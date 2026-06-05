@@ -1,0 +1,41 @@
+--[[----------------------------------------------------------------------------
+	MC - Minecraft-style voxel blocks for Garry's Mod
+	Loader. Runs shared on server, is sent to and runs on clients.
+
+	Design goal: NO per-block entities. Blocks live in a chunked voxel store and
+	are drawn with IMesh (1 draw call per 16^3 chunk). One physics entity per
+	non-empty chunk provides collision. So ~4096 blocks == 1 entity.
+------------------------------------------------------------------------------]]
+
+MC = MC or {}
+
+local SHARED = {
+	"mc/sh_config.lua",
+	"mc/sh_blocks.lua",
+	"mc/sh_voxel.lua",
+}
+local SERVER_FILES = {
+	"mc/sv_world.lua",
+}
+local CLIENT_FILES = {
+	"mc/cl_render.lua",
+	"mc/cl_ui.lua",
+	"mc/cl_net.lua",
+	"mc/cl_debug.lua",
+}
+
+if SERVER then
+	AddCSLuaFile()
+	for _, f in ipairs( SHARED ) do AddCSLuaFile( f ) end
+	for _, f in ipairs( CLIENT_FILES ) do AddCSLuaFile( f ) end
+end
+
+for _, f in ipairs( SHARED ) do include( f ) end
+
+if SERVER then
+	for _, f in ipairs( SERVER_FILES ) do include( f ) end
+else
+	for _, f in ipairs( CLIENT_FILES ) do include( f ) end
+end
+
+MsgN( "[MC] Voxel block addon loaded (" .. ( SERVER and "server" or "client" ) .. ")" )
