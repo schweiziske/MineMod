@@ -122,6 +122,15 @@ if CLIENT then
 		if not tr.Hit then return end
 
 		local bx, by, bz = placeCell( tr )
+		local reach = GetConVar( "mc_reach" )
+		reach = reach and reach:GetFloat() or ( MC.Config and MC.Config.DefaultReach or MC.BS * 5 )
+		if reach <= 0 or math.abs( reach - 8192 ) < 0.01 then
+			reach = MC.Config and MC.Config.DefaultReach or MC.BS * 5
+		end
+		if reach > 0 and ply:EyePos():DistToSqr( MC.CellWorldCenter( bx, by, bz ) ) > reach * reach then
+			return
+		end
+
 		local mn = MC.CellWorldMin( bx, by, bz )
 		render.DrawWireframeBox( mn, angle_zero, vector_origin, Vector( MC.BS, MC.BS, MC.BS ), Color( 255, 255, 255, 230 ), true )
 	end )
