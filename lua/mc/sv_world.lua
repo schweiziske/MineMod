@@ -65,9 +65,34 @@ local function notify( ply, msg )
 	ply:ChatPrint( "[MC] " .. msg )
 end
 
+local function chat( ply, msg )
+	if IsValid( ply ) then
+		ply:ChatPrint( "[MC] " .. msg )
+	else
+		MsgN( "[MC] " .. msg )
+	end
+end
+
+local function canEdit( ply )
+	if C.AdminOnly:GetBool() and IsValid( ply ) and not ply:IsAdmin() then
+		notify( ply, "Only admins may build (mc_admin_only)" )
+		return false
+	end
+	return true
+end
+
+local function worldBoundsOK( bx, by, bz )
+	local protoMax = bit.lshift( 1, Net.COORD_BITS - 1 ) - 1
+	local lim = math.min( C.WorldLimit:GetInt(), protoMax )
+	return math.abs( bx ) <= lim
+		and math.abs( by ) <= lim
+		and math.abs( bz ) <= lim
+end
+
 -- returns true if allowed; otherwise false (+ optional notify)
 function SV.Validate( ply, bx, by, bz, placing )
 	if not cooldownOK( ply ) then return false end
+	if not canEdit( ply ) then return false end
 
 	if C.AdminOnly:GetBool() and IsValid( ply ) and not ply:IsAdmin() then
 		notify( ply, "只有管理员可以建造 (mc_admin_only)" )
@@ -78,6 +103,7 @@ function SV.Validate( ply, bx, by, bz, placing )
 	if reach > 0 and IsValid( ply ) then
 		local center = MC.CellWorldCenter( bx, by, bz )
 		if ply:EyePos():DistToSqr( center ) > reach * reach then
+			notify( ply, "Too far (mc_reach)" )
 			return false
 		end
 	end
@@ -85,9 +111,7 @@ function SV.Validate( ply, bx, by, bz, placing )
 	if placing then
 		-- never allow a coord that wouldn't fit the net protocol's signed field,
 		-- regardless of how high the convar is set
-		local protoMax = bit.lshift( 1, Net.COORD_BITS - 1 ) - 1
-		local lim = math.min( C.WorldLimit:GetInt(), protoMax )
-		if math.abs( bx ) > lim or math.abs( by ) > lim or math.abs( bz ) > lim then
+		if not worldBoundsOK( bx, by, bz ) then
 			notify( ply, "超出建造范围 (mc_world_limit)" )
 			return false
 		end
@@ -174,6 +198,109 @@ function SV.Break( ply, bx, by, bz )
 	return apply( bx, by, bz, 0, -1 )
 end
 
+------------------------------------------------------------------- fill command
+local BlockNameToID = {}
+for id, b in pairs( MC.Blocks ) do
+	BlockNameToID[string.lower( b.name )] = id
+end
+
+local function parseBlockID( s )
+	if not s then return nil end
+	s = string.lower( s )
+	if s == "0" or s == "air" then return 0 end
+	local id = tonumber( s )
+	if id then
+		id = math.floor( id )
+		return ( id == 0 or MC.IsValidBlock( id ) ) and id or nil
+	end
+	return BlockNameToID[s]
+end
+
+local function runFill( ply, args )
+	if #args < 8 then
+		chat( ply, "Usage: /fill x1 y1 z1 x2 y2 z2 <id|name|air>" )
+		return
+	end
+	if not canEdit( ply ) then return end
+
+	local x1, y1, z1 = tonumber( args[2] ), tonumber( args[3] ), tonumber( args[4] )
+	local x2, y2, z2 = tonumber( args[5] ), tonumber( args[6] ), tonumber( args[7] )
+	local id = parseBlockID( args[8] )
+	if not x1 or not y1 or not z1 or not x2 or not y2 or not z2 or id == nil then
+		chat( ply, "Usage: /fill x1 y1 z1 x2 y2 z2 <id|name|air>" )
+		return
+	end
+
+	x1, y1, z1 = math.floor( x1 ), math.floor( y1 ), math.floor( z1 )
+	x2, y2, z2 = math.floor( x2 ), math.floor( y2 ), math.floor( z2 )
+	local minx, maxx = math.min( x1, x2 ), math.max( x1, x2 )
+	local miny, maxy = math.min( y1, y2 ), math.max( y1, y2 )
+	local minz, maxz = math.min( z1, z2 ), math.max( z1, z2 )
+
+	if not worldBoundsOK( minx, miny, minz ) or not worldBoundsOK( maxx, maxy, maxz ) then
+		chat( ply, "Out of build bounds (mc_world_limit)" )
+		return
+	end
+
+	local volume = ( maxx - minx + 1 ) * ( maxy - miny + 1 ) * ( maxz - minz + 1 )
+	local fillMax = C.FillMax:GetInt()
+	if fillMax > 0 and volume > fillMax then
+		chat( ply, "Fill is too large (" .. volume .. " > mc_fill_max " .. fillMax .. ")" )
+		return
+	end
+
+	local add = 0
+	for z = minz, maxz do
+		for y = miny, maxy do
+			for x = minx, maxx do
+				local old = MC.GetBlock( x, y, z )
+				if old ~= id then
+					if old == 0 and id ~= 0 then add = add + 1 end
+				end
+			end
+		end
+	end
+
+	if id ~= 0 and SV.BlockCount + add > C.MaxBlocks:GetInt() then
+		chat( ply, "Block cap would be exceeded (mc_max_blocks)" )
+		return
+	end
+
+	local changed = 0
+	for z = minz, maxz do
+		for y = miny, maxy do
+			for x = minx, maxx do
+				local old = MC.GetBlock( x, y, z )
+				if old ~= id then
+					if id == 0 then
+						if apply( x, y, z, 0, -1 ) then changed = changed + 1 end
+					elseif old == 0 and not wouldTrapPlayer( x, y, z ) then
+						if apply( x, y, z, id, 1 ) then changed = changed + 1 end
+					elseif old ~= 0 then
+						if apply( x, y, z, id, 0 ) then changed = changed + 1 end
+					end
+				end
+			end
+		end
+	end
+
+	chat( ply, "Filled " .. changed .. " blocks" )
+end
+
+hook.Add( "PlayerSay", "mc_fill_command", function( ply, text )
+	local args = string.Explode( "%s+", string.Trim( text ), true )
+	if not args[1] then return end
+	local cmd = string.lower( args[1] )
+	if cmd ~= "/fill" and cmd ~= "!fill" then return end
+	runFill( ply, args )
+	return ""
+end )
+
+concommand.Add( "mc_fill", function( ply, _, args )
+	table.insert( args, 1, "mc_fill" )
+	runFill( ply, args )
+end )
+
 ------------------------------------------------------------------ world streaming
 local function sendChunk( ply, chunk )
 	net.Start( "mc_full" )
@@ -249,7 +376,8 @@ function SV.Load()
 	if not data or not data.chunks then return end
 
 	if data.bs and data.bs ~= MC.BS then
-		MsgN( "[MC] WARNING: save BlockSize " .. data.bs .. " != current " .. MC.BS .. " (positions may be off)" )
+		MsgN( "[MC] WARNING: save BlockSize " .. data.bs .. " != current " .. MC.BS ..
+			"; loaded on the same block grid. Verify the build, then run mc_accept_blocksize to rewrite save metadata." )
 	end
 
 	MC.World = {}
@@ -315,6 +443,14 @@ end )
 concommand.Add( "mc_save", function( ply )
 	if IsValid( ply ) and not ply:IsAdmin() then return end
 	SV.Save()
+end )
+
+concommand.Add( "mc_accept_blocksize", function( ply )
+	if IsValid( ply ) and not ply:IsAdmin() then return end
+	SV.Save()
+	if IsValid( ply ) then
+		ply:ChatPrint( "[MC] Saved current world with BlockSize " .. MC.BS )
+	end
 end )
 
 concommand.Add( "mc_clear", function( ply )
