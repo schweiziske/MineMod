@@ -16,7 +16,6 @@ local function markNeighbours( cx, cy, cz )
 	MC.MarkChunkDirty( MC.ChunkKey( cx, cy, cz - 1 ) )
 end
 
--- full chunk (initial sync / resync)
 net.Receive( "mc_full", function()
 	local cx = net.ReadInt( Net.COORD_BITS )
 	local cy = net.ReadInt( Net.COORD_BITS )
@@ -25,12 +24,15 @@ net.Receive( "mc_full", function()
 
 	local c = MC.EnsureChunk( cx, cy, cz )
 	c.blocks = {}
+	c.orients = {}
 	c.count = 0
 	for _ = 1, count do
 		local li = net.ReadUInt( Net.LOCAL_BITS )
 		local id = net.ReadUInt( Net.ID_BITS )
+		local orient = net.ReadUInt( Net.ORIENT_BITS )
 		if c.blocks[li] == nil then c.count = c.count + 1 end
 		c.blocks[li] = id
+		c.orients[li] = MC.NormalizeOrient( id, orient )
 	end
 	if c.count == 0 then MC.World[c.key] = nil end
 
@@ -38,24 +40,32 @@ net.Receive( "mc_full", function()
 	MC.MarkChunkPhysDirty( c.key )
 end )
 
--- single block change
 net.Receive( "mc_set", function()
 	local bx = net.ReadInt( Net.COORD_BITS )
 	local by = net.ReadInt( Net.COORD_BITS )
 	local bz = net.ReadInt( Net.COORD_BITS )
 	local id = net.ReadUInt( Net.ID_BITS )
+	local orient = net.ReadUInt( Net.ORIENT_BITS )
 
-	MC.SetBlockRaw( bx, by, bz, id )
+	MC.SetBlockRaw( bx, by, bz, id, orient )
 	MC.MarkDirty( bx, by, bz )
 
 	local cx, cy, cz = MC.CellToChunk( bx, by, bz )
 	MC.MarkChunkPhysDirty( MC.ChunkKey( cx, cy, cz ) )
 end )
 
--- wipe
 net.Receive( "mc_clear", function()
 	MC.FreeAllMeshes()
+	for key, e in pairs( MC.ChunkEnts or {} ) do
+		if IsValid( e ) then
+			e:PhysicsDestroy()
+			e:SetNoDraw( true )
+			e.ChunkKey = nil
+		end
+		MC.ChunkEnts[key] = nil
+	end
 	MC.World = {}
 	MC.MeshDirty = {}
 	MC.PhysDirty = {}
+	MC.ChunkEnts = {}
 end )

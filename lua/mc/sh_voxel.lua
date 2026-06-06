@@ -14,7 +14,7 @@ local CS  = MC.CS
 local BS  = MC.BS
 local CS2 = CS * CS
 
--- chunkKey -> chunk = { cx, cy, cz, key, blocks = { [li]=id }, count, ent (sv) }
+-- chunkKey -> chunk = { cx, cy, cz, key, blocks = { [li]=id }, orients = { [li]=orient }, count, ent (sv) }
 MC.World = MC.World or {}
 
 local floor = math.floor
@@ -51,6 +51,30 @@ function MC.CellWorldCenter( bx, by, bz )
 	return Vector( bx * BS + h, by * BS + h, bz * BS + h )
 end
 
+function MC.ReachAllowsEye( eyePos, bx, by, bz, reach )
+	if reach <= 0 or not eyePos then return true end
+	local mn = MC.CellWorldMin( bx, by, bz )
+	local px = math.max( mn.x, math.min( eyePos.x, mn.x + BS ) )
+	local py = math.max( mn.y, math.min( eyePos.y, mn.y + BS ) )
+	local pz = math.max( mn.z, math.min( eyePos.z, mn.z + BS ) )
+	local dx, dy, dz = eyePos.x - px, eyePos.y - py, eyePos.z - pz
+	return dx * dx + dy * dy + dz * dz <= reach * reach
+end
+
+function MC.CurrentReach()
+	local cv = GetConVar( "mc_reach" )
+	local fallback = MC.Config and MC.Config.DefaultReach or BS * 5
+	local reach = cv and cv:GetFloat() or fallback
+	if math.abs( reach - 8192 ) < 0.01 then return fallback end
+	return reach
+end
+
+function MC.CanPreviewPlace( ply, bx, by, bz )
+	if not IsValid( ply ) then return false end
+	return MC.GetBlock( bx, by, bz ) == 0
+		and MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, MC.CurrentReach() )
+end
+
 function MC.ChunkWorldOrigin( cx, cy, cz )
 	return Vector( cx * MC.ChunkWorld, cy * MC.ChunkWorld, cz * MC.ChunkWorld )
 end
@@ -74,9 +98,10 @@ function MC.EnsureChunk( cx, cy, cz )
 	local key = MC.ChunkKey( cx, cy, cz )
 	local c = MC.World[key]
 	if not c then
-		c = { cx = cx, cy = cy, cz = cz, key = key, blocks = {}, count = 0 }
+		c = { cx = cx, cy = cy, cz = cz, key = key, blocks = {}, orients = {}, count = 0 }
 		MC.World[key] = c
 	end
+	c.orients = c.orients or {}
 	return c
 end
 
@@ -88,16 +113,27 @@ function MC.GetBlock( bx, by, bz )
 	return c.blocks[li] or 0
 end
 
+function MC.GetBlockOrient( bx, by, bz )
+	local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
+	local c = MC.World[MC.ChunkKey( cx, cy, cz )]
+	if not c then return 0 end
+	local id = c.blocks[li]
+	if not id then return 0 end
+	return MC.NormalizeOrient and MC.NormalizeOrient( id, c.orients and c.orients[li] ) or ( c.orients and c.orients[li] or 0 )
+end
+
 --- Low-level store mutation used by BOTH realms.
 -- id == 0 removes. Returns: chunk (or nil), created(bool), emptied(bool), changed(bool)
-function MC.SetBlockRaw( bx, by, bz, id )
+function MC.SetBlockRaw( bx, by, bz, id, orient )
 	local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
 	local key = MC.ChunkKey( cx, cy, cz )
+	orient = id ~= 0 and ( MC.NormalizeOrient and MC.NormalizeOrient( id, orient ) or math.floor( tonumber( orient ) or 0 ) ) or 0
 
 	if id == 0 then
 		local c = MC.World[key]
 		if not c or c.blocks[li] == nil then return nil, false, false, false end
 		c.blocks[li] = nil
+		if c.orients then c.orients[li] = nil end
 		c.count = c.count - 1
 		local emptied = c.count <= 0
 		if emptied then MC.World[key] = nil end
@@ -106,17 +142,22 @@ function MC.SetBlockRaw( bx, by, bz, id )
 
 	local created = ( MC.World[key] == nil )
 	local c = MC.EnsureChunk( cx, cy, cz )
-	if c.blocks[li] == id then return c, false, false, false end
+	local old = c.blocks[li]
+	local oldOrient = MC.NormalizeOrient and MC.NormalizeOrient( old, c.orients and c.orients[li] ) or ( c.orients and c.orients[li] or 0 )
+	if old == id and oldOrient == orient then return c, false, false, false end
 	if c.blocks[li] == nil then c.count = c.count + 1 end
 	c.blocks[li] = id
+	c.orients[li] = orient
 	return c, created, false, true
 end
 
---- Iterate every (bx,by,bz,id) in a chunk. cb( bx,by,bz, lx,ly,lz, id )
+--- Iterate every (bx,by,bz,id,orient) in a chunk. cb( bx,by,bz, lx,ly,lz, id, orient )
 function MC.ForEachBlock( chunk, cb )
 	local ox, oy, oz = chunk.cx * CS, chunk.cy * CS, chunk.cz * CS
+	chunk.orients = chunk.orients or {}
 	for li, id in pairs( chunk.blocks ) do
 		local lx, ly, lz = MC.DecodeLocal( li )
-		cb( ox + lx, oy + ly, oz + lz, lx, ly, lz, id )
+		local orient = MC.NormalizeOrient and MC.NormalizeOrient( id, chunk.orients[li] ) or ( chunk.orients[li] or 0 )
+		cb( ox + lx, oy + ly, oz + lz, lx, ly, lz, id, orient )
 	end
 end
