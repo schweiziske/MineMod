@@ -81,11 +81,13 @@ end
 
 local DecodeLocal = MC.DecodeLocal
 
-local function rotatedUVFlags( uf, vf, rot )
+local function rotatedUVFlags( uf, vf, rot, flipU, flipV )
 	rot = rot % 4
-	if rot == 1 then return vf, 1 - uf end
-	if rot == 2 then return 1 - uf, 1 - vf end
-	if rot == 3 then return 1 - vf, uf end
+	if rot == 1 then uf, vf = vf, 1 - uf
+	elseif rot == 2 then uf, vf = 1 - uf, 1 - vf
+	elseif rot == 3 then uf, vf = 1 - vf, uf end
+	if flipU then uf = 1 - uf end
+	if flipV then vf = 1 - vf end
 	return uf, vf
 end
 
@@ -126,14 +128,14 @@ function MC.BuildChunkMesh( key )
 			local face = FACES[f]
 			local o = face.off
 			if visible( id, MC.GetBlock( bx + o[1], by + o[2], bz + o[3] ) ) then
-				local tile, rot = MC.BlockFace( id, f, orient )
+				local tile, rot, flipU, flipV = MC.BlockFace( id, f, orient )
 				local u0, v0, u1, v1 = MC.TileUV( tile )
 				local corners = face.c
 				local nrm, col = face.n, face.sh
 
 				for t = 1, 6 do
 					local cn = corners[ TRI[t] ]
-					local uf, vf = rotatedUVFlags( cn[4], cn[5], rot or 0 )
+					local uf, vf = rotatedUVFlags( cn[4], cn[5], rot or 0, flipU, flipV )
 					nv = nv + 1
 					verts[nv] = {
 						pos    = Vector( wx + cn[1] * BS, wy + cn[2] * BS, wz + cn[3] * BS ),

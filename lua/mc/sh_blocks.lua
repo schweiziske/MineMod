@@ -266,62 +266,131 @@ function MC.OrientForPlacement( ply, tr, id )
 	return MC.OrientForVectors( id, forward, tr and tr.HitNormal or nil )
 end
 
-local function axisEndFace( axis, face )
-	if axis == MC.Axis.X then return face == MC.Face.XP or face == MC.Face.XN end
-	if axis == MC.Axis.Z then return face == MC.Face.YP or face == MC.Face.YN end
-	return face == MC.Face.TOP or face == MC.Face.BOTTOM
+local FaceToDir = {
+	[MC.Face.TOP] = MC.Direction.UP,
+	[MC.Face.BOTTOM] = MC.Direction.DOWN,
+	[MC.Face.XP] = MC.Direction.EAST,
+	[MC.Face.XN] = MC.Direction.WEST,
+	[MC.Face.YP] = MC.Direction.SOUTH,
+	[MC.Face.YN] = MC.Direction.NORTH,
+}
+
+local DirToFace = {
+	[MC.Direction.UP] = MC.Face.TOP,
+	[MC.Direction.DOWN] = MC.Face.BOTTOM,
+	[MC.Direction.EAST] = MC.Face.XP,
+	[MC.Direction.WEST] = MC.Face.XN,
+	[MC.Direction.SOUTH] = MC.Face.YP,
+	[MC.Direction.NORTH] = MC.Face.YN,
+}
+
+local function rotateYDir( dir, steps )
+	steps = steps % 4
+	for _ = 1, steps do
+		if dir == MC.Direction.NORTH then dir = MC.Direction.EAST
+		elseif dir == MC.Direction.EAST then dir = MC.Direction.SOUTH
+		elseif dir == MC.Direction.SOUTH then dir = MC.Direction.WEST
+		elseif dir == MC.Direction.WEST then dir = MC.Direction.NORTH
+		end
+	end
+	return dir
 end
 
-local function axisSideRot( axis, face )
-	if axis == MC.Axis.X then return 1 end
-	if axis == MC.Axis.Z and ( face == MC.Face.XP or face == MC.Face.XN ) then return 1 end
-	return 0
+local function rotateXDir( dir, steps )
+	steps = steps % 4
+	for _ = 1, steps do
+		if dir == MC.Direction.NORTH then dir = MC.Direction.DOWN
+		elseif dir == MC.Direction.DOWN then dir = MC.Direction.SOUTH
+		elseif dir == MC.Direction.SOUTH then dir = MC.Direction.UP
+		elseif dir == MC.Direction.UP then dir = MC.Direction.NORTH
+		end
+	end
+	return dir
 end
 
-local function facingFrontFace( orient )
-	if orient == MC.Direction.UP then return MC.Face.TOP end
-	if orient == MC.Direction.DOWN then return MC.Face.BOTTOM end
-	if orient == MC.Direction.NORTH then return MC.Face.YN end
-	if orient == MC.Direction.SOUTH then return MC.Face.YP end
-	if orient == MC.Direction.WEST then return MC.Face.XN end
-	return MC.Face.XP
+local function modelRotForFacing( orient )
+	if orient == MC.Direction.EAST then return 0, 1 end
+	if orient == MC.Direction.SOUTH then return 0, 2 end
+	if orient == MC.Direction.WEST then return 0, 3 end
+	return 0, 0
+end
+
+local function observerRotForFacing( orient )
+	if orient == MC.Direction.DOWN then return 1, 0 end
+	if orient == MC.Direction.UP then return 3, 0 end
+	return modelRotForFacing( orient )
+end
+
+local function dispenserRotForFacing( orient )
+	if orient == MC.Direction.DOWN then return 2, 0 end
+	if orient == MC.Direction.UP then return 0, 0 end
+	return modelRotForFacing( orient )
+end
+
+local function localFaceAfterModelRotation( face, xSteps, ySteps )
+	local dir = FaceToDir[face]
+	dir = rotateYDir( dir, -ySteps )
+	dir = rotateXDir( dir, -xSteps )
+	return DirToFace[dir]
+end
+
+local function orientableFace( frontTile, topTile, sideTile, face, orient )
+	local _, ySteps = modelRotForFacing( orient )
+	local localFace = localFaceAfterModelRotation( face, 0, ySteps )
+	if localFace == MC.Face.YN then return frontTile, 0 end
+	if localFace == MC.Face.TOP or localFace == MC.Face.BOTTOM then return topTile, ySteps end
+	return sideTile, 0
+end
+
+local function dispenserFace( face, orient )
+	local xSteps, ySteps = dispenserRotForFacing( orient )
+	local localFace = localFaceAfterModelRotation( face, xSteps, ySteps )
+	if orient == MC.Direction.UP or orient == MC.Direction.DOWN then
+		if localFace == MC.Face.TOP then return T.dispenser_front_vertical, 0, false, true end
+		return T.furnace_top, 0
+	end
+	if localFace == MC.Face.YN then return T.dispenser_front, 0 end
+	if localFace == MC.Face.TOP or localFace == MC.Face.BOTTOM then return T.furnace_top, ySteps end
+	return T.furnace_side, 0
 end
 
 local function observerFace( face, orient )
-	if orient == MC.Direction.NORTH then
-		if face == MC.Face.YN then return T.observer_front, 0 end
-		if face == MC.Face.YP then return T.observer_back, 0 end
-		if face == MC.Face.TOP or face == MC.Face.BOTTOM then return T.observer_top, 0 end
-		return T.observer_side, 0
-	end
-	if orient == MC.Direction.SOUTH then
-		if face == MC.Face.YP then return T.observer_front, 0 end
-		if face == MC.Face.YN then return T.observer_back, 0 end
-		if face == MC.Face.TOP or face == MC.Face.BOTTOM then return T.observer_top, 2 end
-		return T.observer_side, 0
-	end
-	if orient == MC.Direction.WEST then
-		if face == MC.Face.XN then return T.observer_front, 0 end
-		if face == MC.Face.XP then return T.observer_back, 0 end
-		if face == MC.Face.TOP or face == MC.Face.BOTTOM then return T.observer_top, 1 end
-		return T.observer_side, 0
-	end
-	if orient == MC.Direction.EAST then
-		if face == MC.Face.XP then return T.observer_front, 0 end
-		if face == MC.Face.XN then return T.observer_back, 0 end
-		if face == MC.Face.TOP or face == MC.Face.BOTTOM then return T.observer_top, 3 end
-		return T.observer_side, 0
-	end
+	local xSteps, ySteps = observerRotForFacing( orient )
+	local localFace = localFaceAfterModelRotation( face, xSteps, ySteps )
 	if orient == MC.Direction.DOWN then
-		if face == MC.Face.BOTTOM then return T.observer_front, 2 end
-		if face == MC.Face.TOP then return T.observer_back, 2 end
-		if face == MC.Face.YN or face == MC.Face.YP then return T.observer_top, 0 end
-		return T.observer_side, 0
+		if localFace == MC.Face.YN then return T.observer_front, 0, true, false end
+		if localFace == MC.Face.YP then return T.observer_back, 0, false, true end
+		if localFace == MC.Face.BOTTOM then return T.observer_top, 0, true, false end
+		if localFace == MC.Face.TOP then return T.observer_top, 0 end
+		if localFace == MC.Face.XN then return T.observer_side, 1, true, false end
+		return T.observer_side, 1, false, true
 	end
-	if face == MC.Face.TOP then return T.observer_front, 0 end
-	if face == MC.Face.BOTTOM then return T.observer_back, 0 end
-	if face == MC.Face.YN or face == MC.Face.YP then return T.observer_top, 0 end
+	if orient == MC.Direction.UP then
+		if localFace == MC.Face.YN then return T.observer_front, 0, true, false end
+		if localFace == MC.Face.YP then return T.observer_back, 0, false, true end
+		if localFace == MC.Face.BOTTOM then return T.observer_top, 0, false, true end
+		if localFace == MC.Face.TOP then return T.observer_top, 0, true, true end
+		if localFace == MC.Face.XN then return T.observer_side, 1, false, true end
+		return T.observer_side, 1, true, false
+	end
+	if localFace == MC.Face.YN then return T.observer_front, 0 end
+	if localFace == MC.Face.YP then return T.observer_back, 0 end
+	if localFace == MC.Face.TOP or localFace == MC.Face.BOTTOM then return T.observer_top, ySteps end
 	return T.observer_side, 0
+end
+
+local function pillarRotForAxis( axis )
+	if axis == MC.Axis.X then return 1, 1 end
+	if axis == MC.Axis.Z then return 1, 0 end
+	return 0, 0
+end
+
+local function pillarFace( id, face, axis )
+	local b = MC.Blocks[id]
+	local xSteps, ySteps = pillarRotForAxis( axis )
+	local localFace = localFaceAfterModelRotation( face, xSteps, ySteps )
+	if localFace == MC.Face.TOP or localFace == MC.Face.BOTTOM then return b.top, 0 end
+	return b.side, 0
 end
 
 function MC.BlockFace( id, face, orient )
@@ -330,23 +399,14 @@ function MC.BlockFace( id, face, orient )
 	orient = MC.NormalizeOrient( id, orient )
 
 	if b.orient == "axis" then
-		return axisEndFace( orient, face ) and b.top or b.side, axisEndFace( orient, face ) and 0 or axisSideRot( orient, face )
+		return pillarFace( id, face, orient )
 	end
 
 	if b.name == "observer" then return observerFace( face, orient ) end
 
 	if b.orient == "facing" or b.orient == "horizontal_facing" then
-		local front = facingFrontFace( orient )
-		if face == front then
-			if b.name == "furnace" then return T.furnace_front, 0 end
-			if b.name == "dispenser" then
-				if front == MC.Face.TOP or front == MC.Face.BOTTOM then return T.dispenser_front_vertical, front == MC.Face.BOTTOM and 2 or 0 end
-				return T.dispenser_front, 0
-			end
-		end
-		if face == MC.Face.TOP then return b.top, 0 end
-		if face == MC.Face.BOTTOM then return b.bottom, 0 end
-		return b.side, 0
+		if b.name == "furnace" then return orientableFace( T.furnace_front, T.furnace_top, T.furnace_side, face, orient ) end
+		if b.name == "dispenser" then return dispenserFace( face, orient ) end
 	end
 
 	if face == MC.Face.TOP then return b.top, 0 end
