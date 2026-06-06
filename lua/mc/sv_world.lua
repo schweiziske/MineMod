@@ -75,7 +75,7 @@ end
 
 local function canEdit( ply )
 	if C.AdminOnly:GetBool() and IsValid( ply ) and not ply:IsAdmin() then
-		notify( ply, "Only admins may build (mc_admin_only)" )
+		notify( ply, "只有管理员可以建造 (mc_admin_only)" )
 		return false
 	end
 	return true
@@ -94,28 +94,21 @@ function SV.Validate( ply, bx, by, bz, placing )
 	if not cooldownOK( ply ) then return false end
 	if not canEdit( ply ) then return false end
 
-	if C.AdminOnly:GetBool() and IsValid( ply ) and not ply:IsAdmin() then
-		notify( ply, "只有管理员可以建造 (mc_admin_only)" )
-		return false
-	end
-
 	local reach = C.Reach:GetFloat()
 	if reach > 0 and IsValid( ply ) then
-		local center = MC.CellWorldCenter( bx, by, bz )
-		if ply:EyePos():DistToSqr( center ) > reach * reach then
+		if not MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, reach ) then
 			notify( ply, "Too far (mc_reach)" )
 			return false
 		end
 	end
 
 	if placing then
-		-- never allow a coord that wouldn't fit the net protocol's signed field,
-		-- regardless of how high the convar is set
 		if not worldBoundsOK( bx, by, bz ) then
 			notify( ply, "超出建造范围 (mc_world_limit)" )
 			return false
 		end
-		if SV.BlockCount >= C.MaxBlocks:GetInt() then
+		local maxBlocks = C.MaxBlocks:GetInt()
+		if maxBlocks > 0 and SV.BlockCount >= maxBlocks then
 			notify( ply, "已达到方块上限 (mc_max_blocks)" )
 			return false
 		end
@@ -129,21 +122,31 @@ end
 -- full-sync reads LIVE chunk state and a single set is order-independent, so a
 -- syncing client always converges (mc_set before its chunk arrives -> the later
 -- mc_full replaces the chunk with live state; mc_set after -> applied on top).
-local function broadcastSet( bx, by, bz, id )
+local function broadcastSet( bx, by, bz, id, orient )
 	if #player.GetAll() == 0 then return end
+	orient = MC.NormalizeOrient( id, orient )
 	net.Start( "mc_set" )
 		net.WriteInt( bx, Net.COORD_BITS )
 		net.WriteInt( by, Net.COORD_BITS )
 		net.WriteInt( bz, Net.COORD_BITS )
 		net.WriteUInt( id, Net.ID_BITS )
+		net.WriteUInt( orient or 0, Net.ORIENT_BITS )
 	net.Broadcast()
 end
 
--- core mutation shared by Place/Break (no validation here)
-local function apply( bx, by, bz, id, delta )
-	local chunk, created, emptied, changed = MC.SetBlockRaw( bx, by, bz, id )
+-- core mutation shared by Place/Break/fill/demo (no validation here)
+local function apply( bx, by, bz, id, _, orient )
+	local old = MC.GetBlock( bx, by, bz )
+	orient = MC.NormalizeOrient( id, orient )
+	local chunk, created, emptied, changed = MC.SetBlockRaw( bx, by, bz, id, orient )
 	if not changed then return false end
 
+	local delta = 0
+	if old == 0 and id ~= 0 then
+		delta = 1
+	elseif old ~= 0 and id == 0 then
+		delta = -1
+	end
 	SV.BlockCount = math.max( 0, SV.BlockCount + delta )
 
 	if id ~= 0 then
@@ -158,7 +161,7 @@ local function apply( bx, by, bz, id, delta )
 		end
 	end
 
-	broadcastSet( bx, by, bz, id )
+	broadcastSet( bx, by, bz, id, orient )
 	SV.Dirty = true
 	return true
 end
@@ -181,7 +184,7 @@ local function wouldTrapPlayer( bx, by, bz )
 	return false
 end
 
-function SV.Place( ply, bx, by, bz, id )
+function SV.Place( ply, bx, by, bz, id, orient )
 	if not MC.IsValidBlock( id ) then return false end
 	if MC.GetBlock( bx, by, bz ) ~= 0 then return false end -- occupied
 	if wouldTrapPlayer( bx, by, bz ) then
@@ -189,7 +192,7 @@ function SV.Place( ply, bx, by, bz, id )
 		return false
 	end
 	if not SV.Validate( ply, bx, by, bz, true ) then return false end
-	return apply( bx, by, bz, id, 1 )
+	return apply( bx, by, bz, id, 1, orient )
 end
 
 function SV.Break( ply, bx, by, bz )
@@ -204,9 +207,21 @@ for id, b in pairs( MC.Blocks ) do
 	BlockNameToID[string.lower( b.name )] = id
 end
 
+local function trimArg( s )
+	return string.match( tostring( s or "" ), "^%s*(.-)%s*$" )
+end
+
+local function joinArgs( args, first, last )
+	if not args[first] then return nil end
+	local out = {}
+	for i = first, last or #args do out[#out + 1] = args[i] end
+	return table.concat( out, " " )
+end
+
 local function parseBlockID( s )
 	if not s then return nil end
-	s = string.lower( s )
+	s = string.lower( trimArg( s ) )
+	s = string.match( s, "^minecraft:(.+)$" ) or s
 	if s == "0" or s == "air" then return 0 end
 	local id = tonumber( s )
 	if id then
@@ -216,18 +231,41 @@ local function parseBlockID( s )
 	return BlockNameToID[s]
 end
 
-local function runFill( ply, args )
-	if #args < 8 then
-		chat( ply, "Usage: /fill x1 y1 z1 x2 y2 z2 <id|name|air>" )
-		return
+local function parseBlockStateText( text )
+	text = trimArg( text )
+	local blockName, bracketState = string.match( text, "^([^%s%[]+)%s*%[(.-)%]%s*$" )
+	if blockName then return trimArg( blockName ), bracketState end
+	if string.find( text, "%[" ) or string.find( text, "%]" ) then
+		return trimArg( string.match( text, "^([^%s%[]+)" ) or text ), "__invalid_bracket_state__"
 	end
+	local blockArg, stateArg = string.match( text, "^(%S+)%s+(.+)$" )
+	if blockArg then return trimArg( blockArg ), stateArg end
+	return text, nil
+end
+
+local function parseBlockStateTail( text )
+	local blockArg, stateArg = parseBlockStateText( text )
+	local id = parseBlockID( blockArg )
+	if id == nil then return nil, nil, blockArg, "block" end
+	if stateArg ~= nil and not MC.IsOrientStateValid( id, stateArg ) then return id, nil, blockArg, "state" end
+	return id, MC.StateToOrient( id, stateArg ), blockArg, nil
+end
+
+local FILL_USAGE = "Usage: /fill x1 y1 z1 x2 y2 z2 <id|name|air|minecraft:name[state]> [state]"
+
+local function runFill( ply, args )
+	if #args < 8 then chat( ply, FILL_USAGE ) return end
 	if not canEdit( ply ) then return end
 
 	local x1, y1, z1 = tonumber( args[2] ), tonumber( args[3] ), tonumber( args[4] )
 	local x2, y2, z2 = tonumber( args[5] ), tonumber( args[6] ), tonumber( args[7] )
-	local id = parseBlockID( args[8] )
-	if not x1 or not y1 or not z1 or not x2 or not y2 or not z2 or id == nil then
-		chat( ply, "Usage: /fill x1 y1 z1 x2 y2 z2 <id|name|air>" )
+	local id, orient, blockArg, parseErr = parseBlockStateTail( joinArgs( args, 8 ) )
+	if not x1 or not y1 or not z1 or not x2 or not y2 or not z2 or parseErr == "block" then
+		chat( ply, FILL_USAGE )
+		return
+	end
+	if parseErr == "state" then
+		chat( ply, "Invalid block state for " .. blockArg )
 		return
 	end
 
@@ -243,7 +281,7 @@ local function runFill( ply, args )
 	end
 
 	local volume = ( maxx - minx + 1 ) * ( maxy - miny + 1 ) * ( maxz - minz + 1 )
-	local fillMax = C.FillMax:GetInt()
+	local fillMax = C.FillMax and C.FillMax:GetInt() or 32768
 	if fillMax > 0 and volume > fillMax then
 		chat( ply, "Fill is too large (" .. volume .. " > mc_fill_max " .. fillMax .. ")" )
 		return
@@ -254,14 +292,16 @@ local function runFill( ply, args )
 		for y = miny, maxy do
 			for x = minx, maxx do
 				local old = MC.GetBlock( x, y, z )
-				if old ~= id then
-					if old == 0 and id ~= 0 then add = add + 1 end
+				local oldOrient = MC.GetBlockOrient( x, y, z )
+				if old ~= id or ( id ~= 0 and oldOrient ~= orient ) then
+					if old == 0 and id ~= 0 and not wouldTrapPlayer( x, y, z ) then add = add + 1 end
 				end
 			end
 		end
 	end
 
-	if id ~= 0 and SV.BlockCount + add > C.MaxBlocks:GetInt() then
+	local maxBlocks = C.MaxBlocks:GetInt()
+	if id ~= 0 and maxBlocks > 0 and SV.BlockCount + add > maxBlocks then
 		chat( ply, "Block cap would be exceeded (mc_max_blocks)" )
 		return
 	end
@@ -271,13 +311,14 @@ local function runFill( ply, args )
 		for y = miny, maxy do
 			for x = minx, maxx do
 				local old = MC.GetBlock( x, y, z )
-				if old ~= id then
+				local oldOrient = MC.GetBlockOrient( x, y, z )
+				if old ~= id or ( id ~= 0 and oldOrient ~= orient ) then
 					if id == 0 then
-						if apply( x, y, z, 0, -1 ) then changed = changed + 1 end
+						if apply( x, y, z, 0 ) then changed = changed + 1 end
 					elseif old == 0 and not wouldTrapPlayer( x, y, z ) then
-						if apply( x, y, z, id, 1 ) then changed = changed + 1 end
+						if apply( x, y, z, id, 1, orient ) then changed = changed + 1 end
 					elseif old ~= 0 then
-						if apply( x, y, z, id, 0 ) then changed = changed + 1 end
+						if apply( x, y, z, id, 0, orient ) then changed = changed + 1 end
 					end
 				end
 			end
@@ -291,9 +332,10 @@ hook.Add( "PlayerSay", "mc_fill_command", function( ply, text )
 	local args = string.Explode( "%s+", string.Trim( text ), true )
 	if not args[1] then return end
 	local cmd = string.lower( args[1] )
-	if cmd ~= "/fill" and cmd ~= "!fill" then return end
-	runFill( ply, args )
-	return ""
+	if cmd == "/fill" or cmd == "!fill" or cmd == "fill" then
+		runFill( ply, args )
+		return ""
+	end
 end )
 
 concommand.Add( "mc_fill", function( ply, _, args )
@@ -311,6 +353,7 @@ local function sendChunk( ply, chunk )
 		for li, id in pairs( chunk.blocks ) do
 			net.WriteUInt( li, Net.LOCAL_BITS )
 			net.WriteUInt( id, Net.ID_BITS )
+			net.WriteUInt( MC.NormalizeOrient( id, chunk.orients and chunk.orients[li] ), Net.ORIENT_BITS )
 		end
 	net.Send( ply )
 end
@@ -352,11 +395,12 @@ function SV.Save()
 			for li, id in pairs( c.blocks ) do
 				n = n + 1 ; cells[n] = li
 				n = n + 1 ; cells[n] = id
+				n = n + 1 ; cells[n] = MC.BlockStateText( id, c.orients and c.orients[li] )
 			end
 			chunks[#chunks + 1] = { c.cx, c.cy, c.cz, cells }
 		end
 	end
-	local json = util.TableToJSON( { v = 1, bs = MC.BS, cs = MC.CS, chunks = chunks } )
+	local json = util.TableToJSON( { v = 2, bs = MC.BS, cs = MC.CS, chunks = chunks } )
 	if not json then return end
 	file.CreateDir( "mc" )
 	file.Write( savePath(), util.Compress( json ) )
@@ -376,8 +420,7 @@ function SV.Load()
 	if not data or not data.chunks then return end
 
 	if data.bs and data.bs ~= MC.BS then
-		MsgN( "[MC] WARNING: save BlockSize " .. data.bs .. " != current " .. MC.BS ..
-			"; loaded on the same block grid. Verify the build, then run mc_accept_blocksize to rewrite save metadata." )
+		MsgN( "[MC] WARNING: save BlockSize " .. data.bs .. " != current " .. MC.BS .. " (positions may be off)" )
 	end
 
 	MC.World = {}
@@ -386,10 +429,13 @@ function SV.Load()
 	for _, ck in ipairs( data.chunks ) do
 		local cx, cy, cz, cells = ck[1], ck[2], ck[3], ck[4]
 		local c = MC.EnsureChunk( cx, cy, cz )
-		for i = 1, #cells, 2 do
+		local stride = data.v == 2 and 3 or 2
+		for i = 1, #cells, stride do
 			local li, id = cells[i], cells[i + 1]
+			local orient = stride == 3 and MC.StateToOrient( id, cells[i + 2] ) or MC.DefaultOrient( id )
 			if MC.IsValidBlock( id ) and c.blocks[li] == nil then
 				c.blocks[li] = id
+				c.orients[li] = MC.NormalizeOrient( id, orient )
 				c.count = c.count + 1
 				SV.BlockCount = SV.BlockCount + 1
 			end
@@ -445,14 +491,6 @@ concommand.Add( "mc_save", function( ply )
 	SV.Save()
 end )
 
-concommand.Add( "mc_accept_blocksize", function( ply )
-	if IsValid( ply ) and not ply:IsAdmin() then return end
-	SV.Save()
-	if IsValid( ply ) then
-		ply:ChatPrint( "[MC] Saved current world with BlockSize " .. MC.BS )
-	end
-end )
-
 concommand.Add( "mc_clear", function( ply )
 	if IsValid( ply ) and not ply:IsAdmin() then return end
 	for _, c in pairs( MC.World ) do
@@ -464,6 +502,17 @@ concommand.Add( "mc_clear", function( ply )
 	SV.Dirty = true
 	net.Start( "mc_clear" ) net.Broadcast()
 	MsgN( "[MC] world cleared" )
+end )
+
+concommand.Add( "mc_resync", function( ply )
+	if IsValid( ply ) and not ply:IsAdmin() then return end
+	local targets = IsValid( ply ) and { ply } or player.GetAll()
+	for _, p in ipairs( targets ) do
+		net.Start( "mc_clear" )
+		net.Send( p )
+		SV.BeginSync( p )
+	end
+	MsgN( "[MC] resync requested for " .. #targets .. " player(s)" )
 end )
 
 -- diagnostics: run `mc_diag` (aim roughly at a build). Prints to your console.

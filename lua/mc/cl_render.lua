@@ -7,12 +7,16 @@
 ------------------------------------------------------------------------------]]
 
 MC = MC or {}
+if MC.ClientRenderLoaded and MC.FreeAllMeshes then
+	MC.FreeAllMeshes()
+end
+MC.ClientRenderLoaded = true
 
 local BS  = MC.BS
 local CS  = MC.CS
 
 -- single atlas material: alpha cutout (glass/leaves), two-sided, vertex-shaded
-MC.Material = Material( "mc/atlas.png", "alphatest nocull vertexcolor" )
+MC.Material = Material( MC.Atlas.MATERIAL or "mc/atlas_365.png", "alphatest nocull vertexcolor noclamp" )
 
 -- directional shading (modulates the texture via vertex colour)
 local SH_TOP    = Color( 255, 255, 255 )
@@ -58,10 +62,9 @@ cvars.AddChangeCallback( "mc_client_collision", function()
 end, "mc" )
 
 -- should the face between `cur` and neighbour `nb` be drawn?
-local Blocks = MC.Blocks
 local function visible( cur, nb )
 	if nb == 0 then return true end
-	local d = Blocks[nb]
+	local d = MC.Blocks[nb]
 	if d and d.transparent then return nb ~= cur end
 	return false
 end
@@ -76,10 +79,15 @@ function MC.FreeChunkMesh( key )
 	MC.Meshes[key] = nil
 end
 
-local GetBlock   = MC.GetBlock
-local BlockTile  = MC.BlockTile
-local TileUV     = MC.TileUV
 local DecodeLocal = MC.DecodeLocal
+
+local function rotatedUVFlags( uf, vf, rot )
+	rot = rot % 4
+	if rot == 1 then return vf, 1 - uf end
+	if rot == 2 then return 1 - uf, 1 - vf end
+	if rot == 3 then return 1 - vf, uf end
+	return uf, vf
+end
 
 function MC.BuildChunkMesh( key )
 	MC.FreeChunkMesh( key )
@@ -97,6 +105,7 @@ function MC.BuildChunkMesh( key )
 	local list = {}
 	local verts = {}
 	local nv = 0
+	chunk.orients = chunk.orients or {}
 
 	local function flush()
 		if nv == 0 then return end
@@ -108,6 +117,7 @@ function MC.BuildChunkMesh( key )
 	end
 
 	for li, id in pairs( chunk.blocks ) do
+		local orient = MC.NormalizeOrient( id, chunk.orients[li] )
 		local lx, ly, lz = DecodeLocal( li )
 		local bx, by, bz = bxo + lx, byo + ly, bzo + lz
 		local wx, wy, wz = wox + lx * BS, woy + ly * BS, woz + lz * BS
@@ -115,20 +125,21 @@ function MC.BuildChunkMesh( key )
 		for f = 1, 6 do
 			local face = FACES[f]
 			local o = face.off
-			if visible( id, GetBlock( bx + o[1], by + o[2], bz + o[3] ) ) then
-				local tile = BlockTile( id, ( f == 1 and 1 ) or ( f == 2 and 2 ) or 3 )
-				local u0, v0, u1, v1 = TileUV( tile )
+			if visible( id, MC.GetBlock( bx + o[1], by + o[2], bz + o[3] ) ) then
+				local tile, rot = MC.BlockFace( id, f, orient )
+				local u0, v0, u1, v1 = MC.TileUV( tile )
 				local corners = face.c
 				local nrm, col = face.n, face.sh
 
 				for t = 1, 6 do
 					local cn = corners[ TRI[t] ]
+					local uf, vf = rotatedUVFlags( cn[4], cn[5], rot or 0 )
 					nv = nv + 1
 					verts[nv] = {
 						pos    = Vector( wx + cn[1] * BS, wy + cn[2] * BS, wz + cn[3] * BS ),
 						normal = nrm,
-						u      = cn[4] == 1 and u1 or u0,
-						v      = cn[5] == 1 and v1 or v0,
+						u      = uf == 1 and u1 or u0,
+						v      = vf == 1 and v1 or v0,
 						color  = col,
 					}
 				end
@@ -178,6 +189,7 @@ function MC.MarkDirty( bx, by, bz )
 end
 
 -- rebuild a few chunks per frame to avoid hitches (meshes + clientside collision)
+hook.Remove( "Think", "mc_meshbuild" )
 hook.Add( "Think", "mc_meshbuild", function()
 	if next( MC.MeshDirty ) then
 		local budget = 3

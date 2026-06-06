@@ -1,30 +1,30 @@
 --[[----------------------------------------------------------------------------
 	mc_placer : SWEP front-end. Runs server-side with the owner, so it talks to
-	MC.SV directly (no extra net layer). Left = break, Right = place, R = palette.
+	MC.SV directly. Left = break, Right = place, R = palette.
 ------------------------------------------------------------------------------]]
 
 if SERVER then AddCSLuaFile() end
 
-SWEP.PrintName    = "MC 方块放置器"
-SWEP.Author       = "MC"
-SWEP.Purpose      = "放置 / 破坏 Minecraft 方块（用 IMesh 渲染，不生成实体）"
-SWEP.Instructions = "左键破坏  右键放置  R 选择方块"
-SWEP.Category     = "MC"
+SWEP.PrintName     = "MC 方块放置器"
+SWEP.Author        = "MC"
+SWEP.Purpose       = "放置 / 破坏 Minecraft 方块（IMesh 渲染，不生成实体）"
+SWEP.Instructions  = "左键破坏  右键放置  Reload 选择方块"
+SWEP.Category      = "MC"
 
-SWEP.Spawnable    = true
-SWEP.AdminOnly    = false
-SWEP.Slot         = 1
-SWEP.SlotPos      = 5
-SWEP.DrawAmmo     = false
+SWEP.Spawnable     = true
+SWEP.AdminOnly     = false
+SWEP.Slot          = 1
+SWEP.SlotPos       = 5
+SWEP.DrawAmmo      = false
 SWEP.DrawCrosshair = true
 
-SWEP.Base         = "weapon_base"
-SWEP.ViewModel    = "models/weapons/c_toolgun.mdl"
-SWEP.WorldModel   = "models/weapons/w_toolgun.mdl"
-SWEP.UseHands     = true
+SWEP.Base          = "weapon_base"
+SWEP.ViewModel     = "models/weapons/c_toolgun.mdl"
+SWEP.WorldModel    = "models/weapons/w_toolgun.mdl"
+SWEP.UseHands      = true
 
-SWEP.Primary   = { ClipSize = -1, DefaultClip = -1, Automatic = true,  Ammo = "none" }
-SWEP.Secondary = { ClipSize = -1, DefaultClip = -1, Automatic = true,  Ammo = "none" }
+SWEP.Primary   = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "none" }
+SWEP.Secondary = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "none" }
 
 local STEP = 0.13
 
@@ -37,6 +37,7 @@ end
 local function placeCell( tr )
 	return MC.WorldToCell( tr.HitPos + tr.HitNormal * 0.5 )
 end
+
 local function breakCell( tr )
 	return MC.WorldToCell( tr.HitPos - tr.HitNormal * 0.5 )
 end
@@ -50,7 +51,7 @@ function SWEP:Deploy()
 	return true
 end
 
-function SWEP:PrimaryAttack()  -- LEFT = break
+function SWEP:PrimaryAttack()
 	self:SetNextPrimaryFire( CurTime() + STEP )
 	local owner = self:GetOwner()
 	if not IsValid( owner ) then return end
@@ -65,7 +66,7 @@ function SWEP:PrimaryAttack()  -- LEFT = break
 	end
 end
 
-function SWEP:SecondaryAttack()  -- RIGHT = place
+function SWEP:SecondaryAttack()
 	self:SetNextSecondaryFire( CurTime() + STEP )
 	local owner = self:GetOwner()
 	if not IsValid( owner ) then return end
@@ -74,7 +75,9 @@ function SWEP:SecondaryAttack()  -- RIGHT = place
 
 	if SERVER then
 		local bx, by, bz = placeCell( tr )
-		if MC.SV.Place( owner, bx, by, bz, selectedID( owner ) ) then
+		local id = selectedID( owner )
+		local orient = MC.OrientForPlacement( owner, tr, id )
+		if MC.SV.Place( owner, bx, by, bz, id, orient ) then
 			self:EmitSound( "buttons/button14.wav", 60, 150, 0.25 )
 		end
 	end
@@ -99,18 +102,22 @@ if CLIENT then
 		local sw, sh = ScrW(), ScrH()
 		local w, h = 64, 64
 		local x, y = sw * 0.5 - w * 0.5, sh - 132
+		local tr = ply:GetEyeTrace()
+		local orient = tr.Hit and MC.OrientForPlacement( ply, tr, id ) or MC.DefaultOrient( id )
+		local state = MC.BlockStateText( id, orient )
 
-		draw.RoundedBox( 6, x - 8, y - 8, w + 16, h + 40, Color( 0, 0, 0, 160 ) )
+		draw.RoundedBox( 6, x - 8, y - 8, w + 16, h + ( state ~= "" and 58 or 40 ), Color( 0, 0, 0, 160 ) )
 		MC.DrawBlockIcon( id, x, y, w, h )
-		draw.SimpleText( b.disp, "mc_hud", x + w * 0.5, y + h + 12, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP )
-		draw.SimpleText( "左键破坏   右键放置   R 选择方块", "mc_hud_small", sw * 0.5, sh - 20, Color( 255, 255, 255, 190 ), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+		draw.SimpleText( b.disp, "mc_hud", x + w * 0.5, y + h + 10, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP )
+		if state ~= "" then
+			draw.SimpleText( state, "mc_hud_small", x + w * 0.5, y + h + 32, Color( 210, 230, 255 ), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP )
+		end
+		draw.SimpleText( "左键破坏   右键放置   Reload 选择方块", "mc_hud_small", sw * 0.5, sh - 20, Color( 255, 255, 255, 190 ), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
 
-		-- crosshair dot
 		surface.SetDrawColor( 255, 255, 255, 220 )
 		surface.DrawRect( sw * 0.5 - 1, sh * 0.5 - 1, 2, 2 )
 	end
 
-	-- placement ghost outline
 	hook.Add( "PostDrawTranslucentRenderables", "mc_ghost", function( _, bSky, bSky3D )
 		if bSky or bSky3D then return end
 		local ply = LocalPlayer()
@@ -122,15 +129,7 @@ if CLIENT then
 		if not tr.Hit then return end
 
 		local bx, by, bz = placeCell( tr )
-		local reach = GetConVar( "mc_reach" )
-		reach = reach and reach:GetFloat() or ( MC.Config and MC.Config.DefaultReach or MC.BS * 5 )
-		if reach <= 0 or math.abs( reach - 8192 ) < 0.01 then
-			reach = MC.Config and MC.Config.DefaultReach or MC.BS * 5
-		end
-		if reach > 0 and ply:EyePos():DistToSqr( MC.CellWorldCenter( bx, by, bz ) ) > reach * reach then
-			return
-		end
-
+		if not MC.CanPreviewPlace( ply, bx, by, bz ) then return end
 		local mn = MC.CellWorldMin( bx, by, bz )
 		render.DrawWireframeBox( mn, angle_zero, vector_origin, Vector( MC.BS, MC.BS, MC.BS ), Color( 255, 255, 255, 230 ), true )
 	end )
