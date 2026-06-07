@@ -28,7 +28,12 @@ local function greedyBoxes( chunk )
 	local CS2 = CS * CS
 	local CH = MC.CH
 	local solid = {}
-	for li in pairs( chunk.blocks ) do solid[li] = true end
+	for li, id in pairs( chunk.blocks ) do
+		local b = MC.Blocks[id]
+		if not b or b.solid ~= false then
+			solid[li] = true
+		end
+	end
 
 	local function idx( x, y, z ) return x + y * CS + z * CS2 end
 

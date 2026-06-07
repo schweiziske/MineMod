@@ -36,11 +36,15 @@ MC.Atlas.H = MC.Atlas.ROWS * MC.Atlas.TILE
 
 ------------------------------------------------------------------ net strings
 if SERVER then
-	if not MC.Config.NetStringsAdded then
-		util.AddNetworkString( "mc_full" )  -- sv->cl : one chunk's blocks (initial sync / resync)
-		util.AddNetworkString( "mc_set" )   -- sv->cl : single block change (id 0 = removed)
-		util.AddNetworkString( "mc_clear" )  -- sv->cl : wipe everything
-		MC.Config.NetStringsAdded = true
+	for _, name in ipairs( {
+		"mc_full",
+		"mc_full_begin",
+		"mc_full_part",
+		"mc_full_end",
+		"mc_set",
+		"mc_clear",
+	} ) do
+		util.AddNetworkString( name )
 	end
 end
 
@@ -53,6 +57,9 @@ MC.Net = {
 	COUNT_BITS = 17, -- blocks per chunk section 0..98304
 }
 
+MC.Config.SyncCellsPerPart = 1024
+MC.Config.SyncMessagesPerTick = 4
+
 ------------------------------------------------------------------ server ConVars
 if SERVER then
 	local F = bit.bor( FCVAR_ARCHIVE, FCVAR_NOTIFY, FCVAR_REPLICATED )
@@ -61,7 +68,7 @@ if SERVER then
 	MC.Config.MaxBlocks   = GetConVar( "mc_max_blocks" ) or CreateConVar( "mc_max_blocks", "300000", F, "Global cap on total placed blocks; 0 = unlimited" )
 	MC.Config.Reach       = GetConVar( "mc_reach" ) or CreateConVar( "mc_reach", tostring( MC.Config.DefaultReach ), F, "Max distance (units) a player may place/break from; 0 disables" )
 	MC.Config.FillMax     = GetConVar( "mc_fill_max" ) or CreateConVar( "mc_fill_max", "32768", F, "Max blocks one /fill may modify; 0 = unlimited" )
-	MC.Config.ImportMax   = GetConVar( "mc_import_max" ) or CreateConVar( "mc_import_max", "300000", F, "Max blocks one mc_import may load; 0 = unlimited" )
+	MC.Config.ImportMax   = GetConVar( "mc_import_max" ) or CreateConVar( "mc_import_max", "0", F, "Max blocks one mc_import may load; 0 = unlimited" )
 	MC.Config.Autosave    = GetConVar( "mc_autosave" ) or CreateConVar( "mc_autosave", "120", F, "Seconds between autosaves (0 disables)" )
 
 	if math.abs( MC.Config.Reach:GetFloat() - 8192 ) < 0.01 then

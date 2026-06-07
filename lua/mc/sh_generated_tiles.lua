@@ -485,6 +485,9 @@ MC.GeneratedTiles = {
 	yellow_stained_glass = 480,
 	yellow_terracotta = 481,
 	yellow_wool = 482,
+	water_still = 483,
+	lava_still = 484,
+	glow_lichen = 485,
 }
 if MC.Atlas then
 	MC.Atlas.COLS = MC.GeneratedAtlas.COLS

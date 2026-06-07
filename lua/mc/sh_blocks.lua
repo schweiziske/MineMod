@@ -229,7 +229,6 @@ for _, b in pairs( MC.Blocks ) do
 		b.defaultOrient = rule and rule.values[b.defaultOrientName] or b.defaultOrient
 	end
 end
-rebuildBlockList()
 
 function MC.IsValidBlock( id )
 	return id ~= nil and MC.Blocks[id] ~= nil
@@ -250,6 +249,23 @@ function MC.ResolveBlock( input )
 	end
 	return b and { id = b.id, block = b, mcid = b.mcid, name = b.name } or nil
 end
+
+local function registerImportFallbackBlock( def )
+	if MC.ResolveBlock( def.mcid ) then return end
+	MC.RegisterBlock( def )
+end
+
+registerImportFallbackBlock( { id = 60001, name = "water", mcid = "minecraft:water", solid = false, transparent = true, textures = { top = "water_still", side = "water_still", bottom = "water_still" } } )
+registerImportFallbackBlock( { id = 60002, name = "short_grass", mcid = "minecraft:short_grass", solid = false, transparent = true, textures = { top = "oak_leaves", side = "oak_leaves", bottom = "oak_leaves" } } )
+registerImportFallbackBlock( { id = 60003, name = "tall_grass", mcid = "minecraft:tall_grass", solid = false, transparent = true, textures = { top = "oak_leaves", side = "oak_leaves", bottom = "oak_leaves" } } )
+registerImportFallbackBlock( { id = 60004, name = "seagrass", mcid = "minecraft:seagrass", solid = false, transparent = true, textures = { top = "oak_leaves", side = "oak_leaves", bottom = "oak_leaves" } } )
+registerImportFallbackBlock( { id = 60005, name = "tall_seagrass", mcid = "minecraft:tall_seagrass", solid = false, transparent = true, textures = { top = "oak_leaves", side = "oak_leaves", bottom = "oak_leaves" } } )
+registerImportFallbackBlock( { id = 60006, name = "lava", mcid = "minecraft:lava", solid = false, transparent = true, textures = { top = "lava_still", side = "lava_still", bottom = "lava_still" } } )
+registerImportFallbackBlock( { id = 60007, name = "glow_lichen", mcid = "minecraft:glow_lichen", solid = false, transparent = true, textures = { top = "glow_lichen", side = "glow_lichen", bottom = "glow_lichen" } } )
+registerImportFallbackBlock( { id = 60008, name = "bush", mcid = "minecraft:bush", solid = false, transparent = true, textures = { top = "oak_leaves", side = "oak_leaves", bottom = "oak_leaves" } } )
+registerImportFallbackBlock( { id = 60009, name = "flower", mcid = "minecraft:dandelion", solid = false, transparent = true, textures = { top = "oak_leaves", side = "oak_leaves", bottom = "oak_leaves" }, aliases = { "minecraft:poppy", "minecraft:white_tulip", "minecraft:pink_tulip", "minecraft:cornflower", "minecraft:oxeye_daisy", "minecraft:sunflower", "minecraft:firefly_bush" } } )
+
+rebuildBlockList()
 
 function MC.DefaultOrient( id )
 	local b = MC.Blocks[id]

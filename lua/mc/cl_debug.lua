@@ -18,6 +18,47 @@ concommand.Add( "mc_debug", function()
 	MC.DebugHUD = not MC.DebugHUD
 end )
 
+concommand.Add( "mc_client_diag", function()
+	local chunks, blocks = 0, 0
+	local minBZ, maxBZ
+	for _, c in pairs( MC.World or {} ) do
+		if c.count and c.count > 0 then
+			chunks = chunks + 1
+			blocks = blocks + c.count
+			for li in pairs( c.blocks or {} ) do
+				local _, _, lz = MC.DecodeLocal( li )
+				local bz = c.cz * MC.CH + lz
+				minBZ = minBZ and math.min( minBZ, bz ) or bz
+				maxBZ = maxBZ and math.max( maxBZ, bz ) or bz
+			end
+		end
+	end
+
+	local meshes = 0
+	for _, list in pairs( MC.Meshes or {} ) do
+		if istable( list ) and #list > 0 then meshes = meshes + 1 end
+	end
+
+	local entsByMap = 0
+	for _, e in ipairs( ents.FindByClass( "mc_chunk" ) ) do
+		if IsValid( e ) then entsByMap = entsByMap + 1 end
+	end
+
+	local entsRegistered = 0
+	for _, e in pairs( MC.ChunkEnts or {} ) do
+		if IsValid( e ) then entsRegistered = entsRegistered + 1 end
+	end
+
+	local pending = 0
+	for _ in pairs( MC.PendingFull or {} ) do pending = pending + 1 end
+	local progress = MC.SyncProgress or {}
+
+	print( string.format( "[MC client] world chunks=%d blocks=%d bz=%s..%s meshes=%d chunk ents=%d registered=%d pending=%d progress=%d/%d chunks=%d/%d dirty=%s",
+		chunks, blocks, tostring( minBZ ), tostring( maxBZ ), meshes, entsByMap, entsRegistered, pending,
+		progress.received or 0, progress.expected or 0, progress.doneChunks or 0, progress.chunks or 0,
+		tostring( next( MC.MeshDirty or {} ) ~= nil ) ) )
+end )
+
 local function facingName( yaw )
 	yaw = ( yaw % 360 + 360 ) % 360
 	if yaw < 45 or yaw >= 315 then return "+X (东)" end
