@@ -22,8 +22,9 @@ MC.ChunkWorld = MC.CS * MC.BS -- world units per chunk edge
 -- Must match _build/build_atlas.ps1 (TILE/COLS) and the produced atlas height.
 MC.Atlas = {
 	COLS = 16,
-	ROWS = 4,
+	ROWS = 31,
 	TILE = 64,
+	INSET = 0.5,
 	MATERIAL = "mc/atlas_365.png",
 }
 MC.Atlas.W = MC.Atlas.COLS * MC.Atlas.TILE
@@ -43,7 +44,7 @@ end
 MC.Net = {
 	COORD_BITS = 20, -- signed block coord (+-524288 blocks; far beyond any map)
 	LOCAL_BITS = 12, -- local index 0..4095
-	ID_BITS    = 8,  -- block id 0..255
+	ID_BITS    = 16, -- block id 0..65535
 	ORIENT_BITS = 3, -- Minecraft Direction ordinal / axis ordinal
 	COUNT_BITS = 13, -- blocks per chunk 0..4096
 }
@@ -56,6 +57,7 @@ if SERVER then
 	MC.Config.MaxBlocks   = GetConVar( "mc_max_blocks" ) or CreateConVar( "mc_max_blocks", "300000", F, "Global cap on total placed blocks; 0 = unlimited" )
 	MC.Config.Reach       = GetConVar( "mc_reach" ) or CreateConVar( "mc_reach", tostring( MC.Config.DefaultReach ), F, "Max distance (units) a player may place/break from; 0 disables" )
 	MC.Config.FillMax     = GetConVar( "mc_fill_max" ) or CreateConVar( "mc_fill_max", "32768", F, "Max blocks one /fill may modify; 0 = unlimited" )
+	MC.Config.ImportMax   = GetConVar( "mc_import_max" ) or CreateConVar( "mc_import_max", "300000", F, "Max blocks one mc_import may load; 0 = unlimited" )
 	MC.Config.Autosave    = GetConVar( "mc_autosave" ) or CreateConVar( "mc_autosave", "120", F, "Seconds between autosaves (0 disables)" )
 
 	if math.abs( MC.Config.Reach:GetFloat() - 8192 ) < 0.01 then

@@ -74,6 +74,9 @@ function SWEP:SecondaryAttack()
 	if not tr.Hit then return end
 
 	if SERVER then
+		local ux, uy, uz = breakCell( tr )
+		if MC.SV.Use( owner, ux, uy, uz ) then return end
+
 		local bx, by, bz = placeCell( tr )
 		local id = selectedID( owner )
 		local orient = MC.OrientForPlacement( owner, tr, id )

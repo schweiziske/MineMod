@@ -13,7 +13,7 @@
 
 把整个 `mc` 文件夹放到 `garrysmod/addons/` 下（你现在就在这）。重启服务器或地图即可。
 
-材质图集已经生成好了：`materials/mc/atlas.png`（32 种原版方块贴图）。
+材质图集已经生成好了：`materials/mc/atlas_365.png`。当前第一阶段会从本地 `26.2-pre-4/out` 生成完整方块注册表和贴图图集。
 
 ---
 
@@ -54,13 +54,12 @@
 
 控制台命令：
 - `mc_save` —— 立即保存（管理员）
-- `mc_accept_blocksize` —— 确认当前方块尺寸加载结果后，重写存档尺寸元数据（管理员）
 - `mc_clear` —— 清空整个世界（管理员）
 - `mc_block_sel <id>` —— SWEP 选择方块（一般由面板自动调用）
-- `mc_fill x1 y1 z1 x2 y2 z2 <id|name|air>` —— 填充/清除一块方块区域（不受 `mc_reach` 限制）
+- `mc_fill x1 y1 z1 x2 y2 z2 <id|name|air|minecraft:name[state]>` —— 填充/清除一块方块区域（不受 `mc_reach` 限制）
 
 聊天命令：
-- `/fill x1 y1 z1 x2 y2 z2 <id|name|air>` 或 `!fill ...` —— 填充/清除一块方块区域，坐标是方块格坐标。例如 `/fill 0 0 0 9 0 9 stone`。
+- `/fill x1 y1 z1 x2 y2 z2 <id|name|air|minecraft:name[state]>` 或 `!fill ...` —— 填充/清除一块方块区域，坐标是方块格坐标。例如 `/fill 0 0 0 9 0 9 stone`、`/fill 0 0 0 3 3 3 minecraft:oak_log[axis=x]`。
 
 **客户端 ConVar**：
 - `mc_client_collision`（默认 `1`）—— 是否在客户端也建一份碰撞，让本地玩家走在方块上时移动预测更顺、不抖。万一某些环境下表现异常，设 `0` 退回「只用服务器碰撞」。
@@ -69,15 +68,19 @@
 
 ## 重新生成 / 更换贴图
 
-图集由 `_build/build_atlas.ps1` 生成（从 InventivetalentDev/minecraft-assets 镜像下载原版贴图，绿化草/树叶，合成草方块侧面，最近邻放大后拼成一张图）。
+图集由 `_build/build_atlas.ps1` 生成。脚本读取本地 `E:\mc\.minecraft\versions\26.2-pre-4\out`，扫描 `blockstates`、`models/block`、`textures/block`，只把完整 cube 方块加入第一阶段注册表。
 
 ```powershell
 # 在 addons/mc 目录下
 powershell -ExecutionPolicy Bypass -File _build\build_atlas.ps1
 ```
 
-想加方块：在 `_build/build_atlas.ps1` 的 `$tiles` 列表里加一格，重新生成；然后在
-`lua/mc/sh_blocks.lua` 里把对应 tile 常量和 `MC.Blocks` 条目加上（顺序必须和脚本一致）。
+脚本会同步生成：
+- `materials/mc/atlas_365.png` —— 方块贴图图集
+- `lua/mc/sh_generated_tiles.lua` —— 机器生成的 tile 索引
+- `lua/mc/sh_generated_blocks.lua` —— 机器生成的完整方块注册表
+
+想加自定义方块：走 `MC.RegisterBlock(def)` 注册，字段包括 `id`、`name`、`mcid`、`disp`、`solid`、`transparent`、`textures`、`stateRule`、`placeRule`、`handlers`。内部数字 ID 由本插件稳定维护，外部命令和后续地图导入优先使用 `minecraft:name`。
 
 > 贴图版权归 Mojang。仅供你自己的服务器使用，请勿公开再分发。
 
@@ -106,6 +109,8 @@ powershell -ExecutionPolicy Bypass -File _build\build_atlas.ps1
 lua/autorun/mc_load.lua          加载器
 lua/mc/sh_config.lua             常量 / ConVar / net 协议
 lua/mc/sh_blocks.lua             方块注册表 + 图集 tile 映射
+lua/mc/sh_generated_tiles.lua    自动生成的 tile 索引
+lua/mc/sh_generated_blocks.lua   自动生成的完整方块表
 lua/mc/sh_voxel.lua              体素存储 + 坐标换算
 lua/mc/sv_world.lua             服务器权威 / 同步 / 存档
 lua/mc/cl_render.lua             IMesh 网格构建 + 绘制
@@ -114,6 +119,6 @@ lua/mc/cl_ui.lua                 方块图标 / 选择面板
 lua/entities/mc_chunk/           区块实体（碰撞 + 渲染）
 lua/weapons/mc_placer/           SWEP
 lua/weapons/gmod_tool/stools/mc_block.lua   工具枪
-materials/mc/atlas.png           贴图图集
+materials/mc/atlas_365.png       贴图图集
 _build/build_atlas.ps1           图集生成脚本
 ```

@@ -134,9 +134,17 @@ local function broadcastSet( bx, by, bz, id, orient )
 	net.Broadcast()
 end
 
+local function callBlockHandler( id, name, ... )
+	local b = MC.Blocks[id]
+	local fn = b and b.handlers and b.handlers[name]
+	if not fn then return nil end
+	return fn( ... )
+end
+
 -- core mutation shared by Place/Break/fill/demo (no validation here)
-local function apply( bx, by, bz, id, _, orient )
+local function apply( bx, by, bz, id, _, orient, actor )
 	local old = MC.GetBlock( bx, by, bz )
+	local oldOrient = MC.GetBlockOrient( bx, by, bz )
 	orient = MC.NormalizeOrient( id, orient )
 	local chunk, created, emptied, changed = MC.SetBlockRaw( bx, by, bz, id, orient )
 	if not changed then return false end
@@ -162,6 +170,8 @@ local function apply( bx, by, bz, id, _, orient )
 	end
 
 	broadcastSet( bx, by, bz, id, orient )
+	if old ~= 0 then callBlockHandler( old, "OnBreak", actor, bx, by, bz, oldOrient ) end
+	if id ~= 0 then callBlockHandler( id, "OnPlace", actor, bx, by, bz, orient ) end
 	SV.Dirty = true
 	return true
 end
@@ -192,21 +202,26 @@ function SV.Place( ply, bx, by, bz, id, orient )
 		return false
 	end
 	if not SV.Validate( ply, bx, by, bz, true ) then return false end
-	return apply( bx, by, bz, id, 1, orient )
+	return apply( bx, by, bz, id, 1, orient, ply )
 end
 
 function SV.Break( ply, bx, by, bz )
-	if MC.GetBlock( bx, by, bz ) == 0 then return false end
+	local old = MC.GetBlock( bx, by, bz )
+	if old == 0 then return false end
 	if not SV.Validate( ply, bx, by, bz, false ) then return false end
-	return apply( bx, by, bz, 0, -1 )
+	return apply( bx, by, bz, 0, -1, nil, ply )
+end
+
+function SV.Use( ply, bx, by, bz )
+	local id = MC.GetBlock( bx, by, bz )
+	if id == 0 then return false end
+	local b = MC.Blocks[id]
+	if not b or not b.handlers or not b.handlers.OnUse then return false end
+	if not SV.Validate( ply, bx, by, bz, false ) then return false end
+	return b.handlers.OnUse( ply, bx, by, bz, MC.GetBlockOrient( bx, by, bz ) ) == true
 end
 
 ------------------------------------------------------------------- fill command
-local BlockNameToID = {}
-for id, b in pairs( MC.Blocks ) do
-	BlockNameToID[string.lower( b.name )] = id
-end
-
 local function trimArg( s )
 	return string.match( tostring( s or "" ), "^%s*(.-)%s*$" )
 end
@@ -218,40 +233,11 @@ local function joinArgs( args, first, last )
 	return table.concat( out, " " )
 end
 
-local function parseBlockID( s )
-	if not s then return nil end
-	s = string.lower( trimArg( s ) )
-	s = string.match( s, "^minecraft:(.+)$" ) or s
-	if s == "0" or s == "air" then return 0 end
-	local id = tonumber( s )
-	if id then
-		id = math.floor( id )
-		return ( id == 0 or MC.IsValidBlock( id ) ) and id or nil
-	end
-	return BlockNameToID[s]
-end
-
-local function parseBlockStateText( text )
-	text = trimArg( text )
-	local blockName, bracketState = string.match( text, "^([^%s%[]+)%s*%[(.-)%]%s*$" )
-	if blockName then return trimArg( blockName ), bracketState end
-	if string.find( text, "%[" ) or string.find( text, "%]" ) then
-		return trimArg( string.match( text, "^([^%s%[]+)" ) or text ), "__invalid_bracket_state__"
-	end
-	local blockArg, stateArg = string.match( text, "^(%S+)%s+(.+)$" )
-	if blockArg then return trimArg( blockArg ), stateArg end
-	return text, nil
-end
-
 local function parseBlockStateTail( text )
-	local blockArg, stateArg = parseBlockStateText( text )
-	local id = parseBlockID( blockArg )
-	if id == nil then return nil, nil, blockArg, "block" end
-	if stateArg ~= nil and not MC.IsOrientStateValid( id, stateArg ) then return id, nil, blockArg, "state" end
-	return id, MC.StateToOrient( id, stateArg ), blockArg, nil
+	return MC.ParseBlockSpec( trimArg( text ) )
 end
 
-local FILL_USAGE = "Usage: /fill x1 y1 z1 x2 y2 z2 <id|name|air|minecraft:name[state]> [state]"
+local FILL_USAGE = "用法: /fill x1 y1 z1 x2 y2 z2 <id|name|air|minecraft:name[state]> [state]"
 
 local function runFill( ply, args )
 	if #args < 8 then chat( ply, FILL_USAGE ) return end
@@ -265,7 +251,7 @@ local function runFill( ply, args )
 		return
 	end
 	if parseErr == "state" then
-		chat( ply, "Invalid block state for " .. blockArg )
+		chat( ply, "方块状态不合法: " .. blockArg )
 		return
 	end
 
@@ -276,14 +262,14 @@ local function runFill( ply, args )
 	local minz, maxz = math.min( z1, z2 ), math.max( z1, z2 )
 
 	if not worldBoundsOK( minx, miny, minz ) or not worldBoundsOK( maxx, maxy, maxz ) then
-		chat( ply, "Out of build bounds (mc_world_limit)" )
+		chat( ply, "超出建造范围 (mc_world_limit)" )
 		return
 	end
 
 	local volume = ( maxx - minx + 1 ) * ( maxy - miny + 1 ) * ( maxz - minz + 1 )
 	local fillMax = C.FillMax and C.FillMax:GetInt() or 32768
 	if fillMax > 0 and volume > fillMax then
-		chat( ply, "Fill is too large (" .. volume .. " > mc_fill_max " .. fillMax .. ")" )
+		chat( ply, "填充范围太大 (" .. volume .. " > mc_fill_max " .. fillMax .. ")" )
 		return
 	end
 
@@ -302,7 +288,7 @@ local function runFill( ply, args )
 
 	local maxBlocks = C.MaxBlocks:GetInt()
 	if id ~= 0 and maxBlocks > 0 and SV.BlockCount + add > maxBlocks then
-		chat( ply, "Block cap would be exceeded (mc_max_blocks)" )
+		chat( ply, "会超过方块上限 (mc_max_blocks)" )
 		return
 	end
 
@@ -325,7 +311,7 @@ local function runFill( ply, args )
 		end
 	end
 
-	chat( ply, "Filled " .. changed .. " blocks" )
+	chat( ply, "已填充 " .. changed .. " 个方块" )
 end
 
 hook.Add( "PlayerSay", "mc_fill_command", function( ply, text )
@@ -341,6 +327,160 @@ end )
 concommand.Add( "mc_fill", function( ply, _, args )
 	table.insert( args, 1, "mc_fill" )
 	runFill( ply, args )
+end )
+
+------------------------------------------------------------------- import tool
+local IMPORT_USAGE = "用法: mc_import <mc_import/文件.json> [replace|append]"
+
+local function normalizeImportPath( path )
+	path = trimArg( path or "" )
+	path = string.gsub( path, "\\", "/" )
+	path = string.gsub( path, "^/+", "" )
+	if path == "" then return nil end
+	if not string.StartWith( path, "mc_import/" ) then
+		path = "mc_import/" .. path
+	end
+	if not string.EndsWith( string.lower( path ), ".json" ) then
+		path = path .. ".json"
+	end
+	return path
+end
+
+local function clearWorldNoNet()
+	for _, c in pairs( MC.World ) do
+		if IsValid( c.ent ) then c.ent:Remove() end
+	end
+	MC.World = {}
+	SV.BlockCount = 0
+	SV.PhysDirty = {}
+	SV.SyncQueue = {}
+end
+
+local function resyncAllClients()
+	net.Start( "mc_clear" )
+	net.Broadcast()
+	for _, p in ipairs( player.GetAll() ) do
+		SV.BeginSync( p )
+	end
+end
+
+local function blockFromImport( cache, savedBlock )
+	local key = tostring( savedBlock or "" )
+	local cached = cache[key]
+	if cached ~= nil then return cached end
+	local resolved = MC.ResolveBlock( key )
+	local id = resolved and resolved.id or 0
+	cache[key] = id
+	return id
+end
+
+local function importCells( data, appendMode )
+	if not data or not data.chunks then return nil, "文件格式不对" end
+	local importMax = C.ImportMax and C.ImportMax:GetInt() or 300000
+	local cache = {}
+	local imported, skippedUnknown, skippedBounds, skippedLimit = 0, 0, 0, 0
+
+	if not appendMode then
+		clearWorldNoNet()
+	end
+
+	for _, ck in ipairs( data.chunks ) do
+		local cx, cy, cz, cells = math.floor( tonumber( ck[1] ) or 0 ), math.floor( tonumber( ck[2] ) or 0 ), math.floor( tonumber( ck[3] ) or 0 ), ck[4]
+		if istable( cells ) then
+			local c = MC.EnsureChunk( cx, cy, cz )
+			for i = 1, #cells, 3 do
+				local li = math.floor( tonumber( cells[i] ) or -1 )
+				local savedBlock = cells[i + 1]
+				local state = cells[i + 2]
+				if li >= 0 and li < MC.CS * MC.CS * MC.CS then
+					local lx, ly, lz = MC.DecodeLocal( li )
+					local bx, by, bz = cx * MC.CS + lx, cy * MC.CS + ly, cz * MC.CS + lz
+					if not worldBoundsOK( bx, by, bz ) then
+						skippedBounds = skippedBounds + 1
+					elseif importMax > 0 and SV.BlockCount >= importMax and c.blocks[li] == nil then
+						skippedLimit = skippedLimit + 1
+					else
+						local id = blockFromImport( cache, savedBlock )
+						if id == 0 or not MC.IsValidBlock( id ) then
+							skippedUnknown = skippedUnknown + 1
+						else
+							if c.blocks[li] == nil then
+								c.count = c.count + 1
+								SV.BlockCount = SV.BlockCount + 1
+							end
+							c.blocks[li] = id
+							c.orients[li] = MC.NormalizeOrient( id, MC.StateToOrient( id, state ) )
+							imported = imported + 1
+						end
+					end
+				end
+			end
+			if c.count > 0 then
+				SV.EnsureChunkEnt( c )
+				SV.MarkPhysDirty( c.key )
+			else
+				MC.World[c.key] = nil
+			end
+		end
+	end
+
+	SV.Dirty = true
+	resyncAllClients()
+	return {
+		imported = imported,
+		total = SV.BlockCount,
+		skippedUnknown = skippedUnknown,
+		skippedBounds = skippedBounds,
+		skippedLimit = skippedLimit,
+	}
+end
+
+local function runImport( ply, args )
+	if IsValid( ply ) and not ply:IsAdmin() then return end
+	local first = string.lower( tostring( args[1] or "" ) )
+	local base = ( first == "/mc_import" or first == "!mc_import" or first == "mc_import" ) and 2 or 1
+	local path = normalizeImportPath( args[base] )
+	if not path then chat( ply, IMPORT_USAGE ) return end
+
+	local mode = string.lower( tostring( args[base + 1] or "replace" ) )
+	local appendMode = mode == "append"
+	if mode ~= "replace" and mode ~= "append" then
+		chat( ply, IMPORT_USAGE )
+		return
+	end
+
+	if not file.Exists( path, "DATA" ) then
+		chat( ply, "找不到导入文件: garrysmod/data/" .. path )
+		return
+	end
+
+	local raw = file.Read( path, "DATA" )
+	local data = raw and util.JSONToTable( raw )
+	if not data then
+		chat( ply, "导入文件不是有效 JSON: " .. path )
+		return
+	end
+
+	local result, err = importCells( data, appendMode )
+	if not result then chat( ply, "导入失败: " .. tostring( err ) ) return end
+	local msg = string.format( "导入完成: %d 个方块，当前总数 %d，跳过未知 %d，越界 %d，超上限 %d",
+		result.imported, result.total, result.skippedUnknown, result.skippedBounds, result.skippedLimit )
+	chat( ply, msg )
+	MsgN( "[MC] imported " .. path .. " (" .. ( appendMode and "append" or "replace" ) .. ")" )
+end
+
+hook.Add( "PlayerSay", "mc_import_command", function( ply, text )
+	local args = string.Explode( "%s+", string.Trim( text ), true )
+	if not args[1] then return end
+	local cmd = string.lower( args[1] )
+	if cmd == "/mc_import" or cmd == "!mc_import" then
+		runImport( ply, args )
+		return ""
+	end
+end )
+
+concommand.Add( "mc_import", function( ply, _, args )
+	runImport( ply, args )
 end )
 
 ------------------------------------------------------------------ world streaming
@@ -381,6 +521,17 @@ timer.Create( "mc_sync", 0.1, 0, function()
 	end
 end )
 
+timer.Create( "mc_block_tick", 1, 0, function()
+	if not MC.HasBlockTickHandlers then return end
+	for _, c in pairs( MC.World ) do
+		if c.count and c.count > 0 then
+			MC.ForEachBlock( c, function( bx, by, bz, _, _, _, id, orient )
+				callBlockHandler( id, "OnTick", bx, by, bz, orient )
+			end )
+		end
+	end
+end )
+
 ------------------------------------------------------------------- persistence
 local function savePath()
 	return "mc/" .. game.GetMap() .. ".dat"
@@ -394,13 +545,13 @@ function SV.Save()
 			local n = 0
 			for li, id in pairs( c.blocks ) do
 				n = n + 1 ; cells[n] = li
-				n = n + 1 ; cells[n] = id
+				n = n + 1 ; cells[n] = MC.BlockCanonicalName( id )
 				n = n + 1 ; cells[n] = MC.BlockStateText( id, c.orients and c.orients[li] )
 			end
 			chunks[#chunks + 1] = { c.cx, c.cy, c.cz, cells }
 		end
 	end
-	local json = util.TableToJSON( { v = 2, bs = MC.BS, cs = MC.CS, chunks = chunks } )
+	local json = util.TableToJSON( { v = 3, bs = MC.BS, cs = MC.CS, chunks = chunks } )
 	if not json then return end
 	file.CreateDir( "mc" )
 	file.Write( savePath(), util.Compress( json ) )
@@ -429,9 +580,11 @@ function SV.Load()
 	for _, ck in ipairs( data.chunks ) do
 		local cx, cy, cz, cells = ck[1], ck[2], ck[3], ck[4]
 		local c = MC.EnsureChunk( cx, cy, cz )
-		local stride = data.v == 2 and 3 or 2
+		local stride = ( data.v == 2 or data.v == 3 ) and 3 or 2
 		for i = 1, #cells, stride do
-			local li, id = cells[i], cells[i + 1]
+			local li, savedBlock = cells[i], cells[i + 1]
+			local resolved = data.v == 3 and MC.ResolveBlock( savedBlock ) or nil
+			local id = resolved and resolved.id or math.floor( tonumber( savedBlock ) or 0 )
 			local orient = stride == 3 and MC.StateToOrient( id, cells[i + 2] ) or MC.DefaultOrient( id )
 			if MC.IsValidBlock( id ) and c.blocks[li] == nil then
 				c.blocks[li] = id
