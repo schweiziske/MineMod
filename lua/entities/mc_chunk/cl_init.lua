@@ -25,7 +25,13 @@ function ENT:Initialize()
 end
 
 function ENT:Draw()
-	MC.DrawChunk( self:EnsureKey() )
+	local mat = Matrix()
+	mat:SetTranslation( self:GetPos() )
+	mat:SetAngles( self:GetAngles() )
+
+	cam.PushModelMatrix( mat )
+		MC.DrawChunk( self:EnsureKey() )
+	cam.PopModelMatrix()
 end
 
 -- alpha cutout draws in the opaque pass; nothing translucent to do
