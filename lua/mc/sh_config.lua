@@ -10,13 +10,17 @@ MC.Config = MC.Config or {}
 -- NOTE: changing this invalidates existing saves (positions are in blocks * size).
 MC.Config.BlockSize = 36.5
 MC.Config.DefaultReach = MC.Config.BlockSize * 5
--- Blocks per chunk edge. 16 == one Minecraft chunk slice. 16^3 = 4096 blocks/entity.
+-- Minecraft-style chunk section: 16x16 horizontally, 384 blocks vertically.
+-- Z is not globally clamped; sections are addressed by their chunk Z.
 MC.Config.ChunkSize = 16
+MC.Config.ChunkHeight = 384
 
 -- convenience locals mirrored onto MC for hot paths
 MC.BS = MC.Config.BlockSize
 MC.CS = MC.Config.ChunkSize
-MC.ChunkWorld = MC.CS * MC.BS -- world units per chunk edge
+MC.CH = MC.Config.ChunkHeight
+MC.ChunkWorld = MC.CS * MC.BS
+MC.ChunkWorldH = MC.CH * MC.BS
 
 ------------------------------------------------------------------ atlas geometry
 -- Must match _build/build_atlas.ps1 (TILE/COLS) and the produced atlas height.
@@ -43,10 +47,10 @@ end
 -- Bit widths used by the net protocol (shared so both ends agree).
 MC.Net = {
 	COORD_BITS = 20, -- signed block coord (+-524288 blocks; far beyond any map)
-	LOCAL_BITS = 12, -- local index 0..4095
+	LOCAL_BITS = 17, -- local index 0..98303 (16*16*384-1)
 	ID_BITS    = 16, -- block id 0..65535
 	ORIENT_BITS = 3, -- Minecraft Direction ordinal / axis ordinal
-	COUNT_BITS = 13, -- blocks per chunk 0..4096
+	COUNT_BITS = 17, -- blocks per chunk section 0..98304
 }
 
 ------------------------------------------------------------------ server ConVars

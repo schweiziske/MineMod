@@ -63,11 +63,11 @@ hook.Add( "HUDPaint", "mc_debug_hud", function()
 		"MC 调试 (F3)",
 		string.format( "XYZ:          %.1f   %.1f   %.1f", pos.x, pos.y, pos.z ),
 		string.format( "方块格:       %d   %d   %d", bx, by, bz ),
-		string.format( "区块:         %d   %d   %d", cx, cy, cz ),
+		string.format( "区块列:       %d   %d", cx, cy ),
 		"朝向:         " .. facingName( ply:EyeAngles().yaw ),
 		"",
 		"看向方块:     " .. looked,
-		string.format( "看向区块:     %d   %d   %d", lcx, lcy, lcz ),
+		string.format( "看向区块列:   %d   %d", lcx, lcy ),
 		string.format( "已加载:       %d 区块 / %d 方块", chunks, blocks ),
 	}
 

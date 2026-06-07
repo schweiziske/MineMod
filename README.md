@@ -1,124 +1,186 @@
-# MC — Minecraft 方块插件 (Garry's Mod)
+# MC 方块插件交接说明
 
-用 **IMesh** 渲染我的世界方块，**不为每个方块创建实体**，所以放再多方块也不卡。
+这个插件是在 Garry's Mod 里用 IMesh 渲染类似 Minecraft 的方块世界。目标不是每个方块一个实体，而是把方块按区块合成网格渲染，再用 `mc_chunk` 实体提供碰撞。
 
-- 方块数据存在一个分区块 (16×16×16) 的体素表里，按区块用 IMesh 网格渲染 —— **每个区块只有 1 次 draw call**。
-- 碰撞用 **每个区块 1 个物理实体** (`mc_chunk`，贪心合并成大盒子的 multiconvex)。约 **4096 个方块共用 1 个实体**。
-- 服务器权威：客户端从不直接改方块，所有放置/破坏都由服务器校验后广播。
-- 建筑**自动按地图保存**到 `data/mc/<地图名>.dat`，地图重启后自动恢复。
+这份 README 主要给下一个接手的 AI/开发者看。当前工程不是稳定完成态，尤其是“区块拼接”和“大地图同步”还有明显问题，不要默认当前实现是对的。
 
----
+## 当前目标
 
-## 安装
+- 支持 36.5 units 的方块尺寸。
+- 支持放置、破坏、`/fill`、基础方块注册和材质 atlas。
+- 支持从 Java Minecraft 存档导出 JSON，再在 GMod 里导入。
+- 最终目标是把 Minecraft 地图读到 GMod，并保留方块 ID、方块状态、朝向和后续自定义交互接口。
 
-把整个 `mc` 文件夹放到 `garrysmod/addons/` 下（你现在就在这）。重启服务器或地图即可。
+## 当前重要问题
 
-材质图集已经生成好了：`materials/mc/atlas_365.png`。当前第一阶段会从本地 `26.2-pre-4/out` 生成完整方块注册表和贴图图集。
+### 1. 区块拼接目前是错的
 
----
+现有代码里曾经尝试把区块改成 `16x16x384`，并用 `cz` 上下拼接。但是这个方案目前没有验证通过，表现包括：
 
-## 使用
+- 上下 section 之间可能空一大块。
+- 靠近 chunk 时可能消失。
+- 客户端 mesh 坐标、实体坐标、render bounds、碰撞坐标之间容易出现重复偏移或少偏移。
+- 当前实现不要当成正确答案继续硬补。
 
-两种工具都有：
+下一步应该先重新设计区块坐标，不要在旧补丁上继续猜。
 
-### 1. SWEP（武器，任何 gamemode 都能用）
-- 生成菜单武器栏里找 **MC 方块放置器**，或控制台 `give mc_placer`。
-- **左键**：破坏方块
-- **右键**：放置当前方块
-- **R**：打开方块选择面板
+建议重新明确三套坐标：
 
-### 2. 工具枪（仅 Sandbox 等带工具枪的 gamemode）
-- 工具枪菜单 → Construction → **MC 方块**
-- **左键**破坏 / **右键**放置 / **Reload** 复制准星处的方块
-- 左侧面板选择方块
+- MC 源数据坐标：Java 存档里的 `x, y, z`，高度通常是 `-64..319`。
+- GMod 方块格坐标：插件内部的 `bx, by, bz`。
+- 渲染实体本地坐标：`mc_chunk` 实体位置加本地 mesh 顶点。
 
-> 放置是“贴着表面放”的（像 MC 一样）：对着地面、墙或已有方块的某个面放，新方块就贴在那个面外侧。
-> 会卡住玩家的位置放不了方块（防止把人埋住）。
+如果继续用 `16x16x384`：
 
-### 调试 (F3)
+- `ChunkKey` 至少要包含 `cx, cy, czBand`。
+- `czBand` 只能表示一个 384 高的带，不应该再有固定 `ChunkMinZ`。
+- mesh 顶点必须只用实体本地坐标，实体位置负责世界偏移。
+- 碰撞和渲染必须用同一套 local index 解码。
+- 旧存档/旧导入格式必须明确迁移，不能混着猜。
 
-按 **F3** 开/关调试信息（仿 MC F3）：显示你的世界坐标、所在方块格 (cell)、所在区块 (chunk)、朝向，以及准星看向的方块/区块和已加载的区块/方块数。也可在控制台 `mc_debug` 切换，或 `bind <键> mc_debug` 绑到别的键。
+也可以考虑更接近 Minecraft 的内部结构：
 
----
+- 水平 chunk 是 `16x16`。
+- 垂直按 section 切成 `16` 高。
+- 导入时按 column 管理，但网络同步和 mesh 可以按 section 或更小批次发。
 
-## 服务器 ConVars
+注意：用户之前明确提过“我的世界正确的区块拼接，但是 GMod 可以上下拼接”。不要把“一个固定最低 z 的大柱子”当成最终方案。
 
-| ConVar | 默认 | 说明 |
-|---|---|---|
-| `mc_admin_only` | `0` | 设 1 则只有管理员能建造 |
-| `mc_world_limit` | `1024` | 每个轴方向离原点最多多少个方块 |
-| `mc_max_blocks` | `300000` | 全图方块总数上限 |
-| `mc_reach` | `182.5` | 放置/破坏的最大距离（单位），默认约 5 个方块，0 = 不限制 |
-| `mc_fill_max` | `32768` | 单次 `/fill` 最多修改多少个格子，0 = 不限制 |
-| `mc_autosave` | `120` | 自动保存间隔（秒），0 = 关闭 |
+### 2. GMod 不能一次发送大包
 
-控制台命令：
-- `mc_save` —— 立即保存（管理员）
-- `mc_clear` —— 清空整个世界（管理员）
-- `mc_block_sel <id>` —— SWEP 选择方块（一般由面板自动调用）
-- `mc_fill x1 y1 z1 x2 y2 z2 <id|name|air|minecraft:name[state]>` —— 填充/清除一块方块区域（不受 `mc_reach` 限制）
+GMod 的 net reliable buffer 很容易溢出。已经出现过类似错误：
 
-聊天命令：
-- `/fill x1 y1 z1 x2 y2 z2 <id|name|air|minecraft:name[state]>` 或 `!fill ...` —— 填充/清除一块方块区域，坐标是方块格坐标。例如 `/fill 0 0 0 9 0 9 stone`、`/fill 0 0 0 3 3 3 minecraft:oak_log[axis=x]`。
+```text
+Disconnect: ... overflowed reliable buffer
+```
 
-**客户端 ConVar**：
-- `mc_client_collision`（默认 `1`）—— 是否在客户端也建一份碰撞，让本地玩家走在方块上时移动预测更顺、不抖。万一某些环境下表现异常，设 `0` 退回「只用服务器碰撞」。
+原因是一次把大量方块或者一个巨大 chunk 通过 `mc_full` 发给客户端。不要再做这种一次性同步。
 
----
+后续同步必须分片：
 
-## 重新生成 / 更换贴图
+- 一个 chunk/section 生成完后可以发，但也要按小包切。
+- 每个 net message 要控制大小，宁可多 tick 发送。
+- 不要把几十万方块塞进一个 reliable message。
+- 客户端应该边收到边建立 mesh/碰撞，而不是等全量一次性完成。
+- 服务器也不能在同一帧给所有客户端塞满同步队列。
 
-图集由 `_build/build_atlas.ps1` 生成。脚本读取本地 `E:\mc\.minecraft\versions\26.2-pre-4\out`，扫描 `blockstates`、`models/block`、`textures/block`，只把完整 cube 方块加入第一阶段注册表。
+建议做一个同步队列：
+
+- `mc_full_begin(key, totalParts)`
+- `mc_full_part(key, partIndex, cells...)`
+- `mc_full_end(key)`
+
+或者更简单：每次只发固定数量 cell，例如 512 或 1024 个，客户端累积到 section 后标 dirty。
+
+### 3. 当前导入 JSON 要保持简单
+
+用户明确不想要特别啰嗦的 JSON。导入文件应该尽量简单：
+
+```json
+{
+  "v": 5,
+  "h": 384,
+  "p": ["minecraft:stone", "minecraft:dirt"],
+  "chunks": [
+    [0, 0, 0, [0, 0, 1, 0, 2, 1]]
+  ]
+}
+```
+
+含义：
+
+- `p` 是全局 palette。
+- `chunks` 里每项是 `[cx, cy, cz, cells]`。
+- `cells` 是 `[localIndex, paletteIndex, localIndex, paletteIndex, ...]`。
+
+不要在每个方块里重复写 `"minecraft:stone"`。
+
+### 4. 服务器碰撞和客户端预测都要保留
+
+用户要求必须有客户端预测，但服务器碰撞也要有。
+
+注意：
+
+- 客户端预测不能一次性为大地图全量建碰撞，否则会崩或卡死。
+- 服务器碰撞也不能一次性为超多 chunk 同帧构建。
+- 应该按 chunk/section 分批 dirty rebuild。
+- 如果导入大地图，先默认只发渲染数据，再按玩家附近逐步建立碰撞会更稳。
+
+## 当前主要文件
+
+```text
+lua/mc/sh_config.lua             方块尺寸、chunk 尺寸、net bit 配置、ConVar
+lua/mc/sh_voxel.lua              方块存储和坐标换算
+lua/mc/sv_world.lua              服务端放置/破坏/fill/import/save/sync
+lua/mc/cl_net.lua                客户端接收 mc_full/mc_set
+lua/mc/cl_render.lua             客户端 IMesh 生成和绘制
+lua/entities/mc_chunk/           chunk 实体，负责绘制入口和碰撞
+_tools/mc_import_world.py        Java .mca 导出为 GMod 导入 JSON
+_build/build_atlas.ps1           从 Minecraft out 目录生成 atlas 和注册表
+out                              我的世界26.2-pre-4源代码
+```
+
+## 接手时先做什么
+
+1. 先看当前 git 状态：
 
 ```powershell
-# 在 addons/mc 目录下
-powershell -ExecutionPolicy Bypass -File _build\build_atlas.ps1
+git status --short
+git diff -- lua/mc/sh_voxel.lua lua/mc/sv_world.lua lua/mc/cl_net.lua lua/mc/cl_render.lua lua/entities/mc_chunk _tools/mc_import_world.py
 ```
 
-脚本会同步生成：
-- `materials/mc/atlas_365.png` —— 方块贴图图集
-- `lua/mc/sh_generated_tiles.lua` —— 机器生成的 tile 索引
-- `lua/mc/sh_generated_blocks.lua` —— 机器生成的完整方块注册表
+2. 不要直接相信当前 chunk 拼接实现。先写一个最小测试：
 
-想加自定义方块：走 `MC.RegisterBlock(def)` 注册，字段包括 `id`、`name`、`mcid`、`disp`、`solid`、`transparent`、`textures`、`stateRule`、`placeRule`、`handlers`。内部数字 ID 由本插件稳定维护，外部命令和后续地图导入优先使用 `minecraft:name`。
+- 只放两个方块：`bz=-1` 和 `bz=0`。
+- 确认它们在渲染和碰撞里是相邻的。
+- 再测试 `bz=383` 和 `bz=384`。
+- 再测试 `bz=-384` 和 `bz=-385`。
 
-> 贴图版权归 Mojang。仅供你自己的服务器使用，请勿公开再分发。
+3. 确认 mesh 和实体坐标规则：
 
----
+- 如果 mesh 顶点是本地坐标，实体位置必须是 chunk 世界原点。
+- 如果 mesh 顶点是世界坐标，实体位置必须是零或 Draw 时要处理矩阵。
+- 两种方式不能混用。
 
-## 工作原理（为什么不卡）
+4. 同步先做小包。
 
+不要先导入 16x16 chunks 或 300000 方块。先导入一个很小的 1 chunk，再确认客户端不卡、不丢、不消失。
+
+## 常用命令
+
+生成 1 个 MC chunk：
+
+```powershell
+xxx
 ```
-放置方块  ──► 服务器写入体素表 ──► 广播 mc_set
-                     │                    │
-                     ▼                    ▼
-        标记该区块碰撞需重建      客户端更新本地体素表 + 标记网格脏
-                     │                    │
-                     ▼                    ▼
-   mc_chunk:RebuildPhysics()    cl_render 在 Think 里重建该区块 IMesh
-   (贪心盒子 → multiconvex)      mc_chunk:Draw() → MC.DrawChunk (1 draw call)
+
+服务器导入：
+
+```text
+mc_import 123_1chunk_16x16x384
 ```
 
-- 隐藏面剔除：相邻两个实心方块之间的面不生成。
-- 玻璃/树叶：用 alpha cutout（材质 `alphatest`），且相邻同种透明方块之间不画面。
-- 方向光照：顶面最亮、底面最暗，靠顶点颜色实现，像素风一致。
-- 网格顶点超过 65535 会自动拆成多个 IMesh。
+清空：
 
-## 文件结构
+```text
+mc_clear
 ```
-lua/autorun/mc_load.lua          加载器
-lua/mc/sh_config.lua             常量 / ConVar / net 协议
-lua/mc/sh_blocks.lua             方块注册表 + 图集 tile 映射
-lua/mc/sh_generated_tiles.lua    自动生成的 tile 索引
-lua/mc/sh_generated_blocks.lua   自动生成的完整方块表
-lua/mc/sh_voxel.lua              体素存储 + 坐标换算
-lua/mc/sv_world.lua             服务器权威 / 同步 / 存档
-lua/mc/cl_render.lua             IMesh 网格构建 + 绘制
-lua/mc/cl_net.lua                客户端接收
-lua/mc/cl_ui.lua                 方块图标 / 选择面板
-lua/entities/mc_chunk/           区块实体（碰撞 + 渲染）
-lua/weapons/mc_placer/           SWEP
-lua/weapons/gmod_tool/stools/mc_block.lua   工具枪
-materials/mc/atlas_365.png       贴图图集
-_build/build_atlas.ps1           图集生成脚本
+
+重建碰撞：
+
+```text
+mc_rebuild
 ```
+
+如果同步卡死或 reliable buffer 溢出，先不要继续扩大地图，先修分片同步。
+
+## 用户偏好
+
+- README 和玩家能看到的文本尽量中文。
+- 不要擅自把 README 改英文。
+- 不要把导入 JSON 写得很复杂。
+- 不要一次性发送大包。
+- 不要把“看起来能跑一次”的 chunk 拼接当成正确实现。
+- 修改前先判断是不是用户刚回滚过的代码，不要把回滚内容又写回来。
+
+

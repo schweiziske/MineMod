@@ -8,7 +8,7 @@ function ENT:Initialize()
 
 	-- local-space render bounds covering the whole chunk (entity sits at chunk origin)
 	local w = MC.ChunkWorld
-	self:SetRenderBounds( Vector( 0, 0, 0 ), Vector( w, w, w ) )
+	self:SetRenderBounds( Vector( 0, 0, 0 ), Vector( w, w, MC.ChunkWorldH ) )
 
 	-- clientside collision for smooth local-player movement prediction, using the
 	-- same recipe as the server (VPHYSICS + custom collisions) so traces/movement

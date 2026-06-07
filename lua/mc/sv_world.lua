@@ -86,7 +86,6 @@ local function worldBoundsOK( bx, by, bz )
 	local lim = math.min( C.WorldLimit:GetInt(), protoMax )
 	return math.abs( bx ) <= lim
 		and math.abs( by ) <= lim
-		and math.abs( bz ) <= lim
 end
 
 -- returns true if allowed; otherwise false (+ optional notify)
@@ -374,10 +373,45 @@ local function blockFromImport( cache, savedBlock )
 	return id
 end
 
+local function importPaletteEntry( cache, palette, index )
+	if not istable( palette ) then return 0, 0 end
+	local spec = palette[math.floor( tonumber( index ) or 0 ) + 1]
+	if not spec then return 0, 0 end
+
+	local cached = cache[spec]
+	if cached then return cached[1], cached[2] end
+
+	local id, orient = MC.ParseBlockSpec( spec )
+	id = id or 0
+	orient = MC.NormalizeOrient( id, orient )
+	cache[spec] = { id, orient }
+	return id, orient
+end
+
+local function decodeLegacyLocal( li )
+	local cs, cs2 = MC.CS, MC.CS * MC.CS
+	local lz = math.floor( li / cs2 )
+	local ly = math.floor( ( li - lz * cs2 ) / cs )
+	local lx = li - lz * cs2 - ly * cs
+	return lx, ly, lz
+end
+
+local function oldColumnCell( data, cx, cy, li )
+	local lx, ly, lz = decodeLegacyLocal( li )
+	local minZ = math.floor( tonumber( data.minZ ) or 0 )
+	return cx * MC.CS + lx, cy * MC.CS + ly, minZ + lz
+end
+
+local function oldSliceCell( cx, cy, oldCz, li )
+	local lx, ly, lz = decodeLegacyLocal( li )
+	return cx * MC.CS + lx, cy * MC.CS + ly, oldCz * MC.CS + lz
+end
+
 local function importCells( data, appendMode )
 	if not data or not data.chunks then return nil, "文件格式不对" end
 	local importMax = C.ImportMax and C.ImportMax:GetInt() or 300000
 	local cache = {}
+	local palette = data.p or data.palette
 	local imported, skippedUnknown, skippedBounds, skippedLimit = 0, 0, 0, 0
 
 	if not appendMode then
@@ -385,41 +419,71 @@ local function importCells( data, appendMode )
 	end
 
 	for _, ck in ipairs( data.chunks ) do
-		local cx, cy, cz, cells = math.floor( tonumber( ck[1] ) or 0 ), math.floor( tonumber( ck[2] ) or 0 ), math.floor( tonumber( ck[3] ) or 0 ), ck[4]
+		local cx, cy, cz, cells, legacyMode
+		if data.v == 5 then
+			cx, cy, cz, cells = math.floor( tonumber( ck[1] ) or 0 ), math.floor( tonumber( ck[2] ) or 0 ), math.floor( tonumber( ck[3] ) or 0 ), ck[4]
+		elseif data.v == 4 then
+			cx, cy, cells, legacyMode = math.floor( tonumber( ck[1] ) or 0 ), math.floor( tonumber( ck[2] ) or 0 ), ck[3], "column"
+		else
+			cx, cy, cz, cells, legacyMode = math.floor( tonumber( ck[1] ) or 0 ), math.floor( tonumber( ck[2] ) or 0 ), math.floor( tonumber( ck[3] ) or 0 ), ck[4], "slice"
+		end
 		if istable( cells ) then
-			local c = MC.EnsureChunk( cx, cy, cz )
-			for i = 1, #cells, 3 do
+			local touched = {}
+			local stride = ( data.v == 4 or data.v == 5 ) and 2 or 3
+			for i = 1, #cells, stride do
 				local li = math.floor( tonumber( cells[i] ) or -1 )
 				local savedBlock = cells[i + 1]
 				local state = cells[i + 2]
-				if li >= 0 and li < MC.CS * MC.CS * MC.CS then
+				local bx, by, bz
+				if legacyMode == "column" then
+					bx, by, bz = oldColumnCell( data, cx, cy, li )
+				elseif legacyMode == "slice" then
+					bx, by, bz = oldSliceCell( cx, cy, cz, li )
+				else
 					local lx, ly, lz = MC.DecodeLocal( li )
-					local bx, by, bz = cx * MC.CS + lx, cy * MC.CS + ly, cz * MC.CS + lz
+					bx, by, bz = cx * MC.CS + lx, cy * MC.CS + ly, cz * MC.CH + lz
+				end
+				local ncx, ncy, ncz, nli = MC.CellToChunk( bx, by, bz )
+				if MC.LocalIndexInRange( nli ) then
 					if not worldBoundsOK( bx, by, bz ) then
 						skippedBounds = skippedBounds + 1
-					elseif importMax > 0 and SV.BlockCount >= importMax and c.blocks[li] == nil then
-						skippedLimit = skippedLimit + 1
 					else
-						local id = blockFromImport( cache, savedBlock )
+						local id, orient
+						if data.v == 4 or data.v == 5 then
+							id, orient = importPaletteEntry( cache, palette, savedBlock )
+						else
+							id = blockFromImport( cache, savedBlock )
+							orient = MC.StateToOrient( id, state )
+						end
 						if id == 0 or not MC.IsValidBlock( id ) then
 							skippedUnknown = skippedUnknown + 1
 						else
-							if c.blocks[li] == nil then
-								c.count = c.count + 1
-								SV.BlockCount = SV.BlockCount + 1
+							local c = MC.GetChunk( ncx, ncy, ncz )
+							local exists = c and c.blocks[nli] ~= nil
+							if importMax > 0 and SV.BlockCount >= importMax and not exists then
+								skippedLimit = skippedLimit + 1
+							else
+								c = c or MC.EnsureChunk( ncx, ncy, ncz )
+								if c.blocks[nli] == nil then
+									c.count = c.count + 1
+									SV.BlockCount = SV.BlockCount + 1
+								end
+								c.blocks[nli] = id
+								c.orients[nli] = MC.NormalizeOrient( id, orient )
+								touched[c.key] = c
+								imported = imported + 1
 							end
-							c.blocks[li] = id
-							c.orients[li] = MC.NormalizeOrient( id, MC.StateToOrient( id, state ) )
-							imported = imported + 1
 						end
 					end
 				end
 			end
-			if c.count > 0 then
-				SV.EnsureChunkEnt( c )
-				SV.MarkPhysDirty( c.key )
-			else
-				MC.World[c.key] = nil
+			for key, c in pairs( touched ) do
+				if c.count > 0 then
+					SV.EnsureChunkEnt( c )
+					SV.MarkPhysDirty( c.key )
+				else
+					MC.World[key] = nil
+				end
 			end
 		end
 	end
@@ -539,19 +603,29 @@ end
 
 function SV.Save()
 	local chunks = {}
+	local palette = {}
+	local paletteIndex = {}
 	for _, c in pairs( MC.World ) do
 		if c.count > 0 then
 			local cells = {}
 			local n = 0
 			for li, id in pairs( c.blocks ) do
+				local state = MC.BlockStateText( id, c.orients and c.orients[li] )
+				local spec = MC.BlockCanonicalName( id )
+				if state ~= "" then spec = spec .. "[" .. state .. "]" end
+				local pi = paletteIndex[spec]
+				if pi == nil then
+					pi = #palette
+					palette[#palette + 1] = spec
+					paletteIndex[spec] = pi
+				end
 				n = n + 1 ; cells[n] = li
-				n = n + 1 ; cells[n] = MC.BlockCanonicalName( id )
-				n = n + 1 ; cells[n] = MC.BlockStateText( id, c.orients and c.orients[li] )
+				n = n + 1 ; cells[n] = pi
 			end
 			chunks[#chunks + 1] = { c.cx, c.cy, c.cz, cells }
 		end
 	end
-	local json = util.TableToJSON( { v = 3, bs = MC.BS, cs = MC.CS, chunks = chunks } )
+	local json = util.TableToJSON( { v = 5, bs = MC.BS, cs = MC.CS, h = MC.CH, p = palette, chunks = chunks } )
 	if not json then return end
 	file.CreateDir( "mc" )
 	file.Write( savePath(), util.Compress( json ) )
@@ -576,28 +650,58 @@ function SV.Load()
 
 	MC.World = {}
 	SV.BlockCount = 0
+	local cache = {}
+	local palette = data.p or data.palette
 
 	for _, ck in ipairs( data.chunks ) do
-		local cx, cy, cz, cells = ck[1], ck[2], ck[3], ck[4]
-		local c = MC.EnsureChunk( cx, cy, cz )
-		local stride = ( data.v == 2 or data.v == 3 ) and 3 or 2
+		local cx, cy, cz, cells, legacyMode
+		if data.v == 5 then
+			cx, cy, cz, cells = ck[1], ck[2], ck[3], ck[4]
+		elseif data.v == 4 then
+			cx, cy, cells, legacyMode = ck[1], ck[2], ck[3], "column"
+		else
+			cx, cy, cz, cells, legacyMode = ck[1], ck[2], ck[3], ck[4], "slice"
+		end
+		local touched = {}
+		local stride = ( data.v == 4 or data.v == 5 ) and 2 or ( ( data.v == 2 or data.v == 3 ) and 3 or 2 )
 		for i = 1, #cells, stride do
-			local li, savedBlock = cells[i], cells[i + 1]
-			local resolved = data.v == 3 and MC.ResolveBlock( savedBlock ) or nil
-			local id = resolved and resolved.id or math.floor( tonumber( savedBlock ) or 0 )
-			local orient = stride == 3 and MC.StateToOrient( id, cells[i + 2] ) or MC.DefaultOrient( id )
-			if MC.IsValidBlock( id ) and c.blocks[li] == nil then
-				c.blocks[li] = id
-				c.orients[li] = MC.NormalizeOrient( id, orient )
+			local li = math.floor( tonumber( cells[i] ) or -1 )
+			local savedBlock = cells[i + 1]
+			local id, orient
+			if data.v == 4 or data.v == 5 then
+				id, orient = importPaletteEntry( cache, palette, savedBlock )
+			else
+				local resolved = data.v == 3 and MC.ResolveBlock( savedBlock ) or nil
+				id = resolved and resolved.id or math.floor( tonumber( savedBlock ) or 0 )
+				orient = stride == 3 and MC.StateToOrient( id, cells[i + 2] ) or MC.DefaultOrient( id )
+			end
+			local bx, by, bz
+			if legacyMode == "column" then
+				bx, by, bz = oldColumnCell( data, cx, cy, li )
+			elseif legacyMode == "slice" then
+				bx, by, bz = oldSliceCell( cx, cy, cz, li )
+			else
+				local lx, ly, lz = MC.DecodeLocal( li )
+				bx, by, bz = cx * MC.CS + lx, cy * MC.CS + ly, cz * MC.CH + lz
+			end
+			local ncx, ncy, ncz, nli = MC.CellToChunk( bx, by, bz )
+			local c = MC.GetChunk( ncx, ncy, ncz )
+			if MC.LocalIndexInRange( nli ) and MC.IsValidBlock( id ) and ( not c or c.blocks[nli] == nil ) then
+				c = c or MC.EnsureChunk( ncx, ncy, ncz )
+				c.blocks[nli] = id
+				c.orients[nli] = MC.NormalizeOrient( id, orient )
 				c.count = c.count + 1
 				SV.BlockCount = SV.BlockCount + 1
+				touched[c.key] = c
 			end
 		end
-		if c.count > 0 then
-			SV.EnsureChunkEnt( c )
-			SV.MarkPhysDirty( c.key )
-		else
-			MC.World[c.key] = nil
+		for key, c in pairs( touched ) do
+			if c.count > 0 then
+				SV.EnsureChunkEnt( c )
+				SV.MarkPhysDirty( c.key )
+			else
+				MC.World[key] = nil
+			end
 		end
 	end
 
@@ -719,7 +823,7 @@ concommand.Add( "mc_diag", function( ply )
 					m = m + 1
 					if m <= 8 then
 						local lx, ly, lz = MC.DecodeLocal( li )
-						cells[m] = ( c.cx * MC.CS + lx ) .. "," .. ( c.cy * MC.CS + ly ) .. "," .. ( c.cz * MC.CS + lz )
+						cells[m] = ( c.cx * MC.CS + lx ) .. "," .. ( c.cy * MC.CS + ly ) .. "," .. ( c.cz * MC.CH + lz )
 					end
 				end
 				if m > 8 then cells[#cells + 1] = "(+" .. ( m - 8 ) .. " more)" end

@@ -1,8 +1,8 @@
 --[[----------------------------------------------------------------------------
-	mc_chunk : one entity per non-empty 16^3 chunk.
+	mc_chunk : one entity per non-empty 16x16x384 Minecraft-style chunk section.
 	  server -> provides collision (greedy-merged box multiconvex)
 	  client -> draws the chunk's IMesh (MC.DrawChunk)
-	This is the ONLY entity type the system spawns. ~4096 blocks share one.
+	This is the ONLY entity type the system spawns. Sections can stack vertically.
 ------------------------------------------------------------------------------]]
 
 ENT.Type      = "anim"
@@ -26,6 +26,7 @@ end
 local function greedyBoxes( chunk )
 	local CS = MC.CS
 	local CS2 = CS * CS
+	local CH = MC.CH
 	local solid = {}
 	for li in pairs( chunk.blocks ) do solid[li] = true end
 
@@ -34,7 +35,7 @@ local function greedyBoxes( chunk )
 	local visited = {}
 	local boxes = {}
 
-	for z = 0, CS - 1 do
+	for z = 0, CH - 1 do
 		for y = 0, CS - 1 do
 			for x = 0, CS - 1 do
 				local i0 = idx( x, y, z )
@@ -56,7 +57,7 @@ local function greedyBoxes( chunk )
 						y1 = y1 + 1
 					end
 					local z1 = z + 1
-					while z1 < CS do
+					while z1 < CH do
 						local ok = true
 						for yy = y, y1 - 1 do
 							for xx = x, x1 - 1 do
