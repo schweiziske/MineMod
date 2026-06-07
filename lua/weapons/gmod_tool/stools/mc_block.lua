@@ -40,6 +40,9 @@ end
 function TOOL:RightClick( tr )
 	if CLIENT then return true end
 	local ply = self:GetOwner()
+	local ux, uy, uz = breakCell( tr )
+	if MC.SV.Use( ply, ux, uy, uz ) then return true end
+
 	local id = selectedID( self )
 	local bx, by, bz = placeCell( tr )
 	MC.SV.Place( ply, bx, by, bz, id, MC.OrientForPlacement( ply, tr, id ) )

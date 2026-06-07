@@ -9,7 +9,7 @@
 
 MC = MC or {}
 
-local T = {
+local T = MC.GeneratedTiles or {
 	dirt = 0, grass_top = 1, grass_side = 2, stone = 3, cobblestone = 4,
 	oak_planks = 5, oak_log = 6, oak_log_top = 7, sand = 8, glass = 9,
 	bricks = 10, stone_bricks = 11, bedrock = 12, gold_block = 13, iron_block = 14,
@@ -25,56 +25,136 @@ MC.Tiles = T
 MC.TileNames = {}
 for name, tile in pairs( T ) do MC.TileNames[tile] = name end
 
-local function blk( name, disp, top, side, bottom, transparent, orient, place )
-	return {
-		name = name,
-		disp = disp,
-		top = top,
-		side = side,
-		bottom = bottom or top,
-		transparent = transparent or false,
-		orient = orient,
-		place = place,
-	}
-end
-
-MC.Blocks = {
-	[1]  = blk( "grass",          "草方块",     T.grass_top,         T.grass_side,          T.dirt ),
-	[2]  = blk( "dirt",           "泥土",       T.dirt,              T.dirt,                T.dirt ),
-	[3]  = blk( "stone",          "石头",       T.stone,             T.stone,               T.stone ),
-	[4]  = blk( "cobblestone",    "圆石",       T.cobblestone,       T.cobblestone,         T.cobblestone ),
-	[5]  = blk( "oak_planks",     "橡木木板",   T.oak_planks,        T.oak_planks,          T.oak_planks ),
-	[6]  = blk( "oak_log",        "橡木原木",   T.oak_log_top,       T.oak_log,             T.oak_log_top, false, "axis" ),
-	[7]  = blk( "sand",           "沙子",       T.sand,              T.sand,                T.sand ),
-	[8]  = blk( "glass",          "玻璃",       T.glass,             T.glass,               T.glass, true ),
-	[9]  = blk( "bricks",         "红砖块",     T.bricks,            T.bricks,              T.bricks ),
-	[10] = blk( "stone_bricks",   "石砖",       T.stone_bricks,      T.stone_bricks,        T.stone_bricks ),
-	[11] = blk( "bedrock",        "基岩",       T.bedrock,           T.bedrock,             T.bedrock ),
-	[12] = blk( "gold_block",     "金块",       T.gold_block,        T.gold_block,          T.gold_block ),
-	[13] = blk( "iron_block",     "铁块",       T.iron_block,        T.iron_block,          T.iron_block ),
-	[14] = blk( "diamond_block",  "钻石块",     T.diamond_block,     T.diamond_block,       T.diamond_block ),
-	[15] = blk( "tnt",            "TNT",            T.tnt_top,           T.tnt_side,            T.tnt_bottom ),
-	[16] = blk( "crafting_table", "工作台",     T.crafting_table_top, T.crafting_table_side, T.oak_planks ),
-	[17] = blk( "obsidian",       "黑曜石",     T.obsidian,          T.obsidian,            T.obsidian ),
-	[18] = blk( "glowstone",      "荧石",       T.glowstone,         T.glowstone,           T.glowstone ),
-	[19] = blk( "netherrack",     "下界岩",     T.netherrack,        T.netherrack,          T.netherrack ),
-	[20] = blk( "snow",           "雪块",       T.snow,              T.snow,                T.snow ),
-	[21] = blk( "oak_leaves",     "橡树树叶",   T.oak_leaves,        T.oak_leaves,          T.oak_leaves, true ),
-	[22] = blk( "pumpkin",        "南瓜",       T.pumpkin_top,       T.pumpkin_side,        T.pumpkin_top ),
-	[23] = blk( "melon",          "西瓜",       T.melon_top,         T.melon_side,          T.melon_top ),
-	[24] = blk( "bookshelf",      "书架",       T.oak_planks,        T.bookshelf,           T.oak_planks ),
-	[25] = blk( "furnace",        "熔炉",       T.furnace_top,       T.furnace_side,        T.furnace_top, false, "horizontal_facing" ),
-	[26] = blk( "dispenser",      "发射器",     T.dispenser_side,    T.dispenser_side,      T.dispenser_side, false, "facing", "look_opposite" ),
-	[27] = blk( "observer",       "侦测器",     T.observer_top,      T.observer_side,       T.observer_top, false, "facing", "look" ),
+local FixedDisp = {
+	grass = "草方块", dirt = "泥土", stone = "石头", cobblestone = "圆石",
+	oak_planks = "橡木木板", oak_log = "橡木原木", sand = "沙子", glass = "玻璃",
+	bricks = "红砖块", stone_bricks = "石砖", bedrock = "基岩", gold_block = "金块",
+	iron_block = "铁块", diamond_block = "钻石块", tnt = "TNT", crafting_table = "工作台",
+	obsidian = "黑曜石", glowstone = "荧石", netherrack = "下界岩", snow = "雪块",
+	oak_leaves = "橡树树叶", pumpkin = "南瓜", melon = "西瓜", bookshelf = "书架",
+	furnace = "熔炉", dispenser = "发射器", observer = "侦测器",
 }
 
-MC.BlockList = {}
-for id in pairs( MC.Blocks ) do MC.BlockList[#MC.BlockList + 1] = id end
-table.sort( MC.BlockList )
-MC.MaxBlockID = MC.BlockList[#MC.BlockList]
+local function normalizeBlockKey( s )
+	s = string.lower( tostring( s or "" ) )
+	s = string.match( s, "^%s*(.-)%s*$" )
+	return s
+end
 
-function MC.IsValidBlock( id )
-	return id ~= nil and MC.Blocks[id] ~= nil
+local function tileValue( value, fallback )
+	if type( value ) == "number" then return value end
+	if type( value ) == "string" and T[value] ~= nil then return T[value] end
+	return fallback or 0
+end
+
+local function blockDisp( def )
+	return def.disp or FixedDisp[def.name] or ( "方块 " .. tostring( def.name or def.mcid or def.id ) )
+end
+
+local function normalizeBaked( baked )
+	if type( baked ) ~= "table" then return nil end
+	local out = {}
+	for orient, faces in pairs( baked ) do
+		local ofaces = {}
+		for face, data in pairs( faces ) do
+			if type( data ) == "table" then
+				ofaces[tonumber( face ) or face] = {
+					tile = tileValue( data.tile, 0 ),
+					rot = math.floor( tonumber( data.rot ) or 0 ),
+					uv = data.uv,
+					uvs = data.uvs,
+				}
+			end
+		end
+		out[tonumber( orient ) or orient] = ofaces
+	end
+	return out
+end
+
+MC.Blocks = {}
+MC.BlockByName = {}
+MC.BlockAliases = {}
+MC.BlockHandlers = MC.BlockHandlers or {}
+
+MC.BlockHandlers.furnace = MC.BlockHandlers.furnace or {
+	OnUse = function( ply )
+		if IsValid( ply ) then
+			ply:ChatPrint( "[MC] 熔炉界面还没接物品系统，先占位。" )
+		end
+		return true
+	end,
+}
+
+function MC.RegisterBlock( def )
+	if not def or def.id == nil then return nil end
+	local id = math.floor( tonumber( def.id ) or 0 )
+	if id <= 0 then return nil end
+
+	local name = normalizeBlockKey( def.name or ( def.mcid and string.match( def.mcid, "^minecraft:(.+)$" ) ) or id )
+	local mcid = normalizeBlockKey( def.mcid or ( "minecraft:" .. name ) )
+	local textures = def.textures or {}
+	local top = tileValue( textures.top or def.top, 0 )
+	local side = tileValue( textures.side or def.side, top )
+	local bottom = tileValue( textures.bottom or def.bottom, top )
+	local front = textures.front and tileValue( textures.front, side ) or nil
+	local handler = def.handlers or ( def.handler and MC.BlockHandlers[def.handler] ) or nil
+	if handler and handler.OnTick then MC.HasBlockTickHandlers = true end
+
+	local b = {
+		id = id,
+		name = name,
+		mcid = mcid,
+		disp = blockDisp( { name = name, disp = def.disp, mcid = mcid, id = id } ),
+		solid = def.solid ~= false,
+		transparent = def.transparent == true,
+		textures = { top = top, side = side, bottom = bottom, front = front },
+		baked = normalizeBaked( def.baked ),
+		stateRule = def.stateRule or def.orient,
+		placeRule = def.placeRule or def.place,
+		handlers = handler or {},
+		aliases = def.aliases or {},
+		defaultOrientName = def.defaultOrientName,
+
+		-- Backward-compatible fields used by the renderer/UI.
+		top = top,
+		side = side,
+		bottom = bottom,
+		front = front,
+		orient = def.stateRule or def.orient,
+		place = def.placeRule or def.place,
+	}
+
+	MC.Blocks[id] = b
+	MC.BlockByName[mcid] = b
+	MC.BlockAliases[name] = b
+	MC.BlockAliases[mcid] = b
+	if string.StartWith( mcid, "minecraft:" ) then
+		MC.BlockAliases[string.sub( mcid, 11 )] = b
+	end
+	for _, alias in ipairs( b.aliases ) do
+		alias = normalizeBlockKey( alias )
+		MC.BlockAliases[alias] = b
+		if not string.StartWith( alias, "minecraft:" ) then
+			MC.BlockAliases["minecraft:" .. alias] = b
+		end
+	end
+
+	return b
+end
+
+local function rebuildBlockList()
+	MC.BlockList = {}
+	for id in pairs( MC.Blocks ) do MC.BlockList[#MC.BlockList + 1] = id end
+	table.sort( MC.BlockList )
+	MC.MaxBlockID = MC.BlockList[#MC.BlockList] or 0
+end
+
+local function registerGeneratedBlocks()
+	if not MC.GeneratedBlocks then return false end
+	for _, def in ipairs( MC.GeneratedBlocks ) do
+		MC.RegisterBlock( def )
+	end
+	return true
 end
 
 MC.Face = { TOP = 1, BOTTOM = 2, XP = 3, XN = 4, YP = 5, YN = 6 }
@@ -136,7 +216,40 @@ MC.OrientRules = {
 	},
 }
 MC.OrientRules.horizontal_facing.allowed = reverseValues( MC.OrientRules.horizontal_facing.values )
-MC.Blocks[27].defaultOrient = MC.Direction.SOUTH
+
+if not registerGeneratedBlocks() then
+	MC.RegisterBlock( { id = 1, name = "grass", mcid = "minecraft:grass_block", transparent = false, textures = { top = "grass_top", side = "grass_side", bottom = "dirt" }, aliases = { "minecraft:grass", "grass_block" } } )
+	MC.RegisterBlock( { id = 2, name = "dirt", mcid = "minecraft:dirt", textures = { top = "dirt", side = "dirt", bottom = "dirt" } } )
+	MC.RegisterBlock( { id = 3, name = "stone", mcid = "minecraft:stone", textures = { top = "stone", side = "stone", bottom = "stone" } } )
+end
+
+for _, b in pairs( MC.Blocks ) do
+	if b.defaultOrientName then
+		local rule = MC.OrientRules[b.orient]
+		b.defaultOrient = rule and rule.values[b.defaultOrientName] or b.defaultOrient
+	end
+end
+rebuildBlockList()
+
+function MC.IsValidBlock( id )
+	return id ~= nil and MC.Blocks[id] ~= nil
+end
+
+function MC.ResolveBlock( input )
+	if input == nil then return nil end
+	local s = normalizeBlockKey( input )
+	if s == "0" or s == "air" or s == "minecraft:air" then return { id = 0, block = nil, mcid = "minecraft:air", name = "air" } end
+	local id = tonumber( s )
+	if id and math.floor( id ) == id then
+		id = math.floor( id )
+		return MC.IsValidBlock( id ) and { id = id, block = MC.Blocks[id], mcid = MC.Blocks[id].mcid, name = MC.Blocks[id].name } or nil
+	end
+	local b = MC.BlockAliases[s] or MC.BlockByName[s]
+	if not b and not string.StartWith( s, "minecraft:" ) then
+		b = MC.BlockByName["minecraft:" .. s] or MC.BlockAliases["minecraft:" .. s]
+	end
+	return b and { id = b.id, block = b, mcid = b.mcid, name = b.name } or nil
+end
 
 function MC.DefaultOrient( id )
 	local b = MC.Blocks[id]
@@ -188,7 +301,7 @@ local function stateValue( b, state )
 	local key, value = string.match( state, "^%s*([%a_]+)%s*=%s*([%a_]+)%s*$" )
 	if not key then return trim( state ), true end
 	local want = b.orient == "axis" and "axis" or "facing"
-	if key ~= want then return nil, false end
+	if key ~= want and not ( b.orient == "horizontal_facing" and key == "horizontal_facing" ) then return nil, false end
 	return value, true
 end
 
@@ -218,6 +331,34 @@ function MC.IsOrientStateValid( id, state )
 	if tonumber( state ) then return numericOrient( rule, state ) ~= nil end
 	local value, validKey = stateValue( b, state )
 	return validKey and value ~= nil and rule.values[value] ~= nil
+end
+
+local function parseBlockStateText( text )
+	text = trim( text )
+	local blockName, bracketState = string.match( text, "^([^%s%[]+)%s*%[(.-)%]%s*$" )
+	if blockName then return trim( blockName ), bracketState end
+	if string.find( text, "%[" ) or string.find( text, "%]" ) then
+		return trim( string.match( text, "^([^%s%[]+)" ) or text ), "__invalid_bracket_state__"
+	end
+	local blockArg, stateArg = string.match( text, "^(%S+)%s+(.+)$" )
+	if blockArg then return trim( blockArg ), stateArg end
+	return text, nil
+end
+
+function MC.ParseBlockSpec( text )
+	local blockArg, stateArg = parseBlockStateText( text )
+	local resolved = MC.ResolveBlock( blockArg )
+	if not resolved then return nil, nil, blockArg, "block" end
+	if resolved.id == 0 then return 0, 0, "minecraft:air", nil, resolved end
+	if stateArg ~= nil and not MC.IsOrientStateValid( resolved.id, stateArg ) then
+		return resolved.id, nil, blockArg, "state", resolved
+	end
+	return resolved.id, MC.StateToOrient( resolved.id, stateArg ), blockArg, nil, resolved
+end
+
+function MC.BlockCanonicalName( id )
+	local b = MC.Blocks[id]
+	return b and b.mcid or "minecraft:air"
 end
 
 local function oppositeDirection( dir )
@@ -346,7 +487,8 @@ local function dispenserFace( face, orient )
 	local xSteps, ySteps = dispenserRotForFacing( orient )
 	local localFace = localFaceAfterModelRotation( face, xSteps, ySteps )
 	if orient == MC.Direction.UP or orient == MC.Direction.DOWN then
-		if localFace == MC.Face.TOP then return T.dispenser_front_vertical, 0, false, true end
+		if orient == MC.Direction.UP and face == MC.Face.TOP then return T.dispenser_front_vertical, 0 end
+		if orient == MC.Direction.DOWN and face == MC.Face.BOTTOM then return T.dispenser_front_vertical, 2 end
 		return T.furnace_top, 0
 	end
 	if localFace == MC.Face.YN then return T.dispenser_front, 0 end
@@ -358,20 +500,16 @@ local function observerFace( face, orient )
 	local xSteps, ySteps = observerRotForFacing( orient )
 	local localFace = localFaceAfterModelRotation( face, xSteps, ySteps )
 	if orient == MC.Direction.DOWN then
-		if localFace == MC.Face.YN then return T.observer_front, 0, true, false end
-		if localFace == MC.Face.YP then return T.observer_back, 0, false, true end
-		if localFace == MC.Face.BOTTOM then return T.observer_top, 0, true, false end
-		if localFace == MC.Face.TOP then return T.observer_top, 0 end
-		if localFace == MC.Face.XN then return T.observer_side, 1, true, false end
-		return T.observer_side, 1, false, true
+		if face == MC.Face.BOTTOM then return T.observer_front, 2 end
+		if face == MC.Face.TOP then return T.observer_back, 2 end
+		if face == MC.Face.YN or face == MC.Face.YP then return T.observer_top, 0 end
+		return T.observer_side, 0
 	end
 	if orient == MC.Direction.UP then
-		if localFace == MC.Face.YN then return T.observer_front, 0, true, false end
-		if localFace == MC.Face.YP then return T.observer_back, 0, false, true end
-		if localFace == MC.Face.BOTTOM then return T.observer_top, 0, false, true end
-		if localFace == MC.Face.TOP then return T.observer_top, 0, true, true end
-		if localFace == MC.Face.XN then return T.observer_side, 1, false, true end
-		return T.observer_side, 1, true, false
+		if face == MC.Face.TOP then return T.observer_front, 0 end
+		if face == MC.Face.BOTTOM then return T.observer_back, 0 end
+		if face == MC.Face.YN or face == MC.Face.YP then return T.observer_top, 0 end
+		return T.observer_side, 0
 	end
 	if localFace == MC.Face.YN then return T.observer_front, 0 end
 	if localFace == MC.Face.YP then return T.observer_back, 0 end
@@ -407,6 +545,7 @@ function MC.BlockFace( id, face, orient )
 	if b.orient == "facing" or b.orient == "horizontal_facing" then
 		if b.name == "furnace" then return orientableFace( T.furnace_front, T.furnace_top, T.furnace_side, face, orient ) end
 		if b.name == "dispenser" then return dispenserFace( face, orient ) end
+		if b.front then return orientableFace( b.front, b.top, b.side, face, orient ) end
 	end
 
 	if face == MC.Face.TOP then return b.top, 0 end
@@ -434,7 +573,7 @@ function MC.TileUV( tile )
 	local row = math.floor( tile / A.COLS )
 	local px0 = col * A.TILE
 	local py0 = row * A.TILE
-	local inset = 0.5
+	local inset = A.INSET or 0.5
 	return ( px0 + inset ) / A.W,
 	       ( py0 + inset ) / A.H,
 	       ( px0 + A.TILE - inset ) / A.W,

@@ -15,8 +15,17 @@ MC.ClientRenderLoaded = true
 local BS  = MC.BS
 local CS  = MC.CS
 
--- single atlas material: alpha cutout (glass/leaves), two-sided, vertex-shaded
-MC.Material = Material( MC.Atlas.MATERIAL or "mc/atlas_365.png", "alphatest nocull vertexcolor noclamp" )
+if MC.GeneratedAtlas then
+	MC.Atlas.COLS = MC.GeneratedAtlas.COLS or MC.Atlas.COLS
+	MC.Atlas.ROWS = MC.GeneratedAtlas.ROWS or MC.Atlas.ROWS
+	MC.Atlas.TILE = MC.GeneratedAtlas.TILE or MC.Atlas.TILE
+	MC.Atlas.MATERIAL = MC.GeneratedAtlas.MATERIAL or MC.Atlas.MATERIAL
+	MC.Atlas.W = MC.Atlas.COLS * MC.Atlas.TILE
+	MC.Atlas.H = MC.Atlas.ROWS * MC.Atlas.TILE
+end
+
+-- single atlas material: alpha cutout (glass/leaves), vertex-shaded, backface-culled
+MC.Material = Material( MC.Atlas.MATERIAL or "mc/atlas_365.png", "alphatest vertexcolor" )
 
 -- directional shading (modulates the texture via vertex colour)
 local SH_TOP    = Color( 255, 255, 255 )
@@ -41,8 +50,8 @@ local FACES = {
 	{ n = N_YP,   sh = SH_Y,      slot = 3, off = {  0,  1,  0 }, c = { {1,1,0,0,1}, {0,1,0,1,1}, {0,1,1,1,0}, {1,1,1,0,0} } },
 	{ n = N_YN,   sh = SH_Y,      slot = 3, off = {  0, -1,  0 }, c = { {0,0,0,0,1}, {1,0,0,1,1}, {1,0,1,1,0}, {0,0,1,0,0} } },
 }
--- order of corner indices that make the two triangles
-local TRI = { 1, 2, 3, 1, 3, 4 }
+-- Source's front-face winding is opposite the corner order above.
+local TRI = { 1, 3, 2, 1, 4, 3 }
 
 local VERT_LIMIT = 64998 -- multiple of 6, under the 65535 IMesh vertex cap
 
@@ -91,6 +100,40 @@ local function rotatedUVFlags( uf, vf, rot, flipU, flipV )
 	return uf, vf
 end
 
+local function tileUVRect( tile, uv )
+	if not uv then return MC.TileUV( tile ) end
+	local A = MC.Atlas
+	local col = tile % A.COLS
+	local row = math.floor( tile / A.COLS )
+	local inset = A.INSET or 0.5
+	local u0 = col * A.TILE + ( tonumber( uv[1] ) or 0 ) / 16 * A.TILE + inset
+	local v0 = row * A.TILE + ( tonumber( uv[2] ) or 0 ) / 16 * A.TILE + inset
+	local u1 = col * A.TILE + ( tonumber( uv[3] ) or 16 ) / 16 * A.TILE - inset
+	local v1 = row * A.TILE + ( tonumber( uv[4] ) or 16 ) / 16 * A.TILE - inset
+	return u0 / A.W, v0 / A.H, u1 / A.W, v1 / A.H
+end
+
+local function tileUVPoint( tile, uv )
+	local A = MC.Atlas
+	local col = tile % A.COLS
+	local row = math.floor( tile / A.COLS )
+	local inset = A.INSET or 0.5
+	local u = tonumber( uv and uv[1] ) or 0
+	local v = tonumber( uv and uv[2] ) or 0
+	local px = col * A.TILE + u / 16 * A.TILE
+	local py = row * A.TILE + v / 16 * A.TILE
+	if u <= 0 then px = px + inset elseif u >= 16 then px = px - inset end
+	if v <= 0 then py = py + inset elseif v >= 16 then py = py - inset end
+	return px / A.W, py / A.H
+end
+
+local function bakedFaceData( id, face, orient )
+	local b = MC.Blocks[id]
+	if not b or not b.baked then return nil end
+	local baked = b.baked[orient] or b.baked[MC.DefaultOrient( id )] or b.baked[0]
+	return baked and baked[face] or nil
+end
+
 function MC.BuildChunkMesh( key )
 	MC.FreeChunkMesh( key )
 
@@ -128,20 +171,36 @@ function MC.BuildChunkMesh( key )
 			local face = FACES[f]
 			local o = face.off
 			if visible( id, MC.GetBlock( bx + o[1], by + o[2], bz + o[3] ) ) then
-				local tile, rot, flipU, flipV = MC.BlockFace( id, f, orient )
-				local u0, v0, u1, v1 = MC.TileUV( tile )
+				local baked = bakedFaceData( id, f, orient )
+				local tile, rot, flipU, flipV
+				local u0, v0, u1, v1
+				if baked then
+					tile = baked.tile
+					rot = baked.rot or 0
+					u0, v0, u1, v1 = tileUVRect( tile, baked.uv )
+				else
+					tile, rot, flipU, flipV = MC.BlockFace( id, f, orient )
+					u0, v0, u1, v1 = MC.TileUV( tile )
+				end
 				local corners = face.c
 				local nrm, col = face.n, face.sh
 
 				for t = 1, 6 do
 					local cn = corners[ TRI[t] ]
-					local uf, vf = rotatedUVFlags( cn[4], cn[5], rot or 0, flipU, flipV )
+					local u, v
+					if baked and baked.uvs then
+						u, v = tileUVPoint( tile, baked.uvs[TRI[t]] )
+					else
+						local uf, vf = rotatedUVFlags( cn[4], cn[5], rot or 0, flipU, flipV )
+						u = uf == 1 and u1 or u0
+						v = vf == 1 and v1 or v0
+					end
 					nv = nv + 1
 					verts[nv] = {
 						pos    = Vector( wx + cn[1] * BS, wy + cn[2] * BS, wz + cn[3] * BS ),
 						normal = nrm,
-						u      = uf == 1 and u1 or u0,
-						v      = vf == 1 and v1 or v0,
+						u      = u,
+						v      = v,
 						color  = col,
 					}
 				end
