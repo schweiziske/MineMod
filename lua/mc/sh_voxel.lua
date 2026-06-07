@@ -4,8 +4,8 @@
 	Coordinate spaces:
 	  world  : Source units (Vector)
 	  cell   : integer block coords  bx,by,bz  (floor(world / BlockSize))
-	  chunk  : integer chunk coords  cx,cy,cz  (floor(cell  / ChunkSize))
-	  local  : index 0..4095 inside a chunk    li = lx + ly*CS + lz*CS*CS
+	  chunk  : integer chunk section coords  cx,cy,cz
+	  local  : index inside a 16x16x384 section      li = lx + ly*CS + lz*CS*CS
 ------------------------------------------------------------------------------]]
 
 MC = MC or {}
@@ -13,6 +13,7 @@ MC = MC or {}
 local CS  = MC.CS
 local BS  = MC.BS
 local CS2 = CS * CS
+local CH  = MC.CH
 
 -- chunkKey -> chunk = { cx, cy, cz, key, blocks = { [li]=id }, orients = { [li]=orient }, count, ent (sv) }
 MC.World = MC.World or {}
@@ -30,8 +31,8 @@ function MC.WorldToCell( v )
 end
 
 function MC.CellToChunk( bx, by, bz )
-	local cx, cy, cz = floor( bx / CS ), floor( by / CS ), floor( bz / CS )
-	local lx, ly, lz = bx - cx * CS, by - cy * CS, bz - cz * CS
+	local cx, cy, cz = floor( bx / CS ), floor( by / CS ), floor( bz / CH )
+	local lx, ly, lz = bx - cx * CS, by - cy * CS, bz - cz * CH
 	return cx, cy, cz, lx + ly * CS + lz * CS2
 end
 
@@ -40,6 +41,10 @@ function MC.DecodeLocal( li )
 	local ly = floor( ( li - lz * CS2 ) / CS )
 	local lx = li - lz * CS2 - ly * CS
 	return lx, ly, lz
+end
+
+function MC.LocalIndexInRange( li )
+	return li >= 0 and li < CS2 * CH
 end
 
 function MC.CellWorldMin( bx, by, bz )
@@ -76,13 +81,13 @@ function MC.CanPreviewPlace( ply, bx, by, bz )
 end
 
 function MC.ChunkWorldOrigin( cx, cy, cz )
-	return Vector( cx * MC.ChunkWorld, cy * MC.ChunkWorld, cz * MC.ChunkWorld )
+	return Vector( cx * MC.ChunkWorld, cy * MC.ChunkWorld, cz * MC.ChunkWorldH )
 end
 
 -- recover chunk coords from a chunk entity's world origin (client side)
 function MC.ChunkCoordsFromOrigin( v )
 	local w = MC.ChunkWorld
-	return math.Round( v.x / w ), math.Round( v.y / w ), math.Round( v.z / w )
+	return math.Round( v.x / w ), math.Round( v.y / w ), math.Round( v.z / MC.ChunkWorldH )
 end
 
 --------------------------------------------------------------------- chunk store
@@ -101,6 +106,7 @@ function MC.EnsureChunk( cx, cy, cz )
 		c = { cx = cx, cy = cy, cz = cz, key = key, blocks = {}, orients = {}, count = 0 }
 		MC.World[key] = c
 	end
+	c.cz = c.cz or cz
 	c.orients = c.orients or {}
 	return c
 end
@@ -108,6 +114,7 @@ end
 ------------------------------------------------------------------- block access
 function MC.GetBlock( bx, by, bz )
 	local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
+	if not MC.LocalIndexInRange( li ) then return 0 end
 	local c = MC.World[MC.ChunkKey( cx, cy, cz )]
 	if not c then return 0 end
 	return c.blocks[li] or 0
@@ -115,6 +122,7 @@ end
 
 function MC.GetBlockOrient( bx, by, bz )
 	local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
+	if not MC.LocalIndexInRange( li ) then return 0 end
 	local c = MC.World[MC.ChunkKey( cx, cy, cz )]
 	if not c then return 0 end
 	local id = c.blocks[li]
@@ -126,6 +134,7 @@ end
 -- id == 0 removes. Returns: chunk (or nil), created(bool), emptied(bool), changed(bool)
 function MC.SetBlockRaw( bx, by, bz, id, orient )
 	local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
+	if not MC.LocalIndexInRange( li ) then return nil, false, false, false end
 	local key = MC.ChunkKey( cx, cy, cz )
 	orient = id ~= 0 and ( MC.NormalizeOrient and MC.NormalizeOrient( id, orient ) or math.floor( tonumber( orient ) or 0 ) ) or 0
 
@@ -153,7 +162,7 @@ end
 
 --- Iterate every (bx,by,bz,id,orient) in a chunk. cb( bx,by,bz, lx,ly,lz, id, orient )
 function MC.ForEachBlock( chunk, cb )
-	local ox, oy, oz = chunk.cx * CS, chunk.cy * CS, chunk.cz * CS
+	local ox, oy, oz = chunk.cx * CS, chunk.cy * CS, chunk.cz * CH
 	chunk.orients = chunk.orients or {}
 	for li, id in pairs( chunk.blocks ) do
 		local lx, ly, lz = MC.DecodeLocal( li )

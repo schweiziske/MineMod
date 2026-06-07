@@ -30,9 +30,11 @@ net.Receive( "mc_full", function()
 		local li = net.ReadUInt( Net.LOCAL_BITS )
 		local id = net.ReadUInt( Net.ID_BITS )
 		local orient = net.ReadUInt( Net.ORIENT_BITS )
-		if c.blocks[li] == nil then c.count = c.count + 1 end
-		c.blocks[li] = id
-		c.orients[li] = MC.NormalizeOrient( id, orient )
+		if MC.LocalIndexInRange( li ) then
+			if c.blocks[li] == nil then c.count = c.count + 1 end
+			c.blocks[li] = id
+			c.orients[li] = MC.NormalizeOrient( id, orient )
+		end
 	end
 	if c.count == 0 then MC.World[c.key] = nil end
 

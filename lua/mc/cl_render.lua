@@ -140,12 +140,9 @@ function MC.BuildChunkMesh( key )
 	local chunk = MC.GetChunkByKey( key )
 	if not chunk or chunk.count == 0 then return end
 
-	local wox = chunk.cx * MC.ChunkWorld
-	local woy = chunk.cy * MC.ChunkWorld
-	local woz = chunk.cz * MC.ChunkWorld
 	local bxo = chunk.cx * CS
 	local byo = chunk.cy * CS
-	local bzo = chunk.cz * CS
+	local bzo = chunk.cz * MC.CH
 
 	local list = {}
 	local verts = {}
@@ -165,7 +162,7 @@ function MC.BuildChunkMesh( key )
 		local orient = MC.NormalizeOrient( id, chunk.orients[li] )
 		local lx, ly, lz = DecodeLocal( li )
 		local bx, by, bz = bxo + lx, byo + ly, bzo + lz
-		local wx, wy, wz = wox + lx * BS, woy + ly * BS, woz + lz * BS
+		local wx, wy, wz = lx * BS, ly * BS, lz * BS
 
 		for f = 1, 6 do
 			local face = FACES[f]
@@ -240,7 +237,7 @@ end
 -- may need a rebuild (boundary faces).
 function MC.MarkDirty( bx, by, bz )
 	local function mark( x, y, z )
-		local cx, cy, cz = math.floor( x / CS ), math.floor( y / CS ), math.floor( z / CS )
+		local cx, cy, cz = MC.CellToChunk( x, y, z )
 		MC.MeshDirty[ MC.ChunkKey( cx, cy, cz ) ] = true
 	end
 	mark( bx, by, bz )
