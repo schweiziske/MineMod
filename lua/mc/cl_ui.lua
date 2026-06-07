@@ -59,3 +59,25 @@ function MC.OpenPalette( onSelect )
 		end
 	end
 end
+
+hook.Remove( "HUDPaint", "mc_sync_progress" )
+hook.Add( "HUDPaint", "mc_sync_progress", function()
+	local p = MC.SyncProgress
+	if not p or p.expected <= 0 then return end
+
+	local now = CurTime()
+	local complete = p.received >= p.expected and p.doneChunks >= p.chunks
+	if complete and now - ( p.lastUpdate or 0 ) > 5 then return end
+
+	local frac = math.Clamp( p.received / math.max( p.expected, 1 ), 0, 1 )
+	local sw = ScrW()
+	local w, h = 420, 18
+	local x, y = sw * 0.5 - w * 0.5, 96
+	local label = string.format( "MC 同步 %d/%d 方块  %d/%d 区块", p.received, p.expected, p.doneChunks, p.chunks )
+	if complete then label = "MC 同步完成  " .. label end
+
+	draw.RoundedBox( 4, x - 10, y - 28, w + 20, 58, Color( 0, 0, 0, 180 ) )
+	draw.SimpleText( label, "mc_hud_small", x, y - 20, color_white, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
+	draw.RoundedBox( 3, x, y, w, h, Color( 35, 38, 42, 230 ) )
+	draw.RoundedBox( 3, x, y, math.floor( w * frac ), h, complete and Color( 120, 220, 150, 240 ) or Color( 90, 180, 255, 240 ) )
+end )

@@ -16,7 +16,7 @@ local C   = MC.Config
 
 SV.BlockCount = SV.BlockCount or 0
 SV.PhysDirty  = SV.PhysDirty or {}   -- chunkKey -> true (collision needs rebuild)
-SV.SyncQueue  = SV.SyncQueue or {}   -- player   -> { keys = {}, i = 1 }
+SV.SyncQueue  = SV.SyncQueue or {}   -- player -> { keys = {}, i = 1, active = nil }
 SV.Dirty      = SV.Dirty or false    -- world changed since last save
 
 ------------------------------------------------------------------ chunk entities
@@ -117,10 +117,10 @@ function SV.Validate( ply, bx, by, bz, placing )
 end
 
 ------------------------------------------------------------- single block update
--- Broadcast a change to everyone, including still-syncing players. This is safe:
--- full-sync reads LIVE chunk state and a single set is order-independent, so a
--- syncing client always converges (mc_set before its chunk arrives -> the later
--- mc_full replaces the chunk with live state; mc_set after -> applied on top).
+-- Broadcast a change to everyone, including still-syncing players. Streamed
+-- full-sync builds each chunk's local-index list when the stream starts and reads
+-- live block values for every part, so single-block updates can interleave without
+-- requiring one giant reliable message.
 local function broadcastSet( bx, by, bz, id, orient )
 	if #player.GetAll() == 0 then return end
 	orient = MC.NormalizeOrient( id, orient )
@@ -407,12 +407,48 @@ local function oldSliceCell( cx, cy, oldCz, li )
 	return cx * MC.CS + lx, cy * MC.CS + ly, oldCz * MC.CS + lz
 end
 
-local function importCells( data, appendMode )
+local function importOneCell( data, cache, palette, legacyMode, cx, cy, cz, li, savedBlock, state, touched )
+	local bx, by, bz
+	if legacyMode == "column" then
+		bx, by, bz = oldColumnCell( data, cx, cy, li )
+	elseif legacyMode == "slice" then
+		bx, by, bz = oldSliceCell( cx, cy, cz, li )
+	else
+		local lx, ly, lz = MC.DecodeLocal( li )
+		bx, by, bz = cx * MC.CS + lx, cy * MC.CS + ly, cz * MC.CH + lz
+	end
+
+	local ncx, ncy, ncz, nli = MC.CellToChunk( bx, by, bz )
+	if not MC.LocalIndexInRange( nli ) then return 0, 0, 0 end
+	if not worldBoundsOK( bx, by, bz ) then return 0, 0, 1 end
+
+	local id, orient
+	if data.v == 4 or data.v == 5 then
+		id, orient = importPaletteEntry( cache, palette, savedBlock )
+	else
+		id = blockFromImport( cache, savedBlock )
+		orient = MC.StateToOrient( id, state )
+	end
+	if id == 0 or not MC.IsValidBlock( id ) then return 0, 1, 0 end
+
+	local c = MC.GetChunk( ncx, ncy, ncz )
+	c = c or MC.EnsureChunk( ncx, ncy, ncz )
+	if c.blocks[nli] == nil then
+		c.count = c.count + 1
+		SV.BlockCount = SV.BlockCount + 1
+	end
+	c.blocks[nli] = id
+	c.orients[nli] = MC.NormalizeOrient( id, orient )
+	touched[c.key] = c
+	return 1, 0, 0
+end
+
+local function importCells( data, appendMode, deferResync )
 	if not data or not data.chunks then return nil, "文件格式不对" end
-	local importMax = C.ImportMax and C.ImportMax:GetInt() or 300000
 	local cache = {}
 	local palette = data.p or data.palette
-	local imported, skippedUnknown, skippedBounds, skippedLimit = 0, 0, 0, 0
+	local expectedBlocks = istable( data.stats ) and math.floor( tonumber( data.stats.blocks ) or 0 ) or 0
+	local imported, skippedUnknown, skippedBounds = 0, 0, 0
 
 	if not appendMode then
 		clearWorldNoNet()
@@ -427,54 +463,22 @@ local function importCells( data, appendMode )
 		else
 			cx, cy, cz, cells, legacyMode = math.floor( tonumber( ck[1] ) or 0 ), math.floor( tonumber( ck[2] ) or 0 ), math.floor( tonumber( ck[3] ) or 0 ), ck[4], "slice"
 		end
-		if istable( cells ) then
+		if istable( cells ) or isstring( cells ) then
 			local touched = {}
-			local stride = ( data.v == 4 or data.v == 5 ) and 2 or 3
-			for i = 1, #cells, stride do
-				local li = math.floor( tonumber( cells[i] ) or -1 )
-				local savedBlock = cells[i + 1]
-				local state = cells[i + 2]
-				local bx, by, bz
-				if legacyMode == "column" then
-					bx, by, bz = oldColumnCell( data, cx, cy, li )
-				elseif legacyMode == "slice" then
-					bx, by, bz = oldSliceCell( cx, cy, cz, li )
-				else
-					local lx, ly, lz = MC.DecodeLocal( li )
-					bx, by, bz = cx * MC.CS + lx, cy * MC.CS + ly, cz * MC.CH + lz
+			if isstring( cells ) then
+				for liText, blockText, stateText in string.gmatch( cells, "([^:;]+):([^:;]*):?([^;]*);?" ) do
+					local add, unk, bounds = importOneCell( data, cache, palette, legacyMode, cx, cy, cz, math.floor( tonumber( liText ) or -1 ), blockText, stateText ~= "" and stateText or nil, touched )
+					imported = imported + add
+					skippedUnknown = skippedUnknown + unk
+					skippedBounds = skippedBounds + bounds
 				end
-				local ncx, ncy, ncz, nli = MC.CellToChunk( bx, by, bz )
-				if MC.LocalIndexInRange( nli ) then
-					if not worldBoundsOK( bx, by, bz ) then
-						skippedBounds = skippedBounds + 1
-					else
-						local id, orient
-						if data.v == 4 or data.v == 5 then
-							id, orient = importPaletteEntry( cache, palette, savedBlock )
-						else
-							id = blockFromImport( cache, savedBlock )
-							orient = MC.StateToOrient( id, state )
-						end
-						if id == 0 or not MC.IsValidBlock( id ) then
-							skippedUnknown = skippedUnknown + 1
-						else
-							local c = MC.GetChunk( ncx, ncy, ncz )
-							local exists = c and c.blocks[nli] ~= nil
-							if importMax > 0 and SV.BlockCount >= importMax and not exists then
-								skippedLimit = skippedLimit + 1
-							else
-								c = c or MC.EnsureChunk( ncx, ncy, ncz )
-								if c.blocks[nli] == nil then
-									c.count = c.count + 1
-									SV.BlockCount = SV.BlockCount + 1
-								end
-								c.blocks[nli] = id
-								c.orients[nli] = MC.NormalizeOrient( id, orient )
-								touched[c.key] = c
-								imported = imported + 1
-							end
-						end
-					end
+			else
+				local stride = ( data.v == 4 or data.v == 5 ) and 2 or 3
+				for i = 1, #cells, stride do
+					local add, unk, bounds = importOneCell( data, cache, palette, legacyMode, cx, cy, cz, math.floor( tonumber( cells[i] ) or -1 ), cells[i + 1], cells[i + 2], touched )
+					imported = imported + add
+					skippedUnknown = skippedUnknown + unk
+					skippedBounds = skippedBounds + bounds
 				end
 			end
 			for key, c in pairs( touched ) do
@@ -489,14 +493,74 @@ local function importCells( data, appendMode )
 	end
 
 	SV.Dirty = true
-	resyncAllClients()
+	if not deferResync then
+		resyncAllClients()
+	end
 	return {
 		imported = imported,
 		total = SV.BlockCount,
+		expected = expectedBlocks,
 		skippedUnknown = skippedUnknown,
 		skippedBounds = skippedBounds,
-		skippedLimit = skippedLimit,
+		skippedLimit = 0,
 	}
+end
+
+local function importPartFile( partPath, appendMode )
+	if not file.Exists( partPath, "DATA" ) then
+		return nil, "missing part garrysmod/data/" .. partPath
+	end
+	local raw = file.Read( partPath, "DATA" )
+	local data = raw and util.JSONToTable( raw )
+	if not data then
+		return nil, "invalid part JSON: " .. partPath
+	end
+	return importCells( data, appendMode, true )
+end
+
+local function importManifest( data, manifestPath, appendMode )
+	if not istable( data.parts ) then
+		return importCells( data, appendMode )
+	end
+
+	if not appendMode then
+		clearWorldNoNet()
+	end
+
+	local dir = string.GetPathFromFilename( manifestPath )
+	local totalImported, totalUnknown, totalBounds, totalLimit = 0, 0, 0, 0
+	local expected = istable( data.stats ) and math.floor( tonumber( data.stats.blocks ) or 0 ) or 0
+	for _, part in ipairs( data.parts ) do
+		local partPath = tostring( part or "" )
+		if partPath == "" then continue end
+		if not string.StartWith( partPath, "mc_import/" ) then
+			partPath = dir .. partPath
+		end
+		local result, err = importPartFile( partPath, true )
+		if not result then return nil, err end
+		totalImported = totalImported + result.imported
+		totalUnknown = totalUnknown + result.skippedUnknown
+		totalBounds = totalBounds + result.skippedBounds
+		totalLimit = totalLimit + result.skippedLimit
+	end
+
+	SV.Dirty = true
+	resyncAllClients()
+	return {
+		imported = totalImported,
+		total = SV.BlockCount,
+		expected = expected,
+		skippedUnknown = totalUnknown,
+		skippedBounds = totalBounds,
+		skippedLimit = totalLimit,
+	}
+end
+
+local function importFormatText( data )
+	if istable( data.parts ) then
+		return "manifest parts=" .. #data.parts .. " v=" .. tostring( data.v )
+	end
+	return "single chunks=" .. ( istable( data.chunks ) and #data.chunks or 0 ) .. " v=" .. tostring( data.v )
 end
 
 local function runImport( ply, args )
@@ -525,11 +589,18 @@ local function runImport( ply, args )
 		return
 	end
 
-	local result, err = importCells( data, appendMode )
+	chat( ply, "import format: " .. importFormatText( data ) .. " bytes=" .. #raw )
+	local result, err = importManifest( data, path, appendMode )
 	if not result then chat( ply, "导入失败: " .. tostring( err ) ) return end
 	local msg = string.format( "导入完成: %d 个方块，当前总数 %d，跳过未知 %d，越界 %d，超上限 %d",
 		result.imported, result.total, result.skippedUnknown, result.skippedBounds, result.skippedLimit )
 	chat( ply, msg )
+	if result.expected and result.expected > 0 and result.imported ~= result.expected then
+		chat( ply, "导入文件写着 " .. result.expected .. " 个方块，实际进服 " .. result.imported .. " 个；少的都在上面跳过统计里。" )
+	end
+	if result.skippedLimit > 0 then
+		chat( ply, "导入被 mc_import_max=" .. tostring( C.ImportMax and C.ImportMax:GetInt() or "?" ) .. " 截断了；完整区块请先执行 mc_import_max 0。" )
+	end
 	MsgN( "[MC] imported " .. path .. " (" .. ( appendMode and "append" or "replace" ) .. ")" )
 end
 
@@ -547,19 +618,109 @@ concommand.Add( "mc_import", function( ply, _, args )
 	runImport( ply, args )
 end )
 
+concommand.Add( "mc_import_probe", function( ply, _, args )
+	if IsValid( ply ) and not ply:IsAdmin() then return end
+	local path = normalizeImportPath( args[1] )
+	if not path then chat( ply, IMPORT_USAGE ) return end
+	if not file.Exists( path, "DATA" ) then
+		chat( ply, "probe missing: garrysmod/data/" .. path )
+		return
+	end
+	local raw = file.Read( path, "DATA" )
+	local data = raw and util.JSONToTable( raw )
+	if not data then
+		chat( ply, "probe invalid JSON bytes=" .. tostring( raw and #raw or "nil" ) )
+		return
+	end
+	chat( ply, "probe " .. path .. ": " .. importFormatText( data ) .. " bytes=" .. #raw )
+	if istable( data.parts ) and data.parts[1] then
+		local dir = string.GetPathFromFilename( path )
+		local partPath = tostring( data.parts[1] )
+		if not string.StartWith( partPath, "mc_import/" ) then partPath = dir .. partPath end
+		local partRaw = file.Read( partPath, "DATA" )
+		local partData = partRaw and util.JSONToTable( partRaw )
+		chat( ply, "probe first part " .. partPath .. ": " .. ( partData and importFormatText( partData ) or "invalid" ) .. " bytes=" .. tostring( partRaw and #partRaw or "nil" ) )
+	end
+end )
+
 ------------------------------------------------------------------ world streaming
-local function sendChunk( ply, chunk )
-	net.Start( "mc_full" )
-		net.WriteInt( chunk.cx, Net.COORD_BITS )
-		net.WriteInt( chunk.cy, Net.COORD_BITS )
-		net.WriteInt( chunk.cz, Net.COORD_BITS )
-		net.WriteUInt( chunk.count, Net.COUNT_BITS )
-		for li, id in pairs( chunk.blocks ) do
-			net.WriteUInt( li, Net.LOCAL_BITS )
-			net.WriteUInt( id, Net.ID_BITS )
-			net.WriteUInt( MC.NormalizeOrient( id, chunk.orients and chunk.orients[li] ), Net.ORIENT_BITS )
+local function sendFullBegin( ply, active )
+	net.Start( "mc_full_begin" )
+		net.WriteInt( active.cx, Net.COORD_BITS )
+		net.WriteInt( active.cy, Net.COORD_BITS )
+		net.WriteInt( active.cz, Net.COORD_BITS )
+		net.WriteUInt( #active.lis, Net.COUNT_BITS )
+	net.Send( ply )
+end
+
+local function sendFullPart( ply, active )
+	local chunk = MC.GetChunkByKey( active.key )
+	if not chunk then
+		active.i = #active.lis + 1
+		return false
+	end
+
+	local maxCells = MC.Config.SyncCellsPerPart or 384
+	local part = {}
+	while active.i <= #active.lis and #part < maxCells do
+		local li = active.lis[active.i]
+		local id = chunk.blocks[li]
+		if id and id ~= 0 then
+			part[#part + 1] = {
+				li = li,
+				id = id,
+				orient = MC.NormalizeOrient( id, chunk.orients and chunk.orients[li] ),
+			}
+		end
+		active.i = active.i + 1
+	end
+
+	if #part == 0 then return false end
+
+	net.Start( "mc_full_part" )
+		net.WriteInt( active.cx, Net.COORD_BITS )
+		net.WriteInt( active.cy, Net.COORD_BITS )
+		net.WriteInt( active.cz, Net.COORD_BITS )
+		net.WriteUInt( #part, Net.COUNT_BITS )
+		for i = 1, #part do
+			local cell = part[i]
+			net.WriteUInt( cell.li, Net.LOCAL_BITS )
+			net.WriteUInt( cell.id, Net.ID_BITS )
+			net.WriteUInt( cell.orient, Net.ORIENT_BITS )
 		end
 	net.Send( ply )
+	return true
+end
+
+local function sendFullEnd( ply, active )
+	net.Start( "mc_full_end" )
+		net.WriteInt( active.cx, Net.COORD_BITS )
+		net.WriteInt( active.cy, Net.COORD_BITS )
+		net.WriteInt( active.cz, Net.COORD_BITS )
+	net.Send( ply )
+end
+
+local function makeSyncActive( key )
+	local chunk = MC.GetChunkByKey( key )
+	if not chunk or chunk.count <= 0 then return nil end
+
+	local lis = {}
+	for li, id in pairs( chunk.blocks ) do
+		if id and id ~= 0 and MC.LocalIndexInRange( li ) then
+			lis[#lis + 1] = li
+		end
+	end
+	table.sort( lis )
+
+	return {
+		key = key,
+		cx = chunk.cx,
+		cy = chunk.cy,
+		cz = chunk.cz,
+		lis = lis,
+		i = 1,
+		begun = false,
+	}
 end
 
 function SV.BeginSync( ply )
@@ -568,20 +729,40 @@ function SV.BeginSync( ply )
 	SV.SyncQueue[ply] = { keys = keys, i = 1 }
 end
 
--- drip a few chunks per tick to each syncing player
-timer.Create( "mc_sync", 0.1, 0, function()
+local function sendSyncStep( ply, q )
+	while not q.active do
+		if q.i > #q.keys then return false end
+		q.active = makeSyncActive( q.keys[q.i] )
+		q.i = q.i + 1
+	end
+
+	local active = q.active
+	if not active.begun then
+		sendFullBegin( ply, active )
+		active.begun = true
+		return true
+	end
+
+	while active.i <= #active.lis do
+		if sendFullPart( ply, active ) then return true end
+	end
+
+	sendFullEnd( ply, active )
+	q.active = nil
+	return true
+end
+
+-- drip small chunk parts to each syncing player; large chunks must never be one
+-- reliable net message.
+timer.Create( "mc_sync", 0.05, 0, function()
 	for ply, q in pairs( SV.SyncQueue ) do
 		if not IsValid( ply ) then SV.SyncQueue[ply] = nil continue end
 		local sent = 0
-		while q.i <= #q.keys and sent < 4 do
-			local chunk = MC.GetChunkByKey( q.keys[q.i] )
-			if chunk and chunk.count > 0 then
-				sendChunk( ply, chunk )
-				sent = sent + 1
-			end
-			q.i = q.i + 1
+		local budget = MC.Config.SyncMessagesPerTick or 1
+		while sent < budget and sendSyncStep( ply, q ) do
+			sent = sent + 1
 		end
-		if q.i > #q.keys then SV.SyncQueue[ply] = nil end
+		if q.i > #q.keys and not q.active then SV.SyncQueue[ply] = nil end
 	end
 end )
 
@@ -803,14 +984,22 @@ concommand.Add( "mc_diag", function( ply )
 	for key, c in pairs( MC.World ) do
 		if c.count > 0 then
 			n = n + 1
+			local minBZ, maxBZ
+			for li in pairs( c.blocks ) do
+				local _, _, lz = MC.DecodeLocal( li )
+				local bz = c.cz * MC.CH + lz
+				minBZ = minBZ and math.min( minBZ, bz ) or bz
+				maxBZ = maxBZ and math.max( maxBZ, bz ) or bz
+			end
 			local e = c.ent
 			if not IsValid( e ) then
-				out( key .. "  count=" .. c.count .. "  *** ENT INVALID ***" )
+				out( key .. "  count=" .. c.count .. "  bz=" .. tostring( minBZ ) .. ".." .. tostring( maxBZ ) .. "  *** ENT INVALID ***" )
 			else
 				local phys = e:GetPhysicsObject()
 				local exp  = MC.ChunkWorldOrigin( c.cx, c.cy, c.cz )
 				local pos  = e:GetPos()
 				out( key .. "  count=" .. c.count ..
+					"  bz=" .. tostring( minBZ ) .. ".." .. tostring( maxBZ ) ..
 					"  solid=" .. e:GetSolid() .. "/" .. SOLID_VPHYSICS ..
 					"  mtype=" .. e:GetMoveType() ..
 					"  phys=" .. tostring( IsValid( phys ) ) ..
