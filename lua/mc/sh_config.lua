@@ -10,10 +10,10 @@ MC.Config = MC.Config or {}
 -- NOTE: changing this invalidates existing saves (positions are in blocks * size).
 MC.Config.BlockSize = 36.5
 MC.Config.DefaultReach = MC.Config.BlockSize * 5
--- Minecraft-style chunk section: 16x16 horizontally, 384 blocks vertically.
+-- Minecraft-style chunk section: 16x16 horizontally, 32 blocks vertically.
 -- Z is not globally clamped; sections are addressed by their chunk Z.
 MC.Config.ChunkSize = 16
-MC.Config.ChunkHeight = 384
+MC.Config.ChunkHeight = 32
 
 -- convenience locals mirrored onto MC for hot paths
 MC.BS = MC.Config.BlockSize
@@ -51,10 +51,10 @@ end
 -- Bit widths used by the net protocol (shared so both ends agree).
 MC.Net = {
 	COORD_BITS = 20, -- signed block coord (+-524288 blocks; far beyond any map)
-	LOCAL_BITS = 17, -- local index 0..98303 (16*16*384-1)
+	LOCAL_BITS = 13, -- local index 0..8191 (16*16*32-1)
 	ID_BITS    = 16, -- block id 0..65535
 	ORIENT_BITS = 3, -- Minecraft Direction ordinal / axis ordinal
-	COUNT_BITS = 17, -- blocks per chunk section 0..98304
+	COUNT_BITS = 13, -- blocks per chunk section 0..8192
 }
 
 MC.Config.SyncCellsPerPart = 1024

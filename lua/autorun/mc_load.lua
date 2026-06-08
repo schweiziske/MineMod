@@ -3,8 +3,8 @@
 	Loader. Runs shared on server, is sent to and runs on clients.
 
 	Design goal: NO per-block entities. Blocks live in a chunked voxel store and
-	are drawn with IMesh (1 draw call per 16^3 chunk). One physics entity per
-	non-empty chunk provides collision. So ~4096 blocks == 1 entity.
+	are drawn with IMesh (1 draw call per 16x16x32 chunk). One physics entity per
+	non-empty chunk provides collision. So ~8192 blocks == 1 entity.
 ------------------------------------------------------------------------------]]
 
 MC = MC or {}

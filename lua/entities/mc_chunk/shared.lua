@@ -1,5 +1,5 @@
 --[[----------------------------------------------------------------------------
-	mc_chunk : one entity per non-empty 16x16x384 Minecraft-style chunk section.
+	mc_chunk : one entity per non-empty 16x16x32 Minecraft-style chunk section.
 	  server -> provides collision (greedy-merged box multiconvex)
 	  client -> draws the chunk's IMesh (MC.DrawChunk)
 	This is the ONLY entity type the system spawns. Sections can stack vertically.
