@@ -224,6 +224,22 @@ function MC.DrawChunk( key )
 	end
 end
 
+hook.Remove( "PostDrawOpaqueRenderables", "mc_draw_chunks" )
+hook.Add( "PostDrawOpaqueRenderables", "mc_draw_chunks", function()
+	for key, list in pairs( MC.Meshes or {} ) do
+		if list then
+			local c = MC.GetChunkByKey( key )
+			if c then
+				local mat = Matrix()
+				mat:SetTranslation( MC.ChunkWorldOrigin( c.cx, c.cy, c.cz ) )
+				cam.PushModelMatrix( mat )
+					MC.DrawChunk( key )
+				cam.PopModelMatrix()
+			end
+		end
+	end
+end )
+
 ------------------------------------------------------------------- dirty tracking
 function MC.MarkChunkDirty( key )
 	MC.MeshDirty[key] = true

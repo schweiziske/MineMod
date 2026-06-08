@@ -5,7 +5,7 @@
 	  world  : Source units (Vector)
 	  cell   : integer block coords  bx,by,bz  (floor(world / BlockSize))
 	  chunk  : integer chunk section coords  cx,cy,cz
-	  local  : index inside a 16x16x384 section      li = lx + ly*CS + lz*CS*CS
+	  local  : index inside a 16x16x32 section       li = lx + ly*CS + lz*CS*CS
 ------------------------------------------------------------------------------]]
 
 MC = MC or {}
