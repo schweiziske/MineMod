@@ -13,17 +13,21 @@ local SHARED = {
 	"mc/sh_config.lua",
 	"mc/sh_generated_tiles.lua",
 	"mc/sh_generated_blocks.lua",
+	"mc/sh_generated_lang.lua",
 	"mc/sh_blocks.lua",
+	"mc/sh_player.lua",
 	"mc/sh_voxel.lua",
 }
 local SERVER_FILES = {
 	"mc/sv_world.lua",
+	"mc/sv_player.lua",
 }
 local CLIENT_FILES = {
 	"mc/cl_render.lua",
 	"mc/cl_ui.lua",
 	"mc/cl_net.lua",
 	"mc/cl_debug.lua",
+	"mc/cl_player.lua",
 }
 
 if SERVER then

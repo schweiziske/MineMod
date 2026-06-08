@@ -71,10 +71,11 @@ cvars.AddChangeCallback( "mc_client_collision", function()
 end, "mc" )
 
 -- should the face between `cur` and neighbour `nb` be drawn?
-local function visible( cur, nb )
+local function visible( cur, nb, nbOrient )
 	if nb == 0 then return true end
 	local d = MC.Blocks[nb]
 	if d and d.transparent then return nb ~= cur end
+	if MC.BlockIsFullCube and not MC.BlockIsFullCube( nb, nbOrient ) then return true end
 	return false
 end
 
@@ -134,6 +135,122 @@ local function bakedFaceData( id, face, orient )
 	return baked and baked[face] or nil
 end
 
+local EPS = 0.0001
+
+local BOX_FACE_CORNERS = {
+	[1] = function( b ) return { { b[1], b[2], b[6] }, { b[4], b[2], b[6] }, { b[4], b[5], b[6] }, { b[1], b[5], b[6] } } end,
+	[2] = function( b ) return { { b[1], b[5], b[3] }, { b[4], b[5], b[3] }, { b[4], b[2], b[3] }, { b[1], b[2], b[3] } } end,
+	[3] = function( b ) return { { b[4], b[2], b[3] }, { b[4], b[5], b[3] }, { b[4], b[5], b[6] }, { b[4], b[2], b[6] } } end,
+	[4] = function( b ) return { { b[1], b[5], b[3] }, { b[1], b[2], b[3] }, { b[1], b[2], b[6] }, { b[1], b[5], b[6] } } end,
+	[5] = function( b ) return { { b[4], b[5], b[3] }, { b[1], b[5], b[3] }, { b[1], b[5], b[6] }, { b[4], b[5], b[6] } } end,
+	[6] = function( b ) return { { b[1], b[2], b[3] }, { b[4], b[2], b[3] }, { b[4], b[2], b[6] }, { b[1], b[2], b[6] } } end,
+}
+
+local function cornerUV16( face, c )
+	if face == MC.Face.TOP then return { c[1] * 16, ( 1 - c[2] ) * 16 } end
+	if face == MC.Face.BOTTOM then return { c[1] * 16, c[2] * 16 } end
+	if face == MC.Face.XP then return { c[2] * 16, ( 1 - c[3] ) * 16 } end
+	if face == MC.Face.XN then return { ( 1 - c[2] ) * 16, ( 1 - c[3] ) * 16 } end
+	if face == MC.Face.YP then return { ( 1 - c[1] ) * 16, ( 1 - c[3] ) * 16 } end
+	return { c[1] * 16, ( 1 - c[3] ) * 16 }
+end
+
+local function rectForFace( box, face )
+	if face == MC.Face.TOP or face == MC.Face.BOTTOM then return box[1], box[4], box[2], box[5] end
+	if face == MC.Face.XP or face == MC.Face.XN then return box[2], box[5], box[3], box[6] end
+	return box[1], box[4], box[3], box[6]
+end
+
+local function facePlane( box, face )
+	if face == MC.Face.TOP then return box[6] end
+	if face == MC.Face.BOTTOM then return box[3] end
+	if face == MC.Face.XP then return box[4] end
+	if face == MC.Face.XN then return box[1] end
+	if face == MC.Face.YP then return box[5] end
+	return box[2]
+end
+
+local function coverRectForBox( box, face, plane, ox, oy, oz )
+	local x0, y0, z0 = box[1] + ox, box[2] + oy, box[3] + oz
+	local x1, y1, z1 = box[4] + ox, box[5] + oy, box[6] + oz
+	if face == MC.Face.TOP and math.abs( z0 - plane ) <= EPS then return x0, x1, y0, y1 end
+	if face == MC.Face.BOTTOM and math.abs( z1 - plane ) <= EPS then return x0, x1, y0, y1 end
+	if face == MC.Face.XP and math.abs( x0 - plane ) <= EPS then return y0, y1, z0, z1 end
+	if face == MC.Face.XN and math.abs( x1 - plane ) <= EPS then return y0, y1, z0, z1 end
+	if face == MC.Face.YP and math.abs( y0 - plane ) <= EPS then return x0, x1, z0, z1 end
+	if face == MC.Face.YN and math.abs( y1 - plane ) <= EPS then return x0, x1, z0, z1 end
+	return nil
+end
+
+local function addEdge( list, value, lo, hi )
+	if value > lo + EPS and value < hi - EPS then list[#list + 1] = value end
+end
+
+local function pointInRect( a, b, r )
+	return a >= r[1] - EPS and a <= r[2] + EPS and b >= r[3] - EPS and b <= r[4] + EPS
+end
+
+local function rectCovered( a0, a1, b0, b1, covers )
+	if #covers == 0 then return false end
+	local as = { a0, a1 }
+	local bs = { b0, b1 }
+	for _, r in ipairs( covers ) do
+		addEdge( as, math.max( a0, math.min( a1, r[1] ) ), a0, a1 )
+		addEdge( as, math.max( a0, math.min( a1, r[2] ) ), a0, a1 )
+		addEdge( bs, math.max( b0, math.min( b1, r[3] ) ), b0, b1 )
+		addEdge( bs, math.max( b0, math.min( b1, r[4] ) ), b0, b1 )
+	end
+	table.sort( as )
+	table.sort( bs )
+	for ai = 1, #as - 1 do
+		for bi = 1, #bs - 1 do
+			local ma = ( as[ai] + as[ai + 1] ) * 0.5
+			local mb = ( bs[bi] + bs[bi + 1] ) * 0.5
+			local ok = false
+			for _, r in ipairs( covers ) do
+				if pointInRect( ma, mb, r ) then ok = true break end
+			end
+			if not ok then return false end
+		end
+	end
+	return true
+end
+
+local function coveredByBoxes( targetBox, face, boxes, ox, oy, oz )
+	local plane = facePlane( targetBox, face )
+	local a0, a1, b0, b1 = rectForFace( targetBox, face )
+	local covers = {}
+	for _, box in ipairs( boxes or {} ) do
+		if box ~= targetBox then
+			local ca0, ca1, cb0, cb1 = coverRectForBox( box, face, plane, ox or 0, oy or 0, oz or 0 )
+			if ca0 and ca1 > a0 + EPS and ca0 < a1 - EPS and cb1 > b0 + EPS and cb0 < b1 - EPS then
+				covers[#covers + 1] = { math.max( a0, ca0 ), math.min( a1, ca1 ), math.max( b0, cb0 ), math.min( b1, cb1 ) }
+			end
+		end
+	end
+	return rectCovered( a0, a1, b0, b1, covers )
+end
+
+local function shapeFaceCovered( box, face, boxes, bx, by, bz )
+	if coveredByBoxes( box, face, boxes, 0, 0, 0 ) then return true end
+	local plane = facePlane( box, face )
+	local off = FACES[face].off
+	if ( face == MC.Face.TOP and math.abs( plane - 1 ) > EPS )
+	or ( face == MC.Face.BOTTOM and math.abs( plane ) > EPS )
+	or ( face == MC.Face.XP and math.abs( plane - 1 ) > EPS )
+	or ( face == MC.Face.XN and math.abs( plane ) > EPS )
+	or ( face == MC.Face.YP and math.abs( plane - 1 ) > EPS )
+	or ( face == MC.Face.YN and math.abs( plane ) > EPS ) then
+		return false
+	end
+	local nb = MC.GetBlock( bx + off[1], by + off[2], bz + off[3] )
+	if nb == 0 then return false end
+	local d = MC.Blocks[nb]
+	if d and d.transparent then return false end
+	local nbOrient = MC.GetBlockOrient( bx + off[1], by + off[2], bz + off[3] )
+	return coveredByBoxes( box, face, MC.BlockBoxes( nb, nbOrient ), off[1], off[2], off[3] )
+end
+
 function MC.BuildChunkMesh( key )
 	MC.FreeChunkMesh( key )
 
@@ -164,45 +281,74 @@ function MC.BuildChunkMesh( key )
 		local bx, by, bz = bxo + lx, byo + ly, bzo + lz
 		local wx, wy, wz = lx * BS, ly * BS, lz * BS
 
-		for f = 1, 6 do
-			local face = FACES[f]
-			local o = face.off
-			if visible( id, MC.GetBlock( bx + o[1], by + o[2], bz + o[3] ) ) then
-				local baked = bakedFaceData( id, f, orient )
-				local tile, rot, flipU, flipV
-				local u0, v0, u1, v1
-				if baked then
-					tile = baked.tile
-					rot = baked.rot or 0
-					u0, v0, u1, v1 = tileUVRect( tile, baked.uv )
-				else
-					tile, rot, flipU, flipV = MC.BlockFace( id, f, orient )
-					u0, v0, u1, v1 = MC.TileUV( tile )
-				end
-				local corners = face.c
-				local nrm, col = face.n, face.sh
-
-				for t = 1, 6 do
-					local cn = corners[ TRI[t] ]
-					local u, v
-					if baked and baked.uvs then
-						u, v = tileUVPoint( tile, baked.uvs[TRI[t]] )
+		if MC.BlockIsFullCube( id, orient ) then
+			for f = 1, 6 do
+				local face = FACES[f]
+				local o = face.off
+				local nbx, nby, nbz = bx + o[1], by + o[2], bz + o[3]
+				if visible( id, MC.GetBlock( nbx, nby, nbz ), MC.GetBlockOrient( nbx, nby, nbz ) ) then
+					local baked = bakedFaceData( id, f, orient )
+					local tile, rot, flipU, flipV
+					local u0, v0, u1, v1
+					if baked then
+						tile = baked.tile
+						rot = baked.rot or 0
+						u0, v0, u1, v1 = tileUVRect( tile, baked.uv )
 					else
-						local uf, vf = rotatedUVFlags( cn[4], cn[5], rot or 0, flipU, flipV )
-						u = uf == 1 and u1 or u0
-						v = vf == 1 and v1 or v0
+						tile, rot, flipU, flipV = MC.BlockFace( id, f, orient )
+						u0, v0, u1, v1 = MC.TileUV( tile )
 					end
-					nv = nv + 1
-					verts[nv] = {
-						pos    = Vector( wx + cn[1] * BS, wy + cn[2] * BS, wz + cn[3] * BS ),
-						normal = nrm,
-						u      = u,
-						v      = v,
-						color  = col,
-					}
-				end
+					local corners = face.c
+					local nrm, col = face.n, face.sh
 
-				if nv >= VERT_LIMIT then flush() end
+					for t = 1, 6 do
+						local cn = corners[ TRI[t] ]
+						local u, v
+						if baked and baked.uvs then
+							u, v = tileUVPoint( tile, baked.uvs[TRI[t]] )
+						else
+							local uf, vf = rotatedUVFlags( cn[4], cn[5], rot or 0, flipU, flipV )
+							u = uf == 1 and u1 or u0
+							v = vf == 1 and v1 or v0
+						end
+						nv = nv + 1
+						verts[nv] = {
+							pos    = Vector( wx + cn[1] * BS, wy + cn[2] * BS, wz + cn[3] * BS ),
+							normal = nrm,
+							u      = u,
+							v      = v,
+							color  = col,
+						}
+					end
+
+					if nv >= VERT_LIMIT then flush() end
+				end
+			end
+		else
+			local boxes = MC.BlockBoxes( id, orient )
+			for _, box in ipairs( boxes or {} ) do
+				for f = 1, 6 do
+					if not shapeFaceCovered( box, f, boxes, bx, by, bz ) then
+						local face = FACES[f]
+						local tile = MC.BlockFace( id, f, orient )
+						local corners = BOX_FACE_CORNERS[f]( box )
+						local nrm, col = face.n, face.sh
+						for t = 1, 6 do
+							local ci = TRI[t]
+							local cn = corners[ci]
+							local u, v = tileUVPoint( tile, cornerUV16( f, cn ) )
+							nv = nv + 1
+							verts[nv] = {
+								pos    = Vector( wx + cn[1] * BS, wy + cn[2] * BS, wz + cn[3] * BS ),
+								normal = nrm,
+								u      = u,
+								v      = v,
+								color  = col,
+							}
+						end
+						if nv >= VERT_LIMIT then flush() end
+					end
+				end
 			end
 		end
 	end
