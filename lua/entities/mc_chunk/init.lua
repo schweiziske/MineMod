@@ -14,5 +14,21 @@ function ENT:Initialize()
 	self:EnsureKey()
 end
 
+function ENT:PhysgunPickup()
+	return false
+end
+
+function ENT:CanProperty( ply, property )
+	if property == "unfreeze" then return false end
+end
+
 -- frozen static build: never let physics forces move / drift a chunk
 function ENT:PhysicsUpdate() end
+
+hook.Add( "PhysgunPickup", "mc_chunk_no_physgun", function( _, ent )
+	if IsValid( ent ) and ent:GetClass() == "mc_chunk" then return false end
+end )
+
+hook.Add( "CanPlayerUnfreeze", "mc_chunk_no_unfreeze", function( _, ent )
+	if IsValid( ent ) and ent:GetClass() == "mc_chunk" then return false end
+end )

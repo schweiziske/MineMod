@@ -129,22 +129,7 @@ git status --short
 git diff -- lua/mc/sh_voxel.lua lua/mc/sv_world.lua lua/mc/cl_net.lua lua/mc/cl_render.lua lua/entities/mc_chunk _tools/mc_import_world.py
 ```
 
-2. 不要直接相信当前 chunk 拼接实现。先写一个最小测试：
 
-- 只放两个方块：`bz=-1` 和 `bz=0`。
-- 确认它们在渲染和碰撞里是相邻的。
-- 再测试 `bz=383` 和 `bz=384`。
-- 再测试 `bz=-384` 和 `bz=-385`。
-
-3. 确认 mesh 和实体坐标规则：
-
-- 如果 mesh 顶点是本地坐标，实体位置必须是 chunk 世界原点。
-- 如果 mesh 顶点是世界坐标，实体位置必须是零或 Draw 时要处理矩阵。
-- 两种方式不能混用。
-
-4. 同步先做小包。
-
-不要先导入 16x16 chunks 或 300000 方块。先导入一个很小的 1 chunk，再确认客户端不卡、不丢、不消失。
 
 ## 常用命令
 
