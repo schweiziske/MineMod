@@ -57,7 +57,7 @@ MC.Net = {
 	COUNT_BITS = 14, -- blocks per chunk section 0..8192
 }
 
-MC.Config.SyncCellsPerPart = 8000
+MC.Config.SyncCellsPerPart = 4000
 MC.Config.SyncMessagesPerTick = 4
 MC.Config.SyncReliableBudget = 48000
 

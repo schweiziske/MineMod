@@ -23,7 +23,7 @@ local function syncCellsPerPart()
 	if C.SyncCells then
 		return math.Clamp( C.SyncCells:GetInt(), 1, 12000 )
 	end
-	return C.SyncCellsPerPart or 8000
+	return C.SyncCellsPerPart or 4000
 end
 
 local function syncMessagesPerTick()
@@ -824,6 +824,32 @@ local function savePath()
 	return "mc/" .. game.GetMap() .. ".dat"
 end
 
+local function savedBlockCount( data )
+	if not data or not istable( data.chunks ) then return 0, 0 end
+	local blocks = 0
+	for _, c in ipairs( data.chunks ) do
+		local cells = c[4]
+		if istable( cells ) then
+			blocks = blocks + math.floor( #cells / 2 )
+		elseif isstring( cells ) then
+			for entry in string.gmatch( cells, "[^;]+" ) do
+				if entry ~= "" then blocks = blocks + 1 end
+			end
+		end
+	end
+	return #data.chunks, blocks
+end
+
+local function packSaveCells( cells )
+	local out = {}
+	local n = 0
+	for i = 1, #cells, 2 do
+		n = n + 1
+		out[n] = tostring( cells[i] ) .. ":" .. tostring( cells[i + 1] )
+	end
+	return table.concat( out, ";" )
+end
+
 function SV.Save()
 	local chunks = {}
 	local palette = {}
@@ -845,13 +871,23 @@ function SV.Save()
 				n = n + 1 ; cells[n] = li
 				n = n + 1 ; cells[n] = pi
 			end
-			chunks[#chunks + 1] = { c.cx, c.cy, c.cz, cells }
+			chunks[#chunks + 1] = { c.cx, c.cy, c.cz, packSaveCells( cells ) }
 		end
 	end
 	local json = util.TableToJSON( { v = 5, bs = MC.BS, cs = MC.CS, h = MC.CH, p = palette, chunks = chunks } )
 	if not json then return end
 	file.CreateDir( "mc" )
-	file.Write( savePath(), util.Compress( json ) )
+	local compressed = util.Compress( json )
+	if not compressed then return end
+	file.Write( savePath(), compressed )
+	local verifyRaw = file.Read( savePath(), "DATA" )
+	local verifyJSON = verifyRaw and util.Decompress( verifyRaw )
+	local verifyData = verifyJSON and util.JSONToTable( verifyJSON )
+	local verifyChunks, verifyBlocks = savedBlockCount( verifyData )
+	if verifyBlocks ~= SV.BlockCount or verifyChunks ~= #chunks then
+		MsgN( "[MC] !!! save verify mismatch chunks " .. verifyChunks .. "/" .. #chunks ..
+			" blocks " .. verifyBlocks .. "/" .. SV.BlockCount )
+	end
 	SV.Dirty = false
 	MsgN( "[MC] saved " .. #chunks .. " chunks / " .. SV.BlockCount .. " blocks" )
 end
@@ -892,16 +928,15 @@ function SV.Load()
 		end
 		local touched = {}
 		local stride = ( data.v == 4 or data.v == 5 ) and 2 or ( ( data.v == 2 or data.v == 3 ) and 3 or 2 )
-		for i = 1, #cells, stride do
-			local li = math.floor( tonumber( cells[i] ) or -1 )
-			local savedBlock = cells[i + 1]
+		local function loadOneCell( li, savedBlock, state )
+			li = math.floor( tonumber( li ) or -1 )
 			local id, orient
 			if data.v == 4 or data.v == 5 then
 				id, orient = importPaletteEntry( cache, palette, savedBlock )
 			else
 				local resolved = data.v == 3 and MC.ResolveBlock( savedBlock ) or nil
 				id = resolved and resolved.id or math.floor( tonumber( savedBlock ) or 0 )
-				orient = stride == 3 and MC.StateToOrient( id, cells[i + 2] ) or MC.DefaultOrient( id )
+				orient = state ~= nil and MC.StateToOrient( id, state ) or MC.DefaultOrient( id )
 			end
 			local bx, by, bz
 			if legacyMode == "column" then
@@ -925,6 +960,16 @@ function SV.Load()
 					SV.BlockCount = SV.BlockCount + 1
 					touched[c.key] = c
 				end
+			end
+		end
+
+		if isstring( cells ) then
+			for liText, blockText, stateText in string.gmatch( cells, "([^:;]+):([^:;]*):?([^;]*);?" ) do
+				loadOneCell( liText, blockText, stateText ~= "" and stateText or nil )
+			end
+		else
+			for i = 1, #cells, stride do
+				loadOneCell( cells[i], cells[i + 1], stride == 3 and cells[i + 2] or nil )
 			end
 		end
 		for key, c in pairs( touched ) do
@@ -978,6 +1023,27 @@ end )
 concommand.Add( "mc_save", function( ply )
 	if IsValid( ply ) and not ply:IsAdmin() then return end
 	SV.Save()
+end )
+
+concommand.Add( "mc_save_diag", function( ply )
+	if IsValid( ply ) and not ply:IsAdmin() then return end
+	local memChunks = 0
+	for _, c in pairs( MC.World ) do
+		if c.count and c.count > 0 then memChunks = memChunks + 1 end
+	end
+	local raw = file.Read( savePath(), "DATA" )
+	local json = raw and util.Decompress( raw )
+	local data = json and util.JSONToTable( json )
+	local diskChunks, diskBlocks = savedBlockCount( data )
+	local msg = "[MC] save diag memory chunks=" .. memChunks .. " blocks=" .. SV.BlockCount ..
+		" disk chunks=" .. diskChunks .. " blocks=" .. diskBlocks ..
+		" h=" .. tostring( data and data.h or "nil" ) ..
+		" dirty=" .. tostring( SV.Dirty )
+	if SV.Dirty and ( diskChunks ~= memChunks or diskBlocks ~= SV.BlockCount ) then
+		msg = msg .. " (run mc_save to write memory to disk)"
+	end
+	MsgN( msg )
+	if IsValid( ply ) then ply:PrintMessage( HUD_PRINTCONSOLE, msg ) end
 end )
 
 concommand.Add( "mc_clear", function( ply )

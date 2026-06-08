@@ -30,6 +30,15 @@ local function finishProgressChunk()
 	local p = MC.SyncProgress
 	p.doneChunks = p.doneChunks + 1
 	touchProgress()
+
+	if not p.finalMeshRefresh and p.doneChunks >= p.chunks and p.received >= p.expected then
+		p.finalMeshRefresh = true
+		for key, c in pairs( MC.World or {} ) do
+			if c.count and c.count > 0 then
+				MC.MarkChunkDirty( key )
+			end
+		end
+	end
 end
 
 local function markNeighbours( cx, cy, cz )
