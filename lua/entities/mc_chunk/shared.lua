@@ -28,10 +28,26 @@ local function greedyBoxes( chunk )
 	local CS2 = CS * CS
 	local CH = MC.CH
 	local solid = {}
+	local shapeBoxes = {}
 	for li, id in pairs( chunk.blocks ) do
 		local b = MC.Blocks[id]
 		if not b or b.solid ~= false then
-			solid[li] = true
+			local orient = MC.NormalizeOrient and MC.NormalizeOrient( id, chunk.orients and chunk.orients[li] ) or 0
+			if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
+				solid[li] = true
+			else
+				local lx, ly, lz = MC.DecodeLocal( li )
+				for _, box in ipairs( MC.BlockBoxes( id, orient ) or {} ) do
+					shapeBoxes[#shapeBoxes + 1] = {
+						lx + box[1],
+						ly + box[2],
+						lz + box[3],
+						lx + box[4],
+						ly + box[5],
+						lz + box[6],
+					}
+				end
+			end
 		end
 	end
 
@@ -85,6 +101,10 @@ local function greedyBoxes( chunk )
 				end
 			end
 		end
+	end
+
+	for i = 1, #shapeBoxes do
+		boxes[#boxes + 1] = shapeBoxes[i]
 	end
 
 	return boxes

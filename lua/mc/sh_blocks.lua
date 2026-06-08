@@ -48,7 +48,8 @@ local function tileValue( value, fallback )
 end
 
 local function blockDisp( def )
-	return def.disp or FixedDisp[def.name] or ( "方块 " .. tostring( def.name or def.mcid or def.id ) )
+	local generated = MC.GeneratedBlockNames or {}
+	return def.disp or generated[def.mcid] or generated[def.name] or FixedDisp[def.name] or ( "方块 " .. tostring( def.name or def.mcid or def.id ) )
 end
 
 local function normalizeBaked( baked )
@@ -107,6 +108,7 @@ function MC.RegisterBlock( def )
 		disp = blockDisp( { name = name, disp = def.disp, mcid = mcid, id = id } ),
 		solid = def.solid ~= false,
 		transparent = def.transparent == true,
+		shape = def.shape,
 		textures = { top = top, side = side, bottom = bottom, front = front },
 		baked = normalizeBaked( def.baked ),
 		stateRule = def.stateRule or def.orient,
@@ -193,6 +195,48 @@ local function reverseValues( values )
 	return out
 end
 
+local SlabTypeName = { [0] = "bottom", [1] = "top", [2] = "double" }
+local SlabTypeValue = { bottom = 0, top = 1, double = 2 }
+local StairFacingByOrient = {
+	[0] = MC.Direction.NORTH,
+	[1] = MC.Direction.SOUTH,
+	[2] = MC.Direction.WEST,
+	[3] = MC.Direction.EAST,
+	[4] = MC.Direction.NORTH,
+	[5] = MC.Direction.SOUTH,
+	[6] = MC.Direction.WEST,
+	[7] = MC.Direction.EAST,
+}
+local StairOrientByFacing = {
+	[MC.Direction.NORTH] = 0,
+	[MC.Direction.SOUTH] = 1,
+	[MC.Direction.WEST] = 2,
+	[MC.Direction.EAST] = 3,
+}
+local StairHalfByOrient = {
+	[0] = "bottom",
+	[1] = "bottom",
+	[2] = "bottom",
+	[3] = "bottom",
+	[4] = "top",
+	[5] = "top",
+	[6] = "top",
+	[7] = "top",
+}
+
+function MC.MakeStairOrient( facing, half )
+	local base = StairOrientByFacing[facing] or StairOrientByFacing[MC.Direction.NORTH]
+	return ( half == "top" and 4 or 0 ) + base
+end
+
+function MC.StairOrientFacing( orient )
+	return StairFacingByOrient[MC.NormalizeOrient and math.floor( tonumber( orient ) or 0 ) or orient] or MC.Direction.NORTH
+end
+
+function MC.StairOrientHalf( orient )
+	return StairHalfByOrient[math.floor( tonumber( orient ) or 0 )] or "bottom"
+end
+
 MC.OrientRules = {
 	axis = {
 		default = MC.Axis.Y,
@@ -213,6 +257,18 @@ MC.OrientRules = {
 		names = DirectionName,
 		values = { north = MC.Direction.NORTH, south = MC.Direction.SOUTH, west = MC.Direction.WEST, east = MC.Direction.EAST },
 		order = { MC.Direction.NORTH, MC.Direction.SOUTH, MC.Direction.WEST, MC.Direction.EAST },
+	},
+	slab = {
+		default = 0,
+		names = SlabTypeName,
+		values = SlabTypeValue,
+		allowed = { [0] = true, [1] = true, [2] = true },
+		order = { 0, 1, 2 },
+	},
+	stairs = {
+		default = 0,
+		allowed = { [0] = true, [1] = true, [2] = true, [3] = true, [4] = true, [5] = true, [6] = true, [7] = true },
+		order = { 0, 1, 2, 3, 4, 5, 6, 7 },
 	},
 }
 MC.OrientRules.horizontal_facing.allowed = reverseValues( MC.OrientRules.horizontal_facing.values )
@@ -286,12 +342,24 @@ function MC.OrientToState( id, orient )
 	local b = MC.Blocks[id]
 	local rule = b and MC.OrientRules[b.orient]
 	if not rule then return "" end
+	if b.orient == "slab" then
+		return SlabTypeName[MC.NormalizeOrient( id, orient )] or "bottom"
+	end
 	return rule.names[MC.NormalizeOrient( id, orient )] or ""
 end
 
 function MC.BlockStateText( id, orient )
 	local b = MC.Blocks[id]
 	if not b or not b.orient then return "" end
+	if b.orient == "slab" then
+		return "type=" .. ( SlabTypeName[MC.NormalizeOrient( id, orient )] or "bottom" )
+	end
+	if b.orient == "stairs" then
+		orient = MC.NormalizeOrient( id, orient )
+		local facing = DirectionName[StairFacingByOrient[orient] or MC.Direction.NORTH] or "north"
+		local half = StairHalfByOrient[orient] or "bottom"
+		return "facing=" .. facing .. ",half=" .. half
+	end
 	local state = MC.OrientToState( id, orient )
 	if state == "" then return "" end
 	return ( b.orient == "axis" and "axis=" or "facing=" ) .. state
@@ -301,6 +369,8 @@ function MC.BlockStateHint( id )
 	local b = MC.Blocks[id]
 	local rule = b and MC.OrientRules[b.orient]
 	if not rule then return "" end
+	if b.orient == "slab" then return "type=bottom/top/double" end
+	if b.orient == "stairs" then return "facing=north/south/west/east,half=bottom/top" end
 	local names = {}
 	for _, value in ipairs( rule.order ) do names[#names + 1] = rule.names[value] end
 	return ( b.orient == "axis" and "axis=" or "facing=" ) .. table.concat( names, "/" )
@@ -308,6 +378,22 @@ end
 
 local function trim( s )
 	return string.match( tostring( s or "" ), "^%s*(.-)%s*$" )
+end
+
+local function parseStateMap( state )
+	if state == nil then return nil end
+	state = string.lower( tostring( state ) )
+	state = string.match( state, "^%s*%[(.-)%]%s*$" ) or state
+	local map = {}
+	local saw = false
+	for part in string.gmatch( state, "[^,]+" ) do
+		local key, value = string.match( part, "^%s*([%a_]+)%s*=%s*([%a_]+)%s*$" )
+		if key and value then
+			map[key] = value
+			saw = true
+		end
+	end
+	return saw and map or nil
 end
 
 local function stateValue( b, state )
@@ -334,6 +420,17 @@ function MC.StateToOrient( id, state )
 	if state == nil or state == "" then return MC.DefaultOrient( id ) end
 	local n = numericOrient( rule, state )
 	if n then return n end
+	local map = parseStateMap( state )
+	if b.orient == "slab" then
+		return map and SlabTypeValue[map.type or map.half] or SlabTypeValue[trim( state )] or MC.DefaultOrient( id )
+	end
+	if b.orient == "stairs" then
+		local facing = map and DirectionValue[map.facing]
+		if not StairOrientByFacing[facing] then facing = nil end
+		local half = map and map.half or "bottom"
+		if half ~= "top" then half = "bottom" end
+		return facing and MC.MakeStairOrient( facing, half ) or MC.DefaultOrient( id )
+	end
 	local value, validKey = stateValue( b, state )
 	if not validKey or not value or value == "" then return MC.DefaultOrient( id ) end
 	return rule.values[value] or MC.DefaultOrient( id )
@@ -345,6 +442,17 @@ function MC.IsOrientStateValid( id, state )
 	if not rule then return state == nil or state == "" end
 	if state == nil or state == "" then return true end
 	if tonumber( state ) then return numericOrient( rule, state ) ~= nil end
+	local map = parseStateMap( state )
+	if b.orient == "slab" then
+		if map then return SlabTypeValue[map.type or map.half] ~= nil end
+		return SlabTypeValue[trim( string.lower( tostring( state ) ) )] ~= nil
+	end
+	if b.orient == "stairs" then
+		if not map then return false end
+		local facing = DirectionValue[map.facing]
+		local half = map.half or "bottom"
+		return StairOrientByFacing[facing] ~= nil and ( half == "bottom" or half == "top" )
+	end
 	local value, validKey = stateValue( b, state )
 	return validKey and value ~= nil and rule.values[value] ~= nil
 end
@@ -400,6 +508,21 @@ local function horizontalLookDirectionFromForward( forward )
 	return forward.y >= 0 and MC.Direction.SOUTH or MC.Direction.NORTH
 end
 
+local function placementHalfFromTrace( tr )
+	if not tr then return "bottom" end
+	local n = tr.HitNormal
+	if n then
+		if n.z < -0.5 then return "top" end
+		if n.z > 0.5 then return "bottom" end
+	end
+	if tr.HitPos then
+		local z = tr.HitPos.z / MC.BS
+		local frac = z - math.floor( z )
+		return frac > 0.5 and "top" or "bottom"
+	end
+	return "bottom"
+end
+
 function MC.OrientForVectors( id, forward, hitNormal )
 	local b = MC.Blocks[id]
 	if not b or not b.orient then return 0 end
@@ -420,6 +543,14 @@ end
 
 function MC.OrientForPlacement( ply, tr, id )
 	local forward = IsValid( ply ) and ply:EyeAngles():Forward() or nil
+	local b = MC.Blocks[id]
+	if b and b.orient == "slab" then
+		return placementHalfFromTrace( tr ) == "top" and 1 or 0
+	end
+	if b and b.orient == "stairs" then
+		local facing = horizontalLookDirectionFromForward( forward )
+		return MC.MakeStairOrient( facing, placementHalfFromTrace( tr ) )
+	end
 	return MC.OrientForVectors( id, forward, tr and tr.HitNormal or nil )
 end
 
@@ -581,6 +712,53 @@ function MC.BlockIconTile( id )
 	if b.name == "dispenser" then return T.dispenser_front end
 	if b.name == "observer" then return T.observer_front end
 	return b.side
+end
+
+local FullBlockBox = { { 0, 0, 0, 1, 1, 1 } }
+
+local function stairBoxes( orient )
+	local facing = StairFacingByOrient[orient] or MC.Direction.NORTH
+	local top = StairHalfByOrient[orient] == "top"
+	local boxes = {}
+	if top then
+		boxes[#boxes + 1] = { 0, 0, 0.5, 1, 1, 1 }
+		if facing == MC.Direction.NORTH then boxes[#boxes + 1] = { 0, 0, 0, 1, 0.5, 0.5 }
+		elseif facing == MC.Direction.SOUTH then boxes[#boxes + 1] = { 0, 0.5, 0, 1, 1, 0.5 }
+		elseif facing == MC.Direction.WEST then boxes[#boxes + 1] = { 0, 0, 0, 0.5, 1, 0.5 }
+		else boxes[#boxes + 1] = { 0.5, 0, 0, 1, 1, 0.5 } end
+	else
+		boxes[#boxes + 1] = { 0, 0, 0, 1, 1, 0.5 }
+		if facing == MC.Direction.NORTH then boxes[#boxes + 1] = { 0, 0, 0.5, 1, 0.5, 1 }
+		elseif facing == MC.Direction.SOUTH then boxes[#boxes + 1] = { 0, 0.5, 0.5, 1, 1, 1 }
+		elseif facing == MC.Direction.WEST then boxes[#boxes + 1] = { 0, 0, 0.5, 0.5, 1, 1 }
+		else boxes[#boxes + 1] = { 0.5, 0, 0.5, 1, 1, 1 } end
+	end
+	return boxes
+end
+
+function MC.BlockBoxes( id, orient )
+	local b = MC.Blocks[id]
+	if not b then return nil end
+	if b.shape == "slab" then
+		orient = MC.NormalizeOrient( id, orient )
+		if orient == 1 then return { { 0, 0, 0.5, 1, 1, 1 } } end
+		if orient == 2 then return FullBlockBox end
+		return { { 0, 0, 0, 1, 1, 0.5 } }
+	end
+	if b.shape == "stairs" then
+		return stairBoxes( MC.NormalizeOrient( id, orient ) )
+	end
+	return FullBlockBox
+end
+
+function MC.BlockIsFullCube( id, orient )
+	local b = MC.Blocks[id]
+	if not b or b.solid == false then return false end
+	if not b.shape then return true end
+	local boxes = MC.BlockBoxes( id, orient )
+	return boxes and #boxes == 1
+		and boxes[1][1] == 0 and boxes[1][2] == 0 and boxes[1][3] == 0
+		and boxes[1][4] == 1 and boxes[1][5] == 1 and boxes[1][6] == 1
 end
 
 function MC.TileUV( tile )

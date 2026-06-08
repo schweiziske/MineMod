@@ -6,6 +6,25 @@ MC = MC or {}
 
 surface.CreateFont( "mc_hud", { font = "Roboto", size = 22, weight = 600 } )
 surface.CreateFont( "mc_hud_small", { font = "Roboto", size = 16, weight = 500 } )
+surface.CreateFont( "mc_hud_big", { font = "Roboto", size = 28, weight = 700 } )
+surface.CreateFont( "mc_hud_fit_24", { font = "Roboto", size = 24, weight = 700 } )
+surface.CreateFont( "mc_hud_fit_20", { font = "Roboto", size = 20, weight = 700 } )
+surface.CreateFont( "mc_hud_fit_16", { font = "Roboto", size = 16, weight = 700 } )
+
+function MC.DrawFittedText( text, font, fallbackFonts, x, y, color, ax, ay, maxw )
+	local useFont = font
+	if maxw and maxw > 0 then
+		surface.SetFont( useFont )
+		local tw = surface.GetTextSize( text )
+		for _, f in ipairs( fallbackFonts or {} ) do
+			if tw <= maxw then break end
+			useFont = f
+			surface.SetFont( useFont )
+			tw = surface.GetTextSize( text )
+		end
+	end
+	draw.SimpleText( text, useFont, x, y, color, ax, ay )
+end
 
 function MC.DrawTile( tile, x, y, w, h )
 	local u0, v0, u1, v1 = MC.TileUV( tile )
@@ -19,12 +38,22 @@ function MC.DrawBlockIcon( id, x, y, w, h )
 	MC.DrawTile( MC.BlockIconTile( id ), x, y, w, h )
 end
 
+function MC.DrawBlockGhost( id, orient, bx, by, bz, color )
+	local base = MC.CellWorldMin( bx, by, bz )
+	local boxes = MC.BlockBoxes and MC.BlockBoxes( id, orient ) or nil
+	for _, box in ipairs( boxes or { { 0, 0, 0, 1, 1, 1 } } ) do
+		local mn = Vector( box[1] * MC.BS, box[2] * MC.BS, box[3] * MC.BS )
+		local mx = Vector( box[4] * MC.BS, box[5] * MC.BS, box[6] * MC.BS )
+		render.DrawWireframeBox( base, angle_zero, mn, mx, color or Color( 255, 255, 255, 230 ), true )
+	end
+end
+
 function MC.OpenPalette( onSelect )
 	if IsValid( MC.PaletteFrame ) then MC.PaletteFrame:Remove() end
 
 	local fr = vgui.Create( "DFrame" )
 	fr:SetTitle( "选择方块" )
-	fr:SetSize( 560, 360 )
+	fr:SetSize( 780, 560 )
 	fr:Center()
 	fr:MakePopup()
 	MC.PaletteFrame = fr
@@ -34,13 +63,13 @@ function MC.OpenPalette( onSelect )
 
 	local layout = vgui.Create( "DIconLayout", scroll )
 	layout:Dock( FILL )
-	layout:SetSpaceX( 6 )
-	layout:SetSpaceY( 6 )
+	layout:SetSpaceX( 8 )
+	layout:SetSpaceY( 8 )
 
 	for _, id in ipairs( MC.BlockList ) do
 		local b = MC.Blocks[id]
 		local btn = layout:Add( "DButton" )
-		btn:SetSize( 76, 92 )
+		btn:SetSize( 104, 124 )
 		btn:SetText( "" )
 
 		local hint = MC.BlockStateHint( id )
@@ -48,8 +77,8 @@ function MC.OpenPalette( onSelect )
 
 		btn.Paint = function( s, w, h )
 			draw.RoundedBox( 4, 0, 0, w, h, s:IsHovered() and Color( 80, 90, 110 ) or Color( 45, 47, 52 ) )
-			MC.DrawBlockIcon( id, w * 0.5 - 28, 6, 56, 56 )
-			draw.SimpleText( b.disp, "mc_hud_small", w * 0.5, h - 16, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+			MC.DrawBlockIcon( id, w * 0.5 - 36, 10, 72, 72 )
+			MC.DrawFittedText( b.disp, "mc_hud", { "mc_hud_small", "mc_hud_fit_16" }, w * 0.5, h - 24, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, w - 10 )
 		end
 
 		btn.DoClick = function()

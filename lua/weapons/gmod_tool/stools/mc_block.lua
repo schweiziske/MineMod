@@ -94,8 +94,11 @@ if CLIENT then
 		local bx, by, bz = placeCell( tr )
 		if not MC.CanPreviewPlace( ply, bx, by, bz ) then return end
 
-		local mn = MC.CellWorldMin( bx, by, bz )
-		render.DrawWireframeBox( mn, angle_zero, vector_origin, Vector( MC.BS, MC.BS, MC.BS ), Color( 255, 255, 255, 230 ), true )
+		local cv = GetConVar( "mc_block_block" )
+		local id = cv and math.floor( cv:GetInt() ) or 1
+		if not MC.IsValidBlock( id ) then id = 1 end
+		local orient = MC.OrientForPlacement( ply, tr, id )
+		MC.DrawBlockGhost( id, orient, bx, by, bz, Color( 255, 255, 255, 230 ) )
 	end )
 end
 

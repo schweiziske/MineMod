@@ -103,17 +103,23 @@ if CLIENT then
 		if not b then return end
 
 		local sw, sh = ScrW(), ScrH()
-		local w, h = 64, 64
-		local x, y = sw * 0.5 - w * 0.5, sh - 132
 		local tr = ply:GetEyeTrace()
 		local orient = tr.Hit and MC.OrientForPlacement( ply, tr, id ) or MC.DefaultOrient( id )
 		local state = MC.BlockStateText( id, orient )
+		local w, h = 64, 64
+		local panelW = 320
+		local panelH = state ~= "" and 118 or 96
+		local px = sw * 0.5 - panelW * 0.5
+		local py = sh - panelH - 44
+		local x, y = px + 18, py + ( panelH - h ) * 0.5
+		local tx = x + w + 18
+		local maxTextW = panelW - ( tx - px ) - 18
 
-		draw.RoundedBox( 6, x - 8, y - 8, w + 16, h + ( state ~= "" and 58 or 40 ), Color( 0, 0, 0, 160 ) )
+		draw.RoundedBox( 6, px, py, panelW, panelH, Color( 0, 0, 0, 175 ) )
 		MC.DrawBlockIcon( id, x, y, w, h )
-		draw.SimpleText( b.disp, "mc_hud", x + w * 0.5, y + h + 10, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP )
+		MC.DrawFittedText( b.disp, "mc_hud_big", { "mc_hud_fit_24", "mc_hud_fit_20", "mc_hud_fit_16" }, tx, py + 22, color_white, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, maxTextW )
 		if state ~= "" then
-			draw.SimpleText( state, "mc_hud_small", x + w * 0.5, y + h + 32, Color( 210, 230, 255 ), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP )
+			draw.SimpleText( state, "mc_hud_small", tx, py + 58, Color( 210, 230, 255 ), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 		end
 		draw.SimpleText( "左键破坏   右键放置   Reload 选择方块", "mc_hud_small", sw * 0.5, sh - 20, Color( 255, 255, 255, 190 ), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
 
@@ -133,7 +139,8 @@ if CLIENT then
 
 		local bx, by, bz = placeCell( tr )
 		if not MC.CanPreviewPlace( ply, bx, by, bz ) then return end
-		local mn = MC.CellWorldMin( bx, by, bz )
-		render.DrawWireframeBox( mn, angle_zero, vector_origin, Vector( MC.BS, MC.BS, MC.BS ), Color( 255, 255, 255, 230 ), true )
+		local id = selectedID( ply )
+		local orient = MC.OrientForPlacement( ply, tr, id )
+		MC.DrawBlockGhost( id, orient, bx, by, bz, Color( 255, 255, 255, 230 ) )
 	end )
 end

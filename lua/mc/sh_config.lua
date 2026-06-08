@@ -6,10 +6,16 @@ MC = MC or {}
 MC.Config = MC.Config or {}
 
 ------------------------------------------------------------------ world geometry
--- Units per block edge. 36.5u makes a GMod player roughly two MC blocks tall.
+-- Units per block edge. 36u keeps half-block collision at the Source step height.
 -- NOTE: changing this invalidates existing saves (positions are in blocks * size).
-MC.Config.BlockSize = 36.5
+MC.Config.BlockSize = 36
 MC.Config.DefaultReach = MC.Config.BlockSize * 5
+MC.Config.PlayerHullWidth = MC.Config.BlockSize * 0.6
+MC.Config.PlayerHullHeight = MC.Config.BlockSize * 1.8
+MC.Config.PlayerDuckHeight = MC.Config.BlockSize * 1.5
+MC.Config.PlayerViewHeight = MC.Config.BlockSize * 1.62
+MC.Config.PlayerDuckViewHeight = MC.Config.BlockSize * 1.27
+MC.Config.PlayerJumpPower = 240
 -- Minecraft-style chunk section: 16x16 horizontally, 32 blocks vertically.
 -- Z is not globally clamped; sections are addressed by their chunk Z.
 MC.Config.ChunkSize = 16
@@ -75,7 +81,8 @@ if SERVER then
 	MC.Config.SyncMsgs    = GetConVar( "mc_sync_messages_per_tick" ) or CreateConVar( "mc_sync_messages_per_tick", tostring( MC.Config.SyncMessagesPerTick ), F, "Streamed sync net messages per 0.05s tick" )
 	MC.Config.SyncBudget  = GetConVar( "mc_sync_reliable_budget" ) or CreateConVar( "mc_sync_reliable_budget", tostring( MC.Config.SyncReliableBudget ), F, "Approx max reliable sync bytes per 0.05s tick" )
 
-	if math.abs( MC.Config.Reach:GetFloat() - 8192 ) < 0.01 then
+	local reach = MC.Config.Reach:GetFloat()
+	if math.abs( reach - 8192 ) < 0.01 or math.abs( reach - 182.5 ) < 0.01 then
 		MC.Config.Reach:SetFloat( MC.Config.DefaultReach )
 	end
 end
