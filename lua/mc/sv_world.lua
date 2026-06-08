@@ -19,6 +19,44 @@ SV.PhysDirty  = SV.PhysDirty or {}   -- chunkKey -> true (collision needs rebuil
 SV.SyncQueue  = SV.SyncQueue or {}   -- player -> { keys = {}, i = 1, active = nil }
 SV.Dirty      = SV.Dirty or false    -- world changed since last save
 
+local function syncCellsPerPart()
+	if C.SyncCells then
+		return math.Clamp( C.SyncCells:GetInt(), 1, 12000 )
+	end
+	return C.SyncCellsPerPart or 8000
+end
+
+local function syncMessagesPerTick()
+	if C.SyncMsgs then
+		return math.Clamp( C.SyncMsgs:GetInt(), 1, 16 )
+	end
+	return C.SyncMessagesPerTick or 4
+end
+
+local function syncReliableBudget()
+	if C.SyncBudget then
+		return math.Clamp( C.SyncBudget:GetInt(), 8192, 52000 )
+	end
+	return C.SyncReliableBudget or 48000
+end
+
+local function estimateSyncPartBytes( cells )
+	local bits = Net.COORD_BITS * 3 + Net.COUNT_BITS +
+		cells * ( Net.LOCAL_BITS + Net.ID_BITS + Net.ORIENT_BITS )
+	return math.ceil( bits / 8 ) + 64
+end
+
+local function decodeLocalWithHeight( li, height )
+	local CS = MC.CS
+	local CS2 = CS * CS
+	if li < 0 or li >= CS2 * height then return nil end
+	local lz = math.floor( li / CS2 )
+	local rem = li - lz * CS2
+	local ly = math.floor( rem / CS )
+	local lx = rem - ly * CS
+	return lx, ly, lz
+end
+
 ------------------------------------------------------------------ chunk entities
 function SV.EnsureChunkEnt( chunk )
 	if IsValid( chunk.ent ) then return chunk.ent end
@@ -660,7 +698,7 @@ local function sendFullPart( ply, active )
 		return false
 	end
 
-	local maxCells = MC.Config.SyncCellsPerPart or 384
+	local maxCells = syncCellsPerPart()
 	local part = {}
 	while active.i <= #active.lis and #part < maxCells do
 		local li = active.lis[active.i]
@@ -758,9 +796,13 @@ timer.Create( "mc_sync", 0.05, 0, function()
 	for ply, q in pairs( SV.SyncQueue ) do
 		if not IsValid( ply ) then SV.SyncQueue[ply] = nil continue end
 		local sent = 0
-		local budget = MC.Config.SyncMessagesPerTick or 1
-		while sent < budget and sendSyncStep( ply, q ) do
+		local sentBytes = 0
+		local budget = syncMessagesPerTick()
+		local byteBudget = syncReliableBudget()
+		local partBytes = estimateSyncPartBytes( syncCellsPerPart() )
+		while sent < budget and sentBytes + partBytes <= byteBudget and sendSyncStep( ply, q ) do
 			sent = sent + 1
+			sentBytes = sentBytes + partBytes
 		end
 		if q.i > #q.keys and not q.active then SV.SyncQueue[ply] = nil end
 	end
@@ -828,6 +870,11 @@ function SV.Load()
 	if data.bs and data.bs ~= MC.BS then
 		MsgN( "[MC] WARNING: save BlockSize " .. data.bs .. " != current " .. MC.BS .. " (positions may be off)" )
 	end
+	local savedHeight = math.floor( tonumber( data.h ) or MC.CH )
+	if savedHeight <= 0 then savedHeight = MC.CH end
+	if data.v == 5 and savedHeight ~= MC.CH then
+		MsgN( "[MC] remapping save chunk height " .. savedHeight .. " -> " .. MC.CH )
+	end
 
 	MC.World = {}
 	SV.BlockCount = 0
@@ -862,18 +909,22 @@ function SV.Load()
 			elseif legacyMode == "slice" then
 				bx, by, bz = oldSliceCell( cx, cy, cz, li )
 			else
-				local lx, ly, lz = MC.DecodeLocal( li )
-				bx, by, bz = cx * MC.CS + lx, cy * MC.CS + ly, cz * MC.CH + lz
+				local lx, ly, lz = decodeLocalWithHeight( li, data.v == 5 and savedHeight or MC.CH )
+				if lx then
+					bx, by, bz = cx * MC.CS + lx, cy * MC.CS + ly, cz * savedHeight + lz
+				end
 			end
-			local ncx, ncy, ncz, nli = MC.CellToChunk( bx, by, bz )
-			local c = MC.GetChunk( ncx, ncy, ncz )
-			if MC.LocalIndexInRange( nli ) and MC.IsValidBlock( id ) and ( not c or c.blocks[nli] == nil ) then
-				c = c or MC.EnsureChunk( ncx, ncy, ncz )
-				c.blocks[nli] = id
-				c.orients[nli] = MC.NormalizeOrient( id, orient )
-				c.count = c.count + 1
-				SV.BlockCount = SV.BlockCount + 1
-				touched[c.key] = c
+			if bx then
+				local ncx, ncy, ncz, nli = MC.CellToChunk( bx, by, bz )
+				local c = MC.GetChunk( ncx, ncy, ncz )
+				if MC.LocalIndexInRange( nli ) and MC.IsValidBlock( id ) and ( not c or c.blocks[nli] == nil ) then
+					c = c or MC.EnsureChunk( ncx, ncy, ncz )
+					c.blocks[nli] = id
+					c.orients[nli] = MC.NormalizeOrient( id, orient )
+					c.count = c.count + 1
+					SV.BlockCount = SV.BlockCount + 1
+					touched[c.key] = c
+				end
 			end
 		end
 		for key, c in pairs( touched ) do
