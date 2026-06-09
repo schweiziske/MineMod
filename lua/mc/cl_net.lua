@@ -51,6 +51,104 @@ local function markNeighbours( cx, cy, cz )
 	MC.MarkChunkDirty( MC.ChunkKey( cx, cy, cz - 1 ) )
 end
 
+function MC.MarkCellPhysNeighbours( bx, by, bz )
+	local function mark( x, y, z )
+		local cx, cy, cz = MC.CellToChunk( x, y, z )
+		MC.MarkChunkPhysDirty( MC.ChunkKey( cx, cy, cz ) )
+	end
+
+	mark( bx, by, bz )
+	mark( bx + 1, by, bz )
+	mark( bx - 1, by, bz )
+	mark( bx, by + 1, bz )
+	mark( bx, by - 1, bz )
+end
+
+MC.PendingPredictions = MC.PendingPredictions or {}
+
+local function predictionKey( bx, by, bz )
+	return bx .. ":" .. by .. ":" .. bz
+end
+
+local function markPredictedCellDirty( bx, by, bz )
+	MC.MarkDirty( bx, by, bz )
+	MC.MarkCellPhysNeighbours( bx, by, bz )
+end
+
+function MC.PredictSetBlock( bx, by, bz, id, orient )
+	if not MC.IsValidBlock or not MC.IsValidBlock( id ) then return false end
+	if MC.GetBlock( bx, by, bz ) ~= 0 then return false end
+
+	local key = predictionKey( bx, by, bz )
+	local pending = MC.PendingPredictions[key]
+	local oldId = pending and pending.oldId or MC.GetBlock( bx, by, bz )
+	local oldOrient = pending and pending.oldOrient or MC.GetBlockOrient( bx, by, bz )
+	orient = MC.NormalizeOrient and MC.NormalizeOrient( id, orient ) or orient
+
+	local _, _, _, changed = MC.SetBlockRaw( bx, by, bz, id, orient )
+	if not changed then return false end
+
+	MC.PendingPredictions[key] = {
+		bx = bx,
+		by = by,
+		bz = bz,
+		id = id,
+		orient = orient,
+		oldId = oldId,
+		oldOrient = oldOrient,
+		expire = CurTime() + 2.5,
+	}
+	markPredictedCellDirty( bx, by, bz )
+	return true
+end
+
+function MC.PredictBreakBlock( bx, by, bz )
+	local oldId = MC.GetBlock( bx, by, bz )
+	if oldId == 0 then return false end
+
+	local key = predictionKey( bx, by, bz )
+	if MC.PendingPredictions[key] then return false end
+
+	local oldOrient = MC.GetBlockOrient( bx, by, bz )
+	local _, _, _, changed = MC.SetBlockRaw( bx, by, bz, 0, 0 )
+	if not changed then return false end
+
+	MC.PendingPredictions[key] = {
+		bx = bx,
+		by = by,
+		bz = bz,
+		id = 0,
+		orient = 0,
+		oldId = oldId,
+		oldOrient = oldOrient,
+		expire = CurTime() + 2.5,
+	}
+	markPredictedCellDirty( bx, by, bz )
+	return true
+end
+
+function MC.ConfirmPrediction( bx, by, bz, id, orient )
+	local key = predictionKey( bx, by, bz )
+	if MC.PendingPredictions[key] then
+		MC.PendingPredictions[key] = nil
+	end
+end
+
+local function rollbackExpiredPredictions()
+	local now = CurTime()
+	for key, pending in pairs( MC.PendingPredictions ) do
+		if now >= pending.expire then
+			local current = MC.GetBlock( pending.bx, pending.by, pending.bz )
+			local currentOrient = MC.GetBlockOrient( pending.bx, pending.by, pending.bz )
+			if current == pending.id and currentOrient == pending.orient then
+				MC.SetBlockRaw( pending.bx, pending.by, pending.bz, pending.oldId, pending.oldOrient )
+				markPredictedCellDirty( pending.bx, pending.by, pending.bz )
+			end
+			MC.PendingPredictions[key] = nil
+		end
+	end
+end
+
 local function resetChunk( cx, cy, cz )
 	local c = MC.EnsureChunk( cx, cy, cz )
 	c.blocks = {}
@@ -155,11 +253,10 @@ net.Receive( "mc_set", function()
 	local id = net.ReadUInt( Net.ID_BITS )
 	local orient = net.ReadUInt( Net.ORIENT_BITS )
 
+	MC.ConfirmPrediction( bx, by, bz, id, orient )
 	MC.SetBlockRaw( bx, by, bz, id, orient )
 	MC.MarkDirty( bx, by, bz )
-
-	local cx, cy, cz = MC.CellToChunk( bx, by, bz )
-	MC.MarkChunkPhysDirty( MC.ChunkKey( cx, cy, cz ) )
+	MC.MarkCellPhysNeighbours( bx, by, bz )
 end )
 
 net.Receive( "mc_clear", function()
@@ -173,5 +270,8 @@ net.Receive( "mc_clear", function()
 	MC.MeshDirty = {}
 	MC.PhysDirty = {}
 	MC.PendingFull = {}
+	MC.PendingPredictions = {}
 	MC.SyncProgress = { expected = 0, received = 0, chunks = 0, doneChunks = 0, active = false, lastUpdate = CurTime() }
 end )
+
+hook.Add( "Think", "mc_prediction_rollback", rollbackExpiredPredictions )

@@ -14,7 +14,7 @@ function MC.ApplyPlayerHull( ply )
 	local duckHeight = MC.Config.PlayerDuckHeight or bs * 1.5
 	local viewHeight = MC.Config.PlayerViewHeight or bs * 1.62
 	local duckViewHeight = MC.Config.PlayerDuckViewHeight or bs * 1.27
-	local jumpPower = MC.Config.PlayerJumpPower or 240
+	local jumpPower = MC.Config.PlayerJumpPower or 280
 	local half = width * 0.5
 
 	ply:SetHull( Vector( -half, -half, 0 ), Vector( half, half, height ) )

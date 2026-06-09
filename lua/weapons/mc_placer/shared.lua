@@ -46,6 +46,36 @@ local function aimedBlock( ply )
 	return MC.PlayerBlockAim and MC.PlayerBlockAim( ply ) or nil
 end
 
+local function blockHasUse( id )
+	local b = MC.Blocks and MC.Blocks[id]
+	return b and b.handlers and b.handlers.OnUse ~= nil
+end
+
+local function placeTarget( ply, aim, fallbackTrace, id, avoidUseBlocks )
+	local tr = aim or fallbackTrace
+	if not tr or not tr.Hit then return nil end
+	if avoidUseBlocks and aim and blockHasUse( aim.Block ) then return nil end
+
+	local bx, by, bz
+	if aim then
+		bx = aim.bx + math.Round( aim.HitNormal.x )
+		by = aim.by + math.Round( aim.HitNormal.y )
+		bz = aim.bz + math.Round( aim.HitNormal.z )
+	else
+		bx, by, bz = placeCell( tr )
+	end
+
+	local orient = MC.OrientForPlacement( ply, tr, id )
+	return bx, by, bz, orient
+end
+
+local function breakTarget( ply, aim, fallbackTrace )
+	if aim then return aim.bx, aim.by, aim.bz end
+	local tr = fallbackTrace
+	if not tr or not tr.Hit then return nil end
+	return breakCell( tr )
+end
+
 function SWEP:Initialize()
 	self:SetHoldType( "pistol" )
 end
@@ -62,16 +92,15 @@ function SWEP:PrimaryAttack()
 	local aim = aimedBlock( owner )
 
 	if SERVER then
-		local bx, by, bz
-		if aim then
-			bx, by, bz = aim.bx, aim.by, aim.bz
-		else
-			local tr = owner:GetEyeTrace()
-			if not tr.Hit then return end
-			bx, by, bz = breakCell( tr )
-		end
+		local bx, by, bz = breakTarget( owner, aim, owner:GetEyeTrace() )
+		if not bx then return end
 		if MC.SV.Break( owner, bx, by, bz ) then
 			self:EmitSound( "buttons/button15.wav", 60, 120, 0.25 )
+		end
+	elseif CLIENT and IsFirstTimePredicted() and owner == LocalPlayer() then
+		local bx, by, bz = breakTarget( owner, aim, owner:GetEyeTrace() )
+		if bx and MC.PredictBreakBlock then
+			MC.PredictBreakBlock( bx, by, bz )
 		end
 	end
 end
@@ -93,18 +122,17 @@ function SWEP:SecondaryAttack()
 		end
 		if MC.SV.Use( owner, ux, uy, uz ) then return end
 
-		local bx, by, bz
-		if aim then
-			bx = aim.bx + math.Round( aim.HitNormal.x )
-			by = aim.by + math.Round( aim.HitNormal.y )
-			bz = aim.bz + math.Round( aim.HitNormal.z )
-		else
-			bx, by, bz = placeCell( tr )
-		end
 		local id = selectedID( owner )
-		local orient = MC.OrientForPlacement( owner, tr, id )
+		local bx, by, bz, orient = placeTarget( owner, aim, tr, id )
+		if not bx then return end
 		if MC.SV.Place( owner, bx, by, bz, id, orient ) then
 			self:EmitSound( "buttons/button14.wav", 60, 150, 0.25 )
+		end
+	elseif CLIENT and IsFirstTimePredicted() and owner == LocalPlayer() then
+		local id = selectedID( owner )
+		local bx, by, bz, orient = placeTarget( owner, aim, owner:GetEyeTrace(), id, true )
+		if bx and MC.CanPreviewPlace( owner, bx, by, bz ) and MC.PredictSetBlock then
+			MC.PredictSetBlock( bx, by, bz, id, orient )
 		end
 	end
 end

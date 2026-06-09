@@ -917,7 +917,67 @@ local function stairBoxes( orient )
 	return boxes
 end
 
-function MC.BlockBoxes( id, orient )
+local function isFenceName( name )
+	return name and string.find( name, "_fence$", 1, false ) ~= nil
+end
+
+local function isFenceGateName( name )
+	return name and string.find( name, "_fence_gate$", 1, false ) ~= nil
+end
+
+local function isWallName( name )
+	return name and string.find( name, "_wall$", 1, false ) ~= nil
+end
+
+function MC.IsFenceBlock( id )
+	local b = MC.Blocks[id]
+	return b and isFenceName( b.name ) or false
+end
+
+local function fenceConnectsToBlock( id, orient )
+	if id == 0 then return false end
+	local b = MC.Blocks[id]
+	if not b then return false end
+	if isFenceName( b.name ) or isFenceGateName( b.name ) or isWallName( b.name ) then return true end
+	if b.solid == false then return false end
+	return MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) or not b.shape
+end
+
+local function fenceConnectsToCell( bx, by, bz )
+	if bx == nil or not MC.GetBlock then return false end
+	local id = MC.GetBlock( bx, by, bz )
+	local orient = MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz ) or 0
+	return fenceConnectsToBlock( id, orient )
+end
+
+local function fenceBoxes( bx, by, bz )
+	local boxes = {
+		{ 0.375, 0.375, 0, 0.625, 0.625, 1 },
+	}
+
+	if bx == nil or by == nil or bz == nil then return boxes end
+
+	if fenceConnectsToCell( bx, by - 1, bz ) then
+		boxes[#boxes + 1] = { 0.4375, 0, 0.375, 0.5625, 0.375, 0.5625 }
+		boxes[#boxes + 1] = { 0.4375, 0, 0.75, 0.5625, 0.375, 0.9375 }
+	end
+	if fenceConnectsToCell( bx, by + 1, bz ) then
+		boxes[#boxes + 1] = { 0.4375, 0.625, 0.375, 0.5625, 1, 0.5625 }
+		boxes[#boxes + 1] = { 0.4375, 0.625, 0.75, 0.5625, 1, 0.9375 }
+	end
+	if fenceConnectsToCell( bx - 1, by, bz ) then
+		boxes[#boxes + 1] = { 0, 0.4375, 0.375, 0.375, 0.5625, 0.5625 }
+		boxes[#boxes + 1] = { 0, 0.4375, 0.75, 0.375, 0.5625, 0.9375 }
+	end
+	if fenceConnectsToCell( bx + 1, by, bz ) then
+		boxes[#boxes + 1] = { 0.625, 0.4375, 0.375, 1, 0.5625, 0.5625 }
+		boxes[#boxes + 1] = { 0.625, 0.4375, 0.75, 1, 0.5625, 0.9375 }
+	end
+
+	return boxes
+end
+
+function MC.BlockBoxes( id, orient, bx, by, bz )
 	local b = MC.Blocks[id]
 	if not b then return nil end
 	if b.shape == "slab" then
@@ -929,13 +989,13 @@ function MC.BlockBoxes( id, orient )
 	if b.shape == "stairs" then
 		return stairBoxes( MC.NormalizeOrient( id, orient ) )
 	end
-	if b.name and string.find( b.name, "_fence$", 1, false ) then
-		return FullBlockBox
+	if isFenceName( b.name ) then
+		return fenceBoxes( bx, by, bz )
 	end
-	if b.name and string.find( b.name, "_fence_gate$", 1, false ) then
+	if isFenceGateName( b.name ) then
 		return fenceGateBoxes( MC.NormalizeOrient( id, orient ) )
 	end
-	if b.name and string.find( b.name, "_wall$", 1, false ) then
+	if isWallName( b.name ) then
 		return FullBlockBox
 	end
 	if b.name and ( b.name == "iron_bars" or string.find( b.name, "_pane$", 1, false ) ) then

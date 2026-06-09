@@ -33,33 +33,15 @@ local function selectedID( self )
 	return MC.IsValidBlock( id ) and id or 1
 end
 
-function TOOL:LeftClick( tr )
-	if CLIENT then return true end
-	local ply = self:GetOwner()
-	local aim = aimedBlock( ply )
-	local bx, by, bz
-	if aim then
-		bx, by, bz = aim.bx, aim.by, aim.bz
-	else
-		bx, by, bz = breakCell( tr )
-	end
-	MC.SV.Break( ply, bx, by, bz )
-	return true
+local function blockHasUse( id )
+	local b = MC.Blocks and MC.Blocks[id]
+	return b and b.handlers and b.handlers.OnUse ~= nil
 end
 
-function TOOL:RightClick( tr )
-	if CLIENT then return true end
-	local ply = self:GetOwner()
-	local aim = aimedBlock( ply )
-	local ux, uy, uz
-	if aim then
-		ux, uy, uz = aim.bx, aim.by, aim.bz
-	else
-		ux, uy, uz = breakCell( tr )
-	end
-	if MC.SV.Use( ply, ux, uy, uz ) then return true end
+local function placeTarget( ply, aim, tr, id, avoidUseBlocks )
+	if not tr or not tr.Hit then return nil end
+	if avoidUseBlocks and aim and blockHasUse( aim.Block ) then return nil end
 
-	local id = selectedID( self )
 	local bx, by, bz
 	if aim then
 		bx = aim.bx + math.Round( aim.HitNormal.x )
@@ -69,7 +51,60 @@ function TOOL:RightClick( tr )
 	else
 		bx, by, bz = placeCell( tr )
 	end
-	MC.SV.Place( ply, bx, by, bz, id, MC.OrientForPlacement( ply, tr, id ) )
+
+	return bx, by, bz, MC.OrientForPlacement( ply, tr, id )
+end
+
+local function breakTarget( aim, tr )
+	if aim then return aim.bx, aim.by, aim.bz end
+	if not tr or not tr.Hit then return nil end
+	return breakCell( tr )
+end
+
+function TOOL:LeftClick( tr )
+	local ply = self:GetOwner()
+	local aim = aimedBlock( ply )
+
+	if CLIENT then
+		if IsFirstTimePredicted() and ply == LocalPlayer() then
+			local bx, by, bz = breakTarget( aim, tr )
+			if bx and MC.PredictBreakBlock then
+				MC.PredictBreakBlock( bx, by, bz )
+			end
+		end
+		return true
+	end
+
+	local bx, by, bz = breakTarget( aim, tr )
+	if not bx then return true end
+	MC.SV.Break( ply, bx, by, bz )
+	return true
+end
+
+function TOOL:RightClick( tr )
+	local ply = self:GetOwner()
+	local aim = aimedBlock( ply )
+	local id = selectedID( self )
+
+	if CLIENT then
+		if not IsFirstTimePredicted() or ply ~= LocalPlayer() then return true end
+		local bx, by, bz, orient = placeTarget( ply, aim, tr, id, true )
+		if bx and MC.CanPreviewPlace( ply, bx, by, bz ) and MC.PredictSetBlock then
+			MC.PredictSetBlock( bx, by, bz, id, orient )
+		end
+		return true
+	end
+
+	local ux, uy, uz
+	if aim then
+		ux, uy, uz = aim.bx, aim.by, aim.bz
+	else
+		ux, uy, uz = breakCell( tr )
+	end
+	if MC.SV.Use( ply, ux, uy, uz ) then return true end
+
+	local bx, by, bz, orient = placeTarget( ply, aim, tr, id )
+	if bx then MC.SV.Place( ply, bx, by, bz, id, orient ) end
 	return true
 end
 

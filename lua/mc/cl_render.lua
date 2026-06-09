@@ -341,7 +341,7 @@ local function shapeFaceCovered( box, face, boxes, bx, by, bz )
 	local d = MC.Blocks[nb]
 	if d and d.transparent then return false end
 	local nbOrient = MC.GetBlockOrient( bx + off[1], by + off[2], bz + off[3] )
-	return coveredByBoxes( box, face, MC.BlockBoxes( nb, nbOrient ), off[1], off[2], off[3] )
+	return coveredByBoxes( box, face, MC.BlockBoxes( nb, nbOrient, bx + off[1], by + off[2], bz + off[3] ), off[1], off[2], off[3] )
 end
 
 function MC.BuildChunkMesh( key )
@@ -439,7 +439,7 @@ function MC.BuildChunkMesh( key )
 		local b = MC.Blocks[id]
 		if b and b.shape == "cross" then
 			emitCrossBlock( id, wx, wy, wz )
-		elseif b and b.shape == "model" and emitModelBlock( b, orient, wx, wy, wz ) then
+		elseif b and b.shape == "model" and not ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) and emitModelBlock( b, orient, wx, wy, wz ) then
 			-- rendered from exact Minecraft model quads; boxes remain for collision/outline
 		elseif MC.BlockIsFullCube( id, orient ) then
 			for f = 1, 6 do
@@ -485,14 +485,14 @@ function MC.BuildChunkMesh( key )
 				end
 			end
 		else
-			local boxes = MC.BlockBoxes( id, orient )
+			local boxes = MC.BlockBoxes( id, orient, bx, by, bz )
 			for boxIndex, box in ipairs( boxes or {} ) do
 				for f = 1, 6 do
 					if not shapeFaceCovered( box, f, boxes, bx, by, bz ) then
 						local face = FACES[f]
 						local modelFaces = b and b.boxFaces
 						local fd = modelFaces and modelFaces[boxIndex] and modelFaces[boxIndex][f]
-						if not modelFaces or fd then
+						if not modelFaces or fd or ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) then
 							local tile = fd and fd.tile or MC.BlockFace( id, f, orient )
 							local u0, v0, u1, v1
 							if fd and fd.uv then
