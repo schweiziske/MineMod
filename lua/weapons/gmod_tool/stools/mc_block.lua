@@ -24,6 +24,10 @@ local function breakCell( tr )
 	return MC.WorldToCell( tr.HitPos - tr.HitNormal * 0.5 )
 end
 
+local function aimedBlock( ply )
+	return MC.PlayerBlockAim and MC.PlayerBlockAim( ply ) or nil
+end
+
 local function selectedID( self )
 	local id = math.floor( self:GetClientNumber( "block", 1 ) )
 	return MC.IsValidBlock( id ) and id or 1
@@ -32,7 +36,13 @@ end
 function TOOL:LeftClick( tr )
 	if CLIENT then return true end
 	local ply = self:GetOwner()
-	local bx, by, bz = breakCell( tr )
+	local aim = aimedBlock( ply )
+	local bx, by, bz
+	if aim then
+		bx, by, bz = aim.bx, aim.by, aim.bz
+	else
+		bx, by, bz = breakCell( tr )
+	end
 	MC.SV.Break( ply, bx, by, bz )
 	return true
 end
@@ -40,11 +50,25 @@ end
 function TOOL:RightClick( tr )
 	if CLIENT then return true end
 	local ply = self:GetOwner()
-	local ux, uy, uz = breakCell( tr )
+	local aim = aimedBlock( ply )
+	local ux, uy, uz
+	if aim then
+		ux, uy, uz = aim.bx, aim.by, aim.bz
+	else
+		ux, uy, uz = breakCell( tr )
+	end
 	if MC.SV.Use( ply, ux, uy, uz ) then return true end
 
 	local id = selectedID( self )
-	local bx, by, bz = placeCell( tr )
+	local bx, by, bz
+	if aim then
+		bx = aim.bx + math.Round( aim.HitNormal.x )
+		by = aim.by + math.Round( aim.HitNormal.y )
+		bz = aim.bz + math.Round( aim.HitNormal.z )
+		tr = aim
+	else
+		bx, by, bz = placeCell( tr )
+	end
 	MC.SV.Place( ply, bx, by, bz, id, MC.OrientForPlacement( ply, tr, id ) )
 	return true
 end
@@ -52,7 +76,13 @@ end
 function TOOL:Reload( tr )
 	if CLIENT then return true end
 	local ply = self:GetOwner()
-	local bx, by, bz = breakCell( tr )
+	local aim = aimedBlock( ply )
+	local bx, by, bz
+	if aim then
+		bx, by, bz = aim.bx, aim.by, aim.bz
+	else
+		bx, by, bz = breakCell( tr )
+	end
 	local id = MC.GetBlock( bx, by, bz )
 	if id ~= 0 then
 		ply:ConCommand( "mc_block_block " .. id )
@@ -65,7 +95,7 @@ if CLIENT then
 		local ply = LocalPlayer()
 		if not IsValid( ply ) then return end
 
-		local tr = ply:GetEyeTrace()
+		local tr = aimedBlock( ply ) or ply:GetEyeTrace()
 		if not tr.Hit then return end
 
 		local id = selectedID( self )
@@ -88,17 +118,9 @@ if CLIENT then
 		local mode = GetConVar( "gmod_toolmode" )
 		if not mode or mode:GetString() ~= "mc_block" then return end
 
-		local tr = ply:GetEyeTrace()
-		if not tr.Hit then return end
-
-		local bx, by, bz = placeCell( tr )
-		if not MC.CanPreviewPlace( ply, bx, by, bz ) then return end
-
-		local cv = GetConVar( "mc_block_block" )
-		local id = cv and math.floor( cv:GetInt() ) or 1
-		if not MC.IsValidBlock( id ) then id = 1 end
-		local orient = MC.OrientForPlacement( ply, tr, id )
-		MC.DrawBlockGhost( id, orient, bx, by, bz, Color( 255, 255, 255, 230 ) )
+		local aim = aimedBlock( ply )
+		if not aim then return end
+		MC.DrawBlockOutline( aim.Block, aim.Orient, aim.bx, aim.by, aim.bz, Color( 0, 0, 0, 235 ) )
 	end )
 end
 

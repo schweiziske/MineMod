@@ -72,6 +72,83 @@ local function normalizeBaked( baked )
 	return out
 end
 
+local function normalizeBoxes( boxes )
+	if type( boxes ) ~= "table" then return nil end
+	local out = {}
+	if type( boxes[1] ) == "number" and type( boxes[6] ) == "number" then
+		boxes = { boxes }
+	end
+	for _, box in ipairs( boxes ) do
+		if type( box ) == "table" then
+			local x0 = math.Clamp( tonumber( box[1] ) or 0, 0, 1 )
+			local y0 = math.Clamp( tonumber( box[2] ) or 0, 0, 1 )
+			local z0 = math.Clamp( tonumber( box[3] ) or 0, 0, 1 )
+			local x1 = math.Clamp( tonumber( box[4] ) or 0, 0, 1 )
+			local y1 = math.Clamp( tonumber( box[5] ) or 0, 0, 1 )
+			local z1 = math.Clamp( tonumber( box[6] ) or 0, 0, 1 )
+			if x1 > x0 and y1 > y0 and z1 > z0 then
+				out[#out + 1] = { x0, y0, z0, x1, y1, z1 }
+			end
+		end
+	end
+	return #out > 0 and out or nil
+end
+
+local function normalizeBoxFaces( boxFaces )
+	if type( boxFaces ) ~= "table" then return nil end
+	local out = {}
+	if type( boxFaces[1] ) == "table" and boxFaces[1].tile ~= nil then
+		boxFaces = { boxFaces }
+	end
+	for boxIndex, faces in ipairs( boxFaces ) do
+		if type( faces ) == "table" then
+			local ofaces = {}
+			for face, data in pairs( faces ) do
+				if type( data ) == "table" then
+					ofaces[tonumber( face ) or face] = {
+						tile = tileValue( data.tile, 0 ),
+						uv = data.uv,
+						rot = math.floor( tonumber( data.rot ) or 0 ),
+					}
+				end
+			end
+			out[boxIndex] = ofaces
+		end
+	end
+	return #out > 0 and out or nil
+end
+
+local function normalizeModelQuads( modelQuads )
+	if type( modelQuads ) ~= "table" then return nil end
+	local out = {}
+	for _, quad in ipairs( modelQuads ) do
+		if type( quad ) == "table" and type( quad.verts ) == "table" then
+			local verts = {}
+			for _, v in ipairs( quad.verts ) do
+				if type( v ) == "table" then
+					verts[#verts + 1] = {
+						x = tonumber( v.x ) or 0,
+						y = tonumber( v.y ) or 0,
+						z = tonumber( v.z ) or 0,
+						u = math.Clamp( tonumber( v.u ) or 0, 0, 1 ),
+						v = math.Clamp( tonumber( v.v ) or 0, 0, 1 ),
+					}
+				end
+			end
+			if #verts == 4 then
+				out[#out + 1] = {
+					face = math.floor( tonumber( quad.face ) or 1 ),
+					tile = tileValue( quad.tile, 0 ),
+					uv = quad.uv,
+					rot = math.floor( tonumber( quad.rot ) or 0 ),
+					verts = verts,
+				}
+			end
+		end
+	end
+	return #out > 0 and out or nil
+end
+
 MC.Blocks = {}
 MC.BlockByName = {}
 MC.BlockAliases = {}
@@ -109,6 +186,9 @@ function MC.RegisterBlock( def )
 		solid = def.solid ~= false,
 		transparent = def.transparent == true,
 		shape = def.shape,
+		boxes = normalizeBoxes( def.boxes ),
+		boxFaces = normalizeBoxFaces( def.boxFaces ),
+		modelQuads = normalizeModelQuads( def.modelQuads ),
 		textures = { top = top, side = side, bottom = bottom, front = front },
 		baked = normalizeBaked( def.baked ),
 		stateRule = def.stateRule or def.orient,
@@ -716,6 +796,86 @@ end
 
 local FullBlockBox = { { 0, 0, 0, 1, 1, 1 } }
 
+local function rotateXY( x, y, steps )
+	steps = steps % 4
+	if steps == 1 then return 1 - y, x end
+	if steps == 2 then return 1 - x, 1 - y end
+	if steps == 3 then return y, 1 - x end
+	return x, y
+end
+
+local function rotateBoxZ( box, steps )
+	if steps == 0 then return box end
+	local minX, minY = 1, 1
+	local maxX, maxY = 0, 0
+	for _, p in ipairs( {
+		{ box[1], box[2] },
+		{ box[4], box[2] },
+		{ box[1], box[5] },
+		{ box[4], box[5] },
+	} ) do
+		local x, y = rotateXY( p[1], p[2], steps )
+		if x < minX then minX = x end
+		if y < minY then minY = y end
+		if x > maxX then maxX = x end
+		if y > maxY then maxY = y end
+	end
+	return { minX, minY, box[3], maxX, maxY, box[6] }
+end
+
+local function rotateBoxX( box, steps )
+	if steps == 0 then return box end
+	local minY, minZ = 1, 1
+	local maxY, maxZ = 0, 0
+	for _, p in ipairs( {
+		{ box[2], box[3] },
+		{ box[5], box[3] },
+		{ box[2], box[6] },
+		{ box[5], box[6] },
+	} ) do
+		local y, z = rotateXY( p[1], p[2], steps )
+		if y < minY then minY = y end
+		if z < minZ then minZ = z end
+		if y > maxY then maxY = y end
+		if z > maxZ then maxZ = z end
+	end
+	return { box[1], minY, minZ, box[4], maxY, maxZ }
+end
+
+local function horizontalOrientSteps( orient )
+	if orient == MC.Direction.EAST then return 1 end
+	if orient == MC.Direction.SOUTH then return 2 end
+	if orient == MC.Direction.WEST then return 3 end
+	return 0
+end
+
+local function modelBoxes( b, orient )
+	if not b.boxes then return nil end
+	local xSteps, zSteps = 0, 0
+	if b.orient == "axis" then
+		xSteps, zSteps = pillarRotForAxis( MC.NormalizeOrient( b.id, orient ) )
+	elseif b.orient == "horizontal_facing" or b.orient == "facing" then
+		orient = MC.NormalizeOrient( b.id, orient )
+		if b.orient == "facing" and orient == MC.Direction.DOWN then
+			xSteps = 1
+		elseif b.orient == "facing" and orient == MC.Direction.UP then
+			xSteps = 3
+		else
+			zSteps = horizontalOrientSteps( orient )
+		end
+	end
+	if xSteps == 0 and zSteps == 0 then return b.boxes end
+	b._rotatedBoxes = b._rotatedBoxes or {}
+	local cacheKey = xSteps .. ":" .. zSteps
+	if b._rotatedBoxes[cacheKey] then return b._rotatedBoxes[cacheKey] end
+	local out = {}
+	for i, box in ipairs( b.boxes ) do
+		out[i] = rotateBoxZ( rotateBoxX( box, xSteps ), zSteps )
+	end
+	b._rotatedBoxes[cacheKey] = out
+	return out
+end
+
 local function stairBoxes( orient )
 	local facing = StairFacingByOrient[orient] or MC.Direction.NORTH
 	local top = StairHalfByOrient[orient] == "top"
@@ -747,6 +907,9 @@ function MC.BlockBoxes( id, orient )
 	end
 	if b.shape == "stairs" then
 		return stairBoxes( MC.NormalizeOrient( id, orient ) )
+	end
+	if b.shape == "model" then
+		return modelBoxes( b, orient )
 	end
 	return FullBlockBox
 end

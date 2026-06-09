@@ -80,6 +80,89 @@ function MC.CanPreviewPlace( ply, bx, by, bz )
 		and MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, MC.CurrentReach() )
 end
 
+local INF = math.huge
+local TRACE_EPS = 0.000001
+
+local function axisStep( pos, dir, cell )
+	if math.abs( dir ) <= TRACE_EPS then return 0, INF, INF end
+	local step = dir > 0 and 1 or -1
+	local boundary = ( dir > 0 and cell + 1 or cell ) * BS
+	local tMax = ( boundary - pos ) / dir
+	if tMax < 0 then tMax = 0 end
+	return step, tMax, BS / math.abs( dir )
+end
+
+function MC.TraceBlockRay( startPos, dir, maxDist )
+	if not startPos or not dir then return nil end
+	dir = Vector( dir.x, dir.y, dir.z )
+	if dir:LengthSqr() <= TRACE_EPS then return nil end
+	dir:Normalize()
+	maxDist = tonumber( maxDist ) or MC.CurrentReach()
+	if maxDist <= 0 then maxDist = BS * 5 end
+
+	local bx, by, bz = MC.WorldToCell( startPos )
+	local sx, tx, dx = axisStep( startPos.x, dir.x, bx )
+	local sy, ty, dy = axisStep( startPos.y, dir.y, by )
+	local sz, tz, dz = axisStep( startPos.z, dir.z, bz )
+	local dist = 0
+	local normal = Vector( 0, 0, 0 )
+	local maxSteps = math.ceil( maxDist / BS ) * 3 + 8
+
+	for _ = 1, maxSteps do
+		local id = MC.GetBlock( bx, by, bz )
+		if id ~= 0 and dist <= maxDist then
+			local orient = MC.GetBlockOrient( bx, by, bz )
+			return {
+				Hit = true,
+				HitMCBlock = true,
+				Block = id,
+				Orient = orient,
+				bx = bx, by = by, bz = bz,
+				HitPos = startPos + dir * dist,
+				HitNormal = normal,
+				Fraction = dist / maxDist,
+				Distance = dist,
+			}
+		end
+
+		if tx <= ty and tx <= tz then
+			dist = tx
+			if dist > maxDist then break end
+			bx = bx + sx
+			tx = tx + dx
+			normal = Vector( -sx, 0, 0 )
+		elseif ty <= tz then
+			dist = ty
+			if dist > maxDist then break end
+			by = by + sy
+			ty = ty + dy
+			normal = Vector( 0, -sy, 0 )
+		else
+			dist = tz
+			if dist > maxDist then break end
+			bz = bz + sz
+			tz = tz + dz
+			normal = Vector( 0, 0, -sz )
+		end
+	end
+
+	return nil
+end
+
+function MC.PlayerBlockAim( ply )
+	if not IsValid( ply ) then return nil end
+	local eye = ply:EyePos()
+	local hit = MC.TraceBlockRay( eye, ply:EyeAngles():Forward(), MC.CurrentReach() )
+	if not hit then return nil end
+	local tr = ply:GetEyeTrace()
+	local ent = tr and tr.Entity
+	if tr and tr.Hit and not ( IsValid( ent ) and ent:GetClass() == "mc_chunk" ) then
+		local mapDist = eye:Distance( tr.HitPos )
+		if mapDist + 1 < ( hit.Distance or 0 ) then return nil end
+	end
+	return hit
+end
+
 function MC.ChunkWorldOrigin( cx, cy, cz )
 	return Vector( cx * MC.ChunkWorld, cy * MC.ChunkWorld, cz * MC.ChunkWorldH )
 end

@@ -42,6 +42,10 @@ local function breakCell( tr )
 	return MC.WorldToCell( tr.HitPos - tr.HitNormal * 0.5 )
 end
 
+local function aimedBlock( ply )
+	return MC.PlayerBlockAim and MC.PlayerBlockAim( ply ) or nil
+end
+
 function SWEP:Initialize()
 	self:SetHoldType( "pistol" )
 end
@@ -55,11 +59,17 @@ function SWEP:PrimaryAttack()
 	self:SetNextPrimaryFire( CurTime() + STEP )
 	local owner = self:GetOwner()
 	if not IsValid( owner ) then return end
-	local tr = owner:GetEyeTrace()
-	if not tr.Hit then return end
+	local aim = aimedBlock( owner )
 
 	if SERVER then
-		local bx, by, bz = breakCell( tr )
+		local bx, by, bz
+		if aim then
+			bx, by, bz = aim.bx, aim.by, aim.bz
+		else
+			local tr = owner:GetEyeTrace()
+			if not tr.Hit then return end
+			bx, by, bz = breakCell( tr )
+		end
 		if MC.SV.Break( owner, bx, by, bz ) then
 			self:EmitSound( "buttons/button15.wav", 60, 120, 0.25 )
 		end
@@ -70,14 +80,27 @@ function SWEP:SecondaryAttack()
 	self:SetNextSecondaryFire( CurTime() + STEP )
 	local owner = self:GetOwner()
 	if not IsValid( owner ) then return end
-	local tr = owner:GetEyeTrace()
-	if not tr.Hit then return end
+	local aim = aimedBlock( owner )
 
 	if SERVER then
-		local ux, uy, uz = breakCell( tr )
+		local tr = aim or owner:GetEyeTrace()
+		if not tr.Hit then return end
+		local ux, uy, uz
+		if aim then
+			ux, uy, uz = aim.bx, aim.by, aim.bz
+		else
+			ux, uy, uz = breakCell( tr )
+		end
 		if MC.SV.Use( owner, ux, uy, uz ) then return end
 
-		local bx, by, bz = placeCell( tr )
+		local bx, by, bz
+		if aim then
+			bx = aim.bx + math.Round( aim.HitNormal.x )
+			by = aim.by + math.Round( aim.HitNormal.y )
+			bz = aim.bz + math.Round( aim.HitNormal.z )
+		else
+			bx, by, bz = placeCell( tr )
+		end
 		local id = selectedID( owner )
 		local orient = MC.OrientForPlacement( owner, tr, id )
 		if MC.SV.Place( owner, bx, by, bz, id, orient ) then
@@ -103,7 +126,7 @@ if CLIENT then
 		if not b then return end
 
 		local sw, sh = ScrW(), ScrH()
-		local tr = ply:GetEyeTrace()
+		local tr = aimedBlock( ply ) or ply:GetEyeTrace()
 		local orient = tr.Hit and MC.OrientForPlacement( ply, tr, id ) or MC.DefaultOrient( id )
 		local state = MC.BlockStateText( id, orient )
 		local w, h = 64, 64
@@ -134,13 +157,8 @@ if CLIENT then
 		local wep = ply:GetActiveWeapon()
 		if not IsValid( wep ) or wep:GetClass() ~= "mc_placer" then return end
 
-		local tr = ply:GetEyeTrace()
-		if not tr.Hit then return end
-
-		local bx, by, bz = placeCell( tr )
-		if not MC.CanPreviewPlace( ply, bx, by, bz ) then return end
-		local id = selectedID( ply )
-		local orient = MC.OrientForPlacement( ply, tr, id )
-		MC.DrawBlockGhost( id, orient, bx, by, bz, Color( 255, 255, 255, 230 ) )
+		local aim = aimedBlock( ply )
+		if not aim then return end
+		MC.DrawBlockOutline( aim.Block, aim.Orient, aim.bx, aim.by, aim.bz, Color( 0, 0, 0, 235 ) )
 	end )
 end
