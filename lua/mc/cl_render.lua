@@ -146,6 +146,99 @@ local BOX_FACE_CORNERS = {
 	[6] = function( b ) return { { b[1], b[2], b[3] }, { b[4], b[2], b[3] }, { b[4], b[2], b[6] }, { b[1], b[2], b[6] } } end,
 }
 
+local BOX_UV_FLAGS = {
+	{ 0, 1 },
+	{ 1, 1 },
+	{ 1, 0 },
+	{ 0, 0 },
+}
+
+local function rotateModelXY( x, y, steps )
+	steps = steps % 4
+	if steps == 1 then return 1 - y, x end
+	if steps == 2 then return 1 - x, 1 - y end
+	if steps == 3 then return y, 1 - x end
+	return x, y
+end
+
+local function rotateModelXZ( y, z, steps )
+	steps = steps % 4
+	if steps == 1 then return 1 - z, y end
+	if steps == 2 then return 1 - y, 1 - z end
+	if steps == 3 then return z, 1 - y end
+	return y, z
+end
+
+local function rotateModelFaceZ( face, steps )
+	steps = steps % 4
+	for _ = 1, steps do
+		if face == MC.Face.YN then face = MC.Face.XP
+		elseif face == MC.Face.XP then face = MC.Face.YP
+		elseif face == MC.Face.YP then face = MC.Face.XN
+		elseif face == MC.Face.XN then face = MC.Face.YN end
+	end
+	return face
+end
+
+local function rotateModelFaceX( face, steps )
+	steps = steps % 4
+	for _ = 1, steps do
+		if face == MC.Face.YN then face = MC.Face.BOTTOM
+		elseif face == MC.Face.BOTTOM then face = MC.Face.YP
+		elseif face == MC.Face.YP then face = MC.Face.TOP
+		elseif face == MC.Face.TOP then face = MC.Face.YN end
+	end
+	return face
+end
+
+local function modelOrientSteps( b, orient )
+	if not b then return 0, 0 end
+	orient = MC.NormalizeOrient( b.id, orient )
+	if b.orient == "axis" then
+		if orient == MC.Axis.X then return 1, 1 end
+		if orient == MC.Axis.Z then return 1, 0 end
+		return 0, 0
+	end
+	if b.orient ~= "horizontal_facing" and b.orient ~= "facing" then return 0, 0 end
+	if b.orient == "facing" then
+		if orient == MC.Direction.DOWN then return 1, 0 end
+		if orient == MC.Direction.UP then return 3, 0 end
+	end
+	if orient == MC.Direction.EAST then return 0, 1 end
+	if orient == MC.Direction.SOUTH then return 0, 2 end
+	if orient == MC.Direction.WEST then return 0, 3 end
+	return 0, 0
+end
+
+local function rotatedModelQuads( b, orient )
+	if not b or not b.modelQuads then return nil end
+	local xSteps, zSteps = modelOrientSteps( b, orient )
+	if xSteps == 0 and zSteps == 0 then return b.modelQuads end
+	b._rotatedModelQuads = b._rotatedModelQuads or {}
+	local cacheKey = xSteps .. ":" .. zSteps
+	if b._rotatedModelQuads[cacheKey] then return b._rotatedModelQuads[cacheKey] end
+	local out = {}
+	for qi, quad in ipairs( b.modelQuads ) do
+		local verts = {}
+		for vi, v in ipairs( quad.verts or {} ) do
+			local y, z = rotateModelXZ( v.y, v.z, xSteps )
+			local x
+			x, y = rotateModelXY( v.x, y, zSteps )
+			verts[vi] = { x = x, y = y, z = v.z, u = v.u, v = v.v }
+			verts[vi].z = z
+		end
+		out[qi] = {
+			face = rotateModelFaceZ( rotateModelFaceX( quad.face or MC.Face.TOP, xSteps ), zSteps ),
+			tile = quad.tile,
+			uv = quad.uv,
+			rot = quad.rot or 0,
+			verts = verts,
+		}
+	end
+	b._rotatedModelQuads[cacheKey] = out
+	return out
+end
+
 local function cornerUV16( face, c )
 	if face == MC.Face.TOP then return { c[1] * 16, ( 1 - c[2] ) * 16 } end
 	if face == MC.Face.BOTTOM then return { c[1] * 16, c[2] * 16 } end
@@ -275,13 +368,80 @@ function MC.BuildChunkMesh( key )
 		nv = 0
 	end
 
+	local function emitQuad( corners, normal, color, tile )
+		for t = 1, 6 do
+			local cn = corners[TRI[t]]
+			local u, v = tileUVPoint( tile, { cn[4], cn[5] } )
+			nv = nv + 1
+			verts[nv] = {
+				pos    = Vector( cn[1], cn[2], cn[3] ),
+				normal = normal,
+				u      = u,
+				v      = v,
+				color  = color,
+			}
+		end
+		if nv >= VERT_LIMIT then flush() end
+	end
+
+	local function emitCrossBlock( id, wx, wy, wz )
+		local b = MC.Blocks[id]
+		local tile = b and b.side or 0
+		local z0, z1 = wz, wz + BS
+		local a, c = 0.08 * BS, 0.92 * BS
+		local p1 = {
+			{ wx + a, wy + a, z0, 0, 16 },
+			{ wx + c, wy + c, z0, 16, 16 },
+			{ wx + c, wy + c, z1, 16, 0 },
+			{ wx + a, wy + a, z1, 0, 0 },
+		}
+		local p2 = {
+			{ wx + c, wy + a, z0, 0, 16 },
+			{ wx + a, wy + c, z0, 16, 16 },
+			{ wx + a, wy + c, z1, 16, 0 },
+			{ wx + c, wy + a, z1, 0, 0 },
+		}
+		emitQuad( p1, N_YP, SH_TOP, tile )
+		emitQuad( { p1[4], p1[3], p1[2], p1[1] }, N_YN, SH_TOP, tile )
+		emitQuad( p2, N_XP, SH_TOP, tile )
+		emitQuad( { p2[4], p2[3], p2[2], p2[1] }, N_XN, SH_TOP, tile )
+	end
+
+	local function emitModelBlock( b, orient, wx, wy, wz )
+		local quads = rotatedModelQuads( b, orient )
+		if not quads then return false end
+		for _, quad in ipairs( quads ) do
+			local face = FACES[quad.face or MC.Face.TOP] or FACES[MC.Face.TOP]
+			local u0, v0, u1, v1 = tileUVRect( quad.tile or 0, quad.uv )
+			for t = 1, 6 do
+				local vert = quad.verts[TRI[t]]
+				local uf, vf = rotatedUVFlags( vert.u or 0, vert.v or 0, quad.rot or 0 )
+				nv = nv + 1
+				verts[nv] = {
+					pos    = Vector( wx + vert.x * BS, wy + vert.y * BS, wz + vert.z * BS ),
+					normal = face.n,
+					u      = uf == 1 and u1 or u0,
+					v      = vf == 1 and v1 or v0,
+					color  = face.sh,
+				}
+			end
+			if nv >= VERT_LIMIT then flush() end
+		end
+		return true
+	end
+
 	for li, id in pairs( chunk.blocks ) do
 		local orient = MC.NormalizeOrient( id, chunk.orients[li] )
 		local lx, ly, lz = DecodeLocal( li )
 		local bx, by, bz = bxo + lx, byo + ly, bzo + lz
 		local wx, wy, wz = lx * BS, ly * BS, lz * BS
 
-		if MC.BlockIsFullCube( id, orient ) then
+		local b = MC.Blocks[id]
+		if b and b.shape == "cross" then
+			emitCrossBlock( id, wx, wy, wz )
+		elseif b and b.shape == "model" and emitModelBlock( b, orient, wx, wy, wz ) then
+			-- rendered from exact Minecraft model quads; boxes remain for collision/outline
+		elseif MC.BlockIsFullCube( id, orient ) then
 			for f = 1, 6 do
 				local face = FACES[f]
 				local o = face.off
@@ -326,27 +486,43 @@ function MC.BuildChunkMesh( key )
 			end
 		else
 			local boxes = MC.BlockBoxes( id, orient )
-			for _, box in ipairs( boxes or {} ) do
+			for boxIndex, box in ipairs( boxes or {} ) do
 				for f = 1, 6 do
 					if not shapeFaceCovered( box, f, boxes, bx, by, bz ) then
 						local face = FACES[f]
-						local tile = MC.BlockFace( id, f, orient )
-						local corners = BOX_FACE_CORNERS[f]( box )
-						local nrm, col = face.n, face.sh
-						for t = 1, 6 do
-							local ci = TRI[t]
-							local cn = corners[ci]
-							local u, v = tileUVPoint( tile, cornerUV16( f, cn ) )
-							nv = nv + 1
-							verts[nv] = {
-								pos    = Vector( wx + cn[1] * BS, wy + cn[2] * BS, wz + cn[3] * BS ),
-								normal = nrm,
-								u      = u,
-								v      = v,
-								color  = col,
-							}
+						local modelFaces = b and b.boxFaces
+						local fd = modelFaces and modelFaces[boxIndex] and modelFaces[boxIndex][f]
+						if not modelFaces or fd then
+							local tile = fd and fd.tile or MC.BlockFace( id, f, orient )
+							local u0, v0, u1, v1
+							if fd and fd.uv then
+								u0, v0, u1, v1 = tileUVRect( tile, fd.uv )
+							end
+							local corners = BOX_FACE_CORNERS[f]( box )
+							local nrm, col = face.n, face.sh
+							for t = 1, 6 do
+								local ci = TRI[t]
+								local cn = corners[ci]
+								local u, v
+								if fd and fd.uv then
+									local flags = BOX_UV_FLAGS[ci]
+									local uf, vf = rotatedUVFlags( flags[1], flags[2], fd.rot or 0 )
+									u = uf == 1 and u1 or u0
+									v = vf == 1 and v1 or v0
+								else
+									u, v = tileUVPoint( tile, cornerUV16( f, cn ) )
+								end
+								nv = nv + 1
+								verts[nv] = {
+									pos    = Vector( wx + cn[1] * BS, wy + cn[2] * BS, wz + cn[3] * BS ),
+									normal = nrm,
+									u      = u,
+									v      = v,
+									color  = col,
+								}
+							end
+							if nv >= VERT_LIMIT then flush() end
 						end
-						if nv >= VERT_LIMIT then flush() end
 					end
 				end
 			end

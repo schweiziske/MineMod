@@ -48,6 +48,48 @@ function MC.DrawBlockGhost( id, orient, bx, by, bz, color )
 	end
 end
 
+local function drawLineLoop( points, color )
+	for i = 1, #points do
+		local j = i == #points and 1 or i + 1
+		render.DrawLine( points[i], points[j], color, true )
+	end
+end
+
+local function drawCrossOutline( base, color )
+	local bs = MC.BS
+	local a, c = 0.08 * bs, 0.92 * bs
+	local z0, z1 = 0, bs
+	drawLineLoop( {
+		base + Vector( a, a, z0 ),
+		base + Vector( c, c, z0 ),
+		base + Vector( c, c, z1 ),
+		base + Vector( a, a, z1 ),
+	}, color )
+	drawLineLoop( {
+		base + Vector( c, a, z0 ),
+		base + Vector( a, c, z0 ),
+		base + Vector( a, c, z1 ),
+		base + Vector( c, a, z1 ),
+	}, color )
+end
+
+function MC.DrawBlockOutline( id, orient, bx, by, bz, color )
+	local base = MC.CellWorldMin( bx, by, bz )
+	color = color or Color( 0, 0, 0, 235 )
+	local b = MC.Blocks[id]
+	if b and b.shape == "cross" then
+		drawCrossOutline( base, color )
+		return
+	end
+
+	local boxes = MC.BlockBoxes and MC.BlockBoxes( id, orient ) or nil
+	for _, box in ipairs( boxes or { { 0, 0, 0, 1, 1, 1 } } ) do
+		local mn = Vector( box[1] * MC.BS, box[2] * MC.BS, box[3] * MC.BS )
+		local mx = Vector( box[4] * MC.BS, box[5] * MC.BS, box[6] * MC.BS )
+		render.DrawWireframeBox( base, angle_zero, mn, mx, color, true )
+	end
+end
+
 function MC.OpenPalette( onSelect )
 	if IsValid( MC.PaletteFrame ) then MC.PaletteFrame:Remove() end
 
