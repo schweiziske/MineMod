@@ -7,6 +7,7 @@ Garry's Mod 里的 Minecraft 风格方块系统。方块不按实体逐个生成
 - 方块边长是 `36` Source units。
 - chunk 水平尺寸固定为 `16x16`，垂直 section 高度是 `32`。
 - 支持放置、破坏、使用、`/fill`、导入、保存、分片同步。
+- 提供 `MC.SV.SetBlock` / `SetBlockSpec` / `RemoveBlock` 给非玩家插件、mob、状态机写入世界。
 - 方块表、atlas、中文名由 `_build/build_atlas.ps1` 从 `out/assets/minecraft` 生成。
 - 生成 Lua 已拆到 `lua/mc/generated/`，避免单文件超过 64KB。
 - 不完整方块使用 Minecraft model quads 渲染，碰撞/选中使用 `MC.BlockBoxes()`。
@@ -20,7 +21,7 @@ lua/autorun/mc_load.lua                  加载入口
 lua/mc/sh_config.lua                     尺寸、ConVar、net bit、atlas 配置
 lua/mc/sh_blocks.lua                     方块注册、状态、朝向、碰撞盒
 lua/mc/sh_voxel.lua                      方块存储、坐标换算、方块射线
-lua/mc/sv_world.lua                      服务端放置、破坏、导入、保存、同步
+lua/mc/sv_world.lua                      服务端世界 API、放置、破坏、导入、保存、同步
 lua/mc/cl_net.lua                        客户端同步接收
 lua/mc/cl_render.lua                     客户端 IMesh 渲染和预测碰撞 dirty
 lua/mc/cl_ui.lua                         方块图标、选择窗口、选中框

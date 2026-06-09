@@ -71,7 +71,14 @@ function MC.CurrentReach()
 	local fallback = MC.Config and MC.Config.DefaultReach or BS * 5
 	local reach = cv and cv:GetFloat() or fallback
 	if math.abs( reach - 8192 ) < 0.01 then return fallback end
+	if math.abs( reach - 182.5 ) < 0.01 then return fallback end
 	return reach
+end
+
+function MC.CanPreviewBreak( ply, bx, by, bz )
+	if not IsValid( ply ) then return false end
+	return MC.GetBlock( bx, by, bz ) ~= 0
+		and MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, MC.CurrentReach() )
 end
 
 function MC.CanPreviewPlace( ply, bx, by, bz )

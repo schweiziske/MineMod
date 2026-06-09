@@ -27,6 +27,8 @@ local function playBlockSound( kind, id, pos )
 end
 
 local ParticleMaterialCache = {}
+local PredictedFx = MC.PredictedFx or {}
+MC.PredictedFx = PredictedFx
 local ParticleUvSteps = 8
 local MaxDestroyParticles = 64
 
@@ -170,6 +172,38 @@ local function spawnBreakParticles( id, orient, bx, by, bz )
 	emitter:Finish()
 end
 
+local function fxKey( kind, bx, by, bz, id )
+	return kind .. ":" .. bx .. ":" .. by .. ":" .. bz .. ":" .. id
+end
+
+local function prunePredictedFx()
+	local now = CurTime()
+	for key, expire in pairs( PredictedFx ) do
+		if expire <= now then PredictedFx[key] = nil end
+	end
+end
+
+function MC.PlayBlockFx( kind, id, orient, bx, by, bz, predicted )
+	local pos = MC.CellWorldCenter( bx, by, bz )
+	playBlockSound( kind, id, pos )
+	if kind == 2 then
+		spawnBreakParticles( id, orient, bx, by, bz )
+	end
+	if predicted then
+		prunePredictedFx()
+		PredictedFx[fxKey( kind, bx, by, bz, id )] = CurTime() + 2.5
+	end
+end
+
+local function consumePredictedFx( kind, bx, by, bz, id )
+	prunePredictedFx()
+	local key = fxKey( kind, bx, by, bz, id )
+	local expire = PredictedFx[key]
+	if not expire then return false end
+	PredictedFx[key] = nil
+	return CurTime() <= expire
+end
+
 net.Receive( "mc_fx", function()
 	local kind = net.ReadUInt( 2 )
 	local bx = net.ReadInt( Net.COORD_BITS )
@@ -178,9 +212,6 @@ net.Receive( "mc_fx", function()
 	local id = net.ReadUInt( Net.ID_BITS )
 	local orient = net.ReadUInt( Net.ORIENT_BITS )
 
-	local pos = MC.CellWorldCenter( bx, by, bz )
-	playBlockSound( kind, id, pos )
-	if kind == 2 then
-		spawnBreakParticles( id, orient, bx, by, bz )
-	end
+	if consumePredictedFx( kind, bx, by, bz, id ) then return end
+	MC.PlayBlockFx( kind, id, orient, bx, by, bz, false )
 end )

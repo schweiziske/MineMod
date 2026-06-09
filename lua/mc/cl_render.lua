@@ -248,6 +248,29 @@ local function cornerUV16( face, c )
 	return { c[1] * 16, ( 1 - c[3] ) * 16 }
 end
 
+local function paneSideTile( b )
+	if not b or not b.name then return b and b.side or 0 end
+	if b.name == "iron_bars" then return b.side end
+	if b.name == "glass_pane" and MC.Tiles and MC.Tiles.glass then return MC.Tiles.glass end
+	local glassName = string.match( b.name, "^(.*_stained_glass)_pane$" )
+	if glassName and MC.Tiles and MC.Tiles[glassName] ~= nil then return MC.Tiles[glassName] end
+	return b.side
+end
+
+local function dynamicShapeFaceData( b, face )
+	if not b then return nil end
+	if MC.IsPaneBlock and MC.IsPaneBlock( b.id ) then
+		if face == MC.Face.TOP or face == MC.Face.BOTTOM then
+			return { tile = b.top, rot = 0 }
+		end
+		return { tile = paneSideTile( b ), rot = 0 }
+	end
+	if MC.IsFenceBlock and MC.IsFenceBlock( b.id ) then
+		return { tile = b.side, rot = 0 }
+	end
+	return nil
+end
+
 local function rectForFace( box, face )
 	if face == MC.Face.TOP or face == MC.Face.BOTTOM then return box[1], box[4], box[2], box[5] end
 	if face == MC.Face.XP or face == MC.Face.XN then return box[2], box[5], box[3], box[6] end
@@ -339,7 +362,7 @@ local function shapeFaceCovered( box, face, boxes, bx, by, bz )
 	local nb = MC.GetBlock( bx + off[1], by + off[2], bz + off[3] )
 	if nb == 0 then return false end
 	local d = MC.Blocks[nb]
-	if d and d.transparent then return false end
+	if d and d.transparent and not ( MC.IsPaneBlock and MC.IsPaneBlock( nb ) ) then return false end
 	local nbOrient = MC.GetBlockOrient( bx + off[1], by + off[2], bz + off[3] )
 	return coveredByBoxes( box, face, MC.BlockBoxes( nb, nbOrient, bx + off[1], by + off[2], bz + off[3] ), off[1], off[2], off[3] )
 end
@@ -439,7 +462,7 @@ function MC.BuildChunkMesh( key )
 		local b = MC.Blocks[id]
 		if b and b.shape == "cross" then
 			emitCrossBlock( id, wx, wy, wz )
-		elseif b and b.shape == "model" and not ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) and emitModelBlock( b, orient, wx, wy, wz ) then
+		elseif b and b.shape == "model" and not ( ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) ) ) and emitModelBlock( b, orient, wx, wy, wz ) then
 			-- rendered from exact Minecraft model quads; boxes remain for collision/outline
 		elseif MC.BlockIsFullCube( id, orient ) then
 			for f = 1, 6 do
@@ -492,7 +515,9 @@ function MC.BuildChunkMesh( key )
 						local face = FACES[f]
 						local modelFaces = b and b.boxFaces
 						local fd = modelFaces and modelFaces[boxIndex] and modelFaces[boxIndex][f]
-						if not modelFaces or fd or ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) then
+						local dynamicFd = dynamicShapeFaceData( b, f )
+						if not modelFaces or fd or dynamicFd then
+							fd = fd or dynamicFd
 							local tile = fd and fd.tile or MC.BlockFace( id, f, orient )
 							local u0, v0, u1, v1
 							if fd and fd.uv then
@@ -547,6 +572,7 @@ function MC.DrawChunk( key )
 end
 
 hook.Remove( "PostDrawOpaqueRenderables", "mc_draw_chunks" )
+hook.Remove( "PostDrawTranslucentRenderables", "mc_draw_chunks" )
 hook.Add( "PostDrawOpaqueRenderables", "mc_draw_chunks", function()
 	for key, list in pairs( MC.Meshes or {} ) do
 		if list then

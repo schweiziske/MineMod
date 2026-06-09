@@ -929,9 +929,18 @@ local function isWallName( name )
 	return name and string.find( name, "_wall$", 1, false ) ~= nil
 end
 
+local function isPaneName( name )
+	return name == "iron_bars" or ( name and string.find( name, "_pane$", 1, false ) ~= nil )
+end
+
 function MC.IsFenceBlock( id )
 	local b = MC.Blocks[id]
 	return b and isFenceName( b.name ) or false
+end
+
+function MC.IsPaneBlock( id )
+	local b = MC.Blocks[id]
+	return b and isPaneName( b.name ) or false
 end
 
 local function fenceConnectsToBlock( id, orient )
@@ -977,6 +986,45 @@ local function fenceBoxes( bx, by, bz )
 	return boxes
 end
 
+local function paneConnectsToBlock( id, orient )
+	if id == 0 then return false end
+	local b = MC.Blocks[id]
+	if not b then return false end
+	if isPaneName( b.name ) then return true end
+	if b.solid == false then return false end
+	return MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) or not b.shape
+end
+
+local function paneConnectsToCell( bx, by, bz )
+	if bx == nil or not MC.GetBlock then return false end
+	local id = MC.GetBlock( bx, by, bz )
+	local orient = MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz ) or 0
+	return paneConnectsToBlock( id, orient )
+end
+
+local function paneBoxes( bx, by, bz )
+	local boxes = {
+		{ 0.4375, 0.4375, 0, 0.5625, 0.5625, 1 },
+	}
+
+	if bx == nil or by == nil or bz == nil then return boxes end
+
+	if paneConnectsToCell( bx, by - 1, bz ) then
+		boxes[#boxes + 1] = { 0.4375, 0, 0, 0.5625, 0.5, 1 }
+	end
+	if paneConnectsToCell( bx, by + 1, bz ) then
+		boxes[#boxes + 1] = { 0.4375, 0.5, 0, 0.5625, 1, 1 }
+	end
+	if paneConnectsToCell( bx - 1, by, bz ) then
+		boxes[#boxes + 1] = { 0, 0.4375, 0, 0.5, 0.5625, 1 }
+	end
+	if paneConnectsToCell( bx + 1, by, bz ) then
+		boxes[#boxes + 1] = { 0.5, 0.4375, 0, 1, 0.5625, 1 }
+	end
+
+	return boxes
+end
+
 function MC.BlockBoxes( id, orient, bx, by, bz )
 	local b = MC.Blocks[id]
 	if not b then return nil end
@@ -998,8 +1046,8 @@ function MC.BlockBoxes( id, orient, bx, by, bz )
 	if isWallName( b.name ) then
 		return FullBlockBox
 	end
-	if b.name and ( b.name == "iron_bars" or string.find( b.name, "_pane$", 1, false ) ) then
-		return FullBlockBox
+	if isPaneName( b.name ) then
+		return paneBoxes( bx, by, bz )
 	end
 	if b.shape == "model" then
 		return modelBoxes( b, orient )
