@@ -876,6 +876,18 @@ local function modelBoxes( b, orient )
 	return out
 end
 
+local FenceGateBoxes = { { 0, 0.375, 0, 1, 0.625, 1 } }
+
+local function fenceGateBoxes( orient )
+	local steps = horizontalOrientSteps( MC.NormalizeOrient and orient or 0 )
+	if steps == 0 then return FenceGateBoxes end
+	local out = {}
+	for i, box in ipairs( FenceGateBoxes ) do
+		out[i] = rotateBoxZ( box, steps )
+	end
+	return out
+end
+
 local function stairBoxes( orient )
 	local facing = StairFacingByOrient[orient] or MC.Direction.NORTH
 	local top = StairHalfByOrient[orient] == "top"
@@ -907,6 +919,9 @@ function MC.BlockBoxes( id, orient )
 	end
 	if b.shape == "stairs" then
 		return stairBoxes( MC.NormalizeOrient( id, orient ) )
+	end
+	if b.name and string.find( b.name, "_fence_gate$", 1, false ) then
+		return fenceGateBoxes( MC.NormalizeOrient( id, orient ) )
 	end
 	if b.shape == "model" then
 		return modelBoxes( b, orient )

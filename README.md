@@ -1,171 +1,77 @@
-# MC 方块插件交接说明
+# MCSWEP
 
-这个插件是在 Garry's Mod 里用 IMesh 渲染类似 Minecraft 的方块世界。目标不是每个方块一个实体，而是把方块按区块合成网格渲染，再用 `mc_chunk` 实体提供碰撞。
+Garry's Mod 里的 Minecraft 风格方块系统。方块不按实体逐个生成，而是存进 chunk section，客户端用 `IMesh` 合批渲染，服务端和客户端各用 `mc_chunk` 实体构建碰撞。
 
-这份 README 主要给下一个接手的 AI/开发者看。当前工程不是稳定完成态，尤其是“区块拼接”和“大地图同步”还有明显问题，不要默认当前实现是对的。
+## 当前状态
 
-## 当前目标
+- 方块边长是 `36` Source units。
+- chunk 水平尺寸固定为 `16x16`，垂直 section 高度是 `32`。
+- 支持放置、破坏、使用、`/fill`、导入、保存、分片同步。
+- 方块表、atlas、中文名由 `_build/build_atlas.ps1` 从 `out/assets/minecraft` 生成。
+- 生成 Lua 已拆到 `lua/mc/generated/`，避免单文件超过 64KB。
+- 不完整方块使用 Minecraft model quads 渲染，碰撞/选中使用 `MC.BlockBoxes()`。
+- `*_fence_gate` 渲染保留原模型，碰撞使用 runtime 稳定覆盖盒。
+- `mc_autosave` 默认是 `0`，自动保存关闭。
 
-- 支持 36.5 units 的方块尺寸。
-- 支持放置、破坏、`/fill`、基础方块注册和材质 atlas。
-- 支持从 Java Minecraft 存档导出 JSON，再在 GMod 里导入。
-- 最终目标是把 Minecraft 地图读到 GMod，并保留方块 ID、方块状态、朝向和后续自定义交互接口。
-
-## 当前重要问题
-
-### 1. 区块拼接目前是错的
-
-现有代码里曾经尝试把区块改成 `16x16x384`，并用 `cz` 上下拼接。但是这个方案目前没有验证通过，表现包括：
-
-- 上下 section 之间可能空一大块。
-- 靠近 chunk 时可能消失。
-- 客户端 mesh 坐标、实体坐标、render bounds、碰撞坐标之间容易出现重复偏移或少偏移。
-- 当前实现不要当成正确答案继续硬补。
-
-下一步应该先重新设计区块坐标，不要在旧补丁上继续猜。
-
-建议重新明确三套坐标：
-
-- MC 源数据坐标：Java 存档里的 `x, y, z`，高度通常是 `-64..319`。
-- GMod 方块格坐标：插件内部的 `bx, by, bz`。
-- 渲染实体本地坐标：`mc_chunk` 实体位置加本地 mesh 顶点。
-
-如果继续用 `16x16x384`：
-
-- `ChunkKey` 至少要包含 `cx, cy, czBand`。
-- `czBand` 只能表示一个 384 高的带，不应该再有固定 `ChunkMinZ`。
-- mesh 顶点必须只用实体本地坐标，实体位置负责世界偏移。
-- 碰撞和渲染必须用同一套 local index 解码。
-- 旧存档/旧导入格式必须明确迁移，不能混着猜。
-
-也可以考虑更接近 Minecraft 的内部结构：
-
-- 水平 chunk 是 `16x16`。
-- 垂直按 section 切成 `16` 高。
-- 导入时按 column 管理，但网络同步和 mesh 可以按 section 或更小批次发。
-
-注意：用户之前明确提过“我的世界正确的区块拼接，但是 GMod 可以上下拼接”。不要把“一个固定最低 z 的大柱子”当成最终方案。
-
-### 2. GMod 不能一次发送大包
-
-GMod 的 net reliable buffer 很容易溢出。已经出现过类似错误：
+## 主要文件
 
 ```text
-Disconnect: ... overflowed reliable buffer
+lua/autorun/mc_load.lua                  加载入口
+lua/mc/sh_config.lua                     尺寸、ConVar、net bit、atlas 配置
+lua/mc/sh_blocks.lua                     方块注册、状态、朝向、碰撞盒
+lua/mc/sh_voxel.lua                      方块存储、坐标换算、方块射线
+lua/mc/sv_world.lua                      服务端放置、破坏、导入、保存、同步
+lua/mc/cl_net.lua                        客户端同步接收
+lua/mc/cl_render.lua                     客户端 IMesh 渲染和预测碰撞 dirty
+lua/mc/cl_ui.lua                         方块图标、选择窗口、选中框
+lua/entities/mc_chunk/                   chunk 实体和 multiconvex 碰撞
+lua/weapons/mc_placer/shared.lua         方块放置器 SWEP
+lua/weapons/gmod_tool/stools/mc_block.lua 工具枪方块工具
+lua/mc/generated/                        生成的方块、tile、中文名 Lua
+_build/build_atlas.ps1                   生成 atlas 和方块表
+_tools/mc_convert_8x8_save.py            老版本 Parkour Spiral 转存工具
+_tools/mc_import_world.py                通用 Minecraft 存档导出工具
+docs/maintenance-update-guide.md         维护更新指南
+docs/interface-usage.md                  接口使用介绍
 ```
-
-原因是一次把大量方块或者一个巨大 chunk 通过 `mc_full` 发给客户端。不要再做这种一次性同步。
-
-后续同步必须分片：
-
-- 一个 chunk/section 生成完后可以发，但也要按小包切。
-- 每个 net message 要控制大小，宁可多 tick 发送。
-- 不要把几十万方块塞进一个 reliable message。
-- 客户端应该边收到边建立 mesh/碰撞，而不是等全量一次性完成。
-- 服务器也不能在同一帧给所有客户端塞满同步队列。
-
-建议做一个同步队列：
-
-- `mc_full_begin(key, totalParts)`
-- `mc_full_part(key, partIndex, cells...)`
-- `mc_full_end(key)`
-
-或者更简单：每次只发固定数量 cell，例如 512 或 1024 个，客户端累积到 section 后标 dirty。
-
-### 3. 当前导入 JSON 要保持简单
-
-用户明确不想要特别啰嗦的 JSON。导入文件应该尽量简单：
-
-```json
-{
-  "v": 5,
-  "h": 384,
-  "p": ["minecraft:stone", "minecraft:dirt"],
-  "chunks": [
-    [0, 0, 0, [0, 0, 1, 0, 2, 1]]
-  ]
-}
-```
-
-含义：
-
-- `p` 是全局 palette。
-- `chunks` 里每项是 `[cx, cy, cz, cells]`。
-- `cells` 是 `[localIndex, paletteIndex, localIndex, paletteIndex, ...]`。
-
-不要在每个方块里重复写 `"minecraft:stone"`。
-
-### 4. 服务器碰撞和客户端预测都要保留
-
-用户要求必须有客户端预测，但服务器碰撞也要有。
-
-注意：
-
-- 客户端预测不能一次性为大地图全量建碰撞，否则会崩或卡死。
-- 服务器碰撞也不能一次性为超多 chunk 同帧构建。
-- 应该按 chunk/section 分批 dirty rebuild。
-- 如果导入大地图，先默认只发渲染数据，再按玩家附近逐步建立碰撞会更稳。
-
-## 当前主要文件
-
-```text
-lua/mc/sh_config.lua             方块尺寸、chunk 尺寸、net bit 配置、ConVar
-lua/mc/sh_voxel.lua              方块存储和坐标换算
-lua/mc/sv_world.lua              服务端放置/破坏/fill/import/save/sync
-lua/mc/cl_net.lua                客户端接收 mc_full/mc_set
-lua/mc/cl_render.lua             客户端 IMesh 生成和绘制
-lua/entities/mc_chunk/           chunk 实体，负责绘制入口和碰撞
-_tools/mc_import_world.py        Java .mca 导出为 GMod 导入 JSON
-_build/build_atlas.ps1           从 Minecraft out 目录生成 atlas 和注册表
-out                              我的世界26.2-pre-4源代码
-```
-
-## 接手时先做什么
-
-1. 先看当前 git 状态：
-
-```powershell
-git status --short
-git diff -- lua/mc/sh_voxel.lua lua/mc/sv_world.lua lua/mc/cl_net.lua lua/mc/cl_render.lua lua/entities/mc_chunk _tools/mc_import_world.py
-```
-
-
 
 ## 常用命令
 
-生成 1 个 MC chunk：
+重新生成 atlas 和方块表：
 
 ```powershell
-xxx
+powershell -ExecutionPolicy Bypass -File _build\build_atlas.ps1 -McOut .\out
 ```
 
-服务器导入：
+导入 Parkour Spiral：
 
-```text
-mc_import 123_1chunk_16x16x384
+```powershell
+python _tools\mc_convert_8x8_save.py --world "D:\mc\Parkour Spiral" --box -75 -64 -58 86 255 57 --out "D:\server\TEST\garrysmod\data\mc_import\parkour_spiral_8x8.json"
 ```
 
-清空：
+游戏内：
 
 ```text
+mc_import parkour_spiral_8x8 replace
 mc_clear
-```
-
-重建碰撞：
-
-```text
 mc_rebuild
+mc_resync
+mc_save
+mc_save_diag
 ```
 
-如果同步卡死或 reliable buffer 溢出，先不要继续扩大地图，先修分片同步。
+## 验证
 
-## 用户偏好
+```powershell
+npm exec --yes --package luaparse -- luaparse lua\autorun\mc_load.lua lua\mc\sh_blocks.lua lua\mc\cl_render.lua lua\mc\cl_ui.lua lua\mc\generated\sh_generated_blocks.lua lua\mc\generated\sh_generated_tiles.lua lua\mc\generated\sh_generated_lang.lua lua\mc\generated\sh_generated_blocks_part*.lua
+python -m py_compile _tools\mc_convert_8x8_save.py _tools\mc_import_world.py
+git diff --check
+```
 
-- README 和玩家能看到的文本尽量中文。
-- 不要擅自把 README 改英文。
-- 不要把导入 JSON 写得很复杂。
-- 不要一次性发送大包。
-- 不要把“看起来能跑一次”的 chunk 拼接当成正确实现。
-- 修改前先判断是不是用户刚回滚过的代码，不要把回滚内容又写回来。
+`lua/mc/sv_world.lua` 使用 GMod Lua 的 `continue`，普通 Lua parser 可能不认；不要把这个误判成新增语法错误。
 
+## 文档入口
 
+- [维护更新指南](docs/maintenance-update-guide.md)
+- [接口使用介绍](docs/interface-usage.md)
+- [Chunk 高度修改说明](docs/chunk-height.md)
