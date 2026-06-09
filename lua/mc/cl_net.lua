@@ -102,7 +102,8 @@ function MC.PredictSetBlock( bx, by, bz, id, orient )
 	return true
 end
 
-function MC.PredictBreakBlock( bx, by, bz )
+function MC.PredictBreakBlock( bx, by, bz, ply )
+	if IsValid( ply ) and not MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, MC.CurrentReach() ) then return false end
 	local oldId = MC.GetBlock( bx, by, bz )
 	if oldId == 0 then return false end
 
@@ -124,6 +125,9 @@ function MC.PredictBreakBlock( bx, by, bz )
 		expire = CurTime() + 2.5,
 	}
 	markPredictedCellDirty( bx, by, bz )
+	if MC.PlayBlockFx then
+		MC.PlayBlockFx( 2, oldId, oldOrient, bx, by, bz, true )
+	end
 	return true
 end
 

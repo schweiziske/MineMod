@@ -99,8 +99,8 @@ function SWEP:PrimaryAttack()
 		end
 	elseif CLIENT and IsFirstTimePredicted() and owner == LocalPlayer() then
 		local bx, by, bz = breakTarget( owner, aim, owner:GetEyeTrace() )
-		if bx and MC.PredictBreakBlock then
-			MC.PredictBreakBlock( bx, by, bz )
+		if bx and MC.CanPreviewBreak and MC.CanPreviewBreak( owner, bx, by, bz ) and MC.PredictBreakBlock then
+			MC.PredictBreakBlock( bx, by, bz, owner )
 		end
 	end
 end

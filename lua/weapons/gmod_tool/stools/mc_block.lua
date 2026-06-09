@@ -68,8 +68,8 @@ function TOOL:LeftClick( tr )
 	if CLIENT then
 		if IsFirstTimePredicted() and ply == LocalPlayer() then
 			local bx, by, bz = breakTarget( aim, tr )
-			if bx and MC.PredictBreakBlock then
-				MC.PredictBreakBlock( bx, by, bz )
+			if bx and MC.CanPreviewBreak and MC.CanPreviewBreak( ply, bx, by, bz ) and MC.PredictBreakBlock then
+				MC.PredictBreakBlock( bx, by, bz, ply )
 			end
 		end
 		return true
