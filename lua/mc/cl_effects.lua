@@ -129,7 +129,7 @@ local function spawnBreakParticles( id, orient, bx, by, bz )
 	if b and b.spawnTerrainParticles == false then return end
 	if not MC.BlockBoxes then return end
 
-	local boxes = MC.BlockBoxes( id, orient )
+	local boxes = MC.BlockBoxes( id, orient, bx, by, bz )
 	if not boxes or #boxes == 0 then return end
 
 	local base = MC.CellWorldMin( bx, by, bz )

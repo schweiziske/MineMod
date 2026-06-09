@@ -40,7 +40,7 @@ end
 
 function MC.DrawBlockGhost( id, orient, bx, by, bz, color )
 	local base = MC.CellWorldMin( bx, by, bz )
-	local boxes = MC.BlockBoxes and MC.BlockBoxes( id, orient ) or nil
+	local boxes = MC.BlockBoxes and MC.BlockBoxes( id, orient, bx, by, bz ) or nil
 	for _, box in ipairs( boxes or { { 0, 0, 0, 1, 1, 1 } } ) do
 		local mn = Vector( box[1] * MC.BS, box[2] * MC.BS, box[3] * MC.BS )
 		local mx = Vector( box[4] * MC.BS, box[5] * MC.BS, box[6] * MC.BS )
@@ -82,7 +82,7 @@ function MC.DrawBlockOutline( id, orient, bx, by, bz, color )
 		return
 	end
 
-	local boxes = MC.BlockBoxes and MC.BlockBoxes( id, orient ) or nil
+	local boxes = MC.BlockBoxes and MC.BlockBoxes( id, orient, bx, by, bz ) or nil
 	for _, box in ipairs( boxes or { { 0, 0, 0, 1, 1, 1 } } ) do
 		local mn = Vector( box[1] * MC.BS, box[2] * MC.BS, box[3] * MC.BS )
 		local mx = Vector( box[4] * MC.BS, box[5] * MC.BS, box[6] * MC.BS )

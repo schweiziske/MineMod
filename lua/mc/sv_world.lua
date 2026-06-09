@@ -191,8 +191,32 @@ local function callBlockHandler( id, name, ... )
 	return fn( ... )
 end
 
--- core mutation shared by Place/Break/fill/demo (no validation here)
-local function apply( bx, by, bz, id, _, orient, actor )
+local function markNeighbourShapePhysDirty( bx, by, bz )
+	local function mark( x, y, z )
+		local cx, cy, cz = MC.CellToChunk( x, y, z )
+		local c = MC.GetChunkByKey( MC.ChunkKey( cx, cy, cz ) )
+		if c and c.count and c.count > 0 then
+			SV.EnsureChunkEnt( c )
+			SV.MarkPhysDirty( c.key )
+		end
+	end
+
+	mark( bx + 1, by, bz )
+	mark( bx - 1, by, bz )
+	mark( bx, by + 1, bz )
+	mark( bx, by - 1, bz )
+end
+
+local function normalizeWriteOptions( options )
+	if istable( options ) then return options end
+	if options ~= nil then return { actor = options } end
+	return {}
+end
+
+-- core mutation shared by Place/Break/fill/demo/public API.
+-- This is still not a validation layer; callers decide whether player checks apply.
+local function apply( bx, by, bz, id, _, orient, actor, options )
+	options = options or {}
 	local old = MC.GetBlock( bx, by, bz )
 	local oldOrient = MC.GetBlockOrient( bx, by, bz )
 	orient = MC.NormalizeOrient( id, orient )
@@ -218,17 +242,22 @@ local function apply( bx, by, bz, id, _, orient, actor )
 			SV.MarkPhysDirty( chunk.key )
 		end
 	end
+	markNeighbourShapePhysDirty( bx, by, bz )
 
 	broadcastSet( bx, by, bz, id, orient )
-	if IsValid( actor ) then
+	local shouldFx = options.fx
+	if shouldFx == nil then shouldFx = IsValid( actor ) end
+	if shouldFx then
 		if old ~= 0 and id == 0 then
 			broadcastFx( 2, bx, by, bz, old, oldOrient )
 		elseif old == 0 and id ~= 0 then
 			broadcastFx( 1, bx, by, bz, id, orient )
 		end
 	end
-	if old ~= 0 then callBlockHandler( old, "OnBreak", actor, bx, by, bz, oldOrient ) end
-	if id ~= 0 then callBlockHandler( id, "OnPlace", actor, bx, by, bz, orient ) end
+	if options.handlers ~= false then
+		if old ~= 0 then callBlockHandler( old, "OnBreak", actor, bx, by, bz, oldOrient ) end
+		if id ~= 0 then callBlockHandler( id, "OnPlace", actor, bx, by, bz, orient ) end
+	end
 	SV.Dirty = true
 	return true
 end
@@ -267,6 +296,31 @@ function SV.Break( ply, bx, by, bz )
 	if old == 0 then return false end
 	if not SV.Validate( ply, bx, by, bz, false ) then return false end
 	return apply( bx, by, bz, 0, -1, nil, ply )
+end
+
+function SV.SetBlock( bx, by, bz, id, orient, options )
+	options = normalizeWriteOptions( options )
+	id = math.floor( tonumber( id ) or 0 )
+	if id ~= 0 and not MC.IsValidBlock( id ) then return false, "invalid_block" end
+	if id ~= 0 and options.preventPlayerOverlap and wouldTrapPlayer( bx, by, bz ) then return false, "player_overlap" end
+	if id == 0 then orient = 0 end
+
+	local changed = apply( bx, by, bz, id, 0, orient, options.actor, {
+		fx = options.fx ~= false,
+		handlers = options.handlers,
+	} )
+	if not changed then return false, "unchanged" end
+	return true
+end
+
+function SV.SetBlockSpec( bx, by, bz, spec, options )
+	local id, orient, _, err = MC.ParseBlockSpec( spec )
+	if err or not id then return false, err or "invalid_block" end
+	return SV.SetBlock( bx, by, bz, id, orient, options )
+end
+
+function SV.RemoveBlock( bx, by, bz, options )
+	return SV.SetBlock( bx, by, bz, 0, 0, options )
 end
 
 function SV.Use( ply, bx, by, bz )

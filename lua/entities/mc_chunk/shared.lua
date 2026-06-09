@@ -33,11 +33,14 @@ local function greedyBoxes( chunk )
 		local b = MC.Blocks[id]
 		if not b or b.solid ~= false then
 			local orient = MC.NormalizeOrient and MC.NormalizeOrient( id, chunk.orients and chunk.orients[li] ) or 0
+			local lx, ly, lz = MC.DecodeLocal( li )
+			local bx = chunk.cx * CS + lx
+			local by = chunk.cy * CS + ly
+			local bz = chunk.cz * CH + lz
 			if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
 				solid[li] = true
 			else
-				local lx, ly, lz = MC.DecodeLocal( li )
-				for _, box in ipairs( MC.BlockBoxes( id, orient ) or {} ) do
+				for _, box in ipairs( MC.BlockBoxes( id, orient, bx, by, bz ) or {} ) do
 					shapeBoxes[#shapeBoxes + 1] = {
 						lx + box[1],
 						ly + box[2],
