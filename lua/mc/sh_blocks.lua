@@ -163,6 +163,11 @@ MC.BlockHandlers.furnace = MC.BlockHandlers.furnace or {
 	end,
 }
 
+local function shouldForceSolid( name )
+	return name == "iron_bars"
+		or string.find( name, "_pane$", 1, false ) ~= nil
+end
+
 function MC.RegisterBlock( def )
 	if not def or def.id == nil then return nil end
 	local id = math.floor( tonumber( def.id ) or 0 )
@@ -170,6 +175,8 @@ function MC.RegisterBlock( def )
 
 	local name = normalizeBlockKey( def.name or ( def.mcid and string.match( def.mcid, "^minecraft:(.+)$" ) ) or id )
 	local mcid = normalizeBlockKey( def.mcid or ( "minecraft:" .. name ) )
+	local generatedSoundTypes = MC.GeneratedBlockSoundTypes or {}
+	local generatedNoTerrainParticles = MC.GeneratedNoTerrainParticles or {}
 	local textures = def.textures or {}
 	local top = tileValue( textures.top or def.top, 0 )
 	local side = tileValue( textures.side or def.side, top )
@@ -183,12 +190,14 @@ function MC.RegisterBlock( def )
 		name = name,
 		mcid = mcid,
 		disp = blockDisp( { name = name, disp = def.disp, mcid = mcid, id = id } ),
-		solid = def.solid ~= false,
+		solid = shouldForceSolid( name ) or def.solid ~= false,
 		transparent = def.transparent == true,
 		shape = def.shape,
 		boxes = normalizeBoxes( def.boxes ),
 		boxFaces = normalizeBoxFaces( def.boxFaces ),
 		modelQuads = normalizeModelQuads( def.modelQuads ),
+		soundType = def.soundType or generatedSoundTypes[mcid] or generatedSoundTypes[name] or "STONE",
+		spawnTerrainParticles = def.spawnTerrainParticles ~= false and generatedNoTerrainParticles[mcid] ~= true,
 		textures = { top = top, side = side, bottom = bottom, front = front },
 		baked = normalizeBaked( def.baked ),
 		stateRule = def.stateRule or def.orient,
@@ -876,7 +885,7 @@ local function modelBoxes( b, orient )
 	return out
 end
 
-local FenceGateBoxes = { { 0, 0.375, 0, 1, 0.625, 1 } }
+local FenceGateBoxes = FullBlockBox
 
 local function fenceGateBoxes( orient )
 	local steps = horizontalOrientSteps( MC.NormalizeOrient and orient or 0 )
@@ -920,8 +929,17 @@ function MC.BlockBoxes( id, orient )
 	if b.shape == "stairs" then
 		return stairBoxes( MC.NormalizeOrient( id, orient ) )
 	end
+	if b.name and string.find( b.name, "_fence$", 1, false ) then
+		return FullBlockBox
+	end
 	if b.name and string.find( b.name, "_fence_gate$", 1, false ) then
 		return fenceGateBoxes( MC.NormalizeOrient( id, orient ) )
+	end
+	if b.name and string.find( b.name, "_wall$", 1, false ) then
+		return FullBlockBox
+	end
+	if b.name and ( b.name == "iron_bars" or string.find( b.name, "_pane$", 1, false ) ) then
+		return FullBlockBox
 	end
 	if b.shape == "model" then
 		return modelBoxes( b, orient )
