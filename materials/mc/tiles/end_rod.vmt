@@ -1,0 +1,8 @@
+"UnlitGeneric"
+{
+  "$basetexture" "mc/tiles/end_rod"
+  "$translucent" "1"
+  "$vertexcolor" "1"
+  "$vertexalpha" "1"
+  "$nocull" "1"
+}

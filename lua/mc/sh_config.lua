@@ -48,6 +48,7 @@ if SERVER then
 		"mc_full_part",
 		"mc_full_end",
 		"mc_set",
+		"mc_fx",
 		"mc_clear",
 	} ) do
 		util.AddNetworkString( name )

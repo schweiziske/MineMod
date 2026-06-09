@@ -965,6 +965,14 @@ MC.GeneratedTiles = {
 	yellow_stained_glass_pane_top = 960,
 	yellow_terracotta = 961,
 }
+if SERVER then
+	-- resource.AddFile( "materials/mc/atlas_365.png" )
+	for name in pairs( MC.GeneratedTiles ) do
+		-- resource.AddFile( "materials/mc/tiles/" .. name .. ".png" )
+		-- resource.AddFile( "materials/mc/tiles/" .. name .. ".vmt" )
+		-- resource.AddFile( "materials/mc/tiles/" .. name .. ".vtf" )
+	end
+end
 if MC.Atlas then
 	MC.Atlas.COLS = MC.GeneratedAtlas.COLS
 	MC.Atlas.ROWS = MC.GeneratedAtlas.ROWS

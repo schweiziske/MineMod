@@ -171,6 +171,19 @@ local function broadcastSet( bx, by, bz, id, orient )
 	net.Broadcast()
 end
 
+local function broadcastFx( kind, bx, by, bz, id, orient )
+	if #player.GetAll() == 0 then return end
+	orient = MC.NormalizeOrient( id, orient )
+	net.Start( "mc_fx" )
+		net.WriteUInt( kind, 2 ) -- 1=place, 2=break
+		net.WriteInt( bx, Net.COORD_BITS )
+		net.WriteInt( by, Net.COORD_BITS )
+		net.WriteInt( bz, Net.COORD_BITS )
+		net.WriteUInt( id, Net.ID_BITS )
+		net.WriteUInt( orient or 0, Net.ORIENT_BITS )
+	net.Broadcast()
+end
+
 local function callBlockHandler( id, name, ... )
 	local b = MC.Blocks[id]
 	local fn = b and b.handlers and b.handlers[name]
@@ -207,6 +220,13 @@ local function apply( bx, by, bz, id, _, orient, actor )
 	end
 
 	broadcastSet( bx, by, bz, id, orient )
+	if IsValid( actor ) then
+		if old ~= 0 and id == 0 then
+			broadcastFx( 2, bx, by, bz, old, oldOrient )
+		elseif old == 0 and id ~= 0 then
+			broadcastFx( 1, bx, by, bz, id, orient )
+		end
+	end
 	if old ~= 0 then callBlockHandler( old, "OnBreak", actor, bx, by, bz, oldOrient ) end
 	if id ~= 0 then callBlockHandler( id, "OnPlace", actor, bx, by, bz, orient ) end
 	SV.Dirty = true

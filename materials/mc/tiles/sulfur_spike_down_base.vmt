@@ -1,0 +1,8 @@
+"UnlitGeneric"
+{
+  "$basetexture" "mc/tiles/sulfur_spike_down_base"
+  "$translucent" "1"
+  "$vertexcolor" "1"
+  "$vertexalpha" "1"
+  "$nocull" "1"
+}

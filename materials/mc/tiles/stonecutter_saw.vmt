@@ -1,0 +1,8 @@
+"UnlitGeneric"
+{
+  "$basetexture" "mc/tiles/stonecutter_saw"
+  "$translucent" "1"
+  "$vertexcolor" "1"
+  "$vertexalpha" "1"
+  "$nocull" "1"
+}
