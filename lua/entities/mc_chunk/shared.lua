@@ -40,7 +40,8 @@ local function greedyBoxes( chunk )
 			if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
 				solid[li] = true
 			else
-				for _, box in ipairs( MC.BlockBoxes( id, orient, bx, by, bz ) or {} ) do
+				local blockBoxes = ( MC.BlockCollisionBoxes or MC.BlockBoxes )( id, orient, bx, by, bz )
+				for _, box in ipairs( blockBoxes or {} ) do
 					shapeBoxes[#shapeBoxes + 1] = {
 						lx + box[1],
 						ly + box[2],

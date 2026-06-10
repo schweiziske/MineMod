@@ -18,6 +18,53 @@ concommand.Add( "mc_debug", function()
 	MC.DebugHUD = not MC.DebugHUD
 end )
 
+-- dump everything we know about the block under the crosshair (debugging
+-- connection/texture issues without guessing)
+concommand.Add( "mc_block_diag", function()
+	local ply = LocalPlayer()
+	if not IsValid( ply ) then return end
+	local hit = MC.PlayerBlockAim and MC.PlayerBlockAim( ply )
+	if not hit or not hit.bx then
+		print( "[MC diag] 准星没有指向方块" )
+		return
+	end
+	local bx, by, bz = hit.bx, hit.by, hit.bz
+	local id = MC.GetBlock( bx, by, bz )
+	local orient = MC.GetBlockOrient( bx, by, bz )
+	local b = MC.Blocks[id]
+	print( string.format( "[MC diag] cell=(%d,%d,%d) id=%d name=%s mcid=%s", bx, by, bz, id, b and b.name or "?", b and b.mcid or "?" ) )
+	if not b then return end
+	print( string.format( "  shape=%s solid=%s transparent=%s pane=%s fence=%s translucent=%s",
+		tostring( b.shape ), tostring( b.solid ), tostring( b.transparent ),
+		tostring( MC.IsPaneBlock and MC.IsPaneBlock( id ) ),
+		tostring( MC.IsFenceBlock and MC.IsFenceBlock( id ) ),
+		tostring( MC.IsTranslucentBlock and MC.IsTranslucentBlock( id ) ) ) )
+	print( string.format( "  tiles top=%s side=%s bottom=%s (boxFaces=%s modelQuads=%s)",
+		tostring( b.top ), tostring( b.side ), tostring( b.bottom ),
+		b.boxFaces and #b.boxFaces or "nil", b.modelQuads and #b.modelQuads or "nil" ) )
+	local boxes = MC.BlockBoxes( id, orient, bx, by, bz ) or {}
+	print( string.format( "  boxes=%d (post+arms; >1 表示有连接)", #boxes ) )
+	for i, box in ipairs( boxes ) do
+		print( string.format( "    [%d] %.4f,%.4f,%.4f -> %.4f,%.4f,%.4f %s%s",
+			i, box[1], box[2], box[3], box[4], box[5], box[6],
+			box.part and ( "part=" .. box.part ) or "", box.dir and ( " dir=" .. box.dir ) or "" ) )
+	end
+	local dirs = { { 0, -1, "y-" }, { 0, 1, "y+" }, { -1, 0, "x-" }, { 1, 0, "x+" } }
+	for _, d in ipairs( dirs ) do
+		local nid = MC.GetBlock( bx + d[1], by + d[2], bz )
+		local nb = MC.Blocks[nid]
+		print( string.format( "  neighbour %s: id=%d name=%s", d[3], nid, nb and nb.name or ( nid == 0 and "air" or "?" ) ) )
+	end
+	local cx, cy, cz = MC.CellToChunk( bx, by, bz )
+	local key = MC.ChunkKey( cx, cy, cz )
+	local ent = MC.ChunkEnts and MC.ChunkEnts[key]
+	print( string.format( "  chunk=%s opaqueMesh=%s transMesh=%s chunkEnt=%s phys=%s",
+		key, tostring( MC.Meshes and MC.Meshes[key] ~= nil ), tostring( MC.MeshesTrans and MC.MeshesTrans[key] ~= nil ),
+		tostring( IsValid( ent ) ), tostring( IsValid( ent ) and IsValid( ent:GetPhysicsObject() ) ) ) )
+	print( string.format( "  material err: opaque=%s translucent=%s",
+		tostring( MC.Material and MC.Material:IsError() ), tostring( MC.MaterialTranslucent and MC.MaterialTranslucent:IsError() ) ) )
+end )
+
 concommand.Add( "mc_client_diag", function()
 	local chunks, blocks = 0, 0
 	local minBZ, maxBZ

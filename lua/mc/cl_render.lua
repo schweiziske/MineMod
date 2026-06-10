@@ -1,9 +1,10 @@
 --[[----------------------------------------------------------------------------
 	MC : client rendering
 
-	Builds one (or a few, if huge) IMesh per chunk from the voxel store with
-	hidden-face culling and Minecraft-style directional face shading. The
-	mc_chunk entity calls MC.DrawChunk in its Draw -> 1 draw call per chunk.
+	Builds IMeshes per chunk from the voxel store with hidden-face culling and
+	Minecraft-style directional face shading. Each chunk gets an opaque/cutout
+	mesh list plus, when it contains glass-family blocks, a separate translucent
+	mesh list; both draw from PostDraw*Renderables hooks.
 ------------------------------------------------------------------------------]]
 
 MC = MC or {}
@@ -26,6 +27,18 @@ end
 
 -- single atlas material: alpha cutout (glass/leaves), vertex-shaded, backface-culled
 MC.Material = Material( MC.Atlas.MATERIAL or "mc/atlas_365.png", "alphatest vertexcolor" )
+
+-- second material over the same atlas pixels for the glass family: real alpha
+-- blending in the translucent pass. PNG materials are cached by path (a second
+-- Material() call with different flags returns the cutout one) and rebinding
+-- the texture via CreateMaterial proved unreliable, so the build writes a
+-- byte-for-byte copy of the atlas for this material to load.
+local transPath = ( MC.Atlas.MATERIAL or "mc/atlas_365.png" ):gsub( "%.png$", "_translucent.png" )
+MC.MaterialTranslucent = Material( transPath, "translucent vertexcolor" )
+if not MC.MaterialTranslucent or MC.MaterialTranslucent:IsError() then
+	-- missing copy: fall back to the cutout material rather than drawing white
+	MC.MaterialTranslucent = MC.Material
+end
 
 -- directional shading (modulates the texture via vertex colour)
 local SH_TOP    = Color( 255, 255, 255 )
@@ -55,7 +68,8 @@ local TRI = { 1, 3, 2, 1, 4, 3 }
 
 local VERT_LIMIT = 64998 -- multiple of 6, under the 65535 IMesh vertex cap
 
-MC.Meshes    = MC.Meshes or {}    -- key -> { IMesh, ... }
+MC.Meshes      = MC.Meshes or {}      -- key -> { IMesh, ... } (opaque/cutout pass)
+MC.MeshesTrans = MC.MeshesTrans or {} -- key -> { IMesh, ... } (translucent glass pass)
 MC.MeshDirty = MC.MeshDirty or {}  -- key -> true
 MC.ChunkEnts = MC.ChunkEnts or {}  -- key -> mc_chunk entity (clientside physics owner)
 MC.PhysDirty = MC.PhysDirty or {}  -- key -> true (clientside collision rebuild)
@@ -80,13 +94,18 @@ local function visible( cur, nb, nbOrient )
 end
 
 ------------------------------------------------------------------ mesh lifecycle
-function MC.FreeChunkMesh( key )
-	local list = MC.Meshes[key]
+local function destroyMeshList( store, key )
+	local list = store[key]
 	if not list then return end
 	for i = 1, #list do
 		if list[i] then list[i]:Destroy() end
 	end
-	MC.Meshes[key] = nil
+	store[key] = nil
+end
+
+function MC.FreeChunkMesh( key )
+	destroyMeshList( MC.Meshes, key )
+	destroyMeshList( MC.MeshesTrans, key )
 end
 
 local DecodeLocal = MC.DecodeLocal
@@ -250,17 +269,31 @@ end
 
 local function paneSideTile( b )
 	if not b or not b.name then return b and b.side or 0 end
-	if b.name == "iron_bars" then return b.side end
+	-- bar blocks (iron_bars, copper_bars variants) keep their own lattice texture
+	if string.find( b.name, "_bars$", 1, false ) or b.name == "iron_bars" then return b.side end
 	if b.name == "glass_pane" and MC.Tiles and MC.Tiles.glass then return MC.Tiles.glass end
 	local glassName = string.match( b.name, "^(.*_stained_glass)_pane$" )
 	if glassName and MC.Tiles and MC.Tiles[glassName] ~= nil then return MC.Tiles[glassName] end
 	return b.side
 end
 
-local function dynamicShapeFaceData( b, face )
+-- connection-arm direction tag -> the face at the open end of that arm
+local ARM_END_FACE = {
+	yn = MC.Face.YN,
+	yp = MC.Face.YP,
+	xn = MC.Face.XN,
+	xp = MC.Face.XP,
+}
+
+local function dynamicShapeFaceData( b, face, box )
 	if not b then return nil end
 	if MC.IsPaneBlock and MC.IsPaneBlock( b.id ) then
 		if face == MC.Face.TOP or face == MC.Face.BOTTOM then
+			return { tile = b.top, rot = 0 }
+		end
+		-- the open end of an arm shows the pane edge strip, like Minecraft's
+		-- cullfaced #edge face on the pane side models
+		if box and box.part == "arm" and ARM_END_FACE[box.dir] == face then
 			return { tile = b.top, rot = 0 }
 		end
 		return { tile = paneSideTile( b ), rot = 0 }
@@ -376,35 +409,42 @@ function MC.BuildChunkMesh( key )
 	local bxo = chunk.cx * CS
 	local byo = chunk.cy * CS
 	local bzo = chunk.cz * MC.CH
-
-	local list = {}
-	local verts = {}
-	local nv = 0
 	chunk.orients = chunk.orients or {}
 
-	local function flush()
-		if nv == 0 then return end
-		local m = Mesh( MC.Material )
-		m:BuildFromTriangles( verts )
-		list[#list + 1] = m
-		verts = {}
-		nv = 0
+	-- two output streams: everything cutout/opaque, plus a translucent stream
+	-- for the glass family only (never move whole chunks to translucent)
+	local opaque      = { list = {}, verts = {}, nv = 0, material = MC.Material }
+	local translucent = { list = {}, verts = {}, nv = 0, material = MC.MaterialTranslucent }
+	local cur = opaque
+
+	local function flush( buf )
+		if buf.nv == 0 then return end
+		local m = Mesh( buf.material )
+		m:BuildFromTriangles( buf.verts )
+		buf.list[#buf.list + 1] = m
+		buf.verts = {}
+		buf.nv = 0
+	end
+
+	local function push( vert )
+		local nv = cur.nv + 1
+		cur.nv = nv
+		cur.verts[nv] = vert
+		if nv >= VERT_LIMIT then flush( cur ) end
 	end
 
 	local function emitQuad( corners, normal, color, tile )
 		for t = 1, 6 do
 			local cn = corners[TRI[t]]
 			local u, v = tileUVPoint( tile, { cn[4], cn[5] } )
-			nv = nv + 1
-			verts[nv] = {
+			push( {
 				pos    = Vector( cn[1], cn[2], cn[3] ),
 				normal = normal,
 				u      = u,
 				v      = v,
 				color  = color,
-			}
+			} )
 		end
-		if nv >= VERT_LIMIT then flush() end
 	end
 
 	local function emitCrossBlock( id, wx, wy, wz )
@@ -439,16 +479,14 @@ function MC.BuildChunkMesh( key )
 			for t = 1, 6 do
 				local vert = quad.verts[TRI[t]]
 				local uf, vf = rotatedUVFlags( vert.u or 0, vert.v or 0, quad.rot or 0 )
-				nv = nv + 1
-				verts[nv] = {
+				push( {
 					pos    = Vector( wx + vert.x * BS, wy + vert.y * BS, wz + vert.z * BS ),
 					normal = face.n,
 					u      = uf == 1 and u1 or u0,
 					v      = vf == 1 and v1 or v0,
 					color  = face.sh,
-				}
+				} )
 			end
-			if nv >= VERT_LIMIT then flush() end
 		end
 		return true
 	end
@@ -458,6 +496,8 @@ function MC.BuildChunkMesh( key )
 		local lx, ly, lz = DecodeLocal( li )
 		local bx, by, bz = bxo + lx, byo + ly, bzo + lz
 		local wx, wy, wz = lx * BS, ly * BS, lz * BS
+
+		cur = ( MC.IsTranslucentBlock and MC.IsTranslucentBlock( id ) ) and translucent or opaque
 
 		local b = MC.Blocks[id]
 		if b and b.shape == "cross" then
@@ -494,20 +534,21 @@ function MC.BuildChunkMesh( key )
 							u = uf == 1 and u1 or u0
 							v = vf == 1 and v1 or v0
 						end
-						nv = nv + 1
-						verts[nv] = {
+						push( {
 							pos    = Vector( wx + cn[1] * BS, wy + cn[2] * BS, wz + cn[3] * BS ),
 							normal = nrm,
 							u      = u,
 							v      = v,
 							color  = col,
-						}
+						} )
 					end
-
-					if nv >= VERT_LIMIT then flush() end
 				end
 			end
 		else
+			-- fence/pane boxes come from the runtime connection logic, so their
+			-- indices do not line up with the generator's static boxFaces list;
+			-- only the centre post (box 1) may take static face data
+			local isConnShape = ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) )
 			local boxes = MC.BlockBoxes( id, orient, bx, by, bz )
 			for boxIndex, box in ipairs( boxes or {} ) do
 				for f = 1, 6 do
@@ -515,7 +556,8 @@ function MC.BuildChunkMesh( key )
 						local face = FACES[f]
 						local modelFaces = b and b.boxFaces
 						local fd = modelFaces and modelFaces[boxIndex] and modelFaces[boxIndex][f]
-						local dynamicFd = dynamicShapeFaceData( b, f )
+						if isConnShape and boxIndex > 1 then fd = nil end
+						local dynamicFd = dynamicShapeFaceData( b, f, box )
 						if not modelFaces or fd or dynamicFd then
 							fd = fd or dynamicFd
 							local tile = fd and fd.tile or MC.BlockFace( id, f, orient )
@@ -537,16 +579,14 @@ function MC.BuildChunkMesh( key )
 								else
 									u, v = tileUVPoint( tile, cornerUV16( f, cn ) )
 								end
-								nv = nv + 1
-								verts[nv] = {
+								push( {
 									pos    = Vector( wx + cn[1] * BS, wy + cn[2] * BS, wz + cn[3] * BS ),
 									normal = nrm,
 									u      = u,
 									v      = v,
 									color  = col,
-								}
+								} )
 							end
-							if nv >= VERT_LIMIT then flush() end
 						end
 					end
 				end
@@ -554,38 +594,57 @@ function MC.BuildChunkMesh( key )
 		end
 	end
 
-	flush()
+	flush( opaque )
+	flush( translucent )
 
-	if #list > 0 then
-		MC.Meshes[key] = list
+	if #opaque.list > 0 then
+		MC.Meshes[key] = opaque.list
+	end
+	if #translucent.list > 0 then
+		MC.MeshesTrans[key] = translucent.list
 	end
 end
 
 ------------------------------------------------------------------------- drawing
-function MC.DrawChunk( key )
-	local list = MC.Meshes[key]
+local function drawMeshList( list, material )
 	if not list then return end
-	render.SetMaterial( MC.Material )
+	render.SetMaterial( material )
 	for i = 1, #list do
 		list[i]:Draw()
 	end
 end
 
-hook.Remove( "PostDrawOpaqueRenderables", "mc_draw_chunks" )
-hook.Remove( "PostDrawTranslucentRenderables", "mc_draw_chunks" )
-hook.Add( "PostDrawOpaqueRenderables", "mc_draw_chunks", function()
-	for key, list in pairs( MC.Meshes or {} ) do
+function MC.DrawChunk( key )
+	drawMeshList( MC.Meshes[key], MC.Material )
+end
+
+function MC.DrawChunkTranslucent( key )
+	drawMeshList( MC.MeshesTrans[key], MC.MaterialTranslucent )
+end
+
+local function drawAllChunks( store, drawFn )
+	for key, list in pairs( store or {} ) do
 		if list then
 			local c = MC.GetChunkByKey( key )
 			if c then
 				local mat = Matrix()
 				mat:SetTranslation( MC.ChunkWorldOrigin( c.cx, c.cy, c.cz ) )
 				cam.PushModelMatrix( mat )
-					MC.DrawChunk( key )
+					drawFn( key )
 				cam.PopModelMatrix()
 			end
 		end
 	end
+end
+
+hook.Remove( "PostDrawOpaqueRenderables", "mc_draw_chunks" )
+hook.Remove( "PostDrawTranslucentRenderables", "mc_draw_chunks" )
+hook.Add( "PostDrawOpaqueRenderables", "mc_draw_chunks", function()
+	drawAllChunks( MC.Meshes, MC.DrawChunk )
+end )
+-- glass family only; the bulk of the world stays in the opaque pass above
+hook.Add( "PostDrawTranslucentRenderables", "mc_draw_chunks", function()
+	drawAllChunks( MC.MeshesTrans, MC.DrawChunkTranslucent )
 end )
 
 ------------------------------------------------------------------- dirty tracking
@@ -641,4 +700,5 @@ end )
 -- free all meshes (used by mc_clear)
 function MC.FreeAllMeshes()
 	for key in pairs( MC.Meshes ) do MC.FreeChunkMesh( key ) end
+	for key in pairs( MC.MeshesTrans ) do MC.FreeChunkMesh( key ) end
 end
