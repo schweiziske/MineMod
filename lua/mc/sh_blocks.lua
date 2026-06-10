@@ -1072,6 +1072,32 @@ local function paneBoxes( bx, by, bz )
 	return boxes
 end
 
+-- Collision for pane-style blocks should be a small number of continuous strips.
+-- Rendering still uses paneBoxes() above so edge/end textures stay Minecraft-like.
+local function paneCollisionBoxes( bx, by, bz )
+	if bx == nil or by == nil or bz == nil then
+		return { { 0.4375, 0.4375, 0, 0.5625, 0.5625, 1 } }
+	end
+
+	local yn = paneConnectsToCell( bx, by - 1, bz )
+	local yp = paneConnectsToCell( bx, by + 1, bz )
+	local xn = paneConnectsToCell( bx - 1, by, bz )
+	local xp = paneConnectsToCell( bx + 1, by, bz )
+	local boxes = {}
+
+	if yn or yp then
+		boxes[#boxes + 1] = { 0.4375, yn and 0 or 0.4375, 0, 0.5625, yp and 1 or 0.5625, 1 }
+	end
+	if xn or xp then
+		boxes[#boxes + 1] = { xn and 0 or 0.4375, 0.4375, 0, xp and 1 or 0.5625, 0.5625, 1 }
+	end
+	if #boxes == 0 then
+		boxes[1] = { 0.4375, 0.4375, 0, 0.5625, 0.5625, 1 }
+	end
+
+	return boxes
+end
+
 function MC.BlockBoxes( id, orient, bx, by, bz )
 	local b = MC.Blocks[id]
 	if not b then return nil end
@@ -1124,6 +1150,9 @@ function MC.BlockCollisionBoxes( id, orient, bx, by, bz )
 			boxes[#boxes + 1] = { 0.4375, 0.4375, 0.375, 1, 0.5625, 0.9375 }
 		end
 		return boxes
+	end
+	if b and isPaneName( b.name ) and bx ~= nil and by ~= nil and bz ~= nil then
+		return paneCollisionBoxes( bx, by, bz )
 	end
 	return MC.BlockBoxes( id, orient, bx, by, bz )
 end

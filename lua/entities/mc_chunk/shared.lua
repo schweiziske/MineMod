@@ -27,8 +27,30 @@ local function greedyBoxes( chunk )
 	local CS = MC.CS
 	local CS2 = CS * CS
 	local CH = MC.CH
+	local function idx( x, y, z ) return x + y * CS + z * CS2 end
+
 	local solid = {}
-	local shapeBoxes = {}
+	local shapeGroups = {}
+	local function shapeKey( box )
+		return table.concat( { box[1], box[2], box[3], box[4], box[5], box[6] }, ":" )
+	end
+	local function addShapeBox( lx, ly, lz, box )
+		local key = shapeKey( box )
+		local group = shapeGroups[key]
+		if not group then
+			group = {
+				cells = {},
+				fx0 = box[1], fy0 = box[2], fz0 = box[3],
+				fx1 = box[4], fy1 = box[5], fz1 = box[6],
+				fullX = box[1] <= 0 and box[4] >= 1,
+				fullY = box[2] <= 0 and box[5] >= 1,
+				fullZ = box[3] <= 0 and box[6] >= 1,
+			}
+			shapeGroups[key] = group
+		end
+		group.cells[idx( lx, ly, lz )] = true
+	end
+
 	for li, id in pairs( chunk.blocks ) do
 		local b = MC.Blocks[id]
 		if not b or b.solid ~= false then
@@ -42,20 +64,11 @@ local function greedyBoxes( chunk )
 			else
 				local blockBoxes = ( MC.BlockCollisionBoxes or MC.BlockBoxes )( id, orient, bx, by, bz )
 				for _, box in ipairs( blockBoxes or {} ) do
-					shapeBoxes[#shapeBoxes + 1] = {
-						lx + box[1],
-						ly + box[2],
-						lz + box[3],
-						lx + box[4],
-						ly + box[5],
-						lz + box[6],
-					}
+					addShapeBox( lx, ly, lz, box )
 				end
 			end
 		end
 	end
-
-	local function idx( x, y, z ) return x + y * CS + z * CS2 end
 
 	local visited = {}
 	local boxes = {}
@@ -107,8 +120,75 @@ local function greedyBoxes( chunk )
 		end
 	end
 
-	for i = 1, #shapeBoxes do
-		boxes[#boxes + 1] = shapeBoxes[i]
+	local function addMergedShapeGroup( group )
+		local seen = {}
+		for z = 0, CH - 1 do
+			for y = 0, CS - 1 do
+				for x = 0, CS - 1 do
+					local i0 = idx( x, y, z )
+					if group.cells[i0] and not seen[i0] then
+						local x1 = x + 1
+						if group.fullX then
+							while x1 < CS do
+								local i = idx( x1, y, z )
+								if not group.cells[i] or seen[i] then break end
+								x1 = x1 + 1
+							end
+						end
+
+						local y1 = y + 1
+						if group.fullY then
+							while y1 < CS do
+								local ok = true
+								for xx = x, x1 - 1 do
+									local i = idx( xx, y1, z )
+									if not group.cells[i] or seen[i] then ok = false break end
+								end
+								if not ok then break end
+								y1 = y1 + 1
+							end
+						end
+
+						local z1 = z + 1
+						if group.fullZ then
+							while z1 < CH do
+								local ok = true
+								for yy = y, y1 - 1 do
+									for xx = x, x1 - 1 do
+										local i = idx( xx, yy, z1 )
+										if not group.cells[i] or seen[i] then ok = false break end
+									end
+									if not ok then break end
+								end
+								if not ok then break end
+								z1 = z1 + 1
+							end
+						end
+
+						for zz = z, z1 - 1 do
+							for yy = y, y1 - 1 do
+								for xx = x, x1 - 1 do
+									seen[idx( xx, yy, zz )] = true
+								end
+							end
+						end
+
+						boxes[#boxes + 1] = {
+							x + group.fx0,
+							y + group.fy0,
+							z + group.fz0,
+							( x1 - 1 ) + group.fx1,
+							( y1 - 1 ) + group.fy1,
+							( z1 - 1 ) + group.fz1,
+						}
+					end
+				end
+			end
+		end
+	end
+
+	for _, group in pairs( shapeGroups ) do
+		addMergedShapeGroup( group )
 	end
 
 	return boxes

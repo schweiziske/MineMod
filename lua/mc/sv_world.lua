@@ -15,9 +15,10 @@ local Net = MC.Net
 local C   = MC.Config
 
 SV.BlockCount = SV.BlockCount or 0
-SV.PhysDirty  = SV.PhysDirty or {}   -- chunkKey -> true (collision needs rebuild)
+SV.PhysDirty  = SV.PhysDirty or {}   -- chunkKey -> due time (collision needs rebuild)
 SV.SyncQueue  = SV.SyncQueue or {}   -- player -> { keys = {}, i = 1, active = nil }
 SV.Dirty      = SV.Dirty or false    -- world changed since last save
+local PHYS_REBUILD_DELAY = 0.12
 
 local function syncCellsPerPart()
 	if C.SyncCells then
@@ -72,18 +73,25 @@ function SV.EnsureChunkEnt( chunk )
 end
 
 function SV.MarkPhysDirty( key )
-	SV.PhysDirty[key] = true
+	SV.PhysDirty[key] = CurTime() + PHYS_REBUILD_DELAY
 end
 
 -- debounced collision rebuild (coalesces many edits in the same frame/window)
 timer.Create( "mc_phys_rebuild", 0.05, 0, function()
 	if not next( SV.PhysDirty ) then return end
+	local now = CurTime()
+	local budget = 2
 	for key in pairs( SV.PhysDirty ) do
-		local chunk = MC.GetChunkByKey( key )
-		if chunk and IsValid( chunk.ent ) then
-			chunk.ent:RebuildPhysics()
+		local due = SV.PhysDirty[key]
+		if due == true or due <= now then
+			local chunk = MC.GetChunkByKey( key )
+			if chunk and IsValid( chunk.ent ) then
+				chunk.ent:RebuildPhysics()
+			end
+			SV.PhysDirty[key] = nil
+			budget = budget - 1
+			if budget <= 0 then break end
 		end
-		SV.PhysDirty[key] = nil
 	end
 end )
 
