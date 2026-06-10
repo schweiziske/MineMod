@@ -273,7 +273,7 @@ local function apply( bx, by, bz, id, _, orient, actor, options )
 	local chunk, created, emptied, changed = MC.SetBlockRaw( bx, by, bz, id, orient )
 	if not changed then return false end
 	local priorityPhys = options.priorityPhys
-	if priorityPhys == nil then priorityPhys = IsValid( actor ) end
+	if priorityPhys == nil then priorityPhys = false end
 
 	local delta = 0
 	if old == 0 and id ~= 0 then

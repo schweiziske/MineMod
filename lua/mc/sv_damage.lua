@@ -114,7 +114,7 @@ function SV.ApplyBlockDamage( bx, by, bz, amount, options )
 		actor = damageActor( options ),
 		fx = options.fx ~= false,
 		handlers = options.handlers,
-		priorityPhys = options.priorityPhys ~= false,
+		priorityPhys = options.priorityPhys == true,
 	} )
 	if not ok then return false, err or "remove_failed" end
 	return true, "broken", rec.damage, health
@@ -203,7 +203,7 @@ function SV.ApplyBlockExplosion( center, damage, options )
 			actor = damageActor( options ),
 			fx = options.fx ~= false,
 			handlers = options.handlers,
-			priorityPhys = options.priorityPhys ~= false,
+			priorityPhys = false,
 		} )
 		if ok then broken = broken + 1 end
 	end
