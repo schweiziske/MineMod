@@ -8,7 +8,9 @@ Garry's Mod 里的 Minecraft 风格方块系统。方块不按实体逐个生成
 - chunk 水平尺寸固定为 `16x16`，垂直 section 高度是 `32`。
 - 支持放置、破坏、使用、`/fill`、导入、保存、分片同步。
 - 提供 `MC.SV.SetBlock` / `SetBlockSpec` / `RemoveBlock` 给非玩家插件、mob、状态机写入世界。
+- 支持 GMod 武器/爆炸破坏方块；血量来自 Minecraft hardness 乘 `mc_block_health_scale`。
 - 方块表、atlas、中文名由 `_build/build_atlas.ps1` 从 `out/assets/minecraft` 生成。
+- 方块硬度/爆炸抗性由 `_build/build_block_properties.cjs` 从 `Blocks.java` 生成。
 - 生成 Lua 已拆到 `lua/mc/generated/`，避免单文件超过 64KB。
 - 不完整方块使用 Minecraft model quads 渲染，碰撞/选中使用 `MC.BlockBoxes()`。
 - `*_fence_gate` 渲染保留原模型，碰撞使用 runtime 稳定覆盖盒。
@@ -23,6 +25,7 @@ lua/mc/sh_config.lua                     尺寸、ConVar、net bit、atlas 配�
 lua/mc/sh_blocks.lua                     方块注册、状态、朝向、碰撞盒
 lua/mc/sh_voxel.lua                      方块存储、坐标换算、方块射线
 lua/mc/sv_world.lua                      服务端世界 API、放置、破坏、导入、保存、同步
+lua/mc/sv_damage.lua                     GMod 伤害破坏方块、MC 风格爆炸坑
 lua/mc/cl_net.lua                        客户端同步接收
 lua/mc/cl_render.lua                     客户端 IMesh 渲染和预测碰撞 dirty
 lua/mc/cl_ui.lua                         方块图标、选择窗口、选中框
@@ -31,6 +34,7 @@ lua/weapons/mc_placer/shared.lua         方块放置器 SWEP
 lua/weapons/gmod_tool/stools/mc_block.lua 工具枪方块工具
 lua/mc/generated/                        生成的方块、tile、中文名 Lua
 _build/build_atlas.ps1                   生成 atlas 和方块表
+_build/build_block_properties.cjs        生成 hardness/explosionResistance 表
 _tools/mc_convert_8x8_save.py            老版本 Parkour Spiral 转存工具
 _tools/mc_import_world.py                通用 Minecraft 存档导出工具
 docs/maintenance-update-guide.md         维护更新指南
@@ -43,6 +47,7 @@ docs/interface-usage.md                  接口使用介绍
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File _build\build_atlas.ps1 -McOut .\out
+node _build\build_block_properties.cjs
 ```
 
 导入 Parkour Spiral：
@@ -65,7 +70,26 @@ mc_save_diag
 ## 验证
 
 ```powershell
-npm exec --yes --package luaparse -- luaparse lua\autorun\mc_load.lua lua\mc\sh_blocks.lua lua\mc\cl_render.lua lua\mc\cl_ui.lua lua\mc\generated\sh_generated_blocks.lua lua\mc\generated\sh_generated_tiles.lua lua\mc\generated\sh_generated_lang.lua lua\mc\generated\sh_generated_blocks_part*.lua
+node _tools\test_block_properties.js
+node _tools\test_block_damage_api.js
+node _tools\test_fence_behavior.js
+node _tools\test_particle_alpha_flags.js
+node _tools\test_generated_lua_size.js
+$luaFiles = @(
+  "lua\autorun\mc_load.lua",
+  "lua\mc\sh_blocks.lua",
+  "lua\mc\sh_config.lua",
+  "lua\mc\sv_damage.lua",
+  "lua\entities\mc_chunk\init.lua",
+  "lua\mc\generated\sh_generated_block_properties.lua",
+  "lua\mc\generated\sh_generated_sound_types.lua"
+)
+$luaFiles += (Get-ChildItem "lua\mc\generated\sh_generated_block_properties_part*.lua").FullName
+$luaFiles += (Get-ChildItem "lua\mc\generated\sh_generated_sound_types_part*.lua").FullName
+foreach ($f in $luaFiles) {
+  npm exec --yes --package luaparse -- luaparse $f > $null
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 python -m py_compile _tools\mc_convert_8x8_save.py _tools\mc_import_world.py
 git diff --check
 ```

@@ -22,6 +22,19 @@ function ENT:CanProperty( ply, property )
 	if property == "unfreeze" then return false end
 end
 
+function ENT:TraceAttack( dmginfo, dir, tr )
+	if MC and MC.SV and MC.SV.HandleChunkTraceDamage then
+		MC.SV.HandleChunkTraceDamage( self, dmginfo, dir, tr )
+	end
+end
+
+function ENT:OnTakeDamage( dmginfo )
+	if MC and MC.SV and MC.SV.HandleChunkDamage then
+		MC.SV.HandleChunkDamage( self, dmginfo )
+	end
+	return 0
+end
+
 -- frozen static build: never let physics forces move / drift a chunk
 function ENT:PhysicsUpdate() end
 

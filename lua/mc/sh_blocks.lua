@@ -52,6 +52,22 @@ local function blockDisp( def )
 	return def.disp or generated[def.mcid] or generated[def.name] or FixedDisp[def.name] or ( "方块 " .. tostring( def.name or def.mcid or def.id ) )
 end
 
+local function generatedBlockProperties( name, mcid )
+	local generated = MC.GeneratedBlockProperties or {}
+	if generated[mcid] then return generated[mcid] end
+	if generated[name] then return generated[name] end
+	if string.StartWith( mcid or "", "minecraft:" ) then
+		return generated[string.sub( mcid, 11 )]
+	end
+	return nil
+end
+
+local function propertyNumber( value, fallback )
+	value = tonumber( value )
+	if value == nil then return fallback end
+	return value
+end
+
 local function normalizeBaked( baked )
 	if type( baked ) ~= "table" then return nil end
 	local out = {}
@@ -196,6 +212,7 @@ function MC.RegisterBlock( def )
 	local mcid = normalizeBlockKey( def.mcid or ( "minecraft:" .. name ) )
 	local generatedSoundTypes = MC.GeneratedBlockSoundTypes or {}
 	local generatedNoTerrainParticles = MC.GeneratedNoTerrainParticles or {}
+	local generatedProps = generatedBlockProperties( name, mcid ) or {}
 	local textures = def.textures or {}
 	local top = tileValue( textures.top or def.top, 0 )
 	local side = tileValue( textures.side or def.side, top )
@@ -218,6 +235,8 @@ function MC.RegisterBlock( def )
 		modelQuads = normalizeModelQuads( def.modelQuads ),
 		soundType = def.soundType or generatedSoundTypes[mcid] or generatedSoundTypes[name] or "STONE",
 		spawnTerrainParticles = def.spawnTerrainParticles ~= false and generatedNoTerrainParticles[mcid] ~= true,
+		hardness = propertyNumber( def.hardness, propertyNumber( generatedProps.hardness, 1 ) ),
+		explosionResistance = propertyNumber( def.explosionResistance, propertyNumber( generatedProps.explosionResistance, propertyNumber( generatedProps.hardness, 1 ) ) ),
 		textures = { top = top, side = side, bottom = bottom, front = front, particle = particle },
 		baked = normalizeBaked( def.baked ),
 		stateRule = def.stateRule or def.orient,
@@ -398,6 +417,20 @@ end
 
 function MC.IsValidBlock( id )
 	return id ~= nil and MC.Blocks[id] ~= nil
+end
+
+function MC.BlockHardness( id )
+	local b = MC.Blocks[tonumber( id ) or -1]
+	if not b then return 1 end
+	return tonumber( b.hardness ) or 1
+end
+
+function MC.BlockExplosionResistance( id )
+	local b = MC.Blocks[tonumber( id ) or -1]
+	if not b then return 1 end
+	local resistance = tonumber( b.explosionResistance )
+	if resistance ~= nil then return resistance end
+	return tonumber( b.hardness ) or 1
 end
 
 function MC.ResolveBlock( input )
