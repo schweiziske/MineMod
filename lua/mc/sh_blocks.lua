@@ -219,6 +219,7 @@ function MC.RegisterBlock( def )
 	local bottom = tileValue( textures.bottom or def.bottom, top )
 	local front = textures.front and tileValue( textures.front, side ) or nil
 	local particle = tileValue( textures.particle or def.particle, side )
+	local icon = textures.icon and tileValue( textures.icon, side ) or nil
 	local handler = def.handlers or ( def.handler and MC.BlockHandlers[def.handler] ) or nil
 	if handler and handler.OnTick then MC.HasBlockTickHandlers = true end
 
@@ -237,7 +238,7 @@ function MC.RegisterBlock( def )
 		spawnTerrainParticles = def.spawnTerrainParticles ~= false and generatedNoTerrainParticles[mcid] ~= true,
 		hardness = propertyNumber( def.hardness, propertyNumber( generatedProps.hardness, 1 ) ),
 		explosionResistance = propertyNumber( def.explosionResistance, propertyNumber( generatedProps.explosionResistance, propertyNumber( generatedProps.hardness, 1 ) ) ),
-		textures = { top = top, side = side, bottom = bottom, front = front, particle = particle },
+		textures = { top = top, side = side, bottom = bottom, front = front, particle = particle, icon = icon },
 		baked = normalizeBaked( def.baked ),
 		stateRule = def.stateRule or def.orient,
 		placeRule = def.placeRule or def.place,
@@ -251,6 +252,7 @@ function MC.RegisterBlock( def )
 		bottom = bottom,
 		front = front,
 		particle = particle,
+		icon = icon,
 		orient = def.stateRule or def.orient,
 		place = def.placeRule or def.place,
 	}
@@ -851,6 +853,7 @@ end
 function MC.BlockIconTile( id )
 	local b = MC.Blocks[id]
 	if not b then return 0 end
+	if b.icon then return b.icon end
 	if b.name == "furnace" then return T.furnace_front end
 	if b.name == "dispenser" then return T.dispenser_front end
 	if b.name == "observer" then return T.observer_front end
