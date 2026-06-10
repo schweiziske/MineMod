@@ -171,6 +171,20 @@ local function broadcastSet( bx, by, bz, id, orient )
 	net.Broadcast()
 end
 
+-- a player-predicted edit got rejected: push the authoritative cell state back
+-- to that player right away instead of waiting for the client's prediction
+-- rollback timer (the client's mc_set receiver overwrites the misprediction)
+function SV.SyncCell( ply, bx, by, bz )
+	if not IsValid( ply ) then return end
+	net.Start( "mc_set" )
+		net.WriteInt( bx, Net.COORD_BITS )
+		net.WriteInt( by, Net.COORD_BITS )
+		net.WriteInt( bz, Net.COORD_BITS )
+		net.WriteUInt( MC.GetBlock( bx, by, bz ), Net.ID_BITS )
+		net.WriteUInt( MC.GetBlockOrient( bx, by, bz ) or 0, Net.ORIENT_BITS )
+	net.Send( ply )
+end
+
 local function broadcastFx( kind, bx, by, bz, id, orient )
 	if #player.GetAll() == 0 then return end
 	orient = MC.NormalizeOrient( id, orient )

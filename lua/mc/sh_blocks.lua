@@ -163,10 +163,28 @@ MC.BlockHandlers.furnace = MC.BlockHandlers.furnace or {
 	end,
 }
 
+-- the generator's name-based solid heuristic misfires on some families (its
+-- 'bamboo' plant pattern catches the whole bamboo wood set), so force the
+-- blocks that must collide. fences/gates/walls/panes always need collision.
+local ForceSolidNames = {
+	bamboo_planks = true,
+	bamboo_mosaic = true,
+	bamboo_block = true,
+	stripped_bamboo_block = true,
+	bamboo_stairs = true,
+	bamboo_slab = true,
+	bamboo_mosaic_stairs = true,
+	bamboo_mosaic_slab = true,
+}
+
 local function shouldForceSolid( name )
 	return name == "iron_bars"
+		or ForceSolidNames[name] == true
 		or string.find( name, "_bars$", 1, false ) ~= nil
 		or string.find( name, "_pane$", 1, false ) ~= nil
+		or string.find( name, "_fence$", 1, false ) ~= nil
+		or string.find( name, "_fence_gate$", 1, false ) ~= nil
+		or string.find( name, "_wall$", 1, false ) ~= nil
 end
 
 function MC.RegisterBlock( def )

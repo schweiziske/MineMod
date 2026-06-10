@@ -75,15 +75,51 @@ function MC.CurrentReach()
 	return reach
 end
 
+-- prediction-side mirrors of the server's SV.Place/SV.Break checks (sv_world):
+-- the relevant ConVars are FCVAR_REPLICATED, so both realms see the same values
+local function previewCanEdit( ply )
+	local cv = GetConVar( "mc_admin_only" )
+	if cv and cv:GetBool() and not ply:IsAdmin() then return false end
+	return true
+end
+
+local function previewWorldBoundsOK( bx, by )
+	local cv = GetConVar( "mc_world_limit" )
+	if not cv then return true end
+	local protoMax = bit.lshift( 1, MC.Net.COORD_BITS - 1 ) - 1
+	local lim = math.min( cv:GetInt(), protoMax )
+	return math.abs( bx ) <= lim and math.abs( by ) <= lim
+end
+
+local function previewWouldTrapPlayer( bx, by, bz )
+	local mn = MC.CellWorldMin( bx, by, bz )
+	local mxx, mxy, mxz = mn.x + BS, mn.y + BS, mn.z + BS
+	for _, p in ipairs( player.GetAll() ) do
+		if p:Alive() then
+			local pmn, pmx = p:WorldSpaceAABB()
+			if mn.x < pmx.x and mxx > pmn.x
+			and mn.y < pmx.y and mxy > pmn.y
+			and mn.z < pmx.z and mxz > pmn.z then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 function MC.CanPreviewBreak( ply, bx, by, bz )
 	if not IsValid( ply ) then return false end
 	return MC.GetBlock( bx, by, bz ) ~= 0
+		and previewCanEdit( ply )
 		and MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, MC.CurrentReach() )
 end
 
 function MC.CanPreviewPlace( ply, bx, by, bz )
 	if not IsValid( ply ) then return false end
 	return MC.GetBlock( bx, by, bz ) == 0
+		and previewCanEdit( ply )
+		and previewWorldBoundsOK( bx, by )
+		and not previewWouldTrapPlayer( bx, by, bz )
 		and MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, MC.CurrentReach() )
 end
 
