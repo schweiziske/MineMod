@@ -13,6 +13,7 @@ local SHARED = {
 	"mc/sh_config.lua",
 	"mc/generated/sh_generated_tiles.lua",
 	"mc/generated/sh_generated_blocks.lua",
+	"mc/generated/sh_generated_block_properties.lua",
 	"mc/generated/sh_generated_sound_types.lua",
 	"mc/generated/sh_generated_lang.lua",
 	"mc/sh_blocks.lua",
@@ -21,6 +22,7 @@ local SHARED = {
 }
 local SERVER_FILES = {
 	"mc/sv_world.lua",
+	"mc/sv_damage.lua",
 	"mc/sv_player.lua",
 }
 local CLIENT_FILES = {
