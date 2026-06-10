@@ -165,6 +165,7 @@ MC.BlockHandlers.furnace = MC.BlockHandlers.furnace or {
 
 local function shouldForceSolid( name )
 	return name == "iron_bars"
+		or string.find( name, "_bars$", 1, false ) ~= nil
 		or string.find( name, "_pane$", 1, false ) ~= nil
 end
 
@@ -929,8 +930,13 @@ local function isWallName( name )
 	return name and string.find( name, "_wall$", 1, false ) ~= nil
 end
 
+-- pane-style blocks: glass panes plus the bar families (iron_bars and the
+-- copper_bars variants all end in _bars)
 local function isPaneName( name )
-	return name == "iron_bars" or ( name and string.find( name, "_pane$", 1, false ) ~= nil )
+	if not name then return false end
+	return name == "iron_bars"
+		or string.find( name, "_pane$", 1, false ) ~= nil
+		or string.find( name, "_bars$", 1, false ) ~= nil
 end
 
 function MC.IsFenceBlock( id )
@@ -941,6 +947,27 @@ end
 function MC.IsPaneBlock( id )
 	local b = MC.Blocks[id]
 	return b and isPaneName( b.name ) or false
+end
+
+-- vanilla translucent render layer: real alpha blending instead of alpha cutout.
+-- exact names only ("ice" must not catch packed_ice/blue_ice, which are opaque).
+local TranslucentNames = {
+	tinted_glass = true,
+	ice = true,
+	frosted_ice = true,
+	slime_block = true,
+	honey_block = true,
+}
+
+local function isTranslucentName( name )
+	if not name then return false end
+	if TranslucentNames[name] then return true end
+	return string.find( name, "stained_glass", 1, true ) ~= nil
+end
+
+function MC.IsTranslucentBlock( id )
+	local b = MC.Blocks[id]
+	return b ~= nil and b.transparent == true and isTranslucentName( b.name )
 end
 
 local function fenceConnectsToBlock( id, orient )
@@ -959,28 +986,30 @@ local function fenceConnectsToCell( bx, by, bz )
 	return fenceConnectsToBlock( id, orient )
 end
 
+-- connection boxes carry part/dir tags so the renderer can pick per-face
+-- textures; physics/outline consumers only read the numeric bounds.
 local function fenceBoxes( bx, by, bz )
 	local boxes = {
-		{ 0.375, 0.375, 0, 0.625, 0.625, 1 },
+		{ 0.375, 0.375, 0, 0.625, 0.625, 1, part = "post" },
 	}
 
 	if bx == nil or by == nil or bz == nil then return boxes end
 
 	if fenceConnectsToCell( bx, by - 1, bz ) then
-		boxes[#boxes + 1] = { 0.4375, 0, 0.375, 0.5625, 0.5625, 0.5625 }
-		boxes[#boxes + 1] = { 0.4375, 0, 0.75, 0.5625, 0.5625, 0.9375 }
+		boxes[#boxes + 1] = { 0.4375, 0, 0.375, 0.5625, 0.5625, 0.5625, part = "arm", dir = "yn" }
+		boxes[#boxes + 1] = { 0.4375, 0, 0.75, 0.5625, 0.5625, 0.9375, part = "arm", dir = "yn" }
 	end
 	if fenceConnectsToCell( bx, by + 1, bz ) then
-		boxes[#boxes + 1] = { 0.4375, 0.4375, 0.375, 0.5625, 1, 0.5625 }
-		boxes[#boxes + 1] = { 0.4375, 0.4375, 0.75, 0.5625, 1, 0.9375 }
+		boxes[#boxes + 1] = { 0.4375, 0.4375, 0.375, 0.5625, 1, 0.5625, part = "arm", dir = "yp" }
+		boxes[#boxes + 1] = { 0.4375, 0.4375, 0.75, 0.5625, 1, 0.9375, part = "arm", dir = "yp" }
 	end
 	if fenceConnectsToCell( bx - 1, by, bz ) then
-		boxes[#boxes + 1] = { 0, 0.4375, 0.375, 0.5625, 0.5625, 0.5625 }
-		boxes[#boxes + 1] = { 0, 0.4375, 0.75, 0.5625, 0.5625, 0.9375 }
+		boxes[#boxes + 1] = { 0, 0.4375, 0.375, 0.5625, 0.5625, 0.5625, part = "arm", dir = "xn" }
+		boxes[#boxes + 1] = { 0, 0.4375, 0.75, 0.5625, 0.5625, 0.9375, part = "arm", dir = "xn" }
 	end
 	if fenceConnectsToCell( bx + 1, by, bz ) then
-		boxes[#boxes + 1] = { 0.4375, 0.4375, 0.375, 1, 0.5625, 0.5625 }
-		boxes[#boxes + 1] = { 0.4375, 0.4375, 0.75, 1, 0.5625, 0.9375 }
+		boxes[#boxes + 1] = { 0.4375, 0.4375, 0.375, 1, 0.5625, 0.5625, part = "arm", dir = "xp" }
+		boxes[#boxes + 1] = { 0.4375, 0.4375, 0.75, 1, 0.5625, 0.9375, part = "arm", dir = "xp" }
 	end
 
 	return boxes
@@ -1004,22 +1033,22 @@ end
 
 local function paneBoxes( bx, by, bz )
 	local boxes = {
-		{ 0.4375, 0.4375, 0, 0.5625, 0.5625, 1 },
+		{ 0.4375, 0.4375, 0, 0.5625, 0.5625, 1, part = "post" },
 	}
 
 	if bx == nil or by == nil or bz == nil then return boxes end
 
 	if paneConnectsToCell( bx, by - 1, bz ) then
-		boxes[#boxes + 1] = { 0.4375, 0, 0, 0.5625, 0.4375, 1 }
+		boxes[#boxes + 1] = { 0.4375, 0, 0, 0.5625, 0.4375, 1, part = "arm", dir = "yn" }
 	end
 	if paneConnectsToCell( bx, by + 1, bz ) then
-		boxes[#boxes + 1] = { 0.4375, 0.5625, 0, 0.5625, 1, 1 }
+		boxes[#boxes + 1] = { 0.4375, 0.5625, 0, 0.5625, 1, 1, part = "arm", dir = "yp" }
 	end
 	if paneConnectsToCell( bx - 1, by, bz ) then
-		boxes[#boxes + 1] = { 0, 0.4375, 0, 0.4375, 0.5625, 1 }
+		boxes[#boxes + 1] = { 0, 0.4375, 0, 0.4375, 0.5625, 1, part = "arm", dir = "xn" }
 	end
 	if paneConnectsToCell( bx + 1, by, bz ) then
-		boxes[#boxes + 1] = { 0.5625, 0.4375, 0, 1, 0.5625, 1 }
+		boxes[#boxes + 1] = { 0.5625, 0.4375, 0, 1, 0.5625, 1, part = "arm", dir = "xp" }
 	end
 
 	return boxes
@@ -1053,6 +1082,32 @@ function MC.BlockBoxes( id, orient, bx, by, bz )
 		return modelBoxes( b, orient )
 	end
 	return FullBlockBox
+end
+
+-- collision wants fewer, fatter convexes than rendering: vanilla fence
+-- collision is a solid wall per direction (the twin rails are visual only),
+-- and Source's multiconvex builder is unhappy with many thin slivers.
+function MC.BlockCollisionBoxes( id, orient, bx, by, bz )
+	local b = MC.Blocks[id]
+	if b and isFenceName( b.name ) and bx ~= nil and by ~= nil and bz ~= nil then
+		local boxes = {
+			{ 0.375, 0.375, 0, 0.625, 0.625, 1 },
+		}
+		if fenceConnectsToCell( bx, by - 1, bz ) then
+			boxes[#boxes + 1] = { 0.4375, 0, 0.375, 0.5625, 0.5625, 0.9375 }
+		end
+		if fenceConnectsToCell( bx, by + 1, bz ) then
+			boxes[#boxes + 1] = { 0.4375, 0.4375, 0.375, 0.5625, 1, 0.9375 }
+		end
+		if fenceConnectsToCell( bx - 1, by, bz ) then
+			boxes[#boxes + 1] = { 0, 0.4375, 0.375, 0.5625, 0.5625, 0.9375 }
+		end
+		if fenceConnectsToCell( bx + 1, by, bz ) then
+			boxes[#boxes + 1] = { 0.4375, 0.4375, 0.375, 1, 0.5625, 0.9375 }
+		end
+		return boxes
+	end
+	return MC.BlockBoxes( id, orient, bx, by, bz )
 end
 
 function MC.BlockIsFullCube( id, orient )

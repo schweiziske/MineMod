@@ -19,7 +19,7 @@ function ENT:Initialize()
 
 	MC.ChunkEnts[ self.ChunkKey ] = self
 	MC.MarkChunkPhysDirty( self.ChunkKey )      -- build collision once data is present
-	if not MC.Meshes[ self.ChunkKey ] then
+	if not MC.Meshes[ self.ChunkKey ] and not ( MC.MeshesTrans and MC.MeshesTrans[ self.ChunkKey ] ) then
 		MC.MarkChunkDirty( self.ChunkKey )       -- build mesh if data arrived first
 	end
 end
@@ -27,7 +27,8 @@ end
 function ENT:Draw()
 end
 
--- alpha cutout draws in the opaque pass; nothing translucent to do
+-- chunk meshes draw via the PostDrawOpaqueRenderables / PostDrawTranslucentRenderables
+-- hooks in cl_render.lua; the entity itself draws nothing
 function ENT:DrawTranslucent() end
 
 function ENT:OnRemove()
