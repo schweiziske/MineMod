@@ -271,6 +271,24 @@ net.Receive( "mc_set", function()
 	end
 end )
 
+net.Receive( "mc_set_bulk", function()
+	local count = net.ReadUInt( Net.COUNT_BITS )
+	for _ = 1, count do
+		local bx = net.ReadInt( Net.COORD_BITS )
+		local by = net.ReadInt( Net.COORD_BITS )
+		local bz = net.ReadInt( Net.COORD_BITS )
+		local id = net.ReadUInt( Net.ID_BITS )
+		local orient = net.ReadUInt( Net.ORIENT_BITS )
+
+		MC.ConfirmPrediction( bx, by, bz, id, orient )
+		local _, _, _, changed = MC.SetBlockRaw( bx, by, bz, id, orient )
+		if changed then
+			MC.MarkDirty( bx, by, bz )
+			MC.MarkCellPhysNeighbours( bx, by, bz )
+		end
+	end
+end )
+
 net.Receive( "mc_clear", function()
 	MC.FreeAllMeshes()
 	for key, e in pairs( MC.ChunkEnts or {} ) do

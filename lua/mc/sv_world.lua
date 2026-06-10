@@ -14,6 +14,9 @@ local SV  = MC.SV
 local Net = MC.Net
 local C   = MC.Config
 
+local BULK_SET_CELLS_PER_MESSAGE = 1024
+local BULK_BREAK_FX_LIMIT = 64
+
 SV.BlockCount = SV.BlockCount or 0
 SV.PhysDirty  = SV.PhysDirty or {}   -- chunkKey -> due time (collision needs rebuild)
 SV.PhysDirtyPriority = SV.PhysDirtyPriority or {} -- player edits should not wait behind bulk rebuilds
@@ -203,6 +206,28 @@ local function broadcastSet( bx, by, bz, id, orient )
 	net.Broadcast()
 end
 
+local function broadcastSetBulk( changes )
+	if #changes == 0 or #player.GetAll() == 0 then return end
+	local i = 1
+	while i <= #changes do
+		local count = math.min( BULK_SET_CELLS_PER_MESSAGE, #changes - i + 1 )
+		net.Start( "mc_set_bulk" )
+			net.WriteUInt( count, Net.COUNT_BITS )
+			for j = i, i + count - 1 do
+				local cell = changes[j]
+				local id = math.floor( tonumber( cell.id ) or 0 )
+				local orient = MC.NormalizeOrient( id, cell.orient )
+				net.WriteInt( cell.bx, Net.COORD_BITS )
+				net.WriteInt( cell.by, Net.COORD_BITS )
+				net.WriteInt( cell.bz, Net.COORD_BITS )
+				net.WriteUInt( id, Net.ID_BITS )
+				net.WriteUInt( orient or 0, Net.ORIENT_BITS )
+			end
+		net.Broadcast()
+		i = i + count
+	end
+end
+
 -- a player-predicted edit got rejected: push the authoritative cell state back
 -- to that player right away instead of waiting for the client's prediction
 -- rollback timer (the client's mc_set receiver overwrites the misprediction)
@@ -251,6 +276,19 @@ local function markNeighbourShapePhysDirty( bx, by, bz, priority )
 		end
 	end
 
+	mark( bx + 1, by, bz )
+	mark( bx - 1, by, bz )
+	mark( bx, by + 1, bz )
+	mark( bx, by - 1, bz )
+end
+
+local function collectCellPhysDirty( dirty, bx, by, bz )
+	local function mark( x, y, z )
+		local cx, cy, cz = MC.CellToChunk( x, y, z )
+		dirty[MC.ChunkKey( cx, cy, cz )] = true
+	end
+
+	mark( bx, by, bz )
 	mark( bx + 1, by, bz )
 	mark( bx - 1, by, bz )
 	mark( bx, by + 1, bz )
@@ -375,6 +413,70 @@ end
 
 function SV.RemoveBlock( bx, by, bz, options )
 	return SV.SetBlock( bx, by, bz, 0, 0, options )
+end
+
+function SV.RemoveBlocksBulk( cells, options )
+	options = normalizeWriteOptions( options )
+	if not istable( cells ) or #cells == 0 then return 0 end
+
+	local actor = options.actor
+	local priorityPhys = options.priorityPhys == true
+	local shouldFx = options.fx
+	if shouldFx == nil then shouldFx = IsValid( actor ) end
+	local fxLimit = options.fxLimit
+	if fxLimit == nil then fxLimit = BULK_BREAK_FX_LIMIT end
+	fxLimit = math.max( 0, math.floor( tonumber( fxLimit ) or 0 ) )
+
+	local changes = {}
+	local dirty = {}
+	local removed = 0
+	local fxSent = 0
+
+	for i = 1, #cells do
+		local cell = cells[i]
+		local bx = math.floor( tonumber( cell.bx ) or 0 )
+		local by = math.floor( tonumber( cell.by ) or 0 )
+		local bz = math.floor( tonumber( cell.bz ) or 0 )
+		local old = MC.GetBlock( bx, by, bz )
+		if old ~= 0 then
+			local oldOrient = MC.GetBlockOrient( bx, by, bz )
+			local chunk, _, emptied, changed = MC.SetBlockRaw( bx, by, bz, 0, 0 )
+			if changed then
+				removed = removed + 1
+				changes[#changes + 1] = { bx = bx, by = by, bz = bz, id = 0, orient = 0 }
+				collectCellPhysDirty( dirty, bx, by, bz )
+
+				if emptied and chunk then
+					SV.PhysDirty[chunk.key] = nil
+					SV.PhysDirtyPriority[chunk.key] = nil
+					if IsValid( chunk.ent ) then chunk.ent:Remove() end
+				end
+
+				if shouldFx and fxSent < fxLimit then
+					broadcastFx( 2, bx, by, bz, old, oldOrient )
+					fxSent = fxSent + 1
+				end
+				if options.handlers ~= false then
+					callBlockHandler( old, "OnBreak", actor, bx, by, bz, oldOrient )
+				end
+			end
+		end
+	end
+
+	if removed == 0 then return 0 end
+
+	SV.BlockCount = math.max( 0, SV.BlockCount - removed )
+	for key in pairs( dirty ) do
+		local c = MC.GetChunkByKey( key )
+		if c and c.count and c.count > 0 then
+			SV.EnsureChunkEnt( c )
+			SV.MarkPhysDirty( c.key, priorityPhys )
+		end
+	end
+
+	broadcastSetBulk( changes )
+	SV.Dirty = true
+	return removed
 end
 
 function SV.Use( ply, bx, by, bz )
