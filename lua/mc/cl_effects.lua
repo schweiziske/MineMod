@@ -33,15 +33,20 @@ local ParticleUvSteps = 8
 local MaxDestroyParticles = 64
 
 local function tileNameForBlock( id )
-	if not MC.BlockIconTile or not MC.TileNames then return nil end
-	local tile = MC.BlockIconTile( id )
+	if not MC.TileNames then return nil end
+	local tile
+	if MC.BlockParticleTile then
+		tile = MC.BlockParticleTile( id )
+	elseif MC.BlockIconTile then
+		tile = MC.BlockIconTile( id )
+	end
 	local name = MC.TileNames[tile]
 	if not name or name == "" then return nil end
 	return name
 end
 
 local function particleMaterialForTile( tileName )
-	if not tileName then return "particle/particle_noisesphere" end
+	if not tileName then return Material( "particle/particle_noisesphere" ) end
 
 	local col = math.random( 0, ParticleUvSteps - 1 )
 	local row = math.random( 0, ParticleUvSteps - 1 )
@@ -126,12 +131,56 @@ local function addDestroyParticleSample( samples, base, box, bs, xx, yy, zz, cou
 	}
 end
 
+local function expandParticleAxis( minv, maxv )
+	local minSize = 0.0625
+	if maxv - minv >= minSize then return minv, maxv end
+
+	local center = ( minv + maxv ) * 0.5
+	minv = math.Clamp( center - minSize * 0.5, 0, 1 )
+	maxv = math.Clamp( center + minSize * 0.5, 0, 1 )
+	if maxv - minv >= minSize then return minv, maxv end
+	if minv <= 0 then return 0, minSize end
+	return 1 - minSize, 1
+end
+
+local function modelParticleBoxes( b )
+	if not b or not b.modelQuads then return nil end
+	if b._particleBoxes then return b._particleBoxes end
+
+	local minX, minY, minZ = 1, 1, 1
+	local maxX, maxY, maxZ = 0, 0, 0
+	for _, quad in ipairs( b.modelQuads ) do
+		for _, v in ipairs( quad.verts or {} ) do
+			local x = math.Clamp( tonumber( v.x ) or 0, 0, 1 )
+			local y = math.Clamp( tonumber( v.y ) or 0, 0, 1 )
+			local z = math.Clamp( tonumber( v.z ) or 0, 0, 1 )
+			if x < minX then minX = x end
+			if y < minY then minY = y end
+			if z < minZ then minZ = z end
+			if x > maxX then maxX = x end
+			if y > maxY then maxY = y end
+			if z > maxZ then maxZ = z end
+		end
+	end
+
+	if maxX <= minX and maxY <= minY and maxZ <= minZ then return nil end
+	minX, maxX = expandParticleAxis( minX, maxX )
+	minY, maxY = expandParticleAxis( minY, maxY )
+	minZ, maxZ = expandParticleAxis( minZ, maxZ )
+
+	b._particleBoxes = { { minX, minY, minZ, maxX, maxY, maxZ } }
+	return b._particleBoxes
+end
+
 local function spawnBreakParticles( id, orient, bx, by, bz )
 	local b = MC.Blocks and MC.Blocks[id]
 	if b and b.spawnTerrainParticles == false then return end
 	if not MC.BlockBoxes then return end
 
 	local boxes = MC.BlockBoxes( id, orient, bx, by, bz )
+	if ( not boxes or #boxes == 0 ) and b and b.modelQuads then
+		boxes = modelParticleBoxes( b )
+	end
 	if not boxes or #boxes == 0 then return end
 
 	local base = MC.CellWorldMin( bx, by, bz )

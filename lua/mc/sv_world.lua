@@ -16,6 +16,7 @@ local C   = MC.Config
 
 SV.BlockCount = SV.BlockCount or 0
 SV.PhysDirty  = SV.PhysDirty or {}   -- chunkKey -> due time (collision needs rebuild)
+SV.PhysDirtyPriority = SV.PhysDirtyPriority or {} -- player edits should not wait behind bulk rebuilds
 SV.SyncQueue  = SV.SyncQueue or {}   -- player -> { keys = {}, i = 1, active = nil }
 SV.Dirty      = SV.Dirty or false    -- world changed since last save
 local PHYS_REBUILD_DELAY = 0.12
@@ -72,23 +73,46 @@ function SV.EnsureChunkEnt( chunk )
 	return e
 end
 
-function SV.MarkPhysDirty( key )
+function SV.MarkPhysDirty( key, priority )
+	if not key then return end
+	if priority then
+		SV.PhysDirty[key] = true
+		SV.PhysDirtyPriority[key] = true
+		return
+	end
+	if SV.PhysDirty[key] == true then return end
 	SV.PhysDirty[key] = CurTime() + PHYS_REBUILD_DELAY
+end
+
+local function rebuildPhysKey( key )
+	local chunk = MC.GetChunkByKey( key )
+	if chunk and IsValid( chunk.ent ) then
+		chunk.ent:RebuildPhysics()
+	end
+	SV.PhysDirty[key] = nil
+	SV.PhysDirtyPriority[key] = nil
 end
 
 -- debounced collision rebuild (coalesces many edits in the same frame/window)
 timer.Create( "mc_phys_rebuild", 0.05, 0, function()
 	if not next( SV.PhysDirty ) then return end
 	local now = CurTime()
+	local priorityBudget = 8
+	for key in pairs( SV.PhysDirtyPriority ) do
+		if SV.PhysDirty[key] then
+			rebuildPhysKey( key )
+			priorityBudget = priorityBudget - 1
+			if priorityBudget <= 0 then break end
+		else
+			SV.PhysDirtyPriority[key] = nil
+		end
+	end
+
 	local budget = 2
 	for key in pairs( SV.PhysDirty ) do
 		local due = SV.PhysDirty[key]
-		if due == true or due <= now then
-			local chunk = MC.GetChunkByKey( key )
-			if chunk and IsValid( chunk.ent ) then
-				chunk.ent:RebuildPhysics()
-			end
-			SV.PhysDirty[key] = nil
+		if not SV.PhysDirtyPriority[key] and ( due == true or due <= now ) then
+			rebuildPhysKey( key )
 			budget = budget - 1
 			if budget <= 0 then break end
 		end
@@ -213,13 +237,17 @@ local function callBlockHandler( id, name, ... )
 	return fn( ... )
 end
 
-local function markNeighbourShapePhysDirty( bx, by, bz )
+local function markNeighbourShapePhysDirty( bx, by, bz, priority )
+	local seen = {}
 	local function mark( x, y, z )
 		local cx, cy, cz = MC.CellToChunk( x, y, z )
-		local c = MC.GetChunkByKey( MC.ChunkKey( cx, cy, cz ) )
+		local key = MC.ChunkKey( cx, cy, cz )
+		if seen[key] then return end
+		seen[key] = true
+		local c = MC.GetChunkByKey( key )
 		if c and c.count and c.count > 0 then
 			SV.EnsureChunkEnt( c )
-			SV.MarkPhysDirty( c.key )
+			SV.MarkPhysDirty( c.key, priority )
 		end
 	end
 
@@ -244,6 +272,8 @@ local function apply( bx, by, bz, id, _, orient, actor, options )
 	orient = MC.NormalizeOrient( id, orient )
 	local chunk, created, emptied, changed = MC.SetBlockRaw( bx, by, bz, id, orient )
 	if not changed then return false end
+	local priorityPhys = options.priorityPhys
+	if priorityPhys == nil then priorityPhys = IsValid( actor ) end
 
 	local delta = 0
 	if old == 0 and id ~= 0 then
@@ -255,16 +285,17 @@ local function apply( bx, by, bz, id, _, orient, actor, options )
 
 	if id ~= 0 then
 		SV.EnsureChunkEnt( chunk )
-		SV.MarkPhysDirty( chunk.key )
+		SV.MarkPhysDirty( chunk.key, priorityPhys )
 	else
 		if emptied then
 			SV.PhysDirty[chunk.key] = nil
+			SV.PhysDirtyPriority[chunk.key] = nil
 			if IsValid( chunk.ent ) then chunk.ent:Remove() end
 		else
-			SV.MarkPhysDirty( chunk.key )
+			SV.MarkPhysDirty( chunk.key, priorityPhys )
 		end
 	end
-	markNeighbourShapePhysDirty( bx, by, bz )
+	markNeighbourShapePhysDirty( bx, by, bz, priorityPhys )
 
 	broadcastSet( bx, by, bz, id, orient )
 	local shouldFx = options.fx
@@ -330,6 +361,7 @@ function SV.SetBlock( bx, by, bz, id, orient, options )
 	local changed = apply( bx, by, bz, id, 0, orient, options.actor, {
 		fx = options.fx ~= false,
 		handlers = options.handlers,
+		priorityPhys = options.priorityPhys,
 	} )
 	if not changed then return false, "unchanged" end
 	return true
@@ -486,6 +518,7 @@ local function clearWorldNoNet()
 	MC.World = {}
 	SV.BlockCount = 0
 	SV.PhysDirty = {}
+	SV.PhysDirtyPriority = {}
 	SV.SyncQueue = {}
 end
 
@@ -1150,6 +1183,7 @@ concommand.Add( "mc_clear", function( ply )
 	MC.World = {}
 	SV.BlockCount = 0
 	SV.PhysDirty = {}
+	SV.PhysDirtyPriority = {}
 	SV.Dirty = true
 	net.Start( "mc_clear" ) net.Broadcast()
 	MsgN( "[MC] world cleared" )

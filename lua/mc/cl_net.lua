@@ -51,10 +51,14 @@ local function markNeighbours( cx, cy, cz )
 	MC.MarkChunkDirty( MC.ChunkKey( cx, cy, cz - 1 ) )
 end
 
-function MC.MarkCellPhysNeighbours( bx, by, bz )
+function MC.MarkCellPhysNeighbours( bx, by, bz, priority )
+	local seen = {}
 	local function mark( x, y, z )
 		local cx, cy, cz = MC.CellToChunk( x, y, z )
-		MC.MarkChunkPhysDirty( MC.ChunkKey( cx, cy, cz ) )
+		local key = MC.ChunkKey( cx, cy, cz )
+		if seen[key] then return end
+		seen[key] = true
+		MC.MarkChunkPhysDirty( key, priority )
 	end
 
 	mark( bx, by, bz )
@@ -72,7 +76,7 @@ end
 
 local function markPredictedCellDirty( bx, by, bz )
 	MC.MarkDirty( bx, by, bz )
-	MC.MarkCellPhysNeighbours( bx, by, bz )
+	MC.MarkCellPhysNeighbours( bx, by, bz, true )
 end
 
 function MC.PredictSetBlock( bx, by, bz, id, orient )
@@ -133,9 +137,11 @@ end
 
 function MC.ConfirmPrediction( bx, by, bz, id, orient )
 	local key = predictionKey( bx, by, bz )
+	local hadPrediction = MC.PendingPredictions[key] ~= nil
 	if MC.PendingPredictions[key] then
 		MC.PendingPredictions[key] = nil
 	end
+	return hadPrediction
 end
 
 local function rollbackExpiredPredictions()
@@ -257,11 +263,11 @@ net.Receive( "mc_set", function()
 	local id = net.ReadUInt( Net.ID_BITS )
 	local orient = net.ReadUInt( Net.ORIENT_BITS )
 
-	MC.ConfirmPrediction( bx, by, bz, id, orient )
+	local predicted = MC.ConfirmPrediction( bx, by, bz, id, orient )
 	local _, _, _, changed = MC.SetBlockRaw( bx, by, bz, id, orient )
 	if changed then
 		MC.MarkDirty( bx, by, bz )
-		MC.MarkCellPhysNeighbours( bx, by, bz )
+		MC.MarkCellPhysNeighbours( bx, by, bz, predicted )
 	end
 end )
 
@@ -275,6 +281,7 @@ net.Receive( "mc_clear", function()
 	MC.World = {}
 	MC.MeshDirty = {}
 	MC.PhysDirty = {}
+	MC.PhysDirtyPriority = {}
 	MC.PendingFull = {}
 	MC.PendingPredictions = {}
 	MC.SyncProgress = { expected = 0, received = 0, chunks = 0, doneChunks = 0, active = false, lastUpdate = CurTime() }

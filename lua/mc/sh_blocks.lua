@@ -201,6 +201,7 @@ function MC.RegisterBlock( def )
 	local side = tileValue( textures.side or def.side, top )
 	local bottom = tileValue( textures.bottom or def.bottom, top )
 	local front = textures.front and tileValue( textures.front, side ) or nil
+	local particle = tileValue( textures.particle or def.particle, side )
 	local handler = def.handlers or ( def.handler and MC.BlockHandlers[def.handler] ) or nil
 	if handler and handler.OnTick then MC.HasBlockTickHandlers = true end
 
@@ -217,7 +218,7 @@ function MC.RegisterBlock( def )
 		modelQuads = normalizeModelQuads( def.modelQuads ),
 		soundType = def.soundType or generatedSoundTypes[mcid] or generatedSoundTypes[name] or "STONE",
 		spawnTerrainParticles = def.spawnTerrainParticles ~= false and generatedNoTerrainParticles[mcid] ~= true,
-		textures = { top = top, side = side, bottom = bottom, front = front },
+		textures = { top = top, side = side, bottom = bottom, front = front, particle = particle },
 		baked = normalizeBaked( def.baked ),
 		stateRule = def.stateRule or def.orient,
 		placeRule = def.placeRule or def.place,
@@ -230,6 +231,7 @@ function MC.RegisterBlock( def )
 		side = side,
 		bottom = bottom,
 		front = front,
+		particle = particle,
 		orient = def.stateRule or def.orient,
 		place = def.placeRule or def.place,
 	}
@@ -820,6 +822,22 @@ function MC.BlockIconTile( id )
 	if b.name == "dispenser" then return T.dispenser_front end
 	if b.name == "observer" then return T.observer_front end
 	return b.side
+end
+
+local function paneParticleTile( b )
+	if not b or not b.name then return b and ( b.particle or b.side ) or 0 end
+	if b.name == "iron_bars" or string.find( b.name, "_bars$", 1, false ) then return b.particle or b.side end
+	if b.name == "glass_pane" and T.glass then return T.glass end
+	local glassName = string.match( b.name, "^(.*_stained_glass)_pane$" )
+	if glassName and T[glassName] ~= nil then return T[glassName] end
+	return b.particle or b.side
+end
+
+function MC.BlockParticleTile( id )
+	local b = MC.Blocks[id]
+	if not b then return 0 end
+	if MC.IsPaneBlock and MC.IsPaneBlock( id ) then return paneParticleTile( b ) end
+	return b.particle or MC.BlockIconTile( id )
 end
 
 local FullBlockBox = { { 0, 0, 0, 1, 1, 1 } }
