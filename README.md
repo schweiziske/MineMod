@@ -13,6 +13,7 @@ Garry's Mod 里的 Minecraft 风格方块系统。方块不按实体逐个生成
 - 不完整方块使用 Minecraft model quads 渲染，碰撞/选中使用 `MC.BlockBoxes()`。
 - `*_fence_gate` 渲染保留原模型，碰撞使用 runtime 稳定覆盖盒。
 - `mc_autosave` 默认是 `0`，自动保存关闭。
+- 当前还在修玻璃、玻璃板、铁栅栏、栅栏连接处的材质/贴图和连接表现，接手前先看 `docs/maintenance-update-guide.md` 的“材质和贴图已知问题”和“栅栏、玻璃板和铁栅栏连接”。
 
 ## 主要文件
 
