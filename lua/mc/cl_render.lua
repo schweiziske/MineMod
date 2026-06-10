@@ -73,6 +73,7 @@ MC.MeshesTrans = MC.MeshesTrans or {} -- key -> { IMesh, ... } (translucent glas
 MC.MeshDirty = MC.MeshDirty or {}  -- key -> true
 MC.ChunkEnts = MC.ChunkEnts or {}  -- key -> mc_chunk entity (clientside physics owner)
 MC.PhysDirty = MC.PhysDirty or {}  -- key -> due time (clientside collision rebuild)
+MC.PhysDirtyPriority = MC.PhysDirtyPriority or {} -- player edits that should not wait behind sync/import work
 local PHYS_REBUILD_DELAY = 0.12
 
 -- safety valve: clientside collision (movement prediction). 0 = server-only.
@@ -657,7 +658,23 @@ function MC.MarkChunkDirty( key )
 	MC.MeshDirty[key] = true
 end
 
-function MC.MarkChunkPhysDirty( key )
+local function rebuildChunkPhys( key, enabled )
+	local e = MC.ChunkEnts[key]
+	if IsValid( e ) then
+		if enabled then e:RebuildPhysics() else e:PhysicsDestroy() end
+	end
+	MC.PhysDirty[key] = nil
+	MC.PhysDirtyPriority[key] = nil
+end
+
+function MC.MarkChunkPhysDirty( key, priority )
+	if not key then return end
+	if priority then
+		MC.PhysDirty[key] = true
+		MC.PhysDirtyPriority[key] = true
+		return
+	end
+	if MC.PhysDirty[key] == true then return end
 	MC.PhysDirty[key] = CurTime() + PHYS_REBUILD_DELAY
 end
 
@@ -689,16 +706,23 @@ hook.Add( "Think", "mc_meshbuild", function()
 
 	if next( MC.PhysDirty ) then
 		local enabled = MC.ClientCollision:GetBool()
+		local priorityBudget = 8
+		for key in pairs( MC.PhysDirtyPriority ) do
+			if MC.PhysDirty[key] then
+				rebuildChunkPhys( key, enabled )
+				priorityBudget = priorityBudget - 1
+				if priorityBudget <= 0 then break end
+			else
+				MC.PhysDirtyPriority[key] = nil
+			end
+		end
+
 		local budget = 3
 		local now = CurTime()
 		for key in pairs( MC.PhysDirty ) do
 			local due = MC.PhysDirty[key]
-			if due == true or due <= now then
-				local e = MC.ChunkEnts[key]
-				if IsValid( e ) then
-					if enabled then e:RebuildPhysics() else e:PhysicsDestroy() end
-				end
-				MC.PhysDirty[key] = nil
+			if not MC.PhysDirtyPriority[key] and ( due == true or due <= now ) then
+				rebuildChunkPhys( key, enabled )
 				budget = budget - 1
 				if budget <= 0 then break end
 			end
