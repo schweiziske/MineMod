@@ -96,6 +96,8 @@ function SWEP:PrimaryAttack()
 		if not bx then return end
 		if MC.SV.Break( owner, bx, by, bz ) then
 			self:EmitSound( "buttons/button15.wav", 60, 120, 0.25 )
+		elseif MC.SV.SyncCell then
+			MC.SV.SyncCell( owner, bx, by, bz ) -- undo the client's break prediction
 		end
 	elseif CLIENT and IsFirstTimePredicted() and owner == LocalPlayer() then
 		local bx, by, bz = breakTarget( owner, aim, owner:GetEyeTrace() )
@@ -127,6 +129,8 @@ function SWEP:SecondaryAttack()
 		if not bx then return end
 		if MC.SV.Place( owner, bx, by, bz, id, orient ) then
 			self:EmitSound( "buttons/button14.wav", 60, 150, 0.25 )
+		elseif MC.SV.SyncCell then
+			MC.SV.SyncCell( owner, bx, by, bz ) -- undo the client's place prediction
 		end
 	elseif CLIENT and IsFirstTimePredicted() and owner == LocalPlayer() then
 		local id = selectedID( owner )
