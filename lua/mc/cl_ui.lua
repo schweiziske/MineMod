@@ -38,6 +38,272 @@ function MC.DrawBlockIcon( id, x, y, w, h )
 	MC.DrawTile( MC.BlockIconTile( id ), x, y, w, h )
 end
 
+local ICON_UV_FLAGS = {
+	{ 0, 0 },
+	{ 1, 0 },
+	{ 1, 1 },
+	{ 0, 1 },
+}
+
+local function iconRotatedUV( uf, vf, rot, flipU, flipV )
+	rot = ( rot or 0 ) % 4
+	if rot == 1 then uf, vf = vf, 1 - uf
+	elseif rot == 2 then uf, vf = 1 - uf, 1 - vf
+	elseif rot == 3 then uf, vf = 1 - vf, uf end
+	if flipU then uf = 1 - uf end
+	if flipV then vf = 1 - vf end
+	return uf, vf
+end
+
+local function iconUVPoint( tile, flags, rot, flipU, flipV )
+	local u0, v0, u1, v1 = MC.TileUV( tile )
+	local uf, vf = iconRotatedUV( flags[1], flags[2], rot, flipU, flipV )
+	return uf == 1 and u1 or u0, vf == 1 and v1 or v0
+end
+
+local function iconVertex( point, tile, flags, rot, flipU, flipV )
+	local u, v = iconUVPoint( tile, flags, rot, flipU, flipV )
+	return { x = point.x, y = point.y, u = u, v = v }
+end
+
+local function drawIconFace( tile, points, shade, rot, flipU, flipV )
+	surface.SetMaterial( MC.Material )
+	surface.SetDrawColor( shade, shade, shade, 255 )
+	surface.DrawPoly( {
+		iconVertex( points[1], tile, ICON_UV_FLAGS[1], rot, flipU, flipV ),
+		iconVertex( points[2], tile, ICON_UV_FLAGS[2], rot, flipU, flipV ),
+		iconVertex( points[3], tile, ICON_UV_FLAGS[3], rot, flipU, flipV ),
+		iconVertex( points[4], tile, ICON_UV_FLAGS[4], rot, flipU, flipV ),
+	} )
+end
+
+function MC.DrawMinecraftBlockIcon( id, x, y, w, h )
+	local b = MC.Blocks[id]
+	if not b then return end
+
+	local orient = MC.DefaultOrient and MC.DefaultOrient( id ) or 0
+	if MC.BlockIsFullCube and not MC.BlockIsFullCube( id, orient ) then
+		MC.DrawBlockIcon( id, x, y, w, h )
+		return
+	end
+
+	local face = MC.Face or { TOP = 1, XP = 3, YP = 5 }
+	local topTile, topRot, topFlipU, topFlipV = MC.BlockFace( id, face.TOP, orient )
+	local rightTile, rightRot, rightFlipU, rightFlipV = MC.BlockFace( id, face.XP, orient )
+	local leftTile, leftRot, leftFlipU, leftFlipV = MC.BlockFace( id, face.YP, orient )
+
+	local size = math.min( w, h )
+	local cx = x + w * 0.5
+	local topY = y + h * 0.1
+	local halfW = size * 0.38
+	local halfH = size * 0.2
+	local cubeH = size * 0.43
+
+	local pTop = { x = cx, y = topY }
+	local pRight = { x = cx + halfW, y = topY + halfH }
+	local pBottom = { x = cx, y = topY + halfH * 2 }
+	local pLeft = { x = cx - halfW, y = topY + halfH }
+	local pRightBottom = { x = pRight.x, y = pRight.y + cubeH }
+	local pBottomDown = { x = pBottom.x, y = pBottom.y + cubeH }
+	local pLeftBottom = { x = pLeft.x, y = pLeft.y + cubeH }
+
+	drawIconFace( leftTile, { pLeft, pBottom, pBottomDown, pLeftBottom }, 170, leftRot, leftFlipU, leftFlipV )
+	drawIconFace( rightTile, { pBottom, pRight, pRightBottom, pBottomDown }, 215, rightRot, rightFlipU, rightFlipV )
+	drawIconFace( topTile, { pTop, pRight, pBottom, pLeft }, 255, topRot, topFlipU, topFlipV )
+end
+
+MC.CreativeCategories = MC.CreativeCategories or {
+	{ id = "all", label = "全部" },
+	{ id = "building", label = "建筑方块" },
+	{ id = "natural", label = "自然方块" },
+	{ id = "functional", label = "功能方块" },
+	{ id = "redstone", label = "红石" },
+	{ id = "decoration", label = "装饰" },
+	{ id = "transparent", label = "透明/玻璃" },
+	{ id = "plants", label = "植物" },
+}
+local CREATIVE_PAGE_SIZE = 45
+
+local function blockText( b )
+	return string.lower( table.concat( {
+		tostring( b and b.name or "" ),
+		tostring( b and b.mcid or "" ),
+		tostring( b and b.disp or "" ),
+	}, " " ) )
+end
+
+local function textHas( text, ... )
+	for _, needle in ipairs( { ... } ) do
+		if string.find( text, needle, 1, true ) then return true end
+	end
+	return false
+end
+
+local function blockMatchesSearch( b, search )
+	search = string.Trim( string.lower( tostring( search or "" ) ) )
+	if search == "" then return true end
+	return string.find( blockText( b ), search, 1, true ) ~= nil
+end
+
+function MC.CreativeCategoryForBlock( b )
+	local text = blockText( b )
+	if textHas( text, "glass", "pane", "ice", "slime", "honey", "water" ) then return "transparent" end
+	if textHas( text, "sapling", "leaves", "flower", "tulip", "grass", "moss", "bush", "vines", "vine", "coral", "kelp", "seagrass", "cactus", "crop", "wheat", "carrot", "potato", "beetroot" ) then return "plants" end
+	if textHas( text, "redstone", "repeater", "comparator", "piston", "observer", "dispenser", "dropper", "hopper", "lever", "button", "pressure_plate", "target", "rail", "detector_rail", "activator_rail" ) then return "redstone" end
+	if textHas( text, "crafting", "furnace", "chest", "barrel", "anvil", "enchanting", "brewing", "cauldron", "bed", "door", "trapdoor", "ladder", "scaffolding", "sign", "bell", "lantern", "torch", "campfire", "beacon", "table", "lectern", "loom", "stonecutter", "grindstone" ) then return "functional" end
+	if textHas( text, "ore", "stone", "dirt", "sand", "gravel", "clay", "mud", "snow", "netherrack", "end_stone", "deepslate", "tuff", "calcite", "basalt", "soil", "nylium", "obsidian" ) then return "natural" end
+	if textHas( text, "wool", "carpet", "banner", "candle", "pot", "skull", "head", "painting", "frame", "bed", "shulker", "terracotta", "glazed" ) then return "decoration" end
+	return "building"
+end
+
+function MC.BuildCreativeBlockGroups( search )
+	local groups = {}
+	for _, cat in ipairs( MC.CreativeCategories ) do
+		groups[cat.id] = {}
+	end
+	for _, id in ipairs( MC.BlockList or {} ) do
+		local b = MC.Blocks[id]
+		if b and blockMatchesSearch( b, search ) then
+			groups.all[#groups.all + 1] = id
+			local cat = MC.CreativeCategoryForBlock( b )
+			groups[cat] = groups[cat] or {}
+			groups[cat][#groups[cat] + 1] = id
+		end
+	end
+	return groups
+end
+
+local function clearLayout( layout )
+	for _, child in ipairs( layout:GetChildren() ) do
+		child:Remove()
+	end
+end
+
+local function addCreativeButton( layout, id, onSelect, frame )
+	local b = MC.Blocks[id]
+	if not b then return end
+	local btn = layout:Add( "DButton" )
+	btn:SetSize( 88, 104 )
+	btn:SetText( "" )
+
+	local hint = MC.BlockStateHint( id )
+	btn:SetTooltip( b.disp .. "\n" .. ( b.mcid or b.name or tostring( id ) ) .. ( hint ~= "" and "\n" .. hint or "" ) )
+
+	btn.Paint = function( s, w, h )
+		draw.RoundedBox( 3, 0, 0, w, h, s:IsHovered() and Color( 80, 92, 112 ) or Color( 43, 45, 50 ) )
+		MC.DrawMinecraftBlockIcon( id, w * 0.5 - 30, 8, 60, 60 )
+		MC.DrawFittedText( b.disp, "mc_hud_small", { "mc_hud_fit_16" }, w * 0.5, h - 18, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, w - 8 )
+	end
+
+	btn.DoClick = function()
+		surface.PlaySound( "ui/buttonclickrelease.wav" )
+		onSelect( id )
+		if IsValid( frame ) then frame:Close() end
+	end
+end
+
+function MC.OpenCreativeInventory( onSelect )
+	if IsValid( MC.CreativeFrame ) then MC.CreativeFrame:Remove() end
+	onSelect = onSelect or function( id )
+		RunConsoleCommand( "mc_block_sel", id )
+	end
+
+	local fr = vgui.Create( "DFrame" )
+	fr:SetTitle( "创造物品栏" )
+	fr:SetSize( 900, 640 )
+	fr:Center()
+	fr:MakePopup()
+	MC.CreativeFrame = fr
+
+	local search = vgui.Create( "DTextEntry", fr )
+	search:Dock( TOP )
+	search:DockMargin( 8, 8, 8, 6 )
+	search:SetTall( 30 )
+	search:SetPlaceholderText( "搜索中文名 / 英文名 / minecraft:id" )
+
+	local controls = vgui.Create( "DPanel", fr )
+	controls:Dock( BOTTOM )
+	controls:DockMargin( 8, 0, 8, 8 )
+	controls:SetTall( 30 )
+	controls.Paint = function() end
+
+	local prev = vgui.Create( "DButton", controls )
+	prev:Dock( LEFT )
+	prev:SetWide( 42 )
+	prev:SetText( "<" )
+
+	local next = vgui.Create( "DButton", controls )
+	next:Dock( RIGHT )
+	next:SetWide( 42 )
+	next:SetText( ">" )
+
+	local pageLabel = vgui.Create( "DLabel", controls )
+	pageLabel:Dock( FILL )
+	pageLabel:SetContentAlignment( 5 )
+	pageLabel:SetTextColor( color_white )
+
+	local tabs = vgui.Create( "DPropertySheet", fr )
+	tabs:Dock( FILL )
+	tabs:DockMargin( 8, 0, 8, 8 )
+
+	local layouts = {}
+	local activeCategory = "all"
+	local page = 1
+	for _, cat in ipairs( MC.CreativeCategories ) do
+		local scroll = vgui.Create( "DScrollPanel", tabs )
+		local layout = vgui.Create( "DIconLayout", scroll )
+		layout:Dock( FILL )
+		layout:SetSpaceX( 6 )
+		layout:SetSpaceY( 6 )
+		layouts[cat.id] = layout
+		local sheet = tabs:AddSheet( cat.label, scroll, nil, false, false, cat.label )
+		if sheet and sheet.Tab then sheet.Tab.MCCategoryID = cat.id end
+	end
+
+	local function rebuild()
+		local groups = MC.BuildCreativeBlockGroups( search:GetValue() )
+		local ids = groups[activeCategory] or {}
+		local pages = math.max( 1, math.ceil( #ids / CREATIVE_PAGE_SIZE ) )
+		page = math.Clamp( page, 1, pages )
+
+		for _, cat in ipairs( MC.CreativeCategories ) do
+			local layout = layouts[cat.id]
+			clearLayout( layout )
+			layout:InvalidateLayout( true )
+		end
+
+		local layout = layouts[activeCategory]
+		local first = ( page - 1 ) * CREATIVE_PAGE_SIZE + 1
+		local last = math.min( #ids, first + CREATIVE_PAGE_SIZE - 1 )
+		for i = first, last do
+			addCreativeButton( layout, ids[i], onSelect, fr )
+		end
+		layout:InvalidateLayout( true )
+		pageLabel:SetText( string.format( "%d / %d    %d 个方块", page, pages, #ids ) )
+		prev:SetEnabled( page > 1 )
+		next:SetEnabled( page < pages )
+	end
+
+	tabs.OnActiveTabChanged = function( _, _, new )
+		activeCategory = new and new.MCCategoryID or activeCategory
+		page = 1
+		rebuild()
+	end
+	search.OnChange = function()
+		page = 1
+		rebuild()
+	end
+	prev.DoClick = function()
+		page = page - 1
+		rebuild()
+	end
+	next.DoClick = function()
+		page = page + 1
+		rebuild()
+	end
+	rebuild()
+end
+
 function MC.DrawBlockGhost( id, orient, bx, by, bz, color )
 	local base = MC.CellWorldMin( bx, by, bz )
 	local boxes = MC.BlockBoxes and MC.BlockBoxes( id, orient, bx, by, bz ) or nil

@@ -7,6 +7,7 @@ Garry's Mod 里的 Minecraft 风格方块系统。方块不按实体逐个生成
 - 方块边长是 `36` Source units。
 - chunk 水平尺寸固定为 `16x16`，垂直 section 高度是 `32`。
 - 支持放置、破坏、使用、`/fill`、导入、保存、分片同步。
+- 提供 `MC 创造方块放置器` SWEP；Reload 打开带分类、搜索和分页的创造物品栏。
 - 提供 `MC.SV.SetBlock` / `SetBlockSpec` / `RemoveBlock` 给非玩家插件、mob、状态机写入世界。
 - 支持 GMod 武器/爆炸破坏方块；血量来自 Minecraft hardness 乘 `mc_block_health_scale`。
 - 方块表、atlas、中文名由 `_build/build_atlas.ps1` 从 `out/assets/minecraft` 生成。
@@ -31,6 +32,7 @@ lua/mc/cl_render.lua                     客户端 IMesh 渲染和预测碰撞 d
 lua/mc/cl_ui.lua                         方块图标、选择窗口、选中框
 lua/entities/mc_chunk/                   chunk 实体和 multiconvex 碰撞
 lua/weapons/mc_placer/shared.lua         方块放置器 SWEP
+lua/weapons/mc_creative_placer/shared.lua 创造物品栏方块放置器 SWEP
 lua/weapons/gmod_tool/stools/mc_block.lua 工具枪方块工具
 lua/mc/generated/                        生成的方块、tile、中文名 Lua
 _build/build_atlas.ps1                   生成 atlas 和方块表
@@ -72,6 +74,7 @@ mc_save_diag
 ```powershell
 node _tools\test_block_properties.js
 node _tools\test_block_damage_api.js
+node _tools\test_creative_inventory.js
 node _tools\test_fence_behavior.js
 node _tools\test_particle_alpha_flags.js
 node _tools\test_generated_lua_size.js
@@ -79,8 +82,10 @@ $luaFiles = @(
   "lua\autorun\mc_load.lua",
   "lua\mc\sh_blocks.lua",
   "lua\mc\sh_config.lua",
+  "lua\mc\cl_ui.lua",
   "lua\mc\sv_damage.lua",
   "lua\entities\mc_chunk\init.lua",
+  "lua\weapons\mc_creative_placer\shared.lua",
   "lua\mc\generated\sh_generated_block_properties.lua",
   "lua\mc\generated\sh_generated_sound_types.lua"
 )
