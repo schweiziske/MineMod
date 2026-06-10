@@ -258,9 +258,11 @@ net.Receive( "mc_set", function()
 	local orient = net.ReadUInt( Net.ORIENT_BITS )
 
 	MC.ConfirmPrediction( bx, by, bz, id, orient )
-	MC.SetBlockRaw( bx, by, bz, id, orient )
-	MC.MarkDirty( bx, by, bz )
-	MC.MarkCellPhysNeighbours( bx, by, bz )
+	local _, _, _, changed = MC.SetBlockRaw( bx, by, bz, id, orient )
+	if changed then
+		MC.MarkDirty( bx, by, bz )
+		MC.MarkCellPhysNeighbours( bx, by, bz )
+	end
 end )
 
 net.Receive( "mc_clear", function()

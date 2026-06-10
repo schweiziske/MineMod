@@ -72,7 +72,8 @@ MC.Meshes      = MC.Meshes or {}      -- key -> { IMesh, ... } (opaque/cutout pa
 MC.MeshesTrans = MC.MeshesTrans or {} -- key -> { IMesh, ... } (translucent glass pass)
 MC.MeshDirty = MC.MeshDirty or {}  -- key -> true
 MC.ChunkEnts = MC.ChunkEnts or {}  -- key -> mc_chunk entity (clientside physics owner)
-MC.PhysDirty = MC.PhysDirty or {}  -- key -> true (clientside collision rebuild)
+MC.PhysDirty = MC.PhysDirty or {}  -- key -> due time (clientside collision rebuild)
+local PHYS_REBUILD_DELAY = 0.12
 
 -- safety valve: clientside collision (movement prediction). 0 = server-only.
 MC.ClientCollision = CreateClientConVar( "mc_client_collision", "1", true, false,
@@ -80,7 +81,7 @@ MC.ClientCollision = CreateClientConVar( "mc_client_collision", "1", true, false
 
 cvars.AddChangeCallback( "mc_client_collision", function()
 	for key, e in pairs( MC.ChunkEnts ) do
-		if IsValid( e ) then MC.PhysDirty[key] = true end
+		if IsValid( e ) then MC.MarkChunkPhysDirty( key ) end
 	end
 end, "mc" )
 
@@ -284,11 +285,15 @@ local ARM_END_FACE = {
 	xn = MC.Face.XN,
 	xp = MC.Face.XP,
 }
+local PANE_ARM_EDGE_UV = { 7, 0, 9, 7 }
 
 local function dynamicShapeFaceData( b, face, box )
 	if not b then return nil end
 	if MC.IsPaneBlock and MC.IsPaneBlock( b.id ) then
 		if face == MC.Face.TOP or face == MC.Face.BOTTOM then
+			if box and box.part == "arm" then
+				return { tile = b.top, rot = 0, uv = PANE_ARM_EDGE_UV }
+			end
 			return { tile = b.top, rot = 0 }
 		end
 		-- the open end of an arm shows the pane edge strip, like Minecraft's
@@ -653,7 +658,7 @@ function MC.MarkChunkDirty( key )
 end
 
 function MC.MarkChunkPhysDirty( key )
-	MC.PhysDirty[key] = true
+	MC.PhysDirty[key] = CurTime() + PHYS_REBUILD_DELAY
 end
 
 -- a block changed: its own chunk and any chunk owning a face-neighbour cell
@@ -685,14 +690,18 @@ hook.Add( "Think", "mc_meshbuild", function()
 	if next( MC.PhysDirty ) then
 		local enabled = MC.ClientCollision:GetBool()
 		local budget = 3
+		local now = CurTime()
 		for key in pairs( MC.PhysDirty ) do
-			local e = MC.ChunkEnts[key]
-			if IsValid( e ) then
-				if enabled then e:RebuildPhysics() else e:PhysicsDestroy() end
+			local due = MC.PhysDirty[key]
+			if due == true or due <= now then
+				local e = MC.ChunkEnts[key]
+				if IsValid( e ) then
+					if enabled then e:RebuildPhysics() else e:PhysicsDestroy() end
+				end
+				MC.PhysDirty[key] = nil
+				budget = budget - 1
+				if budget <= 0 then break end
 			end
-			MC.PhysDirty[key] = nil
-			budget = budget - 1
-			if budget <= 0 then break end
 		end
 	end
 end )
