@@ -196,17 +196,17 @@ function SV.ApplyBlockExplosion( center, damage, options )
 		end
 	end
 
-	local broken = 0
+	local removals = {}
 	for _, key in ipairs( order ) do
 		local cell = cells[key]
-		local ok = SV.RemoveBlock( cell.bx, cell.by, cell.bz, {
-			actor = damageActor( options ),
-			fx = options.fx ~= false,
-			handlers = options.handlers,
-			priorityPhys = false,
-		} )
-		if ok then broken = broken + 1 end
+		removals[#removals + 1] = cell
 	end
+	local broken = SV.RemoveBlocksBulk( removals, {
+		actor = damageActor( options ),
+		fx = options.fx ~= false,
+		handlers = options.handlers,
+		priorityPhys = false,
+	} )
 
 	return broken > 0, broken, radius
 end
