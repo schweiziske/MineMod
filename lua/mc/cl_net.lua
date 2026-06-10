@@ -74,9 +74,9 @@ local function predictionKey( bx, by, bz )
 	return bx .. ":" .. by .. ":" .. bz
 end
 
-local function markPredictedCellDirty( bx, by, bz )
+local function markPredictedCellDirty( bx, by, bz, priority )
 	MC.MarkDirty( bx, by, bz )
-	MC.MarkCellPhysNeighbours( bx, by, bz )
+	MC.MarkCellPhysNeighbours( bx, by, bz, priority )
 end
 
 function MC.PredictSetBlock( bx, by, bz, id, orient )
@@ -128,7 +128,7 @@ function MC.PredictBreakBlock( bx, by, bz, ply )
 		oldOrient = oldOrient,
 		expire = CurTime() + 2.5,
 	}
-	markPredictedCellDirty( bx, by, bz )
+	markPredictedCellDirty( bx, by, bz, true )
 	if MC.PlayBlockFx then
 		MC.PlayBlockFx( 2, oldId, oldOrient, bx, by, bz, true )
 	end

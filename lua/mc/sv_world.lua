@@ -348,7 +348,7 @@ function SV.Break( ply, bx, by, bz )
 	local old = MC.GetBlock( bx, by, bz )
 	if old == 0 then return false end
 	if not SV.Validate( ply, bx, by, bz, false ) then return false end
-	return apply( bx, by, bz, 0, -1, nil, ply )
+	return apply( bx, by, bz, 0, -1, nil, ply, { priorityPhys = true } )
 end
 
 function SV.SetBlock( bx, by, bz, id, orient, options )
