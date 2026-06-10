@@ -947,7 +947,7 @@ local function fenceConnectsToBlock( id, orient )
 	if id == 0 then return false end
 	local b = MC.Blocks[id]
 	if not b then return false end
-	if isFenceName( b.name ) or isFenceGateName( b.name ) or isWallName( b.name ) then return true end
+	if isFenceName( b.name ) or isFenceGateName( b.name ) or isWallName( b.name ) or isPaneName( b.name ) then return true end
 	if b.solid == false then return false end
 	return MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) or not b.shape
 end
@@ -967,20 +967,20 @@ local function fenceBoxes( bx, by, bz )
 	if bx == nil or by == nil or bz == nil then return boxes end
 
 	if fenceConnectsToCell( bx, by - 1, bz ) then
-		boxes[#boxes + 1] = { 0.4375, 0, 0.375, 0.5625, 0.375, 0.5625 }
-		boxes[#boxes + 1] = { 0.4375, 0, 0.75, 0.5625, 0.375, 0.9375 }
+		boxes[#boxes + 1] = { 0.4375, 0, 0.375, 0.5625, 0.5625, 0.5625 }
+		boxes[#boxes + 1] = { 0.4375, 0, 0.75, 0.5625, 0.5625, 0.9375 }
 	end
 	if fenceConnectsToCell( bx, by + 1, bz ) then
-		boxes[#boxes + 1] = { 0.4375, 0.625, 0.375, 0.5625, 1, 0.5625 }
-		boxes[#boxes + 1] = { 0.4375, 0.625, 0.75, 0.5625, 1, 0.9375 }
+		boxes[#boxes + 1] = { 0.4375, 0.4375, 0.375, 0.5625, 1, 0.5625 }
+		boxes[#boxes + 1] = { 0.4375, 0.4375, 0.75, 0.5625, 1, 0.9375 }
 	end
 	if fenceConnectsToCell( bx - 1, by, bz ) then
-		boxes[#boxes + 1] = { 0, 0.4375, 0.375, 0.375, 0.5625, 0.5625 }
-		boxes[#boxes + 1] = { 0, 0.4375, 0.75, 0.375, 0.5625, 0.9375 }
+		boxes[#boxes + 1] = { 0, 0.4375, 0.375, 0.5625, 0.5625, 0.5625 }
+		boxes[#boxes + 1] = { 0, 0.4375, 0.75, 0.5625, 0.5625, 0.9375 }
 	end
 	if fenceConnectsToCell( bx + 1, by, bz ) then
-		boxes[#boxes + 1] = { 0.625, 0.4375, 0.375, 1, 0.5625, 0.5625 }
-		boxes[#boxes + 1] = { 0.625, 0.4375, 0.75, 1, 0.5625, 0.9375 }
+		boxes[#boxes + 1] = { 0.4375, 0.4375, 0.375, 1, 0.5625, 0.5625 }
+		boxes[#boxes + 1] = { 0.4375, 0.4375, 0.75, 1, 0.5625, 0.9375 }
 	end
 
 	return boxes
@@ -990,7 +990,7 @@ local function paneConnectsToBlock( id, orient )
 	if id == 0 then return false end
 	local b = MC.Blocks[id]
 	if not b then return false end
-	if isPaneName( b.name ) then return true end
+	if isPaneName( b.name ) or isFenceName( b.name ) or isFenceGateName( b.name ) or isWallName( b.name ) then return true end
 	if b.solid == false then return false end
 	return MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) or not b.shape
 end
@@ -1010,16 +1010,16 @@ local function paneBoxes( bx, by, bz )
 	if bx == nil or by == nil or bz == nil then return boxes end
 
 	if paneConnectsToCell( bx, by - 1, bz ) then
-		boxes[#boxes + 1] = { 0.4375, 0, 0, 0.5625, 0.5, 1 }
+		boxes[#boxes + 1] = { 0.4375, 0, 0, 0.5625, 0.4375, 1 }
 	end
 	if paneConnectsToCell( bx, by + 1, bz ) then
-		boxes[#boxes + 1] = { 0.4375, 0.5, 0, 0.5625, 1, 1 }
+		boxes[#boxes + 1] = { 0.4375, 0.5625, 0, 0.5625, 1, 1 }
 	end
 	if paneConnectsToCell( bx - 1, by, bz ) then
-		boxes[#boxes + 1] = { 0, 0.4375, 0, 0.5, 0.5625, 1 }
+		boxes[#boxes + 1] = { 0, 0.4375, 0, 0.4375, 0.5625, 1 }
 	end
 	if paneConnectsToCell( bx + 1, by, bz ) then
-		boxes[#boxes + 1] = { 0.5, 0.4375, 0, 1, 0.5625, 1 }
+		boxes[#boxes + 1] = { 0.5625, 0.4375, 0, 1, 0.5625, 1 }
 	end
 
 	return boxes
