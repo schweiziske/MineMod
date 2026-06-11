@@ -4,7 +4,7 @@ Garry's Mod 里的 Minecraft 风格方块系统。方块不按实体逐个生成
 
 ## 当前状态
 
-- 方块边长是 `36` Source units。
+- 方块边长是 `36.5` Source units。
 - chunk 水平尺寸固定为 `16x16`，垂直 section 高度是 `32`。
 - 支持放置、破坏、使用、`/fill`、导入、保存、分片同步。
 - 提供 `MC 创造方块放置器` SWEP；Reload 打开带分类、搜索和分页的创造物品栏。

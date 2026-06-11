@@ -29,6 +29,10 @@ SWEP.Secondary = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "no
 local STEP = 0.13
 
 local function selectedID( ply )
+	if CLIENT and MC.GetCreativeHotbarSelectedID then
+		local hotbarID = MC.GetCreativeHotbarSelectedID( ply )
+		if MC.IsValidBlock( hotbarID ) then return hotbarID end
+	end
 	local id = IsValid( ply ) and ply:GetNWInt( "mc_block", 1 ) or 1
 	if not MC.IsValidBlock( id ) then id = 1 end
 	return id
@@ -145,8 +149,8 @@ function SWEP:Reload()
 	if CLIENT then
 		if IsValid( MC.CreativeFrame ) and MC.CreativeFrame:IsVisible() then return end
 		MC.OpenCreativeInventory( function( id )
-			RunConsoleCommand( "mc_block_sel", id )
-		end )
+			MC.SetCreativeHotbarSlot( MC.GetCreativeHotbarSelectedSlot(), id )
+		end, { closeOnSelect = false } )
 	end
 end
 
@@ -162,10 +166,12 @@ if CLIENT then
 		local orient = tr.Hit and MC.OrientForPlacement( ply, tr, id ) or MC.DefaultOrient( id )
 		local state = MC.BlockStateText( id, orient )
 		local w, h = 64, 64
-		local panelW = 340
+		local slotSize = 54
+		local hotbarY = sh - slotSize - 22
+		local panelW = 380
 		local panelH = state ~= "" and 118 or 96
 		local px = sw * 0.5 - panelW * 0.5
-		local py = sh - panelH - 44
+		local py = hotbarY - panelH - 14
 		local x, y = px + 18, py + ( panelH - h ) * 0.5
 		local tx = x + w + 18
 		local maxTextW = panelW - ( tx - px ) - 18
@@ -176,7 +182,10 @@ if CLIENT then
 		if state ~= "" then
 			draw.SimpleText( state, "mc_hud_small", tx, py + 58, Color( 210, 230, 255 ), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 		end
-		draw.SimpleText( "左键破坏   右键放置   Reload 创造物品栏", "mc_hud_small", sw * 0.5, sh - 20, Color( 255, 255, 255, 190 ), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+		if MC.DrawCreativeHotbar then
+			MC.DrawCreativeHotbar( sw * 0.5, hotbarY, { slotSize = slotSize } )
+		end
+		draw.SimpleText( "左键破坏   右键放置   中键取块   Reload 创造物品栏", "mc_hud_small", sw * 0.5, sh - 10, Color( 255, 255, 255, 190 ), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
 
 		surface.SetDrawColor( 255, 255, 255, 220 )
 		surface.DrawRect( sw * 0.5 - 1, sh * 0.5 - 1, 2, 2 )

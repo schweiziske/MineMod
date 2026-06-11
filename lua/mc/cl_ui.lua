@@ -122,7 +122,187 @@ MC.CreativeCategories = MC.CreativeCategories or {
 	{ id = "transparent", label = "透明/玻璃" },
 	{ id = "plants", label = "植物" },
 }
-local CREATIVE_PAGE_SIZE = 45
+local CREATIVE_GRID_COLS = 9
+local CREATIVE_GRID_ROWS = 4
+local CREATIVE_PAGE_SIZE = CREATIVE_GRID_COLS * CREATIVE_GRID_ROWS
+local CREATIVE_HOTBAR_SIZE = 9
+local CREATIVE_HOTBAR_DEFAULTS = {
+	"minecraft:stone",
+	"minecraft:dirt",
+	"minecraft:oak_planks",
+	"minecraft:cobblestone",
+	"minecraft:glass",
+	"minecraft:oak_fence",
+	"minecraft:oak_stairs",
+	"minecraft:oak_slab",
+	"minecraft:torch",
+}
+local CREATIVE_HOTBAR_KEYS = {
+	[KEY_1] = 1,
+	[KEY_2] = 2,
+	[KEY_3] = 3,
+	[KEY_4] = 4,
+	[KEY_5] = 5,
+	[KEY_6] = 6,
+	[KEY_7] = 7,
+	[KEY_8] = 8,
+	[KEY_9] = 9,
+}
+
+MC.CreativeHotbar = MC.CreativeHotbar or { selected = 1, slots = {} }
+
+local function normalizeHotbarSlot( slot )
+	slot = math.floor( tonumber( slot ) or 1 )
+	return math.Clamp( slot, 1, CREATIVE_HOTBAR_SIZE )
+end
+
+local function normalizeHotbarID( id )
+	id = tonumber( id )
+	if not id then return nil end
+	id = math.floor( id )
+	if MC.IsValidBlock and MC.IsValidBlock( id ) then return id end
+	return nil
+end
+
+local function resolveHotbarDefault( slot )
+	local name = CREATIVE_HOTBAR_DEFAULTS[slot]
+	local resolved = name and MC.ResolveBlock and MC.ResolveBlock( name ) or nil
+	if resolved and normalizeHotbarID( resolved.id ) then return resolved.id end
+	for _, id in ipairs( MC.BlockList or {} ) do
+		local valid = normalizeHotbarID( id )
+		if valid then return valid end
+	end
+	return 1
+end
+
+function MC.EnsureCreativeHotbar()
+	local hotbar = MC.CreativeHotbar or {}
+	hotbar.slots = hotbar.slots or {}
+	hotbar.selected = normalizeHotbarSlot( hotbar.selected )
+	for i = 1, CREATIVE_HOTBAR_SIZE do
+		hotbar.slots[i] = normalizeHotbarID( hotbar.slots[i] ) or resolveHotbarDefault( i )
+	end
+	MC.CreativeHotbar = hotbar
+	return hotbar
+end
+
+function MC.GetCreativeHotbarSelectedSlot()
+	return MC.EnsureCreativeHotbar().selected
+end
+
+function MC.GetCreativeHotbarSelectedID( ply )
+	local hotbar = MC.EnsureCreativeHotbar()
+	local id = normalizeHotbarID( hotbar.slots[hotbar.selected] )
+	if id then return id end
+	if IsValid( ply ) then
+		id = normalizeHotbarID( ply:GetNWInt( "mc_block", 1 ) )
+		if id then return id end
+	end
+	return resolveHotbarDefault( 1 )
+end
+
+function MC.SelectCreativeHotbarSlot( slot, noCommand )
+	local hotbar = MC.EnsureCreativeHotbar()
+	hotbar.selected = normalizeHotbarSlot( slot )
+	local id = normalizeHotbarID( hotbar.slots[hotbar.selected] )
+	if id and not noCommand then
+		RunConsoleCommand( "mc_block_sel", tostring( id ) )
+	end
+	return id ~= nil, id
+end
+
+function MC.SetCreativeHotbarSlot( slot, id, noCommand )
+	id = normalizeHotbarID( id )
+	if not id then return false end
+	local hotbar = MC.EnsureCreativeHotbar()
+	hotbar.selected = normalizeHotbarSlot( slot )
+	hotbar.slots[hotbar.selected] = id
+	if not noCommand then
+		RunConsoleCommand( "mc_block_sel", tostring( id ) )
+	end
+	return true
+end
+
+function MC.PickCreativeHotbarBlock( ply )
+	ply = ply or LocalPlayer()
+	if not IsValid( ply ) or not MC.PlayerBlockAim then return false end
+	local hit = MC.PlayerBlockAim( ply )
+	local id = hit and normalizeHotbarID( hit.Block )
+	if not id then return false end
+	local ok = MC.SetCreativeHotbarSlot( MC.GetCreativeHotbarSelectedSlot(), id )
+	if ok then surface.PlaySound( "ui/buttonclickrelease.wav" ) end
+	return ok
+end
+
+function MC.DrawCreativeHotbar( cx, y, opts )
+	opts = opts or {}
+	local hotbar = MC.EnsureCreativeHotbar()
+	local slotSize = opts.slotSize or 54
+	local gap = opts.gap or 4
+	local totalW = CREATIVE_HOTBAR_SIZE * slotSize + ( CREATIVE_HOTBAR_SIZE - 1 ) * gap
+	local x = math.floor( cx - totalW * 0.5 )
+
+	draw.RoundedBox( 4, x - 8, y - 8, totalW + 16, slotSize + 16, Color( 8, 9, 11, 190 ) )
+	for i = 1, CREATIVE_HOTBAR_SIZE do
+		local sx = x + ( i - 1 ) * ( slotSize + gap )
+		local selected = hotbar.selected == i
+		local id = normalizeHotbarID( hotbar.slots[i] )
+		draw.RoundedBox( 3, sx, y, slotSize, slotSize, selected and Color( 235, 235, 210, 245 ) or Color( 28, 30, 35, 235 ) )
+		draw.RoundedBox( 2, sx + 3, y + 3, slotSize - 6, slotSize - 6, selected and Color( 66, 68, 72, 245 ) or Color( 42, 45, 51, 245 ) )
+		if id then
+			MC.DrawMinecraftBlockIcon( id, sx + 7, y + 7, slotSize - 14, slotSize - 14 )
+		end
+		draw.SimpleText( tostring( i ), "mc_hud_small", sx + 6, y + 4, selected and Color( 255, 245, 160 ) or Color( 220, 225, 235, 210 ), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
+	end
+
+	return x, y, totalW, slotSize
+end
+
+local function activeCreativePlacer( ply )
+	if not IsValid( ply ) then return false end
+	local wep = ply:GetActiveWeapon()
+	return IsValid( wep ) and wep:GetClass() == "mc_creative_placer"
+end
+
+local function textEntryHasFocus()
+	local focus = vgui.GetKeyboardFocus and vgui.GetKeyboardFocus() or nil
+	if not IsValid( focus ) then return false end
+	local class = focus.GetClassName and focus:GetClassName() or ""
+	return class == "TextEntry" or class == "DTextEntry"
+end
+
+local lastCreativePickAt = 0
+local function pickCreativeHotbarBlockDebounced( ply )
+	local now = CurTime()
+	if now - lastCreativePickAt < 0.08 then return true end
+	lastCreativePickAt = now
+	return MC.PickCreativeHotbarBlock( ply )
+end
+
+hook.Remove( "PlayerBindPress", "mc_creative_hotbar_binds" )
+hook.Add( "PlayerBindPress", "mc_creative_hotbar_binds", function( ply, bind, pressed )
+	if not pressed or not activeCreativePlacer( ply ) then return end
+	local slot = string.match( bind or "", "^slot([1-9])$" )
+	if slot then
+		if not textEntryHasFocus() then
+			MC.SelectCreativeHotbarSlot( tonumber( slot ) )
+			surface.PlaySound( "common/wpn_select.wav" )
+		end
+		return true
+	end
+	if bind == "+attack3" then
+		pickCreativeHotbarBlockDebounced( ply )
+		return true
+	end
+end )
+
+hook.Remove( "PlayerButtonDown", "mc_creative_hotbar_buttons" )
+hook.Add( "PlayerButtonDown", "mc_creative_hotbar_buttons", function( ply, button )
+	if not activeCreativePlacer( ply ) then return end
+	if button == MOUSE_MIDDLE then
+		pickCreativeHotbarBlockDebounced( ply )
+	end
+end )
 
 local function blockText( b )
 	return string.lower( table.concat( {
@@ -179,85 +359,274 @@ local function clearLayout( layout )
 	end
 end
 
-local function addCreativeButton( layout, id, onSelect, frame )
+local function layoutCreativeGridSlots( layout, w, h )
+	local gap = 6
+	local usableW = math.max( 1, w - gap * ( CREATIVE_GRID_COLS - 1 ) )
+	local usableH = math.max( 1, h - gap * ( CREATIVE_GRID_ROWS - 1 ) )
+	local baseW = math.floor( usableW / CREATIVE_GRID_COLS )
+	local baseH = math.floor( usableH / CREATIVE_GRID_ROWS )
+	local extraW = usableW - baseW * CREATIVE_GRID_COLS
+	local extraH = usableH - baseH * CREATIVE_GRID_ROWS
+	local children = layout:GetChildren()
+
+	local y = 0
+	for row = 1, CREATIVE_GRID_ROWS do
+		local cellH = baseH + ( row <= extraH and 1 or 0 )
+		local x = 0
+		for col = 1, CREATIVE_GRID_COLS do
+			local cellW = baseW + ( col <= extraW and 1 or 0 )
+			local child = children[( row - 1 ) * CREATIVE_GRID_COLS + col]
+			if IsValid( child ) then
+				child:SetPos( x, y )
+				child:SetSize( cellW, cellH )
+			end
+			x = x + cellW + gap
+		end
+		y = y + cellH + gap
+	end
+end
+
+local CREATIVE_UI = {
+	frame = Color( 30, 32, 37, 250 ),
+	title = Color( 18, 20, 24, 255 ),
+	panel = Color( 24, 26, 30, 245 ),
+	panelInner = Color( 13, 15, 18, 230 ),
+	control = Color( 44, 48, 55, 245 ),
+	controlHover = Color( 80, 92, 112, 245 ),
+	controlDown = Color( 104, 112, 132, 245 ),
+	controlDisabled = Color( 42, 44, 48, 160 ),
+	accent = Color( 236, 230, 190, 245 ),
+	text = Color( 235, 240, 248, 245 ),
+	textDim = Color( 165, 174, 188, 220 ),
+}
+
+local function paintCreativeButtonSurface( s, w, h, label )
+	local enabled = s:IsEnabled()
+	local bg = enabled and CREATIVE_UI.control or CREATIVE_UI.controlDisabled
+	if enabled and s:IsDown() then
+		bg = CREATIVE_UI.controlDown
+	elseif enabled and s:IsHovered() then
+		bg = CREATIVE_UI.controlHover
+	end
+
+	draw.RoundedBox( 3, 0, 0, w, h, bg )
+	draw.RoundedBox( 2, 3, 3, w - 6, h - 6, Color( 20, 22, 26, enabled and 210 or 120 ) )
+	surface.SetDrawColor( enabled and Color( 120, 130, 148, 160 ) or Color( 70, 75, 84, 120 ) )
+	surface.DrawOutlinedRect( 0, 0, w, h, 1 )
+	draw.SimpleText( label or "", "mc_hud_small", w * 0.5, h * 0.5, enabled and CREATIVE_UI.text or CREATIVE_UI.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+end
+
+function MC.StyleCreativePagerButton( btn, label )
+	if not IsValid( btn ) then return end
+	btn:SetText( "" )
+	btn.Paint = function( s, w, h )
+		paintCreativeButtonSurface( s, w, h, label )
+	end
+end
+
+function MC.StyleCreativeGridPanel( panel )
+	if not IsValid( panel ) then return end
+	panel.Paint = function( _, w, h )
+		draw.RoundedBox( 4, 0, 0, w, h, CREATIVE_UI.panel )
+		draw.RoundedBox( 3, 4, 4, w - 8, h - 8, CREATIVE_UI.panelInner )
+	end
+end
+
+function MC.StyleCreativePropertySheet( tabs )
+	if not IsValid( tabs ) then return end
+	tabs.Paint = function( _, w, h )
+		draw.RoundedBox( 5, 0, 0, w, h, CREATIVE_UI.panel )
+		draw.RoundedBox( 4, 8, 28, w - 16, h - 36, CREATIVE_UI.panelInner )
+	end
+end
+
+local function addCreativeButton( layout, id, onSelect, frame, closeOnSelect )
 	local b = MC.Blocks[id]
 	if not b then return end
 	local btn = layout:Add( "DButton" )
-	btn:SetSize( 88, 104 )
+	btn:SetSize( 96, 108 )
 	btn:SetText( "" )
 
 	local hint = MC.BlockStateHint( id )
 	btn:SetTooltip( b.disp .. "\n" .. ( b.mcid or b.name or tostring( id ) ) .. ( hint ~= "" and "\n" .. hint or "" ) )
 
 	btn.Paint = function( s, w, h )
-		draw.RoundedBox( 3, 0, 0, w, h, s:IsHovered() and Color( 80, 92, 112 ) or Color( 43, 45, 50 ) )
-		MC.DrawMinecraftBlockIcon( id, w * 0.5 - 30, 8, 60, 60 )
-		MC.DrawFittedText( b.disp, "mc_hud_small", { "mc_hud_fit_16" }, w * 0.5, h - 18, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, w - 8 )
+		local hotbar = MC.EnsureCreativeHotbar()
+		local active = hotbar.slots[hotbar.selected] == id
+		local bg = active and Color( 76, 82, 70 ) or ( s:IsHovered() and Color( 80, 92, 112 ) or Color( 43, 45, 50 ) )
+		draw.RoundedBox( 3, 0, 0, w, h, bg )
+		if active then
+			surface.SetDrawColor( 235, 225, 170, 230 )
+			surface.DrawOutlinedRect( 1, 1, w - 2, h - 2, 2 )
+		end
+		local icon = math.min( w - 22, h - 38, 76 )
+		MC.DrawMinecraftBlockIcon( id, w * 0.5 - icon * 0.5, 8, icon, icon )
+		MC.DrawFittedText( b.disp, "mc_hud_small", { "mc_hud_fit_16" }, w * 0.5, h - 17, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, w - 8 )
 	end
 
 	btn.DoClick = function()
 		surface.PlaySound( "ui/buttonclickrelease.wav" )
 		onSelect( id )
-		if IsValid( frame ) then frame:Close() end
+		if closeOnSelect and IsValid( frame ) then frame:Close() end
 	end
 end
 
-function MC.OpenCreativeInventory( onSelect )
+local function createCreativeHotbarPanel( parent )
+	local panel = vgui.Create( "DPanel", parent )
+	panel:SetTall( 86 )
+	panel.Paint = function( _, w, h )
+		draw.RoundedBox( 5, 0, 0, w, h, Color( 24, 26, 30, 245 ) )
+		draw.RoundedBox( 4, 8, 8, w - 16, h - 16, Color( 13, 15, 18, 210 ) )
+	end
+
+	local buttons = {}
+	for i = 1, CREATIVE_HOTBAR_SIZE do
+		local btn = vgui.Create( "DButton", panel )
+		btn:SetText( "" )
+		buttons[i] = btn
+		btn.DoClick = function()
+			surface.PlaySound( "common/wpn_select.wav" )
+			MC.SelectCreativeHotbarSlot( i )
+		end
+		btn.Paint = function( s, w, h )
+			local hotbar = MC.EnsureCreativeHotbar()
+			local selected = hotbar.selected == i
+			local id = normalizeHotbarID( hotbar.slots[i] )
+			local b = id and MC.Blocks[id] or nil
+			local bg = selected and Color( 236, 230, 190, 245 ) or ( s:IsHovered() and Color( 80, 92, 112 ) or Color( 44, 48, 55 ) )
+			draw.RoundedBox( 4, 0, 0, w, h, bg )
+			draw.RoundedBox( 3, 4, 4, w - 8, h - 8, selected and Color( 58, 60, 64 ) or Color( 34, 37, 43 ) )
+			draw.SimpleText( tostring( i ), "mc_hud_small", 8, 6, selected and Color( 255, 244, 170 ) or Color( 205, 212, 224 ), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
+			if id then
+				MC.DrawMinecraftBlockIcon( id, w * 0.5 - 22, 11, 44, 44 )
+			end
+			if b then
+				MC.DrawFittedText( b.disp, "mc_hud_small", { "mc_hud_fit_16" }, w * 0.5, h - 13, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, w - 8 )
+			end
+		end
+	end
+
+	panel.PerformLayout = function( _, w, h )
+		local slotW, gap = 76, 6
+		local total = CREATIVE_HOTBAR_SIZE * slotW + ( CREATIVE_HOTBAR_SIZE - 1 ) * gap
+		local x = math.floor( ( w - total ) * 0.5 )
+		local y = 8
+		for i, btn in ipairs( buttons ) do
+			btn:SetPos( x + ( i - 1 ) * ( slotW + gap ), y )
+			btn:SetSize( slotW, h - y * 2 )
+		end
+	end
+
+	return panel
+end
+
+function MC.OpenCreativeInventory( onSelect, opts )
 	if IsValid( MC.CreativeFrame ) then MC.CreativeFrame:Remove() end
+	opts = opts or {}
+	local closeOnSelect = opts.closeOnSelect
+	if closeOnSelect == nil then closeOnSelect = true end
 	onSelect = onSelect or function( id )
-		RunConsoleCommand( "mc_block_sel", id )
+		MC.SetCreativeHotbarSlot( MC.GetCreativeHotbarSelectedSlot(), id )
 	end
 
 	local fr = vgui.Create( "DFrame" )
 	fr:SetTitle( "创造物品栏" )
-	fr:SetSize( 900, 640 )
+	fr:SetSize( 960, 700 )
 	fr:Center()
 	fr:MakePopup()
+	fr:SetKeyboardInputEnabled( true )
+	fr.Paint = function( _, w, h )
+		draw.RoundedBox( 6, 0, 0, w, h, Color( 30, 32, 37, 250 ) )
+		draw.RoundedBoxEx( 6, 0, 0, w, 28, Color( 18, 20, 24, 255 ), true, true, false, false )
+	end
+	fr.OnKeyCodePressed = function( _, key )
+		if key == KEY_ESCAPE then
+			fr:Close()
+			return
+		end
+		local slot = CREATIVE_HOTBAR_KEYS[key]
+		if slot then
+			surface.PlaySound( "common/wpn_select.wav" )
+			MC.SelectCreativeHotbarSlot( slot )
+		end
+	end
 	MC.CreativeFrame = fr
+
+	local hotbar = createCreativeHotbarPanel( fr )
+	hotbar:Dock( TOP )
+	hotbar:DockMargin( 8, 8, 8, 6 )
 
 	local search = vgui.Create( "DTextEntry", fr )
 	search:Dock( TOP )
-	search:DockMargin( 8, 8, 8, 6 )
+	search:DockMargin( 8, 0, 8, 6 )
 	search:SetTall( 30 )
 	search:SetPlaceholderText( "搜索中文名 / 英文名 / minecraft:id" )
+	search:SetDrawBackground( false )
+	search:SetTextColor( CREATIVE_UI.text )
+	if search.SetCursorColor then search:SetCursorColor( CREATIVE_UI.accent ) end
+	search.Paint = function( s, w, h )
+		draw.RoundedBox( 3, 0, 0, w, h, Color( 16, 18, 22, 245 ) )
+		surface.SetDrawColor( 88, 96, 110, s:HasFocus() and 190 or 110 )
+		surface.DrawOutlinedRect( 0, 0, w, h, 1 )
+		if s:GetValue() == "" and not s:HasFocus() then
+			draw.SimpleText( "搜索中文名 / 英文名 / minecraft:id", "mc_hud_small", 8, h * 0.5, CREATIVE_UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER )
+		end
+		s:DrawTextEntryText( CREATIVE_UI.text, Color( 95, 145, 210 ), CREATIVE_UI.text )
+	end
 
 	local controls = vgui.Create( "DPanel", fr )
 	controls:Dock( BOTTOM )
 	controls:DockMargin( 8, 0, 8, 8 )
 	controls:SetTall( 30 )
-	controls.Paint = function() end
+	controls.Paint = function( _, w, h )
+		draw.RoundedBox( 4, 0, 0, w, h, CREATIVE_UI.panel )
+		draw.RoundedBox( 3, 48, 3, w - 96, h - 6, CREATIVE_UI.panelInner )
+	end
 
 	local prev = vgui.Create( "DButton", controls )
 	prev:Dock( LEFT )
 	prev:SetWide( 42 )
-	prev:SetText( "<" )
+	MC.StyleCreativePagerButton( prev, "<" )
 
 	local next = vgui.Create( "DButton", controls )
 	next:Dock( RIGHT )
 	next:SetWide( 42 )
-	next:SetText( ">" )
+	MC.StyleCreativePagerButton( next, ">" )
 
 	local pageLabel = vgui.Create( "DLabel", controls )
 	pageLabel:Dock( FILL )
 	pageLabel:SetContentAlignment( 5 )
-	pageLabel:SetTextColor( color_white )
+	pageLabel:SetTextColor( CREATIVE_UI.text )
 
 	local tabs = vgui.Create( "DPropertySheet", fr )
 	tabs:Dock( FILL )
 	tabs:DockMargin( 8, 0, 8, 8 )
+	MC.StyleCreativePropertySheet( tabs )
 
 	local layouts = {}
 	local activeCategory = "all"
 	local page = 1
 	for _, cat in ipairs( MC.CreativeCategories ) do
-		local scroll = vgui.Create( "DScrollPanel", tabs )
-		local layout = vgui.Create( "DIconLayout", scroll )
+		local grid = vgui.Create( "DPanel", tabs )
+		MC.StyleCreativeGridPanel( grid )
+		local layout = vgui.Create( "DPanel", grid )
 		layout:Dock( FILL )
-		layout:SetSpaceX( 6 )
-		layout:SetSpaceY( 6 )
+		layout:DockMargin( 8, 8, 8, 8 )
+		layout.Paint = function() end
+		layout.PerformLayout = layoutCreativeGridSlots
 		layouts[cat.id] = layout
-		local sheet = tabs:AddSheet( cat.label, scroll, nil, false, false, cat.label )
-		if sheet and sheet.Tab then sheet.Tab.MCCategoryID = cat.id end
+		local sheet = tabs:AddSheet( cat.label, grid, nil, false, false, cat.label )
+		if sheet and sheet.Tab then
+			sheet.Tab.MCCategoryID = cat.id
+			sheet.Tab:SetTextColor( CREATIVE_UI.text )
+			sheet.Tab.Paint = function( s, w, h )
+				local active = tabs:GetActiveTab() == s
+				local bg = active and CREATIVE_UI.panelInner or ( s:IsHovered() and CREATIVE_UI.controlHover or Color( 38, 42, 49, 245 ) )
+				draw.RoundedBoxEx( 4, 0, 0, w, h, bg, true, true, false, false )
+				surface.SetDrawColor( active and Color( 236, 230, 190, 180 ) or Color( 85, 92, 104, 120 ) )
+				surface.DrawOutlinedRect( 0, 0, w, h, 1 )
+			end
+		end
 	end
 
 	local function rebuild()
@@ -276,7 +645,7 @@ function MC.OpenCreativeInventory( onSelect )
 		local first = ( page - 1 ) * CREATIVE_PAGE_SIZE + 1
 		local last = math.min( #ids, first + CREATIVE_PAGE_SIZE - 1 )
 		for i = first, last do
-			addCreativeButton( layout, ids[i], onSelect, fr )
+			addCreativeButton( layout, ids[i], onSelect, fr, closeOnSelect )
 		end
 		layout:InvalidateLayout( true )
 		pageLabel:SetText( string.format( "%d / %d    %d 个方块", page, pages, #ids ) )

@@ -6,9 +6,9 @@ MC = MC or {}
 MC.Config = MC.Config or {}
 
 ------------------------------------------------------------------ world geometry
--- Units per block edge. 36u keeps half-block collision at the Source step height.
+-- Units per block edge. 36.5u keeps the Minecraft scale slightly above Source's half-step edge.
 -- NOTE: changing this invalidates existing saves (positions are in blocks * size).
-MC.Config.BlockSize = 36
+MC.Config.BlockSize = 36.5
 MC.Config.DefaultReach = MC.Config.BlockSize * 5
 MC.Config.PlayerHullWidth = MC.Config.BlockSize * 0.6
 MC.Config.PlayerHullHeight = MC.Config.BlockSize * 1.8
