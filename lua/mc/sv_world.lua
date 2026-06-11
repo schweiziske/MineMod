@@ -1095,8 +1095,35 @@ timer.Create( "mc_block_tick", 1, 0, function()
 end )
 
 ------------------------------------------------------------------- persistence
+local SAVE_DIR = "mc"
+local SAVE_SLOT_DIR = "mc/saves"
+
 local function savePath()
-	return "mc/" .. game.GetMap() .. ".dat"
+	return SAVE_DIR .. "/" .. game.GetMap() .. ".dat"
+end
+
+local function saveSlotName( name )
+	name = string.Trim( tostring( name or "" ) )
+	if name == "" then return nil end
+	name = string.gsub( name, "[%c/\\:%*%?\"<>|]", "_" )
+	name = string.gsub( name, "%.%.+", "_" )
+	name = string.gsub( name, "^%.+", "" )
+	name = string.Trim( string.sub( name, 1, 64 ) )
+	if name == "" then return nil end
+	return name
+end
+
+local function saveSlotPath( slotName )
+	return SAVE_SLOT_DIR .. "/" .. slotName .. ".dat"
+end
+
+local function saveMetaPath( slotName )
+	return SAVE_SLOT_DIR .. "/" .. slotName .. ".json"
+end
+
+local function ensureSaveDirs( named )
+	file.CreateDir( SAVE_DIR )
+	if named then file.CreateDir( SAVE_SLOT_DIR ) end
 end
 
 local function savedBlockCount( data )
@@ -1125,7 +1152,7 @@ local function packSaveCells( cells )
 	return table.concat( out, ";" )
 end
 
-function SV.Save()
+local function buildSaveData( slotName )
 	local chunks = {}
 	local palette = {}
 	local paletteIndex = {}
@@ -1149,13 +1176,52 @@ function SV.Save()
 			chunks[#chunks + 1] = { c.cx, c.cy, c.cz, packSaveCells( cells ) }
 		end
 	end
-	local json = util.TableToJSON( { v = 5, bs = MC.BS, cs = MC.CS, h = MC.CH, p = palette, chunks = chunks } )
+	return {
+		v = 5,
+		map = game.GetMap(),
+		slotName = slotName,
+		savedAt = os.time(),
+		bs = MC.BS,
+		cs = MC.CS,
+		h = MC.CH,
+		p = palette,
+		chunks = chunks,
+	}, chunks
+end
+
+local function writeSaveMeta( slotName, path, data, chunks, blocks )
+	if not slotName then return end
+	ensureSaveDirs( true )
+	local meta = {
+		v = 1,
+		name = slotName,
+		path = path,
+		map = data.map or game.GetMap(),
+		savedAt = data.savedAt or os.time(),
+		savedAtText = os.date( "%Y-%m-%d %H:%M:%S", data.savedAt or os.time() ),
+		bs = data.bs,
+		h = data.h,
+		chunks = chunks,
+		blocks = blocks,
+	}
+	local json = util.TableToJSON( meta, true )
+	if json then file.Write( saveMetaPath( slotName ), json ) end
+end
+
+local function readSaveMeta( slotName )
+	local raw = file.Read( saveMetaPath( slotName ), "DATA" )
+	return raw and util.JSONToTable( raw ) or nil
+end
+
+local function writeSavePath( path, slotName )
+	local data, chunks = buildSaveData( slotName )
+	local json = util.TableToJSON( data )
 	if not json then return end
-	file.CreateDir( "mc" )
+	ensureSaveDirs( slotName ~= nil )
 	local compressed = util.Compress( json )
 	if not compressed then return end
-	file.Write( savePath(), compressed )
-	local verifyRaw = file.Read( savePath(), "DATA" )
+	file.Write( path, compressed )
+	local verifyRaw = file.Read( path, "DATA" )
 	local verifyJSON = verifyRaw and util.Decompress( verifyRaw )
 	local verifyData = verifyJSON and util.JSONToTable( verifyJSON )
 	local verifyChunks, verifyBlocks = savedBlockCount( verifyData )
@@ -1163,20 +1229,31 @@ function SV.Save()
 		MsgN( "[MC] !!! save verify mismatch chunks " .. verifyChunks .. "/" .. #chunks ..
 			" blocks " .. verifyBlocks .. "/" .. SV.BlockCount )
 	end
+	writeSaveMeta( slotName, path, data, #chunks, SV.BlockCount )
 	SV.Dirty = false
-	MsgN( "[MC] saved " .. #chunks .. " chunks / " .. SV.BlockCount .. " blocks" )
+	MsgN( "[MC] saved " .. #chunks .. " chunks / " .. SV.BlockCount .. " blocks" ..
+		( slotName and ( " as \"" .. slotName .. "\" on map " .. game.GetMap() ) or "" ) )
+	return true, path
 end
 
-function SV.Load()
-	local path = savePath()
-	if not file.Exists( path, "DATA" ) then return end
+function SV.Save( slotName )
+	slotName = saveSlotName( slotName )
+	return writeSavePath( slotName and saveSlotPath( slotName ) or savePath(), slotName )
+end
+
+local function loadSavePath( path, resyncClients, requestedName )
+	if not file.Exists( path, "DATA" ) then return false, "save_not_found" end
 
 	local raw = file.Read( path, "DATA" )
-	if not raw or raw == "" then return end
+	if not raw or raw == "" then return false, "empty_save" end
 	local json = util.Decompress( raw )
-	if not json then return end
+	if not json then return false, "decompress_failed" end
 	local data = util.JSONToTable( json )
-	if not data or not data.chunks then return end
+	if not data or not data.chunks then return false, "invalid_save" end
+
+	if data.map and data.map ~= game.GetMap() then
+		MsgN( "[MC] WARNING: save map " .. tostring( data.map ) .. " != current " .. game.GetMap() )
+	end
 
 	if data.bs and data.bs ~= MC.BS then
 		MsgN( "[MC] WARNING: save BlockSize " .. data.bs .. " != current " .. MC.BS .. " (positions may be off)" )
@@ -1187,8 +1264,7 @@ function SV.Load()
 		MsgN( "[MC] remapping save chunk height " .. savedHeight .. " -> " .. MC.CH )
 	end
 
-	MC.World = {}
-	SV.BlockCount = 0
+	clearWorldNoNet()
 	local cache = {}
 	local palette = data.p or data.palette
 
@@ -1257,7 +1333,53 @@ function SV.Load()
 		end
 	end
 
-	MsgN( "[MC] loaded " .. SV.BlockCount .. " blocks" )
+	SV.Dirty = false
+	if resyncClients then resyncAllClients() end
+	MsgN( "[MC] loaded " .. SV.BlockCount .. " blocks" ..
+		( requestedName and ( " from \"" .. requestedName .. "\"" ) or "" ) ..
+		( data.map and ( " saved on map " .. tostring( data.map ) ) or "" ) )
+	return true
+end
+
+function SV.Load()
+	return loadSavePath( savePath(), false )
+end
+
+function SV.LoadSave( slotName, resyncClients )
+	slotName = saveSlotName( slotName )
+	if not slotName then return false, "missing_save_name" end
+	return loadSavePath( saveSlotPath( slotName ), resyncClients, slotName )
+end
+
+function SV.DeleteSave( slotName )
+	slotName = saveSlotName( slotName )
+	if not slotName then return false, "missing_save_name" end
+	local path = saveSlotPath( slotName )
+	if not file.Exists( path, "DATA" ) then return false, "save_not_found" end
+	file.Delete( path )
+	file.Delete( saveMetaPath( slotName ) )
+	MsgN( "[MC] deleted save \"" .. slotName .. "\"" )
+	return true
+end
+
+function SV.SaveList()
+	ensureSaveDirs( true )
+	local files = file.Find( SAVE_SLOT_DIR .. "/*.dat", "DATA" ) or {}
+	local out = {}
+	for _, fn in ipairs( files ) do
+		local slotName = string.gsub( fn, "%.dat$", "" )
+		local meta = readSaveMeta( slotName ) or {}
+		out[#out + 1] = {
+			name = meta.name or slotName,
+			map = meta.map or "unknown",
+			blocks = math.floor( tonumber( meta.blocks ) or 0 ),
+			chunks = math.floor( tonumber( meta.chunks ) or 0 ),
+			savedAtText = meta.savedAtText or "?",
+			path = SAVE_SLOT_DIR .. "/" .. fn,
+		}
+	end
+	table.sort( out, function( a, b ) return tostring( a.name ) < tostring( b.name ) end )
+	return out
 end
 
 ------------------------------------------------------------------------ hooks
@@ -1295,9 +1417,49 @@ concommand.Add( "mc_block_sel", function( ply, _, args )
 end )
 
 ------------------------------------------------------------------- admin commands
-concommand.Add( "mc_save", function( ply )
+local function saveCommandName( args )
+	return joinArgs( args or {}, 1 )
+end
+
+local function printSaveManagerLine( ply, msg )
+	MsgN( msg )
+	if IsValid( ply ) then ply:PrintMessage( HUD_PRINTCONSOLE, msg ) end
+end
+
+concommand.Add( "mc_save", function( ply, _, args )
 	if IsValid( ply ) and not ply:IsAdmin() then return end
-	SV.Save()
+	SV.Save( saveCommandName( args ) )
+end )
+
+local function runSaveListCommand( ply )
+	if IsValid( ply ) and not ply:IsAdmin() then return end
+	local saves = SV.SaveList()
+	if #saves == 0 then
+		printSaveManagerLine( ply, "[MC] no named saves in data/mc/saves" )
+		return
+	end
+	printSaveManagerLine( ply, "[MC] named saves:" )
+	for _, save in ipairs( saves ) do
+		printSaveManagerLine( ply, string.format(
+			"[MC] %s | map=%s | blocks=%d | chunks=%d | saved=%s",
+			tostring( save.name ), tostring( save.map ), save.blocks or 0, save.chunks or 0, tostring( save.savedAtText )
+		) )
+	end
+end
+
+concommand.Add( "mc_save_list", runSaveListCommand )
+concommand.Add( "mc_saves", runSaveListCommand )
+
+concommand.Add( "mc_load_save", function( ply, _, args )
+	if IsValid( ply ) and not ply:IsAdmin() then return end
+	local ok, err = SV.LoadSave( saveCommandName( args ), true )
+	if not ok then printSaveManagerLine( ply, "[MC] load save failed: " .. tostring( err ) ) end
+end )
+
+concommand.Add( "mc_delete_save", function( ply, _, args )
+	if IsValid( ply ) and not ply:IsAdmin() then return end
+	local ok, err = SV.DeleteSave( saveCommandName( args ) )
+	if not ok then printSaveManagerLine( ply, "[MC] delete save failed: " .. tostring( err ) ) end
 end )
 
 concommand.Add( "mc_save_diag", function( ply )
