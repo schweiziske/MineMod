@@ -17,6 +17,7 @@ Garry's Mod 里的 Minecraft 风格方块系统。方块不按实体逐个生成
 - 不完整方块使用 Minecraft model quads 渲染，碰撞/选中使用 `MC.BlockBoxes()`。
 - `*_fence_gate` 渲染、碰撞和选中都使用生成模型盒，不能退回整块 `FullBlockBox`。
 - `mc_autosave` 默认是 `0`，自动保存关闭。
+- `mc_save_public` 默认是 `0`，命名存档读取/保存默认仅管理员；设为 `1` 后普通玩家也能读取/保存，删除仍仅管理员。
 - 栅栏、玻璃板、铁栅栏、墙、紫颂植株等动态连接方块通过 `MC.GeneratedBlockConnections` 标记，runtime 只按这个显式表处理连接/碰撞。
 
 ## 主要文件
@@ -27,10 +28,12 @@ lua/mc/sh_config.lua                     尺寸、ConVar、net bit、atlas 配�
 lua/mc/sh_blocks.lua                     方块注册、状态、朝向、碰撞盒
 lua/mc/sh_voxel.lua                      方块存储、坐标换算、方块射线
 lua/mc/sv_world.lua                      服务端世界 API、放置、破坏、导入、保存、同步
+lua/mc/sv_saves.lua                      命名存档管理、元数据、存档 UI 网络接口
 lua/mc/sv_damage.lua                     GMod 伤害破坏方块、MC 风格爆炸坑
 lua/mc/cl_net.lua                        客户端同步接收
 lua/mc/cl_render.lua                     客户端 IMesh 渲染和预测碰撞 dirty
 lua/mc/cl_ui.lua                         方块图标、选择窗口、选中框
+lua/mc/cl_save_ui.lua                    命名存档管理 UI
 lua/entities/mc_chunk/                   chunk 实体和 multiconvex 碰撞
 lua/weapons/mc_placer/shared.lua         方块放置器 SWEP
 lua/weapons/mc_creative_placer/shared.lua 创造物品栏方块放置器 SWEP
@@ -75,6 +78,8 @@ mc_saves
 mc_load_save <name>
 mc_delete_save <name>
 mc_save_diag
+mc_save_manager
+mc_saves_ui
 ```
 
 ## 验证
@@ -93,6 +98,8 @@ $luaFiles = @(
   "lua\mc\sh_blocks.lua",
   "lua\mc\sh_config.lua",
   "lua\mc\cl_ui.lua",
+  "lua\mc\cl_save_ui.lua",
+  "lua\mc\sv_saves.lua",
   "lua\mc\sv_damage.lua",
   "lua\entities\mc_chunk\init.lua",
   "lua\weapons\mc_creative_placer\shared.lua",
