@@ -93,6 +93,7 @@ function MC.MarkCellPhysNeighbours( bx, by, bz, priority )
 end
 
 MC.PendingPredictions = MC.PendingPredictions or {}
+local PLACE_PHYS_PLAYER_PADDING = MC.BS * 0.75
 
 local function predictionKey( bx, by, bz )
 	return bx .. ":" .. by .. ":" .. bz
@@ -126,7 +127,7 @@ function MC.PredictSetBlock( bx, by, bz, id, orient )
 		oldOrient = oldOrient,
 		expire = CurTime() + 2.5,
 	}
-	markPredictedCellDirty( bx, by, bz )
+	markPredictedCellDirty( bx, by, bz, MC.BlockAABBOverlapsPlayerHull( bx, by, bz, PLACE_PHYS_PLAYER_PADDING ) )
 	return true
 end
 

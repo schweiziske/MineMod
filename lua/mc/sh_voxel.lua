@@ -66,6 +66,23 @@ function MC.ReachAllowsEye( eyePos, bx, by, bz, reach )
 	return dx * dx + dy * dy + dz * dz <= reach * reach
 end
 
+function MC.BlockAABBOverlapsPlayerHull( bx, by, bz, padding )
+	padding = math.max( 0, tonumber( padding ) or 0 )
+	local mn = MC.CellWorldMin( bx, by, bz )
+	local mxx, mxy, mxz = mn.x + BS, mn.y + BS, mn.z + BS
+	for _, p in ipairs( player.GetAll() ) do
+		if p:Alive() then
+			local pmn, pmx = p:WorldSpaceAABB()
+			if mn.x - padding < pmx.x and mxx + padding > pmn.x
+			and mn.y - padding < pmx.y and mxy + padding > pmn.y
+			and mn.z - padding < pmx.z and mxz + padding > pmn.z then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 function MC.CurrentReach()
 	local cv = GetConVar( "mc_reach" )
 	local fallback = MC.Config and MC.Config.DefaultReach or BS * 5
@@ -92,19 +109,7 @@ local function previewWorldBoundsOK( bx, by )
 end
 
 local function previewWouldTrapPlayer( bx, by, bz )
-	local mn = MC.CellWorldMin( bx, by, bz )
-	local mxx, mxy, mxz = mn.x + BS, mn.y + BS, mn.z + BS
-	for _, p in ipairs( player.GetAll() ) do
-		if p:Alive() then
-			local pmn, pmx = p:WorldSpaceAABB()
-			if mn.x < pmx.x and mxx > pmn.x
-			and mn.y < pmx.y and mxy > pmn.y
-			and mn.z < pmx.z and mxz > pmn.z then
-				return true
-			end
-		end
-	end
-	return false
+	return MC.BlockAABBOverlapsPlayerHull( bx, by, bz, 0 )
 end
 
 function MC.CanPreviewBreak( ply, bx, by, bz )

@@ -23,12 +23,14 @@ local SHARED = {
 }
 local SERVER_FILES = {
 	"mc/sv_world.lua",
+	"mc/sv_saves.lua",
 	"mc/sv_damage.lua",
 	"mc/sv_player.lua",
 }
 local CLIENT_FILES = {
 	"mc/cl_render.lua",
 	"mc/cl_ui.lua",
+	"mc/cl_save_ui.lua",
 	"mc/cl_effects.lua",
 	"mc/cl_net.lua",
 	"mc/cl_debug.lua",
