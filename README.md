@@ -6,7 +6,7 @@ Garry's Mod 里的 Minecraft 风格方块系统。方块不按实体逐个生成
 
 - 方块边长是 `36.5` Source units。
 - chunk 水平尺寸固定为 `16x16`，垂直 section 高度是 `32`。
-- 支持放置、破坏、使用、`/fill`、导入、保存、分片同步。
+- 支持放置、破坏、使用、`/fill`、导入、默认存档、命名多存档、分片同步。
 - 提供 `MC 创造方块放置器` SWEP；Reload 打开带分类、搜索和分页的创造物品栏。
 - 提供 `MC.SV.SetBlock` / `SetBlockSpec` / `RemoveBlock` 给非玩家插件、mob、状态机写入世界。
 - 支持 GMod 武器/爆炸破坏方块；血量来自 Minecraft hardness 乘 `mc_block_health_scale`。
@@ -69,6 +69,11 @@ mc_clear
 mc_rebuild
 mc_resync
 mc_save
+mc_save <name>
+mc_save_list
+mc_saves
+mc_load_save <name>
+mc_delete_save <name>
 mc_save_diag
 ```
 
@@ -78,6 +83,7 @@ mc_save_diag
 node _tools\test_block_properties.js
 node _tools\test_block_damage_api.js
 node _tools\test_creative_inventory.js
+node _tools\test_save_manager.js
 node _tools\test_fence_behavior.js
 node _tools\test_generated_block_connections.js
 node _tools\test_particle_alpha_flags.js
