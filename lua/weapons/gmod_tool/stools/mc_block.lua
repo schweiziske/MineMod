@@ -186,7 +186,6 @@ function TOOL.BuildCPanel( panel )
 		end
 		btn.DoClick = function()
 			RunConsoleCommand( "mc_block_block", id )
-			surface.PlaySound( "ui/buttonclickrelease.wav" )
 		end
 	end
 
