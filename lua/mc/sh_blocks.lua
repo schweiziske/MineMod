@@ -62,6 +62,11 @@ local function generatedBlockProperties( name, mcid )
 	return nil
 end
 
+local function generatedConnectionKind( name, mcid )
+	local generated = MC.GeneratedBlockConnections or {}
+	return generated[mcid] or generated[name]
+end
+
 local function propertyNumber( value, fallback )
 	value = tonumber( value )
 	if value == nil then return fallback end
@@ -194,13 +199,14 @@ local ForceSolidNames = {
 }
 
 local function shouldForceSolid( name )
-	return name == "iron_bars"
+	local kind = generatedConnectionKind( name, "minecraft:" .. tostring( name or "" ) )
+	return kind == "fence"
+		or kind == "fence_gate"
+		or kind == "wall"
+		or kind == "pane"
+		or kind == "bars"
+		or kind == "pipe6"
 		or ForceSolidNames[name] == true
-		or string.find( name, "_bars$", 1, false ) ~= nil
-		or string.find( name, "_pane$", 1, false ) ~= nil
-		or string.find( name, "_fence$", 1, false ) ~= nil
-		or string.find( name, "_fence_gate$", 1, false ) ~= nil
-		or string.find( name, "_wall$", 1, false ) ~= nil
 end
 
 function MC.RegisterBlock( def )
@@ -213,6 +219,7 @@ function MC.RegisterBlock( def )
 	local generatedSoundTypes = MC.GeneratedBlockSoundTypes or {}
 	local generatedNoTerrainParticles = MC.GeneratedNoTerrainParticles or {}
 	local generatedProps = generatedBlockProperties( name, mcid ) or {}
+	local connectionKind = def.connection or generatedConnectionKind( name, mcid )
 	local textures = def.textures or {}
 	local top = tileValue( textures.top or def.top, 0 )
 	local side = tileValue( textures.side or def.side, top )
@@ -234,6 +241,7 @@ function MC.RegisterBlock( def )
 		boxes = normalizeBoxes( def.boxes ),
 		boxFaces = normalizeBoxFaces( def.boxFaces ),
 		modelQuads = normalizeModelQuads( def.modelQuads ),
+		connection = connectionKind,
 		soundType = def.soundType or generatedSoundTypes[mcid] or generatedSoundTypes[name] or "STONE",
 		spawnTerrainParticles = def.spawnTerrainParticles ~= false and generatedNoTerrainParticles[mcid] ~= true,
 		hardness = propertyNumber( def.hardness, propertyNumber( generatedProps.hardness, 1 ) ),
@@ -862,7 +870,7 @@ end
 
 local function paneParticleTile( b )
 	if not b or not b.name then return b and ( b.particle or b.side ) or 0 end
-	if b.name == "iron_bars" or string.find( b.name, "_bars$", 1, false ) then return b.particle or b.side end
+	if b.connection == "bars" then return b.particle or b.side end
 	if b.name == "glass_pane" and T.glass then return T.glass end
 	local glassName = string.match( b.name, "^(.*_stained_glass)_pane$" )
 	if glassName and T[glassName] ~= nil then return T[glassName] end
@@ -958,18 +966,6 @@ local function modelBoxes( b, orient )
 	return out
 end
 
-local FenceGateBoxes = FullBlockBox
-
-local function fenceGateBoxes( orient )
-	local steps = horizontalOrientSteps( MC.NormalizeOrient and orient or 0 )
-	if steps == 0 then return FenceGateBoxes end
-	local out = {}
-	for i, box in ipairs( FenceGateBoxes ) do
-		out[i] = rotateBoxZ( box, steps )
-	end
-	return out
-end
-
 local function stairBoxes( orient )
 	local facing = StairFacingByOrient[orient] or MC.Direction.NORTH
 	local top = StairHalfByOrient[orient] == "top"
@@ -990,35 +986,18 @@ local function stairBoxes( orient )
 	return boxes
 end
 
-local function isFenceName( name )
-	return name and string.find( name, "_fence$", 1, false ) ~= nil
-end
-
-local function isFenceGateName( name )
-	return name and string.find( name, "_fence_gate$", 1, false ) ~= nil
-end
-
-local function isWallName( name )
-	return name and string.find( name, "_wall$", 1, false ) ~= nil
-end
-
--- pane-style blocks: glass panes plus the bar families (iron_bars and the
--- copper_bars variants all end in _bars)
-local function isPaneName( name )
-	if not name then return false end
-	return name == "iron_bars"
-		or string.find( name, "_pane$", 1, false ) ~= nil
-		or string.find( name, "_bars$", 1, false ) ~= nil
+local function isPaneKind( kind )
+	return kind == "pane" or kind == "bars"
 end
 
 function MC.IsFenceBlock( id )
 	local b = MC.Blocks[id]
-	return b and isFenceName( b.name ) or false
+	return b and b.connection == "fence" or false
 end
 
 function MC.IsPaneBlock( id )
 	local b = MC.Blocks[id]
-	return b and isPaneName( b.name ) or false
+	return b and isPaneKind( b.connection ) or false
 end
 
 -- vanilla translucent render layer: real alpha blending instead of alpha cutout.
@@ -1046,7 +1025,7 @@ local function fenceConnectsToBlock( id, orient )
 	if id == 0 then return false end
 	local b = MC.Blocks[id]
 	if not b then return false end
-	if isFenceName( b.name ) or isFenceGateName( b.name ) or isWallName( b.name ) or isPaneName( b.name ) then return true end
+	if b.connection == "fence" or b.connection == "fence_gate" or b.connection == "wall" or isPaneKind( b.connection ) then return true end
 	if b.solid == false then return false end
 	return MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) or not b.shape
 end
@@ -1091,7 +1070,7 @@ local function paneConnectsToBlock( id, orient )
 	if id == 0 then return false end
 	local b = MC.Blocks[id]
 	if not b then return false end
-	if isPaneName( b.name ) or isFenceName( b.name ) or isFenceGateName( b.name ) or isWallName( b.name ) then return true end
+	if isPaneKind( b.connection ) or b.connection == "fence" or b.connection == "fence_gate" or b.connection == "wall" then return true end
 	if b.solid == false then return false end
 	return MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) or not b.shape
 end
@@ -1152,6 +1131,48 @@ local function paneCollisionBoxes( bx, by, bz )
 	return boxes
 end
 
+local function pipe6ConnectsToBlock( id, dir )
+	if id == 0 then return false end
+	local b = MC.Blocks[id]
+	if not b then return false end
+	if b.connection == "pipe6" or b.name == "chorus_flower" then return true end
+	return dir == MC.Direction.DOWN and b.name == "end_stone"
+end
+
+local function pipe6ConnectsToCell( bx, by, bz, dir )
+	if bx == nil or not MC.GetBlock then return false end
+	return pipe6ConnectsToBlock( MC.GetBlock( bx, by, bz ), dir )
+end
+
+local function pipe6Boxes( bx, by, bz )
+	local boxes = {
+		{ 0.25, 0.25, 0.25, 0.75, 0.75, 0.75, part = "core" },
+	}
+
+	if bx == nil or by == nil or bz == nil then return boxes end
+
+	if pipe6ConnectsToCell( bx, by - 1, bz, MC.Direction.NORTH ) then
+		boxes[#boxes + 1] = { 0.25, 0, 0.25, 0.75, 0.25, 0.75, part = "arm", dir = "yn" }
+	end
+	if pipe6ConnectsToCell( bx, by + 1, bz, MC.Direction.SOUTH ) then
+		boxes[#boxes + 1] = { 0.25, 0.75, 0.25, 0.75, 1, 0.75, part = "arm", dir = "yp" }
+	end
+	if pipe6ConnectsToCell( bx - 1, by, bz, MC.Direction.WEST ) then
+		boxes[#boxes + 1] = { 0, 0.25, 0.25, 0.25, 0.75, 0.75, part = "arm", dir = "xn" }
+	end
+	if pipe6ConnectsToCell( bx + 1, by, bz, MC.Direction.EAST ) then
+		boxes[#boxes + 1] = { 0.75, 0.25, 0.25, 1, 0.75, 0.75, part = "arm", dir = "xp" }
+	end
+	if pipe6ConnectsToCell( bx, by, bz - 1, MC.Direction.DOWN ) then
+		boxes[#boxes + 1] = { 0.25, 0.25, 0, 0.75, 0.75, 0.25, part = "arm", dir = "zn" }
+	end
+	if pipe6ConnectsToCell( bx, by, bz + 1, MC.Direction.UP ) then
+		boxes[#boxes + 1] = { 0.25, 0.25, 0.75, 0.75, 0.75, 1, part = "arm", dir = "zp" }
+	end
+
+	return boxes
+end
+
 function MC.BlockBoxes( id, orient, bx, by, bz )
 	local b = MC.Blocks[id]
 	if not b then return nil end
@@ -1164,17 +1185,20 @@ function MC.BlockBoxes( id, orient, bx, by, bz )
 	if b.shape == "stairs" then
 		return stairBoxes( MC.NormalizeOrient( id, orient ) )
 	end
-	if isFenceName( b.name ) then
+	if b.connection == "fence" then
 		return fenceBoxes( bx, by, bz )
 	end
-	if isFenceGateName( b.name ) then
-		return fenceGateBoxes( MC.NormalizeOrient( id, orient ) )
+	if b.connection == "fence_gate" then
+		return modelBoxes( b, MC.NormalizeOrient( id, orient ) )
 	end
-	if isWallName( b.name ) then
+	if b.connection == "wall" then
 		return FullBlockBox
 	end
-	if isPaneName( b.name ) then
+	if isPaneKind( b.connection ) then
 		return paneBoxes( bx, by, bz )
+	end
+	if b.connection == "pipe6" then
+		return pipe6Boxes( bx, by, bz )
 	end
 	if b.shape == "model" then
 		return modelBoxes( b, orient )
@@ -1187,7 +1211,7 @@ end
 -- and Source's multiconvex builder is unhappy with many thin slivers.
 function MC.BlockCollisionBoxes( id, orient, bx, by, bz )
 	local b = MC.Blocks[id]
-	if b and isFenceName( b.name ) and bx ~= nil and by ~= nil and bz ~= nil then
+	if b and b.connection == "fence" and bx ~= nil and by ~= nil and bz ~= nil then
 		local boxes = {
 			{ 0.375, 0.375, 0, 0.625, 0.625, 1 },
 		}
@@ -1205,7 +1229,7 @@ function MC.BlockCollisionBoxes( id, orient, bx, by, bz )
 		end
 		return boxes
 	end
-	if b and isPaneName( b.name ) and bx ~= nil and by ~= nil and bz ~= nil then
+	if b and isPaneKind( b.connection ) and bx ~= nil and by ~= nil and bz ~= nil then
 		return paneCollisionBoxes( bx, by, bz )
 	end
 	return MC.BlockBoxes( id, orient, bx, by, bz )
