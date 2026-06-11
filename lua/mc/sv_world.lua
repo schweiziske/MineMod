@@ -16,6 +16,7 @@ local C   = MC.Config
 
 local BULK_SET_CELLS_PER_MESSAGE = 1024
 local BULK_BREAK_FX_LIMIT = 64
+local SYNC_TIMER_INTERVAL = 0.05
 
 SV.BlockCount = SV.BlockCount or 0
 SV.PhysDirty  = SV.PhysDirty or {}   -- chunkKey -> due time (collision needs rebuild)
@@ -24,31 +25,45 @@ SV.SyncQueue  = SV.SyncQueue or {}   -- player -> { keys = {}, i = 1, active = n
 SV.Dirty      = SV.Dirty or false    -- world changed since last save
 local PHYS_REBUILD_DELAY = 0.12
 
+local function syncFastEnabled()
+	return not C.SyncFast or C.SyncFast:GetBool()
+end
+
 local function syncCellsPerPart()
 	if C.SyncCells then
-		return math.Clamp( C.SyncCells:GetInt(), 1, 12000 )
+		return math.Clamp( C.SyncCells:GetInt(), 1, MC.CS * MC.CS * MC.CH )
 	end
 	return C.SyncCellsPerPart or 4000
 end
 
 local function syncMessagesPerTick()
 	if C.SyncMsgs then
-		return math.Clamp( C.SyncMsgs:GetInt(), 1, 16 )
+		return math.Clamp( C.SyncMsgs:GetInt(), 1, syncFastEnabled() and 128 or 16 )
 	end
 	return C.SyncMessagesPerTick or 4
 end
 
 local function syncReliableBudget()
 	if C.SyncBudget then
-		return math.Clamp( C.SyncBudget:GetInt(), 8192, 52000 )
+		return math.Clamp( C.SyncBudget:GetInt(), 8192, syncFastEnabled() and 1048576 or 52000 )
 	end
 	return C.SyncReliableBudget or 48000
 end
 
-local function estimateSyncPartBytes( cells )
-	local bits = Net.COORD_BITS * 3 + Net.COUNT_BITS +
-		cells * ( Net.LOCAL_BITS + Net.ID_BITS + Net.ORIENT_BITS )
-	return math.ceil( bits / 8 ) + 64
+local function syncFrameSeconds()
+	if not syncFastEnabled() then return nil end
+	if C.SyncFrame then
+		return math.Clamp( C.SyncFrame:GetFloat(), 0.25, 20 ) / 1000
+	end
+	return ( C.SyncFrameMS or 4 ) / 1000
+end
+
+local function syncInFlightLimit()
+	if not syncFastEnabled() then return math.huge end
+	if C.SyncWindow then
+		return math.Clamp( C.SyncWindow:GetInt(), 32768, 4194304 )
+	end
+	return C.SyncInFlightLimit or 524288
 end
 
 local function decodeLocalWithHeight( li, height )
@@ -920,45 +935,53 @@ local function sendFullBegin( ply, active )
 		net.WriteInt( active.cz, Net.COORD_BITS )
 		net.WriteUInt( #active.lis, Net.COUNT_BITS )
 	net.Send( ply )
+	return MC.EstimateSyncBeginBytes()
 end
 
-local function sendFullPart( ply, active )
+local function sendFullPart( ply, active, byteLimit )
 	local chunk = MC.GetChunkByKey( active.key )
 	if not chunk then
 		active.i = #active.lis + 1
-		return false
+		return nil
 	end
 
 	local maxCells = syncCellsPerPart()
-	local part = {}
-	while active.i <= #active.lis and #part < maxCells do
+	if byteLimit then
+		maxCells = math.min( maxCells, MC.SyncCellsForByteBudget( byteLimit ) )
+		if maxCells <= 0 then return nil, "budget" end
+	end
+
+	local first = active.i
+	local last = active.i - 1
+	local count = 0
+	while active.i <= #active.lis and count < maxCells do
 		local li = active.lis[active.i]
 		local id = chunk.blocks[li]
 		if id and id ~= 0 then
-			part[#part + 1] = {
-				li = li,
-				id = id,
-				orient = MC.NormalizeOrient( id, chunk.orients and chunk.orients[li] ),
-			}
+			count = count + 1
+			last = active.i
 		end
 		active.i = active.i + 1
 	end
 
-	if #part == 0 then return false end
+	if count == 0 then return nil end
 
 	net.Start( "mc_full_part" )
 		net.WriteInt( active.cx, Net.COORD_BITS )
 		net.WriteInt( active.cy, Net.COORD_BITS )
 		net.WriteInt( active.cz, Net.COORD_BITS )
-		net.WriteUInt( #part, Net.COUNT_BITS )
-		for i = 1, #part do
-			local cell = part[i]
-			net.WriteUInt( cell.li, Net.LOCAL_BITS )
-			net.WriteUInt( cell.id, Net.ID_BITS )
-			net.WriteUInt( cell.orient, Net.ORIENT_BITS )
+		net.WriteUInt( count, Net.COUNT_BITS )
+		for i = first, last do
+			local li = active.lis[i]
+			local id = chunk.blocks[li]
+			if id and id ~= 0 then
+				net.WriteUInt( li, Net.LOCAL_BITS )
+				net.WriteUInt( id, Net.ID_BITS )
+				net.WriteUInt( MC.NormalizeOrient( id, chunk.orients and chunk.orients[li] ), Net.ORIENT_BITS )
+			end
 		end
 	net.Send( ply )
-	return true
+	return MC.EstimateSyncPartBytes( count )
 end
 
 local function sendFullEnd( ply, active )
@@ -967,6 +990,7 @@ local function sendFullEnd( ply, active )
 		net.WriteInt( active.cy, Net.COORD_BITS )
 		net.WriteInt( active.cz, Net.COORD_BITS )
 	net.Send( ply )
+	return MC.EstimateSyncEndBytes()
 end
 
 local function makeSyncActive( key )
@@ -995,10 +1019,10 @@ end
 function SV.BeginSync( ply )
 	local keys = {}
 	for key in pairs( MC.World ) do keys[#keys + 1] = key end
-	SV.SyncQueue[ply] = { keys = keys, i = 1 }
+	SV.SyncQueue[ply] = { keys = keys, i = 1, inflightBytes = 0 }
 end
 
-local function sendSyncStep( ply, q )
+local function sendSyncStep( ply, q, byteLimit )
 	while not q.active do
 		if q.i > #q.keys then return false end
 		q.active = makeSyncActive( q.keys[q.i] )
@@ -1007,36 +1031,56 @@ local function sendSyncStep( ply, q )
 
 	local active = q.active
 	if not active.begun then
-		sendFullBegin( ply, active )
+		local bytes = MC.EstimateSyncBeginBytes()
+		if byteLimit and byteLimit < bytes then return nil, "budget" end
 		active.begun = true
-		return true
+		return sendFullBegin( ply, active )
 	end
 
 	while active.i <= #active.lis do
-		if sendFullPart( ply, active ) then return true end
+		local bytes, reason = sendFullPart( ply, active, byteLimit )
+		if bytes then return bytes end
+		if reason == "budget" then return nil, reason end
 	end
 
-	sendFullEnd( ply, active )
+	local bytes = MC.EstimateSyncEndBytes()
+	if byteLimit and byteLimit < bytes then return nil, "budget" end
 	q.active = nil
-	return true
+	return sendFullEnd( ply, active )
 end
 
 -- drip small chunk parts to each syncing player; large chunks must never be one
 -- reliable net message.
-timer.Create( "mc_sync", 0.05, 0, function()
+timer.Create( "mc_sync", SYNC_TIMER_INTERVAL, 0, function()
+	local frameBudget = syncFrameSeconds()
+	local deadline = frameBudget and ( SysTime() + frameBudget ) or nil
 	for ply, q in pairs( SV.SyncQueue ) do
 		if not IsValid( ply ) then SV.SyncQueue[ply] = nil continue end
 		local sent = 0
 		local sentBytes = 0
 		local budget = syncMessagesPerTick()
 		local byteBudget = syncReliableBudget()
-		local partBytes = estimateSyncPartBytes( syncCellsPerPart() )
-		while sent < budget and sentBytes + partBytes <= byteBudget and sendSyncStep( ply, q ) do
+		local window = syncInFlightLimit()
+		while sent < budget and sentBytes < byteBudget and ( q.inflightBytes or 0 ) < window do
+			if deadline and SysTime() >= deadline then break end
+			local bytes, reason = sendSyncStep( ply, q, byteBudget - sentBytes )
+			if not bytes then
+				if reason == "budget" then break end
+				break
+			end
 			sent = sent + 1
-			sentBytes = sentBytes + partBytes
+			sentBytes = sentBytes + bytes
+			q.inflightBytes = ( q.inflightBytes or 0 ) + bytes
 		end
 		if q.i > #q.keys and not q.active then SV.SyncQueue[ply] = nil end
 	end
+end )
+
+net.Receive( "mc_full_ack", function( _, ply )
+	local q = SV.SyncQueue[ply]
+	if not q then return end
+	local bytes = math.Clamp( net.ReadUInt( 32 ), 0, 4194304 )
+	q.inflightBytes = math.max( 0, ( q.inflightBytes or 0 ) - bytes )
 end )
 
 timer.Create( "mc_block_tick", 1, 0, function()

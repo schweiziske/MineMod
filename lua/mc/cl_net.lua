@@ -8,6 +8,30 @@ local Net = MC.Net
 MC.PendingFull = MC.PendingFull or {}
 MC.SyncProgress = MC.SyncProgress or { expected = 0, received = 0, chunks = 0, doneChunks = 0, active = false, lastUpdate = 0 }
 
+local PendingFullAckBytes = 0
+local NextFullAckAt = 0
+
+local function flushFullAck()
+	if PendingFullAckBytes <= 0 then return end
+	local bytes = math.min( PendingFullAckBytes, 4294967295 )
+	PendingFullAckBytes = 0
+	net.Start( "mc_full_ack" )
+		net.WriteUInt( bytes, 32 )
+	net.SendToServer()
+	NextFullAckAt = CurTime() + 0.02
+end
+
+local function queueFullAck( bytes, immediate )
+	bytes = math.max( 0, math.ceil( tonumber( bytes ) or 0 ) )
+	if bytes <= 0 then return end
+	PendingFullAckBytes = math.min( PendingFullAckBytes + bytes, 4294967295 )
+	if immediate or PendingFullAckBytes >= 65536 or CurTime() >= NextFullAckAt then
+		flushFullAck()
+	end
+end
+
+timer.Create( "mc_full_ack_flush", 0.05, 0, flushFullAck )
+
 local function touchProgress()
 	MC.SyncProgress.lastUpdate = CurTime()
 end
@@ -220,6 +244,7 @@ net.Receive( "mc_full_begin", function()
 	local cy = net.ReadInt( Net.COORD_BITS )
 	local cz = net.ReadInt( Net.COORD_BITS )
 	local expected = net.ReadUInt( Net.COUNT_BITS )
+	queueFullAck( MC.EstimateSyncBeginBytes() )
 	local c = resetChunk( cx, cy, cz )
 	MC.PendingFull[c.key] = { expected = expected, received = 0 }
 	beginProgressChunk( expected )
@@ -231,6 +256,7 @@ net.Receive( "mc_full_part", function()
 	local cy = net.ReadInt( Net.COORD_BITS )
 	local cz = net.ReadInt( Net.COORD_BITS )
 	local count = net.ReadUInt( Net.COUNT_BITS )
+	queueFullAck( MC.EstimateSyncPartBytes( count ) )
 	local c = MC.EnsureChunk( cx, cy, cz )
 	readCellsIntoChunk( c, count )
 	addProgressCells( count )
@@ -244,6 +270,7 @@ net.Receive( "mc_full_end", function()
 	local cx = net.ReadInt( Net.COORD_BITS )
 	local cy = net.ReadInt( Net.COORD_BITS )
 	local cz = net.ReadInt( Net.COORD_BITS )
+	queueFullAck( MC.EstimateSyncEndBytes(), true )
 	local key = MC.ChunkKey( cx, cy, cz )
 	local c = MC.GetChunkByKey( key )
 	MC.PendingFull[key] = nil
@@ -303,6 +330,7 @@ net.Receive( "mc_clear", function()
 	MC.PendingFull = {}
 	MC.PendingPredictions = {}
 	MC.SyncProgress = { expected = 0, received = 0, chunks = 0, doneChunks = 0, active = false, lastUpdate = CurTime() }
+	PendingFullAckBytes = 0
 end )
 
 hook.Add( "Think", "mc_prediction_rollback", rollbackExpiredPredictions )

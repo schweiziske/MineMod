@@ -47,6 +47,7 @@ if SERVER then
 		"mc_full_begin",
 		"mc_full_part",
 		"mc_full_end",
+		"mc_full_ack",
 		"mc_set",
 		"mc_set_bulk",
 		"mc_fx",
@@ -65,9 +66,35 @@ MC.Net = {
 	COUNT_BITS = 14, -- blocks per chunk section 0..8192
 }
 
-MC.Config.SyncCellsPerPart = 4000
-MC.Config.SyncMessagesPerTick = 4
-MC.Config.SyncReliableBudget = 48000
+local SYNC_MESSAGE_OVERHEAD_BYTES = 64
+local SYNC_CELL_BITS = MC.Net.LOCAL_BITS + MC.Net.ID_BITS + MC.Net.ORIENT_BITS
+
+function MC.EstimateSyncBeginBytes()
+	return math.ceil( ( MC.Net.COORD_BITS * 3 + MC.Net.COUNT_BITS ) / 8 ) + SYNC_MESSAGE_OVERHEAD_BYTES
+end
+
+function MC.EstimateSyncPartBytes( cells )
+	cells = math.max( 0, math.floor( tonumber( cells ) or 0 ) )
+	local bits = MC.Net.COORD_BITS * 3 + MC.Net.COUNT_BITS + cells * SYNC_CELL_BITS
+	return math.ceil( bits / 8 ) + SYNC_MESSAGE_OVERHEAD_BYTES
+end
+
+function MC.EstimateSyncEndBytes()
+	return math.ceil( ( MC.Net.COORD_BITS * 3 ) / 8 ) + SYNC_MESSAGE_OVERHEAD_BYTES
+end
+
+function MC.SyncCellsForByteBudget( bytes )
+	bytes = math.floor( tonumber( bytes ) or 0 )
+	local bits = ( bytes - SYNC_MESSAGE_OVERHEAD_BYTES ) * 8 - MC.Net.COORD_BITS * 3 - MC.Net.COUNT_BITS
+	if bits < SYNC_CELL_BITS then return 0 end
+	return math.floor( bits / SYNC_CELL_BITS )
+end
+
+MC.Config.SyncCellsPerPart = 8192
+MC.Config.SyncMessagesPerTick = 12
+MC.Config.SyncReliableBudget = 196608
+MC.Config.SyncFrameMS = 4
+MC.Config.SyncInFlightLimit = 524288
 
 ------------------------------------------------------------------ server ConVars
 if SERVER then
@@ -82,6 +109,9 @@ if SERVER then
 	MC.Config.SyncCells   = GetConVar( "mc_sync_cells_per_part" ) or CreateConVar( "mc_sync_cells_per_part", tostring( MC.Config.SyncCellsPerPart ), F, "Blocks per streamed sync net message" )
 	MC.Config.SyncMsgs    = GetConVar( "mc_sync_messages_per_tick" ) or CreateConVar( "mc_sync_messages_per_tick", tostring( MC.Config.SyncMessagesPerTick ), F, "Streamed sync net messages per 0.05s tick" )
 	MC.Config.SyncBudget  = GetConVar( "mc_sync_reliable_budget" ) or CreateConVar( "mc_sync_reliable_budget", tostring( MC.Config.SyncReliableBudget ), F, "Approx max reliable sync bytes per 0.05s tick" )
+	MC.Config.SyncFast    = GetConVar( "mc_sync_fast" ) or CreateConVar( "mc_sync_fast", "1", F, "Use ack-windowed fast full-map sync" )
+	MC.Config.SyncFrame   = GetConVar( "mc_sync_frame_ms" ) or CreateConVar( "mc_sync_frame_ms", tostring( MC.Config.SyncFrameMS ), F, "Approx server CPU milliseconds spent streaming full sync each tick" )
+	MC.Config.SyncWindow  = GetConVar( "mc_sync_inflight_limit" ) or CreateConVar( "mc_sync_inflight_limit", tostring( MC.Config.SyncInFlightLimit ), F, "Max unacknowledged full-sync bytes per syncing client" )
 	MC.Config.BlockDamage = GetConVar( "mc_block_damage" ) or CreateConVar( "mc_block_damage", "1", F, "Allow GMod damage to break MC blocks" )
 	MC.Config.BlockHealthScale = GetConVar( "mc_block_health_scale" ) or CreateConVar( "mc_block_health_scale", "20", F, "Block health multiplier applied to Minecraft hardness" )
 	MC.Config.BlockDamageDecay = GetConVar( "mc_block_damage_decay" ) or CreateConVar( "mc_block_damage_decay", "5", F, "Seconds before partial block damage is forgotten" )
