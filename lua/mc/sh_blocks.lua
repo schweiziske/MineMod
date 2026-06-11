@@ -1066,6 +1066,32 @@ local function fenceBoxes( bx, by, bz )
 	return boxes
 end
 
+-- Collision wants continuous strips, not every visual rail. This keeps dense
+-- fence builds from generating thousands of multiconvex pieces per chunk.
+local function fenceCollisionBoxes( bx, by, bz )
+	if bx == nil or by == nil or bz == nil then
+		return { { 0.375, 0.375, 0, 0.625, 0.625, 1 } }
+	end
+
+	local yn = fenceConnectsToCell( bx, by - 1, bz )
+	local yp = fenceConnectsToCell( bx, by + 1, bz )
+	local xn = fenceConnectsToCell( bx - 1, by, bz )
+	local xp = fenceConnectsToCell( bx + 1, by, bz )
+	local boxes = {}
+
+	if yn or yp then
+		boxes[#boxes + 1] = { 0.375, yn and 0 or 0.375, 0, 0.625, yp and 1 or 0.625, 1 }
+	end
+	if xn or xp then
+		boxes[#boxes + 1] = { xn and 0 or 0.375, 0.375, 0, xp and 1 or 0.625, 0.625, 1 }
+	end
+	if #boxes == 0 then
+		boxes[1] = { 0.375, 0.375, 0, 0.625, 0.625, 1 }
+	end
+
+	return boxes
+end
+
 local function paneConnectsToBlock( id, orient )
 	if id == 0 then return false end
 	local b = MC.Blocks[id]
@@ -1212,22 +1238,7 @@ end
 function MC.BlockCollisionBoxes( id, orient, bx, by, bz )
 	local b = MC.Blocks[id]
 	if b and b.connection == "fence" and bx ~= nil and by ~= nil and bz ~= nil then
-		local boxes = {
-			{ 0.375, 0.375, 0, 0.625, 0.625, 1 },
-		}
-		if fenceConnectsToCell( bx, by - 1, bz ) then
-			boxes[#boxes + 1] = { 0.4375, 0, 0.375, 0.5625, 0.5625, 0.9375 }
-		end
-		if fenceConnectsToCell( bx, by + 1, bz ) then
-			boxes[#boxes + 1] = { 0.4375, 0.4375, 0.375, 0.5625, 1, 0.9375 }
-		end
-		if fenceConnectsToCell( bx - 1, by, bz ) then
-			boxes[#boxes + 1] = { 0, 0.4375, 0.375, 0.5625, 0.5625, 0.9375 }
-		end
-		if fenceConnectsToCell( bx + 1, by, bz ) then
-			boxes[#boxes + 1] = { 0.4375, 0.4375, 0.375, 1, 0.5625, 0.9375 }
-		end
-		return boxes
+		return fenceCollisionBoxes( bx, by, bz )
 	end
 	if b and isPaneKind( b.connection ) and bx ~= nil and by ~= nil and bz ~= nil then
 		return paneCollisionBoxes( bx, by, bz )
