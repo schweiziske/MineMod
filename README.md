@@ -12,11 +12,12 @@ Garry's Mod 里的 Minecraft 风格方块系统。方块不按实体逐个生成
 - 支持 GMod 武器/爆炸破坏方块；血量来自 Minecraft hardness 乘 `mc_block_health_scale`。
 - 方块表、atlas、中文名由 `_build/build_atlas.ps1` 从 `out/assets/minecraft` 生成。
 - 方块硬度/爆炸抗性由 `_build/build_block_properties.cjs` 从 `Blocks.java` 生成。
+- 连接/贴附类方块由 `_build/build_block_connections.cjs` 从 `Blocks.java` 和 Minecraft blockstate 资源显式生成，不在运行时用后缀统配猜。
 - 生成 Lua 已拆到 `lua/mc/generated/`，避免单文件超过 64KB。
 - 不完整方块使用 Minecraft model quads 渲染，碰撞/选中使用 `MC.BlockBoxes()`。
-- `*_fence_gate` 渲染保留原模型，碰撞使用 runtime 稳定覆盖盒。
+- `*_fence_gate` 渲染、碰撞和选中都使用生成模型盒，不能退回整块 `FullBlockBox`。
 - `mc_autosave` 默认是 `0`，自动保存关闭。
-- 当前还在修玻璃、玻璃板、铁栅栏、栅栏连接处的材质/贴图和连接表现，接手前先看 `docs/maintenance-update-guide.md` 的“材质和贴图已知问题”和“栅栏、玻璃板和铁栅栏连接”。
+- 栅栏、玻璃板、铁栅栏、墙、紫颂植株等动态连接方块通过 `MC.GeneratedBlockConnections` 标记，runtime 只按这个显式表处理连接/碰撞。
 
 ## 主要文件
 
@@ -37,6 +38,7 @@ lua/weapons/gmod_tool/stools/mc_block.lua 工具枪方块工具
 lua/mc/generated/                        生成的方块、tile、中文名 Lua
 _build/build_atlas.ps1                   生成 atlas 和方块表
 _build/build_block_properties.cjs        生成 hardness/explosionResistance 表
+_build/build_block_connections.cjs       生成连接/贴附类方块表
 _tools/mc_convert_8x8_save.py            老版本 Parkour Spiral 转存工具
 _tools/mc_import_world.py                通用 Minecraft 存档导出工具
 docs/maintenance-update-guide.md         维护更新指南
@@ -49,6 +51,7 @@ docs/interface-usage.md                  接口使用介绍
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File _build\build_atlas.ps1 -McOut .\out
+node _build\build_block_connections.cjs
 node _build\build_block_properties.cjs
 ```
 
@@ -76,6 +79,7 @@ node _tools\test_block_properties.js
 node _tools\test_block_damage_api.js
 node _tools\test_creative_inventory.js
 node _tools\test_fence_behavior.js
+node _tools\test_generated_block_connections.js
 node _tools\test_particle_alpha_flags.js
 node _tools\test_generated_lua_size.js
 $luaFiles = @(
@@ -86,6 +90,7 @@ $luaFiles = @(
   "lua\mc\sv_damage.lua",
   "lua\entities\mc_chunk\init.lua",
   "lua\weapons\mc_creative_placer\shared.lua",
+  "lua\mc\generated\sh_generated_block_connections.lua",
   "lua\mc\generated\sh_generated_block_properties.lua",
   "lua\mc\generated\sh_generated_sound_types.lua"
 )

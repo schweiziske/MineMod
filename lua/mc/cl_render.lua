@@ -272,7 +272,7 @@ end
 local function paneSideTile( b )
 	if not b or not b.name then return b and b.side or 0 end
 	-- bar blocks (iron_bars, copper_bars variants) keep their own lattice texture
-	if string.find( b.name, "_bars$", 1, false ) or b.name == "iron_bars" then return b.side end
+	if b.connection == "bars" then return b.side end
 	if b.name == "glass_pane" and MC.Tiles and MC.Tiles.glass then return MC.Tiles.glass end
 	local glassName = string.match( b.name, "^(.*_stained_glass)_pane$" )
 	if glassName and MC.Tiles and MC.Tiles[glassName] ~= nil then return MC.Tiles[glassName] end
@@ -290,6 +290,9 @@ local PANE_ARM_EDGE_UV = { 7, 0, 9, 7 }
 
 local function dynamicShapeFaceData( b, face, box )
 	if not b then return nil end
+	if b.connection == "pipe6" then
+		return { tile = b.side, rot = 0 }
+	end
 	if MC.IsPaneBlock and MC.IsPaneBlock( b.id ) then
 		if face == MC.Face.TOP or face == MC.Face.BOTTOM then
 			if box and box.part == "arm" then
@@ -508,7 +511,7 @@ function MC.BuildChunkMesh( key )
 		local b = MC.Blocks[id]
 		if b and b.shape == "cross" then
 			emitCrossBlock( id, wx, wy, wz )
-		elseif b and b.shape == "model" and not ( ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) ) ) and emitModelBlock( b, orient, wx, wy, wz ) then
+		elseif b and b.shape == "model" and not ( ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) ) or b.connection == "pipe6" ) and emitModelBlock( b, orient, wx, wy, wz ) then
 			-- rendered from exact Minecraft model quads; boxes remain for collision/outline
 		elseif MC.BlockIsFullCube( id, orient ) then
 			for f = 1, 6 do
@@ -551,16 +554,18 @@ function MC.BuildChunkMesh( key )
 				end
 			end
 		else
-			-- fence/pane boxes come from the runtime connection logic, so their
+			-- fence/pane/pipe boxes come from the runtime connection logic, so their
 			-- indices do not line up with the generator's static boxFaces list;
 			-- only the centre post (box 1) may take static face data
-			local isConnShape = ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) )
+			local isPipe6Shape = b and b.connection == "pipe6"
+			local isConnShape = ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) ) or isPipe6Shape
 			local boxes = MC.BlockBoxes( id, orient, bx, by, bz )
 			for boxIndex, box in ipairs( boxes or {} ) do
 				for f = 1, 6 do
 					if not shapeFaceCovered( box, f, boxes, bx, by, bz ) then
 						local face = FACES[f]
 						local modelFaces = b and b.boxFaces
+						if isPipe6Shape then modelFaces = nil end
 						local fd = modelFaces and modelFaces[boxIndex] and modelFaces[boxIndex][f]
 						if isConnShape and boxIndex > 1 then fd = nil end
 						local dynamicFd = dynamicShapeFaceData( b, f, box )
