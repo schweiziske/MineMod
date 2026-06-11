@@ -230,7 +230,6 @@ function MC.PickCreativeHotbarBlock( ply )
 	local id = hit and normalizeHotbarID( hit.Block )
 	if not id then return false end
 	local ok = MC.SetCreativeHotbarSlot( MC.GetCreativeHotbarSelectedSlot(), id )
-	if ok then surface.PlaySound( "ui/buttonclickrelease.wav" ) end
 	return ok
 end
 
@@ -286,7 +285,6 @@ hook.Add( "PlayerBindPress", "mc_creative_hotbar_binds", function( ply, bind, pr
 	if slot then
 		if not textEntryHasFocus() then
 			MC.SelectCreativeHotbarSlot( tonumber( slot ) )
-			surface.PlaySound( "common/wpn_select.wav" )
 		end
 		return true
 	end
@@ -465,7 +463,6 @@ local function addCreativeButton( layout, id, onSelect, frame, closeOnSelect )
 	end
 
 	btn.DoClick = function()
-		surface.PlaySound( "ui/buttonclickrelease.wav" )
 		onSelect( id )
 		if closeOnSelect and IsValid( frame ) then frame:Close() end
 	end
@@ -485,7 +482,6 @@ local function createCreativeHotbarPanel( parent )
 		btn:SetText( "" )
 		buttons[i] = btn
 		btn.DoClick = function()
-			surface.PlaySound( "common/wpn_select.wav" )
 			MC.SelectCreativeHotbarSlot( i )
 		end
 		btn.Paint = function( s, w, h )
@@ -546,7 +542,6 @@ function MC.OpenCreativeInventory( onSelect, opts )
 		end
 		local slot = CREATIVE_HOTBAR_KEYS[key]
 		if slot then
-			surface.PlaySound( "common/wpn_select.wav" )
 			MC.SelectCreativeHotbarSlot( slot )
 		end
 	end
@@ -759,7 +754,6 @@ function MC.OpenPalette( onSelect )
 		end
 
 		btn.DoClick = function()
-			surface.PlaySound( "ui/buttonclickrelease.wav" )
 			onSelect( id )
 			fr:Close()
 		end
