@@ -126,6 +126,8 @@ local CREATIVE_GRID_COLS = 9
 local CREATIVE_GRID_ROWS = 4
 local CREATIVE_PAGE_SIZE = CREATIVE_GRID_COLS * CREATIVE_GRID_ROWS
 local CREATIVE_HOTBAR_SIZE = 9
+local CREATIVE_HOTBAR_SAVE_DIR = "mcswep"
+local CREATIVE_HOTBAR_SAVE_PATH = CREATIVE_HOTBAR_SAVE_DIR .. "/creative_hotbar.json"
 local CREATIVE_HOTBAR_DEFAULTS = {
 	"minecraft:stone",
 	"minecraft:dirt",
@@ -150,6 +152,7 @@ local CREATIVE_HOTBAR_KEYS = {
 }
 
 MC.CreativeHotbar = MC.CreativeHotbar or { selected = 1, slots = {} }
+local creativeHotbarLoaded = false
 
 local function normalizeHotbarSlot( slot )
 	slot = math.floor( tonumber( slot ) or 1 )
@@ -175,7 +178,64 @@ local function resolveHotbarDefault( slot )
 	return 1
 end
 
+local function hotbarIDToSaveValue( id )
+	id = normalizeHotbarID( id )
+	local b = id and MC.Blocks and MC.Blocks[id] or nil
+	if not b then return nil end
+	return b.mcid or b.name or tostring( id )
+end
+
+local function resolveSavedHotbarValue( value )
+	if type( value ) == "number" then return normalizeHotbarID( value ) end
+	if type( value ) ~= "string" then return nil end
+
+	local b = MC.ResolveBlock and MC.ResolveBlock( value ) or nil
+	if b then return normalizeHotbarID( b.id ) end
+	return normalizeHotbarID( tonumber( value ) )
+end
+
+local function loadCreativeHotbar()
+	if creativeHotbarLoaded then return end
+	creativeHotbarLoaded = true
+
+	local raw = file.Read( CREATIVE_HOTBAR_SAVE_PATH, "DATA" )
+	local data = raw and util.JSONToTable( raw ) or nil
+	if type( data ) ~= "table" then return end
+
+	local hotbar = MC.CreativeHotbar or {}
+	hotbar.slots = hotbar.slots or {}
+	hotbar.selected = normalizeHotbarSlot( data.selected or hotbar.selected )
+
+	local slots = type( data.slots ) == "table" and data.slots or {}
+	for i = 1, CREATIVE_HOTBAR_SIZE do
+		local id = resolveSavedHotbarValue( slots[i] or slots[tostring( i )] )
+		if id then hotbar.slots[i] = id end
+	end
+
+	MC.CreativeHotbar = hotbar
+end
+
+local function saveCreativeHotbar()
+	if not creativeHotbarLoaded then return end
+	local hotbar = MC.CreativeHotbar
+	if type( hotbar ) ~= "table" or type( hotbar.slots ) ~= "table" then return end
+
+	local data = {
+		selected = normalizeHotbarSlot( hotbar.selected ),
+		slots = {},
+	}
+	for i = 1, CREATIVE_HOTBAR_SIZE do
+		data.slots[i] = hotbarIDToSaveValue( hotbar.slots[i] ) or hotbarIDToSaveValue( resolveHotbarDefault( i ) )
+	end
+
+	local json = util.TableToJSON( data, true )
+	if not json then return end
+	file.CreateDir( CREATIVE_HOTBAR_SAVE_DIR )
+	file.Write( CREATIVE_HOTBAR_SAVE_PATH, json )
+end
+
 function MC.EnsureCreativeHotbar()
+	loadCreativeHotbar()
 	local hotbar = MC.CreativeHotbar or {}
 	hotbar.slots = hotbar.slots or {}
 	hotbar.selected = normalizeHotbarSlot( hotbar.selected )
@@ -205,6 +265,7 @@ function MC.SelectCreativeHotbarSlot( slot, noCommand )
 	local hotbar = MC.EnsureCreativeHotbar()
 	hotbar.selected = normalizeHotbarSlot( slot )
 	local id = normalizeHotbarID( hotbar.slots[hotbar.selected] )
+	saveCreativeHotbar()
 	if id and not noCommand then
 		RunConsoleCommand( "mc_block_sel", tostring( id ) )
 	end
@@ -217,6 +278,7 @@ function MC.SetCreativeHotbarSlot( slot, id, noCommand )
 	local hotbar = MC.EnsureCreativeHotbar()
 	hotbar.selected = normalizeHotbarSlot( slot )
 	hotbar.slots[hotbar.selected] = id
+	saveCreativeHotbar()
 	if not noCommand then
 		RunConsoleCommand( "mc_block_sel", tostring( id ) )
 	end
