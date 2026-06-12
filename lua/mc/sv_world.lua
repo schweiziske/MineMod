@@ -474,8 +474,8 @@ local function applyCells( cells, actor, options )
 end
 
 -- a placed block must not overlap a living player's hull (don't trap / suffocate them)
-local function wouldTrapPlayer( bx, by, bz )
-	return MC.BlockAABBOverlapsPlayerHull( bx, by, bz, 0 )
+local function wouldTrapPlayer( bx, by, bz, id, orient )
+	return MC.PlacementOverlapsPlayerHull( bx, by, bz, id, orient )
 end
 
 local function needsImmediatePlacePhys( bx, by, bz )
@@ -513,7 +513,7 @@ local function validatePlacementPlan( ply, plan )
 			return false
 		end
 		if MC.GetBlock( cell.bx, cell.by, cell.bz ) ~= 0 then return false end
-		if wouldTrapPlayer( cell.bx, cell.by, cell.bz ) then
+		if wouldTrapPlayer( cell.bx, cell.by, cell.bz, cell.id, cell.orient ) then
 			notify( ply, "A player is in the way" )
 			return false
 		end
@@ -573,7 +573,7 @@ function SV.SetBlock( bx, by, bz, id, orient, options )
 	options = normalizeWriteOptions( options )
 	id = math.floor( tonumber( id ) or 0 )
 	if id ~= 0 and not MC.IsValidBlock( id ) then return false, "invalid_block" end
-	if id ~= 0 and options.preventPlayerOverlap and wouldTrapPlayer( bx, by, bz ) then return false, "player_overlap" end
+	if id ~= 0 and options.preventPlayerOverlap and wouldTrapPlayer( bx, by, bz, id, orient ) then return false, "player_overlap" end
 	if id == 0 then orient = 0 end
 
 	local changed = apply( bx, by, bz, id, 0, orient, options.actor, {
@@ -727,7 +727,7 @@ local function runFill( ply, args )
 				local old = MC.GetBlock( x, y, z )
 				local oldOrient = MC.GetBlockOrient( x, y, z )
 				if old ~= id or ( id ~= 0 and oldOrient ~= orient ) then
-					if old == 0 and id ~= 0 and not wouldTrapPlayer( x, y, z ) then add = add + 1 end
+					if old == 0 and id ~= 0 and not wouldTrapPlayer( x, y, z, id, orient ) then add = add + 1 end
 				end
 			end
 		end
@@ -748,7 +748,7 @@ local function runFill( ply, args )
 				if old ~= id or ( id ~= 0 and oldOrient ~= orient ) then
 					if id == 0 then
 						if apply( x, y, z, 0 ) then changed = changed + 1 end
-					elseif old == 0 and not wouldTrapPlayer( x, y, z ) then
+					elseif old == 0 and not wouldTrapPlayer( x, y, z, id, orient ) then
 						if apply( x, y, z, id, 1, orient ) then changed = changed + 1 end
 					elseif old ~= 0 then
 						if apply( x, y, z, id, 0, orient ) then changed = changed + 1 end

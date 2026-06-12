@@ -153,6 +153,9 @@ local CREATIVE_HOTBAR_KEYS = {
 
 MC.CreativeHotbar = MC.CreativeHotbar or { selected = 1, slots = {} }
 local creativeHotbarLoaded = false
+local lastCreativeHotbarSyncID = nil
+local lastCreativeHotbarSyncAt = 0
+local CREATIVE_HOTBAR_SYNC_INTERVAL = 0.25
 
 local function normalizeHotbarSlot( slot )
 	slot = math.floor( tonumber( slot ) or 1 )
@@ -176,6 +179,17 @@ local function resolveHotbarDefault( slot )
 		if valid then return valid end
 	end
 	return 1
+end
+
+local function creativeDefaultSelectedID()
+	return resolveHotbarDefault( 1 )
+end
+
+local function currentHotbarSelectedID()
+	local hotbar = MC.CreativeHotbar
+	if type( hotbar ) ~= "table" or type( hotbar.slots ) ~= "table" then return nil end
+	local slot = normalizeHotbarSlot( hotbar.selected )
+	return normalizeHotbarID( hotbar.slots[slot] )
 end
 
 local function hotbarIDToSaveValue( id )
@@ -243,7 +257,34 @@ function MC.EnsureCreativeHotbar()
 		hotbar.slots[i] = normalizeHotbarID( hotbar.slots[i] ) or resolveHotbarDefault( i )
 	end
 	MC.CreativeHotbar = hotbar
+	MC.SyncCreativeHotbarSelection( lastCreativeHotbarSyncID == nil )
 	return hotbar
+end
+
+function MC.SyncCreativeHotbarSelection( force )
+	local id = currentHotbarSelectedID()
+	if not id then return false end
+	local now = CurTime and CurTime() or 0
+	if not force and lastCreativeHotbarSyncID == id and now - lastCreativeHotbarSyncAt < CREATIVE_HOTBAR_SYNC_INTERVAL then
+		return true, id
+	end
+	lastCreativeHotbarSyncID = id
+	lastCreativeHotbarSyncAt = now
+	RunConsoleCommand( "mc_block_sel", tostring( id ) )
+	return true, id
+end
+
+function MC.CreativeHotbarSelectionSynced( ply, id )
+	id = normalizeHotbarID( id ) or currentHotbarSelectedID()
+	if not id then return false end
+	if not IsValid( ply ) then return true end
+
+	local serverID = math.floor( tonumber( ply:GetNWInt( "mc_block", -1 ) ) or -1 )
+	if serverID == id then return true end
+	if serverID < 0 and id == creativeDefaultSelectedID() then return true end
+
+	MC.SyncCreativeHotbarSelection( false )
+	return false
 end
 
 function MC.GetCreativeHotbarSelectedSlot()
@@ -267,7 +308,7 @@ function MC.SelectCreativeHotbarSlot( slot, noCommand )
 	local id = normalizeHotbarID( hotbar.slots[hotbar.selected] )
 	saveCreativeHotbar()
 	if id and not noCommand then
-		RunConsoleCommand( "mc_block_sel", tostring( id ) )
+		MC.SyncCreativeHotbarSelection( true )
 	end
 	return id ~= nil, id
 end
@@ -280,7 +321,7 @@ function MC.SetCreativeHotbarSlot( slot, id, noCommand )
 	hotbar.slots[hotbar.selected] = id
 	saveCreativeHotbar()
 	if not noCommand then
-		RunConsoleCommand( "mc_block_sel", tostring( id ) )
+		MC.SyncCreativeHotbarSelection( true )
 	end
 	return true
 end
@@ -362,6 +403,14 @@ hook.Add( "PlayerButtonDown", "mc_creative_hotbar_buttons", function( ply, butto
 	if button == MOUSE_MIDDLE then
 		pickCreativeHotbarBlockDebounced( ply )
 	end
+end )
+
+hook.Remove( "InitPostEntity", "mc_creative_hotbar_initial_sync" )
+hook.Add( "InitPostEntity", "mc_creative_hotbar_initial_sync", function()
+	timer.Simple( 0.5, function()
+		if MC.EnsureCreativeHotbar then MC.EnsureCreativeHotbar() end
+		if MC.SyncCreativeHotbarSelection then MC.SyncCreativeHotbarSelection( true ) end
+	end )
 end )
 
 local function blockText( b )

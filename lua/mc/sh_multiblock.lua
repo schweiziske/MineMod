@@ -135,8 +135,7 @@ end
 function MC.CanPreviewPlacePlan( ply, plan )
 	if not plan or not plan.cells or not MC.CanPreviewPlace then return false end
 	for _, cell in ipairs( plan.cells ) do
-		if not MC.CanPreviewPlace( ply, cell.bx, cell.by, cell.bz ) then return false end
+		if not MC.CanPreviewPlace( ply, cell.bx, cell.by, cell.bz, cell.id, cell.orient ) then return false end
 	end
 	return true
 end
-
