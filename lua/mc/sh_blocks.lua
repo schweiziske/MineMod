@@ -79,6 +79,16 @@ local function generatedBlockCollision( name, mcid )
 	return nil
 end
 
+local function generatedBlockModelVariants( name, mcid )
+	local generated = MC.GeneratedBlockModelVariants or {}
+	if generated[mcid] then return generated[mcid] end
+	if generated[name] then return generated[name] end
+	if string.StartWith( mcid or "", "minecraft:" ) then
+		return generated[string.sub( mcid, 11 )]
+	end
+	return nil
+end
+
 local function propertyNumber( value, fallback )
 	value = tonumber( value )
 	if value == nil then return fallback end
@@ -182,6 +192,25 @@ local function normalizeModelQuads( modelQuads )
 	return #out > 0 and out or nil
 end
 
+local function normalizeModelVariantData( data )
+	if type( data ) ~= "table" then return nil end
+	local boxes = normalizeBoxes( data.boxes )
+	local boxFaces = normalizeBoxFaces( data.boxFaces )
+	local modelQuads = normalizeModelQuads( data.modelQuads )
+	if not boxes or not boxFaces or not modelQuads then return nil end
+	return { boxes = boxes, boxFaces = boxFaces, modelQuads = modelQuads }
+end
+
+local function normalizeModelVariants( variants )
+	if type( variants ) ~= "table" then return nil end
+	local out = {}
+	for key, data in pairs( variants ) do
+		local normalized = normalizeModelVariantData( data )
+		if normalized then out[key] = normalized end
+	end
+	return next( out ) and out or nil
+end
+
 MC.Blocks = {}
 MC.BlockByName = {}
 MC.BlockAliases = {}
@@ -231,6 +260,7 @@ function MC.RegisterBlock( def )
 	local generatedSoundTypes = MC.GeneratedBlockSoundTypes or {}
 	local generatedNoTerrainParticles = MC.GeneratedNoTerrainParticles or {}
 	local generatedProps = generatedBlockProperties( name, mcid ) or {}
+	local generatedVariants = generatedBlockModelVariants( name, mcid )
 	local connectionKind = def.connection or generatedConnectionKind( name, mcid )
 	local textures = def.textures or {}
 	local top = tileValue( textures.top or def.top, 0 )
@@ -247,6 +277,12 @@ function MC.RegisterBlock( def )
 	-- pots, beds, doors, ...); def.solid only decides blocks the source lacks.
 	local solid = generatedBlockCollision( name, mcid )
 	if solid == nil then solid = def.solid ~= false end
+	local stateRule = def.stateRule or def.orient
+	if string.match( name, "_door$" ) then
+		stateRule = "door"
+	elseif string.match( name, "_bed$" ) then
+		stateRule = "bed"
+	end
 
 	local b = {
 		id = id,
@@ -259,6 +295,7 @@ function MC.RegisterBlock( def )
 		boxes = normalizeBoxes( def.boxes ),
 		boxFaces = normalizeBoxFaces( def.boxFaces ),
 		modelQuads = normalizeModelQuads( def.modelQuads ),
+		modelVariants = normalizeModelVariants( def.modelVariants or generatedVariants ),
 		connection = connectionKind,
 		soundType = def.soundType or generatedSoundTypes[mcid] or generatedSoundTypes[name] or "STONE",
 		spawnTerrainParticles = def.spawnTerrainParticles ~= false and generatedNoTerrainParticles[mcid] ~= true,
@@ -266,7 +303,7 @@ function MC.RegisterBlock( def )
 		explosionResistance = propertyNumber( def.explosionResistance, propertyNumber( generatedProps.explosionResistance, propertyNumber( generatedProps.hardness, 1 ) ) ),
 		textures = { top = top, side = side, bottom = bottom, front = front, particle = particle, icon = icon },
 		baked = normalizeBaked( def.baked ),
-		stateRule = def.stateRule or def.orient,
+		stateRule = stateRule,
 		placeRule = def.placeRule or def.place,
 		handlers = handler or {},
 		aliases = def.aliases or {},
@@ -279,7 +316,7 @@ function MC.RegisterBlock( def )
 		front = front,
 		particle = particle,
 		icon = icon,
-		orient = def.stateRule or def.orient,
+		orient = stateRule,
 		place = def.placeRule or def.place,
 	}
 
@@ -345,6 +382,51 @@ local DirectionValue = {
 	west = MC.Direction.WEST,
 	east = MC.Direction.EAST,
 }
+
+local HorizontalPartFacingByBase = {
+	[0] = MC.Direction.NORTH,
+	[1] = MC.Direction.SOUTH,
+	[2] = MC.Direction.WEST,
+	[3] = MC.Direction.EAST,
+}
+local HorizontalPartBaseByFacing = {
+	[MC.Direction.NORTH] = 0,
+	[MC.Direction.SOUTH] = 1,
+	[MC.Direction.WEST] = 2,
+	[MC.Direction.EAST] = 3,
+}
+
+local function horizontalPartBase( facing )
+	return HorizontalPartBaseByFacing[facing] or HorizontalPartBaseByFacing[MC.Direction.NORTH]
+end
+
+local function horizontalPartFacing( orient )
+	return HorizontalPartFacingByBase[math.floor( tonumber( orient ) or 0 ) % 4] or MC.Direction.NORTH
+end
+
+function MC.MakeDoorOrient( facing, half )
+	return horizontalPartBase( facing ) + ( half == "upper" and 4 or 0 )
+end
+
+function MC.DoorOrientFacing( orient )
+	return horizontalPartFacing( orient )
+end
+
+function MC.DoorOrientHalf( orient )
+	return math.floor( tonumber( orient ) or 0 ) >= 4 and "upper" or "lower"
+end
+
+function MC.MakeBedOrient( facing, part )
+	return horizontalPartBase( facing ) + ( part == "head" and 4 or 0 )
+end
+
+function MC.BedOrientFacing( orient )
+	return horizontalPartFacing( orient )
+end
+
+function MC.BedOrientPart( orient )
+	return math.floor( tonumber( orient ) or 0 ) >= 4 and "head" or "foot"
+end
 
 local function reverseValues( values )
 	local out = {}
@@ -423,6 +505,16 @@ MC.OrientRules = {
 		order = { 0, 1, 2 },
 	},
 	stairs = {
+		default = 0,
+		allowed = { [0] = true, [1] = true, [2] = true, [3] = true, [4] = true, [5] = true, [6] = true, [7] = true },
+		order = { 0, 1, 2, 3, 4, 5, 6, 7 },
+	},
+	door = {
+		default = 0,
+		allowed = { [0] = true, [1] = true, [2] = true, [3] = true, [4] = true, [5] = true, [6] = true, [7] = true },
+		order = { 0, 1, 2, 3, 4, 5, 6, 7 },
+	},
+	bed = {
 		default = 0,
 		allowed = { [0] = true, [1] = true, [2] = true, [3] = true, [4] = true, [5] = true, [6] = true, [7] = true },
 		order = { 0, 1, 2, 3, 4, 5, 6, 7 },
@@ -530,6 +622,14 @@ function MC.OrientToState( id, orient )
 	if b.orient == "slab" then
 		return SlabTypeName[MC.NormalizeOrient( id, orient )] or "bottom"
 	end
+	if b.orient == "door" then
+		orient = MC.NormalizeOrient( id, orient )
+		return ( DirectionName[MC.DoorOrientFacing( orient )] or "north" ) .. "," .. MC.DoorOrientHalf( orient )
+	end
+	if b.orient == "bed" then
+		orient = MC.NormalizeOrient( id, orient )
+		return ( DirectionName[MC.BedOrientFacing( orient )] or "north" ) .. "," .. MC.BedOrientPart( orient )
+	end
 	return rule.names[MC.NormalizeOrient( id, orient )] or ""
 end
 
@@ -545,6 +645,16 @@ function MC.BlockStateText( id, orient )
 		local half = StairHalfByOrient[orient] or "bottom"
 		return "facing=" .. facing .. ",half=" .. half
 	end
+	if b.orient == "door" then
+		orient = MC.NormalizeOrient( id, orient )
+		local facing = DirectionName[MC.DoorOrientFacing( orient )] or "north"
+		return "facing=" .. facing .. ",half=" .. MC.DoorOrientHalf( orient )
+	end
+	if b.orient == "bed" then
+		orient = MC.NormalizeOrient( id, orient )
+		local facing = DirectionName[MC.BedOrientFacing( orient )] or "north"
+		return "facing=" .. facing .. ",part=" .. MC.BedOrientPart( orient )
+	end
 	local state = MC.OrientToState( id, orient )
 	if state == "" then return "" end
 	return ( b.orient == "axis" and "axis=" or "facing=" ) .. state
@@ -556,6 +666,8 @@ function MC.BlockStateHint( id )
 	if not rule then return "" end
 	if b.orient == "slab" then return "type=bottom/top/double" end
 	if b.orient == "stairs" then return "facing=north/south/west/east,half=bottom/top" end
+	if b.orient == "door" then return "facing=north/south/west/east,half=lower/upper" end
+	if b.orient == "bed" then return "facing=north/south/west/east,part=foot/head" end
 	local names = {}
 	for _, value in ipairs( rule.order ) do names[#names + 1] = rule.names[value] end
 	return ( b.orient == "axis" and "axis=" or "facing=" ) .. table.concat( names, "/" )
@@ -616,6 +728,20 @@ function MC.StateToOrient( id, state )
 		if half ~= "top" then half = "bottom" end
 		return facing and MC.MakeStairOrient( facing, half ) or MC.DefaultOrient( id )
 	end
+	if b.orient == "door" then
+		local facing = map and DirectionValue[map.facing] or DirectionValue[trim( state )]
+		if not HorizontalPartBaseByFacing[facing] then facing = nil end
+		local half = map and map.half or "lower"
+		if half ~= "upper" then half = "lower" end
+		return facing and MC.MakeDoorOrient( facing, half ) or MC.DefaultOrient( id )
+	end
+	if b.orient == "bed" then
+		local facing = map and DirectionValue[map.facing] or DirectionValue[trim( state )]
+		if not HorizontalPartBaseByFacing[facing] then facing = nil end
+		local part = map and map.part or "foot"
+		if part ~= "head" then part = "foot" end
+		return facing and MC.MakeBedOrient( facing, part ) or MC.DefaultOrient( id )
+	end
 	local value, validKey = stateValue( b, state )
 	if not validKey or not value or value == "" then return MC.DefaultOrient( id ) end
 	return rule.values[value] or MC.DefaultOrient( id )
@@ -637,6 +763,22 @@ function MC.IsOrientStateValid( id, state )
 		local facing = DirectionValue[map.facing]
 		local half = map.half or "bottom"
 		return StairOrientByFacing[facing] ~= nil and ( half == "bottom" or half == "top" )
+	end
+	if b.orient == "door" then
+		if map then
+			local facing = DirectionValue[map.facing]
+			local half = map.half or "lower"
+			return HorizontalPartBaseByFacing[facing] ~= nil and ( half == "lower" or half == "upper" )
+		end
+		return HorizontalPartBaseByFacing[DirectionValue[trim( string.lower( tostring( state ) ) )]] ~= nil
+	end
+	if b.orient == "bed" then
+		if map then
+			local facing = DirectionValue[map.facing]
+			local part = map.part or "foot"
+			return HorizontalPartBaseByFacing[facing] ~= nil and ( part == "foot" or part == "head" )
+		end
+		return HorizontalPartBaseByFacing[DirectionValue[trim( string.lower( tostring( state ) ) )]] ~= nil
 	end
 	local value, validKey = stateValue( b, state )
 	return validKey and value ~= nil and rule.values[value] ~= nil
@@ -735,6 +877,12 @@ function MC.OrientForPlacement( ply, tr, id )
 	if b and b.orient == "stairs" then
 		local facing = horizontalLookDirectionFromForward( forward )
 		return MC.MakeStairOrient( facing, placementHalfFromTrace( tr ) )
+	end
+	if b and b.orient == "door" then
+		return MC.MakeDoorOrient( oppositeDirection( horizontalLookDirectionFromForward( forward ) ), "lower" )
+	end
+	if b and b.orient == "bed" then
+		return MC.MakeBedOrient( horizontalLookDirectionFromForward( forward ), "foot" )
 	end
 	return MC.OrientForVectors( id, forward, tr and tr.HitNormal or nil )
 end
@@ -971,30 +1119,54 @@ local function horizontalOrientSteps( orient )
 	return 0
 end
 
+function MC.BlockModelData( blockOrId, orient )
+	local b = type( blockOrId ) == "table" and blockOrId or MC.Blocks[blockOrId]
+	if not b then return nil end
+	if b.modelVariants then
+		if b.orient == "door" and MC.DoorOrientHalf( orient ) == "upper" then
+			return b.modelVariants.upper or b
+		end
+		if b.orient == "bed" and MC.BedOrientPart( orient ) == "head" then
+			return b.modelVariants.head or b
+		end
+	end
+	return b
+end
+
+function MC.BlockHorizontalFacingForOrient( blockOrId, orient )
+	local b = type( blockOrId ) == "table" and blockOrId or MC.Blocks[blockOrId]
+	if not b then return MC.Direction.NORTH end
+	orient = MC.NormalizeOrient( b.id, orient )
+	if b.orient == "door" then return MC.DoorOrientFacing( orient ) end
+	if b.orient == "bed" then return MC.BedOrientFacing( orient ) end
+	return orient
+end
+
 local function modelBoxes( b, orient )
-	if not b.boxes then return nil end
+	local data = MC.BlockModelData( b, orient )
+	if not data or not data.boxes then return nil end
 	local xSteps, zSteps = 0, 0
 	if b.orient == "axis" then
 		xSteps, zSteps = pillarRotForAxis( MC.NormalizeOrient( b.id, orient ) )
-	elseif b.orient == "horizontal_facing" or b.orient == "facing" then
+	elseif b.orient == "horizontal_facing" or b.orient == "facing" or b.orient == "door" or b.orient == "bed" then
 		orient = MC.NormalizeOrient( b.id, orient )
 		if b.orient == "facing" and orient == MC.Direction.DOWN then
 			xSteps = 1
 		elseif b.orient == "facing" and orient == MC.Direction.UP then
 			xSteps = 3
 		else
-			zSteps = horizontalOrientSteps( orient )
+			zSteps = horizontalOrientSteps( MC.BlockHorizontalFacingForOrient( b, orient ) )
 		end
 	end
-	if xSteps == 0 and zSteps == 0 then return b.boxes end
-	b._rotatedBoxes = b._rotatedBoxes or {}
+	if xSteps == 0 and zSteps == 0 then return data.boxes end
+	data._rotatedBoxes = data._rotatedBoxes or {}
 	local cacheKey = xSteps .. ":" .. zSteps
-	if b._rotatedBoxes[cacheKey] then return b._rotatedBoxes[cacheKey] end
+	if data._rotatedBoxes[cacheKey] then return data._rotatedBoxes[cacheKey] end
 	local out = {}
-	for i, box in ipairs( b.boxes ) do
+	for i, box in ipairs( data.boxes ) do
 		out[i] = rotateBoxZ( rotateBoxX( box, xSteps ), zSteps )
 	end
-	b._rotatedBoxes[cacheKey] = out
+	data._rotatedBoxes[cacheKey] = out
 	return out
 end
 

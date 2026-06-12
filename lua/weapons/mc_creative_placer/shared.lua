@@ -100,6 +100,8 @@ function SWEP:PrimaryAttack()
 		if not bx then return end
 		if MC.SV.Break( owner, bx, by, bz ) then
 			self:EmitSound( "buttons/button15.wav", 60, 120, 0.25 )
+		elseif MC.SV.SyncBreakPlan then
+			MC.SV.SyncBreakPlan( owner, bx, by, bz )
 		elseif MC.SV.SyncCell then
 			MC.SV.SyncCell( owner, bx, by, bz )
 		end
@@ -133,13 +135,16 @@ function SWEP:SecondaryAttack()
 		if not bx then return end
 		if MC.SV.Place( owner, bx, by, bz, id, orient ) then
 			self:EmitSound( "buttons/button14.wav", 60, 150, 0.25 )
+		elseif MC.SV.SyncPlacementPlan then
+			MC.SV.SyncPlacementPlan( owner, bx, by, bz, id, orient )
 		elseif MC.SV.SyncCell then
 			MC.SV.SyncCell( owner, bx, by, bz )
 		end
 	elseif CLIENT and IsFirstTimePredicted() and owner == LocalPlayer() then
 		local id = selectedID( owner )
 		local bx, by, bz, orient = placeTarget( owner, aim, owner:GetEyeTrace(), id, true )
-		if bx and MC.CanPreviewPlace and MC.CanPreviewPlace( owner, bx, by, bz ) and MC.PredictSetBlock then
+		local plan = bx and MC.BuildPlacementPlan and MC.BuildPlacementPlan( bx, by, bz, id, orient )
+		if plan and MC.CanPreviewPlacePlan and MC.CanPreviewPlacePlan( owner, plan ) and MC.PredictSetBlock then
 			MC.PredictSetBlock( bx, by, bz, id, orient )
 		end
 	end

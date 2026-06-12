@@ -220,10 +220,13 @@ local function modelOrientSteps( b, orient )
 		if orient == MC.Axis.Z then return 1, 0 end
 		return 0, 0
 	end
-	if b.orient ~= "horizontal_facing" and b.orient ~= "facing" then return 0, 0 end
+	if b.orient ~= "horizontal_facing" and b.orient ~= "facing" and b.orient ~= "door" and b.orient ~= "bed" then return 0, 0 end
 	if b.orient == "facing" then
 		if orient == MC.Direction.DOWN then return 1, 0 end
 		if orient == MC.Direction.UP then return 3, 0 end
+	end
+	if b.orient == "door" or b.orient == "bed" then
+		orient = MC.BlockHorizontalFacingForOrient and MC.BlockHorizontalFacingForOrient( b, orient ) or orient
 	end
 	if orient == MC.Direction.EAST then return 0, 1 end
 	if orient == MC.Direction.SOUTH then return 0, 2 end
@@ -232,14 +235,15 @@ local function modelOrientSteps( b, orient )
 end
 
 local function rotatedModelQuads( b, orient )
-	if not b or not b.modelQuads then return nil end
+	local data = MC.BlockModelData and MC.BlockModelData( b, orient ) or b
+	if not data or not data.modelQuads then return nil end
 	local xSteps, zSteps = modelOrientSteps( b, orient )
-	if xSteps == 0 and zSteps == 0 then return b.modelQuads end
-	b._rotatedModelQuads = b._rotatedModelQuads or {}
+	if xSteps == 0 and zSteps == 0 then return data.modelQuads end
+	data._rotatedModelQuads = data._rotatedModelQuads or {}
 	local cacheKey = xSteps .. ":" .. zSteps
-	if b._rotatedModelQuads[cacheKey] then return b._rotatedModelQuads[cacheKey] end
+	if data._rotatedModelQuads[cacheKey] then return data._rotatedModelQuads[cacheKey] end
 	local out = {}
-	for qi, quad in ipairs( b.modelQuads ) do
+	for qi, quad in ipairs( data.modelQuads ) do
 		local verts = {}
 		for vi, v in ipairs( quad.verts or {} ) do
 			local y, z = rotateModelXZ( v.y, v.z, xSteps )
@@ -256,7 +260,7 @@ local function rotatedModelQuads( b, orient )
 			verts = verts,
 		}
 	end
-	b._rotatedModelQuads[cacheKey] = out
+	data._rotatedModelQuads[cacheKey] = out
 	return out
 end
 

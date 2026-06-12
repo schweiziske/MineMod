@@ -21,6 +21,7 @@ local SHARED = {
 	"mc/sh_blocks.lua",
 	"mc/sh_player.lua",
 	"mc/sh_voxel.lua",
+	"mc/sh_multiblock.lua",
 }
 local SERVER_FILES = {
 	"mc/sv_world.lua",

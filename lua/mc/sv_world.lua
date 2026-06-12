@@ -222,8 +222,9 @@ local function broadcastSet( bx, by, bz, id, orient )
 	net.Broadcast()
 end
 
-local function broadcastSetBulk( changes )
-	if #changes == 0 or #player.GetAll() == 0 then return end
+local function sendSetBulk( changes, target )
+	if #changes == 0 then return end
+	if not target and #player.GetAll() == 0 then return end
 	local i = 1
 	while i <= #changes do
 		local count = math.min( BULK_SET_CELLS_PER_MESSAGE, #changes - i + 1 )
@@ -239,9 +240,13 @@ local function broadcastSetBulk( changes )
 				net.WriteUInt( id, Net.ID_BITS )
 				net.WriteUInt( orient or 0, Net.ORIENT_BITS )
 			end
-		net.Broadcast()
+		if target then net.Send( target ) else net.Broadcast() end
 		i = i + count
 	end
+end
+
+local function broadcastSetBulk( changes )
+	sendSetBulk( changes )
 end
 
 -- a player-predicted edit got rejected: push the authoritative cell state back
@@ -256,6 +261,22 @@ function SV.SyncCell( ply, bx, by, bz )
 		net.WriteUInt( MC.GetBlock( bx, by, bz ), Net.ID_BITS )
 		net.WriteUInt( MC.GetBlockOrient( bx, by, bz ) or 0, Net.ORIENT_BITS )
 	net.Send( ply )
+end
+
+function SV.SyncCells( ply, cells )
+	if not IsValid( ply ) or not istable( cells ) or #cells == 0 then return end
+	local changes = {}
+	for _, cell in ipairs( cells ) do
+		local bx = math.floor( tonumber( cell.bx ) or 0 )
+		local by = math.floor( tonumber( cell.by ) or 0 )
+		local bz = math.floor( tonumber( cell.bz ) or 0 )
+		changes[#changes + 1] = {
+			bx = bx, by = by, bz = bz,
+			id = MC.GetBlock( bx, by, bz ),
+			orient = MC.GetBlockOrient( bx, by, bz ) or 0,
+		}
+	end
+	sendSetBulk( changes, ply )
 end
 
 local function broadcastFx( kind, bx, by, bz, id, orient )
@@ -369,6 +390,89 @@ local function apply( bx, by, bz, id, _, orient, actor, options )
 	return true
 end
 
+local function applyCells( cells, actor, options )
+	options = options or {}
+	if not istable( cells ) or #cells == 0 then return 0 end
+
+	local priorityPhys = options.priorityPhys == true
+	local shouldFx = options.fx
+	if shouldFx == nil then shouldFx = IsValid( actor ) end
+	local fxIndex = math.max( 1, math.floor( tonumber( options.fxIndex ) or 1 ) )
+
+	local changes = {}
+	local changedInfo = {}
+	local dirty = {}
+	local delta = 0
+
+	for i, cell in ipairs( cells ) do
+		local bx = math.floor( tonumber( cell.bx ) or 0 )
+		local by = math.floor( tonumber( cell.by ) or 0 )
+		local bz = math.floor( tonumber( cell.bz ) or 0 )
+		local id = math.floor( tonumber( cell.id ) or 0 )
+		local orient = id ~= 0 and MC.NormalizeOrient( id, cell.orient ) or 0
+		local old = MC.GetBlock( bx, by, bz )
+		local oldOrient = MC.GetBlockOrient( bx, by, bz )
+
+		if old ~= id or ( id ~= 0 and oldOrient ~= orient ) then
+			local chunk, _, emptied, changed = MC.SetBlockRaw( bx, by, bz, id, orient )
+			if changed then
+				if old == 0 and id ~= 0 then
+					delta = delta + 1
+				elseif old ~= 0 and id == 0 then
+					delta = delta - 1
+				end
+				changes[#changes + 1] = { bx = bx, by = by, bz = bz, id = id, orient = orient }
+				changedInfo[#changedInfo + 1] = {
+					index = i,
+					bx = bx, by = by, bz = bz,
+					id = id, orient = orient,
+					old = old, oldOrient = oldOrient,
+				}
+				collectCellPhysDirty( dirty, bx, by, bz )
+
+				if id ~= 0 and chunk then
+					SV.EnsureChunkEnt( chunk )
+				elseif emptied and chunk then
+					SV.PhysDirty[chunk.key] = nil
+					SV.PhysDirtyPriority[chunk.key] = nil
+					if IsValid( chunk.ent ) then chunk.ent:Remove() end
+				end
+			end
+		end
+	end
+
+	if #changes == 0 then return 0 end
+
+	SV.BlockCount = math.max( 0, SV.BlockCount + delta )
+	for key in pairs( dirty ) do
+		local c = MC.GetChunkByKey( key )
+		if c and c.count and c.count > 0 then
+			SV.EnsureChunkEnt( c )
+			SV.MarkPhysDirty( c.key, priorityPhys )
+		end
+	end
+
+	broadcastSetBulk( changes )
+
+	local fxInfo = changedInfo[fxIndex] or changedInfo[1]
+	for _, info in ipairs( changedInfo ) do
+		if shouldFx and ( options.fxAll == true or info == fxInfo ) then
+			if info.old ~= 0 and info.id == 0 then
+				broadcastFx( 2, info.bx, info.by, info.bz, info.old, info.oldOrient )
+			elseif info.old == 0 and info.id ~= 0 then
+				broadcastFx( 1, info.bx, info.by, info.bz, info.id, info.orient )
+			end
+		end
+		if options.handlers ~= false then
+			if info.old ~= 0 then callBlockHandler( info.old, "OnBreak", actor, info.bx, info.by, info.bz, info.oldOrient ) end
+			if info.id ~= 0 then callBlockHandler( info.id, "OnPlace", actor, info.bx, info.by, info.bz, info.orient ) end
+		end
+	end
+
+	SV.Dirty = true
+	return #changes
+end
+
 -- a placed block must not overlap a living player's hull (don't trap / suffocate them)
 local function wouldTrapPlayer( bx, by, bz )
 	return MC.BlockAABBOverlapsPlayerHull( bx, by, bz, 0 )
@@ -378,24 +482,91 @@ local function needsImmediatePlacePhys( bx, by, bz )
 	return MC.BlockAABBOverlapsPlayerHull( bx, by, bz, PLACE_PHYS_PLAYER_PADDING )
 end
 
-function SV.Place( ply, bx, by, bz, id, orient )
-	if not MC.IsValidBlock( id ) then return false end
-	if MC.GetBlock( bx, by, bz ) ~= 0 then return false end -- occupied
-	if wouldTrapPlayer( bx, by, bz ) then
-		notify( ply, "这里贴着玩家，放不了" )
+local function placementPlanNeedsImmediatePhys( plan )
+	for _, cell in ipairs( plan.cells or {} ) do
+		if needsImmediatePlacePhys( cell.bx, cell.by, cell.bz ) then return true end
+	end
+	return false
+end
+
+local function validateReach( ply, bx, by, bz )
+	local reach = C.Reach:GetFloat()
+	if reach > 0 and IsValid( ply ) then
+		if not MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, reach ) then
+			notify( ply, "Too far (mc_reach)" )
+			return false
+		end
+	end
+	return true
+end
+
+local function validatePlacementPlan( ply, plan )
+	if not plan or not plan.cells or #plan.cells == 0 then return false end
+	if not cooldownOK( ply ) then return false end
+	if not canEdit( ply ) then return false end
+	if not validateReach( ply, plan.bx, plan.by, plan.bz ) then return false end
+
+	local add = 0
+	for _, cell in ipairs( plan.cells ) do
+		if not worldBoundsOK( cell.bx, cell.by, cell.bz ) then
+			notify( ply, "Out of build range (mc_world_limit)" )
+			return false
+		end
+		if MC.GetBlock( cell.bx, cell.by, cell.bz ) ~= 0 then return false end
+		if wouldTrapPlayer( cell.bx, cell.by, cell.bz ) then
+			notify( ply, "A player is in the way" )
+			return false
+		end
+		add = add + 1
+	end
+
+	local maxBlocks = C.MaxBlocks:GetInt()
+	if maxBlocks > 0 and SV.BlockCount + add > maxBlocks then
+		notify( ply, "Block limit reached (mc_max_blocks)" )
 		return false
 	end
-	if not SV.Validate( ply, bx, by, bz, true ) then return false end
-	return apply( bx, by, bz, id, 1, orient, ply, {
-		priorityPhys = needsImmediatePlacePhys( bx, by, bz ),
-	} )
+	return true
+end
+
+local function validateBreakPlan( ply, plan )
+	if not plan or not plan.cells or #plan.cells == 0 then return false end
+	if not cooldownOK( ply ) then return false end
+	if not canEdit( ply ) then return false end
+	return validateReach( ply, plan.bx, plan.by, plan.bz )
+end
+
+function SV.Place( ply, bx, by, bz, id, orient )
+	if not MC.IsValidBlock( id ) then return false end
+	local plan = MC.BuildPlacementPlan and MC.BuildPlacementPlan( bx, by, bz, id, orient )
+	if not validatePlacementPlan( ply, plan ) then return false end
+	return applyCells( plan.cells, ply, {
+		priorityPhys = placementPlanNeedsImmediatePhys( plan ),
+		fxIndex = 1,
+	} ) > 0
 end
 
 function SV.Break( ply, bx, by, bz )
-	local old = MC.GetBlock( bx, by, bz )
-	if old == 0 then return false end
-	if not SV.Validate( ply, bx, by, bz, false ) then return false end
-	return apply( bx, by, bz, 0, -1, nil, ply, { priorityPhys = true } )
+	local plan = MC.BuildBreakPlan and MC.BuildBreakPlan( bx, by, bz )
+	if not validateBreakPlan( ply, plan ) then return false end
+	return applyCells( plan.cells, ply, { priorityPhys = true, fxIndex = 1 } ) > 0
+end
+
+function SV.SyncPlacementPlan( ply, bx, by, bz, id, orient )
+	local plan = MC.BuildPlacementPlan and MC.BuildPlacementPlan( bx, by, bz, id, orient )
+	if plan then
+		SV.SyncCells( ply, plan.cells )
+	else
+		SV.SyncCell( ply, bx, by, bz )
+	end
+end
+
+function SV.SyncBreakPlan( ply, bx, by, bz )
+	local plan = MC.BuildBreakPlan and MC.BuildBreakPlan( bx, by, bz )
+	if plan then
+		SV.SyncCells( ply, plan.cells )
+	else
+		SV.SyncCell( ply, bx, by, bz )
+	end
 end
 
 function SV.SetBlock( bx, by, bz, id, orient, options )
