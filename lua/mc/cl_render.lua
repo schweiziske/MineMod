@@ -3,7 +3,7 @@
 
 	Builds IMeshes per chunk from the voxel store with hidden-face culling and
 	Minecraft-style directional face shading. Each chunk gets an opaque/cutout
-	mesh list plus, when it contains glass-family blocks, a separate translucent
+	mesh list plus, when it contains translucent blocks, a separate translucent
 	mesh list; both draw from PostDraw*Renderables hooks.
 ------------------------------------------------------------------------------]]
 
@@ -20,21 +20,34 @@ if MC.GeneratedAtlas then
 	MC.Atlas.COLS = MC.GeneratedAtlas.COLS or MC.Atlas.COLS
 	MC.Atlas.ROWS = MC.GeneratedAtlas.ROWS or MC.Atlas.ROWS
 	MC.Atlas.TILE = MC.GeneratedAtlas.TILE or MC.Atlas.TILE
+	MC.Atlas.PAD = MC.GeneratedAtlas.PAD or MC.Atlas.PAD
+	MC.Atlas.STRIDE = MC.GeneratedAtlas.STRIDE or MC.Atlas.STRIDE
 	MC.Atlas.MATERIAL = MC.GeneratedAtlas.MATERIAL or MC.Atlas.MATERIAL
-	MC.Atlas.W = MC.Atlas.COLS * MC.Atlas.TILE
-	MC.Atlas.H = MC.Atlas.ROWS * MC.Atlas.TILE
+	MC.Atlas.MATERIAL_TRANSLUCENT = MC.GeneratedAtlas.MATERIAL_TRANSLUCENT or MC.Atlas.MATERIAL_TRANSLUCENT
+	MC.Atlas.W = MC.GeneratedAtlas.W or MC.Atlas.COLS * ( MC.Atlas.STRIDE or MC.Atlas.TILE )
+	MC.Atlas.H = MC.GeneratedAtlas.H or MC.Atlas.ROWS * ( MC.Atlas.STRIDE or MC.Atlas.TILE )
+end
+
+local function atlasPngPath( path )
+	path = path or "mc/atlas_365"
+	path = path:gsub( "%.vmt$", "" )
+	if path:sub( -4 ) == ".png" then return path end
+	return path .. ".png"
 end
 
 -- single atlas material: alpha cutout (glass/leaves), vertex-shaded, backface-culled
-MC.Material = Material( MC.Atlas.MATERIAL or "mc/atlas_365.png", "alphatest vertexcolor" )
+MC.Material = Material( atlasPngPath( MC.Atlas.MATERIAL or "mc/atlas_365" ), "alphatest vertexcolor" )
 
--- second material over the same atlas pixels for the glass family: real alpha
--- blending in the translucent pass. PNG materials are cached by path (a second
--- Material() call with different flags returns the cutout one) and rebinding
--- the texture via CreateMaterial proved unreliable, so the build writes a
--- byte-for-byte copy of the atlas for this material to load.
-local transPath = ( MC.Atlas.MATERIAL or "mc/atlas_365.png" ):gsub( "%.png$", "_translucent.png" )
-MC.MaterialTranslucent = Material( transPath, "translucent vertexcolor" )
+-- second material over the same atlas pixels for translucent blocks: real alpha
+-- blending in the translucent pass. GMod caches materials by path, so the build
+-- writes a separate translucent atlas VMT/VTF instead of rebinding one texture
+-- through two different flag sets.
+local function translucentAtlasPath( path )
+	path = path or "mc/atlas_365"
+	return path:gsub( "%.png$", "" ) .. "_translucent"
+end
+local transPath = MC.Atlas.MATERIAL_TRANSLUCENT or translucentAtlasPath( MC.Atlas.MATERIAL )
+MC.MaterialTranslucent = Material( atlasPngPath( transPath ), "translucent vertexcolor" )
 if not MC.MaterialTranslucent or MC.MaterialTranslucent:IsError() then
 	-- missing copy: fall back to the cutout material rather than drawing white
 	MC.MaterialTranslucent = MC.Material
@@ -69,7 +82,7 @@ local TRI = { 1, 3, 2, 1, 4, 3 }
 local VERT_LIMIT = 64998 -- multiple of 6, under the 65535 IMesh vertex cap
 
 MC.Meshes      = MC.Meshes or {}      -- key -> { IMesh, ... } (opaque/cutout pass)
-MC.MeshesTrans = MC.MeshesTrans or {} -- key -> { IMesh, ... } (translucent glass pass)
+MC.MeshesTrans = MC.MeshesTrans or {} -- key -> { IMesh, ... } (translucent pass)
 MC.MeshDirty = MC.MeshDirty or {}  -- key -> true
 MC.ChunkEnts = MC.ChunkEnts or {}  -- key -> mc_chunk entity (clientside physics owner)
 MC.PhysDirty = MC.PhysDirty or {}  -- key -> due time (clientside collision rebuild)
@@ -87,8 +100,16 @@ cvars.AddChangeCallback( "mc_client_collision", function()
 end, "mc" )
 
 -- should the face between `cur` and neighbour `nb` be drawn?
+local function sameLiquidKind( cur, nb )
+	if not MC.LiquidKind then return false end
+	local curKind = MC.LiquidKind( cur )
+	if not curKind then return false end
+	return curKind == MC.LiquidKind( nb )
+end
+
 local function visible( cur, nb, nbOrient )
 	if nb == 0 then return true end
+	if sameLiquidKind( cur, nb ) then return false end
 	local d = MC.Blocks[nb]
 	if d and d.transparent then return nb ~= cur end
 	if MC.BlockIsFullCube and not MC.BlockIsFullCube( nb, nbOrient ) then return true end
@@ -127,11 +148,15 @@ local function tileUVRect( tile, uv )
 	local A = MC.Atlas
 	local col = tile % A.COLS
 	local row = math.floor( tile / A.COLS )
+	local stride = A.STRIDE or A.TILE
+	local pad = A.PAD or 0
 	local inset = A.INSET or 0.5
-	local u0 = col * A.TILE + ( tonumber( uv[1] ) or 0 ) / 16 * A.TILE + inset
-	local v0 = row * A.TILE + ( tonumber( uv[2] ) or 0 ) / 16 * A.TILE + inset
-	local u1 = col * A.TILE + ( tonumber( uv[3] ) or 16 ) / 16 * A.TILE - inset
-	local v1 = row * A.TILE + ( tonumber( uv[4] ) or 16 ) / 16 * A.TILE - inset
+	local baseX = col * stride + pad
+	local baseY = row * stride + pad
+	local u0 = baseX + ( tonumber( uv[1] ) or 0 ) / 16 * A.TILE + inset
+	local v0 = baseY + ( tonumber( uv[2] ) or 0 ) / 16 * A.TILE + inset
+	local u1 = baseX + ( tonumber( uv[3] ) or 16 ) / 16 * A.TILE - inset
+	local v1 = baseY + ( tonumber( uv[4] ) or 16 ) / 16 * A.TILE - inset
 	return u0 / A.W, v0 / A.H, u1 / A.W, v1 / A.H
 end
 
@@ -139,11 +164,13 @@ local function tileUVPoint( tile, uv )
 	local A = MC.Atlas
 	local col = tile % A.COLS
 	local row = math.floor( tile / A.COLS )
+	local stride = A.STRIDE or A.TILE
+	local pad = A.PAD or 0
 	local inset = A.INSET or 0.5
 	local u = tonumber( uv and uv[1] ) or 0
 	local v = tonumber( uv and uv[2] ) or 0
-	local px = col * A.TILE + u / 16 * A.TILE
-	local py = row * A.TILE + v / 16 * A.TILE
+	local px = col * stride + pad + u / 16 * A.TILE
+	local py = row * stride + pad + v / 16 * A.TILE
 	if u <= 0 then px = px + inset elseif u >= 16 then px = px - inset end
 	if v <= 0 then py = py + inset elseif v >= 16 then py = py - inset end
 	return px / A.W, py / A.H
@@ -393,7 +420,7 @@ local function coveredByBoxes( targetBox, face, boxes, ox, oy, oz )
 	return rectCovered( a0, a1, b0, b1, covers )
 end
 
-local function shapeFaceCovered( box, face, boxes, bx, by, bz )
+local function shapeFaceCovered( cur, box, face, boxes, bx, by, bz )
 	if coveredByBoxes( box, face, boxes, 0, 0, 0 ) then return true end
 	local plane = facePlane( box, face )
 	local off = FACES[face].off
@@ -407,6 +434,7 @@ local function shapeFaceCovered( box, face, boxes, bx, by, bz )
 	end
 	local nb = MC.GetBlock( bx + off[1], by + off[2], bz + off[3] )
 	if nb == 0 then return false end
+	if sameLiquidKind( cur, nb ) then return true end
 	local d = MC.Blocks[nb]
 	if d and d.transparent and not ( MC.IsPaneBlock and MC.IsPaneBlock( nb ) ) then return false end
 	local nbOrient = MC.GetBlockOrient( bx + off[1], by + off[2], bz + off[3] )
@@ -425,7 +453,7 @@ function MC.BuildChunkMesh( key )
 	chunk.orients = chunk.orients or {}
 
 	-- two output streams: everything cutout/opaque, plus a translucent stream
-	-- for the glass family only (never move whole chunks to translucent)
+	-- for water/lava and the glass family (never move whole chunks to translucent)
 	local opaque      = { list = {}, verts = {}, nv = 0, material = MC.Material }
 	local translucent = { list = {}, verts = {}, nv = 0, material = MC.MaterialTranslucent }
 	local cur = opaque
@@ -566,7 +594,7 @@ function MC.BuildChunkMesh( key )
 			local boxes = MC.BlockBoxes( id, orient, bx, by, bz )
 			for boxIndex, box in ipairs( boxes or {} ) do
 				for f = 1, 6 do
-					if not shapeFaceCovered( box, f, boxes, bx, by, bz ) then
+					if not shapeFaceCovered( id, box, f, boxes, bx, by, bz ) then
 						local face = FACES[f]
 						local modelFaces = b and b.boxFaces
 						if isPipe6Shape then modelFaces = nil end
@@ -657,7 +685,7 @@ hook.Remove( "PostDrawTranslucentRenderables", "mc_draw_chunks" )
 hook.Add( "PostDrawOpaqueRenderables", "mc_draw_chunks", function()
 	drawAllChunks( MC.Meshes, MC.DrawChunk )
 end )
--- glass family only; the bulk of the world stays in the opaque pass above
+-- translucent blocks only; the bulk of the world stays in the opaque pass above
 hook.Add( "PostDrawTranslucentRenderables", "mc_draw_chunks", function()
 	drawAllChunks( MC.MeshesTrans, MC.DrawChunkTranslucent )
 end )
