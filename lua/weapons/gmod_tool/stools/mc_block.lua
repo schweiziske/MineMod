@@ -77,7 +77,9 @@ function TOOL:LeftClick( tr )
 
 	local bx, by, bz = breakTarget( aim, tr )
 	if not bx then return true end
-	MC.SV.Break( ply, bx, by, bz )
+	if not MC.SV.Break( ply, bx, by, bz ) and MC.SV.SyncBreakPlan then
+		MC.SV.SyncBreakPlan( ply, bx, by, bz )
+	end
 	return true
 end
 
@@ -89,7 +91,8 @@ function TOOL:RightClick( tr )
 	if CLIENT then
 		if not IsFirstTimePredicted() or ply ~= LocalPlayer() then return true end
 		local bx, by, bz, orient = placeTarget( ply, aim, tr, id, true )
-		if bx and MC.CanPreviewPlace( ply, bx, by, bz ) and MC.PredictSetBlock then
+		local plan = bx and MC.BuildPlacementPlan and MC.BuildPlacementPlan( bx, by, bz, id, orient )
+		if plan and MC.CanPreviewPlacePlan and MC.CanPreviewPlacePlan( ply, plan ) and MC.PredictSetBlock then
 			MC.PredictSetBlock( bx, by, bz, id, orient )
 		end
 		return true
@@ -104,7 +107,9 @@ function TOOL:RightClick( tr )
 	if MC.SV.Use( ply, ux, uy, uz ) then return true end
 
 	local bx, by, bz, orient = placeTarget( ply, aim, tr, id )
-	if bx then MC.SV.Place( ply, bx, by, bz, id, orient ) end
+	if bx and not MC.SV.Place( ply, bx, by, bz, id, orient ) and MC.SV.SyncPlacementPlan then
+		MC.SV.SyncPlacementPlan( ply, bx, by, bz, id, orient )
+	end
 	return true
 end
 
@@ -135,9 +140,10 @@ if CLIENT then
 
 		local id = selectedID( self )
 		local bx, by, bz = placeCell( tr )
-		if not MC.CanPreviewPlace( ply, bx, by, bz ) then return end
 
 		local orient = MC.OrientForPlacement( ply, tr, id )
+		local plan = MC.BuildPlacementPlan and MC.BuildPlacementPlan( bx, by, bz, id, orient )
+		if not plan or not MC.CanPreviewPlacePlan or not MC.CanPreviewPlacePlan( ply, plan ) then return end
 		local state = MC.BlockStateText( id, orient )
 		if state == "" then return end
 

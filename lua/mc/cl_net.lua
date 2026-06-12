@@ -104,56 +104,62 @@ local function markPredictedCellDirty( bx, by, bz, priority )
 	MC.MarkCellPhysNeighbours( bx, by, bz, priority )
 end
 
+local function predictCells( cells, priorityFn )
+	if not istable( cells ) or #cells == 0 then return false end
+	for _, cell in ipairs( cells ) do
+		if MC.PendingPredictions[predictionKey( cell.bx, cell.by, cell.bz )] then return false end
+	end
+
+	local oldStates = {}
+	for i, cell in ipairs( cells ) do
+		oldStates[i] = {
+			id = MC.GetBlock( cell.bx, cell.by, cell.bz ),
+			orient = MC.GetBlockOrient( cell.bx, cell.by, cell.bz ),
+		}
+	end
+
+	for i, cell in ipairs( cells ) do
+		local id = math.floor( tonumber( cell.id ) or 0 )
+		local orient = id ~= 0 and MC.NormalizeOrient( id, cell.orient ) or 0
+		local _, _, _, changed = MC.SetBlockRaw( cell.bx, cell.by, cell.bz, id, orient )
+		if changed then
+			MC.PendingPredictions[predictionKey( cell.bx, cell.by, cell.bz )] = {
+				bx = cell.bx,
+				by = cell.by,
+				bz = cell.bz,
+				id = id,
+				orient = orient,
+				oldId = oldStates[i].id,
+				oldOrient = oldStates[i].orient,
+				expire = CurTime() + 2.5,
+			}
+			markPredictedCellDirty( cell.bx, cell.by, cell.bz, priorityFn and priorityFn( cell ) or false )
+		end
+	end
+
+	return true
+end
+
 function MC.PredictSetBlock( bx, by, bz, id, orient )
 	if not MC.IsValidBlock or not MC.IsValidBlock( id ) then return false end
-	if MC.GetBlock( bx, by, bz ) ~= 0 then return false end
-
-	local key = predictionKey( bx, by, bz )
-	local pending = MC.PendingPredictions[key]
-	local oldId = pending and pending.oldId or MC.GetBlock( bx, by, bz )
-	local oldOrient = pending and pending.oldOrient or MC.GetBlockOrient( bx, by, bz )
-	orient = MC.NormalizeOrient and MC.NormalizeOrient( id, orient ) or orient
-
-	local _, _, _, changed = MC.SetBlockRaw( bx, by, bz, id, orient )
-	if not changed then return false end
-
-	MC.PendingPredictions[key] = {
-		bx = bx,
-		by = by,
-		bz = bz,
-		id = id,
-		orient = orient,
-		oldId = oldId,
-		oldOrient = oldOrient,
-		expire = CurTime() + 2.5,
-	}
-	markPredictedCellDirty( bx, by, bz, MC.BlockAABBOverlapsPlayerHull( bx, by, bz, PLACE_PHYS_PLAYER_PADDING ) )
-	return true
+	local plan = MC.BuildPlacementPlan and MC.BuildPlacementPlan( bx, by, bz, id, orient )
+	if not plan then return false end
+	for _, cell in ipairs( plan.cells ) do
+		if MC.GetBlock( cell.bx, cell.by, cell.bz ) ~= 0 then return false end
+	end
+	return predictCells( plan.cells, function( cell )
+		return MC.BlockAABBOverlapsPlayerHull( cell.bx, cell.by, cell.bz, PLACE_PHYS_PLAYER_PADDING )
+	end )
 end
 
 function MC.PredictBreakBlock( bx, by, bz, ply )
 	if IsValid( ply ) and not MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, MC.CurrentReach() ) then return false end
 	local oldId = MC.GetBlock( bx, by, bz )
 	if oldId == 0 then return false end
-
-	local key = predictionKey( bx, by, bz )
-	if MC.PendingPredictions[key] then return false end
-
 	local oldOrient = MC.GetBlockOrient( bx, by, bz )
-	local _, _, _, changed = MC.SetBlockRaw( bx, by, bz, 0, 0 )
-	if not changed then return false end
-
-	MC.PendingPredictions[key] = {
-		bx = bx,
-		by = by,
-		bz = bz,
-		id = 0,
-		orient = 0,
-		oldId = oldId,
-		oldOrient = oldOrient,
-		expire = CurTime() + 2.5,
-	}
-	markPredictedCellDirty( bx, by, bz, true )
+	local plan = MC.BuildBreakPlan and MC.BuildBreakPlan( bx, by, bz )
+	if not plan then return false end
+	if not predictCells( plan.cells, function() return true end ) then return false end
 	if MC.PlayBlockFx then
 		MC.PlayBlockFx( 2, oldId, oldOrient, bx, by, bz, true )
 	end

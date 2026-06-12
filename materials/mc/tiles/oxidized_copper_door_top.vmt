@@ -1,0 +1,9 @@
+"UnlitGeneric"
+{
+  "$basetexture" "mc/tiles/oxidized_copper_door_top"
+  "$translucent" "1"
+  "$vertexcolor" "1"
+  "$vertexalpha" "1"
+  "$pointsample" "1"
+  "$nocull" "1"
+}
