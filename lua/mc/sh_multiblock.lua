@@ -43,7 +43,7 @@ end
 function MC.PrimaryPartOrient( id, orient )
 	orient = MC.NormalizeOrient( id, orient )
 	if MC.IsDoorBlock( id ) then
-		return MC.MakeDoorOrient( MC.DoorOrientFacing( orient ), "lower" )
+		return MC.MakeDoorOrient( MC.DoorOrientFacing( orient ), "lower", MC.DoorOrientOpen( orient ) )
 	end
 	if MC.IsBedBlock( id ) then
 		return MC.MakeBedOrient( MC.BedOrientFacing( orient ), "foot" )
@@ -59,8 +59,9 @@ function MC.BuildPlacementPlan( bx, by, bz, id, orient )
 
 	if MC.IsDoorBlock( id ) then
 		local facing = MC.DoorOrientFacing( orient )
-		addCell( cells, seen, bx, by, bz, id, MC.MakeDoorOrient( facing, "lower" ) )
-		addCell( cells, seen, bx, by, bz + 1, id, MC.MakeDoorOrient( facing, "upper" ) )
+		local open = MC.DoorOrientOpen( orient )
+		addCell( cells, seen, bx, by, bz, id, MC.MakeDoorOrient( facing, "lower", open ) )
+		addCell( cells, seen, bx, by, bz + 1, id, MC.MakeDoorOrient( facing, "upper", open ) )
 	elseif MC.IsBedBlock( id ) then
 		local facing = MC.BedOrientFacing( orient )
 		local dx, dy = MC.HorizontalDirectionOffset( facing )
@@ -78,11 +79,12 @@ function MC.BuildPlacementPlan( bx, by, bz, id, orient )
 	}
 end
 
-local function matchingDoorPart( id, orient, facing, half )
+local function matchingDoorPart( id, orient, facing, half, open )
 	return id ~= 0
 		and MC.IsDoorBlock( id )
 		and MC.DoorOrientFacing( orient ) == facing
 		and MC.DoorOrientHalf( orient ) == half
+		and MC.DoorOrientOpen( orient ) == open
 end
 
 local function matchingBedPart( id, orient, facing, part )
@@ -103,11 +105,12 @@ function MC.BuildBreakPlan( bx, by, bz )
 	if MC.IsDoorBlock( id ) then
 		local facing = MC.DoorOrientFacing( orient )
 		local half = MC.DoorOrientHalf( orient )
+		local open = MC.DoorOrientOpen( orient )
 		local otherZ = half == "upper" and bz - 1 or bz + 1
 		local wantHalf = half == "upper" and "lower" or "upper"
 		local otherId = MC.GetBlock( bx, by, otherZ )
 		local otherOrient = MC.GetBlockOrient( bx, by, otherZ )
-		if matchingDoorPart( otherId, otherOrient, facing, wantHalf ) then
+		if matchingDoorPart( otherId, otherOrient, facing, wantHalf, open ) then
 			addCell( cells, seen, bx, by, otherZ, 0, 0 )
 		end
 	elseif MC.IsBedBlock( id ) then

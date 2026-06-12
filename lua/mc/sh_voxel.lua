@@ -84,10 +84,27 @@ function MC.BlockAABBOverlapsPlayerHull( bx, by, bz, padding )
 	return false
 end
 
+local function blockAABBOverlapsPlayerHullSidePadding( bx, by, bz, padding )
+	padding = math.max( 0, tonumber( padding ) or 0 )
+	local mn = MC.CellWorldMin( bx, by, bz )
+	local mxx, mxy, mxz = mn.x + BS, mn.y + BS, mn.z + BS
+	for _, p in ipairs( player.GetAll() ) do
+		if p:Alive() then
+			local pmn, pmx = p:WorldSpaceAABB()
+			if mn.x - padding < pmx.x and mxx + padding > pmn.x
+			and mn.y - padding < pmx.y and mxy + padding > pmn.y
+			and mn.z < pmx.z and mxz > pmn.z then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 function MC.PlacementOverlapsPlayerHull( bx, by, bz, id, orient )
 	if MC.BlockAABBOverlapsPlayerHull( bx, by, bz, 0 ) then return true end
 	if id ~= nil and id ~= 0 and MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
-		return MC.BlockAABBOverlapsPlayerHull( bx, by, bz, PLACE_REJECT_PLAYER_PADDING )
+		return blockAABBOverlapsPlayerHullSidePadding( bx, by, bz, PLACE_REJECT_PLAYER_PADDING )
 	end
 	return false
 end

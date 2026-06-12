@@ -18,6 +18,8 @@ local SHARED = {
 	"mc/generated/sh_generated_block_collision.lua",
 	"mc/generated/sh_generated_sound_types.lua",
 	"mc/generated/sh_generated_lang.lua",
+	"mc/functional/sh_furnace.lua",
+	"mc/functional/sh_doors.lua",
 	"mc/sh_blocks.lua",
 	"mc/sh_player.lua",
 	"mc/sh_voxel.lua",

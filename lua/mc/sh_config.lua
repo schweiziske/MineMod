@@ -55,6 +55,11 @@ if SERVER then
 		"mc_save_list_req",
 		"mc_save_list_data",
 		"mc_save_action",
+		"mc_save_cover_begin",
+		"mc_save_cover_part",
+		"mc_save_cover_req",
+		"mc_save_cover_download_begin",
+		"mc_save_cover_download_part",
 	} ) do
 		util.AddNetworkString( name )
 	end
@@ -65,7 +70,7 @@ MC.Net = {
 	COORD_BITS = 20, -- signed block coord (+-524288 blocks; far beyond any map)
 	LOCAL_BITS = 13, -- local index 0..8191 (16*16*32-1)
 	ID_BITS    = 16, -- block id 0..65535
-	ORIENT_BITS = 3, -- Minecraft Direction ordinal / axis ordinal
+	ORIENT_BITS = 4, -- block state nibble; doors need facing + half + opened
 	COUNT_BITS = 14, -- blocks per chunk section 0..8192
 }
 
