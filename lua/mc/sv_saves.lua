@@ -13,12 +13,16 @@ local C = MC.Config
 
 local SAVE_DIR = "mc"
 local SAVE_SLOT_DIR = "mc/saves"
+local SAVE_COVER_DIR = "mc/save_covers"
 local MAX_NET_SAVES = 4095
+local SAVE_COVER_PART_BYTES = 60000
+local MAX_SAVE_COVER_BYTES = 1024 * 1024 * 2
 local SAVE_PUBLIC_HELP = "Allow non-admin players to list/load/save MC saves; delete remains admin-only"
 
 local function ensureSaveDirs()
 	file.CreateDir( SAVE_DIR )
 	file.CreateDir( SAVE_SLOT_DIR )
+	file.CreateDir( SAVE_COVER_DIR )
 end
 
 function SV.SaveSlotName( name )
@@ -40,7 +44,55 @@ function SV.SaveMetaPath( slotName )
 	return SAVE_SLOT_DIR .. "/" .. slotName .. ".json"
 end
 
-local function writeSaveMeta( slotName, path, data, chunks, blocks )
+function SV.SaveCoverPath( slotName )
+	return SAVE_COVER_DIR .. "/" .. slotName .. ".jpg"
+end
+
+function SV.DeleteSaveCovers( slotName, keepPath )
+	slotName = SV.SaveSlotName( slotName )
+	if not slotName then return end
+
+	local function deletePath( path )
+		if path == keepPath then return end
+		if file.Exists( path, "DATA" ) then file.Delete( path ) end
+	end
+
+	deletePath( SV.SaveCoverPath( slotName ) )
+
+	local files = file.Find( SAVE_COVER_DIR .. "/" .. slotName .. "_*.jpg", "DATA" ) or {}
+	for _, fn in ipairs( files ) do
+		deletePath( SAVE_COVER_DIR .. "/" .. fn )
+	end
+end
+
+local function sanitizeSaveCover( cover, slotName )
+	cover = string.Trim( tostring( cover or "" ) )
+	if cover == "" then return nil end
+	cover = string.gsub( cover, "\\", "/" )
+	cover = string.gsub( cover, "%.%.+", "_" )
+	if not string.StartWith( cover, SAVE_COVER_DIR .. "/" ) then
+		return SV.SaveCoverPath( slotName )
+	end
+	cover = string.gsub( cover, "[%c:%*%?\"<>|]", "_" )
+	return string.sub( cover, 1, 160 )
+end
+
+local function sanitizeSaveCoverReadPath( cover )
+	cover = string.Trim( tostring( cover or "" ) )
+	if cover == "" then return nil end
+	cover = string.gsub( cover, "\\", "/" )
+	cover = string.gsub( cover, "%.%.+", "_" )
+	if not string.StartWith( cover, SAVE_COVER_DIR .. "/" ) then return nil end
+	cover = string.gsub( cover, "[%c:%*%?\"<>|]", "_" )
+	return string.sub( cover, 1, 160 )
+end
+
+local function saveCoverBelongsToSlot( cover, slotName )
+	local base = SAVE_COVER_DIR .. "/" .. slotName
+	return cover == base .. ".jpg" or string.StartWith( cover, base .. "_" )
+end
+
+local function writeSaveMeta( slotName, path, data, chunks, blocks, cover )
 	ensureSaveDirs()
 	local savedAt = data.savedAt or os.time()
 	local meta = {
@@ -54,6 +106,7 @@ local function writeSaveMeta( slotName, path, data, chunks, blocks )
 		h = data.h,
 		chunks = chunks,
 		blocks = blocks,
+		cover = sanitizeSaveCover( cover or data.cover, slotName ),
 	}
 	local json = util.TableToJSON( meta, true )
 	if json then file.Write( SV.SaveMetaPath( slotName ), json ) end
@@ -98,6 +151,7 @@ local function readSaveDataSummary( slotName, path )
 		h = data.h,
 		chunks = chunks,
 		blocks = blocks,
+		cover = sanitizeSaveCover( data.cover, slotName ),
 	}
 end
 
@@ -139,16 +193,17 @@ local function readSaveListMeta( slotName, path )
 	if meta.h == nil then meta.h = summary.h end
 	if meta.chunks == nil then meta.chunks = summary.chunks end
 	if meta.blocks == nil then meta.blocks = summary.blocks end
+	if meta.cover == nil then meta.cover = summary.cover end
 	writeMetaTable( slotName, meta )
 	return meta
 end
 
-function SV.SaveNamed( slotName )
+function SV.SaveNamed( slotName, cover )
 	slotName = SV.SaveSlotName( slotName )
 	if not slotName then return false, "missing_save_name" end
 	ensureSaveDirs()
 	local ok, path, data, chunks, blocks = SV.SaveToPath( SV.SaveSlotPath( slotName ), slotName )
-	if ok then writeSaveMeta( slotName, path, data, chunks, blocks ) end
+	if ok then writeSaveMeta( slotName, path, data, chunks, blocks, cover ) end
 	return ok, path
 end
 
@@ -165,6 +220,7 @@ function SV.DeleteSave( slotName )
 	if not file.Exists( path, "DATA" ) then return false, "save_not_found" end
 	file.Delete( path )
 	file.Delete( SV.SaveMetaPath( slotName ) )
+	SV.DeleteSaveCovers( slotName )
 	MsgN( "[MC] deleted save \"" .. slotName .. "\"" )
 	return true
 end
@@ -183,6 +239,7 @@ function SV.SaveList()
 			blocks = math.floor( tonumber( meta.blocks ) or 0 ),
 			chunks = math.floor( tonumber( meta.chunks ) or 0 ),
 			savedAtText = meta.savedAtText or "?",
+			cover = sanitizeSaveCover( meta.cover, slotName ) or "",
 			path = path,
 		}
 	end
@@ -233,6 +290,105 @@ local function printSaveDeleteDenied( ply )
 	printSaveManagerLine( ply, "[MC] only admins may delete MC saves" )
 end
 
+local SaveCoverUploads = {}
+
+local function sendSaveCoverToClient( ply, cover )
+	if not IsValid( ply ) then return end
+	cover = sanitizeSaveCoverReadPath( cover )
+	if not cover or not file.Exists( cover, "DATA" ) then return end
+
+	local data = file.Read( cover, "DATA" )
+	if not data or data == "" or #data > MAX_SAVE_COVER_BYTES then return end
+
+	local parts = math.ceil( #data / SAVE_COVER_PART_BYTES )
+	local timerName = "MC_SaveCoverDownload_" .. ply:EntIndex() .. "_" .. util.CRC( cover )
+	timer.Remove( timerName )
+
+	net.Start( "mc_save_cover_download_begin" )
+		net.WriteString( cover )
+		net.WriteUInt( parts, 16 )
+		net.WriteUInt( #data, 32 )
+	net.Send( ply )
+
+	local i = 1
+	timer.Create( timerName, 0.01, parts, function()
+		if not IsValid( ply ) then timer.Remove( timerName ) return end
+
+		local first = ( i - 1 ) * SAVE_COVER_PART_BYTES + 1
+		local chunk = string.sub( data, first, first + SAVE_COVER_PART_BYTES - 1 )
+		net.Start( "mc_save_cover_download_part" )
+			net.WriteString( cover )
+			net.WriteUInt( i, 16 )
+			net.WriteUInt( #chunk, 16 )
+			net.WriteData( chunk, #chunk )
+		net.Send( ply )
+		i = i + 1
+	end )
+end
+
+net.Receive( "mc_save_cover_begin", function( _, ply )
+	if not canUseSaves( ply ) then return end
+
+	local slotName = SV.SaveSlotName( net.ReadString() )
+	if not slotName then return end
+
+	local cover = sanitizeSaveCover( net.ReadString(), slotName )
+	local expectedParts = net.ReadUInt( 16 )
+	local totalBytes = net.ReadUInt( 32 )
+	if not cover or expectedParts < 1 or totalBytes < 1 or totalBytes > MAX_SAVE_COVER_BYTES then return end
+	if not saveCoverBelongsToSlot( cover, slotName ) then cover = SV.SaveCoverPath( slotName ) end
+
+	SaveCoverUploads[ply] = {
+		slotName = slotName,
+		cover = cover,
+		expectedParts = expectedParts,
+		totalBytes = totalBytes,
+		receivedBytes = 0,
+		receivedParts = 0,
+		parts = {},
+	}
+end )
+
+net.Receive( "mc_save_cover_part", function( _, ply )
+	local upload = SaveCoverUploads[ply]
+	if not upload then return end
+
+	local cover = sanitizeSaveCover( net.ReadString(), upload.slotName )
+	local index = net.ReadUInt( 16 )
+	local len = net.ReadUInt( 16 )
+	local chunk = net.ReadData( len )
+	if cover ~= upload.cover or index < 1 or index > upload.expectedParts then return end
+	if len < 1 or len > SAVE_COVER_PART_BYTES or not chunk or #chunk ~= len then return end
+	if upload.parts[index] then return end
+
+	upload.parts[index] = chunk
+	upload.receivedParts = upload.receivedParts + 1
+	upload.receivedBytes = upload.receivedBytes + len
+	if upload.receivedBytes > upload.totalBytes or upload.receivedBytes > MAX_SAVE_COVER_BYTES then
+		SaveCoverUploads[ply] = nil
+		return
+	end
+
+	if upload.receivedParts < upload.expectedParts then return end
+
+	local data = table.concat( upload.parts )
+	SaveCoverUploads[ply] = nil
+	if #data ~= upload.totalBytes then return end
+
+	ensureSaveDirs()
+	file.Write( upload.cover, data )
+	SV.DeleteSaveCovers( upload.slotName, upload.cover )
+end )
+
+net.Receive( "mc_save_cover_req", function( _, ply )
+	if not canUseSaves( ply ) then return end
+	sendSaveCoverToClient( ply, net.ReadString() )
+end )
+
+hook.Add( "PlayerDisconnected", "MC_ClearSaveCoverUpload", function( ply )
+	SaveCoverUploads[ply] = nil
+end )
+
 local function sendSaveList( ply, message, isError, saves )
 	if not IsValid( ply ) then return end
 	saves = saves or SV.SaveList()
@@ -251,6 +407,7 @@ local function sendSaveList( ply, message, isError, saves )
 			net.WriteUInt( uint32( save.blocks ), 32 )
 			net.WriteUInt( uint32( save.chunks ), 32 )
 			net.WriteString( tostring( save.savedAtText or "?" ) )
+			net.WriteString( tostring( save.cover or "" ) )
 		end
 	net.Send( ply )
 end
@@ -302,6 +459,10 @@ end )
 net.Receive( "mc_save_action", function( _, ply )
 	local action = string.lower( net.ReadString() or "" )
 	local slotName = net.ReadString()
+	local cover = ""
+	if net.BytesLeft() > 0 then
+		cover = net.ReadString()
+	end
 
 	local ok, err
 	if action == "save" then
@@ -309,7 +470,7 @@ net.Receive( "mc_save_action", function( _, ply )
 			sendSaveList( ply, "只有管理员可以保存存档 (mc_save_public 0)", true, {} )
 			return
 		end
-		ok, err = SV.Save( slotName )
+		ok, err = SV.SaveNamed( slotName, cover )
 	elseif action == "load" then
 		if not canUseSaves( ply ) then
 			sendSaveList( ply, "只有管理员可以读取存档 (mc_save_public 0)", true, {} )

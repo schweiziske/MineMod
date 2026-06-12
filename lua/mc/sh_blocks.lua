@@ -216,15 +216,6 @@ MC.BlockByName = {}
 MC.BlockAliases = {}
 MC.BlockHandlers = MC.BlockHandlers or {}
 
-MC.BlockHandlers.furnace = MC.BlockHandlers.furnace or {
-	OnUse = function( ply )
-		if IsValid( ply ) then
-			ply:ChatPrint( "[MC] 熔炉界面还没接物品系统，先占位。" )
-		end
-		return true
-	end,
-}
-
 -- the generator's name-based solid heuristic misfires on some families (its
 -- 'bamboo' plant pattern catches the whole bamboo wood set), so force the
 -- blocks that must collide. fences/gates/walls/panes always need collision.
@@ -269,8 +260,6 @@ function MC.RegisterBlock( def )
 	local front = textures.front and tileValue( textures.front, side ) or nil
 	local particle = tileValue( textures.particle or def.particle, side )
 	local icon = textures.icon and tileValue( textures.icon, side ) or nil
-	local handler = def.handlers or ( def.handler and MC.BlockHandlers[def.handler] ) or nil
-	if handler and handler.OnTick then MC.HasBlockTickHandlers = true end
 
 	-- vanilla collision truth beats the generator's name-based solid heuristic
 	-- (its substring patterns misfire on mushroom blocks, coral blocks, eggs,
@@ -283,6 +272,10 @@ function MC.RegisterBlock( def )
 	elseif string.match( name, "_bed$" ) then
 		stateRule = "bed"
 	end
+	local handlerName = def.handler
+	if not handlerName and stateRule == "door" then handlerName = "door" end
+	local handler = def.handlers or ( handlerName and MC.BlockHandlers[handlerName] ) or nil
+	if handler and handler.OnTick then MC.HasBlockTickHandlers = true end
 
 	local b = {
 		id = id,
@@ -395,6 +388,12 @@ local HorizontalPartBaseByFacing = {
 	[MC.Direction.WEST] = 2,
 	[MC.Direction.EAST] = 3,
 }
+local HorizontalCounterClockwise = {
+	[MC.Direction.NORTH] = MC.Direction.WEST,
+	[MC.Direction.WEST] = MC.Direction.SOUTH,
+	[MC.Direction.SOUTH] = MC.Direction.EAST,
+	[MC.Direction.EAST] = MC.Direction.NORTH,
+}
 
 local function horizontalPartBase( facing )
 	return HorizontalPartBaseByFacing[facing] or HorizontalPartBaseByFacing[MC.Direction.NORTH]
@@ -404,8 +403,8 @@ local function horizontalPartFacing( orient )
 	return HorizontalPartFacingByBase[math.floor( tonumber( orient ) or 0 ) % 4] or MC.Direction.NORTH
 end
 
-function MC.MakeDoorOrient( facing, half )
-	return horizontalPartBase( facing ) + ( half == "upper" and 4 or 0 )
+function MC.MakeDoorOrient( facing, half, open )
+	return horizontalPartBase( facing ) + ( half == "upper" and 4 or 0 ) + ( open and 8 or 0 )
 end
 
 function MC.DoorOrientFacing( orient )
@@ -413,7 +412,17 @@ function MC.DoorOrientFacing( orient )
 end
 
 function MC.DoorOrientHalf( orient )
-	return math.floor( tonumber( orient ) or 0 ) >= 4 and "upper" or "lower"
+	return math.floor( ( tonumber( orient ) or 0 ) / 4 ) % 2 == 1 and "upper" or "lower"
+end
+
+function MC.DoorOrientOpen( orient )
+	return math.floor( ( tonumber( orient ) or 0 ) / 8 ) % 2 == 1
+end
+
+function MC.DoorRenderFacing( orient )
+	local facing = MC.DoorOrientFacing( orient )
+	if MC.DoorOrientOpen( orient ) then return HorizontalCounterClockwise[facing] or facing end
+	return facing
 end
 
 function MC.MakeBedOrient( facing, part )
@@ -462,6 +471,12 @@ local StairHalfByOrient = {
 	[6] = "top",
 	[7] = "top",
 }
+local DoorOrientAllowed = {}
+local DoorOrientOrder = {}
+for i = 0, 15 do
+	DoorOrientAllowed[i] = true
+	DoorOrientOrder[#DoorOrientOrder + 1] = i
+end
 
 function MC.MakeStairOrient( facing, half )
 	local base = StairOrientByFacing[facing] or StairOrientByFacing[MC.Direction.NORTH]
@@ -511,8 +526,8 @@ MC.OrientRules = {
 	},
 	door = {
 		default = 0,
-		allowed = { [0] = true, [1] = true, [2] = true, [3] = true, [4] = true, [5] = true, [6] = true, [7] = true },
-		order = { 0, 1, 2, 3, 4, 5, 6, 7 },
+		allowed = DoorOrientAllowed,
+		order = DoorOrientOrder,
 	},
 	bed = {
 		default = 0,
@@ -624,7 +639,9 @@ function MC.OrientToState( id, orient )
 	end
 	if b.orient == "door" then
 		orient = MC.NormalizeOrient( id, orient )
-		return ( DirectionName[MC.DoorOrientFacing( orient )] or "north" ) .. "," .. MC.DoorOrientHalf( orient )
+		return ( DirectionName[MC.DoorOrientFacing( orient )] or "north" ) ..
+			"," .. MC.DoorOrientHalf( orient ) ..
+			",opened=" .. tostring( MC.DoorOrientOpen( orient ) )
 	end
 	if b.orient == "bed" then
 		orient = MC.NormalizeOrient( id, orient )
@@ -648,7 +665,8 @@ function MC.BlockStateText( id, orient )
 	if b.orient == "door" then
 		orient = MC.NormalizeOrient( id, orient )
 		local facing = DirectionName[MC.DoorOrientFacing( orient )] or "north"
-		return "facing=" .. facing .. ",half=" .. MC.DoorOrientHalf( orient )
+		return "facing=" .. facing .. ",half=" .. MC.DoorOrientHalf( orient ) ..
+			",opened=" .. tostring( MC.DoorOrientOpen( orient ) )
 	end
 	if b.orient == "bed" then
 		orient = MC.NormalizeOrient( id, orient )
@@ -666,7 +684,7 @@ function MC.BlockStateHint( id )
 	if not rule then return "" end
 	if b.orient == "slab" then return "type=bottom/top/double" end
 	if b.orient == "stairs" then return "facing=north/south/west/east,half=bottom/top" end
-	if b.orient == "door" then return "facing=north/south/west/east,half=lower/upper" end
+	if b.orient == "door" then return "facing=north/south/west/east,half=lower/upper,opened=true/false" end
 	if b.orient == "bed" then return "facing=north/south/west/east,part=foot/head" end
 	local names = {}
 	for _, value in ipairs( rule.order ) do names[#names + 1] = rule.names[value] end
@@ -710,6 +728,20 @@ local function numericOrient( rule, state )
 	return n
 end
 
+local function stateBool( value, default )
+	if value == nil then return default end
+	value = string.lower( tostring( value ) )
+	if value == "true" or value == "open" or value == "opened" then return true end
+	if value == "false" or value == "closed" then return false end
+	return default
+end
+
+local function stateBoolValid( value )
+	if value == nil then return true end
+	value = string.lower( tostring( value ) )
+	return value == "true" or value == "false" or value == "open" or value == "opened" or value == "closed"
+end
+
 function MC.StateToOrient( id, state )
 	local b = MC.Blocks[id]
 	local rule = b and MC.OrientRules[b.orient]
@@ -733,7 +765,8 @@ function MC.StateToOrient( id, state )
 		if not HorizontalPartBaseByFacing[facing] then facing = nil end
 		local half = map and map.half or "lower"
 		if half ~= "upper" then half = "lower" end
-		return facing and MC.MakeDoorOrient( facing, half ) or MC.DefaultOrient( id )
+		local open = map and stateBool( map.opened or map.open, false ) or false
+		return facing and MC.MakeDoorOrient( facing, half, open ) or MC.DefaultOrient( id )
 	end
 	if b.orient == "bed" then
 		local facing = map and DirectionValue[map.facing] or DirectionValue[trim( state )]
@@ -768,7 +801,10 @@ function MC.IsOrientStateValid( id, state )
 		if map then
 			local facing = DirectionValue[map.facing]
 			local half = map.half or "lower"
-			return HorizontalPartBaseByFacing[facing] ~= nil and ( half == "lower" or half == "upper" )
+			local open = map.opened or map.open
+			return HorizontalPartBaseByFacing[facing] ~= nil
+				and ( half == "lower" or half == "upper" )
+				and stateBoolValid( open )
 		end
 		return HorizontalPartBaseByFacing[DirectionValue[trim( string.lower( tostring( state ) ) )]] ~= nil
 	end
@@ -1137,7 +1173,7 @@ function MC.BlockHorizontalFacingForOrient( blockOrId, orient )
 	local b = type( blockOrId ) == "table" and blockOrId or MC.Blocks[blockOrId]
 	if not b then return MC.Direction.NORTH end
 	orient = MC.NormalizeOrient( b.id, orient )
-	if b.orient == "door" then return MC.DoorOrientFacing( orient ) end
+	if b.orient == "door" then return MC.DoorRenderFacing( orient ) end
 	if b.orient == "bed" then return MC.BedOrientFacing( orient ) end
 	return orient
 end
