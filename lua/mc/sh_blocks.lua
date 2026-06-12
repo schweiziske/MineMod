@@ -1280,6 +1280,8 @@ local TranslucentNames = {
 	frosted_ice = true,
 	slime_block = true,
 	honey_block = true,
+	water = true,
+	lava = true,
 }
 
 local function isTranslucentName( name )
@@ -1538,8 +1540,10 @@ function MC.TileUV( tile )
 	local A = MC.Atlas
 	local col = tile % A.COLS
 	local row = math.floor( tile / A.COLS )
-	local px0 = col * A.TILE
-	local py0 = row * A.TILE
+	local stride = A.STRIDE or A.TILE
+	local pad = A.PAD or 0
+	local px0 = col * stride + pad
+	local py0 = row * stride + pad
 	local inset = A.INSET or 0.5
 	return ( px0 + inset ) / A.W,
 	       ( py0 + inset ) / A.H,

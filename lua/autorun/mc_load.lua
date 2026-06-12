@@ -21,6 +21,7 @@ local SHARED = {
 	"mc/functional/sh_furnace.lua",
 	"mc/functional/sh_doors.lua",
 	"mc/functional/sh_ladders.lua",
+	"mc/functional/sh_liquids.lua",
 	"mc/sh_blocks.lua",
 	"mc/sh_presets.lua",
 	"mc/sh_player.lua",

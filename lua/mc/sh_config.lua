@@ -31,14 +31,17 @@ MC.ChunkWorldH = MC.CH * MC.BS
 ------------------------------------------------------------------ atlas geometry
 -- Must match _build/build_atlas.ps1 (TILE/COLS) and the produced atlas height.
 MC.Atlas = {
-	COLS = 16,
-	ROWS = 31,
+	COLS = 32,
+	ROWS = 36,
 	TILE = 64,
+	PAD = 4,
+	STRIDE = 72,
+	W = 4096,
+	H = 4096,
 	INSET = 0.5,
-	MATERIAL = "mc/atlas_365.png",
+	MATERIAL = "mc/atlas_365",
+	MATERIAL_TRANSLUCENT = "mc/atlas_365_translucent",
 }
-MC.Atlas.W = MC.Atlas.COLS * MC.Atlas.TILE
-MC.Atlas.H = MC.Atlas.ROWS * MC.Atlas.TILE
 
 ------------------------------------------------------------------ net strings
 if SERVER then
