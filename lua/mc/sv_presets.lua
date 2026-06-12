@@ -285,8 +285,8 @@ function SV.SavePreset( presetName, cornerA, cornerB, anchor, cover, ply )
 		blocks = #cells,
 		cells = cells,
 		cover = sanitizePresetCover( cover, presetName ) or "",
-		-- v1 deliberately does not rotate presets. Saved orientations are replayed as-is.
-		rotation = "none",
+		-- Rotation is applied at placement time around this saved anchor.
+		rotation = "quarter_turn_z",
 	}
 
 	local compressed = presetPayloadToJSON( data )
@@ -299,7 +299,9 @@ function SV.SavePreset( presetName, cornerA, cornerB, anchor, cover, ply )
 	return true, data
 end
 
-local function presetCellTable( data, origin )
+local function presetCellTable( data, origin, rotation )
+	if MC.PresetCells then return MC.PresetCells( data, origin, rotation ) end
+
 	local out = {}
 	for _, cell in ipairs( data.cells or {} ) do
 		local dx = math.floor( tonumber( cell[1] ) or 0 )
@@ -326,7 +328,18 @@ local function presetSize( data )
 	return sx, sy, sz, sx * sy * sz
 end
 
-local function presetClearCells( data, origin )
+local function presetClearCells( data, origin, rotation )
+	if MC.PresetClearCells then
+		local cells = MC.PresetClearCells( data, origin, rotation )
+		local out = {}
+		for _, cell in ipairs( cells ) do
+			if MC.GetBlock( cell.bx, cell.by, cell.bz ) ~= 0 then
+				out[#out + 1] = cell
+			end
+		end
+		return out
+	end
+
 	local out = {}
 	local sx, sy, sz = presetSize( data )
 	for dz = 0, sz - 1 do
@@ -365,20 +378,21 @@ local function validatePresetPlacement( ply, data, cells, overwrite )
 	return true
 end
 
-function SV.PlacePreset( ply, presetName, origin, overwrite )
+function SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 	overwrite = overwrite == true
+	rotation = MC.PresetNormalizeRotation and MC.PresetNormalizeRotation( rotation ) or 0
 	origin = asCell( origin )
 	if not origin then return false, "invalid_origin" end
 	local data, err = SV.LoadPreset( presetName )
 	if not data then return false, err end
 
-	local cells = presetCellTable( data, origin )
+	local cells = presetCellTable( data, origin, rotation )
 	local ok, validateErr = validatePresetPlacement( ply, data, cells, overwrite )
 	if not ok then return false, validateErr end
 
 	local cleared = 0
 	if overwrite then
-		local clearCells = presetClearCells( data, origin )
+		local clearCells = presetClearCells( data, origin, rotation )
 		if #clearCells > 0 then
 			if SV.RemoveBlocksBulk then
 				cleared = SV.RemoveBlocksBulk( clearCells, {
@@ -585,7 +599,11 @@ net.Receive( "mc_preset_place", function( _, ply )
 	if net.BytesLeft() > 0 then
 		overwrite = net.ReadBool()
 	end
-	local ok, err = SV.PlacePreset( ply, presetName, origin, overwrite )
+	local rotation = 0
+	if net.BytesLeft() > 0 then
+		rotation = net.ReadUInt( 2 )
+	end
+	local ok, err = SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 	if not ok and IsValid( ply ) then
 		ply:ChatPrint( "[MC] 预设放置失败: " .. tostring( err ) )
 	end

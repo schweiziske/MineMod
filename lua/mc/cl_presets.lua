@@ -35,6 +35,9 @@ MC.PresetProjectionMeshes = MC.PresetProjectionMeshes or nil
 if MC.PresetOverwrite == nil then
 	MC.PresetOverwrite = false
 end
+if MC.PresetRotation == nil then
+	MC.PresetRotation = 0
+end
 
 local CoverMaterialCache = {}
 local PendingCoverDownloads = {}
@@ -82,6 +85,21 @@ function MC.TogglePresetOverwrite()
 	else
 		chat( "预设覆盖模式: 关。目标位置有方块时不会放置。" )
 	end
+end
+
+function MC.SetPresetRotation( rotation, silent )
+	MC.PresetRotation = MC.PresetNormalizeRotation and MC.PresetNormalizeRotation( rotation ) or 0
+	if MC.ActivePreset and MC.BuildPresetProjectionMesh then
+		MC.BuildPresetProjectionMesh( MC.ActivePreset, MC.PresetRotation )
+	end
+	if not silent then
+		local degrees = MC.PresetRotationDegrees and MC.PresetRotationDegrees( MC.PresetRotation ) or ( MC.PresetRotation * 90 )
+		chat( "Preset rotation: " .. tostring( degrees ) .. " deg" )
+	end
+end
+
+function MC.CyclePresetRotation()
+	MC.SetPresetRotation( ( MC.PresetRotation or 0 ) + 1 )
 end
 
 local function styleButton( btn, label )
@@ -292,23 +310,26 @@ local function isFullBlockBox( box )
 	return box[1] == 0 and box[2] == 0 and box[3] == 0 and box[4] == 1 and box[5] == 1 and box[6] == 1
 end
 
-function MC.BuildPresetProjectionMesh( preset )
+function MC.BuildPresetProjectionMesh( preset, rotation )
 	freePresetProjectionMeshes()
 	if not preset or not istable( preset.cells ) then return nil end
 
+	rotation = MC.PresetNormalizeRotation and MC.PresetNormalizeRotation( rotation ) or 0
 	local mat = MC.MaterialTranslucent or MC.Material
 	local meshes = {}
 	local verts = {}
 	local nv = 0
 	local fullCells = {}
 	local cellInfo = {}
+	local origin = { bx = 0, by = 0, bz = 0 }
+	local transformedCells = MC.PresetCells and MC.PresetCells( preset, origin, rotation ) or {}
 
-	for _, cell in ipairs( preset.cells ) do
-		local dx = math.floor( tonumber( cell[1] ) or 0 )
-		local dy = math.floor( tonumber( cell[2] ) or 0 )
-		local dz = math.floor( tonumber( cell[3] ) or 0 )
-		local id = math.floor( tonumber( cell[4] ) or 0 )
-		local orient = MC.NormalizeOrient( id, cell[5] )
+	for _, cell in ipairs( transformedCells ) do
+		local dx = math.floor( tonumber( cell.dx or cell.bx ) or 0 )
+		local dy = math.floor( tonumber( cell.dy or cell.by ) or 0 )
+		local dz = math.floor( tonumber( cell.dz or cell.bz ) or 0 )
+		local id = math.floor( tonumber( cell.id ) or 0 )
+		local orient = MC.NormalizeOrient( id, cell.orient )
 		if MC.IsValidBlock and MC.IsValidBlock( id ) then
 			local info = { dx = dx, dy = dy, dz = dz, id = id, orient = orient }
 			cellInfo[#cellInfo + 1] = info
@@ -374,8 +395,9 @@ function MC.LoadPresetForProjection( preset )
 	MC.PresetMode = "place"
 	MC.PresetSelectionStep = 0
 	MC.PresetSelection = {}
-	MC.BuildPresetProjectionMesh( preset )
-	chat( "已读取预设: " .. tostring( preset.name ) .. "。移动准星看投影，左键放置，右键取消。" )
+	MC.PresetRotation = 0
+	MC.BuildPresetProjectionMesh( preset, MC.PresetRotation )
+	chat( "已读取预设: " .. tostring( preset.name ) .. "。移动准星看投影，G 旋转，左键放置，右键取消。" )
 	return true
 end
 
@@ -520,7 +542,7 @@ function MC.PresetAdvanceSelection()
 		anchor.nz = math.Round( aim.HitNormal.z )
 		selection.anchor = anchor
 		MC.PresetSelectionStep = 3
-		chat( "基准面已选择。再按一次左键截图并保存；这一版预设不旋转。" )
+		chat( "基准面已选择。再按一次左键截图并保存。" )
 	elseif step == 3 then
 		MC.SavePresetSelection()
 	end
@@ -567,6 +589,7 @@ function MC.PlaceActivePreset()
 		net.WriteInt( oy, MC.Net.COORD_BITS )
 		net.WriteInt( oz, MC.Net.COORD_BITS )
 		net.WriteBool( MC.PresetOverwrite == true )
+		net.WriteUInt( MC.PresetRotation or 0, 2 )
 	net.SendToServer()
 end
 

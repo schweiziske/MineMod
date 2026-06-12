@@ -1,9 +1,7 @@
 --[[----------------------------------------------------------------------------
 	mc_preset_placer : preset capture/place SWEP.
 	Left = advance capture or place loaded preset, Right = undo/cancel, R = UI.
-
-	Preset v1 is no rotation: saved block orientations are replayed as-is and the
-	saved anchor is only translated to the aimed placement cell.
+	G rotates the loaded preset projection by 90 degree grid steps.
 ------------------------------------------------------------------------------]]
 
 if SERVER then AddCSLuaFile() end
@@ -11,7 +9,7 @@ if SERVER then AddCSLuaFile() end
 SWEP.PrintName     = "MC 预设放置器"
 SWEP.Author        = "MC"
 SWEP.Purpose       = "保存和放置 Minecraft 方块建筑预设"
-SWEP.Instructions  = "R 打开预设界面  左键选择/放置  右键撤销"
+SWEP.Instructions  = "R 打开预设界面  左键选择/放置  右键撤销  G 旋转"
 SWEP.Category      = "MC"
 
 SWEP.Spawnable     = true
@@ -87,6 +85,29 @@ function SWEP:Reload()
 end
 
 if CLIENT then
+	local function activePresetPlacer( ply )
+		if not IsValid( ply ) then return false end
+		local wep = ply:GetActiveWeapon()
+		return IsValid( wep ) and wep:GetClass() == "mc_preset_placer"
+	end
+
+	local function textEntryHasFocus()
+		local focus = vgui.GetKeyboardFocus and vgui.GetKeyboardFocus() or nil
+		if not IsValid( focus ) then return false end
+		local class = focus.GetClassName and focus:GetClassName() or ""
+		return class == "TextEntry" or class == "DTextEntry"
+	end
+
+	local lastRotateAt = 0
+	local function cyclePresetRotationDebounced()
+		if not MC.CyclePresetRotation then return false end
+		local now = CurTime()
+		if now - lastRotateAt < 0.08 then return true end
+		lastRotateAt = now
+		MC.CyclePresetRotation()
+		return true
+	end
+
 	local function drawFallbackCellBox( cell, color )
 		local base = MC.CellWorldMin( cell.bx, cell.by, cell.bz )
 		render.DrawWireframeBox( base, angle_zero, vector_origin, Vector( MC.BS, MC.BS, MC.BS ), color, true )
@@ -119,8 +140,10 @@ if CLIENT then
 		local title = "MC 预设放置器"
 		local hint
 		local overwriteText = ( MC.PresetOverwrite == true ) and "覆盖: 开" or "覆盖: 关"
+		local rotationDeg = MC.PresetRotationDegrees and MC.PresetRotationDegrees( MC.PresetRotation or 0 ) or ( ( MC.PresetRotation or 0 ) * 90 )
+		local rotationText = "旋转: " .. tostring( rotationDeg ) .. " deg"
 		if mode == "place" and MC.ActivePreset then
-			hint = "左键放置投影   右键取消   E 切换覆盖   R 选择预设"
+			hint = "左键放置投影   右键取消   E 覆盖   G 旋转   R 预设"
 		elseif mode == "create" then
 			if step == 0 then hint = "左键选择第一个方块   右键取消"
 			elseif step == 1 then hint = "左键选择第二个方块完成范围   右键撤销"
@@ -131,10 +154,10 @@ if CLIENT then
 			hint = "R 打开预设界面"
 		end
 
-		draw.RoundedBox( 6, sw * 0.5 - 210, sh - 116, 420, 76, Color( 0, 0, 0, 175 ) )
+		draw.RoundedBox( 6, sw * 0.5 - 270, sh - 116, 540, 76, Color( 0, 0, 0, 175 ) )
 		draw.SimpleText( title, "mc_hud", sw * 0.5, sh - 94, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
 		draw.SimpleText( hint, "mc_hud_small", sw * 0.5, sh - 66, Color( 225, 235, 248, 230 ), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
-		draw.SimpleText( "不旋转 v1：基准面只负责平移对齐   " .. overwriteText, "mc_hud_small", sw * 0.5, sh - 46, Color( 180, 200, 220, 190 ), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+		draw.SimpleText( rotationText .. "   " .. overwriteText, "mc_hud_small", sw * 0.5, sh - 46, Color( 180, 200, 220, 190 ), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
 
 		surface.SetDrawColor( 255, 255, 255, 220 )
 		surface.DrawRect( sw * 0.5 - 1, sh * 0.5 - 1, 2, 2 )
@@ -142,13 +165,21 @@ if CLIENT then
 
 	hook.Add( "PlayerBindPress", "mc_preset_overwrite_toggle", function( ply, bind, pressed )
 		if not pressed or not IsValid( ply ) or ply ~= LocalPlayer() then return end
-		if string.lower( tostring( bind or "" ) ) ~= "+use" then return end
-		local wep = ply:GetActiveWeapon()
-		if not IsValid( wep ) or wep:GetClass() ~= "mc_preset_placer" then return end
-		if MC.TogglePresetOverwrite then
+		if not activePresetPlacer( ply ) or textEntryHasFocus() then return end
+
+		local lower = string.lower( tostring( bind or "" ) )
+		if lower == "+use" and MC.TogglePresetOverwrite then
 			MC.TogglePresetOverwrite()
 			return true
 		end
+		if lower == "+grenade1" then return cyclePresetRotationDebounced() end
+	end )
+
+	hook.Add( "PlayerButtonDown", "mc_preset_rotation_key", function( ply, button )
+		if button ~= KEY_G then return end
+		if not IsValid( ply ) or ply ~= LocalPlayer() then return end
+		if not activePresetPlacer( ply ) or textEntryHasFocus() then return end
+		cyclePresetRotationDebounced()
 	end )
 
 	hook.Add( "PostDrawTranslucentRenderables", "mc_preset_selection_outline", function( _, bSky, bSky3D )
