@@ -114,6 +114,7 @@ end
 
 MC.CreativeCategories = MC.CreativeCategories or {
 	{ id = "all", label = "全部" },
+	{ id = "custom", label = "自定义" },
 	{ id = "building", label = "建筑方块" },
 	{ id = "natural", label = "自然方块" },
 	{ id = "functional", label = "功能方块" },
@@ -435,6 +436,7 @@ local function blockMatchesSearch( b, search )
 end
 
 function MC.CreativeCategoryForBlock( b )
+	if b and b.creativeCategory then return b.creativeCategory end
 	local text = blockText( b )
 	if textHas( text, "glass", "pane", "ice", "slime", "honey", "water" ) then return "transparent" end
 	if textHas( text, "sapling", "leaves", "flower", "tulip", "grass", "moss", "bush", "vines", "vine", "coral", "kelp", "seagrass", "cactus", "crop", "wheat", "carrot", "potato", "beetroot" ) then return "plants" end
