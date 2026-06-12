@@ -14,6 +14,7 @@ local CS  = MC.CS
 local BS  = MC.BS
 local CS2 = CS * CS
 local CH  = MC.CH
+local PLACE_REJECT_PLAYER_PADDING = math.max( 2, BS * 0.08 )
 
 -- chunkKey -> chunk = { cx, cy, cz, key, blocks = { [li]=id }, orients = { [li]=orient }, count, ent (sv) }
 MC.World = MC.World or {}
@@ -83,6 +84,14 @@ function MC.BlockAABBOverlapsPlayerHull( bx, by, bz, padding )
 	return false
 end
 
+function MC.PlacementOverlapsPlayerHull( bx, by, bz, id, orient )
+	if MC.BlockAABBOverlapsPlayerHull( bx, by, bz, 0 ) then return true end
+	if id ~= nil and id ~= 0 and MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
+		return MC.BlockAABBOverlapsPlayerHull( bx, by, bz, PLACE_REJECT_PLAYER_PADDING )
+	end
+	return false
+end
+
 function MC.CurrentReach()
 	local cv = GetConVar( "mc_reach" )
 	local fallback = MC.Config and MC.Config.DefaultReach or BS * 5
@@ -108,8 +117,8 @@ local function previewWorldBoundsOK( bx, by )
 	return math.abs( bx ) <= lim and math.abs( by ) <= lim
 end
 
-local function previewWouldTrapPlayer( bx, by, bz )
-	return MC.BlockAABBOverlapsPlayerHull( bx, by, bz, 0 )
+local function previewWouldTrapPlayer( bx, by, bz, id, orient )
+	return MC.PlacementOverlapsPlayerHull( bx, by, bz, id, orient )
 end
 
 function MC.CanPreviewBreak( ply, bx, by, bz )
@@ -119,12 +128,12 @@ function MC.CanPreviewBreak( ply, bx, by, bz )
 		and MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, MC.CurrentReach() )
 end
 
-function MC.CanPreviewPlace( ply, bx, by, bz )
+function MC.CanPreviewPlace( ply, bx, by, bz, id, orient )
 	if not IsValid( ply ) then return false end
 	return MC.GetBlock( bx, by, bz ) == 0
 		and previewCanEdit( ply )
 		and previewWorldBoundsOK( bx, by )
-		and not previewWouldTrapPlayer( bx, by, bz )
+		and not previewWouldTrapPlayer( bx, by, bz, id, orient )
 		and MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, MC.CurrentReach() )
 end
 
@@ -158,7 +167,8 @@ function MC.TraceBlockRay( startPos, dir, maxDist )
 
 	for _ = 1, maxSteps do
 		local id = MC.GetBlock( bx, by, bz )
-		if id ~= 0 and dist <= maxDist then
+		local pendingPrediction = CLIENT and MC.IsPendingPredictionCell and MC.IsPendingPredictionCell( bx, by, bz )
+		if id ~= 0 and not pendingPrediction and dist <= maxDist then
 			local orient = MC.GetBlockOrient( bx, by, bz )
 			return {
 				Hit = true,

@@ -99,6 +99,10 @@ local function predictionKey( bx, by, bz )
 	return bx .. ":" .. by .. ":" .. bz
 end
 
+function MC.IsPendingPredictionCell( bx, by, bz )
+	return MC.PendingPredictions[predictionKey( bx, by, bz )] ~= nil
+end
+
 local function markPredictedCellDirty( bx, by, bz, priority )
 	MC.MarkDirty( bx, by, bz )
 	MC.MarkCellPhysNeighbours( bx, by, bz, priority )

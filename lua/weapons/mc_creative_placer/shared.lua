@@ -28,13 +28,21 @@ SWEP.Secondary = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "no
 
 local STEP = 0.13
 
+local function defaultSelectedID()
+	local resolved = MC.ResolveBlock and MC.ResolveBlock( "minecraft:stone" ) or nil
+	local id = resolved and resolved.id or 1
+	if not MC.IsValidBlock( id ) then id = 1 end
+	return id
+end
+
 local function selectedID( ply )
 	if CLIENT and MC.GetCreativeHotbarSelectedID then
 		local hotbarID = MC.GetCreativeHotbarSelectedID( ply )
 		if MC.IsValidBlock( hotbarID ) then return hotbarID end
 	end
-	local id = IsValid( ply ) and ply:GetNWInt( "mc_block", 1 ) or 1
-	if not MC.IsValidBlock( id ) then id = 1 end
+	local fallback = defaultSelectedID()
+	local id = IsValid( ply ) and ply:GetNWInt( "mc_block", fallback ) or fallback
+	if not MC.IsValidBlock( id ) then id = fallback end
 	return id
 end
 
@@ -86,6 +94,10 @@ end
 
 function SWEP:Deploy()
 	self:SetHoldType( "pistol" )
+	if CLIENT and MC.EnsureCreativeHotbar then
+		MC.EnsureCreativeHotbar()
+		if MC.SyncCreativeHotbarSelection then MC.SyncCreativeHotbarSelection( true ) end
+	end
 	return true
 end
 
@@ -142,6 +154,7 @@ function SWEP:SecondaryAttack()
 		end
 	elseif CLIENT and IsFirstTimePredicted() and owner == LocalPlayer() then
 		local id = selectedID( owner )
+		if MC.CreativeHotbarSelectionSynced and not MC.CreativeHotbarSelectionSynced( owner, id ) then return end
 		local bx, by, bz, orient = placeTarget( owner, aim, owner:GetEyeTrace(), id, true )
 		local plan = bx and MC.BuildPlacementPlan and MC.BuildPlacementPlan( bx, by, bz, id, orient )
 		if plan and MC.CanPreviewPlacePlan and MC.CanPreviewPlacePlan( owner, plan ) and MC.PredictSetBlock then
