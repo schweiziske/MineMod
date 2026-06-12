@@ -285,6 +285,8 @@ function MC.RegisterBlock( def )
 		solid = shouldForceSolid( name ) or solid,
 		transparent = def.transparent == true,
 		shape = def.shape,
+		custom = def.custom == true,
+		creativeCategory = def.creativeCategory,
 		boxes = normalizeBoxes( def.boxes ),
 		boxFaces = normalizeBoxFaces( def.boxFaces ),
 		modelQuads = normalizeModelQuads( def.modelQuads ),
@@ -336,6 +338,10 @@ local function rebuildBlockList()
 	for id in pairs( MC.Blocks ) do MC.BlockList[#MC.BlockList + 1] = id end
 	table.sort( MC.BlockList )
 	MC.MaxBlockID = MC.BlockList[#MC.BlockList] or 0
+end
+
+function MC.RefreshBlockList()
+	rebuildBlockList()
 end
 
 local function registerGeneratedBlocks()
@@ -613,6 +619,7 @@ registerImportFallbackBlock( { id = 60007, name = "glow_lichen", mcid = "minecra
 registerImportFallbackBlock( { id = 60008, name = "bush", mcid = "minecraft:bush", solid = false, transparent = true, textures = { top = "oak_leaves", side = "oak_leaves", bottom = "oak_leaves" } } )
 registerImportFallbackBlock( { id = 60009, name = "flower", mcid = "minecraft:dandelion", solid = false, transparent = true, textures = { top = "oak_leaves", side = "oak_leaves", bottom = "oak_leaves" }, aliases = { "minecraft:poppy", "minecraft:white_tulip", "minecraft:pink_tulip", "minecraft:cornflower", "minecraft:oxeye_daisy", "minecraft:sunflower", "minecraft:firefly_bush" } } )
 
+if MC.RegisterPendingCustomBlocks then MC.RegisterPendingCustomBlocks() end
 rebuildBlockList()
 
 function MC.DefaultOrient( id )
