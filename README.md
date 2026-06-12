@@ -8,7 +8,7 @@ Garry's Mod 里的 Minecraft 风格方块系统。方块不按实体逐个生成
 - chunk 水平尺寸固定为 `16x16`，垂直 section 高度是 `32`。
 - 支持放置、破坏、使用、`/fill`、导入、默认存档、命名多存档、分片同步。
 - 提供 `MC 创造方块放置器` SWEP；Reload 打开带分类、搜索和分页的创造物品栏。
-- 提供 `MC 预设放置器` SWEP；可选择区域保存建筑预设，读取后用客户端 IMesh 投影并批量放置，E 可切换覆盖模式。
+- 提供 `MC 预设放置器` SWEP；可选择区域保存建筑预设，读取后用客户端 IMesh 投影并批量放置，E 可切换覆盖模式，G 可按 90 度步进旋转投影和实际放置。
 - 提供 `MC.SV.SetBlock` / `SetBlockSpec` / `RemoveBlock` 给非玩家插件、mob、状态机写入世界。
 - 支持 GMod 武器/爆炸破坏方块；血量来自 Minecraft hardness 乘 `mc_block_health_scale`。
 - 方块表、atlas、中文名由 `_build/build_atlas.ps1` 从 `out/assets/minecraft` 生成。
@@ -27,6 +27,7 @@ Garry's Mod 里的 Minecraft 风格方块系统。方块不按实体逐个生成
 lua/autorun/mc_load.lua                  加载入口
 lua/mc/sh_config.lua                     尺寸、ConVar、net bit、atlas 配置
 lua/mc/sh_blocks.lua                     方块注册、状态、朝向、碰撞盒
+lua/mc/sh_presets.lua                    建筑预设坐标/朝向旋转和覆盖体积变换
 lua/mc/sh_voxel.lua                      方块存储、坐标换算、方块射线
 lua/mc/sv_world.lua                      服务端世界 API、放置、破坏、导入、保存、同步
 lua/mc/sv_saves.lua                      命名存档管理、元数据、存档 UI 网络接口
@@ -103,6 +104,7 @@ node _tools\test_generated_lua_size.js
 $luaFiles = @(
   "lua\autorun\mc_load.lua",
   "lua\mc\sh_blocks.lua",
+  "lua\mc\sh_presets.lua",
   "lua\mc\sh_config.lua",
   "lua\mc\cl_ui.lua",
   "lua\mc\cl_save_ui.lua",
