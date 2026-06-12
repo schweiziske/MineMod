@@ -67,6 +67,18 @@ local function generatedConnectionKind( name, mcid )
 	return generated[mcid] or generated[name]
 end
 
+-- true/false from Blocks.java (sh_generated_block_collision.lua); nil when the
+-- block is unknown to the Minecraft source (plugin/custom registrations).
+local function generatedBlockCollision( name, mcid )
+	local generated = MC.GeneratedBlockCollision or {}
+	if generated[mcid] ~= nil then return generated[mcid] end
+	if generated[name] ~= nil then return generated[name] end
+	if string.StartWith( mcid or "", "minecraft:" ) then
+		return generated[string.sub( mcid, 11 )]
+	end
+	return nil
+end
+
 local function propertyNumber( value, fallback )
 	value = tonumber( value )
 	if value == nil then return fallback end
@@ -230,12 +242,18 @@ function MC.RegisterBlock( def )
 	local handler = def.handlers or ( def.handler and MC.BlockHandlers[def.handler] ) or nil
 	if handler and handler.OnTick then MC.HasBlockTickHandlers = true end
 
+	-- vanilla collision truth beats the generator's name-based solid heuristic
+	-- (its substring patterns misfire on mushroom blocks, coral blocks, eggs,
+	-- pots, beds, doors, ...); def.solid only decides blocks the source lacks.
+	local solid = generatedBlockCollision( name, mcid )
+	if solid == nil then solid = def.solid ~= false end
+
 	local b = {
 		id = id,
 		name = name,
 		mcid = mcid,
 		disp = blockDisp( { name = name, disp = def.disp, mcid = mcid, id = id } ),
-		solid = shouldForceSolid( name ) or def.solid ~= false,
+		solid = shouldForceSolid( name ) or solid,
 		transparent = def.transparent == true,
 		shape = def.shape,
 		boxes = normalizeBoxes( def.boxes ),
@@ -416,6 +434,20 @@ if not registerGeneratedBlocks() then
 	MC.RegisterBlock( { id = 1, name = "grass", mcid = "minecraft:grass_block", transparent = false, textures = { top = "grass_top", side = "grass_side", bottom = "dirt" }, aliases = { "minecraft:grass", "grass_block" } } )
 	MC.RegisterBlock( { id = 2, name = "dirt", mcid = "minecraft:dirt", textures = { top = "dirt", side = "dirt", bottom = "dirt" } } )
 	MC.RegisterBlock( { id = 3, name = "stone", mcid = "minecraft:stone", textures = { top = "stone", side = "stone", bottom = "stone" } } )
+end
+
+-- the generator collapses all-conditional multiparts (huge mushroom blocks) to
+-- their first face plane: a 1/32 sliver model. Vanilla's default state has every
+-- face enabled -- a plain opaque full cube -- so rebuild them as full blocks.
+for _, fixName in ipairs( { "brown_mushroom_block", "red_mushroom_block", "mushroom_stem" } ) do
+	local b = MC.BlockAliases[fixName]
+	if b and b.shape == "model" then
+		MC.RegisterBlock( {
+			id = b.id, name = b.name, mcid = b.mcid,
+			solid = true, transparent = false,
+			textures = { top = b.top, side = b.side, bottom = b.bottom, icon = b.icon },
+		} )
+	end
 end
 
 for _, b in pairs( MC.Blocks ) do
