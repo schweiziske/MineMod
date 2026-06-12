@@ -591,6 +591,37 @@ function SV.SetBlockSpec( bx, by, bz, spec, options )
 	return SV.SetBlock( bx, by, bz, id, orient, options )
 end
 
+function SV.SetBlocksBulk( cells, options )
+	options = normalizeWriteOptions( options )
+	if not istable( cells ) or #cells == 0 then return 0 end
+
+	local prepared = {}
+	for i = 1, #cells do
+		local cell = cells[i]
+		local bx = math.floor( tonumber( cell.bx ) or 0 )
+		local by = math.floor( tonumber( cell.by ) or 0 )
+		local bz = math.floor( tonumber( cell.bz ) or 0 )
+		local id = math.floor( tonumber( cell.id ) or 0 )
+		local orient = id ~= 0 and MC.NormalizeOrient( id, cell.orient ) or 0
+		if id ~= 0 and not MC.IsValidBlock( id ) then return 0, "invalid_block" end
+		if id ~= 0 and options.preventPlayerOverlap and wouldTrapPlayer( bx, by, bz, id, orient ) then
+			return 0, "player_overlap"
+		end
+		prepared[i] = {
+			bx = bx, by = by, bz = bz,
+			id = id, orient = orient,
+		}
+	end
+
+	return applyCells( prepared, options.actor, {
+		fx = options.fx,
+		fxAll = options.fxAll,
+		fxIndex = options.fxIndex,
+		handlers = options.handlers,
+		priorityPhys = options.priorityPhys,
+	} )
+end
+
 function SV.RemoveBlock( bx, by, bz, options )
 	return SV.SetBlock( bx, by, bz, 0, 0, options )
 end
