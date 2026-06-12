@@ -20,6 +20,7 @@ local SHARED = {
 	"mc/generated/sh_generated_lang.lua",
 	"mc/functional/sh_furnace.lua",
 	"mc/functional/sh_doors.lua",
+	"mc/functional/sh_ladders.lua",
 	"mc/sh_blocks.lua",
 	"mc/sh_presets.lua",
 	"mc/sh_player.lua",
