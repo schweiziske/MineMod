@@ -15,6 +15,7 @@ local SHARED = {
 	"mc/generated/sh_generated_blocks.lua",
 	"mc/generated/sh_generated_block_connections.lua",
 	"mc/generated/sh_generated_block_properties.lua",
+	"mc/generated/sh_generated_block_collision.lua",
 	"mc/generated/sh_generated_sound_types.lua",
 	"mc/generated/sh_generated_lang.lua",
 	"mc/sh_blocks.lua",
