@@ -1101,6 +1101,38 @@ function MC.BlockParticleTile( id )
 end
 
 local FullBlockBox = { { 0, 0, 0, 1, 1, 1 } }
+local CrossBlockBoxes
+
+local function clamp01( v )
+	return math.max( 0, math.min( 1, v ) )
+end
+
+local function addCrossTraceBox( boxes, x0, y0, x1, y1, width )
+	boxes[#boxes + 1] = {
+		clamp01( math.min( x0, x1 ) - width ),
+		clamp01( math.min( y0, y1 ) - width ),
+		0,
+		clamp01( math.max( x0, x1 ) + width ),
+		clamp01( math.max( y0, y1 ) + width ),
+		1,
+	}
+end
+
+local function buildCrossBlockBoxes()
+	local boxes = {}
+	local a, c = 0.08, 0.92
+	local step = ( c - a ) / 4
+	local width = 0.035
+	for i = 0, 3 do
+		local x0 = a + i * step
+		local x1 = a + ( i + 1 ) * step
+		addCrossTraceBox( boxes, x0, x0, x1, x1, width )
+		addCrossTraceBox( boxes, x0, 1 - x0, x1, 1 - x1, width )
+	end
+	return boxes
+end
+
+CrossBlockBoxes = buildCrossBlockBoxes()
 
 local function rotateXY( x, y, steps )
 	steps = steps % 4
@@ -1451,6 +1483,9 @@ function MC.BlockBoxes( id, orient, bx, by, bz )
 	if b.shape == "stairs" then
 		return stairBoxes( MC.NormalizeOrient( id, orient ) )
 	end
+	if b.shape == "cross" then
+		return CrossBlockBoxes
+	end
 	if b.connection == "fence" then
 		return fenceBoxes( bx, by, bz )
 	end
@@ -1477,6 +1512,9 @@ end
 -- and Source's multiconvex builder is unhappy with many thin slivers.
 function MC.BlockCollisionBoxes( id, orient, bx, by, bz )
 	local b = MC.Blocks[id]
+	if MC.IsLadderBlock and MC.IsLadderBlock( id ) then
+		return nil
+	end
 	if b and b.connection == "fence" and bx ~= nil and by ~= nil and bz ~= nil then
 		return fenceCollisionBoxes( bx, by, bz )
 	end

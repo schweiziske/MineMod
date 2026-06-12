@@ -166,6 +166,78 @@ local function axisStep( pos, dir, cell )
 	return step, tMax, BS / math.abs( dir )
 end
 
+local function rayAxisSlab( pos, dir, minPos, maxPos, tMin, tMax, normal, negNormal, posNormal )
+	if math.abs( dir ) <= TRACE_EPS then
+		if pos < minPos or pos > maxPos then return nil end
+		return tMin, tMax, normal
+	end
+
+	local near, far, nearNormal
+	if dir > 0 then
+		near = ( minPos - pos ) / dir
+		far = ( maxPos - pos ) / dir
+		nearNormal = negNormal
+	else
+		near = ( maxPos - pos ) / dir
+		far = ( minPos - pos ) / dir
+		nearNormal = posNormal
+	end
+
+	if near > tMin then
+		tMin = near
+		normal = nearNormal
+	end
+	if far < tMax then tMax = far end
+	if tMin - tMax > TRACE_EPS then return nil end
+	return tMin, tMax, normal
+end
+
+local function rayIntersectBox( startPos, dir, minX, minY, minZ, maxX, maxY, maxZ, maxDist, fallbackNormal )
+	local tMin, tMax = 0, maxDist
+	local normal = fallbackNormal or Vector( 0, 0, 0 )
+
+	tMin, tMax, normal = rayAxisSlab( startPos.x, dir.x, minX, maxX, tMin, tMax, normal, Vector( -1, 0, 0 ), Vector( 1, 0, 0 ) )
+	if not tMin then return nil end
+	tMin, tMax, normal = rayAxisSlab( startPos.y, dir.y, minY, maxY, tMin, tMax, normal, Vector( 0, -1, 0 ), Vector( 0, 1, 0 ) )
+	if not tMin then return nil end
+	tMin, tMax, normal = rayAxisSlab( startPos.z, dir.z, minZ, maxZ, tMin, tMax, normal, Vector( 0, 0, -1 ), Vector( 0, 0, 1 ) )
+	if not tMin then return nil end
+	if tMax < -TRACE_EPS or tMin - maxDist > TRACE_EPS then return nil end
+	return math.max( 0, tMin ), normal
+end
+
+local function traceBlockBoxes( startPos, dir, maxDist, bx, by, bz, id, orient, fallbackDist, fallbackNormal )
+	if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
+		return { dist = fallbackDist, normal = fallbackNormal }
+	end
+
+	local boxes = MC.BlockBoxes and MC.BlockBoxes( id, orient, bx, by, bz ) or nil
+	if not boxes then return nil end
+
+	local base = MC.CellWorldMin( bx, by, bz )
+	local bestDist, bestNormal
+	for _, box in ipairs( boxes ) do
+		local dist, normal = rayIntersectBox(
+			startPos,
+			dir,
+			base.x + box[1] * BS,
+			base.y + box[2] * BS,
+			base.z + box[3] * BS,
+			base.x + box[4] * BS,
+			base.y + box[5] * BS,
+			base.z + box[6] * BS,
+			maxDist,
+			fallbackNormal
+		)
+		if dist and ( not bestDist or dist < bestDist ) then
+			bestDist = dist
+			bestNormal = normal
+		end
+	end
+	if not bestDist then return nil end
+	return { dist = bestDist, normal = bestNormal }
+end
+
 function MC.TraceBlockRay( startPos, dir, maxDist )
 	if not startPos or not dir then return nil end
 	dir = Vector( dir.x, dir.y, dir.z )
@@ -187,17 +259,20 @@ function MC.TraceBlockRay( startPos, dir, maxDist )
 		local pendingPrediction = CLIENT and MC.IsPendingPredictionCell and MC.IsPendingPredictionCell( bx, by, bz )
 		if id ~= 0 and not pendingPrediction and dist <= maxDist then
 			local orient = MC.GetBlockOrient( bx, by, bz )
-			return {
-				Hit = true,
-				HitMCBlock = true,
-				Block = id,
-				Orient = orient,
-				bx = bx, by = by, bz = bz,
-				HitPos = startPos + dir * dist,
-				HitNormal = normal,
-				Fraction = dist / maxDist,
-				Distance = dist,
-			}
+			local hit = traceBlockBoxes( startPos, dir, maxDist, bx, by, bz, id, orient, dist, normal )
+			if hit then
+				return {
+					Hit = true,
+					HitMCBlock = true,
+					Block = id,
+					Orient = orient,
+					bx = bx, by = by, bz = bz,
+					HitPos = startPos + dir * hit.dist,
+					HitNormal = hit.normal,
+					Fraction = hit.dist / maxDist,
+					Distance = hit.dist,
+				}
+			end
 		end
 
 		if tx <= ty and tx <= tz then
