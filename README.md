@@ -8,6 +8,7 @@ Garry's Mod 里的 Minecraft 风格方块系统。方块不按实体逐个生成
 - chunk 水平尺寸固定为 `16x16`，垂直 section 高度是 `32`。
 - 支持放置、破坏、使用、`/fill`、导入、默认存档、命名多存档、分片同步。
 - 提供 `MC 创造方块放置器` SWEP；Reload 打开带分类、搜索和分页的创造物品栏。
+- 提供 `MC 预设放置器` SWEP；可选择区域保存建筑预设，读取后用客户端 IMesh 投影并批量放置，E 可切换覆盖模式。
 - 提供 `MC.SV.SetBlock` / `SetBlockSpec` / `RemoveBlock` 给非玩家插件、mob、状态机写入世界。
 - 支持 GMod 武器/爆炸破坏方块；血量来自 Minecraft hardness 乘 `mc_block_health_scale`。
 - 方块表、atlas、中文名由 `_build/build_atlas.ps1` 从 `out/assets/minecraft` 生成。
@@ -29,14 +30,17 @@ lua/mc/sh_blocks.lua                     方块注册、状态、朝向、碰撞
 lua/mc/sh_voxel.lua                      方块存储、坐标换算、方块射线
 lua/mc/sv_world.lua                      服务端世界 API、放置、破坏、导入、保存、同步
 lua/mc/sv_saves.lua                      命名存档管理、元数据、存档 UI 网络接口
+lua/mc/sv_presets.lua                    建筑预设保存、读取、放置和封面网络接口
 lua/mc/sv_damage.lua                     GMod 伤害破坏方块、MC 风格爆炸坑
 lua/mc/cl_net.lua                        客户端同步接收
 lua/mc/cl_render.lua                     客户端 IMesh 渲染和预测碰撞 dirty
 lua/mc/cl_ui.lua                         方块图标、选择窗口、选中框
 lua/mc/cl_save_ui.lua                    命名存档管理 UI
+lua/mc/cl_presets.lua                    建筑预设 UI、截图和 IMesh 投影
 lua/entities/mc_chunk/                   chunk 实体和 multiconvex 碰撞
 lua/weapons/mc_placer/shared.lua         方块放置器 SWEP
 lua/weapons/mc_creative_placer/shared.lua 创造物品栏方块放置器 SWEP
+lua/weapons/mc_preset_placer/shared.lua  建筑预设放置器 SWEP
 lua/weapons/gmod_tool/stools/mc_block.lua 工具枪方块工具
 lua/mc/generated/                        生成的方块、tile、中文名 Lua
 _build/build_atlas.ps1                   生成 atlas 和方块表
@@ -80,6 +84,8 @@ mc_delete_save <name>
 mc_save_diag
 mc_save_manager
 mc_saves_ui
+mc_preset_manager
+mc_presets_ui
 ```
 
 ## 验证
@@ -88,6 +94,7 @@ mc_saves_ui
 node _tools\test_block_properties.js
 node _tools\test_block_damage_api.js
 node _tools\test_creative_inventory.js
+node _tools\test_preset_placer.js
 node _tools\test_save_manager.js
 node _tools\test_fence_behavior.js
 node _tools\test_generated_block_connections.js
@@ -99,10 +106,13 @@ $luaFiles = @(
   "lua\mc\sh_config.lua",
   "lua\mc\cl_ui.lua",
   "lua\mc\cl_save_ui.lua",
+  "lua\mc\cl_presets.lua",
   "lua\mc\sv_saves.lua",
+  "lua\mc\sv_presets.lua",
   "lua\mc\sv_damage.lua",
   "lua\entities\mc_chunk\init.lua",
   "lua\weapons\mc_creative_placer\shared.lua",
+  "lua\weapons\mc_preset_placer\shared.lua",
   "lua\mc\generated\sh_generated_block_connections.lua",
   "lua\mc\generated\sh_generated_block_properties.lua",
   "lua\mc\generated\sh_generated_sound_types.lua"

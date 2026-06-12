@@ -60,6 +60,18 @@ if SERVER then
 		"mc_save_cover_req",
 		"mc_save_cover_download_begin",
 		"mc_save_cover_download_part",
+		"mc_preset_list_req",
+		"mc_preset_list_data",
+		"mc_preset_save",
+		"mc_preset_load_req",
+		"mc_preset_data",
+		"mc_preset_data_part",
+		"mc_preset_place",
+		"mc_preset_cover_begin",
+		"mc_preset_cover_part",
+		"mc_preset_cover_req",
+		"mc_preset_cover_download_begin",
+		"mc_preset_cover_download_part",
 	} ) do
 		util.AddNetworkString( name )
 	end
@@ -127,6 +139,7 @@ if SERVER then
 	MC.Config.BlockExplosionScale = GetConVar( "mc_block_explosion_scale" ) or CreateConVar( "mc_block_explosion_scale", "0.04", F, "GMod blast damage to Minecraft explosion radius scale" )
 	MC.Config.BlockExplosionMaxRadius = GetConVar( "mc_block_explosion_max_radius" ) or CreateConVar( "mc_block_explosion_max_radius", "8", F, "Maximum Minecraft-style block explosion radius" )
 	MC.Config.BlockExplosionMaxBlocks = GetConVar( "mc_block_explosion_max_blocks" ) or CreateConVar( "mc_block_explosion_max_blocks", "4096", F, "Maximum MC blocks one GMod explosion may destroy; 0 = unlimited" )
+	MC.Config.PresetMaxBlocks = GetConVar( "mc_preset_max_blocks" ) or CreateConVar( "mc_preset_max_blocks", "8192", F, "Max non-air blocks one MC preset may save/place; 0 = unlimited" )
 
 	local reach = MC.Config.Reach:GetFloat()
 	if math.abs( reach - 8192 ) < 0.01 or math.abs( reach - 182.5 ) < 0.01 then
