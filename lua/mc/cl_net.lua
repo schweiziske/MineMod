@@ -726,6 +726,16 @@ net.Receive( "mc_http_chunk", function()
 	MC.QueueHttpChunk( MC.ChunkKey( cx, cy, cz ) )
 end )
 
+net.Receive( "mc_http_chunk_bulk", function()
+	local count = net.ReadUInt( Net.COUNT_BITS )
+	for _ = 1, count do
+		local cx = net.ReadInt( Net.COORD_BITS )
+		local cy = net.ReadInt( Net.COORD_BITS )
+		local cz = net.ReadInt( Net.COORD_BITS )
+		MC.QueueHttpChunk( MC.ChunkKey( cx, cy, cz ) )
+	end
+end )
+
 net.Receive( "mc_snapshot_begin", function()
 	local token = net.ReadString()
 	local isError = net.ReadBool()
