@@ -192,6 +192,32 @@ local function normalizeModelQuads( modelQuads )
 	return #out > 0 and out or nil
 end
 
+local function normalizeCollisionConvexes( convexes )
+	if type( convexes ) ~= "table" then return nil end
+	local out = {}
+	for _, convex in ipairs( convexes ) do
+		if type( convex ) == "table" then
+			local points = {}
+			for _, p in ipairs( convex ) do
+				if type( p ) == "table" then
+					local x = tonumber( p.x or p[1] )
+					local y = tonumber( p.y or p[2] )
+					local z = tonumber( p.z or p[3] )
+					if x and y and z then
+						points[#points + 1] = {
+							math.Clamp( x, 0, 1 ),
+							math.Clamp( y, 0, 1 ),
+							math.Clamp( z, 0, 1 ),
+						}
+					end
+				end
+			end
+			if #points >= 4 then out[#out + 1] = points end
+		end
+	end
+	return #out > 0 and out or nil
+end
+
 local function normalizeModelVariantData( data )
 	if type( data ) ~= "table" then return nil end
 	local boxes = normalizeBoxes( data.boxes )
@@ -291,6 +317,7 @@ function MC.RegisterBlock( def )
 		boxFaces = normalizeBoxFaces( def.boxFaces ),
 		modelQuads = normalizeModelQuads( def.modelQuads ),
 		modelVariants = normalizeModelVariants( def.modelVariants or generatedVariants ),
+		collisionConvexes = normalizeCollisionConvexes( def.collisionConvexes or def.convexes ),
 		connection = connectionKind,
 		soundType = def.soundType or generatedSoundTypes[mcid] or generatedSoundTypes[name] or "STONE",
 		spawnTerrainParticles = def.spawnTerrainParticles ~= false and generatedNoTerrainParticles[mcid] ~= true,
@@ -300,6 +327,7 @@ function MC.RegisterBlock( def )
 		baked = normalizeBaked( def.baked ),
 		stateRule = stateRule,
 		placeRule = def.placeRule or def.place,
+		iconSource = def.iconSource,
 		handlers = handler or {},
 		aliases = def.aliases or {},
 		defaultOrientName = def.defaultOrientName,
@@ -903,7 +931,9 @@ function MC.OrientForVectors( id, forward, hitNormal )
 		return MC.Axis.Y
 	end
 	if b.orient == "horizontal_facing" then
-		return oppositeDirection( horizontalLookDirectionFromForward( forward ) )
+		local facing = horizontalLookDirectionFromForward( forward )
+		if b.place == "look" then return facing end
+		return oppositeDirection( facing )
 	end
 	if b.place == "look" then
 		return lookDirectionFromForward( forward )
@@ -1245,6 +1275,56 @@ local function modelBoxes( b, orient )
 	return out
 end
 
+local function modelConvexRotationSteps( b, orient )
+	local xSteps, zSteps = 0, 0
+	if b.orient == "axis" then
+		xSteps, zSteps = pillarRotForAxis( MC.NormalizeOrient( b.id, orient ) )
+	elseif b.orient == "horizontal_facing" or b.orient == "facing" or b.orient == "door" or b.orient == "bed" then
+		orient = MC.NormalizeOrient( b.id, orient )
+		if b.orient == "facing" and orient == MC.Direction.DOWN then
+			xSteps = 1
+		elseif b.orient == "facing" and orient == MC.Direction.UP then
+			xSteps = 3
+		else
+			zSteps = horizontalOrientSteps( MC.BlockHorizontalFacingForOrient( b, orient ) )
+		end
+	end
+	return xSteps, zSteps
+end
+
+local function rotateConvexPointX( p, steps )
+	if steps == 0 then return p end
+	local y, z = rotateXY( p[2], p[3], steps )
+	return { p[1], y, z }
+end
+
+local function rotateConvexPointZ( p, steps )
+	if steps == 0 then return p end
+	local x, y = rotateXY( p[1], p[2], steps )
+	return { x, y, p[3] }
+end
+
+function MC.BlockCollisionConvexes( id, orient, bx, by, bz )
+	local b = MC.Blocks[id]
+	if not b or not b.collisionConvexes then return nil end
+	local xSteps, zSteps = modelConvexRotationSteps( b, orient )
+	if xSteps == 0 and zSteps == 0 then return b.collisionConvexes end
+	b._rotatedCollisionConvexes = b._rotatedCollisionConvexes or {}
+	local cacheKey = xSteps .. ":" .. zSteps
+	if b._rotatedCollisionConvexes[cacheKey] then return b._rotatedCollisionConvexes[cacheKey] end
+
+	local out = {}
+	for ci, convex in ipairs( b.collisionConvexes ) do
+		local points = {}
+		for pi, p in ipairs( convex ) do
+			points[pi] = rotateConvexPointZ( rotateConvexPointX( p, xSteps ), zSteps )
+		end
+		out[ci] = points
+	end
+	b._rotatedCollisionConvexes[cacheKey] = out
+	return out
+end
+
 local function stairBoxes( orient )
 	local facing = StairFacingByOrient[orient] or MC.Direction.NORTH
 	local top = StairHalfByOrient[orient] == "top"
@@ -1524,6 +1604,9 @@ function MC.BlockCollisionBoxes( id, orient, bx, by, bz )
 	if MC.IsLadderBlock and MC.IsLadderBlock( id ) then
 		return nil
 	end
+	if b and b.collisionConvexes then
+		return nil
+	end
 	if b and b.connection == "fence" and bx ~= nil and by ~= nil and bz ~= nil then
 		return fenceCollisionBoxes( bx, by, bz )
 	end
@@ -1536,6 +1619,7 @@ end
 function MC.BlockIsFullCube( id, orient )
 	local b = MC.Blocks[id]
 	if not b or b.solid == false then return false end
+	if b.collisionConvexes then return false end
 	if not b.shape then return true end
 	local boxes = MC.BlockBoxes( id, orient )
 	return boxes and #boxes == 1

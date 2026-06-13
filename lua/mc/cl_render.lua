@@ -94,6 +94,10 @@ MC.ClientCollision = CreateClientConVar( "mc_client_collision", "1", true, false
 	"Build clientside block collision for smooth movement prediction (0 = server-only)" )
 MC.ClientCollisionChunkSpan = CreateClientConVar( "mc_client_collision_chunk_span", tostring( MC.Config.ClientCollisionChunkSpan or 3 ), true, false,
 	"Chunk span around the local player that builds clientside prediction collision; 0 disables" )
+MC.MeshBuildsPerFrame = CreateClientConVar( "mc_mesh_builds_per_frame", tostring( MC.Config.MeshBuildsPerFrame or 2 ), true, false,
+	"Maximum MC chunk meshes built per client frame" )
+MC.MeshBuildFrame = CreateClientConVar( "mc_mesh_build_frame_ms", tostring( MC.Config.MeshBuildFrameMS or 4 ), true, false,
+	"Approximate MC chunk mesh build time budget per frame in milliseconds" )
 MC.ClientCollisionInterest = MC.ClientCollisionInterest or {}
 
 local LastClientCollisionCenterKey
@@ -798,18 +802,43 @@ function MC.MarkDirty( bx, by, bz )
 	mark( bx, by, bz + 1 ) ; mark( bx, by, bz - 1 )
 end
 
+local function chunkDistanceScore( key )
+	local lp = LocalPlayer()
+	if not IsValid( lp ) then return 0 end
+	local cx, cy, cz = MC.ChunkKeyToCoords( key )
+	if not cx then return math.huge end
+	local pos = lp.WorldSpaceCenter and lp:WorldSpaceCenter() or lp:GetPos()
+	local bx, by, bz = MC.WorldToCell( pos )
+	local pcx, pcy, pcz = MC.CellToChunk( bx, by, bz )
+	local dx, dy, dz = cx - pcx, cy - pcy, cz - pcz
+	return dx * dx + dy * dy + dz * dz * 2
+end
+
+local function nextDirtyMeshKeys( maxKeys )
+	local keys = {}
+	for key in pairs( MC.MeshDirty ) do
+		keys[#keys + 1] = key
+	end
+	table.sort( keys, function( a, b )
+		return chunkDistanceScore( a ) < chunkDistanceScore( b )
+	end )
+	while #keys > maxKeys do keys[#keys] = nil end
+	return keys
+end
+
 -- rebuild a few chunks per frame to avoid hitches (meshes + clientside collision)
 hook.Remove( "Think", "mc_meshbuild" )
 hook.Add( "Think", "mc_meshbuild", function()
 	MC.RefreshClientCollisionInterest()
 
 	if next( MC.MeshDirty ) then
-		local budget = 3
-		for key in pairs( MC.MeshDirty ) do
+		local maxBuilds = math.Clamp( MC.MeshBuildsPerFrame:GetInt(), 1, 16 )
+		local frameMS = math.Clamp( MC.MeshBuildFrame:GetFloat(), 0.25, 20 )
+		local deadline = SysTime() + frameMS / 1000
+		for _, key in ipairs( nextDirtyMeshKeys( maxBuilds ) ) do
 			MC.BuildChunkMesh( key )
 			MC.MeshDirty[key] = nil
-			budget = budget - 1
-			if budget <= 0 then break end
+			if SysTime() >= deadline then break end
 		end
 	end
 

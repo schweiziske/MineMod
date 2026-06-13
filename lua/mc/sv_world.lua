@@ -23,7 +23,9 @@ SV.BlockCount = SV.BlockCount or 0
 SV.PhysDirty  = SV.PhysDirty or {}   -- chunkKey -> due time (collision needs rebuild)
 SV.PhysDirtyPriority = SV.PhysDirtyPriority or {} -- player edits should not wait behind bulk rebuilds
 SV.SyncQueue  = SV.SyncQueue or {}   -- player -> { keys = {}, i = 1, active = nil }
+SV.SnapshotQueue = SV.SnapshotQueue or {} -- player -> compressed save snapshot transfer state
 SV.PlayerLoadedChunks = SV.PlayerLoadedChunks or {} -- player -> { [chunkKey] = true }
+SV.PlayerFullSnapshot = SV.PlayerFullSnapshot or {} -- player -> true once full-world snapshot mode owns visibility
 SV.StreamInterestKeys = SV.StreamInterestKeys or {} -- chunkKey -> true, computed from non-world entities
 SV.ServerCollisionActiveChunks = SV.ServerCollisionActiveChunks or {} -- chunkKey -> true
 SV.Dirty      = SV.Dirty or false    -- world changed since last save
@@ -38,7 +40,7 @@ local function syncCellsPerPart()
 	if C.SyncCells then
 		return math.Clamp( C.SyncCells:GetInt(), 1, MC.CS * MC.CS * MC.CH )
 	end
-	return C.SyncCellsPerPart or 4000
+	return C.SyncCellsPerPart or 2048
 end
 
 local function syncMessagesPerTick()
@@ -50,9 +52,9 @@ end
 
 local function syncReliableBudget()
 	if C.SyncBudget then
-		return math.Clamp( C.SyncBudget:GetInt(), 8192, syncFastEnabled() and 1048576 or 52000 )
+		return math.Clamp( C.SyncBudget:GetInt(), 8192, syncFastEnabled() and 65536 or 52000 )
 	end
-	return C.SyncReliableBudget or 48000
+	return C.SyncReliableBudget or 32768
 end
 
 local function syncFrameSeconds()
@@ -66,9 +68,33 @@ end
 local function syncInFlightLimit()
 	if not syncFastEnabled() then return math.huge end
 	if C.SyncWindow then
-		return math.Clamp( C.SyncWindow:GetInt(), 32768, 4194304 )
+		return math.Clamp( C.SyncWindow:GetInt(), 32768, 131072 )
 	end
-	return C.SyncInFlightLimit or 524288
+	return C.SyncInFlightLimit or 65536
+end
+
+local function syncSnapshotEnabled()
+	if C.SyncSnapshot then return C.SyncSnapshot:GetBool() end
+	return ( C.SyncSnapshot or 1 ) ~= 0
+end
+
+local function syncSnapshotPartBytes()
+	if C.SyncSnapshotPartBytes then
+		return math.Clamp( C.SyncSnapshotPartBytes:GetInt(), 4096, 60000 )
+	end
+	return C.SyncSnapshotPartBytes or 32768
+end
+
+local function syncSnapshotMaxChunks()
+	if C.SyncSnapshotMaxChunks then
+		return math.max( 0, C.SyncSnapshotMaxChunks:GetInt() )
+	end
+	return MC.Config.SyncSnapshotMaxChunks or 2048
+end
+
+local function lazyLoadEnabled()
+	if C.LargeWorldLazyLoad then return C.LargeWorldLazyLoad:GetBool() end
+	return ( MC.Config.LargeWorldLazyLoad or 1 ) ~= 0
 end
 
 function SV.EntityTriggersChunkInterest( ent )
@@ -98,6 +124,38 @@ local function serverCollisionSpan()
 	return readChunkSpan( C.ServerCollisionChunkSpan, MC.Config.ServerCollisionChunkSpan or 4, 32 )
 end
 
+local function collisionHotSpan()
+	if C.ServerCollisionHotSpan then
+		return readChunkSpan( C.ServerCollisionHotSpan, MC.Config.ServerCollisionHotSpan or 2, 16 )
+	end
+	return serverCollisionSpan()
+end
+
+local function collisionLookaheadTime()
+	if C.ServerCollisionLookaheadTime then
+		return math.Clamp( C.ServerCollisionLookaheadTime:GetFloat(), 0, 2 )
+	end
+	return MC.Config.ServerCollisionLookaheadTime or 0.5
+end
+
+local function collisionLookaheadMax()
+	return readChunkSpan( C.ServerCollisionLookaheadMax, MC.Config.ServerCollisionLookaheadMax or 4, 16 )
+end
+
+local function collisionBuildsPerTick()
+	if C.ServerCollisionBuildsPerTick then
+		return math.Clamp( C.ServerCollisionBuildsPerTick:GetInt(), 1, 64 )
+	end
+	return MC.Config.ServerCollisionBuildsPerTick or 2
+end
+
+local function collisionEmergencyBuildsPerTick()
+	if C.ServerCollisionEmergencyBuildsPerTick then
+		return math.Clamp( C.ServerCollisionEmergencyBuildsPerTick:GetInt(), 1, 128 )
+	end
+	return MC.Config.ServerCollisionEmergencyBuildsPerTick or 8
+end
+
 local function entityInterestPos( ent )
 	if ent.WorldSpaceCenter then return ent:WorldSpaceCenter() end
 	return ent:GetPos()
@@ -110,6 +168,39 @@ local function collectEntityInterestKeys( spanXY, spanZ )
 		if SV.EntityTriggersChunkInterest( ent ) then
 			for key in pairs( MC.ChunkInterestKeysAroundPos( entityInterestPos( ent ), spanXY, spanZ ) ) do
 				keys[key] = true
+			end
+		end
+	end
+	return keys
+end
+
+local function addInterestKeysAtPos( out, pos, spanXY, spanZ )
+	for key in pairs( MC.ChunkInterestKeysAroundPos( pos, spanXY, spanZ ) ) do
+		out[key] = true
+	end
+end
+
+local function collectEntityCollisionInterestKeys()
+	local keys = {}
+	local hotSpan = collisionHotSpan()
+	if hotSpan <= 0 then return keys end
+	local lookaheadTime = collisionLookaheadTime()
+	local lookaheadMax = collisionLookaheadMax()
+
+	for _, ent in ipairs( ents.GetAll() ) do
+		if SV.EntityTriggersChunkInterest( ent ) then
+			local pos = entityInterestPos( ent )
+			addInterestKeysAtPos( keys, pos, hotSpan, hotSpan )
+
+			local vel = ent.GetVelocity and ent:GetVelocity() or vector_origin
+			local distance = vel:Length() * lookaheadTime
+			if distance > MC.BS and lookaheadMax > 0 then
+				local stepWorld = math.max( MC.ChunkWorld * 0.5, MC.BS )
+				local steps = math.Clamp( math.ceil( distance / stepWorld ), 1, lookaheadMax )
+				for i = 1, steps do
+					local t = lookaheadTime * i / steps
+					addInterestKeysAtPos( keys, pos + vel * t, hotSpan, hotSpan )
+				end
 			end
 		end
 	end
@@ -179,7 +270,7 @@ end
 timer.Create( "mc_phys_rebuild", 0.05, 0, function()
 	if not next( SV.PhysDirty ) then return end
 	local now = CurTime()
-	local priorityBudget = 8
+	local priorityBudget = collisionEmergencyBuildsPerTick()
 	for key in pairs( SV.PhysDirtyPriority ) do
 		if SV.PhysDirty[key] then
 			rebuildPhysKey( key )
@@ -190,7 +281,7 @@ timer.Create( "mc_phys_rebuild", 0.05, 0, function()
 		end
 	end
 
-	local budget = 2
+	local budget = collisionBuildsPerTick()
 	for key in pairs( SV.PhysDirty ) do
 		local due = SV.PhysDirty[key]
 		if not SV.PhysDirtyPriority[key] and ( due == true or due <= now ) then
@@ -275,6 +366,7 @@ local function cellChunkKey( bx, by, bz )
 end
 
 local function playerLoadedChunk( ply, key )
+	if SV.PlayerFullSnapshot and SV.PlayerFullSnapshot[ply] then return true end
 	local loaded = SV.PlayerLoadedChunks and SV.PlayerLoadedChunks[ply]
 	return loaded and loaded[key] == true
 end
@@ -335,6 +427,10 @@ end
 local function sendBulkToInterestedPlayers( changes )
 	if #changes == 0 then return end
 	for _, ply in ipairs( player.GetAll() ) do
+		if SV.PlayerFullSnapshot and SV.PlayerFullSnapshot[ply] then
+			sendSetBulk( changes, ply )
+			continue
+		end
 		local loaded = SV.PlayerLoadedChunks and SV.PlayerLoadedChunks[ply]
 		if loaded then
 			local filtered = {}
@@ -460,6 +556,9 @@ local function apply( bx, by, bz, id, _, orient, actor, options )
 		delta = -1
 	end
 	SV.BlockCount = math.max( 0, SV.BlockCount + delta )
+	if SV.ChunkStore and SV.ChunkStore.RecordEdit then
+		SV.ChunkStore.RecordEdit( bx, by, bz, id, orient )
+	end
 
 	if id ~= 0 then
 		SV.EnsureChunkEnt( chunk, false )
@@ -523,6 +622,9 @@ local function applyCells( cells, actor, options )
 					delta = delta + 1
 				elseif old ~= 0 and id == 0 then
 					delta = delta - 1
+				end
+				if SV.ChunkStore and SV.ChunkStore.RecordEdit then
+					SV.ChunkStore.RecordEdit( bx, by, bz, id, orient )
 				end
 				changes[#changes + 1] = { bx = bx, by = by, bz = bz, id = id, orient = orient }
 				changedInfo[#changedInfo + 1] = {
@@ -1318,24 +1420,31 @@ end
 
 local function enqueueSyncKey( ply, key )
 	local chunk = MC.GetChunkByKey( key )
-	if not chunk or not chunk.count or chunk.count <= 0 then return end
+	if ( not chunk or not chunk.count or chunk.count <= 0 ) and SV.ChunkStore and SV.ChunkStore.IsLazyWorld and SV.ChunkStore.IsLazyWorld() then
+		SV.ChunkStore.QueueChunkLoad( key, false )
+		return false
+	end
+	if not chunk or not chunk.count or chunk.count <= 0 then return false end
 	local q = ensureSyncQueue( ply )
-	if q.queuedKeys[key] then return end
-	if q.active and q.active.key == key then return end
+	if q.queuedKeys[key] then return true end
+	if q.active and q.active.key == key then return true end
 	q.keys[#q.keys + 1] = key
 	q.queuedKeys[key] = true
+	return true
 end
 
 function SV.UpdatePlayerStreamInterest( ply, desired )
 	if not IsValid( ply ) then return end
+	if SV.PlayerFullSnapshot and SV.PlayerFullSnapshot[ply] then return end
 	desired = desired or SV.StreamInterestKeys or {}
 	local loaded = SV.PlayerLoadedChunks[ply] or {}
 	SV.PlayerLoadedChunks[ply] = loaded
 
 	for key in pairs( desired ) do
 		if not loaded[key] then
-			loaded[key] = true
-			enqueueSyncKey( ply, key )
+			if enqueueSyncKey( ply, key ) then
+				loaded[key] = true
+			end
 		end
 	end
 
@@ -1372,7 +1481,11 @@ end
 
 function SV.BeginSync( ply )
 	SV.PlayerLoadedChunks[ply] = {}
+	SV.PlayerFullSnapshot[ply] = nil
 	SV.SyncQueue[ply] = { keys = {}, i = 1, inflightBytes = 0, queuedKeys = {} }
+	if syncSnapshotEnabled() and SV.BeginSnapshotSync and SV.BeginSnapshotSync( ply ) then
+		return
+	end
 	if not next( SV.StreamInterestKeys ) then
 		SV.StreamInterestKeys = collectEntityInterestKeys( streamChunkSpanXY(), streamChunkSpanZ() )
 	end
@@ -1391,8 +1504,7 @@ local function RemoveChunkEntIfInactive( key )
 end
 
 local function refreshServerCollisionInterest()
-	local span = serverCollisionSpan()
-	local desired = collectEntityInterestKeys( span, span )
+	local desired = collectEntityCollisionInterestKeys()
 	local active = SV.ServerCollisionActiveChunks or {}
 	SV.ServerCollisionActiveChunks = active
 
@@ -1401,6 +1513,10 @@ local function refreshServerCollisionInterest()
 			active[key] = true
 		end
 		local chunk = MC.GetChunkByKey( key )
+		if ( not chunk or not chunk.count or chunk.count <= 0 ) and SV.ChunkStore and SV.ChunkStore.IsLazyWorld and SV.ChunkStore.IsLazyWorld() then
+			SV.ChunkStore.QueueChunkLoad( key, true )
+			chunk = SV.ChunkStore.HydrateChunkNow( key, true )
+		end
 		if chunk and chunk.count and chunk.count > 0 and not IsValid( chunk.ent ) then
 			SV.EnsureChunkEnt( chunk, true )
 			SV.MarkPhysDirty( key )
@@ -1459,6 +1575,12 @@ local function sendSyncStep( ply, q, byteLimit )
 end
 
 timer.Create( "mc_interest_sync", INTEREST_TIMER_INTERVAL, 0, function()
+	if SV.StreamInterestDirty then
+		SV.StreamInterestDirty = false
+		for _, ply in ipairs( player.GetAll() ) do
+			SV.UpdatePlayerStreamInterest( ply, SV.StreamInterestKeys )
+		end
+	end
 	SV.RefreshChunkInterest()
 end )
 
@@ -1474,9 +1596,13 @@ timer.Create( "mc_sync", SYNC_TIMER_INTERVAL, 0, function()
 		local budget = syncMessagesPerTick()
 		local byteBudget = syncReliableBudget()
 		local window = syncInFlightLimit()
-		while sent < budget and sentBytes < byteBudget and ( q.inflightBytes or 0 ) < window do
+		while sent < budget and sentBytes < byteBudget do
 			if deadline and SysTime() >= deadline then break end
-			local bytes, reason = sendSyncStep( ply, q, byteBudget - sentBytes )
+			local remainingWindow = window - ( q.inflightBytes or 0 )
+			if remainingWindow <= 0 then break end
+			local stepBudget = math.min( byteBudget - sentBytes, remainingWindow )
+			if stepBudget <= 0 then break end
+			local bytes, reason = sendSyncStep( ply, q, stepBudget )
 			if not bytes then
 				if reason == "budget" then break end
 				break
@@ -1585,7 +1711,151 @@ local function buildSaveData( slotName )
 	}, chunks
 end
 
+local function sendSnapshotBegin( ply, token, err, parts, totalBytes, chunks, blocks )
+	net.Start( "mc_snapshot_begin" )
+		net.WriteString( token or "" )
+		net.WriteBool( err ~= nil )
+		net.WriteString( err or "" )
+		net.WriteUInt( math.max( 0, math.floor( tonumber( parts ) or 0 ) ), 32 )
+		net.WriteUInt( math.max( 0, math.floor( tonumber( totalBytes ) or 0 ) ), 32 )
+		net.WriteUInt( math.max( 0, math.floor( tonumber( chunks ) or 0 ) ), 32 )
+		net.WriteUInt( math.max( 0, math.floor( tonumber( blocks ) or 0 ) ), 32 )
+	net.Send( ply )
+end
+
+local function sendSnapshotError( ply, err )
+	if not IsValid( ply ) then return end
+	sendSnapshotBegin( ply, "", tostring( err or "snapshot_failed" ), 0, 0, 0, 0 )
+end
+
+function SV.BeginSnapshotSync( ply )
+	if not IsValid( ply ) then return false end
+	if SV.ChunkStore and SV.ChunkStore.IsLazyWorld and SV.ChunkStore.IsLazyWorld() then
+		return false
+	end
+
+	local maxSnapshotChunks = syncSnapshotMaxChunks()
+	if maxSnapshotChunks > 0 then
+		local loadedChunks = 0
+		for _, c in pairs( MC.World or {} ) do
+			if c.count and c.count > 0 then
+				loadedChunks = loadedChunks + 1
+				if loadedChunks > maxSnapshotChunks then return false end
+			end
+		end
+	end
+
+	local data, chunks = buildSaveData( "snapshot" )
+	local json = util.TableToJSON( data )
+	if not json or json == "" then
+		sendSnapshotError( ply, "snapshot_json_failed" )
+		return false
+	end
+
+	local compressed = util.Compress( json )
+	if not compressed or compressed == "" then
+		sendSnapshotError( ply, "snapshot_compress_failed" )
+		return false
+	end
+
+	local partBytes = math.min( syncSnapshotPartBytes(), syncReliableBudget() )
+	partBytes = math.Clamp( partBytes, 4096, 60000 )
+	local parts = math.ceil( #compressed / partBytes )
+	if parts < 1 then
+		sendSnapshotError( ply, "snapshot_empty" )
+		return false
+	end
+
+	local token = tostring( ply:EntIndex() ) .. ":" .. util.CRC( tostring( SysTime() ) .. ":" .. tostring( #compressed ) )
+	SV.SyncQueue[ply] = nil
+	SV.PlayerLoadedChunks[ply] = {}
+	SV.PlayerFullSnapshot[ply] = true
+	SV.SnapshotQueue[ply] = {
+		token = token,
+		data = compressed,
+		totalBytes = #compressed,
+		partBytes = partBytes,
+		parts = parts,
+		part = 1,
+		offset = 1,
+		inflightBytes = 0,
+	}
+
+	sendSnapshotBegin( ply, token, nil, parts, #compressed, #chunks, SV.BlockCount )
+	return true
+end
+
+timer.Create( "mc_snapshot_sync", SYNC_TIMER_INTERVAL, 0, function()
+	for ply, q in pairs( SV.SnapshotQueue ) do
+		if not IsValid( ply ) then SV.SnapshotQueue[ply] = nil continue end
+		local sent = 0
+		local sentBytes = 0
+		local budget = syncMessagesPerTick()
+		local byteBudget = syncReliableBudget()
+		local window = syncInFlightLimit()
+
+		while q.part <= q.parts and sent < budget and sentBytes < byteBudget do
+			local remainingBytes = q.totalBytes - q.offset + 1
+			if remainingBytes <= 0 then break end
+			local len = math.min( q.partBytes, remainingBytes )
+			if sentBytes + len > byteBudget then break end
+			local remainingWindow = window - ( q.inflightBytes or 0 )
+			if remainingWindow < len then break end
+
+			local chunk = string.sub( q.data, q.offset, q.offset + len - 1 )
+			net.Start( "mc_snapshot_part" )
+				net.WriteString( q.token )
+				net.WriteUInt( q.part, 32 )
+				net.WriteUInt( len, 16 )
+				net.WriteData( chunk, len )
+			net.Send( ply )
+
+			q.offset = q.offset + len
+			q.part = q.part + 1
+			q.inflightBytes = ( q.inflightBytes or 0 ) + len
+			sent = sent + 1
+			sentBytes = sentBytes + len
+		end
+
+		if q.part > q.parts and ( q.inflightBytes or 0 ) <= 0 then
+			SV.SnapshotQueue[ply] = nil
+		end
+	end
+end )
+
+net.Receive( "mc_snapshot_ack", function( _, ply )
+	local token = net.ReadString()
+	local bytes = math.Clamp( net.ReadUInt( 32 ), 0, 4194304 )
+	local complete = net.ReadBool()
+	local q = SV.SnapshotQueue[ply]
+	if q and q.token == token then
+		q.inflightBytes = math.max( 0, ( q.inflightBytes or 0 ) - bytes )
+		if complete then
+			SV.SnapshotQueue[ply] = nil
+		end
+	end
+	if complete then
+		SV.PlayerFullSnapshot[ply] = true
+	end
+end )
+
+local function overlaySavePath( path )
+	return string.gsub( tostring( path or "" ), "%.[^/%.]*$", "" ) .. "_edits.dat"
+end
+
 function SV.SaveToPath( path, slotName )
+	if SV.ChunkStore and SV.ChunkStore.IsLazyWorld and SV.ChunkStore.IsLazyWorld() and SV.ChunkStore.SaveOverlay then
+		local overlay = SV.ChunkStore.SaveOverlay()
+		local json = util.TableToJSON( overlay )
+		if not json then return false, "overlay_json_failed" end
+		ensureSaveDir()
+		file.Write( overlaySavePath( path ), json )
+		SV.Dirty = false
+		MsgN( "[MC] saved lazy edit overlay / " .. SV.BlockCount .. " blocks" ..
+			( slotName and ( " as \"" .. slotName .. "\" on map " .. game.GetMap() ) or "" ) )
+		return true, path, overlay, 0, SV.BlockCount
+	end
+
 	local data, chunks = buildSaveData( slotName )
 	local json = util.TableToJSON( data )
 	if not json then return end
@@ -1614,34 +1884,29 @@ function SV.Save( slotName )
 	return SV.SaveToPath( savePath() )
 end
 
-function SV.LoadFromPath( path, resyncClients, requestedName )
-	if not file.Exists( path, "DATA" ) then return false, "save_not_found" end
-
-	local raw = file.Read( path, "DATA" )
-	if not raw or raw == "" then return false, "empty_save" end
-	local json = util.Decompress( raw )
-	if not json then return false, "decompress_failed" end
-	local data = util.JSONToTable( json )
-	if not data or not data.chunks then return false, "invalid_save" end
-
-	if data.map and data.map ~= game.GetMap() then
-		MsgN( "[MC] WARNING: save map " .. tostring( data.map ) .. " != current " .. game.GetMap() )
-	end
-
-	if data.bs and data.bs ~= MC.BS then
-		MsgN( "[MC] WARNING: save BlockSize " .. data.bs .. " != current " .. MC.BS .. " (positions may be off)" )
-	end
+local function savedHeightForData( data )
 	local savedHeight = math.floor( tonumber( data.h ) or MC.CH )
 	if savedHeight <= 0 then savedHeight = MC.CH end
-	if data.v == 5 and savedHeight ~= MC.CH then
-		MsgN( "[MC] remapping save chunk height " .. savedHeight .. " -> " .. MC.CH )
-	end
+	return savedHeight
+end
 
-	clearWorldNoNet()
-	local cache = {}
+local function readSaveJSON( path )
+	local raw = file.Read( path, "DATA" )
+	if not raw or raw == "" then return nil, "empty_save" end
+	if string.sub( raw, 1, 1 ) == "{" then
+		return util.JSONToTable( raw ), nil
+	end
+	local json = util.Decompress( raw )
+	if not json then return nil, "decompress_failed" end
+	return util.JSONToTable( json ), nil
+end
+
+local function loadSaveChunks( data, cache )
+	cache = cache or {}
+	local savedHeight = savedHeightForData( data )
 	local palette = data.p or data.palette
 
-	for _, ck in ipairs( data.chunks ) do
+	for _, ck in ipairs( data.chunks or {} ) do
 		local cx, cy, cz, cells, legacyMode
 		if data.v == 5 then
 			cx, cy, cz, cells = ck[1], ck[2], ck[3], ck[4]
@@ -1705,6 +1970,77 @@ function SV.LoadFromPath( path, resyncClients, requestedName )
 			end
 		end
 	end
+end
+
+local function savePartPath( manifestPath, partPath )
+	partPath = string.Trim( tostring( partPath or "" ) )
+	if partPath == "" then return nil end
+	partPath = string.gsub( partPath, "\\", "/" )
+	partPath = string.gsub( partPath, "%.%.+", "_" )
+	if string.StartWith( partPath, "mc/" ) then return partPath end
+	return string.GetPathFromFilename( manifestPath ) .. partPath
+end
+
+local function loadSaveParts( data, manifestPath, cache )
+	for _, part in ipairs( data.parts or {} ) do
+		local partPath = savePartPath( manifestPath, part )
+		if not partPath then return false, "invalid_save_part" end
+		if not file.Exists( partPath, "DATA" ) then return false, "missing_save_part: " .. partPath end
+
+		local partData = readSaveJSON( partPath )
+		if not partData or not istable( partData.chunks ) then
+			return false, "invalid_save_part: " .. partPath
+		end
+
+		partData.v = partData.v or 5
+		partData.h = partData.h or data.h
+		partData.p = partData.p or data.p
+		partData.palette = partData.palette or data.palette
+		loadSaveChunks( partData, cache )
+	end
+	return true
+end
+
+function SV.LoadFromPath( path, resyncClients, requestedName )
+	if not file.Exists( path, "DATA" ) then return false, "save_not_found" end
+
+	local data, err = readSaveJSON( path )
+	if err then return false, err end
+	if not data or ( not data.chunks and not data.parts ) then return false, "invalid_save" end
+
+	if data.map and data.map ~= game.GetMap() then
+		MsgN( "[MC] WARNING: save map " .. tostring( data.map ) .. " != current " .. game.GetMap() )
+	end
+
+	if data.bs and data.bs ~= MC.BS then
+		MsgN( "[MC] WARNING: save BlockSize " .. data.bs .. " != current " .. MC.BS .. " (positions may be off)" )
+	end
+	local savedHeight = savedHeightForData( data )
+	if ( data.v == 5 or data.v == 7 ) and savedHeight ~= MC.CH then
+		MsgN( "[MC] remapping save chunk height " .. savedHeight .. " -> " .. MC.CH )
+	end
+
+	clearWorldNoNet()
+	if data.v == 8 and lazyLoadEnabled() and SV.ChunkStore and SV.ChunkStore.LoadLazyManifest then
+		SV.ChunkStore.LoadLazyManifest( data, path )
+		SV.BlockCount = math.max( 0, math.floor( tonumber( SV.BlockCount ) or tonumber( data.stats and data.stats.blocks ) or 0 ) )
+		SV.Dirty = false
+		if resyncClients then resyncAllClients() end
+		MsgN( "[MC] loaded lazy large world manifest with " .. tostring( SV.BlockCount ) .. " blocks" ..
+			( requestedName and ( " from \"" .. requestedName .. "\"" ) or "" ) ..
+		( data.map and ( " saved on map " .. tostring( data.map ) ) or "" ) )
+		return true
+	end
+	if data.v == 8 then return false, "lazy_large_world_disabled" end
+	if SV.ChunkStore and SV.ChunkStore.Reset then SV.ChunkStore.Reset() end
+
+	local cache = {}
+	if istable( data.parts ) then
+		local ok, err = loadSaveParts( data, path, cache )
+		if not ok then return false, err end
+	else
+		loadSaveChunks( data, cache )
+	end
 
 	SV.Dirty = false
 	if resyncClients then resyncAllClients() end
@@ -1737,7 +2073,9 @@ end )
 
 hook.Add( "PlayerDisconnected", "mc_sync_clean", function( ply )
 	SV.SyncQueue[ply] = nil
+	SV.SnapshotQueue[ply] = nil
 	SV.PlayerLoadedChunks[ply] = nil
+	SV.PlayerFullSnapshot[ply] = nil
 end )
 
 hook.Add( "ShutDown", "mc_save", function()
@@ -1785,7 +2123,9 @@ concommand.Add( "mc_clear", function( ply )
 	SV.PhysDirty = {}
 	SV.PhysDirtyPriority = {}
 	SV.SyncQueue = {}
+	SV.SnapshotQueue = {}
 	SV.PlayerLoadedChunks = {}
+	SV.PlayerFullSnapshot = {}
 	SV.StreamInterestKeys = {}
 	SV.ServerCollisionActiveChunks = {}
 	SV.Dirty = true

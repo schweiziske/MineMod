@@ -133,10 +133,34 @@ local function savedBlockCount( data )
 	return #data.chunks, blocks
 end
 
-local function readSaveDataSummary( slotName, path )
+local function readSaveJSON( path )
 	local raw = file.Read( path, "DATA" )
-	local json = raw and util.Decompress( raw )
-	local data = json and util.JSONToTable( json )
+	if not raw or raw == "" then return nil end
+	if string.sub( raw, 1, 1 ) == "{" then
+		return util.JSONToTable( raw )
+	end
+	local json = util.Decompress( raw )
+	return json and util.JSONToTable( json ) or nil
+end
+
+local function readSaveDataSummary( slotName, path )
+	local data = readSaveJSON( path )
+	if data and istable( data.parts ) and istable( data.stats ) then
+		local savedAt = tonumber( data.savedAt )
+		return {
+			v = 1,
+			name = slotName,
+			path = path,
+			map = data.map or "unknown",
+			savedAt = savedAt,
+			savedAtText = savedAt and os.date( "%Y-%m-%d %H:%M:%S", savedAt ) or "?",
+			bs = data.bs,
+			h = data.h,
+			chunks = math.floor( tonumber( data.stats.chunks ) or 0 ),
+			blocks = math.floor( tonumber( data.stats.blocks ) or 0 ),
+			cover = sanitizeSaveCover( data.cover, slotName ),
+		}
+	end
 	if not data or not data.chunks then return nil end
 	local chunks, blocks = savedBlockCount( data )
 	local savedAt = tonumber( data.savedAt )

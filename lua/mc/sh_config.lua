@@ -32,7 +32,7 @@ MC.ChunkWorldH = MC.CH * MC.BS
 -- Must match _build/build_atlas.ps1 (TILE/COLS) and the produced atlas height.
 MC.Atlas = {
 	COLS = 32,
-	ROWS = 36,
+	ROWS = 40,
 	TILE = 64,
 	PAD = 4,
 	STRIDE = 72,
@@ -51,6 +51,9 @@ if SERVER then
 		"mc_full_part",
 		"mc_full_end",
 		"mc_full_ack",
+		"mc_snapshot_begin",
+		"mc_snapshot_part",
+		"mc_snapshot_ack",
 		"mc_unload_chunk",
 		"mc_set",
 		"mc_set_bulk",
@@ -114,15 +117,30 @@ function MC.SyncCellsForByteBudget( bytes )
 	return math.floor( bits / SYNC_CELL_BITS )
 end
 
-MC.Config.SyncCellsPerPart = 8192
-MC.Config.SyncMessagesPerTick = 12
-MC.Config.SyncReliableBudget = 196608
+MC.Config.SyncCellsPerPart = 2048
+MC.Config.SyncMessagesPerTick = 4
+MC.Config.SyncReliableBudget = 32768
 MC.Config.SyncFrameMS = 4
-MC.Config.SyncInFlightLimit = 524288
-MC.Config.ClientCollisionChunkSpan = 3
+MC.Config.SyncInFlightLimit = 65536
+MC.Config.SyncSnapshot = 1
+MC.Config.SyncSnapshotPartBytes = 32768
+MC.Config.ClientCollisionChunkSpan = 1
 MC.Config.StreamChunkSpanXY = 16
 MC.Config.StreamChunkSpanZ = 4
 MC.Config.ServerCollisionChunkSpan = 4
+MC.Config.LargeWorldLazyLoad = 1
+MC.Config.LargeWorldChunkThreshold = 2048
+MC.Config.SyncSnapshotMaxChunks = 2048
+MC.Config.ChunkStorePartCache = 8
+MC.Config.ChunkStoreLoadsPerTick = 8
+MC.Config.ChunkStoreFrameMS = 3
+MC.Config.MeshBuildsPerFrame = 2
+MC.Config.MeshBuildFrameMS = 4
+MC.Config.ServerCollisionHotSpan = 2
+MC.Config.ServerCollisionLookaheadTime = 0.5
+MC.Config.ServerCollisionLookaheadMax = 4
+MC.Config.ServerCollisionBuildsPerTick = 2
+MC.Config.ServerCollisionEmergencyBuildsPerTick = 8
 
 ------------------------------------------------------------------ server ConVars
 if SERVER then
@@ -141,9 +159,22 @@ if SERVER then
 	MC.Config.SyncFast    = GetConVar( "mc_sync_fast" ) or CreateConVar( "mc_sync_fast", "1", F, "Use ack-windowed fast full-map sync" )
 	MC.Config.SyncFrame   = GetConVar( "mc_sync_frame_ms" ) or CreateConVar( "mc_sync_frame_ms", tostring( MC.Config.SyncFrameMS ), F, "Approx server CPU milliseconds spent streaming full sync each tick" )
 	MC.Config.SyncWindow  = GetConVar( "mc_sync_inflight_limit" ) or CreateConVar( "mc_sync_inflight_limit", tostring( MC.Config.SyncInFlightLimit ), F, "Max unacknowledged full-sync bytes per syncing client" )
+	MC.Config.SyncSnapshot = GetConVar( "mc_sync_snapshot" ) or CreateConVar( "mc_sync_snapshot", tostring( MC.Config.SyncSnapshot ), F, "Sync clients by sending one compressed save snapshot, then incremental edits" )
+	MC.Config.SyncSnapshotPartBytes = GetConVar( "mc_sync_snapshot_part_bytes" ) or CreateConVar( "mc_sync_snapshot_part_bytes", tostring( MC.Config.SyncSnapshotPartBytes ), F, "Bytes per snapshot sync net part" )
+	MC.Config.SyncSnapshotMaxChunks = GetConVar( "mc_sync_snapshot_max_chunks" ) or CreateConVar( "mc_sync_snapshot_max_chunks", tostring( MC.Config.SyncSnapshotMaxChunks ), F, "Maximum loaded chunks allowed for full snapshot sync; larger worlds stream by interest" )
 	MC.Config.StreamChunkSpanXY = GetConVar( "mc_stream_chunk_span_xy" ) or CreateConVar( "mc_stream_chunk_span_xy", tostring( MC.Config.StreamChunkSpanXY ), F, "Horizontal chunk span around non-world entities to stream to clients; 0 disables range sync" )
 	MC.Config.StreamChunkSpanZ = GetConVar( "mc_stream_chunk_span_z" ) or CreateConVar( "mc_stream_chunk_span_z", tostring( MC.Config.StreamChunkSpanZ ), F, "Vertical chunk span around non-world entities to stream to clients; 0 disables range sync" )
+	MC.Config.LargeWorldLazyLoad = GetConVar( "mc_large_world_lazy_load" ) or CreateConVar( "mc_large_world_lazy_load", tostring( MC.Config.LargeWorldLazyLoad ), F, "Load v8 large-world saves lazily from disk instead of hydrating every chunk at load time" )
+	MC.Config.LargeWorldChunkThreshold = GetConVar( "mc_large_world_chunk_threshold" ) or CreateConVar( "mc_large_world_chunk_threshold", tostring( MC.Config.LargeWorldChunkThreshold ), F, "Chunk count at or above which imported saves should use lazy streaming behavior" )
+	MC.Config.ChunkStorePartCache = GetConVar( "mc_chunk_store_part_cache" ) or CreateConVar( "mc_chunk_store_part_cache", tostring( MC.Config.ChunkStorePartCache ), F, "Maximum v8 lazy-save part files cached in memory" )
+	MC.Config.ChunkStoreLoadsPerTick = GetConVar( "mc_chunk_store_loads_per_tick" ) or CreateConVar( "mc_chunk_store_loads_per_tick", tostring( MC.Config.ChunkStoreLoadsPerTick ), F, "Maximum lazy chunk hydrations per store tick" )
+	MC.Config.ChunkStoreFrame = GetConVar( "mc_chunk_store_frame_ms" ) or CreateConVar( "mc_chunk_store_frame_ms", tostring( MC.Config.ChunkStoreFrameMS ), F, "Approximate lazy chunk hydration time budget per tick in milliseconds" )
 	MC.Config.ServerCollisionChunkSpan = GetConVar( "mc_server_collision_chunk_span" ) or CreateConVar( "mc_server_collision_chunk_span", tostring( MC.Config.ServerCollisionChunkSpan ), F, "Chunk span around non-world entities that keeps server collision entities active; 0 disables automatic chunk collision" )
+	MC.Config.ServerCollisionHotSpan = GetConVar( "mc_server_collision_hot_span" ) or CreateConVar( "mc_server_collision_hot_span", tostring( MC.Config.ServerCollisionHotSpan ), F, "Always-hot collision chunk span around non-world entities" )
+	MC.Config.ServerCollisionLookaheadTime = GetConVar( "mc_server_collision_lookahead_time" ) or CreateConVar( "mc_server_collision_lookahead_time", tostring( MC.Config.ServerCollisionLookaheadTime ), F, "Seconds of velocity lookahead used to prewarm server chunk collision" )
+	MC.Config.ServerCollisionLookaheadMax = GetConVar( "mc_server_collision_lookahead_max" ) or CreateConVar( "mc_server_collision_lookahead_max", tostring( MC.Config.ServerCollisionLookaheadMax ), F, "Maximum velocity lookahead samples/chunks for server collision prewarm" )
+	MC.Config.ServerCollisionBuildsPerTick = GetConVar( "mc_server_collision_builds_per_tick" ) or CreateConVar( "mc_server_collision_builds_per_tick", tostring( MC.Config.ServerCollisionBuildsPerTick ), F, "Normal server chunk collision rebuilds per physics tick" )
+	MC.Config.ServerCollisionEmergencyBuildsPerTick = GetConVar( "mc_server_collision_emergency_builds_per_tick" ) or CreateConVar( "mc_server_collision_emergency_builds_per_tick", tostring( MC.Config.ServerCollisionEmergencyBuildsPerTick ), F, "Priority server chunk collision rebuilds per physics tick" )
 	MC.Config.BlockDamage = GetConVar( "mc_block_damage" ) or CreateConVar( "mc_block_damage", "1", F, "Allow GMod damage to break MC blocks" )
 	MC.Config.BlockHealthScale = GetConVar( "mc_block_health_scale" ) or CreateConVar( "mc_block_health_scale", "20", F, "Block health multiplier applied to Minecraft hardness" )
 	MC.Config.BlockDamageDecay = GetConVar( "mc_block_damage_decay" ) or CreateConVar( "mc_block_damage_decay", "5", F, "Seconds before partial block damage is forgotten" )

@@ -18,6 +18,7 @@ local SHARED = {
 	"mc/generated/sh_generated_block_collision.lua",
 	"mc/generated/sh_generated_sound_types.lua",
 	"mc/generated/sh_generated_lang.lua",
+	"mc/generated/sh_generated_mcswep_blocks.lua",
 	"mc/functional/sh_furnace.lua",
 	"mc/functional/sh_doors.lua",
 	"mc/functional/sh_ladders.lua",
@@ -31,6 +32,7 @@ local SHARED = {
 }
 local SERVER_FILES = {
 	"mc/sv_world.lua",
+	"mc/sv_chunk_store.lua",
 	"mc/sv_saves.lua",
 	"mc/sv_presets.lua",
 	"mc/sv_damage.lua",

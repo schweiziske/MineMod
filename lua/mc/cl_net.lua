@@ -6,6 +6,8 @@ MC = MC or {}
 
 local Net = MC.Net
 MC.PendingFull = MC.PendingFull or {}
+MC.SnapshotBuffers = MC.SnapshotBuffers or {}
+MC.SnapshotQueuedDeltas = MC.SnapshotQueuedDeltas or {}
 MC.SyncProgress = MC.SyncProgress or { expected = 0, received = 0, chunks = 0, doneChunks = 0, active = false, lastUpdate = 0 }
 
 local PendingFullAckBytes = 0
@@ -32,6 +34,14 @@ end
 
 timer.Create( "mc_full_ack_flush", 0.05, 0, flushFullAck )
 
+local function sendSnapshotAck( token, bytes, complete )
+	net.Start( "mc_snapshot_ack" )
+		net.WriteString( token or "" )
+		net.WriteUInt( math.Clamp( math.ceil( tonumber( bytes ) or 0 ), 0, 4294967295 ), 32 )
+		net.WriteBool( complete == true )
+	net.SendToServer()
+end
+
 local function touchProgress()
 	MC.SyncProgress.lastUpdate = CurTime()
 end
@@ -50,19 +60,11 @@ local function addProgressCells( count )
 	touchProgress()
 end
 
-local function finishProgressChunk()
+local function finishProgressChunk( key )
 	local p = MC.SyncProgress
 	p.doneChunks = p.doneChunks + 1
 	touchProgress()
-
-	if not p.finalMeshRefresh and p.doneChunks >= p.chunks and p.received >= p.expected then
-		p.finalMeshRefresh = true
-		for key, c in pairs( MC.World or {} ) do
-			if c.count and c.count > 0 then
-				MC.MarkChunkDirty( key )
-			end
-		end
-	end
+	if key then MC.MarkChunkDirty( key ) end
 end
 
 local function markNeighbours( cx, cy, cz )
@@ -90,6 +92,27 @@ function MC.MarkCellPhysNeighbours( bx, by, bz, priority )
 	mark( bx - 1, by, bz )
 	mark( bx, by + 1, bz )
 	mark( bx, by - 1, bz )
+end
+
+local function queueSnapshotDelta( bx, by, bz, id, orient )
+	if not MC.SnapshotLoadingToken then return end
+	MC.SnapshotQueuedDeltas = MC.SnapshotQueuedDeltas or {}
+	MC.SnapshotQueuedDeltas[#MC.SnapshotQueuedDeltas + 1] = {
+		bx = bx,
+		by = by,
+		bz = bz,
+		id = id,
+		orient = orient,
+	}
+end
+
+local function applyNetCell( bx, by, bz, id, orient )
+	MC.ConfirmPrediction( bx, by, bz, id, orient )
+	local _, _, _, changed = MC.SetBlockRaw( bx, by, bz, id, orient )
+	if changed then
+		MC.MarkDirty( bx, by, bz )
+		MC.MarkCellPhysNeighbours( bx, by, bz )
+	end
 end
 
 MC.PendingPredictions = MC.PendingPredictions or {}
@@ -232,6 +255,197 @@ local function reviveChunkEnt( c )
 	e.ChunkKey = c.key
 end
 
+local function resetClientWorldForSnapshot( expectedChunks, expectedBlocks )
+	if MC.FreeAllMeshes then MC.FreeAllMeshes() end
+	for _, e in pairs( MC.ChunkEnts or {} ) do
+		if IsValid( e ) then e:PhysicsDestroy() end
+	end
+	MC.World = {}
+	MC.MeshDirty = {}
+	MC.PhysDirty = {}
+	MC.PhysDirtyPriority = {}
+	MC.PendingFull = {}
+	MC.PendingPredictions = {}
+	MC.SyncProgress = {
+		expected = math.max( 0, math.floor( tonumber( expectedBlocks ) or 0 ) ),
+		received = 0,
+		chunks = math.max( 0, math.floor( tonumber( expectedChunks ) or 0 ) ),
+		doneChunks = 0,
+		active = true,
+		lastUpdate = CurTime(),
+		snapshot = true,
+	}
+	PendingFullAckBytes = 0
+end
+
+local function snapshotPaletteEntry( cache, palette, index )
+	local pi = math.floor( tonumber( index ) or -1 )
+	if pi < 0 then return 0, 0 end
+	local cached = cache[pi]
+	if cached then return cached.id, cached.orient end
+
+	local spec = istable( palette ) and palette[pi + 1] or nil
+	if not isstring( spec ) then return 0, 0 end
+	local id, orient = MC.ParseBlockSpec( spec )
+	id = math.floor( tonumber( id ) or 0 )
+	orient = id ~= 0 and MC.NormalizeOrient( id, orient ) or 0
+	cache[pi] = { id = id, orient = orient }
+	return id, orient
+end
+
+local function loadSnapshotChunk( data, cache, palette )
+	local cx = math.floor( tonumber( data[1] ) or 0 )
+	local cy = math.floor( tonumber( data[2] ) or 0 )
+	local cz = math.floor( tonumber( data[3] ) or 0 )
+	local cells = data[4]
+	local c = MC.EnsureChunk( cx, cy, cz )
+	c.blocks = {}
+	c.orients = {}
+	c.count = 0
+
+	if isstring( cells ) then
+		for entry in string.gmatch( cells, "[^;]+" ) do
+			local liText, piText = string.match( entry, "^(-?%d+):(-?%d+)$" )
+			local li = math.floor( tonumber( liText ) or -1 )
+			if MC.LocalIndexInRange( li ) then
+				local id, orient = snapshotPaletteEntry( cache, palette, piText )
+				if id and id ~= 0 then
+					c.blocks[li] = id
+					c.orients[li] = orient
+					c.count = c.count + 1
+				end
+			end
+		end
+	elseif istable( cells ) then
+		for i = 1, #cells, 2 do
+			local li = math.floor( tonumber( cells[i] ) or -1 )
+			if MC.LocalIndexInRange( li ) then
+				local id, orient = snapshotPaletteEntry( cache, palette, cells[i + 1] )
+				if id and id ~= 0 then
+					c.blocks[li] = id
+					c.orients[li] = orient
+					c.count = c.count + 1
+				end
+			end
+		end
+	end
+
+	if c.count > 0 then
+		MC.MarkChunkDirty( c.key )
+	else
+		MC.World[c.key] = nil
+	end
+	return c.count
+end
+
+function MC.LoadSnapshotSaveData( data )
+	if not istable( data ) or not istable( data.chunks ) then return false end
+	local palette = data.p or data.palette
+	resetClientWorldForSnapshot( #data.chunks, 0 )
+
+	local cache = {}
+	local blocks = 0
+	for _, chunkData in ipairs( data.chunks ) do
+		if istable( chunkData ) then
+			blocks = blocks + loadSnapshotChunk( chunkData, cache, palette )
+		end
+	end
+
+	MC.SyncProgress.expected = blocks
+	MC.SyncProgress.received = blocks
+	MC.SyncProgress.doneChunks = #data.chunks
+	MC.SyncProgress.active = false
+	MC.SyncProgress.lastUpdate = CurTime()
+
+	if MC.RefreshClientCollisionInterest then
+		MC.RefreshClientCollisionInterest( true )
+	end
+
+	local queued = MC.SnapshotQueuedDeltas or {}
+	MC.SnapshotQueuedDeltas = {}
+	MC.SnapshotLoadingToken = nil
+	for _, cell in ipairs( queued ) do
+		applyNetCell( cell.bx, cell.by, cell.bz, cell.id, cell.orient )
+	end
+
+	return true
+end
+
+net.Receive( "mc_snapshot_begin", function()
+	local token = net.ReadString()
+	local isError = net.ReadBool()
+	local message = net.ReadString()
+	local expectedParts = net.ReadUInt( 32 )
+	local totalBytes = net.ReadUInt( 32 )
+	local chunks = net.ReadUInt( 32 )
+	local blocks = net.ReadUInt( 32 )
+	if isError or token == "" or expectedParts < 1 or totalBytes < 1 then
+		MsgN( "[MC] snapshot sync failed: " .. tostring( message ) )
+		return
+	end
+
+	MC.SnapshotLoadingToken = token
+	MC.SnapshotQueuedDeltas = {}
+	MC.SnapshotBuffers[token] = {
+		expectedParts = expectedParts,
+		totalBytes = totalBytes,
+		chunks = chunks,
+		blocks = blocks,
+		receivedParts = 0,
+		receivedBytes = 0,
+		parts = {},
+	}
+	MC.SyncProgress = {
+		expected = blocks,
+		received = 0,
+		chunks = chunks,
+		doneChunks = 0,
+		active = true,
+		lastUpdate = CurTime(),
+		snapshot = true,
+	}
+end )
+
+net.Receive( "mc_snapshot_part", function()
+	local token = net.ReadString()
+	local index = net.ReadUInt( 32 )
+	local len = net.ReadUInt( 16 )
+	local chunk = net.ReadData( len )
+	local download = MC.SnapshotBuffers[token]
+	if not download or index < 1 or index > download.expectedParts then return end
+	if len < 1 or len > 60000 or not chunk or #chunk ~= len or download.parts[index] then return end
+
+	download.parts[index] = chunk
+	download.receivedParts = download.receivedParts + 1
+	download.receivedBytes = download.receivedBytes + len
+	MC.SyncProgress.received = math.min( download.blocks, math.floor( download.blocks * download.receivedBytes / math.max( 1, download.totalBytes ) ) )
+	MC.SyncProgress.lastUpdate = CurTime()
+	sendSnapshotAck( token, len, false )
+
+	if download.receivedBytes > download.totalBytes then
+		MC.SnapshotBuffers[token] = nil
+		if MC.SnapshotLoadingToken == token then MC.SnapshotLoadingToken = nil end
+		return
+	end
+	if download.receivedParts < download.expectedParts then return end
+
+	local payload = table.concat( download.parts )
+	MC.SnapshotBuffers[token] = nil
+	if #payload ~= download.totalBytes then
+		if MC.SnapshotLoadingToken == token then MC.SnapshotLoadingToken = nil end
+		return
+	end
+
+	local json = util.Decompress( payload )
+	local data = json and util.JSONToTable( json ) or nil
+	if not data or not MC.LoadSnapshotSaveData( data ) then
+		if MC.SnapshotLoadingToken == token then MC.SnapshotLoadingToken = nil end
+		MsgN( "[MC] snapshot sync failed: invalid payload" )
+		return
+	end
+	sendSnapshotAck( token, 0, true )
+end )
+
 net.Receive( "mc_full", function()
 	local cx = net.ReadInt( Net.COORD_BITS )
 	local cy = net.ReadInt( Net.COORD_BITS )
@@ -247,7 +461,7 @@ net.Receive( "mc_full", function()
 
 	markNeighbours( cx, cy, cz )
 	MC.MarkChunkPhysDirty( c.key )
-	finishProgressChunk()
+	finishProgressChunk( c.key )
 end )
 
 net.Receive( "mc_full_begin", function()
@@ -291,7 +505,7 @@ net.Receive( "mc_full_end", function()
 
 	markNeighbours( cx, cy, cz )
 	MC.MarkChunkPhysDirty( key )
-	finishProgressChunk()
+	finishProgressChunk( key )
 end )
 
 net.Receive( "mc_set", function()
@@ -301,12 +515,8 @@ net.Receive( "mc_set", function()
 	local id = net.ReadUInt( Net.ID_BITS )
 	local orient = net.ReadUInt( Net.ORIENT_BITS )
 
-	MC.ConfirmPrediction( bx, by, bz, id, orient )
-	local _, _, _, changed = MC.SetBlockRaw( bx, by, bz, id, orient )
-	if changed then
-		MC.MarkDirty( bx, by, bz )
-		MC.MarkCellPhysNeighbours( bx, by, bz )
-	end
+	queueSnapshotDelta( bx, by, bz, id, orient )
+	applyNetCell( bx, by, bz, id, orient )
 end )
 
 net.Receive( "mc_set_bulk", function()
@@ -318,12 +528,8 @@ net.Receive( "mc_set_bulk", function()
 		local id = net.ReadUInt( Net.ID_BITS )
 		local orient = net.ReadUInt( Net.ORIENT_BITS )
 
-		MC.ConfirmPrediction( bx, by, bz, id, orient )
-		local _, _, _, changed = MC.SetBlockRaw( bx, by, bz, id, orient )
-		if changed then
-			MC.MarkDirty( bx, by, bz )
-			MC.MarkCellPhysNeighbours( bx, by, bz )
-		end
+		queueSnapshotDelta( bx, by, bz, id, orient )
+		applyNetCell( bx, by, bz, id, orient )
 	end
 end )
 
