@@ -54,6 +54,8 @@ if SERVER then
 		"mc_snapshot_begin",
 		"mc_snapshot_part",
 		"mc_snapshot_ack",
+		"mc_http_manifest",
+		"mc_http_chunk",
 		"mc_unload_chunk",
 		"mc_set",
 		"mc_set_bulk",
@@ -124,6 +126,8 @@ MC.Config.SyncFrameMS = 4
 MC.Config.SyncInFlightLimit = 65536
 MC.Config.SyncSnapshot = 1
 MC.Config.SyncSnapshotPartBytes = 32768
+MC.Config.ChunkHTTPEnabled = 0
+MC.Config.ChunkHTTPBaseURL = ""
 MC.Config.ClientCollisionChunkSpan = 1
 MC.Config.StreamChunkSpanXY = 16
 MC.Config.StreamChunkSpanZ = 4
@@ -162,6 +166,8 @@ if SERVER then
 	MC.Config.SyncSnapshot = GetConVar( "mc_sync_snapshot" ) or CreateConVar( "mc_sync_snapshot", tostring( MC.Config.SyncSnapshot ), F, "Sync clients by sending one compressed save snapshot, then incremental edits" )
 	MC.Config.SyncSnapshotPartBytes = GetConVar( "mc_sync_snapshot_part_bytes" ) or CreateConVar( "mc_sync_snapshot_part_bytes", tostring( MC.Config.SyncSnapshotPartBytes ), F, "Bytes per snapshot sync net part" )
 	MC.Config.SyncSnapshotMaxChunks = GetConVar( "mc_sync_snapshot_max_chunks" ) or CreateConVar( "mc_sync_snapshot_max_chunks", tostring( MC.Config.SyncSnapshotMaxChunks ), F, "Maximum loaded chunks allowed for full snapshot sync; larger worlds stream by interest" )
+	MC.Config.ChunkHTTPEnabled = GetConVar( "mc_chunk_http_enabled" ) or CreateConVar( "mc_chunk_http_enabled", tostring( MC.Config.ChunkHTTPEnabled ), F, "Allow clients to fetch lazy-save base chunks over HTTP instead of GMod net" )
+	MC.Config.ChunkHTTPBaseURL = GetConVar( "mc_chunk_http_base_url" ) or CreateConVar( "mc_chunk_http_base_url", tostring( MC.Config.ChunkHTTPBaseURL ), F, "HTTP root URL serving garrysmod/data for mc lazy save manifests and parts" )
 	MC.Config.StreamChunkSpanXY = GetConVar( "mc_stream_chunk_span_xy" ) or CreateConVar( "mc_stream_chunk_span_xy", tostring( MC.Config.StreamChunkSpanXY ), F, "Horizontal chunk span around non-world entities to stream to clients; 0 disables range sync" )
 	MC.Config.StreamChunkSpanZ = GetConVar( "mc_stream_chunk_span_z" ) or CreateConVar( "mc_stream_chunk_span_z", tostring( MC.Config.StreamChunkSpanZ ), F, "Vertical chunk span around non-world entities to stream to clients; 0 disables range sync" )
 	MC.Config.LargeWorldLazyLoad = GetConVar( "mc_large_world_lazy_load" ) or CreateConVar( "mc_large_world_lazy_load", tostring( MC.Config.LargeWorldLazyLoad ), F, "Load v8 large-world saves lazily from disk instead of hydrating every chunk at load time" )
