@@ -531,6 +531,8 @@ function MC.LoadHttpChunkRecord( key, record, partData )
 
 	for touchedKey, chunk in pairs( touched ) do
 		if chunk.count and chunk.count > 0 then
+			reviveChunkEnt( chunk )
+			MC.MarkChunkDirty( touchedKey )
 			local cx, cy, cz = MC.ChunkKeyToCoords( touchedKey )
 			if cx then markNeighbours( cx, cy, cz ) end
 			MC.MarkChunkPhysDirty( touchedKey )
