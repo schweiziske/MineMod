@@ -16,6 +16,7 @@ local C   = MC.Config
 
 local BULK_SET_CELLS_PER_MESSAGE = 1024
 local BULK_BREAK_FX_LIMIT = 64
+local HTTP_CHUNK_KEYS_PER_MESSAGE = 512
 local SYNC_TIMER_INTERVAL = 0.05
 local INTEREST_TIMER_INTERVAL = 0.25
 
@@ -1475,6 +1476,25 @@ local function sendHttpChunkInterest( ply, key )
 	return true
 end
 
+local function sendHttpChunkInterestBulk( ply, keys )
+	if not IsValid( ply ) or not keys or #keys == 0 then return false end
+	local i = 1
+	while i <= #keys do
+		local count = math.min( HTTP_CHUNK_KEYS_PER_MESSAGE, #keys - i + 1 )
+		net.Start( "mc_http_chunk_bulk" )
+			net.WriteUInt( count, Net.COUNT_BITS )
+			for j = i, i + count - 1 do
+				local cx, cy, cz = MC.ChunkKeyToCoords( keys[j] )
+				net.WriteInt( cx or 0, Net.COORD_BITS )
+				net.WriteInt( cy or 0, Net.COORD_BITS )
+				net.WriteInt( cz or 0, Net.COORD_BITS )
+			end
+		net.Send( ply )
+		i = i + count
+	end
+	return true
+end
+
 local function enqueueSyncKey( ply, key )
 	local chunk = MC.GetChunkByKey( key )
 	if ( not chunk or not chunk.count or chunk.count <= 0 ) and SV.ChunkStore and SV.ChunkStore.IsLazyWorld and SV.ChunkStore.IsLazyWorld() then
@@ -1496,6 +1516,7 @@ function SV.UpdatePlayerStreamInterest( ply, desired )
 	desired = desired or SV.StreamInterestKeys or {}
 	local loaded = SV.PlayerLoadedChunks[ply] or {}
 	SV.PlayerLoadedChunks[ply] = loaded
+	local httpKeys = {}
 
 	for key in pairs( desired ) do
 		if not loaded[key] then
@@ -1503,13 +1524,17 @@ function SV.UpdatePlayerStreamInterest( ply, desired )
 				and SV.ChunkStore
 				and SV.ChunkStore.HasBaseChunk
 				and SV.ChunkStore.HasBaseChunk( key )
-				and ( not SV.ChunkStore.HasChunkEdits or not SV.ChunkStore.HasChunkEdits( key ) )
-				and sendHttpChunkInterest( ply, key ) then
+				and ( not SV.ChunkStore.HasChunkEdits or not SV.ChunkStore.HasChunkEdits( key ) ) then
+				httpKeys[#httpKeys + 1] = key
 				loaded[key] = true
 			elseif enqueueSyncKey( ply, key ) then
 				loaded[key] = true
 			end
 		end
+	end
+
+	if #httpKeys > 0 then
+		sendHttpChunkInterestBulk( ply, httpKeys )
 	end
 
 	for key in pairs( loaded ) do
