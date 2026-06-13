@@ -26,6 +26,67 @@ function MC.ChunkKey( cx, cy, cz )
 	return cx .. ":" .. cy .. ":" .. cz
 end
 
+function MC.ChunkKeyToCoords( key )
+	local cx, cy, cz = string.match( tostring( key or "" ), "^(-?%d+):(-?%d+):(-?%d+)$" )
+	if not cx then return nil end
+	return tonumber( cx ), tonumber( cy ), tonumber( cz )
+end
+
+local function normalizeChunkSpan( span )
+	span = math.floor( tonumber( span ) or 0 )
+	if span < 0 then return 0 end
+	return span
+end
+
+function MC.ChunkCoordWindow( center, span, fraction )
+	span = normalizeChunkSpan( span )
+	if span <= 0 then return nil, nil end
+	center = floor( tonumber( center ) or 0 )
+	fraction = tonumber( fraction ) or 0.5
+
+	if span % 2 == 1 then
+		local half = ( span - 1 ) / 2
+		return center - half, center + half
+	end
+
+	local half = span / 2
+	if fraction >= 0.5 then
+		return center - half + 1, center + half
+	end
+	return center - half, center + half - 1
+end
+
+local function chunkCoordAndFraction( value, worldSize )
+	local raw = ( tonumber( value ) or 0 ) / worldSize
+	local coord = floor( raw )
+	return coord, raw - coord
+end
+
+function MC.ChunkInterestKeysAroundPos( pos, spanXY, spanZ )
+	local keys = {}
+	if not pos then return keys end
+	spanXY = normalizeChunkSpan( spanXY )
+	spanZ = normalizeChunkSpan( spanZ == nil and spanXY or spanZ )
+	if spanXY <= 0 or spanZ <= 0 then return keys end
+
+	local cx, fx = chunkCoordAndFraction( pos.x, MC.ChunkWorld )
+	local cy, fy = chunkCoordAndFraction( pos.y, MC.ChunkWorld )
+	local cz, fz = chunkCoordAndFraction( pos.z, MC.ChunkWorldH )
+	local minX, maxX = MC.ChunkCoordWindow( cx, spanXY, fx )
+	local minY, maxY = MC.ChunkCoordWindow( cy, spanXY, fy )
+	local minZ, maxZ = MC.ChunkCoordWindow( cz, spanZ, fz )
+
+	for z = minZ, maxZ do
+		for y = minY, maxY do
+			for x = minX, maxX do
+				keys[MC.ChunkKey( x, y, z )] = true
+			end
+		end
+	end
+
+	return keys
+end
+
 ------------------------------------------------------------------ space mapping
 function MC.WorldToCell( v )
 	return floor( v.x / BS ), floor( v.y / BS ), floor( v.z / BS )

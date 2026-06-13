@@ -17,11 +17,15 @@ local C   = MC.Config
 local BULK_SET_CELLS_PER_MESSAGE = 1024
 local BULK_BREAK_FX_LIMIT = 64
 local SYNC_TIMER_INTERVAL = 0.05
+local INTEREST_TIMER_INTERVAL = 0.25
 
 SV.BlockCount = SV.BlockCount or 0
 SV.PhysDirty  = SV.PhysDirty or {}   -- chunkKey -> due time (collision needs rebuild)
 SV.PhysDirtyPriority = SV.PhysDirtyPriority or {} -- player edits should not wait behind bulk rebuilds
 SV.SyncQueue  = SV.SyncQueue or {}   -- player -> { keys = {}, i = 1, active = nil }
+SV.PlayerLoadedChunks = SV.PlayerLoadedChunks or {} -- player -> { [chunkKey] = true }
+SV.StreamInterestKeys = SV.StreamInterestKeys or {} -- chunkKey -> true, computed from non-world entities
+SV.ServerCollisionActiveChunks = SV.ServerCollisionActiveChunks or {} -- chunkKey -> true
 SV.Dirty      = SV.Dirty or false    -- world changed since last save
 local PHYS_REBUILD_DELAY = 0.12
 local PLACE_PHYS_PLAYER_PADDING = MC.BS * 0.75
@@ -67,6 +71,55 @@ local function syncInFlightLimit()
 	return C.SyncInFlightLimit or 524288
 end
 
+function SV.EntityTriggersChunkInterest( ent )
+	if not IsValid( ent ) then return false end
+	if ent.IsWorld and ent:IsWorld() then return false end
+	if ent:GetClass() == "worldspawn" then return false end
+	if ent:GetClass() == "mc_chunk" then return false end
+	return true
+end
+
+local function readChunkSpan( cv, fallback, maxValue )
+	if cv and cv.GetInt then
+		return math.Clamp( cv:GetInt(), 0, maxValue )
+	end
+	return math.Clamp( math.floor( tonumber( fallback ) or 0 ), 0, maxValue )
+end
+
+local function streamChunkSpanXY()
+	return readChunkSpan( C.StreamChunkSpanXY, MC.Config.StreamChunkSpanXY or 16, 64 )
+end
+
+local function streamChunkSpanZ()
+	return readChunkSpan( C.StreamChunkSpanZ, MC.Config.StreamChunkSpanZ or 4, 64 )
+end
+
+local function serverCollisionSpan()
+	return readChunkSpan( C.ServerCollisionChunkSpan, MC.Config.ServerCollisionChunkSpan or 4, 32 )
+end
+
+local function entityInterestPos( ent )
+	if ent.WorldSpaceCenter then return ent:WorldSpaceCenter() end
+	return ent:GetPos()
+end
+
+local function collectEntityInterestKeys( spanXY, spanZ )
+	local keys = {}
+	if spanXY <= 0 or spanZ <= 0 then return keys end
+	for _, ent in ipairs( ents.GetAll() ) do
+		if SV.EntityTriggersChunkInterest( ent ) then
+			for key in pairs( MC.ChunkInterestKeysAroundPos( entityInterestPos( ent ), spanXY, spanZ ) ) do
+				keys[key] = true
+			end
+		end
+	end
+	return keys
+end
+
+function SV.IsChunkCollisionActive( key )
+	return SV.ServerCollisionActiveChunks and SV.ServerCollisionActiveChunks[key] == true
+end
+
 local function decodeLocalWithHeight( li, height )
 	local CS = MC.CS
 	local CS2 = CS * CS
@@ -79,8 +132,9 @@ local function decodeLocalWithHeight( li, height )
 end
 
 ------------------------------------------------------------------ chunk entities
-function SV.EnsureChunkEnt( chunk )
+function SV.EnsureChunkEnt( chunk, force )
 	if IsValid( chunk.ent ) then return chunk.ent end
+	if not force and not SV.IsChunkCollisionActive( chunk.key ) then return nil end
 	local e = ents.Create( "mc_chunk" )
 	if not IsValid( e ) then return nil end
 	e.cx, e.cy, e.cz = chunk.cx, chunk.cy, chunk.cz
@@ -106,7 +160,16 @@ end
 local function rebuildPhysKey( key )
 	local chunk = MC.GetChunkByKey( key )
 	if chunk and IsValid( chunk.ent ) then
+		if not SV.IsChunkCollisionActive( key ) then
+			SV.PhysDirty[key] = nil
+			SV.PhysDirtyPriority[key] = nil
+			return
+		end
+		SV.EnsureChunkEnt( chunk, true )
 		chunk.ent:RebuildPhysics()
+	elseif chunk and chunk.count and chunk.count > 0 and SV.IsChunkCollisionActive( key ) then
+		SV.EnsureChunkEnt( chunk, true )
+		if IsValid( chunk.ent ) then chunk.ent:RebuildPhysics() end
 	end
 	SV.PhysDirty[key] = nil
 	SV.PhysDirtyPriority[key] = nil
@@ -206,25 +269,49 @@ function SV.Validate( ply, bx, by, bz, placing )
 end
 
 ------------------------------------------------------------- single block update
--- Broadcast a change to everyone, including still-syncing players. Streamed
--- full-sync builds each chunk's local-index list when the stream starts and reads
--- live block values for every part, so single-block updates can interleave without
--- requiring one giant reliable message.
+local function cellChunkKey( bx, by, bz )
+	local cx, cy, cz = MC.CellToChunk( bx, by, bz )
+	return MC.ChunkKey( cx, cy, cz )
+end
+
+local function playerLoadedChunk( ply, key )
+	local loaded = SV.PlayerLoadedChunks and SV.PlayerLoadedChunks[ply]
+	return loaded and loaded[key] == true
+end
+
+local function playersLoadedForKey( key )
+	local out = {}
+	for _, ply in ipairs( player.GetAll() ) do
+		if playerLoadedChunk( ply, key ) then
+			out[#out + 1] = ply
+		end
+	end
+	return out
+end
+
+local function sendToPlayersLoadedForCell( bx, by, bz, writeMessage )
+	local targets = playersLoadedForKey( cellChunkKey( bx, by, bz ) )
+	if #targets == 0 then return false end
+	writeMessage( targets )
+	return true
+end
+
 local function broadcastSet( bx, by, bz, id, orient )
-	if #player.GetAll() == 0 then return end
 	orient = MC.NormalizeOrient( id, orient )
-	net.Start( "mc_set" )
-		net.WriteInt( bx, Net.COORD_BITS )
-		net.WriteInt( by, Net.COORD_BITS )
-		net.WriteInt( bz, Net.COORD_BITS )
-		net.WriteUInt( id, Net.ID_BITS )
-		net.WriteUInt( orient or 0, Net.ORIENT_BITS )
-	net.Broadcast()
+	sendToPlayersLoadedForCell( bx, by, bz, function( targets )
+		net.Start( "mc_set" )
+			net.WriteInt( bx, Net.COORD_BITS )
+			net.WriteInt( by, Net.COORD_BITS )
+			net.WriteInt( bz, Net.COORD_BITS )
+			net.WriteUInt( id, Net.ID_BITS )
+			net.WriteUInt( orient or 0, Net.ORIENT_BITS )
+		net.Send( targets )
+	end )
 end
 
 local function sendSetBulk( changes, target )
 	if #changes == 0 then return end
-	if not target and #player.GetAll() == 0 then return end
+	if not target then return end
 	local i = 1
 	while i <= #changes do
 		local count = math.min( BULK_SET_CELLS_PER_MESSAGE, #changes - i + 1 )
@@ -240,13 +327,29 @@ local function sendSetBulk( changes, target )
 				net.WriteUInt( id, Net.ID_BITS )
 				net.WriteUInt( orient or 0, Net.ORIENT_BITS )
 			end
-		if target then net.Send( target ) else net.Broadcast() end
+		net.Send( target )
 		i = i + count
 	end
 end
 
+local function sendBulkToInterestedPlayers( changes )
+	if #changes == 0 then return end
+	for _, ply in ipairs( player.GetAll() ) do
+		local loaded = SV.PlayerLoadedChunks and SV.PlayerLoadedChunks[ply]
+		if loaded then
+			local filtered = {}
+			for _, cell in ipairs( changes ) do
+				if loaded[cellChunkKey( cell.bx, cell.by, cell.bz )] then
+					filtered[#filtered + 1] = cell
+				end
+			end
+			sendSetBulk( filtered, ply )
+		end
+	end
+end
+
 local function broadcastSetBulk( changes )
-	sendSetBulk( changes )
+	sendBulkToInterestedPlayers( changes )
 end
 
 -- a player-predicted edit got rejected: push the authoritative cell state back
@@ -359,7 +462,7 @@ local function apply( bx, by, bz, id, _, orient, actor, options )
 	SV.BlockCount = math.max( 0, SV.BlockCount + delta )
 
 	if id ~= 0 then
-		SV.EnsureChunkEnt( chunk )
+		SV.EnsureChunkEnt( chunk, false )
 		SV.MarkPhysDirty( chunk.key, priorityPhys )
 	else
 		if emptied then
@@ -833,6 +936,9 @@ local function clearWorldNoNet()
 	SV.PhysDirty = {}
 	SV.PhysDirtyPriority = {}
 	SV.SyncQueue = {}
+	SV.PlayerLoadedChunks = {}
+	SV.StreamInterestKeys = {}
+	SV.ServerCollisionActiveChunks = {}
 end
 
 local function resyncAllClients()
@@ -1189,6 +1295,58 @@ local function sendFullEnd( ply, active )
 	return MC.EstimateSyncEndBytes()
 end
 
+local function ensureSyncQueue( ply )
+	local q = SV.SyncQueue[ply]
+	if not q then
+		q = { keys = {}, i = 1, inflightBytes = 0, queuedKeys = {} }
+		SV.SyncQueue[ply] = q
+	end
+	q.queuedKeys = q.queuedKeys or {}
+	return q
+end
+
+local function sendUnloadChunk( ply, key )
+	if not IsValid( ply ) then return end
+	local cx, cy, cz = MC.ChunkKeyToCoords( key )
+	if not cx then return end
+	net.Start( "mc_unload_chunk" )
+		net.WriteInt( cx, Net.COORD_BITS )
+		net.WriteInt( cy, Net.COORD_BITS )
+		net.WriteInt( cz, Net.COORD_BITS )
+	net.Send( ply )
+end
+
+local function enqueueSyncKey( ply, key )
+	local chunk = MC.GetChunkByKey( key )
+	if not chunk or not chunk.count or chunk.count <= 0 then return end
+	local q = ensureSyncQueue( ply )
+	if q.queuedKeys[key] then return end
+	if q.active and q.active.key == key then return end
+	q.keys[#q.keys + 1] = key
+	q.queuedKeys[key] = true
+end
+
+function SV.UpdatePlayerStreamInterest( ply, desired )
+	if not IsValid( ply ) then return end
+	desired = desired or SV.StreamInterestKeys or {}
+	local loaded = SV.PlayerLoadedChunks[ply] or {}
+	SV.PlayerLoadedChunks[ply] = loaded
+
+	for key in pairs( desired ) do
+		if not loaded[key] then
+			loaded[key] = true
+			enqueueSyncKey( ply, key )
+		end
+	end
+
+	for key in pairs( loaded ) do
+		if not desired[key] then
+			loaded[key] = nil
+			sendUnloadChunk( ply, key )
+		end
+	end
+end
+
 local function makeSyncActive( key )
 	local chunk = MC.GetChunkByKey( key )
 	if not chunk or chunk.count <= 0 then return nil end
@@ -1213,16 +1371,71 @@ local function makeSyncActive( key )
 end
 
 function SV.BeginSync( ply )
-	local keys = {}
-	for key in pairs( MC.World ) do keys[#keys + 1] = key end
-	SV.SyncQueue[ply] = { keys = keys, i = 1, inflightBytes = 0 }
+	SV.PlayerLoadedChunks[ply] = {}
+	SV.SyncQueue[ply] = { keys = {}, i = 1, inflightBytes = 0, queuedKeys = {} }
+	if not next( SV.StreamInterestKeys ) then
+		SV.StreamInterestKeys = collectEntityInterestKeys( streamChunkSpanXY(), streamChunkSpanZ() )
+	end
+	SV.UpdatePlayerStreamInterest( ply, SV.StreamInterestKeys )
+end
+
+local function RemoveChunkEntIfInactive( key )
+	if SV.IsChunkCollisionActive( key ) then return end
+	local chunk = MC.GetChunkByKey( key )
+	if chunk and IsValid( chunk.ent ) then
+		chunk.ent:Remove()
+		chunk.ent = nil
+	end
+	SV.PhysDirty[key] = nil
+	SV.PhysDirtyPriority[key] = nil
+end
+
+local function refreshServerCollisionInterest()
+	local span = serverCollisionSpan()
+	local desired = collectEntityInterestKeys( span, span )
+	local active = SV.ServerCollisionActiveChunks or {}
+	SV.ServerCollisionActiveChunks = active
+
+	for key in pairs( desired ) do
+		if not active[key] then
+			active[key] = true
+		end
+		local chunk = MC.GetChunkByKey( key )
+		if chunk and chunk.count and chunk.count > 0 and not IsValid( chunk.ent ) then
+			SV.EnsureChunkEnt( chunk, true )
+			SV.MarkPhysDirty( key )
+		end
+	end
+
+	for key in pairs( active ) do
+		if not desired[key] then
+			active[key] = nil
+			RemoveChunkEntIfInactive( key )
+		end
+	end
+end
+
+function SV.RefreshChunkInterest()
+	SV.StreamInterestKeys = collectEntityInterestKeys( streamChunkSpanXY(), streamChunkSpanZ() )
+	for _, ply in ipairs( player.GetAll() ) do
+		SV.UpdatePlayerStreamInterest( ply, SV.StreamInterestKeys )
+	end
+	refreshServerCollisionInterest()
 end
 
 local function sendSyncStep( ply, q, byteLimit )
+	if q.active and not playerLoadedChunk( ply, q.active.key ) then
+		q.active = nil
+	end
+
 	while not q.active do
 		if q.i > #q.keys then return false end
-		q.active = makeSyncActive( q.keys[q.i] )
+		local key = q.keys[q.i]
 		q.i = q.i + 1
+		if q.queuedKeys then q.queuedKeys[key] = nil end
+		if playerLoadedChunk( ply, key ) then
+			q.active = makeSyncActive( key )
+		end
 	end
 
 	local active = q.active
@@ -1244,6 +1457,10 @@ local function sendSyncStep( ply, q, byteLimit )
 	q.active = nil
 	return sendFullEnd( ply, active )
 end
+
+timer.Create( "mc_interest_sync", INTEREST_TIMER_INTERVAL, 0, function()
+	SV.RefreshChunkInterest()
+end )
 
 -- drip small chunk parts to each syncing player; large chunks must never be one
 -- reliable net message.
@@ -1520,6 +1737,7 @@ end )
 
 hook.Add( "PlayerDisconnected", "mc_sync_clean", function( ply )
 	SV.SyncQueue[ply] = nil
+	SV.PlayerLoadedChunks[ply] = nil
 end )
 
 hook.Add( "ShutDown", "mc_save", function()
@@ -1566,6 +1784,10 @@ concommand.Add( "mc_clear", function( ply )
 	SV.BlockCount = 0
 	SV.PhysDirty = {}
 	SV.PhysDirtyPriority = {}
+	SV.SyncQueue = {}
+	SV.PlayerLoadedChunks = {}
+	SV.StreamInterestKeys = {}
+	SV.ServerCollisionActiveChunks = {}
 	SV.Dirty = true
 	net.Start( "mc_clear" ) net.Broadcast()
 	MsgN( "[MC] world cleared" )
@@ -1658,7 +1880,8 @@ concommand.Add( "mc_rebuild", function( ply )
 	local n = 0
 	for key, c in pairs( MC.World ) do
 		if c.count > 0 then
-			SV.EnsureChunkEnt( c )
+			SV.ServerCollisionActiveChunks[key] = true
+			SV.EnsureChunkEnt( c, true )
 			SV.MarkPhysDirty( key )
 			n = n + 1
 		end
