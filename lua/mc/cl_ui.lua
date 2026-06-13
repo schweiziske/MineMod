@@ -167,6 +167,7 @@ local function normalizeHotbarID( id )
 	id = tonumber( id )
 	if not id then return nil end
 	id = math.floor( id )
+	if MC.NormalizeLegacyBlockID then id = MC.NormalizeLegacyBlockID( id ) end
 	if MC.IsValidBlock and MC.IsValidBlock( id ) then return id end
 	return nil
 end

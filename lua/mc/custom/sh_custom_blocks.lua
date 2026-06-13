@@ -8,11 +8,28 @@
 
 MC = MC or {}
 
-MC.CustomBlockBaseID = 70000
+MC.CustomBlockBaseID = 61000
+MC.CustomBlockMaxID = 2 ^ ( ( MC.Net and MC.Net.ID_BITS ) or 16 ) - 1
 MC.CustomBlockDefs = MC.CustomBlockDefs or {}
 MC.CustomBlockOrder = MC.CustomBlockOrder or {}
 MC.CustomBlockOrderSeen = MC.CustomBlockOrderSeen or {}
-MC.CustomNextBlockID = MC.CustomNextBlockID or ( MC.CustomBlockBaseID + 1 )
+MC.CustomNextBlockID = math.floor( tonumber( MC.CustomNextBlockID ) or 0 )
+if MC.CustomNextBlockID <= MC.CustomBlockBaseID or MC.CustomNextBlockID > MC.CustomBlockMaxID then
+	MC.CustomNextBlockID = MC.CustomBlockBaseID + 1
+end
+MC.CustomLegacyBlockIDMap = MC.CustomLegacyBlockIDMap or {}
+MC.CustomLegacyBlockIDMap[60001] = 61001
+MC.CustomLegacyBlockIDMap[60010] = 61010
+MC.CustomLegacyBlockIDMap[60011] = 61011
+MC.CustomLegacyBlockIDMap[60012] = 61012
+MC.CustomLegacyBlockIDMap[60013] = 61013
+MC.CustomLegacyBlockIDMap[60014] = 61014
+
+function MC.NormalizeLegacyBlockID( id )
+	id = math.floor( tonumber( id ) or -1 )
+	local mapped = MC.CustomLegacyBlockIDMap and MC.CustomLegacyBlockIDMap[id]
+	return mapped or id
+end
 
 local function normalizeCustomKey( s )
 	s = string.lower( tostring( s or "" ) )
@@ -35,7 +52,8 @@ end
 
 local function nextCustomID()
 	local id = math.max( MC.CustomBlockBaseID + 1, math.floor( tonumber( MC.CustomNextBlockID ) or ( MC.CustomBlockBaseID + 1 ) ) )
-	while customIDInUse( id ) do id = id + 1 end
+	while id <= MC.CustomBlockMaxID and customIDInUse( id ) do id = id + 1 end
+	if id > MC.CustomBlockMaxID then return nil end
 	MC.CustomNextBlockID = id + 1
 	return id
 end
@@ -53,7 +71,12 @@ local function prepareCustomDef( def )
 	if not key or key == "" then return nil end
 	out.name = normalizeCustomKey( out.name or string.match( key, "^[^:]+:(.+)$" ) or key )
 	out.mcid = normalizeCustomKey( out.mcid or ( "mcswep:" .. out.name ) )
-	out.id = math.floor( tonumber( out.id ) or nextCustomID() )
+	local explicitID = tonumber( out.id )
+	out.id = explicitID and math.floor( explicitID ) or nextCustomID()
+	if not out.id or out.id < 0 or out.id > MC.CustomBlockMaxID then
+		if MsgN then MsgN( "[MC] custom block '" .. key .. "' has invalid id " .. tostring( out.id ) .. " (max " .. tostring( MC.CustomBlockMaxID ) .. ")" ) end
+		return nil
+	end
 	out.custom = true
 	out.creativeCategory = out.creativeCategory or "custom"
 	return out, key
@@ -149,7 +172,7 @@ local SLOPE_QUADS = {
 }
 
 MC.RegisterCustomBlock( {
-	id = 70001,
+	id = 61001,
 	name = "custom_oak_slope",
 	mcid = "mcswep:oak_slope",
 	disp = "自定义橡木斜坡",
@@ -166,11 +189,11 @@ MC.RegisterCustomBlock( {
 } )
 
 local COLOR_BLOCKS = {
-	{ id = 70010, name = "red_color_block", mcid = "mcswep:red_color_block", disp = "自定义红色块", tile = "red_concrete" },
-	{ id = 70011, name = "green_color_block", mcid = "mcswep:green_color_block", disp = "自定义绿色块", tile = "lime_concrete" },
-	{ id = 70012, name = "blue_color_block", mcid = "mcswep:blue_color_block", disp = "自定义蓝色块", tile = "blue_concrete" },
-	{ id = 70013, name = "white_color_block", mcid = "mcswep:white_color_block", disp = "自定义白色块", tile = "white_concrete" },
-	{ id = 70014, name = "black_color_block", mcid = "mcswep:black_color_block", disp = "自定义黑色块", tile = "black_concrete" },
+	{ id = 61010, name = "red_color_block", mcid = "mcswep:red_color_block", disp = "自定义红色块", tile = "red_concrete" },
+	{ id = 61011, name = "green_color_block", mcid = "mcswep:green_color_block", disp = "自定义绿色块", tile = "lime_concrete" },
+	{ id = 61012, name = "blue_color_block", mcid = "mcswep:blue_color_block", disp = "自定义蓝色块", tile = "blue_concrete" },
+	{ id = 61013, name = "white_color_block", mcid = "mcswep:white_color_block", disp = "自定义白色块", tile = "white_concrete" },
+	{ id = 61014, name = "black_color_block", mcid = "mcswep:black_color_block", disp = "自定义黑色块", tile = "black_concrete" },
 }
 
 for _, def in ipairs( COLOR_BLOCKS ) do
