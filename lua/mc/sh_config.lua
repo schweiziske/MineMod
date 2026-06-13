@@ -56,6 +56,7 @@ if SERVER then
 		"mc_snapshot_ack",
 		"mc_http_manifest",
 		"mc_http_chunk",
+		"mc_http_failed",
 		"mc_unload_chunk",
 		"mc_set",
 		"mc_set_bulk",

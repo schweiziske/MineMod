@@ -26,6 +26,7 @@ SV.SyncQueue  = SV.SyncQueue or {}   -- player -> { keys = {}, i = 1, active = n
 SV.SnapshotQueue = SV.SnapshotQueue or {} -- player -> compressed save snapshot transfer state
 SV.PlayerLoadedChunks = SV.PlayerLoadedChunks or {} -- player -> { [chunkKey] = true }
 SV.PlayerFullSnapshot = SV.PlayerFullSnapshot or {} -- player -> true once full-world snapshot mode owns visibility
+SV.PlayerHTTPDisabled = SV.PlayerHTTPDisabled or {} -- player -> true after client-side HTTP fetch is blocked/failed
 SV.StreamInterestKeys = SV.StreamInterestKeys or {} -- chunkKey -> true, computed from non-world entities
 SV.ServerCollisionActiveChunks = SV.ServerCollisionActiveChunks or {} -- chunkKey -> true
 SV.Dirty      = SV.Dirty or false    -- world changed since last save
@@ -119,6 +120,11 @@ local function httpChunkDeliveryActive()
 		and SV.ChunkStore
 		and SV.ChunkStore.IsLazyWorld
 		and SV.ChunkStore.IsLazyWorld()
+end
+
+local function playerHttpChunkDeliveryActive( ply )
+	return httpChunkDeliveryActive()
+		and not ( SV.PlayerHTTPDisabled and SV.PlayerHTTPDisabled[ply] )
 end
 
 function SV.EntityTriggersChunkInterest( ent )
@@ -1443,7 +1449,7 @@ local function sendUnloadChunk( ply, key )
 end
 
 local function sendHttpManifest( ply )
-	if not IsValid( ply ) or not httpChunkDeliveryActive() then return false end
+	if not IsValid( ply ) or not playerHttpChunkDeliveryActive( ply ) then return false end
 	if not SV.ChunkStore or not SV.ChunkStore.HttpManifestPayload then return false end
 	local payload = SV.ChunkStore.HttpManifestPayload()
 	if not payload or not payload.path or payload.path == "" then return false end
@@ -1493,7 +1499,7 @@ function SV.UpdatePlayerStreamInterest( ply, desired )
 
 	for key in pairs( desired ) do
 		if not loaded[key] then
-			if httpChunkDeliveryActive()
+			if playerHttpChunkDeliveryActive( ply )
 				and SV.ChunkStore
 				and SV.ChunkStore.HasBaseChunk
 				and SV.ChunkStore.HasBaseChunk( key )
@@ -1550,6 +1556,28 @@ function SV.BeginSync( ply )
 	end
 	SV.UpdatePlayerStreamInterest( ply, SV.StreamInterestKeys )
 end
+
+local function restartPlayerStreamSync( ply )
+	if not IsValid( ply ) then return end
+	net.Start( "mc_clear" )
+	net.Send( ply )
+	SV.PlayerLoadedChunks[ply] = {}
+	SV.PlayerFullSnapshot[ply] = nil
+	SV.SyncQueue[ply] = { keys = {}, i = 1, inflightBytes = 0, queuedKeys = {} }
+	if not next( SV.StreamInterestKeys ) then
+		SV.StreamInterestKeys = collectEntityInterestKeys( streamChunkSpanXY(), streamChunkSpanZ() )
+	end
+	SV.UpdatePlayerStreamInterest( ply, SV.StreamInterestKeys )
+end
+
+net.Receive( "mc_http_failed", function( _, ply )
+	if not IsValid( ply ) then return end
+	local reason = string.sub( tostring( net.ReadString() or "" ), 1, 180 )
+	if SV.PlayerHTTPDisabled[ply] then return end
+	SV.PlayerHTTPDisabled[ply] = true
+	MsgN( "[MC] HTTP chunk delivery disabled for " .. tostring( ply:Nick() ) .. ": " .. reason )
+	restartPlayerStreamSync( ply )
+end )
 
 local function RemoveChunkEntIfInactive( key )
 	if SV.IsChunkCollisionActive( key ) then return end
@@ -2135,6 +2163,7 @@ hook.Add( "PlayerDisconnected", "mc_sync_clean", function( ply )
 	SV.SnapshotQueue[ply] = nil
 	SV.PlayerLoadedChunks[ply] = nil
 	SV.PlayerFullSnapshot[ply] = nil
+	SV.PlayerHTTPDisabled[ply] = nil
 end )
 
 hook.Add( "ShutDown", "mc_save", function()
