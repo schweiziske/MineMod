@@ -6,6 +6,9 @@ Garry's Mod 里的 Minecraft 风格方块系统。方块不按实体逐个生成
 
 - 方块边长是 `36.5` Source units。
 - chunk 水平尺寸固定为 `16x16`，垂直 section 高度是 `32`。
+- 客户端预测碰撞默认只在本地玩家附近 `3x3x3` 个 chunk 内构建，由 `mc_client_collision_chunk_span` 控制；`mc_client_collision 0` 仍可完全关闭客户端预测碰撞。
+- 服务端 full sync 不再对玩家发送全图 chunk；非 world / 非 `mc_chunk` 实体附近默认同步水平 `16x16`、垂直 `4` 个 chunk，由 `mc_stream_chunk_span_xy` / `mc_stream_chunk_span_z` 控制，离开范围会发送 `mc_unload_chunk` 让客户端释放数据。
+- 服务端 `mc_chunk` 碰撞实体默认只保留在非 world / 非 `mc_chunk` 实体附近 `4x4x4` 个 chunk 内，由 `mc_server_collision_chunk_span` 控制；远处 chunk 仍保留在服务端 `MC.World` 和存档中。
 - 支持放置、破坏、使用、`/fill`、导入、默认存档、命名多存档、分片同步。
 - 提供 `MC 创造方块放置器` SWEP；Reload 打开带分类、搜索和分页的创造物品栏。
 - 提供 `MC 预设放置器` SWEP；可选择区域保存建筑预设，读取后用客户端 IMesh 投影并批量放置，E 可切换覆盖模式，G 可按 90 度步进旋转投影和实际放置。
@@ -107,6 +110,8 @@ node _tools\test_functional_blocks.js
 node _tools\test_generated_block_connections.js
 node _tools\test_particle_alpha_flags.js
 node _tools\test_generated_lua_size.js
+node _tools\test_interest_range_policy.js
+powershell -ExecutionPolicy Bypass -File _tools\check_streaming_sync.ps1
 $luaFiles = @(
   "lua\autorun\mc_load.lua",
   "lua\mc\sh_blocks.lua",

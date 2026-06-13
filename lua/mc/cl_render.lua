@@ -92,11 +92,72 @@ local PHYS_REBUILD_DELAY = 0.12
 -- safety valve: clientside collision (movement prediction). 0 = server-only.
 MC.ClientCollision = CreateClientConVar( "mc_client_collision", "1", true, false,
 	"Build clientside block collision for smooth movement prediction (0 = server-only)" )
+MC.ClientCollisionChunkSpan = CreateClientConVar( "mc_client_collision_chunk_span", tostring( MC.Config.ClientCollisionChunkSpan or 3 ), true, false,
+	"Chunk span around the local player that builds clientside prediction collision; 0 disables" )
+MC.ClientCollisionInterest = MC.ClientCollisionInterest or {}
+
+local LastClientCollisionCenterKey
+local LastClientCollisionSpan = -1
+local LastClientCollisionEnabled = nil
+
+local function clientCollisionSpan()
+	return math.Clamp( MC.ClientCollisionChunkSpan:GetInt(), 0, 32 )
+end
+
+function MC.IsChunkInClientCollisionInterest( key )
+	return MC.ClientCollisionInterest and MC.ClientCollisionInterest[key] == true
+end
+
+function MC.RefreshClientCollisionInterest( force )
+	local enabled = MC.ClientCollision:GetBool()
+	local span = clientCollisionSpan()
+	local lp = LocalPlayer()
+	local centerKey
+	local desired = {}
+
+	if enabled and span > 0 and IsValid( lp ) then
+		local pos = lp.WorldSpaceCenter and lp:WorldSpaceCenter() or lp:GetPos()
+		local bx, by, bz = MC.WorldToCell( pos )
+		local cx, cy, cz = MC.CellToChunk( bx, by, bz )
+		centerKey = MC.ChunkKey( cx, cy, cz )
+		desired = MC.ChunkInterestKeysAroundPos( pos, span, span )
+	end
+
+	if not force and centerKey == LastClientCollisionCenterKey
+	and span == LastClientCollisionSpan and enabled == LastClientCollisionEnabled then
+		return
+	end
+
+	local old = MC.ClientCollisionInterest or {}
+	MC.ClientCollisionInterest = desired
+	LastClientCollisionCenterKey = centerKey
+	LastClientCollisionSpan = span
+	LastClientCollisionEnabled = enabled
+
+	for key in pairs( old ) do
+		if not desired[key] then
+			local e = MC.ChunkEnts[key]
+			if IsValid( e ) then e:PhysicsDestroy() end
+			MC.PhysDirty[key] = nil
+			MC.PhysDirtyPriority[key] = nil
+		end
+	end
+
+	if enabled then
+		for key in pairs( desired ) do
+			if MC.World[key] and not old[key] then
+				MC.MarkChunkPhysDirty( key )
+			end
+		end
+	end
+end
 
 cvars.AddChangeCallback( "mc_client_collision", function()
-	for key, e in pairs( MC.ChunkEnts ) do
-		if IsValid( e ) then MC.MarkChunkPhysDirty( key ) end
-	end
+	MC.RefreshClientCollisionInterest( true )
+end, "mc" )
+
+cvars.AddChangeCallback( "mc_client_collision_chunk_span", function()
+	MC.RefreshClientCollisionInterest( true )
 end, "mc" )
 
 -- should the face between `cur` and neighbour `nb` be drawn?
@@ -698,7 +759,11 @@ end
 local function rebuildChunkPhys( key, enabled )
 	local e = MC.ChunkEnts[key]
 	if IsValid( e ) then
-		if enabled then e:RebuildPhysics() else e:PhysicsDestroy() end
+		if enabled and MC.IsChunkInClientCollisionInterest( key ) then
+			e:RebuildPhysics()
+		else
+			e:PhysicsDestroy()
+		end
 	end
 	MC.PhysDirty[key] = nil
 	MC.PhysDirtyPriority[key] = nil
@@ -706,6 +771,11 @@ end
 
 function MC.MarkChunkPhysDirty( key, priority )
 	if not key then return end
+	if MC.IsChunkInClientCollisionInterest and not MC.IsChunkInClientCollisionInterest( key ) then
+		MC.PhysDirty[key] = nil
+		MC.PhysDirtyPriority[key] = nil
+		return
+	end
 	if priority then
 		MC.PhysDirty[key] = true
 		MC.PhysDirtyPriority[key] = true
@@ -731,6 +801,8 @@ end
 -- rebuild a few chunks per frame to avoid hitches (meshes + clientside collision)
 hook.Remove( "Think", "mc_meshbuild" )
 hook.Add( "Think", "mc_meshbuild", function()
+	MC.RefreshClientCollisionInterest()
+
 	if next( MC.MeshDirty ) then
 		local budget = 3
 		for key in pairs( MC.MeshDirty ) do

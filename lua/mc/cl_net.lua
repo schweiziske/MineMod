@@ -327,6 +327,30 @@ net.Receive( "mc_set_bulk", function()
 	end
 end )
 
+net.Receive( "mc_unload_chunk", function()
+	local cx = net.ReadInt( Net.COORD_BITS )
+	local cy = net.ReadInt( Net.COORD_BITS )
+	local cz = net.ReadInt( Net.COORD_BITS )
+	local key = MC.ChunkKey( cx, cy, cz )
+
+	MC.FreeChunkMesh( key )
+	local e = MC.ChunkEnts and MC.ChunkEnts[key]
+	if IsValid( e ) then e:PhysicsDestroy() end
+	if MC.ChunkEnts then MC.ChunkEnts[key] = nil end
+	MC.World[key] = nil
+	MC.MeshDirty[key] = nil
+	MC.PhysDirty[key] = nil
+	MC.PhysDirtyPriority[key] = nil
+	MC.PendingFull[key] = nil
+
+	for predKey, pending in pairs( MC.PendingPredictions or {} ) do
+		local pcx, pcy, pcz = MC.CellToChunk( pending.bx, pending.by, pending.bz )
+		if pcx == cx and pcy == cy and pcz == cz then
+			MC.PendingPredictions[predKey] = nil
+		end
+	end
+end )
+
 net.Receive( "mc_clear", function()
 	MC.FreeAllMeshes()
 	for key, e in pairs( MC.ChunkEnts or {} ) do

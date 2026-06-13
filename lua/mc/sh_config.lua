@@ -51,6 +51,7 @@ if SERVER then
 		"mc_full_part",
 		"mc_full_end",
 		"mc_full_ack",
+		"mc_unload_chunk",
 		"mc_set",
 		"mc_set_bulk",
 		"mc_fx",
@@ -118,6 +119,10 @@ MC.Config.SyncMessagesPerTick = 12
 MC.Config.SyncReliableBudget = 196608
 MC.Config.SyncFrameMS = 4
 MC.Config.SyncInFlightLimit = 524288
+MC.Config.ClientCollisionChunkSpan = 3
+MC.Config.StreamChunkSpanXY = 16
+MC.Config.StreamChunkSpanZ = 4
+MC.Config.ServerCollisionChunkSpan = 4
 
 ------------------------------------------------------------------ server ConVars
 if SERVER then
@@ -136,6 +141,9 @@ if SERVER then
 	MC.Config.SyncFast    = GetConVar( "mc_sync_fast" ) or CreateConVar( "mc_sync_fast", "1", F, "Use ack-windowed fast full-map sync" )
 	MC.Config.SyncFrame   = GetConVar( "mc_sync_frame_ms" ) or CreateConVar( "mc_sync_frame_ms", tostring( MC.Config.SyncFrameMS ), F, "Approx server CPU milliseconds spent streaming full sync each tick" )
 	MC.Config.SyncWindow  = GetConVar( "mc_sync_inflight_limit" ) or CreateConVar( "mc_sync_inflight_limit", tostring( MC.Config.SyncInFlightLimit ), F, "Max unacknowledged full-sync bytes per syncing client" )
+	MC.Config.StreamChunkSpanXY = GetConVar( "mc_stream_chunk_span_xy" ) or CreateConVar( "mc_stream_chunk_span_xy", tostring( MC.Config.StreamChunkSpanXY ), F, "Horizontal chunk span around non-world entities to stream to clients; 0 disables range sync" )
+	MC.Config.StreamChunkSpanZ = GetConVar( "mc_stream_chunk_span_z" ) or CreateConVar( "mc_stream_chunk_span_z", tostring( MC.Config.StreamChunkSpanZ ), F, "Vertical chunk span around non-world entities to stream to clients; 0 disables range sync" )
+	MC.Config.ServerCollisionChunkSpan = GetConVar( "mc_server_collision_chunk_span" ) or CreateConVar( "mc_server_collision_chunk_span", tostring( MC.Config.ServerCollisionChunkSpan ), F, "Chunk span around non-world entities that keeps server collision entities active; 0 disables automatic chunk collision" )
 	MC.Config.BlockDamage = GetConVar( "mc_block_damage" ) or CreateConVar( "mc_block_damage", "1", F, "Allow GMod damage to break MC blocks" )
 	MC.Config.BlockHealthScale = GetConVar( "mc_block_health_scale" ) or CreateConVar( "mc_block_health_scale", "20", F, "Block health multiplier applied to Minecraft hardness" )
 	MC.Config.BlockDamageDecay = GetConVar( "mc_block_damage_decay" ) or CreateConVar( "mc_block_damage_decay", "5", F, "Seconds before partial block damage is forgotten" )
