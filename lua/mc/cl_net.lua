@@ -417,6 +417,24 @@ local function httpURLForPath( state, relPath )
 	return ( state.baseUrl or "" ) .. "/" .. urlEscapePath( relPath )
 end
 
+local function failHttpChunkSync( state, label, err )
+	if not state or state.failed then return end
+	state.failed = true
+	if MC.HttpChunkSync == state then MC.HttpChunkSync = nil end
+
+	local reason = string.Trim( tostring( label or "http" ) .. ": " .. tostring( err or "unknown" ) )
+	MsgN( "[MC] HTTP chunk sync failed; falling back to server net: " .. reason )
+	if MC.SyncProgress then
+		MC.SyncProgress.active = false
+		MC.SyncProgress.http = false
+		MC.SyncProgress.lastUpdate = CurTime()
+	end
+
+	net.Start( "mc_http_failed" )
+		net.WriteString( string.sub( reason, 1, 180 ) )
+	net.SendToServer()
+end
+
 local function httpManifestRelativePath( state, relPath )
 	relPath = cleanHttpDataPath( relPath )
 	if relPath == "" then return nil end
@@ -586,7 +604,7 @@ local function fetchHttpPart( state, partNo )
 		writeHttpCache( state, partPath, body )
 		local data = parseHttpSaveJSON( body )
 		if not istable( data ) or not istable( data.chunks ) then
-			MsgN( "[MC] HTTP chunk part failed: invalid payload " .. tostring( partPath ) )
+			failHttpChunkSync( state, "part " .. tostring( partPath ), "invalid payload" )
 			return
 		end
 		data.h = data.h or state.height
@@ -596,7 +614,7 @@ local function fetchHttpPart( state, partNo )
 	end, function( err )
 		if MC.HttpChunkSync ~= state then return end
 		state.loadingParts[partNo] = nil
-		MsgN( "[MC] HTTP chunk part failed: " .. tostring( partPath ) .. " / " .. tostring( err ) )
+		failHttpChunkSync( state, "part " .. tostring( partPath ), err )
 	end )
 end
 
@@ -636,7 +654,7 @@ end
 local function finishHttpManifest( state, body )
 	local data = parseHttpSaveJSON( body )
 	if not istable( data ) or not istable( data.parts ) or not istable( data.chunkIndex ) then
-		MsgN( "[MC] HTTP manifest failed: invalid payload" )
+		failHttpChunkSync( state, "manifest", "invalid payload" )
 		return
 	end
 	writeHttpCache( state, state.manifestPath, body )
@@ -686,7 +704,7 @@ function MC.BeginHttpChunkSync( baseUrl, manifestPath, chunks, blocks, height )
 		if MC.HttpChunkSync == state then finishHttpManifest( state, body ) end
 	end, function( err )
 		if MC.HttpChunkSync == state then
-			MsgN( "[MC] HTTP manifest failed: " .. tostring( err ) )
+			failHttpChunkSync( state, "manifest", err )
 		end
 	end )
 	return true
