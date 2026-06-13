@@ -194,6 +194,30 @@ function Store.IsLazyWorld()
 	return Store.Active == true
 end
 
+function Store.HasBaseChunk( key )
+	if not Store.IsLazyWorld() then return false end
+	key = tostring( key or "" )
+	return Store.ChunkIndex and Store.ChunkIndex[key] ~= nil
+end
+
+function Store.HasChunkEdits( key )
+	if not Store.IsLazyWorld() then return false end
+	key = tostring( key or "" )
+	return Store.EditChunks and Store.EditChunks[key] ~= nil
+end
+
+function Store.HttpManifestPayload()
+	if not Store.IsLazyWorld() or not Store.Manifest then return nil end
+	local chunks = 0
+	for _ in pairs( Store.ChunkIndex or {} ) do chunks = chunks + 1 end
+	return {
+		path = Store.ManifestPath,
+		chunks = chunks,
+		blocks = math.max( 0, math.floor( tonumber( SV.BlockCount ) or tonumber( Store.Manifest.stats and Store.Manifest.stats.blocks ) or 0 ) ),
+		height = math.max( 1, math.floor( tonumber( Store.Manifest.h ) or MC.CH ) ),
+	}
+end
+
 function Store.LoadLazyManifest( manifest, manifestPath )
 	resetTables()
 	Store.Active = true

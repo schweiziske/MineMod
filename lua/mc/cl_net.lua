@@ -371,6 +371,341 @@ function MC.LoadSnapshotSaveData( data )
 	return true
 end
 
+local function cleanHttpDataPath( path )
+	path = string.Trim( tostring( path or "" ) )
+	path = string.gsub( path, "\\", "/" )
+	path = string.gsub( path, "^/+", "" )
+	path = string.gsub( path, "%.%.+", "_" )
+	return path
+end
+
+local function urlEscapePath( path )
+	path = cleanHttpDataPath( path )
+	return string.gsub( path, "([^%w%-%._~/])", function( c )
+		return string.format( "%%%02X", string.byte( c ) )
+	end )
+end
+
+local function ensureDataDirsForPath( path )
+	local dir = string.GetPathFromFilename( cleanHttpDataPath( path ) )
+	dir = string.gsub( dir or "", "/+$", "" )
+	local built = ""
+	for part in string.gmatch( dir, "[^/]+" ) do
+		built = built == "" and part or ( built .. "/" .. part )
+		file.CreateDir( built )
+	end
+end
+
+local function parseHttpSaveJSON( raw )
+	if not raw or raw == "" then return nil end
+	if string.sub( raw, 1, 1 ) == "{" then return util.JSONToTable( raw ) end
+	local json = util.Decompress( raw )
+	return json and util.JSONToTable( json ) or nil
+end
+
+local function httpCachePath( state, relPath )
+	return cleanHttpDataPath( ( state.cacheRoot or "mc/http_cache/default" ) .. "/" .. cleanHttpDataPath( relPath ) )
+end
+
+local function writeHttpCache( state, relPath, body )
+	local path = httpCachePath( state, relPath )
+	ensureDataDirsForPath( path )
+	file.Write( path, body or "" )
+end
+
+local function httpURLForPath( state, relPath )
+	return ( state.baseUrl or "" ) .. "/" .. urlEscapePath( relPath )
+end
+
+local function httpManifestRelativePath( state, relPath )
+	relPath = cleanHttpDataPath( relPath )
+	if relPath == "" then return nil end
+	if string.StartWith( relPath, "mc/" ) then return relPath end
+	return cleanHttpDataPath( ( state.baseDir or "" ) .. relPath )
+end
+
+local function httpPartEntryPath( entry )
+	if istable( entry ) then return entry.path end
+	return entry
+end
+
+local function httpPaletteEntry( state, cache, index )
+	local pi = math.floor( tonumber( index ) or -1 )
+	if pi < 0 then return 0, 0 end
+	local cached = cache[pi]
+	if cached then return cached.id, cached.orient end
+	local spec = state.palette and state.palette[pi + 1]
+	if not isstring( spec ) then return 0, 0 end
+	local id, orient = MC.ParseBlockSpec( spec )
+	id = math.floor( tonumber( id ) or 0 )
+	orient = id ~= 0 and MC.NormalizeOrient( id, orient ) or 0
+	cache[pi] = { id = id, orient = orient }
+	return id, orient
+end
+
+local function decodeHttpLocalWithHeight( li, height )
+	local cs, cs2 = MC.CS, MC.CS * MC.CS
+	li = math.floor( tonumber( li ) or -1 )
+	height = math.floor( tonumber( height ) or MC.CH )
+	if li < 0 or li >= cs2 * height then return nil end
+	local lz = math.floor( li / cs2 )
+	local rem = li - lz * cs2
+	local ly = math.floor( rem / cs )
+	local lx = rem - ly * cs
+	return lx, ly, lz
+end
+
+local function httpChunkKeyForCell( bx, by, bz )
+	local cx, cy, cz = MC.CellToChunk( bx, by, bz )
+	return MC.ChunkKey( cx, cy, cz )
+end
+
+local function applyQueuedHttpDeltas( state, key )
+	local queued = state.queuedDeltas and state.queuedDeltas[key]
+	if not queued then return end
+	state.queuedDeltas[key] = nil
+	for _, cell in ipairs( queued ) do
+		applyNetCell( cell.bx, cell.by, cell.bz, cell.id, cell.orient )
+	end
+end
+
+local function queueHttpDelta( bx, by, bz, id, orient )
+	local state = MC.HttpChunkSync
+	if not state or not state.requestedKeys then return false end
+	local key = httpChunkKeyForCell( bx, by, bz )
+	if state.loadedKeys and state.loadedKeys[key] then return false end
+	if not ( state.requestedKeys[key] or state.loadingKeys[key] or state.pendingKeys[key] ) then return false end
+	state.queuedDeltas = state.queuedDeltas or {}
+	state.queuedDeltas[key] = state.queuedDeltas[key] or {}
+	state.queuedDeltas[key][#state.queuedDeltas[key] + 1] = {
+		bx = bx,
+		by = by,
+		bz = bz,
+		id = id,
+		orient = orient,
+	}
+	return true
+end
+
+function MC.LoadHttpChunkRecord( key, record, partData )
+	local state = MC.HttpChunkSync
+	if not state or not istable( record ) or #record < 4 then return 0 end
+	local srcCX = math.floor( tonumber( record[1] ) or 0 )
+	local srcCY = math.floor( tonumber( record[2] ) or 0 )
+	local srcCZ = math.floor( tonumber( record[3] ) or 0 )
+	local cells = record[4]
+	local savedHeight = math.floor( tonumber( partData and partData.h ) or tonumber( state.height ) or MC.CH )
+	local cache = {}
+	local touched = {}
+	local blocks = 0
+
+	local function loadOneCell( li, paletteIndex )
+		local lx, ly, lz = decodeHttpLocalWithHeight( li, savedHeight )
+		if not lx then return end
+		local bx = srcCX * MC.CS + lx
+		local by = srcCY * MC.CS + ly
+		local bz = srcCZ * savedHeight + lz
+		local cx, cy, cz, nli = MC.CellToChunk( bx, by, bz )
+		if not MC.LocalIndexInRange( nli ) then return end
+		local id, orient = httpPaletteEntry( state, cache, paletteIndex )
+		if not id or id == 0 or ( MC.IsValidBlock and not MC.IsValidBlock( id ) ) then return end
+		local chunk = MC.EnsureChunk( cx, cy, cz )
+		chunk.orients = chunk.orients or {}
+		if chunk.blocks[nli] ~= nil then return end
+		chunk.blocks[nli] = id
+		chunk.orients[nli] = MC.NormalizeOrient( id, orient )
+		chunk.count = ( chunk.count or 0 ) + 1
+		touched[chunk.key] = chunk
+		blocks = blocks + 1
+	end
+
+	if isstring( cells ) then
+		for liText, piText in string.gmatch( cells, "([^:;]+):([^:;]*):?[^;]*;?" ) do
+			loadOneCell( liText, piText )
+		end
+	elseif istable( cells ) then
+		for i = 1, #cells, 2 do
+			loadOneCell( cells[i], cells[i + 1] )
+		end
+	end
+
+	for touchedKey, chunk in pairs( touched ) do
+		if chunk.count and chunk.count > 0 then
+			local cx, cy, cz = MC.ChunkKeyToCoords( touchedKey )
+			if cx then markNeighbours( cx, cy, cz ) end
+			MC.MarkChunkPhysDirty( touchedKey )
+		else
+			MC.World[touchedKey] = nil
+		end
+	end
+	return blocks
+end
+
+local function finishHttpChunkLoad( state, key, record, partData )
+	if not state.requestedKeys[key] then return end
+	local blocks = MC.LoadHttpChunkRecord( key, record, partData )
+	state.loadingKeys[key] = nil
+	state.pendingKeys[key] = nil
+	state.loadedKeys[key] = true
+	beginProgressChunk( blocks )
+	addProgressCells( blocks )
+	finishProgressChunk( key )
+	applyQueuedHttpDeltas( state, key )
+end
+
+local function processHttpPartWaiters( state, partNo )
+	local waiting = state.pendingByPart[partNo]
+	if not waiting then return end
+	state.pendingByPart[partNo] = nil
+	local partData = state.partCache[partNo]
+	if not partData or not istable( partData.chunks ) then return end
+	for key in pairs( waiting ) do
+		local entry = state.chunkIndex and state.chunkIndex[key]
+		local idx = entry and math.floor( tonumber( entry.index ) or 0 )
+		local record = idx and partData.chunks[idx]
+		if istable( record ) then
+			finishHttpChunkLoad( state, key, record, partData )
+		else
+			state.loadingKeys[key] = nil
+			state.pendingKeys[key] = nil
+		end
+	end
+end
+
+local function fetchHttpPart( state, partNo )
+	partNo = math.floor( tonumber( partNo ) or 0 )
+	if partNo <= 0 or state.partCache[partNo] or state.loadingParts[partNo] then return end
+	local partPath = httpManifestRelativePath( state, httpPartEntryPath( state.parts and state.parts[partNo] ) )
+	if not partPath then return end
+	state.loadingParts[partNo] = true
+	http.Fetch( httpURLForPath( state, partPath ), function( body )
+		if MC.HttpChunkSync ~= state then return end
+		state.loadingParts[partNo] = nil
+		writeHttpCache( state, partPath, body )
+		local data = parseHttpSaveJSON( body )
+		if not istable( data ) or not istable( data.chunks ) then
+			MsgN( "[MC] HTTP chunk part failed: invalid payload " .. tostring( partPath ) )
+			return
+		end
+		data.h = data.h or state.height
+		data.p = data.p or state.palette
+		state.partCache[partNo] = data
+		processHttpPartWaiters( state, partNo )
+	end, function( err )
+		if MC.HttpChunkSync ~= state then return end
+		state.loadingParts[partNo] = nil
+		MsgN( "[MC] HTTP chunk part failed: " .. tostring( partPath ) .. " / " .. tostring( err ) )
+	end )
+end
+
+function MC.QueueHttpChunk( key )
+	local state = MC.HttpChunkSync
+	if not state then return false end
+	key = tostring( key or "" )
+	if key == "" or state.loadedKeys[key] then return true end
+	state.requestedKeys[key] = true
+	if not state.ready then
+		state.pendingKeys[key] = true
+		return true
+	end
+	local entry = state.chunkIndex and state.chunkIndex[key]
+	if not istable( entry ) then
+		state.requestedKeys[key] = nil
+		return false
+	end
+	local partNo = math.floor( tonumber( entry.part ) or 0 )
+	local idx = math.floor( tonumber( entry.index ) or 0 )
+	if partNo <= 0 or idx <= 0 then
+		state.requestedKeys[key] = nil
+		return false
+	end
+	state.loadingKeys[key] = true
+	local partData = state.partCache[partNo]
+	if partData and istable( partData.chunks ) and istable( partData.chunks[idx] ) then
+		finishHttpChunkLoad( state, key, partData.chunks[idx], partData )
+		return true
+	end
+	state.pendingByPart[partNo] = state.pendingByPart[partNo] or {}
+	state.pendingByPart[partNo][key] = true
+	fetchHttpPart( state, partNo )
+	return true
+end
+
+local function finishHttpManifest( state, body )
+	local data = parseHttpSaveJSON( body )
+	if not istable( data ) or not istable( data.parts ) or not istable( data.chunkIndex ) then
+		MsgN( "[MC] HTTP manifest failed: invalid payload" )
+		return
+	end
+	writeHttpCache( state, state.manifestPath, body )
+	state.manifest = data
+	state.palette = data.p or data.palette or {}
+	state.chunkIndex = data.chunkIndex or {}
+	state.parts = data.parts or {}
+	state.height = math.floor( tonumber( data.h ) or tonumber( state.height ) or MC.CH )
+	state.ready = true
+	for key in pairs( state.pendingKeys ) do
+		MC.QueueHttpChunk( key )
+	end
+end
+
+function MC.BeginHttpChunkSync( baseUrl, manifestPath, chunks, blocks, height )
+	baseUrl = string.Trim( tostring( baseUrl or "" ) )
+	baseUrl = string.gsub( baseUrl, "/+$", "" )
+	manifestPath = cleanHttpDataPath( manifestPath )
+	if baseUrl == "" or manifestPath == "" then return false end
+	local token = util.CRC( baseUrl .. "|" .. manifestPath )
+	local state = {
+		baseUrl = baseUrl,
+		manifestPath = manifestPath,
+		baseDir = string.GetPathFromFilename( manifestPath ),
+		cacheRoot = "mc/http_cache/" .. token,
+		height = math.floor( tonumber( height ) or MC.CH ),
+		palette = {},
+		chunkIndex = {},
+		parts = {},
+		partCache = {},
+		loadingParts = {},
+		pendingByPart = {},
+		pendingKeys = {},
+		requestedKeys = {},
+		loadingKeys = {},
+		loadedKeys = {},
+		queuedDeltas = {},
+		ready = false,
+	}
+	MC.HttpChunkSync = state
+	resetClientWorldForSnapshot( 0, 0 )
+	MC.SyncProgress.http = true
+	MC.SyncProgress.snapshot = false
+	MC.SyncProgress.httpTotalChunks = math.max( 0, math.floor( tonumber( chunks ) or 0 ) )
+	MC.SyncProgress.httpTotalBlocks = math.max( 0, math.floor( tonumber( blocks ) or 0 ) )
+	http.Fetch( httpURLForPath( state, manifestPath ), function( body )
+		if MC.HttpChunkSync == state then finishHttpManifest( state, body ) end
+	end, function( err )
+		if MC.HttpChunkSync == state then
+			MsgN( "[MC] HTTP manifest failed: " .. tostring( err ) )
+		end
+	end )
+	return true
+end
+
+net.Receive( "mc_http_manifest", function()
+	local baseUrl = net.ReadString()
+	local manifestPath = net.ReadString()
+	local chunks = net.ReadUInt( 32 )
+	local blocks = net.ReadUInt( 32 )
+	local height = net.ReadUInt( 16 )
+	MC.BeginHttpChunkSync( baseUrl, manifestPath, chunks, blocks, height )
+end )
+
+net.Receive( "mc_http_chunk", function()
+	local cx = net.ReadInt( Net.COORD_BITS )
+	local cy = net.ReadInt( Net.COORD_BITS )
+	local cz = net.ReadInt( Net.COORD_BITS )
+	MC.QueueHttpChunk( MC.ChunkKey( cx, cy, cz ) )
+end )
+
 net.Receive( "mc_snapshot_begin", function()
 	local token = net.ReadString()
 	local isError = net.ReadBool()
@@ -516,6 +851,7 @@ net.Receive( "mc_set", function()
 	local orient = net.ReadUInt( Net.ORIENT_BITS )
 
 	queueSnapshotDelta( bx, by, bz, id, orient )
+	if queueHttpDelta( bx, by, bz, id, orient ) then return end
 	applyNetCell( bx, by, bz, id, orient )
 end )
 
@@ -529,7 +865,9 @@ net.Receive( "mc_set_bulk", function()
 		local orient = net.ReadUInt( Net.ORIENT_BITS )
 
 		queueSnapshotDelta( bx, by, bz, id, orient )
-		applyNetCell( bx, by, bz, id, orient )
+		if not queueHttpDelta( bx, by, bz, id, orient ) then
+			applyNetCell( bx, by, bz, id, orient )
+		end
 	end
 end )
 
@@ -548,6 +886,17 @@ net.Receive( "mc_unload_chunk", function()
 	MC.PhysDirty[key] = nil
 	MC.PhysDirtyPriority[key] = nil
 	MC.PendingFull[key] = nil
+	local httpState = MC.HttpChunkSync
+	if httpState then
+		httpState.requestedKeys[key] = nil
+		httpState.pendingKeys[key] = nil
+		httpState.loadingKeys[key] = nil
+		httpState.loadedKeys[key] = nil
+		if httpState.queuedDeltas then httpState.queuedDeltas[key] = nil end
+		for _, waiting in pairs( httpState.pendingByPart or {} ) do
+			waiting[key] = nil
+		end
+	end
 
 	for predKey, pending in pairs( MC.PendingPredictions or {} ) do
 		local pcx, pcy, pcz = MC.CellToChunk( pending.bx, pending.by, pending.bz )
@@ -570,6 +919,7 @@ net.Receive( "mc_clear", function()
 	MC.PhysDirtyPriority = {}
 	MC.PendingFull = {}
 	MC.PendingPredictions = {}
+	MC.HttpChunkSync = nil
 	MC.SyncProgress = { expected = 0, received = 0, chunks = 0, doneChunks = 0, active = false, lastUpdate = CurTime() }
 	PendingFullAckBytes = 0
 end )

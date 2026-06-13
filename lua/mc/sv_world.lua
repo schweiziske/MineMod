@@ -97,6 +97,30 @@ local function lazyLoadEnabled()
 	return ( MC.Config.LargeWorldLazyLoad or 1 ) ~= 0
 end
 
+local function httpChunkDeliveryEnabled()
+	if C.ChunkHTTPEnabled then return C.ChunkHTTPEnabled:GetBool() end
+	return ( MC.Config.ChunkHTTPEnabled or 0 ) ~= 0
+end
+
+local function httpChunkBaseURL()
+	local url
+	if C.ChunkHTTPBaseURL and C.ChunkHTTPBaseURL.GetString then
+		url = C.ChunkHTTPBaseURL:GetString()
+	else
+		url = MC.Config.ChunkHTTPBaseURL
+	end
+	url = string.Trim( tostring( url or "" ) )
+	return string.gsub( url, "/+$", "" )
+end
+
+local function httpChunkDeliveryActive()
+	return httpChunkDeliveryEnabled()
+		and httpChunkBaseURL() ~= ""
+		and SV.ChunkStore
+		and SV.ChunkStore.IsLazyWorld
+		and SV.ChunkStore.IsLazyWorld()
+end
+
 function SV.EntityTriggersChunkInterest( ent )
 	if not IsValid( ent ) then return false end
 	if ent.IsWorld and ent:IsWorld() then return false end
@@ -1418,6 +1442,33 @@ local function sendUnloadChunk( ply, key )
 	net.Send( ply )
 end
 
+local function sendHttpManifest( ply )
+	if not IsValid( ply ) or not httpChunkDeliveryActive() then return false end
+	if not SV.ChunkStore or not SV.ChunkStore.HttpManifestPayload then return false end
+	local payload = SV.ChunkStore.HttpManifestPayload()
+	if not payload or not payload.path or payload.path == "" then return false end
+	net.Start( "mc_http_manifest" )
+		net.WriteString( httpChunkBaseURL() )
+		net.WriteString( payload.path )
+		net.WriteUInt( math.max( 0, math.floor( tonumber( payload.chunks ) or 0 ) ), 32 )
+		net.WriteUInt( math.max( 0, math.floor( tonumber( payload.blocks ) or 0 ) ), 32 )
+		net.WriteUInt( math.Clamp( math.floor( tonumber( payload.height ) or MC.CH ), 1, 65535 ), 16 )
+	net.Send( ply )
+	return true
+end
+
+local function sendHttpChunkInterest( ply, key )
+	if not IsValid( ply ) then return false end
+	local cx, cy, cz = MC.ChunkKeyToCoords( key )
+	if not cx then return false end
+	net.Start( "mc_http_chunk" )
+		net.WriteInt( cx, Net.COORD_BITS )
+		net.WriteInt( cy, Net.COORD_BITS )
+		net.WriteInt( cz, Net.COORD_BITS )
+	net.Send( ply )
+	return true
+end
+
 local function enqueueSyncKey( ply, key )
 	local chunk = MC.GetChunkByKey( key )
 	if ( not chunk or not chunk.count or chunk.count <= 0 ) and SV.ChunkStore and SV.ChunkStore.IsLazyWorld and SV.ChunkStore.IsLazyWorld() then
@@ -1442,7 +1493,14 @@ function SV.UpdatePlayerStreamInterest( ply, desired )
 
 	for key in pairs( desired ) do
 		if not loaded[key] then
-			if enqueueSyncKey( ply, key ) then
+			if httpChunkDeliveryActive()
+				and SV.ChunkStore
+				and SV.ChunkStore.HasBaseChunk
+				and SV.ChunkStore.HasBaseChunk( key )
+				and ( not SV.ChunkStore.HasChunkEdits or not SV.ChunkStore.HasChunkEdits( key ) )
+				and sendHttpChunkInterest( ply, key ) then
+				loaded[key] = true
+			elseif enqueueSyncKey( ply, key ) then
 				loaded[key] = true
 			end
 		end
@@ -1483,6 +1541,7 @@ function SV.BeginSync( ply )
 	SV.PlayerLoadedChunks[ply] = {}
 	SV.PlayerFullSnapshot[ply] = nil
 	SV.SyncQueue[ply] = { keys = {}, i = 1, inflightBytes = 0, queuedKeys = {} }
+	sendHttpManifest( ply )
 	if syncSnapshotEnabled() and SV.BeginSnapshotSync and SV.BeginSnapshotSync( ply ) then
 		return
 	end
