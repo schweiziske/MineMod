@@ -81,6 +81,14 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h )
 	local b = MC.Blocks[id]
 	if not b then return end
 
+	if b.iconSource and MC.ResolveBlock then
+		local source = MC.ResolveBlock( b.iconSource )
+		if source and source.id and source.id ~= id then
+			MC.DrawMinecraftBlockIcon( source.id, x, y, w, h )
+			return
+		end
+	end
+
 	local orient = MC.DefaultOrient and MC.DefaultOrient( id ) or 0
 	if MC.BlockIsFullCube and not MC.BlockIsFullCube( id, orient ) then
 		MC.DrawBlockIcon( id, x, y, w, h )
@@ -114,6 +122,8 @@ end
 
 MC.CreativeCategories = MC.CreativeCategories or {
 	{ id = "all", label = "全部" },
+	{ id = "color_blocks", label = "色块" },
+	{ id = "slopes", label = "斜坡" },
 	{ id = "custom", label = "自定义" },
 	{ id = "building", label = "建筑方块" },
 	{ id = "natural", label = "自然方块" },

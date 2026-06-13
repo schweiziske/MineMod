@@ -117,7 +117,7 @@ function SWEP:PrimaryAttack()
 		elseif MC.SV.SyncCell then
 			MC.SV.SyncCell( owner, bx, by, bz )
 		end
-	elseif CLIENT and IsFirstTimePredicted() and owner == LocalPlayer() then
+	elseif CLIENT and not game.SinglePlayer() and IsFirstTimePredicted() and owner == LocalPlayer() then
 		local bx, by, bz = breakTarget( owner, aim, owner:GetEyeTrace() )
 		if bx and MC.CanPreviewBreak and MC.CanPreviewBreak( owner, bx, by, bz ) and MC.PredictBreakBlock then
 			MC.PredictBreakBlock( bx, by, bz, owner )
@@ -152,7 +152,7 @@ function SWEP:SecondaryAttack()
 		elseif MC.SV.SyncCell then
 			MC.SV.SyncCell( owner, bx, by, bz )
 		end
-	elseif CLIENT and IsFirstTimePredicted() and owner == LocalPlayer() then
+	elseif CLIENT and not game.SinglePlayer() and IsFirstTimePredicted() and owner == LocalPlayer() then
 		local id = selectedID( owner )
 		if MC.CreativeHotbarSelectionSynced and not MC.CreativeHotbarSelectionSynced( owner, id ) then return end
 		local bx, by, bz, orient = placeTarget( owner, aim, owner:GetEyeTrace(), id, true )

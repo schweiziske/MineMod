@@ -19,6 +19,7 @@ if MC.CustomNextBlockID <= MC.CustomBlockBaseID or MC.CustomNextBlockID > MC.Cus
 end
 MC.CustomLegacyBlockIDMap = MC.CustomLegacyBlockIDMap or {}
 MC.CustomLegacyBlockIDMap[60001] = 61001
+MC.CustomLegacyBlockIDMap[70001] = 61001
 MC.CustomLegacyBlockIDMap[60010] = 61010
 MC.CustomLegacyBlockIDMap[60011] = 61011
 MC.CustomLegacyBlockIDMap[60012] = 61012

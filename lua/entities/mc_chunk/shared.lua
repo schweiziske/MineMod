@@ -30,6 +30,7 @@ local function greedyBoxes( chunk )
 	local function idx( x, y, z ) return x + y * CS + z * CS2 end
 
 	local solid = {}
+	local customConvexes = {}
 	local shapeGroups = {}
 	local function shapeKey( box )
 		return table.concat( { box[1], box[2], box[3], box[4], box[5], box[6] }, ":" )
@@ -50,6 +51,21 @@ local function greedyBoxes( chunk )
 		end
 		group.cells[idx( lx, ly, lz )] = true
 	end
+	local function addCustomConvex( lx, ly, lz, convex )
+		if type( convex ) ~= "table" then return end
+		local points = {}
+		for _, p in ipairs( convex ) do
+			if type( p ) == "table" then
+				local x = tonumber( p[1] or p.x )
+				local y = tonumber( p[2] or p.y )
+				local z = tonumber( p[3] or p.z )
+				if x and y and z then
+					points[#points + 1] = { lx + x, ly + y, lz + z }
+				end
+			end
+		end
+		if #points >= 4 then customConvexes[#customConvexes + 1] = points end
+	end
 
 	for li, id in pairs( chunk.blocks ) do
 		local b = MC.Blocks[id]
@@ -62,9 +78,16 @@ local function greedyBoxes( chunk )
 			if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
 				solid[li] = true
 			else
-				local blockBoxes = ( MC.BlockCollisionBoxes or MC.BlockBoxes )( id, orient, bx, by, bz )
-				for _, box in ipairs( blockBoxes or {} ) do
-					addShapeBox( lx, ly, lz, box )
+				local blockConvexes = MC.BlockCollisionConvexes and MC.BlockCollisionConvexes( id, orient, bx, by, bz ) or nil
+				if blockConvexes then
+					for _, convex in ipairs( blockConvexes ) do
+						addCustomConvex( lx, ly, lz, convex )
+					end
+				else
+					local blockBoxes = ( MC.BlockCollisionBoxes or MC.BlockBoxes )( id, orient, bx, by, bz )
+					for _, box in ipairs( blockBoxes or {} ) do
+						addShapeBox( lx, ly, lz, box )
+					end
 				end
 			end
 		end
@@ -191,7 +214,7 @@ local function greedyBoxes( chunk )
 		addMergedShapeGroup( group )
 	end
 
-	return boxes
+	return boxes, customConvexes
 end
 
 -- (re)build this chunk's multiconvex collision from current block data.
@@ -205,8 +228,8 @@ function ENT:RebuildPhysics()
 		return
 	end
 
-	local boxes = greedyBoxes( chunk )
-	if #boxes == 0 then
+	local boxes, customConvexes = greedyBoxes( chunk )
+	if #boxes == 0 and #customConvexes == 0 then
 		self:PhysicsDestroy()
 		return
 	end
@@ -217,12 +240,19 @@ function ENT:RebuildPhysics()
 		local b = boxes[i]
 		local x0, y0, z0 = b[1] * BS, b[2] * BS, b[3] * BS
 		local x1, y1, z1 = b[4] * BS, b[5] * BS, b[6] * BS
-		convexes[i] = {
+		convexes[#convexes + 1] = {
 			Vector( x0, y0, z0 ), Vector( x1, y0, z0 ),
 			Vector( x0, y1, z0 ), Vector( x1, y1, z0 ),
 			Vector( x0, y0, z1 ), Vector( x1, y0, z1 ),
 			Vector( x0, y1, z1 ), Vector( x1, y1, z1 ),
 		}
+	end
+	for _, convex in ipairs( customConvexes ) do
+		local points = {}
+		for _, p in ipairs( convex ) do
+			points[#points + 1] = Vector( p[1] * BS, p[2] * BS, p[3] * BS )
+		end
+		if #points >= 4 then convexes[#convexes + 1] = points end
 	end
 
 	-- Collision recipe copied from the working voxel-destruction addon
