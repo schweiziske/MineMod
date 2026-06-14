@@ -12,11 +12,17 @@ local SV = MC.SV
 local C = MC.Config
 local Net = MC.Net
 
+local function L( ply, key, fallback, vars )
+	return MC.TFor and MC.TFor( ply, key, fallback, vars ) or fallback
+end
+
 local PRESET_DIR = "mc/presets"
 local PRESET_META_DIR = "mc/preset_meta"
 local PRESET_COVER_DIR = "mc/preset_covers"
-local PRESET_DATA_PART_BYTES = 60000
-local PRESET_COVER_PART_BYTES = 60000
+local PRESET_DATA_PART_BYTES = 16384
+local PRESET_COVER_PART_BYTES = 16384
+local PRESET_DOWNLOAD_PART_INTERVAL = 0.05
+local PRESET_PLACE_COOLDOWN = 0.35
 local MAX_PRESET_DATA_BYTES = 1024 * 1024 * 4
 local MAX_PRESET_COVER_BYTES = 1024 * 1024 * 2
 local MAX_NET_PRESETS = 4095
@@ -103,9 +109,17 @@ end
 
 local function canEditPresets( ply )
 	if C.AdminOnly and C.AdminOnly:GetBool() and IsValid( ply ) and not ply:IsAdmin() then
-		ply:ChatPrint( "[MC] 只有管理员可以保存/放置预设 (mc_admin_only)" )
+		ply:ChatPrint( "[MC] " .. L( ply, "server.preset_admin", "只有管理员可以保存/放置预设 (mc_admin_only)" ) )
 		return false
 	end
+	return true
+end
+
+local function presetPlaceCooldownOK( ply )
+	if not IsValid( ply ) then return true end
+	local now = CurTime()
+	if ( ply.mcNextPresetPlace or 0 ) > now then return false end
+	ply.mcNextPresetPlace = now + PRESET_PLACE_COOLDOWN
 	return true
 end
 
@@ -383,6 +397,7 @@ function SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 	rotation = MC.PresetNormalizeRotation and MC.PresetNormalizeRotation( rotation ) or 0
 	origin = asCell( origin )
 	if not origin then return false, "invalid_origin" end
+	if not presetPlaceCooldownOK( ply ) then return false, "preset_place_cooldown" end
 	local data, err = SV.LoadPreset( presetName )
 	if not data then return false, err end
 
@@ -440,8 +455,9 @@ function SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 	local totalChanged = ( changed or 0 ) + cleared
 	if totalChanged <= 0 then return false, bulkErr or "unchanged" end
 	if IsValid( ply ) then
-		local action = overwrite and "已覆盖预设: " or "已放置预设: "
-		ply:ChatPrint( "[MC] " .. action .. tostring( data.name or presetName ) .. " (" .. totalChanged .. " changes)" )
+		local key = overwrite and "server.preset_overwritten" or "server.preset_placed"
+		local fallback = overwrite and "已覆盖预设: {name} ({changes} changes)" or "已放置预设: {name} ({changes} changes)"
+		ply:ChatPrint( "[MC] " .. L( ply, key, fallback, { name = tostring( data.name or presetName ), changes = totalChanged } ) )
 	end
 	return true, totalChanged
 end
@@ -502,7 +518,7 @@ local function sendPresetData( ply, presetName )
 
 	local timerName = "MC_PresetData_" .. ply:EntIndex() .. "_" .. util.CRC( tostring( presetName ) .. tostring( SysTime() ) )
 	local i = 1
-	timer.Create( timerName, 0.01, parts, function()
+	timer.Create( timerName, PRESET_DOWNLOAD_PART_INTERVAL, parts, function()
 		if not IsValid( ply ) then timer.Remove( timerName ) return end
 		local first = ( i - 1 ) * PRESET_DATA_PART_BYTES + 1
 		local chunk = string.sub( compressed, first, first + PRESET_DATA_PART_BYTES - 1 )
@@ -535,7 +551,7 @@ local function sendPresetCoverToClient( ply, cover )
 	net.Send( ply )
 
 	local i = 1
-	timer.Create( timerName, 0.01, parts, function()
+	timer.Create( timerName, PRESET_DOWNLOAD_PART_INTERVAL, parts, function()
 		if not IsValid( ply ) then timer.Remove( timerName ) return end
 		local first = ( i - 1 ) * PRESET_COVER_PART_BYTES + 1
 		local chunk = string.sub( data, first, first + PRESET_COVER_PART_BYTES - 1 )
@@ -581,10 +597,9 @@ net.Receive( "mc_preset_save", function( _, ply )
 
 	local ok, result = SV.SavePreset( presetName, cornerA, cornerB, anchor, cover, ply )
 	if ok then
-		sendPresetList( ply, "预设已保存: " .. tostring( presetName ) )
-		sendPresetData( ply, presetName )
+		sendPresetList( ply, L( ply, "server.preset_saved", "预设已保存: {name}", { name = tostring( presetName ) } ) )
 	else
-		sendPresetList( ply, "预设保存失败: " .. tostring( result ), true )
+		sendPresetList( ply, L( ply, "server.preset_save_failed", "预设保存失败: {err}", { err = tostring( result ) } ), true )
 	end
 end )
 
@@ -605,7 +620,7 @@ net.Receive( "mc_preset_place", function( _, ply )
 	end
 	local ok, err = SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 	if not ok and IsValid( ply ) then
-		ply:ChatPrint( "[MC] 预设放置失败: " .. tostring( err ) )
+		ply:ChatPrint( "[MC] " .. L( ply, "server.preset_place_failed", "预设放置失败: {err}", { err = tostring( err ) } ) )
 	end
 end )
 

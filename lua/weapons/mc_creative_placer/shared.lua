@@ -5,10 +5,20 @@
 
 if SERVER then AddCSLuaFile() end
 
-SWEP.PrintName     = "MC 创造方块放置器"
+local function L( key, fallback, vars )
+	return MC and MC.T and MC.T( key, fallback, vars ) or fallback
+end
+
+local function blockDisplayText( blockOrID )
+	local b = type( blockOrID ) == "table" and blockOrID or ( MC and MC.Blocks and MC.Blocks[blockOrID] )
+	if not b then return "" end
+	return MC.BlockDisplayName and MC.BlockDisplayName( b, b.dispZH or b.disp ) or b.disp
+end
+
+SWEP.PrintName     = L( "weapon.mc_creative_placer.name", "MC 创造方块放置器" )
 SWEP.Author        = "MC"
-SWEP.Purpose       = "放置 / 破坏 Minecraft 方块，并从创造物品栏选择方块"
-SWEP.Instructions  = "左键破坏  右键放置  Reload 创造物品栏"
+SWEP.Purpose       = L( "weapon.mc_creative_placer.purpose", "放置 / 破坏 Minecraft 方块，并从创造物品栏选择方块" )
+SWEP.Instructions  = L( "weapon.mc_creative_placer.instructions", "左键破坏  右键放置  Reload 创造物品栏" )
 SWEP.Category      = "MC"
 
 SWEP.Spawnable     = true
@@ -173,6 +183,10 @@ function SWEP:Reload()
 end
 
 if CLIENT then
+	function SWEP:GetPrintName()
+		return L( "weapon.mc_creative_placer.name", self.PrintName or "MC 创造方块放置器" )
+	end
+
 	function SWEP:DrawHUD()
 		local ply = LocalPlayer()
 		local id = selectedID( ply )
@@ -196,14 +210,14 @@ if CLIENT then
 
 		draw.RoundedBox( 6, px, py, panelW, panelH, Color( 0, 0, 0, 175 ) )
 		MC.DrawMinecraftBlockIcon( id, x, y, w, h )
-		MC.DrawFittedText( b.disp, "mc_hud_big", { "mc_hud_fit_24", "mc_hud_fit_20", "mc_hud_fit_16" }, tx, py + 22, color_white, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, maxTextW )
+		MC.DrawFittedText( blockDisplayText( b ), "mc_hud_big", { "mc_hud_fit_24", "mc_hud_fit_20", "mc_hud_fit_16" }, tx, py + 22, color_white, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, maxTextW )
 		if state ~= "" then
 			draw.SimpleText( state, "mc_hud_small", tx, py + 58, Color( 210, 230, 255 ), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 		end
 		if MC.DrawCreativeHotbar then
 			MC.DrawCreativeHotbar( sw * 0.5, hotbarY, { slotSize = slotSize } )
 		end
-		draw.SimpleText( "左键破坏   右键放置   中键取块   Reload 创造物品栏", "mc_hud_small", sw * 0.5, sh - 10, Color( 255, 255, 255, 190 ), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+		draw.SimpleText( L( "weapon.mc_creative_placer.hud", "左键破坏   右键放置   中键取块   Reload 创造物品栏" ), "mc_hud_small", sw * 0.5, sh - 10, Color( 255, 255, 255, 190 ), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
 
 		surface.SetDrawColor( 255, 255, 255, 220 )
 		surface.DrawRect( sw * 0.5 - 1, sh * 0.5 - 1, 2, 2 )

@@ -88,12 +88,17 @@ MC.ChunkEnts = MC.ChunkEnts or {}  -- key -> mc_chunk entity (clientside physics
 MC.PhysDirty = MC.PhysDirty or {}  -- key -> due time (clientside collision rebuild)
 MC.PhysDirtyPriority = MC.PhysDirtyPriority or {} -- player edits that should not wait behind sync/import work
 local PHYS_REBUILD_DELAY = 0.12
+local CLIENT_PHYS_REBUILD_FRAME_MS = 1
+local CLIENT_PHYS_REBUILD_TICK_INTERVAL = 16
+local NextClientPhysRebuildAt = 0
 
--- safety valve: clientside collision (movement prediction). 0 = server-only.
+-- Clientside collision is a small local prediction bubble; the server remains authoritative.
 MC.ClientCollision = CreateClientConVar( "mc_client_collision", "1", true, false,
 	"Build clientside block collision for smooth movement prediction (0 = server-only)" )
-MC.ClientCollisionChunkSpan = CreateClientConVar( "mc_client_collision_chunk_span", tostring( MC.Config.ClientCollisionChunkSpan or 3 ), true, false,
-	"Chunk span around the local player that builds clientside prediction collision; 0 disables" )
+MC.ClientCollisionChunkSpan = CreateClientConVar( "mc_client_collision_chunk_span", tostring( MC.Config.ClientCollisionChunkSpan or 1 ), true, false,
+	"Chunk radius around the local player that builds clientside prediction collision; 0 disables" )
+MC.ClientCollisionDefaultVersion = CreateClientConVar( "mc_client_collision_default_version", "0", true, false,
+	"Internal migration marker for MC client collision defaults" )
 MC.MeshBuildsPerFrame = CreateClientConVar( "mc_mesh_builds_per_frame", tostring( MC.Config.MeshBuildsPerFrame or 2 ), true, false,
 	"Maximum MC chunk meshes built per client frame" )
 MC.MeshBuildFrame = CreateClientConVar( "mc_mesh_build_frame_ms", tostring( MC.Config.MeshBuildFrameMS or 4 ), true, false,
@@ -101,41 +106,66 @@ MC.MeshBuildFrame = CreateClientConVar( "mc_mesh_build_frame_ms", tostring( MC.C
 MC.ClientCollisionInterest = MC.ClientCollisionInterest or {}
 
 local LastClientCollisionCenterKey
-local LastClientCollisionSpan = -1
+local LastClientCollisionRadius = -1
 local LastClientCollisionEnabled = nil
 
-local function clientCollisionSpan()
+local function clientCollisionEnabled()
+	return MC.ClientCollision:GetBool()
+end
+
+local function clientCollisionRadius()
 	return math.Clamp( MC.ClientCollisionChunkSpan:GetInt(), 0, 32 )
+end
+
+local function clientCollisionWindowSpan( radius )
+	radius = math.Clamp( math.floor( tonumber( radius ) or 0 ), 0, 32 )
+	return radius * 2 + 1
 end
 
 function MC.IsChunkInClientCollisionInterest( key )
 	return MC.ClientCollisionInterest and MC.ClientCollisionInterest[key] == true
 end
 
+if RunConsoleCommand then
+	local defaultVersion = MC.ClientCollisionDefaultVersion:GetInt()
+	local configuredRadius = MC.ClientCollisionChunkSpan:GetInt()
+	if defaultVersion < 1 and not MC.ClientCollision:GetBool() and configuredRadius <= 0 then
+		RunConsoleCommand( "mc_client_collision", "1" )
+		RunConsoleCommand( "mc_client_collision_chunk_span", tostring( MC.Config.ClientCollisionChunkSpan or 1 ) )
+		configuredRadius = MC.Config.ClientCollisionChunkSpan or 1
+	elseif defaultVersion < 2 and configuredRadius == 3 then
+		RunConsoleCommand( "mc_client_collision_chunk_span", tostring( MC.Config.ClientCollisionChunkSpan or 1 ) )
+	end
+	if defaultVersion < 2 then
+		RunConsoleCommand( "mc_client_collision_default_version", "2" )
+	end
+end
+
 function MC.RefreshClientCollisionInterest( force )
-	local enabled = MC.ClientCollision:GetBool()
-	local span = clientCollisionSpan()
+	local enabled = clientCollisionEnabled()
+	local radius = clientCollisionRadius()
 	local lp = LocalPlayer()
 	local centerKey
 	local desired = {}
 
-	if enabled and span > 0 and IsValid( lp ) then
+	if enabled and radius > 0 and IsValid( lp ) then
 		local pos = lp.WorldSpaceCenter and lp:WorldSpaceCenter() or lp:GetPos()
 		local bx, by, bz = MC.WorldToCell( pos )
 		local cx, cy, cz = MC.CellToChunk( bx, by, bz )
+		local windowSpan = clientCollisionWindowSpan( radius )
 		centerKey = MC.ChunkKey( cx, cy, cz )
-		desired = MC.ChunkInterestKeysAroundPos( pos, span, span )
+		desired = MC.ChunkInterestKeysAroundPos( pos, windowSpan, windowSpan )
 	end
 
 	if not force and centerKey == LastClientCollisionCenterKey
-	and span == LastClientCollisionSpan and enabled == LastClientCollisionEnabled then
+	and radius == LastClientCollisionRadius and enabled == LastClientCollisionEnabled then
 		return
 	end
 
 	local old = MC.ClientCollisionInterest or {}
 	MC.ClientCollisionInterest = desired
 	LastClientCollisionCenterKey = centerKey
-	LastClientCollisionSpan = span
+	LastClientCollisionRadius = radius
 	LastClientCollisionEnabled = enabled
 
 	for key in pairs( old ) do
@@ -826,6 +856,20 @@ local function nextDirtyMeshKeys( maxKeys )
 	return keys
 end
 
+local function nextDirtyPhysKeys( maxKeys, now )
+	local keys = {}
+	for key, due in pairs( MC.PhysDirty ) do
+		if due and not MC.PhysDirtyPriority[key] and ( due == true or due <= now ) then
+			keys[#keys + 1] = key
+		end
+	end
+	table.sort( keys, function( a, b )
+		return chunkDistanceScore( a ) < chunkDistanceScore( b )
+	end )
+	while #keys > maxKeys do keys[#keys] = nil end
+	return keys
+end
+
 -- rebuild a few chunks per frame to avoid hitches (meshes + clientside collision)
 hook.Remove( "Think", "mc_meshbuild" )
 hook.Add( "Think", "mc_meshbuild", function()
@@ -843,7 +887,7 @@ hook.Add( "Think", "mc_meshbuild", function()
 	end
 
 	if next( MC.PhysDirty ) then
-		local enabled = MC.ClientCollision:GetBool()
+		local enabled = clientCollisionEnabled()
 		local priorityBudget = 8
 		for key in pairs( MC.PhysDirtyPriority ) do
 			if MC.PhysDirty[key] then
@@ -855,14 +899,14 @@ hook.Add( "Think", "mc_meshbuild", function()
 			end
 		end
 
-		local budget = 3
+		local budget = 1
 		local now = CurTime()
-		for key in pairs( MC.PhysDirty ) do
-			local due = MC.PhysDirty[key]
-			if not MC.PhysDirtyPriority[key] and ( due == true or due <= now ) then
+		if now >= NextClientPhysRebuildAt then
+			local physDeadline = SysTime() + CLIENT_PHYS_REBUILD_FRAME_MS / 1000
+			for _, key in ipairs( nextDirtyPhysKeys( budget, now ) ) do
 				rebuildChunkPhys( key, enabled )
-				budget = budget - 1
-				if budget <= 0 then break end
+				NextClientPhysRebuildAt = now + engine.TickInterval() * CLIENT_PHYS_REBUILD_TICK_INTERVAL
+				if SysTime() >= physDeadline then break end
 			end
 		end
 	end

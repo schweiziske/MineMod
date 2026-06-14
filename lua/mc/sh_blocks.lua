@@ -303,11 +303,13 @@ function MC.RegisterBlock( def )
 	local handler = def.handlers or ( handlerName and MC.BlockHandlers[handlerName] ) or nil
 	if handler and handler.OnTick then MC.HasBlockTickHandlers = true end
 
+	local displayName = blockDisp( { name = name, disp = def.disp, mcid = mcid, id = id } )
 	local b = {
 		id = id,
 		name = name,
 		mcid = mcid,
-		disp = blockDisp( { name = name, disp = def.disp, mcid = mcid, id = id } ),
+		disp = displayName,
+		dispZH = displayName,
 		solid = shouldForceSolid( name ) or solid,
 		transparent = def.transparent == true,
 		shape = def.shape,
@@ -342,6 +344,7 @@ function MC.RegisterBlock( def )
 		orient = stateRule,
 		place = def.placeRule or def.place,
 	}
+	if MC.BlockDisplayName then b.disp = MC.BlockDisplayName( b, displayName ) end
 
 	MC.Blocks[id] = b
 	MC.BlockByName[mcid] = b
@@ -649,6 +652,7 @@ registerImportFallbackBlock( { id = 60009, name = "flower", mcid = "minecraft:da
 
 if MC.RegisterPendingCustomBlocks then MC.RegisterPendingCustomBlocks() end
 rebuildBlockList()
+if MC.RefreshBlockDisplayNames then MC.RefreshBlockDisplayNames() end
 
 function MC.DefaultOrient( id )
 	local b = MC.Blocks[id]

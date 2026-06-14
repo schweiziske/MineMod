@@ -367,8 +367,7 @@ function Store.HydrateChunkNow( key, priority )
 	Store.LoadedKeys[key] = true
 	Store.QueuedKeys[key] = nil
 	if chunk and chunk.count and chunk.count > 0 and priority then
-		SV.ServerCollisionActiveChunks[key] = true
-		SV.EnsureChunkEnt( chunk, true )
+		SV.EnsureChunkEnt( chunk )
 		SV.MarkPhysDirty( key, true )
 	end
 	return chunk

@@ -4,6 +4,16 @@
 
 MC = MC or {}
 
+local function L( key, fallback, vars )
+	return MC.T and MC.T( key, fallback, vars ) or fallback
+end
+
+local function blockDisplayText( blockOrID )
+	local b = type( blockOrID ) == "table" and blockOrID or MC.Blocks[blockOrID]
+	if not b then return "" end
+	return MC.BlockDisplayName and MC.BlockDisplayName( b, b.dispZH or b.disp ) or b.disp
+end
+
 surface.CreateFont( "mc_hud", { font = "Roboto", size = 22, weight = 600 } )
 surface.CreateFont( "mc_hud_small", { font = "Roboto", size = 16, weight = 500 } )
 surface.CreateFont( "mc_hud_big", { font = "Roboto", size = 28, weight = 700 } )
@@ -121,17 +131,17 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h )
 end
 
 MC.CreativeCategories = MC.CreativeCategories or {
-	{ id = "all", label = "全部" },
-	{ id = "color_blocks", label = "色块" },
-	{ id = "slopes", label = "斜坡" },
-	{ id = "custom", label = "自定义" },
-	{ id = "building", label = "建筑方块" },
-	{ id = "natural", label = "自然方块" },
-	{ id = "functional", label = "功能方块" },
-	{ id = "redstone", label = "红石" },
-	{ id = "decoration", label = "装饰" },
-	{ id = "transparent", label = "透明/玻璃" },
-	{ id = "plants", label = "植物" },
+	{ id = "all", labelKey = "creative.category.all", label = MC.T( "creative.category.all", "全部" ) },
+	{ id = "color_blocks", labelKey = "creative.category.color_blocks", label = "色块" },
+	{ id = "slopes", labelKey = "creative.category.slopes", label = "斜坡" },
+	{ id = "custom", labelKey = "creative.category.custom", label = "自定义" },
+	{ id = "building", labelKey = "creative.category.building", label = "建筑方块" },
+	{ id = "natural", labelKey = "creative.category.natural", label = "自然方块" },
+	{ id = "functional", labelKey = "creative.category.functional", label = "功能方块" },
+	{ id = "redstone", labelKey = "creative.category.redstone", label = "红石" },
+	{ id = "decoration", labelKey = "creative.category.decoration", label = "装饰" },
+	{ id = "transparent", labelKey = "creative.category.transparent", label = "透明/玻璃" },
+	{ id = "plants", labelKey = "creative.category.plants", label = "植物" },
 }
 local CREATIVE_GRID_COLS = 9
 local CREATIVE_GRID_ROWS = 4
@@ -430,6 +440,8 @@ local function blockText( b )
 		tostring( b and b.name or "" ),
 		tostring( b and b.mcid or "" ),
 		tostring( b and b.disp or "" ),
+		tostring( b and b.dispZH or "" ),
+		tostring( b and MC.BlockDisplayName and MC.BlockDisplayName( b, b.dispZH or b.disp, "en_us" ) or "" ),
 	}, " " ) )
 end
 
@@ -570,7 +582,7 @@ local function addCreativeButton( layout, id, onSelect, frame, closeOnSelect )
 	btn:SetText( "" )
 
 	local hint = MC.BlockStateHint( id )
-	btn:SetTooltip( b.disp .. "\n" .. ( b.mcid or b.name or tostring( id ) ) .. ( hint ~= "" and "\n" .. hint or "" ) )
+	btn:SetTooltip( blockDisplayText( b ) .. "\n" .. ( b.mcid or b.name or tostring( id ) ) .. ( hint ~= "" and "\n" .. hint or "" ) )
 
 	btn.Paint = function( s, w, h )
 		local hotbar = MC.EnsureCreativeHotbar()
@@ -583,7 +595,7 @@ local function addCreativeButton( layout, id, onSelect, frame, closeOnSelect )
 		end
 		local icon = math.min( w - 22, h - 38, 76 )
 		MC.DrawMinecraftBlockIcon( id, w * 0.5 - icon * 0.5, 8, icon, icon )
-		MC.DrawFittedText( b.disp, "mc_hud_small", { "mc_hud_fit_16" }, w * 0.5, h - 17, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, w - 8 )
+		MC.DrawFittedText( blockDisplayText( b ), "mc_hud_small", { "mc_hud_fit_16" }, w * 0.5, h - 17, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, w - 8 )
 	end
 
 	btn.DoClick = function()
@@ -621,7 +633,7 @@ local function createCreativeHotbarPanel( parent )
 				MC.DrawMinecraftBlockIcon( id, w * 0.5 - 22, 11, 44, 44 )
 			end
 			if b then
-				MC.DrawFittedText( b.disp, "mc_hud_small", { "mc_hud_fit_16" }, w * 0.5, h - 13, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, w - 8 )
+				MC.DrawFittedText( blockDisplayText( b ), "mc_hud_small", { "mc_hud_fit_16" }, w * 0.5, h - 13, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, w - 8 )
 			end
 		end
 	end
@@ -650,7 +662,7 @@ function MC.OpenCreativeInventory( onSelect, opts )
 	end
 
 	local fr = vgui.Create( "DFrame" )
-	fr:SetTitle( "创造物品栏" )
+	fr:SetTitle( L( "creative.title", "创造物品栏" ) )
 	fr:SetSize( 960, 700 )
 	fr:Center()
 	fr:MakePopup()
@@ -679,7 +691,7 @@ function MC.OpenCreativeInventory( onSelect, opts )
 	search:Dock( TOP )
 	search:DockMargin( 8, 0, 8, 6 )
 	search:SetTall( 30 )
-	search:SetPlaceholderText( "搜索中文名 / 英文名 / minecraft:id" )
+	search:SetPlaceholderText( L( "creative.search", "搜索中文名 / 英文名 / minecraft:id" ) )
 	search:SetDrawBackground( false )
 	search:SetTextColor( CREATIVE_UI.text )
 	if search.SetCursorColor then search:SetCursorColor( CREATIVE_UI.accent ) end
@@ -688,7 +700,7 @@ function MC.OpenCreativeInventory( onSelect, opts )
 		surface.SetDrawColor( 88, 96, 110, s:HasFocus() and 190 or 110 )
 		surface.DrawOutlinedRect( 0, 0, w, h, 1 )
 		if s:GetValue() == "" and not s:HasFocus() then
-			draw.SimpleText( "搜索中文名 / 英文名 / minecraft:id", "mc_hud_small", 8, h * 0.5, CREATIVE_UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER )
+			draw.SimpleText( L( "creative.search", "搜索中文名 / 英文名 / minecraft:id" ), "mc_hud_small", 8, h * 0.5, CREATIVE_UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER )
 		end
 		s:DrawTextEntryText( CREATIVE_UI.text, Color( 95, 145, 210 ), CREATIVE_UI.text )
 	end
@@ -726,6 +738,7 @@ function MC.OpenCreativeInventory( onSelect, opts )
 	local activeCategory = "all"
 	local page = 1
 	for _, cat in ipairs( MC.CreativeCategories ) do
+		local label = L( cat.labelKey, cat.label )
 		local grid = vgui.Create( "DPanel", tabs )
 		MC.StyleCreativeGridPanel( grid )
 		local layout = vgui.Create( "DPanel", grid )
@@ -734,9 +747,11 @@ function MC.OpenCreativeInventory( onSelect, opts )
 		layout.Paint = function() end
 		layout.PerformLayout = layoutCreativeGridSlots
 		layouts[cat.id] = layout
-		local sheet = tabs:AddSheet( cat.label, grid, nil, false, false, cat.label )
+		local sheet = tabs:AddSheet( label, grid, nil, false, false, label )
 		if sheet and sheet.Tab then
 			sheet.Tab.MCCategoryID = cat.id
+			sheet.Tab.MCCategoryLabelKey = cat.labelKey
+			sheet.Tab.MCCategoryFallback = cat.label
 			sheet.Tab:SetTextColor( CREATIVE_UI.text )
 			sheet.Tab.Paint = function( s, w, h )
 				local active = tabs:GetActiveTab() == s
@@ -767,7 +782,7 @@ function MC.OpenCreativeInventory( onSelect, opts )
 			addCreativeButton( layout, ids[i], onSelect, fr, closeOnSelect )
 		end
 		layout:InvalidateLayout( true )
-		pageLabel:SetText( string.format( "%d / %d    %d 个方块", page, pages, #ids ) )
+		pageLabel:SetText( L( "creative.page", "{page} / {pages}    {count} 个方块", { page = page, pages = pages, count = #ids } ) )
 		prev:SetEnabled( page > 1 )
 		next:SetEnabled( page < pages )
 	end
@@ -789,7 +804,19 @@ function MC.OpenCreativeInventory( onSelect, opts )
 		page = page + 1
 		rebuild()
 	end
-	rebuild()
+	fr.MCRefreshLanguage = function()
+		fr:SetTitle( L( "creative.title", "创造物品栏" ) )
+		search:SetPlaceholderText( L( "creative.search", "搜索中文名 / 英文名 / minecraft:id" ) )
+		local items = tabs.GetItems and tabs:GetItems() or tabs.Items or {}
+		for _, item in ipairs( items ) do
+			local tab = item.Tab
+			if IsValid( tab ) and tab.MCCategoryLabelKey then
+				tab:SetText( L( tab.MCCategoryLabelKey, tab.MCCategoryFallback or "" ) )
+			end
+		end
+		rebuild()
+	end
+	fr.MCRefreshLanguage()
 end
 
 function MC.DrawBlockGhost( id, orient, bx, by, bz, color )
@@ -848,7 +875,7 @@ function MC.OpenPalette( onSelect )
 	if IsValid( MC.PaletteFrame ) then MC.PaletteFrame:Remove() end
 
 	local fr = vgui.Create( "DFrame" )
-	fr:SetTitle( "选择方块" )
+	fr:SetTitle( L( "palette.title", "选择方块" ) )
 	fr:SetSize( 780, 560 )
 	fr:Center()
 	fr:MakePopup()
@@ -869,12 +896,12 @@ function MC.OpenPalette( onSelect )
 		btn:SetText( "" )
 
 		local hint = MC.BlockStateHint( id )
-		btn:SetTooltip( b.disp .. ( hint ~= "" and "\n" .. hint or "" ) )
+		btn:SetTooltip( blockDisplayText( b ) .. ( hint ~= "" and "\n" .. hint or "" ) )
 
 		btn.Paint = function( s, w, h )
 			draw.RoundedBox( 4, 0, 0, w, h, s:IsHovered() and Color( 80, 90, 110 ) or Color( 45, 47, 52 ) )
 			MC.DrawBlockIcon( id, w * 0.5 - 36, 10, 72, 72 )
-			MC.DrawFittedText( b.disp, "mc_hud", { "mc_hud_small", "mc_hud_fit_16" }, w * 0.5, h - 24, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, w - 10 )
+			MC.DrawFittedText( blockDisplayText( b ), "mc_hud", { "mc_hud_small", "mc_hud_fit_16" }, w * 0.5, h - 24, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, w - 10 )
 		end
 
 		btn.DoClick = function()
@@ -897,11 +924,28 @@ hook.Add( "HUDPaint", "mc_sync_progress", function()
 	local sw = ScrW()
 	local w, h = 420, 18
 	local x, y = sw * 0.5 - w * 0.5, 96
-	local label = string.format( "MC 同步 %d/%d 方块  %d/%d 区块", p.received, p.expected, p.doneChunks, p.chunks )
-	if complete then label = "MC 同步完成  " .. label end
+	local label = L( "sync.progress", "MC 同步 {received}/{expected} 方块  {done}/{chunks} 区块", {
+		received = p.received,
+		expected = p.expected,
+		done = p.doneChunks,
+		chunks = p.chunks,
+	} )
+	if complete then label = L( "sync.complete", "MC 同步完成  {label}", { label = label } ) end
 
 	draw.RoundedBox( 4, x - 10, y - 28, w + 20, 58, Color( 0, 0, 0, 180 ) )
 	draw.SimpleText( label, "mc_hud_small", x, y - 20, color_white, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 	draw.RoundedBox( 3, x, y, w, h, Color( 35, 38, 42, 230 ) )
 	draw.RoundedBox( 3, x, y, math.floor( w * frac ), h, complete and Color( 120, 220, 150, 240 ) or Color( 90, 180, 255, 240 ) )
 end )
+
+if MC.RegisterLanguageChanged then
+	MC.RegisterLanguageChanged( "mc_cl_ui", function()
+		if IsValid( MC.CreativeFrame ) and MC.CreativeFrame.MCRefreshLanguage then
+			MC.CreativeFrame:MCRefreshLanguage()
+		end
+		if IsValid( MC.PaletteFrame ) then
+			MC.PaletteFrame:SetTitle( L( "palette.title", "选择方块" ) )
+			MC.PaletteFrame:InvalidateLayout( true )
+		end
+	end )
+end

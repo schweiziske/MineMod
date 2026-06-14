@@ -10,10 +10,18 @@ TOOL.Name     = "#tool.mc_block.name"
 
 TOOL.ClientConVar["block"] = "1"
 
+local function L( key, fallback, vars )
+	return MC and MC.T and MC.T( key, fallback, vars ) or fallback
+end
+
+local function blockDisplayText( blockOrID )
+	local b = type( blockOrID ) == "table" and blockOrID or ( MC and MC.Blocks and MC.Blocks[blockOrID] )
+	if not b then return "" end
+	return MC.BlockDisplayName and MC.BlockDisplayName( b, b.dispZH or b.disp ) or b.disp
+end
+
 if CLIENT then
-	language.Add( "tool.mc_block.name", "MC 方块" )
-	language.Add( "tool.mc_block.desc", "放置 / 破坏 Minecraft 方块（IMesh 渲染，不生成实体）" )
-	language.Add( "tool.mc_block.0", "左键破坏   右键放置   Reload 复制方块" )
+	if MC and MC.LocalizeToolLanguage then MC.LocalizeToolLanguage() end
 end
 
 local function placeCell( tr )
@@ -166,7 +174,7 @@ if CLIENT then
 end
 
 function TOOL.BuildCPanel( panel )
-	panel:Help( "左键破坏 / 右键放置 / Reload 复制方块。/fill 支持 blockstate，例如 minecraft:furnace[facing=north]。" )
+	panel:Help( L( "tool.help", "左键破坏 / 右键放置 / Reload 复制方块。/fill 支持 blockstate，例如 minecraft:furnace[facing=north]。" ) )
 
 	local scroll = vgui.Create( "DScrollPanel" )
 	scroll:SetTall( 360 )
@@ -182,13 +190,13 @@ function TOOL.BuildCPanel( panel )
 		btn:SetSize( 58, 72 )
 		btn:SetText( "" )
 		local hint = MC.BlockStateHint( id )
-		btn:SetTooltip( b.disp .. ( hint ~= "" and "\n" .. hint or "" ) )
+		btn:SetTooltip( blockDisplayText( b ) .. ( hint ~= "" and "\n" .. hint or "" ) )
 		btn.Paint = function( s, w, h )
 			local cv = GetConVar( "mc_block_block" )
 			local sel = cv and math.floor( cv:GetInt() ) == id
 			draw.RoundedBox( 4, 0, 0, w, h, sel and Color( 70, 130, 80 ) or ( s:IsHovered() and Color( 70, 72, 80 ) or Color( 45, 47, 52 ) ) )
 			MC.DrawBlockIcon( id, w * 0.5 - 20, 4, 40, 40 )
-			draw.SimpleText( b.disp, "mc_hud_small", w * 0.5, h - 12, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+			draw.SimpleText( blockDisplayText( b ), "mc_hud_small", w * 0.5, h - 12, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
 		end
 		btn.DoClick = function()
 			RunConsoleCommand( "mc_block_block", id )

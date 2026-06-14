@@ -4,6 +4,10 @@
 
 MC = MC or {}
 
+local function L( key, fallback, vars )
+	return MC.T and MC.T( key, fallback, vars ) or fallback
+end
+
 local SAVE_COVER_DIR = "mc/save_covers"
 local SAVE_COVER_PART_BYTES = 60000
 
@@ -206,8 +210,8 @@ local function drawSaveCover( save, x, y, w, h )
 		return
 	end
 
-	draw.SimpleText( "暂无截图", "mc_hud", x + w * 0.5, y + h * 0.5 - 10, UI.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
-	draw.SimpleText( "保存一次会自动截图", "mc_hud_small", x + w * 0.5, y + h * 0.5 + 16, UI.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+	draw.SimpleText( L( "save.no_cover", "暂无截图" ), "mc_hud", x + w * 0.5, y + h * 0.5 - 10, UI.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+	draw.SimpleText( L( "save.auto_cover", "保存一次会自动截图" ), "mc_hud_small", x + w * 0.5, y + h * 0.5 + 16, UI.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
 end
 
 local function infoLine( x, y, label, value, color )
@@ -231,7 +235,7 @@ end
 local function sendSaveAction( action, slotName, captureCover )
 	slotName = trim( slotName )
 	if slotName == "" then
-		setStatus( MC.SaveManagerFrame, "请输入存档名", true )
+		setStatus( MC.SaveManagerFrame, L( "save.enter_name", "请输入存档名" ), true )
 		return
 	end
 
@@ -242,7 +246,7 @@ local function sendSaveAction( action, slotName, captureCover )
 			if IsValid( frame ) then
 				frame:SetVisible( true )
 				frame:MakePopup()
-				setStatus( frame, "正在上传截图和保存存档..." )
+				setStatus( frame, L( "save.uploading", "正在上传截图和保存存档..." ) )
 			end
 
 			uploadSaveCover( slotName, coverPath, data, function()
@@ -277,7 +281,7 @@ local function createSaveRow( parent, frame, save )
 		local sameMap = save.map == game.GetMap()
 		local mapColor = sameMap and UI.textDim or UI.error
 		MC.DrawFittedText( save.name, "mc_hud", { "mc_hud_small", "mc_hud_fit_16" }, 12, 10, UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, w - 24 )
-		MC.DrawFittedText( "地图: " .. tostring( save.map ), "mc_hud_small", { "mc_hud_fit_16" }, 12, 36, mapColor, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, w - 24 )
+		MC.DrawFittedText( L( "save.map_prefix", "地图: {map}", { map = tostring( save.map ) } ), "mc_hud_small", { "mc_hud_fit_16" }, 12, 36, mapColor, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, w - 24 )
 		draw.SimpleText( tostring( save.savedAtText ), "mc_hud_small", 12, 52, UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 	end
 end
@@ -286,7 +290,7 @@ function MC.OpenSaveManager()
 	if IsValid( MC.SaveManagerFrame ) then MC.SaveManagerFrame:Remove() end
 
 	local fr = vgui.Create( "DFrame" )
-	fr:SetTitle( "MC 存档管理" )
+	fr:SetTitle( L( "save.title", "MC 存档管理" ) )
 	local frameH = math.Clamp( ScrH() - 80, 680, 760 )
 	fr:SetSize( 1040, frameH )
 	fr:Center()
@@ -308,13 +312,13 @@ function MC.OpenSaveManager()
 	header.Paint = function( _, w, h )
 		draw.RoundedBox( 4, 0, 0, w, h, UI.panel )
 		draw.RoundedBox( 3, 4, 4, w - 8, h - 8, UI.panelInner )
-		draw.SimpleText( "当前地图: " .. game.GetMap(), "mc_hud_small", 12, 12, UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
+		draw.SimpleText( L( "save.current_map", "当前地图: {map}", { map = game.GetMap() } ), "mc_hud_small", 12, 12, UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 	end
 
 	local nameEntry = vgui.Create( "DTextEntry", header )
 	nameEntry:SetPos( 12, 38 )
 	nameEntry:SetSize( 520, 28 )
-	nameEntry:SetPlaceholderText( "新存档名" )
+	nameEntry:SetPlaceholderText( L( "save.new_name", "新存档名" ) )
 	nameEntry:SetPaintBackground( false )
 	nameEntry:SetTextColor( UI.text )
 	if nameEntry.SetCursorColor then nameEntry:SetCursorColor( UI.accent ) end
@@ -323,7 +327,7 @@ function MC.OpenSaveManager()
 		surface.SetDrawColor( 88, 96, 110, s:HasFocus() and 190 or 110 )
 		surface.DrawOutlinedRect( 0, 0, w, h, 1 )
 		if s:GetValue() == "" and not s:HasFocus() then
-			draw.SimpleText( "新存档名", "mc_hud_small", 8, h * 0.5, UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER )
+			draw.SimpleText( L( "save.new_name", "新存档名" ), "mc_hud_small", 8, h * 0.5, UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER )
 		end
 		s:DrawTextEntryText( UI.text, Color( 95, 145, 210 ), UI.text )
 	end
@@ -332,7 +336,7 @@ function MC.OpenSaveManager()
 	local saveNew = vgui.Create( "DButton", header )
 	saveNew:SetPos( 544, 38 )
 	saveNew:SetSize( 110, 28 )
-	styleButton( saveNew, "保存当前" )
+	styleButton( saveNew, L( "save.save_current", "保存当前" ) )
 	saveNew.DoClick = function()
 		sendSaveAction( "save", nameEntry:GetValue(), true )
 	end
@@ -340,7 +344,7 @@ function MC.OpenSaveManager()
 	local refresh = vgui.Create( "DButton", header )
 	refresh:SetPos( 664, 38 )
 	refresh:SetSize( 76, 28 )
-	styleButton( refresh, "刷新" )
+	styleButton( refresh, L( "save.refresh", "刷新" ) )
 	refresh.DoClick = function()
 		MC.RequestSaveList()
 	end
@@ -349,7 +353,7 @@ function MC.OpenSaveManager()
 	fr.StatusLabel:SetPos( 752, 38 )
 	fr.StatusLabel:SetSize( 260, 28 )
 	fr.StatusLabel:SetTextColor( UI.textDim )
-	fr.StatusLabel:SetText( "读取中..." )
+	fr.StatusLabel:SetText( L( "save.loading", "读取中..." ) )
 
 	local body = vgui.Create( "DPanel", fr )
 	body:Dock( FILL )
@@ -363,7 +367,7 @@ function MC.OpenSaveManager()
 	fr.LeftPane.Paint = function( _, w, h )
 		draw.RoundedBox( 4, 0, 0, w, h, UI.panel )
 		draw.RoundedBox( 3, 4, 4, w - 8, h - 8, UI.panelInner )
-		draw.SimpleText( "选择地图 / 存档", "mc_hud", 12, 12, UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
+		draw.SimpleText( L( "save.list_title", "选择地图 / 存档" ), "mc_hud", 12, 12, UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 	end
 
 	fr.RightPane = vgui.Create( "DPanel", body )
@@ -417,49 +421,49 @@ function MC.OpenSaveManager()
 		drawSaveCover( save, 8 + ( w - 16 - coverW ) * 0.5, coverY, coverW, coverH )
 
 		local infoY = coverY + coverH + 18
-		draw.SimpleText( "地图信息", "mc_hud", 8, infoY, UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
+		draw.SimpleText( L( "save.info_title", "地图信息" ), "mc_hud", 8, infoY, UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 		if not save then
-			draw.SimpleText( "左侧选择一个存档。", "mc_hud_small", 8, infoY + 32, UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
+			draw.SimpleText( L( "save.select_hint", "左侧选择一个存档。" ), "mc_hud_small", 8, infoY + 32, UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 			return
 		end
 
 		local sameMap = save.map == game.GetMap()
-		infoLine( 8, infoY + 32, "存档", save.name )
-		infoLine( 8, infoY + 58, "地图", save.map, sameMap and UI.text or UI.error )
-		infoLine( 8, infoY + 84, "保存", save.savedAtText )
-		infoLine( 8, infoY + 110, "规模", string.format( "%d blocks / %d chunks", save.blocks or 0, save.chunks or 0 ) )
-		infoLine( 8, infoY + 136, "截图", trim( save.cover ) ~= "" and save.cover or "无" )
+		infoLine( 8, infoY + 32, L( "save.field_save", "存档" ), save.name )
+		infoLine( 8, infoY + 58, L( "save.field_map", "地图" ), save.map, sameMap and UI.text or UI.error )
+		infoLine( 8, infoY + 84, L( "save.field_saved", "保存" ), save.savedAtText )
+		infoLine( 8, infoY + 110, L( "save.field_size", "规模" ), string.format( "%d blocks / %d chunks", save.blocks or 0, save.chunks or 0 ) )
+		infoLine( 8, infoY + 136, L( "save.field_cover", "截图" ), trim( save.cover ) ~= "" and save.cover or L( "save.none", "无" ) )
 	end
 
 	local load = vgui.Create( "DButton", actions )
 	load:SetPos( 0, 6 )
 	load:SetSize( 96, 30 )
-	styleButton( load, "读取" )
+	styleButton( load, L( "save.load", "读取" ) )
 	load.DoClick = function()
 		local save = fr.SelectedSave
-		if not save then setStatus( fr, "先选择一个存档", true ) return end
+		if not save then setStatus( fr, L( "save.select_first", "先选择一个存档" ), true ) return end
 		Derma_Query(
-			"读取存档会替换当前 MC 方块世界，并重新同步所有客户端。",
-			"读取存档: " .. save.name,
-			"读取",
+			L( "save.load_confirm_body", "读取存档会替换当前 MC 方块世界，并重新同步所有客户端。" ),
+			L( "save.load_confirm_title", "读取存档: {name}", { name = save.name } ),
+			L( "save.load", "读取" ),
 			function() sendSaveAction( "load", save.name, false ) end,
-			"取消"
+			L( "save.cancel", "取消" )
 		)
 	end
 
 	local overwrite = vgui.Create( "DButton", actions )
 	overwrite:SetPos( 104, 6 )
 	overwrite:SetSize( 112, 30 )
-	styleButton( overwrite, "覆盖并截图" )
+	styleButton( overwrite, L( "save.overwrite", "覆盖并截图" ) )
 	overwrite.DoClick = function()
 		local save = fr.SelectedSave
-		if not save then setStatus( fr, "先选择一个存档", true ) return end
+		if not save then setStatus( fr, L( "save.select_first", "先选择一个存档" ), true ) return end
 		Derma_Query(
-			"用当前世界覆盖这个命名存档，并刷新截图？",
-			"覆盖存档: " .. save.name,
-			"覆盖",
+			L( "save.overwrite_confirm_body", "用当前世界覆盖这个命名存档，并刷新截图？" ),
+			L( "save.overwrite_confirm_title", "覆盖存档: {name}", { name = save.name } ),
+			L( "save.overwrite", "覆盖" ),
 			function() sendSaveAction( "save", save.name, true ) end,
-			"取消"
+			L( "save.cancel", "取消" )
 		)
 	end
 
@@ -467,16 +471,16 @@ function MC.OpenSaveManager()
 		local delete = vgui.Create( "DButton", actions )
 		delete:SetPos( 224, 6 )
 		delete:SetSize( 96, 30 )
-		styleButton( delete, "删除", true )
+		styleButton( delete, L( "save.delete", "删除" ), true )
 		delete.DoClick = function()
 			local save = fr.SelectedSave
-			if not save then setStatus( fr, "先选择一个存档", true ) return end
+			if not save then setStatus( fr, L( "save.select_first", "先选择一个存档" ), true ) return end
 			Derma_Query(
-				"删除后不会自动恢复。",
-				"删除存档: " .. save.name,
-				"删除",
+				L( "save.delete_confirm_body", "删除后不会自动恢复。" ),
+				L( "save.delete_confirm_title", "删除存档: {name}", { name = save.name } ),
+				L( "save.delete", "删除" ),
 				function() sendSaveAction( "delete", save.name, false ) end,
-				"取消"
+				L( "save.cancel", "取消" )
 			)
 		end
 	end
@@ -499,7 +503,7 @@ function MC.OpenSaveManager()
 		if #saves == 0 then
 			local empty = vgui.Create( "DLabel", list )
 			empty.MCRowHeight = 52
-			empty:SetText( "还没有命名存档。输入名字后点“保存当前”。" )
+			empty:SetText( L( "save.empty", "还没有命名存档。输入名字后点“保存当前”。" ) )
 			empty:SetTextColor( UI.textDim )
 			empty:SetContentAlignment( 5 )
 			rowCount = 1
@@ -517,7 +521,7 @@ function MC.OpenSaveManager()
 		if #saves == 0 then totalH = 52 end
 		list:SetTall( totalH )
 		list:InvalidateLayout( true )
-		setStatus( self, message ~= "" and message or ( #saves .. " 个存档" ), isError )
+		setStatus( self, message ~= "" and message or L( "save.count", "{count} 个存档", { count = #saves } ), isError )
 	end
 
 	MC.RequestSaveList()
@@ -598,3 +602,12 @@ end )
 concommand.Add( "mc_saves_ui", function()
 	MC.OpenSaveManager()
 end )
+
+if MC.RegisterLanguageChanged then
+	MC.RegisterLanguageChanged( "mc_save_ui", function()
+		if IsValid( MC.SaveManagerFrame ) then
+			MC.SaveManagerFrame:Remove()
+			MC.OpenSaveManager()
+		end
+	end )
+end
