@@ -11,6 +11,7 @@ MC = MC or {}
 
 local SHARED = {
 	"mc/sh_config.lua",
+	"mc/sh_i18n.lua",
 	"mc/generated/sh_generated_tiles.lua",
 	"mc/generated/sh_generated_blocks.lua",
 	"mc/generated/sh_generated_block_connections.lua",

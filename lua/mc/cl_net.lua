@@ -116,7 +116,6 @@ local function applyNetCell( bx, by, bz, id, orient )
 end
 
 MC.PendingPredictions = MC.PendingPredictions or {}
-local PLACE_PHYS_PLAYER_PADDING = MC.BS * 0.75
 
 local function predictionKey( bx, by, bz )
 	return bx .. ":" .. by .. ":" .. bz
@@ -174,9 +173,7 @@ function MC.PredictSetBlock( bx, by, bz, id, orient )
 	for _, cell in ipairs( plan.cells ) do
 		if MC.GetBlock( cell.bx, cell.by, cell.bz ) ~= 0 then return false end
 	end
-	return predictCells( plan.cells, function( cell )
-		return MC.BlockAABBOverlapsPlayerHull( cell.bx, cell.by, cell.bz, PLACE_PHYS_PLAYER_PADDING )
-	end )
+	return predictCells( plan.cells, function() return true end )
 end
 
 function MC.PredictBreakBlock( bx, by, bz, ply )

@@ -13,6 +13,8 @@ ENT.Spawnable = false
 ENT.AdminOnly = false
 ENT.DisableDuplicator = true
 
+local MAX_PHYSICS_CONVEXES = 512
+
 function ENT:EnsureKey()
 	if self.ChunkKey then return self.ChunkKey end
 	local cx, cy, cz = MC.ChunkCoordsFromOrigin( self:GetPos() )
@@ -255,6 +257,13 @@ function ENT:RebuildPhysics()
 		if #points >= 4 then convexes[#convexes + 1] = points end
 	end
 
+	if #convexes > MAX_PHYSICS_CONVEXES then
+		self:PhysicsDestroy()
+		MsgN( "[MC] !!! collision skipped for chunk " .. tostring( self.ChunkKey ) ..
+			"  convexes=" .. #convexes .. " > " .. MAX_PHYSICS_CONVEXES )
+		return
+	end
+
 	-- Collision recipe copied from the working voxel-destruction addon
 	-- (sent_voxelmain): PhysicsInitMultiConvex + EnableCustomCollisions(true) is what
 	-- makes BOTH player movement AND the build/break eye trace actually hit the convex
@@ -263,6 +272,7 @@ function ENT:RebuildPhysics()
 	-- blocks -- exactly the "weird collision, can't build, can't break" symptom.
 	-- (PhysicsInitMultiConvex auto-sets the collision bounds from the mesh, so we no
 	-- longer override them. MOVETYPE_NONE = no collision at all, so VPHYSICS is required.)
+	self:PhysicsDestroy()
 	self:PhysicsInitMultiConvex( convexes )
 	self:SetMoveType( MOVETYPE_VPHYSICS )
 	self:SetSolid( SOLID_VPHYSICS )

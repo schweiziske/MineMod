@@ -4,9 +4,14 @@
 
 MC = MC or {}
 
+local function L( key, fallback, vars )
+	return MC.T and MC.T( key, fallback, vars ) or fallback
+end
+
 local PRESET_COVER_DIR = "mc/preset_covers"
-local PRESET_COVER_PART_BYTES = 60000
-local PRESET_DATA_PART_BYTES = 60000
+local PRESET_COVER_PART_BYTES = 16384
+local PRESET_DATA_PART_BYTES = 16384
+local PRESET_UPLOAD_PART_INTERVAL = 0.05
 
 local UI = {
 	frame = Color( 30, 32, 37, 250 ),
@@ -81,9 +86,9 @@ end
 function MC.TogglePresetOverwrite()
 	MC.PresetOverwrite = MC.PresetOverwrite ~= true
 	if MC.PresetOverwrite then
-		chat( "预设覆盖模式: 开。放置时会覆盖目标体积里的已有方块。" )
+		chat( L( "preset.overwrite_on", "预设覆盖模式: 开。放置时会覆盖目标体积里的已有方块。" ) )
 	else
-		chat( "预设覆盖模式: 关。目标位置有方块时不会放置。" )
+		chat( L( "preset.overwrite_off", "预设覆盖模式: 关。目标位置有方块时不会放置。" ) )
 	end
 end
 
@@ -94,7 +99,7 @@ function MC.SetPresetRotation( rotation, silent )
 	end
 	if not silent then
 		local degrees = MC.PresetRotationDegrees and MC.PresetRotationDegrees( MC.PresetRotation ) or ( MC.PresetRotation * 90 )
-		chat( "Preset rotation: " .. tostring( degrees ) .. " deg" )
+		chat( L( "preset.rotation_chat", "Preset rotation: {degrees} deg", { degrees = degrees } ) )
 	end
 end
 
@@ -172,8 +177,8 @@ local function drawPresetCover( preset, x, y, w, h )
 		return
 	end
 
-	draw.SimpleText( "暂无截图", "mc_hud", x + w * 0.5, y + h * 0.5 - 10, UI.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
-	draw.SimpleText( "保存预设时自动截图", "mc_hud_small", x + w * 0.5, y + h * 0.5 + 16, UI.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+	draw.SimpleText( L( "preset.no_cover", "暂无截图" ), "mc_hud", x + w * 0.5, y + h * 0.5 - 10, UI.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+	draw.SimpleText( L( "preset.auto_cover", "保存预设时自动截图" ), "mc_hud_small", x + w * 0.5, y + h * 0.5 + 16, UI.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
 end
 
 local function capturePresetCover( name, callback )
@@ -232,7 +237,7 @@ local function uploadPresetCover( name, coverPath, data, callback )
 			net.WriteData( chunk, #chunk )
 		net.SendToServer()
 		i = i + 1
-		timer.Simple( 0, sendNextPart )
+		timer.Simple( PRESET_UPLOAD_PART_INTERVAL, sendNextPart )
 	end
 
 	sendNextPart()
@@ -397,7 +402,7 @@ function MC.LoadPresetForProjection( preset )
 	MC.PresetSelection = {}
 	MC.PresetRotation = 0
 	MC.BuildPresetProjectionMesh( preset, MC.PresetRotation )
-	chat( "已读取预设: " .. tostring( preset.name ) .. "。移动准星看投影，G 旋转，左键放置，右键取消。" )
+	chat( L( "preset.loaded_chat", "已读取预设: {name}。移动准星看投影，G 旋转，左键放置，右键取消。", { name = tostring( preset.name ) } ) )
 	return true
 end
 
@@ -471,7 +476,7 @@ function MC.StartPresetCapture( name )
 	MC.PresetDraftName = name
 	MC.PresetSelectionStep = 0
 	MC.PresetSelection = {}
-	chat( "开始新建预设 " .. name .. "：左键选择第一个方块。" )
+	chat( L( "preset.start_chat", "开始新建预设 {name}：左键选择第一个方块。", { name = name } ) )
 end
 
 local function sendPresetSave( name, selection, coverPath )
@@ -497,12 +502,12 @@ function MC.SavePresetSelection()
 	local selection = MC.PresetSelection or {}
 	local name = presetName( MC.PresetDraftName ) or generatedPresetName()
 	if not selection.a or not selection.b or not selection.anchor then
-		chat( "预设选择还没完成。" )
+		chat( L( "preset.selection_incomplete", "预设选择还没完成。" ) )
 		return
 	end
 
 	MC.PresetSelectionStep = 4
-	chat( "正在截图并保存预设: " .. name )
+	chat( L( "preset.saving_chat", "正在截图并保存预设: {name}", { name = name } ) )
 	capturePresetCover( name, function( coverPath, data )
 		uploadPresetCover( name, coverPath, data, function()
 			sendPresetSave( name, selection, coverPath )
@@ -518,7 +523,7 @@ function MC.PresetAdvanceSelection()
 	local step = MC.PresetSelectionStep or 0
 	local aim = aimedExistingBlock()
 	if step < 3 and not aim then
-		chat( "请准星对准一个 MC 方块。" )
+		chat( L( "preset.aim_block", "请准星对准一个 MC 方块。" ) )
 		return
 	end
 
@@ -526,15 +531,15 @@ function MC.PresetAdvanceSelection()
 	if step == 0 then
 		selection.a = { bx = aim.bx, by = aim.by, bz = aim.bz }
 		MC.PresetSelectionStep = 1
-		chat( "已选择第一个方块。左键选择第二个方块完成范围，右键撤销。" )
+		chat( L( "preset.step1_chat", "已选择第一个方块。左键选择第二个方块完成范围，右键撤销。" ) )
 	elseif step == 1 then
 		selection.b = { bx = aim.bx, by = aim.by, bz = aim.bz }
 		MC.PresetSelectionStep = 2
-		chat( "范围已完成。左键选择一个基准面，之后预设会用它对齐准星。" )
+		chat( L( "preset.step2_chat", "范围已完成。左键选择一个基准面，之后预设会用它对齐准星。" ) )
 	elseif step == 2 then
 		local anchor = { bx = aim.bx, by = aim.by, bz = aim.bz }
 		if not inSelection( anchor, selection.a, selection.b ) then
-			chat( "基准面必须在刚才选择的范围里。" )
+			chat( L( "preset.anchor_outside", "基准面必须在刚才选择的范围里。" ) )
 			return
 		end
 		anchor.nx = math.Round( aim.HitNormal.x )
@@ -542,7 +547,7 @@ function MC.PresetAdvanceSelection()
 		anchor.nz = math.Round( aim.HitNormal.z )
 		selection.anchor = anchor
 		MC.PresetSelectionStep = 3
-		chat( "基准面已选择。再按一次左键截图并保存。" )
+		chat( L( "preset.step3_chat", "基准面已选择。再按一次左键截图并保存。" ) )
 	elseif step == 3 then
 		MC.SavePresetSelection()
 	end
@@ -554,7 +559,7 @@ function MC.PresetUndoSelection()
 		MC.ActivePreset = nil
 		MC.ActivePresetName = nil
 		MC.PresetMode = nil
-		chat( "已取消预设投影。" )
+		chat( L( "preset.projection_cancelled", "已取消预设投影。" ) )
 		return
 	end
 
@@ -562,7 +567,7 @@ function MC.PresetUndoSelection()
 	if step <= 0 then
 		MC.PresetMode = nil
 		MC.PresetSelection = {}
-		chat( "已取消预设选择。" )
+		chat( L( "preset.selection_cancelled", "已取消预设选择。" ) )
 		return
 	end
 
@@ -570,17 +575,17 @@ function MC.PresetUndoSelection()
 	elseif step >= 2 then MC.PresetSelection.b = nil
 	elseif step >= 1 then MC.PresetSelection.a = nil end
 	MC.PresetSelectionStep = step - 1
-	chat( "已撤销一步。" )
+	chat( L( "preset.undo", "已撤销一步。" ) )
 end
 
 function MC.PlaceActivePreset()
 	if not MC.ActivePreset or not MC.ActivePresetName then
-		chat( "先按 R 读取一个预设。" )
+		chat( L( "preset.load_first", "先按 R 读取一个预设。" ) )
 		return
 	end
 	local ox, oy, oz = MC.PresetCurrentOrigin()
 	if not ox then
-		chat( "请准星对准可以放置预设的位置。" )
+		chat( L( "preset.aim_place", "请准星对准可以放置预设的位置。" ) )
 		return
 	end
 	net.Start( "mc_preset_place" )
@@ -625,7 +630,7 @@ function MC.OpenPresetManager()
 	if IsValid( MC.PresetManagerFrame ) then MC.PresetManagerFrame:Remove() end
 
 	local fr = vgui.Create( "DFrame" )
-	fr:SetTitle( "MC 预设放置器" )
+	fr:SetTitle( L( "preset.manager_title", "MC 预设放置器" ) )
 	local frameH = math.Clamp( ScrH() - 90, 620, 760 )
 	fr:SetSize( 980, frameH )
 	fr:Center()
@@ -647,13 +652,13 @@ function MC.OpenPresetManager()
 	header.Paint = function( _, w, h )
 		draw.RoundedBox( 4, 0, 0, w, h, UI.panel )
 		draw.RoundedBox( 3, 4, 4, w - 8, h - 8, UI.panelInner )
-		draw.SimpleText( "新建或读取建筑预设", "mc_hud_small", 12, 12, UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
+		draw.SimpleText( L( "preset.header", "新建或读取建筑预设" ), "mc_hud_small", 12, 12, UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 	end
 
 	local nameEntry = vgui.Create( "DTextEntry", header )
 	nameEntry:SetPos( 12, 38 )
 	nameEntry:SetSize( 430, 28 )
-	nameEntry:SetPlaceholderText( "新预设名" )
+	nameEntry:SetPlaceholderText( L( "preset.new_name", "新预设名" ) )
 	nameEntry:SetValue( generatedPresetName() )
 	nameEntry:SetPaintBackground( false )
 	nameEntry:SetTextColor( UI.text )
@@ -668,7 +673,7 @@ function MC.OpenPresetManager()
 	local create = vgui.Create( "DButton", header )
 	create:SetPos( 454, 38 )
 	create:SetSize( 116, 28 )
-	styleButton( create, "新建预设" )
+	styleButton( create, L( "preset.create", "新建预设" ) )
 	create.DoClick = function()
 		MC.StartPresetCapture( nameEntry:GetValue() )
 		fr:Close()
@@ -677,7 +682,7 @@ function MC.OpenPresetManager()
 	local refresh = vgui.Create( "DButton", header )
 	refresh:SetPos( 582, 38 )
 	refresh:SetSize( 76, 28 )
-	styleButton( refresh, "刷新" )
+	styleButton( refresh, L( "preset.refresh", "刷新" ) )
 	refresh.DoClick = function()
 		MC.RequestPresetList()
 	end
@@ -686,7 +691,7 @@ function MC.OpenPresetManager()
 	fr.StatusLabel:SetPos( 672, 38 )
 	fr.StatusLabel:SetSize( 280, 28 )
 	fr.StatusLabel:SetTextColor( UI.textDim )
-	fr.StatusLabel:SetText( "读取中..." )
+	fr.StatusLabel:SetText( L( "preset.loading", "读取中..." ) )
 
 	local body = vgui.Create( "DPanel", fr )
 	body:Dock( FILL )
@@ -700,7 +705,7 @@ function MC.OpenPresetManager()
 	fr.LeftPane.Paint = function( _, w, h )
 		draw.RoundedBox( 4, 0, 0, w, h, UI.panel )
 		draw.RoundedBox( 3, 4, 4, w - 8, h - 8, UI.panelInner )
-		draw.SimpleText( "预设列表", "mc_hud", 12, 12, UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
+		draw.SimpleText( L( "preset.list_title", "预设列表" ), "mc_hud", 12, 12, UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 	end
 
 	fr.RightPane = vgui.Create( "DPanel", body )
@@ -749,27 +754,27 @@ function MC.OpenPresetManager()
 		drawPresetCover( preset, 8 + ( w - 16 - coverW ) * 0.5, 8, coverW, coverH )
 
 		local infoY = coverH + 28
-		draw.SimpleText( "预设信息", "mc_hud", 8, infoY, UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
+		draw.SimpleText( L( "preset.info_title", "预设信息" ), "mc_hud", 8, infoY, UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 		if not preset then
-			draw.SimpleText( "左侧选择一个预设，或输入名字新建。", "mc_hud_small", 8, infoY + 32, UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
+			draw.SimpleText( L( "preset.select_hint", "左侧选择一个预设，或输入名字新建。" ), "mc_hud_small", 8, infoY + 32, UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 			return
 		end
 		local sameMap = preset.map == game.GetMap()
-		infoLine( 8, infoY + 32, "预设", preset.name )
-		infoLine( 8, infoY + 58, "地图", preset.map, sameMap and UI.text or UI.error )
-		infoLine( 8, infoY + 84, "规模", string.format( "%d blocks / %dx%dx%d", preset.blocks or 0, preset.sx or 0, preset.sy or 0, preset.sz or 0 ) )
-		infoLine( 8, infoY + 110, "创建", preset.createdAtText )
+		infoLine( 8, infoY + 32, L( "preset.field_preset", "预设" ), preset.name )
+		infoLine( 8, infoY + 58, L( "preset.field_map", "地图" ), preset.map, sameMap and UI.text or UI.error )
+		infoLine( 8, infoY + 84, L( "preset.field_size", "规模" ), string.format( "%d blocks / %dx%dx%d", preset.blocks or 0, preset.sx or 0, preset.sy or 0, preset.sz or 0 ) )
+		infoLine( 8, infoY + 110, L( "preset.field_created", "创建" ), preset.createdAtText )
 	end
 
 	local load = vgui.Create( "DButton", actions )
 	load:SetPos( 0, 6 )
 	load:SetSize( 110, 30 )
-	styleButton( load, "读取投影" )
+	styleButton( load, L( "preset.load_projection", "读取投影" ) )
 	load.DoClick = function()
 		local preset = fr.SelectedPreset
-		if not preset then setStatus( fr, "先选择一个预设", true ) return end
+		if not preset then setStatus( fr, L( "preset.select_first", "先选择一个预设" ), true ) return end
 		requestPresetData( preset.name )
-		setStatus( fr, "正在读取预设..." )
+		setStatus( fr, L( "preset.loading_projection", "正在读取预设..." ) )
 		fr:Close()
 	end
 
@@ -794,7 +799,7 @@ function MC.OpenPresetManager()
 		if #presets == 0 then
 			local empty = vgui.Create( "DLabel", list )
 			empty.MCRowHeight = 52
-			empty:SetText( "还没有预设。输入名字后点“新建预设”。" )
+			empty:SetText( L( "preset.empty", "还没有预设。输入名字后点“新建预设”。" ) )
 			empty:SetTextColor( UI.textDim )
 			empty:SetContentAlignment( 5 )
 			rowCount = 1
@@ -806,7 +811,7 @@ function MC.OpenPresetManager()
 		if #presets == 0 then totalH = 52 end
 		list:SetTall( totalH )
 		list:InvalidateLayout( true )
-		setStatus( self, message ~= "" and message or ( #presets .. " 个预设" ), isError )
+		setStatus( self, message ~= "" and message or L( "preset.count", "{count} 个预设", { count = #presets } ), isError )
 	end
 
 	MC.RequestPresetList()
@@ -832,6 +837,8 @@ net.Receive( "mc_preset_list_data", function()
 	MC.PresetManagerPresets = presets
 	if IsValid( MC.PresetManagerFrame ) and MC.PresetManagerFrame.RefreshPresetRows then
 		MC.PresetManagerFrame:RefreshPresetRows( message, isError )
+	elseif message ~= "" then
+		chat( message )
 	end
 end )
 
@@ -842,7 +849,7 @@ net.Receive( "mc_preset_data", function()
 	local expectedParts = net.ReadUInt( 16 )
 	local totalBytes = net.ReadUInt( 32 )
 	if isError or expectedParts < 1 or totalBytes < 1 then
-		chat( "预设读取失败: " .. tostring( message ) )
+		chat( L( "preset.load_failed", "预设读取失败: {message}", { message = tostring( message ) } ) )
 		return
 	end
 	PresetDataBuffers[name] = {
@@ -879,7 +886,7 @@ net.Receive( "mc_preset_data_part", function()
 	local json = util.Decompress( data )
 	local preset = json and util.JSONToTable( json ) or nil
 	if not preset then
-		chat( "预设读取失败: 数据损坏" )
+		chat( L( "preset.load_damaged", "预设读取失败: 数据损坏" ) )
 		return
 	end
 	MC.LoadPresetForProjection( preset )
@@ -949,3 +956,12 @@ end )
 concommand.Add( "mc_presets_ui", function()
 	MC.OpenPresetManager()
 end )
+
+if MC.RegisterLanguageChanged then
+	MC.RegisterLanguageChanged( "mc_preset_ui", function()
+		if IsValid( MC.PresetManagerFrame ) then
+			MC.PresetManagerFrame:Remove()
+			MC.OpenPresetManager()
+		end
+	end )
+end

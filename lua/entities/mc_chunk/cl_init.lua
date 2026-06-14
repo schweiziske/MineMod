@@ -10,15 +10,13 @@ function ENT:Initialize()
 	local w = MC.ChunkWorld
 	self:SetRenderBounds( Vector( 0, 0, 0 ), Vector( w, w, MC.ChunkWorldH ) )
 
-	-- clientside collision for smooth local-player movement prediction, using the
-	-- same recipe as the server (VPHYSICS + custom collisions) so traces/movement
-	-- actually hit the convex mesh instead of the bounding box
+	-- Local prediction collision is filtered by MC.RefreshClientCollisionInterest().
 	self:SetMoveType( MOVETYPE_VPHYSICS )
 	self:SetSolid( SOLID_VPHYSICS )
 	self:EnableCustomCollisions( true )
 
 	MC.ChunkEnts[ self.ChunkKey ] = self
-	MC.MarkChunkPhysDirty( self.ChunkKey )      -- build collision once data is present
+	MC.MarkChunkPhysDirty( self.ChunkKey )  -- build collision once data is present
 	if not MC.Meshes[ self.ChunkKey ] and not ( MC.MeshesTrans and MC.MeshesTrans[ self.ChunkKey ] ) then
 		MC.MarkChunkDirty( self.ChunkKey )       -- build mesh if data arrived first
 	end

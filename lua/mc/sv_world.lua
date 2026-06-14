@@ -14,9 +14,12 @@ local SV  = MC.SV
 local Net = MC.Net
 local C   = MC.Config
 
+local function L( ply, key, fallback, vars )
+	return MC.TFor and MC.TFor( ply, key, fallback, vars ) or fallback
+end
+
 local BULK_SET_CELLS_PER_MESSAGE = 1024
 local BULK_BREAK_FX_LIMIT = 64
-local HTTP_CHUNK_KEYS_PER_MESSAGE = 512
 local SYNC_TIMER_INTERVAL = 0.05
 local INTEREST_TIMER_INTERVAL = 0.25
 
@@ -28,11 +31,8 @@ SV.SnapshotQueue = SV.SnapshotQueue or {} -- player -> compressed save snapshot 
 SV.PlayerLoadedChunks = SV.PlayerLoadedChunks or {} -- player -> { [chunkKey] = true }
 SV.PlayerFullSnapshot = SV.PlayerFullSnapshot or {} -- player -> true once full-world snapshot mode owns visibility
 SV.PlayerHTTPDisabled = SV.PlayerHTTPDisabled or {} -- player -> true after client-side HTTP fetch is blocked/failed
-SV.StreamInterestKeys = SV.StreamInterestKeys or {} -- chunkKey -> true, computed from non-world entities
-SV.ServerCollisionActiveChunks = SV.ServerCollisionActiveChunks or {} -- chunkKey -> true
 SV.Dirty      = SV.Dirty or false    -- world changed since last save
 local PHYS_REBUILD_DELAY = 0.12
-local PLACE_PHYS_PLAYER_PADDING = MC.BS * 0.75
 
 local function syncFastEnabled()
 	return not C.SyncFast or C.SyncFast:GetBool()
@@ -94,11 +94,6 @@ local function syncSnapshotMaxChunks()
 	return MC.Config.SyncSnapshotMaxChunks or 2048
 end
 
-local function lazyLoadEnabled()
-	if C.LargeWorldLazyLoad then return C.LargeWorldLazyLoad:GetBool() end
-	return ( MC.Config.LargeWorldLazyLoad or 1 ) ~= 0
-end
-
 local function httpChunkDeliveryEnabled()
 	if C.ChunkHTTPEnabled then return C.ChunkHTTPEnabled:GetBool() end
 	return ( MC.Config.ChunkHTTPEnabled or 0 ) ~= 0
@@ -128,51 +123,6 @@ local function playerHttpChunkDeliveryActive( ply )
 		and not ( SV.PlayerHTTPDisabled and SV.PlayerHTTPDisabled[ply] )
 end
 
-function SV.EntityTriggersChunkInterest( ent )
-	if not IsValid( ent ) then return false end
-	if ent.IsWorld and ent:IsWorld() then return false end
-	if ent:GetClass() == "worldspawn" then return false end
-	if ent:GetClass() == "mc_chunk" then return false end
-	return true
-end
-
-local function readChunkSpan( cv, fallback, maxValue )
-	if cv and cv.GetInt then
-		return math.Clamp( cv:GetInt(), 0, maxValue )
-	end
-	return math.Clamp( math.floor( tonumber( fallback ) or 0 ), 0, maxValue )
-end
-
-local function streamChunkSpanXY()
-	return readChunkSpan( C.StreamChunkSpanXY, MC.Config.StreamChunkSpanXY or 16, 64 )
-end
-
-local function streamChunkSpanZ()
-	return readChunkSpan( C.StreamChunkSpanZ, MC.Config.StreamChunkSpanZ or 4, 64 )
-end
-
-local function serverCollisionSpan()
-	return readChunkSpan( C.ServerCollisionChunkSpan, MC.Config.ServerCollisionChunkSpan or 4, 32 )
-end
-
-local function collisionHotSpan()
-	if C.ServerCollisionHotSpan then
-		return readChunkSpan( C.ServerCollisionHotSpan, MC.Config.ServerCollisionHotSpan or 2, 16 )
-	end
-	return serverCollisionSpan()
-end
-
-local function collisionLookaheadTime()
-	if C.ServerCollisionLookaheadTime then
-		return math.Clamp( C.ServerCollisionLookaheadTime:GetFloat(), 0, 2 )
-	end
-	return MC.Config.ServerCollisionLookaheadTime or 0.5
-end
-
-local function collisionLookaheadMax()
-	return readChunkSpan( C.ServerCollisionLookaheadMax, MC.Config.ServerCollisionLookaheadMax or 4, 16 )
-end
-
 local function collisionBuildsPerTick()
 	if C.ServerCollisionBuildsPerTick then
 		return math.Clamp( C.ServerCollisionBuildsPerTick:GetInt(), 1, 64 )
@@ -187,59 +137,8 @@ local function collisionEmergencyBuildsPerTick()
 	return MC.Config.ServerCollisionEmergencyBuildsPerTick or 8
 end
 
-local function entityInterestPos( ent )
-	if ent.WorldSpaceCenter then return ent:WorldSpaceCenter() end
-	return ent:GetPos()
-end
-
-local function collectEntityInterestKeys( spanXY, spanZ )
-	local keys = {}
-	if spanXY <= 0 or spanZ <= 0 then return keys end
-	for _, ent in ipairs( ents.GetAll() ) do
-		if SV.EntityTriggersChunkInterest( ent ) then
-			for key in pairs( MC.ChunkInterestKeysAroundPos( entityInterestPos( ent ), spanXY, spanZ ) ) do
-				keys[key] = true
-			end
-		end
-	end
-	return keys
-end
-
-local function addInterestKeysAtPos( out, pos, spanXY, spanZ )
-	for key in pairs( MC.ChunkInterestKeysAroundPos( pos, spanXY, spanZ ) ) do
-		out[key] = true
-	end
-end
-
-local function collectEntityCollisionInterestKeys()
-	local keys = {}
-	local hotSpan = collisionHotSpan()
-	if hotSpan <= 0 then return keys end
-	local lookaheadTime = collisionLookaheadTime()
-	local lookaheadMax = collisionLookaheadMax()
-
-	for _, ent in ipairs( ents.GetAll() ) do
-		if SV.EntityTriggersChunkInterest( ent ) then
-			local pos = entityInterestPos( ent )
-			addInterestKeysAtPos( keys, pos, hotSpan, hotSpan )
-
-			local vel = ent.GetVelocity and ent:GetVelocity() or vector_origin
-			local distance = vel:Length() * lookaheadTime
-			if distance > MC.BS and lookaheadMax > 0 then
-				local stepWorld = math.max( MC.ChunkWorld * 0.5, MC.BS )
-				local steps = math.Clamp( math.ceil( distance / stepWorld ), 1, lookaheadMax )
-				for i = 1, steps do
-					local t = lookaheadTime * i / steps
-					addInterestKeysAtPos( keys, pos + vel * t, hotSpan, hotSpan )
-				end
-			end
-		end
-	end
-	return keys
-end
-
 function SV.IsChunkCollisionActive( key )
-	return SV.ServerCollisionActiveChunks and SV.ServerCollisionActiveChunks[key] == true
+	return true
 end
 
 local function decodeLocalWithHeight( li, height )
@@ -256,7 +155,6 @@ end
 ------------------------------------------------------------------ chunk entities
 function SV.EnsureChunkEnt( chunk, force )
 	if IsValid( chunk.ent ) then return chunk.ent end
-	if not force and not SV.IsChunkCollisionActive( chunk.key ) then return nil end
 	local e = ents.Create( "mc_chunk" )
 	if not IsValid( e ) then return nil end
 	e.cx, e.cy, e.cz = chunk.cx, chunk.cy, chunk.cz
@@ -282,19 +180,22 @@ end
 local function rebuildPhysKey( key )
 	local chunk = MC.GetChunkByKey( key )
 	if chunk and IsValid( chunk.ent ) then
-		if not SV.IsChunkCollisionActive( key ) then
-			SV.PhysDirty[key] = nil
-			SV.PhysDirtyPriority[key] = nil
-			return
-		end
-		SV.EnsureChunkEnt( chunk, true )
+		SV.EnsureChunkEnt( chunk )
 		chunk.ent:RebuildPhysics()
-	elseif chunk and chunk.count and chunk.count > 0 and SV.IsChunkCollisionActive( key ) then
-		SV.EnsureChunkEnt( chunk, true )
+	elseif chunk and chunk.count and chunk.count > 0 then
+		SV.EnsureChunkEnt( chunk )
 		if IsValid( chunk.ent ) then chunk.ent:RebuildPhysics() end
 	end
 	SV.PhysDirty[key] = nil
 	SV.PhysDirtyPriority[key] = nil
+end
+
+local function flushPhysDirtyKeys( keys )
+	for key in pairs( keys or {} ) do
+		if SV.PhysDirty[key] then
+			rebuildPhysKey( key )
+		end
+	end
 end
 
 -- debounced collision rebuild (coalesces many edits in the same frame/window)
@@ -349,7 +250,7 @@ end
 
 local function canEdit( ply )
 	if C.AdminOnly:GetBool() and IsValid( ply ) and not ply:IsAdmin() then
-		notify( ply, "只有管理员可以建造 (mc_admin_only)" )
+		notify( ply, L( ply, "server.admin_build", "只有管理员可以建造 (mc_admin_only)" ) )
 		return false
 	end
 	return true
@@ -377,12 +278,12 @@ function SV.Validate( ply, bx, by, bz, placing )
 
 	if placing then
 		if not worldBoundsOK( bx, by, bz ) then
-			notify( ply, "超出建造范围 (mc_world_limit)" )
+			notify( ply, L( ply, "server.world_limit", "超出建造范围 (mc_world_limit)" ) )
 			return false
 		end
 		local maxBlocks = C.MaxBlocks:GetInt()
 		if maxBlocks > 0 and SV.BlockCount >= maxBlocks then
-			notify( ply, "已达到方块上限 (mc_max_blocks)" )
+			notify( ply, L( ply, "server.max_blocks", "已达到方块上限 (mc_max_blocks)" ) )
 			return false
 		end
 	end
@@ -391,45 +292,15 @@ function SV.Validate( ply, bx, by, bz, placing )
 end
 
 ------------------------------------------------------------- single block update
-local function cellChunkKey( bx, by, bz )
-	local cx, cy, cz = MC.CellToChunk( bx, by, bz )
-	return MC.ChunkKey( cx, cy, cz )
-end
-
-local function playerLoadedChunk( ply, key )
-	if SV.PlayerFullSnapshot and SV.PlayerFullSnapshot[ply] then return true end
-	local loaded = SV.PlayerLoadedChunks and SV.PlayerLoadedChunks[ply]
-	return loaded and loaded[key] == true
-end
-
-local function playersLoadedForKey( key )
-	local out = {}
-	for _, ply in ipairs( player.GetAll() ) do
-		if playerLoadedChunk( ply, key ) then
-			out[#out + 1] = ply
-		end
-	end
-	return out
-end
-
-local function sendToPlayersLoadedForCell( bx, by, bz, writeMessage )
-	local targets = playersLoadedForKey( cellChunkKey( bx, by, bz ) )
-	if #targets == 0 then return false end
-	writeMessage( targets )
-	return true
-end
-
 local function broadcastSet( bx, by, bz, id, orient )
 	orient = MC.NormalizeOrient( id, orient )
-	sendToPlayersLoadedForCell( bx, by, bz, function( targets )
-		net.Start( "mc_set" )
-			net.WriteInt( bx, Net.COORD_BITS )
-			net.WriteInt( by, Net.COORD_BITS )
-			net.WriteInt( bz, Net.COORD_BITS )
-			net.WriteUInt( id, Net.ID_BITS )
-			net.WriteUInt( orient or 0, Net.ORIENT_BITS )
-		net.Send( targets )
-	end )
+	net.Start( "mc_set" )
+		net.WriteInt( bx, Net.COORD_BITS )
+		net.WriteInt( by, Net.COORD_BITS )
+		net.WriteInt( bz, Net.COORD_BITS )
+		net.WriteUInt( id, Net.ID_BITS )
+		net.WriteUInt( orient or 0, Net.ORIENT_BITS )
+	net.Broadcast()
 end
 
 local function sendSetBulk( changes, target )
@@ -455,28 +326,8 @@ local function sendSetBulk( changes, target )
 	end
 end
 
-local function sendBulkToInterestedPlayers( changes )
-	if #changes == 0 then return end
-	for _, ply in ipairs( player.GetAll() ) do
-		if SV.PlayerFullSnapshot and SV.PlayerFullSnapshot[ply] then
-			sendSetBulk( changes, ply )
-			continue
-		end
-		local loaded = SV.PlayerLoadedChunks and SV.PlayerLoadedChunks[ply]
-		if loaded then
-			local filtered = {}
-			for _, cell in ipairs( changes ) do
-				if loaded[cellChunkKey( cell.bx, cell.by, cell.bz )] then
-					filtered[#filtered + 1] = cell
-				end
-			end
-			sendSetBulk( filtered, ply )
-		end
-	end
-end
-
 local function broadcastSetBulk( changes )
-	sendBulkToInterestedPlayers( changes )
+	sendSetBulk( changes, player.GetAll() )
 end
 
 -- a player-predicted edit got rejected: push the authoritative cell state back
@@ -529,7 +380,7 @@ local function callBlockHandler( id, name, ... )
 	return fn( ... )
 end
 
-local function markNeighbourShapePhysDirty( bx, by, bz, priority )
+local function markNeighbourShapePhysDirty( bx, by, bz, priority, dirty )
 	local seen = {}
 	local function mark( x, y, z )
 		local cx, cy, cz = MC.CellToChunk( x, y, z )
@@ -540,6 +391,7 @@ local function markNeighbourShapePhysDirty( bx, by, bz, priority )
 		if c and c.count and c.count > 0 then
 			SV.EnsureChunkEnt( c )
 			SV.MarkPhysDirty( c.key, priority )
+			if dirty then dirty[c.key] = true end
 		end
 	end
 
@@ -579,6 +431,8 @@ local function apply( bx, by, bz, id, _, orient, actor, options )
 	if not changed then return false end
 	local priorityPhys = options.priorityPhys
 	if priorityPhys == nil then priorityPhys = false end
+	local immediatePhys = options.immediatePhys == true
+	local dirty = {}
 
 	local delta = 0
 	if old == 0 and id ~= 0 then
@@ -594,6 +448,7 @@ local function apply( bx, by, bz, id, _, orient, actor, options )
 	if id ~= 0 then
 		SV.EnsureChunkEnt( chunk, false )
 		SV.MarkPhysDirty( chunk.key, priorityPhys )
+		dirty[chunk.key] = true
 	else
 		if emptied then
 			SV.PhysDirty[chunk.key] = nil
@@ -601,9 +456,11 @@ local function apply( bx, by, bz, id, _, orient, actor, options )
 			if IsValid( chunk.ent ) then chunk.ent:Remove() end
 		else
 			SV.MarkPhysDirty( chunk.key, priorityPhys )
+			dirty[chunk.key] = true
 		end
 	end
-	markNeighbourShapePhysDirty( bx, by, bz, priorityPhys )
+	markNeighbourShapePhysDirty( bx, by, bz, priorityPhys, dirty )
+	if immediatePhys then flushPhysDirtyKeys( dirty ) end
 
 	broadcastSet( bx, by, bz, id, orient )
 	local shouldFx = options.fx
@@ -628,6 +485,7 @@ local function applyCells( cells, actor, options )
 	if not istable( cells ) or #cells == 0 then return 0 end
 
 	local priorityPhys = options.priorityPhys == true
+	local immediatePhys = options.immediatePhys == true
 	local shouldFx = options.fx
 	if shouldFx == nil then shouldFx = IsValid( actor ) end
 	local fxIndex = math.max( 1, math.floor( tonumber( options.fxIndex ) or 1 ) )
@@ -687,6 +545,7 @@ local function applyCells( cells, actor, options )
 			SV.MarkPhysDirty( c.key, priorityPhys )
 		end
 	end
+	if immediatePhys then flushPhysDirtyKeys( dirty ) end
 
 	broadcastSetBulk( changes )
 
@@ -714,17 +573,6 @@ local function wouldTrapPlayer( bx, by, bz, id, orient )
 	return MC.PlacementOverlapsPlayerHull( bx, by, bz, id, orient )
 end
 
-local function needsImmediatePlacePhys( bx, by, bz )
-	return MC.BlockAABBOverlapsPlayerHull( bx, by, bz, PLACE_PHYS_PLAYER_PADDING )
-end
-
-local function placementPlanNeedsImmediatePhys( plan )
-	for _, cell in ipairs( plan.cells or {} ) do
-		if needsImmediatePlacePhys( cell.bx, cell.by, cell.bz ) then return true end
-	end
-	return false
-end
-
 local function validateReach( ply, bx, by, bz )
 	local reach = C.Reach:GetFloat()
 	if reach > 0 and IsValid( ply ) then
@@ -745,7 +593,7 @@ local function validatePlacementPlan( ply, plan )
 	local add = 0
 	for _, cell in ipairs( plan.cells ) do
 		if not worldBoundsOK( cell.bx, cell.by, cell.bz ) then
-			notify( ply, "Out of build range (mc_world_limit)" )
+			notify( ply, L( ply, "server.world_limit", "Out of build range (mc_world_limit)" ) )
 			return false
 		end
 		if MC.GetBlock( cell.bx, cell.by, cell.bz ) ~= 0 then return false end
@@ -758,7 +606,7 @@ local function validatePlacementPlan( ply, plan )
 
 	local maxBlocks = C.MaxBlocks:GetInt()
 	if maxBlocks > 0 and SV.BlockCount + add > maxBlocks then
-		notify( ply, "Block limit reached (mc_max_blocks)" )
+		notify( ply, L( ply, "server.max_blocks", "Block limit reached (mc_max_blocks)" ) )
 		return false
 	end
 	return true
@@ -776,7 +624,8 @@ function SV.Place( ply, bx, by, bz, id, orient )
 	local plan = MC.BuildPlacementPlan and MC.BuildPlacementPlan( bx, by, bz, id, orient )
 	if not validatePlacementPlan( ply, plan ) then return false end
 	return applyCells( plan.cells, ply, {
-		priorityPhys = placementPlanNeedsImmediatePhys( plan ),
+		priorityPhys = true,
+		immediatePhys = true,
 		fxIndex = 1,
 	} ) > 0
 end
@@ -784,7 +633,7 @@ end
 function SV.Break( ply, bx, by, bz )
 	local plan = MC.BuildBreakPlan and MC.BuildBreakPlan( bx, by, bz )
 	if not validateBreakPlan( ply, plan ) then return false end
-	return applyCells( plan.cells, ply, { priorityPhys = true, fxIndex = 1 } ) > 0
+	return applyCells( plan.cells, ply, { priorityPhys = true, immediatePhys = true, fxIndex = 1 } ) > 0
 end
 
 function SV.SyncPlacementPlan( ply, bx, by, bz, id, orient )
@@ -816,6 +665,7 @@ function SV.SetBlock( bx, by, bz, id, orient, options )
 		fx = options.fx ~= false,
 		handlers = options.handlers,
 		priorityPhys = options.priorityPhys,
+		immediatePhys = options.immediatePhys,
 	} )
 	if not changed then return false, "unchanged" end
 	return true
@@ -954,18 +804,18 @@ end
 local FILL_USAGE = "用法: /fill x1 y1 z1 x2 y2 z2 <id|name|air|minecraft:name[state]> [state]"
 
 local function runFill( ply, args )
-	if #args < 8 then chat( ply, FILL_USAGE ) return end
+	if #args < 8 then chat( ply, L( ply, "server.fill_usage", FILL_USAGE ) ) return end
 	if not canEdit( ply ) then return end
 
 	local x1, y1, z1 = tonumber( args[2] ), tonumber( args[3] ), tonumber( args[4] )
 	local x2, y2, z2 = tonumber( args[5] ), tonumber( args[6] ), tonumber( args[7] )
 	local id, orient, blockArg, parseErr = parseBlockStateTail( joinArgs( args, 8 ) )
 	if not x1 or not y1 or not z1 or not x2 or not y2 or not z2 or parseErr == "block" then
-		chat( ply, FILL_USAGE )
+		chat( ply, L( ply, "server.fill_usage", FILL_USAGE ) )
 		return
 	end
 	if parseErr == "state" then
-		chat( ply, "方块状态不合法: " .. blockArg )
+		chat( ply, L( ply, "server.invalid_state", "方块状态不合法: {block}", { block = blockArg } ) )
 		return
 	end
 
@@ -976,14 +826,14 @@ local function runFill( ply, args )
 	local minz, maxz = math.min( z1, z2 ), math.max( z1, z2 )
 
 	if not worldBoundsOK( minx, miny, minz ) or not worldBoundsOK( maxx, maxy, maxz ) then
-		chat( ply, "超出建造范围 (mc_world_limit)" )
+		chat( ply, L( ply, "server.world_limit", "超出建造范围 (mc_world_limit)" ) )
 		return
 	end
 
 	local volume = ( maxx - minx + 1 ) * ( maxy - miny + 1 ) * ( maxz - minz + 1 )
 	local fillMax = C.FillMax and C.FillMax:GetInt() or 32768
 	if fillMax > 0 and volume > fillMax then
-		chat( ply, "填充范围太大 (" .. volume .. " > mc_fill_max " .. fillMax .. ")" )
+		chat( ply, L( ply, "server.fill_too_large", "填充范围太大 ({volume} > mc_fill_max {max})", { volume = volume, max = fillMax } ) )
 		return
 	end
 
@@ -1002,7 +852,7 @@ local function runFill( ply, args )
 
 	local maxBlocks = C.MaxBlocks:GetInt()
 	if id ~= 0 and maxBlocks > 0 and SV.BlockCount + add > maxBlocks then
-		chat( ply, "会超过方块上限 (mc_max_blocks)" )
+		chat( ply, L( ply, "server.fill_max_blocks", "会超过方块上限 (mc_max_blocks)" ) )
 		return
 	end
 
@@ -1025,7 +875,7 @@ local function runFill( ply, args )
 		end
 	end
 
-	chat( ply, "已填充 " .. changed .. " 个方块" )
+	chat( ply, L( ply, "server.filled", "已填充 {count} 个方块", { count = changed } ) )
 end
 
 hook.Add( "PlayerSay", "mc_fill_command", function( ply, text )
@@ -1070,8 +920,6 @@ local function clearWorldNoNet()
 	SV.PhysDirtyPriority = {}
 	SV.SyncQueue = {}
 	SV.PlayerLoadedChunks = {}
-	SV.StreamInterestKeys = {}
-	SV.ServerCollisionActiveChunks = {}
 end
 
 local function resyncAllClients()
@@ -1163,7 +1011,7 @@ local function importOneCell( data, cache, palette, legacyMode, cx, cy, cz, li, 
 end
 
 local function importCells( data, appendMode, deferResync )
-	if not data or not data.chunks then return nil, "文件格式不对" end
+	if not data or not data.chunks then return nil, "invalid_file" end
 	local cache = {}
 	local palette = data.p or data.palette
 	local expectedBlocks = istable( data.stats ) and math.floor( tonumber( data.stats.blocks ) or 0 ) or 0
@@ -1282,43 +1130,60 @@ local function importFormatText( data )
 	return "single chunks=" .. ( istable( data.chunks ) and #data.chunks or 0 ) .. " v=" .. tostring( data.v )
 end
 
+local function importErrorText( ply, err )
+	if err == "invalid_file" then
+		return L( ply, "server.invalid_file", "文件格式不对" )
+	end
+	return tostring( err )
+end
+
 local function runImport( ply, args )
 	if IsValid( ply ) and not ply:IsAdmin() then return end
 	local first = string.lower( tostring( args[1] or "" ) )
 	local base = ( first == "/mc_import" or first == "!mc_import" or first == "mc_import" ) and 2 or 1
 	local path = normalizeImportPath( args[base] )
-	if not path then chat( ply, IMPORT_USAGE ) return end
+	if not path then chat( ply, L( ply, "server.import_usage", IMPORT_USAGE ) ) return end
 
 	local mode = string.lower( tostring( args[base + 1] or "replace" ) )
 	local appendMode = mode == "append"
 	if mode ~= "replace" and mode ~= "append" then
-		chat( ply, IMPORT_USAGE )
+		chat( ply, L( ply, "server.import_usage", IMPORT_USAGE ) )
 		return
 	end
 
 	if not file.Exists( path, "DATA" ) then
-		chat( ply, "找不到导入文件: garrysmod/data/" .. path )
+		chat( ply, L( ply, "server.import_missing", "找不到导入文件: garrysmod/data/{path}", { path = path } ) )
 		return
 	end
 
 	local raw = file.Read( path, "DATA" )
 	local data = raw and util.JSONToTable( raw )
 	if not data then
-		chat( ply, "导入文件不是有效 JSON: " .. path )
+		chat( ply, L( ply, "server.import_bad_json", "导入文件不是有效 JSON: {path}", { path = path } ) )
 		return
 	end
 
 	chat( ply, "import format: " .. importFormatText( data ) .. " bytes=" .. #raw )
 	local result, err = importManifest( data, path, appendMode )
-	if not result then chat( ply, "导入失败: " .. tostring( err ) ) return end
-	local msg = string.format( "导入完成: %d 个方块，当前总数 %d，跳过未知 %d，越界 %d，超上限 %d",
-		result.imported, result.total, result.skippedUnknown, result.skippedBounds, result.skippedLimit )
+	if not result then chat( ply, L( ply, "server.import_failed", "导入失败: {err}", { err = importErrorText( ply, err ) } ) ) return end
+	local msg = L( ply, "server.import_done", "导入完成: {blocks} 个方块，当前总数 {total}，跳过未知 {unknown}，越界 {bounds}，超上限 {max}", {
+		blocks = result.imported,
+		total = result.total,
+		unknown = result.skippedUnknown,
+		bounds = result.skippedBounds,
+		max = result.skippedLimit,
+	} )
 	chat( ply, msg )
 	if result.expected and result.expected > 0 and result.imported ~= result.expected then
-		chat( ply, "导入文件写着 " .. result.expected .. " 个方块，实际进服 " .. result.imported .. " 个；少的都在上面跳过统计里。" )
+		chat( ply, L( ply, "server.import_count_mismatch", "导入文件写着 {expected} 个方块，实际进服 {imported} 个；少的都在上面跳过统计里。", {
+			expected = result.expected,
+			imported = result.imported,
+		} ) )
 	end
 	if result.skippedLimit > 0 then
-		chat( ply, "导入被 mc_import_max=" .. tostring( C.ImportMax and C.ImportMax:GetInt() or "?" ) .. " 截断了；完整区块请先执行 mc_import_max 0。" )
+		chat( ply, L( ply, "server.import_truncated", "导入被 mc_import_max={max} 截断了；完整区块请先执行 mc_import_max 0。", {
+			max = tostring( C.ImportMax and C.ImportMax:GetInt() or "?" ),
+		} ) )
 	end
 	MsgN( "[MC] imported " .. path .. " (" .. ( appendMode and "append" or "replace" ) .. ")" )
 end
@@ -1340,7 +1205,7 @@ end )
 concommand.Add( "mc_import_probe", function( ply, _, args )
 	if IsValid( ply ) and not ply:IsAdmin() then return end
 	local path = normalizeImportPath( args[1] )
-	if not path then chat( ply, IMPORT_USAGE ) return end
+	if not path then chat( ply, L( ply, "server.import_usage", IMPORT_USAGE ) ) return end
 	if not file.Exists( path, "DATA" ) then
 		chat( ply, "probe missing: garrysmod/data/" .. path )
 		return
@@ -1438,17 +1303,6 @@ local function ensureSyncQueue( ply )
 	return q
 end
 
-local function sendUnloadChunk( ply, key )
-	if not IsValid( ply ) then return end
-	local cx, cy, cz = MC.ChunkKeyToCoords( key )
-	if not cx then return end
-	net.Start( "mc_unload_chunk" )
-		net.WriteInt( cx, Net.COORD_BITS )
-		net.WriteInt( cy, Net.COORD_BITS )
-		net.WriteInt( cz, Net.COORD_BITS )
-	net.Send( ply )
-end
-
 local function sendHttpManifest( ply )
 	if not IsValid( ply ) or not playerHttpChunkDeliveryActive( ply ) then return false end
 	if not SV.ChunkStore or not SV.ChunkStore.HttpManifestPayload then return false end
@@ -1464,43 +1318,8 @@ local function sendHttpManifest( ply )
 	return true
 end
 
-local function sendHttpChunkInterest( ply, key )
-	if not IsValid( ply ) then return false end
-	local cx, cy, cz = MC.ChunkKeyToCoords( key )
-	if not cx then return false end
-	net.Start( "mc_http_chunk" )
-		net.WriteInt( cx, Net.COORD_BITS )
-		net.WriteInt( cy, Net.COORD_BITS )
-		net.WriteInt( cz, Net.COORD_BITS )
-	net.Send( ply )
-	return true
-end
-
-local function sendHttpChunkInterestBulk( ply, keys )
-	if not IsValid( ply ) or not keys or #keys == 0 then return false end
-	local i = 1
-	while i <= #keys do
-		local count = math.min( HTTP_CHUNK_KEYS_PER_MESSAGE, #keys - i + 1 )
-		net.Start( "mc_http_chunk_bulk" )
-			net.WriteUInt( count, Net.COUNT_BITS )
-			for j = i, i + count - 1 do
-				local cx, cy, cz = MC.ChunkKeyToCoords( keys[j] )
-				net.WriteInt( cx or 0, Net.COORD_BITS )
-				net.WriteInt( cy or 0, Net.COORD_BITS )
-				net.WriteInt( cz or 0, Net.COORD_BITS )
-			end
-		net.Send( ply )
-		i = i + count
-	end
-	return true
-end
-
-local function enqueueSyncKey( ply, key )
+local function queueSyncKey( ply, key )
 	local chunk = MC.GetChunkByKey( key )
-	if ( not chunk or not chunk.count or chunk.count <= 0 ) and SV.ChunkStore and SV.ChunkStore.IsLazyWorld and SV.ChunkStore.IsLazyWorld() then
-		SV.ChunkStore.QueueChunkLoad( key, false )
-		return false
-	end
 	if not chunk or not chunk.count or chunk.count <= 0 then return false end
 	local q = ensureSyncQueue( ply )
 	if q.queuedKeys[key] then return true end
@@ -1510,39 +1329,31 @@ local function enqueueSyncKey( ply, key )
 	return true
 end
 
-function SV.UpdatePlayerStreamInterest( ply, desired )
+local function queueAllLoadedChunksForPlayer( ply )
 	if not IsValid( ply ) then return end
-	if SV.PlayerFullSnapshot and SV.PlayerFullSnapshot[ply] then return end
-	desired = desired or SV.StreamInterestKeys or {}
-	local loaded = SV.PlayerLoadedChunks[ply] or {}
+	local q = ensureSyncQueue( ply )
+	q.keys = {}
+	q.i = 1
+	q.active = nil
+	q.queuedKeys = {}
+	q.inflightBytes = 0
+
+	local keys = {}
+	for key, chunk in pairs( MC.World or {} ) do
+		if chunk.count and chunk.count > 0 then
+			keys[#keys + 1] = key
+		end
+	end
+	table.sort( keys )
+
+	local loaded = {}
+	for _, key in ipairs( keys ) do
+		if queueSyncKey( ply, key ) then
+			loaded[key] = true
+		end
+	end
 	SV.PlayerLoadedChunks[ply] = loaded
-	local httpKeys = {}
-
-	for key in pairs( desired ) do
-		if not loaded[key] then
-			if playerHttpChunkDeliveryActive( ply )
-				and SV.ChunkStore
-				and SV.ChunkStore.HasBaseChunk
-				and SV.ChunkStore.HasBaseChunk( key )
-				and ( not SV.ChunkStore.HasChunkEdits or not SV.ChunkStore.HasChunkEdits( key ) ) then
-				httpKeys[#httpKeys + 1] = key
-				loaded[key] = true
-			elseif enqueueSyncKey( ply, key ) then
-				loaded[key] = true
-			end
-		end
-	end
-
-	if #httpKeys > 0 then
-		sendHttpChunkInterestBulk( ply, httpKeys )
-	end
-
-	for key in pairs( loaded ) do
-		if not desired[key] then
-			loaded[key] = nil
-			sendUnloadChunk( ply, key )
-		end
-	end
+	return #keys
 end
 
 local function makeSyncActive( key )
@@ -1576,23 +1387,17 @@ function SV.BeginSync( ply )
 	if syncSnapshotEnabled() and SV.BeginSnapshotSync and SV.BeginSnapshotSync( ply ) then
 		return
 	end
-	if not next( SV.StreamInterestKeys ) then
-		SV.StreamInterestKeys = collectEntityInterestKeys( streamChunkSpanXY(), streamChunkSpanZ() )
-	end
-	SV.UpdatePlayerStreamInterest( ply, SV.StreamInterestKeys )
+	queueAllLoadedChunksForPlayer( ply )
 end
 
-local function restartPlayerStreamSync( ply )
+local function restartPlayerFullSync( ply )
 	if not IsValid( ply ) then return end
 	net.Start( "mc_clear" )
 	net.Send( ply )
 	SV.PlayerLoadedChunks[ply] = {}
 	SV.PlayerFullSnapshot[ply] = nil
 	SV.SyncQueue[ply] = { keys = {}, i = 1, inflightBytes = 0, queuedKeys = {} }
-	if not next( SV.StreamInterestKeys ) then
-		SV.StreamInterestKeys = collectEntityInterestKeys( streamChunkSpanXY(), streamChunkSpanZ() )
-	end
-	SV.UpdatePlayerStreamInterest( ply, SV.StreamInterestKeys )
+	queueAllLoadedChunksForPlayer( ply )
 end
 
 net.Receive( "mc_http_failed", function( _, ply )
@@ -1601,69 +1406,38 @@ net.Receive( "mc_http_failed", function( _, ply )
 	if SV.PlayerHTTPDisabled[ply] then return end
 	SV.PlayerHTTPDisabled[ply] = true
 	MsgN( "[MC] HTTP chunk delivery disabled for " .. tostring( ply:Nick() ) .. ": " .. reason )
-	restartPlayerStreamSync( ply )
+	restartPlayerFullSync( ply )
 end )
 
-local function RemoveChunkEntIfInactive( key )
-	if SV.IsChunkCollisionActive( key ) then return end
-	local chunk = MC.GetChunkByKey( key )
-	if chunk and IsValid( chunk.ent ) then
-		chunk.ent:Remove()
-		chunk.ent = nil
-	end
-	SV.PhysDirty[key] = nil
-	SV.PhysDirtyPriority[key] = nil
-end
-
-local function refreshServerCollisionInterest()
-	local desired = collectEntityCollisionInterestKeys()
-	local active = SV.ServerCollisionActiveChunks or {}
-	SV.ServerCollisionActiveChunks = active
-
-	for key in pairs( desired ) do
-		if not active[key] then
-			active[key] = true
-		end
-		local chunk = MC.GetChunkByKey( key )
-		if ( not chunk or not chunk.count or chunk.count <= 0 ) and SV.ChunkStore and SV.ChunkStore.IsLazyWorld and SV.ChunkStore.IsLazyWorld() then
-			SV.ChunkStore.QueueChunkLoad( key, true )
-			chunk = SV.ChunkStore.HydrateChunkNow( key, true )
-		end
-		if chunk and chunk.count and chunk.count > 0 and not IsValid( chunk.ent ) then
-			SV.EnsureChunkEnt( chunk, true )
-			SV.MarkPhysDirty( key )
-		end
-	end
-
-	for key in pairs( active ) do
-		if not desired[key] then
-			active[key] = nil
-			RemoveChunkEntIfInactive( key )
+function SV.RefreshServerCollision()
+	for key, c in pairs( MC.World or {} ) do
+		if c.count and c.count > 0 then
+			if not IsValid( c.ent ) then
+				SV.EnsureChunkEnt( c )
+				SV.MarkPhysDirty( key )
+			end
+		else
+			if IsValid( c.ent ) then
+				c.ent:Remove()
+				c.ent = nil
+			end
+			SV.PhysDirty[key] = nil
+			SV.PhysDirtyPriority[key] = nil
 		end
 	end
 end
 
 function SV.RefreshChunkInterest()
-	SV.StreamInterestKeys = collectEntityInterestKeys( streamChunkSpanXY(), streamChunkSpanZ() )
-	for _, ply in ipairs( player.GetAll() ) do
-		SV.UpdatePlayerStreamInterest( ply, SV.StreamInterestKeys )
-	end
-	refreshServerCollisionInterest()
+	SV.RefreshServerCollision()
 end
 
 local function sendSyncStep( ply, q, byteLimit )
-	if q.active and not playerLoadedChunk( ply, q.active.key ) then
-		q.active = nil
-	end
-
 	while not q.active do
 		if q.i > #q.keys then return false end
 		local key = q.keys[q.i]
 		q.i = q.i + 1
 		if q.queuedKeys then q.queuedKeys[key] = nil end
-		if playerLoadedChunk( ply, key ) then
-			q.active = makeSyncActive( key )
-		end
+		q.active = makeSyncActive( key )
 	end
 
 	local active = q.active
@@ -1687,13 +1461,8 @@ local function sendSyncStep( ply, q, byteLimit )
 end
 
 timer.Create( "mc_interest_sync", INTEREST_TIMER_INTERVAL, 0, function()
-	if SV.StreamInterestDirty then
-		SV.StreamInterestDirty = false
-		for _, ply in ipairs( player.GetAll() ) do
-			SV.UpdatePlayerStreamInterest( ply, SV.StreamInterestKeys )
-		end
-	end
-	SV.RefreshChunkInterest()
+	SV.StreamInterestDirty = false
+	SV.RefreshServerCollision()
 end )
 
 -- drip small chunk parts to each syncing player; large chunks must never be one
@@ -2131,23 +1900,13 @@ function SV.LoadFromPath( path, resyncClients, requestedName )
 	if ( data.v == 5 or data.v == 7 ) and savedHeight ~= MC.CH then
 		MsgN( "[MC] remapping save chunk height " .. savedHeight .. " -> " .. MC.CH )
 	end
+	local isV8PartManifest = data.v == 8 and istable( data.parts )
 
 	clearWorldNoNet()
-	if data.v == 8 and lazyLoadEnabled() and SV.ChunkStore and SV.ChunkStore.LoadLazyManifest then
-		SV.ChunkStore.LoadLazyManifest( data, path )
-		SV.BlockCount = math.max( 0, math.floor( tonumber( SV.BlockCount ) or tonumber( data.stats and data.stats.blocks ) or 0 ) )
-		SV.Dirty = false
-		if resyncClients then resyncAllClients() end
-		MsgN( "[MC] loaded lazy large world manifest with " .. tostring( SV.BlockCount ) .. " blocks" ..
-			( requestedName and ( " from \"" .. requestedName .. "\"" ) or "" ) ..
-		( data.map and ( " saved on map " .. tostring( data.map ) ) or "" ) )
-		return true
-	end
-	if data.v == 8 then return false, "lazy_large_world_disabled" end
 	if SV.ChunkStore and SV.ChunkStore.Reset then SV.ChunkStore.Reset() end
 
 	local cache = {}
-	if istable( data.parts ) then
+	if isV8PartManifest or istable( data.parts ) then
 		local ok, err = loadSaveParts( data, path, cache )
 		if not ok then return false, err end
 	else
@@ -2239,8 +1998,6 @@ concommand.Add( "mc_clear", function( ply )
 	SV.SnapshotQueue = {}
 	SV.PlayerLoadedChunks = {}
 	SV.PlayerFullSnapshot = {}
-	SV.StreamInterestKeys = {}
-	SV.ServerCollisionActiveChunks = {}
 	SV.Dirty = true
 	net.Start( "mc_clear" ) net.Broadcast()
 	MsgN( "[MC] world cleared" )
@@ -2333,12 +2090,11 @@ concommand.Add( "mc_rebuild", function( ply )
 	local n = 0
 	for key, c in pairs( MC.World ) do
 		if c.count > 0 then
-			SV.ServerCollisionActiveChunks[key] = true
-			SV.EnsureChunkEnt( c, true )
+			SV.EnsureChunkEnt( c )
 			SV.MarkPhysDirty( key )
 			n = n + 1
 		end
 	end
 	MsgN( "[MC] rebuilding collision for " .. n .. " chunks" )
-	if IsValid( ply ) then ply:ChatPrint( "[MC] 重建了 " .. n .. " 个区块的碰撞" ) end
+	if IsValid( ply ) then ply:ChatPrint( "[MC] " .. L( ply, "server.rebuilt", "重建了 {count} 个区块的碰撞", { count = n } ) ) end
 end )
