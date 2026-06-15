@@ -171,7 +171,10 @@ function MC.RefreshClientCollisionInterest( force )
 	for key in pairs( old ) do
 		if not desired[key] then
 			local e = MC.ChunkEnts[key]
-			if IsValid( e ) then e:PhysicsDestroy() end
+			if IsValid( e ) then
+				if e.ClearPhysicsShards then e:ClearPhysicsShards() end
+				e:PhysicsDestroy()
+			end
 			MC.PhysDirty[key] = nil
 			MC.PhysDirtyPriority[key] = nil
 		end
@@ -796,6 +799,7 @@ local function rebuildChunkPhys( key, enabled )
 		if enabled and MC.IsChunkInClientCollisionInterest( key ) then
 			e:RebuildPhysics()
 		else
+			if e.ClearPhysicsShards then e:ClearPhysicsShards() end
 			e:PhysicsDestroy()
 		end
 	end
@@ -888,12 +892,13 @@ hook.Add( "Think", "mc_meshbuild", function()
 
 	if next( MC.PhysDirty ) then
 		local enabled = clientCollisionEnabled()
-		local priorityBudget = 8
+		local priorityBudget = 1
+		local priorityDeadline = SysTime() + CLIENT_PHYS_REBUILD_FRAME_MS / 1000
 		for key in pairs( MC.PhysDirtyPriority ) do
 			if MC.PhysDirty[key] then
 				rebuildChunkPhys( key, enabled )
 				priorityBudget = priorityBudget - 1
-				if priorityBudget <= 0 then break end
+				if priorityBudget <= 0 or SysTime() >= priorityDeadline then break end
 			else
 				MC.PhysDirtyPriority[key] = nil
 			end
