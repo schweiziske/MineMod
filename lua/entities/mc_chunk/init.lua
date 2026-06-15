@@ -35,6 +35,10 @@ function ENT:OnTakeDamage( dmginfo )
 	return 0
 end
 
+function ENT:OnRemove()
+	if self.ClearPhysicsShards then self:ClearPhysicsShards() end
+end
+
 -- frozen static build: never let physics forces move / drift a chunk
 function ENT:PhysicsUpdate() end
 

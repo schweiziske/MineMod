@@ -16,7 +16,7 @@ MC.Config.PlayerDuckHeight = MC.Config.BlockSize * 1.5
 MC.Config.PlayerViewHeight = MC.Config.BlockSize * 1.62
 MC.Config.PlayerDuckViewHeight = MC.Config.BlockSize * 1.27
 MC.Config.PlayerJumpPower = 240
--- Minecraft-style chunk section: 16x16 horizontally, 32 blocks vertically.
+-- Minecraft-style chunk section: 16x16x32 blocks.
 -- Z is not globally clamped; sections are addressed by their chunk Z.
 MC.Config.ChunkSize = 16
 MC.Config.ChunkHeight = 32

@@ -242,6 +242,12 @@ local function vectorUsable( v )
 	return v and v.LengthSqr and v:LengthSqr() > 0.0001
 end
 
+local function isChunkCollisionOwner( ent )
+	if not IsValid( ent ) then return false end
+	local class = ent:GetClass()
+	return class == "mc_chunk" or class == "mc_chunk_phys"
+end
+
 local function cellFromDamageInfo( ent, dmg )
 	local attacker = dmg:GetAttacker()
 	if IsValid( attacker ) and attacker:IsPlayer() and MC.PlayerBlockAim then
@@ -296,7 +302,7 @@ local function explosionSignature( ent, dmg, center )
 end
 
 function SV.HandleChunkTraceDamage( ent, dmg, dir, tr )
-	if not IsValid( ent ) or ent:GetClass() ~= "mc_chunk" then return false end
+	if not isChunkCollisionOwner( ent ) then return false end
 	if dmg:IsDamageType( DMG_BLAST ) then return false end
 	local bx, by, bz = cellFromTrace( tr, dir )
 	if not bx then return false end
@@ -309,7 +315,7 @@ function SV.HandleChunkTraceDamage( ent, dmg, dir, tr )
 end
 
 function SV.HandleChunkDamage( ent, dmg )
-	if not IsValid( ent ) or ent:GetClass() ~= "mc_chunk" then return false end
+	if not isChunkCollisionOwner( ent ) then return false end
 	if not damageEnabled() then return false end
 
 	if dmg:IsDamageType( DMG_BLAST ) then

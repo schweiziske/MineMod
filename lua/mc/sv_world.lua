@@ -33,6 +33,7 @@ SV.PlayerFullSnapshot = SV.PlayerFullSnapshot or {} -- player -> true once full-
 SV.PlayerHTTPDisabled = SV.PlayerHTTPDisabled or {} -- player -> true after client-side HTTP fetch is blocked/failed
 SV.Dirty      = SV.Dirty or false    -- world changed since last save
 local PHYS_REBUILD_DELAY = 0.12
+local SERVER_PHYS_REBUILD_INTERVAL = 0.05
 
 local function syncFastEnabled()
 	return not C.SyncFast or C.SyncFast:GetBool()
@@ -141,14 +142,17 @@ function SV.IsChunkCollisionActive( key )
 	return true
 end
 
-local function decodeLocalWithHeight( li, height )
-	local CS = MC.CS
-	local CS2 = CS * CS
-	if li < 0 or li >= CS2 * height then return nil end
-	local lz = math.floor( li / CS2 )
-	local rem = li - lz * CS2
-	local ly = math.floor( rem / CS )
-	local lx = rem - ly * CS
+local function decodeLocalWithGeometry( li, chunkSize, height )
+	chunkSize = math.floor( tonumber( chunkSize ) or MC.CS )
+	if chunkSize <= 0 then chunkSize = MC.CS end
+	height = math.floor( tonumber( height ) or MC.CH )
+	if height <= 0 then height = MC.CH end
+	local cs2 = chunkSize * chunkSize
+	if li < 0 or li >= cs2 * height then return nil end
+	local lz = math.floor( li / cs2 )
+	local rem = li - lz * cs2
+	local ly = math.floor( rem / chunkSize )
+	local lx = rem - ly * chunkSize
 	return lx, ly, lz
 end
 
@@ -199,7 +203,7 @@ local function flushPhysDirtyKeys( keys )
 end
 
 -- debounced collision rebuild (coalesces many edits in the same frame/window)
-timer.Create( "mc_phys_rebuild", 0.05, 0, function()
+timer.Create( "mc_phys_rebuild", SERVER_PHYS_REBUILD_INTERVAL, 0, function()
 	if not next( SV.PhysDirty ) then return end
 	local now = CurTime()
 	local priorityBudget = collisionEmergencyBuildsPerTick()
@@ -401,13 +405,16 @@ local function markNeighbourShapePhysDirty( bx, by, bz, priority, dirty )
 	mark( bx, by - 1, bz )
 end
 
-local function collectCellPhysDirty( dirty, bx, by, bz )
+local function collectCellPhysDirty( dirty, immediateDirty, bx, by, bz )
 	local function mark( x, y, z )
 		local cx, cy, cz = MC.CellToChunk( x, y, z )
-		dirty[MC.ChunkKey( cx, cy, cz )] = true
+		local key = MC.ChunkKey( cx, cy, cz )
+		dirty[key] = true
+		return key
 	end
 
-	mark( bx, by, bz )
+	local primaryKey = mark( bx, by, bz )
+	if immediateDirty then immediateDirty[primaryKey] = true end
 	mark( bx + 1, by, bz )
 	mark( bx - 1, by, bz )
 	mark( bx, by + 1, bz )
@@ -433,6 +440,7 @@ local function apply( bx, by, bz, id, _, orient, actor, options )
 	if priorityPhys == nil then priorityPhys = false end
 	local immediatePhys = options.immediatePhys == true
 	local dirty = {}
+	local immediateDirty = {}
 
 	local delta = 0
 	if old == 0 and id ~= 0 then
@@ -449,6 +457,7 @@ local function apply( bx, by, bz, id, _, orient, actor, options )
 		SV.EnsureChunkEnt( chunk, false )
 		SV.MarkPhysDirty( chunk.key, priorityPhys )
 		dirty[chunk.key] = true
+		immediateDirty[chunk.key] = true
 	else
 		if emptied then
 			SV.PhysDirty[chunk.key] = nil
@@ -457,10 +466,11 @@ local function apply( bx, by, bz, id, _, orient, actor, options )
 		else
 			SV.MarkPhysDirty( chunk.key, priorityPhys )
 			dirty[chunk.key] = true
+			immediateDirty[chunk.key] = true
 		end
 	end
 	markNeighbourShapePhysDirty( bx, by, bz, priorityPhys, dirty )
-	if immediatePhys then flushPhysDirtyKeys( dirty ) end
+	if immediatePhys then flushPhysDirtyKeys( immediateDirty ) end
 
 	broadcastSet( bx, by, bz, id, orient )
 	local shouldFx = options.fx
@@ -493,6 +503,7 @@ local function applyCells( cells, actor, options )
 	local changes = {}
 	local changedInfo = {}
 	local dirty = {}
+	local immediateDirty = {}
 	local delta = 0
 
 	for i, cell in ipairs( cells ) do
@@ -522,7 +533,7 @@ local function applyCells( cells, actor, options )
 					id = id, orient = orient,
 					old = old, oldOrient = oldOrient,
 				}
-				collectCellPhysDirty( dirty, bx, by, bz )
+				collectCellPhysDirty( dirty, immediateDirty, bx, by, bz )
 
 				if id ~= 0 and chunk then
 					SV.EnsureChunkEnt( chunk )
@@ -545,7 +556,7 @@ local function applyCells( cells, actor, options )
 			SV.MarkPhysDirty( c.key, priorityPhys )
 		end
 	end
-	if immediatePhys then flushPhysDirtyKeys( dirty ) end
+	if immediatePhys then flushPhysDirtyKeys( immediateDirty ) end
 
 	broadcastSetBulk( changes )
 
@@ -741,7 +752,7 @@ function SV.RemoveBlocksBulk( cells, options )
 			if changed then
 				removed = removed + 1
 				changes[#changes + 1] = { bx = bx, by = by, bz = bz, id = 0, orient = 0 }
-				collectCellPhysDirty( dirty, bx, by, bz )
+				collectCellPhysDirty( dirty, nil, bx, by, bz )
 
 				if emptied and chunk then
 					SV.PhysDirty[chunk.key] = nil
@@ -1771,6 +1782,12 @@ local function savedHeightForData( data )
 	return savedHeight
 end
 
+local function savedChunkSizeForData( data )
+	local savedChunkSize = math.floor( tonumber( data.cs ) or MC.CS )
+	if savedChunkSize <= 0 then savedChunkSize = MC.CS end
+	return savedChunkSize
+end
+
 local function readSaveJSON( path )
 	local raw = file.Read( path, "DATA" )
 	if not raw or raw == "" then return nil, "empty_save" end
@@ -1785,6 +1802,7 @@ end
 local function loadSaveChunks( data, cache )
 	cache = cache or {}
 	local savedHeight = savedHeightForData( data )
+	local savedChunkSize = savedChunkSizeForData( data )
 	local palette = data.p or data.palette
 
 	for _, ck in ipairs( data.chunks or {} ) do
@@ -1814,9 +1832,9 @@ local function loadSaveChunks( data, cache )
 			elseif legacyMode == "slice" then
 				bx, by, bz = oldSliceCell( cx, cy, cz, li )
 			else
-				local lx, ly, lz = decodeLocalWithHeight( li, data.v == 5 and savedHeight or MC.CH )
+				local lx, ly, lz = decodeLocalWithGeometry( li, savedChunkSize, savedHeight )
 				if lx then
-					bx, by, bz = cx * MC.CS + lx, cy * MC.CS + ly, cz * savedHeight + lz
+					bx, by, bz = cx * savedChunkSize + lx, cy * savedChunkSize + ly, cz * savedHeight + lz
 				end
 			end
 			if bx then
@@ -1874,6 +1892,7 @@ local function loadSaveParts( data, manifestPath, cache )
 		end
 
 		partData.v = partData.v or 5
+		partData.cs = partData.cs or data.cs
 		partData.h = partData.h or data.h
 		partData.p = partData.p or data.p
 		partData.palette = partData.palette or data.palette
@@ -1897,8 +1916,12 @@ function SV.LoadFromPath( path, resyncClients, requestedName )
 		MsgN( "[MC] WARNING: save BlockSize " .. data.bs .. " != current " .. MC.BS .. " (positions may be off)" )
 	end
 	local savedHeight = savedHeightForData( data )
-	if ( data.v == 5 or data.v == 7 ) and savedHeight ~= MC.CH then
-		MsgN( "[MC] remapping save chunk height " .. savedHeight .. " -> " .. MC.CH )
+	local savedChunkSize = savedChunkSizeForData( data )
+	if data.v == 5 or data.v == 7 or data.v == 8 then
+		if savedChunkSize ~= MC.CS or savedHeight ~= MC.CH then
+			MsgN( "[MC] remapping save chunk geometry " .. savedChunkSize .. "x" .. savedChunkSize .. "x" .. savedHeight ..
+				" -> " .. MC.CS .. "x" .. MC.CS .. "x" .. MC.CH )
+		end
 	end
 	local isV8PartManifest = data.v == 8 and istable( data.parts )
 

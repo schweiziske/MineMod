@@ -127,7 +127,13 @@ end
 
 local function markPredictedCellDirty( bx, by, bz, priority )
 	MC.MarkDirty( bx, by, bz )
-	MC.MarkCellPhysNeighbours( bx, by, bz, priority )
+	if priority then
+		local cx, cy, cz = MC.CellToChunk( bx, by, bz )
+		MC.MarkChunkPhysDirty( MC.ChunkKey( cx, cy, cz ), true )
+		MC.MarkCellPhysNeighbours( bx, by, bz, false )
+	else
+		MC.MarkCellPhysNeighbours( bx, by, bz, false )
+	end
 end
 
 local function predictCells( cells, priorityFn )
@@ -255,7 +261,10 @@ end
 local function resetClientWorldForSnapshot( expectedChunks, expectedBlocks )
 	if MC.FreeAllMeshes then MC.FreeAllMeshes() end
 	for _, e in pairs( MC.ChunkEnts or {} ) do
-		if IsValid( e ) then e:PhysicsDestroy() end
+		if IsValid( e ) then
+			if e.ClearPhysicsShards then e:ClearPhysicsShards() end
+			e:PhysicsDestroy()
+		end
 	end
 	MC.World = {}
 	MC.MeshDirty = {}
@@ -458,21 +467,64 @@ local function httpPaletteEntry( state, cache, index )
 	return id, orient
 end
 
-local function decodeHttpLocalWithHeight( li, height )
-	local cs, cs2 = MC.CS, MC.CS * MC.CS
+local function decodeHttpLocalWithGeometry( li, chunkSize, height )
+	chunkSize = math.floor( tonumber( chunkSize ) or MC.CS )
+	if chunkSize <= 0 then chunkSize = MC.CS end
 	li = math.floor( tonumber( li ) or -1 )
 	height = math.floor( tonumber( height ) or MC.CH )
+	if height <= 0 then height = MC.CH end
+	local cs2 = chunkSize * chunkSize
 	if li < 0 or li >= cs2 * height then return nil end
 	local lz = math.floor( li / cs2 )
 	local rem = li - lz * cs2
-	local ly = math.floor( rem / cs )
-	local lx = rem - ly * cs
+	local ly = math.floor( rem / chunkSize )
+	local lx = rem - ly * chunkSize
 	return lx, ly, lz
 end
 
 local function httpChunkKeyForCell( bx, by, bz )
 	local cx, cy, cz = MC.CellToChunk( bx, by, bz )
 	return MC.ChunkKey( cx, cy, cz )
+end
+
+local function httpSavedChunkSize( state )
+	local savedChunkSize = math.floor( tonumber( state and state.chunkSize ) or MC.CS )
+	if savedChunkSize <= 0 then savedChunkSize = MC.CS end
+	return savedChunkSize
+end
+
+local function httpSavedHeight( state )
+	local savedHeight = math.floor( tonumber( state and state.height ) or MC.CH )
+	if savedHeight <= 0 then savedHeight = MC.CH end
+	return savedHeight
+end
+
+local function httpChunkEntriesForRuntimeKey( state, key )
+	local rx, ry, rz = MC.ChunkKeyToCoords( key )
+	if not state or not rx then return {} end
+	local savedChunkSize = httpSavedChunkSize( state )
+	local savedHeight = httpSavedHeight( state )
+	local minBX, maxBX = rx * MC.CS, rx * MC.CS + MC.CS - 1
+	local minBY, maxBY = ry * MC.CS, ry * MC.CS + MC.CS - 1
+	local minBZ, maxBZ = rz * MC.CH, rz * MC.CH + MC.CH - 1
+	local minSX, maxSX = math.floor( minBX / savedChunkSize ), math.floor( maxBX / savedChunkSize )
+	local minSY, maxSY = math.floor( minBY / savedChunkSize ), math.floor( maxBY / savedChunkSize )
+	local minSZ, maxSZ = math.floor( minBZ / savedHeight ), math.floor( maxBZ / savedHeight )
+	local entries = {}
+
+	for sz = minSZ, maxSZ do
+		for sy = minSY, maxSY do
+			for sx = minSX, maxSX do
+				local savedKey = MC.ChunkKey( sx, sy, sz )
+				local entry = state.chunkIndex and state.chunkIndex[savedKey]
+				if istable( entry ) then
+					entries[#entries + 1] = { key = savedKey, entry = entry }
+				end
+			end
+		end
+	end
+
+	return entries
 end
 
 local function applyQueuedHttpDeltas( state, key )
@@ -509,16 +561,17 @@ function MC.LoadHttpChunkRecord( key, record, partData )
 	local srcCY = math.floor( tonumber( record[2] ) or 0 )
 	local srcCZ = math.floor( tonumber( record[3] ) or 0 )
 	local cells = record[4]
+	local savedChunkSize = math.floor( tonumber( partData and partData.cs ) or tonumber( state.chunkSize ) or MC.CS )
 	local savedHeight = math.floor( tonumber( partData and partData.h ) or tonumber( state.height ) or MC.CH )
 	local cache = {}
 	local touched = {}
 	local blocks = 0
 
 	local function loadOneCell( li, paletteIndex )
-		local lx, ly, lz = decodeHttpLocalWithHeight( li, savedHeight )
+		local lx, ly, lz = decodeHttpLocalWithGeometry( li, savedChunkSize, savedHeight )
 		if not lx then return end
-		local bx = srcCX * MC.CS + lx
-		local by = srcCY * MC.CS + ly
+		local bx = srcCX * savedChunkSize + lx
+		local by = srcCY * savedChunkSize + ly
 		local bz = srcCZ * savedHeight + lz
 		local cx, cy, cz, nli = MC.CellToChunk( bx, by, bz )
 		if not MC.LocalIndexInRange( nli ) then return end
@@ -558,16 +611,39 @@ function MC.LoadHttpChunkRecord( key, record, partData )
 	return blocks
 end
 
-local function finishHttpChunkLoad( state, key, record, partData )
+local function tryFinishHttpChunkLoad( state, key )
 	if not state.requestedKeys[key] then return end
-	local blocks = MC.LoadHttpChunkRecord( key, record, partData )
+	local entries = state.requestedEntries and state.requestedEntries[key]
+	if not istable( entries ) or #entries == 0 then return end
+	local ready = {}
+
+	for _, item in ipairs( entries ) do
+		local entry = item.entry
+		local partNo = math.floor( tonumber( entry and entry.part ) or 0 )
+		local idx = math.floor( tonumber( entry and entry.index ) or 0 )
+		local partData = state.partCache[partNo]
+		if not partData then return false end
+		local record = partData.chunks and partData.chunks[idx]
+		if not istable( record ) then
+			failHttpChunkSync( state, "chunk " .. tostring( item.key or key ), "invalid chunk index" )
+			return false
+		end
+		ready[#ready + 1] = { record = record, partData = partData }
+	end
+
+	local blocks = 0
+	for _, item in ipairs( ready ) do
+		blocks = blocks + MC.LoadHttpChunkRecord( key, item.record, item.partData )
+	end
 	state.loadingKeys[key] = nil
 	state.pendingKeys[key] = nil
 	state.loadedKeys[key] = true
+	state.requestedEntries[key] = nil
 	beginProgressChunk( blocks )
 	addProgressCells( blocks )
 	finishProgressChunk( key )
 	applyQueuedHttpDeltas( state, key )
+	return true
 end
 
 local function processHttpPartWaiters( state, partNo )
@@ -577,15 +653,7 @@ local function processHttpPartWaiters( state, partNo )
 	local partData = state.partCache[partNo]
 	if not partData or not istable( partData.chunks ) then return end
 	for key in pairs( waiting ) do
-		local entry = state.chunkIndex and state.chunkIndex[key]
-		local idx = entry and math.floor( tonumber( entry.index ) or 0 )
-		local record = idx and partData.chunks[idx]
-		if istable( record ) then
-			finishHttpChunkLoad( state, key, record, partData )
-		else
-			state.loadingKeys[key] = nil
-			state.pendingKeys[key] = nil
-		end
+		tryFinishHttpChunkLoad( state, key )
 	end
 end
 
@@ -604,6 +672,7 @@ local function fetchHttpPart( state, partNo )
 			failHttpChunkSync( state, "part " .. tostring( partPath ), "invalid payload" )
 			return
 		end
+		data.cs = data.cs or state.chunkSize
 		data.h = data.h or state.height
 		data.p = data.p or state.palette
 		state.partCache[partNo] = data
@@ -625,26 +694,33 @@ function MC.QueueHttpChunk( key )
 		state.pendingKeys[key] = true
 		return true
 	end
-	local entry = state.chunkIndex and state.chunkIndex[key]
-	if not istable( entry ) then
+	local entries = httpChunkEntriesForRuntimeKey( state, key )
+	if #entries == 0 then
 		state.requestedKeys[key] = nil
 		return false
 	end
-	local partNo = math.floor( tonumber( entry.part ) or 0 )
-	local idx = math.floor( tonumber( entry.index ) or 0 )
-	if partNo <= 0 or idx <= 0 then
-		state.requestedKeys[key] = nil
-		return false
-	end
+	state.requestedEntries[key] = entries
 	state.loadingKeys[key] = true
-	local partData = state.partCache[partNo]
-	if partData and istable( partData.chunks ) and istable( partData.chunks[idx] ) then
-		finishHttpChunkLoad( state, key, partData.chunks[idx], partData )
-		return true
+	state.pendingKeys[key] = true
+
+	for _, item in ipairs( entries ) do
+		local entry = item.entry
+		local partNo = math.floor( tonumber( entry and entry.part ) or 0 )
+		local idx = math.floor( tonumber( entry and entry.index ) or 0 )
+		if partNo <= 0 or idx <= 0 then
+			state.requestedKeys[key] = nil
+			state.loadingKeys[key] = nil
+			state.pendingKeys[key] = nil
+			state.requestedEntries[key] = nil
+			return false
+		end
+		if not state.partCache[partNo] then
+			state.pendingByPart[partNo] = state.pendingByPart[partNo] or {}
+			state.pendingByPart[partNo][key] = true
+			fetchHttpPart( state, partNo )
+		end
 	end
-	state.pendingByPart[partNo] = state.pendingByPart[partNo] or {}
-	state.pendingByPart[partNo][key] = true
-	fetchHttpPart( state, partNo )
+	tryFinishHttpChunkLoad( state, key )
 	return true
 end
 
@@ -659,9 +735,14 @@ local function finishHttpManifest( state, body )
 	state.palette = data.p or data.palette or {}
 	state.chunkIndex = data.chunkIndex or {}
 	state.parts = data.parts or {}
+	state.chunkSize = math.floor( tonumber( data.cs ) or tonumber( state.chunkSize ) or MC.CS )
 	state.height = math.floor( tonumber( data.h ) or tonumber( state.height ) or MC.CH )
 	state.ready = true
+	local pending = {}
 	for key in pairs( state.pendingKeys ) do
+		pending[#pending + 1] = key
+	end
+	for _, key in ipairs( pending ) do
 		MC.QueueHttpChunk( key )
 	end
 end
@@ -677,6 +758,7 @@ function MC.BeginHttpChunkSync( baseUrl, manifestPath, chunks, blocks, height )
 		manifestPath = manifestPath,
 		baseDir = string.GetPathFromFilename( manifestPath ),
 		cacheRoot = "mc/http_cache/" .. token,
+		chunkSize = MC.CS,
 		height = math.floor( tonumber( height ) or MC.CH ),
 		palette = {},
 		chunkIndex = {},
@@ -688,6 +770,7 @@ function MC.BeginHttpChunkSync( baseUrl, manifestPath, chunks, blocks, height )
 		requestedKeys = {},
 		loadingKeys = {},
 		loadedKeys = {},
+		requestedEntries = {},
 		queuedDeltas = {},
 		ready = false,
 	}
@@ -906,7 +989,10 @@ net.Receive( "mc_unload_chunk", function()
 
 	MC.FreeChunkMesh( key )
 	local e = MC.ChunkEnts and MC.ChunkEnts[key]
-	if IsValid( e ) then e:PhysicsDestroy() end
+	if IsValid( e ) then
+		if e.ClearPhysicsShards then e:ClearPhysicsShards() end
+		e:PhysicsDestroy()
+	end
 	if MC.ChunkEnts then MC.ChunkEnts[key] = nil end
 	MC.World[key] = nil
 	MC.MeshDirty[key] = nil
@@ -937,6 +1023,7 @@ net.Receive( "mc_clear", function()
 	MC.FreeAllMeshes()
 	for key, e in pairs( MC.ChunkEnts or {} ) do
 		if IsValid( e ) then
+			if e.ClearPhysicsShards then e:ClearPhysicsShards() end
 			e:PhysicsDestroy()
 		end
 	end

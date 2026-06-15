@@ -145,6 +145,7 @@ local function loadPart( partNo )
 	local data, err = readSaveJSON( partPath )
 	if err then return nil, err end
 	if not istable( data ) or not istable( data.chunks ) then return nil, "invalid_part: " .. partPath end
+	data.cs = data.cs or ( Store.Manifest and Store.Manifest.cs ) or MC.CS
 	data.h = data.h or ( Store.Manifest and Store.Manifest.h ) or MC.CH
 	data.p = data.p or Store.Palette
 
@@ -170,16 +171,59 @@ local function paletteEntry( cache, index )
 	return id, orient
 end
 
-local function decodeLocalWithHeight( li, height )
-	local cs, cs2 = MC.CS, MC.CS * MC.CS
+local function decodeLocalWithGeometry( li, chunkSize, height )
+	chunkSize = math.floor( tonumber( chunkSize ) or MC.CS )
+	if chunkSize <= 0 then chunkSize = MC.CS end
 	li = math.floor( tonumber( li ) or -1 )
 	height = math.floor( tonumber( height ) or MC.CH )
+	if height <= 0 then height = MC.CH end
+	local cs2 = chunkSize * chunkSize
 	if li < 0 or li >= cs2 * height then return nil end
 	local lz = math.floor( li / cs2 )
 	local rem = li - lz * cs2
-	local ly = math.floor( rem / cs )
-	local lx = rem - ly * cs
+	local ly = math.floor( rem / chunkSize )
+	local lx = rem - ly * chunkSize
 	return lx, ly, lz
+end
+
+local function savedChunkSizeForManifest()
+	local savedChunkSize = math.floor( tonumber( Store.Manifest and Store.Manifest.cs ) or MC.CS )
+	if savedChunkSize <= 0 then savedChunkSize = MC.CS end
+	return savedChunkSize
+end
+
+local function savedHeightForManifest()
+	local savedHeight = math.floor( tonumber( Store.Manifest and Store.Manifest.h ) or MC.CH )
+	if savedHeight <= 0 then savedHeight = MC.CH end
+	return savedHeight
+end
+
+local function baseChunkEntriesForRuntimeKey( key )
+	local rx, ry, rz = MC.ChunkKeyToCoords( key )
+	if not rx then return {} end
+	local savedChunkSize = savedChunkSizeForManifest()
+	local savedHeight = savedHeightForManifest()
+	local minBX, maxBX = rx * MC.CS, rx * MC.CS + MC.CS - 1
+	local minBY, maxBY = ry * MC.CS, ry * MC.CS + MC.CS - 1
+	local minBZ, maxBZ = rz * MC.CH, rz * MC.CH + MC.CH - 1
+	local minSX, maxSX = math.floor( minBX / savedChunkSize ), math.floor( maxBX / savedChunkSize )
+	local minSY, maxSY = math.floor( minBY / savedChunkSize ), math.floor( maxBY / savedChunkSize )
+	local minSZ, maxSZ = math.floor( minBZ / savedHeight ), math.floor( maxBZ / savedHeight )
+	local entries = {}
+
+	for sz = minSZ, maxSZ do
+		for sy = minSY, maxSY do
+			for sx = minSX, maxSX do
+				local savedKey = MC.ChunkKey( sx, sy, sz )
+				local entry = Store.ChunkIndex and Store.ChunkIndex[savedKey]
+				if istable( entry ) then
+					entries[#entries + 1] = { key = savedKey, entry = entry }
+				end
+			end
+		end
+	end
+
+	return entries
 end
 
 local function ensureChunkForKey( key )
@@ -197,7 +241,7 @@ end
 function Store.HasBaseChunk( key )
 	if not Store.IsLazyWorld() then return false end
 	key = tostring( key or "" )
-	return Store.ChunkIndex and Store.ChunkIndex[key] ~= nil
+	return #baseChunkEntriesForRuntimeKey( key ) > 0
 end
 
 function Store.HasChunkEdits( key )
@@ -214,7 +258,8 @@ function Store.HttpManifestPayload()
 		path = Store.ManifestPath,
 		chunks = chunks,
 		blocks = math.max( 0, math.floor( tonumber( SV.BlockCount ) or tonumber( Store.Manifest.stats and Store.Manifest.stats.blocks ) or 0 ) ),
-		height = math.max( 1, math.floor( tonumber( Store.Manifest.h ) or MC.CH ) ),
+		chunkSize = savedChunkSizeForManifest(),
+		height = savedHeightForManifest(),
 	}
 end
 
@@ -284,15 +329,16 @@ local function loadBaseChunkIntoWorld( key, record )
 	local srcCY = math.floor( tonumber( record[2] ) or 0 )
 	local srcCZ = math.floor( tonumber( record[3] ) or 0 )
 	local cells = record[4]
-	local savedHeight = math.floor( tonumber( Store.Manifest and Store.Manifest.h ) or MC.CH )
+	local savedChunkSize = savedChunkSizeForManifest()
+	local savedHeight = savedHeightForManifest()
 	local cache = {}
 	local touched = {}
 
 	local function loadOneCell( li, paletteIndex )
-		local lx, ly, lz = decodeLocalWithHeight( li, savedHeight )
+		local lx, ly, lz = decodeLocalWithGeometry( li, savedChunkSize, savedHeight )
 		if not lx then return end
-		local bx = srcCX * MC.CS + lx
-		local by = srcCY * MC.CS + ly
+		local bx = srcCX * savedChunkSize + lx
+		local by = srcCY * savedChunkSize + ly
 		local bz = srcCZ * savedHeight + lz
 		local cx, cy, cz, nli = MC.CellToChunk( bx, by, bz )
 		local targetKey = MC.ChunkKey( cx, cy, cz )
@@ -323,7 +369,7 @@ local function loadBaseChunkIntoWorld( key, record )
 		end
 	end
 
-	return MC.GetChunkByKey( key )
+	return MC.GetChunkByKey( key ), touched
 end
 
 function Store.HydrateChunkNow( key, priority )
@@ -331,14 +377,15 @@ function Store.HydrateChunkNow( key, priority )
 	key = tostring( key or "" )
 	if key == "" then return nil end
 	local existing = MC.GetChunkByKey( key )
-	if existing then
+	if existing and Store.LoadedKeys[key] then
 		Store.LoadedKeys[key] = true
 		return existing
 	end
 
-	local entry = Store.ChunkIndex and Store.ChunkIndex[key]
-	local chunk
-	if istable( entry ) then
+	local chunk = existing
+	local entries = baseChunkEntriesForRuntimeKey( key )
+	for _, item in ipairs( entries ) do
+		local entry = item.entry
 		local partData, err = loadPart( entry.part )
 		if not partData then
 			Store.LastError = err
@@ -352,7 +399,11 @@ function Store.HydrateChunkNow( key, priority )
 			Store.QueuedKeys[key] = nil
 			return nil
 		end
-		chunk = loadBaseChunkIntoWorld( key, record )
+		local loadedChunk, touched = loadBaseChunkIntoWorld( key, record )
+		chunk = chunk or loadedChunk
+		for touchedKey in pairs( touched or {} ) do
+			Store.LoadedKeys[touchedKey] = true
+		end
 	end
 
 	if not chunk and Store.EditChunks and Store.EditChunks[key] then
@@ -377,7 +428,7 @@ function Store.QueueChunkLoad( key, priority )
 	if not Store.IsLazyWorld() then return end
 	key = tostring( key or "" )
 	if key == "" or Store.LoadedKeys[key] or Store.QueuedKeys[key] then return end
-	if not Store.ChunkIndex[key] and not ( Store.EditChunks and Store.EditChunks[key] ) then return end
+	if #baseChunkEntriesForRuntimeKey( key ) == 0 and not ( Store.EditChunks and Store.EditChunks[key] ) then return end
 	Store.QueuedKeys[key] = true
 	Store.LoadQueue[#Store.LoadQueue + 1] = { key = key, priority = priority == true }
 end

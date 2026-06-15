@@ -1,8 +1,8 @@
 --[[----------------------------------------------------------------------------
-	mc_chunk : one entity per non-empty 16x16x32 Minecraft-style chunk section.
-	  server -> provides collision (greedy-merged box multiconvex)
+	mc_chunk : one render owner per non-empty 16x16x32 Minecraft-style chunk section.
+	  server -> provides collision (greedy-merged box multiconvex, sharded if huge)
 	  client -> draws the chunk's IMesh (MC.DrawChunk)
-	This is the ONLY entity type the system spawns. Sections can stack vertically.
+	Sections can stack vertically.
 ------------------------------------------------------------------------------]]
 
 ENT.Type      = "anim"
@@ -13,7 +13,51 @@ ENT.Spawnable = false
 ENT.AdminOnly = false
 ENT.DisableDuplicator = true
 
-local MAX_PHYSICS_CONVEXES = 512
+local PHYSICS_CONVEXES_PER_ENTITY = 96
+
+local function freezePhysicsObject( ent )
+	local phys = ent:GetPhysicsObject()
+	if IsValid( phys ) then
+		phys:EnableMotion( false )
+		phys:Wake()
+		return true
+	end
+	return false
+end
+
+function ENT:ClearPhysicsShards()
+	if not self.PhysicsShards then return end
+	for _, shard in ipairs( self.PhysicsShards ) do
+		if IsValid( shard ) then shard:Remove() end
+	end
+	self.PhysicsShards = nil
+end
+
+local function spawnPhysicsShard( owner, index, convexes )
+	local shard
+	if SERVER then
+		shard = ents.Create( "mc_chunk_phys" )
+	else
+		shard = ents.CreateClientside( "mc_chunk_phys" )
+	end
+	if not IsValid( shard ) then return nil end
+
+	shard.ChunkKey = owner.ChunkKey
+	shard.cx, shard.cy, shard.cz = owner.cx, owner.cy, owner.cz
+	shard.ParentChunk = owner
+	shard.ShardIndex = index
+	shard:SetPos( owner:GetPos() )
+	shard:SetAngles( Angle( 0, 0, 0 ) )
+	if shard.Spawn then shard:Spawn() end
+	if SERVER and shard.Activate then shard:Activate() end
+	shard:SetNoDraw( true )
+
+	if not shard.ApplyPhysicsConvexes or not shard:ApplyPhysicsConvexes( convexes ) then
+		shard:Remove()
+		return nil
+	end
+	return shard
+end
 
 function ENT:EnsureKey()
 	if self.ChunkKey then return self.ChunkKey end
@@ -226,12 +270,14 @@ end
 function ENT:RebuildPhysics()
 	local chunk = MC.GetChunkByKey( self:EnsureKey() )
 	if not chunk or chunk.count == 0 then
+		self:ClearPhysicsShards()
 		self:PhysicsDestroy()
 		return
 	end
 
 	local boxes, customConvexes = greedyBoxes( chunk )
 	if #boxes == 0 and #customConvexes == 0 then
+		self:ClearPhysicsShards()
 		self:PhysicsDestroy()
 		return
 	end
@@ -257,10 +303,43 @@ function ENT:RebuildPhysics()
 		if #points >= 4 then convexes[#convexes + 1] = points end
 	end
 
-	if #convexes > MAX_PHYSICS_CONVEXES then
+	if SERVER then
+		MsgN( "[MC][phys-debug] chunk=" .. tostring( self.ChunkKey ) ..
+			" blocks=" .. tostring( chunk.count or 0 ) ..
+			" boxes=" .. #boxes ..
+			" customConvexes=" .. #customConvexes ..
+			" convexes=" .. #convexes )
+	end
+
+	if #convexes > PHYSICS_CONVEXES_PER_ENTITY then
+		self:ClearPhysicsShards()
 		self:PhysicsDestroy()
-		MsgN( "[MC] !!! collision skipped for chunk " .. tostring( self.ChunkKey ) ..
-			"  convexes=" .. #convexes .. " > " .. MAX_PHYSICS_CONVEXES )
+		self:SetSolid( SOLID_NONE )
+		local shards = {}
+		local shardIndex = 1
+
+		for first = 1, #convexes, PHYSICS_CONVEXES_PER_ENTITY do
+			local part = {}
+			local last = math.min( #convexes, first + PHYSICS_CONVEXES_PER_ENTITY - 1 )
+			for i = first, last do
+				part[#part + 1] = convexes[i]
+			end
+			local shard = spawnPhysicsShard( self, shardIndex, part )
+			if not IsValid( shard ) then
+				for _, existing in ipairs( shards ) do
+					if IsValid( existing ) then existing:Remove() end
+				end
+				MsgN( "[MC] !!! collision shard build FAILED for chunk " .. tostring( self.ChunkKey ) ..
+					"  convexes=" .. #convexes .. " shard=" .. shardIndex )
+				return
+			end
+			shards[#shards + 1] = shard
+			shardIndex = shardIndex + 1
+		end
+
+		self.PhysicsShards = shards
+		MsgN( "[MC] collision sharded for chunk " .. tostring( self.ChunkKey ) ..
+			"  convexes=" .. #convexes .. " shards=" .. #shards )
 		return
 	end
 
@@ -272,17 +351,14 @@ function ENT:RebuildPhysics()
 	-- blocks -- exactly the "weird collision, can't build, can't break" symptom.
 	-- (PhysicsInitMultiConvex auto-sets the collision bounds from the mesh, so we no
 	-- longer override them. MOVETYPE_NONE = no collision at all, so VPHYSICS is required.)
+	self:ClearPhysicsShards()
 	self:PhysicsDestroy()
 	self:PhysicsInitMultiConvex( convexes )
 	self:SetMoveType( MOVETYPE_VPHYSICS )
 	self:SetSolid( SOLID_VPHYSICS )
 	self:EnableCustomCollisions( true )
 
-	local phys = self:GetPhysicsObject()
-	if IsValid( phys ) then
-		phys:EnableMotion( false )   -- static build: blocks must never move
-		phys:Wake()
-	else
+	if not freezePhysicsObject( self ) then
 		MsgN( "[MC] !!! collision build FAILED for chunk " .. tostring( self.ChunkKey ) ..
 			"  boxes=" .. #boxes )
 	end
