@@ -131,6 +131,10 @@ local function clientCollisionRadius()
 end
 
 local function clientCollisionAimRadius()
+	local convar = GetConVar and GetConVar( "mc_client_collision_aim_radius" ) or nil
+	if convar and convar.GetInt then
+		return math.Clamp( convar:GetInt(), 0, 8 )
+	end
 	local value = MC.Config and MC.Config.ClientCollisionAimRadius
 	if istable( value ) and value.GetInt then
 		return math.Clamp( value:GetInt(), 0, 8 )
@@ -284,9 +288,10 @@ local function collectClientAimCollisionInterestKeys( lp, desired )
 	if not IsValid( lp ) then return nil end
 	local hit = MC.PlayerBlockAim and MC.PlayerBlockAim( lp ) or nil
 	if not hit or not hit.bx then return nil end
-	addClientCellNeighborhoodCollisionKeys( desired, hit.bx, hit.by, hit.bz, clientCollisionAimRadius() )
+	local radius = clientCollisionAimRadius()
+	addClientCellNeighborhoodCollisionKeys( desired, hit.bx, hit.by, hit.bz, radius )
 	local cx, cy, cz = MC.CellToChunk( hit.bx, hit.by, hit.bz )
-	return MC.ChunkKey( cx, cy, cz ) .. "|" .. hit.bx .. ":" .. hit.by .. ":" .. hit.bz
+	return MC.ChunkKey( cx, cy, cz ) .. "|" .. hit.bx .. ":" .. hit.by .. ":" .. hit.bz .. "|" .. radius
 end
 
 local function clientCollisionBoundsSignature( bounds )
@@ -366,6 +371,10 @@ cvars.AddChangeCallback( "mc_client_collision", function()
 end, "mc" )
 
 cvars.AddChangeCallback( "mc_client_collision_chunk_span", function()
+	MC.RefreshClientCollisionInterest( true )
+end, "mc" )
+
+cvars.AddChangeCallback( "mc_client_collision_aim_radius", function()
 	MC.RefreshClientCollisionInterest( true )
 end, "mc" )
 

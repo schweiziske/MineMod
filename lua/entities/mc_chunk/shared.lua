@@ -317,15 +317,6 @@ function ENT:RebuildPhysics( bounds )
 		if #points >= 4 then convexes[#convexes + 1] = points end
 	end
 
-	if SERVER then
-		MsgN( "[MC][phys-debug] chunk=" .. tostring( self.ChunkKey ) ..
-			" blocks=" .. tostring( chunk.count or 0 ) ..
-			" bounds=" .. tostring( bounds and #bounds or "full" ) ..
-			" boxes=" .. #boxes ..
-			" customConvexes=" .. #customConvexes ..
-			" convexes=" .. #convexes )
-	end
-
 	if #convexes > PHYSICS_CONVEXES_PER_ENTITY then
 		self:ClearPhysicsShards()
 		self:PhysicsDestroy()
