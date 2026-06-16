@@ -451,9 +451,11 @@ local function broadcastSet( bx, by, bz, id, orient )
 	net.Broadcast()
 end
 
-local function sendSetBulk( changes, target )
+local function sendSetBulk( changes, target, options )
 	if #changes == 0 then return end
 	if not target then return end
+	options = options or {}
+	local explosionMeshThrottle = options.explosionMeshThrottle == true
 	local i = 1
 	while i <= #changes do
 		local count = math.min( BULK_SET_CELLS_PER_MESSAGE, #changes - i + 1 )
@@ -469,13 +471,14 @@ local function sendSetBulk( changes, target )
 				net.WriteUInt( id, Net.ID_BITS )
 				net.WriteUInt( orient or 0, Net.ORIENT_BITS )
 			end
+			net.WriteBool( explosionMeshThrottle )
 		net.Send( target )
 		i = i + count
 	end
 end
 
-local function broadcastSetBulk( changes )
-	sendSetBulk( changes, player.GetAll() )
+local function broadcastSetBulk( changes, options )
+	sendSetBulk( changes, player.GetAll(), options )
 end
 
 -- a player-predicted edit got rejected: push the authoritative cell state back
@@ -702,7 +705,9 @@ local function applyCells( cells, actor, options )
 	end
 	if immediatePhys then flushPhysDirtyKeys( immediateDirty ) end
 
-	broadcastSetBulk( changes )
+	broadcastSetBulk( changes, {
+		explosionMeshThrottle = options.explosionMeshThrottle == true,
+	} )
 
 	local fxInfo = changedInfo[fxIndex] or changedInfo[1]
 	for _, info in ipairs( changedInfo ) do
@@ -926,7 +931,9 @@ function SV.RemoveBlocksBulk( cells, options )
 		end
 	end
 
-	broadcastSetBulk( changes )
+	broadcastSetBulk( changes, {
+		explosionMeshThrottle = options.explosionMeshThrottle == true,
+	} )
 	SV.Dirty = true
 	return removed
 end

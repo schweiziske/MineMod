@@ -107,6 +107,14 @@ concommand.Add( "mc_client_diag", function()
 		if IsValid( e ) then entsByMap = entsByMap + 1 end
 	end
 
+	local shardEnts, shardPhys = 0, 0
+	for _, e in ipairs( ents.FindByClass( "mc_chunk_phys" ) ) do
+		if IsValid( e ) then
+			shardEnts = shardEnts + 1
+			if IsValid( e:GetPhysicsObject() ) then shardPhys = shardPhys + 1 end
+		end
+	end
+
 	local entsRegistered = 0
 	for _, e in pairs( MC.ChunkEnts or {} ) do
 		if IsValid( e ) then entsRegistered = entsRegistered + 1 end
@@ -117,6 +125,36 @@ concommand.Add( "mc_client_diag", function()
 	local progress = MC.SyncProgress or {}
 	local renderStats = MC.RenderStats or {}
 	local physStats = MC.ClientPhysStats or {}
+	local ply = LocalPlayer()
+	local playerKey = "nil"
+	local playerWorld = false
+	local playerEnt = false
+	local playerInterest = false
+	local aimKey = "nil"
+	local aimWorld = false
+	local aimEnt = false
+	local aimInterest = false
+
+	if IsValid( ply ) then
+		local pos = ply.WorldSpaceCenter and ply:WorldSpaceCenter() or ply:GetPos()
+		local bx, by, bz = MC.WorldToCell( pos )
+		local cx, cy, cz = MC.CellToChunk( bx, by, bz )
+		playerKey = MC.ChunkKey( cx, cy, cz )
+		playerWorld = MC.World and MC.World[playerKey] ~= nil
+		playerEnt = MC.ChunkEnts and IsValid( MC.ChunkEnts[playerKey] )
+		playerInterest = MC.ClientCollisionInterest and MC.ClientCollisionInterest[playerKey] ~= nil
+
+		local aimDistConvar = GetConVar( "mc_collision_aim_distance" )
+		local aimDist = aimDistConvar and aimDistConvar:GetFloat() or ( MC.Config and MC.Config.CollisionAimDistance ) or MC.BS * 64
+		local hit = MC.TraceBlockRay and MC.TraceBlockRay( ply:EyePos(), ply:EyeAngles():Forward(), aimDist ) or nil
+		if hit and hit.bx then
+			local acx, acy, acz = MC.CellToChunk( hit.bx, hit.by, hit.bz )
+			aimKey = MC.ChunkKey( acx, acy, acz )
+			aimWorld = MC.World and MC.World[aimKey] ~= nil
+			aimEnt = MC.ChunkEnts and IsValid( MC.ChunkEnts[aimKey] )
+			aimInterest = MC.ClientCollisionInterest and MC.ClientCollisionInterest[aimKey] ~= nil
+		end
+	end
 
 	print( string.format( "[MC client] world chunks=%d blocks=%d bz=%s..%s meshes=%d chunk ents=%d registered=%d pending=%d progress=%d/%d chunks=%d/%d dirty=%s",
 		chunks, blocks, tostring( minBZ ), tostring( maxBZ ), meshes, entsByMap, entsRegistered, pending,
@@ -130,6 +168,16 @@ concommand.Add( "mc_client_diag", function()
 		tostring( physStats.lastClientPhysKey ), tostring( physStats.lastClientPhysBuildMS ),
 		tostring( physStats.lastClientPhysBounds ), tostring( physStats.lastClientPhysHadObject ),
 		tostring( next( MC.PhysDirty or {} ) ~= nil ) ) )
+	print( string.format( "[MC client] collision detail mode=%s chunk=%s inputBounds=%s boxes=%s custom=%s convexes=%s shards=%s shardPhys=%s mainPhys=%s totalShardEnts=%d/%d",
+		tostring( physStats.lastClientPhysMode ), tostring( physStats.lastClientPhysChunkKey ),
+		tostring( physStats.lastClientPhysInputBounds ), tostring( physStats.lastClientPhysBoxes ),
+		tostring( physStats.lastClientPhysCustomConvexes ), tostring( physStats.lastClientPhysConvexes ),
+		tostring( physStats.lastClientPhysShards ), tostring( physStats.lastClientPhysShardObjects ),
+		tostring( physStats.lastClientPhysMainObject ), shardPhys, shardEnts ) )
+	print( string.format( "[MC client] collision target playerKey=%s world=%s ent=%s interest=%s aimKey=%s world=%s ent=%s interest=%s lastReason=%s",
+		tostring( playerKey ), tostring( playerWorld ), tostring( playerEnt ), tostring( playerInterest ),
+		tostring( aimKey ), tostring( aimWorld ), tostring( aimEnt ), tostring( aimInterest ),
+		tostring( physStats.lastClientPhysReason ) ) )
 	print( string.format( "[MC client] server collision debug=%s bounds=%d age=%s",
 		tostring( MC.ServerCollisionDebug and MC.ServerCollisionDebug:GetBool() ),
 		#( MC.ServerCollisionDebugBounds or {} ),
