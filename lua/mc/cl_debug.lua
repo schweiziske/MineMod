@@ -10,6 +10,10 @@ MC.DebugHUD = MC.DebugHUD or false
 MC.ServerCollisionDebug = MC.ServerCollisionDebug or CreateClientConVar( "mc_server_collision_debug", "0", true, false,
 	"Draw server-authoritative MC collision interest bounds" )
 MC.ServerCollisionDebugBounds = MC.ServerCollisionDebugBounds or {}
+MC.ClientCollisionAABBDebug = MC.ClientCollisionAABBDebug or CreateClientConVar( "mc_client_collision_aabb_debug", "0", true, false,
+	"Draw clientside MC prediction collision AABB boxes" )
+MC.ClientCollisionAABBDebugLimit = MC.ClientCollisionAABBDebugLimit or CreateClientConVar( "mc_client_collision_aabb_debug_limit", "2048", true, false,
+	"Maximum clientside MC prediction collision AABB boxes to draw" )
 
 local function requestServerCollisionDebug()
 	if not net or not MC.ServerCollisionDebug then return end
@@ -269,5 +273,25 @@ hook.Add( "PostDrawTranslucentRenderables", "mc_server_collision_debug_draw", fu
 	local col = Color( 0, 220, 255, 220 )
 	for _, b in ipairs( bounds ) do
 		render.DrawWireframeBox( vector_origin, angle_zero, b.mins, b.maxs, col, true )
+	end
+end )
+
+hook.Remove( "PostDrawTranslucentRenderables", "mc_client_collision_aabb_debug_draw" )
+hook.Add( "PostDrawTranslucentRenderables", "mc_client_collision_aabb_debug_draw", function()
+	if not MC.ClientCollisionAABBDebug or not MC.ClientCollisionAABBDebug:GetBool() then return end
+	local byChunk = MC.ClientCollisionAABBDebugBoxes or {}
+	if next( byChunk ) == nil then return end
+
+	local limit = MC.ClientCollisionAABBDebugLimit and MC.ClientCollisionAABBDebugLimit:GetInt() or 2048
+	limit = math.Clamp( math.floor( tonumber( limit ) or 2048 ), 1, 20000 )
+	local drawn = 0
+	render.SetColorMaterial()
+	local col = Color( 80, 255, 120, 230 )
+	for _, boxes in pairs( byChunk ) do
+		for _, b in ipairs( boxes ) do
+			render.DrawWireframeBox( vector_origin, angle_zero, b.mins, b.maxs, col, true )
+			drawn = drawn + 1
+			if drawn >= limit then return end
+		end
 	end
 end )
