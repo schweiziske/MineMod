@@ -264,6 +264,9 @@ local function reviveChunkEnt( c )
 	end
 
 	e:SetNoDraw( false )
+	if e:GetModel() ~= "models/hunter/blocks/cube025x025x025.mdl" then
+		e:SetModel( "models/hunter/blocks/cube025x025x025.mdl" )
+	end
 	e.cx, e.cy, e.cz = c.cx, c.cy, c.cz
 	e.ChunkKey = c.key
 	e:SetPos( MC.ChunkWorldOrigin( c.cx, c.cy, c.cz ) )

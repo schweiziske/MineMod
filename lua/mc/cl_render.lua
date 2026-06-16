@@ -1159,6 +1159,7 @@ local function rebuildChunkPhys( key, enabled )
 			if e.ChunkKey and e.ChunkKey ~= key and MC.ChunkEnts[e.ChunkKey] == e then
 				MC.ChunkEnts[e.ChunkKey] = nil
 			end
+			e:SetModel( "models/hunter/blocks/cube025x025x025.mdl" )
 			e.cx, e.cy, e.cz = chunk.cx, chunk.cy, chunk.cz
 			e.ChunkKey = key
 			e:SetPos( MC.ChunkWorldOrigin( chunk.cx, chunk.cy, chunk.cz ) )
