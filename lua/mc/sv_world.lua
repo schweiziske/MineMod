@@ -26,6 +26,8 @@ local INTEREST_TIMER_INTERVAL = 0.25
 SV.BlockCount = SV.BlockCount or 0
 SV.PhysDirty  = SV.PhysDirty or {}   -- chunkKey -> due time (collision needs rebuild)
 SV.PhysDirtyPriority = SV.PhysDirtyPriority or {} -- player edits should not wait behind bulk rebuilds
+SV.PhysDirtyBulk = SV.PhysDirtyBulk or {} -- chunkKey -> true when explosion/preset collision rebuild is throttled
+SV.PhysDirtyBulkOrder = SV.PhysDirtyBulkOrder or {}
 SV.SyncQueue  = SV.SyncQueue or {}   -- player -> { keys = {}, i = 1, active = nil }
 SV.SnapshotQueue = SV.SnapshotQueue or {} -- player -> compressed save snapshot transfer state
 SV.PlayerLoadedChunks = SV.PlayerLoadedChunks or {} -- player -> { [chunkKey] = true }
@@ -34,6 +36,7 @@ SV.PlayerHTTPDisabled = SV.PlayerHTTPDisabled or {} -- player -> true after clie
 SV.ServerCollisionActiveChunks = SV.ServerCollisionActiveChunks or {} -- chunkKey -> local bounds lists that should have collision
 SV.ServerCollisionSignatures = SV.ServerCollisionSignatures or {} -- chunkKey -> sorted bounds signature
 SV.ServerCollisionRefreshTick = SV.ServerCollisionRefreshTick or nil
+SV.NextBulkCollisionRebuildAt = SV.NextBulkCollisionRebuildAt or 0
 SV.CollisionDebugPlayers = SV.CollisionDebugPlayers or setmetatable( {}, { __mode = "k" } )
 SV.Dirty      = SV.Dirty or false    -- world changed since last save
 
@@ -119,50 +122,9 @@ local function playerHttpChunkDeliveryActive( ply )
 		and not ( SV.PlayerHTTPDisabled and SV.PlayerHTTPDisabled[ply] )
 end
 
-local function serverCollisionAABBPadding()
-	if C.ServerCollisionAABBPadding then
-		return math.Clamp( C.ServerCollisionAABBPadding:GetFloat(), 0, MC.BS * 8 )
-	end
-	return MC.Config.ServerCollisionAABBPadding or MC.BS * 1.5
-end
-
-local function serverCollisionAimRadius()
-	if C.ServerCollisionAimRadius then
-		return math.Clamp( C.ServerCollisionAimRadius:GetInt(), 0, 8 )
-	end
-	return MC.Config.ServerCollisionAimRadius or 1
-end
-
-local function collisionAimDistance()
-	if C.CollisionAimDistance then
-		return math.Clamp( C.CollisionAimDistance:GetFloat(), MC.BS, MC.BS * 256 )
-	end
-	return MC.Config.CollisionAimDistance or MC.BS * 64
-end
-
-local function serverCollisionExtraRadius()
-	if C.ServerCollisionChunkSpan then
-		return math.Clamp( C.ServerCollisionChunkSpan:GetInt(), 0, 8 )
-	end
-	return MC.Config.ServerCollisionChunkSpan or 0
-end
-
-local function collisionLookaheadTime()
-	if C.ServerCollisionLookaheadTime then
-		return math.Clamp( C.ServerCollisionLookaheadTime:GetFloat(), 0, 2 )
-	end
-	return MC.Config.ServerCollisionLookaheadTime or 0.5
-end
-
-local function collisionLookaheadMax()
-	if C.ServerCollisionLookaheadMax then
-		return math.Clamp( C.ServerCollisionLookaheadMax:GetInt(), 0, 16 )
-	end
-	return MC.Config.ServerCollisionLookaheadMax or 4
-end
-
 function SV.IsChunkCollisionActive( key )
-	return SV.ServerCollisionActiveChunks and SV.ServerCollisionActiveChunks[key] ~= nil
+	local chunk = MC.GetChunkByKey( key )
+	return chunk and chunk.count and chunk.count > 0
 end
 
 local function decodeLocalWithGeometry( li, chunkSize, height )
@@ -198,6 +160,7 @@ local rebuildPhysKey
 
 function SV.MarkPhysDirty( key, priority )
 	if not key then return end
+	if SV.PhysDirtyBulk then SV.PhysDirtyBulk[key] = nil end
 	if priority then
 		SV.PhysDirty[key] = true
 		SV.PhysDirtyPriority[key] = true
@@ -206,6 +169,16 @@ function SV.MarkPhysDirty( key, priority )
 		SV.PhysDirtyPriority[key] = nil
 	end
 	if rebuildPhysKey then rebuildPhysKey( key ) end
+end
+
+function SV.MarkPhysDirtyBulk( key )
+	if not key then return end
+	SV.PhysDirty[key] = true
+	SV.PhysDirtyPriority[key] = nil
+	if not SV.PhysDirtyBulk[key] then
+		SV.PhysDirtyBulk[key] = true
+		SV.PhysDirtyBulkOrder[#SV.PhysDirtyBulkOrder + 1] = key
+	end
 end
 
 function rebuildPhysKey( key )
@@ -219,15 +192,16 @@ function rebuildPhysKey( key )
 	end
 	if chunk and IsValid( chunk.ent ) then
 		SV.EnsureChunkEnt( chunk )
-		chunk.ent:RebuildPhysics( SV.ServerCollisionActiveChunks and SV.ServerCollisionActiveChunks[key] )
+		chunk.ent:RebuildPhysics()
 	elseif chunk and chunk.count and chunk.count > 0 then
 		SV.EnsureChunkEnt( chunk )
 		if IsValid( chunk.ent ) then
-			chunk.ent:RebuildPhysics( SV.ServerCollisionActiveChunks and SV.ServerCollisionActiveChunks[key] )
+			chunk.ent:RebuildPhysics()
 		end
 	end
 	SV.PhysDirty[key] = nil
 	SV.PhysDirtyPriority[key] = nil
+	if SV.PhysDirtyBulk then SV.PhysDirtyBulk[key] = nil end
 end
 
 local function flushPhysDirtyKeys( keys )
@@ -238,138 +212,37 @@ local function flushPhysDirtyKeys( keys )
 	end
 end
 
-local function localCollisionBoundsTouch( a, b )
-	return a[1] <= b[4] + 1 and a[4] + 1 >= b[1]
-		and a[2] <= b[5] + 1 and a[5] + 1 >= b[2]
-		and a[3] <= b[6] + 1 and a[6] + 1 >= b[3]
+local function bulkCollisionInterval()
+	if C.BulkCollisionInterval then return math.max( 0, C.BulkCollisionInterval:GetFloat() ) end
+	return MC.Config.BulkCollisionInterval or 0.12
 end
 
-local function mergeLocalCollisionBounds( list, bound )
-	local merged = bound
-	local i = 1
-	while i <= #list do
-		local cur = list[i]
-		if localCollisionBoundsTouch( cur, merged ) then
-			merged = {
-				math.min( cur[1], merged[1] ),
-				math.min( cur[2], merged[2] ),
-				math.min( cur[3], merged[3] ),
-				math.max( cur[4], merged[4] ),
-				math.max( cur[5], merged[5] ),
-				math.max( cur[6], merged[6] ),
-			}
-			table.remove( list, i )
+local function bulkCollisionChunksPerInterval()
+	if C.BulkCollisionChunksPerInterval then
+		return math.max( 1, C.BulkCollisionChunksPerInterval:GetInt() )
+	end
+	return math.max( 1, MC.Config.BulkCollisionChunksPerInterval or 1 )
+end
+
+local function flushBulkCollisionQueue()
+	local now = CurTime()
+	if now < ( SV.NextBulkCollisionRebuildAt or 0 ) then return end
+	local limit = bulkCollisionChunksPerInterval()
+	local built = 0
+
+	while built < limit and #SV.PhysDirtyBulkOrder > 0 do
+		local key = table.remove( SV.PhysDirtyBulkOrder, 1 )
+		if SV.PhysDirtyBulk[key] and SV.PhysDirty[key] then
+			rebuildPhysKey( key )
+			built = built + 1
 		else
-			i = i + 1
+			SV.PhysDirtyBulk[key] = nil
 		end
 	end
-	list[#list + 1] = merged
-	return merged
-end
 
-local function addChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minBZ, maxBX, maxBY, maxBZ, mergeBounds )
-	if mergeBounds == nil then mergeBounds = true end
-	local minCX, minCY, minCZ = MC.CellToChunk( minBX, minBY, minBZ )
-	local maxCX, maxCY, maxCZ = MC.CellToChunk( maxBX, maxBY, maxBZ )
-	for cz = minCZ, maxCZ do
-		for cy = minCY, maxCY do
-			for cx = minCX, maxCX do
-				local key = MC.ChunkKey( cx, cy, cz )
-				local list = desired[key]
-				if not list then
-					list = {}
-					desired[key] = list
-				end
-				local bound = {
-					math.max( 0, minBX - cx * MC.CS ),
-					math.max( 0, minBY - cy * MC.CS ),
-					math.max( 0, minBZ - cz * MC.CH ),
-					math.min( MC.CS - 1, maxBX - cx * MC.CS ),
-					math.min( MC.CS - 1, maxBY - cy * MC.CS ),
-					math.min( MC.CH - 1, maxBZ - cz * MC.CH ),
-				}
-				if mergeBounds then
-					mergeLocalCollisionBounds( list, bound )
-				else
-					list[#list + 1] = bound
-				end
-			end
-		end
+	if built > 0 then
+		SV.NextBulkCollisionRebuildAt = now + bulkCollisionInterval()
 	end
-end
-
-local function addCellNeighborhoodCollisionKeys( desired, bx, by, bz, radius )
-	radius = math.max( 0, math.floor( tonumber( radius ) or 0 ) )
-	addChunkLocalBoundsCollisionInterest( desired, bx - radius, by - radius, bz - radius, bx + radius, by + radius, bz + radius, false )
-end
-
-local function addAABBCollisionKeys( desired, mins, maxs, padding )
-	if not mins or not maxs then return end
-	padding = math.max( 0, tonumber( padding ) or 0 )
-	local blockPad = math.max( 1, math.ceil( padding / MC.BS ) + serverCollisionExtraRadius() )
-	local minBX = math.floor( mins.x / MC.BS ) - blockPad
-	local minBY = math.floor( mins.y / MC.BS ) - blockPad
-	local minBZ = math.floor( mins.z / MC.BS ) - blockPad
-	local maxBX = math.floor( maxs.x / MC.BS ) + blockPad
-	local maxBY = math.floor( maxs.y / MC.BS ) + blockPad
-	local maxBZ = math.floor( maxs.z / MC.BS ) + blockPad
-	addChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minBZ, maxBX, maxBY, maxBZ )
-end
-
-local function collectPlayerCollisionInterestKeys( desired )
-	for _, ply in ipairs( player.GetAll() ) do
-		if IsValid( ply ) then
-			local mins, maxs = ply:WorldSpaceAABB()
-			local padding = serverCollisionAABBPadding()
-			addAABBCollisionKeys( desired, mins, maxs, padding )
-		end
-	end
-end
-
-local function collectEntityCollisionInterestKeys( desired )
-	for _, ent in ipairs( ents.GetAll() ) do
-		if IsValid( ent ) then
-			local cls = ent:GetClass()
-			if cls ~= "worldspawn" and cls ~= "mc_chunk" and cls ~= "mc_chunk_phys" and not ent:IsPlayer() then
-				local mins, maxs = ent:WorldSpaceAABB()
-				local padding = serverCollisionAABBPadding()
-				addAABBCollisionKeys( desired, mins, maxs, padding )
-			end
-		end
-	end
-end
-
-local function collectPlayerAimCollisionInterestKeys( desired )
-	for _, ply in ipairs( player.GetAll() ) do
-		if IsValid( ply ) then
-			local hit = MC.TraceBlockRay and MC.TraceBlockRay(
-				ply:EyePos(),
-				ply:EyeAngles():Forward(),
-				collisionAimDistance()
-			) or nil
-			if hit and hit.bx then
-				addCellNeighborhoodCollisionKeys( desired, hit.bx, hit.by, hit.bz, serverCollisionAimRadius() )
-			end
-		end
-	end
-end
-
-local function collectServerCollisionInterestKeys()
-	local desired = {}
-	collectPlayerCollisionInterestKeys( desired )
-	collectEntityCollisionInterestKeys( desired )
-	collectPlayerAimCollisionInterestKeys( desired )
-	return desired
-end
-
-local function collisionBoundsSignature( bounds )
-	if not bounds then return "" end
-	local parts = {}
-	for i, b in ipairs( bounds ) do
-		parts[i] = table.concat( b, "," )
-	end
-	table.sort( parts )
-	return table.concat( parts, ";" )
 end
 
 --------------------------------------------------------------------- validation
@@ -687,6 +560,7 @@ local function applyCells( cells, actor, options )
 				elseif emptied and chunk then
 					SV.PhysDirty[chunk.key] = nil
 					SV.PhysDirtyPriority[chunk.key] = nil
+					if SV.PhysDirtyBulk then SV.PhysDirtyBulk[chunk.key] = nil end
 					if IsValid( chunk.ent ) then chunk.ent:Remove() end
 				end
 			end
@@ -700,7 +574,11 @@ local function applyCells( cells, actor, options )
 		local c = MC.GetChunkByKey( key )
 		if c and c.count and c.count > 0 then
 			SV.EnsureChunkEnt( c )
-			SV.MarkPhysDirty( c.key, priorityPhys )
+			if options.deferPhys then
+				SV.MarkPhysDirtyBulk( c.key )
+			else
+				SV.MarkPhysDirty( c.key, priorityPhys )
+			end
 		end
 	end
 	if immediatePhys then flushPhysDirtyKeys( immediateDirty ) end
@@ -865,6 +743,7 @@ function SV.SetBlocksBulk( cells, options )
 		fxIndex = options.fxIndex,
 		handlers = options.handlers,
 		priorityPhys = options.priorityPhys,
+		deferPhys = options.deferPhys == true,
 	} )
 end
 
@@ -906,6 +785,7 @@ function SV.RemoveBlocksBulk( cells, options )
 				if emptied and chunk then
 					SV.PhysDirty[chunk.key] = nil
 					SV.PhysDirtyPriority[chunk.key] = nil
+					if SV.PhysDirtyBulk then SV.PhysDirtyBulk[chunk.key] = nil end
 					if IsValid( chunk.ent ) then chunk.ent:Remove() end
 				end
 
@@ -927,7 +807,11 @@ function SV.RemoveBlocksBulk( cells, options )
 		local c = MC.GetChunkByKey( key )
 		if c and c.count and c.count > 0 then
 			SV.EnsureChunkEnt( c )
-			SV.MarkPhysDirty( c.key, priorityPhys )
+			if options.deferPhys then
+				SV.MarkPhysDirtyBulk( c.key )
+			else
+				SV.MarkPhysDirty( c.key, priorityPhys )
+			end
 		end
 	end
 
@@ -1080,6 +964,8 @@ local function clearWorldNoNet()
 	SV.BlockCount = 0
 	SV.PhysDirty = {}
 	SV.PhysDirtyPriority = {}
+	SV.PhysDirtyBulk = {}
+	SV.PhysDirtyBulkOrder = {}
 	SV.SyncQueue = {}
 	SV.PlayerLoadedChunks = {}
 end
@@ -1578,18 +1464,14 @@ function SV.RefreshServerCollision( force )
 	local tick = engine and engine.TickCount and engine.TickCount() or CurTime()
 	if not force and SV.ServerCollisionRefreshTick == tick then return end
 	SV.ServerCollisionRefreshTick = tick
-	-- Collision interest includes player AABBs, entity AABBs plus velocity lookahead, and aimed-block neighborhoods.
-	local desired = collectServerCollisionInterestKeys()
+	local desired = {}
 	SV.ServerCollisionActiveChunks = desired
 	for key, c in pairs( MC.World or {} ) do
-		if c.count and c.count > 0 and desired[key] then
-			local oldSig = SV.ServerCollisionSignatures[key]
-			local newSig = collisionBoundsSignature( desired[key] )
-			SV.ServerCollisionSignatures[key] = newSig
+		if c.count and c.count > 0 then
+			desired[key] = true
+			SV.ServerCollisionSignatures[key] = "full"
 			if not IsValid( c.ent ) then
 				SV.EnsureChunkEnt( c )
-				SV.MarkPhysDirty( key, true )
-			elseif oldSig ~= newSig then
 				SV.MarkPhysDirty( key, true )
 			end
 		else
@@ -1600,6 +1482,7 @@ function SV.RefreshServerCollision( force )
 			SV.ServerCollisionSignatures[key] = nil
 			SV.PhysDirty[key] = nil
 			SV.PhysDirtyPriority[key] = nil
+			if SV.PhysDirtyBulk then SV.PhysDirtyBulk[key] = nil end
 		end
 	end
 end
@@ -1613,7 +1496,10 @@ local function collectCollisionDebugBounds( maxBounds )
 	maxBounds = math.max( 1, math.floor( tonumber( maxBounds ) or 512 ) )
 	for key, bounds in pairs( SV.ServerCollisionActiveChunks or {} ) do
 		local cx, cy, cz = MC.ChunkKeyToCoords( key )
-		if cx and istable( bounds ) then
+		if cx and bounds == true then
+			out[#out + 1] = { cx, cy, cz, 0, 0, 0, MC.CS - 1, MC.CS - 1, MC.CH - 1 }
+			if #out >= maxBounds then return out end
+		elseif cx and istable( bounds ) then
 			for _, b in ipairs( bounds ) do
 				out[#out + 1] = { cx, cy, cz, b[1], b[2], b[3], b[4], b[5], b[6] }
 				if #out >= maxBounds then return out end
@@ -1662,10 +1548,6 @@ timer.Create( "mc_collision_debug_send", 0.1, 0, function()
 end )
 
 hook.Remove( "SetupMove", "mc_server_collision_interest_move" )
-hook.Add( "SetupMove", "mc_server_collision_interest_move", function( ply )
-	if not IsValid( ply ) then return end
-	SV.RefreshServerCollision()
-end )
 
 local function sendSyncStep( ply, q, byteLimit )
 	while not q.active do
@@ -1699,6 +1581,10 @@ end
 timer.Create( "mc_interest_sync", INTEREST_TIMER_INTERVAL, 0, function()
 	SV.StreamInterestDirty = false
 	SV.RefreshServerCollision()
+end )
+
+timer.Create( "mc_bulk_collision_rebuild", 0.05, 0, function()
+	flushBulkCollisionQueue()
 end )
 
 -- drip small chunk parts to each syncing player; large chunks must never be one
@@ -2232,6 +2118,8 @@ concommand.Add( "mc_clear", function( ply )
 	SV.BlockCount = 0
 	SV.PhysDirty = {}
 	SV.PhysDirtyPriority = {}
+	SV.PhysDirtyBulk = {}
+	SV.PhysDirtyBulkOrder = {}
 	SV.SyncQueue = {}
 	SV.SnapshotQueue = {}
 	SV.PlayerLoadedChunks = {}

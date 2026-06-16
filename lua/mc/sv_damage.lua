@@ -207,6 +207,7 @@ function SV.ApplyBlockExplosion( center, damage, options )
 		handlers = options.handlers,
 		priorityPhys = false,
 		explosionMeshThrottle = true,
+		deferPhys = true,
 	} )
 
 	return broken > 0, broken, radius

@@ -415,6 +415,7 @@ function SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 					fx = false,
 					handlers = true,
 					priorityPhys = false,
+					deferPhys = true,
 				} )
 			else
 				for _, cell in ipairs( clearCells ) do
@@ -438,6 +439,7 @@ function SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 			fxIndex = 1,
 			handlers = true,
 			priorityPhys = false,
+			deferPhys = true,
 		} )
 	else
 		changed = 0
