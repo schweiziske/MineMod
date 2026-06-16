@@ -131,6 +131,7 @@ local function greedyBoxes( chunk, bounds )
 	local CS = MC.CS
 	local CS2 = CS * CS
 	local CH = MC.CH
+	local clientAABBOnly = CLIENT
 	local function idx( x, y, z ) return x + y * CS + z * CS2 end
 
 	local solid = {}
@@ -183,13 +184,24 @@ local function greedyBoxes( chunk, bounds )
 				if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
 					solid[li] = true
 				else
-					local blockConvexes = MC.BlockCollisionConvexes and MC.BlockCollisionConvexes( id, orient, bx, by, bz ) or nil
+					local blockConvexes = ( not clientAABBOnly and MC.BlockCollisionConvexes )
+						and MC.BlockCollisionConvexes( id, orient, bx, by, bz ) or nil
 					if blockConvexes then
 						for _, convex in ipairs( blockConvexes ) do
 							addCustomConvex( lx, ly, lz, convex )
 						end
 					else
-						local blockBoxes = ( MC.BlockCollisionBoxes or MC.BlockBoxes )( id, orient, bx, by, bz )
+						local blockBoxes
+						if clientAABBOnly then
+							if MC.BlockCollisionBoxes then
+								blockBoxes = MC.BlockCollisionBoxes( id, orient, bx, by, bz )
+							end
+							if not blockBoxes and MC.BlockBoxes then
+								blockBoxes = MC.BlockBoxes( id, orient, bx, by, bz )
+							end
+						else
+							blockBoxes = ( MC.BlockCollisionBoxes or MC.BlockBoxes )( id, orient, bx, by, bz )
+						end
 						for _, box in ipairs( blockBoxes or {} ) do
 							addShapeBox( lx, ly, lz, box )
 						end
