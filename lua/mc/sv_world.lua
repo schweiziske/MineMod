@@ -1099,7 +1099,7 @@ local function importCells( data, appendMode, deferResync )
 			for key, c in pairs( touched ) do
 				if c.count > 0 then
 					SV.EnsureChunkEnt( c )
-					SV.MarkPhysDirty( c.key )
+					SV.MarkPhysDirtyBulk( c.key )
 				else
 					MC.World[key] = nil
 				end
@@ -1472,7 +1472,7 @@ function SV.RefreshServerCollision( force )
 			SV.ServerCollisionSignatures[key] = "full"
 			if not IsValid( c.ent ) then
 				SV.EnsureChunkEnt( c )
-				SV.MarkPhysDirty( key, true )
+				SV.MarkPhysDirtyBulk( key )
 			end
 		else
 			if IsValid( c.ent ) then
@@ -2217,7 +2217,7 @@ concommand.Add( "mc_rebuild", function( ply )
 	for key, c in pairs( MC.World ) do
 		if c.count > 0 then
 			SV.EnsureChunkEnt( c, true )
-			SV.MarkPhysDirty( key )
+			SV.MarkPhysDirtyBulk( key )
 			n = n + 1
 		end
 	end
