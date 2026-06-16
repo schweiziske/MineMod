@@ -86,6 +86,7 @@ local VERT_LIMIT = 64998 -- multiple of 6, under the 65535 IMesh vertex cap
 
 MC.Meshes      = MC.Meshes or {}      -- key -> { IMesh, ... } (opaque/cutout pass)
 MC.MeshesTrans = MC.MeshesTrans or {} -- key -> { IMesh, ... } (translucent pass)
+MC.MeshSections = MC.MeshSections or {} -- key -> sectionIndex -> { opaque = {}, translucent = {} }
 MC.MeshDirty = MC.MeshDirty or {}  -- key -> true
 MC.ChunkEnts = MC.ChunkEnts or {}  -- key -> mc_chunk entity (clientside physics owner)
 MC.PhysDirty = MC.PhysDirty or {}  -- key -> due time (clientside collision rebuild)
@@ -312,7 +313,52 @@ local function destroyMeshList( store, key )
 	store[key] = nil
 end
 
+local function destroySectionMeshList( list )
+	if not list then return end
+	for i = 1, #list do
+		if list[i] then list[i]:Destroy() end
+	end
+end
+
+local function sectionIndexForLocal( lx, ly, lz )
+	local sx = math.floor( lx / RENDER_SECTION_SIZE )
+	local sy = math.floor( ly / RENDER_SECTION_SIZE )
+	local sz = math.floor( lz / RENDER_SECTION_SIZE )
+	return sx + sy * RENDER_SECTIONS_XY + sz * RENDER_SECTIONS_XY * RENDER_SECTIONS_XY + 1
+end
+
+local function rebuildFlatMeshLists( key )
+	local sections = MC.MeshSections[key]
+	if not sections then
+		MC.Meshes[key] = nil
+		MC.MeshesTrans[key] = nil
+		return
+	end
+	local opaque, translucent = {}, {}
+	local totalSections = RENDER_SECTIONS_XY * RENDER_SECTIONS_XY * RENDER_SECTIONS_Z
+	for i = 1, totalSections do
+		local section = sections[i]
+		if section then
+			for j = 1, #( section.opaque or {} ) do opaque[#opaque + 1] = section.opaque[j] end
+			for j = 1, #( section.translucent or {} ) do translucent[#translucent + 1] = section.translucent[j] end
+		end
+	end
+	MC.Meshes[key] = #opaque > 0 and opaque or nil
+	MC.MeshesTrans[key] = #translucent > 0 and translucent or nil
+end
+
 function MC.FreeChunkMesh( key )
+	local sections = MC.MeshSections[key]
+	if sections then
+		for _, section in pairs( sections ) do
+			destroySectionMeshList( section.opaque )
+			destroySectionMeshList( section.translucent )
+		end
+		MC.MeshSections[key] = nil
+		MC.Meshes[key] = nil
+		MC.MeshesTrans[key] = nil
+		return
+	end
 	destroyMeshList( MC.Meshes, key )
 	destroyMeshList( MC.MeshesTrans, key )
 end
@@ -627,14 +673,29 @@ local function shapeFaceCovered( cur, box, face, boxes, bx, by, bz )
 	return coveredByBoxes( box, face, MC.BlockBoxes( nb, nbOrient, bx + off[1], by + off[2], bz + off[3] ), off[1], off[2], off[3] )
 end
 
-function MC.BuildChunkMesh( key )
+function MC.BuildChunkMesh( key, sectionIndex )
 	local buildStart = SysTime()
-	MC.FreeChunkMesh( key )
+	if not sectionIndex then
+		MC.FreeChunkMesh( key )
+	end
 
 	local chunk = MC.GetChunkByKey( key )
 	if not chunk or chunk.count == 0 then
+		if sectionIndex then
+			local sections = MC.MeshSections[key]
+			local old = sections and sections[sectionIndex]
+			if old then
+				destroySectionMeshList( old.opaque )
+				destroySectionMeshList( old.translucent )
+				sections[sectionIndex] = nil
+				rebuildFlatMeshLists( key )
+			end
+		else
+			MC.FreeChunkMesh( key )
+		end
 		MC.RenderStats.lastMeshBuildMS = math.Round( ( SysTime() - buildStart ) * 1000, 3 )
 		MC.RenderStats.lastMeshKey = key
+		MC.RenderStats.lastMeshSection = sectionIndex or "full"
 		MC.RenderStats.lastMeshBlocks = 0
 		MC.RenderStats.lastOpaqueMeshes = 0
 		MC.RenderStats.lastTranslucentMeshes = 0
@@ -653,15 +714,9 @@ function MC.BuildChunkMesh( key )
 		return { list = {}, verts = {}, nv = 0, material = material }
 	end
 
-	local function sectionIndexForLocal( lx, ly, lz )
-		local sx = math.floor( lx / RENDER_SECTION_SIZE )
-		local sy = math.floor( ly / RENDER_SECTION_SIZE )
-		local sz = math.floor( lz / RENDER_SECTION_SIZE )
-		return sx + sy * RENDER_SECTIONS_XY + sz * RENDER_SECTIONS_XY * RENDER_SECTIONS_XY + 1
-	end
-
 	local function buffersForLocal( lx, ly, lz )
 		local index = sectionIndexForLocal( lx, ly, lz )
+		if sectionIndex and index ~= sectionIndex then return nil end
 		local buffers = sectionBuffers[index]
 		if not buffers then
 			buffers = {
@@ -772,10 +827,11 @@ function MC.BuildChunkMesh( key )
 	for li, id in pairs( chunk.blocks ) do
 		local orient = MC.NormalizeOrient( id, chunk.orients[li] )
 		local lx, ly, lz = DecodeLocal( li )
+		local buffers = buffersForLocal( lx, ly, lz )
+		if not buffers then continue end
 		local bx, by, bz = bxo + lx, byo + ly, bzo + lz
 		local wx, wy, wz = lx * BS, ly * BS, lz * BS
 
-		local buffers = buffersForLocal( lx, ly, lz )
 		cur = ( MC.IsTranslucentBlock and MC.IsTranslucentBlock( id ) ) and buffers.translucent or buffers.opaque
 
 		local b = MC.Blocks[id]
@@ -877,14 +933,36 @@ function MC.BuildChunkMesh( key )
 
 	local opaqueMeshes, translucentMeshes = flushSectionBuffers()
 
-	if #opaqueMeshes > 0 then
-		MC.Meshes[key] = opaqueMeshes
-	end
-	if #translucentMeshes > 0 then
-		MC.MeshesTrans[key] = translucentMeshes
+	if sectionIndex then
+		MC.MeshSections[key] = MC.MeshSections[key] or {}
+		local old = MC.MeshSections[key][sectionIndex]
+		if old then
+			destroySectionMeshList( old.opaque )
+			destroySectionMeshList( old.translucent )
+		end
+		if #opaqueMeshes > 0 or #translucentMeshes > 0 then
+			MC.MeshSections[key][sectionIndex] = { opaque = opaqueMeshes, translucent = translucentMeshes }
+		else
+			MC.MeshSections[key][sectionIndex] = nil
+		end
+		rebuildFlatMeshLists( key )
+	else
+		MC.MeshSections[key] = {}
+		local totalSections = RENDER_SECTIONS_XY * RENDER_SECTIONS_XY * RENDER_SECTIONS_Z
+		for i = 1, totalSections do
+			local buffers = sectionBuffers[i]
+			if buffers then
+				MC.MeshSections[key][i] = {
+					opaque = buffers.opaque.list,
+					translucent = buffers.translucent.list,
+				}
+			end
+		end
+		rebuildFlatMeshLists( key )
 	end
 	MC.RenderStats.lastMeshBuildMS = math.Round( ( SysTime() - buildStart ) * 1000, 3 )
 	MC.RenderStats.lastMeshKey = key
+	MC.RenderStats.lastMeshSection = sectionIndex or "full"
 	MC.RenderStats.lastMeshBlocks = chunk.count or 0
 	MC.RenderStats.lastOpaqueMeshes = #opaqueMeshes
 	MC.RenderStats.lastTranslucentMeshes = #translucentMeshes
@@ -937,6 +1015,17 @@ function MC.MarkChunkDirty( key )
 	MC.MeshDirty[key] = true
 end
 
+local function markChunkSectionDirty( key, sectionIndex )
+	if not key or not sectionIndex then return end
+	if MC.MeshDirty[key] == true then return end
+	local sections = MC.MeshDirty[key]
+	if not sections then
+		sections = {}
+		MC.MeshDirty[key] = sections
+	end
+	MC.MeshDirty[key][sectionIndex] = true
+end
+
 local function rebuildChunkPhys( key, enabled )
 	local e = MC.ChunkEnts[key]
 	if IsValid( e ) then
@@ -976,8 +1065,11 @@ end
 -- may need a rebuild (boundary faces).
 function MC.MarkDirty( bx, by, bz )
 	local function mark( x, y, z )
-		local cx, cy, cz = MC.CellToChunk( x, y, z )
-		MC.MeshDirty[ MC.ChunkKey( cx, cy, cz ) ] = true
+		local cx, cy, cz, li = MC.CellToChunk( x, y, z )
+		local lx, ly, lz = DecodeLocal( li )
+		local key = MC.ChunkKey( cx, cy, cz )
+		local sectionIndex = sectionIndexForLocal( lx, ly, lz )
+		markChunkSectionDirty( key, sectionIndex )
 	end
 	mark( bx, by, bz )
 	mark( bx + 1, by, bz ) ; mark( bx - 1, by, bz )
@@ -1030,7 +1122,14 @@ hook.Add( "Think", "mc_meshbuild", function()
 
 	if next( MC.MeshDirty ) then
 		for _, key in ipairs( nextDirtyMeshKeys() ) do
-			MC.BuildChunkMesh( key )
+			local sections = MC.MeshDirty[key]
+			if sections == true then
+				MC.BuildChunkMesh( key )
+			else
+				for sectionIndex in pairs( sections ) do
+					MC.BuildChunkMesh( key, sectionIndex )
+				end
+			end
 			MC.MeshDirty[key] = nil
 		end
 	end
