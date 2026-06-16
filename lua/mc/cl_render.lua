@@ -1088,55 +1088,6 @@ local function drawMeshList( list, material )
 	end
 end
 
-local function sectionCoordsFromIndex( sectionIndex )
-	local i = sectionIndex - 1
-	local xy = RENDER_SECTIONS_XY
-	local sx = i % xy
-	local sy = math.floor( i / xy ) % xy
-	local sz = math.floor( i / ( xy * xy ) )
-	return sx, sy, sz
-end
-
-local function sectionWorldBounds( chunk, sectionIndex )
-	local sx, sy, sz = sectionCoordsFromIndex( sectionIndex )
-	local size = RENDER_SECTION_SIZE * BS
-	local origin = MC.ChunkWorldOrigin( chunk.cx, chunk.cy, chunk.cz )
-	local mins = origin + Vector( sx * size, sy * size, sz * size )
-	return mins, mins + Vector( size, size, size )
-end
-
-local function currentFrustumInfo()
-	local ang = EyeAngles()
-	local lp = LocalPlayer()
-	local fov = IsValid( lp ) and lp:GetFOV() or 90
-	if not fov or fov <= 0 then fov = 90 end
-	local aspect = ScrH() > 0 and ScrW() / ScrH() or ( 4 / 3 )
-	local halfHorizontal = math.rad( fov ) * 0.5
-	local halfVertical = math.atan( math.tan( halfHorizontal ) / aspect )
-	return {
-		pos = EyePos(),
-		forward = ang:Forward(),
-		right = ang:Right(),
-		up = ang:Up(),
-		tanH = math.tan( halfHorizontal ),
-		tanV = math.tan( halfVertical ),
-	}
-end
-
-local function boundsInView( mins, maxs, view )
-	local center = ( mins + maxs ) * 0.5
-	local ext = ( maxs - mins ) * 0.5
-	local radius = math.sqrt( ext.x * ext.x + ext.y * ext.y + ext.z * ext.z )
-	local toCenter = center - view.pos
-	local forward = toCenter:Dot( view.forward )
-	if forward < -radius then return false end
-
-	local projected = math.max( forward, 0 )
-	if math.abs( toCenter:Dot( view.right ) ) > projected * view.tanH + radius then return false end
-	if math.abs( toCenter:Dot( view.up ) ) > projected * view.tanV + radius then return false end
-	return true
-end
-
 function MC.DrawChunk( key )
 	drawMeshList( MC.Meshes[key], MC.Material )
 end
@@ -1145,29 +1096,7 @@ function MC.DrawChunkTranslucent( key )
 	drawMeshList( MC.MeshesTrans[key], MC.MaterialTranslucent )
 end
 
-local function drawChunkSections( key, chunk, pass, material, view )
-	local sections = MC.MeshSections[key]
-	if not sections then
-		drawMeshList( pass == "translucent" and MC.MeshesTrans[key] or MC.Meshes[key], material )
-		return
-	end
-
-	render.SetMaterial( material )
-	for sectionIndex, section in pairs( sections ) do
-		local list = section and section[pass]
-		if list and #list > 0 then
-			local mins, maxs = sectionWorldBounds( chunk, sectionIndex )
-			if boundsInView( mins, maxs, view ) then
-				for i = 1, #list do
-					list[i]:Draw()
-				end
-			end
-		end
-	end
-end
-
-local function drawAllChunks( store, pass, material )
-	local view = currentFrustumInfo()
+local function drawAllChunks( store, drawFn )
 	for key, list in pairs( store or {} ) do
 		if list then
 			local c = MC.GetChunkByKey( key )
@@ -1175,7 +1104,7 @@ local function drawAllChunks( store, pass, material )
 				local mat = Matrix()
 				mat:SetTranslation( MC.ChunkWorldOrigin( c.cx, c.cy, c.cz ) )
 				cam.PushModelMatrix( mat )
-					drawChunkSections( key, c, pass, material, view )
+					drawFn( key )
 				cam.PopModelMatrix()
 			end
 		end
@@ -1186,12 +1115,12 @@ hook.Remove( "PostDrawOpaqueRenderables", "mc_draw_chunks" )
 hook.Remove( "PostDrawTranslucentRenderables", "mc_draw_chunks" )
 hook.Add( "PostDrawOpaqueRenderables", "mc_draw_chunks", function()
 	if not meshRenderingEnabled() then return end
-	drawAllChunks( MC.Meshes, "opaque", MC.Material )
+	drawAllChunks( MC.Meshes, MC.DrawChunk )
 end )
 -- translucent blocks only; the bulk of the world stays in the opaque pass above
 hook.Add( "PostDrawTranslucentRenderables", "mc_draw_chunks", function()
 	if not meshRenderingEnabled() then return end
-	drawAllChunks( MC.MeshesTrans, "translucent", MC.MaterialTranslucent )
+	drawAllChunks( MC.MeshesTrans, MC.DrawChunkTranslucent )
 end )
 
 ------------------------------------------------------------------- dirty tracking
