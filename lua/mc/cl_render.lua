@@ -89,14 +89,10 @@ MC.MeshesTrans = MC.MeshesTrans or {} -- key -> { IMesh, ... } (translucent pass
 MC.MeshSections = MC.MeshSections or {} -- key -> sectionIndex -> { opaque = {}, translucent = {} }
 MC.MeshDirty = MC.MeshDirty or {}  -- key -> true
 MC.ChunkEnts = MC.ChunkEnts or {}  -- key -> mc_chunk entity (clientside physics owner)
-MC.PhysDirty = MC.PhysDirty or {}  -- key -> due time (clientside collision rebuild)
-MC.PhysDirtyPriority = MC.PhysDirtyPriority or {} -- player edits that should not wait behind sync/import work
+MC.PhysDirty = MC.PhysDirty or {}  -- key -> true while a clientside collision rebuild is being fired
+MC.PhysDirtyPriority = MC.PhysDirtyPriority or {} -- key -> true for priority rebuild diagnostics
 MC.RenderStats = MC.RenderStats or {}
 MC.ClientPhysStats = MC.ClientPhysStats or {}
-local PHYS_REBUILD_DELAY = 0.12
-local CLIENT_PHYS_REBUILD_FRAME_MS = 1
-local CLIENT_PHYS_REBUILD_TICK_INTERVAL = 16
-local NextClientPhysRebuildAt = 0
 
 -- Clientside collision is a small local prediction bubble; the server remains authoritative.
 MC.ClientCollision = CreateClientConVar( "mc_client_collision", "1", true, false,
@@ -113,6 +109,7 @@ local LastClientCollisionRadius = -1
 local LastClientCollisionEnabled = nil
 local LastClientCollisionAimKey
 local LastClientCollisionAABBKey
+local LastClientCollisionPlayerAABB
 
 local function clientCollisionEnabled()
 	return MC.ClientCollision:GetBool()
@@ -184,11 +181,17 @@ local function addClientCellNeighborhoodCollisionKeys( desired, bx, by, bz, radi
 	addClientChunkLocalBoundsCollisionInterest( desired, bx - radius, by - radius, bz - radius, bx + radius, by + radius, bz + radius )
 end
 
-local function collectClientPlayerAABBCollisionInterestKeys( lp, desired )
-	if not IsValid( lp ) then return nil end
-	local mins, maxs = lp:WorldSpaceAABB()
+local function copyClientAABB( mins, maxs )
 	if not mins or not maxs then return nil end
-	local blockPad = 1
+	return {
+		mins = Vector( mins.x, mins.y, mins.z ),
+		maxs = Vector( maxs.x, maxs.y, maxs.z ),
+	}
+end
+
+local function addClientAABBCollisionInterest( desired, mins, maxs, blockPad )
+	if not mins or not maxs then return nil end
+	blockPad = math.max( 1, math.floor( tonumber( blockPad ) or 1 ) )
 	local minBX = math.floor( mins.x / MC.BS ) - blockPad
 	local minBY = math.floor( mins.y / MC.BS ) - blockPad
 	local minBZ = math.floor( mins.z / MC.BS ) - blockPad
@@ -196,6 +199,47 @@ local function collectClientPlayerAABBCollisionInterestKeys( lp, desired )
 	local maxBY = math.floor( maxs.y / MC.BS ) + blockPad
 	local maxBZ = math.floor( maxs.z / MC.BS ) + blockPad
 	addClientChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minBZ, maxBX, maxBY, maxBZ )
+	return minBX, minBY, minBZ, maxBX, maxBY, maxBZ
+end
+
+local function addClientSweptAABBCollisionInterest( desired, mins, maxs, otherMins, otherMaxs, blockPad )
+	if not mins or not maxs or not otherMins or not otherMaxs then return nil end
+	local sweptMins = Vector(
+		math.min( mins.x, otherMins.x ),
+		math.min( mins.y, otherMins.y ),
+		math.min( mins.z, otherMins.z )
+	)
+	local sweptMaxs = Vector(
+		math.max( maxs.x, otherMaxs.x ),
+		math.max( maxs.y, otherMaxs.y ),
+		math.max( maxs.z, otherMaxs.z )
+	)
+	return addClientAABBCollisionInterest( desired, sweptMins, sweptMaxs, blockPad )
+end
+
+local function collectClientPlayerAABBCollisionInterestKeys( lp, desired )
+	if not IsValid( lp ) then return nil end
+	local mins, maxs = lp:WorldSpaceAABB()
+	if not mins or not maxs then return nil end
+	local blockPad = 1
+	local minBX, minBY, minBZ, maxBX, maxBY, maxBZ = addClientAABBCollisionInterest( desired, mins, maxs, blockPad )
+	if LastClientCollisionPlayerAABB then
+		minBX, minBY, minBZ, maxBX, maxBY, maxBZ = addClientSweptAABBCollisionInterest(
+			desired,
+			LastClientCollisionPlayerAABB.mins,
+			LastClientCollisionPlayerAABB.maxs,
+			mins,
+			maxs,
+			blockPad
+		)
+	end
+	local vel = lp:GetVelocity()
+	if vel and vel:LengthSqr() > 0 then
+		local futureMins = mins + vel * 0.5
+		local futureMaxs = maxs + vel * 0.5
+		minBX, minBY, minBZ, maxBX, maxBY, maxBZ = addClientSweptAABBCollisionInterest( desired, mins, maxs, futureMins, futureMaxs, blockPad )
+	end
+	LastClientCollisionPlayerAABB = copyClientAABB( mins, maxs )
 	local minCX, minCY, minCZ = MC.CellToChunk( minBX, minBY, minBZ )
 	local maxCX, maxCY, maxCZ = MC.CellToChunk( maxBX, maxBY, maxBZ )
 	return MC.ChunkKey( minCX, minCY, minCZ ) .. "|" .. MC.ChunkKey( maxCX, maxCY, maxCZ )
@@ -237,6 +281,8 @@ function MC.RefreshClientCollisionInterest( force )
 		centerKey = MC.ChunkKey( cx, cy, cz )
 		aabbKey = collectClientPlayerAABBCollisionInterestKeys( lp, desired )
 		aimKey = collectClientAimCollisionInterestKeys( lp, desired )
+	else
+		LastClientCollisionPlayerAABB = nil
 	end
 
 	if not force and centerKey == LastClientCollisionCenterKey
@@ -285,6 +331,12 @@ end, "mc" )
 cvars.AddChangeCallback( "mc_client_collision_chunk_span", function()
 	MC.RefreshClientCollisionInterest( true )
 end, "mc" )
+
+hook.Remove( "SetupMove", "mc_client_collision_interest_move" )
+hook.Add( "SetupMove", "mc_client_collision_interest_move", function( ply )
+	if not IsValid( ply ) or ply ~= LocalPlayer() then return end
+	MC.RefreshClientCollisionInterest()
+end )
 
 -- should the face between `cur` and neighbour `nb` be drawn?
 local function sameLiquidKind( cur, nb )
@@ -1055,10 +1107,11 @@ function MC.MarkChunkPhysDirty( key, priority )
 	if priority then
 		MC.PhysDirty[key] = true
 		MC.PhysDirtyPriority[key] = true
-		return
+	else
+		MC.PhysDirty[key] = true
+		MC.PhysDirtyPriority[key] = nil
 	end
-	if MC.PhysDirty[key] == true then return end
-	MC.PhysDirty[key] = CurTime() + PHYS_REBUILD_DELAY
+	rebuildChunkPhys( key, clientCollisionEnabled() )
 end
 
 -- a block changed: its own chunk and any chunk owning a face-neighbour cell
@@ -1100,22 +1153,7 @@ local function nextDirtyMeshKeys()
 	return keys
 end
 
-local function nextDirtyPhysKeys( maxKeys, now )
-	local keys = {}
-	for key, due in pairs( MC.PhysDirty ) do
-		if due and not MC.PhysDirtyPriority[key] and ( due == true or due <= now ) then
-			keys[#keys + 1] = key
-		end
-	end
-	table.sort( keys, function( a, b )
-		return chunkDistanceScore( a ) < chunkDistanceScore( b )
-	end )
-	while #keys > maxKeys do keys[#keys] = nil end
-	return keys
-end
-
--- rebuild a few chunks per frame
--- rebuild all dirty meshes immediately; clientside collision remains throttled below
+-- rebuild all dirty meshes immediately; clientside collision rebuilds fire at mark time
 hook.Remove( "Think", "mc_meshbuild" )
 hook.Add( "Think", "mc_meshbuild", function()
 	MC.RefreshClientCollisionInterest()
@@ -1131,32 +1169,6 @@ hook.Add( "Think", "mc_meshbuild", function()
 				end
 			end
 			MC.MeshDirty[key] = nil
-		end
-	end
-
-	if next( MC.PhysDirty ) then
-		local enabled = clientCollisionEnabled()
-		local priorityBudget = 1
-		local priorityDeadline = SysTime() + CLIENT_PHYS_REBUILD_FRAME_MS / 1000
-		for key in pairs( MC.PhysDirtyPriority ) do
-			if MC.PhysDirty[key] then
-				rebuildChunkPhys( key, enabled )
-				priorityBudget = priorityBudget - 1
-				if priorityBudget <= 0 or SysTime() >= priorityDeadline then break end
-			else
-				MC.PhysDirtyPriority[key] = nil
-			end
-		end
-
-		local budget = 1
-		local now = CurTime()
-		if now >= NextClientPhysRebuildAt then
-			local physDeadline = SysTime() + CLIENT_PHYS_REBUILD_FRAME_MS / 1000
-			for _, key in ipairs( nextDirtyPhysKeys( budget, now ) ) do
-				rebuildChunkPhys( key, enabled )
-				NextClientPhysRebuildAt = now + engine.TickInterval() * CLIENT_PHYS_REBUILD_TICK_INTERVAL
-				if SysTime() >= physDeadline then break end
-			end
 		end
 	end
 end )

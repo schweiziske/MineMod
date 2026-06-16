@@ -146,8 +146,6 @@ MC.Config.ChunkStoreFrameMS = 3
 MC.Config.ServerCollisionHotSpan = 2
 MC.Config.ServerCollisionLookaheadTime = 0.5
 MC.Config.ServerCollisionLookaheadMax = 4
-MC.Config.ServerCollisionBuildsPerTick = 2
-MC.Config.ServerCollisionEmergencyBuildsPerTick = 8
 
 ------------------------------------------------------------------ server ConVars
 if SERVER then
@@ -185,8 +183,6 @@ if SERVER then
 	MC.Config.ServerCollisionHotSpan = GetConVar( "mc_server_collision_hot_span" ) or CreateConVar( "mc_server_collision_hot_span", tostring( MC.Config.ServerCollisionHotSpan ), F, "Velocity lookahead chunk span for server collision interest" )
 	MC.Config.ServerCollisionLookaheadTime = GetConVar( "mc_server_collision_lookahead_time" ) or CreateConVar( "mc_server_collision_lookahead_time", tostring( MC.Config.ServerCollisionLookaheadTime ), F, "Seconds of entity velocity lookahead for server collision interest" )
 	MC.Config.ServerCollisionLookaheadMax = GetConVar( "mc_server_collision_lookahead_max" ) or CreateConVar( "mc_server_collision_lookahead_max", tostring( MC.Config.ServerCollisionLookaheadMax ), F, "Maximum chunk radius reached by velocity lookahead collision interest" )
-	MC.Config.ServerCollisionBuildsPerTick = GetConVar( "mc_server_collision_builds_per_tick" ) or CreateConVar( "mc_server_collision_builds_per_tick", tostring( MC.Config.ServerCollisionBuildsPerTick ), F, "Normal server chunk collision rebuilds per physics tick" )
-	MC.Config.ServerCollisionEmergencyBuildsPerTick = GetConVar( "mc_server_collision_emergency_builds_per_tick" ) or CreateConVar( "mc_server_collision_emergency_builds_per_tick", tostring( MC.Config.ServerCollisionEmergencyBuildsPerTick ), F, "Priority server chunk collision rebuilds per physics tick" )
 	MC.Config.BlockDamage = GetConVar( "mc_block_damage" ) or CreateConVar( "mc_block_damage", "1", F, "Allow GMod damage to break MC blocks" )
 	MC.Config.BlockHealthScale = GetConVar( "mc_block_health_scale" ) or CreateConVar( "mc_block_health_scale", "20", F, "Block health multiplier applied to Minecraft hardness" )
 	MC.Config.BlockDamageDecay = GetConVar( "mc_block_damage_decay" ) or CreateConVar( "mc_block_damage_decay", "5", F, "Seconds before partial block damage is forgotten" )
