@@ -32,6 +32,7 @@ SV.PlayerLoadedChunks = SV.PlayerLoadedChunks or {} -- player -> { [chunkKey] = 
 SV.PlayerFullSnapshot = SV.PlayerFullSnapshot or {} -- player -> true once full-world snapshot mode owns visibility
 SV.PlayerHTTPDisabled = SV.PlayerHTTPDisabled or {} -- player -> true after client-side HTTP fetch is blocked/failed
 SV.ServerCollisionActiveChunks = SV.ServerCollisionActiveChunks or {} -- chunkKey -> true while server collision should exist
+SV.ServerCollisionSignatures = SV.ServerCollisionSignatures or {} -- chunkKey -> sorted bounds signature
 SV.Dirty      = SV.Dirty or false    -- world changed since last save
 local PHYS_REBUILD_DELAY = 0.12
 local SERVER_PHYS_REBUILD_INTERVAL = 0.05
@@ -331,6 +332,16 @@ local function collectServerCollisionInterestKeys()
 	collectEntityCollisionInterestKeys( desired )
 	collectPlayerAimCollisionInterestKeys( desired )
 	return desired
+end
+
+local function collisionBoundsSignature( bounds )
+	if not bounds then return "" end
+	local parts = {}
+	for i, b in ipairs( bounds ) do
+		parts[i] = table.concat( b, "," )
+	end
+	table.sort( parts )
+	return table.concat( parts, ";" )
 end
 
 -- debounced collision rebuild (coalesces many edits in the same frame/window)
@@ -1557,10 +1568,13 @@ function SV.RefreshServerCollision()
 	SV.ServerCollisionActiveChunks = desired
 	for key, c in pairs( MC.World or {} ) do
 		if c.count and c.count > 0 and desired[key] then
+			local oldSig = SV.ServerCollisionSignatures[key]
+			local newSig = collisionBoundsSignature( desired[key] )
+			SV.ServerCollisionSignatures[key] = newSig
 			if not IsValid( c.ent ) then
 				SV.EnsureChunkEnt( c )
 				SV.MarkPhysDirty( key )
-			else
+			elseif oldSig ~= newSig then
 				SV.MarkPhysDirty( key )
 			end
 		else
@@ -1568,6 +1582,7 @@ function SV.RefreshServerCollision()
 				c.ent:Remove()
 				c.ent = nil
 			end
+			SV.ServerCollisionSignatures[key] = nil
 			SV.PhysDirty[key] = nil
 			SV.PhysDirtyPriority[key] = nil
 		end
