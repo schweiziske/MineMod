@@ -234,17 +234,3 @@ end
 function Config.CollisionLookaheadMax()
 	return readChunkSpan( C.ServerCollisionLookaheadMax, MC.Config.ServerCollisionLookaheadMax or 4, 16 )
 end
-
-function Config.CollisionBuildsPerTick()
-	if C.ServerCollisionBuildsPerTick then
-		return math.Clamp( C.ServerCollisionBuildsPerTick:GetInt(), 1, 64 )
-	end
-	return MC.Config.ServerCollisionBuildsPerTick or 2
-end
-
-function Config.CollisionEmergencyBuildsPerTick()
-	if C.ServerCollisionEmergencyBuildsPerTick then
-		return math.Clamp( C.ServerCollisionEmergencyBuildsPerTick:GetInt(), 1, 128 )
-	end
-	return MC.Config.ServerCollisionEmergencyBuildsPerTick or 8
-end

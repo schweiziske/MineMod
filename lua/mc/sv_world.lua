@@ -31,11 +31,10 @@ SV.SnapshotQueue = SV.SnapshotQueue or {} -- player -> compressed save snapshot 
 SV.PlayerLoadedChunks = SV.PlayerLoadedChunks or {} -- player -> { [chunkKey] = true }
 SV.PlayerFullSnapshot = SV.PlayerFullSnapshot or {} -- player -> true once full-world snapshot mode owns visibility
 SV.PlayerHTTPDisabled = SV.PlayerHTTPDisabled or {} -- player -> true after client-side HTTP fetch is blocked/failed
-SV.ServerCollisionActiveChunks = SV.ServerCollisionActiveChunks or {} -- chunkKey -> true while server collision should exist
+SV.ServerCollisionActiveChunks = SV.ServerCollisionActiveChunks or {} -- chunkKey -> local bounds lists that should have collision
 SV.ServerCollisionSignatures = SV.ServerCollisionSignatures or {} -- chunkKey -> sorted bounds signature
+SV.ServerCollisionLastAABBs = SV.ServerCollisionLastAABBs or setmetatable( {}, { __mode = "k" } )
 SV.Dirty      = SV.Dirty or false    -- world changed since last save
-local PHYS_REBUILD_DELAY = 0.12
-local SERVER_PHYS_REBUILD_INTERVAL = 0.01
 
 local function syncFastEnabled()
 	return not C.SyncFast or C.SyncFast:GetBool()
@@ -187,18 +186,21 @@ function SV.EnsureChunkEnt( chunk, force )
 	return e
 end
 
+local rebuildPhysKey
+
 function SV.MarkPhysDirty( key, priority )
 	if not key then return end
 	if priority then
 		SV.PhysDirty[key] = true
 		SV.PhysDirtyPriority[key] = true
-		return
+	else
+		SV.PhysDirty[key] = true
+		SV.PhysDirtyPriority[key] = nil
 	end
-	if SV.PhysDirty[key] == true then return end
-	SV.PhysDirty[key] = CurTime() + PHYS_REBUILD_DELAY
+	if rebuildPhysKey then rebuildPhysKey( key ) end
 end
 
-local function rebuildPhysKey( key )
+function rebuildPhysKey( key )
 	local chunk = MC.GetChunkByKey( key )
 	if chunk and not SV.IsChunkCollisionActive( key ) then
 		if IsValid( chunk.ent ) then
@@ -271,20 +273,59 @@ local function addAABBCollisionKeys( desired, mins, maxs, padding )
 	addChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minBZ, maxBX, maxBY, maxBZ )
 end
 
+local function copyAABB( mins, maxs )
+	if not mins or not maxs then return nil end
+	return {
+		mins = Vector( mins.x, mins.y, mins.z ),
+		maxs = Vector( maxs.x, maxs.y, maxs.z ),
+	}
+end
+
+local function getServerCollisionPreviousAABB( ent )
+	local cache = SV.ServerCollisionLastAABBs
+	return cache and cache[ent] or nil
+end
+
+local function rememberServerCollisionAABB( ent, mins, maxs )
+	if not IsValid( ent ) then return end
+	SV.ServerCollisionLastAABBs[ent] = copyAABB( mins, maxs )
+end
+
+local function addSweptAABBCollisionKeys( desired, mins, maxs, otherMins, otherMaxs, padding )
+	if not mins or not maxs or not otherMins or not otherMaxs then return end
+	local sweptMins = Vector(
+		math.min( mins.x, otherMins.x ),
+		math.min( mins.y, otherMins.y ),
+		math.min( mins.z, otherMins.z )
+	)
+	local sweptMaxs = Vector(
+		math.max( maxs.x, otherMaxs.x ),
+		math.max( maxs.y, otherMaxs.y ),
+		math.max( maxs.z, otherMaxs.z )
+	)
+	addAABBCollisionKeys( desired, sweptMins, sweptMaxs, padding )
+end
+
 local function collectPlayerCollisionInterestKeys( desired )
 	for _, ply in ipairs( player.GetAll() ) do
 		if IsValid( ply ) then
 			local mins, maxs = ply:WorldSpaceAABB()
-			addAABBCollisionKeys( desired, mins, maxs, serverCollisionAABBPadding() )
+			local padding = serverCollisionAABBPadding()
+			addAABBCollisionKeys( desired, mins, maxs, padding )
+			local previous = getServerCollisionPreviousAABB( ply )
+			if previous then
+				addSweptAABBCollisionKeys( desired, previous.mins, previous.maxs, mins, maxs, padding )
+			end
 			local vel = ply:GetVelocity()
 			if mins and maxs and vel and vel:LengthSqr() > 0 then
 				local lookahead = math.min( collisionLookaheadMax(), math.max( 0, math.ceil( collisionLookaheadTime() * vel:Length() / MC.ChunkWorld ) ) )
 				if lookahead > 0 then
 					local futureMins = mins + vel * collisionLookaheadTime()
 					local futureMaxs = maxs + vel * collisionLookaheadTime()
-					addAABBCollisionKeys( desired, futureMins, futureMaxs, serverCollisionAABBPadding() )
+					addSweptAABBCollisionKeys( desired, mins, maxs, futureMins, futureMaxs, padding )
 				end
 			end
+			rememberServerCollisionAABB( ply, mins, maxs )
 		end
 	end
 end
@@ -295,16 +336,22 @@ local function collectEntityCollisionInterestKeys( desired )
 			local cls = ent:GetClass()
 			if cls ~= "worldspawn" and cls ~= "mc_chunk" and cls ~= "mc_chunk_phys" and not ent:IsPlayer() then
 				local mins, maxs = ent:WorldSpaceAABB()
-				addAABBCollisionKeys( desired, mins, maxs, serverCollisionAABBPadding() )
+				local padding = serverCollisionAABBPadding()
+				addAABBCollisionKeys( desired, mins, maxs, padding )
+				local previous = getServerCollisionPreviousAABB( ent )
+				if previous then
+					addSweptAABBCollisionKeys( desired, previous.mins, previous.maxs, mins, maxs, padding )
+				end
 				local vel = ent:GetVelocity()
 				if vel and vel:LengthSqr() > 0 then
 					local lookahead = math.min( collisionLookaheadMax(), math.max( 0, math.ceil( collisionLookaheadTime() * vel:Length() / MC.ChunkWorld ) ) )
 					if lookahead > 0 then
 						local futureMins = mins + vel * collisionLookaheadTime()
 						local futureMaxs = maxs + vel * collisionLookaheadTime()
-						addAABBCollisionKeys( desired, futureMins, futureMaxs, serverCollisionAABBPadding() )
+						addSweptAABBCollisionKeys( desired, mins, maxs, futureMins, futureMaxs, padding )
 					end
 				end
+				rememberServerCollisionAABB( ent, mins, maxs )
 			end
 		end
 	end
@@ -338,27 +385,6 @@ local function collisionBoundsSignature( bounds )
 	table.sort( parts )
 	return table.concat( parts, ";" )
 end
-
--- debounced collision rebuild (coalesces many edits in the same frame/window)
-timer.Create( "mc_phys_rebuild", SERVER_PHYS_REBUILD_INTERVAL, 0, function()
-	if not next( SV.PhysDirty ) then return end
-	local now = CurTime()
-	for key in pairs( SV.PhysDirtyPriority ) do
-		if SV.PhysDirty[key] then
-			rebuildPhysKey( key )
-		else
-			SV.PhysDirtyPriority[key] = nil
-		end
-	end
-
-	for key in pairs( SV.PhysDirty ) do
-		local due = SV.PhysDirty[key]
-		if not SV.PhysDirtyPriority[key] and ( due == true or due <= now ) then
-			rebuildPhysKey( key )
-
-		end
-	end
-end )
 
 --------------------------------------------------------------------- validation
 local function cooldownOK( ply )
@@ -1585,6 +1611,12 @@ end
 function SV.RefreshChunkInterest()
 	SV.RefreshServerCollision()
 end
+
+hook.Remove( "SetupMove", "mc_server_collision_interest_move" )
+hook.Add( "SetupMove", "mc_server_collision_interest_move", function( ply )
+	if not IsValid( ply ) then return end
+	SV.RefreshServerCollision()
+end )
 
 local function sendSyncStep( ply, q, byteLimit )
 	while not q.active do
