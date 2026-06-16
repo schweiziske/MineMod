@@ -365,12 +365,6 @@ function MC.PlayerBlockAim( ply )
 	local eye = ply:EyePos()
 	local hit = MC.TraceBlockRay( eye, ply:EyeAngles():Forward(), MC.CurrentReach() )
 	if not hit then return nil end
-	local tr = ply:GetEyeTrace()
-	local ent = tr and tr.Entity
-	if tr and tr.Hit and not ( IsValid( ent ) and ( ent:GetClass() == "mc_chunk" or ent:GetClass() == "mc_chunk_phys" ) ) then
-		local mapDist = eye:Distance( tr.HitPos )
-		if mapDist + 1 < ( hit.Distance or 0 ) then return nil end
-	end
 	return hit
 end
 

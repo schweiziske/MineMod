@@ -1038,4 +1038,29 @@ net.Receive( "mc_clear", function()
 	PendingFullAckBytes = 0
 end )
 
+net.Receive( "mc_collision_debug", function()
+	local count = net.ReadUInt( 10 )
+	local bounds = {}
+	local bs = MC.BS or 36.5
+	for i = 1, count do
+		local cx = net.ReadInt( Net.COORD_BITS )
+		local cy = net.ReadInt( Net.COORD_BITS )
+		local cz = net.ReadInt( Net.COORD_BITS )
+		local lx0 = net.ReadUInt( 6 )
+		local ly0 = net.ReadUInt( 6 )
+		local lz0 = net.ReadUInt( 6 )
+		local lx1 = net.ReadUInt( 6 )
+		local ly1 = net.ReadUInt( 6 )
+		local lz1 = net.ReadUInt( 6 )
+		local origin = MC.ChunkWorldOrigin( cx, cy, cz )
+		bounds[i] = {
+			mins = origin + Vector( lx0 * bs, ly0 * bs, lz0 * bs ),
+			maxs = origin + Vector( ( lx1 + 1 ) * bs, ( ly1 + 1 ) * bs, ( lz1 + 1 ) * bs ),
+			cx = cx, cy = cy, cz = cz,
+		}
+	end
+	MC.ServerCollisionDebugBounds = bounds
+	MC.ServerCollisionDebugUpdated = CurTime()
+end )
+
 hook.Add( "Think", "mc_prediction_rollback", rollbackExpiredPredictions )

@@ -63,6 +63,8 @@ if SERVER then
 		"mc_set_bulk",
 		"mc_fx",
 		"mc_clear",
+		"mc_collision_debug_req",
+		"mc_collision_debug",
 		"mc_save_list_req",
 		"mc_save_list_data",
 		"mc_save_action",

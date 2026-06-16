@@ -7,6 +7,22 @@ MC = MC or {}
 surface.CreateFont( "mc_debug", { font = "Roboto", size = 18, weight = 500 } )
 
 MC.DebugHUD = MC.DebugHUD or false
+MC.ServerCollisionDebug = MC.ServerCollisionDebug or CreateClientConVar( "mc_server_collision_debug", "0", true, false,
+	"Draw server-authoritative MC collision interest bounds" )
+MC.ServerCollisionDebugBounds = MC.ServerCollisionDebugBounds or {}
+
+local function requestServerCollisionDebug()
+	if not net or not MC.ServerCollisionDebug then return end
+	net.Start( "mc_collision_debug_req" )
+		net.WriteBool( MC.ServerCollisionDebug:GetBool() )
+	net.SendToServer()
+end
+
+cvars.AddChangeCallback( "mc_server_collision_debug", function()
+	requestServerCollisionDebug()
+end, "mc" )
+
+timer.Simple( 1, requestServerCollisionDebug )
 
 hook.Add( "PlayerButtonDown", "mc_debug_toggle", function( ply, btn )
 	if btn == KEY_F3 and ply == LocalPlayer() then
@@ -114,6 +130,10 @@ concommand.Add( "mc_client_diag", function()
 		tostring( physStats.lastClientPhysKey ), tostring( physStats.lastClientPhysBuildMS ),
 		tostring( physStats.lastClientPhysBounds ), tostring( physStats.lastClientPhysHadObject ),
 		tostring( next( MC.PhysDirty or {} ) ~= nil ) ) )
+	print( string.format( "[MC client] server collision debug=%s bounds=%d age=%s",
+		tostring( MC.ServerCollisionDebug and MC.ServerCollisionDebug:GetBool() ),
+		#( MC.ServerCollisionDebugBounds or {} ),
+		tostring( MC.ServerCollisionDebugUpdated and math.Round( CurTime() - MC.ServerCollisionDebugUpdated, 3 ) or "nil" ) ) )
 end )
 
 local function facingName( yaw )
@@ -189,5 +209,17 @@ hook.Add( "HUDPaint", "mc_debug_hud", function()
 	for i = 1, #lines do
 		draw.SimpleText( lines[i], "mc_debug", x + pad, ty, i == 1 and Color( 120, 235, 140 ) or color_white )
 		ty = ty + lh
+	end
+end )
+
+hook.Remove( "PostDrawTranslucentRenderables", "mc_server_collision_debug_draw" )
+hook.Add( "PostDrawTranslucentRenderables", "mc_server_collision_debug_draw", function()
+	if not MC.ServerCollisionDebug or not MC.ServerCollisionDebug:GetBool() then return end
+	local bounds = MC.ServerCollisionDebugBounds or {}
+	if #bounds == 0 then return end
+	render.SetColorMaterial()
+	local col = Color( 0, 220, 255, 220 )
+	for _, b in ipairs( bounds ) do
+		render.DrawWireframeBox( vector_origin, angle_zero, b.mins, b.maxs, col, true )
 	end
 end )
