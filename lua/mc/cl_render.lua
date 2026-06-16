@@ -107,6 +107,8 @@ MC.ClientCollisionInterest = MC.ClientCollisionInterest or {}
 local LastClientCollisionCenterKey
 local LastClientCollisionRadius = -1
 local LastClientCollisionEnabled = nil
+local LastClientCollisionAimKey
+local LastClientCollisionAABBKey
 
 local function clientCollisionEnabled()
 	return MC.ClientCollision:GetBool()
@@ -114,6 +116,14 @@ end
 
 local function clientCollisionRadius()
 	return math.Clamp( MC.ClientCollisionChunkSpan:GetInt(), 0, 32 )
+end
+
+local function clientCollisionAimRadius()
+	local value = MC.Config and MC.Config.ClientCollisionAimRadius
+	if value and value.GetInt then
+		return math.Clamp( value:GetInt(), 0, 8 )
+	end
+	return math.Clamp( math.floor( tonumber( value ) or 1 ), 0, 8 )
 end
 
 local function clientCollisionWindowSpan( radius )
@@ -140,11 +150,57 @@ if RunConsoleCommand then
 	end
 end
 
+local function addClientCellNeighborhoodCollisionKeys( desired, bx, by, bz, radius )
+	radius = math.max( 0, math.floor( tonumber( radius ) or 0 ) )
+	for dz = -radius, radius do
+		for dy = -radius, radius do
+			for dx = -radius, radius do
+				local cx, cy, cz = MC.CellToChunk( bx + dx, by + dy, bz + dz )
+				desired[MC.ChunkKey( cx, cy, cz )] = true
+			end
+		end
+	end
+end
+
+local function collectClientPlayerAABBCollisionInterestKeys( lp, desired )
+	if not IsValid( lp ) then return nil end
+	local mins, maxs = lp:WorldSpaceAABB()
+	if not mins or not maxs then return nil end
+	local pad = clientCollisionAimRadius() * MC.BS
+	local minBX = math.floor( ( mins.x - pad ) / MC.BS )
+	local minBY = math.floor( ( mins.y - pad ) / MC.BS )
+	local minBZ = math.floor( ( mins.z - pad ) / MC.BS )
+	local maxBX = math.floor( ( maxs.x + pad ) / MC.BS )
+	local maxBY = math.floor( ( maxs.y + pad ) / MC.BS )
+	local maxBZ = math.floor( ( maxs.z + pad ) / MC.BS )
+	local minCX, minCY, minCZ = MC.CellToChunk( minBX, minBY, minBZ )
+	local maxCX, maxCY, maxCZ = MC.CellToChunk( maxBX, maxBY, maxBZ )
+	for cz = minCZ, maxCZ do
+		for cy = minCY, maxCY do
+			for cx = minCX, maxCX do
+				desired[MC.ChunkKey( cx, cy, cz )] = true
+			end
+		end
+	end
+	return MC.ChunkKey( minCX, minCY, minCZ ) .. "|" .. MC.ChunkKey( maxCX, maxCY, maxCZ )
+end
+
+local function collectClientAimCollisionInterestKeys( lp, desired )
+	if not IsValid( lp ) then return nil end
+	local hit = MC.PlayerBlockAim and MC.PlayerBlockAim( lp ) or nil
+	if not hit or not hit.bx then return nil end
+	addClientCellNeighborhoodCollisionKeys( desired, hit.bx, hit.by, hit.bz, clientCollisionAimRadius() )
+	local cx, cy, cz = MC.CellToChunk( hit.bx, hit.by, hit.bz )
+	return MC.ChunkKey( cx, cy, cz )
+end
+
 function MC.RefreshClientCollisionInterest( force )
 	local enabled = clientCollisionEnabled()
 	local radius = clientCollisionRadius()
 	local lp = LocalPlayer()
 	local centerKey
+	local aimKey
+	local aabbKey
 	local desired = {}
 
 	if enabled and radius > 0 and IsValid( lp ) then
@@ -154,10 +210,13 @@ function MC.RefreshClientCollisionInterest( force )
 		local windowSpan = clientCollisionWindowSpan( radius )
 		centerKey = MC.ChunkKey( cx, cy, cz )
 		desired = MC.ChunkInterestKeysAroundPos( pos, windowSpan, windowSpan )
+		aabbKey = collectClientPlayerAABBCollisionInterestKeys( lp, desired )
+		aimKey = collectClientAimCollisionInterestKeys( lp, desired )
 	end
 
 	if not force and centerKey == LastClientCollisionCenterKey
-	and radius == LastClientCollisionRadius and enabled == LastClientCollisionEnabled then
+	and radius == LastClientCollisionRadius and enabled == LastClientCollisionEnabled
+	and aimKey == LastClientCollisionAimKey and aabbKey == LastClientCollisionAABBKey then
 		return
 	end
 
@@ -166,6 +225,8 @@ function MC.RefreshClientCollisionInterest( force )
 	LastClientCollisionCenterKey = centerKey
 	LastClientCollisionRadius = radius
 	LastClientCollisionEnabled = enabled
+	LastClientCollisionAimKey = aimKey
+	LastClientCollisionAABBKey = aabbKey
 
 	for key in pairs( old ) do
 		if not desired[key] then
@@ -915,6 +976,7 @@ local function nextDirtyPhysKeys( maxKeys, now )
 	return keys
 end
 
+-- rebuild a few chunks per frame
 -- rebuild all dirty meshes immediately; clientside collision remains throttled below
 hook.Remove( "Think", "mc_meshbuild" )
 hook.Add( "Think", "mc_meshbuild", function()

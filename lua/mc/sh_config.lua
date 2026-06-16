@@ -18,8 +18,8 @@ MC.Config.PlayerDuckViewHeight = MC.Config.BlockSize * 1.27
 MC.Config.PlayerJumpPower = 240
 -- Minecraft-style chunk section: 16x16x32 blocks.
 -- Z is not globally clamped; sections are addressed by their chunk Z.
-MC.Config.ChunkSize = 8
-MC.Config.ChunkHeight = 8
+MC.Config.ChunkSize = 16
+MC.Config.ChunkHeight = 32
 
 -- convenience locals mirrored onto MC for hot paths
 MC.BS = MC.Config.BlockSize
@@ -134,6 +134,9 @@ MC.Config.ClientCollisionChunkSpan = 1
 MC.Config.StreamChunkSpanXY = 0
 MC.Config.StreamChunkSpanZ = 0
 MC.Config.ServerCollisionChunkSpan = 0
+MC.Config.ServerCollisionAABBPadding = MC.Config.BlockSize * 1.5
+MC.Config.ServerCollisionAimRadius = 1
+MC.Config.ClientCollisionAimRadius = 1
 MC.Config.LargeWorldLazyLoad = 0
 MC.Config.LargeWorldChunkThreshold = 2048
 MC.Config.SyncSnapshotMaxChunks = 0
@@ -175,10 +178,13 @@ if SERVER then
 	MC.Config.ChunkStorePartCache = GetConVar( "mc_chunk_store_part_cache" ) or CreateConVar( "mc_chunk_store_part_cache", tostring( MC.Config.ChunkStorePartCache ), F, "Maximum v8 lazy-save part files cached in memory" )
 	MC.Config.ChunkStoreLoadsPerTick = GetConVar( "mc_chunk_store_loads_per_tick" ) or CreateConVar( "mc_chunk_store_loads_per_tick", tostring( MC.Config.ChunkStoreLoadsPerTick ), F, "Maximum lazy chunk hydrations per store tick" )
 	MC.Config.ChunkStoreFrame = GetConVar( "mc_chunk_store_frame_ms" ) or CreateConVar( "mc_chunk_store_frame_ms", tostring( MC.Config.ChunkStoreFrameMS ), F, "Approximate lazy chunk hydration time budget per tick in milliseconds" )
-	MC.Config.ServerCollisionChunkSpan = GetConVar( "mc_server_collision_chunk_span" ) or CreateConVar( "mc_server_collision_chunk_span", tostring( MC.Config.ServerCollisionChunkSpan ), F, "Legacy entity-range server collision span; direct server collision ignores this" )
-	MC.Config.ServerCollisionHotSpan = GetConVar( "mc_server_collision_hot_span" ) or CreateConVar( "mc_server_collision_hot_span", tostring( MC.Config.ServerCollisionHotSpan ), F, "Legacy entity-range collision span; direct server collision ignores this" )
-	MC.Config.ServerCollisionLookaheadTime = GetConVar( "mc_server_collision_lookahead_time" ) or CreateConVar( "mc_server_collision_lookahead_time", tostring( MC.Config.ServerCollisionLookaheadTime ), F, "Legacy velocity lookahead time; direct server collision ignores this" )
-	MC.Config.ServerCollisionLookaheadMax = GetConVar( "mc_server_collision_lookahead_max" ) or CreateConVar( "mc_server_collision_lookahead_max", tostring( MC.Config.ServerCollisionLookaheadMax ), F, "Legacy velocity lookahead count; direct server collision ignores this" )
+	MC.Config.ServerCollisionChunkSpan = GetConVar( "mc_server_collision_chunk_span" ) or CreateConVar( "mc_server_collision_chunk_span", tostring( MC.Config.ServerCollisionChunkSpan ), F, "Extra chunk radius around server collision AABBs" )
+	MC.Config.ServerCollisionAABBPadding = GetConVar( "mc_server_collision_aabb_padding" ) or CreateConVar( "mc_server_collision_aabb_padding", tostring( MC.Config.ServerCollisionAABBPadding ), F, "Source-unit padding around player/entity AABBs that keep MC chunk collision active" )
+	MC.Config.ServerCollisionAimRadius = GetConVar( "mc_server_collision_aim_radius" ) or CreateConVar( "mc_server_collision_aim_radius", tostring( MC.Config.ServerCollisionAimRadius ), F, "Block radius around each player's aimed MC block that keeps chunk collision active" )
+	MC.Config.ClientCollisionAimRadius = GetConVar( "mc_client_collision_aim_radius" ) or CreateConVar( "mc_client_collision_aim_radius", tostring( MC.Config.ClientCollisionAimRadius ), F, "Block radius around each player's aimed MC block used by client prediction collision" )
+	MC.Config.ServerCollisionHotSpan = GetConVar( "mc_server_collision_hot_span" ) or CreateConVar( "mc_server_collision_hot_span", tostring( MC.Config.ServerCollisionHotSpan ), F, "Velocity lookahead chunk span for server collision interest" )
+	MC.Config.ServerCollisionLookaheadTime = GetConVar( "mc_server_collision_lookahead_time" ) or CreateConVar( "mc_server_collision_lookahead_time", tostring( MC.Config.ServerCollisionLookaheadTime ), F, "Seconds of entity velocity lookahead for server collision interest" )
+	MC.Config.ServerCollisionLookaheadMax = GetConVar( "mc_server_collision_lookahead_max" ) or CreateConVar( "mc_server_collision_lookahead_max", tostring( MC.Config.ServerCollisionLookaheadMax ), F, "Maximum chunk radius reached by velocity lookahead collision interest" )
 	MC.Config.ServerCollisionBuildsPerTick = GetConVar( "mc_server_collision_builds_per_tick" ) or CreateConVar( "mc_server_collision_builds_per_tick", tostring( MC.Config.ServerCollisionBuildsPerTick ), F, "Normal server chunk collision rebuilds per physics tick" )
 	MC.Config.ServerCollisionEmergencyBuildsPerTick = GetConVar( "mc_server_collision_emergency_builds_per_tick" ) or CreateConVar( "mc_server_collision_emergency_builds_per_tick", tostring( MC.Config.ServerCollisionEmergencyBuildsPerTick ), F, "Priority server chunk collision rebuilds per physics tick" )
 	MC.Config.BlockDamage = GetConVar( "mc_block_damage" ) or CreateConVar( "mc_block_damage", "1", F, "Allow GMod damage to break MC blocks" )
