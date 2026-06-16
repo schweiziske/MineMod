@@ -67,9 +67,21 @@ function ENT:EnsureKey()
 	return self.ChunkKey
 end
 
+local function localBoundsContains( bounds, lx, ly, lz )
+	if not bounds then return true end
+	for _, b in ipairs( bounds ) do
+		if lx >= b[1] and lx <= b[4]
+		and ly >= b[2] and ly <= b[5]
+		and lz >= b[3] and lz <= b[6] then
+			return true
+		end
+	end
+	return false
+end
+
 -- greedy-merge solid cells into a minimal set of boxes (local cell coords);
 -- high corner is exclusive. Shared so both realms can build collision.
-local function greedyBoxes( chunk )
+local function greedyBoxes( chunk, bounds )
 	local CS = MC.CS
 	local CS2 = CS * CS
 	local CH = MC.CH
@@ -118,21 +130,23 @@ local function greedyBoxes( chunk )
 		if not b or b.solid ~= false then
 			local orient = MC.NormalizeOrient and MC.NormalizeOrient( id, chunk.orients and chunk.orients[li] ) or 0
 			local lx, ly, lz = MC.DecodeLocal( li )
-			local bx = chunk.cx * CS + lx
-			local by = chunk.cy * CS + ly
-			local bz = chunk.cz * CH + lz
-			if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
-				solid[li] = true
-			else
-				local blockConvexes = MC.BlockCollisionConvexes and MC.BlockCollisionConvexes( id, orient, bx, by, bz ) or nil
-				if blockConvexes then
-					for _, convex in ipairs( blockConvexes ) do
-						addCustomConvex( lx, ly, lz, convex )
-					end
+			if localBoundsContains( bounds, lx, ly, lz ) then
+				local bx = chunk.cx * CS + lx
+				local by = chunk.cy * CS + ly
+				local bz = chunk.cz * CH + lz
+				if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
+					solid[li] = true
 				else
-					local blockBoxes = ( MC.BlockCollisionBoxes or MC.BlockBoxes )( id, orient, bx, by, bz )
-					for _, box in ipairs( blockBoxes or {} ) do
-						addShapeBox( lx, ly, lz, box )
+					local blockConvexes = MC.BlockCollisionConvexes and MC.BlockCollisionConvexes( id, orient, bx, by, bz ) or nil
+					if blockConvexes then
+						for _, convex in ipairs( blockConvexes ) do
+							addCustomConvex( lx, ly, lz, convex )
+						end
+					else
+						local blockBoxes = ( MC.BlockCollisionBoxes or MC.BlockBoxes )( id, orient, bx, by, bz )
+						for _, box in ipairs( blockBoxes or {} ) do
+							addShapeBox( lx, ly, lz, box )
+						end
 					end
 				end
 			end
@@ -267,7 +281,7 @@ end
 -- Server: authoritative collision. Client: so PREDICTED local-player movement
 -- collides with blocks (server physics objects are not replicated to clients,
 -- which would otherwise cause rubber-banding when walking on builds).
-function ENT:RebuildPhysics()
+function ENT:RebuildPhysics( bounds )
 	local chunk = MC.GetChunkByKey( self:EnsureKey() )
 	if not chunk or chunk.count == 0 then
 		self:ClearPhysicsShards()
@@ -275,7 +289,7 @@ function ENT:RebuildPhysics()
 		return
 	end
 
-	local boxes, customConvexes = greedyBoxes( chunk )
+	local boxes, customConvexes = greedyBoxes( chunk, bounds )
 	if #boxes == 0 and #customConvexes == 0 then
 		self:ClearPhysicsShards()
 		self:PhysicsDestroy()
@@ -306,6 +320,7 @@ function ENT:RebuildPhysics()
 	if SERVER then
 		MsgN( "[MC][phys-debug] chunk=" .. tostring( self.ChunkKey ) ..
 			" blocks=" .. tostring( chunk.count or 0 ) ..
+			" bounds=" .. tostring( bounds and #bounds or "full" ) ..
 			" boxes=" .. #boxes ..
 			" customConvexes=" .. #customConvexes ..
 			" convexes=" .. #convexes )

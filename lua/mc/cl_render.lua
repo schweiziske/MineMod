@@ -132,7 +132,7 @@ local function clientCollisionWindowSpan( radius )
 end
 
 function MC.IsChunkInClientCollisionInterest( key )
-	return MC.ClientCollisionInterest and MC.ClientCollisionInterest[key] == true
+	return MC.ClientCollisionInterest and MC.ClientCollisionInterest[key] ~= nil
 end
 
 if RunConsoleCommand then
@@ -150,38 +150,50 @@ if RunConsoleCommand then
 	end
 end
 
-local function addClientCellNeighborhoodCollisionKeys( desired, bx, by, bz, radius )
-	radius = math.max( 0, math.floor( tonumber( radius ) or 0 ) )
-	for dz = -radius, radius do
-		for dy = -radius, radius do
-			for dx = -radius, radius do
-				local cx, cy, cz = MC.CellToChunk( bx + dx, by + dy, bz + dz )
-				desired[MC.ChunkKey( cx, cy, cz )] = true
+local function addClientChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minBZ, maxBX, maxBY, maxBZ )
+	local minCX, minCY, minCZ = MC.CellToChunk( minBX, minBY, minBZ )
+	local maxCX, maxCY, maxCZ = MC.CellToChunk( maxBX, maxBY, maxBZ )
+	for cz = minCZ, maxCZ do
+		for cy = minCY, maxCY do
+			for cx = minCX, maxCX do
+				local key = MC.ChunkKey( cx, cy, cz )
+				local list = desired[key]
+				if not list then
+					list = {}
+					desired[key] = list
+				end
+				list[#list + 1] = {
+					math.max( 0, minBX - cx * MC.CS ),
+					math.max( 0, minBY - cy * MC.CS ),
+					math.max( 0, minBZ - cz * MC.CH ),
+					math.min( MC.CS - 1, maxBX - cx * MC.CS ),
+					math.min( MC.CS - 1, maxBY - cy * MC.CS ),
+					math.min( MC.CH - 1, maxBZ - cz * MC.CH ),
+				}
 			end
 		end
 	end
+end
+
+local function addClientCellNeighborhoodCollisionKeys( desired, bx, by, bz, radius )
+	radius = math.max( 0, math.floor( tonumber( radius ) or 0 ) )
+	addClientChunkLocalBoundsCollisionInterest( desired, bx - radius, by - radius, bz - radius, bx + radius, by + radius, bz + radius )
 end
 
 local function collectClientPlayerAABBCollisionInterestKeys( lp, desired )
 	if not IsValid( lp ) then return nil end
 	local mins, maxs = lp:WorldSpaceAABB()
 	if not mins or not maxs then return nil end
-	local pad = clientCollisionAimRadius() * MC.BS
-	local minBX = math.floor( ( mins.x - pad ) / MC.BS )
-	local minBY = math.floor( ( mins.y - pad ) / MC.BS )
-	local minBZ = math.floor( ( mins.z - pad ) / MC.BS )
-	local maxBX = math.floor( ( maxs.x + pad ) / MC.BS )
-	local maxBY = math.floor( ( maxs.y + pad ) / MC.BS )
-	local maxBZ = math.floor( ( maxs.z + pad ) / MC.BS )
+	local blockPad = 1
+	local minBX = math.floor( mins.x / MC.BS ) - blockPad
+	local minBY = math.floor( mins.y / MC.BS ) - blockPad
+	local minBZ = math.floor( mins.z / MC.BS ) - blockPad
+	local maxBX = math.floor( maxs.x / MC.BS ) + blockPad
+	local maxBY = math.floor( maxs.y / MC.BS ) + blockPad
+	local maxBZ = math.floor( maxs.z / MC.BS ) + blockPad
+	addClientChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minBZ, maxBX, maxBY, maxBZ )
 	local minCX, minCY, minCZ = MC.CellToChunk( minBX, minBY, minBZ )
 	local maxCX, maxCY, maxCZ = MC.CellToChunk( maxBX, maxBY, maxBZ )
-	for cz = minCZ, maxCZ do
-		for cy = minCY, maxCY do
-			for cx = minCX, maxCX do
-				desired[MC.ChunkKey( cx, cy, cz )] = true
-			end
-		end
-	end
 	return MC.ChunkKey( minCX, minCY, minCZ ) .. "|" .. MC.ChunkKey( maxCX, maxCY, maxCZ )
 end
 
@@ -207,9 +219,7 @@ function MC.RefreshClientCollisionInterest( force )
 		local pos = lp.WorldSpaceCenter and lp:WorldSpaceCenter() or lp:GetPos()
 		local bx, by, bz = MC.WorldToCell( pos )
 		local cx, cy, cz = MC.CellToChunk( bx, by, bz )
-		local windowSpan = clientCollisionWindowSpan( radius )
 		centerKey = MC.ChunkKey( cx, cy, cz )
-		desired = MC.ChunkInterestKeysAroundPos( pos, windowSpan, windowSpan )
 		aabbKey = collectClientPlayerAABBCollisionInterestKeys( lp, desired )
 		aimKey = collectClientAimCollisionInterestKeys( lp, desired )
 	end
@@ -900,7 +910,7 @@ local function rebuildChunkPhys( key, enabled )
 	local e = MC.ChunkEnts[key]
 	if IsValid( e ) then
 		if enabled and MC.IsChunkInClientCollisionInterest( key ) then
-			e:RebuildPhysics()
+			e:RebuildPhysics( MC.ClientCollisionInterest[key] )
 		else
 			if e.ClearPhysicsShards then e:ClearPhysicsShards() end
 			e:PhysicsDestroy()
