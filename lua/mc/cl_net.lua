@@ -291,6 +291,7 @@ local function resetClientWorldForSnapshot( expectedChunks, expectedBlocks )
 	if MC.FreeAllMeshes then MC.FreeAllMeshes() end
 	for _, e in pairs( MC.ChunkEnts or {} ) do
 		if IsValid( e ) then
+			if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
 			if e.ClearPhysicsShards then e:ClearPhysicsShards() end
 			e:PhysicsDestroy()
 		end
@@ -1031,6 +1032,7 @@ net.Receive( "mc_unload_chunk", function()
 	MC.FreeChunkMesh( key )
 	local e = MC.ChunkEnts and MC.ChunkEnts[key]
 	if IsValid( e ) then
+		if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
 		if e.ClearPhysicsShards then e:ClearPhysicsShards() end
 		e:PhysicsDestroy()
 	end
@@ -1066,6 +1068,7 @@ net.Receive( "mc_clear", function()
 	MC.FreeAllMeshes()
 	for key, e in pairs( MC.ChunkEnts or {} ) do
 		if IsValid( e ) then
+			if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
 			if e.ClearPhysicsShards then e:ClearPhysicsShards() end
 			e:PhysicsDestroy()
 		end
@@ -1077,6 +1080,7 @@ net.Receive( "mc_clear", function()
 	MC.PhysDirtyPriority = {}
 	MC.PhysDirtyBulk = {}
 	MC.PhysDirtyBulkOrder = {}
+	MC.ClientCollisionAABBDebugBoxes = {}
 	MC.PendingFull = {}
 	MC.PendingPredictions = {}
 	MC.HttpChunkSync = nil

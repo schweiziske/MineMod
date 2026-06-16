@@ -105,6 +105,40 @@ local function rememberClientPhysStats( ent, mode, bounds, boxes, customConvexes
 	end
 end
 
+local function clearClientAABBDebugBoxes( ent )
+	if not CLIENT then return end
+	local key = ent and ent.ChunkKey
+	if key and MC.ClientCollisionAABBDebugBoxes then
+		MC.ClientCollisionAABBDebugBoxes[key] = nil
+	end
+end
+
+local function rememberClientAABBDebugBoxes( ent, boxes )
+	if not CLIENT then return end
+	local key = ent and ent.ChunkKey
+	if not key then return end
+	MC.ClientCollisionAABBDebugBoxes = MC.ClientCollisionAABBDebugBoxes or {}
+	if not boxes or #boxes == 0 then
+		MC.ClientCollisionAABBDebugBoxes[key] = nil
+		return
+	end
+
+	local origin = ent:GetPos()
+	local bs = MC.BS
+	local out = {}
+	for i, b in ipairs( boxes ) do
+		out[i] = {
+			mins = origin + Vector( b[1] * bs, b[2] * bs, b[3] * bs ),
+			maxs = origin + Vector( b[4] * bs, b[5] * bs, b[6] * bs ),
+		}
+	end
+	MC.ClientCollisionAABBDebugBoxes[key] = out
+end
+
+function ENT:ClearClientCollisionAABBDebugBoxes()
+	clearClientAABBDebugBoxes( self )
+end
+
 function ENT:EnsureKey()
 	if self.ChunkKey then return self.ChunkKey end
 	local cx, cy, cz = MC.ChunkCoordsFromOrigin( self:GetPos() )
@@ -131,6 +165,7 @@ local function greedyBoxes( chunk, bounds )
 	local CS = MC.CS
 	local CS2 = CS * CS
 	local CH = MC.CH
+	local clientAABBOnly = CLIENT
 	local function idx( x, y, z ) return x + y * CS + z * CS2 end
 
 	local solid = {}
@@ -183,13 +218,24 @@ local function greedyBoxes( chunk, bounds )
 				if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
 					solid[li] = true
 				else
-					local blockConvexes = MC.BlockCollisionConvexes and MC.BlockCollisionConvexes( id, orient, bx, by, bz ) or nil
+					local blockConvexes = ( not clientAABBOnly and MC.BlockCollisionConvexes )
+						and MC.BlockCollisionConvexes( id, orient, bx, by, bz ) or nil
 					if blockConvexes then
 						for _, convex in ipairs( blockConvexes ) do
 							addCustomConvex( lx, ly, lz, convex )
 						end
 					else
-						local blockBoxes = ( MC.BlockCollisionBoxes or MC.BlockBoxes )( id, orient, bx, by, bz )
+						local blockBoxes
+						if clientAABBOnly then
+							if MC.BlockCollisionBoxes then
+								blockBoxes = MC.BlockCollisionBoxes( id, orient, bx, by, bz )
+							end
+							if not blockBoxes and MC.BlockBoxes then
+								blockBoxes = MC.BlockBoxes( id, orient, bx, by, bz )
+							end
+						else
+							blockBoxes = ( MC.BlockCollisionBoxes or MC.BlockBoxes )( id, orient, bx, by, bz )
+						end
 						for _, box in ipairs( blockBoxes or {} ) do
 							addShapeBox( lx, ly, lz, box )
 						end
@@ -330,6 +376,7 @@ end
 function ENT:RebuildPhysics( bounds )
 	local chunk = MC.GetChunkByKey( self:EnsureKey() )
 	if not chunk or chunk.count == 0 then
+		clearClientAABBDebugBoxes( self )
 		self:ClearPhysicsShards()
 		self:PhysicsDestroy()
 		return
@@ -337,10 +384,12 @@ function ENT:RebuildPhysics( bounds )
 
 	local boxes, customConvexes = greedyBoxes( chunk, bounds )
 	if #boxes == 0 and #customConvexes == 0 then
+		clearClientAABBDebugBoxes( self )
 		self:ClearPhysicsShards()
 		self:PhysicsDestroy()
 		return
 	end
+	rememberClientAABBDebugBoxes( self, boxes )
 
 	local BS = MC.BS
 	local convexes = {}

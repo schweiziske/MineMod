@@ -176,6 +176,7 @@ function MC.RefreshClientCollisionInterest( force )
 	if not enabled then
 		for key, e in pairs( MC.ChunkEnts or {} ) do
 			if IsValid( e ) then
+				if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
 				if e.ClearPhysicsShards then e:ClearPhysicsShards() end
 				e:PhysicsDestroy()
 			end
@@ -184,6 +185,7 @@ function MC.RefreshClientCollisionInterest( force )
 			if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
 		end
 		MC.PhysDirtyBulkOrder = {}
+		MC.ClientCollisionAABBDebugBoxes = {}
 		return
 	end
 
@@ -977,6 +979,7 @@ local function rebuildChunkPhys( key, enabled )
 	if not chunk or not chunk.count or chunk.count <= 0 then
 		if MC.ClientCollisionInterest then MC.ClientCollisionInterest[key] = nil end
 		if IsValid( e ) then
+			if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
 			if e.ClearPhysicsShards then e:ClearPhysicsShards() end
 			e:PhysicsDestroy()
 		end
@@ -1016,6 +1019,7 @@ local function rebuildChunkPhys( key, enabled )
 			MC.ClientPhysStats.lastClientPhysHadObject = IsValid( e:GetPhysicsObject() ) or ( ( MC.ClientPhysStats.lastClientPhysShardObjects or 0 ) > 0 )
 		else
 			if MC.ClientCollisionInterest then MC.ClientCollisionInterest[key] = nil end
+			if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
 			if e.ClearPhysicsShards then e:ClearPhysicsShards() end
 			e:PhysicsDestroy()
 		end
@@ -1200,4 +1204,5 @@ function MC.FreeAllMeshes()
 	MC.MeshDirtyRateLimited = {}
 	MC.PhysDirtyBulk = {}
 	MC.PhysDirtyBulkOrder = {}
+	MC.ClientCollisionAABBDebugBoxes = {}
 end
