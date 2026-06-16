@@ -14,6 +14,14 @@ ENT.AdminOnly = false
 ENT.DisableDuplicator = true
 
 local PHYSICS_CONVEXES_PER_ENTITY = SERVER and 64 or 256
+local PHYSICS_MODEL = "models/hunter/blocks/cube025x025x025.mdl"
+
+local function ensurePhysicsModel( ent )
+	if not IsValid( ent ) then return end
+	if ent:GetModel() ~= PHYSICS_MODEL then
+		ent:SetModel( PHYSICS_MODEL )
+	end
+end
 
 local function freezePhysicsObject( ent )
 	local phys = ent:GetPhysicsObject()
@@ -46,6 +54,7 @@ local function spawnPhysicsShard( owner, index, convexes )
 	shard.cx, shard.cy, shard.cz = owner.cx, owner.cy, owner.cz
 	shard.ParentChunk = owner
 	shard.ShardIndex = index
+	ensurePhysicsModel( shard )
 	shard:SetPos( owner:GetPos() )
 	shard:SetAngles( Angle( 0, 0, 0 ) )
 	if shard.Spawn then shard:Spawn() end
@@ -419,6 +428,7 @@ function ENT:RebuildPhysics( bounds )
 	-- longer override them. MOVETYPE_NONE = no collision at all, so VPHYSICS is required.)
 	self:ClearPhysicsShards()
 	self:PhysicsDestroy()
+	ensurePhysicsModel( self )
 	self:PhysicsInitMultiConvex( convexes )
 	self:SetMoveType( MOVETYPE_VPHYSICS )
 	self:SetSolid( SOLID_VPHYSICS )

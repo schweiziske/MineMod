@@ -3,7 +3,9 @@ include( "shared.lua" )
 ENT.RenderGroup = RENDERGROUP_OPAQUE
 
 function ENT:Initialize()
+	self:SetModel( "models/hunter/blocks/cube025x025x025.mdl" )
 	self:DrawShadow( false )
+	self:PhysicsInit( SOLID_VPHYSICS )
 	self:EnsureKey()
 
 	-- local-space render bounds covering the whole chunk (entity sits at chunk origin)
