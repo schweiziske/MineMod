@@ -168,7 +168,7 @@ local function collisionLookaheadMax()
 end
 
 function SV.IsChunkCollisionActive( key )
-	return SV.ServerCollisionActiveChunks and SV.ServerCollisionActiveChunks[key] == true
+	return SV.ServerCollisionActiveChunks and SV.ServerCollisionActiveChunks[key] ~= nil
 end
 
 local function decodeLocalWithGeometry( li, chunkSize, height )
@@ -222,10 +222,12 @@ local function rebuildPhysKey( key )
 	end
 	if chunk and IsValid( chunk.ent ) then
 		SV.EnsureChunkEnt( chunk )
-		chunk.ent:RebuildPhysics()
+		chunk.ent:RebuildPhysics( SV.ServerCollisionActiveChunks and SV.ServerCollisionActiveChunks[key] )
 	elseif chunk and chunk.count and chunk.count > 0 then
 		SV.EnsureChunkEnt( chunk )
-		if IsValid( chunk.ent ) then chunk.ent:RebuildPhysics() end
+		if IsValid( chunk.ent ) then
+			chunk.ent:RebuildPhysics( SV.ServerCollisionActiveChunks and SV.ServerCollisionActiveChunks[key] )
+		end
 	end
 	SV.PhysDirty[key] = nil
 	SV.PhysDirtyPriority[key] = nil
@@ -239,37 +241,47 @@ local function flushPhysDirtyKeys( keys )
 	end
 end
 
-local function addCellNeighborhoodCollisionKeys( desired, bx, by, bz, radius )
-	radius = math.max( 0, math.floor( tonumber( radius ) or 0 ) )
-	for dz = -radius, radius do
-		for dy = -radius, radius do
-			for dx = -radius, radius do
-				local cx, cy, cz = MC.CellToChunk( bx + dx, by + dy, bz + dz )
-				desired[MC.ChunkKey( cx, cy, cz )] = true
+local function addChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minBZ, maxBX, maxBY, maxBZ )
+	local minCX, minCY, minCZ = MC.CellToChunk( minBX, minBY, minBZ )
+	local maxCX, maxCY, maxCZ = MC.CellToChunk( maxBX, maxBY, maxBZ )
+	for cz = minCZ, maxCZ do
+		for cy = minCY, maxCY do
+			for cx = minCX, maxCX do
+				local key = MC.ChunkKey( cx, cy, cz )
+				local list = desired[key]
+				if not list then
+					list = {}
+					desired[key] = list
+				end
+				list[#list + 1] = {
+					math.max( 0, minBX - cx * MC.CS ),
+					math.max( 0, minBY - cy * MC.CS ),
+					math.max( 0, minBZ - cz * MC.CH ),
+					math.min( MC.CS - 1, maxBX - cx * MC.CS ),
+					math.min( MC.CS - 1, maxBY - cy * MC.CS ),
+					math.min( MC.CH - 1, maxBZ - cz * MC.CH ),
+				}
 			end
 		end
 	end
 end
 
+local function addCellNeighborhoodCollisionKeys( desired, bx, by, bz, radius )
+	radius = math.max( 0, math.floor( tonumber( radius ) or 0 ) )
+	addChunkLocalBoundsCollisionInterest( desired, bx - radius, by - radius, bz - radius, bx + radius, by + radius, bz + radius )
+end
+
 local function addAABBCollisionKeys( desired, mins, maxs, padding )
 	if not mins or not maxs then return end
 	padding = math.max( 0, tonumber( padding ) or 0 )
-	local extra = serverCollisionExtraRadius()
-	local minBX = math.floor( ( mins.x - padding ) / MC.BS )
-	local minBY = math.floor( ( mins.y - padding ) / MC.BS )
-	local minBZ = math.floor( ( mins.z - padding ) / MC.BS )
-	local maxBX = math.floor( ( maxs.x + padding ) / MC.BS )
-	local maxBY = math.floor( ( maxs.y + padding ) / MC.BS )
-	local maxBZ = math.floor( ( maxs.z + padding ) / MC.BS )
-	local minCX, minCY, minCZ = MC.CellToChunk( minBX, minBY, minBZ )
-	local maxCX, maxCY, maxCZ = MC.CellToChunk( maxBX, maxBY, maxBZ )
-	for cz = minCZ - extra, maxCZ + extra do
-		for cy = minCY - extra, maxCY + extra do
-			for cx = minCX - extra, maxCX + extra do
-				desired[MC.ChunkKey( cx, cy, cz )] = true
-			end
-		end
-	end
+	local blockPad = math.max( 1, math.ceil( padding / MC.BS ) + serverCollisionExtraRadius() )
+	local minBX = math.floor( mins.x / MC.BS ) - blockPad
+	local minBY = math.floor( mins.y / MC.BS ) - blockPad
+	local minBZ = math.floor( mins.z / MC.BS ) - blockPad
+	local maxBX = math.floor( maxs.x / MC.BS ) + blockPad
+	local maxBY = math.floor( maxs.y / MC.BS ) + blockPad
+	local maxBZ = math.floor( maxs.z / MC.BS ) + blockPad
+	addChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minBZ, maxBX, maxBY, maxBZ )
 end
 
 local function collectPlayerCollisionInterestKeys( desired )
@@ -294,7 +306,7 @@ local function collectEntityCollisionInterestKeys( desired )
 					if lookahead > 0 then
 						local futureMins = mins + vel * collisionLookaheadTime()
 						local futureMaxs = maxs + vel * collisionLookaheadTime()
-						addAABBCollisionKeys( desired, futureMins, futureMaxs, lookahead * MC.ChunkWorld )
+						addAABBCollisionKeys( desired, futureMins, futureMaxs, serverCollisionAABBPadding() )
 					end
 				end
 			end
@@ -1547,6 +1559,8 @@ function SV.RefreshServerCollision()
 		if c.count and c.count > 0 and desired[key] then
 			if not IsValid( c.ent ) then
 				SV.EnsureChunkEnt( c )
+				SV.MarkPhysDirty( key )
+			else
 				SV.MarkPhysDirty( key )
 			end
 		else
