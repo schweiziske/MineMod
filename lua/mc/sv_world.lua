@@ -88,13 +88,6 @@ local function syncSnapshotPartBytes()
 	return C.SyncSnapshotPartBytes or 32768
 end
 
-local function syncSnapshotMaxChunks()
-	if C.SyncSnapshotMaxChunks then
-		return math.max( 0, C.SyncSnapshotMaxChunks:GetInt() )
-	end
-	return MC.Config.SyncSnapshotMaxChunks or 2048
-end
-
 local function httpChunkDeliveryEnabled()
 	if C.ChunkHTTPEnabled then return C.ChunkHTTPEnabled:GetBool() end
 	return ( MC.Config.ChunkHTTPEnabled or 0 ) ~= 0
@@ -210,8 +203,6 @@ timer.Create( "mc_phys_rebuild", SERVER_PHYS_REBUILD_INTERVAL, 0, function()
 	for key in pairs( SV.PhysDirtyPriority ) do
 		if SV.PhysDirty[key] then
 			rebuildPhysKey( key )
-			priorityBudget = priorityBudget - 1
-			if priorityBudget <= 0 then break end
 		else
 			SV.PhysDirtyPriority[key] = nil
 		end
@@ -222,8 +213,7 @@ timer.Create( "mc_phys_rebuild", SERVER_PHYS_REBUILD_INTERVAL, 0, function()
 		local due = SV.PhysDirty[key]
 		if not SV.PhysDirtyPriority[key] and ( due == true or due <= now ) then
 			rebuildPhysKey( key )
-			budget = budget - 1
-			if budget <= 0 then break end
+
 		end
 	end
 end )
@@ -1394,10 +1384,10 @@ function SV.BeginSync( ply )
 	SV.PlayerLoadedChunks[ply] = {}
 	SV.PlayerFullSnapshot[ply] = nil
 	SV.SyncQueue[ply] = { keys = {}, i = 1, inflightBytes = 0, queuedKeys = {} }
-	sendHttpManifest( ply )
 	if syncSnapshotEnabled() and SV.BeginSnapshotSync and SV.BeginSnapshotSync( ply ) then
 		return
 	end
+	sendHttpManifest( ply )
 	queueAllLoadedChunksForPlayer( ply )
 end
 
@@ -1408,6 +1398,9 @@ local function restartPlayerFullSync( ply )
 	SV.PlayerLoadedChunks[ply] = {}
 	SV.PlayerFullSnapshot[ply] = nil
 	SV.SyncQueue[ply] = { keys = {}, i = 1, inflightBytes = 0, queuedKeys = {} }
+	if syncSnapshotEnabled() and SV.BeginSnapshotSync and SV.BeginSnapshotSync( ply ) then
+		return
+	end
 	queueAllLoadedChunksForPlayer( ply )
 end
 
@@ -1620,22 +1613,17 @@ local function sendSnapshotError( ply, err )
 	sendSnapshotBegin( ply, "", tostring( err or "snapshot_failed" ), 0, 0, 0, 0 )
 end
 
+local function sendSnapshotPart( ply, token, part, data, offset, len )
+	net.Start( "mc_snapshot_part" )
+		net.WriteString( token )
+		net.WriteUInt( part, 32 )
+		net.WriteUInt( len, 16 )
+		net.WriteData( string.sub( data, offset, offset + len - 1 ), len )
+	net.Send( ply )
+end
+
 function SV.BeginSnapshotSync( ply )
 	if not IsValid( ply ) then return false end
-	if SV.ChunkStore and SV.ChunkStore.IsLazyWorld and SV.ChunkStore.IsLazyWorld() then
-		return false
-	end
-
-	local maxSnapshotChunks = syncSnapshotMaxChunks()
-	if maxSnapshotChunks > 0 then
-		local loadedChunks = 0
-		for _, c in pairs( MC.World or {} ) do
-			if c.count and c.count > 0 then
-				loadedChunks = loadedChunks + 1
-				if loadedChunks > maxSnapshotChunks then return false end
-			end
-		end
-	end
 
 	local data, chunks = buildSaveData( "snapshot" )
 	local json = util.TableToJSON( data )
@@ -1650,8 +1638,7 @@ function SV.BeginSnapshotSync( ply )
 		return false
 	end
 
-	local partBytes = math.min( syncSnapshotPartBytes(), syncReliableBudget() )
-	partBytes = math.Clamp( partBytes, 4096, 60000 )
+	local partBytes = math.Clamp( syncSnapshotPartBytes(), 4096, 60000 )
 	local parts = math.ceil( #compressed / partBytes )
 	if parts < 1 then
 		sendSnapshotError( ply, "snapshot_empty" )
@@ -1662,18 +1649,14 @@ function SV.BeginSnapshotSync( ply )
 	SV.SyncQueue[ply] = nil
 	SV.PlayerLoadedChunks[ply] = {}
 	SV.PlayerFullSnapshot[ply] = true
-	SV.SnapshotQueue[ply] = {
-		token = token,
-		data = compressed,
-		totalBytes = #compressed,
-		partBytes = partBytes,
-		parts = parts,
-		part = 1,
-		offset = 1,
-		inflightBytes = 0,
-	}
+	SV.SnapshotQueue[ply] = nil
 
 	sendSnapshotBegin( ply, token, nil, parts, #compressed, #chunks, SV.BlockCount )
+	for part = 1, parts do
+		local offset = ( part - 1 ) * partBytes + 1
+		local len = math.min( partBytes, #compressed - offset + 1 )
+		sendSnapshotPart( ply, token, part, compressed, offset, len )
+	end
 	return true
 end
 

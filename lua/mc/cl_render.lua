@@ -15,6 +15,9 @@ MC.ClientRenderLoaded = true
 
 local BS  = MC.BS
 local CS  = MC.CS
+local RENDER_SECTION_SIZE = 8
+local RENDER_SECTIONS_XY = math.ceil( MC.CS / RENDER_SECTION_SIZE )
+local RENDER_SECTIONS_Z = math.ceil( MC.CH / RENDER_SECTION_SIZE )
 
 if MC.GeneratedAtlas then
 	MC.Atlas.COLS = MC.GeneratedAtlas.COLS or MC.Atlas.COLS
@@ -99,10 +102,6 @@ MC.ClientCollisionChunkSpan = CreateClientConVar( "mc_client_collision_chunk_spa
 	"Chunk radius around the local player that builds clientside prediction collision; 0 disables" )
 MC.ClientCollisionDefaultVersion = CreateClientConVar( "mc_client_collision_default_version", "0", true, false,
 	"Internal migration marker for MC client collision defaults" )
-MC.MeshBuildsPerFrame = CreateClientConVar( "mc_mesh_builds_per_frame", tostring( MC.Config.MeshBuildsPerFrame or 2 ), true, false,
-	"Maximum MC chunk meshes built per client frame" )
-MC.MeshBuildFrame = CreateClientConVar( "mc_mesh_build_frame_ms", tostring( MC.Config.MeshBuildFrameMS or 4 ), true, false,
-	"Approximate MC chunk mesh build time budget per frame in milliseconds" )
 MC.ClientCollisionInterest = MC.ClientCollisionInterest or {}
 
 local LastClientCollisionCenterKey
@@ -550,11 +549,32 @@ function MC.BuildChunkMesh( key )
 	local bzo = chunk.cz * MC.CH
 	chunk.orients = chunk.orients or {}
 
-	-- two output streams: everything cutout/opaque, plus a translucent stream
-	-- for water/lava and the glass family (never move whole chunks to translucent)
-	local opaque      = { list = {}, verts = {}, nv = 0, material = MC.Material }
-	local translucent = { list = {}, verts = {}, nv = 0, material = MC.MaterialTranslucent }
-	local cur = opaque
+	local sectionBuffers = {}
+	local cur
+
+	local function newMeshBuffer( material )
+		return { list = {}, verts = {}, nv = 0, material = material }
+	end
+
+	local function sectionIndexForLocal( lx, ly, lz )
+		local sx = math.floor( lx / RENDER_SECTION_SIZE )
+		local sy = math.floor( ly / RENDER_SECTION_SIZE )
+		local sz = math.floor( lz / RENDER_SECTION_SIZE )
+		return sx + sy * RENDER_SECTIONS_XY + sz * RENDER_SECTIONS_XY * RENDER_SECTIONS_XY + 1
+	end
+
+	local function buffersForLocal( lx, ly, lz )
+		local index = sectionIndexForLocal( lx, ly, lz )
+		local buffers = sectionBuffers[index]
+		if not buffers then
+			buffers = {
+				opaque = newMeshBuffer( MC.Material ),
+				translucent = newMeshBuffer( MC.MaterialTranslucent ),
+			}
+			sectionBuffers[index] = buffers
+		end
+		return buffers
+	end
 
 	local function flush( buf )
 		if buf.nv == 0 then return end
@@ -570,6 +590,28 @@ function MC.BuildChunkMesh( key )
 		cur.nv = nv
 		cur.verts[nv] = vert
 		if nv >= VERT_LIMIT then flush( cur ) end
+	end
+
+	local function appendMeshList( out, list )
+		for i = 1, #list do
+			out[#out + 1] = list[i]
+		end
+	end
+
+	local function flushSectionBuffers()
+		local opaqueMeshes = {}
+		local translucentMeshes = {}
+		local totalSections = RENDER_SECTIONS_XY * RENDER_SECTIONS_XY * RENDER_SECTIONS_Z
+		for i = 1, totalSections do
+			local buffers = sectionBuffers[i]
+			if buffers then
+				flush( buffers.opaque )
+				flush( buffers.translucent )
+				appendMeshList( opaqueMeshes, buffers.opaque.list )
+				appendMeshList( translucentMeshes, buffers.translucent.list )
+			end
+		end
+		return opaqueMeshes, translucentMeshes
 	end
 
 	local function emitQuad( corners, normal, color, tile )
@@ -636,7 +678,8 @@ function MC.BuildChunkMesh( key )
 		local bx, by, bz = bxo + lx, byo + ly, bzo + lz
 		local wx, wy, wz = lx * BS, ly * BS, lz * BS
 
-		cur = ( MC.IsTranslucentBlock and MC.IsTranslucentBlock( id ) ) and translucent or opaque
+		local buffers = buffersForLocal( lx, ly, lz )
+		cur = ( MC.IsTranslucentBlock and MC.IsTranslucentBlock( id ) ) and buffers.translucent or buffers.opaque
 
 		local b = MC.Blocks[id]
 		if b and b.shape == "cross" then
@@ -735,14 +778,13 @@ function MC.BuildChunkMesh( key )
 		end
 	end
 
-	flush( opaque )
-	flush( translucent )
+	local opaqueMeshes, translucentMeshes = flushSectionBuffers()
 
-	if #opaque.list > 0 then
-		MC.Meshes[key] = opaque.list
+	if #opaqueMeshes > 0 then
+		MC.Meshes[key] = opaqueMeshes
 	end
-	if #translucent.list > 0 then
-		MC.MeshesTrans[key] = translucent.list
+	if #translucentMeshes > 0 then
+		MC.MeshesTrans[key] = translucentMeshes
 	end
 end
 
@@ -848,7 +890,7 @@ local function chunkDistanceScore( key )
 	return dx * dx + dy * dy + dz * dz * 2
 end
 
-local function nextDirtyMeshKeys( maxKeys )
+local function nextDirtyMeshKeys()
 	local keys = {}
 	for key in pairs( MC.MeshDirty ) do
 		keys[#keys + 1] = key
@@ -856,7 +898,6 @@ local function nextDirtyMeshKeys( maxKeys )
 	table.sort( keys, function( a, b )
 		return chunkDistanceScore( a ) < chunkDistanceScore( b )
 	end )
-	while #keys > maxKeys do keys[#keys] = nil end
 	return keys
 end
 
@@ -874,19 +915,15 @@ local function nextDirtyPhysKeys( maxKeys, now )
 	return keys
 end
 
--- rebuild a few chunks per frame to avoid hitches (meshes + clientside collision)
+-- rebuild all dirty meshes immediately; clientside collision remains throttled below
 hook.Remove( "Think", "mc_meshbuild" )
 hook.Add( "Think", "mc_meshbuild", function()
 	MC.RefreshClientCollisionInterest()
 
 	if next( MC.MeshDirty ) then
-		local maxBuilds = math.Clamp( MC.MeshBuildsPerFrame:GetInt(), 1, 16 )
-		local frameMS = math.Clamp( MC.MeshBuildFrame:GetFloat(), 0.25, 20 )
-		local deadline = SysTime() + frameMS / 1000
-		for _, key in ipairs( nextDirtyMeshKeys( maxBuilds ) ) do
+		for _, key in ipairs( nextDirtyMeshKeys() ) do
 			MC.BuildChunkMesh( key )
 			MC.MeshDirty[key] = nil
-			if SysTime() >= deadline then break end
 		end
 	end
 

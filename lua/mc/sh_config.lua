@@ -18,8 +18,8 @@ MC.Config.PlayerDuckViewHeight = MC.Config.BlockSize * 1.27
 MC.Config.PlayerJumpPower = 240
 -- Minecraft-style chunk section: 16x16x32 blocks.
 -- Z is not globally clamped; sections are addressed by their chunk Z.
-MC.Config.ChunkSize = 16
-MC.Config.ChunkHeight = 32
+MC.Config.ChunkSize = 8
+MC.Config.ChunkHeight = 8
 
 -- convenience locals mirrored onto MC for hot paths
 MC.BS = MC.Config.BlockSize
@@ -136,12 +136,10 @@ MC.Config.StreamChunkSpanZ = 0
 MC.Config.ServerCollisionChunkSpan = 0
 MC.Config.LargeWorldLazyLoad = 0
 MC.Config.LargeWorldChunkThreshold = 2048
-MC.Config.SyncSnapshotMaxChunks = 2048
+MC.Config.SyncSnapshotMaxChunks = 0
 MC.Config.ChunkStorePartCache = 8
 MC.Config.ChunkStoreLoadsPerTick = 8
 MC.Config.ChunkStoreFrameMS = 3
-MC.Config.MeshBuildsPerFrame = 2
-MC.Config.MeshBuildFrameMS = 4
 MC.Config.ServerCollisionHotSpan = 2
 MC.Config.ServerCollisionLookaheadTime = 0.5
 MC.Config.ServerCollisionLookaheadMax = 4
@@ -167,7 +165,7 @@ if SERVER then
 	MC.Config.SyncWindow  = GetConVar( "mc_sync_inflight_limit" ) or CreateConVar( "mc_sync_inflight_limit", tostring( MC.Config.SyncInFlightLimit ), F, "Max unacknowledged full-sync bytes per syncing client" )
 	MC.Config.SyncSnapshot = GetConVar( "mc_sync_snapshot" ) or CreateConVar( "mc_sync_snapshot", tostring( MC.Config.SyncSnapshot ), F, "Sync clients by sending one compressed save snapshot, then incremental edits" )
 	MC.Config.SyncSnapshotPartBytes = GetConVar( "mc_sync_snapshot_part_bytes" ) or CreateConVar( "mc_sync_snapshot_part_bytes", tostring( MC.Config.SyncSnapshotPartBytes ), F, "Bytes per snapshot sync net part" )
-	MC.Config.SyncSnapshotMaxChunks = GetConVar( "mc_sync_snapshot_max_chunks" ) or CreateConVar( "mc_sync_snapshot_max_chunks", tostring( MC.Config.SyncSnapshotMaxChunks ), F, "Maximum loaded chunks allowed for full snapshot sync; larger worlds stream by interest" )
+	MC.Config.SyncSnapshotMaxChunks = GetConVar( "mc_sync_snapshot_max_chunks" ) or CreateConVar( "mc_sync_snapshot_max_chunks", tostring( MC.Config.SyncSnapshotMaxChunks ), F, "Legacy setting; full snapshot burst sync ignores this limit" )
 	MC.Config.ChunkHTTPEnabled = GetConVar( "mc_chunk_http_enabled" ) or CreateConVar( "mc_chunk_http_enabled", tostring( MC.Config.ChunkHTTPEnabled ), F, "Allow clients to fetch lazy-save base chunks over HTTP instead of GMod net" )
 	MC.Config.ChunkHTTPBaseURL = GetConVar( "mc_chunk_http_base_url" ) or CreateConVar( "mc_chunk_http_base_url", tostring( MC.Config.ChunkHTTPBaseURL ), F, "HTTP root URL serving garrysmod/data for mc lazy save manifests and parts" )
 	MC.Config.StreamChunkSpanXY = GetConVar( "mc_stream_chunk_span_xy" ) or CreateConVar( "mc_stream_chunk_span_xy", tostring( MC.Config.StreamChunkSpanXY ), F, "Legacy client chunk range sync span; direct full sync ignores this" )
