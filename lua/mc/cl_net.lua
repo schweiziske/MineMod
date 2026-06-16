@@ -77,6 +77,11 @@ local function markNeighbours( cx, cy, cz )
 	MC.MarkChunkDirty( MC.ChunkKey( cx, cy, cz - 1 ) )
 end
 
+local function cellCollisionDependsOnNeighbours( bx, by, bz )
+	local id = MC.GetBlock( bx, by, bz )
+	return MC.BlockCollisionDependsOnNeighbours and MC.BlockCollisionDependsOnNeighbours( id ) == true
+end
+
 function MC.MarkCellPhysNeighbours( bx, by, bz, priority, bulk )
 	local seen = {}
 	local function mark( x, y, z )
@@ -92,10 +97,10 @@ function MC.MarkCellPhysNeighbours( bx, by, bz, priority, bulk )
 	end
 
 	mark( bx, by, bz )
-	mark( bx + 1, by, bz )
-	mark( bx - 1, by, bz )
-	mark( bx, by + 1, bz )
-	mark( bx, by - 1, bz )
+	if cellCollisionDependsOnNeighbours( bx + 1, by, bz ) then mark( bx + 1, by, bz ) end
+	if cellCollisionDependsOnNeighbours( bx - 1, by, bz ) then mark( bx - 1, by, bz ) end
+	if cellCollisionDependsOnNeighbours( bx, by + 1, bz ) then mark( bx, by + 1, bz ) end
+	if cellCollisionDependsOnNeighbours( bx, by - 1, bz ) then mark( bx, by - 1, bz ) end
 end
 
 local function queueSnapshotDelta( bx, by, bz, id, orient )

@@ -1363,6 +1363,14 @@ function MC.IsPaneBlock( id )
 	return b and isPaneKind( b.connection ) or false
 end
 
+function MC.BlockCollisionDependsOnNeighbours( id )
+	local b = MC.Blocks[id]
+	if not b then return false end
+	return b.connection == "fence"
+		or isPaneKind( b.connection )
+		or b.connection == "pipe6"
+end
+
 -- vanilla translucent render layer: real alpha blending instead of alpha cutout.
 -- exact names only ("ice" must not catch packed_ice/blue_ice, which are opaque).
 local TranslucentNames = {

@@ -404,9 +404,15 @@ local function callBlockHandler( id, name, ... )
 	return fn( ... )
 end
 
+local function cellCollisionDependsOnNeighbours( bx, by, bz )
+	local id = MC.GetBlock( bx, by, bz )
+	return MC.BlockCollisionDependsOnNeighbours and MC.BlockCollisionDependsOnNeighbours( id ) == true
+end
+
 local function markNeighbourShapePhysDirty( bx, by, bz, priority, dirty )
 	local seen = {}
 	local function mark( x, y, z )
+		if not cellCollisionDependsOnNeighbours( x, y, z ) then return end
 		local cx, cy, cz = MC.CellToChunk( x, y, z )
 		local key = MC.ChunkKey( cx, cy, cz )
 		if seen[key] then return end
@@ -432,13 +438,18 @@ local function collectCellPhysDirty( dirty, immediateDirty, bx, by, bz )
 		dirty[key] = true
 		return key
 	end
+	local function markNeighbour( x, y, z )
+		if cellCollisionDependsOnNeighbours( x, y, z ) then
+			mark( x, y, z )
+		end
+	end
 
 	local primaryKey = mark( bx, by, bz )
 	if immediateDirty then immediateDirty[primaryKey] = true end
-	mark( bx + 1, by, bz )
-	mark( bx - 1, by, bz )
-	mark( bx, by + 1, bz )
-	mark( bx, by - 1, bz )
+	markNeighbour( bx + 1, by, bz )
+	markNeighbour( bx - 1, by, bz )
+	markNeighbour( bx, by + 1, bz )
+	markNeighbour( bx, by - 1, bz )
 end
 
 local function normalizeWriteOptions( options )
