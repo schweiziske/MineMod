@@ -111,7 +111,6 @@ local LastClientCollisionRadius = -1
 local LastClientCollisionEnabled = nil
 local LastClientCollisionAimKey
 local LastClientCollisionAABBKey
-local LastClientCollisionPlayerAABB
 local LastClientCollisionRefreshFrame
 
 local function clientCollisionEnabled()
@@ -140,6 +139,15 @@ local function clientCollisionAimRadius()
 		return math.Clamp( value:GetInt(), 0, 8 )
 	end
 	return math.Clamp( math.floor( tonumber( value ) or 1 ), 0, 8 )
+end
+
+local function collisionAimDistance()
+	local convar = GetConVar and GetConVar( "mc_collision_aim_distance" ) or nil
+	if convar and convar.GetFloat then
+		return math.Clamp( convar:GetFloat(), MC.BS, MC.BS * 256 )
+	end
+	local value = MC.Config and MC.Config.CollisionAimDistance
+	return math.Clamp( tonumber( value ) or MC.BS * 64, MC.BS, MC.BS * 256 )
 end
 
 local function clientCollisionWindowSpan( radius )
@@ -195,7 +203,8 @@ local function mergeClientLocalCollisionBounds( list, bound )
 	return merged
 end
 
-local function addClientChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minBZ, maxBX, maxBY, maxBZ )
+local function addClientChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minBZ, maxBX, maxBY, maxBZ, mergeBounds )
+	if mergeBounds == nil then mergeBounds = true end
 	local minCX, minCY, minCZ = MC.CellToChunk( minBX, minBY, minBZ )
 	local maxCX, maxCY, maxCZ = MC.CellToChunk( maxBX, maxBY, maxBZ )
 	for cz = minCZ, maxCZ do
@@ -207,14 +216,19 @@ local function addClientChunkLocalBoundsCollisionInterest( desired, minBX, minBY
 					list = {}
 					desired[key] = list
 				end
-				mergeClientLocalCollisionBounds( list, {
+				local bound = {
 					math.max( 0, minBX - cx * MC.CS ),
 					math.max( 0, minBY - cy * MC.CS ),
 					math.max( 0, minBZ - cz * MC.CH ),
 					math.min( MC.CS - 1, maxBX - cx * MC.CS ),
 					math.min( MC.CS - 1, maxBY - cy * MC.CS ),
 					math.min( MC.CH - 1, maxBZ - cz * MC.CH ),
-				} )
+				}
+				if mergeBounds then
+					mergeClientLocalCollisionBounds( list, bound )
+				else
+					list[#list + 1] = bound
+				end
 			end
 		end
 	end
@@ -222,15 +236,7 @@ end
 
 local function addClientCellNeighborhoodCollisionKeys( desired, bx, by, bz, radius )
 	radius = math.max( 0, math.floor( tonumber( radius ) or 0 ) )
-	addClientChunkLocalBoundsCollisionInterest( desired, bx - radius, by - radius, bz - radius, bx + radius, by + radius, bz + radius )
-end
-
-local function copyClientAABB( mins, maxs )
-	if not mins or not maxs then return nil end
-	return {
-		mins = Vector( mins.x, mins.y, mins.z ),
-		maxs = Vector( maxs.x, maxs.y, maxs.z ),
-	}
+	addClientChunkLocalBoundsCollisionInterest( desired, bx - radius, by - radius, bz - radius, bx + radius, by + radius, bz + radius, false )
 end
 
 local function addClientAABBCollisionInterest( desired, mins, maxs, blockPad )
@@ -246,38 +252,12 @@ local function addClientAABBCollisionInterest( desired, mins, maxs, blockPad )
 	return minBX, minBY, minBZ, maxBX, maxBY, maxBZ
 end
 
-local function addClientSweptAABBCollisionInterest( desired, mins, maxs, otherMins, otherMaxs, blockPad )
-	if not mins or not maxs or not otherMins or not otherMaxs then return nil end
-	local sweptMins = Vector(
-		math.min( mins.x, otherMins.x ),
-		math.min( mins.y, otherMins.y ),
-		math.min( mins.z, otherMins.z )
-	)
-	local sweptMaxs = Vector(
-		math.max( maxs.x, otherMaxs.x ),
-		math.max( maxs.y, otherMaxs.y ),
-		math.max( maxs.z, otherMaxs.z )
-	)
-	return addClientAABBCollisionInterest( desired, sweptMins, sweptMaxs, blockPad )
-end
-
 local function collectClientPlayerAABBCollisionInterestKeys( lp, desired )
 	if not IsValid( lp ) then return nil end
 	local mins, maxs = lp:WorldSpaceAABB()
 	if not mins or not maxs then return nil end
 	local blockPad = 1
 	local minBX, minBY, minBZ, maxBX, maxBY, maxBZ = addClientAABBCollisionInterest( desired, mins, maxs, blockPad )
-	if LastClientCollisionPlayerAABB then
-		minBX, minBY, minBZ, maxBX, maxBY, maxBZ = addClientSweptAABBCollisionInterest(
-			desired,
-			LastClientCollisionPlayerAABB.mins,
-			LastClientCollisionPlayerAABB.maxs,
-			mins,
-			maxs,
-			blockPad
-		)
-	end
-	LastClientCollisionPlayerAABB = copyClientAABB( mins, maxs )
 	local minCX, minCY, minCZ = MC.CellToChunk( minBX, minBY, minBZ )
 	local maxCX, maxCY, maxCZ = MC.CellToChunk( maxBX, maxBY, maxBZ )
 	return MC.ChunkKey( minCX, minCY, minCZ ) .. "|" .. MC.ChunkKey( maxCX, maxCY, maxCZ )
@@ -286,12 +266,13 @@ end
 
 local function collectClientAimCollisionInterestKeys( lp, desired )
 	if not IsValid( lp ) then return nil end
-	local hit = MC.PlayerBlockAim and MC.PlayerBlockAim( lp ) or nil
+	local aimDist = collisionAimDistance()
+	local hit = MC.TraceBlockRay and MC.TraceBlockRay( lp:EyePos(), lp:EyeAngles():Forward(), aimDist ) or nil
 	if not hit or not hit.bx then return nil end
 	local radius = clientCollisionAimRadius()
 	addClientCellNeighborhoodCollisionKeys( desired, hit.bx, hit.by, hit.bz, radius )
 	local cx, cy, cz = MC.CellToChunk( hit.bx, hit.by, hit.bz )
-	return MC.ChunkKey( cx, cy, cz ) .. "|" .. hit.bx .. ":" .. hit.by .. ":" .. hit.bz .. "|" .. radius
+	return MC.ChunkKey( cx, cy, cz ) .. "|" .. hit.bx .. ":" .. hit.by .. ":" .. hit.bz .. "|" .. radius .. "|" .. aimDist
 end
 
 local function clientCollisionBoundsSignature( bounds )
@@ -323,8 +304,6 @@ function MC.RefreshClientCollisionInterest( force )
 		centerKey = MC.ChunkKey( cx, cy, cz )
 		aabbKey = collectClientPlayerAABBCollisionInterestKeys( lp, desired )
 		aimKey = collectClientAimCollisionInterestKeys( lp, desired )
-	else
-		LastClientCollisionPlayerAABB = nil
 	end
 
 	if not force and centerKey == LastClientCollisionCenterKey
@@ -375,6 +354,10 @@ cvars.AddChangeCallback( "mc_client_collision_chunk_span", function()
 end, "mc" )
 
 cvars.AddChangeCallback( "mc_client_collision_aim_radius", function()
+	MC.RefreshClientCollisionInterest( true )
+end, "mc" )
+
+cvars.AddChangeCallback( "mc_collision_aim_distance", function()
 	MC.RefreshClientCollisionInterest( true )
 end, "mc" )
 
