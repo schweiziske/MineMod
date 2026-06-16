@@ -333,9 +333,10 @@ cvars.AddChangeCallback( "mc_client_collision_chunk_span", function()
 end, "mc" )
 
 hook.Remove( "SetupMove", "mc_client_collision_interest_move" )
-hook.Add( "SetupMove", "mc_client_collision_interest_move", function( ply )
+hook.Add( "SetupMove", "mc_client_collision_interest_move", function( ply, mv )
 	if not IsValid( ply ) or ply ~= LocalPlayer() then return end
 	MC.RefreshClientCollisionInterest()
+	if MC.TryPlayerMove then MC.TryPlayerMove( ply, mv ) end
 end )
 
 -- should the face between `cur` and neighbour `nb` be drawn?

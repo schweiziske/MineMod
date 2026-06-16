@@ -1613,9 +1613,10 @@ function SV.RefreshChunkInterest()
 end
 
 hook.Remove( "SetupMove", "mc_server_collision_interest_move" )
-hook.Add( "SetupMove", "mc_server_collision_interest_move", function( ply )
+hook.Add( "SetupMove", "mc_server_collision_interest_move", function( ply, mv )
 	if not IsValid( ply ) then return end
 	SV.RefreshServerCollision()
+	if MC.TryPlayerMove then MC.TryPlayerMove( ply, mv ) end
 end )
 
 local function sendSyncStep( ply, q, byteLimit )
