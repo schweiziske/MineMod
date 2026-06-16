@@ -99,11 +99,21 @@ concommand.Add( "mc_client_diag", function()
 	local pending = 0
 	for _ in pairs( MC.PendingFull or {} ) do pending = pending + 1 end
 	local progress = MC.SyncProgress or {}
+	local renderStats = MC.RenderStats or {}
+	local physStats = MC.ClientPhysStats or {}
 
 	print( string.format( "[MC client] world chunks=%d blocks=%d bz=%s..%s meshes=%d chunk ents=%d registered=%d pending=%d progress=%d/%d chunks=%d/%d dirty=%s",
 		chunks, blocks, tostring( minBZ ), tostring( maxBZ ), meshes, entsByMap, entsRegistered, pending,
 		progress.received or 0, progress.expected or 0, progress.doneChunks or 0, progress.chunks or 0,
 		tostring( next( MC.MeshDirty or {} ) ~= nil ) ) )
+	print( string.format( "[MC client] imesh key=%s time=%sms blocks=%s opaque=%s trans=%s",
+		tostring( renderStats.lastMeshKey ), tostring( renderStats.lastMeshBuildMS ),
+		tostring( renderStats.lastMeshBlocks ), tostring( renderStats.lastOpaqueMeshes ),
+		tostring( renderStats.lastTranslucentMeshes ) ) )
+	print( string.format( "[MC client] collision key=%s time=%sms bounds=%s phys=%s dirty=%s",
+		tostring( physStats.lastClientPhysKey ), tostring( physStats.lastClientPhysBuildMS ),
+		tostring( physStats.lastClientPhysBounds ), tostring( physStats.lastClientPhysHadObject ),
+		tostring( next( MC.PhysDirty or {} ) ~= nil ) ) )
 end )
 
 local function facingName( yaw )
@@ -143,6 +153,8 @@ hook.Add( "HUDPaint", "mc_debug_hud", function()
 	local lb = MC.Blocks[lid]
 
 	local chunks, blocks = worldStats()
+	local renderStats = MC.RenderStats or {}
+	local physStats = MC.ClientPhysStats or {}
 
 	local looked = string.format( "%d %d %d [%d %s]", lx, ly, lz, lid, lb and lb.disp or "空气" )
 	if state ~= "" then looked = looked .. " " .. state end
@@ -158,6 +170,9 @@ hook.Add( "HUDPaint", "mc_debug_hud", function()
 		string.format( "看向区块列:   %d   %d", lcx, lcy ),
 		string.format( "已加载:       %d 区块 / %d 方块", chunks, blocks ),
 	}
+
+	table.insert( lines, string.format( "IMesh:        %s ms  %s O / %s T", tostring( renderStats.lastMeshBuildMS ), tostring( renderStats.lastOpaqueMeshes ), tostring( renderStats.lastTranslucentMeshes ) ) )
+	table.insert( lines, string.format( "Client Phys:  %s ms  bounds=%s", tostring( physStats.lastClientPhysBuildMS ), tostring( physStats.lastClientPhysBounds ) ) )
 
 	surface.SetFont( "mc_debug" )
 	local _, lh = surface.GetTextSize( "Ag" )

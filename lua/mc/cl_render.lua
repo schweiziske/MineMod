@@ -90,6 +90,8 @@ MC.MeshDirty = MC.MeshDirty or {}  -- key -> true
 MC.ChunkEnts = MC.ChunkEnts or {}  -- key -> mc_chunk entity (clientside physics owner)
 MC.PhysDirty = MC.PhysDirty or {}  -- key -> due time (clientside collision rebuild)
 MC.PhysDirtyPriority = MC.PhysDirtyPriority or {} -- player edits that should not wait behind sync/import work
+MC.RenderStats = MC.RenderStats or {}
+MC.ClientPhysStats = MC.ClientPhysStats or {}
 local PHYS_REBUILD_DELAY = 0.12
 local CLIENT_PHYS_REBUILD_FRAME_MS = 1
 local CLIENT_PHYS_REBUILD_TICK_INTERVAL = 16
@@ -103,6 +105,7 @@ MC.ClientCollisionChunkSpan = CreateClientConVar( "mc_client_collision_chunk_spa
 MC.ClientCollisionDefaultVersion = CreateClientConVar( "mc_client_collision_default_version", "0", true, false,
 	"Internal migration marker for MC client collision defaults" )
 MC.ClientCollisionInterest = MC.ClientCollisionInterest or {}
+MC.ClientCollisionSignatures = MC.ClientCollisionSignatures or {}
 
 local LastClientCollisionCenterKey
 local LastClientCollisionRadius = -1
@@ -195,6 +198,7 @@ local function collectClientPlayerAABBCollisionInterestKeys( lp, desired )
 	local minCX, minCY, minCZ = MC.CellToChunk( minBX, minBY, minBZ )
 	local maxCX, maxCY, maxCZ = MC.CellToChunk( maxBX, maxBY, maxBZ )
 	return MC.ChunkKey( minCX, minCY, minCZ ) .. "|" .. MC.ChunkKey( maxCX, maxCY, maxCZ )
+		.. "|" .. minBX .. ":" .. minBY .. ":" .. minBZ .. "|" .. maxBX .. ":" .. maxBY .. ":" .. maxBZ
 end
 
 local function collectClientAimCollisionInterestKeys( lp, desired )
@@ -203,7 +207,17 @@ local function collectClientAimCollisionInterestKeys( lp, desired )
 	if not hit or not hit.bx then return nil end
 	addClientCellNeighborhoodCollisionKeys( desired, hit.bx, hit.by, hit.bz, clientCollisionAimRadius() )
 	local cx, cy, cz = MC.CellToChunk( hit.bx, hit.by, hit.bz )
-	return MC.ChunkKey( cx, cy, cz )
+	return MC.ChunkKey( cx, cy, cz ) .. "|" .. hit.bx .. ":" .. hit.by .. ":" .. hit.bz
+end
+
+local function clientCollisionBoundsSignature( bounds )
+	if not bounds then return "" end
+	local parts = {}
+	for i, b in ipairs( bounds ) do
+		parts[i] = table.concat( b, "," )
+	end
+	table.sort( parts )
+	return table.concat( parts, ";" )
 end
 
 function MC.RefreshClientCollisionInterest( force )
@@ -247,12 +261,16 @@ function MC.RefreshClientCollisionInterest( force )
 			end
 			MC.PhysDirty[key] = nil
 			MC.PhysDirtyPriority[key] = nil
+			MC.ClientCollisionSignatures[key] = nil
 		end
 	end
 
 	if enabled then
-		for key in pairs( desired ) do
-			if MC.World[key] and not old[key] then
+		for key, bounds in pairs( desired ) do
+			local oldSig = MC.ClientCollisionSignatures[key]
+			local newSig = clientCollisionBoundsSignature( bounds )
+			MC.ClientCollisionSignatures[key] = newSig
+			if MC.World[key] and ( not old[key] or oldSig ~= newSig ) then
 				MC.MarkChunkPhysDirty( key )
 			end
 		end
@@ -610,10 +628,18 @@ local function shapeFaceCovered( cur, box, face, boxes, bx, by, bz )
 end
 
 function MC.BuildChunkMesh( key )
+	local buildStart = SysTime()
 	MC.FreeChunkMesh( key )
 
 	local chunk = MC.GetChunkByKey( key )
-	if not chunk or chunk.count == 0 then return end
+	if not chunk or chunk.count == 0 then
+		MC.RenderStats.lastMeshBuildMS = math.Round( ( SysTime() - buildStart ) * 1000, 3 )
+		MC.RenderStats.lastMeshKey = key
+		MC.RenderStats.lastMeshBlocks = 0
+		MC.RenderStats.lastOpaqueMeshes = 0
+		MC.RenderStats.lastTranslucentMeshes = 0
+		return
+	end
 
 	local bxo = chunk.cx * CS
 	local byo = chunk.cy * CS
@@ -857,6 +883,11 @@ function MC.BuildChunkMesh( key )
 	if #translucentMeshes > 0 then
 		MC.MeshesTrans[key] = translucentMeshes
 	end
+	MC.RenderStats.lastMeshBuildMS = math.Round( ( SysTime() - buildStart ) * 1000, 3 )
+	MC.RenderStats.lastMeshKey = key
+	MC.RenderStats.lastMeshBlocks = chunk.count or 0
+	MC.RenderStats.lastOpaqueMeshes = #opaqueMeshes
+	MC.RenderStats.lastTranslucentMeshes = #translucentMeshes
 end
 
 ------------------------------------------------------------------------- drawing
@@ -910,7 +941,12 @@ local function rebuildChunkPhys( key, enabled )
 	local e = MC.ChunkEnts[key]
 	if IsValid( e ) then
 		if enabled and MC.IsChunkInClientCollisionInterest( key ) then
+			local buildStart = SysTime()
 			e:RebuildPhysics( MC.ClientCollisionInterest[key] )
+			MC.ClientPhysStats.lastClientPhysBuildMS = math.Round( ( SysTime() - buildStart ) * 1000, 3 )
+			MC.ClientPhysStats.lastClientPhysKey = key
+			MC.ClientPhysStats.lastClientPhysBounds = MC.ClientCollisionInterest[key] and #MC.ClientCollisionInterest[key] or 0
+			MC.ClientPhysStats.lastClientPhysHadObject = IsValid( e:GetPhysicsObject() )
 		else
 			if e.ClearPhysicsShards then e:ClearPhysicsShards() end
 			e:PhysicsDestroy()
