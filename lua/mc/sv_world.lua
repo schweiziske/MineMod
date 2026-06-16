@@ -584,7 +584,7 @@ local function applyCells( cells, actor, options )
 	if immediatePhys then flushPhysDirtyKeys( immediateDirty ) end
 
 	broadcastSetBulk( changes, {
-		explosionMeshThrottle = options.explosionMeshThrottle == true,
+		explosionMeshThrottle = options.explosionMeshThrottle == true or options.deferPhys == true,
 	} )
 
 	local fxInfo = changedInfo[fxIndex] or changedInfo[1]
@@ -816,7 +816,7 @@ function SV.RemoveBlocksBulk( cells, options )
 	end
 
 	broadcastSetBulk( changes, {
-		explosionMeshThrottle = options.explosionMeshThrottle == true,
+		explosionMeshThrottle = options.explosionMeshThrottle == true or options.deferPhys == true,
 	} )
 	SV.Dirty = true
 	return removed

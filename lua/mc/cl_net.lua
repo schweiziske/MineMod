@@ -77,14 +77,18 @@ local function markNeighbours( cx, cy, cz )
 	MC.MarkChunkDirty( MC.ChunkKey( cx, cy, cz - 1 ) )
 end
 
-function MC.MarkCellPhysNeighbours( bx, by, bz, priority )
+function MC.MarkCellPhysNeighbours( bx, by, bz, priority, bulk )
 	local seen = {}
 	local function mark( x, y, z )
 		local cx, cy, cz = MC.CellToChunk( x, y, z )
 		local key = MC.ChunkKey( cx, cy, cz )
 		if seen[key] then return end
 		seen[key] = true
-		MC.MarkChunkPhysDirty( key, priority )
+		if bulk and MC.MarkChunkPhysDirtyBulk then
+			MC.MarkChunkPhysDirtyBulk( key )
+		else
+			MC.MarkChunkPhysDirty( key, priority )
+		end
 	end
 
 	mark( bx, by, bz )
@@ -111,7 +115,7 @@ local function applyNetCell( bx, by, bz, id, orient, meshRateLimited )
 	local _, _, _, changed = MC.SetBlockRaw( bx, by, bz, id, orient )
 	if changed then
 		MC.MarkDirty( bx, by, bz, meshRateLimited )
-		MC.MarkCellPhysNeighbours( bx, by, bz )
+		MC.MarkCellPhysNeighbours( bx, by, bz, false, meshRateLimited == true )
 	end
 end
 
@@ -291,6 +295,8 @@ local function resetClientWorldForSnapshot( expectedChunks, expectedBlocks )
 	MC.MeshDirtyRateLimited = {}
 	MC.PhysDirty = {}
 	MC.PhysDirtyPriority = {}
+	MC.PhysDirtyBulk = {}
+	MC.PhysDirtyBulkOrder = {}
 	MC.PendingFull = {}
 	MC.PendingPredictions = {}
 	MC.SyncProgress = {
@@ -1029,6 +1035,7 @@ net.Receive( "mc_unload_chunk", function()
 	if MC.MeshDirtyRateLimited then MC.MeshDirtyRateLimited[key] = nil end
 	MC.PhysDirty[key] = nil
 	MC.PhysDirtyPriority[key] = nil
+	if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
 	MC.PendingFull[key] = nil
 	local httpState = MC.HttpChunkSync
 	if httpState then
@@ -1063,6 +1070,8 @@ net.Receive( "mc_clear", function()
 	MC.MeshDirtyRateLimited = {}
 	MC.PhysDirty = {}
 	MC.PhysDirtyPriority = {}
+	MC.PhysDirtyBulk = {}
+	MC.PhysDirtyBulkOrder = {}
 	MC.PendingFull = {}
 	MC.PendingPredictions = {}
 	MC.HttpChunkSync = nil
