@@ -59,6 +59,43 @@ local function spawnPhysicsShard( owner, index, convexes )
 	return shard
 end
 
+local function countValidShardPhysics( shards )
+	local count = 0
+	for _, shard in ipairs( shards or {} ) do
+		if IsValid( shard ) and IsValid( shard:GetPhysicsObject() ) then
+			count = count + 1
+		end
+	end
+	return count
+end
+
+local function rememberClientPhysStats( ent, mode, bounds, boxes, customConvexes, convexes, shards )
+	if not CLIENT then return end
+	MC.ClientPhysStats = MC.ClientPhysStats or {}
+	local shardCount = shards and #shards or 0
+	local shardObjects = countValidShardPhysics( shards )
+	MC.ClientPhysStats.lastClientPhysMode = mode
+	MC.ClientPhysStats.lastClientPhysChunkKey = tostring( ent.ChunkKey )
+	MC.ClientPhysStats.lastClientPhysInputBounds = bounds and #bounds or "full"
+	MC.ClientPhysStats.lastClientPhysBoxes = boxes
+	MC.ClientPhysStats.lastClientPhysCustomConvexes = customConvexes
+	MC.ClientPhysStats.lastClientPhysConvexes = convexes
+	MC.ClientPhysStats.lastClientPhysShards = shardCount
+	MC.ClientPhysStats.lastClientPhysShardObjects = shardObjects
+	MC.ClientPhysStats.lastClientPhysMainObject = IsValid( ent:GetPhysicsObject() )
+	if MC.ClientCollisionDebug and MC.ClientCollisionDebug:GetBool() then
+		print( "[MC][client-phys] chunk=" .. tostring( ent.ChunkKey ) ..
+			" mode=" .. tostring( mode ) ..
+			" bounds=" .. tostring( bounds and #bounds or "full" ) ..
+			" boxes=" .. tostring( boxes ) ..
+			" customConvexes=" .. tostring( customConvexes ) ..
+			" convexes=" .. tostring( convexes ) ..
+			" shards=" .. tostring( shardCount ) ..
+			" shardPhys=" .. tostring( shardObjects ) ..
+			" mainPhys=" .. tostring( IsValid( ent:GetPhysicsObject() ) ) )
+	end
+end
+
 function ENT:EnsureKey()
 	if self.ChunkKey then return self.ChunkKey end
 	local cx, cy, cz = MC.ChunkCoordsFromOrigin( self:GetPos() )
@@ -318,16 +355,16 @@ function ENT:RebuildPhysics( bounds )
 	end
 
 	if #convexes > PHYSICS_CONVEXES_PER_ENTITY then
-		if SERVER then
-			MsgN( "[MC][phys-debug] chunk=" .. tostring( self.ChunkKey ) ..
-				" mode=shard" ..
-				" blocks=" .. tostring( chunk.count or 0 ) ..
-				" bounds=" .. tostring( bounds and #bounds or "full" ) ..
-				" boxes=" .. #boxes ..
-				" customConvexes=" .. #customConvexes ..
-				" convexes=" .. #convexes ..
-				" pageSize=" .. PHYSICS_CONVEXES_PER_ENTITY )
-		end
+		-- if SERVER then
+		-- 	MsgN( "[MC][phys-debug] chunk=" .. tostring( self.ChunkKey ) ..
+		-- 		" mode=shard" ..
+		-- 		" blocks=" .. tostring( chunk.count or 0 ) ..
+		-- 		" bounds=" .. tostring( bounds and #bounds or "full" ) ..
+		-- 		" boxes=" .. #boxes ..
+		-- 		" customConvexes=" .. #customConvexes ..
+		-- 		" convexes=" .. #convexes ..
+		-- 		" pageSize=" .. PHYSICS_CONVEXES_PER_ENTITY )
+		-- end
 		self:ClearPhysicsShards()
 		self:PhysicsDestroy()
 		self:SetSolid( SOLID_NONE )
@@ -345,6 +382,7 @@ function ENT:RebuildPhysics( bounds )
 				for _, existing in ipairs( shards ) do
 					if IsValid( existing ) then existing:Remove() end
 				end
+				rememberClientPhysStats( self, "shard_failed", bounds, #boxes, #customConvexes, #convexes, shards )
 				MsgN( "[MC] !!! collision shard build FAILED for chunk " .. tostring( self.ChunkKey ) ..
 					"  convexes=" .. #convexes .. " shard=" .. shardIndex )
 				return
@@ -354,21 +392,22 @@ function ENT:RebuildPhysics( bounds )
 		end
 
 		self.PhysicsShards = shards
+		rememberClientPhysStats( self, "shard", bounds, #boxes, #customConvexes, #convexes, shards )
 		MsgN( "[MC] collision sharded for chunk " .. tostring( self.ChunkKey ) ..
 			"  convexes=" .. #convexes .. " shards=" .. #shards )
 		return
 	end
 
-	if SERVER then
-		MsgN( "[MC][phys-debug] chunk=" .. tostring( self.ChunkKey ) ..
-			" mode=single" ..
-			" blocks=" .. tostring( chunk.count or 0 ) ..
-			" bounds=" .. tostring( bounds and #bounds or "full" ) ..
-			" boxes=" .. #boxes ..
-			" customConvexes=" .. #customConvexes ..
-			" convexes=" .. #convexes ..
-			" pageSize=" .. PHYSICS_CONVEXES_PER_ENTITY )
-	end
+	-- if SERVER then
+	-- 	MsgN( "[MC][phys-debug] chunk=" .. tostring( self.ChunkKey ) ..
+	-- 		" mode=single" ..
+	-- 		" blocks=" .. tostring( chunk.count or 0 ) ..
+	-- 		" bounds=" .. tostring( bounds and #bounds or "full" ) ..
+	-- 		" boxes=" .. #boxes ..
+	-- 		" customConvexes=" .. #customConvexes ..
+	-- 		" convexes=" .. #convexes ..
+	-- 		" pageSize=" .. PHYSICS_CONVEXES_PER_ENTITY )
+	-- end
 
 	-- Collision recipe copied from the working voxel-destruction addon
 	-- (sent_voxelmain): PhysicsInitMultiConvex + EnableCustomCollisions(true) is what
@@ -389,4 +428,5 @@ function ENT:RebuildPhysics( bounds )
 		MsgN( "[MC] !!! collision build FAILED for chunk " .. tostring( self.ChunkKey ) ..
 			"  boxes=" .. #boxes )
 	end
+	rememberClientPhysStats( self, "single", bounds, #boxes, #customConvexes, #convexes, nil )
 end

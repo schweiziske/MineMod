@@ -106,11 +106,11 @@ local function queueSnapshotDelta( bx, by, bz, id, orient )
 	}
 end
 
-local function applyNetCell( bx, by, bz, id, orient )
+local function applyNetCell( bx, by, bz, id, orient, meshRateLimited )
 	MC.ConfirmPrediction( bx, by, bz, id, orient )
 	local _, _, _, changed = MC.SetBlockRaw( bx, by, bz, id, orient )
 	if changed then
-		MC.MarkDirty( bx, by, bz )
+		MC.MarkDirty( bx, by, bz, meshRateLimited )
 		MC.MarkCellPhysNeighbours( bx, by, bz )
 	end
 end
@@ -253,9 +253,26 @@ local function reviveChunkEnt( c )
 			end
 		end
 	end
-	if not IsValid( e ) then return end
+
+	if not IsValid( e ) then
+		e = ents.CreateClientside( "mc_chunk" )
+		if not IsValid( e ) then return end
+	end
+
+	if e.ChunkKey and e.ChunkKey ~= c.key and MC.ChunkEnts[e.ChunkKey] == e then
+		MC.ChunkEnts[e.ChunkKey] = nil
+	end
+
 	e:SetNoDraw( false )
+	e.cx, e.cy, e.cz = c.cx, c.cy, c.cz
 	e.ChunkKey = c.key
+	e:SetPos( MC.ChunkWorldOrigin( c.cx, c.cy, c.cz ) )
+	e:SetAngles( Angle( 0, 0, 0 ) )
+	e:SetRenderBounds( Vector( 0, 0, 0 ), Vector( MC.ChunkWorld, MC.ChunkWorld, MC.ChunkWorldH ) )
+	e:SetMoveType( MOVETYPE_VPHYSICS )
+	e:SetSolid( SOLID_VPHYSICS )
+	e:EnableCustomCollisions( true )
+	MC.ChunkEnts[c.key] = e
 end
 
 local function resetClientWorldForSnapshot( expectedChunks, expectedBlocks )
@@ -268,6 +285,7 @@ local function resetClientWorldForSnapshot( expectedChunks, expectedBlocks )
 	end
 	MC.World = {}
 	MC.MeshDirty = {}
+	MC.MeshDirtyRateLimited = {}
 	MC.PhysDirty = {}
 	MC.PhysDirtyPriority = {}
 	MC.PendingFull = {}
@@ -967,6 +985,7 @@ end )
 
 net.Receive( "mc_set_bulk", function()
 	local count = net.ReadUInt( Net.COUNT_BITS )
+	local changes = {}
 	for _ = 1, count do
 		local bx = net.ReadInt( Net.COORD_BITS )
 		local by = net.ReadInt( Net.COORD_BITS )
@@ -974,9 +993,17 @@ net.Receive( "mc_set_bulk", function()
 		local id = net.ReadUInt( Net.ID_BITS )
 		local orient = net.ReadUInt( Net.ORIENT_BITS )
 
-		queueSnapshotDelta( bx, by, bz, id, orient )
-		if not queueHttpDelta( bx, by, bz, id, orient ) then
-			applyNetCell( bx, by, bz, id, orient )
+		changes[#changes + 1] = {
+			bx = bx, by = by, bz = bz,
+			id = id, orient = orient,
+		}
+	end
+
+	local meshRateLimited = net.ReadBool()
+	for _, cell in ipairs( changes ) do
+		queueSnapshotDelta( cell.bx, cell.by, cell.bz, cell.id, cell.orient )
+		if not queueHttpDelta( cell.bx, cell.by, cell.bz, cell.id, cell.orient ) then
+			applyNetCell( cell.bx, cell.by, cell.bz, cell.id, cell.orient, meshRateLimited )
 		end
 	end
 end )
@@ -996,6 +1023,7 @@ net.Receive( "mc_unload_chunk", function()
 	if MC.ChunkEnts then MC.ChunkEnts[key] = nil end
 	MC.World[key] = nil
 	MC.MeshDirty[key] = nil
+	if MC.MeshDirtyRateLimited then MC.MeshDirtyRateLimited[key] = nil end
 	MC.PhysDirty[key] = nil
 	MC.PhysDirtyPriority[key] = nil
 	MC.PendingFull[key] = nil
@@ -1029,6 +1057,7 @@ net.Receive( "mc_clear", function()
 	end
 	MC.World = {}
 	MC.MeshDirty = {}
+	MC.MeshDirtyRateLimited = {}
 	MC.PhysDirty = {}
 	MC.PhysDirtyPriority = {}
 	MC.PendingFull = {}

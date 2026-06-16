@@ -88,6 +88,7 @@ MC.Meshes      = MC.Meshes or {}      -- key -> { IMesh, ... } (opaque/cutout pa
 MC.MeshesTrans = MC.MeshesTrans or {} -- key -> { IMesh, ... } (translucent pass)
 MC.MeshSections = MC.MeshSections or {} -- key -> sectionIndex -> { opaque = {}, translucent = {} }
 MC.MeshDirty = MC.MeshDirty or {}  -- key -> true
+MC.MeshDirtyRateLimited = MC.MeshDirtyRateLimited or {} -- key -> true for explosion-driven mesh rebuilds
 MC.ChunkEnts = MC.ChunkEnts or {}  -- key -> mc_chunk entity (clientside physics owner)
 MC.PhysDirty = MC.PhysDirty or {}  -- key -> true while a clientside collision rebuild is being fired
 MC.PhysDirtyPriority = MC.PhysDirtyPriority or {} -- key -> true for priority rebuild diagnostics
@@ -99,6 +100,8 @@ MC.ClientCollision = CreateClientConVar( "mc_client_collision", "1", true, false
 	"Build clientside block collision for smooth movement prediction (0 = server-only)" )
 MC.ClientCollisionChunkSpan = CreateClientConVar( "mc_client_collision_chunk_span", tostring( MC.Config.ClientCollisionChunkSpan or 1 ), true, false,
 	"Chunk radius around the local player that builds clientside prediction collision; 0 disables" )
+MC.ClientCollisionDebug = MC.ClientCollisionDebug or CreateClientConVar( "mc_client_collision_debug", "0", true, false,
+	"Print clientside prediction collision rebuild diagnostics" )
 MC.ClientCollisionDefaultVersion = CreateClientConVar( "mc_client_collision_default_version", "0", true, false,
 	"Internal migration marker for MC client collision defaults" )
 MC.MeshRender = MC.MeshRender or CreateClientConVar( "mc_mesh_render", "1", true, false,
@@ -112,9 +115,26 @@ local LastClientCollisionEnabled = nil
 local LastClientCollisionAimKey
 local LastClientCollisionAABBKey
 local LastClientCollisionRefreshFrame
+local NextExplosionMeshBuildAt = 0
 
 local function clientCollisionEnabled()
 	return MC.ClientCollision:GetBool()
+end
+
+local function clientCollisionDebugEnabled()
+	return MC.ClientCollisionDebug and MC.ClientCollisionDebug:GetBool()
+end
+
+local function rememberClientPhysSkip( key, reason )
+	MC.ClientPhysStats = MC.ClientPhysStats or {}
+	MC.ClientPhysStats.lastClientPhysMode = "skip"
+	MC.ClientPhysStats.lastClientPhysKey = key
+	MC.ClientPhysStats.lastClientPhysChunkKey = tostring( key )
+	MC.ClientPhysStats.lastClientPhysReason = reason
+	MC.ClientPhysStats.lastClientPhysHadObject = false
+	if clientCollisionDebugEnabled() then
+		print( "[MC][client-phys] key=" .. tostring( key ) .. " skip=" .. tostring( reason ) )
+	end
 end
 
 local function meshRenderingEnabled()
@@ -338,7 +358,16 @@ function MC.RefreshClientCollisionInterest( force )
 			local oldSig = MC.ClientCollisionSignatures[key]
 			local newSig = clientCollisionBoundsSignature( bounds )
 			MC.ClientCollisionSignatures[key] = newSig
-			if MC.World[key] and ( not old[key] or oldSig ~= newSig ) then
+			if not MC.World[key] then
+				rememberClientPhysSkip( key, "no_world" )
+			elseif old[key] and oldSig == newSig then
+				if clientCollisionDebugEnabled() then
+					print( "[MC][client-phys] key=" .. tostring( key ) .. " skip=same_signature bounds=" .. tostring( bounds and #bounds or 0 ) )
+				end
+			else
+				if clientCollisionDebugEnabled() then
+					print( "[MC][client-phys] key=" .. tostring( key ) .. " mark bounds=" .. tostring( bounds and #bounds or 0 ) .. " old=" .. tostring( old[key] ~= nil ) )
+				end
 				MC.MarkChunkPhysDirty( key, true )
 			end
 		end
@@ -429,6 +458,7 @@ local function rebuildFlatMeshLists( key )
 end
 
 function MC.FreeChunkMesh( key )
+	if MC.MeshDirtyRateLimited then MC.MeshDirtyRateLimited[key] = nil end
 	local sections = MC.MeshSections[key]
 	if sections then
 		for _, section in pairs( sections ) do
@@ -1096,21 +1126,51 @@ end )
 ------------------------------------------------------------------- dirty tracking
 function MC.MarkChunkDirty( key )
 	MC.MeshDirty[key] = true
+	MC.MeshDirtyRateLimited[key] = nil
 end
 
-local function markChunkSectionDirty( key, sectionIndex )
+local function markChunkSectionDirty( key, sectionIndex, rateLimited )
 	if not key or not sectionIndex then return end
-	if MC.MeshDirty[key] == true then return end
+	if MC.MeshDirty[key] == true then
+		if not rateLimited then MC.MeshDirtyRateLimited[key] = nil end
+		return
+	end
 	local sections = MC.MeshDirty[key]
 	if not sections then
 		sections = {}
 		MC.MeshDirty[key] = sections
 	end
 	MC.MeshDirty[key][sectionIndex] = true
+	if rateLimited then
+		if MC.MeshDirtyRateLimited[key] ~= false then
+			MC.MeshDirtyRateLimited[key] = true
+		end
+	else
+		MC.MeshDirtyRateLimited[key] = nil
+	end
 end
 
 local function rebuildChunkPhys( key, enabled )
 	local e = MC.ChunkEnts[key]
+	if not IsValid( e ) and MC.World and MC.World[key] then
+		local chunk = MC.World[key]
+		e = ents.CreateClientside( "mc_chunk" )
+		if IsValid( e ) then
+			if e.ChunkKey and e.ChunkKey ~= key and MC.ChunkEnts[e.ChunkKey] == e then
+				MC.ChunkEnts[e.ChunkKey] = nil
+			end
+			e.cx, e.cy, e.cz = chunk.cx, chunk.cy, chunk.cz
+			e.ChunkKey = key
+			e:SetPos( MC.ChunkWorldOrigin( chunk.cx, chunk.cy, chunk.cz ) )
+			e:SetAngles( Angle( 0, 0, 0 ) )
+			e:SetRenderBounds( Vector( 0, 0, 0 ), Vector( MC.ChunkWorld, MC.ChunkWorld, MC.ChunkWorldH ) )
+			e:SetMoveType( MOVETYPE_VPHYSICS )
+			e:SetSolid( SOLID_VPHYSICS )
+			e:EnableCustomCollisions( true )
+			e:SetNoDraw( false )
+			MC.ChunkEnts[key] = e
+		end
+	end
 	if IsValid( e ) then
 		if enabled and MC.IsChunkInClientCollisionInterest( key ) then
 			local buildStart = SysTime()
@@ -1118,11 +1178,13 @@ local function rebuildChunkPhys( key, enabled )
 			MC.ClientPhysStats.lastClientPhysBuildMS = math.Round( ( SysTime() - buildStart ) * 1000, 3 )
 			MC.ClientPhysStats.lastClientPhysKey = key
 			MC.ClientPhysStats.lastClientPhysBounds = MC.ClientCollisionInterest[key] and #MC.ClientCollisionInterest[key] or 0
-			MC.ClientPhysStats.lastClientPhysHadObject = IsValid( e:GetPhysicsObject() )
+			MC.ClientPhysStats.lastClientPhysHadObject = IsValid( e:GetPhysicsObject() ) or ( ( MC.ClientPhysStats.lastClientPhysShardObjects or 0 ) > 0 )
 		else
 			if e.ClearPhysicsShards then e:ClearPhysicsShards() end
 			e:PhysicsDestroy()
 		end
+	else
+		rememberClientPhysSkip( key, "no_chunk_ent" )
 	end
 	MC.PhysDirty[key] = nil
 	MC.PhysDirtyPriority[key] = nil
@@ -1131,6 +1193,7 @@ end
 function MC.MarkChunkPhysDirty( key, priority )
 	if not key then return end
 	if MC.IsChunkInClientCollisionInterest and not MC.IsChunkInClientCollisionInterest( key ) then
+		rememberClientPhysSkip( key, "outside_interest" )
 		MC.PhysDirty[key] = nil
 		MC.PhysDirtyPriority[key] = nil
 		return
@@ -1147,13 +1210,13 @@ end
 
 -- a block changed: its own chunk and any chunk owning a face-neighbour cell
 -- may need a rebuild (boundary faces).
-function MC.MarkDirty( bx, by, bz )
+function MC.MarkDirty( bx, by, bz, rateLimited )
 	local function mark( x, y, z )
 		local cx, cy, cz, li = MC.CellToChunk( x, y, z )
 		local lx, ly, lz = DecodeLocal( li )
 		local key = MC.ChunkKey( cx, cy, cz )
 		local sectionIndex = sectionIndexForLocal( lx, ly, lz )
-		markChunkSectionDirty( key, sectionIndex )
+		markChunkSectionDirty( key, sectionIndex, rateLimited == true )
 	end
 	mark( bx, by, bz )
 	mark( bx + 1, by, bz ) ; mark( bx - 1, by, bz )
@@ -1184,22 +1247,70 @@ local function nextDirtyMeshKeys()
 	return keys
 end
 
--- rebuild all dirty meshes immediately; clientside collision rebuilds fire at mark time
+local function explosionMeshSectionBudget()
+	local cvar = GetConVar and GetConVar( "mc_explosion_mesh_sections_per_frame" ) or nil
+	local budget = cvar and cvar:GetInt() or ( MC.Config.ExplosionMeshSectionsPerFrame or 4 )
+	budget = math.floor( tonumber( budget ) or 0 )
+	if budget <= 0 then return math.huge end
+	return budget
+end
+
+local function explosionMeshInterval()
+	local cvar = GetConVar and GetConVar( "mc_explosion_mesh_interval" ) or nil
+	local interval = cvar and cvar:GetFloat() or ( MC.Config.ExplosionMeshInterval or 0.12 )
+	return math.max( 0, tonumber( interval ) or 0.12 )
+end
+
+local function buildDirtyMeshKey( key, sections, rateLimited, budget )
+	if sections == true then
+		if rateLimited and budget <= 0 then return 0 end
+		MC.BuildChunkMesh( key )
+		MC.MeshDirty[key] = nil
+		MC.MeshDirtyRateLimited[key] = nil
+		return 1
+	end
+
+	local built = 0
+	for sectionIndex in pairs( sections ) do
+		if rateLimited and built >= budget then break end
+		MC.BuildChunkMesh( key, sectionIndex )
+		sections[sectionIndex] = nil
+		built = built + 1
+	end
+
+	if next( sections ) == nil then
+		MC.MeshDirty[key] = nil
+		MC.MeshDirtyRateLimited[key] = nil
+	else
+		MC.MeshDirty[key] = sections
+	end
+	return built
+end
+
+-- rebuild dirty meshes; explosion-driven edits are section-budgeted on a fixed
+-- interval so one blast cannot force every affected mesh to rebuild at once.
 hook.Remove( "Think", "mc_meshbuild" )
 hook.Add( "Think", "mc_meshbuild", function()
 	MC.RefreshClientCollisionInterest()
 
 	if next( MC.MeshDirty ) then
+		local now = CurTime()
+		local allowExplosionMesh = now >= NextExplosionMeshBuildAt
+		local explosionBudget = allowExplosionMesh and explosionMeshSectionBudget() or 0
+		local builtExplosionMesh = false
 		for _, key in ipairs( nextDirtyMeshKeys() ) do
 			local sections = MC.MeshDirty[key]
-			if sections == true then
-				MC.BuildChunkMesh( key )
-			else
-				for sectionIndex in pairs( sections ) do
-					MC.BuildChunkMesh( key, sectionIndex )
-				end
+			local rateLimited = MC.MeshDirtyRateLimited[key] == true
+			if rateLimited and not allowExplosionMesh then continue end
+			local built = buildDirtyMeshKey( key, sections, rateLimited, explosionBudget )
+			if rateLimited then
+				if built > 0 then builtExplosionMesh = true end
+				explosionBudget = explosionBudget - built
+				if explosionBudget <= 0 then break end
 			end
-			MC.MeshDirty[key] = nil
+		end
+		if builtExplosionMesh then
+			NextExplosionMeshBuildAt = now + explosionMeshInterval()
 		end
 	end
 end )
@@ -1208,4 +1319,5 @@ end )
 function MC.FreeAllMeshes()
 	for key in pairs( MC.Meshes ) do MC.FreeChunkMesh( key ) end
 	for key in pairs( MC.MeshesTrans ) do MC.FreeChunkMesh( key ) end
+	MC.MeshDirtyRateLimited = {}
 end
