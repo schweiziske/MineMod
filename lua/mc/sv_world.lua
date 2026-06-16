@@ -35,7 +35,7 @@ SV.ServerCollisionActiveChunks = SV.ServerCollisionActiveChunks or {} -- chunkKe
 SV.ServerCollisionSignatures = SV.ServerCollisionSignatures or {} -- chunkKey -> sorted bounds signature
 SV.Dirty      = SV.Dirty or false    -- world changed since last save
 local PHYS_REBUILD_DELAY = 0.12
-local SERVER_PHYS_REBUILD_INTERVAL = 0.05
+local SERVER_PHYS_REBUILD_INTERVAL = 0.01
 
 local function syncFastEnabled()
 	return not C.SyncFast or C.SyncFast:GetBool()
@@ -117,20 +117,6 @@ end
 local function playerHttpChunkDeliveryActive( ply )
 	return httpChunkDeliveryActive()
 		and not ( SV.PlayerHTTPDisabled and SV.PlayerHTTPDisabled[ply] )
-end
-
-local function collisionBuildsPerTick()
-	if C.ServerCollisionBuildsPerTick then
-		return math.Clamp( C.ServerCollisionBuildsPerTick:GetInt(), 1, 64 )
-	end
-	return MC.Config.ServerCollisionBuildsPerTick or 2
-end
-
-local function collisionEmergencyBuildsPerTick()
-	if C.ServerCollisionEmergencyBuildsPerTick then
-		return math.Clamp( C.ServerCollisionEmergencyBuildsPerTick:GetInt(), 1, 128 )
-	end
-	return MC.Config.ServerCollisionEmergencyBuildsPerTick or 8
 end
 
 local function serverCollisionAABBPadding()
@@ -290,6 +276,15 @@ local function collectPlayerCollisionInterestKeys( desired )
 		if IsValid( ply ) then
 			local mins, maxs = ply:WorldSpaceAABB()
 			addAABBCollisionKeys( desired, mins, maxs, serverCollisionAABBPadding() )
+			local vel = ply:GetVelocity()
+			if mins and maxs and vel and vel:LengthSqr() > 0 then
+				local lookahead = math.min( collisionLookaheadMax(), math.max( 0, math.ceil( collisionLookaheadTime() * vel:Length() / MC.ChunkWorld ) ) )
+				if lookahead > 0 then
+					local futureMins = mins + vel * collisionLookaheadTime()
+					local futureMaxs = maxs + vel * collisionLookaheadTime()
+					addAABBCollisionKeys( desired, futureMins, futureMaxs, serverCollisionAABBPadding() )
+				end
+			end
 		end
 	end
 end
@@ -348,7 +343,6 @@ end
 timer.Create( "mc_phys_rebuild", SERVER_PHYS_REBUILD_INTERVAL, 0, function()
 	if not next( SV.PhysDirty ) then return end
 	local now = CurTime()
-	local priorityBudget = collisionEmergencyBuildsPerTick()
 	for key in pairs( SV.PhysDirtyPriority ) do
 		if SV.PhysDirty[key] then
 			rebuildPhysKey( key )
@@ -357,7 +351,6 @@ timer.Create( "mc_phys_rebuild", SERVER_PHYS_REBUILD_INTERVAL, 0, function()
 		end
 	end
 
-	local budget = collisionBuildsPerTick()
 	for key in pairs( SV.PhysDirty ) do
 		local due = SV.PhysDirty[key]
 		if not SV.PhysDirtyPriority[key] and ( due == true or due <= now ) then
@@ -1573,9 +1566,9 @@ function SV.RefreshServerCollision()
 			SV.ServerCollisionSignatures[key] = newSig
 			if not IsValid( c.ent ) then
 				SV.EnsureChunkEnt( c )
-				SV.MarkPhysDirty( key )
+				SV.MarkPhysDirty( key, true )
 			elseif oldSig ~= newSig then
-				SV.MarkPhysDirty( key )
+				SV.MarkPhysDirty( key, true )
 			end
 		else
 			if IsValid( c.ent ) then
