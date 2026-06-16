@@ -1,6 +1,6 @@
 --[[----------------------------------------------------------------------------
-	mc_chunk : one render owner per non-empty 16x16x32 Minecraft-style chunk section.
-	  server -> provides collision (greedy-merged box multiconvex, sharded if huge)
+mc_chunk : one render owner per non-empty 16x16x32 Minecraft-style chunk section.
+	  server -> provides collision (per-block-box multiconvex, sharded if huge)
 	  client -> draws the chunk's IMesh (MC.DrawChunk)
 	Sections can stack vertically.
 ------------------------------------------------------------------------------]]
@@ -116,36 +116,14 @@ local function localBoundsContains( bounds, lx, ly, lz )
 	return false
 end
 
--- greedy-merge solid cells into a minimal set of boxes (local cell coords);
--- high corner is exclusive. Shared so both realms can build collision.
-local function greedyBoxes( chunk, bounds )
+-- Build one collision box per block box. Adjacent blocks intentionally stay
+-- separate so large connected builds shard instead of becoming one big hull.
+local function collisionBoxes( chunk, bounds )
 	local CS = MC.CS
-	local CS2 = CS * CS
 	local CH = MC.CH
-	local function idx( x, y, z ) return x + y * CS + z * CS2 end
 
-	local solid = {}
 	local customConvexes = {}
-	local shapeGroups = {}
-	local function shapeKey( box )
-		return table.concat( { box[1], box[2], box[3], box[4], box[5], box[6] }, ":" )
-	end
-	local function addShapeBox( lx, ly, lz, box )
-		local key = shapeKey( box )
-		local group = shapeGroups[key]
-		if not group then
-			group = {
-				cells = {},
-				fx0 = box[1], fy0 = box[2], fz0 = box[3],
-				fx1 = box[4], fy1 = box[5], fz1 = box[6],
-				fullX = box[1] <= 0 and box[4] >= 1,
-				fullY = box[2] <= 0 and box[5] >= 1,
-				fullZ = box[3] <= 0 and box[6] >= 1,
-			}
-			shapeGroups[key] = group
-		end
-		group.cells[idx( lx, ly, lz )] = true
-	end
+	local boxes = {}
 	local function addCustomConvex( lx, ly, lz, convex )
 		if type( convex ) ~= "table" then return end
 		local points = {}
@@ -161,6 +139,17 @@ local function greedyBoxes( chunk, bounds )
 		end
 		if #points >= 4 then customConvexes[#customConvexes + 1] = points end
 	end
+	local function addBlockBox( lx, ly, lz, box )
+		if type( box ) ~= "table" then return end
+		boxes[#boxes + 1] = {
+			lx + ( tonumber( box[1] ) or 0 ),
+			ly + ( tonumber( box[2] ) or 0 ),
+			lz + ( tonumber( box[3] ) or 0 ),
+			lx + ( tonumber( box[4] ) or 1 ),
+			ly + ( tonumber( box[5] ) or 1 ),
+			lz + ( tonumber( box[6] ) or 1 ),
+		}
+	end
 
 	for li, id in pairs( chunk.blocks ) do
 		local b = MC.Blocks[id]
@@ -172,7 +161,7 @@ local function greedyBoxes( chunk, bounds )
 				local by = chunk.cy * CS + ly
 				local bz = chunk.cz * CH + lz
 				if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
-					solid[li] = true
+					boxes[#boxes + 1] = { lx, ly, lz, lx + 1, ly + 1, lz + 1 }
 				else
 					local blockConvexes = MC.BlockCollisionConvexes and MC.BlockCollisionConvexes( id, orient, bx, by, bz ) or nil
 					if blockConvexes then
@@ -182,133 +171,12 @@ local function greedyBoxes( chunk, bounds )
 					else
 						local blockBoxes = ( MC.BlockCollisionBoxes or MC.BlockBoxes )( id, orient, bx, by, bz )
 						for _, box in ipairs( blockBoxes or {} ) do
-							addShapeBox( lx, ly, lz, box )
+							addBlockBox( lx, ly, lz, box )
 						end
 					end
 				end
 			end
 		end
-	end
-
-	local visited = {}
-	local boxes = {}
-
-	for z = 0, CH - 1 do
-		for y = 0, CS - 1 do
-			for x = 0, CS - 1 do
-				local i0 = idx( x, y, z )
-				if solid[i0] and not visited[i0] then
-					local x1 = x + 1
-					while x1 < CS do
-						local i = idx( x1, y, z )
-						if not solid[i] or visited[i] then break end
-						x1 = x1 + 1
-					end
-					local y1 = y + 1
-					while y1 < CS do
-						local ok = true
-						for xx = x, x1 - 1 do
-							local i = idx( xx, y1, z )
-							if not solid[i] or visited[i] then ok = false break end
-						end
-						if not ok then break end
-						y1 = y1 + 1
-					end
-					local z1 = z + 1
-					while z1 < CH do
-						local ok = true
-						for yy = y, y1 - 1 do
-							for xx = x, x1 - 1 do
-								local i = idx( xx, yy, z1 )
-								if not solid[i] or visited[i] then ok = false break end
-							end
-							if not ok then break end
-						end
-						if not ok then break end
-						z1 = z1 + 1
-					end
-					for zz = z, z1 - 1 do
-						for yy = y, y1 - 1 do
-							for xx = x, x1 - 1 do
-								visited[ idx( xx, yy, zz ) ] = true
-							end
-						end
-					end
-					boxes[#boxes + 1] = { x, y, z, x1, y1, z1 }
-				end
-			end
-		end
-	end
-
-	local function addMergedShapeGroup( group )
-		local seen = {}
-		for z = 0, CH - 1 do
-			for y = 0, CS - 1 do
-				for x = 0, CS - 1 do
-					local i0 = idx( x, y, z )
-					if group.cells[i0] and not seen[i0] then
-						local x1 = x + 1
-						if group.fullX then
-							while x1 < CS do
-								local i = idx( x1, y, z )
-								if not group.cells[i] or seen[i] then break end
-								x1 = x1 + 1
-							end
-						end
-
-						local y1 = y + 1
-						if group.fullY then
-							while y1 < CS do
-								local ok = true
-								for xx = x, x1 - 1 do
-									local i = idx( xx, y1, z )
-									if not group.cells[i] or seen[i] then ok = false break end
-								end
-								if not ok then break end
-								y1 = y1 + 1
-							end
-						end
-
-						local z1 = z + 1
-						if group.fullZ then
-							while z1 < CH do
-								local ok = true
-								for yy = y, y1 - 1 do
-									for xx = x, x1 - 1 do
-										local i = idx( xx, yy, z1 )
-										if not group.cells[i] or seen[i] then ok = false break end
-									end
-									if not ok then break end
-								end
-								if not ok then break end
-								z1 = z1 + 1
-							end
-						end
-
-						for zz = z, z1 - 1 do
-							for yy = y, y1 - 1 do
-								for xx = x, x1 - 1 do
-									seen[idx( xx, yy, zz )] = true
-								end
-							end
-						end
-
-						boxes[#boxes + 1] = {
-							x + group.fx0,
-							y + group.fy0,
-							z + group.fz0,
-							( x1 - 1 ) + group.fx1,
-							( y1 - 1 ) + group.fy1,
-							( z1 - 1 ) + group.fz1,
-						}
-					end
-				end
-			end
-		end
-	end
-
-	for _, group in pairs( shapeGroups ) do
-		addMergedShapeGroup( group )
 	end
 
 	return boxes, customConvexes
@@ -326,7 +194,7 @@ function ENT:RebuildPhysics( bounds )
 		return
 	end
 
-	local boxes, customConvexes = greedyBoxes( chunk, bounds )
+	local boxes, customConvexes = collisionBoxes( chunk, bounds )
 	if #boxes == 0 and #customConvexes == 0 then
 		self:ClearPhysicsShards()
 		self:PhysicsDestroy()
