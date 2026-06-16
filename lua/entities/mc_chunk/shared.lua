@@ -318,6 +318,16 @@ function ENT:RebuildPhysics( bounds )
 	end
 
 	if #convexes > PHYSICS_CONVEXES_PER_ENTITY then
+		if SERVER then
+			MsgN( "[MC][phys-debug] chunk=" .. tostring( self.ChunkKey ) ..
+				" mode=shard" ..
+				" blocks=" .. tostring( chunk.count or 0 ) ..
+				" bounds=" .. tostring( bounds and #bounds or "full" ) ..
+				" boxes=" .. #boxes ..
+				" customConvexes=" .. #customConvexes ..
+				" convexes=" .. #convexes ..
+				" pageSize=" .. PHYSICS_CONVEXES_PER_ENTITY )
+		end
 		self:ClearPhysicsShards()
 		self:PhysicsDestroy()
 		self:SetSolid( SOLID_NONE )
@@ -347,6 +357,17 @@ function ENT:RebuildPhysics( bounds )
 		MsgN( "[MC] collision sharded for chunk " .. tostring( self.ChunkKey ) ..
 			"  convexes=" .. #convexes .. " shards=" .. #shards )
 		return
+	end
+
+	if SERVER then
+		MsgN( "[MC][phys-debug] chunk=" .. tostring( self.ChunkKey ) ..
+			" mode=single" ..
+			" blocks=" .. tostring( chunk.count or 0 ) ..
+			" bounds=" .. tostring( bounds and #bounds or "full" ) ..
+			" boxes=" .. #boxes ..
+			" customConvexes=" .. #customConvexes ..
+			" convexes=" .. #convexes ..
+			" pageSize=" .. PHYSICS_CONVEXES_PER_ENTITY )
 	end
 
 	-- Collision recipe copied from the working voxel-destruction addon

@@ -33,7 +33,6 @@ SV.PlayerFullSnapshot = SV.PlayerFullSnapshot or {} -- player -> true once full-
 SV.PlayerHTTPDisabled = SV.PlayerHTTPDisabled or {} -- player -> true after client-side HTTP fetch is blocked/failed
 SV.ServerCollisionActiveChunks = SV.ServerCollisionActiveChunks or {} -- chunkKey -> local bounds lists that should have collision
 SV.ServerCollisionSignatures = SV.ServerCollisionSignatures or {} -- chunkKey -> sorted bounds signature
-SV.ServerCollisionLastAABBs = SV.ServerCollisionLastAABBs or setmetatable( {}, { __mode = "k" } )
 SV.ServerCollisionRefreshTick = SV.ServerCollisionRefreshTick or nil
 SV.CollisionDebugPlayers = SV.CollisionDebugPlayers or setmetatable( {}, { __mode = "k" } )
 SV.Dirty      = SV.Dirty or false    -- world changed since last save
@@ -132,6 +131,13 @@ local function serverCollisionAimRadius()
 		return math.Clamp( C.ServerCollisionAimRadius:GetInt(), 0, 8 )
 	end
 	return MC.Config.ServerCollisionAimRadius or 1
+end
+
+local function collisionAimDistance()
+	if C.CollisionAimDistance then
+		return math.Clamp( C.CollisionAimDistance:GetFloat(), MC.BS, MC.BS * 256 )
+	end
+	return MC.Config.CollisionAimDistance or MC.BS * 64
 end
 
 local function serverCollisionExtraRadius()
@@ -261,7 +267,8 @@ local function mergeLocalCollisionBounds( list, bound )
 	return merged
 end
 
-local function addChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minBZ, maxBX, maxBY, maxBZ )
+local function addChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minBZ, maxBX, maxBY, maxBZ, mergeBounds )
+	if mergeBounds == nil then mergeBounds = true end
 	local minCX, minCY, minCZ = MC.CellToChunk( minBX, minBY, minBZ )
 	local maxCX, maxCY, maxCZ = MC.CellToChunk( maxBX, maxBY, maxBZ )
 	for cz = minCZ, maxCZ do
@@ -273,14 +280,19 @@ local function addChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minB
 					list = {}
 					desired[key] = list
 				end
-				mergeLocalCollisionBounds( list, {
+				local bound = {
 					math.max( 0, minBX - cx * MC.CS ),
 					math.max( 0, minBY - cy * MC.CS ),
 					math.max( 0, minBZ - cz * MC.CH ),
 					math.min( MC.CS - 1, maxBX - cx * MC.CS ),
 					math.min( MC.CS - 1, maxBY - cy * MC.CS ),
 					math.min( MC.CH - 1, maxBZ - cz * MC.CH ),
-				} )
+				}
+				if mergeBounds then
+					mergeLocalCollisionBounds( list, bound )
+				else
+					list[#list + 1] = bound
+				end
 			end
 		end
 	end
@@ -288,7 +300,7 @@ end
 
 local function addCellNeighborhoodCollisionKeys( desired, bx, by, bz, radius )
 	radius = math.max( 0, math.floor( tonumber( radius ) or 0 ) )
-	addChunkLocalBoundsCollisionInterest( desired, bx - radius, by - radius, bz - radius, bx + radius, by + radius, bz + radius )
+	addChunkLocalBoundsCollisionInterest( desired, bx - radius, by - radius, bz - radius, bx + radius, by + radius, bz + radius, false )
 end
 
 local function addAABBCollisionKeys( desired, mins, maxs, padding )
@@ -304,50 +316,12 @@ local function addAABBCollisionKeys( desired, mins, maxs, padding )
 	addChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minBZ, maxBX, maxBY, maxBZ )
 end
 
-local function copyAABB( mins, maxs )
-	if not mins or not maxs then return nil end
-	return {
-		mins = Vector( mins.x, mins.y, mins.z ),
-		maxs = Vector( maxs.x, maxs.y, maxs.z ),
-	}
-end
-
-local function getServerCollisionPreviousAABB( ent )
-	local cache = SV.ServerCollisionLastAABBs
-	return cache and cache[ent] or nil
-end
-
-local function rememberServerCollisionAABB( ent, mins, maxs )
-	if not IsValid( ent ) then return end
-	SV.ServerCollisionLastAABBs[ent] = copyAABB( mins, maxs )
-end
-
-local function addSweptAABBCollisionKeys( desired, mins, maxs, otherMins, otherMaxs, padding )
-	if not mins or not maxs or not otherMins or not otherMaxs then return end
-	local sweptMins = Vector(
-		math.min( mins.x, otherMins.x ),
-		math.min( mins.y, otherMins.y ),
-		math.min( mins.z, otherMins.z )
-	)
-	local sweptMaxs = Vector(
-		math.max( maxs.x, otherMaxs.x ),
-		math.max( maxs.y, otherMaxs.y ),
-		math.max( maxs.z, otherMaxs.z )
-	)
-	addAABBCollisionKeys( desired, sweptMins, sweptMaxs, padding )
-end
-
 local function collectPlayerCollisionInterestKeys( desired )
 	for _, ply in ipairs( player.GetAll() ) do
 		if IsValid( ply ) then
 			local mins, maxs = ply:WorldSpaceAABB()
 			local padding = serverCollisionAABBPadding()
 			addAABBCollisionKeys( desired, mins, maxs, padding )
-			local previous = getServerCollisionPreviousAABB( ply )
-			if previous then
-				addSweptAABBCollisionKeys( desired, previous.mins, previous.maxs, mins, maxs, padding )
-			end
-			rememberServerCollisionAABB( ply, mins, maxs )
 		end
 	end
 end
@@ -360,11 +334,6 @@ local function collectEntityCollisionInterestKeys( desired )
 				local mins, maxs = ent:WorldSpaceAABB()
 				local padding = serverCollisionAABBPadding()
 				addAABBCollisionKeys( desired, mins, maxs, padding )
-				local previous = getServerCollisionPreviousAABB( ent )
-				if previous then
-					addSweptAABBCollisionKeys( desired, previous.mins, previous.maxs, mins, maxs, padding )
-				end
-				rememberServerCollisionAABB( ent, mins, maxs )
 			end
 		end
 	end
@@ -373,7 +342,11 @@ end
 local function collectPlayerAimCollisionInterestKeys( desired )
 	for _, ply in ipairs( player.GetAll() ) do
 		if IsValid( ply ) then
-			local hit = MC.PlayerBlockAim and MC.PlayerBlockAim( ply ) or nil
+			local hit = MC.TraceBlockRay and MC.TraceBlockRay(
+				ply:EyePos(),
+				ply:EyeAngles():Forward(),
+				collisionAimDistance()
+			) or nil
 			if hit and hit.bx then
 				addCellNeighborhoodCollisionKeys( desired, hit.bx, hit.by, hit.bz, serverCollisionAimRadius() )
 			end

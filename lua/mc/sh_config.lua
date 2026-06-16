@@ -137,6 +137,7 @@ MC.Config.StreamChunkSpanXY = 0
 MC.Config.StreamChunkSpanZ = 0
 MC.Config.ServerCollisionChunkSpan = 0
 MC.Config.ServerCollisionAABBPadding = MC.Config.BlockSize
+MC.Config.CollisionAimDistance = MC.Config.BlockSize * 64
 MC.Config.ServerCollisionAimRadius = 1
 MC.Config.ClientCollisionAimRadius = 1
 MC.Config.LargeWorldLazyLoad = 0
@@ -180,6 +181,7 @@ if SERVER then
 	MC.Config.ChunkStoreFrame = GetConVar( "mc_chunk_store_frame_ms" ) or CreateConVar( "mc_chunk_store_frame_ms", tostring( MC.Config.ChunkStoreFrameMS ), F, "Approximate lazy chunk hydration time budget per tick in milliseconds" )
 	MC.Config.ServerCollisionChunkSpan = GetConVar( "mc_server_collision_chunk_span" ) or CreateConVar( "mc_server_collision_chunk_span", tostring( MC.Config.ServerCollisionChunkSpan ), F, "Extra chunk radius around server collision AABBs" )
 	MC.Config.ServerCollisionAABBPadding = GetConVar( "mc_server_collision_aabb_padding" ) or CreateConVar( "mc_server_collision_aabb_padding", tostring( MC.Config.ServerCollisionAABBPadding ), F, "Source-unit padding around player/entity AABBs that keep MC chunk collision active" )
+	MC.Config.CollisionAimDistance = GetConVar( "mc_collision_aim_distance" ) or CreateConVar( "mc_collision_aim_distance", tostring( MC.Config.CollisionAimDistance ), F, "Trace distance in Source units for aimed-block collision interest; independent of build reach" )
 	MC.Config.ServerCollisionAimRadius = GetConVar( "mc_server_collision_aim_radius" ) or CreateConVar( "mc_server_collision_aim_radius", tostring( MC.Config.ServerCollisionAimRadius ), F, "Block radius around each player's aimed MC block that keeps chunk collision active" )
 	MC.Config.ClientCollisionAimRadius = GetConVar( "mc_client_collision_aim_radius" ) or CreateConVar( "mc_client_collision_aim_radius", tostring( MC.Config.ClientCollisionAimRadius ), F, "Block radius around each player's aimed MC block used by client prediction collision" )
 	MC.Config.ServerCollisionHotSpan = GetConVar( "mc_server_collision_hot_span" ) or CreateConVar( "mc_server_collision_hot_span", tostring( MC.Config.ServerCollisionHotSpan ), F, "Velocity lookahead chunk span for server collision interest" )
