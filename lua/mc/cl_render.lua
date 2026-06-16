@@ -120,7 +120,7 @@ end
 
 local function clientCollisionAimRadius()
 	local value = MC.Config and MC.Config.ClientCollisionAimRadius
-	if value and value.GetInt then
+	if istable( value ) and value.GetInt then
 		return math.Clamp( value:GetInt(), 0, 8 )
 	end
 	return math.Clamp( math.floor( tonumber( value ) or 1 ), 0, 8 )
