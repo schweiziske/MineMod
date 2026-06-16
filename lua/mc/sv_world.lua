@@ -31,6 +31,7 @@ SV.SnapshotQueue = SV.SnapshotQueue or {} -- player -> compressed save snapshot 
 SV.PlayerLoadedChunks = SV.PlayerLoadedChunks or {} -- player -> { [chunkKey] = true }
 SV.PlayerFullSnapshot = SV.PlayerFullSnapshot or {} -- player -> true once full-world snapshot mode owns visibility
 SV.PlayerHTTPDisabled = SV.PlayerHTTPDisabled or {} -- player -> true after client-side HTTP fetch is blocked/failed
+SV.ServerCollisionActiveChunks = SV.ServerCollisionActiveChunks or {} -- chunkKey -> true while server collision should exist
 SV.Dirty      = SV.Dirty or false    -- world changed since last save
 local PHYS_REBUILD_DELAY = 0.12
 local SERVER_PHYS_REBUILD_INTERVAL = 0.05
@@ -131,8 +132,43 @@ local function collisionEmergencyBuildsPerTick()
 	return MC.Config.ServerCollisionEmergencyBuildsPerTick or 8
 end
 
+local function serverCollisionAABBPadding()
+	if C.ServerCollisionAABBPadding then
+		return math.Clamp( C.ServerCollisionAABBPadding:GetFloat(), 0, MC.BS * 8 )
+	end
+	return MC.Config.ServerCollisionAABBPadding or MC.BS * 1.5
+end
+
+local function serverCollisionAimRadius()
+	if C.ServerCollisionAimRadius then
+		return math.Clamp( C.ServerCollisionAimRadius:GetInt(), 0, 8 )
+	end
+	return MC.Config.ServerCollisionAimRadius or 1
+end
+
+local function serverCollisionExtraRadius()
+	if C.ServerCollisionChunkSpan then
+		return math.Clamp( C.ServerCollisionChunkSpan:GetInt(), 0, 8 )
+	end
+	return MC.Config.ServerCollisionChunkSpan or 0
+end
+
+local function collisionLookaheadTime()
+	if C.ServerCollisionLookaheadTime then
+		return math.Clamp( C.ServerCollisionLookaheadTime:GetFloat(), 0, 2 )
+	end
+	return MC.Config.ServerCollisionLookaheadTime or 0.5
+end
+
+local function collisionLookaheadMax()
+	if C.ServerCollisionLookaheadMax then
+		return math.Clamp( C.ServerCollisionLookaheadMax:GetInt(), 0, 16 )
+	end
+	return MC.Config.ServerCollisionLookaheadMax or 4
+end
+
 function SV.IsChunkCollisionActive( key )
-	return true
+	return SV.ServerCollisionActiveChunks and SV.ServerCollisionActiveChunks[key] == true
 end
 
 local function decodeLocalWithGeometry( li, chunkSize, height )
@@ -152,6 +188,7 @@ end
 ------------------------------------------------------------------ chunk entities
 function SV.EnsureChunkEnt( chunk, force )
 	if IsValid( chunk.ent ) then return chunk.ent end
+	if not force and not SV.IsChunkCollisionActive( chunk.key ) then return nil end
 	local e = ents.Create( "mc_chunk" )
 	if not IsValid( e ) then return nil end
 	e.cx, e.cy, e.cz = chunk.cx, chunk.cy, chunk.cz
@@ -176,6 +213,13 @@ end
 
 local function rebuildPhysKey( key )
 	local chunk = MC.GetChunkByKey( key )
+	if chunk and not SV.IsChunkCollisionActive( key ) then
+		if IsValid( chunk.ent ) then
+			chunk.ent:Remove()
+			chunk.ent = nil
+		end
+		return
+	end
 	if chunk and IsValid( chunk.ent ) then
 		SV.EnsureChunkEnt( chunk )
 		chunk.ent:RebuildPhysics()
@@ -193,6 +237,88 @@ local function flushPhysDirtyKeys( keys )
 			rebuildPhysKey( key )
 		end
 	end
+end
+
+local function addCellNeighborhoodCollisionKeys( desired, bx, by, bz, radius )
+	radius = math.max( 0, math.floor( tonumber( radius ) or 0 ) )
+	for dz = -radius, radius do
+		for dy = -radius, radius do
+			for dx = -radius, radius do
+				local cx, cy, cz = MC.CellToChunk( bx + dx, by + dy, bz + dz )
+				desired[MC.ChunkKey( cx, cy, cz )] = true
+			end
+		end
+	end
+end
+
+local function addAABBCollisionKeys( desired, mins, maxs, padding )
+	if not mins or not maxs then return end
+	padding = math.max( 0, tonumber( padding ) or 0 )
+	local extra = serverCollisionExtraRadius()
+	local minBX = math.floor( ( mins.x - padding ) / MC.BS )
+	local minBY = math.floor( ( mins.y - padding ) / MC.BS )
+	local minBZ = math.floor( ( mins.z - padding ) / MC.BS )
+	local maxBX = math.floor( ( maxs.x + padding ) / MC.BS )
+	local maxBY = math.floor( ( maxs.y + padding ) / MC.BS )
+	local maxBZ = math.floor( ( maxs.z + padding ) / MC.BS )
+	local minCX, minCY, minCZ = MC.CellToChunk( minBX, minBY, minBZ )
+	local maxCX, maxCY, maxCZ = MC.CellToChunk( maxBX, maxBY, maxBZ )
+	for cz = minCZ - extra, maxCZ + extra do
+		for cy = minCY - extra, maxCY + extra do
+			for cx = minCX - extra, maxCX + extra do
+				desired[MC.ChunkKey( cx, cy, cz )] = true
+			end
+		end
+	end
+end
+
+local function collectPlayerCollisionInterestKeys( desired )
+	for _, ply in ipairs( player.GetAll() ) do
+		if IsValid( ply ) then
+			local mins, maxs = ply:WorldSpaceAABB()
+			addAABBCollisionKeys( desired, mins, maxs, serverCollisionAABBPadding() )
+		end
+	end
+end
+
+local function collectEntityCollisionInterestKeys( desired )
+	for _, ent in ipairs( ents.GetAll() ) do
+		if IsValid( ent ) then
+			local cls = ent:GetClass()
+			if cls ~= "worldspawn" and cls ~= "mc_chunk" and cls ~= "mc_chunk_phys" and not ent:IsPlayer() then
+				local mins, maxs = ent:WorldSpaceAABB()
+				addAABBCollisionKeys( desired, mins, maxs, serverCollisionAABBPadding() )
+				local vel = ent:GetVelocity()
+				if vel and vel:LengthSqr() > 0 then
+					local lookahead = math.min( collisionLookaheadMax(), math.max( 0, math.ceil( collisionLookaheadTime() * vel:Length() / MC.ChunkWorld ) ) )
+					if lookahead > 0 then
+						local futureMins = mins + vel * collisionLookaheadTime()
+						local futureMaxs = maxs + vel * collisionLookaheadTime()
+						addAABBCollisionKeys( desired, futureMins, futureMaxs, lookahead * MC.ChunkWorld )
+					end
+				end
+			end
+		end
+	end
+end
+
+local function collectPlayerAimCollisionInterestKeys( desired )
+	for _, ply in ipairs( player.GetAll() ) do
+		if IsValid( ply ) then
+			local hit = MC.PlayerBlockAim and MC.PlayerBlockAim( ply ) or nil
+			if hit and hit.bx then
+				addCellNeighborhoodCollisionKeys( desired, hit.bx, hit.by, hit.bz, serverCollisionAimRadius() )
+			end
+		end
+	end
+end
+
+local function collectServerCollisionInterestKeys()
+	local desired = {}
+	collectPlayerCollisionInterestKeys( desired )
+	collectEntityCollisionInterestKeys( desired )
+	collectPlayerAimCollisionInterestKeys( desired )
+	return desired
 end
 
 -- debounced collision rebuild (coalesces many edits in the same frame/window)
@@ -1414,8 +1540,11 @@ net.Receive( "mc_http_failed", function( _, ply )
 end )
 
 function SV.RefreshServerCollision()
+	-- Collision interest includes player AABBs, entity AABBs plus velocity lookahead, and aimed-block neighborhoods.
+	local desired = collectServerCollisionInterestKeys()
+	SV.ServerCollisionActiveChunks = desired
 	for key, c in pairs( MC.World or {} ) do
-		if c.count and c.count > 0 then
+		if c.count and c.count > 0 and desired[key] then
 			if not IsValid( c.ent ) then
 				SV.EnsureChunkEnt( c )
 				SV.MarkPhysDirty( key )
@@ -2096,7 +2225,7 @@ concommand.Add( "mc_rebuild", function( ply )
 	local n = 0
 	for key, c in pairs( MC.World ) do
 		if c.count > 0 then
-			SV.EnsureChunkEnt( c )
+			SV.EnsureChunkEnt( c, true )
 			SV.MarkPhysDirty( key )
 			n = n + 1
 		end
