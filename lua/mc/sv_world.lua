@@ -238,7 +238,37 @@ local function flushPhysDirtyKeys( keys )
 	end
 end
 
-local function addChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minBZ, maxBX, maxBY, maxBZ )
+local function localCollisionBoundsTouch( a, b )
+	return a[1] <= b[4] + 1 and a[4] + 1 >= b[1]
+		and a[2] <= b[5] + 1 and a[5] + 1 >= b[2]
+		and a[3] <= b[6] + 1 and a[6] + 1 >= b[3]
+end
+
+local function mergeLocalCollisionBounds( list, bound )
+	local merged = bound
+	local i = 1
+	while i <= #list do
+		local cur = list[i]
+		if localCollisionBoundsTouch( cur, merged ) then
+			merged = {
+				math.min( cur[1], merged[1] ),
+				math.min( cur[2], merged[2] ),
+				math.min( cur[3], merged[3] ),
+				math.max( cur[4], merged[4] ),
+				math.max( cur[5], merged[5] ),
+				math.max( cur[6], merged[6] ),
+			}
+			table.remove( list, i )
+		else
+			i = i + 1
+		end
+	end
+	list[#list + 1] = merged
+	return merged
+end
+
+local function addChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minBZ, maxBX, maxBY, maxBZ, mergeBounds )
+	if mergeBounds == nil then mergeBounds = true end
 	local minCX, minCY, minCZ = MC.CellToChunk( minBX, minBY, minBZ )
 	local maxCX, maxCY, maxCZ = MC.CellToChunk( maxBX, maxBY, maxBZ )
 	for cz = minCZ, maxCZ do
@@ -258,7 +288,11 @@ local function addChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minB
 					math.min( MC.CS - 1, maxBY - cy * MC.CS ),
 					math.min( MC.CH - 1, maxBZ - cz * MC.CH ),
 				}
-				list[#list + 1] = bound
+				if mergeBounds then
+					mergeLocalCollisionBounds( list, bound )
+				else
+					list[#list + 1] = bound
+				end
 			end
 		end
 	end
@@ -266,7 +300,7 @@ end
 
 local function addCellNeighborhoodCollisionKeys( desired, bx, by, bz, radius )
 	radius = math.max( 0, math.floor( tonumber( radius ) or 0 ) )
-	addChunkLocalBoundsCollisionInterest( desired, bx - radius, by - radius, bz - radius, bx + radius, by + radius, bz + radius )
+	addChunkLocalBoundsCollisionInterest( desired, bx - radius, by - radius, bz - radius, bx + radius, by + radius, bz + radius, false )
 end
 
 local function addAABBCollisionKeys( desired, mins, maxs, padding )
