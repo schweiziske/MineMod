@@ -272,7 +272,7 @@ function MC.RefreshClientCollisionInterest( force )
 			local newSig = clientCollisionBoundsSignature( bounds )
 			MC.ClientCollisionSignatures[key] = newSig
 			if MC.World[key] and ( not old[key] or oldSig ~= newSig ) then
-				MC.MarkChunkPhysDirty( key )
+				MC.MarkChunkPhysDirty( key, true )
 			end
 		end
 	end

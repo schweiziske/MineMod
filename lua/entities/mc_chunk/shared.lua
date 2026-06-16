@@ -13,7 +13,7 @@ ENT.Spawnable = false
 ENT.AdminOnly = false
 ENT.DisableDuplicator = true
 
-local PHYSICS_CONVEXES_PER_ENTITY = 96
+local PHYSICS_CONVEXES_PER_ENTITY = 256
 
 local function freezePhysicsObject( ent )
 	local phys = ent:GetPhysicsObject()
