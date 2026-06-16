@@ -34,6 +34,8 @@ SV.PlayerHTTPDisabled = SV.PlayerHTTPDisabled or {} -- player -> true after clie
 SV.ServerCollisionActiveChunks = SV.ServerCollisionActiveChunks or {} -- chunkKey -> local bounds lists that should have collision
 SV.ServerCollisionSignatures = SV.ServerCollisionSignatures or {} -- chunkKey -> sorted bounds signature
 SV.ServerCollisionLastAABBs = SV.ServerCollisionLastAABBs or setmetatable( {}, { __mode = "k" } )
+SV.ServerCollisionRefreshTick = SV.ServerCollisionRefreshTick or nil
+SV.CollisionDebugPlayers = SV.CollisionDebugPlayers or setmetatable( {}, { __mode = "k" } )
 SV.Dirty      = SV.Dirty or false    -- world changed since last save
 
 local function syncFastEnabled()
@@ -230,6 +232,35 @@ local function flushPhysDirtyKeys( keys )
 	end
 end
 
+local function localCollisionBoundsTouch( a, b )
+	return a[1] <= b[4] + 1 and a[4] + 1 >= b[1]
+		and a[2] <= b[5] + 1 and a[5] + 1 >= b[2]
+		and a[3] <= b[6] + 1 and a[6] + 1 >= b[3]
+end
+
+local function mergeLocalCollisionBounds( list, bound )
+	local merged = bound
+	local i = 1
+	while i <= #list do
+		local cur = list[i]
+		if localCollisionBoundsTouch( cur, merged ) then
+			merged = {
+				math.min( cur[1], merged[1] ),
+				math.min( cur[2], merged[2] ),
+				math.min( cur[3], merged[3] ),
+				math.max( cur[4], merged[4] ),
+				math.max( cur[5], merged[5] ),
+				math.max( cur[6], merged[6] ),
+			}
+			table.remove( list, i )
+		else
+			i = i + 1
+		end
+	end
+	list[#list + 1] = merged
+	return merged
+end
+
 local function addChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minBZ, maxBX, maxBY, maxBZ )
 	local minCX, minCY, minCZ = MC.CellToChunk( minBX, minBY, minBZ )
 	local maxCX, maxCY, maxCZ = MC.CellToChunk( maxBX, maxBY, maxBZ )
@@ -242,14 +273,14 @@ local function addChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minB
 					list = {}
 					desired[key] = list
 				end
-				list[#list + 1] = {
+				mergeLocalCollisionBounds( list, {
 					math.max( 0, minBX - cx * MC.CS ),
 					math.max( 0, minBY - cy * MC.CS ),
 					math.max( 0, minBZ - cz * MC.CH ),
 					math.min( MC.CS - 1, maxBX - cx * MC.CS ),
 					math.min( MC.CS - 1, maxBY - cy * MC.CS ),
 					math.min( MC.CH - 1, maxBZ - cz * MC.CH ),
-				}
+				} )
 			end
 		end
 	end
@@ -316,15 +347,6 @@ local function collectPlayerCollisionInterestKeys( desired )
 			if previous then
 				addSweptAABBCollisionKeys( desired, previous.mins, previous.maxs, mins, maxs, padding )
 			end
-			local vel = ply:GetVelocity()
-			if mins and maxs and vel and vel:LengthSqr() > 0 then
-				local lookahead = math.min( collisionLookaheadMax(), math.max( 0, math.ceil( collisionLookaheadTime() * vel:Length() / MC.ChunkWorld ) ) )
-				if lookahead > 0 then
-					local futureMins = mins + vel * collisionLookaheadTime()
-					local futureMaxs = maxs + vel * collisionLookaheadTime()
-					addSweptAABBCollisionKeys( desired, mins, maxs, futureMins, futureMaxs, padding )
-				end
-			end
 			rememberServerCollisionAABB( ply, mins, maxs )
 		end
 	end
@@ -341,15 +363,6 @@ local function collectEntityCollisionInterestKeys( desired )
 				local previous = getServerCollisionPreviousAABB( ent )
 				if previous then
 					addSweptAABBCollisionKeys( desired, previous.mins, previous.maxs, mins, maxs, padding )
-				end
-				local vel = ent:GetVelocity()
-				if vel and vel:LengthSqr() > 0 then
-					local lookahead = math.min( collisionLookaheadMax(), math.max( 0, math.ceil( collisionLookaheadTime() * vel:Length() / MC.ChunkWorld ) ) )
-					if lookahead > 0 then
-						local futureMins = mins + vel * collisionLookaheadTime()
-						local futureMaxs = maxs + vel * collisionLookaheadTime()
-						addSweptAABBCollisionKeys( desired, mins, maxs, futureMins, futureMaxs, padding )
-					end
 				end
 				rememberServerCollisionAABB( ent, mins, maxs )
 			end
@@ -1581,7 +1594,10 @@ net.Receive( "mc_http_failed", function( _, ply )
 	restartPlayerFullSync( ply )
 end )
 
-function SV.RefreshServerCollision()
+function SV.RefreshServerCollision( force )
+	local tick = engine and engine.TickCount and engine.TickCount() or CurTime()
+	if not force and SV.ServerCollisionRefreshTick == tick then return end
+	SV.ServerCollisionRefreshTick = tick
 	-- Collision interest includes player AABBs, entity AABBs plus velocity lookahead, and aimed-block neighborhoods.
 	local desired = collectServerCollisionInterestKeys()
 	SV.ServerCollisionActiveChunks = desired
@@ -1609,8 +1625,61 @@ function SV.RefreshServerCollision()
 end
 
 function SV.RefreshChunkInterest()
-	SV.RefreshServerCollision()
+	SV.RefreshServerCollision( true )
 end
+
+local function collectCollisionDebugBounds( maxBounds )
+	local out = {}
+	maxBounds = math.max( 1, math.floor( tonumber( maxBounds ) or 512 ) )
+	for key, bounds in pairs( SV.ServerCollisionActiveChunks or {} ) do
+		local cx, cy, cz = MC.ChunkKeyToCoords( key )
+		if cx and istable( bounds ) then
+			for _, b in ipairs( bounds ) do
+				out[#out + 1] = { cx, cy, cz, b[1], b[2], b[3], b[4], b[5], b[6] }
+				if #out >= maxBounds then return out end
+			end
+		end
+	end
+	return out
+end
+
+local function sendCollisionDebug( ply )
+	if not IsValid( ply ) or not SV.CollisionDebugPlayers[ply] then return end
+	local bounds = collectCollisionDebugBounds( 512 )
+	net.Start( "mc_collision_debug" )
+		net.WriteUInt( #bounds, 10 )
+		for _, b in ipairs( bounds ) do
+			net.WriteInt( b[1], Net.COORD_BITS )
+			net.WriteInt( b[2], Net.COORD_BITS )
+			net.WriteInt( b[3], Net.COORD_BITS )
+			net.WriteUInt( math.Clamp( b[4], 0, 63 ), 6 )
+			net.WriteUInt( math.Clamp( b[5], 0, 63 ), 6 )
+			net.WriteUInt( math.Clamp( b[6], 0, 63 ), 6 )
+			net.WriteUInt( math.Clamp( b[7], 0, 63 ), 6 )
+			net.WriteUInt( math.Clamp( b[8], 0, 63 ), 6 )
+			net.WriteUInt( math.Clamp( b[9], 0, 63 ), 6 )
+		end
+	net.Send( ply )
+end
+
+net.Receive( "mc_collision_debug_req", function( _, ply )
+	if not IsValid( ply ) then return end
+	SV.CollisionDebugPlayers[ply] = net.ReadBool() or nil
+	if SV.CollisionDebugPlayers[ply] then
+		SV.RefreshServerCollision( true )
+		sendCollisionDebug( ply )
+	end
+end )
+
+timer.Create( "mc_collision_debug_send", 0.1, 0, function()
+	for ply in pairs( SV.CollisionDebugPlayers ) do
+		if IsValid( ply ) then
+			sendCollisionDebug( ply )
+		else
+			SV.CollisionDebugPlayers[ply] = nil
+		end
+	end
+end )
 
 hook.Remove( "SetupMove", "mc_server_collision_interest_move" )
 hook.Add( "SetupMove", "mc_server_collision_interest_move", function( ply )

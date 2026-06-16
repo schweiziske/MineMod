@@ -101,6 +101,8 @@ MC.ClientCollisionChunkSpan = CreateClientConVar( "mc_client_collision_chunk_spa
 	"Chunk radius around the local player that builds clientside prediction collision; 0 disables" )
 MC.ClientCollisionDefaultVersion = CreateClientConVar( "mc_client_collision_default_version", "0", true, false,
 	"Internal migration marker for MC client collision defaults" )
+MC.MeshRender = MC.MeshRender or CreateClientConVar( "mc_mesh_render", "1", true, false,
+	"Draw MC chunk IMeshes (0 = hide meshes, collision unchanged)" )
 MC.ClientCollisionInterest = MC.ClientCollisionInterest or {}
 MC.ClientCollisionSignatures = MC.ClientCollisionSignatures or {}
 
@@ -110,10 +112,19 @@ local LastClientCollisionEnabled = nil
 local LastClientCollisionAimKey
 local LastClientCollisionAABBKey
 local LastClientCollisionPlayerAABB
+local LastClientCollisionRefreshFrame
 
 local function clientCollisionEnabled()
 	return MC.ClientCollision:GetBool()
 end
+
+local function meshRenderingEnabled()
+	return not MC.MeshRender or MC.MeshRender:GetBool()
+end
+
+concommand.Add( "mc_mesh_toggle", function()
+	RunConsoleCommand( "mc_mesh_render", meshRenderingEnabled() and "0" or "1" )
+end )
 
 local function clientCollisionRadius()
 	return math.Clamp( MC.ClientCollisionChunkSpan:GetInt(), 0, 32 )
@@ -151,6 +162,35 @@ if RunConsoleCommand then
 	end
 end
 
+local function clientLocalCollisionBoundsTouch( a, b )
+	return a[1] <= b[4] + 1 and a[4] + 1 >= b[1]
+		and a[2] <= b[5] + 1 and a[5] + 1 >= b[2]
+		and a[3] <= b[6] + 1 and a[6] + 1 >= b[3]
+end
+
+local function mergeClientLocalCollisionBounds( list, bound )
+	local merged = bound
+	local i = 1
+	while i <= #list do
+		local cur = list[i]
+		if clientLocalCollisionBoundsTouch( cur, merged ) then
+			merged = {
+				math.min( cur[1], merged[1] ),
+				math.min( cur[2], merged[2] ),
+				math.min( cur[3], merged[3] ),
+				math.max( cur[4], merged[4] ),
+				math.max( cur[5], merged[5] ),
+				math.max( cur[6], merged[6] ),
+			}
+			table.remove( list, i )
+		else
+			i = i + 1
+		end
+	end
+	list[#list + 1] = merged
+	return merged
+end
+
 local function addClientChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minBZ, maxBX, maxBY, maxBZ )
 	local minCX, minCY, minCZ = MC.CellToChunk( minBX, minBY, minBZ )
 	local maxCX, maxCY, maxCZ = MC.CellToChunk( maxBX, maxBY, maxBZ )
@@ -163,14 +203,14 @@ local function addClientChunkLocalBoundsCollisionInterest( desired, minBX, minBY
 					list = {}
 					desired[key] = list
 				end
-				list[#list + 1] = {
+				mergeClientLocalCollisionBounds( list, {
 					math.max( 0, minBX - cx * MC.CS ),
 					math.max( 0, minBY - cy * MC.CS ),
 					math.max( 0, minBZ - cz * MC.CH ),
 					math.min( MC.CS - 1, maxBX - cx * MC.CS ),
 					math.min( MC.CS - 1, maxBY - cy * MC.CS ),
 					math.min( MC.CH - 1, maxBZ - cz * MC.CH ),
-				}
+				} )
 			end
 		end
 	end
@@ -233,12 +273,6 @@ local function collectClientPlayerAABBCollisionInterestKeys( lp, desired )
 			blockPad
 		)
 	end
-	local vel = lp:GetVelocity()
-	if vel and vel:LengthSqr() > 0 then
-		local futureMins = mins + vel * 0.5
-		local futureMaxs = maxs + vel * 0.5
-		minBX, minBY, minBZ, maxBX, maxBY, maxBZ = addClientSweptAABBCollisionInterest( desired, mins, maxs, futureMins, futureMaxs, blockPad )
-	end
 	LastClientCollisionPlayerAABB = copyClientAABB( mins, maxs )
 	local minCX, minCY, minCZ = MC.CellToChunk( minBX, minBY, minBZ )
 	local maxCX, maxCY, maxCZ = MC.CellToChunk( maxBX, maxBY, maxBZ )
@@ -266,6 +300,9 @@ local function clientCollisionBoundsSignature( bounds )
 end
 
 function MC.RefreshClientCollisionInterest( force )
+	local frame = FrameNumber and FrameNumber() or RealTime()
+	if not force and LastClientCollisionRefreshFrame == frame then return end
+	LastClientCollisionRefreshFrame = frame
 	local enabled = clientCollisionEnabled()
 	local radius = clientCollisionRadius()
 	local lp = LocalPlayer()
@@ -1055,10 +1092,12 @@ end
 hook.Remove( "PostDrawOpaqueRenderables", "mc_draw_chunks" )
 hook.Remove( "PostDrawTranslucentRenderables", "mc_draw_chunks" )
 hook.Add( "PostDrawOpaqueRenderables", "mc_draw_chunks", function()
+	if not meshRenderingEnabled() then return end
 	drawAllChunks( MC.Meshes, MC.DrawChunk )
 end )
 -- translucent blocks only; the bulk of the world stays in the opaque pass above
 hook.Add( "PostDrawTranslucentRenderables", "mc_draw_chunks", function()
+	if not meshRenderingEnabled() then return end
 	drawAllChunks( MC.MeshesTrans, MC.DrawChunkTranslucent )
 end )
 
