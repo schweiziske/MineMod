@@ -1089,17 +1089,6 @@ local function chunkDistanceScore( key )
 	return dx * dx + dy * dy + dz * dz * 2
 end
 
-local function nextDirtyMeshKeys()
-	local keys = {}
-	for key in pairs( MC.MeshDirty ) do
-		keys[#keys + 1] = key
-	end
-	table.sort( keys, function( a, b )
-		return chunkDistanceScore( a ) < chunkDistanceScore( b )
-	end )
-	return keys
-end
-
 local function nextDirtyPhysKeys( maxKeys, now )
 	local keys = {}
 	for key, due in pairs( MC.PhysDirty ) do
@@ -1114,15 +1103,13 @@ local function nextDirtyPhysKeys( maxKeys, now )
 	return keys
 end
 
--- rebuild a few chunks per frame
 -- rebuild all dirty meshes immediately; clientside collision remains throttled below
 hook.Remove( "Think", "mc_meshbuild" )
 hook.Add( "Think", "mc_meshbuild", function()
 	MC.RefreshClientCollisionInterest()
 
 	if next( MC.MeshDirty ) then
-		for _, key in ipairs( nextDirtyMeshKeys() ) do
-			local sections = MC.MeshDirty[key]
+		for key, sections in pairs( MC.MeshDirty ) do
 			if sections == true then
 				MC.BuildChunkMesh( key )
 			else
