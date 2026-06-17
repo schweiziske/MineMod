@@ -23,6 +23,7 @@ local PRESET_DATA_PART_BYTES = 16384
 local PRESET_COVER_PART_BYTES = 16384
 local PRESET_DOWNLOAD_PART_INTERVAL = 0.05
 local PRESET_PLACE_COOLDOWN = 0.35
+local PRESET_BULK_CELLS_PER_MESSAGE = 512
 local MAX_PRESET_DATA_BYTES = 1024 * 1024 * 4
 local MAX_PRESET_COVER_BYTES = 1024 * 1024 * 2
 local MAX_NET_PRESETS = 4095
@@ -419,6 +420,8 @@ function SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 					handlers = true,
 					priorityPhys = false,
 					deferPhys = true,
+					netPaced = true,
+					cellsPerMessage = PRESET_BULK_CELLS_PER_MESSAGE,
 				} )
 			else
 				for _, cell in ipairs( clearCells ) do
@@ -443,6 +446,8 @@ function SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 			handlers = true,
 			priorityPhys = false,
 			deferPhys = true,
+			netPaced = true,
+			cellsPerMessage = PRESET_BULK_CELLS_PER_MESSAGE,
 		} )
 	else
 		changed = 0
@@ -521,20 +526,21 @@ local function sendPresetData( ply, presetName )
 		net.WriteUInt( #compressed, 32 )
 	net.Send( ply )
 
-	local timerName = "MC_PresetData_" .. ply:EntIndex() .. "_" .. util.CRC( tostring( presetName ) .. tostring( SysTime() ) )
-	local i = 1
-	timer.Create( timerName, PRESET_DOWNLOAD_PART_INTERVAL, parts, function()
-		if not IsValid( ply ) then timer.Remove( timerName ) return end
-		local first = ( i - 1 ) * PRESET_DATA_PART_BYTES + 1
-		local chunk = string.sub( compressed, first, first + PRESET_DATA_PART_BYTES - 1 )
-		net.Start( "mc_preset_data_part" )
-			net.WriteString( data.name or presetName )
-			net.WriteUInt( i, 16 )
-			net.WriteUInt( #chunk, 16 )
-			net.WriteData( chunk, #chunk )
-		net.Send( ply )
-		i = i + 1
-	end )
+	for part = 1, parts do
+		local partIndex = part
+		local first = ( partIndex - 1 ) * PRESET_DATA_PART_BYTES + 1
+		local len = math.min( PRESET_DATA_PART_BYTES, #compressed - first + 1 )
+		SV.EnqueueReliableNet( ply, len + 64, function( target )
+			local chunk = string.sub( compressed, first, first + len - 1 )
+			net.Start( "mc_preset_data_part" )
+				net.WriteString( data.name or presetName )
+				net.WriteUInt( partIndex, 16 )
+				net.WriteUInt( #chunk, 16 )
+				net.WriteData( chunk, #chunk )
+			net.Send( target )
+			return true
+		end )
+	end
 end
 
 local function sendPresetCoverToClient( ply, cover )

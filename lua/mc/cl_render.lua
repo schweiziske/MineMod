@@ -1035,9 +1035,7 @@ local function rebuildChunkPhys( key, enabled, bounds )
 	else
 		rememberClientPhysSkip( key, "no_chunk_ent" )
 	end
-	if clientCollisionDebugEnabled() then
-		print( e )
-	end
+
 	MC.PhysDirty[key] = nil
 	MC.PhysDirtyPriority[key] = nil
 	if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end

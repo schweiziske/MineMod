@@ -33,6 +33,7 @@ local SHARED = {
 }
 local SERVER_FILES = {
 	"mc/sv_world.lua",
+	"mc/sv_commands.lua",
 	"mc/sv_chunk_store.lua",
 	"mc/sv_saves.lua",
 	"mc/sv_presets.lua",
@@ -46,6 +47,7 @@ local CLIENT_FILES = {
 	"mc/cl_presets.lua",
 	"mc/cl_effects.lua",
 	"mc/cl_net.lua",
+	"mc/cl_commands.lua",
 	"mc/cl_debug.lua",
 	"mc/cl_player.lua",
 }
