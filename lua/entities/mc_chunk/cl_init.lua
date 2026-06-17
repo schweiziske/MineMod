@@ -33,7 +33,7 @@ function ENT:DrawTranslucent() end
 
 function ENT:OnRemove()
 	if self.ClearClientCollisionAABBDebugBoxes then self:ClearClientCollisionAABBDebugBoxes() end
-	if self.ClearPhysicsShards then self:ClearPhysicsShards() end
+	if self.ClearPhysicsSubchunks then self:ClearPhysicsSubchunks() end
 	local key = self.ChunkKey
 	if key and MC.ChunkEnts[ key ] == self then
 		MC.ChunkEnts[ key ] = nil

@@ -158,7 +158,7 @@ end
 
 local rebuildPhysKey
 
-function SV.MarkPhysDirty( key, priority )
+function SV.MarkPhysDirty( key, priority, bounds )
 	if not key then return end
 	if SV.PhysDirtyBulk then SV.PhysDirtyBulk[key] = nil end
 	if priority then
@@ -168,7 +168,7 @@ function SV.MarkPhysDirty( key, priority )
 		SV.PhysDirty[key] = true
 		SV.PhysDirtyPriority[key] = nil
 	end
-	if rebuildPhysKey then rebuildPhysKey( key ) end
+	if rebuildPhysKey then rebuildPhysKey( key, bounds ) end
 end
 
 function SV.MarkPhysDirtyBulk( key )
@@ -181,7 +181,7 @@ function SV.MarkPhysDirtyBulk( key )
 	end
 end
 
-function rebuildPhysKey( key )
+function rebuildPhysKey( key, bounds )
 	local chunk = MC.GetChunkByKey( key )
 	if chunk and not SV.IsChunkCollisionActive( key ) then
 		if IsValid( chunk.ent ) then
@@ -192,11 +192,11 @@ function rebuildPhysKey( key )
 	end
 	if chunk and IsValid( chunk.ent ) then
 		SV.EnsureChunkEnt( chunk )
-		chunk.ent:RebuildPhysics()
+		chunk.ent:RebuildPhysics( bounds )
 	elseif chunk and chunk.count and chunk.count > 0 then
 		SV.EnsureChunkEnt( chunk )
 		if IsValid( chunk.ent ) then
-			chunk.ent:RebuildPhysics()
+			chunk.ent:RebuildPhysics( bounds )
 		end
 	end
 	SV.PhysDirty[key] = nil
@@ -205,9 +205,9 @@ function rebuildPhysKey( key )
 end
 
 local function flushPhysDirtyKeys( keys )
-	for key in pairs( keys or {} ) do
+	for key, bounds in pairs( keys or {} ) do
 		if SV.PhysDirty[key] then
-			rebuildPhysKey( key )
+			rebuildPhysKey( key, istable( bounds ) and bounds or nil )
 		end
 	end
 end
@@ -413,14 +413,13 @@ local function markNeighbourShapePhysDirty( bx, by, bz, priority, dirty )
 	local seen = {}
 	local function mark( x, y, z )
 		if not cellCollisionDependsOnNeighbours( x, y, z ) then return end
-		local cx, cy, cz = MC.CellToChunk( x, y, z )
-		local key = MC.ChunkKey( cx, cy, cz )
+		local key, bounds = MC.CellCollisionSubchunkBounds( x, y, z )
 		if seen[key] then return end
 		seen[key] = true
 		local c = MC.GetChunkByKey( key )
 		if c and c.count and c.count > 0 then
 			SV.EnsureChunkEnt( c )
-			SV.MarkPhysDirty( c.key, priority )
+			SV.MarkPhysDirty( c.key, priority, { bounds } )
 			if dirty then dirty[c.key] = true end
 		end
 	end
@@ -431,11 +430,27 @@ local function markNeighbourShapePhysDirty( bx, by, bz, priority, dirty )
 	mark( bx, by - 1, bz )
 end
 
-local function collectCellPhysDirty( dirty, immediateDirty, bx, by, bz )
+local function addDirtyBounds( dirtyBounds, key, bounds )
+	if not dirtyBounds or not key or not bounds then return end
+	local list = dirtyBounds[key]
+	if not list then
+		list = {}
+		dirtyBounds[key] = list
+	end
+	for _, existing in ipairs( list ) do
+		if existing[1] == bounds[1] and existing[2] == bounds[2] and existing[3] == bounds[3]
+		and existing[4] == bounds[4] and existing[5] == bounds[5] and existing[6] == bounds[6] then
+			return
+		end
+	end
+	list[#list + 1] = bounds
+end
+
+local function collectCellPhysDirty( dirty, immediateDirty, dirtyBounds, bx, by, bz )
 	local function mark( x, y, z )
-		local cx, cy, cz = MC.CellToChunk( x, y, z )
-		local key = MC.ChunkKey( cx, cy, cz )
+		local key, bounds = MC.CellCollisionSubchunkBounds( x, y, z )
 		dirty[key] = true
+		addDirtyBounds( dirtyBounds, key, bounds )
 		return key
 	end
 	local function markNeighbour( x, y, z )
@@ -445,7 +460,7 @@ local function collectCellPhysDirty( dirty, immediateDirty, bx, by, bz )
 	end
 
 	local primaryKey = mark( bx, by, bz )
-	if immediateDirty then immediateDirty[primaryKey] = true end
+	if immediateDirty then immediateDirty[primaryKey] = dirtyBounds and dirtyBounds[primaryKey] or true end
 	markNeighbour( bx + 1, by, bz )
 	markNeighbour( bx - 1, by, bz )
 	markNeighbour( bx, by + 1, bz )
@@ -472,6 +487,7 @@ local function apply( bx, by, bz, id, _, orient, actor, options )
 	local immediatePhys = options.immediatePhys == true
 	local dirty = {}
 	local immediateDirty = {}
+	local dirtyBounds = {}
 
 	local delta = 0
 	if old == 0 and id ~= 0 then
@@ -486,18 +502,22 @@ local function apply( bx, by, bz, id, _, orient, actor, options )
 
 	if id ~= 0 then
 		SV.EnsureChunkEnt( chunk, false )
-		SV.MarkPhysDirty( chunk.key, priorityPhys )
+		local key, bounds = MC.CellCollisionSubchunkBounds( bx, by, bz )
+		addDirtyBounds( dirtyBounds, key, bounds )
+		SV.MarkPhysDirty( chunk.key, priorityPhys, dirtyBounds[chunk.key] )
 		dirty[chunk.key] = true
-		immediateDirty[chunk.key] = true
+		immediateDirty[chunk.key] = dirtyBounds[chunk.key]
 	else
 		if emptied then
 			SV.PhysDirty[chunk.key] = nil
 			SV.PhysDirtyPriority[chunk.key] = nil
 			if IsValid( chunk.ent ) then chunk.ent:Remove() end
 		else
-			SV.MarkPhysDirty( chunk.key, priorityPhys )
+			local key, bounds = MC.CellCollisionSubchunkBounds( bx, by, bz )
+			addDirtyBounds( dirtyBounds, key, bounds )
+			SV.MarkPhysDirty( chunk.key, priorityPhys, dirtyBounds[chunk.key] )
 			dirty[chunk.key] = true
-			immediateDirty[chunk.key] = true
+			immediateDirty[chunk.key] = dirtyBounds[chunk.key]
 		end
 	end
 	markNeighbourShapePhysDirty( bx, by, bz, priorityPhys, dirty )
@@ -535,6 +555,7 @@ local function applyCells( cells, actor, options )
 	local changedInfo = {}
 	local dirty = {}
 	local immediateDirty = {}
+	local dirtyBounds = {}
 	local delta = 0
 
 	for i, cell in ipairs( cells ) do
@@ -564,7 +585,7 @@ local function applyCells( cells, actor, options )
 					id = id, orient = orient,
 					old = old, oldOrient = oldOrient,
 				}
-				collectCellPhysDirty( dirty, immediateDirty, bx, by, bz )
+				collectCellPhysDirty( dirty, immediateDirty, dirtyBounds, bx, by, bz )
 
 				if id ~= 0 and chunk then
 					SV.EnsureChunkEnt( chunk )
@@ -588,7 +609,7 @@ local function applyCells( cells, actor, options )
 			if options.deferPhys then
 				SV.MarkPhysDirtyBulk( c.key )
 			else
-				SV.MarkPhysDirty( c.key, priorityPhys )
+				SV.MarkPhysDirty( c.key, priorityPhys, dirtyBounds[key] )
 			end
 		end
 	end
@@ -776,6 +797,7 @@ function SV.RemoveBlocksBulk( cells, options )
 
 	local changes = {}
 	local dirty = {}
+	local dirtyBounds = {}
 	local removed = 0
 	local fxSent = 0
 
@@ -791,7 +813,7 @@ function SV.RemoveBlocksBulk( cells, options )
 			if changed then
 				removed = removed + 1
 				changes[#changes + 1] = { bx = bx, by = by, bz = bz, id = 0, orient = 0 }
-				collectCellPhysDirty( dirty, nil, bx, by, bz )
+				collectCellPhysDirty( dirty, nil, dirtyBounds, bx, by, bz )
 
 				if emptied and chunk then
 					SV.PhysDirty[chunk.key] = nil
@@ -821,7 +843,7 @@ function SV.RemoveBlocksBulk( cells, options )
 			if options.deferPhys then
 				SV.MarkPhysDirtyBulk( c.key )
 			else
-				SV.MarkPhysDirty( c.key, priorityPhys )
+				SV.MarkPhysDirty( c.key, priorityPhys, dirtyBounds[key] )
 			end
 		end
 	end

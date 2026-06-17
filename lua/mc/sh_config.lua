@@ -20,11 +20,13 @@ MC.Config.PlayerJumpPower = 240
 -- Z is not globally clamped; sections are addressed by their chunk Z.
 MC.Config.ChunkSize = 16
 MC.Config.ChunkHeight = 32
+MC.Config.CollisionSubchunkSize = 8
 
 -- convenience locals mirrored onto MC for hot paths
 MC.BS = MC.Config.BlockSize
 MC.CS = MC.Config.ChunkSize
 MC.CH = MC.Config.ChunkHeight
+MC.CollisionSubchunkSize = MC.Config.CollisionSubchunkSize
 MC.ChunkWorld = MC.CS * MC.BS
 MC.ChunkWorldH = MC.CH * MC.BS
 

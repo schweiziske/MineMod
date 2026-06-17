@@ -82,18 +82,26 @@ local function cellCollisionDependsOnNeighbours( bx, by, bz )
 	return MC.BlockCollisionDependsOnNeighbours and MC.BlockCollisionDependsOnNeighbours( id ) == true
 end
 
+local function addCellPhysBounds( boundsByKey, key, bounds )
+	local list = boundsByKey[key]
+	if not list then
+		list = {}
+		boundsByKey[key] = list
+	end
+	for _, e in ipairs( list ) do
+		if e[1] == bounds[1] and e[2] == bounds[2] and e[3] == bounds[3]
+		and e[4] == bounds[4] and e[5] == bounds[5] and e[6] == bounds[6] then return end
+	end
+	list[#list + 1] = bounds
+end
+
+-- mirror the server: an edited cell (plus shape-dependent face neighbours) dirties
+-- the 8x8x8 collision subchunk(s) it lives in; whole chunks only rebuild fully on load.
 function MC.MarkCellPhysNeighbours( bx, by, bz, priority, bulk )
-	local seen = {}
+	local boundsByKey = {}
 	local function mark( x, y, z )
-		local cx, cy, cz = MC.CellToChunk( x, y, z )
-		local key = MC.ChunkKey( cx, cy, cz )
-		if seen[key] then return end
-		seen[key] = true
-		if bulk and MC.MarkChunkPhysDirtyBulk then
-			MC.MarkChunkPhysDirtyBulk( key )
-		else
-			MC.MarkChunkPhysDirty( key, priority )
-		end
+		local key, bounds = MC.CellCollisionSubchunkBounds( x, y, z )
+		addCellPhysBounds( boundsByKey, key, bounds )
 	end
 
 	mark( bx, by, bz )
@@ -101,6 +109,14 @@ function MC.MarkCellPhysNeighbours( bx, by, bz, priority, bulk )
 	if cellCollisionDependsOnNeighbours( bx - 1, by, bz ) then mark( bx - 1, by, bz ) end
 	if cellCollisionDependsOnNeighbours( bx, by + 1, bz ) then mark( bx, by + 1, bz ) end
 	if cellCollisionDependsOnNeighbours( bx, by - 1, bz ) then mark( bx, by - 1, bz ) end
+
+	for key, boundsList in pairs( boundsByKey ) do
+		if bulk and MC.MarkChunkPhysDirtyBulk then
+			MC.MarkChunkPhysDirtyBulk( key )
+		else
+			MC.MarkChunkPhysDirty( key, priority, boundsList )
+		end
+	end
 end
 
 local function queueSnapshotDelta( bx, by, bz, id, orient )
@@ -136,13 +152,7 @@ end
 
 local function markPredictedCellDirty( bx, by, bz, priority )
 	MC.MarkDirty( bx, by, bz )
-	if priority then
-		local cx, cy, cz = MC.CellToChunk( bx, by, bz )
-		MC.MarkChunkPhysDirty( MC.ChunkKey( cx, cy, cz ), true )
-		MC.MarkCellPhysNeighbours( bx, by, bz, false )
-	else
-		MC.MarkCellPhysNeighbours( bx, by, bz, false )
-	end
+	MC.MarkCellPhysNeighbours( bx, by, bz, priority == true )
 end
 
 local function predictCells( cells, priorityFn )
@@ -292,7 +302,7 @@ local function resetClientWorldForSnapshot( expectedChunks, expectedBlocks )
 	for _, e in pairs( MC.ChunkEnts or {} ) do
 		if IsValid( e ) then
 			if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
-			if e.ClearPhysicsShards then e:ClearPhysicsShards() end
+			if e.ClearPhysicsSubchunks then e:ClearPhysicsSubchunks() end
 			e:PhysicsDestroy()
 		end
 	end
@@ -303,6 +313,7 @@ local function resetClientWorldForSnapshot( expectedChunks, expectedBlocks )
 	MC.PhysDirtyPriority = {}
 	MC.PhysDirtyBulk = {}
 	MC.PhysDirtyBulkOrder = {}
+	if MC.ResetClientCollisionState then MC.ResetClientCollisionState() end
 	MC.PendingFull = {}
 	MC.PendingPredictions = {}
 	MC.SyncProgress = {
@@ -636,7 +647,7 @@ function MC.LoadHttpChunkRecord( key, record, partData )
 			MC.MarkChunkDirty( touchedKey )
 			local cx, cy, cz = MC.ChunkKeyToCoords( touchedKey )
 			if cx then markNeighbours( cx, cy, cz ) end
-			MC.MarkChunkPhysDirty( touchedKey )
+			MC.MarkChunkPhysDirty( touchedKey, true )
 		else
 			MC.World[touchedKey] = nil
 		end
@@ -938,7 +949,7 @@ net.Receive( "mc_full", function()
 	if c.count == 0 then MC.World[c.key] = nil end
 
 	markNeighbours( cx, cy, cz )
-	MC.MarkChunkPhysDirty( c.key )
+	MC.MarkChunkPhysDirty( c.key, true )
 	finishProgressChunk( c.key )
 end )
 
@@ -982,7 +993,7 @@ net.Receive( "mc_full_end", function()
 	end
 
 	markNeighbours( cx, cy, cz )
-	MC.MarkChunkPhysDirty( key )
+	MC.MarkChunkPhysDirty( key, true )
 	finishProgressChunk( key )
 end )
 
@@ -1033,7 +1044,7 @@ net.Receive( "mc_unload_chunk", function()
 	local e = MC.ChunkEnts and MC.ChunkEnts[key]
 	if IsValid( e ) then
 		if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
-		if e.ClearPhysicsShards then e:ClearPhysicsShards() end
+		if e.ClearPhysicsSubchunks then e:ClearPhysicsSubchunks() end
 		e:PhysicsDestroy()
 	end
 	if MC.ChunkEnts then MC.ChunkEnts[key] = nil end
@@ -1069,7 +1080,7 @@ net.Receive( "mc_clear", function()
 	for key, e in pairs( MC.ChunkEnts or {} ) do
 		if IsValid( e ) then
 			if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
-			if e.ClearPhysicsShards then e:ClearPhysicsShards() end
+			if e.ClearPhysicsSubchunks then e:ClearPhysicsSubchunks() end
 			e:PhysicsDestroy()
 		end
 	end
@@ -1081,6 +1092,7 @@ net.Receive( "mc_clear", function()
 	MC.PhysDirtyBulk = {}
 	MC.PhysDirtyBulkOrder = {}
 	MC.ClientCollisionAABBDebugBoxes = {}
+	if MC.ResetClientCollisionState then MC.ResetClientCollisionState() end
 	MC.PendingFull = {}
 	MC.PendingPredictions = {}
 	MC.HttpChunkSync = nil

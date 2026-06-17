@@ -1,6 +1,6 @@
 --[[----------------------------------------------------------------------------
 	mc_chunk : one render owner per non-empty 16x16x32 Minecraft-style chunk section.
-	  server -> provides collision (greedy-merged box multiconvex, sharded if huge)
+	  server -> provides collision (8x8x8 subchunk multiconvex)
 	  client -> draws the chunk's IMesh (MC.DrawChunk)
 	Sections can stack vertically.
 ------------------------------------------------------------------------------]]
@@ -13,9 +13,9 @@ ENT.Spawnable = false
 ENT.AdminOnly = false
 ENT.DisableDuplicator = true
 
-local PHYSICS_CONVEXES_PER_ENTITY = SERVER and 64 or 256
+local PHYSICS_CONVEXES_PER_ENTITY = 128
 local PHYSICS_MODEL = "models/hunter/blocks/cube025x025x025.mdl"
-local PHYSICS_SUBCHUNK_SIZE = 8
+local PHYSICS_SUBCHUNK_SIZE = MC.CollisionSubchunkSize or 8
 
 local function ensurePhysicsModel( ent )
 	if not IsValid( ent ) then return end
@@ -34,64 +34,146 @@ local function freezePhysicsObject( ent )
 	return false
 end
 
-function ENT:ClearPhysicsShards()
-	if not self.PhysicsShards then return end
-	for _, shard in ipairs( self.PhysicsShards ) do
-		if IsValid( shard ) then shard:Remove() end
+function ENT:ClearPhysicsSubchunks()
+	local subchunks = self.PhysicsSubchunks
+	if not subchunks then return end
+	for _, subchunk in ipairs( subchunks ) do
+		if IsValid( subchunk ) then subchunk:Remove() end
 	end
-	self.PhysicsShards = nil
+	self.PhysicsSubchunks = nil
+	self.PhysicsSubchunksByKey = nil
 end
 
-local function spawnPhysicsShard( owner, index, convexes )
-	local shard
-	if SERVER then
-		shard = ents.Create( "mc_chunk_phys" )
+ENT.ClearPhysicsShards = ENT.ClearPhysicsSubchunks
+
+local function removeSubchunkEntity( subchunk )
+	if IsValid( subchunk ) then subchunk:Remove() end
+end
+
+local function removePhysicsSubchunkKey( ent, key )
+	local byKey = ent.PhysicsSubchunksByKey
+	local mapped = byKey and byKey[key]
+	if istable( mapped ) then
+		for _, subchunk in ipairs( mapped ) do
+			removeSubchunkEntity( subchunk )
+		end
 	else
-		shard = ents.CreateClientside( "mc_chunk_phys" )
+		removeSubchunkEntity( mapped )
 	end
-	if not IsValid( shard ) then return nil end
+	if byKey then byKey[key] = nil end
 
-	shard.ChunkKey = owner.ChunkKey
-	shard.cx, shard.cy, shard.cz = owner.cx, owner.cy, owner.cz
-	shard.ParentChunk = owner
-	shard.ShardIndex = index
-	ensurePhysicsModel( shard )
-	shard:SetPos( owner:GetPos() )
-	shard:SetAngles( Angle( 0, 0, 0 ) )
-	if shard.Spawn then shard:Spawn() end
-	if SERVER and shard.Activate then shard:Activate() end
-	shard:SetNoDraw( true )
+	local old = ent.PhysicsSubchunks
+	if not old then return end
+	local kept = {}
+	for _, existing in ipairs( old ) do
+		if IsValid( existing ) and existing.CollisionSubchunkKey ~= key then
+			kept[#kept + 1] = existing
+		end
+	end
+	ent.PhysicsSubchunks = kept
+end
 
-	if not shard.ApplyPhysicsConvexes or not shard:ApplyPhysicsConvexes( convexes ) then
-		shard:Remove()
+local function spawnPhysicsSubchunk( owner, index, group, convexes )
+	local subchunk
+	if SERVER then
+		subchunk = ents.Create( "mc_chunk_phys" )
+	else
+		subchunk = ents.CreateClientside( "mc_chunk_phys" )
+	end
+	if not IsValid( subchunk ) then return nil end
+
+	subchunk.ChunkKey = owner.ChunkKey
+	subchunk.cx, subchunk.cy, subchunk.cz = owner.cx, owner.cy, owner.cz
+	subchunk.ParentChunk = owner
+	subchunk.SubchunkIndex = index
+	subchunk.CollisionSubchunkKey = group.key
+	ensurePhysicsModel( subchunk )
+	subchunk:SetPos( owner:GetPos() )
+	subchunk:SetAngles( Angle( 0, 0, 0 ) )
+	if subchunk.Spawn then subchunk:Spawn() end
+	if SERVER and subchunk.Activate then subchunk:Activate() end
+	subchunk:SetNoDraw( true )
+
+	if not subchunk.ApplyPhysicsConvexes or not subchunk:ApplyPhysicsConvexes( convexes or group.convexes ) then
+		subchunk:Remove()
 		return nil
 	end
-	return shard
+	return subchunk
 end
 
-local function countValidShardPhysics( shards )
+local function rememberPhysicsSubchunk( subchunks, byKey, group, subchunk )
+	subchunks[#subchunks + 1] = subchunk
+	local list = byKey[group.key]
+	if not list then
+		list = {}
+		byKey[group.key] = list
+	end
+	list[#list + 1] = subchunk
+end
+
+local function spawnPhysicsSubchunkPages( owner, group, subchunks, byKey )
+	local built = 0
+	for first = 1, #group.convexes, PHYSICS_CONVEXES_PER_ENTITY do
+		local part = {}
+		local last = math.min( #group.convexes, first + PHYSICS_CONVEXES_PER_ENTITY - 1 )
+		for i = first, last do
+			part[#part + 1] = group.convexes[i]
+		end
+
+		local subchunk = spawnPhysicsSubchunk( owner, #subchunks + 1, group, part )
+		if not IsValid( subchunk ) then return built, false, #part end
+		rememberPhysicsSubchunk( subchunks, byKey, group, subchunk )
+		built = built + 1
+	end
+	return built, true, 0
+end
+
+local function countValidSubchunkPhysics( subchunks )
 	local count = 0
-	for _, shard in ipairs( shards or {} ) do
-		if IsValid( shard ) and IsValid( shard:GetPhysicsObject() ) then
+	for _, subchunk in ipairs( subchunks or {} ) do
+		if IsValid( subchunk ) and IsValid( subchunk:GetPhysicsObject() ) then
 			count = count + 1
 		end
 	end
 	return count
 end
 
-local function rememberClientPhysStats( ent, mode, bounds, boxes, customConvexes, convexes, shards )
+local function collisionSubchunkKeysForBounds( bounds )
+	if not bounds then return nil end
+	local keys = {}
+	for _, b in ipairs( bounds ) do
+		local minX = math.floor( b[1] / PHYSICS_SUBCHUNK_SIZE )
+		local minY = math.floor( b[2] / PHYSICS_SUBCHUNK_SIZE )
+		local minZ = math.floor( b[3] / PHYSICS_SUBCHUNK_SIZE )
+		local maxX = math.floor( b[4] / PHYSICS_SUBCHUNK_SIZE )
+		local maxY = math.floor( b[5] / PHYSICS_SUBCHUNK_SIZE )
+		local maxZ = math.floor( b[6] / PHYSICS_SUBCHUNK_SIZE )
+		for sz = minZ, maxZ do
+			for sy = minY, maxY do
+				for sx = minX, maxX do
+					keys[sx .. ":" .. sy .. ":" .. sz] = true
+				end
+			end
+		end
+	end
+	return keys
+end
+
+local function rememberClientPhysStats( ent, mode, bounds, boxes, customConvexes, convexes, subchunks )
 	if not CLIENT then return end
 	MC.ClientPhysStats = MC.ClientPhysStats or {}
-	local shardCount = shards and #shards or 0
-	local shardObjects = countValidShardPhysics( shards )
+	local subchunkCount = subchunks and #subchunks or 0
+	local subchunkObjects = countValidSubchunkPhysics( subchunks )
 	MC.ClientPhysStats.lastClientPhysMode = mode
 	MC.ClientPhysStats.lastClientPhysChunkKey = tostring( ent.ChunkKey )
 	MC.ClientPhysStats.lastClientPhysInputBounds = bounds and #bounds or "full"
 	MC.ClientPhysStats.lastClientPhysBoxes = boxes
 	MC.ClientPhysStats.lastClientPhysCustomConvexes = customConvexes
 	MC.ClientPhysStats.lastClientPhysConvexes = convexes
-	MC.ClientPhysStats.lastClientPhysShards = shardCount
-	MC.ClientPhysStats.lastClientPhysShardObjects = shardObjects
+	MC.ClientPhysStats.lastClientPhysSubchunks = subchunkCount
+	MC.ClientPhysStats.lastClientPhysSubchunkObjects = subchunkObjects
+	MC.ClientPhysStats.lastClientPhysShards = subchunkCount
+	MC.ClientPhysStats.lastClientPhysShardObjects = subchunkObjects
 	MC.ClientPhysStats.lastClientPhysMainObject = IsValid( ent:GetPhysicsObject() )
 	if MC.ClientCollisionDebug and MC.ClientCollisionDebug:GetBool() then
 		print( "[MC][client-phys] chunk=" .. tostring( ent.ChunkKey ) ..
@@ -100,8 +182,8 @@ local function rememberClientPhysStats( ent, mode, bounds, boxes, customConvexes
 			" boxes=" .. tostring( boxes ) ..
 			" customConvexes=" .. tostring( customConvexes ) ..
 			" convexes=" .. tostring( convexes ) ..
-			" shards=" .. tostring( shardCount ) ..
-			" shardPhys=" .. tostring( shardObjects ) ..
+			" subchunks=" .. tostring( subchunkCount ) ..
+			" subchunkPhys=" .. tostring( subchunkObjects ) ..
 			" mainPhys=" .. tostring( IsValid( ent:GetPhysicsObject() ) ) )
 	end
 end
@@ -166,7 +248,6 @@ local function greedyBoxes( chunk, bounds )
 	local CS = MC.CS
 	local CS2 = CS * CS
 	local CH = MC.CH
-	local clientAABBOnly = CLIENT
 	local function idx( x, y, z ) return x + y * CS + z * CS2 end
 
 	local solid = {}
@@ -219,24 +300,17 @@ local function greedyBoxes( chunk, bounds )
 				if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
 					solid[li] = true
 				else
-					local blockConvexes = ( not clientAABBOnly and MC.BlockCollisionConvexes )
+					local blockConvexes = MC.BlockCollisionConvexes
 						and MC.BlockCollisionConvexes( id, orient, bx, by, bz ) or nil
 					if blockConvexes then
 						for _, convex in ipairs( blockConvexes ) do
 							addCustomConvex( lx, ly, lz, convex )
 						end
 					else
-						local blockBoxes
-						if clientAABBOnly then
-							if MC.BlockCollisionBoxes then
-								blockBoxes = MC.BlockCollisionBoxes( id, orient, bx, by, bz )
-							end
-							if not blockBoxes and MC.BlockBoxes then
-								blockBoxes = MC.BlockBoxes( id, orient, bx, by, bz )
-							end
-						else
-							blockBoxes = ( MC.BlockCollisionBoxes or MC.BlockBoxes )( id, orient, bx, by, bz )
-						end
+						-- identical to the server: real collision boxes, never a
+						-- client-only bounding-box approximation (that mismatch is what
+						-- made the predicted player jitter on non-cube blocks).
+						local blockBoxes = ( MC.BlockCollisionBoxes or MC.BlockBoxes )( id, orient, bx, by, bz )
 						for _, box in ipairs( blockBoxes or {} ) do
 							addShapeBox( lx, ly, lz, box )
 						end
@@ -482,6 +556,16 @@ local function buildSubchunkConvexGroups( boxes, customConvexes, blockSize )
 	return groups, totalConvexes
 end
 
+local function flattenConvexGroups( groups )
+	local convexes = {}
+	for _, group in ipairs( groups ) do
+		for i = 1, #group.convexes do
+			convexes[#convexes + 1] = group.convexes[i]
+		end
+	end
+	return convexes
+end
+
 -- (re)build this chunk's multiconvex collision from current block data.
 -- Server: authoritative collision. Client: so PREDICTED local-player movement
 -- collides with blocks (server physics objects are not replicated to clients,
@@ -490,71 +574,103 @@ function ENT:RebuildPhysics( bounds )
 	local chunk = MC.GetChunkByKey( self:EnsureKey() )
 	if not chunk or chunk.count == 0 then
 		clearClientAABBDebugBoxes( self )
-		self:ClearPhysicsShards()
+		self:ClearPhysicsSubchunks()
 		self:PhysicsDestroy()
+		return
+	end
+
+	if bounds and not self.PhysicsSubchunks then
+		self:RebuildPhysics()
 		return
 	end
 
 	local boxes, customConvexes = greedyBoxes( chunk, bounds )
 	if #boxes == 0 and #customConvexes == 0 then
 		clearClientAABBDebugBoxes( self )
-		self:ClearPhysicsShards()
-		self:PhysicsDestroy()
+		local affectedKeys = collisionSubchunkKeysForBounds( bounds )
+		if affectedKeys then
+			for key in pairs( affectedKeys ) do
+				removePhysicsSubchunkKey( self, key )
+			end
+		else
+			self:ClearPhysicsSubchunks()
+			self:PhysicsDestroy()
+		end
 		return
 	end
 	rememberClientAABBDebugBoxes( self, boxes )
 
 	local groups, totalConvexes = buildSubchunkConvexGroups( boxes, customConvexes, MC.BS )
-	local singleGroup = #groups == 1 and #groups[1].convexes <= PHYSICS_CONVEXES_PER_ENTITY
-	if not singleGroup then
-		-- if SERVER then
-		-- 	MsgN( "[MC][phys-debug] chunk=" .. tostring( self.ChunkKey ) ..
-		-- 		" mode=shard" ..
-		-- 		" blocks=" .. tostring( chunk.count or 0 ) ..
-		-- 		" bounds=" .. tostring( bounds and #bounds or "full" ) ..
-		-- 		" boxes=" .. #boxes ..
-		-- 		" customConvexes=" .. #customConvexes ..
-		-- 		" convexes=" .. totalConvexes ..
-		-- 		" pageSize=" .. PHYSICS_CONVEXES_PER_ENTITY )
-		-- end
-		self:ClearPhysicsShards()
-		self:PhysicsDestroy()
+	if bounds then
+		local affectedKeys = collisionSubchunkKeysForBounds( bounds )
+		for key in pairs( affectedKeys or {} ) do
+			removePhysicsSubchunkKey( self, key )
+		end
+
+		if IsValid( self:GetPhysicsObject() ) then
+			self:PhysicsDestroy()
+		end
 		self:SetSolid( SOLID_NONE )
-		local shards = {}
-		local shardIndex = 1
+
+		local subchunks = self.PhysicsSubchunks or {}
+		local byKey = self.PhysicsSubchunksByKey or {}
+		local failed = 0
 
 		for _, group in ipairs( groups ) do
-			for first = 1, #group.convexes, PHYSICS_CONVEXES_PER_ENTITY do
-				local part = {}
-				local last = math.min( #group.convexes, first + PHYSICS_CONVEXES_PER_ENTITY - 1 )
-				for i = first, last do
-					part[#part + 1] = group.convexes[i]
-				end
-				local shard = spawnPhysicsShard( self, shardIndex, part )
-				if not IsValid( shard ) then
-					for _, existing in ipairs( shards ) do
-						if IsValid( existing ) then existing:Remove() end
-					end
-					rememberClientPhysStats( self, "subchunk_failed", bounds, #boxes, #customConvexes, totalConvexes, shards )
-					MsgN( "[MC] !!! collision subchunk build FAILED for chunk " .. tostring( self.ChunkKey ) ..
-						"  subchunk=" .. tostring( group.key ) .. " shard=" .. shardIndex ..
-						" convexes=" .. #part )
-					return
-				end
-				shard.CollisionSubchunkKey = group.key
-				shards[#shards + 1] = shard
-				shardIndex = shardIndex + 1
+			local _, ok, partSize = spawnPhysicsSubchunkPages( self, group, subchunks, byKey )
+			if not ok then
+				failed = failed + 1
+				MsgN( "[MC] !!! collision subchunk build FAILED for chunk " .. tostring( self.ChunkKey ) ..
+					"  subchunk=" .. tostring( group.key ) ..
+					" convexes=" .. #group.convexes ..
+					" part=" .. tostring( partSize ) )
 			end
 		end
 
-		self.PhysicsShards = shards
-		rememberClientPhysStats( self, "subchunk", bounds, #boxes, #customConvexes, totalConvexes, shards )
-		MsgN( "[MC] collision subchunked for chunk " .. tostring( self.ChunkKey ) ..
-			"  convexes=" .. totalConvexes .. " subchunks=" .. #groups .. " shards=" .. #shards )
+		self.PhysicsSubchunks = subchunks
+		self.PhysicsSubchunksByKey = byKey
+		rememberClientPhysStats( self, "subchunk_update", bounds, #boxes, #customConvexes, totalConvexes, subchunks )
+		if failed > 0 then
+			MsgN( "[MC] collision subchunk update for chunk " .. tostring( self.ChunkKey ) ..
+				"  convexes=" .. totalConvexes ..
+				" subchunks=" .. #groups ..
+				" built=" .. countValidSubchunkPhysics( subchunks ) ..
+				" failed=" .. failed )
+		end
 		return
 	end
 
-	local convexes = groups[1].convexes
+	if totalConvexes > PHYSICS_CONVEXES_PER_ENTITY then
+		self:ClearPhysicsSubchunks()
+		self:PhysicsDestroy()
+		self:SetSolid( SOLID_NONE )
+		local subchunks = {}
+		local byKey = {}
+		local failed = 0
+
+		for _, group in ipairs( groups ) do
+			local _, ok, partSize = spawnPhysicsSubchunkPages( self, group, subchunks, byKey )
+			if not ok then
+				failed = failed + 1
+				MsgN( "[MC] !!! collision subchunk build FAILED for chunk " .. tostring( self.ChunkKey ) ..
+					"  subchunk=" .. tostring( group.key ) ..
+					" convexes=" .. #group.convexes ..
+					" part=" .. tostring( partSize ) )
+			end
+		end
+
+		self.PhysicsSubchunks = subchunks
+		self.PhysicsSubchunksByKey = byKey
+		rememberClientPhysStats( self, "subchunks", bounds, #boxes, #customConvexes, totalConvexes, subchunks )
+		MsgN( "[MC] collision subchunks for chunk " .. tostring( self.ChunkKey ) ..
+			"  convexes=" .. totalConvexes ..
+			" subchunks=" .. #groups ..
+			" built=" .. countValidSubchunkPhysics( subchunks ) ..
+			" failed=" .. failed )
+		return
+	end
+
+	local convexes = flattenConvexGroups( groups )
 
 	-- if SERVER then
 	-- 	MsgN( "[MC][phys-debug] chunk=" .. tostring( self.ChunkKey ) ..
@@ -575,7 +691,7 @@ function ENT:RebuildPhysics( bounds )
 	-- blocks -- exactly the "weird collision, can't build, can't break" symptom.
 	-- (PhysicsInitMultiConvex auto-sets the collision bounds from the mesh, so we no
 	-- longer override them. MOVETYPE_NONE = no collision at all, so VPHYSICS is required.)
-	self:ClearPhysicsShards()
+	self:ClearPhysicsSubchunks()
 	self:PhysicsDestroy()
 	ensurePhysicsModel( self )
 	self:PhysicsInitMultiConvex( convexes )

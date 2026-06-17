@@ -111,11 +111,11 @@ concommand.Add( "mc_client_diag", function()
 		if IsValid( e ) then entsByMap = entsByMap + 1 end
 	end
 
-	local shardEnts, shardPhys = 0, 0
+	local subchunkEnts, subchunkPhys = 0, 0
 	for _, e in ipairs( ents.FindByClass( "mc_chunk_phys" ) ) do
 		if IsValid( e ) then
-			shardEnts = shardEnts + 1
-			if IsValid( e:GetPhysicsObject() ) then shardPhys = shardPhys + 1 end
+			subchunkEnts = subchunkEnts + 1
+			if IsValid( e:GetPhysicsObject() ) then subchunkPhys = subchunkPhys + 1 end
 		end
 	end
 
@@ -172,12 +172,12 @@ concommand.Add( "mc_client_diag", function()
 		tostring( physStats.lastClientPhysKey ), tostring( physStats.lastClientPhysBuildMS ),
 		tostring( physStats.lastClientPhysBounds ), tostring( physStats.lastClientPhysHadObject ),
 		tostring( next( MC.PhysDirty or {} ) ~= nil ) ) )
-	print( string.format( "[MC client] collision detail mode=%s chunk=%s inputBounds=%s boxes=%s custom=%s convexes=%s shards=%s shardPhys=%s mainPhys=%s totalShardEnts=%d/%d",
+	print( string.format( "[MC client] collision detail mode=%s chunk=%s inputBounds=%s boxes=%s custom=%s convexes=%s subchunks=%s subchunkPhys=%s mainPhys=%s totalSubchunkEnts=%d/%d",
 		tostring( physStats.lastClientPhysMode ), tostring( physStats.lastClientPhysChunkKey ),
 		tostring( physStats.lastClientPhysInputBounds ), tostring( physStats.lastClientPhysBoxes ),
 		tostring( physStats.lastClientPhysCustomConvexes ), tostring( physStats.lastClientPhysConvexes ),
-		tostring( physStats.lastClientPhysShards ), tostring( physStats.lastClientPhysShardObjects ),
-		tostring( physStats.lastClientPhysMainObject ), shardPhys, shardEnts ) )
+		tostring( physStats.lastClientPhysSubchunks ), tostring( physStats.lastClientPhysSubchunkObjects ),
+		tostring( physStats.lastClientPhysMainObject ), subchunkPhys, subchunkEnts ) )
 	print( string.format( "[MC client] collision target playerKey=%s world=%s ent=%s interest=%s aimKey=%s world=%s ent=%s interest=%s lastReason=%s",
 		tostring( playerKey ), tostring( playerWorld ), tostring( playerEnt ), tostring( playerInterest ),
 		tostring( aimKey ), tostring( aimWorld ), tostring( aimEnt ), tostring( aimInterest ),

@@ -105,6 +105,27 @@ function MC.DecodeLocal( li )
 	return lx, ly, lz
 end
 
+function MC.LocalCollisionSubchunkBounds( lx, ly, lz )
+	local size = math.max( 1, math.floor( tonumber( MC.CollisionSubchunkSize ) or 8 ) )
+	local minX = math.floor( lx / size ) * size
+	local minY = math.floor( ly / size ) * size
+	local minZ = math.floor( lz / size ) * size
+	return {
+		minX,
+		minY,
+		minZ,
+		math.min( CS - 1, minX + size - 1 ),
+		math.min( CS - 1, minY + size - 1 ),
+		math.min( CH - 1, minZ + size - 1 ),
+	}
+end
+
+function MC.CellCollisionSubchunkBounds( bx, by, bz )
+	local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
+	local lx, ly, lz = MC.DecodeLocal( li )
+	return MC.ChunkKey( cx, cy, cz ), MC.LocalCollisionSubchunkBounds( lx, ly, lz ), cx, cy, cz
+end
+
 function MC.LocalIndexInRange( li )
 	return li >= 0 and li < CS2 * CH
 end
