@@ -1572,6 +1572,31 @@ local function pipe6Boxes( bx, by, bz )
 	return boxes
 end
 
+local FullBlockCollisionNames = {
+	cauldron = true,
+	water_cauldron = true,
+	lava_cauldron = true,
+	powder_snow_cauldron = true,
+}
+
+local function fenceGateCollisionBoxes( b, orient )
+	local boxes = modelBoxes( b, MC.NormalizeOrient( b.id, orient ) )
+	if not boxes or #boxes == 0 then return boxes end
+
+	local x0, y0, z0 = 1, 1, 1
+	local x1, y1, z1 = 0, 0, 0
+	for _, box in ipairs( boxes ) do
+		x0 = math.min( x0, box[1] )
+		y0 = math.min( y0, box[2] )
+		z0 = math.min( z0, box[3] )
+		x1 = math.max( x1, box[4] )
+		y1 = math.max( y1, box[5] )
+		z1 = math.max( z1, box[6] )
+	end
+
+	return { { x0, y0, z0, x1, y1, z1 } }
+end
+
 function MC.BlockBoxes( id, orient, bx, by, bz )
 	local b = MC.Blocks[id]
 	if not b then return nil end
@@ -1618,6 +1643,12 @@ function MC.BlockCollisionBoxes( id, orient, bx, by, bz )
 	end
 	if b and b.collisionConvexes then
 		return nil
+	end
+	if b and FullBlockCollisionNames[ b.name ] then
+		return FullBlockBox
+	end
+	if b and b.connection == "fence_gate" then
+		return fenceGateCollisionBoxes( b, orient )
 	end
 	if b and b.connection == "fence" and bx ~= nil and by ~= nil and bz ~= nil then
 		return fenceCollisionBoxes( bx, by, bz )
