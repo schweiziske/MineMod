@@ -115,6 +115,18 @@ local LastClientCollisionEnabled = nil
 local NextExplosionMeshBuildAt = 0
 local NextBulkCollisionRebuildAt = 0
 
+function MC.ResetClientCollisionState()
+	LastClientCollisionEnabled = nil
+	MC.ClientCollisionInterest = {}
+	MC.ClientCollisionSignatures = {}
+	MC.PhysDirty = {}
+	MC.PhysDirtyPriority = {}
+	MC.PhysDirtyBulk = {}
+	MC.PhysDirtyBulkOrder = {}
+	MC.ClientCollisionAABBDebugBoxes = {}
+	NextBulkCollisionRebuildAt = 0
+end
+
 local function clientCollisionEnabled()
 	return MC.ClientCollision:GetBool()
 end
@@ -177,7 +189,7 @@ function MC.RefreshClientCollisionInterest( force )
 		for key, e in pairs( MC.ChunkEnts or {} ) do
 			if IsValid( e ) then
 				if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
-				if e.ClearPhysicsShards then e:ClearPhysicsShards() end
+				if e.ClearPhysicsSubchunks then e:ClearPhysicsSubchunks() end
 				e:PhysicsDestroy()
 			end
 			MC.PhysDirty[key] = nil
@@ -192,11 +204,7 @@ function MC.RefreshClientCollisionInterest( force )
 	for key, chunk in pairs( MC.World or {} ) do
 		if chunk and chunk.count and chunk.count > 0 then
 			MC.ClientCollisionInterest[key] = true
-			if force and MC.MarkChunkPhysDirtyBulk then
-				MC.MarkChunkPhysDirtyBulk( key )
-			else
-				MC.MarkChunkPhysDirty( key, true )
-			end
+			MC.MarkChunkPhysDirty( key, true )
 		end
 	end
 end
@@ -973,14 +981,14 @@ local function markChunkSectionDirty( key, sectionIndex, rateLimited )
 	end
 end
 
-local function rebuildChunkPhys( key, enabled )
+local function rebuildChunkPhys( key, enabled, bounds )
 	local chunk = MC.World and MC.World[key] or nil
 	local e = MC.ChunkEnts[key]
 	if not chunk or not chunk.count or chunk.count <= 0 then
 		if MC.ClientCollisionInterest then MC.ClientCollisionInterest[key] = nil end
 		if IsValid( e ) then
 			if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
-			if e.ClearPhysicsShards then e:ClearPhysicsShards() end
+			if e.ClearPhysicsSubchunks then e:ClearPhysicsSubchunks() end
 			e:PhysicsDestroy()
 		end
 		MC.PhysDirty[key] = nil
@@ -1012,15 +1020,15 @@ local function rebuildChunkPhys( key, enabled )
 		if enabled then
 			MC.ClientCollisionInterest[key] = true
 			local buildStart = SysTime()
-			e:RebuildPhysics()
+			e:RebuildPhysics( bounds )
 			MC.ClientPhysStats.lastClientPhysBuildMS = math.Round( ( SysTime() - buildStart ) * 1000, 3 )
 			MC.ClientPhysStats.lastClientPhysKey = key
-			MC.ClientPhysStats.lastClientPhysBounds = "full"
-			MC.ClientPhysStats.lastClientPhysHadObject = IsValid( e:GetPhysicsObject() ) or ( ( MC.ClientPhysStats.lastClientPhysShardObjects or 0 ) > 0 )
+			MC.ClientPhysStats.lastClientPhysBounds = bounds and #bounds or "full"
+			MC.ClientPhysStats.lastClientPhysHadObject = IsValid( e:GetPhysicsObject() ) or ( ( MC.ClientPhysStats.lastClientPhysSubchunkObjects or 0 ) > 0 )
 		else
 			if MC.ClientCollisionInterest then MC.ClientCollisionInterest[key] = nil end
 			if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
-			if e.ClearPhysicsShards then e:ClearPhysicsShards() end
+			if e.ClearPhysicsSubchunks then e:ClearPhysicsSubchunks() end
 			e:PhysicsDestroy()
 		end
 	else
@@ -1031,7 +1039,7 @@ local function rebuildChunkPhys( key, enabled )
 	if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
 end
 
-function MC.MarkChunkPhysDirty( key, priority )
+function MC.MarkChunkPhysDirty( key, priority, bounds )
 	if not key then return end
 	if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
 	if priority then
@@ -1041,7 +1049,7 @@ function MC.MarkChunkPhysDirty( key, priority )
 		MC.PhysDirty[key] = true
 		MC.PhysDirtyPriority[key] = nil
 	end
-	rebuildChunkPhys( key, clientCollisionEnabled() )
+	rebuildChunkPhys( key, clientCollisionEnabled(), bounds )
 end
 
 function MC.MarkChunkPhysDirtyBulk( key )
@@ -1202,7 +1210,5 @@ function MC.FreeAllMeshes()
 	for key in pairs( MC.Meshes ) do MC.FreeChunkMesh( key ) end
 	for key in pairs( MC.MeshesTrans ) do MC.FreeChunkMesh( key ) end
 	MC.MeshDirtyRateLimited = {}
-	MC.PhysDirtyBulk = {}
-	MC.PhysDirtyBulkOrder = {}
-	MC.ClientCollisionAABBDebugBoxes = {}
+	if MC.ResetClientCollisionState then MC.ResetClientCollisionState() end
 end
