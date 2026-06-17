@@ -999,6 +999,7 @@ local function rebuildChunkPhys( key, enabled, bounds )
 
 	if not IsValid( e ) then
 		e = ents.CreateClientside( "mc_chunk" )
+		
 		if IsValid( e ) then
 			if e.ChunkKey and e.ChunkKey ~= key and MC.ChunkEnts[e.ChunkKey] == e then
 				MC.ChunkEnts[e.ChunkKey] = nil
@@ -1033,6 +1034,9 @@ local function rebuildChunkPhys( key, enabled, bounds )
 		end
 	else
 		rememberClientPhysSkip( key, "no_chunk_ent" )
+	end
+	if clientCollisionDebugEnabled() then
+		print( e )
 	end
 	MC.PhysDirty[key] = nil
 	MC.PhysDirtyPriority[key] = nil

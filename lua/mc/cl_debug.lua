@@ -188,6 +188,60 @@ concommand.Add( "mc_client_diag", function()
 		tostring( MC.ServerCollisionDebugUpdated and math.Round( CurTime() - MC.ServerCollisionDebugUpdated, 3 ) or "nil" ) ) )
 end )
 
+local function mcProbeVec( v )
+	if not v then return "nil" end
+	return string.format( "(%.1f %.1f %.1f)", v.x, v.y, v.z )
+end
+
+local function mcProbeEnt( ent )
+	if not IsValid( ent ) then return tostring( ent ) end
+	return string.format( "%s idx=%s class=%s", tostring( ent ), tostring( ent:EntIndex() ), tostring( ent:GetClass() ) )
+end
+
+concommand.Add( "mc_phys_probe", function()
+	local ply = LocalPlayer()
+	if not IsValid( ply ) then return end
+
+	local start = ply:GetPos() + Vector( 0, 0, 8 )
+	local finish = ply:GetPos() - Vector( 0, 0, 192 )
+	local tr = util.TraceHull( {
+		start = start,
+		endpos = finish,
+		mins = ply:OBBMins(),
+		maxs = ply:OBBMaxs(),
+		mask = MASK_PLAYERSOLID,
+		filter = function( ent ) return ent ~= ply end,
+	} )
+
+	print( string.format( "[MCPROBE] player=%s hull=%s->%s hit=%s hitWorld=%s ent=%s hitPos=%s",
+		mcProbeVec( ply:GetPos() ), mcProbeVec( start ), mcProbeVec( finish ),
+		tostring( tr.Hit ), tostring( tr.HitWorld ), mcProbeEnt( tr.Entity ), mcProbeVec( tr.HitPos ) ) )
+
+	local found = {}
+	for _, ent in ipairs( ents.FindByClass( "mc_chunk_phys" ) ) do
+		if IsValid( ent ) then
+			local mins, maxs = ent:WorldSpaceAABB()
+			local center = ( mins + maxs ) * 0.5
+			found[#found + 1] = { ent = ent, mins = mins, maxs = maxs, dist = center:DistToSqr( ply:GetPos() ) }
+		end
+	end
+	table.sort( found, function( a, b ) return a.dist < b.dist end )
+
+	for i = 1, math.min( #found, 8 ) do
+		local item = found[i]
+		local ent = item.ent
+		local phys = ent:GetPhysicsObject()
+		print( string.format( "[MCPROBE] #%d %s key=%s subkey=%s nw=%s/%s/%s pos=%s solid=%s group=%s movetype=%s phys=%s physPos=%s aabb=%s->%s",
+			i, mcProbeEnt( ent ), tostring( ent.ChunkKey ), tostring( ent.CollisionSubchunkKey ),
+			tostring( ent:GetNWString( "MCChunkKey", "" ) ), tostring( ent:GetNWString( "MCSubchunkKey", "" ) ),
+			tostring( ent:GetNWInt( "MCPhysPage", -1 ) ), mcProbeVec( ent:GetPos() ),
+			tostring( ent:GetSolid() ), tostring( ent:GetCollisionGroup() ),
+			tostring( ent:GetMoveType() ), tostring( IsValid( phys ) ),
+			mcProbeVec( IsValid( phys ) and phys.GetPos and phys:GetPos() or nil ),
+			mcProbeVec( item.mins ), mcProbeVec( item.maxs ) ) )
+	end
+end )
+
 local function facingName( yaw )
 	yaw = ( yaw % 360 + 360 ) % 360
 	if yaw < 45 or yaw >= 315 then return "+X (东)" end
