@@ -34,21 +34,160 @@ local function freezePhysicsObject( ent )
 	return false
 end
 
+local function fmtDebugVec( v )
+	if not v then return "nil" end
+	return string.format( "(%.1f %.1f %.1f)", v.x, v.y, v.z )
+end
+
+local function debugPhysicsSubchunkPosition( stage, owner, subchunk )
+	if not CLIENT then return end
+	if not ( MC.ClientCollisionDebug and MC.ClientCollisionDebug:GetBool() ) then return end
+	if not IsValid( subchunk ) then return end
+
+	local phys = subchunk:GetPhysicsObject()
+	local physPos = IsValid( phys ) and phys.GetPos and phys:GetPos() or nil
+	local mins, maxs = subchunk:GetCollisionBounds()
+	print( string.format( "[DEBUG-mcpos] stage=%s chunk=%s subkey=%s owner=%s ownerPos=%s ent=%s entPos=%s phys=%s physPos=%s cbounds=%s->%s",
+		tostring( stage ), tostring( subchunk.ChunkKey ), tostring( subchunk.CollisionSubchunkKey ),
+		tostring( owner ), fmtDebugVec( IsValid( owner ) and owner:GetPos() or nil ),
+		tostring( subchunk ), fmtDebugVec( subchunk:GetPos() ), tostring( IsValid( phys ) ),
+		fmtDebugVec( physPos ), fmtDebugVec( mins ), fmtDebugVec( maxs ) ) )
+end
+
+local function offsetConvexesToWorld( convexes, origin )
+	local out = {}
+	for i, convex in ipairs( convexes or {} ) do
+		local shifted = {}
+		for j, p in ipairs( convex ) do
+			shifted[j] = Vector( p.x + origin.x, p.y + origin.y, p.z + origin.z )
+		end
+		out[i] = shifted
+	end
+	return out
+end
+
+local function convexWorldBounds( convexes, origin )
+	local mins, maxs
+	for _, convex in ipairs( convexes or {} ) do
+		for _, p in ipairs( convex ) do
+			local wp = origin + p
+			if mins then
+				mins.x = math.min( mins.x, wp.x )
+				mins.y = math.min( mins.y, wp.y )
+				mins.z = math.min( mins.z, wp.z )
+				maxs.x = math.max( maxs.x, wp.x )
+				maxs.y = math.max( maxs.y, wp.y )
+				maxs.z = math.max( maxs.z, wp.z )
+			else
+				mins = Vector( wp.x, wp.y, wp.z )
+				maxs = Vector( wp.x, wp.y, wp.z )
+			end
+		end
+	end
+	return mins, maxs
+end
+
+local function boundsNearlyEqual( aMin, aMax, bMin, bMax )
+	if not aMin or not aMax or not bMin or not bMax then return false end
+	local eps = 1.5
+	return math.abs( aMin.x - bMin.x ) <= eps
+		and math.abs( aMin.y - bMin.y ) <= eps
+		and math.abs( aMin.z - bMin.z ) <= eps
+		and math.abs( aMax.x - bMax.x ) <= eps
+		and math.abs( aMax.y - bMax.y ) <= eps
+		and math.abs( aMax.z - bMax.z ) <= eps
+end
+
+local function boundsForCollisionSubchunkKey( key )
+	local sx, sy, sz = tostring( key or "" ):match( "^(-?%d+):(-?%d+):(-?%d+)$" )
+	if not sx then return nil end
+	local size = PHYSICS_SUBCHUNK_SIZE
+	local x0 = math.max( 0, tonumber( sx ) * size )
+	local y0 = math.max( 0, tonumber( sy ) * size )
+	local z0 = math.max( 0, tonumber( sz ) * size )
+	return {
+		{
+			x0,
+			y0,
+			z0,
+			math.min( MC.CS - 1, x0 + size - 1 ),
+			math.min( MC.CS - 1, y0 + size - 1 ),
+			math.min( MC.CH - 1, z0 + size - 1 ),
+		}
+	}
+end
+
+local function findNetworkPhysicsSubchunk( owner, group, pageIndex, convexes )
+	if not CLIENT then return nil end
+	local expectedMin, expectedMax = convexWorldBounds( convexes, owner:GetPos() )
+	local fallback
+
+	for _, candidate in ipairs( ents.FindByClass( "mc_chunk_phys" ) ) do
+		if IsValid( candidate )
+		and candidate:EntIndex() > 0 then
+			if candidate:GetNWString( "MCChunkKey", "" ) == tostring( owner.ChunkKey )
+			and candidate:GetNWString( "MCSubchunkKey", "" ) == tostring( group.key )
+			and candidate:GetNWInt( "MCPhysPage", -1 ) == pageIndex then
+				return candidate
+			end
+
+			local mins, maxs = candidate:WorldSpaceAABB()
+			if not IsValid( candidate:GetPhysicsObject() )
+			and boundsNearlyEqual( expectedMin, expectedMax, mins, maxs ) then
+				fallback = candidate
+			end
+		end
+	end
+	return fallback
+end
+
+local function scheduleClientPhysicsSubchunkRetry( owner, group )
+	if not CLIENT or not IsValid( owner ) then return end
+	local key = owner.ChunkKey
+	if not key then return end
+	local bounds = group and boundsForCollisionSubchunkKey( group.key ) or nil
+
+	MC.PendingNetworkPhysRetry = MC.PendingNetworkPhysRetry or {}
+	MC.NetworkPhysRetryAttempts = MC.NetworkPhysRetryAttempts or {}
+	local retryKey = key .. "/" .. tostring( group and group.key or "" )
+	if MC.PendingNetworkPhysRetry[retryKey] then return end
+	local attempts = ( MC.NetworkPhysRetryAttempts[retryKey] or 0 ) + 1
+	if attempts > 5 then return end
+	MC.NetworkPhysRetryAttempts[retryKey] = attempts
+	MC.PendingNetworkPhysRetry[retryKey] = true
+
+	local delay = attempts <= 2 and 0.03 or 0.12
+	timer.Simple( delay, function()
+		MC.PendingNetworkPhysRetry[retryKey] = nil
+		if MC.MarkChunkPhysDirty then
+			MC.MarkChunkPhysDirty( key, true, bounds )
+		end
+	end )
+end
+
+local function removeSubchunkEntity( subchunk )
+	if not IsValid( subchunk ) then return end
+
+	if CLIENT and subchunk:EntIndex() > 0 then
+		subchunk:PhysicsDestroy()
+		subchunk:SetSolid( SOLID_NONE )
+		return
+	end
+
+	subchunk:Remove()
+end
+
 function ENT:ClearPhysicsSubchunks()
 	local subchunks = self.PhysicsSubchunks
 	if not subchunks then return end
 	for _, subchunk in ipairs( subchunks ) do
-		if IsValid( subchunk ) then subchunk:Remove() end
+		removeSubchunkEntity( subchunk )
 	end
 	self.PhysicsSubchunks = nil
 	self.PhysicsSubchunksByKey = nil
 end
 
 ENT.ClearPhysicsShards = ENT.ClearPhysicsSubchunks
-
-local function removeSubchunkEntity( subchunk )
-	if IsValid( subchunk ) then subchunk:Remove() end
-end
 
 local function removePhysicsSubchunkKey( ent, key )
 	local byKey = ent.PhysicsSubchunksByKey
@@ -73,12 +212,23 @@ local function removePhysicsSubchunkKey( ent, key )
 	ent.PhysicsSubchunks = kept
 end
 
-local function spawnPhysicsSubchunk( owner, index, group, convexes )
+local function spawnPhysicsSubchunk( owner, index, group, convexes, pageIndex )
+	pageIndex = math.floor( tonumber( pageIndex ) or 0 )
+	local networkSubchunk = false
+	local created = false
 	local subchunk
 	if SERVER then
 		subchunk = ents.Create( "mc_chunk_phys" )
 	else
-		subchunk = ents.CreateClientside( "mc_chunk_phys" )
+		subchunk = findNetworkPhysicsSubchunk( owner, group, pageIndex, convexes or group.convexes )
+		networkSubchunk = IsValid( subchunk )
+		if not networkSubchunk then
+			scheduleClientPhysicsSubchunkRetry( owner, group )
+			return nil
+		end
+		local retryKey = tostring( owner.ChunkKey ) .. "/" .. tostring( group.key )
+		if MC.NetworkPhysRetryAttempts then MC.NetworkPhysRetryAttempts[retryKey] = nil end
+		if MC.PendingNetworkPhysRetry then MC.PendingNetworkPhysRetry[retryKey] = nil end
 	end
 	if not IsValid( subchunk ) then return nil end
 
@@ -87,16 +237,64 @@ local function spawnPhysicsSubchunk( owner, index, group, convexes )
 	subchunk.ParentChunk = owner
 	subchunk.SubchunkIndex = index
 	subchunk.CollisionSubchunkKey = group.key
+	subchunk.CollisionPhysPage = pageIndex
+	if SERVER then
+		subchunk:SetNWString( "MCChunkKey", owner.ChunkKey )
+		subchunk:SetNWString( "MCSubchunkKey", group.key )
+		subchunk:SetNWInt( "MCPhysPage", pageIndex )
+	end
 	ensurePhysicsModel( subchunk )
-	subchunk:SetPos( owner:GetPos() )
+	debugPhysicsSubchunkPosition( "before_setpos", owner, subchunk )
+	local physConvexes = convexes or group.convexes
+	if CLIENT and not networkSubchunk then
+		subchunk.CollisionWorldSpace = true
+		physConvexes = offsetConvexesToWorld( physConvexes, owner:GetPos() )
+		subchunk:SetPos( vector_origin )
+	else
+		subchunk.CollisionWorldSpace = nil
+		subchunk:SetPos( owner:GetPos() )
+	end
 	subchunk:SetAngles( Angle( 0, 0, 0 ) )
-	if subchunk.Spawn then subchunk:Spawn() end
+	debugPhysicsSubchunkPosition( "after_setpos_before_spawn", owner, subchunk )
+	if SERVER and subchunk.Spawn then subchunk:Spawn() end
+	if CLIENT and created and subchunk.Spawn then subchunk:Spawn() end
 	if SERVER and subchunk.Activate then subchunk:Activate() end
+	if SERVER then
+		subchunk:SetNWString( "MCChunkKey", owner.ChunkKey )
+		subchunk:SetNWString( "MCSubchunkKey", group.key )
+		subchunk:SetNWInt( "MCPhysPage", pageIndex )
+	end
+	if CLIENT and not networkSubchunk then
+		subchunk:SetPos( vector_origin )
+	else
+		subchunk:SetPos( owner:GetPos() )
+	end
+	subchunk:SetAngles( Angle( 0, 0, 0 ) )
 	subchunk:SetNoDraw( true )
+	debugPhysicsSubchunkPosition( "after_spawn_before_apply", owner, subchunk )
 
-	if not subchunk.ApplyPhysicsConvexes or not subchunk:ApplyPhysicsConvexes( convexes or group.convexes ) then
-		subchunk:Remove()
+	if not subchunk.ApplyPhysicsConvexes or not subchunk:ApplyPhysicsConvexes( physConvexes ) then
+		if created or SERVER then
+			subchunk:Remove()
+		else
+			subchunk:PhysicsDestroy()
+		end
 		return nil
+	end
+	debugPhysicsSubchunkPosition( "after_apply_before_post_setpos", owner, subchunk )
+	if CLIENT and not networkSubchunk then
+		subchunk:SetPos( vector_origin )
+	else
+		subchunk:SetPos( owner:GetPos() )
+	end
+	subchunk:SetAngles( Angle( 0, 0, 0 ) )
+	debugPhysicsSubchunkPosition( "after_post_setpos", owner, subchunk )
+	if CLIENT then
+		local ownerRef = owner
+		local subchunkRef = subchunk
+		timer.Simple( 0, function()
+			debugPhysicsSubchunkPosition( "next_tick", ownerRef, subchunkRef )
+		end )
 	end
 	return subchunk
 end
@@ -120,7 +318,8 @@ local function spawnPhysicsSubchunkPages( owner, group, subchunks, byKey )
 			part[#part + 1] = group.convexes[i]
 		end
 
-		local subchunk = spawnPhysicsSubchunk( owner, #subchunks + 1, group, part )
+		local pageIndex = math.floor( ( first - 1 ) / PHYSICS_CONVEXES_PER_ENTITY )
+		local subchunk = spawnPhysicsSubchunk( owner, #subchunks + 1, group, part, pageIndex )
 		if not IsValid( subchunk ) then return built, false, #part end
 		rememberPhysicsSubchunk( subchunks, byKey, group, subchunk )
 		built = built + 1
@@ -230,16 +429,89 @@ function ENT:EnsureKey()
 	return self.ChunkKey
 end
 
-local function localBoundsContains( bounds, lx, ly, lz )
-	if not bounds then return true end
-	for _, b in ipairs( bounds ) do
-		if lx >= b[1] and lx <= b[4]
-		and ly >= b[2] and ly <= b[5]
-		and lz >= b[3] and lz <= b[6] then
-			return true
+local function collisionWindowsForBounds( bounds )
+	local CS = MC.CS
+	local CH = MC.CH
+	local size = PHYSICS_SUBCHUNK_SIZE
+	local byKey = {}
+	local ordered = {}
+
+	local function addWindow( sx, sy, sz, x0, y0, z0, x1, y1, z1 )
+		local key = sx .. ":" .. sy .. ":" .. sz
+		local window = byKey[key]
+		if not window then
+			window = {
+				sx = sx,
+				sy = sy,
+				sz = sz,
+				x0 = x0,
+				y0 = y0,
+				z0 = z0,
+				x1 = x1,
+				y1 = y1,
+				z1 = z1,
+			}
+			byKey[key] = window
+			ordered[#ordered + 1] = window
+			return
+		end
+
+		window.x0 = math.min( window.x0, x0 )
+		window.y0 = math.min( window.y0, y0 )
+		window.z0 = math.min( window.z0, z0 )
+		window.x1 = math.max( window.x1, x1 )
+		window.y1 = math.max( window.y1, y1 )
+		window.z1 = math.max( window.z1, z1 )
+	end
+
+	if bounds then
+		for _, b in ipairs( bounds ) do
+			local bx0 = math.max( 0, math.floor( tonumber( b[1] ) or 0 ) )
+			local by0 = math.max( 0, math.floor( tonumber( b[2] ) or 0 ) )
+			local bz0 = math.max( 0, math.floor( tonumber( b[3] ) or 0 ) )
+			local bx1 = math.min( CS, math.floor( tonumber( b[4] ) or -1 ) + 1 )
+			local by1 = math.min( CS, math.floor( tonumber( b[5] ) or -1 ) + 1 )
+			local bz1 = math.min( CH, math.floor( tonumber( b[6] ) or -1 ) + 1 )
+			if bx0 < bx1 and by0 < by1 and bz0 < bz1 then
+				local sx0 = math.floor( bx0 / size ) * size
+				local sy0 = math.floor( by0 / size ) * size
+				local sz0 = math.floor( bz0 / size ) * size
+				local sx1 = math.floor( ( bx1 - 1 ) / size ) * size
+				local sy1 = math.floor( ( by1 - 1 ) / size ) * size
+				local sz1 = math.floor( ( bz1 - 1 ) / size ) * size
+				for sz = sz0, sz1, size do
+					for sy = sy0, sy1, size do
+						for sx = sx0, sx1, size do
+							local xLimit = math.min( CS, sx + size )
+							local yLimit = math.min( CS, sy + size )
+							local zLimit = math.min( CH, sz + size )
+							addWindow( sx, sy, sz,
+								math.max( bx0, sx ), math.max( by0, sy ), math.max( bz0, sz ),
+								math.min( bx1, xLimit ), math.min( by1, yLimit ), math.min( bz1, zLimit ) )
+						end
+					end
+				end
+			end
+		end
+	else
+		for sz = 0, CH - 1, size do
+			for sy = 0, CS - 1, size do
+				for sx = 0, CS - 1, size do
+					addWindow( sx, sy, sz, sx, sy, sz,
+						math.min( CS, sx + size ),
+						math.min( CS, sy + size ),
+						math.min( CH, sz + size ) )
+				end
+			end
 		end
 	end
-	return false
+
+	table.sort( ordered, function( a, b )
+		if a.sz ~= b.sz then return a.sz < b.sz end
+		if a.sy ~= b.sy then return a.sy < b.sy end
+		return a.sx < b.sx
+	end )
+	return ordered
 end
 
 -- greedy-merge solid cells into a minimal set of boxes (local cell coords);
@@ -249,6 +521,7 @@ local function greedyBoxes( chunk, bounds )
 	local CS2 = CS * CS
 	local CH = MC.CH
 	local function idx( x, y, z ) return x + y * CS + z * CS2 end
+	local windows = collisionWindowsForBounds( bounds )
 
 	local solid = {}
 	local customConvexes = {}
@@ -288,31 +561,38 @@ local function greedyBoxes( chunk, bounds )
 		if #points >= 4 then customConvexes[#customConvexes + 1] = points end
 	end
 
-	for li, id in pairs( chunk.blocks ) do
-		local b = MC.Blocks[id]
-		if not b or b.solid ~= false then
-			local orient = MC.NormalizeOrient and MC.NormalizeOrient( id, chunk.orients and chunk.orients[li] ) or 0
-			local lx, ly, lz = MC.DecodeLocal( li )
-			if localBoundsContains( bounds, lx, ly, lz ) then
-				local bx = chunk.cx * CS + lx
-				local by = chunk.cy * CS + ly
-				local bz = chunk.cz * CH + lz
-				if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
-					solid[li] = true
-				else
-					local blockConvexes = MC.BlockCollisionConvexes
-						and MC.BlockCollisionConvexes( id, orient, bx, by, bz ) or nil
-					if blockConvexes then
-						for _, convex in ipairs( blockConvexes ) do
-							addCustomConvex( lx, ly, lz, convex )
-						end
-					else
-						-- identical to the server: real collision boxes, never a
-						-- client-only bounding-box approximation (that mismatch is what
-						-- made the predicted player jitter on non-cube blocks).
-						local blockBoxes = ( MC.BlockCollisionBoxes or MC.BlockBoxes )( id, orient, bx, by, bz )
-						for _, box in ipairs( blockBoxes or {} ) do
-							addShapeBox( lx, ly, lz, box )
+	for _, window in ipairs( windows ) do
+		for lz = window.z0, window.z1 - 1 do
+			for ly = window.y0, window.y1 - 1 do
+				for lx = window.x0, window.x1 - 1 do
+					local li = idx( lx, ly, lz )
+					local id = chunk.blocks[li]
+					if id ~= nil then
+						local b = MC.Blocks[id]
+						if not b or b.solid ~= false then
+							local orient = MC.NormalizeOrient and MC.NormalizeOrient( id, chunk.orients and chunk.orients[li] ) or 0
+							local bx = chunk.cx * CS + lx
+							local by = chunk.cy * CS + ly
+							local bz = chunk.cz * CH + lz
+							if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
+								solid[li] = true
+							else
+								local blockConvexes = MC.BlockCollisionConvexes
+									and MC.BlockCollisionConvexes( id, orient, bx, by, bz ) or nil
+								if blockConvexes then
+									for _, convex in ipairs( blockConvexes ) do
+										addCustomConvex( lx, ly, lz, convex )
+									end
+								else
+									-- identical to the server: real collision boxes, never a
+									-- client-only bounding-box approximation (that mismatch is what
+									-- made the predicted player jitter on non-cube blocks).
+									local blockBoxes = ( MC.BlockCollisionBoxes or MC.BlockBoxes )( id, orient, bx, by, bz )
+									for _, box in ipairs( blockBoxes or {} ) do
+										addShapeBox( lx, ly, lz, box )
+									end
+								end
+							end
 						end
 					end
 				end
@@ -323,15 +603,13 @@ local function greedyBoxes( chunk, bounds )
 	local visited = {}
 	local boxes = {}
 
-	for sz = 0, CH - 1, PHYSICS_SUBCHUNK_SIZE do
-		local zLimit = math.min( CH, sz + PHYSICS_SUBCHUNK_SIZE )
-		for sy = 0, CS - 1, PHYSICS_SUBCHUNK_SIZE do
-			local yLimit = math.min( CS, sy + PHYSICS_SUBCHUNK_SIZE )
-			for sx = 0, CS - 1, PHYSICS_SUBCHUNK_SIZE do
-				local xLimit = math.min( CS, sx + PHYSICS_SUBCHUNK_SIZE )
-				for z = sz, zLimit - 1 do
-					for y = sy, yLimit - 1 do
-						for x = sx, xLimit - 1 do
+	for _, window in ipairs( windows ) do
+		local xLimit = window.x1
+		local yLimit = window.y1
+		local zLimit = window.z1
+		for z = window.z0, zLimit - 1 do
+			for y = window.y0, yLimit - 1 do
+				for x = window.x0, xLimit - 1 do
 							local i0 = idx( x, y, z )
 							if solid[i0] and not visited[i0] then
 								local x1 = x + 1
@@ -375,21 +653,17 @@ local function greedyBoxes( chunk, bounds )
 						end
 					end
 				end
-			end
-		end
 	end
 
 	local function addMergedShapeGroup( group )
 		local seen = {}
-		for sz = 0, CH - 1, PHYSICS_SUBCHUNK_SIZE do
-			local zLimit = math.min( CH, sz + PHYSICS_SUBCHUNK_SIZE )
-			for sy = 0, CS - 1, PHYSICS_SUBCHUNK_SIZE do
-				local yLimit = math.min( CS, sy + PHYSICS_SUBCHUNK_SIZE )
-				for sx = 0, CS - 1, PHYSICS_SUBCHUNK_SIZE do
-					local xLimit = math.min( CS, sx + PHYSICS_SUBCHUNK_SIZE )
-					for z = sz, zLimit - 1 do
-						for y = sy, yLimit - 1 do
-							for x = sx, xLimit - 1 do
+		for _, window in ipairs( windows ) do
+			local xLimit = window.x1
+			local yLimit = window.y1
+			local zLimit = window.z1
+			for z = window.z0, zLimit - 1 do
+				for y = window.y0, yLimit - 1 do
+					for x = window.x0, xLimit - 1 do
 								local i0 = idx( x, y, z )
 								if group.cells[i0] and not seen[i0] then
 									local x1 = x + 1
@@ -450,8 +724,6 @@ local function greedyBoxes( chunk, bounds )
 							end
 						end
 					end
-				end
-			end
 		end
 	end
 

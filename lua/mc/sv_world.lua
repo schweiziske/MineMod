@@ -19,6 +19,14 @@ local function L( ply, key, fallback, vars )
 end
 
 local BULK_SET_CELLS_PER_MESSAGE = 1024
+local GMOD_NET_MAX_BYTES = 65533
+local NET_MESSAGE_OVERHEAD_BYTES = 64
+local BULK_SET_CELL_BITS = Net.COORD_BITS * 3 + Net.ID_BITS + Net.ORIENT_BITS
+local BULK_SET_HEADER_BITS = Net.COUNT_BITS + 1
+local BULK_SET_FAST_CELLS_PER_MESSAGE = math.max( 1, math.min(
+	bit.lshift( 1, Net.COUNT_BITS ) - 1,
+	math.floor( ( ( GMOD_NET_MAX_BYTES - NET_MESSAGE_OVERHEAD_BYTES ) * 8 - BULK_SET_HEADER_BITS ) / BULK_SET_CELL_BITS )
+) )
 local BULK_BREAK_FX_LIMIT = 64
 local SYNC_TIMER_INTERVAL = 0.05
 local INTEREST_TIMER_INTERVAL = 0.25
@@ -329,10 +337,12 @@ local function sendSetBulk( changes, target, options )
 	if not target then return end
 	options = options or {}
 	local explosionMeshThrottle = options.explosionMeshThrottle == true
+	local netName = explosionMeshThrottle and "mc_set_bulk" or "mc_set_bulk_fast"
+	local cellsPerMessage = explosionMeshThrottle and BULK_SET_CELLS_PER_MESSAGE or BULK_SET_FAST_CELLS_PER_MESSAGE
 	local i = 1
 	while i <= #changes do
-		local count = math.min( BULK_SET_CELLS_PER_MESSAGE, #changes - i + 1 )
-		net.Start( "mc_set_bulk" )
+		local count = math.min( cellsPerMessage, #changes - i + 1 )
+		net.Start( netName )
 			net.WriteUInt( count, Net.COUNT_BITS )
 			for j = i, i + count - 1 do
 				local cell = changes[j]
@@ -616,7 +626,7 @@ local function applyCells( cells, actor, options )
 	if immediatePhys then flushPhysDirtyKeys( immediateDirty ) end
 
 	broadcastSetBulk( changes, {
-		explosionMeshThrottle = options.explosionMeshThrottle == true or options.deferPhys == true,
+		explosionMeshThrottle = options.explosionMeshThrottle == true,
 	} )
 
 	local fxInfo = changedInfo[fxIndex] or changedInfo[1]
@@ -849,7 +859,7 @@ function SV.RemoveBlocksBulk( cells, options )
 	end
 
 	broadcastSetBulk( changes, {
-		explosionMeshThrottle = options.explosionMeshThrottle == true or options.deferPhys == true,
+		explosionMeshThrottle = options.explosionMeshThrottle == true,
 	} )
 	SV.Dirty = true
 	return removed

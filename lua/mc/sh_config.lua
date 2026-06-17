@@ -63,6 +63,7 @@ if SERVER then
 		"mc_unload_chunk",
 		"mc_set",
 		"mc_set_bulk",
+		"mc_set_bulk_fast",
 		"mc_fx",
 		"mc_clear",
 		"mc_collision_debug_req",

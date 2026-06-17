@@ -9,6 +9,13 @@ function ENT:Initialize()
 	self:SetMoveType( MOVETYPE_VPHYSICS )
 	self:SetSolid( SOLID_VPHYSICS )
 	self:EnableCustomCollisions( true )
+	if self.MarkClientPhysDirtyFromMetadata then
+		timer.Simple( 0, function()
+			if IsValid( self ) and self.MarkClientPhysDirtyFromMetadata then
+				self:MarkClientPhysDirtyFromMetadata()
+			end
+		end )
+	end
 end
 
 function ENT:Draw()
