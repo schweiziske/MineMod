@@ -56,6 +56,26 @@ if not MC.MaterialTranslucent or MC.MaterialTranslucent:IsError() then
 	MC.MaterialTranslucent = MC.Material
 end
 
+-- Opaque variant of the atlas for inventory icons. Semi-transparent blocks
+-- (stained glass, tinted glass, ice, slime, honey) have low texel alpha that the
+-- cutout material's alpha test discards, so their icons would render blank. This
+-- material ignores alpha (no $alphatest/$translucent) so the icon shows the solid
+-- texture colour. Reuses the already-loaded atlas texture so there is no second
+-- PNG/path-cache collision.
+MC.MaterialIconOpaque = nil
+do
+	local tex = MC.Material and MC.Material.GetTexture and MC.Material:GetTexture( "$basetexture" )
+	if tex then
+		local mat = CreateMaterial( "mc_atlas_icon_opaque", "UnlitGeneric", {
+			["$vertexcolor"] = "1",
+			["$nocull"] = "1",
+			["$vertexalpha"] = "1",
+		} )
+		mat:SetTexture( "$basetexture", tex )
+		MC.MaterialIconOpaque = mat
+	end
+end
+
 -- directional shading (modulates the texture via vertex colour)
 local SH_TOP    = Color( 255, 255, 255 )
 local SH_BOTTOM = Color( 130, 130, 130 )
