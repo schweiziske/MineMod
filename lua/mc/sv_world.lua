@@ -38,6 +38,7 @@ SV.PhysDirtyBulk = SV.PhysDirtyBulk or {} -- chunkKey -> true when explosion/pre
 SV.PhysDirtyBulkOrder = SV.PhysDirtyBulkOrder or {}
 SV.SyncQueue  = SV.SyncQueue or {}   -- player -> { keys = {}, i = 1, active = nil }
 SV.SnapshotQueue = SV.SnapshotQueue or {} -- player -> compressed save snapshot transfer state
+SV.ReliableNetQueues = SV.ReliableNetQueues or {} -- player -> shared reliable send queue
 SV.PlayerLoadedChunks = SV.PlayerLoadedChunks or {} -- player -> { [chunkKey] = true }
 SV.PlayerFullSnapshot = SV.PlayerFullSnapshot or {} -- player -> true once full-world snapshot mode owns visibility
 SV.PlayerHTTPDisabled = SV.PlayerHTTPDisabled or {} -- player -> true after client-side HTTP fetch is blocked/failed
@@ -68,7 +69,7 @@ end
 
 local function syncReliableBudget()
 	if C.SyncBudget then
-		return math.Clamp( C.SyncBudget:GetInt(), 8192, syncFastEnabled() and 65536 or 52000 )
+		return math.Clamp( C.SyncBudget:GetInt(), 2048, syncFastEnabled() and 8192 or 6144 )
 	end
 	return C.SyncReliableBudget or 32768
 end
@@ -87,6 +88,10 @@ local function syncInFlightLimit()
 		return math.Clamp( C.SyncWindow:GetInt(), 32768, 131072 )
 	end
 	return C.SyncInFlightLimit or 65536
+end
+
+local function sharedReliableBudget()
+	return math.min( syncReliableBudget(), 32768 )
 end
 
 local function syncSnapshotEnabled()
@@ -277,6 +282,10 @@ local function chat( ply, msg )
 	end
 end
 
+function SV.Chat( ply, msg )
+	chat( ply, msg )
+end
+
 local function canEdit( ply )
 	if C.AdminOnly:GetBool() and IsValid( ply ) and not ply:IsAdmin() then
 		notify( ply, L( ply, "server.admin_build", "只有管理员可以建造 (mc_admin_only)" ) )
@@ -285,11 +294,19 @@ local function canEdit( ply )
 	return true
 end
 
+function SV.CanEdit( ply )
+	return canEdit( ply )
+end
+
 local function worldBoundsOK( bx, by, bz )
 	local protoMax = bit.lshift( 1, Net.COORD_BITS - 1 ) - 1
 	local lim = math.min( C.WorldLimit:GetInt(), protoMax )
 	return math.abs( bx ) <= lim
 		and math.abs( by ) <= lim
+end
+
+function SV.WorldBoundsOK( bx, by, bz )
+	return worldBoundsOK( bx, by, bz )
 end
 
 -- returns true if allowed; otherwise false (+ optional notify)
@@ -320,6 +337,112 @@ function SV.Validate( ply, bx, by, bz, placing )
 	return true
 end
 
+--------------------------------------------------------------- reliable net queue
+local function reliableTargetPlayers( target )
+	if istable( target ) then
+		local out = {}
+		for _, ply in ipairs( target ) do
+			if IsValid( ply ) then out[#out + 1] = ply end
+		end
+		return out
+	end
+	if IsValid( target ) then return { target } end
+	return {}
+end
+
+local function compactReliableQueue( q )
+	if ( q.head or 1 ) <= 32 then return end
+	if q.head <= #q.items * 0.5 then return end
+	local compacted = {}
+	for i = q.head, #q.items do compacted[#compacted + 1] = q.items[i] end
+	q.items = compacted
+	q.head = 1
+end
+
+function SV.EnqueueReliableNet( target, bytes, sendFn, waitAck )
+	if not isfunction( sendFn ) then return false end
+	bytes = math.max( 1, math.floor( tonumber( bytes ) or 1 ) )
+	local queued = false
+
+	for _, ply in ipairs( reliableTargetPlayers( target ) ) do
+		local q = SV.ReliableNetQueues[ply]
+		if not q then
+			q = { items = {}, head = 1, inflightBytes = 0 }
+			SV.ReliableNetQueues[ply] = q
+		end
+		q.items[#q.items + 1] = {
+			bytes = bytes,
+			send = sendFn,
+			waitAck = waitAck == true and not ply:IsBot(),
+		}
+		queued = true
+	end
+
+	return queued
+end
+
+function SV.ClearReliableNet( target )
+	for _, ply in ipairs( reliableTargetPlayers( target ) ) do
+		SV.ReliableNetQueues[ply] = nil
+	end
+end
+
+timer.Create( "mc_reliable_net", SYNC_TIMER_INTERVAL, 0, function()
+	local frameBudget = syncFrameSeconds()
+	local deadline = frameBudget and ( SysTime() + frameBudget ) or nil
+
+	for ply, q in pairs( SV.ReliableNetQueues ) do
+		if not IsValid( ply ) then
+			SV.ReliableNetQueues[ply] = nil
+			continue
+		end
+
+		local sent = 0
+		local sentBytes = 0
+		local messageBudget = syncMessagesPerTick()
+		local byteBudget = math.min( sharedReliableBudget(), syncInFlightLimit() )
+		local inflightLimit = syncInFlightLimit()
+
+		while sent < messageBudget do
+			if deadline and SysTime() >= deadline then break end
+			local item = q.items[q.head or 1]
+			if not item then break end
+			local itemBytes = math.max( 1, math.floor( tonumber( item.bytes ) or 1 ) )
+			if item.waitAck and ( q.inflightBytes or 0 ) + itemBytes > inflightLimit then break end
+			if sent > 0 and sentBytes + itemBytes > byteBudget then break end
+
+			if item.send( ply ) == false then
+				SV.ReliableNetQueues[ply] = nil
+				break
+			end
+			q.head = ( q.head or 1 ) + 1
+			sent = sent + 1
+			sentBytes = sentBytes + itemBytes
+			if item.waitAck then
+				q.inflightBytes = ( q.inflightBytes or 0 ) + itemBytes
+			end
+		end
+
+		if SV.ReliableNetQueues[ply] == q then
+			if not q.items[q.head or 1] and ( q.inflightBytes or 0 ) <= 0 then
+				SV.ReliableNetQueues[ply] = nil
+			else
+				compactReliableQueue( q )
+			end
+		end
+	end
+end )
+
+net.Receive( "mc_reliable_ack", function( _, ply )
+	local q = SV.ReliableNetQueues[ply]
+	if not q then return end
+	local bytes = math.Clamp( net.ReadUInt( 32 ), 0, 4194304 )
+	q.inflightBytes = math.max( 0, ( q.inflightBytes or 0 ) - bytes )
+	if not q.items[q.head or 1] and q.inflightBytes <= 0 then
+		SV.ReliableNetQueues[ply] = nil
+	end
+end )
+
 ------------------------------------------------------------- single block update
 local function broadcastSet( bx, by, bz, id, orient )
 	orient = MC.NormalizeOrient( id, orient )
@@ -332,30 +455,71 @@ local function broadcastSet( bx, by, bz, id, orient )
 	net.Broadcast()
 end
 
+local function liveBulkTarget( target )
+	if istable( target ) then
+		local live = {}
+		for _, ply in ipairs( target ) do
+			if IsValid( ply ) then live[#live + 1] = ply end
+		end
+		if #live == 0 then return nil end
+		return live
+	end
+	if IsValid( target ) then return target end
+	return target
+end
+
+local function estimateBulkSetBytes( count )
+	count = math.max( 0, math.floor( tonumber( count ) or 0 ) )
+	return math.ceil( ( BULK_SET_HEADER_BITS + count * BULK_SET_CELL_BITS ) / 8 ) + NET_MESSAGE_OVERHEAD_BYTES
+end
+
+local function sendSetBulkMessage( changes, target, netName, explosionMeshThrottle, first, count, ackBytes )
+	target = liveBulkTarget( target )
+	if not target then return false end
+	net.Start( netName )
+		net.WriteUInt( count, Net.COUNT_BITS )
+		for j = first, first + count - 1 do
+			local cell = changes[j]
+			local id = math.floor( tonumber( cell.id ) or 0 )
+			local orient = MC.NormalizeOrient( id, cell.orient )
+			net.WriteInt( cell.bx, Net.COORD_BITS )
+			net.WriteInt( cell.by, Net.COORD_BITS )
+			net.WriteInt( cell.bz, Net.COORD_BITS )
+			net.WriteUInt( id, Net.ID_BITS )
+			net.WriteUInt( orient or 0, Net.ORIENT_BITS )
+		end
+		net.WriteBool( explosionMeshThrottle )
+		if ackBytes then net.WriteUInt( ackBytes, 32 ) end
+	net.Send( target )
+	return true
+end
+
 local function sendSetBulk( changes, target, options )
 	if #changes == 0 then return end
 	if not target then return end
 	options = options or {}
 	local explosionMeshThrottle = options.explosionMeshThrottle == true
 	local netName = explosionMeshThrottle and "mc_set_bulk" or "mc_set_bulk_fast"
-	local cellsPerMessage = explosionMeshThrottle and BULK_SET_CELLS_PER_MESSAGE or BULK_SET_FAST_CELLS_PER_MESSAGE
+	local defaultCellsPerMessage = explosionMeshThrottle and BULK_SET_CELLS_PER_MESSAGE or BULK_SET_FAST_CELLS_PER_MESSAGE
+	local cellsPerMessage = math.Clamp( math.floor( tonumber( options.cellsPerMessage ) or defaultCellsPerMessage ), 1, defaultCellsPerMessage )
 	local i = 1
+
+	if options.netPaced == true then
+		while i <= #changes do
+			local first = i
+			local count = math.min( cellsPerMessage, #changes - i + 1 )
+			local bytes = estimateBulkSetBytes( count )
+			SV.EnqueueReliableNet( target, bytes, function( ply )
+				return sendSetBulkMessage( changes, ply, netName, explosionMeshThrottle, first, count, bytes )
+			end, true )
+			i = i + count
+		end
+		return
+	end
+
 	while i <= #changes do
 		local count = math.min( cellsPerMessage, #changes - i + 1 )
-		net.Start( netName )
-			net.WriteUInt( count, Net.COUNT_BITS )
-			for j = i, i + count - 1 do
-				local cell = changes[j]
-				local id = math.floor( tonumber( cell.id ) or 0 )
-				local orient = MC.NormalizeOrient( id, cell.orient )
-				net.WriteInt( cell.bx, Net.COORD_BITS )
-				net.WriteInt( cell.by, Net.COORD_BITS )
-				net.WriteInt( cell.bz, Net.COORD_BITS )
-				net.WriteUInt( id, Net.ID_BITS )
-				net.WriteUInt( orient or 0, Net.ORIENT_BITS )
-			end
-			net.WriteBool( explosionMeshThrottle )
-		net.Send( target )
+		sendSetBulkMessage( changes, target, netName, explosionMeshThrottle, i, count )
 		i = i + count
 	end
 end
@@ -627,6 +791,8 @@ local function applyCells( cells, actor, options )
 
 	broadcastSetBulk( changes, {
 		explosionMeshThrottle = options.explosionMeshThrottle == true,
+		netPaced = options.netPaced == true,
+		cellsPerMessage = options.cellsPerMessage,
 	} )
 
 	local fxInfo = changedInfo[fxIndex] or changedInfo[1]
@@ -651,6 +817,10 @@ end
 -- a placed block must not overlap a living player's hull (don't trap / suffocate them)
 local function wouldTrapPlayer( bx, by, bz, id, orient )
 	return MC.PlacementOverlapsPlayerHull( bx, by, bz, id, orient )
+end
+
+function SV.PlacementWouldTrapPlayer( bx, by, bz, id, orient )
+	return wouldTrapPlayer( bx, by, bz, id, orient )
 end
 
 local function validateReach( ply, bx, by, bz )
@@ -860,6 +1030,8 @@ function SV.RemoveBlocksBulk( cells, options )
 
 	broadcastSetBulk( changes, {
 		explosionMeshThrottle = options.explosionMeshThrottle == true,
+		netPaced = options.netPaced == true,
+		cellsPerMessage = options.cellsPerMessage,
 	} )
 	SV.Dirty = true
 	return removed
@@ -874,113 +1046,9 @@ function SV.Use( ply, bx, by, bz )
 	return b.handlers.OnUse( ply, bx, by, bz, MC.GetBlockOrient( bx, by, bz ) ) == true
 end
 
-------------------------------------------------------------------- fill command
 local function trimArg( s )
 	return string.match( tostring( s or "" ), "^%s*(.-)%s*$" )
 end
-
-local function joinArgs( args, first, last )
-	if not args[first] then return nil end
-	local out = {}
-	for i = first, last or #args do out[#out + 1] = args[i] end
-	return table.concat( out, " " )
-end
-
-local function parseBlockStateTail( text )
-	return MC.ParseBlockSpec( trimArg( text ) )
-end
-
-local FILL_USAGE = "用法: /fill x1 y1 z1 x2 y2 z2 <id|name|air|minecraft:name[state]> [state]"
-
-local function runFill( ply, args )
-	if #args < 8 then chat( ply, L( ply, "server.fill_usage", FILL_USAGE ) ) return end
-	if not canEdit( ply ) then return end
-
-	local x1, y1, z1 = tonumber( args[2] ), tonumber( args[3] ), tonumber( args[4] )
-	local x2, y2, z2 = tonumber( args[5] ), tonumber( args[6] ), tonumber( args[7] )
-	local id, orient, blockArg, parseErr = parseBlockStateTail( joinArgs( args, 8 ) )
-	if not x1 or not y1 or not z1 or not x2 or not y2 or not z2 or parseErr == "block" then
-		chat( ply, L( ply, "server.fill_usage", FILL_USAGE ) )
-		return
-	end
-	if parseErr == "state" then
-		chat( ply, L( ply, "server.invalid_state", "方块状态不合法: {block}", { block = blockArg } ) )
-		return
-	end
-
-	x1, y1, z1 = math.floor( x1 ), math.floor( y1 ), math.floor( z1 )
-	x2, y2, z2 = math.floor( x2 ), math.floor( y2 ), math.floor( z2 )
-	local minx, maxx = math.min( x1, x2 ), math.max( x1, x2 )
-	local miny, maxy = math.min( y1, y2 ), math.max( y1, y2 )
-	local minz, maxz = math.min( z1, z2 ), math.max( z1, z2 )
-
-	if not worldBoundsOK( minx, miny, minz ) or not worldBoundsOK( maxx, maxy, maxz ) then
-		chat( ply, L( ply, "server.world_limit", "超出建造范围 (mc_world_limit)" ) )
-		return
-	end
-
-	local volume = ( maxx - minx + 1 ) * ( maxy - miny + 1 ) * ( maxz - minz + 1 )
-	local fillMax = C.FillMax and C.FillMax:GetInt() or 32768
-	if fillMax > 0 and volume > fillMax then
-		chat( ply, L( ply, "server.fill_too_large", "填充范围太大 ({volume} > mc_fill_max {max})", { volume = volume, max = fillMax } ) )
-		return
-	end
-
-	local add = 0
-	for z = minz, maxz do
-		for y = miny, maxy do
-			for x = minx, maxx do
-				local old = MC.GetBlock( x, y, z )
-				local oldOrient = MC.GetBlockOrient( x, y, z )
-				if old ~= id or ( id ~= 0 and oldOrient ~= orient ) then
-					if old == 0 and id ~= 0 and not wouldTrapPlayer( x, y, z, id, orient ) then add = add + 1 end
-				end
-			end
-		end
-	end
-
-	local maxBlocks = C.MaxBlocks:GetInt()
-	if id ~= 0 and maxBlocks > 0 and SV.BlockCount + add > maxBlocks then
-		chat( ply, L( ply, "server.fill_max_blocks", "会超过方块上限 (mc_max_blocks)" ) )
-		return
-	end
-
-	local changed = 0
-	for z = minz, maxz do
-		for y = miny, maxy do
-			for x = minx, maxx do
-				local old = MC.GetBlock( x, y, z )
-				local oldOrient = MC.GetBlockOrient( x, y, z )
-				if old ~= id or ( id ~= 0 and oldOrient ~= orient ) then
-					if id == 0 then
-						if apply( x, y, z, 0 ) then changed = changed + 1 end
-					elseif old == 0 and not wouldTrapPlayer( x, y, z, id, orient ) then
-						if apply( x, y, z, id, 1, orient ) then changed = changed + 1 end
-					elseif old ~= 0 then
-						if apply( x, y, z, id, 0, orient ) then changed = changed + 1 end
-					end
-				end
-			end
-		end
-	end
-
-	chat( ply, L( ply, "server.filled", "已填充 {count} 个方块", { count = changed } ) )
-end
-
-hook.Add( "PlayerSay", "mc_fill_command", function( ply, text )
-	local args = string.Explode( "%s+", string.Trim( text ), true )
-	if not args[1] then return end
-	local cmd = string.lower( args[1] )
-	if cmd == "/fill" or cmd == "!fill" or cmd == "fill" then
-		runFill( ply, args )
-		return ""
-	end
-end )
-
-concommand.Add( "mc_fill", function( ply, _, args )
-	table.insert( args, 1, "mc_fill" )
-	runFill( ply, args )
-end )
 
 ------------------------------------------------------------------- import tool
 local IMPORT_USAGE = "用法: mc_import <mc_import/文件.json> [replace|append]"
@@ -1474,6 +1542,7 @@ function SV.BeginSync( ply )
 	SV.PlayerLoadedChunks[ply] = {}
 	SV.PlayerFullSnapshot[ply] = nil
 	SV.SyncQueue[ply] = { keys = {}, i = 1, inflightBytes = 0, queuedKeys = {} }
+	SV.ClearReliableNet( ply )
 	if syncSnapshotEnabled() and SV.BeginSnapshotSync and SV.BeginSnapshotSync( ply ) then
 		return
 	end
@@ -1488,6 +1557,7 @@ local function restartPlayerFullSync( ply )
 	SV.PlayerLoadedChunks[ply] = {}
 	SV.PlayerFullSnapshot[ply] = nil
 	SV.SyncQueue[ply] = { keys = {}, i = 1, inflightBytes = 0, queuedKeys = {} }
+	SV.ClearReliableNet( ply )
 	if syncSnapshotEnabled() and SV.BeginSnapshotSync and SV.BeginSnapshotSync( ply ) then
 		return
 	end
@@ -1781,6 +1851,7 @@ local function sendSnapshotPart( ply, token, part, data, offset, len )
 		net.WriteUInt( len, 16 )
 		net.WriteData( string.sub( data, offset, offset + len - 1 ), len )
 	net.Send( ply )
+	return true
 end
 
 function SV.BeginSnapshotSync( ply )
@@ -1799,7 +1870,7 @@ function SV.BeginSnapshotSync( ply )
 		return false
 	end
 
-	local partBytes = math.Clamp( syncSnapshotPartBytes(), 4096, 60000 )
+	local partBytes = math.Clamp( syncSnapshotPartBytes(), 4096, sharedReliableBudget() )
 	local parts = math.ceil( #compressed / partBytes )
 	if parts < 1 then
 		sendSnapshotError( ply, "snapshot_empty" )
@@ -1811,12 +1882,16 @@ function SV.BeginSnapshotSync( ply )
 	SV.PlayerLoadedChunks[ply] = {}
 	SV.PlayerFullSnapshot[ply] = true
 	SV.SnapshotQueue[ply] = nil
+	SV.ClearReliableNet( ply )
 
 	sendSnapshotBegin( ply, token, nil, parts, #compressed, #chunks, SV.BlockCount )
 	for part = 1, parts do
-		local offset = ( part - 1 ) * partBytes + 1
+		local partIndex = part
+		local offset = ( partIndex - 1 ) * partBytes + 1
 		local len = math.min( partBytes, #compressed - offset + 1 )
-		sendSnapshotPart( ply, token, part, compressed, offset, len )
+		SV.EnqueueReliableNet( ply, len + NET_MESSAGE_OVERHEAD_BYTES, function( target )
+			return sendSnapshotPart( target, token, partIndex, compressed, offset, len )
+		end )
 	end
 	return true
 end

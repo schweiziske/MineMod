@@ -892,10 +892,10 @@ function ENT:RebuildPhysics( bounds )
 			local _, ok, partSize = spawnPhysicsSubchunkPages( self, group, subchunks, byKey )
 			if not ok then
 				failed = failed + 1
-				MsgN( "[MC] !!! collision subchunk build FAILED for chunk " .. tostring( self.ChunkKey ) ..
-					"  subchunk=" .. tostring( group.key ) ..
-					" convexes=" .. #group.convexes ..
-					" part=" .. tostring( partSize ) )
+				-- MsgN( "[MC] !!! collision subchunk build FAILED for chunk " .. tostring( self.ChunkKey ) ..
+				-- 	"  subchunk=" .. tostring( group.key ) ..
+				-- 	" convexes=" .. #group.convexes ..
+				-- 	" part=" .. tostring( partSize ) )
 			end
 		end
 
@@ -903,11 +903,11 @@ function ENT:RebuildPhysics( bounds )
 		self.PhysicsSubchunksByKey = byKey
 		rememberClientPhysStats( self, "subchunk_update", bounds, #boxes, #customConvexes, totalConvexes, subchunks )
 		if failed > 0 then
-			MsgN( "[MC] collision subchunk update for chunk " .. tostring( self.ChunkKey ) ..
-				"  convexes=" .. totalConvexes ..
-				" subchunks=" .. #groups ..
-				" built=" .. countValidSubchunkPhysics( subchunks ) ..
-				" failed=" .. failed )
+			-- MsgN( "[MC] collision subchunk update for chunk " .. tostring( self.ChunkKey ) ..
+			-- 	"  convexes=" .. totalConvexes ..
+			-- 	" subchunks=" .. #groups ..
+			-- 	" built=" .. countValidSubchunkPhysics( subchunks ) ..
+			-- 	" failed=" .. failed )
 		end
 		return
 	end
@@ -924,21 +924,21 @@ function ENT:RebuildPhysics( bounds )
 			local _, ok, partSize = spawnPhysicsSubchunkPages( self, group, subchunks, byKey )
 			if not ok then
 				failed = failed + 1
-				MsgN( "[MC] !!! collision subchunk build FAILED for chunk " .. tostring( self.ChunkKey ) ..
-					"  subchunk=" .. tostring( group.key ) ..
-					" convexes=" .. #group.convexes ..
-					" part=" .. tostring( partSize ) )
+				-- MsgN( "[MC] !!! collision subchunk build FAILED for chunk " .. tostring( self.ChunkKey ) ..
+				-- 	"  subchunk=" .. tostring( group.key ) ..
+				-- 	" convexes=" .. #group.convexes ..
+				-- 	" part=" .. tostring( partSize ) )
 			end
 		end
 
 		self.PhysicsSubchunks = subchunks
 		self.PhysicsSubchunksByKey = byKey
 		rememberClientPhysStats( self, "subchunks", bounds, #boxes, #customConvexes, totalConvexes, subchunks )
-		MsgN( "[MC] collision subchunks for chunk " .. tostring( self.ChunkKey ) ..
-			"  convexes=" .. totalConvexes ..
-			" subchunks=" .. #groups ..
-			" built=" .. countValidSubchunkPhysics( subchunks ) ..
-			" failed=" .. failed )
+	--	MsgN( "[MC] collision subchunks for chunk " .. tostring( self.ChunkKey ) ..
+	--		"  convexes=" .. totalConvexes ..
+	--		" subchunks=" .. #groups ..
+	--		" built=" .. countValidSubchunkPhysics( subchunks ) ..
+	--		" failed=" .. failed )
 		return
 	end
 

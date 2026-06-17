@@ -95,7 +95,10 @@ local function addCellPhysBounds( boundsByKey, key, bounds )
 	list[#list + 1] = bounds
 end
 
-local function collectCellPhysBounds( boundsByKey, bx, by, bz )
+-- mirror the server: an edited cell (plus shape-dependent face neighbours) dirties
+-- the 8x8x8 collision subchunk(s) it lives in; whole chunks only rebuild fully on load.
+function MC.MarkCellPhysNeighbours( bx, by, bz, priority, bulk )
+	local boundsByKey = {}
 	local function mark( x, y, z )
 		local key, bounds = MC.CellCollisionSubchunkBounds( x, y, z )
 		addCellPhysBounds( boundsByKey, key, bounds )
@@ -106,29 +109,12 @@ local function collectCellPhysBounds( boundsByKey, bx, by, bz )
 	if cellCollisionDependsOnNeighbours( bx - 1, by, bz ) then mark( bx - 1, by, bz ) end
 	if cellCollisionDependsOnNeighbours( bx, by + 1, bz ) then mark( bx, by + 1, bz ) end
 	if cellCollisionDependsOnNeighbours( bx, by - 1, bz ) then mark( bx, by - 1, bz ) end
-end
-
--- mirror the server: an edited cell (plus shape-dependent face neighbours) dirties
--- the 8x8x8 collision subchunk(s) it lives in; whole chunks only rebuild fully on load.
-function MC.MarkCellPhysNeighbours( bx, by, bz, priority, bulk )
-	local boundsByKey = {}
-	collectCellPhysBounds( boundsByKey, bx, by, bz )
 
 	for key, boundsList in pairs( boundsByKey ) do
 		if bulk and MC.MarkChunkPhysDirtyBulk then
 			MC.MarkChunkPhysDirtyBulk( key )
 		else
 			MC.MarkChunkPhysDirty( key, priority, boundsList )
-		end
-	end
-end
-
-local function flushCellPhysBounds( boundsByKey, bulk )
-	for key, boundsList in pairs( boundsByKey or {} ) do
-		if bulk and MC.MarkChunkPhysDirtyBulk then
-			MC.MarkChunkPhysDirtyBulk( key )
-		else
-			MC.MarkChunkPhysDirty( key, false, boundsList )
 		end
 	end
 end
@@ -152,19 +138,6 @@ local function applyNetCell( bx, by, bz, id, orient, meshRateLimited )
 		MC.MarkDirty( bx, by, bz, meshRateLimited )
 		MC.MarkCellPhysNeighbours( bx, by, bz, false, meshRateLimited == true )
 	end
-end
-
-local function applyNetCellsBulk( cells, meshRateLimited )
-	local boundsByKey = {}
-	for _, cell in ipairs( cells or {} ) do
-		MC.ConfirmPrediction( cell.bx, cell.by, cell.bz, cell.id, cell.orient )
-		local _, _, _, changed = MC.SetBlockRaw( cell.bx, cell.by, cell.bz, cell.id, cell.orient )
-		if changed then
-			MC.MarkDirty( cell.bx, cell.by, cell.bz, meshRateLimited )
-			collectCellPhysBounds( boundsByKey, cell.bx, cell.by, cell.bz )
-		end
-	end
-	flushCellPhysBounds( boundsByKey, meshRateLimited == true )
 end
 
 MC.PendingPredictions = MC.PendingPredictions or {}
@@ -308,9 +281,7 @@ local function reviveChunkEnt( c )
 	if e.ChunkKey and e.ChunkKey ~= c.key and MC.ChunkEnts[e.ChunkKey] == e then
 		MC.ChunkEnts[e.ChunkKey] = nil
 	end
-	if MC.ClientCollisionDebug and MC.ClientCollisionDebug:GetBool() then
-		print( e )
-	end
+	
 	e:SetNoDraw( false )
 	if e:GetModel() ~= "models/hunter/blocks/cube025x025x025.mdl" then
 		e:SetModel( "models/hunter/blocks/cube025x025x025.mdl" )
@@ -1038,7 +1009,7 @@ net.Receive( "mc_set", function()
 	applyNetCell( bx, by, bz, id, orient )
 end )
 
-local function receiveSetBulk()
+net.Receive( "mc_set_bulk", function()
 	local count = net.ReadUInt( Net.COUNT_BITS )
 	local changes = {}
 	for _ = 1, count do
@@ -1055,18 +1026,13 @@ local function receiveSetBulk()
 	end
 
 	local meshRateLimited = net.ReadBool()
-	local applied = {}
 	for _, cell in ipairs( changes ) do
 		queueSnapshotDelta( cell.bx, cell.by, cell.bz, cell.id, cell.orient )
 		if not queueHttpDelta( cell.bx, cell.by, cell.bz, cell.id, cell.orient ) then
-			applied[#applied + 1] = cell
+			applyNetCell( cell.bx, cell.by, cell.bz, cell.id, cell.orient, meshRateLimited )
 		end
 	end
-	applyNetCellsBulk( applied, meshRateLimited )
-end
-
-net.Receive( "mc_set_bulk", receiveSetBulk )
-net.Receive( "mc_set_bulk_fast", receiveSetBulk )
+end )
 
 net.Receive( "mc_unload_chunk", function()
 	local cx = net.ReadInt( Net.COORD_BITS )

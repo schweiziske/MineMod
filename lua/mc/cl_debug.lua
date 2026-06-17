@@ -7,6 +7,7 @@ MC = MC or {}
 surface.CreateFont( "mc_debug", { font = "Roboto", size = 18, weight = 500 } )
 
 MC.DebugHUD = MC.DebugHUD or false
+MC.mcDebugF3Down = MC.mcDebugF3Down or false
 MC.ServerCollisionDebug = MC.ServerCollisionDebug or CreateClientConVar( "mc_server_collision_debug", "0", true, false,
 	"Draw server-authoritative MC collision interest bounds" )
 MC.ServerCollisionDebugBounds = MC.ServerCollisionDebugBounds or {}
@@ -30,7 +31,15 @@ timer.Simple( 1, requestServerCollisionDebug )
 
 hook.Add( "PlayerButtonDown", "mc_debug_toggle", function( ply, btn )
 	if btn == KEY_F3 and ply == LocalPlayer() then
+		if MC.mcDebugF3Down then return end
+		MC.mcDebugF3Down = true
 		MC.DebugHUD = not MC.DebugHUD
+	end
+end )
+
+hook.Add( "PlayerButtonUp", "mc_debug_toggle_release", function( ply, btn )
+	if btn == KEY_F3 and ply == LocalPlayer() then
+		MC.mcDebugF3Down = false
 	end
 end )
 

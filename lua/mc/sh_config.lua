@@ -64,6 +64,7 @@ if SERVER then
 		"mc_set",
 		"mc_set_bulk",
 		"mc_set_bulk_fast",
+		"mc_reliable_ack",
 		"mc_fx",
 		"mc_clear",
 		"mc_collision_debug_req",
@@ -133,6 +134,9 @@ MC.Config.SyncFrameMS = 4
 MC.Config.SyncInFlightLimit = 65536
 MC.Config.SyncSnapshot = 1
 MC.Config.SyncSnapshotPartBytes = 32768
+MC.Config.FillBatchCells = 4096
+MC.Config.FillBatchChunks = 16
+MC.Config.FillBatchInterval = 0.05
 MC.Config.ChunkHTTPEnabled = 0
 MC.Config.ChunkHTTPBaseURL = ""
 MC.Config.ClientCollisionChunkSpan = 1
@@ -164,7 +168,10 @@ if SERVER then
 	MC.Config.WorldLimit  = GetConVar( "mc_world_limit" ) or CreateConVar( "mc_world_limit", "1024", F, "Max |block coordinate| from origin on each axis" )
 	MC.Config.MaxBlocks   = GetConVar( "mc_max_blocks" ) or CreateConVar( "mc_max_blocks", "0", F, "Global cap on total placed blocks; 0 = unlimited" )
 	MC.Config.Reach       = GetConVar( "mc_reach" ) or CreateConVar( "mc_reach", tostring( MC.Config.DefaultReach ), F, "Max distance (units) a player may place/break from; 0 disables" )
-	MC.Config.FillMax     = GetConVar( "mc_fill_max" ) or CreateConVar( "mc_fill_max", "32768", F, "Max blocks one /fill may modify; 0 = unlimited" )
+	MC.Config.FillMax     = GetConVar( "mc_fill_max" ) or CreateConVar( "mc_fill_max", "100000", F, "Max blocks one /fill may modify; 0 = unlimited" )
+	MC.Config.FillBatchCells = GetConVar( "mc_fill_batch_cells" ) or CreateConVar( "mc_fill_batch_cells", tostring( MC.Config.FillBatchCells ), F, "Max /fill cells applied per server batch" )
+	MC.Config.FillBatchChunks = GetConVar( "mc_fill_batch_chunks" ) or CreateConVar( "mc_fill_batch_chunks", tostring( MC.Config.FillBatchChunks ), F, "Max chunks touched per /fill server batch" )
+	MC.Config.FillBatchInterval = GetConVar( "mc_fill_batch_interval" ) or CreateConVar( "mc_fill_batch_interval", tostring( MC.Config.FillBatchInterval ), F, "Seconds between /fill server batches" )
 	MC.Config.ImportMax   = GetConVar( "mc_import_max" ) or CreateConVar( "mc_import_max", "0", F, "Max blocks one mc_import may load; 0 = unlimited" )
 	MC.Config.Autosave    = GetConVar( "mc_autosave" ) or CreateConVar( "mc_autosave", "0", F, "Seconds between autosaves (0 disables)" )
 	MC.Config.SavePublic  = GetConVar( "mc_save_public" ) or CreateConVar( "mc_save_public", "0", F, "Allow non-admin players to list/load/save MC saves; delete remains admin-only" )
