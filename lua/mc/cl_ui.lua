@@ -36,24 +36,27 @@ function MC.DrawFittedText( text, font, fallbackFonts, x, y, color, ax, ay, maxw
 	draw.SimpleText( text, useFont, x, y, color, ax, ay )
 end
 
-function MC.DrawTile( tile, x, y, w, h )
+function MC.DrawTile( tile, x, y, w, h, mat )
 	local u0, v0, u1, v1 = MC.TileUV( tile )
-	surface.SetMaterial( MC.Material )
+	surface.SetMaterial( mat or MC.Material )
 	surface.SetDrawColor( 255, 255, 255, 255 )
 	surface.DrawTexturedRectUV( x, y, w, h, u0, v0, u1, v1 )
 end
 
-function MC.DrawBlockIcon( id, x, y, w, h )
-	if not MC.Blocks[id] then return end
-	MC.DrawTile( MC.BlockIconTile( id ), x, y, w, h )
+-- Semi-transparent blocks (stained/tinted glass, ice, slime, honey) have low
+-- texel alpha that the cutout atlas material's alpha test discards, so their icons
+-- would render blank. Route those to the opaque atlas variant instead.
+local function iconMaterialFor( id )
+	if MC.MaterialIconOpaque and MC.IsTranslucentBlock and MC.IsTranslucentBlock( id ) then
+		return MC.MaterialIconOpaque
+	end
+	return MC.Material
 end
 
-local ICON_UV_FLAGS = {
-	{ 0, 0 },
-	{ 1, 0 },
-	{ 1, 1 },
-	{ 0, 1 },
-}
+function MC.DrawBlockIcon( id, x, y, w, h )
+	if not MC.Blocks[id] then return end
+	MC.DrawTile( MC.BlockIconTile( id ), x, y, w, h, iconMaterialFor( id ) )
+end
 
 local function iconRotatedUV( uf, vf, rot, flipU, flipV )
 	rot = ( rot or 0 ) % 4
@@ -65,26 +68,73 @@ local function iconRotatedUV( uf, vf, rot, flipU, flipV )
 	return uf, vf
 end
 
-local function iconUVPoint( tile, flags, rot, flipU, flipV )
+-- A single textured, flat-shaded quad. uf/vf are face-space texture coords in
+-- 0..1, lerped into the tile's atlas rect after the per-face rotate/flip; this
+-- lets partial boxes (slabs, stairs, fence posts, ...) sample only the slice of
+-- the texture they actually cover, just like the in-world mesh.
+local function drawIconQuad( tile, verts, shade, rot, flipU, flipV, mat )
 	local u0, v0, u1, v1 = MC.TileUV( tile )
-	local uf, vf = iconRotatedUV( flags[1], flags[2], rot, flipU, flipV )
-	return uf == 1 and u1 or u0, vf == 1 and v1 or v0
-end
-
-local function iconVertex( point, tile, flags, rot, flipU, flipV )
-	local u, v = iconUVPoint( tile, flags, rot, flipU, flipV )
-	return { x = point.x, y = point.y, u = u, v = v }
-end
-
-local function drawIconFace( tile, points, shade, rot, flipU, flipV )
-	surface.SetMaterial( MC.Material )
+	local poly = {}
+	for i = 1, 4 do
+		local c = verts[i]
+		local ru, rv = iconRotatedUV( c.uf, c.vf, rot, flipU, flipV )
+		poly[i] = { x = c.px, y = c.py, u = u0 + ru * ( u1 - u0 ), v = v0 + rv * ( v1 - v0 ) }
+	end
+	surface.SetMaterial( mat or MC.Material )
 	surface.SetDrawColor( shade, shade, shade, 255 )
-	surface.DrawPoly( {
-		iconVertex( points[1], tile, ICON_UV_FLAGS[1], rot, flipU, flipV ),
-		iconVertex( points[2], tile, ICON_UV_FLAGS[2], rot, flipU, flipV ),
-		iconVertex( points[3], tile, ICON_UV_FLAGS[3], rot, flipU, flipV ),
-		iconVertex( points[4], tile, ICON_UV_FLAGS[4], rot, flipU, flipV ),
+	surface.DrawPoly( poly )
+end
+
+local ICON_FACE_SHADE = { top = 255, xp = 215, yp = 170 }
+
+-- Project one block-space box [x0,y0,z0,x1,y1,z1] into the icon and append its
+-- three viewer-facing faces (+Z top, +X, +Y) to pool, tagged with a painter's
+-- depth so multi-box shapes (stairs, fences) composite back-to-front.
+local function appendIconBoxFaces( pool, box, faces, project )
+	local x0, y0, z0 = box[1], box[2], box[3]
+	local x1, y1, z1 = box[4], box[5], box[6]
+
+	local function addFace( info, shade, corners )
+		local verts, depth = {}, 0
+		for i = 1, 4 do
+			local c = corners[i]
+			local px, py = project( c[1], c[2], c[3] )
+			verts[i] = { px = px, py = py, uf = c[4], vf = c[5] }
+			depth = depth + c[1] + c[2] + c[3]
+		end
+		pool[#pool + 1] = {
+			tile = info.tile, shade = shade, depth = depth * 0.25,
+			rot = info.rot, flipU = info.flipU, flipV = info.flipV, verts = verts,
+		}
+	end
+
+	addFace( faces.top, ICON_FACE_SHADE.top, {
+		{ x0, y0, z1, x0, y0 }, { x1, y0, z1, x1, y0 },
+		{ x1, y1, z1, x1, y1 }, { x0, y1, z1, x0, y1 },
 	} )
+	addFace( faces.xp, ICON_FACE_SHADE.xp, {
+		{ x1, y1, z1, 1 - y1, 1 - z1 }, { x1, y0, z1, 1 - y0, 1 - z1 },
+		{ x1, y0, z0, 1 - y0, 1 - z0 }, { x1, y1, z0, 1 - y1, 1 - z0 },
+	} )
+	addFace( faces.yp, ICON_FACE_SHADE.yp, {
+		{ x0, y1, z1, x0, 1 - z1 }, { x1, y1, z1, x1, 1 - z1 },
+		{ x1, y1, z0, x1, 1 - z0 }, { x0, y1, z0, x0, 1 - z0 },
+	} )
+end
+
+-- Icon-only geometry for blocks whose collision boxes collapse to a full cube
+-- but should still read as their shape in the palette (walls show a centre post,
+-- like the Minecraft wall item) rather than as an indistinct full block.
+local ICON_SHAPE_BOXES = {
+	wall = { { 0.25, 0.25, 0, 0.75, 0.75, 1 } },
+}
+
+local function iconBoxes( id, orient )
+	local b = MC.Blocks[id]
+	if b and b.connection and ICON_SHAPE_BOXES[b.connection] then
+		return ICON_SHAPE_BOXES[b.connection]
+	end
+	return MC.BlockBoxes and MC.BlockBoxes( id, orient ) or nil
 end
 
 function MC.DrawMinecraftBlockIcon( id, x, y, w, h )
@@ -99,16 +149,36 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h )
 		end
 	end
 
+	-- Blocks with a real Minecraft item sprite (doors, torches, flowers, rails,
+	-- signs, panes, ...) draw that flat icon exactly like the inventory does;
+	-- cross-shaped plants without a sprite stay flat too. Everything else is
+	-- drawn as a 3D model from its actual boxes so slabs read as slabs, stairs
+	-- as stairs and fences as fence posts instead of a flat full-block square.
+	if b.icon or b.shape == "cross" then
+		MC.DrawBlockIcon( id, x, y, w, h )
+		return
+	end
+
+	-- Solid cubes and blocks with real slab/stairs/model/connection geometry get
+	-- the 3D treatment. Shapeless non-solid blocks (banners, water, air, ...) only
+	-- carry placeholder textures, so leave those on the flat fallback.
+	local has3DShape = b.solid ~= false or b.shape ~= nil or b.connection ~= nil
 	local orient = MC.DefaultOrient and MC.DefaultOrient( id ) or 0
-	if MC.BlockIsFullCube and not MC.BlockIsFullCube( id, orient ) then
+	local boxes = has3DShape and iconBoxes( id, orient ) or nil
+	if not boxes or #boxes == 0 then
 		MC.DrawBlockIcon( id, x, y, w, h )
 		return
 	end
 
 	local face = MC.Face or { TOP = 1, XP = 3, YP = 5 }
 	local topTile, topRot, topFlipU, topFlipV = MC.BlockFace( id, face.TOP, orient )
-	local rightTile, rightRot, rightFlipU, rightFlipV = MC.BlockFace( id, face.XP, orient )
-	local leftTile, leftRot, leftFlipU, leftFlipV = MC.BlockFace( id, face.YP, orient )
+	local xpTile, xpRot, xpFlipU, xpFlipV = MC.BlockFace( id, face.XP, orient )
+	local ypTile, ypRot, ypFlipU, ypFlipV = MC.BlockFace( id, face.YP, orient )
+	local faces = {
+		top = { tile = topTile, rot = topRot, flipU = topFlipU, flipV = topFlipV },
+		xp = { tile = xpTile, rot = xpRot, flipU = xpFlipU, flipV = xpFlipV },
+		yp = { tile = ypTile, rot = ypRot, flipU = ypFlipU, flipV = ypFlipV },
+	}
 
 	local size = math.min( w, h )
 	local cx = x + w * 0.5
@@ -116,18 +186,19 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h )
 	local halfW = size * 0.38
 	local halfH = size * 0.2
 	local cubeH = size * 0.43
+	local function project( px, py, pz )
+		return cx + ( px - py ) * halfW, topY + ( px + py ) * halfH + ( 1 - pz ) * cubeH
+	end
 
-	local pTop = { x = cx, y = topY }
-	local pRight = { x = cx + halfW, y = topY + halfH }
-	local pBottom = { x = cx, y = topY + halfH * 2 }
-	local pLeft = { x = cx - halfW, y = topY + halfH }
-	local pRightBottom = { x = pRight.x, y = pRight.y + cubeH }
-	local pBottomDown = { x = pBottom.x, y = pBottom.y + cubeH }
-	local pLeftBottom = { x = pLeft.x, y = pLeft.y + cubeH }
-
-	drawIconFace( leftTile, { pLeft, pBottom, pBottomDown, pLeftBottom }, 170, leftRot, leftFlipU, leftFlipV )
-	drawIconFace( rightTile, { pBottom, pRight, pRightBottom, pBottomDown }, 215, rightRot, rightFlipU, rightFlipV )
-	drawIconFace( topTile, { pTop, pRight, pBottom, pLeft }, 255, topRot, topFlipU, topFlipV )
+	local pool = {}
+	for _, box in ipairs( boxes ) do
+		appendIconBoxFaces( pool, box, faces, project )
+	end
+	table.sort( pool, function( a, c ) return a.depth < c.depth end )
+	local mat = iconMaterialFor( id )
+	for _, f in ipairs( pool ) do
+		drawIconQuad( f.tile, f.verts, f.shade, f.rot, f.flipU, f.flipV, mat )
+	end
 end
 
 MC.CreativeCategories = MC.CreativeCategories or {

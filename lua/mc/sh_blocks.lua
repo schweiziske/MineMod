@@ -432,6 +432,13 @@ local HorizontalCounterClockwise = {
 	[MC.Direction.EAST] = MC.Direction.NORTH,
 }
 
+local HorizontalClockwise = {
+    [MC.Direction.NORTH] = MC.Direction.EAST,
+    [MC.Direction.EAST] = MC.Direction.SOUTH,
+    [MC.Direction.SOUTH] = MC.Direction.WEST,
+    [MC.Direction.WEST] = MC.Direction.NORTH,
+}
+
 local function horizontalPartBase( facing )
 	return HorizontalPartBaseByFacing[facing] or HorizontalPartBaseByFacing[MC.Direction.NORTH]
 end
@@ -458,7 +465,7 @@ end
 
 function MC.DoorRenderFacing( orient )
 	local facing = MC.DoorOrientFacing( orient )
-	if MC.DoorOrientOpen( orient ) then return HorizontalCounterClockwise[facing] or facing end
+	if MC.DoorOrientOpen( orient ) then return HorizontalClockwise[facing] or facing end
 	return facing
 end
 
@@ -956,7 +963,7 @@ function MC.OrientForPlacement( ply, tr, id )
 		return MC.MakeStairOrient( facing, placementHalfFromTrace( tr ) )
 	end
 	if b and b.orient == "door" then
-		return MC.MakeDoorOrient( oppositeDirection( horizontalLookDirectionFromForward( forward ) ), "lower" )
+		return MC.MakeDoorOrient( horizontalLookDirectionFromForward( forward ) , "lower" )
 	end
 	if b and b.orient == "bed" then
 		return MC.MakeBedOrient( horizontalLookDirectionFromForward( forward ), "foot" )
