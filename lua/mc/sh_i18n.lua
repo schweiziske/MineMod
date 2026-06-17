@@ -5,7 +5,14 @@
 MC = MC or {}
 
 local DEFAULT_LANGUAGE = "zh_cn"
+local DEFAULT_LANGUAGE_SETTING = "auto"
 local SUPPORTED_LANGUAGES = { zh_cn = true, en_us = true }
+local LANGUAGE_OPTION_ORDER = { "auto", "zh_cn", "en_us" }
+local LANGUAGE_OPTION_LABELS = {
+	auto = "auto (game language)",
+	zh_cn = "zh_cn (Chinese)",
+	en_us = "en_us (English)",
+}
 local LANGUAGE_ALIASES = {
 	zh = "zh_cn",
 	cn = "zh_cn",
@@ -17,6 +24,10 @@ local LANGUAGE_ALIASES = {
 	us = "en_us",
 	en_us = "en_us",
 	["en-us"] = "en_us",
+	english = "en_us",
+	chinese = "zh_cn",
+	schinese = "zh_cn",
+	["simplified_chinese"] = "zh_cn",
 }
 
 local function trim( value )
@@ -25,13 +36,53 @@ local function trim( value )
 	return string.match( value, "^%s*(.-)%s*$" )
 end
 
-local function normalizeLanguage( value )
+local function canonicalLanguageValue( value )
 	value = string.lower( trim( value ) )
-	value = string.gsub( value, "-", "_" )
+	return string.gsub( value, "-", "_" )
+end
+
+local function normalizeLanguage( value )
+	value = canonicalLanguageValue( value )
 	return LANGUAGE_ALIASES[value] or ( SUPPORTED_LANGUAGES[value] and value ) or DEFAULT_LANGUAGE
 end
 
+local function parseLanguageSetting( value )
+	value = canonicalLanguageValue( value )
+	if value == "" or value == "auto" or value == "default" or value == "game" or value == "gmod_language" then
+		return DEFAULT_LANGUAGE_SETTING, true
+	end
+	local lang = LANGUAGE_ALIASES[value] or ( SUPPORTED_LANGUAGES[value] and value )
+	if lang then return lang, true end
+	return DEFAULT_LANGUAGE_SETTING, false
+end
+
+local function normalizeLanguageSetting( value )
+	local setting = parseLanguageSetting( value )
+	return setting
+end
+
+local function clientGameLanguage()
+	if CLIENT and GetConVar then
+		local cvar = GetConVar( "gmod_language" )
+		if cvar and cvar.GetString then
+			return cvar:GetString()
+		end
+	end
+	return DEFAULT_LANGUAGE
+end
+
+local function resolveLanguage( setting, gameLanguage )
+	setting = normalizeLanguageSetting( setting )
+	if setting == DEFAULT_LANGUAGE_SETTING then
+		return normalizeLanguage( gameLanguage or clientGameLanguage() )
+	end
+	return setting
+end
+
 MC.NormalizeLanguage = normalizeLanguage
+function MC.ResolveLanguage( setting, gameLanguage )
+	return resolveLanguage( setting, gameLanguage )
+end
 MC.LanguageCallbacks = MC.LanguageCallbacks or {}
 
 MC.LanguageData = MC.LanguageData or {
@@ -392,25 +443,41 @@ local function interpolate( text, vars )
 	end ) )
 end
 
-local function cvarLanguage()
+function MC.LanguageOptions()
+	local options = {}
+	for _, value in ipairs( LANGUAGE_OPTION_ORDER ) do
+		options[#options + 1] = {
+			value = value,
+			label = LANGUAGE_OPTION_LABELS[value] or value,
+		}
+	end
+	return options
+end
+
+local function cvarLanguageSetting()
 	if CLIENT then
 		if not MC.LanguageConVar and CreateClientConVar then
-			MC.LanguageConVar = CreateClientConVar( "mc_language", DEFAULT_LANGUAGE, true, true, "MC UI language: zh_cn or en_us" )
+			MC.LanguageConVar = CreateClientConVar( "mc_language", DEFAULT_LANGUAGE_SETTING, true, true, "MC UI language: auto, zh_cn, or en_us" )
 		end
 		if MC.LanguageConVar and MC.LanguageConVar.GetString then
-			return normalizeLanguage( MC.LanguageConVar:GetString() )
+			return normalizeLanguageSetting( MC.LanguageConVar:GetString() )
 		end
 	end
-	return normalizeLanguage( MC.CurrentLanguage or DEFAULT_LANGUAGE )
+	return normalizeLanguageSetting( MC.CurrentLanguage or DEFAULT_LANGUAGE_SETTING )
+end
+
+function MC.LanguageSetting()
+	return cvarLanguageSetting()
 end
 
 function MC.Language()
-	return cvarLanguage()
+	return resolveLanguage( cvarLanguageSetting(), clientGameLanguage() )
 end
 
 function MC.LanguageForPlayer( ply )
 	if SERVER and IsValid( ply ) and ply.GetInfo then
-		return normalizeLanguage( ply:GetInfo( "mc_language" ) )
+		local setting = normalizeLanguageSetting( ply:GetInfo( "mc_language" ) )
+		return resolveLanguage( setting, ply:GetInfo( "gmod_language" ) )
 	end
 	return MC.Language()
 end
@@ -435,7 +502,7 @@ function MC.TFor( ply, key, fallback, vars )
 end
 
 function MC.SetLanguage( lang )
-	lang = normalizeLanguage( lang )
+	lang = normalizeLanguageSetting( lang )
 	if CLIENT and RunConsoleCommand then
 		RunConsoleCommand( "mc_language", lang )
 	else
@@ -494,13 +561,38 @@ function MC.LocalizeToolLanguage()
 end
 
 if CLIENT then
-	cvarLanguage()
+	cvarLanguageSetting()
+
+	local function printLanguageOptions()
+		local lines = {
+			string.format( "[MC] mc_language = %s (current %s)", MC.LanguageSetting(), MC.Language() ),
+			"[MC] Available languages:",
+		}
+		for _, option in ipairs( MC.LanguageOptions() ) do
+			lines[#lines + 1] = string.format( "[MC]   %s - %s", option.value, option.label )
+		end
+		for _, line in ipairs( lines ) do
+			if MsgN then MsgN( line ) else print( line ) end
+		end
+	end
+
+	local function autocompleteLanguageCommand( commandName, stringArgs )
+		local needle = string.lower( trim( stringArgs or "" ) )
+		local suggestions = {}
+		for _, option in ipairs( MC.LanguageOptions() ) do
+			local haystack = string.lower( option.value .. " " .. option.label )
+			if needle == "" or string.find( haystack, needle, 1, true ) then
+				suggestions[#suggestions + 1] = commandName .. " " .. option.value
+			end
+		end
+		return suggestions
+	end
 
 	if cvars and cvars.AddChangeCallback then
 		cvars.RemoveChangeCallback( "mc_language", "mc_i18n_refresh" )
 		cvars.AddChangeCallback( "mc_language", function( _, _, newValue )
-			local normalized = normalizeLanguage( newValue )
-			if normalized ~= newValue and RunConsoleCommand then
+			local normalized = normalizeLanguageSetting( newValue )
+			if normalized ~= trim( newValue ) and RunConsoleCommand then
 				RunConsoleCommand( "mc_language", normalized )
 				return
 			end
@@ -513,8 +605,19 @@ if CLIENT then
 			MC.SetLanguage( MC.Language() == "en_us" and "zh_cn" or "en_us" )
 		end )
 		concommand.Add( "mc_lang", function( _, _, args )
-			MC.SetLanguage( args and args[1] or MC.Language() )
-		end )
+			local requested = args and args[1] or ""
+			local parsed, ok = parseLanguageSetting( requested )
+			if trim( requested ) == "" or requested == "?" or requested == "help" then
+				printLanguageOptions()
+				return
+			end
+			if not ok then
+				MC.SetLanguage( parsed )
+				printLanguageOptions()
+				return
+			end
+			MC.SetLanguage( parsed )
+		end, autocompleteLanguageCommand, "Set MC UI language: auto, zh_cn, or en_us" )
 	end
 
 	if timer and timer.Simple then
