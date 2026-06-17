@@ -15,6 +15,7 @@ ENT.DisableDuplicator = true
 
 local PHYSICS_CONVEXES_PER_ENTITY = SERVER and 64 or 256
 local PHYSICS_MODEL = "models/hunter/blocks/cube025x025x025.mdl"
+local PHYSICS_SUBCHUNK_SIZE = 8
 
 local function ensurePhysicsModel( ent )
 	if not IsValid( ent ) then return end
@@ -248,48 +249,57 @@ local function greedyBoxes( chunk, bounds )
 	local visited = {}
 	local boxes = {}
 
-	for z = 0, CH - 1 do
-		for y = 0, CS - 1 do
-			for x = 0, CS - 1 do
-				local i0 = idx( x, y, z )
-				if solid[i0] and not visited[i0] then
-					local x1 = x + 1
-					while x1 < CS do
-						local i = idx( x1, y, z )
-						if not solid[i] or visited[i] then break end
-						x1 = x1 + 1
-					end
-					local y1 = y + 1
-					while y1 < CS do
-						local ok = true
-						for xx = x, x1 - 1 do
-							local i = idx( xx, y1, z )
-							if not solid[i] or visited[i] then ok = false break end
-						end
-						if not ok then break end
-						y1 = y1 + 1
-					end
-					local z1 = z + 1
-					while z1 < CH do
-						local ok = true
-						for yy = y, y1 - 1 do
-							for xx = x, x1 - 1 do
-								local i = idx( xx, yy, z1 )
-								if not solid[i] or visited[i] then ok = false break end
+	for sz = 0, CH - 1, PHYSICS_SUBCHUNK_SIZE do
+		local zLimit = math.min( CH, sz + PHYSICS_SUBCHUNK_SIZE )
+		for sy = 0, CS - 1, PHYSICS_SUBCHUNK_SIZE do
+			local yLimit = math.min( CS, sy + PHYSICS_SUBCHUNK_SIZE )
+			for sx = 0, CS - 1, PHYSICS_SUBCHUNK_SIZE do
+				local xLimit = math.min( CS, sx + PHYSICS_SUBCHUNK_SIZE )
+				for z = sz, zLimit - 1 do
+					for y = sy, yLimit - 1 do
+						for x = sx, xLimit - 1 do
+							local i0 = idx( x, y, z )
+							if solid[i0] and not visited[i0] then
+								local x1 = x + 1
+								while x1 < xLimit do
+									local i = idx( x1, y, z )
+									if not solid[i] or visited[i] then break end
+									x1 = x1 + 1
+								end
+								local y1 = y + 1
+								while y1 < yLimit do
+									local ok = true
+									for xx = x, x1 - 1 do
+										local i = idx( xx, y1, z )
+										if not solid[i] or visited[i] then ok = false break end
+									end
+									if not ok then break end
+									y1 = y1 + 1
+								end
+								local z1 = z + 1
+								while z1 < zLimit do
+									local ok = true
+									for yy = y, y1 - 1 do
+										for xx = x, x1 - 1 do
+											local i = idx( xx, yy, z1 )
+											if not solid[i] or visited[i] then ok = false break end
+										end
+										if not ok then break end
+									end
+									if not ok then break end
+									z1 = z1 + 1
+								end
+								for zz = z, z1 - 1 do
+									for yy = y, y1 - 1 do
+										for xx = x, x1 - 1 do
+											visited[ idx( xx, yy, zz ) ] = true
+										end
+									end
+								end
+								boxes[#boxes + 1] = { x, y, z, x1, y1, z1 }
 							end
-							if not ok then break end
-						end
-						if not ok then break end
-						z1 = z1 + 1
-					end
-					for zz = z, z1 - 1 do
-						for yy = y, y1 - 1 do
-							for xx = x, x1 - 1 do
-								visited[ idx( xx, yy, zz ) ] = true
-							end
 						end
 					end
-					boxes[#boxes + 1] = { x, y, z, x1, y1, z1 }
 				end
 			end
 		end
@@ -297,65 +307,74 @@ local function greedyBoxes( chunk, bounds )
 
 	local function addMergedShapeGroup( group )
 		local seen = {}
-		for z = 0, CH - 1 do
-			for y = 0, CS - 1 do
-				for x = 0, CS - 1 do
-					local i0 = idx( x, y, z )
-					if group.cells[i0] and not seen[i0] then
-						local x1 = x + 1
-						if group.fullX then
-							while x1 < CS do
-								local i = idx( x1, y, z )
-								if not group.cells[i] or seen[i] then break end
-								x1 = x1 + 1
-							end
-						end
-
-						local y1 = y + 1
-						if group.fullY then
-							while y1 < CS do
-								local ok = true
-								for xx = x, x1 - 1 do
-									local i = idx( xx, y1, z )
-									if not group.cells[i] or seen[i] then ok = false break end
-								end
-								if not ok then break end
-								y1 = y1 + 1
-							end
-						end
-
-						local z1 = z + 1
-						if group.fullZ then
-							while z1 < CH do
-								local ok = true
-								for yy = y, y1 - 1 do
-									for xx = x, x1 - 1 do
-										local i = idx( xx, yy, z1 )
-										if not group.cells[i] or seen[i] then ok = false break end
+		for sz = 0, CH - 1, PHYSICS_SUBCHUNK_SIZE do
+			local zLimit = math.min( CH, sz + PHYSICS_SUBCHUNK_SIZE )
+			for sy = 0, CS - 1, PHYSICS_SUBCHUNK_SIZE do
+				local yLimit = math.min( CS, sy + PHYSICS_SUBCHUNK_SIZE )
+				for sx = 0, CS - 1, PHYSICS_SUBCHUNK_SIZE do
+					local xLimit = math.min( CS, sx + PHYSICS_SUBCHUNK_SIZE )
+					for z = sz, zLimit - 1 do
+						for y = sy, yLimit - 1 do
+							for x = sx, xLimit - 1 do
+								local i0 = idx( x, y, z )
+								if group.cells[i0] and not seen[i0] then
+									local x1 = x + 1
+									if group.fullX then
+										while x1 < xLimit do
+											local i = idx( x1, y, z )
+											if not group.cells[i] or seen[i] then break end
+											x1 = x1 + 1
+										end
 									end
-									if not ok then break end
+
+									local y1 = y + 1
+									if group.fullY then
+										while y1 < yLimit do
+											local ok = true
+											for xx = x, x1 - 1 do
+												local i = idx( xx, y1, z )
+												if not group.cells[i] or seen[i] then ok = false break end
+											end
+											if not ok then break end
+											y1 = y1 + 1
+										end
+									end
+
+									local z1 = z + 1
+									if group.fullZ then
+										while z1 < zLimit do
+											local ok = true
+											for yy = y, y1 - 1 do
+												for xx = x, x1 - 1 do
+													local i = idx( xx, yy, z1 )
+													if not group.cells[i] or seen[i] then ok = false break end
+												end
+												if not ok then break end
+											end
+											if not ok then break end
+											z1 = z1 + 1
+										end
+									end
+
+									for zz = z, z1 - 1 do
+										for yy = y, y1 - 1 do
+											for xx = x, x1 - 1 do
+												seen[idx( xx, yy, zz )] = true
+											end
+										end
+									end
+
+									boxes[#boxes + 1] = {
+										x + group.fx0,
+										y + group.fy0,
+										z + group.fz0,
+										( x1 - 1 ) + group.fx1,
+										( y1 - 1 ) + group.fy1,
+										( z1 - 1 ) + group.fz1,
+									}
 								end
-								if not ok then break end
-								z1 = z1 + 1
 							end
 						end
-
-						for zz = z, z1 - 1 do
-							for yy = y, y1 - 1 do
-								for xx = x, x1 - 1 do
-									seen[idx( xx, yy, zz )] = true
-								end
-							end
-						end
-
-						boxes[#boxes + 1] = {
-							x + group.fx0,
-							y + group.fy0,
-							z + group.fz0,
-							( x1 - 1 ) + group.fx1,
-							( y1 - 1 ) + group.fy1,
-							( z1 - 1 ) + group.fz1,
-						}
 					end
 				end
 			end
@@ -367,6 +386,100 @@ local function greedyBoxes( chunk, bounds )
 	end
 
 	return boxes, customConvexes
+end
+
+local function collisionSubchunkKey( x, y, z )
+	local sx = math.floor( x / PHYSICS_SUBCHUNK_SIZE )
+	local sy = math.floor( y / PHYSICS_SUBCHUNK_SIZE )
+	local sz = math.floor( z / PHYSICS_SUBCHUNK_SIZE )
+	return sx .. ":" .. sy .. ":" .. sz, sx, sy, sz
+end
+
+local function collisionSubchunkGroup( groups, ordered, x, y, z )
+	local key, sx, sy, sz = collisionSubchunkKey( x, y, z )
+	local group = groups[key]
+	if not group then
+		group = {
+			key = key,
+			sx = sx,
+			sy = sy,
+			sz = sz,
+			boxes = {},
+			customConvexes = {},
+			convexes = {},
+		}
+		groups[key] = group
+		ordered[#ordered + 1] = group
+	end
+	return group
+end
+
+local function groupCollisionPartsBySubchunk( boxes, customConvexes )
+	local groups = {}
+	local ordered = {}
+
+	for i = 1, #boxes do
+		local b = boxes[i]
+		local group = collisionSubchunkGroup( groups, ordered, b[1], b[2], b[3] )
+		group.boxes[#group.boxes + 1] = b
+	end
+
+	for _, convex in ipairs( customConvexes ) do
+		local p0 = convex[1]
+		local minX, minY, minZ = p0[1], p0[2], p0[3]
+		for i = 2, #convex do
+			local p = convex[i]
+			minX = math.min( minX, p[1] )
+			minY = math.min( minY, p[2] )
+			minZ = math.min( minZ, p[3] )
+		end
+		local group = collisionSubchunkGroup( groups, ordered, minX, minY, minZ )
+		group.customConvexes[#group.customConvexes + 1] = convex
+	end
+
+	table.sort( ordered, function( a, b )
+		if a.sz ~= b.sz then return a.sz < b.sz end
+		if a.sy ~= b.sy then return a.sy < b.sy end
+		return a.sx < b.sx
+	end )
+
+	return ordered
+end
+
+local function appendBoxConvex( convexes, box, blockSize )
+	local x0, y0, z0 = box[1] * blockSize, box[2] * blockSize, box[3] * blockSize
+	local x1, y1, z1 = box[4] * blockSize, box[5] * blockSize, box[6] * blockSize
+	convexes[#convexes + 1] = {
+		Vector( x0, y0, z0 ), Vector( x1, y0, z0 ),
+		Vector( x0, y1, z0 ), Vector( x1, y1, z0 ),
+		Vector( x0, y0, z1 ), Vector( x1, y0, z1 ),
+		Vector( x0, y1, z1 ), Vector( x1, y1, z1 ),
+	}
+end
+
+local function appendCustomConvex( convexes, convex, blockSize )
+	local points = {}
+	for _, p in ipairs( convex ) do
+		points[#points + 1] = Vector( p[1] * blockSize, p[2] * blockSize, p[3] * blockSize )
+	end
+	if #points >= 4 then convexes[#convexes + 1] = points end
+end
+
+local function buildSubchunkConvexGroups( boxes, customConvexes, blockSize )
+	local groups = groupCollisionPartsBySubchunk( boxes, customConvexes )
+	local totalConvexes = 0
+
+	for _, group in ipairs( groups ) do
+		for i = 1, #group.boxes do
+			appendBoxConvex( group.convexes, group.boxes[i], blockSize )
+		end
+		for _, convex in ipairs( group.customConvexes ) do
+			appendCustomConvex( group.convexes, convex, blockSize )
+		end
+		totalConvexes = totalConvexes + #group.convexes
+	end
+
+	return groups, totalConvexes
 end
 
 -- (re)build this chunk's multiconvex collision from current block data.
@@ -391,28 +504,9 @@ function ENT:RebuildPhysics( bounds )
 	end
 	rememberClientAABBDebugBoxes( self, boxes )
 
-	local BS = MC.BS
-	local convexes = {}
-	for i = 1, #boxes do
-		local b = boxes[i]
-		local x0, y0, z0 = b[1] * BS, b[2] * BS, b[3] * BS
-		local x1, y1, z1 = b[4] * BS, b[5] * BS, b[6] * BS
-		convexes[#convexes + 1] = {
-			Vector( x0, y0, z0 ), Vector( x1, y0, z0 ),
-			Vector( x0, y1, z0 ), Vector( x1, y1, z0 ),
-			Vector( x0, y0, z1 ), Vector( x1, y0, z1 ),
-			Vector( x0, y1, z1 ), Vector( x1, y1, z1 ),
-		}
-	end
-	for _, convex in ipairs( customConvexes ) do
-		local points = {}
-		for _, p in ipairs( convex ) do
-			points[#points + 1] = Vector( p[1] * BS, p[2] * BS, p[3] * BS )
-		end
-		if #points >= 4 then convexes[#convexes + 1] = points end
-	end
-
-	if #convexes > PHYSICS_CONVEXES_PER_ENTITY then
+	local groups, totalConvexes = buildSubchunkConvexGroups( boxes, customConvexes, MC.BS )
+	local singleGroup = #groups == 1 and #groups[1].convexes <= PHYSICS_CONVEXES_PER_ENTITY
+	if not singleGroup then
 		-- if SERVER then
 		-- 	MsgN( "[MC][phys-debug] chunk=" .. tostring( self.ChunkKey ) ..
 		-- 		" mode=shard" ..
@@ -420,7 +514,7 @@ function ENT:RebuildPhysics( bounds )
 		-- 		" bounds=" .. tostring( bounds and #bounds or "full" ) ..
 		-- 		" boxes=" .. #boxes ..
 		-- 		" customConvexes=" .. #customConvexes ..
-		-- 		" convexes=" .. #convexes ..
+		-- 		" convexes=" .. totalConvexes ..
 		-- 		" pageSize=" .. PHYSICS_CONVEXES_PER_ENTITY )
 		-- end
 		self:ClearPhysicsShards()
@@ -429,32 +523,38 @@ function ENT:RebuildPhysics( bounds )
 		local shards = {}
 		local shardIndex = 1
 
-		for first = 1, #convexes, PHYSICS_CONVEXES_PER_ENTITY do
-			local part = {}
-			local last = math.min( #convexes, first + PHYSICS_CONVEXES_PER_ENTITY - 1 )
-			for i = first, last do
-				part[#part + 1] = convexes[i]
-			end
-			local shard = spawnPhysicsShard( self, shardIndex, part )
-			if not IsValid( shard ) then
-				for _, existing in ipairs( shards ) do
-					if IsValid( existing ) then existing:Remove() end
+		for _, group in ipairs( groups ) do
+			for first = 1, #group.convexes, PHYSICS_CONVEXES_PER_ENTITY do
+				local part = {}
+				local last = math.min( #group.convexes, first + PHYSICS_CONVEXES_PER_ENTITY - 1 )
+				for i = first, last do
+					part[#part + 1] = group.convexes[i]
 				end
-				rememberClientPhysStats( self, "shard_failed", bounds, #boxes, #customConvexes, #convexes, shards )
-				MsgN( "[MC] !!! collision shard build FAILED for chunk " .. tostring( self.ChunkKey ) ..
-					"  convexes=" .. #convexes .. " shard=" .. shardIndex )
-				return
+				local shard = spawnPhysicsShard( self, shardIndex, part )
+				if not IsValid( shard ) then
+					for _, existing in ipairs( shards ) do
+						if IsValid( existing ) then existing:Remove() end
+					end
+					rememberClientPhysStats( self, "subchunk_failed", bounds, #boxes, #customConvexes, totalConvexes, shards )
+					MsgN( "[MC] !!! collision subchunk build FAILED for chunk " .. tostring( self.ChunkKey ) ..
+						"  subchunk=" .. tostring( group.key ) .. " shard=" .. shardIndex ..
+						" convexes=" .. #part )
+					return
+				end
+				shard.CollisionSubchunkKey = group.key
+				shards[#shards + 1] = shard
+				shardIndex = shardIndex + 1
 			end
-			shards[#shards + 1] = shard
-			shardIndex = shardIndex + 1
 		end
 
 		self.PhysicsShards = shards
-		rememberClientPhysStats( self, "shard", bounds, #boxes, #customConvexes, #convexes, shards )
-		MsgN( "[MC] collision sharded for chunk " .. tostring( self.ChunkKey ) ..
-			"  convexes=" .. #convexes .. " shards=" .. #shards )
+		rememberClientPhysStats( self, "subchunk", bounds, #boxes, #customConvexes, totalConvexes, shards )
+		MsgN( "[MC] collision subchunked for chunk " .. tostring( self.ChunkKey ) ..
+			"  convexes=" .. totalConvexes .. " subchunks=" .. #groups .. " shards=" .. #shards )
 		return
 	end
+
+	local convexes = groups[1].convexes
 
 	-- if SERVER then
 	-- 	MsgN( "[MC][phys-debug] chunk=" .. tostring( self.ChunkKey ) ..
@@ -487,5 +587,5 @@ function ENT:RebuildPhysics( bounds )
 		MsgN( "[MC] !!! collision build FAILED for chunk " .. tostring( self.ChunkKey ) ..
 			"  boxes=" .. #boxes )
 	end
-	rememberClientPhysStats( self, "single", bounds, #boxes, #customConvexes, #convexes, nil )
+	rememberClientPhysStats( self, "single", bounds, #boxes, #customConvexes, totalConvexes, nil )
 end
