@@ -198,7 +198,10 @@ function SV.LoadPreset( presetName )
 
 	local raw = file.Read( path, "DATA" )
 	if not raw or raw == "" then return nil, "empty_preset" end
-	local json = util.Decompress( raw )
+	local json = raw
+	if string.sub( raw, 1, 1 ) ~= "{" then
+		json = util.Decompress( raw )
+	end
 	if not json then return nil, "decompress_failed" end
 	local data = util.JSONToTable( json )
 	if not data or not istable( data.cells ) then return nil, "invalid_preset" end
