@@ -5,17 +5,15 @@ ENT.RenderGroup = RENDERGROUP_OPAQUE
 function ENT:Initialize()
 	self:SetModel( "models/hunter/blocks/cube025x025x025.mdl" )
 	self:DrawShadow( false )
-	self:PhysicsInit( SOLID_VPHYSICS )
 	self:EnsureKey()
 
 	-- local-space render bounds covering the whole chunk (entity sits at chunk origin)
 	local w = MC.ChunkWorld
 	self:SetRenderBounds( Vector( 0, 0, 0 ), Vector( w, w, MC.ChunkWorldH ) )
 
-	-- Local prediction collision is filtered by MC.RefreshClientCollisionInterest().
-	self:SetMoveType( MOVETYPE_VPHYSICS )
-	self:SetSolid( SOLID_VPHYSICS )
-	self:EnableCustomCollisions( true )
+	self:PhysicsDestroy()
+	self:SetMoveType( MOVETYPE_NONE )
+	self:SetSolid( SOLID_NONE )
 
 	MC.ChunkEnts[ self.ChunkKey ] = self
 	MC.MarkChunkPhysDirty( self.ChunkKey )  -- build collision once data is present

@@ -42,7 +42,7 @@ SV.ReliableNetQueues = SV.ReliableNetQueues or {} -- player -> shared reliable s
 SV.PlayerLoadedChunks = SV.PlayerLoadedChunks or {} -- player -> { [chunkKey] = true }
 SV.PlayerFullSnapshot = SV.PlayerFullSnapshot or {} -- player -> true once full-world snapshot mode owns visibility
 SV.PlayerHTTPDisabled = SV.PlayerHTTPDisabled or {} -- player -> true after client-side HTTP fetch is blocked/failed
-SV.ServerCollisionActiveChunks = SV.ServerCollisionActiveChunks or {} -- chunkKey -> local bounds lists that should have collision
+SV.ServerCollisionActiveChunks = SV.ServerCollisionActiveChunks or {} -- chunkKey -> true for non-empty chunks with server collision
 SV.ServerCollisionSignatures = SV.ServerCollisionSignatures or {} -- chunkKey -> sorted bounds signature
 SV.ServerCollisionRefreshTick = SV.ServerCollisionRefreshTick or nil
 SV.NextBulkCollisionRebuildAt = SV.NextBulkCollisionRebuildAt or 0
@@ -162,6 +162,7 @@ function SV.EnsureChunkEnt( chunk, force )
 	if not IsValid( e ) then return nil end
 	e.cx, e.cy, e.cz = chunk.cx, chunk.cy, chunk.cz
 	e.ChunkKey = chunk.key
+	e:SetNWString( "MCChunkKey", chunk.key )
 	e:SetPos( MC.ChunkWorldOrigin( chunk.cx, chunk.cy, chunk.cz ) )
 	e:Spawn()
 	e:Activate()
@@ -205,11 +206,11 @@ function rebuildPhysKey( key, bounds )
 	end
 	if chunk and IsValid( chunk.ent ) then
 		SV.EnsureChunkEnt( chunk )
-		chunk.ent:RebuildPhysics( bounds )
+		chunk.ent:RebuildPhysics()
 	elseif chunk and chunk.count and chunk.count > 0 then
 		SV.EnsureChunkEnt( chunk )
 		if IsValid( chunk.ent ) then
-			chunk.ent:RebuildPhysics( bounds )
+			chunk.ent:RebuildPhysics()
 		end
 	end
 	SV.PhysDirty[key] = nil
@@ -1582,10 +1583,13 @@ function SV.RefreshServerCollision( force )
 	for key, c in pairs( MC.World or {} ) do
 		if c.count and c.count > 0 then
 			desired[key] = true
+			local oldSig = SV.ServerCollisionSignatures[key]
 			SV.ServerCollisionSignatures[key] = "full"
 			if not IsValid( c.ent ) then
 				SV.EnsureChunkEnt( c )
-				SV.MarkPhysDirtyBulk( key )
+				SV.MarkPhysDirty( key, true )
+			elseif oldSig ~= "full" then
+				SV.MarkPhysDirty( key, true )
 			end
 		else
 			if IsValid( c.ent ) then
