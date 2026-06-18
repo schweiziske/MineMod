@@ -424,6 +424,18 @@ function MC.EnsureChunk( cx, cy, cz )
 	return c
 end
 
+function MC.TouchChunkCollisionVersion( chunk )
+	if not chunk then return end
+	MC.ChunkCollisionVersionCounter = ( MC.ChunkCollisionVersionCounter or 0 ) + 1
+	chunk.collisionVersion = MC.ChunkCollisionVersionCounter
+	if CLIENT and chunk.key then
+		if MC.ClientPhysBuiltSignatures then MC.ClientPhysBuiltSignatures[chunk.key] = nil end
+		if MC.ClientPhysBuiltHadObjects then MC.ClientPhysBuiltHadObjects[chunk.key] = nil end
+		if MC.ClientPhysBuiltObjectCounts then MC.ClientPhysBuiltObjectCounts[chunk.key] = nil end
+		if MC.ClientPhysTargetSignatures then MC.ClientPhysTargetSignatures[chunk.key] = nil end
+	end
+end
+
 ------------------------------------------------------------------- block access
 function MC.GetBlock( bx, by, bz )
 	local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
@@ -458,6 +470,7 @@ function MC.SetBlockRaw( bx, by, bz, id, orient )
 		if c.orients then c.orients[li] = nil end
 		c.count = c.count - 1
 		local emptied = c.count <= 0
+		MC.TouchChunkCollisionVersion( c )
 		if emptied then MC.World[key] = nil end
 		return c, false, emptied, true
 	end
@@ -470,6 +483,7 @@ function MC.SetBlockRaw( bx, by, bz, id, orient )
 	if c.blocks[li] == nil then c.count = c.count + 1 end
 	c.blocks[li] = id
 	c.orients[li] = orient
+	MC.TouchChunkCollisionVersion( c )
 	return c, created, false, true
 end
 

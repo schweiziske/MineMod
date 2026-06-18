@@ -82,6 +82,50 @@ local function boundsForSubchunkKey( key )
 	}
 end
 
+local function boundsTouch( a, b )
+	return a[1] <= b[4] and a[4] >= b[1]
+		and a[2] <= b[5] and a[5] >= b[2]
+		and a[3] <= b[6] and a[6] >= b[3]
+end
+
+local function subchunkInClientInterest( key, subkey )
+	local interest = MC and MC.ClientCollisionInterest and MC.ClientCollisionInterest[key]
+	if not interest then return false end
+	local subBounds = boundsForSubchunkKey( subkey )
+	local sub = subBounds and subBounds[1]
+	if not sub then return false end
+	for _, bounds in ipairs( interest ) do
+		if boundsTouch( sub, bounds ) then return true end
+	end
+	return false
+end
+
+local function syncClientPhysMetadata( ent )
+	if not CLIENT or not IsValid( ent ) or ent:EntIndex() <= 0 then return nil end
+	local key = ent:GetNWString( "MCChunkKey", "" )
+	local subkey = ent:GetNWString( "MCSubchunkKey", "" )
+	if key == "" or subkey == "" then return nil end
+
+	ent.ChunkKey = key
+	ent.CollisionSubchunkKey = subkey
+	ent.CollisionPhysPage = ent:GetNWInt( "MCPhysPage", 0 )
+	if MC and MC.ChunkKeyToCoords then
+		ent.cx, ent.cy, ent.cz = MC.ChunkKeyToCoords( key )
+	end
+	if MC and MC.ChunkEnts and IsValid( MC.ChunkEnts[key] ) then
+		ent.ParentChunk = MC.ChunkEnts[key]
+	end
+	return key, subkey
+end
+
+local function clientPhysNeedsRebuild( ent )
+	if not IsValid( ent ) then return false end
+	if ent.ChunkKey == nil or ent.CollisionSubchunkKey == nil then return true end
+	if not IsValid( ent:GetPhysicsObject() ) then return true end
+	if not IsValid( ent.ParentChunk ) then return true end
+	return false
+end
+
 -- Keep split collision frozen at the chunk origin. Empty PhysicsUpdate was not
 -- enough for clientside multiconvex children: the next VPhysics tick moved both
 -- entity and phys object back to world origin.
@@ -91,11 +135,14 @@ end
 
 function ENT:MarkClientPhysDirtyFromMetadata()
 	if not CLIENT then return false end
-	if self:EntIndex() <= 0 or self.ClientPhysDirtyMarked then return false end
-	local key = self:GetNWString( "MCChunkKey", "" )
-	local subkey = self:GetNWString( "MCSubchunkKey", "" )
-	if key == "" or subkey == "" then return false end
-	self.ClientPhysDirtyMarked = true
+	local key, subkey = syncClientPhysMetadata( self )
+	if not key or not clientPhysNeedsRebuild( self ) then return false end
+	if not subchunkInClientInterest( key, subkey ) then return false end
+
+	local now = CurTime()
+	if now < ( self.NextClientPhysDirtyRequest or 0 ) then return false end
+	self.NextClientPhysDirtyRequest = now + 0.2
+
 	if MC and MC.MarkChunkPhysDirty then
 		MC.MarkChunkPhysDirty( key, true, boundsForSubchunkKey( subkey ) )
 	end

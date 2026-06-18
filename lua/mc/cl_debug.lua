@@ -183,15 +183,23 @@ concommand.Add( "mc_client_diag", function()
 		tostring( physStats.lastClientPhysKey ), tostring( physStats.lastClientPhysBuildMS ),
 		tostring( physStats.lastClientPhysBounds ), tostring( physStats.lastClientPhysHadObject ),
 		tostring( next( MC.PhysDirty or {} ) ~= nil ) ) )
-	print( string.format( "[MC client] collision detail mode=%s chunk=%s inputBounds=%s boxes=%s custom=%s convexes=%s subchunks=%s subchunkPhys=%s mainPhys=%s totalSubchunkEnts=%d/%d",
+	print( string.format( "[MC client] collision detail mode=%s chunk=%s inputBounds=%s boxes=%s custom=%s convexes=%s subchunks=%s subchunkPhys=%s mainPhys=%s totalSubchunkEnts=%d/%d network=%s missing=%s retry=%s:%s",
 		tostring( physStats.lastClientPhysMode ), tostring( physStats.lastClientPhysChunkKey ),
 		tostring( physStats.lastClientPhysInputBounds ), tostring( physStats.lastClientPhysBoxes ),
 		tostring( physStats.lastClientPhysCustomConvexes ), tostring( physStats.lastClientPhysConvexes ),
 		tostring( physStats.lastClientPhysSubchunks ), tostring( physStats.lastClientPhysSubchunkObjects ),
-		tostring( physStats.lastClientPhysMainObject ), subchunkPhys, subchunkEnts ) )
+		tostring( physStats.lastClientPhysMainObject ), subchunkPhys, subchunkEnts,
+		tostring( physStats.lastClientPhysNetworkSubchunks ), tostring( physStats.lastClientPhysMissingSubchunks ),
+		tostring( physStats.lastClientPhysRetryReason ), tostring( physStats.lastClientPhysRetryAttempts ) ) )
 	print( string.format( "[MC client] collision target playerKey=%s world=%s ent=%s interest=%s aimKey=%s world=%s ent=%s interest=%s lastReason=%s",
 		tostring( playerKey ), tostring( playerWorld ), tostring( playerEnt ), tostring( playerInterest ),
 		tostring( aimKey ), tostring( aimWorld ), tostring( aimEnt ), tostring( aimInterest ),
+		tostring( physStats.lastClientPhysReason ) ) )
+	print( string.format( "[MC client] collision built=%d target=%d lastBuiltKey=%s objects=%s lastReason=%s",
+		table.Count( MC.ClientPhysBuiltSignatures or {} ),
+		table.Count( MC.ClientPhysTargetSignatures or {} ),
+		tostring( physStats.lastClientPhysChunkKey ),
+		tostring( physStats.lastClientPhysObjectCount ),
 		tostring( physStats.lastClientPhysReason ) ) )
 	print( string.format( "[MC client] server collision debug=%s bounds=%d age=%s",
 		tostring( MC.ServerCollisionDebug and MC.ServerCollisionDebug:GetBool() ),
@@ -212,6 +220,40 @@ end
 local function mcProbeEnt( ent )
 	if not IsValid( ent ) then return tostring( ent ) end
 	return string.format( "%s idx=%s class=%s", tostring( ent ), tostring( ent:EntIndex() ), tostring( ent:GetClass() ) )
+end
+
+local function mcProbeSubchunkBounds( subkey )
+	local sx, sy, sz = tostring( subkey or "" ):match( "^(-?%d+):(-?%d+):(-?%d+)$" )
+	if not sx then return nil end
+	local size = math.max( 1, math.floor( tonumber( MC.CollisionSubchunkSize ) or 8 ) )
+	local x0 = math.max( 0, tonumber( sx ) * size )
+	local y0 = math.max( 0, tonumber( sy ) * size )
+	local z0 = math.max( 0, tonumber( sz ) * size )
+	return {
+		x0,
+		y0,
+		z0,
+		math.min( MC.CS - 1, x0 + size - 1 ),
+		math.min( MC.CS - 1, y0 + size - 1 ),
+		math.min( MC.CH - 1, z0 + size - 1 ),
+	}
+end
+
+local function mcProbeBoundsTouch( a, b )
+	return a[1] <= b[4] and a[4] >= b[1]
+		and a[2] <= b[5] and a[5] >= b[2]
+		and a[3] <= b[6] and a[6] >= b[3]
+end
+
+local function mcProbeSubchunkInInterest( key, subkey )
+	local interest = MC.ClientCollisionInterest and MC.ClientCollisionInterest[key]
+	if not interest then return false end
+	local sub = mcProbeSubchunkBounds( subkey )
+	if not sub then return false end
+	for _, bounds in ipairs( interest ) do
+		if mcProbeBoundsTouch( sub, bounds ) then return true end
+	end
+	return false
 end
 
 concommand.Add( "mc_phys_probe", function()
@@ -247,10 +289,28 @@ concommand.Add( "mc_phys_probe", function()
 		local item = found[i]
 		local ent = item.ent
 		local phys = ent:GetPhysicsObject()
-		print( string.format( "[MCPROBE] #%d %s key=%s subkey=%s nw=%s/%s/%s pos=%s solid=%s group=%s movetype=%s phys=%s physPos=%s aabb=%s->%s",
+		local nwKey = ent:GetNWString( "MCChunkKey", "" )
+		local nwSubkey = ent:GetNWString( "MCSubchunkKey", "" )
+		local retryKey = nwKey .. "/" .. nwSubkey
+		local netRetry = MC.NetworkPhysRetryAttempts and MC.NetworkPhysRetryAttempts[retryKey] or 0
+		local chunkRetry = MC.ClientPhysRetryAttempts and MC.ClientPhysRetryAttempts[nwKey] or 0
+		local builtSig = nwKey ~= "" and MC.ClientPhysBuiltSignatures and MC.ClientPhysBuiltSignatures[nwKey] or nil
+		local targetSig = nwKey ~= "" and MC.ClientPhysTargetSignatures and MC.ClientPhysTargetSignatures[nwKey] or nil
+		local builtObjCount = nwKey ~= "" and MC.ClientPhysBuiltObjectCounts and MC.ClientPhysBuiltObjectCounts[nwKey] or 0
+		local chunkInterest = nwKey ~= "" and MC.ClientCollisionInterest and MC.ClientCollisionInterest[nwKey] ~= nil
+		local subInterest = nwKey ~= "" and mcProbeSubchunkInInterest( nwKey, nwSubkey )
+		print( string.format( "[MCPROBE] #%d %s key=%s subkey=%s nw=%s/%s/%s world=%s interest=%s subInterest=%s dirty=%s bulk=%s retry=%s/%s built=%s obj=%s/%s match=%s pos=%s solid=%s group=%s movetype=%s phys=%s physPos=%s aabb=%s->%s",
 			i, mcProbeEnt( ent ), tostring( ent.ChunkKey ), tostring( ent.CollisionSubchunkKey ),
-			tostring( ent:GetNWString( "MCChunkKey", "" ) ), tostring( ent:GetNWString( "MCSubchunkKey", "" ) ),
-			tostring( ent:GetNWInt( "MCPhysPage", -1 ) ), mcProbeVec( ent:GetPos() ),
+			tostring( nwKey ), tostring( nwSubkey ),
+			tostring( ent:GetNWInt( "MCPhysPage", -1 ) ),
+			tostring( nwKey ~= "" and MC.World and MC.World[nwKey] ~= nil ),
+			tostring( chunkInterest ), tostring( subInterest ),
+			tostring( nwKey ~= "" and MC.PhysDirty and MC.PhysDirty[nwKey] ~= nil ),
+			tostring( nwKey ~= "" and MC.PhysDirtyBulk and MC.PhysDirtyBulk[nwKey] ~= nil ),
+			tostring( netRetry ), tostring( chunkRetry ),
+			tostring( builtSig ~= nil ), tostring( IsValid( phys ) ), tostring( builtObjCount ),
+			tostring( builtSig ~= nil and targetSig ~= nil and builtSig == targetSig ),
+			mcProbeVec( ent:GetPos() ),
 			tostring( ent:GetSolid() ), tostring( ent:GetCollisionGroup() ),
 			tostring( ent:GetMoveType() ), tostring( IsValid( phys ) ),
 			mcProbeVec( IsValid( phys ) and phys.GetPos and phys:GetPos() or nil ),
