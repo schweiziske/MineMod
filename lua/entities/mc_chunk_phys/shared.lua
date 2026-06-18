@@ -82,22 +82,33 @@ local function boundsForSubchunkKey( key )
 	}
 end
 
-local function boundsTouch( a, b )
-	return a[1] <= b[4] and a[4] >= b[1]
-		and a[2] <= b[5] and a[5] >= b[2]
-		and a[3] <= b[6] and a[6] >= b[3]
+local function clippedBounds( a, b )
+	local out = {
+		math.max( a[1], b[1] ),
+		math.max( a[2], b[2] ),
+		math.max( a[3], b[3] ),
+		math.min( a[4], b[4] ),
+		math.min( a[5], b[5] ),
+		math.min( a[6], b[6] ),
+	}
+	if out[1] <= out[4] and out[2] <= out[5] and out[3] <= out[6] then return out end
+	return nil
 end
 
-local function subchunkInClientInterest( key, subkey )
+local function clientInterestBoundsForSubchunk( key, subkey )
 	local interest = MC and MC.ClientCollisionInterest and MC.ClientCollisionInterest[key]
-	if not interest then return false end
+	if not interest then return nil end
 	local subBounds = boundsForSubchunkKey( subkey )
 	local sub = subBounds and subBounds[1]
-	if not sub then return false end
+	if not sub then return nil end
+
+	local out = {}
 	for _, bounds in ipairs( interest ) do
-		if boundsTouch( sub, bounds ) then return true end
+		local clipped = clippedBounds( sub, bounds )
+		if clipped then out[#out + 1] = clipped end
 	end
-	return false
+	if #out == 0 then return nil end
+	return out
 end
 
 local function syncClientPhysMetadata( ent )
@@ -137,14 +148,15 @@ function ENT:MarkClientPhysDirtyFromMetadata()
 	if not CLIENT then return false end
 	local key, subkey = syncClientPhysMetadata( self )
 	if not key or not clientPhysNeedsRebuild( self ) then return false end
-	if not subchunkInClientInterest( key, subkey ) then return false end
+	local bounds = clientInterestBoundsForSubchunk( key, subkey )
+	if not bounds then return false end
 
 	local now = CurTime()
 	if now < ( self.NextClientPhysDirtyRequest or 0 ) then return false end
 	self.NextClientPhysDirtyRequest = now + 0.2
 
 	if MC and MC.MarkChunkPhysDirty then
-		MC.MarkChunkPhysDirty( key, true, boundsForSubchunkKey( subkey ) )
+		MC.MarkChunkPhysDirty( key, true, bounds )
 	end
 	return true
 end
