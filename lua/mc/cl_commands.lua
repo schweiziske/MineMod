@@ -11,7 +11,8 @@ local function selectedBlockSpec()
 	local ply = LocalPlayer()
 	local id = IsValid( ply ) and ply:GetNWInt( "mc_block", 1 ) or 1
 	local block = MC.Blocks and MC.Blocks[id]
-	return tostring( block and ( block.mcid or block.name ) or id )
+
+	return tostring( block and block.name or id )
 end
 
 local function aimedFillCoords()
