@@ -121,6 +121,55 @@ local function boundsForCollisionSubchunkKey( key )
 	}
 end
 
+local function addUniqueLocalBounds( list, bounds )
+	for _, cur in ipairs( list ) do
+		if cur[1] == bounds[1] and cur[2] == bounds[2] and cur[3] == bounds[3]
+		and cur[4] == bounds[4] and cur[5] == bounds[5] and cur[6] == bounds[6] then return end
+	end
+	list[#list + 1] = bounds
+end
+
+local function collisionSubchunkBoundsForBounds( bounds )
+	if not bounds then return nil end
+	local byKey = {}
+	local size = PHYSICS_SUBCHUNK_SIZE
+	for _, b in ipairs( bounds ) do
+		local bx0 = math.max( 0, math.floor( tonumber( b[1] ) or 0 ) )
+		local by0 = math.max( 0, math.floor( tonumber( b[2] ) or 0 ) )
+		local bz0 = math.max( 0, math.floor( tonumber( b[3] ) or 0 ) )
+		local bx1 = math.min( MC.CS - 1, math.floor( tonumber( b[4] ) or -1 ) )
+		local by1 = math.min( MC.CS - 1, math.floor( tonumber( b[5] ) or -1 ) )
+		local bz1 = math.min( MC.CH - 1, math.floor( tonumber( b[6] ) or -1 ) )
+		if bx0 <= bx1 and by0 <= by1 and bz0 <= bz1 then
+			for sz = math.floor( bz0 / size ), math.floor( bz1 / size ) do
+				for sy = math.floor( by0 / size ), math.floor( by1 / size ) do
+					for sx = math.floor( bx0 / size ), math.floor( bx1 / size ) do
+						local key = sx .. ":" .. sy .. ":" .. sz
+						local x0 = sx * size
+						local y0 = sy * size
+						local z0 = sz * size
+						local clipped = {
+							math.max( bx0, x0 ),
+							math.max( by0, y0 ),
+							math.max( bz0, z0 ),
+							math.min( bx1, math.min( MC.CS - 1, x0 + size - 1 ) ),
+							math.min( by1, math.min( MC.CS - 1, y0 + size - 1 ) ),
+							math.min( bz1, math.min( MC.CH - 1, z0 + size - 1 ) ),
+						}
+						local list = byKey[key]
+						if not list then
+							list = {}
+							byKey[key] = list
+						end
+						addUniqueLocalBounds( list, clipped )
+					end
+				end
+			end
+		end
+	end
+	return byKey
+end
+
 local function findNetworkPhysicsSubchunk( owner, group, pageIndex, convexes )
 	if not CLIENT then return nil end
 	local expectedMin, expectedMax = convexWorldBounds( convexes, owner:GetPos() )
@@ -157,11 +206,11 @@ local function hasNetworkPhysicsSubchunksForChunk( key )
 	return false
 end
 
-local function scheduleClientPhysicsSubchunkRetry( owner, group )
+local function scheduleClientPhysicsSubchunkRetry( owner, group, retryBounds )
 	if not CLIENT or not IsValid( owner ) then return end
 	local key = owner.ChunkKey
 	if not key then return end
-	local bounds = group and boundsForCollisionSubchunkKey( group.key ) or nil
+	local bounds = ( retryBounds and #retryBounds > 0 ) and retryBounds or ( group and boundsForCollisionSubchunkKey( group.key ) or nil )
 
 	MC.PendingNetworkPhysRetry = MC.PendingNetworkPhysRetry or {}
 	MC.NetworkPhysRetryAttempts = MC.NetworkPhysRetryAttempts or {}
@@ -227,7 +276,7 @@ local function removePhysicsSubchunkKey( ent, key )
 	ent.PhysicsSubchunks = kept
 end
 
-local function spawnPhysicsSubchunk( owner, index, group, convexes, pageIndex )
+local function spawnPhysicsSubchunk( owner, index, group, convexes, pageIndex, retryBounds )
 	pageIndex = math.floor( tonumber( pageIndex ) or 0 )
 	local networkSubchunk = false
 	local created = false
@@ -238,7 +287,7 @@ local function spawnPhysicsSubchunk( owner, index, group, convexes, pageIndex )
 		subchunk = findNetworkPhysicsSubchunk( owner, group, pageIndex, convexes or group.convexes )
 		networkSubchunk = IsValid( subchunk )
 		if not networkSubchunk then
-			scheduleClientPhysicsSubchunkRetry( owner, group )
+			scheduleClientPhysicsSubchunkRetry( owner, group, retryBounds )
 			return nil, "no_network_subchunk"
 		end
 		local retryKey = tostring( owner.ChunkKey ) .. "/" .. tostring( group.key )
@@ -294,7 +343,7 @@ local function spawnPhysicsSubchunk( owner, index, group, convexes, pageIndex )
 		else
 			subchunk:PhysicsDestroy()
 		end
-		if CLIENT then scheduleClientPhysicsSubchunkRetry( owner, group ) end
+		if CLIENT then scheduleClientPhysicsSubchunkRetry( owner, group, retryBounds ) end
 		return nil, "apply_failed"
 	end
 	debugPhysicsSubchunkPosition( "after_apply_before_post_setpos", owner, subchunk )
@@ -325,7 +374,7 @@ local function rememberPhysicsSubchunk( subchunks, byKey, group, subchunk )
 	list[#list + 1] = subchunk
 end
 
-local function spawnPhysicsSubchunkPages( owner, group, subchunks, byKey )
+local function spawnPhysicsSubchunkPages( owner, group, subchunks, byKey, retryBounds )
 	local built = 0
 	for first = 1, #group.convexes, PHYSICS_CONVEXES_PER_ENTITY do
 		local part = {}
@@ -335,7 +384,7 @@ local function spawnPhysicsSubchunkPages( owner, group, subchunks, byKey )
 		end
 
 		local pageIndex = math.floor( ( first - 1 ) / PHYSICS_CONVEXES_PER_ENTITY )
-		local subchunk, reason = spawnPhysicsSubchunk( owner, #subchunks + 1, group, part, pageIndex )
+		local subchunk, reason = spawnPhysicsSubchunk( owner, #subchunks + 1, group, part, pageIndex, retryBounds )
 		if not IsValid( subchunk ) then return built, false, #part, reason end
 		rememberPhysicsSubchunk( subchunks, byKey, group, subchunk )
 		built = built + 1
@@ -928,9 +977,11 @@ function ENT:RebuildPhysics( bounds )
 		local byKey = ( CLIENT and bounds and self.PhysicsSubchunksByKey ) or {}
 		local failed = 0
 		local lastFailureReason
+		local retryBoundsBySubchunk = CLIENT and bounds and collisionSubchunkBoundsForBounds( bounds ) or nil
 
 		for _, group in ipairs( groups ) do
-			local _, ok, partSize, reason = spawnPhysicsSubchunkPages( self, group, subchunks, byKey )
+			local retryBounds = retryBoundsBySubchunk and retryBoundsBySubchunk[group.key] or nil
+			local _, ok, partSize, reason = spawnPhysicsSubchunkPages( self, group, subchunks, byKey, retryBounds )
 			if not ok then
 				failed = failed + 1
 				lastFailureReason = reason or "subchunk_failed"
