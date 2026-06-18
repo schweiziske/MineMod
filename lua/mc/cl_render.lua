@@ -118,6 +118,46 @@ local FACES = {
 -- Source's front-face winding is opposite the corner order above.
 local TRI = { 1, 3, 2, 1, 4, 3 }
 
+local function cornerXYZ( cn )
+	return cn.x or cn[1] or 0, cn.y or cn[2] or 0, cn.z or cn[3] or 0
+end
+
+local function cornerCellOffset( value )
+	return value <= 0 and -1 or 0
+end
+
+local function sampleCellForFaceCorner( bx, by, bz, faceIndex, cn )
+	local x, y, z = cornerXYZ( cn )
+	if faceIndex == MC.Face.TOP then
+		return bx + cornerCellOffset( x ), by + cornerCellOffset( y ), bz + 1
+	elseif faceIndex == MC.Face.BOTTOM then
+		return bx + cornerCellOffset( x ), by + cornerCellOffset( y ), bz - 1
+	elseif faceIndex == MC.Face.XP then
+		return bx + 1, by + cornerCellOffset( y ), bz + cornerCellOffset( z )
+	elseif faceIndex == MC.Face.XN then
+		return bx - 1, by + cornerCellOffset( y ), bz + cornerCellOffset( z )
+	elseif faceIndex == MC.Face.YP then
+		return bx + cornerCellOffset( x ), by + 1, bz + cornerCellOffset( z )
+	elseif faceIndex == MC.Face.YN then
+		return bx + cornerCellOffset( x ), by - 1, bz + cornerCellOffset( z )
+	end
+	return bx, by, bz
+end
+
+local function litFaceColor( shade, bx, by, bz, id, faceIndex, cn, selfEmission )
+	if not MC.SampleLighting then return shade end
+	local sx, sy, sz = sampleCellForFaceCorner( bx, by, bz, faceIndex, cn )
+	local brightness = MC.SampleLighting( sx, sy, sz, selfEmission )
+	local ao = MC.SampleAmbientOcclusion and MC.SampleAmbientOcclusion( sx, sy, sz ) or 1
+	local mul = math.Clamp( ( tonumber( brightness ) or 1 ) * ao, 0, 1 )
+	return Color(
+		math.Clamp( math.floor( ( shade.r or 255 ) * mul + 0.5 ), 0, 255 ),
+		math.Clamp( math.floor( ( shade.g or 255 ) * mul + 0.5 ), 0, 255 ),
+		math.Clamp( math.floor( ( shade.b or 255 ) * mul + 0.5 ), 0, 255 ),
+		shade.a or 255
+	)
+end
+
 local VERT_LIMIT = 64998 -- multiple of 6, under the 65535 IMesh vertex cap
 
 MC.Meshes      = MC.Meshes or {}      -- key -> { IMesh, ... } (opaque/cutout pass)
@@ -1146,7 +1186,8 @@ function MC.BuildChunkMesh( key, sectionIndex )
 		return opaqueMeshes, translucentMeshes
 	end
 
-	local function emitQuad( corners, normal, color, tile )
+	local function emitQuad( corners, normal, color, tile, bx, by, bz, id, faceIndex )
+		local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
 		for t = 1, 6 do
 			local cn = corners[TRI[t]]
 			local u, v = tileUVPoint( tile, { cn[4], cn[5] } )
@@ -1155,12 +1196,12 @@ function MC.BuildChunkMesh( key, sectionIndex )
 				normal = normal,
 				u      = u,
 				v      = v,
-				color  = color,
+				color  = litFaceColor( color, bx, by, bz, id, faceIndex, cn, emission ),
 			} )
 		end
 	end
 
-	local function emitCrossBlock( id, wx, wy, wz )
+	local function emitCrossBlock( id, bx, by, bz, wx, wy, wz )
 		local b = MC.Blocks[id]
 		local tile = b and b.side or 0
 		local z0, z1 = wz, wz + BS
@@ -1177,18 +1218,20 @@ function MC.BuildChunkMesh( key, sectionIndex )
 			{ wx + a, wy + c, z1, 16, 0 },
 			{ wx + c, wy + a, z1, 0, 0 },
 		}
-		emitQuad( p1, N_YP, SH_TOP, tile )
-		emitQuad( { p1[4], p1[3], p1[2], p1[1] }, N_YN, SH_TOP, tile )
-		emitQuad( p2, N_XP, SH_TOP, tile )
-		emitQuad( { p2[4], p2[3], p2[2], p2[1] }, N_XN, SH_TOP, tile )
+		emitQuad( p1, N_YP, SH_TOP, tile, bx, by, bz, id, MC.Face.YP )
+		emitQuad( { p1[4], p1[3], p1[2], p1[1] }, N_YN, SH_TOP, tile, bx, by, bz, id, MC.Face.YN )
+		emitQuad( p2, N_XP, SH_TOP, tile, bx, by, bz, id, MC.Face.XP )
+		emitQuad( { p2[4], p2[3], p2[2], p2[1] }, N_XN, SH_TOP, tile, bx, by, bz, id, MC.Face.XN )
 	end
 
-	local function emitModelBlock( b, orient, wx, wy, wz )
+	local function emitModelBlock( b, orient, bx, by, bz, wx, wy, wz )
 		local quads = rotatedModelQuads( b, orient )
 		if not quads then return false end
 		local mirrorU = b.orient == "door"
+		local emission = MC.BlockLightEmission and MC.BlockLightEmission( b.id ) or 0
 		for _, quad in ipairs( quads ) do
-			local face = FACES[quad.face or MC.Face.TOP] or FACES[MC.Face.TOP]
+			local faceIndex = quad.face or MC.Face.TOP
+			local face = FACES[faceIndex] or FACES[MC.Face.TOP]
 			local u0, v0, u1, v1 = tileUVRect( quad.tile or 0, quad.uv )
 			for t = 1, 6 do
 				local vert = quad.verts[TRI[t]]
@@ -1199,7 +1242,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 					normal = face.n,
 					u      = uf == 1 and u1 or u0,
 					v      = vf == 1 and v1 or v0,
-					color  = face.sh,
+					color  = litFaceColor( face.sh, bx, by, bz, b.id, faceIndex, vert, emission ),
 				} )
 			end
 		end
@@ -1218,10 +1261,11 @@ function MC.BuildChunkMesh( key, sectionIndex )
 
 		local b = MC.Blocks[id]
 		if b and b.shape == "cross" then
-			emitCrossBlock( id, wx, wy, wz )
-		elseif b and b.shape == "model" and not ( ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) ) or b.connection == "pipe6" ) and emitModelBlock( b, orient, wx, wy, wz ) then
+			emitCrossBlock( id, bx, by, bz, wx, wy, wz )
+		elseif b and b.shape == "model" and not ( ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) ) or b.connection == "pipe6" ) and emitModelBlock( b, orient, bx, by, bz, wx, wy, wz ) then
 			-- rendered from exact Minecraft model quads; boxes remain for collision/outline
 		elseif MC.BlockIsFullCube( id, orient ) then
+			local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
 			for f = 1, 6 do
 				local face = FACES[f]
 				local o = face.off
@@ -1256,7 +1300,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 							normal = nrm,
 							u      = u,
 							v      = v,
-							color  = col,
+							color  = litFaceColor( col, bx, by, bz, id, f, cn, emission ),
 						} )
 					end
 				end
@@ -1268,6 +1312,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 			local isPipe6Shape = b and b.connection == "pipe6"
 			local isConnShape = ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) ) or isPipe6Shape
 			local boxes = MC.BlockBoxes( id, orient, bx, by, bz )
+			local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
 			for boxIndex, box in ipairs( boxes or {} ) do
 				for f = 1, 6 do
 					if not shapeFaceCovered( id, box, f, boxes, bx, by, bz ) then
@@ -1303,7 +1348,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 									normal = nrm,
 									u      = u,
 									v      = v,
-									color  = col,
+									color  = litFaceColor( col, bx, by, bz, id, f, cn, emission ),
 								} )
 							end
 						end
@@ -1418,6 +1463,42 @@ local function markChunkSectionDirty( key, sectionIndex, rateLimited )
 		end
 	else
 		MC.MeshDirtyRateLimited[key] = nil
+	end
+end
+
+function MC.MarkRenderSectionsDirtyInBounds( minBX, minBY, minBZ, maxBX, maxBY, maxBZ, rateLimited )
+	minBX, minBY, minBZ = math.floor( tonumber( minBX ) or 0 ), math.floor( tonumber( minBY ) or 0 ), math.floor( tonumber( minBZ ) or 0 )
+	maxBX, maxBY, maxBZ = math.floor( tonumber( maxBX ) or minBX ), math.floor( tonumber( maxBY ) or minBY ), math.floor( tonumber( maxBZ ) or minBZ )
+	if minBX > maxBX then minBX, maxBX = maxBX, minBX end
+	if minBY > maxBY then minBY, maxBY = maxBY, minBY end
+	if minBZ > maxBZ then minBZ, maxBZ = maxBZ, minBZ end
+
+	local minCX, minCY, minCZ = MC.CellToChunk( minBX, minBY, minBZ )
+	local maxCX, maxCY, maxCZ = MC.CellToChunk( maxBX, maxBY, maxBZ )
+	for cz = minCZ, maxCZ do
+		for cy = minCY, maxCY do
+			for cx = minCX, maxCX do
+				local key = MC.ChunkKey( cx, cy, cz )
+				if MC.World and MC.World[key] then
+					local chunkMinX, chunkMinY, chunkMinZ = cx * MC.CS, cy * MC.CS, cz * MC.CH
+					local lx0 = math.max( 0, minBX - chunkMinX )
+					local ly0 = math.max( 0, minBY - chunkMinY )
+					local lz0 = math.max( 0, minBZ - chunkMinZ )
+					local lx1 = math.min( MC.CS - 1, maxBX - chunkMinX )
+					local ly1 = math.min( MC.CS - 1, maxBY - chunkMinY )
+					local lz1 = math.min( MC.CH - 1, maxBZ - chunkMinZ )
+					local sx0, sy0, sz0 = math.floor( lx0 / RENDER_SECTION_SIZE ), math.floor( ly0 / RENDER_SECTION_SIZE ), math.floor( lz0 / RENDER_SECTION_SIZE )
+					local sx1, sy1, sz1 = math.floor( lx1 / RENDER_SECTION_SIZE ), math.floor( ly1 / RENDER_SECTION_SIZE ), math.floor( lz1 / RENDER_SECTION_SIZE )
+					for sz = sz0, sz1 do
+						for sy = sy0, sy1 do
+							for sx = sx0, sx1 do
+								markChunkSectionDirty( key, sx + sy * RENDER_SECTIONS_XY + sz * RENDER_SECTIONS_XY * RENDER_SECTIONS_XY + 1, rateLimited )
+							end
+						end
+					end
+				end
+			end
+		end
 	end
 end
 
@@ -1606,7 +1687,11 @@ function MC.MarkDirty( bx, by, bz, rateLimited )
 		local lx, ly, lz = DecodeLocal( li )
 		local key = MC.ChunkKey( cx, cy, cz )
 		local sectionIndex = sectionIndexForLocal( lx, ly, lz )
-		markChunkSectionDirty( key, sectionIndex, rateLimited == true )
+		if rateLimited then
+			markChunkSectionDirty( key, sectionIndex, true )
+		else
+			markChunkSectionDirty( key, sectionIndex )
+		end
 	end
 	mark( bx, by, bz )
 	mark( bx + 1, by, bz ) ; mark( bx - 1, by, bz )

@@ -62,6 +62,16 @@ local function generatedBlockProperties( name, mcid )
 	return nil
 end
 
+local function generatedBlockLight( name, mcid )
+	local generated = MC.GeneratedBlockLight or {}
+	if generated[mcid] ~= nil then return generated[mcid] end
+	if generated[name] ~= nil then return generated[name] end
+	if string.StartWith( mcid or "", "minecraft:" ) then
+		return generated[string.sub( mcid, 11 )]
+	end
+	return nil
+end
+
 local function generatedConnectionKind( name, mcid )
 	local generated = MC.GeneratedBlockConnections or {}
 	return generated[mcid] or generated[name]
@@ -277,6 +287,7 @@ function MC.RegisterBlock( def )
 	local generatedSoundTypes = MC.GeneratedBlockSoundTypes or {}
 	local generatedNoTerrainParticles = MC.GeneratedNoTerrainParticles or {}
 	local generatedProps = generatedBlockProperties( name, mcid ) or {}
+	local generatedLight = generatedBlockLight( name, mcid )
 	local generatedVariants = generatedBlockModelVariants( name, mcid )
 	local connectionKind = def.connection or generatedConnectionKind( name, mcid )
 	local textures = def.textures or {}
@@ -328,6 +339,7 @@ function MC.RegisterBlock( def )
 		spawnTerrainParticles = def.spawnTerrainParticles ~= false and generatedNoTerrainParticles[mcid] ~= true,
 		hardness = propertyNumber( def.hardness, propertyNumber( generatedProps.hardness, 1 ) ),
 		explosionResistance = propertyNumber( def.explosionResistance, propertyNumber( generatedProps.explosionResistance, propertyNumber( generatedProps.hardness, 1 ) ) ),
+		lightEmission = math.Clamp( propertyNumber( def.lightEmission, generatedLight or 0 ), 0, 15 ),
 		textures = { top = top, side = side, bottom = bottom, front = front, particle = particle, icon = icon },
 		baked = normalizeBaked( def.baked ),
 		stateRule = stateRule,
@@ -1561,6 +1573,27 @@ function MC.BlockCollisionDependsOnNeighbours( id )
 	return b.connection == "fence"
 		or isPaneKind( b.connection )
 		or b.connection == "pipe6"
+end
+
+function MC.BlockLightEmission( id )
+	id = math.floor( tonumber( id ) or 0 )
+	if id == 0 then return 0 end
+	local b = MC.Blocks[id]
+	return b and math.Clamp( math.floor( tonumber( b.lightEmission ) or 0 ), 0, 15 ) or 0
+end
+
+function MC.BlockLightOpacity( id, orient )
+	id = math.floor( tonumber( id ) or 0 )
+	if id == 0 then return 0 end
+	local b = MC.Blocks[id]
+	if not b then return 15 end
+	if b.transparent == true or b.solid == false then return 0 end
+	if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then return 15 end
+	return 0
+end
+
+function MC.BlockAllowsLight( id, orient )
+	return MC.BlockLightOpacity( id, orient ) < 15
 end
 
 -- vanilla translucent render layer: real alpha blending instead of alpha cutout.
