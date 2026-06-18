@@ -16,6 +16,7 @@ local SHARED = {
 	"mc/generated/sh_generated_blocks.lua",
 	"mc/generated/sh_generated_block_connections.lua",
 	"mc/generated/sh_generated_block_properties.lua",
+	"mc/generated/sh_generated_block_light.lua",
 	"mc/generated/sh_generated_block_collision.lua",
 	"mc/generated/sh_generated_sound_types.lua",
 	"mc/generated/sh_generated_lang.lua",
@@ -42,6 +43,7 @@ local SERVER_FILES = {
 	"mc/sv_player.lua",
 }
 local CLIENT_FILES = {
+	"mc/cl_lighting.lua",
 	"mc/cl_render.lua",
 	"mc/cl_ui.lua",
 	"mc/cl_save_ui.lua",

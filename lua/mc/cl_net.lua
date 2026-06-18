@@ -82,6 +82,14 @@ local function cellCollisionDependsOnNeighbours( bx, by, bz )
 	return MC.BlockCollisionDependsOnNeighbours and MC.BlockCollisionDependsOnNeighbours( id ) == true
 end
 
+local function markLightingDirtyForChange( bx, by, bz, oldId, oldOrient, newId, newOrient, rateLimited )
+	if MC.MarkLightingDirtyForChange then
+		MC.MarkLightingDirtyForChange( bx, by, bz, oldId, oldOrient, newId, newOrient, rateLimited )
+	elseif MC.MarkLightingDirtyAroundCell then
+		MC.MarkLightingDirtyAroundCell( bx, by, bz, nil, rateLimited )
+	end
+end
+
 local function addCellPhysBounds( boundsByKey, key, bounds )
 	local list = boundsByKey[key]
 	if not list then
@@ -173,8 +181,12 @@ end
 
 local function applyNetCell( bx, by, bz, id, orient, meshRateLimited )
 	MC.ConfirmPrediction( bx, by, bz, id, orient )
+	local oldId = MC.GetBlock( bx, by, bz )
+	local oldOrient = MC.GetBlockOrient( bx, by, bz )
 	local _, _, _, changed = MC.SetBlockRaw( bx, by, bz, id, orient )
 	if changed then
+		local newOrient = MC.GetBlockOrient( bx, by, bz )
+		markLightingDirtyForChange( bx, by, bz, oldId, oldOrient, id, newOrient, meshRateLimited )
 		MC.MarkDirty( bx, by, bz, meshRateLimited )
 		MC.MarkCellPhysNeighbours( bx, by, bz, false, meshRateLimited == true )
 	end
@@ -184,8 +196,12 @@ local function applyNetCellsBulk( cells, meshRateLimited )
 	local boundsByKey = {}
 	for _, cell in ipairs( cells or {} ) do
 		MC.ConfirmPrediction( cell.bx, cell.by, cell.bz, cell.id, cell.orient )
+		local oldId = MC.GetBlock( cell.bx, cell.by, cell.bz )
+		local oldOrient = MC.GetBlockOrient( cell.bx, cell.by, cell.bz )
 		local _, _, _, changed = MC.SetBlockRaw( cell.bx, cell.by, cell.bz, cell.id, cell.orient )
 		if changed then
+			local newOrient = MC.GetBlockOrient( cell.bx, cell.by, cell.bz )
+			markLightingDirtyForChange( cell.bx, cell.by, cell.bz, oldId, oldOrient, cell.id, newOrient, meshRateLimited )
 			MC.MarkDirty( cell.bx, cell.by, cell.bz, meshRateLimited )
 			collectCellPhysBounds( boundsByKey, cell.bx, cell.by, cell.bz )
 		end
@@ -213,7 +229,8 @@ function MC.ClientEditPredictionEnabled()
 	return true
 end
 
-local function markPredictedCellDirty( bx, by, bz, priority )
+local function markPredictedCellDirty( bx, by, bz, priority, oldId, oldOrient, newId, newOrient )
+	markLightingDirtyForChange( bx, by, bz, oldId, oldOrient, newId, newOrient )
 	MC.MarkDirty( bx, by, bz )
 	MC.MarkCellPhysNeighbours( bx, by, bz, priority == true )
 end
@@ -247,7 +264,8 @@ local function predictCells( cells, priorityFn )
 				oldOrient = oldStates[i].orient,
 				expire = CurTime() + 2.5,
 			}
-			markPredictedCellDirty( cell.bx, cell.by, cell.bz, priorityFn and priorityFn( cell ) or false )
+			markPredictedCellDirty( cell.bx, cell.by, cell.bz, priorityFn and priorityFn( cell ) or false,
+				oldStates[i].id, oldStates[i].orient, id, orient )
 		end
 	end
 
@@ -297,7 +315,8 @@ local function rollbackExpiredPredictions()
 			local currentOrient = MC.GetBlockOrient( pending.bx, pending.by, pending.bz )
 			if current == pending.id and currentOrient == pending.orient then
 				MC.SetBlockRaw( pending.bx, pending.by, pending.bz, pending.oldId, pending.oldOrient )
-				markPredictedCellDirty( pending.bx, pending.by, pending.bz )
+				markPredictedCellDirty( pending.bx, pending.by, pending.bz, false,
+					current, currentOrient, pending.oldId, pending.oldOrient )
 			end
 			MC.PendingPredictions[key] = nil
 		end
@@ -310,6 +329,7 @@ local function resetChunk( cx, cy, cz )
 	c.orients = {}
 	c.count = 0
 	if MC.TouchChunkCollisionVersion then MC.TouchChunkCollisionVersion( c ) end
+	if MC.IndexChunkLightSources then MC.IndexChunkLightSources( c ) end
 	return c
 end
 
@@ -327,6 +347,7 @@ local function readCellsIntoChunk( c, count )
 		end
 	end
 	if changed and MC.TouchChunkCollisionVersion then MC.TouchChunkCollisionVersion( c ) end
+	if changed and MC.IndexChunkLightSources then MC.IndexChunkLightSources( c ) end
 end
 
 local function reviveChunkEnt( c )
@@ -370,6 +391,7 @@ end
 
 local function resetClientWorldForSnapshot( expectedChunks, expectedBlocks )
 	if MC.FreeAllMeshes then MC.FreeAllMeshes() end
+	if MC.MarkAllMeshesDirty then MC.MarkAllMeshesDirty() end
 	for _, e in pairs( MC.ChunkEnts or {} ) do
 		if IsValid( e ) then
 			if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
@@ -452,6 +474,7 @@ local function loadSnapshotChunk( data, cache, palette )
 	end
 
 	if MC.TouchChunkCollisionVersion then MC.TouchChunkCollisionVersion( c ) end
+	if MC.IndexChunkLightSources then MC.IndexChunkLightSources( c ) end
 	if c.count > 0 then
 		MC.MarkChunkDirty( c.key )
 	else
@@ -716,6 +739,7 @@ function MC.LoadHttpChunkRecord( key, record, partData )
 	for touchedKey, chunk in pairs( touched ) do
 		if chunk.count and chunk.count > 0 then
 			if MC.TouchChunkCollisionVersion then MC.TouchChunkCollisionVersion( chunk ) end
+			if MC.IndexChunkLightSources then MC.IndexChunkLightSources( chunk ) end
 			reviveChunkEnt( chunk )
 			MC.MarkChunkDirty( touchedKey )
 			local cx, cy, cz = MC.ChunkKeyToCoords( touchedKey )
@@ -1136,6 +1160,8 @@ net.Receive( "mc_unload_chunk", function()
 	if MC.ClientPhysBuiltHadObjects then MC.ClientPhysBuiltHadObjects[key] = nil end
 	if MC.ClientPhysBuiltObjectCounts then MC.ClientPhysBuiltObjectCounts[key] = nil end
 	if MC.ClientPhysTargetSignatures then MC.ClientPhysTargetSignatures[key] = nil end
+	if MC.ClearChunkLightSources then MC.ClearChunkLightSources( key ) end
+	if MC.LightSkyColumns then MC.LightSkyColumns = {} end
 	MC.PendingFull[key] = nil
 	local httpState = MC.HttpChunkSync
 	if httpState then
@@ -1159,6 +1185,7 @@ end )
 
 net.Receive( "mc_clear", function()
 	MC.FreeAllMeshes()
+	if MC.MarkAllMeshesDirty then MC.MarkAllMeshesDirty() end
 	for key, e in pairs( MC.ChunkEnts or {} ) do
 		if IsValid( e ) then
 			if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end

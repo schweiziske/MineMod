@@ -73,6 +73,15 @@ concommand.Add( "mc_block_diag", function()
 	print( string.format( "  tiles top=%s side=%s bottom=%s (boxFaces=%s modelQuads=%s)",
 		tostring( b.top ), tostring( b.side ), tostring( b.bottom ),
 		b.boxFaces and #b.boxFaces or "nil", b.modelQuads and #b.modelQuads or "nil" ) )
+	local lightBrightness, lightLevel, blockLight, skyLight = 1, 15, 15, 15
+	if MC.SampleLighting then
+		lightBrightness, lightLevel, blockLight, skyLight = MC.SampleLighting( bx, by, bz, MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0 )
+	end
+	print( string.format( "  lighting enabled=%s skyCvar=%s lightEmission=%s sample=%s block=%s sky=%s brightness=%.3f",
+		tostring( MC.LightEnabled and MC.LightEnabled:GetBool() ),
+		tostring( MC.LightSkyLevel and MC.LightSkyLevel:GetInt() ),
+		tostring( b.lightEmission ),
+		tostring( lightLevel ), tostring( blockLight ), tostring( skyLight ), tonumber( lightBrightness ) or 1 ) )
 	local boxes = MC.BlockBoxes( id, orient, bx, by, bz ) or {}
 	print( string.format( "  boxes=%d (post+arms; >1 表示有连接)", #boxes ) )
 	for i, box in ipairs( boxes ) do
