@@ -218,9 +218,10 @@ local function scheduleClientPhysicsSubchunkRetry( owner, group, retryBounds )
 	if MC.PendingNetworkPhysRetry[retryKey] then return end
 	local attempts = ( MC.NetworkPhysRetryAttempts[retryKey] or 0 ) + 1
 	MC.NetworkPhysRetryAttempts[retryKey] = attempts
+	if attempts > 5 then return end
 	MC.PendingNetworkPhysRetry[retryKey] = true
 
-	local delay = attempts <= 2 and 0.03 or ( attempts <= 10 and 0.12 or 0.35 )
+	local delay = attempts <= 2 and 0.03 or 0.12
 	timer.Simple( delay, function()
 		MC.PendingNetworkPhysRetry[retryKey] = nil
 		if MC.MarkChunkPhysDirty then
