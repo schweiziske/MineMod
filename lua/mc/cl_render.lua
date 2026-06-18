@@ -416,12 +416,13 @@ local function addClientAABBCollisionInterest( desired, mins, maxs, blockPad, on
 	return minBX, minBY, minBZ, maxBX, maxBY, maxBZ
 end
 
-local function collectClientPlayerAABBCollisionInterestKeys( lp, desired )
+local function collectClientPlayerAABBCollisionInterestKeys( lp, desired, radius )
 	if not IsValid( lp ) then return nil end
 	local mins, maxs = lp:WorldSpaceAABB()
 	if not mins or not maxs then return nil end
+	radius = math.max( 0, math.floor( tonumber( radius ) or 0 ) )
 	local onlyCX, onlyCY, onlyCZ
-	if not clientCollisionCrossChunkEnabled() then
+	if radius <= 0 and not clientCollisionCrossChunkEnabled() then
 		local pos = lp.WorldSpaceCenter and lp:WorldSpaceCenter() or lp:GetPos()
 		local bx, by, bz = MC.WorldToCell( pos )
 		onlyCX, onlyCY, onlyCZ = MC.CellToChunk( bx, by, bz )
@@ -441,7 +442,7 @@ local function collectClientAimCollisionInterestKeys( lp, desired )
 	local hit = MC.PlayerBlockAim and MC.PlayerBlockAim( lp, aimDist ) or nil
 	if not hit or not hit.bx then return nil end
 	local radius = clientCollisionAimRadius()
-	local clampToHitChunk = not clientCollisionCrossChunkEnabled()
+	local clampToHitChunk = radius <= 0 and not clientCollisionCrossChunkEnabled()
 	addClientCellNeighborhoodCollisionKeys( desired, hit.bx, hit.by, hit.bz, radius, clampToHitChunk )
 	local cx, cy, cz = MC.CellToChunk( hit.bx, hit.by, hit.bz )
 	return MC.ChunkKey( cx, cy, cz ) .. "|" .. hit.bx .. ":" .. hit.by .. ":" .. hit.bz .. "|" .. radius .. "|" .. aimDist .. "|" .. tostring( clampToHitChunk )
@@ -567,7 +568,7 @@ function MC.RefreshClientCollisionInterest( force )
 		local bx, by, bz = MC.WorldToCell( pos )
 		local cx, cy, cz = MC.CellToChunk( bx, by, bz )
 		centerKey = MC.ChunkKey( cx, cy, cz )
-		aabbKey = collectClientPlayerAABBCollisionInterestKeys( lp, desired )
+		aabbKey = collectClientPlayerAABBCollisionInterestKeys( lp, desired, radius )
 		aimKey = collectClientAimCollisionInterestKeys( lp, desired )
 	end
 
