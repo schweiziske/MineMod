@@ -425,20 +425,6 @@ local HorizontalPartBaseByFacing = {
 	[MC.Direction.WEST] = 2,
 	[MC.Direction.EAST] = 3,
 }
-local HorizontalCounterClockwise = {
-	[MC.Direction.NORTH] = MC.Direction.WEST,
-	[MC.Direction.WEST] = MC.Direction.SOUTH,
-	[MC.Direction.SOUTH] = MC.Direction.EAST,
-	[MC.Direction.EAST] = MC.Direction.NORTH,
-}
-
-local HorizontalClockwise = {
-    [MC.Direction.NORTH] = MC.Direction.EAST,
-    [MC.Direction.EAST] = MC.Direction.SOUTH,
-    [MC.Direction.SOUTH] = MC.Direction.WEST,
-    [MC.Direction.WEST] = MC.Direction.NORTH,
-}
-
 local function horizontalPartBase( facing )
 	return HorizontalPartBaseByFacing[facing] or HorizontalPartBaseByFacing[MC.Direction.NORTH]
 end
@@ -447,8 +433,12 @@ local function horizontalPartFacing( orient )
 	return HorizontalPartFacingByBase[math.floor( tonumber( orient ) or 0 ) % 4] or MC.Direction.NORTH
 end
 
-function MC.MakeDoorOrient( facing, half, open )
-	return horizontalPartBase( facing ) + ( half == "upper" and 4 or 0 ) + ( open and 8 or 0 )
+function MC.MakeDoorOrient( facing, half, open, hinge, powered )
+	return horizontalPartBase( facing )
+		+ ( half == "upper" and 4 or 0 )
+		+ ( open and 8 or 0 )
+		+ ( hinge == "right" and 16 or 0 )
+		+ ( powered and 32 or 0 )
 end
 
 function MC.DoorOrientFacing( orient )
@@ -463,10 +453,20 @@ function MC.DoorOrientOpen( orient )
 	return math.floor( ( tonumber( orient ) or 0 ) / 8 ) % 2 == 1
 end
 
-function MC.DoorRenderFacing( orient )
-	local facing = MC.DoorOrientFacing( orient )
-	if MC.DoorOrientOpen( orient ) then return HorizontalClockwise[facing] or facing end
-	return facing
+function MC.DoorOrientHinge( orient )
+	return math.floor( ( tonumber( orient ) or 0 ) / 16 ) % 2 == 1 and "right" or "left"
+end
+
+function MC.DoorOrientPowered( orient )
+	return math.floor( ( tonumber( orient ) or 0 ) / 32 ) % 2 == 1
+end
+
+function MC.DoorModelVariantKey( orient )
+	return table.concat( {
+		MC.DoorOrientHalf( orient ),
+		MC.DoorOrientHinge( orient ),
+		MC.DoorOrientOpen( orient ) and "open" or "closed",
+	}, "_" )
 end
 
 function MC.MakeBedOrient( facing, part )
@@ -517,7 +517,7 @@ local StairHalfByOrient = {
 }
 local DoorOrientAllowed = {}
 local DoorOrientOrder = {}
-for i = 0, 15 do
+for i = 0, 63 do
 	DoorOrientAllowed[i] = true
 	DoorOrientOrder[#DoorOrientOrder + 1] = i
 end
@@ -685,9 +685,11 @@ function MC.OrientToState( id, orient )
 	end
 	if b.orient == "door" then
 		orient = MC.NormalizeOrient( id, orient )
-		return ( DirectionName[MC.DoorOrientFacing( orient )] or "north" ) ..
-			"," .. MC.DoorOrientHalf( orient ) ..
-			",opened=" .. tostring( MC.DoorOrientOpen( orient ) )
+		return "facing=" .. ( DirectionName[MC.DoorOrientFacing( orient )] or "north" ) ..
+			",half=" .. MC.DoorOrientHalf( orient ) ..
+			",hinge=" .. MC.DoorOrientHinge( orient ) ..
+			",open=" .. tostring( MC.DoorOrientOpen( orient ) ) ..
+			",powered=" .. tostring( MC.DoorOrientPowered( orient ) )
 	end
 	if b.orient == "bed" then
 		orient = MC.NormalizeOrient( id, orient )
@@ -712,7 +714,9 @@ function MC.BlockStateText( id, orient )
 		orient = MC.NormalizeOrient( id, orient )
 		local facing = DirectionName[MC.DoorOrientFacing( orient )] or "north"
 		return "facing=" .. facing .. ",half=" .. MC.DoorOrientHalf( orient ) ..
-			",opened=" .. tostring( MC.DoorOrientOpen( orient ) )
+			",hinge=" .. MC.DoorOrientHinge( orient ) ..
+			",open=" .. tostring( MC.DoorOrientOpen( orient ) ) ..
+			",powered=" .. tostring( MC.DoorOrientPowered( orient ) )
 	end
 	if b.orient == "bed" then
 		orient = MC.NormalizeOrient( id, orient )
@@ -730,7 +734,7 @@ function MC.BlockStateHint( id )
 	if not rule then return "" end
 	if b.orient == "slab" then return "type=bottom/top/double" end
 	if b.orient == "stairs" then return "facing=north/south/west/east,half=bottom/top" end
-	if b.orient == "door" then return "facing=north/south/west/east,half=lower/upper,opened=true/false" end
+	if b.orient == "door" then return "facing=north/south/west/east,half=lower/upper,hinge=left/right,open=true/false,powered=true/false" end
 	if b.orient == "bed" then return "facing=north/south/west/east,part=foot/head" end
 	local names = {}
 	for _, value in ipairs( rule.order ) do names[#names + 1] = rule.names[value] end
@@ -811,8 +815,11 @@ function MC.StateToOrient( id, state )
 		if not HorizontalPartBaseByFacing[facing] then facing = nil end
 		local half = map and map.half or "lower"
 		if half ~= "upper" then half = "lower" end
+		local hinge = map and map.hinge or "left"
+		if hinge ~= "right" then hinge = "left" end
 		local open = map and stateBool( map.opened or map.open, false ) or false
-		return facing and MC.MakeDoorOrient( facing, half, open ) or MC.DefaultOrient( id )
+		local powered = map and stateBool( map.powered, false ) or false
+		return facing and MC.MakeDoorOrient( facing, half, open, hinge, powered ) or MC.DefaultOrient( id )
 	end
 	if b.orient == "bed" then
 		local facing = map and DirectionValue[map.facing] or DirectionValue[trim( state )]
@@ -848,9 +855,13 @@ function MC.IsOrientStateValid( id, state )
 			local facing = DirectionValue[map.facing]
 			local half = map.half or "lower"
 			local open = map.opened or map.open
+			local hinge = map.hinge or "left"
+			local powered = map.powered
 			return HorizontalPartBaseByFacing[facing] ~= nil
 				and ( half == "lower" or half == "upper" )
+				and ( hinge == "left" or hinge == "right" )
 				and stateBoolValid( open )
+				and stateBoolValid( powered )
 		end
 		return HorizontalPartBaseByFacing[DirectionValue[trim( string.lower( tostring( state ) ) )]] ~= nil
 	end
@@ -932,6 +943,62 @@ local function placementHalfFromTrace( tr )
 	return "bottom"
 end
 
+local function doorSideDirections( facing )
+	if facing == MC.Direction.NORTH then return MC.Direction.WEST, MC.Direction.EAST end
+	if facing == MC.Direction.SOUTH then return MC.Direction.EAST, MC.Direction.WEST end
+	if facing == MC.Direction.WEST then return MC.Direction.SOUTH, MC.Direction.NORTH end
+	return MC.Direction.NORTH, MC.Direction.SOUTH
+end
+
+local function doorNeighbourSolid( bx, by, bz )
+	local id = MC.GetBlock and MC.GetBlock( bx, by, bz ) or 0
+	if id == 0 then return false end
+	if MC.BlockIsFullCube then return MC.BlockIsFullCube( id, MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz ) or 0 ) == true end
+	local b = MC.Blocks and MC.Blocks[id]
+	return b and b.solid == true and not b.shape and not b.connection or false
+end
+
+local function doorNeighbourIsLowerDoor( bx, by, bz )
+	local id = MC.GetBlock and MC.GetBlock( bx, by, bz ) or 0
+	if id == 0 then return false end
+	local b = MC.Blocks and MC.Blocks[id]
+	if not b or b.orient ~= "door" then return false end
+	return MC.DoorOrientHalf( MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz ) or 0 ) == "lower"
+end
+
+local function localDoorClickXZ( tr, bx, by )
+	if not tr or not tr.HitPos or not MC.BS then return 0.5, 0.5 end
+	local wx = tr.HitPos.x / MC.BS
+	local wy = tr.HitPos.y / MC.BS
+	return wx - ( tonumber( bx ) or math.floor( wx ) ), wy - ( tonumber( by ) or math.floor( wy ) )
+end
+
+local function doorHingeFromPlacement( tr, bx, by, bz, facing )
+	local leftDir, rightDir = doorSideDirections( facing )
+	local ldx, ldy = 0, 0
+	local rdx, rdy = 0, 0
+	if MC.HorizontalDirectionOffset then
+		ldx, ldy = MC.HorizontalDirectionOffset( leftDir )
+		rdx, rdy = MC.HorizontalDirectionOffset( rightDir )
+	end
+	local leftSolid = doorNeighbourSolid( bx + ldx, by + ldy, bz ) and 1 or 0
+	leftSolid = leftSolid + ( doorNeighbourSolid( bx + ldx, by + ldy, bz + 1 ) and 1 or 0 )
+	local rightSolid = doorNeighbourSolid( bx + rdx, by + rdy, bz ) and 1 or 0
+	rightSolid = rightSolid + ( doorNeighbourSolid( bx + rdx, by + rdy, bz + 1 ) and 1 or 0 )
+	local solidBlockBalance = -leftSolid + rightSolid
+	local doorLeft = doorNeighbourIsLowerDoor( bx + ldx, by + ldy, bz )
+	local doorRight = doorNeighbourIsLowerDoor( bx + rdx, by + rdy, bz )
+
+	if ( doorLeft and not doorRight ) or solidBlockBalance > 0 then return "right" end
+	if ( doorRight and not doorLeft ) or solidBlockBalance < 0 then return "left" end
+
+	local clickX, clickY = localDoorClickXZ( tr, bx, by )
+	if facing == MC.Direction.NORTH then return clickX > 0.5 and "right" or "left" end
+	if facing == MC.Direction.SOUTH then return clickX < 0.5 and "right" or "left" end
+	if facing == MC.Direction.WEST then return clickY < 0.5 and "right" or "left" end
+	return clickY > 0.5 and "right" or "left"
+end
+
 function MC.OrientForVectors( id, forward, hitNormal )
 	local b = MC.Blocks[id]
 	if not b or not b.orient then return 0 end
@@ -963,7 +1030,9 @@ function MC.OrientForPlacement( ply, tr, id )
 		return MC.MakeStairOrient( facing, placementHalfFromTrace( tr ) )
 	end
 	if b and b.orient == "door" then
-		return MC.MakeDoorOrient( horizontalLookDirectionFromForward( forward ) , "lower" )
+		local facing = horizontalLookDirectionFromForward( forward )
+		local hinge = doorHingeFromPlacement( tr, tr and tr.MCBlockX or 0, tr and tr.MCBlockY or 0, tr and tr.MCBlockZ or 0, facing )
+		return MC.MakeDoorOrient( facing, "lower", false, hinge, false )
 	end
 	if b and b.orient == "bed" then
 		return MC.MakeBedOrient( horizontalLookDirectionFromForward( forward ), "foot" )
@@ -1239,8 +1308,11 @@ function MC.BlockModelData( blockOrId, orient )
 	local b = type( blockOrId ) == "table" and blockOrId or MC.Blocks[blockOrId]
 	if not b then return nil end
 	if b.modelVariants then
-		if b.orient == "door" and MC.DoorOrientHalf( orient ) == "upper" then
-			return b.modelVariants.upper or b
+		if b.orient == "door" then
+			local key = MC.DoorModelVariantKey( orient )
+			if b.modelVariants[key] then return b.modelVariants[key] end
+			if MC.DoorOrientHalf( orient ) == "upper" then return b.modelVariants.upper or b end
+			return b
 		end
 		if b.orient == "bed" and MC.BedOrientPart( orient ) == "head" then
 			return b.modelVariants.head or b
@@ -1253,7 +1325,7 @@ function MC.BlockHorizontalFacingForOrient( blockOrId, orient )
 	local b = type( blockOrId ) == "table" and blockOrId or MC.Blocks[blockOrId]
 	if not b then return MC.Direction.NORTH end
 	orient = MC.NormalizeOrient( b.id, orient )
-	if b.orient == "door" then return MC.DoorRenderFacing( orient ) end
+	if b.orient == "door" then return MC.DoorOrientFacing( orient ) end
 	if b.orient == "bed" then return MC.BedOrientFacing( orient ) end
 	return orient
 end

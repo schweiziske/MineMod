@@ -1185,12 +1185,14 @@ function MC.BuildChunkMesh( key, sectionIndex )
 	local function emitModelBlock( b, orient, wx, wy, wz )
 		local quads = rotatedModelQuads( b, orient )
 		if not quads then return false end
+		local mirrorU = b.orient == "door"
 		for _, quad in ipairs( quads ) do
 			local face = FACES[quad.face or MC.Face.TOP] or FACES[MC.Face.TOP]
 			local u0, v0, u1, v1 = tileUVRect( quad.tile or 0, quad.uv )
 			for t = 1, 6 do
 				local vert = quad.verts[TRI[t]]
 				local uf, vf = rotatedUVFlags( vert.u or 0, vert.v or 0, quad.rot or 0 )
+				if mirrorU then uf = 1 - uf end
 				push( {
 					pos    = Vector( wx + vert.x * BS, wy + vert.y * BS, wz + vert.z * BS ),
 					normal = face.n,

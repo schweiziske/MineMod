@@ -87,6 +87,7 @@ local function placeTarget( ply, aim, fallbackTrace, id, avoidUseBlocks )
 		bx, by, bz = placeCell( tr )
 	end
 
+	tr.MCBlockX, tr.MCBlockY, tr.MCBlockZ = bx, by, bz
 	local orient = MC.OrientForPlacement( ply, tr, id )
 	return bx, by, bz, orient
 end
