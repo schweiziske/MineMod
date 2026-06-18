@@ -32,24 +32,32 @@ MC.PredictedFx = PredictedFx
 local ParticleUvSteps = 8
 local MaxDestroyParticles = 64
 
-local function tileNameForBlock( id )
-	if not MC.TileNames then return nil end
-	local tile
+function MC.GetBlockParticleTile( id )
 	if MC.BlockParticleTile then
-		tile = MC.BlockParticleTile( id )
+		return MC.BlockParticleTile( id )
 	elseif MC.BlockIconTile then
-		tile = MC.BlockIconTile( id )
+		return MC.BlockIconTile( id )
 	end
-	local name = MC.TileNames[tile]
-	if not name or name == "" then return nil end
-	return name
+	return nil
 end
 
-local function particleMaterialForTile( tileName )
+function MC.GetBlockParticleTileName( id )
+	if not MC.TileNames then return nil, nil end
+	local tile = MC.GetBlockParticleTile( id )
+	local name = MC.TileNames[tile]
+	if not name or name == "" then return nil end
+	return name, tile
+end
+
+local function tileNameForBlock( id )
+	return MC.GetBlockParticleTileName( id )
+end
+
+local function particleMaterialForTile( tileName, col, row )
 	if not tileName then return Material( "particle/particle_noisesphere" ) end
 
-	local col = math.random( 0, ParticleUvSteps - 1 )
-	local row = math.random( 0, ParticleUvSteps - 1 )
+	col = math.Clamp( math.floor( tonumber( col ) or math.random( 0, ParticleUvSteps - 1 ) ), 0, ParticleUvSteps - 1 )
+	row = math.Clamp( math.floor( tonumber( row ) or math.random( 0, ParticleUvSteps - 1 ) ), 0, ParticleUvSteps - 1 )
 	local key = tileName .. ":" .. col .. ":" .. row
 	local cached = ParticleMaterialCache[key]
 	if cached then return cached end
@@ -77,6 +85,15 @@ local function particleMaterialForTile( tileName )
 
 	ParticleMaterialCache[key] = mat
 	return mat
+end
+
+function MC.GetParticleMaterialForTile( tileName, col, row )
+	return particleMaterialForTile( tileName, col, row )
+end
+
+function MC.GetBlockParticleMaterial( id, col, row )
+	local tileName, tile = MC.GetBlockParticleTileName( id )
+	return particleMaterialForTile( tileName, col, row ), tileName, tile
 end
 
 local function addTerrainParticle( emitter, tileName, pos, relX, relY, relZ, bs )
@@ -172,23 +189,24 @@ local function modelParticleBoxes( b )
 	return b._particleBoxes
 end
 
-local function spawnBreakParticles( id, orient, bx, by, bz )
+local function spawnBreakParticles( id, orient, bx, by, bz, options )
+	options = istable( options ) and options or {}
 	local b = MC.Blocks and MC.Blocks[id]
-	if b and b.spawnTerrainParticles == false then return end
-	if not MC.BlockBoxes then return end
+	if b and b.spawnTerrainParticles == false then return 0 end
+	if not MC.BlockBoxes then return 0 end
 
-	local boxes = MC.BlockBoxes( id, orient, bx, by, bz )
+	local boxes = options.boxes or MC.BlockBoxes( id, orient, bx, by, bz )
 	if ( not boxes or #boxes == 0 ) and b and b.modelQuads then
 		boxes = modelParticleBoxes( b )
 	end
-	if not boxes or #boxes == 0 then return end
+	if not boxes or #boxes == 0 then return 0 end
 
 	local base = MC.CellWorldMin( bx, by, bz )
 	local bs = MC.BS
-	local emitter = ParticleEmitter( base + Vector( bs * 0.5, bs * 0.5, bs * 0.5 ) )
-	if not emitter then return end
+	local emitter = ParticleEmitter( options.emitterPos or base + Vector( bs * 0.5, bs * 0.5, bs * 0.5 ) )
+	if not emitter then return 0 end
 
-	local tileName = tileNameForBlock( id )
+	local tileName = options.tileName or tileNameForBlock( id )
 	local samples = {}
 	for _, box in ipairs( boxes ) do
 		local widthX = math.min( 1, box[4] - box[1] )
@@ -208,7 +226,12 @@ local function spawnBreakParticles( id, orient, bx, by, bz )
 	end
 
 	local total = #samples
-	local count = math.min( total, MaxDestroyParticles )
+	local maxParticles = math.max( 0, math.floor( tonumber( options.maxParticles ) or MaxDestroyParticles ) )
+	local count = math.min( total, maxParticles )
+	if count <= 0 then
+		emitter:Finish()
+		return 0
+	end
 	local step = total > count and total / count or 1
 	local offset = total > count and math.Rand( 0, step ) or 0
 
@@ -219,6 +242,11 @@ local function spawnBreakParticles( id, orient, bx, by, bz )
 	end
 
 	emitter:Finish()
+	return count
+end
+
+function MC.SpawnBlockBreakParticles( id, orient, bx, by, bz, options )
+	return spawnBreakParticles( id, orient, bx, by, bz, options )
 end
 
 local function fxKey( kind, bx, by, bz, id )
@@ -242,6 +270,22 @@ function MC.PlayBlockFx( kind, id, orient, bx, by, bz, predicted )
 		prunePredictedFx()
 		PredictedFx[fxKey( kind, bx, by, bz, id )] = CurTime() + 2.5
 	end
+end
+
+local function normalizeFxKind( kind )
+	if kind == "place" then return 1 end
+	if kind == "break" or kind == "destroy" then return 2 end
+	kind = math.floor( tonumber( kind ) or 0 )
+	if kind == 1 or kind == 2 then return kind end
+	return nil
+end
+
+function MC.PlayBlockEffect( kind, id, orient, bx, by, bz, options )
+	kind = normalizeFxKind( kind )
+	if not kind then return false, "invalid_kind" end
+	options = istable( options ) and options or {}
+	MC.PlayBlockFx( kind, id, orient, bx, by, bz, options.predicted == true )
+	return true
 end
 
 local function consumePredictedFx( kind, bx, by, bz, id )

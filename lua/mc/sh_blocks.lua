@@ -1851,6 +1851,93 @@ function MC.BlockCollisionBoxes( id, orient, bx, by, bz )
 	return MC.BlockBoxes( id, orient, bx, by, bz )
 end
 
+function MC.BlockHasCollision( id )
+	id = math.floor( tonumber( id ) or 0 )
+	local b = MC.Blocks[id]
+	return b ~= nil and b.solid ~= false
+end
+
+function MC.GetBlockCollisionBoxes( id, orient, bx, by, bz )
+	id = math.floor( tonumber( id ) or 0 )
+	if not MC.BlockHasCollision( id ) then return nil end
+	return MC.BlockCollisionBoxes( id, orient, bx, by, bz )
+end
+
+local BlockExtentCache = {}
+
+local function boxesExtent( boxes )
+	if not boxes or #boxes == 0 then return nil, nil end
+	local lo, hi = math.huge, -math.huge
+	for _, box in ipairs( boxes ) do
+		if box[3] < lo then lo = box[3] end
+		if box[6] > hi then hi = box[6] end
+	end
+	if lo == math.huge or hi == -math.huge then return nil, nil end
+	return lo, hi
+end
+
+local function convexesExtent( convexes )
+	if not convexes or #convexes == 0 then return nil, nil end
+	local lo, hi = math.huge, -math.huge
+	for _, convex in ipairs( convexes ) do
+		for _, point in ipairs( convex ) do
+			local z = point[3] or point.z
+			if z then
+				if z < lo then lo = z end
+				if z > hi then hi = z end
+			end
+		end
+	end
+	if lo == math.huge or hi == -math.huge then return nil, nil end
+	return lo, hi
+end
+
+function MC.GetBlockExtent( id, orient, bx, by, bz )
+	id = math.floor( tonumber( id ) or 0 )
+	if id == 0 or not MC.BlockHasCollision( id ) then return nil, nil end
+	orient = MC.NormalizeOrient and MC.NormalizeOrient( id, orient ) or math.floor( tonumber( orient ) or 0 )
+
+	local cacheable = bx == nil and by == nil and bz == nil
+	local cacheKey = cacheable and ( id .. ":" .. orient ) or nil
+	local cached = cacheKey and BlockExtentCache[cacheKey] or nil
+	if cached then
+		if cached.empty then return nil, nil end
+		return cached.lo, cached.hi
+	end
+
+	local lo, hi = boxesExtent( MC.GetBlockCollisionBoxes( id, orient, bx, by, bz ) )
+	if lo == nil and MC.BlockCollisionConvexes then
+		lo, hi = convexesExtent( MC.BlockCollisionConvexes( id, orient, bx, by, bz ) )
+	end
+
+	if cacheKey then
+		BlockExtentCache[cacheKey] = lo == nil and { empty = true } or { lo = lo, hi = hi }
+	end
+	return lo, hi
+end
+
+function MC.GetBlockShapeInfo( id, orient, bx, by, bz )
+	id = math.floor( tonumber( id ) or 0 )
+	if id == 0 then return nil end
+	orient = MC.NormalizeOrient and MC.NormalizeOrient( id, orient ) or math.floor( tonumber( orient ) or 0 )
+	local boxes = MC.BlockBoxes( id, orient, bx, by, bz )
+	local collisionBoxes = MC.GetBlockCollisionBoxes( id, orient, bx, by, bz )
+	local collisionConvexes = ( not collisionBoxes and MC.BlockHasCollision( id ) and MC.BlockCollisionConvexes )
+		and MC.BlockCollisionConvexes( id, orient, bx, by, bz ) or nil
+	local lo, hi = MC.GetBlockExtent( id, orient, bx, by, bz )
+	return {
+		id = id,
+		orient = orient,
+		boxes = boxes,
+		collisionBoxes = collisionBoxes,
+		collisionConvexes = collisionConvexes,
+		extentLo = lo,
+		extentHi = hi,
+		hasCollision = lo ~= nil,
+		fullCube = MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) or false,
+	}
+end
+
 function MC.BlockIsFullCube( id, orient )
 	local b = MC.Blocks[id]
 	if not b or b.solid == false then return false end
