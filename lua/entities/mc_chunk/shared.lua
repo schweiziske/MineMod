@@ -34,6 +34,10 @@ local function freezePhysicsObject( ent )
 	return false
 end
 
+local function clientCollisionAABBOnly()
+	return CLIENT
+end
+
 local function fmtDebugVec( v )
 	if not v then return "nil" end
 	return string.format( "(%.1f %.1f %.1f)", v.x, v.y, v.z )
@@ -426,6 +430,9 @@ function ENT:EnsureKey()
 	local cx, cy, cz = MC.ChunkCoordsFromOrigin( self:GetPos() )
 	self.cx, self.cy, self.cz = cx, cy, cz
 	self.ChunkKey = MC.ChunkKey( cx, cy, cz )
+	if SERVER then
+		self:SetNWString( "MCChunkKey", self.ChunkKey )
+	end
 	return self.ChunkKey
 end
 
@@ -577,17 +584,17 @@ local function greedyBoxes( chunk, bounds )
 							if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
 								solid[li] = true
 							else
-								local blockConvexes = MC.BlockCollisionConvexes
+								local blockConvexes = not clientCollisionAABBOnly() and MC.BlockCollisionConvexes
 									and MC.BlockCollisionConvexes( id, orient, bx, by, bz ) or nil
 								if blockConvexes then
 									for _, convex in ipairs( blockConvexes ) do
 										addCustomConvex( lx, ly, lz, convex )
 									end
 								else
-									-- identical to the server: real collision boxes, never a
-									-- client-only bounding-box approximation (that mismatch is what
-									-- made the predicted player jitter on non-cube blocks).
 									local blockBoxes = ( MC.BlockCollisionBoxes or MC.BlockBoxes )( id, orient, bx, by, bz )
+									if clientCollisionAABBOnly() and ( not blockBoxes or #blockBoxes == 0 ) and MC.BlockBoxes then
+										blockBoxes = MC.BlockBoxes( id, orient, bx, by, bz )
+									end
 									for _, box in ipairs( blockBoxes or {} ) do
 										addShapeBox( lx, ly, lz, box )
 									end
@@ -843,6 +850,7 @@ end
 -- collides with blocks (server physics objects are not replicated to clients,
 -- which would otherwise cause rubber-banding when walking on builds).
 function ENT:RebuildPhysics( bounds )
+	if bounds == true then bounds = nil end
 	local chunk = MC.GetChunkByKey( self:EnsureKey() )
 	if not chunk or chunk.count == 0 then
 		clearClientAABBDebugBoxes( self )
@@ -851,67 +859,16 @@ function ENT:RebuildPhysics( bounds )
 		return
 	end
 
-	if bounds and not self.PhysicsSubchunks then
-		self:RebuildPhysics()
-		return
-	end
-
 	local boxes, customConvexes = greedyBoxes( chunk, bounds )
 	if #boxes == 0 and #customConvexes == 0 then
 		clearClientAABBDebugBoxes( self )
-		local affectedKeys = collisionSubchunkKeysForBounds( bounds )
-		if affectedKeys then
-			for key in pairs( affectedKeys ) do
-				removePhysicsSubchunkKey( self, key )
-			end
-		else
-			self:ClearPhysicsSubchunks()
-			self:PhysicsDestroy()
-		end
+		self:ClearPhysicsSubchunks()
+		self:PhysicsDestroy()
 		return
 	end
 	rememberClientAABBDebugBoxes( self, boxes )
 
 	local groups, totalConvexes = buildSubchunkConvexGroups( boxes, customConvexes, MC.BS )
-	if bounds then
-		local affectedKeys = collisionSubchunkKeysForBounds( bounds )
-		for key in pairs( affectedKeys or {} ) do
-			removePhysicsSubchunkKey( self, key )
-		end
-
-		if IsValid( self:GetPhysicsObject() ) then
-			self:PhysicsDestroy()
-		end
-		self:SetSolid( SOLID_NONE )
-
-		local subchunks = self.PhysicsSubchunks or {}
-		local byKey = self.PhysicsSubchunksByKey or {}
-		local failed = 0
-
-		for _, group in ipairs( groups ) do
-			local _, ok, partSize = spawnPhysicsSubchunkPages( self, group, subchunks, byKey )
-			if not ok then
-				failed = failed + 1
-				-- MsgN( "[MC] !!! collision subchunk build FAILED for chunk " .. tostring( self.ChunkKey ) ..
-				-- 	"  subchunk=" .. tostring( group.key ) ..
-				-- 	" convexes=" .. #group.convexes ..
-				-- 	" part=" .. tostring( partSize ) )
-			end
-		end
-
-		self.PhysicsSubchunks = subchunks
-		self.PhysicsSubchunksByKey = byKey
-		rememberClientPhysStats( self, "subchunk_update", bounds, #boxes, #customConvexes, totalConvexes, subchunks )
-		if failed > 0 then
-			-- MsgN( "[MC] collision subchunk update for chunk " .. tostring( self.ChunkKey ) ..
-			-- 	"  convexes=" .. totalConvexes ..
-			-- 	" subchunks=" .. #groups ..
-			-- 	" built=" .. countValidSubchunkPhysics( subchunks ) ..
-			-- 	" failed=" .. failed )
-		end
-		return
-	end
-
 	if totalConvexes > PHYSICS_CONVEXES_PER_ENTITY then
 		self:ClearPhysicsSubchunks()
 		self:PhysicsDestroy()

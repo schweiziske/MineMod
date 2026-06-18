@@ -381,10 +381,14 @@ function MC.TraceBlockRay( startPos, dir, maxDist )
 	return nil
 end
 
-function MC.PlayerBlockAim( ply )
+function MC.PlayerBlockAim( ply, reach )
 	if not IsValid( ply ) then return nil end
 	local eye = ply:EyePos()
-	local hit = MC.TraceBlockRay( eye, ply:EyeAngles():Forward(), MC.CurrentReach() )
+	local maxDist = tonumber( reach )
+	if not maxDist or maxDist <= 0 then
+		maxDist = MC.CurrentReach()
+	end
+	local hit = MC.TraceBlockRay( eye, ply:EyeAngles():Forward(), maxDist )
 	if not hit then return nil end
 	return hit
 end

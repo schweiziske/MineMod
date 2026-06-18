@@ -11,6 +11,8 @@ MC.mcDebugF3Down = MC.mcDebugF3Down or false
 MC.ServerCollisionDebug = MC.ServerCollisionDebug or CreateClientConVar( "mc_server_collision_debug", "0", true, false,
 	"Draw server-authoritative MC collision interest bounds" )
 MC.ServerCollisionDebugBounds = MC.ServerCollisionDebugBounds or {}
+MC.ClientCollisionAreaDebug = MC.ClientCollisionAreaDebug or CreateClientConVar( "mc_client_collision_area_debug", "0", true, false,
+	"Draw clientside MC prediction collision interest areas" )
 MC.ClientCollisionAABBDebug = MC.ClientCollisionAABBDebug or CreateClientConVar( "mc_client_collision_aabb_debug", "0", true, false,
 	"Draw clientside MC prediction collision AABB boxes" )
 MC.ClientCollisionAABBDebugLimit = MC.ClientCollisionAABBDebugLimit or CreateClientConVar( "mc_client_collision_aabb_debug_limit", "2048", true, false,
@@ -195,6 +197,11 @@ concommand.Add( "mc_client_diag", function()
 		tostring( MC.ServerCollisionDebug and MC.ServerCollisionDebug:GetBool() ),
 		#( MC.ServerCollisionDebugBounds or {} ),
 		tostring( MC.ServerCollisionDebugUpdated and math.Round( CurTime() - MC.ServerCollisionDebugUpdated, 3 ) or "nil" ) ) )
+	print( string.format( "[MC client] client collision debug area=%s aabb=%s interest=%d aabbBoxes=%d",
+		tostring( MC.ClientCollisionAreaDebug and MC.ClientCollisionAreaDebug:GetBool() ),
+		tostring( MC.ClientCollisionAABBDebug and MC.ClientCollisionAABBDebug:GetBool() ),
+		table.Count( MC.ClientCollisionInterest or {} ),
+		table.Count( MC.ClientCollisionAABBDebugBoxes or {} ) ) )
 end )
 
 local function mcProbeVec( v )
@@ -336,6 +343,38 @@ hook.Add( "PostDrawTranslucentRenderables", "mc_server_collision_debug_draw", fu
 	local col = Color( 0, 220, 255, 220 )
 	for _, b in ipairs( bounds ) do
 		render.DrawWireframeBox( vector_origin, angle_zero, b.mins, b.maxs, col, true )
+	end
+end )
+
+local function clientCollisionInterestWorldBounds( key, b )
+	local cx, cy, cz = MC.ChunkKeyToCoords( key )
+	if not cx then return nil end
+	local origin = MC.ChunkWorldOrigin( cx, cy, cz )
+	local bs = MC.BS
+	return origin + Vector( b[1] * bs, b[2] * bs, b[3] * bs ),
+		origin + Vector( ( b[4] + 1 ) * bs, ( b[5] + 1 ) * bs, ( b[6] + 1 ) * bs )
+end
+
+hook.Remove( "PostDrawTranslucentRenderables", "mc_client_collision_area_debug_draw" )
+hook.Add( "PostDrawTranslucentRenderables", "mc_client_collision_area_debug_draw", function()
+	if not MC.ClientCollisionAreaDebug or not MC.ClientCollisionAreaDebug:GetBool() then return end
+	local interest = MC.ClientCollisionInterest or {}
+	if next( interest ) == nil then return end
+
+	local limit = MC.ClientCollisionAABBDebugLimit and MC.ClientCollisionAABBDebugLimit:GetInt() or 2048
+	limit = math.Clamp( math.floor( tonumber( limit ) or 2048 ), 1, 20000 )
+	local drawn = 0
+	render.SetColorMaterial()
+	local col = Color( 255, 220, 40, 230 )
+	for key, bounds in pairs( interest ) do
+		for _, b in ipairs( bounds or {} ) do
+			local mins, maxs = clientCollisionInterestWorldBounds( key, b )
+			if mins and maxs then
+				render.DrawWireframeBox( vector_origin, angle_zero, mins, maxs, col, true )
+				drawn = drawn + 1
+				if drawn >= limit then return end
+			end
+		end
 	end
 end )
 
