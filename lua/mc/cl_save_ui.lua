@@ -453,7 +453,7 @@ function MC.OpenSaveManager()
 
 	local overwrite = vgui.Create( "DButton", actions )
 	overwrite:SetPos( 104, 6 )
-	overwrite:SetSize( 112, 30 )
+	overwrite:SetSize( 142, 30 )
 	styleButton( overwrite, L( "save.overwrite", "覆盖并截图" ) )
 	overwrite.DoClick = function()
 		local save = fr.SelectedSave
@@ -469,7 +469,7 @@ function MC.OpenSaveManager()
 
 	if LocalPlayer():IsAdmin() then
 		local delete = vgui.Create( "DButton", actions )
-		delete:SetPos( 224, 6 )
+		delete:SetPos( 254, 6 )
 		delete:SetSize( 96, 30 )
 		styleButton( delete, L( "save.delete", "删除" ), true )
 		delete.DoClick = function()

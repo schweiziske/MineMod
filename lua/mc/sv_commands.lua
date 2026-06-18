@@ -186,6 +186,7 @@ local function runFill( ply, args )
 
 	local x1, y1, z1 = tonumber( args[2] ), tonumber( args[3] ), tonumber( args[4] )
 	local x2, y2, z2 = tonumber( args[5] ), tonumber( args[6] ), tonumber( args[7] )
+	print(args)
 	local id, orient, blockArg, parseErr = MC.ParseBlockSpec( trimArg( joinArgs( args, 8 ) ) )
 	if not x1 or not y1 or not z1 or not x2 or not y2 or not z2 or id == nil or parseErr == "block" then
 		sendFillUsage( ply )
