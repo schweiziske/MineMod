@@ -99,7 +99,7 @@ MC.Net = {
 	COORD_BITS = 20, -- signed block coord (+-524288 blocks; far beyond any map)
 	LOCAL_BITS = 13, -- local index 0..8191 (16*16*32-1)
 	ID_BITS    = 16, -- block id 0..65535
-	ORIENT_BITS = 4, -- block state nibble; doors need facing + half + opened
+	ORIENT_BITS = 6, -- block state bits; doors need facing + half + open + hinge + powered
 	COUNT_BITS = 14, -- blocks per chunk section 0..8192
 }
 

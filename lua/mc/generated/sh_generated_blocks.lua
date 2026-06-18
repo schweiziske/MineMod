@@ -71,6 +71,13 @@ local parts = {
 	"mc/generated/sh_generated_blocks_part067.lua",
 	"mc/generated/sh_generated_blocks_part068.lua",
 	"mc/generated/sh_generated_blocks_part069.lua",
+	"mc/generated/sh_generated_blocks_part070.lua",
+	"mc/generated/sh_generated_blocks_part071.lua",
+	"mc/generated/sh_generated_blocks_part072.lua",
+	"mc/generated/sh_generated_blocks_part073.lua",
+	"mc/generated/sh_generated_blocks_part074.lua",
+	"mc/generated/sh_generated_blocks_part075.lua",
+	"mc/generated/sh_generated_blocks_part076.lua",
 }
 if SERVER then
 	for _, f in ipairs( parts ) do AddCSLuaFile( f ) end

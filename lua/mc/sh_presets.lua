@@ -99,7 +99,9 @@ function MC.PresetRotateBlockOrient( id, orient, rotation )
 		return MC.MakeDoorOrient(
 			MC.PresetRotateHorizontalDirection( MC.DoorOrientFacing( orient ), rotation ),
 			MC.DoorOrientHalf( orient ),
-			MC.DoorOrientOpen( orient )
+			MC.DoorOrientOpen( orient ),
+			MC.DoorOrientHinge( orient ),
+			MC.DoorOrientPowered( orient )
 		)
 	end
 

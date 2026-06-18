@@ -101,6 +101,11 @@ local function doorSoundSetForBlock( id )
 	return DoorSoundSets.wood
 end
 
+function MC.DoorCanOpenByHand( id )
+	local b = MC.Blocks and MC.Blocks[id]
+	return not ( b and b.name == "iron_door" )
+end
+
 local function playDoorSound( id, open, bx, by, bz )
 	if not SERVER then return end
 	local set = doorSoundSetForBlock( id )
@@ -110,16 +115,18 @@ local function playDoorSound( id, open, bx, by, bz )
 	sound.Play( list[math.random( #list )], pos, 72, math.floor( math.Rand( 90, 100 ) + 0.5 ), 1 )
 end
 
-local function matchingDoorPart( id, orient, wantId, facing, half, open )
+local function matchingDoorPart( id, orient, wantId, facing, half, open, hinge, powered )
 	return id == wantId
 		and MC.IsDoorBlock and MC.IsDoorBlock( id )
 		and MC.DoorOrientFacing( orient ) == facing
 		and MC.DoorOrientHalf( orient ) == half
 		and MC.DoorOrientOpen( orient ) == open
+		and MC.DoorOrientHinge( orient ) == hinge
+		and MC.DoorOrientPowered( orient ) == powered
 end
 
-local function toggleDoorCell( ply, bx, by, bz, id, facing, half, open )
-	local orient = MC.MakeDoorOrient( facing, half, open )
+local function toggleDoorCell( ply, bx, by, bz, id, facing, half, open, hinge, powered )
+	local orient = MC.MakeDoorOrient( facing, half, open, hinge, powered )
 	return MC.SV.SetBlock( bx, by, bz, id, orient, {
 		actor = ply,
 		fx = false,
@@ -134,11 +141,14 @@ MC.BlockHandlers.door = MC.BlockHandlers.door or {
 
 		local id = MC.GetBlock( bx, by, bz )
 		if not MC.IsDoorBlock( id ) then return false end
+		if not MC.DoorCanOpenByHand( id ) then return false end
 
 		orient = MC.NormalizeOrient( id, orient )
 		local facing = MC.DoorOrientFacing( orient )
 		local half = MC.DoorOrientHalf( orient )
 		local open = MC.DoorOrientOpen( orient )
+		local hinge = MC.DoorOrientHinge( orient )
+		local powered = MC.DoorOrientPowered( orient )
 		local nextOpen = not open
 		local lowerZ = half == "upper" and bz - 1 or bz
 		local upperZ = lowerZ + 1
@@ -146,15 +156,15 @@ MC.BlockHandlers.door = MC.BlockHandlers.door or {
 
 		local lowerId = MC.GetBlock( bx, by, lowerZ )
 		local lowerOrient = MC.GetBlockOrient( bx, by, lowerZ )
-		if matchingDoorPart( lowerId, lowerOrient, id, facing, "lower", open ) then
-			local ok = toggleDoorCell( ply, bx, by, lowerZ, id, facing, "lower", nextOpen )
+		if matchingDoorPart( lowerId, lowerOrient, id, facing, "lower", open, hinge, powered ) then
+			local ok = toggleDoorCell( ply, bx, by, lowerZ, id, facing, "lower", nextOpen, hinge, powered )
 			changed = changed or ok == true
 		end
 
 		local upperId = MC.GetBlock( bx, by, upperZ )
 		local upperOrient = MC.GetBlockOrient( bx, by, upperZ )
-		if matchingDoorPart( upperId, upperOrient, id, facing, "upper", open ) then
-			local ok = toggleDoorCell( ply, bx, by, upperZ, id, facing, "upper", nextOpen )
+		if matchingDoorPart( upperId, upperOrient, id, facing, "upper", open, hinge, powered ) then
+			local ok = toggleDoorCell( ply, bx, by, upperZ, id, facing, "upper", nextOpen, hinge, powered )
 			changed = changed or ok == true
 		end
 
