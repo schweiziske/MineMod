@@ -148,4 +148,5 @@ git diff --check
 
 - [维护更新指南](docs/maintenance-update-guide.md)
 - [接口使用介绍](docs/interface-usage.md)
+- [mc_import_world.py 用法](docs/mc-import-world.md)
 - [Chunk 高度修改说明](docs/chunk-height.md)

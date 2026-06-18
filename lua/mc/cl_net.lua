@@ -271,10 +271,12 @@ local function resetChunk( cx, cy, cz )
 	c.blocks = {}
 	c.orients = {}
 	c.count = 0
+	if MC.TouchChunkCollisionVersion then MC.TouchChunkCollisionVersion( c ) end
 	return c
 end
 
 local function readCellsIntoChunk( c, count )
+	local changed = false
 	for _ = 1, count do
 		local li = net.ReadUInt( Net.LOCAL_BITS )
 		local id = net.ReadUInt( Net.ID_BITS )
@@ -283,8 +285,10 @@ local function readCellsIntoChunk( c, count )
 			if c.blocks[li] == nil then c.count = c.count + 1 end
 			c.blocks[li] = id
 			c.orients[li] = MC.NormalizeOrient( id, orient )
+			changed = true
 		end
 	end
+	if changed and MC.TouchChunkCollisionVersion then MC.TouchChunkCollisionVersion( c ) end
 end
 
 local function reviveChunkEnt( c )
@@ -409,6 +413,7 @@ local function loadSnapshotChunk( data, cache, palette )
 		end
 	end
 
+	if MC.TouchChunkCollisionVersion then MC.TouchChunkCollisionVersion( c ) end
 	if c.count > 0 then
 		MC.MarkChunkDirty( c.key )
 	else
@@ -672,6 +677,7 @@ function MC.LoadHttpChunkRecord( key, record, partData )
 
 	for touchedKey, chunk in pairs( touched ) do
 		if chunk.count and chunk.count > 0 then
+			if MC.TouchChunkCollisionVersion then MC.TouchChunkCollisionVersion( chunk ) end
 			reviveChunkEnt( chunk )
 			MC.MarkChunkDirty( touchedKey )
 			local cx, cy, cz = MC.ChunkKeyToCoords( touchedKey )
@@ -1088,6 +1094,10 @@ net.Receive( "mc_unload_chunk", function()
 	MC.PhysDirty[key] = nil
 	MC.PhysDirtyPriority[key] = nil
 	if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
+	if MC.ClientPhysBuiltSignatures then MC.ClientPhysBuiltSignatures[key] = nil end
+	if MC.ClientPhysBuiltHadObjects then MC.ClientPhysBuiltHadObjects[key] = nil end
+	if MC.ClientPhysBuiltObjectCounts then MC.ClientPhysBuiltObjectCounts[key] = nil end
+	if MC.ClientPhysTargetSignatures then MC.ClientPhysTargetSignatures[key] = nil end
 	MC.PendingFull[key] = nil
 	local httpState = MC.HttpChunkSync
 	if httpState then

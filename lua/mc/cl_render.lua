@@ -130,8 +130,14 @@ MC.PhysDirty = MC.PhysDirty or {}  -- key -> true while a clientside collision r
 MC.PhysDirtyPriority = MC.PhysDirtyPriority or {} -- key -> true for priority rebuild diagnostics
 MC.PhysDirtyBulk = MC.PhysDirtyBulk or {} -- key -> true when bulk client collision rebuild is throttled
 MC.PhysDirtyBulkOrder = MC.PhysDirtyBulkOrder or {}
+MC.ClientPhysRetryPending = MC.ClientPhysRetryPending or {}
+MC.ClientPhysRetryAttempts = MC.ClientPhysRetryAttempts or {}
 MC.RenderStats = MC.RenderStats or {}
 MC.ClientPhysStats = MC.ClientPhysStats or {}
+MC.ClientPhysBuiltSignatures = MC.ClientPhysBuiltSignatures or {}
+MC.ClientPhysBuiltHadObjects = MC.ClientPhysBuiltHadObjects or {}
+MC.ClientPhysBuiltObjectCounts = MC.ClientPhysBuiltObjectCounts or {}
+MC.ClientPhysTargetSignatures = MC.ClientPhysTargetSignatures or {}
 
 -- Clientside collision is a small local prediction bubble; the server remains authoritative.
 MC.ClientCollision = CreateClientConVar( "mc_client_collision", "1", true, false,
@@ -169,6 +175,12 @@ function MC.ResetClientCollisionState()
 	MC.PhysDirtyPriority = {}
 	MC.PhysDirtyBulk = {}
 	MC.PhysDirtyBulkOrder = {}
+	MC.ClientPhysRetryPending = {}
+	MC.ClientPhysRetryAttempts = {}
+	MC.ClientPhysBuiltSignatures = {}
+	MC.ClientPhysBuiltHadObjects = {}
+	MC.ClientPhysBuiltObjectCounts = {}
+	MC.ClientPhysTargetSignatures = {}
 	MC.ClientCollisionAABBDebugBoxes = {}
 	NextBulkCollisionRebuildAt = 0
 end
@@ -181,6 +193,16 @@ local function clientCollisionDebugEnabled()
 	return MC.ClientCollisionDebug and MC.ClientCollisionDebug:GetBool()
 end
 
+local function shouldPrintClientPhysSkip( key, reason )
+	MC.ClientPhysSkipPrintState = MC.ClientPhysSkipPrintState or {}
+	local sig = tostring( key ) .. "|" .. tostring( reason )
+	local now = CurTime()
+	local state = MC.ClientPhysSkipPrintState[key]
+	if state and state.sig == sig and now < state.nextPrint then return false end
+	MC.ClientPhysSkipPrintState[key] = { sig = sig, nextPrint = now + 1.0 }
+	return true
+end
+
 local function rememberClientPhysSkip( key, reason )
 	MC.ClientPhysStats = MC.ClientPhysStats or {}
 	MC.ClientPhysStats.lastClientPhysMode = "skip"
@@ -188,9 +210,54 @@ local function rememberClientPhysSkip( key, reason )
 	MC.ClientPhysStats.lastClientPhysChunkKey = tostring( key )
 	MC.ClientPhysStats.lastClientPhysReason = reason
 	MC.ClientPhysStats.lastClientPhysHadObject = false
-	if clientCollisionDebugEnabled() then
+	if clientCollisionDebugEnabled() and shouldPrintClientPhysSkip( key, reason ) then
 		print( "[MC][client-phys] key=" .. tostring( key ) .. " skip=" .. tostring( reason ) )
 	end
+end
+
+local function clearClientPhysRetry( key )
+	if not key then return end
+	if MC.ClientPhysRetryPending then MC.ClientPhysRetryPending[key] = nil end
+	if MC.ClientPhysRetryAttempts then MC.ClientPhysRetryAttempts[key] = nil end
+end
+
+local function clearClientPhysBuildState( key )
+	if not key then return end
+	if MC.ClientPhysBuiltSignatures then MC.ClientPhysBuiltSignatures[key] = nil end
+	if MC.ClientPhysBuiltHadObjects then MC.ClientPhysBuiltHadObjects[key] = nil end
+	if MC.ClientPhysBuiltObjectCounts then MC.ClientPhysBuiltObjectCounts[key] = nil end
+	if MC.ClientPhysTargetSignatures then MC.ClientPhysTargetSignatures[key] = nil end
+end
+
+local function scheduleClientPhysRetry( key, bounds, reason )
+	if not key or not clientCollisionEnabled() then return end
+	if not ( MC.ClientCollisionInterest and MC.ClientCollisionInterest[key] ) then return end
+
+	MC.ClientPhysRetryPending = MC.ClientPhysRetryPending or {}
+	if MC.ClientPhysRetryPending[key] then return end
+
+	MC.ClientPhysRetryAttempts = MC.ClientPhysRetryAttempts or {}
+	local attempts = ( MC.ClientPhysRetryAttempts[key] or 0 ) + 1
+	MC.ClientPhysRetryAttempts[key] = attempts
+	MC.ClientPhysRetryPending[key] = true
+
+	if MC.ClientPhysStats then
+		MC.ClientPhysStats.lastClientPhysRetryKey = key
+		MC.ClientPhysStats.lastClientPhysRetryReason = reason
+		MC.ClientPhysStats.lastClientPhysRetryAttempts = attempts
+	end
+
+	local delay = attempts <= 2 and 0.05 or ( attempts <= 10 and 0.15 or 0.4 )
+	timer.Simple( delay, function()
+		if MC.ClientPhysRetryPending then MC.ClientPhysRetryPending[key] = nil end
+		if not ( MC.ClientCollisionInterest and MC.ClientCollisionInterest[key] ) then
+			clearClientPhysRetry( key )
+			return
+		end
+		if MC.MarkChunkPhysDirty then
+			MC.MarkChunkPhysDirty( key, true, bounds )
+		end
+	end )
 end
 
 local function meshRenderingEnabled()
@@ -362,6 +429,98 @@ local function clientCollisionBoundsSignature( bounds )
 	return table.concat( parts, ";" )
 end
 
+local function clientCollisionSubchunkBoundsForKey( subkey )
+	local sx, sy, sz = tostring( subkey or "" ):match( "^(-?%d+):(-?%d+):(-?%d+)$" )
+	if not sx then return nil end
+	local size = math.max( 1, math.floor( tonumber( MC.CollisionSubchunkSize ) or 8 ) )
+	local x0 = math.max( 0, tonumber( sx ) * size )
+	local y0 = math.max( 0, tonumber( sy ) * size )
+	local z0 = math.max( 0, tonumber( sz ) * size )
+	return {
+		x0,
+		y0,
+		z0,
+		math.min( MC.CS - 1, x0 + size - 1 ),
+		math.min( MC.CS - 1, y0 + size - 1 ),
+		math.min( MC.CH - 1, z0 + size - 1 ),
+	}
+end
+
+local function clientLocalBoundsTouch( a, b )
+	return a[1] <= b[4] and a[4] >= b[1]
+		and a[2] <= b[5] and a[5] >= b[2]
+		and a[3] <= b[6] and a[6] >= b[3]
+end
+
+local function clientNetworkSubchunkInBounds( ent, key, bounds )
+	if not IsValid( ent ) or ent:GetNWString( "MCChunkKey", "" ) ~= tostring( key ) then return false end
+	if not bounds then return true end
+	local sub = clientCollisionSubchunkBoundsForKey( ent:GetNWString( "MCSubchunkKey", "" ) )
+	if not sub then return false end
+	for _, bound in ipairs( bounds ) do
+		if clientLocalBoundsTouch( sub, bound ) then return true end
+	end
+	return false
+end
+
+local function clientNetworkSubchunkPhysSummary( key, bounds )
+	local total = 0
+	local missing = 0
+	for _, subchunk in ipairs( ents.FindByClass( "mc_chunk_phys" ) ) do
+		if clientNetworkSubchunkInBounds( subchunk, key, bounds ) then
+			total = total + 1
+			if not IsValid( subchunk:GetPhysicsObject() ) then
+				missing = missing + 1
+			end
+		end
+	end
+	return total, missing
+end
+
+local function clientPhysBuildSignature( key, bounds, chunk )
+	chunk = chunk or ( MC.World and MC.World[key] )
+	local version = chunk and chunk.collisionVersion or 0
+	local count = chunk and chunk.count or 0
+	local signature = tostring( version ) .. "|" .. tostring( count ) .. "|" .. clientCollisionBoundsSignature( bounds )
+	MC.ClientPhysTargetSignatures = MC.ClientPhysTargetSignatures or {}
+	MC.ClientPhysTargetSignatures[key] = signature
+	return signature
+end
+
+local function clientPhysObjectCount( ent )
+	if not IsValid( ent ) then return 0 end
+	local count = IsValid( ent:GetPhysicsObject() ) and 1 or 0
+	for _, subchunk in ipairs( ent.PhysicsSubchunks or {} ) do
+		if IsValid( subchunk ) and IsValid( subchunk:GetPhysicsObject() ) then
+			count = count + 1
+		end
+	end
+	return count
+end
+
+local function clientPhysHasObject( ent )
+	return clientPhysObjectCount( ent ) > 0
+end
+
+local function clientPhysAlreadyBuilt( key, chunk, ent, bounds )
+	local built = MC.ClientPhysBuiltSignatures and MC.ClientPhysBuiltSignatures[key]
+	if not built then return false end
+	if built ~= clientPhysBuildSignature( key, bounds, chunk ) then return false end
+	local networkTotal, networkMissing = clientNetworkSubchunkPhysSummary( key, bounds )
+	if MC.ClientPhysStats then
+		MC.ClientPhysStats.lastClientPhysNetworkSubchunks = networkTotal
+		MC.ClientPhysStats.lastClientPhysMissingSubchunks = networkMissing
+	end
+	if networkTotal > 0 then
+		return networkMissing == 0
+	end
+	local builtObjects = MC.ClientPhysBuiltObjectCounts and MC.ClientPhysBuiltObjectCounts[key] or 0
+	if builtObjects > 0 then
+		return IsValid( ent ) and IsValid( ent:GetPhysicsObject() ) and clientPhysObjectCount( ent ) >= builtObjects
+	end
+	return true
+end
+
 function MC.RefreshClientCollisionInterest( force )
 	local frame = FrameNumber and FrameNumber() or RealTime()
 	if not force and LastClientCollisionRefreshFrame == frame then return end
@@ -409,6 +568,7 @@ function MC.RefreshClientCollisionInterest( force )
 			MC.PhysDirtyPriority[key] = nil
 			if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
 			MC.ClientCollisionSignatures[key] = nil
+			clearClientPhysBuildState( key )
 		end
 		MC.PhysDirtyBulkOrder = {}
 		MC.ClientCollisionAABBDebugBoxes = {}
@@ -427,17 +587,22 @@ function MC.RefreshClientCollisionInterest( force )
 			MC.PhysDirtyPriority[key] = nil
 			if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
 			MC.ClientCollisionSignatures[key] = nil
+			clearClientPhysBuildState( key )
 		end
 	end
 
 	for key, bounds in pairs( desired ) do
 		local oldSig = MC.ClientCollisionSignatures[key]
 		local newSig = clientCollisionBoundsSignature( bounds )
-		MC.ClientCollisionSignatures[key] = newSig
 		if not ( MC.World and MC.World[key] ) then
+			MC.ClientCollisionSignatures[key] = nil
+			clearClientPhysBuildState( key )
 			rememberClientPhysSkip( key, "no_world" )
 		elseif not old[key] or oldSig ~= newSig then
+			MC.ClientCollisionSignatures[key] = newSig
 			MC.MarkChunkPhysDirty( key, true )
+		else
+			MC.ClientCollisionSignatures[key] = newSig
 		end
 	end
 end
@@ -1245,17 +1410,38 @@ end
 local function rebuildChunkPhys( key, enabled, bounds )
 	local chunk = MC.World and MC.World[key] or nil
 	local e = MC.ChunkEnts[key]
+	if not enabled then
+		if IsValid( e ) then
+			if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
+			if e.ClearPhysicsSubchunks then e:ClearPhysicsSubchunks() end
+			e:PhysicsDestroy()
+		end
+		MC.PhysDirty[key] = nil
+		MC.PhysDirtyPriority[key] = nil
+		if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
+		clearClientPhysRetry( key )
+		clearClientPhysBuildState( key )
+		return true
+	end
 	if enabled and not ( MC.ClientCollisionInterest and MC.ClientCollisionInterest[key] ) then
 		rememberClientPhysSkip( key, "not_interest" )
 		MC.PhysDirty[key] = nil
 		MC.PhysDirtyPriority[key] = nil
 		if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
-		return
+		clearClientPhysRetry( key )
+		clearClientPhysBuildState( key )
+		return true
 	end
 	if enabled and IsValid( e ) and e:EntIndex() <= 0 then
 		e = nil
 	end
-	if not chunk or not chunk.count or chunk.count <= 0 then
+	if not chunk then
+		rememberClientPhysSkip( key, "no_world" )
+		clearClientPhysBuildState( key )
+		scheduleClientPhysRetry( key, bounds, "no_world" )
+		return false
+	end
+	if not chunk.count or chunk.count <= 0 then
 		if MC.ClientCollisionInterest then MC.ClientCollisionInterest[key] = nil end
 		if IsValid( e ) then
 			if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
@@ -1265,7 +1451,9 @@ local function rebuildChunkPhys( key, enabled, bounds )
 		MC.PhysDirty[key] = nil
 		MC.PhysDirtyPriority[key] = nil
 		if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
-		return
+		clearClientPhysRetry( key )
+		clearClientPhysBuildState( key )
+		return true
 	end
 
 	if not IsValid( e ) then
@@ -1289,25 +1477,62 @@ local function rebuildChunkPhys( key, enabled, bounds )
 	end
 	if IsValid( e ) then
 		if enabled then
+			local buildBounds = bounds or ( MC.ClientCollisionInterest and MC.ClientCollisionInterest[key] )
+			if clientPhysAlreadyBuilt( key, chunk, e, buildBounds ) then
+				MC.ClientPhysStats.lastClientPhysMode = "skip"
+				MC.ClientPhysStats.lastClientPhysKey = key
+				MC.ClientPhysStats.lastClientPhysChunkKey = tostring( key )
+				MC.ClientPhysStats.lastClientPhysReason = "already_built"
+				MC.ClientPhysStats.lastClientPhysHadObject = clientPhysHasObject( e )
+				MC.ClientPhysStats.lastClientPhysObjectCount = clientPhysObjectCount( e )
+				MC.PhysDirty[key] = nil
+				MC.PhysDirtyPriority[key] = nil
+				if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
+				clearClientPhysRetry( key )
+				return true
+			end
 			local buildStart = SysTime()
-			e:RebuildPhysics( MC.ClientCollisionInterest[key] )
+			local signature = clientPhysBuildSignature( key, buildBounds, chunk )
+			local ok, reason = e:RebuildPhysics( buildBounds )
 			MC.ClientPhysStats.lastClientPhysBuildMS = math.Round( ( SysTime() - buildStart ) * 1000, 3 )
 			MC.ClientPhysStats.lastClientPhysKey = key
-			MC.ClientPhysStats.lastClientPhysBounds = MC.ClientCollisionInterest[key] and #MC.ClientCollisionInterest[key] or "full"
-			MC.ClientPhysStats.lastClientPhysHadObject = IsValid( e:GetPhysicsObject() ) or ( ( MC.ClientPhysStats.lastClientPhysSubchunkObjects or 0 ) > 0 )
+			MC.ClientPhysStats.lastClientPhysBounds = buildBounds and #buildBounds or "full"
+			MC.ClientPhysStats.lastClientPhysHadObject = clientPhysHasObject( e )
+			MC.ClientPhysStats.lastClientPhysObjectCount = clientPhysObjectCount( e )
+			local networkTotal, networkMissing = clientNetworkSubchunkPhysSummary( key, buildBounds )
+			MC.ClientPhysStats.lastClientPhysNetworkSubchunks = networkTotal
+			MC.ClientPhysStats.lastClientPhysMissingSubchunks = networkMissing
+			if ok == false then
+				clearClientPhysBuildState( key )
+				MC.ClientPhysStats.lastClientPhysReason = reason or "rebuild_failed"
+				scheduleClientPhysRetry( key, buildBounds, reason or "rebuild_failed" )
+				return false
+			end
+			MC.ClientPhysBuiltSignatures = MC.ClientPhysBuiltSignatures or {}
+			MC.ClientPhysBuiltHadObjects = MC.ClientPhysBuiltHadObjects or {}
+			MC.ClientPhysBuiltObjectCounts = MC.ClientPhysBuiltObjectCounts or {}
+			MC.ClientPhysBuiltSignatures[key] = signature
+			MC.ClientPhysBuiltHadObjects[key] = clientPhysHasObject( e )
+			MC.ClientPhysBuiltObjectCounts[key] = clientPhysObjectCount( e )
 		else
 			if MC.ClientCollisionInterest then MC.ClientCollisionInterest[key] = nil end
 			if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
 			if e.ClearPhysicsSubchunks then e:ClearPhysicsSubchunks() end
 			e:PhysicsDestroy()
+			clearClientPhysBuildState( key )
 		end
 	else
 		rememberClientPhysSkip( key, "no_chunk_ent" )
+		clearClientPhysBuildState( key )
+		scheduleClientPhysRetry( key, bounds, "no_chunk_ent" )
+		return false
 	end
 
 	MC.PhysDirty[key] = nil
 	MC.PhysDirtyPriority[key] = nil
 	if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
+	clearClientPhysRetry( key )
+	return true
 end
 
 function MC.MarkChunkPhysDirty( key, priority, bounds )
