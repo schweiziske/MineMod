@@ -95,10 +95,35 @@ local function addCellPhysBounds( boundsByKey, key, bounds )
 	list[#list + 1] = bounds
 end
 
+local function clippedCellPhysBounds( a, b )
+	local out = {
+		math.max( a[1], b[1] ),
+		math.max( a[2], b[2] ),
+		math.max( a[3], b[3] ),
+		math.min( a[4], b[4] ),
+		math.min( a[5], b[5] ),
+		math.min( a[6], b[6] ),
+	}
+	if out[1] <= out[4] and out[2] <= out[5] and out[3] <= out[6] then return out end
+	return nil
+end
+
+local function addClientInterestCellPhysBounds( boundsByKey, key, subchunkBounds )
+	local interest = MC.ClientCollisionInterest and MC.ClientCollisionInterest[key]
+	if not interest then return end
+
+	for _, interestBounds in ipairs( interest ) do
+		local clipped = clippedCellPhysBounds( subchunkBounds, interestBounds )
+		if clipped then
+			addCellPhysBounds( boundsByKey, key, clipped )
+		end
+	end
+end
+
 local function collectCellPhysBounds( boundsByKey, bx, by, bz )
 	local function mark( x, y, z )
 		local key, bounds = MC.CellCollisionSubchunkBounds( x, y, z )
-		addCellPhysBounds( boundsByKey, key, bounds )
+		addClientInterestCellPhysBounds( boundsByKey, key, bounds )
 	end
 
 	mark( bx, by, bz )
@@ -108,8 +133,9 @@ local function collectCellPhysBounds( boundsByKey, bx, by, bz )
 	if cellCollisionDependsOnNeighbours( bx, by - 1, bz ) then mark( bx, by - 1, bz ) end
 end
 
--- mirror the server: an edited cell (plus shape-dependent face neighbours) dirties
--- the 8x8x8 collision subchunk(s) it lives in; whole chunks only rebuild fully on load.
+-- An edited cell (plus shape-dependent face neighbours) replaces the affected
+-- collision subchunk objects, but only rebuilds the currently active client
+-- AABB/aim interest inside those subchunks.
 function MC.MarkCellPhysNeighbours( bx, by, bz, priority, bulk )
 	local boundsByKey = {}
 	collectCellPhysBounds( boundsByKey, bx, by, bz )
