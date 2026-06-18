@@ -203,6 +203,16 @@ function MC.IsPendingPredictionCell( bx, by, bz )
 	return MC.PendingPredictions[predictionKey( bx, by, bz )] ~= nil
 end
 
+function MC.ClientEditPredictionEnabled()
+	if game.SinglePlayer and game.SinglePlayer() then return false end
+	if game.MaxPlayers and game.MaxPlayers() <= 1 then return false end
+
+	local lp = LocalPlayer and LocalPlayer() or nil
+	if IsValid( lp ) and lp.IsListenServerHost and lp:IsListenServerHost() then return false end
+
+	return true
+end
+
 local function markPredictedCellDirty( bx, by, bz, priority )
 	MC.MarkDirty( bx, by, bz )
 	MC.MarkCellPhysNeighbours( bx, by, bz, priority == true )
@@ -245,6 +255,7 @@ local function predictCells( cells, priorityFn )
 end
 
 function MC.PredictSetBlock( bx, by, bz, id, orient )
+	if not MC.ClientEditPredictionEnabled() then return false end
 	if not MC.IsValidBlock or not MC.IsValidBlock( id ) then return false end
 	local plan = MC.BuildPlacementPlan and MC.BuildPlacementPlan( bx, by, bz, id, orient )
 	if not plan then return false end
@@ -255,6 +266,7 @@ function MC.PredictSetBlock( bx, by, bz, id, orient )
 end
 
 function MC.PredictBreakBlock( bx, by, bz, ply )
+	if not MC.ClientEditPredictionEnabled() then return false end
 	if IsValid( ply ) and not MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, MC.CurrentReach() ) then return false end
 	local oldId = MC.GetBlock( bx, by, bz )
 	if oldId == 0 then return false end

@@ -112,7 +112,7 @@ function SWEP:PrimaryAttack()
 		elseif MC.SV.SyncCell then
 			MC.SV.SyncCell( owner, bx, by, bz ) -- undo the client's break prediction
 		end
-	elseif CLIENT and IsFirstTimePredicted() and owner == LocalPlayer() then
+	elseif CLIENT and not game.SinglePlayer() and IsFirstTimePredicted() and owner == LocalPlayer() then
 		local bx, by, bz = breakTarget( owner, aim, owner:GetEyeTrace() )
 		if bx and MC.CanPreviewBreak and MC.CanPreviewBreak( owner, bx, by, bz ) and MC.PredictBreakBlock then
 			MC.PredictBreakBlock( bx, by, bz, owner )
@@ -147,7 +147,7 @@ function SWEP:SecondaryAttack()
 		elseif MC.SV.SyncCell then
 			MC.SV.SyncCell( owner, bx, by, bz ) -- undo the client's place prediction
 		end
-	elseif CLIENT and IsFirstTimePredicted() and owner == LocalPlayer() then
+	elseif CLIENT and not game.SinglePlayer() and IsFirstTimePredicted() and owner == LocalPlayer() then
 		local id = selectedID( owner )
 		local bx, by, bz, orient = placeTarget( owner, aim, owner:GetEyeTrace(), id, true )
 		local plan = bx and MC.BuildPlacementPlan and MC.BuildPlacementPlan( bx, by, bz, id, orient )

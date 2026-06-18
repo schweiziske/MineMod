@@ -9,6 +9,7 @@ local parts = {
 	"mc/generated/sh_generated_sound_types_part002.lua",
 	"mc/generated/sh_generated_sound_types_part003.lua",
 	"mc/generated/sh_generated_sound_types_part004.lua",
+	"mc/generated/sh_generated_sound_types_part005.lua",
 }
 if SERVER then
 	for _, f in ipairs( parts ) do AddCSLuaFile( f ) end

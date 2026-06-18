@@ -858,12 +858,12 @@ local function modelOrientSteps( b, orient )
 		if orient == MC.Axis.Z then return 1, 0 end
 		return 0, 0
 	end
-	if b.orient ~= "horizontal_facing" and b.orient ~= "facing" and b.orient ~= "door" and b.orient ~= "bed" then return 0, 0 end
+	if b.orient ~= "horizontal_facing" and b.orient ~= "facing" and b.orient ~= "door" and b.orient ~= "trapdoor" and b.orient ~= "bed" then return 0, 0 end
 	if b.orient == "facing" then
 		if orient == MC.Direction.DOWN then return 1, 0 end
 		if orient == MC.Direction.UP then return 3, 0 end
 	end
-	if b.orient == "door" or b.orient == "bed" then
+	if b.orient == "door" or b.orient == "trapdoor" or b.orient == "bed" then
 		orient = MC.BlockHorizontalFacingForOrient and MC.BlockHorizontalFacingForOrient( b, orient ) or orient
 	end
 	if orient == MC.Direction.EAST then return 0, 1 end

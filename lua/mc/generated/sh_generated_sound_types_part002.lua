@@ -4,6 +4,16 @@ MC.GeneratedBlockSoundTypes = MC.GeneratedBlockSoundTypes or {}
 MC.GeneratedNoTerrainParticles = MC.GeneratedNoTerrainParticles or {}
 MC.GeneratedSoundTypes = MC.GeneratedSoundTypes or {}
 MC.GeneratedSoundResources = MC.GeneratedSoundResources or {}
+MC.GeneratedBlockSoundTypes["minecraft:oxidized_copper_trapdoor"] = "STONE"
+MC.GeneratedBlockSoundTypes["minecraft:oxidized_cut_copper"] = "STONE"
+MC.GeneratedBlockSoundTypes["minecraft:oxidized_cut_copper_slab"] = "STONE"
+MC.GeneratedBlockSoundTypes["minecraft:oxidized_cut_copper_stairs"] = "STONE"
+MC.GeneratedBlockSoundTypes["minecraft:oxidized_lightning_rod"] = "STONE"
+MC.GeneratedBlockSoundTypes["minecraft:packed_ice"] = "GLASS"
+MC.GeneratedBlockSoundTypes["minecraft:packed_mud"] = "PACKED_MUD"
+MC.GeneratedBlockSoundTypes["minecraft:pale_hanging_moss"] = "MOSS_CARPET"
+MC.GeneratedBlockSoundTypes["minecraft:pale_moss_block"] = "MOSS"
+MC.GeneratedBlockSoundTypes["minecraft:pale_moss_carpet"] = "MOSS_CARPET"
 MC.GeneratedBlockSoundTypes["minecraft:pale_oak_button"] = "WOOD"
 MC.GeneratedBlockSoundTypes["minecraft:pale_oak_door"] = "WOOD"
 MC.GeneratedBlockSoundTypes["minecraft:pale_oak_fence"] = "WOOD"
@@ -529,5 +539,3 @@ MC.GeneratedSoundTypes.COPPER = { volume = 1, pitch = 1, breaks = { "mc/block/co
 MC.GeneratedSoundTypes.CORAL_BLOCK = { volume = 1, pitch = 1, breaks = { "mc/dig/coral1.ogg", "mc/dig/coral2.ogg", "mc/dig/coral3.ogg", "mc/dig/coral4.ogg" }, place = { "mc/dig/coral1.ogg", "mc/dig/coral2.ogg", "mc/dig/coral3.ogg", "mc/dig/coral4.ogg" } }
 MC.GeneratedSoundTypes.CREAKING_HEART = { volume = 1, pitch = 1, breaks = { "mc/block/creaking_heart/break/creaking_heart_break.ogg" }, place = { "mc/block/creaking_heart/place/creaking_heart_place1.ogg", "mc/block/creaking_heart/place/creaking_heart_place2.ogg", "mc/block/creaking_heart/place/creaking_heart_place3.ogg", "mc/block/creaking_heart/place/creaking_heart_place4.ogg" } }
 MC.GeneratedSoundTypes.CROP = { volume = 1, pitch = 1, breaks = { "mc/block/bamboo/sapling_place1.ogg", "mc/block/bamboo/sapling_place2.ogg", "mc/block/bamboo/sapling_place3.ogg", "mc/block/bamboo/sapling_place4.ogg", "mc/block/bamboo/sapling_place5.ogg", "mc/block/bamboo/sapling_place6.ogg" }, place = { "mc/item/plant/crop1.ogg", "mc/item/plant/crop1.ogg", "mc/item/plant/crop2.ogg", "mc/item/plant/crop2.ogg", "mc/item/plant/crop3.ogg", "mc/item/plant/crop3.ogg", "mc/item/plant/crop4.ogg", "mc/item/plant/crop4.ogg", "mc/item/plant/crop5.ogg", "mc/item/plant/crop5.ogg", "mc/item/plant/crop6.ogg", "mc/item/plant/crop6.ogg" } }
-MC.GeneratedSoundTypes.DEEPSLATE = { volume = 1, pitch = 1, breaks = { "mc/block/deepslate/break1.ogg", "mc/block/deepslate/break2.ogg", "mc/block/deepslate/break3.ogg", "mc/block/deepslate/break4.ogg" }, place = { "mc/block/deepslate/place1.ogg", "mc/block/deepslate/place2.ogg", "mc/block/deepslate/place3.ogg", "mc/block/deepslate/place4.ogg", "mc/block/deepslate/place5.ogg", "mc/block/deepslate/place6.ogg" } }
-MC.GeneratedSoundTypes.DEEPSLATE_BRICKS = { volume = 1, pitch = 1, breaks = { "mc/block/deepslate_bricks/place1.ogg", "mc/block/deepslate_bricks/place2.ogg", "mc/block/deepslate_bricks/place3.ogg", "mc/block/deepslate_bricks/place4.ogg", "mc/block/deepslate_bricks/place5.ogg", "mc/block/deepslate_bricks/place6.ogg" }, place = { "mc/block/deepslate_bricks/place1.ogg", "mc/block/deepslate_bricks/place2.ogg", "mc/block/deepslate_bricks/place3.ogg", "mc/block/deepslate_bricks/place4.ogg", "mc/block/deepslate_bricks/place5.ogg", "mc/block/deepslate_bricks/place6.ogg" } }
