@@ -75,6 +75,7 @@ function TOOL:LeftClick( tr )
 	local aim = aimedBlock( ply )
 
 	if CLIENT then
+		if game.SinglePlayer() then return true end
 		if IsFirstTimePredicted() and ply == LocalPlayer() then
 			local bx, by, bz = breakTarget( aim, tr )
 			if bx and MC.CanPreviewBreak and MC.CanPreviewBreak( ply, bx, by, bz ) and MC.PredictBreakBlock then
@@ -98,6 +99,7 @@ function TOOL:RightClick( tr )
 	local id = selectedID( self )
 
 	if CLIENT then
+		if game.SinglePlayer() then return true end
 		if not IsFirstTimePredicted() or ply ~= LocalPlayer() then return true end
 		local bx, by, bz, orient = placeTarget( ply, aim, tr, id, true )
 		local plan = bx and MC.BuildPlacementPlan and MC.BuildPlacementPlan( bx, by, bz, id, orient )

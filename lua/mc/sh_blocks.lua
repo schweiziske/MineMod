@@ -295,11 +295,14 @@ function MC.RegisterBlock( def )
 	local stateRule = def.stateRule or def.orient
 	if string.match( name, "_door$" ) then
 		stateRule = "door"
+	elseif string.match( name, "_trapdoor$" ) then
+		stateRule = "trapdoor"
 	elseif string.match( name, "_bed$" ) then
 		stateRule = "bed"
 	end
 	local handlerName = def.handler
 	if not handlerName and stateRule == "door" then handlerName = "door" end
+	if not handlerName and stateRule == "trapdoor" then handlerName = "trapdoor" end
 	local handler = def.handlers or ( handlerName and MC.BlockHandlers[handlerName] ) or nil
 	if handler and handler.OnTick then MC.HasBlockTickHandlers = true end
 
@@ -469,6 +472,34 @@ function MC.DoorModelVariantKey( orient )
 	}, "_" )
 end
 
+function MC.MakeTrapdoorOrient( facing, half, open, powered )
+	return horizontalPartBase( facing )
+		+ ( half == "top" and 4 or 0 )
+		+ ( open and 8 or 0 )
+		+ ( powered and 16 or 0 )
+end
+
+function MC.TrapdoorOrientFacing( orient )
+	return horizontalPartFacing( orient )
+end
+
+function MC.TrapdoorOrientHalf( orient )
+	return math.floor( ( tonumber( orient ) or 0 ) / 4 ) % 2 == 1 and "top" or "bottom"
+end
+
+function MC.TrapdoorOrientOpen( orient )
+	return math.floor( ( tonumber( orient ) or 0 ) / 8 ) % 2 == 1
+end
+
+function MC.TrapdoorOrientPowered( orient )
+	return math.floor( ( tonumber( orient ) or 0 ) / 16 ) % 2 == 1
+end
+
+function MC.TrapdoorModelVariantKey( orient )
+	if MC.TrapdoorOrientOpen( orient ) then return "open" end
+	return MC.TrapdoorOrientHalf( orient ) == "top" and "top" or "bottom"
+end
+
 function MC.MakeBedOrient( facing, part )
 	return horizontalPartBase( facing ) + ( part == "head" and 4 or 0 )
 end
@@ -521,6 +552,12 @@ for i = 0, 63 do
 	DoorOrientAllowed[i] = true
 	DoorOrientOrder[#DoorOrientOrder + 1] = i
 end
+local TrapdoorOrientAllowed = {}
+local TrapdoorOrientOrder = {}
+for i = 0, 31 do
+	TrapdoorOrientAllowed[i] = true
+	TrapdoorOrientOrder[#TrapdoorOrientOrder + 1] = i
+end
 
 function MC.MakeStairOrient( facing, half )
 	local base = StairOrientByFacing[facing] or StairOrientByFacing[MC.Direction.NORTH]
@@ -572,6 +609,11 @@ MC.OrientRules = {
 		default = 0,
 		allowed = DoorOrientAllowed,
 		order = DoorOrientOrder,
+	},
+	trapdoor = {
+		default = 0,
+		allowed = TrapdoorOrientAllowed,
+		order = TrapdoorOrientOrder,
 	},
 	bed = {
 		default = 0,
@@ -691,6 +733,13 @@ function MC.OrientToState( id, orient )
 			",open=" .. tostring( MC.DoorOrientOpen( orient ) ) ..
 			",powered=" .. tostring( MC.DoorOrientPowered( orient ) )
 	end
+	if b.orient == "trapdoor" then
+		orient = MC.NormalizeOrient( id, orient )
+		return "facing=" .. ( DirectionName[MC.TrapdoorOrientFacing( orient )] or "north" ) ..
+			",half=" .. MC.TrapdoorOrientHalf( orient ) ..
+			",open=" .. tostring( MC.TrapdoorOrientOpen( orient ) ) ..
+			",powered=" .. tostring( MC.TrapdoorOrientPowered( orient ) )
+	end
 	if b.orient == "bed" then
 		orient = MC.NormalizeOrient( id, orient )
 		return ( DirectionName[MC.BedOrientFacing( orient )] or "north" ) .. "," .. MC.BedOrientPart( orient )
@@ -718,6 +767,13 @@ function MC.BlockStateText( id, orient )
 			",open=" .. tostring( MC.DoorOrientOpen( orient ) ) ..
 			",powered=" .. tostring( MC.DoorOrientPowered( orient ) )
 	end
+	if b.orient == "trapdoor" then
+		orient = MC.NormalizeOrient( id, orient )
+		local facing = DirectionName[MC.TrapdoorOrientFacing( orient )] or "north"
+		return "facing=" .. facing .. ",half=" .. MC.TrapdoorOrientHalf( orient ) ..
+			",open=" .. tostring( MC.TrapdoorOrientOpen( orient ) ) ..
+			",powered=" .. tostring( MC.TrapdoorOrientPowered( orient ) )
+	end
 	if b.orient == "bed" then
 		orient = MC.NormalizeOrient( id, orient )
 		local facing = DirectionName[MC.BedOrientFacing( orient )] or "north"
@@ -735,6 +791,7 @@ function MC.BlockStateHint( id )
 	if b.orient == "slab" then return "type=bottom/top/double" end
 	if b.orient == "stairs" then return "facing=north/south/west/east,half=bottom/top" end
 	if b.orient == "door" then return "facing=north/south/west/east,half=lower/upper,hinge=left/right,open=true/false,powered=true/false" end
+	if b.orient == "trapdoor" then return "facing=north/south/west/east,half=top/bottom,open=true/false,powered=true/false" end
 	if b.orient == "bed" then return "facing=north/south/west/east,part=foot/head" end
 	local names = {}
 	for _, value in ipairs( rule.order ) do names[#names + 1] = rule.names[value] end
@@ -821,6 +878,15 @@ function MC.StateToOrient( id, state )
 		local powered = map and stateBool( map.powered, false ) or false
 		return facing and MC.MakeDoorOrient( facing, half, open, hinge, powered ) or MC.DefaultOrient( id )
 	end
+	if b.orient == "trapdoor" then
+		local facing = map and DirectionValue[map.facing] or DirectionValue[trim( state )]
+		if not HorizontalPartBaseByFacing[facing] then facing = nil end
+		local half = map and map.half or "bottom"
+		if half ~= "top" then half = "bottom" end
+		local open = map and stateBool( map.opened or map.open, false ) or false
+		local powered = map and stateBool( map.powered, false ) or false
+		return facing and MC.MakeTrapdoorOrient( facing, half, open, powered ) or MC.DefaultOrient( id )
+	end
 	if b.orient == "bed" then
 		local facing = map and DirectionValue[map.facing] or DirectionValue[trim( state )]
 		if not HorizontalPartBaseByFacing[facing] then facing = nil end
@@ -860,6 +926,19 @@ function MC.IsOrientStateValid( id, state )
 			return HorizontalPartBaseByFacing[facing] ~= nil
 				and ( half == "lower" or half == "upper" )
 				and ( hinge == "left" or hinge == "right" )
+				and stateBoolValid( open )
+				and stateBoolValid( powered )
+		end
+		return HorizontalPartBaseByFacing[DirectionValue[trim( string.lower( tostring( state ) ) )]] ~= nil
+	end
+	if b.orient == "trapdoor" then
+		if map then
+			local facing = DirectionValue[map.facing]
+			local half = map.half or "bottom"
+			local open = map.opened or map.open
+			local powered = map.powered
+			return HorizontalPartBaseByFacing[facing] ~= nil
+				and ( half == "bottom" or half == "top" )
 				and stateBoolValid( open )
 				and stateBoolValid( powered )
 		end
@@ -999,6 +1078,21 @@ local function doorHingeFromPlacement( tr, bx, by, bz, facing )
 	return clickY > 0.5 and "right" or "left"
 end
 
+local function directionFromHitNormal( n )
+	if not n then return MC.Direction.UP end
+	if n.z > 0.5 then return MC.Direction.UP end
+	if n.z < -0.5 then return MC.Direction.DOWN end
+	if math.abs( n.x ) > math.abs( n.y ) then return n.x >= 0 and MC.Direction.EAST or MC.Direction.WEST end
+	return n.y >= 0 and MC.Direction.SOUTH or MC.Direction.NORTH
+end
+
+local function isHorizontalDirection( dir )
+	return dir == MC.Direction.NORTH
+		or dir == MC.Direction.SOUTH
+		or dir == MC.Direction.WEST
+		or dir == MC.Direction.EAST
+end
+
 function MC.OrientForVectors( id, forward, hitNormal )
 	local b = MC.Blocks[id]
 	if not b or not b.orient then return 0 end
@@ -1033,6 +1127,15 @@ function MC.OrientForPlacement( ply, tr, id )
 		local facing = horizontalLookDirectionFromForward( forward )
 		local hinge = doorHingeFromPlacement( tr, tr and tr.MCBlockX or 0, tr and tr.MCBlockY or 0, tr and tr.MCBlockZ or 0, facing )
 		return MC.MakeDoorOrient( facing, "lower", false, hinge, false )
+	end
+	if b and b.orient == "trapdoor" then
+		local clickedFace = directionFromHitNormal( tr and tr.HitNormal or nil )
+		if isHorizontalDirection( clickedFace ) then
+			return MC.MakeTrapdoorOrient( clickedFace, placementHalfFromTrace( tr ), false, false )
+		end
+		local facing = oppositeDirection( horizontalLookDirectionFromForward( forward ) )
+		local half = clickedFace == MC.Direction.UP and "bottom" or "top"
+		return MC.MakeTrapdoorOrient( facing, half, false, false )
 	end
 	if b and b.orient == "bed" then
 		return MC.MakeBedOrient( horizontalLookDirectionFromForward( forward ), "foot" )
@@ -1314,6 +1417,15 @@ function MC.BlockModelData( blockOrId, orient )
 			if MC.DoorOrientHalf( orient ) == "upper" then return b.modelVariants.upper or b end
 			return b
 		end
+		if b.orient == "trapdoor" then
+			local key = MC.TrapdoorModelVariantKey( orient )
+			if key == "open" and b.modelVariants.open then return b.modelVariants.open end
+			if key == "top" and b.modelVariants.top then return b.modelVariants.top end
+			if key == "bottom" and b.modelVariants.bottom then return b.modelVariants.bottom end
+			if b.modelVariants[key] then return b.modelVariants[key] end
+			if MC.TrapdoorOrientHalf( orient ) == "top" then return b.modelVariants.top or b end
+			return b.modelVariants.bottom or b
+		end
 		if b.orient == "bed" and MC.BedOrientPart( orient ) == "head" then
 			return b.modelVariants.head or b
 		end
@@ -1326,6 +1438,7 @@ function MC.BlockHorizontalFacingForOrient( blockOrId, orient )
 	if not b then return MC.Direction.NORTH end
 	orient = MC.NormalizeOrient( b.id, orient )
 	if b.orient == "door" then return MC.DoorOrientFacing( orient ) end
+	if b.orient == "trapdoor" then return MC.TrapdoorOrientFacing( orient ) end
 	if b.orient == "bed" then return MC.BedOrientFacing( orient ) end
 	return orient
 end
@@ -1336,7 +1449,7 @@ local function modelBoxes( b, orient )
 	local xSteps, zSteps = 0, 0
 	if b.orient == "axis" then
 		xSteps, zSteps = pillarRotForAxis( MC.NormalizeOrient( b.id, orient ) )
-	elseif b.orient == "horizontal_facing" or b.orient == "facing" or b.orient == "door" or b.orient == "bed" then
+	elseif b.orient == "horizontal_facing" or b.orient == "facing" or b.orient == "door" or b.orient == "trapdoor" or b.orient == "bed" then
 		orient = MC.NormalizeOrient( b.id, orient )
 		if b.orient == "facing" and orient == MC.Direction.DOWN then
 			xSteps = 1
@@ -1362,7 +1475,7 @@ local function modelConvexRotationSteps( b, orient )
 	local xSteps, zSteps = 0, 0
 	if b.orient == "axis" then
 		xSteps, zSteps = pillarRotForAxis( MC.NormalizeOrient( b.id, orient ) )
-	elseif b.orient == "horizontal_facing" or b.orient == "facing" or b.orient == "door" or b.orient == "bed" then
+	elseif b.orient == "horizontal_facing" or b.orient == "facing" or b.orient == "door" or b.orient == "trapdoor" or b.orient == "bed" then
 		orient = MC.NormalizeOrient( b.id, orient )
 		if b.orient == "facing" and orient == MC.Direction.DOWN then
 			xSteps = 1

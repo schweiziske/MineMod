@@ -4,6 +4,8 @@ MC.GeneratedBlockSoundTypes = MC.GeneratedBlockSoundTypes or {}
 MC.GeneratedNoTerrainParticles = MC.GeneratedNoTerrainParticles or {}
 MC.GeneratedSoundTypes = MC.GeneratedSoundTypes or {}
 MC.GeneratedSoundResources = MC.GeneratedSoundResources or {}
+MC.GeneratedSoundTypes.DEEPSLATE = { volume = 1, pitch = 1, breaks = { "mc/block/deepslate/break1.ogg", "mc/block/deepslate/break2.ogg", "mc/block/deepslate/break3.ogg", "mc/block/deepslate/break4.ogg" }, place = { "mc/block/deepslate/place1.ogg", "mc/block/deepslate/place2.ogg", "mc/block/deepslate/place3.ogg", "mc/block/deepslate/place4.ogg", "mc/block/deepslate/place5.ogg", "mc/block/deepslate/place6.ogg" } }
+MC.GeneratedSoundTypes.DEEPSLATE_BRICKS = { volume = 1, pitch = 1, breaks = { "mc/block/deepslate_bricks/place1.ogg", "mc/block/deepslate_bricks/place2.ogg", "mc/block/deepslate_bricks/place3.ogg", "mc/block/deepslate_bricks/place4.ogg", "mc/block/deepslate_bricks/place5.ogg", "mc/block/deepslate_bricks/place6.ogg" }, place = { "mc/block/deepslate_bricks/place1.ogg", "mc/block/deepslate_bricks/place2.ogg", "mc/block/deepslate_bricks/place3.ogg", "mc/block/deepslate_bricks/place4.ogg", "mc/block/deepslate_bricks/place5.ogg", "mc/block/deepslate_bricks/place6.ogg" } }
 MC.GeneratedSoundTypes.DEEPSLATE_TILES = { volume = 1, pitch = 1, breaks = { "mc/block/deepslate_bricks/place1.ogg", "mc/block/deepslate_bricks/place2.ogg", "mc/block/deepslate_bricks/place3.ogg", "mc/block/deepslate_bricks/place4.ogg", "mc/block/deepslate_bricks/place5.ogg", "mc/block/deepslate_bricks/place6.ogg" }, place = { "mc/block/deepslate_bricks/place1.ogg", "mc/block/deepslate_bricks/place2.ogg", "mc/block/deepslate_bricks/place3.ogg", "mc/block/deepslate_bricks/place4.ogg", "mc/block/deepslate_bricks/place5.ogg", "mc/block/deepslate_bricks/place6.ogg" } }
 MC.GeneratedSoundTypes.DRIED_GHAST = { volume = 1, pitch = 1, breaks = { "mc/block/dried_ghast/break.ogg" }, place = { "mc/dig/stone1.ogg", "mc/dig/stone2.ogg", "mc/dig/stone3.ogg", "mc/dig/stone4.ogg" } }
 MC.GeneratedSoundTypes.DRIPSTONE_BLOCK = { volume = 1, pitch = 1, breaks = { "mc/block/dripstone/break1.ogg", "mc/block/dripstone/break2.ogg", "mc/block/dripstone/break3.ogg", "mc/block/dripstone/break4.ogg", "mc/block/dripstone/break5.ogg" }, place = { "mc/block/dripstone/break1.ogg", "mc/block/dripstone/break2.ogg", "mc/block/dripstone/break3.ogg", "mc/block/dripstone/break4.ogg", "mc/block/dripstone/break5.ogg" } }
@@ -142,10 +144,18 @@ MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/ba
 MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/bamboo_wood/break3.ogg"
 MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/bamboo_wood/break4.ogg"
 MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/bamboo_wood/break5.ogg"
+MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/bamboo_wood_door/toggle1.ogg"
+MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/bamboo_wood_door/toggle2.ogg"
+MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/bamboo_wood_door/toggle3.ogg"
+MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/bamboo_wood_door/toggle4.ogg"
 MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/bamboo_wood_hanging_sign/break1.ogg"
 MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/bamboo_wood_hanging_sign/break2.ogg"
 MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/bamboo_wood_hanging_sign/break3.ogg"
 MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/bamboo_wood_hanging_sign/break4.ogg"
+MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/bamboo_wood_trapdoor/toggle1.ogg"
+MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/bamboo_wood_trapdoor/toggle2.ogg"
+MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/bamboo_wood_trapdoor/toggle3.ogg"
+MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/bamboo_wood_trapdoor/toggle4.ogg"
 MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/basalt/break1.ogg"
 MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/basalt/break2.ogg"
 MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/basalt/break3.ogg"
@@ -191,23 +201,3 @@ MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/ch
 MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/cherry_wood/break1.ogg"
 MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/cherry_wood/break2.ogg"
 MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/cherry_wood/break3.ogg"
-MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/cherry_wood/break4.ogg"
-MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/cherry_wood/break5.ogg"
-MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/cherry_wood_hanging_sign/break1.ogg"
-MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/cherry_wood_hanging_sign/break2.ogg"
-MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/cherry_wood_hanging_sign/break3.ogg"
-MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/cherry_wood_hanging_sign/break4.ogg"
-MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/chiseled_bookshelf/break1.ogg"
-MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/chiseled_bookshelf/break2.ogg"
-MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/chiseled_bookshelf/break3.ogg"
-MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/chiseled_bookshelf/break4.ogg"
-MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/chiseled_bookshelf/break5.ogg"
-MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/chiseled_bookshelf/break6.ogg"
-MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/cobweb/break1.ogg"
-MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/cobweb/break2.ogg"
-MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/cobweb/break3.ogg"
-MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/cobweb/break4.ogg"
-MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/cobweb/break5.ogg"
-MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/cobweb/break6.ogg"
-MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/copper/break1.ogg"
-MC.GeneratedSoundResources[#MC.GeneratedSoundResources + 1] = "sound/mc/block/copper/break2.ogg"
