@@ -455,6 +455,36 @@ function MC.GetBlockOrient( bx, by, bz )
 	return MC.NormalizeOrient and MC.NormalizeOrient( id, c.orients and c.orients[li] ) or ( c.orients and c.orients[li] or 0 )
 end
 
+function MC.GetCellBlockBoxes( bx, by, bz )
+	local id = MC.GetBlock( bx, by, bz )
+	if id == 0 then return nil end
+	return MC.BlockBoxes and MC.BlockBoxes( id, MC.GetBlockOrient( bx, by, bz ), bx, by, bz ) or nil
+end
+
+function MC.GetCellCollisionBoxes( bx, by, bz )
+	local id = MC.GetBlock( bx, by, bz )
+	if id == 0 then return nil end
+	return MC.GetBlockCollisionBoxes and MC.GetBlockCollisionBoxes( id, MC.GetBlockOrient( bx, by, bz ), bx, by, bz ) or nil
+end
+
+function MC.GetCellBlockExtent( bx, by, bz )
+	local id = MC.GetBlock( bx, by, bz )
+	if id == 0 or not MC.GetBlockExtent then return nil, nil end
+	return MC.GetBlockExtent( id, MC.GetBlockOrient( bx, by, bz ), bx, by, bz )
+end
+
+function MC.GetCellShapeInfo( bx, by, bz )
+	local id = MC.GetBlock( bx, by, bz )
+	if id == 0 or not MC.GetBlockShapeInfo then return nil end
+	local info = MC.GetBlockShapeInfo( id, MC.GetBlockOrient( bx, by, bz ), bx, by, bz )
+	if info then
+		info.bx = bx
+		info.by = by
+		info.bz = bz
+	end
+	return info
+end
+
 --- Low-level store mutation used by BOTH realms.
 -- id == 0 removes. Returns: chunk (or nil), created(bool), emptied(bool), changed(bool)
 function MC.SetBlockRaw( bx, by, bz, id, orient )

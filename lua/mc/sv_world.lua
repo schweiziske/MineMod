@@ -559,8 +559,8 @@ function SV.SyncCells( ply, cells )
 	sendSetBulk( changes, ply )
 end
 
-local function broadcastFx( kind, bx, by, bz, id, orient )
-	if #player.GetAll() == 0 then return end
+local function sendFx( kind, bx, by, bz, id, orient, recipients )
+	if recipients == nil and #player.GetAll() == 0 then return end
 	orient = MC.NormalizeOrient( id, orient )
 	net.Start( "mc_fx" )
 		net.WriteUInt( kind, 2 ) -- 1=place, 2=break
@@ -569,7 +569,35 @@ local function broadcastFx( kind, bx, by, bz, id, orient )
 		net.WriteInt( bz, Net.COORD_BITS )
 		net.WriteUInt( id, Net.ID_BITS )
 		net.WriteUInt( orient or 0, Net.ORIENT_BITS )
-	net.Broadcast()
+	if recipients ~= nil then
+		net.Send( recipients )
+	else
+		net.Broadcast()
+	end
+end
+
+local function broadcastFx( kind, bx, by, bz, id, orient )
+	sendFx( kind, bx, by, bz, id, orient )
+end
+
+local function normalizeFxKind( kind )
+	if kind == "place" then return 1 end
+	if kind == "break" or kind == "destroy" then return 2 end
+	kind = math.floor( tonumber( kind ) or 0 )
+	if kind == 1 or kind == 2 then return kind end
+	return nil
+end
+
+function SV.PlayBlockFx( kind, id, orient, bx, by, bz, recipients )
+	kind = normalizeFxKind( kind )
+	id = math.floor( tonumber( id ) or 0 )
+	if not kind then return false, "invalid_kind" end
+	if id == 0 or not MC.IsValidBlock( id ) then return false, "invalid_block" end
+	bx = math.floor( tonumber( bx ) or 0 )
+	by = math.floor( tonumber( by ) or 0 )
+	bz = math.floor( tonumber( bz ) or 0 )
+	sendFx( kind, bx, by, bz, id, orient, recipients )
+	return true
 end
 
 local function callBlockHandler( id, name, ... )
