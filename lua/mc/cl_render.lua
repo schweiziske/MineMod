@@ -135,12 +135,31 @@ local function cornerStep( value )
 	return value <= 0 and -1 or 1
 end
 
+local MC_LIGHT_STYLE_FAST = "fast"
+local MC_LIGHT_STYLE_VANILLA = "vanilla"
+local MC_LIGHT_STYLE_BEST = "best"
+
 local MC_LIGHT_AO_FACTORS = {
 	[0] = 1.00,
 	[1] = 0.82,
 	[2] = 0.68,
 	[3] = 0.55,
 }
+
+local MC_LIGHT_BEST_AO_FACTORS = {
+	[0] = 1.00,
+	[1] = 0.90,
+	[2] = 0.78,
+	[3] = 0.66,
+}
+
+local function currentLightStyle()
+	local cv = MC.LightStyle
+	local style = cv and cv.GetString and string.lower( tostring( cv:GetString() or "" ) ) or MC_LIGHT_STYLE_VANILLA
+	if style == MC_LIGHT_STYLE_FAST or style == "low" or style == "0" then return MC_LIGHT_STYLE_FAST end
+	if style == MC_LIGHT_STYLE_BEST or style == "fancy" or style == "high" or style == "2" then return MC_LIGHT_STYLE_BEST end
+	return MC_LIGHT_STYLE_VANILLA
+end
 
 local function minecraftSmoothCornerSamples( bx, by, bz, faceIndex, cn )
 	local x, y, z = cornerXYZ( cn )
@@ -226,6 +245,18 @@ local function minecraftSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfE
 	return ( a + b + c + d ) * 0.25
 end
 
+local function minecraftFastCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
+	local face = FACES[faceIndex]
+	local off = face and face.off
+	if not off then return cachedMeshLightingSample( bx, by, bz, selfEmission ) end
+	return cachedMeshLightingSample( bx + off[1], by + off[2], bz + off[3], selfEmission )
+end
+
+local function bestSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
+	local brightness = math.Clamp( minecraftSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission ), 0, 1 )
+	return math.Clamp( brightness ^ 0.85, 0, 1 )
+end
+
 local function minecraftCornerOccluders( bx, by, bz, faceIndex, cn )
 	local x, y, z = cornerXYZ( cn )
 	local xs, ys, zs = cornerStep( x ), cornerStep( y ), cornerStep( z )
@@ -239,20 +270,38 @@ local function minecraftCornerOccluders( bx, by, bz, faceIndex, cn )
 	return bx, by, bz, bx, by, bz, bx, by, bz
 end
 
-local function minecraftSmoothCornerAO( bx, by, bz, faceIndex, cn )
+local function minecraftCornerAOWithFactors( bx, by, bz, faceIndex, cn, factors )
 	local s1x, s1y, s1z, s2x, s2y, s2z, cx, cy, cz = minecraftCornerOccluders( bx, by, bz, faceIndex, cn )
 	local side1Blocked = cachedMeshAOSample( s1x, s1y, s1z )
 	local side2Blocked = cachedMeshAOSample( s2x, s2y, s2z )
 	local cornerBlocked = cachedMeshAOSample( cx, cy, cz )
-	if side1Blocked and side2Blocked then return MC_LIGHT_AO_FACTORS[3] end
+	if side1Blocked and side2Blocked then return factors[3] end
 	local blocked = ( side1Blocked and 1 or 0 ) + ( side2Blocked and 1 or 0 ) + ( cornerBlocked and 1 or 0 )
-	return MC_LIGHT_AO_FACTORS[blocked] or 1
+	return factors[blocked] or 1
 end
 
-local function litFaceColor( shade, bx, by, bz, id, faceIndex, cn, selfEmission )
+local function minecraftSmoothCornerAO( bx, by, bz, faceIndex, cn )
+	return minecraftCornerAOWithFactors( bx, by, bz, faceIndex, cn, MC_LIGHT_AO_FACTORS )
+end
+
+local function minecraftBestCornerAO( bx, by, bz, faceIndex, cn )
+	return minecraftCornerAOWithFactors( bx, by, bz, faceIndex, cn, MC_LIGHT_BEST_AO_FACTORS )
+end
+
+local function litFaceColor( shade, bx, by, bz, id, faceIndex, cn, selfEmission, style )
 	if not MC.SampleLighting then return shade end
-	local brightness = minecraftSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
-	local ao = minecraftSmoothCornerAO( bx, by, bz, faceIndex, cn )
+	style = style or MC_LIGHT_STYLE_VANILLA
+	local brightness, ao
+	if style == MC_LIGHT_STYLE_FAST then
+		brightness = minecraftFastCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
+		ao = 1
+	elseif style == MC_LIGHT_STYLE_BEST then
+		brightness = bestSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
+		ao = minecraftBestCornerAO( bx, by, bz, faceIndex, cn )
+	else
+		brightness = minecraftSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
+		ao = minecraftSmoothCornerAO( bx, by, bz, faceIndex, cn )
+	end
 	local mul = math.Clamp( ( tonumber( brightness ) or 1 ) * ao, 0, 1 )
 	return Color(
 		math.Clamp( math.floor( ( shade.r or 255 ) * mul + 0.5 ), 0, 255 ),
@@ -260,6 +309,19 @@ local function litFaceColor( shade, bx, by, bz, id, faceIndex, cn, selfEmission 
 		math.Clamp( math.floor( ( shade.b or 255 ) * mul + 0.5 ), 0, 255 ),
 		shade.a or 255
 	)
+end
+
+local function quadCornerColors( shade, bx, by, bz, id, faceIndex, corners, selfEmission, style )
+	if style == MC_LIGHT_STYLE_FAST then
+		local color = litFaceColor( shade, bx, by, bz, id, faceIndex, corners[1], selfEmission, style )
+		return { color, color, color, color }
+	end
+	return {
+		litFaceColor( shade, bx, by, bz, id, faceIndex, corners[1], selfEmission, style ),
+		litFaceColor( shade, bx, by, bz, id, faceIndex, corners[2], selfEmission, style ),
+		litFaceColor( shade, bx, by, bz, id, faceIndex, corners[3], selfEmission, style ),
+		litFaceColor( shade, bx, by, bz, id, faceIndex, corners[4], selfEmission, style ),
+	}
 end
 
 local VERT_LIMIT = 64998 -- multiple of 6, under the 65535 IMesh vertex cap
@@ -1224,6 +1286,10 @@ end
 function MC.BuildChunkMesh( key, sectionIndex )
 	local buildStart = SysTime()
 	resetMeshLightingSampleCaches()
+	local meshLightStyle = currentLightStyle()
+	if MC.LightPerfStats then
+		MC.LightPerfStats.lastMeshLightStyle = meshLightStyle
+	end
 	if MC.LightPerfBeginMeshBuild then
 		MC.LightPerfBeginMeshBuild( key, sectionIndex )
 	end
@@ -1325,15 +1391,17 @@ function MC.BuildChunkMesh( key, sectionIndex )
 
 	local function emitQuad( corners, normal, color, tile, bx, by, bz, id, faceIndex )
 		local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
+		local colors = quadCornerColors( color, bx, by, bz, id, faceIndex, corners, emission, meshLightStyle )
 		for t = 1, 6 do
-			local cn = corners[TRI[t]]
+			local ci = TRI[t]
+			local cn = corners[ci]
 			local u, v = tileUVPoint( tile, { cn[4], cn[5] } )
 			push( {
 				pos    = Vector( cn[1], cn[2], cn[3] ),
 				normal = normal,
 				u      = u,
 				v      = v,
-				color  = litFaceColor( color, bx, by, bz, id, faceIndex, cn, emission ),
+				color  = colors[ci],
 			} )
 		end
 	end
@@ -1370,8 +1438,10 @@ function MC.BuildChunkMesh( key, sectionIndex )
 			local faceIndex = quad.face or MC.Face.TOP
 			local face = FACES[faceIndex] or FACES[MC.Face.TOP]
 			local u0, v0, u1, v1 = tileUVRect( quad.tile or 0, quad.uv )
+			local colors = quadCornerColors( face.sh, bx, by, bz, b.id, faceIndex, quad.verts, emission, meshLightStyle )
 			for t = 1, 6 do
-				local vert = quad.verts[TRI[t]]
+				local ci = TRI[t]
+				local vert = quad.verts[ci]
 				local uf, vf = rotatedUVFlags( vert.u or 0, vert.v or 0, quad.rot or 0 )
 				if mirrorU then uf = 1 - uf end
 				push( {
@@ -1379,7 +1449,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 					normal = face.n,
 					u      = uf == 1 and u1 or u0,
 					v      = vf == 1 and v1 or v0,
-					color  = litFaceColor( face.sh, bx, by, bz, b.id, faceIndex, vert, emission ),
+					color  = colors[ci],
 				} )
 			end
 		end
@@ -1427,12 +1497,14 @@ function MC.BuildChunkMesh( key, sectionIndex )
 					end
 					local corners = face.c
 					local nrm, col = face.n, face.sh
+					local colors = quadCornerColors( col, bx, by, bz, id, f, corners, emission, meshLightStyle )
 
 					for t = 1, 6 do
-						local cn = corners[ TRI[t] ]
+						local ci = TRI[t]
+						local cn = corners[ci]
 						local u, v
 						if baked and baked.uvs then
-							u, v = tileUVPoint( tile, baked.uvs[TRI[t]] )
+							u, v = tileUVPoint( tile, baked.uvs[ci] )
 						else
 							local uf, vf = rotatedUVFlags( cn[4], cn[5], rot or 0, flipU, flipV )
 							u = uf == 1 and u1 or u0
@@ -1443,7 +1515,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 							normal = nrm,
 							u      = u,
 							v      = v,
-							color  = litFaceColor( col, bx, by, bz, id, f, cn, emission ),
+							color  = colors[ci],
 						} )
 					end
 				end
@@ -1474,6 +1546,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 							end
 							local corners = BOX_FACE_CORNERS[f]( box )
 							local nrm, col = face.n, face.sh
+							local colors = quadCornerColors( col, bx, by, bz, id, f, corners, emission, meshLightStyle )
 							for t = 1, 6 do
 								local ci = TRI[t]
 								local cn = corners[ci]
@@ -1491,7 +1564,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 									normal = nrm,
 									u      = u,
 									v      = v,
-									color  = litFaceColor( col, bx, by, bz, id, f, cn, emission ),
+									color  = colors[ci],
 								} )
 							end
 						end
