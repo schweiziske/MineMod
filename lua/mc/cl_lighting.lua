@@ -1008,26 +1008,17 @@ function MC.SampleAmbientOcclusion( bx, by, bz )
 	local sampleStart = lightPerfDebugEnabled() and perfNow() or nil
 	if not lightEnabled() then
 		noteLightAOSample( sampleStart )
-		return 1
+		return false
 	end
-	local blocked = 0
-	local function test( x, y, z )
-		local id = MC.GetBlock( x, y, z )
-		if id == 0 then return end
-		local orient = MC.GetBlockOrient and MC.GetBlockOrient( x, y, z ) or 0
-		if lightOpacity( id, orient ) >= 15 then
-			blocked = blocked + 1
-		end
+	bx, by, bz = math.floor( bx ), math.floor( by ), math.floor( bz )
+	local id = MC.GetBlock( bx, by, bz )
+	local blocked = false
+	if id ~= 0 then
+		local orient = MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz ) or 0
+		blocked = lightOpacity( id, orient ) >= 15
 	end
-	test( bx + 1, by, bz )
-	test( bx - 1, by, bz )
-	test( bx, by + 1, bz )
-	test( bx, by - 1, bz )
-	test( bx, by, bz + 1 )
-	test( bx, by, bz - 1 )
-	local ao = math.Clamp( 1 - blocked * 0.035, 0.72, 1 )
 	noteLightAOSample( sampleStart )
-	return ao
+	return blocked
 end
 
 cvars.AddChangeCallback( "mc_light_enabled", function()

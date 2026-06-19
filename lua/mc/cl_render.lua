@@ -126,22 +126,41 @@ local function cornerCellOffset( value )
 	return value <= 0 and -1 or 0
 end
 
-local function sampleCellForFaceCorner( bx, by, bz, faceIndex, cn )
+local function cornerSampleOffsets( value )
+	local low = cornerCellOffset( value )
+	return low, low + 1
+end
+
+local function cornerStep( value )
+	return value <= 0 and -1 or 1
+end
+
+local MC_LIGHT_AO_FACTORS = {
+	[0] = 1.00,
+	[1] = 0.82,
+	[2] = 0.68,
+	[3] = 0.55,
+}
+
+local function minecraftSmoothCornerSamples( bx, by, bz, faceIndex, cn )
 	local x, y, z = cornerXYZ( cn )
+	local x0, x1 = cornerSampleOffsets( x )
+	local y0, y1 = cornerSampleOffsets( y )
+	local z0, z1 = cornerSampleOffsets( z )
 	if faceIndex == MC.Face.TOP then
-		return bx + cornerCellOffset( x ), by + cornerCellOffset( y ), bz + 1
+		return bx + x0, by + y0, bz + 1, bx + x1, by + y0, bz + 1, bx + x0, by + y1, bz + 1, bx + x1, by + y1, bz + 1
 	elseif faceIndex == MC.Face.BOTTOM then
-		return bx + cornerCellOffset( x ), by + cornerCellOffset( y ), bz - 1
+		return bx + x0, by + y0, bz - 1, bx + x1, by + y0, bz - 1, bx + x0, by + y1, bz - 1, bx + x1, by + y1, bz - 1
 	elseif faceIndex == MC.Face.XP then
-		return bx + 1, by + cornerCellOffset( y ), bz + cornerCellOffset( z )
+		return bx + 1, by + y0, bz + z0, bx + 1, by + y1, bz + z0, bx + 1, by + y0, bz + z1, bx + 1, by + y1, bz + z1
 	elseif faceIndex == MC.Face.XN then
-		return bx - 1, by + cornerCellOffset( y ), bz + cornerCellOffset( z )
+		return bx - 1, by + y0, bz + z0, bx - 1, by + y1, bz + z0, bx - 1, by + y0, bz + z1, bx - 1, by + y1, bz + z1
 	elseif faceIndex == MC.Face.YP then
-		return bx + cornerCellOffset( x ), by + 1, bz + cornerCellOffset( z )
+		return bx + x0, by + 1, bz + z0, bx + x1, by + 1, bz + z0, bx + x0, by + 1, bz + z1, bx + x1, by + 1, bz + z1
 	elseif faceIndex == MC.Face.YN then
-		return bx + cornerCellOffset( x ), by - 1, bz + cornerCellOffset( z )
+		return bx + x0, by - 1, bz + z0, bx + x1, by - 1, bz + z0, bx + x0, by - 1, bz + z1, bx + x1, by - 1, bz + z1
 	end
-	return bx, by, bz
+	return bx, by, bz, bx, by, bz, bx, by, bz, bx, by, bz
 end
 
 local MeshLightSampleCache = {}
@@ -175,7 +194,7 @@ local function cachedMeshLightingSample( sx, sy, sz, selfEmission )
 end
 
 local function cachedMeshAOSample( sx, sy, sz )
-	if not MC.SampleAmbientOcclusion then return 1 end
+	if not MC.SampleAmbientOcclusion then return false end
 	local key = sampleCacheKey( sx, sy, sz )
 	local cached = MeshAOSampleCache[key]
 	if cached ~= nil then
@@ -183,9 +202,10 @@ local function cachedMeshAOSample( sx, sy, sz )
 		return cached
 	end
 	MeshAOSampleMisses = MeshAOSampleMisses + 1
-	local ao = MC.SampleAmbientOcclusion( sx, sy, sz )
-	MeshAOSampleCache[key] = ao
-	return ao
+	local sample = MC.SampleAmbientOcclusion( sx, sy, sz )
+	local blocked = sample == true or sample == 1
+	MeshAOSampleCache[key] = blocked
+	return blocked
 end
 
 local function noteMeshLightingCacheStats()
@@ -197,11 +217,42 @@ local function noteMeshLightingCacheStats()
 	stats.lastMeshAOCacheMisses = MeshAOSampleMisses
 end
 
+local function minecraftSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
+	local ax, ay, az, bx2, by2, bz2, cx, cy, cz, dx, dy, dz = minecraftSmoothCornerSamples( bx, by, bz, faceIndex, cn )
+	local a = tonumber( cachedMeshLightingSample( ax, ay, az, selfEmission ) ) or 1
+	local b = tonumber( cachedMeshLightingSample( bx2, by2, bz2, selfEmission ) ) or 1
+	local c = tonumber( cachedMeshLightingSample( cx, cy, cz, selfEmission ) ) or 1
+	local d = tonumber( cachedMeshLightingSample( dx, dy, dz, selfEmission ) ) or 1
+	return ( a + b + c + d ) * 0.25
+end
+
+local function minecraftCornerOccluders( bx, by, bz, faceIndex, cn )
+	local x, y, z = cornerXYZ( cn )
+	local xs, ys, zs = cornerStep( x ), cornerStep( y ), cornerStep( z )
+	if faceIndex == MC.Face.TOP or faceIndex == MC.Face.BOTTOM then
+		return bx + xs, by, bz, bx, by + ys, bz, bx + xs, by + ys, bz
+	elseif faceIndex == MC.Face.XP or faceIndex == MC.Face.XN then
+		return bx, by + ys, bz, bx, by, bz + zs, bx, by + ys, bz + zs
+	elseif faceIndex == MC.Face.YP or faceIndex == MC.Face.YN then
+		return bx + xs, by, bz, bx, by, bz + zs, bx + xs, by, bz + zs
+	end
+	return bx, by, bz, bx, by, bz, bx, by, bz
+end
+
+local function minecraftSmoothCornerAO( bx, by, bz, faceIndex, cn )
+	local s1x, s1y, s1z, s2x, s2y, s2z, cx, cy, cz = minecraftCornerOccluders( bx, by, bz, faceIndex, cn )
+	local side1Blocked = cachedMeshAOSample( s1x, s1y, s1z )
+	local side2Blocked = cachedMeshAOSample( s2x, s2y, s2z )
+	local cornerBlocked = cachedMeshAOSample( cx, cy, cz )
+	if side1Blocked and side2Blocked then return MC_LIGHT_AO_FACTORS[3] end
+	local blocked = ( side1Blocked and 1 or 0 ) + ( side2Blocked and 1 or 0 ) + ( cornerBlocked and 1 or 0 )
+	return MC_LIGHT_AO_FACTORS[blocked] or 1
+end
+
 local function litFaceColor( shade, bx, by, bz, id, faceIndex, cn, selfEmission )
 	if not MC.SampleLighting then return shade end
-	local sx, sy, sz = sampleCellForFaceCorner( bx, by, bz, faceIndex, cn )
-	local brightness = cachedMeshLightingSample( sx, sy, sz, selfEmission )
-	local ao = cachedMeshAOSample( sx, sy, sz )
+	local brightness = minecraftSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
+	local ao = minecraftSmoothCornerAO( bx, by, bz, faceIndex, cn )
 	local mul = math.Clamp( ( tonumber( brightness ) or 1 ) * ao, 0, 1 )
 	return Color(
 		math.Clamp( math.floor( ( shade.r or 255 ) * mul + 0.5 ), 0, 255 ),
