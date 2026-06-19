@@ -68,6 +68,28 @@ local function perfBoundsText( minX, minY, minZ, maxX, maxY, maxZ )
 	return string.format( "%d,%d,%d -> %d,%d,%d", minX or 0, minY or 0, minZ or 0, maxX or 0, maxY or 0, maxZ or 0 )
 end
 
+local function noteLightingDisabledSkip( reason, bx, by, bz )
+	local stats = MC.LightPerfStats or {}
+	MC.LightPerfStats = stats
+	stats.lastUpdateMS = 0
+	stats.lastPropagateMS = 0
+	stats.lastDirtyMarkMS = 0
+	stats.lastLightChangedCells = 0
+	stats.lastLightDirtySections = 0
+	stats.lastPropagateSources = 0
+	stats.lastPropagateQueued = 0
+	stats.lastPropagateProcessed = 0
+	stats.lastPropagateWritten = 0
+	stats.lastBlockIncreaseProcessed = 0
+	stats.lastBlockDecreaseProcessed = 0
+	stats.lastUpdateDisabled = reason or true
+	if bx and by and bz then
+		stats.lastUpdateCell = string.format( "%d,%d,%d", bx, by, bz )
+		stats.lastUpdateBounds = perfBoundsText( bx, by, bz, bx, by, bz )
+		stats.lastPropagateBounds = stats.lastUpdateBounds
+	end
+end
+
 local function noteLightSample( startTime )
 	local stats = MC.LightPerfStats
 	if not stats then return end
@@ -323,6 +345,11 @@ end
 
 function MC.IndexChunkLightSources( chunk )
 	if not chunk or not chunk.key then return end
+	if not lightEnabled() then
+		MC.LightSourceIndexReady = false
+		MC.LightCellsReady = false
+		return
+	end
 	MC.ClearChunkLightSources( chunk.key )
 	indexChunkColumn( chunk )
 	indexChunkSources( chunk )
@@ -590,6 +617,10 @@ local function finishChunkLightQueues( perfStart, changed, removeQ, addQ, source
 end
 
 function MC.RemoveChunkLighting( key )
+	if not lightEnabled() then
+		noteLightingDisabledSkip( "remove_chunk" )
+		return 0, 0
+	end
 	local perfStart = perfNow()
 	local changed = newChangedLightCells()
 	local removeQ = newLightQueue()
@@ -600,6 +631,10 @@ end
 
 function MC.UpdateLightingForChunkLoaded( chunk )
 	if not chunk or not chunk.key then return 0, 0 end
+	if not lightEnabled() then
+		noteLightingDisabledSkip( "chunk_loaded" )
+		return 0, 0
+	end
 	local perfStart = perfNow()
 	local changed = newChangedLightCells()
 	local removeQ = newLightQueue()
@@ -822,6 +857,10 @@ local function ensureLightingCells()
 end
 
 function MC.UpdateLightingCellsAroundCell( bx, by, bz, radius, rateLimited )
+	if not lightEnabled() then
+		noteLightingDisabledSkip( "around_cell", bx, by, bz )
+		return 0, 0
+	end
 	local perfStart = SysTime()
 	ensureLightSourceIndex()
 	if MC.LightCellsSkyLevel ~= skyLevel() then
@@ -904,6 +943,10 @@ local function nearbySourceRadius( bx, by, bz )
 end
 
 function MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, oldOpacity, newOpacity )
+	if not lightEnabled() then
+		noteLightingDisabledSkip( "block_change", bx, by, bz )
+		return 0, 0
+	end
 	local perfStart = perfNow()
 	local changed = newChangedLightCells()
 	local removeQ = newLightQueue()
@@ -953,6 +996,10 @@ function MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, old
 end
 
 function MC.MarkLightingDirtyForChange( bx, by, bz, oldId, oldOrient, newId, newOrient, rateLimited )
+	if not lightEnabled() then
+		noteLightingDisabledSkip( "change_dirty", bx, by, bz )
+		return 0, 0
+	end
 	oldId, newId = math.floor( tonumber( oldId ) or 0 ), math.floor( tonumber( newId ) or 0 )
 	oldOrient, newOrient = math.floor( tonumber( oldOrient ) or 0 ), math.floor( tonumber( newOrient ) or 0 )
 
@@ -1023,7 +1070,26 @@ function MC.SampleAmbientOcclusion( bx, by, bz )
 	return blocked
 end
 
-cvars.AddChangeCallback( "mc_light_enabled", function()
+concommand.Add( "mc_light_enable", function( _, _, args )
+	local value = args and args[1]
+	if value == nil or value == "" then
+		print( "[MC light] mc_light_enabled = " .. tostring( MC.LightEnabled and MC.LightEnabled:GetString() or "?" ) )
+		return
+	end
+	RunConsoleCommand( "mc_light_enabled", tostring( value ) )
+end )
+
+cvars.AddChangeCallback( "mc_light_enabled", function( _, _, newValue )
+	MC.LightCellsReady = false
+	MC.LightSourceIndexReady = false
+	MC.LightSkyChunks = {}
+	MC.LightSkyColumnTops = {}
+	local value = string.lower( tostring( newValue or "" ) )
+	if value ~= "0" and value ~= "false" and value ~= "off" then
+		MC.RebuildLightingCells()
+	else
+		noteLightingDisabledSkip( "disabled" )
+	end
 	markLoadedMeshesDirty()
 end, "mc" )
 
