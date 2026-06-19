@@ -785,6 +785,30 @@ end
 
 local DecodeLocal = MC.DecodeLocal
 
+local function ensureChunkRenderSectionIndex( chunk )
+	if not chunk then return nil end
+	local version = chunk.collisionVersion or 0
+	if chunk.renderSectionBlocks and chunk.renderSectionIndexVersion == version then
+		return chunk.renderSectionBlocks
+	end
+
+	local bySection = {}
+	for li, id in pairs( chunk.blocks or {} ) do
+		local lx, ly, lz = DecodeLocal( li )
+		local sectionIndex = sectionIndexForLocal( lx, ly, lz )
+		local list = bySection[sectionIndex]
+		if not list then
+			list = {}
+			bySection[sectionIndex] = list
+		end
+		list[li] = id
+	end
+
+	chunk.renderSectionBlocks = bySection
+	chunk.renderSectionIndexVersion = version
+	return bySection
+end
+
 local function rotatedUVFlags( uf, vf, rot, flipU, flipV )
 	rot = rot % 4
 	if rot == 1 then uf, vf = vf, 1 - uf
@@ -1095,6 +1119,9 @@ end
 
 function MC.BuildChunkMesh( key, sectionIndex )
 	local buildStart = SysTime()
+	if MC.LightPerfBeginMeshBuild then
+		MC.LightPerfBeginMeshBuild( key, sectionIndex )
+	end
 	if not sectionIndex then
 		MC.FreeChunkMesh( key )
 	end
@@ -1113,12 +1140,16 @@ function MC.BuildChunkMesh( key, sectionIndex )
 		else
 			MC.FreeChunkMesh( key )
 		end
-		MC.RenderStats.lastMeshBuildMS = math.Round( ( SysTime() - buildStart ) * 1000, 3 )
+		local meshMS = math.Round( ( SysTime() - buildStart ) * 1000, 3 )
+		MC.RenderStats.lastMeshBuildMS = meshMS
 		MC.RenderStats.lastMeshKey = key
 		MC.RenderStats.lastMeshSection = sectionIndex or "full"
 		MC.RenderStats.lastMeshBlocks = 0
 		MC.RenderStats.lastOpaqueMeshes = 0
 		MC.RenderStats.lastTranslucentMeshes = 0
+		if MC.LightPerfEndMeshBuild then
+			MC.LightPerfEndMeshBuild( key, sectionIndex, meshMS )
+		end
 		return
 	end
 
@@ -1249,7 +1280,13 @@ function MC.BuildChunkMesh( key, sectionIndex )
 		return true
 	end
 
-	for li, id in pairs( chunk.blocks ) do
+	local blockIter = chunk.blocks
+	if sectionIndex then
+		local bySection = ensureChunkRenderSectionIndex( chunk )
+		blockIter = bySection and bySection[sectionIndex] or {}
+	end
+
+	for li, id in pairs( blockIter ) do
 		local orient = MC.NormalizeOrient( id, chunk.orients[li] )
 		local lx, ly, lz = DecodeLocal( li )
 		local buffers = buffersForLocal( lx, ly, lz )
@@ -1387,12 +1424,16 @@ function MC.BuildChunkMesh( key, sectionIndex )
 		end
 		rebuildFlatMeshLists( key )
 	end
-	MC.RenderStats.lastMeshBuildMS = math.Round( ( SysTime() - buildStart ) * 1000, 3 )
+	local meshMS = math.Round( ( SysTime() - buildStart ) * 1000, 3 )
+	MC.RenderStats.lastMeshBuildMS = meshMS
 	MC.RenderStats.lastMeshKey = key
 	MC.RenderStats.lastMeshSection = sectionIndex or "full"
 	MC.RenderStats.lastMeshBlocks = chunk.count or 0
 	MC.RenderStats.lastOpaqueMeshes = #opaqueMeshes
 	MC.RenderStats.lastTranslucentMeshes = #translucentMeshes
+	if MC.LightPerfEndMeshBuild then
+		MC.LightPerfEndMeshBuild( key, sectionIndex, meshMS )
+	end
 end
 
 ------------------------------------------------------------------------- drawing
@@ -1464,6 +1505,20 @@ local function markChunkSectionDirty( key, sectionIndex, rateLimited )
 	else
 		MC.MeshDirtyRateLimited[key] = nil
 	end
+end
+
+function MC.MarkLightSectionDirty( key, sectionIndex )
+	markChunkSectionDirty( key, sectionIndex, false )
+end
+
+function MC.MarkLightCellDirty( bx, by, bz )
+	local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
+	local key = MC.ChunkKey( cx, cy, cz )
+	if not ( MC.World and MC.World[key] ) then return false end
+	local lx, ly, lz = DecodeLocal( li )
+	local sectionIndex = sectionIndexForLocal( lx, ly, lz )
+	MC.MarkLightSectionDirty( key, sectionIndex )
+	return true, key, sectionIndex
 end
 
 function MC.MarkRenderSectionsDirtyInBounds( minBX, minBY, minBZ, maxBX, maxBY, maxBZ, rateLimited )
