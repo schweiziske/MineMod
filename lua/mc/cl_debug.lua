@@ -105,6 +105,49 @@ concommand.Add( "mc_block_diag", function()
 		tostring( MC.Material and MC.Material:IsError() ), tostring( MC.MaterialTranslucent and MC.MaterialTranslucent:IsError() ) ) )
 end )
 
+local function lightPerfDebugEnabled()
+	return MC.LightPerfDebug and MC.LightPerfDebug:GetBool()
+end
+
+function MC.LightPerfSummaryLines()
+	local s = MC.LightPerfStats or {}
+	local r = MC.RenderStats or {}
+	return {
+		string.format( "Light total: update=%sms rebuild=%sms dirty=%sms sky=%s debug=%s",
+			tostring( s.lastUpdateMS ), tostring( s.lastRebuildMS ), tostring( s.lastDirtyMarkMS ),
+			tostring( MC.LightSkyLevel and MC.LightSkyLevel:GetInt() ), tostring( lightPerfDebugEnabled() ) ),
+		string.format( "Light block: prop=%sms inc=%s dec=%s changed=%s dirtySec=%s src=%s queue=%s proc=%s write=%s",
+			tostring( s.lastPropagateMS ), tostring( s.lastBlockIncreaseProcessed ), tostring( s.lastBlockDecreaseProcessed ),
+			tostring( s.lastLightChangedCells ), tostring( s.lastLightDirtySections ),
+			tostring( s.lastPropagateSources ), tostring( s.lastPropagateQueued ),
+			tostring( s.lastPropagateProcessed ), tostring( s.lastPropagateWritten ) ),
+		string.format( "Light sky: all=%sms cols=%s cells=%s col=%sms/%s dirtySec=%s",
+			tostring( s.lastSkyRebuildMS ), tostring( s.lastSkyRebuildColumns ), tostring( s.lastSkyRebuildCells ),
+			tostring( s.lastSkyColumnMS ), tostring( s.lastSkyColumn ), tostring( s.lastSkyColumnDirtySections ) ),
+		string.format( "Light mesh: mesh=%sms key=%s sec=%s samples=%s/%sms ao=%s/%sms timed=%s",
+			tostring( r.lastMeshBuildMS or s.lastMeshBuildMS ), tostring( s.lastMeshKey or r.lastMeshKey ),
+			tostring( s.lastMeshSection or r.lastMeshSection ), tostring( s.lastMeshSampleCalls ),
+			tostring( s.lastMeshSampleMS ), tostring( s.lastMeshAOCalls ), tostring( s.lastMeshAOMS ),
+			tostring( s.lastMeshDebugTimed ) ),
+		string.format( "Light bounds: update=%s prop=%s rebuild=%s",
+			tostring( s.lastUpdateBounds ), tostring( s.lastPropagateBounds ), tostring( s.lastRebuildBounds ) ),
+	}
+end
+
+function MC.PrintLightPerfStats( reason, extra )
+	local tag = "[MC light perf]"
+	if reason and reason ~= "" then tag = tag .. "[" .. tostring( reason ) .. "]" end
+	if extra and extra ~= "" then print( tag .. " " .. tostring( extra ) ) end
+	print( tag .. " mc_light_perf_debug 1 enables per-sample timing and HUD overlay" )
+	for _, line in ipairs( MC.LightPerfSummaryLines() ) do
+		print( tag .. " " .. line )
+	end
+end
+
+concommand.Add( "mc_light_perf", function()
+	MC.PrintLightPerfStats()
+end )
+
 concommand.Add( "mc_client_diag", function()
 	local chunks, blocks = 0, 0
 	local minBZ, maxBZ
@@ -188,6 +231,9 @@ concommand.Add( "mc_client_diag", function()
 		tostring( renderStats.lastMeshKey ), tostring( renderStats.lastMeshBuildMS ),
 		tostring( renderStats.lastMeshBlocks ), tostring( renderStats.lastOpaqueMeshes ),
 		tostring( renderStats.lastTranslucentMeshes ) ) )
+	for _, line in ipairs( MC.LightPerfSummaryLines() ) do
+		print( "[MC client] " .. line )
+	end
 	print( string.format( "[MC client] collision key=%s time=%sms bounds=%s phys=%s dirty=%s",
 		tostring( physStats.lastClientPhysKey ), tostring( physStats.lastClientPhysBuildMS ),
 		tostring( physStats.lastClientPhysBounds ), tostring( physStats.lastClientPhysHadObject ),
@@ -384,6 +430,36 @@ hook.Add( "HUDPaint", "mc_debug_hud", function()
 
 	table.insert( lines, string.format( "IMesh:        %s ms  %s O / %s T", tostring( renderStats.lastMeshBuildMS ), tostring( renderStats.lastOpaqueMeshes ), tostring( renderStats.lastTranslucentMeshes ) ) )
 	table.insert( lines, string.format( "Client Phys:  %s ms  bounds=%s", tostring( physStats.lastClientPhysBuildMS ), tostring( physStats.lastClientPhysBounds ) ) )
+	local lightStats = MC.LightPerfStats or {}
+	table.insert( lines, string.format( "Light:        upd=%sms prop=%sms chg=%s sec=%s sky=%sms smp=%s/%sms",
+		tostring( lightStats.lastUpdateMS ), tostring( lightStats.lastPropagateMS ),
+		tostring( lightStats.lastLightChangedCells ), tostring( lightStats.lastLightDirtySections ),
+		tostring( lightStats.lastSkyRebuildMS ), tostring( lightStats.lastMeshSampleCalls ),
+		tostring( lightStats.lastMeshSampleMS ) ) )
+
+	surface.SetFont( "mc_debug" )
+	local _, lh = surface.GetTextSize( "Ag" )
+	local maxw = 0
+	for i = 1, #lines do
+		local w = surface.GetTextSize( lines[i] )
+		if w > maxw then maxw = w end
+	end
+
+	local x, y, pad = 16, 130, 10
+	draw.RoundedBox( 4, x, y, maxw + pad * 2, #lines * lh + pad * 2, Color( 0, 0, 0, 180 ) )
+
+	local ty = y + pad
+	for i = 1, #lines do
+		draw.SimpleText( lines[i], "mc_debug", x + pad, ty, i == 1 and Color( 120, 235, 140 ) or color_white )
+		ty = ty + lh
+	end
+end )
+
+hook.Remove( "HUDPaint", "mc_light_perf_hud" )
+hook.Add( "HUDPaint", "mc_light_perf_hud", function()
+	if not lightPerfDebugEnabled() or MC.DebugHUD then return end
+	local lines = MC.LightPerfSummaryLines()
+	table.insert( lines, 1, "MC Light Perf" )
 
 	surface.SetFont( "mc_debug" )
 	local _, lh = surface.GetTextSize( "Ag" )

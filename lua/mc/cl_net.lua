@@ -1161,7 +1161,6 @@ net.Receive( "mc_unload_chunk", function()
 	if MC.ClientPhysBuiltObjectCounts then MC.ClientPhysBuiltObjectCounts[key] = nil end
 	if MC.ClientPhysTargetSignatures then MC.ClientPhysTargetSignatures[key] = nil end
 	if MC.ClearChunkLightSources then MC.ClearChunkLightSources( key ) end
-	if MC.LightSkyColumns then MC.LightSkyColumns = {} end
 	MC.PendingFull[key] = nil
 	local httpState = MC.HttpChunkSync
 	if httpState then
