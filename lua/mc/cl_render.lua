@@ -144,11 +144,64 @@ local function sampleCellForFaceCorner( bx, by, bz, faceIndex, cn )
 	return bx, by, bz
 end
 
+local MeshLightSampleCache = {}
+local MeshAOSampleCache = {}
+local MeshLightSampleHits, MeshLightSampleMisses = 0, 0
+local MeshAOSampleHits, MeshAOSampleMisses = 0, 0
+
+local function resetMeshLightingSampleCaches()
+	MeshLightSampleCache = {}
+	MeshAOSampleCache = {}
+	MeshLightSampleHits, MeshLightSampleMisses = 0, 0
+	MeshAOSampleHits, MeshAOSampleMisses = 0, 0
+end
+
+local function sampleCacheKey( sx, sy, sz, extra )
+	return sx .. ":" .. sy .. ":" .. sz .. ":" .. ( extra or 0 )
+end
+
+local function cachedMeshLightingSample( sx, sy, sz, selfEmission )
+	if not MC.SampleLighting then return 1 end
+	local key = sampleCacheKey( sx, sy, sz, selfEmission )
+	local cached = MeshLightSampleCache[key]
+	if cached ~= nil then
+		MeshLightSampleHits = MeshLightSampleHits + 1
+		return cached
+	end
+	MeshLightSampleMisses = MeshLightSampleMisses + 1
+	local brightness = MC.SampleLighting( sx, sy, sz, selfEmission )
+	MeshLightSampleCache[key] = brightness
+	return brightness
+end
+
+local function cachedMeshAOSample( sx, sy, sz )
+	if not MC.SampleAmbientOcclusion then return 1 end
+	local key = sampleCacheKey( sx, sy, sz )
+	local cached = MeshAOSampleCache[key]
+	if cached ~= nil then
+		MeshAOSampleHits = MeshAOSampleHits + 1
+		return cached
+	end
+	MeshAOSampleMisses = MeshAOSampleMisses + 1
+	local ao = MC.SampleAmbientOcclusion( sx, sy, sz )
+	MeshAOSampleCache[key] = ao
+	return ao
+end
+
+local function noteMeshLightingCacheStats()
+	local stats = MC.LightPerfStats or {}
+	MC.LightPerfStats = stats
+	stats.lastMeshLightCacheHits = MeshLightSampleHits
+	stats.lastMeshLightCacheMisses = MeshLightSampleMisses
+	stats.lastMeshAOCacheHits = MeshAOSampleHits
+	stats.lastMeshAOCacheMisses = MeshAOSampleMisses
+end
+
 local function litFaceColor( shade, bx, by, bz, id, faceIndex, cn, selfEmission )
 	if not MC.SampleLighting then return shade end
 	local sx, sy, sz = sampleCellForFaceCorner( bx, by, bz, faceIndex, cn )
-	local brightness = MC.SampleLighting( sx, sy, sz, selfEmission )
-	local ao = MC.SampleAmbientOcclusion and MC.SampleAmbientOcclusion( sx, sy, sz ) or 1
+	local brightness = cachedMeshLightingSample( sx, sy, sz, selfEmission )
+	local ao = cachedMeshAOSample( sx, sy, sz )
 	local mul = math.Clamp( ( tonumber( brightness ) or 1 ) * ao, 0, 1 )
 	return Color(
 		math.Clamp( math.floor( ( shade.r or 255 ) * mul + 0.5 ), 0, 255 ),
@@ -1119,6 +1172,7 @@ end
 
 function MC.BuildChunkMesh( key, sectionIndex )
 	local buildStart = SysTime()
+	resetMeshLightingSampleCaches()
 	if MC.LightPerfBeginMeshBuild then
 		MC.LightPerfBeginMeshBuild( key, sectionIndex )
 	end
@@ -1147,6 +1201,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 		MC.RenderStats.lastMeshBlocks = 0
 		MC.RenderStats.lastOpaqueMeshes = 0
 		MC.RenderStats.lastTranslucentMeshes = 0
+		noteMeshLightingCacheStats()
 		if MC.LightPerfEndMeshBuild then
 			MC.LightPerfEndMeshBuild( key, sectionIndex, meshMS )
 		end
@@ -1431,6 +1486,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 	MC.RenderStats.lastMeshBlocks = chunk.count or 0
 	MC.RenderStats.lastOpaqueMeshes = #opaqueMeshes
 	MC.RenderStats.lastTranslucentMeshes = #translucentMeshes
+	noteMeshLightingCacheStats()
 	if MC.LightPerfEndMeshBuild then
 		MC.LightPerfEndMeshBuild( key, sectionIndex, meshMS )
 	end
