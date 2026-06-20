@@ -66,6 +66,7 @@ if SERVER then
 		"mc_set_bulk_fast",
 		"mc_reliable_ack",
 		"mc_fx",
+		"mc_creative_place_anim",
 		"mc_clear",
 		"mc_collision_debug_req",
 		"mc_collision_debug",
