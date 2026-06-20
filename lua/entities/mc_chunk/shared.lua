@@ -526,35 +526,20 @@ local function collisionWindowsForBounds( bounds )
 	local CS = MC.CS
 	local CH = MC.CH
 	local size = PHYSICS_SUBCHUNK_SIZE
-	local byKey = {}
 	local ordered = {}
 
 	local function addWindow( sx, sy, sz, x0, y0, z0, x1, y1, z1 )
-		local key = sx .. ":" .. sy .. ":" .. sz
-		local window = byKey[key]
-		if not window then
-			window = {
-				sx = sx,
-				sy = sy,
-				sz = sz,
-				x0 = x0,
-				y0 = y0,
-				z0 = z0,
-				x1 = x1,
-				y1 = y1,
-				z1 = z1,
-			}
-			byKey[key] = window
-			ordered[#ordered + 1] = window
-			return
-		end
-
-		window.x0 = math.min( window.x0, x0 )
-		window.y0 = math.min( window.y0, y0 )
-		window.z0 = math.min( window.z0, z0 )
-		window.x1 = math.max( window.x1, x1 )
-		window.y1 = math.max( window.y1, y1 )
-		window.z1 = math.max( window.z1, z1 )
+		ordered[#ordered + 1] = {
+			sx = sx,
+			sy = sy,
+			sz = sz,
+			x0 = x0,
+			y0 = y0,
+			z0 = z0,
+			x1 = x1,
+			y1 = y1,
+			z1 = z1,
+		}
 	end
 
 	if bounds then

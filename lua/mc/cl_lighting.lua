@@ -12,11 +12,11 @@ local LIGHT_RADIUS = 15
 
 MC.LightEnabled = MC.LightEnabled or CreateClientConVar( "mc_light_enabled", "1", true, false,
 	"Apply Minecraft-style vertex lighting to MC chunk meshes" )
-MC.LightSkyLevel = MC.LightSkyLevel or CreateClientConVar( "mc_light_sky_level", "15", true, false,
+MC.LightSkyLevel = MC.LightSkyLevel or CreateClientConVar( "mc_light_sky_level", "18", true, false,
 	"Client sky light level for MC chunks (0-15)" )
 MC.LightAmbientMin = MC.LightAmbientMin or CreateClientConVar( "mc_light_ambient_min", "0.18", true, false,
 	"Minimum brightness multiplier for MC vertex lighting" )
-MC.LightStyle = MC.LightStyle or CreateClientConVar( "mc_light_style", "vanilla", true, false,
+MC.LightStyle = MC.LightStyle or CreateClientConVar( "mc_light_style", "best", true, false,
 	"MC chunk lighting visual style: fast, vanilla, or best" )
 MC.LightPerfDebug = MC.LightPerfDebug or CreateClientConVar( "mc_light_perf_debug", "0", true, false,
 	"Show and collect detailed MC lighting performance diagnostics" )
