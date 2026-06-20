@@ -2,21 +2,29 @@
 	MC functional block: liquids.
 
 	Liquids remain non-solid voxel blocks. Source water movement depends on BSP
-	CONTENTS_WATER, so dynamic MC liquids emulate the feel in predicted
-	SetupMove by applying drag, buoyancy and view-direction swim velocity.
+	CONTENTS_WATER, so dynamic MC liquids emulate Minecraft's LivingEntity
+	travelInWater/travelInLava logic in predicted SetupMove.
 ------------------------------------------------------------------------------]]
 
 MC = MC or {}
 
 local LIQUID_CONTACT_PADDING = 1
-local LIQUID_DRAG = 0.72
-local LIQUID_ACCEL = 0.28
-local LIQUID_SWIM_SPEED = 165
-local LIQUID_SIDE_SPEED = 125
-local LIQUID_VERTICAL_SPEED = 130
-local LIQUID_IDLE_SINK_SPEED = 18
-local LIQUID_MAX_SPEED = 190
-local LAVA_SPEED_SCALE = 0.52
+local MC_FLUID_TICKS_PER_SECOND = 20
+local MC_WATER_MOVE_RELATIVE = 0.02
+local MC_WATER_SLOWDOWN = 0.8
+local MC_WATER_SPRINT_SLOWDOWN = 0.9
+local MC_WATER_VERTICAL_INPUT = 0.04
+local MC_WATER_GRAVITY = 0.08
+local MC_WATER_GRAVITY_DIVISOR = 16
+local MC_WATER_FALL_EPSILON = 0.003
+local MC_WATER_FALL_SNAP = 0.005
+local MC_WATER_FALL_SLOW = -0.003
+local MC_WATER_JUMP_OUT = 0.3
+local MC_SWIM_LOOK_UP_MULTIPLIER = 0.085
+local MC_SWIM_LOOK_NORMAL_MULTIPLIER = 0.06
+local MC_LAVA_MOVE_RELATIVE = 0.02
+local MC_LAVA_SLOWDOWN = 0.5
+local MC_LAVA_VERTICAL_SLOWDOWN = 0.8
 
 local LiquidKinds = {
 	water = "water",
@@ -106,53 +114,165 @@ local function moveAngles( ply, mv )
 	return ply:EyeAngles()
 end
 
+local function mcVelocityScale()
+	return ( MC.BS or 36.5 ) * MC_FLUID_TICKS_PER_SECOND
+end
+
+local function mcToSourceVelocity( blocksPerTick )
+	return blocksPerTick * mcVelocityScale()
+end
+
+local function sourceToMcVelocity( sourceVelocity )
+	return sourceVelocity / mcVelocityScale()
+end
+
+local function mcTickFactor()
+	if engine and engine.TickInterval then
+		return math.Clamp( engine.TickInterval() * MC_FLUID_TICKS_PER_SECOND, 0.05, 4 )
+	end
+	return 1
+end
+
 local function inputAxis( speed )
 	return math.Clamp( speed / 400, -1, 1 )
 end
 
-local function scaledLiquidSpeeds( kind )
-	if kind == "lava" then return LAVA_SPEED_SCALE, LIQUID_MAX_SPEED * LAVA_SPEED_SCALE end
-	return 1, LIQUID_MAX_SPEED
+local function horizontalMoveAngles( ply, mv )
+	local ang = moveAngles( ply, mv )
+	return Angle( 0, ang.y or ang.yaw or 0, 0 )
 end
 
-local function clampVectorLength( vec, maxLen )
-	local len = vec:Length()
-	if len <= maxLen or len <= 0.001 then return vec end
-	return vec * ( maxLen / len )
-end
-
-local function applyLiquidVelocity( ply, mv, contact )
-	local scale, maxSpeed = scaledLiquidSpeeds( contact and contact.kind or "water" )
-	local forward = moveAngles( ply, mv ):Forward()
-	local right = moveAngles( ply, mv ):Right()
-	local wish = Vector( 0, 0, 0 )
-	local hadInput = false
-
+local function moveRelative( vel, ply, mv, speed, tickFactor )
 	local forwardInput = inputAxis( mv:GetForwardSpeed() )
 	local sideInput = inputAxis( mv:GetSideSpeed() )
-	if math.abs( forwardInput ) > 0.01 then
-		wish = wish + forward * ( forwardInput * LIQUID_SWIM_SPEED * scale )
-		hadInput = true
-	end
-	if math.abs( sideInput ) > 0.01 then
-		wish = wish + right * ( sideInput * LIQUID_SIDE_SPEED * scale )
-		hadInput = true
-	end
-	if mv:KeyDown( IN_JUMP ) then
-		wish.z = wish.z + LIQUID_VERTICAL_SPEED * scale
-		hadInput = true
-	end
-	if mv:KeyDown( IN_DUCK ) then
-		wish.z = wish.z - LIQUID_VERTICAL_SPEED * scale
-		hadInput = true
-	end
-	if not hadInput then
-		wish.z = -LIQUID_IDLE_SINK_SPEED * scale
+	local lenSqr = forwardInput * forwardInput + sideInput * sideInput
+	if lenSqr < 0.0000001 then return vel, false end
+	if lenSqr > 1 then
+		local invLen = 1 / math.sqrt( lenSqr )
+		forwardInput = forwardInput * invLen
+		sideInput = sideInput * invLen
 	end
 
-	wish = clampVectorLength( wish, maxSpeed )
-	local vel = mv:GetVelocity() * LIQUID_DRAG + wish * LIQUID_ACCEL
-	vel = clampVectorLength( vel, maxSpeed )
+	local ang = horizontalMoveAngles( ply, mv )
+	local wish = ang:Forward() * forwardInput + ang:Right() * sideInput
+	return vel + wish * mcToSourceVelocity( speed * tickFactor ), true
+end
+
+local function liquidAbove( contact )
+	if not contact or not MC.GetBlock or not MC.LiquidKind then return false end
+	return MC.LiquidKind( MC.GetBlock( contact.bx, contact.by, contact.bz + 1 ) ) == contact.kind
+end
+
+local function isWaterSprinting( ply, mv, contact )
+	if not contact or contact.kind ~= "water" then return false end
+	if ply.IsSprinting and ply:IsSprinting() then return true end
+	return mv:KeyDown( IN_SPEED ) and inputAxis( mv:GetForwardSpeed() ) > 0.01
+end
+
+local function applySwimmingLookAdjustment( ply, mv, contact, vel, tickFactor )
+	if not isWaterSprinting( ply, mv, contact ) then return vel end
+	local look = moveAngles( ply, mv ):Forward()
+	local lookZ = look.z or 0
+	if lookZ > 0 and not mv:KeyDown( IN_JUMP ) and not liquidAbove( contact ) then return vel end
+	local baseMultiplier = lookZ < -0.2 and MC_SWIM_LOOK_UP_MULTIPLIER or MC_SWIM_LOOK_NORMAL_MULTIPLIER
+	local multiplier = 1 - math.pow( 1 - baseMultiplier, tickFactor )
+	local mcZ = sourceToMcVelocity( vel.z )
+	vel.z = mcToSourceVelocity( mcZ + ( lookZ - mcZ ) * multiplier )
+	return vel
+end
+
+local function getFluidFallingAdjustedVelocity( vel, gravity, isFalling, sprinting, tickFactor )
+	if gravity == 0 or sprinting then return vel end
+	local mcZ = sourceToMcVelocity( vel.z )
+	local scaledGravity = gravity * tickFactor
+	local yd
+	if isFalling and math.abs( mcZ - MC_WATER_FALL_SNAP * tickFactor ) >= MC_WATER_FALL_EPSILON and math.abs( mcZ - scaledGravity / MC_WATER_GRAVITY_DIVISOR ) < MC_WATER_FALL_EPSILON then
+		yd = MC_WATER_FALL_SLOW * tickFactor
+	else
+		yd = mcZ - scaledGravity / MC_WATER_GRAVITY_DIVISOR
+	end
+	vel.z = mcToSourceVelocity( yd )
+	return vel
+end
+
+local function horizontalCollisionFromVelocity( ply, mv, vel )
+	if not util or not util.TraceHull then return false end
+	local horizontal = Vector( vel.x, vel.y, 0 )
+	if horizontal:LengthSqr() < 1 then return false end
+	local origin = mv:GetOrigin()
+	local step = horizontal:GetNormalized() * math.min( ( MC.BS or 36.5 ) * 0.25, 12 )
+	local tr = util.TraceHull( {
+		start = origin,
+		endpos = origin + step,
+		mins = ply:OBBMins(),
+		maxs = ply:OBBMaxs(),
+		filter = ply,
+		mask = MASK_PLAYERSOLID,
+	} )
+	return tr.Hit == true
+end
+
+local function freeForFluidJumpOut( ply, mv, vel )
+	if not util or not util.TraceHull then return false end
+	local origin = mv:GetOrigin()
+	local tickInterval = engine and engine.TickInterval and engine.TickInterval() or ( 1 / MC_FLUID_TICKS_PER_SECOND )
+	local up = ( MC.BS or 36.5 ) * 0.6
+	local tr = util.TraceHull( {
+		start = origin,
+		endpos = origin + Vector( vel.x * tickInterval, vel.y * tickInterval, up ),
+		mins = ply:OBBMins(),
+		maxs = ply:OBBMaxs(),
+		filter = ply,
+		mask = MASK_PLAYERSOLID,
+	} )
+	return tr.Hit ~= true
+end
+
+local function jumpOutOfFluid( ply, mv, vel )
+	if horizontalCollisionFromVelocity( ply, mv, vel ) and freeForFluidJumpOut( ply, mv, vel ) then
+		vel.z = mcToSourceVelocity( MC_WATER_JUMP_OUT )
+	end
+	return vel
+end
+
+local function applyWaterVelocity( ply, mv, contact )
+	local vel = mv:GetVelocity()
+	local tickFactor = mcTickFactor()
+	local isFalling = vel.z <= 0
+	local sprinting = isWaterSprinting( ply, mv, contact )
+	vel = applySwimmingLookAdjustment( ply, mv, contact, vel, tickFactor )
+	vel = moveRelative( vel, ply, mv, MC_WATER_MOVE_RELATIVE, tickFactor )
+	if mv:KeyDown( IN_JUMP ) then
+		vel.z = vel.z + mcToSourceVelocity( MC_WATER_VERTICAL_INPUT )
+	end
+	if mv:KeyDown( IN_DUCK ) then
+		vel.z = vel.z - mcToSourceVelocity( MC_WATER_VERTICAL_INPUT )
+	end
+
+	local slowDown = sprinting and MC_WATER_SPRINT_SLOWDOWN or MC_WATER_SLOWDOWN
+	local horizontalSlowDown = math.pow( slowDown, tickFactor )
+	local verticalSlowDown = math.pow( MC_WATER_SLOWDOWN, tickFactor )
+	vel.x = vel.x * horizontalSlowDown
+	vel.y = vel.y * horizontalSlowDown
+	vel.z = vel.z * verticalSlowDown
+	vel = getFluidFallingAdjustedVelocity( vel, MC_WATER_GRAVITY, isFalling, sprinting, tickFactor )
+	vel = jumpOutOfFluid( ply, mv, vel )
+	mv:SetVelocity( vel )
+	mv:SetForwardSpeed( 0 )
+	mv:SetSideSpeed( 0 )
+end
+
+local function applyLavaVelocity( ply, mv )
+	local vel = mv:GetVelocity()
+	local tickFactor = mcTickFactor()
+	vel = moveRelative( vel, ply, mv, MC_LAVA_MOVE_RELATIVE, tickFactor )
+	local lavaSlowDown = math.pow( MC_LAVA_SLOWDOWN, tickFactor )
+	local lavaVerticalSlowDown = math.pow( MC_LAVA_VERTICAL_SLOWDOWN, tickFactor )
+	vel.x = vel.x * lavaSlowDown
+	vel.y = vel.y * lavaSlowDown
+	vel.z = vel.z * lavaVerticalSlowDown
+	vel.z = vel.z - mcToSourceVelocity( MC_WATER_GRAVITY / 4 * tickFactor )
+	vel = jumpOutOfFluid( ply, mv, vel )
 	mv:SetVelocity( vel )
 	mv:SetForwardSpeed( 0 )
 	mv:SetSideSpeed( 0 )
@@ -171,7 +291,11 @@ function MC.ApplyLiquidMove( ply, mv )
 	end
 
 	MC.LiquidMovePlayers[ply] = contact.kind
-	applyLiquidVelocity( ply, mv, contact )
+	if contact.kind == "lava" then
+		applyLavaVelocity( ply, mv )
+	else
+		applyWaterVelocity( ply, mv, contact )
+	end
 	return true, contact
 end
 

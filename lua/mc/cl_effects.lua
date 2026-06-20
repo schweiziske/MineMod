@@ -96,7 +96,15 @@ function MC.GetBlockParticleMaterial( id, col, row )
 	return particleMaterialForTile( tileName, col, row ), tileName, tile
 end
 
-local function addTerrainParticle( emitter, tileName, pos, relX, relY, relZ, bs )
+local function particleBrightnessAt( pos, id )
+	if not ( MC.WorldToCell and MC.SampleLighting ) then return 1 end
+	local bx, by, bz = MC.WorldToCell( pos )
+	if bx == nil then return 1 end
+	local brightness = MC.SampleLighting( bx, by, bz, MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0 )
+	return math.Clamp( tonumber( brightness ) or 1, 0, 1 )
+end
+
+local function addTerrainParticle( emitter, tileName, id, pos, relX, relY, relZ, bs )
 	local p = emitter:Add( particleMaterialForTile( tileName ), pos )
 	if not p then return end
 
@@ -124,7 +132,9 @@ local function addTerrainParticle( emitter, tileName, pos, relX, relY, relZ, bs 
 	p:SetCollide( true )
 	p:SetBounce( 0 )
 	p:SetLighting( false )
-	p:SetColor( 153, 153, 153 )
+	local brightness = particleBrightnessAt( pos, id )
+	local shade = math.Clamp( math.floor( 153 * brightness + 0.5 ), 0, 255 )
+	p:SetColor( shade, shade, shade )
 end
 
 local function addDestroyParticleSample( samples, base, box, bs, xx, yy, zz, countX, countY, countZ )
@@ -238,7 +248,7 @@ local function spawnBreakParticles( id, orient, bx, by, bz, options )
 	for i = 1, count do
 		local sampleIndex = math.min( total, math.floor( offset + ( i - 1 ) * step ) + 1 )
 		local sample = samples[sampleIndex]
-		addTerrainParticle( emitter, tileName, sample.pos, sample.relX, sample.relY, sample.relZ, bs )
+		addTerrainParticle( emitter, tileName, id, sample.pos, sample.relX, sample.relY, sample.relZ, bs )
 	end
 
 	emitter:Finish()

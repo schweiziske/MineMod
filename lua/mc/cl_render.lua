@@ -908,6 +908,58 @@ local function visible( cur, nb, nbOrient )
 	return false
 end
 
+local FLUID_SURFACE_HEIGHT = 0.8888889
+local FLUID_WEIGHTED_HEIGHT = 0.8
+local FLUID_FACE_OFFSET = 0.001
+
+local function isLiquidBlock( id )
+	if MC.IsLiquidBlock then return MC.IsLiquidBlock( id ) end
+	return MC.LiquidKind and MC.LiquidKind( id ) ~= nil or false
+end
+
+local function solidForFluidHeight( id, orient )
+	if id == 0 then return false end
+	local b = MC.Blocks[id]
+	if not b then return true end
+	if b.solid == false or b.transparent == true then return false end
+	if MC.BlockIsFullCube then return MC.BlockIsFullCube( id, orient ) == true end
+	return not b.shape
+end
+
+local function fluidHeightAt( bx, by, bz, kind )
+	local id = MC.GetBlock( bx, by, bz )
+	if MC.LiquidKind and MC.LiquidKind( id ) == kind then
+		if sameLiquidKind( id, MC.GetBlock( bx, by, bz + 1 ) ) then return 1.0 end
+		return FLUID_SURFACE_HEIGHT
+	end
+	local orient = MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz ) or 0
+	return solidForFluidHeight( id, orient ) and -1.0 or 0.0
+end
+
+local function addWeightedFluidHeight( total, weight, height )
+	if height >= FLUID_WEIGHTED_HEIGHT then
+		return total + height * 10, weight + 10
+	elseif height >= 0 then
+		return total + height, weight + 1
+	end
+	return total, weight
+end
+
+local function calculateAverageFluidHeight( kind, heightSelf, heightA, heightB, bx, by, bz )
+	if heightA >= 1.0 or heightB >= 1.0 then return 1.0 end
+	local total, weight = 0, 0
+	if heightA > 0 or heightB > 0 then
+		local cornerHeight = fluidHeightAt( bx, by, bz, kind )
+		if cornerHeight >= 1.0 then return 1.0 end
+		total, weight = addWeightedFluidHeight( total, weight, cornerHeight )
+	end
+	total, weight = addWeightedFluidHeight( total, weight, heightSelf )
+	total, weight = addWeightedFluidHeight( total, weight, heightA )
+	total, weight = addWeightedFluidHeight( total, weight, heightB )
+	if weight <= 0 then return 0 end
+	return total / weight
+end
+
 ------------------------------------------------------------------ mesh lifecycle
 local function destroyMeshList( store, key )
 	local list = store[key]
@@ -1476,6 +1528,135 @@ function MC.BuildChunkMesh( key, sectionIndex )
 		return true
 	end
 
+	local function emitFluidQuad( verts, normal, shade, tile, bx, by, bz, id, faceIndex, lightCorners, uvCorners )
+		local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
+		local colors = quadCornerColors( shade, bx, by, bz, id, faceIndex, lightCorners, emission, meshLightStyle )
+		for t = 1, 6 do
+			local ci = TRI[t]
+			local vert = verts[ci]
+			local uv = uvCorners[ci]
+			local u, v = tileUVPoint( tile, uv )
+			push( {
+				pos    = Vector( vert[1], vert[2], vert[3] ),
+				normal = normal,
+				u      = u,
+				v      = v,
+				color  = colors[ci],
+			} )
+		end
+	end
+
+	local function emitLiquidBlock( id, orient, bx, by, bz, wx, wy, wz )
+		local kind = MC.LiquidKind and MC.LiquidKind( id )
+		if not kind then return false end
+
+		local x0, y0, z0 = wx, wy, wz
+		local x1, y1 = wx + BS, wy + BS
+		local bottom = z0
+		local hSelf = fluidHeightAt( bx, by, bz, kind )
+		local hXN = fluidHeightAt( bx - 1, by, bz, kind )
+		local hXP = fluidHeightAt( bx + 1, by, bz, kind )
+		local hYN = fluidHeightAt( bx, by - 1, bz, kind )
+		local hYP = fluidHeightAt( bx, by + 1, bz, kind )
+		local h00, h10, h11, h01
+
+		if hSelf >= 1.0 then
+			h00, h10, h11, h01 = 1.0, 1.0, 1.0, 1.0
+		else
+			h00 = calculateAverageFluidHeight( kind, hSelf, hYN, hXN, bx - 1, by - 1, bz )
+			h10 = calculateAverageFluidHeight( kind, hSelf, hYN, hXP, bx + 1, by - 1, bz )
+			h11 = calculateAverageFluidHeight( kind, hSelf, hYP, hXP, bx + 1, by + 1, bz )
+			h01 = calculateAverageFluidHeight( kind, hSelf, hYP, hXN, bx - 1, by + 1, bz )
+		end
+
+		local nbUp = MC.GetBlock( bx, by, bz + 1 )
+		local renderUp = visible( id, nbUp, MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz + 1 ) or 0 )
+		local topOffset = renderUp and FLUID_FACE_OFFSET or 0
+		local rh00 = math.max( h00 - topOffset, 0 )
+		local rh10 = math.max( h10 - topOffset, 0 )
+		local rh11 = math.max( h11 - topOffset, 0 )
+		local rh01 = math.max( h01 - topOffset, 0 )
+		local z00, z10, z11, z01 = z0 + rh00 * BS, z0 + rh10 * BS, z0 + rh11 * BS, z0 + rh01 * BS
+		local tile
+
+		if renderUp then
+			tile = MC.BlockFace( id, MC.Face.TOP, orient )
+			emitFluidQuad(
+				{ { x0, y0, z00 }, { x1, y0, z10 }, { x1, y1, z11 }, { x0, y1, z01 } },
+				N_UP, SH_TOP, tile, bx, by, bz, id, MC.Face.TOP,
+				{ { 0, 0, rh00 }, { 1, 0, rh10 }, { 1, 1, rh11 }, { 0, 1, rh01 } },
+				{ { 0, 16 }, { 16, 16 }, { 16, 0 }, { 0, 0 } }
+			)
+		end
+
+		local nbDown = MC.GetBlock( bx, by, bz - 1 )
+		local renderDown = visible( id, nbDown, MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz - 1 ) or 0 )
+		local bottomZ = bottom + ( renderDown and FLUID_FACE_OFFSET or 0 ) * BS
+		if renderDown then
+			tile = MC.BlockFace( id, MC.Face.BOTTOM, orient )
+			emitFluidQuad(
+				{ { x0, y1, bottomZ }, { x1, y1, bottomZ }, { x1, y0, bottomZ }, { x0, y0, bottomZ } },
+				N_DOWN, SH_BOTTOM, tile, bx, by, bz, id, MC.Face.BOTTOM,
+				{ { 0, 1, 0 }, { 1, 1, 0 }, { 1, 0, 0 }, { 0, 0, 0 } },
+				{ { 0, 16 }, { 16, 16 }, { 16, 0 }, { 0, 0 } }
+			)
+		end
+
+		local function sideV( height )
+			return math.Clamp( ( 1 - height ) * 8, 0, 8 )
+		end
+
+		local sideBottomV = 8
+		local sideBottom = bottomZ
+		local sideInset = FLUID_FACE_OFFSET * BS
+
+		if visible( id, MC.GetBlock( bx + 1, by, bz ), MC.GetBlockOrient and MC.GetBlockOrient( bx + 1, by, bz ) or 0 ) then
+			tile = MC.BlockFace( id, MC.Face.XP, orient )
+			local sx = x1 - sideInset
+			emitFluidQuad(
+				{ { sx, y0, sideBottom }, { sx, y1, sideBottom }, { sx, y1, z11 }, { sx, y0, z10 } },
+				N_XP, SH_X, tile, bx, by, bz, id, MC.Face.XP,
+				{ { 1, 0, 0 }, { 1, 1, 0 }, { 1, 1, rh11 }, { 1, 0, rh10 } },
+				{ { 0, sideBottomV }, { 8, sideBottomV }, { 8, sideV( rh11 ) }, { 0, sideV( rh10 ) } }
+			)
+		end
+
+		if visible( id, MC.GetBlock( bx - 1, by, bz ), MC.GetBlockOrient and MC.GetBlockOrient( bx - 1, by, bz ) or 0 ) then
+			tile = MC.BlockFace( id, MC.Face.XN, orient )
+			local sx = x0 + sideInset
+			emitFluidQuad(
+				{ { sx, y1, sideBottom }, { sx, y0, sideBottom }, { sx, y0, z00 }, { sx, y1, z01 } },
+				N_XN, SH_X, tile, bx, by, bz, id, MC.Face.XN,
+				{ { 0, 1, 0 }, { 0, 0, 0 }, { 0, 0, rh00 }, { 0, 1, rh01 } },
+				{ { 0, sideBottomV }, { 8, sideBottomV }, { 8, sideV( rh00 ) }, { 0, sideV( rh01 ) } }
+			)
+		end
+
+		if visible( id, MC.GetBlock( bx, by + 1, bz ), MC.GetBlockOrient and MC.GetBlockOrient( bx, by + 1, bz ) or 0 ) then
+			tile = MC.BlockFace( id, MC.Face.YP, orient )
+			local sy = y1 - sideInset
+			emitFluidQuad(
+				{ { x1, sy, sideBottom }, { x0, sy, sideBottom }, { x0, sy, z01 }, { x1, sy, z11 } },
+				N_YP, SH_Y, tile, bx, by, bz, id, MC.Face.YP,
+				{ { 1, 1, 0 }, { 0, 1, 0 }, { 0, 1, rh01 }, { 1, 1, rh11 } },
+				{ { 0, sideBottomV }, { 8, sideBottomV }, { 8, sideV( rh01 ) }, { 0, sideV( rh11 ) } }
+			)
+		end
+
+		if visible( id, MC.GetBlock( bx, by - 1, bz ), MC.GetBlockOrient and MC.GetBlockOrient( bx, by - 1, bz ) or 0 ) then
+			tile = MC.BlockFace( id, MC.Face.YN, orient )
+			local sy = y0 + sideInset
+			emitFluidQuad(
+				{ { x0, sy, sideBottom }, { x1, sy, sideBottom }, { x1, sy, z10 }, { x0, sy, z00 } },
+				N_YN, SH_Y, tile, bx, by, bz, id, MC.Face.YN,
+				{ { 0, 0, 0 }, { 1, 0, 0 }, { 1, 0, rh10 }, { 0, 0, rh00 } },
+				{ { 0, sideBottomV }, { 8, sideBottomV }, { 8, sideV( rh10 ) }, { 0, sideV( rh00 ) } }
+			)
+		end
+
+		return true
+	end
+
 	local blockIter = chunk.blocks
 	if sectionIndex then
 		local bySection = ensureChunkRenderSectionIndex( chunk )
@@ -1497,6 +1678,8 @@ function MC.BuildChunkMesh( key, sectionIndex )
 			emitCrossBlock( id, bx, by, bz, wx, wy, wz )
 		elseif b and b.shape == "model" and not ( ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) ) or b.connection == "pipe6" ) and emitModelBlock( b, orient, bx, by, bz, wx, wy, wz ) then
 			-- rendered from exact Minecraft model quads; boxes remain for collision/outline
+		elseif isLiquidBlock( id ) and emitLiquidBlock( id, orient, bx, by, bz, wx, wy, wz ) then
+			-- rendered with Minecraft fluid surface height/offsets instead of full cube faces
 		elseif MC.BlockIsFullCube( id, orient ) then
 			local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
 			for f = 1, 6 do

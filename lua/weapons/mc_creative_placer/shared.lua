@@ -123,6 +123,11 @@ function SWEP:PrimaryAttack()
 		if not bx then return end
 		if MC.SV.Break( owner, bx, by, bz ) then
 			self:EmitSound( "buttons/button15.wav", 60, 120, 0.25 )
+			net.Start( "mc_creative_break_anim" )
+				net.WriteInt( bx, MC.Net.COORD_BITS )
+				net.WriteInt( by, MC.Net.COORD_BITS )
+				net.WriteInt( bz, MC.Net.COORD_BITS )
+			net.Send( owner )
 		elseif MC.SV.SyncBreakPlan then
 			MC.SV.SyncBreakPlan( owner, bx, by, bz )
 		elseif MC.SV.SyncCell then
@@ -131,7 +136,9 @@ function SWEP:PrimaryAttack()
 	elseif CLIENT and not game.SinglePlayer() and IsFirstTimePredicted() and owner == LocalPlayer() then
 		local bx, by, bz = breakTarget( owner, aim, owner:GetEyeTrace() )
 		if bx and MC.CanPreviewBreak and MC.CanPreviewBreak( owner, bx, by, bz ) and MC.PredictBreakBlock then
-			MC.PredictBreakBlock( bx, by, bz, owner )
+			if MC.PredictBreakBlock( bx, by, bz, owner ) then
+				self:StartCreativePlaceAnimation( bx, by, bz )
+			end
 		end
 	end
 end
@@ -239,6 +246,8 @@ if CLIENT then
 	local HELD_TP_DEFAULTS = { forward = 2.5, right = 2.2, up = -1.8, scale = 6, yaw = 45, pitch = 75, roll = 0 }
 	local HELD_PLACE_ANIM = { duration = 0.30, rightScale = 21.4, upScale = 16, forwardScale = 16, yaw = -20, pitch = -80, roll = -20 }
 	local HELD_HAND_HEIGHT = { recoverPerSecond = 8, upScale = 9.6 }
+	local HELD_MODEL_CVAR = CreateClientConVar( "mc_creative_held_model", "1", true, false, "Draw the MC creative held block model" )
+	local HELD_ANIM_CVAR = CreateClientConVar( "mc_creative_held_anim", "1", true, false, "Play MC creative held block swing animations" )
 	local HELD_FP_CVARS = {
 		forward = CreateClientConVar( "mc_creative_held_fp_forward", tostring( HELD_FP_DEFAULTS.forward ), true, false, "MC creative held block first-person forward offset" ),
 		right = CreateClientConVar( "mc_creative_held_fp_right", tostring( HELD_FP_DEFAULTS.right ), true, false, "MC creative held block first-person right offset" ),
@@ -263,6 +272,19 @@ if CLIENT then
 
 	local function cvarFloat( cvar, fallback )
 		return cvar and cvar.GetFloat and cvar:GetFloat() or fallback
+	end
+
+	local function cvarBool( cvar, fallback )
+		if cvar and cvar.GetBool then return cvar:GetBool() end
+		return fallback
+	end
+
+	local function creativeHeldModelEnabled()
+		return cvarBool( HELD_MODEL_CVAR, true )
+	end
+
+	local function creativeHeldAnimEnabled()
+		return cvarBool( HELD_ANIM_CVAR, true )
 	end
 
 	local function heldBlockBrightnessAt( pos, id )
@@ -367,6 +389,7 @@ if CLIENT then
 	end
 
 	function SWEP:StartCreativePlaceAnimation( bx, by, bz )
+		if not creativeHeldAnimEnabled() then return end
 		local now = CurTime()
 		local key = placeAnimKey( bx, by, bz )
 		if key and self.MCCreativePlaceAnimKey == key and now - ( self.MCCreativePlaceAnimStart or 0 ) < 0.75 then return end
@@ -378,6 +401,7 @@ if CLIENT then
 	end
 
 	function SWEP:CreativePlaceAnim()
+		if not creativeHeldAnimEnabled() then return 0 end
 		local start = self.MCCreativePlaceAnimStart
 		if not start then return 0 end
 		local t = ( CurTime() - start ) / HELD_PLACE_ANIM.duration
@@ -406,6 +430,7 @@ if CLIENT then
 	end
 
 	function SWEP:CreativeMainHandInverseHeight()
+		if not creativeHeldAnimEnabled() then return 0 end
 		self:UpdateCreativeMainHandHeight()
 		return 1 - math.Clamp( self.MCCreativeMainHandHeight or 1, 0, 1 )
 	end
@@ -489,12 +514,12 @@ if CLIENT then
 	end
 
 	function SWEP:PreDrawViewModel()
-		return true
+		return creativeHeldModelEnabled()
 	end
 
 	function SWEP:DrawWorldModel()
 		local owner = self:GetOwner()
-		if IsValid( owner ) then
+		if IsValid( owner ) and creativeHeldModelEnabled() then
 			drawThirdPersonHeldBlock( owner )
 			return
 		end
@@ -505,7 +530,7 @@ if CLIENT then
 		return L( "weapon.mc_creative_placer.name", self.PrintName or "MC 创造方块放置器" )
 	end
 
-	net.Receive( "mc_creative_place_anim", function()
+	local function receiveCreativeHeldBlockAnim()
 		local bx = net.ReadInt( MC.Net.COORD_BITS )
 		local by = net.ReadInt( MC.Net.COORD_BITS )
 		local bz = net.ReadInt( MC.Net.COORD_BITS )
@@ -514,7 +539,10 @@ if CLIENT then
 		local wep = ply:GetActiveWeapon()
 		if not IsValid( wep ) or wep:GetClass() ~= "mc_creative_placer" then return end
 		wep:StartCreativePlaceAnimation( bx, by, bz )
-	end )
+	end
+
+	net.Receive( "mc_creative_place_anim", receiveCreativeHeldBlockAnim )
+	net.Receive( "mc_creative_break_anim", receiveCreativeHeldBlockAnim )
 
 	function SWEP:DrawHUD()
 		local ply = LocalPlayer()
@@ -528,7 +556,7 @@ if CLIENT then
 		local state = MC.BlockStateText( id, orient )
 		local w, h = 64, 64
 		local slotSize = 54
-		local hotbarY = sh - slotSize - 22
+		local hotbarY = sh - slotSize - 30
 		local panelW = 380
 		local panelH = state ~= "" and 118 or 96
 		local px = sw * 0.5 - panelW * 0.5
@@ -546,7 +574,7 @@ if CLIENT then
 		if MC.DrawCreativeHotbar then
 			MC.DrawCreativeHotbar( sw * 0.5, hotbarY, { slotSize = slotSize } )
 		end
-		draw.SimpleText( L( "weapon.mc_creative_placer.hud", "左键破坏   右键放置   中键取块   Reload 创造物品栏" ), "mc_hud_small", sw * 0.5, sh - 10, Color( 255, 255, 255, 190 ), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+		draw.SimpleText( L( "weapon.mc_creative_placer.hud", "左键破坏    右键放置    中键取块    Reload 创造物品栏    按 Tab 切出" ), "mc_hud_small", sw * 0.5, sh - 10, Color( 255, 255, 255, 190 ), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
 
 		surface.SetDrawColor( 255, 255, 255, 220 )
 		surface.DrawRect( sw * 0.5 - 1, sh * 0.5 - 1, 2, 2 )
@@ -558,6 +586,7 @@ if CLIENT then
 		if not IsValid( ply ) or not ply:Alive() or ply:ShouldDrawLocalPlayer() then return end
 		local wep = ply:GetActiveWeapon()
 		if not IsValid( wep ) or wep:GetClass() ~= "mc_creative_placer" then return end
+		if not creativeHeldModelEnabled() then return end
 		if not MC.DrawCreativeHeldBlock then return end
 		drawFirstPersonHeldBlock( ply, wep )
 	end )
