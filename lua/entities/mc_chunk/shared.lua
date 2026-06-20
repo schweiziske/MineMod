@@ -446,6 +446,12 @@ local function collisionSubchunkKeysForBounds( bounds )
 	return keys
 end
 
+local function removePhysicsSubchunkKeysForBounds( ent, bounds )
+	for subkey in pairs( collisionSubchunkKeysForBounds( bounds ) or {} ) do
+		removePhysicsSubchunkKey( ent, subkey )
+	end
+end
+
 local function rememberClientPhysStats( ent, mode, bounds, boxes, customConvexes, convexes, subchunks )
 	if not CLIENT then return end
 	MC.ClientPhysStats = MC.ClientPhysStats or {}
@@ -916,6 +922,32 @@ local function flattenConvexGroups( groups )
 	return convexes
 end
 
+local function applyMainEntityFallbackCollision( ent, groups, bounds, boxes, customConvexes, totalConvexes )
+	if not CLIENT then return false, "not_client" end
+	if totalConvexes > PHYSICS_CONVEXES_PER_ENTITY then
+		if MC.ClientPhysStats then MC.ClientPhysStats.lastClientPhysReason = "main_fallback_too_many_convexes" end
+		return false, "main_fallback_too_many_convexes"
+	end
+	local convexes = flattenConvexGroups( groups )
+	if #convexes == 0 then return false, "main_fallback_empty" end
+
+	ent:PhysicsDestroy()
+	ensurePhysicsModel( ent )
+	ent:PhysicsInitMultiConvex( convexes )
+	ent:SetMoveType( MOVETYPE_VPHYSICS )
+	ent:SetSolid( SOLID_VPHYSICS )
+	ent:EnableCustomCollisions( true )
+
+	if not freezePhysicsObject( ent ) then
+		rememberClientPhysStats( ent, "main_fallback", bounds, #boxes, #customConvexes, totalConvexes, nil )
+		if MC.ClientPhysStats then MC.ClientPhysStats.lastClientPhysReason = "main_fallback_apply_failed" end
+		return false, "main_fallback_apply_failed"
+	end
+
+	rememberClientPhysStats( ent, "main_fallback", bounds, #boxes, #customConvexes, totalConvexes, nil )
+	return true
+end
+
 -- (re)build this chunk's multiconvex collision from current block data.
 -- Server: authoritative collision. Client: so PREDICTED local-player movement
 -- collides with blocks (server physics objects are not replicated to clients,
@@ -935,9 +967,7 @@ function ENT:RebuildPhysics( bounds )
 	if #boxes == 0 and #customConvexes == 0 then
 		clearClientAABBDebugBoxes( self )
 		if forceNetworkSubchunks and bounds then
-			for subkey in pairs( collisionSubchunkKeysForBounds( bounds ) or {} ) do
-				removePhysicsSubchunkKey( self, subkey )
-			end
+			removePhysicsSubchunkKeysForBounds( self, bounds )
 			self:PhysicsDestroy()
 			self:SetSolid( SOLID_NONE )
 		else
@@ -951,9 +981,7 @@ function ENT:RebuildPhysics( bounds )
 	local groups, totalConvexes = buildSubchunkConvexGroups( boxes, customConvexes, MC.BS )
 	if forceNetworkSubchunks or totalConvexes > PHYSICS_CONVEXES_PER_ENTITY then
 		if CLIENT and bounds then
-			for subkey in pairs( collisionSubchunkKeysForBounds( bounds ) or {} ) do
-				removePhysicsSubchunkKey( self, subkey )
-			end
+			removePhysicsSubchunkKeysForBounds( self, bounds )
 		else
 			self:ClearPhysicsSubchunks()
 		end
@@ -984,6 +1012,10 @@ function ENT:RebuildPhysics( bounds )
 		if CLIENT and failed > 0 and MC.ClientPhysStats then
 			MC.ClientPhysStats.lastClientPhysReason = lastFailureReason
 			MC.ClientPhysStats.lastClientPhysFailedSubchunks = failed
+		end
+		if CLIENT and failed > 0 and bounds then
+			removePhysicsSubchunkKeysForBounds( self, bounds )
+			applyMainEntityFallbackCollision( self, groups, bounds, boxes, customConvexes, totalConvexes )
 		end
 	--	MsgN( "[MC] collision subchunks for chunk " .. tostring( self.ChunkKey ) ..
 	--		"  convexes=" .. totalConvexes ..
