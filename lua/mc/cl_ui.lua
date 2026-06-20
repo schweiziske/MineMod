@@ -406,6 +406,13 @@ function MC.SelectCreativeHotbarSlot( slot, noCommand )
 	return id ~= nil, id
 end
 
+function MC.StepCreativeHotbarSlot( delta, noCommand )
+	local hotbar = MC.EnsureCreativeHotbar()
+	local current = normalizeHotbarSlot( hotbar.selected )
+	delta = math.floor( tonumber( delta ) or 0 )
+	return MC.SelectCreativeHotbarSlot( ( current - 1 + delta ) % CREATIVE_HOTBAR_SIZE + 1, noCommand )
+end
+
 function MC.SetCreativeHotbarSlot( slot, id, noCommand )
 	id = normalizeHotbarID( id )
 	if not id then return false end
@@ -481,6 +488,18 @@ hook.Add( "PlayerBindPress", "mc_creative_hotbar_binds", function( ply, bind, pr
 	if slot then
 		if not textEntryHasFocus() then
 			MC.SelectCreativeHotbarSlot( tonumber( slot ) )
+		end
+		return true
+	end
+	if bind == "invnext" then
+		if not textEntryHasFocus() then
+			MC.StepCreativeHotbarSlot( 1 )
+		end
+		return true
+	end
+	if bind == "invprev" then
+		if not textEntryHasFocus() then
+			MC.StepCreativeHotbarSlot( -1 )
 		end
 		return true
 	end
