@@ -17,7 +17,7 @@ MC.LightSkyLevel = MC.LightSkyLevel or CreateClientConVar( "mc_light_sky_level",
 MC.LightAmbientMin = MC.LightAmbientMin or CreateClientConVar( "mc_light_ambient_min", "0.18", true, false,
 	"Minimum brightness multiplier for MC vertex lighting" )
 MC.LightStyle = MC.LightStyle or CreateClientConVar( "mc_light_style", "best", true, false,
-	"MC chunk lighting visual style: fast, vanilla, or best" )
+	"MC chunk lighting visual style: fast, vanilla, best, or shader" )
 MC.LightPerfDebug = MC.LightPerfDebug or CreateClientConVar( "mc_light_perf_debug", "0", true, false,
 	"Show and collect detailed MC lighting performance diagnostics" )
 MC.LightPerfPrintBreak = MC.LightPerfPrintBreak or CreateClientConVar( "mc_light_perf_print_break", "0", true, false,
