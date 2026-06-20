@@ -151,6 +151,19 @@ concommand.Add( "mc_light_perf", function()
 	MC.PrintLightPerfStats()
 end )
 
+local function clientConvarString( name, fallback )
+	local cvar = GetConVar and GetConVar( name ) or nil
+	if cvar and cvar.GetString then return cvar:GetString() end
+	return tostring( fallback )
+end
+
+local function clientChunkEntInfo( key )
+	local ent = MC.ChunkEnts and MC.ChunkEnts[key] or nil
+	local valid = IsValid( ent )
+	local idx = valid and ent:EntIndex() or nil
+	return ent, valid, valid and idx > 0, idx
+end
+
 concommand.Add( "mc_client_diag", function()
 	local chunks, blocks = 0, 0
 	local minBZ, maxBZ
@@ -199,19 +212,39 @@ concommand.Add( "mc_client_diag", function()
 	local playerKey = "nil"
 	local playerWorld = false
 	local playerEnt = false
+	local playerNetEnt = false
+	local playerEntIndex = "nil"
 	local playerInterest = false
 	local aimKey = "nil"
 	local aimWorld = false
 	local aimEnt = false
+	local aimNetEnt = false
+	local aimEntIndex = "nil"
 	local aimInterest = false
+	local playerInterestCount = table.Count( MC.ClientCollisionPlayerInterest or {} )
+	local aimInterestCount = table.Count( MC.ClientCollisionAimInterest or {} )
+	local interestWorld, interestNetEnt, interestClientEnt = 0, 0, 0
+
+	for key in pairs( MC.ClientCollisionInterest or {} ) do
+		if MC.World and MC.World[key] then interestWorld = interestWorld + 1 end
+		local _, entValid, entNetwork = clientChunkEntInfo( key )
+		if entNetwork then
+			interestNetEnt = interestNetEnt + 1
+		elseif entValid then
+			interestClientEnt = interestClientEnt + 1
+		end
+	end
 
 	if IsValid( ply ) then
-		local pos = ply.WorldSpaceCenter and ply:WorldSpaceCenter() or ply:GetPos()
+		local pos = ply:GetPos()
 		local bx, by, bz = MC.WorldToCell( pos )
 		local cx, cy, cz = MC.CellToChunk( bx, by, bz )
 		playerKey = MC.ChunkKey( cx, cy, cz )
 		playerWorld = MC.World and MC.World[playerKey] ~= nil
-		playerEnt = MC.ChunkEnts and IsValid( MC.ChunkEnts[playerKey] )
+		local _, playerEntValid, playerEntNetwork, playerEntIdx = clientChunkEntInfo( playerKey )
+		playerEnt = playerEntValid
+		playerNetEnt = playerEntNetwork
+		playerEntIndex = tostring( playerEntIdx or "nil" )
 		playerInterest = MC.ClientCollisionInterest and MC.ClientCollisionInterest[playerKey] ~= nil
 
 		local aimDistConvar = GetConVar( "mc_collision_aim_distance" )
@@ -221,7 +254,10 @@ concommand.Add( "mc_client_diag", function()
 			local acx, acy, acz = MC.CellToChunk( hit.bx, hit.by, hit.bz )
 			aimKey = MC.ChunkKey( acx, acy, acz )
 			aimWorld = MC.World and MC.World[aimKey] ~= nil
-			aimEnt = MC.ChunkEnts and IsValid( MC.ChunkEnts[aimKey] )
+			local _, aimEntValid, aimEntNetwork, aimEntIdx = clientChunkEntInfo( aimKey )
+			aimEnt = aimEntValid
+			aimNetEnt = aimEntNetwork
+			aimEntIndex = tostring( aimEntIdx or "nil" )
 			aimInterest = MC.ClientCollisionInterest and MC.ClientCollisionInterest[aimKey] ~= nil
 		end
 	end
@@ -249,9 +285,9 @@ concommand.Add( "mc_client_diag", function()
 		tostring( physStats.lastClientPhysMainObject ), subchunkPhys, subchunkEnts,
 		tostring( physStats.lastClientPhysNetworkSubchunks ), tostring( physStats.lastClientPhysMissingSubchunks ),
 		tostring( physStats.lastClientPhysRetryReason ), tostring( physStats.lastClientPhysRetryAttempts ) ) )
-	print( string.format( "[MC client] collision target playerKey=%s world=%s ent=%s interest=%s aimKey=%s world=%s ent=%s interest=%s lastReason=%s",
-		tostring( playerKey ), tostring( playerWorld ), tostring( playerEnt ), tostring( playerInterest ),
-		tostring( aimKey ), tostring( aimWorld ), tostring( aimEnt ), tostring( aimInterest ),
+	print( string.format( "[MC client] collision target playerKey=%s world=%s ent=%s net=%s idx=%s interest=%s aimKey=%s world=%s ent=%s net=%s idx=%s interest=%s lastReason=%s",
+		tostring( playerKey ), tostring( playerWorld ), tostring( playerEnt ), tostring( playerNetEnt ), tostring( playerEntIndex ), tostring( playerInterest ),
+		tostring( aimKey ), tostring( aimWorld ), tostring( aimEnt ), tostring( aimNetEnt ), tostring( aimEntIndex ), tostring( aimInterest ),
 		tostring( physStats.lastClientPhysReason ) ) )
 	print( string.format( "[MC client] collision built=%d target=%d lastBuiltKey=%s objects=%s lastReason=%s",
 		table.Count( MC.ClientPhysBuiltSignatures or {} ),
@@ -263,10 +299,18 @@ concommand.Add( "mc_client_diag", function()
 		tostring( MC.ServerCollisionDebug and MC.ServerCollisionDebug:GetBool() ),
 		#( MC.ServerCollisionDebugBounds or {} ),
 		tostring( MC.ServerCollisionDebugUpdated and math.Round( CurTime() - MC.ServerCollisionDebugUpdated, 3 ) or "nil" ) ) )
-	print( string.format( "[MC client] client collision debug area=%s aabb=%s interest=%d aabbBoxes=%d",
+	print( string.format( "[MC client] client collision debug enabled=%s span=%s aimRadius=%s area=%s aabb=%s interest=%d playerInterest=%d aimInterest=%d world=%d netEnt=%d clientEnt=%d aabbBoxes=%d",
+		clientConvarString( "mc_client_collision", "?" ),
+		clientConvarString( "mc_client_collision_chunk_span", "?" ),
+		clientConvarString( "mc_client_collision_aim_radius", "?" ),
 		tostring( MC.ClientCollisionAreaDebug and MC.ClientCollisionAreaDebug:GetBool() ),
 		tostring( MC.ClientCollisionAABBDebug and MC.ClientCollisionAABBDebug:GetBool() ),
 		table.Count( MC.ClientCollisionInterest or {} ),
+		playerInterestCount,
+		aimInterestCount,
+		interestWorld,
+		interestNetEnt,
+		interestClientEnt,
 		table.Count( MC.ClientCollisionAABBDebugBoxes or {} ) ) )
 end )
 

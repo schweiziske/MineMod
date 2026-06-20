@@ -14,6 +14,10 @@ function ENT:Initialize()
 	self:EnsureKey()
 end
 
+function ENT:UpdateTransmitState()
+	return TRANSMIT_ALWAYS
+end
+
 function ENT:PhysgunPickup()
 	return false
 end

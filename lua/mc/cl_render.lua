@@ -344,12 +344,14 @@ MC.ClientPhysBuiltSignatures = MC.ClientPhysBuiltSignatures or {}
 MC.ClientPhysBuiltHadObjects = MC.ClientPhysBuiltHadObjects or {}
 MC.ClientPhysBuiltObjectCounts = MC.ClientPhysBuiltObjectCounts or {}
 MC.ClientPhysTargetSignatures = MC.ClientPhysTargetSignatures or {}
+MC.ClientCollisionPlayerInterest = MC.ClientCollisionPlayerInterest or {}
+MC.ClientCollisionAimInterest = MC.ClientCollisionAimInterest or {}
 
 -- Clientside collision is a small local prediction bubble; the server remains authoritative.
 MC.ClientCollision = CreateClientConVar( "mc_client_collision", "1", true, false,
 	"Build clientside block collision for smooth movement prediction (0 = server-only)" )
 MC.ClientCollisionChunkSpan = CreateClientConVar( "mc_client_collision_chunk_span", tostring( MC.Config.ClientCollisionChunkSpan or 1 ), true, false,
-	"Chunk radius around the local player that builds clientside prediction collision; 0 disables" )
+	"Enable a small AABB around the local player for clientside prediction collision; 0 disables" )
 MC.ClientCollisionDebug = MC.ClientCollisionDebug or CreateClientConVar( "mc_client_collision_debug", "0", true, false,
 	"Print clientside prediction collision rebuild diagnostics" )
 MC.ClientCollisionCrossChunk = MC.ClientCollisionCrossChunk or CreateClientConVar( "mc_client_collision_cross_chunk", "0", true, false,
@@ -368,6 +370,9 @@ local LastClientCollisionAimKey
 local LastClientCollisionAABBKey
 local LastClientCollisionCrossChunk = nil
 local LastClientCollisionRefreshFrame
+local CLIENT_PLAYER_COLLISION_BLOCK_SIZE = 4
+local CLIENT_PLAYER_COLLISION_NEGATIVE_EXTENT = math.floor( ( CLIENT_PLAYER_COLLISION_BLOCK_SIZE - 1 ) / 2 )
+local CLIENT_PLAYER_COLLISION_POSITIVE_EXTENT = CLIENT_PLAYER_COLLISION_BLOCK_SIZE - CLIENT_PLAYER_COLLISION_NEGATIVE_EXTENT - 1
 local NextExplosionMeshBuildAt = 0
 local NextBulkCollisionRebuildAt = 0
 
@@ -380,6 +385,8 @@ function MC.ResetClientCollisionState()
 	LastClientCollisionCrossChunk = nil
 	LastClientCollisionRefreshFrame = nil
 	MC.ClientCollisionInterest = {}
+	MC.ClientCollisionPlayerInterest = {}
+	MC.ClientCollisionAimInterest = {}
 	MC.ClientCollisionSignatures = {}
 	MC.PhysDirty = {}
 	MC.PhysDirtyPriority = {}
@@ -597,49 +604,37 @@ local function addClientChunkLocalBoundsCollisionInterest( desired, minBX, minBY
 	end
 end
 
-local function addClientCellNeighborhoodCollisionKeys( desired, bx, by, bz, radius, clampToHitChunk )
+local function addClientCellNeighborhoodCollisionKeys( desired, bx, by, bz, radius, clampToHitChunk, positiveRadius )
 	radius = math.max( 0, math.floor( tonumber( radius ) or 0 ) )
+	positiveRadius = positiveRadius == nil and radius or math.max( 0, math.floor( tonumber( positiveRadius ) or 0 ) )
 	local onlyCX, onlyCY, onlyCZ
 	if clampToHitChunk then
 		onlyCX, onlyCY, onlyCZ = MC.CellToChunk( bx, by, bz )
 	end
 	addClientChunkLocalBoundsCollisionInterest( desired,
 		bx - radius, by - radius, bz - radius,
-		bx + radius, by + radius, bz + radius,
+		bx + positiveRadius, by + positiveRadius, bz + positiveRadius,
 		false, onlyCX, onlyCY, onlyCZ )
-end
-
-local function addClientAABBCollisionInterest( desired, mins, maxs, blockPad, onlyCX, onlyCY, onlyCZ )
-	if not mins or not maxs then return nil end
-	blockPad = math.max( 1, math.floor( tonumber( blockPad ) or 1 ) )
-	local minBX = math.floor( mins.x / MC.BS ) - blockPad
-	local minBY = math.floor( mins.y / MC.BS ) - blockPad
-	local minBZ = math.floor( mins.z / MC.BS ) - blockPad
-	local maxBX = math.floor( maxs.x / MC.BS ) + blockPad
-	local maxBY = math.floor( maxs.y / MC.BS ) + blockPad
-	local maxBZ = math.floor( maxs.z / MC.BS ) + blockPad
-	addClientChunkLocalBoundsCollisionInterest( desired, minBX, minBY, minBZ, maxBX, maxBY, maxBZ, true, onlyCX, onlyCY, onlyCZ )
-	return minBX, minBY, minBZ, maxBX, maxBY, maxBZ
 end
 
 local function collectClientPlayerAABBCollisionInterestKeys( lp, desired, radius )
 	if not IsValid( lp ) then return nil end
-	local mins, maxs = lp:WorldSpaceAABB()
-	if not mins or not maxs then return nil end
 	radius = math.max( 0, math.floor( tonumber( radius ) or 0 ) )
-	local onlyCX, onlyCY, onlyCZ
-	if radius <= 0 and not clientCollisionCrossChunkEnabled() then
-		local pos = lp.WorldSpaceCenter and lp:WorldSpaceCenter() or lp:GetPos()
-		local bx, by, bz = MC.WorldToCell( pos )
-		onlyCX, onlyCY, onlyCZ = MC.CellToChunk( bx, by, bz )
-	end
-	local minBX, minBY, minBZ, maxBX, maxBY, maxBZ = addClientAABBCollisionInterest( desired, mins, maxs, 1, onlyCX, onlyCY, onlyCZ )
+	local pos = lp:GetPos()
+	local bx, by, bz = MC.WorldToCell( pos )
+	addClientCellNeighborhoodCollisionKeys( desired, bx, by, bz, CLIENT_PLAYER_COLLISION_NEGATIVE_EXTENT, false, CLIENT_PLAYER_COLLISION_POSITIVE_EXTENT )
+	local minBX = bx - CLIENT_PLAYER_COLLISION_NEGATIVE_EXTENT
+	local minBY = by - CLIENT_PLAYER_COLLISION_NEGATIVE_EXTENT
+	local minBZ = bz - CLIENT_PLAYER_COLLISION_NEGATIVE_EXTENT
+	local maxBX = bx + CLIENT_PLAYER_COLLISION_POSITIVE_EXTENT
+	local maxBY = by + CLIENT_PLAYER_COLLISION_POSITIVE_EXTENT
+	local maxBZ = bz + CLIENT_PLAYER_COLLISION_POSITIVE_EXTENT
 	local minCX, minCY, minCZ = MC.CellToChunk( minBX, minBY, minBZ )
 	local maxCX, maxCY, maxCZ = MC.CellToChunk( maxBX, maxBY, maxBZ )
-	local sigMinKey = onlyCX ~= nil and MC.ChunkKey( onlyCX, onlyCY, onlyCZ ) or MC.ChunkKey( minCX, minCY, minCZ )
-	local sigMaxKey = onlyCX ~= nil and sigMinKey or MC.ChunkKey( maxCX, maxCY, maxCZ )
-	return sigMinKey .. "|" .. sigMaxKey
+	local spanX, spanY, spanZ = maxBX - minBX + 1, maxBY - minBY + 1, maxBZ - minBZ + 1
+	return MC.ChunkKey( minCX, minCY, minCZ ) .. "|" .. MC.ChunkKey( maxCX, maxCY, maxCZ )
 		.. "|" .. minBX .. ":" .. minBY .. ":" .. minBZ .. "|" .. maxBX .. ":" .. maxBY .. ":" .. maxBZ
+		.. "|size|" .. spanX .. ":" .. spanY .. ":" .. spanZ .. "|gate|" .. radius
 end
 
 local function collectClientAimCollisionInterestKeys( lp, desired )
@@ -662,6 +657,23 @@ local function clientCollisionBoundsSignature( bounds )
 	end
 	table.sort( parts )
 	return table.concat( parts, ";" )
+end
+
+local function mergeClientCollisionInterestSets( target, source )
+	if not source then return end
+	for key, bounds in pairs( source ) do
+		local list = target[key]
+		if not list then
+			list = {}
+			target[key] = list
+		end
+		for _, bound in ipairs( bounds ) do
+			list[#list + 1] = {
+				bound[1], bound[2], bound[3],
+				bound[4], bound[5], bound[6],
+			}
+		end
+	end
 end
 
 local function clientCollisionSubchunkBoundsForKey( subkey )
@@ -757,6 +769,7 @@ local function clientPhysAlreadyBuilt( key, chunk, ent, bounds )
 end
 
 function MC.RefreshClientCollisionInterest( force )
+
 	local frame = FrameNumber and FrameNumber() or RealTime()
 	if not force and LastClientCollisionRefreshFrame == frame then return end
 	LastClientCollisionRefreshFrame = frame
@@ -767,16 +780,20 @@ function MC.RefreshClientCollisionInterest( force )
 	local centerKey
 	local aimKey
 	local aabbKey
+	local playerDesired = {}
+	local aimDesired = {}
 	local desired = {}
 
 	if enabled and radius > 0 and IsValid( lp ) then
-		local pos = lp.WorldSpaceCenter and lp:WorldSpaceCenter() or lp:GetPos()
+		local pos = lp:GetPos()
 		local bx, by, bz = MC.WorldToCell( pos )
 		local cx, cy, cz = MC.CellToChunk( bx, by, bz )
 		centerKey = MC.ChunkKey( cx, cy, cz )
-		aabbKey = collectClientPlayerAABBCollisionInterestKeys( lp, desired, radius )
-		aimKey = collectClientAimCollisionInterestKeys( lp, desired )
+		aabbKey = collectClientPlayerAABBCollisionInterestKeys( lp, playerDesired, radius )
+		aimKey = collectClientAimCollisionInterestKeys( lp, aimDesired )
 	end
+	mergeClientCollisionInterestSets( desired, playerDesired )
+	mergeClientCollisionInterestSets( desired, aimDesired )
 
 	if not force and centerKey == LastClientCollisionCenterKey
 	and radius == LastClientCollisionRadius and enabled == LastClientCollisionEnabled
@@ -787,6 +804,8 @@ function MC.RefreshClientCollisionInterest( force )
 
 	local old = MC.ClientCollisionInterest or {}
 	MC.ClientCollisionInterest = desired
+	MC.ClientCollisionPlayerInterest = playerDesired
+	MC.ClientCollisionAimInterest = aimDesired
 	LastClientCollisionCenterKey = centerKey
 	LastClientCollisionRadius = radius
 	LastClientCollisionEnabled = enabled
@@ -833,6 +852,7 @@ function MC.RefreshClientCollisionInterest( force )
 		local oldSig = MC.ClientCollisionSignatures[key]
 		local newSig = clientCollisionBoundsSignature( bounds )
 		if not ( MC.World and MC.World[key] ) then
+			if MC.QueueHttpChunk then MC.QueueHttpChunk( key ) end
 			MC.ClientCollisionSignatures[key] = nil
 			clearClientPhysBuildState( key )
 			rememberClientPhysSkip( key, "no_world" )
