@@ -466,6 +466,22 @@ local function activeCreativePlacer( ply )
 	return IsValid( wep ) and wep:GetClass() == "mc_creative_placer"
 end
 
+local function exitCreativePlacerWeapon( ply )
+	if not IsValid( ply ) then return false end
+	local active = ply:GetActiveWeapon()
+	for _, wep in ipairs( ply:GetWeapons() or {} ) do
+		if IsValid( wep ) and wep ~= active and wep:GetClass() ~= "mc_creative_placer" then
+			if input and input.SelectWeapon then
+				input.SelectWeapon( wep )
+				return true
+			end
+			break
+		end
+	end
+	RunConsoleCommand( "lastinv" )
+	return true
+end
+
 local function textEntryHasFocus()
 	local focus = vgui.GetKeyboardFocus and vgui.GetKeyboardFocus() or nil
 	if not IsValid( focus ) then return false end
@@ -484,6 +500,12 @@ end
 hook.Remove( "PlayerBindPress", "mc_creative_hotbar_binds" )
 hook.Add( "PlayerBindPress", "mc_creative_hotbar_binds", function( ply, bind, pressed )
 	if not pressed or not activeCreativePlacer( ply ) then return end
+	if bind == "+showscores" then
+		if not textEntryHasFocus() then
+			exitCreativePlacerWeapon( ply )
+		end
+		return true
+	end
 	local slot = string.match( bind or "", "^slot([1-9])$" )
 	if slot then
 		if not textEntryHasFocus() then
@@ -512,6 +534,12 @@ end )
 hook.Remove( "PlayerButtonDown", "mc_creative_hotbar_buttons" )
 hook.Add( "PlayerButtonDown", "mc_creative_hotbar_buttons", function( ply, button )
 	if not activeCreativePlacer( ply ) then return end
+	if button == KEY_TAB then
+		if not textEntryHasFocus() then
+			exitCreativePlacerWeapon( ply )
+		end
+		return
+	end
 	if button == MOUSE_MIDDLE then
 		pickCreativeHotbarBlockDebounced( ply )
 	end

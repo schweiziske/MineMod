@@ -11,6 +11,7 @@ MC = MC or {}
 
 local SHARED = {
 	"mc/sh_config.lua",
+	"mc/sh_config_ui.lua",
 	"mc/sh_i18n.lua",
 	"mc/generated/sh_generated_tiles.lua",
 	"mc/generated/sh_generated_blocks.lua",
@@ -35,6 +36,7 @@ local SHARED = {
 }
 local SERVER_FILES = {
 	"mc/sv_world.lua",
+	"mc/sv_config_ui.lua",
 	"mc/sv_commands.lua",
 	"mc/sv_chunk_store.lua",
 	"mc/sv_saves.lua",
@@ -45,6 +47,7 @@ local SERVER_FILES = {
 local CLIENT_FILES = {
 	"mc/cl_lighting.lua",
 	"mc/cl_render.lua",
+	"mc/cl_config_ui.lua",
 	"mc/cl_ui.lua",
 	"mc/cl_save_ui.lua",
 	"mc/cl_presets.lua",

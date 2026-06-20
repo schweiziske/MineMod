@@ -103,7 +103,7 @@ MC.LanguageData = MC.LanguageData or {
 		["weapon.mc_creative_placer.name"] = "MC 创造方块放置器",
 		["weapon.mc_creative_placer.purpose"] = "放置 / 破坏 Minecraft 方块，并从创造物品栏选择方块",
 		["weapon.mc_creative_placer.instructions"] = "左键破坏  右键放置  Reload 创造物品栏",
-		["weapon.mc_creative_placer.hud"] = "左键破坏   右键放置   中键取块   Reload 创造物品栏",
+		["weapon.mc_creative_placer.hud"] = "左键破坏    右键放置    中键取块    Reload 创造物品栏    按 Tab 切出",
 
 		["weapon.mc_preset_placer.name"] = "MC 预设放置器",
 		["weapon.mc_preset_placer.purpose"] = "保存和放置 Minecraft 方块建筑预设",
@@ -261,7 +261,7 @@ MC.LanguageData = MC.LanguageData or {
 		["weapon.mc_creative_placer.name"] = "MC Creative Block Placer",
 		["weapon.mc_creative_placer.purpose"] = "Place and break Minecraft blocks, with a creative inventory picker",
 		["weapon.mc_creative_placer.instructions"] = "Left click breaks  Right click places  Reload opens creative inventory",
-		["weapon.mc_creative_placer.hud"] = "Left click breaks   Right click places   Middle click picks block   Reload opens creative inventory",
+		["weapon.mc_creative_placer.hud"] = "Left click breaks    Right click places    Middle click picks block    Reload opens creative inventory    Press Tab to switch weapon",
 
 		["weapon.mc_preset_placer.name"] = "MC Preset Placer",
 		["weapon.mc_preset_placer.purpose"] = "Save and place Minecraft block build presets",
