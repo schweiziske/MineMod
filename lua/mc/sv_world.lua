@@ -1783,9 +1783,19 @@ end )
 
 ------------------------------------------------------------------- persistence
 local SAVE_DIR = "mc"
+local AUTOSAVE_TIMER = "mc_autosave"
+local AUTOSAVE_CVAR_CALLBACK = "mc_autosave_timer"
 
 local function savePath()
 	return SAVE_DIR .. "/" .. game.GetMap() .. ".dat"
+end
+
+local function normalizedSavePath( path )
+	return string.lower( string.gsub( tostring( path or "" ), "\\", "/" ) )
+end
+
+local function isDefaultSavePath( path )
+	return normalizedSavePath( path ) == normalizedSavePath( savePath() )
 end
 
 local function ensureSaveDir()
@@ -1987,24 +1997,32 @@ local function overlaySavePath( path )
 end
 
 function SV.SaveToPath( path, slotName )
+	if SV.SaveInProgress then return false, "save_in_progress" end
+	SV.SaveInProgress = true
+	local saveIsDefault = isDefaultSavePath( path )
+	local function finishSave( ok, ... )
+		if ok and saveIsDefault then SV.Dirty = false end
+		SV.SaveInProgress = false
+		return ok, ...
+	end
+
 	if SV.ChunkStore and SV.ChunkStore.IsLazyWorld and SV.ChunkStore.IsLazyWorld() and SV.ChunkStore.SaveOverlay then
 		local overlay = SV.ChunkStore.SaveOverlay()
 		local json = util.TableToJSON( overlay )
-		if not json then return false, "overlay_json_failed" end
+		if not json then return finishSave( false, "overlay_json_failed" ) end
 		ensureSaveDir()
 		file.Write( overlaySavePath( path ), json )
-		SV.Dirty = false
 		MsgN( "[MC] saved lazy edit overlay / " .. SV.BlockCount .. " blocks" ..
 			( slotName and ( " as \"" .. slotName .. "\" on map " .. game.GetMap() ) or "" ) )
-		return true, path, overlay, 0, SV.BlockCount
+		return finishSave( true, path, overlay, 0, SV.BlockCount )
 	end
 
 	local data, chunks = buildSaveData( slotName )
 	local json = util.TableToJSON( data )
-	if not json then return end
+	if not json then return finishSave( false, "save_json_failed" ) end
 	ensureSaveDir()
 	local compressed = util.Compress( json )
-	if not compressed then return end
+	if not compressed then return finishSave( false, "save_compress_failed" ) end
 	file.Write( path, compressed )
 	local verifyRaw = file.Read( path, "DATA" )
 	local verifyJSON = verifyRaw and util.Decompress( verifyRaw )
@@ -2014,10 +2032,9 @@ function SV.SaveToPath( path, slotName )
 		MsgN( "[MC] !!! save verify mismatch chunks " .. verifyChunks .. "/" .. #chunks ..
 			" blocks " .. verifyBlocks .. "/" .. SV.BlockCount )
 	end
-	SV.Dirty = false
 	MsgN( "[MC] saved " .. #chunks .. " chunks / " .. SV.BlockCount .. " blocks" ..
 		( slotName and ( " as \"" .. slotName .. "\" on map " .. game.GetMap() ) or "" ) )
-	return true, path, data, #chunks, SV.BlockCount
+	return finishSave( true, path, data, #chunks, SV.BlockCount )
 end
 
 function SV.Save( slotName )
@@ -2199,15 +2216,48 @@ function SV.Load()
 	return SV.LoadFromPath( savePath(), false )
 end
 
+local function autosaveConVar()
+	if C.Autosave then return C.Autosave end
+	C.Autosave = GetConVar( "mc_autosave" )
+	return C.Autosave
+end
+
+local function autosaveSeconds()
+	local cv = autosaveConVar()
+	if not cv then return 0 end
+	return math.max( 0, tonumber( cv:GetFloat() ) or 0 )
+end
+
+local function runAutosave()
+	if not SV.Dirty then return end
+	local ok, err = SV.Save()
+	if ok == false then MsgN( "[MC] autosave failed: " .. tostring( err ) ) end
+end
+
+function SV.ConfigureAutosave()
+	timer.Remove( AUTOSAVE_TIMER )
+
+	local secs = autosaveSeconds()
+	if secs <= 0 then
+		MsgN( "[MC] autosave disabled" )
+		return false
+	end
+
+	timer.Create( AUTOSAVE_TIMER, secs, 0, runAutosave )
+	MsgN( "[MC] autosave every " .. tostring( secs ) .. "s" )
+	return true
+end
+
+if cvars and cvars.AddChangeCallback then
+	cvars.AddChangeCallback( "mc_autosave", function()
+		if SV.ConfigureAutosave then SV.ConfigureAutosave() end
+	end, AUTOSAVE_CVAR_CALLBACK )
+end
+
 ------------------------------------------------------------------------ hooks
 hook.Add( "InitPostEntity", "mc_load", function()
 	SV.Load()
-	local secs = C.Autosave:GetInt()
-	if secs > 0 then
-		timer.Create( "mc_autosave", secs, 0, function()
-			if SV.Dirty then SV.Save() end
-		end )
-	end
+	SV.ConfigureAutosave()
 end )
 
 hook.Add( "PlayerInitialSpawn", "mc_sync", function( ply )
