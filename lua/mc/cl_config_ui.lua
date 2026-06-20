@@ -3,6 +3,7 @@
 ------------------------------------------------------------------------------]]
 
 MC = MC or {}
+MC.ConfigServerValues = MC.ConfigServerValues or {}
 
 local UI = {
 	bg = Color( 28, 30, 34, 250 ),
@@ -18,7 +19,30 @@ local UI = {
 	warn = Color( 245, 190, 110 ),
 }
 
-local function getCVarValue( name )
+local function configText( en, zh )
+	if zh and MC.Language and MC.Language() == "zh_cn" then
+		return zh
+	end
+	return en
+end
+
+local function itemLabel( item )
+	return configText( item.label or item.name, item.labelZH )
+end
+
+local function itemHelp( item )
+	return configText( item.help or "", item.helpZH )
+end
+
+local function categoryLabel( category )
+	return configText( category.label or category.id, category.zhLabel )
+end
+
+local function getCVarValue( scope, name )
+	if scope == "server" then
+		return MC.ConfigServerValues[name] or ""
+	end
+
 	local cvar = GetConVar and GetConVar( name ) or nil
 	if not cvar then return "" end
 	return cvar:GetString()
@@ -52,6 +76,11 @@ local function applyConfigValue( scope, item, value )
 	net.SendToServer()
 end
 
+local function requestServerConfigValues()
+	net.Start( "mc_config_get" )
+	net.SendToServer()
+end
+
 local function clearPanel( pnl )
 	for _, child in ipairs( pnl:GetChildren() ) do
 		child:Remove()
@@ -62,19 +91,44 @@ local function scrollCanvas( scroll )
 	return scroll.GetCanvas and scroll:GetCanvas() or scroll
 end
 
-local function createBoolControl( parent, item, editable, getScope )
-	local check = vgui.Create( "DCheckBoxLabel", parent )
-	check:Dock( RIGHT )
-	check:SetWide( 88 )
-	check:SetText( "Enabled" )
-	check:SetTextColor( UI.textDim )
-	check:SetValue( isTruthyValue( getCVarValue( item.name ) ) and 1 or 0 )
-	check:SetEnabled( editable )
-	check.OnChange = function( _, checked )
-		if not editable then return end
-		applyConfigValue( getScope(), item, checked and "1" or "0" )
+local function createBoolControl( parent, scope, item, editable )
+	local holder = vgui.Create( "DPanel", parent )
+	holder:Dock( RIGHT )
+	holder:DockMargin( 0, 16, 10, 16 )
+	holder:SetWide( 70 )
+	holder.MCEnabled = isTruthyValue( getCVarValue( scope, item.name ) )
+	holder.Paint = function() end
+
+	local function makeChoice( value, label, x )
+		local btn = vgui.Create( "DButton", holder )
+		btn:SetPos( x, 0 )
+		btn:SetSize( 32, 32 )
+		btn:SetText( "" )
+		btn:SetEnabled( editable )
+		btn.Paint = function( s, w, h )
+			local active = holder.MCEnabled == value
+			local bg = active and UI.accent or Color( 50, 56, 66, 245 )
+			if not editable then bg = active and Color( 78, 88, 104, 210 ) or Color( 44, 48, 56, 210 ) end
+			if s:IsHovered() and editable then
+				bg = active and Color( 140, 190, 245 ) or Color( 68, 76, 90, 245 )
+			end
+
+			draw.RoundedBox( 0, 0, 0, w, h, bg )
+			surface.SetDrawColor( active and Color( 220, 235, 255, 210 ) or UI.line )
+			surface.DrawOutlinedRect( 0, 0, w, h, 1 )
+			draw.SimpleText( label, "mc_hud_small", w * 0.5, h * 0.5, UI.text, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+		end
+		btn.DoClick = function()
+			if not editable or holder.MCEnabled == value then return end
+			holder.MCEnabled = value
+			applyConfigValue( scope, item, value and "1" or "0" )
+		end
+		return btn
 	end
-	return check
+
+	makeChoice( false, configText( "OFF", "关" ), 0 )
+	makeChoice( true, configText( "ON", "开" ), 38 )
+	return holder
 end
 
 local function createConfigRow( parent, scope, item )
@@ -83,11 +137,15 @@ local function createConfigRow( parent, scope, item )
 	local row = vgui.Create( "DPanel", parent )
 	row:Dock( TOP )
 	row:DockMargin( 0, 0, 0, 8 )
-	row:SetTall( item.kind == "bool" and 58 or 72 )
+	row:SetTall( item.kind == "bool" and 64 or 88 )
 	row.Paint = function( _, w, h )
 		draw.RoundedBox( 4, 0, 0, w, h, UI.panel )
 		surface.SetDrawColor( UI.line )
 		surface.DrawOutlinedRect( 0, 0, w, h, 1 )
+	end
+
+	if item.kind == "bool" then
+		createBoolControl( row, scope, item, editable )
 	end
 
 	local title = vgui.Create( "DLabel", row )
@@ -95,37 +153,36 @@ local function createConfigRow( parent, scope, item )
 	title:DockMargin( 10, 7, 10, 0 )
 	title:SetTall( 18 )
 	title:SetTextColor( UI.text )
-	title:SetText( item.label .. "  (" .. item.name .. ")" )
+	title:SetText( itemLabel( item ) .. "  (" .. item.name .. ")" )
 
 	local help = vgui.Create( "DLabel", row )
 	help:Dock( TOP )
-	help:DockMargin( 10, 0, 10, 0 )
-	help:SetTall( 18 )
+	help:DockMargin( 10, 1, 10, 4 )
+	help:SetTall( 20 )
 	help:SetTextColor( editable and UI.textDim or UI.warn )
-	help:SetText( editable and ( item.help or "" ) or "Admin only" )
+	help:SetText( editable and itemHelp( item ) or configText( "Admin only", "仅管理员可改" ) )
 
 	if item.kind == "bool" then
-		createBoolControl( row, item, editable, function() return scope end )
 		return row
 	end
 
 	local line = vgui.Create( "DPanel", row )
 	line:Dock( BOTTOM )
-	line:DockMargin( 10, 0, 10, 8 )
-	line:SetTall( 26 )
+	line:DockMargin( 10, 4, 10, 10 )
+	line:SetTall( 28 )
 	line.Paint = function() end
 
 	local apply = vgui.Create( "DButton", line )
 	apply:Dock( RIGHT )
 	apply:SetWide( 72 )
-	apply:SetText( "Apply" )
+	apply:SetText( configText( "Apply", "应用" ) )
 	apply:SetEnabled( editable )
 	styleButton( apply )
 
 	local entry = vgui.Create( "DTextEntry", line )
 	entry:Dock( FILL )
 	entry:DockMargin( 0, 0, 8, 0 )
-	entry:SetText( getCVarValue( item.name ) )
+	entry:SetText( getCVarValue( scope, item.name ) )
 	entry:SetEnabled( editable )
 	entry:SetTextColor( UI.text )
 	entry:SetDrawBackground( false )
@@ -150,7 +207,7 @@ function MC.OpenConfigMenu()
 	if IsValid( MC.ConfigFrame ) then MC.ConfigFrame:Remove() end
 
 	local fr = vgui.Create( "DFrame" )
-	fr:SetTitle( "MC Config" )
+	fr:SetTitle( configText( "MC Config", "MC 配置" ) )
 	fr:SetSize( 980, 680 )
 	fr:Center()
 	fr:MakePopup()
@@ -201,6 +258,7 @@ function MC.OpenConfigMenu()
 			end
 		end
 	end
+	MC.ConfigRefreshRows = rebuildRows
 
 	local function categoryExists( id )
 		for _, cat in ipairs( categoriesForScope() ) do
@@ -223,7 +281,7 @@ function MC.OpenConfigMenu()
 			btn:Dock( TOP )
 			btn:DockMargin( 0, 0, 0, 6 )
 			btn:SetTall( 32 )
-			btn:SetText( cat.label or cat.id )
+			btn:SetText( categoryLabel( cat ) )
 			btn.CategoryButton = true
 			categoryButtons[cat.id] = btn
 			styleButton( btn, function() return activeCategory == cat.id end )
@@ -240,12 +298,13 @@ function MC.OpenConfigMenu()
 		btn:Dock( LEFT )
 		btn:DockMargin( 0, 0, 8, 0 )
 		btn:SetWide( 120 )
-		btn:SetText( scope == "client" and "Client" or "Server (Admin)" )
+		btn:SetText( scope == "client" and configText( "Client", "客户端" ) or configText( "Server (Admin)", "服务端 (管理员)" ) )
 		scopeButtons[scope] = btn
 		styleButton( btn, function() return activeScope == scope end )
 		btn.DoClick = function()
 			activeScope = scope
 			activeCategory = nil
+			if activeScope == "server" then requestServerConfigValues() end
 			rebuildCategories()
 		end
 	end
@@ -254,11 +313,31 @@ function MC.OpenConfigMenu()
 	hint:Dock( FILL )
 	hint:SetTextColor( UI.textDim )
 	hint:SetContentAlignment( 6 )
-	hint:SetText( "Server settings require admin rights." )
+	hint:SetText( configText( "Server settings require admin rights.", "服务端设置需要管理员权限。" ) )
 
 	rebuildCategories()
 end
 
+net.Receive( "mc_config_values", function()
+	local values = {}
+	for _ = 1, net.ReadUInt( 12 ) do
+		values[net.ReadString()] = net.ReadString()
+	end
+
+	MC.ConfigServerValues = values
+	if IsValid( MC.ConfigFrame ) and MC.ConfigRefreshRows then
+		MC.ConfigRefreshRows()
+	end
+end )
+
 concommand.Add( "mc_config", function()
 	MC.OpenConfigMenu()
 end )
+
+if MC.RegisterLanguageChanged then
+	MC.RegisterLanguageChanged( "mc_config_ui", function()
+		if IsValid( MC.ConfigFrame ) then
+			MC.OpenConfigMenu()
+		end
+	end )
+end
