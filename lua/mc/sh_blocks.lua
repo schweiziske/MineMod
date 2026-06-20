@@ -1567,11 +1567,17 @@ function MC.IsPaneBlock( id )
 	return b and isPaneKind( b.connection ) or false
 end
 
+function MC.IsWallBlock( id )
+	local b = MC.Blocks[id]
+	return b and b.connection == "wall" or false
+end
+
 function MC.BlockCollisionDependsOnNeighbours( id )
 	local b = MC.Blocks[id]
 	if not b then return false end
 	return b.connection == "fence"
 		or isPaneKind( b.connection )
+		or b.connection == "wall"
 		or b.connection == "pipe6"
 end
 
@@ -1755,6 +1761,68 @@ local function paneCollisionBoxes( bx, by, bz )
 	return boxes
 end
 
+local function wallConnectsToBlock( id, orient )
+	if id == 0 then return false end
+	local b = MC.Blocks[id]
+	if not b then return false end
+	if b.connection == "wall" or b.connection == "fence" or b.connection == "fence_gate" or isPaneKind( b.connection ) then return true end
+	if b.solid == false then return false end
+	return MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) or not b.shape
+end
+
+local function wallConnectsToCell( bx, by, bz )
+	if bx == nil or not MC.GetBlock then return false end
+	local id = MC.GetBlock( bx, by, bz )
+	local orient = MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz ) or 0
+	return wallConnectsToBlock( id, orient )
+end
+
+local function wallBoxes( bx, by, bz )
+	local boxes = {
+		{ 0.25, 0.25, 0, 0.75, 0.75, 1, part = "post" },
+	}
+
+	if bx == nil or by == nil or bz == nil then return boxes end
+
+	if wallConnectsToCell( bx, by - 1, bz ) then
+		boxes[#boxes + 1] = { 0.3125, 0, 0, 0.6875, 0.5, 0.875, part = "arm", dir = "yn" }
+	end
+	if wallConnectsToCell( bx, by + 1, bz ) then
+		boxes[#boxes + 1] = { 0.3125, 0.5, 0, 0.6875, 1, 0.875, part = "arm", dir = "yp" }
+	end
+	if wallConnectsToCell( bx - 1, by, bz ) then
+		boxes[#boxes + 1] = { 0, 0.3125, 0, 0.5, 0.6875, 0.875, part = "arm", dir = "xn" }
+	end
+	if wallConnectsToCell( bx + 1, by, bz ) then
+		boxes[#boxes + 1] = { 0.5, 0.3125, 0, 1, 0.6875, 0.875, part = "arm", dir = "xp" }
+	end
+
+	return boxes
+end
+
+local function wallCollisionBoxes( bx, by, bz )
+	if bx == nil or by == nil or bz == nil then
+		return { { 0.25, 0.25, 0, 0.75, 0.75, 1 } }
+	end
+
+	local yn = wallConnectsToCell( bx, by - 1, bz )
+	local yp = wallConnectsToCell( bx, by + 1, bz )
+	local xn = wallConnectsToCell( bx - 1, by, bz )
+	local xp = wallConnectsToCell( bx + 1, by, bz )
+	local boxes = {
+		{ 0.25, 0.25, 0, 0.75, 0.75, 1 },
+	}
+
+	if yn or yp then
+		boxes[#boxes + 1] = { 0.3125, yn and 0 or 0.25, 0, 0.6875, yp and 1 or 0.75, 0.875 }
+	end
+	if xn or xp then
+		boxes[#boxes + 1] = { xn and 0 or 0.25, 0.3125, 0, xp and 1 or 0.75, 0.6875, 0.875 }
+	end
+
+	return boxes
+end
+
 local function pipe6ConnectsToBlock( id, dir )
 	if id == 0 then return false end
 	local b = MC.Blocks[id]
@@ -1844,7 +1912,7 @@ function MC.BlockBoxes( id, orient, bx, by, bz )
 		return modelBoxes( b, MC.NormalizeOrient( id, orient ) )
 	end
 	if b.connection == "wall" then
-		return FullBlockBox
+		return wallBoxes( bx, by, bz )
 	end
 	if isPaneKind( b.connection ) then
 		return paneBoxes( bx, by, bz )
@@ -1880,6 +1948,9 @@ function MC.BlockCollisionBoxes( id, orient, bx, by, bz )
 	end
 	if b and isPaneKind( b.connection ) and bx ~= nil and by ~= nil and bz ~= nil then
 		return paneCollisionBoxes( bx, by, bz )
+	end
+	if b and b.connection == "wall" and bx ~= nil and by ~= nil and bz ~= nil then
+		return wallCollisionBoxes( bx, by, bz )
 	end
 	return MC.BlockBoxes( id, orient, bx, by, bz )
 end

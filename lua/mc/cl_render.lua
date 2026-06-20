@@ -138,6 +138,7 @@ end
 local MC_LIGHT_STYLE_FAST = "fast"
 local MC_LIGHT_STYLE_VANILLA = "vanilla"
 local MC_LIGHT_STYLE_BEST = "best"
+local MC_LIGHT_STYLE_SHADER = "shader"
 
 local MC_LIGHT_AO_FACTORS = {
 	[0] = 1.00,
@@ -153,11 +154,19 @@ local MC_LIGHT_BEST_AO_FACTORS = {
 	[3] = 0.66,
 }
 
+local MC_LIGHT_SHADER_AO_FACTORS = {
+	[0] = 1.00,
+	[1] = 0.94,
+	[2] = 0.86,
+	[3] = 0.74,
+}
+
 local function currentLightStyle()
 	local cv = MC.LightStyle
 	local style = cv and cv.GetString and string.lower( tostring( cv:GetString() or "" ) ) or MC_LIGHT_STYLE_VANILLA
 	if style == MC_LIGHT_STYLE_FAST or style == "low" or style == "0" then return MC_LIGHT_STYLE_FAST end
 	if style == MC_LIGHT_STYLE_BEST or style == "fancy" or style == "high" or style == "2" then return MC_LIGHT_STYLE_BEST end
+	if style == MC_LIGHT_STYLE_SHADER or style == "shaders" or style == "cinematic" or style == "3" then return MC_LIGHT_STYLE_SHADER end
 	return MC_LIGHT_STYLE_VANILLA
 end
 
@@ -257,6 +266,31 @@ local function bestSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmissi
 	return math.Clamp( brightness ^ 0.85, 0, 1 )
 end
 
+local function shaderSunFaceFactor( faceIndex )
+	if faceIndex == MC.Face.TOP then return 1.16 end
+	if faceIndex == MC.Face.BOTTOM then return 0.72 end
+	if faceIndex == MC.Face.YP then return 1.08 end
+	if faceIndex == MC.Face.XP then return 1.00 end
+	if faceIndex == MC.Face.XN then return 0.88 end
+	if faceIndex == MC.Face.YN then return 0.82 end
+	return 1
+end
+
+local function shaderDaylightFactor()
+	local cv = MC.LightSkyLevel
+	return math.Clamp( ( cv and cv.GetInt and cv:GetInt() or 15 ) / 15, 0, 1 )
+end
+
+local function shaderSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
+	local brightness = math.Clamp( bestSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission ), 0, 1 )
+	local daylight = shaderDaylightFactor()
+	local litSurface = math.Clamp( ( brightness - 0.22 ) / 0.78, 0, 1 )
+	local sunMix = daylight * litSurface
+	local directed = brightness * ( 1 + ( shaderSunFaceFactor( faceIndex ) - 1 ) * sunMix )
+	local contrast = ( directed - 0.5 ) * 1.12 + 0.5
+	return math.Clamp( contrast + daylight * 0.025, 0, 1 )
+end
+
 local function minecraftCornerOccluders( bx, by, bz, faceIndex, cn )
 	local x, y, z = cornerXYZ( cn )
 	local xs, ys, zs = cornerStep( x ), cornerStep( y ), cornerStep( z )
@@ -288,6 +322,20 @@ local function minecraftBestCornerAO( bx, by, bz, faceIndex, cn )
 	return minecraftCornerAOWithFactors( bx, by, bz, faceIndex, cn, MC_LIGHT_BEST_AO_FACTORS )
 end
 
+local function minecraftShaderCornerAO( bx, by, bz, faceIndex, cn )
+	return minecraftCornerAOWithFactors( bx, by, bz, faceIndex, cn, MC_LIGHT_SHADER_AO_FACTORS )
+end
+
+local function shaderFaceTint( faceIndex )
+	if faceIndex == MC.Face.TOP then return 1.06, 1.03, 0.94 end
+	if faceIndex == MC.Face.BOTTOM then return 0.76, 0.82, 0.98 end
+	if faceIndex == MC.Face.YP then return 1.02, 1.00, 0.94 end
+	if faceIndex == MC.Face.XP then return 0.96, 0.99, 1.04 end
+	if faceIndex == MC.Face.XN then return 0.86, 0.90, 1.02 end
+	if faceIndex == MC.Face.YN then return 0.82, 0.88, 1.04 end
+	return 1, 1, 1
+end
+
 local function litFaceColor( shade, bx, by, bz, id, faceIndex, cn, selfEmission, style )
 	if not MC.SampleLighting then return shade end
 	style = style or MC_LIGHT_STYLE_VANILLA
@@ -298,15 +346,22 @@ local function litFaceColor( shade, bx, by, bz, id, faceIndex, cn, selfEmission,
 	elseif style == MC_LIGHT_STYLE_BEST then
 		brightness = bestSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
 		ao = minecraftBestCornerAO( bx, by, bz, faceIndex, cn )
+	elseif style == MC_LIGHT_STYLE_SHADER then
+		brightness = shaderSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
+		ao = minecraftShaderCornerAO( bx, by, bz, faceIndex, cn )
 	else
 		brightness = minecraftSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
 		ao = minecraftSmoothCornerAO( bx, by, bz, faceIndex, cn )
 	end
 	local mul = math.Clamp( ( tonumber( brightness ) or 1 ) * ao, 0, 1 )
+	local rScale, gScale, bScale = 1, 1, 1
+	if style == MC_LIGHT_STYLE_SHADER then
+		rScale, gScale, bScale = shaderFaceTint( faceIndex )
+	end
 	return Color(
-		math.Clamp( math.floor( ( shade.r or 255 ) * mul + 0.5 ), 0, 255 ),
-		math.Clamp( math.floor( ( shade.g or 255 ) * mul + 0.5 ), 0, 255 ),
-		math.Clamp( math.floor( ( shade.b or 255 ) * mul + 0.5 ), 0, 255 ),
+		math.Clamp( math.floor( ( shade.r or 255 ) * mul * rScale + 0.5 ), 0, 255 ),
+		math.Clamp( math.floor( ( shade.g or 255 ) * mul * gScale + 0.5 ), 0, 255 ),
+		math.Clamp( math.floor( ( shade.b or 255 ) * mul * bScale + 0.5 ), 0, 255 ),
 		shade.a or 255
 	)
 end
@@ -1255,6 +1310,9 @@ local function dynamicShapeFaceData( b, face, box )
 	if MC.IsFenceBlock and MC.IsFenceBlock( b.id ) then
 		return { tile = b.side, rot = 0 }
 	end
+	if MC.IsWallBlock and MC.IsWallBlock( b.id ) then
+		return { tile = b.side, rot = 0 }
+	end
 	return nil
 end
 
@@ -1676,7 +1734,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 		local b = MC.Blocks[id]
 		if b and b.shape == "cross" then
 			emitCrossBlock( id, bx, by, bz, wx, wy, wz )
-		elseif b and b.shape == "model" and not ( ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) ) or b.connection == "pipe6" ) and emitModelBlock( b, orient, bx, by, bz, wx, wy, wz ) then
+		elseif b and b.shape == "model" and not ( ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) ) or ( MC.IsWallBlock and MC.IsWallBlock( id ) ) or b.connection == "pipe6" ) and emitModelBlock( b, orient, bx, by, bz, wx, wy, wz ) then
 			-- rendered from exact Minecraft model quads; boxes remain for collision/outline
 		elseif isLiquidBlock( id ) and emitLiquidBlock( id, orient, bx, by, bz, wx, wy, wz ) then
 			-- rendered with Minecraft fluid surface height/offsets instead of full cube faces
@@ -1724,11 +1782,11 @@ function MC.BuildChunkMesh( key, sectionIndex )
 				end
 			end
 		else
-			-- fence/pane/pipe boxes come from the runtime connection logic, so their
+			-- fence/pane/wall/pipe boxes come from the runtime connection logic, so their
 			-- indices do not line up with the generator's static boxFaces list;
 			-- only the centre post (box 1) may take static face data
 			local isPipe6Shape = b and b.connection == "pipe6"
-			local isConnShape = ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) ) or isPipe6Shape
+			local isConnShape = ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) ) or ( MC.IsWallBlock and MC.IsWallBlock( id ) ) or isPipe6Shape
 			local boxes = MC.BlockBoxes( id, orient, bx, by, bz )
 			local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
 			for boxIndex, box in ipairs( boxes or {} ) do
