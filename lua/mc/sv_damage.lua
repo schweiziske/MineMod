@@ -54,7 +54,7 @@ local function actorCanDamage( actor, options )
 end
 
 local function blockDamageKey( bx, by, bz )
-	return bx .. ":" .. by .. ":" .. bz
+	return MC.CellKey( bx, by, bz )
 end
 
 local function blockHealth( id )

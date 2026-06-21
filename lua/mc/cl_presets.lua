@@ -262,7 +262,7 @@ local function freePresetProjectionMeshes()
 end
 
 local function cellKey( x, y, z )
-	return x .. ":" .. y .. ":" .. z
+	return MC.CellKey( x, y, z )
 end
 
 local TRI = { 1, 3, 2, 1, 4, 3 }

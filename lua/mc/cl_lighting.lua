@@ -16,12 +16,14 @@ MC.LightSkyLevel = MC.LightSkyLevel or CreateClientConVar( "mc_light_sky_level",
 	"Client sky light level for MC chunks (0-15)" )
 MC.LightAmbientMin = MC.LightAmbientMin or CreateClientConVar( "mc_light_ambient_min", "0.18", true, false,
 	"Minimum brightness multiplier for MC vertex lighting" )
-MC.LightStyle = MC.LightStyle or CreateClientConVar( "mc_light_style", "best", true, false,
+MC.LightStyle = MC.LightStyle or CreateClientConVar( "mc_light_style", "shader", true, false,
 	"MC chunk lighting visual style: fast, vanilla, best, or shader" )
 MC.LightPerfDebug = MC.LightPerfDebug or CreateClientConVar( "mc_light_perf_debug", "0", true, false,
 	"Show and collect detailed MC lighting performance diagnostics" )
 MC.LightPerfPrintBreak = MC.LightPerfPrintBreak or CreateClientConVar( "mc_light_perf_print_break", "0", true, false,
 	"Print MC lighting performance diagnostics after a block is broken" )
+MC.LightPerfPrintEach = MC.LightPerfPrintEach or CreateClientConVar( "mc_light_perf_print_each", "0", true, false,
+	"Print one-line timing diagnostics for each MC lighting calculation" )
 
 MC.LightBlockChunks = MC.LightBlockChunks or {}
 MC.LightSkyChunks = MC.LightSkyChunks or {}
@@ -56,6 +58,10 @@ local function lightPerfPrintBreakEnabled()
 	return MC.LightPerfPrintBreak and MC.LightPerfPrintBreak:GetBool()
 end
 
+local function lightPerfPrintEachEnabled()
+	return MC.LightPerfPrintEach and MC.LightPerfPrintEach:GetBool()
+end
+
 local function perfNow()
 	return SysTime and SysTime() or 0
 end
@@ -66,6 +72,34 @@ end
 
 local function perfBoundsText( minX, minY, minZ, maxX, maxY, maxZ )
 	return string.format( "%d,%d,%d -> %d,%d,%d", minX or 0, minY or 0, minZ or 0, maxX or 0, maxY or 0, maxZ or 0 )
+end
+
+function MC.LightPerfTrace( kind, fields )
+	if not lightPerfPrintEachEnabled() then return end
+	fields = fields or {}
+	local parts = { "[MC light calc][" .. tostring( kind or "?" ) .. "]" }
+	local function add( name, value )
+		if value ~= nil then parts[#parts + 1] = name .. "=" .. tostring( value ) end
+	end
+	add( "ms", fields.ms )
+	add( "key", fields.key )
+	add( "sec", fields.section )
+	add( "changed", fields.changed )
+	add( "dirtySec", fields.dirtySections )
+	add( "inc", fields.inc )
+	add( "dec", fields.dec )
+	add( "src", fields.sources )
+	add( "queue", fields.queued )
+	add( "proc", fields.processed )
+	add( "write", fields.written )
+	add( "samples", fields.samples )
+	add( "sampleMS", fields.sampleMS )
+	add( "ao", fields.ao )
+	add( "aoMS", fields.aoMS )
+	add( "cache", fields.cache )
+	add( "aoCache", fields.aoCache )
+	add( "bounds", fields.bounds )
+	print( table.concat( parts, " " ) )
 end
 
 local function noteLightingDisabledSkip( reason, bx, by, bz )
@@ -137,18 +171,29 @@ function MC.LightPerfEndMeshBuild( key, sectionIndex, meshMS )
 	stats.lastMeshAOCalls = stats.currentMeshAOCalls or 0
 	stats.lastMeshAOMS = stats.currentMeshAOMS or 0
 	stats.lastMeshDebugTimed = stats.currentMeshDebugTimed == true
+	MC.LightPerfTrace( "mesh", {
+		ms = meshMS,
+		key = key,
+		section = sectionIndex or "full",
+		samples = stats.lastMeshSampleCalls,
+		sampleMS = stats.lastMeshSampleMS,
+		ao = stats.lastMeshAOCalls,
+		aoMS = stats.lastMeshAOMS,
+		cache = tostring( stats.lastMeshLightCacheHits ) .. "/" .. tostring( stats.lastMeshLightCacheMisses ),
+		aoCache = tostring( stats.lastMeshAOCacheHits ) .. "/" .. tostring( stats.lastMeshAOCacheMisses ),
+	} )
 end
 
 local function cellKey( bx, by, bz )
-	return bx .. ":" .. by .. ":" .. bz
+	return MC.CellKey( bx, by, bz )
 end
 
 local function chunkColumnKey( cx, cy )
-	return cx .. ":" .. cy
+	return MC.ChunkColumnKey( cx, cy )
 end
 
 local function skyColumnKey( bx, by )
-	return bx .. ":" .. by
+	return MC.CellColumnKey( bx, by )
 end
 
 local function invalidateSkyColumnsForChunkCoords( cx, cy )
@@ -591,7 +636,7 @@ local function seedChunkLightSources( q, changed, chunk )
 	return count
 end
 
-local function finishChunkLightQueues( perfStart, changed, removeQ, addQ, sourceCount, boundsText )
+local function finishChunkLightQueues( perfStart, changed, removeQ, addQ, sourceCount, boundsText, traceKind )
 	local decProcessed = runLightDecreaseQueue( removeQ, addQ, changed )
 	local incProcessed = runLightIncreaseQueue( addQ, changed )
 	local dirtySections = MC.MarkLightSectionsDirtyForChangedCells and MC.MarkLightSectionsDirtyForChangedCells( changed ) or 0
@@ -613,6 +658,18 @@ local function finishChunkLightQueues( perfStart, changed, removeQ, addQ, source
 	stats.lastUpdateRadius = 0
 	stats.lastUpdateBounds = stats.lastPropagateBounds
 	stats.lastDirtyMarkMS = 0
+	MC.LightPerfTrace( traceKind or "chunk_light", {
+		ms = stats.lastPropagateMS,
+		changed = changed.count,
+		dirtySections = dirtySections,
+		inc = incProcessed,
+		dec = decProcessed,
+		sources = sourceCount or 0,
+		queued = stats.lastPropagateQueued,
+		processed = stats.lastPropagateProcessed,
+		written = stats.lastPropagateWritten,
+		bounds = stats.lastPropagateBounds,
+	} )
 	return changed.count, dirtySections
 end
 
@@ -626,7 +683,7 @@ function MC.RemoveChunkLighting( key )
 	local removeQ = newLightQueue()
 	local addQ = newLightQueue()
 	clearChunkStoredBlockLightToQueue( key, changed, removeQ )
-	return finishChunkLightQueues( perfStart, changed, removeQ, addQ, 0, "remove:" .. tostring( key ) )
+	return finishChunkLightQueues( perfStart, changed, removeQ, addQ, 0, "remove:" .. tostring( key ), "remove_chunk" )
 end
 
 function MC.UpdateLightingForChunkLoaded( chunk )
@@ -645,7 +702,7 @@ function MC.UpdateLightingForChunkLoaded( chunk )
 		sourceCount = seedChunkLightSources( addQ, changed, chunk )
 		seedChunkBorderLight( addQ, chunk )
 	end
-	return finishChunkLightQueues( perfStart, changed, removeQ, addQ, sourceCount, tostring( chunk.key ) )
+	return finishChunkLightQueues( perfStart, changed, removeQ, addQ, sourceCount, tostring( chunk.key ), "chunk_loaded" )
 end
 
 function MC.MarkLightSectionsDirtyForChangedCells( changed )
@@ -657,7 +714,7 @@ function MC.MarkLightSectionsDirtyForChangedCells( changed )
 				local off = LIGHT_DIRTY_MESH_NEIGHBORS[i]
 				local ok, key, sectionIndex = MC.MarkLightCellDirty( cell[1] + off[1], cell[2] + off[2], cell[3] + off[3] )
 				if ok and key and sectionIndex then
-					local dirtyKey = key .. ":" .. sectionIndex
+					local dirtyKey = type( key ) == "number" and key * 16 + sectionIndex or tostring( key ) .. ":" .. sectionIndex
 					if not dirty[dirtyKey] then
 						dirty[dirtyKey] = true
 						dirtyCount = dirtyCount + 1
@@ -707,6 +764,17 @@ local function rebuildBlockLightCells()
 	stats.lastBlockDecreaseProcessed = 0
 	stats.lastLightChangedCells = changed.count
 	stats.lastLightDirtySections = 0
+	MC.LightPerfTrace( "block_rebuild", {
+		ms = stats.lastPropagateMS,
+		changed = changed.count,
+		inc = incProcessed,
+		dec = 0,
+		sources = sources,
+		queued = stats.lastPropagateQueued,
+		processed = stats.lastPropagateProcessed,
+		written = stats.lastPropagateWritten,
+		bounds = "full",
+	} )
 	return changed
 end
 
@@ -817,6 +885,11 @@ local function rebuildAllSkyCells()
 	stats.lastSkyRebuildMS = perfMS( perfStart )
 	stats.lastSkyRebuildColumns = 0
 	stats.lastSkyRebuildCells = 0
+	MC.LightPerfTrace( "sky_rebuild", {
+		ms = stats.lastSkyRebuildMS,
+		changed = stats.lastSkyRebuildCells,
+		bounds = "full",
+	} )
 end
 
 local function loadedWorldBounds()
@@ -849,6 +922,14 @@ function MC.RebuildLightingCells()
 	MC.LightPerfStats = stats
 	stats.lastRebuildMS = perfMS( perfStart )
 	stats.lastRebuildBounds = minX and perfBoundsText( minX, minY, minZ, maxX, maxY, maxZ ) or "empty"
+	MC.LightPerfTrace( "rebuild", {
+		ms = stats.lastRebuildMS,
+		changed = stats.lastLightChangedCells,
+		dirtySections = stats.lastLightDirtySections,
+		inc = stats.lastBlockIncreaseProcessed,
+		dec = stats.lastBlockDecreaseProcessed,
+		bounds = stats.lastRebuildBounds,
+	} )
 end
 
 local function ensureLightingCells()
@@ -870,7 +951,7 @@ function MC.UpdateLightingCellsAroundCell( bx, by, bz, radius, rateLimited )
 	local changed = newChangedLightCells()
 	local addQ = newLightQueue()
 	seedNeighborLight( addQ, bx, by, bz )
-	runLightIncreaseQueue( addQ, changed )
+	local incProcessed = runLightIncreaseQueue( addQ, changed )
 	MC.LightCellsReady = true
 	MC.LightCellsSkyLevel = skyLevel()
 	local dirtySections = MC.MarkLightSectionsDirtyForChangedCells( changed )
@@ -883,6 +964,16 @@ function MC.UpdateLightingCellsAroundCell( bx, by, bz, radius, rateLimited )
 	stats.lastDirtyMarkMS = 0
 	stats.lastLightChangedCells = changed.count
 	stats.lastLightDirtySections = dirtySections
+	stats.lastBlockIncreaseProcessed = incProcessed
+	stats.lastBlockDecreaseProcessed = 0
+	MC.LightPerfTrace( "around_cell", {
+		ms = stats.lastUpdateMS,
+		changed = changed.count,
+		dirtySections = dirtySections,
+		inc = incProcessed,
+		dec = 0,
+		bounds = stats.lastUpdateBounds,
+	} )
 end
 
 function MC.NoteLightingCellChanged( bx, by, bz, oldId, oldOrient, newId, newOrient )
@@ -909,6 +1000,12 @@ local function markLightingDirtyColumn( bx, by, bz, oldTop )
 		local stats = MC.LightPerfStats or {}
 		MC.LightPerfStats = stats
 		stats.lastSkyColumnDirtySections = 0
+		MC.LightPerfTrace( "sky_column", {
+			ms = stats.lastSkyColumnMS,
+			changed = 0,
+			dirtySections = 0,
+			bounds = stats.lastSkyColumn,
+		} )
 		return
 	end
 	local z0, z1
@@ -927,6 +1024,12 @@ local function markLightingDirtyColumn( bx, by, bz, oldTop )
 	stats.lastSkyColumnDirtySections = dirtySections
 	stats.lastSkyColumnCells = dirtyCells
 	stats.lastSkyColumn = string.format( "%d,%d z=%d..%d", bx, by, z0, z1 )
+	MC.LightPerfTrace( "sky_column", {
+		ms = stats.lastSkyColumnMS,
+		changed = dirtyCells,
+		dirtySections = dirtySections,
+		bounds = stats.lastSkyColumn,
+	} )
 end
 
 local function nearbySourceRadius( bx, by, bz )
@@ -992,6 +1095,18 @@ function MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, old
 	stats.lastUpdateCell = string.format( "%d,%d,%d", bx, by, bz )
 	stats.lastUpdateBounds = stats.lastPropagateBounds
 	stats.lastDirtyMarkMS = 0
+	MC.LightPerfTrace( "block_change", {
+		ms = stats.lastPropagateMS,
+		changed = changed.count,
+		dirtySections = dirtySections,
+		inc = incProcessed,
+		dec = decProcessed,
+		sources = stats.lastPropagateSources,
+		queued = stats.lastPropagateQueued,
+		processed = stats.lastPropagateProcessed,
+		written = stats.lastPropagateWritten,
+		bounds = stats.lastPropagateBounds,
+	} )
 	return changed.count, dirtySections
 end
 

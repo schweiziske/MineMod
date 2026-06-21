@@ -33,6 +33,7 @@ MC.ConfigConVars = {
 			item( "lighting", "mc_light_style", "Lighting style", "string", "fast / vanilla / best / shader" ),
 			item( "lighting", "mc_light_perf_debug", "Lighting perf debug", "bool", "Track lighting perf diagnostics" ),
 			item( "lighting", "mc_light_perf_print_break", "Print break lighting perf", "bool", "Print lighting cost when breaking blocks" ),
+			item( "lighting", "mc_light_perf_print_each", "Print each light calc", "bool", "Print one-line timing for every lighting calculation" ),
 		} },
 		{ scope = "client", id = "creative", label = "Creative Placer", items = {
 			item( "creative", "mc_creative_held_model", "Held block model", "bool", "Draw the held block model" ),

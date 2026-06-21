@@ -385,7 +385,7 @@ if CLIENT then
 
 	local function placeAnimKey( bx, by, bz )
 		if bx == nil then return nil end
-		return bx .. ":" .. by .. ":" .. bz
+		return MC.CellKey( bx, by, bz )
 	end
 
 	function SWEP:StartCreativePlaceAnimation( bx, by, bz )

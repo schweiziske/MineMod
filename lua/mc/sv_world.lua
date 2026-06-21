@@ -162,7 +162,7 @@ function SV.EnsureChunkEnt( chunk, force )
 	if not IsValid( e ) then return nil end
 	e.cx, e.cy, e.cz = chunk.cx, chunk.cy, chunk.cz
 	e.ChunkKey = chunk.key
-	e:SetNWString( "MCChunkKey", chunk.key )
+	e:SetNWString( "MCChunkKey", tostring( chunk.key ) )
 	e:SetPos( MC.ChunkWorldOrigin( chunk.cx, chunk.cy, chunk.cz ) )
 	e:Spawn()
 	e:Activate()
@@ -1532,7 +1532,7 @@ local function queueAllLoadedChunksForPlayer( ply )
 			keys[#keys + 1] = key
 		end
 	end
-	table.sort( keys )
+	table.sort( keys, function( a, b ) return tostring( a ) < tostring( b ) end )
 
 	local loaded = {}
 	for _, key in ipairs( keys ) do

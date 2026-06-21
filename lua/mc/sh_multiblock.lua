@@ -30,7 +30,7 @@ function MC.HorizontalDirectionOffset( facing )
 end
 
 local function addCell( cells, seen, bx, by, bz, id, orient )
-	local key = bx .. ":" .. by .. ":" .. bz
+	local key = MC.CellKey( bx, by, bz )
 	if seen[key] then return end
 	seen[key] = true
 	cells[#cells + 1] = {
