@@ -260,7 +260,9 @@ function MC.SpawnBlockBreakParticles( id, orient, bx, by, bz, options )
 end
 
 local function fxKey( kind, bx, by, bz, id )
-	return kind .. ":" .. bx .. ":" .. by .. ":" .. bz .. ":" .. id
+	local key = MC.CellKey( bx, by, bz )
+	if type( key ) == "number" then return key * 4 + kind end
+	return key
 end
 
 local function prunePredictedFx()

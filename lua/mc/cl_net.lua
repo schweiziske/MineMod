@@ -212,7 +212,7 @@ end
 MC.PendingPredictions = MC.PendingPredictions or {}
 
 local function predictionKey( bx, by, bz )
-	return bx .. ":" .. by .. ":" .. bz
+	return MC.CellKey( bx, by, bz )
 end
 
 function MC.IsPendingPredictionCell( bx, by, bz )
@@ -654,7 +654,7 @@ local function httpChunkEntriesForRuntimeKey( state, key )
 	for sz = minSZ, maxSZ do
 		for sy = minSY, maxSY do
 			for sx = minSX, maxSX do
-				local savedKey = MC.ChunkKey( sx, sy, sz )
+				local savedKey = MC.ChunkKeyString( sx, sy, sz )
 				local entry = state.chunkIndex and state.chunkIndex[savedKey]
 				if istable( entry ) then
 					entries[#entries + 1] = { key = savedKey, entry = entry }

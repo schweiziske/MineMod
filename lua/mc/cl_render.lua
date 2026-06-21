@@ -195,6 +195,13 @@ local MeshLightSampleCache = {}
 local MeshAOSampleCache = {}
 local MeshLightSampleHits, MeshLightSampleMisses = 0, 0
 local MeshAOSampleHits, MeshAOSampleMisses = 0, 0
+local MeshSampleBaseX, MeshSampleBaseY, MeshSampleBaseZ = 0, 0, 0
+local SAMPLE_CACHE_ORIGIN_PAD = 16
+local SAMPLE_CACHE_AXIS_BITS = 6
+local SAMPLE_CACHE_AXIS_SIZE = 64
+local SAMPLE_CACHE_Z_SHIFT = SAMPLE_CACHE_AXIS_BITS * 2
+local SAMPLE_CACHE_EXTRA_SHIFT = SAMPLE_CACHE_AXIS_BITS * 3
+local bit_bor, bit_lshift = bit.bor, bit.lshift
 
 local function resetMeshLightingSampleCaches()
 	MeshLightSampleCache = {}
@@ -203,36 +210,58 @@ local function resetMeshLightingSampleCaches()
 	MeshAOSampleHits, MeshAOSampleMisses = 0, 0
 end
 
+local function setMeshSampleCacheOrigin( bx, by, bz )
+	MeshSampleBaseX = ( bx or 0 ) - SAMPLE_CACHE_ORIGIN_PAD
+	MeshSampleBaseY = ( by or 0 ) - SAMPLE_CACHE_ORIGIN_PAD
+	MeshSampleBaseZ = ( bz or 0 ) - SAMPLE_CACHE_ORIGIN_PAD
+end
+
 local function sampleCacheKey( sx, sy, sz, extra )
-	return sx .. ":" .. sy .. ":" .. sz .. ":" .. ( extra or 0 )
+	local x = math.floor( sx - MeshSampleBaseX )
+	local y = math.floor( sy - MeshSampleBaseY )
+	local z = math.floor( sz - MeshSampleBaseZ )
+	extra = math.floor( tonumber( extra ) or 0 )
+
+	if x < 0 or x >= SAMPLE_CACHE_AXIS_SIZE
+	or y < 0 or y >= SAMPLE_CACHE_AXIS_SIZE
+	or z < 0 or z >= SAMPLE_CACHE_AXIS_SIZE
+	or extra < 0 or extra >= SAMPLE_CACHE_AXIS_SIZE then
+		return nil
+	end
+
+	return bit_bor( x, bit_lshift( y, SAMPLE_CACHE_AXIS_BITS ), bit_lshift( z, SAMPLE_CACHE_Z_SHIFT ), bit_lshift( extra, SAMPLE_CACHE_EXTRA_SHIFT ) )
 end
 
 local function cachedMeshLightingSample( sx, sy, sz, selfEmission )
 	if not MC.SampleLighting then return 1 end
 	local key = sampleCacheKey( sx, sy, sz, selfEmission )
-	local cached = MeshLightSampleCache[key]
-	if cached ~= nil then
-		MeshLightSampleHits = MeshLightSampleHits + 1
-		return cached
+	if key ~= nil then
+		local cached = MeshLightSampleCache[key]
+		if cached ~= nil then
+			MeshLightSampleHits = MeshLightSampleHits + 1
+			return cached
+		end
 	end
 	MeshLightSampleMisses = MeshLightSampleMisses + 1
 	local brightness = MC.SampleLighting( sx, sy, sz, selfEmission )
-	MeshLightSampleCache[key] = brightness
+	if key ~= nil then MeshLightSampleCache[key] = brightness end
 	return brightness
 end
 
 local function cachedMeshAOSample( sx, sy, sz )
 	if not MC.SampleAmbientOcclusion then return false end
 	local key = sampleCacheKey( sx, sy, sz )
-	local cached = MeshAOSampleCache[key]
-	if cached ~= nil then
-		MeshAOSampleHits = MeshAOSampleHits + 1
-		return cached
+	if key ~= nil then
+		local cached = MeshAOSampleCache[key]
+		if cached ~= nil then
+			MeshAOSampleHits = MeshAOSampleHits + 1
+			return cached
+		end
 	end
 	MeshAOSampleMisses = MeshAOSampleMisses + 1
 	local sample = MC.SampleAmbientOcclusion( sx, sy, sz )
 	local blocked = sample == true or sample == 1
-	MeshAOSampleCache[key] = blocked
+	if key ~= nil then MeshAOSampleCache[key] = blocked end
 	return blocked
 end
 
@@ -1458,6 +1487,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 	local bxo = chunk.cx * CS
 	local byo = chunk.cy * CS
 	local bzo = chunk.cz * MC.CH
+	setMeshSampleCacheOrigin( bxo, byo, bzo )
 	chunk.orients = chunk.orients or {}
 
 	local sectionBuffers = {}
@@ -1911,12 +1941,14 @@ end
 
 hook.Remove( "PostDrawOpaqueRenderables", "mc_draw_chunks" )
 hook.Remove( "PostDrawTranslucentRenderables", "mc_draw_chunks" )
-hook.Add( "PostDrawOpaqueRenderables", "mc_draw_chunks", function()
+hook.Add( "PostDrawOpaqueRenderables", "mc_draw_chunks", function( bDepth, bSky, bSky3D )
+	if bSky or bSky3D then return end
 	if not meshRenderingEnabled() then return end
 	drawAllChunks( MC.Meshes, MC.DrawChunk )
 end )
 -- translucent blocks only; the bulk of the world stays in the opaque pass above
-hook.Add( "PostDrawTranslucentRenderables", "mc_draw_chunks", function()
+hook.Add( "PostDrawTranslucentRenderables", "mc_draw_chunks", function( bDepth, bSky, bSky3D )
+	if bSky or bSky3D then return end
 	if not meshRenderingEnabled() then return end
 	drawAllChunks( MC.MeshesTrans, MC.DrawChunkTranslucent )
 end )

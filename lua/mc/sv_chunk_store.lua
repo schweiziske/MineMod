@@ -214,7 +214,7 @@ local function baseChunkEntriesForRuntimeKey( key )
 	for sz = minSZ, maxSZ do
 		for sy = minSY, maxSY do
 			for sx = minSX, maxSX do
-				local savedKey = MC.ChunkKey( sx, sy, sz )
+				local savedKey = MC.ChunkKeyString( sx, sy, sz )
 				local entry = Store.ChunkIndex and Store.ChunkIndex[savedKey]
 				if istable( entry ) then
 					entries[#entries + 1] = { key = savedKey, entry = entry }
@@ -313,7 +313,8 @@ end
 
 function Store.ApplyOverlayToChunk( chunk )
 	if not chunk or not chunk.key then return chunk end
-	local edits = Store.EditChunks and Store.EditChunks[chunk.key]
+	local editKey = tostring( chunk.key )
+	local edits = Store.EditChunks and ( Store.EditChunks[editKey] or Store.EditChunks[chunk.key] or Store.EditChunks[MC.ChunkKeyString( chunk.key )] )
 	if not istable( edits ) then return chunk end
 	for li, edit in pairs( edits ) do
 		if istable( edit ) then
@@ -402,7 +403,7 @@ function Store.HydrateChunkNow( key, priority )
 		local loadedChunk, touched = loadBaseChunkIntoWorld( key, record )
 		chunk = chunk or loadedChunk
 		for touchedKey in pairs( touched or {} ) do
-			Store.LoadedKeys[touchedKey] = true
+			Store.LoadedKeys[tostring( touchedKey )] = true
 		end
 	end
 
@@ -410,7 +411,7 @@ function Store.HydrateChunkNow( key, priority )
 		chunk = ensureChunkForKey( key )
 		Store.ApplyOverlayToChunk( chunk )
 		if chunk and chunk.count <= 0 then
-			MC.World[key] = nil
+			MC.World[MC.CanonicalChunkKey( key )] = nil
 			chunk = nil
 		end
 	end
@@ -454,7 +455,7 @@ end
 function Store.RecordEdit( bx, by, bz, id, orient )
 	if not Store.IsLazyWorld() then return end
 	local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
-	local key = MC.ChunkKey( cx, cy, cz )
+	local key = tostring( MC.ChunkKey( cx, cy, cz ) )
 	local edits = Store.EditChunks[key]
 	if not edits then
 		edits = {}

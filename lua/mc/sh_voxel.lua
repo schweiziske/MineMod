@@ -20,16 +20,110 @@ local PLACE_REJECT_PLAYER_PADDING = math.max( 2, BS * 0.08 )
 MC.World = MC.World or {}
 
 local floor = math.floor
+local bit_bor, bit_band = bit.bor, bit.band
+local bit_lshift, bit_rshift = bit.lshift, bit.rshift
+
+local CHUNK_KEY_X_BITS = 13
+local CHUNK_KEY_Y_BITS = 13
+local CHUNK_KEY_Z_BITS = 6
+local CHUNK_KEY_X_SIZE = bit_lshift( 1, CHUNK_KEY_X_BITS )
+local CHUNK_KEY_Y_SIZE = bit_lshift( 1, CHUNK_KEY_Y_BITS )
+local CHUNK_KEY_Z_SIZE = bit_lshift( 1, CHUNK_KEY_Z_BITS )
+local CHUNK_KEY_X_BIAS = CHUNK_KEY_X_SIZE / 2
+local CHUNK_KEY_Y_BIAS = CHUNK_KEY_Y_SIZE / 2
+local CHUNK_KEY_Z_BIAS = CHUNK_KEY_Z_SIZE / 2
+local CHUNK_KEY_Y_SHIFT = CHUNK_KEY_X_BITS
+local CHUNK_KEY_Z_SHIFT = CHUNK_KEY_X_BITS + CHUNK_KEY_Y_BITS
+local CHUNK_KEY_X_MASK = CHUNK_KEY_X_SIZE - 1
+local CHUNK_KEY_Y_MASK = CHUNK_KEY_Y_SIZE - 1
+local CHUNK_KEY_Z_MASK = CHUNK_KEY_Z_SIZE - 1
+local CHUNK_KEY_CELL_STRIDE = CS2 * CH
+local CHUNK_COLUMN_BITS = 16
+local CHUNK_COLUMN_SIZE = bit_lshift( 1, CHUNK_COLUMN_BITS )
+local CHUNK_COLUMN_BIAS = CHUNK_COLUMN_SIZE / 2
+local CHUNK_COLUMN_MASK = CHUNK_COLUMN_SIZE - 1
+local CELL_COLUMN_STRIDE = CS2
 
 --------------------------------------------------------------------------- keys
-function MC.ChunkKey( cx, cy, cz )
+local function legacyChunkKeyString( cx, cy, cz )
 	return cx .. ":" .. cy .. ":" .. cz
+end
+
+local function packedCoord( value, bias, size )
+	value = floor( tonumber( value ) or 0 )
+	if value < -bias or value >= size - bias then return nil end
+	return value + bias, value
+end
+
+function MC.ChunkKey( cx, cy, cz )
+	local x, nx = packedCoord( cx, CHUNK_KEY_X_BIAS, CHUNK_KEY_X_SIZE )
+	local y, ny = packedCoord( cy, CHUNK_KEY_Y_BIAS, CHUNK_KEY_Y_SIZE )
+	local z, nz = packedCoord( cz, CHUNK_KEY_Z_BIAS, CHUNK_KEY_Z_SIZE )
+	if not x or not y or not z then
+		return legacyChunkKeyString( nx or floor( tonumber( cx ) or 0 ), ny or floor( tonumber( cy ) or 0 ), nz or floor( tonumber( cz ) or 0 ) )
+	end
+	return bit_bor( x, bit_lshift( y, CHUNK_KEY_Y_SHIFT ), bit_lshift( z, CHUNK_KEY_Z_SHIFT ) )
+end
+
+function MC.ChunkKeyString( keyOrCX, cy, cz )
+	if cy ~= nil and cz ~= nil then
+		return legacyChunkKeyString( floor( tonumber( keyOrCX ) or 0 ), floor( tonumber( cy ) or 0 ), floor( tonumber( cz ) or 0 ) )
+	end
+	local cx, ccy, ccz = MC.ChunkKeyToCoords( keyOrCX )
+	if not cx then return tostring( keyOrCX or "" ) end
+	return legacyChunkKeyString( cx, ccy, ccz )
+end
+
+local function packedChunkKeyToCoords( key )
+	key = tonumber( key )
+	if not key then return nil end
+	local x = bit_band( key, CHUNK_KEY_X_MASK ) - CHUNK_KEY_X_BIAS
+	local y = bit_band( bit_rshift( key, CHUNK_KEY_Y_SHIFT ), CHUNK_KEY_Y_MASK ) - CHUNK_KEY_Y_BIAS
+	local z = bit_band( bit_rshift( key, CHUNK_KEY_Z_SHIFT ), CHUNK_KEY_Z_MASK ) - CHUNK_KEY_Z_BIAS
+	return x, y, z
 end
 
 function MC.ChunkKeyToCoords( key )
 	local cx, cy, cz = string.match( tostring( key or "" ), "^(-?%d+):(-?%d+):(-?%d+)$" )
-	if not cx then return nil end
-	return tonumber( cx ), tonumber( cy ), tonumber( cz )
+	if cx then return tonumber( cx ), tonumber( cy ), tonumber( cz ) end
+	return packedChunkKeyToCoords( key )
+end
+
+function MC.CanonicalChunkKey( key )
+	if key == nil then return nil end
+	if type( key ) == "number" then return key end
+	local cx, cy, cz = MC.ChunkKeyToCoords( key )
+	if not cx then return key end
+	return MC.ChunkKey( cx, cy, cz )
+end
+
+function MC.CellKey( bx, by, bz )
+	local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
+	local chunkKey = MC.ChunkKey( cx, cy, cz )
+	if type( chunkKey ) == "number" then
+		return chunkKey * CHUNK_KEY_CELL_STRIDE + li
+	end
+	return chunkKey .. ":" .. li
+end
+
+function MC.ChunkColumnKey( cx, cy )
+	local x, nx = packedCoord( cx, CHUNK_COLUMN_BIAS, CHUNK_COLUMN_SIZE )
+	local y, ny = packedCoord( cy, CHUNK_COLUMN_BIAS, CHUNK_COLUMN_SIZE )
+	if not x or not y then
+		return legacyChunkKeyString( nx or floor( tonumber( cx ) or 0 ), ny or floor( tonumber( cy ) or 0 ), 0 )
+	end
+	return bit_bor( x, bit_lshift( y, CHUNK_COLUMN_BITS ) )
+end
+
+function MC.CellColumnKey( bx, by )
+	local cx, cy = floor( bx / CS ), floor( by / CS )
+	local lx, ly = bx - cx * CS, by - cy * CS
+	local columnKey = MC.ChunkColumnKey( cx, cy )
+	local li = lx + ly * CS
+	if type( columnKey ) == "number" then
+		return columnKey * CELL_COLUMN_STRIDE + li
+	end
+	return columnKey .. ":" .. li
 end
 
 local function normalizeChunkSpan( span )
@@ -405,7 +499,13 @@ end
 
 --------------------------------------------------------------------- chunk store
 function MC.GetChunkByKey( key )
-	return MC.World[key]
+	local chunk = MC.World[key]
+	if chunk ~= nil then return chunk end
+	local canonical = MC.CanonicalChunkKey and MC.CanonicalChunkKey( key ) or key
+	if canonical ~= key then return MC.World[canonical] end
+	local cx, cy, cz = MC.ChunkKeyToCoords( key )
+	if cx then return MC.World[legacyChunkKeyString( cx, cy, cz )] end
+	return nil
 end
 
 function MC.GetChunk( cx, cy, cz )
@@ -414,9 +514,13 @@ end
 
 function MC.EnsureChunk( cx, cy, cz )
 	local key = MC.ChunkKey( cx, cy, cz )
-	local c = MC.World[key]
+	local c = MC.GetChunkByKey( key )
 	if not c then
 		c = { cx = cx, cy = cy, cz = cz, key = key, blocks = {}, orients = {}, count = 0 }
+		MC.World[key] = c
+	elseif c.key ~= key then
+		if c.key ~= nil then MC.World[c.key] = nil end
+		c.key = key
 		MC.World[key] = c
 	end
 	c.cz = c.cz or cz

@@ -304,8 +304,8 @@ local function spawnPhysicsSubchunk( owner, index, group, convexes, pageIndex, r
 	subchunk.CollisionSubchunkKey = group.key
 	subchunk.CollisionPhysPage = pageIndex
 	if SERVER then
-		subchunk:SetNWString( "MCChunkKey", owner.ChunkKey )
-		subchunk:SetNWString( "MCSubchunkKey", group.key )
+		subchunk:SetNWString( "MCChunkKey", tostring( owner.ChunkKey ) )
+		subchunk:SetNWString( "MCSubchunkKey", tostring( group.key ) )
 		subchunk:SetNWInt( "MCPhysPage", pageIndex )
 	end
 	ensurePhysicsModel( subchunk )
@@ -325,8 +325,8 @@ local function spawnPhysicsSubchunk( owner, index, group, convexes, pageIndex, r
 	if CLIENT and created and subchunk.Spawn then subchunk:Spawn() end
 	if SERVER and subchunk.Activate then subchunk:Activate() end
 	if SERVER then
-		subchunk:SetNWString( "MCChunkKey", owner.ChunkKey )
-		subchunk:SetNWString( "MCSubchunkKey", group.key )
+		subchunk:SetNWString( "MCChunkKey", tostring( owner.ChunkKey ) )
+		subchunk:SetNWString( "MCSubchunkKey", tostring( group.key ) )
 		subchunk:SetNWInt( "MCPhysPage", pageIndex )
 	end
 	if CLIENT and not networkSubchunk then
@@ -523,7 +523,7 @@ function ENT:EnsureKey()
 	self.cx, self.cy, self.cz = cx, cy, cz
 	self.ChunkKey = MC.ChunkKey( cx, cy, cz )
 	if SERVER then
-		self:SetNWString( "MCChunkKey", self.ChunkKey )
+		self:SetNWString( "MCChunkKey", tostring( self.ChunkKey ) )
 	end
 	return self.ChunkKey
 end

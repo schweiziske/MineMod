@@ -117,16 +117,16 @@ local function syncClientPhysMetadata( ent )
 	local subkey = ent:GetNWString( "MCSubchunkKey", "" )
 	if key == "" or subkey == "" then return nil end
 
-	ent.ChunkKey = key
+	ent.ChunkKey = MC and MC.CanonicalChunkKey and MC.CanonicalChunkKey( key ) or key
 	ent.CollisionSubchunkKey = subkey
 	ent.CollisionPhysPage = ent:GetNWInt( "MCPhysPage", 0 )
 	if MC and MC.ChunkKeyToCoords then
-		ent.cx, ent.cy, ent.cz = MC.ChunkKeyToCoords( key )
+		ent.cx, ent.cy, ent.cz = MC.ChunkKeyToCoords( ent.ChunkKey )
 	end
-	if MC and MC.ChunkEnts and IsValid( MC.ChunkEnts[key] ) then
-		ent.ParentChunk = MC.ChunkEnts[key]
+	if MC and MC.ChunkEnts and IsValid( MC.ChunkEnts[ent.ChunkKey] ) then
+		ent.ParentChunk = MC.ChunkEnts[ent.ChunkKey]
 	end
-	return key, subkey
+	return ent.ChunkKey, subkey
 end
 
 local function clientPhysNeedsRebuild( ent )
