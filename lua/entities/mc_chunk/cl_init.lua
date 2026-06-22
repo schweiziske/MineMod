@@ -2,6 +2,36 @@ include( "shared.lua" )
 
 ENT.RenderGroup = RENDERGROUP_OPAQUE
 
+MC.ChunkEnts = MC.ChunkEnts or {}
+MC.Meshes = MC.Meshes or {}
+MC.MeshesTrans = MC.MeshesTrans or {}
+MC.MeshDirty = MC.MeshDirty or {}
+MC.MeshLightDirty = MC.MeshLightDirty or {}
+MC.MeshDirtyRateLimited = MC.MeshDirtyRateLimited or {}
+MC.PhysDirty = MC.PhysDirty or {}
+MC.PhysDirtyPriority = MC.PhysDirtyPriority or {}
+
+if not MC.MarkChunkDirty then
+	function MC.MarkChunkDirty( key )
+		if not key then return end
+		MC.MeshDirty[key] = true
+		MC.MeshLightDirty[key] = nil
+		MC.MeshDirtyRateLimited[key] = nil
+	end
+end
+
+if not MC.MarkChunkPhysDirty then
+	function MC.MarkChunkPhysDirty( key, priority )
+		if not key then return end
+		MC.PhysDirty[key] = true
+		if priority then
+			MC.PhysDirtyPriority[key] = true
+		else
+			MC.PhysDirtyPriority[key] = nil
+		end
+	end
+end
+
 function ENT:Initialize()
 	self:SetModel( "models/hunter/blocks/cube025x025x025.mdl" )
 	self:DrawShadow( false )
