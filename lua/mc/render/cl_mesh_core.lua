@@ -350,6 +350,12 @@ local function meshPerfAddKindMS( perf, kind, startTime )
 	end
 end
 
+local function shouldStoreBlockEmissionCache( kind, vertexCount )
+	if vertexCount <= 0 then return false end
+	if kind == "fullCube" and vertexCount <= 12 then return false end
+	return true
+end
+
 local function publishMeshPerfStats( perf )
 	local stats = MC.LightPerfStats
 	if not stats or not perf then return end
@@ -1770,14 +1776,20 @@ function MC.BuildChunkMesh( key, sectionIndex )
 			end
 		end
 		local emittedVertices = cur.nv
-		local blockRecord = MC.StoreBlockEmissionCache( key, blockSectionIndex, li, id, orient, meshLightStyle, {
+		local blockRecord = {
 			verts = cur.verts,
 			light = cur.light,
 			vertexCount = emittedVertices,
 			material = targetBuffer.material,
 			translucent = targetBuffer.translucent,
 			kind = emitKind,
-		} )
+		}
+		if shouldStoreBlockEmissionCache( emitKind, emittedVertices ) then
+			blockRecord = MC.StoreBlockEmissionCache( key, blockSectionIndex, li, id, orient, meshLightStyle, blockRecord )
+		else
+			MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
+			if MC.ClearBlockCacheDirtySlot then MC.ClearBlockCacheDirtySlot( key, blockSectionIndex, li ) end
+		end
 		MC.AppendCachedBlockEmission( blockRecord, targetBuffer, flush, meshPerf, C.VERT_LIMIT )
 		if emittedVertices > 0 then
 			meshPerf.blocksRendered = meshPerf.blocksRendered + 1

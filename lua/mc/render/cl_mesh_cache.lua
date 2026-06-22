@@ -245,6 +245,11 @@ local function clearBlockDirtySlot( store, key, sectionIndex, li )
 	pruneBlockTable( store, key, sectionIndex )
 end
 
+function MC.ClearBlockCacheDirtySlot( key, sectionIndex, li )
+	clearBlockDirtySlot( MC.MeshBlockEmitDirty, key, sectionIndex, li )
+	clearBlockDirtySlot( MC.MeshBlockLightDirty, key, sectionIndex, li )
+end
+
 function MC.ClearSectionBlockEmitCache( key, sectionIndex )
 	MC.ForgetBlockEmitCacheSlot( key, sectionIndex )
 end
@@ -379,8 +384,7 @@ function MC.StoreBlockEmissionCache( key, sectionIndex, li, id, orient, lightSty
 	record.vertexCount = record.vertexCount or #( record.verts or {} )
 	if record.vertexCount <= 0 then
 		MC.DropBlockEmitCacheRecord( key, sectionIndex, li )
-		clearBlockDirtySlot( MC.MeshBlockEmitDirty, key, sectionIndex, li )
-		clearBlockDirtySlot( MC.MeshBlockLightDirty, key, sectionIndex, li )
+		MC.ClearBlockCacheDirtySlot( key, sectionIndex, li )
 		return nil
 	end
 
@@ -398,8 +402,7 @@ function MC.StoreBlockEmissionCache( key, sectionIndex, li, id, orient, lightSty
 	section[li] = record
 	MC.TouchBlockEmitCacheSection( key, sectionIndex )
 
-	clearBlockDirtySlot( MC.MeshBlockEmitDirty, key, sectionIndex, li )
-	clearBlockDirtySlot( MC.MeshBlockLightDirty, key, sectionIndex, li )
+	MC.ClearBlockCacheDirtySlot( key, sectionIndex, li )
 	return record
 end
 
