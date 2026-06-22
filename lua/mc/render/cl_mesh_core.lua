@@ -313,13 +313,21 @@ local function newMeshPerfStats()
 	}
 end
 
+local function meshPerfElapsedMS( startTime )
+	return ( SysTime() - startTime ) * 1000
+end
+
+local function meshPerfRoundMS( value )
+	return math.Round( value or 0, 3 )
+end
+
 local function meshPerfMS( startTime )
-	return math.Round( ( SysTime() - startTime ) * 1000, 3 )
+	return meshPerfRoundMS( meshPerfElapsedMS( startTime ) )
 end
 
 local function meshPerfAdd( perf, field, startTime )
 	if not perf or not field or not startTime then return end
-	perf[field] = math.Round( ( perf[field] or 0 ) + meshPerfMS( startTime ), 3 )
+	perf[field] = ( perf[field] or 0 ) + meshPerfElapsedMS( startTime )
 end
 
 local function meshPerfAddBlockKind( perf, kind )
@@ -336,17 +344,17 @@ local function meshPerfAddBlockKind( perf, kind )
 	end
 end
 
-local function meshPerfAddKindMS( perf, kind, startTime )
+local function meshPerfAddKindDuration( perf, kind, durationMS )
 	if kind == "fullCube" then
-		meshPerfAdd( perf, "fullCubeMS", startTime )
+		perf.fullCubeMS = perf.fullCubeMS + durationMS
 	elseif kind == "model" then
-		meshPerfAdd( perf, "modelMS", startTime )
+		perf.modelMS = perf.modelMS + durationMS
 	elseif kind == "liquid" then
-		meshPerfAdd( perf, "liquidMS", startTime )
+		perf.liquidMS = perf.liquidMS + durationMS
 	elseif kind == "cross" then
-		meshPerfAdd( perf, "crossMS", startTime )
+		perf.crossMS = perf.crossMS + durationMS
 	else
-		meshPerfAdd( perf, "shapeMS", startTime )
+		perf.shapeMS = perf.shapeMS + durationMS
 	end
 end
 
@@ -374,22 +382,22 @@ local function publishMeshPerfStats( perf )
 	stats.lastMeshModelBlocks = perf.modelBlocks or 0
 	stats.lastMeshLiquidBlocks = perf.liquidBlocks or 0
 	stats.lastMeshCrossBlocks = perf.crossBlocks or 0
-	stats.lastMeshPrepMS = perf.prepMS or 0
-	stats.lastMeshIndexMS = perf.indexMS or 0
-	stats.lastMeshLoopMS = perf.loopMS or 0
-	stats.lastMeshEmitMS = perf.emitMS or 0
-	stats.lastMeshFullCubeMS = perf.fullCubeMS or 0
-	stats.lastMeshShapeMS = perf.shapeMS or 0
-	stats.lastMeshModelMS = perf.modelMS or 0
-	stats.lastMeshLiquidMS = perf.liquidMS or 0
-	stats.lastMeshCrossMS = perf.crossMS or 0
-	stats.lastMeshFlushMS = perf.flushMS or 0
-	stats.lastMeshMeshNewMS = perf.meshNewMS or 0
-	stats.lastMeshBuildTrianglesMS = perf.buildTriMS or 0
-	stats.lastMeshDestroyMS = perf.destroyMS or 0
-	stats.lastMeshCommitMS = perf.commitMS or 0
-	stats.lastMeshFlatMS = perf.flatMS or 0
-	stats.lastMeshRecolorMS = perf.recolorMS or 0
+	stats.lastMeshPrepMS = meshPerfRoundMS( perf.prepMS )
+	stats.lastMeshIndexMS = meshPerfRoundMS( perf.indexMS )
+	stats.lastMeshLoopMS = meshPerfRoundMS( perf.loopMS )
+	stats.lastMeshEmitMS = meshPerfRoundMS( perf.emitMS )
+	stats.lastMeshFullCubeMS = meshPerfRoundMS( perf.fullCubeMS )
+	stats.lastMeshShapeMS = meshPerfRoundMS( perf.shapeMS )
+	stats.lastMeshModelMS = meshPerfRoundMS( perf.modelMS )
+	stats.lastMeshLiquidMS = meshPerfRoundMS( perf.liquidMS )
+	stats.lastMeshCrossMS = meshPerfRoundMS( perf.crossMS )
+	stats.lastMeshFlushMS = meshPerfRoundMS( perf.flushMS )
+	stats.lastMeshMeshNewMS = meshPerfRoundMS( perf.meshNewMS )
+	stats.lastMeshBuildTrianglesMS = meshPerfRoundMS( perf.buildTriMS )
+	stats.lastMeshDestroyMS = meshPerfRoundMS( perf.destroyMS )
+	stats.lastMeshCommitMS = meshPerfRoundMS( perf.commitMS )
+	stats.lastMeshFlatMS = meshPerfRoundMS( perf.flatMS )
+	stats.lastMeshRecolorMS = meshPerfRoundMS( perf.recolorMS )
 end
 
 local function minecraftSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
@@ -602,6 +610,7 @@ MC.PhysDirty = MC.PhysDirty or {}  -- key -> true while a clientside collision r
 MC.PhysDirtyPriority = MC.PhysDirtyPriority or {} -- key -> true for priority rebuild diagnostics
 MC.PhysDirtyBulk = MC.PhysDirtyBulk or {} -- key -> true when bulk client collision rebuild is throttled
 MC.PhysDirtyBulkOrder = MC.PhysDirtyBulkOrder or {}
+MC.PhysDirtyBulkOrderHead = MC.PhysDirtyBulkOrderHead or 1
 MC.ClientPhysRetryPending = MC.ClientPhysRetryPending or {}
 MC.ClientPhysRetryAttempts = MC.ClientPhysRetryAttempts or {}
 MC.RenderStats = MC.RenderStats or {}
@@ -1297,6 +1306,11 @@ function MC.BuildChunkMesh( key, sectionIndex )
 		return { verts = {}, light = {}, nv = 0, material = material, translucent = translucent == true, cacheOnly = true }
 	end
 
+	local function prepareBlockCacheBuffer( targetBuffer )
+		cur = newBlockCacheBuffer( targetBuffer.material, targetBuffer.translucent )
+		return true
+	end
+
 	local function buffersForLocal( lx, ly, lz )
 		local index = MC.RenderSectionIndexForLocal( lx, ly, lz )
 		if sectionIndex and index ~= sectionIndex then return nil end
@@ -1648,23 +1662,42 @@ function MC.BuildChunkMesh( key, sectionIndex )
 		end
 
 		meshPerf.blockCacheMisses = meshPerf.blockCacheMisses + 1
-		cur = newBlockCacheBuffer( targetBuffer.material, targetBuffer.translucent )
+		cur = nil
 
 		local emitStart = SysTime()
 		local emitKind = "shape"
+		local directEmitCheapFullCube = false
+		local directEmitVertexCount = 0
 		local b = blocksById[id]
 		if b and b.shape == "cross" then
 			emitKind = "cross"
+			prepareBlockCacheBuffer( targetBuffer )
 			emitCrossBlock( id, bx, by, bz, wx, wy, wz )
-		elseif b and b.shape == "model" and not ( ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) ) or ( MC.IsWallBlock and MC.IsWallBlock( id ) ) or b.connection == "pipe6" ) and emitModelBlock( b, orient, bx, by, bz, wx, wy, wz ) then
+		elseif b and b.shape == "model" and not ( ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) ) or ( MC.IsWallBlock and MC.IsWallBlock( id ) ) or b.connection == "pipe6" ) and prepareBlockCacheBuffer( targetBuffer ) and emitModelBlock( b, orient, bx, by, bz, wx, wy, wz ) then
 			emitKind = "model"
 			-- rendered from exact Minecraft model quads; boxes remain for collision/outline
-		elseif isLiquidBlock( id ) and emitLiquidBlock( id, orient, bx, by, bz, wx, wy, wz ) then
+		elseif isLiquidBlock( id ) and prepareBlockCacheBuffer( targetBuffer ) and emitLiquidBlock( id, orient, bx, by, bz, wx, wy, wz ) then
 			emitKind = "liquid"
 			-- rendered with Minecraft fluid surface height/offsets instead of full cube faces
 		elseif MC.BlockIsFullCube and blockIsFullCube and blockIsFullCube( id, orient ) then
 			emitKind = "fullCube"
 			local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
+			local visibleFaceCount = 0
+			for f = 1, 6 do
+				local face = C.FACES[f]
+				local o = face.off
+				if visibleAt( id, lx + o[1], ly + o[2], lz + o[3], bx + o[1], by + o[2], bz + o[3] ) then
+					visibleFaceCount = visibleFaceCount + 1
+				end
+			end
+			directEmitVertexCount = visibleFaceCount * 6
+			directEmitCheapFullCube = not shouldStoreBlockEmissionCache( emitKind, directEmitVertexCount )
+			if directEmitCheapFullCube then
+				if targetBuffer.nv + directEmitVertexCount >= C.VERT_LIMIT then flush( targetBuffer ) end
+				cur = targetBuffer
+			else
+				prepareBlockCacheBuffer( targetBuffer )
+			end
 			for f = 1, 6 do
 				local face = C.FACES[f]
 				local o = face.off
@@ -1711,6 +1744,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 			-- fence/pane/wall/pipe boxes come from the runtime connection logic, so their
 			-- indices do not line up with the generator's static boxFaces list;
 			-- only the centre post (box 1) may take static face data
+			prepareBlockCacheBuffer( targetBuffer )
 			local isPipe6Shape = b and b.connection == "pipe6"
 			local isConnShape = ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) ) or ( MC.IsWallBlock and MC.IsWallBlock( id ) ) or isPipe6Shape
 			local boxes = blockBoxes and blockBoxes( id, orient, bx, by, bz ) or nil
@@ -1775,28 +1809,34 @@ function MC.BuildChunkMesh( key, sectionIndex )
 				end
 			end
 		end
-		local emittedVertices = cur.nv
-		local blockRecord = {
-			verts = cur.verts,
-			light = cur.light,
-			vertexCount = emittedVertices,
-			material = targetBuffer.material,
-			translucent = targetBuffer.translucent,
-			kind = emitKind,
-		}
-		if shouldStoreBlockEmissionCache( emitKind, emittedVertices ) then
-			blockRecord = MC.StoreBlockEmissionCache( key, blockSectionIndex, li, id, orient, meshLightStyle, blockRecord )
-		else
+		local emittedVertices = directEmitCheapFullCube and directEmitVertexCount or ( cur and cur.nv or 0 )
+		if directEmitCheapFullCube then
 			MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
 			if MC.ClearBlockCacheDirtySlot then MC.ClearBlockCacheDirtySlot( key, blockSectionIndex, li ) end
+		else
+			local blockRecord = {
+				verts = cur.verts,
+				light = cur.light,
+				vertexCount = emittedVertices,
+				material = targetBuffer.material,
+				translucent = targetBuffer.translucent,
+				kind = emitKind,
+			}
+			if shouldStoreBlockEmissionCache( emitKind, emittedVertices ) then
+				blockRecord = MC.StoreBlockEmissionCache( key, blockSectionIndex, li, id, orient, meshLightStyle, blockRecord )
+			else
+				MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
+				if MC.ClearBlockCacheDirtySlot then MC.ClearBlockCacheDirtySlot( key, blockSectionIndex, li ) end
+			end
+			MC.AppendCachedBlockEmission( blockRecord, targetBuffer, flush, meshPerf, C.VERT_LIMIT )
 		end
-		MC.AppendCachedBlockEmission( blockRecord, targetBuffer, flush, meshPerf, C.VERT_LIMIT )
 		if emittedVertices > 0 then
 			meshPerf.blocksRendered = meshPerf.blocksRendered + 1
 		end
 		meshPerfAddBlockKind( meshPerf, emitKind )
-		meshPerfAdd( meshPerf, "emitMS", emitStart )
-		meshPerfAddKindMS( meshPerf, emitKind, emitStart )
+		local emitMS = meshPerfElapsedMS( emitStart )
+		meshPerf.emitMS = meshPerf.emitMS + emitMS
+		meshPerfAddKindDuration( meshPerf, emitKind, emitMS )
 	end
 	meshPerfAdd( meshPerf, "loopMS", loopStart )
 

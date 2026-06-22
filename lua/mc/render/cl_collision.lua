@@ -43,6 +43,7 @@ function MC.ResetClientCollisionState()
 	MC.PhysDirtyPriority = {}
 	MC.PhysDirtyBulk = {}
 	MC.PhysDirtyBulkOrder = {}
+	MC.PhysDirtyBulkOrderHead = 1
 	MC.ClientPhysRetryPending = {}
 	MC.ClientPhysRetryAttempts = {}
 	MC.ClientPhysBuiltSignatures = {}
@@ -483,6 +484,7 @@ function MC.RefreshClientCollisionInterest( force )
 			clearClientPhysBuildState( key )
 		end
 		MC.PhysDirtyBulkOrder = {}
+		MC.PhysDirtyBulkOrderHead = 1
 		MC.ClientCollisionAABBDebugBoxes = {}
 		return
 	end
@@ -741,6 +743,7 @@ function MC.MarkChunkPhysDirtyBulk( key )
 	MC.PhysDirtyPriority[key] = nil
 	MC.PhysDirtyBulk = MC.PhysDirtyBulk or {}
 	MC.PhysDirtyBulkOrder = MC.PhysDirtyBulkOrder or {}
+	MC.PhysDirtyBulkOrderHead = MC.PhysDirtyBulkOrderHead or 1
 	if not MC.PhysDirtyBulk[key] then
 		MC.PhysDirtyBulk[key] = true
 		MC.PhysDirtyBulkOrder[#MC.PhysDirtyBulkOrder + 1] = key

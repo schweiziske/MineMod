@@ -187,18 +187,38 @@ local function flushBulkCollisionQueue()
 	local now = CurTime()
 	if now < ( MC.NextBulkCollisionRebuildAt or 0 ) then return end
 	local order = MC.PhysDirtyBulkOrder or {}
+	local head = MC.PhysDirtyBulkOrderHead or 1
+	local tail = #order
 	local bulk = MC.PhysDirtyBulk or {}
 	local limit = bulkCollisionChunksPerInterval()
 	local built = 0
 
-	while built < limit and #order > 0 do
-		local key = table.remove( order, 1 )
+	while built < limit and head <= tail do
+		local key = order[head]
+		head = head + 1
 		if bulk[key] and MC.PhysDirty[key] then
 			MC.RebuildChunkPhys( key, MC.ClientCollisionEnabled and MC.ClientCollisionEnabled() or false )
 			built = built + 1
 		else
 			bulk[key] = nil
 		end
+	end
+
+	if head > tail then
+		MC.PhysDirtyBulkOrder = {}
+		MC.PhysDirtyBulkOrderHead = 1
+	elseif head > 64 and head > tail * 0.5 then
+		local n = 0
+		for i = head, tail do
+			n = n + 1
+			order[n] = order[i]
+		end
+		for i = n + 1, tail do
+			order[i] = nil
+		end
+		MC.PhysDirtyBulkOrderHead = 1
+	else
+		MC.PhysDirtyBulkOrderHead = head
 	end
 
 	if built > 0 then
