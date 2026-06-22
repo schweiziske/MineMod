@@ -20,6 +20,7 @@ MC.PhysDirty = MC.PhysDirty or {}
 MC.PhysDirtyPriority = MC.PhysDirtyPriority or {}
 MC.PhysDirtyBulk = MC.PhysDirtyBulk or {}
 MC.PhysDirtyBulkOrder = MC.PhysDirtyBulkOrder or {}
+MC.PhysDirtyBulkOrderHead = MC.PhysDirtyBulkOrderHead or 1
 MC.MeshBlockEmitCache = MC.MeshBlockEmitCache or {} -- key -> sectionIndex -> local block index -> emitted vertices/light
 MC.MeshBlockEmitDirty = MC.MeshBlockEmitDirty or {} -- key -> sectionIndex -> local block index -> true
 MC.MeshBlockLightDirty = MC.MeshBlockLightDirty or {} -- key -> sectionIndex -> local block index -> true
@@ -219,6 +220,7 @@ if not MC.MarkChunkPhysDirtyBulk then
 		MC.PhysDirtyPriority[key] = nil
 		MC.PhysDirtyBulk[key] = true
 		MC.PhysDirtyBulkOrder[#MC.PhysDirtyBulkOrder + 1] = key
+		MC.PhysDirtyBulkOrderHead = MC.PhysDirtyBulkOrderHead or 1
 	end
 end
 
@@ -412,13 +414,30 @@ function MC.AppendCachedBlockEmission( record, buf, flushFn, meshPerf, vertexLim
 	local light = record.light or {}
 	local vertexCount = record.vertexCount or #verts
 	vertexLimit = vertexLimit or 64998
+	local outVerts = buf.verts
+	local outLight = buf.light
+	local nv = buf.nv or 0
+	local pushed = 0
 	for i = 1, vertexCount do
-		local nv = buf.nv + 1
-		buf.nv = nv
-		buf.verts[nv] = verts[i]
-		buf.light[nv] = light[i]
-		if meshPerf then meshPerf.pushedVertices = ( meshPerf.pushedVertices or 0 ) + 1 end
-		if nv >= vertexLimit and flushFn then flushFn( buf ) end
+		nv = nv + 1
+		outVerts[nv] = verts[i]
+		outLight[nv] = light[i]
+		pushed = pushed + 1
+		if nv >= vertexLimit and flushFn then
+			buf.nv = nv
+			if meshPerf and pushed > 0 then
+				meshPerf.pushedVertices = ( meshPerf.pushedVertices or 0 ) + pushed
+				pushed = 0
+			end
+			flushFn( buf )
+			outVerts = buf.verts
+			outLight = buf.light
+			nv = buf.nv or 0
+		end
+	end
+	buf.nv = nv
+	if meshPerf and pushed > 0 then
+		meshPerf.pushedVertices = ( meshPerf.pushedVertices or 0 ) + pushed
 	end
 	return vertexCount
 end
