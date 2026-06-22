@@ -775,6 +775,9 @@ function MC.MarkLightSectionsDirtyForChangedCells( changed )
 	local dirty = {}
 	local dirtyCount = 0
 	for _, cell in ipairs( changed and changed.list or {} ) do
+		if MC.MarkLightCellBlockDirty then
+			MC.MarkLightCellBlockDirty( cell[1], cell[2], cell[3] )
+		end
 		if MC.MarkLightCellDirty then
 			for i = 1, #LIGHT_DIRTY_MESH_NEIGHBORS do
 				local off = LIGHT_DIRTY_MESH_NEIGHBORS[i]

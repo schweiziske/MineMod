@@ -1,0 +1,468 @@
+MC = MC or {}
+
+local RENDER_SECTION_SIZE = 8
+local RENDER_SECTIONS_XY = math.ceil( MC.CS / RENDER_SECTION_SIZE )
+local DEFAULT_GEOMETRY_CACHE_SECTIONS = 384
+local DEFAULT_BLOCK_EMIT_CACHE_SECTIONS = 1536
+
+MC.Meshes = MC.Meshes or {}
+MC.MeshesTrans = MC.MeshesTrans or {}
+MC.MeshSections = MC.MeshSections or {}
+MC.MeshSectionGeometry = MC.MeshSectionGeometry or {}
+MC.MeshSectionGeometryLRU = MC.MeshSectionGeometryLRU or {}
+MC.MeshSectionGeometryLRUClock = MC.MeshSectionGeometryLRUClock or 0
+MC.MeshDirty = MC.MeshDirty or {}
+MC.MeshLightDirty = MC.MeshLightDirty or {}
+MC.MeshDirtyRateLimited = MC.MeshDirtyRateLimited or {}
+MC.ChunkEnts = MC.ChunkEnts or {}
+MC.PhysDirty = MC.PhysDirty or {}
+MC.PhysDirtyPriority = MC.PhysDirtyPriority or {}
+MC.PhysDirtyBulk = MC.PhysDirtyBulk or {}
+MC.PhysDirtyBulkOrder = MC.PhysDirtyBulkOrder or {}
+MC.MeshBlockEmitCache = MC.MeshBlockEmitCache or {} -- key -> sectionIndex -> local block index -> emitted vertices/light
+MC.MeshBlockEmitDirty = MC.MeshBlockEmitDirty or {} -- key -> sectionIndex -> local block index -> true
+MC.MeshBlockLightDirty = MC.MeshBlockLightDirty or {} -- key -> sectionIndex -> local block index -> true
+MC.MeshBlockEmitCacheLRU = MC.MeshBlockEmitCacheLRU or {}
+MC.MeshBlockEmitCacheLRUClock = MC.MeshBlockEmitCacheLRUClock or 0
+
+local function sectionSlotKey( key, sectionIndex )
+	return tostring( key ) .. "/" .. tostring( sectionIndex )
+end
+
+local function geometryCacheSectionLimit()
+	local cv = MC.MeshGeometryCacheSections
+	if not cv and CreateClientConVar then
+		cv = CreateClientConVar( "mc_mesh_geometry_cache_sections", tostring( DEFAULT_GEOMETRY_CACHE_SECTIONS ), true, false, "Max client render sections that keep Lua vertex/light data for light-only recolor; lower saves RAM" )
+		MC.MeshGeometryCacheSections = cv
+	end
+	local limit = cv and cv.GetInt and cv:GetInt() or DEFAULT_GEOMETRY_CACHE_SECTIONS
+	return math.max( 0, tonumber( limit ) or DEFAULT_GEOMETRY_CACHE_SECTIONS )
+end
+
+local function blockEmitCacheSectionLimit()
+	local cv = MC.MeshBlockEmitCacheSections
+	if not cv and CreateClientConVar then
+		cv = CreateClientConVar( "mc_mesh_block_emit_cache_sections", tostring( DEFAULT_BLOCK_EMIT_CACHE_SECTIONS ), true, false, "Max client render sections that keep per-block emitted vertex/light caches; lower saves RAM but increases full mesh emit work" )
+		MC.MeshBlockEmitCacheSections = cv
+	end
+	local limit = cv and cv.GetInt and cv:GetInt() or DEFAULT_BLOCK_EMIT_CACHE_SECTIONS
+	return math.max( 0, tonumber( limit ) or DEFAULT_BLOCK_EMIT_CACHE_SECTIONS )
+end
+
+function MC.ForgetMeshSectionGeometryCacheSlot( key, sectionIndex )
+	if not key or not sectionIndex then return end
+	MC.MeshSectionGeometryLRU[sectionSlotKey( key, sectionIndex )] = nil
+	local sections = MC.MeshSectionGeometry[key]
+	if sections then
+		sections[sectionIndex] = nil
+		if next( sections ) == nil then MC.MeshSectionGeometry[key] = nil end
+	end
+end
+
+function MC.ForgetChunkMeshSectionGeometryCache( key )
+	if not key then return end
+	for slot, entry in pairs( MC.MeshSectionGeometryLRU ) do
+		if entry and entry.key == key then MC.MeshSectionGeometryLRU[slot] = nil end
+	end
+	MC.MeshSectionGeometry[key] = nil
+end
+
+function MC.ClearChunkMeshSectionGeometryLRU( key )
+	if not key then return end
+	for slot, entry in pairs( MC.MeshSectionGeometryLRU ) do
+		if entry and entry.key == key then MC.MeshSectionGeometryLRU[slot] = nil end
+	end
+end
+
+function MC.TouchMeshSectionGeometryCache( key, sectionIndex )
+	if not key or not sectionIndex then return end
+	MC.MeshSectionGeometryLRUClock = ( MC.MeshSectionGeometryLRUClock or 0 ) + 1
+	MC.MeshSectionGeometryLRU[sectionSlotKey( key, sectionIndex )] = {
+		key = key,
+		sectionIndex = sectionIndex,
+		tick = MC.MeshSectionGeometryLRUClock,
+	}
+end
+
+function MC.PruneMeshSectionGeometryCache()
+	local limit = geometryCacheSectionLimit()
+	local lru = MC.MeshSectionGeometryLRU
+	while true do
+		local count, oldestSlot, oldestTick = 0, nil, nil
+		for slot, entry in pairs( lru ) do
+			local valid = entry and MC.MeshSectionGeometry[entry.key] and MC.MeshSectionGeometry[entry.key][entry.sectionIndex]
+			if valid then
+				count = count + 1
+				if not oldestTick or entry.tick < oldestTick then
+					oldestTick = entry.tick
+					oldestSlot = slot
+				end
+			else
+				lru[slot] = nil
+			end
+		end
+		if count <= limit or not oldestSlot then return end
+		local oldest = lru[oldestSlot]
+		if oldest then MC.ForgetMeshSectionGeometryCacheSlot( oldest.key, oldest.sectionIndex ) end
+	end
+end
+
+function MC.ForgetBlockEmitCacheSlot( key, sectionIndex )
+	if not key or not sectionIndex then return end
+	MC.MeshBlockEmitCacheLRU[sectionSlotKey( key, sectionIndex )] = nil
+	local cacheSections = MC.MeshBlockEmitCache[key]
+	if cacheSections then
+		cacheSections[sectionIndex] = nil
+		if next( cacheSections ) == nil then MC.MeshBlockEmitCache[key] = nil end
+	end
+	local dirtySections = MC.MeshBlockEmitDirty[key]
+	if dirtySections then
+		dirtySections[sectionIndex] = nil
+		if next( dirtySections ) == nil then MC.MeshBlockEmitDirty[key] = nil end
+	end
+	local lightDirtySections = MC.MeshBlockLightDirty[key]
+	if lightDirtySections then
+		lightDirtySections[sectionIndex] = nil
+		if next( lightDirtySections ) == nil then MC.MeshBlockLightDirty[key] = nil end
+	end
+end
+
+function MC.TouchBlockEmitCacheSection( key, sectionIndex )
+	if not key or not sectionIndex then return end
+	MC.MeshBlockEmitCacheLRUClock = ( MC.MeshBlockEmitCacheLRUClock or 0 ) + 1
+	MC.MeshBlockEmitCacheLRU[sectionSlotKey( key, sectionIndex )] = {
+		key = key,
+		sectionIndex = sectionIndex,
+		tick = MC.MeshBlockEmitCacheLRUClock,
+	}
+end
+
+function MC.PruneBlockEmitCache()
+	local limit = blockEmitCacheSectionLimit()
+	local lru = MC.MeshBlockEmitCacheLRU
+	while true do
+		local count, oldestSlot, oldestTick = 0, nil, nil
+		for slot, entry in pairs( lru ) do
+			local valid = entry and MC.MeshBlockEmitCache[entry.key] and MC.MeshBlockEmitCache[entry.key][entry.sectionIndex]
+			if valid then
+				count = count + 1
+				if not oldestTick or entry.tick < oldestTick then
+					oldestTick = entry.tick
+					oldestSlot = slot
+				end
+			else
+				lru[slot] = nil
+			end
+		end
+		if count <= limit or not oldestSlot then return end
+		local oldest = lru[oldestSlot]
+		if oldest then MC.ForgetBlockEmitCacheSlot( oldest.key, oldest.sectionIndex ) end
+	end
+end
+
+if not MC.MarkChunkDirty then
+	function MC.MarkChunkDirty( key )
+		if not key then return end
+		MC.MeshDirty[key] = true
+		MC.MeshLightDirty[key] = nil
+		MC.MeshDirtyRateLimited[key] = nil
+	end
+end
+
+if not MC.MarkChunkPhysDirty then
+	function MC.MarkChunkPhysDirty( key, priority )
+		if not key then return end
+		MC.PhysDirty[key] = true
+		if priority then
+			MC.PhysDirtyPriority[key] = true
+		else
+			MC.PhysDirtyPriority[key] = nil
+		end
+	end
+end
+
+if not MC.MarkChunkPhysDirtyBulk then
+	function MC.MarkChunkPhysDirtyBulk( key )
+		if not key then return end
+		MC.PhysDirty[key] = true
+		MC.PhysDirtyPriority[key] = nil
+		MC.PhysDirtyBulk[key] = true
+		MC.PhysDirtyBulkOrder[#MC.PhysDirtyBulkOrder + 1] = key
+	end
+end
+
+function MC.RenderSectionIndexForLocal( lx, ly, lz )
+	local sx = math.floor( lx / RENDER_SECTION_SIZE )
+	local sy = math.floor( ly / RENDER_SECTION_SIZE )
+	local sz = math.floor( lz / RENDER_SECTION_SIZE )
+	return sx + sy * RENDER_SECTIONS_XY + sz * RENDER_SECTIONS_XY * RENDER_SECTIONS_XY + 1
+end
+
+local function pruneBlockTable( store, key, sectionIndex )
+	local sections = store and store[key]
+	if not sections then return end
+	local section = sections[sectionIndex]
+	if section and next( section ) == nil then sections[sectionIndex] = nil end
+	if next( sections ) == nil then store[key] = nil end
+end
+
+local function clearBlockDirtySlot( store, key, sectionIndex, li )
+	local sections = store and store[key]
+	local section = sections and sections[sectionIndex]
+	if not section then return end
+	section[li] = nil
+	pruneBlockTable( store, key, sectionIndex )
+end
+
+function MC.ClearSectionBlockEmitCache( key, sectionIndex )
+	MC.ForgetBlockEmitCacheSlot( key, sectionIndex )
+end
+
+function MC.ClearSectionBlockEmitDirty( key, sectionIndex )
+	local dirtySections = MC.MeshBlockEmitDirty[key]
+	if dirtySections then
+		dirtySections[sectionIndex] = nil
+		if next( dirtySections ) == nil then MC.MeshBlockEmitDirty[key] = nil end
+	end
+end
+
+function MC.ClearSectionBlockLightDirty( key, sectionIndex )
+	local lightDirtySections = MC.MeshBlockLightDirty[key]
+	if not lightDirtySections then return end
+	lightDirtySections[sectionIndex] = nil
+	if next( lightDirtySections ) == nil then MC.MeshBlockLightDirty[key] = nil end
+end
+
+function MC.ClearChunkBlockEmitCache( key )
+	if not key then return end
+	for slot, entry in pairs( MC.MeshBlockEmitCacheLRU or {} ) do
+		if entry and entry.key == key then MC.MeshBlockEmitCacheLRU[slot] = nil end
+	end
+	MC.MeshBlockEmitCache[key] = nil
+	MC.MeshBlockEmitDirty[key] = nil
+	MC.MeshBlockLightDirty[key] = nil
+end
+
+local function cellToBlockDirtySlot( bx, by, bz )
+	local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
+	local key = MC.ChunkKey( cx, cy, cz )
+	local lx, ly, lz = MC.DecodeLocal( li )
+	return key, MC.RenderSectionIndexForLocal( lx, ly, lz ), li
+end
+
+function MC.MarkBlockEmitCacheDirty( bx, by, bz )
+	local key, sectionIndex, li = cellToBlockDirtySlot( bx, by, bz )
+	local cacheSections = MC.MeshBlockEmitCache[key]
+	local dirtySections = MC.MeshBlockEmitDirty[key]
+	if not cacheSections and not dirtySections and not ( MC.World and MC.World[key] ) then return end
+
+	local cacheSection = cacheSections and cacheSections[sectionIndex]
+	if cacheSection then
+		cacheSection[li] = nil
+		pruneBlockTable( MC.MeshBlockEmitCache, key, sectionIndex )
+	end
+
+	dirtySections = MC.MeshBlockEmitDirty[key]
+	if not dirtySections then
+		dirtySections = {}
+		MC.MeshBlockEmitDirty[key] = dirtySections
+	end
+	local dirtySection = dirtySections[sectionIndex]
+	if not dirtySection then
+		dirtySection = {}
+		dirtySections[sectionIndex] = dirtySection
+	end
+	dirtySection[li] = true
+
+	local lightDirtySection = MC.MeshBlockLightDirty[key] and MC.MeshBlockLightDirty[key][sectionIndex]
+	if lightDirtySection then
+		lightDirtySection[li] = nil
+		pruneBlockTable( MC.MeshBlockLightDirty, key, sectionIndex )
+	end
+end
+
+function MC.MarkBlockLightCacheDirty( bx, by, bz )
+	local key, sectionIndex, li = cellToBlockDirtySlot( bx, by, bz )
+	local cacheSections = MC.MeshBlockEmitCache[key]
+	local lightDirtySections = MC.MeshBlockLightDirty[key]
+	if not cacheSections and not lightDirtySections and not ( MC.World and MC.World[key] ) then return end
+
+	lightDirtySections = MC.MeshBlockLightDirty[key]
+	if not lightDirtySections then
+		lightDirtySections = {}
+		MC.MeshBlockLightDirty[key] = lightDirtySections
+	end
+	local lightDirtySection = lightDirtySections[sectionIndex]
+	if not lightDirtySection then
+		lightDirtySection = {}
+		lightDirtySections[sectionIndex] = lightDirtySection
+	end
+	lightDirtySection[li] = true
+end
+
+function MC.MarkLightCellBlockDirty( bx, by, bz )
+	for dz = -1, 1 do
+		for dy = -1, 1 do
+			for dx = -1, 1 do
+				MC.MarkBlockLightCacheDirty( bx + dx, by + dy, bz + dz )
+			end
+		end
+	end
+end
+
+function MC.GetBlockLightDirtySection( key, sectionIndex )
+	return MC.MeshBlockLightDirty[key] and MC.MeshBlockLightDirty[key][sectionIndex]
+end
+
+function MC.GetCachedBlockEmission( key, sectionIndex, li, id, orient )
+	local dirtySection = MC.MeshBlockEmitDirty[key] and MC.MeshBlockEmitDirty[key][sectionIndex]
+	if dirtySection and dirtySection[li] then return nil end
+	local section = MC.MeshBlockEmitCache[key] and MC.MeshBlockEmitCache[key][sectionIndex]
+	local record = section and section[li]
+	if not record then return nil end
+	if record.id ~= id or record.orient ~= ( orient or 0 ) then return nil end
+	if not record.verts or not record.light then return nil end
+	local vertexCount = record.vertexCount or #record.verts
+	if vertexCount ~= #record.verts or vertexCount ~= #record.light then return nil end
+	MC.TouchBlockEmitCacheSection( key, sectionIndex )
+	return record
+end
+
+function MC.GetCachedBlockEmissionByLocalIndex( key, sectionIndex, li )
+	local section = MC.MeshBlockEmitCache[key] and MC.MeshBlockEmitCache[key][sectionIndex]
+	return section and section[li] or nil
+end
+
+function MC.DropBlockEmitCacheRecord( key, sectionIndex, li )
+	local section = MC.MeshBlockEmitCache[key] and MC.MeshBlockEmitCache[key][sectionIndex]
+	if not section then return end
+	section[li] = nil
+	pruneBlockTable( MC.MeshBlockEmitCache, key, sectionIndex )
+end
+
+function MC.StoreBlockEmissionCache( key, sectionIndex, li, id, orient, lightStyle, record )
+	if not record then return nil end
+	record.id = id
+	record.orient = orient or 0
+	record.lightStyle = lightStyle
+	record.vertexCount = record.vertexCount or #( record.verts or {} )
+	if record.vertexCount <= 0 then
+		MC.DropBlockEmitCacheRecord( key, sectionIndex, li )
+		clearBlockDirtySlot( MC.MeshBlockEmitDirty, key, sectionIndex, li )
+		clearBlockDirtySlot( MC.MeshBlockLightDirty, key, sectionIndex, li )
+		return nil
+	end
+
+	local sections = MC.MeshBlockEmitCache[key]
+	if not sections then
+		sections = {}
+		MC.MeshBlockEmitCache[key] = sections
+	end
+	local section = sections[sectionIndex]
+	if not section then
+		section = {}
+		sections[sectionIndex] = section
+	end
+
+	section[li] = record
+	MC.TouchBlockEmitCacheSection( key, sectionIndex )
+
+	clearBlockDirtySlot( MC.MeshBlockEmitDirty, key, sectionIndex, li )
+	clearBlockDirtySlot( MC.MeshBlockLightDirty, key, sectionIndex, li )
+	return record
+end
+
+function MC.AppendCachedBlockEmission( record, buf, flushFn, meshPerf, vertexLimit )
+	if not record or not buf then return 0 end
+	local verts = record.verts or {}
+	local light = record.light or {}
+	local vertexCount = record.vertexCount or #verts
+	vertexLimit = vertexLimit or 64998
+	for i = 1, vertexCount do
+		local nv = buf.nv + 1
+		buf.nv = nv
+		buf.verts[nv] = verts[i]
+		buf.light[nv] = light[i]
+		if meshPerf then meshPerf.pushedVertices = ( meshPerf.pushedVertices or 0 ) + 1 end
+		if nv >= vertexLimit and flushFn then flushFn( buf ) end
+	end
+	return vertexCount
+end
+
+function MC.CachedBlockLightMetaKey( meta )
+	if not meta then return nil end
+	local shade = meta.shade
+	return tostring( shade and shade.r or 255 )
+		.. ":" .. tostring( shade and shade.g or 255 )
+		.. ":" .. tostring( shade and shade.b or 255 )
+		.. ":" .. tostring( shade and shade.a or 255 )
+		.. ":" .. tostring( meta.bx or 0 )
+		.. ":" .. tostring( meta.by or 0 )
+		.. ":" .. tostring( meta.bz or 0 )
+		.. ":" .. tostring( meta.id or 0 )
+		.. ":" .. tostring( meta.faceIndex or 0 )
+		.. ":" .. tostring( meta.cx or 0 )
+		.. ":" .. tostring( meta.cy or 0 )
+		.. ":" .. tostring( meta.cz or 0 )
+		.. ":" .. tostring( meta.selfEmission or 0 )
+end
+
+function MC.RecolorCachedBlockEmission( record, lightStyle, recolorFn )
+	if not record or not record.verts or not record.light or not recolorFn then return false end
+	local vertexCount = record.vertexCount or #record.verts
+	if vertexCount ~= #record.verts or vertexCount ~= #record.light then return false end
+	local colorCache = {}
+	for i = 1, vertexCount do
+		local meta = record.light[i]
+		if not meta then return false end
+		local key = MC.CachedBlockLightMetaKey( meta )
+		local color = key and colorCache[key] or nil
+		if not color then
+			color = recolorFn( meta, lightStyle )
+			if key then colorCache[key] = color end
+		end
+		record.verts[i].color = color
+	end
+	record.lightStyle = lightStyle
+	return true, vertexCount
+end
+
+local function clearRecordRecolorKeys( record )
+	local light = record and record.light
+	if not light then return end
+	for i = 1, #light do
+		local meta = light[i]
+		if meta then meta.recolorKey = nil end
+	end
+end
+
+function MC.ClearCachedBlockRecolorKeys()
+	for _, sections in pairs( MC.MeshSectionGeometry or {} ) do
+		for _, section in pairs( sections or {} ) do
+			for _, record in ipairs( section.opaque or {} ) do clearRecordRecolorKeys( record ) end
+			for _, record in ipairs( section.translucent or {} ) do clearRecordRecolorKeys( record ) end
+		end
+	end
+	for _, sections in pairs( MC.MeshBlockEmitCache or {} ) do
+		for _, section in pairs( sections or {} ) do
+			for _, record in pairs( section or {} ) do clearRecordRecolorKeys( record ) end
+		end
+	end
+end
+
+MC.ClearCachedBlockRecolorKeys()
+
+function MC.PruneEmptyBlockEmissionCacheRecords()
+	for key, sections in pairs( MC.MeshBlockEmitCache or {} ) do
+		for sectionIndex, section in pairs( sections or {} ) do
+			for li, record in pairs( section or {} ) do
+				if not record or ( record.vertexCount or #( record.verts or {} ) ) <= 0 then
+					section[li] = nil
+				end
+			end
+			pruneBlockTable( MC.MeshBlockEmitCache, key, sectionIndex )
+		end
+	end
+end
+
+MC.PruneEmptyBlockEmissionCacheRecords()
