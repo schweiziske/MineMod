@@ -525,7 +525,7 @@ do
 end
 
 local function newChangedLightCells()
-	return { keys = {}, list = {}, count = 0 }
+	return { keys = {}, x = {}, y = {}, z = {}, count = 0 }
 end
 
 local function noteChangedLightCell( changed, bx, by, bz )
@@ -534,7 +534,9 @@ local function noteChangedLightCell( changed, bx, by, bz )
 	if changed.keys[key] then return end
 	changed.keys[key] = true
 	changed.count = changed.count + 1
-	changed.list[changed.count] = { bx, by, bz }
+	changed.x[changed.count] = bx
+	changed.y[changed.count] = by
+	changed.z[changed.count] = bz
 end
 
 local function setBlockLightChanged( changed, bx, by, bz, level )
@@ -774,14 +776,17 @@ end
 function MC.MarkLightSectionsDirtyForChangedCells( changed )
 	local dirty = {}
 	local dirtyCount = 0
-	for _, cell in ipairs( changed and changed.list or {} ) do
+	local count = changed and changed.count or 0
+	local xs, ys, zs = changed and changed.x or {}, changed and changed.y or {}, changed and changed.z or {}
+	for c = 1, count do
+		local bx, by, bz = xs[c], ys[c], zs[c]
 		if MC.MarkLightCellBlockDirty then
-			MC.MarkLightCellBlockDirty( cell[1], cell[2], cell[3] )
+			MC.MarkLightCellBlockDirty( bx, by, bz )
 		end
 		if MC.MarkLightCellDirty then
 			for i = 1, #LIGHT_DIRTY_MESH_NEIGHBORS do
 				local off = LIGHT_DIRTY_MESH_NEIGHBORS[i]
-				local ok, key, sectionIndex = MC.MarkLightCellDirty( cell[1] + off[1], cell[2] + off[2], cell[3] + off[3] )
+				local ok, key, sectionIndex = MC.MarkLightCellDirty( bx + off[1], by + off[2], bz + off[3] )
 				if ok and key and sectionIndex then
 					local dirtyKey = type( key ) == "number" and key * 16 + sectionIndex or tostring( key ) .. ":" .. sectionIndex
 					if not dirty[dirtyKey] then

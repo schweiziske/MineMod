@@ -11,6 +11,7 @@ MC.MeshSections = MC.MeshSections or {}
 MC.MeshSectionGeometry = MC.MeshSectionGeometry or {}
 MC.MeshSectionGeometryLRU = MC.MeshSectionGeometryLRU or {}
 MC.MeshSectionGeometryLRUClock = MC.MeshSectionGeometryLRUClock or 0
+MC.MeshSectionGeometryLRUCount = MC.MeshSectionGeometryLRUCount or 0
 MC.MeshDirty = MC.MeshDirty or {}
 MC.MeshLightDirty = MC.MeshLightDirty or {}
 MC.MeshDirtyRateLimited = MC.MeshDirtyRateLimited or {}
@@ -24,9 +25,27 @@ MC.MeshBlockEmitDirty = MC.MeshBlockEmitDirty or {} -- key -> sectionIndex -> lo
 MC.MeshBlockLightDirty = MC.MeshBlockLightDirty or {} -- key -> sectionIndex -> local block index -> true
 MC.MeshBlockEmitCacheLRU = MC.MeshBlockEmitCacheLRU or {}
 MC.MeshBlockEmitCacheLRUClock = MC.MeshBlockEmitCacheLRUClock or 0
+MC.MeshBlockEmitCacheLRUCount = MC.MeshBlockEmitCacheLRUCount or 0
+
+local function tableEntryCount( t )
+	local count = 0
+	for _ in pairs( t or {} ) do count = count + 1 end
+	return count
+end
+
+MC.MeshSectionGeometryLRUCount = tableEntryCount( MC.MeshSectionGeometryLRU )
+MC.MeshBlockEmitCacheLRUCount = tableEntryCount( MC.MeshBlockEmitCacheLRU )
 
 local function sectionSlotKey( key, sectionIndex )
+	if type( key ) == "number" then return key * 64 + sectionIndex end
 	return tostring( key ) .. "/" .. tostring( sectionIndex )
+end
+
+local function lruRemove( lru, countName, slot )
+	if lru[slot] ~= nil then
+		lru[slot] = nil
+		MC[countName] = math.max( ( MC[countName] or 1 ) - 1, 0 )
+	end
 end
 
 local function geometryCacheSectionLimit()
@@ -51,7 +70,7 @@ end
 
 function MC.ForgetMeshSectionGeometryCacheSlot( key, sectionIndex )
 	if not key or not sectionIndex then return end
-	MC.MeshSectionGeometryLRU[sectionSlotKey( key, sectionIndex )] = nil
+	lruRemove( MC.MeshSectionGeometryLRU, "MeshSectionGeometryLRUCount", sectionSlotKey( key, sectionIndex ) )
 	local sections = MC.MeshSectionGeometry[key]
 	if sections then
 		sections[sectionIndex] = nil
@@ -62,7 +81,7 @@ end
 function MC.ForgetChunkMeshSectionGeometryCache( key )
 	if not key then return end
 	for slot, entry in pairs( MC.MeshSectionGeometryLRU ) do
-		if entry and entry.key == key then MC.MeshSectionGeometryLRU[slot] = nil end
+		if entry and entry.key == key then lruRemove( MC.MeshSectionGeometryLRU, "MeshSectionGeometryLRUCount", slot ) end
 	end
 	MC.MeshSectionGeometry[key] = nil
 end
@@ -70,14 +89,18 @@ end
 function MC.ClearChunkMeshSectionGeometryLRU( key )
 	if not key then return end
 	for slot, entry in pairs( MC.MeshSectionGeometryLRU ) do
-		if entry and entry.key == key then MC.MeshSectionGeometryLRU[slot] = nil end
+		if entry and entry.key == key then lruRemove( MC.MeshSectionGeometryLRU, "MeshSectionGeometryLRUCount", slot ) end
 	end
 end
 
 function MC.TouchMeshSectionGeometryCache( key, sectionIndex )
 	if not key or not sectionIndex then return end
 	MC.MeshSectionGeometryLRUClock = ( MC.MeshSectionGeometryLRUClock or 0 ) + 1
-	MC.MeshSectionGeometryLRU[sectionSlotKey( key, sectionIndex )] = {
+	local slot = sectionSlotKey( key, sectionIndex )
+	if MC.MeshSectionGeometryLRU[slot] == nil then
+		MC.MeshSectionGeometryLRUCount = ( MC.MeshSectionGeometryLRUCount or 0 ) + 1
+	end
+	MC.MeshSectionGeometryLRU[slot] = {
 		key = key,
 		sectionIndex = sectionIndex,
 		tick = MC.MeshSectionGeometryLRUClock,
@@ -86,6 +109,7 @@ end
 
 function MC.PruneMeshSectionGeometryCache()
 	local limit = geometryCacheSectionLimit()
+	if ( MC.MeshSectionGeometryLRUCount or 0 ) <= limit then return end
 	local lru = MC.MeshSectionGeometryLRU
 	while true do
 		local count, oldestSlot, oldestTick = 0, nil, nil
@@ -98,9 +122,10 @@ function MC.PruneMeshSectionGeometryCache()
 					oldestSlot = slot
 				end
 			else
-				lru[slot] = nil
+				lruRemove( lru, "MeshSectionGeometryLRUCount", slot )
 			end
 		end
+		MC.MeshSectionGeometryLRUCount = count
 		if count <= limit or not oldestSlot then return end
 		local oldest = lru[oldestSlot]
 		if oldest then MC.ForgetMeshSectionGeometryCacheSlot( oldest.key, oldest.sectionIndex ) end
@@ -109,7 +134,7 @@ end
 
 function MC.ForgetBlockEmitCacheSlot( key, sectionIndex )
 	if not key or not sectionIndex then return end
-	MC.MeshBlockEmitCacheLRU[sectionSlotKey( key, sectionIndex )] = nil
+	lruRemove( MC.MeshBlockEmitCacheLRU, "MeshBlockEmitCacheLRUCount", sectionSlotKey( key, sectionIndex ) )
 	local cacheSections = MC.MeshBlockEmitCache[key]
 	if cacheSections then
 		cacheSections[sectionIndex] = nil
@@ -130,7 +155,11 @@ end
 function MC.TouchBlockEmitCacheSection( key, sectionIndex )
 	if not key or not sectionIndex then return end
 	MC.MeshBlockEmitCacheLRUClock = ( MC.MeshBlockEmitCacheLRUClock or 0 ) + 1
-	MC.MeshBlockEmitCacheLRU[sectionSlotKey( key, sectionIndex )] = {
+	local slot = sectionSlotKey( key, sectionIndex )
+	if MC.MeshBlockEmitCacheLRU[slot] == nil then
+		MC.MeshBlockEmitCacheLRUCount = ( MC.MeshBlockEmitCacheLRUCount or 0 ) + 1
+	end
+	MC.MeshBlockEmitCacheLRU[slot] = {
 		key = key,
 		sectionIndex = sectionIndex,
 		tick = MC.MeshBlockEmitCacheLRUClock,
@@ -139,6 +168,7 @@ end
 
 function MC.PruneBlockEmitCache()
 	local limit = blockEmitCacheSectionLimit()
+	if ( MC.MeshBlockEmitCacheLRUCount or 0 ) <= limit then return end
 	local lru = MC.MeshBlockEmitCacheLRU
 	while true do
 		local count, oldestSlot, oldestTick = 0, nil, nil
@@ -151,9 +181,10 @@ function MC.PruneBlockEmitCache()
 					oldestSlot = slot
 				end
 			else
-				lru[slot] = nil
+				lruRemove( lru, "MeshBlockEmitCacheLRUCount", slot )
 			end
 		end
+		MC.MeshBlockEmitCacheLRUCount = count
 		if count <= limit or not oldestSlot then return end
 		local oldest = lru[oldestSlot]
 		if oldest then MC.ForgetBlockEmitCacheSlot( oldest.key, oldest.sectionIndex ) end
@@ -236,7 +267,7 @@ end
 function MC.ClearChunkBlockEmitCache( key )
 	if not key then return end
 	for slot, entry in pairs( MC.MeshBlockEmitCacheLRU or {} ) do
-		if entry and entry.key == key then MC.MeshBlockEmitCacheLRU[slot] = nil end
+		if entry and entry.key == key then lruRemove( MC.MeshBlockEmitCacheLRU, "MeshBlockEmitCacheLRUCount", slot ) end
 	end
 	MC.MeshBlockEmitCache[key] = nil
 	MC.MeshBlockEmitDirty[key] = nil
@@ -389,22 +420,17 @@ function MC.AppendCachedBlockEmission( record, buf, flushFn, meshPerf, vertexLim
 	return vertexCount
 end
 
+local function cacheLevel( parent, key )
+	local nextLevel = parent[key]
+	if nextLevel == nil then
+		nextLevel = {}
+		parent[key] = nextLevel
+	end
+	return nextLevel
+end
+
 function MC.CachedBlockLightMetaKey( meta )
-	if not meta then return nil end
-	local shade = meta.shade
-	return tostring( shade and shade.r or 255 )
-		.. ":" .. tostring( shade and shade.g or 255 )
-		.. ":" .. tostring( shade and shade.b or 255 )
-		.. ":" .. tostring( shade and shade.a or 255 )
-		.. ":" .. tostring( meta.bx or 0 )
-		.. ":" .. tostring( meta.by or 0 )
-		.. ":" .. tostring( meta.bz or 0 )
-		.. ":" .. tostring( meta.id or 0 )
-		.. ":" .. tostring( meta.faceIndex or 0 )
-		.. ":" .. tostring( meta.cx or 0 )
-		.. ":" .. tostring( meta.cy or 0 )
-		.. ":" .. tostring( meta.cz or 0 )
-		.. ":" .. tostring( meta.selfEmission or 0 )
+	return meta
 end
 
 function MC.RecolorCachedBlockEmission( record, lightStyle, recolorFn )
@@ -415,11 +441,20 @@ function MC.RecolorCachedBlockEmission( record, lightStyle, recolorFn )
 	for i = 1, vertexCount do
 		local meta = record.light[i]
 		if not meta then return false end
-		local key = MC.CachedBlockLightMetaKey( meta )
-		local color = key and colorCache[key] or nil
+		local blockCache = cacheLevel( colorCache, meta.bx or 0 )
+		blockCache = cacheLevel( blockCache, meta.by or 0 )
+		blockCache = cacheLevel( blockCache, meta.bz or 0 )
+		blockCache = cacheLevel( blockCache, meta.id or 0 )
+		blockCache = cacheLevel( blockCache, meta.selfEmission or 0 )
+		blockCache = cacheLevel( blockCache, meta.shade or false )
+		blockCache = cacheLevel( blockCache, meta.faceIndex or 0 )
+		blockCache = cacheLevel( blockCache, meta.cx or 0 )
+		blockCache = cacheLevel( blockCache, meta.cy or 0 )
+		local cz = meta.cz or 0
+		local color = blockCache[cz]
 		if not color then
 			color = recolorFn( meta, lightStyle )
-			if key then colorCache[key] = color end
+			blockCache[cz] = color
 		end
 		record.verts[i].color = color
 	end

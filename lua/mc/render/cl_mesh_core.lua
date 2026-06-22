@@ -322,6 +322,34 @@ local function meshPerfAdd( perf, field, startTime )
 	perf[field] = math.Round( ( perf[field] or 0 ) + meshPerfMS( startTime ), 3 )
 end
 
+local function meshPerfAddBlockKind( perf, kind )
+	if kind == "fullCube" then
+		perf.fullCubeBlocks = perf.fullCubeBlocks + 1
+	elseif kind == "model" then
+		perf.modelBlocks = perf.modelBlocks + 1
+	elseif kind == "liquid" then
+		perf.liquidBlocks = perf.liquidBlocks + 1
+	elseif kind == "cross" then
+		perf.crossBlocks = perf.crossBlocks + 1
+	else
+		perf.shapeBlocks = perf.shapeBlocks + 1
+	end
+end
+
+local function meshPerfAddKindMS( perf, kind, startTime )
+	if kind == "fullCube" then
+		meshPerfAdd( perf, "fullCubeMS", startTime )
+	elseif kind == "model" then
+		meshPerfAdd( perf, "modelMS", startTime )
+	elseif kind == "liquid" then
+		meshPerfAdd( perf, "liquidMS", startTime )
+	elseif kind == "cross" then
+		meshPerfAdd( perf, "crossMS", startTime )
+	else
+		meshPerfAdd( perf, "shapeMS", startTime )
+	end
+end
+
 local function publishMeshPerfStats( perf )
 	local stats = MC.LightPerfStats
 	if not stats or not perf then return end
@@ -1259,6 +1287,10 @@ function MC.BuildChunkMesh( key, sectionIndex )
 		return { list = {}, records = {}, verts = {}, light = {}, nv = 0, material = material, translucent = translucent == true }
 	end
 
+	local function newBlockCacheBuffer( material, translucent )
+		return { verts = {}, light = {}, nv = 0, material = material, translucent = translucent == true, cacheOnly = true }
+	end
+
 	local function buffersForLocal( lx, ly, lz )
 		local index = MC.RenderSectionIndexForLocal( lx, ly, lz )
 		if sectionIndex and index ~= sectionIndex then return nil end
@@ -1605,13 +1637,12 @@ function MC.BuildChunkMesh( key, sectionIndex )
 			local appended = MC.AppendCachedBlockEmission( cached, targetBuffer, flush, meshPerf, C.VERT_LIMIT )
 			if appended > 0 then meshPerf.blocksRendered = meshPerf.blocksRendered + 1 end
 			local cachedKind = cached.kind or "shape"
-			meshPerf[cachedKind .. "Blocks"] = ( meshPerf[cachedKind .. "Blocks"] or 0 ) + 1
+			meshPerfAddBlockKind( meshPerf, cachedKind )
 			continue
 		end
 
 		meshPerf.blockCacheMisses = meshPerf.blockCacheMisses + 1
-		cur = newMeshBuffer( targetBuffer.material, targetBuffer.translucent )
-		cur.cacheOnly = true
+		cur = newBlockCacheBuffer( targetBuffer.material, targetBuffer.translucent )
 
 		local emitStart = SysTime()
 		local emitKind = "shape"
@@ -1751,9 +1782,9 @@ function MC.BuildChunkMesh( key, sectionIndex )
 		if emittedVertices > 0 then
 			meshPerf.blocksRendered = meshPerf.blocksRendered + 1
 		end
-		meshPerf[emitKind .. "Blocks"] = ( meshPerf[emitKind .. "Blocks"] or 0 ) + 1
+		meshPerfAddBlockKind( meshPerf, emitKind )
 		meshPerfAdd( meshPerf, "emitMS", emitStart )
-		meshPerfAdd( meshPerf, emitKind .. "MS", emitStart )
+		meshPerfAddKindMS( meshPerf, emitKind, emitStart )
 	end
 	meshPerfAdd( meshPerf, "loopMS", loopStart )
 
