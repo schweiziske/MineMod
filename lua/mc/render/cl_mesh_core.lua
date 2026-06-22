@@ -204,7 +204,7 @@ local SAMPLE_CACHE_AXIS_BITS = 6
 local SAMPLE_CACHE_AXIS_SIZE = 64
 local SAMPLE_CACHE_Z_SHIFT = SAMPLE_CACHE_AXIS_BITS * 2
 local SAMPLE_CACHE_EXTRA_SHIFT = SAMPLE_CACHE_AXIS_BITS * 3
-local bit_bor, bit_lshift = bit.bor, bit.lshift
+local bit_bor, bit_lshift, bit_band = bit.bor, bit.lshift, bit.band
 
 local function resetMeshLightingSampleCaches()
 	MeshLightSampleCache = {}
@@ -491,8 +491,34 @@ local function shaderFaceTint( faceIndex )
 	return 1, 1, 1
 end
 
-local function litFaceColor( shade, bx, by, bz, id, faceIndex, cn, selfEmission, style )
-	if not MC.SampleLighting then return shade end
+local MeshColorObjectCache = {}
+local MeshColorObjectCacheCount = 0
+local MESH_COLOR_OBJECT_CACHE_LIMIT = 4096
+
+local function resetMeshColorObjectCache()
+	MeshColorObjectCache = {}
+	MeshColorObjectCacheCount = 0
+end
+
+local function colorFromRGBA( r, g, b, a )
+	r = r or 255
+	g = g or 255
+	b = b or 255
+	a = a or 255
+	local key = r + g * 256 + b * 65536 + a * 16777216
+	local cached = MeshColorObjectCache[key]
+	if cached then return cached end
+	local color = Color( r, g, b, a )
+	if MeshColorObjectCacheCount < MESH_COLOR_OBJECT_CACHE_LIMIT then
+		MeshColorObjectCache[key] = color
+		MeshColorObjectCacheCount = MeshColorObjectCacheCount + 1
+	end
+	return color
+end
+
+local function litFaceColorValues( shade, bx, by, bz, id, faceIndex, cn, selfEmission, style )
+	local shadeR, shadeG, shadeB, shadeA = shade.r or 255, shade.g or 255, shade.b or 255, shade.a or 255
+	if not MC.SampleLighting then return shadeR, shadeG, shadeB, shadeA end
 	style = style or MC_LIGHT_STYLE_VANILLA
 	local brightness, ao
 	if style == MC_LIGHT_STYLE_FAST then
@@ -513,25 +539,27 @@ local function litFaceColor( shade, bx, by, bz, id, faceIndex, cn, selfEmission,
 	if style == MC_LIGHT_STYLE_SHADER then
 		rScale, gScale, bScale = shaderFaceTint( faceIndex )
 	end
-	return Color(
-		math.Clamp( math.floor( ( shade.r or 255 ) * mul * rScale + 0.5 ), 0, 255 ),
-		math.Clamp( math.floor( ( shade.g or 255 ) * mul * gScale + 0.5 ), 0, 255 ),
-		math.Clamp( math.floor( ( shade.b or 255 ) * mul * bScale + 0.5 ), 0, 255 ),
-		shade.a or 255
-	)
+	local r = math.Clamp( math.floor( shadeR * mul * rScale + 0.5 ), 0, 255 )
+	local g = math.Clamp( math.floor( shadeG * mul * gScale + 0.5 ), 0, 255 )
+	local b = math.Clamp( math.floor( shadeB * mul * bScale + 0.5 ), 0, 255 )
+	local a = shadeA
+	return r, g, b, a
+end
+
+local function litFaceColor( shade, bx, by, bz, id, faceIndex, cn, selfEmission, style )
+	return colorFromRGBA( litFaceColorValues( shade, bx, by, bz, id, faceIndex, cn, selfEmission, style ) )
 end
 
 local function quadCornerColors( shade, bx, by, bz, id, faceIndex, corners, selfEmission, style )
 	if style == MC_LIGHT_STYLE_FAST then
 		local color = litFaceColor( shade, bx, by, bz, id, faceIndex, corners[1], selfEmission, style )
-		return { color, color, color, color }
+		return color, color, color, color
 	end
-	return {
+	return
 		litFaceColor( shade, bx, by, bz, id, faceIndex, corners[1], selfEmission, style ),
 		litFaceColor( shade, bx, by, bz, id, faceIndex, corners[2], selfEmission, style ),
 		litFaceColor( shade, bx, by, bz, id, faceIndex, corners[3], selfEmission, style ),
-		litFaceColor( shade, bx, by, bz, id, faceIndex, corners[4], selfEmission, style ),
-	}
+		litFaceColor( shade, bx, by, bz, id, faceIndex, corners[4], selfEmission, style )
 end
 
 local ScratchCorners = {
@@ -1156,6 +1184,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 	local buildStart = SysTime()
 	local meshPerf = newMeshPerfStats()
 	resetMeshLightingSampleCaches()
+	resetMeshColorObjectCache()
 	local meshLightStyle = currentLightStyle()
 	if MC.LightPerfStats then
 		MC.LightPerfStats.lastMeshLightStyle = meshLightStyle
@@ -1425,17 +1454,27 @@ function MC.BuildChunkMesh( key, sectionIndex )
 
 	local function emitQuad( corners, normal, color, tile, bx, by, bz, id, faceIndex )
 		local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
-		local colors = quadCornerColors( color, bx, by, bz, id, faceIndex, corners, emission, meshLightStyle )
+		local color1, color2, color3, color4 = quadCornerColors( color, bx, by, bz, id, faceIndex, corners, emission, meshLightStyle )
 		for t = 1, 6 do
 			local ci = C.TRI[t]
 			local cn = corners[ci]
 			local u, v = tileUVPointRaw( tile, cn[4], cn[5] )
+			local vertColor
+			if ci == 1 then
+				vertColor = color1
+			elseif ci == 2 then
+				vertColor = color2
+			elseif ci == 3 then
+				vertColor = color3
+			else
+				vertColor = color4
+			end
 			push( {
 				pos    = Vector( cn[1], cn[2], cn[3] ),
 				normal = normal,
 				u      = u,
 				v      = v,
-				color  = colors[ci],
+				color  = vertColor,
 			}, lightMeta( color, bx, by, bz, id, faceIndex, cn, emission ) )
 		end
 	end
@@ -1472,18 +1511,28 @@ function MC.BuildChunkMesh( key, sectionIndex )
 			local faceIndex = quad.face or MC.Face.TOP
 			local face = C.FACES[faceIndex] or C.FACES[MC.Face.TOP]
 			local u0, v0, u1, v1 = tileUVRect( quad.tile or 0, quad.uv )
-			local colors = quadCornerColors( face.sh, bx, by, bz, b.id, faceIndex, quad.verts, emission, meshLightStyle )
+			local color1, color2, color3, color4 = quadCornerColors( face.sh, bx, by, bz, b.id, faceIndex, quad.verts, emission, meshLightStyle )
 			for t = 1, 6 do
 				local ci = C.TRI[t]
 				local vert = quad.verts[ci]
 				local uf, vf = rotatedUVFlags( vert.u or 0, vert.v or 0, quad.rot or 0 )
 				if mirrorU then uf = 1 - uf end
+				local vertColor
+				if ci == 1 then
+					vertColor = color1
+				elseif ci == 2 then
+					vertColor = color2
+				elseif ci == 3 then
+					vertColor = color3
+				else
+					vertColor = color4
+				end
 				push( {
 					pos    = Vector( wx + vert.x * C.BS, wy + vert.y * C.BS, wz + vert.z * C.BS ),
 					normal = face.n,
 					u      = uf == 1 and u1 or u0,
 					v      = vf == 1 and v1 or v0,
-					color  = colors[ci],
+					color  = vertColor,
 				}, lightMeta( face.sh, bx, by, bz, b.id, faceIndex, vert, emission ) )
 			end
 		end
@@ -1492,18 +1541,28 @@ function MC.BuildChunkMesh( key, sectionIndex )
 
 	local function emitFluidQuad( verts, normal, shade, tile, bx, by, bz, id, faceIndex, lightCorners, uvCorners )
 		local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
-		local colors = quadCornerColors( shade, bx, by, bz, id, faceIndex, lightCorners, emission, meshLightStyle )
+		local color1, color2, color3, color4 = quadCornerColors( shade, bx, by, bz, id, faceIndex, lightCorners, emission, meshLightStyle )
 		for t = 1, 6 do
 			local ci = C.TRI[t]
 			local vert = verts[ci]
 			local uv = uvCorners[ci]
 			local u, v = tileUVPointRaw( tile, uv and uv[1], uv and uv[2] )
+			local vertColor
+			if ci == 1 then
+				vertColor = color1
+			elseif ci == 2 then
+				vertColor = color2
+			elseif ci == 3 then
+				vertColor = color3
+			else
+				vertColor = color4
+			end
 			push( {
 				pos    = Vector( vert[1], vert[2], vert[3] ),
 				normal = normal,
 				u      = u,
 				v      = v,
-				color  = colors[ci],
+				color  = vertColor,
 			}, lightMeta( shade, bx, by, bz, id, faceIndex, lightCorners[ci], emission ) )
 		end
 	end
@@ -1683,11 +1742,13 @@ function MC.BuildChunkMesh( key, sectionIndex )
 			emitKind = "fullCube"
 			local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
 			local visibleFaceCount = 0
+			local visibleFaceMask = 0
 			for f = 1, 6 do
 				local face = C.FACES[f]
 				local o = face.off
 				if visibleAt( id, lx + o[1], ly + o[2], lz + o[3], bx + o[1], by + o[2], bz + o[3] ) then
 					visibleFaceCount = visibleFaceCount + 1
+					visibleFaceMask = bit_bor( visibleFaceMask, bit_lshift( 1, f - 1 ) )
 				end
 			end
 			directEmitVertexCount = visibleFaceCount * 6
@@ -1699,10 +1760,8 @@ function MC.BuildChunkMesh( key, sectionIndex )
 				prepareBlockCacheBuffer( targetBuffer )
 			end
 			for f = 1, 6 do
-				local face = C.FACES[f]
-				local o = face.off
-				local nbx, nby, nbz = bx + o[1], by + o[2], bz + o[3]
-				if visibleAt( id, lx + o[1], ly + o[2], lz + o[3], nbx, nby, nbz ) then
+				if bit_band( visibleFaceMask, bit_lshift( 1, f - 1 ) ) ~= 0 then
+					local face = C.FACES[f]
 					local baked = bakedFaceData( id, f, orient )
 					local tile, rot, flipU, flipV
 					local u0, v0, u1, v1
@@ -1716,7 +1775,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 					end
 					local corners = face.c
 					local nrm, col = face.n, face.sh
-					local colors = quadCornerColors( col, bx, by, bz, id, f, corners, emission, meshLightStyle )
+					local color1, color2, color3, color4 = quadCornerColors( col, bx, by, bz, id, f, corners, emission, meshLightStyle )
 
 					for t = 1, 6 do
 						local ci = C.TRI[t]
@@ -1730,12 +1789,22 @@ function MC.BuildChunkMesh( key, sectionIndex )
 							u = uf == 1 and u1 or u0
 							v = vf == 1 and v1 or v0
 						end
+						local vertColor
+						if ci == 1 then
+							vertColor = color1
+						elseif ci == 2 then
+							vertColor = color2
+						elseif ci == 3 then
+							vertColor = color3
+						else
+							vertColor = color4
+						end
 						push( {
 							pos    = Vector( wx + cn[1] * C.BS, wy + cn[2] * C.BS, wz + cn[3] * C.BS ),
 							normal = nrm,
 							u      = u,
 							v      = v,
-							color  = colors[ci],
+							color  = vertColor,
 						}, lightMeta( col, bx, by, bz, id, f, cn, emission ) )
 					end
 				end
@@ -1927,6 +1996,7 @@ function MC.RebuildChunkMeshLighting( key, sectionIndex )
 	local buildStart = SysTime()
 	local meshPerf = newMeshPerfStats()
 	resetMeshLightingSampleCaches()
+	resetMeshColorObjectCache()
 	local meshLightStyle = currentLightStyle()
 	if MC.LightPerfStats then
 		MC.LightPerfStats.lastMeshLightStyle = meshLightStyle
