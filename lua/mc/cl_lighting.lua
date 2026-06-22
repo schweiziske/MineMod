@@ -92,6 +92,39 @@ function MC.LightPerfTrace( kind, fields )
 	add( "queue", fields.queued )
 	add( "proc", fields.processed )
 	add( "write", fields.written )
+	add( "mode", fields.mode )
+	add( "records", fields.records )
+	add( "fallback", fields.fallback )
+	add( "verts", fields.vertices )
+	add( "faces", fields.faces )
+	add( "meshes", fields.meshes )
+	add( "blocks", fields.blocks )
+	add( "emitted", fields.emitted )
+	add( "blockCache", fields.blockCache )
+	add( "blockRecolor", fields.blockRecolor )
+	add( "fullBlocks", fields.fullBlocks )
+	add( "shapeBlocks", fields.shapeBlocks )
+	add( "modelBlocks", fields.modelBlocks )
+	add( "liquidBlocks", fields.liquidBlocks )
+	add( "crossBlocks", fields.crossBlocks )
+	add( "opaqueVerts", fields.opaqueVerts )
+	add( "transVerts", fields.translucentVerts )
+	add( "prepMS", fields.prepMS )
+	add( "indexMS", fields.indexMS )
+	add( "loopMS", fields.loopMS )
+	add( "emitMS", fields.emitMS )
+	add( "fullMS", fields.fullMS )
+	add( "shapeMS", fields.shapeMS )
+	add( "modelMS", fields.modelMS )
+	add( "liquidMS", fields.liquidMS )
+	add( "crossMS", fields.crossMS )
+	add( "flushMS", fields.flushMS )
+	add( "meshNewMS", fields.meshNewMS )
+	add( "buildTriMS", fields.buildTriMS )
+	add( "destroyMS", fields.destroyMS )
+	add( "commitMS", fields.commitMS )
+	add( "flatMS", fields.flatMS )
+	add( "recolorMS", fields.recolorMS )
 	add( "samples", fields.samples )
 	add( "sampleMS", fields.sampleMS )
 	add( "ao", fields.ao )
@@ -175,6 +208,39 @@ function MC.LightPerfEndMeshBuild( key, sectionIndex, meshMS )
 		ms = meshMS,
 		key = key,
 		section = sectionIndex or "full",
+		mode = stats.lastMeshMode,
+		records = stats.lastMeshRecords,
+		fallback = stats.lastMeshFallback,
+		vertices = stats.lastMeshVertices,
+		faces = stats.lastMeshFaces,
+		meshes = stats.lastMeshMeshes,
+		blocks = stats.lastMeshBlocksVisited,
+		emitted = stats.lastMeshBlocksRendered,
+		blockCache = tostring( stats.lastMeshBlockCacheHits ) .. "/" .. tostring( stats.lastMeshBlockCacheMisses ),
+		blockRecolor = stats.lastMeshBlockCacheRecolors,
+		fullBlocks = stats.lastMeshFullCubeBlocks,
+		shapeBlocks = stats.lastMeshShapeBlocks,
+		modelBlocks = stats.lastMeshModelBlocks,
+		liquidBlocks = stats.lastMeshLiquidBlocks,
+		crossBlocks = stats.lastMeshCrossBlocks,
+		opaqueVerts = stats.lastMeshOpaqueVerts,
+		translucentVerts = stats.lastMeshTranslucentVerts,
+		prepMS = stats.lastMeshPrepMS,
+		indexMS = stats.lastMeshIndexMS,
+		loopMS = stats.lastMeshLoopMS,
+		emitMS = stats.lastMeshEmitMS,
+		fullMS = stats.lastMeshFullCubeMS,
+		shapeMS = stats.lastMeshShapeMS,
+		modelMS = stats.lastMeshModelMS,
+		liquidMS = stats.lastMeshLiquidMS,
+		crossMS = stats.lastMeshCrossMS,
+		flushMS = stats.lastMeshFlushMS,
+		meshNewMS = stats.lastMeshMeshNewMS,
+		buildTriMS = stats.lastMeshBuildTrianglesMS,
+		destroyMS = stats.lastMeshDestroyMS,
+		commitMS = stats.lastMeshCommitMS,
+		flatMS = stats.lastMeshFlatMS,
+		recolorMS = stats.lastMeshRecolorMS,
 		samples = stats.lastMeshSampleCalls,
 		sampleMS = stats.lastMeshSampleMS,
 		ao = stats.lastMeshAOCalls,

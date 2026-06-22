@@ -15,6 +15,8 @@ MC.ClientRenderLoaded = true
 
 local BS  = MC.BS
 local CS  = MC.CS
+local CH  = MC.CH
+local CS2 = CS * CS
 local RENDER_SECTION_SIZE = 8
 local RENDER_SECTIONS_XY = math.ceil( MC.CS / RENDER_SECTION_SIZE )
 local RENDER_SECTIONS_Z = math.ceil( MC.CH / RENDER_SECTION_SIZE )
@@ -119,7 +121,7 @@ local FACES = {
 local TRI = { 1, 3, 2, 1, 4, 3 }
 
 local function cornerXYZ( cn )
-	return cn.x or cn[1] or 0, cn.y or cn[2] or 0, cn.z or cn[3] or 0
+	return cn.x or cn.cx or cn[1] or 0, cn.y or cn.cy or cn[2] or 0, cn.z or cn.cz or cn[3] or 0
 end
 
 local function cornerCellOffset( value )
@@ -274,6 +276,87 @@ local function noteMeshLightingCacheStats()
 	stats.lastMeshAOCacheMisses = MeshAOSampleMisses
 end
 
+local function newMeshPerfStats()
+	return {
+		vertices = 0,
+		faces = 0,
+		meshes = 0,
+		opaqueVerts = 0,
+		translucentVerts = 0,
+		blocksVisited = 0,
+		blocksRendered = 0,
+		blockCacheHits = 0,
+		blockCacheMisses = 0,
+		blockCacheRecolors = 0,
+		fullCubeBlocks = 0,
+		shapeBlocks = 0,
+		modelBlocks = 0,
+		liquidBlocks = 0,
+		crossBlocks = 0,
+		prepMS = 0,
+		indexMS = 0,
+		loopMS = 0,
+		emitMS = 0,
+		fullCubeMS = 0,
+		shapeMS = 0,
+		modelMS = 0,
+		liquidMS = 0,
+		crossMS = 0,
+		flushMS = 0,
+		meshNewMS = 0,
+		buildTriMS = 0,
+		destroyMS = 0,
+		commitMS = 0,
+		flatMS = 0,
+		recolorMS = 0,
+	}
+end
+
+local function meshPerfMS( startTime )
+	return math.Round( ( SysTime() - startTime ) * 1000, 3 )
+end
+
+local function meshPerfAdd( perf, field, startTime )
+	if not perf or not field or not startTime then return end
+	perf[field] = math.Round( ( perf[field] or 0 ) + meshPerfMS( startTime ), 3 )
+end
+
+local function publishMeshPerfStats( perf )
+	local stats = MC.LightPerfStats
+	if not stats or not perf then return end
+	stats.lastMeshVertices = perf.vertices or 0
+	stats.lastMeshFaces = perf.faces or 0
+	stats.lastMeshMeshes = perf.meshes or 0
+	stats.lastMeshOpaqueVerts = perf.opaqueVerts or 0
+	stats.lastMeshTranslucentVerts = perf.translucentVerts or 0
+	stats.lastMeshBlocksVisited = perf.blocksVisited or 0
+	stats.lastMeshBlocksRendered = perf.blocksRendered or 0
+	stats.lastMeshBlockCacheHits = perf.blockCacheHits or 0
+	stats.lastMeshBlockCacheMisses = perf.blockCacheMisses or 0
+	stats.lastMeshBlockCacheRecolors = perf.blockCacheRecolors or 0
+	stats.lastMeshFullCubeBlocks = perf.fullCubeBlocks or 0
+	stats.lastMeshShapeBlocks = perf.shapeBlocks or 0
+	stats.lastMeshModelBlocks = perf.modelBlocks or 0
+	stats.lastMeshLiquidBlocks = perf.liquidBlocks or 0
+	stats.lastMeshCrossBlocks = perf.crossBlocks or 0
+	stats.lastMeshPrepMS = perf.prepMS or 0
+	stats.lastMeshIndexMS = perf.indexMS or 0
+	stats.lastMeshLoopMS = perf.loopMS or 0
+	stats.lastMeshEmitMS = perf.emitMS or 0
+	stats.lastMeshFullCubeMS = perf.fullCubeMS or 0
+	stats.lastMeshShapeMS = perf.shapeMS or 0
+	stats.lastMeshModelMS = perf.modelMS or 0
+	stats.lastMeshLiquidMS = perf.liquidMS or 0
+	stats.lastMeshCrossMS = perf.crossMS or 0
+	stats.lastMeshFlushMS = perf.flushMS or 0
+	stats.lastMeshMeshNewMS = perf.meshNewMS or 0
+	stats.lastMeshBuildTrianglesMS = perf.buildTriMS or 0
+	stats.lastMeshDestroyMS = perf.destroyMS or 0
+	stats.lastMeshCommitMS = perf.commitMS or 0
+	stats.lastMeshFlatMS = perf.flatMS or 0
+	stats.lastMeshRecolorMS = perf.recolorMS or 0
+end
+
 local function minecraftSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
 	local ax, ay, az, bx2, by2, bz2, cx, cy, cz, dx, dy, dz = minecraftSmoothCornerSamples( bx, by, bz, faceIndex, cn )
 	local a = tonumber( cachedMeshLightingSample( ax, ay, az, selfEmission ) ) or 1
@@ -408,12 +491,41 @@ local function quadCornerColors( shade, bx, by, bz, id, faceIndex, corners, self
 	}
 end
 
+local ScratchCorners = {
+	{ 0, 0, 0 },
+	{ 0, 0, 0 },
+	{ 0, 0, 0 },
+	{ 0, 0, 0 },
+}
+
+local function setScratchCorner( index, x, y, z )
+	local c = ScratchCorners[index]
+	c[1], c[2], c[3] = x, y, z
+	return c
+end
+
+local function quadCornerColorValues( shade, bx, by, bz, id, faceIndex, selfEmission, style, x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4 )
+	if style == MC_LIGHT_STYLE_FAST then
+		local color = litFaceColor( shade, bx, by, bz, id, faceIndex, setScratchCorner( 1, x1, y1, z1 ), selfEmission, style )
+		return color, color, color, color
+	end
+	return
+		litFaceColor( shade, bx, by, bz, id, faceIndex, setScratchCorner( 1, x1, y1, z1 ), selfEmission, style ),
+		litFaceColor( shade, bx, by, bz, id, faceIndex, setScratchCorner( 2, x2, y2, z2 ), selfEmission, style ),
+		litFaceColor( shade, bx, by, bz, id, faceIndex, setScratchCorner( 3, x3, y3, z3 ), selfEmission, style ),
+		litFaceColor( shade, bx, by, bz, id, faceIndex, setScratchCorner( 4, x4, y4, z4 ), selfEmission, style )
+end
+
 local VERT_LIMIT = 64998 -- multiple of 6, under the 65535 IMesh vertex cap
 
 MC.Meshes      = MC.Meshes or {}      -- key -> { IMesh, ... } (opaque/cutout pass)
 MC.MeshesTrans = MC.MeshesTrans or {} -- key -> { IMesh, ... } (translucent pass)
 MC.MeshSections = MC.MeshSections or {} -- key -> sectionIndex -> { opaque = {}, translucent = {} }
+MC.MeshSectionGeometry = MC.MeshSectionGeometry or {} -- key -> sectionIndex -> cached vertex/light records
+MC.MeshBlockEmitCache = MC.MeshBlockEmitCache or {} -- key -> sectionIndex -> local block index -> emitted vertices/light
+MC.MeshBlockEmitDirty = MC.MeshBlockEmitDirty or {} -- key -> sectionIndex -> local block index -> true
 MC.MeshDirty = MC.MeshDirty or {}  -- key -> true
+MC.MeshLightDirty = MC.MeshLightDirty or {} -- key -> sectionIndex -> true for light-only colour updates
 MC.MeshDirtyRateLimited = MC.MeshDirtyRateLimited or {} -- key -> true for explosion-driven mesh rebuilds
 MC.ChunkEnts = MC.ChunkEnts or {}  -- key -> mc_chunk entity (clientside physics owner)
 MC.PhysDirty = MC.PhysDirty or {}  -- key -> true while a clientside collision rebuild is being fired
@@ -1068,6 +1180,32 @@ local function sectionIndexForLocal( lx, ly, lz )
 	return sx + sy * RENDER_SECTIONS_XY + sz * RENDER_SECTIONS_XY * RENDER_SECTIONS_XY + 1
 end
 
+local function clearSectionBlockEmitCache( key, sectionIndex )
+	local cacheSections = MC.MeshBlockEmitCache[key]
+	if cacheSections then
+		cacheSections[sectionIndex] = nil
+		if next( cacheSections ) == nil then MC.MeshBlockEmitCache[key] = nil end
+	end
+	local dirtySections = MC.MeshBlockEmitDirty[key]
+	if dirtySections then
+		dirtySections[sectionIndex] = nil
+		if next( dirtySections ) == nil then MC.MeshBlockEmitDirty[key] = nil end
+	end
+end
+
+local function clearSectionBlockEmitDirty( key, sectionIndex )
+	local dirtySections = MC.MeshBlockEmitDirty[key]
+	if not dirtySections then return end
+	dirtySections[sectionIndex] = nil
+	if next( dirtySections ) == nil then MC.MeshBlockEmitDirty[key] = nil end
+end
+
+local function clearChunkBlockEmitCache( key )
+	if not key then return end
+	MC.MeshBlockEmitCache[key] = nil
+	MC.MeshBlockEmitDirty[key] = nil
+end
+
 local function rebuildFlatMeshLists( key )
 	local sections = MC.MeshSections[key]
 	if not sections then
@@ -1090,6 +1228,8 @@ end
 
 function MC.FreeChunkMesh( key )
 	if MC.MeshDirtyRateLimited then MC.MeshDirtyRateLimited[key] = nil end
+	if MC.MeshLightDirty then MC.MeshLightDirty[key] = nil end
+	clearChunkBlockEmitCache( key )
 	local sections = MC.MeshSections[key]
 	if sections then
 		for _, section in pairs( sections ) do
@@ -1097,10 +1237,12 @@ function MC.FreeChunkMesh( key )
 			destroySectionMeshList( section.translucent )
 		end
 		MC.MeshSections[key] = nil
+		MC.MeshSectionGeometry[key] = nil
 		MC.Meshes[key] = nil
 		MC.MeshesTrans[key] = nil
 		return
 	end
+	MC.MeshSectionGeometry[key] = nil
 	destroyMeshList( MC.Meshes, key )
 	destroyMeshList( MC.MeshesTrans, key )
 end
@@ -1131,6 +1273,126 @@ local function ensureChunkRenderSectionIndex( chunk )
 	return bySection
 end
 
+local function pruneBlockEmitTable( store, key, sectionIndex )
+	local sections = store and store[key]
+	if not sections then return end
+	local section = sections[sectionIndex]
+	if section and next( section ) == nil then sections[sectionIndex] = nil end
+	if next( sections ) == nil then store[key] = nil end
+end
+
+local function markBlockEmitCacheDirty( bx, by, bz )
+	local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
+	local key = MC.ChunkKey( cx, cy, cz )
+	local cacheSections = MC.MeshBlockEmitCache[key]
+	local dirtySections = MC.MeshBlockEmitDirty[key]
+	if not cacheSections and not dirtySections and not ( MC.World and MC.World[key] ) then return end
+
+	local lx, ly, lz = DecodeLocal( li )
+	local sectionIndex = sectionIndexForLocal( lx, ly, lz )
+	local cacheSection = cacheSections and cacheSections[sectionIndex]
+	if cacheSection then
+		cacheSection[li] = nil
+		pruneBlockEmitTable( MC.MeshBlockEmitCache, key, sectionIndex )
+	end
+
+	dirtySections = MC.MeshBlockEmitDirty[key]
+	if not dirtySections then
+		dirtySections = {}
+		MC.MeshBlockEmitDirty[key] = dirtySections
+	end
+	local dirtySection = dirtySections[sectionIndex]
+	if not dirtySection then
+		dirtySection = {}
+		dirtySections[sectionIndex] = dirtySection
+	end
+	dirtySection[li] = true
+end
+
+local function getCachedBlockEmission( key, sectionIndex, li, id, orient )
+	local dirtySection = MC.MeshBlockEmitDirty[key] and MC.MeshBlockEmitDirty[key][sectionIndex]
+	if dirtySection and dirtySection[li] then return nil end
+	local section = MC.MeshBlockEmitCache[key] and MC.MeshBlockEmitCache[key][sectionIndex]
+	local record = section and section[li]
+	if not record then return nil end
+	if record.id ~= id or record.orient ~= ( orient or 0 ) then return nil end
+	if not record.verts or not record.light then return nil end
+	local vertexCount = record.vertexCount or #record.verts
+	if vertexCount ~= #record.verts or vertexCount ~= #record.light then return nil end
+	return record
+end
+
+local function dropBlockEmitCacheRecord( key, sectionIndex, li )
+	local section = MC.MeshBlockEmitCache[key] and MC.MeshBlockEmitCache[key][sectionIndex]
+	if not section then return end
+	section[li] = nil
+	pruneBlockEmitTable( MC.MeshBlockEmitCache, key, sectionIndex )
+end
+
+local function recolorCachedBlockEmission( record, lightStyle )
+	if not record or not record.verts or not record.light then return false end
+	local vertexCount = record.vertexCount or #record.verts
+	if vertexCount ~= #record.verts or vertexCount ~= #record.light then return false end
+	for i = 1, vertexCount do
+		local meta = record.light[i]
+		if not meta then return false end
+		record.verts[i].color = litFaceColor(
+			meta.shade,
+			meta.bx, meta.by, meta.bz,
+			meta.id,
+			meta.faceIndex,
+			meta,
+			meta.selfEmission,
+			lightStyle
+		)
+	end
+	record.lightStyle = lightStyle
+	return true
+end
+
+local function storeBlockEmissionCache( key, sectionIndex, li, id, orient, lightStyle, record )
+	if not record then return nil end
+	local sections = MC.MeshBlockEmitCache[key]
+	if not sections then
+		sections = {}
+		MC.MeshBlockEmitCache[key] = sections
+	end
+	local section = sections[sectionIndex]
+	if not section then
+		section = {}
+		sections[sectionIndex] = section
+	end
+
+	record.id = id
+	record.orient = orient or 0
+	record.lightStyle = lightStyle
+	record.vertexCount = record.vertexCount or #( record.verts or {} )
+	section[li] = record
+
+	local dirtySection = MC.MeshBlockEmitDirty[key] and MC.MeshBlockEmitDirty[key][sectionIndex]
+	if dirtySection then
+		dirtySection[li] = nil
+		pruneBlockEmitTable( MC.MeshBlockEmitDirty, key, sectionIndex )
+	end
+	return record
+end
+
+local function appendCachedBlockEmission( record, buf, flushFn, meshPerf )
+	if not record or not buf then return 0 end
+	local verts = record.verts or {}
+	local light = record.light or {}
+	local vertexCount = record.vertexCount or #verts
+	for i = 1, vertexCount do
+		local nv = buf.nv + 1
+		buf.nv = nv
+		buf.verts[nv] = verts[i]
+		buf.light[nv] = light[i]
+		if meshPerf then meshPerf.pushedVertices = ( meshPerf.pushedVertices or 0 ) + 1 end
+		if nv >= VERT_LIMIT and flushFn then flushFn( buf ) end
+	end
+	return vertexCount
+end
+
 local function rotatedUVFlags( uf, vf, rot, flipU, flipV )
 	rot = rot % 4
 	if rot == 1 then uf, vf = vf, 1 - uf
@@ -1158,20 +1420,24 @@ local function tileUVRect( tile, uv )
 	return u0 / A.W, v0 / A.H, u1 / A.W, v1 / A.H
 end
 
-local function tileUVPoint( tile, uv )
+local function tileUVPointRaw( tile, u, v )
 	local A = MC.Atlas
 	local col = tile % A.COLS
 	local row = math.floor( tile / A.COLS )
 	local stride = A.STRIDE or A.TILE
 	local pad = A.PAD or 0
 	local inset = A.INSET or 0.5
-	local u = tonumber( uv and uv[1] ) or 0
-	local v = tonumber( uv and uv[2] ) or 0
+	u = tonumber( u ) or 0
+	v = tonumber( v ) or 0
 	local px = col * stride + pad + u / 16 * A.TILE
 	local py = row * stride + pad + v / 16 * A.TILE
 	if u <= 0 then px = px + inset elseif u >= 16 then px = px - inset end
 	if v <= 0 then py = py + inset elseif v >= 16 then py = py - inset end
 	return px / A.W, py / A.H
+end
+
+local function tileUVPoint( tile, uv )
+	return tileUVPointRaw( tile, uv and uv[1], uv and uv[2] )
 end
 
 local function bakedFaceData( id, face, orient )
@@ -1191,6 +1457,40 @@ local BOX_FACE_CORNERS = {
 	[5] = function( b ) return { { b[4], b[5], b[3] }, { b[1], b[5], b[3] }, { b[1], b[5], b[6] }, { b[4], b[5], b[6] } } end,
 	[6] = function( b ) return { { b[1], b[2], b[3] }, { b[4], b[2], b[3] }, { b[4], b[2], b[6] }, { b[1], b[2], b[6] } } end,
 }
+
+local function boxFaceCornerValues( b, face, corner )
+	local x0, y0, z0, x1, y1, z1 = b[1], b[2], b[3], b[4], b[5], b[6]
+	if face == MC.Face.TOP then
+		if corner == 1 then return x0, y0, z1 end
+		if corner == 2 then return x1, y0, z1 end
+		if corner == 3 then return x1, y1, z1 end
+		return x0, y1, z1
+	elseif face == MC.Face.BOTTOM then
+		if corner == 1 then return x0, y1, z0 end
+		if corner == 2 then return x1, y1, z0 end
+		if corner == 3 then return x1, y0, z0 end
+		return x0, y0, z0
+	elseif face == MC.Face.XP then
+		if corner == 1 then return x1, y0, z0 end
+		if corner == 2 then return x1, y1, z0 end
+		if corner == 3 then return x1, y1, z1 end
+		return x1, y0, z1
+	elseif face == MC.Face.XN then
+		if corner == 1 then return x0, y1, z0 end
+		if corner == 2 then return x0, y0, z0 end
+		if corner == 3 then return x0, y0, z1 end
+		return x0, y1, z1
+	elseif face == MC.Face.YP then
+		if corner == 1 then return x1, y1, z0 end
+		if corner == 2 then return x0, y1, z0 end
+		if corner == 3 then return x0, y1, z1 end
+		return x1, y1, z1
+	end
+	if corner == 1 then return x0, y0, z0 end
+	if corner == 2 then return x1, y0, z0 end
+	if corner == 3 then return x1, y0, z1 end
+	return x0, y0, z1
+end
 
 local BOX_UV_FLAGS = {
 	{ 0, 1 },
@@ -1289,13 +1589,27 @@ local function rotatedModelQuads( b, orient )
 	return out
 end
 
+local function cornerUV16Values( face, c )
+	if face == MC.Face.TOP then return c[1] * 16, ( 1 - c[2] ) * 16 end
+	if face == MC.Face.BOTTOM then return c[1] * 16, c[2] * 16 end
+	if face == MC.Face.XP then return c[2] * 16, ( 1 - c[3] ) * 16 end
+	if face == MC.Face.XN then return ( 1 - c[2] ) * 16, ( 1 - c[3] ) * 16 end
+	if face == MC.Face.YP then return ( 1 - c[1] ) * 16, ( 1 - c[3] ) * 16 end
+	return c[1] * 16, ( 1 - c[3] ) * 16
+end
+
+local function cornerUV16Raw( face, x, y, z )
+	if face == MC.Face.TOP then return x * 16, ( 1 - y ) * 16 end
+	if face == MC.Face.BOTTOM then return x * 16, y * 16 end
+	if face == MC.Face.XP then return y * 16, ( 1 - z ) * 16 end
+	if face == MC.Face.XN then return ( 1 - y ) * 16, ( 1 - z ) * 16 end
+	if face == MC.Face.YP then return ( 1 - x ) * 16, ( 1 - z ) * 16 end
+	return x * 16, ( 1 - z ) * 16
+end
+
 local function cornerUV16( face, c )
-	if face == MC.Face.TOP then return { c[1] * 16, ( 1 - c[2] ) * 16 } end
-	if face == MC.Face.BOTTOM then return { c[1] * 16, c[2] * 16 } end
-	if face == MC.Face.XP then return { c[2] * 16, ( 1 - c[3] ) * 16 } end
-	if face == MC.Face.XN then return { ( 1 - c[2] ) * 16, ( 1 - c[3] ) * 16 } end
-	if face == MC.Face.YP then return { ( 1 - c[1] ) * 16, ( 1 - c[3] ) * 16 } end
-	return { c[1] * 16, ( 1 - c[3] ) * 16 }
+	local u, v = cornerUV16Values( face, c )
+	return { u, v }
 end
 
 local function paneSideTile( b )
@@ -1444,6 +1758,7 @@ end
 
 function MC.BuildChunkMesh( key, sectionIndex )
 	local buildStart = SysTime()
+	local meshPerf = newMeshPerfStats()
 	resetMeshLightingSampleCaches()
 	local meshLightStyle = currentLightStyle()
 	if MC.LightPerfStats then
@@ -1453,20 +1768,30 @@ function MC.BuildChunkMesh( key, sectionIndex )
 		MC.LightPerfBeginMeshBuild( key, sectionIndex )
 	end
 	if not sectionIndex then
+		local destroyStart = SysTime()
 		MC.FreeChunkMesh( key )
+		meshPerfAdd( meshPerf, "destroyMS", destroyStart )
 	end
 
 	local chunk = MC.GetChunkByKey( key )
 	if not chunk or chunk.count == 0 then
 		if sectionIndex then
+			clearSectionBlockEmitCache( key, sectionIndex )
+			local commitStart = SysTime()
 			local sections = MC.MeshSections[key]
 			local old = sections and sections[sectionIndex]
 			if old then
+				local destroyStart = SysTime()
 				destroySectionMeshList( old.opaque )
 				destroySectionMeshList( old.translucent )
+				meshPerfAdd( meshPerf, "destroyMS", destroyStart )
 				sections[sectionIndex] = nil
+				if MC.MeshSectionGeometry[key] then MC.MeshSectionGeometry[key][sectionIndex] = nil end
+				local flatStart = SysTime()
 				rebuildFlatMeshLists( key )
+				meshPerfAdd( meshPerf, "flatMS", flatStart )
 			end
+			meshPerfAdd( meshPerf, "commitMS", commitStart )
 		else
 			MC.FreeChunkMesh( key )
 		end
@@ -1475,26 +1800,104 @@ function MC.BuildChunkMesh( key, sectionIndex )
 		MC.RenderStats.lastMeshKey = key
 		MC.RenderStats.lastMeshSection = sectionIndex or "full"
 		MC.RenderStats.lastMeshBlocks = 0
+		MC.RenderStats.lastMeshVertices = 0
+		MC.RenderStats.lastMeshFaces = 0
 		MC.RenderStats.lastOpaqueMeshes = 0
 		MC.RenderStats.lastTranslucentMeshes = 0
+		if MC.LightPerfStats then
+			MC.LightPerfStats.lastMeshMode = "full"
+			MC.LightPerfStats.lastMeshRecords = nil
+			MC.LightPerfStats.lastMeshFallback = nil
+		end
+		meshPerf.prepMS = meshPerfMS( buildStart )
+		publishMeshPerfStats( meshPerf )
 		noteMeshLightingCacheStats()
 		if MC.LightPerfEndMeshBuild then
 			MC.LightPerfEndMeshBuild( key, sectionIndex, meshMS )
 		end
 		return
 	end
+	local sectionNeedsRecolor = sectionIndex and MC.MeshLightDirty[key] and MC.MeshLightDirty[key][sectionIndex]
 
 	local bxo = chunk.cx * CS
 	local byo = chunk.cy * CS
 	local bzo = chunk.cz * MC.CH
 	setMeshSampleCacheOrigin( bxo, byo, bzo )
 	chunk.orients = chunk.orients or {}
+	local chunkBlocks = chunk.blocks or {}
+	local chunkOrients = chunk.orients
+	local normalizeOrient = MC.NormalizeOrient
+	local blocksById = MC.Blocks
+	local blockIsFullCube = MC.BlockIsFullCube
+	local getBlock = MC.GetBlock
+	local getBlockOrient = MC.GetBlockOrient
+	local isPaneBlock = MC.IsPaneBlock
+	local blockBoxes = MC.BlockBoxes
 
 	local sectionBuffers = {}
 	local cur
 
-	local function newMeshBuffer( material )
-		return { list = {}, verts = {}, nv = 0, material = material }
+	local function localIndex( lx, ly, lz )
+		return lx + ly * CS + lz * CS2
+	end
+
+	local function inCurrentChunk( lx, ly, lz )
+		return lx >= 0 and lx < CS and ly >= 0 and ly < CS and lz >= 0 and lz < CH
+	end
+
+	local function blockAt( lx, ly, lz, bx, by, bz )
+		if inCurrentChunk( lx, ly, lz ) then
+			return chunkBlocks[localIndex( lx, ly, lz )] or 0
+		end
+		return getBlock( bx, by, bz )
+	end
+
+	local function orientAt( lx, ly, lz, bx, by, bz )
+		if inCurrentChunk( lx, ly, lz ) then
+			local li = localIndex( lx, ly, lz )
+			local id = chunkBlocks[li]
+			if not id then return 0 end
+			return normalizeOrient and normalizeOrient( id, chunkOrients[li] ) or ( chunkOrients[li] or 0 )
+		end
+		return getBlockOrient and getBlockOrient( bx, by, bz ) or 0
+	end
+
+	local function visibleAt( curId, lx, ly, lz, bx, by, bz )
+		local nb = blockAt( lx, ly, lz, bx, by, bz )
+		if nb == 0 then return true end
+		if sameLiquidKind( curId, nb ) then return false end
+		local d = blocksById[nb]
+		if d and d.transparent then return nb ~= curId end
+		if blockIsFullCube and not blockIsFullCube( nb, orientAt( lx, ly, lz, bx, by, bz ) ) then return true end
+		return false
+	end
+
+	local function shapeFaceCoveredAt( curId, box, faceIndex, boxes, bx, by, bz, lx, ly, lz )
+		if boxes and #boxes > 1 and coveredByBoxes( box, faceIndex, boxes, 0, 0, 0 ) then return true end
+		local plane = facePlane( box, faceIndex )
+		local off = FACES[faceIndex].off
+		if ( faceIndex == MC.Face.TOP and math.abs( plane - 1 ) > EPS )
+		or ( faceIndex == MC.Face.BOTTOM and math.abs( plane ) > EPS )
+		or ( faceIndex == MC.Face.XP and math.abs( plane - 1 ) > EPS )
+		or ( faceIndex == MC.Face.XN and math.abs( plane ) > EPS )
+		or ( faceIndex == MC.Face.YP and math.abs( plane - 1 ) > EPS )
+		or ( faceIndex == MC.Face.YN and math.abs( plane ) > EPS ) then
+			return false
+		end
+		local nlx, nly, nlz = lx + off[1], ly + off[2], lz + off[3]
+		local nbx, nby, nbz = bx + off[1], by + off[2], bz + off[3]
+		local nb = blockAt( nlx, nly, nlz, nbx, nby, nbz )
+		if nb == 0 then return false end
+		if sameLiquidKind( curId, nb ) then return true end
+		local d = blocksById[nb]
+		if d and d.transparent and not ( isPaneBlock and isPaneBlock( nb ) ) then return false end
+		local nbOrient = orientAt( nlx, nly, nlz, nbx, nby, nbz )
+		if blockIsFullCube and blockIsFullCube( nb, nbOrient ) then return true end
+		return coveredByBoxes( box, faceIndex, blockBoxes and blockBoxes( nb, nbOrient, nbx, nby, nbz ) or nil, off[1], off[2], off[3] )
+	end
+
+	local function newMeshBuffer( material, translucent )
+		return { list = {}, records = {}, verts = {}, light = {}, nv = 0, material = material, translucent = translucent == true }
 	end
 
 	local function buffersForLocal( lx, ly, lz )
@@ -1503,8 +1906,8 @@ function MC.BuildChunkMesh( key, sectionIndex )
 		local buffers = sectionBuffers[index]
 		if not buffers then
 			buffers = {
-				opaque = newMeshBuffer( MC.Material ),
-				translucent = newMeshBuffer( MC.MaterialTranslucent ),
+				opaque = newMeshBuffer( MC.Material, false ),
+				translucent = newMeshBuffer( MC.MaterialTranslucent, true ),
 			}
 			sectionBuffers[index] = buffers
 		end
@@ -1513,18 +1916,74 @@ function MC.BuildChunkMesh( key, sectionIndex )
 
 	local function flush( buf )
 		if buf.nv == 0 then return end
+		local vertexCount = buf.nv
+		local meshNewStart = SysTime()
 		local m = Mesh( buf.material )
+		meshPerfAdd( meshPerf, "meshNewMS", meshNewStart )
+		local buildTrianglesStart = SysTime()
 		m:BuildFromTriangles( buf.verts )
+		meshPerfAdd( meshPerf, "buildTriMS", buildTrianglesStart )
 		buf.list[#buf.list + 1] = m
+		buf.records[#buf.records + 1] = {
+			mesh = m,
+			verts = buf.verts,
+			light = buf.light,
+			material = buf.material,
+			vertexCount = vertexCount,
+		}
+		meshPerf.vertices = meshPerf.vertices + vertexCount
+		meshPerf.faces = meshPerf.faces + math.floor( vertexCount / 6 )
+		meshPerf.meshes = meshPerf.meshes + 1
+		if buf.translucent then
+			meshPerf.translucentVerts = meshPerf.translucentVerts + vertexCount
+		else
+			meshPerf.opaqueVerts = meshPerf.opaqueVerts + vertexCount
+		end
 		buf.verts = {}
+		buf.light = {}
 		buf.nv = 0
 	end
 
-	local function push( vert )
+	local function push( vert, light )
 		local nv = cur.nv + 1
 		cur.nv = nv
 		cur.verts[nv] = vert
-		if nv >= VERT_LIMIT then flush( cur ) end
+		cur.light[nv] = light
+		if not cur.cacheOnly then
+			meshPerf.pushedVertices = ( meshPerf.pushedVertices or 0 ) + 1
+			if nv >= VERT_LIMIT then flush( cur ) end
+		end
+	end
+
+	local function lightMeta( shade, bx, by, bz, id, faceIndex, corner, selfEmission )
+		local cx, cy, cz = cornerXYZ( corner )
+		return {
+			shade = shade,
+			bx = bx,
+			by = by,
+			bz = bz,
+			id = id,
+			faceIndex = faceIndex,
+			cx = cx,
+			cy = cy,
+			cz = cz,
+			selfEmission = selfEmission,
+		}
+	end
+
+	local function lightMetaValues( shade, bx, by, bz, id, faceIndex, cx, cy, cz, selfEmission )
+		return {
+			shade = shade,
+			bx = bx,
+			by = by,
+			bz = bz,
+			id = id,
+			faceIndex = faceIndex,
+			cx = cx,
+			cy = cy,
+			cz = cz,
+			selfEmission = selfEmission,
+		}
 	end
 
 	local function appendMeshList( out, list )
@@ -1536,6 +1995,8 @@ function MC.BuildChunkMesh( key, sectionIndex )
 	local function flushSectionBuffers()
 		local opaqueMeshes = {}
 		local translucentMeshes = {}
+		local opaqueRecords = {}
+		local translucentRecords = {}
 		local totalSections = RENDER_SECTIONS_XY * RENDER_SECTIONS_XY * RENDER_SECTIONS_Z
 		for i = 1, totalSections do
 			local buffers = sectionBuffers[i]
@@ -1544,9 +2005,11 @@ function MC.BuildChunkMesh( key, sectionIndex )
 				flush( buffers.translucent )
 				appendMeshList( opaqueMeshes, buffers.opaque.list )
 				appendMeshList( translucentMeshes, buffers.translucent.list )
+				appendMeshList( opaqueRecords, buffers.opaque.records )
+				appendMeshList( translucentRecords, buffers.translucent.records )
 			end
 		end
-		return opaqueMeshes, translucentMeshes
+		return opaqueMeshes, translucentMeshes, opaqueRecords, translucentRecords
 	end
 
 	local function emitQuad( corners, normal, color, tile, bx, by, bz, id, faceIndex )
@@ -1555,14 +2018,14 @@ function MC.BuildChunkMesh( key, sectionIndex )
 		for t = 1, 6 do
 			local ci = TRI[t]
 			local cn = corners[ci]
-			local u, v = tileUVPoint( tile, { cn[4], cn[5] } )
+			local u, v = tileUVPointRaw( tile, cn[4], cn[5] )
 			push( {
 				pos    = Vector( cn[1], cn[2], cn[3] ),
 				normal = normal,
 				u      = u,
 				v      = v,
 				color  = colors[ci],
-			} )
+			}, lightMeta( color, bx, by, bz, id, faceIndex, cn, emission ) )
 		end
 	end
 
@@ -1610,7 +2073,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 					u      = uf == 1 and u1 or u0,
 					v      = vf == 1 and v1 or v0,
 					color  = colors[ci],
-				} )
+				}, lightMeta( face.sh, bx, by, bz, b.id, faceIndex, vert, emission ) )
 			end
 		end
 		return true
@@ -1623,14 +2086,14 @@ function MC.BuildChunkMesh( key, sectionIndex )
 			local ci = TRI[t]
 			local vert = verts[ci]
 			local uv = uvCorners[ci]
-			local u, v = tileUVPoint( tile, uv )
+			local u, v = tileUVPointRaw( tile, uv and uv[1], uv and uv[2] )
 			push( {
 				pos    = Vector( vert[1], vert[2], vert[3] ),
 				normal = normal,
 				u      = u,
 				v      = v,
 				color  = colors[ci],
-			} )
+			}, lightMeta( shade, bx, by, bz, id, faceIndex, lightCorners[ci], emission ) )
 		end
 	end
 
@@ -1747,34 +2210,69 @@ function MC.BuildChunkMesh( key, sectionIndex )
 
 	local blockIter = chunk.blocks
 	if sectionIndex then
+		local indexStart = SysTime()
 		local bySection = ensureChunkRenderSectionIndex( chunk )
+		meshPerfAdd( meshPerf, "indexMS", indexStart )
 		blockIter = bySection and bySection[sectionIndex] or {}
 	end
+	meshPerf.prepMS = meshPerfMS( buildStart )
 
+	local loopStart = SysTime()
 	for li, id in pairs( blockIter ) do
+		meshPerf.blocksVisited = meshPerf.blocksVisited + 1
 		local orient = MC.NormalizeOrient( id, chunk.orients[li] )
 		local lx, ly, lz = DecodeLocal( li )
 		local buffers = buffersForLocal( lx, ly, lz )
 		if not buffers then continue end
 		local bx, by, bz = bxo + lx, byo + ly, bzo + lz
 		local wx, wy, wz = lx * BS, ly * BS, lz * BS
+		local blockSectionIndex = sectionIndexForLocal( lx, ly, lz )
 
-		cur = ( MC.IsTranslucentBlock and MC.IsTranslucentBlock( id ) ) and buffers.translucent or buffers.opaque
+		local targetBuffer = ( MC.IsTranslucentBlock and MC.IsTranslucentBlock( id ) ) and buffers.translucent or buffers.opaque
+		local cached = getCachedBlockEmission( key, blockSectionIndex, li, id, orient )
+		if cached and ( sectionNeedsRecolor or cached.lightStyle ~= meshLightStyle ) then
+			local recolorStart = SysTime()
+			if recolorCachedBlockEmission( cached, meshLightStyle ) then
+				meshPerfAdd( meshPerf, "recolorMS", recolorStart )
+				meshPerf.blockCacheRecolors = meshPerf.blockCacheRecolors + 1
+			else
+				dropBlockEmitCacheRecord( key, blockSectionIndex, li )
+				cached = nil
+			end
+		end
+		if cached then
+			meshPerf.blockCacheHits = meshPerf.blockCacheHits + 1
+			local appended = appendCachedBlockEmission( cached, targetBuffer, flush, meshPerf )
+			if appended > 0 then meshPerf.blocksRendered = meshPerf.blocksRendered + 1 end
+			local cachedKind = cached.kind or "shape"
+			meshPerf[cachedKind .. "Blocks"] = ( meshPerf[cachedKind .. "Blocks"] or 0 ) + 1
+			continue
+		end
 
-		local b = MC.Blocks[id]
+		meshPerf.blockCacheMisses = meshPerf.blockCacheMisses + 1
+		cur = newMeshBuffer( targetBuffer.material, targetBuffer.translucent )
+		cur.cacheOnly = true
+
+		local emitStart = SysTime()
+		local emitKind = "shape"
+		local b = blocksById[id]
 		if b and b.shape == "cross" then
+			emitKind = "cross"
 			emitCrossBlock( id, bx, by, bz, wx, wy, wz )
 		elseif b and b.shape == "model" and not ( ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) ) or ( MC.IsWallBlock and MC.IsWallBlock( id ) ) or b.connection == "pipe6" ) and emitModelBlock( b, orient, bx, by, bz, wx, wy, wz ) then
+			emitKind = "model"
 			-- rendered from exact Minecraft model quads; boxes remain for collision/outline
 		elseif isLiquidBlock( id ) and emitLiquidBlock( id, orient, bx, by, bz, wx, wy, wz ) then
+			emitKind = "liquid"
 			-- rendered with Minecraft fluid surface height/offsets instead of full cube faces
-		elseif MC.BlockIsFullCube( id, orient ) then
+		elseif blockIsFullCube and blockIsFullCube( id, orient ) then
+			emitKind = "fullCube"
 			local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
 			for f = 1, 6 do
 				local face = FACES[f]
 				local o = face.off
 				local nbx, nby, nbz = bx + o[1], by + o[2], bz + o[3]
-				if visible( id, MC.GetBlock( nbx, nby, nbz ), MC.GetBlockOrient( nbx, nby, nbz ) ) then
+				if visibleAt( id, lx + o[1], ly + o[2], lz + o[3], nbx, nby, nbz ) then
 					local baked = bakedFaceData( id, f, orient )
 					local tile, rot, flipU, flipV
 					local u0, v0, u1, v1
@@ -1795,7 +2293,8 @@ function MC.BuildChunkMesh( key, sectionIndex )
 						local cn = corners[ci]
 						local u, v
 						if baked and baked.uvs then
-							u, v = tileUVPoint( tile, baked.uvs[ci] )
+							local uv = baked.uvs[ci]
+							u, v = tileUVPointRaw( tile, uv and uv[1], uv and uv[2] )
 						else
 							local uf, vf = rotatedUVFlags( cn[4], cn[5], rot or 0, flipU, flipV )
 							u = uf == 1 and u1 or u0
@@ -1807,7 +2306,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 							u      = u,
 							v      = v,
 							color  = colors[ci],
-						} )
+						}, lightMeta( col, bx, by, bz, id, f, cn, emission ) )
 					end
 				end
 			end
@@ -1817,11 +2316,11 @@ function MC.BuildChunkMesh( key, sectionIndex )
 			-- only the centre post (box 1) may take static face data
 			local isPipe6Shape = b and b.connection == "pipe6"
 			local isConnShape = ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) ) or ( MC.IsWallBlock and MC.IsWallBlock( id ) ) or isPipe6Shape
-			local boxes = MC.BlockBoxes( id, orient, bx, by, bz )
+			local boxes = blockBoxes and blockBoxes( id, orient, bx, by, bz ) or nil
 			local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
 			for boxIndex, box in ipairs( boxes or {} ) do
 				for f = 1, 6 do
-					if not shapeFaceCovered( id, box, f, boxes, bx, by, bz ) then
+					if not shapeFaceCoveredAt( id, box, f, boxes, bx, by, bz, lx, ly, lz ) then
 						local face = FACES[f]
 						local modelFaces = b and b.boxFaces
 						if isPipe6Shape then modelFaces = nil end
@@ -1835,12 +2334,27 @@ function MC.BuildChunkMesh( key, sectionIndex )
 							if fd and fd.uv then
 								u0, v0, u1, v1 = tileUVRect( tile, fd.uv )
 							end
-							local corners = BOX_FACE_CORNERS[f]( box )
 							local nrm, col = face.n, face.sh
-							local colors = quadCornerColors( col, bx, by, bz, id, f, corners, emission, meshLightStyle )
+							local c1x, c1y, c1z = boxFaceCornerValues( box, f, 1 )
+							local c2x, c2y, c2z = boxFaceCornerValues( box, f, 2 )
+							local c3x, c3y, c3z = boxFaceCornerValues( box, f, 3 )
+							local c4x, c4y, c4z = boxFaceCornerValues( box, f, 4 )
+							local color1, color2, color3, color4 = quadCornerColorValues(
+								col, bx, by, bz, id, f, emission, meshLightStyle,
+								c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z
+							)
 							for t = 1, 6 do
 								local ci = TRI[t]
-								local cn = corners[ci]
+								local cx, cy, cz, color
+								if ci == 1 then
+									cx, cy, cz, color = c1x, c1y, c1z, color1
+								elseif ci == 2 then
+									cx, cy, cz, color = c2x, c2y, c2z, color2
+								elseif ci == 3 then
+									cx, cy, cz, color = c3x, c3y, c3z, color3
+								else
+									cx, cy, cz, color = c4x, c4y, c4z, color4
+								end
 								local u, v
 								if fd and fd.uv then
 									local flags = BOX_UV_FLAGS[ci]
@@ -1848,40 +2362,71 @@ function MC.BuildChunkMesh( key, sectionIndex )
 									u = uf == 1 and u1 or u0
 									v = vf == 1 and v1 or v0
 								else
-									u, v = tileUVPoint( tile, cornerUV16( f, cn ) )
+									local cu, cv = cornerUV16Raw( f, cx, cy, cz )
+									u, v = tileUVPointRaw( tile, cu, cv )
 								end
 								push( {
-									pos    = Vector( wx + cn[1] * BS, wy + cn[2] * BS, wz + cn[3] * BS ),
+									pos    = Vector( wx + cx * BS, wy + cy * BS, wz + cz * BS ),
 									normal = nrm,
 									u      = u,
 									v      = v,
-									color  = colors[ci],
-								} )
+									color  = color,
+								}, lightMetaValues( col, bx, by, bz, id, f, cx, cy, cz, emission ) )
 							end
 						end
 					end
 				end
 			end
 		end
+		local emittedVertices = cur.nv
+		local blockRecord = storeBlockEmissionCache( key, blockSectionIndex, li, id, orient, meshLightStyle, {
+			verts = cur.verts,
+			light = cur.light,
+			vertexCount = emittedVertices,
+			material = targetBuffer.material,
+			translucent = targetBuffer.translucent,
+			kind = emitKind,
+		} )
+		appendCachedBlockEmission( blockRecord, targetBuffer, flush, meshPerf )
+		if emittedVertices > 0 then
+			meshPerf.blocksRendered = meshPerf.blocksRendered + 1
+		end
+		meshPerf[emitKind .. "Blocks"] = ( meshPerf[emitKind .. "Blocks"] or 0 ) + 1
+		meshPerfAdd( meshPerf, "emitMS", emitStart )
+		meshPerfAdd( meshPerf, emitKind .. "MS", emitStart )
 	end
+	meshPerfAdd( meshPerf, "loopMS", loopStart )
 
-	local opaqueMeshes, translucentMeshes = flushSectionBuffers()
+	local flushStart = SysTime()
+	local opaqueMeshes, translucentMeshes, opaqueRecords, translucentRecords = flushSectionBuffers()
+	meshPerfAdd( meshPerf, "flushMS", flushStart )
 
+	local commitStart = SysTime()
 	if sectionIndex then
 		MC.MeshSections[key] = MC.MeshSections[key] or {}
+		MC.MeshSectionGeometry[key] = MC.MeshSectionGeometry[key] or {}
 		local old = MC.MeshSections[key][sectionIndex]
 		if old then
+			local destroyStart = SysTime()
 			destroySectionMeshList( old.opaque )
 			destroySectionMeshList( old.translucent )
+			meshPerfAdd( meshPerf, "destroyMS", destroyStart )
 		end
 		if #opaqueMeshes > 0 or #translucentMeshes > 0 then
 			MC.MeshSections[key][sectionIndex] = { opaque = opaqueMeshes, translucent = translucentMeshes }
+			MC.MeshSectionGeometry[key][sectionIndex] = { opaque = opaqueRecords, translucent = translucentRecords }
 		else
 			MC.MeshSections[key][sectionIndex] = nil
+			MC.MeshSectionGeometry[key][sectionIndex] = nil
 		end
+		clearSectionBlockEmitDirty( key, sectionIndex )
+		if MC.MeshLightDirty[key] then MC.MeshLightDirty[key][sectionIndex] = nil end
+		local flatStart = SysTime()
 		rebuildFlatMeshLists( key )
+		meshPerfAdd( meshPerf, "flatMS", flatStart )
 	else
 		MC.MeshSections[key] = {}
+		MC.MeshSectionGeometry[key] = {}
 		local totalSections = RENDER_SECTIONS_XY * RENDER_SECTIONS_XY * RENDER_SECTIONS_Z
 		for i = 1, totalSections do
 			local buffers = sectionBuffers[i]
@@ -1890,17 +2435,135 @@ function MC.BuildChunkMesh( key, sectionIndex )
 					opaque = buffers.opaque.list,
 					translucent = buffers.translucent.list,
 				}
+				MC.MeshSectionGeometry[key][i] = {
+					opaque = buffers.opaque.records,
+					translucent = buffers.translucent.records,
+				}
 			end
 		end
+		MC.MeshLightDirty[key] = nil
+		local flatStart = SysTime()
 		rebuildFlatMeshLists( key )
+		meshPerfAdd( meshPerf, "flatMS", flatStart )
 	end
+	meshPerfAdd( meshPerf, "commitMS", commitStart )
 	local meshMS = math.Round( ( SysTime() - buildStart ) * 1000, 3 )
 	MC.RenderStats.lastMeshBuildMS = meshMS
 	MC.RenderStats.lastMeshKey = key
 	MC.RenderStats.lastMeshSection = sectionIndex or "full"
 	MC.RenderStats.lastMeshBlocks = chunk.count or 0
+	MC.RenderStats.lastMeshVertices = meshPerf.vertices
+	MC.RenderStats.lastMeshFaces = meshPerf.faces
 	MC.RenderStats.lastOpaqueMeshes = #opaqueMeshes
 	MC.RenderStats.lastTranslucentMeshes = #translucentMeshes
+	if MC.LightPerfStats then
+		MC.LightPerfStats.lastMeshMode = "full"
+		MC.LightPerfStats.lastMeshRecords = nil
+		MC.LightPerfStats.lastMeshFallback = nil
+	end
+	publishMeshPerfStats( meshPerf )
+	noteMeshLightingCacheStats()
+	if MC.LightPerfEndMeshBuild then
+		MC.LightPerfEndMeshBuild( key, sectionIndex, meshMS )
+	end
+end
+
+function MC.RebuildChunkMeshLighting( key, sectionIndex )
+	if not sectionIndex then return MC.BuildChunkMesh( key ) end
+	local buildStart = SysTime()
+	local meshPerf = newMeshPerfStats()
+	resetMeshLightingSampleCaches()
+	local meshLightStyle = currentLightStyle()
+	if MC.LightPerfStats then
+		MC.LightPerfStats.lastMeshLightStyle = meshLightStyle
+	end
+	if MC.LightPerfBeginMeshBuild then
+		MC.LightPerfBeginMeshBuild( key, sectionIndex )
+	end
+
+	local chunk = MC.GetChunkByKey( key )
+	local section = MC.MeshSectionGeometry[key] and MC.MeshSectionGeometry[key][sectionIndex]
+	if not chunk or chunk.count == 0 or not section then
+		if MC.LightPerfStats then
+			MC.LightPerfStats.lastMeshMode = "fallback"
+			MC.LightPerfStats.lastMeshFallback = "missing_cache"
+		end
+		return MC.BuildChunkMesh( key, sectionIndex )
+	end
+
+	setMeshSampleCacheOrigin( chunk.cx * CS, chunk.cy * CS, chunk.cz * MC.CH )
+	meshPerf.prepMS = meshPerfMS( buildStart )
+
+	local scannedRecords, updatedRecords = 0, 0
+	local function updateRecord( record, translucent )
+		scannedRecords = scannedRecords + 1
+		if not record or not record.mesh or not record.verts or not record.light then return false end
+		if #record.verts ~= #record.light then return false end
+		local vertexCount = #record.verts
+		local recolorStart = SysTime()
+		for i = 1, vertexCount do
+			local meta = record.light[i]
+			if not meta then return false end
+			record.verts[i].color = litFaceColor(
+				meta.shade,
+				meta.bx, meta.by, meta.bz,
+				meta.id,
+				meta.faceIndex,
+				meta,
+				meta.selfEmission,
+				meshLightStyle
+			)
+		end
+		meshPerfAdd( meshPerf, "recolorMS", recolorStart )
+		local buildTrianglesStart = SysTime()
+		record.mesh:BuildFromTriangles( record.verts )
+		meshPerfAdd( meshPerf, "buildTriMS", buildTrianglesStart )
+		meshPerf.vertices = meshPerf.vertices + vertexCount
+		meshPerf.faces = meshPerf.faces + math.floor( vertexCount / 6 )
+		meshPerf.meshes = meshPerf.meshes + 1
+		if translucent then
+			meshPerf.translucentVerts = meshPerf.translucentVerts + vertexCount
+		else
+			meshPerf.opaqueVerts = meshPerf.opaqueVerts + vertexCount
+		end
+		updatedRecords = updatedRecords + 1
+		return true
+	end
+
+	local function updateList( list, translucent )
+		for i = 1, #( list or {} ) do
+			if not updateRecord( list[i], translucent ) then return false end
+		end
+		return true
+	end
+
+	local loopStart = SysTime()
+	local updateOK = updateList( section.opaque, false ) and updateList( section.translucent, true )
+	meshPerfAdd( meshPerf, "loopMS", loopStart )
+	if not updateOK then
+		if MC.LightPerfStats then
+			MC.LightPerfStats.lastMeshMode = "fallback"
+			MC.LightPerfStats.lastMeshFallback = "invalid_cache"
+			MC.LightPerfStats.lastMeshRecords = tostring( updatedRecords ) .. "/" .. tostring( scannedRecords )
+		end
+		return MC.BuildChunkMesh( key, sectionIndex )
+	end
+
+	local meshMS = math.Round( ( SysTime() - buildStart ) * 1000, 3 )
+	MC.RenderStats.lastMeshBuildMS = meshMS
+	MC.RenderStats.lastMeshKey = key
+	MC.RenderStats.lastMeshSection = sectionIndex
+	MC.RenderStats.lastMeshBlocks = chunk.count or 0
+	MC.RenderStats.lastMeshVertices = meshPerf.vertices
+	MC.RenderStats.lastMeshFaces = meshPerf.faces
+	MC.RenderStats.lastOpaqueMeshes = #( section.opaque or {} )
+	MC.RenderStats.lastTranslucentMeshes = #( section.translucent or {} )
+	if MC.LightPerfStats then
+		MC.LightPerfStats.lastMeshMode = "light"
+		MC.LightPerfStats.lastMeshRecords = tostring( updatedRecords ) .. "/" .. tostring( scannedRecords )
+		MC.LightPerfStats.lastMeshFallback = nil
+	end
+	publishMeshPerfStats( meshPerf )
 	noteMeshLightingCacheStats()
 	if MC.LightPerfEndMeshBuild then
 		MC.LightPerfEndMeshBuild( key, sectionIndex, meshMS )
@@ -1956,6 +2619,8 @@ end )
 ------------------------------------------------------------------- dirty tracking
 function MC.MarkChunkDirty( key )
 	MC.MeshDirty[key] = true
+	MC.MeshLightDirty[key] = nil
+	clearChunkBlockEmitCache( key )
 	MC.MeshDirtyRateLimited[key] = nil
 end
 
@@ -1980,8 +2645,20 @@ local function markChunkSectionDirty( key, sectionIndex, rateLimited )
 	end
 end
 
+local function markChunkSectionLightDirty( key, sectionIndex )
+	if not key or not sectionIndex then return end
+	local geometryDirty = MC.MeshDirty[key]
+	if geometryDirty == true then return end
+	local sections = MC.MeshLightDirty[key]
+	if not sections then
+		sections = {}
+		MC.MeshLightDirty[key] = sections
+	end
+	sections[sectionIndex] = true
+end
+
 function MC.MarkLightSectionDirty( key, sectionIndex )
-	markChunkSectionDirty( key, sectionIndex, false )
+	markChunkSectionLightDirty( key, sectionIndex )
 end
 
 function MC.MarkLightCellDirty( bx, by, bz )
@@ -1990,7 +2667,7 @@ function MC.MarkLightCellDirty( bx, by, bz )
 	if not ( MC.World and MC.World[key] ) then return false end
 	local lx, ly, lz = DecodeLocal( li )
 	local sectionIndex = sectionIndexForLocal( lx, ly, lz )
-	MC.MarkLightSectionDirty( key, sectionIndex )
+	markChunkSectionLightDirty( key, sectionIndex )
 	return true, key, sectionIndex
 end
 
@@ -2020,7 +2697,9 @@ function MC.MarkRenderSectionsDirtyInBounds( minBX, minBY, minBZ, maxBX, maxBY, 
 					for sz = sz0, sz1 do
 						for sy = sy0, sy1 do
 							for sx = sx0, sx1 do
-								markChunkSectionDirty( key, sx + sy * RENDER_SECTIONS_XY + sz * RENDER_SECTIONS_XY * RENDER_SECTIONS_XY + 1, rateLimited )
+								local sectionIndex = sx + sy * RENDER_SECTIONS_XY + sz * RENDER_SECTIONS_XY * RENDER_SECTIONS_XY + 1
+								clearSectionBlockEmitCache( key, sectionIndex )
+								markChunkSectionDirty( key, sectionIndex, rateLimited )
 							end
 						end
 					end
@@ -2215,6 +2894,7 @@ function MC.MarkDirty( bx, by, bz, rateLimited )
 		local lx, ly, lz = DecodeLocal( li )
 		local key = MC.ChunkKey( cx, cy, cz )
 		local sectionIndex = sectionIndexForLocal( lx, ly, lz )
+		markBlockEmitCacheDirty( x, y, z )
 		if rateLimited then
 			markChunkSectionDirty( key, sectionIndex, true )
 		else
@@ -2242,6 +2922,17 @@ end
 local function nextDirtyMeshKeys()
 	local keys = {}
 	for key in pairs( MC.MeshDirty ) do
+		keys[#keys + 1] = key
+	end
+	table.sort( keys, function( a, b )
+		return chunkDistanceScore( a ) < chunkDistanceScore( b )
+	end )
+	return keys
+end
+
+local function nextLightDirtyMeshKeys()
+	local keys = {}
+	for key in pairs( MC.MeshLightDirty ) do
 		keys[#keys + 1] = key
 	end
 	table.sort( keys, function( a, b )
@@ -2325,6 +3016,29 @@ local function buildDirtyMeshKey( key, sections, rateLimited, budget )
 	return built
 end
 
+local function buildLightDirtyMeshKey( key, sections )
+	local geometryDirty = MC.MeshDirty[key]
+	if geometryDirty == true then
+		MC.MeshLightDirty[key] = nil
+		return 0
+	end
+
+	local built = 0
+	local pending
+	for sectionIndex in pairs( sections ) do
+		if istable( geometryDirty ) and geometryDirty[sectionIndex] then
+			pending = pending or {}
+			pending[sectionIndex] = true
+		else
+			MC.RebuildChunkMeshLighting( key, sectionIndex )
+			built = built + 1
+		end
+	end
+
+	MC.MeshLightDirty[key] = pending
+	return built
+end
+
 -- rebuild dirty meshes; explosion-driven edits are section-budgeted on a fixed
 -- interval so one blast cannot force every affected mesh to rebuild at once.
 hook.Remove( "Think", "mc_meshbuild" )
@@ -2349,6 +3063,11 @@ hook.Add( "Think", "mc_meshbuild", function()
 			NextExplosionMeshBuildAt = now + explosionMeshInterval()
 		end
 	end
+	if next( MC.MeshLightDirty ) then
+		for _, key in ipairs( nextLightDirtyMeshKeys() ) do
+			buildLightDirtyMeshKey( key, MC.MeshLightDirty[key] )
+		end
+	end
 	flushBulkCollisionQueue()
 end )
 
@@ -2356,6 +3075,9 @@ end )
 function MC.FreeAllMeshes()
 	for key in pairs( MC.Meshes ) do MC.FreeChunkMesh( key ) end
 	for key in pairs( MC.MeshesTrans ) do MC.FreeChunkMesh( key ) end
+	MC.MeshLightDirty = {}
+	MC.MeshBlockEmitCache = {}
+	MC.MeshBlockEmitDirty = {}
 	MC.MeshDirtyRateLimited = {}
 	if MC.ResetClientCollisionState then MC.ResetClientCollisionState() end
 end
