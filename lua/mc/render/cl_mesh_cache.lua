@@ -442,43 +442,31 @@ function MC.AppendCachedBlockEmission( record, buf, flushFn, meshPerf, vertexLim
 	return vertexCount
 end
 
-local function cacheLevel( parent, key )
-	local nextLevel = parent[key]
-	if nextLevel == nil then
-		nextLevel = {}
-		parent[key] = nextLevel
-	end
-	return nextLevel
-end
-
 function MC.CachedBlockLightMetaKey( meta )
-	return meta
+	return meta and meta.recolorKey
 end
 
 function MC.RecolorCachedBlockEmission( record, lightStyle, recolorFn )
 	if not record or not record.verts or not record.light or not recolorFn then return false end
-	local vertexCount = record.vertexCount or #record.verts
-	if vertexCount ~= #record.verts or vertexCount ~= #record.light then return false end
+	local verts = record.verts
+	local light = record.light
+	local vertexCount = record.vertexCount or #verts
+	if vertexCount ~= #verts or vertexCount ~= #light then return false end
 	local colorCache = {}
+	local style = lightStyle
+	local recolor = recolorFn
 	for i = 1, vertexCount do
-		local meta = record.light[i]
+		local meta = light[i]
 		if not meta then return false end
-		local blockCache = cacheLevel( colorCache, meta.bx or 0 )
-		blockCache = cacheLevel( blockCache, meta.by or 0 )
-		blockCache = cacheLevel( blockCache, meta.bz or 0 )
-		blockCache = cacheLevel( blockCache, meta.id or 0 )
-		blockCache = cacheLevel( blockCache, meta.selfEmission or 0 )
-		blockCache = cacheLevel( blockCache, meta.shade or false )
-		blockCache = cacheLevel( blockCache, meta.faceIndex or 0 )
-		blockCache = cacheLevel( blockCache, meta.cx or 0 )
-		blockCache = cacheLevel( blockCache, meta.cy or 0 )
-		local cz = meta.cz or 0
-		local color = blockCache[cz]
-		if not color then
-			color = recolorFn( meta, lightStyle )
-			blockCache[cz] = color
+		local key = meta.recolorKey
+		if key == nil then return false end
+		if meta.shadeIndex == nil then return false end
+		local color = colorCache[key]
+		if color == nil then
+			color = recolor( meta, style )
+			colorCache[key] = color
 		end
-		record.verts[i].color = color
+		verts[i].color = color
 	end
 	record.lightStyle = lightStyle
 	return true, vertexCount

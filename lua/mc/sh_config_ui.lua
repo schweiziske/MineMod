@@ -25,6 +25,9 @@ MC.ConfigConVars = {
 			item( "render", "mc_client_collision_chunk_span", "Client collision chunk span", "number", "Extra chunk radius for prediction collision" ),
 			item( "render", "mc_client_collision_cross_chunk", "Cross-chunk collision", "bool", "Include neighbouring chunk collision where needed" ),
 			item( "render", "mc_client_collision_default_version", "Default collision version", "number", "Migration/version marker for collision defaults" ),
+			item( "render", "mc_mesh_geometry_cache_sections", "Geometry cache sections", "number", "Render sections retaining Lua mesh/light data for light-only recolor" ),
+			item( "render", "mc_mesh_block_emit_cache_sections", "Block emit cache sections", "number", "Render sections retaining per-block emitted vertex/light caches" ),
+			item( "render", "mc_mesh_emit_probe", "Mesh emit probe", "bool", "Print detailed mesh emit timings for geometry rebuild diagnosis" ),
 		} },
 		{ scope = "client", id = "lighting", label = "Lighting", items = {
 			item( "lighting", "mc_light_enabled", "Lighting enabled", "bool", "Apply Minecraft-style block lighting" ),
