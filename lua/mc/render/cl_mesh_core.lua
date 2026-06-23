@@ -24,6 +24,8 @@ local RENDER_SECTIONS_Z = math.ceil( MC.CH / RENDER_SECTION_SIZE )
 
 MC.MeshEmitProbe = MC.MeshEmitProbe or ( CreateClientConVar and CreateClientConVar( "mc_mesh_emit_probe", "0", true, false,
 	"Print detailed MC mesh emit timings for diagnosing full geometry rebuild hot paths" ) )
+MC.MeshBeginUpload = MC.MeshBeginUpload or ( CreateClientConVar and CreateClientConVar( "mc_mesh_begin_upload", "1", true, false,
+	"Upload MC IMesh vertices with mesh.Begin instead of IMesh:BuildFromTriangles" ) )
 
 if MC.GeneratedAtlas then
 	MC.Atlas.COLS = MC.GeneratedAtlas.COLS or MC.Atlas.COLS
@@ -415,6 +417,11 @@ local function meshEmitProbeEnabled()
 	return cv and cv.GetBool and cv:GetBool()
 end
 
+local function meshBeginUploadEnabled()
+	local cv = MC.MeshBeginUpload
+	return not cv or not cv.GetBool or cv:GetBool()
+end
+
 local function newMeshPerfStats()
 	return {
 		vertices = 0,
@@ -444,6 +451,8 @@ local function newMeshPerfStats()
 		flushMS = 0,
 		meshNewMS = 0,
 		buildTriMS = 0,
+		meshBeginUploads = 0,
+		buildTriangleUploads = 0,
 		destroyMS = 0,
 		commitMS = 0,
 		flatMS = 0,
@@ -475,6 +484,47 @@ end
 local function meshPerfAdd( perf, field, startTime )
 	if not perf or not field or not startTime then return end
 	perf[field] = ( perf[field] or 0 ) + meshPerfElapsedMS( startTime )
+end
+
+local function uploadMeshVertices( meshObj, verts, perf )
+	if meshBeginUploadEnabled() and mesh and mesh.Begin and meshObj then
+		local vertexCount = #verts
+		local triCount = math.floor( vertexCount / 3 )
+		local uploadStart = SysTime()
+		local meshBegin = mesh.Begin
+		local meshPosition = mesh.Position
+		local meshNormal = mesh.Normal
+		local meshTexCoord = mesh.TexCoord
+		local meshColor = mesh.Color
+		local meshAdvanceVertex = mesh.AdvanceVertex
+		local meshEnd = mesh.End
+		meshBegin( meshObj, MATERIAL_TRIANGLES, triCount )
+		for i = 1, vertexCount do
+			local vert = verts[i]
+			local pos = vert.pos
+			local normal = vert.normal
+			local color = vert.color
+			meshPosition( pos )
+			if normal then meshNormal( normal ) end
+			meshTexCoord( 0, vert.u or 0, vert.v or 0 )
+			if color then
+				meshColor( color.r or 255, color.g or 255, color.b or 255, color.a or 255 )
+			else
+				meshColor( 255, 255, 255, 255 )
+			end
+			meshAdvanceVertex()
+		end
+		meshEnd()
+		meshPerfAdd( perf, "buildTriMS", uploadStart )
+		if perf then perf.meshBeginUploads = ( perf.meshBeginUploads or 0 ) + 1 end
+		return "begin"
+	end
+
+	local uploadStart = SysTime()
+	meshObj:BuildFromTriangles( verts )
+	meshPerfAdd( perf, "buildTriMS", uploadStart )
+	if perf then perf.buildTriangleUploads = ( perf.buildTriangleUploads or 0 ) + 1 end
+	return "triangles"
 end
 
 local function meshPerfAddBlockKind( perf, kind )
@@ -541,6 +591,9 @@ local function publishMeshPerfStats( perf )
 	stats.lastMeshFlushMS = meshPerfRoundMS( perf.flushMS )
 	stats.lastMeshMeshNewMS = meshPerfRoundMS( perf.meshNewMS )
 	stats.lastMeshBuildTrianglesMS = meshPerfRoundMS( perf.buildTriMS )
+	stats.lastMeshBeginUploads = perf.meshBeginUploads or 0
+	stats.lastMeshBuildTriangleUploads = perf.buildTriangleUploads or 0
+	stats.lastMeshUploadMode = ( perf.meshBeginUploads or 0 ) > 0 and "begin" or "triangles"
 	stats.lastMeshDestroyMS = meshPerfRoundMS( perf.destroyMS )
 	stats.lastMeshCommitMS = meshPerfRoundMS( perf.commitMS )
 	stats.lastMeshFlatMS = meshPerfRoundMS( perf.flatMS )
@@ -586,6 +639,9 @@ local function printMeshEmitProbe( key, sectionIndex, meshMS, perf )
 	add( "modelMS", meshPerfRoundMS( perf.modelMS ) )
 	add( "flushMS", meshPerfRoundMS( perf.flushMS ) )
 	add( "buildTriMS", meshPerfRoundMS( perf.buildTriMS ) )
+	add( "upload", ( perf.meshBeginUploads or 0 ) > 0 and "begin" or "triangles" )
+	add( "beginUploads", perf.meshBeginUploads or 0 )
+	add( "triUploads", perf.buildTriangleUploads or 0 )
 	print( table.concat( parts, " " ) )
 end
 
@@ -1210,7 +1266,9 @@ local function destroyMeshList( store, key )
 	local list = store[key]
 	if not list then return end
 	for i = 1, #list do
-		if list[i] then list[i]:Destroy() end
+		local entry = list[i]
+		local meshObj = type( entry ) == "table" and entry.mesh or entry
+		if meshObj and meshObj.Destroy then meshObj:Destroy() end
 	end
 	store[key] = nil
 end
@@ -1218,7 +1276,9 @@ end
 local function destroySectionMeshList( list )
 	if not list then return end
 	for i = 1, #list do
-		if list[i] then list[i]:Destroy() end
+		local entry = list[i]
+		local meshObj = type( entry ) == "table" and entry.mesh or entry
+		if meshObj and meshObj.Destroy then meshObj:Destroy() end
 	end
 end
 
@@ -1846,9 +1906,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 		local meshNewStart = SysTime()
 		local m = Mesh( buf.material )
 		meshPerfAdd( meshPerf, "meshNewMS", meshNewStart )
-		local buildTrianglesStart = SysTime()
-		m:BuildFromTriangles( buf.verts )
-		meshPerfAdd( meshPerf, "buildTriMS", buildTrianglesStart )
+		uploadMeshVertices( m, buf.verts, meshPerf )
 		buf.list[#buf.list + 1] = m
 		buf.records[#buf.records + 1] = {
 			mesh = m,
@@ -2569,9 +2627,7 @@ function MC.RebuildChunkMeshLighting( key, sectionIndex )
 			if not recolorCachedBlockEmission( record, meshLightStyle ) then return false end
 			meshPerfAdd( meshPerf, "recolorMS", recolorStart )
 		end
-		local buildTrianglesStart = SysTime()
-		record.mesh:BuildFromTriangles( record.verts )
-		meshPerfAdd( meshPerf, "buildTriMS", buildTrianglesStart )
+		uploadMeshVertices( record.mesh, record.verts, meshPerf )
 		meshPerf.vertices = meshPerf.vertices + vertexCount
 		meshPerf.faces = meshPerf.faces + math.floor( vertexCount / 6 )
 		meshPerf.meshes = meshPerf.meshes + 1
