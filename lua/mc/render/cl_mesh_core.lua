@@ -22,6 +22,9 @@ local RENDER_SECTION_SIZE = 8
 local RENDER_SECTIONS_XY = math.ceil( MC.CS / RENDER_SECTION_SIZE )
 local RENDER_SECTIONS_Z = math.ceil( MC.CH / RENDER_SECTION_SIZE )
 
+MC.MeshEmitProbe = MC.MeshEmitProbe or ( CreateClientConVar and CreateClientConVar( "mc_mesh_emit_probe", "0", true, false,
+	"Print detailed MC mesh emit timings for diagnosing full geometry rebuild hot paths" ) )
+
 if MC.GeneratedAtlas then
 	MC.Atlas.COLS = MC.GeneratedAtlas.COLS or MC.Atlas.COLS
 	MC.Atlas.ROWS = MC.GeneratedAtlas.ROWS or MC.Atlas.ROWS
@@ -142,6 +145,7 @@ local MC_LIGHT_STYLE_FAST = "fast"
 local MC_LIGHT_STYLE_VANILLA = "vanilla"
 local MC_LIGHT_STYLE_BEST = "best"
 local MC_LIGHT_STYLE_SHADER = "shader"
+local mathClamp, mathFloor = math.Clamp, math.floor
 
 local MC_LIGHT_AO_FACTORS = {
 	[0] = 1.00,
@@ -173,8 +177,7 @@ local function currentLightStyle()
 	return MC_LIGHT_STYLE_VANILLA
 end
 
-local function minecraftSmoothCornerSamples( bx, by, bz, faceIndex, cn )
-	local x, y, z = cornerXYZ( cn )
+local function minecraftSmoothCornerSamplesValues( bx, by, bz, faceIndex, x, y, z )
 	local x0, x1 = cornerSampleOffsets( x )
 	local y0, y1 = cornerSampleOffsets( y )
 	local z0, z1 = cornerSampleOffsets( z )
@@ -196,9 +199,13 @@ end
 
 local MeshLightSampleCache = {}
 local MeshAOSampleCache = {}
+local MeshFullCubeColorCache = {}
 local MeshLightSampleHits, MeshLightSampleMisses = 0, 0
 local MeshAOSampleHits, MeshAOSampleMisses = 0, 0
 local MeshSampleBaseX, MeshSampleBaseY, MeshSampleBaseZ = 0, 0, 0
+local MeshShaderDaylightFactor = nil
+local MeshSampleLightingFn = nil
+local MeshSampleAOFn = nil
 local SAMPLE_CACHE_ORIGIN_PAD = 16
 local SAMPLE_CACHE_AXIS_BITS = 6
 local SAMPLE_CACHE_AXIS_SIZE = 64
@@ -206,11 +213,84 @@ local SAMPLE_CACHE_Z_SHIFT = SAMPLE_CACHE_AXIS_BITS * 2
 local SAMPLE_CACHE_EXTRA_SHIFT = SAMPLE_CACHE_AXIS_BITS * 3
 local bit_bor, bit_lshift, bit_band = bit.bor, bit.lshift, bit.band
 
+local function shadeRecolorIndex( shade )
+	if shade == SH_TOP then return 1 end
+	if shade == SH_BOTTOM then return 2 end
+	if shade == SH_X then return 3 end
+	if shade == SH_Y then return 4 end
+	return 5
+end
+
+local function shadeIndexForFace( faceIndex )
+	if faceIndex == MC.Face.TOP then return 1 end
+	if faceIndex == MC.Face.BOTTOM then return 2 end
+	if faceIndex == MC.Face.XP or faceIndex == MC.Face.XN then return 3 end
+	if faceIndex == MC.Face.YP or faceIndex == MC.Face.YN then return 4 end
+	return 5
+end
+
+local function shadeRGBAByIndex( shadeIndex )
+	if shadeIndex == 1 then return 255, 255, 255, 255 end
+	if shadeIndex == 2 then return 130, 130, 130, 255 end
+	if shadeIndex == 3 then return 160, 160, 160, 255 end
+	if shadeIndex == 4 then return 205, 205, 205, 255 end
+	return 255, 255, 255, 255
+end
+
+local function cornerRecolorBits( cx, cy, cz )
+	local bits = 0
+	if ( cx or 0 ) > 0 then bits = bits + 1 end
+	if ( cy or 0 ) > 0 then bits = bits + 2 end
+	if ( cz or 0 ) > 0 then bits = bits + 4 end
+	return bits
+end
+
+local function meshRecolorKey( shadeIndex, bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
+	local emission = tonumber( selfEmission ) or 0
+	return bit_bor(
+		bit_band( bx or 0, 15 ),
+		bit_lshift( bit_band( by or 0, 15 ), 4 ),
+		bit_lshift( bit_band( bz or 0, 15 ), 8 ),
+		bit_lshift( bit_band( faceIndex or 0, 7 ), 12 ),
+		bit_lshift( shadeIndex or 5, 15 ),
+		bit_lshift( cornerRecolorBits( cx, cy, cz ), 18 ),
+		bit_lshift( bit_band( emission, 15 ), 21 )
+	)
+end
+
 local function resetMeshLightingSampleCaches()
 	MeshLightSampleCache = {}
 	MeshAOSampleCache = {}
+	MeshFullCubeColorCache = {}
 	MeshLightSampleHits, MeshLightSampleMisses = 0, 0
 	MeshAOSampleHits, MeshAOSampleMisses = 0, 0
+	MeshShaderDaylightFactor = nil
+	MeshSampleLightingFn = MC.SampleLighting
+	MeshSampleAOFn = MC.SampleAmbientOcclusion
+end
+
+local function fullCubeColorCacheKey( bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
+	local x = bx - MeshSampleBaseX
+	local y = by - MeshSampleBaseY
+	local z = bz - MeshSampleBaseZ
+	if x < 0 or x >= SAMPLE_CACHE_AXIS_SIZE
+	or y < 0 or y >= SAMPLE_CACHE_AXIS_SIZE
+	or z < 0 or z >= SAMPLE_CACHE_AXIS_SIZE then
+		return nil
+	end
+	local cornerBits = 0
+	if cx > 0 then cornerBits = cornerBits + 1 end
+	if cy > 0 then cornerBits = cornerBits + 2 end
+	if cz > 0 then cornerBits = cornerBits + 4 end
+
+	return bit_bor(
+		x,
+		bit_lshift( y, SAMPLE_CACHE_AXIS_BITS ),
+		bit_lshift( z, SAMPLE_CACHE_Z_SHIFT ),
+		bit_lshift( bit_band( faceIndex or 0, 7 ), SAMPLE_CACHE_EXTRA_SHIFT ),
+		bit_lshift( cornerBits, SAMPLE_CACHE_EXTRA_SHIFT + 3 ),
+		bit_lshift( bit_band( selfEmission or 0, 15 ), SAMPLE_CACHE_EXTRA_SHIFT + 6 )
+	)
 end
 
 local function setMeshSampleCacheOrigin( bx, by, bz )
@@ -236,7 +316,8 @@ local function sampleCacheKey( sx, sy, sz, extra )
 end
 
 local function cachedMeshLightingSample( sx, sy, sz, selfEmission )
-	if not MC.SampleLighting then return 1 end
+	local sampleLighting = MeshSampleLightingFn
+	if not sampleLighting then return 1 end
 	local key = sampleCacheKey( sx, sy, sz, selfEmission )
 	if key ~= nil then
 		local cached = MeshLightSampleCache[key]
@@ -246,13 +327,14 @@ local function cachedMeshLightingSample( sx, sy, sz, selfEmission )
 		end
 	end
 	MeshLightSampleMisses = MeshLightSampleMisses + 1
-	local brightness = MC.SampleLighting( sx, sy, sz, selfEmission )
+	local brightness = sampleLighting( sx, sy, sz, selfEmission )
 	if key ~= nil then MeshLightSampleCache[key] = brightness end
 	return brightness
 end
 
 local function cachedMeshAOSample( sx, sy, sz )
-	if not MC.SampleAmbientOcclusion then return false end
+	local sampleAO = MeshSampleAOFn
+	if not sampleAO then return false end
 	local key = sampleCacheKey( sx, sy, sz )
 	if key ~= nil then
 		local cached = MeshAOSampleCache[key]
@@ -262,7 +344,58 @@ local function cachedMeshAOSample( sx, sy, sz )
 		end
 	end
 	MeshAOSampleMisses = MeshAOSampleMisses + 1
-	local sample = MC.SampleAmbientOcclusion( sx, sy, sz )
+	local sample = sampleAO( sx, sy, sz )
+	local blocked = sample == true or sample == 1
+	if key ~= nil then MeshAOSampleCache[key] = blocked end
+	return blocked
+end
+
+local function sampleCacheKeyFast( sx, sy, sz, extra )
+	local x = sx - MeshSampleBaseX
+	local y = sy - MeshSampleBaseY
+	local z = sz - MeshSampleBaseZ
+	extra = extra or 0
+
+	if x < 0 or x >= SAMPLE_CACHE_AXIS_SIZE
+	or y < 0 or y >= SAMPLE_CACHE_AXIS_SIZE
+	or z < 0 or z >= SAMPLE_CACHE_AXIS_SIZE
+	or extra < 0 or extra >= SAMPLE_CACHE_AXIS_SIZE then
+		return nil
+	end
+
+	return bit_bor( x, bit_lshift( y, SAMPLE_CACHE_AXIS_BITS ), bit_lshift( z, SAMPLE_CACHE_Z_SHIFT ), bit_lshift( extra, SAMPLE_CACHE_EXTRA_SHIFT ) )
+end
+
+local function cachedMeshLightingSampleFast( sx, sy, sz, selfEmission )
+	local sampleLighting = MeshSampleLightingFn
+	if not sampleLighting then return 1 end
+	local key = sampleCacheKeyFast( sx, sy, sz, selfEmission )
+	if key ~= nil then
+		local cached = MeshLightSampleCache[key]
+		if cached ~= nil then
+			MeshLightSampleHits = MeshLightSampleHits + 1
+			return cached
+		end
+	end
+	MeshLightSampleMisses = MeshLightSampleMisses + 1
+	local brightness = sampleLighting( sx, sy, sz, selfEmission )
+	if key ~= nil then MeshLightSampleCache[key] = brightness end
+	return brightness or 1
+end
+
+local function cachedMeshAOSampleFast( sx, sy, sz )
+	local sampleAO = MeshSampleAOFn
+	if not sampleAO then return false end
+	local key = sampleCacheKeyFast( sx, sy, sz, 0 )
+	if key ~= nil then
+		local cached = MeshAOSampleCache[key]
+		if cached ~= nil then
+			MeshAOSampleHits = MeshAOSampleHits + 1
+			return cached
+		end
+	end
+	MeshAOSampleMisses = MeshAOSampleMisses + 1
+	local sample = sampleAO( sx, sy, sz )
 	local blocked = sample == true or sample == 1
 	if key ~= nil then MeshAOSampleCache[key] = blocked end
 	return blocked
@@ -275,6 +408,11 @@ local function noteMeshLightingCacheStats()
 	stats.lastMeshLightCacheMisses = MeshLightSampleMisses
 	stats.lastMeshAOCacheHits = MeshAOSampleHits
 	stats.lastMeshAOCacheMisses = MeshAOSampleMisses
+end
+
+local function meshEmitProbeEnabled()
+	local cv = MC.MeshEmitProbe
+	return cv and cv.GetBool and cv:GetBool()
 end
 
 local function newMeshPerfStats()
@@ -310,6 +448,15 @@ local function newMeshPerfStats()
 		commitMS = 0,
 		flatMS = 0,
 		recolorMS = 0,
+		cacheAppendMS = 0,
+		fullVisibleMS = 0,
+		fullFaceMS = 0,
+		fullColorMS = 0,
+		fullVertexMS = 0,
+		fullMetaMS = 0,
+		fullPushMS = 0,
+		fullVisibleFaces = 0,
+		fullDirectBlocks = 0,
 	}
 end
 
@@ -398,15 +545,62 @@ local function publishMeshPerfStats( perf )
 	stats.lastMeshCommitMS = meshPerfRoundMS( perf.commitMS )
 	stats.lastMeshFlatMS = meshPerfRoundMS( perf.flatMS )
 	stats.lastMeshRecolorMS = meshPerfRoundMS( perf.recolorMS )
+	stats.lastMeshCacheAppendMS = meshPerfRoundMS( perf.cacheAppendMS )
+	stats.lastMeshFullVisibleMS = meshPerfRoundMS( perf.fullVisibleMS )
+	stats.lastMeshFullFaceMS = meshPerfRoundMS( perf.fullFaceMS )
+	stats.lastMeshFullColorMS = meshPerfRoundMS( perf.fullColorMS )
+	stats.lastMeshFullVertexMS = meshPerfRoundMS( perf.fullVertexMS )
+	stats.lastMeshFullMetaMS = meshPerfRoundMS( perf.fullMetaMS )
+	stats.lastMeshFullPushMS = meshPerfRoundMS( perf.fullPushMS )
+	stats.lastMeshFullVisibleFaces = perf.fullVisibleFaces or 0
+	stats.lastMeshFullDirectBlocks = perf.fullDirectBlocks or 0
 end
 
-local function minecraftSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
-	local ax, ay, az, bx2, by2, bz2, cx, cy, cz, dx, dy, dz = minecraftSmoothCornerSamples( bx, by, bz, faceIndex, cn )
+local function printMeshEmitProbe( key, sectionIndex, meshMS, perf )
+	if not meshEmitProbeEnabled() or not perf then return end
+	local parts = { "[MC mesh probe]" }
+	local function add( name, value )
+		if value ~= nil then parts[#parts + 1] = name .. "=" .. tostring( value ) end
+	end
+	add( "ms", meshMS )
+	add( "key", key )
+	add( "sec", sectionIndex or "full" )
+	add( "verts", perf.vertices or 0 )
+	add( "faces", math.floor( ( perf.vertices or 0 ) / 6 ) )
+	add( "blocks", perf.blocksVisited or 0 )
+	add( "emitted", perf.blocksRendered or 0 )
+	add( "cache", tostring( perf.blockCacheHits or 0 ) .. "/" .. tostring( perf.blockCacheMisses or 0 ) )
+	add( "cacheAppendMS", meshPerfRoundMS( perf.cacheAppendMS ) )
+	add( "emitMS", meshPerfRoundMS( perf.emitMS ) )
+	add( "fullMS", meshPerfRoundMS( perf.fullCubeMS ) )
+	add( "fullBlocks", perf.fullCubeBlocks or 0 )
+	add( "fullFaces", perf.fullVisibleFaces or 0 )
+	add( "fullDirect", perf.fullDirectBlocks or 0 )
+	add( "fullVisibleMS", meshPerfRoundMS( perf.fullVisibleMS ) )
+	add( "fullFaceMS", meshPerfRoundMS( perf.fullFaceMS ) )
+	add( "fullColorMS", meshPerfRoundMS( perf.fullColorMS ) )
+	add( "fullVertexMS", meshPerfRoundMS( perf.fullVertexMS ) )
+	add( "fullMetaMS", meshPerfRoundMS( perf.fullMetaMS ) )
+	add( "fullPushMS", meshPerfRoundMS( perf.fullPushMS ) )
+	add( "shapeMS", meshPerfRoundMS( perf.shapeMS ) )
+	add( "modelMS", meshPerfRoundMS( perf.modelMS ) )
+	add( "flushMS", meshPerfRoundMS( perf.flushMS ) )
+	add( "buildTriMS", meshPerfRoundMS( perf.buildTriMS ) )
+	print( table.concat( parts, " " ) )
+end
+
+local function minecraftSmoothCornerBrightnessValues( bx, by, bz, faceIndex, cx0, cy0, cz0, selfEmission )
+	local ax, ay, az, bx2, by2, bz2, cx, cy, cz, dx, dy, dz = minecraftSmoothCornerSamplesValues( bx, by, bz, faceIndex, cx0, cy0, cz0 )
 	local a = tonumber( cachedMeshLightingSample( ax, ay, az, selfEmission ) ) or 1
 	local b = tonumber( cachedMeshLightingSample( bx2, by2, bz2, selfEmission ) ) or 1
 	local c = tonumber( cachedMeshLightingSample( cx, cy, cz, selfEmission ) ) or 1
 	local d = tonumber( cachedMeshLightingSample( dx, dy, dz, selfEmission ) ) or 1
 	return ( a + b + c + d ) * 0.25
+end
+
+local function minecraftSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
+	local cx, cy, cz = cornerXYZ( cn )
+	return minecraftSmoothCornerBrightnessValues( bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
 end
 
 local function minecraftFastCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
@@ -416,8 +610,94 @@ local function minecraftFastCornerBrightness( bx, by, bz, faceIndex, cn, selfEmi
 	return cachedMeshLightingSample( bx + off[1], by + off[2], bz + off[3], selfEmission )
 end
 
+local function minecraftFastCornerBrightnessValues( bx, by, bz, faceIndex, selfEmission )
+	local face = FACES[faceIndex]
+	local off = face and face.off
+	if not off then return cachedMeshLightingSample( bx, by, bz, selfEmission ) end
+	return cachedMeshLightingSample( bx + off[1], by + off[2], bz + off[3], selfEmission )
+end
+
+local function fullCubeSmoothCornerBrightnessFast( bx, by, bz, faceIndex, cx0, cy0, cz0, selfEmission )
+	local x0 = cx0 <= 0 and -1 or 0
+	local x1 = x0 + 1
+	local y0 = cy0 <= 0 and -1 or 0
+	local y1 = y0 + 1
+	local z0 = cz0 <= 0 and -1 or 0
+	local z1 = z0 + 1
+	local a, b, c, d
+	if faceIndex == MC.Face.TOP then
+		local z = bz + 1
+		a = cachedMeshLightingSampleFast( bx + x0, by + y0, z, selfEmission )
+		b = cachedMeshLightingSampleFast( bx + x1, by + y0, z, selfEmission )
+		c = cachedMeshLightingSampleFast( bx + x0, by + y1, z, selfEmission )
+		d = cachedMeshLightingSampleFast( bx + x1, by + y1, z, selfEmission )
+	elseif faceIndex == MC.Face.BOTTOM then
+		local z = bz - 1
+		a = cachedMeshLightingSampleFast( bx + x0, by + y0, z, selfEmission )
+		b = cachedMeshLightingSampleFast( bx + x1, by + y0, z, selfEmission )
+		c = cachedMeshLightingSampleFast( bx + x0, by + y1, z, selfEmission )
+		d = cachedMeshLightingSampleFast( bx + x1, by + y1, z, selfEmission )
+	elseif faceIndex == MC.Face.XP then
+		local x = bx + 1
+		a = cachedMeshLightingSampleFast( x, by + y0, bz + z0, selfEmission )
+		b = cachedMeshLightingSampleFast( x, by + y1, bz + z0, selfEmission )
+		c = cachedMeshLightingSampleFast( x, by + y0, bz + z1, selfEmission )
+		d = cachedMeshLightingSampleFast( x, by + y1, bz + z1, selfEmission )
+	elseif faceIndex == MC.Face.XN then
+		local x = bx - 1
+		a = cachedMeshLightingSampleFast( x, by + y0, bz + z0, selfEmission )
+		b = cachedMeshLightingSampleFast( x, by + y1, bz + z0, selfEmission )
+		c = cachedMeshLightingSampleFast( x, by + y0, bz + z1, selfEmission )
+		d = cachedMeshLightingSampleFast( x, by + y1, bz + z1, selfEmission )
+	elseif faceIndex == MC.Face.YP then
+		local y = by + 1
+		a = cachedMeshLightingSampleFast( bx + x0, y, bz + z0, selfEmission )
+		b = cachedMeshLightingSampleFast( bx + x1, y, bz + z0, selfEmission )
+		c = cachedMeshLightingSampleFast( bx + x0, y, bz + z1, selfEmission )
+		d = cachedMeshLightingSampleFast( bx + x1, y, bz + z1, selfEmission )
+	else
+		local y = by - 1
+		a = cachedMeshLightingSampleFast( bx + x0, y, bz + z0, selfEmission )
+		b = cachedMeshLightingSampleFast( bx + x1, y, bz + z0, selfEmission )
+		c = cachedMeshLightingSampleFast( bx + x0, y, bz + z1, selfEmission )
+		d = cachedMeshLightingSampleFast( bx + x1, y, bz + z1, selfEmission )
+	end
+	return ( a + b + c + d ) * 0.25
+end
+
+local function fullCubeCornerAOWithFactorsFast( bx, by, bz, faceIndex, cx0, cy0, cz0, f1, f2, f3 )
+	local xs = cx0 <= 0 and -1 or 1
+	local ys = cy0 <= 0 and -1 or 1
+	local zs = cz0 <= 0 and -1 or 1
+	local side1Blocked, side2Blocked, cornerBlocked
+	if faceIndex == MC.Face.TOP or faceIndex == MC.Face.BOTTOM then
+		side1Blocked = cachedMeshAOSampleFast( bx + xs, by, bz )
+		side2Blocked = cachedMeshAOSampleFast( bx, by + ys, bz )
+		cornerBlocked = cachedMeshAOSampleFast( bx + xs, by + ys, bz )
+	elseif faceIndex == MC.Face.XP or faceIndex == MC.Face.XN then
+		side1Blocked = cachedMeshAOSampleFast( bx, by + ys, bz )
+		side2Blocked = cachedMeshAOSampleFast( bx, by, bz + zs )
+		cornerBlocked = cachedMeshAOSampleFast( bx, by + ys, bz + zs )
+	else
+		side1Blocked = cachedMeshAOSampleFast( bx + xs, by, bz )
+		side2Blocked = cachedMeshAOSampleFast( bx, by, bz + zs )
+		cornerBlocked = cachedMeshAOSampleFast( bx + xs, by, bz + zs )
+	end
+	if side1Blocked and side2Blocked then return f3 end
+	local blocked = ( side1Blocked and 1 or 0 ) + ( side2Blocked and 1 or 0 ) + ( cornerBlocked and 1 or 0 )
+	if blocked == 1 then return f1 end
+	if blocked == 2 then return f2 end
+	if blocked == 3 then return f3 end
+	return 1
+end
+
 local function bestSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
 	local brightness = math.Clamp( minecraftSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission ), 0, 1 )
+	return math.Clamp( brightness ^ 0.85, 0, 1 )
+end
+
+local function bestSmoothCornerBrightnessValues( bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
+	local brightness = math.Clamp( minecraftSmoothCornerBrightnessValues( bx, by, bz, faceIndex, cx, cy, cz, selfEmission ), 0, 1 )
 	return math.Clamp( brightness ^ 0.85, 0, 1 )
 end
 
@@ -432,8 +712,10 @@ local function shaderSunFaceFactor( faceIndex )
 end
 
 local function shaderDaylightFactor()
+	if MeshShaderDaylightFactor ~= nil then return MeshShaderDaylightFactor end
 	local cv = MC.LightSkyLevel
-	return math.Clamp( ( cv and cv.GetInt and cv:GetInt() or 15 ) / 15, 0, 1 )
+	MeshShaderDaylightFactor = math.Clamp( ( cv and cv.GetInt and cv:GetInt() or 15 ) / 15, 0, 1 )
+	return MeshShaderDaylightFactor
 end
 
 local function shaderSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
@@ -446,8 +728,17 @@ local function shaderSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmis
 	return math.Clamp( contrast + daylight * 0.025, 0, 1 )
 end
 
-local function minecraftCornerOccluders( bx, by, bz, faceIndex, cn )
-	local x, y, z = cornerXYZ( cn )
+local function shaderSmoothCornerBrightnessValues( bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
+	local brightness = math.Clamp( bestSmoothCornerBrightnessValues( bx, by, bz, faceIndex, cx, cy, cz, selfEmission ), 0, 1 )
+	local daylight = shaderDaylightFactor()
+	local litSurface = math.Clamp( ( brightness - 0.22 ) / 0.78, 0, 1 )
+	local sunMix = daylight * litSurface
+	local directed = brightness * ( 1 + ( shaderSunFaceFactor( faceIndex ) - 1 ) * sunMix )
+	local contrast = ( directed - 0.5 ) * 1.12 + 0.5
+	return math.Clamp( contrast + daylight * 0.025, 0, 1 )
+end
+
+local function minecraftCornerOccludersValues( bx, by, bz, faceIndex, x, y, z )
 	local xs, ys, zs = cornerStep( x ), cornerStep( y ), cornerStep( z )
 	if faceIndex == MC.Face.TOP or faceIndex == MC.Face.BOTTOM then
 		return bx + xs, by, bz, bx, by + ys, bz, bx + xs, by + ys, bz
@@ -459,14 +750,19 @@ local function minecraftCornerOccluders( bx, by, bz, faceIndex, cn )
 	return bx, by, bz, bx, by, bz, bx, by, bz
 end
 
-local function minecraftCornerAOWithFactors( bx, by, bz, faceIndex, cn, factors )
-	local s1x, s1y, s1z, s2x, s2y, s2z, cx, cy, cz = minecraftCornerOccluders( bx, by, bz, faceIndex, cn )
+local function minecraftCornerAOWithFactorsValues( bx, by, bz, faceIndex, cx0, cy0, cz0, factors )
+	local s1x, s1y, s1z, s2x, s2y, s2z, cx, cy, cz = minecraftCornerOccludersValues( bx, by, bz, faceIndex, cx0, cy0, cz0 )
 	local side1Blocked = cachedMeshAOSample( s1x, s1y, s1z )
 	local side2Blocked = cachedMeshAOSample( s2x, s2y, s2z )
 	local cornerBlocked = cachedMeshAOSample( cx, cy, cz )
 	if side1Blocked and side2Blocked then return factors[3] end
 	local blocked = ( side1Blocked and 1 or 0 ) + ( side2Blocked and 1 or 0 ) + ( cornerBlocked and 1 or 0 )
 	return factors[blocked] or 1
+end
+
+local function minecraftCornerAOWithFactors( bx, by, bz, faceIndex, cn, factors )
+	local cx, cy, cz = cornerXYZ( cn )
+	return minecraftCornerAOWithFactorsValues( bx, by, bz, faceIndex, cx, cy, cz, factors )
 end
 
 local function minecraftSmoothCornerAO( bx, by, bz, faceIndex, cn )
@@ -479,6 +775,18 @@ end
 
 local function minecraftShaderCornerAO( bx, by, bz, faceIndex, cn )
 	return minecraftCornerAOWithFactors( bx, by, bz, faceIndex, cn, MC_LIGHT_SHADER_AO_FACTORS )
+end
+
+local function minecraftSmoothCornerAOValues( bx, by, bz, faceIndex, cx, cy, cz )
+	return minecraftCornerAOWithFactorsValues( bx, by, bz, faceIndex, cx, cy, cz, MC_LIGHT_AO_FACTORS )
+end
+
+local function minecraftBestCornerAOValues( bx, by, bz, faceIndex, cx, cy, cz )
+	return minecraftCornerAOWithFactorsValues( bx, by, bz, faceIndex, cx, cy, cz, MC_LIGHT_BEST_AO_FACTORS )
+end
+
+local function minecraftShaderCornerAOValues( bx, by, bz, faceIndex, cx, cy, cz )
+	return minecraftCornerAOWithFactorsValues( bx, by, bz, faceIndex, cx, cy, cz, MC_LIGHT_SHADER_AO_FACTORS )
 end
 
 local function shaderFaceTint( faceIndex )
@@ -546,8 +854,192 @@ local function litFaceColorValues( shade, bx, by, bz, id, faceIndex, cn, selfEmi
 	return r, g, b, a
 end
 
+local function litFaceColorMetaValues( meta, style )
+	local shadeR, shadeG, shadeB, shadeA = shadeRGBAByIndex( meta.shadeIndex )
+	if not MC.SampleLighting then return shadeR, shadeG, shadeB, shadeA end
+	style = style or MC_LIGHT_STYLE_VANILLA
+	local bx, by, bz = meta.bx, meta.by, meta.bz
+	local faceIndex = meta.faceIndex
+	local cx, cy, cz = meta.cx, meta.cy, meta.cz
+	local selfEmission = meta.selfEmission
+	local brightness, ao
+	if style == MC_LIGHT_STYLE_FAST then
+		brightness = minecraftFastCornerBrightness( bx, by, bz, faceIndex, meta, selfEmission )
+		ao = 1
+	elseif style == MC_LIGHT_STYLE_BEST then
+		brightness = bestSmoothCornerBrightnessValues( bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
+		ao = minecraftBestCornerAOValues( bx, by, bz, faceIndex, cx, cy, cz )
+	elseif style == MC_LIGHT_STYLE_SHADER then
+		brightness = shaderSmoothCornerBrightnessValues( bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
+		ao = minecraftShaderCornerAOValues( bx, by, bz, faceIndex, cx, cy, cz )
+	else
+		brightness = minecraftSmoothCornerBrightnessValues( bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
+		ao = minecraftSmoothCornerAOValues( bx, by, bz, faceIndex, cx, cy, cz )
+	end
+	local mul = math.Clamp( ( tonumber( brightness ) or 1 ) * ao, 0, 1 )
+	local rScale, gScale, bScale = 1, 1, 1
+	if style == MC_LIGHT_STYLE_SHADER then
+		rScale, gScale, bScale = shaderFaceTint( faceIndex )
+	end
+	local r = math.Clamp( math.floor( shadeR * mul * rScale + 0.5 ), 0, 255 )
+	local g = math.Clamp( math.floor( shadeG * mul * gScale + 0.5 ), 0, 255 )
+	local b = math.Clamp( math.floor( shadeB * mul * bScale + 0.5 ), 0, 255 )
+	return r, g, b, shadeA
+end
+
+local function litFaceColorMeta( meta, style )
+	return colorFromRGBA( litFaceColorMetaValues( meta, style ) )
+end
+
 local function litFaceColor( shade, bx, by, bz, id, faceIndex, cn, selfEmission, style )
 	return colorFromRGBA( litFaceColorValues( shade, bx, by, bz, id, faceIndex, cn, selfEmission, style ) )
+end
+
+local function colorFromShadeMul( shadeR, shadeG, shadeB, shadeA, mul, rScale, gScale, bScale )
+	return colorFromRGBA(
+		mathClamp( mathFloor( shadeR * mul * rScale + 0.5 ), 0, 255 ),
+		mathClamp( mathFloor( shadeG * mul * gScale + 0.5 ), 0, 255 ),
+		mathClamp( mathFloor( shadeB * mul * bScale + 0.5 ), 0, 255 ),
+		shadeA
+	)
+end
+
+local function fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, cx, cy, cz, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor )
+	local key = nil
+	if style ~= MC_LIGHT_STYLE_SHADER then
+		key = fullCubeColorCacheKey( bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
+	end
+	if key ~= nil then
+		local cached = MeshFullCubeColorCache[key]
+		if cached then return cached end
+	end
+
+	local brightness, ao
+	if style == MC_LIGHT_STYLE_BEST then
+		brightness = mathClamp( fullCubeSmoothCornerBrightnessFast( bx, by, bz, faceIndex, cx, cy, cz, selfEmission ), 0, 1 )
+		brightness = mathClamp( brightness ^ 0.85, 0, 1 )
+		ao = fullCubeCornerAOWithFactorsFast( bx, by, bz, faceIndex, cx, cy, cz, 0.90, 0.78, 0.66 )
+	elseif style == MC_LIGHT_STYLE_SHADER then
+		brightness = mathClamp( fullCubeSmoothCornerBrightnessFast( bx, by, bz, faceIndex, cx, cy, cz, selfEmission ), 0, 1 )
+		brightness = mathClamp( brightness ^ 0.85, 0, 1 )
+		local litSurface = mathClamp( ( brightness - 0.22 ) / 0.78, 0, 1 )
+		local directed = brightness * ( 1 + ( sunFactor - 1 ) * daylight * litSurface )
+		brightness = mathClamp( ( directed - 0.5 ) * 1.12 + 0.5 + daylight * 0.025, 0, 1 )
+		ao = fullCubeCornerAOWithFactorsFast( bx, by, bz, faceIndex, cx, cy, cz, 0.94, 0.86, 0.74 )
+	else
+		brightness = fullCubeSmoothCornerBrightnessFast( bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
+		ao = fullCubeCornerAOWithFactorsFast( bx, by, bz, faceIndex, cx, cy, cz, 0.82, 0.68, 0.55 )
+	end
+	local color = colorFromShadeMul( shadeR, shadeG, shadeB, shadeA, mathClamp( brightness * ao, 0, 1 ), rScale, gScale, bScale )
+	if key ~= nil then MeshFullCubeColorCache[key] = color end
+	return color
+end
+
+local function fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, cx, cy, cz, selfEmission, rScale, gScale, bScale, daylight, sunFactor )
+	local brightness = mathClamp( fullCubeSmoothCornerBrightnessFast( bx, by, bz, faceIndex, cx, cy, cz, selfEmission ), 0, 1 )
+	brightness = mathClamp( brightness ^ 0.85, 0, 1 )
+	local litSurface = mathClamp( ( brightness - 0.22 ) / 0.78, 0, 1 )
+	local directed = brightness * ( 1 + ( sunFactor - 1 ) * daylight * litSurface )
+	brightness = mathClamp( ( directed - 0.5 ) * 1.12 + 0.5 + daylight * 0.025, 0, 1 )
+	local ao = fullCubeCornerAOWithFactorsFast( bx, by, bz, faceIndex, cx, cy, cz, 0.94, 0.86, 0.74 )
+	return colorFromShadeMul( shadeR, shadeG, shadeB, shadeA, mathClamp( brightness * ao, 0, 1 ), rScale, gScale, bScale )
+end
+
+local function fullCubeFaceCornerColorsShader( shadeIndex, bx, by, bz, faceIndex, selfEmission )
+	local shadeR, shadeG, shadeB, shadeA = shadeRGBAByIndex( shadeIndex )
+	local rScale, gScale, bScale = shaderFaceTint( faceIndex )
+	local daylight = shaderDaylightFactor()
+	local sunFactor = shaderSunFaceFactor( faceIndex )
+	if faceIndex == MC.Face.TOP then
+		return
+			fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 1, selfEmission, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 1, selfEmission, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 1, selfEmission, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 1, selfEmission, rScale, gScale, bScale, daylight, sunFactor )
+	elseif faceIndex == MC.Face.BOTTOM then
+		return
+			fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 0, selfEmission, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 0, selfEmission, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 0, selfEmission, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 0, selfEmission, rScale, gScale, bScale, daylight, sunFactor )
+	elseif faceIndex == MC.Face.XP then
+		return
+			fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 0, selfEmission, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 0, selfEmission, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 1, selfEmission, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 1, selfEmission, rScale, gScale, bScale, daylight, sunFactor )
+	elseif faceIndex == MC.Face.XN then
+		return
+			fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 0, selfEmission, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 0, selfEmission, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 1, selfEmission, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 1, selfEmission, rScale, gScale, bScale, daylight, sunFactor )
+	elseif faceIndex == MC.Face.YP then
+		return
+			fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 0, selfEmission, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 0, selfEmission, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 1, selfEmission, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 1, selfEmission, rScale, gScale, bScale, daylight, sunFactor )
+	end
+	return
+		fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 0, selfEmission, rScale, gScale, bScale, daylight, sunFactor ),
+		fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 0, selfEmission, rScale, gScale, bScale, daylight, sunFactor ),
+		fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 1, selfEmission, rScale, gScale, bScale, daylight, sunFactor ),
+		fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 1, selfEmission, rScale, gScale, bScale, daylight, sunFactor )
+end
+
+local function fullCubeFaceCornerColors( shadeIndex, bx, by, bz, faceIndex, selfEmission, style )
+	local shadeR, shadeG, shadeB, shadeA = shadeRGBAByIndex( shadeIndex )
+	if not MC.SampleLighting then
+		local color = colorFromRGBA( shadeR, shadeG, shadeB, shadeA )
+		return color, color, color, color
+	end
+	if style == MC_LIGHT_STYLE_FAST then
+		local mul = mathClamp( tonumber( minecraftFastCornerBrightnessValues( bx, by, bz, faceIndex, selfEmission ) ) or 1, 0, 1 )
+		local color = colorFromShadeMul( shadeR, shadeG, shadeB, shadeA, mul, 1, 1, 1 )
+		return color, color, color, color
+	end
+	if style == MC_LIGHT_STYLE_SHADER then
+		return fullCubeFaceCornerColorsShader( shadeIndex, bx, by, bz, faceIndex, selfEmission )
+	end
+	local rScale, gScale, bScale = 1, 1, 1
+	local daylight, sunFactor = 0, 1
+	if faceIndex == MC.Face.TOP then
+		return
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor )
+	elseif faceIndex == MC.Face.BOTTOM then
+		return
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor )
+	elseif faceIndex == MC.Face.XP then
+		return
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor )
+	elseif faceIndex == MC.Face.XN then
+		return
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor )
+	elseif faceIndex == MC.Face.YP then
+		return
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor )
+	end
+	return
+		fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor ),
+		fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor ),
+		fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor ),
+		fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor )
 end
 
 local function quadCornerColors( shade, bx, by, bz, id, faceIndex, corners, selfEmission, style )
@@ -611,15 +1103,7 @@ MC.RenderMeshConstants.SH_X = SH_X
 MC.RenderMeshConstants.SH_Y = SH_Y
 
 local function recolorLightMeta( meta, style )
-	return litFaceColor(
-		meta.shade,
-		meta.bx, meta.by, meta.bz,
-		meta.id,
-		meta.faceIndex,
-		meta,
-		meta.selfEmission,
-		style
-	)
+	return litFaceColorMeta( meta, style )
 end
 
 local function recolorCachedBlockEmission( record, lightStyle )
@@ -1183,6 +1667,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 	local C = MC.RenderMeshConstants
 	local buildStart = SysTime()
 	local meshPerf = newMeshPerfStats()
+	local meshProbe = meshEmitProbeEnabled()
 	resetMeshLightingSampleCaches()
 	resetMeshColorObjectCache()
 	local meshLightStyle = currentLightStyle()
@@ -1241,6 +1726,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 		meshPerf.prepMS = meshPerfMS( buildStart )
 		publishMeshPerfStats( meshPerf )
 		noteMeshLightingCacheStats()
+		printMeshEmitProbe( key, sectionIndex, meshMS, meshPerf )
 		if MC.LightPerfEndMeshBuild then
 			MC.LightPerfEndMeshBuild( key, sectionIndex, meshMS )
 		end
@@ -1397,8 +1883,10 @@ function MC.BuildChunkMesh( key, sectionIndex )
 
 	local function lightMeta( shade, bx, by, bz, id, faceIndex, corner, selfEmission )
 		local cx, cy, cz = cornerXYZ( corner )
+		local shadeIndex = shadeRecolorIndex( shade )
 		return {
 			shade = shade,
+			shadeIndex = shadeIndex,
 			bx = bx,
 			by = by,
 			bz = bz,
@@ -1408,12 +1896,15 @@ function MC.BuildChunkMesh( key, sectionIndex )
 			cy = cy,
 			cz = cz,
 			selfEmission = selfEmission,
+			recolorKey = meshRecolorKey( shadeIndex, bx, by, bz, faceIndex, cx, cy, cz, selfEmission ),
 		}
 	end
 
 	local function lightMetaValues( shade, bx, by, bz, id, faceIndex, cx, cy, cz, selfEmission )
+		local shadeIndex = shadeRecolorIndex( shade )
 		return {
 			shade = shade,
+			shadeIndex = shadeIndex,
 			bx = bx,
 			by = by,
 			bz = bz,
@@ -1423,6 +1914,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 			cy = cy,
 			cz = cz,
 			selfEmission = selfEmission,
+			recolorKey = meshRecolorKey( shadeIndex, bx, by, bz, faceIndex, cx, cy, cz, selfEmission ),
 		}
 	end
 
@@ -1713,7 +2205,9 @@ function MC.BuildChunkMesh( key, sectionIndex )
 		end
 		if cached then
 			meshPerf.blockCacheHits = meshPerf.blockCacheHits + 1
+			local cacheAppendStart = meshProbe and SysTime() or nil
 			local appended = MC.AppendCachedBlockEmission( cached, targetBuffer, flush, meshPerf, C.VERT_LIMIT )
+			if cacheAppendStart then meshPerfAdd( meshPerf, "cacheAppendMS", cacheAppendStart ) end
 			if appended > 0 then meshPerf.blocksRendered = meshPerf.blocksRendered + 1 end
 			local cachedKind = cached.kind or "shape"
 			meshPerfAddBlockKind( meshPerf, cachedKind )
@@ -1743,6 +2237,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 			local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
 			local visibleFaceCount = 0
 			local visibleFaceMask = 0
+			local fullVisibleStart = meshProbe and SysTime() or nil
 			for f = 1, 6 do
 				local face = C.FACES[f]
 				local o = face.off
@@ -1751,8 +2246,11 @@ function MC.BuildChunkMesh( key, sectionIndex )
 					visibleFaceMask = bit_bor( visibleFaceMask, bit_lshift( 1, f - 1 ) )
 				end
 			end
+			if fullVisibleStart then meshPerfAdd( meshPerf, "fullVisibleMS", fullVisibleStart ) end
+			meshPerf.fullVisibleFaces = meshPerf.fullVisibleFaces + visibleFaceCount
 			directEmitVertexCount = visibleFaceCount * 6
 			directEmitCheapFullCube = not shouldStoreBlockEmissionCache( emitKind, directEmitVertexCount )
+			if directEmitCheapFullCube then meshPerf.fullDirectBlocks = meshPerf.fullDirectBlocks + 1 end
 			if directEmitCheapFullCube then
 				if targetBuffer.nv + directEmitVertexCount >= C.VERT_LIMIT then flush( targetBuffer ) end
 				cur = targetBuffer
@@ -1762,6 +2260,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 			for f = 1, 6 do
 				if bit_band( visibleFaceMask, bit_lshift( 1, f - 1 ) ) ~= 0 then
 					local face = C.FACES[f]
+					local faceStart = meshProbe and SysTime() or nil
 					local baked = bakedFaceData( id, f, orient )
 					local tile, rot, flipU, flipV
 					local u0, v0, u1, v1
@@ -1775,7 +2274,11 @@ function MC.BuildChunkMesh( key, sectionIndex )
 					end
 					local corners = face.c
 					local nrm, col = face.n, face.sh
-					local color1, color2, color3, color4 = quadCornerColors( col, bx, by, bz, id, f, corners, emission, meshLightStyle )
+					local shadeIndex = shadeIndexForFace( f )
+					if faceStart then meshPerfAdd( meshPerf, "fullFaceMS", faceStart ) end
+					local colorStart = meshProbe and SysTime() or nil
+					local color1, color2, color3, color4 = fullCubeFaceCornerColors( shadeIndex, bx, by, bz, f, emission, meshLightStyle )
+					if colorStart then meshPerfAdd( meshPerf, "fullColorMS", colorStart ) end
 
 					for t = 1, 6 do
 						local ci = C.TRI[t]
@@ -1799,13 +2302,31 @@ function MC.BuildChunkMesh( key, sectionIndex )
 						else
 							vertColor = color4
 						end
-						push( {
-							pos    = Vector( wx + cn[1] * C.BS, wy + cn[2] * C.BS, wz + cn[3] * C.BS ),
-							normal = nrm,
-							u      = u,
-							v      = v,
-							color  = vertColor,
-						}, lightMeta( col, bx, by, bz, id, f, cn, emission ) )
+						if meshProbe then
+							local vertexStart = SysTime()
+							local vert = {
+								pos    = Vector( wx + cn[1] * C.BS, wy + cn[2] * C.BS, wz + cn[3] * C.BS ),
+								normal = nrm,
+								u      = u,
+								v      = v,
+								color  = vertColor,
+							}
+							meshPerfAdd( meshPerf, "fullVertexMS", vertexStart )
+							local metaStart = SysTime()
+							local meta = lightMeta( col, bx, by, bz, id, f, cn, emission )
+							meshPerfAdd( meshPerf, "fullMetaMS", metaStart )
+							local pushStart = SysTime()
+							push( vert, meta )
+							meshPerfAdd( meshPerf, "fullPushMS", pushStart )
+						else
+							push( {
+								pos    = Vector( wx + cn[1] * C.BS, wy + cn[2] * C.BS, wz + cn[3] * C.BS ),
+								normal = nrm,
+								u      = u,
+								v      = v,
+								color  = vertColor,
+							}, lightMeta( col, bx, by, bz, id, f, cn, emission ) )
+						end
 					end
 				end
 			end
@@ -1986,6 +2507,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 	end
 	publishMeshPerfStats( meshPerf )
 	noteMeshLightingCacheStats()
+	printMeshEmitProbe( key, sectionIndex, meshMS, meshPerf )
 	if MC.LightPerfEndMeshBuild then
 		MC.LightPerfEndMeshBuild( key, sectionIndex, meshMS )
 	end
