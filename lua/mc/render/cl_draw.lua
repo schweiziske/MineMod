@@ -6,9 +6,21 @@ end
 
 local function drawMeshList( list, material )
 	if not list then return end
-	render.SetMaterial( material )
+	local currentMaterial = material
+	render.SetMaterial( currentMaterial )
 	for i = 1, #list do
-		list[i]:Draw()
+		local entry = list[i]
+		local meshObj = entry
+		local entryMaterial = material
+		if type( entry ) == "table" then
+			meshObj = entry.mesh
+			entryMaterial = entry.material or material
+		end
+		if entryMaterial ~= currentMaterial then
+			currentMaterial = entryMaterial
+			render.SetMaterial( currentMaterial )
+		end
+		if meshObj and meshObj.Draw then meshObj:Draw() end
 	end
 end
 

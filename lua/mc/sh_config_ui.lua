@@ -27,6 +27,7 @@ MC.ConfigConVars = {
 			item( "render", "mc_client_collision_default_version", "Default collision version", "number", "Migration/version marker for collision defaults" ),
 			item( "render", "mc_mesh_geometry_cache_sections", "Geometry cache sections", "number", "Render sections retaining Lua mesh/light data for light-only recolor" ),
 			item( "render", "mc_mesh_block_emit_cache_sections", "Block emit cache sections", "number", "Render sections retaining per-block emitted vertex/light caches" ),
+			item( "render", "mc_mesh_begin_upload", "Mesh.Begin upload", "bool", "Upload IMesh vertices with mesh.Begin instead of BuildFromTriangles" ),
 			item( "render", "mc_mesh_emit_probe", "Mesh emit probe", "bool", "Print detailed mesh emit timings for geometry rebuild diagnosis" ),
 		} },
 		{ scope = "client", id = "lighting", label = "Lighting", items = {
