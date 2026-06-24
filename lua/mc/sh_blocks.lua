@@ -105,6 +105,13 @@ local function propertyNumber( value, fallback )
 	return value
 end
 
+local function quadLightEmissionValue( value, tile )
+	local emission = math.Clamp( math.floor( tonumber( value ) or 0 ), 0, 15 )
+	if emission > 0 then return emission end
+	if type( tile ) == "string" and string.find( tile, "_emissive", 1, true ) then return 15 end
+	return 0
+end
+
 local function normalizeBaked( baked )
 	if type( baked ) ~= "table" then return nil end
 	local out = {}
@@ -112,11 +119,13 @@ local function normalizeBaked( baked )
 		local ofaces = {}
 		for face, data in pairs( faces ) do
 			if type( data ) == "table" then
+				local lightEmission = quadLightEmissionValue( data.lightEmission or data.light_emission, data.tile )
 				ofaces[tonumber( face ) or face] = {
 					tile = tileValue( data.tile, 0 ),
 					rot = math.floor( tonumber( data.rot ) or 0 ),
 					uv = data.uv,
 					uvs = data.uvs,
+					lightEmission = lightEmission,
 				}
 			end
 		end
@@ -158,10 +167,12 @@ local function normalizeBoxFaces( boxFaces )
 			local ofaces = {}
 			for face, data in pairs( faces ) do
 				if type( data ) == "table" then
+					local lightEmission = quadLightEmissionValue( data.lightEmission or data.light_emission, data.tile )
 					ofaces[tonumber( face ) or face] = {
 						tile = tileValue( data.tile, 0 ),
 						uv = data.uv,
 						rot = math.floor( tonumber( data.rot ) or 0 ),
+						lightEmission = lightEmission,
 					}
 				end
 			end
@@ -189,11 +200,13 @@ local function normalizeModelQuads( modelQuads )
 				end
 			end
 			if #verts == 4 then
+				local lightEmission = quadLightEmissionValue( quad.lightEmission or quad.light_emission, quad.tile )
 				out[#out + 1] = {
 					face = math.floor( tonumber( quad.face ) or 1 ),
 					tile = tileValue( quad.tile, 0 ),
 					uv = quad.uv,
 					rot = math.floor( tonumber( quad.rot ) or 0 ),
+					lightEmission = lightEmission,
 					verts = verts,
 				}
 			end
@@ -1593,6 +1606,11 @@ function MC.BlockLightOpacity( id, orient )
 	if id == 0 then return 0 end
 	local b = MC.Blocks[id]
 	if not b then return 15 end
+	local name = b.name or ""
+	if name == "tinted_glass" then return 15 end
+	if name == "water" then return 3 end
+	if name == "lava" then return 15 end
+	if string.find( name, "leaves", 1, true ) then return 1 end
 	if b.transparent == true or b.solid == false then return 0 end
 	if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then return 15 end
 	return 0

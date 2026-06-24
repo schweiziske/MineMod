@@ -453,6 +453,8 @@ function MC.RecolorCachedBlockEmission( record, lightStyle, recolorFn )
 	local vertexCount = record.vertexCount or #verts
 	if vertexCount ~= #verts or vertexCount ~= #light then return false end
 	local colorCache = {}
+	local u1Cache = {}
+	local v1Cache = {}
 	local style = lightStyle
 	local recolor = recolorFn
 	for i = 1, vertexCount do
@@ -462,11 +464,24 @@ function MC.RecolorCachedBlockEmission( record, lightStyle, recolorFn )
 		if key == nil then return false end
 		if meta.shadeIndex == nil then return false end
 		local color = colorCache[key]
+		local u1, v1
 		if color == nil then
-			color = recolor( meta, style )
+			color, u1, v1 = recolor( meta, style )
 			colorCache[key] = color
+			u1Cache[key] = u1
+			v1Cache[key] = v1
+		else
+			u1 = u1Cache[key]
+			v1 = v1Cache[key]
 		end
 		verts[i].color = color
+		if u1 ~= nil and v1 ~= nil then
+			verts[i].u1 = u1
+			verts[i].v1 = v1
+		else
+			verts[i].u1 = nil
+			verts[i].v1 = nil
+		end
 	end
 	record.lightStyle = lightStyle
 	return true, vertexCount
