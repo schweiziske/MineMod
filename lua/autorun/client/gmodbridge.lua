@@ -62,4 +62,20 @@ concommand.Add("gmodbridge_status", function()
 	end
 end)
 
+concommand.Add("gmodbridge_connect", function(_, _, args)
+	if not gmodbridge or not gmodbridge.connect then
+		print("[gmodbridge] connect unavailable")
+		return
+	end
+
+	local port = tonumber(args and args[1]) or 27670
+	local connectOk, result = pcall(gmodbridge.connect, port)
+	if connectOk then
+		print("[gmodbridge]", result)
+	else
+		print("[gmodbridge] connect failed:", result)
+	end
+end)
+
 print("[gmodbridge] client bridge loaded")
+RunConsoleCommand("gmodbridge_connect",27671)

@@ -38,6 +38,7 @@ local SERVER_FILES = {
 	"mc/sv_world.lua",
 	"mc/sv_config_ui.lua",
 	"mc/sv_commands.lua",
+	"mc/sv_collision_probe.lua",
 	"mc/sv_chunk_store.lua",
 	"mc/sv_saves.lua",
 	"mc/sv_presets.lua",
@@ -47,6 +48,18 @@ local SERVER_FILES = {
 local CLIENT_FILES = {
 	"mc/cl_lighting.lua",
 	"mc/render/cl_mesh_cache.lua",
+	"mc/render/cl_mesh_constants.lua",
+	"mc/render/cl_mesh_config.lua",
+	"mc/render/cl_mesh_materials.lua",
+	"mc/render/cl_mesh_lightmap_texture.lua",
+	"mc/render/cl_mesh_light_samples.lua",
+	"mc/render/cl_mesh_upload.lua",
+	"mc/render/cl_mesh_lightmap_uv.lua",
+	"mc/render/cl_mesh_color.lua",
+	"mc/render/cl_mesh_geometry.lua",
+	"mc/render/cl_mesh_build_context.lua",
+	"mc/render/cl_mesh_emitters.lua",
+	"mc/render/cl_mesh_builder.lua",
 	"mc/render/cl_mesh_core.lua",
 	"mc/render/cl_collision.lua",
 	"mc/render/cl_draw.lua",
@@ -60,13 +73,19 @@ local CLIENT_FILES = {
 	"mc/cl_net.lua",
 	"mc/cl_commands.lua",
 	"mc/cl_debug.lua",
+	"mc/cl_collision_probe.lua",
 	"mc/cl_player.lua",
+}
+local CLIENT_ENTITY_FILES = {
+	"entities/mc_client_collision_probe/shared.lua",
+	"entities/mc_client_collision_probe/cl_init.lua",
 }
 
 if SERVER then
 	AddCSLuaFile()
 	for _, f in ipairs( SHARED ) do AddCSLuaFile( f ) end
 	for _, f in ipairs( CLIENT_FILES ) do AddCSLuaFile( f ) end
+	for _, f in ipairs( CLIENT_ENTITY_FILES ) do AddCSLuaFile( f ) end
 end
 
 for _, f in ipairs( SHARED ) do include( f ) end
