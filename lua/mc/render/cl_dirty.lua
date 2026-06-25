@@ -226,10 +226,26 @@ local function flushBulkCollisionQueue()
 	end
 end
 
-local function buildDirtyMeshKey( key, sections, rateLimited, budget )
+local function noteRebuiltMeshSection( rebuiltSections, key, sectionIndex )
+	if not rebuiltSections or not key then return end
+	if sectionIndex == true then
+		rebuiltSections[key] = true
+		return
+	end
+	local sections = rebuiltSections[key]
+	if sections == true then return end
+	if not sections then
+		sections = {}
+		rebuiltSections[key] = sections
+	end
+	sections[sectionIndex] = true
+end
+
+local function buildDirtyMeshKey( key, sections, rateLimited, budget, rebuiltSections )
 	if sections == true then
 		if rateLimited and budget <= 0 then return 0 end
 		MC.BuildChunkMesh( key )
+		noteRebuiltMeshSection( rebuiltSections, key, true )
 		MC.MeshDirty[key] = nil
 		MC.MeshDirtyRateLimited[key] = nil
 		return 1
@@ -239,6 +255,7 @@ local function buildDirtyMeshKey( key, sections, rateLimited, budget )
 	for sectionIndex in pairs( sections ) do
 		if rateLimited and built >= budget then break end
 		MC.BuildChunkMesh( key, sectionIndex )
+		noteRebuiltMeshSection( rebuiltSections, key, sectionIndex )
 		sections[sectionIndex] = nil
 		built = built + 1
 	end
@@ -252,9 +269,14 @@ local function buildDirtyMeshKey( key, sections, rateLimited, budget )
 	return built
 end
 
-local function buildLightDirtyMeshKey( key, sections )
+local function buildLightDirtyMeshKey( key, sections, rebuiltSections )
 	local geometryDirty = MC.MeshDirty[key]
 	if geometryDirty == true then
+		MC.MeshLightDirty[key] = nil
+		return 0
+	end
+	local rebuilt = rebuiltSections and rebuiltSections[key]
+	if rebuilt == true then
 		MC.MeshLightDirty[key] = nil
 		return 0
 	end
@@ -262,9 +284,11 @@ local function buildLightDirtyMeshKey( key, sections )
 	local built = 0
 	local pending
 	for sectionIndex in pairs( sections ) do
-		if istable( geometryDirty ) and geometryDirty[sectionIndex] then
+		if ( istable( geometryDirty ) and geometryDirty[sectionIndex] ) or ( istable( rebuilt ) and rebuilt[sectionIndex] ) then
 			pending = pending or {}
-			pending[sectionIndex] = true
+			if not ( istable( rebuilt ) and rebuilt[sectionIndex] ) then
+				pending[sectionIndex] = true
+			end
 		else
 			MC.RebuildChunkMeshLighting( key, sectionIndex )
 			built = built + 1
@@ -301,7 +325,9 @@ hook.Add( "Think", "mc_meshbuild", function()
 	local frameStart = SysTime()
 	local geometryKeys, geometrySections = 0, 0
 	local lightKeys, lightSections = 0, 0
+	local rebuiltSections
 	if next( MC.MeshDirty ) then
+		rebuiltSections = {}
 		local now = CurTime()
 		local allowExplosionMesh = now >= NextExplosionMeshBuildAt
 		local explosionBudget = allowExplosionMesh and explosionMeshSectionBudget() or 0
@@ -310,7 +336,7 @@ hook.Add( "Think", "mc_meshbuild", function()
 			local sections = MC.MeshDirty[key]
 			local rateLimited = MC.MeshDirtyRateLimited[key] == true
 			if rateLimited and not allowExplosionMesh then continue end
-			local built = buildDirtyMeshKey( key, sections, rateLimited, explosionBudget )
+			local built = buildDirtyMeshKey( key, sections, rateLimited, explosionBudget, rebuiltSections )
 			if built > 0 then
 				geometryKeys = geometryKeys + 1
 				geometrySections = geometrySections + built
@@ -327,7 +353,7 @@ hook.Add( "Think", "mc_meshbuild", function()
 	end
 	if next( MC.MeshLightDirty ) then
 		for _, key in ipairs( nextLightDirtyMeshKeys() ) do
-			local built = buildLightDirtyMeshKey( key, MC.MeshLightDirty[key] )
+			local built = buildLightDirtyMeshKey( key, MC.MeshLightDirty[key], rebuiltSections )
 			if built > 0 then
 				lightKeys = lightKeys + 1
 				lightSections = lightSections + built

@@ -9,6 +9,7 @@ local FACES = C.FACES
 local mathClamp, mathFloor = math.Clamp, math.floor
 local cornerSampleOffsets = RM.cornerSampleOffsets
 local clampLightLevel = RM.clampLightLevel
+local sampleCacheKey
 
 local MC_LIGHT_AO_FACTORS = {
 	[0] = 1.00,
@@ -39,10 +40,19 @@ local function isSolidRenderForLightmap( id, orient )
 	return true
 end
 
+local MeshLightmapTranslucentCache = {}
+
 local function isTranslucentForLightmap( bx, by, bz )
+	local key = sampleCacheKey and sampleCacheKey( bx, by, bz, 0 ) or nil
+	if key ~= nil then
+		local cached = MeshLightmapTranslucentCache[key]
+		if cached ~= nil then return cached end
+	end
 	local id = MC.GetBlock and MC.GetBlock( bx, by, bz ) or 0
 	local orient = id ~= 0 and MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz ) or 0
-	return not isSolidRenderForLightmap( id, orient )
+	local translucent = not isSolidRenderForLightmap( id, orient )
+	if key ~= nil then MeshLightmapTranslucentCache[key] = translucent end
+	return translucent
 end
 
 local function faceSampleBaseCell( bx, by, bz, faceIndex, faceCubic )
@@ -154,8 +164,9 @@ local function quantizedQuadCoord( value )
 end
 
 local function weightedQuadRecolorKey( baseKey, quad, quadLightEmission )
-	local key = tostring( baseKey )
 	local emission = clampLightLevel( quadLightEmission )
+	if not quad and emission <= 0 then return baseKey end
+	local key = tostring( baseKey )
 	if emission > 0 then key = key .. ":qe" .. emission end
 	if not quad then return key end
 	return key
@@ -170,12 +181,14 @@ local function resetMeshLightingSampleCaches()
 	MeshLightLevelCache = {}
 	MeshAOSampleCache = {}
 	MeshShadeBrightnessCache = {}
+	MeshLightmapTranslucentCache = {}
 	MeshFullCubeColorCache = {}
 	MeshLightSampleHits, MeshLightSampleMisses = 0, 0
 	MeshAOSampleHits, MeshAOSampleMisses = 0, 0
 	MeshShaderDaylightFactor = nil
 	MeshSampleLightingFn = MC.SampleLighting
 	MeshSampleAOFn = MC.SampleAmbientOcclusion
+	if RM.resetMeshLightmapUVCaches then RM.resetMeshLightmapUVCaches() end
 	if RM.resetMeshColorLightingCaches then RM.resetMeshColorLightingCaches() end
 end
 
@@ -209,7 +222,7 @@ local function setMeshSampleCacheOrigin( bx, by, bz )
 	MeshSampleBaseZ = ( bz or 0 ) - SAMPLE_CACHE_ORIGIN_PAD
 end
 
-local function sampleCacheKey( sx, sy, sz, extra )
+function sampleCacheKey( sx, sy, sz, extra )
 	local x = math.floor( sx - MeshSampleBaseX )
 	local y = math.floor( sy - MeshSampleBaseY )
 	local z = math.floor( sz - MeshSampleBaseZ )
