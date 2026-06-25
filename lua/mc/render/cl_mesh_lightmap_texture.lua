@@ -19,7 +19,7 @@ local MeshLightmapTexture = nil
 local MeshLightmapTextureDirty = true
 local blockLightFlicker = 0
 local MeshLightmapNextFlickerTick = 0
-local USER_LIGHTMAP_BASE_SCALE = 0.8
+local USER_LIGHTMAP_BASE_SCALE = 0.6
 
 local function sourceLightmapScaleCompensation()
 	-- SetLightmapTexture binds this render target directly as a user lightmap.
