@@ -9,8 +9,8 @@ MC.MeshBeginUpload = MC.MeshBeginUpload or ( CreateClientConVar and CreateClient
 	"Upload MC IMesh vertices with mesh.Begin instead of IMesh:BuildFromTriangles" ) )
 MC.MeshDebugFullCubeOnly = MC.MeshDebugFullCubeOnly or ( CreateClientConVar and CreateClientConVar( "mc_mesh_debug_full_cube_only", "0", true, false,
 	"Debug MC mesh emission by rendering only full cube blocks" ) )
-MC.MeshLightmapUV = MC.MeshLightmapUV or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lightmap_uv", "1", true, false,
-	"Use UV1 hardware lightmaps for mc_light_style lightmap" ) )
+MC.MeshLightmapUV = MC.MeshLightmapUV or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lightmap_uv", "0", true, false,
+	"Use experimental UV1 hardware lightmaps for mc_light_style lightmap" ) )
 MC.MeshLightmapSource = MC.MeshLightmapSource or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lightmap_source", "generated", true, false,
 	"Hardware lightmap texture source: generated or image" ) )
 MC.MeshLightmapImage = MC.MeshLightmapImage or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lightmap_image", "mc/lightmap.png", true, false,
@@ -25,8 +25,8 @@ MC.MeshLightmapSkyFactor = MC.MeshLightmapSkyFactor or ( CreateClientConVar and 
 	"Minecraft lightmap SkyFactor uniform for UV1 hardware lightmaps" ) )
 MC.MeshLightmapBrightnessFactor = MC.MeshLightmapBrightnessFactor or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lightmap_brightness_factor", "0", true, false,
 	"Minecraft lightmap BrightnessFactor/gamma uniform for UV1 hardware lightmaps" ) )
-MC.MeshLightmapBlockFlicker = MC.MeshLightmapBlockFlicker or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lightmap_block_flicker", "1", true, false,
-	"Apply Minecraft-style block light flicker to the generated UV1 lightmap texture" ) )
+MC.MeshLightmapBlockFlicker = MC.MeshLightmapBlockFlicker or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lightmap_block_flicker", "0", true, false,
+	"Apply Minecraft-style block light flicker to the generated UV1 lightmap texture; expensive because it refreshes the render target repeatedly" ) )
 MC.MeshLightmapNightVisionFactor = MC.MeshLightmapNightVisionFactor or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lightmap_night_vision_factor", "0", true, false,
 	"Minecraft lightmap NightVisionFactor uniform for UV1 hardware lightmaps" ) )
 MC.MeshLightmapDarknessScale = MC.MeshLightmapDarknessScale or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lightmap_darkness_scale", "0", true, false,

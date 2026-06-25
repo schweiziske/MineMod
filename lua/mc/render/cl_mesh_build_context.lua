@@ -21,6 +21,7 @@ local uploadMeshVertices = RM.uploadMeshVertices
 local meshPerfAdd = RM.meshPerfAdd
 local meshPerfMS = RM.meshPerfMS
 local smoothCornerLightmapUVFromMeta = RM.smoothCornerLightmapUVFromMeta
+local lightmapPacketCornerUV = RM.lightmapPacketCornerUV
 local setMeshSampleCacheOrigin = RM.setMeshSampleCacheOrigin
 local ensureChunkRenderSectionIndex = RM.ensureChunkRenderSectionIndex
 
@@ -176,9 +177,19 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 
 	local function push( vert, light )
 		if cur and cur.lightmap then
-			local u1, v1 = smoothCornerLightmapUVFromMeta( light )
+			local u1, v1 = light and light.u1, light and light.v1
+			if u1 ~= nil and v1 ~= nil then
+				meshPerf.lightmapPacketVertices = ( meshPerf.lightmapPacketVertices or 0 ) + 1
+			else
+				u1, v1 = smoothCornerLightmapUVFromMeta( light )
+				meshPerf.lightmapFallbackUVs = ( meshPerf.lightmapFallbackUVs or 0 ) + 1
+			end
 			vert.u1 = u1
 			vert.v1 = v1
+			if light then
+				light.u1 = nil
+				light.v1 = nil
+			end
 		end
 		local nv = cur.nv + 1
 		cur.nv = nv
@@ -190,41 +201,25 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		end
 	end
 
-local function lightMeta( shade, bx, by, bz, id, faceIndex, corner, selfEmission, weightedLightmapQuad, faceCubic, quadLightEmission )
-	local cx, cy, cz = cornerXYZ( corner )
-	local shadeIndex = shadeRecolorIndex( shade )
-	local recolorKey = meshRecolorKey( shadeIndex, bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
-	quadLightEmission = clampLightLevel( quadLightEmission )
-	if faceCubic == nil then
-		faceCubic = not weightedLightmapQuad or weightedLightmapQuad.faceCubic ~= false
+	local function addLightmapPacketUV( meta, lightmapPacket, packetCornerIndex )
+		if not lightmapPacket or not packetCornerIndex or not lightmapPacketCornerUV then return meta end
+		local u1, v1 = lightmapPacketCornerUV( lightmapPacket, packetCornerIndex )
+		if u1 ~= nil and v1 ~= nil then
+			meta.u1 = u1
+			meta.v1 = v1
+		end
+		return meta
 	end
-		return {
-			shade = shade,
-			shadeIndex = shadeIndex,
-			bx = bx,
-			by = by,
-			bz = bz,
-			id = id,
-			faceIndex = faceIndex,
-			cx = cx,
-			cy = cy,
-		cz = cz,
-		selfEmission = selfEmission,
-		quadLightEmission = quadLightEmission,
-		weightedLightmapQuad = weightedLightmapQuad,
-		faceCubic = faceCubic ~= false,
-		recolorKey = weightedQuadRecolorKey( recolorKey, weightedLightmapQuad, quadLightEmission ),
-	}
-end
 
-local function lightMetaValues( shade, bx, by, bz, id, faceIndex, cx, cy, cz, selfEmission, weightedLightmapQuad, faceCubic, quadLightEmission )
-	local shadeIndex = shadeRecolorIndex( shade )
-	local recolorKey = meshRecolorKey( shadeIndex, bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
-	quadLightEmission = clampLightLevel( quadLightEmission )
-	if faceCubic == nil then
-		faceCubic = not weightedLightmapQuad or weightedLightmapQuad.faceCubic ~= false
-	end
-		return {
+	local function lightMeta( shade, bx, by, bz, id, faceIndex, corner, selfEmission, weightedLightmapQuad, faceCubic, quadLightEmission, lightmapPacket, packetCornerIndex )
+		local cx, cy, cz = cornerXYZ( corner )
+		local shadeIndex = shadeRecolorIndex( shade )
+		local recolorKey = meshRecolorKey( shadeIndex, bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
+		quadLightEmission = clampLightLevel( quadLightEmission )
+		if faceCubic == nil then
+			faceCubic = not weightedLightmapQuad or weightedLightmapQuad.faceCubic ~= false
+		end
+		return addLightmapPacketUV( {
 			shade = shade,
 			shadeIndex = shadeIndex,
 			bx = bx,
@@ -234,14 +229,40 @@ local function lightMetaValues( shade, bx, by, bz, id, faceIndex, cx, cy, cz, se
 			faceIndex = faceIndex,
 			cx = cx,
 			cy = cy,
-		cz = cz,
-		selfEmission = selfEmission,
-		quadLightEmission = quadLightEmission,
-		weightedLightmapQuad = weightedLightmapQuad,
-		faceCubic = faceCubic ~= false,
-		recolorKey = weightedQuadRecolorKey( recolorKey, weightedLightmapQuad, quadLightEmission ),
-	}
-end
+			cz = cz,
+			selfEmission = selfEmission,
+			quadLightEmission = quadLightEmission,
+			weightedLightmapQuad = weightedLightmapQuad,
+			faceCubic = faceCubic ~= false,
+			recolorKey = weightedQuadRecolorKey( recolorKey, weightedLightmapQuad, quadLightEmission ),
+		}, lightmapPacket, packetCornerIndex )
+	end
+
+	local function lightMetaValues( shade, bx, by, bz, id, faceIndex, cx, cy, cz, selfEmission, weightedLightmapQuad, faceCubic, quadLightEmission, lightmapPacket, packetCornerIndex )
+		local shadeIndex = shadeRecolorIndex( shade )
+		local recolorKey = meshRecolorKey( shadeIndex, bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
+		quadLightEmission = clampLightLevel( quadLightEmission )
+		if faceCubic == nil then
+			faceCubic = not weightedLightmapQuad or weightedLightmapQuad.faceCubic ~= false
+		end
+		return addLightmapPacketUV( {
+			shade = shade,
+			shadeIndex = shadeIndex,
+			bx = bx,
+			by = by,
+			bz = bz,
+			id = id,
+			faceIndex = faceIndex,
+			cx = cx,
+			cy = cy,
+			cz = cz,
+			selfEmission = selfEmission,
+			quadLightEmission = quadLightEmission,
+			weightedLightmapQuad = weightedLightmapQuad,
+			faceCubic = faceCubic ~= false,
+			recolorKey = weightedQuadRecolorKey( recolorKey, weightedLightmapQuad, quadLightEmission ),
+		}, lightmapPacket, packetCornerIndex )
+	end
 
 	local function appendMeshList( out, list )
 		for i = 1, #list do

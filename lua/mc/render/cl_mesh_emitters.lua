@@ -26,10 +26,13 @@ local BOX_UV_FLAGS = RM.BOX_UV_FLAGS
 local fullCubeFaceCornerColors = RM.fullCubeFaceCornerColors
 local quadCornerColors = RM.quadCornerColors
 local quadCornerColorValues = RM.quadCornerColorValues
+local lightmapPacketCornerColors = RM.lightmapPacketCornerColors
+local lightmapPacketCornerColorValues = RM.lightmapPacketCornerColorValues
 local shadeIndexForFace = RM.shadeIndexForFace
 local cornerXYZ = RM.cornerXYZ
 local quadFaceCubic = RM.quadFaceCubic
-local weightedLightmapQuadForFace = RM.weightedLightmapQuadForFace
+local lightmapFacePacketForQuad = RM.lightmapFacePacketForQuad
+local lightmapPacketWeightedQuad = RM.lightmapPacketWeightedQuad
 local visible = RM.visible
 local fluidHeightAt = RM.fluidHeightAt
 local calculateAverageFluidHeight = RM.calculateAverageFluidHeight
@@ -40,6 +43,16 @@ local function shapeTriCornerValues( ci, c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y,
 	if ci == 2 then return c2x, c2y, c2z, color2 end
 	if ci == 3 then return c3x, c3y, c3z, color3 end
 	return c4x, c4y, c4z, color4
+end
+
+local function noteLightmapFacePacket( meshPerf, packet )
+	if not meshPerf or not packet then return end
+	meshPerf.lightmapPackets = ( meshPerf.lightmapPackets or 0 ) + 1
+	if packet.weighted then
+		meshPerf.lightmapWeightedPackets = ( meshPerf.lightmapWeightedPackets or 0 ) + 1
+	else
+		meshPerf.lightmapFullPackets = ( meshPerf.lightmapFullPackets or 0 ) + 1
+	end
 end
 
 local function shapeTriUV( fd, ci, faceIndex, cx, cy, cz, tile, u0, v0, u1, v1 )
@@ -55,13 +68,20 @@ end
 local function emitQuad( ctx, cur, push, lightMeta, currentEmitLightStyle, corners, normal, color, tile, bx, by, bz, id, faceIndex )
 	local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
 	local emitLightStyle = currentEmitLightStyle()
-	local color1, color2, color3, color4 = quadCornerColors( color, bx, by, bz, id, faceIndex, corners, emission, emitLightStyle )
 	local x1, y1, z1 = cornerXYZ( corners[1] )
 	local x2, y2, z2 = cornerXYZ( corners[2] )
 	local x3, y3, z3 = cornerXYZ( corners[3] )
 	local x4, y4, z4 = cornerXYZ( corners[4] )
-	local weightedLightmapQuad = lightmapStyleUsesHardware( emitLightStyle )
-		and weightedLightmapQuadForFace( faceIndex, true, x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4 ) or nil
+	local lightmapPacket = lightmapStyleUsesHardware( emitLightStyle ) and lightmapFacePacketForQuad
+		and lightmapFacePacketForQuad( bx, by, bz, faceIndex, emission, true, 0, x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4 ) or nil
+	noteLightmapFacePacket( ctx and ctx.meshPerf, lightmapPacket )
+	local weightedLightmapQuad = lightmapPacketWeightedQuad and lightmapPacketWeightedQuad( lightmapPacket ) or nil
+	local color1, color2, color3, color4
+	if lightmapPacket and lightmapPacketCornerColors then
+		color1, color2, color3, color4 = lightmapPacketCornerColors( color, lightmapPacket )
+	else
+		color1, color2, color3, color4 = quadCornerColors( color, bx, by, bz, id, faceIndex, corners, emission, emitLightStyle )
+	end
 	for t = 1, 6 do
 		local ci = C.TRI[t]
 		local cn = corners[ci]
@@ -82,7 +102,7 @@ local function emitQuad( ctx, cur, push, lightMeta, currentEmitLightStyle, corne
 			u      = u,
 			v      = v,
 			color  = vertColor,
-		}, lightMeta( color, bx, by, bz, id, faceIndex, cn, emission, weightedLightmapQuad ) )
+		}, lightMeta( color, bx, by, bz, id, faceIndex, cn, emission, weightedLightmapQuad, nil, 0, lightmapPacket, ci ) )
 	end
 end
 
@@ -120,14 +140,21 @@ function RM.EmitModelBlock( ctx, b, orient, bx, by, bz, wx, wy, wz, push, lightM
 		local u0, v0, u1, v1 = tileUVRect( quad.tile or 0, quad.uv )
 		local quadLightEmission = quad.lightEmission or 0
 		local emitLightStyle = currentEmitLightStyle()
-		local color1, color2, color3, color4 = quadCornerColors( face.sh, bx, by, bz, b.id, faceIndex, quad.verts, emission, emitLightStyle )
 		local v1x, v1y, v1z = cornerXYZ( quad.verts[1] )
 		local v2x, v2y, v2z = cornerXYZ( quad.verts[2] )
 		local v3x, v3y, v3z = cornerXYZ( quad.verts[3] )
 		local v4x, v4y, v4z = cornerXYZ( quad.verts[4] )
 		local faceCubic = quadFaceCubic( faceIndex, b.id, orient, v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z, v4x, v4y, v4z )
-		local weightedLightmapQuad = lightmapStyleUsesHardware( emitLightStyle )
-			and weightedLightmapQuadForFace( faceIndex, faceCubic, v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z, v4x, v4y, v4z ) or nil
+		local lightmapPacket = lightmapStyleUsesHardware( emitLightStyle ) and lightmapFacePacketForQuad
+			and lightmapFacePacketForQuad( bx, by, bz, faceIndex, emission, faceCubic, quadLightEmission, v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z, v4x, v4y, v4z ) or nil
+		noteLightmapFacePacket( ctx and ctx.meshPerf, lightmapPacket )
+		local weightedLightmapQuad = lightmapPacketWeightedQuad and lightmapPacketWeightedQuad( lightmapPacket ) or nil
+		local color1, color2, color3, color4
+		if lightmapPacket and lightmapPacketCornerColors then
+			color1, color2, color3, color4 = lightmapPacketCornerColors( face.sh, lightmapPacket )
+		else
+			color1, color2, color3, color4 = quadCornerColors( face.sh, bx, by, bz, b.id, faceIndex, quad.verts, emission, emitLightStyle )
+		end
 		for t = 1, 6 do
 			local ci = C.TRI[t]
 			local vert = quad.verts[ci]
@@ -149,7 +176,7 @@ function RM.EmitModelBlock( ctx, b, orient, bx, by, bz, wx, wy, wz, push, lightM
 				u      = uf == 1 and u1 or u0,
 				v      = vf == 1 and v1 or v0,
 				color  = vertColor,
-			}, lightMeta( face.sh, bx, by, bz, b.id, faceIndex, vert, emission, weightedLightmapQuad, faceCubic, quadLightEmission ) )
+			}, lightMeta( face.sh, bx, by, bz, b.id, faceIndex, vert, emission, weightedLightmapQuad, faceCubic, quadLightEmission, lightmapPacket, ci ) )
 		end
 	end
 	return true
@@ -158,14 +185,21 @@ end
 local function emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle, verts, normal, shade, tile, bx, by, bz, id, faceIndex, lightCorners, uvCorners )
 	local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
 	local emitLightStyle = currentEmitLightStyle()
-	local color1, color2, color3, color4 = quadCornerColors( shade, bx, by, bz, id, faceIndex, lightCorners, emission, emitLightStyle )
 	local x1, y1, z1 = cornerXYZ( lightCorners[1] )
 	local x2, y2, z2 = cornerXYZ( lightCorners[2] )
 	local x3, y3, z3 = cornerXYZ( lightCorners[3] )
 	local x4, y4, z4 = cornerXYZ( lightCorners[4] )
 	local faceCubic = quadFaceCubic( faceIndex, id, 0, x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4 )
-	local weightedLightmapQuad = lightmapStyleUsesHardware( emitLightStyle )
-		and weightedLightmapQuadForFace( faceIndex, faceCubic, x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4 ) or nil
+	local lightmapPacket = lightmapStyleUsesHardware( emitLightStyle ) and lightmapFacePacketForQuad
+		and lightmapFacePacketForQuad( bx, by, bz, faceIndex, emission, faceCubic, 0, x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4 ) or nil
+	noteLightmapFacePacket( ctx and ctx.meshPerf, lightmapPacket )
+	local weightedLightmapQuad = lightmapPacketWeightedQuad and lightmapPacketWeightedQuad( lightmapPacket ) or nil
+	local color1, color2, color3, color4
+	if lightmapPacket and lightmapPacketCornerColors then
+		color1, color2, color3, color4 = lightmapPacketCornerColors( shade, lightmapPacket )
+	else
+		color1, color2, color3, color4 = quadCornerColors( shade, bx, by, bz, id, faceIndex, lightCorners, emission, emitLightStyle )
+	end
 	for t = 1, 6 do
 		local ci = C.TRI[t]
 		local vert = verts[ci]
@@ -187,7 +221,7 @@ local function emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle, verts
 			u      = u,
 			v      = v,
 			color  = vertColor,
-		}, lightMeta( shade, bx, by, bz, id, faceIndex, lightCorners[ci], emission, weightedLightmapQuad, faceCubic ) )
+		}, lightMeta( shade, bx, by, bz, id, faceIndex, lightCorners[ci], emission, weightedLightmapQuad, faceCubic, 0, lightmapPacket, ci ) )
 	end
 end
 
@@ -454,7 +488,18 @@ function RM.EmitBlock( ctx, li, id )
 					local shadeIndex = shadeIndexForFace( f )
 					if faceStart then meshPerfAdd( meshPerf, "fullFaceMS", faceStart ) end
 					local colorStart = meshProbe and SysTime() or nil
-					local color1, color2, color3, color4 = fullCubeFaceCornerColors( shadeIndex, bx, by, bz, f, emission, currentEmitLightStyle() )
+					local emitLightStyle = currentEmitLightStyle()
+					local c1, c2, c3, c4 = corners[1], corners[2], corners[3], corners[4]
+					local lightmapPacket = lightmapStyleUsesHardware( emitLightStyle ) and lightmapFacePacketForQuad
+						and lightmapFacePacketForQuad( bx, by, bz, f, emission, true, quadLightEmission,
+							c1[1], c1[2], c1[3], c2[1], c2[2], c2[3], c3[1], c3[2], c3[3], c4[1], c4[2], c4[3] ) or nil
+					noteLightmapFacePacket( meshPerf, lightmapPacket )
+					local color1, color2, color3, color4
+					if lightmapPacket and lightmapPacketCornerColorValues then
+						color1, color2, color3, color4 = lightmapPacketCornerColorValues( shadeIndex, lightmapPacket )
+					else
+						color1, color2, color3, color4 = fullCubeFaceCornerColors( shadeIndex, bx, by, bz, f, emission, emitLightStyle )
+					end
 					if colorStart then meshPerfAdd( meshPerf, "fullColorMS", colorStart ) end
 
 					for t = 1, 6 do
@@ -490,7 +535,7 @@ function RM.EmitBlock( ctx, li, id )
 							}
 							meshPerfAdd( meshPerf, "fullVertexMS", vertexStart )
 							local metaStart = SysTime()
-							local meta = lightMeta( col, bx, by, bz, id, f, cn, emission, nil, nil, quadLightEmission )
+							local meta = lightMeta( col, bx, by, bz, id, f, cn, emission, nil, true, quadLightEmission, lightmapPacket, ci )
 							meshPerfAdd( meshPerf, "fullMetaMS", metaStart )
 							local pushStart = SysTime()
 							push( vert, meta )
@@ -502,7 +547,7 @@ function RM.EmitBlock( ctx, li, id )
 								u      = u,
 								v      = v,
 								color  = vertColor,
-							}, lightMeta( col, bx, by, bz, id, f, cn, emission, nil, nil, quadLightEmission ) )
+							}, lightMeta( col, bx, by, bz, id, f, cn, emission, nil, true, quadLightEmission, lightmapPacket, ci ) )
 						end
 					end
 				end
@@ -541,12 +586,19 @@ function RM.EmitBlock( ctx, li, id )
 						local c4x, c4y, c4z = boxFaceCornerValues( box, f, 4 )
 						local emitLightStyle = currentEmitLightStyle()
 						local faceCubic = quadFaceCubic( f, id, orient, c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z )
-						local color1, color2, color3, color4 = quadCornerColorValues(
-							col, bx, by, bz, id, f, emission, emitLightStyle,
-							c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z
-						)
-						local weightedLightmapQuad = lightmapStyleUsesHardware( emitLightStyle )
-							and weightedLightmapQuadForFace( f, faceCubic, c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z ) or nil
+						local lightmapPacket = lightmapStyleUsesHardware( emitLightStyle ) and lightmapFacePacketForQuad
+							and lightmapFacePacketForQuad( bx, by, bz, f, emission, faceCubic, quadLightEmission, c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z ) or nil
+						noteLightmapFacePacket( meshPerf, lightmapPacket )
+						local weightedLightmapQuad = lightmapPacketWeightedQuad and lightmapPacketWeightedQuad( lightmapPacket ) or nil
+						local color1, color2, color3, color4
+						if lightmapPacket and lightmapPacketCornerColors then
+							color1, color2, color3, color4 = lightmapPacketCornerColors( col, lightmapPacket )
+						else
+							color1, color2, color3, color4 = quadCornerColorValues(
+								col, bx, by, bz, id, f, emission, emitLightStyle,
+								c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z
+							)
+						end
 						for t = 1, 6 do
 							local ci = C.TRI[t]
 							local cx, cy, cz, color = shapeTriCornerValues( ci, c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z, color1, color2, color3, color4 )
@@ -557,7 +609,7 @@ function RM.EmitBlock( ctx, li, id )
 								u      = u,
 								v      = v,
 								color  = color,
-							}, lightMetaValues( col, bx, by, bz, id, f, cx, cy, cz, emission, weightedLightmapQuad, faceCubic, quadLightEmission ) )
+							}, lightMetaValues( col, bx, by, bz, id, f, cx, cy, cz, emission, weightedLightmapQuad, faceCubic, quadLightEmission, lightmapPacket, ci ) )
 						end
 					until true
 				end

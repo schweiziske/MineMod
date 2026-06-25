@@ -58,6 +58,11 @@ local function newMeshPerfStats()
 		fullPushMS = 0,
 		fullVisibleFaces = 0,
 		fullDirectBlocks = 0,
+		lightmapPackets = 0,
+		lightmapFullPackets = 0,
+		lightmapWeightedPackets = 0,
+		lightmapPacketVertices = 0,
+		lightmapFallbackUVs = 0,
 	}
 end
 
@@ -209,6 +214,11 @@ local function publishMeshPerfStats( perf )
 	stats.lastMeshFullPushMS = meshPerfRoundMS( perf.fullPushMS )
 	stats.lastMeshFullVisibleFaces = perf.fullVisibleFaces or 0
 	stats.lastMeshFullDirectBlocks = perf.fullDirectBlocks or 0
+	stats.lastMeshLightmapPackets = perf.lightmapPackets or 0
+	stats.lastMeshLightmapFullPackets = perf.lightmapFullPackets or 0
+	stats.lastMeshLightmapWeightedPackets = perf.lightmapWeightedPackets or 0
+	stats.lastMeshLightmapPacketVertices = perf.lightmapPacketVertices or 0
+	stats.lastMeshLightmapFallbackUVs = perf.lightmapFallbackUVs or 0
 end
 
 local function printMeshEmitProbe( key, sectionIndex, meshMS, perf )
@@ -237,6 +247,9 @@ local function printMeshEmitProbe( key, sectionIndex, meshMS, perf )
 	add( "fullVertexMS", meshPerfRoundMS( perf.fullVertexMS ) )
 	add( "fullMetaMS", meshPerfRoundMS( perf.fullMetaMS ) )
 	add( "fullPushMS", meshPerfRoundMS( perf.fullPushMS ) )
+	add( "lmPackets", perf.lightmapPackets or 0 )
+	add( "lmPacketVerts", perf.lightmapPacketVertices or 0 )
+	add( "lmFallbackUVs", perf.lightmapFallbackUVs or 0 )
 	add( "shapeMS", meshPerfRoundMS( perf.shapeMS ) )
 	add( "modelMS", meshPerfRoundMS( perf.modelMS ) )
 	add( "flushMS", meshPerfRoundMS( perf.flushMS ) )

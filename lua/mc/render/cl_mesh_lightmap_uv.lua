@@ -425,6 +425,86 @@ local function weightedLightmapQuadForFace( faceIndex, faceCubic, x1, y1, z1, x2
 	return makeWeightedLightmapQuad( x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4, faceCubic )
 end
 
+local function lightmapPacketSetCorner( packet, cornerIndex, smooth, shade, quadLightEmission )
+	local u1, v1 = lightmapUVFromSmoothPacked( smooth, quadLightEmission )
+	if cornerIndex == 1 then
+		packet.u1_1, packet.v1_1, packet.shade1 = u1, v1, shade
+	elseif cornerIndex == 2 then
+		packet.u1_2, packet.v1_2, packet.shade2 = u1, v1, shade
+	elseif cornerIndex == 3 then
+		packet.u1_3, packet.v1_3, packet.shade3 = u1, v1, shade
+	else
+		packet.u1_4, packet.v1_4, packet.shade4 = u1, v1, shade
+	end
+end
+
+local function lightmapPacketSetFullCorner( packet, cornerIndex, faceIndex, cx, cy, cz, quadLightEmission,
+	coords1, coords2, coords3, coords4, shade1, shade2, shade3, shade4 )
+	local slot = faceVertexLightSlot( faceIndex, faceVertexCornerIndex( faceIndex, cx, cy, cz ) )
+	if slot == 1 then
+		lightmapPacketSetCorner( packet, cornerIndex, coords1, shade1, quadLightEmission )
+	elseif slot == 2 then
+		lightmapPacketSetCorner( packet, cornerIndex, coords2, shade2, quadLightEmission )
+	elseif slot == 3 then
+		lightmapPacketSetCorner( packet, cornerIndex, coords3, shade3, quadLightEmission )
+	else
+		lightmapPacketSetCorner( packet, cornerIndex, coords4, shade4, quadLightEmission )
+	end
+end
+
+local function lightmapPacketSetWeightedCorner( packet, cornerIndex, faceIndex, quad, cx, cy, cz, quadLightEmission,
+	coords1, coords2, coords3, coords4, shade1, shade2, shade3, shade4 )
+	local weight1, weight2, weight3, weight4 = faceQuadWeights( faceIndex, quad, cx, cy, cz )
+	local smooth = smoothWeightedBlendLightCoords( coords1, coords2, coords3, coords4, weight1, weight2, weight3, weight4 )
+	local shade = shade1 * weight1 + shade2 * weight2 + shade3 * weight3 + shade4 * weight4
+	lightmapPacketSetCorner( packet, cornerIndex, smooth, shade, quadLightEmission )
+end
+
+local function lightmapFacePacketForQuad( bx, by, bz, faceIndex, selfEmission, faceCubic, quadLightEmission,
+	x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4 )
+	faceCubic = faceCubic ~= false
+	quadLightEmission = clampLightLevel( quadLightEmission )
+	local coords1, coords2, coords3, coords4, shade1, shade2, shade3, shade4 = mcLightmapCornerState( bx, by, bz, faceIndex, selfEmission, faceCubic )
+	local weightedQuad = weightedLightmapQuadForFace( faceIndex, faceCubic, x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4 )
+	local packet = {
+		weightedLightmapQuad = weightedQuad,
+		faceCubic = faceCubic,
+		weighted = weightedQuad ~= nil,
+	}
+	if weightedQuad then
+		lightmapPacketSetWeightedCorner( packet, 1, faceIndex, weightedQuad, x1, y1, z1, quadLightEmission, coords1, coords2, coords3, coords4, shade1, shade2, shade3, shade4 )
+		lightmapPacketSetWeightedCorner( packet, 2, faceIndex, weightedQuad, x2, y2, z2, quadLightEmission, coords1, coords2, coords3, coords4, shade1, shade2, shade3, shade4 )
+		lightmapPacketSetWeightedCorner( packet, 3, faceIndex, weightedQuad, x3, y3, z3, quadLightEmission, coords1, coords2, coords3, coords4, shade1, shade2, shade3, shade4 )
+		lightmapPacketSetWeightedCorner( packet, 4, faceIndex, weightedQuad, x4, y4, z4, quadLightEmission, coords1, coords2, coords3, coords4, shade1, shade2, shade3, shade4 )
+	else
+		lightmapPacketSetFullCorner( packet, 1, faceIndex, x1, y1, z1, quadLightEmission, coords1, coords2, coords3, coords4, shade1, shade2, shade3, shade4 )
+		lightmapPacketSetFullCorner( packet, 2, faceIndex, x2, y2, z2, quadLightEmission, coords1, coords2, coords3, coords4, shade1, shade2, shade3, shade4 )
+		lightmapPacketSetFullCorner( packet, 3, faceIndex, x3, y3, z3, quadLightEmission, coords1, coords2, coords3, coords4, shade1, shade2, shade3, shade4 )
+		lightmapPacketSetFullCorner( packet, 4, faceIndex, x4, y4, z4, quadLightEmission, coords1, coords2, coords3, coords4, shade1, shade2, shade3, shade4 )
+	end
+	return packet
+end
+
+local function lightmapPacketWeightedQuad( packet )
+	return packet and packet.weightedLightmapQuad or nil
+end
+
+local function lightmapPacketCornerUV( packet, cornerIndex )
+	if not packet then return nil, nil end
+	if cornerIndex == 1 then return packet.u1_1, packet.v1_1 end
+	if cornerIndex == 2 then return packet.u1_2, packet.v1_2 end
+	if cornerIndex == 3 then return packet.u1_3, packet.v1_3 end
+	return packet.u1_4, packet.v1_4
+end
+
+local function lightmapPacketCornerShade( packet, cornerIndex )
+	if not packet then return nil end
+	if cornerIndex == 1 then return packet.shade1 end
+	if cornerIndex == 2 then return packet.shade2 end
+	if cornerIndex == 3 then return packet.shade3 end
+	return packet.shade4
+end
+
 local function weightedFaceLightmapUVValues( bx, by, bz, faceIndex, quad, cx, cy, cz, selfEmission, quadLightEmission )
 	local faceCubic = not quad or quad.faceCubic ~= false
 	local coords1, coords2, coords3, coords4 = mcLightmapCornerState( bx, by, bz, faceIndex, selfEmission, faceCubic )
@@ -460,6 +540,10 @@ end
 RM.smoothCornerLightmapUVFromMeta = smoothCornerLightmapUVFromMeta
 RM.minecraftSmoothCornerShadeBrightnessValues = minecraftSmoothCornerShadeBrightnessValues
 RM.weightedFaceShadeBrightnessValues = weightedFaceShadeBrightnessValues
+RM.lightmapFacePacketForQuad = lightmapFacePacketForQuad
+RM.lightmapPacketWeightedQuad = lightmapPacketWeightedQuad
+RM.lightmapPacketCornerUV = lightmapPacketCornerUV
+RM.lightmapPacketCornerShade = lightmapPacketCornerShade
 RM.weightedLightmapQuadForFace = weightedLightmapQuadForFace
 RM.makeWeightedLightmapQuad = makeWeightedLightmapQuad
 RM.quadFaceCubic = quadFaceCubic
