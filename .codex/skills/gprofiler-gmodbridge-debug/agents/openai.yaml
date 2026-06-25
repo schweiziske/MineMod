@@ -1,0 +1,4 @@
+interface:
+  display_name: "GProfiler + GMod Bridge"
+  short_description: "Profile Garry's Mod plugins with GProfiler and gmodbridge."
+  default_prompt: "Use $gprofiler-gmodbridge-debug to debug Garry's Mod plugin performance with GProfiler and gmodbridge."
