@@ -19,14 +19,12 @@ local MeshLightmapTexture = nil
 local MeshLightmapTextureDirty = true
 local blockLightFlicker = 0
 local MeshLightmapNextFlickerTick = 0
-local SOURCE_LDR_LIGHTMAP_SCALE = 2 ^ 2.2
+local USER_LIGHTMAP_BASE_SCALE = 0.8
 
 local function sourceLightmapScaleCompensation()
-	local cv = GetConVar and GetConVar( "mat_hdr_level" ) or nil
-	local hdrLevel = cv and cv.GetInt and cv:GetInt() or 0
-	if hdrLevel >= 2 then return 1 / 16 end
-	if hdrLevel <= 0 then return 1 / SOURCE_LDR_LIGHTMAP_SCALE end
-	return 1
+	-- SetLightmapTexture binds this render target directly as a user lightmap.
+	-- It is not a BSP lightmap page, so do not apply Source's baked-lightmap HDR/LDR storage scale here.
+	return USER_LIGHTMAP_BASE_SCALE
 end
 
 local function mcLightmapBrightnessCurve( level )
@@ -263,7 +261,18 @@ function MC.GetMeshLightmapTexture()
 end
 
 function MC.PushMeshLightmapLinearFilter()
-	return false, false
+	if not render then return false, false end
+	local linear = TEXFILTER and TEXFILTER.LINEAR or 2
+	local pushedMin, pushedMag = false, false
+	if render.PushFilterMin then
+		render.PushFilterMin( linear )
+		pushedMin = true
+	end
+	if render.PushFilterMag then
+		render.PushFilterMag( linear )
+		pushedMag = true
+	end
+	return pushedMin, pushedMag
 end
 
 function MC.PopMeshLightmapLinearFilter( pushedMin, pushedMag )
