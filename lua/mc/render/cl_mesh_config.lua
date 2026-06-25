@@ -35,7 +35,7 @@ MC.MeshLightmapDarknessScale = MC.MeshLightmapDarknessScale or ( CreateClientCon
 	"Minecraft lightmap DarknessScale uniform for UV1 hardware lightmaps" ) )
 MC.MeshLightmapBossDarkening = MC.MeshLightmapBossDarkening or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lightmap_boss_darkening", "0", true, false,
 	"Minecraft lightmap BossOverlayWorldDarkeningFactor uniform for UV1 hardware lightmaps" ) )
-MC.MeshLightmapBlockTint = MC.MeshLightmapBlockTint or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lightmap_block_tint", "255 216 140", true, false,
+MC.MeshLightmapBlockTint = MC.MeshLightmapBlockTint or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lightmap_block_tint", "255 255 255", true, false,
 	"Minecraft lightmap BlockLightTint RGB color for UV1 hardware lightmaps" ) )
 MC.MeshLightmapSkyColor = MC.MeshLightmapSkyColor or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lightmap_sky_color", "255 255 255", true, false,
 	"Minecraft lightmap SkyLightColor RGB color for UV1 hardware lightmaps" ) )

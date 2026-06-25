@@ -46,14 +46,7 @@ local function forceDepthWrite()
 	return false
 end
 
-local function safePopMeshLightmapFilter( pushedMin, pushedMag )
-	if MC.PopMeshLightmapPointFilter then
-		pcall( MC.PopMeshLightmapPointFilter, pushedMin, pushedMag )
-	end
-end
-
-local function restoreChunkMeshRenderState( setCullMode, pushedMin, pushedMag )
-	if pushedMin or pushedMag then safePopMeshLightmapFilter( pushedMin, pushedMag ) end
+local function restoreChunkMeshRenderState( setCullMode )
 	if setCullMode then pcall( restoreDefaultCullMode ) end
 	resetDepthOverride()
 end
@@ -61,7 +54,6 @@ end
 local function drawMeshList( list, material, writeDepth )
 	if not list then return end
 	local setCullMode = false
-	local pushedMin, pushedMag = false, false
 	local function draw()
 		resetDepthOverride()
 		if writeDepth then forceDepthWrite() end
@@ -83,20 +75,13 @@ local function drawMeshList( list, material, writeDepth )
 				render.SetMaterial( currentMaterial )
 			end
 			if entryLightmap and render.SetLightmapTexture and MC.GetMeshLightmapTexture then
-				if MC.PushMeshLightmapPointFilter then
-					pushedMin, pushedMag = MC.PushMeshLightmapPointFilter()
-				end
 				render.SetLightmapTexture( MC.GetMeshLightmapTexture() )
 			end
 			if meshObj and meshObj.Draw then meshObj:Draw() end
-			if entryLightmap then
-				safePopMeshLightmapFilter( pushedMin, pushedMag )
-				pushedMin, pushedMag = false, false
-			end
 		end
 	end
 	local ok, err = xpcall( draw, debug and debug.traceback or tostring )
-	restoreChunkMeshRenderState( setCullMode, pushedMin, pushedMag )
+	restoreChunkMeshRenderState( setCullMode )
 	if not ok then error( err ) end
 end
 
