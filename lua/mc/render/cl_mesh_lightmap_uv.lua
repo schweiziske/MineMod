@@ -12,24 +12,49 @@ local clampLightLevel = RM.clampLightLevel
 local LIGHTMAP_PACK_SKY_MASK = RM.LIGHTMAP_PACK_SKY_MASK
 local LIGHTMAP_SMOOTH_PACK_MASK = RM.LIGHTMAP_SMOOTH_PACK_MASK
 local lightmapUVFromSmoothCoords = RM.lightmapUVFromSmoothCoords
+local sampleCacheKey = RM.sampleCacheKey
+local sampleCacheKeyFast = RM.sampleCacheKeyFast or RM.sampleCacheKey
 local cachedMeshLightLevelsSample = RM.cachedMeshLightLevelsSample
 local blockLightEmissionAt = RM.blockLightEmissionAt
 local faceSampleBaseCell = RM.faceSampleBaseCell
 local cachedMeshAOSample = RM.cachedMeshAOSample
+local cachedMeshAOSampleFast = RM.cachedMeshAOSampleFast or RM.cachedMeshAOSample
 local isSolidRenderForLightmap = RM.isSolidRenderForLightmap
 local isTranslucentForLightmap = RM.isTranslucentForLightmap
 local MC_LIGHTMAP_SIDE_OFFSETS = RM.MC_LIGHTMAP_SIDE_OFFSETS
 local MC_LIGHT_AO_FACTORS = RM.MC_LIGHT_AO_FACTORS
 local offsetCell = RM.offsetCell
-local cornerStep = RM.cornerStep
 
 local function packedLightCoordsFromLevels( block, sky )
 	return bit_bor( bit_lshift( clampLightLevel( block ), 4 ), bit_lshift( clampLightLevel( sky ), 20 ) )
 end
 
+local MeshLightmapPackedCoordsCache = {}
+local MeshLightmapCornerStateCache = {}
+local MeshLightmapFullCubePacketCache = {}
+local MeshLightmapUVCacheGeneration = 0
+
+function RM.resetMeshLightmapUVCaches()
+	MeshLightmapPackedCoordsCache = {}
+	MeshLightmapCornerStateCache = {}
+	MeshLightmapFullCubePacketCache = {}
+	MeshLightmapUVCacheGeneration = MeshLightmapUVCacheGeneration + 1
+end
+
+function RM.meshLightmapUVCacheGeneration()
+	return MeshLightmapUVCacheGeneration
+end
+
 local function packedLightCoordsAt( sx, sy, sz )
+	local key = sampleCacheKeyFast and sampleCacheKeyFast( sx, sy, sz, 0 ) or nil
+	if key ~= nil then
+		local cached = MeshLightmapPackedCoordsCache[key]
+		if cached ~= nil then return cached end
+	end
 	local block, sky = cachedMeshLightLevelsSample( sx, sy, sz, blockLightEmissionAt( sx, sy, sz ) )
-	return packedLightCoordsFromLevels( block, sky )
+	local packed = packedLightCoordsFromLevels( block, sky )
+	if key ~= nil then MeshLightmapPackedCoordsCache[key] = packed end
+	return packed
 end
 
 local function packedLightBlockLevel( packed )
@@ -135,42 +160,70 @@ local function remapFaceCornerLightSlot( faceIndex, cornerIndex )
 	return cornerIndex
 end
 
-local function minecraftCornerOccludersValues( bx, by, bz, faceIndex, x, y, z )
-	local xs, ys, zs = cornerStep( x ), cornerStep( y ), cornerStep( z )
-	if faceIndex == MC.Face.TOP or faceIndex == MC.Face.BOTTOM then
-		return bx + xs, by, bz, bx, by + ys, bz, bx + xs, by + ys, bz
-	elseif faceIndex == MC.Face.XP or faceIndex == MC.Face.XN then
-		return bx, by + ys, bz, bx, by, bz + zs, bx, by + ys, bz + zs
-	elseif faceIndex == MC.Face.YP or faceIndex == MC.Face.YN then
-		return bx + xs, by, bz, bx, by, bz + zs, bx + xs, by, bz + zs
-	end
-	return bx, by, bz, bx, by, bz, bx, by, bz
-end
-
 local function minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, cx, cy, cz )
-	if not cachedMeshAOSample then return 1 end
-	local s1x, s1y, s1z, s2x, s2y, s2z, cornerX, cornerY, cornerZ =
-		minecraftCornerOccludersValues( bx, by, bz, faceIndex, cx, cy, cz )
-	local side1Blocked = cachedMeshAOSample( s1x, s1y, s1z )
-	local side2Blocked = cachedMeshAOSample( s2x, s2y, s2z )
-	local cornerBlocked = cachedMeshAOSample( cornerX, cornerY, cornerZ )
+	local sampleAO = cachedMeshAOSampleFast or cachedMeshAOSample
+	if not sampleAO then return 1 end
+	local xs = cx <= 0 and -1 or 1
+	local ys = cy <= 0 and -1 or 1
+	local zs = cz <= 0 and -1 or 1
+	local side1Blocked, side2Blocked, cornerBlocked
+	if faceIndex == MC.Face.TOP or faceIndex == MC.Face.BOTTOM then
+		side1Blocked = sampleAO( bx + xs, by, bz )
+		side2Blocked = sampleAO( bx, by + ys, bz )
+		cornerBlocked = sampleAO( bx + xs, by + ys, bz )
+	elseif faceIndex == MC.Face.XP or faceIndex == MC.Face.XN then
+		side1Blocked = sampleAO( bx, by + ys, bz )
+		side2Blocked = sampleAO( bx, by, bz + zs )
+		cornerBlocked = sampleAO( bx, by + ys, bz + zs )
+	else
+		side1Blocked = sampleAO( bx + xs, by, bz )
+		side2Blocked = sampleAO( bx, by, bz + zs )
+		cornerBlocked = sampleAO( bx + xs, by, bz + zs )
+	end
 	if side1Blocked and side2Blocked then return MC_LIGHT_AO_FACTORS[3] end
 	local blocked = ( side1Blocked and 1 or 0 ) + ( side2Blocked and 1 or 0 ) + ( cornerBlocked and 1 or 0 )
 	return MC_LIGHT_AO_FACTORS[blocked] or 1
 end
 
 local function lightmapFaceAOValues( bx, by, bz, faceIndex )
-	local face = FACES[faceIndex]
-	if not face or not face.c then return 1, 1, 1, 1 end
-	local values = { 1, 1, 1, 1 }
-	for cornerIndex = 1, 4 do
-		local c = face.c[cornerIndex]
-		if c then
-			local slot = remapFaceCornerLightSlot( faceIndex, cornerIndex )
-			values[slot] = minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, c[1], c[2], c[3] )
-		end
+	if faceIndex == MC.Face.TOP then
+		return
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 1, 1, 1 ),
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 0, 1, 1 ),
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 0, 0, 1 ),
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 1, 0, 1 )
+	elseif faceIndex == MC.Face.BOTTOM then
+		return
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 0, 1, 0 ),
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 1, 1, 0 ),
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 1, 0, 0 ),
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 0, 0, 0 )
+	elseif faceIndex == MC.Face.XP then
+		return
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 1, 1, 0 ),
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 1, 1, 1 ),
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 1, 0, 1 ),
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 1, 0, 0 )
+	elseif faceIndex == MC.Face.XN then
+		return
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 0, 1, 1 ),
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 0, 1, 0 ),
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 0, 0, 0 ),
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 0, 0, 1 )
+	elseif faceIndex == MC.Face.YP then
+		return
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 1, 1, 0 ),
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 0, 1, 0 ),
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 0, 1, 1 ),
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 1, 1, 1 )
+	elseif faceIndex == MC.Face.YN then
+		return
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 0, 0, 1 ),
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 0, 0, 0 ),
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 1, 0, 0 ),
+			minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, 1, 0, 1 )
 	end
-	return values[1], values[2], values[3], values[4]
+	return 1, 1, 1, 1
 end
 
 local function mcLightmapCornerState( bx, by, bz, faceIndex, selfEmission, faceCubic )
@@ -233,6 +286,31 @@ local function mcLightmapCornerState( bx, by, bz, faceIndex, selfEmission, faceC
 	return tc1, tc2, tc3, tc4, ao1, ao2, ao3, ao4
 end
 
+local function lightmapCoordsCacheKey( bx, by, bz, subKey )
+	local key = sampleCacheKeyFast and sampleCacheKeyFast( bx, by, bz, 0 ) or nil
+	if key ~= nil then return key * 4096 + subKey end
+	return tostring( bx ) .. ":" .. tostring( by ) .. ":" .. tostring( bz ) .. ":" .. tostring( subKey )
+end
+
+local function lightmapCornerStateSubKey( faceIndex, selfEmission, faceCubic )
+	return ( faceIndex or 0 )
+		+ ( faceCubic ~= false and 0 or 8 )
+		+ clampLightLevel( selfEmission ) * 16
+end
+
+local function mcLightmapCornerStateCached( bx, by, bz, faceIndex, selfEmission, faceCubic )
+	local subKey = lightmapCornerStateSubKey( faceIndex, selfEmission, faceCubic )
+	local key = lightmapCoordsCacheKey( bx, by, bz, subKey )
+	local cached = MeshLightmapCornerStateCache[key]
+	if cached then
+		return cached[1], cached[2], cached[3], cached[4], cached[5], cached[6], cached[7], cached[8]
+	end
+	local tc1, tc2, tc3, tc4, shade1, shade2, shade3, shade4 =
+		mcLightmapCornerState( bx, by, bz, faceIndex, selfEmission, faceCubic )
+	MeshLightmapCornerStateCache[key] = { tc1, tc2, tc3, tc4, shade1, shade2, shade3, shade4 }
+	return tc1, tc2, tc3, tc4, shade1, shade2, shade3, shade4
+end
+
 local function faceVertexCornerIndex( faceIndex, cx, cy, cz )
 	local function near( ax, ay, az, bx, by, bz )
 		local dx, dy, dz = ax - bx, ay - by, az - bz
@@ -256,7 +334,7 @@ local function faceVertexLightSlot( faceIndex, cornerIndex )
 end
 
 local function smoothCornerPackedLightCoordsValues( bx, by, bz, faceIndex, cx0, cy0, cz0, selfEmission, faceCubic )
-	local tc1, tc2, tc3, tc4 = mcLightmapCornerState( bx, by, bz, faceIndex, selfEmission, faceCubic )
+	local tc1, tc2, tc3, tc4 = mcLightmapCornerStateCached( bx, by, bz, faceIndex, selfEmission, faceCubic )
 	local slot = faceVertexLightSlot( faceIndex, faceVertexCornerIndex( faceIndex, cx0, cy0, cz0 ) )
 	if slot == 1 then return tc1 elseif slot == 2 then return tc2 elseif slot == 3 then return tc3 end
 	return tc4
@@ -478,6 +556,47 @@ local function lightmapPacketSetFullCorner( packet, cornerIndex, faceIndex, cx, 
 	end
 end
 
+local function lightmapFullCubeFacePacket( bx, by, bz, faceIndex, selfEmission, quadLightEmission )
+	quadLightEmission = clampLightLevel( quadLightEmission )
+	local subKey = lightmapCornerStateSubKey( faceIndex, selfEmission, true ) + quadLightEmission * 256
+	local key = lightmapCoordsCacheKey( bx, by, bz, subKey )
+	local cached = MeshLightmapFullCubePacketCache[key]
+	if cached then return cached end
+	local coords1, coords2, coords3, coords4, shade1, shade2, shade3, shade4 =
+		mcLightmapCornerStateCached( bx, by, bz, faceIndex, selfEmission, true )
+	local packet = {
+		faceCubic = true,
+		weighted = false,
+	}
+	local u1, v1 = lightmapUVFromSmoothPacked( coords1, quadLightEmission )
+	local u2, v2 = lightmapUVFromSmoothPacked( coords2, quadLightEmission )
+	local u3, v3 = lightmapUVFromSmoothPacked( coords3, quadLightEmission )
+	local u4, v4 = lightmapUVFromSmoothPacked( coords4, quadLightEmission )
+	if faceIndex == MC.Face.TOP then
+		packet.u1_1, packet.v1_1, packet.shade1 = u3, v3, shade3
+		packet.u1_2, packet.v1_2, packet.shade2 = u4, v4, shade4
+		packet.u1_3, packet.v1_3, packet.shade3 = u1, v1, shade1
+		packet.u1_4, packet.v1_4, packet.shade4 = u2, v2, shade2
+	elseif faceIndex == MC.Face.YN or faceIndex == MC.Face.XN then
+		packet.u1_1, packet.v1_1, packet.shade1 = u2, v2, shade2
+		packet.u1_2, packet.v1_2, packet.shade2 = u3, v3, shade3
+		packet.u1_3, packet.v1_3, packet.shade3 = u4, v4, shade4
+		packet.u1_4, packet.v1_4, packet.shade4 = u1, v1, shade1
+	elseif faceIndex == MC.Face.XP then
+		packet.u1_1, packet.v1_1, packet.shade1 = u4, v4, shade4
+		packet.u1_2, packet.v1_2, packet.shade2 = u1, v1, shade1
+		packet.u1_3, packet.v1_3, packet.shade3 = u2, v2, shade2
+		packet.u1_4, packet.v1_4, packet.shade4 = u3, v3, shade3
+	else
+		packet.u1_1, packet.v1_1, packet.shade1 = u1, v1, shade1
+		packet.u1_2, packet.v1_2, packet.shade2 = u2, v2, shade2
+		packet.u1_3, packet.v1_3, packet.shade3 = u3, v3, shade3
+		packet.u1_4, packet.v1_4, packet.shade4 = u4, v4, shade4
+	end
+	MeshLightmapFullCubePacketCache[key] = packet
+	return packet
+end
+
 local function lightmapPacketSetWeightedCorner( packet, cornerIndex, faceIndex, quad, cx, cy, cz, quadLightEmission,
 	coords1, coords2, coords3, coords4, shade1, shade2, shade3, shade4 )
 	local weight1, weight2, weight3, weight4 = faceQuadWeights( faceIndex, quad, cx, cy, cz )
@@ -490,7 +609,8 @@ local function lightmapFacePacketForQuad( bx, by, bz, faceIndex, selfEmission, f
 	x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4 )
 	faceCubic = faceCubic ~= false
 	quadLightEmission = clampLightLevel( quadLightEmission )
-	local coords1, coords2, coords3, coords4, shade1, shade2, shade3, shade4 = mcLightmapCornerState( bx, by, bz, faceIndex, selfEmission, faceCubic )
+	local coords1, coords2, coords3, coords4, shade1, shade2, shade3, shade4 =
+		mcLightmapCornerStateCached( bx, by, bz, faceIndex, selfEmission, faceCubic )
 	local weightedQuad = weightedLightmapQuadForFace( faceIndex, faceCubic, x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4 )
 	local packet = {
 		weightedLightmapQuad = weightedQuad,
@@ -533,7 +653,7 @@ end
 
 local function weightedFaceLightmapUVValues( bx, by, bz, faceIndex, quad, cx, cy, cz, selfEmission, quadLightEmission )
 	local faceCubic = not quad or quad.faceCubic ~= false
-	local coords1, coords2, coords3, coords4 = mcLightmapCornerState( bx, by, bz, faceIndex, selfEmission, faceCubic )
+	local coords1, coords2, coords3, coords4 = mcLightmapCornerStateCached( bx, by, bz, faceIndex, selfEmission, faceCubic )
 	local weight1, weight2, weight3, weight4 = faceQuadWeights( faceIndex, quad, cx, cy, cz )
 	local smooth = smoothWeightedBlendLightCoords( coords1, coords2, coords3, coords4, weight1, weight2, weight3, weight4 )
 	return lightmapUVFromSmoothPacked( smooth, quadLightEmission )
@@ -549,7 +669,7 @@ local function smoothCornerLightmapUVFromMeta( meta )
 end
 
 local function minecraftSmoothCornerShadeBrightnessValues( bx, by, bz, faceIndex, cx0, cy0, cz0, faceCubic )
-	local _, _, _, _, shade1, shade2, shade3, shade4 = mcLightmapCornerState( bx, by, bz, faceIndex, 0, faceCubic )
+	local _, _, _, _, shade1, shade2, shade3, shade4 = mcLightmapCornerStateCached( bx, by, bz, faceIndex, 0, faceCubic )
 	local slot = faceVertexLightSlot( faceIndex, faceVertexCornerIndex( faceIndex, cx0, cy0, cz0 ) )
 	if slot == 1 then return shade1 elseif slot == 2 then return shade2 elseif slot == 3 then return shade3 end
 	return shade4
@@ -557,7 +677,7 @@ end
 
 local function weightedFaceShadeBrightnessValues( bx, by, bz, faceIndex, quad, cx, cy, cz )
 	local faceCubic = not quad or quad.faceCubic ~= false
-	local _, _, _, _, shade1, shade2, shade3, shade4 = mcLightmapCornerState( bx, by, bz, faceIndex, 0, faceCubic )
+	local _, _, _, _, shade1, shade2, shade3, shade4 = mcLightmapCornerStateCached( bx, by, bz, faceIndex, 0, faceCubic )
 	local weight1, weight2, weight3, weight4 = faceQuadWeights( faceIndex, quad, cx, cy, cz )
 	return shade1 * weight1 + shade2 * weight2 + shade3 * weight3 + shade4 * weight4
 end
@@ -566,6 +686,7 @@ end
 RM.smoothCornerLightmapUVFromMeta = smoothCornerLightmapUVFromMeta
 RM.minecraftSmoothCornerShadeBrightnessValues = minecraftSmoothCornerShadeBrightnessValues
 RM.weightedFaceShadeBrightnessValues = weightedFaceShadeBrightnessValues
+RM.lightmapFullCubeFacePacket = lightmapFullCubeFacePacket
 RM.lightmapFacePacketForQuad = lightmapFacePacketForQuad
 RM.lightmapPacketWeightedQuad = lightmapPacketWeightedQuad
 RM.lightmapPacketCornerUV = lightmapPacketCornerUV

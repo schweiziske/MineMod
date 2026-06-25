@@ -27,10 +27,11 @@ local fullCubeFaceCornerColors = RM.fullCubeFaceCornerColors
 local quadCornerColors = RM.quadCornerColors
 local quadCornerColorValues = RM.quadCornerColorValues
 local lightmapPacketCornerColors = RM.lightmapPacketCornerColors
-local lightmapPacketCornerColorValues = RM.lightmapPacketCornerColorValues
 local shadeIndexForFace = RM.shadeIndexForFace
 local cornerXYZ = RM.cornerXYZ
 local quadFaceCubic = RM.quadFaceCubic
+local lightmapFixedFaceColor = RM.lightmapFixedFaceColor
+local lightmapFullCubeFacePacket = RM.lightmapFullCubeFacePacket
 local lightmapFacePacketForQuad = RM.lightmapFacePacketForQuad
 local lightmapPacketWeightedQuad = RM.lightmapPacketWeightedQuad
 local visible = RM.visible
@@ -53,6 +54,17 @@ local function noteLightmapFacePacket( meshPerf, packet )
 	else
 		meshPerf.lightmapFullPackets = ( meshPerf.lightmapFullPackets or 0 ) + 1
 	end
+end
+
+local function lightmapPacketCornerMeta( packet, cornerIndex )
+	if cornerIndex == 1 then
+		return { u1 = packet.u1_1, v1 = packet.v1_1, lightmapCornerIndex = 1, shared = true }
+	elseif cornerIndex == 2 then
+		return { u1 = packet.u1_2, v1 = packet.v1_2, lightmapCornerIndex = 2, shared = true }
+	elseif cornerIndex == 3 then
+		return { u1 = packet.u1_3, v1 = packet.v1_3, lightmapCornerIndex = 3, shared = true }
+	end
+	return { u1 = packet.u1_4, v1 = packet.v1_4, lightmapCornerIndex = 4, shared = true }
 end
 
 local function shapeTriUV( fd, ci, faceIndex, cx, cy, cz, tile, u0, v0, u1, v1 )
@@ -361,7 +373,7 @@ function RM.EmitBlock( ctx, li, id )
 	local blocksById = ctx.blocksById
 	local cur = ctx.getCur()
 	local function flush( buf ) return ctx.flush( buf ) end
-	local function push( vert, light ) ctx.setCur( cur ); local result = ctx.push( vert, light ); cur = ctx.getCur(); return result end
+	local function push( vert, light ) return ctx.push( vert, light ) end
 	local function lightMeta( ... ) return ctx.lightMeta( ... ) end
 	local function lightMetaValues( ... ) return ctx.lightMetaValues( ... ) end
 	local function prepareBlockCacheBuffer( targetBuffer ) local ok = ctx.prepareBlockCacheBuffer( targetBuffer ); cur = ctx.getCur(); return ok end
@@ -404,7 +416,7 @@ function RM.EmitBlock( ctx, li, id )
 		end
 		if cached and ( blockNeedsRecolor or cached.lightStyle ~= targetLightStyle ) then
 			local recolorStart = SysTime()
-			if recolorCachedBlockEmission( cached, targetLightStyle ) then
+			if recolorCachedBlockEmission( cached, targetLightStyle, meshPerf ) then
 				meshPerfAdd( meshPerf, "recolorMS", recolorStart )
 				meshPerf.blockCacheRecolors = meshPerf.blockCacheRecolors + 1
 			else
@@ -430,6 +442,7 @@ function RM.EmitBlock( ctx, li, id )
 		local emitKind = "shape"
 		local directEmitCheapFullCube = false
 		local directEmitVertexCount = 0
+		local fixedLightmapFaceMetas, fixedLightmapFaceCount
 		local b = blocksById[id]
 		if b and b.shape == "cross" then
 			emitKind = "cross"
@@ -467,6 +480,8 @@ function RM.EmitBlock( ctx, li, id )
 			else
 				prepareBlockCacheBuffer( targetBuffer )
 			end
+			local emitLightStyle = currentEmitLightStyle()
+			local fullCubeUsesLightmap = lightmapFullCubeFacePacket and lightmapStyleUsesHardware( emitLightStyle )
 			for f = 1, 6 do
 				if bit_band( visibleFaceMask, bit_lshift( 1, f - 1 ) ) ~= 0 then
 					local face = C.FACES[f]
@@ -488,19 +503,51 @@ function RM.EmitBlock( ctx, li, id )
 					local shadeIndex = shadeIndexForFace( f )
 					if faceStart then meshPerfAdd( meshPerf, "fullFaceMS", faceStart ) end
 					local colorStart = meshProbe and SysTime() or nil
-					local emitLightStyle = currentEmitLightStyle()
-					local c1, c2, c3, c4 = corners[1], corners[2], corners[3], corners[4]
-					local lightmapPacket = lightmapStyleUsesHardware( emitLightStyle ) and lightmapFacePacketForQuad
-						and lightmapFacePacketForQuad( bx, by, bz, f, emission, true, quadLightEmission,
-							c1[1], c1[2], c1[3], c2[1], c2[2], c2[3], c3[1], c3[2], c3[3], c4[1], c4[2], c4[3] ) or nil
+					local lightmapPacket = fullCubeUsesLightmap
+						and lightmapFullCubeFacePacket( bx, by, bz, f, emission, quadLightEmission ) or nil
 					noteLightmapFacePacket( meshPerf, lightmapPacket )
 					local color1, color2, color3, color4
-					if lightmapPacket and lightmapPacketCornerColorValues then
-						color1, color2, color3, color4 = lightmapPacketCornerColorValues( shadeIndex, lightmapPacket )
+					if lightmapPacket then
+						local fixedColor = lightmapFixedFaceColor and lightmapFixedFaceColor( shadeIndex, f, emitLightStyle ) or col
+						color1, color2, color3, color4 = fixedColor, fixedColor, fixedColor, fixedColor
 					else
 						color1, color2, color3, color4 = fullCubeFaceCornerColors( shadeIndex, bx, by, bz, f, emission, emitLightStyle )
 					end
 					if colorStart then meshPerfAdd( meshPerf, "fullColorMS", colorStart ) end
+					local meta1, meta2, meta3, meta4
+					local metaStart = meshProbe and SysTime() or nil
+					if lightmapPacket then
+						meta1 = {
+							shade = col,
+							shadeIndex = shadeIndex,
+							bx = bx,
+							by = by,
+							bz = bz,
+							id = id,
+							faceIndex = f,
+							selfEmission = emission,
+							quadLightEmission = quadLightEmission,
+							faceCubic = true,
+							lightmapFixedColor = true,
+							lightmapCornerIndex = 1,
+							u1 = lightmapPacket.u1_1,
+							v1 = lightmapPacket.v1_1,
+							shared = true,
+						}
+						meta2 = lightmapPacketCornerMeta( lightmapPacket, 2 )
+						meta3 = lightmapPacketCornerMeta( lightmapPacket, 3 )
+						meta4 = lightmapPacketCornerMeta( lightmapPacket, 4 )
+						fixedLightmapFaceMetas = fixedLightmapFaceMetas or {}
+						fixedLightmapFaceCount = ( fixedLightmapFaceCount or 0 ) + 1
+						fixedLightmapFaceMetas[fixedLightmapFaceCount] = meta1
+					else
+						meta1 = lightMeta( col, bx, by, bz, id, f, corners[1], emission, nil, true, quadLightEmission, nil, 1 )
+						meta2 = lightMeta( col, bx, by, bz, id, f, corners[2], emission, nil, true, quadLightEmission, nil, 2 )
+						meta3 = lightMeta( col, bx, by, bz, id, f, corners[3], emission, nil, true, quadLightEmission, nil, 3 )
+						meta4 = lightMeta( col, bx, by, bz, id, f, corners[4], emission, nil, true, quadLightEmission, nil, 4 )
+						meta1.shared, meta2.shared, meta3.shared, meta4.shared = true, true, true, true
+					end
+					if metaStart then meshPerfAdd( meshPerf, "fullMetaMS", metaStart ) end
 
 					for t = 1, 6 do
 						local ci = C.TRI[t]
@@ -524,6 +571,16 @@ function RM.EmitBlock( ctx, li, id )
 						else
 							vertColor = color4
 						end
+						local meta
+						if ci == 1 then
+							meta = meta1
+						elseif ci == 2 then
+							meta = meta2
+						elseif ci == 3 then
+							meta = meta3
+						else
+							meta = meta4
+						end
 						if meshProbe then
 							local vertexStart = SysTime()
 							local vert = {
@@ -534,9 +591,6 @@ function RM.EmitBlock( ctx, li, id )
 								color  = vertColor,
 							}
 							meshPerfAdd( meshPerf, "fullVertexMS", vertexStart )
-							local metaStart = SysTime()
-							local meta = lightMeta( col, bx, by, bz, id, f, cn, emission, nil, true, quadLightEmission, lightmapPacket, ci )
-							meshPerfAdd( meshPerf, "fullMetaMS", metaStart )
 							local pushStart = SysTime()
 							push( vert, meta )
 							meshPerfAdd( meshPerf, "fullPushMS", pushStart )
@@ -547,7 +601,7 @@ function RM.EmitBlock( ctx, li, id )
 								u      = u,
 								v      = v,
 								color  = vertColor,
-							}, lightMeta( col, bx, by, bz, id, f, cn, emission, nil, true, quadLightEmission, lightmapPacket, ci ) )
+							}, meta )
 						end
 					end
 				end
@@ -629,6 +683,11 @@ function RM.EmitBlock( ctx, li, id )
 				lightmap = targetBuffer.lightmap == true,
 				kind = emitKind,
 			}
+			if fixedLightmapFaceMetas and fixedLightmapFaceCount and fixedLightmapFaceCount * 6 == emittedVertices then
+				blockRecord.fixedLightmapFaceMetas = fixedLightmapFaceMetas
+				blockRecord.fixedLightmapFaceCount = fixedLightmapFaceCount
+				blockRecord.fixedLightmapFastFullCube = true
+			end
 			if shouldStoreBlockEmissionCache( emitKind, emittedVertices ) then
 				blockRecord = MC.StoreBlockEmissionCache( key, blockSectionIndex, li, id, orient, targetLightStyle, blockRecord )
 			else

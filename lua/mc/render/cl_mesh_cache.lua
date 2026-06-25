@@ -442,12 +442,37 @@ function MC.AppendCachedBlockEmission( record, buf, flushFn, meshPerf, vertexLim
 	return vertexCount
 end
 
-function MC.CachedBlockLightMetaKey( meta )
-	return meta and meta.recolorKey
+local function cachedBlockLightMetaKey( meta )
+	if not meta then return nil end
+	if meta.recolorKey ~= nil then return meta.recolorKey end
+	local RM = MC.RenderMesh
+	local meshRecolorKey = RM and RM.meshRecolorKey
+	local weightedQuadRecolorKey = RM and RM.weightedQuadRecolorKey
+	if not meshRecolorKey or not weightedQuadRecolorKey then return nil end
+	local key = meshRecolorKey( meta.shadeIndex, meta.bx, meta.by, meta.bz, meta.faceIndex, meta.cx, meta.cy, meta.cz, meta.selfEmission )
+	key = weightedQuadRecolorKey( key, meta.weightedLightmapQuad, meta.quadLightEmission )
+	meta.recolorKey = key
+	return key
 end
 
-function MC.RecolorCachedBlockEmission( record, lightStyle, recolorFn )
+function MC.CachedBlockLightMetaKey( meta )
+	return cachedBlockLightMetaKey( meta )
+end
+
+function MC.RecolorCachedBlockEmission( record, lightStyle, recolorFn, meshPerf )
 	if not record or not record.verts or not record.light or not recolorFn then return false end
+	local RM = MC.RenderMesh
+	local fixedLightmapRecolor = RM and RM.recolorFixedLightmapBlockEmission
+	if fixedLightmapRecolor then
+		local fastOK, fastVertexCount = fixedLightmapRecolor( record, lightStyle )
+		if fastOK ~= nil then
+			if fastOK and meshPerf then
+				meshPerf.fixedLightmapFastRecolors = ( meshPerf.fixedLightmapFastRecolors or 0 ) + 1
+				meshPerf.fixedLightmapFastVertices = ( meshPerf.fixedLightmapFastVertices or 0 ) + ( fastVertexCount or 0 )
+			end
+			return fastOK, fastVertexCount
+		end
+	end
 	local verts = record.verts
 	local light = record.light
 	local vertexCount = record.vertexCount or #verts
@@ -460,7 +485,7 @@ function MC.RecolorCachedBlockEmission( record, lightStyle, recolorFn )
 	for i = 1, vertexCount do
 		local meta = light[i]
 		if not meta then return false end
-		local key = meta.recolorKey
+		local key = cachedBlockLightMetaKey( meta )
 		if key == nil then return false end
 		if meta.shadeIndex == nil then return false end
 		local color = colorCache[key]

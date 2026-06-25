@@ -123,6 +123,8 @@ function MC.LightPerfTrace( kind, fields )
 	add( "commitMS", fields.commitMS )
 	add( "flatMS", fields.flatMS )
 	add( "recolorMS", fields.recolorMS )
+	add( "lmFastRecolor", fields.lmFastRecolor )
+	add( "lmFastVerts", fields.lmFastVerts )
 	add( "samples", fields.samples )
 	add( "sampleMS", fields.sampleMS )
 	add( "ao", fields.ao )
@@ -239,6 +241,8 @@ function MC.LightPerfEndMeshBuild( key, sectionIndex, meshMS )
 		commitMS = stats.lastMeshCommitMS,
 		flatMS = stats.lastMeshFlatMS,
 		recolorMS = stats.lastMeshRecolorMS,
+		lmFastRecolor = stats.lastMeshFixedLightmapFastRecolors,
+		lmFastVerts = stats.lastMeshFixedLightmapFastVertices,
 		samples = stats.lastMeshSampleCalls,
 		sampleMS = stats.lastMeshSampleMS,
 		ao = stats.lastMeshAOCalls,

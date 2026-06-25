@@ -10,7 +10,7 @@ MC.MeshBeginUpload = MC.MeshBeginUpload or ( CreateClientConVar and CreateClient
 MC.MeshDebugFullCubeOnly = MC.MeshDebugFullCubeOnly or ( CreateClientConVar and CreateClientConVar( "mc_mesh_debug_full_cube_only", "0", true, false,
 	"Debug MC mesh emission by rendering only full cube blocks" ) )
 MC.MeshLightmapUV = MC.MeshLightmapUV or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lightmap_uv", "0", true, false,
-	"Use experimental UV1 hardware lightmaps for mc_light_style lightmap" ) )
+	"Use experimental UV1 hardware lightmaps for mc_light_style lightmap/vanilla/shader" ) )
 MC.MeshLightmapSource = MC.MeshLightmapSource or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lightmap_source", "generated", true, false,
 	"Hardware lightmap texture source: generated or image" ) )
 MC.MeshLightmapImage = MC.MeshLightmapImage or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lightmap_image", "mc/lightmap.png", true, false,
@@ -19,6 +19,8 @@ MC.MeshLightmapAllowExternal = MC.MeshLightmapAllowExternal or ( CreateClientCon
 	"Allow mc_mesh_lightmap_source image to override the generated in-game MC lightmap" ) )
 MC.MeshLightmapExposure = MC.MeshLightmapExposure or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lightmap_exposure", "1", true, false,
 	"Brightness multiplier for the generated MC hardware lightmap texture" ) )
+MC.MeshLightmapBaseScale = MC.MeshLightmapBaseScale or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lightmap_base_scale", "0.6", true, false,
+	"Base brightness compensation for user hardware lightmaps; multiplied by mc_mesh_lightmap_exposure" ) )
 MC.MeshLightmapAmbientScale = MC.MeshLightmapAmbientScale or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lightmap_ambient_scale", "1", true, false,
 	"Multiplier for the Minecraft AmbientColor uniform in the generated MC hardware lightmap texture" ) )
 MC.MeshLightmapSkyFactor = MC.MeshLightmapSkyFactor or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lightmap_sky_factor", "1", true, false,
@@ -86,11 +88,14 @@ local function meshDebugFullCubeOnly()
 end
 
 local function lightmapStyleUsesHardware( style )
-	return style == MC_LIGHT_STYLE_LIGHTMAP and meshLightmapUVEnabled()
+	if not meshLightmapUVEnabled() then return false end
+	return style == MC_LIGHT_STYLE_LIGHTMAP
+		or style == MC_LIGHT_STYLE_VANILLA
+		or style == MC_LIGHT_STYLE_SHADER
 end
 
 local function fallbackLightStyle( style )
-	return style == MC_LIGHT_STYLE_LIGHTMAP and MC_LIGHT_STYLE_VANILLA or style
+	return lightmapStyleUsesHardware( style ) and MC_LIGHT_STYLE_VANILLA or style
 end
 
 MC.CurrentMeshLightStyle = currentLightStyle

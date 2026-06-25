@@ -47,8 +47,8 @@ local function forceDepthWrite()
 end
 
 local function safePopMeshLightmapFilter( pushedMin, pushedMag )
-	if MC.PopMeshLightmapLinearFilter then
-		pcall( MC.PopMeshLightmapLinearFilter, pushedMin, pushedMag )
+	if MC.PopMeshLightmapPointFilter then
+		pcall( MC.PopMeshLightmapPointFilter, pushedMin, pushedMag )
 	end
 end
 
@@ -83,8 +83,8 @@ local function drawMeshList( list, material, writeDepth )
 				render.SetMaterial( currentMaterial )
 			end
 			if entryLightmap and render.SetLightmapTexture and MC.GetMeshLightmapTexture then
-				if MC.PushMeshLightmapLinearFilter then
-					pushedMin, pushedMag = MC.PushMeshLightmapLinearFilter()
+				if MC.PushMeshLightmapPointFilter then
+					pushedMin, pushedMag = MC.PushMeshLightmapPointFilter()
 				end
 				render.SetLightmapTexture( MC.GetMeshLightmapTexture() )
 			end

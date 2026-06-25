@@ -63,6 +63,8 @@ local function newMeshPerfStats()
 		lightmapWeightedPackets = 0,
 		lightmapPacketVertices = 0,
 		lightmapFallbackUVs = 0,
+		fixedLightmapFastRecolors = 0,
+		fixedLightmapFastVertices = 0,
 	}
 end
 
@@ -219,6 +221,8 @@ local function publishMeshPerfStats( perf )
 	stats.lastMeshLightmapWeightedPackets = perf.lightmapWeightedPackets or 0
 	stats.lastMeshLightmapPacketVertices = perf.lightmapPacketVertices or 0
 	stats.lastMeshLightmapFallbackUVs = perf.lightmapFallbackUVs or 0
+	stats.lastMeshFixedLightmapFastRecolors = perf.fixedLightmapFastRecolors or 0
+	stats.lastMeshFixedLightmapFastVertices = perf.fixedLightmapFastVertices or 0
 end
 
 local function printMeshEmitProbe( key, sectionIndex, meshMS, perf )
@@ -250,6 +254,8 @@ local function printMeshEmitProbe( key, sectionIndex, meshMS, perf )
 	add( "lmPackets", perf.lightmapPackets or 0 )
 	add( "lmPacketVerts", perf.lightmapPacketVertices or 0 )
 	add( "lmFallbackUVs", perf.lightmapFallbackUVs or 0 )
+	add( "lmFastRecolor", perf.fixedLightmapFastRecolors or 0 )
+	add( "lmFastVerts", perf.fixedLightmapFastVertices or 0 )
 	add( "shapeMS", meshPerfRoundMS( perf.shapeMS ) )
 	add( "modelMS", meshPerfRoundMS( perf.modelMS ) )
 	add( "flushMS", meshPerfRoundMS( perf.flushMS ) )

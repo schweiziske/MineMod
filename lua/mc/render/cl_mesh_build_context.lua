@@ -15,8 +15,6 @@ local facePlane = RM.facePlane
 local EPS = RM.EPS
 local cornerXYZ = RM.cornerXYZ
 local shadeRecolorIndex = RM.shadeRecolorIndex
-local meshRecolorKey = RM.meshRecolorKey
-local weightedQuadRecolorKey = RM.weightedQuadRecolorKey
 local uploadMeshVertices = RM.uploadMeshVertices
 local meshPerfAdd = RM.meshPerfAdd
 local meshPerfMS = RM.meshPerfMS
@@ -186,7 +184,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			end
 			vert.u1 = u1
 			vert.v1 = v1
-			if light then
+			if light and not light.shared then
 				light.u1 = nil
 				light.v1 = nil
 			end
@@ -207,6 +205,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		if u1 ~= nil and v1 ~= nil then
 			meta.u1 = u1
 			meta.v1 = v1
+			meta.lightmapCornerIndex = packetCornerIndex
 		end
 		return meta
 	end
@@ -214,7 +213,6 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	local function lightMeta( shade, bx, by, bz, id, faceIndex, corner, selfEmission, weightedLightmapQuad, faceCubic, quadLightEmission, lightmapPacket, packetCornerIndex )
 		local cx, cy, cz = cornerXYZ( corner )
 		local shadeIndex = shadeRecolorIndex( shade )
-		local recolorKey = meshRecolorKey( shadeIndex, bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
 		quadLightEmission = clampLightLevel( quadLightEmission )
 		if faceCubic == nil then
 			faceCubic = not weightedLightmapQuad or weightedLightmapQuad.faceCubic ~= false
@@ -234,13 +232,11 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			quadLightEmission = quadLightEmission,
 			weightedLightmapQuad = weightedLightmapQuad,
 			faceCubic = faceCubic ~= false,
-			recolorKey = weightedQuadRecolorKey( recolorKey, weightedLightmapQuad, quadLightEmission ),
 		}, lightmapPacket, packetCornerIndex )
 	end
 
 	local function lightMetaValues( shade, bx, by, bz, id, faceIndex, cx, cy, cz, selfEmission, weightedLightmapQuad, faceCubic, quadLightEmission, lightmapPacket, packetCornerIndex )
 		local shadeIndex = shadeRecolorIndex( shade )
-		local recolorKey = meshRecolorKey( shadeIndex, bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
 		quadLightEmission = clampLightLevel( quadLightEmission )
 		if faceCubic == nil then
 			faceCubic = not weightedLightmapQuad or weightedLightmapQuad.faceCubic ~= false
@@ -260,7 +256,6 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			quadLightEmission = quadLightEmission,
 			weightedLightmapQuad = weightedLightmapQuad,
 			faceCubic = faceCubic ~= false,
-			recolorKey = weightedQuadRecolorKey( recolorKey, weightedLightmapQuad, quadLightEmission ),
 		}, lightmapPacket, packetCornerIndex )
 	end
 

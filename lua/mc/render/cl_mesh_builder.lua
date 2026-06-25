@@ -219,7 +219,7 @@ function MC.RebuildChunkMeshLighting( key, sectionIndex )
 			local blockRecord = blockEmitCacheSection[li]
 			if blockRecord then
 				local recolorStart = SysTime()
-				local ok = recolorCachedBlockEmission( blockRecord, meshLightStyle )
+				local ok = recolorCachedBlockEmission( blockRecord, meshLightStyle, meshPerf )
 				meshPerfAdd( meshPerf, "recolorMS", recolorStart )
 				if not ok then return false end
 				meshPerf.blockCacheRecolors = meshPerf.blockCacheRecolors + 1
@@ -235,7 +235,7 @@ function MC.RebuildChunkMeshLighting( key, sectionIndex )
 		local vertexCount = #record.verts
 		if recolorWholeRecord then
 			local recolorStart = SysTime()
-			if not recolorCachedBlockEmission( record, meshLightStyle ) then return false end
+			if not recolorCachedBlockEmission( record, meshLightStyle, meshPerf ) then return false end
 			meshPerfAdd( meshPerf, "recolorMS", recolorStart )
 		end
 		uploadMeshVertices( record.mesh, record.verts, meshPerf )

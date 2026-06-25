@@ -19,12 +19,16 @@ local MeshLightmapTexture = nil
 local MeshLightmapTextureDirty = true
 local blockLightFlicker = 0
 local MeshLightmapNextFlickerTick = 0
-local USER_LIGHTMAP_BASE_SCALE = 0.6
+local DEFAULT_USER_LIGHTMAP_BASE_SCALE = 0.6
 
 local function sourceLightmapScaleCompensation()
 	-- SetLightmapTexture binds this render target directly as a user lightmap.
 	-- It is not a BSP lightmap page, so do not apply Source's baked-lightmap HDR/LDR storage scale here.
-	return USER_LIGHTMAP_BASE_SCALE
+	local cv = MC.MeshLightmapBaseScale
+	local scale = cv and cv.GetFloat and cv:GetFloat() or DEFAULT_USER_LIGHTMAP_BASE_SCALE
+	scale = tonumber( scale ) or DEFAULT_USER_LIGHTMAP_BASE_SCALE
+	if scale < 0 then return 0 end
+	return scale
 end
 
 local function mcLightmapBrightnessCurve( level )
@@ -260,26 +264,29 @@ function MC.GetMeshLightmapTexture()
 	return MeshLightmapTexture
 end
 
-function MC.PushMeshLightmapLinearFilter()
+function MC.PushMeshLightmapPointFilter()
 	if not render then return false, false end
-	local linear = TEXFILTER and TEXFILTER.LINEAR or 2
+	local point = TEXFILTER and TEXFILTER.POINT or 0
 	local pushedMin, pushedMag = false, false
 	if render.PushFilterMin then
-		render.PushFilterMin( linear )
+		render.PushFilterMin( point )
 		pushedMin = true
 	end
 	if render.PushFilterMag then
-		render.PushFilterMag( linear )
+		render.PushFilterMag( point )
 		pushedMag = true
 	end
 	return pushedMin, pushedMag
 end
 
-function MC.PopMeshLightmapLinearFilter( pushedMin, pushedMag )
+function MC.PopMeshLightmapPointFilter( pushedMin, pushedMag )
 	if not render then return end
 	if pushedMag and render.PopFilterMag then render.PopFilterMag() end
 	if pushedMin and render.PopFilterMin then render.PopFilterMin() end
 end
+
+MC.PushMeshLightmapLinearFilter = nil
+MC.PopMeshLightmapLinearFilter = nil
 
 local function markLoadedMeshesDirtyForLightmapFormat()
 	for key, chunk in pairs( MC.World or {} ) do
@@ -314,6 +321,9 @@ if cvars and cvars.AddChangeCallback then
 	cvars.AddChangeCallback( "mc_mesh_lightmap_exposure", function()
 		markMeshLightmapTextureDirty()
 	end, "mc_mesh_lightmap_exposure_refresh" )
+	cvars.AddChangeCallback( "mc_mesh_lightmap_base_scale", function()
+		markMeshLightmapTextureDirty()
+	end, "mc_mesh_lightmap_base_scale_refresh" )
 	cvars.AddChangeCallback( "mc_mesh_lightmap_ambient_scale", function()
 		markMeshLightmapTextureDirty()
 	end, "mc_mesh_lightmap_ambient_refresh" )
