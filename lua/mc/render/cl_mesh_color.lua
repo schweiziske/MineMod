@@ -18,6 +18,7 @@ local minecraftSmoothCornerBrightnessValues = RM.minecraftSmoothCornerBrightness
 local minecraftSmoothCornerShadeBrightnessValues = RM.minecraftSmoothCornerShadeBrightnessValues
 local weightedFaceShadeBrightnessValues = RM.weightedFaceShadeBrightnessValues
 local smoothCornerLightmapUVFromMeta = RM.smoothCornerLightmapUVFromMeta
+local lightmapPacketCornerShade = RM.lightmapPacketCornerShade
 local lightmapStyleUsesHardware = RM.lightmapStyleUsesHardware
 local fallbackLightStyle = RM.fallbackLightStyle
 local MC_LIGHT_STYLE_FAST = RM.MC_LIGHT_STYLE_FAST
@@ -566,6 +567,33 @@ local function weightedLightmapFaceColor( shade, bx, by, bz, faceIndex, quad, cx
 	)
 end
 
+local function lightmapPacketColorFromRGBA( shadeR, shadeG, shadeB, shadeA, packet, cornerIndex )
+	local mul = mathClamp( tonumber( lightmapPacketCornerShade and lightmapPacketCornerShade( packet, cornerIndex ) ) or 1, 0, 1 )
+	return colorFromRGBA(
+		mathClamp( mathFloor( shadeR * mul + 0.5 ), 0, 255 ),
+		mathClamp( mathFloor( shadeG * mul + 0.5 ), 0, 255 ),
+		mathClamp( mathFloor( shadeB * mul + 0.5 ), 0, 255 ),
+		shadeA
+	)
+end
+
+local function lightmapPacketCornerColorsByRGBA( shadeR, shadeG, shadeB, shadeA, packet )
+	return
+		lightmapPacketColorFromRGBA( shadeR, shadeG, shadeB, shadeA, packet, 1 ),
+		lightmapPacketColorFromRGBA( shadeR, shadeG, shadeB, shadeA, packet, 2 ),
+		lightmapPacketColorFromRGBA( shadeR, shadeG, shadeB, shadeA, packet, 3 ),
+		lightmapPacketColorFromRGBA( shadeR, shadeG, shadeB, shadeA, packet, 4 )
+end
+
+local function lightmapPacketCornerColors( shade, packet )
+	return lightmapPacketCornerColorsByRGBA( shade.r or 255, shade.g or 255, shade.b or 255, shade.a or 255, packet )
+end
+
+local function lightmapPacketCornerColorValues( shadeIndex, packet )
+	local shadeR, shadeG, shadeB, shadeA = shadeRGBAByIndex( shadeIndex )
+	return lightmapPacketCornerColorsByRGBA( shadeR, shadeG, shadeB, shadeA, packet )
+end
+
 local function quadCornerColors( shade, bx, by, bz, id, faceIndex, corners, selfEmission, style )
 	if style == MC_LIGHT_STYLE_FAST then
 		local color = litFaceColor( shade, bx, by, bz, id, faceIndex, corners[1], selfEmission, style )
@@ -671,6 +699,8 @@ RM.fullCubeFaceCornerColorsShader = fullCubeFaceCornerColorsShader
 RM.fullCubeCornerColorLightmap = fullCubeCornerColorLightmap
 RM.fullCubeFaceCornerColors = fullCubeFaceCornerColors
 RM.weightedLightmapFaceColor = weightedLightmapFaceColor
+RM.lightmapPacketCornerColors = lightmapPacketCornerColors
+RM.lightmapPacketCornerColorValues = lightmapPacketCornerColorValues
 RM.quadCornerColors = quadCornerColors
 RM.quadCornerColorValues = quadCornerColorValues
 RM.recolorLightMeta = recolorLightMeta
