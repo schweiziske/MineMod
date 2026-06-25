@@ -31,6 +31,7 @@ local shadeIndexForFace = RM.shadeIndexForFace
 local cornerXYZ = RM.cornerXYZ
 local quadFaceCubic = RM.quadFaceCubic
 local lightmapFixedFaceColor = RM.lightmapFixedFaceColor
+local lightmapFixedFaceCornerColors = RM.lightmapFixedFaceCornerColors
 local lightmapFullCubeFacePacket = RM.lightmapFullCubeFacePacket
 local lightmapFacePacketForQuad = RM.lightmapFacePacketForQuad
 local lightmapPacketWeightedQuad = RM.lightmapPacketWeightedQuad
@@ -508,8 +509,15 @@ function RM.EmitBlock( ctx, li, id )
 					noteLightmapFacePacket( meshPerf, lightmapPacket )
 					local color1, color2, color3, color4
 					if lightmapPacket then
-						local fixedColor = lightmapFixedFaceColor and lightmapFixedFaceColor( shadeIndex, f, emitLightStyle ) or col
-						color1, color2, color3, color4 = fixedColor, fixedColor, fixedColor, fixedColor
+						if lightmapFixedFaceCornerColors then
+							color1, color2, color3, color4 = lightmapFixedFaceCornerColors( shadeIndex, f, emitLightStyle, lightmapPacket )
+						elseif lightmapPacketCornerColors then
+							local fixedColor = lightmapFixedFaceColor and lightmapFixedFaceColor( shadeIndex, f, emitLightStyle ) or col
+							color1, color2, color3, color4 = lightmapPacketCornerColors( fixedColor, lightmapPacket )
+						else
+							local fixedColor = lightmapFixedFaceColor and lightmapFixedFaceColor( shadeIndex, f, emitLightStyle ) or col
+							color1, color2, color3, color4 = fixedColor, fixedColor, fixedColor, fixedColor
+						end
 					else
 						color1, color2, color3, color4 = fullCubeFaceCornerColors( shadeIndex, bx, by, bz, f, emission, emitLightStyle )
 					end

@@ -38,6 +38,7 @@ local fullCubeColorCacheKey = RM.fullCubeColorCacheKey
 
 local MeshFullCubeColorCache = {}
 local MeshShaderDaylightFactor = nil
+local FIXED_LIGHTMAP_COLOR_VERSION = 2
 
 function RM.resetMeshColorLightingCaches()
 	MeshFullCubeColorCache = {}
@@ -605,6 +606,17 @@ local function lightmapPacketCornerColorValues( shadeIndex, packet )
 	return lightmapPacketCornerColorsByRGBA( shadeR, shadeG, shadeB, shadeA, packet )
 end
 
+local function lightmapFixedFaceCornerColors( shadeIndex, faceIndex, style, packet )
+	local shadeR, shadeG, shadeB, shadeA = shadeRGBAByIndex( shadeIndex )
+	if style == MC_LIGHT_STYLE_SHADER then
+		local rScale, gScale, bScale = shaderFaceTint( faceIndex )
+		shadeR = mathClamp( mathFloor( shadeR * rScale + 0.5 ), 0, 255 )
+		shadeG = mathClamp( mathFloor( shadeG * gScale + 0.5 ), 0, 255 )
+		shadeB = mathClamp( mathFloor( shadeB * bScale + 0.5 ), 0, 255 )
+	end
+	return lightmapPacketCornerColorsByRGBA( shadeR, shadeG, shadeB, shadeA, packet )
+end
+
 local function quadCornerColors( shade, bx, by, bz, id, faceIndex, corners, selfEmission, style )
 	if style == MC_LIGHT_STYLE_FAST then
 		local color = litFaceColor( shade, bx, by, bz, id, faceIndex, corners[1], selfEmission, style )
@@ -667,6 +679,16 @@ end
 local function recolorLightMeta( meta, style )
 	if meta and meta.lightmapFixedColor and lightmapStyleUsesHardware( style ) then
 		local u1, v1 = smoothCornerLightmapUVFromMeta( meta )
+		if lightmapFullCubeFacePacket and lightmapFixedFaceCornerColors and meta.lightmapCornerIndex then
+			local packet = lightmapFullCubeFacePacket( meta.bx, meta.by, meta.bz, meta.faceIndex, meta.selfEmission, meta.quadLightEmission )
+			if packet then
+				local c1, c2, c3, c4 = lightmapFixedFaceCornerColors( meta.shadeIndex, meta.faceIndex, style, packet )
+				if meta.lightmapCornerIndex == 2 then return c2 or c1, u1, v1 end
+				if meta.lightmapCornerIndex == 3 then return c3 or c1, u1, v1 end
+				if meta.lightmapCornerIndex == 4 then return c4 or c1, u1, v1 end
+				return c1, u1, v1
+			end
+		end
 		return lightmapFixedFaceColor( meta.shadeIndex, meta.faceIndex, style ), u1, v1
 	end
 	return litFaceColorMeta( meta, style )
@@ -766,19 +788,33 @@ local function fixedLightmapFacePackets( record, faceMetas, faceCount )
 	return packets
 end
 
-local function fixedLightmapFaceColors( record, style, faceMetas, faceCount )
+local function fixedLightmapFaceColors( record, style, faceMetas, faceCount, packets )
+	local generation = record.fixedLightmapFacePacketGeneration or 0
 	local colors = record.fixedLightmapFaceColors
-	if colors and record.fixedLightmapFaceColorStyle == style then return colors end
+	if colors
+		and record.fixedLightmapFaceColorStyle == style
+		and record.fixedLightmapFaceColorGeneration == generation
+		and record.fixedLightmapFaceColorVersion == FIXED_LIGHTMAP_COLOR_VERSION then
+		return colors
+	end
 	colors = colors or {}
 	for faceSlot = 1, faceCount do
 		local meta = faceMetas[faceSlot]
-		colors[faceSlot] = lightmapFixedFaceColor( meta.shadeIndex, meta.faceIndex, style )
+		local packet = packets and packets[faceSlot] or nil
+		if packet and lightmapFixedFaceCornerColors then
+			colors[faceSlot] = { lightmapFixedFaceCornerColors( meta.shadeIndex, meta.faceIndex, style, packet ) }
+		else
+			local color = lightmapFixedFaceColor( meta.shadeIndex, meta.faceIndex, style )
+			colors[faceSlot] = { color, color, color, color }
+		end
 	end
 	for faceSlot = faceCount + 1, #colors do
 		colors[faceSlot] = nil
 	end
 	record.fixedLightmapFaceColors = colors
 	record.fixedLightmapFaceColorStyle = style
+	record.fixedLightmapFaceColorGeneration = generation
+	record.fixedLightmapFaceColorVersion = FIXED_LIGHTMAP_COLOR_VERSION
 	return colors
 end
 
@@ -792,26 +828,28 @@ local function recolorFixedLightmapBlockEmission( record, style )
 	local vertexCount = record.vertexCount or #verts
 	if vertexCount <= 0 or vertexCount ~= #verts or vertexCount ~= #light then return false end
 	local faceMetas, faceCount = fixedLightmapFaceMetas( record, light, vertexCount )
-	local updateColors = record.lightStyle ~= style
+	local updateColors = record.lightStyle ~= style or record.fixedLightmapColorVersion ~= FIXED_LIGHTMAP_COLOR_VERSION
 	if faceMetas then
 		local packets = fixedLightmapFacePackets( record, faceMetas, faceCount )
 		if not packets then return false end
-		local colors = updateColors and fixedLightmapFaceColors( record, style, faceMetas, faceCount ) or nil
+		local colors = updateColors and fixedLightmapFaceColors( record, style, faceMetas, faceCount, packets ) or nil
 		for faceSlot = 1, faceCount do
 			local first = ( faceSlot - 1 ) * 6 + 1
 			local packet = packets[faceSlot]
-			local color = colors and colors[faceSlot] or nil
+			local faceColors = colors and colors[faceSlot] or nil
 			for j = 0, 5 do
 				local i = first + j
-				local u1, v1 = fixedLightmapPacketCornerUV( packet, light[i].lightmapCornerIndex )
+				local cornerIndex = light[i].lightmapCornerIndex
+				local u1, v1 = fixedLightmapPacketCornerUV( packet, cornerIndex )
 				if u1 == nil or v1 == nil then return false end
 				local vert = verts[i]
 				vert.u1 = u1
 				vert.v1 = v1
-				if updateColors then vert.color = color end
+				if faceColors then vert.color = faceColors[cornerIndex] or faceColors[1] end
 			end
 		end
 		record.lightStyle = style
+		record.fixedLightmapColorVersion = FIXED_LIGHTMAP_COLOR_VERSION
 		record.fixedLightmapFastRecolors = ( record.fixedLightmapFastRecolors or 0 ) + 1
 		return true, vertexCount
 	end
@@ -834,15 +872,24 @@ local function recolorFixedLightmapBlockEmission( record, style )
 		if faceMeta then
 			local packet = lightmapFullCubeFacePacket( faceMeta.bx, faceMeta.by, faceMeta.bz, faceMeta.faceIndex, faceMeta.selfEmission, faceMeta.quadLightEmission )
 			if not packet then return false end
-			local color = updateColors and lightmapFixedFaceColor( faceMeta.shadeIndex, faceMeta.faceIndex, style ) or nil
+			local faceColors = nil
+			if updateColors then
+				if lightmapFixedFaceCornerColors then
+					faceColors = { lightmapFixedFaceCornerColors( faceMeta.shadeIndex, faceMeta.faceIndex, style, packet ) }
+				else
+					local color = lightmapFixedFaceColor( faceMeta.shadeIndex, faceMeta.faceIndex, style )
+					faceColors = { color, color, color, color }
+				end
+			end
 			for j = 0, 5 do
 				local i = first + j
-				local u1, v1 = fixedLightmapPacketCornerUV( packet, light[i].lightmapCornerIndex )
+				local cornerIndex = light[i].lightmapCornerIndex
+				local u1, v1 = fixedLightmapPacketCornerUV( packet, cornerIndex )
 				if u1 == nil or v1 == nil then return false end
 				local vert = verts[i]
 				vert.u1 = u1
 				vert.v1 = v1
-				if updateColors then vert.color = color end
+				if faceColors then vert.color = faceColors[cornerIndex] or faceColors[1] end
 			end
 		else
 			for i = first, first + 5 do
@@ -874,6 +921,7 @@ local function recolorFixedLightmapBlockEmission( record, style )
 		end
 	end
 	record.lightStyle = style
+	record.fixedLightmapColorVersion = FIXED_LIGHTMAP_COLOR_VERSION
 	record.fixedLightmapFastRecolors = ( record.fixedLightmapFastRecolors or 0 ) + 1
 	return true, vertexCount
 end
@@ -915,6 +963,7 @@ RM.litFaceColorMeta = litFaceColorMeta
 RM.litFaceColor = litFaceColor
 RM.colorFromShadeMul = colorFromShadeMul
 RM.lightmapFixedFaceColor = lightmapFixedFaceColor
+RM.lightmapFixedFaceCornerColors = lightmapFixedFaceCornerColors
 RM.recolorFixedLightmapBlockEmission = recolorFixedLightmapBlockEmission
 RM.fullCubeCornerColor = fullCubeCornerColor
 RM.fullCubeCornerColorShader = fullCubeCornerColorShader
