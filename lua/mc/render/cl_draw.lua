@@ -83,6 +83,9 @@ local function drawMeshList( list, material, writeDepth )
 				render.SetMaterial( currentMaterial )
 			end
 			if entryLightmap and render.SetLightmapTexture and MC.GetMeshLightmapTexture then
+				if MC.PushMeshLightmapLinearFilter then
+					pushedMin, pushedMag = MC.PushMeshLightmapLinearFilter()
+				end
 				render.SetLightmapTexture( MC.GetMeshLightmapTexture() )
 			end
 			if meshObj and meshObj.Draw then meshObj:Draw() end

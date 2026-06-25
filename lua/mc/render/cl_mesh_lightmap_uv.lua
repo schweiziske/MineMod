@@ -15,11 +15,13 @@ local lightmapUVFromSmoothCoords = RM.lightmapUVFromSmoothCoords
 local cachedMeshLightLevelsSample = RM.cachedMeshLightLevelsSample
 local blockLightEmissionAt = RM.blockLightEmissionAt
 local faceSampleBaseCell = RM.faceSampleBaseCell
-local minecraftShadeBrightnessSample = RM.minecraftShadeBrightnessSample
+local cachedMeshAOSample = RM.cachedMeshAOSample
 local isSolidRenderForLightmap = RM.isSolidRenderForLightmap
 local isTranslucentForLightmap = RM.isTranslucentForLightmap
 local MC_LIGHTMAP_SIDE_OFFSETS = RM.MC_LIGHTMAP_SIDE_OFFSETS
+local MC_LIGHT_AO_FACTORS = RM.MC_LIGHT_AO_FACTORS
 local offsetCell = RM.offsetCell
+local cornerStep = RM.cornerStep
 
 local function packedLightCoordsFromLevels( block, sky )
 	return bit_bor( bit_lshift( clampLightLevel( block ), 4 ), bit_lshift( clampLightLevel( sky ), 20 ) )
@@ -119,9 +121,56 @@ local function lightCenterPackedCoords( bx, by, bz, faceIndex, selfEmission, fac
 	return packedLightCoordsAt( bx, by, bz, selfEmission )
 end
 
-local function shadeCenterValue( bx, by, bz, faceIndex, faceCubic )
-	local baseX, baseY, baseZ = faceSampleBaseCell( bx, by, bz, faceIndex, faceCubic )
-	return minecraftShadeBrightnessSample( baseX, baseY, baseZ )
+local function remapFaceCornerLightSlot( faceIndex, cornerIndex )
+	if faceIndex == MC.Face.TOP then
+		if cornerIndex == 1 then return 3 elseif cornerIndex == 2 then return 4 elseif cornerIndex == 3 then return 1 end
+		return 2
+	elseif faceIndex == MC.Face.YN or faceIndex == MC.Face.XN then
+		if cornerIndex == 1 then return 2 elseif cornerIndex == 2 then return 3 elseif cornerIndex == 3 then return 4 end
+		return 1
+	elseif faceIndex == MC.Face.XP then
+		if cornerIndex == 1 then return 4 elseif cornerIndex == 2 then return 1 elseif cornerIndex == 3 then return 2 end
+		return 3
+	end
+	return cornerIndex
+end
+
+local function minecraftCornerOccludersValues( bx, by, bz, faceIndex, x, y, z )
+	local xs, ys, zs = cornerStep( x ), cornerStep( y ), cornerStep( z )
+	if faceIndex == MC.Face.TOP or faceIndex == MC.Face.BOTTOM then
+		return bx + xs, by, bz, bx, by + ys, bz, bx + xs, by + ys, bz
+	elseif faceIndex == MC.Face.XP or faceIndex == MC.Face.XN then
+		return bx, by + ys, bz, bx, by, bz + zs, bx, by + ys, bz + zs
+	elseif faceIndex == MC.Face.YP or faceIndex == MC.Face.YN then
+		return bx + xs, by, bz, bx, by, bz + zs, bx + xs, by, bz + zs
+	end
+	return bx, by, bz, bx, by, bz, bx, by, bz
+end
+
+local function minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, cx, cy, cz )
+	if not cachedMeshAOSample then return 1 end
+	local s1x, s1y, s1z, s2x, s2y, s2z, cornerX, cornerY, cornerZ =
+		minecraftCornerOccludersValues( bx, by, bz, faceIndex, cx, cy, cz )
+	local side1Blocked = cachedMeshAOSample( s1x, s1y, s1z )
+	local side2Blocked = cachedMeshAOSample( s2x, s2y, s2z )
+	local cornerBlocked = cachedMeshAOSample( cornerX, cornerY, cornerZ )
+	if side1Blocked and side2Blocked then return MC_LIGHT_AO_FACTORS[3] end
+	local blocked = ( side1Blocked and 1 or 0 ) + ( side2Blocked and 1 or 0 ) + ( cornerBlocked and 1 or 0 )
+	return MC_LIGHT_AO_FACTORS[blocked] or 1
+end
+
+local function lightmapFaceAOValues( bx, by, bz, faceIndex )
+	local face = FACES[faceIndex]
+	if not face or not face.c then return 1, 1, 1, 1 end
+	local values = { 1, 1, 1, 1 }
+	for cornerIndex = 1, 4 do
+		local c = face.c[cornerIndex]
+		if c then
+			local slot = remapFaceCornerLightSlot( faceIndex, cornerIndex )
+			values[slot] = minecraftSmoothCornerAOValuesForLightmap( bx, by, bz, faceIndex, c[1], c[2], c[3] )
+		end
+	end
+	return values[1], values[2], values[3], values[4]
 end
 
 local function mcLightmapCornerState( bx, by, bz, faceIndex, selfEmission, faceCubic )
@@ -131,8 +180,7 @@ local function mcLightmapCornerState( bx, by, bz, faceIndex, selfEmission, faceC
 	local off = face and face.off
 	if not sides or not off then
 		local centerLight = packedLightCoordsAt( bx, by, bz, selfEmission )
-		local centerShade = minecraftShadeBrightnessSample( bx, by, bz )
-		return centerLight, centerLight, centerLight, centerLight, centerShade, centerShade, centerShade, centerShade
+		return centerLight, centerLight, centerLight, centerLight, 1, 1, 1, 1
 	end
 
 	local baseX, baseY, baseZ = faceSampleBaseCell( bx, by, bz, faceIndex, faceCubic )
@@ -144,57 +192,45 @@ local function mcLightmapCornerState( bx, by, bz, faceIndex, selfEmission, faceC
 	local light1 = packedLightCoordsAt( s1x, s1y, s1z, selfEmission )
 	local light2 = packedLightCoordsAt( s2x, s2y, s2z, selfEmission )
 	local light3 = packedLightCoordsAt( s3x, s3y, s3z, selfEmission )
-	local shade0 = minecraftShadeBrightnessSample( s0x, s0y, s0z )
-	local shade1 = minecraftShadeBrightnessSample( s1x, s1y, s1z )
-	local shade2 = minecraftShadeBrightnessSample( s2x, s2y, s2z )
-	local shade3 = minecraftShadeBrightnessSample( s3x, s3y, s3z )
 	local translucent0 = isTranslucentForLightmap( s0x + off[1], s0y + off[2], s0z + off[3] )
 	local translucent1 = isTranslucentForLightmap( s1x + off[1], s1y + off[2], s1z + off[3] )
 	local translucent2 = isTranslucentForLightmap( s2x + off[1], s2y + off[2], s2z + off[3] )
 	local translucent3 = isTranslucentForLightmap( s3x + off[1], s3y + off[2], s3z + off[3] )
-	local lightCorner02, shadeCorner02
+	local lightCorner02
 	if not translucent2 and not translucent0 then
-		lightCorner02, shadeCorner02 = light0, shade0
+		lightCorner02 = light0
 	else
 		local x, y, z = s0x + sides[3][1], s0y + sides[3][2], s0z + sides[3][3]
 		lightCorner02 = packedLightCoordsAt( x, y, z, selfEmission )
-		shadeCorner02 = minecraftShadeBrightnessSample( x, y, z )
 	end
-	local lightCorner03, shadeCorner03
+	local lightCorner03
 	if not translucent3 and not translucent0 then
-		lightCorner03, shadeCorner03 = light0, shade0
+		lightCorner03 = light0
 	else
 		local x, y, z = s0x + sides[4][1], s0y + sides[4][2], s0z + sides[4][3]
 		lightCorner03 = packedLightCoordsAt( x, y, z, selfEmission )
-		shadeCorner03 = minecraftShadeBrightnessSample( x, y, z )
 	end
-	local lightCorner12, shadeCorner12
+	local lightCorner12
 	if not translucent2 and not translucent1 then
-		lightCorner12, shadeCorner12 = light0, shade0
+		lightCorner12 = light0
 	else
 		local x, y, z = s1x + sides[3][1], s1y + sides[3][2], s1z + sides[3][3]
 		lightCorner12 = packedLightCoordsAt( x, y, z, selfEmission )
-		shadeCorner12 = minecraftShadeBrightnessSample( x, y, z )
 	end
-	local lightCorner13, shadeCorner13
+	local lightCorner13
 	if not translucent3 and not translucent1 then
-		lightCorner13, shadeCorner13 = light0, shade0
+		lightCorner13 = light0
 	else
 		local x, y, z = s1x + sides[4][1], s1y + sides[4][2], s1z + sides[4][3]
 		lightCorner13 = packedLightCoordsAt( x, y, z, selfEmission )
-		shadeCorner13 = minecraftShadeBrightnessSample( x, y, z )
 	end
 	local lightCenter = lightCenterPackedCoords( bx, by, bz, faceIndex, selfEmission, faceCubic )
-	local shadeCenter = shadeCenterValue( bx, by, bz, faceIndex, faceCubic )
 	local tc1 = mcSmoothBlendLightCoords( light3, light0, lightCorner03, lightCenter )
 	local tc2 = mcSmoothBlendLightCoords( light2, light0, lightCorner02, lightCenter )
 	local tc3 = mcSmoothBlendLightCoords( light2, light1, lightCorner12, lightCenter )
 	local tc4 = mcSmoothBlendLightCoords( light3, light1, lightCorner13, lightCenter )
-	local shadeTemp1 = ( shade3 + shade0 + shadeCorner03 + shadeCenter ) * 0.25
-	local shadeTemp2 = ( shade2 + shade0 + shadeCorner02 + shadeCenter ) * 0.25
-	local shadeTemp3 = ( shade2 + shade1 + shadeCorner12 + shadeCenter ) * 0.25
-	local shadeTemp4 = ( shade3 + shade1 + shadeCorner13 + shadeCenter ) * 0.25
-	return tc1, tc2, tc3, tc4, shadeTemp1, shadeTemp2, shadeTemp3, shadeTemp4
+	local ao1, ao2, ao3, ao4 = lightmapFaceAOValues( bx, by, bz, faceIndex )
+	return tc1, tc2, tc3, tc4, ao1, ao2, ao3, ao4
 end
 
 local function faceVertexCornerIndex( faceIndex, cx, cy, cz )
@@ -216,17 +252,7 @@ local function faceVertexCornerIndex( faceIndex, cx, cy, cz )
 end
 
 local function faceVertexLightSlot( faceIndex, cornerIndex )
-	if faceIndex == MC.Face.TOP then
-		if cornerIndex == 1 then return 3 elseif cornerIndex == 2 then return 4 elseif cornerIndex == 3 then return 1 end
-		return 2
-	elseif faceIndex == MC.Face.YN or faceIndex == MC.Face.XN then
-		if cornerIndex == 1 then return 2 elseif cornerIndex == 2 then return 3 elseif cornerIndex == 3 then return 4 end
-		return 1
-	elseif faceIndex == MC.Face.XP then
-		if cornerIndex == 1 then return 4 elseif cornerIndex == 2 then return 1 elseif cornerIndex == 3 then return 2 end
-		return 3
-	end
-	return cornerIndex
+	return remapFaceCornerLightSlot( faceIndex, cornerIndex )
 end
 
 local function smoothCornerPackedLightCoordsValues( bx, by, bz, faceIndex, cx0, cy0, cz0, selfEmission, faceCubic )
