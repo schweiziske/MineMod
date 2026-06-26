@@ -7,6 +7,7 @@ local RM = MC.RenderMesh
 local C = MC.RenderMeshConstants
 local FACES = C.FACES
 local mathClamp, mathFloor = math.Clamp, math.floor
+local cornerXYZ = RM.cornerXYZ
 local cornerSampleOffsets = RM.cornerSampleOffsets
 local clampLightLevel = RM.clampLightLevel
 local sampleCacheKey

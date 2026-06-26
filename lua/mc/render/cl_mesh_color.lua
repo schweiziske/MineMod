@@ -10,6 +10,7 @@ local mathClamp = math.Clamp
 local mathFloor = math.floor
 local cornerXYZ = RM.cornerXYZ
 local cornerStep = RM.cornerStep
+local minecraftSmoothCornerBrightness = RM.minecraftSmoothCornerBrightness
 local cachedMeshLightingSample = RM.cachedMeshLightingSample
 local cachedMeshLightingSampleFast = RM.cachedMeshLightingSampleFast
 local cachedMeshAOSample = RM.cachedMeshAOSample
