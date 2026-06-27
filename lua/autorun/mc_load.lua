@@ -54,6 +54,7 @@ local CLIENT_FILES = {
 	"mc/render/cl_mesh_materials.lua",
 	"mc/render/cl_mesh_light_samples.lua",
 	"mc/render/cl_mesh_upload.lua",
+	"mc/render/cl_mesh_source_lighting.lua",
 	"mc/render/cl_mesh_color.lua",
 	"mc/render/cl_mesh_geometry.lua",
 	"mc/render/cl_mesh_build_context.lua",
