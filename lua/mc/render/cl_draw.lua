@@ -38,6 +38,14 @@ local function resetDepthOverride()
 	return false
 end
 
+local function resetColorWriteOverride()
+	if render.OverrideColorWriteEnable then
+		render.OverrideColorWriteEnable( false, false )
+		return true
+	end
+	return false
+end
+
 local function forceDepthWrite()
 	if render.OverrideDepthEnable then
 		render.OverrideDepthEnable( true, true )
@@ -46,17 +54,28 @@ local function forceDepthWrite()
 	return false
 end
 
+local function setDepthPrepassColorMask()
+	if render.OverrideColorWriteEnable then
+		render.OverrideColorWriteEnable( true, false )
+		return true
+	end
+	return false
+end
+
 local function restoreChunkMeshRenderState( setCullMode )
 	if setCullMode then pcall( restoreDefaultCullMode ) end
+	resetColorWriteOverride()
 	resetDepthOverride()
 end
 
-local function drawMeshList( list, material, writeDepth )
+local function drawMeshList( list, material, writeDepth, writeColor, forceMaterial )
 	if not list then return end
 	local setCullMode = false
 	local function draw()
 		resetDepthOverride()
+		resetColorWriteOverride()
 		if writeDepth then forceDepthWrite() end
+		if writeColor == false then setDepthPrepassColorMask() end
 		setCullMode = setChunkMeshCullMode()
 		local currentMaterial = material
 		render.SetMaterial( currentMaterial )
@@ -66,7 +85,9 @@ local function drawMeshList( list, material, writeDepth )
 			local entryMaterial = material
 			if type( entry ) == "table" then
 				meshObj = entry.mesh
-				entryMaterial = entry.material or material
+				if not forceMaterial then
+					entryMaterial = entry.material or material
+				end
 			end
 			if entryMaterial ~= currentMaterial then
 				currentMaterial = entryMaterial
@@ -80,12 +101,25 @@ local function drawMeshList( list, material, writeDepth )
 	if not ok then error( err ) end
 end
 
+local function drawGpuOpaqueDepthPrepass( list )
+	if not ( MC.UsingGpuChunkShader and MC.UsingGpuChunkShader() ) then return end
+	local cpuMaterial = MC.MaterialOpaqueCPU or MC.Material
+	if not cpuMaterial then return end
+	drawMeshList( list, cpuMaterial, true, false, true )
+end
+
 function MC.DrawChunk( key )
-	drawMeshList( MC.Meshes[key], MC.Material, true )
+	local list = MC.Meshes[key]
+	local material = MC.CurrentChunkMaterial and MC.CurrentChunkMaterial( false ) or MC.Material
+	if material == MC.MaterialGpuOpaque then
+		drawGpuOpaqueDepthPrepass( list )
+	end
+	drawMeshList( list, material, true )
 end
 
 function MC.DrawChunkTranslucent( key )
-	drawMeshList( MC.MeshesTrans[key], MC.MaterialTranslucent, false )
+	local material = MC.CurrentChunkMaterial and MC.CurrentChunkMaterial( true ) or MC.MaterialTranslucent
+	drawMeshList( MC.MeshesTrans[key], material, false )
 end
 
 local function drawAllChunks( store, drawFn )

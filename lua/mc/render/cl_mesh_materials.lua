@@ -11,6 +11,7 @@ end
 
 -- single atlas material: alpha cutout (glass/leaves), vertex-shaded, backface-culled
 MC.Material = Material( atlasPngPath( MC.Atlas.MATERIAL or "mc/atlas_365" ), "alphatest vertexcolor" )
+MC.MaterialOpaqueCPU = MC.Material
 
 -- second material over the same atlas pixels for translucent blocks: real alpha
 -- blending in the translucent pass. GMod caches materials by path, so the build
@@ -35,6 +36,53 @@ end
 
 local function atlasBaseTexture()
 	return materialBaseTexture( MC.Material )
+end
+
+MC.MaterialGpuOpaque = nil
+do
+	local baseTex, baseName = atlasBaseTexture()
+	if baseTex and baseName and baseName ~= "" and CreateMaterial then
+		local mat = CreateMaterial( "mc_atlas_gpu_payload4_opaque", "screenspace_general", {
+			["$pixshader"] = "mc_gpu_chunk_payload_ps30",
+			["$vertexshader"] = "mc_gpu_chunk_payload_vs30",
+			["$basetexture"] = baseName,
+			["$x360appchooser"] = 1,
+			["$vertexcolor"] = 1,
+			["$linearwrite"] = 0,
+			["$alphatest"] = "1",
+			["$alphatestreference"] = "0.5",
+			["$alphatested"] = 1,
+			["$nocull"] = "0",
+		} )
+		if mat and not mat:IsError() then
+			mat:SetTexture( "$basetexture", baseTex )
+			MC.MaterialGpuOpaque = mat
+		end
+	end
+end
+
+local function gpuChunkShaderEnabled()
+	local cv = MC.MeshGpuShader
+	if not ( cv and cv.GetBool and cv:GetBool() ) then return false end
+	if not ( MC.MaterialGpuOpaque and not MC.MaterialGpuOpaque:IsError() ) then return false end
+	if MC.CurrentMeshLightStyle and MC.CurrentMeshLightStyle() ~= "shader" then return false end
+	return true
+end
+
+function MC.UsingGpuChunkShader()
+	return gpuChunkShaderEnabled() == true
+end
+
+function MC.CurrentChunkMaterial( translucent )
+	if translucent then return MC.MaterialTranslucent or MC.Material end
+	if gpuChunkShaderEnabled() then return MC.MaterialGpuOpaque end
+	return MC.Material
+end
+
+if cvars and cvars.AddChangeCallback then
+	cvars.AddChangeCallback( "mc_mesh_gpu_shader", function()
+		if MC.MarkAllMeshesDirty then MC.MarkAllMeshesDirty( "gpu_shader_toggle" ) end
+	end, "mc_mesh_gpu_shader_rebuild" )
 end
 
 -- Opaque variant of the atlas for inventory icons. Semi-transparent blocks

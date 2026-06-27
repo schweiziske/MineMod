@@ -17,6 +17,8 @@ local meshPerfAdd = RM.meshPerfAdd
 local meshPerfMS = RM.meshPerfMS
 local setMeshSampleCacheOrigin = RM.setMeshSampleCacheOrigin
 local ensureChunkRenderSectionIndex = RM.ensureChunkRenderSectionIndex
+local MC_LIGHT_STYLE_SHADER = RM.MC_LIGHT_STYLE_SHADER
+local MC_LIGHT_STYLE_GPU_SHADER = RM.MC_LIGHT_STYLE_GPU_SHADER
 
 function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, meshLightStyle, buildStart )
 	local sectionNeedsRecolor = sectionIndex and MC.MeshLightDirty[key] and MC.MeshLightDirty[key][sectionIndex]
@@ -42,6 +44,9 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	local cur
 
 	local function styleForBuffer( buf )
+		if meshLightStyle == MC_LIGHT_STYLE_SHADER and buf and MC.MaterialGpuOpaque and buf.material == MC.MaterialGpuOpaque then
+			return MC_LIGHT_STYLE_GPU_SHADER
+		end
 		return meshLightStyle
 	end
 
@@ -151,9 +156,10 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		if sectionIndex and index ~= sectionIndex then return nil end
 		local buffers = sectionBuffers[index]
 		if not buffers then
+			local chunkMaterial = MC.CurrentChunkMaterial or function( translucent ) return translucent and MC.MaterialTranslucent or MC.Material end
 			buffers = {
-				opaque = newMeshBuffer( MC.Material, false ),
-				translucent = newMeshBuffer( MC.MaterialTranslucent, true ),
+				opaque = newMeshBuffer( chunkMaterial( false ), false ),
+				translucent = newMeshBuffer( chunkMaterial( true ), true ),
 			}
 			sectionBuffers[index] = buffers
 		end
@@ -249,6 +255,24 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		}
 	end
 
+	local function lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, cx, cy, cz, selfEmission, faceCubic, quadLightEmission )
+		return {
+			shadeIndex = shadeIndex,
+			bx = bx,
+			by = by,
+			bz = bz,
+			id = id,
+			faceIndex = faceIndex,
+			li = li,
+			cx = cx,
+			cy = cy,
+			cz = cz,
+			selfEmission = selfEmission,
+			quadLightEmission = clampLightLevel( quadLightEmission ),
+			faceCubic = faceCubic ~= false,
+		}
+	end
+
 	local function appendMeshList( out, list )
 		for i = 1, #list do
 			out[#out + 1] = list[i]
@@ -319,6 +343,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	ctx.push = push
 	ctx.lightMeta = lightMeta
 	ctx.lightMetaValues = lightMetaValues
+	ctx.lightMetaFast = lightMetaFast
 	ctx.flushSectionBuffers = flushSectionBuffers
 	function ctx.prepareBlockCacheBuffer( targetBuffer )
 		local ok = prepareBlockCacheBuffer( targetBuffer )

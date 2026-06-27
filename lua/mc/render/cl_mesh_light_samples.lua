@@ -556,6 +556,15 @@ local function smoothCornerBrightnessValues( bx, by, bz, faceIndex, cx, cy, cz, 
 	return renderedBrightnessFromSmoothPacked( l4, selfEmission )
 end
 
+local function smoothCornerBrightnessPacketValues( bx, by, bz, faceIndex, selfEmission, faceCubic )
+	local l1, l2, l3, l4 = smoothLightCornerStateCached( bx, by, bz, faceIndex, selfEmission, faceCubic )
+	return
+		renderedBrightnessFromSmoothPacked( l1, selfEmission ),
+		renderedBrightnessFromSmoothPacked( l2, selfEmission ),
+		renderedBrightnessFromSmoothPacked( l3, selfEmission ),
+		renderedBrightnessFromSmoothPacked( l4, selfEmission )
+end
+
 local function smoothCornerShadeBrightnessValues( bx, by, bz, faceIndex, cx, cy, cz, selfEmission, faceCubic )
 	local _, _, _, _, s1, s2, s3, s4 = smoothLightCornerStateCached( bx, by, bz, faceIndex, selfEmission, faceCubic )
 	local slot = smoothSlotForFaceVertex( faceIndex, cx, cy, cz )
@@ -613,5 +622,6 @@ RM.minecraftShadeBrightnessForBlock = minecraftShadeBrightnessForBlock
 RM.minecraftShadeBrightnessSample = minecraftShadeBrightnessSample
 RM.noteMeshLightingCacheStats = noteMeshLightingCacheStats
 RM.minecraftSmoothCornerBrightnessValues = minecraftSmoothCornerBrightnessValues
+RM.minecraftSmoothCornerBrightnessPacketValues = smoothCornerBrightnessPacketValues
 RM.minecraftSmoothCornerShadeBrightnessValues = minecraftSmoothCornerShadeBrightnessValues
 RM.minecraftSmoothCornerBrightness = minecraftSmoothCornerBrightness
