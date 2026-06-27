@@ -28,6 +28,7 @@ MC.ConfigConVars = {
 			item( "render", "mc_mesh_geometry_cache_sections", "Geometry cache sections", "number", "Render sections retaining Lua mesh/light data for light-only recolor" ),
 			item( "render", "mc_mesh_block_emit_cache_sections", "Block emit cache sections", "number", "Render sections retaining per-block emitted vertex/light caches" ),
 			item( "render", "mc_mesh_begin_upload", "Mesh.Begin upload", "bool", "Upload IMesh vertices with mesh.Begin instead of BuildFromTriangles" ),
+			item( "render", "mc_mesh_gpu_shader", "GPU chunk shader", "bool", "Use custom VCS shader for opaque chunk atlas meshes" ),
 			item( "render", "mc_mesh_cull_mode", "Mesh cull mode", "string", "Chunk mesh cull mode: cw or ccw" ),
 			item( "render", "mc_mesh_debug_full_cube_only", "Full cubes only", "bool", "Debug mesh occlusion by rendering only full cube blocks" ),
 			item( "render", "mc_mesh_emit_probe", "Mesh emit probe", "bool", "Print detailed mesh emit timings for geometry rebuild diagnosis" ),

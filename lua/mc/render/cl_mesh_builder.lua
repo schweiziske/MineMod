@@ -21,6 +21,8 @@ local recolorCachedBlockEmission = RM.recolorCachedBlockEmission
 local recolorLightMeta = RM.recolorLightMeta
 local setMeshSampleCacheOrigin = RM.setMeshSampleCacheOrigin
 local uploadMeshVertices = RM.uploadMeshVertices
+local MC_LIGHT_STYLE_SHADER = RM.MC_LIGHT_STYLE_SHADER
+local MC_LIGHT_STYLE_GPU_SHADER = RM.MC_LIGHT_STYLE_GPU_SHADER
 
 function MC.BuildChunkMesh( key, sectionIndex )
 	local buildStart = SysTime()
@@ -258,6 +260,9 @@ function MC.RebuildChunkMeshLighting( key, sectionIndex )
 		local colorCache = {}
 		local recolored = false
 		local style = meshLightStyle
+		if style == MC_LIGHT_STYLE_SHADER and record and MC.MaterialGpuOpaque and record.material == MC.MaterialGpuOpaque then
+			style = MC_LIGHT_STYLE_GPU_SHADER
+		end
 		for li in pairs( blockLightDirtySection ) do
 			local vertexIndexes = lightByLi[li]
 			if vertexIndexes then
@@ -287,7 +292,11 @@ function MC.RebuildChunkMeshLighting( key, sectionIndex )
 			local blockRecord = blockEmitCacheSection[li]
 			if blockRecord then
 				local recolorStart = SysTime()
-				local ok = recolorCachedBlockEmission( blockRecord, meshLightStyle, meshPerf )
+				local recordStyle = meshLightStyle
+				if recordStyle == MC_LIGHT_STYLE_SHADER and MC.MaterialGpuOpaque and blockRecord.material == MC.MaterialGpuOpaque then
+					recordStyle = MC_LIGHT_STYLE_GPU_SHADER
+				end
+				local ok = recolorCachedBlockEmission( blockRecord, recordStyle, meshPerf )
 				meshPerfAdd( meshPerf, "recolorMS", recolorStart )
 				if not ok then return false end
 				meshPerf.blockCacheRecolors = meshPerf.blockCacheRecolors + 1
@@ -303,7 +312,11 @@ function MC.RebuildChunkMeshLighting( key, sectionIndex )
 		local vertexCount = #record.verts
 		if recolorWholeRecord then
 			local recolorStart = SysTime()
-			if not recolorCachedBlockEmission( record, meshLightStyle, meshPerf ) then return false end
+			local recordStyle = meshLightStyle
+			if recordStyle == MC_LIGHT_STYLE_SHADER and record and MC.MaterialGpuOpaque and record.material == MC.MaterialGpuOpaque then
+				recordStyle = MC_LIGHT_STYLE_GPU_SHADER
+			end
+			if not recolorCachedBlockEmission( record, recordStyle, meshPerf ) then return false end
 			meshPerfAdd( meshPerf, "recolorMS", recolorStart )
 		else
 			local recolorStart = SysTime()

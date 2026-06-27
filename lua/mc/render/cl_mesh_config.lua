@@ -9,11 +9,14 @@ MC.MeshBeginUpload = MC.MeshBeginUpload or ( CreateClientConVar and CreateClient
 	"Upload MC IMesh vertices with mesh.Begin instead of IMesh:BuildFromTriangles" ) )
 MC.MeshDebugFullCubeOnly = MC.MeshDebugFullCubeOnly or ( CreateClientConVar and CreateClientConVar( "mc_mesh_debug_full_cube_only", "0", true, false,
 	"Debug MC mesh emission by rendering only full cube blocks" ) )
+MC.MeshGpuShader = MC.MeshGpuShader or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_shader", "0", true, false,
+	"Use the experimental custom GPU shader for opaque MC chunk atlas meshes when the compiled VCS files are available" ) )
 
 local MC_LIGHT_STYLE_FAST = "fast"
 local MC_LIGHT_STYLE_VANILLA = "vanilla"
 local MC_LIGHT_STYLE_BEST = "best"
 local MC_LIGHT_STYLE_SHADER = "shader"
+local MC_LIGHT_STYLE_GPU_SHADER = "gpu_shader"
 
 local mathClamp, mathFloor = math.Clamp, math.floor
 
@@ -41,6 +44,7 @@ RM.MC_LIGHT_STYLE_FAST = MC_LIGHT_STYLE_FAST
 RM.MC_LIGHT_STYLE_VANILLA = MC_LIGHT_STYLE_VANILLA
 RM.MC_LIGHT_STYLE_BEST = MC_LIGHT_STYLE_BEST
 RM.MC_LIGHT_STYLE_SHADER = MC_LIGHT_STYLE_SHADER
+RM.MC_LIGHT_STYLE_GPU_SHADER = MC_LIGHT_STYLE_GPU_SHADER
 RM.currentLightStyle = currentLightStyle
 RM.meshDebugFullCubeOnly = meshDebugFullCubeOnly
 RM.clampLightLevel = clampLightLevel

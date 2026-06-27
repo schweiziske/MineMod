@@ -317,25 +317,22 @@ function RM.EmitBlock( ctx, li, id )
 	local blockBoxes = ctx.blockBoxes
 	local blocksById = ctx.blocksById
 	local cur = ctx.getCur()
-	local function flush( buf ) return ctx.flush( buf ) end
-	local function push( vert, light ) return ctx.push( vert, light ) end
-	local function lightMeta( ... ) return ctx.lightMeta( ... ) end
-	local function lightMetaValues( ... ) return ctx.lightMetaValues( ... ) end
-	local function prepareBlockCacheBuffer( targetBuffer ) local ok = ctx.prepareBlockCacheBuffer( targetBuffer ); cur = ctx.getCur(); return ok end
-	local function buffersForLocal( lx, ly, lz ) return ctx.buffersForLocal( lx, ly, lz ) end
-	local function visibleAt( ... ) return ctx.visibleAt( ... ) end
-	local function shapeFaceCoveredAt( ... ) return ctx.shapeFaceCoveredAt( ... ) end
-	local function styleForBuffer( buf ) return ctx.styleForBuffer( buf ) end
-	local function currentEmitLightStyle() return ctx.currentEmitLightStyle() end
-	local function emitCrossBlock( blockId, bx, by, bz, wx, wy, wz )
-		return RM.EmitCrossBlock( ctx, blockId, bx, by, bz, wx, wy, wz, push, lightMeta, currentEmitLightStyle )
-	end
-	local function emitModelBlock( block, orient, bx, by, bz, wx, wy, wz )
-		return RM.EmitModelBlock( ctx, block, orient, bx, by, bz, wx, wy, wz, push, lightMeta, currentEmitLightStyle )
-	end
-	local function emitLiquidBlock( blockId, orient, bx, by, bz, wx, wy, wz )
-		return RM.EmitLiquidBlock( ctx, blockId, orient, bx, by, bz, wx, wy, wz, push, lightMeta, currentEmitLightStyle )
-	end
+	local flush = ctx.flush
+	local push = ctx.push
+	local lightMeta = ctx.lightMeta
+	local lightMetaValues = ctx.lightMetaValues
+	local lightMetaFast = ctx.lightMetaFast
+	local prepareBlockCacheBuffer = ctx.prepareBlockCacheBuffer
+	local buffersForLocal = ctx.buffersForLocal
+	local visibleAt = ctx.visibleAt
+	local shapeFaceCoveredAt = ctx.shapeFaceCoveredAt
+	local styleForBuffer = ctx.styleForBuffer
+	local currentEmitLightStyle = ctx.currentEmitLightStyle
+	local getCur = ctx.getCur
+	local setCur = ctx.setCur
+	local emitCrossBlock = RM.EmitCrossBlock
+	local emitModelBlock = RM.EmitModelBlock
+	local emitLiquidBlock = RM.EmitLiquidBlock
 		meshPerf.blocksVisited = meshPerf.blocksVisited + 1
 		local orient = MC.NormalizeOrient( id, chunk.orients[li] )
 		local lx, ly, lz = DecodeLocal( li )
@@ -387,11 +384,11 @@ function RM.EmitBlock( ctx, li, id )
 		if b and b.shape == "cross" then
 			emitKind = "cross"
 			prepareBlockCacheBuffer( targetBuffer )
-			emitCrossBlock( id, bx, by, bz, wx, wy, wz )
-		elseif b and b.shape == "model" and not ( ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) ) or ( MC.IsWallBlock and MC.IsWallBlock( id ) ) or b.connection == "pipe6" ) and prepareBlockCacheBuffer( targetBuffer ) and emitModelBlock( b, orient, bx, by, bz, wx, wy, wz ) then
+			emitCrossBlock( ctx, id, bx, by, bz, wx, wy, wz, push, lightMeta, currentEmitLightStyle )
+		elseif b and b.shape == "model" and not ( ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) ) or ( MC.IsWallBlock and MC.IsWallBlock( id ) ) or b.connection == "pipe6" ) and prepareBlockCacheBuffer( targetBuffer ) and emitModelBlock( ctx, b, orient, bx, by, bz, wx, wy, wz, push, lightMeta, currentEmitLightStyle ) then
 			emitKind = "model"
 			-- rendered from exact Minecraft model quads; boxes remain for collision/outline
-		elseif isLiquidBlock( id ) and prepareBlockCacheBuffer( targetBuffer ) and emitLiquidBlock( id, orient, bx, by, bz, wx, wy, wz ) then
+		elseif isLiquidBlock( id ) and prepareBlockCacheBuffer( targetBuffer ) and emitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, lightMeta, currentEmitLightStyle ) then
 			emitKind = "liquid"
 			-- rendered with Minecraft fluid surface height/offsets instead of full cube faces
 		elseif MC.BlockIsFullCube and blockIsFullCube and blockIsFullCube( id, orient ) then
@@ -416,7 +413,7 @@ function RM.EmitBlock( ctx, li, id )
 			if directEmitCheapFullCube then
 				if targetBuffer.nv + directEmitVertexCount >= C.VERT_LIMIT then flush( targetBuffer ) end
 				cur = targetBuffer
-				ctx.setCur( cur )
+				setCur( cur )
 			else
 				prepareBlockCacheBuffer( targetBuffer )
 			end
@@ -448,10 +445,11 @@ function RM.EmitBlock( ctx, li, id )
 					local tri = C.TRI
 					local meta1, meta2, meta3, meta4
 					local metaStart = meshProbe and SysTime() or nil
-					meta1 = lightMeta( col, bx, by, bz, id, f, corners[1], emission, nil, true, quadLightEmission )
-					meta2 = lightMeta( col, bx, by, bz, id, f, corners[2], emission, nil, true, quadLightEmission )
-					meta3 = lightMeta( col, bx, by, bz, id, f, corners[3], emission, nil, true, quadLightEmission )
-					meta4 = lightMeta( col, bx, by, bz, id, f, corners[4], emission, nil, true, quadLightEmission )
+					local c1, c2, c3, c4 = corners[1], corners[2], corners[3], corners[4]
+					meta1 = lightMetaFast( shadeIndex, bx, by, bz, id, f, li, c1[1], c1[2], c1[3], emission, true, quadLightEmission )
+					meta2 = lightMetaFast( shadeIndex, bx, by, bz, id, f, li, c2[1], c2[2], c2[3], emission, true, quadLightEmission )
+					meta3 = lightMetaFast( shadeIndex, bx, by, bz, id, f, li, c3[1], c3[2], c3[3], emission, true, quadLightEmission )
+					meta4 = lightMetaFast( shadeIndex, bx, by, bz, id, f, li, c4[1], c4[2], c4[3], emission, true, quadLightEmission )
 					meta1.shared, meta2.shared, meta3.shared, meta4.shared = true, true, true, true
 					if metaStart then meshPerfAdd( meshPerf, "fullMetaMS", metaStart ) end
 
@@ -567,6 +565,7 @@ function RM.EmitBlock( ctx, li, id )
 				end
 			end
 		end
+		if not directEmitCheapFullCube then cur = getCur() end
 		local emittedVertices = directEmitCheapFullCube and directEmitVertexCount or ( cur and cur.nv or 0 )
 		if directEmitCheapFullCube then
 			MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
