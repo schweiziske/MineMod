@@ -7,6 +7,8 @@ local RM = MC.RenderMesh
 local C = MC.RenderMeshConstants
 local FACES = C.FACES
 local mathClamp, mathFloor = math.Clamp, math.floor
+local bit_bor, bit_lshift, bit_band, bit_rshift = bit.bor, bit.lshift, bit.band, bit.rshift
+local SH_TOP, SH_BOTTOM, SH_X, SH_Y = C.SH_TOP, C.SH_BOTTOM, C.SH_X, C.SH_Y
 local cornerXYZ = RM.cornerXYZ
 local cornerSampleOffsets = RM.cornerSampleOffsets
 local clampLightLevel = RM.clampLightLevel
@@ -32,29 +34,6 @@ local MC_LIGHT_SHADER_AO_FACTORS = {
 	[2] = 0.86,
 	[3] = 0.74,
 }
-local function isSolidRenderForLightmap( id, orient )
-	if id == nil or id == 0 then return false end
-	local block = MC.Blocks and MC.Blocks[id]
-	if block and ( block.transparent == true or block.solid == false ) then return false end
-	if MC.BlockIsFullCube then return MC.BlockIsFullCube( id, orient ) == true end
-	if block and block.shape then return false end
-	return true
-end
-
-local MeshLightmapTranslucentCache = {}
-
-local function isTranslucentForLightmap( bx, by, bz )
-	local key = sampleCacheKey and sampleCacheKey( bx, by, bz, 0 ) or nil
-	if key ~= nil then
-		local cached = MeshLightmapTranslucentCache[key]
-		if cached ~= nil then return cached end
-	end
-	local id = MC.GetBlock and MC.GetBlock( bx, by, bz ) or 0
-	local orient = id ~= 0 and MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz ) or 0
-	local translucent = not isSolidRenderForLightmap( id, orient )
-	if key ~= nil then MeshLightmapTranslucentCache[key] = translucent end
-	return translucent
-end
 
 local function faceSampleBaseCell( bx, by, bz, faceIndex, faceCubic )
 	if faceCubic then
@@ -64,15 +43,6 @@ local function faceSampleBaseCell( bx, by, bz, faceIndex, faceCubic )
 	end
 	return bx, by, bz
 end
-
-local MC_LIGHTMAP_SIDE_OFFSETS = {
-	[MC.Face.BOTTOM] = { { -1, 0, 0 }, { 1, 0, 0 }, { 0, -1, 0 }, { 0, 1, 0 } },
-	[MC.Face.TOP] = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, -1, 0 }, { 0, 1, 0 } },
-	[MC.Face.YN] = { { 0, 0, 1 }, { 0, 0, -1 }, { 1, 0, 0 }, { -1, 0, 0 } },
-	[MC.Face.YP] = { { -1, 0, 0 }, { 1, 0, 0 }, { 0, 0, -1 }, { 0, 0, 1 } },
-	[MC.Face.XN] = { { 0, 0, 1 }, { 0, 0, -1 }, { 0, -1, 0 }, { 0, 1, 0 } },
-	[MC.Face.XP] = { { 0, 0, -1 }, { 0, 0, 1 }, { 0, -1, 0 }, { 0, 1, 0 } },
-}
 
 local function offsetCell( bx, by, bz, off )
 	return bx + off[1], by + off[2], bz + off[3]
@@ -103,6 +73,8 @@ local MeshLightSampleCache = {}
 local MeshLightLevelCache = {}
 local MeshAOSampleCache = {}
 local MeshShadeBrightnessCache = {}
+local MeshSmoothLightTranslucentCache = {}
+local MeshSmoothLightCornerStateCache = {}
 local MeshLightSampleHits, MeshLightSampleMisses = 0, 0
 local MeshAOSampleHits, MeshAOSampleMisses = 0, 0
 local MeshSampleBaseX, MeshSampleBaseY, MeshSampleBaseZ = 0, 0, 0
@@ -113,7 +85,6 @@ local SAMPLE_CACHE_AXIS_BITS = 6
 local SAMPLE_CACHE_AXIS_SIZE = 64
 local SAMPLE_CACHE_Z_SHIFT = SAMPLE_CACHE_AXIS_BITS * 2
 local SAMPLE_CACHE_EXTRA_SHIFT = SAMPLE_CACHE_AXIS_BITS * 3
-local bit_bor, bit_lshift, bit_band = bit.bor, bit.lshift, bit.band
 
 local function shadeRecolorIndex( shade )
 	if shade == SH_TOP then return 1 end
@@ -182,14 +153,14 @@ local function resetMeshLightingSampleCaches()
 	MeshLightLevelCache = {}
 	MeshAOSampleCache = {}
 	MeshShadeBrightnessCache = {}
-	MeshLightmapTranslucentCache = {}
+	MeshSmoothLightTranslucentCache = {}
+	MeshSmoothLightCornerStateCache = {}
 	MeshFullCubeColorCache = {}
 	MeshLightSampleHits, MeshLightSampleMisses = 0, 0
 	MeshAOSampleHits, MeshAOSampleMisses = 0, 0
 	MeshShaderDaylightFactor = nil
 	MeshSampleLightingFn = MC.SampleLighting
 	MeshSampleAOFn = MC.SampleAmbientOcclusion
-	if RM.resetMeshLightmapUVCaches then RM.resetMeshLightmapUVCaches() end
 	if RM.resetMeshColorLightingCaches then RM.resetMeshColorLightingCaches() end
 end
 
@@ -380,6 +351,218 @@ local function minecraftShadeBrightnessSample( sx, sy, sz )
 	return shadeBrightness
 end
 
+local function solidRenderForSmoothLight( id, orient )
+	if id == nil or id == 0 then return false end
+	local block = MC.Blocks and MC.Blocks[id]
+	if block and ( block.transparent == true or block.solid == false ) then return false end
+	if MC.BlockIsFullCube then return MC.BlockIsFullCube( id, orient ) == true end
+	if block and block.shape then return false end
+	return true
+end
+
+local function translucentForSmoothLight( bx, by, bz )
+	local key = sampleCacheKey( bx, by, bz, 0 )
+	if key ~= nil then
+		local cached = MeshSmoothLightTranslucentCache[key]
+		if cached ~= nil then return cached end
+	end
+	local id = MC.GetBlock and MC.GetBlock( bx, by, bz ) or 0
+	local orient = id ~= 0 and MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz ) or 0
+	local translucent = not solidRenderForSmoothLight( id, orient )
+	if key ~= nil then MeshSmoothLightTranslucentCache[key] = translucent end
+	return translucent
+end
+
+local function packedSmoothLightFromLevels( block, sky )
+	return bit_bor( bit_lshift( clampLightLevel( block ), 4 ), bit_lshift( clampLightLevel( sky ), 20 ) )
+end
+
+local function packedSmoothLightAt( sx, sy, sz, selfEmission )
+	local block, sky = cachedMeshLightLevelsSample( sx, sy, sz, math.max( blockLightEmissionAt( sx, sy, sz ), clampLightLevel( selfEmission ) ) )
+	return packedSmoothLightFromLevels( block, sky )
+end
+
+local function packedSmoothLightBlockLevel( packed )
+	return bit_band( bit_rshift( packed or 0, 4 ), 15 )
+end
+
+local function packedSmoothLightSkyLevel( packed )
+	return bit_band( bit_rshift( packed or 0, 20 ), 15 )
+end
+
+local function smoothPackedBlock( packed )
+	return bit_band( packed or 0, 0xFF )
+end
+
+local function smoothPackedSky( packed )
+	return bit_band( bit_rshift( packed or 0, 16 ), 0xFF )
+end
+
+local SMOOTH_LIGHT_PACK_SKY_MASK = 0xFF0000
+local SMOOTH_LIGHT_PACK_MASK = 0xFF00FF
+
+local function blendSmoothPackedLight( neighbor1, neighbor2, neighbor3, center )
+	neighbor1 = neighbor1 or 0
+	neighbor2 = neighbor2 or 0
+	neighbor3 = neighbor3 or 0
+	center = center or 0
+	if packedSmoothLightSkyLevel( center ) > 2 or packedSmoothLightBlockLevel( center ) > 2 then
+		if neighbor1 == 0 then
+			neighbor1 = center
+		elseif packedSmoothLightSkyLevel( neighbor1 ) == 0 then
+			neighbor1 = bit_bor( neighbor1, bit_band( center, SMOOTH_LIGHT_PACK_SKY_MASK ) )
+		end
+		if neighbor2 == 0 then
+			neighbor2 = center
+		elseif packedSmoothLightSkyLevel( neighbor2 ) == 0 then
+			neighbor2 = bit_bor( neighbor2, bit_band( center, SMOOTH_LIGHT_PACK_SKY_MASK ) )
+		end
+		if neighbor3 == 0 then
+			neighbor3 = center
+		elseif packedSmoothLightSkyLevel( neighbor3 ) == 0 then
+			neighbor3 = bit_bor( neighbor3, bit_band( center, SMOOTH_LIGHT_PACK_SKY_MASK ) )
+		end
+	end
+	return bit_band( bit_rshift( neighbor1 + neighbor2 + neighbor3 + center, 2 ), SMOOTH_LIGHT_PACK_MASK )
+end
+
+local function smoothLightCenterPacked( bx, by, bz, faceIndex, selfEmission, faceCubic )
+	local face = FACES[faceIndex]
+	local off = face and face.off
+	if not off then return packedSmoothLightAt( bx, by, bz, selfEmission ) end
+	local nbx, nby, nbz = bx + off[1], by + off[2], bz + off[3]
+	if faceCubic then return packedSmoothLightAt( nbx, nby, nbz, selfEmission ) end
+	local id = MC.GetBlock and MC.GetBlock( nbx, nby, nbz ) or 0
+	local orient = id ~= 0 and MC.GetBlockOrient and MC.GetBlockOrient( nbx, nby, nbz ) or 0
+	if not solidRenderForSmoothLight( id, orient ) then
+		return packedSmoothLightAt( nbx, nby, nbz, selfEmission )
+	end
+	return packedSmoothLightAt( bx, by, bz, selfEmission )
+end
+
+local function smoothLightSingleCornerState( baseX, baseY, baseZ, faceIndex, cx, cy, cz, selfEmission, offX, offY, offZ, lightCenter, shadeCenter )
+	local ax, ay, az, bx2, by2, bz2, dx, dy, dz
+	if faceIndex == MC.Face.TOP or faceIndex == MC.Face.BOTTOM then
+		local xs = cx <= 0 and -1 or 1
+		local ys = cy <= 0 and -1 or 1
+		ax, ay, az = baseX + xs, baseY, baseZ
+		bx2, by2, bz2 = baseX, baseY + ys, baseZ
+		dx, dy, dz = baseX + xs, baseY + ys, baseZ
+	elseif faceIndex == MC.Face.XP or faceIndex == MC.Face.XN then
+		local ys = cy <= 0 and -1 or 1
+		local zs = cz <= 0 and -1 or 1
+		ax, ay, az = baseX, baseY + ys, baseZ
+		bx2, by2, bz2 = baseX, baseY, baseZ + zs
+		dx, dy, dz = baseX, baseY + ys, baseZ + zs
+	else
+		local xs = cx <= 0 and -1 or 1
+		local zs = cz <= 0 and -1 or 1
+		ax, ay, az = baseX + xs, baseY, baseZ
+		bx2, by2, bz2 = baseX, baseY, baseZ + zs
+		dx, dy, dz = baseX + xs, baseY, baseZ + zs
+	end
+
+	local lightA = packedSmoothLightAt( ax, ay, az, selfEmission )
+	local lightB = packedSmoothLightAt( bx2, by2, bz2, selfEmission )
+	local shadeA = minecraftShadeBrightnessSample( ax, ay, az )
+	local shadeB = minecraftShadeBrightnessSample( bx2, by2, bz2 )
+	local lightD, shadeD
+	if not translucentForSmoothLight( ax + offX, ay + offY, az + offZ )
+	and not translucentForSmoothLight( bx2 + offX, by2 + offY, bz2 + offZ ) then
+		lightD = lightA
+		shadeD = shadeA
+	else
+		lightD = packedSmoothLightAt( dx, dy, dz, selfEmission )
+		shadeD = minecraftShadeBrightnessSample( dx, dy, dz )
+	end
+	return blendSmoothPackedLight( lightA, lightB, lightD, lightCenter ),
+		( shadeA + shadeB + shadeD + shadeCenter ) * 0.25
+end
+
+local function smoothLightCornerState( bx, by, bz, faceIndex, selfEmission, faceCubic )
+	faceCubic = faceCubic ~= false
+	local face = FACES[faceIndex]
+	local off = face and face.off
+	local corners = face and face.c
+	if not corners or not off then
+		local centerLight = packedSmoothLightAt( bx, by, bz, selfEmission )
+		return centerLight, centerLight, centerLight, centerLight, 1, 1, 1, 1
+	end
+
+	local baseX, baseY, baseZ = faceSampleBaseCell( bx, by, bz, faceIndex, faceCubic )
+	local lightCenter = smoothLightCenterPacked( bx, by, bz, faceIndex, selfEmission, faceCubic )
+	local shadeCenter = minecraftShadeBrightnessSample( baseX, baseY, baseZ )
+	local offX, offY, offZ = off[1], off[2], off[3]
+	local c1, c2, c3, c4 = corners[1], corners[2], corners[3], corners[4]
+	local l1, s1 = smoothLightSingleCornerState( baseX, baseY, baseZ, faceIndex, c1[1], c1[2], c1[3], selfEmission, offX, offY, offZ, lightCenter, shadeCenter )
+	local l2, s2 = smoothLightSingleCornerState( baseX, baseY, baseZ, faceIndex, c2[1], c2[2], c2[3], selfEmission, offX, offY, offZ, lightCenter, shadeCenter )
+	local l3, s3 = smoothLightSingleCornerState( baseX, baseY, baseZ, faceIndex, c3[1], c3[2], c3[3], selfEmission, offX, offY, offZ, lightCenter, shadeCenter )
+	local l4, s4 = smoothLightSingleCornerState( baseX, baseY, baseZ, faceIndex, c4[1], c4[2], c4[3], selfEmission, offX, offY, offZ, lightCenter, shadeCenter )
+	return
+		l1, l2, l3, l4,
+		s1, s2, s3, s4
+end
+
+local function smoothLightCornerStateCached( bx, by, bz, faceIndex, selfEmission, faceCubic )
+	local subKey = ( faceIndex or 0 ) + ( faceCubic ~= false and 0 or 8 ) + clampLightLevel( selfEmission ) * 16
+	local baseKey = sampleCacheKeyFast( bx, by, bz, 0 )
+	if baseKey == nil then
+		return smoothLightCornerState( bx, by, bz, faceIndex, selfEmission, faceCubic )
+	end
+	local key = baseKey * 4096 + subKey
+	local cached = MeshSmoothLightCornerStateCache[key]
+	if cached then return cached[1], cached[2], cached[3], cached[4], cached[5], cached[6], cached[7], cached[8] end
+	local l1, l2, l3, l4, s1, s2, s3, s4 = smoothLightCornerState( bx, by, bz, faceIndex, selfEmission, faceCubic )
+	MeshSmoothLightCornerStateCache[key] = { l1, l2, l3, l4, s1, s2, s3, s4 }
+	return l1, l2, l3, l4, s1, s2, s3, s4
+end
+
+local function faceVertexCornerIndex( faceIndex, cx, cy, cz )
+	local corners = FACES[faceIndex] and FACES[faceIndex].c
+	if not corners then return 1 end
+	local c = corners[1]
+	local dx, dy, dz = cx - c[1], cy - c[2], cz - c[3]
+	local bestIndex, bestDistance = 1, dx * dx + dy * dy + dz * dz
+	for i = 2, 4 do
+		c = corners[i]
+		dx, dy, dz = cx - c[1], cy - c[2], cz - c[3]
+		local distance = dx * dx + dy * dy + dz * dz
+		if distance < bestDistance then
+			bestIndex, bestDistance = i, distance
+		end
+	end
+	return bestIndex
+end
+
+local function smoothSlotForFaceVertex( faceIndex, cx, cy, cz )
+	return faceVertexCornerIndex( faceIndex, cx, cy, cz )
+end
+
+local function renderedBrightnessFromSmoothPacked( packed, selfEmission )
+	local block = ( smoothPackedBlock( packed ) or 0 ) / 16
+	local sky = ( smoothPackedSky( packed ) or 0 ) / 16
+	local level = math.max( block, sky, clampLightLevel( selfEmission ) )
+	local cv = MC.LightAmbientMin
+	local ambient = mathClamp( cv and cv.GetFloat and cv:GetFloat() or 0.18, 0, 1 )
+	return mathClamp( ambient + ( 1 - ambient ) * ( level / 15 ), 0, 1 )
+end
+
+local function smoothCornerBrightnessValues( bx, by, bz, faceIndex, cx, cy, cz, selfEmission, faceCubic )
+	local l1, l2, l3, l4 = smoothLightCornerStateCached( bx, by, bz, faceIndex, selfEmission, faceCubic )
+	local slot = smoothSlotForFaceVertex( faceIndex, cx, cy, cz )
+	if slot == 1 then return renderedBrightnessFromSmoothPacked( l1, selfEmission )
+	elseif slot == 2 then return renderedBrightnessFromSmoothPacked( l2, selfEmission )
+	elseif slot == 3 then return renderedBrightnessFromSmoothPacked( l3, selfEmission ) end
+	return renderedBrightnessFromSmoothPacked( l4, selfEmission )
+end
+
+local function smoothCornerShadeBrightnessValues( bx, by, bz, faceIndex, cx, cy, cz, selfEmission, faceCubic )
+	local _, _, _, _, s1, s2, s3, s4 = smoothLightCornerStateCached( bx, by, bz, faceIndex, selfEmission, faceCubic )
+	local slot = smoothSlotForFaceVertex( faceIndex, cx, cy, cz )
+	if slot == 1 then return s1 elseif slot == 2 then return s2 elseif slot == 3 then return s3 end
+	return s4
+end
+
 local function noteMeshLightingCacheStats()
 	local stats = MC.LightPerfStats or {}
 	MC.LightPerfStats = stats
@@ -390,12 +573,11 @@ local function noteMeshLightingCacheStats()
 end
 
 local function minecraftSmoothCornerBrightnessValues( bx, by, bz, faceIndex, cx0, cy0, cz0, selfEmission )
-	local ax, ay, az, bx2, by2, bz2, cx, cy, cz, dx, dy, dz = minecraftSmoothCornerSamplesValues( bx, by, bz, faceIndex, cx0, cy0, cz0 )
-	local a = tonumber( cachedMeshLightingSample( ax, ay, az, selfEmission ) ) or 1
-	local b = tonumber( cachedMeshLightingSample( bx2, by2, bz2, selfEmission ) ) or 1
-	local c = tonumber( cachedMeshLightingSample( cx, cy, cz, selfEmission ) ) or 1
-	local d = tonumber( cachedMeshLightingSample( dx, dy, dz, selfEmission ) ) or 1
-	return ( a + b + c + d ) * 0.25
+	return smoothCornerBrightnessValues( bx, by, bz, faceIndex, cx0, cy0, cz0, selfEmission, true )
+end
+
+local function minecraftSmoothCornerShadeBrightnessValues( bx, by, bz, faceIndex, cx0, cy0, cz0, selfEmission, faceCubic )
+	return smoothCornerShadeBrightnessValues( bx, by, bz, faceIndex, cx0, cy0, cz0, selfEmission, faceCubic )
 end
 
 local function minecraftSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
@@ -406,10 +588,7 @@ end
 RM.MC_LIGHT_AO_FACTORS = MC_LIGHT_AO_FACTORS
 RM.MC_LIGHT_BEST_AO_FACTORS = MC_LIGHT_BEST_AO_FACTORS
 RM.MC_LIGHT_SHADER_AO_FACTORS = MC_LIGHT_SHADER_AO_FACTORS
-RM.isSolidRenderForLightmap = isSolidRenderForLightmap
-RM.isTranslucentForLightmap = isTranslucentForLightmap
 RM.faceSampleBaseCell = faceSampleBaseCell
-RM.MC_LIGHTMAP_SIDE_OFFSETS = MC_LIGHTMAP_SIDE_OFFSETS
 RM.offsetCell = offsetCell
 RM.minecraftSmoothCornerSamplesValues = minecraftSmoothCornerSamplesValues
 RM.shadeRecolorIndex = shadeRecolorIndex
@@ -434,4 +613,5 @@ RM.minecraftShadeBrightnessForBlock = minecraftShadeBrightnessForBlock
 RM.minecraftShadeBrightnessSample = minecraftShadeBrightnessSample
 RM.noteMeshLightingCacheStats = noteMeshLightingCacheStats
 RM.minecraftSmoothCornerBrightnessValues = minecraftSmoothCornerBrightnessValues
+RM.minecraftSmoothCornerShadeBrightnessValues = minecraftSmoothCornerShadeBrightnessValues
 RM.minecraftSmoothCornerBrightness = minecraftSmoothCornerBrightness

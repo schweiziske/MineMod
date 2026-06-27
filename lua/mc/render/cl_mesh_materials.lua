@@ -37,39 +37,6 @@ local function atlasBaseTexture()
 	return materialBaseTexture( MC.Material )
 end
 
-local function createLightmappedAtlasMaterial( name, sourceMaterial, fallbackMaterial, extraParams )
-	if not CreateMaterial then return fallbackMaterial end
-	local baseTex, baseName = materialBaseTexture( sourceMaterial )
-	if not baseName or baseName == "" then return fallbackMaterial end
-	local params = {
-		["$basetexture"] = baseName,
-		["$vertexcolor"] = "1",
-		["$alphatest"] = "1",
-		["$alphatestreference"] = "0.5",
-		["$nocull"] = "0",
-		["$pointsample"] = "1",
-	}
-	for key, value in pairs( extraParams or {} ) do
-		params[key] = value
-	end
-	local mat = CreateMaterial( name, "LightmappedGeneric", params )
-	if mat and not mat:IsError() then
-		mat:SetTexture( "$basetexture", baseTex )
-		return mat
-	end
-	return fallbackMaterial
-end
-
--- CreateMaterial returns an already-cached IMaterial when the name matches, so
--- keep a versioned name for hot-reloadable shader parameter changes.
-local LIGHTMAPPED_MATERIAL_VERSION = "v3"
-MC.MaterialLightmapped = createLightmappedAtlasMaterial( "mc_atlas_lightmapped_" .. LIGHTMAPPED_MATERIAL_VERSION, MC.Material, MC.Material )
-MC.MaterialLightmappedTranslucent = createLightmappedAtlasMaterial( "mc_atlas_lightmapped_translucent_" .. LIGHTMAPPED_MATERIAL_VERSION, MC.MaterialTranslucent, MC.MaterialTranslucent, {
-	["$alphatest"] = "0",
-	["$vertexalpha"] = "1",
-	["$translucent"] = "1",
-} )
-
 -- Opaque variant of the atlas for inventory icons. Semi-transparent blocks
 -- (stained glass, tinted glass, ice, slime, honey) have low texel alpha that the
 -- cutout material's alpha test discards, so their icons would render blank. This

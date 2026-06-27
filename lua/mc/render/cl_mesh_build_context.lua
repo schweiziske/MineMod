@@ -6,9 +6,6 @@ local RM = MC.RenderMesh
 
 local C = MC.RenderMeshConstants
 local clampLightLevel = RM.clampLightLevel
-local lightmapStyleUsesHardware = RM.lightmapStyleUsesHardware
-local fallbackLightStyle = RM.fallbackLightStyle
-local MC_LIGHT_STYLE_LIGHTMAP = RM.MC_LIGHT_STYLE_LIGHTMAP
 local sameLiquidKind = RM.sameLiquidKind
 local coveredByBoxes = RM.coveredByBoxes
 local facePlane = RM.facePlane
@@ -18,8 +15,6 @@ local shadeRecolorIndex = RM.shadeRecolorIndex
 local uploadMeshVertices = RM.uploadMeshVertices
 local meshPerfAdd = RM.meshPerfAdd
 local meshPerfMS = RM.meshPerfMS
-local smoothCornerLightmapUVFromMeta = RM.smoothCornerLightmapUVFromMeta
-local lightmapPacketCornerUV = RM.lightmapPacketCornerUV
 local setMeshSampleCacheOrigin = RM.setMeshSampleCacheOrigin
 local ensureChunkRenderSectionIndex = RM.ensureChunkRenderSectionIndex
 
@@ -45,12 +40,8 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 
 	local sectionBuffers = {}
 	local cur
-	local meshUsesHardwareLightmap = lightmapStyleUsesHardware( meshLightStyle )
 
 	local function styleForBuffer( buf )
-		if meshLightStyle == MC_LIGHT_STYLE_LIGHTMAP and not ( buf and buf.lightmap ) then
-			return fallbackLightStyle( meshLightStyle )
-		end
 		return meshLightStyle
 	end
 
@@ -60,6 +51,12 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 
 	local function localIndex( lx, ly, lz )
 		return lx + ly * C.CS + lz * C.CS2
+	end
+
+	local function localIndexForBlockCoords( bx, by, bz )
+		local lx, ly, lz = bx - bxo, by - byo, bz - bzo
+		if lx < 0 or lx >= C.CS or ly < 0 or ly >= C.CS or lz < 0 or lz >= C.CH then return nil end
+		return localIndex( lx, ly, lz )
 	end
 
 	local function inCurrentChunk( lx, ly, lz )
@@ -117,17 +114,36 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		return coveredByBoxes( box, faceIndex, blockBoxes and blockBoxes( nb, nbOrient, nbx, nby, nbz ) or nil, off[1], off[2], off[3] )
 	end
 
-	local function newMeshBuffer( material, translucent, lightmap )
-		return { list = {}, records = {}, verts = {}, light = {}, nv = 0, material = material, translucent = translucent == true, lightmap = lightmap == true }
+	local function newMeshBuffer( material, translucent )
+		return { list = {}, records = {}, verts = {}, light = {}, nv = 0, material = material, translucent = translucent == true }
 	end
 
 	local function newBlockCacheBuffer( targetBuffer )
-		return { verts = {}, light = {}, nv = 0, material = targetBuffer.material, translucent = targetBuffer.translucent == true, lightmap = targetBuffer.lightmap == true, cacheOnly = true }
+		return { verts = {}, light = {}, nv = 0, material = targetBuffer.material, translucent = targetBuffer.translucent == true, cacheOnly = true }
 	end
 
 	local function prepareBlockCacheBuffer( targetBuffer )
 		cur = newBlockCacheBuffer( targetBuffer )
 		return true
+	end
+
+	local function buildLightIndexByLi( light, vertexCount )
+		local byLi = {}
+		for i = 1, vertexCount do
+			local meta = light[i]
+			local li = meta and meta.li
+			if li ~= nil then
+				local list = byLi[li]
+				if not list then
+					list = { n = 0 }
+					byLi[li] = list
+				end
+				local n = list.n + 1
+				list.n = n
+				list[n] = i
+			end
+		end
+		return byLi
 	end
 
 	local function buffersForLocal( lx, ly, lz )
@@ -136,8 +152,8 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		local buffers = sectionBuffers[index]
 		if not buffers then
 			buffers = {
-				opaque = newMeshBuffer( meshUsesHardwareLightmap and MC.MaterialLightmapped or MC.Material, false, meshUsesHardwareLightmap ),
-				translucent = newMeshBuffer( meshUsesHardwareLightmap and MC.MaterialLightmappedTranslucent or MC.MaterialTranslucent, true, meshUsesHardwareLightmap ),
+				opaque = newMeshBuffer( MC.Material, false ),
+				translucent = newMeshBuffer( MC.MaterialTranslucent, true ),
 			}
 			sectionBuffers[index] = buffers
 		end
@@ -151,13 +167,13 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		local m = Mesh( buf.material )
 		meshPerfAdd( meshPerf, "meshNewMS", meshNewStart )
 		uploadMeshVertices( m, buf.verts, meshPerf )
-		buf.list[#buf.list + 1] = { mesh = m, material = buf.material, lightmap = buf.lightmap == true }
+		buf.list[#buf.list + 1] = { mesh = m, material = buf.material }
 		buf.records[#buf.records + 1] = {
 			mesh = m,
 			verts = buf.verts,
 			light = buf.light,
+			lightByLi = buildLightIndexByLi( buf.light, vertexCount ),
 			material = buf.material,
-			lightmap = buf.lightmap == true,
 			vertexCount = vertexCount,
 		}
 		meshPerf.vertices = meshPerf.vertices + vertexCount
@@ -174,21 +190,6 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	end
 
 	local function push( vert, light )
-		if cur and cur.lightmap then
-			local u1, v1 = light and light.u1, light and light.v1
-			if u1 ~= nil and v1 ~= nil then
-				meshPerf.lightmapPacketVertices = ( meshPerf.lightmapPacketVertices or 0 ) + 1
-			else
-				u1, v1 = smoothCornerLightmapUVFromMeta( light )
-				meshPerf.lightmapFallbackUVs = ( meshPerf.lightmapFallbackUVs or 0 ) + 1
-			end
-			vert.u1 = u1
-			vert.v1 = v1
-			if light and not light.shared then
-				light.u1 = nil
-				light.v1 = nil
-			end
-		end
 		local nv = cur.nv + 1
 		cur.nv = nv
 		cur.verts[nv] = vert
@@ -199,25 +200,14 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		end
 	end
 
-	local function addLightmapPacketUV( meta, lightmapPacket, packetCornerIndex )
-		if not lightmapPacket or not packetCornerIndex or not lightmapPacketCornerUV then return meta end
-		local u1, v1 = lightmapPacketCornerUV( lightmapPacket, packetCornerIndex )
-		if u1 ~= nil and v1 ~= nil then
-			meta.u1 = u1
-			meta.v1 = v1
-			meta.lightmapCornerIndex = packetCornerIndex
-		end
-		return meta
-	end
-
-	local function lightMeta( shade, bx, by, bz, id, faceIndex, corner, selfEmission, weightedLightmapQuad, faceCubic, quadLightEmission, lightmapPacket, packetCornerIndex )
+	local function lightMeta( shade, bx, by, bz, id, faceIndex, corner, selfEmission, unusedQuad, faceCubic, quadLightEmission )
 		local cx, cy, cz = cornerXYZ( corner )
 		local shadeIndex = shadeRecolorIndex( shade )
 		quadLightEmission = clampLightLevel( quadLightEmission )
 		if faceCubic == nil then
-			faceCubic = not weightedLightmapQuad or weightedLightmapQuad.faceCubic ~= false
+			faceCubic = not unusedQuad or unusedQuad.faceCubic ~= false
 		end
-		return addLightmapPacketUV( {
+		return {
 			shade = shade,
 			shadeIndex = shadeIndex,
 			bx = bx,
@@ -225,23 +215,23 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			bz = bz,
 			id = id,
 			faceIndex = faceIndex,
+			li = localIndexForBlockCoords( bx, by, bz ),
 			cx = cx,
 			cy = cy,
 			cz = cz,
 			selfEmission = selfEmission,
 			quadLightEmission = quadLightEmission,
-			weightedLightmapQuad = weightedLightmapQuad,
 			faceCubic = faceCubic ~= false,
-		}, lightmapPacket, packetCornerIndex )
+		}
 	end
 
-	local function lightMetaValues( shade, bx, by, bz, id, faceIndex, cx, cy, cz, selfEmission, weightedLightmapQuad, faceCubic, quadLightEmission, lightmapPacket, packetCornerIndex )
+	local function lightMetaValues( shade, bx, by, bz, id, faceIndex, cx, cy, cz, selfEmission, unusedQuad, faceCubic, quadLightEmission )
 		local shadeIndex = shadeRecolorIndex( shade )
 		quadLightEmission = clampLightLevel( quadLightEmission )
 		if faceCubic == nil then
-			faceCubic = not weightedLightmapQuad or weightedLightmapQuad.faceCubic ~= false
+			faceCubic = not unusedQuad or unusedQuad.faceCubic ~= false
 		end
-		return addLightmapPacketUV( {
+		return {
 			shade = shade,
 			shadeIndex = shadeIndex,
 			bx = bx,
@@ -249,14 +239,14 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			bz = bz,
 			id = id,
 			faceIndex = faceIndex,
+			li = localIndexForBlockCoords( bx, by, bz ),
 			cx = cx,
 			cy = cy,
 			cz = cz,
 			selfEmission = selfEmission,
 			quadLightEmission = quadLightEmission,
-			weightedLightmapQuad = weightedLightmapQuad,
 			faceCubic = faceCubic ~= false,
-		}, lightmapPacket, packetCornerIndex )
+		}
 	end
 
 	local function appendMeshList( out, list )

@@ -64,18 +64,13 @@ local function drawMeshList( list, material, writeDepth )
 			local entry = list[i]
 			local meshObj = entry
 			local entryMaterial = material
-			local entryLightmap = false
 			if type( entry ) == "table" then
 				meshObj = entry.mesh
 				entryMaterial = entry.material or material
-				entryLightmap = entry.lightmap == true
 			end
 			if entryMaterial ~= currentMaterial then
 				currentMaterial = entryMaterial
 				render.SetMaterial( currentMaterial )
-			end
-			if entryLightmap and render.SetLightmapTexture and MC.GetMeshLightmapTexture then
-				render.SetLightmapTexture( MC.GetMeshLightmapTexture() )
 			end
 			if meshObj and meshObj.Draw then meshObj:Draw() end
 		end

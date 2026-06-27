@@ -253,6 +253,21 @@ local function tileUVPointRaw( tile, u, v )
 	return px / A.W, py / A.H
 end
 
+local function quadFaceCubic( faceIndex, id, orient, x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4 )
+	if MC.BlockIsFullCube and id and MC.BlockIsFullCube( id, orient or 0 ) then return true end
+	local eps = 0.0001
+	local minX, maxX = math.min( x1, x2, x3, x4 ), math.max( x1, x2, x3, x4 )
+	local minY, maxY = math.min( y1, y2, y3, y4 ), math.max( y1, y2, y3, y4 )
+	local minZ, maxZ = math.min( z1, z2, z3, z4 ), math.max( z1, z2, z3, z4 )
+	if faceIndex == MC.Face.TOP then return math.abs( minZ - maxZ ) <= eps and maxZ > 1 - eps end
+	if faceIndex == MC.Face.BOTTOM then return math.abs( minZ - maxZ ) <= eps and minZ < eps end
+	if faceIndex == MC.Face.XP then return math.abs( minX - maxX ) <= eps and maxX > 1 - eps end
+	if faceIndex == MC.Face.XN then return math.abs( minX - maxX ) <= eps and minX < eps end
+	if faceIndex == MC.Face.YP then return math.abs( minY - maxY ) <= eps and maxY > 1 - eps end
+	if faceIndex == MC.Face.YN then return math.abs( minY - maxY ) <= eps and minY < eps end
+	return true
+end
+
 local function bakedFaceData( id, face, orient )
 	local b = MC.Blocks[id]
 	if not b or not b.baked then return nil end
@@ -538,6 +553,7 @@ RM.ensureChunkRenderSectionIndex = ensureChunkRenderSectionIndex
 RM.rotatedUVFlags = rotatedUVFlags
 RM.tileUVRect = tileUVRect
 RM.tileUVPointRaw = tileUVPointRaw
+RM.quadFaceCubic = quadFaceCubic
 RM.bakedFaceData = bakedFaceData
 RM.EPS = EPS
 RM.boxFaceCornerValues = boxFaceCornerValues

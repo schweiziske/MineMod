@@ -447,10 +447,8 @@ local function cachedBlockLightMetaKey( meta )
 	if meta.recolorKey ~= nil then return meta.recolorKey end
 	local RM = MC.RenderMesh
 	local meshRecolorKey = RM and RM.meshRecolorKey
-	local weightedQuadRecolorKey = RM and RM.weightedQuadRecolorKey
-	if not meshRecolorKey or not weightedQuadRecolorKey then return nil end
+	if not meshRecolorKey then return nil end
 	local key = meshRecolorKey( meta.shadeIndex, meta.bx, meta.by, meta.bz, meta.faceIndex, meta.cx, meta.cy, meta.cz, meta.selfEmission )
-	key = weightedQuadRecolorKey( key, meta.weightedLightmapQuad, meta.quadLightEmission )
 	meta.recolorKey = key
 	return key
 end
@@ -461,25 +459,11 @@ end
 
 function MC.RecolorCachedBlockEmission( record, lightStyle, recolorFn, meshPerf )
 	if not record or not record.verts or not record.light or not recolorFn then return false end
-	local RM = MC.RenderMesh
-	local fixedLightmapRecolor = RM and RM.recolorFixedLightmapBlockEmission
-	if fixedLightmapRecolor then
-		local fastOK, fastVertexCount = fixedLightmapRecolor( record, lightStyle )
-		if fastOK ~= nil then
-			if fastOK and meshPerf then
-				meshPerf.fixedLightmapFastRecolors = ( meshPerf.fixedLightmapFastRecolors or 0 ) + 1
-				meshPerf.fixedLightmapFastVertices = ( meshPerf.fixedLightmapFastVertices or 0 ) + ( fastVertexCount or 0 )
-			end
-			return fastOK, fastVertexCount
-		end
-	end
 	local verts = record.verts
 	local light = record.light
 	local vertexCount = record.vertexCount or #verts
 	if vertexCount ~= #verts or vertexCount ~= #light then return false end
 	local colorCache = {}
-	local u1Cache = {}
-	local v1Cache = {}
 	local style = lightStyle
 	local recolor = recolorFn
 	for i = 1, vertexCount do
@@ -489,24 +473,11 @@ function MC.RecolorCachedBlockEmission( record, lightStyle, recolorFn, meshPerf 
 		if key == nil then return false end
 		if meta.shadeIndex == nil then return false end
 		local color = colorCache[key]
-		local u1, v1
 		if color == nil then
-			color, u1, v1 = recolor( meta, style )
+			color = recolor( meta, style )
 			colorCache[key] = color
-			u1Cache[key] = u1
-			v1Cache[key] = v1
-		else
-			u1 = u1Cache[key]
-			v1 = v1Cache[key]
 		end
 		verts[i].color = color
-		if u1 ~= nil and v1 ~= nil then
-			verts[i].u1 = u1
-			verts[i].v1 = v1
-		else
-			verts[i].u1 = nil
-			verts[i].v1 = nil
-		end
 	end
 	record.lightStyle = lightStyle
 	return true, vertexCount

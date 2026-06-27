@@ -97,6 +97,36 @@ function MC.CanonicalChunkKey( key )
 	return MC.ChunkKey( cx, cy, cz )
 end
 
+MC.LoadedChunkKeys = MC.LoadedChunkKeys or {}
+
+local function chunkKeyFromArgs( keyOrCX, cy, cz )
+	if cy ~= nil and cz ~= nil then
+		return MC.ChunkKey( keyOrCX, cy, cz )
+	end
+	return MC.CanonicalChunkKey( keyOrCX )
+end
+
+function MC.MarkChunkLoaded( keyOrCX, cy, cz )
+	local key = chunkKeyFromArgs( keyOrCX, cy, cz )
+	if key == nil then return nil end
+	MC.LoadedChunkKeys = MC.LoadedChunkKeys or {}
+	MC.LoadedChunkKeys[key] = true
+	return key
+end
+
+function MC.MarkChunkUnloaded( keyOrCX, cy, cz )
+	local key = chunkKeyFromArgs( keyOrCX, cy, cz )
+	if key == nil then return nil end
+	if MC.LoadedChunkKeys then MC.LoadedChunkKeys[key] = nil end
+	return key
+end
+
+function MC.IsChunkLoaded( keyOrCX, cy, cz )
+	local key = chunkKeyFromArgs( keyOrCX, cy, cz )
+	if key == nil then return false end
+	return ( MC.World and MC.World[key] ~= nil ) or ( MC.LoadedChunkKeys and MC.LoadedChunkKeys[key] == true )
+end
+
 function MC.CellKey( bx, by, bz )
 	local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
 	local chunkKey = MC.ChunkKey( cx, cy, cz )
@@ -514,6 +544,7 @@ end
 
 function MC.EnsureChunk( cx, cy, cz )
 	local key = MC.ChunkKey( cx, cy, cz )
+	if MC.MarkChunkLoaded then MC.MarkChunkLoaded( key ) end
 	local c = MC.GetChunkByKey( key )
 	if not c then
 		c = { cx = cx, cy = cy, cz = cz, key = key, blocks = {}, orients = {}, count = 0 }
