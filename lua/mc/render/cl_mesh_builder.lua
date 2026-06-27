@@ -18,6 +18,7 @@ local printMeshEmitProbe = RM.printMeshEmitProbe
 local destroySectionMeshList = RM.destroySectionMeshList
 local rebuildFlatMeshLists = RM.rebuildFlatMeshLists
 local recolorCachedBlockEmission = RM.recolorCachedBlockEmission
+local recolorLightMeta = RM.recolorLightMeta
 local setMeshSampleCacheOrigin = RM.setMeshSampleCacheOrigin
 local uploadMeshVertices = RM.uploadMeshVertices
 
@@ -212,9 +213,76 @@ function MC.RebuildChunkMeshLighting( key, sectionIndex )
 	local scannedRecords, updatedRecords = 0, 0
 	local blockLightDirtySection = MC.GetBlockLightDirtySection and MC.GetBlockLightDirtySection( key, sectionIndex ) or nil
 	local blockEmitCacheSection = blockLightDirtySection and MC.MeshBlockEmitCache[key] and MC.MeshBlockEmitCache[key][sectionIndex] or nil
+	local chunkBaseX, chunkBaseY, chunkBaseZ = chunk.cx * C.CS, chunk.cy * C.CS, chunk.cz * C.CH
+	local cachedBlockLightMetaKey = MC.CachedBlockLightMetaKey
+	local function metaLocalIndex( meta )
+		local li = meta and meta.li
+		if li ~= nil then return li end
+		if not meta or meta.bx == nil or meta.by == nil or meta.bz == nil then return nil end
+		local lx, ly, lz = meta.bx - chunkBaseX, meta.by - chunkBaseY, meta.bz - chunkBaseZ
+		if lx < 0 or lx >= C.CS or ly < 0 or ly >= C.CS or lz < 0 or lz >= C.CH then return nil end
+		li = lx + ly * C.CS + lz * C.CS2
+		meta.li = li
+		return li
+	end
+
+	local function ensureRecordLightIndexByLi( record, light, vertexCount )
+		local byLi = record.lightByLi
+		if byLi ~= nil then return byLi end
+		byLi = {}
+		for i = 1, vertexCount do
+			local li = metaLocalIndex( light[i] )
+			if li ~= nil then
+				local list = byLi[li]
+				if not list then
+					list = { n = 0 }
+					byLi[li] = list
+				end
+				local n = list.n + 1
+				list.n = n
+				list[n] = i
+			end
+		end
+		record.lightByLi = byLi
+		return byLi
+	end
+
+	local function recolorDirtyRecordVertices( record )
+		if not blockLightDirtySection then return true, true end
+		if not cachedBlockLightMetaKey or not recolorLightMeta then return false, false end
+		local verts = record and record.verts
+		local light = record and record.light
+		local vertexCount = record and ( record.vertexCount or #verts ) or 0
+		if not verts or not light or vertexCount ~= #verts or vertexCount ~= #light then return false, false end
+		local lightByLi = ensureRecordLightIndexByLi( record, light, vertexCount )
+		local colorCache = {}
+		local recolored = false
+		local style = meshLightStyle
+		for li in pairs( blockLightDirtySection ) do
+			local vertexIndexes = lightByLi[li]
+			if vertexIndexes then
+				for j = 1, vertexIndexes.n do
+					local i = vertexIndexes[j]
+					local meta = light[i]
+					if not meta then return false, false end
+					local recolorKey = cachedBlockLightMetaKey( meta )
+					if recolorKey == nil then return false, false end
+					local color = colorCache[recolorKey]
+					if color == nil then
+						color = recolorLightMeta( meta, style )
+						colorCache[recolorKey] = color
+					end
+					verts[i].color = color
+					recolored = true
+				end
+			end
+		end
+		return true, recolored
+	end
+
 	local function recolorDirtyBlockRecords()
 		if not blockLightDirtySection then return true end
-		if not blockEmitCacheSection then return false end
+		if not blockEmitCacheSection then return true end
 		for li in pairs( blockLightDirtySection ) do
 			local blockRecord = blockEmitCacheSection[li]
 			if blockRecord then
@@ -237,6 +305,12 @@ function MC.RebuildChunkMeshLighting( key, sectionIndex )
 			local recolorStart = SysTime()
 			if not recolorCachedBlockEmission( record, meshLightStyle, meshPerf ) then return false end
 			meshPerfAdd( meshPerf, "recolorMS", recolorStart )
+		else
+			local recolorStart = SysTime()
+			local ok, changed = recolorDirtyRecordVertices( record )
+			if not ok then return false end
+			if not changed then return true, false end
+			meshPerfAdd( meshPerf, "recolorMS", recolorStart )
 		end
 		uploadMeshVertices( record.mesh, record.verts, meshPerf )
 		meshPerf.vertices = meshPerf.vertices + vertexCount
@@ -248,7 +322,7 @@ function MC.RebuildChunkMeshLighting( key, sectionIndex )
 			meshPerf.opaqueVerts = meshPerf.opaqueVerts + vertexCount
 		end
 		updatedRecords = updatedRecords + 1
-		return true
+		return true, true
 	end
 
 	local function updateList( list, translucent, recolorWholeRecord )

@@ -400,6 +400,7 @@ local function resetClientWorldForSnapshot( expectedChunks, expectedBlocks )
 		end
 	end
 	MC.World = {}
+	MC.LoadedChunkKeys = {}
 	MC.MeshDirty = {}
 	MC.MeshDirtyRateLimited = {}
 	MC.PhysDirty = {}
@@ -779,6 +780,13 @@ local function tryFinishHttpChunkLoad( state, key )
 	state.loadingKeys[key] = nil
 	state.pendingKeys[key] = nil
 	state.loadedKeys[key] = true
+	if MC.MarkChunkLoaded then MC.MarkChunkLoaded( key ) end
+	if blocks <= 0 and MC.IndexChunkLightSources and MC.ChunkKeyToCoords then
+		local cx, cy, cz = MC.ChunkKeyToCoords( key )
+		if cx then
+			MC.IndexChunkLightSources( { cx = cx, cy = cy, cz = cz, key = key, blocks = {}, orients = {}, count = 0 } )
+		end
+	end
 	state.requestedEntries[key] = nil
 	beginProgressChunk( blocks )
 	addProgressCells( blocks )
@@ -1151,6 +1159,7 @@ net.Receive( "mc_unload_chunk", function()
 	end
 	if MC.ChunkEnts then MC.ChunkEnts[key] = nil end
 	MC.World[key] = nil
+	if MC.MarkChunkUnloaded then MC.MarkChunkUnloaded( key ) end
 	MC.MeshDirty[key] = nil
 	if MC.MeshDirtyRateLimited then MC.MeshDirtyRateLimited[key] = nil end
 	MC.PhysDirty[key] = nil
@@ -1193,6 +1202,7 @@ net.Receive( "mc_clear", function()
 		end
 	end
 	MC.World = {}
+	MC.LoadedChunkKeys = {}
 	MC.MeshDirty = {}
 	MC.MeshDirtyRateLimited = {}
 	MC.PhysDirty = {}

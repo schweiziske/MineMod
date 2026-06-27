@@ -58,13 +58,6 @@ local function newMeshPerfStats()
 		fullPushMS = 0,
 		fullVisibleFaces = 0,
 		fullDirectBlocks = 0,
-		lightmapPackets = 0,
-		lightmapFullPackets = 0,
-		lightmapWeightedPackets = 0,
-		lightmapPacketVertices = 0,
-		lightmapFallbackUVs = 0,
-		fixedLightmapFastRecolors = 0,
-		fixedLightmapFastVertices = 0,
 	}
 end
 
@@ -80,21 +73,12 @@ local function meshPerfMS( startTime )
 	return meshPerfRoundMS( meshPerfElapsedMS( startTime ) )
 end
 
-local function meshHasSecondaryUV( verts )
-	for i = 1, #verts do
-		local vert = verts[i]
-		if vert and ( vert.u1 ~= nil or vert.v1 ~= nil ) then return true end
-	end
-	return false
-end
-
 local function meshPerfAdd( perf, field, startTime )
 	if not perf or not field or not startTime then return end
 	perf[field] = ( perf[field] or 0 ) + meshPerfElapsedMS( startTime )
 end
 
 local function uploadMeshVertices( meshObj, verts, perf )
-	local hasSecondaryUV = meshHasSecondaryUV( verts )
 	if meshBeginUploadEnabled() and mesh and mesh.Begin and meshObj then
 		local vertexCount = #verts
 		local triCount = math.floor( vertexCount / 3 )
@@ -115,7 +99,6 @@ local function uploadMeshVertices( meshObj, verts, perf )
 			meshPosition( pos )
 			if normal then meshNormal( normal ) end
 			meshTexCoord( 0, vert.u or 0, vert.v or 0 )
-			if hasSecondaryUV then meshTexCoord( 1, vert.u1 or 0, vert.v1 or 0 ) end
 			if color then
 				meshColor( color.r or 255, color.g or 255, color.b or 255, color.a or 255 )
 			else
@@ -216,13 +199,6 @@ local function publishMeshPerfStats( perf )
 	stats.lastMeshFullPushMS = meshPerfRoundMS( perf.fullPushMS )
 	stats.lastMeshFullVisibleFaces = perf.fullVisibleFaces or 0
 	stats.lastMeshFullDirectBlocks = perf.fullDirectBlocks or 0
-	stats.lastMeshLightmapPackets = perf.lightmapPackets or 0
-	stats.lastMeshLightmapFullPackets = perf.lightmapFullPackets or 0
-	stats.lastMeshLightmapWeightedPackets = perf.lightmapWeightedPackets or 0
-	stats.lastMeshLightmapPacketVertices = perf.lightmapPacketVertices or 0
-	stats.lastMeshLightmapFallbackUVs = perf.lightmapFallbackUVs or 0
-	stats.lastMeshFixedLightmapFastRecolors = perf.fixedLightmapFastRecolors or 0
-	stats.lastMeshFixedLightmapFastVertices = perf.fixedLightmapFastVertices or 0
 end
 
 local function printMeshEmitProbe( key, sectionIndex, meshMS, perf )
@@ -251,11 +227,6 @@ local function printMeshEmitProbe( key, sectionIndex, meshMS, perf )
 	add( "fullVertexMS", meshPerfRoundMS( perf.fullVertexMS ) )
 	add( "fullMetaMS", meshPerfRoundMS( perf.fullMetaMS ) )
 	add( "fullPushMS", meshPerfRoundMS( perf.fullPushMS ) )
-	add( "lmPackets", perf.lightmapPackets or 0 )
-	add( "lmPacketVerts", perf.lightmapPacketVertices or 0 )
-	add( "lmFallbackUVs", perf.lightmapFallbackUVs or 0 )
-	add( "lmFastRecolor", perf.fixedLightmapFastRecolors or 0 )
-	add( "lmFastVerts", perf.fixedLightmapFastVertices or 0 )
 	add( "shapeMS", meshPerfRoundMS( perf.shapeMS ) )
 	add( "modelMS", meshPerfRoundMS( perf.modelMS ) )
 	add( "flushMS", meshPerfRoundMS( perf.flushMS ) )

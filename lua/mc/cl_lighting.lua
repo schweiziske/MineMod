@@ -15,7 +15,7 @@ MC.LightSkyLevel = MC.LightSkyLevel or CreateClientConVar( "mc_light_sky_level",
 MC.LightAmbientMin = MC.LightAmbientMin or CreateClientConVar( "mc_light_ambient_min", "0.18", true, false,
 	"Minimum brightness multiplier for MC vertex lighting" )
 MC.LightStyle = MC.LightStyle or CreateClientConVar( "mc_light_style", "shader", true, false,
-	"MC chunk lighting visual style: fast, vanilla, best, shader, or lightmap" )
+	"MC chunk lighting visual style: fast, vanilla, best, or shader" )
 MC.LightPerfDebug = MC.LightPerfDebug or CreateClientConVar( "mc_light_perf_debug", "0", true, false,
 	"Show and collect detailed MC lighting performance diagnostics" )
 MC.LightPerfPrintBreak = MC.LightPerfPrintBreak or CreateClientConVar( "mc_light_perf_print_break", "0", true, false,
@@ -29,6 +29,7 @@ MC.LightSkyColumnTops = MC.LightSkyColumnTops or {}
 MC.LightSourceCells = MC.LightSourceCells or {}
 MC.LightChunkSources = MC.LightChunkSources or {}
 MC.LightColumnChunks = MC.LightColumnChunks or {}
+MC.LightVirtualChunks = MC.LightVirtualChunks or {}
 MC.LightCellsReady = MC.LightCellsReady or false
 MC.LightSourceIndexReady = MC.LightSourceIndexReady or false
 MC.LightCellsSkyLevel = MC.LightCellsSkyLevel or -1
@@ -123,8 +124,6 @@ function MC.LightPerfTrace( kind, fields )
 	add( "commitMS", fields.commitMS )
 	add( "flatMS", fields.flatMS )
 	add( "recolorMS", fields.recolorMS )
-	add( "lmFastRecolor", fields.lmFastRecolor )
-	add( "lmFastVerts", fields.lmFastVerts )
 	add( "samples", fields.samples )
 	add( "sampleMS", fields.sampleMS )
 	add( "ao", fields.ao )
@@ -241,8 +240,6 @@ function MC.LightPerfEndMeshBuild( key, sectionIndex, meshMS )
 		commitMS = stats.lastMeshCommitMS,
 		flatMS = stats.lastMeshFlatMS,
 		recolorMS = stats.lastMeshRecolorMS,
-		lmFastRecolor = stats.lastMeshFixedLightmapFastRecolors,
-		lmFastVerts = stats.lastMeshFixedLightmapFastVertices,
 		samples = stats.lastMeshSampleCalls,
 		sampleMS = stats.lastMeshSampleMS,
 		ao = stats.lastMeshAOCalls,
@@ -264,6 +261,30 @@ local function skyColumnKey( bx, by )
 	return MC.CellColumnKey( bx, by )
 end
 
+local function chunkKeyLoaded( key )
+	if key == nil then return false end
+	if MC.IsChunkLoaded then return MC.IsChunkLoaded( key ) end
+	return MC.World and MC.World[key] ~= nil
+end
+
+local function lightChunkAvailable( chunk )
+	return chunk and chunk.key and chunkKeyLoaded( chunk.key )
+end
+
+local function lightingChunkForCoords( cx, cy, cz, key )
+	key = key or MC.ChunkKey( cx, cy, cz )
+	local chunk = MC.World and MC.World[key]
+	if chunk then return chunk end
+	if not chunkKeyLoaded( key ) then return nil end
+	local virtual = MC.LightVirtualChunks and MC.LightVirtualChunks[key]
+	if not virtual then
+		virtual = { cx = cx, cy = cy, cz = cz, key = key, blocks = {}, orients = {}, count = 0 }
+		MC.LightVirtualChunks = MC.LightVirtualChunks or {}
+		MC.LightVirtualChunks[key] = virtual
+	end
+	return virtual
+end
+
 local function invalidateSkyColumnsForChunkCoords( cx, cy )
 	if not MC.LightSkyColumnTops then return end
 	local baseX, baseY = cx * MC.CS, cy * MC.CS
@@ -281,8 +302,8 @@ local function syncLightColumnForCell( bx, by, bz )
 	local chunkKey = MC.ChunkKey( cx, cy, cz )
 	local columnKey = chunkColumnKey( cx, cy )
 	local column = MC.LightColumnChunks[columnKey]
-	local chunk = MC.World and MC.World[chunkKey]
-	if chunk and chunk.count and chunk.count > 0 then
+	local chunk = lightingChunkForCoords( cx, cy, cz, chunkKey )
+	if chunk then
 		if not column then
 			column = {}
 			MC.LightColumnChunks[columnKey] = column
@@ -304,9 +325,44 @@ local function lightOpacity( id, orient )
 	return MC.BlockLightOpacity and MC.BlockLightOpacity( id, orient ) or 15
 end
 
+local function lightingGeometrySolidRenderState( id, orient )
+	if id == nil or id == 0 then return false end
+	local block = MC.Blocks and MC.Blocks[id]
+	if block and ( block.transparent == true or block.solid == false ) then return false end
+	if MC.BlockIsFullCube then return MC.BlockIsFullCube( id, orient ) == true end
+	if block and block.shape then return false end
+	return true
+end
+
+local function lightingGeometryDirtyState( id, orient )
+	id = math.floor( tonumber( id ) or 0 )
+	orient = math.floor( tonumber( orient ) or 0 )
+	local block = MC.Blocks and MC.Blocks[id] or nil
+	return
+		lightEmission( id ),
+		lightOpacity( id, orient ),
+		lightingGeometrySolidRenderState( id, orient ),
+		block and block.transparent == true or false,
+		block and block.solid == false or false,
+		block and block.shadeBrightness or nil
+end
+
+local function lightingGeometryDirtyNeeded( oldId, oldOrient, newId, newOrient )
+	local oldEmission, oldOpacity, oldSolidRender, oldTransparent, oldNonSolid, oldShade =
+		lightingGeometryDirtyState( oldId, oldOrient )
+	local newEmission, newOpacity, newSolidRender, newTransparent, newNonSolid, newShade =
+		lightingGeometryDirtyState( newId, newOrient )
+	return oldEmission ~= newEmission
+		or oldOpacity ~= newOpacity
+		or oldSolidRender ~= newSolidRender
+		or oldTransparent ~= newTransparent
+		or oldNonSolid ~= newNonSolid
+		or oldShade ~= newShade
+end
+
 local function chunkLoadedForCell( bx, by, bz )
 	local cx, cy, cz = MC.CellToChunk( bx, by, bz )
-	return MC.World and MC.World[MC.ChunkKey( cx, cy, cz )] ~= nil
+	return chunkKeyLoaded( MC.ChunkKey( cx, cy, cz ) )
 end
 
 local function lightStoreForCell( store, bx, by, bz, create )
@@ -350,6 +406,7 @@ local function clearStoredLight()
 	MC.LightBlockChunks = {}
 	MC.LightSkyChunks = {}
 	MC.LightSkyColumnTops = {}
+	MC.LightVirtualChunks = {}
 	MC.LightCellsReady = false
 	MC.LightCellsSkyLevel = -1
 end
@@ -390,6 +447,7 @@ function MC.ClearChunkLightSources( key )
 		end
 	end
 	MC.LightChunkSources[key] = nil
+	if MC.LightVirtualChunks then MC.LightVirtualChunks[key] = nil end
 	if MC.ChunkKeyToCoords then
 		local cx, cy, cz = MC.ChunkKeyToCoords( key )
 		if cx then
@@ -435,11 +493,11 @@ local function indexChunkSources( chunk )
 end
 
 local function indexChunkColumn( chunk )
-	if not chunk or not chunk.key or not chunk.count or chunk.count <= 0 then return end
+	if not lightChunkAvailable( chunk ) then return end
 	invalidateSkyColumnsForChunkCoords( chunk.cx, chunk.cy )
 	local key = chunkColumnKey( chunk.cx, chunk.cy )
 	MC.LightColumnChunks[key] = MC.LightColumnChunks[key] or {}
-	MC.LightColumnChunks[key][chunk.cz] = chunk
+	MC.LightColumnChunks[key][chunk.cz] = lightingChunkForCoords( chunk.cx, chunk.cy, chunk.cz, chunk.key ) or chunk
 end
 
 function MC.IndexChunkLightSources( chunk )
@@ -483,12 +541,18 @@ local NEIGHBORS = {
 	{ 0, 0, 1 }, { 0, 0, -1 },
 }
 
-local LIGHT_DIRTY_MESH_NEIGHBORS = {}
+local LIGHT_DIRTY_MESH_NEIGHBOR_X = {}
+local LIGHT_DIRTY_MESH_NEIGHBOR_Y = {}
+local LIGHT_DIRTY_MESH_NEIGHBOR_Z = {}
+local LIGHT_DIRTY_MESH_NEIGHBOR_COUNT = 0
 do
 	for dz = -1, 1 do
 		for dy = -1, 1 do
 			for dx = -1, 1 do
-				LIGHT_DIRTY_MESH_NEIGHBORS[#LIGHT_DIRTY_MESH_NEIGHBORS + 1] = { dx, dy, dz }
+				LIGHT_DIRTY_MESH_NEIGHBOR_COUNT = LIGHT_DIRTY_MESH_NEIGHBOR_COUNT + 1
+				LIGHT_DIRTY_MESH_NEIGHBOR_X[LIGHT_DIRTY_MESH_NEIGHBOR_COUNT] = dx
+				LIGHT_DIRTY_MESH_NEIGHBOR_Y[LIGHT_DIRTY_MESH_NEIGHBOR_COUNT] = dy
+				LIGHT_DIRTY_MESH_NEIGHBOR_Z[LIGHT_DIRTY_MESH_NEIGHBOR_COUNT] = dz
 			end
 		end
 	end
@@ -738,7 +802,7 @@ function MC.UpdateLightingForChunkLoaded( chunk )
 	local addQ = newLightQueue()
 	clearChunkStoredBlockLightToQueue( chunk.key, changed, removeQ )
 	local sourceCount = 0
-	if chunk.count and chunk.count > 0 and MC.World and MC.World[chunk.key] then
+	if lightChunkAvailable( chunk ) then
 		sourceCount = seedChunkLightSources( addQ, changed, chunk )
 		seedChunkBorderLight( addQ, chunk )
 	end
@@ -750,20 +814,65 @@ end
 
 function MC.MarkLightSectionsDirtyForChangedCells( changed )
 	local dirty = {}
+	local dirtyCells = {}
 	local dirtyCount = 0
 	local count = changed and changed.count or 0
 	local xs, ys, zs = changed and changed.x or {}, changed and changed.y or {}, changed and changed.z or {}
+	local chunkKey = MC.ChunkKey
+	local world = MC.World
+	local meshDirty = MC.MeshDirty
+	local meshLightDirty = MC.MeshLightDirty
+	local meshBlockLightDirty = MC.MeshBlockLightDirty
+	local cs = MC.CS or 16
+	local ch = MC.CH or 32
+	local cs2 = cs * cs
+	local chunkVolume = cs2 * ch
+	local renderSectionSize = 8
+	local renderSectionsXY = math.ceil( cs / renderSectionSize )
+	local mathFloor = math.floor
+	if not chunkKey or not meshLightDirty or not meshBlockLightDirty then return 0 end
 	for c = 1, count do
 		local bx, by, bz = xs[c], ys[c], zs[c]
-		if MC.MarkLightCellBlockDirty then
-			MC.MarkLightCellBlockDirty( bx, by, bz )
-		end
-		if MC.MarkLightCellDirty then
-			for i = 1, #LIGHT_DIRTY_MESH_NEIGHBORS do
-				local off = LIGHT_DIRTY_MESH_NEIGHBORS[i]
-				local ok, key, sectionIndex = MC.MarkLightCellDirty( bx + off[1], by + off[2], bz + off[3] )
-				if ok and key and sectionIndex then
-					local dirtyKey = type( key ) == "number" and key * 16 + sectionIndex or tostring( key ) .. ":" .. sectionIndex
+		for i = 1, LIGHT_DIRTY_MESH_NEIGHBOR_COUNT do
+			local dbx = bx + LIGHT_DIRTY_MESH_NEIGHBOR_X[i]
+			local dby = by + LIGHT_DIRTY_MESH_NEIGHBOR_Y[i]
+			local dbz = bz + LIGHT_DIRTY_MESH_NEIGHBOR_Z[i]
+			local cx = mathFloor( dbx / cs )
+			local cy = mathFloor( dby / cs )
+			local cz = mathFloor( dbz / ch )
+			local lx = dbx - cx * cs
+			local ly = dby - cy * cs
+			local lz = dbz - cz * ch
+			local li = lx + ly * cs + lz * cs2
+			local key = chunkKey( cx, cy, cz )
+			if world and world[key] then
+				local cellKey = key * chunkVolume + li
+				if not dirtyCells[cellKey] then
+					dirtyCells[cellKey] = true
+					local sx = mathFloor( lx / renderSectionSize )
+					local sy = mathFloor( ly / renderSectionSize )
+					local sz = mathFloor( lz / renderSectionSize )
+					local sectionIndex = sx + sy * renderSectionsXY + sz * renderSectionsXY * renderSectionsXY + 1
+					local lightDirtySections = meshBlockLightDirty[key]
+					if not lightDirtySections then
+						lightDirtySections = {}
+						meshBlockLightDirty[key] = lightDirtySections
+					end
+					local lightDirtySection = lightDirtySections[sectionIndex]
+					if not lightDirtySection then
+						lightDirtySection = {}
+						lightDirtySections[sectionIndex] = lightDirtySection
+					end
+					lightDirtySection[li] = true
+					if not ( meshDirty and meshDirty[key] == true ) then
+						local sections = meshLightDirty[key]
+						if not sections then
+							sections = {}
+							meshLightDirty[key] = sections
+						end
+						sections[sectionIndex] = true
+					end
+					local dirtyKey = key * 32 + sectionIndex
 					if not dirty[dirtyKey] then
 						dirty[dirtyKey] = true
 						dirtyCount = dirtyCount + 1
@@ -885,7 +994,7 @@ local function seedDirectSkyVerticalLine( q, changed, oldStore, column, minCZ, m
 	local directCells = 0
 	for cz = maxCZ, minCZ, -1 do
 		local chunk = column[cz]
-		if chunk and chunk.count and chunk.count > 0 then
+		if lightChunkAvailable( chunk ) then
 			local chunkCells
 			directLevel, chunkCells = seedDirectSkyChunkCells( q, changed, oldStore, level, chunk, lx, ly, bx, by, directLevel )
 			directCells = directCells + chunkCells
@@ -913,7 +1022,7 @@ local function seedDirectSkyLight( q, changed, oldStore, level )
 	for _, column in pairs( MC.LightColumnChunks or {} ) do
 		local cx, cy, minCZ, maxCZ
 		for cz, chunk in pairs( column or {} ) do
-			if chunk and chunk.count and chunk.count > 0 then
+			if lightChunkAvailable( chunk ) then
 				cx, cy = chunk.cx, chunk.cy
 				minCZ = minCZ and math.min( minCZ, cz ) or cz
 				maxCZ = maxCZ and math.max( maxCZ, cz ) or cz
@@ -1016,7 +1125,7 @@ local function columnBounds( bx, by )
 	local minZ, maxZ
 	local column = MC.LightColumnChunks and MC.LightColumnChunks[chunkColumnKey( cx, cy )]
 	for cz, chunk in pairs( column or {} ) do
-		if chunk and chunk.count and chunk.count > 0 then
+		if lightChunkAvailable( chunk ) then
 			local bottom = cz * MC.CH
 			local top = bottom + MC.CH - 1
 			minZ = minZ and math.min( minZ, bottom ) or bottom
@@ -1029,7 +1138,7 @@ end
 local function loadedColumnCZRange( column )
 	local minCZ, maxCZ
 	for cz, chunk in pairs( column or {} ) do
-		if chunk and chunk.count and chunk.count > 0 then
+		if lightChunkAvailable( chunk ) then
 			minCZ = minCZ and math.min( minCZ, cz ) or cz
 			maxCZ = maxCZ and math.max( maxCZ, cz ) or cz
 		end
@@ -1045,7 +1154,7 @@ local function localSkyRegionZBounds( minBX, minBY, maxBX, maxBY )
 		for cx = minCX, maxCX do
 			local column = MC.LightColumnChunks and MC.LightColumnChunks[chunkColumnKey( cx, cy )]
 			for cz, chunk in pairs( column or {} ) do
-				if chunk and chunk.count and chunk.count > 0 then
+				if lightChunkAvailable( chunk ) then
 					local bottom = cz * MC.CH
 					local top = bottom + MC.CH - 1
 					minZ = minZ and math.min( minZ, bottom ) or bottom
@@ -1104,7 +1213,7 @@ local function seedDirectSkyVerticalLineLocal( q, changed, column, minCZ, maxCZ,
 	local directCells = 0
 	for cz = maxCZ, minCZ, -1 do
 		local chunk = column[cz]
-		if chunk and chunk.count and chunk.count > 0 then
+		if lightChunkAvailable( chunk ) then
 			local chunkCells
 			directLevel, chunkCells = seedDirectSkyChunkCellsLocal( q, changed, level, chunk, lx, ly, bx, by, directLevel )
 			directCells = directCells + chunkCells
@@ -1118,7 +1227,7 @@ local function rebuildDirectSkyVerticalLineQueued( changed, removeQ, addQ, colum
 	local directCells = 0
 	for cz = maxCZ, minCZ, -1 do
 		local chunk = column[cz]
-		if chunk and chunk.count and chunk.count > 0 then
+		if lightChunkAvailable( chunk ) then
 			local baseZ = chunk.cz * MC.CH
 			for lz = MC.CH - 1, 0, -1 do
 				local bz = baseZ + lz
@@ -1544,6 +1653,7 @@ function MC.MarkLightingDirtyForChange( bx, by, bz, oldId, oldOrient, newId, new
 
 	local oldEmission, newEmission = lightEmission( oldId ), lightEmission( newId )
 	local oldOpacity, newOpacity = lightOpacity( oldId, oldOrient ), lightOpacity( newId, newOrient )
+	local lightingGeometryDirty = lightingGeometryDirtyNeeded( oldId, oldOrient, newId, newOrient )
 	syncLightColumnForCell( bx, by, bz )
 	local oldTop = oldOpacity ~= newOpacity and skyColumnTopWithOverride( bx, by, bx, by, bz, oldId, oldOrient ) or nil
 	MC.NoteLightingCellChanged( bx, by, bz, oldId, oldOrient, newId, newOrient )
@@ -1553,6 +1663,13 @@ function MC.MarkLightingDirtyForChange( bx, by, bz, oldId, oldOrient, newId, new
 	end
 	if oldEmission ~= newEmission or oldOpacity ~= newOpacity then
 		MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, oldOpacity, newOpacity )
+	end
+	if lightingGeometryDirty and MC.MarkLightingGeometryDirtyForChange then
+		local dirtySections = MC.MarkLightingGeometryDirtyForChange( bx, by, bz, rateLimited )
+		local stats = MC.LightPerfStats or {}
+		MC.LightPerfStats = stats
+		stats.lastLightingGeometryDirtySections = dirtySections
+		stats.lastLightingGeometryDirtyCell = string.format( "%d,%d,%d", bx, by, bz )
 	end
 	if oldId ~= 0 and newId == 0 and lightPerfPrintBreakEnabled() and timer and timer.Simple then
 		timer.Simple( 0, function()

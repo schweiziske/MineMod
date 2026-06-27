@@ -101,26 +101,45 @@ function MC.MarkRenderSectionsDirtyInBounds( minBX, minBY, minBZ, maxBX, maxBY, 
 	end
 end
 
+local function markBlockGeometryDirty( x, y, z, rateLimited )
+	local cx, cy, cz, li = MC.CellToChunk( x, y, z )
+	local lx, ly, lz = DecodeLocal( li )
+	local key = MC.ChunkKey( cx, cy, cz )
+	local sectionIndex = sectionIndexForLocal( lx, ly, lz )
+	markBlockEmitCacheDirty( x, y, z )
+	if rateLimited then
+		markChunkSectionDirty( key, sectionIndex, true )
+	else
+		markChunkSectionDirty( key, sectionIndex )
+	end
+	return key, sectionIndex
+end
+
 
 -- a block changed: its own chunk and any chunk owning a face-neighbour cell
 -- may need a rebuild (boundary faces).
 function MC.MarkDirty( bx, by, bz, rateLimited )
-	local function mark( x, y, z )
-		local cx, cy, cz, li = MC.CellToChunk( x, y, z )
-		local lx, ly, lz = DecodeLocal( li )
-		local key = MC.ChunkKey( cx, cy, cz )
-		local sectionIndex = sectionIndexForLocal( lx, ly, lz )
-		markBlockEmitCacheDirty( x, y, z )
-		if rateLimited then
-			markChunkSectionDirty( key, sectionIndex, true )
-		else
-			markChunkSectionDirty( key, sectionIndex )
+	markBlockGeometryDirty( bx, by, bz, rateLimited )
+	markBlockGeometryDirty( bx + 1, by, bz, rateLimited ) ; markBlockGeometryDirty( bx - 1, by, bz, rateLimited )
+	markBlockGeometryDirty( bx, by + 1, bz, rateLimited ) ; markBlockGeometryDirty( bx, by - 1, bz, rateLimited )
+	markBlockGeometryDirty( bx, by, bz + 1, rateLimited ) ; markBlockGeometryDirty( bx, by, bz - 1, rateLimited )
+end
+
+function MC.MarkLightingGeometryDirtyForChange( bx, by, bz, rateLimited )
+	local dirtySections, dirtyCount = {}, 0
+	for dz = -1, 1 do
+		for dy = -1, 1 do
+			for dx = -1, 1 do
+				local key, sectionIndex = markBlockGeometryDirty( bx + dx, by + dy, bz + dz, rateLimited )
+				local dirtyKey = type( key ) == "number" and key * 16 + sectionIndex or tostring( key ) .. ":" .. tostring( sectionIndex )
+				if not dirtySections[dirtyKey] then
+					dirtySections[dirtyKey] = true
+					dirtyCount = dirtyCount + 1
+				end
+			end
 		end
 	end
-	mark( bx, by, bz )
-	mark( bx + 1, by, bz ) ; mark( bx - 1, by, bz )
-	mark( bx, by + 1, bz ) ; mark( bx, by - 1, bz )
-	mark( bx, by, bz + 1 ) ; mark( bx, by, bz - 1 )
+	return dirtyCount
 end
 
 local function chunkDistanceScore( key )
