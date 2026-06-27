@@ -1578,7 +1578,7 @@ local function markLightingDirtyColumn( bx, by, bz, oldTop )
 	} )
 end
 
-function MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, oldOpacity, newOpacity )
+function MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, oldOpacity, newOpacity, dirtyBlockLightMeshes )
 	if not lightEnabled() then
 		noteLightingDisabledSkip( "block_change", bx, by, bz )
 		return 0, 0
@@ -1606,7 +1606,8 @@ function MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, old
 
 	seedNeighborLight( addQ, bx, by, bz )
 	local incProcessed = runLightIncreaseQueue( addQ, changed )
-	local dirtySections = MC.MarkLightSectionsDirtyForChangedCells( changed )
+	local dirtySections = 0
+	if dirtyBlockLightMeshes ~= false then dirtySections = MC.MarkLightSectionsDirtyForChangedCells( changed ) end
 
 	MC.LightCellsReady = true
 	MC.LightCellsSkyLevel = skyLevel()
@@ -1653,7 +1654,6 @@ function MC.MarkLightingDirtyForChange( bx, by, bz, oldId, oldOrient, newId, new
 
 	local oldEmission, newEmission = lightEmission( oldId ), lightEmission( newId )
 	local oldOpacity, newOpacity = lightOpacity( oldId, oldOrient ), lightOpacity( newId, newOrient )
-	local lightingGeometryDirty = lightingGeometryDirtyNeeded( oldId, oldOrient, newId, newOrient )
 	syncLightColumnForCell( bx, by, bz )
 	local oldTop = oldOpacity ~= newOpacity and skyColumnTopWithOverride( bx, by, bx, by, bz, oldId, oldOrient ) or nil
 	MC.NoteLightingCellChanged( bx, by, bz, oldId, oldOrient, newId, newOrient )
@@ -1662,14 +1662,8 @@ function MC.MarkLightingDirtyForChange( bx, by, bz, oldId, oldOrient, newId, new
 		rebuildSkyCellsAroundColumn( bx, by )
 	end
 	if oldEmission ~= newEmission or oldOpacity ~= newOpacity then
-		MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, oldOpacity, newOpacity )
-	end
-	if lightingGeometryDirty and MC.MarkLightingGeometryDirtyForChange then
-		local dirtySections = MC.MarkLightingGeometryDirtyForChange( bx, by, bz, rateLimited )
-		local stats = MC.LightPerfStats or {}
-		MC.LightPerfStats = stats
-		stats.lastLightingGeometryDirtySections = dirtySections
-		stats.lastLightingGeometryDirtyCell = string.format( "%d,%d,%d", bx, by, bz )
+		local dirtyBlockLightMeshes = oldEmission ~= newEmission
+		MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, oldOpacity, newOpacity, dirtyBlockLightMeshes )
 	end
 	if oldId ~= 0 and newId == 0 and lightPerfPrintBreakEnabled() and timer and timer.Simple then
 		timer.Simple( 0, function()
