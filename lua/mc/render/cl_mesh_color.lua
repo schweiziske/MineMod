@@ -29,14 +29,17 @@ local MC_LIGHT_SHADER_AO_FACTORS = RM.MC_LIGHT_SHADER_AO_FACTORS
 local shadeRGBAByIndex = RM.shadeRGBAByIndex
 local fullCubeColorCacheKey = RM.fullCubeColorCacheKey
 local applySourceLightingToRGB = RM.applySourceLightingToRGB
+local sourceLightingIsEnabled = RM.sourceLightingIsEnabled
 
 local MeshFullCubeColorCache = {}
 local MeshShaderDaylightFactor = nil
+local MeshSourceLightingActive = false
 
 function RM.resetMeshColorLightingCaches()
 	MeshFullCubeColorCache = {}
 	MeshShaderDaylightFactor = nil
 	if RM.resetSourceLightingCache then RM.resetSourceLightingCache() end
+	MeshSourceLightingActive = sourceLightingIsEnabled and sourceLightingIsEnabled() or false
 end
 
 local function minecraftSmoothCornerShadeBrightness( bx, by, bz, faceIndex, cn )
@@ -205,8 +208,8 @@ local MeshColorObjectCacheCount = 0
 local MESH_COLOR_OBJECT_CACHE_LIMIT = 4096
 
 local function resetMeshColorObjectCache()
-	MeshColorObjectCache = {}
-	MeshColorObjectCacheCount = 0
+	-- Keep this cache across mesh builds; repeated section rebuilds reuse the
+	-- same small set of quantized vertex colors.
 end
 
 local function colorFromRGBA( r, g, b, a )
@@ -266,7 +269,7 @@ local function litFaceColorValues( shade, bx, by, bz, id, faceIndex, cn, selfEmi
 	local r = math.Clamp( math.floor( shadeR * mul * rScale + 0.5 ), 0, 255 )
 	local g = math.Clamp( math.floor( shadeG * mul * gScale + 0.5 ), 0, 255 )
 	local b = math.Clamp( math.floor( shadeB * mul * bScale + 0.5 ), 0, 255 )
-	if applySourceLightingToRGB then
+	if applySourceLightingToRGB and MeshSourceLightingActive then
 		local cx, cy, cz = cornerXYZ( cn )
 		r, g, b = applySourceLightingToRGB( r, g, b, bx, by, bz, faceIndex, cx, cy, cz )
 	end
@@ -308,7 +311,7 @@ local function litFaceColorMetaValues( meta, style )
 	local r = math.Clamp( math.floor( shadeR * mul * rScale + 0.5 ), 0, 255 )
 	local g = math.Clamp( math.floor( shadeG * mul * gScale + 0.5 ), 0, 255 )
 	local b = math.Clamp( math.floor( shadeB * mul * bScale + 0.5 ), 0, 255 )
-	if applySourceLightingToRGB then
+	if applySourceLightingToRGB and MeshSourceLightingActive then
 		r, g, b = applySourceLightingToRGB( r, g, b, bx, by, bz, faceIndex, cx, cy, cz )
 	end
 	return r, g, b, shadeA
@@ -322,11 +325,11 @@ local function litFaceColor( shade, bx, by, bz, id, faceIndex, cn, selfEmission,
 	return colorFromRGBA( litFaceColorValues( shade, bx, by, bz, id, faceIndex, cn, selfEmission, style ) )
 end
 
-local function colorFromShadeMul( shadeR, shadeG, shadeB, shadeA, mul, rScale, gScale, bScale, bx, by, bz, faceIndex, cx, cy, cz )
+local function colorFromShadeMul( shadeR, shadeG, shadeB, shadeA, mul, rScale, gScale, bScale, bx, by, bz, faceIndex, cx, cy, cz, sourceActive )
 	local r = mathClamp( mathFloor( shadeR * mul * rScale + 0.5 ), 0, 255 )
 	local g = mathClamp( mathFloor( shadeG * mul * gScale + 0.5 ), 0, 255 )
 	local b = mathClamp( mathFloor( shadeB * mul * bScale + 0.5 ), 0, 255 )
-	if bx ~= nil and applySourceLightingToRGB then
+	if sourceActive and applySourceLightingToRGB then
 		r, g, b = applySourceLightingToRGB( r, g, b, bx, by, bz, faceIndex, cx, cy, cz )
 	end
 	return colorFromRGBA(
@@ -366,7 +369,7 @@ local function fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, 
 	if style == MC_LIGHT_STYLE_GPU_SHADER then
 		return gpuShaderPayloadColor( faceIndex, mathClamp( brightness * ao, 0, 1 ), shadeA )
 	end
-	local color = colorFromShadeMul( shadeR, shadeG, shadeB, shadeA, mathClamp( brightness * ao, 0, 1 ), rScale, gScale, bScale, bx, by, bz, faceIndex, cx, cy, cz )
+	local color = colorFromShadeMul( shadeR, shadeG, shadeB, shadeA, mathClamp( brightness * ao, 0, 1 ), rScale, gScale, bScale, bx, by, bz, faceIndex, cx, cy, cz, MeshSourceLightingActive )
 	if key ~= nil then MeshFullCubeColorCache[key] = color end
 	return color
 end
@@ -378,16 +381,38 @@ local function fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by
 	local directed = brightness * ( 1 + ( sunFactor - 1 ) * daylight * litSurface )
 	brightness = mathClamp( ( directed - 0.5 ) * 1.12 + 0.5 + daylight * 0.025, 0, 1 )
 	local ao = receiveAO ~= false and fullCubeCornerAOWithFactorsFast( bx, by, bz, faceIndex, cx, cy, cz, 0.94, 0.86, 0.74 ) or 1
-	return colorFromShadeMul( shadeR, shadeG, shadeB, shadeA, mathClamp( brightness * ao, 0, 1 ), rScale, gScale, bScale, bx, by, bz, faceIndex, cx, cy, cz )
+	return colorFromShadeMul( shadeR, shadeG, shadeB, shadeA, mathClamp( brightness * ao, 0, 1 ), rScale, gScale, bScale, bx, by, bz, faceIndex, cx, cy, cz, MeshSourceLightingActive )
 end
 
-local function fullCubeShaderColorFromBrightness( shadeR, shadeG, shadeB, shadeA, brightness, ao, rScale, gScale, bScale, daylight, sunFactor, bx, by, bz, faceIndex, cx, cy, cz )
+local function fullCubeShaderColorFromBrightness( shadeR, shadeG, shadeB, shadeA, brightness, ao, rScale, gScale, bScale, daylight, sunFactor, bx, by, bz, faceIndex, cx, cy, cz, sourceActive )
 	brightness = mathClamp( brightness, 0, 1 )
 	brightness = mathClamp( brightness ^ 0.85, 0, 1 )
 	local litSurface = mathClamp( ( brightness - 0.22 ) / 0.78, 0, 1 )
 	local directed = brightness * ( 1 + ( sunFactor - 1 ) * daylight * litSurface )
 	brightness = mathClamp( ( directed - 0.5 ) * 1.12 + 0.5 + daylight * 0.025, 0, 1 )
-	return colorFromShadeMul( shadeR, shadeG, shadeB, shadeA, mathClamp( brightness * ao, 0, 1 ), rScale, gScale, bScale, bx, by, bz, faceIndex, cx, cy, cz )
+	return colorFromShadeMul( shadeR, shadeG, shadeB, shadeA, mathClamp( brightness * ao, 0, 1 ), rScale, gScale, bScale, bx, by, bz, faceIndex, cx, cy, cz, sourceActive )
+end
+
+local function fullCubeShaderColorPacket( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, selfEmission, rScale, gScale, bScale, daylight, sunFactor, receiveAO )
+	local brightness1, brightness2, brightness3, brightness4 = minecraftSmoothCornerBrightnessPacketValues( bx, by, bz, faceIndex, selfEmission )
+	local corners = FACES[faceIndex] and FACES[faceIndex].c
+	if not corners then
+		local color = colorFromShadeMul( shadeR, shadeG, shadeB, shadeA, 1, rScale, gScale, bScale )
+		return color, color, color, color
+	end
+	local c1, c2, c3, c4 = corners[1], corners[2], corners[3], corners[4]
+	local ao1, ao2, ao3, ao4 = 1, 1, 1, 1
+	if receiveAO ~= false then
+		ao1 = fullCubeCornerAOWithFactorsFast( bx, by, bz, faceIndex, c1[1], c1[2], c1[3], 0.94, 0.86, 0.74 )
+		ao2 = fullCubeCornerAOWithFactorsFast( bx, by, bz, faceIndex, c2[1], c2[2], c2[3], 0.94, 0.86, 0.74 )
+		ao3 = fullCubeCornerAOWithFactorsFast( bx, by, bz, faceIndex, c3[1], c3[2], c3[3], 0.94, 0.86, 0.74 )
+		ao4 = fullCubeCornerAOWithFactorsFast( bx, by, bz, faceIndex, c4[1], c4[2], c4[3], 0.94, 0.86, 0.74 )
+	end
+	return
+		fullCubeShaderColorFromBrightness( shadeR, shadeG, shadeB, shadeA, brightness1, ao1, rScale, gScale, bScale, daylight, sunFactor, bx, by, bz, faceIndex, c1[1], c1[2], c1[3], MeshSourceLightingActive ),
+		fullCubeShaderColorFromBrightness( shadeR, shadeG, shadeB, shadeA, brightness2, ao2, rScale, gScale, bScale, daylight, sunFactor, bx, by, bz, faceIndex, c2[1], c2[2], c2[3], MeshSourceLightingActive ),
+		fullCubeShaderColorFromBrightness( shadeR, shadeG, shadeB, shadeA, brightness3, ao3, rScale, gScale, bScale, daylight, sunFactor, bx, by, bz, faceIndex, c3[1], c3[2], c3[3], MeshSourceLightingActive ),
+		fullCubeShaderColorFromBrightness( shadeR, shadeG, shadeB, shadeA, brightness4, ao4, rScale, gScale, bScale, daylight, sunFactor, bx, by, bz, faceIndex, c4[1], c4[2], c4[3], MeshSourceLightingActive )
 end
 
 local function fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, cx, cy, cz, selfEmission, daylight, sunFactor, receiveAO )
@@ -405,25 +430,7 @@ local function fullCubeFaceCornerColorsShader( shadeIndex, bx, by, bz, faceIndex
 	local rScale, gScale, bScale = shaderFaceTint( faceIndex )
 	local daylight = shaderDaylightFactor()
 	local sunFactor = shaderSunFaceFactor( faceIndex )
-	local brightness1, brightness2, brightness3, brightness4 = minecraftSmoothCornerBrightnessPacketValues( bx, by, bz, faceIndex, selfEmission )
-	local corners = FACES[faceIndex] and FACES[faceIndex].c
-	if not corners then
-		local color = colorFromShadeMul( shadeR, shadeG, shadeB, shadeA, 1, rScale, gScale, bScale )
-		return color, color, color, color
-	end
-	local c1, c2, c3, c4 = corners[1], corners[2], corners[3], corners[4]
-	local ao1, ao2, ao3, ao4 = 1, 1, 1, 1
-	if receiveAO ~= false then
-		ao1 = fullCubeCornerAOWithFactorsFast( bx, by, bz, faceIndex, c1[1], c1[2], c1[3], 0.94, 0.86, 0.74 )
-		ao2 = fullCubeCornerAOWithFactorsFast( bx, by, bz, faceIndex, c2[1], c2[2], c2[3], 0.94, 0.86, 0.74 )
-		ao3 = fullCubeCornerAOWithFactorsFast( bx, by, bz, faceIndex, c3[1], c3[2], c3[3], 0.94, 0.86, 0.74 )
-		ao4 = fullCubeCornerAOWithFactorsFast( bx, by, bz, faceIndex, c4[1], c4[2], c4[3], 0.94, 0.86, 0.74 )
-	end
-	return
-		fullCubeShaderColorFromBrightness( shadeR, shadeG, shadeB, shadeA, brightness1, ao1, rScale, gScale, bScale, daylight, sunFactor, bx, by, bz, faceIndex, c1[1], c1[2], c1[3] ),
-		fullCubeShaderColorFromBrightness( shadeR, shadeG, shadeB, shadeA, brightness2, ao2, rScale, gScale, bScale, daylight, sunFactor, bx, by, bz, faceIndex, c2[1], c2[2], c2[3] ),
-		fullCubeShaderColorFromBrightness( shadeR, shadeG, shadeB, shadeA, brightness3, ao3, rScale, gScale, bScale, daylight, sunFactor, bx, by, bz, faceIndex, c3[1], c3[2], c3[3] ),
-		fullCubeShaderColorFromBrightness( shadeR, shadeG, shadeB, shadeA, brightness4, ao4, rScale, gScale, bScale, daylight, sunFactor, bx, by, bz, faceIndex, c4[1], c4[2], c4[3] )
+	return fullCubeShaderColorPacket( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, selfEmission, rScale, gScale, bScale, daylight, sunFactor, receiveAO )
 end
 
 local function fullCubeFaceCornerColorsGpuShader( shadeIndex, bx, by, bz, faceIndex, selfEmission, receiveAO )

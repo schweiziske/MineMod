@@ -47,6 +47,11 @@ function RM.resetSourceLightingCache()
 	refreshSourceLightingState()
 end
 
+function RM.sourceLightingIsEnabled()
+	if SourceLightingEnabled == nil then refreshSourceLightingState() end
+	return SourceLightingEnabled and SourceLightingStrength > 0
+end
+
 local function sourceLightingKey( bx, by, bz, faceIndex, cx, cy, cz )
 	local sx = mathFloor( ( tonumber( cx ) or 0 ) * 16 + 0.5 )
 	local sy = mathFloor( ( tonumber( cy ) or 0 ) * 16 + 0.5 )

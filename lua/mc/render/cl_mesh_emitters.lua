@@ -50,6 +50,240 @@ local function shapeTriUV( fd, ci, faceIndex, cx, cy, cz, tile, u0, v0, u1, v1 )
 	return tileUVPointRaw( tile, cu, cv )
 end
 
+local ShapeModelTemplateCache = {
+	model = {},
+	shape = {},
+}
+
+function RM.resetShapeModelTemplateCache()
+	ShapeModelTemplateCache = {
+		model = {},
+		shape = {},
+	}
+end
+
+local function templateBucket( store, id )
+	local bucket = store[id]
+	if not bucket then
+		bucket = {}
+		store[id] = bucket
+	end
+	return bucket
+end
+
+local function isConnectionShapeBlock( b, id )
+	return ( MC.IsFenceBlock and MC.IsFenceBlock( id ) )
+		or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) )
+		or ( MC.IsWallBlock and MC.IsWallBlock( id ) )
+		or ( b and b.connection == "pipe6" )
+end
+
+local setTemplateTriVertex
+
+local function buildModelTemplate( b, orient )
+	local quads = rotatedModelQuads( b, orient )
+	if not quads then return false end
+
+	local mirrorU = b.orient == "door"
+	local tri = C.TRI
+	local out = { n = 0 }
+	for qi = 1, #quads do
+		local quad = quads[qi]
+		local verts = quad and quad.verts
+		if verts and verts[1] and verts[2] and verts[3] and verts[4] then
+			local faceIndex = quad.face or MC.Face.TOP
+			local face = C.FACES[faceIndex] or C.FACES[MC.Face.TOP]
+			local u0, v0, u1, v1 = tileUVRect( quad.tile or 0, quad.uv )
+			local vtx1, vtx2, vtx3, vtx4 = verts[1], verts[2], verts[3], verts[4]
+			local c1x, c1y, c1z = cornerXYZ( vtx1 )
+			local c2x, c2y, c2z = cornerXYZ( vtx2 )
+			local c3x, c3y, c3z = cornerXYZ( vtx3 )
+			local c4x, c4y, c4z = cornerXYZ( vtx4 )
+			local rec = {
+				faceIndex = faceIndex,
+				normal = face.n,
+				shade = face.sh,
+				quadLightEmission = quad.lightEmission or 0,
+				faceCubic = quadFaceCubic( faceIndex, b.id, orient, c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z ),
+				c1x = c1x, c1y = c1y, c1z = c1z,
+				c2x = c2x, c2y = c2y, c2z = c2z,
+				c3x = c3x, c3y = c3y, c3z = c3z,
+				c4x = c4x, c4y = c4y, c4z = c4z,
+			}
+			for t = 1, 6 do
+				local ci = tri[t]
+				local vert = verts[ci]
+				local uf, vf = rotatedUVFlags( vert.u or 0, vert.v or 0, quad.rot or 0 )
+				if mirrorU then uf = 1 - uf end
+				setTemplateTriVertex( rec, t, ci, vert.x, vert.y, vert.z, uf == 1 and u1 or u0, vf == 1 and v1 or v0 )
+			end
+			local n = out.n + 1
+			out.n = n
+			out[n] = rec
+		end
+	end
+	return out
+end
+
+local function getModelTemplate( b, orient )
+	local bucket = templateBucket( ShapeModelTemplateCache.model, b.id )
+	local cached = bucket[orient]
+	if cached ~= nil then return cached ~= false and cached or nil end
+	cached = buildModelTemplate( b, orient )
+	bucket[orient] = cached or false
+	return cached ~= false and cached or nil
+end
+
+local function shapeCornerValuesByIndex( ci, c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z )
+	if ci == 1 then return c1x, c1y, c1z end
+	if ci == 2 then return c2x, c2y, c2z end
+	if ci == 3 then return c3x, c3y, c3z end
+	return c4x, c4y, c4z
+end
+
+function setTemplateTriVertex( rec, t, ci, x, y, z, u, v )
+	if t == 1 then
+		rec.t1ci, rec.t1x, rec.t1y, rec.t1z, rec.t1u, rec.t1v = ci, x, y, z, u, v
+	elseif t == 2 then
+		rec.t2ci, rec.t2x, rec.t2y, rec.t2z, rec.t2u, rec.t2v = ci, x, y, z, u, v
+	elseif t == 3 then
+		rec.t3ci, rec.t3x, rec.t3y, rec.t3z, rec.t3u, rec.t3v = ci, x, y, z, u, v
+	elseif t == 4 then
+		rec.t4ci, rec.t4x, rec.t4y, rec.t4z, rec.t4u, rec.t4v = ci, x, y, z, u, v
+	elseif t == 5 then
+		rec.t5ci, rec.t5x, rec.t5y, rec.t5z, rec.t5u, rec.t5v = ci, x, y, z, u, v
+	else
+		rec.t6ci, rec.t6x, rec.t6y, rec.t6z, rec.t6u, rec.t6v = ci, x, y, z, u, v
+	end
+end
+
+local function buildShapeTemplate( b, id, orient, blockBoxes )
+	if not blockBoxes then return false end
+	local boxes = blockBoxes( id, orient )
+	if not boxes then return false end
+
+	local modelFaces = b and b.boxFaces
+	local tri = C.TRI
+	local out = { boxes = boxes, n = 0 }
+	for boxIndex = 1, #boxes do
+		local box = boxes[boxIndex]
+		local boxFaces = modelFaces and modelFaces[boxIndex] or nil
+		for f = 1, 6 do
+			local fd = boxFaces and boxFaces[f] or nil
+			if not modelFaces or fd then
+				local face = C.FACES[f]
+				local tile = fd and fd.tile or MC.BlockFace( id, f, orient )
+				local quadLightEmission = fd and fd.lightEmission or 0
+				local u0, v0, u1, v1
+				if fd and fd.uv then
+					u0, v0, u1, v1 = tileUVRect( tile, fd.uv )
+				end
+				local c1x, c1y, c1z = boxFaceCornerValues( box, f, 1 )
+				local c2x, c2y, c2z = boxFaceCornerValues( box, f, 2 )
+				local c3x, c3y, c3z = boxFaceCornerValues( box, f, 3 )
+				local c4x, c4y, c4z = boxFaceCornerValues( box, f, 4 )
+				local rec = {
+					box = box,
+					faceIndex = f,
+					normal = face.n,
+					shade = face.sh,
+					quadLightEmission = quadLightEmission,
+					faceCubic = quadFaceCubic( f, id, orient, c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z ),
+					c1x = c1x, c1y = c1y, c1z = c1z,
+					c2x = c2x, c2y = c2y, c2z = c2z,
+					c3x = c3x, c3y = c3y, c3z = c3z,
+					c4x = c4x, c4y = c4y, c4z = c4z,
+				}
+				for t = 1, 6 do
+					local ci = tri[t]
+					local cx, cy, cz = shapeCornerValuesByIndex( ci, c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z )
+					local u, v
+					if fd and fd.uv then
+						local flags = BOX_UV_FLAGS[ci]
+						local uf, vf = rotatedUVFlags( flags[1], flags[2], fd.rot or 0 )
+						u, v = uf == 1 and u1 or u0, vf == 1 and v1 or v0
+					else
+						local cu, cv = cornerUV16Raw( f, cx, cy, cz )
+						u, v = tileUVPointRaw( tile, cu, cv )
+					end
+					setTemplateTriVertex( rec, t, ci, cx, cy, cz, u, v )
+				end
+				local n = out.n + 1
+				out.n = n
+				out[n] = rec
+			end
+		end
+	end
+	return out
+end
+
+local function getShapeTemplate( b, id, orient, blockBoxes )
+	local bucket = templateBucket( ShapeModelTemplateCache.shape, id )
+	local cached = bucket[orient]
+	if cached ~= nil then return cached ~= false and cached or nil end
+	cached = buildShapeTemplate( b, id, orient, blockBoxes )
+	bucket[orient] = cached or false
+	return cached ~= false and cached or nil
+end
+
+local function templateColorForCorner( ci, color1, color2, color3, color4 )
+	if ci == 1 then return color1 end
+	if ci == 2 then return color2 end
+	if ci == 3 then return color3 end
+	return color4
+end
+
+local function emitTemplateTriVertex( push, lightMetaValues, quad, id, bx, by, bz, wx, wy, wz, emission, ci, x, y, z, u, v, color1, color2, color3, color4 )
+	push( {
+		pos    = Vector( wx + x * C.BS, wy + y * C.BS, wz + z * C.BS ),
+		normal = quad.normal,
+		u      = u,
+		v      = v,
+		color  = templateColorForCorner( ci, color1, color2, color3, color4 ),
+	}, lightMetaValues( quad.shade, bx, by, bz, id, quad.faceIndex, x, y, z, emission, nil, quad.faceCubic, quad.quadLightEmission ) )
+end
+
+local function emitTemplateQuadVertices( push, lightMetaValues, quad, id, bx, by, bz, wx, wy, wz, emission, color1, color2, color3, color4 )
+	emitTemplateTriVertex( push, lightMetaValues, quad, id, bx, by, bz, wx, wy, wz, emission, quad.t1ci, quad.t1x, quad.t1y, quad.t1z, quad.t1u, quad.t1v, color1, color2, color3, color4 )
+	emitTemplateTriVertex( push, lightMetaValues, quad, id, bx, by, bz, wx, wy, wz, emission, quad.t2ci, quad.t2x, quad.t2y, quad.t2z, quad.t2u, quad.t2v, color1, color2, color3, color4 )
+	emitTemplateTriVertex( push, lightMetaValues, quad, id, bx, by, bz, wx, wy, wz, emission, quad.t3ci, quad.t3x, quad.t3y, quad.t3z, quad.t3u, quad.t3v, color1, color2, color3, color4 )
+	emitTemplateTriVertex( push, lightMetaValues, quad, id, bx, by, bz, wx, wy, wz, emission, quad.t4ci, quad.t4x, quad.t4y, quad.t4z, quad.t4u, quad.t4v, color1, color2, color3, color4 )
+	emitTemplateTriVertex( push, lightMetaValues, quad, id, bx, by, bz, wx, wy, wz, emission, quad.t5ci, quad.t5x, quad.t5y, quad.t5z, quad.t5u, quad.t5v, color1, color2, color3, color4 )
+	emitTemplateTriVertex( push, lightMetaValues, quad, id, bx, by, bz, wx, wy, wz, emission, quad.t6ci, quad.t6x, quad.t6y, quad.t6z, quad.t6u, quad.t6v, color1, color2, color3, color4 )
+end
+
+local function emitModelBlockTemplate( template, b, bx, by, bz, wx, wy, wz, push, lightMetaValues, currentEmitLightStyle )
+	local emission = MC.BlockLightEmission and MC.BlockLightEmission( b.id ) or 0
+	local emitLightStyle = currentEmitLightStyle()
+	for qi = 1, template.n do
+		local quad = template[qi]
+		local color1, color2, color3, color4 = quadCornerColorValues(
+			quad.shade, bx, by, bz, b.id, quad.faceIndex, emission, emitLightStyle,
+			quad.c1x, quad.c1y, quad.c1z, quad.c2x, quad.c2y, quad.c2z, quad.c3x, quad.c3y, quad.c3z, quad.c4x, quad.c4y, quad.c4z
+		)
+		emitTemplateQuadVertices( push, lightMetaValues, quad, b.id, bx, by, bz, wx, wy, wz, emission, color1, color2, color3, color4 )
+	end
+	return true
+end
+
+local function emitShapeBlockTemplate( template, id, bx, by, bz, wx, wy, wz, lx, ly, lz, push, lightMetaValues, shapeFaceCoveredAt, currentEmitLightStyle )
+	local boxes = template.boxes
+	local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
+	local emitLightStyle = currentEmitLightStyle()
+	for faceI = 1, template.n do
+		local quad = template[faceI]
+		local f = quad.faceIndex
+		if not shapeFaceCoveredAt( id, quad.box, f, boxes, bx, by, bz, lx, ly, lz ) then
+			local color1, color2, color3, color4 = quadCornerColorValues(
+				quad.shade, bx, by, bz, id, f, emission, emitLightStyle,
+				quad.c1x, quad.c1y, quad.c1z, quad.c2x, quad.c2y, quad.c2z, quad.c3x, quad.c3y, quad.c3z, quad.c4x, quad.c4y, quad.c4z
+			)
+			emitTemplateQuadVertices( push, lightMetaValues, quad, id, bx, by, bz, wx, wy, wz, emission, color1, color2, color3, color4 )
+		end
+	end
+	return true
+end
+
 local function emitQuad( ctx, cur, push, lightMeta, currentEmitLightStyle, corners, normal, color, tile, bx, by, bz, id, faceIndex )
 	local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
 	local emitLightStyle = currentEmitLightStyle()
@@ -103,48 +337,9 @@ function RM.EmitCrossBlock( ctx, id, bx, by, bz, wx, wy, wz, push, lightMeta, cu
 end
 
 function RM.EmitModelBlock( ctx, b, orient, bx, by, bz, wx, wy, wz, push, lightMeta, currentEmitLightStyle )
-	local quads = rotatedModelQuads( b, orient )
-	if not quads then return false end
-	local mirrorU = b.orient == "door"
-	local emission = MC.BlockLightEmission and MC.BlockLightEmission( b.id ) or 0
-	for _, quad in ipairs( quads ) do
-		local faceIndex = quad.face or MC.Face.TOP
-		local face = C.FACES[faceIndex] or C.FACES[MC.Face.TOP]
-		local u0, v0, u1, v1 = tileUVRect( quad.tile or 0, quad.uv )
-		local quadLightEmission = quad.lightEmission or 0
-		local emitLightStyle = currentEmitLightStyle()
-		local v1x, v1y, v1z = cornerXYZ( quad.verts[1] )
-		local v2x, v2y, v2z = cornerXYZ( quad.verts[2] )
-		local v3x, v3y, v3z = cornerXYZ( quad.verts[3] )
-		local v4x, v4y, v4z = cornerXYZ( quad.verts[4] )
-		local faceCubic = quadFaceCubic( faceIndex, b.id, orient, v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z, v4x, v4y, v4z )
-		local color1, color2, color3, color4 = quadCornerColors( face.sh, bx, by, bz, b.id, faceIndex, quad.verts, emission, emitLightStyle )
-		local tri = C.TRI
-		for t = 1, 6 do
-			local ci = tri[t]
-			local vert = quad.verts[ci]
-			local uf, vf = rotatedUVFlags( vert.u or 0, vert.v or 0, quad.rot or 0 )
-			if mirrorU then uf = 1 - uf end
-			local vertColor
-			if ci == 1 then
-				vertColor = color1
-			elseif ci == 2 then
-				vertColor = color2
-			elseif ci == 3 then
-				vertColor = color3
-			else
-				vertColor = color4
-			end
-			push( {
-				pos    = Vector( wx + vert.x * C.BS, wy + vert.y * C.BS, wz + vert.z * C.BS ),
-				normal = face.n,
-				u      = uf == 1 and u1 or u0,
-				v      = vf == 1 and v1 or v0,
-				color  = vertColor,
-			}, lightMeta( face.sh, bx, by, bz, b.id, faceIndex, vert, emission, nil, faceCubic, quadLightEmission ) )
-		end
-	end
-	return true
+	local template = getModelTemplate( b, orient )
+	if not template then return false end
+	return emitModelBlockTemplate( template, b, bx, by, bz, wx, wy, wz, push, ctx.lightMetaValues or lightMeta, currentEmitLightStyle )
 end
 
 local function emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle, verts, normal, shade, tile, bx, by, bz, id, faceIndex, lightCorners, uvCorners )
@@ -516,52 +711,60 @@ function RM.EmitBlock( ctx, li, id )
 			-- only the centre post (box 1) may take static face data
 			prepareBlockCacheBuffer( targetBuffer )
 			local isPipe6Shape = b and b.connection == "pipe6"
-			local isConnShape = ( MC.IsFenceBlock and MC.IsFenceBlock( id ) ) or ( MC.IsPaneBlock and MC.IsPaneBlock( id ) ) or ( MC.IsWallBlock and MC.IsWallBlock( id ) ) or isPipe6Shape
-			local boxes = blockBoxes and blockBoxes( id, orient, bx, by, bz ) or nil
-			local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
-			for boxIndex, box in ipairs( boxes or {} ) do
-				for f = 1, 6 do
-					repeat
-						if shapeFaceCoveredAt( id, box, f, boxes, bx, by, bz, lx, ly, lz ) then break end
-						local face = C.FACES[f]
-						local modelFaces = b and b.boxFaces
-						if isPipe6Shape then modelFaces = nil end
-						local fd = modelFaces and modelFaces[boxIndex] and modelFaces[boxIndex][f]
-						if isConnShape and boxIndex > 1 then fd = nil end
-						local dynamicFd = dynamicShapeFaceData( b, f, box )
-						if modelFaces and not fd and not dynamicFd then break end
-						fd = fd or dynamicFd
-						local tile = fd and fd.tile or MC.BlockFace( id, f, orient )
-						local quadLightEmission = fd and fd.lightEmission or 0
-						local u0, v0, u1, v1
-						if fd and fd.uv then
-							u0, v0, u1, v1 = tileUVRect( tile, fd.uv )
-						end
-						local nrm, col = face.n, face.sh
-						local c1x, c1y, c1z = boxFaceCornerValues( box, f, 1 )
-						local c2x, c2y, c2z = boxFaceCornerValues( box, f, 2 )
-						local c3x, c3y, c3z = boxFaceCornerValues( box, f, 3 )
-						local c4x, c4y, c4z = boxFaceCornerValues( box, f, 4 )
-						local emitLightStyle = currentEmitLightStyle()
-						local faceCubic = quadFaceCubic( f, id, orient, c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z )
-						local color1, color2, color3, color4 = quadCornerColorValues(
-							col, bx, by, bz, id, f, emission, emitLightStyle,
-							c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z
-						)
-						local tri = C.TRI
-						for t = 1, 6 do
-							local ci = tri[t]
-							local cx, cy, cz, color = shapeTriCornerValues( ci, c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z, color1, color2, color3, color4 )
-							local u, v = shapeTriUV( fd, ci, f, cx, cy, cz, tile, u0, v0, u1, v1 )
-							push( {
-								pos    = Vector( wx + cx * C.BS, wy + cy * C.BS, wz + cz * C.BS ),
-								normal = nrm,
-								u      = u,
-								v      = v,
-								color  = color,
-							}, lightMetaValues( col, bx, by, bz, id, f, cx, cy, cz, emission, nil, faceCubic, quadLightEmission ) )
-						end
-					until true
+			local isConnShape = isConnectionShapeBlock( b, id )
+			local template
+			if not isConnShape then
+				template = getShapeTemplate( b, id, orient, blockBoxes )
+			end
+			if template then
+				emitShapeBlockTemplate( template, id, bx, by, bz, wx, wy, wz, lx, ly, lz, push, lightMetaValues, shapeFaceCoveredAt, currentEmitLightStyle )
+			else
+				local boxes = blockBoxes and blockBoxes( id, orient, bx, by, bz ) or nil
+				local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
+				for boxIndex, box in ipairs( boxes or {} ) do
+					for f = 1, 6 do
+						repeat
+							if shapeFaceCoveredAt( id, box, f, boxes, bx, by, bz, lx, ly, lz ) then break end
+							local face = C.FACES[f]
+							local modelFaces = b and b.boxFaces
+							if isPipe6Shape then modelFaces = nil end
+							local fd = modelFaces and modelFaces[boxIndex] and modelFaces[boxIndex][f]
+							if isConnShape and boxIndex > 1 then fd = nil end
+							local dynamicFd = dynamicShapeFaceData( b, f, box )
+							if modelFaces and not fd and not dynamicFd then break end
+							fd = fd or dynamicFd
+							local tile = fd and fd.tile or MC.BlockFace( id, f, orient )
+							local quadLightEmission = fd and fd.lightEmission or 0
+							local u0, v0, u1, v1
+							if fd and fd.uv then
+								u0, v0, u1, v1 = tileUVRect( tile, fd.uv )
+							end
+							local nrm, col = face.n, face.sh
+							local c1x, c1y, c1z = boxFaceCornerValues( box, f, 1 )
+							local c2x, c2y, c2z = boxFaceCornerValues( box, f, 2 )
+							local c3x, c3y, c3z = boxFaceCornerValues( box, f, 3 )
+							local c4x, c4y, c4z = boxFaceCornerValues( box, f, 4 )
+							local emitLightStyle = currentEmitLightStyle()
+							local faceCubic = quadFaceCubic( f, id, orient, c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z )
+							local color1, color2, color3, color4 = quadCornerColorValues(
+								col, bx, by, bz, id, f, emission, emitLightStyle,
+								c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z
+							)
+							local tri = C.TRI
+							for t = 1, 6 do
+								local ci = tri[t]
+								local cx, cy, cz, color = shapeTriCornerValues( ci, c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z, color1, color2, color3, color4 )
+								local u, v = shapeTriUV( fd, ci, f, cx, cy, cz, tile, u0, v0, u1, v1 )
+								push( {
+									pos    = Vector( wx + cx * C.BS, wy + cy * C.BS, wz + cz * C.BS ),
+									normal = nrm,
+									u      = u,
+									v      = v,
+									color  = color,
+								}, lightMetaValues( col, bx, by, bz, id, f, cx, cy, cz, emission, nil, faceCubic, quadLightEmission ) )
+							end
+						until true
+					end
 				end
 			end
 		end
