@@ -116,6 +116,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	local meshGpuPayloadMaterial = meshLightProfile and meshLightProfile.gpuPayloadMaterial
 	if type( meshGpuPayloadMaterial ) == "function" then meshGpuPayloadMaterial = meshGpuPayloadMaterial( meshLightProfile ) end
 	local meshGpuPayloadStyle = meshLightProfile and meshLightProfile.gpuPayloadStyle
+	if type( meshGpuPayloadStyle ) == "function" then meshGpuPayloadStyle = meshGpuPayloadStyle( meshLightProfile, meshGpuPayloadMaterial ) end
 	local sectionNeedsRecolor = sectionIndex and MC.MeshLightDirty[key] and MC.MeshLightDirty[key][sectionIndex]
 	local blockLightDirtySection = sectionNeedsRecolor and MC.GetBlockLightDirtySection and MC.GetBlockLightDirtySection( key, sectionIndex ) or nil
 	local sectionNeedsFullRecolor = sectionNeedsRecolor and not blockLightDirtySection
