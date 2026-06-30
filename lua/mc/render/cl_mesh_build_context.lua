@@ -17,10 +17,105 @@ local meshPerfAdd = RM.meshPerfAdd
 local meshPerfMS = RM.meshPerfMS
 local setMeshSampleCacheOrigin = RM.setMeshSampleCacheOrigin
 local ensureChunkRenderSectionIndex = RM.ensureChunkRenderSectionIndex
-local MC_LIGHT_STYLE_SHADER = RM.MC_LIGHT_STYLE_SHADER
-local MC_LIGHT_STYLE_GPU_SHADER = RM.MC_LIGHT_STYLE_GPU_SHADER
 
-function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, meshLightStyle, buildStart )
+local function makeLightMeta( shade, shadeIndex, bx, by, bz, id, faceIndex, li, cx, cy, cz, selfEmission, faceCubic, quadLightEmission )
+	return {
+		shade = shade,
+		shadeIndex = shadeIndex,
+		bx = bx,
+		by = by,
+		bz = bz,
+		id = id,
+		faceIndex = faceIndex,
+		li = li,
+		cx = cx,
+		cy = cy,
+		cz = cz,
+		selfEmission = selfEmission,
+		quadLightEmission = clampLightLevel( quadLightEmission ),
+		faceCubic = faceCubic ~= false,
+	}
+end
+
+local function newLightMetaFactory( localIndexForBlockCoords )
+	local function fromCorner( shade, bx, by, bz, id, faceIndex, corner, selfEmission, unusedQuad, faceCubic, quadLightEmission )
+		local cx, cy, cz = cornerXYZ( corner )
+		if faceCubic == nil then
+			faceCubic = not unusedQuad or unusedQuad.faceCubic ~= false
+		end
+		return makeLightMeta(
+			shade,
+			shadeRecolorIndex( shade ),
+			bx,
+			by,
+			bz,
+			id,
+			faceIndex,
+			localIndexForBlockCoords( bx, by, bz ),
+			cx,
+			cy,
+			cz,
+			selfEmission,
+			faceCubic,
+			quadLightEmission
+		)
+	end
+
+	local function fromValues( shade, bx, by, bz, id, faceIndex, cx, cy, cz, selfEmission, unusedQuad, faceCubic, quadLightEmission )
+		if faceCubic == nil then
+			faceCubic = not unusedQuad or unusedQuad.faceCubic ~= false
+		end
+		return makeLightMeta(
+			shade,
+			shadeRecolorIndex( shade ),
+			bx,
+			by,
+			bz,
+			id,
+			faceIndex,
+			localIndexForBlockCoords( bx, by, bz ),
+			cx,
+			cy,
+			cz,
+			selfEmission,
+			faceCubic,
+			quadLightEmission
+		)
+	end
+
+	local function fast( shadeIndex, bx, by, bz, id, faceIndex, li, cx, cy, cz, selfEmission, faceCubic, quadLightEmission )
+		return makeLightMeta(
+			nil,
+			shadeIndex,
+			bx,
+			by,
+			bz,
+			id,
+			faceIndex,
+			li,
+			cx,
+			cy,
+			cz,
+			selfEmission,
+			faceCubic,
+			quadLightEmission
+		)
+	end
+
+	return {
+		fromCorner = fromCorner,
+		fromValues = fromValues,
+		fast = fast,
+	}
+end
+
+RM.newLightMetaFactory = newLightMetaFactory
+
+function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, meshLightStyle, buildStart, meshLightProfile )
+	meshLightProfile = meshLightProfile or RM.GetLightProfile and RM.GetLightProfile( meshLightStyle ) or nil
+	local meshGpuPayloadMaterial = meshLightProfile and meshLightProfile.gpuPayloadMaterial
+	if type( meshGpuPayloadMaterial ) == "function" then meshGpuPayloadMaterial = meshGpuPayloadMaterial( meshLightProfile ) end
+	local meshGpuPayloadStyle = meshLightProfile and meshLightProfile.gpuPayloadStyle
 	local sectionNeedsRecolor = sectionIndex and MC.MeshLightDirty[key] and MC.MeshLightDirty[key][sectionIndex]
 	local blockLightDirtySection = sectionNeedsRecolor and MC.GetBlockLightDirtySection and MC.GetBlockLightDirtySection( key, sectionIndex ) or nil
 	local sectionNeedsFullRecolor = sectionNeedsRecolor and not blockLightDirtySection
@@ -44,8 +139,8 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	local cur
 
 	local function styleForBuffer( buf )
-		if meshLightStyle == MC_LIGHT_STYLE_SHADER and buf and MC.MaterialGpuOpaque and buf.material == MC.MaterialGpuOpaque then
-			return MC_LIGHT_STYLE_GPU_SHADER
+		if meshGpuPayloadStyle and meshGpuPayloadMaterial and buf and buf.material == meshGpuPayloadMaterial then
+			return meshGpuPayloadStyle
 		end
 		return meshLightStyle
 	end
@@ -63,6 +158,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		if lx < 0 or lx >= C.CS or ly < 0 or ly >= C.CS or lz < 0 or lz >= C.CH then return nil end
 		return localIndex( lx, ly, lz )
 	end
+	local lightMetaFactory = newLightMetaFactory( localIndexForBlockCoords )
 
 	local function inCurrentChunk( lx, ly, lz )
 		return lx >= 0 and lx < C.CS and ly >= 0 and ly < C.CS and lz >= 0 and lz < C.CH
@@ -95,8 +191,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		return false
 	end
 
-	local function shapeFaceCoveredAt( curId, box, faceIndex, boxes, bx, by, bz, lx, ly, lz )
-		if boxes and #boxes > 1 and coveredByBoxes( box, faceIndex, boxes, 0, 0, 0 ) then return true end
+	local function shapeFaceNeighborCoveredAt( curId, box, faceIndex, bx, by, bz, lx, ly, lz )
 		local plane = facePlane( box, faceIndex )
 		local off = C.FACES[faceIndex].off
 		if ( faceIndex == MC.Face.TOP and math.abs( plane - 1 ) > EPS )
@@ -119,12 +214,17 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		return coveredByBoxes( box, faceIndex, blockBoxes and blockBoxes( nb, nbOrient, nbx, nby, nbz ) or nil, off[1], off[2], off[3] )
 	end
 
+	local function shapeFaceCoveredAt( curId, box, faceIndex, boxes, bx, by, bz, lx, ly, lz )
+		if boxes and #boxes > 1 and coveredByBoxes( box, faceIndex, boxes, 0, 0, 0 ) then return true end
+		return shapeFaceNeighborCoveredAt( curId, box, faceIndex, bx, by, bz, lx, ly, lz )
+	end
+
 	local function newMeshBuffer( material, translucent )
-		return { list = {}, records = {}, verts = {}, light = {}, nv = 0, material = material, translucent = translucent == true }
+		return { list = {}, records = {}, verts = {}, light = {}, nv = 0, hasSecondaryUV = false, material = material, translucent = translucent == true }
 	end
 
 	local function newBlockCacheBuffer( targetBuffer )
-		return { verts = {}, light = {}, nv = 0, material = targetBuffer.material, translucent = targetBuffer.translucent == true, cacheOnly = true }
+		return { verts = {}, light = {}, nv = 0, hasSecondaryUV = false, material = targetBuffer.material, translucent = targetBuffer.translucent == true, cacheOnly = true }
 	end
 
 	local function prepareBlockCacheBuffer( targetBuffer )
@@ -172,7 +272,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		local meshNewStart = SysTime()
 		local m = Mesh( buf.material )
 		meshPerfAdd( meshPerf, "meshNewMS", meshNewStart )
-		uploadMeshVertices( m, buf.verts, meshPerf )
+		uploadMeshVertices( m, buf.verts, meshPerf, buf.hasSecondaryUV )
 		buf.list[#buf.list + 1] = { mesh = m, material = buf.material }
 		buf.records[#buf.records + 1] = {
 			mesh = m,
@@ -181,6 +281,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			lightByLi = buildLightIndexByLi( buf.light, vertexCount ),
 			material = buf.material,
 			vertexCount = vertexCount,
+			hasSecondaryUV = buf.hasSecondaryUV == true,
 		}
 		meshPerf.vertices = meshPerf.vertices + vertexCount
 		meshPerf.faces = meshPerf.faces + math.floor( vertexCount / 6 )
@@ -193,6 +294,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		buf.verts = {}
 		buf.light = {}
 		buf.nv = 0
+		buf.hasSecondaryUV = false
 	end
 
 	local function push( vert, light )
@@ -200,77 +302,11 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		cur.nv = nv
 		cur.verts[nv] = vert
 		cur.light[nv] = light
+		if vert and ( vert.u1 ~= nil or vert.v1 ~= nil ) then cur.hasSecondaryUV = true end
 		if not cur.cacheOnly then
 			meshPerf.pushedVertices = ( meshPerf.pushedVertices or 0 ) + 1
 			if nv >= C.VERT_LIMIT then flush( cur ) end
 		end
-	end
-
-	local function lightMeta( shade, bx, by, bz, id, faceIndex, corner, selfEmission, unusedQuad, faceCubic, quadLightEmission )
-		local cx, cy, cz = cornerXYZ( corner )
-		local shadeIndex = shadeRecolorIndex( shade )
-		quadLightEmission = clampLightLevel( quadLightEmission )
-		if faceCubic == nil then
-			faceCubic = not unusedQuad or unusedQuad.faceCubic ~= false
-		end
-		return {
-			shade = shade,
-			shadeIndex = shadeIndex,
-			bx = bx,
-			by = by,
-			bz = bz,
-			id = id,
-			faceIndex = faceIndex,
-			li = localIndexForBlockCoords( bx, by, bz ),
-			cx = cx,
-			cy = cy,
-			cz = cz,
-			selfEmission = selfEmission,
-			quadLightEmission = quadLightEmission,
-			faceCubic = faceCubic ~= false,
-		}
-	end
-
-	local function lightMetaValues( shade, bx, by, bz, id, faceIndex, cx, cy, cz, selfEmission, unusedQuad, faceCubic, quadLightEmission )
-		local shadeIndex = shadeRecolorIndex( shade )
-		quadLightEmission = clampLightLevel( quadLightEmission )
-		if faceCubic == nil then
-			faceCubic = not unusedQuad or unusedQuad.faceCubic ~= false
-		end
-		return {
-			shade = shade,
-			shadeIndex = shadeIndex,
-			bx = bx,
-			by = by,
-			bz = bz,
-			id = id,
-			faceIndex = faceIndex,
-			li = localIndexForBlockCoords( bx, by, bz ),
-			cx = cx,
-			cy = cy,
-			cz = cz,
-			selfEmission = selfEmission,
-			quadLightEmission = quadLightEmission,
-			faceCubic = faceCubic ~= false,
-		}
-	end
-
-	local function lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, cx, cy, cz, selfEmission, faceCubic, quadLightEmission )
-		return {
-			shadeIndex = shadeIndex,
-			bx = bx,
-			by = by,
-			bz = bz,
-			id = id,
-			faceIndex = faceIndex,
-			li = li,
-			cx = cx,
-			cy = cy,
-			cz = cz,
-			selfEmission = selfEmission,
-			quadLightEmission = clampLightLevel( quadLightEmission ),
-			faceCubic = faceCubic ~= false,
-		}
 	end
 
 	local function appendMeshList( out, list )
@@ -315,6 +351,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		meshPerf = meshPerf,
 		meshProbe = meshProbe,
 		meshLightStyle = meshLightStyle,
+		meshLightProfile = meshLightProfile,
 		sectionNeedsRecolor = sectionNeedsRecolor,
 		blockLightDirtySection = blockLightDirtySection,
 		sectionNeedsFullRecolor = sectionNeedsFullRecolor,
@@ -338,12 +375,14 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	ctx.orientAt = orientAt
 	ctx.visibleAt = visibleAt
 	ctx.shapeFaceCoveredAt = shapeFaceCoveredAt
+	ctx.shapeFaceNeighborCoveredAt = shapeFaceNeighborCoveredAt
 	ctx.buffersForLocal = buffersForLocal
 	ctx.flush = flush
 	ctx.push = push
-	ctx.lightMeta = lightMeta
-	ctx.lightMetaValues = lightMetaValues
-	ctx.lightMetaFast = lightMetaFast
+	ctx.lightMetaFactory = lightMetaFactory
+	ctx.lightMeta = lightMetaFactory.fromCorner
+	ctx.lightMetaValues = lightMetaFactory.fromValues
+	ctx.lightMetaFast = lightMetaFactory.fast
 	ctx.flushSectionBuffers = flushSectionBuffers
 	function ctx.prepareBlockCacheBuffer( targetBuffer )
 		local ok = prepareBlockCacheBuffer( targetBuffer )

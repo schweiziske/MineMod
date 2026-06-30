@@ -1883,6 +1883,226 @@ local function pipe6Boxes( bx, by, bz )
 	return boxes
 end
 
+local CONNECTION_YN, CONNECTION_YP = 1, 2
+local CONNECTION_XN, CONNECTION_XP = 4, 8
+local CONNECTION_ZN, CONNECTION_ZP = 16, 32
+
+MC.ConnectionMaskBits = MC.ConnectionMaskBits or {
+	yn = CONNECTION_YN,
+	yp = CONNECTION_YP,
+	xn = CONNECTION_XN,
+	xp = CONNECTION_XP,
+	zn = CONNECTION_ZN,
+	zp = CONNECTION_ZP,
+}
+
+local function maskHas( mask, flag )
+	return math.floor( ( tonumber( mask ) or 0 ) / flag ) % 2 == 1
+end
+
+local ConnectionMaskCache = {
+	fence = {},
+	pane = {},
+	wall = {},
+	pipe6 = {},
+}
+
+local function normalizeConnectionKind( kind )
+	if kind == "bars" then return "pane" end
+	return kind
+end
+
+local function computeBlockConnectionMask( kind, bx, by, bz )
+	if bx == nil or by == nil or bz == nil then return 0 end
+	local mask = 0
+	if kind == "fence" then
+		if fenceConnectsToCell( bx, by - 1, bz ) then mask = mask + CONNECTION_YN end
+		if fenceConnectsToCell( bx, by + 1, bz ) then mask = mask + CONNECTION_YP end
+		if fenceConnectsToCell( bx - 1, by, bz ) then mask = mask + CONNECTION_XN end
+		if fenceConnectsToCell( bx + 1, by, bz ) then mask = mask + CONNECTION_XP end
+	elseif kind == "pane" or kind == "bars" then
+		if paneConnectsToCell( bx, by - 1, bz ) then mask = mask + CONNECTION_YN end
+		if paneConnectsToCell( bx, by + 1, bz ) then mask = mask + CONNECTION_YP end
+		if paneConnectsToCell( bx - 1, by, bz ) then mask = mask + CONNECTION_XN end
+		if paneConnectsToCell( bx + 1, by, bz ) then mask = mask + CONNECTION_XP end
+	elseif kind == "wall" then
+		if wallConnectsToCell( bx, by - 1, bz ) then mask = mask + CONNECTION_YN end
+		if wallConnectsToCell( bx, by + 1, bz ) then mask = mask + CONNECTION_YP end
+		if wallConnectsToCell( bx - 1, by, bz ) then mask = mask + CONNECTION_XN end
+		if wallConnectsToCell( bx + 1, by, bz ) then mask = mask + CONNECTION_XP end
+	elseif kind == "pipe6" then
+		if pipe6ConnectsToCell( bx, by - 1, bz, MC.Direction.NORTH ) then mask = mask + CONNECTION_YN end
+		if pipe6ConnectsToCell( bx, by + 1, bz, MC.Direction.SOUTH ) then mask = mask + CONNECTION_YP end
+		if pipe6ConnectsToCell( bx - 1, by, bz, MC.Direction.WEST ) then mask = mask + CONNECTION_XN end
+		if pipe6ConnectsToCell( bx + 1, by, bz, MC.Direction.EAST ) then mask = mask + CONNECTION_XP end
+		if pipe6ConnectsToCell( bx, by, bz - 1, MC.Direction.DOWN ) then mask = mask + CONNECTION_ZN end
+		if pipe6ConnectsToCell( bx, by, bz + 1, MC.Direction.UP ) then mask = mask + CONNECTION_ZP end
+	end
+	return mask
+end
+
+function MC.BlockConnectionMask( kind, bx, by, bz )
+	kind = normalizeConnectionKind( kind )
+	if bx == nil or by == nil or bz == nil then return 0 end
+	local bucket = ConnectionMaskCache[kind]
+	if not bucket then return computeBlockConnectionMask( kind, bx, by, bz ) end
+	local xBucket = bucket[bx]
+	if not xBucket then
+		xBucket = {}
+		bucket[bx] = xBucket
+	end
+	local yBucket = xBucket[by]
+	if not yBucket then
+		yBucket = {}
+		xBucket[by] = yBucket
+	end
+	local cached = yBucket[bz]
+	if cached ~= nil then return cached end
+	cached = computeBlockConnectionMask( kind, bx, by, bz )
+	yBucket[bz] = cached
+	return cached
+end
+
+function MC.ClearBlockConnectionMaskCache( bx, by, bz )
+	if bx == nil or by == nil or bz == nil then return end
+	for _, bucket in pairs( ConnectionMaskCache ) do
+		local xBucket = bucket[bx]
+		local yBucket = xBucket and xBucket[by]
+		if yBucket then yBucket[bz] = nil end
+	end
+end
+
+local ConnectionBoxesCache = {
+	fence = {},
+	pane = {},
+	wall = {},
+	pipe6 = {},
+}
+
+local function buildFenceBoxesForMask( mask )
+	local boxes = {
+		{ 0.375, 0.375, 0, 0.625, 0.625, 1, part = "post" },
+	}
+	if maskHas( mask, CONNECTION_YN ) then
+		boxes[#boxes + 1] = { 0.4375, 0, 0.375, 0.5625, 0.5625, 0.5625, part = "arm", dir = "yn" }
+		boxes[#boxes + 1] = { 0.4375, 0, 0.75, 0.5625, 0.5625, 0.9375, part = "arm", dir = "yn" }
+	end
+	if maskHas( mask, CONNECTION_YP ) then
+		boxes[#boxes + 1] = { 0.4375, 0.4375, 0.375, 0.5625, 1, 0.5625, part = "arm", dir = "yp" }
+		boxes[#boxes + 1] = { 0.4375, 0.4375, 0.75, 0.5625, 1, 0.9375, part = "arm", dir = "yp" }
+	end
+	if maskHas( mask, CONNECTION_XN ) then
+		boxes[#boxes + 1] = { 0, 0.4375, 0.375, 0.5625, 0.5625, 0.5625, part = "arm", dir = "xn" }
+		boxes[#boxes + 1] = { 0, 0.4375, 0.75, 0.5625, 0.5625, 0.9375, part = "arm", dir = "xn" }
+	end
+	if maskHas( mask, CONNECTION_XP ) then
+		boxes[#boxes + 1] = { 0.4375, 0.4375, 0.375, 1, 0.5625, 0.5625, part = "arm", dir = "xp" }
+		boxes[#boxes + 1] = { 0.4375, 0.4375, 0.75, 1, 0.5625, 0.9375, part = "arm", dir = "xp" }
+	end
+	return boxes
+end
+
+local function buildPaneBoxesForMask( mask )
+	local boxes = {
+		{ 0.4375, 0.4375, 0, 0.5625, 0.5625, 1, part = "post" },
+	}
+	if maskHas( mask, CONNECTION_YN ) then boxes[#boxes + 1] = { 0.4375, 0, 0, 0.5625, 0.4375, 1, part = "arm", dir = "yn" } end
+	if maskHas( mask, CONNECTION_YP ) then boxes[#boxes + 1] = { 0.4375, 0.5625, 0, 0.5625, 1, 1, part = "arm", dir = "yp" } end
+	if maskHas( mask, CONNECTION_XN ) then boxes[#boxes + 1] = { 0, 0.4375, 0, 0.4375, 0.5625, 1, part = "arm", dir = "xn" } end
+	if maskHas( mask, CONNECTION_XP ) then boxes[#boxes + 1] = { 0.5625, 0.4375, 0, 1, 0.5625, 1, part = "arm", dir = "xp" } end
+	return boxes
+end
+
+local function buildWallBoxesForMask( mask )
+	local boxes = {
+		{ 0.25, 0.25, 0, 0.75, 0.75, 1, part = "post" },
+	}
+	if maskHas( mask, CONNECTION_YN ) then boxes[#boxes + 1] = { 0.3125, 0, 0, 0.6875, 0.5, 0.875, part = "arm", dir = "yn" } end
+	if maskHas( mask, CONNECTION_YP ) then boxes[#boxes + 1] = { 0.3125, 0.5, 0, 0.6875, 1, 0.875, part = "arm", dir = "yp" } end
+	if maskHas( mask, CONNECTION_XN ) then boxes[#boxes + 1] = { 0, 0.3125, 0, 0.5, 0.6875, 0.875, part = "arm", dir = "xn" } end
+	if maskHas( mask, CONNECTION_XP ) then boxes[#boxes + 1] = { 0.5, 0.3125, 0, 1, 0.6875, 0.875, part = "arm", dir = "xp" } end
+	return boxes
+end
+
+local function buildPipe6BoxesForMask( mask )
+	local boxes = {
+		{ 0.25, 0.25, 0.25, 0.75, 0.75, 0.75, part = "core" },
+	}
+	if maskHas( mask, CONNECTION_YN ) then boxes[#boxes + 1] = { 0.25, 0, 0.25, 0.75, 0.25, 0.75, part = "arm", dir = "yn" } end
+	if maskHas( mask, CONNECTION_YP ) then boxes[#boxes + 1] = { 0.25, 0.75, 0.25, 0.75, 1, 0.75, part = "arm", dir = "yp" } end
+	if maskHas( mask, CONNECTION_XN ) then boxes[#boxes + 1] = { 0, 0.25, 0.25, 0.25, 0.75, 0.75, part = "arm", dir = "xn" } end
+	if maskHas( mask, CONNECTION_XP ) then boxes[#boxes + 1] = { 0.75, 0.25, 0.25, 1, 0.75, 0.75, part = "arm", dir = "xp" } end
+	if maskHas( mask, CONNECTION_ZN ) then boxes[#boxes + 1] = { 0.25, 0.25, 0, 0.75, 0.75, 0.25, part = "arm", dir = "zn" } end
+	if maskHas( mask, CONNECTION_ZP ) then boxes[#boxes + 1] = { 0.25, 0.25, 0.75, 0.75, 0.75, 1, part = "arm", dir = "zp" } end
+	return boxes
+end
+
+function MC.ConnectionBlockBoxes( kind, mask )
+	kind = normalizeConnectionKind( kind )
+	mask = math.floor( tonumber( mask ) or 0 )
+	local bucket = ConnectionBoxesCache[kind]
+	if not bucket then return nil end
+	local cached = bucket[mask]
+	if cached then return cached end
+	if kind == "fence" then cached = buildFenceBoxesForMask( mask )
+	elseif kind == "pane" then cached = buildPaneBoxesForMask( mask )
+	elseif kind == "wall" then cached = buildWallBoxesForMask( mask )
+	elseif kind == "pipe6" then cached = buildPipe6BoxesForMask( mask ) end
+	bucket[mask] = cached
+	return cached
+end
+
+local ConnectionCollisionBoxesCache = {
+	fence = {},
+	pane = {},
+	wall = {},
+}
+
+local function buildFenceCollisionBoxesForMask( mask )
+	local yn, yp = maskHas( mask, CONNECTION_YN ), maskHas( mask, CONNECTION_YP )
+	local xn, xp = maskHas( mask, CONNECTION_XN ), maskHas( mask, CONNECTION_XP )
+	local boxes = {}
+	if yn or yp then boxes[#boxes + 1] = { 0.375, yn and 0 or 0.375, 0, 0.625, yp and 1 or 0.625, 1 } end
+	if xn or xp then boxes[#boxes + 1] = { xn and 0 or 0.375, 0.375, 0, xp and 1 or 0.625, 0.625, 1 } end
+	if #boxes == 0 then boxes[1] = { 0.375, 0.375, 0, 0.625, 0.625, 1 } end
+	return boxes
+end
+
+local function buildPaneCollisionBoxesForMask( mask )
+	local yn, yp = maskHas( mask, CONNECTION_YN ), maskHas( mask, CONNECTION_YP )
+	local xn, xp = maskHas( mask, CONNECTION_XN ), maskHas( mask, CONNECTION_XP )
+	local boxes = {}
+	if yn or yp then boxes[#boxes + 1] = { 0.4375, yn and 0 or 0.4375, 0, 0.5625, yp and 1 or 0.5625, 1 } end
+	if xn or xp then boxes[#boxes + 1] = { xn and 0 or 0.4375, 0.4375, 0, xp and 1 or 0.5625, 0.5625, 1 } end
+	if #boxes == 0 then boxes[1] = { 0.4375, 0.4375, 0, 0.5625, 0.5625, 1 } end
+	return boxes
+end
+
+local function buildWallCollisionBoxesForMask( mask )
+	local yn, yp = maskHas( mask, CONNECTION_YN ), maskHas( mask, CONNECTION_YP )
+	local xn, xp = maskHas( mask, CONNECTION_XN ), maskHas( mask, CONNECTION_XP )
+	local boxes = {
+		{ 0.25, 0.25, 0, 0.75, 0.75, 1 },
+	}
+	if yn or yp then boxes[#boxes + 1] = { 0.3125, yn and 0 or 0.25, 0, 0.6875, yp and 1 or 0.75, 0.875 } end
+	if xn or xp then boxes[#boxes + 1] = { xn and 0 or 0.25, 0.3125, 0, xp and 1 or 0.75, 0.6875, 0.875 } end
+	return boxes
+end
+
+function MC.ConnectionBlockCollisionBoxes( kind, mask )
+	kind = normalizeConnectionKind( kind )
+	mask = math.floor( tonumber( mask ) or 0 )
+	local bucket = ConnectionCollisionBoxesCache[kind]
+	if not bucket then return nil end
+	local cached = bucket[mask]
+	if cached then return cached end
+	if kind == "fence" then cached = buildFenceCollisionBoxesForMask( mask )
+	elseif kind == "pane" then cached = buildPaneCollisionBoxesForMask( mask )
+	elseif kind == "wall" then cached = buildWallCollisionBoxesForMask( mask ) end
+	bucket[mask] = cached
+	return cached
+end
+
 local FullBlockCollisionNames = {
 	cauldron = true,
 	water_cauldron = true,
@@ -1924,19 +2144,19 @@ function MC.BlockBoxes( id, orient, bx, by, bz )
 		return CrossBlockBoxes
 	end
 	if b.connection == "fence" then
-		return fenceBoxes( bx, by, bz )
+		return MC.ConnectionBlockBoxes( "fence", MC.BlockConnectionMask( "fence", bx, by, bz ) )
 	end
 	if b.connection == "fence_gate" then
 		return modelBoxes( b, MC.NormalizeOrient( id, orient ) )
 	end
 	if b.connection == "wall" then
-		return wallBoxes( bx, by, bz )
+		return MC.ConnectionBlockBoxes( "wall", MC.BlockConnectionMask( "wall", bx, by, bz ) )
 	end
 	if isPaneKind( b.connection ) then
-		return paneBoxes( bx, by, bz )
+		return MC.ConnectionBlockBoxes( "pane", MC.BlockConnectionMask( "pane", bx, by, bz ) )
 	end
 	if b.connection == "pipe6" then
-		return pipe6Boxes( bx, by, bz )
+		return MC.ConnectionBlockBoxes( "pipe6", MC.BlockConnectionMask( "pipe6", bx, by, bz ) )
 	end
 	if b.shape == "model" then
 		return modelBoxes( b, orient )
@@ -1962,13 +2182,13 @@ function MC.BlockCollisionBoxes( id, orient, bx, by, bz )
 		return fenceGateCollisionBoxes( b, orient )
 	end
 	if b and b.connection == "fence" and bx ~= nil and by ~= nil and bz ~= nil then
-		return fenceCollisionBoxes( bx, by, bz )
+		return MC.ConnectionBlockCollisionBoxes( "fence", MC.BlockConnectionMask( "fence", bx, by, bz ) )
 	end
 	if b and isPaneKind( b.connection ) and bx ~= nil and by ~= nil and bz ~= nil then
-		return paneCollisionBoxes( bx, by, bz )
+		return MC.ConnectionBlockCollisionBoxes( "pane", MC.BlockConnectionMask( "pane", bx, by, bz ) )
 	end
 	if b and b.connection == "wall" and bx ~= nil and by ~= nil and bz ~= nil then
-		return wallCollisionBoxes( bx, by, bz )
+		return MC.ConnectionBlockCollisionBoxes( "wall", MC.BlockConnectionMask( "wall", bx, by, bz ) )
 	end
 	return MC.BlockBoxes( id, orient, bx, by, bz )
 end

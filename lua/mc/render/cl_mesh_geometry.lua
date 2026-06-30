@@ -437,32 +437,39 @@ local ARM_END_FACE = {
 }
 local PANE_ARM_EDGE_UV = { 7, 0, 9, 7 }
 
-local function dynamicShapeFaceData( b, face, box )
+local function connectionShapeFaceValues( b, face, box )
 	if not b then return nil end
 	if b.connection == "pipe6" then
-		return { tile = b.side, rot = 0 }
+		return b.side, nil, true
 	end
 	if MC.IsPaneBlock and MC.IsPaneBlock( b.id ) then
 		if face == MC.Face.TOP or face == MC.Face.BOTTOM then
 			if box and box.part == "arm" then
-				return { tile = b.top, rot = 0, uv = PANE_ARM_EDGE_UV }
+				return b.top, PANE_ARM_EDGE_UV, true
 			end
-			return { tile = b.top, rot = 0 }
+			return b.top, nil, true
 		end
 		-- the open end of an arm shows the pane edge strip, like Minecraft's
 		-- cullfaced #edge face on the pane side models
 		if box and box.part == "arm" and ARM_END_FACE[box.dir] == face then
-			return { tile = b.top, rot = 0 }
+			return b.top, nil, true
 		end
-		return { tile = paneSideTile( b ), rot = 0 }
+		return paneSideTile( b ), nil, true
 	end
 	if MC.IsFenceBlock and MC.IsFenceBlock( b.id ) then
-		return { tile = b.side, rot = 0 }
+		return b.side, nil, true
 	end
 	if MC.IsWallBlock and MC.IsWallBlock( b.id ) then
-		return { tile = b.side, rot = 0 }
+		return b.side, nil, true
 	end
-	return nil
+	return nil, nil, false
+end
+
+local function dynamicShapeFaceData( b, face, box )
+	local tile, uv, ok = connectionShapeFaceValues( b, face, box )
+	if not ok then return nil end
+	if uv then return { tile = tile, rot = 0, uv = uv } end
+	return { tile = tile, rot = 0 }
 end
 
 local function rectForFace( box, face )
@@ -496,19 +503,19 @@ local function addEdge( list, value, lo, hi )
 	if value > lo + EPS and value < hi - EPS then list[#list + 1] = value end
 end
 
-local function pointInRect( a, b, r )
-	return a >= r[1] - EPS and a <= r[2] + EPS and b >= r[3] - EPS and b <= r[4] + EPS
+local function pointInRectFlat( a, b, covers, i )
+	return a >= covers[i] - EPS and a <= covers[i + 1] + EPS and b >= covers[i + 2] - EPS and b <= covers[i + 3] + EPS
 end
 
-local function rectCovered( a0, a1, b0, b1, covers )
-	if #covers == 0 then return false end
+local function rectCovered( a0, a1, b0, b1, covers, coverValues )
+	if not covers or coverValues <= 0 then return false end
 	local as = { a0, a1 }
 	local bs = { b0, b1 }
-	for _, r in ipairs( covers ) do
-		addEdge( as, math.max( a0, math.min( a1, r[1] ) ), a0, a1 )
-		addEdge( as, math.max( a0, math.min( a1, r[2] ) ), a0, a1 )
-		addEdge( bs, math.max( b0, math.min( b1, r[3] ) ), b0, b1 )
-		addEdge( bs, math.max( b0, math.min( b1, r[4] ) ), b0, b1 )
+	for i = 1, coverValues, 4 do
+		addEdge( as, math.max( a0, math.min( a1, covers[i] ) ), a0, a1 )
+		addEdge( as, math.max( a0, math.min( a1, covers[i + 1] ) ), a0, a1 )
+		addEdge( bs, math.max( b0, math.min( b1, covers[i + 2] ) ), b0, b1 )
+		addEdge( bs, math.max( b0, math.min( b1, covers[i + 3] ) ), b0, b1 )
 	end
 	table.sort( as )
 	table.sort( bs )
@@ -517,8 +524,8 @@ local function rectCovered( a0, a1, b0, b1, covers )
 			local ma = ( as[ai] + as[ai + 1] ) * 0.5
 			local mb = ( bs[bi] + bs[bi + 1] ) * 0.5
 			local ok = false
-			for _, r in ipairs( covers ) do
-				if pointInRect( ma, mb, r ) then ok = true break end
+			for i = 1, coverValues, 4 do
+				if pointInRectFlat( ma, mb, covers, i ) then ok = true break end
 			end
 			if not ok then return false end
 		end
@@ -527,18 +534,30 @@ local function rectCovered( a0, a1, b0, b1, covers )
 end
 
 local function coveredByBoxes( targetBox, face, boxes, ox, oy, oz )
+	if not boxes or #boxes == 0 then return false end
 	local plane = facePlane( targetBox, face )
 	local a0, a1, b0, b1 = rectForFace( targetBox, face )
-	local covers = {}
-	for _, box in ipairs( boxes or {} ) do
+	local covers = nil
+	local coverValues = 0
+	ox, oy, oz = ox or 0, oy or 0, oz or 0
+	for i = 1, #boxes do
+		local box = boxes[i]
 		if box ~= targetBox then
-			local ca0, ca1, cb0, cb1 = coverRectForBox( box, face, plane, ox or 0, oy or 0, oz or 0 )
+			local ca0, ca1, cb0, cb1 = coverRectForBox( box, face, plane, ox, oy, oz )
 			if ca0 and ca1 > a0 + EPS and ca0 < a1 - EPS and cb1 > b0 + EPS and cb0 < b1 - EPS then
-				covers[#covers + 1] = { math.max( a0, ca0 ), math.min( a1, ca1 ), math.max( b0, cb0 ), math.min( b1, cb1 ) }
+				local ra0, ra1 = math.max( a0, ca0 ), math.min( a1, ca1 )
+				local rb0, rb1 = math.max( b0, cb0 ), math.min( b1, cb1 )
+				if ra0 <= a0 + EPS and ra1 >= a1 - EPS and rb0 <= b0 + EPS and rb1 >= b1 - EPS then return true end
+				if not covers then covers = {} end
+				coverValues = coverValues + 4
+				covers[coverValues - 3] = ra0
+				covers[coverValues - 2] = ra1
+				covers[coverValues - 1] = rb0
+				covers[coverValues] = rb1
 			end
 		end
 	end
-	return rectCovered( a0, a1, b0, b1, covers )
+	return rectCovered( a0, a1, b0, b1, covers, coverValues )
 end
 
 RM.sameLiquidKind = sameLiquidKind
@@ -560,6 +579,7 @@ RM.boxFaceCornerValues = boxFaceCornerValues
 RM.BOX_UV_FLAGS = BOX_UV_FLAGS
 RM.rotatedModelQuads = rotatedModelQuads
 RM.cornerUV16Raw = cornerUV16Raw
+RM.connectionShapeFaceValues = connectionShapeFaceValues
 RM.dynamicShapeFaceData = dynamicShapeFaceData
 RM.facePlane = facePlane
 RM.coveredByBoxes = coveredByBoxes

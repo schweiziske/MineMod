@@ -1,6 +1,9 @@
 -- Render mesh internals split from cl_mesh_core.lua.
 MC = MC or {}
 MC.RenderMesh = MC.RenderMesh or {}
+local RM = MC.RenderMesh
+local MC_LIGHT_STYLE_SHADER = RM.MC_LIGHT_STYLE_SHADER
+local MC_LIGHT_STYLE_GPU_SHADER = RM.MC_LIGHT_STYLE_GPU_SHADER
 
 local function atlasPngPath( path )
 	path = path or "mc/atlas_365"
@@ -42,8 +45,8 @@ MC.MaterialGpuOpaque = nil
 do
 	local baseTex, baseName = atlasBaseTexture()
 	if baseTex and baseName and baseName ~= "" and CreateMaterial then
-		local mat = CreateMaterial( "mc_atlas_gpu_payload4_opaque", "screenspace_general", {
-			["$pixshader"] = "mc_gpu_chunk_payload_ps30",
+		local mat = CreateMaterial( "mc_atlas_gpu_payload5_vface_opaque", "screenspace_general", {
+			["$pixshader"] = "mc_gpu_chunk_payload_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_payload_vs30",
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,
@@ -62,11 +65,10 @@ do
 end
 
 local function gpuChunkShaderEnabled()
-	local cv = MC.MeshGpuShader
-	if not ( cv and cv.GetBool and cv:GetBool() ) then return false end
-	if not ( MC.MaterialGpuOpaque and not MC.MaterialGpuOpaque:IsError() ) then return false end
-	if MC.CurrentMeshLightStyle and MC.CurrentMeshLightStyle() ~= "shader" then return false end
-	return true
+	local profile = RM.CurrentLightProfile and RM.CurrentLightProfile() or nil
+	local usesGpuPayload = profile and profile.usesGpuPayload
+	if type( usesGpuPayload ) == "function" then return usesGpuPayload( profile ) == true end
+	return usesGpuPayload == true
 end
 
 function MC.UsingGpuChunkShader()
@@ -74,9 +76,42 @@ function MC.UsingGpuChunkShader()
 end
 
 function MC.CurrentChunkMaterial( translucent )
+	local profile = RM.CurrentLightProfile and RM.CurrentLightProfile() or nil
+	local chunkMaterial = profile and profile.chunkMaterial
+	if chunkMaterial then
+		local material = chunkMaterial( translucent, profile )
+		if material then return material end
+	end
 	if translucent then return MC.MaterialTranslucent or MC.Material end
-	if gpuChunkShaderEnabled() then return MC.MaterialGpuOpaque end
 	return MC.Material
+end
+
+local function shaderProfileUsesGpuPayload()
+	local cv = MC.MeshGpuShader
+	if not ( cv and cv.GetBool and cv:GetBool() ) then return false end
+	if not ( MC.MaterialGpuOpaque and not MC.MaterialGpuOpaque:IsError() ) then return false end
+	return true
+end
+
+local function shaderProfileChunkMaterial( translucent )
+	if translucent then return MC.MaterialTranslucent or MC.Material end
+	if shaderProfileUsesGpuPayload() then return MC.MaterialGpuOpaque end
+	return MC.Material
+end
+
+if RM.RegisterLightProfile then
+	RM.RegisterLightProfile( MC_LIGHT_STYLE_SHADER, {
+		chunkMaterial = shaderProfileChunkMaterial,
+		usesGpuPayload = shaderProfileUsesGpuPayload,
+		gpuPayloadMaterial = function() return MC.MaterialGpuOpaque end,
+		gpuPayloadStyle = MC_LIGHT_STYLE_GPU_SHADER,
+	} )
+	RM.RegisterLightProfile( MC_LIGHT_STYLE_GPU_SHADER, {
+		chunkMaterial = shaderProfileChunkMaterial,
+		usesGpuPayload = true,
+		gpuPayloadMaterial = function() return MC.MaterialGpuOpaque end,
+		gpuPayloadStyle = MC_LIGHT_STYLE_GPU_SHADER,
+	} )
 end
 
 if cvars and cvars.AddChangeCallback then

@@ -106,6 +106,7 @@ local function markBlockGeometryDirty( x, y, z, rateLimited )
 	local lx, ly, lz = DecodeLocal( li )
 	local key = MC.ChunkKey( cx, cy, cz )
 	local sectionIndex = sectionIndexForLocal( lx, ly, lz )
+	if MC.ClearBlockConnectionMaskCache then MC.ClearBlockConnectionMaskCache( x, y, z ) end
 	markBlockEmitCacheDirty( x, y, z )
 	if rateLimited then
 		markChunkSectionDirty( key, sectionIndex, true )

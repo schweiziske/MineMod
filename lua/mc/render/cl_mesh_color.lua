@@ -23,6 +23,7 @@ local MC_LIGHT_STYLE_VANILLA = RM.MC_LIGHT_STYLE_VANILLA
 local MC_LIGHT_STYLE_BEST = RM.MC_LIGHT_STYLE_BEST
 local MC_LIGHT_STYLE_SHADER = RM.MC_LIGHT_STYLE_SHADER
 local MC_LIGHT_STYLE_GPU_SHADER = RM.MC_LIGHT_STYLE_GPU_SHADER
+local MC_LIGHT_STYLE_LIGHTMAP = RM.MC_LIGHT_STYLE_LIGHTMAP
 local MC_LIGHT_AO_FACTORS = RM.MC_LIGHT_AO_FACTORS
 local MC_LIGHT_BEST_AO_FACTORS = RM.MC_LIGHT_BEST_AO_FACTORS
 local MC_LIGHT_SHADER_AO_FACTORS = RM.MC_LIGHT_SHADER_AO_FACTORS
@@ -613,3 +614,36 @@ RM.quadCornerColors = quadCornerColors
 RM.quadCornerColorValues = quadCornerColorValues
 RM.recolorLightMeta = recolorLightMeta
 RM.recolorCachedBlockEmission = recolorCachedBlockEmission
+
+if RM.RegisterLightProfile then
+	RM.RegisterLightProfile( MC_LIGHT_STYLE_FAST, {
+		fullCubeColors = fullCubeFaceCornerColors,
+		quadColors = quadCornerColorValues,
+		recolorMeta = recolorLightMeta,
+	} )
+	RM.RegisterLightProfile( MC_LIGHT_STYLE_VANILLA, {
+		fullCubeColors = fullCubeFaceCornerColors,
+		quadColors = quadCornerColorValues,
+		recolorMeta = recolorLightMeta,
+	} )
+	RM.RegisterLightProfile( MC_LIGHT_STYLE_BEST, {
+		fullCubeColors = fullCubeFaceCornerColors,
+		quadColors = quadCornerColorValues,
+		recolorMeta = recolorLightMeta,
+	} )
+	RM.RegisterLightProfile( MC_LIGHT_STYLE_SHADER, {
+		fullCubeColors = fullCubeFaceCornerColors,
+		quadColors = quadCornerColorValues,
+		recolorMeta = recolorLightMeta,
+	} )
+	RM.RegisterLightProfile( MC_LIGHT_STYLE_GPU_SHADER, {
+		fullCubeColors = fullCubeFaceCornerColors,
+		quadColors = quadCornerColorValues,
+		recolorMeta = recolorLightMeta,
+	} )
+	RM.RegisterLightProfile( MC_LIGHT_STYLE_LIGHTMAP, {
+		fullCubeColors = fullCubeFaceCornerColors,
+		quadColors = quadCornerColorValues,
+		recolorMeta = recolorLightMeta,
+	} )
+end
