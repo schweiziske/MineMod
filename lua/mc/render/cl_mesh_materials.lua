@@ -63,8 +63,8 @@ do
 			mat:SetTexture( "$basetexture", baseTex )
 			MC.MaterialGpuOpaque = mat
 		end
-		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex1_vface_opaque", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_vface_ps30",
+		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex3_halo_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_halo_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,

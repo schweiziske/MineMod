@@ -46,6 +46,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 
 	local chunk = MC.GetChunkByKey( key )
 	if not chunk or chunk.count == 0 then
+		if MC.ClearGpuChunkLightTexture then MC.ClearGpuChunkLightTexture( key ) end
 		if sectionIndex then
 			MC.ClearSectionBlockEmitCache( key, sectionIndex )
 			local commitStart = SysTime()
