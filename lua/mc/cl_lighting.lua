@@ -818,6 +818,15 @@ function MC.MarkLightSectionsDirtyForChangedCells( changed )
 	local dirtyCount = 0
 	local count = changed and changed.count or 0
 	local xs, ys, zs = changed and changed.x or {}, changed and changed.y or {}, changed and changed.z or {}
+	if MC.UsingGpuLightTexture and MC.UsingGpuLightTexture()
+	and MC.MarkGpuChunkLightTextureDirtyForChangedCells then
+		local dirtyChunks = MC.MarkGpuChunkLightTextureDirtyForChangedCells( changed )
+		local stats = MC.LightPerfStats or {}
+		MC.LightPerfStats = stats
+		stats.lastGpuLightTextureDirtyChunks = dirtyChunks
+		stats.lastGpuLightTextureDirtyCells = count
+		return 0
+	end
 	local chunkKey = MC.ChunkKey
 	local world = MC.World
 	local meshDirty = MC.MeshDirty

@@ -11,6 +11,8 @@ MC.MeshDebugFullCubeOnly = MC.MeshDebugFullCubeOnly or ( CreateClientConVar and 
 	"Debug MC mesh emission by rendering only full cube blocks" ) )
 MC.MeshGpuShader = MC.MeshGpuShader or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_shader", "0", true, false,
 	"Use the experimental custom GPU shader for opaque MC chunk atlas meshes when the compiled VCS files are available" ) )
+MC.MeshGpuLightTexture = MC.MeshGpuLightTexture or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_light_texture", "0", true, false,
+	"Experimental: sample chunk light textures in the GPU shader instead of baking opaque chunk light into vertex colors" ) )
 MC.MeshConnectionVisibleTemplate = MC.MeshConnectionVisibleTemplate or ( CreateClientConVar and CreateClientConVar( "mc_mesh_connection_visible_template", "1", true, false,
 	"Experimental: use cached visible geometry templates for fence/pane/wall/pipe connection shapes" ) )
 
@@ -19,6 +21,7 @@ local MC_LIGHT_STYLE_VANILLA = "vanilla"
 local MC_LIGHT_STYLE_BEST = "best"
 local MC_LIGHT_STYLE_SHADER = "shader"
 local MC_LIGHT_STYLE_GPU_SHADER = "gpu_shader"
+local MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE = "gpu_light_texture"
 local MC_LIGHT_STYLE_LIGHTMAP = "lightmap"
 
 local mathClamp, mathFloor = math.Clamp, math.floor
@@ -81,6 +84,7 @@ local function effectiveLightStyleForMaterial( style, material, profile )
 	local payloadMaterial = profile and profile.gpuPayloadMaterial
 	if type( payloadMaterial ) == "function" then payloadMaterial = payloadMaterial() end
 	local payloadStyle = profile and profile.gpuPayloadStyle
+	if type( payloadStyle ) == "function" then payloadStyle = payloadStyle( profile, material ) end
 	if payloadStyle and payloadMaterial and material == payloadMaterial then return payloadStyle end
 	local fn = profile and profile.effectiveStyleForMaterial
 	if fn then return fn( material, style, profile ) end
@@ -127,6 +131,13 @@ registerLightProfile( MC_LIGHT_STYLE_GPU_SHADER, {
 	usesGpuPayload = true,
 	usesHardwareLightmap = false,
 } )
+registerLightProfile( MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE, {
+	name = "GPU Light Texture",
+	fallbackStyle = MC_LIGHT_STYLE_SHADER,
+	usesGpuPayload = true,
+	usesGpuLightTexture = true,
+	usesHardwareLightmap = false,
+} )
 registerLightProfile( MC_LIGHT_STYLE_LIGHTMAP, {
 	name = "Lightmap",
 	fallbackStyle = MC_LIGHT_STYLE_VANILLA,
@@ -139,6 +150,7 @@ RM.MC_LIGHT_STYLE_VANILLA = MC_LIGHT_STYLE_VANILLA
 RM.MC_LIGHT_STYLE_BEST = MC_LIGHT_STYLE_BEST
 RM.MC_LIGHT_STYLE_SHADER = MC_LIGHT_STYLE_SHADER
 RM.MC_LIGHT_STYLE_GPU_SHADER = MC_LIGHT_STYLE_GPU_SHADER
+RM.MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE = MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE
 RM.MC_LIGHT_STYLE_LIGHTMAP = MC_LIGHT_STYLE_LIGHTMAP
 RM.currentLightStyle = currentLightStyle
 RM.normalizeLightStyle = normalizeLightStyle

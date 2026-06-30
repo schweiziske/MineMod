@@ -23,6 +23,7 @@ local MC_LIGHT_STYLE_VANILLA = RM.MC_LIGHT_STYLE_VANILLA
 local MC_LIGHT_STYLE_BEST = RM.MC_LIGHT_STYLE_BEST
 local MC_LIGHT_STYLE_SHADER = RM.MC_LIGHT_STYLE_SHADER
 local MC_LIGHT_STYLE_GPU_SHADER = RM.MC_LIGHT_STYLE_GPU_SHADER
+local MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE = RM.MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE
 local MC_LIGHT_STYLE_LIGHTMAP = RM.MC_LIGHT_STYLE_LIGHTMAP
 local MC_LIGHT_AO_FACTORS = RM.MC_LIGHT_AO_FACTORS
 local MC_LIGHT_BEST_AO_FACTORS = RM.MC_LIGHT_BEST_AO_FACTORS
@@ -244,6 +245,9 @@ end
 local function litFaceColorValues( shade, bx, by, bz, id, faceIndex, cn, selfEmission, style )
 	style = style or MC_LIGHT_STYLE_VANILLA
 	local shadeR, shadeG, shadeB, shadeA = shade.r or 255, shade.g or 255, shade.b or 255, shade.a or 255
+	if style == MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE then
+		return gpuShaderPayloadValues( faceIndex, 1, shadeA )
+	end
 	if not MC.SampleLighting then return shadeR, shadeG, shadeB, shadeA end
 	local brightness, ao
 	if style == MC_LIGHT_STYLE_FAST then
@@ -281,10 +285,13 @@ end
 local function litFaceColorMetaValues( meta, style )
 	style = style or MC_LIGHT_STYLE_VANILLA
 	local shadeR, shadeG, shadeB, shadeA = shadeRGBAByIndex( meta.shadeIndex )
-	if not MC.SampleLighting then return shadeR, shadeG, shadeB, shadeA end
 	local bx, by, bz = meta.bx, meta.by, meta.bz
 	local id = meta.id
 	local faceIndex = meta.faceIndex
+	if style == MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE then
+		return gpuShaderPayloadValues( faceIndex, 1, shadeA )
+	end
+	if not MC.SampleLighting then return shadeR, shadeG, shadeB, shadeA end
 	local cx, cy, cz = meta.cx, meta.cy, meta.cz
 	local selfEmission = meta.selfEmission
 	local brightness, ao
@@ -342,6 +349,9 @@ local function colorFromShadeMul( shadeR, shadeG, shadeB, shadeA, mul, rScale, g
 end
 
 local function fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, cx, cy, cz, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO )
+	if style == MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE then
+		return gpuShaderPayloadColor( faceIndex, 1, shadeA )
+	end
 	local key = nil
 	if style ~= MC_LIGHT_STYLE_SHADER and style ~= MC_LIGHT_STYLE_GPU_SHADER then
 		key = fullCubeColorCacheKey( bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
@@ -478,6 +488,10 @@ end
 
 local function fullCubeFaceCornerColors( shadeIndex, bx, by, bz, faceIndex, selfEmission, style, receiveAO )
 	local shadeR, shadeG, shadeB, shadeA = shadeRGBAByIndex( shadeIndex )
+	if style == MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE then
+		local color = gpuShaderPayloadColor( faceIndex, 1, shadeA )
+		return color, color, color, color
+	end
 	if not MC.SampleLighting then
 		local color = colorFromRGBA( shadeR, shadeG, shadeB, shadeA )
 		return color, color, color, color
@@ -538,6 +552,10 @@ local function quadCornerColors( shade, bx, by, bz, id, faceIndex, corners, self
 		local color = litFaceColor( shade, bx, by, bz, id, faceIndex, corners[1], selfEmission, style )
 		return color, color, color, color
 	end
+	if style == MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE then
+		local color = litFaceColor( shade, bx, by, bz, id, faceIndex, corners[1], selfEmission, style )
+		return color, color, color, color
+	end
 	return
 		litFaceColor( shade, bx, by, bz, id, faceIndex, corners[1], selfEmission, style ),
 		litFaceColor( shade, bx, by, bz, id, faceIndex, corners[2], selfEmission, style ),
@@ -560,6 +578,10 @@ end
 
 local function quadCornerColorValues( shade, bx, by, bz, id, faceIndex, selfEmission, style, x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4 )
 	if style == MC_LIGHT_STYLE_FAST then
+		local color = litFaceColor( shade, bx, by, bz, id, faceIndex, setScratchCorner( 1, x1, y1, z1 ), selfEmission, style )
+		return color, color, color, color
+	end
+	if style == MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE then
 		local color = litFaceColor( shade, bx, by, bz, id, faceIndex, setScratchCorner( 1, x1, y1, z1 ), selfEmission, style )
 		return color, color, color, color
 	end
@@ -637,6 +659,11 @@ if RM.RegisterLightProfile then
 		recolorMeta = recolorLightMeta,
 	} )
 	RM.RegisterLightProfile( MC_LIGHT_STYLE_GPU_SHADER, {
+		fullCubeColors = fullCubeFaceCornerColors,
+		quadColors = quadCornerColorValues,
+		recolorMeta = recolorLightMeta,
+	} )
+	RM.RegisterLightProfile( MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE, {
 		fullCubeColors = fullCubeFaceCornerColors,
 		quadColors = quadCornerColorValues,
 		recolorMeta = recolorLightMeta,
