@@ -1151,6 +1151,7 @@ net.Receive( "mc_unload_chunk", function()
 	local key = MC.ChunkKey( cx, cy, cz )
 
 	MC.FreeChunkMesh( key )
+	if MC.ClearGpuChunkLightTexture then MC.ClearGpuChunkLightTexture( key ) end
 	local e = MC.ChunkEnts and MC.ChunkEnts[key]
 	if IsValid( e ) then
 		if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
@@ -1193,6 +1194,7 @@ end )
 
 net.Receive( "mc_clear", function()
 	MC.FreeAllMeshes()
+	if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
 	if MC.MarkAllMeshesDirty then MC.MarkAllMeshesDirty() end
 	for key, e in pairs( MC.ChunkEnts or {} ) do
 		if IsValid( e ) then

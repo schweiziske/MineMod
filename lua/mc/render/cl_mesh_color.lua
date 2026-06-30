@@ -116,7 +116,7 @@ end
 local function shaderDaylightFactor()
 	if MeshShaderDaylightFactor ~= nil then return MeshShaderDaylightFactor end
 	local cv = MC.LightSkyLevel
-	MeshShaderDaylightFactor = math.Clamp( ( cv and cv.GetInt and cv:GetInt() or 15 ) / 15, 0, 1 )
+	MeshShaderDaylightFactor = math.Clamp( ( cv and cv.GetInt and cv:GetInt() or 0 ) / 15, 0, 1 )
 	return MeshShaderDaylightFactor
 end
 

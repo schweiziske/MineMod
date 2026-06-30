@@ -10,9 +10,9 @@ MC = MC or {}
 
 MC.LightEnabled = MC.LightEnabled or CreateClientConVar( "mc_light_enabled", "1", true, false,
 	"Apply Minecraft-style vertex lighting to MC chunk meshes" )
-MC.LightSkyLevel = MC.LightSkyLevel or CreateClientConVar( "mc_light_sky_level", "18", true, false,
+MC.LightSkyLevel = MC.LightSkyLevel or CreateClientConVar( "mc_light_sky_level", "0", true, false,
 	"Client sky light level for MC chunks (0-15)" )
-MC.LightAmbientMin = MC.LightAmbientMin or CreateClientConVar( "mc_light_ambient_min", "0.18", true, false,
+MC.LightAmbientMin = MC.LightAmbientMin or CreateClientConVar( "mc_light_ambient_min", "0", true, false,
 	"Minimum brightness multiplier for MC vertex lighting" )
 MC.LightStyle = MC.LightStyle or CreateClientConVar( "mc_light_style", "shader", true, false,
 	"MC chunk lighting visual style: fast, vanilla, best, shader, or lightmap" )
@@ -411,8 +411,13 @@ local function clearStoredLight()
 	MC.LightCellsSkyLevel = -1
 end
 
+local function clearGpuLightTextures()
+	if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
+end
+
 function MC.ClearLightingCache()
 	clearStoredLight()
+	clearGpuLightTextures()
 	MC.LightSkyColumnTops = {}
 	MC.LightSourceCells = {}
 	MC.LightChunkSources = {}
@@ -430,6 +435,7 @@ function MC.MarkAllMeshesDirty()
 end
 
 local function markLoadedMeshesDirty()
+	clearGpuLightTextures()
 	for key, chunk in pairs( MC.World or {} ) do
 		if chunk and chunk.count and chunk.count > 0 and MC.MarkChunkDirty then
 			MC.MarkChunkDirty( key )

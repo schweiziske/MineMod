@@ -2,8 +2,12 @@
 MC = MC or {}
 
 local LIGHT_TEX_W = 128
-local LIGHT_TEX_H = 64
-local LIGHT_TEX_CELLS = LIGHT_TEX_W * LIGHT_TEX_H
+local LIGHT_TEX_H = 128
+local LIGHT_TEX_PAD = 1
+local LIGHT_GRID_XY = 16 + LIGHT_TEX_PAD * 2
+local LIGHT_GRID_Z = 32 + LIGHT_TEX_PAD * 2
+local LIGHT_GRID_XY2 = LIGHT_GRID_XY * LIGHT_GRID_XY
+local LIGHT_GRID_CELLS = LIGHT_GRID_XY2 * LIGHT_GRID_Z
 
 MC.GpuChunkLightTextures = MC.GpuChunkLightTextures or {}
 MC.GpuChunkLightDirtyCells = MC.GpuChunkLightDirtyCells or {}
@@ -26,31 +30,69 @@ function MC.UsingGpuLightTexture()
 		and not MC.MaterialGpuLightTexture:IsError()
 end
 
-local function cellPixel( li )
-	li = math.floor( tonumber( li ) or 0 )
-	if li < 0 then li = 0 elseif li >= LIGHT_TEX_CELLS then li = LIGHT_TEX_CELLS - 1 end
-	return li % LIGHT_TEX_W, math.floor( li / LIGHT_TEX_W )
+local function packedPaddedCell( lx, ly, lz )
+	lx = math.floor( tonumber( lx ) or 0 )
+	ly = math.floor( tonumber( ly ) or 0 )
+	lz = math.floor( tonumber( lz ) or 0 )
+	if lx < 0 or lx >= LIGHT_GRID_XY or ly < 0 or ly >= LIGHT_GRID_XY or lz < 0 or lz >= LIGHT_GRID_Z then return nil end
+	return lx + ly * LIGHT_GRID_XY + lz * LIGHT_GRID_XY2
 end
 
-local function brightnessByte( bx, by, bz )
-	local brightness = 1
+local function unpackPaddedCell( packed )
+	packed = math.floor( tonumber( packed ) or 0 )
+	if packed < 0 then packed = 0 elseif packed >= LIGHT_GRID_CELLS then packed = LIGHT_GRID_CELLS - 1 end
+	local lz = math.floor( packed / LIGHT_GRID_XY2 )
+	local rem = packed - lz * LIGHT_GRID_XY2
+	local ly = math.floor( rem / LIGHT_GRID_XY )
+	local lx = rem - ly * LIGHT_GRID_XY
+	return lx, ly, lz
+end
+
+local function cellPixel( packed )
+	packed = math.floor( tonumber( packed ) or 0 )
+	if packed < 0 then packed = 0 elseif packed >= LIGHT_GRID_CELLS then packed = LIGHT_GRID_CELLS - 1 end
+	return packed % LIGHT_TEX_W, math.floor( packed / LIGHT_TEX_W )
+end
+
+local function lightByteFromUnit( value )
+	return math.floor( math.Clamp( tonumber( value ) or 0, 0, 1 ) * 255 + 0.5 )
+end
+
+local function lightUnitFromLevel( level )
+	return math.Clamp( ( tonumber( level ) or 0 ) / 15, 0, 1 )
+end
+
+local function cellSelfEmission( bx, by, bz )
+	if not ( MC.GetBlock and MC.BlockLightEmission ) then return 0 end
+	local id = MC.GetBlock( bx, by, bz )
+	if not id or id == 0 then return 0 end
+	return MC.BlockLightEmission( id ) or 0
+end
+
+local function lightTextureBytes( bx, by, bz )
+	local brightness, level, block, sky = 1, 15, 15, 15
 	if MC.SampleLighting then
-		brightness = MC.SampleLighting( bx, by, bz )
+		brightness, level, block, sky = MC.SampleLighting( bx, by, bz, cellSelfEmission( bx, by, bz ) )
 	end
-	brightness = math.Clamp( tonumber( brightness ) or 1, 0, 1 )
-	return math.floor( brightness * 255 + 0.5 )
+	level = tonumber( level ) or 15
+	block = tonumber( block ) or level
+	sky = tonumber( sky ) or level
+	return lightByteFromUnit( brightness ), lightByteFromUnit( lightUnitFromLevel( block ) ), lightByteFromUnit( lightUnitFromLevel( sky ) )
 end
 
-local function chunkCellCoords( chunk, li )
-	local lx, ly, lz = MC.DecodeLocal( li )
-	return chunk.cx * MC.CS + lx, chunk.cy * MC.CS + ly, chunk.cz * MC.CH + lz
+local function paddedCellWorldCoords( chunk, lx, ly, lz )
+	return chunk.cx * MC.CS + lx - LIGHT_TEX_PAD,
+		chunk.cy * MC.CS + ly - LIGHT_TEX_PAD,
+		chunk.cz * MC.CH + lz - LIGHT_TEX_PAD
 end
 
-local function drawLightCell( chunk, li )
-	local bx, by, bz = chunkCellCoords( chunk, li )
-	local b = brightnessByte( bx, by, bz )
-	local px, py = cellPixel( li )
-	surface.SetDrawColor( b, b, b, 255 )
+local function drawLightCell( chunk, lx, ly, lz )
+	local bx, by, bz = paddedCellWorldCoords( chunk, lx, ly, lz )
+	local combined, block, sky = lightTextureBytes( bx, by, bz )
+	local packed = packedPaddedCell( lx, ly, lz )
+	if not packed then return end
+	local px, py = cellPixel( packed )
+	surface.SetDrawColor( combined, block, sky, 255 )
 	surface.DrawRect( px, py, 1, 1 )
 end
 
@@ -71,7 +113,7 @@ local function ensureFallbackTexture()
 end
 
 local function textureNameForKey( key )
-	return "mc_gpu_chunk_light_" .. tostring( key ):gsub( "%W", "_" )
+	return "mc_gpu_chunk_light_smooth_halo1_" .. tostring( key ):gsub( "%W", "_" )
 end
 
 local function ensureChunkLightRecord( key )
@@ -100,18 +142,36 @@ function MC.MarkGpuChunkLightTextureDirtyCell( bx, by, bz )
 	if not ( MC.CellToChunk and MC.ChunkKey ) then return false end
 	local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
 	if not MC.LocalIndexInRange or not MC.LocalIndexInRange( li ) then return false end
-	local key = MC.ChunkKey( cx, cy, cz )
-	if not ( MC.World and MC.World[key] ) then return false end
-	local dirty = MC.GpuChunkLightDirtyCells[key]
-	if dirty ~= true then
-		if not dirty then
-			dirty = {}
-			MC.GpuChunkLightDirtyCells[key] = dirty
+	local marked = 0
+	local firstKey
+	for dcx = -1, 1 do
+		for dcy = -1, 1 do
+			for dcz = -1, 1 do
+				local key = MC.ChunkKey( cx + dcx, cy + dcy, cz + dcz )
+				local chunk = MC.World and MC.World[key] or nil
+				if chunk then
+					local lx = bx - chunk.cx * MC.CS + LIGHT_TEX_PAD
+					local ly = by - chunk.cy * MC.CS + LIGHT_TEX_PAD
+					local lz = bz - chunk.cz * MC.CH + LIGHT_TEX_PAD
+					local packed = packedPaddedCell( lx, ly, lz )
+					if packed then
+						local dirty = MC.GpuChunkLightDirtyCells[key]
+						if dirty ~= true then
+							if not dirty then
+								dirty = {}
+								MC.GpuChunkLightDirtyCells[key] = dirty
+							end
+							dirty[packed] = true
+						end
+						MC.GpuChunkLightDirtyChunks[key] = true
+						firstKey = firstKey or key
+						marked = marked + 1
+					end
+				end
+			end
 		end
-		dirty[li] = true
 	end
-	MC.GpuChunkLightDirtyChunks[key] = true
-	return true, key, li
+	return marked > 0, firstKey, marked
 end
 
 function MC.MarkGpuChunkLightTextureDirtyForChangedCells( changed )
@@ -120,18 +180,27 @@ function MC.MarkGpuChunkLightTextureDirtyForChangedCells( changed )
 	local dirtyChunks = 0
 	local seen = {}
 	for i = 1, count do
-		local ok, key = MC.MarkGpuChunkLightTextureDirtyCell( xs[i], ys[i], zs[i] )
-		if ok and not seen[key] then
-			seen[key] = true
-			dirtyChunks = dirtyChunks + 1
+		MC.MarkGpuChunkLightTextureDirtyCell( xs[i], ys[i], zs[i] )
+	end
+	for key in pairs( MC.GpuChunkLightDirtyChunks or {} ) do
+		if not seen[key] then
+			local chunk = MC.World and MC.World[key] or nil
+			if chunk then
+				seen[key] = true
+				dirtyChunks = dirtyChunks + 1
+			end
 		end
 	end
 	return dirtyChunks
 end
 
 local function refreshWholeChunk( chunk )
-	for li = 0, ( MC.CS * MC.CS * MC.CH ) - 1 do
-		drawLightCell( chunk, li )
+	for lz = 0, LIGHT_GRID_Z - 1 do
+		for ly = 0, LIGHT_GRID_XY - 1 do
+			for lx = 0, LIGHT_GRID_XY - 1 do
+				drawLightCell( chunk, lx, ly, lz )
+			end
+		end
 	end
 end
 
@@ -140,8 +209,9 @@ local function refreshDirtyCells( chunk, dirty )
 		refreshWholeChunk( chunk )
 		return
 	end
-	for li in pairs( dirty or {} ) do
-		drawLightCell( chunk, li )
+	for packed in pairs( dirty or {} ) do
+		local lx, ly, lz = unpackPaddedCell( packed )
+		drawLightCell( chunk, lx, ly, lz )
 	end
 end
 
