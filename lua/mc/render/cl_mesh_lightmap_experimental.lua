@@ -94,11 +94,14 @@ local function lightmapBackendAvailable()
 end
 
 local function lightmapStyleUsesHardware( style )
-	return false
+	return style == MC_LIGHT_STYLE_LIGHTMAP
+		and meshLightmapExperimentalEnabled()
+		and meshLightmapUVEnabled()
+		and lightmapBackendAvailable()
 end
 
 local function fallbackLightStyle( style )
-	if style == MC_LIGHT_STYLE_LIGHTMAP then
+	if style == MC_LIGHT_STYLE_LIGHTMAP and not lightmapStyleUsesHardware( style ) then
 		return MC_LIGHT_STYLE_VANILLA
 	end
 	return style
@@ -151,6 +154,15 @@ RM.fallbackLightStyle = fallbackLightStyle
 RM.clampSmoothLightCoord = clampSmoothLightCoord
 RM.lightmapUVFromSmoothCoords = lightmapUVFromSmoothCoords
 RM.lightmapUVFromLevels = lightmapUVFromLevels
+
+if RM.RegisterLightProfile then
+	RM.RegisterLightProfile( MC_LIGHT_STYLE_LIGHTMAP, {
+		fallbackStyle = MC_LIGHT_STYLE_VANILLA,
+		usesGpuPayload = false,
+		usesHardwareLightmap = false,
+		hardwareAvailable = lightmapStyleUsesHardware,
+	} )
+end
 
 if cvars and cvars.AddChangeCallback then
 	cvars.AddChangeCallback( "mc_mesh_lightmap_experimental", function()

@@ -6,6 +6,7 @@ local RM = MC.RenderMesh
 
 local C = MC.RenderMeshConstants
 local currentLightStyle = RM.currentLightStyle
+local currentLightProfile = RM.CurrentLightProfile
 local newMeshPerfStats = RM.newMeshPerfStats
 local meshEmitProbeEnabled = RM.meshEmitProbeEnabled
 local resetMeshLightingSampleCaches = RM.resetMeshLightingSampleCaches
@@ -19,10 +20,9 @@ local destroySectionMeshList = RM.destroySectionMeshList
 local rebuildFlatMeshLists = RM.rebuildFlatMeshLists
 local recolorCachedBlockEmission = RM.recolorCachedBlockEmission
 local recolorLightMeta = RM.recolorLightMeta
+local effectiveLightStyleForMaterial = RM.effectiveLightStyleForMaterial
 local setMeshSampleCacheOrigin = RM.setMeshSampleCacheOrigin
 local uploadMeshVertices = RM.uploadMeshVertices
-local MC_LIGHT_STYLE_SHADER = RM.MC_LIGHT_STYLE_SHADER
-local MC_LIGHT_STYLE_GPU_SHADER = RM.MC_LIGHT_STYLE_GPU_SHADER
 
 function MC.BuildChunkMesh( key, sectionIndex )
 	local buildStart = SysTime()
@@ -31,6 +31,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 	resetMeshLightingSampleCaches()
 	resetMeshColorObjectCache()
 	local meshLightStyle = currentLightStyle()
+	local meshLightProfile = currentLightProfile()
 	if MC.LightPerfStats then
 		MC.LightPerfStats.lastMeshLightStyle = meshLightStyle
 	end
@@ -92,7 +93,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 		end
 		return
 	end
-	local ctx = RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, meshLightStyle, buildStart )
+	local ctx = RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, meshLightStyle, buildStart, meshLightProfile )
 
 	local loopStart = SysTime()
 	for li, id in pairs( ctx.blockIter ) do
@@ -192,6 +193,7 @@ function MC.RebuildChunkMeshLighting( key, sectionIndex )
 	resetMeshLightingSampleCaches()
 	resetMeshColorObjectCache()
 	local meshLightStyle = currentLightStyle()
+	local meshLightProfile = currentLightProfile()
 	if MC.LightPerfStats then
 		MC.LightPerfStats.lastMeshLightStyle = meshLightStyle
 	end
@@ -254,15 +256,12 @@ function MC.RebuildChunkMeshLighting( key, sectionIndex )
 		if not cachedBlockLightMetaKey or not recolorLightMeta then return false, false end
 		local verts = record and record.verts
 		local light = record and record.light
-		local vertexCount = record and ( record.vertexCount or #verts ) or 0
+		local vertexCount = #( verts or {} )
 		if not verts or not light or vertexCount ~= #verts or vertexCount ~= #light then return false, false end
 		local lightByLi = ensureRecordLightIndexByLi( record, light, vertexCount )
 		local colorCache = {}
 		local recolored = false
-		local style = meshLightStyle
-		if style == MC_LIGHT_STYLE_SHADER and record and MC.MaterialGpuOpaque and record.material == MC.MaterialGpuOpaque then
-			style = MC_LIGHT_STYLE_GPU_SHADER
-		end
+		local style = effectiveLightStyleForMaterial( meshLightStyle, record.material, meshLightProfile )
 		for li in pairs( blockLightDirtySection ) do
 			local vertexIndexes = lightByLi[li]
 			if vertexIndexes then
@@ -292,10 +291,7 @@ function MC.RebuildChunkMeshLighting( key, sectionIndex )
 			local blockRecord = blockEmitCacheSection[li]
 			if blockRecord then
 				local recolorStart = SysTime()
-				local recordStyle = meshLightStyle
-				if recordStyle == MC_LIGHT_STYLE_SHADER and MC.MaterialGpuOpaque and blockRecord.material == MC.MaterialGpuOpaque then
-					recordStyle = MC_LIGHT_STYLE_GPU_SHADER
-				end
+				local recordStyle = effectiveLightStyleForMaterial( meshLightStyle, blockRecord.material, meshLightProfile )
 				local ok = recolorCachedBlockEmission( blockRecord, recordStyle, meshPerf )
 				meshPerfAdd( meshPerf, "recolorMS", recolorStart )
 				if not ok then return false end
@@ -312,10 +308,7 @@ function MC.RebuildChunkMeshLighting( key, sectionIndex )
 		local vertexCount = #record.verts
 		if recolorWholeRecord then
 			local recolorStart = SysTime()
-			local recordStyle = meshLightStyle
-			if recordStyle == MC_LIGHT_STYLE_SHADER and record and MC.MaterialGpuOpaque and record.material == MC.MaterialGpuOpaque then
-				recordStyle = MC_LIGHT_STYLE_GPU_SHADER
-			end
+			local recordStyle = effectiveLightStyleForMaterial( meshLightStyle, record.material, meshLightProfile )
 			if not recolorCachedBlockEmission( record, recordStyle, meshPerf ) then return false end
 			meshPerfAdd( meshPerf, "recolorMS", recolorStart )
 		else
@@ -325,7 +318,7 @@ function MC.RebuildChunkMeshLighting( key, sectionIndex )
 			if not changed then return true, false end
 			meshPerfAdd( meshPerf, "recolorMS", recolorStart )
 		end
-		uploadMeshVertices( record.mesh, record.verts, meshPerf )
+		uploadMeshVertices( record.mesh, record.verts, meshPerf, record.hasSecondaryUV )
 		meshPerf.vertices = meshPerf.vertices + vertexCount
 		meshPerf.faces = meshPerf.faces + math.floor( vertexCount / 6 )
 		meshPerf.meshes = meshPerf.meshes + 1

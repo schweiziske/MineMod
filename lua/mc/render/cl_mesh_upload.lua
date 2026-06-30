@@ -78,7 +78,23 @@ local function meshPerfAdd( perf, field, startTime )
 	perf[field] = ( perf[field] or 0 ) + meshPerfElapsedMS( startTime )
 end
 
-local function uploadMeshVertices( meshObj, verts, perf )
+local function writeMeshVertex( vert, meshPosition, meshNormal, meshTexCoord, meshColor, meshAdvanceVertex, hasSecondaryUV )
+	local pos = vert.pos
+	local normal = vert.normal
+	local color = vert.color
+	meshPosition( pos.x, pos.y, pos.z )
+	if normal then meshNormal( normal.x, normal.y, normal.z ) end
+	meshTexCoord( 0, vert.u or 0, vert.v or 0 )
+	if hasSecondaryUV then meshTexCoord( 1, vert.u1 or 0, vert.v1 or 0 ) end
+	if color then
+		meshColor( color.r or 255, color.g or 255, color.b or 255, color.a or 255 )
+	else
+		meshColor( 255, 255, 255, 255 )
+	end
+	meshAdvanceVertex()
+end
+
+local function uploadMeshVertices( meshObj, verts, perf, hasSecondaryUV )
 	if meshBeginUploadEnabled() and mesh and mesh.Begin and meshObj then
 		local vertexCount = #verts
 		local triCount = math.floor( vertexCount / 3 )
@@ -92,19 +108,7 @@ local function uploadMeshVertices( meshObj, verts, perf )
 		local meshEnd = mesh.End
 		meshBegin( meshObj, MATERIAL_TRIANGLES, triCount )
 		for i = 1, vertexCount do
-			local vert = verts[i]
-			local pos = vert.pos
-			local normal = vert.normal
-			local color = vert.color
-			meshPosition( pos )
-			if normal then meshNormal( normal ) end
-			meshTexCoord( 0, vert.u or 0, vert.v or 0 )
-			if color then
-				meshColor( color.r or 255, color.g or 255, color.b or 255, color.a or 255 )
-			else
-				meshColor( 255, 255, 255, 255 )
-			end
-			meshAdvanceVertex()
+			writeMeshVertex( verts[i], meshPosition, meshNormal, meshTexCoord, meshColor, meshAdvanceVertex, hasSecondaryUV )
 		end
 		meshEnd()
 		meshPerfAdd( perf, "buildTriMS", uploadStart )
@@ -243,7 +247,6 @@ RM.newMeshPerfStats = newMeshPerfStats
 RM.meshPerfElapsedMS = meshPerfElapsedMS
 RM.meshPerfRoundMS = meshPerfRoundMS
 RM.meshPerfMS = meshPerfMS
-RM.meshHasSecondaryUV = meshHasSecondaryUV
 RM.meshPerfAdd = meshPerfAdd
 RM.uploadMeshVertices = uploadMeshVertices
 RM.meshPerfAddBlockKind = meshPerfAddBlockKind

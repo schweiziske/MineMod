@@ -384,6 +384,7 @@ function MC.StoreBlockEmissionCache( key, sectionIndex, li, id, orient, lightSty
 	record.orient = orient or 0
 	record.lightStyle = lightStyle
 	record.vertexCount = record.vertexCount or #( record.verts or {} )
+	record.hasSecondaryUV = record.hasSecondaryUV == true
 	if record.vertexCount <= 0 then
 		MC.DropBlockEmitCacheRecord( key, sectionIndex, li )
 		MC.ClearBlockCacheDirtySlot( key, sectionIndex, li )
@@ -418,21 +419,62 @@ function MC.AppendCachedBlockEmission( record, buf, flushFn, meshPerf, vertexLim
 	local outLight = buf.light
 	local nv = buf.nv or 0
 	local pushed = 0
-	for i = 1, vertexCount do
-		nv = nv + 1
-		outVerts[nv] = verts[i]
-		outLight[nv] = light[i]
-		pushed = pushed + 1
-		if nv >= vertexLimit and flushFn then
-			buf.nv = nv
-			if meshPerf and pushed > 0 then
-				meshPerf.pushedVertices = ( meshPerf.pushedVertices or 0 ) + pushed
-				pushed = 0
+	local tableMove = table.move
+	if record.hasSecondaryUV then buf.hasSecondaryUV = true end
+	if tableMove then
+		local offset = 1
+		while offset <= vertexCount do
+			if nv >= vertexLimit and flushFn then
+				buf.nv = nv
+				if meshPerf and pushed > 0 then
+					meshPerf.pushedVertices = ( meshPerf.pushedVertices or 0 ) + pushed
+					pushed = 0
+				end
+				flushFn( buf )
+				outVerts = buf.verts
+				outLight = buf.light
+				nv = buf.nv or 0
 			end
-			flushFn( buf )
-			outVerts = buf.verts
-			outLight = buf.light
-			nv = buf.nv or 0
+			local chunkCount = vertexCount - offset + 1
+			if flushFn then
+				local room = vertexLimit - nv
+				if chunkCount > room then chunkCount = room end
+			end
+			if chunkCount <= 0 then break end
+			tableMove( verts, offset, offset + chunkCount - 1, nv + 1, outVerts )
+			tableMove( light, offset, offset + chunkCount - 1, nv + 1, outLight )
+			nv = nv + chunkCount
+			offset = offset + chunkCount
+			pushed = pushed + chunkCount
+			if nv >= vertexLimit and flushFn then
+				buf.nv = nv
+				if meshPerf and pushed > 0 then
+					meshPerf.pushedVertices = ( meshPerf.pushedVertices or 0 ) + pushed
+					pushed = 0
+				end
+				flushFn( buf )
+				outVerts = buf.verts
+				outLight = buf.light
+				nv = buf.nv or 0
+			end
+		end
+	else
+		for i = 1, vertexCount do
+			nv = nv + 1
+			outVerts[nv] = verts[i]
+			outLight[nv] = light[i]
+			pushed = pushed + 1
+			if nv >= vertexLimit and flushFn then
+				buf.nv = nv
+				if meshPerf and pushed > 0 then
+					meshPerf.pushedVertices = ( meshPerf.pushedVertices or 0 ) + pushed
+					pushed = 0
+				end
+				flushFn( buf )
+				outVerts = buf.verts
+				outLight = buf.light
+				nv = buf.nv or 0
+			end
 		end
 	end
 	buf.nv = nv
@@ -458,11 +500,11 @@ function MC.CachedBlockLightMetaKey( meta )
 end
 
 function MC.RecolorCachedBlockEmission( record, lightStyle, recolorFn, meshPerf )
-	if not record or not record.verts or not record.light or not recolorFn then return false end
-	local verts = record.verts
-	local light = record.light
+	if not record or not recolorFn then return false end
+	local verts = record.verts or {}
+	local light = record.light or {}
 	local vertexCount = record.vertexCount or #verts
-	if vertexCount ~= #verts or vertexCount ~= #light then return false end
+	if vertexCount ~= #light then return false end
 	local colorCache = {}
 	local style = lightStyle
 	local recolor = recolorFn
@@ -485,10 +527,11 @@ end
 
 local function clearRecordRecolorKeys( record )
 	local light = record and record.light
-	if not light then return end
-	for i = 1, #light do
-		local meta = light[i]
-		if meta then meta.recolorKey = nil end
+	if light then
+		for i = 1, #light do
+			local meta = light[i]
+			if meta then meta.recolorKey = nil end
+		end
 	end
 end
 
