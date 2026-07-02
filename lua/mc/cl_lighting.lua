@@ -1,8 +1,8 @@
 --[[----------------------------------------------------------------------------
 	MC : client-side Minecraft-style vertex lighting
 
-	Lighting is stored as per-cell 0-15 block/sky values, like Minecraft's light
-	arrays. Mesh building only samples those values; propagation happens when
+	Lighting is stored as per-cell 0-15 block light values. Mesh building samples
+	those values; propagation happens when
 	chunks arrive or blocks change.
 ------------------------------------------------------------------------------]]
 
@@ -10,8 +10,7 @@ MC = MC or {}
 
 MC.LightEnabled = MC.LightEnabled or CreateClientConVar( "mc_light_enabled", "1", true, false,
 	"Apply Minecraft-style vertex lighting to MC chunk meshes" )
-MC.LightSkyLevel = MC.LightSkyLevel or CreateClientConVar( "mc_light_sky_level", "0", true, false,
-	"Client sky light level for MC chunks (0-15)" )
+MC.LightSkyLevel = nil
 MC.LightAmbientMin = MC.LightAmbientMin or CreateClientConVar( "mc_light_ambient_min", "0", true, false,
 	"Minimum brightness multiplier for MC vertex lighting" )
 MC.LightStyle = MC.LightStyle or CreateClientConVar( "mc_light_style", "shader", true, false,
@@ -24,24 +23,17 @@ MC.LightPerfPrintEach = MC.LightPerfPrintEach or CreateClientConVar( "mc_light_p
 	"Print one-line timing diagnostics for each MC lighting calculation" )
 
 MC.LightBlockChunks = MC.LightBlockChunks or {}
-MC.LightSkyChunks = MC.LightSkyChunks or {}
-MC.LightSkyColumnTops = MC.LightSkyColumnTops or {}
+MC.LightSkyChunks = nil
+MC.LightSkyColumnTops = nil
 MC.LightSourceCells = MC.LightSourceCells or {}
 MC.LightChunkSources = MC.LightChunkSources or {}
-MC.LightColumnChunks = MC.LightColumnChunks or {}
-MC.LightVirtualChunks = MC.LightVirtualChunks or {}
 MC.LightCellsReady = MC.LightCellsReady or false
 MC.LightSourceIndexReady = MC.LightSourceIndexReady or false
-MC.LightCellsSkyLevel = MC.LightCellsSkyLevel or -1
+MC.LightCellsSkyLevel = nil
 MC.LightPerfStats = MC.LightPerfStats or {}
 
 local function lightEnabled()
 	return not MC.LightEnabled or MC.LightEnabled:GetBool()
-end
-
-local function skyLevel()
-	local cv = MC.LightSkyLevel
-	return math.Clamp( cv and cv:GetInt() or 15, 0, 15 )
 end
 
 local function ambientMin()
@@ -253,14 +245,6 @@ local function cellKey( bx, by, bz )
 	return MC.CellKey( bx, by, bz )
 end
 
-local function chunkColumnKey( cx, cy )
-	return MC.ChunkColumnKey( cx, cy )
-end
-
-local function skyColumnKey( bx, by )
-	return MC.CellColumnKey( bx, by )
-end
-
 local function chunkKeyLoaded( key )
 	if key == nil then return false end
 	if MC.IsChunkLoaded then return MC.IsChunkLoaded( key ) end
@@ -269,51 +253,6 @@ end
 
 local function lightChunkAvailable( chunk )
 	return chunk and chunk.key and chunkKeyLoaded( chunk.key )
-end
-
-local function lightingChunkForCoords( cx, cy, cz, key )
-	key = key or MC.ChunkKey( cx, cy, cz )
-	local chunk = MC.World and MC.World[key]
-	if chunk then return chunk end
-	if not chunkKeyLoaded( key ) then return nil end
-	local virtual = MC.LightVirtualChunks and MC.LightVirtualChunks[key]
-	if not virtual then
-		virtual = { cx = cx, cy = cy, cz = cz, key = key, blocks = {}, orients = {}, count = 0 }
-		MC.LightVirtualChunks = MC.LightVirtualChunks or {}
-		MC.LightVirtualChunks[key] = virtual
-	end
-	return virtual
-end
-
-local function invalidateSkyColumnsForChunkCoords( cx, cy )
-	if not MC.LightSkyColumnTops then return end
-	local baseX, baseY = cx * MC.CS, cy * MC.CS
-	for ly = 0, MC.CS - 1 do
-		for lx = 0, MC.CS - 1 do
-			MC.LightSkyColumnTops[skyColumnKey( baseX + lx, baseY + ly )] = nil
-		end
-	end
-end
-
-local function syncLightColumnForCell( bx, by, bz )
-	if not MC.CellToChunk or not MC.ChunkKey then return end
-	MC.LightColumnChunks = MC.LightColumnChunks or {}
-	local cx, cy, cz = MC.CellToChunk( bx, by, bz )
-	local chunkKey = MC.ChunkKey( cx, cy, cz )
-	local columnKey = chunkColumnKey( cx, cy )
-	local column = MC.LightColumnChunks[columnKey]
-	local chunk = lightingChunkForCoords( cx, cy, cz, chunkKey )
-	if chunk then
-		if not column then
-			column = {}
-			MC.LightColumnChunks[columnKey] = column
-		end
-		column[cz] = chunk
-	elseif column then
-		column[cz] = nil
-		if next( column ) == nil then MC.LightColumnChunks[columnKey] = nil end
-	end
-	if MC.LightSkyColumnTops then MC.LightSkyColumnTops[skyColumnKey( bx, by )] = nil end
 end
 
 local function lightEmission( id )
@@ -404,11 +343,9 @@ end
 
 local function clearStoredLight()
 	MC.LightBlockChunks = {}
-	MC.LightSkyChunks = {}
-	MC.LightSkyColumnTops = {}
-	MC.LightVirtualChunks = {}
+	MC.LightSkyChunks = nil
+	MC.LightSkyColumnTops = nil
 	MC.LightCellsReady = false
-	MC.LightCellsSkyLevel = -1
 end
 
 local function clearGpuLightTextures()
@@ -418,10 +355,9 @@ end
 function MC.ClearLightingCache()
 	clearStoredLight()
 	clearGpuLightTextures()
-	MC.LightSkyColumnTops = {}
+	MC.LightSkyColumnTops = nil
 	MC.LightSourceCells = {}
 	MC.LightChunkSources = {}
-	MC.LightColumnChunks = {}
 	MC.LightSourceIndexReady = false
 end
 
@@ -453,21 +389,6 @@ function MC.ClearChunkLightSources( key )
 		end
 	end
 	MC.LightChunkSources[key] = nil
-	if MC.LightVirtualChunks then MC.LightVirtualChunks[key] = nil end
-	if MC.ChunkKeyToCoords then
-		local cx, cy, cz = MC.ChunkKeyToCoords( key )
-		if cx then
-			invalidateSkyColumnsForChunkCoords( cx, cy )
-			local columnKey = chunkColumnKey( cx, cy )
-			local column = MC.LightColumnChunks and MC.LightColumnChunks[columnKey]
-			if column then
-				column[cz] = nil
-				if next( column ) == nil then
-					MC.LightColumnChunks[columnKey] = nil
-				end
-			end
-		end
-	end
 	if MC.RemoveChunkLighting then
 		MC.RemoveChunkLighting( key )
 	else
@@ -498,14 +419,6 @@ local function indexChunkSources( chunk )
 	end
 end
 
-local function indexChunkColumn( chunk )
-	if not lightChunkAvailable( chunk ) then return end
-	invalidateSkyColumnsForChunkCoords( chunk.cx, chunk.cy )
-	local key = chunkColumnKey( chunk.cx, chunk.cy )
-	MC.LightColumnChunks[key] = MC.LightColumnChunks[key] or {}
-	MC.LightColumnChunks[key][chunk.cz] = lightingChunkForCoords( chunk.cx, chunk.cy, chunk.cz, chunk.key ) or chunk
-end
-
 function MC.IndexChunkLightSources( chunk )
 	if not chunk or not chunk.key then return end
 	if not lightEnabled() then
@@ -514,7 +427,6 @@ function MC.IndexChunkLightSources( chunk )
 		return
 	end
 	MC.ClearChunkLightSources( chunk.key )
-	indexChunkColumn( chunk )
 	indexChunkSources( chunk )
 	MC.LightSourceIndexReady = true
 	if MC.UpdateLightingForChunkLoaded then
@@ -527,9 +439,7 @@ end
 function MC.ReindexAllLightingSources()
 	MC.LightSourceCells = {}
 	MC.LightChunkSources = {}
-	MC.LightColumnChunks = {}
 	for _, chunk in pairs( MC.World or {} ) do
-		indexChunkColumn( chunk )
 		indexChunkSources( chunk )
 	end
 	MC.LightSourceIndexReady = true
@@ -647,14 +557,17 @@ local function runLightDecreaseQueue( removeQ, addQ, changed )
 			for i = 1, #NEIGHBORS do
 				local off = NEIGHBORS[i]
 				local nx, ny, nz = bx + off[1], by + off[2], bz + off[3]
-				if chunkLoadedForCell( nx, ny, nz ) then
-					local neighborLevel = getStoredLight( MC.LightBlockChunks, nx, ny, nz )
-					if neighborLevel > 0 and neighborLevel < oldLevel then
-						setBlockLightChanged( changed, nx, ny, nz, 0 )
-						pushLightQueue( removeQ, nx, ny, nz, neighborLevel )
-					elseif neighborLevel >= oldLevel then
-						pushLightQueue( addQ, nx, ny, nz, neighborLevel )
-					end
+				-- No chunkLoadedForCell gate here: stored block light can
+				-- outlive its chunk (a lone torch creates the chunk, removing
+				-- it deletes the chunk BEFORE this flood runs). The removal
+				-- wave must chase those orphaned values, otherwise the
+				-- surviving frontier re-seeds the region and the glow sticks.
+				local neighborLevel = getStoredLight( MC.LightBlockChunks, nx, ny, nz )
+				if neighborLevel > 0 and neighborLevel < oldLevel then
+					setBlockLightChanged( changed, nx, ny, nz, 0 )
+					pushLightQueue( removeQ, nx, ny, nz, neighborLevel )
+				elseif neighborLevel >= oldLevel then
+					pushLightQueue( addQ, nx, ny, nz, neighborLevel )
 				end
 			end
 		end
@@ -749,7 +662,6 @@ local function finishChunkLightQueues( perfStart, changed, removeQ, addQ, source
 	local incProcessed = runLightIncreaseQueue( addQ, changed )
 	local dirtySections = MC.MarkLightSectionsDirtyForChangedCells and MC.MarkLightSectionsDirtyForChangedCells( changed ) or 0
 	MC.LightCellsReady = true
-	MC.LightCellsSkyLevel = skyLevel()
 	local stats = MC.LightPerfStats or {}
 	MC.LightPerfStats = stats
 	stats.lastPropagateMS = perfMS( perfStart )
@@ -794,10 +706,11 @@ function MC.RemoveChunkLighting( key )
 	return finishChunkLightQueues( perfStart, changed, removeQ, addQ, 0, "remove:" .. tostring( key ), "remove_chunk" )
 end
 
-local rebuildAllSkyCells
-
 function MC.UpdateLightingForChunkLoaded( chunk )
 	if not chunk or not chunk.key then return 0, 0 end
+	if MC.NoteSkyColumnChunkLoaded then
+		MC.NoteSkyColumnChunkLoaded( chunk )
+	end
 	if not lightEnabled() then
 		noteLightingDisabledSkip( "chunk_loaded" )
 		return 0, 0
@@ -813,9 +726,7 @@ function MC.UpdateLightingForChunkLoaded( chunk )
 		seedChunkBorderLight( addQ, chunk )
 	end
 	local changedCount, dirtySections = finishChunkLightQueues( perfStart, changed, removeQ, addQ, sourceCount, tostring( chunk.key ), "chunk_loaded" )
-	local skyChanged = rebuildAllSkyCells()
-	local skyDirtySections = MC.MarkLightSectionsDirtyForChangedCells( skyChanged )
-	return changedCount + ( skyChanged and skyChanged.count or 0 ), dirtySections + skyDirtySections
+	return changedCount, dirtySections
 end
 
 function MC.MarkLightSectionsDirtyForChangedCells( changed )
@@ -951,510 +862,6 @@ local function rebuildBlockLightCells()
 	return changed
 end
 
-local function setSkyLightChanged( changed, oldStore, bx, by, bz, level )
-	level = math.Clamp( math.floor( tonumber( level ) or 0 ), 0, 15 )
-	local currentLevel = getStoredLight( MC.LightSkyChunks, bx, by, bz )
-	if currentLevel == level then return false end
-	setStoredLight( MC.LightSkyChunks, bx, by, bz, level )
-	local oldLevel = oldStore and getStoredLight( oldStore, bx, by, bz ) or 0
-	if oldLevel ~= level then noteChangedLightCell( changed, bx, by, bz ) end
-	return true
-end
-
-local function setSkyLightLevelChanged( changed, bx, by, bz, level )
-	level = math.Clamp( math.floor( tonumber( level ) or 0 ), 0, 15 )
-	local currentLevel = getStoredLight( MC.LightSkyChunks, bx, by, bz )
-	if currentLevel == level then return false end
-	setStoredLight( MC.LightSkyChunks, bx, by, bz, level )
-	if chunkLoadedForCell( bx, by, bz ) then noteChangedLightCell( changed, bx, by, bz ) end
-	return true
-end
-
-local function skyLightPropagationCost( bx, by, bz, offZ, sourceLevel )
-	local opacity = lightOpacityAt( bx, by, bz )
-	if opacity >= 15 then return 16 end
-	if offZ == -1 and sourceLevel >= skyLevel() and opacity <= 0 then return 0 end
-	return math.max( 1, opacity )
-end
-
-local function seedDirectSkyChunkCells( q, changed, oldStore, level, chunk, lx, ly, bx, by, directLevel )
-	local directCells = 0
-	local baseZ = chunk.cz * MC.CH
-	for lz = MC.CH - 1, 0, -1 do
-		local bz = baseZ + lz
-		local li = lx + ly * MC.CS + lz * MC.CS * MC.CS
-		local id = chunk.blocks and chunk.blocks[li] or 0
-		local orient = chunk.orients and chunk.orients[li] or 0
-		local opacity = lightOpacity( id, orient )
-		if opacity >= 15 then
-			directLevel = 0
-			setSkyLightChanged( changed, oldStore, bx, by, bz, 0 )
-		elseif directLevel > 0 then
-			if setSkyLightChanged( changed, oldStore, bx, by, bz, directLevel ) then
-				directCells = directCells + 1
-			end
-			pushLightQueue( q, bx, by, bz, directLevel )
-			if directLevel < level or opacity > 0 then
-				directLevel = math.max( 0, directLevel - math.max( 1, opacity ) )
-			end
-		else
-			setSkyLightChanged( changed, oldStore, bx, by, bz, 0 )
-		end
-	end
-	return directLevel, directCells
-end
-
-local function seedDirectSkyVerticalLine( q, changed, oldStore, column, minCZ, maxCZ, level, lx, ly, bx, by )
-	local directLevel = level
-	local directCells = 0
-	for cz = maxCZ, minCZ, -1 do
-		local chunk = column[cz]
-		if lightChunkAvailable( chunk ) then
-			local chunkCells
-			directLevel, chunkCells = seedDirectSkyChunkCells( q, changed, oldStore, level, chunk, lx, ly, bx, by, directLevel )
-			directCells = directCells + chunkCells
-		end
-	end
-	return directCells
-end
-
-local function seedDirectSkyLoadedColumn( q, changed, oldStore, column, cx, cy, minCZ, maxCZ, level )
-	local directCells = 0
-	local baseX, baseY = cx * MC.CS, cy * MC.CS
-	for ly = 0, MC.CS - 1 do
-		for lx = 0, MC.CS - 1 do
-			local bx, by = baseX + lx, baseY + ly
-			directCells = directCells + seedDirectSkyVerticalLine( q, changed, oldStore, column, minCZ, maxCZ, level, lx, ly, bx, by )
-		end
-	end
-	return directCells
-end
-
-local function seedDirectSkyLight( q, changed, oldStore, level )
-	local columns, directCells = 0, 0
-	level = math.Clamp( math.floor( tonumber( level ) or 0 ), 0, 15 )
-	if level <= 0 then return columns, directCells end
-	for _, column in pairs( MC.LightColumnChunks or {} ) do
-		local cx, cy, minCZ, maxCZ
-		for cz, chunk in pairs( column or {} ) do
-			if lightChunkAvailable( chunk ) then
-				cx, cy = chunk.cx, chunk.cy
-				minCZ = minCZ and math.min( minCZ, cz ) or cz
-				maxCZ = maxCZ and math.max( maxCZ, cz ) or cz
-			end
-		end
-		if cx and cy and minCZ and maxCZ then
-			columns = columns + MC.CS * MC.CS
-			directCells = directCells + seedDirectSkyLoadedColumn( q, changed, oldStore, column, cx, cy, minCZ, maxCZ, level )
-		end
-	end
-	return columns, directCells
-end
-
-local function runSkyLightIncreaseQueue( q, changed, oldStore )
-	local processed = 0
-	while q.head <= q.tail do
-		local bx, by, bz, level = popLightQueue( q )
-		if bx and chunkLoadedForCell( bx, by, bz ) then
-			processed = processed + 1
-			for i = 1, #NEIGHBORS do
-				local off = NEIGHBORS[i]
-				local nx, ny, nz = bx + off[1], by + off[2], bz + off[3]
-				if chunkLoadedForCell( nx, ny, nz ) then
-					local nextLevel = level - skyLightPropagationCost( nx, ny, nz, off[3], level )
-					if nextLevel > 0 and getStoredLight( MC.LightSkyChunks, nx, ny, nz ) < nextLevel then
-						setSkyLightChanged( changed, oldStore, nx, ny, nz, nextLevel )
-						pushLightQueue( q, nx, ny, nz, nextLevel )
-					end
-				end
-			end
-		end
-	end
-	return processed
-end
-
-local function setSkyLightLevelQueued( changed, removeQ, addQ, bx, by, bz, level )
-	level = math.Clamp( math.floor( tonumber( level ) or 0 ), 0, 15 )
-	local oldLevel = getStoredLight( MC.LightSkyChunks, bx, by, bz )
-	if oldLevel == level then return false end
-	setStoredLight( MC.LightSkyChunks, bx, by, bz, level )
-	if chunkLoadedForCell( bx, by, bz ) then
-		noteChangedLightCell( changed, bx, by, bz )
-	end
-	if oldLevel > level and oldLevel > 0 then
-		pushLightQueue( removeQ, bx, by, bz, oldLevel )
-	end
-	if level > 0 then
-		pushLightQueue( addQ, bx, by, bz, level )
-	end
-	return true, oldLevel
-end
-
-local function runSkyLightDecreaseQueue( removeQ, addQ, changed )
-	local processed = 0
-	while removeQ.head <= removeQ.tail do
-		local bx, by, bz, oldLevel = popLightQueue( removeQ )
-		if bx then
-			processed = processed + 1
-			for i = 1, #NEIGHBORS do
-				local off = NEIGHBORS[i]
-				local nx, ny, nz = bx + off[1], by + off[2], bz + off[3]
-				if chunkLoadedForCell( nx, ny, nz ) then
-					local neighborLevel = getStoredLight( MC.LightSkyChunks, nx, ny, nz )
-					if neighborLevel > 0 and neighborLevel < oldLevel then
-						setSkyLightLevelQueued( changed, removeQ, addQ, nx, ny, nz, 0 )
-					elseif neighborLevel >= oldLevel then
-						pushLightQueue( addQ, nx, ny, nz, neighborLevel )
-					end
-				end
-			end
-		end
-	end
-	return processed
-end
-
-local function noteClearedSkyLightCells( oldStore, changed )
-	if not oldStore or not MC.ChunkKeyToCoords or not MC.DecodeLocal then return 0 end
-	local cleared = 0
-	for key, store in pairs( oldStore ) do
-		local cx, cy, cz = MC.ChunkKeyToCoords( key )
-		if cx then
-			local baseX, baseY, baseZ = cx * MC.CS, cy * MC.CS, cz * MC.CH
-			for li, level in pairs( store or {} ) do
-				if level and level > 0 and MC.LocalIndexInRange( li ) then
-					local lx, ly, lz = MC.DecodeLocal( li )
-					local bx, by, bz = baseX + lx, baseY + ly, baseZ + lz
-					if getStoredLight( MC.LightSkyChunks, bx, by, bz ) <= 0 then
-						noteChangedLightCell( changed, bx, by, bz )
-						cleared = cleared + 1
-					end
-				end
-			end
-		end
-	end
-	return cleared
-end
-
-local function columnBounds( bx, by )
-	local cx, cy = math.floor( bx / MC.CS ), math.floor( by / MC.CS )
-	local minZ, maxZ
-	local column = MC.LightColumnChunks and MC.LightColumnChunks[chunkColumnKey( cx, cy )]
-	for cz, chunk in pairs( column or {} ) do
-		if lightChunkAvailable( chunk ) then
-			local bottom = cz * MC.CH
-			local top = bottom + MC.CH - 1
-			minZ = minZ and math.min( minZ, bottom ) or bottom
-			maxZ = maxZ and math.max( maxZ, top ) or top
-		end
-	end
-	return minZ, maxZ
-end
-
-local function loadedColumnCZRange( column )
-	local minCZ, maxCZ
-	for cz, chunk in pairs( column or {} ) do
-		if lightChunkAvailable( chunk ) then
-			minCZ = minCZ and math.min( minCZ, cz ) or cz
-			maxCZ = maxCZ and math.max( maxCZ, cz ) or cz
-		end
-	end
-	return minCZ, maxCZ
-end
-
-local function localSkyRegionZBounds( minBX, minBY, maxBX, maxBY )
-	local minCX, maxCX = math.floor( minBX / MC.CS ), math.floor( maxBX / MC.CS )
-	local minCY, maxCY = math.floor( minBY / MC.CS ), math.floor( maxBY / MC.CS )
-	local minZ, maxZ
-	for cy = minCY, maxCY do
-		for cx = minCX, maxCX do
-			local column = MC.LightColumnChunks and MC.LightColumnChunks[chunkColumnKey( cx, cy )]
-			for cz, chunk in pairs( column or {} ) do
-				if lightChunkAvailable( chunk ) then
-					local bottom = cz * MC.CH
-					local top = bottom + MC.CH - 1
-					minZ = minZ and math.min( minZ, bottom ) or bottom
-					maxZ = maxZ and math.max( maxZ, top ) or top
-				end
-			end
-		end
-	end
-	return minZ, maxZ
-end
-
-local function clearSkyLightBounds( changed, minBX, minBY, minBZ, maxBX, maxBY, maxBZ )
-	local cleared = 0
-	for bz = minBZ, maxBZ do
-		for by = minBY, maxBY do
-			for bx = minBX, maxBX do
-				if getStoredLight( MC.LightSkyChunks, bx, by, bz ) > 0
-				and setSkyLightLevelChanged( changed, bx, by, bz, 0 ) then
-					cleared = cleared + 1
-				end
-			end
-		end
-	end
-	return cleared
-end
-
-local function seedDirectSkyChunkCellsLocal( q, changed, level, chunk, lx, ly, bx, by, directLevel )
-	local directCells = 0
-	local baseZ = chunk.cz * MC.CH
-	for lz = MC.CH - 1, 0, -1 do
-		local bz = baseZ + lz
-		local li = lx + ly * MC.CS + lz * MC.CS * MC.CS
-		local id = chunk.blocks and chunk.blocks[li] or 0
-		local orient = chunk.orients and chunk.orients[li] or 0
-		local opacity = lightOpacity( id, orient )
-		if opacity >= 15 then
-			directLevel = 0
-			setSkyLightLevelChanged( changed, bx, by, bz, 0 )
-		elseif directLevel > 0 then
-			if setSkyLightLevelChanged( changed, bx, by, bz, directLevel ) then
-				directCells = directCells + 1
-			end
-			pushLightQueue( q, bx, by, bz, directLevel )
-			if directLevel < level or opacity > 0 then
-				directLevel = math.max( 0, directLevel - math.max( 1, opacity ) )
-			end
-		else
-			setSkyLightLevelChanged( changed, bx, by, bz, 0 )
-		end
-	end
-	return directLevel, directCells
-end
-
-local function seedDirectSkyVerticalLineLocal( q, changed, column, minCZ, maxCZ, level, lx, ly, bx, by )
-	local directLevel = level
-	local directCells = 0
-	for cz = maxCZ, minCZ, -1 do
-		local chunk = column[cz]
-		if lightChunkAvailable( chunk ) then
-			local chunkCells
-			directLevel, chunkCells = seedDirectSkyChunkCellsLocal( q, changed, level, chunk, lx, ly, bx, by, directLevel )
-			directCells = directCells + chunkCells
-		end
-	end
-	return directCells
-end
-
-local function rebuildDirectSkyVerticalLineQueued( changed, removeQ, addQ, column, minCZ, maxCZ, level, lx, ly, bx, by )
-	local directLevel = level
-	local directCells = 0
-	for cz = maxCZ, minCZ, -1 do
-		local chunk = column[cz]
-		if lightChunkAvailable( chunk ) then
-			local baseZ = chunk.cz * MC.CH
-			for lz = MC.CH - 1, 0, -1 do
-				local bz = baseZ + lz
-				local li = lx + ly * MC.CS + lz * MC.CS * MC.CS
-				local id = chunk.blocks and chunk.blocks[li] or 0
-				local orient = chunk.orients and chunk.orients[li] or 0
-				local opacity = lightOpacity( id, orient )
-				local nextLevel = 0
-				if opacity >= 15 then
-					directLevel = 0
-				elseif directLevel > 0 then
-					nextLevel = directLevel
-					if directLevel < level or opacity > 0 then
-						directLevel = math.max( 0, directLevel - math.max( 1, opacity ) )
-					end
-				end
-				if setSkyLightLevelQueued( changed, removeQ, addQ, bx, by, bz, nextLevel )
-				and nextLevel > 0 then
-					directCells = directCells + 1
-				end
-			end
-		end
-	end
-	return directCells
-end
-
-local function seedDirectSkyLocalBounds( q, changed, minBX, minBY, maxBX, maxBY, level )
-	local columns, directCells = 0, 0
-	for by = minBY, maxBY do
-		for bx = minBX, maxBX do
-			local cx, cy = math.floor( bx / MC.CS ), math.floor( by / MC.CS )
-			local column = MC.LightColumnChunks and MC.LightColumnChunks[chunkColumnKey( cx, cy )]
-			local minCZ, maxCZ = loadedColumnCZRange( column )
-			if minCZ and maxCZ then
-				local lx, ly = bx - cx * MC.CS, by - cy * MC.CS
-				columns = columns + 1
-				directCells = directCells + seedDirectSkyVerticalLineLocal( q, changed, column, minCZ, maxCZ, level, lx, ly, bx, by )
-			end
-		end
-	end
-	return columns, directCells
-end
-
-local function seedSkyBoundaryLight( q, minBX, minBY, minBZ, maxBX, maxBY, maxBZ )
-	for bz = minBZ, maxBZ do
-		for by = minBY, maxBY do
-			local west = getStoredLight( MC.LightSkyChunks, minBX - 1, by, bz )
-			local east = getStoredLight( MC.LightSkyChunks, maxBX + 1, by, bz )
-			if west > 0 then pushLightQueue( q, minBX - 1, by, bz, west ) end
-			if east > 0 then pushLightQueue( q, maxBX + 1, by, bz, east ) end
-		end
-		for bx = minBX - 1, maxBX + 1 do
-			local south = getStoredLight( MC.LightSkyChunks, bx, minBY - 1, bz )
-			local north = getStoredLight( MC.LightSkyChunks, bx, maxBY + 1, bz )
-			if south > 0 then pushLightQueue( q, bx, minBY - 1, bz, south ) end
-			if north > 0 then pushLightQueue( q, bx, maxBY + 1, bz, north ) end
-		end
-	end
-end
-
-local function rebuildSkyCellsAroundColumn( bx, by )
-	local perfStart = perfNow()
-	local level = skyLevel()
-	local changed = newChangedLightCells()
-	local cx, cy = math.floor( bx / MC.CS ), math.floor( by / MC.CS )
-	local lx, ly = bx - cx * MC.CS, by - cy * MC.CS
-	local column = MC.LightColumnChunks and MC.LightColumnChunks[chunkColumnKey( cx, cy )]
-	local minCZ, maxCZ = loadedColumnCZRange( column )
-	if not minCZ or not maxCZ then return changed, 0 end
-
-	local removeQ = newLightQueue()
-	local addQ = newLightQueue()
-	local directCells, decProcessed, incProcessed = 0, 0, 0
-	if level > 0 then
-		directCells = rebuildDirectSkyVerticalLineQueued( changed, removeQ, addQ, column, minCZ, maxCZ, level, lx, ly, bx, by )
-		decProcessed = runSkyLightDecreaseQueue( removeQ, addQ, changed )
-		incProcessed = runSkyLightIncreaseQueue( addQ, changed, nil )
-	end
-	local dirtySections = MC.MarkLightSectionsDirtyForChangedCells and MC.MarkLightSectionsDirtyForChangedCells( changed ) or 0
-	local ms = perfMS( perfStart )
-	local stats = MC.LightPerfStats or {}
-	MC.LightPerfStats = stats
-	stats.lastSkyRebuildMS = ms
-	stats.lastSkyRebuildMode = "local"
-	stats.lastSkyRebuildColumns = 1
-	stats.lastSkyRebuildCells = changed.count
-	stats.lastSkyDirectCells = directCells
-	stats.lastSkyClearedCells = 0
-	stats.lastSkyIncreaseProcessed = incProcessed
-	stats.lastSkyDecreaseProcessed = decProcessed
-	stats.lastSkyLocalMS = ms
-	stats.lastSkyLocalBounds = perfBoundsText( bx, by, minCZ * MC.CH, bx, by, maxCZ * MC.CH + MC.CH - 1 )
-	stats.lastSkyLocalDirtySections = dirtySections
-	MC.LightPerfTrace( "sky_local", {
-		ms = ms,
-		changed = changed.count,
-		dirtySections = dirtySections,
-		inc = incProcessed,
-		dec = decProcessed,
-		queued = lightQueueCount( removeQ ) + lightQueueCount( addQ ),
-		written = directCells,
-		bounds = stats.lastSkyLocalBounds,
-	} )
-	return changed, dirtySections
-end
-
-local function highestOpaqueInChunkColumn( chunk, lx, ly, cz )
-	if not chunk or not chunk.count or chunk.count <= 0 then return nil end
-	for lz = MC.CH - 1, 0, -1 do
-		local li = lx + ly * MC.CS + lz * MC.CS * MC.CS
-		local id = chunk.blocks and chunk.blocks[li] or 0
-		if id and id ~= 0 then
-			local orient = chunk.orients and chunk.orients[li] or 0
-			if lightOpacity( id, orient ) >= 15 then
-				return cz * MC.CH + lz
-			end
-		end
-	end
-	return nil
-end
-
-local function highestOpaqueInColumn( bx, by )
-	local cx, cy = math.floor( bx / MC.CS ), math.floor( by / MC.CS )
-	local lx, ly = bx - cx * MC.CS, by - cy * MC.CS
-	local topOpaque = nil
-	local column = MC.LightColumnChunks and MC.LightColumnChunks[chunkColumnKey( cx, cy )]
-	for cz, chunk in pairs( column or {} ) do
-		local z = highestOpaqueInChunkColumn( chunk, lx, ly, cz )
-		if z and ( not topOpaque or z > topOpaque ) then topOpaque = z end
-	end
-	return topOpaque
-end
-
-local function skyColumnTopWithOverride( bx, by, overrideBX, overrideBY, overrideBZ, overrideId, overrideOrient )
-	local cx, cy = math.floor( bx / MC.CS ), math.floor( by / MC.CS )
-	local lx, ly = bx - cx * MC.CS, by - cy * MC.CS
-	local topOpaque = nil
-	local column = MC.LightColumnChunks and MC.LightColumnChunks[chunkColumnKey( cx, cy )]
-	for cz, chunk in pairs( column or {} ) do
-		if chunk and chunk.count and chunk.count > 0 then
-			for lz = MC.CH - 1, 0, -1 do
-				local z = cz * MC.CH + lz
-				local id, orient
-				if bx == overrideBX and by == overrideBY and z == overrideBZ then
-					id, orient = overrideId, overrideOrient
-				else
-					local li = lx + ly * MC.CS + lz * MC.CS * MC.CS
-					id = chunk.blocks and chunk.blocks[li] or 0
-					orient = chunk.orients and chunk.orients[li] or 0
-				end
-				if id and id ~= 0 and lightOpacity( id, orient ) >= 15 then
-					if not topOpaque or z > topOpaque then topOpaque = z end
-					break
-				end
-			end
-		end
-	end
-	if bx == overrideBX and by == overrideBY
-	and overrideId and overrideId ~= 0
-	and lightOpacity( overrideId, overrideOrient ) >= 15 then
-		topOpaque = topOpaque and math.max( topOpaque, overrideBZ ) or overrideBZ
-	end
-	return topOpaque or false
-end
-
-local function rebuildSkyColumn( bx, by )
-	local perfStart = perfNow()
-	local minZ, maxZ = columnBounds( bx, by )
-	if not minZ then return nil, nil, false end
-	local topOpaque = highestOpaqueInColumn( bx, by )
-	MC.LightSkyColumnTops = MC.LightSkyColumnTops or {}
-	MC.LightSkyColumnTops[skyColumnKey( bx, by )] = topOpaque or false
-	local ms = perfMS( perfStart )
-	local stats = MC.LightPerfStats or {}
-	MC.LightPerfStats = stats
-	stats.lastSkyColumnMS = ms
-	stats.lastSkyColumnCells = 1
-	stats.lastSkyColumn = string.format( "%d,%d z=%d..%d", bx, by, minZ, maxZ )
-	return minZ, maxZ, topOpaque or false, ms
-end
-
-rebuildAllSkyCells = function()
-	local perfStart = perfNow()
-	local changed = newChangedLightCells()
-	local oldStore = MC.LightSkyChunks or {}
-	local q = newLightQueue()
-	local level = skyLevel()
-	MC.LightSkyChunks = {}
-	MC.LightSkyColumnTops = {}
-	local columns, directCells = seedDirectSkyLight( q, changed, oldStore, level )
-	local incProcessed = runSkyLightIncreaseQueue( q, changed, oldStore )
-	local clearedCells = noteClearedSkyLightCells( oldStore, changed )
-	local stats = MC.LightPerfStats or {}
-	MC.LightPerfStats = stats
-	stats.lastSkyRebuildMS = perfMS( perfStart )
-	stats.lastSkyRebuildMode = "full"
-	stats.lastSkyRebuildColumns = columns
-	stats.lastSkyRebuildCells = changed.count
-	stats.lastSkyDirectCells = directCells
-	stats.lastSkyClearedCells = clearedCells
-	stats.lastSkyIncreaseProcessed = incProcessed
-	MC.LightPerfTrace( "sky_rebuild", {
-		ms = stats.lastSkyRebuildMS,
-		changed = stats.lastSkyRebuildCells,
-		inc = incProcessed,
-		queued = lightQueueCount( q ),
-		written = directCells,
-		bounds = "full",
-	} )
-	return changed
-end
-
 local function loadedWorldBounds()
 	local minX, minY, minZ, maxX, maxY, maxZ
 	for _, chunk in pairs( MC.World or {} ) do
@@ -1475,11 +882,9 @@ end
 function MC.RebuildLightingCells()
 	local perfStart = SysTime()
 	ensureLightSourceIndex()
-	MC.LightSkyChunks = {}
+	MC.LightSkyChunks = nil
 	local minX, minY, minZ, maxX, maxY, maxZ = loadedWorldBounds()
 	rebuildBlockLightCells()
-	rebuildAllSkyCells()
-	MC.LightCellsSkyLevel = skyLevel()
 	MC.LightCellsReady = true
 	local stats = MC.LightPerfStats or {}
 	MC.LightPerfStats = stats
@@ -1502,19 +907,11 @@ function MC.UpdateLightingCellsAroundCell( bx, by, bz, radius, rateLimited )
 	end
 	local perfStart = SysTime()
 	ensureLightSourceIndex()
-	if MC.LightCellsSkyLevel ~= skyLevel() then
-		local skyChanged = rebuildAllSkyCells()
-		if skyChanged and skyChanged.count and skyChanged.count > 0 then
-			MC.MarkLightSectionsDirtyForChangedCells( skyChanged )
-		end
-		MC.LightCellsSkyLevel = skyLevel()
-	end
 	local changed = newChangedLightCells()
 	local addQ = newLightQueue()
 	seedNeighborLight( addQ, bx, by, bz )
 	local incProcessed = runLightIncreaseQueue( addQ, changed )
 	MC.LightCellsReady = true
-	MC.LightCellsSkyLevel = skyLevel()
 	local dirtySections = MC.MarkLightSectionsDirtyForChangedCells( changed )
 	local stats = MC.LightPerfStats or {}
 	MC.LightPerfStats = stats
@@ -1553,46 +950,6 @@ function MC.MarkLightingDirtyAroundCell( bx, by, bz, radius, rateLimited )
 	MC.UpdateLightingCellsAroundCell( bx, by, bz, radius, rateLimited )
 end
 
-local function markLightingDirtyColumn( bx, by, bz, oldTop )
-	local minZ, maxZ, newTop = rebuildSkyColumn( bx, by )
-	if not minZ then return end
-	if oldTop == nil then oldTop = false end
-	if oldTop == newTop then
-		local stats = MC.LightPerfStats or {}
-		MC.LightPerfStats = stats
-		stats.lastSkyColumnDirtySections = 0
-		MC.LightPerfTrace( "sky_column", {
-			ms = stats.lastSkyColumnMS,
-			changed = 0,
-			dirtySections = 0,
-			bounds = stats.lastSkyColumn,
-		} )
-		return
-	end
-	local z0, z1
-	if oldTop == false then
-		z0, z1 = minZ, newTop
-	elseif newTop == false then
-		z0, z1 = minZ, oldTop
-	else
-		z0, z1 = math.min( oldTop, newTop ), math.max( oldTop, newTop )
-	end
-	z0 = math.Clamp( math.floor( z0 or minZ ), minZ, maxZ )
-	z1 = math.Clamp( math.floor( z1 or maxZ ), minZ, maxZ )
-	local dirtySections, dirtyCells = markLightSectionsInBounds( bx, by, z0, bx, by, z1 )
-	local stats = MC.LightPerfStats or {}
-	MC.LightPerfStats = stats
-	stats.lastSkyColumnDirtySections = dirtySections
-	stats.lastSkyColumnCells = dirtyCells
-	stats.lastSkyColumn = string.format( "%d,%d z=%d..%d", bx, by, z0, z1 )
-	MC.LightPerfTrace( "sky_column", {
-		ms = stats.lastSkyColumnMS,
-		changed = dirtyCells,
-		dirtySections = dirtySections,
-		bounds = stats.lastSkyColumn,
-	} )
-end
-
 function MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, oldOpacity, newOpacity, dirtyBlockLightMeshes )
 	if not lightEnabled() then
 		noteLightingDisabledSkip( "block_change", bx, by, bz )
@@ -1625,7 +982,6 @@ function MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, old
 	if dirtyBlockLightMeshes ~= false then dirtySections = MC.MarkLightSectionsDirtyForChangedCells( changed ) end
 
 	MC.LightCellsReady = true
-	MC.LightCellsSkyLevel = skyLevel()
 
 	local stats = MC.LightPerfStats or {}
 	MC.LightPerfStats = stats
@@ -1669,12 +1025,9 @@ function MC.MarkLightingDirtyForChange( bx, by, bz, oldId, oldOrient, newId, new
 
 	local oldEmission, newEmission = lightEmission( oldId ), lightEmission( newId )
 	local oldOpacity, newOpacity = lightOpacity( oldId, oldOrient ), lightOpacity( newId, newOrient )
-	syncLightColumnForCell( bx, by, bz )
-	local oldTop = oldOpacity ~= newOpacity and skyColumnTopWithOverride( bx, by, bx, by, bz, oldId, oldOrient ) or nil
 	MC.NoteLightingCellChanged( bx, by, bz, oldId, oldOrient, newId, newOrient )
-	if oldOpacity ~= newOpacity then
-		markLightingDirtyColumn( bx, by, bz, oldTop )
-		rebuildSkyCellsAroundColumn( bx, by )
+	if MC.NoteSkyColumnBlockChange then
+		MC.NoteSkyColumnBlockChange( bx, by, bz, oldOpacity, newOpacity )
 	end
 	if oldEmission ~= newEmission or oldOpacity ~= newOpacity then
 		local dirtyBlockLightMeshes = oldEmission ~= newEmission
@@ -1689,14 +1042,6 @@ function MC.MarkLightingDirtyForChange( bx, by, bz, oldId, oldOrient, newId, new
 	end
 end
 
-local function storedSkyLight( bx, by, bz )
-	if not chunkLoadedForCell( bx, by, bz ) then return skyLevel() end
-	local id = MC.GetBlock( bx, by, bz )
-	local orient = MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz ) or 0
-	if lightOpacity( id, orient ) >= 15 then return 0 end
-	return getStoredLight( MC.LightSkyChunks, bx, by, bz )
-end
-
 function MC.SampleLighting( bx, by, bz, selfEmission )
 	local sampleStart = lightPerfDebugEnabled() and perfNow() or nil
 	if not lightEnabled() then
@@ -1704,12 +1049,9 @@ function MC.SampleLighting( bx, by, bz, selfEmission )
 		return 1, 15, 15, 15
 	end
 	ensureLightSourceIndex()
-	if MC.LightCellsSkyLevel ~= skyLevel() then
-		MC.LightCellsSkyLevel = skyLevel()
-	end
 	bx, by, bz = math.floor( bx ), math.floor( by ), math.floor( bz )
 	local block = chunkLoadedForCell( bx, by, bz ) and getStoredLight( MC.LightBlockChunks, bx, by, bz ) or 0
-	local sky = storedSkyLight( bx, by, bz )
+	local sky = 0
 	local level = math.max( block, sky, math.Clamp( math.floor( tonumber( selfEmission ) or 0 ), 0, 15 ) )
 	local brightness = ambientMin() + ( 1 - ambientMin() ) * ( level / 15 )
 	noteLightSample( sampleStart )
@@ -1745,24 +1087,14 @@ end )
 cvars.AddChangeCallback( "mc_light_enabled", function( _, _, newValue )
 	MC.LightCellsReady = false
 	MC.LightSourceIndexReady = false
-	MC.LightSkyChunks = {}
-	MC.LightSkyColumnTops = {}
+	MC.LightSkyChunks = nil
+	MC.LightSkyColumnTops = nil
 	local value = string.lower( tostring( newValue or "" ) )
 	if value ~= "0" and value ~= "false" and value ~= "off" then
 		MC.RebuildLightingCells()
 	else
 		noteLightingDisabledSkip( "disabled" )
 	end
-	markLoadedMeshesDirty()
-end, "mc" )
-
-cvars.AddChangeCallback( "mc_light_sky_level", function()
-	local skyChanged = rebuildAllSkyCells()
-	if skyChanged and skyChanged.count and skyChanged.count > 0 then
-		MC.MarkLightSectionsDirtyForChangedCells( skyChanged )
-	end
-	MC.LightSkyColumnTops = {}
-	MC.LightCellsSkyLevel = skyLevel()
 	markLoadedMeshesDirty()
 end, "mc" )
 

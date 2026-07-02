@@ -140,17 +140,19 @@ end
 function MC.RequestServerCollisionProbe( bx, by, bz )
 	local cell = MC.SetPendingClientCollisionProbeCell( bx, by, bz )
 	bx, by, bz = cell.bx, cell.by, cell.bz
+	local ent = ents.CreateClientside( "mc_client_collision_probe" )
+	ent:Spawn()
+	ent:ApplyProbeCell( bx, by, bz )
+	-- if not net then
+	-- 	print( "[MC probe] net library is unavailable; cannot request server-backed probe" )
+	-- 	return
+	-- end
 
-	if not net then
-		print( "[MC probe] net library is unavailable; cannot request server-backed probe" )
-		return
-	end
-
-	net.Start( "mc_collision_probe_create" )
-		net.WriteInt( bx, 32 )
-		net.WriteInt( by, 32 )
-		net.WriteInt( bz, 32 )
-	net.SendToServer()
+	-- net.Start( "mc_collision_probe_create" )
+	-- 	net.WriteInt( bx, 32 )
+	-- 	net.WriteInt( by, 32 )
+	-- 	net.WriteInt( bz, 32 )
+	-- net.SendToServer()
 
 	print( string.format( "[MC probe] requested server-backed probe at cell %s", probeCellText( bx, by, bz ) ) )
 end
@@ -320,3 +322,63 @@ end, nil, "Trace a player hull through the pure clientside MC collision probe." 
 concommand.Add( "mc_client_collision_probe_dump", function()
 	MC.DumpClientCollisionProbe()
 end, nil, "Print data for the current pure clientside MC collision probe entity." )
+
+
+concommand.Add( "mc_client_collision_dump", function()
+	MC.DumpClientCollision()
+end, nil, "Print data for the current pure clientside MC collision probe entity." )
+
+concommand.Add( "mc_client_collision_dump_sch", function()
+	MC.DumpClientCollision_sch()
+end, nil, "Print data for the current pure clientside MC collision probe entity." )
+
+function MC.DumpClientCollision()
+
+
+	for _, ent in ipairs( ents.FindByClass( "mc_chunk" ) ) do
+		//local phys = ent:GetPhysicsObject()
+		local data = {
+			pos = ent:GetPos(),
+			ang = ent:GetAngles(),
+		}
+
+		print( string.format(
+			"[MC probe dump] pos=%s ang=%s",
+			vectorText( data.pos ),
+			angleText( data.ang )
+		) )
+
+
+		return data
+	end
+
+end
+
+function MC.DumpClientCollision_sch()
+
+
+	for _, ent in ipairs( ents.FindByClass( "mc_client_collision_probe" ) ) do
+		local phys = ent:GetPhysicsObject()
+		local data = {
+			pos = ent:GetPos(),
+			ang = ent:GetAngles(),
+		}
+
+		print( string.format(
+			"[MC probe dump] pos=%s ang=%s",
+			vectorText( data.pos ),
+			angleText( data.ang )
+		) )
+
+
+		return data
+	end
+
+end
+
+hook.Add( "ShouldCollide", "ForceProbeCellCollision", function( ent1, ent2 )
+    -- 如果其中一个是你的网格实体，强制允许碰撞，覆盖引擎默认的 !IsClientCreated() 过滤
+    if ent1:GetClass() == "mc_client_collision_probe" or ent2:IsPlayer() then
+        return true 
+    end
+end )

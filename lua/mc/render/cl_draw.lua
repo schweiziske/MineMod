@@ -111,13 +111,17 @@ end
 function MC.DrawChunk( key )
 	local list = MC.Meshes[key]
 	local material = MC.CurrentChunkMaterial and MC.CurrentChunkMaterial( false ) or MC.Material
-	if material == MC.MaterialGpuLightTexture and MC.BindGpuChunkLightTexture then
+	local isGpuLightTexture = MC.IsGpuLightTextureMaterial and MC.IsGpuLightTextureMaterial( material )
+		or material == MC.MaterialGpuLightTexture
+	if isGpuLightTexture and MC.BindGpuChunkLightTexture then
 		MC.BindGpuChunkLightTexture( key, material )
+		if MC.BindMeshShadowMap then MC.BindMeshShadowMap( material ) end
 	end
-	if material == MC.MaterialGpuOpaque or material == MC.MaterialGpuLightTexture then
+	if material == MC.MaterialGpuOpaque or isGpuLightTexture then
 		drawGpuOpaqueDepthPrepass( list )
 	end
-	drawMeshList( list, material, true )
+	local forceCurrentMaterial = material == MC.MaterialGpuOpaque or isGpuLightTexture
+	drawMeshList( list, material, true, nil, forceCurrentMaterial )
 end
 
 function MC.DrawChunkTranslucent( key )

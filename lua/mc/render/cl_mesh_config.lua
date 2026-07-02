@@ -13,6 +13,54 @@ MC.MeshGpuShader = MC.MeshGpuShader or ( CreateClientConVar and CreateClientConV
 	"Use the experimental custom GPU shader for opaque MC chunk atlas meshes when the compiled VCS files are available" ) )
 MC.MeshGpuLightTexture = MC.MeshGpuLightTexture or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_light_texture", "0", true, false,
 	"Experimental: sample chunk light textures in the GPU shader instead of baking opaque chunk light into vertex colors" ) )
+MC.MeshShadowMap = MC.MeshShadowMap or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map", "0", true, false,
+	"Experimental: let GPU light texture chunk shader receive an MC-owned shadow map" ) )
+MC.MeshShadowMapStrength = MC.MeshShadowMapStrength or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_strength", "0.75", true, false,
+	"Experimental shadow multiplier strength for MC chunk shader" ) )
+MC.MeshShadowMapBias = MC.MeshShadowMapBias or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_bias", "0.0005", true, false,
+	"Experimental shadow map depth/edge bias for MC chunk shader sampling" ) )
+MC.MeshShadowMapSoftness = MC.MeshShadowMapSoftness or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_softness", "1", true, false,
+	"Experimental shadow edge softness in shadow-map texels (0 = hard 1-tap shadow)" ) )
+MC.MeshGpuShaderFancy = MC.MeshGpuShaderFancy or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_shader_fancy", "0", true, false,
+	"Experimental: use the fancy GPU chunk shader variant (cool shadows, warm sun, back-face shading, edge fade)" ) )
+MC.MeshShadowMapTint = MC.MeshShadowMapTint or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_tint", "0.6", true, false,
+	"Fancy shader: how strongly shadows shift toward a cool sky tint (0 = plain darkening)" ) )
+MC.MeshShadowMapEdgeFade = MC.MeshShadowMapEdgeFade or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_edge_fade", "0.1", true, false,
+	"Fancy shader: fade band width at the shadow coverage border in UV units (0 = hard cutoff)" ) )
+MC.MeshShadowMapFaceShade = MC.MeshShadowMapFaceShade or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_face_shade", "0.65", true, false,
+	"Fancy shader: how strongly faces pointing away from the sun are shaded like cast shadow" ) )
+MC.MeshShadowMapWarmth = MC.MeshShadowMapWarmth or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_warmth", "0.35", true, false,
+	"Fancy shader: warm tint on sunlit faces and torch-lit areas (0 = neutral)" ) )
+MC.MeshGpuLightBrightness = MC.MeshGpuLightBrightness or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_light_brightness", "1", true, false,
+	"GPU light texture: brightness multiplier applied to block/sky light levels (1 = unchanged)" ) )
+MC.MeshGpuLightGamma = MC.MeshGpuLightGamma or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_light_gamma", "1", true, false,
+	"GPU light texture: light falloff curve; >1 brightens mid levels (torch edges), <1 darkens them (1 = linear)" ) )
+MC.MeshGpuSkyLight = MC.MeshGpuSkyLight or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_sky_light", "1", true, false,
+	"GPU light texture: column-based sky exposure so sunlight is brighter than torches (no sky flood)" ) )
+MC.MeshGpuSunBrightness = MC.MeshGpuSunBrightness or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_sun_brightness", "1", true, false,
+	"GPU light texture: sun/sky light brightness multiplier (1 = unchanged)" ) )
+MC.DayCycleSunTilt = MC.DayCycleSunTilt or ( CreateClientConVar and CreateClientConVar( "mc_daycycle_sun_tilt", "0.2", true, false,
+	"Day cycle: sideways tilt of the sun path used by the shadow map (avoids axis-aligned shadows)" ) )
+MC.DayCycleMoonShadow = MC.DayCycleMoonShadow or ( CreateClientConVar and CreateClientConVar( "mc_daycycle_moon_shadow", "0.3", true, false,
+	"Day cycle: moon shadow strength at night relative to sun shadows (0 = no night shadows)" ) )
+MC.DayCycleMoonLight = MC.DayCycleMoonLight or ( CreateClientConVar and CreateClientConVar( "mc_daycycle_moon_light", "4", true, false,
+	"Day cycle: moonlight sky level at deep night, 0-15 (MC default 4; lower = darker nights)" ) )
+MC.DayCycleNightTint = MC.DayCycleNightTint or ( CreateClientConVar and CreateClientConVar( "mc_daycycle_night_tint", "0.6", true, false,
+	"Day cycle: how strongly sky-lit surfaces shift toward moonlight blue at night (0 = neutral)" ) )
+MC.MeshGpuLightRefreshPerFrame = MC.MeshGpuLightRefreshPerFrame or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_light_refresh_per_frame", "2", true, false,
+	"GPU light texture: chunks re-rendered per frame during day/night level steps (higher = faster but choppier)" ) )
+MC.MeshShadowMapSource = MC.MeshShadowMapSource or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_source", "mc", true, false,
+	"Experimental shadow source for MC chunks: mc, screen, or combined" ) )
+MC.MeshShadowMapScreenContrast = MC.MeshShadowMapScreenContrast or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_screen_contrast", "6", true, false,
+	"Experimental contrast multiplier when sampling the screen-space CSM shadow mask" ) )
+MC.MeshShadowMapSize = MC.MeshShadowMapSize or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_size", "2048", true, false,
+	"Experimental MC-owned shadow map resolution" ) )
+MC.MeshShadowMapDistance = MC.MeshShadowMapDistance or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_distance", "4096", true, false,
+	"Experimental MC-owned shadow map world-space coverage radius" ) )
+MC.MeshShadowMapCasterDistance = MC.MeshShadowMapCasterDistance or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_caster_distance", "4608", true, false,
+	"Experimental max distance from camera for MC chunks drawn into the shadow map" ) )
+MC.MeshShadowMapUpdateInterval = MC.MeshShadowMapUpdateInterval or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_update_interval", "0", true, false,
+	"Experimental minimum seconds between MC shadow map redraws; 0 redraws every frame while enabled" ) )
 MC.MeshConnectionVisibleTemplate = MC.MeshConnectionVisibleTemplate or ( CreateClientConVar and CreateClientConVar( "mc_mesh_connection_visible_template", "1", true, false,
 	"Experimental: use cached visible geometry templates for fence/pane/wall/pipe connection shapes" ) )
 

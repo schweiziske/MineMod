@@ -77,9 +77,8 @@ concommand.Add( "mc_block_diag", function()
 	if MC.SampleLighting then
 		lightBrightness, lightLevel, blockLight, skyLight = MC.SampleLighting( bx, by, bz, MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0 )
 	end
-	print( string.format( "  lighting enabled=%s skyCvar=%s lightEmission=%s sample=%s block=%s sky=%s brightness=%.3f",
+	print( string.format( "  lighting enabled=%s lightEmission=%s sample=%s block=%s sky=%s brightness=%.3f",
 		tostring( MC.LightEnabled and MC.LightEnabled:GetBool() ),
-		tostring( MC.LightSkyLevel and MC.LightSkyLevel:GetInt() ),
 		tostring( b.lightEmission ),
 		tostring( lightLevel ), tostring( blockLight ), tostring( skyLight ), tonumber( lightBrightness ) or 1 ) )
 	local boxes = MC.BlockBoxes( id, orient, bx, by, bz ) or {}
@@ -113,18 +112,15 @@ function MC.LightPerfSummaryLines()
 	local s = MC.LightPerfStats or {}
 	local r = MC.RenderStats or {}
 	return {
-		string.format( "Light total: update=%sms rebuild=%sms dirty=%sms sky=%s style=%s debug=%s",
+		string.format( "Light total: update=%sms rebuild=%sms dirty=%sms style=%s debug=%s",
 			tostring( s.lastUpdateMS ), tostring( s.lastRebuildMS ), tostring( s.lastDirtyMarkMS ),
-			tostring( MC.LightSkyLevel and MC.LightSkyLevel:GetInt() ), tostring( s.lastMeshLightStyle or ( MC.LightStyle and MC.LightStyle:GetString() ) or "vanilla" ),
+			tostring( s.lastMeshLightStyle or ( MC.LightStyle and MC.LightStyle:GetString() ) or "vanilla" ),
 			tostring( lightPerfDebugEnabled() ) ),
 		string.format( "Light block: prop=%sms inc=%s dec=%s changed=%s dirtySec=%s src=%s queue=%s proc=%s write=%s",
 			tostring( s.lastPropagateMS ), tostring( s.lastBlockIncreaseProcessed ), tostring( s.lastBlockDecreaseProcessed ),
 			tostring( s.lastLightChangedCells ), tostring( s.lastLightDirtySections ),
 			tostring( s.lastPropagateSources ), tostring( s.lastPropagateQueued ),
 			tostring( s.lastPropagateProcessed ), tostring( s.lastPropagateWritten ) ),
-		string.format( "Light sky: all=%sms cols=%s cells=%s col=%sms/%s dirtySec=%s",
-			tostring( s.lastSkyRebuildMS ), tostring( s.lastSkyRebuildColumns ), tostring( s.lastSkyRebuildCells ),
-			tostring( s.lastSkyColumnMS ), tostring( s.lastSkyColumn ), tostring( s.lastSkyColumnDirtySections ) ),
 		string.format( "Light mesh: mesh=%sms key=%s sec=%s samples=%s/%sms ao=%s/%sms cache=%s/%s aoCache=%s/%s timed=%s",
 			tostring( r.lastMeshBuildMS or s.lastMeshBuildMS ), tostring( s.lastMeshKey or r.lastMeshKey ),
 			tostring( s.lastMeshSection or r.lastMeshSection ), tostring( s.lastMeshSampleCalls ),
@@ -478,10 +474,10 @@ hook.Add( "HUDPaint", "mc_debug_hud", function()
 	table.insert( lines, string.format( "IMesh:        %s ms  %s O / %s T", tostring( renderStats.lastMeshBuildMS ), tostring( renderStats.lastOpaqueMeshes ), tostring( renderStats.lastTranslucentMeshes ) ) )
 	table.insert( lines, string.format( "Client Phys:  %s ms  bounds=%s", tostring( physStats.lastClientPhysBuildMS ), tostring( physStats.lastClientPhysBounds ) ) )
 	local lightStats = MC.LightPerfStats or {}
-	table.insert( lines, string.format( "Light:        upd=%sms prop=%sms chg=%s sec=%s sky=%sms smp=%s/%sms",
+	table.insert( lines, string.format( "Light:        upd=%sms prop=%sms chg=%s sec=%s smp=%s/%sms",
 		tostring( lightStats.lastUpdateMS ), tostring( lightStats.lastPropagateMS ),
 		tostring( lightStats.lastLightChangedCells ), tostring( lightStats.lastLightDirtySections ),
-		tostring( lightStats.lastSkyRebuildMS ), tostring( lightStats.lastMeshSampleCalls ),
+		tostring( lightStats.lastMeshSampleCalls ),
 		tostring( lightStats.lastMeshSampleMS ) ) )
 
 	surface.SetFont( "mc_debug" )
