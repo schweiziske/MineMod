@@ -12,6 +12,7 @@ MC = MC or {}
 local SHARED = {
 	"mc/sh_config.lua",
 	"mc/sh_config_ui.lua",
+	"mc/sh_daycycle.lua",
 	"mc/sh_i18n.lua",
 	"mc/generated/sh_generated_tiles.lua",
 	"mc/generated/sh_generated_blocks.lua",
@@ -51,7 +52,9 @@ local CLIENT_FILES = {
 	"mc/render/cl_mesh_constants.lua",
 	"mc/render/cl_mesh_config.lua",
 	"mc/render/cl_mesh_lightmap_experimental.lua",
+	"mc/render/cl_sky_column.lua",
 	"mc/render/cl_mesh_gpu_light_texture.lua",
+	"mc/render/cl_mesh_shadow_map.lua",
 	"mc/render/cl_mesh_materials.lua",
 	"mc/render/cl_mesh_light_samples.lua",
 	"mc/render/cl_mesh_upload.lua",

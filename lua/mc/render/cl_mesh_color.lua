@@ -34,12 +34,10 @@ local applySourceLightingToRGB = RM.applySourceLightingToRGB
 local sourceLightingIsEnabled = RM.sourceLightingIsEnabled
 
 local MeshFullCubeColorCache = {}
-local MeshShaderDaylightFactor = nil
 local MeshSourceLightingActive = false
 
 function RM.resetMeshColorLightingCaches()
 	MeshFullCubeColorCache = {}
-	MeshShaderDaylightFactor = nil
 	if RM.resetSourceLightingCache then RM.resetSourceLightingCache() end
 	MeshSourceLightingActive = sourceLightingIsEnabled and sourceLightingIsEnabled() or false
 end
@@ -103,41 +101,14 @@ local function bestSmoothCornerBrightnessValues( bx, by, bz, faceIndex, cx, cy, 
 	return math.Clamp( brightness ^ 0.85, 0, 1 )
 end
 
-local function shaderSunFaceFactor( faceIndex )
-	if faceIndex == MC.Face.TOP then return 1.16 end
-	if faceIndex == MC.Face.BOTTOM then return 0.72 end
-	if faceIndex == MC.Face.YP then return 1.08 end
-	if faceIndex == MC.Face.XP then return 1.00 end
-	if faceIndex == MC.Face.XN then return 0.88 end
-	if faceIndex == MC.Face.YN then return 0.82 end
-	return 1
-end
-
-local function shaderDaylightFactor()
-	if MeshShaderDaylightFactor ~= nil then return MeshShaderDaylightFactor end
-	local cv = MC.LightSkyLevel
-	MeshShaderDaylightFactor = math.Clamp( ( cv and cv.GetInt and cv:GetInt() or 0 ) / 15, 0, 1 )
-	return MeshShaderDaylightFactor
-end
-
 local function shaderSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission )
 	local brightness = math.Clamp( bestSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfEmission ), 0, 1 )
-	local daylight = shaderDaylightFactor()
-	local litSurface = math.Clamp( ( brightness - 0.22 ) / 0.78, 0, 1 )
-	local sunMix = daylight * litSurface
-	local directed = brightness * ( 1 + ( shaderSunFaceFactor( faceIndex ) - 1 ) * sunMix )
-	local contrast = ( directed - 0.5 ) * 1.12 + 0.5
-	return math.Clamp( contrast + daylight * 0.025, 0, 1 )
+	return math.Clamp( ( brightness - 0.5 ) * 1.12 + 0.5, 0, 1 )
 end
 
 local function shaderSmoothCornerBrightnessValues( bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
 	local brightness = math.Clamp( bestSmoothCornerBrightnessValues( bx, by, bz, faceIndex, cx, cy, cz, selfEmission ), 0, 1 )
-	local daylight = shaderDaylightFactor()
-	local litSurface = math.Clamp( ( brightness - 0.22 ) / 0.78, 0, 1 )
-	local sunMix = daylight * litSurface
-	local directed = brightness * ( 1 + ( shaderSunFaceFactor( faceIndex ) - 1 ) * sunMix )
-	local contrast = ( directed - 0.5 ) * 1.12 + 0.5
-	return math.Clamp( contrast + daylight * 0.025, 0, 1 )
+	return math.Clamp( ( brightness - 0.5 ) * 1.12 + 0.5, 0, 1 )
 end
 
 local function minecraftCornerOccludersValues( bx, by, bz, faceIndex, x, y, z )
@@ -348,7 +319,7 @@ local function colorFromShadeMul( shadeR, shadeG, shadeB, shadeA, mul, rScale, g
 	)
 end
 
-local function fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, cx, cy, cz, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO )
+local function fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, cx, cy, cz, selfEmission, style, rScale, gScale, bScale, receiveAO )
 	if style == MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE then
 		return gpuShaderPayloadColor( faceIndex, 1, shadeA )
 	end
@@ -369,9 +340,7 @@ local function fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, 
 	elseif style == MC_LIGHT_STYLE_SHADER or style == MC_LIGHT_STYLE_GPU_SHADER then
 		brightness = mathClamp( fullCubeSmoothCornerBrightnessFast( bx, by, bz, faceIndex, cx, cy, cz, selfEmission ), 0, 1 )
 		brightness = mathClamp( brightness ^ 0.85, 0, 1 )
-		local litSurface = mathClamp( ( brightness - 0.22 ) / 0.78, 0, 1 )
-		local directed = brightness * ( 1 + ( sunFactor - 1 ) * daylight * litSurface )
-		brightness = mathClamp( ( directed - 0.5 ) * 1.12 + 0.5 + daylight * 0.025, 0, 1 )
+		brightness = mathClamp( ( brightness - 0.5 ) * 1.12 + 0.5, 0, 1 )
 		ao = receiveAO ~= false and fullCubeCornerAOWithFactorsFast( bx, by, bz, faceIndex, cx, cy, cz, 0.94, 0.86, 0.74 ) or 1
 	else
 		brightness = fullCubeSmoothCornerBrightnessFast( bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
@@ -385,26 +354,22 @@ local function fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, 
 	return color
 end
 
-local function fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, cx, cy, cz, selfEmission, rScale, gScale, bScale, daylight, sunFactor, receiveAO )
+local function fullCubeCornerColorShader( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, cx, cy, cz, selfEmission, rScale, gScale, bScale, receiveAO )
 	local brightness = mathClamp( fullCubeSmoothCornerBrightnessFast( bx, by, bz, faceIndex, cx, cy, cz, selfEmission ), 0, 1 )
 	brightness = mathClamp( brightness ^ 0.85, 0, 1 )
-	local litSurface = mathClamp( ( brightness - 0.22 ) / 0.78, 0, 1 )
-	local directed = brightness * ( 1 + ( sunFactor - 1 ) * daylight * litSurface )
-	brightness = mathClamp( ( directed - 0.5 ) * 1.12 + 0.5 + daylight * 0.025, 0, 1 )
+	brightness = mathClamp( ( brightness - 0.5 ) * 1.12 + 0.5, 0, 1 )
 	local ao = receiveAO ~= false and fullCubeCornerAOWithFactorsFast( bx, by, bz, faceIndex, cx, cy, cz, 0.94, 0.86, 0.74 ) or 1
 	return colorFromShadeMul( shadeR, shadeG, shadeB, shadeA, mathClamp( brightness * ao, 0, 1 ), rScale, gScale, bScale, bx, by, bz, faceIndex, cx, cy, cz, MeshSourceLightingActive )
 end
 
-local function fullCubeShaderColorFromBrightness( shadeR, shadeG, shadeB, shadeA, brightness, ao, rScale, gScale, bScale, daylight, sunFactor, bx, by, bz, faceIndex, cx, cy, cz, sourceActive )
+local function fullCubeShaderColorFromBrightness( shadeR, shadeG, shadeB, shadeA, brightness, ao, rScale, gScale, bScale, bx, by, bz, faceIndex, cx, cy, cz, sourceActive )
 	brightness = mathClamp( brightness, 0, 1 )
 	brightness = mathClamp( brightness ^ 0.85, 0, 1 )
-	local litSurface = mathClamp( ( brightness - 0.22 ) / 0.78, 0, 1 )
-	local directed = brightness * ( 1 + ( sunFactor - 1 ) * daylight * litSurface )
-	brightness = mathClamp( ( directed - 0.5 ) * 1.12 + 0.5 + daylight * 0.025, 0, 1 )
+	brightness = mathClamp( ( brightness - 0.5 ) * 1.12 + 0.5, 0, 1 )
 	return colorFromShadeMul( shadeR, shadeG, shadeB, shadeA, mathClamp( brightness * ao, 0, 1 ), rScale, gScale, bScale, bx, by, bz, faceIndex, cx, cy, cz, sourceActive )
 end
 
-local function fullCubeShaderColorPacket( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, selfEmission, rScale, gScale, bScale, daylight, sunFactor, receiveAO )
+local function fullCubeShaderColorPacket( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, selfEmission, rScale, gScale, bScale, receiveAO )
 	local brightness1, brightness2, brightness3, brightness4 = minecraftSmoothCornerBrightnessPacketValues( bx, by, bz, faceIndex, selfEmission )
 	local corners = FACES[faceIndex] and FACES[faceIndex].c
 	if not corners then
@@ -420,18 +385,16 @@ local function fullCubeShaderColorPacket( shadeR, shadeG, shadeB, shadeA, bx, by
 		ao4 = fullCubeCornerAOWithFactorsFast( bx, by, bz, faceIndex, c4[1], c4[2], c4[3], 0.94, 0.86, 0.74 )
 	end
 	return
-		fullCubeShaderColorFromBrightness( shadeR, shadeG, shadeB, shadeA, brightness1, ao1, rScale, gScale, bScale, daylight, sunFactor, bx, by, bz, faceIndex, c1[1], c1[2], c1[3], MeshSourceLightingActive ),
-		fullCubeShaderColorFromBrightness( shadeR, shadeG, shadeB, shadeA, brightness2, ao2, rScale, gScale, bScale, daylight, sunFactor, bx, by, bz, faceIndex, c2[1], c2[2], c2[3], MeshSourceLightingActive ),
-		fullCubeShaderColorFromBrightness( shadeR, shadeG, shadeB, shadeA, brightness3, ao3, rScale, gScale, bScale, daylight, sunFactor, bx, by, bz, faceIndex, c3[1], c3[2], c3[3], MeshSourceLightingActive ),
-		fullCubeShaderColorFromBrightness( shadeR, shadeG, shadeB, shadeA, brightness4, ao4, rScale, gScale, bScale, daylight, sunFactor, bx, by, bz, faceIndex, c4[1], c4[2], c4[3], MeshSourceLightingActive )
+		fullCubeShaderColorFromBrightness( shadeR, shadeG, shadeB, shadeA, brightness1, ao1, rScale, gScale, bScale, bx, by, bz, faceIndex, c1[1], c1[2], c1[3], MeshSourceLightingActive ),
+		fullCubeShaderColorFromBrightness( shadeR, shadeG, shadeB, shadeA, brightness2, ao2, rScale, gScale, bScale, bx, by, bz, faceIndex, c2[1], c2[2], c2[3], MeshSourceLightingActive ),
+		fullCubeShaderColorFromBrightness( shadeR, shadeG, shadeB, shadeA, brightness3, ao3, rScale, gScale, bScale, bx, by, bz, faceIndex, c3[1], c3[2], c3[3], MeshSourceLightingActive ),
+		fullCubeShaderColorFromBrightness( shadeR, shadeG, shadeB, shadeA, brightness4, ao4, rScale, gScale, bScale, bx, by, bz, faceIndex, c4[1], c4[2], c4[3], MeshSourceLightingActive )
 end
 
-local function fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, cx, cy, cz, selfEmission, daylight, sunFactor, receiveAO )
+local function fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, cx, cy, cz, selfEmission, receiveAO )
 	local brightness = mathClamp( fullCubeSmoothCornerBrightnessFast( bx, by, bz, faceIndex, cx, cy, cz, selfEmission ), 0, 1 )
 	brightness = mathClamp( brightness ^ 0.85, 0, 1 )
-	local litSurface = mathClamp( ( brightness - 0.22 ) / 0.78, 0, 1 )
-	local directed = brightness * ( 1 + ( sunFactor - 1 ) * daylight * litSurface )
-	brightness = mathClamp( ( directed - 0.5 ) * 1.12 + 0.5 + daylight * 0.025, 0, 1 )
+	brightness = mathClamp( ( brightness - 0.5 ) * 1.12 + 0.5, 0, 1 )
 	local ao = receiveAO ~= false and fullCubeCornerAOWithFactorsFast( bx, by, bz, faceIndex, cx, cy, cz, 0.94, 0.86, 0.74 ) or 1
 	return gpuShaderPayloadColor( faceIndex, mathClamp( brightness * ao, 0, 1 ), shadeA )
 end
@@ -439,51 +402,47 @@ end
 local function fullCubeFaceCornerColorsShader( shadeIndex, bx, by, bz, faceIndex, selfEmission, receiveAO )
 	local shadeR, shadeG, shadeB, shadeA = shadeRGBAByIndex( shadeIndex )
 	local rScale, gScale, bScale = shaderFaceTint( faceIndex )
-	local daylight = shaderDaylightFactor()
-	local sunFactor = shaderSunFaceFactor( faceIndex )
-	return fullCubeShaderColorPacket( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, selfEmission, rScale, gScale, bScale, daylight, sunFactor, receiveAO )
+	return fullCubeShaderColorPacket( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, selfEmission, rScale, gScale, bScale, receiveAO )
 end
 
 local function fullCubeFaceCornerColorsGpuShader( shadeIndex, bx, by, bz, faceIndex, selfEmission, receiveAO )
 	local _, _, _, shadeA = shadeRGBAByIndex( shadeIndex )
-	local daylight = shaderDaylightFactor()
-	local sunFactor = shaderSunFaceFactor( faceIndex )
 	if faceIndex == MC.Face.TOP then
 		return
-			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 0, 1, selfEmission, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 0, 1, selfEmission, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 1, 1, selfEmission, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 1, 1, selfEmission, daylight, sunFactor, receiveAO )
+			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 0, 1, selfEmission, receiveAO ),
+			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 0, 1, selfEmission, receiveAO ),
+			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 1, 1, selfEmission, receiveAO ),
+			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 1, 1, selfEmission, receiveAO )
 	elseif faceIndex == MC.Face.BOTTOM then
 		return
-			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 1, 0, selfEmission, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 1, 0, selfEmission, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 0, 0, selfEmission, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 0, 0, selfEmission, daylight, sunFactor, receiveAO )
+			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 1, 0, selfEmission, receiveAO ),
+			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 1, 0, selfEmission, receiveAO ),
+			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 0, 0, selfEmission, receiveAO ),
+			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 0, 0, selfEmission, receiveAO )
 	elseif faceIndex == MC.Face.XP then
 		return
-			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 0, 0, selfEmission, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 1, 0, selfEmission, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 1, 1, selfEmission, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 0, 1, selfEmission, daylight, sunFactor, receiveAO )
+			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 0, 0, selfEmission, receiveAO ),
+			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 1, 0, selfEmission, receiveAO ),
+			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 1, 1, selfEmission, receiveAO ),
+			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 0, 1, selfEmission, receiveAO )
 	elseif faceIndex == MC.Face.XN then
 		return
-			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 1, 0, selfEmission, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 0, 0, selfEmission, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 0, 1, selfEmission, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 1, 1, selfEmission, daylight, sunFactor, receiveAO )
+			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 1, 0, selfEmission, receiveAO ),
+			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 0, 0, selfEmission, receiveAO ),
+			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 0, 1, selfEmission, receiveAO ),
+			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 1, 1, selfEmission, receiveAO )
 	elseif faceIndex == MC.Face.YP then
 		return
-			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 1, 0, selfEmission, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 1, 0, selfEmission, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 1, 1, selfEmission, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 1, 1, selfEmission, daylight, sunFactor, receiveAO )
+			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 1, 0, selfEmission, receiveAO ),
+			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 1, 0, selfEmission, receiveAO ),
+			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 1, 1, selfEmission, receiveAO ),
+			fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 1, 1, selfEmission, receiveAO )
 	end
 	return
-		fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 0, 0, selfEmission, daylight, sunFactor, receiveAO ),
-		fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 0, 0, selfEmission, daylight, sunFactor, receiveAO ),
-		fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 0, 1, selfEmission, daylight, sunFactor, receiveAO ),
-		fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 0, 1, selfEmission, daylight, sunFactor, receiveAO )
+		fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 0, 0, selfEmission, receiveAO ),
+		fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 0, 0, selfEmission, receiveAO ),
+		fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 1, 0, 1, selfEmission, receiveAO ),
+		fullCubeCornerColorGpuShader( shadeA, bx, by, bz, faceIndex, 0, 0, 1, selfEmission, receiveAO )
 end
 
 local function fullCubeFaceCornerColors( shadeIndex, bx, by, bz, faceIndex, selfEmission, style, receiveAO )
@@ -508,43 +467,42 @@ local function fullCubeFaceCornerColors( shadeIndex, bx, by, bz, faceIndex, self
 		return fullCubeFaceCornerColorsGpuShader( shadeIndex, bx, by, bz, faceIndex, selfEmission, receiveAO )
 	end
 	local rScale, gScale, bScale = 1, 1, 1
-	local daylight, sunFactor = 0, 1
 	if faceIndex == MC.Face.TOP then
 		return
-			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO )
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 1, selfEmission, style, rScale, gScale, bScale, receiveAO ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 1, selfEmission, style, rScale, gScale, bScale, receiveAO ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 1, selfEmission, style, rScale, gScale, bScale, receiveAO ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 1, selfEmission, style, rScale, gScale, bScale, receiveAO )
 	elseif faceIndex == MC.Face.BOTTOM then
 		return
-			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO )
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 0, selfEmission, style, rScale, gScale, bScale, receiveAO ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 0, selfEmission, style, rScale, gScale, bScale, receiveAO ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 0, selfEmission, style, rScale, gScale, bScale, receiveAO ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 0, selfEmission, style, rScale, gScale, bScale, receiveAO )
 	elseif faceIndex == MC.Face.XP then
 		return
-			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO )
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 0, selfEmission, style, rScale, gScale, bScale, receiveAO ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 0, selfEmission, style, rScale, gScale, bScale, receiveAO ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 1, selfEmission, style, rScale, gScale, bScale, receiveAO ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 1, selfEmission, style, rScale, gScale, bScale, receiveAO )
 	elseif faceIndex == MC.Face.XN then
 		return
-			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO )
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 0, selfEmission, style, rScale, gScale, bScale, receiveAO ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 0, selfEmission, style, rScale, gScale, bScale, receiveAO ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 1, selfEmission, style, rScale, gScale, bScale, receiveAO ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 1, selfEmission, style, rScale, gScale, bScale, receiveAO )
 	elseif faceIndex == MC.Face.YP then
 		return
-			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO ),
-			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO )
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 0, selfEmission, style, rScale, gScale, bScale, receiveAO ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 0, selfEmission, style, rScale, gScale, bScale, receiveAO ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 1, 1, selfEmission, style, rScale, gScale, bScale, receiveAO ),
+			fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 1, 1, selfEmission, style, rScale, gScale, bScale, receiveAO )
 	end
 	return
-		fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO ),
-		fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 0, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO ),
-		fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO ),
-		fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 1, selfEmission, style, rScale, gScale, bScale, daylight, sunFactor, receiveAO )
+		fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 0, selfEmission, style, rScale, gScale, bScale, receiveAO ),
+		fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 0, selfEmission, style, rScale, gScale, bScale, receiveAO ),
+		fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 1, 0, 1, selfEmission, style, rScale, gScale, bScale, receiveAO ),
+		fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, 0, 0, 1, selfEmission, style, rScale, gScale, bScale, receiveAO )
 end
 
 local function quadCornerColors( shade, bx, by, bz, id, faceIndex, corners, selfEmission, style )
@@ -607,8 +565,6 @@ RM.fullCubeSmoothCornerBrightnessFast = fullCubeSmoothCornerBrightnessFast
 RM.fullCubeCornerAOWithFactorsFast = fullCubeCornerAOWithFactorsFast
 RM.bestSmoothCornerBrightness = bestSmoothCornerBrightness
 RM.bestSmoothCornerBrightnessValues = bestSmoothCornerBrightnessValues
-RM.shaderSunFaceFactor = shaderSunFaceFactor
-RM.shaderDaylightFactor = shaderDaylightFactor
 RM.shaderSmoothCornerBrightness = shaderSmoothCornerBrightness
 RM.shaderSmoothCornerBrightnessValues = shaderSmoothCornerBrightnessValues
 RM.minecraftCornerOccludersValues = minecraftCornerOccludersValues

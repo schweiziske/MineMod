@@ -158,7 +158,6 @@ local function resetMeshLightingSampleCaches()
 	MeshFullCubeColorCache = {}
 	MeshLightSampleHits, MeshLightSampleMisses = 0, 0
 	MeshAOSampleHits, MeshAOSampleMisses = 0, 0
-	MeshShaderDaylightFactor = nil
 	MeshSampleLightingFn = MC.SampleLighting
 	MeshSampleAOFn = MC.SampleAmbientOcclusion
 	if RM.resetMeshColorLightingCaches then RM.resetMeshColorLightingCaches() end

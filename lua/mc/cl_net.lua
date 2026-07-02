@@ -1152,6 +1152,7 @@ net.Receive( "mc_unload_chunk", function()
 
 	MC.FreeChunkMesh( key )
 	if MC.ClearGpuChunkLightTexture then MC.ClearGpuChunkLightTexture( key ) end
+	if MC.NoteSkyColumnChunkUnloaded then MC.NoteSkyColumnChunkUnloaded( cx, cy, cz ) end
 	local e = MC.ChunkEnts and MC.ChunkEnts[key]
 	if IsValid( e ) then
 		if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end

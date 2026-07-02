@@ -58,8 +58,27 @@ local function lightByteFromUnit( value )
 	return math.floor( math.Clamp( tonumber( value ) or 0, 0, 1 ) * 255 + 0.5 )
 end
 
+local function convarNumber( cv, fallback, minValue, maxValue )
+	local value = cv and cv.GetFloat and cv:GetFloat() or fallback
+	value = tonumber( value ) or fallback
+	if value < minValue then value = minValue end
+	if value > maxValue then value = maxValue end
+	return value
+end
+
+-- User-tunable intensity curve for the light texture: gamma shapes the
+-- falloff (gamma > 1 lifts mid levels, so torch edges reach visibly further),
+-- brightness scales the result. Both feed the same channel the shadow pass
+-- uses as its block-light floor, so brighter torch light also protects
+-- shadowed areas more strongly — intended.
 local function lightUnitFromLevel( level )
-	return math.Clamp( ( tonumber( level ) or 0 ) / 15, 0, 1 )
+	local unit = math.Clamp( ( tonumber( level ) or 0 ) / 15, 0, 1 )
+	local gamma = convarNumber( MC.MeshGpuLightGamma, 1, 0.25, 4 )
+	if gamma ~= 1 then
+		unit = unit ^ ( 1 / gamma )
+	end
+	local brightness = convarNumber( MC.MeshGpuLightBrightness, 1, 0.1, 4 )
+	return math.Clamp( unit * brightness, 0, 1 )
 end
 
 local function cellSelfEmission( bx, by, bz )
@@ -77,7 +96,39 @@ local function lightTextureBytes( bx, by, bz )
 	level = tonumber( level ) or 15
 	block = tonumber( block ) or level
 	sky = tonumber( sky ) or level
-	return lightByteFromUnit( brightness ), lightByteFromUnit( lightUnitFromLevel( block ) ), lightByteFromUnit( lightUnitFromLevel( sky ) )
+	-- Column-based sky exposure (cl_sky_column) replaces the stored sky value
+	-- when active; day/night is already folded into the returned level.
+	local skyOverridden = false
+	if MC.SkyLightLevelAt then
+		local skyLevel = MC.SkyLightLevelAt( bx, by, bz )
+		if skyLevel then
+			sky = skyLevel
+			skyOverridden = true
+		end
+	end
+	local blockUnit = lightUnitFromLevel( block )
+	local sunMul = convarNumber( MC.MeshGpuSunBrightness, 1, 0, 4 )
+	-- Sky stays LINEAR: the gamma/brightness curve shapes torch falloff and
+	-- would otherwise lift the level-4 moonlight into a bright night.
+	local skyUnit
+	if skyOverridden then
+		skyUnit = math.Clamp( ( math.Clamp( sky, 0, 15 ) / 15 ) * sunMul, 0, 1 )
+	else
+		skyUnit = math.Clamp( lightUnitFromLevel( sky ) * sunMul, 0, 1 )
+	end
+	-- The r channel is repurposed as the night cool-tint weight (nothing read
+	-- the old combined-brightness value): global night amount times how much
+	-- this cell is sky-dominated. Torch pools bake ~0 and stay warm; caves
+	-- have no sky light and stay neutral.
+	local tintWeight = 0
+	if skyOverridden and MC.DayCycleNightAmount then
+		local night = MC.DayCycleNightAmount()
+		if night > 0 and skyUnit > 0.001 then
+			local dom = math.Clamp( ( skyUnit - blockUnit ) / skyUnit, 0, 1 )
+			tintWeight = math.Clamp( night * dom * convarNumber( MC.DayCycleNightTint, 0.6, 0, 1 ), 0, 1 )
+		end
+	end
+	return lightByteFromUnit( tintWeight ), lightByteFromUnit( blockUnit ), lightByteFromUnit( skyUnit )
 end
 
 local function paddedCellWorldCoords( chunk, lx, ly, lz )
@@ -262,9 +313,59 @@ function MC.ClearAllGpuChunkLightTextures()
 	fallbackReady = false
 end
 
+-- Amortized full refresh: instead of dropping every cached texture at once
+-- (one giant rebuild frame), mark a few chunks dirty per frame and let the
+-- lazy bind-time refresh spread the cost. Used by the day/night level steps.
+local pendingRefreshKeys = nil
+local pendingRefreshIndex = 1
+
+function MC.QueueAllGpuChunkLightTextureRefresh()
+	local keys = {}
+	for key in pairs( MC.GpuChunkLightTextures or {} ) do
+		keys[#keys + 1] = key
+	end
+	pendingRefreshKeys = #keys > 0 and keys or nil
+	pendingRefreshIndex = 1
+end
+
+hook.Remove( "Think", "mc_gpu_light_texture_refresh_queue" )
+hook.Add( "Think", "mc_gpu_light_texture_refresh_queue", function()
+	if not pendingRefreshKeys then return end
+	local budget = convarNumber( MC.MeshGpuLightRefreshPerFrame, 2, 1, 32 )
+	local keys = pendingRefreshKeys
+	local n = #keys
+	local i = pendingRefreshIndex
+	local marked = 0
+	while i <= n and marked < budget do
+		local key = keys[i]
+		i = i + 1
+		if MC.GpuChunkLightTextures[key] then
+			MC.GpuChunkLightDirtyChunks[key] = true
+			MC.GpuChunkLightDirtyCells[key] = true
+			marked = marked + 1
+		end
+	end
+	pendingRefreshIndex = i
+	if i > n then pendingRefreshKeys = nil end
+end )
+
 if cvars and cvars.AddChangeCallback then
 	cvars.AddChangeCallback( "mc_mesh_gpu_light_texture", function()
 		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
 		if MC.MarkAllMeshesDirty then MC.MarkAllMeshesDirty( "gpu_light_texture_toggle" ) end
 	end, "mc_mesh_gpu_light_texture_rebuild" )
+	-- Intensity curve changes only need the cached light textures re-rendered;
+	-- the meshes themselves are unaffected.
+	cvars.AddChangeCallback( "mc_mesh_gpu_light_brightness", function()
+		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
+	end, "mc_mesh_gpu_light_brightness_refresh" )
+	cvars.AddChangeCallback( "mc_mesh_gpu_light_gamma", function()
+		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
+	end, "mc_mesh_gpu_light_gamma_refresh" )
+	cvars.AddChangeCallback( "mc_mesh_gpu_sun_brightness", function()
+		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
+	end, "mc_mesh_gpu_sun_brightness_refresh" )
+	cvars.AddChangeCallback( "mc_daycycle_night_tint", function()
+		if MC.QueueAllGpuChunkLightTextureRefresh then MC.QueueAllGpuChunkLightTextureRefresh() end
+	end, "mc_daycycle_night_tint_refresh" )
 end

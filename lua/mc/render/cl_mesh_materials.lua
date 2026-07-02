@@ -44,6 +44,7 @@ end
 
 MC.MaterialGpuOpaque = nil
 MC.MaterialGpuLightTexture = nil
+MC.MaterialGpuLightTextureFancy = nil
 do
 	local baseTex, baseName = atlasBaseTexture()
 	if baseTex and baseName and baseName ~= "" and CreateMaterial then
@@ -63,8 +64,8 @@ do
 			mat:SetTexture( "$basetexture", baseTex )
 			MC.MaterialGpuOpaque = mat
 		end
-		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex3_halo_vface_opaque", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_halo_vface_ps30",
+		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex24_night1_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth10_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,
@@ -74,12 +75,82 @@ do
 			["$alphatestreference"] = "0.5",
 			["$alphatested"] = 1,
 			["$nocull"] = "0",
+			-- Shadow-map params read by the pixel shader at c0..c2. Define all
+			-- of them here so the engine reliably uploads these registers;
+			-- $c3/$invviewprojmat/$eyepos must stay undefined so the shader's
+			-- inline literal constants outside c0..c2/c11..c14 are never
+			-- overwritten.
+			["$c0_x"] = "0",
+			["$c0_y"] = "0.0005",
+			["$c0_z"] = "0",
+			["$c0_w"] = "-2",
+			["$c1_x"] = "0",
+			["$c1_y"] = "0",
+			["$c1_z"] = "-1",
+			["$c1_w"] = "0.0001",
+			["$c2_x"] = "0",
+			["$c2_y"] = "0",
+			["$c2_z"] = "0",
+			["$c2_w"] = "0",
 		} )
 		if lightTexMat and not lightTexMat:IsError() then
 			lightTexMat:SetTexture( "$basetexture", baseTex )
 			MC.MaterialGpuLightTexture = lightTexMat
 		end
+		-- Fancy variant: same pipeline plus cool shadow tint, warm sun/torch
+		-- grading, back-face sun shading and shadow-window edge fade. It is the
+		-- ONLY material allowed to define $c3_* (its pixel shader declares and
+		-- uses register c3); defining $c3 on the plain material would make the
+		-- engine upload c3 over that shader's inline literal constants.
+		local fancyMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy2_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy2_vface_ps30",
+			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
+			["$basetexture"] = baseName,
+			["$x360appchooser"] = 1,
+			["$vertexcolor"] = 1,
+			["$linearwrite"] = 0,
+			["$alphatest"] = "1",
+			["$alphatestreference"] = "0.5",
+			["$alphatested"] = 1,
+			["$nocull"] = "0",
+			["$c0_x"] = "0",
+			["$c0_y"] = "0.0005",
+			["$c0_z"] = "0",
+			["$c0_w"] = "-2",
+			["$c1_x"] = "0",
+			["$c1_y"] = "0",
+			["$c1_z"] = "-1",
+			["$c1_w"] = "0.0001",
+			["$c2_x"] = "0",
+			["$c2_y"] = "0",
+			["$c2_z"] = "0",
+			["$c2_w"] = "0",
+			["$c3_x"] = "0.6",
+			["$c3_y"] = "0.1",
+			["$c3_z"] = "0.65",
+			["$c3_w"] = "0.35",
+		} )
+		if fancyMat and not fancyMat:IsError() then
+			fancyMat:SetTexture( "$basetexture", baseTex )
+			MC.MaterialGpuLightTextureFancy = fancyMat
+		end
 	end
+end
+
+function MC.IsGpuLightTextureMaterial( material )
+	if not material then return false end
+	if material == MC.MaterialGpuLightTexture then return true end
+	if MC.MaterialGpuLightTextureFancy and material == MC.MaterialGpuLightTextureFancy then return true end
+	return false
+end
+
+local function activeGpuLightTextureMaterial()
+	local cv = MC.MeshGpuShaderFancy
+	if cv and cv.GetBool and cv:GetBool()
+		and MC.MaterialGpuLightTextureFancy and not MC.MaterialGpuLightTextureFancy:IsError() then
+		return MC.MaterialGpuLightTextureFancy
+	end
+	return MC.MaterialGpuLightTexture
 end
 
 local function gpuChunkShaderEnabled()
@@ -122,13 +193,13 @@ end
 
 local function shaderProfileChunkMaterial( translucent )
 	if translucent then return MC.MaterialTranslucent or MC.Material end
-	if shaderProfileUsesGpuLightTexture() then return MC.MaterialGpuLightTexture end
+	if shaderProfileUsesGpuLightTexture() then return activeGpuLightTextureMaterial() end
 	if shaderProfileUsesGpuPayload() then return MC.MaterialGpuOpaque end
 	return MC.Material
 end
 
 local function shaderProfileGpuPayloadMaterial()
-	if shaderProfileUsesGpuLightTexture() then return MC.MaterialGpuLightTexture end
+	if shaderProfileUsesGpuLightTexture() then return activeGpuLightTextureMaterial() end
 	return MC.MaterialGpuOpaque
 end
 

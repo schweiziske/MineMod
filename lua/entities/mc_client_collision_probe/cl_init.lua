@@ -74,9 +74,22 @@ function ENT:PhysicsUpdate( phys )
 end
 
 function ENT:Think()
-	MC.ClientCollisionProbeEntity = self
-	if MC and MC.ApplyPendingClientCollisionProbe then MC.ApplyPendingClientCollisionProbe( self ) end
-	pinProbePhysicsObject( self )
+	local phys = self:GetPhysicsObject()
+	if self.ProbeCell then
+		phys:SetVelocity( Vector(0, 0, 0) )
+        phys:SetAngleVelocity( Vector(0, 0, 0) )
+		local bx = self.ProbeCell.bx
+		local by = self.ProbeCell.by
+		local bz = self.ProbeCell.bz
+
+		phys:SetPos(cellWorldMin( bx, by, bz ))
+		phys:SetAngles( angle_zero )
+		self:SetPos( cellWorldMin( bx, by, bz ) )
+		self:SetAngles( angle_zero )
+		
+		
+	end
+
 	self:NextThink( CurTime() )
 	return true
 end
@@ -88,6 +101,7 @@ function ENT:DrawTranslucent()
 
 	render.SetColorMaterial()
 	render.DrawBox( self:GetPos(), self:GetAngles(), mins, maxs, PROBE_FILL, true )
+	
 	render.DrawWireframeBox( self:GetPos(), self:GetAngles(), mins, maxs, PROBE_WIRE, true )
 end
 
