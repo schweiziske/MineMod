@@ -528,7 +528,15 @@ local function runLightIncreaseQueue( q, changed )
 	local processed = 0
 	while q.head <= q.tail do
 		local bx, by, bz, level = popLightQueue( q )
-		if bx and chunkLoadedForCell( bx, by, bz ) then
+		-- The stored-value check drops phantom re-seeds: the decrease wave
+		-- queues equal-or-brighter neighbors as "another source's light", but
+		-- with two overlapping light fields many equal-level neighbor pairs
+		-- belong to the REMOVED source and get zeroed by another wave path
+		-- after being queued. Without this check the increase pass would
+		-- re-flood light out of a now-dark cell — the classic two-torch
+		-- overlap residue.
+		if bx and chunkLoadedForCell( bx, by, bz )
+		and getStoredLight( MC.LightBlockChunks, bx, by, bz ) >= level then
 			processed = processed + 1
 			if level > 1 then
 				for i = 1, #NEIGHBORS do
@@ -1074,6 +1082,16 @@ function MC.SampleAmbientOcclusion( bx, by, bz )
 	noteLightAOSample( sampleStart )
 	return blocked
 end
+
+concommand.Add( "mc_light_rebuild", function()
+	if not MC.RebuildLightingCells then return end
+	MC.RebuildLightingCells()
+	if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
+	if MC.ClearSkyColumnCache then MC.ClearSkyColumnCache() end
+	local stats = MC.LightPerfStats or {}
+	print( string.format( "[MC light] full rebuild: stored light wiped and re-flooded from sources (%.1fms). Use this to clean residue left by old bugs.",
+		tonumber( stats.lastRebuildMS ) or 0 ) )
+end )
 
 concommand.Add( "mc_light_enable", function( _, _, args )
 	local value = args and args[1]

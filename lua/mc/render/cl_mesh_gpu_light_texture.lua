@@ -97,7 +97,7 @@ local function lightTextureBytes( bx, by, bz )
 	block = tonumber( block ) or level
 	sky = tonumber( sky ) or level
 	-- Column-based sky exposure (cl_sky_column) replaces the stored sky value
-	-- when active; day/night is already folded into the returned level.
+	-- when active.
 	local skyOverridden = false
 	if MC.SkyLightLevelAt then
 		local skyLevel = MC.SkyLightLevelAt( bx, by, bz )
@@ -106,6 +106,25 @@ local function lightTextureBytes( bx, by, bz )
 			skyOverridden = true
 		end
 	end
+
+	if MC.GlobalLightmapActive and MC.GlobalLightmapActive() then
+		-- Global lightmap mode: chunk textures store RAW linear levels; the
+		-- 16x16 lightmap applies the brightness curve, sun brightness and all
+		-- time-of-day color/darkening. Chunk bytes are time-independent, so
+		-- day/night never re-bakes chunks, and the r-channel night tint stays
+		-- zero (night hue comes from the lightmap sky axis).
+		local blockUnit = math.Clamp( block / 15, 0, 1 )
+		local skyUnit
+		local exposure = MC.SkyExposureUnitAt and MC.SkyExposureUnitAt( bx, by, bz ) or nil
+		if exposure then
+			skyUnit = exposure
+		else
+			skyUnit = math.Clamp( sky / 15, 0, 1 )
+		end
+		return 0, lightByteFromUnit( blockUnit ), lightByteFromUnit( skyUnit )
+	end
+
+	-- Fallback (grayscale) mode: curves and day factor bake into the bytes.
 	local blockUnit = lightUnitFromLevel( block )
 	local sunMul = convarNumber( MC.MeshGpuSunBrightness, 1, 0, 4 )
 	-- Sky stays LINEAR: the gamma/brightness curve shapes torch falloff and
@@ -354,18 +373,24 @@ if cvars and cvars.AddChangeCallback then
 		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
 		if MC.MarkAllMeshesDirty then MC.MarkAllMeshesDirty( "gpu_light_texture_toggle" ) end
 	end, "mc_mesh_gpu_light_texture_rebuild" )
-	-- Intensity curve changes only need the cached light textures re-rendered;
-	-- the meshes themselves are unaffected.
-	cvars.AddChangeCallback( "mc_mesh_gpu_light_brightness", function()
+	-- Intensity curve changes: in global-lightmap mode the curves live in the
+	-- 16x16 lightmap (regenerating it is free); in fallback mode they are
+	-- baked into the chunk textures and need a full re-render.
+	local function refreshLightCurves()
+		if MC.GlobalLightmapActive and MC.GlobalLightmapActive() then
+			if MC.RefreshGlobalLightmap then MC.RefreshGlobalLightmap() end
+			return
+		end
 		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
-	end, "mc_mesh_gpu_light_brightness_refresh" )
-	cvars.AddChangeCallback( "mc_mesh_gpu_light_gamma", function()
-		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
-	end, "mc_mesh_gpu_light_gamma_refresh" )
-	cvars.AddChangeCallback( "mc_mesh_gpu_sun_brightness", function()
-		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
-	end, "mc_mesh_gpu_sun_brightness_refresh" )
+	end
+	cvars.AddChangeCallback( "mc_mesh_gpu_light_brightness", refreshLightCurves, "mc_mesh_gpu_light_brightness_refresh" )
+	cvars.AddChangeCallback( "mc_mesh_gpu_light_gamma", refreshLightCurves, "mc_mesh_gpu_light_gamma_refresh" )
+	cvars.AddChangeCallback( "mc_mesh_gpu_sun_brightness", refreshLightCurves, "mc_mesh_gpu_sun_brightness_refresh" )
 	cvars.AddChangeCallback( "mc_daycycle_night_tint", function()
+		if MC.GlobalLightmapActive and MC.GlobalLightmapActive() then
+			if MC.RefreshGlobalLightmap then MC.RefreshGlobalLightmap() end
+			return
+		end
 		if MC.QueueAllGpuChunkLightTextureRefresh then MC.QueueAllGpuChunkLightTextureRefresh() end
 	end, "mc_daycycle_night_tint_refresh" )
 end

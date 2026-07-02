@@ -57,6 +57,32 @@ function MC.DayCycleNightAmount()
 	return math.Clamp( ( 15 - MC.DayCycleSkyLevel() ) / range, 0, 1 )
 end
 
+-- Continuous (unquantized) darkness 0..1: 0 through the day, 1 at deep night.
+-- Used by the global lightmap so sunsets fade smoothly instead of stepping.
+function MC.DayCycleNightBlend()
+	if not MC.DayCycleEnabled() then return 0 end
+	local angle = MC.DayCycleCelestialAngle()
+	return math.Clamp( 1 - ( math.cos( angle * math.pi * 2 ) * 2 + 0.5 ), 0, 1 )
+end
+
+-- Continuous sky brightness 0..1 with the moonlight floor applied.
+function MC.DayCycleSkyBrightness()
+	if not MC.DayCycleEnabled() then return 1 end
+	local floorLevel = 4
+	local cv = MC.DayCycleMoonLight
+	if cv and cv.GetFloat then
+		floorLevel = math.Clamp( cv:GetFloat(), 0, 15 )
+	end
+	return 1 - MC.DayCycleNightBlend() * ( 1 - floorLevel / 15 )
+end
+
+-- 0..1 window around sunrise/sunset (sun near the horizon) for warm grading.
+function MC.DayCycleHorizonBlend()
+	if not MC.DayCycleEnabled() then return 0 end
+	local _, elevation = MC.DayCycleSunVector()
+	return math.Clamp( 1 - math.abs( elevation ) / 0.35, 0, 1 )
+end
+
 -- Untilted direction toward the sun plus its elevation (cos of the sun angle:
 -- +1 noon, 0 at the horizon, negative at night). Sun travels east (+x) to
 -- west (-x) through the zenith like MC.

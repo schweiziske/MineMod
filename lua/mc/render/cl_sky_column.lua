@@ -128,6 +128,15 @@ function MC.SkyLightLevelAt( bx, by, bz )
 	return MC.DayCycleSkyLevel and MC.DayCycleSkyLevel() or 15
 end
 
+-- Time-independent exposure for global-lightmap mode: nil = feature inactive,
+-- otherwise 0 or 1. Never modulated by the day cycle (that lives in the
+-- lightmap sky axis), so chunk bytes stay valid around the clock even with
+-- mc_daycycle_moon_light 0.
+function MC.SkyExposureUnitAt( bx, by, bz )
+	if not skyFeatureEnabled() then return nil end
+	return MC.SkyExposedAt( math.floor( bx ), math.floor( by ), math.floor( bz ) ) and 1 or 0
+end
+
 local function markColumnSpanDirty( bx, by, zFrom, zTo )
 	if not MC.MarkGpuChunkLightTextureDirtyCell then return end
 	if zFrom > zTo then zFrom, zTo = zTo, zFrom end
@@ -231,6 +240,9 @@ timer.Create( "mc_sky_column_daystep", 1, 0, function()
 	end
 	if levelNow ~= lastSkyLevel then
 		lastSkyLevel = levelNow
+		-- Global-lightmap mode: chunk bytes are time-independent (exposure
+		-- only) and the lightmap module regenerates itself; nothing to do.
+		if MC.GlobalLightmapActive and MC.GlobalLightmapActive() then return end
 		if MC.QueueAllGpuChunkLightTextureRefresh then
 			MC.QueueAllGpuChunkLightTextureRefresh()
 		elseif MC.ClearAllGpuChunkLightTextures then

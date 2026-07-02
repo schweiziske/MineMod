@@ -56,6 +56,7 @@ local CLIENT_FILES = {
 	"mc/render/cl_mesh_gpu_light_texture.lua",
 	"mc/render/cl_mesh_shadow_map.lua",
 	"mc/render/cl_mesh_materials.lua",
+	"mc/render/cl_mesh_global_lightmap.lua",
 	"mc/render/cl_mesh_light_samples.lua",
 	"mc/render/cl_mesh_upload.lua",
 	"mc/render/cl_mesh_source_lighting.lua",

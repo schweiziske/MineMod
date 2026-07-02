@@ -3,6 +3,8 @@ AddCSLuaFile( "cl_init.lua" )
 include( "shared.lua" )
 
 local DEFAULT_CELL = { 10, 9, -334 }
+local PROBE_RADIUS = 1
+local PHYSICS_MODEL = "models/hunter/blocks/cube025x025x025.mdl"
 
 local function blockSize()
 	return MC and MC.BS or 36.5
@@ -23,11 +25,13 @@ local function freezePhysicsObject( ent )
 end
 
 function ENT:Initialize()
-	self:SetModel( "models/hunter/blocks/cube025x025x025.mdl" )
+	self:SetModel( PHYSICS_MODEL )
 	self:DrawShadow( false )
+	self:PhysicsInit( SOLID_VPHYSICS )
 	self:SetMoveType( MOVETYPE_VPHYSICS )
 	self:SetSolid( SOLID_VPHYSICS )
 	self:EnableCustomCollisions( true )
+	freezePhysicsObject( self )
 end
 
 function ENT:ApplyProbeCell( bx, by, bz )
@@ -39,12 +43,19 @@ function ENT:ApplyProbeCell( bx, by, bz )
 	self.ProbeCell = { bx = bx, by = by, bz = bz }
 	self.ProbeBlockSize = bs
 
+	local size = bs * ( PROBE_RADIUS * 2 + 1 )
+	local origin = cellWorldMin( bx - PROBE_RADIUS, by - PROBE_RADIUS, bz - PROBE_RADIUS )
 	self:PhysicsDestroy()
-	self:SetPos( cellWorldMin( bx, by, bz ) )
+	if self:GetModel() ~= PHYSICS_MODEL then
+		self:SetModel( PHYSICS_MODEL )
+	end
+	self:SetPos( origin )
 	self:SetAngles( Angle( 0, 0, 0 ) )
-	-- self:SetCollisionBounds( Vector( 0, 0, 0 ), Vector( bs, bs, bs ) )
-	-- self:SetRenderBounds( Vector( 0, 0, 0 ), Vector( bs, bs, bs ) )
-	-- self:PhysicsInitBox( Vector( 0, 0, 0 ), Vector( bs, bs, bs ) )
+	self:SetCollisionBounds( Vector( 0, 0, 0 ), Vector( size, size, size ) )
+	if self.SetRenderBounds then
+		self:SetRenderBounds( Vector( 0, 0, 0 ), Vector( size, size, size ) )
+	end
+	self:PhysicsInitBox( Vector( 0, 0, 0 ), Vector( size, size, size ) )
 	self:SetMoveType( MOVETYPE_VPHYSICS )
 	self:SetSolid( SOLID_VPHYSICS )
 	self:EnableCustomCollisions( true )
