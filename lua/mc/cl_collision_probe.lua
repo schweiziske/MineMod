@@ -68,7 +68,8 @@ function MC.ApplyPendingClientCollisionProbe( ent )
 	if not ent.ApplyProbeCell then return false end
 	if ent.ProbeLocalSignature == cell.signature and IsValid( ent:GetPhysicsObject() ) then return true end
 
-	local ok = ent:ApplyProbeCell( cell.bx, cell.by, cell.bz )
+	local ok = ent:ApplyProbeCell( cell.bx, cell.by - 1, cell.bz )
+	print(ok)
 	if ok ~= false then ent.ProbeLocalSignature = cell.signature end
 	return ok ~= false
 end
@@ -140,19 +141,17 @@ end
 function MC.RequestServerCollisionProbe( bx, by, bz )
 	local cell = MC.SetPendingClientCollisionProbeCell( bx, by, bz )
 	bx, by, bz = cell.bx, cell.by, cell.bz
-	local ent = ents.CreateClientside( "mc_client_collision_probe" )
-	ent:Spawn()
-	ent:ApplyProbeCell( bx, by, bz )
-	-- if not net then
-	-- 	print( "[MC probe] net library is unavailable; cannot request server-backed probe" )
-	-- 	return
-	-- end
 
-	-- net.Start( "mc_collision_probe_create" )
-	-- 	net.WriteInt( bx, 32 )
-	-- 	net.WriteInt( by, 32 )
-	-- 	net.WriteInt( bz, 32 )
-	-- net.SendToServer()
+	if not net then
+		print( "[MC probe] net library is unavailable; cannot request server-backed probe" )
+		return
+	end
+
+	net.Start( "mc_collision_probe_create" )
+		net.WriteInt( bx, 32 )
+		net.WriteInt( by, 32 )
+		net.WriteInt( bz, 32 )
+	net.SendToServer()
 
 	print( string.format( "[MC probe] requested server-backed probe at cell %s", probeCellText( bx, by, bz ) ) )
 end
@@ -341,6 +340,7 @@ function MC.DumpClientCollision()
 			pos = ent:GetPos(),
 			ang = ent:GetAngles(),
 		}
+		print(ent)
 
 		print( string.format(
 			"[MC probe dump] pos=%s ang=%s",
@@ -363,7 +363,7 @@ function MC.DumpClientCollision_sch()
 			pos = ent:GetPos(),
 			ang = ent:GetAngles(),
 		}
-
+		
 		print( string.format(
 			"[MC probe dump] pos=%s ang=%s",
 			vectorText( data.pos ),
@@ -375,10 +375,3 @@ function MC.DumpClientCollision_sch()
 	end
 
 end
-
-hook.Add( "ShouldCollide", "ForceProbeCellCollision", function( ent1, ent2 )
-    -- 如果其中一个是你的网格实体，强制允许碰撞，覆盖引擎默认的 !IsClientCreated() 过滤
-    if ent1:GetClass() == "mc_client_collision_probe" or ent2:IsPlayer() then
-        return true 
-    end
-end )

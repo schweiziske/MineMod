@@ -49,6 +49,14 @@ MC.DayCycleNightTint = MC.DayCycleNightTint or ( CreateClientConVar and CreateCl
 	"Day cycle: how strongly sky-lit surfaces shift toward moonlight blue at night (0 = neutral)" ) )
 MC.MeshGpuLightRefreshPerFrame = MC.MeshGpuLightRefreshPerFrame or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_light_refresh_per_frame", "2", true, false,
 	"GPU light texture: chunks re-rendered per frame during day/night level steps (higher = faster but choppier)" ) )
+MC.MeshGpuLightmap = MC.MeshGpuLightmap or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_lightmap", "1", true, false,
+	"Procedural 16x16 global lightmap: warm torch light, colored day/night sky axis (0 = grayscale fallback)" ) )
+MC.MeshGpuLightmapTorchWarmth = MC.MeshGpuLightmapTorchWarmth or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_lightmap_torch_warmth", "0.7", true, false,
+	"Global lightmap: warm tint of block light (0 = neutral white torches)" ) )
+MC.MeshGpuLightmapAmbient = MC.MeshGpuLightmapAmbient or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_lightmap_ambient", "0.12", true, false,
+	"Global lightmap: minimum visible brightness in fully dark areas" ) )
+MC.MeshGpuLightmapSunset = MC.MeshGpuLightmapSunset or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_lightmap_sunset", "0.5", true, false,
+	"Global lightmap: sunset/sunrise orange grading strength on the sky axis (0 = off)" ) )
 MC.MeshShadowMapSource = MC.MeshShadowMapSource or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_source", "mc", true, false,
 	"Experimental shadow source for MC chunks: mc, screen, or combined" ) )
 MC.MeshShadowMapScreenContrast = MC.MeshShadowMapScreenContrast or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_screen_contrast", "6", true, false,
