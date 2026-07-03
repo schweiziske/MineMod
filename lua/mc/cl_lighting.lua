@@ -495,7 +495,9 @@ local function setBlockLightChanged( changed, bx, by, bz, level )
 	if level > 0 and not loaded then return false end
 	if getStoredLight( MC.LightBlockChunks, bx, by, bz ) == level then return false end
 	setStoredLight( MC.LightBlockChunks, bx, by, bz, level )
-	if loaded then noteChangedLightCell( changed, bx, by, bz ) end
+	-- Always note changed cells for GPU light texture halo updates, even if this cell's chunk is unloaded
+	-- (neighbor chunks may be loaded and need their halo texels refreshed)
+	noteChangedLightCell( changed, bx, by, bz )
 	return true
 end
 
@@ -1040,6 +1042,12 @@ function MC.MarkLightingDirtyForChange( bx, by, bz, oldId, oldOrient, newId, new
 	if oldEmission ~= newEmission or oldOpacity ~= newOpacity then
 		local dirtyBlockLightMeshes = oldEmission ~= newEmission
 		MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, oldOpacity, newOpacity, dirtyBlockLightMeshes )
+	elseif oldOpacity ~= newOpacity and MC.UsingGpuLightTexture and MC.UsingGpuLightTexture() then
+		-- Opacity-only change: doesn't affect CPU mesh vertex colors, but GPU light texture
+		-- needs to refresh because transparency affects light propagation
+		if MC.MarkGpuChunkLightTextureDirtyCell then
+			MC.MarkGpuChunkLightTextureDirtyCell( bx, by, bz )
+		end
 	end
 	if oldId ~= 0 and newId == 0 and lightPerfPrintBreakEnabled() and timer and timer.Simple then
 		timer.Simple( 0, function()
