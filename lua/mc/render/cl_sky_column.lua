@@ -18,11 +18,13 @@ local function chunkColKey( cx, cy )
 end
 
 local function skyFeatureEnabled()
-	local cv = MC.MeshGpuSkyLight
-	if cv and cv.GetBool and not cv:GetBool() then return false end
-	local le = MC.LightEnabled
-	if le and le.GetBool and not le:GetBool() then return false end
-	return true
+	-- DISABLED: Column-based sky occlusion disabled to prevent fake shadows under light sources
+	return false
+	-- local cv = MC.MeshGpuSkyLight
+	-- if cv and cv.GetBool and not cv:GetBool() then return false end
+	-- local le = MC.LightEnabled
+	-- if le and le.GetBool and not le:GetBool() then return false end
+	-- return true
 end
 
 local function ensureChunkColumns()
