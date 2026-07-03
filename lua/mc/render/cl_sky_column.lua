@@ -123,10 +123,8 @@ function MC.SkyExposedAt( bx, by, bz )
 	return bz > top
 end
 
--- nil = feature inactive (caller keeps its own sky value), otherwise 0..15.
 function MC.SkyLightLevelAt( bx, by, bz )
-	if not skyFeatureEnabled() then return nil end
-	if not MC.SkyExposedAt( math.floor( bx ), math.floor( by ), math.floor( bz ) ) then return 0 end
+	-- Column occlusion disabled, always return full sky light
 	return MC.DayCycleSkyLevel and MC.DayCycleSkyLevel() or 15
 end
 
@@ -135,8 +133,8 @@ end
 -- lightmap sky axis), so chunk bytes stay valid around the clock even with
 -- mc_daycycle_moon_light 0.
 function MC.SkyExposureUnitAt( bx, by, bz )
-	if not skyFeatureEnabled() then return nil end
-	return MC.SkyExposedAt( math.floor( bx ), math.floor( by ), math.floor( bz ) ) and 1 or 0
+	-- Column occlusion disabled, always return full exposure
+	return 1
 end
 
 local function markColumnSpanDirty( bx, by, zFrom, zTo )
