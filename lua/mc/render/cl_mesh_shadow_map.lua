@@ -486,7 +486,11 @@ local function bindShadowParams( material, enabled, source, isFancy )
 
 	if source == "mc" and mcShadowForward and mcShadowOrigin then
 		local invZFar = ( mcShadowZFar and mcShadowZFar > 0 ) and 1 / mcShadowZFar or 0
-		local softness = convarFloat( MC.MeshShadowMapSoftness, 1, 0, 4 )
+		-- The shader derives its normal-offset shadow bias from this kernel
+		-- radius, so it must span at least one shadow-map texel or the bias
+		-- collapses and acne returns; clamp softness up instead of allowing a
+		-- biasless single-tap mode.
+		local softness = convarFloat( MC.MeshShadowMapSoftness, 1, 1, 4 )
 		local kernelUV = mcShadowTextureSize > 0 and softness / mcShadowTextureSize or 0
 		material:SetFloat( "$c1_x", mcShadowForward.x )
 		material:SetFloat( "$c1_y", mcShadowForward.y )
