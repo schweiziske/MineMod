@@ -56,7 +56,7 @@ MC.ConfigConVars = {
 			item( "lighting", "mc_mesh_shadow_map_edge_fade", "Shadow edge fade", "number", "Fancy shader: fade band at shadow coverage border (0-0.5)" ),
 			item( "lighting", "mc_mesh_gpu_light_brightness", "Light brightness", "number", "GPU light texture: brightness multiplier for block/sky light (1 = unchanged)" ),
 			item( "lighting", "mc_mesh_gpu_light_gamma", "Light gamma", "number", "GPU light texture: falloff curve; >1 brightens torch edges, <1 darkens (1 = linear)" ),
-			item( "lighting", "mc_mesh_gpu_sky_light", "Sky light", "bool", "Column-based sky exposure so sunlight is brighter than torches" ),
+			item( "lighting", "mc_mesh_gpu_sky_light", "Sky light", "bool", "Column sky exposure disabled; day/night uses uniform sky light" ),
 			item( "lighting", "mc_mesh_gpu_sun_brightness", "Sun brightness", "number", "Sun/sky light brightness multiplier (1 = unchanged)" ),
 			item( "lighting", "mc_daycycle_sun_tilt", "Sun path tilt", "number", "Day cycle: sideways tilt of the shadow sun path (0-1)" ),
 			item( "lighting", "mc_daycycle_moon_shadow", "Moon shadow", "number", "Day cycle: night shadow strength relative to day (0 = none)" ),

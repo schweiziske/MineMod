@@ -18,13 +18,10 @@ local function chunkColKey( cx, cy )
 end
 
 local function skyFeatureEnabled()
-	-- DISABLED: Column-based sky occlusion disabled to prevent fake shadows under light sources
+	-- Hard disabled: column exposure creates visible sky-light pillars in this
+	-- renderer. Day/night still uses a uniform sky term through the global
+	-- lightmap; directional occlusion belongs to the shadow map, not this cache.
 	return false
-	-- local cv = MC.MeshGpuSkyLight
-	-- if cv and cv.GetBool and not cv:GetBool() then return false end
-	-- local le = MC.LightEnabled
-	-- if le and le.GetBool and not le:GetBool() then return false end
-	-- return true
 end
 
 local function ensureChunkColumns()
@@ -124,16 +121,13 @@ function MC.SkyExposedAt( bx, by, bz )
 end
 
 function MC.SkyLightLevelAt( bx, by, bz )
-	-- Column occlusion disabled, always return full sky light
 	return MC.DayCycleSkyLevel and MC.DayCycleSkyLevel() or 15
 end
 
--- Time-independent exposure for global-lightmap mode: nil = feature inactive,
--- otherwise 0 or 1. Never modulated by the day cycle (that lives in the
--- lightmap sky axis), so chunk bytes stay valid around the clock even with
--- mc_daycycle_moon_light 0.
+-- Time-independent exposure for global-lightmap mode. Column exposure is
+-- disabled, so this stays at 1 and the global lightmap owns all day/night
+-- brightness and color grading.
 function MC.SkyExposureUnitAt( bx, by, bz )
-	-- Column occlusion disabled, always return full exposure
 	return 1
 end
 
@@ -232,7 +226,6 @@ end
 -- Uses the amortized queue so a step never rebuilds every chunk in one frame.
 local lastSkyLevel
 timer.Create( "mc_sky_column_daystep", 1, 0, function()
-	if not skyFeatureEnabled() then return end
 	local levelNow = MC.DayCycleSkyLevel and MC.DayCycleSkyLevel() or 15
 	if lastSkyLevel == nil then
 		lastSkyLevel = levelNow
