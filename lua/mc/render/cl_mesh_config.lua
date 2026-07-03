@@ -20,7 +20,7 @@ MC.MeshShadowMapStrength = MC.MeshShadowMapStrength or ( CreateClientConVar and 
 MC.MeshShadowMapBias = MC.MeshShadowMapBias or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_bias", "0.0005", true, false,
 	"Experimental shadow map depth/edge bias for MC chunk shader sampling" ) )
 MC.MeshShadowMapSoftness = MC.MeshShadowMapSoftness or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_softness", "1", true, false,
-	"Experimental shadow edge softness in shadow-map texels (0 = hard 1-tap shadow)" ) )
+	"Experimental shadow edge softness in shadow-map texels (clamped to at least 1 texel; the shadow bias scales with it)" ) )
 MC.MeshGpuShaderFancy = MC.MeshGpuShaderFancy or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_shader_fancy", "0", true, false,
 	"Experimental: use the fancy GPU chunk shader variant (cool shadows, warm sun, back-face shading, edge fade)" ) )
 MC.MeshShadowMapTint = MC.MeshShadowMapTint or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_tint", "0.6", true, false,
