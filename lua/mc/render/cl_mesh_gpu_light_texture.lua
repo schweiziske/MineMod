@@ -373,6 +373,17 @@ if cvars and cvars.AddChangeCallback then
 		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
 		if MC.MarkAllMeshesDirty then MC.MarkAllMeshesDirty( "gpu_light_texture_toggle" ) end
 	end, "mc_mesh_gpu_light_texture_rebuild" )
+	local function refreshTimeOfDayLighting()
+		if MC.GlobalLightmapActive and MC.GlobalLightmapActive() then
+			if MC.RefreshGlobalLightmap then MC.RefreshGlobalLightmap() end
+			return
+		end
+		if MC.QueueAllGpuChunkLightTextureRefresh then
+			MC.QueueAllGpuChunkLightTextureRefresh()
+		elseif MC.ClearAllGpuChunkLightTextures then
+			MC.ClearAllGpuChunkLightTextures()
+		end
+	end
 	-- Intensity curve changes: in global-lightmap mode the curves live in the
 	-- 16x16 lightmap (regenerating it is free); in fallback mode they are
 	-- baked into the chunk textures and need a full re-render.
@@ -385,12 +396,7 @@ if cvars and cvars.AddChangeCallback then
 	end
 	cvars.AddChangeCallback( "mc_mesh_gpu_light_brightness", refreshLightCurves, "mc_mesh_gpu_light_brightness_refresh" )
 	cvars.AddChangeCallback( "mc_mesh_gpu_light_gamma", refreshLightCurves, "mc_mesh_gpu_light_gamma_refresh" )
-	cvars.AddChangeCallback( "mc_mesh_gpu_sun_brightness", refreshLightCurves, "mc_mesh_gpu_sun_brightness_refresh" )
-	cvars.AddChangeCallback( "mc_daycycle_night_tint", function()
-		if MC.GlobalLightmapActive and MC.GlobalLightmapActive() then
-			if MC.RefreshGlobalLightmap then MC.RefreshGlobalLightmap() end
-			return
-		end
-		if MC.QueueAllGpuChunkLightTextureRefresh then MC.QueueAllGpuChunkLightTextureRefresh() end
-	end, "mc_daycycle_night_tint_refresh" )
+	cvars.AddChangeCallback( "mc_mesh_gpu_sun_brightness", refreshTimeOfDayLighting, "mc_mesh_gpu_sun_brightness_refresh" )
+	cvars.AddChangeCallback( "mc_daycycle_moon_light", refreshTimeOfDayLighting, "mc_daycycle_moon_light_refresh" )
+	cvars.AddChangeCallback( "mc_daycycle_night_tint", refreshTimeOfDayLighting, "mc_daycycle_night_tint_refresh" )
 end

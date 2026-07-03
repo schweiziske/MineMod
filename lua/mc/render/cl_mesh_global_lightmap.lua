@@ -5,9 +5,9 @@
 --
 -- Axes: u = block level 0..15 (warm torch ramp, user brightness/gamma curve),
 -- v = sky level 0..15 (day/night brightness + hue: sunset orange, moonlight
--- blue). Channels combine with per-channel max, floored by the ambient
+-- blue). Sky and block terms add, then floor by the ambient
 -- minimum — at default settings this reproduces the old fallback's brightness
--- (max(0.12, max(block, sky))), only adding hue.
+-- (mc_mesh_gpu_lightmap_ambient, default 0.04), with the floor carrying hue.
 --
 -- Time-of-day lives ENTIRELY in this 16x16 texture: a day/night step now
 -- redraws 256 texels once a second instead of re-baking every chunk light
@@ -91,7 +91,7 @@ local function blockCurveUnit( level )
 end
 
 local TORCH_WARM = { 1.0, 0.82, 0.58 }
-local NIGHT_BLUE = { 0.55, 0.66, 1.0 }
+local NIGHT_BLUE = { 0.28, 0.42, 1.0 }
 local SUNSET_ORANGE = { 1.0, 0.62, 0.36 }
 
 local function generateGlobalLightmap()
@@ -102,12 +102,12 @@ local function generateGlobalLightmap()
 	local nightBlend = MC.DayCycleNightBlend and MC.DayCycleNightBlend() or 0
 	local horizon = MC.DayCycleHorizonBlend and MC.DayCycleHorizonBlend() or 0
 	local sunset = horizon * ( 1 - nightBlend ) * convarNumber( MC.MeshGpuLightmapSunset, 0.5, 0, 1 )
-	local nightTint = nightBlend * convarNumber( MC.DayCycleNightTint, 0.6, 0, 1 )
+	local nightTint = nightBlend * convarNumber( MC.DayCycleNightTint, 0.85, 0, 1 )
 	local torchWarmth = convarNumber( MC.MeshGpuLightmapTorchWarmth, 0.7, 0, 1 )
-	local ambient = convarNumber( MC.MeshGpuLightmapAmbient, 0.12, 0, 1 )
+	local ambient = convarNumber( MC.MeshGpuLightmapAmbient, 0.04, 0, 1 )
 	local sunMul = convarNumber( MC.MeshGpuSunBrightness, 1, 0, 4 )
 
-	-- Sky hue: day white -> sunset orange -> moonlight blue.
+	-- Sky hue: day white -> sunset orange -> dark moonlight blue.
 	local skyR = 1 + ( SUNSET_ORANGE[1] - 1 ) * sunset
 	local skyG = 1 + ( SUNSET_ORANGE[2] - 1 ) * sunset
 	local skyB = 1 + ( SUNSET_ORANGE[3] - 1 ) * sunset
@@ -142,7 +142,7 @@ local function generateGlobalLightmap()
 					local bl = math.min( unit * torchB + sb, 1 )
 					-- The ambient floor carries the sky hue: with a neutral
 					-- gray floor, deep night snaps to gray the moment the sky
-					-- term drops below it (sudden loss of the blue tint).
+					-- term drops below it.
 					r = math.max( r, ambient * floorR )
 					g = math.max( g, ambient * floorG )
 					bl = math.max( bl, ambient * floorB )
