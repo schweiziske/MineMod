@@ -134,6 +134,7 @@ local function rebuildFlatMeshLists( key )
 	if not sections then
 		MC.Meshes[key] = nil
 		MC.MeshesTrans[key] = nil
+		if MC.MarkChunkDrawListDirty then MC.MarkChunkDrawListDirty() end
 		return
 	end
 	local opaque, translucent = {}, {}
@@ -147,9 +148,11 @@ local function rebuildFlatMeshLists( key )
 	end
 	MC.Meshes[key] = #opaque > 0 and opaque or nil
 	MC.MeshesTrans[key] = #translucent > 0 and translucent or nil
+	if MC.MarkChunkDrawListDirty then MC.MarkChunkDrawListDirty() end
 end
 
 function MC.FreeChunkMesh( key )
+	if MC.MarkChunkDrawListDirty then MC.MarkChunkDrawListDirty() end
 	if MC.MeshDirtyRateLimited then MC.MeshDirtyRateLimited[key] = nil end
 	if MC.MeshLightDirty then MC.MeshLightDirty[key] = nil end
 	clearChunkBlockEmitCache( key )

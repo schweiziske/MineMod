@@ -59,10 +59,13 @@ end
 
 -- Continuous (unquantized) darkness 0..1: 0 through the day, 1 at deep night.
 -- Used by the global lightmap so sunsets fade smoothly instead of stepping.
+-- Smoothstepped: the raw clamp has slope kinks where it enters/leaves 0..1,
+-- which read as lights snapping off at dusk and back on at dawn.
 function MC.DayCycleNightBlend()
 	if not MC.DayCycleEnabled() then return 0 end
 	local angle = MC.DayCycleCelestialAngle()
-	return math.Clamp( 1 - ( math.cos( angle * math.pi * 2 ) * 2 + 0.5 ), 0, 1 )
+	local t = math.Clamp( 1 - ( math.cos( angle * math.pi * 2 ) * 2 + 0.5 ), 0, 1 )
+	return t * t * ( 3 - 2 * t )
 end
 
 -- Continuous sky brightness 0..1 with the moonlight floor applied.

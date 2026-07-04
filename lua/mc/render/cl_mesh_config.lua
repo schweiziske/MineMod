@@ -57,6 +57,8 @@ MC.MeshGpuLightmapAmbient = MC.MeshGpuLightmapAmbient or ( CreateClientConVar an
 	"Global lightmap: minimum visible brightness in fully dark areas" ) )
 MC.MeshGpuLightmapSunset = MC.MeshGpuLightmapSunset or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_lightmap_sunset", "0.5", true, false,
 	"Global lightmap: sunset/sunrise orange grading strength on the sky axis (0 = off)" ) )
+MC.MeshGpuLightmapNightGamma = MC.MeshGpuLightmapNightGamma or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_lightmap_night_gamma", "0.6", true, false,
+	"Global lightmap: perceptual curve on day/night sky brightness (1 = linear; lower = brighter, bluer nights and gentler dusk)" ) )
 MC.MeshShadowMapSource = MC.MeshShadowMapSource or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_source", "mc", true, false,
 	"Experimental shadow source for MC chunks: mc, screen, or combined" ) )
 MC.MeshShadowMapScreenContrast = MC.MeshShadowMapScreenContrast or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_screen_contrast", "6", true, false,
