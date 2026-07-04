@@ -9,10 +9,10 @@ function ENT:Initialize()
 	self:SetMoveType( MOVETYPE_VPHYSICS )
 	self:SetSolid( SOLID_VPHYSICS )
 	self:EnableCustomCollisions( true )
-	if self.MarkClientPhysDirtyFromMetadata then
+	if self.SyncClientPhysMetadata then
 		timer.Simple( 0, function()
-			if IsValid( self ) and self.MarkClientPhysDirtyFromMetadata then
-				self:MarkClientPhysDirtyFromMetadata()
+			if IsValid( self ) and self.SyncClientPhysMetadata then
+				self:SyncClientPhysMetadata()
 			end
 		end )
 	end

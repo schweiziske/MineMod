@@ -40,6 +40,7 @@ local SERVER_FILES = {
 	"mc/sv_config_ui.lua",
 	"mc/sv_commands.lua",
 	"mc/sv_collision_probe.lua",
+	"mc/sv_collision_carriers.lua",
 	"mc/sv_chunk_store.lua",
 	"mc/sv_saves.lua",
 	"mc/sv_presets.lua",

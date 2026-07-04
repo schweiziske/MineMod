@@ -22,9 +22,16 @@ local LastClientCollisionAimKey
 local LastClientCollisionAABBKey
 local LastClientCollisionCrossChunk = nil
 local LastClientCollisionRefreshFrame
-local CLIENT_PLAYER_COLLISION_BLOCK_SIZE = 4
+-- Hysteresis: collision is built for a 6x6x6 region around an ANCHOR cell,
+-- and the anchor only moves when the player leaves the 3x3x3 core around it.
+-- Crouching, small steps and view jitter therefore never trigger rebuilds.
+local CLIENT_PLAYER_COLLISION_BLOCK_SIZE = 6
 local CLIENT_PLAYER_COLLISION_NEGATIVE_EXTENT = math.floor( ( CLIENT_PLAYER_COLLISION_BLOCK_SIZE - 1 ) / 2 )
 local CLIENT_PLAYER_COLLISION_POSITIVE_EXTENT = CLIENT_PLAYER_COLLISION_BLOCK_SIZE - CLIENT_PLAYER_COLLISION_NEGATIVE_EXTENT - 1
+local CLIENT_PLAYER_COLLISION_CORE_EXTENT = 1
+local CLIENT_AIM_COLLISION_SLACK = 1
+local PlayerCollisionAnchor
+local AimCollisionAnchor
 MC.NextBulkCollisionRebuildAt = MC.NextBulkCollisionRebuildAt or 0
 
 function MC.ResetClientCollisionState()
@@ -35,6 +42,11 @@ function MC.ResetClientCollisionState()
 	LastClientCollisionAABBKey = nil
 	LastClientCollisionCrossChunk = nil
 	LastClientCollisionRefreshFrame = nil
+	PlayerCollisionAnchor = nil
+	AimCollisionAnchor = nil
+	if MC.ReleaseAllClientCarrierCollision then MC.ReleaseAllClientCarrierCollision() end
+	MC.CollisionCarrierAssignments = {}
+	MC.CollisionCarriers = nil
 	MC.ClientCollisionInterest = {}
 	MC.ClientCollisionPlayerInterest = {}
 	MC.ClientCollisionAimInterest = {}
@@ -278,13 +290,25 @@ local function collectClientPlayerAABBCollisionInterestKeys( lp, desired, radius
 	radius = math.max( 0, math.floor( tonumber( radius ) or 0 ) )
 	local pos = lp:GetPos()
 	local bx, by, bz = MC.WorldToCell( pos )
-	addClientCellNeighborhoodCollisionKeys( desired, bx, by, bz, CLIENT_PLAYER_COLLISION_NEGATIVE_EXTENT, false, CLIENT_PLAYER_COLLISION_POSITIVE_EXTENT )
-	local minBX = bx - CLIENT_PLAYER_COLLISION_NEGATIVE_EXTENT
-	local minBY = by - CLIENT_PLAYER_COLLISION_NEGATIVE_EXTENT
-	local minBZ = bz - CLIENT_PLAYER_COLLISION_NEGATIVE_EXTENT
-	local maxBX = bx + CLIENT_PLAYER_COLLISION_POSITIVE_EXTENT
-	local maxBY = by + CLIENT_PLAYER_COLLISION_POSITIVE_EXTENT
-	local maxBZ = bz + CLIENT_PLAYER_COLLISION_POSITIVE_EXTENT
+
+	-- re-anchor only when the player leaves the core around the anchor;
+	-- inside the core the interest (and its key) is completely stable
+	local a = PlayerCollisionAnchor
+	if not a
+	or math.abs( bx - a.bx ) > CLIENT_PLAYER_COLLISION_CORE_EXTENT
+	or math.abs( by - a.by ) > CLIENT_PLAYER_COLLISION_CORE_EXTENT
+	or math.abs( bz - a.bz ) > CLIENT_PLAYER_COLLISION_CORE_EXTENT then
+		a = { bx = bx, by = by, bz = bz }
+		PlayerCollisionAnchor = a
+	end
+
+	addClientCellNeighborhoodCollisionKeys( desired, a.bx, a.by, a.bz, CLIENT_PLAYER_COLLISION_NEGATIVE_EXTENT, false, CLIENT_PLAYER_COLLISION_POSITIVE_EXTENT )
+	local minBX = a.bx - CLIENT_PLAYER_COLLISION_NEGATIVE_EXTENT
+	local minBY = a.by - CLIENT_PLAYER_COLLISION_NEGATIVE_EXTENT
+	local minBZ = a.bz - CLIENT_PLAYER_COLLISION_NEGATIVE_EXTENT
+	local maxBX = a.bx + CLIENT_PLAYER_COLLISION_POSITIVE_EXTENT
+	local maxBY = a.by + CLIENT_PLAYER_COLLISION_POSITIVE_EXTENT
+	local maxBZ = a.bz + CLIENT_PLAYER_COLLISION_POSITIVE_EXTENT
 	local minCX, minCY, minCZ = MC.CellToChunk( minBX, minBY, minBZ )
 	local maxCX, maxCY, maxCZ = MC.CellToChunk( maxBX, maxBY, maxBZ )
 	local spanX, spanY, spanZ = maxBX - minBX + 1, maxBY - minBY + 1, maxBZ - minBZ + 1
@@ -296,13 +320,29 @@ end
 local function collectClientAimCollisionInterestKeys( lp, desired )
 	if not IsValid( lp ) then return nil end
 	local aimDist = collisionAimDistance()
-	local hit = MC.PlayerBlockAim and MC.PlayerBlockAim( lp, aimDist ) or nil
-	if not hit or not hit.bx then return nil end
 	local radius = clientCollisionAimRadius()
+
+	-- same hysteresis as the player bubble: build slightly wider than the
+	-- configured radius and only re-anchor when the aimed cell drifts out of
+	-- the slack zone, so crouching/eye-height jitter does not rebuild.
+	local hit = MC.PlayerBlockAim and MC.PlayerBlockAim( lp, aimDist ) or nil
+	if hit and hit.bx then
+		local a = AimCollisionAnchor
+		if not a
+		or math.abs( hit.bx - a.bx ) > CLIENT_AIM_COLLISION_SLACK
+		or math.abs( hit.by - a.by ) > CLIENT_AIM_COLLISION_SLACK
+		or math.abs( hit.bz - a.bz ) > CLIENT_AIM_COLLISION_SLACK then
+			AimCollisionAnchor = { bx = hit.bx, by = hit.by, bz = hit.bz }
+		end
+	end
+
+	local a = AimCollisionAnchor
+	if not a then return nil end
+	local buildRadius = radius + CLIENT_AIM_COLLISION_SLACK
 	local clampToHitChunk = radius <= 0 and not clientCollisionCrossChunkEnabled()
-	addClientCellNeighborhoodCollisionKeys( desired, hit.bx, hit.by, hit.bz, radius, clampToHitChunk )
-	local cx, cy, cz = MC.CellToChunk( hit.bx, hit.by, hit.bz )
-	return MC.ChunkKey( cx, cy, cz ) .. "|" .. hit.bx .. ":" .. hit.by .. ":" .. hit.bz .. "|" .. radius .. "|" .. aimDist .. "|" .. tostring( clampToHitChunk )
+	addClientCellNeighborhoodCollisionKeys( desired, a.bx, a.by, a.bz, buildRadius, clampToHitChunk )
+	local cx, cy, cz = MC.CellToChunk( a.bx, a.by, a.bz )
+	return MC.ChunkKey( cx, cy, cz ) .. "|" .. a.bx .. ":" .. a.by .. ":" .. a.bz .. "|" .. buildRadius .. "|" .. aimDist .. "|" .. tostring( clampToHitChunk )
 end
 
 local function clientCollisionBoundsSignature( bounds )
@@ -332,54 +372,6 @@ local function mergeClientCollisionInterestSets( target, source )
 	end
 end
 
-local function clientCollisionSubchunkBoundsForKey( subkey )
-	local sx, sy, sz = tostring( subkey or "" ):match( "^(-?%d+):(-?%d+):(-?%d+)$" )
-	if not sx then return nil end
-	local size = math.max( 1, math.floor( tonumber( MC.CollisionSubchunkSize ) or 8 ) )
-	local x0 = math.max( 0, tonumber( sx ) * size )
-	local y0 = math.max( 0, tonumber( sy ) * size )
-	local z0 = math.max( 0, tonumber( sz ) * size )
-	return {
-		x0,
-		y0,
-		z0,
-		math.min( MC.CS - 1, x0 + size - 1 ),
-		math.min( MC.CS - 1, y0 + size - 1 ),
-		math.min( MC.CH - 1, z0 + size - 1 ),
-	}
-end
-
-local function clientLocalBoundsTouch( a, b )
-	return a[1] <= b[4] and a[4] >= b[1]
-		and a[2] <= b[5] and a[5] >= b[2]
-		and a[3] <= b[6] and a[6] >= b[3]
-end
-
-local function clientNetworkSubchunkInBounds( ent, key, bounds )
-	if not IsValid( ent ) or ent:GetNWString( "MCChunkKey", "" ) ~= tostring( key ) then return false end
-	if not bounds then return true end
-	local sub = clientCollisionSubchunkBoundsForKey( ent:GetNWString( "MCSubchunkKey", "" ) )
-	if not sub then return false end
-	for _, bound in ipairs( bounds ) do
-		if clientLocalBoundsTouch( sub, bound ) then return true end
-	end
-	return false
-end
-
-local function clientNetworkSubchunkPhysSummary( key, bounds )
-	local total = 0
-	local missing = 0
-	for _, subchunk in ipairs( ents.FindByClass( "mc_chunk_phys" ) ) do
-		if clientNetworkSubchunkInBounds( subchunk, key, bounds ) then
-			total = total + 1
-			if not IsValid( subchunk:GetPhysicsObject() ) then
-				missing = missing + 1
-			end
-		end
-	end
-	return total, missing
-end
-
 local function clientPhysBuildSignature( key, bounds, chunk )
 	chunk = chunk or ( MC.World and MC.World[key] )
 	local version = chunk and chunk.collisionVersion or 0
@@ -390,38 +382,196 @@ local function clientPhysBuildSignature( key, bounds, chunk )
 	return signature
 end
 
-local function clientPhysObjectCount( ent )
-	if not IsValid( ent ) then return 0 end
-	local count = IsValid( ent:GetPhysicsObject() ) and 1 or 0
-	for _, subchunk in ipairs( ent.PhysicsSubchunks or {} ) do
-		if IsValid( subchunk ) and IsValid( subchunk:GetPhysicsObject() ) then
+--------------------------------------------------------------- carrier pool
+-- Client prediction collision lives on per-player mc_collision_carrier
+-- entities (spawned server-side, transmitted only to their owner, never
+-- removed while connected). Each carrier holds one page of world-space
+-- convexes; a chunk's interest collision may span several carriers.
+
+local CARRIER_CLASS = "mc_collision_carrier"
+
+local function localCollisionCarriers()
+	local lp = LocalPlayer()
+	if not IsValid( lp ) then return nil end
+
+	local cached = MC.CollisionCarriers
+	if cached and #cached > 0 then
+		local ok = true
+		for i = 1, #cached do
+			if not IsValid( cached[i] ) then ok = false break end
+		end
+		if ok then return cached end
+	end
+
+	local out = {}
+	for _, ent in ipairs( ents.FindByClass( CARRIER_CLASS ) ) do
+		if IsValid( ent ) and ent:EntIndex() > 0 and ent:GetNWEntity( "MCCarrierOwner" ) == lp then
+			out[#out + 1] = ent
+		end
+	end
+	table.sort( out, function( a, b )
+		return a:GetNWInt( "MCCarrierIndex", 0 ) < b:GetNWInt( "MCCarrierIndex", 0 )
+	end )
+	MC.CollisionCarriers = out
+	return out
+end
+
+local function releaseCarrierCollisionForChunk( key )
+	local assigned = MC.CollisionCarrierAssignments and MC.CollisionCarrierAssignments[key]
+	if assigned then
+		for _, ent in ipairs( assigned ) do
+			if IsValid( ent ) then ent:PhysicsDestroy() end
+		end
+		MC.CollisionCarrierAssignments[key] = nil
+	end
+	if MC.ClientCollisionAABBDebugBoxes then
+		MC.ClientCollisionAABBDebugBoxes[key] = nil
+	end
+end
+
+function MC.ReleaseAllClientCarrierCollision()
+	for key in pairs( MC.CollisionCarrierAssignments or {} ) do
+		releaseCarrierCollisionForChunk( key )
+	end
+	MC.CollisionCarrierAssignments = {}
+end
+
+local function acquireCarriersForChunk( key, count )
+	MC.CollisionCarrierAssignments = MC.CollisionCarrierAssignments or {}
+	local carriers = localCollisionCarriers()
+	if not carriers or #carriers == 0 then return nil, "no_carriers" end
+
+	local inUse = {}
+	for otherKey, list in pairs( MC.CollisionCarrierAssignments ) do
+		if otherKey ~= key then
+			for _, ent in ipairs( list ) do
+				inUse[ent] = true
+			end
+		end
+	end
+
+	-- keep current assignment where possible, top up from the free pool
+	local assigned = {}
+	for _, ent in ipairs( MC.CollisionCarrierAssignments[key] or {} ) do
+		if IsValid( ent ) and #assigned < count then
+			assigned[#assigned + 1] = ent
+			inUse[ent] = true
+		end
+	end
+	for _, ent in ipairs( carriers ) do
+		if #assigned >= count then break end
+		if not inUse[ent] then
+			assigned[#assigned + 1] = ent
+			inUse[ent] = true
+		end
+	end
+
+	-- strip physics from carriers this chunk no longer needs
+	for _, ent in ipairs( MC.CollisionCarrierAssignments[key] or {} ) do
+		local kept = false
+		for _, a in ipairs( assigned ) do
+			if a == ent then kept = true break end
+		end
+		if not kept and IsValid( ent ) then ent:PhysicsDestroy() end
+	end
+
+	if #assigned < count then
+		MC.CollisionCarrierAssignments[key] = nil
+		for _, ent in ipairs( assigned ) do
+			if IsValid( ent ) then ent:PhysicsDestroy() end
+		end
+		return nil, "carrier_pool_exhausted"
+	end
+
+	MC.CollisionCarrierAssignments[key] = assigned
+	return assigned
+end
+
+local function carrierObjectCount( key )
+	local count = 0
+	for _, ent in ipairs( ( MC.CollisionCarrierAssignments and MC.CollisionCarrierAssignments[key] ) or {} ) do
+		if IsValid( ent ) and IsValid( ent:GetPhysicsObject() ) then
 			count = count + 1
 		end
 	end
 	return count
 end
 
-local function clientPhysHasObject( ent )
-	return clientPhysObjectCount( ent ) > 0
+local function rememberCarrierAABBDebugBoxes( key, origin, boxes )
+	MC.ClientCollisionAABBDebugBoxes = MC.ClientCollisionAABBDebugBoxes or {}
+	if not boxes or #boxes == 0 then
+		MC.ClientCollisionAABBDebugBoxes[key] = nil
+		return
+	end
+	local bs = MC.BS
+	local out = {}
+	for i, b in ipairs( boxes ) do
+		out[i] = {
+			mins = origin + Vector( b[1] * bs, b[2] * bs, b[3] * bs ),
+			maxs = origin + Vector( b[4] * bs, b[5] * bs, b[6] * bs ),
+		}
+	end
+	MC.ClientCollisionAABBDebugBoxes[key] = out
 end
 
-local function clientPhysAlreadyBuilt( key, chunk, ent, bounds )
+-- returns ok, reason, convexCount, pageCount
+local function buildCarrierCollisionForChunk( key, chunk, bounds )
+	if not MC.BuildChunkCollisionConvexGroups then return false, "builder_missing", 0, 0 end
+	local groups, totalConvexes, boxes, customConvexes = MC.BuildChunkCollisionConvexGroups( chunk, bounds )
+	local origin = MC.ChunkWorldOrigin( chunk.cx, chunk.cy, chunk.cz )
+	rememberCarrierAABBDebugBoxes( key, origin, boxes )
+	if MC.ClientPhysStats then
+		MC.ClientPhysStats.lastClientPhysBoxes = boxes and #boxes or 0
+		MC.ClientPhysStats.lastClientPhysCustomConvexes = customConvexes and #customConvexes or 0
+		MC.ClientPhysStats.lastClientPhysConvexes = totalConvexes
+	end
+
+	local convexes = {}
+	for _, group in ipairs( groups ) do
+		for _, convex in ipairs( group.convexes ) do
+			local shifted = {}
+			for i, p in ipairs( convex ) do
+				shifted[i] = Vector( p.x + origin.x, p.y + origin.y, p.z + origin.z )
+			end
+			convexes[#convexes + 1] = shifted
+		end
+	end
+
+	if #convexes == 0 then
+		releaseCarrierCollisionForChunk( key )
+		return true, nil, 0, 0
+	end
+
+	local limit = math.max( 1, math.floor( 511) )
+	local pages = {}
+	for first = 1, #convexes, limit do
+		local page = {}
+		for i = first, math.min( #convexes, first + limit - 1 ) do
+			page[#page + 1] = convexes[i]
+		end
+		pages[#pages + 1] = page
+	end
+
+	local carriers, reason = acquireCarriersForChunk( key, #pages )
+	if not carriers then
+		return false, reason or "no_carriers", #convexes, #pages
+	end
+
+	for i, page in ipairs( pages ) do
+		if not carriers[i]:ApplyCarrierConvexes( page ) then
+			releaseCarrierCollisionForChunk( key )
+			return false, "carrier_apply_failed", #convexes, #pages
+		end
+	end
+	return true, nil, #convexes, #pages
+end
+
+local function clientPhysAlreadyBuilt( key, chunk, bounds )
 	local built = MC.ClientPhysBuiltSignatures and MC.ClientPhysBuiltSignatures[key]
 	if not built then return false end
 	if built ~= clientPhysBuildSignature( key, bounds, chunk ) then return false end
-	local networkTotal, networkMissing = clientNetworkSubchunkPhysSummary( key, bounds )
-	if MC.ClientPhysStats then
-		MC.ClientPhysStats.lastClientPhysNetworkSubchunks = networkTotal
-		MC.ClientPhysStats.lastClientPhysMissingSubchunks = networkMissing
-	end
-	if networkTotal > 0 then
-		return networkMissing == 0
-	end
 	local builtObjects = MC.ClientPhysBuiltObjectCounts and MC.ClientPhysBuiltObjectCounts[key] or 0
-	if builtObjects > 0 then
-		return IsValid( ent ) and IsValid( ent:GetPhysicsObject() ) and clientPhysObjectCount( ent ) >= builtObjects
-	end
-	return true
+	return carrierObjectCount( key ) >= builtObjects
 end
 
 function MC.RefreshClientCollisionInterest( force )
@@ -470,13 +620,8 @@ function MC.RefreshClientCollisionInterest( force )
 	LastClientCollisionAABBKey = aabbKey
 
 	if not enabled then
-		for key, e in pairs( old ) do
-			local ent = MC.ChunkEnts and MC.ChunkEnts[key]
-			if IsValid( ent ) then
-				if ent.ClearClientCollisionAABBDebugBoxes then ent:ClearClientCollisionAABBDebugBoxes() end
-				if ent.ClearPhysicsSubchunks then ent:ClearPhysicsSubchunks() end
-				ent:PhysicsDestroy()
-			end
+		for key in pairs( old ) do
+			releaseCarrierCollisionForChunk( key )
 			MC.PhysDirty[key] = nil
 			MC.PhysDirtyPriority[key] = nil
 			if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
@@ -491,12 +636,7 @@ function MC.RefreshClientCollisionInterest( force )
 
 	for key in pairs( old ) do
 		if not desired[key] then
-			local e = MC.ChunkEnts and MC.ChunkEnts[key]
-			if IsValid( e ) then
-				if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
-				if e.ClearPhysicsSubchunks then e:ClearPhysicsSubchunks() end
-				e:PhysicsDestroy()
-			end
+			releaseCarrierCollisionForChunk( key )
 			MC.PhysDirty[key] = nil
 			MC.PhysDirtyPriority[key] = nil
 			if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
@@ -549,39 +689,11 @@ hook.Add( "SetupMove", "mc_client_collision_interest_move", function( ply )
 end )
 
 
-local function findNetworkChunkShell( key, chunk )
-	local existing = MC.ChunkEnts and MC.ChunkEnts[key] or nil
-	if IsValid( existing ) and existing:EntIndex() > 0 then return existing end
-
-	for _, candidate in ipairs( ents.FindByClass( "mc_chunk" ) ) do
-		if IsValid( candidate ) and candidate:EntIndex() > 0 then
-			if candidate:GetNWString( "MCChunkKey", "" ) == tostring( key ) then
-				MC.ChunkEnts[key] = candidate
-				return candidate
-			end
-			if chunk then
-				local expected = MC.ChunkWorldOrigin( chunk.cx, chunk.cy, chunk.cz )
-				if candidate:GetPos():DistToSqr( expected ) <= 1 then
-					candidate.ChunkKey = key
-					candidate.cx, candidate.cy, candidate.cz = chunk.cx, chunk.cy, chunk.cz
-					MC.ChunkEnts[key] = candidate
-					return candidate
-				end
-			end
-		end
-	end
-	return nil
-end
-
 local function rebuildChunkPhys( key, enabled, bounds )
+	MC.ClientPhysStats = MC.ClientPhysStats or {}
 	local chunk = MC.World and MC.World[key] or nil
-	local e = MC.ChunkEnts[key]
 	if not enabled then
-		if IsValid( e ) then
-			if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
-			if e.ClearPhysicsSubchunks then e:ClearPhysicsSubchunks() end
-			e:PhysicsDestroy()
-		end
+		releaseCarrierCollisionForChunk( key )
 		MC.PhysDirty[key] = nil
 		MC.PhysDirtyPriority[key] = nil
 		if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
@@ -589,17 +701,15 @@ local function rebuildChunkPhys( key, enabled, bounds )
 		clearClientPhysBuildState( key )
 		return true
 	end
-	if enabled and not ( MC.ClientCollisionInterest and MC.ClientCollisionInterest[key] ) then
+	if not ( MC.ClientCollisionInterest and MC.ClientCollisionInterest[key] ) then
 		rememberClientPhysSkip( key, "not_interest" )
+		releaseCarrierCollisionForChunk( key )
 		MC.PhysDirty[key] = nil
 		MC.PhysDirtyPriority[key] = nil
 		if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
 		clearClientPhysRetry( key )
 		clearClientPhysBuildState( key )
 		return true
-	end
-	if enabled and IsValid( e ) and e:EntIndex() <= 0 then
-		e = nil
 	end
 	if not chunk then
 		rememberClientPhysSkip( key, "no_world" )
@@ -609,11 +719,7 @@ local function rebuildChunkPhys( key, enabled, bounds )
 	end
 	if not chunk.count or chunk.count <= 0 then
 		if MC.ClientCollisionInterest then MC.ClientCollisionInterest[key] = nil end
-		if IsValid( e ) then
-			if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
-			if e.ClearPhysicsSubchunks then e:ClearPhysicsSubchunks() end
-			e:PhysicsDestroy()
-		end
+		releaseCarrierCollisionForChunk( key )
 		MC.PhysDirty[key] = nil
 		MC.PhysDirtyPriority[key] = nil
 		if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
@@ -622,96 +728,63 @@ local function rebuildChunkPhys( key, enabled, bounds )
 		return true
 	end
 
-	if not IsValid( e ) then
-		e = findNetworkChunkShell( key, chunk )
-		if IsValid( e ) then
-			if e.ChunkKey and e.ChunkKey ~= key and MC.ChunkEnts[e.ChunkKey] == e then
-				MC.ChunkEnts[e.ChunkKey] = nil
-			end
-			e:SetModel( "models/hunter/blocks/cube025x025x025.mdl" )
-			e.cx, e.cy, e.cz = chunk.cx, chunk.cy, chunk.cz
-			e.ChunkKey = key
-			e:SetPos( MC.ChunkWorldOrigin( chunk.cx, chunk.cy, chunk.cz ) )
-			e:SetAngles( Angle( 0, 0, 0 ) )
-			e:SetRenderBounds( Vector( 0, 0, 0 ), Vector( MC.ChunkWorld, MC.ChunkWorld, MC.ChunkWorldH ) )
-			e:SetMoveType( MOVETYPE_VPHYSICS )
-			e:SetSolid( SOLID_VPHYSICS )
-			e:EnableCustomCollisions( true )
-			e:SetNoDraw( false )
-			MC.ChunkEnts[key] = e
-		end
+	-- Every rebuild covers the whole current AABB/aim interest of this chunk;
+	-- narrow edit bounds only serve as the dirty trigger. Collision is baked
+	-- onto per-player carrier entities, one page of convexes each.
+	local buildBounds = ( MC.ClientCollisionInterest and MC.ClientCollisionInterest[key] ) or bounds
+	if clientPhysAlreadyBuilt( key, chunk, buildBounds ) then
+		MC.ClientPhysStats.lastClientPhysMode = "skip"
+		MC.ClientPhysStats.lastClientPhysKey = key
+		MC.ClientPhysStats.lastClientPhysChunkKey = tostring( key )
+		MC.ClientPhysStats.lastClientPhysReason = "already_built"
+		MC.ClientPhysStats.lastClientPhysObjectCount = carrierObjectCount( key )
+		MC.ClientPhysStats.lastClientPhysHadObject = MC.ClientPhysStats.lastClientPhysObjectCount > 0
+		MC.PhysDirty[key] = nil
+		MC.PhysDirtyPriority[key] = nil
+		if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
+		clearClientPhysRetry( key )
+		return true
 	end
-	if IsValid( e ) then
-		if enabled then
-			local buildBounds = bounds or ( MC.ClientCollisionInterest and MC.ClientCollisionInterest[key] )
-			if clientPhysAlreadyBuilt( key, chunk, e, buildBounds ) then
-				MC.ClientPhysStats.lastClientPhysMode = "skip"
-				MC.ClientPhysStats.lastClientPhysKey = key
-				MC.ClientPhysStats.lastClientPhysChunkKey = tostring( key )
-				MC.ClientPhysStats.lastClientPhysReason = "already_built"
-				MC.ClientPhysStats.lastClientPhysHadObject = clientPhysHasObject( e )
-				MC.ClientPhysStats.lastClientPhysObjectCount = clientPhysObjectCount( e )
-				MC.PhysDirty[key] = nil
-				MC.PhysDirtyPriority[key] = nil
-				if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
-				clearClientPhysRetry( key )
-				return true
-			end
-			local buildStart = SysTime()
-			local signature = clientPhysBuildSignature( key, buildBounds, chunk )
-			local ok, reason = e:RebuildPhysics( buildBounds )
-			MC.ClientPhysStats.lastClientPhysBuildMS = math.Round( ( SysTime() - buildStart ) * 1000, 3 )
-			MC.ClientPhysStats.lastClientPhysKey = key
-			MC.ClientPhysStats.lastClientPhysBounds = buildBounds and #buildBounds or "full"
-			MC.ClientPhysStats.lastClientPhysHadObject = clientPhysHasObject( e )
-			MC.ClientPhysStats.lastClientPhysObjectCount = clientPhysObjectCount( e )
-			local networkTotal, networkMissing = clientNetworkSubchunkPhysSummary( key, buildBounds )
-			MC.ClientPhysStats.lastClientPhysNetworkSubchunks = networkTotal
-			MC.ClientPhysStats.lastClientPhysMissingSubchunks = networkMissing
-			if clientCollisionDebugEnabled() then
-				print( string.format(
-					"[MC][client-phys-build] key=%s ms=%s bounds=%s mode=%s boxes=%s custom=%s convexes=%s subchunks=%s subchunkPhys=%s mainPhys=%s ok=%s reason=%s network=%s missing=%s",
-					tostring( key ),
-					tostring( MC.ClientPhysStats.lastClientPhysBuildMS ),
-					tostring( MC.ClientPhysStats.lastClientPhysBounds ),
-					tostring( MC.ClientPhysStats.lastClientPhysMode ),
-					tostring( MC.ClientPhysStats.lastClientPhysBoxes ),
-					tostring( MC.ClientPhysStats.lastClientPhysCustomConvexes ),
-					tostring( MC.ClientPhysStats.lastClientPhysConvexes ),
-					tostring( MC.ClientPhysStats.lastClientPhysSubchunks ),
-					tostring( MC.ClientPhysStats.lastClientPhysSubchunkObjects ),
-					tostring( MC.ClientPhysStats.lastClientPhysMainObject ),
-					tostring( ok ~= false ),
-					tostring( reason ),
-					tostring( networkTotal ),
-					tostring( networkMissing )
-				) )
-			end
-			if ok == false then
-				clearClientPhysBuildState( key )
-				MC.ClientPhysStats.lastClientPhysReason = reason or "rebuild_failed"
-				scheduleClientPhysRetry( key, buildBounds, reason or "rebuild_failed" )
-				return false
-			end
-			MC.ClientPhysBuiltSignatures = MC.ClientPhysBuiltSignatures or {}
-			MC.ClientPhysBuiltHadObjects = MC.ClientPhysBuiltHadObjects or {}
-			MC.ClientPhysBuiltObjectCounts = MC.ClientPhysBuiltObjectCounts or {}
-			MC.ClientPhysBuiltSignatures[key] = signature
-			MC.ClientPhysBuiltHadObjects[key] = clientPhysHasObject( e )
-			MC.ClientPhysBuiltObjectCounts[key] = clientPhysObjectCount( e )
-		else
-			if MC.ClientCollisionInterest then MC.ClientCollisionInterest[key] = nil end
-			if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
-			if e.ClearPhysicsSubchunks then e:ClearPhysicsSubchunks() end
-			e:PhysicsDestroy()
-			clearClientPhysBuildState( key )
-		end
-	else
-		rememberClientPhysSkip( key, "no_chunk_ent" )
+
+	local buildStart = SysTime()
+	local signature = clientPhysBuildSignature( key, buildBounds, chunk )
+	local ok, reason, convexCount, pageCount = buildCarrierCollisionForChunk( key, chunk, buildBounds )
+	MC.ClientPhysStats.lastClientPhysMode = "carriers"
+	MC.ClientPhysStats.lastClientPhysBuildMS = math.Round( ( SysTime() - buildStart ) * 1000, 3 )
+	MC.ClientPhysStats.lastClientPhysKey = key
+	MC.ClientPhysStats.lastClientPhysChunkKey = tostring( key )
+	MC.ClientPhysStats.lastClientPhysBounds = buildBounds and #buildBounds or "full"
+	MC.ClientPhysStats.lastClientPhysObjectCount = carrierObjectCount( key )
+	MC.ClientPhysStats.lastClientPhysHadObject = MC.ClientPhysStats.lastClientPhysObjectCount > 0
+	if clientCollisionDebugEnabled() then
+		print( string.format(
+			"[MC][client-phys-build] key=%s ms=%s bounds=%s boxes=%s custom=%s convexes=%s worldConvexes=%s carriers=%s carrierPhys=%s ok=%s reason=%s",
+			tostring( key ),
+			tostring( MC.ClientPhysStats.lastClientPhysBuildMS ),
+			tostring( MC.ClientPhysStats.lastClientPhysBounds ),
+			tostring( MC.ClientPhysStats.lastClientPhysBoxes ),
+			tostring( MC.ClientPhysStats.lastClientPhysCustomConvexes ),
+			tostring( MC.ClientPhysStats.lastClientPhysConvexes ),
+			tostring( convexCount ),
+			tostring( pageCount ),
+			tostring( MC.ClientPhysStats.lastClientPhysObjectCount ),
+			tostring( ok ~= false ),
+			tostring( reason )
+		) )
+	end
+	if not ok then
 		clearClientPhysBuildState( key )
-		scheduleClientPhysRetry( key, bounds, "no_chunk_ent" )
+		MC.ClientPhysStats.lastClientPhysReason = reason or "rebuild_failed"
+		scheduleClientPhysRetry( key, buildBounds, reason or "rebuild_failed" )
 		return false
 	end
+	MC.ClientPhysStats.lastClientPhysReason = nil
+	MC.ClientPhysBuiltSignatures = MC.ClientPhysBuiltSignatures or {}
+	MC.ClientPhysBuiltHadObjects = MC.ClientPhysBuiltHadObjects or {}
+	MC.ClientPhysBuiltObjectCounts = MC.ClientPhysBuiltObjectCounts or {}
+	MC.ClientPhysBuiltSignatures[key] = signature
+	MC.ClientPhysBuiltHadObjects[key] = pageCount > 0
+	MC.ClientPhysBuiltObjectCounts[key] = pageCount
 
 	MC.PhysDirty[key] = nil
 	MC.PhysDirtyPriority[key] = nil
