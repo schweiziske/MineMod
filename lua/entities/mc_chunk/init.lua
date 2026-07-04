@@ -15,7 +15,7 @@ function ENT:Initialize()
 end
 
 function ENT:UpdateTransmitState()
-	return TRANSMIT_ALWAYS
+	return TRANSMIT_NEVER
 end
 
 function ENT:PhysgunPickup()

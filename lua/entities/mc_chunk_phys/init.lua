@@ -11,7 +11,10 @@ function ENT:Initialize()
 end
 
 function ENT:UpdateTransmitState()
-	return TRANSMIT_ALWAYS
+	-- Server-only collision: clients build their own prediction collision on
+	-- per-player mc_collision_carrier entities, so networking thousands of
+	-- subchunk entities would only burn bandwidth and client entity slots.
+	return TRANSMIT_NEVER
 end
 
 function ENT:PhysgunPickup()

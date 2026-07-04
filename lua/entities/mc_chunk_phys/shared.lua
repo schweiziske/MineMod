@@ -1,5 +1,9 @@
 --[[----------------------------------------------------------------------------
 	mc_chunk_phys : invisible 8x8x8 collision subchunk for one mc_chunk.
+	Server-authoritative collision + trace damage target. The client never
+	attaches physics to these entities: clientside prediction collision is a
+	local interest-bounds multiconvex on the mc_chunk shell (see mc_chunk
+	RebuildPhysics), so these stay physics-less and non-colliding on clients.
 ------------------------------------------------------------------------------]]
 
 ENT.Type      = "anim"
@@ -61,56 +65,6 @@ local function pinToParentChunk( ent, phys )
 	end
 end
 
-local function boundsForSubchunkKey( key )
-	local sx, sy, sz = tostring( key or "" ):match( "^(-?%d+):(-?%d+):(-?%d+)$" )
-	if not sx then return nil end
-	local size = math.max( 1, math.floor( tonumber( MC and MC.CollisionSubchunkSize ) or 8 ) )
-	local cs = MC and MC.CS or 16
-	local ch = MC and MC.CH or 32
-	local x0 = math.max( 0, tonumber( sx ) * size )
-	local y0 = math.max( 0, tonumber( sy ) * size )
-	local z0 = math.max( 0, tonumber( sz ) * size )
-	return {
-		{
-			x0,
-			y0,
-			z0,
-			math.min( cs - 1, x0 + size - 1 ),
-			math.min( cs - 1, y0 + size - 1 ),
-			math.min( ch - 1, z0 + size - 1 ),
-		}
-	}
-end
-
-local function clippedBounds( a, b )
-	local out = {
-		math.max( a[1], b[1] ),
-		math.max( a[2], b[2] ),
-		math.max( a[3], b[3] ),
-		math.min( a[4], b[4] ),
-		math.min( a[5], b[5] ),
-		math.min( a[6], b[6] ),
-	}
-	if out[1] <= out[4] and out[2] <= out[5] and out[3] <= out[6] then return out end
-	return nil
-end
-
-local function clientInterestBoundsForSubchunk( key, subkey )
-	local interest = MC and MC.ClientCollisionInterest and MC.ClientCollisionInterest[key]
-	if not interest then return nil end
-	local subBounds = boundsForSubchunkKey( subkey )
-	local sub = subBounds and subBounds[1]
-	if not sub then return nil end
-
-	local out = {}
-	for _, bounds in ipairs( interest ) do
-		local clipped = clippedBounds( sub, bounds )
-		if clipped then out[#out + 1] = clipped end
-	end
-	if #out == 0 then return nil end
-	return out
-end
-
 local function syncClientPhysMetadata( ent )
 	if not CLIENT or not IsValid( ent ) or ent:EntIndex() <= 0 then return nil end
 	local key = ent:GetNWString( "MCChunkKey", "" )
@@ -129,14 +83,6 @@ local function syncClientPhysMetadata( ent )
 	return ent.ChunkKey, subkey
 end
 
-local function clientPhysNeedsRebuild( ent )
-	if not IsValid( ent ) then return false end
-	if ent.ChunkKey == nil or ent.CollisionSubchunkKey == nil then return true end
-	if not IsValid( ent:GetPhysicsObject() ) then return true end
-	if not IsValid( ent.ParentChunk ) then return true end
-	return false
-end
-
 -- Keep split collision frozen at the chunk origin. Empty PhysicsUpdate was not
 -- enough for clientside multiconvex children: the next VPhysics tick moved both
 -- entity and phys object back to world origin.
@@ -144,28 +90,18 @@ function ENT:PhysicsUpdate( phys )
 	pinToParentChunk( self, phys )
 end
 
-function ENT:MarkClientPhysDirtyFromMetadata()
-	if not CLIENT then return false end
-	local key, subkey = syncClientPhysMetadata( self )
-	if not key or not clientPhysNeedsRebuild( self ) then return false end
-	local bounds = clientInterestBoundsForSubchunk( key, subkey )
-	if not bounds then return false end
-
-	local now = CurTime()
-	if now < ( self.NextClientPhysDirtyRequest or 0 ) then return false end
-	self.NextClientPhysDirtyRequest = now + 0.2
-
-	if MC and MC.MarkChunkPhysDirty then
-		MC.MarkChunkPhysDirty( key, true, bounds )
-	end
-	return true
+-- Client: metadata mirror only (chunk/subchunk keys for debug overlays and
+-- probes). Never marks collision dirty -- prediction collision does not live
+-- on these entities.
+function ENT:SyncClientPhysMetadata()
+	if not CLIENT then return nil end
+	return syncClientPhysMetadata( self )
 end
 
 function ENT:Think()
 	if CLIENT then
-		self:MarkClientPhysDirtyFromMetadata()
-		pinToParentChunk( self )
-		self:NextThink( CurTime() )
+		syncClientPhysMetadata( self )
+		self:SetNextClientThink( CurTime() + 0.5 )
 		return true
 	end
 end

@@ -1,7 +1,11 @@
 --[[----------------------------------------------------------------------------
 	mc_chunk : one render owner per non-empty 16x16x32 Minecraft-style chunk section.
-	  server -> provides collision (8x8x8 subchunk multiconvex)
-	  client -> draws the chunk's IMesh (MC.DrawChunk)
+	  server -> provides collision (8x8x8 subchunk multiconvex via mc_chunk_phys)
+	  client -> draws the chunk's IMesh (MC.DrawChunk) and hosts the local
+	            prediction collision: a small interest-bounds multiconvex built
+	            directly on this networked shell entity. The client never touches
+	            mc_chunk_phys entities, so server-side collision entity churn
+	            cannot break prediction.
 	Sections can stack vertically.
 ------------------------------------------------------------------------------]]
 
@@ -38,198 +42,6 @@ local function clientCollisionAABBOnly()
 	return CLIENT
 end
 
-local function fmtDebugVec( v )
-	if not v then return "nil" end
-	return string.format( "(%.1f %.1f %.1f)", v.x, v.y, v.z )
-end
-
-local function debugPhysicsSubchunkPosition( stage, owner, subchunk )
-	if not CLIENT then return end
-	if not ( MC.ClientCollisionDebug and MC.ClientCollisionDebug:GetBool() ) then return end
-	if not IsValid( subchunk ) then return end
-
-	local phys = subchunk:GetPhysicsObject()
-	local physPos = IsValid( phys ) and phys.GetPos and phys:GetPos() or nil
-	local mins, maxs = subchunk:GetCollisionBounds()
-	print( string.format( "[DEBUG-mcpos] stage=%s chunk=%s subkey=%s owner=%s ownerPos=%s ent=%s entPos=%s phys=%s physPos=%s cbounds=%s->%s",
-		tostring( stage ), tostring( subchunk.ChunkKey ), tostring( subchunk.CollisionSubchunkKey ),
-		tostring( owner ), fmtDebugVec( IsValid( owner ) and owner:GetPos() or nil ),
-		tostring( subchunk ), fmtDebugVec( subchunk:GetPos() ), tostring( IsValid( phys ) ),
-		fmtDebugVec( physPos ), fmtDebugVec( mins ), fmtDebugVec( maxs ) ) )
-end
-
-local function offsetConvexesToWorld( convexes, origin )
-	local out = {}
-	for i, convex in ipairs( convexes or {} ) do
-		local shifted = {}
-		for j, p in ipairs( convex ) do
-			shifted[j] = Vector( p.x + origin.x, p.y + origin.y, p.z + origin.z )
-		end
-		out[i] = shifted
-	end
-	return out
-end
-
-local function convexWorldBounds( convexes, origin )
-	local mins, maxs
-	for _, convex in ipairs( convexes or {} ) do
-		for _, p in ipairs( convex ) do
-			local wp = origin + p
-			if mins then
-				mins.x = math.min( mins.x, wp.x )
-				mins.y = math.min( mins.y, wp.y )
-				mins.z = math.min( mins.z, wp.z )
-				maxs.x = math.max( maxs.x, wp.x )
-				maxs.y = math.max( maxs.y, wp.y )
-				maxs.z = math.max( maxs.z, wp.z )
-			else
-				mins = Vector( wp.x, wp.y, wp.z )
-				maxs = Vector( wp.x, wp.y, wp.z )
-			end
-		end
-	end
-	return mins, maxs
-end
-
-local function boundsNearlyEqual( aMin, aMax, bMin, bMax )
-	if not aMin or not aMax or not bMin or not bMax then return false end
-	local eps = 1.5
-	return math.abs( aMin.x - bMin.x ) <= eps
-		and math.abs( aMin.y - bMin.y ) <= eps
-		and math.abs( aMin.z - bMin.z ) <= eps
-		and math.abs( aMax.x - bMax.x ) <= eps
-		and math.abs( aMax.y - bMax.y ) <= eps
-		and math.abs( aMax.z - bMax.z ) <= eps
-end
-
-local function boundsForCollisionSubchunkKey( key )
-	local sx, sy, sz = tostring( key or "" ):match( "^(-?%d+):(-?%d+):(-?%d+)$" )
-	if not sx then return nil end
-	local size = PHYSICS_SUBCHUNK_SIZE
-	local x0 = math.max( 0, tonumber( sx ) * size )
-	local y0 = math.max( 0, tonumber( sy ) * size )
-	local z0 = math.max( 0, tonumber( sz ) * size )
-	return {
-		{
-			x0,
-			y0,
-			z0,
-			math.min( MC.CS - 1, x0 + size - 1 ),
-			math.min( MC.CS - 1, y0 + size - 1 ),
-			math.min( MC.CH - 1, z0 + size - 1 ),
-		}
-	}
-end
-
-local function addUniqueLocalBounds( list, bounds )
-	for _, cur in ipairs( list ) do
-		if cur[1] == bounds[1] and cur[2] == bounds[2] and cur[3] == bounds[3]
-		and cur[4] == bounds[4] and cur[5] == bounds[5] and cur[6] == bounds[6] then return end
-	end
-	list[#list + 1] = bounds
-end
-
-local function collisionSubchunkBoundsForBounds( bounds )
-	if not bounds then return nil end
-	local byKey = {}
-	local size = PHYSICS_SUBCHUNK_SIZE
-	for _, b in ipairs( bounds ) do
-		local bx0 = math.max( 0, math.floor( tonumber( b[1] ) or 0 ) )
-		local by0 = math.max( 0, math.floor( tonumber( b[2] ) or 0 ) )
-		local bz0 = math.max( 0, math.floor( tonumber( b[3] ) or 0 ) )
-		local bx1 = math.min( MC.CS - 1, math.floor( tonumber( b[4] ) or -1 ) )
-		local by1 = math.min( MC.CS - 1, math.floor( tonumber( b[5] ) or -1 ) )
-		local bz1 = math.min( MC.CH - 1, math.floor( tonumber( b[6] ) or -1 ) )
-		if bx0 <= bx1 and by0 <= by1 and bz0 <= bz1 then
-			for sz = math.floor( bz0 / size ), math.floor( bz1 / size ) do
-				for sy = math.floor( by0 / size ), math.floor( by1 / size ) do
-					for sx = math.floor( bx0 / size ), math.floor( bx1 / size ) do
-						local key = sx .. ":" .. sy .. ":" .. sz
-						local x0 = sx * size
-						local y0 = sy * size
-						local z0 = sz * size
-						local clipped = {
-							math.max( bx0, x0 ),
-							math.max( by0, y0 ),
-							math.max( bz0, z0 ),
-							math.min( bx1, math.min( MC.CS - 1, x0 + size - 1 ) ),
-							math.min( by1, math.min( MC.CS - 1, y0 + size - 1 ) ),
-							math.min( bz1, math.min( MC.CH - 1, z0 + size - 1 ) ),
-						}
-						local list = byKey[key]
-						if not list then
-							list = {}
-							byKey[key] = list
-						end
-						addUniqueLocalBounds( list, clipped )
-					end
-				end
-			end
-		end
-	end
-	return byKey
-end
-
-local function findNetworkPhysicsSubchunk( owner, group, pageIndex, convexes )
-	if not CLIENT then return nil end
-	local expectedMin, expectedMax = convexWorldBounds( convexes, owner:GetPos() )
-	local fallback
-
-	for _, candidate in ipairs( ents.FindByClass( "mc_chunk_phys" ) ) do
-		if IsValid( candidate )
-		and candidate:EntIndex() > 0 then
-			if candidate:GetNWString( "MCChunkKey", "" ) == tostring( owner.ChunkKey )
-			and candidate:GetNWString( "MCSubchunkKey", "" ) == tostring( group.key )
-			and candidate:GetNWInt( "MCPhysPage", -1 ) == pageIndex then
-				return candidate
-			end
-
-			local mins, maxs = candidate:WorldSpaceAABB()
-			if not IsValid( candidate:GetPhysicsObject() )
-			and boundsNearlyEqual( expectedMin, expectedMax, mins, maxs ) then
-				fallback = candidate
-			end
-		end
-	end
-	return fallback
-end
-
-local function hasNetworkPhysicsSubchunksForChunk( key )
-	if not CLIENT or not key then return false end
-	for _, candidate in ipairs( ents.FindByClass( "mc_chunk_phys" ) ) do
-		if IsValid( candidate )
-		and candidate:EntIndex() > 0
-		and candidate:GetNWString( "MCChunkKey", "" ) == tostring( key ) then
-			return true
-		end
-	end
-	return false
-end
-
-local function scheduleClientPhysicsSubchunkRetry( owner, group, retryBounds )
-	if not CLIENT or not IsValid( owner ) then return end
-	local key = owner.ChunkKey
-	if not key then return end
-	local bounds = ( retryBounds and #retryBounds > 0 ) and retryBounds or ( group and boundsForCollisionSubchunkKey( group.key ) or nil )
-
-	MC.PendingNetworkPhysRetry = MC.PendingNetworkPhysRetry or {}
-	MC.NetworkPhysRetryAttempts = MC.NetworkPhysRetryAttempts or {}
-	local retryKey = key .. "/" .. tostring( group and group.key or "" )
-	if MC.PendingNetworkPhysRetry[retryKey] then return end
-	local attempts = ( MC.NetworkPhysRetryAttempts[retryKey] or 0 ) + 1
-	MC.NetworkPhysRetryAttempts[retryKey] = attempts
-	if attempts > 5 then return end
-	MC.PendingNetworkPhysRetry[retryKey] = true
-
-	local delay = attempts <= 2 and 0.03 or 0.12
-	timer.Simple( delay, function()
-		MC.PendingNetworkPhysRetry[retryKey] = nil
-		if MC.MarkChunkPhysDirty then
-			MC.MarkChunkPhysDirty( key, true, bounds )
-		end
-	end )
-end
-
 local function removeSubchunkEntity( subchunk )
 	if not IsValid( subchunk ) then return end
 
@@ -254,47 +66,12 @@ end
 
 ENT.ClearPhysicsShards = ENT.ClearPhysicsSubchunks
 
-local function removePhysicsSubchunkKey( ent, key )
-	local byKey = ent.PhysicsSubchunksByKey
-	local mapped = byKey and byKey[key]
-	if istable( mapped ) then
-		for _, subchunk in ipairs( mapped ) do
-			removeSubchunkEntity( subchunk )
-		end
-	else
-		removeSubchunkEntity( mapped )
-	end
-	if byKey then byKey[key] = nil end
-
-	local old = ent.PhysicsSubchunks
-	if not old then return end
-	local kept = {}
-	for _, existing in ipairs( old ) do
-		if IsValid( existing ) and existing.CollisionSubchunkKey ~= key then
-			kept[#kept + 1] = existing
-		end
-	end
-	ent.PhysicsSubchunks = kept
-end
-
-local function spawnPhysicsSubchunk( owner, index, group, convexes, pageIndex, retryBounds )
+-- Server-only: collision subchunk entities exist for authoritative collision and
+-- bullet/trace damage. The client's prediction collision lives on the mc_chunk
+-- shell instead (see RebuildPhysics), so no clientside spawn/match path exists.
+local function spawnPhysicsSubchunk( owner, index, group, convexes, pageIndex )
 	pageIndex = math.floor( tonumber( pageIndex ) or 0 )
-	local networkSubchunk = false
-	local created = false
-	local subchunk
-	if SERVER then
-		subchunk = ents.Create( "mc_chunk_phys" )
-	else
-		subchunk = findNetworkPhysicsSubchunk( owner, group, pageIndex, convexes or group.convexes )
-		networkSubchunk = IsValid( subchunk )
-		if not networkSubchunk then
-			scheduleClientPhysicsSubchunkRetry( owner, group, retryBounds )
-			return nil, "no_network_subchunk"
-		end
-		local retryKey = tostring( owner.ChunkKey ) .. "/" .. tostring( group.key )
-		if MC.NetworkPhysRetryAttempts then MC.NetworkPhysRetryAttempts[retryKey] = nil end
-		if MC.PendingNetworkPhysRetry then MC.PendingNetworkPhysRetry[retryKey] = nil end
-	end
+	local subchunk = ents.Create( "mc_chunk_phys" )
 	if not IsValid( subchunk ) then return nil end
 
 	subchunk.ChunkKey = owner.ChunkKey
@@ -303,64 +80,19 @@ local function spawnPhysicsSubchunk( owner, index, group, convexes, pageIndex, r
 	subchunk.SubchunkIndex = index
 	subchunk.CollisionSubchunkKey = group.key
 	subchunk.CollisionPhysPage = pageIndex
-	if SERVER then
-		subchunk:SetNWString( "MCChunkKey", tostring( owner.ChunkKey ) )
-		subchunk:SetNWString( "MCSubchunkKey", tostring( group.key ) )
-		subchunk:SetNWInt( "MCPhysPage", pageIndex )
-	end
+	subchunk:SetNWString( "MCChunkKey", tostring( owner.ChunkKey ) )
+	subchunk:SetNWString( "MCSubchunkKey", tostring( group.key ) )
+	subchunk:SetNWInt( "MCPhysPage", pageIndex )
 	ensurePhysicsModel( subchunk )
-	debugPhysicsSubchunkPosition( "before_setpos", owner, subchunk )
-	local physConvexes = convexes or group.convexes
-	if CLIENT and not networkSubchunk then
-		subchunk.CollisionWorldSpace = true
-		physConvexes = offsetConvexesToWorld( physConvexes, owner:GetPos() )
-		subchunk:SetPos( vector_origin )
-	else
-		subchunk.CollisionWorldSpace = nil
-		subchunk:SetPos( owner:GetPos() )
-	end
+	subchunk:SetPos( owner:GetPos() )
 	subchunk:SetAngles( Angle( 0, 0, 0 ) )
-	debugPhysicsSubchunkPosition( "after_setpos_before_spawn", owner, subchunk )
-	if SERVER and subchunk.Spawn then subchunk:Spawn() end
-	if CLIENT and created and subchunk.Spawn then subchunk:Spawn() end
-	if SERVER and subchunk.Activate then subchunk:Activate() end
-	if SERVER then
-		subchunk:SetNWString( "MCChunkKey", tostring( owner.ChunkKey ) )
-		subchunk:SetNWString( "MCSubchunkKey", tostring( group.key ) )
-		subchunk:SetNWInt( "MCPhysPage", pageIndex )
-	end
-	if CLIENT and not networkSubchunk then
-		subchunk:SetPos( vector_origin )
-	else
-		subchunk:SetPos( owner:GetPos() )
-	end
-	subchunk:SetAngles( Angle( 0, 0, 0 ) )
+	if subchunk.Spawn then subchunk:Spawn() end
+	if subchunk.Activate then subchunk:Activate() end
 	subchunk:SetNoDraw( true )
-	debugPhysicsSubchunkPosition( "after_spawn_before_apply", owner, subchunk )
 
-	if not subchunk.ApplyPhysicsConvexes or not subchunk:ApplyPhysicsConvexes( physConvexes ) then
-		if created or SERVER then
-			subchunk:Remove()
-		else
-			subchunk:PhysicsDestroy()
-		end
-		if CLIENT then scheduleClientPhysicsSubchunkRetry( owner, group, retryBounds ) end
+	if not subchunk.ApplyPhysicsConvexes or not subchunk:ApplyPhysicsConvexes( convexes or group.convexes ) then
+		subchunk:Remove()
 		return nil, "apply_failed"
-	end
-	debugPhysicsSubchunkPosition( "after_apply_before_post_setpos", owner, subchunk )
-	if CLIENT and not networkSubchunk then
-		subchunk:SetPos( vector_origin )
-	else
-		subchunk:SetPos( owner:GetPos() )
-	end
-	subchunk:SetAngles( Angle( 0, 0, 0 ) )
-	debugPhysicsSubchunkPosition( "after_post_setpos", owner, subchunk )
-	if CLIENT then
-		local ownerRef = owner
-		local subchunkRef = subchunk
-		timer.Simple( 0, function()
-			debugPhysicsSubchunkPosition( "next_tick", ownerRef, subchunkRef )
-		end )
 	end
 	return subchunk
 end
@@ -375,7 +107,7 @@ local function rememberPhysicsSubchunk( subchunks, byKey, group, subchunk )
 	list[#list + 1] = subchunk
 end
 
-local function spawnPhysicsSubchunkPages( owner, group, subchunks, byKey, retryBounds )
+local function spawnPhysicsSubchunkPages( owner, group, subchunks, byKey )
 	local built = 0
 	for first = 1, #group.convexes, PHYSICS_CONVEXES_PER_ENTITY do
 		local part = {}
@@ -385,7 +117,7 @@ local function spawnPhysicsSubchunkPages( owner, group, subchunks, byKey, retryB
 		end
 
 		local pageIndex = math.floor( ( first - 1 ) / PHYSICS_CONVEXES_PER_ENTITY )
-		local subchunk, reason = spawnPhysicsSubchunk( owner, #subchunks + 1, group, part, pageIndex, retryBounds )
+		local subchunk, reason = spawnPhysicsSubchunk( owner, #subchunks + 1, group, part, pageIndex )
 		if not IsValid( subchunk ) then return built, false, #part, reason end
 		rememberPhysicsSubchunk( subchunks, byKey, group, subchunk )
 		built = built + 1
@@ -423,33 +155,6 @@ local function shouldPrintClientPhysStats( ent, mode, bounds, boxes, customConve
 	if state and state.sig == sig and now < state.nextPrint then return false end
 	MC.ClientPhysDebugPrintState[key] = { sig = sig, nextPrint = now + 1.0 }
 	return true
-end
-
-local function collisionSubchunkKeysForBounds( bounds )
-	if not bounds then return nil end
-	local keys = {}
-	for _, b in ipairs( bounds ) do
-		local minX = math.floor( b[1] / PHYSICS_SUBCHUNK_SIZE )
-		local minY = math.floor( b[2] / PHYSICS_SUBCHUNK_SIZE )
-		local minZ = math.floor( b[3] / PHYSICS_SUBCHUNK_SIZE )
-		local maxX = math.floor( b[4] / PHYSICS_SUBCHUNK_SIZE )
-		local maxY = math.floor( b[5] / PHYSICS_SUBCHUNK_SIZE )
-		local maxZ = math.floor( b[6] / PHYSICS_SUBCHUNK_SIZE )
-		for sz = minZ, maxZ do
-			for sy = minY, maxY do
-				for sx = minX, maxX do
-					keys[sx .. ":" .. sy .. ":" .. sz] = true
-				end
-			end
-		end
-	end
-	return keys
-end
-
-local function removePhysicsSubchunkKeysForBounds( ent, bounds )
-	for subkey in pairs( collisionSubchunkKeysForBounds( bounds ) or {} ) do
-		removePhysicsSubchunkKey( ent, subkey )
-	end
 end
 
 local function rememberClientPhysStats( ent, mode, bounds, boxes, customConvexes, convexes, subchunks )
@@ -922,36 +627,23 @@ local function flattenConvexGroups( groups )
 	return convexes
 end
 
-local function applyMainEntityFallbackCollision( ent, groups, bounds, boxes, customConvexes, totalConvexes )
-	if not CLIENT then return false, "not_client" end
-	if totalConvexes > PHYSICS_CONVEXES_PER_ENTITY then
-		if MC.ClientPhysStats then MC.ClientPhysStats.lastClientPhysReason = "main_fallback_too_many_convexes" end
-		return false, "main_fallback_too_many_convexes"
-	end
-	local convexes = flattenConvexGroups( groups )
-	if #convexes == 0 then return false, "main_fallback_empty" end
-
-	ent:PhysicsDestroy()
-	ensurePhysicsModel( ent )
-	ent:PhysicsInitMultiConvex( convexes )
-	ent:SetMoveType( MOVETYPE_VPHYSICS )
-	ent:SetSolid( SOLID_VPHYSICS )
-	ent:EnableCustomCollisions( true )
-
-	if not freezePhysicsObject( ent ) then
-		rememberClientPhysStats( ent, "main_fallback", bounds, #boxes, #customConvexes, totalConvexes, nil )
-		if MC.ClientPhysStats then MC.ClientPhysStats.lastClientPhysReason = "main_fallback_apply_failed" end
-		return false, "main_fallback_apply_failed"
-	end
-
-	rememberClientPhysStats( ent, "main_fallback", bounds, #boxes, #customConvexes, totalConvexes, nil )
-	return true
+-- Shared with the client collision carriers (mc/render/cl_collision.lua):
+-- build one chunk's (optionally bounded) collision convex groups without
+-- touching any entity.
+function MC.BuildChunkCollisionConvexGroups( chunk, bounds )
+	local boxes, customConvexes = greedyBoxes( chunk, bounds )
+	local groups, totalConvexes = buildSubchunkConvexGroups( boxes, customConvexes, MC.BS )
+	return groups, totalConvexes, boxes, customConvexes
 end
 
--- (re)build this chunk's multiconvex collision from current block data.
--- Server: authoritative collision. Client: so PREDICTED local-player movement
--- collides with blocks (server physics objects are not replicated to clients,
--- which would otherwise cause rubber-banding when walking on builds).
+-- (re)build this chunk's collision from current block data.
+-- Server: authoritative collision; oversized chunks split into mc_chunk_phys
+--   subchunk entities (paged at PHYSICS_CONVEXES_PER_ENTITY convexes).
+-- Client: PREDICTED local-player movement collision. The client only ever
+--   builds the small AABB/aim interest bounds, so the whole set fits on this
+--   networked shell entity as one multiconvex. Building locally on the shell
+--   (instead of matching server mc_chunk_phys entities) keeps prediction
+--   collision alive across server-side entity churn after edits.
 function ENT:RebuildPhysics( bounds )
 	if bounds == true then bounds = nil end
 	local chunk = MC.GetChunkByKey( self:EnsureKey() )
@@ -963,65 +655,34 @@ function ENT:RebuildPhysics( bounds )
 	end
 
 	local boxes, customConvexes = greedyBoxes( chunk, bounds )
-	local forceNetworkSubchunks = CLIENT and hasNetworkPhysicsSubchunksForChunk( self.ChunkKey )
 	if #boxes == 0 and #customConvexes == 0 then
 		clearClientAABBDebugBoxes( self )
-		if forceNetworkSubchunks and bounds then
-			removePhysicsSubchunkKeysForBounds( self, bounds )
-			self:PhysicsDestroy()
-			self:SetSolid( SOLID_NONE )
-		else
-			self:ClearPhysicsSubchunks()
-			self:PhysicsDestroy()
-		end
+		self:ClearPhysicsSubchunks()
+		self:PhysicsDestroy()
 		return true
 	end
 	rememberClientAABBDebugBoxes( self, boxes )
 
 	local groups, totalConvexes = buildSubchunkConvexGroups( boxes, customConvexes, MC.BS )
-	if forceNetworkSubchunks or totalConvexes > PHYSICS_CONVEXES_PER_ENTITY then
-		if CLIENT and bounds then
-			removePhysicsSubchunkKeysForBounds( self, bounds )
-		else
-			self:ClearPhysicsSubchunks()
-		end
+	if SERVER and totalConvexes > PHYSICS_CONVEXES_PER_ENTITY then
+		self:ClearPhysicsSubchunks()
 		self:PhysicsDestroy()
 		self:SetSolid( SOLID_NONE )
-		local subchunks = ( CLIENT and bounds and self.PhysicsSubchunks ) or {}
-		local byKey = ( CLIENT and bounds and self.PhysicsSubchunksByKey ) or {}
+		local subchunks = {}
+		local byKey = {}
 		local failed = 0
 		local lastFailureReason
-		local retryBoundsBySubchunk = CLIENT and bounds and collisionSubchunkBoundsForBounds( bounds ) or nil
 
 		for _, group in ipairs( groups ) do
-			local retryBounds = retryBoundsBySubchunk and retryBoundsBySubchunk[group.key] or nil
-			local _, ok, partSize, reason = spawnPhysicsSubchunkPages( self, group, subchunks, byKey, retryBounds )
+			local _, ok, partSize, reason = spawnPhysicsSubchunkPages( self, group, subchunks, byKey )
 			if not ok then
 				failed = failed + 1
 				lastFailureReason = reason or "subchunk_failed"
-				-- MsgN( "[MC] !!! collision subchunk build FAILED for chunk " .. tostring( self.ChunkKey ) ..
-				-- 	"  subchunk=" .. tostring( group.key ) ..
-				-- 	" convexes=" .. #group.convexes ..
-				-- 	" part=" .. tostring( partSize ) )
 			end
 		end
 
 		self.PhysicsSubchunks = subchunks
 		self.PhysicsSubchunksByKey = byKey
-		rememberClientPhysStats( self, "subchunks", bounds, #boxes, #customConvexes, totalConvexes, subchunks )
-		if CLIENT and failed > 0 and MC.ClientPhysStats then
-			MC.ClientPhysStats.lastClientPhysReason = lastFailureReason
-			MC.ClientPhysStats.lastClientPhysFailedSubchunks = failed
-		end
-		if CLIENT and failed > 0 and bounds then
-			removePhysicsSubchunkKeysForBounds( self, bounds )
-			applyMainEntityFallbackCollision( self, groups, bounds, boxes, customConvexes, totalConvexes )
-		end
-	--	MsgN( "[MC] collision subchunks for chunk " .. tostring( self.ChunkKey ) ..
-	--		"  convexes=" .. totalConvexes ..
-	--		" subchunks=" .. #groups ..
-	--		" built=" .. countValidSubchunkPhysics( subchunks ) ..
-	--		" failed=" .. failed )
 		return failed == 0, failed > 0 and lastFailureReason or nil
 	end
 

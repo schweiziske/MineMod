@@ -350,43 +350,19 @@ local function readCellsIntoChunk( c, count )
 	if changed and MC.IndexChunkLightSources then MC.IndexChunkLightSources( c ) end
 end
 
+-- Rendering is data-driven (PostDraw hooks over MC.Meshes) and prediction
+-- collision lives on per-player mc_collision_carrier entities, so the client
+-- needs NO mc_chunk entity at all (shells are TRANSMIT_NEVER). Keep only the
+-- legacy registry entry coherent if one somehow exists.
 local function reviveChunkEnt( c )
 	MC.ChunkEnts = MC.ChunkEnts or {}
 	local e = MC.ChunkEnts[c.key]
 	if not IsValid( e ) then
-		for _, candidate in ipairs( ents.FindByClass( "mc_chunk" ) ) do
-			if candidate:EnsureKey() == c.key then
-				e = candidate
-				MC.ChunkEnts[c.key] = candidate
-				break
-			end
-		end
-	end
-
-	if not IsValid( e ) then
-		e = ents.CreateClientside( "mc_chunk" )
-		if not IsValid( e ) then return end
-	end
-
-	if e.ChunkKey and e.ChunkKey ~= c.key and MC.ChunkEnts[e.ChunkKey] == e then
-		MC.ChunkEnts[e.ChunkKey] = nil
-	end
-	if MC.ClientCollisionDebug and MC.ClientCollisionDebug:GetBool() then
-		print( e )
-	end
-	e:SetNoDraw( false )
-	if e:GetModel() ~= "models/hunter/blocks/cube025x025x025.mdl" then
-		e:SetModel( "models/hunter/blocks/cube025x025x025.mdl" )
+		MC.ChunkEnts[c.key] = nil
+		return
 	end
 	e.cx, e.cy, e.cz = c.cx, c.cy, c.cz
 	e.ChunkKey = c.key
-	e:SetPos( MC.ChunkWorldOrigin( c.cx, c.cy, c.cz ) )
-	e:SetAngles( Angle( 0, 0, 0 ) )
-	e:SetRenderBounds( Vector( 0, 0, 0 ), Vector( MC.ChunkWorld, MC.ChunkWorld, MC.ChunkWorldH ) )
-	e:SetMoveType( MOVETYPE_VPHYSICS )
-	e:SetSolid( SOLID_VPHYSICS )
-	e:EnableCustomCollisions( true )
-	MC.ChunkEnts[c.key] = e
 end
 
 local function resetClientWorldForSnapshot( expectedChunks, expectedBlocks )
