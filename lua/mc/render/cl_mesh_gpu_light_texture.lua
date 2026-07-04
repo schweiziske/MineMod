@@ -81,6 +81,26 @@ local function lightUnitFromLevel( level )
 	return math.Clamp( unit * brightness, 0, 1 )
 end
 
+local cachedSkyBrightnessTime
+local cachedSkyBrightnessMoon
+local cachedSkyBrightnessEnabled
+local cachedSkyBrightness = 1
+
+local function currentDayCycleSkyBrightness()
+	local now = CurTime and CurTime() or 0
+	local moon = convarNumber( MC.DayCycleMoonLight, 4, 0, 15 )
+	local enabled = MC.DayCycleEnabled and MC.DayCycleEnabled() == true
+	if cachedSkyBrightnessTime ~= now
+		or cachedSkyBrightnessMoon ~= moon
+		or cachedSkyBrightnessEnabled ~= enabled then
+		cachedSkyBrightnessTime = now
+		cachedSkyBrightnessMoon = moon
+		cachedSkyBrightnessEnabled = enabled
+		cachedSkyBrightness = MC.DayCycleSkyBrightness and MC.DayCycleSkyBrightness() or 1
+	end
+	return cachedSkyBrightness
+end
+
 local function cellSelfEmission( bx, by, bz )
 	if not ( MC.GetBlock and MC.BlockLightEmission ) then return 0 end
 	local id = MC.GetBlock( bx, by, bz )
@@ -131,7 +151,12 @@ local function lightTextureBytes( bx, by, bz )
 	-- would otherwise lift the level-4 moonlight into a bright night.
 	local skyUnit
 	if skyOverridden then
-		skyUnit = math.Clamp( ( math.Clamp( sky, 0, 15 ) / 15 ) * sunMul, 0, 1 )
+		local exposure = MC.SkyExposureUnitAt and MC.SkyExposureUnitAt( bx, by, bz ) or nil
+		if exposure then
+			skyUnit = math.Clamp( exposure * currentDayCycleSkyBrightness() * sunMul, 0, 1 )
+		else
+			skyUnit = math.Clamp( ( math.Clamp( sky, 0, 15 ) / 15 ) * sunMul, 0, 1 )
+		end
 	else
 		skyUnit = math.Clamp( lightUnitFromLevel( sky ) * sunMul, 0, 1 )
 	end

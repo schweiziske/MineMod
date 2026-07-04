@@ -76,7 +76,7 @@ local function ensureOffRT()
 end
 
 function MC.GlobalLightmapActive()
-	return lightmapEnabled() and lightmapRT ~= nil
+	return lightmapEnabled()
 end
 
 -- Same curve family the per-cell bake used before the lightmap took over:
@@ -99,6 +99,14 @@ local function generateGlobalLightmap()
 	if not ( target and render and render.PushRenderTarget and cam and surface ) then return false end
 
 	local dayBrightness = MC.DayCycleSkyBrightness and MC.DayCycleSkyBrightness() or 1
+	-- Perceptual night lift: the linear moonlight floor (moon level / 15, 2/15
+	-- at the default) is nearly black on screen, so dusk reads as a sudden
+	-- blackout and the night-blue tint lands on brightness too low to see.
+	-- Gamma < 1 lifts the dark end while leaving full day (1.0) untouched.
+	local nightGamma = convarNumber( MC.MeshGpuLightmapNightGamma, 0.6, 0.25, 1 )
+	if nightGamma ~= 1 then
+		dayBrightness = math.Clamp( dayBrightness, 0, 1 ) ^ nightGamma
+	end
 	local nightBlend = MC.DayCycleNightBlend and MC.DayCycleNightBlend() or 0
 	local horizon = MC.DayCycleHorizonBlend and MC.DayCycleHorizonBlend() or 0
 	local sunset = horizon * ( 1 - nightBlend ) * convarNumber( MC.MeshGpuLightmapSunset, 0.5, 0, 1 )
@@ -182,8 +190,9 @@ function MC.RefreshGlobalLightmap()
 end
 
 -- Initial generation is deferred to the first Think: the render context is
--- not reliable at include time. Afterwards regenerate once a second while the
--- day cycle runs (256 texels, effectively free) so transitions stay smooth.
+-- not reliable at include time. Afterwards regenerate 4x a second while the
+-- day cycle runs (256 texels, effectively free) so transitions stay smooth
+-- even on short test day lengths.
 local needsInitialRefresh = true
 local nextTimedRefresh = 0
 hook.Remove( "Think", "mc_global_lightmap_refresh" )
@@ -197,7 +206,7 @@ hook.Add( "Think", "mc_global_lightmap_refresh", function()
 	if not lightmapEnabled() then return end
 	local now = CurTime()
 	if now < nextTimedRefresh then return end
-	nextTimedRefresh = now + 1
+	nextTimedRefresh = now + 0.25
 	generateGlobalLightmap()
 end )
 
@@ -208,7 +217,7 @@ if cvars and cvars.AddChangeCallback then
 		MC.RefreshGlobalLightmap()
 		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
 	end, "mc_global_lightmap_toggle" )
-	for _, name in ipairs( { "mc_mesh_gpu_lightmap_torch_warmth", "mc_mesh_gpu_lightmap_ambient", "mc_mesh_gpu_lightmap_sunset" } ) do
+	for _, name in ipairs( { "mc_mesh_gpu_lightmap_torch_warmth", "mc_mesh_gpu_lightmap_ambient", "mc_mesh_gpu_lightmap_sunset", "mc_mesh_gpu_lightmap_night_gamma" } ) do
 		cvars.AddChangeCallback( name, function()
 			MC.RefreshGlobalLightmap()
 		end, "mc_global_lightmap_refresh_" .. name )

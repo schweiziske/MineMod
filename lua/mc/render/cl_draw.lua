@@ -1,11 +1,25 @@
 -- Chunk mesh draw hooks.
+--
+-- Hot-path notes (LuaJIT): the per-frame loops iterate flat arrays with
+-- numeric for (pairs() is NYI and aborts traces), allocate nothing per chunk
+-- (chunk matrices are cached by key, frustum planes live in reused number
+-- slots), and error protection is one pcall on a named function per mesh
+-- list instead of a fresh closure + xpcall per call.
 ------------------------------------------------------------------------- drawing
+local math_abs = math.abs
+local math_tan = math.tan
+local math_rad = math.rad
+
 local function meshRenderingEnabled()
 	return not MC.MeshRender or MC.MeshRender:GetBool()
 end
 
 MC.MeshCullMode = MC.MeshCullMode or ( CreateClientConVar and CreateClientConVar( "mc_mesh_cull_mode", "ccw", true, false,
 	"MC chunk mesh cull mode: cw or ccw" ) )
+MC.MeshFrustumCull = MC.MeshFrustumCull or ( CreateClientConVar and CreateClientConVar( "mc_mesh_frustum_cull", "1", true, false,
+	"Skip drawing MC chunk meshes outside the view frustum" ) )
+MC.MeshDrawDistance = MC.MeshDrawDistance or ( CreateClientConVar and CreateClientConVar( "mc_mesh_draw_distance", "0", true, false,
+	"Max distance in units at which MC chunk meshes are drawn; 0 = unlimited" ) )
 
 local function meshCullMode()
 	local cv = MC.MeshCullMode
@@ -68,35 +82,35 @@ local function restoreChunkMeshRenderState( setCullMode )
 	resetDepthOverride()
 end
 
+local function drawMeshListInner( list, material, forceMaterial )
+	local currentMaterial = material
+	render.SetMaterial( currentMaterial )
+	for i = 1, #list do
+		local entry = list[i]
+		local meshObj = entry
+		local entryMaterial = material
+		if type( entry ) == "table" then
+			meshObj = entry.mesh
+			if not forceMaterial then
+				entryMaterial = entry.material or material
+			end
+		end
+		if entryMaterial ~= currentMaterial then
+			currentMaterial = entryMaterial
+			render.SetMaterial( currentMaterial )
+		end
+		if meshObj and meshObj.Draw then meshObj:Draw() end
+	end
+end
+
 local function drawMeshList( list, material, writeDepth, writeColor, forceMaterial )
 	if not list then return end
-	local setCullMode = false
-	local function draw()
-		resetDepthOverride()
-		resetColorWriteOverride()
-		if writeDepth then forceDepthWrite() end
-		if writeColor == false then setDepthPrepassColorMask() end
-		setCullMode = setChunkMeshCullMode()
-		local currentMaterial = material
-		render.SetMaterial( currentMaterial )
-		for i = 1, #list do
-			local entry = list[i]
-			local meshObj = entry
-			local entryMaterial = material
-			if type( entry ) == "table" then
-				meshObj = entry.mesh
-				if not forceMaterial then
-					entryMaterial = entry.material or material
-				end
-			end
-			if entryMaterial ~= currentMaterial then
-				currentMaterial = entryMaterial
-				render.SetMaterial( currentMaterial )
-			end
-			if meshObj and meshObj.Draw then meshObj:Draw() end
-		end
-	end
-	local ok, err = xpcall( draw, debug and debug.traceback or tostring )
+	resetDepthOverride()
+	resetColorWriteOverride()
+	if writeDepth then forceDepthWrite() end
+	if writeColor == false then setDepthPrepassColorMask() end
+	local setCullMode = setChunkMeshCullMode()
+	local ok, err = pcall( drawMeshListInner, list, material, forceMaterial )
 	restoreChunkMeshRenderState( setCullMode )
 	if not ok then error( err ) end
 end
@@ -108,11 +122,152 @@ local function drawGpuOpaqueDepthPrepass( list )
 	drawMeshList( list, cpuMaterial, true, false, true )
 end
 
-function MC.DrawChunk( key )
+------------------------------------------------------------------- draw-list cache
+-- Flat per-pass chunk arrays so the frame loop never touches pairs(). Mesh
+-- upload/free bumps the version to trigger a rebuild; removed or replaced
+-- lists are additionally caught per frame by comparing the store slot against
+-- the cached list, so a missed bump can never draw a destroyed IMesh.
+local drawListVersion = 0
+local builtVersion = -1
+local opaqueEntries, opaqueCount = {}, 0
+local transEntries, transCount = {}, 0
+local chunkMatrices = {} -- key -> Matrix; chunk origins never move for a key
+
+function MC.MarkChunkDrawListDirty()
+	drawListVersion = drawListVersion + 1
+end
+
+local function rebuildDrawList( store, entries )
+	local chunkW = MC.ChunkWorld
+	local chunkH = MC.ChunkWorldH
+	local n = 0
+	for key, list in pairs( store ) do
+		local c = MC.GetChunkByKey( key )
+		if c and list then
+			n = n + 1
+			local e = entries[n]
+			if not e then
+				e = {}
+				entries[n] = e
+			end
+			local ox, oy, oz = c.cx * chunkW, c.cy * chunkW, c.cz * chunkH
+			e.key = key
+			e.list = list
+			e.x = ox + chunkW * 0.5
+			e.y = oy + chunkW * 0.5
+			e.z = oz + chunkH * 0.5
+			local m = chunkMatrices[key]
+			if not m then
+				m = Matrix()
+				m:SetTranslation( Vector( ox, oy, oz ) )
+				chunkMatrices[key] = m
+			end
+			e.matrix = m
+		end
+	end
+	for i = #entries, n + 1, -1 do entries[i] = nil end
+	return n
+end
+
+local function ensureDrawLists()
+	if builtVersion == drawListVersion then return end
+	builtVersion = drawListVersion
+	opaqueCount = rebuildDrawList( MC.Meshes, opaqueEntries )
+	transCount = rebuildDrawList( MC.MeshesTrans, transEntries )
+end
+
+------------------------------------------------------------------- frustum culling
+-- Inward-pointing frustum planes through the eye. Normals stay unnormalized:
+-- the AABB p-vertex radius scales by the same factor as the center distance,
+-- so the compare is scale-invariant. All slots are plain numbers reused every
+-- frame; the per-chunk test is pure scalar math.
+local planeNX, planeNY, planeNZ, planeR = {}, {}, {}, {}
+local planeCount = 0
+local cullEyeX, cullEyeY, cullEyeZ = 0, 0, 0
+local maxDistSq = 0 -- 0 = unlimited
+
+MC.DrawCullStats = MC.DrawCullStats or { tested = 0, drawn = 0 }
+
+local function addPlane( nx, ny, nz, hx, hz )
+	planeCount = planeCount + 1
+	local i = planeCount
+	planeNX[i], planeNY[i], planeNZ[i] = nx, ny, nz
+	planeR[i] = hx * ( math_abs( nx ) + math_abs( ny ) ) + hz * math_abs( nz )
+end
+
+local function updateCullState()
+	planeCount = 0
+	local eye = EyePos()
+	cullEyeX, cullEyeY, cullEyeZ = eye.x, eye.y, eye.z
+
+	local hx = MC.ChunkWorld * 0.5
+	local hz = MC.ChunkWorldH * 0.5
+
+	local dist = MC.MeshDrawDistance and MC.MeshDrawDistance.GetFloat and MC.MeshDrawDistance:GetFloat() or 0
+	if dist > 0 then
+		-- Chunk bounding-sphere slack so a chunk whose center sits past the
+		-- limit but whose blocks reach inside it does not pop.
+		local r = dist + math.sqrt( hx * hx * 2 + hz * hz )
+		maxDistSq = r * r
+	else
+		maxDistSq = 0
+	end
+
+	if not ( MC.MeshFrustumCull and MC.MeshFrustumCull.GetBool and MC.MeshFrustumCull:GetBool() ) then return end
+
+	local ang = EyeAngles()
+	local fwd = ang:Forward()
+	local right = ang:Right()
+	local up = ang:Up()
+
+	local fovDeg, aspect = 100, ScrW() / ScrH()
+	if render.GetViewSetup then
+		local vs = render.GetViewSetup()
+		if vs then
+			fovDeg = vs.fov or fovDeg
+			if vs.width and vs.height and vs.height > 0 then aspect = vs.width / vs.height end
+		end
+	end
+	-- Source fov convention: ViewSetup fov is horizontal on a 4:3 basis and
+	-- the vertical fov is aspect-invariant. If the engine hands us an already
+	-- aspect-corrected fov this over-includes (draws a few extra off-screen
+	-- chunks) instead of popping chunks at the screen edges. 1.05 = margin.
+	local tanY = math_tan( math_rad( fovDeg ) * 0.5 ) * 0.75 * 1.05
+	local tanX = tanY * aspect
+
+	local fx, fy, fz = fwd.x, fwd.y, fwd.z
+	local rx, ry, rz = right.x, right.y, right.z
+	local ux, uy, uz = up.x, up.y, up.z
+
+	addPlane( fx, fy, fz, hx, hz )                                        -- near
+	addPlane( rx + fx * tanX, ry + fy * tanX, rz + fz * tanX, hx, hz )    -- left edge
+	addPlane( -rx + fx * tanX, -ry + fy * tanX, -rz + fz * tanX, hx, hz ) -- right edge
+	addPlane( ux + fx * tanY, uy + fy * tanY, uz + fz * tanY, hx, hz )    -- bottom edge
+	addPlane( -ux + fx * tanY, -uy + fy * tanY, -uz + fz * tanY, hx, hz ) -- top edge
+end
+
+local function entryVisible( e )
+	local dx, dy, dz = e.x - cullEyeX, e.y - cullEyeY, e.z - cullEyeZ
+	if maxDistSq > 0 and dx * dx + dy * dy + dz * dz > maxDistSq then return false end
+	for i = 1, planeCount do
+		if planeNX[i] * dx + planeNY[i] * dy + planeNZ[i] * dz < -planeR[i] then return false end
+	end
+	return true
+end
+
+------------------------------------------------------------------- chunk drawing
+-- material/isGpuLightTexture are resolved once per pass by the hooks below;
+-- both stay optional so external callers keep the old key-only signature.
+function MC.DrawChunk( key, material, isGpuLightTexture )
 	local list = MC.Meshes[key]
-	local material = MC.CurrentChunkMaterial and MC.CurrentChunkMaterial( false ) or MC.Material
-	local isGpuLightTexture = MC.IsGpuLightTextureMaterial and MC.IsGpuLightTextureMaterial( material )
-		or material == MC.MaterialGpuLightTexture
+	if not list then return end
+	if material == nil then
+		material = MC.CurrentChunkMaterial and MC.CurrentChunkMaterial( false ) or MC.Material
+	end
+	if isGpuLightTexture == nil then
+		isGpuLightTexture = MC.IsGpuLightTextureMaterial and MC.IsGpuLightTextureMaterial( material )
+			or material == MC.MaterialGpuLightTexture
+	end
 	if isGpuLightTexture and MC.BindGpuChunkLightTexture then
 		MC.BindGpuChunkLightTexture( key, material )
 		if MC.BindMeshShadowMap then MC.BindMeshShadowMap( material ) end
@@ -124,23 +279,52 @@ function MC.DrawChunk( key )
 	drawMeshList( list, material, true, nil, forceCurrentMaterial )
 end
 
-function MC.DrawChunkTranslucent( key )
-	local material = MC.CurrentChunkMaterial and MC.CurrentChunkMaterial( true ) or MC.MaterialTranslucent
+function MC.DrawChunkTranslucent( key, material )
+	if material == nil then
+		material = MC.CurrentChunkMaterial and MC.CurrentChunkMaterial( true ) or MC.MaterialTranslucent
+	end
 	drawMeshList( MC.MeshesTrans[key], material, false )
 end
 
-local function drawAllChunks( store, drawFn )
-	for key, list in pairs( store or {} ) do
-		if list then
-			local c = MC.GetChunkByKey( key )
-			if c then
-				local mat = Matrix()
-				mat:SetTranslation( MC.ChunkWorldOrigin( c.cx, c.cy, c.cz ) )
-				cam.PushModelMatrix( mat )
-					drawFn( key )
-				cam.PopModelMatrix()
-			end
+local function drawVisibleChunks( store, entries, count, drawFn, material, isGpuLightTexture )
+	local pushMatrix = cam.PushModelMatrix
+	local popMatrix = cam.PopModelMatrix
+	local drawn = 0
+	for i = 1, count do
+		local e = entries[i]
+		if store[e.key] == e.list and entryVisible( e ) then
+			drawn = drawn + 1
+			pushMatrix( e.matrix )
+			drawFn( e.key, material, isGpuLightTexture )
+			popMatrix()
 		end
+	end
+	return drawn
+end
+
+local function drawAllChunks( store, drawFn )
+	ensureDrawLists()
+	local translucent = store == MC.MeshesTrans
+	local entries, count
+	if translucent then
+		entries, count = transEntries, transCount
+	else
+		entries, count = opaqueEntries, opaqueCount
+	end
+	if count == 0 then return end
+	updateCullState()
+	local material = MC.CurrentChunkMaterial and MC.CurrentChunkMaterial( translucent )
+		or ( translucent and MC.MaterialTranslucent or MC.Material )
+	local isGpuLightTexture = false
+	if not translucent then
+		isGpuLightTexture = MC.IsGpuLightTextureMaterial and MC.IsGpuLightTextureMaterial( material )
+			or material == MC.MaterialGpuLightTexture
+	end
+	local drawn = drawVisibleChunks( store, entries, count, drawFn, material, isGpuLightTexture )
+	if not translucent then
+		local stats = MC.DrawCullStats
+		stats.tested = count
+		stats.drawn = drawn
 	end
 end
 
