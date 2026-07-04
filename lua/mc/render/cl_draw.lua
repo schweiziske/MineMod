@@ -20,6 +20,8 @@ MC.MeshFrustumCull = MC.MeshFrustumCull or ( CreateClientConVar and CreateClient
 	"Skip drawing MC chunk meshes outside the view frustum" ) )
 MC.MeshDrawDistance = MC.MeshDrawDistance or ( CreateClientConVar and CreateClientConVar( "mc_mesh_draw_distance", "0", true, false,
 	"Max distance in units at which MC chunk meshes are drawn; 0 = unlimited" ) )
+MC.MeshGpuDepthPrepass = MC.MeshGpuDepthPrepass or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_depth_prepass", "0", true, false,
+	"Draw a CPU-material depth-only prepass before GPU chunk shading (doubles geometry cost; the main pass already force-writes depth)" ) )
 
 local function meshCullMode()
 	local cv = MC.MeshCullMode
@@ -115,7 +117,13 @@ local function drawMeshList( list, material, writeDepth, writeColor, forceMateri
 	if not ok then error( err ) end
 end
 
+-- Optional early-Z helper, OFF by default: the main GPU pass already renders
+-- with OverrideDepthEnable(true, true) and the custom vertex shader outputs
+-- real clip-space depth, so this prepass is not needed for correctness. It
+-- only saves pixel-shader work on self-overdraw within a chunk while paying
+-- the whole vertex/draw-call cost a second time — a net loss on large worlds.
 local function drawGpuOpaqueDepthPrepass( list )
+	if not ( MC.MeshGpuDepthPrepass and MC.MeshGpuDepthPrepass.GetBool and MC.MeshGpuDepthPrepass:GetBool() ) then return end
 	if not ( MC.UsingGpuChunkShader and MC.UsingGpuChunkShader() ) then return end
 	local cpuMaterial = MC.MaterialOpaqueCPU or MC.Material
 	if not cpuMaterial then return end

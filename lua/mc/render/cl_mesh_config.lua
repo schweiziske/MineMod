@@ -21,8 +21,8 @@ MC.MeshShadowMapBias = MC.MeshShadowMapBias or ( CreateClientConVar and CreateCl
 	"Experimental shadow map depth/edge bias for MC chunk shader sampling" ) )
 MC.MeshShadowMapSoftness = MC.MeshShadowMapSoftness or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_softness", "1", true, false,
 	"Experimental shadow edge softness in shadow-map texels (clamped to at least 1 texel; the shadow bias scales with it)" ) )
-MC.MeshGpuShaderFancy = MC.MeshGpuShaderFancy or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_shader_fancy", "0", true, false,
-	"Experimental: use the fancy GPU chunk shader variant (cool shadows, warm sun, back-face shading, edge fade)" ) )
+MC.MeshGpuShaderFancy = MC.MeshGpuShaderFancy or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_shader_fancy", "1", true, false,
+	"Use the fancy GPU chunk shader variant (cool shadows, warm sun, back-face shading, edge fade)" ) )
 MC.MeshShadowMapTint = MC.MeshShadowMapTint or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_tint", "0.6", true, false,
 	"Fancy shader: how strongly shadows shift toward a cool sky tint (0 = plain darkening)" ) )
 MC.MeshShadowMapEdgeFade = MC.MeshShadowMapEdgeFade or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_edge_fade", "0.1", true, false,
@@ -37,6 +37,8 @@ MC.MeshGpuLightGamma = MC.MeshGpuLightGamma or ( CreateClientConVar and CreateCl
 	"GPU light texture: light falloff curve; >1 brightens mid levels (torch edges), <1 darkens them (1 = linear)" ) )
 MC.MeshGpuSkyLight = MC.MeshGpuSkyLight or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_sky_light", "0", true, false,
 	"GPU light texture: column sky exposure is disabled; day/night uses uniform sky light" ) )
+MC.MeshGpuSkySoft = MC.MeshGpuSkySoft or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_sky_soft", "2", true, false,
+	"Soft sky exposure radius in blocks: enclosed cells fade to dark with distance from the nearest open-sky column (0 = uniform sky light, interiors stay bright)" ) )
 MC.MeshGpuSunBrightness = MC.MeshGpuSunBrightness or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_sun_brightness", "1", true, false,
 	"GPU light texture: sun/sky light brightness multiplier (1 = unchanged)" ) )
 MC.DayCycleSunTilt = MC.DayCycleSunTilt or ( CreateClientConVar and CreateClientConVar( "mc_daycycle_sun_tilt", "0.2", true, false,
