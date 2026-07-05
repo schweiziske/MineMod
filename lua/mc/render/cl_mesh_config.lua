@@ -23,6 +23,8 @@ MC.MeshShadowMapSoftness = MC.MeshShadowMapSoftness or ( CreateClientConVar and 
 	"Experimental shadow edge softness in shadow-map texels (clamped to at least 1 texel; the shadow bias scales with it)" ) )
 MC.MeshGpuShaderFancy = MC.MeshGpuShaderFancy or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_shader_fancy", "1", true, false,
 	"Use the fancy GPU chunk shader variant (cool shadows, warm sun, back-face shading, edge fade)" ) )
+MC.MeshGpuLightFast = MC.MeshGpuLightFast or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_light_fast", "0", true, false,
+	"Low-sample fast GPU light shader (the original look): 4 light taps + atlas per pixel, warm/cool tinting, no shadow or lightmap sampling; overrides fancy/height selection" ) )
 MC.MeshShadowMapTint = MC.MeshShadowMapTint or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_tint", "0.6", true, false,
 	"Fancy shader: how strongly shadows shift toward a cool sky tint (0 = plain darkening)" ) )
 MC.MeshShadowMapEdgeFade = MC.MeshShadowMapEdgeFade or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_edge_fade", "0.1", true, false,
@@ -51,6 +53,8 @@ MC.DayCycleNightTint = MC.DayCycleNightTint or ( CreateClientConVar and CreateCl
 	"Day cycle: how strongly sky-lit surfaces shift toward moonlight blue at night (0 = neutral)" ) )
 MC.MeshGpuLightRefreshPerFrame = MC.MeshGpuLightRefreshPerFrame or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_light_refresh_per_frame", "2", true, false,
 	"GPU light texture: chunks re-rendered per frame during day/night level steps (higher = faster but choppier)" ) )
+MC.MeshGpuLightFlushPerFrame = MC.MeshGpuLightFlushPerFrame or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_light_flush_per_frame", "8", true, false,
+	"GPU light texture: max chunk textures baked per frame in the PreRender flush (draw path never bakes; 0 = unlimited)" ) )
 MC.MeshGpuLightmap = MC.MeshGpuLightmap or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_lightmap", "1", true, false,
 	"Procedural 16x16 global lightmap: warm torch light, colored day/night sky axis (0 = grayscale fallback)" ) )
 MC.MeshGpuLightmapTorchWarmth = MC.MeshGpuLightmapTorchWarmth or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_lightmap_torch_warmth", "0.7", true, false,
@@ -73,6 +77,18 @@ MC.MeshShadowMapCasterDistance = MC.MeshShadowMapCasterDistance or ( CreateClien
 	"Experimental max distance from camera for MC chunks drawn into the shadow map" ) )
 MC.MeshShadowMapUpdateInterval = MC.MeshShadowMapUpdateInterval or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_update_interval", "0", true, false,
 	"Experimental minimum seconds between MC shadow map redraws; 0 redraws every frame while enabled" ) )
+MC.MeshShadowMode = MC.MeshShadowMode or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_mode", "map", true, false,
+	"MC sun shadow technique: map = per-frame sun-space shadow map (PCF), height = cached top-down heightfield ray march (soft shadows, no per-frame depth pass)" ) )
+MC.MeshHfShadowSize = MC.MeshHfShadowSize or ( CreateClientConVar and CreateClientConVar( "mc_mesh_hf_shadow_size", "1024", true, false,
+	"Heightfield shadow mode: top-down height map resolution" ) )
+MC.MeshHfShadowRange = MC.MeshHfShadowRange or ( CreateClientConVar and CreateClientConVar( "mc_mesh_hf_shadow_range", "4096", true, false,
+	"Heightfield shadow mode: world-space coverage radius around the player" ) )
+MC.MeshHfShadowMaxDist = MC.MeshHfShadowMaxDist or ( CreateClientConVar and CreateClientConVar( "mc_mesh_hf_shadow_max_dist", "2400", true, false,
+	"Heightfield shadow mode: max world distance a caster can throw shadow (ray march reach)" ) )
+MC.MeshHfShadowSoftness = MC.MeshHfShadowSoftness or ( CreateClientConVar and CreateClientConVar( "mc_mesh_hf_shadow_softness", "0.05", true, false,
+	"Heightfield shadow mode: penumbra tangent; shadows widen by this per unit of blocker distance (0.02 = crisp, 0.12 = very soft)" ) )
+MC.MeshHfShadowUpdateInterval = MC.MeshHfShadowUpdateInterval or ( CreateClientConVar and CreateClientConVar( "mc_mesh_hf_shadow_update_interval", "0.1", true, false,
+	"Heightfield shadow mode: minimum seconds between height map redraws when meshes changed or the window recentered" ) )
 MC.MeshConnectionVisibleTemplate = MC.MeshConnectionVisibleTemplate or ( CreateClientConVar and CreateClientConVar( "mc_mesh_connection_visible_template", "1", true, false,
 	"Experimental: use cached visible geometry templates for fence/pane/wall/pipe connection shapes" ) )
 

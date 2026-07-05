@@ -45,6 +45,8 @@ end
 MC.MaterialGpuOpaque = nil
 MC.MaterialGpuLightTexture = nil
 MC.MaterialGpuLightTextureFancy = nil
+MC.MaterialGpuLightTextureHeight = nil
+MC.MaterialGpuLightTextureFast = nil
 do
 	local baseTex, baseName = atlasBaseTexture()
 	if baseTex and baseName and baseName ~= "" and CreateMaterial then
@@ -64,8 +66,8 @@ do
 			mat:SetTexture( "$basetexture", baseTex )
 			MC.MaterialGpuOpaque = mat
 		end
-		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex26_night2_vface_opaque", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth13_vface_ps30",
+		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex28_atlas2_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth15_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,
@@ -102,8 +104,8 @@ do
 		-- ONLY material allowed to define $c3_* (its pixel shader declares and
 		-- uses register c3); defining $c3 on the plain material would make the
 		-- engine upload c3 over that shader's inline literal constants.
-		local fancyMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy6_vface_opaque", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy6_vface_ps30",
+		local fancyMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy8_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy8_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,
@@ -134,6 +136,72 @@ do
 			fancyMat:SetTexture( "$basetexture", baseTex )
 			MC.MaterialGpuLightTextureFancy = fancyMat
 		end
+		-- Heightfield shadow variant ("mc_mesh_shadow_mode height"): same
+		-- light pipeline and fancy grading, but sun shadows come from ray
+		-- marching a cached top-down height map bound at $texture3 — no
+		-- per-frame shadow depth pass. Its shader reads $c0..$c3 only;
+		-- $viewprojmat/$invviewprojmat must NEVER be defined or set on this
+		-- material (the engine would upload c11..c18 over compiler-placed
+		-- inline literal constants).
+		local heightMat = CreateMaterial( "mc_atlas_gpu_lighttex_height3_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_height3_vface_ps30",
+			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
+			["$basetexture"] = baseName,
+			["$x360appchooser"] = 1,
+			["$vertexcolor"] = 1,
+			["$linearwrite"] = 0,
+			["$alphatest"] = "1",
+			["$alphatestreference"] = "0.5",
+			["$alphatested"] = 1,
+			["$nocull"] = "0",
+			["$c0_x"] = "0",
+			["$c0_y"] = "0.05",
+			["$c0_z"] = "0",
+			["$c0_w"] = "1",
+			["$c1_x"] = "0",
+			["$c1_y"] = "0",
+			["$c1_z"] = "1",
+			["$c1_w"] = "2400",
+			["$c2_x"] = "0",
+			["$c2_y"] = "0",
+			["$c2_z"] = "0",
+			["$c2_w"] = "0",
+			["$c3_x"] = "0.6",
+			["$c3_y"] = "0.1",
+			["$c3_z"] = "0.65",
+			["$c3_w"] = "0.35",
+		} )
+		if heightMat and not heightMat:IsError() then
+			heightMat:SetTexture( "$basetexture", baseTex )
+			MC.MaterialGpuLightTextureHeight = heightMat
+		end
+		-- Fast low-sample variant ("mc_mesh_gpu_light_fast 1"): the original
+		-- cheap look — 4 light-texture taps + atlas per pixel, analytic
+		-- warm/cool tint, no shadow or global-lightmap sampling. Only two
+		-- samplers, so it rides the stable non-8tex shader base. Its shader
+		-- reads $c0 only (day-cycle sky brightness / ambient / night blue /
+		-- tint strength, set once per frame); never define $c1..$c3 or
+		-- $viewprojmat on this material.
+		local fastMat = CreateMaterial( "mc_atlas_gpu_lighttex_fast3_vface_opaque", "screenspace_general", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_fast3_vface_ps30",
+			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
+			["$basetexture"] = baseName,
+			["$x360appchooser"] = 1,
+			["$vertexcolor"] = 1,
+			["$linearwrite"] = 0,
+			["$alphatest"] = "1",
+			["$alphatestreference"] = "0.5",
+			["$alphatested"] = 1,
+			["$nocull"] = "0",
+			["$c0_x"] = "1",
+			["$c0_y"] = "0.04",
+			["$c0_z"] = "0",
+			["$c0_w"] = "0.7",
+		} )
+		if fastMat and not fastMat:IsError() then
+			fastMat:SetTexture( "$basetexture", baseTex )
+			MC.MaterialGpuLightTextureFast = fastMat
+		end
 	end
 end
 
@@ -141,10 +209,26 @@ function MC.IsGpuLightTextureMaterial( material )
 	if not material then return false end
 	if material == MC.MaterialGpuLightTexture then return true end
 	if MC.MaterialGpuLightTextureFancy and material == MC.MaterialGpuLightTextureFancy then return true end
+	if MC.MaterialGpuLightTextureHeight and material == MC.MaterialGpuLightTextureHeight then return true end
+	if MC.MaterialGpuLightTextureFast and material == MC.MaterialGpuLightTextureFast then return true end
 	return false
 end
 
 local function activeGpuLightTextureMaterial()
+	-- Explicit fast opt-in wins: the low-sample shader is the whole point.
+	local fastCv = MC.MeshGpuLightFast
+	if fastCv and fastCv.GetBool and fastCv:GetBool()
+		and MC.MaterialGpuLightTextureFast and not MC.MaterialGpuLightTextureFast:IsError() then
+		return MC.MaterialGpuLightTextureFast
+	end
+	-- Height shadow mode owns its own shader/material pair; it only makes
+	-- sense while the shadow system is enabled at all.
+	local shadowCv = MC.MeshShadowMap
+	if shadowCv and shadowCv.GetBool and shadowCv:GetBool()
+		and MC.MeshShadowMapMode and MC.MeshShadowMapMode() == "height"
+		and MC.MaterialGpuLightTextureHeight and not MC.MaterialGpuLightTextureHeight:IsError() then
+		return MC.MaterialGpuLightTextureHeight
+	end
 	local cv = MC.MeshGpuShaderFancy
 	if cv and cv.GetBool and cv:GetBool()
 		and MC.MaterialGpuLightTextureFancy and not MC.MaterialGpuLightTextureFancy:IsError() then

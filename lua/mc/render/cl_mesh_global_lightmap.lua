@@ -178,6 +178,7 @@ local function bindToMaterials()
 	end
 	bind( MC.MaterialGpuLightTexture )
 	bind( MC.MaterialGpuLightTextureFancy )
+	bind( MC.MaterialGpuLightTextureHeight )
 end
 
 function MC.RefreshGlobalLightmap()

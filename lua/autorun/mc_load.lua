@@ -56,6 +56,7 @@ local CLIENT_FILES = {
 	"mc/render/cl_sky_column.lua",
 	"mc/render/cl_mesh_gpu_light_texture.lua",
 	"mc/render/cl_mesh_shadow_map.lua",
+	"mc/render/cl_mesh_heightfield.lua",
 	"mc/render/cl_mesh_materials.lua",
 	"mc/render/cl_mesh_global_lightmap.lua",
 	"mc/render/cl_mesh_light_samples.lua",
@@ -79,6 +80,7 @@ local CLIENT_FILES = {
 	"mc/cl_net.lua",
 	"mc/cl_commands.lua",
 	"mc/cl_debug.lua",
+	"mc/cl_light_bench.lua",
 	"mc/cl_collision_probe.lua",
 	"mc/cl_player.lua",
 }
