@@ -14,6 +14,8 @@ local mcShadowZFar
 local mcShadowStrengthScale = 1
 local mcShadowDepthMaterial
 local mcShadowNextUpdate = 0
+local mapBindFrame = {}
+local mapBindResult = {}
 local mcShadowStats = {
 	drawnChunks = 0,
 	drawnMeshes = 0,
@@ -52,6 +54,20 @@ local function shadowMapSource()
 	if source == "combined" or source == "world" or source == "shadowmap" or source == "csm" then return "combined" end
 	if source == "screen" or source == "screenspace" then return "screen" end
 	return "mc"
+end
+
+-- Shadow technique switch: "map" keeps the per-frame sun-space shadow map,
+-- "height" hands sun shadows to the cached heightfield module and disables
+-- this file's depth pass entirely.
+local function shadowMapMode()
+	local cv = MC.MeshShadowMode
+	local mode = cv and cv.GetString and string.lower( tostring( cv:GetString() or "" ) ) or "map"
+	if mode == "height" or mode == "heightfield" or mode == "hf" or mode == "2" then return "height" end
+	return "map"
+end
+
+function MC.MeshShadowMapMode()
+	return shadowMapMode()
 end
 
 local function ensureFallbackShadowTexture()
@@ -143,7 +159,7 @@ local function usingGpuLightTexture()
 end
 
 local function mcShadowSourceEnabled()
-	return shadowMapEnabled() and shadowMapSource() == "mc" and usingGpuLightTexture()
+	return shadowMapEnabled() and shadowMapMode() == "map" and shadowMapSource() == "mc" and usingGpuLightTexture()
 end
 
 local function normalizedSunDirection()
@@ -178,6 +194,10 @@ local function shadowLightDirection()
 	end
 	return normalizedSunDirection(), 1
 end
+
+-- Shared with the heightfield shadow module: direction toward the active
+-- light body plus the horizon/moon strength scale.
+MC.MeshShadowLightDirection = shadowLightDirection
 
 local function makeMCShadowViewSetup( rtSize )
 	if not ( shaderlib and shaderlib.GetViewProjOrthoMatrix ) then return nil end
@@ -454,6 +474,9 @@ end
 
 function MC.UsingMeshShadowMap()
 	if not ( shadowMapEnabled() and usingGpuLightTexture() ) then return false end
+	if shadowMapMode() == "height" then
+		return MC.UsingHeightfieldShadow and MC.UsingHeightfieldShadow() == true
+	end
 	if shadowMapSource() == "mc" then return mcShadowReady() end
 	return csmReady()
 end
@@ -513,8 +536,60 @@ local function bindShadowParams( material, enabled, source, isFancy )
 	end
 end
 
-function MC.BindMeshShadowMap( material )
+-- Fast low-sample material: its shader reads only $c0 (day-cycle sky
+-- brightness / ambient floor / night blue / tint strength). It must never
+-- go through the shadow bind below — that would clobber $c0 with shadow
+-- semantics and upload $viewprojmat over its compiler literals.
+local function bindFastLightParams( material )
+	local frame = FrameNumber and FrameNumber() or 0
+	if mapBindFrame[material] == frame then return true end
+	mapBindFrame[material] = frame
+	if not material.SetFloat then return true end
+	local sky, night = 1, 0
+	if MC.DayCycleEnabled and MC.DayCycleEnabled() then
+		-- In global-lightmap mode the light texture's sky channel is raw
+		-- time-independent exposure, so the day/night brightness must come
+		-- in through this constant; the fallback writer already bakes the
+		-- day-cycle brightness into the channel, so scaling again here
+		-- would darken nights twice.
+		if MC.DayCycleSkyBrightness and MC.GlobalLightmapActive and MC.GlobalLightmapActive() then
+			sky = tonumber( MC.DayCycleSkyBrightness() ) or 1
+		end
+		if MC.DayCycleNightBlend then
+			night = ( tonumber( MC.DayCycleNightBlend() ) or 0 ) * convarFloat( MC.DayCycleNightTint, 0.85, 0, 1 )
+		end
+	end
+	material:SetFloat( "$c0_x", math.Clamp( sky, 0, 1 ) )
+	material:SetFloat( "$c0_y", convarFloat( MC.MeshGpuLightmapAmbient, 0.04, 0, 1 ) )
+	material:SetFloat( "$c0_z", math.Clamp( night, 0, 1 ) )
+	material:SetFloat( "$c0_w", convarFloat( MC.MeshGpuLightmapTorchWarmth, 0.7, 0, 1 ) )
+	return true
+end
+
+function MC.BindMeshShadowMap( material, force )
 	if not material then return false end
+	if MC.MaterialGpuLightTextureFast and material == MC.MaterialGpuLightTextureFast then
+		return bindFastLightParams( material )
+	end
+	-- The heightfield material reads a different constant layout and must
+	-- never receive $viewprojmat (the engine would upload c11..c14 over its
+	-- compiler literals), so dispatch by material identity: if the height
+	-- material failed to create and the selector fell back to plain/fancy,
+	-- those still bind safely through the map path below.
+	if MC.MaterialGpuLightTextureHeight and material == MC.MaterialGpuLightTextureHeight
+		and MC.BindMeshHeightfieldShadow then
+		return MC.BindMeshHeightfieldShadow( material )
+	end
+	-- Shadow constants are identical for every chunk, but this is called from
+	-- the per-chunk draw path (478 chunks x 12 SetFloat + SetMatrix +
+	-- SetTexture used to dominate the frame). Bind once per frame per
+	-- material; repeat calls in the same frame are one table lookup.
+	local frame = FrameNumber and FrameNumber() or 0
+	if not force and mapBindFrame[material] == frame then
+		return mapBindResult[material] == true
+	end
+	mapBindFrame[material] = frame
+
 	local enabled = MC.UsingMeshShadowMap and MC.UsingMeshShadowMap() == true
 	local source = shadowMapSource()
 	local tex
@@ -544,6 +619,7 @@ function MC.BindMeshShadowMap( material )
 		local isFancy = MC.MaterialGpuLightTextureFancy ~= nil and material == MC.MaterialGpuLightTextureFancy
 		bindShadowParams( material, enabled and tex ~= nil and matrix ~= nil, source, isFancy )
 	end
+	mapBindResult[material] = enabled
 	return enabled
 end
 
@@ -566,12 +642,23 @@ hook.Add( "PreRender", "mc_mesh_shadow_map_render", function()
 end )
 
 if cvars and cvars.AddChangeCallback then
-	cvars.AddChangeCallback( "mc_mesh_shadow_map", function()
+	local function rebindAllShadowMaterials()
 		if not MC.BindMeshShadowMap then return end
-		if MC.MaterialGpuLightTexture then MC.BindMeshShadowMap( MC.MaterialGpuLightTexture ) end
-		if MC.MaterialGpuLightTextureFancy then MC.BindMeshShadowMap( MC.MaterialGpuLightTextureFancy ) end
+		if MC.MaterialGpuLightTexture then MC.BindMeshShadowMap( MC.MaterialGpuLightTexture, true ) end
+		if MC.MaterialGpuLightTextureFancy then MC.BindMeshShadowMap( MC.MaterialGpuLightTextureFancy, true ) end
+		if MC.MaterialGpuLightTextureHeight and MC.BindMeshHeightfieldShadow then
+			MC.BindMeshHeightfieldShadow( MC.MaterialGpuLightTextureHeight )
+		end
+	end
+	cvars.AddChangeCallback( "mc_mesh_shadow_map", function()
+		rebindAllShadowMaterials()
 	end, "mc_mesh_shadow_map_refresh" )
 	cvars.AddChangeCallback( "mc_mesh_shadow_map_source", function()
 		mcShadowNextUpdate = 0
 	end, "mc_mesh_shadow_map_source_refresh" )
+	cvars.AddChangeCallback( "mc_mesh_shadow_mode", function()
+		mcShadowNextUpdate = 0
+		if MC.MarkHeightfieldShadowDirty then MC.MarkHeightfieldShadowDirty() end
+		rebindAllShadowMaterials()
+	end, "mc_mesh_shadow_mode_refresh" )
 end

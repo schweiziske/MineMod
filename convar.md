@@ -160,6 +160,23 @@
 | `mc_mesh_shadow_map_face_shade` | `0.65` | fancy shader 中背离太阳的面按阴影压暗的强度。 |
 | `mc_mesh_shadow_map_warmth` | `0.35` | fancy shader 中日照面和火把区域的暖色强度。 |
 
+## 高度场光影模式（height shadow mode）
+
+与 shadow map 二选一的另一套太阳阴影：`mc_mesh_shadow_mode height` 切换（`map` 切回，需要 `mc_mesh_shadow_map 1`）。
+维护一张俯视高度图，只在方块变化或玩家走远时重画；chunk shader 沿太阳方向对它 raymarch，
+得到近硬远软的距离衰减软阴影。太阳/相机移动零重绘成本，昼夜循环下远比 `map` 模式便宜。
+强度与调色复用 `mc_mesh_shadow_map_strength` 和 fancy 的 tint/face_shade/warmth/edge_fade；
+`bias/softness/size/distance/caster_distance/update_interval` 等 shadow map 专属项在此模式下无效。
+
+| ConVar | 默认 | 作用 |
+| --- | --- | --- |
+| `mc_mesh_shadow_mode` | `map` | 太阳阴影技术：`map` = 每帧太阳视角 shadow map（PCF），`height` = 缓存俯视高度场 raymarch。 |
+| `mc_mesh_hf_shadow_size` | `1024` | 高度图分辨率。 |
+| `mc_mesh_hf_shadow_range` | `4096` | 高度图覆盖的世界半径（以玩家为中心）。 |
+| `mc_mesh_hf_shadow_max_dist` | `2400` | 阴影投射的最大世界距离（raymarch 射程）。 |
+| `mc_mesh_hf_shadow_softness` | `0.05` | 半影正切：阴影随遮挡距离变软的速度（0.02 锐利，0.12 很软）。 |
+| `mc_mesh_hf_shadow_update_interval` | `0.1` | 几何变化/窗口重定位后高度图的最小重绘间隔秒数。 |
+
 ## Source engine 光照桥
 
 这一组把 Source 静态光照采样混入 MC mesh 顶点色，属于可选桥接，不是 GPU global lightmap。
@@ -231,3 +248,14 @@
 | ConVar | 默认 | 作用 |
 | --- | --- | --- |
 | `mc_language` | `auto` | MC UI 语言：`auto`、`zh_cn` 或 `en_us`；`auto` 跟随 `gmod_language`。 |
+
+## Fast 低采样 GPU 光照（旧版观感）
+
+`mc_mesh_gpu_light_fast 1` 切换回最初的低采样 GPU 光照着色器观感：每像素 4 次光照采样 + 1 次图集采样，
+解析式暖/冷调色 + 面向着色，**无阴影采样、无 lightmap 查表**。优先级高于 fancy/height 材质选择。
+昼夜亮度/夜色/暖色由每帧一次的常量传入（复用 daycycle 与 lightmap 的 cvar），无每 chunk 成本。
+
+| ConVar | 默认 | 作用 |
+| --- | --- | --- |
+| `mc_mesh_gpu_light_fast` | `0` | 低采样快速 GPU 光照着色器（旧版观感），开启后覆盖 fancy/height 选择。 |
+| `mc_mesh_gpu_light_flush_per_frame` | `8` | PreRender 中每帧最多重烘的 chunk 光照纹理数（绘制路径不再重烘；0 = 不限）。 |

@@ -84,6 +84,21 @@ local function restoreChunkMeshRenderState( setCullMode )
 	resetDepthOverride()
 end
 
+-- Pass-scoped render state: depth/colorwrite/cull overrides are identical
+-- for every chunk in a pass, so drawAllChunks applies them once and flags
+-- the pass as active; drawMeshList then skips its per-chunk state dance
+-- (5 render.Override*/CullMode calls per chunk per frame add up on
+-- hundreds of visible chunks). External MC.DrawChunk callers outside a
+-- pass keep the old self-contained behavior.
+local passActive = false
+
+local function applyPassState( writeDepth )
+	resetDepthOverride()
+	resetColorWriteOverride()
+	if writeDepth then forceDepthWrite() end
+	return setChunkMeshCullMode()
+end
+
 local function drawMeshListInner( list, material, forceMaterial )
 	local currentMaterial = material
 	render.SetMaterial( currentMaterial )
@@ -107,13 +122,22 @@ end
 
 local function drawMeshList( list, material, writeDepth, writeColor, forceMaterial )
 	if not list then return end
-	resetDepthOverride()
-	resetColorWriteOverride()
-	if writeDepth then forceDepthWrite() end
-	if writeColor == false then setDepthPrepassColorMask() end
-	local setCullMode = setChunkMeshCullMode()
+	local ownState = not passActive or writeColor == false
+	local setCullMode = false
+	if ownState then
+		resetDepthOverride()
+		resetColorWriteOverride()
+		if writeDepth then forceDepthWrite() end
+		if writeColor == false then setDepthPrepassColorMask() end
+		setCullMode = setChunkMeshCullMode()
+	end
 	local ok, err = pcall( drawMeshListInner, list, material, forceMaterial )
-	restoreChunkMeshRenderState( setCullMode )
+	if ownState then
+		restoreChunkMeshRenderState( setCullMode )
+		-- A depth-prepass detour inside an active pass must hand the pass
+		-- state back (the opaque pass is the only caller of that detour).
+		if passActive then applyPassState( true ) end
+	end
 	if not ok then error( err ) end
 end
 
@@ -143,6 +167,13 @@ local chunkMatrices = {} -- key -> Matrix; chunk origins never move for a key
 
 function MC.MarkChunkDrawListDirty()
 	drawListVersion = drawListVersion + 1
+end
+
+-- Monotonic mesh-change counter: bumps whenever chunk mesh lists are built,
+-- replaced, or freed. The heightfield shadow module polls it to re-render
+-- its cached top-down height map only when geometry actually changed.
+function MC.ChunkDrawListVersion()
+	return drawListVersion
 end
 
 local function rebuildDrawList( store, entries )
@@ -276,8 +307,13 @@ function MC.DrawChunk( key, material, isGpuLightTexture )
 		isGpuLightTexture = MC.IsGpuLightTextureMaterial and MC.IsGpuLightTextureMaterial( material )
 			or material == MC.MaterialGpuLightTexture
 	end
-	if isGpuLightTexture and MC.BindGpuChunkLightTexture then
-		MC.BindGpuChunkLightTexture( key, material )
+	if isGpuLightTexture then
+		-- Light data lives in one shared atlas bound to $texture1 once, so the
+		-- per-chunk work here is pure Lua: LRU-touch the chunk's atlas slot and
+		-- queue a budgeted PreRender bake if it is dirty or unassigned. The
+		-- per-chunk SetTexture this used to do was the last per-chunk material
+		-- state write in the frame.
+		if MC.TouchGpuChunkLightTexture then MC.TouchGpuChunkLightTexture( key ) end
 		if MC.BindMeshShadowMap then MC.BindMeshShadowMap( material ) end
 	end
 	if material == MC.MaterialGpuOpaque or isGpuLightTexture then
@@ -328,7 +364,12 @@ local function drawAllChunks( store, drawFn )
 		isGpuLightTexture = MC.IsGpuLightTextureMaterial and MC.IsGpuLightTextureMaterial( material )
 			or material == MC.MaterialGpuLightTexture
 	end
-	local drawn = drawVisibleChunks( store, entries, count, drawFn, material, isGpuLightTexture )
+	local setCullMode = applyPassState( not translucent )
+	passActive = true
+	local ok, drawn = pcall( drawVisibleChunks, store, entries, count, drawFn, material, isGpuLightTexture )
+	passActive = false
+	restoreChunkMeshRenderState( setCullMode )
+	if not ok then error( drawn ) end
 	if not translucent then
 		local stats = MC.DrawCullStats
 		stats.tested = count
