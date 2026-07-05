@@ -9,11 +9,11 @@ MC.MeshBeginUpload = MC.MeshBeginUpload or ( CreateClientConVar and CreateClient
 	"Upload MC IMesh vertices with mesh.Begin instead of IMesh:BuildFromTriangles" ) )
 MC.MeshDebugFullCubeOnly = MC.MeshDebugFullCubeOnly or ( CreateClientConVar and CreateClientConVar( "mc_mesh_debug_full_cube_only", "0", true, false,
 	"Debug MC mesh emission by rendering only full cube blocks" ) )
-MC.MeshGpuShader = MC.MeshGpuShader or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_shader", "0", true, false,
+MC.MeshGpuShader = MC.MeshGpuShader or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_shader", "1", true, false,
 	"Use the experimental custom GPU shader for opaque MC chunk atlas meshes when the compiled VCS files are available" ) )
-MC.MeshGpuLightTexture = MC.MeshGpuLightTexture or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_light_texture", "0", true, false,
+MC.MeshGpuLightTexture = MC.MeshGpuLightTexture or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_light_texture", "1", true, false,
 	"Experimental: sample chunk light textures in the GPU shader instead of baking opaque chunk light into vertex colors" ) )
-MC.MeshShadowMap = MC.MeshShadowMap or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map", "0", true, false,
+MC.MeshShadowMap = MC.MeshShadowMap or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map", "1", true, false,
 	"Experimental: let GPU light texture chunk shader receive an MC-owned shadow map" ) )
 MC.MeshShadowMapStrength = MC.MeshShadowMapStrength or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_strength", "0.75", true, false,
 	"Experimental shadow multiplier strength for MC chunk shader" ) )
