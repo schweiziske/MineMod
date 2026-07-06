@@ -1454,6 +1454,14 @@ function MC.BlockModelData( blockOrId, orient )
 		if b.orient == "bed" and MC.BedOrientPart( orient ) == "head" then
 			return b.modelVariants.head or b
 		end
+		if b.orient == "facing" then
+			-- hopper-style blocks bake a dedicated down/up model because the
+			-- vertical vanilla model is not a rotation of the horizontal one
+			orient = MC.NormalizeOrient( b.id, orient )
+			if orient == MC.Direction.DOWN and b.modelVariants.down then return b.modelVariants.down end
+			if orient == MC.Direction.UP and b.modelVariants.up then return b.modelVariants.up end
+			return b
+		end
 	end
 	return b
 end
@@ -1477,9 +1485,11 @@ local function modelBoxes( b, orient )
 	elseif b.orient == "horizontal_facing" or b.orient == "facing" or b.orient == "door" or b.orient == "trapdoor" or b.orient == "bed" then
 		orient = MC.NormalizeOrient( b.id, orient )
 		if b.orient == "facing" and orient == MC.Direction.DOWN then
-			xSteps = 1
+			-- a baked down/up variant is already vertical; only rotate when we
+			-- have to reuse the horizontal model
+			xSteps = ( b.modelVariants and b.modelVariants.down ) and 0 or 1
 		elseif b.orient == "facing" and orient == MC.Direction.UP then
-			xSteps = 3
+			xSteps = ( b.modelVariants and b.modelVariants.up ) and 0 or 3
 		else
 			zSteps = horizontalOrientSteps( MC.BlockHorizontalFacingForOrient( b, orient ) )
 		end

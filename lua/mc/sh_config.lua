@@ -31,15 +31,17 @@ MC.ChunkWorld = MC.CS * MC.BS
 MC.ChunkWorldH = MC.CH * MC.BS
 
 ------------------------------------------------------------------ atlas geometry
--- Must match _build/build_atlas.ps1 (TILE/COLS) and the produced atlas height.
+-- Must match _build/build_atlas.ps1 (TILE/COLS) and the produced atlas size.
+-- 56 padded columns keep ~1280 tiles inside a 4096x2048 canvas instead of
+-- wasting ~60% of a 4096x4096 one; sh_generated_tiles.lua overrides these.
 MC.Atlas = {
-	COLS = 32,
-	ROWS = 40,
+	COLS = 56,
+	ROWS = 23,
 	TILE = 64,
 	PAD = 4,
 	STRIDE = 72,
 	W = 4096,
-	H = 4096,
+	H = 2048,
 	INSET = 0.5,
 	MATERIAL = "mc/atlas_365",
 	MATERIAL_TRANSLUCENT = "mc/atlas_365_translucent",

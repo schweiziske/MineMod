@@ -369,8 +369,9 @@ local function modelOrientSteps( b, orient )
 	end
 	if b.orient ~= "horizontal_facing" and b.orient ~= "facing" and b.orient ~= "door" and b.orient ~= "trapdoor" and b.orient ~= "bed" then return 0, 0 end
 	if b.orient == "facing" then
-		if orient == MC.Direction.DOWN then return 1, 0 end
-		if orient == MC.Direction.UP then return 3, 0 end
+		-- down/up model variants are baked vertical already (see MC.BlockModelData)
+		if orient == MC.Direction.DOWN then return ( b.modelVariants and b.modelVariants.down ) and 0 or 1, 0 end
+		if orient == MC.Direction.UP then return ( b.modelVariants and b.modelVariants.up ) and 0 or 3, 0 end
 	end
 	if b.orient == "door" or b.orient == "trapdoor" or b.orient == "bed" then
 		orient = MC.BlockHorizontalFacingForOrient and MC.BlockHorizontalFacingForOrient( b, orient ) or orient
