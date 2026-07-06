@@ -48,14 +48,6 @@ local function shadowMapEnabled()
 	return convarBool( MC.MeshShadowMap )
 end
 
-local function shadowMapSource()
-	local cv = MC.MeshShadowMapSource
-	local source = cv and cv.GetString and string.lower( tostring( cv:GetString() or "" ) ) or "mc"
-	if source == "combined" or source == "world" or source == "shadowmap" or source == "csm" then return "combined" end
-	if source == "screen" or source == "screenspace" then return "screen" end
-	return "mc"
-end
-
 -- Shadow technique switch: "map" keeps the per-frame sun-space shadow map,
 -- "height" hands sun shadows to the cached heightfield module and disables
 -- this file's depth pass entirely.
@@ -96,7 +88,7 @@ local function ensureMCShadowTexture()
 	if mcShadowTexture and mcShadowTextureSize == size then return mcShadowTexture end
 
 	IMAGE_FORMAT_R32F = IMAGE_FORMAT_R32F or 27
-	-- Same recipe as the CSM addon's _rt_CSM shadow target:
+	-- Shadow target recipe:
 	-- CLAMPS|CLAMPT|ANISOTROPIC|NOMIP|NOLOD|DEPTHRENDERTARGET|NODEPTHBUFFER
 	local flags = bit.bor( 4, 8, 16, 256, 512, 65536, 8388608 )
 	mcShadowTexture = GetRenderTargetEx(
@@ -120,7 +112,7 @@ local function ensureMCShadowDummyTexture()
 
 	IMAGE_FORMAT_A8 = IMAGE_FORMAT_A8 or 8
 	IMAGE_FORMAT_RGB565 = IMAGE_FORMAT_RGB565 or 4
-	-- Same recipe as the CSM addon's _rt_CSM_dummy MRT slot 0 target.
+	-- Dummy MRT slot 0 target.
 	local flags = bit.bor( 1, 4, 8, 256, 512, 32768, 262144, 8388608, 33554432, 536870912 )
 	local isLinux = system and system.IsLinux and system.IsLinux() == true
 	mcShadowDummyTexture = GetRenderTargetEx(
@@ -159,7 +151,7 @@ local function usingGpuLightTexture()
 end
 
 local function mcShadowSourceEnabled()
-	return shadowMapEnabled() and shadowMapMode() == "map" and shadowMapSource() == "mc" and usingGpuLightTexture()
+	return shadowMapEnabled() and shadowMapMode() == "map" and usingGpuLightTexture()
 end
 
 local function normalizedSunDirection()
@@ -390,7 +382,7 @@ local function renderMCShadowMap()
 		cam.Start( viewSetup )
 			startedCam = true
 			-- Bind the real shadow target at MRT slot 1 inside the camera
-			-- block, mirroring the CSM addon's proven ordering.
+			-- block so the depth shader can write linear depth to COLOR1.
 			render.SetRenderTargetEx( 1, rt )
 			local chunks, meshes = drawMCShadowCasters( material )
 			mcShadowStats.drawnChunks = chunks
@@ -437,77 +429,28 @@ local function mcShadowReady()
 		and mcShadowForward ~= nil and mcShadowOrigin ~= nil
 end
 
-local function csmCombinedShadowTexture()
-	local csm = GShaderCSM
-	local csmMat = csm and csm.csm_mat or nil
-	if not csmMat and Material then csmMat = Material( "pp/csm_gmod" ) end
-	if not ( csmMat and csmMat.GetTexture ) then return nil end
-	local tex = csmMat:GetTexture( "$texture2" )
-	if not tex or ( tex.IsError and tex:IsError() ) then return nil end
-	return tex
-end
-
-local function csmScreenShadowTexture()
-	local csm = GShaderCSM
-	local finalMat = csm and csm.csm_mat_final or nil
-	if not finalMat and Material then finalMat = Material( "pp/csm_final" ) end
-	if not ( finalMat and finalMat.GetTexture ) then return nil end
-	local tex = finalMat:GetTexture( "$texture1" )
-	if not tex or ( tex.IsError and tex:IsError() ) then return nil end
-	return tex
-end
-
-local function csmShadowTexture()
-	if shadowMapSource() == "combined" then return csmCombinedShadowTexture(), "combined" end
-	local tex = csmScreenShadowTexture()
-	if tex then return tex, "screen" end
-	return csmCombinedShadowTexture(), "combined"
-end
-
-local function csmReady()
-	local csm = GShaderCSM
-	if not ( csm and csm.CSMViewProj ) then return false end
-	local cv = GetConVar and GetConVar( "r_csm" ) or nil
-	if cv and cv.GetBool and not cv:GetBool() then return false end
-	return csmShadowTexture() ~= nil
-end
-
 function MC.UsingMeshShadowMap()
 	if not ( shadowMapEnabled() and usingGpuLightTexture() ) then return false end
 	if shadowMapMode() == "height" then
 		return MC.UsingHeightfieldShadow and MC.UsingHeightfieldShadow() == true
 	end
-	if shadowMapSource() == "mc" then return mcShadowReady() end
-	return csmReady()
+	return mcShadowReady()
 end
 
-local function bindShadowParams( material, enabled, source, isFancy )
+local function bindShadowParams( material, enabled, isFancy )
 	local strength = enabled and convarFloat( MC.MeshShadowMapStrength, 0.45, 0, 1 ) or 0
-	if source == "mc" then
-		-- Day cycle: shadows fade at the horizon and stay weak under moonlight.
-		strength = strength * math.Clamp( mcShadowStrengthScale, 0, 1 )
-	end
+	-- Day cycle: shadows fade at the horizon and stay weak under moonlight.
+	strength = strength * math.Clamp( mcShadowStrengthScale, 0, 1 )
 	local bias = convarFloat( MC.MeshShadowMapBias, 0.0005, 0, 0.05 )
-	local screenContrast = convarFloat( MC.MeshShadowMapScreenContrast, 6, 1, 32 )
-	local csm = GShaderCSM
-	local cascadeCount = csm and tonumber( csm.cascade_count ) or 4
-	if not cascadeCount or cascadeCount < 1 then cascadeCount = 4 end
-	if cascadeCount > 4 then cascadeCount = 4 end
 
 	-- $c0_*..$c2_* land in pixel shader constants c0..c2 (screenspace_general
 	-- uploads $c0..$c3 to c0..c3; $viewprojmat goes to c11..c14).
 	material:SetFloat( "$c0_x", strength )
-	material:SetFloat( "$c0_y", source == "screen" and screenContrast or bias )
+	material:SetFloat( "$c0_y", bias )
 	material:SetFloat( "$c0_z", enabled and 1 or 0 )
-	if source == "mc" then
-		material:SetFloat( "$c0_w", -2 )
-	elseif source == "screen" then
-		material:SetFloat( "$c0_w", -1 )
-	else
-		material:SetFloat( "$c0_w", 1 / cascadeCount )
-	end
+	material:SetFloat( "$c0_w", -2 )
 
-	if source == "mc" and mcShadowForward and mcShadowOrigin then
+	if mcShadowForward and mcShadowOrigin then
 		local invZFar = ( mcShadowZFar and mcShadowZFar > 0 ) and 1 / mcShadowZFar or 0
 		-- The shader derives its normal-offset shadow bias from this kernel
 		-- radius, so it must span at least one shadow-map texel or the bias
@@ -591,17 +534,12 @@ function MC.BindMeshShadowMap( material, force )
 	mapBindFrame[material] = frame
 
 	local enabled = MC.UsingMeshShadowMap and MC.UsingMeshShadowMap() == true
-	local source = shadowMapSource()
 	local tex
 	local matrix
 
-	if enabled and source == "mc" then
+	if enabled then
 		tex = mcShadowTexture
 		matrix = mcShadowViewProj
-	elseif enabled then
-		tex, source = csmShadowTexture()
-		local csm = GShaderCSM
-		matrix = csm and csm.CSMViewProj or nil
 	end
 
 	tex = tex or ensureFallbackShadowTexture()
@@ -617,7 +555,7 @@ function MC.BindMeshShadowMap( material, force )
 	-- free to place inline literal constants of the chunk shader.
 	if material.SetFloat then
 		local isFancy = MC.MaterialGpuLightTextureFancy ~= nil and material == MC.MaterialGpuLightTextureFancy
-		bindShadowParams( material, enabled and tex ~= nil and matrix ~= nil, source, isFancy )
+		bindShadowParams( material, enabled and tex ~= nil and matrix ~= nil, isFancy )
 	end
 	mapBindResult[material] = enabled
 	return enabled
@@ -653,9 +591,6 @@ if cvars and cvars.AddChangeCallback then
 	cvars.AddChangeCallback( "mc_mesh_shadow_map", function()
 		rebindAllShadowMaterials()
 	end, "mc_mesh_shadow_map_refresh" )
-	cvars.AddChangeCallback( "mc_mesh_shadow_map_source", function()
-		mcShadowNextUpdate = 0
-	end, "mc_mesh_shadow_map_source_refresh" )
 	cvars.AddChangeCallback( "mc_mesh_shadow_mode", function()
 		mcShadowNextUpdate = 0
 		if MC.MarkHeightfieldShadowDirty then MC.MarkHeightfieldShadowDirty() end
