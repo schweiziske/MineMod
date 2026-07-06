@@ -149,8 +149,6 @@
 | `mc_mesh_shadow_map_strength` | `0.75` | shadow map 对最终亮度的压暗强度。 |
 | `mc_mesh_shadow_map_bias` | `0.0005` | shadow map 深度/边缘采样 bias，用于减轻 acne 和漏光。 |
 | `mc_mesh_shadow_map_softness` | `1` | 阴影边缘柔化半径，单位是 shadow-map texel，最低钳到 1。 |
-| `mc_mesh_shadow_map_source` | `mc` | 阴影来源：`mc`、`screen` 或 `combined`。 |
-| `mc_mesh_shadow_map_screen_contrast` | `6` | 使用 screen-space CSM shadow mask 时的对比度倍率。 |
 | `mc_mesh_shadow_map_size` | `2048` | MC-owned shadow map 分辨率。 |
 | `mc_mesh_shadow_map_distance` | `4096` | MC-owned shadow map 的世界覆盖半径。 |
 | `mc_mesh_shadow_map_caster_distance` | `4608` | 距相机多远以内的 MC chunk 会绘入 shadow map。 |

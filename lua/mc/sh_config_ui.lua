@@ -48,8 +48,6 @@ MC.ConfigConVars = {
 			item( "lighting", "mc_mesh_shadow_map_strength", "Shadow strength", "number", "Experimental shadow strength for GPU chunk shader" ),
 			item( "lighting", "mc_mesh_shadow_map_bias", "Shadow bias", "number", "Experimental shadow map depth bias for GPU chunk shader" ),
 			item( "lighting", "mc_mesh_shadow_map_softness", "Shadow softness", "number", "Experimental shadow edge softness in shadow-map texels (0 = hard)" ),
-			item( "lighting", "mc_mesh_shadow_map_source", "Shadow source", "string", "Experimental shadow source: mc, screen, or combined" ),
-			item( "lighting", "mc_mesh_shadow_map_screen_contrast", "Shadow screen contrast", "number", "Experimental contrast for screen-space CSM shadow mask" ),
 			item( "lighting", "mc_mesh_gpu_shader_fancy", "Fancy shader", "bool", "Fancy GPU chunk shader: cool shadows, warm sun, back-face shading, edge fade" ),
 			item( "lighting", "mc_mesh_gpu_light_fast", "Fast light shader", "bool", "Low-sample GPU light shader (original look): 4 light taps per pixel, no shadow/lightmap sampling" ),
 			item( "lighting", "mc_mesh_shadow_map_tint", "Shadow cool tint", "number", "Fancy shader: shadow shift toward cool sky tint (0-1)" ),

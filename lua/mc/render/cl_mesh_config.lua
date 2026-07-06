@@ -65,10 +65,6 @@ MC.MeshGpuLightmapSunset = MC.MeshGpuLightmapSunset or ( CreateClientConVar and 
 	"Global lightmap: sunset/sunrise orange grading strength on the sky axis (0 = off)" ) )
 MC.MeshGpuLightmapNightGamma = MC.MeshGpuLightmapNightGamma or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_lightmap_night_gamma", "0.6", true, false,
 	"Global lightmap: perceptual curve on day/night sky brightness (1 = linear; lower = brighter, bluer nights and gentler dusk)" ) )
-MC.MeshShadowMapSource = MC.MeshShadowMapSource or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_source", "mc", true, false,
-	"Experimental shadow source for MC chunks: mc, screen, or combined" ) )
-MC.MeshShadowMapScreenContrast = MC.MeshShadowMapScreenContrast or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_screen_contrast", "6", true, false,
-	"Experimental contrast multiplier when sampling the screen-space CSM shadow mask" ) )
 MC.MeshShadowMapSize = MC.MeshShadowMapSize or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_size", "2048", true, false,
 	"Experimental MC-owned shadow map resolution" ) )
 MC.MeshShadowMapDistance = MC.MeshShadowMapDistance or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_distance", "4096", true, false,
