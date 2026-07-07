@@ -24,7 +24,6 @@ local MC_LIGHT_STYLE_BEST = RM.MC_LIGHT_STYLE_BEST
 local MC_LIGHT_STYLE_SHADER = RM.MC_LIGHT_STYLE_SHADER
 local MC_LIGHT_STYLE_GPU_SHADER = RM.MC_LIGHT_STYLE_GPU_SHADER
 local MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE = RM.MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE
-local MC_LIGHT_STYLE_LIGHTMAP = RM.MC_LIGHT_STYLE_LIGHTMAP
 local MC_LIGHT_AO_FACTORS = RM.MC_LIGHT_AO_FACTORS
 local MC_LIGHT_BEST_AO_FACTORS = RM.MC_LIGHT_BEST_AO_FACTORS
 local MC_LIGHT_SHADER_AO_FACTORS = RM.MC_LIGHT_SHADER_AO_FACTORS
@@ -620,11 +619,6 @@ if RM.RegisterLightProfile then
 		recolorMeta = recolorLightMeta,
 	} )
 	RM.RegisterLightProfile( MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE, {
-		fullCubeColors = fullCubeFaceCornerColors,
-		quadColors = quadCornerColorValues,
-		recolorMeta = recolorLightMeta,
-	} )
-	RM.RegisterLightProfile( MC_LIGHT_STYLE_LIGHTMAP, {
 		fullCubeColors = fullCubeFaceCornerColors,
 		quadColors = quadCornerColorValues,
 		recolorMeta = recolorLightMeta,
