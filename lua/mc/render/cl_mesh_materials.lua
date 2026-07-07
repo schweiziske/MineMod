@@ -66,8 +66,8 @@ do
 			mat:SetTexture( "$basetexture", baseTex )
 			MC.MaterialGpuOpaque = mat
 		end
-		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex28_atlas2_vface_opaque", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth15_vface_ps30",
+		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex29_atlas2_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth16_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,
@@ -104,8 +104,8 @@ do
 		-- ONLY material allowed to define $c3_* (its pixel shader declares and
 		-- uses register c3); defining $c3 on the plain material would make the
 		-- engine upload c3 over that shader's inline literal constants.
-		local fancyMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy8_vface_opaque", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy8_vface_ps30",
+		local fancyMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy9_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy9_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,

@@ -8,8 +8,8 @@
 | --- | --- | --- |
 | 开启 GPU 光照路径 | `mc_mesh_gpu_shader 1`, `mc_mesh_gpu_light_texture 1`, `mc_mesh_gpu_lightmap 1` | 使用自定义 chunk shader、GPU chunk light texture 和全局 16x16 lightmap。 |
 | 让夜晚更暗蓝 | `mc_daycycle 1`, `mc_daycycle_moon_light`, `mc_daycycle_night_tint`, `mc_mesh_gpu_lightmap_ambient` | `moon_light` 控夜晚天光等级，`night_tint` 控蓝色夜色，`ambient` 控 GPU lightmap 最低亮度。 |
-| 让阴影处更黑 | `mc_mesh_shadow_map 1`, `mc_mesh_shadow_map_strength`, `mc_mesh_shadow_map_face_shade`, `mc_mesh_gpu_lightmap_ambient` | 阴影暗度走 shadow map 和 fancy shader；不要靠 `mc_mesh_gpu_sky_light` 做。 |
-| 避免光柱 | `mc_mesh_gpu_sky_light 0` | 当前源码硬关闭 column sky exposure；昼夜天光是统一的，遮挡应交给 shadow map。 |
+| 让阴影处更黑 | `mc_mesh_shadow_map 1`, `mc_mesh_shadow_map_strength`, `mc_mesh_shadow_map_face_shade`, `mc_mesh_gpu_lightmap_ambient` | 阴影暗度走 shadow map 和 fancy shader。 |
+| 封闭空间变暗 | `mc_light_sky_flood 1` | 体素天空光泛洪（MC 语义：露天 15，横向每格 -1，全封闭 0）；只作环境光，方向性阴影仍由 shadow map 负责，因此不会出现"两种影子/光柱"。 |
 | 区分两个最低亮度 | `mc_light_ambient_min`, `mc_mesh_gpu_lightmap_ambient` | 前者是 CPU/vertex-color 路径最低亮度；后者是 GPU global lightmap 最低亮度。 |
 
 ## 服务器：权限、世界和批量操作
@@ -97,6 +97,8 @@
 | `mc_light_perf_debug` | `0` | 显示并收集详细光照性能诊断。 |
 | `mc_light_perf_print_break` | `0` | 破坏方块后打印光照性能诊断。 |
 | `mc_light_perf_print_each` | `0` | 每次光照计算打印一行 timing 诊断。 |
+| `mc_light_sky_flood` | `1` | 体素天空光泛洪填充：露天 15，横向每格 -1 进入室内，全封闭 0（`0` = 天空光均匀全亮）。 |
+| `mc_light_sky_flood_per_frame` | `4` | 每帧从摊销队列里重算多少个 chunk 的天空光泛洪。 |
 
 ## 客户端渲染和 mesh
 
@@ -120,7 +122,7 @@
 | `mc_mesh_gpu_shader_fancy` | `0` | 使用 fancy GPU shader 变体：冷阴影、暖太阳、背光面 shading、边缘 fade。 |
 | `mc_mesh_gpu_light_brightness` | `1` | GPU light texture 的 block/sky light 亮度倍率。 |
 | `mc_mesh_gpu_light_gamma` | `1` | GPU light texture 的衰减曲线；`>1` 提亮中间亮度，`<1` 压暗。 |
-| `mc_mesh_gpu_sky_light` | `0` | 旧的柱状 sky exposure 开关名；当前源码硬关闭，昼夜走统一天光，避免光柱。 |
+| `mc_mesh_gpu_sky_light` | `0` | 旧的柱状 sky exposure 开关名；已被 `mc_light_sky_flood` 体素泛洪取代。 |
 | `mc_mesh_gpu_sun_brightness` | `1` | GPU 路径 sun/sky light 亮度倍率。 |
 | `mc_mesh_gpu_light_refresh_per_frame` | `2` | 昼夜 sky level 跳变时，每帧刷新多少个 chunk light texture。 |
 | `mc_mesh_gpu_lightmap` | `1` | 启用程序生成的 16x16 global lightmap；提供暖火把和彩色昼夜天光。 |

@@ -1,16 +1,10 @@
 -- Client-side sky exposure for the GPU light texture path.
 -- A cell is sky-exposed iff it sits ABOVE the highest sky-blocking block of
--- its column (cheap per-column cache). This is deliberately NOT a sky light
--- flood — no lateral propagation, no global rebuilds; directional light
--- through openings is the shadow map's job. Day/night modulates the exposed
--- level through MC.DayCycleSkyLevel().
---
--- On top of the binary column test sits a SOFT exposure kernel
--- (MC.SkyExposureUnitAt): enclosed cells take the nearest open-sky column
--- within a small Manhattan radius, faded by distance. Skylight through an
--- opening reads as a soft shaft instead of the hard-edged pillar that got
--- binary exposure disabled, and fully enclosed rooms fall to the ambient
--- floor. Still not a flood: it only ever reads the column-top cache.
+-- its column (cheap per-column cache). This module only maintains the column
+-- tops; exposed cells are implicit sky level 15 and everything below them is
+-- flooded by cl_sky_flood (Minecraft-style BFS, -1 per lateral block). The
+-- old soft-exposure ring kernel is gone: it painted a hard vertical light
+-- pillar under roof openings that fought the shadow map's directional shadow.
 MC = MC or {}
 
 -- Numeric column keys: |block coord| < 2^20 (net COORD_BITS), so bx * 2^21 +
@@ -26,13 +20,6 @@ end
 
 local function chunkColKey( cx, cy )
 	return cx .. ":" .. cy
-end
-
-local function skyFeatureEnabled()
-	-- Hard disabled: column exposure creates visible sky-light pillars in this
-	-- renderer. Day/night still uses a uniform sky term through the global
-	-- lightmap; directional occlusion belongs to the shadow map, not this cache.
-	return false
 end
 
 local function ensureChunkColumns()
@@ -125,16 +112,10 @@ function MC.SkyColumnTop( bx, by )
 	return top
 end
 
--- Internal fast path: assumes integer coords, shares the tops cache.
-local function skyExposedRaw( bx, by, bz )
-	local key = colKey( bx, by )
-	local top = tops[key]
-	if top == nil then
-		top = computeColumnTop( bx, by )
-		tops[key] = top
-	end
-	if top == false then return true end
-	return bz > top
+-- Loaded chunk cz set for a chunk column, for callers that need to walk a
+-- column without scanning the whole world (sky flood reflood queue).
+function MC.SkyColumnChunkCzList( cx, cy )
+	return ensureChunkColumns()[chunkColKey( cx, cy )]
 end
 
 function MC.SkyExposedAt( bx, by, bz )
@@ -147,71 +128,11 @@ function MC.SkyLightLevelAt( bx, by, bz )
 	return MC.DayCycleSkyLevel and MC.DayCycleSkyLevel() or 15
 end
 
--- Manhattan rings for the soft-exposure kernel, flattened {dx1,dy1,dx2,dy2,...}
--- and built once per distance.
-local softRings = {}
-local function ringOffsets( d )
-	local ring = softRings[d]
-	if ring then return ring end
-	ring = {}
-	for dx = -d, d do
-		local ady = d - math.abs( dx )
-		ring[#ring + 1] = dx
-		ring[#ring + 1] = ady
-		if ady ~= 0 then
-			ring[#ring + 1] = dx
-			ring[#ring + 1] = -ady
-		end
-	end
-	softRings[d] = ring
-	return ring
-end
-
-local function softSkyRadius()
-	local cv = MC.MeshGpuSkySoft
-	local r = cv and cv.GetInt and cv:GetInt() or 2
-	if r < 0 then r = 0 elseif r > 8 then r = 8 end
-	return r
-end
-
--- Time-independent soft exposure for the chunk light texture sky byte.
--- 1 above open sky; under a roof, the nearest exposed column within the
--- kernel radius wins, faded to 0 at the kernel edge (rings are scanned
--- nearest-first, so the first hit is the maximum). 0 deep inside — the
--- global lightmap then only applies torch light plus the ambient floor.
-function MC.SkyExposureUnitAt( bx, by, bz )
-	local radius = softSkyRadius()
-	if radius <= 0 then return 1 end
-	bx, by, bz = math.floor( bx ), math.floor( by ), math.floor( bz )
-	if skyExposedRaw( bx, by, bz ) then return 1 end
-	for d = 1, radius do
-		local ring = ringOffsets( d )
-		for i = 1, #ring, 2 do
-			if skyExposedRaw( bx + ring[i], by + ring[i + 1], bz ) then
-				return 1 - d / ( radius + 1 )
-			end
-		end
-	end
-	return 0
-end
-
 local function markColumnSpanDirty( bx, by, zFrom, zTo )
 	if not MC.MarkGpuChunkLightTextureDirtyCell then return end
 	if zFrom > zTo then zFrom, zTo = zTo, zFrom end
 	for bz = zFrom, zTo do
 		MC.MarkGpuChunkLightTextureDirtyCell( bx, by, bz )
-	end
-end
-
--- A column-top change also shifts the soft exposure of neighbor columns
--- within the kernel radius, so the dirty span fans out over the footprint.
-local function markColumnFootprintSpanDirty( bx, by, zFrom, zTo )
-	markColumnSpanDirty( bx, by, zFrom, zTo )
-	for d = 1, softSkyRadius() do
-		local ring = ringOffsets( d )
-		for i = 1, #ring, 2 do
-			markColumnSpanDirty( bx + ring[i], by + ring[i + 1], zFrom, zTo )
-		end
 	end
 end
 
@@ -239,15 +160,23 @@ function MC.NoteSkyColumnBlockChange( bx, by, bz, oldOpacity, newOpacity )
 	local newTop = MC.SkyColumnTop( bx, by )
 	if oldTop == newTop then return end
 
+	local zFrom, zTo
 	if oldTop ~= false and newTop ~= false then
 		-- Exposure flips for cells strictly above the lower top.
-		markColumnFootprintSpanDirty( bx, by, math.min( oldTop, newTop ) + 1, math.max( oldTop, newTop ) )
+		zFrom, zTo = math.min( oldTop, newTop ) + 1, math.max( oldTop, newTop )
 	else
 		-- Column gained its first blocker or lost its last one: everything
 		-- below the blocker (down to the lowest loaded chunk) flips.
 		local top = oldTop == false and newTop or oldTop
 		local bottom = lowestLoadedZ( bx, by ) or ( top - ch )
-		markColumnFootprintSpanDirty( bx, by, bottom, top )
+		zFrom, zTo = bottom, top
+	end
+	-- Exposed cells are implicit values, no stored change marks them: dirty
+	-- the flipped span for the light texture bake, then let the sky flood
+	-- update the stored light around it (marks its own changed cells).
+	markColumnSpanDirty( bx, by, zFrom, zTo )
+	if MC.NoteSkyExposureSpanChanged then
+		MC.NoteSkyExposureSpanChanged( bx, by, zFrom, zTo )
 	end
 end
 
@@ -285,16 +214,30 @@ function MC.NoteSkyColumnChunkLoaded( chunk )
 	if not ( chunk and chunk.cx ~= nil ) then return end
 	noteChunkPresence( chunk.cx, chunk.cy, chunk.cz, true )
 	invalidateChunkFootprint( chunk.cx, chunk.cy, chunk.cz )
+	-- Column tops over this footprint changed wholesale: re-flood the sky
+	-- light of the whole chunk column plus its lateral neighbors (BFS light
+	-- reaches at most 14 blocks, less than one chunk).
+	if MC.QueueSkyFloodColumn then
+		MC.QueueSkyFloodColumn( chunk.cx, chunk.cy )
+	end
 end
 
 function MC.NoteSkyColumnChunkUnloaded( cx, cy, cz )
 	noteChunkPresence( cx, cy, cz, false )
 	invalidateChunkFootprint( cx, cy, cz )
+	if MC.QueueSkyFloodChunk and MC.ChunkKey then
+		MC.QueueSkyFloodChunk( MC.ChunkKey( cx, cy, cz ) )
+	end
+	if MC.QueueSkyFloodColumn then
+		MC.QueueSkyFloodColumn( cx, cy )
+	end
 end
 
 function MC.ClearSkyColumnCache()
 	tops = {}
 	chunkColumns = nil
+	if MC.ClearSkyFlood then MC.ClearSkyFlood() end
+	if MC.QueueAllSkyFlood then MC.QueueAllSkyFlood() end
 end
 
 -- Day/night: refresh light textures when the quantized sky level steps
@@ -325,10 +268,4 @@ if cvars and cvars.AddChangeCallback then
 		MC.ClearSkyColumnCache()
 		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
 	end, "mc_sky_column_toggle" )
-	-- Exposure bytes baked into chunk light textures depend on the kernel
-	-- radius, so a radius change re-bakes them (the column-top cache is
-	-- radius-independent and stays).
-	cvars.AddChangeCallback( "mc_mesh_gpu_sky_soft", function()
-		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
-	end, "mc_sky_soft_rebake" )
 end

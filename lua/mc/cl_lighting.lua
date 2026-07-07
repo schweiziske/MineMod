@@ -23,7 +23,7 @@ MC.LightPerfPrintEach = MC.LightPerfPrintEach or CreateClientConVar( "mc_light_p
 	"Print one-line timing diagnostics for each MC lighting calculation" )
 
 MC.LightBlockChunks = MC.LightBlockChunks or {}
-MC.LightSkyChunks = nil
+-- Sky voxel light store lives in mc/render/cl_sky_flood.lua (MC.LightSkyChunks).
 MC.LightSkyColumnTops = nil
 MC.LightSourceCells = MC.LightSourceCells or {}
 MC.LightChunkSources = MC.LightChunkSources or {}
@@ -343,9 +343,9 @@ end
 
 local function clearStoredLight()
 	MC.LightBlockChunks = {}
-	MC.LightSkyChunks = nil
 	MC.LightSkyColumnTops = nil
 	MC.LightCellsReady = false
+	if MC.ClearSkyFlood then MC.ClearSkyFlood() end
 end
 
 local function clearGpuLightTextures()
@@ -359,6 +359,7 @@ function MC.ClearLightingCache()
 	MC.LightSourceCells = {}
 	MC.LightChunkSources = {}
 	MC.LightSourceIndexReady = false
+	if MC.QueueAllSkyFlood then MC.QueueAllSkyFlood() end
 end
 
 function MC.MarkAllMeshesDirty()
@@ -892,7 +893,8 @@ end
 function MC.RebuildLightingCells()
 	local perfStart = SysTime()
 	ensureLightSourceIndex()
-	MC.LightSkyChunks = nil
+	if MC.ClearSkyFlood then MC.ClearSkyFlood() end
+	if MC.QueueAllSkyFlood then MC.QueueAllSkyFlood() end
 	local minX, minY, minZ, maxX, maxY, maxZ = loadedWorldBounds()
 	rebuildBlockLightCells()
 	MC.LightCellsReady = true
@@ -1039,6 +1041,12 @@ function MC.MarkLightingDirtyForChange( bx, by, bz, oldId, oldOrient, newId, new
 	if MC.NoteSkyColumnBlockChange then
 		MC.NoteSkyColumnBlockChange( bx, by, bz, oldOpacity, newOpacity )
 	end
+	-- Sky flood runs after the column tops updated above (exposure reads must
+	-- see the new top). Covers opacity changes that never flip a column top
+	-- (walls, cave ceilings) — the flipped spans re-flood from the note above.
+	if MC.UpdateSkyLightForBlockChange then
+		MC.UpdateSkyLightForBlockChange( bx, by, bz, oldOpacity, newOpacity )
+	end
 	if oldEmission ~= newEmission or oldOpacity ~= newOpacity then
 		local dirtyBlockLightMeshes = oldEmission ~= newEmission
 		MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, oldOpacity, newOpacity, dirtyBlockLightMeshes )
@@ -1067,7 +1075,10 @@ function MC.SampleLighting( bx, by, bz, selfEmission )
 	ensureLightSourceIndex()
 	bx, by, bz = math.floor( bx ), math.floor( by ), math.floor( bz )
 	local block = chunkLoadedForCell( bx, by, bz ) and getStoredLight( MC.LightBlockChunks, bx, by, bz ) or 0
-	local sky = 0
+	-- Voxel sky light from the flood fill: 15 above open sky, smooth falloff
+	-- into interiors, 0 fully enclosed. This is the AMBIENT sky term only —
+	-- directional sun shadow stays the shadow map's job.
+	local sky = MC.SkyVoxelLight and MC.SkyVoxelLight( bx, by, bz ) or 0
 	local level = math.max( block, sky, math.Clamp( math.floor( tonumber( selfEmission ) or 0 ), 0, 15 ) )
 	local brightness = ambientMin() + ( 1 - ambientMin() ) * ( level / 15 )
 	noteLightSample( sampleStart )
@@ -1113,7 +1124,7 @@ end )
 cvars.AddChangeCallback( "mc_light_enabled", function( _, _, newValue )
 	MC.LightCellsReady = false
 	MC.LightSourceIndexReady = false
-	MC.LightSkyChunks = nil
+	if MC.ClearSkyFlood then MC.ClearSkyFlood() end
 	MC.LightSkyColumnTops = nil
 	local value = string.lower( tostring( newValue or "" ) )
 	if value ~= "0" and value ~= "false" and value ~= "off" then

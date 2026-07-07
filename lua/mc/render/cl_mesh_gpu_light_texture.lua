@@ -187,17 +187,11 @@ local function lightTextureBytes( bx, by, bz )
 	end
 	level = tonumber( level ) or 15
 	block = tonumber( block ) or level
+	-- Sky now carries the flooded voxel sky light (cl_sky_flood): 15 above
+	-- open sky, -1 per lateral block into interiors, 0 fully enclosed. It is
+	-- an AMBIENT term only — the shader's shadow map is the one directional
+	-- shadow; no column/pillar exposure override here anymore.
 	sky = tonumber( sky ) or level
-	-- Column-based sky exposure (cl_sky_column) replaces the stored sky value
-	-- when active.
-	local skyOverridden = false
-	if MC.SkyLightLevelAt then
-		local skyLevel = MC.SkyLightLevelAt( bx, by, bz )
-		if skyLevel then
-			sky = skyLevel
-			skyOverridden = true
-		end
-	end
 
 	if MC.GlobalLightmapActive and MC.GlobalLightmapActive() then
 		-- Global lightmap mode: chunk textures store RAW linear levels; the
@@ -206,13 +200,7 @@ local function lightTextureBytes( bx, by, bz )
 		-- day/night never re-bakes chunks, and the r-channel night tint stays
 		-- zero (night hue comes from the lightmap sky axis).
 		local blockUnit = math.Clamp( block / 15, 0, 1 )
-		local skyUnit
-		local exposure = MC.SkyExposureUnitAt and MC.SkyExposureUnitAt( bx, by, bz ) or nil
-		if exposure then
-			skyUnit = exposure
-		else
-			skyUnit = math.Clamp( sky / 15, 0, 1 )
-		end
+		local skyUnit = math.Clamp( sky / 15, 0, 1 )
 		return 0, lightByteFromUnit( blockUnit ), lightByteFromUnit( skyUnit )
 	end
 
@@ -221,23 +209,13 @@ local function lightTextureBytes( bx, by, bz )
 	local sunMul = convarNumber( MC.MeshGpuSunBrightness, 1, 0, 4 )
 	-- Sky stays LINEAR: the gamma/brightness curve shapes torch falloff and
 	-- would otherwise lift the level-4 moonlight into a bright night.
-	local skyUnit
-	if skyOverridden then
-		local exposure = MC.SkyExposureUnitAt and MC.SkyExposureUnitAt( bx, by, bz ) or nil
-		if exposure then
-			skyUnit = math.Clamp( exposure * currentDayCycleSkyBrightness() * sunMul, 0, 1 )
-		else
-			skyUnit = math.Clamp( ( math.Clamp( sky, 0, 15 ) / 15 ) * sunMul, 0, 1 )
-		end
-	else
-		skyUnit = math.Clamp( lightUnitFromLevel( sky ) * sunMul, 0, 1 )
-	end
+	local skyUnit = math.Clamp( ( math.Clamp( sky, 0, 15 ) / 15 ) * currentDayCycleSkyBrightness() * sunMul, 0, 1 )
 	-- The r channel is repurposed as the night cool-tint weight (nothing read
 	-- the old combined-brightness value): global night amount times how much
 	-- this cell is sky-dominated. Torch pools bake ~0 and stay warm; caves
 	-- have no sky light and stay neutral.
 	local tintWeight = 0
-	if skyOverridden and MC.DayCycleNightAmount then
+	if MC.DayCycleNightAmount then
 		local night = MC.DayCycleNightAmount()
 		if night > 0 and skyUnit > 0.001 then
 			local dom = math.Clamp( ( skyUnit - blockUnit ) / skyUnit, 0, 1 )
