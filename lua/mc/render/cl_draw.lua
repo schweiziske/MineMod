@@ -127,7 +127,14 @@ local function drawMeshList( list, material, writeDepth, writeColor, forceMateri
 	if ownState then
 		resetDepthOverride()
 		resetColorWriteOverride()
-		if writeDepth then forceDepthWrite() end
+		if writeDepth == "test" then
+			-- Depth TEST without write: the GPU translucent chunk material
+			-- rides screenspace_general, which ignores the depth buffer unless
+			-- overridden — without this glass draws on top of everything.
+			if render.OverrideDepthEnable then render.OverrideDepthEnable( true, false ) end
+		elseif writeDepth then
+			forceDepthWrite()
+		end
 		if writeColor == false then setDepthPrepassColorMask() end
 		setCullMode = setChunkMeshCullMode()
 	end
@@ -334,7 +341,7 @@ function MC.DrawChunkTranslucent( key, material )
 		if MC.TouchGpuChunkLightTexture then MC.TouchGpuChunkLightTexture( key ) end
 		if MC.BindMeshShadowMap then MC.BindMeshShadowMap( material ) end
 	end
-	drawMeshList( MC.MeshesTrans[key], material, false, nil, isGpuLightTexture )
+	drawMeshList( MC.MeshesTrans[key], material, isGpuLightTexture and "test" or false, nil, isGpuLightTexture )
 end
 
 local function drawVisibleChunks( store, entries, count, drawFn, material, isGpuLightTexture )
@@ -366,12 +373,15 @@ local function drawAllChunks( store, drawFn )
 	updateCullState()
 	local material = MC.CurrentChunkMaterial and MC.CurrentChunkMaterial( translucent )
 		or ( translucent and MC.MaterialTranslucent or MC.Material )
-	local isGpuLightTexture = false
-	if not translucent then
-		isGpuLightTexture = MC.IsGpuLightTextureMaterial and MC.IsGpuLightTextureMaterial( material )
-			or material == MC.MaterialGpuLightTexture
-	end
+	local isGpuLightTexture = MC.IsGpuLightTextureMaterial and MC.IsGpuLightTextureMaterial( material )
+		or material == MC.MaterialGpuLightTexture
 	local setCullMode = applyPassState( not translucent )
+	if translucent and isGpuLightTexture and render.OverrideDepthEnable then
+		-- Pass-scoped depth TEST (no write): screenspace_general ignores the
+		-- depth buffer unless overridden, which made GPU-lit glass draw on
+		-- top of the world.
+		render.OverrideDepthEnable( true, false )
+	end
 	passActive = true
 	local ok, drawn = pcall( drawVisibleChunks, store, entries, count, drawFn, material, isGpuLightTexture )
 	passActive = false

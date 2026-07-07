@@ -94,6 +94,30 @@ local TORCH_WARM = { 1.0, 0.82, 0.58 }
 local NIGHT_BLUE = { 0.28, 0.42, 1.0 }
 local SUNSET_ORANGE = { 1.0, 0.62, 0.36 }
 
+-- MC-shaderpack "eyeBrightnessSmooth": the sky-ambient axis scales with the
+-- CAMERA cell's sky exposure, smoothed like Minecraft's eye brightness. This
+-- — not the per-pixel sky value — is what makes enclosed spaces go dark in
+-- shader packs; the per-pixel sky axis keeps a healthy ambient floor so the
+-- underside of large structures reads as ONE shadow-map shadow instead of a
+-- second, vertical black blob.
+local eyeFactorSmooth = 1
+local eyeFactorApplied = 1
+local eyeFactorLastThink = 0
+
+local function updateEyeFactor()
+	local now = RealTime and RealTime() or 0
+	local dt = math.Clamp( now - eyeFactorLastThink, 0, 0.25 )
+	eyeFactorLastThink = now
+	local target = 1
+	if MC.SkyVoxelLightUnit and MC.WorldToCell and EyePos then
+		local ok, bx, by, bz = pcall( MC.WorldToCell, EyePos() )
+		if ok and bx then
+			target = math.Clamp( MC.SkyVoxelLightUnit( bx, by, bz ) * 2, 0, 1 )
+		end
+	end
+	eyeFactorSmooth = eyeFactorSmooth + ( target - eyeFactorSmooth ) * math.min( dt * 3, 1 )
+end
+
 local function generateGlobalLightmap()
 	local target = ensureLightmapRT()
 	if not ( target and render and render.PushRenderTarget and cam and surface ) then return false end
@@ -114,6 +138,10 @@ local function generateGlobalLightmap()
 	local torchWarmth = convarNumber( MC.MeshGpuLightmapTorchWarmth, 0.7, 0, 1 )
 	local ambient = convarNumber( MC.MeshGpuLightmapAmbient, 0.04, 0, 1 )
 	local sunMul = convarNumber( MC.MeshGpuSunBrightness, 1, 0, 4 )
+	-- Camera-based cave darkening (see updateEyeFactor above).
+	local eyeMin = convarNumber( MC.MeshGpuLightmapEyeMin, 0.15, 0, 1 )
+	local eyeFactor = eyeMin + ( 1 - eyeMin ) * eyeFactorSmooth
+	eyeFactorApplied = eyeFactorSmooth
 
 	-- Sky hue: day white -> sunset orange -> dark moonlight blue.
 	local skyR = 1 + ( SUNSET_ORANGE[1] - 1 ) * sunset
@@ -136,14 +164,18 @@ local function generateGlobalLightmap()
 
 	render.PushRenderTarget( target )
 		cam.Start2D()
-			-- Sky ambient falloff: 1-(1-u)^curve keeps mid sky levels bright
-			-- (shaded-but-open ground under overhangs reads as shadow, not a
-			-- black pit) while level 0 — true enclosure — still falls to the
-			-- ambient floor. curve 1 = the old linear ramp.
+			-- Sky ambient falloff: floor + curve. The FLOOR is the MC-shaderpack
+			-- trick — sky level 0 keeps a readable ambient fraction, so the
+			-- underside of large structures shows only the shadow map's shadow;
+			-- the darkness of true enclosure comes from the camera eye factor,
+			-- not from the per-pixel sky value. The curve (1-(1-u)^k) keeps mid
+			-- levels bright so shaded-but-open areas read as shadow, not void.
 			local skyCurve = convarNumber( MC.MeshGpuLightmapSkyCurve, 3, 1, 6 )
+			local skyFloor = convarNumber( MC.MeshGpuLightmapSkyFloor, 0.3, 0, 1 )
 			for s = 0, LIGHTMAP_SIZE - 1 do
 				local skyShape = 1 - ( 1 - s / 15 ) ^ skyCurve
-				local skyUnit = math.Clamp( skyShape * dayBrightness * sunMul, 0, 1 )
+				skyShape = skyFloor + ( 1 - skyFloor ) * skyShape
+				local skyUnit = math.Clamp( skyShape * dayBrightness * sunMul * eyeFactor, 0, 1 )
 				local sr, sg, sb = skyUnit * skyR, skyUnit * skyG, skyUnit * skyB
 				for b = 0, LIGHTMAP_SIZE - 1 do
 					local unit = blockCurveUnit( b )
@@ -198,23 +230,28 @@ function MC.RefreshGlobalLightmap()
 end
 
 -- Initial generation is deferred to the first Think: the render context is
--- not reliable at include time. Afterwards regenerate 4x a second while the
--- day cycle runs (256 texels, effectively free) so transitions stay smooth
--- even on short test day lengths.
+-- not reliable at include time. Afterwards regenerate while the day cycle
+-- runs or while the camera eye factor is converging (256 texels, effectively
+-- free), so both transitions stay smooth.
 local needsInitialRefresh = true
 local nextTimedRefresh = 0
 hook.Remove( "Think", "mc_global_lightmap_refresh" )
 hook.Add( "Think", "mc_global_lightmap_refresh", function()
+	updateEyeFactor()
 	if needsInitialRefresh then
 		needsInitialRefresh = false
 		MC.RefreshGlobalLightmap()
 		return
 	end
-	if not ( MC.DayCycleEnabled and MC.DayCycleEnabled() ) then return end
 	if not lightmapEnabled() then return end
+	local eyeMoved = math.abs( eyeFactorSmooth - eyeFactorApplied ) > 0.01
+	local dayRunning = MC.DayCycleEnabled and MC.DayCycleEnabled() == true
+	if not ( eyeMoved or dayRunning ) then return end
 	local now = CurTime()
 	if now < nextTimedRefresh then return end
-	nextTimedRefresh = now + 0.25
+	-- Eye transitions refresh faster than the day-cycle tick so walking into
+	-- a cave darkens smoothly instead of stepping.
+	nextTimedRefresh = now + ( eyeMoved and 0.05 or 0.25 )
 	generateGlobalLightmap()
 end )
 
@@ -225,7 +262,7 @@ if cvars and cvars.AddChangeCallback then
 		MC.RefreshGlobalLightmap()
 		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
 	end, "mc_global_lightmap_toggle" )
-	for _, name in ipairs( { "mc_mesh_gpu_lightmap_torch_warmth", "mc_mesh_gpu_lightmap_ambient", "mc_mesh_gpu_lightmap_sunset", "mc_mesh_gpu_lightmap_night_gamma", "mc_mesh_gpu_lightmap_sky_curve" } ) do
+	for _, name in ipairs( { "mc_mesh_gpu_lightmap_torch_warmth", "mc_mesh_gpu_lightmap_ambient", "mc_mesh_gpu_lightmap_sunset", "mc_mesh_gpu_lightmap_night_gamma", "mc_mesh_gpu_lightmap_sky_curve", "mc_mesh_gpu_lightmap_sky_floor", "mc_mesh_gpu_lightmap_eye_min" } ) do
 		cvars.AddChangeCallback( name, function()
 			MC.RefreshGlobalLightmap()
 		end, "mc_global_lightmap_refresh_" .. name )

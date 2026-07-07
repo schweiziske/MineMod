@@ -212,14 +212,16 @@ do
 		if not ( transTex and transTexName and transTexName ~= "" ) then
 			transTex, transTexName = baseTex, baseName
 		end
-		local transGpuMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans1_vface", "screenspace_general_8tex", {
+		local transGpuMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans2_vface", "screenspace_general_8tex", {
 			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy_trans1_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = transTexName,
 			["$x360appchooser"] = 1,
 			["$vertexcolor"] = 1,
-			["$vertexalpha"] = 1,
 			["$linearwrite"] = 0,
+			-- screenspace_general blends via $alphablend ($translucent is only
+			-- the material-system sort flag and does not enable blending here).
+			["$alphablend"] = 1,
 			["$translucent"] = 1,
 			["$nocull"] = "0",
 			["$c0_x"] = "0",
