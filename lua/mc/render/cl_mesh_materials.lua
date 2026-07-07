@@ -47,6 +47,7 @@ MC.MaterialGpuLightTexture = nil
 MC.MaterialGpuLightTextureFancy = nil
 MC.MaterialGpuLightTextureHeight = nil
 MC.MaterialGpuLightTextureFast = nil
+MC.MaterialGpuLightTextureTranslucent = nil
 do
 	local baseTex, baseName = atlasBaseTexture()
 	if baseTex and baseName and baseName ~= "" and CreateMaterial then
@@ -66,8 +67,8 @@ do
 			mat:SetTexture( "$basetexture", baseTex )
 			MC.MaterialGpuOpaque = mat
 		end
-		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex29_atlas2_vface_opaque", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth16_vface_ps30",
+		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex30_atlas2_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth17_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,
@@ -104,8 +105,8 @@ do
 		-- ONLY material allowed to define $c3_* (its pixel shader declares and
 		-- uses register c3); defining $c3 on the plain material would make the
 		-- engine upload c3 over that shader's inline literal constants.
-		local fancyMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy9_vface_opaque", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy9_vface_ps30",
+		local fancyMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy10_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy10_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,
@@ -202,6 +203,46 @@ do
 			fastMat:SetTexture( "$basetexture", baseTex )
 			MC.MaterialGpuLightTextureFast = fastMat
 		end
+		-- Translucent GPU variant: glass/water go through the same voxel light
+		-- + shadow map pipeline as opaque chunks (they previously stayed on the
+		-- CPU vertex-color material and never received shadows). Same register
+		-- layout as the fancy shader ($c0..$c3), real alpha blending instead of
+		-- alpha test. Drawn in the translucent pass with depth writes off.
+		local transTex, transTexName = materialBaseTexture( MC.MaterialTranslucent )
+		if not ( transTex and transTexName and transTexName ~= "" ) then
+			transTex, transTexName = baseTex, baseName
+		end
+		local transGpuMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans1_vface", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy_trans1_vface_ps30",
+			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
+			["$basetexture"] = transTexName,
+			["$x360appchooser"] = 1,
+			["$vertexcolor"] = 1,
+			["$vertexalpha"] = 1,
+			["$linearwrite"] = 0,
+			["$translucent"] = 1,
+			["$nocull"] = "0",
+			["$c0_x"] = "0",
+			["$c0_y"] = "0.0005",
+			["$c0_z"] = "0",
+			["$c0_w"] = "-2",
+			["$c1_x"] = "0",
+			["$c1_y"] = "0",
+			["$c1_z"] = "-1",
+			["$c1_w"] = "0.0001",
+			["$c2_x"] = "0",
+			["$c2_y"] = "0",
+			["$c2_z"] = "0",
+			["$c2_w"] = "0",
+			["$c3_x"] = "0.6",
+			["$c3_y"] = "0.1",
+			["$c3_z"] = "0.65",
+			["$c3_w"] = "0.35",
+		} )
+		if transGpuMat and not transGpuMat:IsError() then
+			transGpuMat:SetTexture( "$basetexture", transTex )
+			MC.MaterialGpuLightTextureTranslucent = transGpuMat
+		end
 	end
 end
 
@@ -211,6 +252,7 @@ function MC.IsGpuLightTextureMaterial( material )
 	if MC.MaterialGpuLightTextureFancy and material == MC.MaterialGpuLightTextureFancy then return true end
 	if MC.MaterialGpuLightTextureHeight and material == MC.MaterialGpuLightTextureHeight then return true end
 	if MC.MaterialGpuLightTextureFast and material == MC.MaterialGpuLightTextureFast then return true end
+	if MC.MaterialGpuLightTextureTranslucent and material == MC.MaterialGpuLightTextureTranslucent then return true end
 	return false
 end
 
@@ -275,8 +317,17 @@ local function shaderProfileUsesGpuPayload()
 	return true
 end
 
+local function gpuTranslucentMaterial()
+	if not shaderProfileUsesGpuLightTexture() then return nil end
+	local mat = MC.MaterialGpuLightTextureTranslucent
+	if mat and not mat:IsError() then return mat end
+	return nil
+end
+
 local function shaderProfileChunkMaterial( translucent )
-	if translucent then return MC.MaterialTranslucent or MC.Material end
+	if translucent then
+		return gpuTranslucentMaterial() or MC.MaterialTranslucent or MC.Material
+	end
 	if shaderProfileUsesGpuLightTexture() then return activeGpuLightTextureMaterial() end
 	if shaderProfileUsesGpuPayload() then return MC.MaterialGpuOpaque end
 	return MC.Material
@@ -292,18 +343,32 @@ local function shaderProfileGpuPayloadStyle()
 	return MC_LIGHT_STYLE_GPU_SHADER
 end
 
+-- Recolor/emit style resolution: the translucent GPU material carries the
+-- same vertex payload (face index + AO) as the opaque GPU materials.
+local function shaderProfileEffectiveStyleForMaterial( material, style )
+	if material ~= nil and material == MC.MaterialGpuLightTextureTranslucent
+		and shaderProfileUsesGpuLightTexture() then
+		return shaderProfileGpuPayloadStyle()
+	end
+	return style
+end
+
 if RM.RegisterLightProfile then
 	RM.RegisterLightProfile( MC_LIGHT_STYLE_SHADER, {
 		chunkMaterial = shaderProfileChunkMaterial,
 		usesGpuPayload = shaderProfileUsesGpuPayload,
 		gpuPayloadMaterial = shaderProfileGpuPayloadMaterial,
+		gpuPayloadMaterialTranslucent = gpuTranslucentMaterial,
 		gpuPayloadStyle = shaderProfileGpuPayloadStyle,
+		effectiveStyleForMaterial = shaderProfileEffectiveStyleForMaterial,
 	} )
 	RM.RegisterLightProfile( MC_LIGHT_STYLE_GPU_SHADER, {
 		chunkMaterial = shaderProfileChunkMaterial,
 		usesGpuPayload = true,
 		gpuPayloadMaterial = shaderProfileGpuPayloadMaterial,
+		gpuPayloadMaterialTranslucent = gpuTranslucentMaterial,
 		gpuPayloadStyle = shaderProfileGpuPayloadStyle,
+		effectiveStyleForMaterial = shaderProfileEffectiveStyleForMaterial,
 	} )
 end
 

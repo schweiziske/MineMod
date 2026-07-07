@@ -136,8 +136,14 @@ local function generateGlobalLightmap()
 
 	render.PushRenderTarget( target )
 		cam.Start2D()
+			-- Sky ambient falloff: 1-(1-u)^curve keeps mid sky levels bright
+			-- (shaded-but-open ground under overhangs reads as shadow, not a
+			-- black pit) while level 0 — true enclosure — still falls to the
+			-- ambient floor. curve 1 = the old linear ramp.
+			local skyCurve = convarNumber( MC.MeshGpuLightmapSkyCurve, 3, 1, 6 )
 			for s = 0, LIGHTMAP_SIZE - 1 do
-				local skyUnit = math.Clamp( ( s / 15 ) * dayBrightness * sunMul, 0, 1 )
+				local skyShape = 1 - ( 1 - s / 15 ) ^ skyCurve
+				local skyUnit = math.Clamp( skyShape * dayBrightness * sunMul, 0, 1 )
 				local sr, sg, sb = skyUnit * skyR, skyUnit * skyG, skyUnit * skyB
 				for b = 0, LIGHTMAP_SIZE - 1 do
 					local unit = blockCurveUnit( b )
@@ -179,6 +185,7 @@ local function bindToMaterials()
 	bind( MC.MaterialGpuLightTexture )
 	bind( MC.MaterialGpuLightTextureFancy )
 	bind( MC.MaterialGpuLightTextureHeight )
+	bind( MC.MaterialGpuLightTextureTranslucent )
 end
 
 function MC.RefreshGlobalLightmap()
@@ -218,7 +225,7 @@ if cvars and cvars.AddChangeCallback then
 		MC.RefreshGlobalLightmap()
 		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
 	end, "mc_global_lightmap_toggle" )
-	for _, name in ipairs( { "mc_mesh_gpu_lightmap_torch_warmth", "mc_mesh_gpu_lightmap_ambient", "mc_mesh_gpu_lightmap_sunset", "mc_mesh_gpu_lightmap_night_gamma" } ) do
+	for _, name in ipairs( { "mc_mesh_gpu_lightmap_torch_warmth", "mc_mesh_gpu_lightmap_ambient", "mc_mesh_gpu_lightmap_sunset", "mc_mesh_gpu_lightmap_night_gamma", "mc_mesh_gpu_lightmap_sky_curve" } ) do
 		cvars.AddChangeCallback( name, function()
 			MC.RefreshGlobalLightmap()
 		end, "mc_global_lightmap_refresh_" .. name )

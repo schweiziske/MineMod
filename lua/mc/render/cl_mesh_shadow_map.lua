@@ -554,7 +554,8 @@ function MC.BindMeshShadowMap( material, force )
 	-- upload it to pixel shader constants c15..c18, where the compiler is
 	-- free to place inline literal constants of the chunk shader.
 	if material.SetFloat then
-		local isFancy = MC.MaterialGpuLightTextureFancy ~= nil and material == MC.MaterialGpuLightTextureFancy
+		local isFancy = ( MC.MaterialGpuLightTextureFancy ~= nil and material == MC.MaterialGpuLightTextureFancy )
+			or ( MC.MaterialGpuLightTextureTranslucent ~= nil and material == MC.MaterialGpuLightTextureTranslucent )
 		bindShadowParams( material, enabled and tex ~= nil and matrix ~= nil, isFancy )
 	end
 	mapBindResult[material] = enabled
@@ -584,6 +585,7 @@ if cvars and cvars.AddChangeCallback then
 		if not MC.BindMeshShadowMap then return end
 		if MC.MaterialGpuLightTexture then MC.BindMeshShadowMap( MC.MaterialGpuLightTexture, true ) end
 		if MC.MaterialGpuLightTextureFancy then MC.BindMeshShadowMap( MC.MaterialGpuLightTextureFancy, true ) end
+		if MC.MaterialGpuLightTextureTranslucent then MC.BindMeshShadowMap( MC.MaterialGpuLightTextureTranslucent, true ) end
 		if MC.MaterialGpuLightTextureHeight and MC.BindMeshHeightfieldShadow then
 			MC.BindMeshHeightfieldShadow( MC.MaterialGpuLightTextureHeight )
 		end
