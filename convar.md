@@ -130,8 +130,8 @@
 | `mc_mesh_gpu_lightmap_ambient` | `0.04` | GPU global lightmap 的最低可见亮度；设 `0` 可接近全黑。 |
 | `mc_mesh_gpu_lightmap_sunset` | `0.5` | sunrise/sunset 天光轴橙色渐变强度；`0` 关闭。 |
 | `mc_mesh_gpu_lightmap_sky_curve` | `3` | 天空环境光衰减形状 `1-(1-level)^curve`：越高，屋檐/树冠下等"有遮挡但开阔"的区域越亮，只有真正封闭的空间才落到环境底光（`1` = 线性）。 |
-| `mc_mesh_gpu_lightmap_sky_floor` | `0.3` | 天空环境光在 sky level 0 处保留的比例（MC 光影包做法：大建筑底下保持可读亮度、只显示 shadow map 一种影子；封闭变黑靠 eye 因子）。 |
-| `mc_mesh_gpu_lightmap_eye_min` | `0.15` | 相机完全处于封闭空间时天空环境光的乘数（eyeBrightness 洞穴变暗；`1` = 关闭该效果）。 |
+| `mc_mesh_gpu_lightmap_sky_min` | `0.1` | 天空环境光在 sky level 0 处保留的比例（室内/大建筑底下的环境底光；直射阳光独立于此，由 shadow map 决定）。 |
+| `mc_mesh_gpu_lightmap_eye_dark` | `1` | 相机所在格无天空光时的环境光乘数（eyeBrightness 洞穴变暗）；`1` = 关闭——站在大建筑底下也会触发它，所以默认关。 |
 
 ## 昼夜循环
 

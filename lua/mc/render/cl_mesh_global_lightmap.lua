@@ -138,9 +138,11 @@ local function generateGlobalLightmap()
 	local torchWarmth = convarNumber( MC.MeshGpuLightmapTorchWarmth, 0.7, 0, 1 )
 	local ambient = convarNumber( MC.MeshGpuLightmapAmbient, 0.04, 0, 1 )
 	local sunMul = convarNumber( MC.MeshGpuSunBrightness, 1, 0, 4 )
-	-- Camera-based cave darkening (see updateEyeFactor above).
-	local eyeMin = convarNumber( MC.MeshGpuLightmapEyeMin, 0.15, 0, 1 )
-	local eyeFactor = eyeMin + ( 1 - eyeMin ) * eyeFactorSmooth
+	-- Camera-based cave darkening (see updateEyeFactor above). Default OFF:
+	-- the camera cell also loses sky light when merely standing under a large
+	-- structure, which darkened the whole world outdoors.
+	local eyeDark = convarNumber( MC.MeshGpuLightmapEyeDark, 1, 0, 1 )
+	local eyeFactor = eyeDark + ( 1 - eyeDark ) * eyeFactorSmooth
 	eyeFactorApplied = eyeFactorSmooth
 
 	-- Sky hue: day white -> sunset orange -> dark moonlight blue.
@@ -164,14 +166,14 @@ local function generateGlobalLightmap()
 
 	render.PushRenderTarget( target )
 		cam.Start2D()
-			-- Sky ambient falloff: floor + curve. The FLOOR is the MC-shaderpack
-			-- trick — sky level 0 keeps a readable ambient fraction, so the
-			-- underside of large structures shows only the shadow map's shadow;
-			-- the darkness of true enclosure comes from the camera eye factor,
-			-- not from the per-pixel sky value. The curve (1-(1-u)^k) keeps mid
-			-- levels bright so shaded-but-open areas read as shadow, not void.
+			-- Sky ambient falloff: floor + curve, AMBIENT ONLY — the shader
+			-- adds direct sun from the sky axis top independently, so this
+			-- floor no longer needs to carry "sun under structures". The curve
+			-- (1-(1-u)^k) keeps mid levels bright so shaded-but-open areas
+			-- read as shadow, not void; level 0 (true enclosure) falls to the
+			-- small ambient floor.
 			local skyCurve = convarNumber( MC.MeshGpuLightmapSkyCurve, 3, 1, 6 )
-			local skyFloor = convarNumber( MC.MeshGpuLightmapSkyFloor, 0.3, 0, 1 )
+			local skyFloor = convarNumber( MC.MeshGpuLightmapSkyMin, 0.1, 0, 1 )
 			for s = 0, LIGHTMAP_SIZE - 1 do
 				local skyShape = 1 - ( 1 - s / 15 ) ^ skyCurve
 				skyShape = skyFloor + ( 1 - skyFloor ) * skyShape
@@ -244,7 +246,8 @@ hook.Add( "Think", "mc_global_lightmap_refresh", function()
 		return
 	end
 	if not lightmapEnabled() then return end
-	local eyeMoved = math.abs( eyeFactorSmooth - eyeFactorApplied ) > 0.01
+	local eyeDark = convarNumber( MC.MeshGpuLightmapEyeDark, 1, 0, 1 )
+	local eyeMoved = eyeDark < 1 and math.abs( eyeFactorSmooth - eyeFactorApplied ) > 0.01
 	local dayRunning = MC.DayCycleEnabled and MC.DayCycleEnabled() == true
 	if not ( eyeMoved or dayRunning ) then return end
 	local now = CurTime()
@@ -262,7 +265,7 @@ if cvars and cvars.AddChangeCallback then
 		MC.RefreshGlobalLightmap()
 		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
 	end, "mc_global_lightmap_toggle" )
-	for _, name in ipairs( { "mc_mesh_gpu_lightmap_torch_warmth", "mc_mesh_gpu_lightmap_ambient", "mc_mesh_gpu_lightmap_sunset", "mc_mesh_gpu_lightmap_night_gamma", "mc_mesh_gpu_lightmap_sky_curve", "mc_mesh_gpu_lightmap_sky_floor", "mc_mesh_gpu_lightmap_eye_min" } ) do
+	for _, name in ipairs( { "mc_mesh_gpu_lightmap_torch_warmth", "mc_mesh_gpu_lightmap_ambient", "mc_mesh_gpu_lightmap_sunset", "mc_mesh_gpu_lightmap_night_gamma", "mc_mesh_gpu_lightmap_sky_curve", "mc_mesh_gpu_lightmap_sky_min", "mc_mesh_gpu_lightmap_eye_dark" } ) do
 		cvars.AddChangeCallback( name, function()
 			MC.RefreshGlobalLightmap()
 		end, "mc_global_lightmap_refresh_" .. name )
