@@ -93,7 +93,7 @@
 | --- | --- | --- |
 | `mc_light_enabled` | `1` | 是否把 Minecraft 风格顶点光照应用到 MC chunk mesh。 |
 | `mc_light_ambient_min` | `0` | CPU/vertex-color 路径的最低亮度，不控制 GPU global lightmap。 |
-| `mc_light_style` | `shader` | MC chunk 光照风格：`fast`、`vanilla`、`best`、`shader`、`lightmap`。 |
+| `mc_light_style` | `shader` | MC chunk 光照风格：`fast`、`vanilla`、`best`、`shader`。 |
 | `mc_light_perf_debug` | `0` | 显示并收集详细光照性能诊断。 |
 | `mc_light_perf_print_break` | `0` | 破坏方块后打印光照性能诊断。 |
 | `mc_light_perf_print_each` | `0` | 每次光照计算打印一行 timing 诊断。 |
@@ -190,31 +190,6 @@
 | `mc_mesh_source_lighting_strength` | `0.55` | Source 光照调制 MC 顶点色的强度。 |
 | `mc_mesh_source_lighting_min` | `0.35` | Source 光照调制时的最低倍率。 |
 | `mc_mesh_source_lighting_scale` | `1.0` | Source 光照采样值在混入前的倍率。 |
-
-## Experimental UV1 hardware lightmap
-
-这条路当前不是生产主线。源码里明确写了 UV1 `LightmappedGeneric` 路径还没准备好，`lightmap` style 会 fallback 到 vanilla。
-
-| ConVar | 默认 | 作用 |
-| --- | --- | --- |
-| `mc_mesh_lightmap_experimental` | `0` | 打开隔离的实验 UV1 lightmap 后端入口；当前仍未接回主线。 |
-| `mc_mesh_lightmap_uv` | `0` | 实验 UV1 hardware lightmap 开关；当前与主 mesh backend 隔离。 |
-| `mc_mesh_lightmap_source` | `generated` | 实验 hardware lightmap 贴图来源：`generated` 或 `image`。 |
-| `mc_mesh_lightmap_image` | `mc/lightmap.png` | 当 source 为 `image` 时使用的材质路径。 |
-| `mc_mesh_lightmap_allow_external` | `0` | 允许外部 image 覆盖游戏内生成的 MC lightmap。 |
-| `mc_mesh_lightmap_exposure` | `1` | 生成的 MC hardware lightmap 亮度倍率。 |
-| `mc_mesh_lightmap_base_scale` | `0.6` | 用户 hardware lightmap 的基础亮度补偿，会乘以 exposure。 |
-| `mc_mesh_lightmap_ambient_scale` | `1` | Minecraft `AmbientColor` uniform 的倍率。 |
-| `mc_mesh_lightmap_sky_factor` | `1` | Minecraft lightmap `SkyFactor` uniform。 |
-| `mc_mesh_lightmap_brightness_factor` | `0` | Minecraft lightmap `BrightnessFactor` / gamma uniform。 |
-| `mc_mesh_lightmap_block_flicker` | `0` | 对生成的 UV1 lightmap 应用 Minecraft 风格 block light flicker。 |
-| `mc_mesh_lightmap_night_vision_factor` | `0` | Minecraft lightmap `NightVisionFactor` uniform。 |
-| `mc_mesh_lightmap_darkness_scale` | `0` | Minecraft lightmap `DarknessScale` uniform。 |
-| `mc_mesh_lightmap_boss_darkening` | `0` | Minecraft lightmap `BossOverlayWorldDarkeningFactor` uniform。 |
-| `mc_mesh_lightmap_block_tint` | `255 255 255` | UV1 lightmap 的 `BlockLightTint` RGB。 |
-| `mc_mesh_lightmap_sky_color` | `255 255 255` | UV1 lightmap 的 `SkyLightColor` RGB。 |
-| `mc_mesh_lightmap_ambient_color` | `0 0 0` | UV1 lightmap 的 `AmbientColor` RGB。 |
-| `mc_mesh_lightmap_night_vision_color` | `153 153 153` | UV1 lightmap 的 `NightVisionColor` RGB。 |
 
 ## 调试
 

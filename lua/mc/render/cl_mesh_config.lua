@@ -100,7 +100,6 @@ local MC_LIGHT_STYLE_BEST = "best"
 local MC_LIGHT_STYLE_SHADER = "shader"
 local MC_LIGHT_STYLE_GPU_SHADER = "gpu_shader"
 local MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE = "gpu_light_texture"
-local MC_LIGHT_STYLE_LIGHTMAP = "lightmap"
 
 local mathClamp, mathFloor = math.Clamp, math.floor
 local stringLower = string.lower
@@ -140,7 +139,6 @@ local function normalizeLightStyle( style )
 	if style == MC_LIGHT_STYLE_VANILLA or style == "default" or style == "normal" or style == "1" then return MC_LIGHT_STYLE_VANILLA end
 	if style == MC_LIGHT_STYLE_BEST or style == "fancy" or style == "high" or style == "2" then return MC_LIGHT_STYLE_BEST end
 	if style == MC_LIGHT_STYLE_SHADER or style == "shaders" or style == "cinematic" or style == "3" then return MC_LIGHT_STYLE_SHADER end
-	if style == MC_LIGHT_STYLE_LIGHTMAP or style == "lm" or style == "uv1" or style == "hardware" or style == "4" then return MC_LIGHT_STYLE_LIGHTMAP end
 	if LightProfiles[style] then return style end
 	return MC_LIGHT_STYLE_SHADER
 end
@@ -148,8 +146,6 @@ end
 local function currentLightStyle()
 	local cv = MC.LightStyle
 	local style = normalizeLightStyle( cv and cv.GetString and cv:GetString() or MC_LIGHT_STYLE_SHADER )
-	local fallbackLightStyle = RM.fallbackLightStyle
-	if fallbackLightStyle then style = fallbackLightStyle( style ) end
 	return style
 end
 
@@ -186,41 +182,29 @@ end
 registerLightProfile( MC_LIGHT_STYLE_FAST, {
 	name = "Fast",
 	usesGpuPayload = false,
-	usesHardwareLightmap = false,
 } )
 registerLightProfile( MC_LIGHT_STYLE_VANILLA, {
 	name = "Vanilla",
 	usesGpuPayload = false,
-	usesHardwareLightmap = false,
 } )
 registerLightProfile( MC_LIGHT_STYLE_BEST, {
 	name = "Best",
 	usesGpuPayload = false,
-	usesHardwareLightmap = false,
 } )
 registerLightProfile( MC_LIGHT_STYLE_SHADER, {
 	name = "Shader",
 	usesGpuPayload = false,
-	usesHardwareLightmap = false,
 } )
 registerLightProfile( MC_LIGHT_STYLE_GPU_SHADER, {
 	name = "GPU Shader Payload",
 	fallbackStyle = MC_LIGHT_STYLE_SHADER,
 	usesGpuPayload = true,
-	usesHardwareLightmap = false,
 } )
 registerLightProfile( MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE, {
 	name = "GPU Light Texture",
 	fallbackStyle = MC_LIGHT_STYLE_SHADER,
 	usesGpuPayload = true,
 	usesGpuLightTexture = true,
-	usesHardwareLightmap = false,
-} )
-registerLightProfile( MC_LIGHT_STYLE_LIGHTMAP, {
-	name = "Lightmap",
-	fallbackStyle = MC_LIGHT_STYLE_VANILLA,
-	usesGpuPayload = false,
-	usesHardwareLightmap = false,
 } )
 
 RM.MC_LIGHT_STYLE_FAST = MC_LIGHT_STYLE_FAST
@@ -229,7 +213,6 @@ RM.MC_LIGHT_STYLE_BEST = MC_LIGHT_STYLE_BEST
 RM.MC_LIGHT_STYLE_SHADER = MC_LIGHT_STYLE_SHADER
 RM.MC_LIGHT_STYLE_GPU_SHADER = MC_LIGHT_STYLE_GPU_SHADER
 RM.MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE = MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE
-RM.MC_LIGHT_STYLE_LIGHTMAP = MC_LIGHT_STYLE_LIGHTMAP
 RM.currentLightStyle = currentLightStyle
 RM.normalizeLightStyle = normalizeLightStyle
 RM.effectiveLightStyleForMaterial = effectiveLightStyleForMaterial
