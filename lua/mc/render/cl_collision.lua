@@ -32,6 +32,7 @@ local CLIENT_PLAYER_COLLISION_CORE_EXTENT = 1
 local CLIENT_AIM_COLLISION_SLACK = 1
 local PlayerCollisionAnchor
 local AimCollisionAnchor
+local AimCollisionAnchorCandidate
 MC.NextBulkCollisionRebuildAt = MC.NextBulkCollisionRebuildAt or 0
 
 function MC.ResetClientCollisionState()
@@ -44,6 +45,7 @@ function MC.ResetClientCollisionState()
 	LastClientCollisionRefreshFrame = nil
 	PlayerCollisionAnchor = nil
 	AimCollisionAnchor = nil
+	AimCollisionAnchorCandidate = nil
 	if MC.ReleaseAllClientCarrierCollision then MC.ReleaseAllClientCarrierCollision() end
 	MC.CollisionCarrierAssignments = {}
 	MC.CollisionCarriers = nil
@@ -324,7 +326,12 @@ local function collectClientAimCollisionInterestKeys( lp, desired )
 
 	-- same hysteresis as the player bubble: build slightly wider than the
 	-- configured radius and only re-anchor when the aimed cell drifts out of
-	-- the slack zone, so crouching/eye-height jitter does not rebuild.
+	-- the slack zone. Re-anchoring additionally requires the hit cell to hold
+	-- still for two consecutive refreshes: duck view-height animation and
+	-- prediction-correction view wobble walk the hit cell every frame, and
+	-- chasing it would rebuild carrier collision (often the ground under the
+	-- player) mid-prediction each frame, feeding the very prediction errors
+	-- that move the view.
 	local hit = MC.PlayerBlockAim and MC.PlayerBlockAim( lp, aimDist ) or nil
 	if hit and hit.bx then
 		local a = AimCollisionAnchor
@@ -332,7 +339,15 @@ local function collectClientAimCollisionInterestKeys( lp, desired )
 		or math.abs( hit.bx - a.bx ) > CLIENT_AIM_COLLISION_SLACK
 		or math.abs( hit.by - a.by ) > CLIENT_AIM_COLLISION_SLACK
 		or math.abs( hit.bz - a.bz ) > CLIENT_AIM_COLLISION_SLACK then
-			AimCollisionAnchor = { bx = hit.bx, by = hit.by, bz = hit.bz }
+			local c = AimCollisionAnchorCandidate
+			if not a or ( c and c.bx == hit.bx and c.by == hit.by and c.bz == hit.bz ) then
+				AimCollisionAnchor = { bx = hit.bx, by = hit.by, bz = hit.bz }
+				AimCollisionAnchorCandidate = nil
+			else
+				AimCollisionAnchorCandidate = { bx = hit.bx, by = hit.by, bz = hit.bz }
+			end
+		else
+			AimCollisionAnchorCandidate = nil
 		end
 	end
 
@@ -685,6 +700,11 @@ end, "mc" )
 hook.Remove( "SetupMove", "mc_client_collision_interest_move" )
 hook.Add( "SetupMove", "mc_client_collision_interest_move", function( ply )
 	if not IsValid( ply ) or ply ~= LocalPlayer() then return end
+	-- Never refresh anchors or rebuild carrier physics while the engine
+	-- replays already-predicted commands: collision must stay identical
+	-- across re-prediction, or the replay diverges from the original run and
+	-- the resulting prediction errors shake the view.
+	if IsFirstTimePredicted and not IsFirstTimePredicted() then return end
 	MC.RefreshClientCollisionInterest()
 end )
 
