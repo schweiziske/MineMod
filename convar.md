@@ -129,6 +129,7 @@
 | `mc_mesh_gpu_lightmap_torch_warmth` | `0.7` | global lightmap 里 block light/火把的暖色程度。 |
 | `mc_mesh_gpu_lightmap_ambient` | `0.04` | GPU global lightmap 的最低可见亮度；设 `0` 可接近全黑。 |
 | `mc_mesh_gpu_lightmap_sunset` | `0.5` | sunrise/sunset 天光轴橙色渐变强度；`0` 关闭。 |
+| `mc_mesh_gpu_lightmap_sky_curve` | `3` | 天空环境光衰减形状 `1-(1-level)^curve`：越高，屋檐/树冠下等"有遮挡但开阔"的区域越亮，只有真正封闭的空间才落到环境底光（`1` = 线性）。 |
 
 ## 昼夜循环
 

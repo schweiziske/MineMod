@@ -327,7 +327,14 @@ function MC.DrawChunkTranslucent( key, material )
 	if material == nil then
 		material = MC.CurrentChunkMaterial and MC.CurrentChunkMaterial( true ) or MC.MaterialTranslucent
 	end
-	drawMeshList( MC.MeshesTrans[key], material, false )
+	local isGpuLightTexture = MC.IsGpuLightTextureMaterial and MC.IsGpuLightTextureMaterial( material ) or false
+	if isGpuLightTexture then
+		-- Same per-frame binds as the opaque GPU path: LRU-touch the chunk's
+		-- light atlas slot and upload the shadow constants once per material.
+		if MC.TouchGpuChunkLightTexture then MC.TouchGpuChunkLightTexture( key ) end
+		if MC.BindMeshShadowMap then MC.BindMeshShadowMap( material ) end
+	end
+	drawMeshList( MC.MeshesTrans[key], material, false, nil, isGpuLightTexture )
 end
 
 local function drawVisibleChunks( store, entries, count, drawFn, material, isGpuLightTexture )

@@ -115,6 +115,8 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	meshLightProfile = meshLightProfile or RM.GetLightProfile and RM.GetLightProfile( meshLightStyle ) or nil
 	local meshGpuPayloadMaterial = meshLightProfile and meshLightProfile.gpuPayloadMaterial
 	if type( meshGpuPayloadMaterial ) == "function" then meshGpuPayloadMaterial = meshGpuPayloadMaterial( meshLightProfile ) end
+	local meshGpuPayloadMaterialTrans = meshLightProfile and meshLightProfile.gpuPayloadMaterialTranslucent
+	if type( meshGpuPayloadMaterialTrans ) == "function" then meshGpuPayloadMaterialTrans = meshGpuPayloadMaterialTrans( meshLightProfile ) end
 	local meshGpuPayloadStyle = meshLightProfile and meshLightProfile.gpuPayloadStyle
 	if type( meshGpuPayloadStyle ) == "function" then meshGpuPayloadStyle = meshGpuPayloadStyle( meshLightProfile, meshGpuPayloadMaterial ) end
 	local sectionNeedsRecolor = sectionIndex and MC.MeshLightDirty[key] and MC.MeshLightDirty[key][sectionIndex]
@@ -140,8 +142,12 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	local cur
 
 	local function styleForBuffer( buf )
-		if meshGpuPayloadStyle and meshGpuPayloadMaterial and buf and buf.material == meshGpuPayloadMaterial then
-			return meshGpuPayloadStyle
+		if meshGpuPayloadStyle and buf then
+			local m = buf.material
+			if ( meshGpuPayloadMaterial and m == meshGpuPayloadMaterial )
+			or ( meshGpuPayloadMaterialTrans and m == meshGpuPayloadMaterialTrans ) then
+				return meshGpuPayloadStyle
+			end
 		end
 		return meshLightStyle
 	end
