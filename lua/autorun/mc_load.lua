@@ -54,6 +54,7 @@ local CLIENT_FILES = {
 	"mc/render/cl_mesh_config.lua",
 	"mc/render/cl_mesh_lightmap_experimental.lua",
 	"mc/render/cl_sky_column.lua",
+	"mc/render/cl_sky_flood.lua",
 	"mc/render/cl_mesh_gpu_light_texture.lua",
 	"mc/render/cl_mesh_shadow_map.lua",
 	"mc/render/cl_mesh_heightfield.lua",
