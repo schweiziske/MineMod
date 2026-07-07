@@ -67,10 +67,10 @@ MC.MeshGpuLightmapNightGamma = MC.MeshGpuLightmapNightGamma or ( CreateClientCon
 	"Global lightmap: perceptual curve on day/night sky brightness (1 = linear; lower = brighter, bluer nights and gentler dusk)" ) )
 MC.MeshGpuLightmapSkyCurve = MC.MeshGpuLightmapSkyCurve or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_lightmap_sky_curve", "3", true, false,
 	"Global lightmap: sky ambient falloff shape 1-(1-level)^curve; higher keeps shaded-but-open areas bright and only true enclosure dark (1 = linear)" ) )
-MC.MeshGpuLightmapSkyFloor = MC.MeshGpuLightmapSkyFloor or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_lightmap_sky_floor", "0.3", true, false,
-	"Global lightmap: minimum sky-ambient fraction at sky level 0 (MC-shaderpack style: under big structures stays readable, only the eye factor darkens enclosure)" ) )
-MC.MeshGpuLightmapEyeMin = MC.MeshGpuLightmapEyeMin or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_lightmap_eye_min", "0.15", true, false,
-	"Global lightmap: sky-ambient multiplier when the CAMERA is fully enclosed (eyeBrightness cave darkening; 1 = disabled)" ) )
+MC.MeshGpuLightmapSkyMin = MC.MeshGpuLightmapSkyMin or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_lightmap_sky_min", "0.1", true, false,
+	"Global lightmap: minimum sky-AMBIENT fraction at sky level 0 (interior/under-structure ambient floor; direct sun is independent of this)" ) )
+MC.MeshGpuLightmapEyeDark = MC.MeshGpuLightmapEyeDark or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_lightmap_eye_dark", "1", true, false,
+	"Global lightmap: sky-ambient multiplier when the CAMERA cell has no sky light (eyeBrightness cave darkening; 1 = off — it also darkens standing under large structures)" ) )
 MC.MeshShadowMapSize = MC.MeshShadowMapSize or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_size", "2048", true, false,
 	"Experimental MC-owned shadow map resolution" ) )
 MC.MeshShadowMapDistance = MC.MeshShadowMapDistance or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_distance", "4096", true, false,
