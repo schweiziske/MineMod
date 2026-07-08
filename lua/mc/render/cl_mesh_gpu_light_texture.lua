@@ -143,14 +143,13 @@ end
 -- brightness scales the result. Both feed the same channel the shadow pass
 -- uses as its block-light floor, so brighter torch light also protects
 -- shadowed areas more strongly — intended.
-local function lightUnitFromLevel( level )
+local function lightUnitFromLevel( p, level )
 	local unit = math.Clamp( ( tonumber( level ) or 0 ) / 15, 0, 1 )
-	local gamma = convarNumber( MC.MeshGpuLightGamma, 1, 0.25, 4 )
+	local gamma = p.gamma
 	if gamma ~= 1 then
 		unit = unit ^ ( 1 / gamma )
 	end
-	local brightness = convarNumber( MC.MeshGpuLightBrightness, 1, 0.1, 4 )
-	return math.Clamp( unit * brightness, 0, 1 )
+	return math.Clamp( unit * p.brightness, 0, 1 )
 end
 
 local cachedSkyBrightnessTime
@@ -160,7 +159,7 @@ local cachedSkyBrightness = 1
 
 local function currentDayCycleSkyBrightness()
 	local now = CurTime and CurTime() or 0
-	local moon = convarNumber( MC.DayCycleMoonLight, 4, 0, 15 )
+	local moon = convarNumber( MC.DayCycleMoonLight, 2, 0, 15 )
 	local enabled = MC.DayCycleEnabled and MC.DayCycleEnabled() == true
 	if cachedSkyBrightnessTime ~= now
 		or cachedSkyBrightnessMoon ~= moon
@@ -180,7 +179,23 @@ local function cellSelfEmission( bx, by, bz )
 	return MC.BlockLightEmission( id ) or 0
 end
 
-local function lightTextureBytes( bx, by, bz )
+-- Per-bake parameter snapshot: mode flag, curves and day-cycle factors are
+-- identical for every cell in one bake, so read them once per bake instead
+-- of once per texel (a whole-chunk bake touches ~11k cells).
+local function bakeLightParams()
+	local p = { lightmapMode = MC.GlobalLightmapActive and MC.GlobalLightmapActive() or false }
+	if not p.lightmapMode then
+		p.gamma = convarNumber( MC.MeshGpuLightGamma, 1, 0.25, 4 )
+		p.brightness = convarNumber( MC.MeshGpuLightBrightness, 1, 0.1, 4 )
+		p.sunMul = convarNumber( MC.MeshGpuSunBrightness, 1, 0, 4 )
+		p.skyBrightness = currentDayCycleSkyBrightness()
+		p.night = MC.DayCycleNightAmount and MC.DayCycleNightAmount() or 0
+		p.nightTint = convarNumber( MC.DayCycleNightTint, 0.85, 0, 1 )
+	end
+	return p
+end
+
+local function lightTextureBytes( bx, by, bz, p )
 	local brightness, level, block, sky = 1, 15, 15, 15
 	if MC.SampleLighting then
 		brightness, level, block, sky = MC.SampleLighting( bx, by, bz, cellSelfEmission( bx, by, bz ) )
@@ -193,7 +208,7 @@ local function lightTextureBytes( bx, by, bz )
 	-- shadow; no column/pillar exposure override here anymore.
 	sky = tonumber( sky ) or level
 
-	if MC.GlobalLightmapActive and MC.GlobalLightmapActive() then
+	if p.lightmapMode then
 		-- Global lightmap mode: chunk textures store RAW linear levels; the
 		-- 16x16 lightmap applies the brightness curve, sun brightness and all
 		-- time-of-day color/darkening. Chunk bytes are time-independent, so
@@ -205,22 +220,18 @@ local function lightTextureBytes( bx, by, bz )
 	end
 
 	-- Fallback (grayscale) mode: curves and day factor bake into the bytes.
-	local blockUnit = lightUnitFromLevel( block )
-	local sunMul = convarNumber( MC.MeshGpuSunBrightness, 1, 0, 4 )
+	local blockUnit = lightUnitFromLevel( p, block )
 	-- Sky stays LINEAR: the gamma/brightness curve shapes torch falloff and
 	-- would otherwise lift the level-4 moonlight into a bright night.
-	local skyUnit = math.Clamp( ( math.Clamp( sky, 0, 15 ) / 15 ) * currentDayCycleSkyBrightness() * sunMul, 0, 1 )
+	local skyUnit = math.Clamp( ( math.Clamp( sky, 0, 15 ) / 15 ) * p.skyBrightness * p.sunMul, 0, 1 )
 	-- The r channel is repurposed as the night cool-tint weight (nothing read
 	-- the old combined-brightness value): global night amount times how much
 	-- this cell is sky-dominated. Torch pools bake ~0 and stay warm; caves
 	-- have no sky light and stay neutral.
 	local tintWeight = 0
-	if MC.DayCycleNightAmount then
-		local night = MC.DayCycleNightAmount()
-		if night > 0 and skyUnit > 0.001 then
-			local dom = math.Clamp( ( skyUnit - blockUnit ) / skyUnit, 0, 1 )
-			tintWeight = math.Clamp( night * dom * convarNumber( MC.DayCycleNightTint, 0.6, 0, 1 ), 0, 1 )
-		end
+	if p.night > 0 and skyUnit > 0.001 then
+		local dom = math.Clamp( ( skyUnit - blockUnit ) / skyUnit, 0, 1 )
+		tintWeight = math.Clamp( p.night * dom * p.nightTint, 0, 1 )
 	end
 	return lightByteFromUnit( tintWeight ), lightByteFromUnit( blockUnit ), lightByteFromUnit( skyUnit )
 end
@@ -231,9 +242,9 @@ local function paddedCellWorldCoords( chunk, lx, ly, lz )
 		chunk.cz * MC.CH + lz - LIGHT_TEX_PAD
 end
 
-local function drawLightCell( chunk, lx, ly, lz, tileX, tileY )
+local function drawLightCell( chunk, lx, ly, lz, tileX, tileY, p )
 	local bx, by, bz = paddedCellWorldCoords( chunk, lx, ly, lz )
-	local combined, block, sky = lightTextureBytes( bx, by, bz )
+	local combined, block, sky = lightTextureBytes( bx, by, bz, p )
 	local packed = packedPaddedCell( lx, ly, lz )
 	if not packed then return end
 	local px, py = cellPixel( packed )
@@ -447,13 +458,50 @@ end
 
 ------------------------------------------------------------------ baking
 
+-- Whole-chunk bake with run merging: light fields are dominated by long
+-- constant spans (uniform open sky, fully dark interiors, zero block light),
+-- so consecutive same-color texels in a tile row collapse into ONE DrawRect.
+-- This is the hitch path when chunks stream into view (18*18*34 ≈ 11k cells
+-- per tile); merging typically cuts the surface call count by an order of
+-- magnitude. Iteration order lz→ly→lx makes the packed cell index (and the
+-- tile pixel) advance by exactly one per cell, so px/py track cellPixel().
 local function refreshWholeChunk( chunk, tileX, tileY )
+	local p = bakeLightParams()
+	local baseX = chunk.cx * MC.CS - LIGHT_TEX_PAD
+	local baseY = chunk.cy * MC.CS - LIGHT_TEX_PAD
+	local baseZ = chunk.cz * MC.CH - LIGHT_TEX_PAD
+	local setColor = surface.SetDrawColor
+	local drawRect = surface.DrawRect
+	local runR, runG, runB, runStart, runY, runLen
+	local px, py = 0, 0
 	for lz = 0, LIGHT_GRID_Z - 1 do
+		local bz = baseZ + lz
 		for ly = 0, LIGHT_GRID_XY - 1 do
+			local by = baseY + ly
 			for lx = 0, LIGHT_GRID_XY - 1 do
-				drawLightCell( chunk, lx, ly, lz, tileX, tileY )
+				local r, g, b = lightTextureBytes( baseX + lx, by, bz, p )
+				-- px == 0 starts a new tile row: a run never spans rows.
+				if runLen and px > 0 and r == runR and g == runG and b == runB then
+					runLen = runLen + 1
+				else
+					if runLen then
+						setColor( runR, runG, runB, 255 )
+						drawRect( tileX + runStart, tileY + runY, runLen, 1 )
+					end
+					runR, runG, runB = r, g, b
+					runStart, runY, runLen = px, py, 1
+				end
+				px = px + 1
+				if px >= TILE then
+					px = 0
+					py = py + 1
+				end
 			end
 		end
+	end
+	if runLen then
+		setColor( runR, runG, runB, 255 )
+		drawRect( tileX + runStart, tileY + runY, runLen, 1 )
 	end
 end
 
@@ -462,9 +510,10 @@ local function refreshDirtyCells( chunk, dirty, tileX, tileY )
 		refreshWholeChunk( chunk, tileX, tileY )
 		return
 	end
+	local p = bakeLightParams()
 	for packed in pairs( dirty or {} ) do
 		local lx, ly, lz = unpackPaddedCell( packed )
-		drawLightCell( chunk, lx, ly, lz, tileX, tileY )
+		drawLightCell( chunk, lx, ly, lz, tileX, tileY, p )
 	end
 end
 

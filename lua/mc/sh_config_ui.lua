@@ -70,8 +70,6 @@ MC.ConfigConVars = {
 			item( "lighting", "mc_mesh_gpu_light_texture", "GPU light texture", "bool", "Sample per-chunk light textures in the GPU shader" ),
 			item( "lighting", "mc_mesh_gpu_light_brightness", "Light brightness", "number", "GPU light texture: brightness multiplier for block/sky light (1 = unchanged)" ),
 			item( "lighting", "mc_mesh_gpu_light_gamma", "Light gamma", "number", "GPU light texture: falloff curve; >1 brightens torch edges, <1 darkens (1 = linear)" ),
-			item( "lighting", "mc_mesh_gpu_sky_light", "Sky light", "bool", "Column sky exposure disabled; day/night uses uniform sky light" ),
-			item( "lighting", "mc_mesh_gpu_sky_soft", "Sky soft", "number", "Deprecated old soft sky exposure radius" ),
 			item( "lighting", "mc_mesh_gpu_sun_brightness", "Sun brightness", "number", "Sun/sky light brightness multiplier (1 = unchanged)" ),
 			item( "lighting", "mc_mesh_gpu_light_refresh_per_frame", "Light refresh budget", "number", "Chunks refreshed per frame during day/night light steps" ),
 			item( "lighting", "mc_mesh_gpu_light_flush_per_frame", "Light flush budget", "number", "Chunk light textures baked per PreRender flush; 0 unlimited" ),

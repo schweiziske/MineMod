@@ -230,37 +230,39 @@ local function restoreDefaultCullMode()
 end
 
 local function drawHeightfieldCasters( material, anchorX, anchorY, range )
-	local meshes = MC.Meshes
-	if not meshes then return 0, 0 end
+	local store = MC.Meshes
+	if not ( store and MC.OpaqueChunkDrawEntries ) then return 0, 0 end
+	local entries, count = MC.OpaqueChunkDrawEntries()
 	local chunkW = MC.ChunkWorld or 0
+	local halfW = chunkW * 0.5
 	local minX, maxX = anchorX - range - chunkW, anchorX + range
 	local minY, maxY = anchorY - range - chunkW, anchorY + range
+	local pushMatrix, popMatrix = cam.PushModelMatrix, cam.PopModelMatrix
 	local drawnChunks, drawnMeshes = 0, 0
 
 	render.SetMaterial( material )
-	for key, list in pairs( meshes ) do
-		if list then
-			local chunk = MC.GetChunkByKey and MC.GetChunkByKey( key ) or nil
-			if chunk then
-				local origin = MC.ChunkWorldOrigin( chunk.cx, chunk.cy, chunk.cz )
-				if origin.x <= maxX and origin.x >= minX and origin.y <= maxY and origin.y >= minY then
-					local mat = Matrix()
-					mat:SetTranslation( origin )
-					cam.PushModelMatrix( mat )
-						local count = 0
-						for i = 1, #list do
-							local entry = list[i]
-							local meshObj = type( entry ) == "table" and entry.mesh or entry
-							if meshObj and meshObj.Draw then
-								meshObj:Draw()
-								count = count + 1
-							end
+	for i = 1, count do
+		local e = entries[i]
+		local list = e.list
+		if store[e.key] == list then
+			-- Entries carry the chunk CENTER; the window filter keeps running
+			-- on the chunk origin (min side is already widened by chunkW).
+			local ox, oy = e.x - halfW, e.y - halfW
+			if ox <= maxX and ox >= minX and oy <= maxY and oy >= minY then
+				pushMatrix( e.matrix )
+					local drawn = 0
+					for j = 1, #list do
+						local entry = list[j]
+						local meshObj = type( entry ) == "table" and entry.mesh or entry
+						if meshObj and meshObj.Draw then
+							meshObj:Draw()
+							drawn = drawn + 1
 						end
-					cam.PopModelMatrix()
-					if count > 0 then
-						drawnChunks = drawnChunks + 1
-						drawnMeshes = drawnMeshes + count
 					end
+				popMatrix()
+				if drawn > 0 then
+					drawnChunks = drawnChunks + 1
+					drawnMeshes = drawnMeshes + drawn
 				end
 			end
 		end

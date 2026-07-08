@@ -33,14 +33,10 @@ MC.MeshShadowMapFaceShade = MC.MeshShadowMapFaceShade or ( CreateClientConVar an
 	"Fancy shader: how strongly faces pointing away from the sun are shaded like cast shadow" ) )
 MC.MeshShadowMapWarmth = MC.MeshShadowMapWarmth or ( CreateClientConVar and CreateClientConVar( "mc_mesh_shadow_map_warmth", "0.35", true, false,
 	"Fancy shader: warm tint on sunlit faces and torch-lit areas (0 = neutral)" ) )
-MC.MeshGpuLightBrightness = MC.MeshGpuLightBrightness or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_light_brightness", "1", true, false,
+MC.MeshGpuLightBrightness = MC.MeshGpuLightBrightness or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_light_brightness", "1.5", true, false,
 	"GPU light texture: brightness multiplier applied to block/sky light levels (1 = unchanged)" ) )
 MC.MeshGpuLightGamma = MC.MeshGpuLightGamma or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_light_gamma", "1", true, false,
 	"GPU light texture: light falloff curve; >1 brightens mid levels (torch edges), <1 darkens them (1 = linear)" ) )
-MC.MeshGpuSkyLight = MC.MeshGpuSkyLight or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_sky_light", "0", true, false,
-	"GPU light texture: column sky exposure is disabled; day/night uses uniform sky light" ) )
-MC.MeshGpuSkySoft = MC.MeshGpuSkySoft or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_sky_soft", "2", true, false,
-	"Soft sky exposure radius in blocks: enclosed cells fade to dark with distance from the nearest open-sky column (0 = uniform sky light, interiors stay bright)" ) )
 MC.MeshGpuSunBrightness = MC.MeshGpuSunBrightness or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_sun_brightness", "1", true, false,
 	"GPU light texture: sun/sky light brightness multiplier (1 = unchanged)" ) )
 MC.DayCycleSunTilt = MC.DayCycleSunTilt or ( CreateClientConVar and CreateClientConVar( "mc_daycycle_sun_tilt", "0.2", true, false,

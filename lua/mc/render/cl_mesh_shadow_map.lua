@@ -240,18 +240,22 @@ local function makeMCShadowViewSetup( rtSize )
 	return viewSetup, viewProj, lookDir, origin, zfar, strengthScale
 end
 
-local function chunkCenter( chunk )
-	local origin = MC.ChunkWorldOrigin( chunk.cx, chunk.cy, chunk.cz )
-	return Vector(
-		origin.x + ( MC.ChunkWorld or 0 ) * 0.5,
-		origin.y + ( MC.ChunkWorld or 0 ) * 0.5,
-		origin.z + ( MC.ChunkWorldH or 0 ) * 0.5
-	)
-end
+-- Last-rendered depth-pass signature. The shadow map's content only depends
+-- on the light direction, the texel-snapped ortho window, the RT size, the
+-- caster radius and the chunk geometry version — while all of those hold
+-- (static sun, camera inside one shadow texel, no mesh edits) re-rendering
+-- would reproduce the exact same texels, so the pass is skipped.
+local sigValid = false
+local sigOriginX, sigOriginY, sigOriginZ = 0, 0, 0
+local sigDirX, sigDirY, sigDirZ = 0, 0, 0
+local sigZFar, sigSize, sigCasterDist = 0, 0, 0
+local sigDrawVersion = -1
 
-local function chunkWithinCasterDistance( chunk, eye, maxDistSqr )
-	if not maxDistSqr or maxDistSqr <= 0 then return true end
-	return chunkCenter( chunk ):DistToSqr( eye ) <= maxDistSqr
+-- Defined before renderMCShadowMap so the signature skip captures the local
+-- (not a nil global) as its upvalue.
+local function mcShadowReady()
+	return mcShadowTexture ~= nil and mcShadowViewProj ~= nil
+		and mcShadowForward ~= nil and mcShadowOrigin ~= nil
 end
 
 local function setChunkMeshCullMode()
@@ -284,27 +288,31 @@ local function drawShadowMeshList( list )
 	return drawn
 end
 
-local function drawMCShadowCasters( material )
-	local meshes = MC.Meshes
-	if not meshes then return 0, 0 end
+local function drawMCShadowCasters( material, maxDistSqr )
+	local store = MC.Meshes
+	if not ( store and MC.OpaqueChunkDrawEntries ) then return 0, 0 end
+	local entries, count = MC.OpaqueChunkDrawEntries()
 	local eye = EyePos()
-	local casterDist = convarFloat( MC.MeshShadowMapCasterDistance, 4608, 0, 65536 )
-	local maxDistSqr = casterDist > 0 and casterDist * casterDist or nil
+	local eyeX, eyeY, eyeZ = eye.x, eye.y, eye.z
+	local pushMatrix, popMatrix = cam.PushModelMatrix, cam.PopModelMatrix
 	local drawnChunks, drawnMeshes = 0, 0
 
 	render.SetMaterial( material )
-	for key, list in pairs( meshes ) do
-		if list then
-			local chunk = MC.GetChunkByKey and MC.GetChunkByKey( key ) or nil
-			if chunk and chunkWithinCasterDistance( chunk, eye, maxDistSqr ) then
-				local mat = Matrix()
-				mat:SetTranslation( MC.ChunkWorldOrigin( chunk.cx, chunk.cy, chunk.cz ) )
-				cam.PushModelMatrix( mat )
-					local count = drawShadowMeshList( list )
-				cam.PopModelMatrix()
-				if count > 0 then
+	for i = 1, count do
+		local e = entries[i]
+		if store[e.key] == e.list then
+			local within = true
+			if maxDistSqr and maxDistSqr > 0 then
+				local dx, dy, dz = e.x - eyeX, e.y - eyeY, e.z - eyeZ
+				within = dx * dx + dy * dy + dz * dz <= maxDistSqr
+			end
+			if within then
+				pushMatrix( e.matrix )
+					local n = drawShadowMeshList( e.list )
+				popMatrix()
+				if n > 0 then
 					drawnChunks = drawnChunks + 1
-					drawnMeshes = drawnMeshes + count
+					drawnMeshes = drawnMeshes + n
 				end
 			end
 		end
@@ -313,11 +321,11 @@ local function drawMCShadowCasters( material )
 	return drawnChunks, drawnMeshes
 end
 
-local function renderMCShadowMap()
+local function renderMCShadowMap( force )
 	if not mcShadowSourceEnabled() then return false end
 	local now = CurTime()
 	local interval = convarFloat( MC.MeshShadowMapUpdateInterval, 0, 0, 1 )
-	if interval > 0 and mcShadowNextUpdate > now then return true end
+	if not force and interval > 0 and mcShadowNextUpdate > now then return true end
 	mcShadowNextUpdate = now + interval
 
 	local rt = ensureMCShadowTexture()
@@ -343,6 +351,24 @@ local function renderMCShadowMap()
 		mcShadowStats.lastError = nil
 		return true
 	end
+
+	-- Depth-pass output is fully determined by the signature below; while it
+	-- holds (static sun + camera within one snapped texel + unchanged chunk
+	-- geometry) the previous shadow map is still exact, so keep it. With the
+	-- day cycle off this makes standing still / looking around free.
+	local drawVersion = MC.ChunkDrawListVersion and MC.ChunkDrawListVersion() or -1
+	local casterDist = convarFloat( MC.MeshShadowMapCasterDistance, 4608, 0, 65536 )
+	if not force and sigValid and mcShadowReady()
+		and sigDrawVersion == drawVersion
+		and sigOriginX == lightOrigin.x and sigOriginY == lightOrigin.y and sigOriginZ == lightOrigin.z
+		and sigDirX == lightForward.x and sigDirY == lightForward.y and sigDirZ == lightForward.z
+		and sigZFar == lightZFar
+		and sigSize == mcShadowTextureSize
+		and sigCasterDist == casterDist then
+		return true
+	end
+	sigValid = false
+
 	local shadowViewProj = viewProj.GetTransposed and viewProj:GetTransposed() or viewProj
 	local invZFar = lightZFar > 0 and 1 / lightZFar or 0
 
@@ -384,7 +410,8 @@ local function renderMCShadowMap()
 			-- Bind the real shadow target at MRT slot 1 inside the camera
 			-- block so the depth shader can write linear depth to COLOR1.
 			render.SetRenderTargetEx( 1, rt )
-			local chunks, meshes = drawMCShadowCasters( material )
+			local maxDistSqr = casterDist > 0 and casterDist * casterDist or nil
+			local chunks, meshes = drawMCShadowCasters( material, maxDistSqr )
 			mcShadowStats.drawnChunks = chunks
 			mcShadowStats.drawnMeshes = meshes
 		cam.End()
@@ -421,12 +448,21 @@ local function renderMCShadowMap()
 	MC.MCShadowMapZFar = lightZFar
 	mcShadowStats.lastUpdate = now
 	mcShadowStats.lastError = nil
+	-- Only freeze the signature when the pass actually drew casters (or the
+	-- world is empty): a zero-caster render (e.g. during a Lua autorefresh
+	-- window while cl_draw reloads) must keep re-rendering every frame like
+	-- the old path did, otherwise an empty white map gets locked in.
+	local worldEmpty = MC.Meshes == nil or next( MC.Meshes ) == nil
+	if mcShadowStats.drawnChunks > 0 or worldEmpty then
+		sigValid = true
+		sigOriginX, sigOriginY, sigOriginZ = lightOrigin.x, lightOrigin.y, lightOrigin.z
+		sigDirX, sigDirY, sigDirZ = lightForward.x, lightForward.y, lightForward.z
+		sigZFar = lightZFar
+		sigSize = mcShadowTextureSize
+		sigCasterDist = casterDist
+		sigDrawVersion = drawVersion
+	end
 	return true
-end
-
-local function mcShadowReady()
-	return mcShadowTexture ~= nil and mcShadowViewProj ~= nil
-		and mcShadowForward ~= nil and mcShadowOrigin ~= nil
 end
 
 function MC.UsingMeshShadowMap()
@@ -438,7 +474,7 @@ function MC.UsingMeshShadowMap()
 end
 
 local function bindShadowParams( material, enabled, isFancy )
-	local strength = enabled and convarFloat( MC.MeshShadowMapStrength, 0.45, 0, 1 ) or 0
+	local strength = enabled and convarFloat( MC.MeshShadowMapStrength, 0.75, 0, 1 ) or 0
 	-- Day cycle: shadows fade at the horizon and stay weak under moonlight.
 	strength = strength * math.Clamp( mcShadowStrengthScale, 0, 1 )
 	local bias = convarFloat( MC.MeshShadowMapBias, 0.0005, 0, 0.05 )
@@ -571,8 +607,8 @@ function MC.MeshShadowMapStats()
 	return mcShadowStats
 end
 
-function MC.UpdateMeshShadowMap()
-	return renderMCShadowMap()
+function MC.UpdateMeshShadowMap( force )
+	return renderMCShadowMap( force )
 end
 
 hook.Remove( "PreRender", "mc_mesh_shadow_map_render" )

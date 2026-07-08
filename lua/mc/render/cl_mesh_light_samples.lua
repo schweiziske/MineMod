@@ -542,7 +542,7 @@ local function renderedBrightnessFromSmoothPacked( packed, selfEmission )
 	local sky = ( smoothPackedSky( packed ) or 0 ) / 16
 	local level = math.max( block, sky, clampLightLevel( selfEmission ) )
 	local cv = MC.LightAmbientMin
-	local ambient = mathClamp( cv and cv.GetFloat and cv:GetFloat() or 0.18, 0, 1 )
+	local ambient = mathClamp( cv and cv.GetFloat and cv:GetFloat() or 0, 0, 1 )
 	return mathClamp( ambient + ( 1 - ambient ) * ( level / 15 ), 0, 1 )
 end
 
