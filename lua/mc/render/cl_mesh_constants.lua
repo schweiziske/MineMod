@@ -3,6 +3,15 @@ MC = MC or {}
 MC.RenderMesh = MC.RenderMesh or {}
 local RM = MC.RenderMesh
 
+-- Localized render-target/image-format constants that GShader Library also
+-- defines. Keep them in this addon so the GPU light atlas, global lightmap,
+-- and MC shadow map do not depend on CSM/GShader being mounted first.
+IMAGE_FORMAT_RGBA8888 = IMAGE_FORMAT_RGBA8888 or 0
+IMAGE_FORMAT_RGB565 = IMAGE_FORMAT_RGB565 or 4
+IMAGE_FORMAT_A8 = IMAGE_FORMAT_A8 or 8
+IMAGE_FORMAT_R32F = IMAGE_FORMAT_R32F or 27
+CREATERENDERTARGETFLAGS_NOEDRAM = CREATERENDERTARGETFLAGS_NOEDRAM or 8
+MATERIAL_FOG_MODE = MATERIAL_FOG_MODE or 0
 
 local BS  = MC.BS
 local CS  = MC.CS

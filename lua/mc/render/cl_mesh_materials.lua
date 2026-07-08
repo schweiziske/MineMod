@@ -67,7 +67,7 @@ do
 			mat:SetTexture( "$basetexture", baseTex )
 			MC.MaterialGpuOpaque = mat
 		end
-		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex32_atlas2_vface_opaque", "screenspace_general_8tex", {
+		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex33_localdeps_vface_opaque", "screenspace_general_8tex", {
 			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth19_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
@@ -105,7 +105,7 @@ do
 		-- ONLY material allowed to define $c3_* (its pixel shader declares and
 		-- uses register c3); defining $c3 on the plain material would make the
 		-- engine upload c3 over that shader's inline literal constants.
-		local fancyMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy12_vface_opaque", "screenspace_general_8tex", {
+		local fancyMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy13_localdeps_vface_opaque", "screenspace_general_8tex", {
 			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy12_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
@@ -144,7 +144,7 @@ do
 		-- $viewprojmat/$invviewprojmat must NEVER be defined or set on this
 		-- material (the engine would upload c11..c18 over compiler-placed
 		-- inline literal constants).
-		local heightMat = CreateMaterial( "mc_atlas_gpu_lighttex_height3_vface_opaque", "screenspace_general_8tex", {
+		local heightMat = CreateMaterial( "mc_atlas_gpu_lighttex_height4_localdeps_vface_opaque", "screenspace_general_8tex", {
 			["$pixshader"] = "mc_gpu_chunk_lighttex_height3_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
@@ -183,7 +183,7 @@ do
 		-- reads $c0 only (day-cycle sky brightness / ambient / night blue /
 		-- tint strength, set once per frame); never define $c1..$c3 or
 		-- $viewprojmat on this material.
-		local fastMat = CreateMaterial( "mc_atlas_gpu_lighttex_fast3_vface_opaque", "screenspace_general", {
+		local fastMat = CreateMaterial( "mc_atlas_gpu_lighttex_fast4_localdeps_vface_opaque", "screenspace_general", {
 			["$pixshader"] = "mc_gpu_chunk_lighttex_fast3_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
@@ -212,7 +212,7 @@ do
 		if not ( transTex and transTexName and transTexName ~= "" ) then
 			transTex, transTexName = baseTex, baseName
 		end
-		local transGpuMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans4_vface", "screenspace_general_8tex", {
+		local transGpuMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans5_localdeps_vface", "screenspace_general_8tex", {
 			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy_trans3_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = transTexName,
