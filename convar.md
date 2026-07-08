@@ -9,7 +9,7 @@
 | 开启 GPU 光照路径 | `mc_mesh_gpu_shader 1`, `mc_mesh_gpu_light_texture 1`, `mc_mesh_gpu_lightmap 1` | 使用自定义 chunk shader、GPU chunk light texture 和全局 16x16 lightmap。 |
 | 让夜晚更暗蓝 | `mc_daycycle 1`, `mc_daycycle_moon_light`, `mc_daycycle_night_tint`, `mc_mesh_gpu_lightmap_ambient` | `moon_light` 控夜晚天光等级，`night_tint` 控蓝色夜色，`ambient` 控 GPU lightmap 最低亮度。 |
 | 让阴影处更黑 | `mc_mesh_shadow_map 1`, `mc_mesh_shadow_map_strength`, `mc_mesh_shadow_map_face_shade`, `mc_mesh_gpu_lightmap_ambient` | 阴影暗度走 shadow map 和 fancy shader。 |
-| 封闭空间变暗 | `mc_light_sky_flood 1` | 体素天空光泛洪（MC 语义：露天 15，横向每格 -1，全封闭 0）；只作环境光，方向性阴影仍由 shadow map 负责，因此不会出现"两种影子/光柱"。 |
+| 封闭空间变暗 | `mc_light_sky_flood 1`, `mc_mesh_gpu_lightmap_ambient`, `mc_mesh_gpu_lightmap_sky_min` | 体素天空光泛洪(露天 15,横向每格 -1,全封闭 0)。着色器里直射阳光按体素天空光门控:全封闭格子收不到直射阳光,不再需要把 `mc_mesh_shadow_map_strength` 拉满;室内亮度由 `ambient`(绝对底光)和 `sky_min`(天空环境光底比例)直接控制。 |
 | 区分两个最低亮度 | `mc_light_ambient_min`, `mc_mesh_gpu_lightmap_ambient` | 前者是 CPU/vertex-color 路径最低亮度；后者是 GPU global lightmap 最低亮度。 |
 
 ## 服务器：权限、世界和批量操作
@@ -106,6 +106,9 @@
 | --- | --- | --- |
 | `mc_mesh_render` | `1` | 是否绘制 MC chunk IMesh；关闭只隐藏 mesh，不影响碰撞。 |
 | `mc_mesh_cull_mode` | `ccw` | MC chunk mesh 的剔除方向：`ccw` 或 `cw`。 |
+| `mc_mesh_frustum_cull` | `1` | 跳过视锥外的 MC chunk mesh 绘制。 |
+| `mc_mesh_draw_distance` | `0` | MC chunk mesh 最大绘制距离(Source 单位);`0` = 不限。 |
+| `mc_mesh_gpu_depth_prepass` | `0` | GPU 着色前额外画一遍 CPU 材质 depth-only prepass;几何成本翻倍,通常保持关闭。 |
 | `mc_mesh_emit_probe` | `0` | 打印详细 mesh emit timings，用于诊断完整几何重建。 |
 | `mc_mesh_begin_upload` | `1` | 用 `mesh.Begin` 上传 IMesh 顶点，而不是 `IMesh:BuildFromTriangles`。 |
 | `mc_mesh_debug_full_cube_only` | `0` | 调试 mesh emission 时只渲染完整立方体方块。 |
@@ -117,18 +120,18 @@
 
 | ConVar | 默认 | 作用 |
 | --- | --- | --- |
-| `mc_mesh_gpu_shader` | `0` | 使用自定义 GPU chunk shader；需要已编译 VCS 文件。 |
-| `mc_mesh_gpu_light_texture` | `0` | GPU shader 从 chunk light texture 采样光照，而不是把光照烘进顶点色。 |
-| `mc_mesh_gpu_shader_fancy` | `0` | 使用 fancy GPU shader 变体：冷阴影、暖太阳、背光面 shading、边缘 fade。 |
-| `mc_mesh_gpu_light_brightness` | `1` | GPU light texture 的 block/sky light 亮度倍率。 |
+| `mc_mesh_gpu_shader` | `1` | 使用自定义 GPU chunk shader；需要已编译 VCS 文件。 |
+| `mc_mesh_gpu_light_texture` | `1` | GPU shader 从 chunk light texture 采样光照，而不是把光照烘进顶点色。 |
+| `mc_mesh_gpu_shader_fancy` | `1` | 使用 fancy GPU shader 变体：冷阴影、暖太阳、背光面 shading、边缘 fade。 |
+| `mc_mesh_gpu_light_brightness` | `1.5` | GPU light texture 的 block/sky light 亮度倍率(>1 时火把高等级饱和截顶;想不截顶地增强火把改用 gamma)。 |
 | `mc_mesh_gpu_light_gamma` | `1` | GPU light texture 的衰减曲线；`>1` 提亮中间亮度，`<1` 压暗。 |
-| `mc_mesh_gpu_sky_light` | `0` | 旧的柱状 sky exposure 开关名；已被 `mc_light_sky_flood` 体素泛洪取代。 |
 | `mc_mesh_gpu_sun_brightness` | `1` | GPU 路径 sun/sky light 亮度倍率。 |
 | `mc_mesh_gpu_light_refresh_per_frame` | `2` | 昼夜 sky level 跳变时，每帧刷新多少个 chunk light texture。 |
 | `mc_mesh_gpu_lightmap` | `1` | 启用程序生成的 16x16 global lightmap；提供暖火把和彩色昼夜天光。 |
 | `mc_mesh_gpu_lightmap_torch_warmth` | `0.7` | global lightmap 里 block light/火把的暖色程度。 |
 | `mc_mesh_gpu_lightmap_ambient` | `0.04` | GPU global lightmap 的最低可见亮度；设 `0` 可接近全黑。 |
 | `mc_mesh_gpu_lightmap_sunset` | `0.5` | sunrise/sunset 天光轴橙色渐变强度；`0` 关闭。 |
+| `mc_mesh_gpu_lightmap_night_gamma` | `0.6` | 昼夜天光亮度的感知曲线(`1` = 线性;更低 = 夜晚更亮更蓝、黄昏过渡更缓)。 |
 | `mc_mesh_gpu_lightmap_sky_curve` | `3` | 天空环境光衰减形状 `1-(1-level)^curve`：越高，屋檐/树冠下等"有遮挡但开阔"的区域越亮，只有真正封闭的空间才落到环境底光（`1` = 线性）。 |
 | `mc_mesh_gpu_lightmap_sky_min` | `0.1` | 天空环境光在 sky level 0 处保留的比例（室内/大建筑底下的环境底光；直射阳光独立于此，由 shadow map 决定）。 |
 | `mc_mesh_gpu_lightmap_eye_dark` | `1` | 相机所在格无天空光时的环境光乘数（eyeBrightness 洞穴变暗）；`1` = 关闭——站在大建筑底下也会触发它，所以默认关。 |
@@ -150,14 +153,14 @@
 
 | ConVar | 默认 | 作用 |
 | --- | --- | --- |
-| `mc_mesh_shadow_map` | `0` | 让 GPU light texture chunk shader 接收 MC shadow map。 |
+| `mc_mesh_shadow_map` | `1` | 让 GPU light texture chunk shader 接收 MC shadow map。 |
 | `mc_mesh_shadow_map_strength` | `0.75` | shadow map 对最终亮度的压暗强度。 |
 | `mc_mesh_shadow_map_bias` | `0.0005` | shadow map 深度/边缘采样 bias，用于减轻 acne 和漏光。 |
 | `mc_mesh_shadow_map_softness` | `1` | 阴影边缘柔化半径，单位是 shadow-map texel，最低钳到 1。 |
 | `mc_mesh_shadow_map_size` | `2048` | MC-owned shadow map 分辨率。 |
 | `mc_mesh_shadow_map_distance` | `4096` | MC-owned shadow map 的世界覆盖半径。 |
 | `mc_mesh_shadow_map_caster_distance` | `4608` | 距相机多远以内的 MC chunk 会绘入 shadow map。 |
-| `mc_mesh_shadow_map_update_interval` | `0` | shadow map 最小重绘间隔秒数；`0` 表示启用时每帧重绘。 |
+| `mc_mesh_shadow_map_update_interval` | `0` | shadow map 最小重绘间隔秒数。`0` = 不限速,但现在深度 pass 只在太阳方向、纹素对齐窗口、chunk 几何或覆盖半径变化时才真正重绘(静止场景零成本)。 |
 | `mc_mesh_shadow_map_tint` | `0.6` | fancy shader 中阴影向冷色天空 tint 偏移的强度。 |
 | `mc_mesh_shadow_map_edge_fade` | `0.1` | fancy shader 中阴影覆盖边缘的 fade 宽度。 |
 | `mc_mesh_shadow_map_face_shade` | `0.65` | fancy shader 中背离太阳的面按阴影压暗的强度。 |

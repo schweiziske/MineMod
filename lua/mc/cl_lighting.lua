@@ -38,7 +38,7 @@ end
 
 local function ambientMin()
 	local cv = MC.LightAmbientMin
-	return math.Clamp( cv and cv:GetFloat() or 0.18, 0, 1 )
+	return math.Clamp( cv and cv:GetFloat() or 0, 0, 1 )
 end
 
 local function lightPerfDebugEnabled()

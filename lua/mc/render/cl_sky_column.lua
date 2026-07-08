@@ -262,10 +262,3 @@ timer.Create( "mc_sky_column_daystep", 1, 0, function()
 		end
 	end
 end )
-
-if cvars and cvars.AddChangeCallback then
-	cvars.AddChangeCallback( "mc_mesh_gpu_sky_light", function()
-		MC.ClearSkyColumnCache()
-		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
-	end, "mc_sky_column_toggle" )
-end

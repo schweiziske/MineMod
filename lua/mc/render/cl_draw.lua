@@ -222,6 +222,17 @@ local function ensureDrawLists()
 	transCount = rebuildDrawList( MC.MeshesTrans, transEntries )
 end
 
+-- Flat opaque draw entries shared with the shadow-map / heightfield depth
+-- passes, so caster loops reuse the cached per-chunk matrices instead of
+-- walking pairs(MC.Meshes) and allocating a Matrix per chunk per frame.
+-- Read-only for callers; entries carry key/list/matrix and the chunk center
+-- (x/y/z). Callers must re-check MC.Meshes[e.key] == e.list before drawing.
+-- NOTE: defined AFTER ensureDrawLists so the local is captured as an upvalue.
+function MC.OpaqueChunkDrawEntries()
+	ensureDrawLists()
+	return opaqueEntries, opaqueCount
+end
+
 ------------------------------------------------------------------- frustum culling
 -- Inward-pointing frustum planes through the eye. Normals stay unnormalized:
 -- the AABB p-vertex radius scales by the same factor as the center distance,
