@@ -405,6 +405,27 @@ end
 
 local CARRIER_CLASS = "mc_collision_carrier"
 
+local function scanLocalCollisionCarriers( lp )
+	local out = {}
+	for _, ent in ipairs( ents.FindByClass( CARRIER_CLASS ) ) do
+		if IsValid( ent ) and ent:EntIndex() > 0 then
+			-- Carriers are SetPreventTransmit-hidden from every client except
+			-- their owner, so any carrier this client can see is its own. An
+			-- unresolved MCCarrierOwner var (NULL) just means the NW value has
+			-- not arrived yet; rejecting it would shrink the pool.
+			local owner = ent:GetNWEntity( "MCCarrierOwner" )
+			if owner == lp or not IsValid( owner ) then
+				out[#out + 1] = ent
+			end
+		end
+	end
+	table.sort( out, function( a, b )
+		return a:GetNWInt( "MCCarrierIndex", 0 ) < b:GetNWInt( "MCCarrierIndex", 0 )
+	end )
+	MC.CollisionCarriers = out
+	return out
+end
+
 local function localCollisionCarriers()
 	local lp = LocalPlayer()
 	if not IsValid( lp ) then return nil end
@@ -418,17 +439,7 @@ local function localCollisionCarriers()
 		if ok then return cached end
 	end
 
-	local out = {}
-	for _, ent in ipairs( ents.FindByClass( CARRIER_CLASS ) ) do
-		if IsValid( ent ) and ent:EntIndex() > 0 and ent:GetNWEntity( "MCCarrierOwner" ) == lp then
-			out[#out + 1] = ent
-		end
-	end
-	table.sort( out, function( a, b )
-		return a:GetNWInt( "MCCarrierIndex", 0 ) < b:GetNWInt( "MCCarrierIndex", 0 )
-	end )
-	MC.CollisionCarriers = out
-	return out
+	return scanLocalCollisionCarriers( lp )
 end
 
 local function releaseCarrierCollisionForChunk( key )
@@ -473,11 +484,26 @@ local function acquireCarriersForChunk( key, count )
 			inUse[ent] = true
 		end
 	end
-	for _, ent in ipairs( carriers ) do
-		if #assigned >= count then break end
-		if not inUse[ent] then
-			assigned[#assigned + 1] = ent
-			inUse[ent] = true
+	local function topUpFromPool()
+		for _, ent in ipairs( carriers ) do
+			if #assigned >= count then break end
+			if not inUse[ent] then
+				assigned[#assigned + 1] = ent
+				inUse[ent] = true
+			end
+		end
+	end
+	topUpFromPool()
+
+	-- Carriers stream in over several snapshots around join/cleanup, and the
+	-- pool cache never invalidates on its own (carriers stay valid for the
+	-- whole session). A shortfall must therefore rescan once before reporting
+	-- exhaustion, or a frozen partial cache keeps this chunk exhausted forever.
+	if #assigned < count then
+		local lp = LocalPlayer()
+		if IsValid( lp ) then
+			carriers = scanLocalCollisionCarriers( lp )
+			topUpFromPool()
 		end
 	end
 

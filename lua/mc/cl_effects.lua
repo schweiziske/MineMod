@@ -100,7 +100,11 @@ local function particleBrightnessAt( pos, id )
 	if not ( MC.WorldToCell and MC.SampleLighting ) then return 1 end
 	local bx, by, bz = MC.WorldToCell( pos )
 	if bx == nil then return 1 end
-	local brightness = MC.SampleLighting( bx, by, bz, MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0 )
+	local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
+	local brightness, level, blockLight = MC.SampleLighting( bx, by, bz, emission )
+	if MC.ApplySunShadowToBrightness then
+		brightness = MC.ApplySunShadowToBrightness( pos, brightness, level, blockLight, emission )
+	end
 	return math.Clamp( tonumber( brightness ) or 1, 0, 1 )
 end
 
