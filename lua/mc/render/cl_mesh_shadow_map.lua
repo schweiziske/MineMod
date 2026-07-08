@@ -22,6 +22,55 @@ local mcShadowStats = {
 	lastUpdate = 0,
 	lastError = nil,
 }
+-- Local copy of the tiny GShader matrix helper this shadow pass used to call.
+-- Keeping it here makes the MC shadow map independent from the external
+-- GShader/CSM addons while preserving the same matrix convention the shaders
+-- were validated against.
+local t0001 = { 0, 0, 0, 1 }
+local function GetViewProjOrthoMatrix(viewSetup)
+	local pos, ang = viewSetup.origin, viewSetup.angles
+	local D = -ang:Forward()
+	local R = ang:Right()
+	local U = -ang:Up() -- In Gmod func cam.GetViewMatrix() local U = ang:Up()
+	local P = -pos
+
+	local mFirst = Matrix({
+		{R.x, 	R.y, 	R.z,	0},
+		{U.x, 	U.y, 	U.z,	0},
+		{D.x, 	D.y, 	D.z,	0},
+		t0001,
+	})
+
+	local mSecond = Matrix({
+		{1, 	0, 		0, 		P.x},
+		{0, 	1, 		0, 		P.y},
+		{0, 	0, 		1, 		P.z},
+		t0001,
+	})
+
+	mFirst:Mul(mSecond)
+
+	local left = viewSetup.ortho.left
+	local right = viewSetup.ortho.right
+	local bottom = viewSetup.ortho.bottom
+	local top = viewSetup.ortho.top
+	local znear = viewSetup.znear
+	local zfar = viewSetup.zfar
+	local mProj = Matrix()
+
+	mProj:SetUnpacked(
+		2 / (right - left), 0, 					0, 					 (right + left) / (right - left),
+		0, 					2 / (top - bottom), 0, 					 (top + bottom) / (top - bottom),
+		0, 					0, 					-1 / (zfar - znear), -(zfar + znear) / (zfar - znear),
+		0,		0,		0, 		1
+	)
+
+	mProj:InvertTR()
+
+	mProj:Mul(mFirst)
+
+	return mProj
+end
 
 local function convarBool( cv )
 	return cv and cv.GetBool and cv:GetBool() == true
@@ -192,7 +241,6 @@ end
 MC.MeshShadowLightDirection = shadowLightDirection
 
 local function makeMCShadowViewSetup( rtSize )
-	if not ( shaderlib and shaderlib.GetViewProjOrthoMatrix ) then return nil end
 	local eye = EyePos()
 	local sunDir, strengthScale = shadowLightDirection()
 	local shadowDistance = convarFloat( MC.MeshShadowMapDistance, 4096, 512, 32768 )
@@ -236,7 +284,7 @@ local function makeMCShadowViewSetup( rtSize )
 		viewid = 6,
 	}
 
-	local viewProj = shaderlib.GetViewProjOrthoMatrix( viewSetup )
+	local viewProj = GetViewProjOrthoMatrix( viewSetup )
 	return viewSetup, viewProj, lookDir, origin, zfar, strengthScale
 end
 
@@ -338,7 +386,7 @@ local function renderMCShadowMap( force )
 
 	local viewSetup, viewProj, lightForward, lightOrigin, lightZFar, strengthScale = makeMCShadowViewSetup( mcShadowTextureSize )
 	if not ( viewSetup and viewProj ) then
-		mcShadowStats.lastError = "missing_shaderlib_matrix"
+		mcShadowStats.lastError = "missing_shadow_matrix"
 		return false
 	end
 	mcShadowStrengthScale = strengthScale or 1
