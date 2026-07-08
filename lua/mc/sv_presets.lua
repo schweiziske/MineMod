@@ -29,6 +29,10 @@ local MAX_PRESET_COVER_BYTES = 1024 * 1024 * 2
 local MAX_NET_PRESETS = 4095
 
 local PresetCoverUploads = {}
+-- presetName -> { fileTime, data, payload }: decompressing + JSON-parsing a
+-- large preset is expensive, so parsed presets (and their ready-to-send net
+-- payload) are reused until the .dat on disk changes
+local PresetCache = {}
 
 local function ensurePresetDirs()
 	file.CreateDir( "mc" )
@@ -195,20 +199,34 @@ function SV.LoadPreset( presetName )
 	if not presetName then return nil, "missing_preset_name" end
 
 	local path = SV.PresetPath( presetName )
-	if not file.Exists( path, "DATA" ) then return nil, "preset_not_found" end
+	if not file.Exists( path, "DATA" ) then
+		PresetCache[presetName] = nil
+		return nil, "preset_not_found"
+	end
+
+	local fileTime = file.Time( path, "DATA" ) or 0
+	local cached = PresetCache[presetName]
+	if cached and cached.fileTime == fileTime then
+		return cached.data, nil, cached
+	end
 
 	local raw = file.Read( path, "DATA" )
 	if not raw or raw == "" then return nil, "empty_preset" end
 	local json = raw
+	local payload = raw
 	if string.sub( raw, 1, 1 ) ~= "{" then
 		json = util.Decompress( raw )
+	else
+		payload = util.Compress( raw )
 	end
 	if not json then return nil, "decompress_failed" end
 	local data = util.JSONToTable( json )
 	if not data or not istable( data.cells ) then return nil, "invalid_preset" end
 	data.name = data.name or presetName
 	data.cover = sanitizePresetCover( data.cover, presetName ) or ""
-	return data
+	cached = { fileTime = fileTime, data = data, payload = payload }
+	PresetCache[presetName] = cached
+	return data, nil, cached
 end
 
 function SV.PresetList()
@@ -312,6 +330,13 @@ function SV.SavePreset( presetName, cornerA, cornerB, anchor, cover, ply )
 	if #compressed > MAX_PRESET_DATA_BYTES then return false, "preset_payload_too_large" end
 
 	file.Write( SV.PresetPath( presetName ), compressed )
+	-- prime the cache directly: file.Time has 1s resolution, so a same-second
+	-- overwrite could otherwise keep serving the stale parsed preset
+	PresetCache[presetName] = {
+		fileTime = file.Time( SV.PresetPath( presetName ), "DATA" ) or 0,
+		data = data,
+		payload = compressed,
+	}
 	writePresetMeta( presetName, data )
 	MsgN( string.format( "[MC] saved preset \"%s\" (%d blocks, %dx%dx%d)", presetName, #cells, data.size[1], data.size[2], data.size[3] ) )
 	return true, data
@@ -507,11 +532,16 @@ end
 
 local function sendPresetData( ply, presetName )
 	if not IsValid( ply ) then return end
-	local data, err = SV.LoadPreset( presetName )
+	local data, err, cached = SV.LoadPreset( presetName )
 	if not data then sendPresetDataError( ply, presetName, err ) return end
 
-	local json = util.TableToJSON( data )
-	local compressed = json and util.Compress( json ) or nil
+	-- the .dat on disk is already the compressed JSON payload the client
+	-- expects; reuse it instead of re-serializing + re-compressing per request
+	local compressed = cached and cached.payload or nil
+	if not compressed or compressed == "" then
+		local json = util.TableToJSON( data )
+		compressed = json and util.Compress( json ) or nil
+	end
 	if not compressed or compressed == "" or #compressed > MAX_PRESET_DATA_BYTES then
 		sendPresetDataError( ply, presetName, "preset_payload_too_large" )
 		return

@@ -40,9 +40,12 @@ function SV.EnsureCollisionCarriers( ply )
 			local ent = ents.Create( "mc_collision_carrier" )
 			if not IsValid( ent ) then break end
 			ent:SetPos( vector_origin )
+			ent:Spawn()
+			-- NW vars only after Spawn: values written before the entity spawns
+			-- can miss the first client baseline (long-standing NW2 quirk), and
+			-- the owning client filters carriers by MCCarrierOwner.
 			ent:SetNWEntity( "MCCarrierOwner", ply )
 			ent:SetNWInt( "MCCarrierIndex", i )
-			ent:Spawn()
 			hideCarrierFromOthers( ent, ply )
 			carriers[#carriers + 1] = ent
 		end

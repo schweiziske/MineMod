@@ -74,8 +74,9 @@ local function clearExpiredDamage()
 	for key, expire in pairs( SV.RecentTraceDamage ) do
 		if now >= expire then SV.RecentTraceDamage[key] = nil end
 	end
-	for key, expire in pairs( SV.RecentExplosions ) do
-		if now >= expire then SV.RecentExplosions[key] = nil end
+	local tick = engine.TickCount()
+	for key, seenTick in pairs( SV.RecentExplosions ) do
+		if tick > seenTick then SV.RecentExplosions[key] = nil end
 	end
 end
 timer.Create( "mc_block_damage_decay", 1, 0, clearExpiredDamage )
@@ -126,14 +127,6 @@ local function explosionRadiusForDamage( damage )
 	return math.Clamp( radius, 0, maxRadius )
 end
 
-local function addExplosionCell( cells, order, bx, by, bz, maxBlocks )
-	local key = blockDamageKey( bx, by, bz )
-	if cells[key] then return false end
-	cells[key] = { bx = bx, by = by, bz = bz }
-	order[#order + 1] = key
-	return maxBlocks > 0 and #order >= maxBlocks
-end
-
 function SV.ApplyBlockExplosion( center, damage, options )
 	if not damageEnabled() then return false, 0, 0 end
 	if not center then return false, 0, 0 end
@@ -141,11 +134,14 @@ function SV.ApplyBlockExplosion( center, damage, options )
 	if not actorCanDamage( damageActor( options ), options ) then return false, 0, "forbidden" end
 
 	if options.key then
-		local now = CurTime()
-		if SV.RecentExplosions[options.key] and SV.RecentExplosions[options.key] > now then
+		-- one blast reaches many chunk entities within the same tick; dedupe those
+		-- repeats only. A time window here would also swallow distinct explosions
+		-- (e.g. stacked TNT detonating at the same spot in quick succession).
+		local tick = engine.TickCount()
+		if SV.RecentExplosions[options.key] == tick then
 			return false, 0, "duplicate"
 		end
-		SV.RecentExplosions[options.key] = now + 0.25
+		SV.RecentExplosions[options.key] = tick
 	end
 
 	local radius = explosionRadiusForDamage( damage )
@@ -155,6 +151,19 @@ function SV.ApplyBlockExplosion( center, damage, options )
 	local cx, cy, cz = center.x / MC.BS, center.y / MC.BS, center.z / MC.BS
 	local cells, order = {}, {}
 	local stopped = false
+
+	-- per-explosion cell cache: all ~1350 rays re-sample the same cells near the
+	-- center, and the sub-block march revisits each cell several times per ray, so
+	-- block/property lookups dominate. Resolve each cell once per explosion.
+	local floor = math.floor
+	local sqrt = math.sqrt
+	local rand = math.Rand
+	local cellKey = MC.CellKey
+	local getBlock = MC.GetBlock
+	local resistanceOf = MC.BlockExplosionResistance
+	local hardnessOf = MC.BlockHardness
+	local stepCost = {}  -- cellKey -> power cost per sample step (0 = air)
+	local breakable = {} -- cellKey -> block may be destroyed
 
 	for xx = 0, EXPLOSION_GRID do
 		if stopped then break end
@@ -166,28 +175,44 @@ function SV.ApplyBlockExplosion( center, damage, options )
 					local dx = xx / EXPLOSION_GRID * 2 - 1
 					local dy = yy / EXPLOSION_GRID * 2 - 1
 					local dz = zz / EXPLOSION_GRID * 2 - 1
-					local len = math.sqrt( dx * dx + dy * dy + dz * dz )
+					local len = sqrt( dx * dx + dy * dy + dz * dz )
 					if len > 0 then
-						dx, dy, dz = dx / len, dy / len, dz / len
-						local power = radius * ( 0.7 + math.Rand( 0, 0.6 ) )
+						local sx = dx / len * EXPLOSION_STEP
+						local sy = dy / len * EXPLOSION_STEP
+						local sz = dz / len * EXPLOSION_STEP
+						local power = radius * ( 0.7 + rand( 0, 0.6 ) )
 						local x, y, z = cx, cy, cz
 
 						while power > 0 do
-							local bx, by, bz = math.floor( x ), math.floor( y ), math.floor( z )
-							local id = MC.GetBlock( bx, by, bz )
-							if id ~= 0 then
-								local explosionResistance = MC.BlockExplosionResistance and MC.BlockExplosionResistance( id ) or 1
-								power = power - ( explosionResistance + 0.3 ) * EXPLOSION_STEP
-								local hardness = MC.BlockHardness and MC.BlockHardness( id ) or 1
-								if power > 0 and hardness >= 0 then
-									stopped = addExplosionCell( cells, order, bx, by, bz, maxBlocks )
-									if stopped then break end
+							local bx, by, bz = floor( x ), floor( y ), floor( z )
+							local key = cellKey( bx, by, bz )
+							local cost = stepCost[key]
+							if cost == nil then
+								local id = getBlock( bx, by, bz )
+								if id == 0 then
+									cost = 0
+								else
+									local explosionResistance = resistanceOf and resistanceOf( id ) or 1
+									cost = ( explosionResistance + 0.3 ) * EXPLOSION_STEP
+									breakable[key] = ( hardnessOf and hardnessOf( id ) or 1 ) >= 0
+								end
+								stepCost[key] = cost
+							end
+							if cost > 0 then
+								power = power - cost
+								if power > 0 and breakable[key] and not cells[key] then
+									cells[key] = { bx = bx, by = by, bz = bz }
+									order[#order + 1] = key
+									if maxBlocks > 0 and #order >= maxBlocks then
+										stopped = true
+										break
+									end
 								end
 							end
 
-							x = x + dx * EXPLOSION_STEP
-							y = y + dy * EXPLOSION_STEP
-							z = z + dz * EXPLOSION_STEP
+							x = x + sx
+							y = y + sy
+							z = z + sz
 							power = power - EXPLOSION_AIR_COST
 						end
 					end
@@ -204,6 +229,7 @@ function SV.ApplyBlockExplosion( center, damage, options )
 	local broken = SV.RemoveBlocksBulk( removals, {
 		actor = damageActor( options ),
 		fx = options.fx ~= false,
+		fxLimit = math.max( 0, conVarInt( C.BlockExplosionFxLimit, 16 ) ),
 		handlers = options.handlers,
 		priorityPhys = false,
 		explosionMeshThrottle = true,

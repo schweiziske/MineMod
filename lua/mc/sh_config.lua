@@ -215,6 +215,7 @@ if SERVER then
 	MC.Config.BlockExplosionScale = GetConVar( "mc_block_explosion_scale" ) or CreateConVar( "mc_block_explosion_scale", "0.04", F, "GMod blast damage to Minecraft explosion radius scale" )
 	MC.Config.BlockExplosionMaxRadius = GetConVar( "mc_block_explosion_max_radius" ) or CreateConVar( "mc_block_explosion_max_radius", "8", F, "Maximum Minecraft-style block explosion radius" )
 	MC.Config.BlockExplosionMaxBlocks = GetConVar( "mc_block_explosion_max_blocks" ) or CreateConVar( "mc_block_explosion_max_blocks", "4096", F, "Maximum MC blocks one GMod explosion may destroy; 0 = unlimited" )
+	MC.Config.BlockExplosionFxLimit = GetConVar( "mc_block_explosion_fx_limit" ) or CreateConVar( "mc_block_explosion_fx_limit", "16", F, "Max block break particle/sound effects broadcast per explosion; 0 = none" )
 	MC.Config.PresetMaxBlocks = GetConVar( "mc_preset_max_blocks" ) or CreateConVar( "mc_preset_max_blocks", "100000", F, "Max non-air blocks one MC preset may save/place; 0 = unlimited" )
 
 	local reach = MC.Config.Reach:GetFloat()
