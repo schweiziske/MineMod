@@ -263,7 +263,15 @@ local function cellFromTrace( tr, dir )
 	else
 		inward = Vector( 0, 0, 0 )
 	end
-	return MC.WorldToCell( tr.HitPos + inward * TRACE_INSET )
+	local bx, by, bz = MC.WorldToCell( tr.HitPos + inward * TRACE_INSET )
+	if MC.GetBlock( bx, by, bz ) ~= 0 then return bx, by, bz end
+	-- shallow-angle hits can inset along the shot direction into air; the
+	-- surface normal always points out of the block that was actually hit
+	if tr.HitNormal and tr.HitNormal.LengthSqr and tr.HitNormal:LengthSqr() > 0.0001 then
+		local nx, ny, nz = MC.WorldToCell( tr.HitPos - tr.HitNormal * TRACE_INSET )
+		if MC.GetBlock( nx, ny, nz ) ~= 0 then return nx, ny, nz end
+	end
+	return bx, by, bz
 end
 
 local function vectorUsable( v )
@@ -274,6 +282,21 @@ local function isChunkCollisionOwner( ent )
 	if not IsValid( ent ) then return false end
 	local class = ent:GetClass()
 	return class == "mc_chunk" or class == "mc_chunk_phys"
+end
+
+-- march from pos along dir and return the first non-air cell, or nil
+local function firstSolidCellAlong( pos, dir, maxBlocks )
+	if not vectorUsable( dir ) then return nil end
+	local step = Vector( dir.x, dir.y, dir.z )
+	step:Normalize()
+	step:Mul( MC.BS * 0.5 )
+	local probe = Vector( pos.x, pos.y, pos.z )
+	for _ = 1, maxBlocks * 2 do
+		local bx, by, bz = MC.WorldToCell( probe )
+		if MC.GetBlock( bx, by, bz ) ~= 0 then return bx, by, bz end
+		probe:Add( step )
+	end
+	return nil
 end
 
 local function cellFromDamageInfo( ent, dmg )
@@ -287,15 +310,40 @@ local function cellFromDamageInfo( ent, dmg )
 	if not vectorUsable( pos ) and dmg.GetReportedPosition then
 		pos = dmg:GetReportedPosition()
 	end
-	if not vectorUsable( pos ) then return nil end
 
-	local force = dmg:GetDamageForce()
-	if vectorUsable( force ) then
-		force = Vector( force.x, force.y, force.z )
-		force:Normalize()
-		pos = pos + force * TRACE_INSET
+	if vectorUsable( pos ) then
+		local force = dmg:GetDamageForce()
+		if vectorUsable( force ) then
+			force = Vector( force.x, force.y, force.z )
+			force:Normalize()
+			local bx, by, bz = MC.WorldToCell( pos + force * TRACE_INSET )
+			if MC.GetBlock( bx, by, bz ) ~= 0 then return bx, by, bz end
+		end
+		local bx, by, bz = MC.WorldToCell( pos )
+		if MC.GetBlock( bx, by, bz ) ~= 0 then return bx, by, bz end
+		-- the reported point sits on the surface but maps to air (typical for
+		-- impact/melee damage with no useful force direction): probe toward the
+		-- chunk for the nearest solid cell
+		if IsValid( ent ) and ent.NearestPoint then
+			local sx, sy, sz = firstSolidCellAlong( pos, ent:NearestPoint( pos ) - pos, 3 )
+			if sx then return sx, sy, sz end
+		end
+		return bx, by, bz
 	end
-	return MC.WorldToCell( pos )
+
+	-- no damage position at all (scripted ent:TakeDamage, fire, crush, ...):
+	-- approach the chunk from the inflictor/attacker and take the first solid cell
+	local inflictor = dmg:GetInflictor()
+	local from
+	if IsValid( inflictor ) and not isChunkCollisionOwner( inflictor ) then
+		from = inflictor:GetPos()
+	elseif IsValid( attacker ) and not isChunkCollisionOwner( attacker ) then
+		from = attacker.EyePos and attacker:EyePos() or attacker:GetPos()
+	end
+	if not from or not IsValid( ent ) or not ent.NearestPoint then return nil end
+
+	local target = ent:NearestPoint( from )
+	return firstSolidCellAlong( target, target - from, 16 )
 end
 
 local function explosionCenter( ent, dmg )
