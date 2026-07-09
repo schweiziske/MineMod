@@ -200,6 +200,9 @@ local function usingGpuLightTexture()
 end
 
 local function mcShadowSourceEnabled()
+	-- Vanilla lighting mode has no shadow consumer (its shader never samples
+	-- the shadow map), so the per-frame depth pass would be wasted GPU work.
+	if MC.UsingVanillaLightMaterial and MC.UsingVanillaLightMaterial() then return false end
 	return shadowMapEnabled() and shadowMapMode() == "map" and usingGpuLightTexture()
 end
 
@@ -595,6 +598,14 @@ end
 
 function MC.BindMeshShadowMap( material, force )
 	if not material then return false end
+	-- The vanilla materials' shaders read NO constant registers: any SetFloat
+	-- / SetMatrix here would define those material vars and make the engine
+	-- upload c0..c3 / c11..c14 over compiler-placed literal constants (same
+	-- hazard the fast/height dispatches below guard against).
+	if MC.MaterialGpuLightTextureVanilla and ( material == MC.MaterialGpuLightTextureVanilla
+		or material == MC.MaterialGpuLightTextureVanillaTranslucent ) then
+		return true
+	end
 	if MC.MaterialGpuLightTextureFast and material == MC.MaterialGpuLightTextureFast then
 		return bindFastLightParams( material )
 	end
@@ -674,12 +685,12 @@ if cvars and cvars.AddChangeCallback then
 			MC.BindMeshHeightfieldShadow( MC.MaterialGpuLightTextureHeight )
 		end
 	end
-	cvars.AddChangeCallback( "mc_mesh_shadow_map", function()
+	cvars.AddChangeCallback( "mc_shadow", function()
 		rebindAllShadowMaterials()
-	end, "mc_mesh_shadow_map_refresh" )
-	cvars.AddChangeCallback( "mc_mesh_shadow_mode", function()
+	end, "mc_shadow_refresh" )
+	cvars.AddChangeCallback( "mc_shadow_mode", function()
 		mcShadowNextUpdate = 0
 		if MC.MarkHeightfieldShadowDirty then MC.MarkHeightfieldShadowDirty() end
 		rebindAllShadowMaterials()
-	end, "mc_mesh_shadow_mode_refresh" )
+	end, "mc_shadow_mode_refresh" )
 end

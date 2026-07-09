@@ -1,4 +1,4 @@
--- Heightfield shadow mode ("mc_mesh_shadow_mode height").
+-- Heightfield shadow mode ("mc_shadow_mode height").
 --
 -- Owns a cached TOP-DOWN depth map of the MC world: one ortho render of the
 -- opaque chunk meshes looking straight down, stored as normalized linear
@@ -74,6 +74,9 @@ end
 local function heightfieldModeEnabled()
 	if not convarBool( MC.MeshShadowMap ) then return false end
 	if not ( MC.MeshShadowMapMode and MC.MeshShadowMapMode() == "height" ) then return false end
+	-- Vanilla lighting mode outranks the height material in the selector, so
+	-- its ray-marched heightmap would render with no consumer.
+	if MC.UsingVanillaLightMaterial and MC.UsingVanillaLightMaterial() then return false end
 	return usingGpuLightTexture()
 end
 
@@ -491,10 +494,10 @@ hook.Add( "PreRender", "mc_mesh_heightfield_render", function()
 end )
 
 if cvars and cvars.AddChangeCallback then
-	for _, name in ipairs( { "mc_mesh_hf_shadow_size", "mc_mesh_hf_shadow_range" } ) do
+	for _, name in ipairs( { "mc_shadow_hf_size", "mc_shadow_hf_range" } ) do
 		cvars.AddChangeCallback( name, function()
 			hfDirty = true
 			hfNextUpdate = 0
-		end, "mc_mesh_hf_shadow_refresh" )
+		end, "mc_shadow_hf_refresh" )
 	end
 end

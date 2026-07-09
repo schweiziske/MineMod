@@ -20,7 +20,7 @@ MC.MeshFrustumCull = MC.MeshFrustumCull or ( CreateClientConVar and CreateClient
 	"Skip drawing MC chunk meshes outside the view frustum" ) )
 MC.MeshDrawDistance = MC.MeshDrawDistance or ( CreateClientConVar and CreateClientConVar( "mc_mesh_draw_distance", "0", true, false,
 	"Max distance in units at which MC chunk meshes are drawn; 0 = unlimited" ) )
-MC.MeshGpuDepthPrepass = MC.MeshGpuDepthPrepass or ( CreateClientConVar and CreateClientConVar( "mc_mesh_gpu_depth_prepass", "0", true, false,
+MC.MeshGpuDepthPrepass = MC.MeshGpuDepthPrepass or ( CreateClientConVar and CreateClientConVar( "mc_mesh_depth_prepass", "0", true, false,
 	"Draw a CPU-material depth-only prepass before GPU chunk shading (doubles geometry cost; the main pass already force-writes depth)" ) )
 
 local function meshCullMode()

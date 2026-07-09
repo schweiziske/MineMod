@@ -312,6 +312,8 @@ local function bindAtlasToMaterials()
 	bind( MC.MaterialGpuLightTextureFancy )
 	bind( MC.MaterialGpuLightTextureHeight )
 	bind( MC.MaterialGpuLightTextureFast )
+	bind( MC.MaterialGpuLightTextureVanilla )
+	bind( MC.MaterialGpuLightTextureVanillaTranslucent )
 	bind( MC.MaterialGpuLightTextureTranslucent )
 	materialsBound = true
 end
@@ -742,10 +744,10 @@ hook.Add( "Think", "mc_gpu_light_texture_refresh_queue", function()
 end )
 
 if cvars and cvars.AddChangeCallback then
-	cvars.AddChangeCallback( "mc_mesh_gpu_light_texture", function()
+	cvars.AddChangeCallback( "mc_light_texture", function()
 		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
 		if MC.MarkAllMeshesDirty then MC.MarkAllMeshesDirty( "gpu_light_texture_toggle" ) end
-	end, "mc_mesh_gpu_light_texture_rebuild" )
+	end, "mc_light_texture_rebuild" )
 	local function refreshTimeOfDayLighting()
 		if MC.GlobalLightmapActive and MC.GlobalLightmapActive() then
 			if MC.RefreshGlobalLightmap then MC.RefreshGlobalLightmap() end
@@ -767,9 +769,9 @@ if cvars and cvars.AddChangeCallback then
 		end
 		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
 	end
-	cvars.AddChangeCallback( "mc_mesh_gpu_light_brightness", refreshLightCurves, "mc_mesh_gpu_light_brightness_refresh" )
-	cvars.AddChangeCallback( "mc_mesh_gpu_light_gamma", refreshLightCurves, "mc_mesh_gpu_light_gamma_refresh" )
-	cvars.AddChangeCallback( "mc_mesh_gpu_sun_brightness", refreshTimeOfDayLighting, "mc_mesh_gpu_sun_brightness_refresh" )
+	cvars.AddChangeCallback( "mc_light_brightness", refreshLightCurves, "mc_light_brightness_refresh" )
+	cvars.AddChangeCallback( "mc_light_gamma", refreshLightCurves, "mc_light_gamma_refresh" )
+	cvars.AddChangeCallback( "mc_light_sun_brightness", refreshTimeOfDayLighting, "mc_light_sun_brightness_refresh" )
 	cvars.AddChangeCallback( "mc_daycycle_moon_light", refreshTimeOfDayLighting, "mc_daycycle_moon_light_refresh" )
 	cvars.AddChangeCallback( "mc_daycycle_night_tint", refreshTimeOfDayLighting, "mc_daycycle_night_tint_refresh" )
 end
