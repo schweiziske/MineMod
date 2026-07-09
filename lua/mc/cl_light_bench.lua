@@ -33,30 +33,30 @@ end
 
 local TOUCHED = {
 	"mc_mesh_render",
-	"mc_mesh_gpu_shader",
-	"mc_mesh_gpu_light_texture",
-	"mc_mesh_gpu_light_fast",
-	"mc_mesh_shadow_map",
-	"mc_mesh_shadow_mode",
+	"mc_light_shader",
+	"mc_light_texture",
+	"mc_light_style",
+	"mc_shadow",
+	"mc_shadow_mode",
 	"fps_max",
 }
 
 local function buildConfigs( full )
 	-- Ordered to avoid mesh-rebuild-triggering payload switches until the
-	-- optional full pass: shadow/mode/render/fast toggles only rebind or
+	-- optional full pass: shadow/mode/render/style toggles only rebind or
 	-- swap materials of the same vertex format.
 	local configs = {
 		{ name = "current(你现在的设置)", cvars = {} },
-		{ name = "fast低采样(旧版观感)", cvars = { mc_mesh_render = "1", mc_mesh_gpu_shader = "1", mc_mesh_gpu_light_texture = "1", mc_mesh_gpu_light_fast = "1", mc_mesh_shadow_map = "0" } },
-		{ name = "height模式(新)", cvars = { mc_mesh_render = "1", mc_mesh_gpu_shader = "1", mc_mesh_gpu_light_texture = "1", mc_mesh_gpu_light_fast = "0", mc_mesh_shadow_map = "1", mc_mesh_shadow_mode = "height" } },
-		{ name = "map模式(旧shadow map)", cvars = { mc_mesh_render = "1", mc_mesh_gpu_shader = "1", mc_mesh_gpu_light_texture = "1", mc_mesh_gpu_light_fast = "0", mc_mesh_shadow_map = "1", mc_mesh_shadow_mode = "map" } },
-		{ name = "无阴影(smooth采样)", cvars = { mc_mesh_render = "1", mc_mesh_gpu_shader = "1", mc_mesh_gpu_light_texture = "1", mc_mesh_gpu_light_fast = "0", mc_mesh_shadow_map = "0" } },
+		{ name = "fast低采样(旧版观感)", cvars = { mc_mesh_render = "1", mc_light_shader = "1", mc_light_texture = "1", mc_light_style = "fast", mc_shadow = "0" } },
+		{ name = "height模式(新)", cvars = { mc_mesh_render = "1", mc_light_shader = "1", mc_light_texture = "1", mc_light_style = "fancy", mc_shadow = "1", mc_shadow_mode = "height" } },
+		{ name = "map模式(旧shadow map)", cvars = { mc_mesh_render = "1", mc_light_shader = "1", mc_light_texture = "1", mc_light_style = "fancy", mc_shadow = "1", mc_shadow_mode = "map" } },
+		{ name = "无阴影(smooth采样)", cvars = { mc_mesh_render = "1", mc_light_shader = "1", mc_light_texture = "1", mc_light_style = "fancy", mc_shadow = "0" } },
 		{ name = "整个MC渲染关闭", cvars = { mc_mesh_render = "0" } },
 	}
 	if full then
 		table.insert( configs, {
 			name = "CPU顶点色(最简shader)",
-			cvars = { mc_mesh_render = "1", mc_mesh_gpu_shader = "0", mc_mesh_gpu_light_texture = "0", mc_mesh_gpu_light_fast = "0", mc_mesh_shadow_map = "0" },
+			cvars = { mc_mesh_render = "1", mc_light_shader = "0", mc_light_texture = "0", mc_light_style = "fancy", mc_shadow = "0" },
 			waitRebuild = true,
 		} )
 	end

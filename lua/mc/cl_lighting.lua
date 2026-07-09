@@ -13,8 +13,8 @@ MC.LightEnabled = MC.LightEnabled or CreateClientConVar( "mc_light_enabled", "1"
 MC.LightSkyLevel = nil
 MC.LightAmbientMin = MC.LightAmbientMin or CreateClientConVar( "mc_light_ambient_min", "0", true, false,
 	"Minimum brightness multiplier for MC vertex lighting" )
-MC.LightStyle = MC.LightStyle or CreateClientConVar( "mc_light_style", "shader", true, false,
-	"MC chunk lighting visual style: fast, vanilla, best, or shader" )
+MC.LightProfile = MC.LightProfile or CreateClientConVar( "mc_light_profile", "shader", true, false,
+	"MC chunk lighting pipeline profile: fast, vanilla, best (CPU vertex color paths) or shader (GPU chunk shader, default); the GPU look is picked by mc_light_style" )
 MC.LightPerfDebug = MC.LightPerfDebug or CreateClientConVar( "mc_light_perf_debug", "0", true, false,
 	"Show and collect detailed MC lighting performance diagnostics" )
 MC.LightPerfPrintBreak = MC.LightPerfPrintBreak or CreateClientConVar( "mc_light_perf_print_break", "0", true, false,

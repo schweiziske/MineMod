@@ -7,7 +7,7 @@
 -- v = sky level 0..15 (day/night brightness + hue: sunset orange, moonlight
 -- blue). Sky and block terms add, then floor by the ambient
 -- minimum — at default settings this reproduces the old fallback's brightness
--- (mc_mesh_gpu_lightmap_ambient, default 0.04), with the floor carrying hue.
+-- (mc_lightmap_ambient, default 0.04), with the floor carrying hue.
 --
 -- Time-of-day lives ENTIRELY in this 16x16 texture: a day/night step now
 -- redraws 256 texels once a second instead of re-baking every chunk light
@@ -94,6 +94,171 @@ local TORCH_WARM = { 1.0, 0.82, 0.58 }
 local NIGHT_BLUE = { 0.28, 0.42, 1.0 }
 local SUNSET_ORANGE = { 1.0, 0.62, 0.36 }
 
+-- ==== Vanilla Minecraft lightmap (mc_light_style vanilla) ==================
+-- 1:1 port of Minecraft 26.2's lightmap pipeline (out/ decompile):
+-- assets/minecraft/shaders/core/lightmap.fsh fed by
+-- LightmapRenderStateExtractor.extract() with the overworld defaults from
+-- EnvironmentAttributes and the "day" timeline from Timelines.bootstrap().
+-- GMod has no night vision / darkness effect / boss overlay / weather, so
+-- those inputs sit at their vanilla no-effect values (0 / black).
+
+-- EnvironmentAttributes.BLOCK_LIGHT_TINT default 0xFFD88C.
+local VANILLA_BLOCK_TINT = { 255 / 255, 216 / 255, 140 / 255 }
+-- Timelines.NIGHT_SKY_LIGHT_COLOR / NIGHT_SKY_LIGHT_FACTOR.
+local VANILLA_NIGHT_SKY_COLOR = { 0.48, 0.48, 1.0 }
+local VANILLA_NIGHT_SKY_FACTOR = 0.24
+
+-- Overworld "day" timeline modifier tracks over the 24000-tick day (base
+-- attribute values are white / 1.0, so the multiplier IS the value). Linear
+-- easing (KeyframeTrack default), cyclic wrap between the last and first key.
+local VANILLA_SKY_FACTOR_KEYS = {
+	{ 730, 1.0 },
+	{ 11270, 1.0 },
+	{ 13140, VANILLA_NIGHT_SKY_FACTOR },
+	{ 22860, VANILLA_NIGHT_SKY_FACTOR },
+}
+local VANILLA_SKY_COLOR_KEYS = {
+	{ 730, 1.0, 1.0, 1.0 },
+	{ 11270, 1.0, 1.0, 1.0 },
+	{ 13140, VANILLA_NIGHT_SKY_COLOR[1], VANILLA_NIGHT_SKY_COLOR[2], VANILLA_NIGHT_SKY_COLOR[3] },
+	{ 22860, VANILLA_NIGHT_SKY_COLOR[1], VANILLA_NIGHT_SKY_COLOR[2], VANILLA_NIGHT_SKY_COLOR[3] },
+}
+
+local function vanillaLightmapActive()
+	if not ( MC.LightStyleName and MC.LightStyleName() == "vanilla" ) then return false end
+	return lightmapEnabled()
+end
+
+-- Cyclic linear keyframe sampling (KeyframeTrackSampler semantics): segment
+-- between the surrounding keys, wrapping last -> first across the day border.
+-- Returns the interpolated tuple components after the tick column.
+local function sampleVanillaTrack( keys, ticks )
+	local count = #keys
+	local first, last = keys[1], keys[count]
+	local a, b, frac
+	if ticks < first[1] or ticks >= last[1] then
+		a, b = last, first
+		local span = ( first[1] + 24000 ) - last[1]
+		local into = ticks >= last[1] and ( ticks - last[1] ) or ( ticks + 24000 - last[1] )
+		frac = span > 0 and into / span or 0
+	else
+		for k = 1, count - 1 do
+			if ticks < keys[k + 1][1] then
+				a, b = keys[k], keys[k + 1]
+				local span = b[1] - a[1]
+				frac = span > 0 and ( ticks - a[1] ) / span or 0
+				break
+			end
+		end
+	end
+	local v1 = a[2] + ( b[2] - a[2] ) * frac
+	if a[4] == nil then return v1 end
+	local v2 = a[3] + ( b[3] - a[3] ) * frac
+	local v3 = a[4] + ( b[4] - a[4] ) * frac
+	return v1, v2, v3
+end
+
+-- LightmapRenderStateExtractor.tick(): random-walk torch flicker decayed
+-- toward zero, advanced at Minecraft's 20 Hz tick rate. blockFactor below is
+-- flicker + 1.4 (extract()).
+local VANILLA_TICK_INTERVAL = 0.05
+local vanillaFlicker = 0
+local vanillaFlickerLast = 0
+
+local function updateVanillaFlicker()
+	local cv = MC.MeshGpuLightmapVanillaFlicker
+	if not ( cv and cv.GetBool and cv:GetBool() ) then
+		vanillaFlicker = 0
+		return
+	end
+	local now = RealTime and RealTime() or 0
+	local steps = math.floor( ( now - vanillaFlickerLast ) / VANILLA_TICK_INTERVAL )
+	if steps <= 0 then return end
+	-- Cap the catch-up: after a hitch the walk state converges within a few
+	-- ticks anyway (x0.9 decay), so replaying a long backlog is pointless.
+	if steps > 5 then
+		steps = 5
+		vanillaFlickerLast = now
+	else
+		vanillaFlickerLast = vanillaFlickerLast + steps * VANILLA_TICK_INTERVAL
+	end
+	for _ = 1, steps do
+		vanillaFlicker = vanillaFlicker
+			+ ( math.random() - math.random() ) * math.random() * math.random() * 0.1
+		vanillaFlicker = vanillaFlicker * 0.9
+	end
+end
+
+-- lightmap.fsh get_brightness(): the classic vanilla light falloff curve.
+local function vanillaGetBrightness( level )
+	return level / ( 4 - 3 * level )
+end
+
+-- lightmap.fsh notGamma(): the "brightness" option's lift curve.
+local function vanillaNotGamma( r, g, b )
+	local maxComponent = math.max( r, g, b )
+	if maxComponent <= 0 then return r, g, b end
+	local maxInverted = 1 - maxComponent
+	local maxScaled = 1 - maxInverted * maxInverted * maxInverted * maxInverted
+	local mul = maxScaled / maxComponent
+	return r * mul, g * mul, b * mul
+end
+
+local function generateGlobalLightmapVanilla()
+	local target = ensureLightmapRT()
+	if not ( target and render and render.PushRenderTarget and cam and surface ) then return false end
+
+	-- The addon clock already runs vanilla ticks (24000/day, same epoch), so
+	-- the timeline keys apply directly; with the day cycle off it holds the
+	-- base tick (default 6000 = noon).
+	local ticks = MC.DayCycleTicks and MC.DayCycleTicks() or 6000
+	local skyFactor = sampleVanillaTrack( VANILLA_SKY_FACTOR_KEYS, ticks )
+	local skyColorR, skyColorG, skyColorB = sampleVanillaTrack( VANILLA_SKY_COLOR_KEYS, ticks )
+	local blockFactor = vanillaFlicker + 1.4
+	-- options.gamma, vanilla default 0.5; AMBIENT_LIGHT_COLOR is black in the
+	-- overworld and night vision / darkness / boss darkening have no GMod
+	-- counterpart, so color starts at the sky+block sum below.
+	local brightnessFactor = convarNumber( MC.MeshGpuLightmapVanillaGamma, 0.5, 0, 1 )
+
+	render.PushRenderTarget( target )
+		cam.Start2D()
+			for s = 0, LIGHTMAP_SIZE - 1 do
+				local skyBrightness = vanillaGetBrightness( s / 15 ) * skyFactor
+				local skyR = skyColorR * skyBrightness
+				local skyG = skyColorG * skyBrightness
+				local skyB = skyColorB * skyBrightness
+				for b = 0, LIGHTMAP_SIZE - 1 do
+					local blockLevel = b / 15
+					local blockBrightness = vanillaGetBrightness( blockLevel ) * blockFactor
+					-- BlockLightColor = mix(tint, white, 0.9 * (2l-1)^2): full
+					-- warm tint at mid levels, near white at 0 and 15.
+					local parabolic = ( 2 * blockLevel - 1 ) * ( 2 * blockLevel - 1 )
+					local whiteMix = 0.9 * parabolic
+					local r = skyR + ( VANILLA_BLOCK_TINT[1] + ( 1 - VANILLA_BLOCK_TINT[1] ) * whiteMix ) * blockBrightness
+					local g = skyG + ( VANILLA_BLOCK_TINT[2] + ( 1 - VANILLA_BLOCK_TINT[2] ) * whiteMix ) * blockBrightness
+					local bl = skyB + ( VANILLA_BLOCK_TINT[3] + ( 1 - VANILLA_BLOCK_TINT[3] ) * whiteMix ) * blockBrightness
+					r = math.Clamp( r, 0, 1 )
+					g = math.Clamp( g, 0, 1 )
+					bl = math.Clamp( bl, 0, 1 )
+					local nr, ng, nb = vanillaNotGamma( r, g, bl )
+					r = r + ( nr - r ) * brightnessFactor
+					g = g + ( ng - g ) * brightnessFactor
+					bl = bl + ( nb - bl ) * brightnessFactor
+					surface.SetDrawColor(
+						math.floor( math.Clamp( r, 0, 1 ) * 255 + 0.5 ),
+						math.floor( math.Clamp( g, 0, 1 ) * 255 + 0.5 ),
+						math.floor( math.Clamp( bl, 0, 1 ) * 255 + 0.5 ),
+						255
+					)
+					surface.DrawRect( b, s, 1, 1 )
+				end
+			end
+		cam.End2D()
+	render.PopRenderTarget()
+	return true
+end
+-- ==== end vanilla lightmap =================================================
+
 -- MC-shaderpack "eyeBrightnessSmooth": the sky-ambient axis scales with the
 -- CAMERA cell's sky exposure, smoothed like Minecraft's eye brightness. This
 -- — not the per-pixel sky value — is what makes enclosed spaces go dark in
@@ -119,6 +284,11 @@ local function updateEyeFactor()
 end
 
 local function generateGlobalLightmap()
+	-- Vanilla mode swaps the texture CONTENT only; the RT, bindings and the
+	-- chunk-side raw-level semantics are shared with the custom formula.
+	if vanillaLightmapActive() then
+		return generateGlobalLightmapVanilla()
+	end
 	local target = ensureLightmapRT()
 	if not ( target and render and render.PushRenderTarget and cam and surface ) then return false end
 
@@ -219,6 +389,8 @@ local function bindToMaterials()
 	bind( MC.MaterialGpuLightTexture )
 	bind( MC.MaterialGpuLightTextureFancy )
 	bind( MC.MaterialGpuLightTextureHeight )
+	bind( MC.MaterialGpuLightTextureVanilla )
+	bind( MC.MaterialGpuLightTextureVanillaTranslucent )
 	bind( MC.MaterialGpuLightTextureTranslucent )
 end
 
@@ -242,10 +414,27 @@ hook.Add( "Think", "mc_global_lightmap_refresh", function()
 	updateEyeFactor()
 	if needsInitialRefresh then
 		needsInitialRefresh = false
+		vanillaFlickerLast = RealTime and RealTime() or 0
 		MC.RefreshGlobalLightmap()
 		return
 	end
 	if not lightmapEnabled() then return end
+	if vanillaLightmapActive() then
+		-- Vanilla redraws every Minecraft tick, exactly like the game: the
+		-- torch flicker walks each tick and the timeline moves with the clock.
+		-- With flicker off and the clock frozen the texture is static, so only
+		-- convar callbacks refresh it.
+		updateVanillaFlicker()
+		local flickerCv = MC.MeshGpuLightmapVanillaFlicker
+		local flickerOn = flickerCv and flickerCv.GetBool and flickerCv:GetBool() or false
+		local dayRunning = MC.DayCycleEnabled and MC.DayCycleEnabled() == true
+		if not ( flickerOn or dayRunning ) then return end
+		local now = CurTime()
+		if now < nextTimedRefresh then return end
+		nextTimedRefresh = now + VANILLA_TICK_INTERVAL
+		generateGlobalLightmap()
+		return
+	end
 	local eyeDark = convarNumber( MC.MeshGpuLightmapEyeDark, 1, 0, 1 )
 	local eyeMoved = eyeDark < 1 and math.abs( eyeFactorSmooth - eyeFactorApplied ) > 0.01
 	local dayRunning = MC.DayCycleEnabled and MC.DayCycleEnabled() == true
@@ -259,13 +448,13 @@ hook.Add( "Think", "mc_global_lightmap_refresh", function()
 end )
 
 if cvars and cvars.AddChangeCallback then
-	cvars.AddChangeCallback( "mc_mesh_gpu_lightmap", function()
+	cvars.AddChangeCallback( "mc_lightmap", function()
 		-- Chunk light texture byte semantics differ between lightmap and
 		-- fallback mode (raw levels vs curved units), so a toggle re-bakes.
 		MC.RefreshGlobalLightmap()
 		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
 	end, "mc_global_lightmap_toggle" )
-	for _, name in ipairs( { "mc_mesh_gpu_lightmap_torch_warmth", "mc_mesh_gpu_lightmap_ambient", "mc_mesh_gpu_lightmap_sunset", "mc_mesh_gpu_lightmap_night_gamma", "mc_mesh_gpu_lightmap_sky_curve", "mc_mesh_gpu_lightmap_sky_min", "mc_mesh_gpu_lightmap_eye_dark" } ) do
+	for _, name in ipairs( { "mc_lightmap_torch_warmth", "mc_lightmap_ambient", "mc_lightmap_sunset", "mc_lightmap_night_gamma", "mc_lightmap_sky_curve", "mc_lightmap_sky_min", "mc_lightmap_eye_dark", "mc_light_style", "mc_lightmap_vanilla_gamma", "mc_lightmap_vanilla_flicker" } ) do
 		cvars.AddChangeCallback( name, function()
 			MC.RefreshGlobalLightmap()
 		end, "mc_global_lightmap_refresh_" .. name )

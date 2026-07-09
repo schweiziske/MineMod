@@ -114,7 +114,7 @@ function MC.LightPerfSummaryLines()
 	return {
 		string.format( "Light total: update=%sms rebuild=%sms dirty=%sms style=%s debug=%s",
 			tostring( s.lastUpdateMS ), tostring( s.lastRebuildMS ), tostring( s.lastDirtyMarkMS ),
-			tostring( s.lastMeshLightStyle or ( MC.LightStyle and MC.LightStyle:GetString() ) or "vanilla" ),
+			tostring( s.lastMeshLightStyle or ( MC.LightProfile and MC.LightProfile:GetString() ) or "vanilla" ),
 			tostring( lightPerfDebugEnabled() ) ),
 		string.format( "Light block: prop=%sms inc=%s dec=%s changed=%s dirtySec=%s src=%s queue=%s proc=%s write=%s",
 			tostring( s.lastPropagateMS ), tostring( s.lastBlockIncreaseProcessed ), tostring( s.lastBlockDecreaseProcessed ),
