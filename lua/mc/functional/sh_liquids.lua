@@ -8,7 +8,8 @@
 
 MC = MC or {}
 
-local LIQUID_CONTACT_PADDING = 1
+local LIQUID_CONTACT_HORIZONTAL_INSET = 2
+local LIQUID_CONTACT_VERTICAL_PADDING = 1
 local MC_FLUID_TICKS_PER_SECOND = 20
 local MC_WATER_MOVE_RELATIVE = 0.02
 local MC_WATER_SLOWDOWN = 0.8
@@ -20,11 +21,13 @@ local MC_WATER_FALL_EPSILON = 0.003
 local MC_WATER_FALL_SNAP = 0.005
 local MC_WATER_FALL_SLOW = -0.003
 local MC_WATER_JUMP_OUT = 0.3
+local MC_WATER_GROUND_INPUT_SCALE = 0.45
 local MC_SWIM_LOOK_UP_MULTIPLIER = 0.085
 local MC_SWIM_LOOK_NORMAL_MULTIPLIER = 0.06
 local MC_LAVA_MOVE_RELATIVE = 0.02
 local MC_LAVA_SLOWDOWN = 0.5
 local MC_LAVA_VERTICAL_SLOWDOWN = 0.8
+local MC_LAVA_GROUND_INPUT_SCALE = 0.25
 
 local LiquidKinds = {
 	water = "water",
@@ -65,21 +68,24 @@ function MC.PlayerEyeLiquid( ply )
 	return liquidAtPos( ply:EyePos() )
 end
 
-local function playerMoveAABB( ply, mv, padding )
+local function playerMoveAABB( ply, mv, horizontalInset, verticalPadding )
 	local pos = mv and mv.GetOrigin and mv:GetOrigin() or ply:GetPos()
 	local mins = ply:OBBMins()
 	local maxs = ply:OBBMaxs()
-	return pos.x + mins.x - padding,
-		pos.y + mins.y - padding,
-		pos.z + mins.z - padding,
-		pos.x + maxs.x + padding,
-		pos.y + maxs.y + padding,
-		pos.z + maxs.z + padding
+	local maxInset = math.max( 0, math.min( ( maxs.x - mins.x ) * 0.45, ( maxs.y - mins.y ) * 0.45 ) )
+	horizontalInset = math.Clamp( tonumber( horizontalInset ) or 0, 0, maxInset )
+	verticalPadding = math.max( 0, tonumber( verticalPadding ) or 0 )
+	return pos.x + mins.x + horizontalInset,
+		pos.y + mins.y + horizontalInset,
+		pos.z + mins.z - verticalPadding,
+		pos.x + maxs.x - horizontalInset,
+		pos.y + maxs.y - horizontalInset,
+		pos.z + maxs.z + verticalPadding
 end
 
 function MC.PlayerLiquidContact( ply, mv )
 	if not IsValid( ply ) or not MC.WorldToCell or not MC.GetBlock then return nil end
-	local x0, y0, z0, x1, y1, z1 = playerMoveAABB( ply, mv, LIQUID_CONTACT_PADDING )
+	local x0, y0, z0, x1, y1, z1 = playerMoveAABB( ply, mv, LIQUID_CONTACT_HORIZONTAL_INSET, LIQUID_CONTACT_VERTICAL_PADDING )
 	local minBx, minBy, minBz = MC.WorldToCell( Vector( x0, y0, z0 ) )
 	local maxBx, maxBy, maxBz = MC.WorldToCell( Vector( x1, y1, z1 ) )
 	local best
@@ -156,6 +162,17 @@ local function moveRelative( vel, ply, mv, speed, tickFactor )
 	local ang = horizontalMoveAngles( ply, mv )
 	local wish = ang:Forward() * forwardInput + ang:Right() * sideInput
 	return vel + wish * mcToSourceVelocity( speed * tickFactor ), true
+end
+
+local function consumeLiquidGroundInput( ply, mv, scale )
+	if ply:OnGround() then
+		mv:SetForwardSpeed( mv:GetForwardSpeed() * scale )
+		mv:SetSideSpeed( mv:GetSideSpeed() * scale )
+		return
+	end
+
+	mv:SetForwardSpeed( 0 )
+	mv:SetSideSpeed( 0 )
 end
 
 local function liquidAbove( contact )
@@ -258,8 +275,7 @@ local function applyWaterVelocity( ply, mv, contact )
 	vel = getFluidFallingAdjustedVelocity( vel, MC_WATER_GRAVITY, isFalling, sprinting, tickFactor )
 	vel = jumpOutOfFluid( ply, mv, vel )
 	mv:SetVelocity( vel )
-	mv:SetForwardSpeed( 0 )
-	mv:SetSideSpeed( 0 )
+	consumeLiquidGroundInput( ply, mv, MC_WATER_GROUND_INPUT_SCALE )
 end
 
 local function applyLavaVelocity( ply, mv )
@@ -274,8 +290,7 @@ local function applyLavaVelocity( ply, mv )
 	vel.z = vel.z - mcToSourceVelocity( MC_WATER_GRAVITY / 4 * tickFactor )
 	vel = jumpOutOfFluid( ply, mv, vel )
 	mv:SetVelocity( vel )
-	mv:SetForwardSpeed( 0 )
-	mv:SetSideSpeed( 0 )
+	consumeLiquidGroundInput( ply, mv, MC_LAVA_GROUND_INPUT_SCALE )
 end
 
 function MC.ApplyLiquidMove( ply, mv )
