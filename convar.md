@@ -7,6 +7,7 @@
 | 需求 | 主要 ConVar | 说明 |
 | --- | --- | --- |
 | 开启 GPU 光照路径 | `mc_light_shader 1`, `mc_light_texture 1`, `mc_lightmap 1` | 使用自定义 chunk shader、GPU chunk light texture 和全局 16x16 lightmap。 |
+| 切换 GPU 光照观感 | `mc_light_style fancy/plain/fast/vanilla` | `fancy` 是默认阴影+冷暖调色；`plain` 是平滑无调色；`fast` 是低采样旧观感；`vanilla` 是原版 Minecraft lightmap 合成。 |
 | 让夜晚更暗蓝 | `mc_daycycle 1`, `mc_daycycle_moon_light`, `mc_daycycle_night_tint`, `mc_lightmap_ambient` | `moon_light` 控夜晚天光等级，`night_tint` 控蓝色夜色，`ambient` 控 GPU lightmap 最低亮度。 |
 | 让阴影处更黑 | `mc_shadow 1`, `mc_shadow_strength`, `mc_shadow_face_shade`, `mc_lightmap_ambient` | 阴影暗度走 shadow map 和 fancy shader。 |
 | 封闭空间变暗 | `mc_light_sky_flood 1`, `mc_lightmap_ambient`, `mc_lightmap_sky_min` | 体素天空光泛洪(露天 15,横向每格 -1,全封闭 0)。着色器里直射阳光按体素天空光门控:全封闭格子收不到直射阳光,不再需要把 `mc_shadow_strength` 拉满;室内亮度由 `ambient`(绝对底光)和 `sky_min`(天空环境光底比例)直接控制。 |
@@ -86,6 +87,7 @@
 | `mc_block_explosion_scale` | `0.04` | GMod 爆炸伤害转 Minecraft 风格爆炸半径的倍率。 |
 | `mc_block_explosion_max_radius` | `8` | Minecraft 风格方块爆炸最大半径。 |
 | `mc_block_explosion_max_blocks` | `4096` | 单次 GMod 爆炸最多破坏多少 MC 方块；`0` 表示不限。 |
+| `mc_block_explosion_fx_limit` | `16` | 单次爆炸最多广播多少个方块破坏粒子/音效；`0` 表示不广播。 |
 
 ## 客户端基础光照
 
@@ -93,7 +95,8 @@
 | --- | --- | --- |
 | `mc_light_enabled` | `1` | 是否把 Minecraft 风格顶点光照应用到 MC chunk mesh。 |
 | `mc_light_ambient_min` | `0` | CPU/vertex-color 路径的最低亮度，不控制 GPU global lightmap。 |
-| `mc_light_style` | `shader` | MC chunk 光照风格：`fast`、`vanilla`、`best`、`shader`。 |
+| `mc_light_profile` | `shader` | mesh 光照管线 profile：`fast`、`vanilla`、`best` 是 CPU/vertex-color 路径；`shader` 是 GPU chunk shader 路径（默认）。 |
+| `mc_light_style` | `fancy` | GPU 像素光照观感：`fancy`、`plain`、`fast`、`vanilla`。旧归档值 `shader` / `best` / 数字会归一为 `fancy`。 |
 | `mc_light_perf_debug` | `0` | 显示并收集详细光照性能诊断。 |
 | `mc_light_perf_print_break` | `0` | 破坏方块后打印光照性能诊断。 |
 | `mc_light_perf_print_each` | `0` | 每次光照计算打印一行 timing 诊断。 |
@@ -122,7 +125,7 @@
 | --- | --- | --- |
 | `mc_light_shader` | `1` | 使用自定义 GPU chunk shader；需要已编译 VCS 文件。 |
 | `mc_light_texture` | `1` | GPU shader 从 chunk light texture 采样光照，而不是把光照烘进顶点色。 |
-| `MCSTYLEFANCY` | `1` | 使用 fancy GPU shader 变体：冷阴影、暖太阳、背光面 shading、边缘 fade。 |
+| `mc_light_style` | `fancy` | GPU 光照观感选择：`fancy` = PCF 阴影+冷暖调色；`plain` = 平滑光照无调色；`fast` = 低采样旧观感；`vanilla` = 原版 Minecraft lightmap 合成。 |
 | `mc_light_brightness` | `1.5` | GPU light texture 的 block/sky light 亮度倍率(>1 时火把高等级饱和截顶;想不截顶地增强火把改用 gamma)。 |
 | `mc_light_gamma` | `1` | GPU light texture 的衰减曲线；`>1` 提亮中间亮度，`<1` 压暗。 |
 | `mc_light_sun_brightness` | `1` | GPU 路径 sun/sky light 亮度倍率。 |
@@ -135,6 +138,8 @@
 | `mc_lightmap_sky_curve` | `3` | 天空环境光衰减形状 `1-(1-level)^curve`：越高，屋檐/树冠下等"有遮挡但开阔"的区域越亮，只有真正封闭的空间才落到环境底光（`1` = 线性）。 |
 | `mc_lightmap_sky_min` | `0.1` | 天空环境光在 sky level 0 处保留的比例（室内/大建筑底下的环境底光；直射阳光独立于此，由 shadow map 决定）。 |
 | `mc_lightmap_eye_dark` | `1` | 相机所在格无天空光时的环境光乘数（eyeBrightness 洞穴变暗）；`1` = 关闭——站在大建筑底下也会触发它，所以默认关。 |
+| `mc_lightmap_vanilla_gamma` | `0.5` | `mc_light_style vanilla` 使用的原版亮度选项 options.gamma：`0` = 昏暗(Moody)，`0.5` = 原版默认，`1` = 明亮。 |
+| `mc_lightmap_vanilla_flicker` | `1` | `mc_light_style vanilla` 使用的原版每 tick 火把闪烁；`0` = 稳定方块光。 |
 
 ## 昼夜循环
 
@@ -149,7 +154,7 @@
 
 ## GPU shadow map
 
-阴影处的黑暗主要靠这一组。建议组合：`mc_light_shader 1`、`mc_light_texture 1`、`MCSTYLEFANCY 1`、`mc_shadow 1`，再调 `mc_shadow_strength` 和 `mc_lightmap_ambient`。
+阴影处的黑暗主要靠这一组。建议组合：`mc_light_shader 1`、`mc_light_texture 1`、`mc_light_style fancy`、`mc_shadow 1`，再调 `mc_shadow_strength` 和 `mc_lightmap_ambient`。
 
 | ConVar | 默认 | 作用 |
 | --- | --- | --- |
@@ -232,27 +237,27 @@
 
 ## Fast 低采样 GPU 光照（旧版观感）
 
-`MCSTYLEFAST 1` 切换回最初的低采样 GPU 光照着色器观感：每像素 4 次光照采样 + 1 次图集采样，
+`mc_light_style fast` 切换回最初的低采样 GPU 光照着色器观感：每像素 4 次光照采样 + 1 次图集采样，
 解析式暖/冷调色 + 面向着色，**无阴影采样、无 lightmap 查表**。优先级高于 fancy/height 材质选择。
 昼夜亮度/夜色/暖色由每帧一次的常量传入（复用 daycycle 与 lightmap 的 cvar），无每 chunk 成本。
 
 | ConVar | 默认 | 作用 |
 | --- | --- | --- |
-| `MCSTYLEFAST` | `0` | 低采样快速 GPU 光照着色器（旧版观感），开启后覆盖 fancy/height 选择。 |
+| `mc_light_style` | `fancy` | 设为 `fast` 使用低采样快速 GPU 光照着色器（旧版观感），并跳过 shadow map / heightfield 消费。 |
 | `mc_light_flush_per_frame` | `8` | PreRender 中每帧最多重烘的 chunk 光照纹理数（绘制路径不再重烘；0 = 不限）。 |
 
 ## 原版 Minecraft 光照（vanilla 观感）
 
-`MCSTYLEVANILLA 1` 切换到 1:1 复刻原版 Minecraft 26.2 的光照系统（公式逐行移植自
+`mc_light_style vanilla` 切换到 1:1 复刻原版 Minecraft 26.2 的光照系统（公式逐行移植自
 反编译源码 `out/` 的 `lightmap.fsh` + `LightmapRenderStateExtractor` + `Timelines`）：
 最终色 = 图集色 x lightmap(方块光, 天光) x 面明暗(顶1.0/底0.5/X面0.6/Y面0.8) x AO，
 **无阴影贴图、无冷暖调色**——昼夜亮度、火把暖色(0xFFD88C)、夜晚蓝天光(0.48,0.48,1 x 0.24)
 全部按原版昼夜时间线烘在 16x16 lightmap 里，每个 MC tick 重绘（含火把闪烁随机游走）。
-开启时自动跳过 shadow map / heightfield 的每帧渲染。优先级：高于 fancy/height，低于 fast。
+开启时自动跳过 shadow map / heightfield 的每帧渲染；切回默认观感用 `mc_light_style fancy`。
 需要 `mc_lightmap 1`（默认开）。
 
 | ConVar | 默认 | 作用 |
 | --- | --- | --- |
-| `MCSTYLEVANILLA` | `0` | 原版 Minecraft 光照合成（一次 lightmap 查表，无阴影）。 |
+| `mc_light_style` | `fancy` | 设为 `vanilla` 使用原版 Minecraft 光照合成（一次 lightmap 查表，无阴影）。 |
 | `mc_lightmap_vanilla_gamma` | `0.5` | 原版亮度选项 options.gamma：`0` = 昏暗(Moody)，`0.5` = 原版默认，`1` = 明亮。 |
 | `mc_lightmap_vanilla_flicker` | `1` | 原版每 tick 火把闪烁（随机游走 x0.9 衰减）；`0` = 稳定方块光。 |
