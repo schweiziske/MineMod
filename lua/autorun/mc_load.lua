@@ -71,6 +71,7 @@ local CLIENT_FILES = {
 	"mc/render/cl_mesh_core.lua",
 	"mc/render/cl_collision.lua",
 	"mc/render/cl_draw.lua",
+	"mc/render/cl_mesh_bloom.lua",
 	"mc/render/cl_dirty.lua",
 	"mc/cl_render.lua",
 	"mc/cl_config_ui.lua",

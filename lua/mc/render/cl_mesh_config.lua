@@ -41,6 +41,14 @@ MC.MeshShadowMapFaceShade = MC.MeshShadowMapFaceShade or ( CreateClientConVar an
 	"Fancy look: how strongly faces pointing away from the sun are shaded like cast shadow" ) )
 MC.MeshShadowMapWarmth = MC.MeshShadowMapWarmth or ( CreateClientConVar and CreateClientConVar( "mc_shadow_warmth", "0.35", true, false,
 	"Fancy look: warm tint on sunlit faces and torch-lit areas (0 = neutral)" ) )
+MC.MeshBloom = MC.MeshBloom or ( CreateClientConVar and CreateClientConVar( "mc_light_bloom", "1", true, false,
+	"Fancy GPU look: spread bright torch and sun highlight seeds with a screen-space bloom pass" ) )
+MC.MeshBloomStrength = MC.MeshBloomStrength or ( CreateClientConVar and CreateClientConVar( "mc_light_bloom_strength", "0.8", true, false,
+	"Fancy GPU bloom intensity (night automatically receives a small boost)" ) )
+MC.MeshBloomThreshold = MC.MeshBloomThreshold or ( CreateClientConVar and CreateClientConVar( "mc_light_bloom_threshold", "0.7", true, false,
+	"Fancy GPU bloom brightness threshold; higher values restrict bloom to hotter pixels" ) )
+MC.MeshBloomRadius = MC.MeshBloomRadius or ( CreateClientConVar and CreateClientConVar( "mc_light_bloom_radius", "6", true, false,
+	"Fancy GPU bloom blur radius in screen pixels" ) )
 MC.MeshGpuLightBrightness = MC.MeshGpuLightBrightness or ( CreateClientConVar and CreateClientConVar( "mc_light_brightness", "1.5", true, false,
 	"Brightness multiplier applied to block/sky light levels (1 = unchanged)" ) )
 MC.MeshGpuLightGamma = MC.MeshGpuLightGamma or ( CreateClientConVar and CreateClientConVar( "mc_light_gamma", "1", true, false,
