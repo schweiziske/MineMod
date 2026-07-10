@@ -122,7 +122,7 @@ function SWEP:PrimaryAttack()
 		local bx, by, bz = breakTarget( owner, aim, owner:GetEyeTrace() )
 		if not bx then return end
 		if MC.SV.Break( owner, bx, by, bz ) then
-			self:EmitSound( "buttons/button15.wav", 60, 120, 0.25 )
+			//self:EmitSound( "buttons/button15.wav", 60, 120, 0.25 )
 			net.Start( "mc_creative_break_anim" )
 				net.WriteInt( bx, MC.Net.COORD_BITS )
 				net.WriteInt( by, MC.Net.COORD_BITS )
@@ -164,7 +164,7 @@ function SWEP:SecondaryAttack()
 		local bx, by, bz, orient = placeTarget( owner, aim, tr, id )
 		if not bx then return end
 		if MC.SV.Place( owner, bx, by, bz, id, orient ) then
-			self:EmitSound( "buttons/button14.wav", 60, 150, 0.25 )
+			//self:EmitSound( "buttons/button14.wav", 60, 150, 0.25 )
 			net.Start( "mc_creative_place_anim" )
 				net.WriteInt( bx, MC.Net.COORD_BITS )
 				net.WriteInt( by, MC.Net.COORD_BITS )
