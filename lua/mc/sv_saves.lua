@@ -19,8 +19,10 @@ local SAVE_DIR = "mc"
 local SAVE_SLOT_DIR = "mc/saves"
 local SAVE_COVER_DIR = "mc/save_covers"
 local MAX_NET_SAVES = 4095
-local SAVE_COVER_PART_BYTES = 60000
+local SAVE_COVER_PART_BYTES = 16384
 local MAX_SAVE_COVER_BYTES = 1024 * 1024 * 2
+local SAVE_COVER_UPLOAD_TIMEOUT = 20
+local SAVE_COVER_DOWNLOAD_PART_INTERVAL = 0.05
 local SAVE_PUBLIC_HELP = "Allow non-admin players to list/load/save MC saves; delete remains admin-only"
 
 local function ensureSaveDirs()
@@ -320,6 +322,24 @@ end
 
 local SaveCoverUploads = {}
 
+local function sendSaveCoverAck( ply, cover, ok, err )
+	if not IsValid( ply ) then return end
+	net.Start( "mc_save_cover_ack" )
+		net.WriteString( tostring( cover or "" ) )
+		net.WriteBool( ok == true )
+		net.WriteString( tostring( err or "" ) )
+	net.Send( ply )
+end
+
+local function failSaveCoverUpload( ply, upload, err )
+	if SaveCoverUploads[ply] == upload then SaveCoverUploads[ply] = nil end
+	sendSaveCoverAck( ply, upload and upload.cover or "", false, err )
+end
+
+local function isJPEGData( data )
+	return isstring( data ) and #data >= 4 and string.byte( data, 1 ) == 255 and string.byte( data, 2 ) == 216
+end
+
 local function sendSaveCoverToClient( ply, cover )
 	if not IsValid( ply ) then return end
 	cover = sanitizeSaveCoverReadPath( cover )
@@ -339,7 +359,7 @@ local function sendSaveCoverToClient( ply, cover )
 	net.Send( ply )
 
 	local i = 1
-	timer.Create( timerName, 0.01, parts, function()
+	timer.Create( timerName, SAVE_COVER_DOWNLOAD_PART_INTERVAL, parts, function()
 		if not IsValid( ply ) then timer.Remove( timerName ) return end
 
 		local first = ( i - 1 ) * SAVE_COVER_PART_BYTES + 1
@@ -355,18 +375,25 @@ local function sendSaveCoverToClient( ply, cover )
 end
 
 net.Receive( "mc_save_cover_begin", function( _, ply )
-	if not canUseSaves( ply ) then return end
-
 	local slotName = SV.SaveSlotName( net.ReadString() )
-	if not slotName then return end
-
-	local cover = sanitizeSaveCover( net.ReadString(), slotName )
+	local rawCover = net.ReadString()
 	local expectedParts = net.ReadUInt( 16 )
 	local totalBytes = net.ReadUInt( 32 )
-	if not cover or expectedParts < 1 or totalBytes < 1 or totalBytes > MAX_SAVE_COVER_BYTES then return end
+	if not canUseSaves( ply ) then sendSaveCoverAck( ply, rawCover, false, "permission" ) return end
+	if not slotName then sendSaveCoverAck( ply, rawCover, false, "invalid_slot" ) return end
+
+	local cover = sanitizeSaveCover( rawCover, slotName )
+	if not cover or expectedParts < 1 or totalBytes < 1 or totalBytes > MAX_SAVE_COVER_BYTES then
+		sendSaveCoverAck( ply, rawCover, false, "invalid_upload" )
+		return
+	end
+	if expectedParts ~= math.ceil( totalBytes / SAVE_COVER_PART_BYTES ) then
+		sendSaveCoverAck( ply, rawCover, false, "invalid_part_count" )
+		return
+	end
 	if not saveCoverBelongsToSlot( cover, slotName ) then cover = SV.SaveCoverPath( slotName ) end
 
-	SaveCoverUploads[ply] = {
+	local upload = {
 		slotName = slotName,
 		cover = cover,
 		expectedParts = expectedParts,
@@ -375,6 +402,10 @@ net.Receive( "mc_save_cover_begin", function( _, ply )
 		receivedParts = 0,
 		parts = {},
 	}
+	SaveCoverUploads[ply] = upload
+	timer.Simple( SAVE_COVER_UPLOAD_TIMEOUT, function()
+		if SaveCoverUploads[ply] == upload then failSaveCoverUpload( ply, upload, "timeout" ) end
+	end )
 end )
 
 net.Receive( "mc_save_cover_part", function( _, ply )
@@ -385,15 +416,15 @@ net.Receive( "mc_save_cover_part", function( _, ply )
 	local index = net.ReadUInt( 16 )
 	local len = net.ReadUInt( 16 )
 	local chunk = net.ReadData( len )
-	if cover ~= upload.cover or index < 1 or index > upload.expectedParts then return end
-	if len < 1 or len > SAVE_COVER_PART_BYTES or not chunk or #chunk ~= len then return end
+	if cover ~= upload.cover or index < 1 or index > upload.expectedParts then failSaveCoverUpload( ply, upload, "invalid_part" ) return end
+	if len < 1 or len > SAVE_COVER_PART_BYTES or not chunk or #chunk ~= len then failSaveCoverUpload( ply, upload, "invalid_part" ) return end
 	if upload.parts[index] then return end
 
 	upload.parts[index] = chunk
 	upload.receivedParts = upload.receivedParts + 1
 	upload.receivedBytes = upload.receivedBytes + len
 	if upload.receivedBytes > upload.totalBytes or upload.receivedBytes > MAX_SAVE_COVER_BYTES then
-		SaveCoverUploads[ply] = nil
+		failSaveCoverUpload( ply, upload, "too_large" )
 		return
 	end
 
@@ -401,11 +432,17 @@ net.Receive( "mc_save_cover_part", function( _, ply )
 
 	local data = table.concat( upload.parts )
 	SaveCoverUploads[ply] = nil
-	if #data ~= upload.totalBytes then return end
+	if #data ~= upload.totalBytes then sendSaveCoverAck( ply, upload.cover, false, "size_mismatch" ) return end
+	if not isJPEGData( data ) then sendSaveCoverAck( ply, upload.cover, false, "invalid_jpeg" ) return end
 
 	ensureSaveDirs()
 	file.Write( upload.cover, data )
+	if not file.Exists( upload.cover, "DATA" ) or file.Size( upload.cover, "DATA" ) ~= #data then
+		sendSaveCoverAck( ply, upload.cover, false, "write_failed" )
+		return
+	end
 	SV.DeleteSaveCovers( upload.slotName, upload.cover )
+	sendSaveCoverAck( ply, upload.cover, true )
 end )
 
 net.Receive( "mc_save_cover_req", function( _, ply )

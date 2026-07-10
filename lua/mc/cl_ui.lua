@@ -20,6 +20,284 @@ surface.CreateFont( "mc_hud_big", { font = "Roboto", size = 28, weight = 700 } )
 surface.CreateFont( "mc_hud_fit_24", { font = "Roboto", size = 24, weight = 700 } )
 surface.CreateFont( "mc_hud_fit_20", { font = "Roboto", size = 20, weight = 700 } )
 surface.CreateFont( "mc_hud_fit_16", { font = "Roboto", size = 16, weight = 700 } )
+surface.CreateFont( "mc_library_title", { font = "Roboto", size = 26, weight = 700 } )
+surface.CreateFont( "mc_library_section", { font = "Roboto", size = 14, weight = 700 } )
+
+-- Save/preset managers intentionally use a muted denim-blue palette.  Flat
+-- surfaces, warm text and generous spacing keep it closer to a tidy library
+-- than a glowing sci-fi dashboard.
+MC.LibraryUI = {
+	frame = Color( 228, 234, 235, 252 ),
+	title = Color( 61, 84, 99, 255 ),
+	panel = Color( 248, 248, 245, 252 ),
+	panelInner = Color( 248, 248, 245, 252 ),
+	sidebar = Color( 218, 228, 231, 252 ),
+	row = Color( 238, 242, 241, 255 ),
+	rowHover = Color( 226, 235, 237, 255 ),
+	rowSelected = Color( 205, 222, 229, 255 ),
+	control = Color( 92, 126, 145, 255 ),
+	controlHover = Color( 106, 140, 158, 255 ),
+	controlDown = Color( 76, 108, 126, 255 ),
+	quiet = Color( 224, 232, 233, 255 ),
+	quietHover = Color( 211, 223, 226, 255 ),
+	danger = Color( 164, 83, 76, 255 ),
+	dangerHover = Color( 181, 96, 87, 255 ),
+	accent = Color( 82, 124, 147, 255 ),
+	accentSoft = Color( 190, 213, 222, 255 ),
+	input = Color( 252, 251, 247, 255 ),
+	text = Color( 43, 54, 61, 255 ),
+	textOnBlue = Color( 248, 247, 242, 255 ),
+	textDim = Color( 104, 118, 124, 235 ),
+	border = Color( 190, 203, 206, 220 ),
+	error = Color( 169, 70, 66, 255 ),
+	warm = Color( 205, 151, 82, 255 ),
+}
+
+local LIBRARY_GROUP_PATH = "mc/library_groups.json"
+local LibraryGroupData
+
+local function libraryTrim( value )
+	return string.Trim( tostring( value or "" ) )
+end
+
+local function libraryGroupName( value )
+	local name = libraryTrim( value )
+	name = string.gsub( name, "[%c]", " " )
+	name = libraryTrim( string.sub( name, 1, 32 ) )
+	return name ~= "" and name or nil
+end
+
+local function libraryLoadGroups()
+	if LibraryGroupData then return LibraryGroupData end
+
+	local raw = file.Read( LIBRARY_GROUP_PATH, "DATA" )
+	local parsed = raw and util.JSONToTable( raw ) or nil
+	LibraryGroupData = istable( parsed ) and parsed or {}
+	LibraryGroupData.v = 1
+	LibraryGroupData.groups = istable( LibraryGroupData.groups ) and LibraryGroupData.groups or {}
+	LibraryGroupData.assignments = istable( LibraryGroupData.assignments ) and LibraryGroupData.assignments or {}
+	LibraryGroupData.assignments.save = istable( LibraryGroupData.assignments.save ) and LibraryGroupData.assignments.save or {}
+	LibraryGroupData.assignments.preset = istable( LibraryGroupData.assignments.preset ) and LibraryGroupData.assignments.preset or {}
+
+	local clean = {}
+	local seen = {}
+	for _, group in ipairs( LibraryGroupData.groups ) do
+		local id = libraryTrim( group.id )
+		local name = libraryGroupName( group.name )
+		if id ~= "" and name and not seen[id] then
+			clean[#clean + 1] = { id = id, name = name }
+			seen[id] = true
+		end
+	end
+	LibraryGroupData.groups = clean
+	return LibraryGroupData
+end
+
+local function librarySaveGroups()
+	local data = libraryLoadGroups()
+	file.CreateDir( "mc" )
+	local json = util.TableToJSON( data, true )
+	if json then file.Write( LIBRARY_GROUP_PATH, json ) end
+end
+
+function MC.LibraryGetGroups()
+	return libraryLoadGroups().groups
+end
+
+function MC.LibraryGetGroupName( groupID )
+	groupID = libraryTrim( groupID )
+	if groupID == "" then return nil end
+	for _, group in ipairs( libraryLoadGroups().groups ) do
+		if group.id == groupID then return group.name end
+	end
+	return nil
+end
+
+function MC.LibraryGetItemGroup( kind, itemName )
+	local assignments = libraryLoadGroups().assignments[kind]
+	if not assignments then return nil end
+	local id = assignments[tostring( itemName or "" )]
+	return MC.LibraryGetGroupName( id ) and id or nil
+end
+
+function MC.LibraryAssignItemGroup( kind, itemName, groupID )
+	local data = libraryLoadGroups()
+	if not data.assignments[kind] then return false end
+	itemName = tostring( itemName or "" )
+	if itemName == "" then return false end
+	if groupID and not MC.LibraryGetGroupName( groupID ) then return false end
+	data.assignments[kind][itemName] = groupID
+	librarySaveGroups()
+	return true
+end
+
+function MC.LibraryCreateGroup( requestedName )
+	local name = libraryGroupName( requestedName )
+	if not name then return nil, "empty" end
+	local data = libraryLoadGroups()
+	for _, group in ipairs( data.groups ) do
+		if string.lower( group.name ) == string.lower( name ) then return nil, "exists" end
+	end
+
+	local id = "group_" .. util.CRC( name .. "|" .. tostring( SysTime() ) .. "|" .. tostring( math.random() ) )
+	data.groups[#data.groups + 1] = { id = id, name = name }
+	librarySaveGroups()
+	return id
+end
+
+function MC.LibraryRenameGroup( groupID, requestedName )
+	local name = libraryGroupName( requestedName )
+	if not name then return false end
+	local data = libraryLoadGroups()
+	for _, group in ipairs( data.groups ) do
+		if group.id ~= groupID and string.lower( group.name ) == string.lower( name ) then return false end
+	end
+	for _, group in ipairs( data.groups ) do
+		if group.id == groupID then
+			group.name = name
+			librarySaveGroups()
+			return true
+		end
+	end
+	return false
+end
+
+function MC.LibraryDeleteGroup( groupID )
+	local data = libraryLoadGroups()
+	local removed = false
+	for i = #data.groups, 1, -1 do
+		if data.groups[i].id == groupID then
+			table.remove( data.groups, i )
+			removed = true
+		end
+	end
+	if not removed then return false end
+	for _, assignments in pairs( data.assignments ) do
+		for itemName, assignedID in pairs( assignments ) do
+			if assignedID == groupID then assignments[itemName] = nil end
+		end
+	end
+	librarySaveGroups()
+	return true
+end
+
+function MC.LibraryCollectMaps( items )
+	local counts = {}
+	for _, item in ipairs( items or {} ) do
+		local map = libraryTrim( item.map )
+		if map == "" then map = "unknown" end
+		counts[map] = ( counts[map] or 0 ) + 1
+	end
+	local maps = {}
+	for map, count in pairs( counts ) do maps[#maps + 1] = { name = map, count = count } end
+	table.sort( maps, function( a, b )
+		if a.name == game.GetMap() then return true end
+		if b.name == game.GetMap() then return false end
+		return a.name < b.name
+	end )
+	return maps
+end
+
+function MC.LibrarySortNewestFirst( items, timeField )
+	table.sort( items or {}, function( a, b )
+		local at = libraryTrim( a and a[timeField] )
+		local bt = libraryTrim( b and b[timeField] )
+		local aHasTime = at ~= "" and at ~= "?"
+		local bHasTime = bt ~= "" and bt ~= "?"
+		if aHasTime ~= bHasTime then return aHasTime end
+		if at ~= bt then return at > bt end
+		return string.lower( tostring( a and a.name or "" ) ) < string.lower( tostring( b and b.name or "" ) )
+	end )
+	return items
+end
+
+function MC.LibraryItemMatches( item, kind, mapFilter, groupFilter, search )
+	local itemMap = libraryTrim( item and item.map )
+	if mapFilter == "@current" and itemMap ~= game.GetMap() then return false end
+	if mapFilter and string.StartWith( mapFilter, "map:" ) and itemMap ~= string.sub( mapFilter, 5 ) then return false end
+
+	local assigned = MC.LibraryGetItemGroup( kind, item and item.name )
+	if groupFilter == "@none" and assigned then return false end
+	if groupFilter and groupFilter ~= "*" and groupFilter ~= "@none" and assigned ~= groupFilter then return false end
+
+	search = string.lower( libraryTrim( search ) )
+	if search ~= "" then
+		local haystack = string.lower( tostring( item and item.name or "" ) .. " " .. itemMap )
+		if not string.find( haystack, search, 1, true ) then return false end
+	end
+	return true
+end
+
+function MC.LibraryStyleButton( btn, label, kind )
+	local UI = MC.LibraryUI
+	btn:SetText( "" )
+	btn:SetCursor( "hand" )
+	btn.Paint = function( s, w, h )
+		local bg, fg = UI.control, UI.textOnBlue
+		if kind == "quiet" then bg, fg = UI.quiet, UI.text end
+		if kind == "danger" then bg, fg = UI.danger, UI.textOnBlue end
+		if not s:IsEnabled() then
+			bg, fg = UI.quiet, UI.textDim
+		elseif s:IsDown() then
+			bg = kind == "danger" and UI.dangerHover or UI.controlDown
+		elseif s:IsHovered() then
+			bg = kind == "danger" and UI.dangerHover or ( kind == "quiet" and UI.quietHover or UI.controlHover )
+		end
+		surface.SetDrawColor( bg )
+		surface.DrawRect( 0, 0, w, h )
+		draw.SimpleText( label, "mc_hud_small", w * 0.5, h * 0.5, fg, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+	end
+end
+
+function MC.LibraryStyleTextEntry( entry, placeholder )
+	local UI = MC.LibraryUI
+	entry:SetPlaceholderText( placeholder or "" )
+	entry:SetPaintBackground( false )
+	entry:SetTextColor( UI.text )
+	if entry.SetCursorColor then entry:SetCursorColor( UI.accent ) end
+	entry.Paint = function( s, w, h )
+		surface.SetDrawColor( UI.input )
+		surface.DrawRect( 0, 0, w, h )
+		surface.SetDrawColor( s:HasFocus() and UI.accent or UI.border )
+		surface.DrawOutlinedRect( 0, 0, w, h, 1 )
+		if s:GetValue() == "" and not s:HasFocus() then
+			draw.SimpleText( placeholder or "", "mc_hud_small", 10, h * 0.5, UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER )
+		end
+		s:DrawTextEntryText( UI.text, UI.accent, UI.text )
+	end
+end
+
+function MC.LibraryStyleCombo( combo )
+	local UI = MC.LibraryUI
+	combo:SetTextColor( UI.text )
+	combo:SetFont( "mc_hud_small" )
+	combo.UpdateColours = function( s )
+		s:SetTextStyleColor( s:IsEnabled() and UI.text or UI.textDim )
+	end
+	if IsValid( combo.DropButton ) then
+		combo.DropButton.Paint = function( _, w, h )
+			draw.SimpleText( "▾", "mc_hud_small", w * 0.5, h * 0.5 - 1, UI.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+		end
+	end
+	combo.Paint = function( s, w, h )
+		surface.SetDrawColor( UI.input )
+		surface.DrawRect( 0, 0, w, h )
+		surface.SetDrawColor( s:IsHovered() and UI.accent or UI.border )
+		surface.DrawOutlinedRect( 0, 0, w, h, 1 )
+		return false
+	end
+end
+
+function MC.LibraryDrawPill( textValue, x, y, background, foreground )
+	local text = tostring( textValue or "" )
+	surface.SetFont( "mc_library_section" )
+	local tw, th = surface.GetTextSize( text )
+	local w, h = tw + 16, math.max( 22, th + 6 )
+	surface.SetDrawColor( background or MC.LibraryUI.accentSoft )
+	surface.DrawRect( x, y, w, h )
+	draw.SimpleText( text, "mc_library_section", x + w * 0.5, y + h * 0.5, foreground or MC.LibraryUI.text, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+	return w, h
+end
 
 function MC.DrawFittedText( text, font, fallbackFonts, x, y, color, ax, ay, maxw )
 	local useFont = font

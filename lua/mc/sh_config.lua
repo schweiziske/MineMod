@@ -78,6 +78,7 @@ if SERVER then
 		"mc_save_action",
 		"mc_save_cover_begin",
 		"mc_save_cover_part",
+		"mc_save_cover_ack",
 		"mc_save_cover_req",
 		"mc_save_cover_download_begin",
 		"mc_save_cover_download_part",
@@ -90,6 +91,7 @@ if SERVER then
 		"mc_preset_place",
 		"mc_preset_cover_begin",
 		"mc_preset_cover_part",
+		"mc_preset_cover_ack",
 		"mc_preset_cover_req",
 		"mc_preset_cover_download_begin",
 		"mc_preset_cover_download_part",
@@ -179,6 +181,7 @@ if SERVER then
 	MC.Config.ImportMax   = GetConVar( "mc_import_max" ) or CreateConVar( "mc_import_max", "0", F, "Max blocks one mc_import may load; 0 = unlimited" )
 	MC.Config.Autosave    = GetConVar( "mc_autosave" ) or CreateConVar( "mc_autosave", "0", F, "Seconds between autosaves (0 disables)" )
 	MC.Config.SavePublic  = GetConVar( "mc_save_public" ) or CreateConVar( "mc_save_public", "0", F, "Allow non-admin players to list/load/save MC saves; delete remains admin-only" )
+	MC.Config.PresetPublic = GetConVar( "mc_preset_public" ) or CreateConVar( "mc_preset_public", "0", F, "Allow non-admin players to list/load/save/place MC presets" )
 	MC.Config.SyncCells   = GetConVar( "mc_sync_cells_per_part" ) or CreateConVar( "mc_sync_cells_per_part", tostring( MC.Config.SyncCellsPerPart ), F, "Blocks per streamed sync net message" )
 	MC.Config.SyncMsgs    = GetConVar( "mc_sync_messages_per_tick" ) or CreateConVar( "mc_sync_messages_per_tick", tostring( MC.Config.SyncMessagesPerTick ), F, "Streamed sync net messages per 0.05s tick" )
 	MC.Config.SyncBudget  = GetConVar( "mc_sync_reliable_budget" ) or CreateConVar( "mc_sync_reliable_budget", tostring( MC.Config.SyncReliableBudget ), F, "Approx max reliable sync bytes per 0.05s tick" )
