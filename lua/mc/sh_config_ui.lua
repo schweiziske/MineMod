@@ -48,17 +48,17 @@ end
 MC.ConfigGroups = {
 	client = {
 		{ id = "interface", label = "Interface", zhLabel = "界面" },
-		{ id = "rendering", label = "Rendering", zhLabel = "画面与网格" },
 		{ id = "lighting", label = "Lighting", zhLabel = "光照与阴影" },
 		{ id = "creative", label = "Creative tool", zhLabel = "创造工具" },
+		{ id = "rendering", label = "Rendering", zhLabel = "画面与网格" },
 		{ id = "diagnostics", label = "Diagnostics", zhLabel = "诊断" },
 	},
 	server = {
 		{ id = "access", label = "Access and world", zhLabel = "权限与世界" },
 		{ id = "editing", label = "Editing and storage", zhLabel = "编辑与存储" },
+		{ id = "gameplay", label = "Gameplay", zhLabel = "玩法" },
 		{ id = "network", label = "Networking", zhLabel = "网络与同步" },
 		{ id = "physics", label = "Collision", zhLabel = "碰撞" },
-		{ id = "gameplay", label = "Gameplay", zhLabel = "玩法" },
 	},
 }
 
