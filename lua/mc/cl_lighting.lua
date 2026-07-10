@@ -11,7 +11,7 @@ MC = MC or {}
 MC.LightEnabled = MC.LightEnabled or CreateClientConVar( "mc_light_enabled", "1", true, false,
 	"Apply Minecraft-style vertex lighting to MC chunk meshes" )
 MC.LightSkyLevel = nil
-MC.LightAmbientMin = MC.LightAmbientMin or CreateClientConVar( "mc_light_ambient_min", "0", true, false,
+MC.LightAmbientMin = MC.LightAmbientMin or CreateClientConVar( "mc_light_ambient_min", "0.18", true, false,
 	"Minimum brightness multiplier for MC vertex lighting" )
 MC.LightProfile = MC.LightProfile or CreateClientConVar( "mc_light_profile", "shader", true, false,
 	"MC chunk lighting pipeline profile: fast, vanilla, best (CPU vertex color paths) or shader (GPU chunk shader, default); the GPU look is picked by mc_light_style" )

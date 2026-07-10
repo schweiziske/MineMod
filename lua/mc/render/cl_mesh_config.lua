@@ -59,7 +59,7 @@ MC.DayCycleSunTilt = MC.DayCycleSunTilt or ( CreateClientConVar and CreateClient
 	"Day cycle: sideways tilt of the sun path used by the shadow map (avoids axis-aligned shadows)" ) )
 MC.DayCycleMoonShadow = MC.DayCycleMoonShadow or ( CreateClientConVar and CreateClientConVar( "mc_daycycle_moon_shadow", "0.3", true, false,
 	"Day cycle: moon shadow strength at night relative to sun shadows (0 = no night shadows)" ) )
-MC.DayCycleMoonLight = MC.DayCycleMoonLight or ( CreateClientConVar and CreateClientConVar( "mc_daycycle_moon_light", "2", true, false,
+MC.DayCycleMoonLight = MC.DayCycleMoonLight or ( CreateClientConVar and CreateClientConVar( "mc_daycycle_moon_light", "3", true, false,
 	"Day cycle: moonlight sky level at deep night, 0-15 (MC default 4; lower = darker nights)" ) )
 MC.DayCycleNightTint = MC.DayCycleNightTint or ( CreateClientConVar and CreateClientConVar( "mc_daycycle_night_tint", "0.85", true, false,
 	"Day cycle: how strongly sky-lit surfaces shift toward moonlight blue at night (0 = neutral)" ) )
@@ -71,7 +71,7 @@ MC.MeshGpuLightmap = MC.MeshGpuLightmap or ( CreateClientConVar and CreateClient
 	"Procedural 16x16 global lightmap: warm torch light, colored day/night sky axis (0 = grayscale fallback)" ) )
 MC.MeshGpuLightmapTorchWarmth = MC.MeshGpuLightmapTorchWarmth or ( CreateClientConVar and CreateClientConVar( "mc_lightmap_torch_warmth", "0.7", true, false,
 	"Global lightmap: warm tint of block light (0 = neutral white torches)" ) )
-MC.MeshGpuLightmapAmbient = MC.MeshGpuLightmapAmbient or ( CreateClientConVar and CreateClientConVar( "mc_lightmap_ambient", "0.04", true, false,
+MC.MeshGpuLightmapAmbient = MC.MeshGpuLightmapAmbient or ( CreateClientConVar and CreateClientConVar( "mc_lightmap_ambient", "0.18", true, false,
 	"Global lightmap: minimum visible brightness in fully dark areas" ) )
 MC.MeshGpuLightmapSunset = MC.MeshGpuLightmapSunset or ( CreateClientConVar and CreateClientConVar( "mc_lightmap_sunset", "0.5", true, false,
 	"Global lightmap: sunset/sunrise orange grading strength on the sky axis (0 = off)" ) )
@@ -79,7 +79,7 @@ MC.MeshGpuLightmapNightGamma = MC.MeshGpuLightmapNightGamma or ( CreateClientCon
 	"Global lightmap: perceptual curve on day/night sky brightness (1 = linear; lower = brighter, bluer nights and gentler dusk)" ) )
 MC.MeshGpuLightmapSkyCurve = MC.MeshGpuLightmapSkyCurve or ( CreateClientConVar and CreateClientConVar( "mc_lightmap_sky_curve", "3", true, false,
 	"Global lightmap: sky ambient falloff shape 1-(1-level)^curve; higher keeps shaded-but-open areas bright and only true enclosure dark (1 = linear)" ) )
-MC.MeshGpuLightmapSkyMin = MC.MeshGpuLightmapSkyMin or ( CreateClientConVar and CreateClientConVar( "mc_lightmap_sky_min", "0.1", true, false,
+MC.MeshGpuLightmapSkyMin = MC.MeshGpuLightmapSkyMin or ( CreateClientConVar and CreateClientConVar( "mc_lightmap_sky_min", "0.18", true, false,
 	"Global lightmap: minimum sky-AMBIENT fraction at sky level 0 (interior/under-structure ambient floor; direct sun is independent of this)" ) )
 MC.MeshGpuLightmapEyeDark = MC.MeshGpuLightmapEyeDark or ( CreateClientConVar and CreateClientConVar( "mc_lightmap_eye_dark", "1", true, false,
 	"Global lightmap: sky-ambient multiplier when the CAMERA cell has no sky light (eyeBrightness cave darkening; 1 = off — it also darkens standing under large structures)" ) )
