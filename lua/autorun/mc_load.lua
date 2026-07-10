@@ -39,7 +39,6 @@ local SERVER_FILES = {
 	"mc/sv_world.lua",
 	"mc/sv_config_ui.lua",
 	"mc/sv_commands.lua",
-	"mc/sv_collision_probe.lua",
 	"mc/sv_collision_carriers.lua",
 	"mc/sv_chunk_store.lua",
 	"mc/sv_saves.lua",
@@ -83,19 +82,13 @@ local CLIENT_FILES = {
 	"mc/cl_commands.lua",
 	"mc/cl_debug.lua",
 	"mc/cl_light_bench.lua",
-	"mc/cl_collision_probe.lua",
 	"mc/cl_player.lua",
-}
-local CLIENT_ENTITY_FILES = {
-	"entities/mc_client_collision_probe/shared.lua",
-	"entities/mc_client_collision_probe/cl_init.lua",
 }
 
 if SERVER then
 	AddCSLuaFile()
 	for _, f in ipairs( SHARED ) do AddCSLuaFile( f ) end
 	for _, f in ipairs( CLIENT_FILES ) do AddCSLuaFile( f ) end
-	for _, f in ipairs( CLIENT_ENTITY_FILES ) do AddCSLuaFile( f ) end
 end
 
 for _, f in ipairs( SHARED ) do include( f ) end
