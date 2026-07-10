@@ -126,6 +126,10 @@
 | `mc_light_shader` | `1` | 使用自定义 GPU chunk shader；需要已编译 VCS 文件。 |
 | `mc_light_texture` | `1` | GPU shader 从 chunk light texture 采样光照，而不是把光照烘进顶点色。 |
 | `mc_light_style` | `fancy` | GPU 光照观感选择：`fancy` = PCF 阴影+冷暖调色；`plain` = 平滑光照无调色；`fast` = 低采样旧观感；`vanilla` = 原版 Minecraft lightmap 合成。 |
+| `mc_light_bloom` | `1` | `fancy` GPU 光照的屏幕 bloom；shader 负责生成火把/阳光高亮种子，此项负责实际模糊扩散。 |
+| `mc_light_bloom_strength` | `0.8` | bloom 强度；夜晚会自动小幅增强。 |
+| `mc_light_bloom_threshold` | `0.7` | bloom 亮度阈值；越高越只保留最亮的火把核心和日光高光。 |
+| `mc_light_bloom_radius` | `6` | bloom 屏幕模糊半径，范围在运行时限制为 `1..16`。 |
 | `mc_light_brightness` | `1.5` | GPU light texture 的 block/sky light 亮度倍率(>1 时火把高等级饱和截顶;想不截顶地增强火把改用 gamma)。 |
 | `mc_light_gamma` | `1` | GPU light texture 的衰减曲线；`>1` 提亮中间亮度，`<1` 压暗。 |
 | `mc_light_sun_brightness` | `1` | GPU 路径 sun/sky light 亮度倍率。 |
