@@ -87,16 +87,20 @@ MC.MeshGpuLightmapVanillaGamma = MC.MeshGpuLightmapVanillaGamma or ( CreateClien
 	"Vanilla look: Minecraft brightness slider 0-1 (options.gamma; 0 = Moody, 0.5 = vanilla default, 1 = Bright)" ) )
 MC.MeshGpuLightmapVanillaFlicker = MC.MeshGpuLightmapVanillaFlicker or ( CreateClientConVar and CreateClientConVar( "mc_lightmap_vanilla_flicker", "1", true, false,
 	"Vanilla look: per-tick torch light flicker (LightmapRenderStateExtractor's random walk); 0 = steady block light" ) )
-MC.MeshShadowMapSize = MC.MeshShadowMapSize or ( CreateClientConVar and CreateClientConVar( "mc_shadow_size", "2048", true, false,
-	"MC-owned shadow map resolution" ) )
-MC.MeshShadowMapDistance = MC.MeshShadowMapDistance or ( CreateClientConVar and CreateClientConVar( "mc_shadow_distance", "4096", true, false,
-	"MC-owned shadow map world-space coverage radius" ) )
-MC.MeshShadowMapCasterDistance = MC.MeshShadowMapCasterDistance or ( CreateClientConVar and CreateClientConVar( "mc_shadow_caster_distance", "4608", true, false,
+MC.MeshShadowMapSize = MC.MeshShadowMapSize or ( CreateClientConVar and CreateClientConVar( "mc_shadow_size", "4096", true, false,
+	"MC-owned shadow map cascade tile resolution, 512-4096 (atlas is size x 3*size; 4096 costs ~240MB VRAM and needs a modern GPU)" ) )
+MC.MeshShadowMapDistance = MC.MeshShadowMapDistance or ( CreateClientConVar and CreateClientConVar( "mc_shadow_distance", "10000", true, false,
+	"MC-owned shadow map world-space coverage radius (the far cascade; inner cascades divide it by the cascade ratio)" ) )
+MC.MeshShadowCascadeRatio = MC.MeshShadowCascadeRatio or ( CreateClientConVar and CreateClientConVar( "mc_shadow_cascade_ratio", "3", true, false,
+	"Cascaded shadow map radius ratio between tiles: near = distance/ratio^2, mid = distance/ratio (higher = sharper near shadows, coarser mid range)" ) )
+MC.MeshShadowMapCasterDistance = MC.MeshShadowMapCasterDistance or ( CreateClientConVar and CreateClientConVar( "mc_shadow_caster_distance", "10000", true, false,
 	"Max distance from camera for MC chunks drawn into the shadow map" ) )
 MC.MeshShadowMapUpdateInterval = MC.MeshShadowMapUpdateInterval or ( CreateClientConVar and CreateClientConVar( "mc_shadow_update_interval", "0", true, false,
 	"Minimum seconds between MC shadow map redraws; 0 redraws every frame while enabled" ) )
+MC.MeshShadowMapSunStep = MC.MeshShadowMapSunStep or ( CreateClientConVar and CreateClientConVar( "mc_shadow_sun_step", "1", true, false,
+	"Day cycle: shadow sun angle quantization step in degrees; the shadow grid holds still between steps so edges stop shimmering (0 = continuous sun)" ) )
 MC.MeshShadowMode = MC.MeshShadowMode or ( CreateClientConVar and CreateClientConVar( "mc_shadow_mode", "map", true, false,
-	"MC sun shadow technique: map = per-frame sun-space shadow map (PCF), height = cached top-down heightfield ray march (soft shadows, no per-frame depth pass)" ) )
+	"MC sun shadow technique: map = Photon-style distorted shadow map (sharp near, continuous falloff), csm = 3-cascade atlas, height = cached top-down heightfield ray march" ) )
 MC.MeshHfShadowSize = MC.MeshHfShadowSize or ( CreateClientConVar and CreateClientConVar( "mc_shadow_hf_size", "1024", true, false,
 	"Heightfield shadow mode: top-down height map resolution" ) )
 MC.MeshHfShadowRange = MC.MeshHfShadowRange or ( CreateClientConVar and CreateClientConVar( "mc_shadow_hf_range", "4096", true, false,

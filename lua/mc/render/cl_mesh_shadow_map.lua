@@ -12,7 +12,6 @@ local mcShadowForward
 local mcShadowOrigin
 local mcShadowZFar
 local mcShadowStrengthScale = 1
-local mcShadowDepthMaterial
 local mcShadowNextUpdate = 0
 local mapBindFrame = {}
 local mapBindResult = {}
@@ -97,14 +96,19 @@ local function shadowMapEnabled()
 	return convarBool( MC.MeshShadowMap )
 end
 
--- Shadow technique switch: "map" keeps the per-frame sun-space shadow map,
--- "height" hands sun shadows to the cached heightfield module and disables
--- this file's depth pass entirely.
+-- Shadow technique switch:
+--   "map" (default) = Photon-style distorted single shadow map: one depth
+--     pass whose clip xy is radially warped so texel density is highest at
+--     the camera and falls off CONTINUOUSLY with distance — no cascade seams.
+--   "csm" = 3-cascade vertically stacked atlas (discrete quality steps, but
+--     texel-snappable and therefore rock-stable under a stepped sun).
+--   "height" = cached heightfield ray march; disables this file's depth pass.
 local function shadowMapMode()
 	local cv = MC.MeshShadowMode
 	local mode = cv and cv.GetString and string.lower( tostring( cv:GetString() or "" ) ) or "map"
 	if mode == "height" or mode == "heightfield" or mode == "hf" or mode == "2" then return "height" end
-	return "map"
+	if mode == "csm" or mode == "cascade" or mode == "cascades" or mode == "3" then return "csm" end
+	return "distort"
 end
 
 function MC.MeshShadowMapMode()
@@ -128,22 +132,34 @@ local function ensureFallbackShadowTexture()
 end
 
 local function mcShadowSize()
+	-- Tile size. distort mode uses one size x size map; csm stacks three
+	-- tiles into size x (3 * size). 4096 in csm mode means a 4096x12288 R32F
+	-- target (~192MB VRAM + the dummy MRT slot) and needs a GPU with max
+	-- texture dimension >= 12288 (any modern card; ancient DX10-era GPUs cap
+	-- at 8192 and the RT creation will fail -> shadows disable cleanly).
 	return convarInt( MC.MeshShadowMapSize, 2048, 512, 4096 )
 end
 
-local function ensureMCShadowTexture()
+-- Tile rows in the shadow target: 1 for the distorted single map, 3 for the
+-- cascade atlas.
+local function mcShadowTileRows( mode )
+	return ( mode or shadowMapMode() ) == "csm" and 3 or 1
+end
+
+local mcShadowTextureRows = 0
+local function ensureMCShadowTexture( rows )
 	if not GetRenderTargetEx then return nil end
 	local size = mcShadowSize()
-	if mcShadowTexture and mcShadowTextureSize == size then return mcShadowTexture end
+	if mcShadowTexture and mcShadowTextureSize == size and mcShadowTextureRows == rows then return mcShadowTexture end
 
 	IMAGE_FORMAT_R32F = IMAGE_FORMAT_R32F or 27
 	-- Shadow target recipe:
 	-- CLAMPS|CLAMPT|ANISOTROPIC|NOMIP|NOLOD|DEPTHRENDERTARGET|NODEPTHBUFFER
 	local flags = bit.bor( 4, 8, 16, 256, 512, 65536, 8388608 )
 	mcShadowTexture = GetRenderTargetEx(
-		"mc_mesh_shadow_map2_" .. tostring( size ),
+		"mc_mesh_shadow_map4_" .. tostring( rows ) .. "x_" .. tostring( size ),
 		size,
-		size,
+		size * rows,
 		RT_SIZE_LITERAL,
 		MATERIAL_RT_DEPTH_ONLY,
 		flags,
@@ -151,23 +167,25 @@ local function ensureMCShadowTexture()
 		IMAGE_FORMAT_R32F
 	)
 	mcShadowTextureSize = mcShadowTexture and size or 0
+	mcShadowTextureRows = mcShadowTexture and rows or 0
 	return mcShadowTexture
 end
 
-local function ensureMCShadowDummyTexture()
+local mcShadowDummyTextureRows = 0
+local function ensureMCShadowDummyTexture( rows )
 	if not GetRenderTargetEx then return nil end
 	local size = mcShadowSize()
-	if mcShadowDummyTexture and mcShadowDummyTextureSize == size then return mcShadowDummyTexture end
+	if mcShadowDummyTexture and mcShadowDummyTextureSize == size and mcShadowDummyTextureRows == rows then return mcShadowDummyTexture end
 
 	IMAGE_FORMAT_A8 = IMAGE_FORMAT_A8 or 8
 	IMAGE_FORMAT_RGB565 = IMAGE_FORMAT_RGB565 or 4
-	-- Dummy MRT slot 0 target.
+	-- Dummy MRT slot 0 target (must match the real target's dimensions).
 	local flags = bit.bor( 1, 4, 8, 256, 512, 32768, 262144, 8388608, 33554432, 536870912 )
 	local isLinux = system and system.IsLinux and system.IsLinux() == true
 	mcShadowDummyTexture = GetRenderTargetEx(
-		"mc_mesh_shadow_map2_dummy_" .. tostring( size ),
+		"mc_mesh_shadow_map4_dummy_" .. tostring( rows ) .. "x_" .. tostring( size ),
 		size,
-		size,
+		size * rows,
 		RT_SIZE_LITERAL,
 		MATERIAL_RT_DEPTH_ONLY,
 		flags,
@@ -175,22 +193,30 @@ local function ensureMCShadowDummyTexture()
 		isLinux and IMAGE_FORMAT_RGB565 or IMAGE_FORMAT_A8
 	)
 	mcShadowDummyTextureSize = mcShadowDummyTexture and size or 0
+	mcShadowDummyTextureRows = mcShadowDummyTexture and rows or 0
 	return mcShadowDummyTexture
 end
 
-local function ensureMCShadowDepthMaterial()
-	if mcShadowDepthMaterial and not mcShadowDepthMaterial:IsError() then return mcShadowDepthMaterial end
+-- Depth writer materials: same pixel shader (linear world-space depth to
+-- COLOR1), but distort mode's vertex shader warps the clip position with the
+-- Photon distortion formula. Cached per mode.
+local mcShadowDepthMaterials = {}
+local function ensureMCShadowDepthMaterial( mode )
+	local path = mode == "distort" and "pp/mc_shadow_depth4_distort" or "pp/mc_shadow_depth3"
+	local cached = mcShadowDepthMaterials[path]
+	if cached and not cached:IsError() then return cached end
 	if not Material then return nil end
-	mcShadowDepthMaterial = Material( "pp/mc_shadow_depth3" )
-	if mcShadowDepthMaterial and not mcShadowDepthMaterial:IsError() then
+	local material = Material( path )
+	if material and not material:IsError() then
 		-- Bind the block atlas so the depth pixel shader can alpha-test
 		-- casters; cutout blocks (torches, leaves, panes) then only shadow
-		-- where their texels are opaque.
+		-- where their texels are actually opaque.
 		local baseTex = MC.Material and MC.Material.GetTexture and MC.Material:GetTexture( "$basetexture" ) or nil
 		if baseTex and not ( baseTex.IsError and baseTex:IsError() ) then
-			mcShadowDepthMaterial:SetTexture( "$basetexture", baseTex )
+			material:SetTexture( "$basetexture", baseTex )
 		end
-		return mcShadowDepthMaterial
+		mcShadowDepthMaterials[path] = material
+		return material
 	end
 	return nil
 end
@@ -203,7 +229,7 @@ local function mcShadowSourceEnabled()
 	-- Vanilla lighting mode has no shadow consumer (its shader never samples
 	-- the shadow map), so the per-frame depth pass would be wasted GPU work.
 	if MC.UsingVanillaLightMaterial and MC.UsingVanillaLightMaterial() then return false end
-	return shadowMapEnabled() and shadowMapMode() == "map" and usingGpuLightTexture()
+	return shadowMapEnabled() and shadowMapMode() ~= "height" and usingGpuLightTexture()
 end
 
 local function normalizedSunDirection()
@@ -218,19 +244,36 @@ end
 -- Direction toward the active light body (sun by day, moon at night) plus a
 -- strength scale that fades shadows out around the horizon and keeps moon
 -- shadows weak. Falls back to the map sun when the day cycle is off.
+--
+-- The direction fed into the shadow matrix is QUANTIZED to whole angle steps
+-- (mc_shadow_sun_step): a continuously moving sun rotates the light-space
+-- texel grid every frame, which makes every shadow edge crawl by up to one
+-- texel — invisible at small coverage radii, but the texel's world size grows
+-- linearly with mc_shadow_distance and the crawl becomes visible jitter.
+-- Holding the direction still between steps lets the ortho-window texel snap
+-- and the depth-pass signature keep the map bit-identical, so shadows only
+-- move in discrete, infrequent jumps. The strength scale stays continuous so
+-- horizon fades don't step.
 local function shadowLightDirection()
 	if MC.DayCycleEnabled and MC.DayCycleEnabled() and MC.DayCycleSunVector then
 		local sunDir, elevation = MC.DayCycleSunVector()
+		local strengthElevation = math.abs( elevation )
+		local stepDeg = convarFloat( MC.MeshShadowMapSunStep, 1, 0, 30 )
+		if stepDeg > 0 and MC.DayCycleCelestialAngle then
+			local step = stepDeg / 360
+			local angle = math.floor( MC.DayCycleCelestialAngle() / step + 0.5 ) * step * math.pi * 2
+			elevation = math.cos( angle )
+			sunDir = Vector( -math.sin( angle ), 0, elevation )
+		end
 		local isMoon = false
 		if elevation < 0 then
 			isMoon = true
 			sunDir = Vector( -sunDir.x, -sunDir.y, -sunDir.z )
-			elevation = -elevation
 		end
 		local tilt = convarFloat( MC.DayCycleSunTilt, 0.2, 0, 1 )
 		local dir = Vector( sunDir.x, tilt, sunDir.z )
 		dir:Normalize()
-		local scale = math.Clamp( elevation / 0.25, 0, 1 )
+		local scale = math.Clamp( strengthElevation / 0.25, 0, 1 )
 		if isMoon then
 			scale = scale * convarFloat( MC.DayCycleMoonShadow, 0.3, 0, 1 )
 		end
@@ -243,64 +286,195 @@ end
 -- light body plus the horizon/moon strength scale.
 MC.MeshShadowLightDirection = shadowLightDirection
 
-local function makeMCShadowViewSetup( rtSize )
-	local eye = EyePos()
-	local sunDir, strengthScale = shadowLightDirection()
-	local shadowDistance = convarFloat( MC.MeshShadowMapDistance, 4096, 512, 32768 )
-	local lookDir = Vector( -sunDir.x, -sunDir.y, -sunDir.z )
-	local angles = lookDir:Angle()
-	local zfar = shadowDistance * 3
-
-	-- Snap the ortho window to whole shadow-map texels in light space so the
-	-- shadow edges do not crawl/shimmer while the camera moves.
-	local texelWorld = ( shadowDistance * 2 ) / math.max( rtSize or 0, 1 )
-	local anchor = eye
-	if texelWorld > 0 then
-		local right = angles:Right()
-		local up = angles:Up()
-		local r = math.floor( eye:Dot( right ) / texelWorld + 0.5 ) * texelWorld
-		local u = math.floor( eye:Dot( up ) / texelWorld + 0.5 ) * texelWorld
-		local f = eye:Dot( lookDir )
-		anchor = right * r + up * u + lookDir * f
-	end
-	local origin = anchor + sunDir * shadowDistance
-
-	local viewSetup = {
-		origin = origin,
-		angles = angles,
-		znear = 0.01,
-		zfar = zfar,
-		ortho = {
-			left = -shadowDistance,
-			right = shadowDistance,
-			bottom = shadowDistance,
-			top = -shadowDistance,
-		},
-		x = 0,
-		y = 0,
-		w = rtSize,
-		h = rtSize,
-		drawviewer = false,
-		drawviewmodel = false,
-		dopostprocess = false,
-		bloomtone = false,
-		viewid = 6,
-	}
-
-	local viewProj = GetViewProjOrthoMatrix( viewSetup )
-	return viewSetup, viewProj, lookDir, origin, zfar, strengthScale
+-- Cascade geometry: three sun-space ortho windows rendered into one
+-- vertically stacked atlas (tile k on rows [k*S, (k+1)*S) of an S x 3S
+-- target). Tile 0 is the finest (radius = distance / ratio^2), tile 1 covers
+-- distance / ratio, tile 2 the full mc_shadow_distance. Every tile shares the
+-- same camera BASIS (angles) and pull-back, so the normalized linear
+-- light-space depth written by the depth shader is valid for all three tiles
+-- (a cascade's window center moves orthogonally to the light direction and
+-- cancels out of the depth dot product); only the XY window mapping differs,
+-- which the chunk shader resolves as an affine clip-space remap uploaded
+-- through $invviewprojmat (c15..c18).
+local function cascadeRadii()
+	local far = convarFloat( MC.MeshShadowMapDistance, 4096, 512, 32768 )
+	local ratio = convarFloat( MC.MeshShadowCascadeRatio, 3, 1.5, 8 )
+	local mid = far / ratio
+	local near = math.max( far / ( ratio * ratio ), 256 )
+	return near, mid, far
 end
 
--- Last-rendered depth-pass signature. The shadow map's content only depends
--- on the light direction, the texel-snapped ortho window, the RT size, the
+local function makeMCShadowCascades( rtSize, mode )
+	local eye = EyePos()
+	local sunDir, strengthScale = shadowLightDirection()
+	local r0, r1, r2 = cascadeRadii()
+	-- distort mode renders ONE full-distance window (the vertex/pixel warp
+	-- supplies the near-camera detail); csm renders all three.
+	local radii = ( mode == "csm" ) and { r0, r1, r2 } or { r2 }
+	local lookDir = Vector( -sunDir.x, -sunDir.y, -sunDir.z )
+	local angles = lookDir:Angle()
+	local right = angles:Right()
+	local up = angles:Up()
+	local zfar = r2 * 3
+	local f = eye:Dot( lookDir )
+
+	local setups, viewProjs, origins = {}, {}, {}
+	for k = 1, #radii do
+		local radius = radii[k]
+		local anchor = eye
+		if mode == "csm" then
+			-- Snap each ortho window to whole shadow-map texels in light
+			-- space so the shadow edges do not crawl while the camera moves.
+			-- The distorted map CANNOT snap (its warp center must follow the
+			-- camera continuously, Photon behaviour); its stability comes
+			-- from the high texel density near the camera instead.
+			local texelWorld = ( radius * 2 ) / math.max( rtSize or 0, 1 )
+			if texelWorld > 0 then
+				local r = math.floor( eye:Dot( right ) / texelWorld + 0.5 ) * texelWorld
+				local u = math.floor( eye:Dot( up ) / texelWorld + 0.5 ) * texelWorld
+				anchor = right * r + up * u + lookDir * f
+			end
+		end
+		local origin = anchor + sunDir * r2
+
+		local viewSetup = {
+			origin = origin,
+			angles = angles,
+			znear = 0.01,
+			zfar = zfar,
+			ortho = {
+				left = -radius,
+				right = radius,
+				bottom = radius,
+				top = -radius,
+			},
+			x = 0,
+			y = ( k - 1 ) * rtSize,
+			w = rtSize,
+			h = rtSize,
+			drawviewer = false,
+			drawviewmodel = false,
+			dopostprocess = false,
+			bloomtone = false,
+			viewid = 6,
+		}
+		setups[k] = viewSetup
+		viewProjs[k] = GetViewProjOrthoMatrix( viewSetup )
+		origins[k] = origin
+	end
+
+	return {
+		setups = setups,
+		viewProjs = viewProjs,
+		origins = origins,
+		radii = radii,
+		lookDir = lookDir,
+		-- Canonical depth origin: the last (largest) window's camera. The
+		-- depth shader and every tile's compare use this one origin.
+		origin = origins[#origins],
+		zfar = zfar,
+		strengthScale = strengthScale,
+	}
+end
+
+-- Clip-space XY of a world point under a cascade view-proj (VMatrix
+-- convention: clip_i = sum_j M[i][j] * p_j; ortho w row is 0 0 0 1).
+local function clipXY( m, p )
+	local x = m:GetField( 1, 1 ) * p.x + m:GetField( 1, 2 ) * p.y + m:GetField( 1, 3 ) * p.z + m:GetField( 1, 4 )
+	local y = m:GetField( 2, 1 ) * p.x + m:GetField( 2, 2 ) * p.y + m:GetField( 2, 3 ) * p.z + m:GetField( 2, 4 )
+	return x, y
+end
+
+-- Affine remap rows for the shader's cascade table: clip_k = clip_0 * scale
+-- + offset (exact — all cascades share one camera basis). Measured
+-- numerically from the actual matrices so no assumption about the ortho
+-- builder's sign conventions can drift out of sync.
+local mcCsmRow1, mcCsmRow2, mcCsmNearRadius
+local function computeCsmRows( cascades )
+	if #cascades.viewProjs < 3 then
+		-- Distorted single map: no remap rows. c17.x still carries the window
+		-- half radius (the shader's distortion path derives its local filter
+		-- footprint from it) and c18 the border fade.
+		mcCsmRow1 = { 0, 0, 0, 0 }
+		mcCsmRow2 = { 0, 0, 0, 0 }
+		mcCsmNearRadius = cascades.radii[1]
+		return
+	end
+	local eye = EyePos()
+	local probe = eye + cascades.setups[1].angles:Right() * 128
+	local m0 = cascades.viewProjs[1]
+	local p0x, p0y = clipXY( m0, eye )
+	local q0x = clipXY( m0, probe )
+	local rows = {}
+	for k = 2, 3 do
+		local mk = cascades.viewProjs[k]
+		local pkx, pky = clipXY( mk, eye )
+		local qkx = clipXY( mk, probe )
+		local denom = q0x - p0x
+		local scale = 0
+		if math.abs( denom ) > 1e-9 then scale = ( qkx - pkx ) / denom end
+		rows[k - 1] = { scale, pkx - scale * p0x, pky - scale * p0y, cascades.radii[k] }
+	end
+	mcCsmRow1 = rows[1]
+	mcCsmRow2 = rows[2]
+	mcCsmNearRadius = cascades.radii[1]
+end
+
+-- The c15..c18 table uploaded through $invviewprojmat. Row 4 carries live
+-- convar-derived values (selection pad, far-tile border fade), so the matrix
+-- is refreshed at bind time rather than only when the depth pass re-renders.
+local mcCsmTableMatrix
+local function csmTableMatrix( kernelUV )
+	if not mcCsmRow1 then return nil end
+	local fade = convarFloat( MC.MeshShadowMapEdgeFade, 0.1, 0, 0.5 )
+	-- Selection pad: PCF tap radius (<= 1 kernel) + normal-offset bias shift
+	-- (<= 2 kernels) + margin, in tile uv units.
+	local pad = kernelUV * 3.5
+	mcCsmTableMatrix = mcCsmTableMatrix or Matrix()
+	mcCsmTableMatrix:SetUnpacked(
+		mcCsmRow1[1], mcCsmRow1[2], mcCsmRow1[3], mcCsmRow1[4],
+		mcCsmRow2[1], mcCsmRow2[2], mcCsmRow2[3], mcCsmRow2[4],
+		mcCsmNearRadius, 0, 0, 0,
+		pad, fade, 0, 0
+	)
+	return mcCsmTableMatrix
+end
+
+-- Last-rendered depth-pass signature. The atlas content only depends on the
+-- light direction, the three texel-snapped cascade windows, the RT size, the
 -- caster radius and the chunk geometry version — while all of those hold
--- (static sun, camera inside one shadow texel, no mesh edits) re-rendering
--- would reproduce the exact same texels, so the pass is skipped.
+-- (static/stepped sun, camera inside one snapped texel of every cascade, no
+-- mesh edits) re-rendering would reproduce the exact same texels, so the
+-- pass is skipped.
 local sigValid = false
-local sigOriginX, sigOriginY, sigOriginZ = 0, 0, 0
+local sigOrigins = { 0, 0, 0, 0, 0, 0, 0, 0, 0 }
+local sigOriginCount = 0
+local sigMode = ""
 local sigDirX, sigDirY, sigDirZ = 0, 0, 0
 local sigZFar, sigSize, sigCasterDist = 0, 0, 0
+local sigRadius0, sigRadius1 = 0, 0
 local sigDrawVersion = -1
+
+local function cascadeOriginsMatchSig( origins )
+	if #origins ~= sigOriginCount then return false end
+	for k = 1, #origins do
+		local o = origins[k]
+		local base = ( k - 1 ) * 3
+		if sigOrigins[base + 1] ~= o.x or sigOrigins[base + 2] ~= o.y or sigOrigins[base + 3] ~= o.z then
+			return false
+		end
+	end
+	return true
+end
+
+local function storeCascadeOriginsSig( origins )
+	sigOriginCount = #origins
+	for k = 1, #origins do
+		local o = origins[k]
+		local base = ( k - 1 ) * 3
+		sigOrigins[base + 1], sigOrigins[base + 2], sigOrigins[base + 3] = o.x, o.y, o.z
+	end
+end
 
 -- Defined before renderMCShadowMap so the signature skip captures the local
 -- (not a nil global) as its upvalue.
@@ -379,20 +553,25 @@ local function renderMCShadowMap( force )
 	if not force and interval > 0 and mcShadowNextUpdate > now then return true end
 	mcShadowNextUpdate = now + interval
 
-	local rt = ensureMCShadowTexture()
-	local dummyRT = ensureMCShadowDummyTexture()
-	local material = ensureMCShadowDepthMaterial()
+	local mode = shadowMapMode()
+	local rows = mcShadowTileRows( mode )
+	local rt = ensureMCShadowTexture( rows )
+	local dummyRT = ensureMCShadowDummyTexture( rows )
+	local material = ensureMCShadowDepthMaterial( mode )
 	if not ( rt and dummyRT and material ) then
 		mcShadowStats.lastError = "missing_rt_or_material"
 		return false
 	end
 
-	local viewSetup, viewProj, lightForward, lightOrigin, lightZFar, strengthScale = makeMCShadowViewSetup( mcShadowTextureSize )
-	if not ( viewSetup and viewProj ) then
+	local cascades = makeMCShadowCascades( mcShadowTextureSize, mode )
+	if not ( cascades and #cascades.viewProjs == #cascades.setups and cascades.viewProjs[#cascades.setups] ) then
 		mcShadowStats.lastError = "missing_shadow_matrix"
 		return false
 	end
-	mcShadowStrengthScale = strengthScale or 1
+	local lightForward = cascades.lookDir
+	local lightOrigin = cascades.origin
+	local lightZFar = cascades.zfar
+	mcShadowStrengthScale = cascades.strengthScale or 1
 	if mcShadowStrengthScale <= 0 then
 		-- Twilight gap: sun and moon both below the fade threshold. Skip the
 		-- depth pass; binds still run and see an effective strength of 0.
@@ -404,23 +583,26 @@ local function renderMCShadowMap( force )
 	end
 
 	-- Depth-pass output is fully determined by the signature below; while it
-	-- holds (static sun + camera within one snapped texel + unchanged chunk
-	-- geometry) the previous shadow map is still exact, so keep it. With the
-	-- day cycle off this makes standing still / looking around free.
+	-- holds (static sun + camera within one snapped texel of every cascade +
+	-- unchanged chunk geometry) the previous atlas is still exact, so keep it.
+	-- With the sun angle stepped this makes standing still / looking around
+	-- free between steps.
 	local drawVersion = MC.ChunkDrawListVersion and MC.ChunkDrawListVersion() or -1
 	local casterDist = convarFloat( MC.MeshShadowMapCasterDistance, 4608, 0, 65536 )
 	if not force and sigValid and mcShadowReady()
+		and sigMode == mode
 		and sigDrawVersion == drawVersion
-		and sigOriginX == lightOrigin.x and sigOriginY == lightOrigin.y and sigOriginZ == lightOrigin.z
+		and cascadeOriginsMatchSig( cascades.origins )
 		and sigDirX == lightForward.x and sigDirY == lightForward.y and sigDirZ == lightForward.z
 		and sigZFar == lightZFar
 		and sigSize == mcShadowTextureSize
+		and sigRadius0 == cascades.radii[1] and sigRadius1 == ( cascades.radii[2] or 0 )
 		and sigCasterDist == casterDist then
 		return true
 	end
 	sigValid = false
 
-	local shadowViewProj = viewProj.GetTransposed and viewProj:GetTransposed() or viewProj
+	local shadowViewProj = cascades.viewProjs[1].GetTransposed and cascades.viewProjs[1]:GetTransposed() or cascades.viewProjs[1]
 	local invZFar = lightZFar > 0 and 1 / lightZFar or 0
 
 	-- The depth pixel shader rebuilds the same normalized linear light-space
@@ -456,17 +638,29 @@ local function renderMCShadowMap( force )
 		setMRT = true
 		render.OverrideDepthEnable( true, true )
 		setCullMode = setChunkMeshCullMode()
-		cam.Start( viewSetup )
-			startedCam = true
-			-- Bind the real shadow target at MRT slot 1 inside the camera
-			-- block so the depth shader can write linear depth to COLOR1.
-			render.SetRenderTargetEx( 1, rt )
-			local maxDistSqr = casterDist > 0 and casterDist * casterDist or nil
-			local chunks, meshes = drawMCShadowCasters( material, maxDistSqr )
-			mcShadowStats.drawnChunks = chunks
-			mcShadowStats.drawnMeshes = meshes
-		cam.End()
-		startedCam = false
+		local totalChunks, totalMeshes = 0, 0
+		for k = 1, #cascades.setups do
+			cam.Start( cascades.setups[k] )
+				startedCam = true
+				-- Bind the real shadow target at MRT slot 1 inside the camera
+				-- block so the depth shader can write linear depth to COLOR1.
+				render.SetRenderTargetEx( 1, rt )
+				-- Inner cascades only need casters close enough to reach their
+				-- window: radius + generous slack for long grazing-sun shadows.
+				local radius = cascades.radii[k]
+				local cullDist = casterDist
+				if cullDist <= 0 or radius * 2 + 2048 < cullDist then
+					cullDist = radius * 2 + 2048
+				end
+				local maxDistSqr = cullDist > 0 and cullDist * cullDist or nil
+				local chunks, meshes = drawMCShadowCasters( material, maxDistSqr )
+				totalChunks = totalChunks + chunks
+				totalMeshes = totalMeshes + meshes
+			cam.End()
+			startedCam = false
+		end
+		mcShadowStats.drawnChunks = totalChunks
+		mcShadowStats.drawnMeshes = totalMeshes
 		if setCullMode then restoreDefaultCullMode() end
 		setCullMode = false
 		render.OverrideDepthEnable( false, false )
@@ -488,6 +682,7 @@ local function renderMCShadowMap( force )
 		return false
 	end
 
+	computeCsmRows( cascades )
 	mcShadowViewProj = shadowViewProj
 	mcShadowForward = lightForward
 	mcShadowOrigin = lightOrigin
@@ -506,10 +701,12 @@ local function renderMCShadowMap( force )
 	local worldEmpty = MC.Meshes == nil or next( MC.Meshes ) == nil
 	if mcShadowStats.drawnChunks > 0 or worldEmpty then
 		sigValid = true
-		sigOriginX, sigOriginY, sigOriginZ = lightOrigin.x, lightOrigin.y, lightOrigin.z
+		sigMode = mode
+		storeCascadeOriginsSig( cascades.origins )
 		sigDirX, sigDirY, sigDirZ = lightForward.x, lightForward.y, lightForward.z
 		sigZFar = lightZFar
 		sigSize = mcShadowTextureSize
+		sigRadius0, sigRadius1 = cascades.radii[1], cascades.radii[2] or 0
 		sigCasterDist = casterDist
 		sigDrawVersion = drawVersion
 	end
@@ -535,7 +732,9 @@ local function bindShadowParams( material, enabled, isFancy )
 	material:SetFloat( "$c0_x", strength )
 	material:SetFloat( "$c0_y", bias )
 	material:SetFloat( "$c0_z", enabled and 1 or 0 )
-	material:SetFloat( "$c0_w", -2 )
+	-- Technique flag read by the chunk shaders: -3 = Photon-style distorted
+	-- single map, -2 = 3-cascade atlas.
+	material:SetFloat( "$c0_w", shadowMapMode() == "csm" and -2 or -3 )
 
 	if mcShadowForward and mcShadowOrigin then
 		local invZFar = ( mcShadowZFar and mcShadowZFar > 0 ) and 1 / mcShadowZFar or 0
@@ -644,10 +843,17 @@ function MC.BindMeshShadowMap( material, force )
 
 	if material.SetMatrix and matrix then
 		material:SetMatrix( "$viewprojmat", matrix )
+		-- Cascade remap table -> c15..c18. The chunk shaders DECLARE and USE
+		-- those registers (see the .fxc sources), so the engine upload is safe
+		-- there — but it must never land on shaders that leave c15..c18 free
+		-- for compiler literals (vanilla/fast/height already returned above).
+		local softness = convarFloat( MC.MeshShadowMapSoftness, 1, 1, 4 )
+		local kernelUV = mcShadowTextureSize > 0 and softness / mcShadowTextureSize or 0
+		local csmTable = csmTableMatrix( kernelUV )
+		if csmTable then
+			material:SetMatrix( "$invviewprojmat", csmTable )
+		end
 	end
-	-- Never define $invviewprojmat on the chunk material: the engine would
-	-- upload it to pixel shader constants c15..c18, where the compiler is
-	-- free to place inline literal constants of the chunk shader.
 	if material.SetFloat then
 		local isFancy = ( MC.MaterialGpuLightTextureFancy ~= nil and material == MC.MaterialGpuLightTextureFancy )
 			or ( MC.MaterialGpuLightTextureTranslucent ~= nil and material == MC.MaterialGpuLightTextureTranslucent )
