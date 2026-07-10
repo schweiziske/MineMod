@@ -22,11 +22,13 @@ local PRESET_COVER_DIR = "mc/preset_covers"
 local PRESET_DATA_PART_BYTES = 16384
 local PRESET_COVER_PART_BYTES = 16384
 local PRESET_DOWNLOAD_PART_INTERVAL = 0.05
+local PRESET_COVER_UPLOAD_TIMEOUT = 20
 local PRESET_PLACE_COOLDOWN = 0.35
 local PRESET_BULK_CELLS_PER_MESSAGE = 512
 local MAX_PRESET_DATA_BYTES = 1024 * 1024 * 4
 local MAX_PRESET_COVER_BYTES = 1024 * 1024 * 2
 local MAX_NET_PRESETS = 4095
+local PRESET_PUBLIC_HELP = "Allow non-admin players to list/load/save/place MC presets"
 
 local PresetCoverUploads = {}
 -- presetName -> { fileTime, data, payload }: decompressing + JSON-parsing a
@@ -112,12 +114,45 @@ local function deletePresetCovers( presetName, keepPath )
 	end
 end
 
+local function presetPublicConVar()
+	if not C.PresetPublic then
+		C.PresetPublic = GetConVar( "mc_preset_public" ) or CreateConVar( "mc_preset_public", "0", bit.bor( FCVAR_ARCHIVE, FCVAR_NOTIFY, FCVAR_REPLICATED ), PRESET_PUBLIC_HELP )
+	end
+	return C.PresetPublic
+end
+
+local function canUsePresets( ply )
+	return not IsValid( ply ) or ply:IsAdmin() or presetPublicConVar():GetBool()
+end
+
 local function canEditPresets( ply )
+	if not canUsePresets( ply ) then
+		if IsValid( ply ) then ply:ChatPrint( "[MC] " .. L( ply, "server.preset_admin", "只有管理员可以读取/保存/放置预设 (mc_preset_public 0)" ) ) end
+		return false
+	end
 	if C.AdminOnly and C.AdminOnly:GetBool() and IsValid( ply ) and not ply:IsAdmin() then
-		ply:ChatPrint( "[MC] " .. L( ply, "server.preset_admin", "只有管理员可以保存/放置预设 (mc_admin_only)" ) )
+		ply:ChatPrint( "[MC] " .. L( ply, "server.preset_edit_admin", "只有管理员可以保存/放置预设 (mc_admin_only)" ) )
 		return false
 	end
 	return true
+end
+
+local function sendPresetCoverAck( ply, cover, ok, err )
+	if not IsValid( ply ) then return end
+	net.Start( "mc_preset_cover_ack" )
+		net.WriteString( tostring( cover or "" ) )
+		net.WriteBool( ok == true )
+		net.WriteString( tostring( err or "" ) )
+	net.Send( ply )
+end
+
+local function failPresetCoverUpload( ply, upload, err )
+	if PresetCoverUploads[ply] == upload then PresetCoverUploads[ply] = nil end
+	sendPresetCoverAck( ply, upload and upload.cover or "", false, err )
+end
+
+local function isJPEGData( data )
+	return isstring( data ) and #data >= 4 and string.byte( data, 1 ) == 255 and string.byte( data, 2 ) == 216
 end
 
 local function presetPlaceCooldownOK( ply )
@@ -497,9 +532,9 @@ function SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 	return true, totalChanged
 end
 
-local function sendPresetList( ply, message, isError )
+local function sendPresetList( ply, message, isError, presets )
 	if not IsValid( ply ) then return end
-	local presets = SV.PresetList()
+	presets = presets or SV.PresetList()
 	local count = math.min( #presets, MAX_NET_PRESETS )
 	net.Start( "mc_preset_list_data" )
 		net.WriteString( message or "" )
@@ -607,14 +642,27 @@ local function sendPresetCoverToClient( ply, cover )
 end
 
 net.Receive( "mc_preset_list_req", function( _, ply )
+	if not canUsePresets( ply ) then
+		sendPresetList( ply, L( ply, "server.preset_admin_list", "只有管理员可以读取/保存预设 (mc_preset_public 0)" ), true, {} )
+		return
+	end
 	sendPresetList( ply )
 end )
 
 net.Receive( "mc_preset_load_req", function( _, ply )
-	sendPresetData( ply, net.ReadString() )
+	local presetName = net.ReadString()
+	if not canUsePresets( ply ) then
+		sendPresetDataError( ply, presetName, L( ply, "server.preset_admin_load", "只有管理员可以读取预设 (mc_preset_public 0)" ) )
+		return
+	end
+	sendPresetData( ply, presetName )
 end )
 
 net.Receive( "mc_preset_save", function( _, ply )
+	if not canEditPresets( ply ) then
+		sendPresetList( ply, L( ply, "server.preset_admin_save", "只有管理员可以保存预设 (mc_preset_public 0)" ), true, {} )
+		return
+	end
 	local presetName = net.ReadString()
 	local cornerA = {
 		bx = net.ReadInt( Net.COORD_BITS ),
@@ -645,6 +693,7 @@ net.Receive( "mc_preset_save", function( _, ply )
 end )
 
 net.Receive( "mc_preset_place", function( _, ply )
+	if not canEditPresets( ply ) then return end
 	local presetName = net.ReadString()
 	local origin = {
 		bx = net.ReadInt( Net.COORD_BITS ),
@@ -666,18 +715,25 @@ net.Receive( "mc_preset_place", function( _, ply )
 end )
 
 net.Receive( "mc_preset_cover_begin", function( _, ply )
-	if not canEditPresets( ply ) then return end
-
 	local presetName = SV.PresetName( net.ReadString() )
-	if not presetName then return end
-
-	local cover = sanitizePresetCover( net.ReadString(), presetName )
+	local rawCover = net.ReadString()
 	local expectedParts = net.ReadUInt( 16 )
 	local totalBytes = net.ReadUInt( 32 )
-	if not cover or expectedParts < 1 or totalBytes < 1 or totalBytes > MAX_PRESET_COVER_BYTES then return end
+	if not canEditPresets( ply ) then sendPresetCoverAck( ply, rawCover, false, "permission" ) return end
+	if not presetName then sendPresetCoverAck( ply, rawCover, false, "invalid_preset" ) return end
+
+	local cover = sanitizePresetCover( rawCover, presetName )
+	if not cover or expectedParts < 1 or totalBytes < 1 or totalBytes > MAX_PRESET_COVER_BYTES then
+		sendPresetCoverAck( ply, rawCover, false, "invalid_upload" )
+		return
+	end
+	if expectedParts ~= math.ceil( totalBytes / PRESET_COVER_PART_BYTES ) then
+		sendPresetCoverAck( ply, rawCover, false, "invalid_part_count" )
+		return
+	end
 	if not presetCoverBelongsToPreset( cover, presetName ) then cover = SV.PresetCoverPath( presetName ) end
 
-	PresetCoverUploads[ply] = {
+	local upload = {
 		presetName = presetName,
 		cover = cover,
 		expectedParts = expectedParts,
@@ -686,6 +742,10 @@ net.Receive( "mc_preset_cover_begin", function( _, ply )
 		receivedParts = 0,
 		parts = {},
 	}
+	PresetCoverUploads[ply] = upload
+	timer.Simple( PRESET_COVER_UPLOAD_TIMEOUT, function()
+		if PresetCoverUploads[ply] == upload then failPresetCoverUpload( ply, upload, "timeout" ) end
+	end )
 end )
 
 net.Receive( "mc_preset_cover_part", function( _, ply )
@@ -696,15 +756,15 @@ net.Receive( "mc_preset_cover_part", function( _, ply )
 	local index = net.ReadUInt( 16 )
 	local len = net.ReadUInt( 16 )
 	local chunk = net.ReadData( len )
-	if cover ~= upload.cover or index < 1 or index > upload.expectedParts then return end
-	if len < 1 or len > PRESET_COVER_PART_BYTES or not chunk or #chunk ~= len then return end
+	if cover ~= upload.cover or index < 1 or index > upload.expectedParts then failPresetCoverUpload( ply, upload, "invalid_part" ) return end
+	if len < 1 or len > PRESET_COVER_PART_BYTES or not chunk or #chunk ~= len then failPresetCoverUpload( ply, upload, "invalid_part" ) return end
 	if upload.parts[index] then return end
 
 	upload.parts[index] = chunk
 	upload.receivedParts = upload.receivedParts + 1
 	upload.receivedBytes = upload.receivedBytes + len
 	if upload.receivedBytes > upload.totalBytes or upload.receivedBytes > MAX_PRESET_COVER_BYTES then
-		PresetCoverUploads[ply] = nil
+		failPresetCoverUpload( ply, upload, "too_large" )
 		return
 	end
 
@@ -712,14 +772,21 @@ net.Receive( "mc_preset_cover_part", function( _, ply )
 
 	local data = table.concat( upload.parts )
 	PresetCoverUploads[ply] = nil
-	if #data ~= upload.totalBytes then return end
+	if #data ~= upload.totalBytes then sendPresetCoverAck( ply, upload.cover, false, "size_mismatch" ) return end
+	if not isJPEGData( data ) then sendPresetCoverAck( ply, upload.cover, false, "invalid_jpeg" ) return end
 
 	ensurePresetDirs()
 	file.Write( upload.cover, data )
+	if not file.Exists( upload.cover, "DATA" ) or file.Size( upload.cover, "DATA" ) ~= #data then
+		sendPresetCoverAck( ply, upload.cover, false, "write_failed" )
+		return
+	end
 	deletePresetCovers( upload.presetName, upload.cover )
+	sendPresetCoverAck( ply, upload.cover, true )
 end )
 
 net.Receive( "mc_preset_cover_req", function( _, ply )
+	if not canUsePresets( ply ) then return end
 	sendPresetCoverToClient( ply, net.ReadString() )
 end )
 
@@ -728,6 +795,10 @@ hook.Add( "PlayerDisconnected", "MC_ClearPresetCoverUpload", function( ply )
 end )
 
 concommand.Add( "mc_preset_list", function( ply )
+	if not canUsePresets( ply ) then
+		if IsValid( ply ) then ply:PrintMessage( HUD_PRINTCONSOLE, "[MC] only admins may list/load/save MC presets (set mc_preset_public 1 to allow everyone)" ) end
+		return
+	end
 	local presets = SV.PresetList()
 	if IsValid( ply ) then
 		for _, preset in ipairs( presets ) do

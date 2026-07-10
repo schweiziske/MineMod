@@ -12,23 +12,10 @@ local PRESET_COVER_DIR = "mc/preset_covers"
 local PRESET_COVER_PART_BYTES = 16384
 local PRESET_DATA_PART_BYTES = 16384
 local PRESET_UPLOAD_PART_INTERVAL = 0.05
+local PRESET_UPLOAD_TIMEOUT = 20
+local MAX_PRESET_COVER_BYTES = 1024 * 1024 * 2
 
-local UI = {
-	frame = Color( 30, 32, 37, 250 ),
-	title = Color( 18, 20, 24, 255 ),
-	panel = Color( 24, 26, 30, 245 ),
-	panelInner = Color( 13, 15, 18, 230 ),
-	row = Color( 42, 45, 51, 245 ),
-	rowHover = Color( 56, 64, 78, 245 ),
-	rowSelected = Color( 72, 84, 104, 245 ),
-	control = Color( 44, 48, 55, 245 ),
-	controlHover = Color( 80, 92, 112, 245 ),
-	controlDown = Color( 104, 112, 132, 245 ),
-	accent = Color( 236, 230, 190, 245 ),
-	text = Color( 235, 240, 248, 245 ),
-	textDim = Color( 165, 174, 188, 220 ),
-	error = Color( 240, 110, 110, 245 ),
-}
+local UI = MC.LibraryUI
 
 MC.PresetSelectionStep = MC.PresetSelectionStep or 0
 MC.PresetSelection = MC.PresetSelection or {}
@@ -48,9 +35,18 @@ local CoverMaterialCache = {}
 local PendingCoverDownloads = {}
 local CoverDownloadBuffers = {}
 local PresetDataBuffers = {}
+local PendingCoverUploads = {}
 
 local function trim( value )
 	return string.Trim( tostring( value or "" ) )
+end
+
+local function canUsePresetManager()
+	local ply = LocalPlayer()
+	if not IsValid( ply ) then return false end
+	if ply:IsAdmin() then return true end
+	local cv = GetConVar( "mc_preset_public" )
+	return cv and cv:GetBool() or false
 end
 
 local function presetName( name )
@@ -72,6 +68,19 @@ local function presetCoverPath( name )
 	local safe = presetName( name )
 	if not safe then return nil end
 	return PRESET_COVER_DIR .. "/" .. safe .. "_" .. math.floor( SysTime() * 1000 ) .. ".jpg"
+end
+
+local function deleteLocalPresetCovers( name, keepPath )
+	local safe = presetName( name )
+	if not safe then return end
+	local function deletePath( path )
+		if path == keepPath then return end
+		CoverMaterialCache[path] = nil
+		if file.Exists( path, "DATA" ) then file.Delete( path ) end
+	end
+	deletePath( PRESET_COVER_DIR .. "/" .. safe .. ".jpg" )
+	local files = file.Find( PRESET_COVER_DIR .. "/" .. safe .. "_*.jpg", "DATA" ) or {}
+	for _, fn in ipairs( files ) do deletePath( PRESET_COVER_DIR .. "/" .. fn ) end
 end
 
 local function chat( msg )
@@ -108,20 +117,7 @@ function MC.CyclePresetRotation()
 end
 
 local function styleButton( btn, label )
-	btn:SetText( "" )
-	btn.Paint = function( s, w, h )
-		local bg = UI.control
-		if s:IsDown() then
-			bg = UI.controlDown
-		elseif s:IsHovered() then
-			bg = UI.controlHover
-		end
-		draw.RoundedBox( 3, 0, 0, w, h, bg )
-		draw.RoundedBox( 2, 3, 3, w - 6, h - 6, Color( 20, 22, 26, 200 ) )
-		surface.SetDrawColor( 120, 130, 148, 150 )
-		surface.DrawOutlinedRect( 0, 0, w, h, 1 )
-		draw.SimpleText( label, "mc_hud_small", w * 0.5, h * 0.5, UI.text, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
-	end
+	MC.LibraryStyleButton( btn, label )
 end
 
 local function hideScrollBar( scroll )
@@ -165,15 +161,16 @@ local function coverMaterialForPreset( preset )
 end
 
 local function drawPresetCover( preset, x, y, w, h )
-	draw.RoundedBox( 4, x, y, w, h, Color( 10, 12, 15, 245 ) )
-	surface.SetDrawColor( 88, 96, 110, 130 )
+	surface.SetDrawColor( 210, 220, 222, 255 )
+	surface.DrawRect( x, y, w, h )
+	surface.SetDrawColor( UI.border )
 	surface.DrawOutlinedRect( x, y, w, h, 1 )
 
 	local mat = coverMaterialForPreset( preset )
 	if mat then
 		surface.SetDrawColor( 255, 255, 255, 255 )
 		surface.SetMaterial( mat )
-		surface.DrawTexturedRect( x + 4, y + 4, w - 8, h - 8 )
+		surface.DrawTexturedRect( x + 5, y + 5, w - 10, h - 10 )
 		return
 	end
 
@@ -189,34 +186,54 @@ local function capturePresetCover( name, callback )
 	file.CreateDir( PRESET_COVER_DIR )
 
 	local hookName = "MC_PresetCoverCapture_" .. util.CRC( coverPath .. tostring( SysTime() ) )
+	local timerName = hookName .. "_timeout"
+	local finished = false
+	local function finish( path, data )
+		if finished then return end
+		finished = true
+		hook.Remove( "PostRender", hookName )
+		timer.Remove( timerName )
+		callback( path or "", data )
+	end
+	timer.Create( timerName, 5, 1, function() finish( "", nil ) end )
 	local frames = 0
 	hook.Add( "PostRender", hookName, function()
 		frames = frames + 1
 		if frames < 2 then return end
-		hook.Remove( "PostRender", hookName )
 
 		local data = render.Capture( {
 			format = "jpeg",
-			quality = 75,
+			quality = 65,
 			x = 0,
 			y = 0,
 			w = ScrW(),
 			h = ScrH(),
 		} )
-		if not data or data == "" then callback( "", nil ) return end
+		if not data or data == "" then finish( "", nil ) return end
 		file.Write( coverPath, data )
 		CoverMaterialCache[coverPath] = nil
-		callback( coverPath, data )
+		deleteLocalPresetCovers( name, coverPath )
+		finish( coverPath, data )
 	end )
 end
 
 local function uploadPresetCover( name, coverPath, data, callback )
 	callback = callback or function() end
-	if not coverPath or coverPath == "" or not data or data == "" then callback() return end
+	if not coverPath or coverPath == "" or not data or data == "" then callback( true, "" ) return end
 
 	local totalBytes = #data
+	if totalBytes > MAX_PRESET_COVER_BYTES then callback( false, "", "too_large" ) return end
 	local parts = math.ceil( totalBytes / PRESET_COVER_PART_BYTES )
-	if parts < 1 then callback() return end
+	if parts < 1 then callback( true, "" ) return end
+
+	local timerName = "MC_PresetCoverUploadTimeout_" .. util.CRC( coverPath )
+	PendingCoverUploads[coverPath] = { callback = callback, timerName = timerName }
+	timer.Create( timerName, PRESET_UPLOAD_TIMEOUT, 1, function()
+		local pending = PendingCoverUploads[coverPath]
+		if not pending then return end
+		PendingCoverUploads[coverPath] = nil
+		pending.callback( false, "", "timeout" )
+	end )
 
 	net.Start( "mc_preset_cover_begin" )
 		net.WriteString( name )
@@ -227,7 +244,7 @@ local function uploadPresetCover( name, coverPath, data, callback )
 
 	local i = 1
 	local function sendNextPart()
-		if i > parts then callback() return end
+		if not PendingCoverUploads[coverPath] or i > parts then return end
 		local first = ( i - 1 ) * PRESET_COVER_PART_BYTES + 1
 		local chunk = string.sub( data, first, first + PRESET_COVER_PART_BYTES - 1 )
 		net.Start( "mc_preset_cover_part" )
@@ -237,7 +254,7 @@ local function uploadPresetCover( name, coverPath, data, callback )
 			net.WriteData( chunk, #chunk )
 		net.SendToServer()
 		i = i + 1
-		timer.Simple( PRESET_UPLOAD_PART_INTERVAL, sendNextPart )
+		if i <= parts then timer.Simple( PRESET_UPLOAD_PART_INTERVAL, sendNextPart ) end
 	end
 
 	sendNextPart()
@@ -249,6 +266,10 @@ function MC.RequestPresetList()
 end
 
 local function requestPresetData( name )
+	if not canUsePresetManager() then
+		chat( L( "preset.admin_only", "默认只有管理员可以保存和读取预设" ) )
+		return
+	end
 	net.Start( "mc_preset_load_req" )
 		net.WriteString( name )
 	net.SendToServer()
@@ -468,6 +489,10 @@ local function inSelection( cell, a, b )
 end
 
 function MC.StartPresetCapture( name )
+	if not canUsePresetManager() then
+		chat( L( "preset.admin_only", "默认只有管理员可以保存和读取预设" ) )
+		return
+	end
 	name = presetName( name ) or generatedPresetName()
 	freePresetProjectionMeshes()
 	MC.ActivePreset = nil
@@ -499,6 +524,10 @@ local function sendPresetSave( name, selection, coverPath )
 end
 
 function MC.SavePresetSelection()
+	if not canUsePresetManager() then
+		chat( L( "preset.admin_only", "默认只有管理员可以保存和读取预设" ) )
+		return
+	end
 	local selection = MC.PresetSelection or {}
 	local name = presetName( MC.PresetDraftName ) or generatedPresetName()
 	if not selection.a or not selection.b or not selection.anchor then
@@ -509,8 +538,13 @@ function MC.SavePresetSelection()
 	MC.PresetSelectionStep = 4
 	chat( L( "preset.saving_chat", "正在截图并保存预设: {name}", { name = name } ) )
 	capturePresetCover( name, function( coverPath, data )
-		uploadPresetCover( name, coverPath, data, function()
-			sendPresetSave( name, selection, coverPath )
+		uploadPresetCover( name, coverPath, data, function( ok, confirmedCover, err )
+			if not ok then
+				MC.PresetSelectionStep = 3
+				chat( L( "preset.upload_failed", "截图上传失败，未保存预设: {err}", { err = tostring( err or "error" ) } ) )
+				return
+			end
+			sendPresetSave( name, selection, confirmedCover or "" )
 		end )
 	end )
 end
@@ -579,6 +613,10 @@ function MC.PresetUndoSelection()
 end
 
 function MC.PlaceActivePreset()
+	if not canUsePresetManager() then
+		chat( L( "preset.admin_only", "默认只有管理员可以保存和读取预设" ) )
+		return
+	end
 	if not MC.ActivePreset or not MC.ActivePresetName then
 		chat( L( "preset.load_first", "先按 R 读取一个预设。" ) )
 		return
@@ -598,8 +636,8 @@ function MC.PlaceActivePreset()
 	net.SendToServer()
 end
 
-local ROW_HEIGHT = 72
-local ROW_GAP = 6
+local ROW_HEIGHT = 82
+local ROW_GAP = 8
 
 local function createPresetRow( parent, frame, preset )
 	local row = vgui.Create( "DButton", parent )
@@ -611,13 +649,23 @@ local function createPresetRow( parent, frame, preset )
 	row.Paint = function( s, w, h )
 		local selected = frame.SelectedPreset and frame.SelectedPreset.name == preset.name
 		local bg = selected and UI.rowSelected or ( s:IsHovered() and UI.rowHover or UI.row )
-		draw.RoundedBox( 4, 0, 0, w, h, bg )
-		draw.RoundedBox( 3, 4, 4, w - 8, h - 8, UI.panelInner )
-		surface.SetDrawColor( selected and UI.accent or Color( 88, 96, 110, 140 ) )
-		surface.DrawOutlinedRect( 0, 0, w, h, 1 )
-		MC.DrawFittedText( preset.name, "mc_hud", { "mc_hud_small", "mc_hud_fit_16" }, 12, 10, UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, w - 24 )
-		draw.SimpleText( string.format( "%d blocks  %dx%dx%d", preset.blocks or 0, preset.sx or 0, preset.sy or 0, preset.sz or 0 ), "mc_hud_small", 12, 38, UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
-		draw.SimpleText( tostring( preset.createdAtText or "?" ), "mc_hud_small", 12, 54, UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
+		surface.SetDrawColor( bg )
+		surface.DrawRect( 0, 0, w, h )
+		if selected then
+			surface.SetDrawColor( UI.accent )
+			surface.DrawRect( 0, 0, 4, h )
+		end
+		MC.DrawFittedText( preset.name, "mc_hud", { "mc_hud_small", "mc_hud_fit_16" }, 14, 11, UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, w - 160 )
+		draw.SimpleText( tostring( preset.createdAtText or "?" ), "mc_library_section", w - 14, h - 10, UI.textDim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_BOTTOM )
+		local sameMap = preset.map == game.GetMap()
+		local mapW = MC.LibraryDrawPill( tostring( preset.map or "unknown" ), 14, 43, sameMap and UI.accentSoft or Color( 232, 219, 207 ), sameMap and UI.text or UI.error )
+		local groupName = MC.LibraryGetGroupName( MC.LibraryGetItemGroup( "preset", preset.name ) )
+		if groupName then
+			surface.SetFont( "mc_library_section" )
+			local groupW = surface.GetTextSize( groupName ) + 16
+			local groupX = w - groupW - 14
+			if 20 + mapW < groupX then MC.LibraryDrawPill( groupName, groupX, 43, Color( 226, 225, 211 ), UI.textDim ) end
+		end
 	end
 end
 
@@ -630,94 +678,150 @@ function MC.OpenPresetManager()
 	if IsValid( MC.PresetManagerFrame ) then MC.PresetManagerFrame:Remove() end
 
 	local fr = vgui.Create( "DFrame" )
-	fr:SetTitle( L( "preset.manager_title", "MC 预设放置器" ) )
-	local frameH = math.Clamp( ScrH() - 90, 620, 760 )
-	fr:SetSize( 980, frameH )
+	fr:SetTitle( "" )
+	fr:ShowCloseButton( false )
+	local frameH = math.Clamp( ScrH() - 60, 640, 860 )
+	local frameW = math.Clamp( ScrW() - 60, 980, 1180 )
+	fr:SetSize( frameW, frameH )
 	fr:Center()
 	fr:MakePopup()
 	fr:SetKeyboardInputEnabled( true )
+	fr:DockPadding( 12, 68, 12, 12 )
+	fr.MapFilter = "*"
+	fr.GroupFilter = "*"
+	fr.SearchText = ""
 	fr.Paint = function( _, w, h )
-		draw.RoundedBox( 6, 0, 0, w, h, UI.frame )
-		draw.RoundedBoxEx( 6, 0, 0, w, 28, UI.title, true, true, false, false )
+		surface.SetDrawColor( UI.frame )
+		surface.DrawRect( 0, 0, w, h )
+		surface.SetDrawColor( UI.title )
+		surface.DrawRect( 0, 0, w, 58 )
+		draw.SimpleText( L( "preset.manager_title", "MC 预设放置器" ), "mc_library_title", 22, 13, UI.textOnBlue, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
+		draw.SimpleText( L( "library.preset_subtitle", "收藏并整理可以再次搭建的作品" ), "mc_library_section", 22, 40, Color( 220, 230, 232 ), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 	end
 	fr.OnKeyCodePressed = function( _, key )
 		if key == KEY_ESCAPE then fr:Close() end
 	end
 	MC.PresetManagerFrame = fr
+	local canManage = canUsePresetManager()
+
+	local close = vgui.Create( "DButton", fr )
+	close:SetText( "" )
+	close:SetSize( 36, 36 )
+	close:SetPos( fr:GetWide() - 48, 11 )
+	close:SetCursor( "hand" )
+	close.Paint = function( s, w, h )
+		surface.SetDrawColor( s:IsHovered() and Color( 82, 105, 118 ) or Color( 72, 95, 109 ) )
+		surface.DrawRect( 0, 0, w, h )
+		draw.SimpleText( "×", "mc_hud_big", w * 0.5, h * 0.5 - 1, UI.textOnBlue, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+	end
+	close.DoClick = function() fr:Close() end
 
 	local header = vgui.Create( "DPanel", fr )
 	header:Dock( TOP )
-	header:DockMargin( 8, 8, 8, 6 )
-	header:SetTall( 78 )
+	header:DockMargin( 0, 0, 0, 10 )
+	header:SetTall( 68 )
 	header.Paint = function( _, w, h )
-		draw.RoundedBox( 4, 0, 0, w, h, UI.panel )
-		draw.RoundedBox( 3, 4, 4, w - 8, h - 8, UI.panelInner )
-		draw.SimpleText( L( "preset.header", "新建或读取建筑预设" ), "mc_hud_small", 12, 12, UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
+		surface.SetDrawColor( UI.panel )
+		surface.DrawRect( 0, 0, w, h )
+		draw.SimpleText( L( "preset.header", "新建或读取建筑预设" ), "mc_library_section", 14, 10, UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 	end
 
 	local nameEntry = vgui.Create( "DTextEntry", header )
-	nameEntry:SetPos( 12, 38 )
-	nameEntry:SetSize( 430, 28 )
-	nameEntry:SetPlaceholderText( L( "preset.new_name", "新预设名" ) )
+	nameEntry:SetPos( 14, 32 )
+	nameEntry:SetSize( 480, 28 )
 	nameEntry:SetValue( generatedPresetName() )
-	nameEntry:SetPaintBackground( false )
-	nameEntry:SetTextColor( UI.text )
-	if nameEntry.SetCursorColor then nameEntry:SetCursorColor( UI.accent ) end
-	nameEntry.Paint = function( s, w, h )
-		draw.RoundedBox( 3, 0, 0, w, h, Color( 16, 18, 22, 245 ) )
-		surface.SetDrawColor( 88, 96, 110, s:HasFocus() and 190 or 110 )
-		surface.DrawOutlinedRect( 0, 0, w, h, 1 )
-		s:DrawTextEntryText( UI.text, Color( 95, 145, 210 ), UI.text )
-	end
+	MC.LibraryStyleTextEntry( nameEntry, L( "preset.new_name", "新预设名" ) )
+	nameEntry:SetEnabled( canManage )
 
 	local create = vgui.Create( "DButton", header )
-	create:SetPos( 454, 38 )
+	create:SetPos( 506, 32 )
 	create:SetSize( 116, 28 )
 	styleButton( create, L( "preset.create", "新建预设" ) )
+	create:SetEnabled( canManage )
 	create.DoClick = function()
 		MC.StartPresetCapture( nameEntry:GetValue() )
 		fr:Close()
 	end
 
 	local refresh = vgui.Create( "DButton", header )
-	refresh:SetPos( 582, 38 )
+	refresh:SetPos( 632, 32 )
 	refresh:SetSize( 76, 28 )
-	styleButton( refresh, L( "preset.refresh", "刷新" ) )
+	MC.LibraryStyleButton( refresh, L( "preset.refresh", "刷新" ), "quiet" )
 	refresh.DoClick = function()
 		MC.RequestPresetList()
 	end
 
 	fr.StatusLabel = vgui.Create( "DLabel", header )
-	fr.StatusLabel:SetPos( 672, 38 )
-	fr.StatusLabel:SetSize( 280, 28 )
+	fr.StatusLabel:SetPos( 720, 32 )
+	fr.StatusLabel:SetSize( frameW - 746, 28 )
 	fr.StatusLabel:SetTextColor( UI.textDim )
 	fr.StatusLabel:SetText( L( "preset.loading", "读取中..." ) )
+	fr.StatusLabel:SetContentAlignment( 6 )
 
 	local body = vgui.Create( "DPanel", fr )
 	body:Dock( FILL )
-	body:DockMargin( 8, 0, 8, 8 )
 	body.Paint = function() end
 
 	fr.LeftPane = vgui.Create( "DPanel", body )
 	fr.LeftPane:Dock( LEFT )
-	fr.LeftPane:SetWide( 320 )
-	fr.LeftPane:DockMargin( 0, 0, 8, 0 )
+	fr.LeftPane:SetWide( 200 )
+	fr.LeftPane:DockMargin( 0, 0, 10, 0 )
 	fr.LeftPane.Paint = function( _, w, h )
-		draw.RoundedBox( 4, 0, 0, w, h, UI.panel )
-		draw.RoundedBox( 3, 4, 4, w - 8, h - 8, UI.panelInner )
+		surface.SetDrawColor( UI.sidebar )
+		surface.DrawRect( 0, 0, w, h )
+		draw.SimpleText( L( "library.filter", "筛选" ), "mc_hud", 12, 12, UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
+	end
+
+	fr.CenterPane = vgui.Create( "DPanel", body )
+	fr.CenterPane:Dock( LEFT )
+	fr.CenterPane:SetWide( 340 )
+	fr.CenterPane:DockMargin( 0, 0, 10, 0 )
+	fr.CenterPane.Paint = function( _, w, h )
+		surface.SetDrawColor( UI.panel )
+		surface.DrawRect( 0, 0, w, h )
 		draw.SimpleText( L( "preset.list_title", "预设列表" ), "mc_hud", 12, 12, UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 	end
 
 	fr.RightPane = vgui.Create( "DPanel", body )
 	fr.RightPane:Dock( FILL )
 	fr.RightPane.Paint = function( _, w, h )
-		draw.RoundedBox( 4, 0, 0, w, h, UI.panel )
-		draw.RoundedBox( 3, 4, 4, w - 8, h - 8, UI.panelInner )
+		surface.SetDrawColor( UI.panel )
+		surface.DrawRect( 0, 0, w, h )
 	end
 
-	local scroll = vgui.Create( "DScrollPanel", fr.LeftPane )
+	local filterScroll = vgui.Create( "DScrollPanel", fr.LeftPane )
+	filterScroll:Dock( FILL )
+	filterScroll:DockMargin( 8, 44, 8, 8 )
+	hideScrollBar( filterScroll )
+	local filterList = vgui.Create( "DPanel", filterScroll:GetCanvas() )
+	filterList:Dock( TOP )
+	filterList.Paint = function() end
+	filterList.PerformLayout = function( s, w )
+		local y = 0
+		for _, child in ipairs( s:GetChildren() ) do
+			if IsValid( child ) then
+				local h = child.MCRowHeight or 34
+				child:SetPos( 0, y )
+				child:SetSize( w, h )
+				y = y + h + 4
+			end
+		end
+	end
+	fr.FilterListPanel = filterList
+
+	local search = vgui.Create( "DTextEntry", fr.CenterPane )
+	search:Dock( TOP )
+	search:DockMargin( 10, 44, 10, 8 )
+	search:SetTall( 32 )
+	MC.LibraryStyleTextEntry( search, L( "library.search", "搜索名称或地图" ) )
+	search.OnValueChange = function( _, value )
+		fr.SearchText = value or ""
+		if fr.RefreshPresetRows then fr:RefreshPresetRows( "", false, true ) end
+	end
+
+	local scroll = vgui.Create( "DScrollPanel", fr.CenterPane )
 	scroll:Dock( FILL )
-	scroll:DockMargin( 8, 42, 8, 8 )
+	scroll:DockMargin( 10, 0, 10, 10 )
 	hideScrollBar( scroll )
 	local list = vgui.Create( "DPanel", scroll:GetCanvas() )
 	list:Dock( TOP )
@@ -738,7 +842,7 @@ function MC.OpenPresetManager()
 	local actions = vgui.Create( "DPanel", fr.RightPane )
 	actions:Dock( BOTTOM )
 	actions:DockMargin( 10, 0, 10, 10 )
-	actions:SetTall( 42 )
+	actions:SetTall( 52 )
 	actions.Paint = function() end
 
 	fr.DetailPanel = vgui.Create( "DPanel", fr.RightPane )
@@ -748,7 +852,7 @@ function MC.OpenPresetManager()
 		local preset = fr.SelectedPreset
 		local coverAspect = 16 / 9
 		local coverW = w - 16
-		local coverH = math.min( coverW / coverAspect, h - 178 )
+		local coverH = math.min( coverW / coverAspect, h - 204 )
 		if coverH < 120 then coverH = 120 end
 		coverW = coverH * coverAspect
 		drawPresetCover( preset, 8 + ( w - 16 - coverW ) * 0.5, 8, coverW, coverH )
@@ -764,12 +868,15 @@ function MC.OpenPresetManager()
 		infoLine( 8, infoY + 58, L( "preset.field_map", "地图" ), preset.map, sameMap and UI.text or UI.error )
 		infoLine( 8, infoY + 84, L( "preset.field_size", "规模" ), string.format( "%d blocks / %dx%dx%d", preset.blocks or 0, preset.sx or 0, preset.sy or 0, preset.sz or 0 ) )
 		infoLine( 8, infoY + 110, L( "preset.field_created", "创建" ), preset.createdAtText )
+		local groupName = MC.LibraryGetGroupName( MC.LibraryGetItemGroup( "preset", preset.name ) ) or L( "library.group_none", "未分组" )
+		infoLine( 8, infoY + 136, L( "library.group", "分组" ), groupName )
 	end
 
 	local load = vgui.Create( "DButton", actions )
-	load:SetPos( 0, 6 )
+	load:SetPos( 0, 10 )
 	load:SetSize( 110, 30 )
 	styleButton( load, L( "preset.load_projection", "读取投影" ) )
+	load:SetEnabled( canManage )
 	load.DoClick = function()
 		local preset = fr.SelectedPreset
 		if not preset then setStatus( fr, L( "preset.select_first", "先选择一个预设" ), true ) return end
@@ -778,40 +885,189 @@ function MC.OpenPresetManager()
 		fr:Close()
 	end
 
+	local groupLabel = vgui.Create( "DLabel", actions )
+	groupLabel:SetFont( "mc_library_section" )
+	groupLabel:SetText( L( "library.move_to_group", "整理到" ) )
+	groupLabel:SetTextColor( UI.textDim )
+	groupLabel:SetContentAlignment( 6 )
+
+	local groupCombo = vgui.Create( "DComboBox", actions )
+	groupCombo:SetTall( 30 )
+	MC.LibraryStyleCombo( groupCombo )
+	groupCombo.OnSelect = function( _, _, _, data )
+		if fr.UpdatingGroupCombo then return end
+		local preset = fr.SelectedPreset
+		if not preset then return end
+		local groupID = data ~= false and data or nil
+		MC.LibraryAssignItemGroup( "preset", preset.name, groupID )
+		fr:RefreshPresetRows( "", false )
+	end
+	actions.PerformLayout = function( _, w )
+		groupLabel:SetPos( math.max( 120, w - 216 ), 10 )
+		groupLabel:SetSize( 52, 30 )
+		groupCombo:SetPos( math.max( 172, w - 164 ), 10 )
+		groupCombo:SetSize( math.min( 164, w - math.max( 172, w - 164 ) ), 30 )
+	end
+	fr.GroupCombo = groupCombo
+
+	function fr:RefreshGroupCombo()
+		if not IsValid( groupCombo ) then return end
+		self.UpdatingGroupCombo = true
+		groupCombo:Clear()
+		local selectedID = self.SelectedPreset and MC.LibraryGetItemGroup( "preset", self.SelectedPreset.name ) or nil
+		groupCombo:AddChoice( L( "library.group_none", "未分组" ), false, not selectedID )
+		for _, group in ipairs( MC.LibraryGetGroups() ) do
+			groupCombo:AddChoice( group.name, group.id, selectedID == group.id )
+		end
+		groupCombo:SetEnabled( self.SelectedPreset ~= nil )
+		self.UpdatingGroupCombo = false
+	end
+
 	function fr:SelectPreset( preset )
 		self.SelectedPreset = preset
 		if IsValid( self.PresetListPanel ) then self.PresetListPanel:InvalidateLayout( true ) end
 		if IsValid( self.DetailPanel ) then self.DetailPanel:InvalidateLayout( true ) end
+		self:RefreshGroupCombo()
 	end
 
-	function fr:RefreshPresetRows( message, isError )
+	local function addFilterHeading( textValue, withAdd )
+		local heading = vgui.Create( "DPanel", filterList )
+		heading.MCRowHeight = 30
+		heading.Paint = function( _, w, h )
+			draw.SimpleText( textValue, "mc_library_section", 6, h * 0.5, UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER )
+		end
+		if withAdd then
+			local add = vgui.Create( "DButton", heading )
+			add:Dock( RIGHT )
+			add:DockMargin( 0, 3, 2, 3 )
+			add:SetWide( 46 )
+			MC.LibraryStyleButton( add, L( "library.new", "+ 新建" ), "quiet" )
+			add.DoClick = function()
+				Derma_StringRequest( L( "library.new_group", "新建分组" ), L( "library.group_name", "输入分组名称" ), "", function( name )
+					local id = MC.LibraryCreateGroup( name )
+					if not id then setStatus( fr, L( "library.group_exists", "分组名称不能为空或已存在" ), true ) return end
+					fr.GroupFilter = "*"
+					fr:RefreshPresetRows( "", false )
+				end )
+			end
+		end
+	end
+
+	local function addFilterButton( label, count, value, isMap, groupID )
+		local btn = vgui.Create( "DButton", filterList )
+		btn:SetText( "" )
+		btn:SetCursor( "hand" )
+		btn.MCRowHeight = 34
+		btn.Paint = function( s, w, h )
+			local selected = isMap and fr.MapFilter == value or ( not isMap and fr.GroupFilter == value )
+			local bg = selected and UI.panel or ( s:IsHovered() and UI.quietHover or Color( 0, 0, 0, 0 ) )
+			surface.SetDrawColor( bg )
+			surface.DrawRect( 0, 0, w, h )
+			if selected then
+				surface.SetDrawColor( UI.accent )
+				surface.DrawRect( 0, 0, 4, h )
+			end
+			MC.DrawFittedText( label, "mc_hud_small", { "mc_library_section" }, 10, h * 0.5, selected and UI.text or UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER, w - 46 )
+			draw.SimpleText( tostring( count or 0 ), "mc_library_section", w - 10, h * 0.5, UI.textDim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER )
+		end
+		btn.DoClick = function()
+			if isMap then fr.MapFilter = value else fr.GroupFilter = value end
+			fr:RefreshPresetRows( "", false, true )
+		end
+		if groupID then
+			btn:SetTooltip( L( "library.group_manage_hint", "右键可重命名或删除分组" ) )
+			btn.DoRightClick = function()
+				local menu = DermaMenu()
+				menu:AddOption( L( "library.rename_group", "重命名分组" ), function()
+					Derma_StringRequest( L( "library.rename_group", "重命名分组" ), L( "library.group_name", "输入分组名称" ), MC.LibraryGetGroupName( groupID ) or "", function( name )
+						if MC.LibraryRenameGroup( groupID, name ) then fr:RefreshPresetRows( "", false ) end
+					end )
+				end )
+				menu:AddOption( L( "library.delete_group", "删除分组" ), function()
+					Derma_Query( L( "library.delete_group_hint", "分组会被删除，里面的条目会变成未分组。" ), L( "library.delete_group", "删除分组" ), L( "save.delete", "删除" ), function()
+						MC.LibraryDeleteGroup( groupID )
+						if fr.GroupFilter == groupID then fr.GroupFilter = "*" end
+						fr:RefreshPresetRows( "", false )
+					end, L( "save.cancel", "取消" ) )
+				end )
+				menu:Open()
+			end
+		end
+	end
+
+	function fr:RefreshFilters()
+		for _, child in ipairs( filterList:GetChildren() ) do child:Remove() end
+		local presets = MC.PresetManagerPresets or {}
+		if string.StartWith( self.MapFilter or "", "map:" ) then
+			local wantedMap, found = string.sub( self.MapFilter, 5 ), false
+			for _, preset in ipairs( presets ) do if preset.map == wantedMap then found = true break end end
+			if not found then self.MapFilter = "*" end
+		end
+		if self.GroupFilter ~= "*" and self.GroupFilter ~= "@none" and not MC.LibraryGetGroupName( self.GroupFilter ) then self.GroupFilter = "*" end
+		addFilterHeading( L( "library.maps", "保存地图" ) )
+		addFilterButton( L( "library.all", "全部" ), #presets, "*", true )
+		local currentCount = 0
+		for _, preset in ipairs( presets ) do if preset.map == game.GetMap() then currentCount = currentCount + 1 end end
+		addFilterButton( L( "library.current_map", "当前地图" ), currentCount, "@current", true )
+		for _, mapInfo in ipairs( MC.LibraryCollectMaps( presets ) ) do
+			addFilterButton( mapInfo.name, mapInfo.count, "map:" .. mapInfo.name, true )
+		end
+
+		addFilterHeading( L( "library.groups", "自定义分组" ), true )
+		addFilterButton( L( "library.all_groups", "全部分组" ), #presets, "*", false )
+		local ungrouped = 0
+		local groupCounts = {}
+		for _, preset in ipairs( presets ) do
+			local groupID = MC.LibraryGetItemGroup( "preset", preset.name )
+			if groupID then groupCounts[groupID] = ( groupCounts[groupID] or 0 ) + 1 else ungrouped = ungrouped + 1 end
+		end
+		addFilterButton( L( "library.group_none", "未分组" ), ungrouped, "@none", false )
+		for _, group in ipairs( MC.LibraryGetGroups() ) do
+			addFilterButton( group.name, groupCounts[group.id] or 0, group.id, false, group.id )
+		end
+
+		local totalH = 0
+		for _, child in ipairs( filterList:GetChildren() ) do totalH = totalH + ( child.MCRowHeight or 34 ) + 4 end
+		filterList:SetTall( math.max( 1, totalH - 4 ) )
+		filterList:InvalidateLayout( true )
+	end
+
+	function fr:RefreshPresetRows( message, isError, skipFilters )
 		if not IsValid( list ) then return end
 		for _, child in ipairs( list:GetChildren() ) do child:Remove() end
 		local presets = MC.PresetManagerPresets or {}
+		MC.LibrarySortNewestFirst( presets, "createdAtText" )
+		if not skipFilters then self:RefreshFilters() end
+		local filtered = {}
+		for _, preset in ipairs( presets ) do
+			if MC.LibraryItemMatches( preset, "preset", self.MapFilter, self.GroupFilter, self.SearchText ) then filtered[#filtered + 1] = preset end
+		end
 		local rowCount = 0
 		local selectedName = self.SelectedPreset and self.SelectedPreset.name
 		local nextSelected
-		for _, preset in ipairs( presets ) do
+		for _, preset in ipairs( filtered ) do
 			if selectedName and preset.name == selectedName then nextSelected = preset end
 			createPresetRow( list, self, preset )
 			rowCount = rowCount + 1
 		end
-		if #presets == 0 then
+		if #filtered == 0 then
 			local empty = vgui.Create( "DLabel", list )
-			empty.MCRowHeight = 52
-			empty:SetText( L( "preset.empty", "还没有预设。输入名字后点“新建预设”。" ) )
+			empty.MCRowHeight = 72
+			empty:SetText( #presets == 0 and L( "preset.empty", "还没有预设。输入名字后点“新建预设”。" ) or L( "library.no_results", "没有符合当前筛选的内容。" ) )
 			empty:SetTextColor( UI.textDim )
 			empty:SetContentAlignment( 5 )
+			empty:SetWrap( true )
 			rowCount = 1
 			self:SelectPreset( nil )
 		else
-			self:SelectPreset( nextSelected or presets[1] )
+			self:SelectPreset( nextSelected or filtered[1] )
 		end
 		local totalH = rowCount * ROW_HEIGHT + math.max( 0, rowCount - 1 ) * ROW_GAP
-		if #presets == 0 then totalH = 52 end
+		if #filtered == 0 then totalH = 72 end
 		list:SetTall( totalH )
 		list:InvalidateLayout( true )
-		setStatus( self, message ~= "" and message or L( "preset.count", "{count} 个预设", { count = #presets } ), isError )
+		local countText = L( "library.showing", "显示 {visible} / {total}", { visible = #filtered, total = #presets } )
+		setStatus( self, message ~= "" and message or countText, isError )
 	end
 
 	MC.RequestPresetList()
@@ -835,11 +1091,23 @@ net.Receive( "mc_preset_list_data", function()
 		}
 	end
 	MC.PresetManagerPresets = presets
+	MC.LibrarySortNewestFirst( MC.PresetManagerPresets, "createdAtText" )
 	if IsValid( MC.PresetManagerFrame ) and MC.PresetManagerFrame.RefreshPresetRows then
 		MC.PresetManagerFrame:RefreshPresetRows( message, isError )
 	elseif message ~= "" then
 		chat( message )
 	end
+end )
+
+net.Receive( "mc_preset_cover_ack", function()
+	local cover = trim( net.ReadString() )
+	local ok = net.ReadBool()
+	local err = net.ReadString()
+	local pending = PendingCoverUploads[cover]
+	if not pending then return end
+	PendingCoverUploads[cover] = nil
+	timer.Remove( pending.timerName )
+	pending.callback( ok, ok and cover or "", err )
 end )
 
 net.Receive( "mc_preset_data", function()
