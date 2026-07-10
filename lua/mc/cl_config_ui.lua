@@ -5,18 +5,40 @@
 MC = MC or {}
 MC.ConfigServerValues = MC.ConfigServerValues or {}
 
+surface.CreateFont( "mc_config_title", { font = "Roboto", size = 24, weight = 600, antialias = true, extended = true } )
+surface.CreateFont( "mc_config_heading", { font = "Roboto", size = 19, weight = 600, antialias = true, extended = true } )
+surface.CreateFont( "mc_config_body", { font = "Roboto", size = 16, weight = 500, antialias = true, extended = true } )
+surface.CreateFont( "mc_config_small", { font = "Roboto", size = 14, weight = 400, antialias = true, extended = true } )
+surface.CreateFont( "mc_config_meta", { font = "Roboto", size = 12, weight = 400, antialias = true, extended = true } )
+surface.CreateFont( "mc_config_group", { font = "Roboto", size = 12, weight = 600, antialias = true, extended = true } )
+
+-- Muted denim blue on warm charcoal. The menu intentionally avoids neon,
+-- gradients, glow and rounded cards so it reads like a normal settings panel.
 local UI = {
-	bg = Color( 28, 30, 34, 250 ),
-	header = Color( 18, 20, 24, 255 ),
-	panel = Color( 38, 42, 49, 245 ),
-	panelHover = Color( 52, 58, 68, 245 ),
-	panelActive = Color( 68, 78, 94, 250 ),
-	field = Color( 14, 16, 20, 245 ),
-	line = Color( 90, 98, 112, 130 ),
-	text = Color( 235, 238, 242 ),
-	textDim = Color( 165, 172, 184 ),
-	accent = Color( 120, 170, 235 ),
-	warn = Color( 245, 190, 110 ),
+	window = Color( 31, 32, 34, 252 ),
+	header = Color( 38, 39, 41, 255 ),
+	toolbar = Color( 35, 36, 38, 255 ),
+	sidebar = Color( 34, 35, 37, 255 ),
+	content = Color( 39, 40, 42, 255 ),
+	contentHeader = Color( 43, 44, 46, 255 ),
+	row = Color( 44, 45, 47, 255 ),
+	rowAlt = Color( 42, 43, 45, 255 ),
+	rowHover = Color( 48, 49, 51, 255 ),
+	field = Color( 28, 29, 31, 255 ),
+	fieldDisabled = Color( 34, 35, 37, 255 ),
+	neutralSelected = Color( 69, 71, 74, 255 ),
+	line = Color( 68, 70, 73, 255 ),
+	lineSoft = Color( 55, 57, 59, 255 ),
+	text = Color( 235, 233, 228, 255 ),
+	textDim = Color( 170, 171, 168, 255 ),
+	textFaint = Color( 122, 124, 123, 255 ),
+	accent = Color( 82, 119, 153, 255 ),
+	accentHover = Color( 98, 136, 169, 255 ),
+	accentDark = Color( 52, 76, 98, 255 ),
+	accentText = Color( 244, 244, 241, 255 ),
+	warn = Color( 199, 159, 96, 255 ),
+	success = Color( 91, 132, 103, 255 ),
+	danger = Color( 160, 74, 68, 255 ),
 }
 
 local function configText( en, zh )
@@ -38,6 +60,36 @@ local function categoryLabel( category )
 	return configText( category.label or category.id, category.zhLabel )
 end
 
+local function categoryDescription( category )
+	return configText( category.description or "", category.descriptionZH )
+end
+
+local function groupLabel( group )
+	return configText( group.label or group.id, group.zhLabel )
+end
+
+local function choiceLabel( entry )
+	return configText( entry.label or entry.value, entry.labelZH )
+end
+
+local function unitLabel( unit )
+	local units = {
+		blocks = { "blocks", "方块" },
+		chunks = { "chunks", "区块" },
+		["chunks/frame"] = { "chunks/frame", "区块/帧" },
+		bytes = { "bytes", "字节" },
+		ms = { "ms", "毫秒" },
+		s = { "seconds", "秒" },
+		px = { "px", "像素" },
+		deg = { "degrees", "度" },
+		texels = { "texels", "纹素" },
+		u = { "Source units", "Source 单位" },
+	}
+	local labels = units[unit]
+	if not labels then return tostring( unit or "" ) end
+	return configText( labels[1], labels[2] )
+end
+
 local function getCVarValue( scope, name )
 	if scope == "server" then
 		return MC.ConfigServerValues[name] or ""
@@ -53,14 +105,10 @@ local function isTruthyValue( value )
 	return value == "1" or value == "true" or value == "yes" or value == "on"
 end
 
-local function styleButton( btn, isActive )
-	btn:SetTextColor( UI.text )
-	btn.Paint = function( s, w, h )
-		local bg = isActive and isActive() and UI.panelActive or ( s:IsHovered() and UI.panelHover or UI.panel )
-		draw.RoundedBox( 4, 0, 0, w, h, bg )
-		surface.SetDrawColor( UI.line )
-		surface.DrawOutlinedRect( 0, 0, w, h, 1 )
-	end
+local function canEditScope( scope )
+	if scope == "client" then return true end
+	local ply = LocalPlayer()
+	return IsValid( ply ) and ply:IsAdmin()
 end
 
 local function applyConfigValue( scope, item, value )
@@ -91,230 +139,716 @@ local function scrollCanvas( scroll )
 	return scroll.GetCanvas and scroll:GetCanvas() or scroll
 end
 
+local function styleScrollPanel( scroll )
+	local bar = scroll:GetVBar()
+	bar:SetWide( 7 )
+	bar.Paint = function( _, w, h )
+		surface.SetDrawColor( UI.content )
+		surface.DrawRect( 0, 0, w, h )
+	end
+
+	bar.btnGrip.Paint = function( s, w, h )
+		surface.SetDrawColor( s:IsHovered() and UI.accentHover or UI.accentDark )
+		surface.DrawRect( 1, 0, w - 2, h )
+	end
+
+	bar.btnUp:SetVisible( false )
+	bar.btnDown:SetVisible( false )
+end
+
+local function styleTextEntry( entry, placeholder )
+	entry:SetFont( "mc_config_body" )
+	entry:SetTextColor( UI.text )
+	entry:SetDrawBackground( false )
+	if entry.SetCursorColor then entry:SetCursorColor( UI.accentHover ) end
+	if entry.SetHighlightColor then entry:SetHighlightColor( UI.accentDark ) end
+
+	entry.Paint = function( s, w, h )
+		local enabled = s:IsEnabled()
+		surface.SetDrawColor( enabled and UI.field or UI.fieldDisabled )
+		surface.DrawRect( 0, 0, w, h )
+		surface.SetDrawColor( s:HasFocus() and UI.accent or UI.line )
+		surface.DrawOutlinedRect( 0, 0, w, h, 1 )
+
+		if s:GetValue() == "" and not s:HasFocus() and placeholder then
+			draw.SimpleText( placeholder, "mc_config_small", 10, h * 0.5, UI.textFaint, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER )
+		end
+
+		s:DrawTextEntryText( enabled and UI.text or UI.textFaint, UI.accentHover, enabled and UI.text or UI.textFaint )
+	end
+end
+
+local function styleFlatButton( button, options )
+	options = options or {}
+	button:SetText( "" )
+	button.Paint = function( s, w, h )
+		local enabled = s:IsEnabled()
+		local active = options.active and options.active() or false
+		local selectedColor = options.selectedColor and options.selectedColor() or UI.accent
+		local bg
+		if not enabled then
+			bg = UI.fieldDisabled
+		elseif active then
+			bg = s:IsHovered() and UI.accentHover or selectedColor
+		else
+			bg = s:IsHovered() and UI.rowHover or UI.field
+		end
+
+		surface.SetDrawColor( bg )
+		surface.DrawRect( 0, 0, w, h )
+		surface.SetDrawColor( active and UI.accent or UI.line )
+		surface.DrawOutlinedRect( 0, 0, w, h, 1 )
+
+		local label = options.label
+		if isfunction( label ) then label = label() end
+		draw.SimpleText( tostring( label or "" ), options.font or "mc_config_small", w * 0.5, h * 0.5,
+			enabled and ( active and UI.accentText or UI.text ) or UI.textFaint,
+			TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+	end
+end
+
+local function registerControl( name, control )
+	MC.ConfigControlRows = MC.ConfigControlRows or {}
+	MC.ConfigControlRows[name] = MC.ConfigControlRows[name] or {}
+	table.insert( MC.ConfigControlRows[name], control )
+end
+
 local function createBoolControl( parent, scope, item, editable )
 	local holder = vgui.Create( "DPanel", parent )
-	holder:Dock( RIGHT )
-	holder:DockMargin( 0, 16, 10, 16 )
-	holder:SetWide( 70 )
+	holder:Dock( FILL )
+	holder:DockMargin( 0, 27, 12, 27 )
 	holder.MCEnabled = isTruthyValue( getCVarValue( scope, item.name ) )
 	holder.Paint = function() end
 
-	local function makeChoice( value, label, x )
+	local function makeChoice( value, label )
 		local btn = vgui.Create( "DButton", holder )
-		btn:SetPos( x, 0 )
-		btn:SetSize( 32, 32 )
-		btn:SetText( "" )
+		btn:Dock( LEFT )
+		if value then btn:DockMargin( 4, 0, 0, 0 ) end
+		btn:SetWide( 108 )
 		btn:SetEnabled( editable )
-		btn.Paint = function( s, w, h )
-			local active = holder.MCEnabled == value
-			local bg = active and UI.accent or Color( 50, 56, 66, 245 )
-			if not editable then bg = active and Color( 78, 88, 104, 210 ) or Color( 44, 48, 56, 210 ) end
-			if s:IsHovered() and editable then
-				bg = active and Color( 140, 190, 245 ) or Color( 68, 76, 90, 245 )
-			end
-
-			draw.RoundedBox( 0, 0, 0, w, h, bg )
-			surface.SetDrawColor( active and Color( 220, 235, 255, 210 ) or UI.line )
-			surface.DrawOutlinedRect( 0, 0, w, h, 1 )
-			draw.SimpleText( label, "mc_hud_small", w * 0.5, h * 0.5, UI.text, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
-		end
+		styleFlatButton( btn, {
+			label = label,
+			active = function() return holder.MCEnabled == value end,
+			selectedColor = function() return value and UI.accent or UI.neutralSelected end,
+		} )
 		btn.DoClick = function()
 			if not editable or holder.MCEnabled == value then return end
 			holder.MCEnabled = value
 			applyConfigValue( scope, item, value and "1" or "0" )
 		end
-		return btn
 	end
 
-	makeChoice( false, configText( "OFF", "关" ), 0 )
-	makeChoice( true, configText( "ON", "开" ), 38 )
+	makeChoice( false, configText( "Off", "关闭" ) )
+	makeChoice( true, configText( "On", "开启" ) )
+
+	holder.MCSetValue = function( _, value )
+		holder.MCEnabled = isTruthyValue( value )
+	end
+	registerControl( item.name, holder )
 	return holder
 end
 
-local function createConfigRow( parent, scope, item )
-	local editable = scope == "client" or ( LocalPlayer():IsAdmin() )
+local function createChoiceControl( parent, scope, item, editable )
+	local holder = vgui.Create( "DPanel", parent )
+	holder:Dock( FILL )
+	holder:DockMargin( 0, 27, 12, 27 )
+	holder.Paint = function() end
 
-	local row = vgui.Create( "DPanel", parent )
-	row:Dock( TOP )
-	row:DockMargin( 0, 0, 0, 8 )
-	row:SetTall( item.kind == "bool" and 64 or 88 )
-	row.Paint = function( _, w, h )
-		draw.RoundedBox( 4, 0, 0, w, h, UI.panel )
-		surface.SetDrawColor( UI.line )
+	local combo = vgui.Create( "DComboBox", holder )
+	combo:Dock( FILL )
+	combo:SetFont( "mc_config_small" )
+	combo:SetTextColor( editable and UI.text or UI.textFaint )
+	combo:SetContentAlignment( 4 )
+	if combo.SetTextInset then combo:SetTextInset( 11, 0 ) end
+	if combo.SetSortItems then combo:SetSortItems( false ) end
+	combo:SetEnabled( editable )
+
+	if IsValid( combo.DropButton ) then
+		combo.DropButton:SetVisible( false )
+	end
+
+	for _, entry in ipairs( item.choices or {} ) do
+		combo:AddChoice( choiceLabel( entry ), tostring( entry.value ) )
+	end
+
+	combo.Paint = function( s, w, h )
+		surface.SetDrawColor( s:IsEnabled() and UI.field or UI.fieldDisabled )
+		surface.DrawRect( 0, 0, w, h )
+		surface.SetDrawColor( s:IsMenuOpen() and UI.accent or UI.line )
 		surface.DrawOutlinedRect( 0, 0, w, h, 1 )
+		draw.SimpleText( "v", "mc_config_meta", w - 13, h * 0.5 - 1, s:IsEnabled() and UI.textDim or UI.textFaint,
+			TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+	end
+	combo.OnMenuOpened = function( _, menu )
+		menu.Paint = function( _, w, h )
+			surface.SetDrawColor( UI.field )
+			surface.DrawRect( 0, 0, w, h )
+			surface.SetDrawColor( UI.line )
+			surface.DrawOutlinedRect( 0, 0, w, h, 1 )
+		end
+
+		local canvas = menu:GetCanvas()
+		for _, option in ipairs( canvas:GetChildren() ) do
+			if option.SetFont then option:SetFont( "mc_config_small" ) end
+			if option.SetTextColor then option:SetTextColor( UI.text ) end
+			if option.SetTextInset then option:SetTextInset( 10, 0 ) end
+			option.Paint = function( s, w, h )
+				if s:IsHovered() then
+					surface.SetDrawColor( UI.accentDark )
+					surface.DrawRect( 1, 0, w - 2, h )
+				end
+				return false
+			end
+		end
 	end
 
-	if item.kind == "bool" then
-		createBoolControl( row, scope, item, editable )
+	local function setDisplayedValue( value )
+		value = tostring( value or "" )
+		for _, entry in ipairs( item.choices or {} ) do
+			if tostring( entry.value ) == value then
+				combo:SetValue( choiceLabel( entry ) )
+				return
+			end
+		end
+		combo:SetValue( value )
 	end
 
-	local title = vgui.Create( "DLabel", row )
-	title:Dock( TOP )
-	title:DockMargin( 10, 7, 10, 0 )
-	title:SetTall( 18 )
-	title:SetTextColor( UI.text )
-	title:SetText( itemLabel( item ) .. "  (" .. item.name .. ")" )
-
-	local help = vgui.Create( "DLabel", row )
-	help:Dock( TOP )
-	help:DockMargin( 10, 1, 10, 4 )
-	help:SetTall( 20 )
-	help:SetTextColor( editable and UI.textDim or UI.warn )
-	help:SetText( editable and itemHelp( item ) or configText( "Admin only", "仅管理员可改" ) )
-
-	if item.kind == "bool" then
-		return row
+	setDisplayedValue( getCVarValue( scope, item.name ) )
+	combo.OnSelect = function( _, _, _, data )
+		if not editable then return end
+		applyConfigValue( scope, item, tostring( data or "" ) )
 	end
 
-	local line = vgui.Create( "DPanel", row )
-	line:Dock( BOTTOM )
-	line:DockMargin( 10, 4, 10, 10 )
-	line:SetTall( 28 )
-	line.Paint = function() end
+	holder.MCSetValue = function( _, value )
+		setDisplayedValue( value )
+	end
+	registerControl( item.name, holder )
+	return holder
+end
 
-	local apply = vgui.Create( "DButton", line )
+local function createValueControl( parent, scope, item, editable )
+	local holder = vgui.Create( "DPanel", parent )
+	holder:Dock( FILL )
+	holder:DockMargin( 0, 27, 12, 27 )
+	holder.Paint = function() end
+
+	local apply = vgui.Create( "DButton", holder )
 	apply:Dock( RIGHT )
 	apply:SetWide( 72 )
-	apply:SetText( configText( "Apply", "应用" ) )
+	apply:DockMargin( 7, 0, 0, 0 )
 	apply:SetEnabled( editable )
-	styleButton( apply )
 
-	local entry = vgui.Create( "DTextEntry", line )
+	local unit
+	if item.unit then
+		unit = vgui.Create( "DLabel", holder )
+		unit:Dock( RIGHT )
+		unit:SetWide( 76 )
+		unit:SetFont( "mc_config_meta" )
+		unit:SetTextColor( UI.textDim )
+		unit:SetContentAlignment( 5 )
+		unit:SetText( unitLabel( item.unit ) )
+	end
+
+	local entry = vgui.Create( "DTextEntry", holder )
 	entry:Dock( FILL )
-	entry:DockMargin( 0, 0, 8, 0 )
 	entry:SetText( getCVarValue( scope, item.name ) )
 	entry:SetEnabled( editable )
-	entry:SetTextColor( UI.text )
-	entry:SetDrawBackground( false )
-	if entry.SetCursorColor then entry:SetCursorColor( UI.accent ) end
-	entry.Paint = function( s, w, h )
-		draw.RoundedBox( 3, 0, 0, w, h, UI.field )
-		surface.SetDrawColor( UI.line )
-		surface.DrawOutlinedRect( 0, 0, w, h, 1 )
-		s:DrawTextEntryText( UI.text, UI.accent, UI.text )
-	end
-	entry.OnEnter = function()
-		if editable then applyConfigValue( scope, item, entry:GetValue() ) end
-	end
-	apply.DoClick = function()
-		applyConfigValue( scope, item, entry:GetValue() )
+	entry.MCOriginalValue = entry:GetValue()
+	styleTextEntry( entry )
+
+	styleFlatButton( apply, {
+		label = function()
+			if apply.MCSavedUntil and apply.MCSavedUntil > CurTime() then
+				return configText( "Saved", "已保存" )
+			end
+			return configText( "Save", "保存" )
+		end,
+		active = function()
+			return editable and ( apply.MCDirty or ( apply.MCSavedUntil and apply.MCSavedUntil > CurTime() ) )
+		end,
+		selectedColor = function()
+			if apply.MCSavedUntil and apply.MCSavedUntil > CurTime() then return UI.success end
+			return UI.accent
+		end,
+	} )
+
+	local function markSaved()
+		if not editable then return end
+		local value = entry:GetValue()
+		applyConfigValue( scope, item, value )
+		entry.MCOriginalValue = value
+		apply.MCDirty = false
+		apply.MCSavedUntil = CurTime() + 1.1
 	end
 
+	entry.OnChange = function()
+		apply.MCDirty = entry:GetValue() ~= tostring( entry.MCOriginalValue or "" )
+	end
+	entry.OnEnter = markSaved
+	apply.DoClick = markSaved
+
+	holder.MCSetValue = function( _, value )
+		value = tostring( value or "" )
+		entry.MCOriginalValue = value
+		if not entry:HasFocus() and not apply.MCDirty then
+			entry:SetText( value )
+		end
+	end
+	registerControl( item.name, holder )
+	return holder
+end
+
+local function createConfigRow( parent, scope, item, rowIndex )
+	local editable = canEditScope( scope )
+	local row = vgui.Create( "DPanel", parent )
+	row:Dock( TOP )
+	row:DockMargin( 0, 0, 0, 1 )
+	row:SetTall( 92 )
+	row.Paint = function( s, w, h )
+		local base = rowIndex % 2 == 0 and UI.rowAlt or UI.row
+		surface.SetDrawColor( s:IsHovered() and UI.rowHover or base )
+		surface.DrawRect( 0, 0, w, h )
+		surface.SetDrawColor( UI.lineSoft )
+		surface.DrawRect( 0, h - 1, w, 1 )
+	end
+
+	local controls = vgui.Create( "DPanel", row )
+	controls:Dock( RIGHT )
+	controls:SetWide( 350 )
+	controls.Paint = function() end
+
+	if item.kind == "bool" then
+		createBoolControl( controls, scope, item, editable )
+	elseif item.kind == "choice" or item.choices then
+		createChoiceControl( controls, scope, item, editable )
+	else
+		createValueControl( controls, scope, item, editable )
+	end
+
+	local information = vgui.Create( "DPanel", row )
+	information:Dock( FILL )
+	information:DockMargin( 16, 10, 10, 8 )
+	information.Paint = function() end
+
+	local title = vgui.Create( "DLabel", information )
+	title:Dock( TOP )
+	title:SetTall( 21 )
+	title:SetFont( "mc_config_body" )
+	title:SetTextColor( UI.text )
+	title:SetText( itemLabel( item ) )
+
+	local help = vgui.Create( "DLabel", information )
+	help:Dock( TOP )
+	help:SetTall( 34 )
+	help:SetFont( "mc_config_small" )
+	help:SetTextColor( UI.textDim )
+	help:SetWrap( true )
+	help:SetText( itemHelp( item ) )
+
+	local meta = vgui.Create( "DLabel", information )
+	meta:Dock( TOP )
+	meta:SetTall( 16 )
+	meta:SetFont( "mc_config_meta" )
+	meta:SetTextColor( editable and UI.textFaint or UI.warn )
+	local suffix = ""
+	if item.advanced then suffix = suffix .. configText( "  ·  advanced", "  ·  高级设置" ) end
+	if not editable then suffix = suffix .. configText( "  ·  administrator only", "  ·  仅管理员可修改" ) end
+	meta:SetText( item.name .. suffix )
+
 	return row
+end
+
+local function createResultHeading( parent, category, count )
+	local heading = vgui.Create( "DPanel", parent )
+	heading:Dock( TOP )
+	heading:DockMargin( 0, 12, 0, 0 )
+	heading:SetTall( 38 )
+	heading.Paint = function( _, w, h )
+		surface.SetDrawColor( UI.contentHeader )
+		surface.DrawRect( 0, 0, w, h )
+		surface.SetDrawColor( UI.accent )
+		surface.DrawRect( 0, h - 2, w, 2 )
+		draw.SimpleText( categoryLabel( category ), "mc_config_body", 13, h * 0.5, UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER )
+		draw.SimpleText( tostring( count ), "mc_config_meta", w - 14, h * 0.5, UI.textDim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER )
+	end
+end
+
+local function createEmptyState( parent, titleText, helpText )
+	local empty = vgui.Create( "DPanel", parent )
+	empty:Dock( TOP )
+	empty:SetTall( 150 )
+	empty.Paint = function( _, w, h )
+		draw.SimpleText( titleText, "mc_config_heading", w * 0.5, 49, UI.text, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+		draw.SimpleText( helpText, "mc_config_small", w * 0.5, 78, UI.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+	end
 end
 
 function MC.OpenConfigMenu()
 	if IsValid( MC.ConfigFrame ) then MC.ConfigFrame:Remove() end
 
+	local frameWidth = math.min( 1160, ScrW() - 40 )
+	local frameHeight = math.min( 760, ScrH() - 40 )
 	local fr = vgui.Create( "DFrame" )
-	fr:SetTitle( configText( "MC Config", "MC 配置" ) )
-	fr:SetSize( 980, 680 )
+	fr:SetTitle( "" )
+	fr:ShowCloseButton( false )
+	fr:SetSize( frameWidth, frameHeight )
+	fr:SetMinimumSize( math.min( 820, frameWidth ), math.min( 580, frameHeight ) )
+	fr:SetSizable( true )
+	fr:SetDeleteOnClose( true )
+	fr:DockPadding( 0, 0, 0, 0 )
 	fr:Center()
 	fr:MakePopup()
 	fr.Paint = function( _, w, h )
-		draw.RoundedBox( 6, 0, 0, w, h, UI.bg )
-		draw.RoundedBoxEx( 6, 0, 0, w, 28, UI.header, true, true, false, false )
+		surface.SetDrawColor( UI.window )
+		surface.DrawRect( 0, 0, w, h )
+		surface.SetDrawColor( UI.line )
+		surface.DrawOutlinedRect( 0, 0, w, h, 1 )
 	end
 	MC.ConfigFrame = fr
 
 	local activeScope = "client"
-	local activeCategory = nil
+	local activeCategory
+	local searchQuery = ""
 	local scopeButtons = {}
 	local categoryButtons = {}
 	MC.ConfigScopeButtons = scopeButtons
+	MC.ConfigControlRows = {}
 
-	local top = vgui.Create( "DPanel", fr )
-	top:Dock( TOP )
-	top:DockMargin( 8, 8, 8, 6 )
-	top:SetTall( 34 )
-	top.Paint = function() end
+	local header = vgui.Create( "DPanel", fr )
+	header:Dock( TOP )
+	header:SetTall( 66 )
+	header.Paint = function( _, w, h )
+		surface.SetDrawColor( UI.header )
+		surface.DrawRect( 0, 0, w, h )
+		surface.SetDrawColor( UI.accent )
+		surface.DrawRect( 0, 0, 5, h )
+		surface.SetDrawColor( UI.lineSoft )
+		surface.DrawRect( 0, h - 1, w, 1 )
+	end
+
+	local title = vgui.Create( "DLabel", header )
+	title:SetPos( 22, 10 )
+	title:SetSize( 500, 27 )
+	title:SetFont( "mc_config_title" )
+	title:SetTextColor( UI.text )
+	title:SetText( configText( "MC Settings", "MC 设置" ) )
+
+	local subtitle = vgui.Create( "DLabel", header )
+	subtitle:SetPos( 23, 37 )
+	subtitle:SetSize( 620, 19 )
+	subtitle:SetFont( "mc_config_small" )
+	subtitle:SetTextColor( UI.textDim )
+	subtitle:SetText( configText( "Client preferences and server administration", "客户端偏好与服务器管理" ) )
+
+	local close = vgui.Create( "DButton", header )
+	close:Dock( RIGHT )
+	close:SetWide( 50 )
+	close:SetText( "" )
+	close.Paint = function( s, w, h )
+		if s:IsHovered() then
+			surface.SetDrawColor( UI.danger )
+			surface.DrawRect( 0, 0, w, h )
+		end
+		draw.SimpleText( "X", "mc_config_body", w * 0.5, h * 0.5, s:IsHovered() and UI.accentText or UI.textDim,
+			TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+	end
+	close.DoClick = function() fr:Close() end
+
+	local toolbar = vgui.Create( "DPanel", fr )
+	toolbar:Dock( TOP )
+	toolbar:SetTall( 48 )
+	toolbar.Paint = function( _, w, h )
+		surface.SetDrawColor( UI.toolbar )
+		surface.DrawRect( 0, 0, w, h )
+		surface.SetDrawColor( UI.lineSoft )
+		surface.DrawRect( 0, h - 1, w, 1 )
+	end
+
+	local scopeHolder = vgui.Create( "DPanel", toolbar )
+	scopeHolder:Dock( LEFT )
+	scopeHolder:SetWide( 410 )
+	scopeHolder:DockMargin( 12, 0, 0, 0 )
+	scopeHolder.Paint = function() end
+
+	local scopeHint = vgui.Create( "DLabel", toolbar )
+	scopeHint:Dock( FILL )
+	scopeHint:DockMargin( 10, 0, 18, 0 )
+	scopeHint:SetFont( "mc_config_small" )
+	scopeHint:SetContentAlignment( 6 )
+	scopeHint:SetTextColor( UI.textDim )
 
 	local body = vgui.Create( "DPanel", fr )
 	body:Dock( FILL )
-	body:DockMargin( 8, 0, 8, 8 )
 	body.Paint = function() end
 
-	local left = vgui.Create( "DScrollPanel", body )
-	left:Dock( LEFT )
-	left:SetWide( 190 )
-	left:DockMargin( 0, 0, 8, 0 )
+	local sidebar = vgui.Create( "DPanel", body )
+	sidebar:Dock( LEFT )
+	sidebar:SetWide( 255 )
+	sidebar.Paint = function( _, w, h )
+		surface.SetDrawColor( UI.sidebar )
+		surface.DrawRect( 0, 0, w, h )
+		surface.SetDrawColor( UI.lineSoft )
+		surface.DrawRect( w - 1, 0, 1, h )
+	end
 
-	local right = vgui.Create( "DScrollPanel", body )
-	right:Dock( FILL )
+	local searchHolder = vgui.Create( "DPanel", sidebar )
+	searchHolder:Dock( TOP )
+	searchHolder:SetTall( 59 )
+	searchHolder.Paint = function() end
+
+	local search = vgui.Create( "DTextEntry", searchHolder )
+	search:Dock( FILL )
+	search:DockMargin( 12, 12, 12, 11 )
+	styleTextEntry( search, configText( "Search settings", "搜索设置" ) )
+
+	local categoryScroll = vgui.Create( "DScrollPanel", sidebar )
+	categoryScroll:Dock( FILL )
+	styleScrollPanel( categoryScroll )
+
+	local contentArea = vgui.Create( "DPanel", body )
+	contentArea:Dock( FILL )
+	contentArea.Paint = function( _, w, h )
+		surface.SetDrawColor( UI.content )
+		surface.DrawRect( 0, 0, w, h )
+	end
+
+	local contentHeader = vgui.Create( "DPanel", contentArea )
+	contentHeader:Dock( TOP )
+	contentHeader:SetTall( 82 )
+	contentHeader.Paint = function( _, w, h )
+		surface.SetDrawColor( UI.contentHeader )
+		surface.DrawRect( 0, 0, w, h )
+		surface.SetDrawColor( UI.lineSoft )
+		surface.DrawRect( 0, h - 1, w, 1 )
+	end
+
+	local contentTitle = vgui.Create( "DLabel", contentHeader )
+	contentTitle:SetPos( 18, 12 )
+	contentTitle:SetSize( 650, 25 )
+	contentTitle:SetFont( "mc_config_heading" )
+	contentTitle:SetTextColor( UI.text )
+
+	local contentDescription = vgui.Create( "DLabel", contentHeader )
+	contentDescription:SetPos( 19, 39 )
+	contentDescription:SetSize( 720, 32 )
+	contentDescription:SetFont( "mc_config_small" )
+	contentDescription:SetTextColor( UI.textDim )
+	contentDescription:SetWrap( true )
+
+	local contentCount = vgui.Create( "DLabel", contentHeader )
+	contentCount:Dock( RIGHT )
+	contentCount:SetWide( 130 )
+	contentCount:DockMargin( 0, 0, 18, 0 )
+	contentCount:SetFont( "mc_config_meta" )
+	contentCount:SetTextColor( UI.textDim )
+	contentCount:SetContentAlignment( 6 )
+
+	local settingsScroll = vgui.Create( "DScrollPanel", contentArea )
+	settingsScroll:Dock( FILL )
+	styleScrollPanel( settingsScroll )
 
 	local function categoriesForScope()
 		return ( MC.ConfigConVars and MC.ConfigConVars[activeScope] ) or {}
 	end
 
-	local function rebuildRows()
-		local canvas = scrollCanvas( right )
-		clearPanel( canvas )
-		for _, cat in ipairs( categoriesForScope() ) do
-			if cat.id == activeCategory then
-				for _, item in ipairs( cat.items or {} ) do
-					createConfigRow( canvas, activeScope, item )
-				end
-				break
-			end
+	local function activeCategoryData()
+		for _, entry in ipairs( categoriesForScope() ) do
+			if entry.id == activeCategory then return entry end
 		end
 	end
-	MC.ConfigRefreshRows = rebuildRows
 
 	local function categoryExists( id )
-		for _, cat in ipairs( categoriesForScope() ) do
-			if cat.id == id then return true end
+		for _, entry in ipairs( categoriesForScope() ) do
+			if entry.id == id then return true end
 		end
 		return false
 	end
 
-	local function rebuildCategories()
-		local canvas = scrollCanvas( left )
-		clearPanel( canvas )
-		categoryButtons = {}
-		local cats = categoriesForScope()
-		if not activeCategory or not categoryExists( activeCategory ) then
-			activeCategory = cats[1] and cats[1].id or nil
-		end
-
-		for _, cat in ipairs( cats ) do
-			local btn = vgui.Create( "DButton", canvas )
-			btn:Dock( TOP )
-			btn:DockMargin( 0, 0, 0, 6 )
-			btn:SetTall( 32 )
-			btn:SetText( categoryLabel( cat ) )
-			btn.CategoryButton = true
-			categoryButtons[cat.id] = btn
-			styleButton( btn, function() return activeCategory == cat.id end )
-			btn.DoClick = function()
-				activeCategory = cat.id
-				rebuildRows()
-			end
-		end
-		rebuildRows()
+	local function itemMatches( item, entryCategory, query )
+		if query == "" then return true end
+		local haystack = table.concat( {
+			item.name or "",
+			item.label or "",
+			item.labelZH or "",
+			item.help or "",
+			item.helpZH or "",
+			entryCategory.label or "",
+			entryCategory.zhLabel or "",
+		}, " " )
+		return string.find( string.lower( haystack ), string.lower( query ), 1, true ) ~= nil
 	end
 
-	for _, scope in ipairs( { "client", "server" } ) do
-		local btn = vgui.Create( "DButton", top )
+	local rebuildRows
+	local rebuildCategories
+
+	rebuildRows = function( resetScroll )
+		local canvas = scrollCanvas( settingsScroll )
+		clearPanel( canvas )
+		canvas:DockPadding( 12, 0, 5, 12 )
+		MC.ConfigControlRows = {}
+
+		local rowIndex = 0
+		local total = 0
+		local query = string.Trim( searchQuery or "" )
+		if query ~= "" then
+			for _, entryCategory in ipairs( categoriesForScope() ) do
+				local matches = {}
+				for _, entry in ipairs( entryCategory.items or {} ) do
+					if itemMatches( entry, entryCategory, query ) then
+						table.insert( matches, entry )
+					end
+				end
+
+				if #matches > 0 then
+					createResultHeading( canvas, entryCategory, #matches )
+					for _, entry in ipairs( matches ) do
+						rowIndex = rowIndex + 1
+						total = total + 1
+						createConfigRow( canvas, activeScope, entry, rowIndex )
+					end
+				end
+			end
+
+			contentTitle:SetText( configText( "Search results", "搜索结果" ) )
+			contentDescription:SetText( configText( "Matching settings across the current scope.", "当前范围内所有匹配的设置。" ) )
+		else
+			local entryCategory = activeCategoryData()
+			if entryCategory then
+				for _, entry in ipairs( entryCategory.items or {} ) do
+					rowIndex = rowIndex + 1
+					total = total + 1
+					createConfigRow( canvas, activeScope, entry, rowIndex )
+				end
+				contentTitle:SetText( categoryLabel( entryCategory ) )
+				contentDescription:SetText( categoryDescription( entryCategory ) )
+			else
+				contentTitle:SetText( configText( "No settings", "没有设置" ) )
+				contentDescription:SetText( "" )
+			end
+		end
+
+		if total == 0 then
+			createEmptyState( canvas, configText( "Nothing found", "没有找到设置" ),
+				configText( "Try a setting name, description or ConVar.", "可以尝试设置名称、说明或 ConVar。" ) )
+		end
+
+		contentCount:SetText( configText( total .. ( total == 1 and " setting" or " settings" ), total .. " 项设置" ) )
+		canvas:InvalidateLayout( true )
+		if resetScroll then settingsScroll:GetVBar():SetScroll( 0 ) end
+	end
+	MC.ConfigRefreshRows = function() rebuildRows( false ) end
+
+	rebuildCategories = function()
+		local canvas = scrollCanvas( categoryScroll )
+		clearPanel( canvas )
+		canvas:DockPadding( 9, 0, 9, 14 )
+		categoryButtons = {}
+
+		local categories = categoriesForScope()
+		if not activeCategory or not categoryExists( activeCategory ) then
+			activeCategory = categories[1] and categories[1].id or nil
+		end
+
+		for _, group in ipairs( ( MC.ConfigGroups and MC.ConfigGroups[activeScope] ) or {} ) do
+			local groupEntry = group
+			local groupHeader = vgui.Create( "DLabel", canvas )
+			groupHeader:Dock( TOP )
+			groupHeader:DockMargin( 6, 10, 6, 4 )
+			groupHeader:SetTall( 20 )
+			groupHeader:SetFont( "mc_config_group" )
+			groupHeader:SetTextColor( UI.textFaint )
+			groupHeader:SetText( groupLabel( groupEntry ) )
+
+			for _, entryCategory in ipairs( categories ) do
+				if entryCategory.group == groupEntry.id then
+					local categoryEntry = entryCategory
+					local btn = vgui.Create( "DButton", canvas )
+					btn:Dock( TOP )
+					btn:DockMargin( 0, 0, 0, 2 )
+					btn:SetTall( 39 )
+					btn:SetText( "" )
+					btn.CategoryButton = true
+					categoryButtons[categoryEntry.id] = btn
+					btn.Paint = function( s, w, h )
+						local selected = searchQuery == "" and activeCategory == categoryEntry.id
+						local bg = selected and UI.accentDark or ( s:IsHovered() and UI.rowHover or UI.sidebar )
+						surface.SetDrawColor( bg )
+						surface.DrawRect( 0, 0, w, h )
+						if selected then
+							surface.SetDrawColor( UI.accent )
+							surface.DrawRect( 0, 0, 4, h )
+						end
+						draw.SimpleText( categoryLabel( categoryEntry ), "mc_config_small", 13, h * 0.5,
+							selected and UI.accentText or UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER )
+						draw.SimpleText( tostring( #( categoryEntry.items or {} ) ), "mc_config_meta", w - 11, h * 0.5,
+							selected and UI.accentText or UI.textFaint, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER )
+					end
+					btn.DoClick = function()
+						activeCategory = categoryEntry.id
+						if search:GetValue() ~= "" then search:SetText( "" ) end
+						searchQuery = ""
+						rebuildRows( true )
+					end
+				end
+			end
+		end
+
+		rebuildRows( true )
+	end
+
+	local function updateScopeHint()
+		if activeScope == "client" then
+			scopeHint:SetTextColor( UI.textDim )
+			scopeHint:SetText( configText( "Changes apply to this client.", "修改只应用到当前客户端。" ) )
+		elseif canEditScope( "server" ) then
+			scopeHint:SetTextColor( UI.textDim )
+			scopeHint:SetText( configText( "Server changes apply immediately.", "服务器设置修改后立即生效。" ) )
+		else
+			scopeHint:SetTextColor( UI.warn )
+			scopeHint:SetText( configText( "Server settings are read-only without administrator access.", "没有管理员权限时，服务器设置仅可查看。" ) )
+		end
+	end
+
+	for _, scopeName in ipairs( { "client", "server" } ) do
+		local scope = scopeName
+		local btn = vgui.Create( "DButton", scopeHolder )
 		btn:Dock( LEFT )
-		btn:DockMargin( 0, 0, 8, 0 )
-		btn:SetWide( 120 )
-		btn:SetText( scope == "client" and configText( "Client", "客户端" ) or configText( "Server (Admin)", "服务端 (管理员)" ) )
+		btn:SetWide( 190 )
+		btn:SetText( "" )
 		scopeButtons[scope] = btn
-		styleButton( btn, function() return activeScope == scope end )
+		btn.Paint = function( s, w, h )
+			local selected = activeScope == scope
+			if selected or s:IsHovered() then
+				surface.SetDrawColor( selected and UI.contentHeader or UI.rowHover )
+				surface.DrawRect( 0, 0, w, h )
+			end
+			if selected then
+				surface.SetDrawColor( UI.accent )
+				surface.DrawRect( 0, h - 3, w, 3 )
+			end
+			local label = scope == "client" and configText( "Client settings", "客户端设置" )
+				or configText( "Server settings", "服务器设置" )
+			draw.SimpleText( label, "mc_config_body", w * 0.5, h * 0.5 - 1,
+				selected and UI.text or UI.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+		end
 		btn.DoClick = function()
+			if activeScope == scope then return end
 			activeScope = scope
 			activeCategory = nil
+			searchQuery = ""
+			search:SetText( "" )
 			if activeScope == "server" then requestServerConfigValues() end
+			updateScopeHint()
 			rebuildCategories()
 		end
 	end
 
-	local hint = vgui.Create( "DLabel", top )
-	hint:Dock( FILL )
-	hint:SetTextColor( UI.textDim )
-	hint:SetContentAlignment( 6 )
-	hint:SetText( configText( "Server settings require admin rights.", "服务端设置需要管理员权限。" ) )
+	search.OnChange = function( s )
+		searchQuery = string.Trim( s:GetValue() or "" )
+		rebuildRows( true )
+	end
 
+	updateScopeHint()
 	rebuildCategories()
 end
 
@@ -325,8 +859,17 @@ net.Receive( "mc_config_values", function()
 	end
 
 	MC.ConfigServerValues = values
-	if IsValid( MC.ConfigFrame ) and MC.ConfigRefreshRows then
-		MC.ConfigRefreshRows()
+	if not IsValid( MC.ConfigFrame ) then return end
+
+	for name, controls in pairs( MC.ConfigControlRows or {} ) do
+		local value = values[name]
+		if value ~= nil then
+			for _, control in ipairs( controls ) do
+				if IsValid( control ) and control.MCSetValue then
+					control:MCSetValue( value )
+				end
+			end
+		end
 	end
 end )
 
