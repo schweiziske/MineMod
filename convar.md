@@ -167,10 +167,12 @@
 | `mc_shadow_strength` | `0.75` | shadow map 对最终亮度的压暗强度。 |
 | `mc_shadow_bias` | `0.0005` | shadow map 深度/边缘采样 bias，用于减轻 acne 和漏光。 |
 | `mc_shadow_softness` | `1` | 阴影边缘柔化半径，单位是 shadow-map texel，最低钳到 1。 |
-| `mc_shadow_size` | `2048` | MC-owned shadow map 分辨率。 |
-| `mc_shadow_distance` | `4096` | MC-owned shadow map 的世界覆盖半径。 |
+| `mc_shadow_size` | `2048` | MC-owned shadow map 分辨率,512-4096。map(畸变)模式 RT 为 size × size;csm 模式为 size × 3·size 的纵向级联 atlas(4096 约占 240MB 显存,老显卡可能建不出 RT 导致阴影关闭)。 |
+| `mc_shadow_distance` | `4096` | 阴影总覆盖半径。map(畸变)模式下纹素密度从相机处(约 6.7 倍)随距离连续衰减,近处始终清晰;csm 模式下近/中级联半径为 distance/ratio² 和 distance/ratio。 |
+| `mc_shadow_cascade_ratio` | `3` | 仅 csm 模式:级联半径比,1.5~8。 |
 | `mc_shadow_caster_distance` | `4608` | 距相机多远以内的 MC chunk 会绘入 shadow map。 |
 | `mc_shadow_update_interval` | `0` | shadow map 最小重绘间隔秒数。`0` = 不限速,但现在深度 pass 只在太阳方向、纹素对齐窗口、chunk 几何或覆盖半径变化时才真正重绘(静止场景零成本)。 |
+| `mc_shadow_sun_step` | `1` | 昼夜循环下 shadow map 太阳角的量化步进(度)。连续移动的太阳会让光空间纹素网格每帧旋转,阴影边缘随 `mc_shadow_distance` 增大而明显爬动/抖动;量化后步进之间网格完全静止(深度 pass 也命中签名跳过)。`0` = 连续。阴影强度渐变仍是连续的。 |
 | `mc_shadow_tint` | `0.6` | fancy shader 中阴影向冷色天空 tint 偏移的强度。 |
 | `mc_shadow_edge_fade` | `0.1` | fancy shader 中阴影覆盖边缘的 fade 宽度。 |
 | `mc_shadow_face_shade` | `0.65` | fancy shader 中背离太阳的面按阴影压暗的强度。 |
@@ -186,7 +188,7 @@
 
 | ConVar | 默认 | 作用 |
 | --- | --- | --- |
-| `mc_shadow_mode` | `map` | 太阳阴影技术：`map` = 每帧太阳视角 shadow map（PCF），`height` = 缓存俯视高度场 raymarch。 |
+| `mc_shadow_mode` | `map` | 太阳阴影技术：`map` = Photon 式畸变 shadow map（单图,clip 空间径向拉伸,近处纹素密度约 6.7 倍且随距离连续衰减,无级联接缝跳变），`csm` = 3 级联纵向 atlas（可纹素吸附,太阳步进下完全静止,但级联边界随相机移动会有质量跳变），`height` = 缓存俯视高度场 raymarch。 |
 | `mc_shadow_hf_size` | `1024` | 高度图分辨率。 |
 | `mc_shadow_hf_range` | `4096` | 高度图覆盖的世界半径（以玩家为中心）。 |
 | `mc_shadow_hf_max_dist` | `2400` | 阴影投射的最大世界距离（raymarch 射程）。 |

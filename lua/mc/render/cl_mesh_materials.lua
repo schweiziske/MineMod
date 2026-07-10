@@ -69,8 +69,8 @@ do
 			mat:SetTexture( "$basetexture", baseTex )
 			MC.MaterialGpuOpaque = mat
 		end
-		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex33_localdeps_vface_opaque", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth19_vface_ps30",
+		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex35_localdeps_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth21_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,
@@ -82,9 +82,10 @@ do
 			["$nocull"] = "0",
 			-- Shadow-map params read by the pixel shader at c0..c2. Define all
 			-- of them here so the engine reliably uploads these registers;
-			-- $c3/$invviewprojmat/$eyepos must stay undefined so the shader's
-			-- inline literal constants outside c0..c2/c11..c14 are never
-			-- overwritten.
+			-- $c3/$eyepos must stay undefined so the shader's inline literal
+			-- constants outside c0..c2/c11..c18 are never overwritten.
+			-- ($viewprojmat/$invviewprojmat are set at bind time: the shader
+			-- declares c11..c18 for the cascade matrices/table.)
 			["$c0_x"] = "0",
 			["$c0_y"] = "0.0005",
 			["$c0_z"] = "0",
@@ -107,8 +108,8 @@ do
 		-- ONLY material allowed to define $c3_* (its pixel shader declares and
 		-- uses register c3); defining $c3 on the plain material would make the
 		-- engine upload c3 over that shader's inline literal constants.
-		local fancyMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy15_localdeps_vface_opaque", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy14_vface_ps30",
+		local fancyMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy17_localdeps_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy16_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,
@@ -141,7 +142,7 @@ do
 		end
 		-- Heightfield shadow variant ("mc_shadow_mode height"): same
 		-- light pipeline and fancy grading, but sun shadows come from ray
-		-- marching a cached top-down height map bound at $texture3 — no
+		-- marching a cached top-down height map bound at $texture3 鈥?no
 		-- per-frame shadow depth pass. Its shader reads $c0..$c3 only;
 		-- $viewprojmat/$invviewprojmat must NEVER be defined or set on this
 		-- material (the engine would upload c11..c18 over compiler-placed
@@ -179,7 +180,7 @@ do
 			MC.MaterialGpuLightTextureHeight = heightMat
 		end
 		-- Fast low-sample variant ("mc_light_style fast"): the original
-		-- cheap look — 4 light-texture taps + atlas per pixel, analytic
+		-- cheap look 鈥?4 light-texture taps + atlas per pixel, analytic
 		-- warm/cool tint, no shadow or global-lightmap sampling. Only two
 		-- samplers, so it rides the stable non-8tex shader base. Its shader
 		-- reads $c0 only (day-cycle sky brightness / ambient / night blue /
@@ -212,7 +213,7 @@ do
 		-- formula in cl_mesh_global_lightmap); there is NO shadow map. Its
 		-- shader reads no constant registers at all, so this material must
 		-- never define (or receive via SetFloat/SetMatrix) any $c*_,
-		-- $viewprojmat, $invviewprojmat or $eyepos parameters — the engine
+		-- $viewprojmat, $invviewprojmat or $eyepos parameters 鈥?the engine
 		-- would upload those registers over compiler-placed literal constants.
 		local vanillaMat = CreateMaterial( "mc_atlas_gpu_lighttex_mcvanilla1_localdeps_vface_opaque", "screenspace_general_8tex", {
 			["$pixshader"] = "mc_gpu_chunk_lighttex_mcvanilla1_vface_ps30",
@@ -239,8 +240,8 @@ do
 		if not ( transTex and transTexName and transTexName ~= "" ) then
 			transTex, transTexName = baseTex, baseName
 		end
-		local transGpuMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans7_localdeps_vface", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy_trans5_vface_ps30",
+		local transGpuMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans9_localdeps_vface", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy_trans7_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = transTexName,
 			["$x360appchooser"] = 1,
