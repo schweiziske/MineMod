@@ -34,6 +34,31 @@ end
 
 timer.Create( "mc_full_ack_flush", 0.05, 0, flushFullAck )
 
+local PendingReliableAckBytes = 0
+local NextReliableAckAt = 0
+
+local function flushReliableAck()
+	if PendingReliableAckBytes <= 0 then return end
+	-- the server clamps a single ack at 4MB; carry any remainder to the next flush
+	local bytes = math.min( PendingReliableAckBytes, 4194304 )
+	PendingReliableAckBytes = PendingReliableAckBytes - bytes
+	net.Start( "mc_reliable_ack" )
+		net.WriteUInt( bytes, 32 )
+	net.SendToServer()
+	NextReliableAckAt = CurTime() + 0.02
+end
+
+local function queueReliableAck( bytes )
+	bytes = math.max( 0, math.ceil( tonumber( bytes ) or 0 ) )
+	if bytes <= 0 then return end
+	PendingReliableAckBytes = math.min( PendingReliableAckBytes + bytes, 4294967295 )
+	if PendingReliableAckBytes >= 65536 or CurTime() >= NextReliableAckAt then
+		flushReliableAck()
+	end
+end
+
+timer.Create( "mc_reliable_ack_flush", 0.05, 0, flushReliableAck )
+
 local function sendSnapshotAck( token, bytes, complete )
 	net.Start( "mc_snapshot_ack" )
 		net.WriteString( token or "" )
@@ -1107,6 +1132,12 @@ local function receiveSetBulk()
 	end
 
 	local meshRateLimited = net.ReadBool()
+	-- netPaced bulk messages carry a trailing UInt32 of their reliable byte cost;
+	-- ack it so the server releases its per-player in-flight window. Plain
+	-- (non-paced) mc_set_bulk_fast messages omit the field, so guard on BytesLeft.
+	if net.BytesLeft() >= 4 then
+		queueReliableAck( net.ReadUInt( 32 ) )
+	end
 	local applied = {}
 	for _, cell in ipairs( changes ) do
 		queueSnapshotDelta( cell.bx, cell.by, cell.bz, cell.id, cell.orient )

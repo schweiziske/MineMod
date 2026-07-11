@@ -985,6 +985,12 @@ function SV.SetBlocksBulk( cells, options )
 		handlers = options.handlers,
 		priorityPhys = options.priorityPhys,
 		deferPhys = options.deferPhys == true,
+		-- keep the paced-net options: an overwrite place runs RemoveBlocksBulk
+		-- (paced) then this (if unpaced it would overtake the queued removes,
+		-- letting late removes blank out freshly placed overlap cells)
+		explosionMeshThrottle = options.explosionMeshThrottle == true,
+		netPaced = options.netPaced == true,
+		cellsPerMessage = options.cellsPerMessage,
 	} )
 end
 
