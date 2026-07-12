@@ -309,12 +309,18 @@ local function bindAtlasToMaterials()
 		end
 	end
 	bind( MC.MaterialGpuLightTexture )
+	bind( MC.MaterialGpuLightTextureLinearDebug )
+	bind( MC.MaterialGpuLightTexturePpFix )
 	bind( MC.MaterialGpuLightTextureFancy )
+	bind( MC.MaterialGpuLightTextureFancyLinearDebug )
+	bind( MC.MaterialGpuLightTextureFancyPpFix )
 	bind( MC.MaterialGpuLightTextureHeight )
 	bind( MC.MaterialGpuLightTextureFast )
 	bind( MC.MaterialGpuLightTextureVanilla )
 	bind( MC.MaterialGpuLightTextureVanillaTranslucent )
 	bind( MC.MaterialGpuLightTextureTranslucent )
+	bind( MC.MaterialGpuLightTextureTranslucentLinearDebug )
+	bind( MC.MaterialGpuLightTextureTranslucentPpFix )
 	materialsBound = true
 end
 

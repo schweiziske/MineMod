@@ -23,10 +23,12 @@ MC.MeshShadowMap = MC.MeshShadowMap or ( CreateClientConVar and CreateClientConV
 	"Let the GPU chunk shader receive the MC-owned sun shadow map" ) )
 MC.MeshShadowMapStrength = MC.MeshShadowMapStrength or ( CreateClientConVar and CreateClientConVar( "mc_shadow_strength", "0.75", true, false,
 	"Shadow multiplier strength for the MC chunk shader" ) )
-MC.MeshShadowMapBias = MC.MeshShadowMapBias or ( CreateClientConVar and CreateClientConVar( "mc_shadow_bias", "0.0005", true, false,
+MC.MeshShadowMapBias = MC.MeshShadowMapBias or ( CreateClientConVar and CreateClientConVar( "mc_shadow_bias", "0", true, false,
 	"Shadow map depth/edge bias for MC chunk shader sampling" ) )
 MC.MeshShadowMapSoftness = MC.MeshShadowMapSoftness or ( CreateClientConVar and CreateClientConVar( "mc_shadow_softness", "0.5", true, false,
 	"Shadow PCF radius in shadow-map texels; normal bias stays at a fixed one-texel footprint" ) )
+MC.MeshShadowFaceFix = MC.MeshShadowFaceFix or ( CreateClientConVar and CreateClientConVar( "mc_shadow_facefix", "0", true, false,
+	"A/B test separated cast-shadow and back-face lighting; 0 keeps legacy composition, 1 uses the face-lighting fix" ) )
 -- One look selector instead of the old three mutually exclusive booleans
 -- (mc_mesh_gpu_shader_fancy / _light_fast / _light_vanilla). Legacy archived
 -- values from the pre-rename mc_light_style profile convar ("shader", "best",
@@ -100,7 +102,7 @@ MC.MeshShadowMapUpdateInterval = MC.MeshShadowMapUpdateInterval or ( CreateClien
 MC.MeshShadowMapSunStep = MC.MeshShadowMapSunStep or ( CreateClientConVar and CreateClientConVar( "mc_shadow_sun_step", "1", true, false,
 	"Day cycle: shadow sun angle quantization step in degrees; the shadow grid holds still between steps so edges stop shimmering (0 = continuous sun)" ) )
 MC.MeshShadowMode = MC.MeshShadowMode or ( CreateClientConVar and CreateClientConVar( "mc_shadow_mode", "map", true, false,
-	"MC sun shadow technique: map = Photon-style distorted shadow map (sharp near, continuous falloff), csm = 3-cascade atlas, height = cached top-down heightfield ray march" ) )
+	"MC sun shadow technique: linear = single-map alignment debug, map = Photon-style distorted map, csm = 3-cascade atlas, height = cached heightfield" ) )
 MC.MeshHfShadowSize = MC.MeshHfShadowSize or ( CreateClientConVar and CreateClientConVar( "mc_shadow_hf_size", "1024", true, false,
 	"Heightfield shadow mode: top-down height map resolution" ) )
 MC.MeshHfShadowRange = MC.MeshHfShadowRange or ( CreateClientConVar and CreateClientConVar( "mc_shadow_hf_range", "4096", true, false,
