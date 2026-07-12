@@ -6,7 +6,7 @@
 // pp/mc_shadow_depth3.
 screenspace_general
 {
-	$pixshader 		"mc_gpu_shadow_depth3_ps30"
+	$pixshader 		"mc_gpu_shadow_depth4_ps30"
 	$vertexshader 	"mc_gpu_shadow_depth_distort1_vs30"
 
 	$nodecal        1

@@ -125,9 +125,9 @@ local function finishBench()
 	end
 
 	fmt( "---------------- 状态检查 ----------------" )
-	local vcsLoaded = file.Exists( "shaders/fxc/mc_gpu_chunk_lighttex_height3_vface_ps30.vcs", "GAME" )
+	local vcsLoaded = file.Exists( "shaders/fxc/mc_gpu_chunk_lighttex_height6_vface_ps30.vcs", "GAME" )
 	fmt( "height模式shader文件: %s", vcsLoaded and "已找到" or "缺失!! 需要重启客户端/检查部署" )
-	local fastVcs = file.Exists( "shaders/fxc/mc_gpu_chunk_lighttex_fast3_vface_ps30.vcs", "GAME" )
+	local fastVcs = file.Exists( "shaders/fxc/mc_gpu_chunk_lighttex_fast6_vface_ps30.vcs", "GAME" )
 	fmt( "fast模式shader文件: %s", fastVcs and "已找到" or "缺失!! 需要重启客户端/检查部署" )
 	local heightMat = MC.MaterialGpuLightTextureHeight
 	fmt( "height材质: %s", heightMat and ( heightMat:IsError() and "ERROR" or "ok" ) or "未创建" )

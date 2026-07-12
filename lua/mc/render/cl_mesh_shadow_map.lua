@@ -202,7 +202,7 @@ end
 -- Photon distortion formula. Cached per mode.
 local mcShadowDepthMaterials = {}
 local function ensureMCShadowDepthMaterial( mode )
-	local path = mode == "distort" and "pp/mc_shadow_depth4_distort" or "pp/mc_shadow_depth3"
+	local path = mode == "distort" and "pp/mc_shadow_depth5_distort" or "pp/mc_shadow_depth4"
 	local cached = mcShadowDepthMaterials[path]
 	if cached and not cached:IsError() then return cached end
 	if not Material then return nil end

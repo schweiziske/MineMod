@@ -141,7 +141,7 @@ local function ensureHfDepthMaterial()
 	if not Material then return nil end
 	-- Shared with the sun shadow map pass: both passes set $c0/$c1 right
 	-- before drawing, so the two modes never fight over the constants.
-	hfDepthMaterial = Material( "pp/mc_shadow_depth3" )
+	hfDepthMaterial = Material( "pp/mc_shadow_depth4" )
 	if hfDepthMaterial and not hfDepthMaterial:IsError() then
 		local baseTex = MC.Material and MC.Material.GetTexture and MC.Material:GetTexture( "$basetexture" ) or nil
 		if baseTex and not ( baseTex.IsError and baseTex:IsError() ) then

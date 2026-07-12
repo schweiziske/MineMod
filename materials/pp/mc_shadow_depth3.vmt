@@ -5,7 +5,7 @@
 // the block atlas to $basetexture so the pixel shader can alpha-test casters.
 screenspace_general
 {
-	$pixshader 		"mc_gpu_shadow_depth3_ps30"
+	$pixshader 		"mc_gpu_shadow_depth4_ps30"
 	$vertexshader 	"mc_gpu_shadow_depth3_vs30"
 
 	$nodecal        1
