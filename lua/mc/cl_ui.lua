@@ -228,8 +228,8 @@ function MC.LibraryItemMatches( item, kind, mapFilter, groupFilter, search )
 	return true
 end
 
-function MC.LibraryStyleButton( btn, label, kind )
-	local UI = MC.LibraryUI
+function MC.LibraryStyleButton( btn, label, kind, palette )
+	local UI = palette or MC.LibraryUI
 	btn:SetText( "" )
 	btn:SetCursor( "hand" )
 	btn.Paint = function( s, w, h )
@@ -249,8 +249,8 @@ function MC.LibraryStyleButton( btn, label, kind )
 	end
 end
 
-function MC.LibraryStyleTextEntry( entry, placeholder )
-	local UI = MC.LibraryUI
+function MC.LibraryStyleTextEntry( entry, placeholder, palette )
+	local UI = palette or MC.LibraryUI
 	entry:SetPlaceholderText( placeholder or "" )
 	entry:SetPaintBackground( false )
 	entry:SetTextColor( UI.text )
@@ -267,8 +267,8 @@ function MC.LibraryStyleTextEntry( entry, placeholder )
 	end
 end
 
-function MC.LibraryStyleCombo( combo )
-	local UI = MC.LibraryUI
+function MC.LibraryStyleCombo( combo, palette )
+	local UI = palette or MC.LibraryUI
 	combo:SetTextColor( UI.text )
 	combo:SetFont( "mc_hud_small" )
 	combo.UpdateColours = function( s )
