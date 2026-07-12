@@ -153,11 +153,12 @@ local function ensureMCShadowTexture( rows )
 	if mcShadowTexture and mcShadowTextureSize == size and mcShadowTextureRows == rows then return mcShadowTexture end
 
 	IMAGE_FORMAT_R32F = IMAGE_FORMAT_R32F or 27
-	-- Shadow target recipe:
-	-- CLAMPS|CLAMPT|ANISOTROPIC|NOMIP|NOLOD|DEPTHRENDERTARGET|NODEPTHBUFFER
-	local flags = bit.bor( 4, 8, 16, 256, 512, 65536, 8388608 )
+	-- Ordinary shadow depth must be point sampled. Filtering raw depth before
+	-- the comparison moves the hard edge; PCF compares each point tap first.
+	-- POINTSAMPLE|CLAMPS|CLAMPT|NOMIP|NOLOD|DEPTHRENDERTARGET|NODEPTHBUFFER
+	local flags = bit.bor( 1, 4, 8, 256, 512, 65536, 8388608 )
 	mcShadowTexture = GetRenderTargetEx(
-		"mc_mesh_shadow_map4_" .. tostring( rows ) .. "x_" .. tostring( size ),
+		"mc_mesh_shadow_map5_point_" .. tostring( rows ) .. "x_" .. tostring( size ),
 		size,
 		size * rows,
 		RT_SIZE_LITERAL,
@@ -424,9 +425,12 @@ end
 -- convar-derived values (selection pad, far-tile border fade), so the matrix
 -- is refreshed at bind time rather than only when the depth pass re-renders.
 local mcCsmTableMatrix
-local function csmTableMatrix( filterKernelUV, biasKernelUV )
+local function csmTableMatrix( filterKernelUV, biasKernelUV, texelUV )
 	if not mcCsmRow1 then return nil end
 	local fade = convarFloat( MC.MeshShadowMapEdgeFade, 0.1, 0, 0.5 )
+	local offsetX = convarFloat( MC.MeshShadowMapTexelOffsetX, 0 )
+	local offsetY = convarFloat( MC.MeshShadowMapTexelOffsetY, 0 )
+	local hardDebug = convarBool( MC.MeshShadowMapDebugHard ) and 1 or 0
 	-- Selection pad: PCF radius + the fixed one-texel normal-offset footprint
 	-- (up to 2x at grazing angles) + a half-texel sampling margin.
 	local pad = filterKernelUV + biasKernelUV * 2.5
@@ -434,16 +438,17 @@ local function csmTableMatrix( filterKernelUV, biasKernelUV )
 	mcCsmTableMatrix:SetUnpacked(
 		mcCsmRow1[1], mcCsmRow1[2], mcCsmRow1[3], mcCsmRow1[4],
 		mcCsmRow2[1], mcCsmRow2[2], mcCsmRow2[3], mcCsmRow2[4],
-		mcCsmNearRadius, 0, 0, 0,
-		pad, fade, biasKernelUV, 0
+		mcCsmNearRadius, offsetX, offsetY, texelUV,
+		pad, fade, biasKernelUV, hardDebug
 	)
 	return mcCsmTableMatrix
 end
 
 local function shadowKernelUVs()
 	local softness = convarFloat( MC.MeshShadowMapSoftness, 0.5, 0, 32 )
+	local normalBiasTexels = convarFloat( MC.MeshShadowMapNormalBiasTexels, 0 )
 	local texelUV = mcShadowTextureSize > 0 and 1 / mcShadowTextureSize or 0
-	return softness * texelUV, texelUV
+	return softness * texelUV, normalBiasTexels * texelUV, texelUV
 end
 
 -- Last-rendered depth-pass signature. The atlas content only depends on the
@@ -848,8 +853,8 @@ function MC.BindMeshShadowMap( material, force )
 		-- those registers (see the .fxc sources), so the engine upload is safe
 		-- there — but it must never land on shaders that leave c15..c18 free
 		-- for compiler literals (vanilla/fast/height already returned above).
-		local filterKernelUV, biasKernelUV = shadowKernelUVs()
-		local csmTable = csmTableMatrix( filterKernelUV, biasKernelUV )
+		local filterKernelUV, biasKernelUV, texelUV = shadowKernelUVs()
+		local csmTable = csmTableMatrix( filterKernelUV, biasKernelUV, texelUV )
 		if csmTable then
 			material:SetMatrix( "$invviewprojmat", csmTable )
 		end

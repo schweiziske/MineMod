@@ -27,6 +27,14 @@ MC.MeshShadowMapBias = MC.MeshShadowMapBias or ( CreateClientConVar and CreateCl
 	"Shadow map depth/edge bias for MC chunk shader sampling" ) )
 MC.MeshShadowMapSoftness = MC.MeshShadowMapSoftness or ( CreateClientConVar and CreateClientConVar( "mc_shadow_softness", "0.5", true, false,
 	"Shadow PCF radius in shadow-map texels; normal bias stays at a fixed one-texel footprint" ) )
+MC.MeshShadowMapTexelOffsetX = MC.MeshShadowMapTexelOffsetX or ( CreateClientConVar and CreateClientConVar( "mc_shadow_texel_offset_x", "0", true, false,
+	"Debug receiver offset along shadow-map X, measured in texels" ) )
+MC.MeshShadowMapTexelOffsetY = MC.MeshShadowMapTexelOffsetY or ( CreateClientConVar and CreateClientConVar( "mc_shadow_texel_offset_y", "0", true, false,
+	"Debug receiver offset along shadow-map Y, measured in texels" ) )
+MC.MeshShadowMapNormalBiasTexels = MC.MeshShadowMapNormalBiasTexels or ( CreateClientConVar and CreateClientConVar( "mc_shadow_normal_bias_texels", "0", true, false,
+	"Normal-offset shadow bias footprint measured in shadow-map texels" ) )
+MC.MeshShadowMapDebugHard = MC.MeshShadowMapDebugHard or ( CreateClientConVar and CreateClientConVar( "mc_shadow_debug_hard", "1", true, false,
+	"Use one point-sampled shadow comparison for alignment debugging" ) )
 -- One look selector instead of the old three mutually exclusive booleans
 -- (mc_mesh_gpu_shader_fancy / _light_fast / _light_vanilla). Legacy archived
 -- values from the pre-rename mc_light_style profile convar ("shader", "best",
