@@ -56,6 +56,16 @@ local function selectedID( ply )
 	return id
 end
 
+local function selectedOrient( ply, id )
+	if CLIENT and ply == LocalPlayer() and MC.GetCreativeHotbarSelectedOrient then
+		return MC.GetCreativeHotbarSelectedOrient()
+	end
+	if not IsValid( ply ) or ply:GetNWInt( "mc_block", -1 ) ~= id then return nil end
+	local orient = ply:GetNWInt( "mc_block_orient", -1 )
+	if orient < 0 then return nil end
+	return MC.NormalizeOrient and MC.NormalizeOrient( id, orient ) or orient
+end
+
 local function placeCell( tr )
 	return MC.WorldToCell( tr.HitPos + tr.HitNormal * 0.5 )
 end
@@ -88,7 +98,8 @@ local function placeTarget( ply, aim, fallbackTrace, id, avoidUseBlocks )
 	end
 
 	tr.MCBlockX, tr.MCBlockY, tr.MCBlockZ = bx, by, bz
-	local orient = MC.OrientForPlacement( ply, tr, id )
+	local orient = selectedOrient( ply, id )
+	if orient == nil then orient = MC.OrientForPlacement( ply, tr, id ) end
 	return bx, by, bz, orient
 end
 
@@ -191,8 +202,12 @@ end
 function SWEP:Reload()
 	if CLIENT then
 		if IsValid( MC.CreativeFrame ) and MC.CreativeFrame:IsVisible() then return end
-		MC.OpenCreativeInventory( function( id )
-			MC.SetCreativeHotbarSlot( MC.GetCreativeHotbarSelectedSlot(), id )
+		MC.OpenCreativeInventory( function( id, orient )
+			if orient ~= nil and MC.SetCreativeHotbarSlotState then
+				MC.SetCreativeHotbarSlotState( MC.GetCreativeHotbarSelectedSlot(), id, orient )
+			else
+				MC.SetCreativeHotbarSlot( MC.GetCreativeHotbarSelectedSlot(), id )
+			end
 		end, { closeOnSelect = false } )
 	end
 end
@@ -385,6 +400,8 @@ if CLIENT then
 	end
 
 	local function creativeHeldOrient( id )
+		local orient = MC.GetCreativeHotbarSelectedOrient and MC.GetCreativeHotbarSelectedOrient() or nil
+		if orient ~= nil then return orient end
 		return MC.DefaultOrient and MC.DefaultOrient( id ) or 0
 	end
 
