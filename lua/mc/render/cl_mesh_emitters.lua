@@ -846,10 +846,11 @@ local function emitShapeBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz,
 	-- box order does not match generated static boxFaces except for the centre.
 	ctx.prepareBlockCacheBuffer( targetBuffer )
 	local isPipe6Shape = b and b.connection == "pipe6"
+	local isDynamicStairs = b and b.shape == "stairs"
 	local connectionKind = connectionKindForBlock( b, id )
 	local isConnShape = connectionKind ~= nil
 	local template
-	if not isConnShape then
+	if not isConnShape and not isDynamicStairs then
 		template = getShapeTemplate( b, id, orient, blockBoxes )
 	end
 	if isConnShape and emitConnectionShapeBlock( ctx, connectionKind, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, push, lightMetaFast, shapeFaceCoveredAt, shapeFaceNeighborCoveredAt, currentEmitLightStyle ) then
@@ -868,7 +869,7 @@ local function emitShapeBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz,
 				if shapeFaceCoveredAt( id, box, f, boxes, bx, by, bz, lx, ly, lz ) then break end
 				local face = C.FACES[f]
 				local modelFaces = b and b.boxFaces
-				if isPipe6Shape then modelFaces = nil end
+				if isPipe6Shape or isDynamicStairs then modelFaces = nil end
 				local fd = modelFaces and modelFaces[boxIndex] and modelFaces[boxIndex][f]
 				if isConnShape and boxIndex > 1 then fd = nil end
 				local dynamicFd = dynamicShapeFaceData( b, f, box )
