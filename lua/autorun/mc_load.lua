@@ -30,6 +30,7 @@ local SHARED = {
 	"mc/functional/sh_liquids.lua",
 	"mc/custom/sh_custom_blocks.lua",
 	"mc/sh_blocks.lua",
+	"mc/block/sh_stairs.lua",
 	"mc/sh_presets.lua",
 	"mc/sh_player.lua",
 	"mc/sh_voxel.lua",

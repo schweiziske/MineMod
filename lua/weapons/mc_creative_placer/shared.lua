@@ -346,7 +346,7 @@ if CLIENT then
 		if b and b.connection and HELD_ITEM_BOXES[b.connection] then
 			return HELD_ITEM_BOXES[b.connection]
 		end
-		local boxes = MC.BlockBoxes and MC.BlockBoxes( id, orient, 0, 0, 0 ) or nil
+		local boxes = MC.BlockBoxes and MC.BlockBoxes( id, orient ) or nil
 		if boxes and #boxes > 0 then return boxes end
 		return HELD_FULL_BLOCK
 	end

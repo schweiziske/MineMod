@@ -1556,26 +1556,6 @@ function MC.BlockCollisionConvexes( id, orient, bx, by, bz )
 	return out
 end
 
-local function stairBoxes( orient )
-	local facing = StairFacingByOrient[orient] or MC.Direction.NORTH
-	local top = StairHalfByOrient[orient] == "top"
-	local boxes = {}
-	if top then
-		boxes[#boxes + 1] = { 0, 0, 0.5, 1, 1, 1 }
-		if facing == MC.Direction.NORTH then boxes[#boxes + 1] = { 0, 0, 0, 1, 0.5, 0.5 }
-		elseif facing == MC.Direction.SOUTH then boxes[#boxes + 1] = { 0, 0.5, 0, 1, 1, 0.5 }
-		elseif facing == MC.Direction.WEST then boxes[#boxes + 1] = { 0, 0, 0, 0.5, 1, 0.5 }
-		else boxes[#boxes + 1] = { 0.5, 0, 0, 1, 1, 0.5 } end
-	else
-		boxes[#boxes + 1] = { 0, 0, 0, 1, 1, 0.5 }
-		if facing == MC.Direction.NORTH then boxes[#boxes + 1] = { 0, 0, 0.5, 1, 0.5, 1 }
-		elseif facing == MC.Direction.SOUTH then boxes[#boxes + 1] = { 0, 0.5, 0.5, 1, 1, 1 }
-		elseif facing == MC.Direction.WEST then boxes[#boxes + 1] = { 0, 0, 0.5, 0.5, 1, 1 }
-		else boxes[#boxes + 1] = { 0.5, 0, 0.5, 1, 1, 1 } end
-	end
-	return boxes
-end
-
 local function isPaneKind( kind )
 	return kind == "pane" or kind == "bars"
 end
@@ -1602,6 +1582,7 @@ function MC.BlockCollisionDependsOnNeighbours( id )
 		or isPaneKind( b.connection )
 		or b.connection == "wall"
 		or b.connection == "pipe6"
+		or ( MC.NeighbourDependentShapes and MC.NeighbourDependentShapes[b.shape] == true )
 end
 
 function MC.BlockLightEmission( id )
@@ -2148,7 +2129,7 @@ function MC.BlockBoxes( id, orient, bx, by, bz )
 		return { { 0, 0, 0, 1, 1, 0.5 } }
 	end
 	if b.shape == "stairs" then
-		return stairBoxes( MC.NormalizeOrient( id, orient ) )
+		return MC.StairBoxes( id, orient, bx, by, bz )
 	end
 	if b.shape == "cross" then
 		return CrossBlockBoxes
