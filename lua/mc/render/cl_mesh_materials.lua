@@ -44,12 +44,18 @@ end
 
 MC.MaterialGpuOpaque = nil
 MC.MaterialGpuLightTexture = nil
+MC.MaterialGpuLightTextureLinearDebug = nil
+MC.MaterialGpuLightTexturePpFix = nil
 MC.MaterialGpuLightTextureFancy = nil
+MC.MaterialGpuLightTextureFancyLinearDebug = nil
+MC.MaterialGpuLightTextureFancyPpFix = nil
 MC.MaterialGpuLightTextureHeight = nil
 MC.MaterialGpuLightTextureFast = nil
 MC.MaterialGpuLightTextureVanilla = nil
 MC.MaterialGpuLightTextureVanillaTranslucent = nil
 MC.MaterialGpuLightTextureTranslucent = nil
+MC.MaterialGpuLightTextureTranslucentLinearDebug = nil
+MC.MaterialGpuLightTextureTranslucentPpFix = nil
 do
 	local baseTex, baseName = atlasBaseTexture()
 	if baseTex and baseName and baseName ~= "" and CreateMaterial then
@@ -70,7 +76,7 @@ do
 			MC.MaterialGpuOpaque = mat
 		end
 		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex41_centroid_vface_opaque", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth31_vface_ps30",
+			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth34_clean_pcf_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,
@@ -103,13 +109,38 @@ do
 			lightTexMat:SetTexture( "$basetexture", baseTex )
 			MC.MaterialGpuLightTexture = lightTexMat
 		end
+		local linearMat = CreateMaterial( "mc_atlas_gpu_lighttex43_linear_debug_centroid_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth33_linear_debug_vface_ps30", ["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30", ["$basetexture"] = baseName,
+			["$x360appchooser"] = 1, ["$vertexcolor"] = 1, ["$linearwrite"] = 0, ["$alphatest"] = "1", ["$alphatestreference"] = "0.5", ["$alphatested"] = 1, ["$nocull"] = "0",
+			["$c0_x"] = "0", ["$c0_y"] = "0", ["$c0_z"] = "0", ["$c0_w"] = "-4", ["$c1_x"] = "0", ["$c1_y"] = "0", ["$c1_z"] = "-1", ["$c1_w"] = "0.0001", ["$c2_x"] = "0", ["$c2_y"] = "0", ["$c2_z"] = "0", ["$c2_w"] = "0",
+		} )
+		if linearMat and not linearMat:IsError() then linearMat:SetTexture( "$basetexture", baseTex ); MC.MaterialGpuLightTextureLinearDebug = linearMat end
+		local lightTexPpFixMat = CreateMaterial( "mc_atlas_gpu_lighttex42_ppfix_centroid_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth32_ppfix_vface_ps30",
+			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
+			["$basetexture"] = baseName,
+			["$x360appchooser"] = 1,
+			["$vertexcolor"] = 1,
+			["$linearwrite"] = 0,
+			["$alphatest"] = "1",
+			["$alphatestreference"] = "0.5",
+			["$alphatested"] = 1,
+			["$nocull"] = "0",
+			["$c0_x"] = "0", ["$c0_y"] = "0", ["$c0_z"] = "0", ["$c0_w"] = "-2",
+			["$c1_x"] = "0", ["$c1_y"] = "0", ["$c1_z"] = "-1", ["$c1_w"] = "0.0001",
+			["$c2_x"] = "0", ["$c2_y"] = "0", ["$c2_z"] = "0", ["$c2_w"] = "0",
+		} )
+		if lightTexPpFixMat and not lightTexPpFixMat:IsError() then
+			lightTexPpFixMat:SetTexture( "$basetexture", baseTex )
+			MC.MaterialGpuLightTexturePpFix = lightTexPpFixMat
+		end
 		-- Fancy variant: same pipeline plus cool shadow tint, warm sun/torch
 		-- grading, back-face sun shading and shadow-window edge fade. It is the
 		-- ONLY material allowed to define $c3_* (its pixel shader declares and
 		-- uses register c3); defining $c3 on the plain material would make the
 		-- engine upload c3 over that shader's inline literal constants.
 		local fancyMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy23_centroid_vface_opaque", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy26_vface_ps30",
+			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy31_clean_pcf_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,
@@ -139,6 +170,32 @@ do
 		if fancyMat and not fancyMat:IsError() then
 			fancyMat:SetTexture( "$basetexture", baseTex )
 			MC.MaterialGpuLightTextureFancy = fancyMat
+		end
+		local fancyLinearMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy27_linear_debug_centroid_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy30_linear_debug_vface_ps30", ["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30", ["$basetexture"] = baseName,
+			["$x360appchooser"] = 1, ["$vertexcolor"] = 1, ["$linearwrite"] = 0, ["$alphatest"] = "1", ["$alphatestreference"] = "0.5", ["$alphatested"] = 1, ["$nocull"] = "0",
+			["$c0_x"] = "0", ["$c0_y"] = "0", ["$c0_z"] = "0", ["$c0_w"] = "-4", ["$c1_x"] = "0", ["$c1_y"] = "0", ["$c1_z"] = "-1", ["$c1_w"] = "0.0001", ["$c2_x"] = "0", ["$c2_y"] = "0", ["$c2_z"] = "0", ["$c2_w"] = "0", ["$c3_x"] = "0.6", ["$c3_y"] = "0.1", ["$c3_z"] = "0", ["$c3_w"] = "0.35",
+		} )
+		if fancyLinearMat and not fancyLinearMat:IsError() then fancyLinearMat:SetTexture( "$basetexture", baseTex ); MC.MaterialGpuLightTextureFancyLinearDebug = fancyLinearMat end
+		local fancyPpFixMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy26_facefix_centroid_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy29_facefix_vface_ps30",
+			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
+			["$basetexture"] = baseName,
+			["$x360appchooser"] = 1,
+			["$vertexcolor"] = 1,
+			["$linearwrite"] = 0,
+			["$alphatest"] = "1",
+			["$alphatestreference"] = "0.5",
+			["$alphatested"] = 1,
+			["$nocull"] = "0",
+			["$c0_x"] = "0", ["$c0_y"] = "0", ["$c0_z"] = "0", ["$c0_w"] = "-2",
+			["$c1_x"] = "0", ["$c1_y"] = "0", ["$c1_z"] = "-1", ["$c1_w"] = "0.0001",
+			["$c2_x"] = "0", ["$c2_y"] = "0", ["$c2_z"] = "0", ["$c2_w"] = "0",
+			["$c3_x"] = "0.6", ["$c3_y"] = "0.1", ["$c3_z"] = "0.65", ["$c3_w"] = "0.35",
+		} )
+		if fancyPpFixMat and not fancyPpFixMat:IsError() then
+			fancyPpFixMat:SetTexture( "$basetexture", baseTex )
+			MC.MaterialGpuLightTextureFancyPpFix = fancyPpFixMat
 		end
 		-- Heightfield shadow variant ("mc_shadow_mode height"): same
 		-- light pipeline and fancy grading, but sun shadows come from ray
@@ -241,7 +298,7 @@ do
 			transTex, transTexName = baseTex, baseName
 		end
 		local transGpuMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans15_centroid_vface", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy_trans17_vface_ps30",
+			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy_trans22_clean_pcf_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = transTexName,
 			["$x360appchooser"] = 1,
@@ -273,6 +330,31 @@ do
 			transGpuMat:SetTexture( "$basetexture", transTex )
 			MC.MaterialGpuLightTextureTranslucent = transGpuMat
 		end
+		local transLinearMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans19_linear_debug_centroid_vface", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy_trans21_linear_debug_vface_ps30", ["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30", ["$basetexture"] = transTexName,
+			["$x360appchooser"] = 1, ["$vertexcolor"] = 1, ["$linearwrite"] = 0, ["$alphablend"] = 1, ["$translucent"] = 1, ["$nocull"] = "0",
+			["$c0_x"] = "0", ["$c0_y"] = "0", ["$c0_z"] = "0", ["$c0_w"] = "-4", ["$c1_x"] = "0", ["$c1_y"] = "0", ["$c1_z"] = "-1", ["$c1_w"] = "0.0001", ["$c2_x"] = "0", ["$c2_y"] = "0", ["$c2_z"] = "0", ["$c2_w"] = "0", ["$c3_x"] = "0.6", ["$c3_y"] = "0.1", ["$c3_z"] = "0", ["$c3_w"] = "0.35",
+		} )
+		if transLinearMat and not transLinearMat:IsError() then transLinearMat:SetTexture( "$basetexture", transTex ); MC.MaterialGpuLightTextureTranslucentLinearDebug = transLinearMat end
+		local transPpFixMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans18_facefix_centroid_vface", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy_trans20_facefix_vface_ps30",
+			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
+			["$basetexture"] = transTexName,
+			["$x360appchooser"] = 1,
+			["$vertexcolor"] = 1,
+			["$linearwrite"] = 0,
+			["$alphablend"] = 1,
+			["$translucent"] = 1,
+			["$nocull"] = "0",
+			["$c0_x"] = "0", ["$c0_y"] = "0", ["$c0_z"] = "0", ["$c0_w"] = "-2",
+			["$c1_x"] = "0", ["$c1_y"] = "0", ["$c1_z"] = "-1", ["$c1_w"] = "0.0001",
+			["$c2_x"] = "0", ["$c2_y"] = "0", ["$c2_z"] = "0", ["$c2_w"] = "0",
+			["$c3_x"] = "0.6", ["$c3_y"] = "0.1", ["$c3_z"] = "0.65", ["$c3_w"] = "0.35",
+		} )
+		if transPpFixMat and not transPpFixMat:IsError() then
+			transPpFixMat:SetTexture( "$basetexture", transTex )
+			MC.MaterialGpuLightTextureTranslucentPpFix = transPpFixMat
+		end
 		-- Vanilla translucent variant: same register-free vanilla shader over
 		-- the translucent atlas, real alpha blending. Selected instead of the
 		-- fancy translucent material while mc_light_style is "vanilla" so
@@ -300,12 +382,18 @@ end
 function MC.IsGpuLightTextureMaterial( material )
 	if not material then return false end
 	if material == MC.MaterialGpuLightTexture then return true end
+	if material == MC.MaterialGpuLightTextureLinearDebug then return true end
+	if MC.MaterialGpuLightTexturePpFix and material == MC.MaterialGpuLightTexturePpFix then return true end
 	if MC.MaterialGpuLightTextureFancy and material == MC.MaterialGpuLightTextureFancy then return true end
+	if material == MC.MaterialGpuLightTextureFancyLinearDebug then return true end
+	if MC.MaterialGpuLightTextureFancyPpFix and material == MC.MaterialGpuLightTextureFancyPpFix then return true end
 	if MC.MaterialGpuLightTextureHeight and material == MC.MaterialGpuLightTextureHeight then return true end
 	if MC.MaterialGpuLightTextureFast and material == MC.MaterialGpuLightTextureFast then return true end
 	if MC.MaterialGpuLightTextureVanilla and material == MC.MaterialGpuLightTextureVanilla then return true end
 	if MC.MaterialGpuLightTextureVanillaTranslucent and material == MC.MaterialGpuLightTextureVanillaTranslucent then return true end
 	if MC.MaterialGpuLightTextureTranslucent and material == MC.MaterialGpuLightTextureTranslucent then return true end
+	if material == MC.MaterialGpuLightTextureTranslucentLinearDebug then return true end
+	if MC.MaterialGpuLightTextureTranslucentPpFix and material == MC.MaterialGpuLightTextureTranslucentPpFix then return true end
 	return false
 end
 
@@ -322,6 +410,11 @@ local function vanillaLightActive()
 	return MC.MaterialGpuLightTextureVanilla ~= nil and not MC.MaterialGpuLightTextureVanilla:IsError()
 end
 
+local function shadowPpFixActive()
+	local cv = MC.MeshShadowFaceFix
+	return cv and cv.GetBool and cv:GetBool() == true
+end
+
 function MC.UsingVanillaLightMaterial()
 	return vanillaLightActive()
 end
@@ -330,6 +423,10 @@ local function activeGpuLightTextureMaterial()
 	-- mc_light_style picks the look; the shadow-free looks (fast/vanilla)
 	-- also bypass the height material since it exists only to render shadows.
 	local style = lightStyleName()
+	if MC.MeshShadowMapMode and MC.MeshShadowMapMode() == "linear" then
+		if style == "fancy" and MC.MaterialGpuLightTextureFancyLinearDebug and not MC.MaterialGpuLightTextureFancyLinearDebug:IsError() then return MC.MaterialGpuLightTextureFancyLinearDebug end
+		if MC.MaterialGpuLightTextureLinearDebug and not MC.MaterialGpuLightTextureLinearDebug:IsError() then return MC.MaterialGpuLightTextureLinearDebug end
+	end
 	if style == "fast"
 		and MC.MaterialGpuLightTextureFast and not MC.MaterialGpuLightTextureFast:IsError() then
 		return MC.MaterialGpuLightTextureFast
@@ -346,8 +443,17 @@ local function activeGpuLightTextureMaterial()
 		return MC.MaterialGpuLightTextureHeight
 	end
 	if style == "fancy"
+		and shadowPpFixActive()
+		and MC.MaterialGpuLightTextureFancyPpFix and not MC.MaterialGpuLightTextureFancyPpFix:IsError() then
+		return MC.MaterialGpuLightTextureFancyPpFix
+	end
+	if style == "fancy"
 		and MC.MaterialGpuLightTextureFancy and not MC.MaterialGpuLightTextureFancy:IsError() then
 		return MC.MaterialGpuLightTextureFancy
+	end
+	if shadowPpFixActive()
+		and MC.MaterialGpuLightTexturePpFix and not MC.MaterialGpuLightTexturePpFix:IsError() then
+		return MC.MaterialGpuLightTexturePpFix
 	end
 	return MC.MaterialGpuLightTexture
 end
@@ -399,6 +505,14 @@ local function gpuTranslucentMaterial()
 		if vanillaTrans and not vanillaTrans:IsError() then return vanillaTrans end
 	end
 	local mat = MC.MaterialGpuLightTextureTranslucent
+	if MC.MeshShadowMapMode and MC.MeshShadowMapMode() == "linear" then
+		local linear = MC.MaterialGpuLightTextureTranslucentLinearDebug
+		if linear and not linear:IsError() then return linear end
+	end
+	if shadowPpFixActive() then
+		local ppFixMat = MC.MaterialGpuLightTextureTranslucentPpFix
+		if ppFixMat and not ppFixMat:IsError() then return ppFixMat end
+	end
 	if mat and not mat:IsError() then return mat end
 	return nil
 end
@@ -427,6 +541,7 @@ end
 local function shaderProfileEffectiveStyleForMaterial( material, style )
 	if material ~= nil and shaderProfileUsesGpuLightTexture()
 		and ( material == MC.MaterialGpuLightTextureTranslucent
+			or material == MC.MaterialGpuLightTextureTranslucentPpFix
 			or material == MC.MaterialGpuLightTextureVanillaTranslucent ) then
 		return shaderProfileGpuPayloadStyle()
 	end
@@ -456,6 +571,9 @@ if cvars and cvars.AddChangeCallback then
 	cvars.AddChangeCallback( "mc_light_shader", function()
 		if MC.MarkAllMeshesDirty then MC.MarkAllMeshesDirty( "gpu_shader_toggle" ) end
 	end, "mc_light_shader_rebuild" )
+	cvars.AddChangeCallback( "mc_shadow_facefix", function()
+		if MC.MarkAllMeshesDirty then MC.MarkAllMeshesDirty( "shadow_ppfix_toggle" ) end
+	end, "mc_shadow_facefix_rebuild" )
 end
 
 -- Opaque variant of the atlas for inventory icons. Semi-transparent blocks

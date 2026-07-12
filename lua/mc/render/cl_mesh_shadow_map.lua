@@ -108,6 +108,7 @@ local function shadowMapMode()
 	local mode = cv and cv.GetString and string.lower( tostring( cv:GetString() or "" ) ) or "map"
 	if mode == "height" or mode == "heightfield" or mode == "hf" or mode == "2" then return "height" end
 	if mode == "csm" or mode == "cascade" or mode == "cascades" or mode == "3" then return "csm" end
+	if mode == "linear" or mode == "single" or mode == "debug" then return "linear" end
 	return "distort"
 end
 
@@ -427,9 +428,8 @@ local mcCsmTableMatrix
 local function csmTableMatrix( filterKernelUV, biasKernelUV )
 	if not mcCsmRow1 then return nil end
 	local fade = convarFloat( MC.MeshShadowMapEdgeFade, 0.1, 0, 0.5 )
-	-- Selection pad: PCF radius + the fixed one-texel normal-offset footprint
-	-- (up to 2x at grazing angles) + a half-texel sampling margin.
-	local pad = filterKernelUV + biasKernelUV * 2.5
+	-- PCF taps are the only receiver-space footprint in the clean path.
+	local pad = filterKernelUV
 	mcCsmTableMatrix = mcCsmTableMatrix or Matrix()
 	mcCsmTableMatrix:SetUnpacked(
 		mcCsmRow1[1], mcCsmRow1[2], mcCsmRow1[3], mcCsmRow1[4],
@@ -731,16 +731,19 @@ local function bindShadowParams( material, enabled, isFancy )
 	local strength = enabled and convarFloat( MC.MeshShadowMapStrength, 0.75, 0, 1 ) or 0
 	-- Day cycle: shadows fade at the horizon and stay weak under moonlight.
 	strength = strength * math.Clamp( mcShadowStrengthScale, 0, 1 )
-	local bias = convarFloat( MC.MeshShadowMapBias, 0, 0, 0.05 )
+	local depthOnlyBias = convarFloat( MC.MeshShadowMapBias, 0, -10, 0.05 )
 
 	-- $c0_*..$c2_* land in pixel shader constants c0..c2 (screenspace_general
 	-- uploads $c0..$c3 to c0..c3; $viewprojmat goes to c11..c14).
 	material:SetFloat( "$c0_x", strength )
-	material:SetFloat( "$c0_y", bias )
+	-- Peter-Panning fix: bias changes only the reference depth. Shadow UV is
+	-- always projected from the original, unshifted receiver world position.
+	material:SetFloat( "$c0_y", depthOnlyBias )
 	material:SetFloat( "$c0_z", enabled and 1 or 0 )
 	-- Technique flag read by the chunk shaders: -3 = Photon-style distorted
 	-- single map, -2 = 3-cascade atlas.
-	material:SetFloat( "$c0_w", shadowMapMode() == "csm" and -2 or -3 )
+	local mode = shadowMapMode()
+	material:SetFloat( "$c0_w", mode == "csm" and -2 or ( mode == "linear" and -4 or -3 ) )
 
 	if mcShadowForward and mcShadowOrigin then
 		local invZFar = ( mcShadowZFar and mcShadowZFar > 0 ) and 1 / mcShadowZFar or 0
@@ -856,7 +859,11 @@ function MC.BindMeshShadowMap( material, force )
 	end
 	if material.SetFloat then
 		local isFancy = ( MC.MaterialGpuLightTextureFancy ~= nil and material == MC.MaterialGpuLightTextureFancy )
+			or ( MC.MaterialGpuLightTextureFancyLinearDebug ~= nil and material == MC.MaterialGpuLightTextureFancyLinearDebug )
+			or ( MC.MaterialGpuLightTextureFancyPpFix ~= nil and material == MC.MaterialGpuLightTextureFancyPpFix )
 			or ( MC.MaterialGpuLightTextureTranslucent ~= nil and material == MC.MaterialGpuLightTextureTranslucent )
+			or ( MC.MaterialGpuLightTextureTranslucentLinearDebug ~= nil and material == MC.MaterialGpuLightTextureTranslucentLinearDebug )
+			or ( MC.MaterialGpuLightTextureTranslucentPpFix ~= nil and material == MC.MaterialGpuLightTextureTranslucentPpFix )
 		bindShadowParams( material, enabled and tex ~= nil and matrix ~= nil, isFancy )
 	end
 	mapBindResult[material] = enabled
@@ -885,8 +892,14 @@ if cvars and cvars.AddChangeCallback then
 	local function rebindAllShadowMaterials()
 		if not MC.BindMeshShadowMap then return end
 		if MC.MaterialGpuLightTexture then MC.BindMeshShadowMap( MC.MaterialGpuLightTexture, true ) end
+		if MC.MaterialGpuLightTextureLinearDebug then MC.BindMeshShadowMap( MC.MaterialGpuLightTextureLinearDebug, true ) end
+		if MC.MaterialGpuLightTexturePpFix then MC.BindMeshShadowMap( MC.MaterialGpuLightTexturePpFix, true ) end
 		if MC.MaterialGpuLightTextureFancy then MC.BindMeshShadowMap( MC.MaterialGpuLightTextureFancy, true ) end
+		if MC.MaterialGpuLightTextureFancyLinearDebug then MC.BindMeshShadowMap( MC.MaterialGpuLightTextureFancyLinearDebug, true ) end
+		if MC.MaterialGpuLightTextureFancyPpFix then MC.BindMeshShadowMap( MC.MaterialGpuLightTextureFancyPpFix, true ) end
 		if MC.MaterialGpuLightTextureTranslucent then MC.BindMeshShadowMap( MC.MaterialGpuLightTextureTranslucent, true ) end
+		if MC.MaterialGpuLightTextureTranslucentLinearDebug then MC.BindMeshShadowMap( MC.MaterialGpuLightTextureTranslucentLinearDebug, true ) end
+		if MC.MaterialGpuLightTextureTranslucentPpFix then MC.BindMeshShadowMap( MC.MaterialGpuLightTextureTranslucentPpFix, true ) end
 		if MC.MaterialGpuLightTextureHeight and MC.BindMeshHeightfieldShadow then
 			MC.BindMeshHeightfieldShadow( MC.MaterialGpuLightTextureHeight )
 		end
@@ -899,4 +912,7 @@ if cvars and cvars.AddChangeCallback then
 		if MC.MarkHeightfieldShadowDirty then MC.MarkHeightfieldShadowDirty() end
 		rebindAllShadowMaterials()
 	end, "mc_shadow_mode_refresh" )
+	cvars.AddChangeCallback( "mc_shadow_facefix", function()
+		rebindAllShadowMaterials()
+	end, "mc_shadow_facefix_refresh" )
 end
