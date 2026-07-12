@@ -57,10 +57,6 @@ end
 
 local function blocksSky( id, orient )
 	if not id or id == 0 then return false end
-	-- Light-emitting blocks (torches, glowstone) never block sky light,
-	-- matching MC semantics — otherwise placing a lamp darkens the column
-	-- under it.
-	if MC.BlockLightEmission and ( MC.BlockLightEmission( id ) or 0 ) > 0 then return false end
 	local opacity = MC.BlockLightOpacity and MC.BlockLightOpacity( id, orient ) or 15
 	return opacity >= 15
 end

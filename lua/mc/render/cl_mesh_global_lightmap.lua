@@ -428,6 +428,7 @@ hook.Add( "Think", "mc_global_lightmap_refresh", function()
 		local flickerCv = MC.MeshGpuLightmapVanillaFlicker
 		local flickerOn = flickerCv and flickerCv.GetBool and flickerCv:GetBool() or false
 		local dayRunning = MC.DayCycleEnabled and MC.DayCycleEnabled() == true
+			and not ( MC.DayCyclePaused and MC.DayCyclePaused() == true )
 		if not ( flickerOn or dayRunning ) then return end
 		local now = CurTime()
 		if now < nextTimedRefresh then return end
@@ -438,6 +439,7 @@ hook.Add( "Think", "mc_global_lightmap_refresh", function()
 	local eyeDark = convarNumber( MC.MeshGpuLightmapEyeDark, 1, 0, 1 )
 	local eyeMoved = eyeDark < 1 and math.abs( eyeFactorSmooth - eyeFactorApplied ) > 0.01
 	local dayRunning = MC.DayCycleEnabled and MC.DayCycleEnabled() == true
+		and not ( MC.DayCyclePaused and MC.DayCyclePaused() == true )
 	if not ( eyeMoved or dayRunning ) then return end
 	local now = CurTime()
 	if now < nextTimedRefresh then return end

@@ -9,12 +9,16 @@ local TICKS_PER_DAY = 24000
 MC.DAYCYCLE_TICKS_PER_DAY = TICKS_PER_DAY
 
 function MC.DayCycleEnabled()
-	return GetGlobalBool( "mc_daycycle_on", false ) == true
+	return GetGlobalBool( "mc_daycycle_on", true ) == true
+end
+
+function MC.DayCyclePaused()
+	return GetGlobalBool( "mc_daycycle_paused", false ) == true
 end
 
 function MC.DayCycleTicks()
 	local baseTicks = GetGlobalFloat( "mc_daycycle_base_ticks", 6000 )
-	if not MC.DayCycleEnabled() then return baseTicks % TICKS_PER_DAY end
+	if not MC.DayCycleEnabled() or MC.DayCyclePaused() then return baseTicks % TICKS_PER_DAY end
 	local length = math.max( GetGlobalFloat( "mc_daycycle_length", 1200 ), 10 )
 	local baseCur = GetGlobalFloat( "mc_daycycle_base_curtime", 0 )
 	return ( baseTicks + ( CurTime() - baseCur ) * ( TICKS_PER_DAY / length ) ) % TICKS_PER_DAY
@@ -96,32 +100,51 @@ function MC.DayCycleSunVector()
 end
 
 if SERVER then
-	local cvEnabled = CreateConVar( "mc_daycycle", "0", { FCVAR_ARCHIVE, FCVAR_NOTIFY },
+	local cvEnabled = CreateConVar( "mc_daycycle", "1", { FCVAR_ARCHIVE, FCVAR_NOTIFY },
 		"Enable the MC day/night cycle" )
+	local cvPaused = CreateConVar( "mc_daycycle_paused", "0", { FCVAR_ARCHIVE, FCVAR_NOTIFY },
+		"Pause the MC day/night clock at its current time" )
 	local cvLength = CreateConVar( "mc_daycycle_length", "1200", { FCVAR_ARCHIVE },
 		"Real seconds per full MC day (1200 = MC's 20 minutes)" )
 
 	local baseTicks = 6000
 	local baseCur = 0
 
-	local function serverTicks()
-		if not cvEnabled:GetBool() then return baseTicks end
-		local length = math.max( cvLength:GetFloat(), 10 )
+	local function valueBool( value )
+		value = string.lower( tostring( value or "" ) )
+		return value ~= "" and value ~= "0" and value ~= "false" and value ~= "off"
+	end
+
+	local function serverTicksForState( enabled, paused, length )
+		if not enabled or paused then return baseTicks end
+		length = math.max( tonumber( length ) or cvLength:GetFloat(), 10 )
 		return ( baseTicks + ( CurTime() - baseCur ) * ( TICKS_PER_DAY / length ) ) % TICKS_PER_DAY
+	end
+
+	local function serverTicks()
+		return serverTicksForState( cvEnabled:GetBool(), cvPaused:GetBool(), cvLength:GetFloat() )
 	end
 
 	local function rebase( ticks )
 		baseTicks = ( tonumber( ticks ) or serverTicks() ) % TICKS_PER_DAY
 		baseCur = CurTime()
 		SetGlobalBool( "mc_daycycle_on", cvEnabled:GetBool() )
+		SetGlobalBool( "mc_daycycle_paused", cvPaused:GetBool() )
 		SetGlobalFloat( "mc_daycycle_base_ticks", baseTicks )
 		SetGlobalFloat( "mc_daycycle_base_curtime", baseCur )
 		SetGlobalFloat( "mc_daycycle_length", math.max( cvLength:GetFloat(), 10 ) )
 	end
 
 	if cvars and cvars.AddChangeCallback then
-		cvars.AddChangeCallback( "mc_daycycle", function() rebase() end, "mc_daycycle_rebase" )
-		cvars.AddChangeCallback( "mc_daycycle_length", function() rebase() end, "mc_daycycle_length_rebase" )
+		cvars.AddChangeCallback( "mc_daycycle", function( _, oldValue )
+			rebase( serverTicksForState( valueBool( oldValue ), cvPaused:GetBool(), cvLength:GetFloat() ) )
+		end, "mc_daycycle_rebase" )
+		cvars.AddChangeCallback( "mc_daycycle_paused", function( _, oldValue )
+			rebase( serverTicksForState( cvEnabled:GetBool(), valueBool( oldValue ), cvLength:GetFloat() ) )
+		end, "mc_daycycle_paused_rebase" )
+		cvars.AddChangeCallback( "mc_daycycle_length", function( _, oldValue )
+			rebase( serverTicksForState( cvEnabled:GetBool(), cvPaused:GetBool(), tonumber( oldValue ) or cvLength:GetFloat() ) )
+		end, "mc_daycycle_length_rebase" )
 	end
 
 	hook.Add( "InitPostEntity", "mc_daycycle_init", function() rebase( baseTicks ) end )
@@ -143,8 +166,9 @@ if SERVER then
 		if IsValid( ply ) and not ply:IsAdmin() then return end
 		local arg = args and args[1] and string.lower( tostring( args[1] ) ) or ""
 		if arg == "" then
-			local msg = string.format( "[MC] time = %d / %d (sky level %d)",
-				math.floor( serverTicks() ), TICKS_PER_DAY, MC.DayCycleSkyLevel and MC.DayCycleSkyLevel() or 15 )
+			local msg = string.format( "[MC] time = %d / %d (sky level %d, paused=%s)",
+				math.floor( serverTicks() ), TICKS_PER_DAY, MC.DayCycleSkyLevel and MC.DayCycleSkyLevel() or 15,
+				tostring( cvPaused:GetBool() ) )
 			if IsValid( ply ) then ply:PrintMessage( HUD_PRINTCONSOLE, msg ) else print( msg ) end
 			return
 		end
