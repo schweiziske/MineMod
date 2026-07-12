@@ -2285,11 +2285,13 @@ hook.Add( "ShutDown", "mc_save", function()
 end )
 
 ------------------------------------------------------------------- block select
--- clients call: mc_block_sel <id>  (used by the SWEP)
+-- clients call: mc_block_sel <id> [orient]; orient -1 keeps placement automatic
 concommand.Add( "mc_block_sel", function( ply, _, args )
 	local id = tonumber( args[1] )
 	if IsValid( ply ) and MC.IsValidBlock( id ) then
 		ply:SetNWInt( "mc_block", id )
+		local orient = tonumber( args[2] )
+		ply:SetNWInt( "mc_block_orient", orient and orient >= 0 and MC.NormalizeOrient( id, orient ) or -1 )
 	end
 end )
 
