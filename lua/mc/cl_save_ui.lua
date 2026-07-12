@@ -14,7 +14,39 @@ local SAVE_COVER_UPLOAD_PART_INTERVAL = 0.05
 local SAVE_COVER_UPLOAD_TIMEOUT = 20
 local MAX_SAVE_COVER_BYTES = 1024 * 1024 * 2
 
-local UI = MC.LibraryUI
+-- Save manager variant of the mc_config palette. Keep this local so the
+-- preset library can retain its lighter library theme.
+local UI = {
+	frame = Color( 31, 32, 34, 252 ),
+	title = Color( 38, 39, 41, 255 ),
+	panel = Color( 39, 40, 42, 255 ),
+	panelInner = Color( 28, 29, 31, 255 ),
+	sidebar = Color( 34, 35, 37, 255 ),
+	row = Color( 44, 45, 47, 255 ),
+	rowHover = Color( 48, 49, 51, 255 ),
+	rowSelected = Color( 52, 76, 98, 255 ),
+	control = Color( 82, 119, 153, 255 ),
+	controlHover = Color( 98, 136, 169, 255 ),
+	controlDown = Color( 52, 76, 98, 255 ),
+	quiet = Color( 43, 44, 46, 255 ),
+	quietHover = Color( 55, 57, 59, 255 ),
+	danger = Color( 160, 74, 68, 255 ),
+	dangerHover = Color( 178, 86, 79, 255 ),
+	accent = Color( 82, 119, 153, 255 ),
+	accentSoft = Color( 52, 76, 98, 255 ),
+	input = Color( 28, 29, 31, 255 ),
+	text = Color( 235, 233, 228, 255 ),
+	textOnBlue = Color( 244, 244, 241, 255 ),
+	textDim = Color( 170, 171, 168, 255 ),
+	border = Color( 68, 70, 73, 255 ),
+	error = Color( 160, 74, 68, 255 ),
+	warm = Color( 199, 159, 96, 255 ),
+	cover = Color( 43, 44, 46, 255 ),
+	mapMismatch = Color( 74, 61, 48, 255 ),
+	groupPill = Color( 55, 57, 59, 255 ),
+	transparent = Color( 0, 0, 0, 0 ),
+	imageTint = Color( 255, 255, 255, 255 ),
+}
 
 local CoverMaterialCache = {}
 local PendingCoverDownloads = {}
@@ -70,7 +102,7 @@ local function deleteLocalSaveCovers( slotName, keepPath )
 end
 
 local function styleButton( btn, label, danger )
-	MC.LibraryStyleButton( btn, label, danger and "danger" or nil )
+	MC.LibraryStyleButton( btn, label, danger and "danger" or nil, UI )
 end
 
 local function hideScrollBar( scroll )
@@ -199,14 +231,14 @@ local function coverMaterialForSave( save )
 end
 
 local function drawSaveCover( save, x, y, w, h )
-	surface.SetDrawColor( 210, 220, 222, 255 )
+	surface.SetDrawColor( UI.cover )
 	surface.DrawRect( x, y, w, h )
 	surface.SetDrawColor( UI.border )
 	surface.DrawOutlinedRect( x, y, w, h, 1 )
 
 	local mat = coverMaterialForSave( save )
 	if mat then
-		surface.SetDrawColor( 255, 255, 255, 255 )
+		surface.SetDrawColor( UI.imageTint )
 		surface.SetMaterial( mat )
 		surface.DrawTexturedRect( x + 5, y + 5, w - 10, h - 10 )
 		return
@@ -299,13 +331,13 @@ local function createSaveRow( parent, frame, save )
 		local sameMap = save.map == game.GetMap()
 		MC.DrawFittedText( save.name, "mc_hud", { "mc_hud_small", "mc_hud_fit_16" }, 14, 11, UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, w - 158 )
 		local mapText = L( "save.map_prefix", "地图: {map}", { map = tostring( save.map ) } )
-		local mapW = MC.LibraryDrawPill( mapText, 14, 43, sameMap and UI.accentSoft or Color( 232, 219, 207 ), sameMap and UI.text or UI.error )
+		local mapW = MC.LibraryDrawPill( mapText, 14, 43, sameMap and UI.accentSoft or UI.mapMismatch, sameMap and UI.text or UI.error )
 		local groupName = MC.LibraryGetGroupName( MC.LibraryGetItemGroup( "save", save.name ) )
 		if groupName then
 			surface.SetFont( "mc_library_section" )
 			local groupW = surface.GetTextSize( groupName ) + 16
 			local groupX = w - groupW - 14
-			if 20 + mapW < groupX then MC.LibraryDrawPill( groupName, groupX, 43, Color( 226, 225, 211 ), UI.textDim ) end
+			if 20 + mapW < groupX then MC.LibraryDrawPill( groupName, groupX, 43, UI.groupPill, UI.textDim ) end
 		end
 		draw.SimpleText( tostring( save.savedAtText ), "mc_library_section", w - 14, h - 10, UI.textDim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_BOTTOM )
 	end
@@ -333,7 +365,7 @@ function MC.OpenSaveManager()
 		surface.SetDrawColor( UI.title )
 		surface.DrawRect( 0, 0, w, 58 )
 		draw.SimpleText( L( "save.title", "MC 存档管理" ), "mc_library_title", 22, 13, UI.textOnBlue, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
-		draw.SimpleText( L( "library.save_subtitle", "整理、筛选并回到你的方块世界" ), "mc_library_section", 22, 40, Color( 220, 230, 232 ), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
+		draw.SimpleText( L( "library.save_subtitle", "整理、筛选并回到你的方块世界" ), "mc_library_section", 22, 40, UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 	end
 	fr.OnKeyCodePressed = function( _, key )
 		if key == KEY_ESCAPE then fr:Close() end
@@ -347,7 +379,7 @@ function MC.OpenSaveManager()
 	close:SetPos( fr:GetWide() - 48, 11 )
 	close:SetCursor( "hand" )
 	close.Paint = function( s, w, h )
-		surface.SetDrawColor( s:IsHovered() and Color( 82, 105, 118 ) or Color( 72, 95, 109 ) )
+		surface.SetDrawColor( s:IsHovered() and UI.controlHover or UI.controlDown )
 		surface.DrawRect( 0, 0, w, h )
 		draw.SimpleText( "×", "mc_hud_big", w * 0.5, h * 0.5 - 1, UI.textOnBlue, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
 	end
@@ -366,7 +398,7 @@ function MC.OpenSaveManager()
 	local nameEntry = vgui.Create( "DTextEntry", header )
 	nameEntry:SetPos( 14, 32 )
 	nameEntry:SetSize( 500, 28 )
-	MC.LibraryStyleTextEntry( nameEntry, L( "save.new_name", "新存档名" ) )
+	MC.LibraryStyleTextEntry( nameEntry, L( "save.new_name", "新存档名" ), UI )
 	nameEntry:SetEnabled( canManage )
 	fr.NameEntry = nameEntry
 
@@ -382,7 +414,7 @@ function MC.OpenSaveManager()
 	local refresh = vgui.Create( "DButton", header )
 	refresh:SetPos( 646, 32 )
 	refresh:SetSize( 76, 28 )
-	MC.LibraryStyleButton( refresh, L( "save.refresh", "刷新" ), "quiet" )
+	MC.LibraryStyleButton( refresh, L( "save.refresh", "刷新" ), "quiet", UI )
 	refresh.DoClick = function()
 		MC.RequestSaveList()
 	end
@@ -449,7 +481,7 @@ function MC.OpenSaveManager()
 	search:Dock( TOP )
 	search:DockMargin( 10, 44, 10, 8 )
 	search:SetTall( 32 )
-	MC.LibraryStyleTextEntry( search, L( "library.search", "搜索名称或地图" ) )
+	MC.LibraryStyleTextEntry( search, L( "library.search", "搜索名称或地图" ), UI )
 	search.OnValueChange = function( _, value )
 		fr.SearchText = value or ""
 		if fr.RefreshSaveRows then fr:RefreshSaveRows( "", false, true ) end
@@ -574,7 +606,7 @@ function MC.OpenSaveManager()
 
 	local groupCombo = vgui.Create( "DComboBox", actions )
 	groupCombo:SetTall( 30 )
-	MC.LibraryStyleCombo( groupCombo )
+	MC.LibraryStyleCombo( groupCombo, UI )
 	groupCombo.OnSelect = function( _, _, _, data )
 		if fr.UpdatingGroupCombo then return end
 		local save = fr.SelectedSave
@@ -623,7 +655,7 @@ function MC.OpenSaveManager()
 			add:Dock( RIGHT )
 			add:DockMargin( 0, 3, 2, 3 )
 			add:SetWide( 46 )
-			MC.LibraryStyleButton( add, L( "library.new", "+ 新建" ), "quiet" )
+			MC.LibraryStyleButton( add, L( "library.new", "+ 新建" ), "quiet", UI )
 			add.DoClick = function()
 				Derma_StringRequest( L( "library.new_group", "新建分组" ), L( "library.group_name", "输入分组名称" ), "", function( name )
 					local id = MC.LibraryCreateGroup( name )
@@ -642,7 +674,7 @@ function MC.OpenSaveManager()
 		btn.MCRowHeight = 34
 		btn.Paint = function( s, w, h )
 			local selected = isMap and fr.MapFilter == value or ( not isMap and fr.GroupFilter == value )
-			local bg = selected and UI.panel or ( s:IsHovered() and UI.quietHover or Color( 0, 0, 0, 0 ) )
+			local bg = selected and UI.panel or ( s:IsHovered() and UI.quietHover or UI.transparent )
 			surface.SetDrawColor( bg )
 			surface.DrawRect( 0, 0, w, h )
 			if selected then
