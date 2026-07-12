@@ -424,20 +424,26 @@ end
 -- convar-derived values (selection pad, far-tile border fade), so the matrix
 -- is refreshed at bind time rather than only when the depth pass re-renders.
 local mcCsmTableMatrix
-local function csmTableMatrix( kernelUV )
+local function csmTableMatrix( filterKernelUV, biasKernelUV )
 	if not mcCsmRow1 then return nil end
 	local fade = convarFloat( MC.MeshShadowMapEdgeFade, 0.1, 0, 0.5 )
-	-- Selection pad: PCF tap radius (<= 1 kernel) + normal-offset bias shift
-	-- (<= 2 kernels) + margin, in tile uv units.
-	local pad = kernelUV * 3.5
+	-- Selection pad: PCF radius + the fixed one-texel normal-offset footprint
+	-- (up to 2x at grazing angles) + a half-texel sampling margin.
+	local pad = filterKernelUV + biasKernelUV * 2.5
 	mcCsmTableMatrix = mcCsmTableMatrix or Matrix()
 	mcCsmTableMatrix:SetUnpacked(
 		mcCsmRow1[1], mcCsmRow1[2], mcCsmRow1[3], mcCsmRow1[4],
 		mcCsmRow2[1], mcCsmRow2[2], mcCsmRow2[3], mcCsmRow2[4],
 		mcCsmNearRadius, 0, 0, 0,
-		pad, fade, 0, 0
+		pad, fade, biasKernelUV, 0
 	)
 	return mcCsmTableMatrix
+end
+
+local function shadowKernelUVs()
+	local softness = convarFloat( MC.MeshShadowMapSoftness, 0.5, 0, 32 )
+	local texelUV = mcShadowTextureSize > 0 and 1 / mcShadowTextureSize or 0
+	return softness * texelUV, texelUV
 end
 
 -- Last-rendered depth-pass signature. The atlas content only depends on the
@@ -725,7 +731,7 @@ local function bindShadowParams( material, enabled, isFancy )
 	local strength = enabled and convarFloat( MC.MeshShadowMapStrength, 0.75, 0, 1 ) or 0
 	-- Day cycle: shadows fade at the horizon and stay weak under moonlight.
 	strength = strength * math.Clamp( mcShadowStrengthScale, 0, 1 )
-	local bias = convarFloat( MC.MeshShadowMapBias, 0.0005, 0, 0.05 )
+	local bias = convarFloat( MC.MeshShadowMapBias, 0, 0, 0.05 )
 
 	-- $c0_*..$c2_* land in pixel shader constants c0..c2 (screenspace_general
 	-- uploads $c0..$c3 to c0..c3; $viewprojmat goes to c11..c14).
@@ -738,12 +744,7 @@ local function bindShadowParams( material, enabled, isFancy )
 
 	if mcShadowForward and mcShadowOrigin then
 		local invZFar = ( mcShadowZFar and mcShadowZFar > 0 ) and 1 / mcShadowZFar or 0
-		-- The shader derives its normal-offset shadow bias from this kernel
-		-- radius, so it must span at least one shadow-map texel or the bias
-		-- collapses and acne returns; clamp softness up instead of allowing a
-		-- biasless single-tap mode.
-		local softness = convarFloat( MC.MeshShadowMapSoftness, 1, 1, 4 )
-		local kernelUV = mcShadowTextureSize > 0 and softness / mcShadowTextureSize or 0
+		local filterKernelUV = shadowKernelUVs()
 		material:SetFloat( "$c1_x", mcShadowForward.x )
 		material:SetFloat( "$c1_y", mcShadowForward.y )
 		material:SetFloat( "$c1_z", mcShadowForward.z )
@@ -751,7 +752,7 @@ local function bindShadowParams( material, enabled, isFancy )
 		material:SetFloat( "$c2_x", mcShadowOrigin.x )
 		material:SetFloat( "$c2_y", mcShadowOrigin.y )
 		material:SetFloat( "$c2_z", mcShadowOrigin.z )
-		material:SetFloat( "$c2_w", kernelUV )
+		material:SetFloat( "$c2_w", filterKernelUV )
 	end
 
 	-- $c3 is reserved for the fancy shader variant. Only that material may
@@ -847,9 +848,8 @@ function MC.BindMeshShadowMap( material, force )
 		-- those registers (see the .fxc sources), so the engine upload is safe
 		-- there — but it must never land on shaders that leave c15..c18 free
 		-- for compiler literals (vanilla/fast/height already returned above).
-		local softness = convarFloat( MC.MeshShadowMapSoftness, 1, 1, 4 )
-		local kernelUV = mcShadowTextureSize > 0 and softness / mcShadowTextureSize or 0
-		local csmTable = csmTableMatrix( kernelUV )
+		local filterKernelUV, biasKernelUV = shadowKernelUVs()
+		local csmTable = csmTableMatrix( filterKernelUV, biasKernelUV )
 		if csmTable then
 			material:SetMatrix( "$invviewprojmat", csmTable )
 		end

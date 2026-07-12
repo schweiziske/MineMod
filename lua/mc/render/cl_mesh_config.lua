@@ -25,8 +25,8 @@ MC.MeshShadowMapStrength = MC.MeshShadowMapStrength or ( CreateClientConVar and 
 	"Shadow multiplier strength for the MC chunk shader" ) )
 MC.MeshShadowMapBias = MC.MeshShadowMapBias or ( CreateClientConVar and CreateClientConVar( "mc_shadow_bias", "0.0005", true, false,
 	"Shadow map depth/edge bias for MC chunk shader sampling" ) )
-MC.MeshShadowMapSoftness = MC.MeshShadowMapSoftness or ( CreateClientConVar and CreateClientConVar( "mc_shadow_softness", "1", true, false,
-	"Shadow edge softness in shadow-map texels (clamped to at least 1 texel; the shadow bias scales with it)" ) )
+MC.MeshShadowMapSoftness = MC.MeshShadowMapSoftness or ( CreateClientConVar and CreateClientConVar( "mc_shadow_softness", "0.5", true, false,
+	"Shadow PCF radius in shadow-map texels; normal bias stays at a fixed one-texel footprint" ) )
 -- One look selector instead of the old three mutually exclusive booleans
 -- (mc_mesh_gpu_shader_fancy / _light_fast / _light_vanilla). Legacy archived
 -- values from the pre-rename mc_light_style profile convar ("shader", "best",

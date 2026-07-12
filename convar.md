@@ -166,7 +166,7 @@
 | `mc_shadow` | `1` | 让 GPU light texture chunk shader 接收 MC shadow map。 |
 | `mc_shadow_strength` | `0.75` | shadow map 对最终亮度的压暗强度。 |
 | `mc_shadow_bias` | `0.0005` | shadow map 深度/边缘采样 bias，用于减轻 acne 和漏光。 |
-| `mc_shadow_softness` | `1` | 阴影边缘柔化半径，单位是 shadow-map texel，最低钳到 1。 |
+| `mc_shadow_softness` | `0.5` | 16 点 Vogel PCF 半径，单位是 shadow-map texel；不会再联动 normal bias。 |
 | `mc_shadow_size` | `2048` | MC-owned shadow map 分辨率,512-4096。map(畸变)模式 RT 为 size × size;csm 模式为 size × 3·size 的纵向级联 atlas(4096 约占 240MB 显存,老显卡可能建不出 RT 导致阴影关闭)。 |
 | `mc_shadow_distance` | `4096` | 阴影总覆盖半径。map(畸变)模式下纹素密度从相机处(约 6.7 倍)随距离连续衰减,近处始终清晰;csm 模式下近/中级联半径为 distance/ratio² 和 distance/ratio。 |
 | `mc_shadow_cascade_ratio` | `3` | 仅 csm 模式:级联半径比,1.5~8。 |
