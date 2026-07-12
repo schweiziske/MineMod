@@ -96,19 +96,20 @@ function MC.GetBlockParticleMaterial( id, col, row )
 	return particleMaterialForTile( tileName, col, row ), tileName, tile
 end
 
-local function particleBrightnessAt( pos, id )
+local function particleBrightnessAt( pos )
 	if not ( MC.WorldToCell and MC.SampleLighting ) then return 1 end
 	local bx, by, bz = MC.WorldToCell( pos )
 	if bx == nil then return 1 end
-	local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
-	local brightness, level, blockLight = MC.SampleLighting( bx, by, bz, emission )
+	-- Terrain fragments are lit by the world cell they occupy; breaking an
+	-- emitting block does not make every fragment a new level-15 light source.
+	local brightness, level, blockLight, skyLight = MC.SampleLighting( bx, by, bz, 0 )
 	if MC.ApplySunShadowToBrightness then
-		brightness = MC.ApplySunShadowToBrightness( pos, brightness, level, blockLight, emission )
+		brightness = MC.ApplySunShadowToBrightness( pos, brightness, level, blockLight, 0, skyLight )
 	end
 	return math.Clamp( tonumber( brightness ) or 1, 0, 1 )
 end
 
-local function addTerrainParticle( emitter, tileName, id, pos, relX, relY, relZ, bs )
+local function addTerrainParticle( emitter, tileName, pos, relX, relY, relZ, bs )
 	local p = emitter:Add( particleMaterialForTile( tileName ), pos )
 	if not p then return end
 
@@ -136,7 +137,7 @@ local function addTerrainParticle( emitter, tileName, id, pos, relX, relY, relZ,
 	p:SetCollide( true )
 	p:SetBounce( 0 )
 	p:SetLighting( false )
-	local brightness = particleBrightnessAt( pos, id )
+	local brightness = particleBrightnessAt( pos )
 	local shade = math.Clamp( math.floor( 153 * brightness + 0.5 ), 0, 255 )
 	p:SetColor( shade, shade, shade )
 end
@@ -252,7 +253,7 @@ local function spawnBreakParticles( id, orient, bx, by, bz, options )
 	for i = 1, count do
 		local sampleIndex = math.min( total, math.floor( offset + ( i - 1 ) * step ) + 1 )
 		local sample = samples[sampleIndex]
-		addTerrainParticle( emitter, tileName, id, sample.pos, sample.relX, sample.relY, sample.relZ, bs )
+		addTerrainParticle( emitter, tileName, sample.pos, sample.relX, sample.relY, sample.relZ, bs )
 	end
 
 	emitter:Finish()

@@ -11,7 +11,7 @@ MC = MC or {}
 MC.LightEnabled = MC.LightEnabled or CreateClientConVar( "mc_light_enabled", "1", true, false,
 	"Apply Minecraft-style vertex lighting to MC chunk meshes" )
 MC.LightSkyLevel = nil
-MC.LightAmbientMin = MC.LightAmbientMin or CreateClientConVar( "mc_light_ambient_min", "0.18", true, false,
+MC.LightAmbientMin = MC.LightAmbientMin or CreateClientConVar( "mc_light_ambient_min", "0", true, false,
 	"Minimum brightness multiplier for MC vertex lighting" )
 MC.LightProfile = MC.LightProfile or CreateClientConVar( "mc_light_profile", "shader", true, false,
 	"MC chunk lighting pipeline profile: fast, vanilla, best (CPU vertex color paths) or shader (GPU chunk shader, default); the GPU look is picked by mc_light_style" )
@@ -962,7 +962,7 @@ function MC.MarkLightingDirtyAroundCell( bx, by, bz, radius, rateLimited )
 	MC.UpdateLightingCellsAroundCell( bx, by, bz, radius, rateLimited )
 end
 
-function MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, oldOpacity, newOpacity, dirtyBlockLightMeshes )
+function MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, oldOpacity, newOpacity )
 	if not lightEnabled() then
 		noteLightingDisabledSkip( "block_change", bx, by, bz )
 		return 0, 0
@@ -990,8 +990,7 @@ function MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, old
 
 	seedNeighborLight( addQ, bx, by, bz )
 	local incProcessed = runLightIncreaseQueue( addQ, changed )
-	local dirtySections = 0
-	if dirtyBlockLightMeshes ~= false then dirtySections = MC.MarkLightSectionsDirtyForChangedCells( changed ) end
+	local dirtySections = MC.MarkLightSectionsDirtyForChangedCells( changed )
 
 	MC.LightCellsReady = true
 
@@ -1048,14 +1047,10 @@ function MC.MarkLightingDirtyForChange( bx, by, bz, oldId, oldOrient, newId, new
 		MC.UpdateSkyLightForBlockChange( bx, by, bz, oldOpacity, newOpacity )
 	end
 	if oldEmission ~= newEmission or oldOpacity ~= newOpacity then
-		local dirtyBlockLightMeshes = oldEmission ~= newEmission
-		MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, oldOpacity, newOpacity, dirtyBlockLightMeshes )
-	elseif oldOpacity ~= newOpacity and MC.UsingGpuLightTexture and MC.UsingGpuLightTexture() then
-		-- Opacity-only change: doesn't affect CPU mesh vertex colors, but GPU light texture
-		-- needs to refresh because transparency affects light propagation
-		if MC.MarkGpuChunkLightTextureDirtyCell then
-			MC.MarkGpuChunkLightTextureDirtyCell( bx, by, bz )
-		end
+		-- Both emission and opacity changes can alter the propagated field far
+		-- beyond the edited cell, so every actually changed light cell must
+		-- invalidate its CPU mesh section or GPU light-texture texel.
+		MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, oldOpacity, newOpacity )
 	end
 	if oldId ~= 0 and newId == 0 and lightPerfPrintBreakEnabled() and timer and timer.Simple then
 		timer.Simple( 0, function()

@@ -77,16 +77,36 @@ function MC.SampleSunShadow( pos )
 	return factor
 end
 
--- Applies the directional shadow to a MC.SampleLighting result. Block light
--- and self emission are omnidirectional, so they set a floor the shadow can
--- never darken below — a torch-lit particle stays torch-lit in the shade.
-function MC.ApplySunShadowToBrightness( pos, brightness, level, blockLight, emission )
+-- Applies day/night sky intensity and the directional shadow to a
+-- MC.SampleLighting result. MC.SampleLighting stores time-independent voxel
+-- sky levels, while chunk shaders apply the current day-cycle intensity later;
+-- dynamic objects must do the same before drawing their unlit materials.
+-- Block light and explicit self emission are omnidirectional, so they set a
+-- floor the shadow can never darken below.
+function MC.ApplySunShadowToBrightness( pos, brightness, level, blockLight, emission, skyLight )
 	brightness = math.Clamp( tonumber( brightness ) or 1, 0, 1 )
+	blockLight = math.Clamp( tonumber( blockLight ) or 0, 0, 15 )
+	emission = math.Clamp( tonumber( emission ) or 0, 0, 15 )
+	if skyLight ~= nil then
+		skyLight = math.Clamp( tonumber( skyLight ) or 0, 0, 15 )
+		local skyBrightness = MC.DayCycleSkyBrightness and MC.DayCycleSkyBrightness() or 1
+		local sunBrightness = convarFloat( MC.MeshGpuSunBrightness, 1, 0, 4 )
+		local effectiveLevel = math.max( blockLight, emission, skyLight * skyBrightness * sunBrightness )
+		local ambient = convarFloat( MC.LightAmbientMin, 0, 0, 1 )
+		-- Dynamic models use unlit/vertex-colored materials, so they do not
+		-- receive the global lightmap's dark-area floor automatically. Match the
+		-- active world pipeline while still honoring a higher CPU ambient clamp.
+		if MC.GlobalLightmapActive and MC.GlobalLightmapActive() then
+			ambient = math.max( ambient, convarFloat( MC.MeshGpuLightmapAmbient, 0.1, 0, 1 ) )
+		end
+		brightness = math.Clamp( ambient + ( 1 - ambient ) * ( effectiveLevel / 15 ), 0, 1 )
+		level = effectiveLevel
+	end
 	local factor = MC.SampleSunShadow( pos )
 	if factor >= 1 then return brightness end
 
 	local shadowed = brightness * factor
-	local floorLevel = math.max( tonumber( blockLight ) or 0, tonumber( emission ) or 0 )
+	local floorLevel = math.max( blockLight, emission )
 	level = tonumber( level ) or 0
 	if level > 0 and floorLevel > 0 then
 		shadowed = math.max( shadowed, brightness * math.Clamp( floorLevel / level, 0, 1 ) )

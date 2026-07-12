@@ -287,14 +287,15 @@ if CLIENT then
 		return cvarBool( HELD_ANIM_CVAR, true )
 	end
 
-	local function heldBlockBrightnessAt( pos, id )
+	local function heldBlockBrightnessAt( pos )
 		if not ( MC.WorldToCell and MC.SampleLighting ) then return 1 end
 		local bx, by, bz = MC.WorldToCell( pos )
 		if bx == nil then return 1 end
-		local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
-		local brightness, level, blockLight = MC.SampleLighting( bx, by, bz, emission )
+		-- Held inventory models do not emit voxel light. Sample only the light
+		-- already present at the player's hand, like Minecraft's item renderer.
+		local brightness, level, blockLight, skyLight = MC.SampleLighting( bx, by, bz, 0 )
 		if MC.ApplySunShadowToBrightness then
-			brightness = MC.ApplySunShadowToBrightness( pos, brightness, level, blockLight, emission )
+			brightness = MC.ApplySunShadowToBrightness( pos, brightness, level, blockLight, 0, skyLight )
 		end
 		return math.Clamp( tonumber( brightness ) or 1, 0, 1 )
 	end
@@ -477,7 +478,7 @@ if CLIENT then
 		if not MC.IsValidBlock( id ) then return end
 
 		local pos, ang, scale = firstPersonHeldPose( wep )
-		local brightness = heldBlockBrightnessAt( pos, id )
+		local brightness = heldBlockBrightnessAt( pos )
 
 		render.OverrideDepthEnable( true, false )
 			MC.DrawCreativeHeldBlock( id, creativeHeldOrient( id ), pos, ang, scale, brightness )
@@ -514,7 +515,7 @@ if CLIENT then
 		if not MC.IsValidBlock( id ) then return end
 
 		local pos, ang, scale = thirdPersonHeldPose( ply )
-		MC.DrawCreativeHeldBlock( id, creativeHeldOrient( id ), pos, ang, scale, heldBlockBrightnessAt( pos, id ) )
+		MC.DrawCreativeHeldBlock( id, creativeHeldOrient( id ), pos, ang, scale, heldBlockBrightnessAt( pos ) )
 	end
 
 	function SWEP:PreDrawViewModel()
