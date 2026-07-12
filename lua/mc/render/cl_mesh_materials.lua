@@ -14,7 +14,7 @@ local function atlasPngPath( path )
 end
 
 -- single atlas material: alpha cutout (glass/leaves), vertex-shaded, backface-culled
-MC.Material = Material( atlasPngPath( MC.Atlas.MATERIAL or "mc/atlas_365" ), "alphatest vertexcolor" )
+MC.Material = Material( atlasPngPath( MC.Atlas.MATERIAL or "mc/atlas_365" ), "alphatest vertexcolor nomip nolod pointsample" )
 MC.MaterialOpaqueCPU = MC.Material
 
 -- second material over the same atlas pixels for translucent blocks: real alpha
@@ -26,7 +26,7 @@ local function translucentAtlasPath( path )
 	return path:gsub( "%.png$", "" ) .. "_translucent"
 end
 local transPath = MC.Atlas.MATERIAL_TRANSLUCENT or translucentAtlasPath( MC.Atlas.MATERIAL )
-MC.MaterialTranslucent = Material( atlasPngPath( transPath ), "translucent vertexcolor" )
+MC.MaterialTranslucent = Material( atlasPngPath( transPath ), "translucent vertexcolor nomip nolod pointsample" )
 if not MC.MaterialTranslucent or MC.MaterialTranslucent:IsError() then
 	-- missing copy: fall back to the cutout material rather than drawing white
 	MC.MaterialTranslucent = MC.Material
@@ -69,8 +69,8 @@ do
 			mat:SetTexture( "$basetexture", baseTex )
 			MC.MaterialGpuOpaque = mat
 		end
-		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex35_localdeps_vface_opaque", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth21_vface_ps30",
+		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex36_photon32_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth26_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,
@@ -108,8 +108,8 @@ do
 		-- ONLY material allowed to define $c3_* (its pixel shader declares and
 		-- uses register c3); defining $c3 on the plain material would make the
 		-- engine upload c3 over that shader's inline literal constants.
-		local fancyMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy17_localdeps_vface_opaque", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy16_vface_ps30",
+		local fancyMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy18_photon32_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy21_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,
@@ -240,8 +240,8 @@ do
 		if not ( transTex and transTexName and transTexName ~= "" ) then
 			transTex, transTexName = baseTex, baseName
 		end
-		local transGpuMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans9_localdeps_vface", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy_trans7_vface_ps30",
+		local transGpuMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans10_photon32_vface", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy_trans12_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = transTexName,
 			["$x360appchooser"] = 1,
