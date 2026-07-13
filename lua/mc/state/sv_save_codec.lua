@@ -10,6 +10,16 @@ MC.SV = MC.SV or {}
 
 local SV = MC.SV
 
+local function copyValue( value, seen )
+	if type( value ) ~= "table" then return value end
+	seen = seen or {}
+	if seen[value] then return seen[value] end
+	local out = {}
+	seen[value] = out
+	for key, item in pairs( value ) do out[copyValue( key, seen )] = copyValue( item, seen ) end
+	return out
+end
+
 local function packSparseCells( cells )
 	local out = {}
 	for i = 1, #cells, 2 do
@@ -63,6 +73,31 @@ local function encodeBlockEntities( chunk, options )
 	return #out > 0 and out or nil
 end
 
+local function encodeOpaqueBlockEntities( chunk, options )
+	if options and options.forClient == true then return nil end
+	if not chunk.opaqueBlockEntities then return nil end
+	local indexes = {}
+	for localIndex in pairs( chunk.opaqueBlockEntities ) do indexes[#indexes + 1] = localIndex end
+	table.sort( indexes )
+	local out, totalBytes = {}, 0
+	for _, localIndex in ipairs( indexes ) do
+		if not MC.LocalIndexInRange( localIndex ) then return nil, "invalid_opaque_block_entity_index" end
+		local record = copyValue( chunk.opaqueBlockEntities[localIndex] )
+		if not istable( record ) then return nil, "invalid_opaque_block_entity" end
+		if not isstring( record.sourceType ) or record.sourceType == ""
+		or record.encoding ~= "typed-nbt-json-v1" or not istable( record.data ) then
+			return nil, "invalid_opaque_block_entity_record"
+		end
+		local json = util.TableToJSON( record.data, false )
+		if not json or #json < 1 or #json > 1048576 then return nil, "opaque_block_entity_too_large" end
+		totalBytes = totalBytes + #json
+		if totalBytes > 8388608 then return nil, "opaque_chunk_budget_exceeded" end
+		record.localIndex = localIndex
+		out[#out + 1] = record
+	end
+	return #out > 0 and out or nil
+end
+
 function SV.BuildStateSaveData( slotName, options )
 	local chunks, palette, paletteIndex = {}, {}, {}
 	local specByStateId = {}
@@ -94,13 +129,16 @@ function SV.BuildStateSaveData( slotName, options )
 		if encodeError then return nil, nil, "state_encode_failed:" .. tostring( encodeError ) end
 		local blockEntities, blockEntityError = encodeBlockEntities( chunk, options )
 		if blockEntityError then return nil, nil, "block_entity_encode_failed:" .. tostring( blockEntityError ) end
-		chunks[#chunks + 1] = { chunk.cx, chunk.cy, chunk.cz, packSparseCells( cells ), blockEntities }
+		local opaqueBlockEntities, opaqueError = encodeOpaqueBlockEntities( chunk, options )
+		if opaqueError then return nil, nil, "opaque_block_entity_encode_failed:" .. tostring( opaqueError ) end
+		chunks[#chunks + 1] = { chunk.cx, chunk.cy, chunk.cz, packSparseCells( cells ), blockEntities, opaqueBlockEntities }
 	end
 
 	return {
-		v = 9,
-		formatVersion = 9,
+		v = 10,
+		formatVersion = 10,
 		schemaHash = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or nil,
+		sourceDataVersion = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.worldVersion or nil,
 		map = game.GetMap(),
 		slotName = slotName,
 		savedAt = os.time(),

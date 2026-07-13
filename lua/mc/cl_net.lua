@@ -328,9 +328,18 @@ local function predictCells( cells, priorityFn )
 	end
 
 	for i, cell in ipairs( cells ) do
-		local id = math.floor( tonumber( cell.id ) or 0 )
-		local orient = id ~= 0 and MC.NormalizeOrient( id, cell.orient ) or 0
-		local stateId = MC.StateFromLegacy( id, orient )
+		local stateId
+		if cell.stateId ~= nil then
+			stateId = math.floor( tonumber( cell.stateId ) or -1 )
+		else
+			local legacyId = math.floor( tonumber( cell.id ) or 0 )
+			local legacyOrient = legacyId ~= 0 and MC.NormalizeOrient( legacyId, cell.orient ) or 0
+			stateId = MC.StateFromLegacy( legacyId, legacyOrient )
+		end
+		if not stateId or not MC.IsValidBlockState( stateId ) then return false end
+		local id, orient = MC.LegacyFromState( stateId )
+		if id == nil then return false end
+		orient = orient or 0
 		local _, _, _, changed = MC.SetBlockStateRaw( cell.bx, cell.by, cell.bz, stateId )
 		if changed then
 			MC.PendingPredictions[predictionKey( cell.bx, cell.by, cell.bz )] = {
@@ -352,6 +361,18 @@ local function predictCells( cells, priorityFn )
 	end
 
 	return true
+end
+
+function MC.PredictSetBlockState( bx, by, bz, stateId )
+	if not MC.ClientEditPredictionEnabled() then return false end
+	stateId = math.floor( tonumber( stateId ) or -1 )
+	if stateId <= 0 or not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return false end
+	local plan = MC.BuildPlacementStatePlan and MC.BuildPlacementStatePlan( bx, by, bz, stateId )
+	if not plan then return false end
+	for _, cell in ipairs( plan.cells ) do
+		if MC.GetBlock( cell.bx, cell.by, cell.bz ) ~= 0 then return false end
+	end
+	return predictCells( plan.cells, function() return true end )
 end
 
 function MC.PredictSetBlock( bx, by, bz, id, orient )
@@ -586,7 +607,7 @@ end
 
 function MC.LoadSnapshotSaveData( data )
 	if not istable( data ) or not istable( data.chunks ) then return false end
-	if data.v == 9 then
+	if data.v == 9 or data.v == 10 then
 		local expectedHash = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or nil
 		if not isstring( data.schemaHash ) or data.schemaHash == "" then return false end
 		if expectedHash and data.schemaHash ~= expectedHash then return false end
@@ -599,13 +620,13 @@ function MC.LoadSnapshotSaveData( data )
 	local blocks = 0
 	for _, chunkData in ipairs( data.chunks ) do
 		if istable( chunkData ) then
-			local loaded, loadError = loadSnapshotChunk( chunkData, cache, palette, data.v == 9 )
+			local loaded, loadError = loadSnapshotChunk( chunkData, cache, palette, data.v == 9 or data.v == 10 )
 			if loaded == nil then
 				resetClientWorldForSnapshot( 0, 0 )
 				return false, loadError
 			end
 			blocks = blocks + loaded
-		elseif data.v == 9 then
+		elseif data.v == 9 or data.v == 10 then
 			resetClientWorldForSnapshot( 0, 0 )
 			return false, "invalid_snapshot_chunk"
 		end

@@ -745,6 +745,9 @@ local function validatePlacementPlan( ply, plan )
 
 	local add = 0
 	for _, cell in ipairs( plan.cells ) do
+		if cell.stateId ~= nil and ( not MC.IsValidBlockState or not MC.IsValidBlockState( cell.stateId ) or cell.stateId == 0 ) then
+			return false
+		end
 		if not worldBoundsOK( cell.bx, cell.by, cell.bz ) then
 			notify( ply, L( ply, "server.world_limit", "Out of build range (mc_world_limit)" ) )
 			return false
@@ -770,6 +773,21 @@ local function validateBreakPlan( ply, plan )
 	if not cooldownOK( ply ) then return false end
 	if not canEdit( ply ) then return false end
 	return validateReach( ply, plan.bx, plan.by, plan.bz )
+end
+
+function SV.PlaceState( ply, bx, by, bz, stateId )
+	stateId = math.floor( tonumber( stateId ) or -1 )
+	if stateId <= 0 or not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return false end
+	local plan = MC.BuildPlacementStatePlan and MC.BuildPlacementStatePlan( bx, by, bz, stateId )
+	if not validatePlacementPlan( ply, plan ) then return false end
+	local result = SV.ApplyBlockTransaction( plan.cells, {
+		actor = ply,
+		priorityPhys = true,
+		immediatePhys = true,
+		fxIndex = 1,
+		netMode = "bulk",
+	})
+	return result.ok == true and result.changed > 0
 end
 
 function SV.Place( ply, bx, by, bz, id, orient )
@@ -826,6 +844,15 @@ function SV.SetBlockState( bx, by, bz, stateId, options )
 	return SV.ApplyBlockTransaction( {
 		{ bx = bx, by = by, bz = bz, stateId = stateId, blockEntity = options.blockEntity },
 	}, transactionOptions )
+end
+
+function SV.SyncPlacementStatePlan( ply, bx, by, bz, stateId )
+	local plan = MC.BuildPlacementStatePlan and MC.BuildPlacementStatePlan( bx, by, bz, stateId )
+	if plan then
+		SV.SyncCells( ply, plan.cells )
+	else
+		SV.SyncCell( ply, bx, by, bz )
+	end
 end
 
 function SV.SetBlock( bx, by, bz, id, orient, options )
@@ -894,7 +921,7 @@ local function trimArg( s )
 end
 
 ------------------------------------------------------------------- import tool
-local IMPORT_USAGE = "用法: mc_import <mc_import/文件.json> [replace|append]"
+local IMPORT_USAGE = "用法: mc_import <mc_import/文件.json> [replace|append] [reject|preserve]"
 
 local function normalizeImportPath( path )
 	path = trimArg( path or "" )
@@ -978,6 +1005,17 @@ local function resyncAllClients()
 	end
 end
 
+-- Narrow host surface for import/sv_world_sink.lua. Import format parsing and
+-- staging live in separate modules; this file only exposes world lifecycle
+-- operations that already belong to server authority.
+SV.WorldImportHost = {
+	beginWorldLoadStage = beginWorldLoadStage,
+	restoreWorldLoadStage = restoreWorldLoadStage,
+	commitWorldLoadStage = commitWorldLoadStage,
+	resyncAllClients = resyncAllClients,
+	worldBoundsOK = worldBoundsOK,
+}
+
 local function blockFromImport( cache, savedBlock )
 	local key = tostring( savedBlock or "" )
 	local cached = cache[key]
@@ -1019,6 +1057,43 @@ local function loadSavedBlockEntities( chunk, envelopes )
 		if not record then return false, decodeError end
 		chunk.blockEntities = chunk.blockEntities or {}
 		chunk.blockEntities[localIndex] = record
+	end
+	return true
+end
+
+local function loadSavedOpaqueBlockEntities( chunk, records, sourceDataVersion )
+	if records == nil then return true end
+	if not chunk or not istable( records ) then return false, "invalid_opaque_block_entities" end
+	local seen, totalBytes = {}, 0
+	for _, record in ipairs( records ) do
+		if not istable( record ) then return false, "invalid_opaque_block_entity" end
+		local localIndex = math.floor( tonumber( record.localIndex ) or -1 )
+		if not MC.LocalIndexInRange( localIndex ) or seen[localIndex] then return false, "invalid_opaque_block_entity_index" end
+		seen[localIndex] = true
+		if not isstring( record.sourceType ) or record.sourceType == ""
+		or record.encoding ~= "typed-nbt-json-v1" or not istable( record.data ) then
+			return false, "invalid_opaque_block_entity_record"
+		end
+		local json = util.TableToJSON( record.data, false )
+		local bytes = json and #json or 0
+		if bytes < 1 or bytes > 1048576 then return false, "opaque_block_entity_too_large" end
+		totalBytes = totalBytes + bytes
+		if totalBytes > 8388608 then return false, "opaque_chunk_budget_exceeded" end
+		if sourceDataVersion and tonumber( record.sourceDataVersion ) ~= tonumber( sourceDataVersion ) then
+			return false, "opaque_block_entity_version_mismatch"
+		end
+		local lx, ly, lz = MC.DecodeLocal( localIndex )
+		local stateId = MC.GetBlockState(
+			chunk.cx * MC.CS + lx,
+			chunk.cy * MC.CS + ly,
+			chunk.cz * MC.CH + lz
+		)
+		if stateId == 0 then return false, "opaque_block_entity_without_state" end
+		if chunk.blockEntities and chunk.blockEntities[localIndex] then
+			return false, "opaque_block_entity_conflicts_active"
+		end
+		chunk.opaqueBlockEntities = chunk.opaqueBlockEntities or {}
+		chunk.opaqueBlockEntities[localIndex] = record
 	end
 	return true
 end
@@ -1198,6 +1273,10 @@ local function importManifest( data, manifestPath, appendMode )
 end
 
 local function importFormatText( data )
+	if data.format == "mc_world_import" then
+		return "mc_world_import v=" .. tostring( data.formatVersion ) ..
+			" chunks=" .. ( istable( data.chunks ) and #data.chunks or 0 )
+	end
 	if istable( data.parts ) then
 		return "manifest parts=" .. #data.parts .. " v=" .. tostring( data.v )
 	end
@@ -1224,6 +1303,11 @@ local function runImport( ply, args )
 		chat( ply, L( ply, "server.import_usage", IMPORT_USAGE ) )
 		return
 	end
+	local unknownPolicy = string.lower( tostring( args[base + 2] or "reject" ) )
+	if unknownPolicy ~= "reject" and unknownPolicy ~= "preserve" then
+		chat( ply, L( ply, "server.import_usage", IMPORT_USAGE ) )
+		return
+	end
 
 	if not file.Exists( path, "DATA" ) then
 		chat( ply, L( ply, "server.import_missing", "找不到导入文件: garrysmod/data/{path}", { path = path } ) )
@@ -1238,7 +1322,15 @@ local function runImport( ply, args )
 	end
 
 	chat( ply, "import format: " .. importFormatText( data ) .. " bytes=" .. #raw )
-	local result, err = importManifest( data, path, appendMode )
+	local result, err
+	if data.format == "mc_world_import" and SV.ImportWorldBundle then
+		result, err = SV.ImportWorldBundle( data, path, {
+			mode = appendMode and "append" or "replace",
+			unknownPolicy = unknownPolicy,
+		} )
+	else
+		result, err = importManifest( data, path, appendMode )
+	end
 	if not result then chat( ply, L( ply, "server.import_failed", "导入失败: {err}", { err = importErrorText( ply, err ) } ) ) return end
 	local msg = L( ply, "server.import_done", "导入完成: {blocks} 个方块，当前总数 {total}，跳过未知 {unknown}，越界 {bounds}，超上限 {max}", {
 		blocks = result.imported,
@@ -1248,6 +1340,7 @@ local function runImport( ply, args )
 		max = result.skippedLimit,
 	} )
 	chat( ply, msg )
+	if result.lossSummary then chat( ply, "import verification: " .. result.lossSummary ) end
 	if result.expected and result.expected > 0 and result.imported ~= result.expected then
 		chat( ply, L( ply, "server.import_count_mismatch", "导入文件写着 {expected} 个方块，实际进服 {imported} 个；少的都在上面跳过统计里。", {
 			expected = result.expected,
@@ -1944,16 +2037,16 @@ end
 
 local function loadSaveChunks( data, cache, deferWorldEffects )
 	cache = cache or {}
-	local strict = data.v == 9
+	local strict = data.v == 9 or data.v == 10
 	local savedHeight = savedHeightForData( data )
 	local savedChunkSize = savedChunkSizeForData( data )
 	local palette = data.p or data.palette
 
 	for _, ck in ipairs( data.chunks or {} ) do
 		if strict and not istable( ck ) then return false, "invalid_chunk_record" end
-		local cx, cy, cz, cells, legacyMode, blockEntities
-		if data.v == 5 or data.v == 9 then
-			cx, cy, cz, cells, blockEntities = ck[1], ck[2], ck[3], ck[4], ck[5]
+		local cx, cy, cz, cells, legacyMode, blockEntities, opaqueBlockEntities
+		if data.v == 5 or data.v == 9 or data.v == 10 then
+			cx, cy, cz, cells, blockEntities, opaqueBlockEntities = ck[1], ck[2], ck[3], ck[4], ck[5], ck[6]
 		elseif data.v == 4 then
 			cx, cy, cells, legacyMode = ck[1], ck[2], ck[3], "column"
 		else
@@ -1967,13 +2060,13 @@ local function loadSaveChunks( data, cache, deferWorldEffects )
 		end
 		local touched = {}
 		local loadError
-		local stride = ( data.v == 4 or data.v == 5 or data.v == 9 ) and 2 or ( ( data.v == 2 or data.v == 3 ) and 3 or 2 )
+		local stride = ( data.v == 4 or data.v == 5 or data.v == 9 or data.v == 10 ) and 2 or ( ( data.v == 2 or data.v == 3 ) and 3 or 2 )
 		local function loadOneCell( li, savedBlock, state )
 			if loadError then return end
 			li = math.floor( tonumber( li ) or -1 )
 			if strict and not MC.LocalIndexInRange( li ) then loadError = "invalid_local_index" return end
 			local stateId, stateError
-			if data.v == 4 or data.v == 5 or data.v == 9 then
+			if data.v == 4 or data.v == 5 or data.v == 9 or data.v == 10 then
 				stateId, stateError = importPaletteState( cache, palette, savedBlock )
 			else
 				local resolved = data.v == 3 and MC.ResolveBlock( savedBlock ) or nil
@@ -2043,6 +2136,15 @@ local function loadSaveChunks( data, cache, deferWorldEffects )
 			local loadedEntities, entityError = loadSavedBlockEntities( chunk, blockEntities )
 			if not loadedEntities then return false, entityError end
 		end
+		if strict and opaqueBlockEntities ~= nil then
+			local chunk = MC.GetChunk( cx, cy, cz )
+			local loadedOpaque, opaqueError = loadSavedOpaqueBlockEntities(
+				chunk,
+				opaqueBlockEntities,
+				data.sourceDataVersion or data.source and data.source.dataVersion
+			)
+			if not loadedOpaque then return false, opaqueError end
+		end
 		for key, c in pairs( touched ) do
 			MC.FinalizeChunkStateStorage( c )
 			if c.count > 0 then
@@ -2083,6 +2185,8 @@ local function loadSaveParts( data, manifestPath, cache, deferWorldEffects )
 		partData.h = partData.h or data.h
 		partData.p = partData.p or data.p
 		partData.palette = partData.palette or data.palette
+		partData.source = partData.source or data.source
+		partData.sourceDataVersion = partData.sourceDataVersion or data.sourceDataVersion
 		local loaded, loadError = loadSaveChunks( partData, cache, deferWorldEffects )
 		if not loaded then return false, loadError end
 	end
@@ -2108,7 +2212,16 @@ function SV.LoadFromPath( path, resyncClients, requestedName )
 	local data, err = readSaveJSON( path )
 	if err then return false, err end
 	if not data or ( not data.chunks and not data.parts ) then return false, "invalid_save" end
-	if data.v == 9 then
+	if data.format == "mc_world_import" then
+		if not MC.Import or not MC.Import.ValidateSourceMetadata then return false, "import_format_unavailable" end
+		local metadataOK, metadataError = MC.Import.ValidateSourceMetadata( data )
+		if metadataOK ~= true then return false, metadataError or "invalid_import_metadata" end
+		local loss = data.lossReport
+		if not istable( loss ) or loss.archiveRoundTripLossless ~= true or loss.substitutedOrDropped == true then
+			return false, "import_save_contains_loss"
+		end
+	end
+	if data.v == 9 or data.v == 10 then
 		local expectedHash = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or nil
 		if not isstring( data.schemaHash ) or data.schemaHash == "" then return false, "missing_schema_hash" end
 		if expectedHash and data.schemaHash ~= expectedHash then return false, "schema_hash_mismatch" end
@@ -2126,7 +2239,7 @@ function SV.LoadFromPath( path, resyncClients, requestedName )
 	end
 	local savedHeight = savedHeightForData( data )
 	local savedChunkSize = savedChunkSizeForData( data )
-	if data.v == 5 or data.v == 7 or data.v == 8 or data.v == 9 then
+	if data.v == 5 or data.v == 7 or data.v == 8 or data.v == 9 or data.v == 10 then
 		if savedChunkSize ~= MC.CS or savedHeight ~= MC.CH then
 			MsgN( "[MC] remapping save chunk geometry " .. savedChunkSize .. "x" .. savedChunkSize .. "x" .. savedHeight ..
 				" -> " .. MC.CS .. "x" .. MC.CS .. "x" .. MC.CH )
@@ -2138,7 +2251,7 @@ function SV.LoadFromPath( path, resyncClients, requestedName )
 		if not validParts then return false, partError end
 	end
 
-	local stagedLoad = data.v == 9
+	local stagedLoad = data.v == 9 or data.v == 10
 	local previousWorld = stagedLoad and beginWorldLoadStage() or nil
 	if not stagedLoad then clearWorldNoNet() end
 
@@ -2238,8 +2351,12 @@ end )
 concommand.Add( "mc_block_sel", function( ply, _, args )
 	local id = tonumber( args[1] )
 	if IsValid( ply ) and MC.IsValidBlock( id ) then
-		ply:SetNWInt( "mc_block", id )
 		local orient = tonumber( args[2] )
+		if SV.SelectCreativeLegacy then
+			SV.SelectCreativeLegacy( ply, id, orient )
+			return
+		end
+		ply:SetNWInt( "mc_block", id )
 		ply:SetNWInt( "mc_block_orient", orient and orient >= 0 and MC.NormalizeOrient( id, orient ) or -1 )
 	end
 end )

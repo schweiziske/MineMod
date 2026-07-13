@@ -40,6 +40,21 @@ local function addCell( cells, seen, bx, by, bz, id, orient )
 	}
 end
 
+local function addStateCell( cells, seen, bx, by, bz, stateId )
+	local key = MC.CellKey( bx, by, bz )
+	if seen[key] then return end
+	local id, orient = MC.LegacyFromState( stateId )
+	if id == nil then return nil, "state_missing_block" end
+	seen[key] = true
+	cells[#cells + 1] = {
+		bx = bx, by = by, bz = bz,
+		stateId = stateId,
+		id = id,
+		orient = orient or 0,
+	}
+	return true
+end
+
 function MC.PrimaryPartOrient( id, orient )
 	orient = MC.NormalizeOrient( id, orient )
 	if MC.IsDoorBlock( id ) then
@@ -60,29 +75,57 @@ end
 function MC.BuildPlacementPlan( bx, by, bz, id, orient )
 	if not MC.IsValidBlock or not MC.IsValidBlock( id ) then return nil end
 	orient = MC.PrimaryPartOrient( id, orient )
+	local stateId = MC.StateFromLegacy and MC.StateFromLegacy( id, orient ) or nil
+	if not stateId then return nil end
+	return MC.BuildPlacementStatePlan( bx, by, bz, stateId )
+end
+
+local FacingDirection = {
+	north = MC.Direction.NORTH,
+	south = MC.Direction.SOUTH,
+	west = MC.Direction.WEST,
+	east = MC.Direction.EAST,
+}
+
+local function stateWith( stateId, property, value )
+	local nextState, err = MC.StateWith( stateId, property, value )
+	if not nextState then return nil, err or "invalid_part_state" end
+	return nextState
+end
+
+function MC.BuildPlacementStatePlan( bx, by, bz, stateId )
+	stateId = math.floor( tonumber( stateId ) or -1 )
+	if stateId <= 0 or not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return nil end
+	local id = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or nil
+	if id == nil or not MC.IsValidBlock or not MC.IsValidBlock( id ) then return nil end
 	local cells = {}
 	local seen = {}
 
 	if MC.IsDoorBlock( id ) then
-		local facing = MC.DoorOrientFacing( orient )
-		local open = MC.DoorOrientOpen( orient )
-		local hinge = MC.DoorOrientHinge( orient )
-		local powered = MC.DoorOrientPowered( orient )
-		addCell( cells, seen, bx, by, bz, id, MC.MakeDoorOrient( facing, "lower", open, hinge, powered ) )
-		addCell( cells, seen, bx, by, bz + 1, id, MC.MakeDoorOrient( facing, "upper", open, hinge, powered ) )
+		local lower = stateWith( stateId, "half", "lower" )
+		local upper = stateWith( stateId, "half", "upper" )
+		if not lower or not upper then return nil end
+		if not addStateCell( cells, seen, bx, by, bz, lower ) then return nil end
+		if not addStateCell( cells, seen, bx, by, bz + 1, upper ) then return nil end
 	elseif MC.IsBedBlock( id ) then
-		local facing = MC.BedOrientFacing( orient )
+		local facingName = MC.GetStateProperty and MC.GetStateProperty( stateId, "facing" ) or "north"
+		local facing = FacingDirection[tostring( facingName )] or MC.Direction.NORTH
 		local dx, dy = MC.HorizontalDirectionOffset( facing )
-		addCell( cells, seen, bx, by, bz, id, MC.MakeBedOrient( facing, "foot" ) )
-		addCell( cells, seen, bx + dx, by + dy, bz, id, MC.MakeBedOrient( facing, "head" ) )
+		local foot = stateWith( stateId, "part", "foot" )
+		local head = stateWith( stateId, "part", "head" )
+		if not foot or not head then return nil end
+		if not addStateCell( cells, seen, bx, by, bz, foot ) then return nil end
+		if not addStateCell( cells, seen, bx + dx, by + dy, bz, head ) then return nil end
 	else
-		addCell( cells, seen, bx, by, bz, id, orient )
+		if not addStateCell( cells, seen, bx, by, bz, stateId ) then return nil end
 	end
 
+	local _, orient = MC.LegacyFromState( cells[1].stateId )
 	return {
 		bx = bx, by = by, bz = bz,
 		id = id,
-		orient = orient,
+		orient = orient or 0,
+		stateId = cells[1].stateId,
 		cells = cells,
 	}
 end

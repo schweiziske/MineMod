@@ -33,6 +33,7 @@ local SHARED = {
 	"mc/custom/sh_custom_blocks.lua",
 	"mc/sh_blocks.lua",
 	"mc/sh_block_states.lua",
+	"mc/import/sh_format.lua",
 	"mc/block_entity/sh_registry.lua",
 	"mc/block/sh_stairs.lua",
 	"mc/sh_presets.lua",
@@ -43,9 +44,15 @@ local SHARED = {
 }
 local SERVER_FILES = {
 	"mc/sv_world.lua",
+	"mc/creative/sv_state_selection.lua",
 	"mc/state/sv_save_codec.lua",
 	"mc/state/sv_network_transport.lua",
 	"mc/state/sv_block_transaction.lua",
+	"mc/import/sv_reader.lua",
+	"mc/import/sv_decoder.lua",
+	"mc/import/sv_world_sink.lua",
+	"mc/import/sv_service.lua",
+	"mc/import/sv_commands.lua",
 	"mc/sv_config_ui.lua",
 	"mc/sv_commands.lua",
 	"mc/sv_collision_carriers.lua",
