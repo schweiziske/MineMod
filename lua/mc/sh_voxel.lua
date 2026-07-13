@@ -571,7 +571,175 @@ function MC.TouchChunkCollisionVersion( chunk )
 	end
 end
 
+-- Keep the optional client render-section index coherent with a single-cell
+-- store mutation.  The index is built lazily by the mesh renderer, so servers
+-- and clients that have not built it pay nothing here.  Updating it in place
+-- avoids rescanning every block in the chunk after each edit merely because
+-- collisionVersion also changed.
+local function updateCachedRenderSectionCell( chunk, li, id )
+	if not CLIENT or not chunk or not chunk.renderSectionBlocks then return end
+	if not MC.RenderSectionIndexForLocal then
+		chunk.renderSectionBlocks = nil
+		chunk.renderSectionIndexVersion = nil
+		return
+	end
+
+	local lx, ly, lz = MC.DecodeLocal( li )
+	local sectionIndex = MC.RenderSectionIndexForLocal( lx, ly, lz )
+	local section = chunk.renderSectionBlocks[sectionIndex]
+	if id == 0 then
+		if section then
+			section[li] = nil
+			if next( section ) == nil then chunk.renderSectionBlocks[sectionIndex] = nil end
+		end
+	else
+		if not section then
+			section = {}
+			chunk.renderSectionBlocks[sectionIndex] = section
+		end
+		section[li] = id
+	end
+	chunk.renderSectionIndexVersion = chunk.collisionVersion or 0
+end
+
 ------------------------------------------------------------------- block access
+local STATE_SECTION_HEIGHT = 16
+local STATE_SECTION_CELLS = CS2 * STATE_SECTION_HEIGHT
+
+local function stateSectionAddress( li )
+	return floor( li / STATE_SECTION_CELLS ) + 1, li % STATE_SECTION_CELLS
+end
+
+local function buildStateSectionsFromLegacy( chunk )
+	local sections = {}
+	for li, id in pairs( chunk.blocks or {} ) do
+		if id ~= 0 and MC.LocalIndexInRange( li ) then
+			local orient = MC.NormalizeOrient and MC.NormalizeOrient( id, chunk.orients and chunk.orients[li] )
+				or ( chunk.orients and chunk.orients[li] or 0 )
+			local stateId, _, err = MC.StateFromLegacy( id, orient )
+			if stateId == nil then return nil, err or "legacy_state_migration_failed" end
+			local sectionIndex, sectionLocalIndex = stateSectionAddress( li )
+			local section = sections[sectionIndex]
+			if not section then
+				section = MC.StateSection.New()
+				sections[sectionIndex] = section
+			end
+			local changed, setError = MC.StateSection.Set( section, sectionLocalIndex, stateId )
+			if changed == nil then return nil, setError end
+		end
+	end
+	return sections
+end
+
+--- Lazily converts a legacy blocks/orients mirror into the authoritative
+-- two-section state store. The replacement is atomic: failed projections do
+-- not leave a half-migrated chunk behind.
+function MC.MigrateChunkStateStorage( chunk )
+	if not chunk then return nil, "missing_chunk" end
+	if chunk.stateStorageMigrated then return true end
+	if not MC.StateSection then return nil, "state_section_unavailable" end
+	local sections, err = buildStateSectionsFromLegacy( chunk )
+	if not sections then return nil, err end
+	chunk.stateSections = sections
+	chunk.stateStorageMigrated = true
+	return true
+end
+
+--- Marks direct legacy mirror hydration as needing a fresh lazy migration.
+-- Bulk loaders that still assign chunk.blocks/chunk.orients must call this
+-- once after their final assignment, never once per cell.
+function MC.InvalidateChunkStateStorage( chunk )
+	if not chunk then return end
+	chunk.stateSections = nil
+	chunk.stateStorageMigrated = nil
+end
+
+--- Starts an empty authoritative chunk payload for future palette-aware bulk
+-- loaders. It deliberately does not touch collision/render versions.
+function MC.ResetChunkStateStorage( chunk )
+	if not chunk then return nil, "missing_chunk" end
+	chunk.stateSections = {}
+	chunk.stateStorageMigrated = true
+	chunk.blocks = {}
+	chunk.orients = {}
+	chunk.blockEntities = nil
+	chunk.count = 0
+	return true
+end
+
+--- Bulk-loader primitive. Mutates one chunk-local state without publishing
+-- collision/render/network side effects; callers finalize each touched chunk
+-- once after the batch. The state section remains authoritative and the old
+-- blocks/orients tables are updated only as a derived compatibility mirror.
+function MC.SetChunkLocalStateRaw( chunk, li, stateId )
+	li = math.floor( tonumber( li ) or -1 )
+	stateId = math.floor( tonumber( stateId ) or -1 )
+	if not chunk or not MC.LocalIndexInRange( li ) then return nil, "invalid_local_index" end
+	if stateId < 0 or ( MC.IsValidBlockState and not MC.IsValidBlockState( stateId ) ) then
+		return nil, "invalid_state_id"
+	end
+	local migrated, migrationError = MC.MigrateChunkStateStorage( chunk )
+	if not migrated then return nil, migrationError end
+
+	local sectionIndex, sectionLocalIndex = stateSectionAddress( li )
+	local section = chunk.stateSections[sectionIndex]
+	local oldStateId = section and MC.StateSection.Get( section, sectionLocalIndex ) or 0
+	if oldStateId == stateId then return false, oldStateId end
+	if not section then
+		section = MC.StateSection.New()
+		chunk.stateSections[sectionIndex] = section
+	end
+
+	local changed, setError = MC.StateSection.Set( section, sectionLocalIndex, stateId )
+	if changed == nil then return nil, setError end
+	if section.count <= 0 then chunk.stateSections[sectionIndex] = nil end
+
+	local id, orient
+	if stateId ~= 0 then id, orient = MC.LegacyFromState( stateId ) end
+	chunk.blocks = chunk.blocks or {}
+	chunk.orients = chunk.orients or {}
+	if stateId == 0 or id == nil then
+		chunk.blocks[li] = nil
+		chunk.orients[li] = nil
+	else
+		chunk.blocks[li] = id
+		chunk.orients[li] = orient or 0
+	end
+	if oldStateId == 0 then chunk.count = ( chunk.count or 0 ) + 1 end
+	if stateId == 0 then chunk.count = math.max( 0, ( chunk.count or 0 ) - 1 ) end
+	if chunk.blockEntities and chunk.blockEntities[li] then
+		local expectedType = MC.BlockEntityTypeForState and MC.BlockEntityTypeForState( stateId ) or nil
+		if chunk.blockEntities[li].type ~= expectedType then
+			chunk.blockEntities[li] = nil
+			if next( chunk.blockEntities ) == nil then chunk.blockEntities = nil end
+		end
+	end
+	return true, oldStateId, id, orient or 0
+end
+
+function MC.FinalizeChunkStateStorage( chunk )
+	if not chunk then return nil, "missing_chunk" end
+	MC.TouchChunkCollisionVersion( chunk )
+	if CLIENT then
+		chunk.renderSectionBlocks = nil
+		chunk.renderSectionIndexVersion = nil
+	end
+	return true
+end
+
+function MC.GetBlockState( bx, by, bz )
+	local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
+	if not MC.LocalIndexInRange( li ) then return 0 end
+	local c = MC.World[MC.ChunkKey( cx, cy, cz )]
+	if not c then return 0 end
+	local migrated, err = MC.MigrateChunkStateStorage( c )
+	if not migrated then return nil, err end
+	local sectionIndex, sectionLocalIndex = stateSectionAddress( li )
+	local section = c.stateSections and c.stateSections[sectionIndex]
+	if not section then return 0 end
+	return MC.StateSection.Get( section, sectionLocalIndex ) or 0
+end
+
 function MC.GetBlock( bx, by, bz )
 	local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
 	if not MC.LocalIndexInRange( li ) then return 0 end
@@ -620,43 +788,83 @@ function MC.GetCellShapeInfo( bx, by, bz )
 	return info
 end
 
---- Low-level store mutation used by BOTH realms.
--- id == 0 removes. Returns: chunk (or nil), created(bool), emptied(bool), changed(bool)
-function MC.SetBlockRaw( bx, by, bz, id, orient )
+--- Authoritative low-level state mutation used by both realms.
+-- stateId zero removes. Returns: chunk, created, emptied, changed[, error].
+function MC._SetBlockStateStorageRaw( bx, by, bz, stateId )
 	local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
 	if not MC.LocalIndexInRange( li ) then return nil, false, false, false end
 	local key = MC.ChunkKey( cx, cy, cz )
-	orient = id ~= 0 and ( MC.NormalizeOrient and MC.NormalizeOrient( id, orient ) or math.floor( tonumber( orient ) or 0 ) ) or 0
-
-	if id == 0 then
-		local c = MC.World[key]
-		if not c or c.blocks[li] == nil then return nil, false, false, false end
-		c.blocks[li] = nil
-		if c.orients then c.orients[li] = nil end
-		c.count = c.count - 1
-		local emptied = c.count <= 0
-		MC.TouchChunkCollisionVersion( c )
-		if emptied then MC.World[key] = nil end
-		return c, false, emptied, true
+	stateId = math.floor( tonumber( stateId ) or -1 )
+	if stateId < 0 or ( MC.IsValidBlockState and not MC.IsValidBlockState( stateId ) ) then
+		return nil, false, false, false, "invalid_state_id"
 	end
 
-	local created = ( MC.World[key] == nil )
-	local c = MC.EnsureChunk( cx, cy, cz )
-	local old = c.blocks[li]
-	local oldOrient = MC.NormalizeOrient and MC.NormalizeOrient( old, c.orients and c.orients[li] ) or ( c.orients and c.orients[li] or 0 )
-	if old == id and oldOrient == orient then return c, false, false, false end
-	if c.blocks[li] == nil then c.count = c.count + 1 end
-	c.blocks[li] = id
-	c.orients[li] = orient
-	MC.TouchChunkCollisionVersion( c )
-	return c, created, false, true
+	local c = MC.World[key]
+	if stateId == 0 and not c then return nil, false, false, false end
+	local created = c == nil
+	if not c then c = MC.EnsureChunk( cx, cy, cz ) end
+	local migrated, migrationError = MC.MigrateChunkStateStorage( c )
+	if not migrated then
+		if created then MC.World[key] = nil end
+		return nil, false, false, false, migrationError
+	end
+
+	local changed, oldOrError, id, orient = MC.SetChunkLocalStateRaw( c, li, stateId )
+	if changed == nil then
+		if created then MC.World[key] = nil end
+		return nil, false, false, false, oldOrError
+	end
+	if not changed then return c, false, false, false end
+	local emptied = ( c.count or 0 ) <= 0
+	if stateId == 0 or id == nil then
+		MC.TouchChunkCollisionVersion( c )
+		updateCachedRenderSectionCell( c, li, 0 )
+	else
+		MC.TouchChunkCollisionVersion( c )
+		updateCachedRenderSectionCell( c, li, id )
+	end
+	if emptied then MC.World[key] = nil end
+	return c, created, emptied, true
+end
+
+function MC.SetBlockStateRaw( bx, by, bz, stateId )
+	return MC._SetBlockStateStorageRaw( bx, by, bz, stateId )
+end
+
+--- Legacy low-level mutation adapter. New callers should pass stateId to
+-- SetBlockStateRaw; blocks/orients remain a compatibility mirror only.
+function MC.SetBlockRaw( bx, by, bz, id, orient )
+	id = math.floor( tonumber( id ) or 0 )
+	orient = id ~= 0 and ( MC.NormalizeOrient and MC.NormalizeOrient( id, orient ) or math.floor( tonumber( orient ) or 0 ) ) or 0
+	local stateId, _, err = MC.StateFromLegacy( id, orient )
+	if stateId == nil then return nil, false, false, false, err end
+	return MC.SetBlockStateRaw( bx, by, bz, stateId )
+end
+
+--- Iterate authoritative non-air states in deterministic local-index order.
+-- cb( bx,by,bz, lx,ly,lz, stateId )
+function MC.ForEachBlockState( chunk, cb )
+	if not chunk or not cb then return end
+	local migrated = MC.MigrateChunkStateStorage( chunk )
+	if not migrated then return end
+	local ox, oy, oz = chunk.cx * CS, chunk.cy * CS, chunk.cz * CH
+	for sectionIndex = 1, 2 do
+		local section = chunk.stateSections and chunk.stateSections[sectionIndex]
+		if section then
+			MC.StateSection.ForEach( section, function( sectionLocalIndex, stateId )
+				local li = ( sectionIndex - 1 ) * STATE_SECTION_CELLS + sectionLocalIndex
+				local lx, ly, lz = MC.DecodeLocal( li )
+				cb( ox + lx, oy + ly, oz + lz, lx, ly, lz, stateId )
+			end )
+		end
+	end
 end
 
 --- Iterate every (bx,by,bz,id,orient) in a chunk. cb( bx,by,bz, lx,ly,lz, id, orient )
 function MC.ForEachBlock( chunk, cb )
 	local ox, oy, oz = chunk.cx * CS, chunk.cy * CS, chunk.cz * CH
 	chunk.orients = chunk.orients or {}
-	for li, id in pairs( chunk.blocks ) do
+	for li, id in pairs( chunk.blocks or {} ) do
 		local lx, ly, lz = MC.DecodeLocal( li )
 		local orient = MC.NormalizeOrient and MC.NormalizeOrient( id, chunk.orients[li] ) or ( chunk.orients[li] or 0 )
 		cb( ox + lx, oy + ly, oz + lz, lx, ly, lz, id, orient )

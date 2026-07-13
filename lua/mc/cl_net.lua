@@ -234,6 +234,58 @@ local function applyNetCellsBulk( cells, meshRateLimited )
 	flushCellPhysBounds( boundsByKey, meshRateLimited == true )
 end
 
+-- Phase 4 state transport calls these narrow application helpers. Transport
+-- ordering/generation validation deliberately lives in state/cl_network_transport.lua;
+-- this file remains the owner of client prediction, lighting, mesh and physics
+-- invalidation after an authoritative cell value has been accepted.
+function MC.ConfirmStatePrediction( bx, by, bz, stateId, revision )
+	local key = MC.CellKey( bx, by, bz )
+	local pending = MC.PendingPredictions and MC.PendingPredictions[key] or nil
+	if not pending then return false, false end
+	revision = math.floor( tonumber( revision ) or 0 )
+	if revision <= ( pending.authoritativeRevisionAtPrediction or 0 ) then return false, false end
+	MC.PendingPredictions[key] = nil
+	return true, pending.stateId == stateId
+end
+
+function MC.ApplyStateNetCell( bx, by, bz, stateId, revision, meshRateLimited )
+	stateId = math.floor( tonumber( stateId ) or -1 )
+	if not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return false, "invalid_state_id" end
+	MC.ConfirmStatePrediction( bx, by, bz, stateId, revision )
+	local oldId = MC.GetBlock( bx, by, bz )
+	local oldOrient = MC.GetBlockOrient( bx, by, bz )
+	local _, _, _, changed, setError = MC.SetBlockStateRaw( bx, by, bz, stateId )
+	if not changed then return changed == false, setError end
+	local newId = MC.GetBlock( bx, by, bz )
+	local newOrient = MC.GetBlockOrient( bx, by, bz )
+	markLightingDirtyForChange( bx, by, bz, oldId, oldOrient, newId, newOrient, meshRateLimited )
+	MC.MarkDirty( bx, by, bz, meshRateLimited )
+	MC.MarkCellPhysNeighbours( bx, by, bz, false, meshRateLimited == true )
+	return true
+end
+
+function MC.ApplyStateNetCellsBulk( cells, revision, meshRateLimited )
+	local boundsByKey = {}
+	for _, cell in ipairs( cells or {} ) do
+		local stateId = math.floor( tonumber( cell.stateId ) or -1 )
+		if MC.IsValidBlockState and MC.IsValidBlockState( stateId ) then
+			MC.ConfirmStatePrediction( cell.bx, cell.by, cell.bz, stateId, revision )
+			local oldId = MC.GetBlock( cell.bx, cell.by, cell.bz )
+			local oldOrient = MC.GetBlockOrient( cell.bx, cell.by, cell.bz )
+			local _, _, _, changed = MC.SetBlockStateRaw( cell.bx, cell.by, cell.bz, stateId )
+			if changed then
+				local newId = MC.GetBlock( cell.bx, cell.by, cell.bz )
+				local newOrient = MC.GetBlockOrient( cell.bx, cell.by, cell.bz )
+				markLightingDirtyForChange( cell.bx, cell.by, cell.bz, oldId, oldOrient, newId, newOrient, meshRateLimited )
+				MC.MarkDirty( cell.bx, cell.by, cell.bz, meshRateLimited )
+				collectCellPhysBounds( boundsByKey, cell.bx, cell.by, cell.bz )
+			end
+		end
+	end
+	flushCellPhysBounds( boundsByKey, meshRateLimited == true )
+	return true
+end
+
 MC.PendingPredictions = MC.PendingPredictions or {}
 
 local function predictionKey( bx, by, bz )
@@ -271,13 +323,15 @@ local function predictCells( cells, priorityFn )
 		oldStates[i] = {
 			id = MC.GetBlock( cell.bx, cell.by, cell.bz ),
 			orient = MC.GetBlockOrient( cell.bx, cell.by, cell.bz ),
+			stateId = MC.GetBlockState( cell.bx, cell.by, cell.bz ),
 		}
 	end
 
 	for i, cell in ipairs( cells ) do
 		local id = math.floor( tonumber( cell.id ) or 0 )
 		local orient = id ~= 0 and MC.NormalizeOrient( id, cell.orient ) or 0
-		local _, _, _, changed = MC.SetBlockRaw( cell.bx, cell.by, cell.bz, id, orient )
+		local stateId = MC.StateFromLegacy( id, orient )
+		local _, _, _, changed = MC.SetBlockStateRaw( cell.bx, cell.by, cell.bz, stateId )
 		if changed then
 			MC.PendingPredictions[predictionKey( cell.bx, cell.by, cell.bz )] = {
 				bx = cell.bx,
@@ -285,8 +339,11 @@ local function predictCells( cells, priorityFn )
 				bz = cell.bz,
 				id = id,
 				orient = orient,
+				stateId = stateId,
 				oldId = oldStates[i].id,
 				oldOrient = oldStates[i].orient,
+				oldStateId = oldStates[i].stateId,
+				authoritativeRevisionAtPrediction = MC.AppliedStateRevision or 0,
 				expire = CurTime() + 2.5,
 			}
 			markPredictedCellDirty( cell.bx, cell.by, cell.bz, priorityFn and priorityFn( cell ) or false,
@@ -336,10 +393,11 @@ local function rollbackExpiredPredictions()
 	local now = CurTime()
 	for key, pending in pairs( MC.PendingPredictions ) do
 		if now >= pending.expire then
+			local currentStateId = MC.GetBlockState( pending.bx, pending.by, pending.bz )
 			local current = MC.GetBlock( pending.bx, pending.by, pending.bz )
 			local currentOrient = MC.GetBlockOrient( pending.bx, pending.by, pending.bz )
-			if current == pending.id and currentOrient == pending.orient then
-				MC.SetBlockRaw( pending.bx, pending.by, pending.bz, pending.oldId, pending.oldOrient )
+			if currentStateId == pending.stateId then
+				MC.SetBlockStateRaw( pending.bx, pending.by, pending.bz, pending.oldStateId or 0 )
 				markPredictedCellDirty( pending.bx, pending.by, pending.bz, false,
 					current, currentOrient, pending.oldId, pending.oldOrient )
 			end
@@ -350,9 +408,7 @@ end
 
 local function resetChunk( cx, cy, cz )
 	local c = MC.EnsureChunk( cx, cy, cz )
-	c.blocks = {}
-	c.orients = {}
-	c.count = 0
+	MC.ResetChunkStateStorage( c )
 	if MC.TouchChunkCollisionVersion then MC.TouchChunkCollisionVersion( c ) end
 	if MC.IndexChunkLightSources then MC.IndexChunkLightSources( c ) end
 	return c
@@ -365,13 +421,14 @@ local function readCellsIntoChunk( c, count )
 		local id = net.ReadUInt( Net.ID_BITS )
 		local orient = net.ReadUInt( Net.ORIENT_BITS )
 		if id ~= 0 and MC.LocalIndexInRange( li ) then
-			if c.blocks[li] == nil then c.count = c.count + 1 end
-			c.blocks[li] = id
-			c.orients[li] = MC.NormalizeOrient( id, orient )
-			changed = true
+			local stateId = MC.StateFromLegacy( id, orient )
+			if stateId then
+				local cellChanged = MC.SetChunkLocalStateRaw( c, li, stateId )
+				if cellChanged then changed = true end
+			end
 		end
 	end
-	if changed and MC.TouchChunkCollisionVersion then MC.TouchChunkCollisionVersion( c ) end
+	if changed and MC.FinalizeChunkStateStorage then MC.FinalizeChunkStateStorage( c ) end
 	if changed and MC.IndexChunkLightSources then MC.IndexChunkLightSources( c ) end
 end
 
@@ -423,59 +480,101 @@ local function resetClientWorldForSnapshot( expectedChunks, expectedBlocks )
 	PendingFullAckBytes = 0
 end
 
+MC.ResetClientWorldForStateSync = resetClientWorldForSnapshot
+
 local function snapshotPaletteEntry( cache, palette, index )
 	local pi = math.floor( tonumber( index ) or -1 )
-	if pi < 0 then return 0, 0 end
+	if pi < 0 then return nil end
 	local cached = cache[pi]
-	if cached then return cached.id, cached.orient end
+	if cached ~= nil then return cached ~= false and cached or nil end
 
 	local spec = istable( palette ) and palette[pi + 1] or nil
-	if not isstring( spec ) then return 0, 0 end
-	local id, orient = MC.ParseBlockSpec( spec )
-	id = math.floor( tonumber( id ) or 0 )
-	orient = id ~= 0 and MC.NormalizeOrient( id, orient ) or 0
-	cache[pi] = { id = id, orient = orient }
-	return id, orient
+	if not isstring( spec ) then return nil end
+	local stateId = MC.ParseBlockState( spec )
+	cache[pi] = stateId or false
+	return stateId
 end
 
-local function loadSnapshotChunk( data, cache, palette )
-	local cx = math.floor( tonumber( data[1] ) or 0 )
-	local cy = math.floor( tonumber( data[2] ) or 0 )
-	local cz = math.floor( tonumber( data[3] ) or 0 )
+local function loadSnapshotBlockEntities( chunk, envelopes, strict )
+	if envelopes == nil then return true end
+	if not istable( envelopes ) then return not strict end
+	local seen = {}
+	for _, envelope in ipairs( envelopes ) do
+		local localIndex = istable( envelope ) and math.floor( tonumber( envelope.localIndex ) or -1 ) or -1
+		if not MC.LocalIndexInRange( localIndex ) or seen[localIndex] then return false end
+		seen[localIndex] = true
+		local definition = MC.BlockEntityTypes and MC.BlockEntityTypes[envelope.type] or nil
+		if not definition then return false end
+		if not definition.serverOnly then
+			local lx, ly, lz = MC.DecodeLocal( localIndex )
+			local stateId = MC.GetBlockState(
+				chunk.cx * MC.CS + lx,
+				chunk.cy * MC.CS + ly,
+				chunk.cz * MC.CH + lz
+			)
+			local record = MC.DecodeBlockEntityEnvelope and MC.DecodeBlockEntityEnvelope( stateId, envelope ) or nil
+			if not record then return false end
+			chunk.blockEntities = chunk.blockEntities or {}
+			chunk.blockEntities[localIndex] = record
+		end
+	end
+	return true
+end
+
+local function loadSnapshotChunk( data, cache, palette, strict )
+	local rawCX, rawCY, rawCZ = tonumber( data[1] ), tonumber( data[2] ), tonumber( data[3] )
+	if strict and ( not rawCX or not rawCY or not rawCZ
+		or rawCX ~= math.floor( rawCX ) or rawCY ~= math.floor( rawCY ) or rawCZ ~= math.floor( rawCZ ) ) then
+		return nil, "invalid_snapshot_chunk_coords"
+	end
+	local cx = math.floor( rawCX or 0 )
+	local cy = math.floor( rawCY or 0 )
+	local cz = math.floor( rawCZ or 0 )
 	local cells = data[4]
+	local blockEntities = data[5]
 	local c = MC.EnsureChunk( cx, cy, cz )
-	c.blocks = {}
-	c.orients = {}
-	c.count = 0
+	MC.ResetChunkStateStorage( c )
+	local seen = {}
+	local loadError
 
 	if isstring( cells ) then
 		for entry in string.gmatch( cells, "[^;]+" ) do
 			local liText, piText = string.match( entry, "^(-?%d+):(-?%d+)$" )
 			local li = math.floor( tonumber( liText ) or -1 )
+			if strict and ( not liText or not MC.LocalIndexInRange( li ) or seen[li] ) then loadError = "invalid_snapshot_cell" break end
 			if MC.LocalIndexInRange( li ) then
-				local id, orient = snapshotPaletteEntry( cache, palette, piText )
-				if id and id ~= 0 then
-					c.blocks[li] = id
-					c.orients[li] = orient
-					c.count = c.count + 1
+				local stateId = snapshotPaletteEntry( cache, palette, piText )
+				if strict and ( not stateId or stateId == 0 ) then loadError = "invalid_snapshot_state" break end
+				if stateId and stateId ~= 0 then
+					local changed = MC.SetChunkLocalStateRaw( c, li, stateId )
+					if strict and changed ~= true then loadError = "snapshot_state_write_failed" break end
+					seen[li] = true
 				end
 			end
 		end
 	elseif istable( cells ) then
+		if strict and #cells % 2 ~= 0 then loadError = "invalid_snapshot_cells" end
 		for i = 1, #cells, 2 do
+			if loadError then break end
 			local li = math.floor( tonumber( cells[i] ) or -1 )
+			if strict and ( not MC.LocalIndexInRange( li ) or seen[li] ) then loadError = "invalid_snapshot_cell" break end
 			if MC.LocalIndexInRange( li ) then
-				local id, orient = snapshotPaletteEntry( cache, palette, cells[i + 1] )
-				if id and id ~= 0 then
-					c.blocks[li] = id
-					c.orients[li] = orient
-					c.count = c.count + 1
+				local stateId = snapshotPaletteEntry( cache, palette, cells[i + 1] )
+				if strict and ( not stateId or stateId == 0 ) then loadError = "invalid_snapshot_state" break end
+				if stateId and stateId ~= 0 then
+					local changed = MC.SetChunkLocalStateRaw( c, li, stateId )
+					if strict and changed ~= true then loadError = "snapshot_state_write_failed" break end
+					seen[li] = true
 				end
 			end
 		end
+	elseif strict then
+		loadError = "invalid_snapshot_cells"
 	end
+	if loadError then return nil, loadError end
+	if not loadSnapshotBlockEntities( c, blockEntities, strict ) then return nil, "invalid_snapshot_block_entities" end
 
-	if MC.TouchChunkCollisionVersion then MC.TouchChunkCollisionVersion( c ) end
+	if MC.FinalizeChunkStateStorage then MC.FinalizeChunkStateStorage( c ) end
 	if MC.IndexChunkLightSources then MC.IndexChunkLightSources( c ) end
 	if c.count > 0 then
 		MC.MarkChunkDirty( c.key )
@@ -487,6 +586,12 @@ end
 
 function MC.LoadSnapshotSaveData( data )
 	if not istable( data ) or not istable( data.chunks ) then return false end
+	if data.v == 9 then
+		local expectedHash = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or nil
+		if not isstring( data.schemaHash ) or data.schemaHash == "" then return false end
+		if expectedHash and data.schemaHash ~= expectedHash then return false end
+		if math.floor( tonumber( data.cs ) or -1 ) ~= MC.CS or math.floor( tonumber( data.h ) or -1 ) ~= MC.CH then return false end
+	end
 	local palette = data.p or data.palette
 	resetClientWorldForSnapshot( #data.chunks, 0 )
 
@@ -494,7 +599,15 @@ function MC.LoadSnapshotSaveData( data )
 	local blocks = 0
 	for _, chunkData in ipairs( data.chunks ) do
 		if istable( chunkData ) then
-			blocks = blocks + loadSnapshotChunk( chunkData, cache, palette )
+			local loaded, loadError = loadSnapshotChunk( chunkData, cache, palette, data.v == 9 )
+			if loaded == nil then
+				resetClientWorldForSnapshot( 0, 0 )
+				return false, loadError
+			end
+			blocks = blocks + loaded
+		elseif data.v == 9 then
+			resetClientWorldForSnapshot( 0, 0 )
+			return false, "invalid_snapshot_chunk"
 		end
 	end
 
