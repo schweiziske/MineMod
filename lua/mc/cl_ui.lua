@@ -531,7 +531,7 @@ local CREATIVE_HOTBAR_KEYS = {
 MC.CreativeHotbar = MC.CreativeHotbar or { selected = 1, slots = {} }
 local creativeHotbarLoaded = false
 local lastCreativeHotbarSyncID = nil
-local lastCreativeHotbarSyncOrient = nil
+local lastCreativeHotbarSyncState = nil
 local lastCreativeHotbarSyncAt = 0
 local CREATIVE_HOTBAR_SYNC_INTERVAL = 0.25
 local creativeInventoryStateLoaded = false
@@ -544,6 +544,15 @@ local function loadCreativeInventoryState()
 	MC.CreativeInventoryState = type( saved ) == "table" and saved or ( MC.CreativeInventoryState or {} )
 	MC.CreativeInventoryState.pages = type( MC.CreativeInventoryState.pages ) == "table" and MC.CreativeInventoryState.pages or {}
 	return MC.CreativeInventoryState
+end
+
+function MC.DrawMinecraftBlockStateIcon( stateId, x, y, w, h, forceModel )
+	stateId = math.floor( tonumber( stateId ) or -1 )
+	if not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return false end
+	local id, orient, exact = MC.LegacyFromState( stateId )
+	if id == nil then return false end
+	MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient or 0, forceModel )
+	return true, exact == true
 end
 
 local function saveCreativeInventoryState()
@@ -591,14 +600,42 @@ local function currentHotbarSelectedID()
 	return normalizeHotbarID( hotbar.slots[slot] )
 end
 
-local function currentHotbarSelectedOrient()
+local function canonicalStateForBlock( id, value )
+	id = normalizeHotbarID( id )
+	if not id or value == nil then return nil, nil end
+	local stateId
+	if type( value ) == "number" then
+		stateId = math.floor( value )
+	elseif type( value ) == "string" then
+		stateId = MC.ParseBlockState and MC.ParseBlockState( value ) or nil
+	end
+	if not stateId or not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return nil, nil end
+	if not MC.BlockTypeForState or MC.BlockTypeForState( stateId ) ~= id then return nil, nil end
+	local spec = MC.FormatBlockState and MC.FormatBlockState( stateId ) or nil
+	if not spec then return nil, nil end
+	return stateId, spec
+end
+
+local function currentHotbarSelectedStateSpec()
 	local hotbar = MC.CreativeHotbar
-	if type( hotbar ) ~= "table" or type( hotbar.orients ) ~= "table" then return nil end
+	if type( hotbar ) ~= "table" or type( hotbar.states ) ~= "table" then return nil end
 	local slot = normalizeHotbarSlot( hotbar.selected )
 	local id = currentHotbarSelectedID()
-	local orient = tonumber( hotbar.orients[slot] )
-	if not id or orient == nil then return nil end
-	return MC.NormalizeOrient and MC.NormalizeOrient( id, orient ) or math.floor( orient )
+	local _, spec = canonicalStateForBlock( id, hotbar.states[slot] )
+	return spec
+end
+
+local function currentHotbarSelectedStateID()
+	local id = currentHotbarSelectedID()
+	local stateId = canonicalStateForBlock( id, currentHotbarSelectedStateSpec() )
+	return stateId
+end
+
+local function currentHotbarSelectedOrient()
+	local stateId = currentHotbarSelectedStateID()
+	if not stateId or not MC.LegacyFromState then return nil end
+	local _, orient = MC.LegacyFromState( stateId )
+	return orient
 end
 
 local function hotbarIDToSaveValue( id )
@@ -609,17 +646,42 @@ local function hotbarIDToSaveValue( id )
 end
 
 local function resolveSavedHotbarValue( value )
-	local orient
+	local stateSpec, legacyOrient, mode
 	if type( value ) == "table" then
-		orient = tonumber( value.orient )
+		stateSpec = value.state
+		legacyOrient = tonumber( value.orient )
+		mode = value.mode
 		value = value.block or value.id
 	end
-	if type( value ) == "number" then return normalizeHotbarID( value ), orient end
+	if type( value ) == "number" then
+		local id = normalizeHotbarID( value )
+		if mode == "auto" then return id end
+		local _, spec = canonicalStateForBlock( id, stateSpec )
+		if spec then return id, spec end
+		if id and legacyOrient and legacyOrient >= 0 then
+			local stateId = MC.StateFromLegacy( id, legacyOrient )
+			return id, stateId and MC.FormatBlockState( stateId ) or nil
+		end
+		return id
+	end
 	if type( value ) ~= "string" then return nil, nil end
+	if string.find( value, "[", 1, true ) and MC.ParseBlockState then
+		local stateId = MC.ParseBlockState( value )
+		local id = stateId and MC.BlockTypeForState( stateId ) or nil
+		local _, spec = canonicalStateForBlock( id, stateId )
+		if id and spec then return id, spec end
+	end
 
 	local b = MC.ResolveBlock and MC.ResolveBlock( value ) or nil
-	if b then return normalizeHotbarID( b.id ), orient end
-	return normalizeHotbarID( tonumber( value ) ), orient
+	local id = b and normalizeHotbarID( b.id ) or normalizeHotbarID( tonumber( value ) )
+	if mode == "auto" then return id end
+	local _, spec = canonicalStateForBlock( id, stateSpec )
+	if spec then return id, spec end
+	if id and legacyOrient and legacyOrient >= 0 then
+		local stateId = MC.StateFromLegacy( id, legacyOrient )
+		return id, stateId and MC.FormatBlockState( stateId ) or nil
+	end
+	return id
 end
 
 local function loadCreativeHotbar()
@@ -632,15 +694,16 @@ local function loadCreativeHotbar()
 
 	local hotbar = MC.CreativeHotbar or {}
 	hotbar.slots = hotbar.slots or {}
-	hotbar.orients = hotbar.orients or {}
+	hotbar.states = hotbar.states or {}
 	hotbar.selected = normalizeHotbarSlot( data.selected or hotbar.selected )
+	hotbar.needsV2Migration = tonumber( data.version ) ~= 2
 
 	local slots = type( data.slots ) == "table" and data.slots or {}
 	for i = 1, CREATIVE_HOTBAR_SIZE do
-		local id, orient = resolveSavedHotbarValue( slots[i] or slots[tostring( i )] )
+		local id, stateSpec = resolveSavedHotbarValue( slots[i] or slots[tostring( i )] )
 		if id then
 			hotbar.slots[i] = id
-			hotbar.orients[i] = orient ~= nil and MC.NormalizeOrient( id, orient ) or nil
+			hotbar.states[i] = stateSpec
 		end
 	end
 
@@ -653,13 +716,15 @@ local function saveCreativeHotbar()
 	if type( hotbar ) ~= "table" or type( hotbar.slots ) ~= "table" then return end
 
 	local data = {
+		version = 2,
 		selected = normalizeHotbarSlot( hotbar.selected ),
 		slots = {},
 	}
 	for i = 1, CREATIVE_HOTBAR_SIZE do
 		local block = hotbarIDToSaveValue( hotbar.slots[i] ) or hotbarIDToSaveValue( resolveHotbarDefault( i ) )
-		local orient = hotbar.orients and hotbar.orients[i]
-		data.slots[i] = orient ~= nil and { block = block, orient = orient } or block
+		local _, stateSpec = canonicalStateForBlock( hotbar.slots[i], hotbar.states and hotbar.states[i] )
+		data.slots[i] = stateSpec and { block = block, mode = "state", state = stateSpec }
+			or { block = block, mode = "auto" }
 	end
 
 	local json = util.TableToJSON( data, true )
@@ -672,44 +737,48 @@ function MC.EnsureCreativeHotbar()
 	loadCreativeHotbar()
 	local hotbar = MC.CreativeHotbar or {}
 	hotbar.slots = hotbar.slots or {}
-	hotbar.orients = hotbar.orients or {}
+	hotbar.states = hotbar.states or {}
 	hotbar.selected = normalizeHotbarSlot( hotbar.selected )
 	for i = 1, CREATIVE_HOTBAR_SIZE do
 		hotbar.slots[i] = normalizeHotbarID( hotbar.slots[i] ) or resolveHotbarDefault( i )
-		if hotbar.orients[i] ~= nil then
-			hotbar.orients[i] = MC.NormalizeOrient( hotbar.slots[i], hotbar.orients[i] )
-		end
+		local _, spec = canonicalStateForBlock( hotbar.slots[i], hotbar.states[i] )
+		hotbar.states[i] = spec
 	end
 	MC.CreativeHotbar = hotbar
+	if hotbar.needsV2Migration then
+		hotbar.needsV2Migration = nil
+		saveCreativeHotbar()
+	end
 	MC.SyncCreativeHotbarSelection( lastCreativeHotbarSyncID == nil )
 	return hotbar
 end
 
 function MC.SyncCreativeHotbarSelection( force )
+	-- Legacy v1 used RunConsoleCommand( "mc_block_sel", id, orient ); v2 sends a canonical state spec.
 	local id = currentHotbarSelectedID()
 	if not id then return false end
-	local orient = currentHotbarSelectedOrient()
+	local stateSpec = currentHotbarSelectedStateSpec()
 	local now = CurTime and CurTime() or 0
-	if not force and lastCreativeHotbarSyncID == id and lastCreativeHotbarSyncOrient == orient and now - lastCreativeHotbarSyncAt < CREATIVE_HOTBAR_SYNC_INTERVAL then
-		return true, id, orient
+	if not force and lastCreativeHotbarSyncID == id and lastCreativeHotbarSyncState == stateSpec and now - lastCreativeHotbarSyncAt < CREATIVE_HOTBAR_SYNC_INTERVAL then
+		return true, id, currentHotbarSelectedStateID()
 	end
 	lastCreativeHotbarSyncID = id
-	lastCreativeHotbarSyncOrient = orient
+	lastCreativeHotbarSyncState = stateSpec
 	lastCreativeHotbarSyncAt = now
-	RunConsoleCommand( "mc_block_sel", tostring( id ), tostring( orient ~= nil and orient or -1 ) )
-	return true, id, orient
+	RunConsoleCommand( "mc_block_sel_v2", tostring( id ), stateSpec or "-" )
+	return true, id, currentHotbarSelectedStateID()
 end
 
-function MC.CreativeHotbarSelectionSynced( ply, id, orient )
+function MC.CreativeHotbarSelectionSynced( ply, id, stateId )
 	id = normalizeHotbarID( id ) or currentHotbarSelectedID()
 	if not id then return false end
-	if orient == nil then orient = currentHotbarSelectedOrient() end
+	if stateId == nil then stateId = currentHotbarSelectedStateID() end
 	if not IsValid( ply ) then return true end
 
 	local serverID = math.floor( tonumber( ply:GetNWInt( "mc_block", -1 ) ) or -1 )
-	local serverOrient = math.floor( tonumber( ply:GetNWInt( "mc_block_orient", -1 ) ) or -1 )
-	local wantedOrient = orient ~= nil and MC.NormalizeOrient( id, orient ) or -1
-	if serverID == id and serverOrient == wantedOrient then return true end
+	local serverStateId = math.floor( tonumber( ply:GetNWInt( "mc_block_state", -1 ) ) or -1 )
+	local wantedStateId = stateId ~= nil and math.floor( stateId ) or -1
+	if serverID == id and serverStateId == wantedStateId then return true end
 	if serverID < 0 and id == creativeDefaultSelectedID() then return true end
 
 	MC.SyncCreativeHotbarSelection( false )
@@ -736,6 +805,16 @@ function MC.GetCreativeHotbarSelectedOrient()
 	return currentHotbarSelectedOrient()
 end
 
+function MC.GetCreativeHotbarSelectedStateID()
+	MC.EnsureCreativeHotbar()
+	return currentHotbarSelectedStateID()
+end
+
+function MC.GetCreativeHotbarSelectedStateSpec()
+	MC.EnsureCreativeHotbar()
+	return currentHotbarSelectedStateSpec()
+end
+
 function MC.SelectCreativeHotbarSlot( slot, noCommand )
 	local hotbar = MC.EnsureCreativeHotbar()
 	hotbar.selected = normalizeHotbarSlot( slot )
@@ -760,7 +839,23 @@ function MC.SetCreativeHotbarSlot( slot, id, noCommand )
 	local hotbar = MC.EnsureCreativeHotbar()
 	hotbar.selected = normalizeHotbarSlot( slot )
 	hotbar.slots[hotbar.selected] = id
-	hotbar.orients[hotbar.selected] = nil
+	hotbar.states[hotbar.selected] = nil
+	saveCreativeHotbar()
+	if not noCommand then
+		MC.SyncCreativeHotbarSelection( true )
+	end
+	return true
+end
+
+function MC.SetCreativeHotbarSlotStateID( slot, id, state, noCommand )
+	id = normalizeHotbarID( id )
+	if not id then return false end
+	local stateId, stateSpec = canonicalStateForBlock( id, state )
+	if not stateId or not stateSpec then return false end
+	local hotbar = MC.EnsureCreativeHotbar()
+	hotbar.selected = normalizeHotbarSlot( slot )
+	hotbar.slots[hotbar.selected] = id
+	hotbar.states[hotbar.selected] = stateSpec
 	saveCreativeHotbar()
 	if not noCommand then
 		MC.SyncCreativeHotbarSelection( true )
@@ -771,15 +866,10 @@ end
 function MC.SetCreativeHotbarSlotState( slot, id, orient, noCommand )
 	id = normalizeHotbarID( id )
 	if not id then return false end
-	local hotbar = MC.EnsureCreativeHotbar()
-	hotbar.selected = normalizeHotbarSlot( slot )
-	hotbar.slots[hotbar.selected] = id
-	hotbar.orients[hotbar.selected] = orient ~= nil and MC.NormalizeOrient( id, orient ) or nil
-	saveCreativeHotbar()
-	if not noCommand then
-		MC.SyncCreativeHotbarSelection( true )
-	end
-	return true
+	if orient == nil then return MC.SetCreativeHotbarSlot( slot, id, noCommand ) end
+	local stateId = MC.StateFromLegacy and MC.StateFromLegacy( id, orient ) or nil
+	if not stateId then return false end
+	return MC.SetCreativeHotbarSlotStateID( slot, id, stateId, noCommand )
 end
 
 function MC.PickCreativeHotbarBlock( ply )
@@ -788,7 +878,8 @@ function MC.PickCreativeHotbarBlock( ply )
 	local hit = MC.PlayerBlockAim( ply )
 	local id = hit and normalizeHotbarID( hit.Block )
 	if not id then return false end
-	local ok = MC.SetCreativeHotbarSlotState( MC.GetCreativeHotbarSelectedSlot(), id, hit.Orient )
+	local stateId = hit.StateId or ( MC.StateFromLegacy and MC.StateFromLegacy( id, hit.Orient ) )
+	local ok = stateId and MC.SetCreativeHotbarSlotStateID( MC.GetCreativeHotbarSelectedSlot(), id, stateId )
 	return ok
 end
 
@@ -805,10 +896,13 @@ function MC.DrawCreativeHotbar( cx, y, opts )
 		local sx = x + ( i - 1 ) * ( slotSize + gap )
 		local selected = hotbar.selected == i
 		local id = normalizeHotbarID( hotbar.slots[i] )
+		local stateId = canonicalStateForBlock( id, hotbar.states and hotbar.states[i] )
 		draw.RoundedBox( 3, sx, y, slotSize, slotSize, selected and Color( 235, 235, 210, 245 ) or Color( 28, 30, 35, 235 ) )
 		draw.RoundedBox( 2, sx + 3, y + 3, slotSize - 6, slotSize - 6, selected and Color( 66, 68, 72, 245 ) or Color( 42, 45, 51, 245 ) )
 		if id then
-			MC.DrawMinecraftBlockIcon( id, sx + 7, y + 7, slotSize - 14, slotSize - 14 )
+			if not stateId or not MC.DrawMinecraftBlockStateIcon( stateId, sx + 7, y + 7, slotSize - 14, slotSize - 14 ) then
+				MC.DrawMinecraftBlockIcon( id, sx + 7, y + 7, slotSize - 14, slotSize - 14 )
+			end
 		end
 		draw.SimpleText( tostring( i ), "mc_hud_small", sx + 6, y + 4, selected and Color( 255, 245, 160 ) or Color( 220, 225, 235, 210 ), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 	end
@@ -1048,10 +1142,60 @@ function MC.StyleCreativePropertySheet( tabs )
 	end
 end
 
-local function creativeBlockStateRule( id )
+function MC.StyleCreativeStateComboBox( combo )
+	if not IsValid( combo ) then return end
+	combo:SetFont( "mc_hud_small" )
+	combo:SetTextColor( CREATIVE_UI.text )
+	combo:SetContentAlignment( 4 )
+	if combo.SetTextInset then combo:SetTextInset( 12, 0 ) end
+	if IsValid( combo.DropButton ) then combo.DropButton:SetVisible( false ) end
+
+	combo.Paint = function( s, w, h )
+		local bg = s:IsMenuOpen() and Color( 34, 39, 47, 255 )
+			or ( s:IsHovered() and CREATIVE_UI.controlHover or CREATIVE_UI.control )
+		draw.RoundedBox( 3, 0, 0, w, h, bg )
+		draw.RoundedBox( 2, 3, 3, w - 6, h - 6, CREATIVE_UI.panelInner )
+		surface.SetDrawColor( s:IsMenuOpen() and CREATIVE_UI.accent or Color( 104, 114, 132, 180 ) )
+		surface.DrawOutlinedRect( 0, 0, w, h, 1 )
+		draw.SimpleText( "▼", "mc_hud_small", w - 15, h * 0.5, CREATIVE_UI.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+	end
+
+	combo.OnMenuOpened = function( s, menu )
+		if not IsValid( menu ) then return end
+		if menu.SetMinimumWidth then menu:SetMinimumWidth( s:GetWide() ) end
+		menu.Paint = function( _, w, h )
+			draw.RoundedBox( 3, 0, 0, w, h, Color( 18, 20, 24, 255 ) )
+			surface.SetDrawColor( Color( 104, 114, 132, 200 ) )
+			surface.DrawOutlinedRect( 0, 0, w, h, 1 )
+		end
+
+		local canvas = menu.GetCanvas and menu:GetCanvas() or nil
+		for _, option in ipairs( IsValid( canvas ) and canvas:GetChildren() or {} ) do
+			if option.SetFont then option:SetFont( "mc_hud_small" ) end
+			if option.SetTextColor then option:SetTextColor( CREATIVE_UI.text ) end
+			if option.SetContentAlignment then option:SetContentAlignment( 4 ) end
+			if option.SetTextInset then option:SetTextInset( 12, 0 ) end
+			if option.SetTall then option:SetTall( 30 ) end
+			option.Paint = function( item, w, h )
+				local selected = tostring( item:GetText() ) == tostring( s:GetValue() )
+				local color = selected and Color( 76, 82, 70, 255 )
+					or ( item:IsHovered() and CREATIVE_UI.controlHover or Color( 24, 27, 32, 255 ) )
+				surface.SetDrawColor( color )
+				surface.DrawRect( 1, 0, w - 2, h )
+				if selected then
+					surface.SetDrawColor( CREATIVE_UI.accent )
+					surface.DrawRect( 1, 0, 3, h )
+				end
+				return false
+			end
+		end
+	end
+end
+
+local function creativeBlockStateSchema( id )
 	local b = MC.Blocks[id]
-	local rule = b and b.orient and MC.OrientRules and MC.OrientRules[b.orient] or nil
-	return b, rule, rule and rule.order or nil
+	local schema = MC.BlockStateSchemas and MC.BlockStateSchemas[id] or nil
+	return b, schema
 end
 
 local function positionCreativeStateFrame( frame, parent )
@@ -1071,14 +1215,17 @@ local function positionCreativeStateFrame( frame, parent )
 	frame:SetPos( math.Clamp( x, 8, ScrW() - fw - 8 ), math.Clamp( py + 40, 8, ScrH() - fh - 8 ) )
 end
 
-function MC.OpenCreativeStatePicker( id, onSelect, parent, selectedOrient )
-	local b, _, order = creativeBlockStateRule( id )
-	if not b or type( order ) ~= "table" or #order == 0 then return false end
+function MC.OpenCreativeStatePicker( id, onSelect, parent, selectedStateId )
+	local b, schema = creativeBlockStateSchema( id )
+	if not b or not schema or type( schema.properties ) ~= "table" or #schema.properties == 0 then return false end
+	if not selectedStateId or not MC.IsValidBlockState( selectedStateId ) or MC.BlockTypeForState( selectedStateId ) ~= id then
+		selectedStateId = schema.defaultStateId
+	end
 	if IsValid( MC.CreativeStateFrame ) then MC.CreativeStateFrame:Remove() end
 
 	local fr = vgui.Create( "DFrame" )
 	fr:SetTitle( L( "creative.state.title", "方块状态" ) .. " · " .. blockDisplayText( b ) )
-	fr:SetSize( 480, 620 )
+	fr:SetSize( 520, 620 )
 	positionCreativeStateFrame( fr, parent )
 	fr:MakePopup()
 	fr:SetKeyboardInputEnabled( true )
@@ -1090,19 +1237,34 @@ function MC.OpenCreativeStatePicker( id, onSelect, parent, selectedOrient )
 		if MC.CreativeStateFrame == fr then MC.CreativeStateFrame = nil end
 	end
 	MC.CreativeStateFrame = fr
+	local propertyControls = {}
+	local function propertyDisplayValue( propertyName )
+		local value = MC.GetStateProperty( selectedStateId, propertyName )
+		if value == nil then return "" end
+		return tostring( value )
+	end
+	local function refreshPropertyControls()
+		for propertyName, combo in pairs( propertyControls ) do
+			if IsValid( combo ) then
+				combo:SetValue( propertyDisplayValue( propertyName ) )
+			end
+		end
+	end
 
 	local preview = vgui.Create( "DPanel", fr )
 	preview:Dock( TOP )
 	preview:DockMargin( 8, 8, 8, 6 )
-	preview:SetTall( 126 )
+	preview:SetTall( 156 )
 	preview.Paint = function( _, w, h )
 		draw.RoundedBox( 5, 0, 0, w, h, CREATIVE_UI.panel )
-		draw.RoundedBox( 4, 5, 5, 116, h - 10, CREATIVE_UI.panelInner )
-		local orient = selectedOrient ~= nil and selectedOrient or MC.DefaultOrient( id )
-		MC.DrawMinecraftBlockIcon( id, 13, 11, 100, 100, orient, true )
-		local state = selectedOrient ~= nil and MC.BlockStateText( id, selectedOrient ) or L( "creative.state.auto", "自动放置" )
-		draw.SimpleText( blockDisplayText( b ), "mc_hud", 134, 18, CREATIVE_UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
-		draw.DrawText( string.Replace( state, ",", "\n" ), "mc_hud_small", 134, 48, CREATIVE_UI.textDim, TEXT_ALIGN_LEFT )
+		draw.RoundedBox( 4, 5, 5, 136, h - 10, CREATIVE_UI.panelInner )
+		local _, exact = MC.DrawMinecraftBlockStateIcon( selectedStateId, 15, 17, 116, 116, true )
+		local state = MC.FormatBlockState( selectedStateId ) or "?"
+		draw.SimpleText( blockDisplayText( b ), "mc_hud", 154, 16, CREATIVE_UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
+		draw.DrawText( state, "mc_hud_fit_16", 154, 46, CREATIVE_UI.textDim, TEXT_ALIGN_LEFT )
+		if exact == false then
+			draw.SimpleText( L( "creative.state.approx_preview", "预览使用兼容模型，状态数据仍完整" ), "mc_hud_small", 154, h - 28, Color( 230, 190, 100 ), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
+		end
 	end
 
 	local automatic = vgui.Create( "DButton", fr )
@@ -1111,9 +1273,18 @@ function MC.OpenCreativeStatePicker( id, onSelect, parent, selectedOrient )
 	automatic:SetTall( 34 )
 	MC.StyleCreativePagerButton( automatic, L( "creative.state.auto", "自动放置" ) )
 	automatic.DoClick = function()
-		selectedOrient = nil
 		onSelect( id, nil )
-		preview:InvalidateLayout( true )
+	end
+
+	local explicitDefault = vgui.Create( "DButton", fr )
+	explicitDefault:Dock( TOP )
+	explicitDefault:DockMargin( 8, 0, 8, 6 )
+	explicitDefault:SetTall( 30 )
+	MC.StyleCreativePagerButton( explicitDefault, L( "creative.state.explicit_default", "显式默认状态" ) )
+	explicitDefault.DoClick = function()
+		selectedStateId = schema.defaultStateId
+		onSelect( id, selectedStateId )
+		refreshPropertyControls()
 	end
 
 	local scroll = vgui.Create( "DScrollPanel", fr )
@@ -1127,35 +1298,39 @@ function MC.OpenCreativeStatePicker( id, onSelect, parent, selectedOrient )
 		if IsValid( scrollBar.btnGrip ) then scrollBar.btnGrip.Paint = function() end end
 	end
 
-	local layout = vgui.Create( "DIconLayout", scroll )
-	layout:Dock( FILL )
-	layout:SetSpaceX( 8 )
-	layout:SetSpaceY( 8 )
-
-	for _, value in ipairs( order ) do
-		local orient = MC.NormalizeOrient( id, value )
-		local stateText = MC.BlockStateText( id, orient )
-		if stateText == "" then stateText = tostring( orient ) end
-		local btn = layout:Add( "DButton" )
-		btn:SetSize( 216, 176 )
-		btn:SetText( "" )
-		btn:SetTooltip( stateText )
-		btn.Paint = function( s, w, h )
-			local active = selectedOrient ~= nil and MC.NormalizeOrient( id, selectedOrient ) == orient
-			local bg = active and Color( 76, 82, 70 ) or ( s:IsHovered() and CREATIVE_UI.controlHover or CREATIVE_UI.control )
-			draw.RoundedBox( 5, 0, 0, w, h, bg )
-			draw.RoundedBox( 4, 4, 4, w - 8, h - 8, CREATIVE_UI.panelInner )
-			if active then
-				surface.SetDrawColor( CREATIVE_UI.accent )
-				surface.DrawOutlinedRect( 1, 1, w - 2, h - 2, 2 )
-			end
-			MC.DrawMinecraftBlockIcon( id, w * 0.5 - 48, 8, 96, 96, orient, true )
-			draw.DrawText( string.Replace( stateText, ",", "\n" ), "mc_hud_fit_16", w * 0.5, 108, CREATIVE_UI.text, TEXT_ALIGN_CENTER )
+	for _, property in ipairs( schema.properties ) do
+		local row = vgui.Create( "DPanel", scroll )
+		row:Dock( TOP )
+		row:DockMargin( 0, 0, 0, 6 )
+		row:SetTall( 54 )
+		row.Paint = function( _, w, h )
+			draw.RoundedBox( 4, 0, 0, w, h, CREATIVE_UI.panel )
 		end
-		btn.DoClick = function()
-			selectedOrient = orient
-			onSelect( id, orient )
-			preview:InvalidateLayout( true )
+
+		local label = vgui.Create( "DLabel", row )
+		label:Dock( LEFT )
+		label:DockMargin( 12, 0, 8, 0 )
+		label:SetWide( 170 )
+		label:SetContentAlignment( 4 )
+		label:SetTextColor( CREATIVE_UI.text )
+		label:SetFont( "mc_hud" )
+		label:SetText( property.name )
+
+		local combo = vgui.Create( "DComboBox", row )
+		combo:Dock( FILL )
+		combo:DockMargin( 0, 9, 10, 9 )
+		combo:SetSortItems( false )
+		MC.StyleCreativeStateComboBox( combo )
+		for _, value in ipairs( property.canonicalValues or {} ) do combo:AddChoice( value, value ) end
+		combo:SetValue( propertyDisplayValue( property.name ) )
+		propertyControls[property.name] = combo
+		combo.OnSelect = function( _, _, text, data )
+			local value = data ~= nil and data or text
+			local nextState = MC.StateWith( selectedStateId, property.name, value )
+			if not nextState then return end
+			selectedStateId = nextState
+			onSelect( id, selectedStateId )
+			refreshPropertyControls()
 		end
 	end
 
@@ -1212,13 +1387,16 @@ local function createCreativeHotbarPanel( parent )
 			local hotbar = MC.EnsureCreativeHotbar()
 			local selected = hotbar.selected == i
 			local id = normalizeHotbarID( hotbar.slots[i] )
+			local stateId = canonicalStateForBlock( id, hotbar.states and hotbar.states[i] )
 			local b = id and MC.Blocks[id] or nil
 			local bg = selected and Color( 236, 230, 190, 245 ) or ( s:IsHovered() and Color( 80, 92, 112 ) or Color( 44, 48, 55 ) )
 			draw.RoundedBox( 4, 0, 0, w, h, bg )
 			draw.RoundedBox( 3, 4, 4, w - 8, h - 8, selected and Color( 58, 60, 64 ) or Color( 34, 37, 43 ) )
 			draw.SimpleText( tostring( i ), "mc_hud_small", 8, 6, selected and Color( 255, 244, 170 ) or Color( 205, 212, 224 ), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 			if id then
-				MC.DrawMinecraftBlockIcon( id, w * 0.5 - 22, 11, 44, 44 )
+				if not stateId or not MC.DrawMinecraftBlockStateIcon( stateId, w * 0.5 - 22, 11, 44, 44 ) then
+					MC.DrawMinecraftBlockIcon( id, w * 0.5 - 22, 11, 44, 44 )
+				end
 			end
 			if b then
 				MC.DrawFittedText( blockDisplayText( b ), "mc_hud_small", { "mc_hud_fit_16" }, w * 0.5, h - 13, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, w - 8 )
@@ -1247,9 +1425,9 @@ function MC.OpenCreativeInventory( onSelect, opts )
 	local cachedState = loadCreativeInventoryState()
 	local closeOnSelect = opts.closeOnSelect
 	if closeOnSelect == nil then closeOnSelect = true end
-	onSelect = onSelect or function( id, orient )
-		if orient ~= nil then
-			MC.SetCreativeHotbarSlotState( MC.GetCreativeHotbarSelectedSlot(), id, orient )
+	onSelect = onSelect or function( id, stateId )
+		if stateId ~= nil then
+			MC.SetCreativeHotbarSlotStateID( MC.GetCreativeHotbarSelectedSlot(), id, stateId )
 		else
 			MC.SetCreativeHotbarSlot( MC.GetCreativeHotbarSelectedSlot(), id )
 		end
@@ -1369,11 +1547,11 @@ function MC.OpenCreativeInventory( onSelect, opts )
 	end
 
 	local function selectCreativeBlock( id )
-		local orient = currentHotbarSelectedID() == id and currentHotbarSelectedOrient() or nil
-		onSelect( id, orient )
-		local _, _, order = creativeBlockStateRule( id )
-		if type( order ) == "table" and #order > 0 then
-			MC.OpenCreativeStatePicker( id, onSelect, fr, orient )
+		local stateId = currentHotbarSelectedID() == id and currentHotbarSelectedStateID() or nil
+		onSelect( id, stateId )
+		local _, schema = creativeBlockStateSchema( id )
+		if schema and type( schema.properties ) == "table" and #schema.properties > 0 then
+			MC.OpenCreativeStatePicker( id, onSelect, fr, stateId )
 			return true
 		end
 		if IsValid( MC.CreativeStateFrame ) then MC.CreativeStateFrame:Remove() end

@@ -472,6 +472,7 @@ function MC.TraceBlockRay( startPos, dir, maxDist )
 					HitMCBlock = true,
 					Block = id,
 					Orient = orient,
+					StateId = MC.GetBlockState( bx, by, bz ),
 					bx = bx, by = by, bz = bz,
 					HitPos = startPos + dir * hit.dist,
 					HitNormal = hit.normal,
@@ -663,6 +664,8 @@ function MC.ResetChunkStateStorage( chunk )
 	chunk.blocks = {}
 	chunk.orients = {}
 	chunk.blockEntities = nil
+	chunk.opaqueBlockEntities = nil
+	chunk.opaqueStates = nil
 	chunk.count = 0
 	return true
 end
@@ -713,6 +716,13 @@ function MC.SetChunkLocalStateRaw( chunk, li, stateId )
 			chunk.blockEntities[li] = nil
 			if next( chunk.blockEntities ) == nil then chunk.blockEntities = nil end
 		end
+	end
+	-- Opaque imported Block Entities are archive-only and cannot participate in
+	-- lifecycle compatibility checks. Any gameplay state mutation invalidates
+	-- the archived attachment at that cell instead of risking an orphan record.
+	if chunk.opaqueBlockEntities and chunk.opaqueBlockEntities[li] then
+		chunk.opaqueBlockEntities[li] = nil
+		if next( chunk.opaqueBlockEntities ) == nil then chunk.opaqueBlockEntities = nil end
 	end
 	return true, oldStateId, id, orient or 0
 end

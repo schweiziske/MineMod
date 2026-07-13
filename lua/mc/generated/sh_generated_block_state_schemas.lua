@@ -4,6 +4,7 @@ MC.GeneratedBlockStateSchemas={}
 MC.GeneratedStateMetadata={
 	minecraftId="26.2-pre-4",
 	worldVersion=4897,
+	seriesId="main",
 	generatorVersion=1,
 	schemaHash="f5e75267ed182adb4e65c936e8473c2f22ac1c72ca0642e93752fa9d6bd87e7d",
 	reportSha256="dec22eb9547b0bbea396cbf35569f7ec81b7be662775ce03dc2236227473af7b",

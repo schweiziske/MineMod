@@ -57,13 +57,31 @@ local function selectedID( ply )
 end
 
 local function selectedOrient( ply, id )
-	if CLIENT and ply == LocalPlayer() and MC.GetCreativeHotbarSelectedOrient then
-		return MC.GetCreativeHotbarSelectedOrient()
+	local stateId
+	if CLIENT and ply == LocalPlayer() and MC.GetCreativeHotbarSelectedStateID then
+		stateId = MC.GetCreativeHotbarSelectedStateID()
+	elseif IsValid( ply ) and ply:GetNWInt( "mc_block", -1 ) == id then
+		local selected = ply:GetNWInt( "mc_block_state", -1 )
+		stateId = selected >= 0 and selected or nil
 	end
-	if not IsValid( ply ) or ply:GetNWInt( "mc_block", -1 ) ~= id then return nil end
-	local orient = ply:GetNWInt( "mc_block_orient", -1 )
-	if orient < 0 then return nil end
-	return MC.NormalizeOrient and MC.NormalizeOrient( id, orient ) or orient
+	if stateId and MC.LegacyFromState then
+		local stateBlockId, orient = MC.LegacyFromState( stateId )
+		if stateBlockId == id then return orient end
+	end
+	return nil
+end
+
+local function selectedStateId( ply, id )
+	local stateId
+	if CLIENT and ply == LocalPlayer() and MC.GetCreativeHotbarSelectedStateID then
+		stateId = MC.GetCreativeHotbarSelectedStateID()
+	elseif IsValid( ply ) and ply:GetNWInt( "mc_block", -1 ) == id then
+		local selected = ply:GetNWInt( "mc_block_state", -1 )
+		stateId = selected >= 0 and selected or nil
+	end
+	if not stateId or not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return nil end
+	if MC.BlockTypeForState( stateId ) ~= id then return nil end
+	return stateId
 end
 
 local function placeCell( tr )
@@ -98,9 +116,17 @@ local function placeTarget( ply, aim, fallbackTrace, id, avoidUseBlocks )
 	end
 
 	tr.MCBlockX, tr.MCBlockY, tr.MCBlockZ = bx, by, bz
-	local orient = selectedOrient( ply, id )
-	if orient == nil then orient = MC.OrientForPlacement( ply, tr, id ) end
-	return bx, by, bz, orient
+	local stateId = selectedStateId( ply, id )
+	local orient
+	if stateId then
+		local _, projectedOrient = MC.LegacyFromState( stateId )
+		orient = projectedOrient or MC.DefaultOrient( id )
+	else
+		orient = MC.OrientForPlacement( ply, tr, id )
+		stateId = MC.StateFromLegacy( id, orient )
+	end
+	if not stateId then return nil end
+	return bx, by, bz, stateId, orient
 end
 
 local function breakTarget( ply, aim, fallbackTrace )
@@ -172,27 +198,28 @@ function SWEP:SecondaryAttack()
 		if MC.SV.Use( owner, ux, uy, uz ) then return end
 
 		local id = selectedID( owner )
-		local bx, by, bz, orient = placeTarget( owner, aim, tr, id )
+		local bx, by, bz, stateId = placeTarget( owner, aim, tr, id )
 		if not bx then return end
-		if MC.SV.Place( owner, bx, by, bz, id, orient ) then
+		if MC.SV.PlaceState( owner, bx, by, bz, stateId ) then
 			//self:EmitSound( "buttons/button14.wav", 60, 150, 0.25 )
 			net.Start( "mc_creative_place_anim" )
 				net.WriteInt( bx, MC.Net.COORD_BITS )
 				net.WriteInt( by, MC.Net.COORD_BITS )
 				net.WriteInt( bz, MC.Net.COORD_BITS )
 			net.Send( owner )
-		elseif MC.SV.SyncPlacementPlan then
-			MC.SV.SyncPlacementPlan( owner, bx, by, bz, id, orient )
+		elseif MC.SV.SyncPlacementStatePlan then
+			MC.SV.SyncPlacementStatePlan( owner, bx, by, bz, stateId )
 		elseif MC.SV.SyncCell then
 			MC.SV.SyncCell( owner, bx, by, bz )
 		end
 	elseif CLIENT and not game.SinglePlayer() and IsFirstTimePredicted() and owner == LocalPlayer() then
 		local id = selectedID( owner )
-		if MC.CreativeHotbarSelectionSynced and not MC.CreativeHotbarSelectionSynced( owner, id ) then return end
-		local bx, by, bz, orient = placeTarget( owner, aim, owner:GetEyeTrace(), id, true )
-		local plan = bx and MC.BuildPlacementPlan and MC.BuildPlacementPlan( bx, by, bz, id, orient )
-		if plan and MC.CanPreviewPlacePlan and MC.CanPreviewPlacePlan( owner, plan ) and MC.PredictSetBlock then
-			if MC.PredictSetBlock( bx, by, bz, id, orient ) then
+		local selectedState = selectedStateId( owner, id )
+		if MC.CreativeHotbarSelectionSynced and not MC.CreativeHotbarSelectionSynced( owner, id, selectedState ) then return end
+		local bx, by, bz, stateId = placeTarget( owner, aim, owner:GetEyeTrace(), id, true )
+		local plan = bx and MC.BuildPlacementStatePlan and MC.BuildPlacementStatePlan( bx, by, bz, stateId )
+		if plan and MC.CanPreviewPlacePlan and MC.CanPreviewPlacePlan( owner, plan ) and MC.PredictSetBlockState then
+			if MC.PredictSetBlockState( bx, by, bz, stateId ) then
 				self:StartCreativePlaceAnimation( bx, by, bz )
 			end
 		end
@@ -202,9 +229,9 @@ end
 function SWEP:Reload()
 	if CLIENT then
 		if IsValid( MC.CreativeFrame ) and MC.CreativeFrame:IsVisible() then return end
-		MC.OpenCreativeInventory( function( id, orient )
-			if orient ~= nil and MC.SetCreativeHotbarSlotState then
-				MC.SetCreativeHotbarSlotState( MC.GetCreativeHotbarSelectedSlot(), id, orient )
+		MC.OpenCreativeInventory( function( id, stateId )
+			if stateId ~= nil and MC.SetCreativeHotbarSlotStateID then
+				MC.SetCreativeHotbarSlotStateID( MC.GetCreativeHotbarSelectedSlot(), id, stateId )
 			else
 				MC.SetCreativeHotbarSlot( MC.GetCreativeHotbarSelectedSlot(), id )
 			end
@@ -498,7 +525,7 @@ if CLIENT then
 		local brightness = heldBlockBrightnessAt( pos )
 
 		render.OverrideDepthEnable( true, false )
-			MC.DrawCreativeHeldBlock( id, creativeHeldOrient( id ), pos, ang, scale, brightness )
+			MC.DrawCreativeHeldBlock( id, selectedOrient( ply, id ) or creativeHeldOrient( id ), pos, ang, scale, brightness )
 		render.OverrideDepthEnable( false, false )
 	end
 
@@ -532,7 +559,7 @@ if CLIENT then
 		if not MC.IsValidBlock( id ) then return end
 
 		local pos, ang, scale = thirdPersonHeldPose( ply )
-		MC.DrawCreativeHeldBlock( id, creativeHeldOrient( id ), pos, ang, scale, heldBlockBrightnessAt( pos ) )
+		MC.DrawCreativeHeldBlock( id, selectedOrient( ply, id ) or creativeHeldOrient( id ), pos, ang, scale, heldBlockBrightnessAt( pos ) )
 	end
 
 	function SWEP:PreDrawViewModel()
@@ -574,8 +601,13 @@ if CLIENT then
 
 		local sw, sh = ScrW(), ScrH()
 		local tr = aimedBlock( ply ) or ply:GetEyeTrace()
-		local orient = tr.Hit and MC.OrientForPlacement( ply, tr, id ) or MC.DefaultOrient( id )
-		local state = MC.BlockStateText( id, orient )
+		local stateId = selectedStateId( ply, id )
+		if not stateId then
+			local orient = tr.Hit and MC.OrientForPlacement( ply, tr, id ) or MC.DefaultOrient( id )
+			stateId = MC.StateFromLegacy( id, orient )
+		end
+		local stateSpec = stateId and MC.FormatBlockState( stateId ) or ""
+		local state = string.match( stateSpec, "%[(.*)%]$" ) or ""
 		local w, h = 64, 64
 		local slotSize = 54
 		local hotbarY = sh - slotSize - 30
@@ -588,7 +620,9 @@ if CLIENT then
 		local maxTextW = panelW - ( tx - px ) - 18
 
 		draw.RoundedBox( 6, px, py, panelW, panelH, Color( 0, 0, 0, 175 ) )
-		MC.DrawMinecraftBlockIcon( id, x, y, w, h )
+		if not stateId or not MC.DrawMinecraftBlockStateIcon or not MC.DrawMinecraftBlockStateIcon( stateId, x, y, w, h ) then
+			MC.DrawMinecraftBlockIcon( id, x, y, w, h )
+		end
 		MC.DrawFittedText( blockDisplayText( b ), "mc_hud_big", { "mc_hud_fit_24", "mc_hud_fit_20", "mc_hud_fit_16" }, tx, py + 22, color_white, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, maxTextW )
 		if state ~= "" then
 			draw.SimpleText( state, "mc_hud_small", tx, py + 58, Color( 210, 230, 255 ), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
