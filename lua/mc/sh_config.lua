@@ -47,67 +47,10 @@ MC.Atlas = {
 	MATERIAL_TRANSLUCENT = "mc/atlas_365_translucent",
 }
 
------------------------------------------------------------------- net strings
-if SERVER then
-	for _, name in ipairs( {
-		"mc_full",
-		"mc_full_begin",
-		"mc_full_part",
-		"mc_full_end",
-		"mc_full_ack",
-		"mc_snapshot_begin",
-		"mc_snapshot_part",
-		"mc_snapshot_ack",
-		"mc_http_manifest",
-		"mc_http_chunk",
-		"mc_http_chunk_bulk",
-		"mc_http_failed",
-		"mc_unload_chunk",
-		"mc_set",
-		"mc_set_bulk",
-		"mc_set_bulk_fast",
-		"mc_reliable_ack",
-		"mc_fx",
-		"mc_creative_place_anim",
-		"mc_creative_break_anim",
-		"mc_clear",
-		"mc_collision_debug_req",
-		"mc_collision_debug",
-		"mc_save_list_req",
-		"mc_save_list_data",
-		"mc_save_action",
-		"mc_save_cover_begin",
-		"mc_save_cover_part",
-		"mc_save_cover_ack",
-		"mc_save_cover_req",
-		"mc_save_cover_download_begin",
-		"mc_save_cover_download_part",
-		"mc_preset_list_req",
-		"mc_preset_list_data",
-		"mc_preset_save",
-		"mc_preset_load_req",
-		"mc_preset_data",
-		"mc_preset_data_part",
-		"mc_preset_place",
-		"mc_preset_cover_begin",
-		"mc_preset_cover_part",
-		"mc_preset_cover_ack",
-		"mc_preset_cover_req",
-		"mc_preset_cover_download_begin",
-		"mc_preset_cover_download_part",
-	} ) do
-		util.AddNetworkString( name )
-	end
-end
-
--- Bit widths used by the net protocol (shared so both ends agree).
-MC.Net = {
-	COORD_BITS = 20, -- signed block coord (+-524288 blocks; far beyond any map)
-	LOCAL_BITS = 13, -- local index 0..8191 (16*16*32-1)
-	ID_BITS    = 16, -- block id 0..65535
-	ORIENT_BITS = 6, -- block state bits; doors need facing + half + open + hinge + powered
-	COUNT_BITS = 14, -- blocks per chunk section 0..8192
-}
+------------------------------------------------------------------ net sizing
+-- Protocol constants and network strings live in state/sh_network_protocol.lua.
+-- It is loaded before this file; the legacy fields used below remain available
+-- while the state-aware transport is introduced.
 
 local SYNC_MESSAGE_OVERHEAD_BYTES = 64
 local SYNC_CELL_BITS = MC.Net.LOCAL_BITS + MC.Net.ID_BITS + MC.Net.ORIENT_BITS

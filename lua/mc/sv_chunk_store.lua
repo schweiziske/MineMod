@@ -155,20 +155,17 @@ local function loadPart( partNo )
 	return data, nil
 end
 
-local function paletteEntry( cache, index )
+local function paletteState( cache, index )
 	index = math.floor( tonumber( index ) or -1 )
-	if index < 0 then return 0, 0 end
+	if index < 0 then return nil end
 	local spec = Store.Palette[index + 1]
-	if not spec then return 0, 0 end
-
-	local cached = cache[spec]
-	if cached then return cached[1], cached[2] end
-
-	local id, orient = MC.ParseBlockSpec( spec )
-	id = id or 0
-	orient = MC.NormalizeOrient( id, orient )
-	cache[spec] = { id, orient }
-	return id, orient
+	if not isstring( spec ) then return nil end
+	cache._states = cache._states or {}
+	local cached = cache._states[spec]
+	if cached ~= nil then return cached ~= false and cached or nil end
+	local stateId = MC.ParseBlockState( spec )
+	cache._states[spec] = stateId or false
+	return stateId
 end
 
 local function decodeLocalWithGeometry( li, chunkSize, height )
@@ -291,24 +288,12 @@ function Store.LoadLazyManifest( manifest, manifestPath )
 	return true
 end
 
-local function applyCellToChunk( chunk, li, id, orient )
+local function applyCellToChunk( chunk, li, stateId )
 	li = math.floor( tonumber( li ) or -1 )
-	id = math.floor( tonumber( id ) or 0 )
-	orient = math.floor( tonumber( orient ) or 0 )
+	stateId = math.floor( tonumber( stateId ) or -1 )
 	if not chunk or not MC.LocalIndexInRange( li ) then return end
-	if id == 0 then
-		if chunk.blocks[li] ~= nil then
-			chunk.blocks[li] = nil
-			if chunk.orients then chunk.orients[li] = nil end
-			chunk.count = math.max( 0, ( chunk.count or 0 ) - 1 )
-		end
-		return
-	end
-	if not MC.IsValidBlock( id ) then return end
-	if chunk.blocks[li] == nil then chunk.count = ( chunk.count or 0 ) + 1 end
-	chunk.blocks[li] = id
-	chunk.orients = chunk.orients or {}
-	chunk.orients[li] = MC.NormalizeOrient( id, orient )
+	if not MC.IsValidBlockState( stateId ) then return end
+	return MC.SetChunkLocalStateRaw( chunk, li, stateId )
 end
 
 function Store.ApplyOverlayToChunk( chunk )
@@ -318,7 +303,13 @@ function Store.ApplyOverlayToChunk( chunk )
 	if not istable( edits ) then return chunk end
 	for li, edit in pairs( edits ) do
 		if istable( edit ) then
-			applyCellToChunk( chunk, li, edit.id, edit.orient )
+			local stateId
+			if isstring( edit.state ) then
+				stateId = MC.ParseBlockState( edit.state )
+			else
+				stateId = MC.StateFromLegacy( edit.id, edit.orient )
+			end
+			if stateId then applyCellToChunk( chunk, li, stateId ) end
 		end
 	end
 	return chunk
@@ -344,12 +335,11 @@ local function loadBaseChunkIntoWorld( key, record )
 		local cx, cy, cz, nli = MC.CellToChunk( bx, by, bz )
 		local targetKey = MC.ChunkKey( cx, cy, cz )
 		local chunk = MC.EnsureChunk( cx, cy, cz )
-		local id, orient = paletteEntry( cache, paletteIndex )
-		if MC.LocalIndexInRange( nli ) and MC.IsValidBlock( id ) and chunk.blocks[nli] == nil then
-			chunk.blocks[nli] = id
-			chunk.orients[nli] = MC.NormalizeOrient( id, orient )
-			chunk.count = chunk.count + 1
-			touched[targetKey] = chunk
+		local stateId = paletteState( cache, paletteIndex )
+		local existingState = MC.GetBlockState( bx, by, bz )
+		if MC.LocalIndexInRange( nli ) and stateId and stateId ~= 0 and existingState == 0 then
+			local changed = MC.SetChunkLocalStateRaw( chunk, nli, stateId )
+			if changed then touched[targetKey] = chunk end
 		end
 	end
 
@@ -365,6 +355,7 @@ local function loadBaseChunkIntoWorld( key, record )
 
 	for touchedKey, chunk in pairs( touched ) do
 		Store.ApplyOverlayToChunk( chunk )
+		MC.FinalizeChunkStateStorage( chunk )
 		if chunk.count <= 0 then
 			MC.World[touchedKey] = nil
 		end
@@ -410,6 +401,7 @@ function Store.HydrateChunkNow( key, priority )
 	if not chunk and Store.EditChunks and Store.EditChunks[key] then
 		chunk = ensureChunkForKey( key )
 		Store.ApplyOverlayToChunk( chunk )
+		if chunk then MC.FinalizeChunkStateStorage( chunk ) end
 		if chunk and chunk.count <= 0 then
 			MC.World[MC.CanonicalChunkKey( key )] = nil
 			chunk = nil
@@ -452,7 +444,7 @@ function Store.TickChunkLoads()
 	if loaded > 0 then SV.StreamInterestDirty = true end
 end
 
-function Store.RecordEdit( bx, by, bz, id, orient )
+function Store.RecordEdit( bx, by, bz, id, orient, stateId )
 	if not Store.IsLazyWorld() then return end
 	local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
 	local key = tostring( MC.ChunkKey( cx, cy, cz ) )
@@ -461,15 +453,15 @@ function Store.RecordEdit( bx, by, bz, id, orient )
 		edits = {}
 		Store.EditChunks[key] = edits
 	end
-	edits[tostring( li )] = {
-		id = math.floor( tonumber( id ) or 0 ),
-		orient = math.floor( tonumber( orient ) or 0 ),
-	}
+	stateId = stateId or MC.StateFromLegacy( id, orient )
+	local spec = stateId and MC.FormatBlockState( stateId ) or nil
+	if not spec then return end
+	edits[tostring( li )] = { state = spec }
 end
 
 function Store.SaveOverlay()
 	return {
-		v = 1,
+		v = 2,
 		base = Store.ManifestPath,
 		blockCount = math.max( 0, math.floor( tonumber( SV.BlockCount ) or 0 ) ),
 		edits = Store.EditChunks or {},

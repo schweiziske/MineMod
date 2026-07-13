@@ -10,12 +10,14 @@
 MC = MC or {}
 
 local SHARED = {
+	"mc/state/sh_network_protocol.lua",
 	"mc/sh_config.lua",
 	"mc/sh_config_ui.lua",
 	"mc/sh_daycycle.lua",
 	"mc/sh_i18n.lua",
 	"mc/generated/sh_generated_tiles.lua",
 	"mc/generated/sh_generated_blocks.lua",
+	"mc/generated/sh_generated_block_state_schemas.lua",
 	"mc/generated/sh_generated_block_connections.lua",
 	"mc/generated/sh_generated_block_properties.lua",
 	"mc/generated/sh_generated_block_light.lua",
@@ -30,14 +32,20 @@ local SHARED = {
 	"mc/functional/sh_liquids.lua",
 	"mc/custom/sh_custom_blocks.lua",
 	"mc/sh_blocks.lua",
+	"mc/sh_block_states.lua",
+	"mc/block_entity/sh_registry.lua",
 	"mc/block/sh_stairs.lua",
 	"mc/sh_presets.lua",
 	"mc/sh_player.lua",
+	"mc/state/sh_section.lua",
 	"mc/sh_voxel.lua",
 	"mc/sh_multiblock.lua",
 }
 local SERVER_FILES = {
 	"mc/sv_world.lua",
+	"mc/state/sv_save_codec.lua",
+	"mc/state/sv_network_transport.lua",
+	"mc/state/sv_block_transaction.lua",
 	"mc/sv_config_ui.lua",
 	"mc/sv_commands.lua",
 	"mc/sv_collision_carriers.lua",
@@ -80,6 +88,7 @@ local CLIENT_FILES = {
 	"mc/cl_presets.lua",
 	"mc/cl_effects.lua",
 	"mc/cl_net.lua",
+	"mc/state/cl_network_transport.lua",
 	"mc/cl_commands.lua",
 	"mc/cl_debug.lua",
 	"mc/cl_light_bench.lua",

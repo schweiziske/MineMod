@@ -32,6 +32,7 @@ local SYNC_TIMER_INTERVAL = 0.05
 local INTEREST_TIMER_INTERVAL = 0.25
 
 SV.BlockCount = SV.BlockCount or 0
+SV.BlockRevision = SV.BlockRevision or 0 -- one increment per committed authoritative transaction
 SV.PhysDirty  = SV.PhysDirty or {}   -- chunkKey -> due time (collision needs rebuild)
 SV.PhysDirtyPriority = SV.PhysDirtyPriority or {} -- player edits should not wait behind bulk rebuilds
 SV.PhysDirtyBulk = SV.PhysDirtyBulk or {} -- chunkKey -> true when explosion/preset collision rebuild is throttled
@@ -534,6 +535,10 @@ end
 -- rollback timer (the client's mc_set receiver overwrites the misprediction)
 function SV.SyncCell( ply, bx, by, bz )
 	if not IsValid( ply ) then return end
+	if SV.SendStateCorrection then
+		SV.SendStateCorrection( ply, bx, by, bz, MC.GetBlockState( bx, by, bz ), SV.BlockRevision )
+		return
+	end
 	net.Start( "mc_set" )
 		net.WriteInt( bx, Net.COORD_BITS )
 		net.WriteInt( by, Net.COORD_BITS )
@@ -552,9 +557,19 @@ function SV.SyncCells( ply, cells )
 		local bz = math.floor( tonumber( cell.bz ) or 0 )
 		changes[#changes + 1] = {
 			bx = bx, by = by, bz = bz,
+			stateId = MC.GetBlockState( bx, by, bz ),
 			id = MC.GetBlock( bx, by, bz ),
 			orient = MC.GetBlockOrient( bx, by, bz ) or 0,
 		}
+	end
+	if SV.SendStateCorrections then
+		SV.SendStateCorrections( ply, changes, SV.BlockRevision )
+		return
+	elseif SV.SendStateCorrection then
+		for _, change in ipairs( changes ) do
+			SV.SendStateCorrection( ply, change.bx, change.by, change.bz, change.stateId, SV.BlockRevision )
+		end
+		return
 	end
 	sendSetBulk( changes, ply )
 end
@@ -670,183 +685,42 @@ local function collectCellPhysDirty( dirty, immediateDirty, dirtyBounds, bx, by,
 	markNeighbour( bx, by - 1, bz )
 end
 
+local wouldTrapPlayer
+
 local function normalizeWriteOptions( options )
 	if istable( options ) then return options end
 	if options ~= nil then return { actor = options } end
 	return {}
 end
 
--- core mutation shared by Place/Break/fill/demo/public API.
--- This is still not a validation layer; callers decide whether player checks apply.
-local function apply( bx, by, bz, id, _, orient, actor, options )
-	options = options or {}
-	local old = MC.GetBlock( bx, by, bz )
-	local oldOrient = MC.GetBlockOrient( bx, by, bz )
-	orient = MC.NormalizeOrient( id, orient )
-	local chunk, created, emptied, changed = MC.SetBlockRaw( bx, by, bz, id, orient )
-	if not changed then return false end
-	local priorityPhys = options.priorityPhys
-	if priorityPhys == nil then priorityPhys = false end
-	local immediatePhys = options.immediatePhys == true
-	local dirty = {}
-	local immediateDirty = {}
-	local dirtyBounds = {}
-
-	local delta = 0
-	if old == 0 and id ~= 0 then
-		delta = 1
-	elseif old ~= 0 and id == 0 then
-		delta = -1
-	end
-	SV.BlockCount = math.max( 0, SV.BlockCount + delta )
-	if SV.ChunkStore and SV.ChunkStore.RecordEdit then
-		SV.ChunkStore.RecordEdit( bx, by, bz, id, orient )
-	end
-
-	if id ~= 0 then
-		SV.EnsureChunkEnt( chunk, false )
-		local key, bounds = MC.CellCollisionSubchunkBounds( bx, by, bz )
-		addDirtyBounds( dirtyBounds, key, bounds )
-		SV.MarkPhysDirty( chunk.key, priorityPhys, dirtyBounds[chunk.key] )
-		dirty[chunk.key] = true
-		immediateDirty[chunk.key] = dirtyBounds[chunk.key]
-	else
-		if emptied then
-			SV.PhysDirty[chunk.key] = nil
-			SV.PhysDirtyPriority[chunk.key] = nil
-			if IsValid( chunk.ent ) then chunk.ent:Remove() end
-		else
-			local key, bounds = MC.CellCollisionSubchunkBounds( bx, by, bz )
-			addDirtyBounds( dirtyBounds, key, bounds )
-			SV.MarkPhysDirty( chunk.key, priorityPhys, dirtyBounds[chunk.key] )
-			dirty[chunk.key] = true
-			immediateDirty[chunk.key] = dirtyBounds[chunk.key]
-		end
-	end
-	markNeighbourShapePhysDirty( bx, by, bz, priorityPhys, dirty )
-	if immediatePhys then flushPhysDirtyKeys( immediateDirty ) end
-
-	broadcastSet( bx, by, bz, id, orient )
-	local shouldFx = options.fx
-	if shouldFx == nil then shouldFx = IsValid( actor ) end
-	if shouldFx then
-		if old ~= 0 and id == 0 then
-			broadcastFx( 2, bx, by, bz, old, oldOrient )
-		elseif old == 0 and id ~= 0 then
-			broadcastFx( 1, bx, by, bz, id, orient )
-		end
-	end
-	if options.handlers ~= false then
-		if old ~= 0 then callBlockHandler( old, "OnBreak", actor, bx, by, bz, oldOrient ) end
-		if id ~= 0 then callBlockHandler( id, "OnPlace", actor, bx, by, bz, orient ) end
-	end
-	SV.Dirty = true
-	return true
-end
-
-local function applyCells( cells, actor, options )
-	options = options or {}
-	if not istable( cells ) or #cells == 0 then return 0 end
-
-	local priorityPhys = options.priorityPhys == true
-	local immediatePhys = options.immediatePhys == true
-	local shouldFx = options.fx
-	if shouldFx == nil then shouldFx = IsValid( actor ) end
-	local fxIndex = math.max( 1, math.floor( tonumber( options.fxIndex ) or 1 ) )
-
-	local changes = {}
-	local changedInfo = {}
-	local dirty = {}
-	local immediateDirty = {}
-	local dirtyBounds = {}
-	local delta = 0
-
-	for i, cell in ipairs( cells ) do
-		local bx = math.floor( tonumber( cell.bx ) or 0 )
-		local by = math.floor( tonumber( cell.by ) or 0 )
-		local bz = math.floor( tonumber( cell.bz ) or 0 )
-		local id = math.floor( tonumber( cell.id ) or 0 )
-		local orient = id ~= 0 and MC.NormalizeOrient( id, cell.orient ) or 0
-		local old = MC.GetBlock( bx, by, bz )
-		local oldOrient = MC.GetBlockOrient( bx, by, bz )
-
-		if old ~= id or ( id ~= 0 and oldOrient ~= orient ) then
-			local chunk, _, emptied, changed = MC.SetBlockRaw( bx, by, bz, id, orient )
-			if changed then
-				if old == 0 and id ~= 0 then
-					delta = delta + 1
-				elseif old ~= 0 and id == 0 then
-					delta = delta - 1
-				end
-				if SV.ChunkStore and SV.ChunkStore.RecordEdit then
-					SV.ChunkStore.RecordEdit( bx, by, bz, id, orient )
-				end
-				changes[#changes + 1] = { bx = bx, by = by, bz = bz, id = id, orient = orient }
-				changedInfo[#changedInfo + 1] = {
-					index = i,
-					bx = bx, by = by, bz = bz,
-					id = id, orient = orient,
-					old = old, oldOrient = oldOrient,
-				}
-				collectCellPhysDirty( dirty, immediateDirty, dirtyBounds, bx, by, bz )
-
-				if id ~= 0 and chunk then
-					SV.EnsureChunkEnt( chunk )
-				elseif emptied and chunk then
-					SV.PhysDirty[chunk.key] = nil
-					SV.PhysDirtyPriority[chunk.key] = nil
-					if SV.PhysDirtyBulk then SV.PhysDirtyBulk[chunk.key] = nil end
-					if IsValid( chunk.ent ) then chunk.ent:Remove() end
-				end
-			end
-		end
-	end
-
-	if #changes == 0 then return 0 end
-
-	SV.BlockCount = math.max( 0, SV.BlockCount + delta )
-	for key in pairs( dirty ) do
-		local c = MC.GetChunkByKey( key )
-		if c and c.count and c.count > 0 then
-			SV.EnsureChunkEnt( c )
-			if options.deferPhys then
-				SV.MarkPhysDirtyBulk( c.key )
-			else
-				SV.MarkPhysDirty( c.key, priorityPhys, dirtyBounds[key] )
-			end
-		end
-	end
-	if immediatePhys then flushPhysDirtyKeys( immediateDirty ) end
-
-	broadcastSetBulk( changes, {
-		explosionMeshThrottle = options.explosionMeshThrottle == true,
-		netPaced = options.netPaced == true,
-		cellsPerMessage = options.cellsPerMessage,
-	} )
-
-	local fxInfo = changedInfo[fxIndex] or changedInfo[1]
-	for _, info in ipairs( changedInfo ) do
-		if shouldFx and ( options.fxAll == true or info == fxInfo ) then
-			if info.old ~= 0 and info.id == 0 then
-				broadcastFx( 2, info.bx, info.by, info.bz, info.old, info.oldOrient )
-			elseif info.old == 0 and info.id ~= 0 then
-				broadcastFx( 1, info.bx, info.by, info.bz, info.id, info.orient )
-			end
-		end
-		if options.handlers ~= false then
-			if info.old ~= 0 then callBlockHandler( info.old, "OnBreak", actor, info.bx, info.by, info.bz, info.oldOrient ) end
-			if info.id ~= 0 then callBlockHandler( info.id, "OnPlace", actor, info.bx, info.by, info.bz, info.orient ) end
-		end
-	end
-
-	SV.Dirty = true
-	return #changes
+local function stateFromLegacyWrite( id, orient )
+	id = math.floor( tonumber( id ) or 0 )
+	if id ~= 0 and not MC.IsValidBlock( id ) then return nil, "invalid_block" end
+	local stateId, exact, err = MC.StateFromLegacy( id, id ~= 0 and MC.NormalizeOrient( id, orient ) or 0 )
+	if not stateId then return nil, err or "invalid_state" end
+	if exact ~= true then return nil, "state_not_legacy_projectable" end
+	return stateId
 end
 
 -- a placed block must not overlap a living player's hull (don't trap / suffocate them)
-local function wouldTrapPlayer( bx, by, bz, id, orient )
+wouldTrapPlayer = function( bx, by, bz, id, orient )
 	return MC.PlacementOverlapsPlayerHull( bx, by, bz, id, orient )
 end
+
+-- Narrow host surface consumed by state/sv_block_transaction.lua. Keeping
+-- these world-specific effects here lets the transaction module stay focused
+-- without turning every local networking/physics helper into a public API.
+SV.BlockTransactionHost = {
+	normalizeWriteOptions = normalizeWriteOptions,
+	stateFromLegacyWrite = stateFromLegacyWrite,
+	wouldTrapPlayer = function( ... ) return wouldTrapPlayer( ... ) end,
+	callBlockHandler = callBlockHandler,
+	collectCellPhysDirty = collectCellPhysDirty,
+	flushPhysDirtyKeys = flushPhysDirtyKeys,
+	broadcastSet = broadcastSet,
+	broadcastSetBulk = broadcastSetBulk,
+	broadcastFx = broadcastFx,
+}
 
 function SV.PlacementWouldTrapPlayer( bx, by, bz, id, orient )
 	return wouldTrapPlayer( bx, by, bz, id, orient )
@@ -902,17 +776,27 @@ function SV.Place( ply, bx, by, bz, id, orient )
 	if not MC.IsValidBlock( id ) then return false end
 	local plan = MC.BuildPlacementPlan and MC.BuildPlacementPlan( bx, by, bz, id, orient )
 	if not validatePlacementPlan( ply, plan ) then return false end
-	return applyCells( plan.cells, ply, {
+	local result = SV.ApplyBlockTransaction( plan.cells, {
+		actor = ply,
 		priorityPhys = true,
 		immediatePhys = true,
 		fxIndex = 1,
-	} ) > 0
+		netMode = "bulk",
+	} )
+	return result.ok == true and result.changed > 0
 end
 
 function SV.Break( ply, bx, by, bz )
 	local plan = MC.BuildBreakPlan and MC.BuildBreakPlan( bx, by, bz )
 	if not validateBreakPlan( ply, plan ) then return false end
-	return applyCells( plan.cells, ply, { priorityPhys = true, immediatePhys = true, fxIndex = 1 } ) > 0
+	local result = SV.ApplyBlockTransaction( plan.cells, {
+		actor = ply,
+		priorityPhys = true,
+		immediatePhys = true,
+		fxIndex = 1,
+		netMode = "bulk",
+	} )
+	return result.ok == true and result.changed > 0
 end
 
 function SV.SyncPlacementPlan( ply, bx, by, bz, id, orient )
@@ -933,65 +817,44 @@ function SV.SyncBreakPlan( ply, bx, by, bz )
 	end
 end
 
-function SV.SetBlock( bx, by, bz, id, orient, options )
+function SV.SetBlockState( bx, by, bz, stateId, options )
 	options = normalizeWriteOptions( options )
-	id = math.floor( tonumber( id ) or 0 )
-	if id ~= 0 and not MC.IsValidBlock( id ) then return false, "invalid_block" end
-	if id ~= 0 and options.preventPlayerOverlap and wouldTrapPlayer( bx, by, bz, id, orient ) then return false, "player_overlap" end
-	if id == 0 then orient = 0 end
+	local transactionOptions = {}
+	for key, value in pairs( options ) do transactionOptions[key] = value end
+	transactionOptions.fx = options.fx ~= false
+	transactionOptions.netMode = "single"
+	return SV.ApplyBlockTransaction( {
+		{ bx = bx, by = by, bz = bz, stateId = stateId, blockEntity = options.blockEntity },
+	}, transactionOptions )
+end
 
-	local changed = apply( bx, by, bz, id, 0, orient, options.actor, {
-		fx = options.fx ~= false,
-		handlers = options.handlers,
-		priorityPhys = options.priorityPhys,
-		immediatePhys = options.immediatePhys,
-	} )
-	if not changed then return false, "unchanged" end
+function SV.SetBlock( bx, by, bz, id, orient, options )
+	local stateId, err = stateFromLegacyWrite( id, orient )
+	if not stateId then return false, err end
+	local result = SV.SetBlockState( bx, by, bz, stateId, options )
+	if result.ok ~= true then return false, result.error end
+	if result.changed == 0 then return false, "unchanged" end
 	return true
 end
 
 function SV.SetBlockSpec( bx, by, bz, spec, options )
-	local id, orient, _, err = MC.ParseBlockSpec( spec )
-	if err or not id then return false, err or "invalid_block" end
-	return SV.SetBlock( bx, by, bz, id, orient, options )
+	local stateId, err = MC.ParseBlockState( spec )
+	if not stateId then return false, err or "invalid_state" end
+	local result = SV.SetBlockState( bx, by, bz, stateId, options )
+	if result.ok ~= true then return false, result.error end
+	if result.changed == 0 then return false, "unchanged" end
+	return true
 end
 
 function SV.SetBlocksBulk( cells, options )
 	options = normalizeWriteOptions( options )
 	if not istable( cells ) or #cells == 0 then return 0 end
-
-	local prepared = {}
-	for i = 1, #cells do
-		local cell = cells[i]
-		local bx = math.floor( tonumber( cell.bx ) or 0 )
-		local by = math.floor( tonumber( cell.by ) or 0 )
-		local bz = math.floor( tonumber( cell.bz ) or 0 )
-		local id = math.floor( tonumber( cell.id ) or 0 )
-		local orient = id ~= 0 and MC.NormalizeOrient( id, cell.orient ) or 0
-		if id ~= 0 and not MC.IsValidBlock( id ) then return 0, "invalid_block" end
-		if id ~= 0 and options.preventPlayerOverlap and wouldTrapPlayer( bx, by, bz, id, orient ) then
-			return 0, "player_overlap"
-		end
-		prepared[i] = {
-			bx = bx, by = by, bz = bz,
-			id = id, orient = orient,
-		}
-	end
-
-	return applyCells( prepared, options.actor, {
-		fx = options.fx,
-		fxAll = options.fxAll,
-		fxIndex = options.fxIndex,
-		handlers = options.handlers,
-		priorityPhys = options.priorityPhys,
-		deferPhys = options.deferPhys == true,
-		-- keep the paced-net options: an overwrite place runs RemoveBlocksBulk
-		-- (paced) then this (if unpaced it would overtake the queued removes,
-		-- letting late removes blank out freshly placed overlap cells)
-		explosionMeshThrottle = options.explosionMeshThrottle == true,
-		netPaced = options.netPaced == true,
-		cellsPerMessage = options.cellsPerMessage,
-	} )
+	local transactionOptions = {}
+	for key, value in pairs( options ) do transactionOptions[key] = value end
+	transactionOptions.netMode = "bulk"
+	local result = SV.ApplyBlockTransaction( cells, transactionOptions )
+	if result.ok ~= true then return 0, result.error end
+	return result.changed
 end
 
 function SV.RemoveBlock( bx, by, bz, options )
@@ -1001,75 +864,20 @@ end
 function SV.RemoveBlocksBulk( cells, options )
 	options = normalizeWriteOptions( options )
 	if not istable( cells ) or #cells == 0 then return 0 end
-
-	local actor = options.actor
-	local priorityPhys = options.priorityPhys == true
-	local shouldFx = options.fx
-	if shouldFx == nil then shouldFx = IsValid( actor ) end
-	local fxLimit = options.fxLimit
-	if fxLimit == nil then fxLimit = BULK_BREAK_FX_LIMIT end
-	fxLimit = math.max( 0, math.floor( tonumber( fxLimit ) or 0 ) )
-
-	local changes = {}
-	local dirty = {}
-	local dirtyBounds = {}
-	local removed = 0
-	local fxSent = 0
-
+	local airStateId, err = stateFromLegacyWrite( 0, 0 )
+	if not airStateId then return 0, err end
+	local removals = {}
 	for i = 1, #cells do
 		local cell = cells[i]
-		local bx = math.floor( tonumber( cell.bx ) or 0 )
-		local by = math.floor( tonumber( cell.by ) or 0 )
-		local bz = math.floor( tonumber( cell.bz ) or 0 )
-		local old = MC.GetBlock( bx, by, bz )
-		if old ~= 0 then
-			local oldOrient = MC.GetBlockOrient( bx, by, bz )
-			local chunk, _, emptied, changed = MC.SetBlockRaw( bx, by, bz, 0, 0 )
-			if changed then
-				removed = removed + 1
-				changes[#changes + 1] = { bx = bx, by = by, bz = bz, id = 0, orient = 0 }
-				collectCellPhysDirty( dirty, nil, dirtyBounds, bx, by, bz )
-
-				if emptied and chunk then
-					SV.PhysDirty[chunk.key] = nil
-					SV.PhysDirtyPriority[chunk.key] = nil
-					if SV.PhysDirtyBulk then SV.PhysDirtyBulk[chunk.key] = nil end
-					if IsValid( chunk.ent ) then chunk.ent:Remove() end
-				end
-
-				if shouldFx and fxSent < fxLimit then
-					broadcastFx( 2, bx, by, bz, old, oldOrient )
-					fxSent = fxSent + 1
-				end
-				if options.handlers ~= false then
-					callBlockHandler( old, "OnBreak", actor, bx, by, bz, oldOrient )
-				end
-			end
-		end
+		removals[i] = { bx = cell.bx, by = cell.by, bz = cell.bz, stateId = airStateId }
 	end
-
-	if removed == 0 then return 0 end
-
-	SV.BlockCount = math.max( 0, SV.BlockCount - removed )
-	for key in pairs( dirty ) do
-		local c = MC.GetChunkByKey( key )
-		if c and c.count and c.count > 0 then
-			SV.EnsureChunkEnt( c )
-			if options.deferPhys then
-				SV.MarkPhysDirtyBulk( c.key )
-			else
-				SV.MarkPhysDirty( c.key, priorityPhys, dirtyBounds[key] )
-			end
-		end
-	end
-
-	broadcastSetBulk( changes, {
-		explosionMeshThrottle = options.explosionMeshThrottle == true,
-		netPaced = options.netPaced == true,
-		cellsPerMessage = options.cellsPerMessage,
-	} )
-	SV.Dirty = true
-	return removed
+	local transactionOptions = {}
+	for key, value in pairs( options ) do transactionOptions[key] = value end
+	transactionOptions.fxLimit = options.fxLimit ~= nil and options.fxLimit or BULK_BREAK_FX_LIMIT
+	transactionOptions.netMode = "bulk"
+	local result = SV.ApplyBlockTransaction( removals, transactionOptions )
+	if result.ok ~= true then return 0, result.error end
+	return result.changed
 end
 
 function SV.Use( ply, bx, by, bz )
@@ -1103,6 +911,7 @@ local function normalizeImportPath( path )
 end
 
 local function clearWorldNoNet()
+	if SV.ChunkStore and SV.ChunkStore.Reset then SV.ChunkStore.Reset() end
 	for _, c in pairs( MC.World ) do
 		if IsValid( c.ent ) then c.ent:Remove() end
 	end
@@ -1114,6 +923,51 @@ local function clearWorldNoNet()
 	SV.PhysDirtyBulkOrder = {}
 	SV.SyncQueue = {}
 	SV.PlayerLoadedChunks = {}
+end
+
+local function beginWorldLoadStage()
+	local previous = {
+		world = MC.World,
+		loadedChunkKeys = MC.LoadedChunkKeys,
+		blockCount = SV.BlockCount,
+		physDirty = SV.PhysDirty,
+		physDirtyPriority = SV.PhysDirtyPriority,
+		physDirtyBulk = SV.PhysDirtyBulk,
+		physDirtyBulkOrder = SV.PhysDirtyBulkOrder,
+	}
+	MC.World = {}
+	MC.LoadedChunkKeys = {}
+	SV.BlockCount = 0
+	SV.PhysDirty = {}
+	SV.PhysDirtyPriority = {}
+	SV.PhysDirtyBulk = {}
+	SV.PhysDirtyBulkOrder = {}
+	return previous
+end
+
+local function restoreWorldLoadStage( previous )
+	MC.World = previous.world
+	MC.LoadedChunkKeys = previous.loadedChunkKeys
+	SV.BlockCount = previous.blockCount
+	SV.PhysDirty = previous.physDirty
+	SV.PhysDirtyPriority = previous.physDirtyPriority
+	SV.PhysDirtyBulk = previous.physDirtyBulk
+	SV.PhysDirtyBulkOrder = previous.physDirtyBulkOrder
+end
+
+local function commitWorldLoadStage( previous )
+	if SV.ChunkStore and SV.ChunkStore.Reset then SV.ChunkStore.Reset() end
+	for _, chunk in pairs( previous.world or {} ) do
+		if IsValid( chunk.ent ) then chunk.ent:Remove() end
+	end
+	SV.SyncQueue = {}
+	SV.PlayerLoadedChunks = {}
+	for _, chunk in pairs( MC.World ) do
+		if chunk.count and chunk.count > 0 then
+			SV.EnsureChunkEnt( chunk )
+			SV.MarkPhysDirty( chunk.key )
+		end
+	end
 end
 
 local function resyncAllClients()
@@ -1134,19 +988,39 @@ local function blockFromImport( cache, savedBlock )
 	return id
 end
 
-local function importPaletteEntry( cache, palette, index )
-	if not istable( palette ) then return 0, 0 end
+local function importPaletteState( cache, palette, index )
+	if not istable( palette ) then return nil, "missing_palette" end
 	local spec = palette[math.floor( tonumber( index ) or 0 ) + 1]
-	if not spec then return 0, 0 end
+	if not isstring( spec ) then return nil, "missing_palette_state" end
+	cache._states = cache._states or {}
+	local cached = cache._states[spec]
+	if cached ~= nil then return cached ~= false and cached or nil end
+	local stateId, err = MC.ParseBlockState( spec )
+	cache._states[spec] = stateId or false
+	return stateId, err
+end
 
-	local cached = cache[spec]
-	if cached then return cached[1], cached[2] end
-
-	local id, orient = MC.ParseBlockSpec( spec )
-	id = id or 0
-	orient = MC.NormalizeOrient( id, orient )
-	cache[spec] = { id, orient }
-	return id, orient
+local function loadSavedBlockEntities( chunk, envelopes )
+	if envelopes == nil then return true end
+	if not chunk or not istable( envelopes ) then return false, "invalid_block_entities" end
+	local seen = {}
+	for _, envelope in ipairs( envelopes ) do
+		if not istable( envelope ) then return false, "invalid_block_entity_envelope" end
+		local localIndex = math.floor( tonumber( envelope.localIndex ) or -1 )
+		if not MC.LocalIndexInRange( localIndex ) or seen[localIndex] then return false, "invalid_block_entity_index" end
+		seen[localIndex] = true
+		local lx, ly, lz = MC.DecodeLocal( localIndex )
+		local stateId = MC.GetBlockState(
+			chunk.cx * MC.CS + lx,
+			chunk.cy * MC.CS + ly,
+			chunk.cz * MC.CH + lz
+		)
+		local record, decodeError = MC.DecodeBlockEntityEnvelope( stateId, envelope )
+		if not record then return false, decodeError end
+		chunk.blockEntities = chunk.blockEntities or {}
+		chunk.blockEntities[localIndex] = record
+	end
+	return true
 end
 
 local function decodeLegacyLocal( li )
@@ -1169,6 +1043,9 @@ local function oldSliceCell( cx, cy, oldCz, li )
 end
 
 local function importOneCell( data, cache, palette, legacyMode, cx, cy, cz, li, savedBlock, state, touched )
+	li = math.floor( tonumber( li ) or -1 )
+	local sourceHeight = legacyMode == "column" and MC.CH or legacyMode == "slice" and MC.CS or MC.CH
+	if li < 0 or li >= MC.CS * MC.CS * sourceHeight then return 0, 1, 0 end
 	local bx, by, bz
 	if legacyMode == "column" then
 		bx, by, bz = oldColumnCell( data, cx, cy, li )
@@ -1183,24 +1060,24 @@ local function importOneCell( data, cache, palette, legacyMode, cx, cy, cz, li, 
 	if not MC.LocalIndexInRange( nli ) then return 0, 0, 0 end
 	if not worldBoundsOK( bx, by, bz ) then return 0, 0, 1 end
 
-	local id, orient
-	if data.v == 4 or data.v == 5 then
-		id, orient = importPaletteEntry( cache, palette, savedBlock )
+	local stateId
+	if data.v == 4 or data.v == 5 or data.v == 9 then
+		stateId = importPaletteState( cache, palette, savedBlock )
 	else
-		id = blockFromImport( cache, savedBlock )
-		orient = MC.StateToOrient( id, state )
+		local id = blockFromImport( cache, savedBlock )
+		local orient = MC.StateToOrient( id, state )
+		stateId = MC.StateFromLegacy( id, orient )
 	end
-	if id == 0 or not MC.IsValidBlock( id ) then return 0, 1, 0 end
+	if not stateId or stateId == 0 or not MC.IsValidBlockState( stateId ) then return 0, 1, 0 end
 
 	local c = MC.GetChunk( ncx, ncy, ncz )
 	c = c or MC.EnsureChunk( ncx, ncy, ncz )
-	if c.blocks[nli] == nil then
-		c.count = c.count + 1
+	local changed, oldStateId = MC.SetChunkLocalStateRaw( c, nli, stateId )
+	if changed == nil then return 0, 1, 0 end
+	if changed and oldStateId == 0 then
 		SV.BlockCount = SV.BlockCount + 1
 	end
-	c.blocks[nli] = id
-	c.orients[nli] = MC.NormalizeOrient( id, orient )
-	touched[c.key] = c
+	if changed then touched[c.key] = c end
 	return 1, 0, 0
 end
 
@@ -1217,7 +1094,7 @@ local function importCells( data, appendMode, deferResync )
 
 	for _, ck in ipairs( data.chunks ) do
 		local cx, cy, cz, cells, legacyMode
-		if data.v == 5 then
+		if data.v == 5 or data.v == 9 then
 			cx, cy, cz, cells = math.floor( tonumber( ck[1] ) or 0 ), math.floor( tonumber( ck[2] ) or 0 ), math.floor( tonumber( ck[3] ) or 0 ), ck[4]
 		elseif data.v == 4 then
 			cx, cy, cells, legacyMode = math.floor( tonumber( ck[1] ) or 0 ), math.floor( tonumber( ck[2] ) or 0 ), ck[3], "column"
@@ -1234,7 +1111,7 @@ local function importCells( data, appendMode, deferResync )
 					skippedBounds = skippedBounds + bounds
 				end
 			else
-				local stride = ( data.v == 4 or data.v == 5 ) and 2 or 3
+				local stride = ( data.v == 4 or data.v == 5 or data.v == 9 ) and 2 or 3
 				for i = 1, #cells, stride do
 					local add, unk, bounds = importOneCell( data, cache, palette, legacyMode, cx, cy, cz, math.floor( tonumber( cells[i] ) or -1 ), cells[i + 1], cells[i + 2], touched )
 					imported = imported + add
@@ -1243,6 +1120,7 @@ local function importCells( data, appendMode, deferResync )
 				end
 			end
 			for key, c in pairs( touched ) do
+				MC.FinalizeChunkStateStorage( c )
 				if c.count > 0 then
 					SV.EnsureChunkEnt( c )
 					SV.MarkPhysDirtyBulk( c.key )
@@ -1254,6 +1132,7 @@ local function importCells( data, appendMode, deferResync )
 	end
 
 	SV.Dirty = true
+	if not appendMode and SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
 	if not deferResync then
 		resyncAllClients()
 	end
@@ -1306,6 +1185,7 @@ local function importManifest( data, manifestPath, appendMode )
 	end
 
 	SV.Dirty = true
+	if not appendMode and SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
 	resyncAllClients()
 	return {
 		imported = totalImported,
@@ -1578,6 +1458,11 @@ function SV.BeginSync( ply )
 	SV.PlayerFullSnapshot[ply] = nil
 	SV.SyncQueue[ply] = { keys = {}, i = 1, inflightBytes = 0, queuedKeys = {} }
 	SV.ClearReliableNet( ply )
+	if SV.SendStateHello then
+		SV.SyncQueue[ply] = nil
+		SV.SendStateHello( ply )
+		return
+	end
 	if syncSnapshotEnabled() and SV.BeginSnapshotSync and SV.BeginSnapshotSync( ply ) then
 		return
 	end
@@ -1593,6 +1478,11 @@ local function restartPlayerFullSync( ply )
 	SV.PlayerFullSnapshot[ply] = nil
 	SV.SyncQueue[ply] = { keys = {}, i = 1, inflightBytes = 0, queuedKeys = {} }
 	SV.ClearReliableNet( ply )
+	if SV.SendStateHello then
+		SV.SyncQueue[ply] = nil
+		SV.SendStateHello( ply )
+		return
+	end
 	if syncSnapshotEnabled() and SV.BeginSnapshotSync and SV.BeginSnapshotSync( ply ) then
 		return
 	end
@@ -1828,53 +1718,10 @@ local function savedBlockCount( data )
 	return #data.chunks, blocks
 end
 
-local function packSaveCells( cells )
-	local out = {}
-	local n = 0
-	for i = 1, #cells, 2 do
-		n = n + 1
-		out[n] = tostring( cells[i] ) .. ":" .. tostring( cells[i + 1] )
-	end
-	return table.concat( out, ";" )
-end
-
 local function buildSaveData( slotName )
-	local chunks = {}
-	local palette = {}
-	local paletteIndex = {}
-	for _, c in pairs( MC.World ) do
-		if c.count > 0 then
-			local cells = {}
-			local n = 0
-			for li, id in pairs( c.blocks ) do
-				local state = MC.BlockStateText( id, c.orients and c.orients[li] )
-				local spec = MC.BlockCanonicalName( id )
-				if state ~= "" then spec = spec .. "[" .. state .. "]" end
-				local pi = paletteIndex[spec]
-				if pi == nil then
-					pi = #palette
-					palette[#palette + 1] = spec
-					paletteIndex[spec] = pi
-				end
-				n = n + 1 ; cells[n] = li
-				n = n + 1 ; cells[n] = pi
-			end
-			chunks[#chunks + 1] = { c.cx, c.cy, c.cz, packSaveCells( cells ) }
-		end
-	end
-	return {
-		v = 5,
-		map = game.GetMap(),
-		slotName = slotName,
-		savedAt = os.time(),
-		bs = MC.BS,
-		cs = MC.CS,
-		h = MC.CH,
-		p = palette,
-		chunks = chunks,
-	}, chunks
+	if not SV.BuildStateSaveData then return nil, nil, "state_save_codec_unavailable" end
+	return SV.BuildStateSaveData( slotName )
 end
-
 local function sendSnapshotBegin( ply, token, err, parts, totalBytes, chunks, blocks )
 	net.Start( "mc_snapshot_begin" )
 		net.WriteString( token or "" )
@@ -1905,7 +1752,11 @@ end
 function SV.BeginSnapshotSync( ply )
 	if not IsValid( ply ) then return false end
 
-	local data, chunks = buildSaveData( "snapshot" )
+	local data, chunks, buildError = buildSaveData( "snapshot" )
+	if not data then
+		sendSnapshotError( ply, buildError or "snapshot_encode_failed" )
+		return false
+	end
 	local json = util.TableToJSON( data )
 	if not json or json == "" then
 		sendSnapshotError( ply, "snapshot_json_failed" )
@@ -2023,21 +1874,39 @@ function SV.SaveToPath( path, slotName )
 		return finishSave( true, path, overlay, 0, SV.BlockCount )
 	end
 
-	local data, chunks = buildSaveData( slotName )
+	local data, chunks, buildError = buildSaveData( slotName )
+	if not data then return finishSave( false, buildError or "save_encode_failed" ) end
 	local json = util.TableToJSON( data )
 	if not json then return finishSave( false, "save_json_failed" ) end
 	ensureSaveDir()
 	local compressed = util.Compress( json )
 	if not compressed then return finishSave( false, "save_compress_failed" ) end
-	file.Write( path, compressed )
-	local verifyRaw = file.Read( path, "DATA" )
+	local tempPath = path .. ".tmp"
+	file.Write( tempPath, compressed )
+	local verifyRaw = file.Read( tempPath, "DATA" )
 	local verifyJSON = verifyRaw and util.Decompress( verifyRaw )
 	local verifyData = verifyJSON and util.JSONToTable( verifyJSON )
 	local verifyChunks, verifyBlocks = savedBlockCount( verifyData )
 	if verifyBlocks ~= SV.BlockCount or verifyChunks ~= #chunks then
-		MsgN( "[MC] !!! save verify mismatch chunks " .. verifyChunks .. "/" .. #chunks ..
-			" blocks " .. verifyBlocks .. "/" .. SV.BlockCount )
+		file.Delete( tempPath )
+		return finishSave( false, "save_verify_mismatch" )
 	end
+	local backupPath = path .. ".bak"
+	if file.Exists( backupPath, "DATA" ) then file.Delete( backupPath ) end
+	if file.Exists( path, "DATA" ) then
+		file.Rename( path, backupPath )
+		if not file.Exists( backupPath, "DATA" ) then
+			file.Delete( tempPath )
+			return finishSave( false, "save_backup_failed" )
+		end
+	end
+	file.Rename( tempPath, path )
+	if not file.Exists( path, "DATA" ) then
+		if file.Exists( backupPath, "DATA" ) then file.Rename( backupPath, path ) end
+		file.Delete( tempPath )
+		return finishSave( false, "save_commit_failed" )
+	end
+	if file.Exists( backupPath, "DATA" ) then file.Delete( backupPath ) end
 	MsgN( "[MC] saved " .. #chunks .. " chunks / " .. SV.BlockCount .. " blocks" ..
 		( slotName and ( " as \"" .. slotName .. "\" on map " .. game.GetMap() ) or "" ) )
 	return finishSave( true, path, data, #chunks, SV.BlockCount )
@@ -2073,32 +1942,48 @@ local function readSaveJSON( path )
 	return util.JSONToTable( json ), nil
 end
 
-local function loadSaveChunks( data, cache )
+local function loadSaveChunks( data, cache, deferWorldEffects )
 	cache = cache or {}
+	local strict = data.v == 9
 	local savedHeight = savedHeightForData( data )
 	local savedChunkSize = savedChunkSizeForData( data )
 	local palette = data.p or data.palette
 
 	for _, ck in ipairs( data.chunks or {} ) do
-		local cx, cy, cz, cells, legacyMode
-		if data.v == 5 then
-			cx, cy, cz, cells = ck[1], ck[2], ck[3], ck[4]
+		if strict and not istable( ck ) then return false, "invalid_chunk_record" end
+		local cx, cy, cz, cells, legacyMode, blockEntities
+		if data.v == 5 or data.v == 9 then
+			cx, cy, cz, cells, blockEntities = ck[1], ck[2], ck[3], ck[4], ck[5]
 		elseif data.v == 4 then
 			cx, cy, cells, legacyMode = ck[1], ck[2], ck[3], "column"
 		else
 			cx, cy, cz, cells, legacyMode = ck[1], ck[2], ck[3], ck[4], "slice"
 		end
+		if strict then
+			cx, cy, cz = tonumber( cx ), tonumber( cy ), tonumber( cz )
+			if not cx or not cy or not cz or cx ~= math.floor( cx ) or cy ~= math.floor( cy ) or cz ~= math.floor( cz ) then
+				return false, "invalid_chunk_coords"
+			end
+		end
 		local touched = {}
-		local stride = ( data.v == 4 or data.v == 5 ) and 2 or ( ( data.v == 2 or data.v == 3 ) and 3 or 2 )
+		local loadError
+		local stride = ( data.v == 4 or data.v == 5 or data.v == 9 ) and 2 or ( ( data.v == 2 or data.v == 3 ) and 3 or 2 )
 		local function loadOneCell( li, savedBlock, state )
+			if loadError then return end
 			li = math.floor( tonumber( li ) or -1 )
-			local id, orient
-			if data.v == 4 or data.v == 5 then
-				id, orient = importPaletteEntry( cache, palette, savedBlock )
+			if strict and not MC.LocalIndexInRange( li ) then loadError = "invalid_local_index" return end
+			local stateId, stateError
+			if data.v == 4 or data.v == 5 or data.v == 9 then
+				stateId, stateError = importPaletteState( cache, palette, savedBlock )
 			else
 				local resolved = data.v == 3 and MC.ResolveBlock( savedBlock ) or nil
-				id = resolved and resolved.id or math.floor( tonumber( savedBlock ) or 0 )
-				orient = state ~= nil and MC.StateToOrient( id, state ) or MC.DefaultOrient( id )
+				local id = resolved and resolved.id or math.floor( tonumber( savedBlock ) or 0 )
+				local orient = state ~= nil and MC.StateToOrient( id, state ) or MC.DefaultOrient( id )
+				stateId = MC.StateFromLegacy( id, orient )
+			end
+			if strict and ( not stateId or stateId == 0 or not MC.IsValidBlockState( stateId ) ) then
+				loadError = stateError or "invalid_palette_state"
+				return
 			end
 			local bx, by, bz
 			if legacyMode == "column" then
@@ -2111,38 +1996,66 @@ local function loadSaveChunks( data, cache )
 					bx, by, bz = cx * savedChunkSize + lx, cy * savedChunkSize + ly, cz * savedHeight + lz
 				end
 			end
+			if strict and not bx then loadError = "invalid_cell_geometry" return end
 			if bx then
 				local ncx, ncy, ncz, nli = MC.CellToChunk( bx, by, bz )
 				local c = MC.GetChunk( ncx, ncy, ncz )
-				if MC.LocalIndexInRange( nli ) and MC.IsValidBlock( id ) and ( not c or c.blocks[nli] == nil ) then
+				local existingState = c and MC.GetBlockState( bx, by, bz ) or 0
+				if strict and existingState ~= 0 then loadError = "duplicate_cell" return end
+				if MC.LocalIndexInRange( nli ) and stateId and stateId ~= 0 and MC.IsValidBlockState( stateId ) and existingState == 0 then
 					c = c or MC.EnsureChunk( ncx, ncy, ncz )
-					c.blocks[nli] = id
-					c.orients[nli] = MC.NormalizeOrient( id, orient )
-					c.count = c.count + 1
-					SV.BlockCount = SV.BlockCount + 1
-					touched[c.key] = c
+					local changed, oldStateId = MC.SetChunkLocalStateRaw( c, nli, stateId )
+					if strict and changed == nil then loadError = oldStateId or "state_write_failed" return end
+					if changed then
+						if oldStateId == 0 then SV.BlockCount = SV.BlockCount + 1 end
+						touched[c.key] = c
+					end
 				end
 			end
 		end
 
 		if isstring( cells ) then
-			for liText, blockText, stateText in string.gmatch( cells, "([^:;]+):([^:;]*):?([^;]*);?" ) do
-				loadOneCell( liText, blockText, stateText ~= "" and stateText or nil )
+			if strict then
+				for entry in string.gmatch( cells, "[^;]+" ) do
+					local liText, blockText = string.match( entry, "^(-?%d+):(-?%d+)$" )
+					if not liText then loadError = "invalid_cell_record" break end
+					loadOneCell( liText, blockText )
+				end
+			else
+				for liText, blockText, stateText in string.gmatch( cells, "([^:;]+):([^:;]*):?([^;]*);?" ) do
+					loadOneCell( liText, blockText, stateText ~= "" and stateText or nil )
+				end
 			end
 		else
-			for i = 1, #cells, stride do
-				loadOneCell( cells[i], cells[i + 1], stride == 3 and cells[i + 2] or nil )
+			if not istable( cells ) then
+				if strict then loadError = "invalid_cells" end
+			else
+				if strict and #cells % stride ~= 0 then loadError = "invalid_cells" end
+				for i = 1, #cells, stride do
+					if loadError then break end
+					loadOneCell( cells[i], cells[i + 1], stride == 3 and cells[i + 2] or nil )
+				end
 			end
 		end
+		if loadError then return false, loadError end
+		if strict and blockEntities ~= nil then
+			local chunk = MC.GetChunk( cx, cy, cz )
+			local loadedEntities, entityError = loadSavedBlockEntities( chunk, blockEntities )
+			if not loadedEntities then return false, entityError end
+		end
 		for key, c in pairs( touched ) do
+			MC.FinalizeChunkStateStorage( c )
 			if c.count > 0 then
-				SV.EnsureChunkEnt( c )
-				SV.MarkPhysDirty( c.key )
+				if not deferWorldEffects then
+					SV.EnsureChunkEnt( c )
+					SV.MarkPhysDirty( c.key )
+				end
 			else
 				MC.World[key] = nil
 			end
 		end
 	end
+	return true
 end
 
 local function savePartPath( manifestPath, partPath )
@@ -2154,7 +2067,7 @@ local function savePartPath( manifestPath, partPath )
 	return string.GetPathFromFilename( manifestPath ) .. partPath
 end
 
-local function loadSaveParts( data, manifestPath, cache )
+local function loadSaveParts( data, manifestPath, cache, deferWorldEffects )
 	for _, part in ipairs( data.parts or {} ) do
 		local partPath = savePartPath( manifestPath, part )
 		if not partPath then return false, "invalid_save_part" end
@@ -2165,12 +2078,26 @@ local function loadSaveParts( data, manifestPath, cache )
 			return false, "invalid_save_part: " .. partPath
 		end
 
-		partData.v = partData.v or 5
+		partData.v = partData.v or data.v or 5
 		partData.cs = partData.cs or data.cs
 		partData.h = partData.h or data.h
 		partData.p = partData.p or data.p
 		partData.palette = partData.palette or data.palette
-		loadSaveChunks( partData, cache )
+		local loaded, loadError = loadSaveChunks( partData, cache, deferWorldEffects )
+		if not loaded then return false, loadError end
+	end
+	return true
+end
+
+local function validateSavePartFiles( data, manifestPath )
+	for _, part in ipairs( data.parts or {} ) do
+		local partPath = savePartPath( manifestPath, part )
+		if not partPath then return false, "invalid_save_part" end
+		if not file.Exists( partPath, "DATA" ) then return false, "missing_save_part: " .. partPath end
+		local partData, partError = readSaveJSON( partPath )
+		if partError or not partData or not istable( partData.chunks ) then
+			return false, "invalid_save_part: " .. partPath
+		end
 	end
 	return true
 end
@@ -2181,6 +2108,14 @@ function SV.LoadFromPath( path, resyncClients, requestedName )
 	local data, err = readSaveJSON( path )
 	if err then return false, err end
 	if not data or ( not data.chunks and not data.parts ) then return false, "invalid_save" end
+	if data.v == 9 then
+		local expectedHash = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or nil
+		if not isstring( data.schemaHash ) or data.schemaHash == "" then return false, "missing_schema_hash" end
+		if expectedHash and data.schemaHash ~= expectedHash then return false, "schema_hash_mismatch" end
+		if savedChunkSizeForData( data ) ~= MC.CS or savedHeightForData( data ) ~= MC.CH then
+			return false, "state_geometry_mismatch"
+		end
+	end
 
 	if data.map and data.map ~= game.GetMap() then
 		MsgN( "[MC] WARNING: save map " .. tostring( data.map ) .. " != current " .. game.GetMap() )
@@ -2191,24 +2126,38 @@ function SV.LoadFromPath( path, resyncClients, requestedName )
 	end
 	local savedHeight = savedHeightForData( data )
 	local savedChunkSize = savedChunkSizeForData( data )
-	if data.v == 5 or data.v == 7 or data.v == 8 then
+	if data.v == 5 or data.v == 7 or data.v == 8 or data.v == 9 then
 		if savedChunkSize ~= MC.CS or savedHeight ~= MC.CH then
 			MsgN( "[MC] remapping save chunk geometry " .. savedChunkSize .. "x" .. savedChunkSize .. "x" .. savedHeight ..
 				" -> " .. MC.CS .. "x" .. MC.CS .. "x" .. MC.CH )
 		end
 	end
 	local isV8PartManifest = data.v == 8 and istable( data.parts )
+	if istable( data.parts ) then
+		local validParts, partError = validateSavePartFiles( data, path )
+		if not validParts then return false, partError end
+	end
 
-	clearWorldNoNet()
-	if SV.ChunkStore and SV.ChunkStore.Reset then SV.ChunkStore.Reset() end
+	local stagedLoad = data.v == 9
+	local previousWorld = stagedLoad and beginWorldLoadStage() or nil
+	if not stagedLoad then clearWorldNoNet() end
 
 	local cache = {}
 	if isV8PartManifest or istable( data.parts ) then
-		local ok, err = loadSaveParts( data, path, cache )
-		if not ok then return false, err end
+		local ok, err = loadSaveParts( data, path, cache, stagedLoad )
+		if not ok then
+			if stagedLoad then restoreWorldLoadStage( previousWorld ) else clearWorldNoNet() end
+			return false, err
+		end
 	else
-		loadSaveChunks( data, cache )
+		local ok, err = loadSaveChunks( data, cache, stagedLoad )
+		if not ok then
+			if stagedLoad then restoreWorldLoadStage( previousWorld ) else clearWorldNoNet() end
+			return false, err
+		end
 	end
+	if stagedLoad then commitWorldLoadStage( previousWorld ) end
+	if SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
 
 	SV.Dirty = false
 	if resyncClients then resyncAllClients() end
@@ -2332,8 +2281,9 @@ concommand.Add( "mc_clear", function( ply )
 	SV.SnapshotQueue = {}
 	SV.PlayerLoadedChunks = {}
 	SV.PlayerFullSnapshot = {}
+	if SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
 	SV.Dirty = true
-	net.Start( "mc_clear" ) net.Broadcast()
+	for _, target in ipairs( player.GetAll() ) do SV.BeginSync( target ) end
 	MsgN( "[MC] world cleared" )
 end )
 

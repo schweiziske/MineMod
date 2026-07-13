@@ -125,14 +125,12 @@ local function matchingDoorPart( id, orient, wantId, facing, half, open, hinge, 
 		and MC.DoorOrientPowered( orient ) == powered
 end
 
-local function toggleDoorCell( ply, bx, by, bz, id, facing, half, open, hinge, powered )
-	local orient = MC.MakeDoorOrient( facing, half, open, hinge, powered )
-	return MC.SV.SetBlock( bx, by, bz, id, orient, {
-		actor = ply,
-		fx = false,
-		handlers = false,
-		priorityPhys = true,
-	} )
+local function toggledDoorCell( bx, by, bz, id, facing, half, open, hinge, powered )
+	return {
+		bx = bx, by = by, bz = bz,
+		id = id,
+		orient = MC.MakeDoorOrient( facing, half, open, hinge, powered ),
+	}
 end
 
 MC.BlockHandlers.door = MC.BlockHandlers.door or {
@@ -152,26 +150,33 @@ MC.BlockHandlers.door = MC.BlockHandlers.door or {
 		local nextOpen = not open
 		local lowerZ = half == "upper" and bz - 1 or bz
 		local upperZ = lowerZ + 1
-		local changed = false
+		local changes = {}
 
 		local lowerId = MC.GetBlock( bx, by, lowerZ )
 		local lowerOrient = MC.GetBlockOrient( bx, by, lowerZ )
 		if matchingDoorPart( lowerId, lowerOrient, id, facing, "lower", open, hinge, powered ) then
-			local ok = toggleDoorCell( ply, bx, by, lowerZ, id, facing, "lower", nextOpen, hinge, powered )
-			changed = changed or ok == true
+			changes[#changes + 1] = toggledDoorCell( bx, by, lowerZ, id, facing, "lower", nextOpen, hinge, powered )
 		end
 
 		local upperId = MC.GetBlock( bx, by, upperZ )
 		local upperOrient = MC.GetBlockOrient( bx, by, upperZ )
 		if matchingDoorPart( upperId, upperOrient, id, facing, "upper", open, hinge, powered ) then
-			local ok = toggleDoorCell( ply, bx, by, upperZ, id, facing, "upper", nextOpen, hinge, powered )
-			changed = changed or ok == true
+			changes[#changes + 1] = toggledDoorCell( bx, by, upperZ, id, facing, "upper", nextOpen, hinge, powered )
 		end
+		if #changes == 0 then return false end
 
-		if changed then
+		local changed = MC.SV.SetBlocksBulk( changes, {
+			actor = ply,
+			fx = false,
+			handlers = false,
+			priorityPhys = true,
+			immediatePhys = true,
+		} )
+
+		if changed > 0 then
 			playDoorSound( id, nextOpen, bx, by, bz )
 		end
 
-		return changed
+		return changed > 0
 	end,
 }
