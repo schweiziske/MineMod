@@ -731,7 +731,7 @@ local function bindShadowParams( material, enabled, isFancy )
 	local strength = enabled and convarFloat( MC.MeshShadowMapStrength, 0.75, 0, 1 ) or 0
 	-- Day cycle: shadows fade at the horizon and stay weak under moonlight.
 	strength = strength * math.Clamp( mcShadowStrengthScale, 0, 1 )
-	local depthOnlyBias = convarFloat( MC.MeshShadowMapBias, 0, -10, 0.05 )
+	local depthOnlyBias = convarFloat( MC.MeshShadowMapBias, 0, 0, 0.05 )
 
 	-- $c0_*..$c2_* land in pixel shader constants c0..c2 (screenspace_general
 	-- uploads $c0..$c3 to c0..c3; $viewprojmat goes to c11..c14).
