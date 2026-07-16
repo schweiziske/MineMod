@@ -355,6 +355,7 @@ function MC.RegisterBlock( def )
 		lightEmission = math.Clamp( propertyNumber( def.lightEmission, generatedLight or 0 ), 0, 15 ),
 		textures = { top = top, side = side, bottom = bottom, front = front, particle = particle, icon = icon },
 		baked = normalizeBaked( def.baked ),
+		stateSchema = def.stateSchema or def.blockStateSchema,
 		stateRule = stateRule,
 		placeRule = def.placeRule or def.place,
 		iconSource = def.iconSource,
