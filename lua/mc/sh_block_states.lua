@@ -466,6 +466,7 @@ end
 
 function MC.FinalizePreparedBlockStateRegistry()
 	if MC.BlockStateRegistryFrozen then return MC.BlockStateCount end
+	if MC.ProjectBlockStateSchemaError then return nil, "project_schema_error:" .. tostring( MC.ProjectBlockStateSchemaError ) end
 	local count, err = MC.FinalizeBlockStateRegistry( MC.GeneratedStateMetadata )
 	if not count then
 		reportRegistryError( err )

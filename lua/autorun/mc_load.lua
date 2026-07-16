@@ -33,6 +33,7 @@ local SHARED = {
 	"mc/custom/sh_custom_blocks.lua",
 	"mc/sh_blocks.lua",
 	"mc/sh_block_states.lua",
+	"mc/state/sh_project_block_state_schemas.lua",
 	"mc/import/sh_format.lua",
 	"mc/block_entity/sh_registry.lua",
 	"mc/block/sh_stairs.lua",

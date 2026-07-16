@@ -91,8 +91,32 @@ local function stampCustomMetadata( b, def )
 end
 
 function MC.RegisterCustomBlock( def )
+	if MC.BlockStateRegistryFrozen then
+		if MsgN then MsgN( "[MC] custom block registration rejected after block-state registry freeze" ) end
+		return nil
+	end
 	local prepared, key = prepareCustomDef( def )
 	if not prepared then return nil end
+	if MC.RegisterBlock and MC.RegisterProjectBlockStateSchema then
+		local stateRule = prepared.stateRule or prepared.orient
+		if string.match( prepared.name, "_door$" ) then
+			stateRule = "door"
+		elseif string.match( prepared.name, "_trapdoor$" ) then
+			stateRule = "trapdoor"
+		elseif string.match( prepared.name, "_bed$" ) then
+			stateRule = "bed"
+		end
+		local schema, schemaError = MC.RegisterProjectBlockStateSchema( {
+			id = prepared.id,
+			mcid = prepared.mcid,
+			orient = stateRule,
+			stateSchema = prepared.stateSchema or prepared.blockStateSchema,
+		} )
+		if not schema then
+			if MsgN then MsgN( "[MC] custom block '" .. key .. "' has invalid state schema: " .. tostring( schemaError ) ) end
+			return nil
+		end
+	end
 
 	if not MC.CustomBlockOrderSeen[key] then
 		MC.CustomBlockOrder[#MC.CustomBlockOrder + 1] = key
