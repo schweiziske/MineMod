@@ -577,18 +577,25 @@ end
 -- and clients that have not built it pay nothing here.  Updating it in place
 -- avoids rescanning every block in the chunk after each edit merely because
 -- collisionVersion also changed.
-local function updateCachedRenderSectionCell( chunk, li, id )
+local function updateCachedRenderSectionCell( chunk, li, stateId )
 	if not CLIENT or not chunk or not chunk.renderSectionBlocks then return end
+	if chunk.renderSectionIndexStoresStateId ~= true then
+		chunk.renderSectionBlocks = nil
+		chunk.renderSectionIndexVersion = nil
+		chunk.renderSectionIndexStoresStateId = nil
+		return
+	end
 	if not MC.RenderSectionIndexForLocal then
 		chunk.renderSectionBlocks = nil
 		chunk.renderSectionIndexVersion = nil
+		chunk.renderSectionIndexStoresStateId = nil
 		return
 	end
 
 	local lx, ly, lz = MC.DecodeLocal( li )
 	local sectionIndex = MC.RenderSectionIndexForLocal( lx, ly, lz )
 	local section = chunk.renderSectionBlocks[sectionIndex]
-	if id == 0 then
+	if stateId == 0 then
 		if section then
 			section[li] = nil
 			if next( section ) == nil then chunk.renderSectionBlocks[sectionIndex] = nil end
@@ -598,9 +605,10 @@ local function updateCachedRenderSectionCell( chunk, li, id )
 			section = {}
 			chunk.renderSectionBlocks[sectionIndex] = section
 		end
-		section[li] = id
+		section[li] = stateId
 	end
 	chunk.renderSectionIndexVersion = chunk.collisionVersion or 0
+	chunk.renderSectionIndexStoresStateId = true
 end
 
 ------------------------------------------------------------------- block access
@@ -733,6 +741,7 @@ function MC.FinalizeChunkStateStorage( chunk )
 	if CLIENT then
 		chunk.renderSectionBlocks = nil
 		chunk.renderSectionIndexVersion = nil
+		chunk.renderSectionIndexStoresStateId = nil
 	end
 	return true
 end
@@ -746,6 +755,16 @@ function MC.GetBlockState( bx, by, bz )
 	if not migrated then return nil, err end
 	local sectionIndex, sectionLocalIndex = stateSectionAddress( li )
 	local section = c.stateSections and c.stateSections[sectionIndex]
+	if not section then return 0 end
+	return MC.StateSection.Get( section, sectionLocalIndex ) or 0
+end
+
+function MC.GetChunkBlockStateByLocalIndex( chunk, li )
+	if not chunk or not MC.LocalIndexInRange( li ) then return 0 end
+	local migrated, err = MC.MigrateChunkStateStorage( chunk )
+	if not migrated then return nil, err end
+	local sectionIndex, sectionLocalIndex = stateSectionAddress( li )
+	local section = chunk.stateSections and chunk.stateSections[sectionIndex]
 	if not section then return 0 end
 	return MC.StateSection.Get( section, sectionLocalIndex ) or 0
 end
@@ -769,15 +788,15 @@ function MC.GetBlockOrient( bx, by, bz )
 end
 
 function MC.GetCellBlockBoxes( bx, by, bz )
-	local id = MC.GetBlock( bx, by, bz )
-	if id == 0 then return nil end
-	return MC.BlockBoxes and MC.BlockBoxes( id, MC.GetBlockOrient( bx, by, bz ), bx, by, bz ) or nil
+	local stateId = MC.GetBlockState( bx, by, bz )
+	if not stateId or stateId == 0 then return nil end
+	return MC.BlockBoxesForState and MC.BlockBoxesForState( stateId, bx, by, bz ) or nil
 end
 
 function MC.GetCellCollisionBoxes( bx, by, bz )
-	local id = MC.GetBlock( bx, by, bz )
-	if id == 0 then return nil end
-	return MC.GetBlockCollisionBoxes and MC.GetBlockCollisionBoxes( id, MC.GetBlockOrient( bx, by, bz ), bx, by, bz ) or nil
+	local stateId = MC.GetBlockState( bx, by, bz )
+	if not stateId or stateId == 0 then return nil end
+	return MC.GetBlockCollisionBoxesForState and MC.GetBlockCollisionBoxesForState( stateId, bx, by, bz ) or nil
 end
 
 function MC.GetCellBlockExtent( bx, by, bz )
@@ -831,7 +850,7 @@ function MC._SetBlockStateStorageRaw( bx, by, bz, stateId )
 		updateCachedRenderSectionCell( c, li, 0 )
 	else
 		MC.TouchChunkCollisionVersion( c )
-		updateCachedRenderSectionCell( c, li, id )
+		updateCachedRenderSectionCell( c, li, stateId )
 	end
 	if emptied then MC.World[key] = nil end
 	return c, created, emptied, true

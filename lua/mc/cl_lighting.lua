@@ -264,6 +264,14 @@ local function lightOpacity( id, orient )
 	return MC.BlockLightOpacity and MC.BlockLightOpacity( id, orient ) or 15
 end
 
+local function lightEmissionForState( stateId, bx, by, bz )
+	return MC.BlockLightEmissionForState and MC.BlockLightEmissionForState( stateId, bx, by, bz ) or 0
+end
+
+local function lightOpacityForState( stateId, bx, by, bz )
+	return MC.BlockLightOpacityForState and MC.BlockLightOpacityForState( stateId, bx, by, bz ) or 15
+end
+
 local function lightingGeometrySolidRenderState( id, orient )
 	if id == nil or id == 0 then return false end
 	local block = MC.Blocks and MC.Blocks[id]
@@ -330,9 +338,8 @@ end
 
 local function lightOpacityAt( bx, by, bz )
 	if not chunkLoadedForCell( bx, by, bz ) then return 15 end
-	local id = MC.GetBlock( bx, by, bz )
-	local orient = MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz ) or 0
-	return lightOpacity( id, orient )
+	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
+	return lightOpacityForState( stateId, bx, by, bz )
 end
 
 local function lightPropagationCost( bx, by, bz )
@@ -409,15 +416,11 @@ local function addLightSource( bx, by, bz, level )
 end
 
 local function indexChunkSources( chunk )
-	if not chunk or not chunk.blocks or not MC.DecodeLocal then return end
-	local baseX, baseY, baseZ = chunk.cx * MC.CS, chunk.cy * MC.CS, chunk.cz * MC.CH
-	for li, id in pairs( chunk.blocks ) do
-		local emission = lightEmission( id )
-		if emission > 0 then
-			local lx, ly, lz = MC.DecodeLocal( li )
-			addLightSource( baseX + lx, baseY + ly, baseZ + lz, emission )
-		end
-	end
+	if not chunk or not MC.ForEachBlockState then return end
+	MC.ForEachBlockState( chunk, function( bx, by, bz, _, _, _, stateId )
+		local emission = lightEmissionForState( stateId, bx, by, bz )
+		if emission > 0 then addLightSource( bx, by, bz, emission ) end
+	end )
 end
 
 function MC.IndexChunkLightSources( chunk )
@@ -958,6 +961,18 @@ function MC.NoteLightingCellChanged( bx, by, bz, oldId, oldOrient, newId, newOri
 	addLightSource( bx, by, bz, lightEmission( newId ) )
 end
 
+function MC.NoteLightingStateCellChanged( bx, by, bz, newStateId )
+	ensureLightSourceIndex()
+	local key = cellKey( bx, by, bz )
+	local old = MC.LightSourceCells[key]
+	if old then
+		local chunkSources = MC.LightChunkSources[old.chunkKey]
+		if chunkSources then chunkSources[key] = nil end
+		MC.LightSourceCells[key] = nil
+	end
+	addLightSource( bx, by, bz, lightEmissionForState( newStateId, bx, by, bz ) )
+end
+
 function MC.MarkLightingDirtyAroundCell( bx, by, bz, radius, rateLimited )
 	MC.UpdateLightingCellsAroundCell( bx, by, bz, radius, rateLimited )
 end
@@ -1061,6 +1076,26 @@ function MC.MarkLightingDirtyForChange( bx, by, bz, oldId, oldOrient, newId, new
 	end
 end
 
+function MC.MarkLightingDirtyForStateChange( bx, by, bz, oldStateId, newStateId, rateLimited )
+	if not lightEnabled() then
+		noteLightingDisabledSkip( "state_change_dirty", bx, by, bz )
+		return 0, 0
+	end
+	oldStateId = math.floor( tonumber( oldStateId ) or 0 )
+	newStateId = math.floor( tonumber( newStateId ) or 0 )
+	local oldEmission = lightEmissionForState( oldStateId, bx, by, bz )
+	local newEmission = lightEmissionForState( newStateId, bx, by, bz )
+	local oldOpacity = lightOpacityForState( oldStateId, bx, by, bz )
+	local newOpacity = lightOpacityForState( newStateId, bx, by, bz )
+	MC.NoteLightingStateCellChanged( bx, by, bz, newStateId )
+	if MC.NoteSkyColumnBlockChange then MC.NoteSkyColumnBlockChange( bx, by, bz, oldOpacity, newOpacity ) end
+	if MC.UpdateSkyLightForBlockChange then MC.UpdateSkyLightForBlockChange( bx, by, bz, oldOpacity, newOpacity ) end
+	if oldEmission ~= newEmission or oldOpacity ~= newOpacity then
+		return MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, oldOpacity, newOpacity )
+	end
+	return 0, 0
+end
+
 function MC.SampleLighting( bx, by, bz, selfEmission )
 	local sampleStart = lightPerfDebugEnabled() and perfNow() or nil
 	if not lightEnabled() then
@@ -1087,12 +1122,8 @@ function MC.SampleAmbientOcclusion( bx, by, bz )
 		return false
 	end
 	bx, by, bz = math.floor( bx ), math.floor( by ), math.floor( bz )
-	local id = MC.GetBlock( bx, by, bz )
-	local blocked = false
-	if id ~= 0 then
-		local orient = MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz ) or 0
-		blocked = lightOpacity( id, orient ) >= 15
-	end
+	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
+	local blocked = stateId ~= 0 and lightOpacityForState( stateId, bx, by, bz ) >= 15 or false
 	noteLightAOSample( sampleStart )
 	return blocked
 end

@@ -248,9 +248,10 @@ local function cachedMeshLightLevelsSample( sx, sy, sz, selfEmission )
 end
 
 local function blockLightEmissionAt( sx, sy, sz )
-	if not MC.GetBlock or not MC.BlockLightEmission then return 0 end
-	local id = MC.GetBlock( mathFloor( sx ), mathFloor( sy ), mathFloor( sz ) )
-	return MC.BlockLightEmission( id ) or 0
+	if not MC.GetBlockState or not MC.BlockLightEmissionForState then return 0 end
+	local bx, by, bz = mathFloor( sx ), mathFloor( sy ), mathFloor( sz )
+	local stateId = MC.GetBlockState( bx, by, bz )
+	return MC.BlockLightEmissionForState( stateId, bx, by, bz ) or 0
 end
 
 local function cachedMeshAOSample( sx, sy, sz )
@@ -322,16 +323,16 @@ local function cachedMeshAOSampleFast( sx, sy, sz )
 	return blocked
 end
 
-local function minecraftShadeBrightnessForBlock( id, orient )
-	if id == nil or id == 0 then return 1 end
+local function minecraftShadeBrightnessForState( stateId, bx, by, bz )
+	if stateId == nil or stateId == 0 then return 1 end
+	local id = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or 0
 	local block = MC.Blocks and MC.Blocks[id]
 	if block and block.shadeBrightness ~= nil then
 		return mathClamp( tonumber( block.shadeBrightness ) or 1, 0, 1 )
 	end
-	if block and ( block.transparent == true or block.solid == false ) then return 1 end
-	if MC.BlockIsFullCube then
-		return MC.BlockIsFullCube( id, orient ) and 0.2 or 1
-	end
+	if MC.IsTranslucentBlockState and MC.IsTranslucentBlockState( stateId, bx, by, bz ) then return 1 end
+	if MC.BlockHasCollisionForState and not MC.BlockHasCollisionForState( stateId, bx, by, bz ) then return 1 end
+	if MC.BlockIsFullCubeForState then return MC.BlockIsFullCubeForState( stateId, bx, by, bz ) and 0.2 or 1 end
 	if block and block.shape then return 1 end
 	return 0.2
 end
@@ -343,20 +344,17 @@ local function minecraftShadeBrightnessSample( sx, sy, sz )
 		if cached ~= nil then return cached end
 	end
 	local bx, by, bz = mathFloor( sx ), mathFloor( sy ), mathFloor( sz )
-	local id = MC.GetBlock and MC.GetBlock( bx, by, bz ) or 0
-	local orient = id ~= 0 and MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz ) or 0
-	local shadeBrightness = minecraftShadeBrightnessForBlock( id, orient )
+	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
+	local shadeBrightness = minecraftShadeBrightnessForState( stateId, bx, by, bz )
 	if key ~= nil then MeshShadeBrightnessCache[key] = shadeBrightness end
 	return shadeBrightness
 end
 
-local function solidRenderForSmoothLight( id, orient )
-	if id == nil or id == 0 then return false end
-	local block = MC.Blocks and MC.Blocks[id]
-	if block and ( block.transparent == true or block.solid == false ) then return false end
-	if MC.BlockIsFullCube then return MC.BlockIsFullCube( id, orient ) == true end
-	if block and block.shape then return false end
-	return true
+local function solidRenderForSmoothLight( stateId, bx, by, bz )
+	if stateId == nil or stateId == 0 then return false end
+	if MC.IsTranslucentBlockState and MC.IsTranslucentBlockState( stateId, bx, by, bz ) then return false end
+	if MC.BlockHasCollisionForState and not MC.BlockHasCollisionForState( stateId, bx, by, bz ) then return false end
+	return MC.BlockIsFullCubeForState and MC.BlockIsFullCubeForState( stateId, bx, by, bz ) == true or false
 end
 
 local function translucentForSmoothLight( bx, by, bz )
@@ -365,9 +363,8 @@ local function translucentForSmoothLight( bx, by, bz )
 		local cached = MeshSmoothLightTranslucentCache[key]
 		if cached ~= nil then return cached end
 	end
-	local id = MC.GetBlock and MC.GetBlock( bx, by, bz ) or 0
-	local orient = id ~= 0 and MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz ) or 0
-	local translucent = not solidRenderForSmoothLight( id, orient )
+	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
+	local translucent = not solidRenderForSmoothLight( stateId, bx, by, bz )
 	if key ~= nil then MeshSmoothLightTranslucentCache[key] = translucent end
 	return translucent
 end
@@ -431,9 +428,8 @@ local function smoothLightCenterPacked( bx, by, bz, faceIndex, selfEmission, fac
 	if not off then return packedSmoothLightAt( bx, by, bz, selfEmission ) end
 	local nbx, nby, nbz = bx + off[1], by + off[2], bz + off[3]
 	if faceCubic then return packedSmoothLightAt( nbx, nby, nbz, selfEmission ) end
-	local id = MC.GetBlock and MC.GetBlock( nbx, nby, nbz ) or 0
-	local orient = id ~= 0 and MC.GetBlockOrient and MC.GetBlockOrient( nbx, nby, nbz ) or 0
-	if not solidRenderForSmoothLight( id, orient ) then
+	local stateId = MC.GetBlockState and MC.GetBlockState( nbx, nby, nbz ) or 0
+	if not solidRenderForSmoothLight( stateId, nbx, nby, nbz ) then
 		return packedSmoothLightAt( nbx, nby, nbz, selfEmission )
 	end
 	return packedSmoothLightAt( bx, by, bz, selfEmission )
@@ -617,7 +613,7 @@ RM.cachedMeshAOSample = cachedMeshAOSample
 RM.sampleCacheKeyFast = sampleCacheKeyFast
 RM.cachedMeshLightingSampleFast = cachedMeshLightingSampleFast
 RM.cachedMeshAOSampleFast = cachedMeshAOSampleFast
-RM.minecraftShadeBrightnessForBlock = minecraftShadeBrightnessForBlock
+RM.minecraftShadeBrightnessForState = minecraftShadeBrightnessForState
 RM.minecraftShadeBrightnessSample = minecraftShadeBrightnessSample
 RM.noteMeshLightingCacheStats = noteMeshLightingCacheStats
 RM.minecraftSmoothCornerBrightnessValues = minecraftSmoothCornerBrightnessValues

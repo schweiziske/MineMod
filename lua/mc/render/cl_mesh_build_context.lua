@@ -127,14 +127,11 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	local byo = chunk.cy * C.CS
 	local bzo = chunk.cz * C.CH
 	setMeshSampleCacheOrigin( bxo, byo, bzo )
-	chunk.orients = chunk.orients or {}
-	local chunkBlocks = chunk.blocks or {}
-	local chunkOrients = chunk.orients
-	local normalizeOrient = MC.NormalizeOrient
 	local blocksById = MC.Blocks
 	local blockIsFullCube = MC.BlockIsFullCube
 	local getBlock = MC.GetBlock
-	local getBlockOrient = MC.GetBlockOrient
+	local getBlockState = MC.GetBlockState
+	local getChunkBlockState = MC.GetChunkBlockStateByLocalIndex
 	local isPaneBlock = MC.IsPaneBlock
 	local blockBoxes = MC.BlockBoxes
 
@@ -171,30 +168,42 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		return lx >= 0 and lx < C.CS and ly >= 0 and ly < C.CS and lz >= 0 and lz < C.CH
 	end
 
+	local stateAt
 	local function blockAt( lx, ly, lz, bx, by, bz )
+		local stateId = stateAt( lx, ly, lz, bx, by, bz )
+		return stateId and MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or 0
+	end
+
+	stateAt = function( lx, ly, lz, bx, by, bz )
 		if inCurrentChunk( lx, ly, lz ) then
-			return chunkBlocks[localIndex( lx, ly, lz )] or 0
+			local li = localIndex( lx, ly, lz )
+			return getChunkBlockState and getChunkBlockState( chunk, li ) or 0
 		end
-		return getBlock( bx, by, bz )
+		return getBlockState and getBlockState( bx, by, bz ) or 0
 	end
 
 	local function orientAt( lx, ly, lz, bx, by, bz )
-		if inCurrentChunk( lx, ly, lz ) then
-			local li = localIndex( lx, ly, lz )
-			local id = chunkBlocks[li]
-			if not id then return 0 end
-			return normalizeOrient and normalizeOrient( id, chunkOrients[li] ) or ( chunkOrients[li] or 0 )
+		local stateId = stateAt( lx, ly, lz, bx, by, bz )
+		if stateId and MC.ResolveBlockStateVisual then
+			local visual = MC.ResolveBlockStateVisual( stateId, bx, by, bz )
+			if visual then return visual.renderOrient end
 		end
-		return getBlockOrient and getBlockOrient( bx, by, bz ) or 0
+		return 0
 	end
 
 	local function visibleAt( curId, lx, ly, lz, bx, by, bz )
-		local nb = blockAt( lx, ly, lz, bx, by, bz )
+		local nbState = stateAt( lx, ly, lz, bx, by, bz )
+		local nb = nbState and MC.BlockTypeForState and MC.BlockTypeForState( nbState ) or blockAt( lx, ly, lz, bx, by, bz )
 		if nb == 0 then return true end
 		if sameLiquidKind( curId, nb ) then return false end
 		local d = blocksById[nb]
-		if d and d.transparent then return nb ~= curId end
-		if blockIsFullCube and not blockIsFullCube( nb, orientAt( lx, ly, lz, bx, by, bz ) ) then return true end
+		local translucent = nbState and MC.IsTranslucentBlockState and MC.IsTranslucentBlockState( nbState, bx, by, bz )
+		if translucent or d and d.transparent then return nb ~= curId end
+		if nbState and MC.BlockIsFullCubeForState then
+			if not MC.BlockIsFullCubeForState( nbState, bx, by, bz ) then return true end
+		elseif blockIsFullCube and not blockIsFullCube( nb, orientAt( lx, ly, lz, bx, by, bz ) ) then
+			return true
+		end
 		return false
 	end
 
@@ -211,14 +220,19 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		end
 		local nlx, nly, nlz = lx + off[1], ly + off[2], lz + off[3]
 		local nbx, nby, nbz = bx + off[1], by + off[2], bz + off[3]
-		local nb = blockAt( nlx, nly, nlz, nbx, nby, nbz )
+		local nbState = stateAt( nlx, nly, nlz, nbx, nby, nbz )
+		local nb = nbState and MC.BlockTypeForState and MC.BlockTypeForState( nbState ) or blockAt( nlx, nly, nlz, nbx, nby, nbz )
 		if nb == 0 then return false end
 		if sameLiquidKind( curId, nb ) then return true end
 		local d = blocksById[nb]
-		if d and d.transparent and not ( isPaneBlock and isPaneBlock( nb ) ) then return false end
+		local translucent = nbState and MC.IsTranslucentBlockState and MC.IsTranslucentBlockState( nbState, nbx, nby, nbz )
+		if ( translucent or d and d.transparent ) and not ( isPaneBlock and isPaneBlock( nb ) ) then return false end
 		local nbOrient = orientAt( nlx, nly, nlz, nbx, nby, nbz )
-		if blockIsFullCube and blockIsFullCube( nb, nbOrient ) then return true end
-		return coveredByBoxes( box, faceIndex, blockBoxes and blockBoxes( nb, nbOrient, nbx, nby, nbz ) or nil, off[1], off[2], off[3] )
+		if nbState and MC.BlockIsFullCubeForState and MC.BlockIsFullCubeForState( nbState, nbx, nby, nbz ) then return true end
+		if not nbState and blockIsFullCube and blockIsFullCube( nb, nbOrient ) then return true end
+		local nbBoxes = nbState and MC.BlockBoxesForState and MC.BlockBoxesForState( nbState, nbx, nby, nbz )
+			or blockBoxes and blockBoxes( nb, nbOrient, nbx, nby, nbz ) or nil
+		return coveredByBoxes( box, faceIndex, nbBoxes, off[1], off[2], off[3] )
 	end
 
 	local function shapeFaceCoveredAt( curId, box, faceIndex, boxes, bx, by, bz, lx, ly, lz )
@@ -342,7 +356,18 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		return opaqueMeshes, translucentMeshes, opaqueRecords, translucentRecords
 	end
 
-	local blockIter = chunk.blocks
+	local blockIter = {}
+	for stateSectionIndex = 1, 2 do
+		local stateSection = chunk.stateSections and chunk.stateSections[stateSectionIndex]
+		if stateSection and MC.StateSection and MC.StateSection.ForEach then
+			MC.StateSection.ForEach( stateSection, function( sectionLocalIndex, stateId )
+				if stateId ~= 0 then
+					local li = ( stateSectionIndex - 1 ) * 4096 + sectionLocalIndex
+					blockIter[li] = stateId
+				end
+			end )
+		end
+	end
 	if sectionIndex then
 		local indexStart = SysTime()
 		local bySection = ensureChunkRenderSectionIndex( chunk )
@@ -365,8 +390,6 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		bxo = bxo,
 		byo = byo,
 		bzo = bzo,
-		chunkBlocks = chunkBlocks,
-		chunkOrients = chunkOrients,
 		blocksById = blocksById,
 		blockIsFullCube = blockIsFullCube,
 		blockBoxes = blockBoxes,
@@ -379,6 +402,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	ctx.currentEmitLightStyle = currentEmitLightStyle
 	ctx.localIndex = localIndex
 	ctx.blockAt = blockAt
+	ctx.stateAt = stateAt
 	ctx.orientAt = orientAt
 	ctx.visibleAt = visibleAt
 	ctx.shapeFaceCoveredAt = shapeFaceCoveredAt
