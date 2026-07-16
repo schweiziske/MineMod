@@ -62,23 +62,24 @@ local function isLiquidBlock( id )
 	return MC.LiquidKind and MC.LiquidKind( id ) ~= nil or false
 end
 
-local function solidForFluidHeight( id, orient )
-	if id == 0 then return false end
-	local b = MC.Blocks[id]
-	if not b then return true end
-	if b.solid == false or b.transparent == true then return false end
-	if MC.BlockIsFullCube then return MC.BlockIsFullCube( id, orient ) == true end
-	return not b.shape
+local function solidForFluidHeight( stateId, bx, by, bz )
+	if not stateId or stateId == 0 then return false end
+	if MC.IsTranslucentBlockState and MC.IsTranslucentBlockState( stateId, bx, by, bz ) then return false end
+	if MC.BlockHasCollisionForState and not MC.BlockHasCollisionForState( stateId, bx, by, bz ) then return false end
+	if MC.BlockIsFullCubeForState then return MC.BlockIsFullCubeForState( stateId, bx, by, bz ) == true end
+	return false
 end
 
 local function fluidHeightAt( bx, by, bz, kind )
-	local id = MC.GetBlock( bx, by, bz )
+	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
+	local id = stateId and MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or 0
 	if MC.LiquidKind and MC.LiquidKind( id ) == kind then
-		if sameLiquidKind( id, MC.GetBlock( bx, by, bz + 1 ) ) then return 1.0 end
+		local aboveState = MC.GetBlockState and MC.GetBlockState( bx, by, bz + 1 ) or 0
+		local aboveId = aboveState and MC.BlockTypeForState and MC.BlockTypeForState( aboveState ) or 0
+		if sameLiquidKind( id, aboveId ) then return 1.0 end
 		return FLUID_SURFACE_HEIGHT
 	end
-	local orient = MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz ) or 0
-	return solidForFluidHeight( id, orient ) and -1.0 or 0.0
+	return solidForFluidHeight( stateId, bx, by, bz ) and -1.0 or 0.0
 end
 
 local function addWeightedFluidHeight( total, weight, height )
@@ -192,24 +193,33 @@ end
 local function ensureChunkRenderSectionIndex( chunk )
 	if not chunk then return nil end
 	local version = chunk.collisionVersion or 0
-	if chunk.renderSectionBlocks and chunk.renderSectionIndexVersion == version then
+	if chunk.renderSectionBlocks and chunk.renderSectionIndexVersion == version
+	and chunk.renderSectionIndexStoresStateId == true then
 		return chunk.renderSectionBlocks
 	end
 
 	local bySection = {}
-	for li, id in pairs( chunk.blocks or {} ) do
-		local lx, ly, lz = DecodeLocal( li )
-		local sectionIndex = sectionIndexForLocal( lx, ly, lz )
-		local list = bySection[sectionIndex]
-		if not list then
-			list = {}
-			bySection[sectionIndex] = list
+	for stateSectionIndex = 1, 2 do
+		local stateSection = chunk.stateSections and chunk.stateSections[stateSectionIndex]
+		if stateSection and MC.StateSection and MC.StateSection.ForEach then
+			MC.StateSection.ForEach( stateSection, function( sectionLocalIndex, stateId )
+				if stateId == 0 then return end
+				local li = ( stateSectionIndex - 1 ) * 4096 + sectionLocalIndex
+				local lx, ly, lz = DecodeLocal( li )
+				local sectionIndex = sectionIndexForLocal( lx, ly, lz )
+				local list = bySection[sectionIndex]
+				if not list then
+					list = {}
+					bySection[sectionIndex] = list
+				end
+				list[li] = stateId
+			end )
 		end
-		list[li] = id
 	end
 
 	chunk.renderSectionBlocks = bySection
 	chunk.renderSectionIndexVersion = version
+	chunk.renderSectionIndexStoresStateId = true
 	return bySection
 end
 

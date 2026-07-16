@@ -154,19 +154,10 @@ function T.AcceptHello( hello )
 	return true
 end
 
-local function stateLegacyView( stateId )
-	if stateId == 0 then return 0, 0 end
-	if not MC.LegacyFromState then return 0, 0 end
-	local id, orient = MC.LegacyFromState( stateId )
-	return id or 0, orient or 0
-end
-
 local function markCellChanged( cell, oldStateId, rateLimited )
-	local oldId, oldOrient = stateLegacyView( oldStateId )
-	local newId, newOrient = stateLegacyView( cell.stateId )
-	if MC.MarkLightingDirtyForChange then
-		MC.MarkLightingDirtyForChange( cell.bx, cell.by, cell.bz,
-			oldId, oldOrient, newId, newOrient, rateLimited )
+	if MC.MarkLightingDirtyForStateChange then
+		MC.MarkLightingDirtyForStateChange( cell.bx, cell.by, cell.bz,
+			oldStateId, cell.stateId, rateLimited )
 	elseif MC.MarkLightingDirtyAroundCell then
 		MC.MarkLightingDirtyAroundCell( cell.bx, cell.by, cell.bz, nil, rateLimited )
 	end
@@ -280,12 +271,9 @@ local function applyTransactionNow( transaction )
 				end
 			end
 		end
-		if not correction and MC.ConfirmStatePrediction then
+		if MC.ConfirmStatePrediction then
 			MC.ConfirmStatePrediction( item.cell.bx, item.cell.by, item.cell.bz,
 				item.cell.stateId, transaction.revision )
-		elseif correction and MC.ConfirmPrediction then
-			local id, orient = stateLegacyView( item.cell.stateId )
-			MC.ConfirmPrediction( item.cell.bx, item.cell.by, item.cell.bz, id, orient )
 		end
 	end
 	return true

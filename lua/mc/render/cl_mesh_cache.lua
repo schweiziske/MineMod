@@ -352,13 +352,14 @@ function MC.GetBlockLightDirtySection( key, sectionIndex )
 	return MC.MeshBlockLightDirty[key] and MC.MeshBlockLightDirty[key][sectionIndex]
 end
 
-function MC.GetCachedBlockEmission( key, sectionIndex, li, id, orient )
+function MC.GetCachedBlockEmission( key, sectionIndex, li, id, orient, stateId )
 	local dirtySection = MC.MeshBlockEmitDirty[key] and MC.MeshBlockEmitDirty[key][sectionIndex]
 	if dirtySection and dirtySection[li] then return nil end
 	local section = MC.MeshBlockEmitCache[key] and MC.MeshBlockEmitCache[key][sectionIndex]
 	local record = section and section[li]
 	if not record then return nil end
 	if record.id ~= id or record.orient ~= ( orient or 0 ) then return nil end
+	if stateId ~= nil and record.stateId ~= stateId then return nil end
 	if not record.verts or not record.light then return nil end
 	local vertexCount = record.vertexCount or #record.verts
 	if vertexCount ~= #record.verts or vertexCount ~= #record.light then return nil end
@@ -378,10 +379,11 @@ function MC.DropBlockEmitCacheRecord( key, sectionIndex, li )
 	pruneBlockTable( MC.MeshBlockEmitCache, key, sectionIndex )
 end
 
-function MC.StoreBlockEmissionCache( key, sectionIndex, li, id, orient, lightStyle, record )
+function MC.StoreBlockEmissionCache( key, sectionIndex, li, id, orient, lightStyle, record, stateId )
 	if not record then return nil end
 	record.id = id
 	record.orient = orient or 0
+	record.stateId = stateId
 	record.lightStyle = lightStyle
 	record.vertexCount = record.vertexCount or #( record.verts or {} )
 	record.hasSecondaryUV = record.hasSecondaryUV == true

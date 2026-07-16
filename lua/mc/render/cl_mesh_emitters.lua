@@ -13,6 +13,7 @@ local meshPerfElapsedMS = RM.meshPerfElapsedMS
 local meshPerfAddBlockKind = RM.meshPerfAddBlockKind
 local meshPerfAddKindDuration = RM.meshPerfAddKindDuration
 local isLiquidBlock = RM.isLiquidBlock
+local sameLiquidKind = RM.sameLiquidKind
 local rotatedModelQuads = RM.rotatedModelQuads
 local rotatedUVFlags = RM.rotatedUVFlags
 local tileUVRect = RM.tileUVRect
@@ -31,7 +32,6 @@ local quadCornerColorValues = RM.quadCornerColorValues
 local shadeIndexForFace = RM.shadeIndexForFace
 local cornerXYZ = RM.cornerXYZ
 local quadFaceCubic = RM.quadFaceCubic
-local visible = RM.visible
 local fluidHeightAt = RM.fluidHeightAt
 local calculateAverageFluidHeight = RM.calculateAverageFluidHeight
 local recolorCachedBlockEmission = RM.recolorCachedBlockEmission
@@ -42,6 +42,46 @@ local ShapeModelTemplateCache = {
 	shape = {},
 	connection = {},
 }
+
+local function stateFace( ctx, id, face, orient, bx, by, bz )
+	local stateId = ctx and ctx.currentStateId
+	if stateId and ctx.currentVisual and MC.BlockVisualFace then return MC.BlockVisualFace( ctx.currentVisual, face, bx, by, bz ) end
+	return MC.BlockFace( id, face, orient )
+end
+
+local function stateBoxes( ctx, id, orient, bx, by, bz )
+	local stateId = ctx and ctx.currentStateId
+	if stateId and ctx.currentVisual and MC.BlockVisualBoxes then return MC.BlockVisualBoxes( ctx.currentVisual, bx, by, bz ) end
+	return MC.BlockBoxes and MC.BlockBoxes( id, orient, bx, by, bz ) or nil
+end
+
+local function stateEmission( ctx, id, bx, by, bz )
+	local stateId = ctx and ctx.currentStateId
+	if stateId and ctx.currentVisual and MC.BlockVisualLightEmission then return MC.BlockVisualLightEmission( ctx.currentVisual, bx, by, bz ) end
+	return MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
+end
+
+local function stateFullCube( ctx, id, orient, bx, by, bz )
+	local stateId = ctx and ctx.currentStateId
+	if stateId and ctx.currentVisual and MC.BlockVisualIsFullCube then return MC.BlockVisualIsFullCube( ctx.currentVisual, bx, by, bz ) end
+	return MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) == true or false
+end
+
+local function stateTranslucent( ctx, id, bx, by, bz )
+	local stateId = ctx and ctx.currentStateId
+	if stateId and ctx.currentVisual and MC.BlockVisualIsTranslucent then return MC.BlockVisualIsTranslucent( ctx.currentVisual, bx, by, bz ) end
+	return MC.IsTranslucentBlock and MC.IsTranslucentBlock( id ) == true or false
+end
+
+local function stateVisibleAtWorld( currentId, bx, by, bz )
+	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
+	local id = stateId and MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or 0
+	if not id or id == 0 then return true end
+	if sameLiquidKind( currentId, id ) then return false end
+	if MC.IsTranslucentBlockState and MC.IsTranslucentBlockState( stateId, bx, by, bz ) then return id ~= currentId end
+	if MC.BlockIsFullCubeForState and not MC.BlockIsFullCubeForState( stateId, bx, by, bz ) then return true end
+	return false
+end
 
 function RM.resetShapeModelTemplateCache()
 	ShapeModelTemplateCache = {
@@ -120,12 +160,13 @@ local function buildModelTemplate( b, orient )
 	return out
 end
 
-local function getModelTemplate( b, orient )
+local function getModelTemplate( b, orient, stateId )
 	local bucket = templateBucket( ShapeModelTemplateCache.model, b.id )
-	local cached = bucket[orient]
+	local cacheKey = stateId or orient
+	local cached = bucket[cacheKey]
 	if cached ~= nil then return cached ~= false and cached or nil end
 	cached = buildModelTemplate( b, orient )
-	bucket[orient] = cached or false
+	bucket[cacheKey] = cached or false
 	return cached ~= false and cached or nil
 end
 
@@ -161,9 +202,9 @@ function setTemplateTriVertex( rec, t, ci, x, y, z, u, v )
 	end
 end
 
-local function buildShapeTemplate( b, id, orient, blockBoxes )
-	if not blockBoxes then return false end
-	local boxes = blockBoxes( id, orient )
+local function buildShapeTemplate( ctx, b, id, orient, blockBoxes )
+	if not blockBoxes and not MC.BlockBoxesForState then return false end
+	local boxes = stateBoxes( ctx, id, orient )
 	if not boxes then return false end
 
 	local modelFaces = b and b.boxFaces
@@ -176,7 +217,7 @@ local function buildShapeTemplate( b, id, orient, blockBoxes )
 			local fd = boxFaces and boxFaces[f] or nil
 			if not modelFaces or fd then
 				local face = C.FACES[f]
-				local tile = fd and fd.tile or MC.BlockFace( id, f, orient )
+				local tile = fd and fd.tile or stateFace( ctx, id, f, orient )
 				local quadLightEmission = fd and fd.lightEmission or 0
 				local u0, v0, u1, v1
 				if fd and fd.uv then
@@ -221,12 +262,13 @@ local function buildShapeTemplate( b, id, orient, blockBoxes )
 	return out
 end
 
-local function getShapeTemplate( b, id, orient, blockBoxes )
+local function getShapeTemplate( ctx, b, id, orient, blockBoxes )
 	local bucket = templateBucket( ShapeModelTemplateCache.shape, id )
-	local cached = bucket[orient]
+	local cacheKey = ctx.currentStateId or orient
+	local cached = bucket[cacheKey]
 	if cached ~= nil then return cached ~= false and cached or nil end
-	cached = buildShapeTemplate( b, id, orient, blockBoxes )
-	bucket[orient] = cached or false
+	cached = buildShapeTemplate( ctx, b, id, orient, blockBoxes )
+	bucket[cacheKey] = cached or false
 	return cached ~= false and cached or nil
 end
 
@@ -358,7 +400,7 @@ local function connectionBoundaryBit( box, faceIndex )
 	return 0
 end
 
-local function connectionTemplateBucket( kind, id, orient )
+local function connectionTemplateBucket( kind, id, orient, stateId )
 	local kindBucket = ShapeModelTemplateCache.connection[kind]
 	if not kindBucket then
 		kindBucket = {}
@@ -369,15 +411,16 @@ local function connectionTemplateBucket( kind, id, orient )
 		idBucket = {}
 		kindBucket[id] = idBucket
 	end
-	local orientBucket = idBucket[orient]
+	local cacheKey = stateId or orient
+	local orientBucket = idBucket[cacheKey]
 	if not orientBucket then
 		orientBucket = {}
-		idBucket[orient] = orientBucket
+		idBucket[cacheKey] = orientBucket
 	end
 	return orientBucket
 end
 
-local function buildConnectionShapeTemplate( kind, id, orient, b, mask, boxes )
+local function buildConnectionShapeTemplate( ctx, kind, id, orient, b, mask, boxes )
 	if not boxes or not connectionShapeFaceValues then return false end
 	local out = { boxes = boxes, n = 0 }
 	local boxCount = #boxes
@@ -389,7 +432,7 @@ local function buildConnectionShapeTemplate( kind, id, orient, b, mask, boxes )
 			if not connectedBoundary and ( boxCount <= 1 or not coveredByBoxes( box, f, boxes, 0, 0, 0 ) ) then
 					local face = C.FACES[f]
 					local tile, uv, ok = connectionShapeFaceValues( b, f, box )
-					if not ok then tile = MC.BlockFace( id, f, orient ) end
+					if not ok then tile = stateFace( ctx, id, f, orient ) end
 					local c1x, c1y, c1z = boxFaceCornerValues( box, f, 1 )
 					local c2x, c2y, c2z = boxFaceCornerValues( box, f, 2 )
 					local c3x, c3y, c3z = boxFaceCornerValues( box, f, 3 )
@@ -424,11 +467,11 @@ local function buildConnectionShapeTemplate( kind, id, orient, b, mask, boxes )
 	return out
 end
 
-local function getConnectionShapeTemplate( kind, id, orient, b, mask, boxes )
-	local bucket = connectionTemplateBucket( kind, id, orient )
+local function getConnectionShapeTemplate( ctx, kind, id, orient, b, mask, boxes )
+	local bucket = connectionTemplateBucket( kind, id, orient, ctx.currentStateId )
 	local cached = bucket[mask]
 	if cached ~= nil then return cached ~= false and cached or nil end
-	cached = buildConnectionShapeTemplate( kind, id, orient, b, mask, boxes )
+	cached = buildConnectionShapeTemplate( ctx, kind, id, orient, b, mask, boxes )
 	bucket[mask] = cached or false
 	return cached ~= false and cached or nil
 end
@@ -472,8 +515,8 @@ local function pushFullCubeFace( push, wx, wy, wz, nrm, corners, baked, tile, u0
 	)
 end
 
-local function emitModelBlockTemplate( template, b, bx, by, bz, wx, wy, wz, li, push, lightMetaFast, currentEmitLightStyle )
-	local emission = MC.BlockLightEmission and MC.BlockLightEmission( b.id ) or 0
+local function emitModelBlockTemplate( ctx, template, b, bx, by, bz, wx, wy, wz, li, push, lightMetaFast, currentEmitLightStyle )
+	local emission = stateEmission( ctx, b.id, bx, by, bz )
 	local emitLightStyle = currentEmitLightStyle()
 	for qi = 1, template.n do
 		local quad = template[qi]
@@ -491,9 +534,9 @@ local function emitModelBlockTemplate( template, b, bx, by, bz, wx, wy, wz, li, 
 	return true
 end
 
-local function emitShapeBlockTemplate( template, id, bx, by, bz, wx, wy, wz, lx, ly, lz, li, push, lightMetaFast, shapeFaceNeighborCoveredAt, currentEmitLightStyle )
+local function emitShapeBlockTemplate( ctx, template, id, bx, by, bz, wx, wy, wz, lx, ly, lz, li, push, lightMetaFast, shapeFaceNeighborCoveredAt, currentEmitLightStyle )
 	local boxes = template.boxes
-	local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
+	local emission = stateEmission( ctx, id, bx, by, bz )
 	local emitLightStyle = currentEmitLightStyle()
 	for faceI = 1, template.n do
 		local quad = template[faceI]
@@ -527,10 +570,10 @@ local function emitConnectionShapeBlockTemplate( ctx, kind, b, id, orient, bx, b
 	end
 	if not boxes then return false end
 
-	local template = getConnectionShapeTemplate( kind, id, orient, b, mask, boxes )
+	local template = getConnectionShapeTemplate( ctx, kind, id, orient, b, mask, boxes )
 	if not template then return false end
 
-	local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
+	local emission = stateEmission( ctx, id, bx, by, bz )
 	local emitLightStyle = currentEmitLightStyle()
 	for qi = 1, template.n do
 		local quad = template[qi]
@@ -559,7 +602,7 @@ local function emitConnectionShapeBlockLegacy( ctx, kind, b, id, orient, bx, by,
 	end
 	if not boxes then return false end
 
-	local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
+	local emission = stateEmission( ctx, id, bx, by, bz )
 	local emitLightStyle = currentEmitLightStyle()
 	for boxIndex = 1, #boxes do
 		local box = boxes[boxIndex]
@@ -567,7 +610,7 @@ local function emitConnectionShapeBlockLegacy( ctx, kind, b, id, orient, bx, by,
 			if not shapeFaceCoveredAt( id, box, f, boxes, bx, by, bz, lx, ly, lz ) then
 				local face = C.FACES[f]
 				local tile, uv, ok = connectionShapeFaceValues( b, f, box )
-				if not ok then tile = MC.BlockFace( id, f, orient ) end
+				if not ok then tile = stateFace( ctx, id, f, orient, bx, by, bz ) end
 				local c1x, c1y, c1z = boxFaceCornerValues( box, f, 1 )
 				local c2x, c2y, c2z = boxFaceCornerValues( box, f, 2 )
 				local c3x, c3y, c3z = boxFaceCornerValues( box, f, 3 )
@@ -601,7 +644,7 @@ local function emitConnectionShapeBlock( ctx, kind, b, id, orient, bx, by, bz, w
 end
 
 local function emitQuad( ctx, cur, push, lightMeta, currentEmitLightStyle, corners, normal, color, tile, bx, by, bz, id, faceIndex )
-	local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
+	local emission = stateEmission( ctx, id, bx, by, bz )
 	local emitLightStyle = currentEmitLightStyle()
 	local color1, color2, color3, color4 = quadCornerColors( color, bx, by, bz, id, faceIndex, corners, emission, emitLightStyle )
 	local tri = C.TRI
@@ -629,8 +672,8 @@ local function emitQuad( ctx, cur, push, lightMeta, currentEmitLightStyle, corne
 	end
 end
 
-function RM.EmitCrossBlock( ctx, id, bx, by, bz, wx, wy, wz, push, lightMeta, currentEmitLightStyle )
-	local b = MC.Blocks[id]
+function RM.EmitCrossBlock( ctx, b, id, bx, by, bz, wx, wy, wz, push, lightMeta, currentEmitLightStyle )
+	b = b or MC.Blocks[id]
 	local tile = b and b.side or 0
 	local z0, z1 = wz, wz + C.BS
 	local a, c = 0.08 * C.BS, 0.92 * C.BS
@@ -653,13 +696,13 @@ function RM.EmitCrossBlock( ctx, id, bx, by, bz, wx, wy, wz, push, lightMeta, cu
 end
 
 function RM.EmitModelBlock( ctx, b, orient, bx, by, bz, wx, wy, wz, li, push, lightMeta, currentEmitLightStyle )
-	local template = getModelTemplate( b, orient )
+	local template = getModelTemplate( b, orient, ctx.currentStateId )
 	if not template then return false end
-	return emitModelBlockTemplate( template, b, bx, by, bz, wx, wy, wz, li, push, ctx.lightMetaFast, currentEmitLightStyle )
+	return emitModelBlockTemplate( ctx, template, b, bx, by, bz, wx, wy, wz, li, push, ctx.lightMetaFast, currentEmitLightStyle )
 end
 
 local function emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle, verts, normal, shade, tile, bx, by, bz, id, faceIndex, lightCorners, uvCorners )
-	local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
+	local emission = stateEmission( ctx, id, bx, by, bz )
 	local emitLightStyle = currentEmitLightStyle()
 	local x1, y1, z1 = cornerXYZ( lightCorners[1] )
 	local x2, y2, z2 = cornerXYZ( lightCorners[2] )
@@ -716,8 +759,7 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 		h01 = calculateAverageFluidHeight( kind, hSelf, hYP, hXN, bx - 1, by + 1, bz )
 	end
 
-	local nbUp = MC.GetBlock( bx, by, bz + 1 )
-	local renderUp = visible( id, nbUp, MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz + 1 ) or 0 )
+	local renderUp = stateVisibleAtWorld( id, bx, by, bz + 1 )
 	local topOffset = renderUp and C.FLUID_FACE_OFFSET or 0
 	local rh00 = math.max( h00 - topOffset, 0 )
 	local rh10 = math.max( h10 - topOffset, 0 )
@@ -727,7 +769,7 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 	local tile
 
 	if renderUp then
-		tile = MC.BlockFace( id, MC.Face.TOP, orient )
+		tile = stateFace( ctx, id, MC.Face.TOP, orient, bx, by, bz )
 		emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle,
 			{ { x0, y0, z00 }, { x1, y0, z10 }, { x1, y1, z11 }, { x0, y1, z01 } },
 			C.N_UP, C.SH_TOP, tile, bx, by, bz, id, MC.Face.TOP,
@@ -736,11 +778,10 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 		)
 	end
 
-	local nbDown = MC.GetBlock( bx, by, bz - 1 )
-	local renderDown = visible( id, nbDown, MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz - 1 ) or 0 )
+	local renderDown = stateVisibleAtWorld( id, bx, by, bz - 1 )
 	local bottomZ = bottom + ( renderDown and C.FLUID_FACE_OFFSET or 0 ) * C.BS
 	if renderDown then
-		tile = MC.BlockFace( id, MC.Face.BOTTOM, orient )
+		tile = stateFace( ctx, id, MC.Face.BOTTOM, orient, bx, by, bz )
 		emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle,
 			{ { x0, y1, bottomZ }, { x1, y1, bottomZ }, { x1, y0, bottomZ }, { x0, y0, bottomZ } },
 			C.N_DOWN, C.SH_BOTTOM, tile, bx, by, bz, id, MC.Face.BOTTOM,
@@ -757,8 +798,8 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 	local sideBottom = bottomZ
 	local sideInset = C.FLUID_FACE_OFFSET * C.BS
 
-	if visible( id, MC.GetBlock( bx + 1, by, bz ), MC.GetBlockOrient and MC.GetBlockOrient( bx + 1, by, bz ) or 0 ) then
-		tile = MC.BlockFace( id, MC.Face.XP, orient )
+	if stateVisibleAtWorld( id, bx + 1, by, bz ) then
+		tile = stateFace( ctx, id, MC.Face.XP, orient, bx, by, bz )
 		local sx = x1 - sideInset
 		emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle,
 			{ { sx, y0, sideBottom }, { sx, y1, sideBottom }, { sx, y1, z11 }, { sx, y0, z10 } },
@@ -768,8 +809,8 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 		)
 	end
 
-	if visible( id, MC.GetBlock( bx - 1, by, bz ), MC.GetBlockOrient and MC.GetBlockOrient( bx - 1, by, bz ) or 0 ) then
-		tile = MC.BlockFace( id, MC.Face.XN, orient )
+	if stateVisibleAtWorld( id, bx - 1, by, bz ) then
+		tile = stateFace( ctx, id, MC.Face.XN, orient, bx, by, bz )
 		local sx = x0 + sideInset
 		emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle,
 			{ { sx, y1, sideBottom }, { sx, y0, sideBottom }, { sx, y0, z00 }, { sx, y1, z01 } },
@@ -779,8 +820,8 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 		)
 	end
 
-	if visible( id, MC.GetBlock( bx, by + 1, bz ), MC.GetBlockOrient and MC.GetBlockOrient( bx, by + 1, bz ) or 0 ) then
-		tile = MC.BlockFace( id, MC.Face.YP, orient )
+	if stateVisibleAtWorld( id, bx, by + 1, bz ) then
+		tile = stateFace( ctx, id, MC.Face.YP, orient, bx, by, bz )
 		local sy = y1 - sideInset
 		emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle,
 			{ { x1, sy, sideBottom }, { x0, sy, sideBottom }, { x0, sy, z01 }, { x1, sy, z11 } },
@@ -790,8 +831,8 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 		)
 	end
 
-	if visible( id, MC.GetBlock( bx, by - 1, bz ), MC.GetBlockOrient and MC.GetBlockOrient( bx, by - 1, bz ) or 0 ) then
-		tile = MC.BlockFace( id, MC.Face.YN, orient )
+	if stateVisibleAtWorld( id, bx, by - 1, bz ) then
+		tile = stateFace( ctx, id, MC.Face.YN, orient, bx, by, bz )
 		local sy = y0 + sideInset
 		emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle,
 			{ { x0, sy, sideBottom }, { x1, sy, sideBottom }, { x1, sy, z10 }, { x0, sy, z00 } },
@@ -826,11 +867,11 @@ local function modelUsesConnectionShape( b, id )
 		or ( b and b.connection == "pipe6" )
 end
 
-local function selectBlockEmitter( ctx, b, id, orient, blockIsFullCube )
+local function selectBlockEmitter( ctx, b, id, orient, blockIsFullCube, bx, by, bz )
 	if b and b.shape == "cross" then return BlockEmitters.cross end
 	if b and b.shape == "model" and not modelUsesConnectionShape( b, id ) then return BlockEmitters.model end
 	if isLiquidBlock( id ) then return BlockEmitters.liquid end
-	if MC.BlockIsFullCube and blockIsFullCube and blockIsFullCube( id, orient ) then return BlockEmitters.fullCube end
+	if stateFullCube( ctx, id, orient, bx, by, bz ) then return BlockEmitters.fullCube end
 	return BlockEmitters.shape
 end
 
@@ -851,18 +892,18 @@ local function emitShapeBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz,
 	local isConnShape = connectionKind ~= nil
 	local template
 	if not isConnShape and not isDynamicStairs then
-		template = getShapeTemplate( b, id, orient, blockBoxes )
+		template = getShapeTemplate( ctx, b, id, orient, blockBoxes )
 	end
 	if isConnShape and emitConnectionShapeBlock( ctx, connectionKind, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, push, lightMetaFast, shapeFaceCoveredAt, shapeFaceNeighborCoveredAt, currentEmitLightStyle ) then
 		return "shape", false, 0
 	end
 	if template then
-		emitShapeBlockTemplate( template, id, bx, by, bz, wx, wy, wz, lx, ly, lz, li, push, lightMetaFast, shapeFaceNeighborCoveredAt, currentEmitLightStyle )
+		emitShapeBlockTemplate( ctx, template, id, bx, by, bz, wx, wy, wz, lx, ly, lz, li, push, lightMetaFast, shapeFaceNeighborCoveredAt, currentEmitLightStyle )
 		return "shape", false, 0
 	end
 
-	local boxes = blockBoxes and blockBoxes( id, orient, bx, by, bz ) or nil
-	local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
+	local boxes = stateBoxes( ctx, id, orient, bx, by, bz )
+	local emission = stateEmission( ctx, id, bx, by, bz )
 	for boxIndex, box in ipairs( boxes or {} ) do
 		for f = 1, 6 do
 			repeat
@@ -875,7 +916,7 @@ local function emitShapeBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz,
 				local dynamicFd = dynamicShapeFaceData( b, f, box )
 				if modelFaces and not fd and not dynamicFd then break end
 				fd = fd or dynamicFd
-				local tile = fd and fd.tile or MC.BlockFace( id, f, orient )
+				local tile = fd and fd.tile or stateFace( ctx, id, f, orient, bx, by, bz )
 				local quadLightEmission = fd and fd.lightEmission or 0
 				local u0, v0, u1, v1
 				if fd and fd.uv then
@@ -909,7 +950,7 @@ end
 
 local function emitCrossBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
 	ctx.prepareBlockCacheBuffer( targetBuffer )
-	RM.EmitCrossBlock( ctx, id, bx, by, bz, wx, wy, wz, ctx.push, ctx.lightMeta, ctx.currentEmitLightStyle )
+	RM.EmitCrossBlock( ctx, b, id, bx, by, bz, wx, wy, wz, ctx.push, ctx.lightMeta, ctx.currentEmitLightStyle )
 	return "cross", false, 0
 end
 
@@ -921,7 +962,7 @@ local function emitModelBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz,
 	if isLiquidBlock( id ) and emitLiquidBlockRecord then
 		return emitLiquidBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
 	end
-	if MC.BlockIsFullCube and ctx.blockIsFullCube and ctx.blockIsFullCube( id, orient ) and emitFullCubeBlockRecord then
+	if stateFullCube( ctx, id, orient, bx, by, bz ) and emitFullCubeBlockRecord then
 		return emitFullCubeBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
 	end
 	return emitShapeBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
@@ -932,7 +973,7 @@ emitLiquidBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx
 		and RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, ctx.push, ctx.lightMeta, ctx.currentEmitLightStyle ) then
 		return "liquid", false, 0
 	end
-	if MC.BlockIsFullCube and ctx.blockIsFullCube and ctx.blockIsFullCube( id, orient ) and emitFullCubeBlockRecord then
+	if stateFullCube( ctx, id, orient, bx, by, bz ) and emitFullCubeBlockRecord then
 		return emitFullCubeBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
 	end
 	return emitShapeBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
@@ -945,7 +986,7 @@ emitFullCubeBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, 
 	local lightMetaFast = ctx.lightMetaFast
 	local flush = ctx.flush
 	local push = ctx.push
-	local emission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
+	local emission = stateEmission( ctx, id, bx, by, bz )
 	local visibleFaceCount = 0
 	local visibleFaceMask = 0
 	local fullVisibleStart = meshProbe and SysTime() or nil
@@ -974,7 +1015,7 @@ emitFullCubeBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, 
 		if bit_band( visibleFaceMask, bit_lshift( 1, f - 1 ) ) ~= 0 then
 			local face = C.FACES[f]
 			local faceStart = meshProbe and SysTime() or nil
-			local baked = bakedFaceData( id, f, orient )
+			local baked = not ( ctx.currentVisual and ctx.currentVisual.faces ) and bakedFaceData( id, f, orient ) or nil
 			local tile, rot, flipU, flipV
 			local u0, v0, u1, v1
 			local quadLightEmission = baked and baked.lightEmission or 0
@@ -983,7 +1024,7 @@ emitFullCubeBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, 
 				rot = baked.rot or 0
 				u0, v0, u1, v1 = tileUVRect( tile, baked.uv )
 			else
-				tile, rot, flipU, flipV = MC.BlockFace( id, f, orient )
+				tile, rot, flipU, flipV = stateFace( ctx, id, f, orient, bx, by, bz )
 				u0, v0, u1, v1 = MC.TileUV( tile )
 			end
 			local corners = face.c
@@ -1019,7 +1060,7 @@ local function emitSelectedBlock( emitter, ctx, b, id, orient, bx, by, bz, wx, w
 end
 
 
-function RM.EmitBlock( ctx, li, id )
+function RM.EmitBlock( ctx, li, stateId )
 	local key = ctx.key
 	local meshPerf = ctx.meshPerf
 	local meshProbe = ctx.meshProbe
@@ -1035,23 +1076,31 @@ function RM.EmitBlock( ctx, li, id )
 	local styleForBuffer = ctx.styleForBuffer
 	local getCur = ctx.getCur
 		meshPerf.blocksVisited = meshPerf.blocksVisited + 1
-		local orient = MC.NormalizeOrient( id, chunk.orients[li] )
 		local lx, ly, lz = DecodeLocal( li )
 		local buffers = buffersForLocal( lx, ly, lz )
 		if not buffers then return end
 		local bx, by, bz = bxo + lx, byo + ly, bzo + lz
+		local visual = stateId and MC.ResolveBlockStateVisual and MC.ResolveBlockStateVisual( stateId, bx, by, bz ) or nil
+		if not visual then
+			MC.DropBlockEmitCacheRecord( key, MC.RenderSectionIndexForLocal( lx, ly, lz ), li )
+			return
+		end
+		local id = visual.id
+		local orient = visual.renderOrient
+		ctx.currentStateId = stateId
+		ctx.currentVisual = visual
 		local wx, wy, wz = lx * C.BS, ly * C.BS, lz * C.BS
 		local blockSectionIndex = MC.RenderSectionIndexForLocal( lx, ly, lz )
 
-		if meshDebugFullCubeOnly() and not ( MC.BlockIsFullCube and blockIsFullCube and blockIsFullCube( id, orient ) ) then
+		if meshDebugFullCubeOnly() and not stateFullCube( ctx, id, orient, bx, by, bz ) then
 			MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
 			if MC.ClearBlockCacheDirtySlot then MC.ClearBlockCacheDirtySlot( key, blockSectionIndex, li ) end
 			return
 		end
 
-		local targetBuffer = ( MC.IsTranslucentBlock and MC.IsTranslucentBlock( id ) ) and buffers.translucent or buffers.opaque
+		local targetBuffer = stateTranslucent( ctx, id, bx, by, bz ) and buffers.translucent or buffers.opaque
 		local targetLightStyle = styleForBuffer( targetBuffer )
-		local cached = MC.GetCachedBlockEmission( key, blockSectionIndex, li, id, orient )
+		local cached = MC.GetCachedBlockEmission( key, blockSectionIndex, li, id, orient, stateId )
 		local blockNeedsRecolor = sectionNeedsFullRecolor or ( blockLightDirtySection and blockLightDirtySection[li] )
 		if cached and ( blockNeedsRecolor or cached.lightStyle ~= targetLightStyle ) then
 			local recolorStart = SysTime()
@@ -1078,8 +1127,8 @@ function RM.EmitBlock( ctx, li, id )
 		ctx.setCur( nil )
 
 		local emitStart = SysTime()
-		local b = blocksById[id]
-		local emitter = selectBlockEmitter( ctx, b, id, orient, blockIsFullCube )
+		local b = visual and visual.block or blocksById[id]
+		local emitter = selectBlockEmitter( ctx, b, id, orient, blockIsFullCube, bx, by, bz )
 		local emitKind, directEmitCheapFullCube, directEmitVertexCount = emitSelectedBlock(
 			emitter,
 			ctx,
@@ -1116,7 +1165,7 @@ function RM.EmitBlock( ctx, li, id )
 				kind = emitKind,
 			} or nil
 			if shouldStoreBlockEmissionCache( emitKind, emittedVertices ) then
-				blockRecord = MC.StoreBlockEmissionCache( key, blockSectionIndex, li, id, orient, targetLightStyle, blockRecord )
+				blockRecord = MC.StoreBlockEmissionCache( key, blockSectionIndex, li, id, orient, targetLightStyle, blockRecord, stateId )
 			else
 				MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
 				if MC.ClearBlockCacheDirtySlot then MC.ClearBlockCacheDirtySlot( key, blockSectionIndex, li ) end

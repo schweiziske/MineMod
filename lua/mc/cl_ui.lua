@@ -407,18 +407,19 @@ local ICON_SHAPE_BOXES = {
 	wall = { { 0.25, 0.25, 0, 0.75, 0.75, 1 } },
 }
 
-local function iconBoxes( id, orient )
-	local b = MC.Blocks[id]
+local function iconBoxes( id, orient, visual )
+	local b = visual and visual.block or MC.Blocks[id]
 	if b and b.connection and ICON_SHAPE_BOXES[b.connection] then
 		return ICON_SHAPE_BOXES[b.connection]
 	end
+	if visual and MC.BlockBoxesForState then return MC.BlockBoxesForState( visual.stateId ) end
 	return MC.BlockBoxes and MC.BlockBoxes( id, orient ) or nil
 end
 
-function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel )
-	local b = MC.Blocks[id]
+function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual )
+	local b = visual and visual.block or MC.Blocks[id]
 	if not b then return end
-	orient = MC.NormalizeOrient and MC.NormalizeOrient( id, orient ) or math.floor( tonumber( orient ) or 0 )
+	orient = visual and visual.renderOrient or ( MC.NormalizeOrient and MC.NormalizeOrient( id, orient ) or math.floor( tonumber( orient ) or 0 ) )
 
 	if b.iconSource and MC.ResolveBlock then
 		local source = MC.ResolveBlock( b.iconSource )
@@ -448,16 +449,21 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel )
 	-- the 3D treatment. Shapeless non-solid blocks (banners, water, air, ...) only
 	-- carry placeholder textures, so leave those on the flat fallback.
 	local has3DShape = b.solid ~= false or b.shape ~= nil or b.connection ~= nil
-	local boxes = has3DShape and iconBoxes( id, orient ) or nil
+	local boxes = has3DShape and iconBoxes( id, orient, visual ) or nil
 	if not boxes or #boxes == 0 then
 		MC.DrawBlockIcon( id, x, y, w, h )
 		return
 	end
 
 	local face = MC.Face or { TOP = 1, XP = 3, YP = 5 }
-	local topTile, topRot, topFlipU, topFlipV = MC.BlockFace( id, face.TOP, orient )
-	local xpTile, xpRot, xpFlipU, xpFlipV = MC.BlockFace( id, face.XP, orient )
-	local ypTile, ypRot, ypFlipU, ypFlipV = MC.BlockFace( id, face.YP, orient )
+	local faceForState = visual and MC.BlockFaceForState
+	local function iconFace( faceIndex )
+		if faceForState then return faceForState( visual.stateId, faceIndex ) end
+		return MC.BlockFace( id, faceIndex, orient )
+	end
+	local topTile, topRot, topFlipU, topFlipV = iconFace( face.TOP )
+	local xpTile, xpRot, xpFlipU, xpFlipV = iconFace( face.XP )
+	local ypTile, ypRot, ypFlipU, ypFlipV = iconFace( face.YP )
 	local faces = {
 		top = { tile = topTile, rot = topRot, flipU = topFlipU, flipV = topFlipV },
 		xp = { tile = xpTile, rot = xpRot, flipU = xpFlipU, flipV = xpFlipV },
@@ -549,10 +555,10 @@ end
 function MC.DrawMinecraftBlockStateIcon( stateId, x, y, w, h, forceModel )
 	stateId = math.floor( tonumber( stateId ) or -1 )
 	if not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return false end
-	local id, orient, exact = MC.LegacyFromState( stateId )
-	if id == nil then return false end
-	MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient or 0, forceModel )
-	return true, exact == true
+	local visual = MC.ResolveBlockStateVisual and MC.ResolveBlockStateVisual( stateId ) or nil
+	if not visual then return false end
+	MC.DrawMinecraftBlockIcon( visual.id, x, y, w, h, visual.renderOrient, forceModel or visual.forceModelIcon == true, visual )
+	return true
 end
 
 local function saveCreativeInventoryState()
@@ -1258,13 +1264,10 @@ function MC.OpenCreativeStatePicker( id, onSelect, parent, selectedStateId )
 	preview.Paint = function( _, w, h )
 		draw.RoundedBox( 5, 0, 0, w, h, CREATIVE_UI.panel )
 		draw.RoundedBox( 4, 5, 5, 136, h - 10, CREATIVE_UI.panelInner )
-		local _, exact = MC.DrawMinecraftBlockStateIcon( selectedStateId, 15, 17, 116, 116, true )
+		MC.DrawMinecraftBlockStateIcon( selectedStateId, 15, 17, 116, 116, true )
 		local state = MC.FormatBlockState( selectedStateId ) or "?"
 		draw.SimpleText( blockDisplayText( b ), "mc_hud", 154, 16, CREATIVE_UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 		draw.DrawText( state, "mc_hud_fit_16", 154, 46, CREATIVE_UI.textDim, TEXT_ALIGN_LEFT )
-		if exact == false then
-			draw.SimpleText( L( "creative.state.approx_preview", "预览使用兼容模型，状态数据仍完整" ), "mc_hud_small", 154, h - 28, Color( 230, 190, 100 ), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
-		end
 	end
 
 	local automatic = vgui.Create( "DButton", fr )

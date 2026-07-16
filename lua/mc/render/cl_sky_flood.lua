@@ -85,15 +85,10 @@ function MC.SkyVoxelLightUnit( bx, by, bz )
 	return math.Clamp( MC.SkyVoxelLight( bx, by, bz ) / 15, 0, 1 )
 end
 
-local function lightOpacity( id, orient )
-	if id == 0 then return 0 end
-	return MC.BlockLightOpacity and MC.BlockLightOpacity( id, orient ) or 15
-end
-
 local function propagationCost( bx, by, bz )
 	if not chunkLoadedForCell( bx, by, bz ) then return 16 end
-	local id = MC.GetBlock( bx, by, bz )
-	local opacity = lightOpacity( id, MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz ) or 0 )
+	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
+	local opacity = MC.BlockLightOpacityForState and MC.BlockLightOpacityForState( stateId, bx, by, bz ) or 15
 	if opacity >= 15 then return 16 end
 	return math.max( 1, opacity )
 end

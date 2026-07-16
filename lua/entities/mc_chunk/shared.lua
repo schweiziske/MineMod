@@ -355,27 +355,28 @@ local function greedyBoxes( chunk, bounds )
 			for ly = window.y0, window.y1 - 1 do
 				for lx = window.x0, window.x1 - 1 do
 					local li = idx( lx, ly, lz )
-					local id = chunk.blocks[li]
-					if id ~= nil then
-						local b = MC.Blocks[id]
-						if not b or b.solid ~= false then
-							local orient = MC.NormalizeOrient and MC.NormalizeOrient( id, chunk.orients and chunk.orients[li] ) or 0
-							local bx = chunk.cx * CS + lx
-							local by = chunk.cy * CS + ly
-							local bz = chunk.cz * CH + lz
-							if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
+					local stateId = MC.GetChunkBlockStateByLocalIndex and MC.GetChunkBlockStateByLocalIndex( chunk, li ) or 0
+					if stateId and stateId ~= 0 then
+						local bx = chunk.cx * CS + lx
+						local by = chunk.cy * CS + ly
+						local bz = chunk.cz * CH + lz
+						local visual = MC.ResolveBlockStateVisual and MC.ResolveBlockStateVisual( stateId, bx, by, bz ) or nil
+						local id = visual and visual.id or nil
+						if id and ( not MC.BlockVisualHasCollision or MC.BlockVisualHasCollision( visual, bx, by, bz ) ) then
+							if MC.BlockVisualIsFullCube and MC.BlockVisualIsFullCube( visual, bx, by, bz ) then
 								solid[li] = true
 							else
-								local blockConvexes = not clientCollisionAABBOnly() and MC.BlockCollisionConvexes
-									and MC.BlockCollisionConvexes( id, orient, bx, by, bz ) or nil
+								local blockConvexes = not clientCollisionAABBOnly() and MC.BlockVisualCollisionConvexes
+									and MC.BlockVisualCollisionConvexes( visual, bx, by, bz ) or nil
 								if blockConvexes then
 									for _, convex in ipairs( blockConvexes ) do
 										addCustomConvex( lx, ly, lz, convex )
 									end
 								else
-									local blockBoxes = ( MC.BlockCollisionBoxes or MC.BlockBoxes )( id, orient, bx, by, bz )
-									if clientCollisionAABBOnly() and ( not blockBoxes or #blockBoxes == 0 ) and MC.BlockBoxes then
-										blockBoxes = MC.BlockBoxes( id, orient, bx, by, bz )
+									local blockBoxes = MC.BlockVisualCollisionBoxes
+										and MC.BlockVisualCollisionBoxes( visual, bx, by, bz ) or nil
+									if clientCollisionAABBOnly() and ( not blockBoxes or #blockBoxes == 0 ) and MC.BlockVisualBoxes then
+										blockBoxes = MC.BlockVisualBoxes( visual, bx, by, bz )
 									end
 									for _, box in ipairs( blockBoxes or {} ) do
 										addShapeBox( lx, ly, lz, box )

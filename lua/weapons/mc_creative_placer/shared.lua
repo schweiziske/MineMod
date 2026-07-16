@@ -368,22 +368,28 @@ if CLIENT then
 		return u0 + uf * ( u1 - u0 ), v0 + vf * ( v1 - v0 )
 	end
 
-	local function heldBlockBoxes( id, orient )
+	local function heldBlockBoxes( id, orient, stateId )
 		local b = MC.Blocks and MC.Blocks[id]
 		if b and b.connection and HELD_ITEM_BOXES[b.connection] then
 			return HELD_ITEM_BOXES[b.connection]
+		end
+		if stateId and MC.BlockBoxesForState then
+			local boxes = MC.BlockBoxesForState( stateId )
+			if boxes and #boxes > 0 then return boxes end
 		end
 		local boxes = MC.BlockBoxes and MC.BlockBoxes( id, orient ) or nil
 		if boxes and #boxes > 0 then return boxes end
 		return HELD_FULL_BLOCK
 	end
 
-	function MC.DrawCreativeHeldBlock( id, orient, pos, ang, scale, brightness )
+	function MC.DrawCreativeHeldBlock( id, orient, pos, ang, scale, brightness, stateId )
 		if not ( MC.Blocks and MC.Blocks[id] and MC.Material and MC.BlockFace and MC.TileUV ) then return false end
-		local boxes = heldBlockBoxes( id, orient )
+		local boxes = heldBlockBoxes( id, orient, stateId )
 		if not boxes or #boxes == 0 then return false end
 
-		if MC.IsTranslucentBlock and MC.IsTranslucentBlock( id ) and MC.MaterialTranslucent then
+		local translucent = stateId and MC.IsTranslucentBlockState and MC.IsTranslucentBlockState( stateId )
+			or MC.IsTranslucentBlock and MC.IsTranslucentBlock( id )
+		if translucent and MC.MaterialTranslucent then
 			render.SetMaterial( MC.MaterialTranslucent )
 		else
 			render.SetMaterial( MC.Material )
@@ -400,7 +406,12 @@ if CLIENT then
 			mesh.Begin( MATERIAL_TRIANGLES, #boxes * 12 )
 			for _, box in ipairs( boxes ) do
 				for face = 1, 6 do
-					local tile, rot, flipU, flipV = MC.BlockFace( id, face, orient )
+					local tile, rot, flipU, flipV
+					if stateId and MC.BlockFaceForState then
+						tile, rot, flipU, flipV = MC.BlockFaceForState( stateId, face )
+					else
+						tile, rot, flipU, flipV = MC.BlockFace( id, face, orient )
+					end
 					local corners = HELD_FACE_CORNERS[face]( box )
 					local normal = HELD_FACE_NORMALS[face]
 					local shade = HELD_FACE_SHADE[face]
@@ -424,6 +435,12 @@ if CLIENT then
 		cam.PopModelMatrix()
 
 		return true
+	end
+
+	function MC.DrawCreativeHeldBlockState( stateId, pos, ang, scale, brightness )
+		local visual = MC.ResolveBlockStateVisual and MC.ResolveBlockStateVisual( stateId ) or nil
+		if not visual then return false end
+		return MC.DrawCreativeHeldBlock( visual.id, visual.renderOrient, pos, ang, scale, brightness, stateId )
 	end
 
 	local function creativeHeldOrient( id )
@@ -525,7 +542,10 @@ if CLIENT then
 		local brightness = heldBlockBrightnessAt( pos )
 
 		render.OverrideDepthEnable( true, false )
-			MC.DrawCreativeHeldBlock( id, selectedOrient( ply, id ) or creativeHeldOrient( id ), pos, ang, scale, brightness )
+			local stateId = selectedStateId( ply, id )
+			if not stateId or not MC.DrawCreativeHeldBlockState( stateId, pos, ang, scale, brightness ) then
+				MC.DrawCreativeHeldBlock( id, selectedOrient( ply, id ) or creativeHeldOrient( id ), pos, ang, scale, brightness )
+			end
 		render.OverrideDepthEnable( false, false )
 	end
 
@@ -559,7 +579,11 @@ if CLIENT then
 		if not MC.IsValidBlock( id ) then return end
 
 		local pos, ang, scale = thirdPersonHeldPose( ply )
-		MC.DrawCreativeHeldBlock( id, selectedOrient( ply, id ) or creativeHeldOrient( id ), pos, ang, scale, heldBlockBrightnessAt( pos ) )
+		local brightness = heldBlockBrightnessAt( pos )
+		local stateId = selectedStateId( ply, id )
+		if not stateId or not MC.DrawCreativeHeldBlockState( stateId, pos, ang, scale, brightness ) then
+			MC.DrawCreativeHeldBlock( id, selectedOrient( ply, id ) or creativeHeldOrient( id ), pos, ang, scale, brightness )
+		end
 	end
 
 	function SWEP:PreDrawViewModel()

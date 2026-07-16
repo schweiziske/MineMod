@@ -55,9 +55,9 @@ local function noteChunkPresence( cx, cy, cz, present )
 	end
 end
 
-local function blocksSky( id, orient )
-	if not id or id == 0 then return false end
-	local opacity = MC.BlockLightOpacity and MC.BlockLightOpacity( id, orient ) or 15
+local function blocksSky( stateId, bx, by, bz )
+	if not stateId or stateId == 0 then return false end
+	local opacity = MC.BlockLightOpacityForState and MC.BlockLightOpacityForState( stateId, bx, by, bz ) or 15
 	return opacity >= 15
 end
 
@@ -75,8 +75,8 @@ local function computeColumnTop( bx, by )
 		local chunk = world[MC.ChunkKey( cx, cy, cz )]
 		if chunk and chunk.count and chunk.count > 0 then
 			for bz = cz * ch + ch - 1, cz * ch, -1 do
-				local id = MC.GetBlock( bx, by, bz )
-				if id ~= 0 and blocksSky( id, MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz ) or 0 ) then
+				local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
+				if blocksSky( stateId, bx, by, bz ) then
 					return bz
 				end
 			end
