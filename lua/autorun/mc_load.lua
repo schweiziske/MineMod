@@ -9,6 +9,9 @@
 
 MC = MC or {}
 
+local loadPerfStart = SysTime and SysTime() or 0
+local loadPerfStartKB = collectgarbage and collectgarbage( "count" ) or 0
+
 local SHARED = {
 	"mc/state/sh_network_protocol.lua",
 	"mc/sh_config.lua",
@@ -18,13 +21,14 @@ local SHARED = {
 	"mc/generated/sh_generated_tiles.lua",
 	"mc/generated/sh_generated_blocks.lua",
 	"mc/generated/sh_generated_block_state_schemas.lua",
+	"mc/generated/sh_generated_state_visual_catalog.lua",
 	"mc/generated/sh_generated_block_connections.lua",
 	"mc/generated/sh_generated_block_properties.lua",
 	"mc/generated/sh_generated_block_light.lua",
 	"mc/generated/sh_generated_block_collision.lua",
+	"mc/generated/sh_generated_state_collision_families.lua",
 	"mc/generated/sh_generated_sound_types.lua",
 	"mc/generated/sh_generated_lang.lua",
-	"mc/generated/sh_generated_mcswep_blocks.lua",
 	"mc/functional/sh_furnace.lua",
 	"mc/functional/sh_doors.lua",
 	"mc/functional/sh_trapdoors.lua",
@@ -32,9 +36,12 @@ local SHARED = {
 	"mc/functional/sh_liquids.lua",
 	"mc/custom/sh_custom_blocks.lua",
 	"mc/sh_blocks.lua",
+	"mc/generated/sh_generated_mcswep_blocks.lua",
 	"mc/sh_block_states.lua",
 	"mc/state/sh_project_block_state_schemas.lua",
+	"mc/state/sh_state_collision.lua",
 	"mc/state/sh_state_visuals.lua",
+	"mc/state/sh_state_tints.lua",
 	"mc/import/sh_format.lua",
 	"mc/block_entity/sh_registry.lua",
 	"mc/block/sh_stairs.lua",
@@ -65,6 +72,7 @@ local SERVER_FILES = {
 	"mc/sv_player.lua",
 }
 local CLIENT_FILES = {
+	"mc/state/cl_state_visual_catalog.lua",
 	"mc/cl_lighting.lua",
 	"mc/render/cl_mesh_cache.lua",
 	"mc/render/cl_mesh_constants.lua",
@@ -104,18 +112,69 @@ local CLIENT_FILES = {
 	"mc/cl_player.lua",
 }
 
+local LOAD_PERF_FILES = {
+	["mc/generated/sh_generated_blocks.lua"] = true,
+	["mc/generated/sh_generated_block_state_schemas.lua"] = true,
+	["mc/generated/sh_generated_state_visual_catalog.lua"] = true,
+	["mc/generated/sh_generated_state_collision_families.lua"] = true,
+	["mc/sh_blocks.lua"] = true,
+	["mc/sh_block_states.lua"] = true,
+	["mc/state/cl_state_visual_catalog.lua"] = true,
+}
+
+MC.LoadPerfStats = {
+	realm = SERVER and "server" or "client",
+	files = {},
+}
+
+local function includeTracked( fileName )
+	if not LOAD_PERF_FILES[fileName] then
+		include( fileName )
+		return
+	end
+	local start = SysTime and SysTime() or 0
+	local beforeKB = collectgarbage and collectgarbage( "count" ) or 0
+	include( fileName )
+	local afterKB = collectgarbage and collectgarbage( "count" ) or beforeKB
+	MC.LoadPerfStats.files[fileName] = {
+		ms = math.Round( ( ( SysTime and SysTime() or start ) - start ) * 1000, 3 ),
+		memoryKB = math.Round( afterKB - beforeKB, 3 ),
+	}
+end
+
 if SERVER then
 	AddCSLuaFile()
 	for _, f in ipairs( SHARED ) do AddCSLuaFile( f ) end
 	for _, f in ipairs( CLIENT_FILES ) do AddCSLuaFile( f ) end
 end
 
-for _, f in ipairs( SHARED ) do include( f ) end
+for _, f in ipairs( SHARED ) do includeTracked( f ) end
 
 if SERVER then
-	for _, f in ipairs( SERVER_FILES ) do include( f ) end
+	for _, f in ipairs( SERVER_FILES ) do includeTracked( f ) end
 else
-	for _, f in ipairs( CLIENT_FILES ) do include( f ) end
+	for _, f in ipairs( CLIENT_FILES ) do includeTracked( f ) end
+end
+
+local loadPerfEndKB = collectgarbage and collectgarbage( "count" ) or loadPerfStartKB
+MC.LoadPerfStats.totalMS = math.Round( ( ( SysTime and SysTime() or loadPerfStart ) - loadPerfStart ) * 1000, 3 )
+MC.LoadPerfStats.totalMemoryKB = math.Round( loadPerfEndKB - loadPerfStartKB, 3 )
+
+function MC.GeneratedRuntimeDiagnostics()
+	return {
+		realm = SERVER and "server" or "client",
+		luaHeapKB = collectgarbage and math.Round( collectgarbage( "count" ), 3 ) or 0,
+		load = MC.LoadPerfStats,
+		blocks = MC.GeneratedBlockCatalogStats,
+		blockCount = MC.GeneratedBlockDefinitionCount or 0,
+		stateCount = MC.BlockStateCount or 0,
+		stateMetadata = MC.BlockStateRegistryMetadata or MC.GeneratedStateMetadata,
+		propertyDomains = MC.BlockStatePropertyDomainStats,
+		stateVisuals = MC.StateVisualCatalogStats,
+		blockStagingReleased = MC.GeneratedBlockRegistrationTablesReleased == true,
+		schemaStagingReleased = MC.GeneratedBlockStateSchemasReleased == true,
+		pendingSchemasReleased = MC.PendingBlockStateSchemasReleased == true,
+	}
 end
 
 MsgN( "[MC] Voxel block addon loaded (" .. ( SERVER and "server" or "client" ) .. ")" )

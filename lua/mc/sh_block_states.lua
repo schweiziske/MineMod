@@ -12,13 +12,25 @@ MC = MC or {}
 MC.PendingBlockStateSchemas = MC.PendingBlockStateSchemas or {}
 MC.BlockStateSchemas = MC.BlockStateSchemas or {}
 MC.BlockStateSchemaByName = MC.BlockStateSchemaByName or {}
-MC.BlockStateRanges = MC.BlockStateRanges or {}
+MC.BlockStateSchemaById = MC.BlockStateSchemaById or {}
+MC.BlockTypeByStateId = MC.BlockTypeByStateId or {}
 MC.BlockStateRegistryFrozen = MC.BlockStateRegistryFrozen or false
 MC.BlockStateCount = MC.BlockStateCount or 0
 MC.LegacyStateByBlockOrient = MC.LegacyStateByBlockOrient or {}
 MC.LegacyProjectionByState = MC.LegacyProjectionByState or {}
 
 local MAX_STATE_ID = 2147483647
+local PROPERTY_DOMAIN_VALUE = {}
+local PropertyDomainTrie = {}
+local PropertyCanonicalScratch = {}
+local PropertyTypedScratch = {}
+local PropertySeenScratch = {}
+local DEFAULT_BOOL_VALUES = { false, true }
+
+MC.BlockStatePropertyDomainStats = {
+	instances = 0,
+	domains = 0,
+}
 
 local function trim( value )
 	return string.match( tostring( value or "" ), "^%s*(.-)%s*$" )
@@ -79,38 +91,96 @@ local function normalizeProperty( name, definition )
 	if kind ~= "bool" and kind ~= "int" and kind ~= "enum" then return nil, "invalid_property_kind" end
 
 	local sourceValues = definition.values
-	if kind == "bool" and type( sourceValues ) ~= "table" then sourceValues = { false, true } end
+	local sourceMin
+	local sourceCount
+	if kind == "bool" and type( sourceValues ) ~= "table" then sourceValues = DEFAULT_BOOL_VALUES end
 	if kind == "int" and type( sourceValues ) ~= "table" then
 		local minValue = tonumber( definition.min )
 		local maxValue = tonumber( definition.max )
 		if not minValue or not maxValue or math.floor( minValue ) ~= minValue or math.floor( maxValue ) ~= maxValue or minValue > maxValue then
 			return nil, "invalid_integer_range"
 		end
-		sourceValues = {}
-		for value = minValue, maxValue do sourceValues[#sourceValues + 1] = value end
+		sourceMin = minValue
+		sourceCount = maxValue - minValue + 1
 	end
-	if type( sourceValues ) ~= "table" or #sourceValues == 0 then return nil, "missing_property_values" end
+	if sourceCount == nil then
+		if type( sourceValues ) ~= "table" or #sourceValues == 0 then return nil, "missing_property_values" end
+		sourceCount = #sourceValues
+	end
 
-	local values = {}
-	local canonicalValues = {}
-	local valueIndex = {}
-	for i, raw in ipairs( sourceValues ) do
+	local root = PropertyDomainTrie[kind]
+	if not root then
+		root = {}
+		PropertyDomainTrie[kind] = root
+	end
+	local node = root
+	for i = 1, sourceCount do
+		local raw
+		if sourceValues then raw = sourceValues[i] else raw = sourceMin + i - 1 end
 		local typed = typedValue( kind, raw )
 		local canonical = canonicalValue( typed )
-		if typed == nil or not canonical then return nil, "invalid_property_value" end
-		if valueIndex[canonical] ~= nil then return nil, "duplicate_property_value" end
-		values[i] = typed
-		canonicalValues[i] = canonical
-		valueIndex[canonical] = i
+		if typed == nil or not canonical then
+			for clearIndex = 1, i - 1 do
+				PropertySeenScratch[PropertyCanonicalScratch[clearIndex]] = nil
+				PropertyCanonicalScratch[clearIndex] = nil
+				PropertyTypedScratch[clearIndex] = nil
+			end
+			return nil, "invalid_property_value"
+		end
+		if PropertySeenScratch[canonical] then
+			for clearIndex = 1, i - 1 do
+				PropertySeenScratch[PropertyCanonicalScratch[clearIndex]] = nil
+				PropertyCanonicalScratch[clearIndex] = nil
+				PropertyTypedScratch[clearIndex] = nil
+			end
+			return nil, "duplicate_property_value"
+		end
+		PropertySeenScratch[canonical] = true
+		PropertyCanonicalScratch[i] = canonical
+		PropertyTypedScratch[i] = typed
+		local child = node[canonical]
+		if not child then
+			child = {}
+			node[canonical] = child
+		end
+		node = child
 	end
+
+	local domain = node[PROPERTY_DOMAIN_VALUE]
+	if not domain then
+		local values = {}
+		local canonicalValues = {}
+		local valueIndex = {}
+		for i = 1, sourceCount do
+			local canonical = PropertyCanonicalScratch[i]
+			values[i] = PropertyTypedScratch[i]
+			canonicalValues[i] = canonical
+			valueIndex[canonical] = i
+		end
+		domain = {
+			kind = kind,
+			values = values,
+			canonicalValues = canonicalValues,
+			valueIndex = valueIndex,
+			count = sourceCount,
+		}
+		node[PROPERTY_DOMAIN_VALUE] = domain
+		MC.BlockStatePropertyDomainStats.domains = MC.BlockStatePropertyDomainStats.domains + 1
+	end
+	for i = 1, sourceCount do
+		PropertySeenScratch[PropertyCanonicalScratch[i]] = nil
+		PropertyCanonicalScratch[i] = nil
+		PropertyTypedScratch[i] = nil
+	end
+	MC.BlockStatePropertyDomainStats.instances = MC.BlockStatePropertyDomainStats.instances + 1
 
 	return {
 		name = name,
-		kind = kind,
-		values = values,
-		canonicalValues = canonicalValues,
-		valueIndex = valueIndex,
-		count = #values,
+		kind = domain.kind,
+		values = domain.values,
+		canonicalValues = domain.canonicalValues,
+		valueIndex = domain.valueIndex,
+		count = domain.count,
 	}
 end
 
@@ -214,7 +284,8 @@ function MC.FinalizeBlockStateRegistry( metadata )
 
 	local blockSchemas = {}
 	local schemasByName = {}
-	local ranges = {}
+	local schemasByStateId = {}
+	local blockTypesByStateId = {}
 	local firstStateId = 0
 	for _, schema in ipairs( schemas ) do
 		schema.firstStateId = firstStateId
@@ -238,40 +309,28 @@ function MC.FinalizeBlockStateRegistry( metadata )
 			blockSchemas[schema.blockId] = schema
 		end
 		schemasByName[schema.name] = schema
-		ranges[#ranges + 1] = {
-			first = schema.firstStateId,
-			last = schema.lastStateId,
-			schema = schema,
-		}
+		for stateId = schema.firstStateId, schema.lastStateId do
+			schemasByStateId[stateId] = schema
+			blockTypesByStateId[stateId] = schema.blockId
+		end
 		firstStateId = schema.lastStateId + 1
 	end
 
 	MC.BlockStateSchemas = blockSchemas
 	MC.BlockStateSchemaByName = schemasByName
-	MC.BlockStateRanges = ranges
+	MC.BlockStateSchemaById = schemasByStateId
+	MC.BlockTypeByStateId = blockTypesByStateId
 	MC.BlockStateCount = firstStateId
 	MC.BlockStateRegistryMetadata = metadata or MC.GeneratedStateMetadata or {}
 	MC.BlockStateRegistryFrozen = true
+	MC.PendingBlockStateSchemas = nil
+	MC.BlockStateRanges = nil
+	MC.PendingBlockStateSchemasReleased = true
 	return MC.BlockStateCount
 end
 
 local function schemaForState( stateId )
-	stateId = tonumber( stateId )
-	if not stateId or math.floor( stateId ) ~= stateId or stateId < 0 or stateId >= MC.BlockStateCount then return nil end
-	local ranges = MC.BlockStateRanges
-	local low, high = 1, #ranges
-	while low <= high do
-		local middle = math.floor( ( low + high ) * 0.5 )
-		local range = ranges[middle]
-		if stateId < range.first then
-			high = middle - 1
-		elseif stateId > range.last then
-			low = middle + 1
-		else
-			return range.schema
-		end
-	end
-	return nil
+	return MC.BlockStateSchemaById[stateId]
 end
 
 local function resolveSchema( block )
@@ -295,8 +354,7 @@ function MC.BlockStateSchemaForState( stateId )
 end
 
 function MC.BlockTypeForState( stateId )
-	local schema = schemaForState( stateId )
-	return schema and schema.blockId or nil
+	return MC.BlockTypeByStateId[stateId]
 end
 
 function MC.DefaultBlockState( block )
@@ -442,11 +500,44 @@ end
 
 function MC.RegisterGeneratedBlockStateSchemas()
 	if MC.BlockStateRegistryFrozen then return nil, "registry_frozen" end
-	local generated = MC.GeneratedBlockStateSchemas
-	if type( generated ) ~= "table" then return 0 end
+	local catalog = MC.GeneratedBlockStateSchemaCatalog
+	if type( catalog ) ~= "table" or type( catalog.rows ) ~= "table" or type( catalog.domains ) ~= "table" then return 0 end
+	local rows = catalog.rows
+	local domains = catalog.domains
+	local definition = { propertyOrder = {}, properties = {}, defaults = {} }
+	local propertyOrder = definition.propertyOrder
+	local properties = definition.properties
+	local defaults = definition.defaults
 	local count = 0
 	local stateCount = 0
-	for _, definition in ipairs( generated ) do
+	for rowIndex = 1, #rows do
+		for propertyIndex = 1, #propertyOrder do
+			local propertyName = propertyOrder[propertyIndex]
+			propertyOrder[propertyIndex] = nil
+			properties[propertyName] = nil
+			defaults[propertyName] = nil
+		end
+		local row = rows[rowIndex]
+		if type( row ) ~= "table" or type( row[1] ) ~= "string" then return nil, "invalid_generated_schema_row" end
+		local fieldCount = #row - 2
+		if fieldCount < 0 or fieldCount % 3 ~= 0 then return nil, "invalid_generated_schema_fields" end
+		definition.name = row[1]
+		definition.stateCount = row[2]
+		local propertyCount = fieldCount / 3
+		for propertyIndex = 1, propertyCount do
+			local offset = ( propertyIndex - 1 ) * 3 + 3
+			local propertyName = row[offset]
+			local domain = domains[row[offset + 1]]
+			local defaultIndex = row[offset + 2]
+			local defaultValue
+			if domain and domain.values then defaultValue = domain.values[defaultIndex] end
+			if type( propertyName ) ~= "string" or type( domain ) ~= "table" or defaultValue == nil then
+				return nil, "invalid_generated_schema_property"
+			end
+			propertyOrder[propertyIndex] = propertyName
+			properties[propertyName] = domain
+			defaults[propertyName] = defaultValue
+		end
 		local schema, err = MC.RegisterBlockStateSchema( definition )
 		if not schema then return nil, err end
 		schema.generated = true
@@ -456,6 +547,12 @@ function MC.RegisterGeneratedBlockStateSchemas()
 	local metadata = MC.GeneratedStateMetadata or {}
 	if metadata.blockCount ~= nil and tonumber( metadata.blockCount ) ~= count then return nil, "generated_block_count_mismatch" end
 	if metadata.stateCount ~= nil and tonumber( metadata.stateCount ) ~= stateCount then return nil, "generated_state_count_mismatch" end
+	-- Registered schemas own normalized runtime data. Release the compact staging
+	-- rows/domains after registration; only the shared runtime property domains
+	-- and schema records remain reachable.
+	MC.GeneratedBlockStateSchemaCatalog = nil
+	MC.GeneratedBlockStateSchemas = nil
+	MC.GeneratedBlockStateSchemasReleased = true
 	return count
 end
 
@@ -475,7 +572,7 @@ function MC.FinalizePreparedBlockStateRegistry()
 	return count
 end
 
-if type( MC.GeneratedBlockStateSchemas ) == "table" and next( MC.PendingBlockStateSchemas ) == nil then
+if type( MC.GeneratedBlockStateSchemaCatalog ) == "table" and next( MC.PendingBlockStateSchemas ) == nil then
 	local _, err = MC.RegisterGeneratedBlockStateSchemas()
 	if err then
 		reportRegistryError( err )

@@ -32,6 +32,16 @@ local quadCornerColorValues = RM.quadCornerColorValues
 local shadeIndexForFace = RM.shadeIndexForFace
 local cornerXYZ = RM.cornerXYZ
 local quadFaceCubic = RM.quadFaceCubic
+local blockModelSurface = MC.BlockModelSurface
+local modelQuadVertex = MC.ModelQuadVertex
+local resolveBlockStateVisual = MC.ResolveBlockStateVisual
+local resolveBlockStateRenderClass = MC.ResolveBlockStateRenderClass
+local blockVisualIsTranslucent = MC.BlockVisualIsTranslucent
+local blockVisualIsFullCube = MC.BlockVisualIsFullCube
+local stateVisualPlanRangeFast = MC.StateVisualPlanRangeFast
+local stateVisualPlanModelAtFast = MC.StateVisualPlanModelAtFast
+local stateVisualModelData = MC.StateVisualModelData
+local blockStateTintCode = MC.BlockStateTintCode
 local fluidHeightAt = RM.fluidHeightAt
 local calculateAverageFluidHeight = RM.calculateAverageFluidHeight
 local recolorCachedBlockEmission = RM.recolorCachedBlockEmission
@@ -42,6 +52,19 @@ local ShapeModelTemplateCache = {
 	shape = {},
 	connection = {},
 }
+local GeneratedModelTemplateCache = {}
+local SpecialBlockVisualEmitters = {}
+
+function MC.RegisterSpecialBlockVisualEmitter( blockName, emitter )
+	if type( emitter ) ~= "function" then return nil, "invalid_special_visual_emitter" end
+	blockName = string.lower( string.match( tostring( blockName or "" ), "^%s*(.-)%s*$" ) )
+	if blockName == "" then return nil, "invalid_special_visual_block" end
+	SpecialBlockVisualEmitters[blockName] = emitter
+	if string.sub( blockName, 1, 10 ) == "minecraft:" then
+		SpecialBlockVisualEmitters[string.sub( blockName, 11 )] = emitter
+	end
+	return emitter
+end
 
 local function stateFace( ctx, id, face, orient, bx, by, bz )
 	local stateId = ctx and ctx.currentStateId
@@ -75,11 +98,25 @@ end
 
 local function stateVisibleAtWorld( currentId, bx, by, bz )
 	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
-	local id = stateId and MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or 0
+	if not stateId or stateId == 0 then return true end
+	local id, fullCube, translucent
+	if resolveBlockStateRenderClass then
+		id, fullCube, translucent = resolveBlockStateRenderClass( stateId, bx, by, bz )
+	end
+	local visual
+	if not id then
+		visual = resolveBlockStateVisual and resolveBlockStateVisual( stateId, bx, by, bz ) or nil
+		id = visual and visual.id or MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or 0
+	end
 	if not id or id == 0 then return true end
 	if sameLiquidKind( currentId, id ) then return false end
-	if MC.IsTranslucentBlockState and MC.IsTranslucentBlockState( stateId, bx, by, bz ) then return id ~= currentId end
-	if MC.BlockIsFullCubeForState and not MC.BlockIsFullCubeForState( stateId, bx, by, bz ) then return true end
+	if translucent == true then return id ~= currentId end
+	if fullCube == false then return true end
+	if translucent == nil or fullCube == nil then
+		visual = visual or resolveBlockStateVisual and resolveBlockStateVisual( stateId, bx, by, bz ) or nil
+		if visual and blockVisualIsTranslucent and blockVisualIsTranslucent( visual, bx, by, bz ) then return id ~= currentId end
+		if visual and blockVisualIsFullCube and not blockVisualIsFullCube( visual, bx, by, bz ) then return true end
+	end
 	return false
 end
 
@@ -89,6 +126,7 @@ function RM.resetShapeModelTemplateCache()
 		shape = {},
 		connection = {},
 	}
+	GeneratedModelTemplateCache = {}
 end
 
 local function templateBucket( store, id )
@@ -115,7 +153,7 @@ end
 
 local setTemplateTriVertex
 
-local function buildModelTemplate( b, orient )
+local function buildModelTemplate( b, orient, cubicBlockId )
 	local quads = rotatedModelQuads( b, orient )
 	if not quads then return false end
 
@@ -125,21 +163,22 @@ local function buildModelTemplate( b, orient )
 	for qi = 1, #quads do
 		local quad = quads[qi]
 		local verts = quad and quad.verts
-		if verts and verts[1] and verts[2] and verts[3] and verts[4] then
+		if verts and verts[1] then
 			local faceIndex = quad.face or MC.Face.TOP
 			local face = C.FACES[faceIndex] or C.FACES[MC.Face.TOP]
-			local u0, v0, u1, v1 = tileUVRect( quad.tile or 0, quad.uv )
-			local vtx1, vtx2, vtx3, vtx4 = verts[1], verts[2], verts[3], verts[4]
-			local c1x, c1y, c1z = cornerXYZ( vtx1 )
-			local c2x, c2y, c2z = cornerXYZ( vtx2 )
-			local c3x, c3y, c3z = cornerXYZ( vtx3 )
-			local c4x, c4y, c4z = cornerXYZ( vtx4 )
+			local tile, quadLightEmission = blockModelSurface( b, quad )
+			local u0, v0, u1, v1 = tileUVRect( tile, quad.uv )
+			local c1x, c1y, c1z = modelQuadVertex( quad, 1 )
+			local c2x, c2y, c2z = modelQuadVertex( quad, 2 )
+			local c3x, c3y, c3z = modelQuadVertex( quad, 3 )
+			local c4x, c4y, c4z = modelQuadVertex( quad, 4 )
 			local rec = {
 				faceIndex = faceIndex,
+				tintIndex = quad.tintIndex or -1,
 				normal = face.n,
 				shade = face.sh,
-				quadLightEmission = quad.lightEmission or 0,
-				faceCubic = quadFaceCubic( faceIndex, b.id, orient, c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z ),
+				quadLightEmission = quadLightEmission,
+				faceCubic = quadFaceCubic( faceIndex, cubicBlockId, orient, c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z ),
 				c1x = c1x, c1y = c1y, c1z = c1z,
 				c2x = c2x, c2y = c2y, c2z = c2z,
 				c3x = c3x, c3y = c3y, c3z = c3z,
@@ -147,10 +186,10 @@ local function buildModelTemplate( b, orient )
 			}
 			for t = 1, 6 do
 				local ci = tri[t]
-				local vert = verts[ci]
-				local uf, vf = rotatedUVFlags( vert.u or 0, vert.v or 0, quad.rot or 0 )
+				local vx, vy, vz, vu, vv = modelQuadVertex( quad, ci )
+				local uf, vf = rotatedUVFlags( vu, vv, quad.rot or 0 )
 				if mirrorU then uf = 1 - uf end
-				setTemplateTriVertex( rec, t, ci, vert.x, vert.y, vert.z, uf == 1 and u1 or u0, vf == 1 and v1 or v0 )
+				setTemplateTriVertex( rec, t, ci, vx, vy, vz, uf == 1 and u1 or u0, vf == 1 and v1 or v0 )
 			end
 			local n = out.n + 1
 			out.n = n
@@ -165,8 +204,16 @@ local function getModelTemplate( b, orient, stateId )
 	local cacheKey = stateId or orient
 	local cached = bucket[cacheKey]
 	if cached ~= nil then return cached ~= false and cached or nil end
-	cached = buildModelTemplate( b, orient )
+	cached = buildModelTemplate( b, orient, b.id )
 	bucket[cacheKey] = cached or false
+	return cached ~= false and cached or nil
+end
+
+local function getGeneratedModelTemplate( modelData )
+	local cached = GeneratedModelTemplateCache[modelData]
+	if cached ~= nil then return cached ~= false and cached or nil end
+	cached = buildModelTemplate( modelData, 0, nil )
+	GeneratedModelTemplateCache[modelData] = cached or false
 	return cached ~= false and cached or nil
 end
 
@@ -217,8 +264,12 @@ local function buildShapeTemplate( ctx, b, id, orient, blockBoxes )
 			local fd = boxFaces and boxFaces[f] or nil
 			if not modelFaces or fd then
 				local face = C.FACES[f]
-				local tile = fd and fd.tile or stateFace( ctx, id, f, orient )
-				local quadLightEmission = fd and fd.lightEmission or 0
+				local tile, quadLightEmission
+				if fd then
+					tile, quadLightEmission = blockModelSurface( b, fd )
+				else
+					tile, quadLightEmission = stateFace( ctx, id, f, orient ), 0
+				end
 				local u0, v0, u1, v1
 				if fd and fd.uv then
 					u0, v0, u1, v1 = tileUVRect( tile, fd.uv )
@@ -273,11 +324,11 @@ local function getShapeTemplate( ctx, b, id, orient, blockBoxes )
 end
 
 local function faceMetaValues( lightMetaFast, shadeIndex, bx, by, bz, id, faceIndex, li, emission, faceCubic, quadLightEmission,
-	c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z )
-	local meta1 = lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, c1x, c1y, c1z, emission, faceCubic, quadLightEmission )
-	local meta2 = lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, c2x, c2y, c2z, emission, faceCubic, quadLightEmission )
-	local meta3 = lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, c3x, c3y, c3z, emission, faceCubic, quadLightEmission )
-	local meta4 = lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, c4x, c4y, c4z, emission, faceCubic, quadLightEmission )
+	c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z, tintCode )
+	local meta1 = lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, c1x, c1y, c1z, emission, faceCubic, quadLightEmission, tintCode )
+	local meta2 = lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, c2x, c2y, c2z, emission, faceCubic, quadLightEmission, tintCode )
+	local meta3 = lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, c3x, c3y, c3z, emission, faceCubic, quadLightEmission, tintCode )
+	local meta4 = lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, c4x, c4y, c4z, emission, faceCubic, quadLightEmission, tintCode )
 	meta1.shared, meta2.shared, meta3.shared, meta4.shared = true, true, true, true
 	return meta1, meta2, meta3, meta4
 end
@@ -515,21 +566,30 @@ local function pushFullCubeFace( push, wx, wy, wz, nrm, corners, baked, tile, u0
 	)
 end
 
-local function emitModelBlockTemplate( ctx, template, b, bx, by, bz, wx, wy, wz, li, push, lightMetaFast, currentEmitLightStyle )
-	local emission = stateEmission( ctx, b.id, bx, by, bz )
+local function emitModelBlockTemplate( ctx, template, id, bx, by, bz, wx, wy, wz, lx, ly, lz, li, push, lightMetaFast, currentEmitLightStyle, cullCubicFaces )
+	local emission = stateEmission( ctx, id, bx, by, bz )
 	local emitLightStyle = currentEmitLightStyle()
 	for qi = 1, template.n do
 		local quad = template[qi]
-		local color1, color2, color3, color4 = quadCornerColorValues(
-			quad.shade, bx, by, bz, b.id, quad.faceIndex, emission, emitLightStyle,
-			quad.c1x, quad.c1y, quad.c1z, quad.c2x, quad.c2y, quad.c2z, quad.c3x, quad.c3y, quad.c3z, quad.c4x, quad.c4y, quad.c4z
-		)
 		local f = quad.faceIndex
-		local meta1, meta2, meta3, meta4 = faceMetaValues(
-			lightMetaFast, shadeIndexForFace( f ), bx, by, bz, b.id, f, li, emission, quad.faceCubic, quad.quadLightEmission,
-			quad.c1x, quad.c1y, quad.c1z, quad.c2x, quad.c2y, quad.c2z, quad.c3x, quad.c3y, quad.c3z, quad.c4x, quad.c4y, quad.c4z
-		)
-		pushTemplateFace( push, quad, wx, wy, wz, color1, color2, color3, color4, meta1, meta2, meta3, meta4 )
+		local visible = true
+		if cullCubicFaces and quad.faceCubic then
+			local off = C.FACES[f].off
+			visible = ctx.visibleAt( id, lx + off[1], ly + off[2], lz + off[3], bx + off[1], by + off[2], bz + off[3] )
+		end
+		if visible then
+			local tintCode = quad.tintIndex and quad.tintIndex >= 0 and blockStateTintCode
+				and blockStateTintCode( ctx.currentStateId, id, quad.tintIndex ) or 0
+			local color1, color2, color3, color4 = quadCornerColorValues(
+				quad.shade, bx, by, bz, id, f, emission, emitLightStyle,
+				quad.c1x, quad.c1y, quad.c1z, quad.c2x, quad.c2y, quad.c2z, quad.c3x, quad.c3y, quad.c3z, quad.c4x, quad.c4y, quad.c4z, tintCode
+			)
+			local meta1, meta2, meta3, meta4 = faceMetaValues(
+				lightMetaFast, shadeIndexForFace( f ), bx, by, bz, id, f, li, emission, quad.faceCubic, quad.quadLightEmission,
+				quad.c1x, quad.c1y, quad.c1z, quad.c2x, quad.c2y, quad.c2z, quad.c3x, quad.c3y, quad.c3z, quad.c4x, quad.c4y, quad.c4z, tintCode
+			)
+			pushTemplateFace( push, quad, wx, wy, wz, color1, color2, color3, color4, meta1, meta2, meta3, meta4 )
+		end
 	end
 	return true
 end
@@ -698,7 +758,9 @@ end
 function RM.EmitModelBlock( ctx, b, orient, bx, by, bz, wx, wy, wz, li, push, lightMeta, currentEmitLightStyle )
 	local template = getModelTemplate( b, orient, ctx.currentStateId )
 	if not template then return false end
-	return emitModelBlockTemplate( ctx, template, b, bx, by, bz, wx, wy, wz, li, push, ctx.lightMetaFast, currentEmitLightStyle )
+	local decode = RM.DecodeLocal or MC.DecodeLocal
+	local lx, ly, lz = decode( li )
+	return emitModelBlockTemplate( ctx, template, b.id, bx, by, bz, wx, wy, wz, lx, ly, lz, li, push, ctx.lightMetaFast, currentEmitLightStyle, false )
 end
 
 local function emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle, verts, normal, shade, tile, bx, by, bz, id, faceIndex, lightCorners, uvCorners )
@@ -867,12 +929,18 @@ local function modelUsesConnectionShape( b, id )
 		or ( b and b.connection == "pipe6" )
 end
 
-local function selectBlockEmitter( ctx, b, id, orient, blockIsFullCube, bx, by, bz )
+local function selectBaseBlockEmitter( ctx, b, id, orient, blockIsFullCube, bx, by, bz )
 	if b and b.shape == "cross" then return BlockEmitters.cross end
 	if b and b.shape == "model" and not modelUsesConnectionShape( b, id ) then return BlockEmitters.model end
 	if isLiquidBlock( id ) then return BlockEmitters.liquid end
 	if stateFullCube( ctx, id, orient, bx, by, bz ) then return BlockEmitters.fullCube end
 	return BlockEmitters.shape
+end
+
+local function selectBlockEmitter( ctx, b, id, orient, blockIsFullCube, bx, by, bz )
+	if isLiquidBlock( id ) then return BlockEmitters.liquid end
+	if ctx.currentVisual and ctx.currentVisual.generatedVisualOverride then return BlockEmitters.statePlan end
+	return selectBaseBlockEmitter( ctx, b, id, orient, blockIsFullCube, bx, by, bz )
 end
 
 local function emitShapeBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
@@ -916,8 +984,12 @@ local function emitShapeBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz,
 				local dynamicFd = dynamicShapeFaceData( b, f, box )
 				if modelFaces and not fd and not dynamicFd then break end
 				fd = fd or dynamicFd
-				local tile = fd and fd.tile or stateFace( ctx, id, f, orient, bx, by, bz )
-				local quadLightEmission = fd and fd.lightEmission or 0
+				local tile, quadLightEmission
+				if fd then
+					tile, quadLightEmission = blockModelSurface( b, fd )
+				else
+					tile, quadLightEmission = stateFace( ctx, id, f, orient, bx, by, bz ), 0
+				end
 				local u0, v0, u1, v1
 				if fd and fd.uv then
 					u0, v0, u1, v1 = tileUVRect( tile, fd.uv )
@@ -966,6 +1038,40 @@ local function emitModelBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz,
 		return emitFullCubeBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
 	end
 	return emitShapeBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
+end
+
+local function emitStatePlanBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
+	if not stateVisualPlanRangeFast or not stateVisualPlanModelAtFast or not stateVisualModelData then
+		local fallback = selectBaseBlockEmitter( ctx, b, id, orient, ctx.blockIsFullCube, bx, by, bz )
+		return fallback( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
+	end
+	ctx.prepareBlockCacheBuffer( targetBuffer )
+	local planId, groupOffset, groupCount = stateVisualPlanRangeFast( ctx.currentStateId )
+	if groupCount == 0 then return "statePlan", false, 0 end
+	local rendered = false
+	for groupIndex = 0, groupCount - 1 do
+		local modelId = stateVisualPlanModelAtFast( planId, groupOffset, groupIndex, bx, by, bz )
+		local modelData = modelId and stateVisualModelData( modelId ) or nil
+		local template = modelData and getGeneratedModelTemplate( modelData ) or nil
+		if template then
+			emitModelBlockTemplate(
+				ctx, template, id, bx, by, bz, wx, wy, wz, lx, ly, lz, li,
+				ctx.push, ctx.lightMetaFast, ctx.currentEmitLightStyle, true
+			)
+			rendered = true
+		end
+	end
+	if rendered then return "statePlan", false, 0 end
+	local special = b and ( SpecialBlockVisualEmitters[b.mcid] or SpecialBlockVisualEmitters[b.name] ) or nil
+	if special then
+		local kind, cacheable, vertices = special( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
+		if kind then return kind, cacheable, vertices end
+	end
+	-- A plan that intentionally references a built-in/entity/special renderer
+	-- must stay absent from the static chunk mesh until that renderer registers.
+	-- Falling back to the generic cube path turns chests, banners, skulls,
+	-- portals and invisible technical blocks into grass-textured full cubes.
+	return "statePlan", false, 0
 end
 
 emitLiquidBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
@@ -1018,9 +1124,9 @@ emitFullCubeBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, 
 			local baked = not ( ctx.currentVisual and ctx.currentVisual.faces ) and bakedFaceData( id, f, orient ) or nil
 			local tile, rot, flipU, flipV
 			local u0, v0, u1, v1
-			local quadLightEmission = baked and baked.lightEmission or 0
+			local quadLightEmission = 0
 			if baked then
-				tile = baked.tile
+				tile, quadLightEmission = blockModelSurface( b, baked )
 				rot = baked.rot or 0
 				u0, v0, u1, v1 = tileUVRect( tile, baked.uv )
 			else
@@ -1050,6 +1156,7 @@ end
 
 BlockEmitters.cross = emitCrossBlockRecord
 BlockEmitters.model = emitModelBlockRecord
+BlockEmitters.statePlan = emitStatePlanBlockRecord
 BlockEmitters.liquid = emitLiquidBlockRecord
 BlockEmitters.fullCube = emitFullCubeBlockRecord
 BlockEmitters.shape = emitShapeBlockRecord

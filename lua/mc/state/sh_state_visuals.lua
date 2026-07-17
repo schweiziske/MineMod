@@ -13,7 +13,19 @@
 MC = MC or {}
 
 MC.BlockStateVisualResolvers = MC.BlockStateVisualResolvers or {}
-MC.BlockStateVisualCache = MC.BlockStateVisualCache or {}
+local BlockStateVisualCache = {}
+local BlockStateRenderClassCache = {}
+MC.BlockStateVisualCache = BlockStateVisualCache
+MC.BlockStateRenderClassCache = BlockStateRenderClassCache
+
+local RENDER_CLASS_FULL_CUBE = 1
+local RENDER_CLASS_TRANSLUCENT = 2
+local RENDER_CLASS_SCALE = 4
+local floor = math.floor
+
+local function clearCache( cache )
+	for key in pairs( cache ) do cache[key] = nil end
+end
 
 local function normalizeBlockName( block )
 	if type( block ) == "table" and block.name and block.firstStateId ~= nil then return block.name end
@@ -118,15 +130,70 @@ local function baseVisual( stateId, schema )
 	}
 end
 
+local VISUAL_PLAN_PROPERTIES = {
+	axis = { "axis" },
+	horizontal_facing = { "facing" },
+	facing = { "facing" },
+	slab = { "type" },
+	stairs = { "facing", "half", "shape" },
+	door = { "facing", "half", "hinge", "open", "powered" },
+	trapdoor = { "facing", "half", "open", "powered" },
+	bed = { "facing", "part" },
+}
+
+local function baseRendererHandlesConnection( block )
+	local connection = block and block.connection
+	return connection == "fence" or connection == "pane" or connection == "bars"
+		or connection == "wall" or connection == "pipe6"
+end
+
+local function projectedVisualPlanId( stateId, schema, block, planId )
+	if baseRendererHandlesConnection( block ) then return planId end
+	local rule = block and ( block.stateRule or block.orient ) or nil
+	local properties = VISUAL_PLAN_PROPERTIES[rule]
+	local projectedState = schema and schema.defaultStateId or nil
+	if not projectedState then return nil end
+	if properties then
+		for index = 1, #properties do
+			local propertyName = properties[index]
+			local value = MC.GetStateProperty and MC.GetStateProperty( stateId, propertyName ) or nil
+			if value ~= nil and MC.StateWith then
+				projectedState = MC.StateWith( projectedState, propertyName, value ) or projectedState
+			end
+		end
+	end
+	return MC.StateVisualPlanIdFast( projectedState )
+end
+
 function MC.ClearBlockStateVisualCache( block )
 	if block == nil then
-		MC.BlockStateVisualCache = {}
+		clearCache( BlockStateVisualCache )
+		clearCache( BlockStateRenderClassCache )
 		return
 	end
 	local name = normalizeBlockName( block )
 	if not name then return end
-	for stateId, visual in pairs( MC.BlockStateVisualCache ) do
-		if visual and visual.schema and visual.schema.name == name then MC.BlockStateVisualCache[stateId] = nil end
+	for stateId, visual in pairs( BlockStateVisualCache ) do
+		if visual and visual.schema and visual.schema.name == name then
+			BlockStateVisualCache[stateId] = nil
+			BlockStateRenderClassCache[stateId] = nil
+		end
+	end
+end
+
+function MC.ClearBlockStateRenderClassCache( block )
+	if block == nil then
+		clearCache( BlockStateRenderClassCache )
+		return
+	end
+	local name = normalizeBlockName( block )
+	local schema = name and MC.BlockStateSchemaByName and MC.BlockStateSchemaByName[name] or nil
+	if not schema or schema.firstStateId == nil or schema.lastStateId == nil then
+		clearCache( BlockStateRenderClassCache )
+		return
+	end
+	for stateId = schema.firstStateId, schema.lastStateId do
+		BlockStateRenderClassCache[stateId] = nil
 	end
 end
 
@@ -147,16 +214,12 @@ function MC.RegisterBlockStateVisual( block, definition )
 end
 
 function MC.ResolveBlockStateVisual( stateId, bx, by, bz )
-	stateId = math.floor( tonumber( stateId ) or -1 )
-	if not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return nil, "invalid_state" end
+	local cached = BlockStateVisualCache[stateId]
+	if cached then return cached end
 	local schema = MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( stateId ) or nil
-	if not schema then return nil, "missing_schema" end
+	if not schema then return nil, "invalid_state" end
 	local definition = MC.BlockStateVisualResolvers[schema.name]
 	local positionDependent = definition and definition.positionDependent == true
-	if not positionDependent then
-		local cached = MC.BlockStateVisualCache[stateId]
-		if cached then return cached end
-	end
 
 	local visual, baseError = baseVisual( stateId, schema )
 	if not visual then return nil, baseError end
@@ -172,7 +235,15 @@ function MC.ResolveBlockStateVisual( stateId, bx, by, bz )
 	visual.renderOrient = math.floor( tonumber( visual.renderOrient ) or renderOrientForState( stateId, MC.Blocks[visual.id] ) )
 	visual.block = visual.block or MC.Blocks[visual.id]
 	if visual.block.id == nil then visual.block.id = visual.id end
-	if not positionDependent and visual.cacheable ~= false then MC.BlockStateVisualCache[stateId] = visual end
+	if CLIENT and MC.StateVisualPlanIdFast and stateId >= 0 and MC.StateVisualCatalog
+	and stateId < MC.StateVisualCatalog.stateCount then
+		local planId = MC.StateVisualPlanIdFast( stateId )
+		visual.generatedPlanId = planId
+		local projectedPlanId = projectedVisualPlanId( stateId, schema, visual.block, planId )
+		visual.generatedVisualOverride = projectedPlanId ~= planId
+			or MC.StateVisualPlanHasRandomChoice and MC.StateVisualPlanHasRandomChoice( planId ) == true
+	end
+	if not positionDependent and visual.cacheable ~= false then BlockStateVisualCache[stateId] = visual end
 	return visual
 end
 
@@ -220,6 +291,9 @@ function MC.BlockVisualCollisionConvexes( visual, bx, by, bz )
 	if not visual then return nil end
 	local convexes = visualValue( visual, "collisionConvexes", bx, by, bz )
 	if convexes ~= nil then return convexes end
+	local stateCollision = MC.ResolveBlockStateCollision
+		and MC.ResolveBlockStateCollision( visual.stateId, bx, by, bz, visual ) or nil
+	if stateCollision then return stateCollision.convexes end
 	return MC.BlockCollisionConvexes and MC.BlockCollisionConvexes( visual.id, visual.renderOrient, bx, by, bz ) or nil
 end
 
@@ -231,6 +305,9 @@ function MC.BlockVisualHasCollision( visual, bx, by, bz )
 	if not visual then return false end
 	local hasCollision = visualValue( visual, "hasCollision", bx, by, bz )
 	if hasCollision ~= nil then return hasCollision == true end
+	local stateCollision = MC.ResolveBlockStateCollision
+		and MC.ResolveBlockStateCollision( visual.stateId, bx, by, bz, visual ) or nil
+	if stateCollision then return stateCollision.hasCollision == true end
 	return MC.BlockHasCollision and MC.BlockHasCollision( visual.id ) == true or false
 end
 
@@ -242,6 +319,9 @@ function MC.BlockVisualCollisionBoxes( visual, bx, by, bz )
 	if not visual or not MC.BlockVisualHasCollision( visual, bx, by, bz ) then return nil end
 	local collisionBoxes = visualValue( visual, "collisionBoxes", bx, by, bz )
 	if collisionBoxes ~= nil then return collisionBoxes end
+	local stateCollision = MC.ResolveBlockStateCollision
+		and MC.ResolveBlockStateCollision( visual.stateId, bx, by, bz, visual ) or nil
+	if stateCollision then return stateCollision.boxes end
 	return MC.GetBlockCollisionBoxes and MC.GetBlockCollisionBoxes( visual.id, visual.renderOrient, bx, by, bz ) or nil
 end
 
@@ -253,6 +333,9 @@ function MC.BlockVisualIsFullCube( visual, bx, by, bz )
 	if not visual then return false end
 	local fullCube = visualValue( visual, "fullCube", bx, by, bz )
 	if fullCube ~= nil then return fullCube == true end
+	local stateCollision = MC.ResolveBlockStateCollision
+		and MC.ResolveBlockStateCollision( visual.stateId, bx, by, bz, visual ) or nil
+	if stateCollision then return stateCollision.fullCube == true end
 	return MC.BlockIsFullCube and MC.BlockIsFullCube( visual.id, visual.renderOrient ) == true or false
 end
 
@@ -265,6 +348,40 @@ function MC.BlockVisualIsTranslucent( visual, bx, by, bz )
 	local translucent = visualValue( visual, "translucent", bx, by, bz )
 	if translucent ~= nil then return translucent == true end
 	return MC.IsTranslucentBlock and MC.IsTranslucentBlock( visual.id ) == true or false
+end
+
+-- Mesh face culling asks the same three questions for every neighbouring voxel:
+-- which block type is it, is it a full cube, and is it translucent? Keep that
+-- state-only answer packed into one number so the hot path does not repeatedly
+-- traverse the generic visual/collision interfaces. Position-dependent custom
+-- resolvers are still evaluated at the requested world coordinate and are not
+-- cached.
+function MC.ResolveBlockStateRenderClass( stateId, bx, by, bz )
+	local cached = BlockStateRenderClassCache[stateId]
+	if cached ~= nil then
+		local flags = cached % RENDER_CLASS_SCALE
+		return floor( cached / RENDER_CLASS_SCALE ),
+			flags % 2 == RENDER_CLASS_FULL_CUBE,
+			flags >= RENDER_CLASS_TRANSLUCENT
+	end
+
+	local visual = MC.ResolveBlockStateVisual( stateId, bx, by, bz )
+	if not visual then return 0, false, false end
+	local id = visual.id or visual.blockId or 0
+	local fullCube = MC.BlockVisualIsFullCube( visual, bx, by, bz ) == true
+	local translucent = MC.BlockVisualIsTranslucent( visual, bx, by, bz ) == true
+	local schemaName = visual.schema and visual.schema.name
+	local visualResolver = schemaName and MC.BlockStateVisualResolvers[schemaName] or nil
+	local collisionResolver = schemaName and MC.BlockStateCollisionResolvers and MC.BlockStateCollisionResolvers[schemaName] or nil
+	local positionDependent = visualResolver and visualResolver.positionDependent == true
+		or collisionResolver and collisionResolver.positionDependent == true
+		or visual.cacheable == false
+	if not positionDependent then
+		local flags = ( fullCube and RENDER_CLASS_FULL_CUBE or 0 )
+			+ ( translucent and RENDER_CLASS_TRANSLUCENT or 0 )
+		BlockStateRenderClassCache[stateId] = id * RENDER_CLASS_SCALE + flags
+	end
+	return id, fullCube, translucent, visual
 end
 
 function MC.IsTranslucentBlockState( stateId, bx, by, bz )
@@ -300,15 +417,4 @@ function MC.BlockModelDataForState( stateId, bx, by, bz )
 	local modelData = visualValue( visual, "modelData", bx, by, bz )
 	if modelData ~= nil then return modelData, visual end
 	return MC.BlockModelData and MC.BlockModelData( visual.block or visual.id, visual.renderOrient ) or visual.block, visual
-end
-
-if CLIENT and timer and timer.Simple then
-	timer.Simple( 0, function()
-		for key, chunk in pairs( MC.World or {} ) do
-			chunk.renderSectionBlocks = nil
-			chunk.renderSectionIndexVersion = nil
-			chunk.renderSectionIndexStoresStateId = nil
-			if MC.MarkChunkDirty then MC.MarkChunkDirty( key ) end
-		end
-	end )
 end

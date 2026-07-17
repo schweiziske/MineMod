@@ -14,7 +14,12 @@ MC.PhysDirtyPriority = MC.PhysDirtyPriority or {}
 if not MC.MarkChunkDirty then
 	function MC.MarkChunkDirty( key )
 		if not key then return end
-		MC.MeshDirty[key] = true
+		local size = 8
+		local xy = math.ceil( MC.CS / size )
+		local count = xy * xy * math.ceil( MC.CH / size )
+		local sections = {}
+		for sectionIndex = 1, count do sections[sectionIndex] = true end
+		MC.MeshDirty[key] = sections
 		MC.MeshLightDirty[key] = nil
 		MC.MeshDirtyRateLimited[key] = nil
 	end

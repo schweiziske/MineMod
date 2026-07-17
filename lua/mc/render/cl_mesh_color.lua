@@ -31,6 +31,7 @@ local shadeRGBAByIndex = RM.shadeRGBAByIndex
 local fullCubeColorCacheKey = RM.fullCubeColorCacheKey
 local applySourceLightingToRGB = RM.applySourceLightingToRGB
 local sourceLightingIsEnabled = RM.sourceLightingIsEnabled
+local blockTintRGB = MC.BlockTintRGB
 
 local MeshFullCubeColorCache = {}
 local MeshSourceLightingActive = false
@@ -200,24 +201,31 @@ local function colorFromRGBA( r, g, b, a )
 	return color
 end
 
-local function gpuShaderPayloadValues( faceIndex, mul, alpha )
+local function gpuShaderPayloadValues( faceIndex, mul, alpha, tintCode )
 	return
 		mathClamp( mathFloor( ( tonumber( mul ) or 1 ) * 255 + 0.5 ), 0, 255 ),
 		mathClamp( mathFloor( tonumber( faceIndex ) or 0 ), 0, 255 ),
-		0,
+		mathClamp( mathFloor( tonumber( tintCode ) or 0 ), 0, 255 ),
 		alpha or 255
 end
 
-local function gpuShaderPayloadColor( faceIndex, mul, alpha )
-	return colorFromRGBA( gpuShaderPayloadValues( faceIndex, mul, alpha ) )
+local function gpuShaderPayloadColor( faceIndex, mul, alpha, tintCode )
+	return colorFromRGBA( gpuShaderPayloadValues( faceIndex, mul, alpha, tintCode ) )
 end
 
-local function litFaceColorValues( shade, bx, by, bz, id, faceIndex, cn, selfEmission, style )
+local function applyBlockTint( r, g, b, tintCode )
+	if not blockTintRGB or not tintCode or tintCode == 0 then return r, g, b end
+	local tr, tg, tb = blockTintRGB( tintCode )
+	return mathFloor( r * tr / 255 + 0.5 ), mathFloor( g * tg / 255 + 0.5 ), mathFloor( b * tb / 255 + 0.5 )
+end
+
+local function litFaceColorValues( shade, bx, by, bz, id, faceIndex, cn, selfEmission, style, tintCode )
 	style = style or MC_LIGHT_STYLE_VANILLA
 	local shadeR, shadeG, shadeB, shadeA = shade.r or 255, shade.g or 255, shade.b or 255, shade.a or 255
 	if style == MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE then
-		return gpuShaderPayloadValues( faceIndex, 1, shadeA )
+		return gpuShaderPayloadValues( faceIndex, 1, shadeA, tintCode )
 	end
+	shadeR, shadeG, shadeB = applyBlockTint( shadeR, shadeG, shadeB, tintCode )
 	if not MC.SampleLighting then return shadeR, shadeG, shadeB, shadeA end
 	local brightness, ao
 	if style == MC_LIGHT_STYLE_FAST then
@@ -235,7 +243,7 @@ local function litFaceColorValues( shade, bx, by, bz, id, faceIndex, cn, selfEmi
 	end
 	local mul = math.Clamp( ( tonumber( brightness ) or 1 ) * ao, 0, 1 )
 	if style == MC_LIGHT_STYLE_GPU_SHADER then
-		return gpuShaderPayloadValues( faceIndex, mul, shadeA )
+		return gpuShaderPayloadValues( faceIndex, mul, shadeA, tintCode )
 	end
 	local rScale, gScale, bScale = 1, 1, 1
 	if style == MC_LIGHT_STYLE_SHADER then
@@ -258,9 +266,11 @@ local function litFaceColorMetaValues( meta, style )
 	local bx, by, bz = meta.bx, meta.by, meta.bz
 	local id = meta.id
 	local faceIndex = meta.faceIndex
+	local tintCode = meta.tintCode or 0
 	if style == MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE then
-		return gpuShaderPayloadValues( faceIndex, 1, shadeA )
+		return gpuShaderPayloadValues( faceIndex, 1, shadeA, tintCode )
 	end
+	shadeR, shadeG, shadeB = applyBlockTint( shadeR, shadeG, shadeB, tintCode )
 	if not MC.SampleLighting then return shadeR, shadeG, shadeB, shadeA end
 	local cx, cy, cz = meta.cx, meta.cy, meta.cz
 	local selfEmission = meta.selfEmission
@@ -280,7 +290,7 @@ local function litFaceColorMetaValues( meta, style )
 	end
 	local mul = math.Clamp( ( tonumber( brightness ) or 1 ) * ao, 0, 1 )
 	if style == MC_LIGHT_STYLE_GPU_SHADER then
-		return gpuShaderPayloadValues( faceIndex, mul, shadeA )
+		return gpuShaderPayloadValues( faceIndex, mul, shadeA, tintCode )
 	end
 	local rScale, gScale, bScale = 1, 1, 1
 	if style == MC_LIGHT_STYLE_SHADER then
@@ -299,8 +309,8 @@ local function litFaceColorMeta( meta, style )
 	return colorFromRGBA( litFaceColorMetaValues( meta, style ) )
 end
 
-local function litFaceColor( shade, bx, by, bz, id, faceIndex, cn, selfEmission, style )
-	return colorFromRGBA( litFaceColorValues( shade, bx, by, bz, id, faceIndex, cn, selfEmission, style ) )
+local function litFaceColor( shade, bx, by, bz, id, faceIndex, cn, selfEmission, style, tintCode )
+	return colorFromRGBA( litFaceColorValues( shade, bx, by, bz, id, faceIndex, cn, selfEmission, style, tintCode ) )
 end
 
 local function colorFromShadeMul( shadeR, shadeG, shadeB, shadeA, mul, rScale, gScale, bScale, bx, by, bz, faceIndex, cx, cy, cz, sourceActive )
@@ -533,20 +543,20 @@ local function setScratchCorner( index, x, y, z )
 	return c
 end
 
-local function quadCornerColorValues( shade, bx, by, bz, id, faceIndex, selfEmission, style, x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4 )
+local function quadCornerColorValues( shade, bx, by, bz, id, faceIndex, selfEmission, style, x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4, tintCode )
 	if style == MC_LIGHT_STYLE_FAST then
-		local color = litFaceColor( shade, bx, by, bz, id, faceIndex, setScratchCorner( 1, x1, y1, z1 ), selfEmission, style )
+		local color = litFaceColor( shade, bx, by, bz, id, faceIndex, setScratchCorner( 1, x1, y1, z1 ), selfEmission, style, tintCode )
 		return color, color, color, color
 	end
 	if style == MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE then
-		local color = litFaceColor( shade, bx, by, bz, id, faceIndex, setScratchCorner( 1, x1, y1, z1 ), selfEmission, style )
+		local color = litFaceColor( shade, bx, by, bz, id, faceIndex, setScratchCorner( 1, x1, y1, z1 ), selfEmission, style, tintCode )
 		return color, color, color, color
 	end
 	return
-		litFaceColor( shade, bx, by, bz, id, faceIndex, setScratchCorner( 1, x1, y1, z1 ), selfEmission, style ),
-		litFaceColor( shade, bx, by, bz, id, faceIndex, setScratchCorner( 2, x2, y2, z2 ), selfEmission, style ),
-		litFaceColor( shade, bx, by, bz, id, faceIndex, setScratchCorner( 3, x3, y3, z3 ), selfEmission, style ),
-		litFaceColor( shade, bx, by, bz, id, faceIndex, setScratchCorner( 4, x4, y4, z4 ), selfEmission, style )
+		litFaceColor( shade, bx, by, bz, id, faceIndex, setScratchCorner( 1, x1, y1, z1 ), selfEmission, style, tintCode ),
+		litFaceColor( shade, bx, by, bz, id, faceIndex, setScratchCorner( 2, x2, y2, z2 ), selfEmission, style, tintCode ),
+		litFaceColor( shade, bx, by, bz, id, faceIndex, setScratchCorner( 3, x3, y3, z3 ), selfEmission, style, tintCode ),
+		litFaceColor( shade, bx, by, bz, id, faceIndex, setScratchCorner( 4, x4, y4, z4 ), selfEmission, style, tintCode )
 end
 
 local function recolorLightMeta( meta, style )
