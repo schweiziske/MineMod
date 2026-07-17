@@ -1672,7 +1672,7 @@ local function drawCrossOutline( base, color )
 	}, color )
 end
 
-function MC.DrawBlockOutline( id, orient, bx, by, bz, color )
+function MC.DrawBlockOutline( id, orient, bx, by, bz, color, stateId )
 	local base = MC.CellWorldMin( bx, by, bz )
 	color = color or Color( 0, 0, 0, 235 )
 	local b = MC.Blocks[id]
@@ -1681,7 +1681,10 @@ function MC.DrawBlockOutline( id, orient, bx, by, bz, color )
 		return
 	end
 
-	local boxes = MC.BlockBoxes and MC.BlockBoxes( id, orient, bx, by, bz ) or nil
+	if stateId == nil and MC.GetBlockState then stateId = MC.GetBlockState( bx, by, bz ) end
+	local boxes = stateId ~= nil and MC.BlockSelectionBoxesForState
+		and MC.BlockSelectionBoxesForState( stateId, bx, by, bz ) or nil
+	if boxes == nil then boxes = MC.BlockBoxes and MC.BlockBoxes( id, orient, bx, by, bz ) or nil end
 	for _, box in ipairs( boxes or { { 0, 0, 0, 1, 1, 1 } } ) do
 		local mn = Vector( box[1] * MC.BS, box[2] * MC.BS, box[3] * MC.BS )
 		local mx = Vector( box[4] * MC.BS, box[5] * MC.BS, box[6] * MC.BS )

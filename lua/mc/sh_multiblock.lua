@@ -31,28 +31,31 @@ end
 
 local function addCell( cells, seen, bx, by, bz, id, orient )
 	local key = MC.CellKey( bx, by, bz )
-	if seen[key] then return end
-	seen[key] = true
-	cells[#cells + 1] = {
+	if seen[key] then return seen[key] end
+	local cell = {
 		bx = bx, by = by, bz = bz,
 		id = id or 0,
 		orient = orient or 0,
 	}
+	seen[key] = cell
+	cells[#cells + 1] = cell
+	return cell
 end
 
 local function addStateCell( cells, seen, bx, by, bz, stateId )
 	local key = MC.CellKey( bx, by, bz )
-	if seen[key] then return end
+	if seen[key] then return seen[key] end
 	local id, orient = MC.LegacyFromState( stateId )
 	if id == nil then return nil, "state_missing_block" end
-	seen[key] = true
-	cells[#cells + 1] = {
+	local cell = {
 		bx = bx, by = by, bz = bz,
 		stateId = stateId,
 		id = id,
 		orient = orient or 0,
 	}
-	return true
+	seen[key] = cell
+	cells[#cells + 1] = cell
+	return cell
 end
 
 function MC.PrimaryPartOrient( id, orient )
@@ -93,6 +96,28 @@ local function stateWith( stateId, property, value )
 	return nextState
 end
 
+local function mergeStateUpdate( cells, seen, update )
+	local key = MC.CellKey( update.bx, update.by, update.bz )
+	local cell = seen[key]
+	local id, orient = MC.LegacyFromState( update.stateId )
+	if id == nil then return nil end
+	if cell then
+		cell.stateId = update.stateId
+		cell.id = id
+		cell.orient = orient or 0
+		return cell
+	end
+	cell = addStateCell( cells, seen, update.bx, update.by, update.bz, update.stateId )
+	if cell then cell.updateExisting = true end
+	return cell
+end
+
+local function appendRedstoneUpdates( cells, seen )
+	if not MC.BuildRedstoneWireStateUpdates then return end
+	local updates = MC.BuildRedstoneWireStateUpdates( cells )
+	for index = 1, #updates do mergeStateUpdate( cells, seen, updates[index] ) end
+end
+
 function MC.BuildPlacementStatePlan( bx, by, bz, stateId )
 	stateId = math.floor( tonumber( stateId ) or -1 )
 	if stateId <= 0 or not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return nil end
@@ -119,6 +144,7 @@ function MC.BuildPlacementStatePlan( bx, by, bz, stateId )
 	else
 		if not addStateCell( cells, seen, bx, by, bz, stateId ) then return nil end
 	end
+	appendRedstoneUpdates( cells, seen )
 
 	local _, orient = MC.LegacyFromState( cells[1].stateId )
 	return {
@@ -181,6 +207,7 @@ function MC.BuildBreakPlan( bx, by, bz )
 			addCell( cells, seen, otherX, otherY, bz, 0, 0 )
 		end
 	end
+	appendRedstoneUpdates( cells, seen )
 
 	return {
 		bx = bx, by = by, bz = bz,
@@ -193,7 +220,7 @@ end
 function MC.CanPreviewPlacePlan( ply, plan )
 	if not plan or not plan.cells or not MC.CanPreviewPlace then return false end
 	for _, cell in ipairs( plan.cells ) do
-		if not MC.CanPreviewPlace( ply, cell.bx, cell.by, cell.bz, cell.id, cell.orient ) then return false end
+		if not cell.updateExisting and not MC.CanPreviewPlace( ply, cell.bx, cell.by, cell.bz, cell.id, cell.orient ) then return false end
 	end
 	return true
 end

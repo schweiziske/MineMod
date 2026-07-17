@@ -370,7 +370,10 @@ function MC.PredictSetBlockState( bx, by, bz, stateId )
 	local plan = MC.BuildPlacementStatePlan and MC.BuildPlacementStatePlan( bx, by, bz, stateId )
 	if not plan then return false end
 	for _, cell in ipairs( plan.cells ) do
-		if MC.GetBlock( cell.bx, cell.by, cell.bz ) ~= 0 then return false end
+		local existingId = MC.GetBlock( cell.bx, cell.by, cell.bz )
+		if cell.updateExisting then
+			if existingId == 0 or existingId ~= cell.id then return false end
+		elseif existingId ~= 0 then return false end
 	end
 	return predictCells( plan.cells, function() return true end )
 end
@@ -381,7 +384,10 @@ function MC.PredictSetBlock( bx, by, bz, id, orient )
 	local plan = MC.BuildPlacementPlan and MC.BuildPlacementPlan( bx, by, bz, id, orient )
 	if not plan then return false end
 	for _, cell in ipairs( plan.cells ) do
-		if MC.GetBlock( cell.bx, cell.by, cell.bz ) ~= 0 then return false end
+		local existingId = MC.GetBlock( cell.bx, cell.by, cell.bz )
+		if cell.updateExisting then
+			if existingId == 0 or existingId ~= cell.id then return false end
+		elseif existingId ~= 0 then return false end
 	end
 	return predictCells( plan.cells, function() return true end )
 end

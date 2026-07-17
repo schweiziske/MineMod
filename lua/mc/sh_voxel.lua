@@ -414,12 +414,18 @@ local function rayIntersectBox( startPos, dir, minX, minY, minZ, maxX, maxY, max
 	return math.max( 0, tMin ), normal
 end
 
-local function traceBlockBoxes( startPos, dir, maxDist, bx, by, bz, id, orient, fallbackDist, fallbackNormal )
-	if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
-		return { dist = fallbackDist, normal = fallbackNormal }
+local function traceBlockBoxes( startPos, dir, maxDist, bx, by, bz, id, orient, stateId, fallbackDist, fallbackNormal )
+	local boxes = CLIENT and stateId ~= nil and MC.BlockSelectionBoxesForState
+		and MC.BlockSelectionBoxesForState( stateId, bx, by, bz ) or nil
+	if boxes == nil and stateId ~= nil and MC.BlockBoxesForState then
+		boxes = MC.BlockBoxesForState( stateId, bx, by, bz )
 	end
-
-	local boxes = MC.BlockBoxes and MC.BlockBoxes( id, orient, bx, by, bz ) or nil
+	if boxes == nil then
+		if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
+			return { dist = fallbackDist, normal = fallbackNormal }
+		end
+		boxes = MC.BlockBoxes and MC.BlockBoxes( id, orient, bx, by, bz ) or nil
+	end
 	if not boxes then return nil end
 
 	local base = MC.CellWorldMin( bx, by, bz )
@@ -467,14 +473,15 @@ function MC.TraceBlockRay( startPos, dir, maxDist )
 		local pendingPrediction = CLIENT and MC.IsPendingPredictionCell and MC.IsPendingPredictionCell( bx, by, bz )
 		if id ~= 0 and not pendingPrediction and dist <= maxDist then
 			local orient = MC.GetBlockOrient( bx, by, bz )
-			local hit = traceBlockBoxes( startPos, dir, maxDist, bx, by, bz, id, orient, dist, normal )
+			local stateId = MC.GetBlockState( bx, by, bz )
+			local hit = traceBlockBoxes( startPos, dir, maxDist, bx, by, bz, id, orient, stateId, dist, normal )
 			if hit then
 				return {
 					Hit = true,
 					HitMCBlock = true,
 					Block = id,
 					Orient = orient,
-					StateId = MC.GetBlockState( bx, by, bz ),
+					StateId = stateId,
 					bx = bx, by = by, bz = bz,
 					HitPos = startPos + dir * hit.dist,
 					HitNormal = hit.normal,
