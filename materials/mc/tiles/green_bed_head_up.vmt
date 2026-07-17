@@ -1,9 +1,0 @@
-"UnlitGeneric"
-{
-  "$basetexture" "mc/tiles/green_bed_head_up"
-  "$translucent" "1"
-  "$vertexcolor" "1"
-  "$vertexalpha" "1"
-  "$pointsample" "1"
-  "$nocull" "1"
-}

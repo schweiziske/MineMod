@@ -1,9 +1,0 @@
-"UnlitGeneric"
-{
-  "$basetexture" "mc/tiles/large_amethyst_bud"
-  "$translucent" "1"
-  "$vertexcolor" "1"
-  "$vertexalpha" "1"
-  "$pointsample" "1"
-  "$nocull" "1"
-}

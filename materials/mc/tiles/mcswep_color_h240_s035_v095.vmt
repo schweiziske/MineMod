@@ -1,9 +1,0 @@
-"UnlitGeneric"
-{
-  "$basetexture" "mc/tiles/mcswep_color_h240_s035_v095"
-  "$translucent" "1"
-  "$vertexcolor" "1"
-  "$vertexalpha" "1"
-  "$pointsample" "1"
-  "$nocull" "1"
-}
