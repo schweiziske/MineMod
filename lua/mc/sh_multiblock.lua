@@ -112,9 +112,27 @@ local function mergeStateUpdate( cells, seen, update )
 	return cell
 end
 
-local function appendRedstoneUpdates( cells, seen )
+local function appendRedstoneUpdates( cells, seen, changeCount )
 	if not MC.BuildRedstoneWireStateUpdates then return end
-	local updates = MC.BuildRedstoneWireStateUpdates( cells )
+	local updates = MC.BuildRedstoneWireStateUpdates( cells, changeCount )
+	for index = 1, #updates do mergeStateUpdate( cells, seen, updates[index] ) end
+end
+
+local function appendBlockConnectionUpdates( cells, seen, changeCount )
+	if not MC.BuildBlockConnectionStateUpdates then return end
+	local updates = MC.BuildBlockConnectionStateUpdates( cells, changeCount )
+	for index = 1, #updates do mergeStateUpdate( cells, seen, updates[index] ) end
+end
+
+local function appendRailUpdates( cells, seen, changeCount )
+	if not MC.BuildRailStateUpdates then return end
+	local updates = MC.BuildRailStateUpdates( cells, changeCount )
+	for index = 1, #updates do mergeStateUpdate( cells, seen, updates[index] ) end
+end
+
+local function appendNeighbourStateUpdates( cells, seen, changeCount )
+	if not MC.BuildNeighbourStateUpdates then return end
+	local updates = MC.BuildNeighbourStateUpdates( cells, changeCount )
 	for index = 1, #updates do mergeStateUpdate( cells, seen, updates[index] ) end
 end
 
@@ -144,7 +162,11 @@ function MC.BuildPlacementStatePlan( bx, by, bz, stateId )
 	else
 		if not addStateCell( cells, seen, bx, by, bz, stateId ) then return nil end
 	end
-	appendRedstoneUpdates( cells, seen )
+	local primaryChangeCount = #cells
+	appendBlockConnectionUpdates( cells, seen, primaryChangeCount )
+	appendRedstoneUpdates( cells, seen, primaryChangeCount )
+	appendRailUpdates( cells, seen, primaryChangeCount )
+	appendNeighbourStateUpdates( cells, seen, primaryChangeCount )
 
 	local _, orient = MC.LegacyFromState( cells[1].stateId )
 	return {
@@ -207,7 +229,11 @@ function MC.BuildBreakPlan( bx, by, bz )
 			addCell( cells, seen, otherX, otherY, bz, 0, 0 )
 		end
 	end
-	appendRedstoneUpdates( cells, seen )
+	local primaryChangeCount = #cells
+	appendBlockConnectionUpdates( cells, seen, primaryChangeCount )
+	appendRedstoneUpdates( cells, seen, primaryChangeCount )
+	appendRailUpdates( cells, seen, primaryChangeCount )
+	appendNeighbourStateUpdates( cells, seen, primaryChangeCount )
 
 	return {
 		bx = bx, by = by, bz = bz,

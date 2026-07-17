@@ -58,6 +58,8 @@ local FLUID_SURFACE_HEIGHT = 0.8888889
 local FLUID_WEIGHTED_HEIGHT = 0.8
 local FLUID_FACE_OFFSET = 0.001
 MC.RenderMeshConstants.FLUID_FACE_OFFSET = FLUID_FACE_OFFSET
+local liquidStateMetrics = MC.LiquidStateMetrics
+local liquidKindForState = MC.LiquidKindForState
 
 local function isLiquidBlock( id )
 	if MC.IsLiquidBlock then return MC.IsLiquidBlock( id ) end
@@ -75,12 +77,19 @@ end
 
 local function fluidHeightAt( bx, by, bz, kind )
 	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
-	local id = stateId and MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or 0
-	if MC.LiquidKind and MC.LiquidKind( id ) == kind then
+	local stateKind, ownHeight
+	if liquidStateMetrics then
+		stateKind, ownHeight = liquidStateMetrics( stateId )
+	else
+		local id = stateId and MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or 0
+		stateKind = MC.LiquidKind and MC.LiquidKind( id ) or nil
+		ownHeight = stateKind and FLUID_SURFACE_HEIGHT or 0
+	end
+	if stateKind == kind then
 		local aboveState = MC.GetBlockState and MC.GetBlockState( bx, by, bz + 1 ) or 0
-		local aboveId = aboveState and MC.BlockTypeForState and MC.BlockTypeForState( aboveState ) or 0
-		if sameLiquidKind( id, aboveId ) then return 1.0 end
-		return FLUID_SURFACE_HEIGHT
+		local aboveKind = liquidKindForState and liquidKindForState( aboveState ) or nil
+		if aboveKind == kind then return 1.0 end
+		return ownHeight
 	end
 	return solidForFluidHeight( stateId, bx, by, bz ) and -1.0 or 0.0
 end

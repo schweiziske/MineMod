@@ -22,12 +22,14 @@ local MC_WATER_FALL_SNAP = 0.005
 local MC_WATER_FALL_SLOW = -0.003
 local MC_WATER_JUMP_OUT = 0.3
 local MC_WATER_GROUND_INPUT_SCALE = 0.45
+local MC_WATER_CURRENT_SCALE = 0.014
 local MC_SWIM_LOOK_UP_MULTIPLIER = 0.085
 local MC_SWIM_LOOK_NORMAL_MULTIPLIER = 0.06
 local MC_LAVA_MOVE_RELATIVE = 0.02
 local MC_LAVA_SLOWDOWN = 0.5
 local MC_LAVA_VERTICAL_SLOWDOWN = 0.8
 local MC_LAVA_GROUND_INPUT_SCALE = 0.25
+local MC_LAVA_CURRENT_SCALE = 0.0023333333333333335
 
 local LiquidKinds = {
 	water = "water",
@@ -40,6 +42,66 @@ local LiquidKinds = {
 
 MC.LiquidMovePlayers = MC.LiquidMovePlayers or {}
 
+-- LiquidBlock stores the legacy block LEVEL (0..15), while Minecraft renders
+-- and tests contact against the derived FluidState amount:
+--   level 0      -> source amount 8
+--   level 1..7   -> flowing amount 8 - level
+--   level 8..15  -> falling amount 8
+-- FlowingFluid.getOwnHeight then returns amount / 9. Keep the decoded result
+-- indexed by StateId so mesh rebuilds do not repeatedly normalize property
+-- names or allocate formatted block-state strings.
+local LiquidKindByState = {}
+local LiquidHeightByState = {}
+local LiquidLevelByState = {}
+local LiquidFallingByState = {}
+local WaterloggedByState = {}
+
+local function statePropertyValue( schema, stateId, propertyName )
+	local property = schema and schema.propertyByName and schema.propertyByName[propertyName] or nil
+	if not property then return nil end
+	local ordinal = stateId - schema.firstStateId
+	local valueIndex = math.floor( ordinal / property.stride ) % property.count + 1
+	return property.values[valueIndex]
+end
+
+local function decodeLiquidState( stateId )
+	if type( stateId ) ~= "number" then stateId = tonumber( stateId ) or 0 end
+	local cachedKind = LiquidKindByState[stateId]
+	if cachedKind ~= nil then
+		return cachedKind or nil,
+			LiquidHeightByState[stateId] or 0,
+			LiquidLevelByState[stateId],
+			LiquidFallingByState[stateId] == true,
+			WaterloggedByState[stateId] == true
+	end
+	if MC.BlockStateRegistryFrozen ~= true then return nil, 0, nil, false, false end
+
+	local id = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or nil
+	local kind = id and MC.LiquidKind( id ) or nil
+	local schema = MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( stateId ) or nil
+	local waterlogged = not kind and statePropertyValue( schema, stateId, "waterlogged" ) == true
+	if waterlogged then kind = "water" end
+	if not kind then
+		LiquidKindByState[stateId] = false
+		LiquidHeightByState[stateId] = 0
+		LiquidFallingByState[stateId] = false
+		WaterloggedByState[stateId] = false
+		return nil, 0, nil, false, false
+	end
+
+	local rawLevel = statePropertyValue( schema, stateId, "level" )
+	local level = math.Clamp( math.floor( tonumber( rawLevel ) or 0 ), 0, 15 )
+	local falling = not waterlogged and level >= 8
+	local amount = falling and 8 or 8 - level
+	local height = amount / 9
+	LiquidKindByState[stateId] = kind
+	LiquidHeightByState[stateId] = height
+	LiquidLevelByState[stateId] = level
+	LiquidFallingByState[stateId] = falling
+	WaterloggedByState[stateId] = waterlogged
+	return kind, height, level, falling, waterlogged
+end
+
 function MC.LiquidKind( id )
 	local b = MC.Blocks and MC.Blocks[id]
 	if not b then return nil end
@@ -50,13 +112,108 @@ function MC.IsLiquidBlock( id )
 	return MC.LiquidKind( id ) ~= nil
 end
 
+function MC.LiquidStateMetrics( stateId )
+	return decodeLiquidState( stateId )
+end
+
+function MC.LiquidKindForState( stateId )
+	local kind = decodeLiquidState( stateId )
+	return kind
+end
+
+function MC.LiquidOwnHeightForState( stateId )
+	local _, height = decodeLiquidState( stateId )
+	return height
+end
+
+function MC.IsWaterloggedState( stateId )
+	local _, _, _, _, waterlogged = decodeLiquidState( stateId )
+	return waterlogged == true
+end
+
+function MC.LiquidHeightAtCell( bx, by, bz, requiredKind )
+	if not MC.GetBlockState then return 0 end
+	local stateId = MC.GetBlockState( bx, by, bz ) or 0
+	local kind, ownHeight = decodeLiquidState( stateId )
+	if not kind or requiredKind and kind ~= requiredKind then return 0 end
+	local aboveState = MC.GetBlockState( bx, by, bz + 1 ) or 0
+	local aboveKind = decodeLiquidState( aboveState )
+	return aboveKind == kind and 1 or ownHeight
+end
+
+local function stateBlocksFluidFlow( stateId, bx, by, bz )
+	if not stateId or stateId == 0 then return false end
+	if MC.BlockHasCollisionForState then return MC.BlockHasCollisionForState( stateId, bx, by, bz ) == true end
+	local id = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or 0
+	return id ~= 0 and MC.BlockHasCollision and MC.BlockHasCollision( id ) == true or false
+end
+
+local function flowDistanceTo( bx, by, bz, kind, ownHeight, dx, dy )
+	local nx, ny = bx + dx, by + dy
+	local neighbourState = MC.GetBlockState( nx, ny, bz ) or 0
+	local neighbourKind, neighbourHeight = decodeLiquidState( neighbourState )
+	if neighbourKind == kind then return ownHeight - neighbourHeight end
+	if stateBlocksFluidFlow( neighbourState, nx, ny, bz ) then return 0 end
+	local belowState = MC.GetBlockState( nx, ny, bz - 1 ) or 0
+	local belowKind, belowHeight = decodeLiquidState( belowState )
+	if belowKind ~= kind or belowHeight <= 0 then return 0 end
+	return ownHeight - ( belowHeight - 8 / 9 )
+end
+
+-- FlowingFluid.getFlow expressed in project X/Y/Z axes. The horizontal result
+-- drives the flowing top UV and can also be reused by entity current handling.
+function MC.LiquidFlowAtCell( bx, by, bz, requiredKind )
+	if not MC.GetBlockState then return 0, 0, 0 end
+	local stateId = MC.GetBlockState( bx, by, bz ) or 0
+	local kind, ownHeight, _, falling = decodeLiquidState( stateId )
+	if not kind or requiredKind and kind ~= requiredKind then return 0, 0, 0 end
+
+	local flowX = flowDistanceTo( bx, by, bz, kind, ownHeight, 1, 0 )
+		- flowDistanceTo( bx, by, bz, kind, ownHeight, -1, 0 )
+	local flowY = flowDistanceTo( bx, by, bz, kind, ownHeight, 0, 1 )
+		- flowDistanceTo( bx, by, bz, kind, ownHeight, 0, -1 )
+	local length = math.sqrt( flowX * flowX + flowY * flowY )
+	if length > 0.000001 then
+		flowX, flowY = flowX / length, flowY / length
+	else
+		flowX, flowY = 0, 0
+	end
+
+	local flowZ = 0
+	if falling then
+		local blocked = stateBlocksFluidFlow( MC.GetBlockState( bx + 1, by, bz ) or 0, bx + 1, by, bz )
+			or stateBlocksFluidFlow( MC.GetBlockState( bx - 1, by, bz ) or 0, bx - 1, by, bz )
+			or stateBlocksFluidFlow( MC.GetBlockState( bx, by + 1, bz ) or 0, bx, by + 1, bz )
+			or stateBlocksFluidFlow( MC.GetBlockState( bx, by - 1, bz ) or 0, bx, by - 1, bz )
+			or stateBlocksFluidFlow( MC.GetBlockState( bx + 1, by, bz + 1 ) or 0, bx + 1, by, bz + 1 )
+			or stateBlocksFluidFlow( MC.GetBlockState( bx - 1, by, bz + 1 ) or 0, bx - 1, by, bz + 1 )
+			or stateBlocksFluidFlow( MC.GetBlockState( bx, by + 1, bz + 1 ) or 0, bx, by + 1, bz + 1 )
+			or stateBlocksFluidFlow( MC.GetBlockState( bx, by - 1, bz + 1 ) or 0, bx, by - 1, bz + 1 )
+		if blocked then
+			flowZ = -6
+			local length3 = math.sqrt( flowX * flowX + flowY * flowY + flowZ * flowZ )
+			flowX, flowY, flowZ = flowX / length3, flowY / length3, flowZ / length3
+		end
+	end
+	return flowX, flowY, flowZ
+end
+
 local function liquidAtPos( pos )
-	if not pos or not MC.WorldToCell or not MC.GetBlock then return nil end
+	if not pos or not MC.WorldToCell or not MC.GetBlockState then return nil end
 	local bx, by, bz = MC.WorldToCell( pos )
-	local id = MC.GetBlock( bx, by, bz )
-	local kind = MC.LiquidKind( id )
+	local stateId = MC.GetBlockState( bx, by, bz ) or 0
+	local kind, _, level, falling = decodeLiquidState( stateId )
 	if not kind then return nil end
-	return { bx = bx, by = by, bz = bz, id = id, kind = kind }
+	local height = MC.LiquidHeightAtCell( bx, by, bz, kind )
+	local surfaceZ = ( bz + height ) * ( MC.BS or 36.5 )
+	if pos.z >= surfaceZ then return nil end
+	local id = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or 0
+	return {
+		bx = bx, by = by, bz = bz,
+		id = id, stateId = stateId, kind = kind,
+		height = height, surfaceZ = surfaceZ,
+		level = level, falling = falling,
+	}
 end
 
 function MC.LiquidAtPos( pos )
@@ -84,21 +241,34 @@ local function playerMoveAABB( ply, mv, horizontalInset, verticalPadding )
 end
 
 function MC.PlayerLiquidContact( ply, mv )
-	if not IsValid( ply ) or not MC.WorldToCell or not MC.GetBlock then return nil end
+	if not IsValid( ply ) or not MC.WorldToCell or not MC.GetBlockState then return nil end
 	local x0, y0, z0, x1, y1, z1 = playerMoveAABB( ply, mv, LIQUID_CONTACT_HORIZONTAL_INSET, LIQUID_CONTACT_VERTICAL_PADDING )
 	local minBx, minBy, minBz = MC.WorldToCell( Vector( x0, y0, z0 ) )
 	local maxBx, maxBy, maxBz = MC.WorldToCell( Vector( x1, y1, z1 ) )
 	local best
+	local blockSize = MC.BS or 36.5
 
 	for bz = minBz, maxBz do
 		for by = minBy, maxBy do
 			for bx = minBx, maxBx do
-				local id = MC.GetBlock( bx, by, bz )
-				local kind = MC.LiquidKind( id )
+				local stateId = MC.GetBlockState( bx, by, bz ) or 0
+				local kind, _, level, falling = decodeLiquidState( stateId )
 				if kind then
-					local contact = { bx = bx, by = by, bz = bz, id = id, kind = kind }
-					if kind == "lava" then return contact end
-					best = best or contact
+					local height = MC.LiquidHeightAtCell( bx, by, bz, kind )
+					local cellBottom = bz * blockSize
+					local surfaceZ = cellBottom + height * blockSize
+					if z1 > cellBottom and z0 < surfaceZ then
+						local id = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or 0
+						local contact = {
+							bx = bx, by = by, bz = bz,
+							id = id, stateId = stateId, kind = kind,
+							height = height, surfaceZ = surfaceZ,
+							depth = math.max( 0, ( surfaceZ - z0 ) / blockSize ),
+							level = level, falling = falling,
+						}
+						if kind == "lava" then return contact end
+						best = best or contact
+					end
 				end
 			end
 		end
@@ -252,11 +422,47 @@ local function jumpOutOfFluid( ply, mv, vel )
 	return vel
 end
 
+local function applyLiquidCurrent( vel, contact, scale, tickFactor )
+	if not contact or not MC.LiquidFlowAtCell then return vel end
+	local flowX, flowY, flowZ = MC.LiquidFlowAtCell( contact.bx, contact.by, contact.bz, contact.kind )
+	if flowX == 0 and flowY == 0 and flowZ == 0 then return vel end
+	local depthScale = contact.depth and contact.depth < 0.4 and contact.depth or 1
+	local impulse = mcToSourceVelocity( scale * depthScale * tickFactor )
+	vel.x = vel.x + flowX * impulse
+	vel.y = vel.y + flowY * impulse
+	vel.z = vel.z + flowZ * impulse
+	return vel
+end
+
+local function bubbleColumnDrag( stateId )
+	local schema = MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( stateId ) or nil
+	if not schema or schema.name ~= "minecraft:bubble_column" then return nil end
+	return MC.GetStateProperty( stateId, "drag" ) == true
+end
+
+local function applyBubbleColumnVelocity( vel, contact, tickFactor )
+	local dragDown = contact and bubbleColumnDrag( contact.stateId )
+	if dragDown == nil then return vel end
+	local aboveSurface = not liquidAbove( contact )
+	local mcZ = sourceToMcVelocity( vel.z )
+	if dragDown then
+		local cap = aboveSurface and -0.9 or -0.3
+		mcZ = math.max( cap, mcZ - 0.03 * tickFactor )
+	else
+		local cap = aboveSurface and 1.8 or 0.7
+		local impulse = aboveSurface and 0.1 or 0.06
+		mcZ = math.min( cap, mcZ + impulse * tickFactor )
+	end
+	vel.z = mcToSourceVelocity( mcZ )
+	return vel
+end
+
 local function applyWaterVelocity( ply, mv, contact )
 	local vel = mv:GetVelocity()
 	local tickFactor = mcTickFactor()
 	local isFalling = vel.z <= 0
 	local sprinting = isWaterSprinting( ply, mv, contact )
+	vel = applyLiquidCurrent( vel, contact, MC_WATER_CURRENT_SCALE, tickFactor )
 	vel = applySwimmingLookAdjustment( ply, mv, contact, vel, tickFactor )
 	vel = moveRelative( vel, ply, mv, MC_WATER_MOVE_RELATIVE, tickFactor )
 	if mv:KeyDown( IN_JUMP ) then
@@ -274,13 +480,15 @@ local function applyWaterVelocity( ply, mv, contact )
 	vel.z = vel.z * verticalSlowDown
 	vel = getFluidFallingAdjustedVelocity( vel, MC_WATER_GRAVITY, isFalling, sprinting, tickFactor )
 	vel = jumpOutOfFluid( ply, mv, vel )
+	vel = applyBubbleColumnVelocity( vel, contact, tickFactor )
 	mv:SetVelocity( vel )
 	consumeLiquidGroundInput( ply, mv, MC_WATER_GROUND_INPUT_SCALE )
 end
 
-local function applyLavaVelocity( ply, mv )
+local function applyLavaVelocity( ply, mv, contact )
 	local vel = mv:GetVelocity()
 	local tickFactor = mcTickFactor()
+	vel = applyLiquidCurrent( vel, contact, MC_LAVA_CURRENT_SCALE, tickFactor )
 	vel = moveRelative( vel, ply, mv, MC_LAVA_MOVE_RELATIVE, tickFactor )
 	local lavaSlowDown = math.pow( MC_LAVA_SLOWDOWN, tickFactor )
 	local lavaVerticalSlowDown = math.pow( MC_LAVA_VERTICAL_SLOWDOWN, tickFactor )
@@ -307,7 +515,7 @@ function MC.ApplyLiquidMove( ply, mv )
 
 	MC.LiquidMovePlayers[ply] = contact.kind
 	if contact.kind == "lava" then
-		applyLavaVelocity( ply, mv )
+		applyLavaVelocity( ply, mv, contact )
 	else
 		applyWaterVelocity( ply, mv, contact )
 	end

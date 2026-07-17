@@ -1504,6 +1504,8 @@ MC.GeneratedTiles = {
 	wheat_stage7 = 1499,
 	white_candle_lit = 1500,
 	yellow_candle_lit = 1501,
+	water_flow = 1502,
+	lava_flow = 1503,
 }
 if SERVER then
 	-- resource.AddFile( "materials/mc/atlas_365.png" )

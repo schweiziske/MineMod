@@ -574,7 +574,7 @@ function SV.SyncCells( ply, cells )
 	sendSetBulk( changes, ply )
 end
 
-local function sendFx( kind, bx, by, bz, id, orient, recipients )
+local function sendFx( kind, bx, by, bz, id, orient, stateId, recipients )
 	if recipients == nil and #player.GetAll() == 0 then return end
 	orient = MC.NormalizeOrient( id, orient )
 	net.Start( "mc_fx" )
@@ -584,6 +584,7 @@ local function sendFx( kind, bx, by, bz, id, orient, recipients )
 		net.WriteInt( bz, Net.COORD_BITS )
 		net.WriteUInt( id, Net.ID_BITS )
 		net.WriteUInt( orient or 0, Net.ORIENT_BITS )
+		net.WriteUInt( math.max( 0, math.floor( tonumber( stateId ) or 0 ) ), Net.STATE_ID_BITS or Net.ID_BITS )
 	if recipients ~= nil then
 		net.Send( recipients )
 	else
@@ -591,8 +592,8 @@ local function sendFx( kind, bx, by, bz, id, orient, recipients )
 	end
 end
 
-local function broadcastFx( kind, bx, by, bz, id, orient )
-	sendFx( kind, bx, by, bz, id, orient )
+local function broadcastFx( kind, bx, by, bz, id, orient, stateId )
+	sendFx( kind, bx, by, bz, id, orient, stateId )
 end
 
 local function normalizeFxKind( kind )
@@ -603,7 +604,7 @@ local function normalizeFxKind( kind )
 	return nil
 end
 
-function SV.PlayBlockFx( kind, id, orient, bx, by, bz, recipients )
+function SV.PlayBlockFx( kind, id, orient, bx, by, bz, recipients, stateId )
 	kind = normalizeFxKind( kind )
 	id = math.floor( tonumber( id ) or 0 )
 	if not kind then return false, "invalid_kind" end
@@ -611,7 +612,7 @@ function SV.PlayBlockFx( kind, id, orient, bx, by, bz, recipients )
 	bx = math.floor( tonumber( bx ) or 0 )
 	by = math.floor( tonumber( by ) or 0 )
 	bz = math.floor( tonumber( bz ) or 0 )
-	sendFx( kind, bx, by, bz, id, orient, recipients )
+	sendFx( kind, bx, by, bz, id, orient, stateId, recipients )
 	return true
 end
 

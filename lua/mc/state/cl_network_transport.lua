@@ -91,6 +91,7 @@ local function resetClientWorld()
 	MC.PhysDirtyBulkOrder = {}
 	MC.PendingFull = {}
 	MC.PendingPredictions = {}
+	MC.PendingPredictionGroups = {}
 	if MC.ResetClientCollisionState then MC.ResetClientCollisionState() end
 end
 
@@ -220,6 +221,10 @@ local function applyTransactionNow( transaction )
 			oldBlockEntity = cloneValue( blockEntityAt( cell.bx, cell.by, cell.bz ) ),
 		}
 	end
+	local correction = bit.band( transaction.flags or 0, FLAG_CORRECTION ) ~= 0
+	if MC.ReconcileStatePredictionCells then
+		MC.ReconcileStatePredictionCells( transaction.cells, transaction.revision, correction )
+	end
 
 	local written = 0
 	for index, item in ipairs( prepared ) do
@@ -255,7 +260,6 @@ local function applyTransactionNow( transaction )
 	end
 
 	local rateLimited = bit.band( transaction.flags or 0, FLAG_MESH_RATE_LIMITED ) ~= 0
-	local correction = bit.band( transaction.flags or 0, FLAG_CORRECTION ) ~= 0
 	for _, item in ipairs( prepared ) do
 		if item.changed then
 			markCellChanged( item.cell, item.oldStateId, rateLimited )
@@ -270,10 +274,6 @@ local function applyTransactionNow( transaction )
 					MC.MarkCellPhysNeighbours( item.cell.bx, item.cell.by, item.cell.bz, false, rateLimited == true )
 				end
 			end
-		end
-		if MC.ConfirmStatePrediction then
-			MC.ConfirmStatePrediction( item.cell.bx, item.cell.by, item.cell.bz,
-				item.cell.stateId, transaction.revision )
 		end
 	end
 	return true

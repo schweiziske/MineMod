@@ -150,7 +150,7 @@ local function particleBrightnessAt( pos )
 	return math.Clamp( tonumber( brightness ) or 1, 0, 1 )
 end
 
-local function addTerrainParticle( emitter, tileName, pos, relX, relY, relZ, bs )
+local function addTerrainParticle( emitter, tileName, pos, relX, relY, relZ, bs, tintCode )
 	local p = emitter:Add( particleMaterialForTile( tileName ), pos )
 	if not p then return end
 
@@ -180,7 +180,12 @@ local function addTerrainParticle( emitter, tileName, pos, relX, relY, relZ, bs 
 	p:SetLighting( false )
 	local brightness = particleBrightnessAt( pos )
 	local shade = math.Clamp( math.floor( 153 * brightness + 0.5 ), 0, 255 )
-	p:SetColor( shade, shade, shade )
+	if tintCode and tintCode ~= 0 and MC.BlockTintRGB then
+		local tr, tg, tb = MC.BlockTintRGB( tintCode )
+		p:SetColor( math.floor( shade * tr / 255 + 0.5 ), math.floor( shade * tg / 255 + 0.5 ), math.floor( shade * tb / 255 + 0.5 ) )
+	else
+		p:SetColor( shade, shade, shade )
+	end
 end
 
 local function addDestroyParticleSample( samples, base, box, bs, xx, yy, zz, countX, countY, countZ )
@@ -264,6 +269,7 @@ local function spawnBreakParticles( id, orient, bx, by, bz, options )
 	if not emitter then return 0 end
 
 	local tileName = options.tileName or tileNameForBlock( id )
+	local tintCode = options.tintCode or 0
 	local samples = {}
 	for _, box in ipairs( boxes ) do
 		local widthX = math.min( 1, box[4] - box[1] )
@@ -295,7 +301,7 @@ local function spawnBreakParticles( id, orient, bx, by, bz, options )
 	for i = 1, count do
 		local sampleIndex = math.min( total, math.floor( offset + ( i - 1 ) * step ) + 1 )
 		local sample = samples[sampleIndex]
-		addTerrainParticle( emitter, tileName, sample.pos, sample.relX, sample.relY, sample.relZ, bs )
+		addTerrainParticle( emitter, tileName, sample.pos, sample.relX, sample.relY, sample.relZ, bs, tintCode )
 	end
 
 	emitter:Finish()
@@ -319,11 +325,12 @@ local function prunePredictedFx()
 	end
 end
 
-function MC.PlayBlockFx( kind, id, orient, bx, by, bz, predicted )
+function MC.PlayBlockFx( kind, id, orient, bx, by, bz, predicted, stateId )
 	local pos = MC.CellWorldCenter( bx, by, bz )
 	playBlockSound( kind, id, pos )
 	if kind == 2 then
-		spawnBreakParticles( id, orient, bx, by, bz )
+		local tintCode = stateId and MC.BlockStateTintCode and MC.BlockStateTintCode( stateId, id, 0 ) or 0
+		spawnBreakParticles( id, orient, bx, by, bz, { tintCode = tintCode } )
 	end
 	if predicted then
 		prunePredictedFx()
@@ -343,7 +350,7 @@ function MC.PlayBlockEffect( kind, id, orient, bx, by, bz, options )
 	kind = normalizeFxKind( kind )
 	if not kind then return false, "invalid_kind" end
 	options = istable( options ) and options or {}
-	MC.PlayBlockFx( kind, id, orient, bx, by, bz, options.predicted == true )
+	MC.PlayBlockFx( kind, id, orient, bx, by, bz, options.predicted == true, options.stateId )
 	return true
 end
 
@@ -363,7 +370,8 @@ net.Receive( "mc_fx", function()
 	local bz = net.ReadInt( Net.COORD_BITS )
 	local id = net.ReadUInt( Net.ID_BITS )
 	local orient = net.ReadUInt( Net.ORIENT_BITS )
+	local stateId = net.ReadUInt( Net.STATE_ID_BITS or Net.ID_BITS )
 
 	if consumePredictedFx( kind, bx, by, bz, id ) then return end
-	MC.PlayBlockFx( kind, id, orient, bx, by, bz, false )
+	MC.PlayBlockFx( kind, id, orient, bx, by, bz, false, stateId )
 end )
