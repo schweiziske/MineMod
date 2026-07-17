@@ -54,68 +54,12 @@ local function visible( cur, nb, nbOrient )
 	return false
 end
 
-local FLUID_SURFACE_HEIGHT = 0.8888889
-local FLUID_WEIGHTED_HEIGHT = 0.8
 local FLUID_FACE_OFFSET = 0.001
 MC.RenderMeshConstants.FLUID_FACE_OFFSET = FLUID_FACE_OFFSET
-local liquidStateMetrics = MC.LiquidStateMetrics
-local liquidKindForState = MC.LiquidKindForState
 
 local function isLiquidBlock( id )
 	if MC.IsLiquidBlock then return MC.IsLiquidBlock( id ) end
 	return MC.LiquidKind and MC.LiquidKind( id ) ~= nil or false
-end
-
-local function solidForFluidHeight( stateId, bx, by, bz )
-	if not stateId or stateId == 0 then return false end
-	local visual = MC.ResolveBlockStateVisual and MC.ResolveBlockStateVisual( stateId, bx, by, bz ) or nil
-	if visual and MC.BlockVisualIsTranslucent and MC.BlockVisualIsTranslucent( visual, bx, by, bz ) then return false end
-	if visual and MC.BlockVisualHasCollision and not MC.BlockVisualHasCollision( visual, bx, by, bz ) then return false end
-	if visual and MC.BlockVisualIsFullCube then return MC.BlockVisualIsFullCube( visual, bx, by, bz ) == true end
-	return false
-end
-
-local function fluidHeightAt( bx, by, bz, kind )
-	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
-	local stateKind, ownHeight
-	if liquidStateMetrics then
-		stateKind, ownHeight = liquidStateMetrics( stateId )
-	else
-		local id = stateId and MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or 0
-		stateKind = MC.LiquidKind and MC.LiquidKind( id ) or nil
-		ownHeight = stateKind and FLUID_SURFACE_HEIGHT or 0
-	end
-	if stateKind == kind then
-		local aboveState = MC.GetBlockState and MC.GetBlockState( bx, by, bz + 1 ) or 0
-		local aboveKind = liquidKindForState and liquidKindForState( aboveState ) or nil
-		if aboveKind == kind then return 1.0 end
-		return ownHeight
-	end
-	return solidForFluidHeight( stateId, bx, by, bz ) and -1.0 or 0.0
-end
-
-local function addWeightedFluidHeight( total, weight, height )
-	if height >= FLUID_WEIGHTED_HEIGHT then
-		return total + height * 10, weight + 10
-	elseif height >= 0 then
-		return total + height, weight + 1
-	end
-	return total, weight
-end
-
-local function calculateAverageFluidHeight( kind, heightSelf, heightA, heightB, bx, by, bz )
-	if heightA >= 1.0 or heightB >= 1.0 then return 1.0 end
-	local total, weight = 0, 0
-	if heightA > 0 or heightB > 0 then
-		local cornerHeight = fluidHeightAt( bx, by, bz, kind )
-		if cornerHeight >= 1.0 then return 1.0 end
-		total, weight = addWeightedFluidHeight( total, weight, cornerHeight )
-	end
-	total, weight = addWeightedFluidHeight( total, weight, heightSelf )
-	total, weight = addWeightedFluidHeight( total, weight, heightA )
-	total, weight = addWeightedFluidHeight( total, weight, heightB )
-	if weight <= 0 then return 0 end
-	return total / weight
 end
 
 ------------------------------------------------------------------ mesh lifecycle
@@ -631,8 +575,6 @@ end
 RM.sameLiquidKind = sameLiquidKind
 RM.visible = visible
 RM.isLiquidBlock = isLiquidBlock
-RM.fluidHeightAt = fluidHeightAt
-RM.calculateAverageFluidHeight = calculateAverageFluidHeight
 RM.destroySectionMeshList = destroySectionMeshList
 RM.rebuildFlatMeshLists = rebuildFlatMeshLists
 RM.DecodeLocal = DecodeLocal
