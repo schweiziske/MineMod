@@ -7,6 +7,8 @@ local RM = MC.RenderMesh
 local C = MC.RenderMeshConstants
 local CS = C.CS
 local CS2 = C.CS2
+local CH = C.CH
+local RENDER_SECTION_SIZE = 8
 local RENDER_SECTIONS_XY = C.RENDER_SECTIONS_XY
 local RENDER_SECTIONS_Z = C.RENDER_SECTIONS_Z
 
@@ -64,9 +66,10 @@ end
 
 local function solidForFluidHeight( stateId, bx, by, bz )
 	if not stateId or stateId == 0 then return false end
-	if MC.IsTranslucentBlockState and MC.IsTranslucentBlockState( stateId, bx, by, bz ) then return false end
-	if MC.BlockHasCollisionForState and not MC.BlockHasCollisionForState( stateId, bx, by, bz ) then return false end
-	if MC.BlockIsFullCubeForState then return MC.BlockIsFullCubeForState( stateId, bx, by, bz ) == true end
+	local visual = MC.ResolveBlockStateVisual and MC.ResolveBlockStateVisual( stateId, bx, by, bz ) or nil
+	if visual and MC.BlockVisualIsTranslucent and MC.BlockVisualIsTranslucent( visual, bx, by, bz ) then return false end
+	if visual and MC.BlockVisualHasCollision and not MC.BlockVisualHasCollision( visual, bx, by, bz ) then return false end
+	if visual and MC.BlockVisualIsFullCube then return MC.BlockVisualIsFullCube( visual, bx, by, bz ) == true end
 	return false
 end
 
@@ -127,7 +130,6 @@ local function destroySectionMeshList( list )
 	end
 end
 
-local sectionIndexForLocal = MC.RenderSectionIndexForLocal
 local clearChunkBlockEmitCache = MC.ClearChunkBlockEmitCache
 
 local function rebuildFlatMeshLists( key )
@@ -190,37 +192,76 @@ local function DecodeLocal( li )
 	return lx, ly, lz
 end
 
-local function ensureChunkRenderSectionIndex( chunk )
+local EMPTY_RENDER_SECTION_BLOCKS = {}
+
+local function resetChunkRenderSectionIndex( chunk, version )
+	chunk.renderSectionBlocks = {}
+	chunk.renderSectionBlocksReady = {}
+	chunk.renderSectionIndexVersion = version
+	chunk.renderSectionIndexStoresStateId = true
+end
+
+local function ensureChunkRenderSectionBlockList( chunk, targetSectionIndex )
 	if not chunk then return nil end
 	local version = chunk.collisionVersion or 0
-	if chunk.renderSectionBlocks and chunk.renderSectionIndexVersion == version
-	and chunk.renderSectionIndexStoresStateId == true then
-		return chunk.renderSectionBlocks
+	local storesStateId = chunk.renderSectionIndexStoresStateId == true
+	if not chunk.renderSectionBlocks
+	or chunk.renderSectionIndexVersion ~= version
+	or not storesStateId
+	or type( chunk.renderSectionBlocksReady ) ~= "table" then
+		resetChunkRenderSectionIndex( chunk, version )
+	end
+	if chunk.renderSectionBlocksReady[targetSectionIndex] then
+		return chunk.renderSectionBlocks[targetSectionIndex] or EMPTY_RENDER_SECTION_BLOCKS
 	end
 
-	local bySection = {}
-	for stateSectionIndex = 1, 2 do
-		local stateSection = chunk.stateSections and chunk.stateSections[stateSectionIndex]
-		if stateSection and MC.StateSection and MC.StateSection.ForEach then
-			MC.StateSection.ForEach( stateSection, function( sectionLocalIndex, stateId )
-				if stateId == 0 then return end
-				local li = ( stateSectionIndex - 1 ) * 4096 + sectionLocalIndex
-				local lx, ly, lz = DecodeLocal( li )
-				local sectionIndex = sectionIndexForLocal( lx, ly, lz )
-				local list = bySection[sectionIndex]
-				if not list then
-					list = {}
-					bySection[sectionIndex] = list
+	local zeroIndex = targetSectionIndex - 1
+	local sectionX = zeroIndex % RENDER_SECTIONS_XY
+	local sectionY = math.floor( zeroIndex / RENDER_SECTIONS_XY ) % RENDER_SECTIONS_XY
+	local sectionZ = math.floor( zeroIndex / ( RENDER_SECTIONS_XY * RENDER_SECTIONS_XY ) )
+	local minX = sectionX * RENDER_SECTION_SIZE
+	local minY = sectionY * RENDER_SECTION_SIZE
+	local minZ = sectionZ * RENDER_SECTION_SIZE
+	local maxX = math.min( CS - 1, minX + RENDER_SECTION_SIZE - 1 )
+	local maxY = math.min( CS - 1, minY + RENDER_SECTION_SIZE - 1 )
+	local maxZ = math.min( CH - 1, minZ + RENDER_SECTION_SIZE - 1 )
+	local stateSections = chunk.stateSections
+	local StateSection = MC.StateSection
+	local list
+
+	local getStateFast = StateSection and ( StateSection.GetFast or StateSection.Get )
+	if stateSections and getStateFast then
+		for lz = minZ, maxZ do
+			local stateSectionIndex = math.floor( lz / 16 ) + 1
+			local stateSection = stateSections[stateSectionIndex]
+			if stateSection and ( stateSection.count or 0 ) > 0 then
+				local sectionZOffset = ( lz % 16 ) * CS2
+				for ly = minY, maxY do
+					local rowOffset = sectionZOffset + ly * CS
+					for lx = minX, maxX do
+						local stateId = getStateFast( stateSection, rowOffset + lx )
+						if stateId and stateId ~= 0 then
+							if not list then list = {} end
+							local li = lx + ly * CS + lz * CS2
+							list[li] = stateId
+						end
+					end
 				end
-				list[li] = stateId
-			end )
+			end
 		end
 	end
 
-	chunk.renderSectionBlocks = bySection
-	chunk.renderSectionIndexVersion = version
-	chunk.renderSectionIndexStoresStateId = true
-	return bySection
+	chunk.renderSectionBlocks[targetSectionIndex] = list
+	chunk.renderSectionBlocksReady[targetSectionIndex] = true
+	return list or EMPTY_RENDER_SECTION_BLOCKS
+end
+
+local function ensureChunkRenderSectionIndex( chunk )
+	if not chunk then return nil end
+	for sectionIndex = 1, RENDER_SECTIONS_XY * RENDER_SECTIONS_XY * RENDER_SECTIONS_Z do
+		ensureChunkRenderSectionBlockList( chunk, sectionIndex )
+	end
+	return chunk.renderSectionBlocks
 end
 
 local function rotatedUVFlags( uf, vf, rot, flipU, flipV )
@@ -398,23 +439,27 @@ local function rotatedModelQuads( b, orient )
 	local xSteps, zSteps = modelOrientSteps( b, orient )
 	if xSteps == 0 and zSteps == 0 then return data.modelQuads end
 	data._rotatedModelQuads = data._rotatedModelQuads or {}
-	local cacheKey = xSteps .. ":" .. zSteps
+	local cacheKey = xSteps * 4 + zSteps
 	if data._rotatedModelQuads[cacheKey] then return data._rotatedModelQuads[cacheKey] end
 	local out = {}
 	for qi, quad in ipairs( data.modelQuads ) do
 		local verts = {}
-		for vi, v in ipairs( quad.verts or {} ) do
-			local y, z = rotateModelXZ( v.y, v.z, xSteps )
+		for vi = 1, 4 do
+			local vx, vy, vz, vu, vv = MC.ModelQuadVertex( quad, vi )
+			local y, z = rotateModelXZ( vy, vz, xSteps )
 			local x
-			x, y = rotateModelXY( v.x, y, zSteps )
-			verts[vi] = { x = x, y = y, z = v.z, u = v.u, v = v.v }
-			verts[vi].z = z
+			x, y = rotateModelXY( vx, y, zSteps )
+			local offset = ( vi - 1 ) * 5
+			verts[offset + 1], verts[offset + 2], verts[offset + 3] = x, y, z
+			verts[offset + 4], verts[offset + 5] = vu, vv
 		end
 		out[qi] = {
 			face = rotateModelFaceZ( rotateModelFaceX( quad.face or MC.Face.TOP, xSteps ), zSteps ),
 			tile = quad.tile,
+			surface = quad.surface,
 			uv = quad.uv,
 			rot = quad.rot or 0,
+			tintIndex = quad.tintIndex or -1,
 			lightEmission = quad.lightEmission or 0,
 			verts = verts,
 		}
@@ -583,6 +628,7 @@ RM.destroySectionMeshList = destroySectionMeshList
 RM.rebuildFlatMeshLists = rebuildFlatMeshLists
 RM.DecodeLocal = DecodeLocal
 RM.ensureChunkRenderSectionIndex = ensureChunkRenderSectionIndex
+RM.ensureChunkRenderSectionBlockList = ensureChunkRenderSectionBlockList
 RM.rotatedUVFlags = rotatedUVFlags
 RM.tileUVRect = tileUVRect
 RM.tileUVPointRaw = tileUVPointRaw

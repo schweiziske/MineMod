@@ -12,6 +12,10 @@ local SH_TOP, SH_BOTTOM, SH_X, SH_Y = C.SH_TOP, C.SH_BOTTOM, C.SH_X, C.SH_Y
 local cornerXYZ = RM.cornerXYZ
 local cornerSampleOffsets = RM.cornerSampleOffsets
 local clampLightLevel = RM.clampLightLevel
+local resolveBlockStateVisual = MC.ResolveBlockStateVisual
+local blockVisualIsTranslucent = MC.BlockVisualIsTranslucent
+local blockVisualHasCollision = MC.BlockVisualHasCollision
+local blockVisualIsFullCube = MC.BlockVisualIsFullCube
 local sampleCacheKey
 
 local MC_LIGHT_AO_FACTORS = {
@@ -118,7 +122,7 @@ local function cornerRecolorBits( cx, cy, cz )
 	return bits
 end
 
-local function meshRecolorKey( shadeIndex, bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
+local function meshRecolorKey( shadeIndex, bx, by, bz, faceIndex, cx, cy, cz, selfEmission, tintCode )
 	local emission = tonumber( selfEmission ) or 0
 	return bit_bor(
 		bit_band( bx or 0, 15 ),
@@ -127,25 +131,9 @@ local function meshRecolorKey( shadeIndex, bx, by, bz, faceIndex, cx, cy, cz, se
 		bit_lshift( bit_band( faceIndex or 0, 7 ), 12 ),
 		bit_lshift( shadeIndex or 5, 15 ),
 		bit_lshift( cornerRecolorBits( cx, cy, cz ), 18 ),
-		bit_lshift( bit_band( emission, 15 ), 21 )
+		bit_lshift( bit_band( emission, 15 ), 21 ),
+		bit_lshift( bit_band( tintCode or 0, 63 ), 25 )
 	)
-end
-
-local function quantizedQuadCoord( value )
-	return tostring( mathFloor( ( tonumber( value ) or 0 ) * 16 + 0.5 ) )
-end
-
-local function weightedQuadRecolorKey( baseKey, quad, quadLightEmission )
-	local emission = clampLightLevel( quadLightEmission )
-	if not quad and emission <= 0 then return baseKey end
-	local key = tostring( baseKey )
-	if emission > 0 then key = key .. ":qe" .. emission end
-	if not quad then return key end
-	return key
-		.. ":" .. quantizedQuadCoord( quad.x1 ) .. "," .. quantizedQuadCoord( quad.y1 ) .. "," .. quantizedQuadCoord( quad.z1 )
-		.. ":" .. quantizedQuadCoord( quad.x2 ) .. "," .. quantizedQuadCoord( quad.y2 ) .. "," .. quantizedQuadCoord( quad.z2 )
-		.. ":" .. quantizedQuadCoord( quad.x3 ) .. "," .. quantizedQuadCoord( quad.y3 ) .. "," .. quantizedQuadCoord( quad.z3 )
-		.. ":" .. quantizedQuadCoord( quad.x4 ) .. "," .. quantizedQuadCoord( quad.y4 ) .. "," .. quantizedQuadCoord( quad.z4 )
 end
 
 local function resetMeshLightingSampleCaches()
@@ -325,14 +313,15 @@ end
 
 local function minecraftShadeBrightnessForState( stateId, bx, by, bz )
 	if stateId == nil or stateId == 0 then return 1 end
-	local id = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or 0
+	local visual = resolveBlockStateVisual and resolveBlockStateVisual( stateId, bx, by, bz ) or nil
+	local id = visual and visual.id or MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or 0
 	local block = MC.Blocks and MC.Blocks[id]
 	if block and block.shadeBrightness ~= nil then
 		return mathClamp( tonumber( block.shadeBrightness ) or 1, 0, 1 )
 	end
-	if MC.IsTranslucentBlockState and MC.IsTranslucentBlockState( stateId, bx, by, bz ) then return 1 end
-	if MC.BlockHasCollisionForState and not MC.BlockHasCollisionForState( stateId, bx, by, bz ) then return 1 end
-	if MC.BlockIsFullCubeForState then return MC.BlockIsFullCubeForState( stateId, bx, by, bz ) and 0.2 or 1 end
+	if visual and blockVisualIsTranslucent and blockVisualIsTranslucent( visual, bx, by, bz ) then return 1 end
+	if visual and blockVisualHasCollision and not blockVisualHasCollision( visual, bx, by, bz ) then return 1 end
+	if visual and blockVisualIsFullCube then return blockVisualIsFullCube( visual, bx, by, bz ) and 0.2 or 1 end
 	if block and block.shape then return 1 end
 	return 0.2
 end
@@ -352,9 +341,11 @@ end
 
 local function solidRenderForSmoothLight( stateId, bx, by, bz )
 	if stateId == nil or stateId == 0 then return false end
-	if MC.IsTranslucentBlockState and MC.IsTranslucentBlockState( stateId, bx, by, bz ) then return false end
-	if MC.BlockHasCollisionForState and not MC.BlockHasCollisionForState( stateId, bx, by, bz ) then return false end
-	return MC.BlockIsFullCubeForState and MC.BlockIsFullCubeForState( stateId, bx, by, bz ) == true or false
+	local visual = resolveBlockStateVisual and resolveBlockStateVisual( stateId, bx, by, bz ) or nil
+	if not visual then return false end
+	if blockVisualIsTranslucent and blockVisualIsTranslucent( visual, bx, by, bz ) then return false end
+	if blockVisualHasCollision and not blockVisualHasCollision( visual, bx, by, bz ) then return false end
+	return blockVisualIsFullCube and blockVisualIsFullCube( visual, bx, by, bz ) == true or false
 end
 
 local function translucentForSmoothLight( bx, by, bz )
@@ -600,8 +591,6 @@ RM.shadeIndexForFace = shadeIndexForFace
 RM.shadeRGBAByIndex = shadeRGBAByIndex
 RM.cornerRecolorBits = cornerRecolorBits
 RM.meshRecolorKey = meshRecolorKey
-RM.quantizedQuadCoord = quantizedQuadCoord
-RM.weightedQuadRecolorKey = weightedQuadRecolorKey
 RM.resetMeshLightingSampleCaches = resetMeshLightingSampleCaches
 RM.fullCubeColorCacheKey = fullCubeColorCacheKey
 RM.setMeshSampleCacheOrigin = setMeshSampleCacheOrigin

@@ -2,39 +2,31 @@
 ------------------------------------------------------------------- dirty tracking
 local RENDER_SECTION_SIZE = 8
 local RENDER_SECTIONS_XY = math.ceil( MC.CS / RENDER_SECTION_SIZE )
+local RENDER_SECTIONS_Z = math.ceil( MC.CH / RENDER_SECTION_SIZE )
+local RENDER_SECTION_COUNT = RENDER_SECTIONS_XY * RENDER_SECTIONS_XY * RENDER_SECTIONS_Z
 local DecodeLocal = MC.DecodeLocal
 local sectionIndexForLocal = MC.RenderSectionIndexForLocal
 local clearChunkBlockEmitCache = MC.ClearChunkBlockEmitCache
 local clearSectionBlockEmitCache = MC.ClearSectionBlockEmitCache
 local markBlockEmitCacheDirty = MC.MarkBlockEmitCacheDirty
-local NextExplosionMeshBuildAt = 0
 
 function MC.MarkChunkDirty( key )
-	MC.MeshDirty[key] = true
+	local sections = {}
+	for sectionIndex = 1, RENDER_SECTION_COUNT do sections[sectionIndex] = true end
+	MC.MeshDirty[key] = sections
 	MC.MeshLightDirty[key] = nil
 	clearChunkBlockEmitCache( key )
-	MC.MeshDirtyRateLimited[key] = nil
 end
 
-local function markChunkSectionDirty( key, sectionIndex, rateLimited )
+local function markChunkSectionDirty( key, sectionIndex )
 	if not key or not sectionIndex then return end
-	if MC.MeshDirty[key] == true then
-		if not rateLimited then MC.MeshDirtyRateLimited[key] = nil end
-		return
-	end
+	if MC.MeshDirty[key] == true then return end
 	local sections = MC.MeshDirty[key]
 	if not sections then
 		sections = {}
 		MC.MeshDirty[key] = sections
 	end
 	MC.MeshDirty[key][sectionIndex] = true
-	if rateLimited then
-		if MC.MeshDirtyRateLimited[key] ~= false then
-			MC.MeshDirtyRateLimited[key] = true
-		end
-	else
-		MC.MeshDirtyRateLimited[key] = nil
-	end
 end
 
 local function markChunkSectionLightDirty( key, sectionIndex )
@@ -63,7 +55,7 @@ function MC.MarkLightCellDirty( bx, by, bz )
 	return true, key, sectionIndex
 end
 
-function MC.MarkRenderSectionsDirtyInBounds( minBX, minBY, minBZ, maxBX, maxBY, maxBZ, rateLimited )
+function MC.MarkRenderSectionsDirtyInBounds( minBX, minBY, minBZ, maxBX, maxBY, maxBZ )
 	minBX, minBY, minBZ = math.floor( tonumber( minBX ) or 0 ), math.floor( tonumber( minBY ) or 0 ), math.floor( tonumber( minBZ ) or 0 )
 	maxBX, maxBY, maxBZ = math.floor( tonumber( maxBX ) or minBX ), math.floor( tonumber( maxBY ) or minBY ), math.floor( tonumber( maxBZ ) or minBZ )
 	if minBX > maxBX then minBX, maxBX = maxBX, minBX end
@@ -91,7 +83,7 @@ function MC.MarkRenderSectionsDirtyInBounds( minBX, minBY, minBZ, maxBX, maxBY, 
 							for sx = sx0, sx1 do
 								local sectionIndex = sx + sy * RENDER_SECTIONS_XY + sz * RENDER_SECTIONS_XY * RENDER_SECTIONS_XY + 1
 								clearSectionBlockEmitCache( key, sectionIndex )
-								markChunkSectionDirty( key, sectionIndex, rateLimited )
+								markChunkSectionDirty( key, sectionIndex )
 							end
 						end
 					end
@@ -101,37 +93,33 @@ function MC.MarkRenderSectionsDirtyInBounds( minBX, minBY, minBZ, maxBX, maxBY, 
 	end
 end
 
-local function markBlockGeometryDirty( x, y, z, rateLimited )
+local function markBlockGeometryDirty( x, y, z )
 	local cx, cy, cz, li = MC.CellToChunk( x, y, z )
 	local lx, ly, lz = DecodeLocal( li )
 	local key = MC.ChunkKey( cx, cy, cz )
 	local sectionIndex = sectionIndexForLocal( lx, ly, lz )
 	if MC.ClearBlockConnectionMaskCache then MC.ClearBlockConnectionMaskCache( x, y, z ) end
 	markBlockEmitCacheDirty( x, y, z )
-	if rateLimited then
-		markChunkSectionDirty( key, sectionIndex, true )
-	else
-		markChunkSectionDirty( key, sectionIndex )
-	end
+	markChunkSectionDirty( key, sectionIndex )
 	return key, sectionIndex
 end
 
 
 -- a block changed: its own chunk and any chunk owning a face-neighbour cell
 -- may need a rebuild (boundary faces).
-function MC.MarkDirty( bx, by, bz, rateLimited )
-	markBlockGeometryDirty( bx, by, bz, rateLimited )
-	markBlockGeometryDirty( bx + 1, by, bz, rateLimited ) ; markBlockGeometryDirty( bx - 1, by, bz, rateLimited )
-	markBlockGeometryDirty( bx, by + 1, bz, rateLimited ) ; markBlockGeometryDirty( bx, by - 1, bz, rateLimited )
-	markBlockGeometryDirty( bx, by, bz + 1, rateLimited ) ; markBlockGeometryDirty( bx, by, bz - 1, rateLimited )
+function MC.MarkDirty( bx, by, bz )
+	markBlockGeometryDirty( bx, by, bz )
+	markBlockGeometryDirty( bx + 1, by, bz ) ; markBlockGeometryDirty( bx - 1, by, bz )
+	markBlockGeometryDirty( bx, by + 1, bz ) ; markBlockGeometryDirty( bx, by - 1, bz )
+	markBlockGeometryDirty( bx, by, bz + 1 ) ; markBlockGeometryDirty( bx, by, bz - 1 )
 end
 
-function MC.MarkLightingGeometryDirtyForChange( bx, by, bz, rateLimited )
+function MC.MarkLightingGeometryDirtyForChange( bx, by, bz )
 	local dirtySections, dirtyCount = {}, 0
 	for dz = -1, 1 do
 		for dy = -1, 1 do
 			for dx = -1, 1 do
-				local key, sectionIndex = markBlockGeometryDirty( bx + dx, by + dy, bz + dz, rateLimited )
+				local key, sectionIndex = markBlockGeometryDirty( bx + dx, by + dy, bz + dz )
 				local dirtyKey = type( key ) == "number" and key * 16 + sectionIndex or tostring( key ) .. ":" .. tostring( sectionIndex )
 				if not dirtySections[dirtyKey] then
 					dirtySections[dirtyKey] = true
@@ -143,53 +131,40 @@ function MC.MarkLightingGeometryDirtyForChange( bx, by, bz, rateLimited )
 	return dirtyCount
 end
 
-local function chunkDistanceScore( key )
+local function playerChunkCoords()
 	local lp = LocalPlayer()
-	if not IsValid( lp ) then return 0 end
-	local cx, cy, cz = MC.ChunkKeyToCoords( key )
-	if not cx then return math.huge end
+	if not IsValid( lp ) then return nil end
 	local pos = lp.WorldSpaceCenter and lp:WorldSpaceCenter() or lp:GetPos()
 	local bx, by, bz = MC.WorldToCell( pos )
-	local pcx, pcy, pcz = MC.CellToChunk( bx, by, bz )
-	local dx, dy, dz = cx - pcx, cy - pcy, cz - pcz
-	return dx * dx + dy * dy + dz * dz * 2
+	return MC.CellToChunk( bx, by, bz )
 end
 
-local function nextDirtyMeshKeys()
+local function sortedDirtyKeys( dirty )
 	local keys = {}
-	for key in pairs( MC.MeshDirty ) do
+	local scores = {}
+	local pcx, pcy, pcz = playerChunkCoords()
+	for key in pairs( dirty ) do
 		keys[#keys + 1] = key
+		if pcx then
+			local cx, cy, cz = MC.ChunkKeyToCoords( key )
+			if cx then
+				local dx, dy, dz = cx - pcx, cy - pcy, cz - pcz
+				scores[key] = dx * dx + dy * dy + dz * dz * 2
+			else
+				scores[key] = math.huge
+			end
+		else
+			scores[key] = 0
+		end
 	end
 	table.sort( keys, function( a, b )
-		return chunkDistanceScore( a ) < chunkDistanceScore( b )
+		return scores[a] < scores[b]
 	end )
 	return keys
 end
 
-local function nextLightDirtyMeshKeys()
-	local keys = {}
-	for key in pairs( MC.MeshLightDirty ) do
-		keys[#keys + 1] = key
-	end
-	table.sort( keys, function( a, b )
-		return chunkDistanceScore( a ) < chunkDistanceScore( b )
-	end )
-	return keys
-end
-
-local function explosionMeshSectionBudget()
-	local cvar = GetConVar and GetConVar( "mc_explosion_mesh_sections_per_frame" ) or nil
-	local budget = cvar and cvar:GetInt() or ( MC.Config.ExplosionMeshSectionsPerFrame or 4 )
-	budget = math.floor( tonumber( budget ) or 0 )
-	if budget <= 0 then return math.huge end
-	return budget
-end
-
-local function explosionMeshInterval()
-	local cvar = GetConVar and GetConVar( "mc_explosion_mesh_interval" ) or nil
-	local interval = cvar and cvar:GetFloat() or ( MC.Config.ExplosionMeshInterval or 0.12 )
-	return math.max( 0, tonumber( interval ) or 0.12 )
-end
+local function nextDirtyMeshKeys() return sortedDirtyKeys( MC.MeshDirty ) end
+local function nextLightDirtyMeshKeys() return sortedDirtyKeys( MC.MeshLightDirty ) end
 
 local function bulkCollisionInterval()
 	local cvar = GetConVar and GetConVar( "mc_bulk_collision_interval" ) or nil
@@ -261,19 +236,15 @@ local function noteRebuiltMeshSection( rebuiltSections, key, sectionIndex )
 	sections[sectionIndex] = true
 end
 
-local function buildDirtyMeshKey( key, sections, rateLimited, budget, rebuiltSections )
+local function buildDirtyMeshKey( key, sections, rebuiltSections )
 	if sections == true then
-		if rateLimited and budget <= 0 then return 0 end
-		MC.BuildChunkMesh( key )
-		noteRebuiltMeshSection( rebuiltSections, key, true )
-		MC.MeshDirty[key] = nil
-		MC.MeshDirtyRateLimited[key] = nil
-		return 1
+		sections = {}
+		for sectionIndex = 1, RENDER_SECTION_COUNT do sections[sectionIndex] = true end
+		MC.MeshDirty[key] = sections
 	end
 
 	local built = 0
 	for sectionIndex in pairs( sections ) do
-		if rateLimited and built >= budget then break end
 		MC.BuildChunkMesh( key, sectionIndex )
 		noteRebuiltMeshSection( rebuiltSections, key, sectionIndex )
 		sections[sectionIndex] = nil
@@ -282,7 +253,6 @@ local function buildDirtyMeshKey( key, sections, rateLimited, budget, rebuiltSec
 
 	if next( sections ) == nil then
 		MC.MeshDirty[key] = nil
-		MC.MeshDirtyRateLimited[key] = nil
 	else
 		MC.MeshDirty[key] = sections
 	end
@@ -302,20 +272,17 @@ local function buildLightDirtyMeshKey( key, sections, rebuiltSections )
 	end
 
 	local built = 0
-	local pending
 	for sectionIndex in pairs( sections ) do
 		if ( istable( geometryDirty ) and geometryDirty[sectionIndex] ) or ( istable( rebuilt ) and rebuilt[sectionIndex] ) then
-			pending = pending or {}
-			if not ( istable( rebuilt ) and rebuilt[sectionIndex] ) then
-				pending[sectionIndex] = true
-			end
+			if istable( rebuilt ) and rebuilt[sectionIndex] then sections[sectionIndex] = nil end
 		else
 			MC.RebuildChunkMeshLighting( key, sectionIndex )
+			sections[sectionIndex] = nil
 			built = built + 1
 		end
 	end
 
-	MC.MeshLightDirty[key] = pending
+	MC.MeshLightDirty[key] = next( sections ) and sections or nil
 	return built
 end
 
@@ -338,8 +305,9 @@ local function maybePrintMeshBuildFramePerf( totalStart, geometryKeys, geometryS
 	) )
 end
 
--- rebuild dirty meshes; explosion-driven edits are section-budgeted on a fixed
--- interval so one blast cannot force every affected mesh to rebuild at once.
+-- Drain every pending geometry and lighting section in this Think. Render
+-- sections remain the rebuild unit, but there is deliberately no frame-time,
+-- section-count, or explosion-specific mesh throttle.
 hook.Remove( "Think", "mc_meshbuild" )
 hook.Add( "Think", "mc_meshbuild", function()
 	local frameStart = SysTime()
@@ -348,27 +316,13 @@ hook.Add( "Think", "mc_meshbuild", function()
 	local rebuiltSections
 	if next( MC.MeshDirty ) then
 		rebuiltSections = {}
-		local now = CurTime()
-		local allowExplosionMesh = now >= NextExplosionMeshBuildAt
-		local explosionBudget = allowExplosionMesh and explosionMeshSectionBudget() or 0
-		local builtExplosionMesh = false
 		for _, key in ipairs( nextDirtyMeshKeys() ) do
 			local sections = MC.MeshDirty[key]
-			local rateLimited = MC.MeshDirtyRateLimited[key] == true
-			if rateLimited and not allowExplosionMesh then continue end
-			local built = buildDirtyMeshKey( key, sections, rateLimited, explosionBudget, rebuiltSections )
+			local built = buildDirtyMeshKey( key, sections, rebuiltSections )
 			if built > 0 then
 				geometryKeys = geometryKeys + 1
 				geometrySections = geometrySections + built
 			end
-			if rateLimited then
-				if built > 0 then builtExplosionMesh = true end
-				explosionBudget = explosionBudget - built
-				if explosionBudget <= 0 then break end
-			end
-		end
-		if builtExplosionMesh then
-			NextExplosionMeshBuildAt = now + explosionMeshInterval()
 		end
 	end
 	if next( MC.MeshLightDirty ) then
@@ -393,6 +347,5 @@ function MC.FreeAllMeshes()
 	MC.MeshLightDirty = {}
 	MC.MeshBlockEmitCache = {}
 	MC.MeshBlockEmitDirty = {}
-	MC.MeshDirtyRateLimited = {}
 	if MC.ResetClientCollisionState then MC.ResetClientCollisionState() end
 end

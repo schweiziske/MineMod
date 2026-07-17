@@ -1,39 +1,49 @@
--- Generated/project-owned MCSwep blocks that are not vanilla Minecraft blocks.
--- Loaded after generated vanilla data and before sh_blocks.lua registers it.
+-- Project-owned generated colour and slope blocks.
+-- Loaded after sh_blocks.lua so generated slopes can share one compact model.
 MC = MC or {}
-MC.GeneratedBlocks = MC.GeneratedBlocks or {}
 
-local MCSWEP_COLOR_BASE_ID = 50000
-local MCSWEP_SLOPE_BASE_ID = 52000
-local MCSWEP_MAX_BLOCK_ID = 65535
-local MCSWEP_COLOR_HUES = 12
-local MCSWEP_COLOR_VARIANTS = {
-	{ s = 35, v = 95 },
-	{ s = 50, v = 95 },
-	{ s = 65, v = 95 },
-	{ s = 80, v = 95 },
-	{ s = 100, v = 95 },
-	{ s = 35, v = 75 },
-	{ s = 50, v = 75 },
-	{ s = 65, v = 75 },
-	{ s = 80, v = 75 },
-	{ s = 100, v = 75 },
-	{ s = 65, v = 55 },
-	{ s = 100, v = 55 },
+local COLOR_BASE_ID = 50000
+local SLOPE_BASE_ID = 52000
+local MAX_BLOCK_ID = 65535
+local COLOR_HUES = 12
+local COLOR_VARIANTS = {
+	{ 35, 95 }, { 50, 95 }, { 65, 95 }, { 80, 95 }, { 100, 95 },
+	{ 35, 75 }, { 50, 75 }, { 65, 75 }, { 80, 75 }, { 100, 75 },
+	{ 65, 55 }, { 100, 55 },
 }
 
 local SLOPE_COLLISION_CONVEXES = {
 	{
-		{ 0, 0, 0 },
-		{ 1, 0, 0 },
-		{ 0, 1, 0 },
-		{ 1, 1, 0 },
-		{ 0, 0, 1 },
-		{ 1, 0, 1 },
+		{ 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 },
+		{ 1, 1, 0 }, { 0, 0, 1 }, { 1, 0, 1 },
 	},
 }
 
-local MCSWEP_REQUIRED_SLOPE_NAMES = {
+-- surface slots: 1=top, 2=bottom, 3=side. Vertices are flat x/y/z/u/v
+-- arrays so hundreds of generated slopes do not allocate vertex hash tables.
+local SLOPE_GEOMETRY = {
+	compact = true,
+	boxes = { { 0, 0, 0, 1, 1, 1 } },
+	modelQuads = {
+		{ face = 1, surface = 1, uv = { 0, 0, 16, 16 }, verts = {
+			0, 0, 1, 0, 0,  1, 0, 1, 1, 0,  1, 1, 0, 1, 1,  0, 1, 0, 0, 1,
+		} },
+		{ face = 2, surface = 2, uv = { 0, 0, 16, 16 }, verts = {
+			0, 1, 0, 0, 1,  1, 1, 0, 1, 1,  1, 0, 0, 1, 0,  0, 0, 0, 0, 0,
+		} },
+		{ face = 6, surface = 3, uv = { 0, 0, 16, 16 }, verts = {
+			0, 0, 0, 0, 1,  1, 0, 0, 1, 1,  1, 0, 1, 1, 0,  0, 0, 1, 0, 0,
+		} },
+		{ face = 4, surface = 3, uv = { 0, 0, 16, 16 }, verts = {
+			0, 1, 0, 1, 1,  0, 0, 0, 0, 1,  0, 0, 1, 0, 0,  0, 0, 1, 0, 0,
+		} },
+		{ face = 3, surface = 3, uv = { 0, 0, 16, 16 }, verts = {
+			1, 0, 0, 0, 1,  1, 1, 0, 1, 1,  1, 0, 1, 0, 0,  1, 0, 1, 0, 0,
+		} },
+	},
+}
+
+local REQUIRED_SLOPES = {
 	oak_planks_slope = true,
 	oak_log_slope = true,
 	stone_slope = true,
@@ -42,126 +52,65 @@ local MCSWEP_REQUIRED_SLOPE_NAMES = {
 	mcswep_color_h000_s035_v095_slope = true,
 }
 
-local function generatedName( hue, variant )
-	return string.format( "mcswep_color_h%03d_s%03d_v%03d", hue, variant.s, variant.v )
+local function generatedName( hue, saturation, value )
+	return string.format( "mcswep_color_h%03d_s%03d_v%03d", hue, saturation, value )
 end
 
-local function addGeneratedBlock( def )
-	MC.GeneratedBlocks[#MC.GeneratedBlocks + 1] = def
-	return def
+local function displayName( block )
+	return block.dispZH or block.disp or block.name
 end
 
-local function generatedDisplayName( source )
-	if not source then return nil end
-	local names = MC.GeneratedBlockNames or {}
-	return source.disp or names[source.mcid] or names[source.name] or source.name
+local function isSlopeSource( block )
+	if not block or block.custom == true then return false end
+	if block.solid == false or block.transparent == true or block.shape ~= nil then return false end
+	if type( block.name ) ~= "string" or string.match( block.name, "_slope$" ) then return false end
+	return block.top ~= nil and block.side ~= nil and block.bottom ~= nil
 end
 
-local function sourceTextures( source )
-	local textures = source and source.textures or nil
-	local top = textures and textures.top or source and source.top
-	local side = textures and textures.side or source and source.side or top
-	local bottom = textures and textures.bottom or source and source.bottom or top
-	if not top or not side or not bottom then return nil end
-	return { top = top, side = side, bottom = bottom }
+local sourceIds = {}
+for _, id in ipairs( MC.BlockList or {} ) do
+	local block = MC.Blocks[id]
+	if block and string.StartWith( block.mcid or "", "minecraft:" ) then sourceIds[#sourceIds + 1] = id end
 end
 
-local function hasTile( name )
-	return name ~= nil and MC.GeneratedTiles and MC.GeneratedTiles[name] ~= nil
-end
-
-local function isSlopeSource( source )
-	if type( source ) ~= "table" then return false end
-	if source.solid == false or source.transparent == true or source.shape ~= nil then return false end
-	if type( source.name ) ~= "string" or string.match( source.name, "_slope$" ) then return false end
-	local textures = sourceTextures( source )
-	return textures ~= nil and hasTile( textures.top ) and hasTile( textures.side ) and hasTile( textures.bottom )
-end
-
-local function slopeQuads( topTile, sideTile, bottomTile )
-	return {
-		{
-			face = 1, tile = topTile, uv = { 0, 0, 16, 16 },
-			verts = {
-				{ x = 0, y = 0, z = 1, u = 0, v = 0 },
-				{ x = 1, y = 0, z = 1, u = 1, v = 0 },
-				{ x = 1, y = 1, z = 0, u = 1, v = 1 },
-				{ x = 0, y = 1, z = 0, u = 0, v = 1 },
-			},
-		},
-		{
-			face = 2, tile = bottomTile, uv = { 0, 0, 16, 16 },
-			verts = {
-				{ x = 0, y = 1, z = 0, u = 0, v = 1 },
-				{ x = 1, y = 1, z = 0, u = 1, v = 1 },
-				{ x = 1, y = 0, z = 0, u = 1, v = 0 },
-				{ x = 0, y = 0, z = 0, u = 0, v = 0 },
-			},
-		},
-		{
-			face = 6, tile = sideTile, uv = { 0, 0, 16, 16 },
-			verts = {
-				{ x = 0, y = 0, z = 0, u = 0, v = 1 },
-				{ x = 1, y = 0, z = 0, u = 1, v = 1 },
-				{ x = 1, y = 0, z = 1, u = 1, v = 0 },
-				{ x = 0, y = 0, z = 1, u = 0, v = 0 },
-			},
-		},
-		{
-			face = 4, tile = sideTile, uv = { 0, 0, 16, 16 },
-			verts = {
-				{ x = 0, y = 1, z = 0, u = 1, v = 1 },
-				{ x = 0, y = 0, z = 0, u = 0, v = 1 },
-				{ x = 0, y = 0, z = 1, u = 0, v = 0 },
-				{ x = 0, y = 0, z = 1, u = 0, v = 0 },
-			},
-		},
-		{
-			face = 3, tile = sideTile, uv = { 0, 0, 16, 16 },
-			verts = {
-				{ x = 1, y = 0, z = 0, u = 0, v = 1 },
-				{ x = 1, y = 1, z = 0, u = 1, v = 1 },
-				{ x = 1, y = 0, z = 1, u = 0, v = 0 },
-				{ x = 1, y = 0, z = 1, u = 0, v = 0 },
-			},
-		},
-	}
-end
-
-MC.MCSwepColorBlockDefs = {}
-for hueIndex = 0, MCSWEP_COLOR_HUES - 1 do
+local colorCount = 0
+for hueIndex = 0, COLOR_HUES - 1 do
 	local hue = hueIndex * 30
-	for variantIndex, variant in ipairs( MCSWEP_COLOR_VARIANTS ) do
-		local name = generatedName( hue, variant )
-		local def = addGeneratedBlock( {
-			id = MCSWEP_COLOR_BASE_ID + hueIndex * #MCSWEP_COLOR_VARIANTS + variantIndex - 1,
+	for variantIndex = 1, #COLOR_VARIANTS do
+		local variant = COLOR_VARIANTS[variantIndex]
+		local name = generatedName( hue, variant[1], variant[2] )
+		local tile = MC.GeneratedTiles and MC.GeneratedTiles[name] or 0
+		local blockId = COLOR_BASE_ID + hueIndex * #COLOR_VARIANTS + variantIndex - 1
+		MC.RegisterBlock( {
+			id = blockId,
 			name = name,
 			mcid = "mcswep:" .. name,
-			disp = string.format( "色块 H%03d S%03d V%03d", hue, variant.s, variant.v ),
+			disp = string.format( "色块 H%03d S%03d V%03d", hue, variant[1], variant[2] ),
 			solid = true,
 			transparent = false,
 			creativeCategory = "color_blocks",
-			textures = { top = name, side = name, bottom = name },
+			top = tile,
+			side = tile,
+			bottom = tile,
 			hardness = 1.2,
 			explosionResistance = 1.2,
 		} )
-		MC.MCSwepColorBlockDefs[#MC.MCSwepColorBlockDefs + 1] = def
+		sourceIds[#sourceIds + 1] = blockId
+		colorCount = colorCount + 1
 	end
 end
 
-MC.MCSwepSlopeBlockDefs = {}
-local sourceCount = #MC.GeneratedBlocks
-local nextSlopeID = MCSWEP_SLOPE_BASE_ID
-for i = 1, sourceCount do
-	local source = MC.GeneratedBlocks[i]
-	if isSlopeSource( source ) and nextSlopeID <= MCSWEP_MAX_BLOCK_ID then
-		local textures = sourceTextures( source )
+local slopeCount = 0
+local nextSlopeID = SLOPE_BASE_ID
+for index = 1, #sourceIds do
+	local source = MC.Blocks[sourceIds[index]]
+	if isSlopeSource( source ) and nextSlopeID <= MAX_BLOCK_ID then
 		local name = source.name .. "_slope"
-		local def = addGeneratedBlock( {
+		local block = MC.RegisterBlock( {
 			id = nextSlopeID,
 			name = name,
 			mcid = "mcswep:" .. name,
-			disp = ( generatedDisplayName( source ) or source.name ) .. "斜坡",
+			disp = displayName( source ) .. "斜坡",
 			solid = true,
 			transparent = false,
 			creativeCategory = "slopes",
@@ -169,14 +118,28 @@ for i = 1, sourceCount do
 			placeRule = "look",
 			iconSource = source.mcid or source.name,
 			shape = "model",
-			boxes = { { 0, 0, 0, 1, 1, 1 } },
-			modelQuads = slopeQuads( textures.top, textures.side, textures.bottom ),
-			collisionConvexes = SLOPE_COLLISION_CONVEXES,
+			top = source.top,
+			side = source.side,
+			bottom = source.bottom,
+			generatedGeometry = SLOPE_GEOMETRY,
+			modelSurfaces = {
+				MC.PackBlockModelSurface( source.top, 0 ),
+				MC.PackBlockModelSurface( source.bottom, 0 ),
+				MC.PackBlockModelSurface( source.side, 0 ),
+			},
+			generatedCollisionConvexes = SLOPE_COLLISION_CONVEXES,
 			hardness = source.hardness or 1.5,
 			explosionResistance = source.explosionResistance or source.hardness or 1.5,
 		} )
-		if MCSWEP_REQUIRED_SLOPE_NAMES[name] then def.requiredSlope = true end
-		MC.MCSwepSlopeBlockDefs[#MC.MCSwepSlopeBlockDefs + 1] = def
+		if REQUIRED_SLOPES[name] then block.requiredSlope = true end
+		slopeCount = slopeCount + 1
 		nextSlopeID = nextSlopeID + 1
 	end
 end
+
+MC.GeneratedMCSwepBlockStats = {
+	colors = colorCount,
+	slopes = slopeCount,
+	sharedSlopeGeometry = SLOPE_GEOMETRY,
+}
+MC.RefreshBlockList()

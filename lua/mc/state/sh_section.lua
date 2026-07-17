@@ -42,14 +42,14 @@ local function bitsForPaletteSize( size )
 	return bits
 end
 
-local function packedGet( words, bits, cellIndex )
+local function packedGet( words, bits, cellIndex, entryMask )
 	if bits == 0 then return 0 end
 	local bitOffset = cellIndex * bits
 	local wordIndex = floor( bitOffset / 32 ) + 1
 	local shift = bitOffset % 32
 	local word = words[wordIndex] or 0
 	if shift + bits <= 32 then
-		return bit_band( bit_rshift( word, shift ), maskForBits( bits ) )
+		return bit_band( bit_rshift( word, shift ), entryMask or maskForBits( bits ) )
 	end
 
 	local lowBits = 32 - shift
@@ -90,6 +90,7 @@ local function resetUniform( section, stateId )
 	section.refCount = { [0] = Section.CELL_COUNT }
 	section.paletteSize = 1
 	section.bitsPerEntry = 0
+	section.entryMask = 0
 	section.words = {}
 	section.count = stateId == 0 and 0 or Section.CELL_COUNT
 	section.deadPaletteEntries = 0
@@ -116,6 +117,14 @@ function Section.Get( section, cellIndex )
 	return section.palette[localIndex + 1] or 0
 end
 
+-- Internal hot-path accessor. The caller must provide a valid section and a
+-- zero-based cell index in [0, 4095]. Mesh construction uses this after doing
+-- its bounds/migration checks once per build instead of once per sampled cell.
+function Section.GetFast( section, cellIndex )
+	local localIndex = packedGet( section.words, section.bitsPerEntry, cellIndex, section.entryMask )
+	return section.palette[localIndex + 1] or 0
+end
+
 function Section.Resize( section, bitsPerEntry )
 	if not section then return nil, "missing_section" end
 	bitsPerEntry = integer( bitsPerEntry )
@@ -131,6 +140,7 @@ function Section.Resize( section, bitsPerEntry )
 	end
 	section.words = words
 	section.bitsPerEntry = bitsPerEntry
+	section.entryMask = maskForBits( bitsPerEntry )
 	return true
 end
 
@@ -167,6 +177,7 @@ function Section.Compact( section )
 	end
 
 	section.bitsPerEntry = bitsForPaletteSize( section.paletteSize )
+	section.entryMask = maskForBits( section.bitsPerEntry )
 	section.words = {}
 	for cellIndex = 0, Section.CELL_COUNT - 1 do
 		local stateId = states[cellIndex]
@@ -181,7 +192,7 @@ function Section.Set( section, cellIndex, stateId )
 	if not section or not cellIndex or cellIndex >= Section.CELL_COUNT then return nil, "invalid_cell_index" end
 	if not stateId then return nil, "invalid_state_id" end
 
-	local oldLocalIndex = packedGet( section.words, section.bitsPerEntry, cellIndex )
+	local oldLocalIndex = packedGet( section.words, section.bitsPerEntry, cellIndex, section.entryMask )
 	local oldStateId = section.palette[oldLocalIndex + 1] or 0
 	if oldStateId == stateId then return false, oldStateId end
 
@@ -202,7 +213,7 @@ function Section.Set( section, cellIndex, stateId )
 		local capacity = 2 ^ section.bitsPerEntry
 		if section.deadPaletteEntries > 0 and section.paletteSize >= capacity then
 			Section.Compact( section )
-			oldLocalIndex = packedGet( section.words, section.bitsPerEntry, cellIndex )
+			oldLocalIndex = packedGet( section.words, section.bitsPerEntry, cellIndex, section.entryMask )
 			newLocalIndex = section.paletteIndex[stateId]
 			newEntryWasDead = newLocalIndex ~= nil and ( section.refCount[newLocalIndex] or 0 ) == 0
 		end
@@ -244,7 +255,7 @@ end
 function Section.ForEach( section, cb )
 	if not section or not cb or ( section.count or 0 ) <= 0 then return end
 	for cellIndex = 0, Section.CELL_COUNT - 1 do
-		local stateId = Section.Get( section, cellIndex )
+		local stateId = Section.GetFast( section, cellIndex )
 		if stateId and stateId ~= 0 then cb( cellIndex, stateId ) end
 	end
 end

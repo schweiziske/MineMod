@@ -5,6 +5,7 @@ local RM = MC.RenderMesh
 
 
 local C = MC.RenderMeshConstants
+local mathFloor = math.floor
 local clampLightLevel = RM.clampLightLevel
 local sameLiquidKind = RM.sameLiquidKind
 local coveredByBoxes = RM.coveredByBoxes
@@ -17,8 +18,9 @@ local meshPerfAdd = RM.meshPerfAdd
 local meshPerfMS = RM.meshPerfMS
 local setMeshSampleCacheOrigin = RM.setMeshSampleCacheOrigin
 local ensureChunkRenderSectionIndex = RM.ensureChunkRenderSectionIndex
+local ensureChunkRenderSectionBlockList = RM.ensureChunkRenderSectionBlockList
 
-local function makeLightMeta( shade, shadeIndex, bx, by, bz, id, faceIndex, li, cx, cy, cz, selfEmission, faceCubic, quadLightEmission )
+local function makeLightMeta( shade, shadeIndex, bx, by, bz, id, faceIndex, li, cx, cy, cz, selfEmission, faceCubic, quadLightEmission, tintCode )
 	return {
 		shade = shade,
 		shadeIndex = shadeIndex,
@@ -33,12 +35,13 @@ local function makeLightMeta( shade, shadeIndex, bx, by, bz, id, faceIndex, li, 
 		cz = cz,
 		selfEmission = selfEmission,
 		quadLightEmission = clampLightLevel( quadLightEmission ),
+		tintCode = tintCode or 0,
 		faceCubic = faceCubic ~= false,
 	}
 end
 
 local function newLightMetaFactory( localIndexForBlockCoords )
-	local function fromCorner( shade, bx, by, bz, id, faceIndex, corner, selfEmission, unusedQuad, faceCubic, quadLightEmission )
+	local function fromCorner( shade, bx, by, bz, id, faceIndex, corner, selfEmission, unusedQuad, faceCubic, quadLightEmission, tintCode )
 		local cx, cy, cz = cornerXYZ( corner )
 		if faceCubic == nil then
 			faceCubic = not unusedQuad or unusedQuad.faceCubic ~= false
@@ -57,11 +60,12 @@ local function newLightMetaFactory( localIndexForBlockCoords )
 			cz,
 			selfEmission,
 			faceCubic,
-			quadLightEmission
+			quadLightEmission,
+			tintCode
 		)
 	end
 
-	local function fromValues( shade, bx, by, bz, id, faceIndex, cx, cy, cz, selfEmission, unusedQuad, faceCubic, quadLightEmission )
+	local function fromValues( shade, bx, by, bz, id, faceIndex, cx, cy, cz, selfEmission, unusedQuad, faceCubic, quadLightEmission, tintCode )
 		if faceCubic == nil then
 			faceCubic = not unusedQuad or unusedQuad.faceCubic ~= false
 		end
@@ -79,11 +83,12 @@ local function newLightMetaFactory( localIndexForBlockCoords )
 			cz,
 			selfEmission,
 			faceCubic,
-			quadLightEmission
+			quadLightEmission,
+			tintCode
 		)
 	end
 
-	local function fast( shadeIndex, bx, by, bz, id, faceIndex, li, cx, cy, cz, selfEmission, faceCubic, quadLightEmission )
+	local function fast( shadeIndex, bx, by, bz, id, faceIndex, li, cx, cy, cz, selfEmission, faceCubic, quadLightEmission, tintCode )
 		return makeLightMeta(
 			nil,
 			shadeIndex,
@@ -98,7 +103,8 @@ local function newLightMetaFactory( localIndexForBlockCoords )
 			cz,
 			selfEmission,
 			faceCubic,
-			quadLightEmission
+			quadLightEmission,
+			tintCode
 		)
 	end
 
@@ -127,11 +133,19 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	local byo = chunk.cy * C.CS
 	local bzo = chunk.cz * C.CH
 	setMeshSampleCacheOrigin( bxo, byo, bzo )
+	if not chunk.stateStorageMigrated and MC.MigrateChunkStateStorage then MC.MigrateChunkStateStorage( chunk ) end
+	local chunkStateSections = chunk.stateSections or {}
+	local StateSection = MC.StateSection
+	local getStateFast = StateSection and ( StateSection.GetFast or StateSection.Get )
 	local blocksById = MC.Blocks
 	local blockIsFullCube = MC.BlockIsFullCube
-	local getBlock = MC.GetBlock
 	local getBlockState = MC.GetBlockState
-	local getChunkBlockState = MC.GetChunkBlockStateByLocalIndex
+	local blockTypeForState = MC.BlockTypeForState
+	local resolveBlockStateVisual = MC.ResolveBlockStateVisual
+	local resolveBlockStateRenderClass = MC.ResolveBlockStateRenderClass
+	local blockVisualIsTranslucent = MC.BlockVisualIsTranslucent
+	local blockVisualIsFullCube = MC.BlockVisualIsFullCube
+	local blockVisualBoxes = MC.BlockVisualBoxes
 	local isPaneBlock = MC.IsPaneBlock
 	local blockBoxes = MC.BlockBoxes
 
@@ -168,24 +182,20 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		return lx >= 0 and lx < C.CS and ly >= 0 and ly < C.CS and lz >= 0 and lz < C.CH
 	end
 
-	local stateAt
-	local function blockAt( lx, ly, lz, bx, by, bz )
-		local stateId = stateAt( lx, ly, lz, bx, by, bz )
-		return stateId and MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or 0
-	end
-
-	stateAt = function( lx, ly, lz, bx, by, bz )
+	local function stateAt( lx, ly, lz, bx, by, bz )
 		if inCurrentChunk( lx, ly, lz ) then
 			local li = localIndex( lx, ly, lz )
-			return getChunkBlockState and getChunkBlockState( chunk, li ) or 0
+			local stateSection = chunkStateSections[mathFloor( li / 4096 ) + 1]
+			return stateSection and getStateFast and getStateFast( stateSection, li % 4096 ) or 0
 		end
 		return getBlockState and getBlockState( bx, by, bz ) or 0
 	end
 
 	local function orientAt( lx, ly, lz, bx, by, bz )
 		local stateId = stateAt( lx, ly, lz, bx, by, bz )
-		if stateId and MC.ResolveBlockStateVisual then
-			local visual = MC.ResolveBlockStateVisual( stateId, bx, by, bz )
+		if not stateId or stateId == 0 then return 0 end
+		if stateId and resolveBlockStateVisual then
+			local visual = resolveBlockStateVisual( stateId, bx, by, bz )
 			if visual then return visual.renderOrient end
 		end
 		return 0
@@ -193,14 +203,28 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 
 	local function visibleAt( curId, lx, ly, lz, bx, by, bz )
 		local nbState = stateAt( lx, ly, lz, bx, by, bz )
-		local nb = nbState and MC.BlockTypeForState and MC.BlockTypeForState( nbState ) or blockAt( lx, ly, lz, bx, by, bz )
+		if not nbState or nbState == 0 then return true end
+		local nb, fullCube, translucent
+		if resolveBlockStateRenderClass then
+			nb, fullCube, translucent = resolveBlockStateRenderClass( nbState, bx, by, bz )
+		end
+		local nbVisual
+		if not nb then
+			nbVisual = resolveBlockStateVisual and resolveBlockStateVisual( nbState, bx, by, bz ) or nil
+			nb = nbVisual and nbVisual.id or blockTypeForState and blockTypeForState( nbState ) or 0
+		end
 		if nb == 0 then return true end
 		if sameLiquidKind( curId, nb ) then return false end
 		local d = blocksById[nb]
-		local translucent = nbState and MC.IsTranslucentBlockState and MC.IsTranslucentBlockState( nbState, bx, by, bz )
+		if translucent == nil then
+			nbVisual = nbVisual or resolveBlockStateVisual and resolveBlockStateVisual( nbState, bx, by, bz ) or nil
+			translucent = nbVisual and blockVisualIsTranslucent and blockVisualIsTranslucent( nbVisual, bx, by, bz )
+		end
 		if translucent or d and d.transparent then return nb ~= curId end
-		if nbState and MC.BlockIsFullCubeForState then
-			if not MC.BlockIsFullCubeForState( nbState, bx, by, bz ) then return true end
+		if fullCube ~= nil then
+			if not fullCube then return true end
+		elseif nbVisual and blockVisualIsFullCube then
+			if not blockVisualIsFullCube( nbVisual, bx, by, bz ) then return true end
 		elseif blockIsFullCube and not blockIsFullCube( nb, orientAt( lx, ly, lz, bx, by, bz ) ) then
 			return true
 		end
@@ -221,16 +245,30 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		local nlx, nly, nlz = lx + off[1], ly + off[2], lz + off[3]
 		local nbx, nby, nbz = bx + off[1], by + off[2], bz + off[3]
 		local nbState = stateAt( nlx, nly, nlz, nbx, nby, nbz )
-		local nb = nbState and MC.BlockTypeForState and MC.BlockTypeForState( nbState ) or blockAt( nlx, nly, nlz, nbx, nby, nbz )
+		if not nbState or nbState == 0 then return false end
+		local nb, fullCube, translucent
+		if resolveBlockStateRenderClass then
+			nb, fullCube, translucent = resolveBlockStateRenderClass( nbState, nbx, nby, nbz )
+		end
+		local nbVisual
+		if not nb then
+			nbVisual = resolveBlockStateVisual and resolveBlockStateVisual( nbState, nbx, nby, nbz ) or nil
+			nb = nbVisual and nbVisual.id or blockTypeForState and blockTypeForState( nbState ) or 0
+		end
 		if nb == 0 then return false end
 		if sameLiquidKind( curId, nb ) then return true end
 		local d = blocksById[nb]
-		local translucent = nbState and MC.IsTranslucentBlockState and MC.IsTranslucentBlockState( nbState, nbx, nby, nbz )
+		if translucent == nil then
+			nbVisual = nbVisual or resolveBlockStateVisual and resolveBlockStateVisual( nbState, nbx, nby, nbz ) or nil
+			translucent = nbVisual and blockVisualIsTranslucent and blockVisualIsTranslucent( nbVisual, nbx, nby, nbz )
+		end
 		if ( translucent or d and d.transparent ) and not ( isPaneBlock and isPaneBlock( nb ) ) then return false end
-		local nbOrient = orientAt( nlx, nly, nlz, nbx, nby, nbz )
-		if nbState and MC.BlockIsFullCubeForState and MC.BlockIsFullCubeForState( nbState, nbx, nby, nbz ) then return true end
-		if not nbState and blockIsFullCube and blockIsFullCube( nb, nbOrient ) then return true end
-		local nbBoxes = nbState and MC.BlockBoxesForState and MC.BlockBoxesForState( nbState, nbx, nby, nbz )
+		if fullCube == true then return true end
+		nbVisual = nbVisual or resolveBlockStateVisual and resolveBlockStateVisual( nbState, nbx, nby, nbz ) or nil
+		if fullCube == nil and nbVisual and blockVisualIsFullCube and blockVisualIsFullCube( nbVisual, nbx, nby, nbz ) then return true end
+		local nbOrient = nbVisual and nbVisual.renderOrient or orientAt( nlx, nly, nlz, nbx, nby, nbz )
+		if not nbVisual and blockIsFullCube and blockIsFullCube( nb, nbOrient ) then return true end
+		local nbBoxes = nbVisual and blockVisualBoxes and blockVisualBoxes( nbVisual, nbx, nby, nbz )
 			or blockBoxes and blockBoxes( nb, nbOrient, nbx, nby, nbz ) or nil
 		return coveredByBoxes( box, faceIndex, nbBoxes, off[1], off[2], off[3] )
 	end
@@ -356,23 +394,28 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		return opaqueMeshes, translucentMeshes, opaqueRecords, translucentRecords
 	end
 
-	local blockIter = {}
-	for stateSectionIndex = 1, 2 do
-		local stateSection = chunk.stateSections and chunk.stateSections[stateSectionIndex]
-		if stateSection and MC.StateSection and MC.StateSection.ForEach then
-			MC.StateSection.ForEach( stateSection, function( sectionLocalIndex, stateId )
-				if stateId ~= 0 then
-					local li = ( stateSectionIndex - 1 ) * 4096 + sectionLocalIndex
-					blockIter[li] = stateId
-				end
-			end )
-		end
-	end
+	local blockIter
 	if sectionIndex then
 		local indexStart = SysTime()
-		local bySection = ensureChunkRenderSectionIndex( chunk )
+		blockIter = ensureChunkRenderSectionBlockList and ensureChunkRenderSectionBlockList( chunk, sectionIndex ) or nil
+		if not blockIter then
+			local bySection = ensureChunkRenderSectionIndex( chunk )
+			blockIter = bySection and bySection[sectionIndex] or {}
+		end
 		meshPerfAdd( meshPerf, "indexMS", indexStart )
-		blockIter = bySection and bySection[sectionIndex] or {}
+	else
+		blockIter = {}
+		for stateSectionIndex = 1, 2 do
+			local stateSection = chunk.stateSections and chunk.stateSections[stateSectionIndex]
+			if stateSection and MC.StateSection and MC.StateSection.ForEach then
+				MC.StateSection.ForEach( stateSection, function( sectionLocalIndex, stateId )
+					if stateId ~= 0 then
+						local li = ( stateSectionIndex - 1 ) * 4096 + sectionLocalIndex
+						blockIter[li] = stateId
+					end
+				end )
+			end
+		end
 	end
 	meshPerf.prepMS = meshPerfMS( buildStart )
 
@@ -401,7 +444,6 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	ctx.styleForBuffer = styleForBuffer
 	ctx.currentEmitLightStyle = currentEmitLightStyle
 	ctx.localIndex = localIndex
-	ctx.blockAt = blockAt
 	ctx.stateAt = stateAt
 	ctx.orientAt = orientAt
 	ctx.visibleAt = visibleAt

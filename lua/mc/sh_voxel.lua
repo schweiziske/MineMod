@@ -84,7 +84,9 @@ local function packedChunkKeyToCoords( key )
 end
 
 function MC.ChunkKeyToCoords( key )
-	local cx, cy, cz = string.match( tostring( key or "" ), "^(-?%d+):(-?%d+):(-?%d+)$" )
+	if type( key ) == "number" then return packedChunkKeyToCoords( key ) end
+	if type( key ) ~= "string" then return nil end
+	local cx, cy, cz = string.match( key or "", "^(-?%d+):(-?%d+):(-?%d+)$" )
 	if cx then return tonumber( cx ), tonumber( cy ), tonumber( cz ) end
 	return packedChunkKeyToCoords( key )
 end
@@ -579,14 +581,16 @@ end
 -- collisionVersion also changed.
 local function updateCachedRenderSectionCell( chunk, li, stateId )
 	if not CLIENT or not chunk or not chunk.renderSectionBlocks then return end
-	if chunk.renderSectionIndexStoresStateId ~= true then
+	if chunk.renderSectionIndexStoresStateId ~= true or type( chunk.renderSectionBlocksReady ) ~= "table" then
 		chunk.renderSectionBlocks = nil
+		chunk.renderSectionBlocksReady = nil
 		chunk.renderSectionIndexVersion = nil
 		chunk.renderSectionIndexStoresStateId = nil
 		return
 	end
 	if not MC.RenderSectionIndexForLocal then
 		chunk.renderSectionBlocks = nil
+		chunk.renderSectionBlocksReady = nil
 		chunk.renderSectionIndexVersion = nil
 		chunk.renderSectionIndexStoresStateId = nil
 		return
@@ -594,6 +598,10 @@ local function updateCachedRenderSectionCell( chunk, li, stateId )
 
 	local lx, ly, lz = MC.DecodeLocal( li )
 	local sectionIndex = MC.RenderSectionIndexForLocal( lx, ly, lz )
+	if not chunk.renderSectionBlocksReady[sectionIndex] then
+		chunk.renderSectionIndexVersion = chunk.collisionVersion or 0
+		return
+	end
 	local section = chunk.renderSectionBlocks[sectionIndex]
 	if stateId == 0 then
 		if section then
@@ -661,6 +669,10 @@ function MC.InvalidateChunkStateStorage( chunk )
 	if not chunk then return end
 	chunk.stateSections = nil
 	chunk.stateStorageMigrated = nil
+	chunk.renderSectionBlocks = nil
+	chunk.renderSectionBlocksReady = nil
+	chunk.renderSectionIndexVersion = nil
+	chunk.renderSectionIndexStoresStateId = nil
 end
 
 --- Starts an empty authoritative chunk payload for future palette-aware bulk
@@ -675,6 +687,10 @@ function MC.ResetChunkStateStorage( chunk )
 	chunk.opaqueBlockEntities = nil
 	chunk.opaqueStates = nil
 	chunk.count = 0
+	chunk.renderSectionBlocks = nil
+	chunk.renderSectionBlocksReady = nil
+	chunk.renderSectionIndexVersion = nil
+	chunk.renderSectionIndexStoresStateId = nil
 	return true
 end
 
@@ -740,6 +756,7 @@ function MC.FinalizeChunkStateStorage( chunk )
 	MC.TouchChunkCollisionVersion( chunk )
 	if CLIENT then
 		chunk.renderSectionBlocks = nil
+		chunk.renderSectionBlocksReady = nil
 		chunk.renderSectionIndexVersion = nil
 		chunk.renderSectionIndexStoresStateId = nil
 	end

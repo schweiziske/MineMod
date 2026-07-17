@@ -182,10 +182,11 @@ local function modelParticleBoxes( b )
 	local minX, minY, minZ = 1, 1, 1
 	local maxX, maxY, maxZ = 0, 0, 0
 	for _, quad in ipairs( b.modelQuads ) do
-		for _, v in ipairs( quad.verts or {} ) do
-			local x = math.Clamp( tonumber( v.x ) or 0, 0, 1 )
-			local y = math.Clamp( tonumber( v.y ) or 0, 0, 1 )
-			local z = math.Clamp( tonumber( v.z ) or 0, 0, 1 )
+		for index = 1, 4 do
+			local vx, vy, vz = MC.ModelQuadVertex( quad, index )
+			local x = math.Clamp( tonumber( vx ) or 0, 0, 1 )
+			local y = math.Clamp( tonumber( vy ) or 0, 0, 1 )
+			local z = math.Clamp( tonumber( vz ) or 0, 0, 1 )
 			if x < minX then minX = x end
 			if y < minY then minY = y end
 			if z < minZ then minZ = z end

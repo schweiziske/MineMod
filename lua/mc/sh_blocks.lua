@@ -9,6 +9,10 @@
 
 MC = MC or {}
 
+local bit_band, bit_rshift, bit_lshift = bit.band, bit.rshift, bit.lshift
+local MODEL_SURFACE_TILE_MASK = 4095
+local MODEL_SURFACE_TILE_SHIFT = 12
+
 local T = MC.GeneratedTiles or {
 	dirt = 0, grass_top = 1, grass_side = 2, stone = 3, cobblestone = 4,
 	oak_planks = 5, oak_log = 6, oak_log_top = 7, sand = 8, glass = 9,
@@ -47,9 +51,9 @@ local function tileValue( value, fallback )
 	return fallback or 0
 end
 
-local function blockDisp( def )
+local function blockDisp( name, mcid, id, explicit )
 	local generated = MC.GeneratedBlockNames or {}
-	return def.disp or generated[def.mcid] or generated[def.name] or FixedDisp[def.name] or ( "方块 " .. tostring( def.name or def.mcid or def.id ) )
+	return explicit or generated[mcid] or generated[name] or FixedDisp[name] or ( "方块 " .. tostring( name or mcid or id ) )
 end
 
 local function generatedBlockProperties( name, mcid )
@@ -125,6 +129,7 @@ local function normalizeBaked( baked )
 					rot = math.floor( tonumber( data.rot ) or 0 ),
 					uv = data.uv,
 					uvs = data.uvs,
+					tintIndex = math.floor( tonumber( data.tintIndex or data.tintindex ) or -1 ),
 					lightEmission = lightEmission,
 				}
 			end
@@ -172,6 +177,7 @@ local function normalizeBoxFaces( boxFaces )
 						tile = tileValue( data.tile, 0 ),
 						uv = data.uv,
 						rot = math.floor( tonumber( data.rot ) or 0 ),
+						tintIndex = math.floor( tonumber( data.tintIndex or data.tintindex ) or -1 ),
 						lightEmission = lightEmission,
 					}
 				end
@@ -206,6 +212,7 @@ local function normalizeModelQuads( modelQuads )
 					tile = tileValue( quad.tile, 0 ),
 					uv = quad.uv,
 					rot = math.floor( tonumber( quad.rot ) or 0 ),
+					tintIndex = math.floor( tonumber( quad.tintIndex or quad.tintindex ) or -1 ),
 					lightEmission = lightEmission,
 					verts = verts,
 				}
@@ -260,6 +267,37 @@ local function normalizeModelVariants( variants )
 	return next( out ) and out or nil
 end
 
+function MC.PackBlockModelSurface( tile, lightEmission )
+	tile = math.floor( tonumber( tile ) or 0 )
+	lightEmission = math.Clamp( math.floor( tonumber( lightEmission ) or 0 ), 0, 15 )
+	return tile + bit_lshift( lightEmission, MODEL_SURFACE_TILE_SHIFT )
+end
+
+function MC.BlockModelSurface( block, data )
+	if not data then return 0, 0 end
+	local surface = data.surface
+	local surfaces = block and block.modelSurfaces
+	if surface and surfaces then
+		local packed = surfaces[surface] or 0
+		return bit_band( packed, MODEL_SURFACE_TILE_MASK ), bit_rshift( packed, MODEL_SURFACE_TILE_SHIFT )
+	end
+	return data.tile or 0, data.lightEmission or 0
+end
+
+function MC.ModelQuadVertex( quad, index )
+	local vertices = quad and quad.verts
+	if not vertices then return 0, 0, 0, 0, 0 end
+	if type( vertices[1] ) == "number" then
+		local offset = ( index - 1 ) * 5
+		return vertices[offset + 1] or 0, vertices[offset + 2] or 0, vertices[offset + 3] or 0,
+			vertices[offset + 4] or 0, vertices[offset + 5] or 0
+	end
+	local vertex = vertices[index]
+	if not vertex then return 0, 0, 0, 0, 0 end
+	return vertex.x or vertex[1] or 0, vertex.y or vertex[2] or 0, vertex.z or vertex[3] or 0,
+		vertex.u or vertex[4] or 0, vertex.v or vertex[5] or 0
+end
+
 MC.Blocks = {}
 MC.BlockByName = {}
 MC.BlockAliases = {}
@@ -279,8 +317,8 @@ local ForceSolidNames = {
 	bamboo_mosaic_slab = true,
 }
 
-local function shouldForceSolid( name )
-	local kind = generatedConnectionKind( name, "minecraft:" .. tostring( name or "" ) )
+local function shouldForceSolid( name, mcid )
+	local kind = generatedConnectionKind( name, mcid )
 	return kind == "fence"
 		or kind == "fence_gate"
 		or kind == "wall"
@@ -307,9 +345,12 @@ function MC.RegisterBlock( def )
 	local top = tileValue( textures.top or def.top, 0 )
 	local side = tileValue( textures.side or def.side, top )
 	local bottom = tileValue( textures.bottom or def.bottom, top )
-	local front = textures.front and tileValue( textures.front, side ) or nil
+	local frontValue = textures.front or def.front
+	local front = frontValue ~= nil and tileValue( frontValue, side ) or nil
 	local particle = tileValue( textures.particle or def.particle, side )
-	local icon = textures.icon and tileValue( textures.icon, side ) or nil
+	local iconValue = textures.icon or def.icon
+	local icon = iconValue ~= nil and tileValue( iconValue, side ) or nil
+	local generatedGeometry = def.generatedGeometry
 
 	-- vanilla collision truth beats the generator's name-based solid heuristic
 	-- (its substring patterns misfire on mushroom blocks, coral blocks, eggs,
@@ -330,23 +371,25 @@ function MC.RegisterBlock( def )
 	local handler = def.handlers or ( handlerName and MC.BlockHandlers[handlerName] ) or nil
 	if handler and handler.OnTick then MC.HasBlockTickHandlers = true end
 
-	local displayName = blockDisp( { name = name, disp = def.disp, mcid = mcid, id = id } )
+	local displayName = blockDisp( name, mcid, id, def.disp )
 	local b = {
 		id = id,
 		name = name,
 		mcid = mcid,
 		disp = displayName,
 		dispZH = displayName,
-		solid = shouldForceSolid( name ) or solid,
+		solid = shouldForceSolid( name, mcid ) or solid,
 		transparent = def.transparent == true,
 		shape = def.shape,
 		custom = def.custom == true,
 		creativeCategory = def.creativeCategory,
-		boxes = normalizeBoxes( def.boxes ),
-		boxFaces = normalizeBoxFaces( def.boxFaces ),
-		modelQuads = normalizeModelQuads( def.modelQuads ),
-		modelVariants = normalizeModelVariants( def.modelVariants or generatedVariants ),
-		collisionConvexes = normalizeCollisionConvexes( def.collisionConvexes or def.convexes ),
+		boxes = generatedGeometry and generatedGeometry.boxes or normalizeBoxes( def.boxes ),
+		boxFaces = generatedGeometry and generatedGeometry.boxFaces or normalizeBoxFaces( def.boxFaces ),
+		modelQuads = generatedGeometry and generatedGeometry.modelQuads or normalizeModelQuads( def.modelQuads ),
+		modelVariants = generatedGeometry and generatedGeometry.modelVariants or normalizeModelVariants( def.modelVariants or generatedVariants ),
+		modelSurfaces = def.modelSurfaces,
+		compactModel = generatedGeometry and generatedGeometry.compact == true or false,
+		collisionConvexes = def.generatedCollisionConvexes or normalizeCollisionConvexes( def.collisionConvexes or def.convexes ),
 		connection = connectionKind,
 		soundType = def.soundType or generatedSoundTypes[mcid] or generatedSoundTypes[name] or "STONE",
 		spawnTerrainParticles = def.spawnTerrainParticles ~= false and generatedNoTerrainParticles[mcid] ~= true,
@@ -354,7 +397,7 @@ function MC.RegisterBlock( def )
 		explosionResistance = propertyNumber( def.explosionResistance, propertyNumber( generatedProps.explosionResistance, propertyNumber( generatedProps.hardness, 1 ) ) ),
 		lightEmission = math.Clamp( propertyNumber( def.lightEmission, generatedLight or 0 ), 0, 15 ),
 		textures = { top = top, side = side, bottom = bottom, front = front, particle = particle, icon = icon },
-		baked = normalizeBaked( def.baked ),
+		baked = generatedGeometry and generatedGeometry.baked or normalizeBaked( def.baked ),
 		stateSchema = def.stateSchema or def.blockStateSchema,
 		stateRule = stateRule,
 		placeRule = def.placeRule or def.place,
@@ -405,10 +448,45 @@ function MC.RefreshBlockList()
 end
 
 local function registerGeneratedBlocks()
-	if not MC.GeneratedBlocks then return false end
-	for _, def in ipairs( MC.GeneratedBlocks ) do
-		MC.RegisterBlock( def )
+	local catalog = MC.GeneratedBlockCatalog
+	if not catalog or type( catalog.rows ) ~= "table" then return false end
+	local rows = catalog.rows
+	-- RegisterBlock never retains the input definition itself. Reuse one staging
+	-- record instead of allocating 1197 short-lived keyed tables during startup.
+	local definition = {}
+	for index = 1, #rows do
+		local row = rows[index]
+		local flags = row[4] or 0
+		local geometry = catalog.geometry[row[13] or 0]
+		local surface = catalog.surfaces[row[14] or 0]
+		local mcidLocal = row[3] or row[2]
+		definition.id = row[1]
+		definition.name = row[2]
+		definition.mcid = "minecraft:" .. mcidLocal
+		definition.solid = bit_band( flags, 1 ) ~= 0
+		definition.transparent = bit_band( flags, 2 ) ~= 0
+		definition.top = row[5]
+		definition.side = row[6]
+		definition.bottom = row[7]
+		definition.front = row[8] and row[8] >= 0 and row[8] or nil
+		definition.icon = row[9] and row[9] >= 0 and row[9] or nil
+		definition.stateRule = catalog.stateRules[row[10] or 0]
+		definition.placeRule = catalog.placeRules[row[11] or 0]
+		definition.shape = catalog.shapes[row[12] or 0]
+		definition.generatedGeometry = geometry
+		definition.modelSurfaces = surface
+		definition.defaultOrientName = catalog.defaultOrients[row[15] or 0]
+		definition.handler = catalog.handlers[row[16] or 0]
+		definition.aliases = row[17] or nil
+		MC.RegisterBlock( definition )
 	end
+	MC.GeneratedBlockDefinitionCount = #rows
+	MC.GeneratedBlockCatalogStats = {
+		blocks = #rows,
+		geometryTemplates = #catalog.geometry,
+		surfaceSets = #catalog.surfaces,
+	}
+	MC.GeneratedBlockCatalog = nil
 	return true
 end
 
@@ -728,6 +806,20 @@ registerImportFallbackBlock( { id = 60009, name = "flower", mcid = "minecraft:da
 if MC.RegisterPendingCustomBlocks then MC.RegisterPendingCustomBlocks() end
 rebuildBlockList()
 if MC.RefreshBlockDisplayNames then MC.RefreshBlockDisplayNames() end
+
+-- These generated maps are staging indexes used only while the initial block
+-- records above are normalized. Every value needed at runtime now lives on a
+-- registered block. Keeping the staging maps would retain thousands of
+-- duplicate string keys and property tables for the entire session.
+MC.GeneratedBlockProperties = nil
+MC.GeneratedBlockLight = nil
+MC.GeneratedBlockCollision = nil
+MC.GeneratedBlockModelVariants = nil
+MC.GeneratedBlockConnections = nil
+MC.GeneratedBlockNames = nil
+MC.GeneratedBlockSoundTypes = nil
+MC.GeneratedNoTerrainParticles = nil
+MC.GeneratedBlockRegistrationTablesReleased = true
 
 function MC.DefaultOrient( id )
 	local b = MC.Blocks[id]
@@ -1497,7 +1589,7 @@ local function modelBoxes( b, orient )
 	end
 	if xSteps == 0 and zSteps == 0 then return data.boxes end
 	data._rotatedBoxes = data._rotatedBoxes or {}
-	local cacheKey = xSteps .. ":" .. zSteps
+	local cacheKey = xSteps * 4 + zSteps
 	if data._rotatedBoxes[cacheKey] then return data._rotatedBoxes[cacheKey] end
 	local out = {}
 	for i, box in ipairs( data.boxes ) do
@@ -1542,7 +1634,7 @@ function MC.BlockCollisionConvexes( id, orient, bx, by, bz )
 	local xSteps, zSteps = modelConvexRotationSteps( b, orient )
 	if xSteps == 0 and zSteps == 0 then return b.collisionConvexes end
 	b._rotatedCollisionConvexes = b._rotatedCollisionConvexes or {}
-	local cacheKey = xSteps .. ":" .. zSteps
+	local cacheKey = xSteps * 4 + zSteps
 	if b._rotatedCollisionConvexes[cacheKey] then return b._rotatedCollisionConvexes[cacheKey] end
 
 	local out = {}
@@ -2232,8 +2324,8 @@ function MC.GetBlockExtent( id, orient, bx, by, bz )
 	orient = MC.NormalizeOrient and MC.NormalizeOrient( id, orient ) or math.floor( tonumber( orient ) or 0 )
 
 	local cacheable = bx == nil and by == nil and bz == nil
-	local cacheKey = cacheable and ( id .. ":" .. orient ) or nil
-	local cached = cacheKey and BlockExtentCache[cacheKey] or nil
+	local cache = cacheable and BlockExtentCache[id] or nil
+	local cached = cache and cache[orient] or nil
 	if cached then
 		if cached.empty then return nil, nil end
 		return cached.lo, cached.hi
@@ -2244,8 +2336,12 @@ function MC.GetBlockExtent( id, orient, bx, by, bz )
 		lo, hi = convexesExtent( MC.BlockCollisionConvexes( id, orient, bx, by, bz ) )
 	end
 
-	if cacheKey then
-		BlockExtentCache[cacheKey] = lo == nil and { empty = true } or { lo = lo, hi = hi }
+	if cacheable then
+		if not cache then
+			cache = {}
+			BlockExtentCache[id] = cache
+		end
+		cache[orient] = lo == nil and { empty = true } or { lo = lo, hi = hi }
 	end
 	return lo, hi
 end

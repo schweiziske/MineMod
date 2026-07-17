@@ -656,8 +656,8 @@ MC.ConfigConVars = {
 		} ),
 
 		category( "explosions", "gameplay", "Explosions", "爆炸",
-			"Explosion radius, limits, effects and client mesh rebuild pacing.",
-			"爆炸半径、限制、效果与客户端网格重建节奏。", {
+			"Explosion radius, limits and effects.",
+			"爆炸半径、限制与效果。", {
 			item( "mc_block_explosion_scale", "Blast-to-radius scale", "爆炸伤害转半径倍数", "number",
 				"Convert Garry's Mod blast damage into Minecraft explosion radius.",
 				"将 Garry's Mod 爆炸伤害换算为 Minecraft 爆炸半径。" ),
@@ -670,12 +670,6 @@ MC.ConfigConVars = {
 			item( "mc_block_explosion_fx_limit", "Break-effect limit", "破坏效果上限", "number",
 				"Maximum particle and sound effects broadcast per explosion; 0 sends none.",
 				"单次爆炸最多广播的粒子与声音效果数；0 表示不发送。" ),
-			item( "mc_explosion_mesh_sections_per_frame", "Mesh sections per batch", "每批网格分区数", "number",
-				"Client render sections rebuilt after explosion edits per interval.",
-				"爆炸编辑后客户端每个间隔重建的渲染分区数。" ),
-			item( "mc_explosion_mesh_interval", "Mesh rebuild interval", "网格重建间隔", "number",
-				"Seconds between client mesh rebuild batches after explosions.",
-				"爆炸后客户端网格重建批次之间的秒数。", { unit = "s" } ),
 		} ),
 	},
 }
