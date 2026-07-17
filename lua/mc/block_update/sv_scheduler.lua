@@ -20,6 +20,8 @@ local DEFAULT_MAX_CELLS = 16384
 local DEFAULT_MAX_DEPTH = 64
 local DEFAULT_MAX_QUEUE = 262144
 
+local cvEnabled = CreateConVar( "mc_block_updates_enabled", "0", 0,
+	"Enable queued neighbor updates and scheduled block ticks." )
 local cvMaxUpdates = CreateConVar( "mc_block_update_max_per_tick", tostring( DEFAULT_MAX_UPDATES ), FCVAR_ARCHIVE,
 	"Maximum block update callbacks processed per 20 TPS logic tick." )
 local cvMaxCells = CreateConVar( "mc_block_update_max_cells_per_tick", tostring( DEFAULT_MAX_CELLS ), FCVAR_ARCHIVE,
@@ -70,6 +72,10 @@ local function queueLimit()
 	return positiveConVar( cvMaxQueue, DEFAULT_MAX_QUEUE )
 end
 
+local function updatesEnabled()
+	return not cvEnabled or cvEnabled:GetBool()
+end
+
 local function depthLimit()
 	return positiveConVar( cvMaxDepth, DEFAULT_MAX_DEPTH )
 end
@@ -88,6 +94,7 @@ local function combinedQueueCount()
 end
 
 local function enqueueReady( bx, by, bz, kind, depth, revision, expectedStateId, knownKey )
+	if not updatesEnabled() then return false, "block_updates_disabled" end
 	kind = math.floor( tonumber( kind ) or 0 )
 	if not MC.IsBlockUpdateKind or not MC.IsBlockUpdateKind( kind ) then return false, "invalid_update_kind" end
 	if MC.HasBlockUpdateHandlers and not MC.HasBlockUpdateHandlers( kind ) then return false, "no_update_handlers" end
@@ -236,6 +243,7 @@ end
 
 function SV.EnqueueTransactionNeighbours( changes, revision, depth )
 	if type( changes ) ~= "table" or #changes == 0 then return 0 end
+	if not updatesEnabled() then return 0 end
 	if MC.HasBlockUpdateHandlers and not MC.HasBlockUpdateHandlers( Kind.NEIGHBOR ) then return 0 end
 	local added, seen = 0, {}
 	local function add( bx, by, bz )
@@ -260,6 +268,7 @@ function SV.EnqueueTransactionNeighbours( changes, revision, depth )
 end
 
 function SV.ScheduleBlockTick( bx, by, bz, delayTicks, kind, expectedStateId )
+	if not updatesEnabled() then return false, "block_updates_disabled" end
 	bx = math.floor( tonumber( bx ) or 0 )
 	by = math.floor( tonumber( by ) or 0 )
 	bz = math.floor( tonumber( bz ) or 0 )
@@ -450,6 +459,7 @@ local function runLogicTick()
 end
 
 function SV.RunBlockUpdateTick()
+	if not updatesEnabled() then return false, "block_updates_disabled" end
 	if Running then return false, "scheduler_already_running" end
 	Running = true
 	local ok, processed, submittedCells = xpcall( runLogicTick, debug.traceback )
@@ -478,6 +488,7 @@ end
 
 function SV.BlockUpdateDiagnostics()
 	local out = {
+		enabled = updatesEnabled(),
 		logicTick = LogicTick,
 		ticksPerSecond = TICKS_PER_SECOND,
 		ready = ReadyCount,
@@ -491,3 +502,10 @@ end
 
 timer.Remove( "mc_block_update_scheduler" )
 timer.Create( "mc_block_update_scheduler", TICK_INTERVAL, 0, SV.RunBlockUpdateTick )
+
+cvars.RemoveChangeCallback( "mc_block_updates_enabled", "mc_block_update_scheduler_enabled" )
+cvars.AddChangeCallback( "mc_block_updates_enabled", function( _, _, newValue )
+	if tonumber( newValue ) == 0 then SV.ClearBlockUpdates() end
+end, "mc_block_update_scheduler_enabled" )
+
+if not updatesEnabled() then SV.ClearBlockUpdates() end
