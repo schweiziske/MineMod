@@ -27,6 +27,9 @@ local function playBlockSound( kind, id, pos )
 end
 
 local ParticleMaterialCache = {}
+local ParticleAtlasTexture = nil
+local ParticleAtlasTextureName = nil
+local ParticleFallbackMaterial = Material( "particle/particle_noisesphere" )
 local PredictedFx = MC.PredictedFx or {}
 MC.PredictedFx = PredictedFx
 local ParticleUvSteps = 8
@@ -53,37 +56,75 @@ local function tileNameForBlock( id )
 	return MC.GetBlockParticleTileName( id )
 end
 
+local function particleAtlasTexture()
+	if ParticleAtlasTexture and not ParticleAtlasTexture:IsError() then
+		return ParticleAtlasTexture, ParticleAtlasTextureName
+	end
+
+	local atlasMaterial = MC.Material
+	local texture = atlasMaterial and atlasMaterial.GetTexture and atlasMaterial:GetTexture( "$basetexture" ) or nil
+	if not texture or texture:IsError() then return nil, nil end
+	local textureName = texture.GetName and texture:GetName() or nil
+	if not textureName or textureName == "" then return nil, nil end
+	ParticleAtlasTexture = texture
+	ParticleAtlasTextureName = textureName
+	return texture, textureName
+end
+
 local function particleMaterialForTile( tileName, col, row )
-	if not tileName then return Material( "particle/particle_noisesphere" ) end
+	local tile = type( tileName ) == "number" and tileName or MC.Tiles and MC.Tiles[tileName]
+	if tile == nil then return ParticleFallbackMaterial end
 
 	col = math.Clamp( math.floor( tonumber( col ) or math.random( 0, ParticleUvSteps - 1 ) ), 0, ParticleUvSteps - 1 )
 	row = math.Clamp( math.floor( tonumber( row ) or math.random( 0, ParticleUvSteps - 1 ) ), 0, ParticleUvSteps - 1 )
-	local key = tileName .. ":" .. col .. ":" .. row
-	local cached = ParticleMaterialCache[key]
+	local byTile = ParticleMaterialCache[tile]
+	if not byTile then
+		byTile = {}
+		ParticleMaterialCache[tile] = byTile
+	end
+	local byColumn = byTile[col]
+	if not byColumn then
+		byColumn = {}
+		byTile[col] = byColumn
+	end
+	local cached = byColumn[row]
 	if cached then return cached end
 
-	local safeName = string.gsub( tileName, "[^%w_]", "_" )
-	local matName = "mc_particle_" .. safeName .. "_" .. col .. "_" .. row
+	local atlas = MC.Atlas
+	local atlasTexture, atlasTextureName = particleAtlasTexture()
+	if not atlas or not atlasTexture or not atlasTextureName then return ParticleFallbackMaterial end
+	local stride = atlas.STRIDE or atlas.TILE
+	local pad = atlas.PAD or 0
+	local atlasColumn = tile % atlas.COLS
+	local atlasRow = math.floor( tile / atlas.COLS )
+	local sampleOffset = 0.75 / ( ParticleUvSteps - 1 )
+	local scaleX = atlas.TILE * 0.25 / atlas.W
+	local scaleY = atlas.TILE * 0.25 / atlas.H
+	local translateX = ( atlasColumn * stride + pad + col * sampleOffset * atlas.TILE ) / atlas.W
+	local translateY = ( atlasRow * stride + pad + row * sampleOffset * atlas.TILE ) / atlas.H
+	local matName = "mc_particle_atlas_v1_" .. tile .. "_" .. col .. "_" .. row
 	local transform = string.format(
-		"center 0 0 scale 0.25 0.25 rotate 0 translate %.4f %.4f",
-		col * ( 0.75 / ( ParticleUvSteps - 1 ) ),
-		row * ( 0.75 / ( ParticleUvSteps - 1 ) )
+		"center 0 0 scale %.9f %.9f rotate 0 translate %.9f %.9f",
+		scaleX, scaleY, translateX, translateY
 	)
 
 	local mat = CreateMaterial( matName, "UnlitGeneric", {
-		["$basetexture"] = "mc/tiles/" .. tileName,
+		["$basetexture"] = atlasTextureName,
 		["$translucent"] = "1",
 		["$vertexcolor"] = "1",
 		["$vertexalpha"] = "1",
 		["$nocull"] = "1",
+		["$pointsample"] = "1",
 		["$basetexturetransform"] = transform,
 	} )
 
-	if not mat or mat:IsError() then
-		mat = Material( "mc/tiles/" .. tileName )
+	if mat and not mat:IsError() then
+		mat:SetTexture( "$basetexture", atlasTexture )
+	else
+		mat = ParticleFallbackMaterial
 	end
 
-	ParticleMaterialCache[key] = mat
+	byColumn[row] = mat
 	return mat
 end
 

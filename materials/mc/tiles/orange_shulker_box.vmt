@@ -1,9 +1,0 @@
-"UnlitGeneric"
-{
-  "$basetexture" "mc/tiles/orange_shulker_box"
-  "$translucent" "1"
-  "$vertexcolor" "1"
-  "$vertexalpha" "1"
-  "$pointsample" "1"
-  "$nocull" "1"
-}
