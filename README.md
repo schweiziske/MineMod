@@ -20,7 +20,7 @@ Garry's Mod 里的 Minecraft 风格方块系统。方块不按实体逐个生成
 - 生成 Lua 已拆到 `lua/mc/generated/`，避免单文件超过 64KB。
 - 不完整方块使用 Minecraft model quads 渲染，碰撞/选中使用 `MC.BlockBoxes()`。
 - 梯子不生成普通 chunk 物理薄板；玩家贴近 `minecraft:ladder` 时共享 `SetupMove` 会切到 Source/GMod `MOVETYPE_LADDER`，W/S 按视角 pitch 爬行，A/D 横移，空格脱离。
-- 水/岩浆保持非碰撞 voxel；玩家进入时共享 `SetupMove` 模拟 Source/Minecraft 风格游泳阻力和上浮/下潜，客户端在眼睛进液体后绘制水下/岩浆视觉效果。
+- 水/岩浆保持非碰撞 voxel；玩家进入时由共享 `Move`/`FinishMove` 预测逻辑应用 GWater2 的加速度、阻力、浮力和重力补偿，同时保留 Minecraft 水流方向，客户端在眼睛进液体后绘制水下/岩浆视觉效果。
 - `*_fence_gate` 渲染、碰撞和选中都使用生成模型盒，不能退回整块 `FullBlockBox`。
 - `mc_autosave` 默认是 `0`，自动保存关闭；运行时修改会立即重建/移除自动保存 timer。
 - `mc_save_public` 默认是 `0`，命名存档读取/保存默认仅管理员；设为 `1` 后普通玩家也能读取/保存，删除仍仅管理员。
@@ -35,7 +35,8 @@ lua/mc/sh_blocks.lua                     方块注册、状态、朝向、碰撞
 lua/mc/sh_presets.lua                    建筑预设坐标/朝向旋转和覆盖体积变换
 lua/mc/sh_voxel.lua                      方块存储、坐标换算、方块射线
 lua/mc/functional/sh_ladders.lua         梯子 Source ladder movetype 的共享移动预测
-lua/mc/functional/sh_liquids.lua         水/岩浆游泳手感和水下视觉效果
+lua/mc/liquid/                           液体状态、流向、接触、游泳和水下效果
+lua/mc/render/cl_fluid_geometry.lua      原版式液面高度和邻面遮挡
 lua/mc/sv_world.lua                      服务端世界 API、放置、破坏、导入、保存、同步
 lua/mc/sv_saves.lua                      命名存档管理、元数据、存档 UI 网络接口
 lua/mc/sv_presets.lua                    建筑预设保存、读取、放置和封面网络接口
@@ -118,7 +119,11 @@ $luaFiles = @(
   "lua\mc\sh_presets.lua",
   "lua\mc\sh_config.lua",
   "lua\mc\functional\sh_ladders.lua",
-  "lua\mc\functional\sh_liquids.lua",
+  "lua\mc\liquid\sh_registry.lua",
+  "lua\mc\liquid\sh_shapes.lua",
+  "lua\mc\liquid\sh_flow.lua",
+  "lua\mc\liquid\sh_contact.lua",
+  "lua\mc\liquid\sh_movement.lua",
   "lua\mc\cl_ui.lua",
   "lua\mc\cl_save_ui.lua",
   "lua\mc\cl_presets.lua",
