@@ -1235,6 +1235,19 @@ function MC.OpenCreativeStatePicker( id, onSelect, parent, selectedStateId )
 	positionCreativeStateFrame( fr, parent )
 	fr:MakePopup()
 	fr:SetKeyboardInputEnabled( true )
+	-- Keep hotbar number keys working while the block-state picker is open.
+	-- DFrame receives the key event and otherwise prevents PlayerBindPress from
+	-- seeing slot1..slot9, so explicitly route those keys to the creative bar.
+	fr.OnKeyCodePressed = function( _, key )
+		if key == KEY_ESCAPE then
+			fr:Close()
+			return
+		end
+		local slot = CREATIVE_HOTBAR_KEYS[key]
+		if slot then
+			MC.SelectCreativeHotbarSlot( slot )
+		end
+	end
 	fr.Paint = function( _, w, h )
 		draw.RoundedBox( 6, 0, 0, w, h, CREATIVE_UI.frame )
 		draw.RoundedBoxEx( 6, 0, 0, w, 28, CREATIVE_UI.title, true, true, false, false )
