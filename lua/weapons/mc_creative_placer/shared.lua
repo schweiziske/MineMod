@@ -391,6 +391,7 @@ if CLIENT then
 
 	function MC.DrawCreativeHeldBlock( id, orient, pos, ang, scale, brightness, stateId )
 		if not ( MC.Blocks and MC.Blocks[id] and MC.Material and MC.BlockFace and MC.TileUV ) then return false end
+		if not stateId and MC.StateFromLegacy then stateId = MC.StateFromLegacy( id, orient or 0 ) end
 		local boxes = heldBlockBoxes( id, orient, stateId )
 		if not boxes or #boxes == 0 then return false end
 
@@ -404,6 +405,11 @@ if CLIENT then
 
 		scale = scale or 8
 		brightness = math.Clamp( tonumber( brightness ) or 1, 0, 1 )
+		local tintR, tintG, tintB = 255, 255, 255
+		if stateId and MC.BlockStateTintCode and MC.BlockTintRGB then
+			local tintCode = MC.BlockStateTintCode( stateId, id, 0 )
+			if tintCode and tintCode ~= 0 then tintR, tintG, tintB = MC.BlockTintRGB( tintCode ) end
+		end
 		local mat = Matrix()
 		mat:Translate( pos )
 		mat:Rotate( ang )
@@ -429,9 +435,9 @@ if CLIENT then
 						mesh.Normal( normal )
 						mesh.TexCoord( 0, u, v )
 						mesh.Color(
-							math.Clamp( math.floor( shade.r * brightness + 0.5 ), 0, 255 ),
-							math.Clamp( math.floor( shade.g * brightness + 0.5 ), 0, 255 ),
-							math.Clamp( math.floor( shade.b * brightness + 0.5 ), 0, 255 ),
+							math.Clamp( math.floor( shade.r * brightness * tintR / 255 + 0.5 ), 0, 255 ),
+							math.Clamp( math.floor( shade.g * brightness * tintG / 255 + 0.5 ), 0, 255 ),
+							math.Clamp( math.floor( shade.b * brightness * tintB / 255 + 0.5 ), 0, 255 ),
 							shade.a
 						)
 						mesh.AdvanceVertex()

@@ -99,7 +99,7 @@ MC.MeshShadowMapCasterDistance = MC.MeshShadowMapCasterDistance or ( CreateClien
 	"Max distance from camera for MC chunks drawn into the shadow map" ) )
 MC.MeshShadowMapUpdateInterval = MC.MeshShadowMapUpdateInterval or ( CreateClientConVar and CreateClientConVar( "mc_shadow_update_interval", "0", true, false,
 	"Minimum seconds between MC shadow map redraws; 0 redraws every frame while enabled" ) )
-MC.MeshShadowMapSunStep = MC.MeshShadowMapSunStep or ( CreateClientConVar and CreateClientConVar( "mc_shadow_sun_step", "1", true, false,
+MC.MeshShadowMapSunStep = MC.MeshShadowMapSunStep or ( CreateClientConVar and CreateClientConVar( "mc_shadow_sun_step", "0", true, false,
 	"Day cycle: shadow sun angle quantization step in degrees; the shadow grid holds still between steps so edges stop shimmering (0 = continuous sun)" ) )
 MC.MeshShadowMode = MC.MeshShadowMode or ( CreateClientConVar and CreateClientConVar( "mc_shadow_mode", "map", true, false,
 	"MC sun shadow technique: linear = single-map alignment debug, map = Photon-style distorted map, csm = 3-cascade atlas, height = cached heightfield" ) )
@@ -111,7 +111,7 @@ MC.MeshHfShadowMaxDist = MC.MeshHfShadowMaxDist or ( CreateClientConVar and Crea
 	"Heightfield shadow mode: max world distance a caster can throw shadow (ray march reach)" ) )
 MC.MeshHfShadowSoftness = MC.MeshHfShadowSoftness or ( CreateClientConVar and CreateClientConVar( "mc_shadow_hf_softness", "0.05", true, false,
 	"Heightfield shadow mode: penumbra tangent; shadows widen by this per unit of blocker distance (0.02 = crisp, 0.12 = very soft)" ) )
-MC.MeshHfShadowUpdateInterval = MC.MeshHfShadowUpdateInterval or ( CreateClientConVar and CreateClientConVar( "mc_shadow_hf_update_interval", "0.1", true, false,
+MC.MeshHfShadowUpdateInterval = MC.MeshHfShadowUpdateInterval or ( CreateClientConVar and CreateClientConVar( "mc_shadow_hf_update_interval", "0", true, false,
 	"Heightfield shadow mode: minimum seconds between height map redraws when meshes changed or the window recentered" ) )
 MC.MeshConnectionVisibleTemplate = MC.MeshConnectionVisibleTemplate or ( CreateClientConVar and CreateClientConVar( "mc_mesh_connection_visible_template", "1", true, false,
 	"Experimental: use cached visible geometry templates for fence/pane/wall/pipe connection shapes" ) )

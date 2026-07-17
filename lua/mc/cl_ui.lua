@@ -314,10 +314,14 @@ function MC.DrawFittedText( text, font, fallbackFonts, x, y, color, ax, ay, maxw
 	draw.SimpleText( text, useFont, x, y, color, ax, ay )
 end
 
-function MC.DrawTile( tile, x, y, w, h, mat )
+function MC.DrawTile( tile, x, y, w, h, mat, tintCode )
 	local u0, v0, u1, v1 = MC.TileUV( tile )
 	surface.SetMaterial( mat or MC.Material )
-	surface.SetDrawColor( 255, 255, 255, 255 )
+	local r, g, b = 255, 255, 255
+	if tintCode and tintCode ~= 0 and MC.BlockTintRGB then
+		r, g, b = MC.BlockTintRGB( tintCode )
+	end
+	surface.SetDrawColor( r, g, b, 255 )
 	surface.DrawTexturedRectUV( x, y, w, h, u0, v0, u1, v1 )
 end
 
@@ -331,9 +335,11 @@ local function iconMaterialFor( id )
 	return MC.Material
 end
 
-function MC.DrawBlockIcon( id, x, y, w, h )
+function MC.DrawBlockIcon( id, x, y, w, h, stateId )
 	if not MC.Blocks[id] then return end
-	MC.DrawTile( MC.BlockIconTile( id ), x, y, w, h, iconMaterialFor( id ) )
+	if not stateId and MC.StateFromLegacy then stateId = MC.StateFromLegacy( id, 0 ) end
+	local tintCode = stateId and MC.BlockStateTintCode and MC.BlockStateTintCode( stateId, id, 0 ) or 0
+	MC.DrawTile( MC.BlockIconTile( id ), x, y, w, h, iconMaterialFor( id ), tintCode )
 end
 
 local function iconRotatedUV( uf, vf, rot, flipU, flipV )
@@ -350,7 +356,7 @@ end
 -- 0..1, lerped into the tile's atlas rect after the per-face rotate/flip; this
 -- lets partial boxes (slabs, stairs, fence posts, ...) sample only the slice of
 -- the texture they actually cover, just like the in-world mesh.
-local function drawIconQuad( tile, verts, shade, rot, flipU, flipV, mat )
+local function drawIconQuad( tile, verts, shade, rot, flipU, flipV, mat, tintCode )
 	local u0, v0, u1, v1 = MC.TileUV( tile )
 	local poly = {}
 	for i = 1, 4 do
@@ -359,7 +365,14 @@ local function drawIconQuad( tile, verts, shade, rot, flipU, flipV, mat )
 		poly[i] = { x = c.px, y = c.py, u = u0 + ru * ( u1 - u0 ), v = v0 + rv * ( v1 - v0 ) }
 	end
 	surface.SetMaterial( mat or MC.Material )
-	surface.SetDrawColor( shade, shade, shade, 255 )
+	local r, g, b = shade, shade, shade
+	if tintCode and tintCode ~= 0 and MC.BlockTintRGB then
+		local tr, tg, tb = MC.BlockTintRGB( tintCode )
+		r = math.floor( shade * tr / 255 + 0.5 )
+		g = math.floor( shade * tg / 255 + 0.5 )
+		b = math.floor( shade * tb / 255 + 0.5 )
+	end
+	surface.SetDrawColor( r, g, b, 255 )
 	surface.DrawPoly( poly )
 end
 
@@ -382,7 +395,7 @@ local function appendIconBoxFaces( pool, box, faces, project )
 		end
 		pool[#pool + 1] = {
 			tile = info.tile, shade = shade, depth = depth * 0.25,
-			rot = info.rot, flipU = info.flipU, flipV = info.flipV, verts = verts,
+			rot = info.rot, flipU = info.flipU, flipV = info.flipV, tintCode = info.tintCode, verts = verts,
 		}
 	end
 
@@ -424,10 +437,12 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual )
 	if b.iconSource and MC.ResolveBlock then
 		local source = MC.ResolveBlock( b.iconSource )
 		if source and source.id and source.id ~= id then
-			MC.DrawMinecraftBlockIcon( source.id, x, y, w, h, nil, forceModel )
+			MC.DrawMinecraftBlockIcon( source.id, x, y, w, h, nil, forceModel, visual )
 			return
 		end
 	end
+	local tintStateId = visual and visual.stateId or nil
+	if not tintStateId and MC.StateFromLegacy then tintStateId = MC.StateFromLegacy( id, orient ) end
 
 	-- Blocks with a real Minecraft item sprite (doors, torches, flowers, rails,
 	-- signs, panes, ...) draw that flat icon exactly like the inventory does;
@@ -436,11 +451,11 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual )
 	-- as stairs and fences as fence posts instead of a flat full-block square.
 	if not forceModel then
 		if b.icon then
-			MC.DrawBlockIcon( id, x, y, w, h )
+			MC.DrawBlockIcon( id, x, y, w, h, tintStateId )
 			return
 		end
 		if b.shape == "cross" then
-			MC.DrawBlockIcon( id, x, y, w, h )
+			MC.DrawBlockIcon( id, x, y, w, h, tintStateId )
 			return
 		end
 	end
@@ -451,7 +466,7 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual )
 	local has3DShape = b.solid ~= false or b.shape ~= nil or b.connection ~= nil
 	local boxes = has3DShape and iconBoxes( id, orient, visual ) or nil
 	if not boxes or #boxes == 0 then
-		MC.DrawBlockIcon( id, x, y, w, h )
+		MC.DrawBlockIcon( id, x, y, w, h, tintStateId )
 		return
 	end
 
@@ -469,6 +484,12 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual )
 		xp = { tile = xpTile, rot = xpRot, flipU = xpFlipU, flipV = xpFlipV },
 		yp = { tile = ypTile, rot = ypRot, flipU = ypFlipU, flipV = ypFlipV },
 	}
+	if tintStateId and MC.BlockStateTintCode then
+		local tintCode = MC.BlockStateTintCode( tintStateId, id, 0 )
+		faces.top.tintCode = tintCode
+		faces.xp.tintCode = tintCode
+		faces.yp.tintCode = tintCode
+	end
 
 	local size = math.min( w, h )
 	local cx = x + w * 0.5
@@ -487,7 +508,7 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual )
 	table.sort( pool, function( a, c ) return a.depth < c.depth end )
 	local mat = iconMaterialFor( id )
 	for _, f in ipairs( pool ) do
-		drawIconQuad( f.tile, f.verts, f.shade, f.rot, f.flipU, f.flipV, mat )
+		drawIconQuad( f.tile, f.verts, f.shade, f.rot, f.flipU, f.flipV, mat, f.tintCode )
 	end
 end
 

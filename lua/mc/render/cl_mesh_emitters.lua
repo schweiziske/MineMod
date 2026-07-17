@@ -44,8 +44,18 @@ local stateVisualModelData = MC.StateVisualModelData
 local blockStateTintCode = MC.BlockStateTintCode
 local fluidHeightAt = RM.fluidHeightAt
 local calculateAverageFluidHeight = RM.calculateAverageFluidHeight
+local liquidFlowAtCell = MC.LiquidFlowAtCell
+local isWaterloggedState = MC.IsWaterloggedState
 local recolorCachedBlockEmission = RM.recolorCachedBlockEmission
 local BS = C.BS
+local LiquidFlowTiles = {
+	water = MC.Tiles and MC.Tiles.water_flow or nil,
+	lava = MC.Tiles and MC.Tiles.lava_flow or nil,
+}
+local LiquidStillTiles = {
+	water = MC.Tiles and MC.Tiles.water_still or nil,
+	lava = MC.Tiles and MC.Tiles.lava_still or nil,
+}
 
 local ShapeModelTemplateCache = {
 	model = {},
@@ -99,6 +109,9 @@ end
 local function stateVisibleAtWorld( currentId, bx, by, bz )
 	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
 	if not stateId or stateId == 0 then return true end
+	local currentKind = MC.LiquidKind and MC.LiquidKind( currentId ) or nil
+	local neighbourKind = MC.LiquidKindForState and MC.LiquidKindForState( stateId ) or nil
+	if currentKind and neighbourKind == currentKind then return false end
 	local id, fullCube, translucent
 	if resolveBlockStateRenderClass then
 		id, fullCube, translucent = resolveBlockStateRenderClass( stateId, bx, by, bz )
@@ -763,8 +776,8 @@ function RM.EmitModelBlock( ctx, b, orient, bx, by, bz, wx, wy, wz, li, push, li
 	return emitModelBlockTemplate( ctx, template, b.id, bx, by, bz, wx, wy, wz, lx, ly, lz, li, push, ctx.lightMetaFast, currentEmitLightStyle, false )
 end
 
-local function emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle, verts, normal, shade, tile, bx, by, bz, id, faceIndex, lightCorners, uvCorners )
-	local emission = stateEmission( ctx, id, bx, by, bz )
+local function emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle, verts, normal, shade, tile, bx, by, bz, id, faceIndex, lightCorners, uvCorners, fluidEmission )
+	local emission = fluidEmission ~= nil and fluidEmission or stateEmission( ctx, id, bx, by, bz )
 	local emitLightStyle = currentEmitLightStyle()
 	local x1, y1, z1 = cornerXYZ( lightCorners[1] )
 	local x2, y2, z2 = cornerXYZ( lightCorners[2] )
@@ -801,6 +814,7 @@ end
 function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, lightMeta, currentEmitLightStyle )
 	local kind = MC.LiquidKind and MC.LiquidKind( id )
 	if not kind then return false end
+	local fluidEmission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
 
 	local x0, y0, z0 = wx, wy, wz
 	local x1, y1 = wx + C.BS, wy + C.BS
@@ -831,24 +845,42 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 	local tile
 
 	if renderUp then
-		tile = stateFace( ctx, id, MC.Face.TOP, orient, bx, by, bz )
+		tile = LiquidStillTiles[kind] or stateFace( ctx, id, MC.Face.TOP, orient, bx, by, bz )
+		local topUV = { { 0, 16 }, { 16, 16 }, { 16, 0 }, { 0, 0 } }
+		local flowX, flowY = 0, 0
+		if liquidFlowAtCell then flowX, flowY = liquidFlowAtCell( bx, by, bz, kind ) end
+		local flowTile = LiquidFlowTiles[kind]
+		if flowTile and ( math.abs( flowX ) > 0.000001 or math.abs( flowY ) > 0.000001 ) then
+			tile = flowTile
+			local angle = math.atan2( flowY, flowX ) - math.pi * 0.5
+			local s = math.sin( angle ) * 0.25
+			local c = math.cos( angle ) * 0.25
+			local u00, v00 = ( 0.5 - c - s ) * 16, ( 0.5 - c + s ) * 16
+			local u01, v01 = ( 0.5 - c + s ) * 16, ( 0.5 + c + s ) * 16
+			local u10, v10 = ( 0.5 + c + s ) * 16, ( 0.5 + c - s ) * 16
+			local u11, v11 = ( 0.5 + c - s ) * 16, ( 0.5 - c - s ) * 16
+			topUV = {
+				{ u00, 16 - v00 }, { u11, 16 - v11 },
+				{ u10, 16 - v10 }, { u01, 16 - v01 },
+			}
+		end
 		emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle,
 			{ { x0, y0, z00 }, { x1, y0, z10 }, { x1, y1, z11 }, { x0, y1, z01 } },
 			C.N_UP, C.SH_TOP, tile, bx, by, bz, id, MC.Face.TOP,
 			{ { 0, 0, rh00 }, { 1, 0, rh10 }, { 1, 1, rh11 }, { 0, 1, rh01 } },
-			{ { 0, 16 }, { 16, 16 }, { 16, 0 }, { 0, 0 } }
+			topUV, fluidEmission
 		)
 	end
 
 	local renderDown = stateVisibleAtWorld( id, bx, by, bz - 1 )
 	local bottomZ = bottom + ( renderDown and C.FLUID_FACE_OFFSET or 0 ) * C.BS
 	if renderDown then
-		tile = stateFace( ctx, id, MC.Face.BOTTOM, orient, bx, by, bz )
+		tile = LiquidStillTiles[kind] or stateFace( ctx, id, MC.Face.BOTTOM, orient, bx, by, bz )
 		emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle,
 			{ { x0, y1, bottomZ }, { x1, y1, bottomZ }, { x1, y0, bottomZ }, { x0, y0, bottomZ } },
 			C.N_DOWN, C.SH_BOTTOM, tile, bx, by, bz, id, MC.Face.BOTTOM,
 			{ { 0, 1, 0 }, { 1, 1, 0 }, { 1, 0, 0 }, { 0, 0, 0 } },
-			{ { 0, 16 }, { 16, 16 }, { 16, 0 }, { 0, 0 } }
+			{ { 0, 16 }, { 16, 16 }, { 16, 0 }, { 0, 0 } }, fluidEmission
 		)
 	end
 
@@ -861,46 +893,46 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 	local sideInset = C.FLUID_FACE_OFFSET * C.BS
 
 	if stateVisibleAtWorld( id, bx + 1, by, bz ) then
-		tile = stateFace( ctx, id, MC.Face.XP, orient, bx, by, bz )
+		tile = LiquidFlowTiles[kind] or stateFace( ctx, id, MC.Face.XP, orient, bx, by, bz )
 		local sx = x1 - sideInset
 		emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle,
 			{ { sx, y0, sideBottom }, { sx, y1, sideBottom }, { sx, y1, z11 }, { sx, y0, z10 } },
 			C.N_XP, C.SH_X, tile, bx, by, bz, id, MC.Face.XP,
 			{ { 1, 0, 0 }, { 1, 1, 0 }, { 1, 1, rh11 }, { 1, 0, rh10 } },
-			{ { 0, sideBottomV }, { 8, sideBottomV }, { 8, sideV( rh11 ) }, { 0, sideV( rh10 ) } }
+			{ { 0, sideBottomV }, { 8, sideBottomV }, { 8, sideV( rh11 ) }, { 0, sideV( rh10 ) } }, fluidEmission
 		)
 	end
 
 	if stateVisibleAtWorld( id, bx - 1, by, bz ) then
-		tile = stateFace( ctx, id, MC.Face.XN, orient, bx, by, bz )
+		tile = LiquidFlowTiles[kind] or stateFace( ctx, id, MC.Face.XN, orient, bx, by, bz )
 		local sx = x0 + sideInset
 		emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle,
 			{ { sx, y1, sideBottom }, { sx, y0, sideBottom }, { sx, y0, z00 }, { sx, y1, z01 } },
 			C.N_XN, C.SH_X, tile, bx, by, bz, id, MC.Face.XN,
 			{ { 0, 1, 0 }, { 0, 0, 0 }, { 0, 0, rh00 }, { 0, 1, rh01 } },
-			{ { 0, sideBottomV }, { 8, sideBottomV }, { 8, sideV( rh00 ) }, { 0, sideV( rh01 ) } }
+			{ { 0, sideBottomV }, { 8, sideBottomV }, { 8, sideV( rh00 ) }, { 0, sideV( rh01 ) } }, fluidEmission
 		)
 	end
 
 	if stateVisibleAtWorld( id, bx, by + 1, bz ) then
-		tile = stateFace( ctx, id, MC.Face.YP, orient, bx, by, bz )
+		tile = LiquidFlowTiles[kind] or stateFace( ctx, id, MC.Face.YP, orient, bx, by, bz )
 		local sy = y1 - sideInset
 		emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle,
 			{ { x1, sy, sideBottom }, { x0, sy, sideBottom }, { x0, sy, z01 }, { x1, sy, z11 } },
 			C.N_YP, C.SH_Y, tile, bx, by, bz, id, MC.Face.YP,
 			{ { 1, 1, 0 }, { 0, 1, 0 }, { 0, 1, rh01 }, { 1, 1, rh11 } },
-			{ { 0, sideBottomV }, { 8, sideBottomV }, { 8, sideV( rh01 ) }, { 0, sideV( rh11 ) } }
+			{ { 0, sideBottomV }, { 8, sideBottomV }, { 8, sideV( rh01 ) }, { 0, sideV( rh11 ) } }, fluidEmission
 		)
 	end
 
 	if stateVisibleAtWorld( id, bx, by - 1, bz ) then
-		tile = stateFace( ctx, id, MC.Face.YN, orient, bx, by, bz )
+		tile = LiquidFlowTiles[kind] or stateFace( ctx, id, MC.Face.YN, orient, bx, by, bz )
 		local sy = y0 + sideInset
 		emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle,
 			{ { x0, sy, sideBottom }, { x1, sy, sideBottom }, { x1, sy, z10 }, { x0, sy, z00 } },
 			C.N_YN, C.SH_Y, tile, bx, by, bz, id, MC.Face.YN,
 			{ { 0, 0, 0 }, { 1, 0, 0 }, { 1, 0, rh10 }, { 0, 0, rh00 } },
-			{ { 0, sideBottomV }, { 8, sideBottomV }, { 8, sideV( rh10 ) }, { 0, sideV( rh00 ) } }
+			{ { 0, sideBottomV }, { 8, sideBottomV }, { 8, sideV( rh10 ) }, { 0, sideV( rh00 ) } }, fluidEmission
 		)
 	end
 
@@ -1166,6 +1198,38 @@ local function emitSelectedBlock( emitter, ctx, b, id, orient, bx, by, bz, wx, w
 	return emitter( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
 end
 
+local WaterBlockId
+local function waterBlockId()
+	if WaterBlockId ~= nil then return WaterBlockId or nil end
+	local schema = MC.BlockStateSchemaByName and MC.BlockStateSchemaByName["minecraft:water"] or nil
+	WaterBlockId = schema and schema.blockId or false
+	return WaterBlockId or nil
+end
+
+local function emitWaterloggedOverlay( ctx, stateId, bx, by, bz, wx, wy, wz, targetBuffer, flush, meshPerf )
+	if not isWaterloggedState or not isWaterloggedState( stateId ) then return 0 end
+	local waterId = waterBlockId()
+	if not waterId then return 0 end
+	local previous = ctx.getCur()
+	ctx.prepareBlockCacheBuffer( targetBuffer )
+	local emitted = RM.EmitLiquidBlock(
+		ctx, waterId, 0, bx, by, bz, wx, wy, wz,
+		ctx.push, ctx.lightMeta, ctx.currentEmitLightStyle
+	)
+	local overlay = ctx.getCur()
+	local vertexCount = emitted and overlay and overlay.nv or 0
+	if vertexCount > 0 then
+		MC.AppendCachedBlockEmission( {
+			verts = overlay.verts,
+			light = overlay.light,
+			vertexCount = vertexCount,
+			hasSecondaryUV = overlay.hasSecondaryUV == true,
+		}, targetBuffer, flush, meshPerf, C.VERT_LIMIT )
+	end
+	ctx.setCur( previous )
+	return vertexCount
+end
+
 
 function RM.EmitBlock( ctx, li, stateId )
 	local key = ctx.key
@@ -1224,7 +1288,10 @@ function RM.EmitBlock( ctx, li, stateId )
 			local cacheAppendStart = meshProbe and SysTime() or nil
 			local appended = MC.AppendCachedBlockEmission( cached, targetBuffer, flush, meshPerf, C.VERT_LIMIT )
 			if cacheAppendStart then meshPerfAdd( meshPerf, "cacheAppendMS", cacheAppendStart ) end
-			if appended > 0 then meshPerf.blocksRendered = meshPerf.blocksRendered + 1 end
+			local overlayVertices = emitWaterloggedOverlay(
+				ctx, stateId, bx, by, bz, wx, wy, wz, buffers.translucent, flush, meshPerf
+			)
+			if appended > 0 or overlayVertices > 0 then meshPerf.blocksRendered = meshPerf.blocksRendered + 1 end
 			local cachedKind = cached.kind or "shape"
 			meshPerfAddBlockKind( meshPerf, cachedKind )
 			return
@@ -1279,7 +1346,10 @@ function RM.EmitBlock( ctx, li, stateId )
 			end
 			MC.AppendCachedBlockEmission( blockRecord, targetBuffer, flush, meshPerf, C.VERT_LIMIT )
 		end
-		if emittedVertices > 0 then
+		local overlayVertices = emitWaterloggedOverlay(
+			ctx, stateId, bx, by, bz, wx, wy, wz, buffers.translucent, flush, meshPerf
+		)
+		if emittedVertices > 0 or overlayVertices > 0 then
 			meshPerf.blocksRendered = meshPerf.blocksRendered + 1
 		end
 		meshPerfAddBlockKind( meshPerf, emitKind )

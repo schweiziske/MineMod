@@ -22,8 +22,8 @@ function MC.IsRedstoneWireState( stateId )
 	return stateName( stateId ) == "minecraft:redstone_wire"
 end
 
-local function plannedState( changes, bx, by, bz )
-	for index = 1, #changes do
+local function plannedState( changes, changeCount, bx, by, bz )
+	for index = 1, changeCount do
 		local cell = changes[index]
 		if cell.bx == bx and cell.by == by and cell.bz == bz then
 			if cell.stateId ~= nil then return cell.stateId end
@@ -33,30 +33,30 @@ local function plannedState( changes, bx, by, bz )
 	return MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
 end
 
-local function fullCubeAt( changes, bx, by, bz )
-	local stateId = plannedState( changes, bx, by, bz )
+local function fullCubeAt( changes, changeCount, bx, by, bz )
+	local stateId = plannedState( changes, changeCount, bx, by, bz )
 	if not stateId or stateId == 0 then return false end
 	if MC.BlockIsFullCubeForState then return MC.BlockIsFullCubeForState( stateId, bx, by, bz ) == true end
 	local id, orient = MC.LegacyFromState( stateId )
 	return id and MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) == true or false
 end
 
-local function connectionValue( changes, bx, by, bz, direction )
+local function connectionValue( changes, changeCount, bx, by, bz, direction )
 	local nx, ny = bx + direction.dx, by + direction.dy
-	if MC.IsRedstoneWireState( plannedState( changes, nx, ny, bz ) ) then return "side" end
+	if MC.IsRedstoneWireState( plannedState( changes, changeCount, nx, ny, bz ) ) then return "side" end
 
-	local neighbourSolid = fullCubeAt( changes, nx, ny, bz )
-	if neighbourSolid and not fullCubeAt( changes, bx, by, bz + 1 )
-	and MC.IsRedstoneWireState( plannedState( changes, nx, ny, bz + 1 ) ) then
+	local neighbourSolid = fullCubeAt( changes, changeCount, nx, ny, bz )
+	if neighbourSolid and not fullCubeAt( changes, changeCount, bx, by, bz + 1 )
+	and MC.IsRedstoneWireState( plannedState( changes, changeCount, nx, ny, bz + 1 ) ) then
 		return "up"
 	end
-	if not neighbourSolid and MC.IsRedstoneWireState( plannedState( changes, nx, ny, bz - 1 ) ) then
+	if not neighbourSolid and MC.IsRedstoneWireState( plannedState( changes, changeCount, nx, ny, bz - 1 ) ) then
 		return "side"
 	end
 	return "none"
 end
 
-local function resolvedWireState( changes, stateId, bx, by, bz, forceCross )
+local function resolvedWireState( changes, changeCount, stateId, bx, by, bz, forceCross )
 	local wasDot = MC.GetStateProperty( stateId, "north" ) == "none"
 		and MC.GetStateProperty( stateId, "south" ) == "none"
 		and MC.GetStateProperty( stateId, "east" ) == "none"
@@ -64,7 +64,7 @@ local function resolvedWireState( changes, stateId, bx, by, bz, forceCross )
 	local values = {}
 	for index = 1, #Directions do
 		local direction = Directions[index]
-		values[direction.name] = connectionValue( changes, bx, by, bz, direction )
+		values[direction.name] = connectionValue( changes, changeCount, bx, by, bz, direction )
 	end
 	-- RedStoneWireBlock.getConnectionState: a non-dot wire with no connection
 	-- on one axis is completed into a straight line on that axis.
@@ -95,10 +95,11 @@ local function addCandidate( candidates, seen, bx, by, bz )
 	candidates[#candidates + 1] = { bx = bx, by = by, bz = bz }
 end
 
-function MC.BuildRedstoneWireStateUpdates( changes )
+function MC.BuildRedstoneWireStateUpdates( changes, changeCount )
 	if not changes or #changes == 0 then return {} end
+	changeCount = math.min( math.floor( tonumber( changeCount ) or #changes ), #changes )
 	local candidates, seen = {}, {}
-	for index = 1, #changes do
+	for index = 1, changeCount do
 		local cell = changes[index]
 		addCandidate( candidates, seen, cell.bx, cell.by, cell.bz )
 		addCandidate( candidates, seen, cell.bx, cell.by, cell.bz - 1 )
@@ -115,10 +116,10 @@ function MC.BuildRedstoneWireStateUpdates( changes )
 	local updates = {}
 	for index = 1, #candidates do
 		local candidate = candidates[index]
-		local stateId = plannedState( changes, candidate.bx, candidate.by, candidate.bz )
+		local stateId = plannedState( changes, changeCount, candidate.bx, candidate.by, candidate.bz )
 		if MC.IsRedstoneWireState( stateId ) then
 			local worldState = MC.GetBlockState and MC.GetBlockState( candidate.bx, candidate.by, candidate.bz ) or 0
-			local nextState = resolvedWireState( changes, stateId, candidate.bx, candidate.by, candidate.bz, worldState == 0 )
+			local nextState = resolvedWireState( changes, changeCount, stateId, candidate.bx, candidate.by, candidate.bz, worldState == 0 )
 			if nextState ~= worldState then
 				updates[#updates + 1] = {
 					bx = candidate.bx, by = candidate.by, bz = candidate.bz,

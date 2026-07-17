@@ -367,8 +367,8 @@ function SV.ApplyBlockTransaction( cells, options )
 		local playFx = shouldFx and ( options.fxAll == true or info == fxInfo )
 		if fxLimit ~= nil then playFx = shouldFx and fxSent < fxLimit and info.kind == "removed" end
 		if playFx then
-			if info.kind == "removed" and info.old ~= 0 then Host.broadcastFx( 2, info.bx, info.by, info.bz, info.old, info.oldOrient )
-			elseif info.kind == "placed" and info.id ~= 0 then Host.broadcastFx( 1, info.bx, info.by, info.bz, info.id, info.orient ) end
+			if info.kind == "removed" and info.old ~= 0 then Host.broadcastFx( 2, info.bx, info.by, info.bz, info.old, info.oldOrient, info.oldStateId )
+			elseif info.kind == "placed" and info.id ~= 0 then Host.broadcastFx( 1, info.bx, info.by, info.bz, info.id, info.orient, info.stateId ) end
 			fxSent = fxSent + 1
 		end
 		if options.handlers ~= false and info.kind ~= "block_entity_changed" then
