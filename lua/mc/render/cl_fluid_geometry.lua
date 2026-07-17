@@ -62,17 +62,41 @@ local function averageHeight( kind, heightSelf, heightA, heightB, cornerX, corne
 	return weight > 0 and total / weight or 0
 end
 
-local function cornerHeights( bx, by, bz, kind )
+local function sharedCornerHeight( cache, kind, heightSelf, heightA, heightB,
+	cornerKeyX, cornerKeyY, sampleX, sampleY, bz )
+	if not cache or not MC.CellKey then
+		return averageHeight( kind, heightSelf, heightA, heightB, sampleX, sampleY, bz )
+	end
+	local byKind = cache[kind]
+	if not byKind then
+		byKind = {}
+		cache[kind] = byKind
+	end
+	local key = MC.CellKey( cornerKeyX, cornerKeyY, bz )
+	local height = byKind[key]
+	if height ~= nil then return height end
+	height = averageHeight( kind, heightSelf, heightA, heightB, sampleX, sampleY, bz )
+	byKind[key] = height
+	return height
+end
+
+local function cornerHeights( bx, by, bz, kind, cornerCache )
 	local heightSelf = fluidHeightAt( bx, by, bz, kind )
 	if heightSelf >= 1 then return 1, 1, 1, 1 end
 	local heightXN = fluidHeightAt( bx - 1, by, bz, kind )
 	local heightXP = fluidHeightAt( bx + 1, by, bz, kind )
 	local heightYN = fluidHeightAt( bx, by - 1, bz, kind )
 	local heightYP = fluidHeightAt( bx, by + 1, bz, kind )
-	return averageHeight( kind, heightSelf, heightYN, heightXN, bx - 1, by - 1, bz ),
-		averageHeight( kind, heightSelf, heightYN, heightXP, bx + 1, by - 1, bz ),
-		averageHeight( kind, heightSelf, heightYP, heightXP, bx + 1, by + 1, bz ),
-		averageHeight( kind, heightSelf, heightYP, heightXN, bx - 1, by + 1, bz )
+	-- Cache by the actual world-grid vertex. The final coordinate pair remains
+	-- the diagonal cell sampled by Minecraft's four-cell corner average.
+	return sharedCornerHeight( cornerCache, kind, heightSelf, heightYN, heightXN,
+		bx, by, bx - 1, by - 1, bz ),
+		sharedCornerHeight( cornerCache, kind, heightSelf, heightYN, heightXP,
+		bx + 1, by, bx + 1, by - 1, bz ),
+		sharedCornerHeight( cornerCache, kind, heightSelf, heightYP, heightXP,
+		bx + 1, by + 1, bx + 1, by + 1, bz ),
+		sharedCornerHeight( cornerCache, kind, heightSelf, heightYP, heightXN,
+		bx, by + 1, bx - 1, by + 1, bz )
 end
 
 local function selfOccludesFace( currentStateId, bx, by, bz, face )
@@ -89,14 +113,14 @@ local function neighborOccludesFace( face, height, stateId, bx, by, bz )
 	return faceOccludedByState( face, height, stateId, bx, by, bz )
 end
 
-function RM.FluidGeometryAt( currentStateId, bx, by, bz, kind )
+function RM.FluidGeometryAt( currentStateId, bx, by, bz, kind, cornerCache )
 	local downState = fluidStateAt( bx, by, bz - 1 )
 	local upState = fluidStateAt( bx, by, bz + 1 )
 	local xpState = fluidStateAt( bx + 1, by, bz )
 	local xnState = fluidStateAt( bx - 1, by, bz )
 	local ypState = fluidStateAt( bx, by + 1, bz )
 	local ynState = fluidStateAt( bx, by - 1, bz )
-	local h00, h10, h11, h01 = cornerHeights( bx, by, bz, kind )
+	local h00, h10, h11, h01 = cornerHeights( bx, by, bz, kind, cornerCache )
 
 	local renderUp = not sameFluid( kind, upState )
 	if renderUp then

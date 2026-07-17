@@ -796,7 +796,7 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 	local bottom = z0
 	if not fluidGeometryAt then return false end
 	local h00, h10, h11, h01, renderUp, renderDown, renderXP, renderXN, renderYP, renderYN =
-		fluidGeometryAt( ctx.currentStateId, bx, by, bz, kind )
+		fluidGeometryAt( ctx.currentStateId, bx, by, bz, kind, ctx.fluidCornerHeightCache )
 	local topOffset = renderUp and C.FLUID_FACE_OFFSET or 0
 	local rh00 = math.max( h00 - topOffset, 0 )
 	local rh10 = math.max( h10 - topOffset, 0 )
@@ -810,11 +810,9 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 		local topUV = { { 0, 16 }, { 16, 16 }, { 16, 0 }, { 0, 0 } }
 		local flowX, flowY = 0, 0
 		if liquidFlowAtCell then flowX, flowY = liquidFlowAtCell( bx, by, bz, kind ) end
-		-- water_flow was appended at the tail of the existing atlas. Clients that
-		-- already cached atlas_365 under the same material path see that new slot as
-		-- empty, which makes only flowing-water top faces disappear. Reuse the
-		-- stable water_still slot while keeping Minecraft's flow-directed UV rotation.
-		local flowTile = kind == "water" and LiquidStillTiles.water or LiquidFlowTiles[kind]
+		-- Minecraft's flowing sprite is 32x32. The 0.25 rotation radius below
+		-- selects its central 16x16 block-sized region without crossing the tile.
+		local flowTile = LiquidFlowTiles[kind]
 		if flowTile and ( math.abs( flowX ) > 0.000001 or math.abs( flowY ) > 0.000001 ) then
 			tile = flowTile
 			local angle = math.atan2( flowY, flowX ) - math.pi * 0.5
@@ -848,11 +846,15 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 		)
 	end
 
+	-- The registered liquid side is a normal 16x16 atlas tile. Unlike the
+	-- dedicated 32x32 flowing top sprite, it must use the whole tile or the
+	-- side either magnifies one quadrant or lands on an atlas-only slot that is
+	-- not part of the block-face material contract.
 	local function sideV( height )
-		return math.Clamp( ( 1 - height ) * 8, 0, 8 )
+		return math.Clamp( ( 1 - height ) * 16, 0, 16 )
 	end
 
-	local sideBottomV = 8
+	local sideBottomV = 16
 	local sideBottom = bottomZ
 	local sideInset = C.FLUID_FACE_OFFSET * C.BS
 
@@ -863,7 +865,7 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 			{ { sx, y0, sideBottom }, { sx, y1, sideBottom }, { sx, y1, z11 }, { sx, y0, z10 } },
 			C.N_XP, C.SH_X, tile, bx, by, bz, id, MC.Face.XP,
 			{ { 1, 0, 0 }, { 1, 1, 0 }, { 1, 1, rh11 }, { 1, 0, rh10 } },
-			{ { 0, sideBottomV }, { 8, sideBottomV }, { 8, sideV( rh11 ) }, { 0, sideV( rh10 ) } }, fluidEmission
+			{ { 0, sideBottomV }, { 16, sideBottomV }, { 16, sideV( rh11 ) }, { 0, sideV( rh10 ) } }, fluidEmission
 		)
 	end
 
@@ -874,7 +876,7 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 			{ { sx, y1, sideBottom }, { sx, y0, sideBottom }, { sx, y0, z00 }, { sx, y1, z01 } },
 			C.N_XN, C.SH_X, tile, bx, by, bz, id, MC.Face.XN,
 			{ { 0, 1, 0 }, { 0, 0, 0 }, { 0, 0, rh00 }, { 0, 1, rh01 } },
-			{ { 0, sideBottomV }, { 8, sideBottomV }, { 8, sideV( rh00 ) }, { 0, sideV( rh01 ) } }, fluidEmission
+			{ { 0, sideBottomV }, { 16, sideBottomV }, { 16, sideV( rh00 ) }, { 0, sideV( rh01 ) } }, fluidEmission
 		)
 	end
 
@@ -885,7 +887,7 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 			{ { x1, sy, sideBottom }, { x0, sy, sideBottom }, { x0, sy, z01 }, { x1, sy, z11 } },
 			C.N_YP, C.SH_Y, tile, bx, by, bz, id, MC.Face.YP,
 			{ { 1, 1, 0 }, { 0, 1, 0 }, { 0, 1, rh01 }, { 1, 1, rh11 } },
-			{ { 0, sideBottomV }, { 8, sideBottomV }, { 8, sideV( rh01 ) }, { 0, sideV( rh11 ) } }, fluidEmission
+			{ { 0, sideBottomV }, { 16, sideBottomV }, { 16, sideV( rh01 ) }, { 0, sideV( rh11 ) } }, fluidEmission
 		)
 	end
 
@@ -896,7 +898,7 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 			{ { x0, sy, sideBottom }, { x1, sy, sideBottom }, { x1, sy, z10 }, { x0, sy, z00 } },
 			C.N_YN, C.SH_Y, tile, bx, by, bz, id, MC.Face.YN,
 			{ { 0, 0, 0 }, { 1, 0, 0 }, { 1, 0, rh10 }, { 0, 0, rh00 } },
-			{ { 0, sideBottomV }, { 8, sideBottomV }, { 8, sideV( rh10 ) }, { 0, sideV( rh00 ) } }, fluidEmission
+			{ { 0, sideBottomV }, { 16, sideBottomV }, { 16, sideV( rh10 ) }, { 0, sideV( rh00 ) } }, fluidEmission
 		)
 	end
 

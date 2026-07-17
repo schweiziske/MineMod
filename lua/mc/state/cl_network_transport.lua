@@ -163,6 +163,9 @@ local function markCellChanged( cell, oldStateId, rateLimited )
 		MC.MarkLightingDirtyAroundCell( cell.bx, cell.by, cell.bz, nil, rateLimited )
 	end
 	if MC.MarkDirty then MC.MarkDirty( cell.bx, cell.by, cell.bz, rateLimited ) end
+	if MC.MarkFluidGeometryDirtyForStateChange then
+		MC.MarkFluidGeometryDirtyForStateChange( cell.bx, cell.by, cell.bz, oldStateId, cell.stateId )
+	end
 	if MC.MarkCellPhysNeighbours then
 		MC.MarkCellPhysNeighbours( cell.bx, cell.by, cell.bz, false, rateLimited == true )
 	end
