@@ -752,12 +752,17 @@ local function validatePlacementPlan( ply, plan )
 			notify( ply, L( ply, "server.world_limit", "Out of build range (mc_world_limit)" ) )
 			return false
 		end
-		if MC.GetBlock( cell.bx, cell.by, cell.bz ) ~= 0 then return false end
-		if wouldTrapPlayer( cell.bx, cell.by, cell.bz, cell.id, cell.orient ) then
-			notify( ply, "A player is in the way" )
-			return false
+		local existingId = MC.GetBlock( cell.bx, cell.by, cell.bz )
+		if cell.updateExisting then
+			if existingId == 0 or existingId ~= cell.id then return false end
+		else
+			if existingId ~= 0 then return false end
+			if wouldTrapPlayer( cell.bx, cell.by, cell.bz, cell.id, cell.orient ) then
+				notify( ply, "A player is in the way" )
+				return false
+			end
+			add = add + 1
 		end
-		add = add + 1
 	end
 
 	local maxBlocks = C.MaxBlocks:GetInt()

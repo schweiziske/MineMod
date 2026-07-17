@@ -61,7 +61,18 @@ local function placeTarget( ply, aim, tr, id, avoidUseBlocks )
 	end
 
 	tr.MCBlockX, tr.MCBlockY, tr.MCBlockZ = bx, by, bz
-	return bx, by, bz, MC.OrientForPlacement( ply, tr, id )
+	local orient = MC.OrientForPlacement( ply, tr, id )
+	local placeId = id
+	if MC.ResolveTorchPlacementState and MC.StateFromLegacy then
+		local stateId = MC.StateFromLegacy( id, orient )
+		local resolvedState = stateId and MC.ResolveTorchPlacementState( stateId, tr.HitNormal ) or nil
+		if stateId and not resolvedState then return nil end
+		if resolvedState then
+			placeId, orient = MC.LegacyFromState( resolvedState )
+			if placeId == nil then return nil end
+		end
+	end
+	return bx, by, bz, placeId, orient
 end
 
 local function breakTarget( aim, tr )
@@ -101,10 +112,10 @@ function TOOL:RightClick( tr )
 	if CLIENT then
 		if game.SinglePlayer() then return true end
 		if not IsFirstTimePredicted() or ply ~= LocalPlayer() then return true end
-		local bx, by, bz, orient = placeTarget( ply, aim, tr, id, true )
-		local plan = bx and MC.BuildPlacementPlan and MC.BuildPlacementPlan( bx, by, bz, id, orient )
+		local bx, by, bz, placeId, orient = placeTarget( ply, aim, tr, id, true )
+		local plan = bx and MC.BuildPlacementPlan and MC.BuildPlacementPlan( bx, by, bz, placeId, orient )
 		if plan and MC.CanPreviewPlacePlan and MC.CanPreviewPlacePlan( ply, plan ) and MC.PredictSetBlock then
-			MC.PredictSetBlock( bx, by, bz, id, orient )
+			MC.PredictSetBlock( bx, by, bz, placeId, orient )
 		end
 		return true
 	end
@@ -117,9 +128,9 @@ function TOOL:RightClick( tr )
 	end
 	if MC.SV.Use( ply, ux, uy, uz ) then return true end
 
-	local bx, by, bz, orient = placeTarget( ply, aim, tr, id )
-	if bx and not MC.SV.Place( ply, bx, by, bz, id, orient ) and MC.SV.SyncPlacementPlan then
-		MC.SV.SyncPlacementPlan( ply, bx, by, bz, id, orient )
+	local bx, by, bz, placeId, orient = placeTarget( ply, aim, tr, id )
+	if bx and not MC.SV.Place( ply, bx, by, bz, placeId, orient ) and MC.SV.SyncPlacementPlan then
+		MC.SV.SyncPlacementPlan( ply, bx, by, bz, placeId, orient )
 	end
 	return true
 end
@@ -172,7 +183,7 @@ if CLIENT then
 
 		local aim = aimedBlock( ply )
 		if not aim then return end
-		MC.DrawBlockOutline( aim.Block, aim.Orient, aim.bx, aim.by, aim.bz, Color( 0, 0, 0, 235 ) )
+		MC.DrawBlockOutline( aim.Block, aim.Orient, aim.bx, aim.by, aim.bz, Color( 0, 0, 0, 235 ), aim.StateId )
 	end )
 end
 

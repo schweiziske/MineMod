@@ -125,6 +125,13 @@ local function placeTarget( ply, aim, fallbackTrace, id, avoidUseBlocks )
 		orient = MC.OrientForPlacement( ply, tr, id )
 		stateId = MC.StateFromLegacy( id, orient )
 	end
+	if stateId and MC.ResolveTorchPlacementState then
+		stateId = MC.ResolveTorchPlacementState( stateId, tr.HitNormal )
+		if not stateId then return nil end
+		local placedId, placedOrient = MC.LegacyFromState( stateId )
+		if placedId == nil then return nil end
+		id, orient = placedId, placedOrient or 0
+	end
 	if not stateId then return nil end
 	return bx, by, bz, stateId, orient
 end
@@ -680,6 +687,6 @@ if CLIENT then
 
 		local aim = aimedBlock( ply )
 		if not aim then return end
-		MC.DrawBlockOutline( aim.Block, aim.Orient, aim.bx, aim.by, aim.bz, Color( 0, 0, 0, 235 ) )
+		MC.DrawBlockOutline( aim.Block, aim.Orient, aim.bx, aim.by, aim.bz, Color( 0, 0, 0, 235 ), aim.StateId )
 	end )
 end

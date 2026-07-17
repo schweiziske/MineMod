@@ -45,6 +45,8 @@ local SHARED = {
 	"mc/import/sh_format.lua",
 	"mc/block_entity/sh_registry.lua",
 	"mc/block/sh_stairs.lua",
+	"mc/block/sh_torch_placement.lua",
+	"mc/block/sh_redstone_wire.lua",
 	"mc/sh_presets.lua",
 	"mc/sh_player.lua",
 	"mc/state/sh_section.lua",
@@ -73,6 +75,7 @@ local SERVER_FILES = {
 }
 local CLIENT_FILES = {
 	"mc/state/cl_state_visual_catalog.lua",
+	"mc/state/cl_state_selection_boxes.lua",
 	"mc/cl_lighting.lua",
 	"mc/render/cl_mesh_cache.lua",
 	"mc/render/cl_mesh_constants.lua",
