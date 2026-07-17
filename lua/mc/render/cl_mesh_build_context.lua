@@ -438,6 +438,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		blockBoxes = blockBoxes,
 		blockIter = blockIter,
 		sectionBuffers = sectionBuffers,
+		fluidCornerHeightCache = {},
 		C = C,
 	}
 

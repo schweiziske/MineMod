@@ -20,8 +20,8 @@ local DEFAULT_MAX_CELLS = 16384
 local DEFAULT_MAX_DEPTH = 64
 local DEFAULT_MAX_QUEUE = 262144
 
-local cvEnabled = CreateConVar( "mc_block_updates_enabled", "0", 0,
-	"Enable queued neighbor updates and scheduled block ticks." )
+local cvEnabled = MC.Config and MC.Config.BlockUpdatesEnabled
+	or GetConVar( "mc_block_updates_enabled" )
 local cvMaxUpdates = CreateConVar( "mc_block_update_max_per_tick", tostring( DEFAULT_MAX_UPDATES ), FCVAR_ARCHIVE,
 	"Maximum block update callbacks processed per 20 TPS logic tick." )
 local cvMaxCells = CreateConVar( "mc_block_update_max_cells_per_tick", tostring( DEFAULT_MAX_CELLS ), FCVAR_ARCHIVE,

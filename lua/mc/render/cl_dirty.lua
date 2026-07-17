@@ -114,6 +114,27 @@ function MC.MarkDirty( bx, by, bz )
 	markBlockGeometryDirty( bx, by, bz + 1 ) ; markBlockGeometryDirty( bx, by, bz - 1 )
 end
 
+-- FluidRenderer corner heights sample a horizontal 3x3 neighborhood. Each
+-- sampled cell also checks the state directly above it, so a liquid edit can
+-- alter cached fluid geometry in the same layer and one layer below. Keep this
+-- fanout liquid-only; ordinary block edits retain the cheap six-neighbour path.
+function MC.MarkFluidGeometryDirtyForStateChange( bx, by, bz, oldStateId, newStateId )
+	if oldStateId == newStateId then return 0 end
+	local oldKind = MC.LiquidKindForState and MC.LiquidKindForState( oldStateId ) or nil
+	local newKind = MC.LiquidKindForState and MC.LiquidKindForState( newStateId ) or nil
+	if not oldKind and not newKind then return 0 end
+	for dy = -1, 1 do
+		for dx = -1, 1 do
+			-- MC.MarkDirty already handled the changed cell, its four horizontal
+			-- face neighbours and the cell directly below. Only add the corner
+			-- dependencies and the remaining lower-layer ring here.
+			if dx ~= 0 and dy ~= 0 then markBlockGeometryDirty( bx + dx, by + dy, bz ) end
+			if dx ~= 0 or dy ~= 0 then markBlockGeometryDirty( bx + dx, by + dy, bz - 1 ) end
+		end
+	end
+	return 12
+end
+
 function MC.MarkLightingGeometryDirtyForChange( bx, by, bz )
 	local dirtySections, dirtyCount = {}, 0
 	for dz = -1, 1 do

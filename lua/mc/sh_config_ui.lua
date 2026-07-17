@@ -641,6 +641,14 @@ MC.ConfigConVars = {
 				"两次碰撞重建批次之间的秒数。", { unit = "s" } ),
 		} ),
 
+		category( "block_updates", "gameplay", "Block updates", "方块更新",
+			"Controls queued neighbour updates and scheduled block ticks.",
+			"控制水、红石及其他方块的邻居更新与计划刻。", {
+			item( "mc_block_updates_enabled", "Enable block updates", "启用方块更新", "bool",
+				"Enable water, redstone and other queued block behaviour. Disabled by default until the native acceleration path is ready.",
+				"启用水、红石及其他排队方块行为；原生加速路径完成前默认关闭。" ),
+		} ),
+
 		category( "block_damage", "gameplay", "Block damage", "方块伤害",
 			"How regular Garry's Mod damage breaks MC blocks.",
 			"普通 Garry's Mod 伤害破坏 MC 方块的方式。", {
