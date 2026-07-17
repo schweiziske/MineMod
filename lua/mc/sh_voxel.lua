@@ -309,7 +309,19 @@ local function blockAABBOverlapsPlayerHullSidePadding( bx, by, bz, padding )
 	return false
 end
 
-function MC.PlacementOverlapsPlayerHull( bx, by, bz, id, orient )
+local function placementStateHasCollision( bx, by, bz, id, stateId )
+	if stateId ~= nil and MC.BlockHasCollisionForState then
+		return MC.BlockHasCollisionForState( stateId, bx, by, bz ) == true
+	end
+	if id == nil or id == 0 then return false end
+	if MC.BlockHasCollision then return MC.BlockHasCollision( id ) == true end
+	return true
+end
+
+function MC.PlacementOverlapsPlayerHull( bx, by, bz, id, orient, stateId )
+	-- Non-colliding states cannot trap a player. Return before player.GetAll(),
+	-- WorldSpaceAABB() and the full-cell overlap checks.
+	if not placementStateHasCollision( bx, by, bz, id, stateId ) then return false end
 	if MC.BlockAABBOverlapsPlayerHull( bx, by, bz, 0 ) then return true end
 	if id ~= nil and id ~= 0 and MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
 		return blockAABBOverlapsPlayerHullSidePadding( bx, by, bz, PLACE_REJECT_PLAYER_PADDING )
@@ -342,8 +354,8 @@ local function previewWorldBoundsOK( bx, by )
 	return math.abs( bx ) <= lim and math.abs( by ) <= lim
 end
 
-local function previewWouldTrapPlayer( bx, by, bz, id, orient )
-	return MC.PlacementOverlapsPlayerHull( bx, by, bz, id, orient )
+local function previewWouldTrapPlayer( bx, by, bz, id, orient, stateId )
+	return MC.PlacementOverlapsPlayerHull( bx, by, bz, id, orient, stateId )
 end
 
 function MC.CanPreviewBreak( ply, bx, by, bz )
@@ -353,12 +365,12 @@ function MC.CanPreviewBreak( ply, bx, by, bz )
 		and MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, MC.CurrentReach() )
 end
 
-function MC.CanPreviewPlace( ply, bx, by, bz, id, orient )
+function MC.CanPreviewPlace( ply, bx, by, bz, id, orient, stateId )
 	if not IsValid( ply ) then return false end
 	return MC.GetBlock( bx, by, bz ) == 0
 		and previewCanEdit( ply )
 		and previewWorldBoundsOK( bx, by )
-		and not previewWouldTrapPlayer( bx, by, bz, id, orient )
+		and not previewWouldTrapPlayer( bx, by, bz, id, orient, stateId )
 		and MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, MC.CurrentReach() )
 end
 
