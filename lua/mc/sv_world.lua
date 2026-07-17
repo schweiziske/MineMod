@@ -710,8 +710,8 @@ local function stateFromLegacyWrite( id, orient )
 end
 
 -- a placed block must not overlap a living player's hull (don't trap / suffocate them)
-wouldTrapPlayer = function( bx, by, bz, id, orient )
-	return MC.PlacementOverlapsPlayerHull( bx, by, bz, id, orient )
+wouldTrapPlayer = function( bx, by, bz, id, orient, stateId )
+	return MC.PlacementOverlapsPlayerHull( bx, by, bz, id, orient, stateId )
 end
 
 -- Narrow host surface consumed by state/sv_block_transaction.lua. Keeping
@@ -729,8 +729,8 @@ SV.BlockTransactionHost = {
 	broadcastFx = broadcastFx,
 }
 
-function SV.PlacementWouldTrapPlayer( bx, by, bz, id, orient )
-	return wouldTrapPlayer( bx, by, bz, id, orient )
+function SV.PlacementWouldTrapPlayer( bx, by, bz, id, orient, stateId )
+	return wouldTrapPlayer( bx, by, bz, id, orient, stateId )
 end
 
 local function validateReach( ply, bx, by, bz )
@@ -764,7 +764,7 @@ local function validatePlacementPlan( ply, plan )
 			if existingId == 0 or existingId ~= cell.id then return false end
 		else
 			if existingId ~= 0 then return false end
-			if wouldTrapPlayer( cell.bx, cell.by, cell.bz, cell.id, cell.orient ) then
+			if wouldTrapPlayer( cell.bx, cell.by, cell.bz, cell.id, cell.orient, cell.stateId ) then
 				notify( ply, "A player is in the way" )
 				return false
 			end

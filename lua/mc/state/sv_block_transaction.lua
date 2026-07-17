@@ -228,7 +228,7 @@ function SV.ApplyBlockTransaction( cells, options )
 		local entityType = info.newBlockEntity and info.newBlockEntity.type or info.oldBlockEntity and info.oldBlockEntity.type
 		info.blockEntityDefinition = entityType and MC.BlockEntityTypes and MC.BlockEntityTypes[entityType] or nil
 		if options.preventPlayerOverlap and info.id ~= 0 and info.stateId ~= info.oldStateId
-		and Host.wouldTrapPlayer( info.bx, info.by, info.bz, info.id, info.orient ) then
+		and Host.wouldTrapPlayer( info.bx, info.by, info.bz, info.id, info.orient, info.stateId ) then
 			return failure( "player_overlap", info.sourceIndex )
 		end
 		if options.validateChange then
