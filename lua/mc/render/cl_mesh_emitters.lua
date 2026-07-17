@@ -810,7 +810,11 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 		local topUV = { { 0, 16 }, { 16, 16 }, { 16, 0 }, { 0, 0 } }
 		local flowX, flowY = 0, 0
 		if liquidFlowAtCell then flowX, flowY = liquidFlowAtCell( bx, by, bz, kind ) end
-		local flowTile = LiquidFlowTiles[kind]
+		-- water_flow was appended at the tail of the existing atlas. Clients that
+		-- already cached atlas_365 under the same material path see that new slot as
+		-- empty, which makes only flowing-water top faces disappear. Reuse the
+		-- stable water_still slot while keeping Minecraft's flow-directed UV rotation.
+		local flowTile = kind == "water" and LiquidStillTiles.water or LiquidFlowTiles[kind]
 		if flowTile and ( math.abs( flowX ) > 0.000001 or math.abs( flowY ) > 0.000001 ) then
 			tile = flowTile
 			local angle = math.atan2( flowY, flowX ) - math.pi * 0.5

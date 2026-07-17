@@ -47,6 +47,9 @@ local Rects = {}
 local LastEdgeCount = 0
 local SolidByState = {}
 local EmptyOcclusionByState = {}
+local WALL_CACHE_SIZE = 200
+local WallCacheKeys = {}
+local WallCacheValues = {}
 
 local function addRect( count, a0, a1, b0, b1, targetB1 )
 	a0, a1 = max( 0, a0 ), min( 1, a1 )
@@ -155,6 +158,83 @@ local function faceOccludedByState( face, height, stateId, bx, by, bz )
 	return faceCoveredByState( face, height, stateId, bx, by, bz, false )
 end
 
+local function appendBoundaryRects( rectCount, stateId, bx, by, bz, face )
+	local boxes = stateBoxes( stateId, bx, by, bz )
+	if not boxes then return rectCount end
+	for index = 1, #boxes do
+		local a0, a1, b0, b1, limit = boundaryRect( boxes[index], face, 1 )
+		if a0 then
+			if a0 <= EPSILON and a1 >= 1 - EPSILON and b0 <= EPSILON and b1 >= limit - EPSILON then
+				return -1
+			end
+			rectCount = addRect( rectCount, a0, a1, b0, b1, limit )
+		end
+	end
+	return rectCount
+end
+
+local function rectsCoverWholeFace( rectCount )
+	if rectCount < 0 then return true end
+	if rectCount == 0 then return false end
+	local edgeCount = rectCount * 2
+	for index = edgeCount + 1, LastEdgeCount do Edges[index] = nil end
+	LastEdgeCount = edgeCount
+	sort( Edges )
+	local previous = 0
+	for edgeIndex = 1, edgeCount do
+		local edge = Edges[edgeIndex]
+		if edge > previous + EPSILON then
+			local sampleA = ( previous + edge ) * 0.5
+			local coveredTo = 0
+			while coveredTo < 1 - EPSILON do
+				local nextCovered = coveredTo
+				for rectIndex = 1, rectCount do
+					local offset = ( rectIndex - 1 ) * 4
+					if Rects[offset + 1] <= sampleA + EPSILON and Rects[offset + 2] >= sampleA - EPSILON
+					and Rects[offset + 3] <= coveredTo + EPSILON and Rects[offset + 4] > nextCovered then
+						nextCovered = Rects[offset + 4]
+					end
+				end
+				if nextCovered <= coveredTo + EPSILON then return false end
+				coveredTo = nextCovered
+			end
+		end
+		if edge > previous then previous = edge end
+	end
+	return previous >= 1 - EPSILON
+end
+
+local function positionDependentCollision( stateId )
+	local schema = MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( stateId ) or nil
+	local resolver = schema and MC.BlockStateCollisionResolvers and MC.BlockStateCollisionResolvers[schema.name] or nil
+	return resolver and resolver.positionDependent == true or false
+end
+
+-- FlowingFluid#canPassThroughWall uses !Shapes.mergedFaceOccludes. The source
+-- contributes its outward boundary and the target contributes its inward one.
+local function canPassThroughWall( sourceStateId, sx, sy, sz, targetStateId, tx, ty, tz, face )
+	if MC.BlockIsFullCubeForState then
+		if MC.BlockIsFullCubeForState( targetStateId, tx, ty, tz ) then return false end
+		if MC.BlockIsFullCubeForState( sourceStateId, sx, sy, sz ) then return false end
+	end
+	local cacheable = not positionDependentCollision( sourceStateId ) and not positionDependentCollision( targetStateId )
+	local cacheKey, cacheSlot
+	if cacheable then
+		local stride = ( MC.BlockStateCount or 0 ) + 1
+		cacheKey = ( sourceStateId * stride + targetStateId ) * 7 + face
+		cacheSlot = cacheKey % WALL_CACHE_SIZE + 1
+		if WallCacheKeys[cacheSlot] == cacheKey then return WallCacheValues[cacheSlot] end
+	end
+	local rectCount = appendBoundaryRects( 0, sourceStateId, sx, sy, sz, oppositeFace( face ) )
+	if rectCount >= 0 then rectCount = appendBoundaryRects( rectCount, targetStateId, tx, ty, tz, face ) end
+	local pass = not rectsCoverWholeFace( rectCount )
+	if cacheable then
+		WallCacheKeys[cacheSlot] = cacheKey
+		WallCacheValues[cacheSlot] = pass
+	end
+	return pass
+end
+
 local function faceSturdyForFlow( stateId, bx, by, bz, face )
 	return faceCoveredByState( oppositeFace( face ), 1, stateId, bx, by, bz, true )
 end
@@ -191,6 +271,7 @@ Liquid.OppositeFace = oppositeFace
 Liquid.FaceOffset = faceOffset
 Liquid.FaceOccludedByState = faceOccludedByState
 Liquid.FaceSturdyForFlow = faceSturdyForFlow
+Liquid.CanPassThroughWall = canPassThroughWall
 Liquid.StateSolid = stateSolid
 Liquid.FACE_TOP = FACE_TOP
 Liquid.FACE_BOTTOM = FACE_BOTTOM

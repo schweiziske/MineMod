@@ -944,6 +944,7 @@ local function normalizeImportPath( path )
 end
 
 local function clearWorldNoNet()
+	if SV.ClearBlockUpdates then SV.ClearBlockUpdates() end
 	if SV.ChunkStore and SV.ChunkStore.Reset then SV.ChunkStore.Reset() end
 	for _, c in pairs( MC.World ) do
 		if IsValid( c.ent ) then c.ent:Remove() end
@@ -989,6 +990,7 @@ local function restoreWorldLoadStage( previous )
 end
 
 local function commitWorldLoadStage( previous )
+	if SV.ClearBlockUpdates then SV.ClearBlockUpdates() end
 	if SV.ChunkStore and SV.ChunkStore.Reset then SV.ChunkStore.Reset() end
 	for _, chunk in pairs( previous.world or {} ) do
 		if IsValid( chunk.ent ) then chunk.ent:Remove() end
@@ -2391,6 +2393,7 @@ end )
 
 concommand.Add( "mc_clear", function( ply )
 	if IsValid( ply ) and not ply:IsAdmin() then return end
+	if SV.ClearBlockUpdates then SV.ClearBlockUpdates() end
 	for _, c in pairs( MC.World ) do
 		if IsValid( c.ent ) then c.ent:Remove() end
 	end
