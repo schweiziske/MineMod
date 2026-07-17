@@ -143,6 +143,7 @@ function Water.WaterloggedState( stateId )
 end
 
 function Water.CanHoldAny( stateId, bx, by, bz )
+	if Water.WorldCellBlocked and Water.WorldCellBlocked( bx, by, bz ) then return false end
 	local cached = CanHoldAnyByState[stateId]
 	if cached ~= nil then return cached end
 	local schema = schemaForState( stateId )
@@ -175,6 +176,7 @@ function Water.CanConvertToSource()
 end
 
 function Water.CanPassThroughWall( sourceStateId, sx, sy, sz, targetStateId, tx, ty, tz, face )
+	if Water.WorldCanTraverse and not Water.WorldCanTraverse( sx, sy, sz, tx, ty, tz, face ) then return false end
 	return Liquid.CanPassThroughWall
 		and Liquid.CanPassThroughWall( sourceStateId, sx, sy, sz, targetStateId, tx, ty, tz, face ) == true
 end
@@ -206,5 +208,6 @@ function Water.PlaceFluidInState( targetStateId, amount, falling, source )
 end
 
 function Water.StateIsSolid( stateId, bx, by, bz )
+	if Water.WorldCellBlocked and Water.WorldCellBlocked( bx, by, bz ) then return true end
 	return Liquid.StateSolid and Liquid.StateSolid( stateId, bx, by, bz ) == true or false
 end

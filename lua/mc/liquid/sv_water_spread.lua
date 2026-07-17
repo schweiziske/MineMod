@@ -27,6 +27,10 @@ local Horizontal = {
 	{ 0, -1, FACE_YN, 3 },
 }
 
+local function worldBoundsOK( bx, by, bz )
+	return not SV.WorldBoundsOK or SV.WorldBoundsOK( bx, by, bz )
+end
+
 local function newView()
 	return {
 		states = {},
@@ -38,6 +42,7 @@ local function newView()
 end
 
 local function viewState( view, bx, by, bz )
+	if not worldBoundsOK( bx, by, bz ) then return Water.AirState() end
 	local key = MC.CellKey( bx, by, bz )
 	local stateId = view.states[key]
 	if stateId ~= nil then return stateId end
@@ -45,6 +50,7 @@ local function viewState( view, bx, by, bz )
 end
 
 local function scheduleWater( view, bx, by, bz )
+	if not worldBoundsOK( bx, by, bz ) then return end
 	local key = MC.CellKey( bx, by, bz )
 	if view.scheduleSeen[key] then return end
 	view.scheduleSeen[key] = true
@@ -56,6 +62,7 @@ local function scheduleWater( view, bx, by, bz )
 end
 
 local function planState( view, bx, by, bz, stateId, schedule )
+	if not worldBoundsOK( bx, by, bz ) then return false end
 	local key = MC.CellKey( bx, by, bz )
 	local current = viewState( view, bx, by, bz )
 	if current == stateId then
@@ -110,7 +117,7 @@ end
 
 local function isWaterHole( getState, bx, by, bz )
 	local bottomZ = bz - 1
-	if SV.WorldBoundsOK and not SV.WorldBoundsOK( bx, by, bottomZ ) then return false end
+	if not worldBoundsOK( bx, by, bottomZ ) then return false end
 	local topStateId = getState( bx, by, bz )
 	local bottomStateId = getState( bx, by, bottomZ )
 	if not Water.CanPassThroughWall( topStateId, bx, by, bz, bottomStateId, bx, by, bottomZ, FACE_BOTTOM ) then

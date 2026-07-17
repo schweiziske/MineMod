@@ -305,10 +305,16 @@ local function worldBoundsOK( bx, by, bz )
 	local lim = math.min( C.WorldLimit:GetInt(), protoMax )
 	return math.abs( bx ) <= lim
 		and math.abs( by ) <= lim
+		and math.abs( bz ) <= lim
 end
 
 function SV.WorldBoundsOK( bx, by, bz )
 	return worldBoundsOK( bx, by, bz )
+end
+
+function SV.WorldCoordinateLimit()
+	local protoMax = bit.lshift( 1, Net.COORD_BITS - 1 ) - 1
+	return math.min( C.WorldLimit:GetInt(), protoMax )
 end
 
 -- returns true if allowed; otherwise false (+ optional notify)
