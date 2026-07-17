@@ -87,6 +87,23 @@ local function lifecycleKind( oldStateId, stateId )
 	return "state_changed"
 end
 
+local function collisionChanged( info )
+	if info.oldStateId == info.stateId then return false end
+	local oldShape = MC.ResolveBlockStateCollision
+		and MC.ResolveBlockStateCollision( info.oldStateId, info.bx, info.by, info.bz ) or nil
+	local newShape = MC.ResolveBlockStateCollision
+		and MC.ResolveBlockStateCollision( info.stateId, info.bx, info.by, info.bz ) or nil
+	local oldHas = oldShape and oldShape.hasCollision == true
+		or not oldShape and MC.BlockHasCollision and MC.BlockHasCollision( info.old ) == true or false
+	local newHas = newShape and newShape.hasCollision == true
+		or not newShape and MC.BlockHasCollision and MC.BlockHasCollision( info.id ) == true or false
+	if oldHas ~= newHas then return true end
+	if not oldHas then return false end
+	if oldShape and newShape then return oldShape ~= newShape end
+	-- Unknown colliding shapes stay conservative.
+	return true
+end
+
 local function callLifecycleHandler( info, actor, revision )
 	local context = {
 		actor = actor,
@@ -283,7 +300,9 @@ function SV.ApplyBlockTransaction( cells, options )
 			if SV.ChunkStore and SV.ChunkStore.RecordEdit then
 				SV.ChunkStore.RecordEdit( info.bx, info.by, info.bz, info.id, info.orient, info.stateId )
 			end
-			Host.collectCellPhysDirty( dirty, immediateDirty, dirtyBounds, info.bx, info.by, info.bz )
+			if options.compareCollision ~= true or collisionChanged( info ) then
+				Host.collectCellPhysDirty( dirty, immediateDirty, dirtyBounds, info.bx, info.by, info.bz )
+			end
 		elseif info.blockEntityDefinition and info.blockEntityDefinition.affectsCollision then
 			Host.collectCellPhysDirty( dirty, immediateDirty, dirtyBounds, info.bx, info.by, info.bz )
 		end
@@ -377,6 +396,19 @@ function SV.ApplyBlockTransaction( cells, options )
 				local message = "[MC] block lifecycle handler failed: " .. tostring( handlerError ) .. "\n"
 				if ErrorNoHalt then ErrorNoHalt( message ) else print( message ) end
 			end
+		end
+	end
+
+	if options.blockUpdates ~= false and SV.EnqueueTransactionNeighbours then
+		local ok, updateError = pcall(
+			SV.EnqueueTransactionNeighbours,
+			finalized,
+			revision,
+			options.updateDepth
+		)
+		if not ok then
+			local message = "[MC] block update enqueue failed: " .. tostring( updateError ) .. "\n"
+			if ErrorNoHalt then ErrorNoHalt( message ) else print( message ) end
 		end
 	end
 
