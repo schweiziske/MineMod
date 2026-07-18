@@ -55,7 +55,24 @@ local function doorUpdate( context )
 	end
 	append( context.bz, context.stateId )
 	append( otherZ, otherState )
-	return #cells > 0 and { cells = cells, compareCollision = true } or nil
+	if #cells == 0 then return nil end
+	local blockSchema = schema( context.stateId )
+	local lowerZ = half == "upper" and otherZ or context.bz
+	return {
+		cells = cells,
+		compareCollision = true,
+		afterTransaction = function( data, transaction )
+			if not transaction or transaction.ok ~= true or ( transaction.changed or 0 ) <= 0 then return end
+			if MC.PlayDoorToggleSound then
+				MC.PlayDoorToggleSound( data.blockId, data.open, data.bx, data.by, data.bz )
+			end
+		end,
+		afterTransactionData = {
+			blockId = blockSchema and blockSchema.blockId,
+			open = powered,
+			bx = context.bx, by = context.by, bz = lowerZ,
+		},
+	}
 end
 
 local doorHandler = { OnNeighborUpdate = doorUpdate }

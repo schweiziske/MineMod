@@ -59,4 +59,3 @@ function MC.ResolveTorchPlacementState( stateId, hitNormal )
 	end
 	return targetState
 end
-

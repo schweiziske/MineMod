@@ -33,6 +33,14 @@ local function isTrackedInputName( name )
 		or name == "minecraft:detector_rail" or name == "minecraft:tripwire"
 end
 
+local IgnoredTriggerEntityClasses = {
+	-- Static Minecraft world collision is implemented with frozen VPhysics
+	-- entities. They overlap plates by design and must never count as occupants.
+	mc_chunk = true,
+	mc_chunk_phys = true,
+	mc_collision_carrier = true,
+}
+
 local function addActive( bx, by, bz )
 	local key = CellKey( bx, by, bz )
 	if ActiveIndex[key] then return false end
@@ -62,6 +70,7 @@ end
 
 local function entityTriggersPlate( entity, name )
 	if not IsValid( entity ) or entity:IsWorld() then return false end
+	if IgnoredTriggerEntityClasses[entity:GetClass()] then return false end
 	if entity:IsPlayer() and entity:GetMoveType() == MOVETYPE_NOCLIP then return false end
 	if entity.MCIgnoreBlockTriggers == true then return false end
 	if name == "minecraft:stone_pressure_plate" or name == "minecraft:polished_blackstone_pressure_plate" then
@@ -129,7 +138,7 @@ local function pressurePlatePitch( name, pressed )
 end
 
 local function playPressurePlateSound( entry, name, pressed )
-	MC.PlayRedstoneSound( "mc/random/click.ogg", entry.bx, entry.by, entry.bz, 0.3, pressurePlatePitch( name, pressed ) )
+	MC.PlayRedstoneSound( "mc/random/click.wav", entry.bx, entry.by, entry.bz, 0.3, pressurePlatePitch( name, pressed ) )
 end
 
 local function updateEntry( entry )

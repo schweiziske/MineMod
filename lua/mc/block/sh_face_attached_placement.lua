@@ -59,7 +59,17 @@ end
 
 function MC.ResolveFaceAttachedPlacementState( stateId, hitNormal, ply )
 	stateId = math.floor( tonumber( stateId ) or -1 )
-	if stateId < 1 or not isFaceAttachedState( stateId ) then return stateId end
+	if stateId < 1 then return stateId end
+	-- Creative state selection may contain a pressed pressure-plate variant.
+	-- Placement must always begin released; physical input owns subsequent
+	-- powered/power transitions on the server.
+	if isPressurePlateState( stateId ) then
+		if MC.GetStateProperty( stateId, "power" ) ~= nil then
+			return MC.StateWith( stateId, "power", 0 ) or stateId
+		end
+		return MC.StateWith( stateId, "powered", false ) or stateId
+	end
+	if not isFaceAttachedState( stateId ) then return stateId end
 	local normalZ = tonumber( hitNormal and hitNormal.z ) or 1
 	local face, facing
 	if normalZ > 0.5 then

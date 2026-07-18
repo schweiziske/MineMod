@@ -139,6 +139,9 @@ end
 function MC.BuildPlacementStatePlan( bx, by, bz, stateId )
 	stateId = math.floor( tonumber( stateId ) or -1 )
 	if stateId <= 0 or not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return nil end
+	if MC.ResolveRedstonePlacementState then
+		stateId = MC.ResolveRedstonePlacementState( stateId, bx, by, bz ) or stateId
+	end
 	local id = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or nil
 	if id == nil or not MC.IsValidBlock or not MC.IsValidBlock( id ) then return nil end
 	if MC.FaceAttachedCanSurvive and not MC.FaceAttachedCanSurvive( bx, by, bz, stateId ) then return nil end

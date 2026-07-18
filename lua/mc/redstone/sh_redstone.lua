@@ -44,9 +44,9 @@ local DirectSignalEmitters = {}
 local DirectSignalEmitterCache = {}
 
 local RedstoneSoundResources = {
-	"sound/mc/random/click.ogg",
-	"sound/mc/tile/piston/in.ogg",
-	"sound/mc/tile/piston/out.ogg",
+	"sound/mc/random/click.wav",
+	"sound/mc/tile/piston/in.wav",
+	"sound/mc/tile/piston/out.wav",
 }
 
 if SERVER and resource and resource.AddFile then
@@ -229,6 +229,12 @@ for name in pairs( MC.BlockByName ) do
 	if string.match( name, "_pressure_plate$" ) then
 		MC.RegisterRedstoneSignalEmitter( name, pressurePlateEmitter )
 		MC.RegisterRedstoneDirectSignalEmitter( name, downwardDirectPower )
+		-- The legacy base renderer uses one fixed thin plate mesh and cannot
+		-- represent the vanilla up/down state geometry. Always consume the exact
+		-- imported blockstate model, including the normally unpowered default.
+		if MC.RegisterBlockStateVisual then
+			MC.RegisterBlockStateVisual( name, { forceGeneratedVisual = true } )
+		end
 	end
 end
 
@@ -250,6 +256,14 @@ end
 local function fullCube( stateId, bx, by, bz )
 	return stateId ~= nil and stateId ~= 0
 		and BlockIsFullCubeForState and BlockIsFullCubeForState( stateId, bx, by, bz ) == true
+end
+
+local function redstoneConductor( stateId, bx, by, bz )
+	-- Vanilla SLIME_BLOCK keeps the default full collision-shape conductor
+	-- predicate even though its translucent imported visual is not classified as
+	-- a normal full cube by our renderer/collision abstraction.
+	if stateName( stateId ) == "minecraft:slime_block" then return true end
+	return fullCube( stateId, bx, by, bz )
 end
 
 local function redstoneUpdateSourceState( stateId )
@@ -274,7 +288,7 @@ function MC.AppendRedstoneConductorFanout( changes, add )
 				local direction = NeighborDirections[directionIndex]
 				local cx, cy, cz = bx + direction[1], by + direction[2], bz + direction[3]
 				local conductorState = GetBlockState( cx, cy, cz )
-				if fullCube( conductorState, cx, cy, cz ) then
+				if redstoneConductor( conductorState, cx, cy, cz ) then
 					for targetIndex = 1, 6 do
 						local target = NeighborDirections[targetIndex]
 						add( cx + target[1], cy + target[2], cz + target[3], bx, by, bz )
@@ -319,7 +333,7 @@ local function conductorSample( sx, sy, sz, tx, ty, tz, targetX, targetY, target
 end
 
 local function conductorSignal( stateId, bx, by, bz, towardX, towardY, towardZ, suppressWire, readState )
-	if not fullCube( stateId, bx, by, bz ) then return 0 end
+	if not redstoneConductor( stateId, bx, by, bz ) then return 0 end
 	local targetX, targetY, targetZ = bx + towardX, by + towardY, bz + towardZ
 	local best = conductorSample( bx + 1, by, bz, -1, 0, 0, targetX, targetY, targetZ, suppressWire, readState )
 	local value = conductorSample( bx - 1, by, bz, 1, 0, 0, targetX, targetY, targetZ, suppressWire, readState )
@@ -393,13 +407,13 @@ end
 
 local function visitWireNeighbours( bx, by, bz, readState, visit )
 	local aboveState = readState( bx, by, bz + 1 )
-	local canClimb = not fullCube( aboveState, bx, by, bz + 1 )
+	local canClimb = not redstoneConductor( aboveState, bx, by, bz + 1 )
 	for index = 1, 4 do
 		local direction = WireDirections[index]
 		local nx, ny = bx + direction[1], by + direction[2]
 		local neighbourState = readState( nx, ny, bz )
 		if IsRedstoneWireState( neighbourState ) then visit( nx, ny, bz, neighbourState ) end
-		if fullCube( neighbourState, nx, ny, bz ) then
+		if redstoneConductor( neighbourState, nx, ny, bz ) then
 			if canClimb then
 				local upperState = readState( nx, ny, bz + 1 )
 				if IsRedstoneWireState( upperState ) then visit( nx, ny, bz + 1, upperState ) end
@@ -619,7 +633,7 @@ local function installLeverHandler()
 			{ bx = bx, by = by, bz = bz, stateId = nextState },
 		}, { actor = ply, fx = false, netMode = "bulk", compareCollision = false } )
 		local changed = result and result.ok == true and result.changed > 0 or false
-		if changed then MC.PlayRedstoneSound( "mc/random/click.ogg", bx, by, bz, 0.3, not powered and 0.6 or 0.5 ) end
+		if changed then MC.PlayRedstoneSound( "mc/random/click.wav", bx, by, bz, 0.3, not powered and 0.6 or 0.5 ) end
 		return changed
 	end
 	return true
@@ -768,6 +782,30 @@ local function torchScheduledTick( context )
 		bx = context.bx, by = context.by, bz = context.bz,
 		stateId = StateWith( context.stateId, "lit", shouldLight ) or context.stateId,
 	} } }
+end
+
+local function redstoneLampVisual( stateId )
+	return {
+		forceGeneratedVisual = true,
+		lightEmission = GetStateProperty( stateId, "lit" ) == true and 15 or 0,
+	}
+end
+
+MC.RegisterBlockStateVisual( "minecraft:redstone_lamp", { Resolve = redstoneLampVisual } )
+
+-- Shared equivalent of RedstoneLampBlock.getStateForPlacement: prediction and
+-- authority both place the lamp with its final initial LIT value, avoiding a
+-- false-state write followed by a second corrective transaction.
+function MC.ResolveRedstonePlacementState( stateId, bx, by, bz )
+	local name = stateName( stateId )
+	if name == "minecraft:observer" then
+		-- Imported schema default is powered=true, while vanilla onPlace always
+		-- starts/reset observers unpowered and only scheduled ticks create pulses.
+		return StateWith( stateId, "powered", false ) or stateId
+	end
+	if name ~= "minecraft:redstone_lamp" then return stateId end
+	local powered = MC.RedstoneBestNeighborSignal( bx, by, bz ) > 0
+	return StateWith( stateId, "lit", powered ) or stateId
 end
 
 if MC.RegisterBlockUpdateHandler then
