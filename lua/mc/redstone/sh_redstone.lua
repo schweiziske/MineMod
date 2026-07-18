@@ -18,6 +18,7 @@ local BlockStateSchemaForState = MC.BlockStateSchemaForState
 local BlockIsFullCubeForState = MC.BlockIsFullCubeForState
 local GetBlockState = MC.GetBlockState
 local IsRedstoneWireState = MC.IsRedstoneWireState
+local CellKey = MC.CellKey
 
 local WireDirections = {
 	{ 0, -1, "north" },
@@ -286,32 +287,32 @@ local function wireSignalToward( stateId, towardX, towardY, towardZ )
 	return power
 end
 
-local function directSignalAt( bx, by, bz, towardX, towardY, towardZ, suppressWire )
-	local stateId = GetBlockState( bx, by, bz )
+local function directSignalAt( bx, by, bz, towardX, towardY, towardZ, suppressWire, readState )
+	local stateId = ( readState or GetBlockState )( bx, by, bz )
 	if IsRedstoneWireState( stateId ) then
 		return suppressWire and 0 or wireSignalToward( stateId, towardX, towardY, towardZ )
 	end
 	return MC.RedstoneDirectSignalFromState( stateId, bx, by, bz, towardX, towardY, towardZ )
 end
 
-local function conductorSample( sx, sy, sz, tx, ty, tz, targetX, targetY, targetZ, suppressWire )
+local function conductorSample( sx, sy, sz, tx, ty, tz, targetX, targetY, targetZ, suppressWire, readState )
 	if sx == targetX and sy == targetY and sz == targetZ then return 0 end
-	return directSignalAt( sx, sy, sz, tx, ty, tz, suppressWire )
+	return directSignalAt( sx, sy, sz, tx, ty, tz, suppressWire, readState )
 end
 
-local function conductorSignal( stateId, bx, by, bz, towardX, towardY, towardZ, suppressWire )
+local function conductorSignal( stateId, bx, by, bz, towardX, towardY, towardZ, suppressWire, readState )
 	if not fullCube( stateId, bx, by, bz ) then return 0 end
 	local targetX, targetY, targetZ = bx + towardX, by + towardY, bz + towardZ
-	local best = conductorSample( bx + 1, by, bz, -1, 0, 0, targetX, targetY, targetZ, suppressWire )
-	local value = conductorSample( bx - 1, by, bz, 1, 0, 0, targetX, targetY, targetZ, suppressWire )
+	local best = conductorSample( bx + 1, by, bz, -1, 0, 0, targetX, targetY, targetZ, suppressWire, readState )
+	local value = conductorSample( bx - 1, by, bz, 1, 0, 0, targetX, targetY, targetZ, suppressWire, readState )
 	if value > best then best = value end
-	value = conductorSample( bx, by + 1, bz, 0, -1, 0, targetX, targetY, targetZ, suppressWire )
+	value = conductorSample( bx, by + 1, bz, 0, -1, 0, targetX, targetY, targetZ, suppressWire, readState )
 	if value > best then best = value end
-	value = conductorSample( bx, by - 1, bz, 0, 1, 0, targetX, targetY, targetZ, suppressWire )
+	value = conductorSample( bx, by - 1, bz, 0, 1, 0, targetX, targetY, targetZ, suppressWire, readState )
 	if value > best then best = value end
-	value = conductorSample( bx, by, bz + 1, 0, 0, -1, targetX, targetY, targetZ, suppressWire )
+	value = conductorSample( bx, by, bz + 1, 0, 0, -1, targetX, targetY, targetZ, suppressWire, readState )
 	if value > best then best = value end
-	value = conductorSample( bx, by, bz - 1, 0, 0, 1, targetX, targetY, targetZ, suppressWire )
+	value = conductorSample( bx, by, bz - 1, 0, 0, 1, targetX, targetY, targetZ, suppressWire, readState )
 	if value > best then best = value end
 	return best
 end
@@ -346,53 +347,66 @@ function MC.RedstoneBestNeighborSignal( bx, by, bz, ignoreX, ignoreY, ignoreZ )
 	return best
 end
 
-local function sourcePowerAt( bx, by, bz, towardX, towardY, towardZ )
-	local stateId = GetBlockState( bx, by, bz )
+local function sourcePowerAt( bx, by, bz, towardX, towardY, towardZ, readState )
+	local stateId = readState( bx, by, bz )
 	if IsRedstoneWireState( stateId ) then return 0 end
 	local signal = MC.RedstoneSignalFromState( stateId, bx, by, bz, towardX, towardY, towardZ )
 	-- RedStoneWireBlock.getBlockSignal temporarily disables every dust output
 	-- while finding non-wire power. Without this, two powered wires separated by
 	-- one conductor can feed each other forever after the real source is gone.
-	local conducted = conductorSignal( stateId, bx, by, bz, towardX, towardY, towardZ, true )
+	local conducted = conductorSignal( stateId, bx, by, bz, towardX, towardY, towardZ, true, readState )
 	return conducted > signal and conducted or signal
 end
 
-local function strongestDirectSource( bx, by, bz )
-	local best = sourcePowerAt( bx + 1, by, bz, -1, 0, 0 )
-	local value = sourcePowerAt( bx - 1, by, bz, 1, 0, 0 )
+local function strongestDirectSource( bx, by, bz, readState )
+	local best = sourcePowerAt( bx + 1, by, bz, -1, 0, 0, readState )
+	local value = sourcePowerAt( bx - 1, by, bz, 1, 0, 0, readState )
 	if value > best then best = value end
-	value = sourcePowerAt( bx, by + 1, bz, 0, -1, 0 )
+	value = sourcePowerAt( bx, by + 1, bz, 0, -1, 0, readState )
 	if value > best then best = value end
-	value = sourcePowerAt( bx, by - 1, bz, 0, 1, 0 )
+	value = sourcePowerAt( bx, by - 1, bz, 0, 1, 0, readState )
 	if value > best then best = value end
-	value = sourcePowerAt( bx, by, bz + 1, 0, 0, -1 )
+	value = sourcePowerAt( bx, by, bz + 1, 0, 0, -1, readState )
 	if value > best then best = value end
-	value = sourcePowerAt( bx, by, bz - 1, 0, 0, 1 )
+	value = sourcePowerAt( bx, by, bz - 1, 0, 0, 1, readState )
 	if value > best then best = value end
 	return best
 end
 
-local function strongestNeighbourWire( bx, by, bz )
-	local best = 0
-	local aboveState = GetBlockState( bx, by, bz + 1 )
+local function visitWireNeighbours( bx, by, bz, readState, visit )
+	local aboveState = readState( bx, by, bz + 1 )
 	local canClimb = not fullCube( aboveState, bx, by, bz + 1 )
 	for index = 1, 4 do
 		local direction = WireDirections[index]
 		local nx, ny = bx + direction[1], by + direction[2]
-		local neighbourState = GetBlockState( nx, ny, bz )
-		local value = wirePower( neighbourState )
-		if value > best then best = value end
+		local neighbourState = readState( nx, ny, bz )
+		if IsRedstoneWireState( neighbourState ) then visit( nx, ny, bz, neighbourState ) end
 		if fullCube( neighbourState, nx, ny, bz ) then
 			if canClimb then
-				value = wirePower( GetBlockState( nx, ny, bz + 1 ) )
-				if value > best then best = value end
+				local upperState = readState( nx, ny, bz + 1 )
+				if IsRedstoneWireState( upperState ) then visit( nx, ny, bz + 1, upperState ) end
 			end
 		else
-			value = wirePower( GetBlockState( nx, ny, bz - 1 ) )
-			if value > best then best = value end
+			local lowerState = readState( nx, ny, bz - 1 )
+			if IsRedstoneWireState( lowerState ) then visit( nx, ny, bz - 1, lowerState ) end
 		end
 	end
-	return best
+end
+
+local WireSettledRevision = {}
+local WireStats = {
+	settlements = 0,
+	wiresScanned = 0,
+	wiresChanged = 0,
+	revisionSkips = 0,
+	oversizedFallbacks = 0,
+}
+
+local function wireBatchCellLimit()
+	local cv = GetConVar and GetConVar( "mc_block_update_max_cells_per_tick" ) or nil
+	local limit = cv and tonumber( cv:GetInt() ) or 16384
+	limit = math.floor( limit or 16384 )
+	return limit > 0 and limit or 16384
 end
 
 local function appendWireFanout( updates, bx, by, bz )
@@ -410,18 +424,159 @@ local function appendWireFanout( updates, bx, by, bz )
 	return updates
 end
 
-local function updateWire( context )
+local function updateSingleWire( context, readState )
 	local bx, by, bz = context.bx, context.by, context.bz
-	local power = strongestDirectSource( bx, by, bz )
-	local neighbourPower = strongestNeighbourWire( bx, by, bz ) - 1
+	local power = strongestDirectSource( bx, by, bz, readState )
+	local neighbourPower = 0
+	visitWireNeighbours( bx, by, bz, readState, function( _, _, _, stateId )
+		local value = wirePower( stateId )
+		if value > neighbourPower then neighbourPower = value end
+	end )
+	neighbourPower = neighbourPower - 1
 	if neighbourPower > power then power = neighbourPower end
 	if power < 0 then power = 0 end
-	local oldPower = clampPower( GetStateProperty( context.stateId, "power" ) )
-	if power == oldPower then return nil end
-	local nextState = StateWith( context.stateId, "power", power ) or context.stateId
+	local stateId = readState( bx, by, bz )
+	if wirePower( stateId ) == power then return nil end
+	local nextState = StateWith( stateId, "power", power ) or stateId
+	if nextState == stateId then return nil end
 	return {
 		cells = { { bx = bx, by = by, bz = bz, stateId = nextState } },
 		updates = appendWireFanout( {}, bx, by, bz ),
+		compareCollision = true,
+	}
+end
+
+local function markWireNetworkCommitted( keys, transaction )
+	if type( transaction ) ~= "table" or transaction.ok ~= true then return end
+	local revision = tonumber( transaction.revision )
+	if not revision then return end
+	for index = 1, #keys do WireSettledRevision[keys[index]] = revision end
+end
+
+function MC.ClearRedstoneWireRuntime()
+	WireSettledRevision = {}
+end
+
+local function updateWire( context )
+	local startX, startY, startZ = context.bx, context.by, context.bz
+	local startKey = CellKey( startX, startY, startZ )
+	local inputRevision = tonumber( context.revision )
+	if inputRevision and ( WireSettledRevision[startKey] or -1 ) >= inputRevision then
+		WireStats.revisionSkips = WireStats.revisionSkips + 1
+		return nil
+	end
+
+	-- One settlement owns a small, revision-local state cache. Conductors around
+	-- a long line otherwise make strongestDirectSource repeat the same chunk and
+	-- neighbour lookups dozens of times per wire.
+	local stateCache = {}
+	local function readState( bx, by, bz )
+		local key = CellKey( bx, by, bz )
+		local stateId = stateCache[key]
+		if stateId == nil then
+			stateId = GetBlockState( bx, by, bz )
+			stateCache[key] = stateId
+		end
+		return stateId
+	end
+
+	local startState = readState( startX, startY, startZ )
+	if not IsRedstoneWireState( startState ) then return nil end
+
+	-- Parallel numeric arrays keep the LuaJIT hot path monomorphic. Edges contain
+	-- integer wire indices rather than per-neighbour tables or coordinate strings.
+	local xs, ys, zs, states, keys = {}, {}, {}, {}, {}
+	local byKey, edgeStarts, edgeEnds, edges = {}, {}, {}, {}
+	local function addWire( bx, by, bz, stateId )
+		local key = CellKey( bx, by, bz )
+		local wireIndex = byKey[key]
+		if wireIndex then return wireIndex end
+		wireIndex = #xs + 1
+		byKey[key] = wireIndex
+		xs[wireIndex], ys[wireIndex], zs[wireIndex] = bx, by, bz
+		states[wireIndex], keys[wireIndex] = stateId, key
+		return wireIndex
+	end
+
+	addWire( startX, startY, startZ, startState )
+	local batchLimit = wireBatchCellLimit()
+	local function collectNeighbour( bx, by, bz, stateId )
+		edges[#edges + 1] = addWire( bx, by, bz, stateId )
+	end
+	local scanIndex = 1
+	while scanIndex <= #xs do
+		edgeStarts[scanIndex] = #edges + 1
+		visitWireNeighbours( xs[scanIndex], ys[scanIndex], zs[scanIndex], readState, collectNeighbour )
+		edgeEnds[scanIndex] = #edges
+		if #xs > batchLimit then
+			-- Preserve bounded scheduler behavior for pathological networks. The
+			-- legacy one-cell relaxation remains a correctness fallback instead of
+			-- submitting an oversized transaction that the scheduler would reject.
+			WireStats.oversizedFallbacks = WireStats.oversizedFallbacks + 1
+			return updateSingleWire( context, readState )
+		end
+		scanIndex = scanIndex + 1
+	end
+
+	-- A 16-level descending bucket queue is a bounded multi-source shortest-path
+	-- solve. Each external source seeds its local wire, then every graph edge
+	-- attenuates by exactly one; stale lower bucket entries are ignored.
+	local powers, buckets = {}, {}
+	for power = 1, 15 do buckets[power] = {} end
+	for wireIndex = 1, #xs do
+		local power = strongestDirectSource( xs[wireIndex], ys[wireIndex], zs[wireIndex], readState )
+		powers[wireIndex] = power
+		if power > 0 then
+			local bucket = buckets[power]
+			bucket[#bucket + 1] = wireIndex
+		end
+	end
+	for power = 15, 2, -1 do
+		local bucket = buckets[power]
+		local nextPower = power - 1
+		for bucketIndex = 1, #bucket do
+			local wireIndex = bucket[bucketIndex]
+			if powers[wireIndex] == power then
+				for edgeIndex = edgeStarts[wireIndex], edgeEnds[wireIndex] do
+					local neighbourIndex = edges[edgeIndex]
+					if powers[neighbourIndex] < nextPower then
+						powers[neighbourIndex] = nextPower
+						local nextBucket = buckets[nextPower]
+						nextBucket[#nextBucket + 1] = neighbourIndex
+					end
+				end
+			end
+		end
+	end
+
+	local cells = {}
+	for wireIndex = 1, #xs do
+		local stateId = states[wireIndex]
+		local power = powers[wireIndex]
+		if wirePower( stateId ) ~= power then
+			local nextState = StateWith( stateId, "power", power ) or stateId
+			if nextState ~= stateId then
+				cells[#cells + 1] = {
+					bx = xs[wireIndex], by = ys[wireIndex], bz = zs[wireIndex], stateId = nextState,
+				}
+			end
+		end
+	end
+
+	WireStats.settlements = WireStats.settlements + 1
+	WireStats.wiresScanned = WireStats.wiresScanned + #xs
+	WireStats.wiresChanged = WireStats.wiresChanged + #cells
+	if #cells == 0 then
+		if inputRevision then
+			for wireIndex = 1, #keys do WireSettledRevision[keys[wireIndex]] = inputRevision end
+		end
+		return nil
+	end
+	return {
+		cells = cells,
+		compareCollision = true,
+		afterTransaction = markWireNetworkCommitted,
+		afterTransactionData = keys,
 	}
 end
 
@@ -522,9 +677,19 @@ local function torchAttachedCell( stateId, bx, by, bz )
 	return bx - facing[1], by - facing[2], bz
 end
 
+-- Vanilla torch logic samples only the attachment block: the torch goes out
+-- when its support emits power itself or receives direct power (dust on top of
+-- or pointing into it, repeater/observer output, an attached lever/button).
+-- Sampling RedstoneBestNeighborSignal at the support instead would let every
+-- weakly powered block NEXT TO the support re-radiate the torch's own wire
+-- signal back into it, so a torch feeding nearby dust extinguishes itself and
+-- oscillates forever.
 local function torchShouldBeLit( stateId, bx, by, bz )
 	local ax, ay, az = torchAttachedCell( stateId, bx, by, bz )
-	return MC.RedstoneBestNeighborSignal( ax, ay, az, bx, by, bz ) <= 0
+	local towardX, towardY, towardZ = bx - ax, by - ay, bz - az
+	local supportState = GetBlockState( ax, ay, az )
+	if MC.RedstoneSignalFromState( supportState, ax, ay, az, towardX, towardY, towardZ ) > 0 then return false end
+	return conductorSignal( supportState, ax, ay, az, towardX, towardY, towardZ ) <= 0
 end
 
 local function torchNeighborUpdate( context )
@@ -617,6 +782,11 @@ function MC.RedstoneDiagnostics()
 	for _ in pairs( SignalEmitters ) do emitterCount = emitterCount + 1 end
 	return {
 		emitters = emitterCount,
+		wireSettlements = WireStats.settlements,
+		wireScanned = WireStats.wiresScanned,
+		wireChanged = WireStats.wiresChanged,
+		wireRevisionSkips = WireStats.revisionSkips,
+		wireOversizedFallbacks = WireStats.oversizedFallbacks,
 		wireHandler = MC.BlockUpdateHandlerForName
 			and MC.BlockUpdateHandlerForName( "minecraft:redstone_wire" ) ~= nil or false,
 		leverHandler = MC.BlockByName and MC.BlockByName["minecraft:lever"]

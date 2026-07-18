@@ -228,8 +228,14 @@ local function retractCells( context )
 	return cells
 end
 
+-- Vanilla pistons never listen to the face they push into: dust there would
+-- both trigger the piston and be displaced by the head, retriggering forever.
 local function pistonPowered( context )
-	return MC.RedstoneBestNeighborSignal( context.bx, context.by, context.bz ) > 0
+	local offset = pistonOffset( context.stateId )
+	return MC.RedstoneBestNeighborSignal(
+		context.bx, context.by, context.bz,
+		context.bx + offset[1], context.by + offset[2], context.bz + offset[3]
+	) > 0
 end
 
 local pistonHandler = {

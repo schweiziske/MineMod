@@ -396,6 +396,14 @@ local function applyReturnedUpdates( result, entry )
 	end
 end
 
+local function applyAfterTransaction( result, transaction )
+	if type( result ) ~= "table" or type( result.afterTransaction ) ~= "function" then return end
+	local ok, callbackError = xpcall( function()
+		result.afterTransaction( result.afterTransactionData, transaction )
+	end, debug.traceback )
+	if not ok then reportHandlerError( callbackError ) end
+end
+
 local function processEntry( entry )
 	local stateId = MC.GetBlockState( entry.bx, entry.by, entry.bz )
 	if entry.expectedStateId ~= nil and stateId ~= entry.expectedStateId then
@@ -432,8 +440,9 @@ local function processEntry( entry )
 		Stats.droppedResultCells = Stats.droppedResultCells + cellCount
 		return 0
 	end
+	local transaction
 	if cellCount > 0 then
-		local transaction = SV.ApplyBlockTransaction( cells, {
+		transaction = SV.ApplyBlockTransaction( cells, {
 			actor = nil,
 			fx = false,
 			netMode = "bulk",
@@ -447,6 +456,7 @@ local function processEntry( entry )
 		end
 		Stats.changedCells = Stats.changedCells + ( transaction.changed or 0 )
 	end
+	applyAfterTransaction( result, transaction )
 	applyReturnedUpdates( result, entry )
 	applyReturnedSchedules( result, entry )
 	return cellCount
@@ -491,6 +501,7 @@ function SV.ClearBlockUpdates( resetStats )
 	ScheduledHeap = {}
 	ScheduledByKind = {}
 	ScheduledCount = 0
+	if MC.ClearRedstoneWireRuntime then MC.ClearRedstoneWireRuntime() end
 	if SV.ClearRedstoneRuntime then SV.ClearRedstoneRuntime() end
 	if resetStats == true then
 		for key in pairs( Stats ) do Stats[key] = 0 end
