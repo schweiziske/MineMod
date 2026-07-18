@@ -151,7 +151,15 @@ if SERVER then
 	MC.Config.ServerCollisionLookaheadMax = GetConVar( "mc_server_collision_lookahead_max" ) or CreateConVar( "mc_server_collision_lookahead_max", tostring( MC.Config.ServerCollisionLookaheadMax ), F, "Maximum chunk radius reached by velocity lookahead collision interest" )
 	MC.Config.BulkCollisionChunksPerInterval = GetConVar( "mc_bulk_collision_chunks_per_interval" ) or CreateConVar( "mc_bulk_collision_chunks_per_interval", tostring( MC.Config.BulkCollisionChunksPerInterval ), F, "Server collision chunks rebuilt per interval for explosion/preset edits" )
 	MC.Config.BulkCollisionInterval = GetConVar( "mc_bulk_collision_interval" ) or CreateConVar( "mc_bulk_collision_interval", tostring( MC.Config.BulkCollisionInterval ), F, "Seconds between server collision rebuild batches for explosion/preset edits" )
-	MC.Config.BlockUpdatesEnabled = GetConVar( "mc_block_updates_enabled" ) or CreateConVar( "mc_block_updates_enabled", "0", F, "Enable queued neighbor updates and scheduled block ticks" )
+	MC.Config.BlockUpdatesEnabled = GetConVar( "mc_block_updates_enabled" ) or CreateConVar( "mc_block_updates_enabled", "1", F, "Enable queued neighbor updates and scheduled block ticks" )
+	-- Hot-reloading from the pre-redstone build keeps the already-created ConVar's
+	-- old internal default of 0. Migrate only that legacy instance; a ConVar
+	-- created by the new build has default 1 and remains under administrator control.
+	if MC.Config.BlockUpdatesEnabled.GetDefault
+	and MC.Config.BlockUpdatesEnabled:GetDefault() == "0"
+	and not MC.Config.BlockUpdatesEnabled:GetBool() then
+		MC.Config.BlockUpdatesEnabled:SetBool( true )
+	end
 	MC.Config.BlockDamage = GetConVar( "mc_block_damage" ) or CreateConVar( "mc_block_damage", "1", F, "Allow GMod damage to break MC blocks" )
 	MC.Config.BlockHealthScale = GetConVar( "mc_block_health_scale" ) or CreateConVar( "mc_block_health_scale", "20", F, "Block health multiplier applied to Minecraft hardness" )
 	MC.Config.BlockDamageDecay = GetConVar( "mc_block_damage_decay" ) or CreateConVar( "mc_block_damage_decay", "5", F, "Seconds before partial block damage is forgotten" )

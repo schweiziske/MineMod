@@ -427,7 +427,7 @@ local function rayIntersectBox( startPos, dir, minX, minY, minZ, maxX, maxY, max
 end
 
 local function traceBlockBoxes( startPos, dir, maxDist, bx, by, bz, id, orient, stateId, fallbackDist, fallbackNormal )
-	local boxes = CLIENT and stateId ~= nil and MC.BlockSelectionBoxesForState
+	local boxes = stateId ~= nil and MC.BlockSelectionBoxesForState
 		and MC.BlockSelectionBoxesForState( stateId, bx, by, bz ) or nil
 	if boxes == nil and stateId ~= nil and MC.BlockBoxesForState then
 		boxes = MC.BlockBoxesForState( stateId, bx, by, bz )
@@ -438,7 +438,12 @@ local function traceBlockBoxes( startPos, dir, maxDist, bx, by, bz, id, orient, 
 		end
 		boxes = MC.BlockBoxes and MC.BlockBoxes( id, orient, bx, by, bz ) or nil
 	end
-	if not boxes then return nil end
+	-- Both realms load the same compact model catalog and exact state selection
+	-- boxes. This fallback is only for custom/technical blocks which genuinely
+	-- have no authored collision, model, or selection geometry in either realm.
+	if not boxes or boxes[1] == nil then
+		return { dist = fallbackDist, normal = fallbackNormal }
+	end
 
 	local base = MC.CellWorldMin( bx, by, bz )
 	local bestDist, bestNormal

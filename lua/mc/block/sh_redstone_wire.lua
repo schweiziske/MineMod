@@ -43,7 +43,11 @@ end
 
 local function connectionValue( changes, changeCount, bx, by, bz, direction )
 	local nx, ny = bx + direction.dx, by + direction.dy
-	if MC.IsRedstoneWireState( plannedState( changes, changeCount, nx, ny, bz ) ) then return "side" end
+	local neighbourState = plannedState( changes, changeCount, nx, ny, bz )
+	if MC.RedstoneWireConnectsToState
+	and MC.RedstoneWireConnectsToState( neighbourState, direction.name ) then
+		return "side"
+	end
 
 	local neighbourSolid = fullCubeAt( changes, changeCount, nx, ny, bz )
 	if neighbourSolid and not fullCubeAt( changes, changeCount, bx, by, bz + 1 )

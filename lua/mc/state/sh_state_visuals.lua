@@ -240,8 +240,12 @@ function MC.ResolveBlockStateVisual( stateId, bx, by, bz )
 		local planId = MC.StateVisualPlanIdFast( stateId )
 		visual.generatedPlanId = planId
 		local projectedPlanId = projectedVisualPlanId( stateId, schema, visual.block, planId )
-		visual.generatedVisualOverride = projectedPlanId ~= planId
-			or MC.StateVisualPlanHasRandomChoice and MC.StateVisualPlanHasRandomChoice( planId ) == true
+		if visual.forceBaseRenderer == true then
+			visual.generatedVisualOverride = false
+		else
+			visual.generatedVisualOverride = visual.forceGeneratedVisual == true or projectedPlanId ~= planId
+				or MC.StateVisualPlanHasRandomChoice and MC.StateVisualPlanHasRandomChoice( planId ) == true
+		end
 	end
 	if not positionDependent and visual.cacheable ~= false then BlockStateVisualCache[stateId] = visual end
 	return visual

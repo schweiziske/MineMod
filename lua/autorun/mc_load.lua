@@ -51,6 +51,7 @@ local SHARED = {
 	"mc/block_entity/sh_registry.lua",
 	"mc/block/sh_stairs.lua",
 	"mc/block/sh_torch_placement.lua",
+	"mc/block/sh_face_attached_placement.lua",
 	"mc/block/sh_redstone_wire.lua",
 	"mc/block/sh_connections.lua",
 	"mc/block/sh_rails.lua",
@@ -58,7 +59,13 @@ local SHARED = {
 	"mc/sh_presets.lua",
 	"mc/sh_player.lua",
 	"mc/state/sh_section.lua",
+	"mc/state/cl_state_visual_catalog.lua",
+	"mc/state/cl_state_selection_boxes.lua",
 	"mc/sh_voxel.lua",
+	"mc/redstone/sh_redstone.lua",
+	"mc/redstone/sh_logic.lua",
+	"mc/redstone/sh_devices.lua",
+	"mc/redstone/sh_piston.lua",
 	"mc/sh_multiblock.lua",
 }
 local SERVER_FILES = {
@@ -68,6 +75,7 @@ local SERVER_FILES = {
 	"mc/state/sv_network_transport.lua",
 	"mc/state/sv_block_transaction.lua",
 	"mc/block_update/sv_scheduler.lua",
+	"mc/redstone/sv_inputs.lua",
 	"mc/liquid/sv_world_collision.lua",
 	"mc/liquid/sv_water_state.lua",
 	"mc/liquid/sv_water_spread.lua",
@@ -87,8 +95,6 @@ local SERVER_FILES = {
 	"mc/sv_player.lua",
 }
 local CLIENT_FILES = {
-	"mc/state/cl_state_visual_catalog.lua",
-	"mc/state/cl_state_selection_boxes.lua",
 	"mc/cl_lighting.lua",
 	"mc/render/cl_mesh_cache.lua",
 	"mc/render/cl_mesh_constants.lua",

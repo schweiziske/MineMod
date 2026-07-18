@@ -101,9 +101,11 @@ end
 function SV.BuildStateSaveData( slotName, options )
 	local chunks, palette, paletteIndex = {}, {}, {}
 	local specByStateId = {}
+	local blockCount = 0
 	for _, chunk in ipairs( orderedWorldChunks() ) do
 		local cells = {}
 		local encodeError
+		local chunkBlockCount = 0
 		MC.ForEachBlockState( chunk, function( _, _, _, lx, ly, lz, stateId )
 			if encodeError then return end
 			local spec = specByStateId[stateId]
@@ -125,8 +127,15 @@ function SV.BuildStateSaveData( slotName, options )
 			local li = lx + ly * MC.CS + lz * MC.CS * MC.CS
 			cells[#cells + 1] = li
 			cells[#cells + 1] = paletteId
+			chunkBlockCount = chunkBlockCount + 1
 		end )
 		if encodeError then return nil, nil, "state_encode_failed:" .. tostring( encodeError ) end
+		local storedChunkCount = math.max( 0, math.floor( tonumber( chunk.count ) or 0 ) )
+		if chunkBlockCount ~= storedChunkCount then
+			return nil, nil, "chunk_count_mismatch:" .. tostring( chunk.key or "?")
+				.. ":" .. tostring( storedChunkCount ) .. ":" .. tostring( chunkBlockCount )
+		end
+		blockCount = blockCount + chunkBlockCount
 		local blockEntities, blockEntityError = encodeBlockEntities( chunk, options )
 		if blockEntityError then return nil, nil, "block_entity_encode_failed:" .. tostring( blockEntityError ) end
 		local opaqueBlockEntities, opaqueError = encodeOpaqueBlockEntities( chunk, options )
@@ -142,10 +151,36 @@ function SV.BuildStateSaveData( slotName, options )
 		map = game.GetMap(),
 		slotName = slotName,
 		savedAt = os.time(),
+		blockCount = blockCount,
 		bs = MC.BS,
 		cs = MC.CS,
 		h = MC.CH,
 		p = palette,
 		chunks = chunks,
 	}, chunks
+end
+
+-- Verify the actual bytes written to disk. Re-counting sparse cells after a
+-- JSON round-trip is not a valid integrity check: util.JSONToTable may return
+-- numerically keyed tables in a different shape even though the compressed
+-- payload is byte-for-byte correct and loadable. The encoded JSON is already
+-- canonical for this save operation, so exact decompression equality is the
+-- strongest write/truncation check available.
+function SV.VerifyStateSavePayload( raw, expectedJSON, expectedBlocks, expectedChunks )
+	if not isstring( raw ) or raw == "" then return false, "save_verify_read_failed" end
+	local decoded = util.Decompress( raw )
+	if not isstring( decoded ) then return false, "save_verify_decompress_failed" end
+	if decoded ~= expectedJSON then return false, "save_verify_payload_mismatch" end
+
+	local data = util.JSONToTable( decoded )
+	if not istable( data ) then return false, "save_verify_json_failed" end
+	local formatVersion = math.floor( tonumber( data.formatVersion or data.v ) or -1 )
+	if formatVersion ~= 10 then return false, "save_verify_version_mismatch" end
+	if math.floor( tonumber( data.blockCount ) or -1 ) ~= expectedBlocks then
+		return false, "save_verify_block_count_mismatch"
+	end
+	if not istable( data.chunks ) or #data.chunks ~= expectedChunks then
+		return false, "save_verify_chunk_count_mismatch"
+	end
+	return true, data
 end

@@ -141,6 +141,7 @@ function MC.BuildPlacementStatePlan( bx, by, bz, stateId )
 	if stateId <= 0 or not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return nil end
 	local id = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or nil
 	if id == nil or not MC.IsValidBlock or not MC.IsValidBlock( id ) then return nil end
+	if MC.FaceAttachedCanSurvive and not MC.FaceAttachedCanSurvive( bx, by, bz, stateId ) then return nil end
 	local cells = {}
 	local seen = {}
 
@@ -202,6 +203,12 @@ function MC.BuildBreakPlan( bx, by, bz )
 	local cells = {}
 	local seen = {}
 	addCell( cells, seen, bx, by, bz, 0, 0 )
+	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or nil
+	local pistonX, pistonY, pistonZ
+	if MC.PistonBreakPartner then
+		pistonX, pistonY, pistonZ = MC.PistonBreakPartner( bx, by, bz, stateId )
+	end
+	if pistonX ~= nil then addCell( cells, seen, pistonX, pistonY, pistonZ, 0, 0 ) end
 
 	if MC.IsDoorBlock( id ) then
 		local facing = MC.DoorOrientFacing( orient )

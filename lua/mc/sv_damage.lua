@@ -382,6 +382,25 @@ function SV.HandleChunkTraceDamage( ent, dmg, dir, tr )
 	if dmg:IsDamageType( DMG_BLAST ) then return false end
 	local bx, by, bz = cellFromTrace( tr, dir )
 	if not bx then return false end
+	local targetState = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
+	local targetSchema = MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( targetState ) or nil
+	if targetSchema and targetSchema.name == "minecraft:lightning_rod"
+	and dmg:IsDamageType( DMG_SHOCK ) and SV.PulseLightningRod then
+		SV.PulseLightningRod( bx, by, bz, 8 )
+		return true, "lightning_rod_pulse"
+	end
+	if targetSchema and targetSchema.name == "minecraft:target" and SV.PulseRedstoneTarget then
+		local center = MC.CellWorldCenter( bx, by, bz )
+		local normal = tr.HitNormal or Vector( 0, 0, 1 )
+		local delta = tr.HitPos - center
+		local planarDistance
+		if math.abs( normal.x ) > 0.5 then planarDistance = math.sqrt( delta.y * delta.y + delta.z * delta.z )
+		elseif math.abs( normal.y ) > 0.5 then planarDistance = math.sqrt( delta.x * delta.x + delta.z * delta.z )
+		else planarDistance = math.sqrt( delta.x * delta.x + delta.y * delta.y ) end
+		local strength = math.max( 1, math.ceil( 15 * ( 1 - math.min( 1, planarDistance / ( MC.BS * 0.70710678 ) ) ) ) )
+		SV.PulseRedstoneTarget( bx, by, bz, strength, 20 )
+		return true, "target_pulse", strength
+	end
 	local sig = damageSignature( bx, by, bz, dmg )
 	SV.RecentTraceDamage[sig] = CurTime() + 0.08
 	return SV.ApplyBlockDamage( bx, by, bz, dmg:GetDamage(), {

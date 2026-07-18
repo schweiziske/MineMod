@@ -62,17 +62,17 @@ local function placeTarget( ply, aim, tr, id, avoidUseBlocks )
 
 	tr.MCBlockX, tr.MCBlockY, tr.MCBlockZ = bx, by, bz
 	local orient = MC.OrientForPlacement( ply, tr, id )
-	local placeId = id
-	if MC.ResolveTorchPlacementState and MC.StateFromLegacy then
-		local stateId = MC.StateFromLegacy( id, orient )
-		local resolvedState = stateId and MC.ResolveTorchPlacementState( stateId, tr.HitNormal ) or nil
-		if stateId and not resolvedState then return nil end
-		if resolvedState then
-			placeId, orient = MC.LegacyFromState( resolvedState )
-			if placeId == nil then return nil end
-		end
+	local stateId = MC.StateFromLegacy and MC.StateFromLegacy( id, orient ) or nil
+	if not stateId then return nil end
+	if MC.ResolveTorchPlacementState then
+		stateId = MC.ResolveTorchPlacementState( stateId, tr.HitNormal )
+		if not stateId then return nil end
 	end
-	return bx, by, bz, placeId, orient
+	if MC.ResolveFaceAttachedPlacementState then
+		stateId = MC.ResolveFaceAttachedPlacementState( stateId, tr.HitNormal, ply )
+		if not stateId then return nil end
+	end
+	return bx, by, bz, stateId
 end
 
 local function breakTarget( aim, tr )
@@ -112,10 +112,10 @@ function TOOL:RightClick( tr )
 	if CLIENT then
 		if game.SinglePlayer() then return true end
 		if not IsFirstTimePredicted() or ply ~= LocalPlayer() then return true end
-		local bx, by, bz, placeId, orient = placeTarget( ply, aim, tr, id, true )
-		local plan = bx and MC.BuildPlacementPlan and MC.BuildPlacementPlan( bx, by, bz, placeId, orient )
-		if plan and MC.CanPreviewPlacePlan and MC.CanPreviewPlacePlan( ply, plan ) and MC.PredictSetBlock then
-			MC.PredictSetBlock( bx, by, bz, placeId, orient )
+		local bx, by, bz, stateId = placeTarget( ply, aim, tr, id, true )
+		local plan = bx and MC.BuildPlacementStatePlan and MC.BuildPlacementStatePlan( bx, by, bz, stateId )
+		if plan and MC.CanPreviewPlacePlan and MC.CanPreviewPlacePlan( ply, plan ) and MC.PredictSetBlockState then
+			MC.PredictSetBlockState( bx, by, bz, stateId )
 		end
 		return true
 	end
@@ -128,9 +128,9 @@ function TOOL:RightClick( tr )
 	end
 	if MC.SV.Use( ply, ux, uy, uz ) then return true end
 
-	local bx, by, bz, placeId, orient = placeTarget( ply, aim, tr, id )
-	if bx and not MC.SV.Place( ply, bx, by, bz, placeId, orient ) and MC.SV.SyncPlacementPlan then
-		MC.SV.SyncPlacementPlan( ply, bx, by, bz, placeId, orient )
+	local bx, by, bz, stateId = placeTarget( ply, aim, tr, id )
+	if bx and not MC.SV.PlaceState( ply, bx, by, bz, stateId ) and MC.SV.SyncPlacementStatePlan then
+		MC.SV.SyncPlacementStatePlan( ply, bx, by, bz, stateId )
 	end
 	return true
 end
