@@ -899,15 +899,17 @@ function MC.SetCreativeHotbarSlotState( slot, id, orient, noCommand )
 	return MC.SetCreativeHotbarSlotStateID( slot, id, stateId, noCommand )
 end
 
-function MC.PickCreativeHotbarBlock( ply )
+function MC.PickCreativeHotbarBlock( ply, includeState )
 	ply = ply or LocalPlayer()
 	if not IsValid( ply ) or not MC.PlayerBlockAim then return false end
 	local hit = MC.PlayerBlockAim( ply )
 	local id = hit and normalizeHotbarID( hit.Block )
 	if not id then return false end
+	if includeState ~= true then
+		return MC.SetCreativeHotbarSlot( MC.GetCreativeHotbarSelectedSlot(), id )
+	end
 	local stateId = hit.StateId or ( MC.StateFromLegacy and MC.StateFromLegacy( id, hit.Orient ) )
-	local ok = stateId and MC.SetCreativeHotbarSlotStateID( MC.GetCreativeHotbarSelectedSlot(), id, stateId )
-	return ok
+	return stateId and MC.SetCreativeHotbarSlotStateID( MC.GetCreativeHotbarSelectedSlot(), id, stateId ) or false
 end
 
 function MC.DrawCreativeHotbar( cx, y, opts )
@@ -967,11 +969,16 @@ local function textEntryHasFocus()
 end
 
 local lastCreativePickAt = 0
+local function creativePickIncludesState()
+	if not input or not input.IsKeyDown then return false end
+	return input.IsKeyDown( KEY_LSHIFT ) or input.IsKeyDown( KEY_RSHIFT )
+end
+
 local function pickCreativeHotbarBlockDebounced( ply )
 	local now = CurTime()
 	if now - lastCreativePickAt < 0.08 then return true end
 	lastCreativePickAt = now
-	return MC.PickCreativeHotbarBlock( ply )
+	return MC.PickCreativeHotbarBlock( ply, creativePickIncludesState() )
 end
 
 hook.Remove( "PlayerBindPress", "mc_creative_hotbar_binds" )
@@ -1129,27 +1136,29 @@ local CREATIVE_UI = {
 	textDim = Color( 165, 174, 188, 220 ),
 }
 
-local function paintCreativeButtonSurface( s, w, h, label )
+local function paintCreativeButtonSurface( s, w, h, label, selected )
 	local enabled = s:IsEnabled()
-	local bg = enabled and CREATIVE_UI.control or CREATIVE_UI.controlDisabled
-	if enabled and s:IsDown() then
+	local bg = selected and Color( 76, 82, 70, 255 ) or ( enabled and CREATIVE_UI.control or CREATIVE_UI.controlDisabled )
+	if enabled and not selected and s:IsDown() then
 		bg = CREATIVE_UI.controlDown
-	elseif enabled and s:IsHovered() then
+	elseif enabled and not selected and s:IsHovered() then
 		bg = CREATIVE_UI.controlHover
 	end
 
 	draw.RoundedBox( 3, 0, 0, w, h, bg )
-	draw.RoundedBox( 2, 3, 3, w - 6, h - 6, Color( 20, 22, 26, enabled and 210 or 120 ) )
-	surface.SetDrawColor( enabled and Color( 120, 130, 148, 160 ) or Color( 70, 75, 84, 120 ) )
+	draw.RoundedBox( 2, 3, 3, w - 6, h - 6, selected and Color( 37, 41, 35, 235 ) or Color( 20, 22, 26, enabled and 210 or 120 ) )
+	surface.SetDrawColor( selected and CREATIVE_UI.accent or ( enabled and Color( 120, 130, 148, 160 ) or Color( 70, 75, 84, 120 ) ) )
 	surface.DrawOutlinedRect( 0, 0, w, h, 1 )
-	draw.SimpleText( label or "", "mc_hud_small", w * 0.5, h * 0.5, enabled and CREATIVE_UI.text or CREATIVE_UI.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+	draw.SimpleText( label or "", "mc_hud_small", w * 0.5, h * 0.5, selected and CREATIVE_UI.accent or ( enabled and CREATIVE_UI.text or CREATIVE_UI.textDim ), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
 end
 
-function MC.StyleCreativePagerButton( btn, label )
+function MC.StyleCreativePagerButton( btn, label, isSelected )
 	if not IsValid( btn ) then return end
 	btn:SetText( "" )
 	btn.Paint = function( s, w, h )
-		paintCreativeButtonSurface( s, w, h, label )
+		local selected = type( isSelected ) == "function" and isSelected( s ) == true or isSelected == true
+		local text = type( label ) == "function" and label( selected, s ) or label
+		paintCreativeButtonSurface( s, w, h, text, selected )
 	end
 end
 
@@ -1245,7 +1254,8 @@ end
 function MC.OpenCreativeStatePicker( id, onSelect, parent, selectedStateId )
 	local b, schema = creativeBlockStateSchema( id )
 	if not b or not schema or type( schema.properties ) ~= "table" or #schema.properties == 0 then return false end
-	if not selectedStateId or not MC.IsValidBlockState( selectedStateId ) or MC.BlockTypeForState( selectedStateId ) ~= id then
+	local automaticSelected = not selectedStateId or not MC.IsValidBlockState( selectedStateId ) or MC.BlockTypeForState( selectedStateId ) ~= id
+	if automaticSelected then
 		selectedStateId = schema.defaultStateId
 	end
 	if IsValid( MC.CreativeStateFrame ) then MC.CreativeStateFrame:Remove() end
@@ -1308,8 +1318,15 @@ function MC.OpenCreativeStatePicker( id, onSelect, parent, selectedStateId )
 	automatic:Dock( TOP )
 	automatic:DockMargin( 8, 0, 8, 6 )
 	automatic:SetTall( 34 )
-	MC.StyleCreativePagerButton( automatic, L( "creative.state.auto", "自动放置" ) )
+	local automaticLabel = L( "creative.state.auto", "自动放置" )
+	local selectedLabel = L( "creative.state.selected", "已选中" )
+	MC.StyleCreativePagerButton( automatic, function( selected )
+		return selected and ( automaticLabel .. "  ·  " .. selectedLabel ) or automaticLabel
+	end, function()
+		return automaticSelected
+	end )
 	automatic.DoClick = function()
+		automaticSelected = true
 		onSelect( id, nil )
 	end
 
@@ -1319,6 +1336,7 @@ function MC.OpenCreativeStatePicker( id, onSelect, parent, selectedStateId )
 	explicitDefault:SetTall( 30 )
 	MC.StyleCreativePagerButton( explicitDefault, L( "creative.state.explicit_default", "显式默认状态" ) )
 	explicitDefault.DoClick = function()
+		automaticSelected = false
 		selectedStateId = schema.defaultStateId
 		onSelect( id, selectedStateId )
 		refreshPropertyControls()
@@ -1365,6 +1383,7 @@ function MC.OpenCreativeStatePicker( id, onSelect, parent, selectedStateId )
 			local value = data ~= nil and data or text
 			local nextState = MC.StateWith( selectedStateId, property.name, value )
 			if not nextState then return end
+			automaticSelected = false
 			selectedStateId = nextState
 			onSelect( id, selectedStateId )
 			refreshPropertyControls()

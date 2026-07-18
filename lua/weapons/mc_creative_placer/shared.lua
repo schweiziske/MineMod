@@ -128,12 +128,13 @@ local function placeTarget( ply, aim, fallbackTrace, id, avoidUseBlocks )
 	if stateId and MC.ResolveTorchPlacementState then
 		stateId = MC.ResolveTorchPlacementState( stateId, tr.HitNormal )
 		if not stateId then return nil end
-		local placedId, placedOrient = MC.LegacyFromState( stateId )
-		if placedId == nil then return nil end
-		id, orient = placedId, placedOrient or 0
+	end
+	if stateId and MC.ResolveFaceAttachedPlacementState then
+		stateId = MC.ResolveFaceAttachedPlacementState( stateId, tr.HitNormal, ply )
+		if not stateId then return nil end
 	end
 	if not stateId then return nil end
-	return bx, by, bz, stateId, orient
+	return bx, by, bz, stateId
 end
 
 local function breakTarget( ply, aim, fallbackTrace )
@@ -667,7 +668,7 @@ if CLIENT then
 		if MC.DrawCreativeHotbar then
 			MC.DrawCreativeHotbar( sw * 0.5, hotbarY, { slotSize = slotSize } )
 		end
-		draw.SimpleText( L( "weapon.mc_creative_placer.hud", "左键破坏    右键放置    中键取块    Reload 创造物品栏    按 Tab 切出" ), "mc_hud_small", sw * 0.5, sh - 10, Color( 255, 255, 255, 190 ), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+		draw.SimpleText( L( "weapon.mc_creative_placer.hud", "左键破坏    右键放置    中键取块(自动)    Shift+中键取数据    Reload 创造栏    Tab 切出" ), "mc_hud_small", sw * 0.5, sh - 10, Color( 255, 255, 255, 190 ), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
 
 		surface.SetDrawColor( 255, 255, 255, 220 )
 		surface.DrawRect( sw * 0.5 - 1, sh * 0.5 - 1, 2, 2 )

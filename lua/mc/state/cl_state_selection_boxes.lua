@@ -1,4 +1,4 @@
--- State-native selection boxes for client aiming and outlines.
+-- Shared state-native selection boxes for authoritative aiming and outlines.
 --
 -- Prefer authored state collision boxes for solid shapes (stairs, doors,
 -- fences, walls, slabs), then derive bounds from the exact compact visual-plan

@@ -1009,6 +1009,7 @@ local function commitWorldLoadStage( previous )
 			SV.MarkPhysDirty( chunk.key )
 		end
 	end
+	if SV.RebuildRedstoneRuntime then SV.RebuildRedstoneRuntime() end
 end
 
 local function resyncAllClients()
@@ -1825,6 +1826,18 @@ local function savedBlockCount( data )
 	return #data.chunks, blocks
 end
 
+local function reconcileBuiltBlockCount( data, context )
+	local expectedBlocks = math.floor( tonumber( data and data.blockCount ) or -1 )
+	if expectedBlocks < 0 then return nil, "save_missing_block_count" end
+	if SV.BlockCount ~= expectedBlocks then
+		local message = "[MC] repaired stale block count before " .. tostring( context or "save" ) .. ": "
+			.. tostring( SV.BlockCount ) .. " -> " .. tostring( expectedBlocks ) .. "\n"
+		if ErrorNoHalt then ErrorNoHalt( message ) else print( message ) end
+		SV.BlockCount = expectedBlocks
+	end
+	return expectedBlocks
+end
+
 local function buildSaveData( slotName )
 	if not SV.BuildStateSaveData then return nil, nil, "state_save_codec_unavailable" end
 	return SV.BuildStateSaveData( slotName )
@@ -1864,6 +1877,11 @@ function SV.BeginSnapshotSync( ply )
 		sendSnapshotError( ply, buildError or "snapshot_encode_failed" )
 		return false
 	end
+	local snapshotBlocks, countError = reconcileBuiltBlockCount( data, "snapshot" )
+	if not snapshotBlocks then
+		sendSnapshotError( ply, countError or "snapshot_count_failed" )
+		return false
+	end
 	local json = util.TableToJSON( data )
 	if not json or json == "" then
 		sendSnapshotError( ply, "snapshot_json_failed" )
@@ -1890,7 +1908,7 @@ function SV.BeginSnapshotSync( ply )
 	SV.SnapshotQueue[ply] = nil
 	SV.ClearReliableNet( ply )
 
-	sendSnapshotBegin( ply, token, nil, parts, #compressed, #chunks, SV.BlockCount )
+	sendSnapshotBegin( ply, token, nil, parts, #compressed, #chunks, snapshotBlocks )
 	for part = 1, parts do
 		local partIndex = part
 		local offset = ( partIndex - 1 ) * partBytes + 1
@@ -1956,8 +1974,14 @@ net.Receive( "mc_snapshot_ack", function( _, ply )
 	end
 end )
 
+-- file.Write silently rejects non-whitelisted extensions, so save working files
+-- must never use a .tmp/.bak suffix: stage them on whitelisted siblings.
+local function savePathSibling( path, suffix )
+	return string.gsub( tostring( path or "" ), "%.[^/%.]*$", "" ) .. suffix
+end
+
 local function overlaySavePath( path )
-	return string.gsub( tostring( path or "" ), "%.[^/%.]*$", "" ) .. "_edits.dat"
+	return savePathSibling( path, "_edits.dat" )
 end
 
 function SV.SaveToPath( path, slotName )
@@ -1983,22 +2007,25 @@ function SV.SaveToPath( path, slotName )
 
 	local data, chunks, buildError = buildSaveData( slotName )
 	if not data then return finishSave( false, buildError or "save_encode_failed" ) end
+	local expectedBlocks, countError = reconcileBuiltBlockCount( data, "save" )
+	if not expectedBlocks then return finishSave( false, countError or "save_count_failed" ) end
 	local json = util.TableToJSON( data )
 	if not json then return finishSave( false, "save_json_failed" ) end
 	ensureSaveDir()
 	local compressed = util.Compress( json )
 	if not compressed then return finishSave( false, "save_compress_failed" ) end
-	local tempPath = path .. ".tmp"
+	local tempPath = savePathSibling( path, "_tmp.txt" )
 	file.Write( tempPath, compressed )
 	local verifyRaw = file.Read( tempPath, "DATA" )
-	local verifyJSON = verifyRaw and util.Decompress( verifyRaw )
-	local verifyData = verifyJSON and util.JSONToTable( verifyJSON )
-	local verifyChunks, verifyBlocks = savedBlockCount( verifyData )
-	if verifyBlocks ~= SV.BlockCount or verifyChunks ~= #chunks then
-		file.Delete( tempPath )
-		return finishSave( false, "save_verify_mismatch" )
+	local verified, verifyError
+	if SV.VerifyStateSavePayload then
+		verified, verifyError = SV.VerifyStateSavePayload( verifyRaw, json, expectedBlocks, #chunks )
 	end
-	local backupPath = path .. ".bak"
+	if verified ~= true then
+		file.Delete( tempPath )
+		return finishSave( false, verifyError or "save_verify_unavailable" )
+	end
+	local backupPath = savePathSibling( path, "_bak.txt" )
 	if file.Exists( backupPath, "DATA" ) then file.Delete( backupPath ) end
 	if file.Exists( path, "DATA" ) then
 		file.Rename( path, backupPath )
@@ -2014,9 +2041,9 @@ function SV.SaveToPath( path, slotName )
 		return finishSave( false, "save_commit_failed" )
 	end
 	if file.Exists( backupPath, "DATA" ) then file.Delete( backupPath ) end
-	MsgN( "[MC] saved " .. #chunks .. " chunks / " .. SV.BlockCount .. " blocks" ..
+	MsgN( "[MC] saved " .. #chunks .. " chunks / " .. expectedBlocks .. " blocks" ..
 		( slotName and ( " as \"" .. slotName .. "\" on map " .. game.GetMap() ) or "" ) )
-	return finishSave( true, path, data, #chunks, SV.BlockCount )
+	return finishSave( true, path, data, #chunks, expectedBlocks )
 end
 
 function SV.Save( slotName )

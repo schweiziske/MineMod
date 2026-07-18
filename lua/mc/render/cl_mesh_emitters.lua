@@ -1054,7 +1054,8 @@ local function emitStatePlanBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy,
 		if template then
 			emitModelBlockTemplate(
 				ctx, template, id, bx, by, bz, wx, wy, wz, lx, ly, lz, li,
-				ctx.push, ctx.lightMetaFast, ctx.currentEmitLightStyle, true
+				ctx.push, ctx.lightMetaFast, ctx.currentEmitLightStyle,
+				not ( ctx.currentVisual and ctx.currentVisual.cullGeneratedFaces == false )
 			)
 			rendered = true
 		end

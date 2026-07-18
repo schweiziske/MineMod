@@ -1,4 +1,4 @@
--- Compact Minecraft blockstate visual catalog accessors.
+-- Shared compact Minecraft blockstate visual catalog accessors.
 --
 -- The generated source stores binary strings instead of tens of thousands of
 -- Lua geometry/state tables. Geometry and material tables are decoded lazily
@@ -111,6 +111,8 @@ end
 local GeometryCache = {}
 local SurfaceCache = {}
 local ModelDataCache = {}
+local ModelTransformById = {}
+local TransformedModelDataCache = {}
 local RandomPlanCache = {}
 
 function MC.StateVisualPlanHasRandomChoice( planId )
@@ -193,30 +195,49 @@ end
 function MC.StateVisualModelData( modelId )
 	modelId = floor( tonumber( modelId ) or -1 )
 	if modelId < 1 or modelId > Catalog.modelInstanceCount then return nil end
+	local transform = ModelTransformById[modelId]
+	if transform then
+		local transformed = TransformedModelDataCache[modelId]
+		if transformed then return transformed end
+	end
 	local mapOffset = ( modelId - 1 ) * 4 + 1
 	local geometryId = u16( Catalog.modelMap, mapOffset )
 	local surfaceId = u16( Catalog.modelMap, mapOffset + 2 )
 	if geometryId == 0 or surfaceId == 0 then return nil end
 	local cacheKey = geometryId * 2048 + surfaceId
 	local cached = ModelDataCache[cacheKey]
-	if cached then return cached end
-	local geometry = decodeGeometry( geometryId )
-	cached = {
-		compact = true,
-		modelQuads = geometry.modelQuads,
-		modelSurfaces = decodeSurfaces( surfaceId ),
-		generatedStateVisual = true,
-		geometryId = geometryId,
-		surfaceId = surfaceId,
-	}
-	ModelDataCache[cacheKey] = cached
-	return cached
+	if not cached then
+		local geometry = decodeGeometry( geometryId )
+		cached = {
+			compact = true,
+			modelQuads = geometry.modelQuads,
+			modelSurfaces = decodeSurfaces( surfaceId ),
+			generatedStateVisual = true,
+			geometryId = geometryId,
+			surfaceId = surfaceId,
+		}
+		ModelDataCache[cacheKey] = cached
+	end
+	if not transform then return cached end
+	local transformed = transform( cached, modelId ) or cached
+	TransformedModelDataCache[modelId] = transformed
+	return transformed
+end
+
+function MC.RegisterStateVisualModelTransform( modelId, transform )
+	modelId = floor( tonumber( modelId ) or -1 )
+	if modelId < 1 or modelId > Catalog.modelInstanceCount then return nil, "invalid_model_id" end
+	if type( transform ) ~= "function" then return nil, "invalid_model_transform" end
+	ModelTransformById[modelId] = transform
+	TransformedModelDataCache[modelId] = nil
+	return transform
 end
 
 function MC.ClearDecodedStateVisualModels()
 	GeometryCache = {}
 	SurfaceCache = {}
 	ModelDataCache = {}
+	TransformedModelDataCache = {}
 	RandomPlanCache = {}
 end
 

@@ -77,17 +77,17 @@ local function placeTarget( ply, aim, fallbackTrace, id, avoidUseBlocks )
 
 	tr.MCBlockX, tr.MCBlockY, tr.MCBlockZ = bx, by, bz
 	local orient = MC.OrientForPlacement( ply, tr, id )
-	local placeId = id
-	if MC.ResolveTorchPlacementState and MC.StateFromLegacy then
-		local stateId = MC.StateFromLegacy( id, orient )
-		local resolvedState = stateId and MC.ResolveTorchPlacementState( stateId, tr.HitNormal ) or nil
-		if stateId and not resolvedState then return nil end
-		if resolvedState then
-			placeId, orient = MC.LegacyFromState( resolvedState )
-			if placeId == nil then return nil end
-		end
+	local stateId = MC.StateFromLegacy and MC.StateFromLegacy( id, orient ) or nil
+	if not stateId then return nil end
+	if MC.ResolveTorchPlacementState then
+		stateId = MC.ResolveTorchPlacementState( stateId, tr.HitNormal )
+		if not stateId then return nil end
 	end
-	return bx, by, bz, placeId, orient
+	if MC.ResolveFaceAttachedPlacementState then
+		stateId = MC.ResolveFaceAttachedPlacementState( stateId, tr.HitNormal, ply )
+		if not stateId then return nil end
+	end
+	return bx, by, bz, stateId
 end
 
 local function breakTarget( ply, aim, fallbackTrace )
@@ -148,21 +148,21 @@ function SWEP:SecondaryAttack()
 		if MC.SV.Use( owner, ux, uy, uz ) then return end
 
 		local id = selectedID( owner )
-		local bx, by, bz, placeId, orient = placeTarget( owner, aim, tr, id )
+		local bx, by, bz, stateId = placeTarget( owner, aim, tr, id )
 		if not bx then return end
-		if MC.SV.Place( owner, bx, by, bz, placeId, orient ) then
+		if MC.SV.PlaceState( owner, bx, by, bz, stateId ) then
 			self:EmitSound( "buttons/button14.wav", 60, 150, 0.25 )
-		elseif MC.SV.SyncPlacementPlan then
-			MC.SV.SyncPlacementPlan( owner, bx, by, bz, placeId, orient )
+		elseif MC.SV.SyncPlacementStatePlan then
+			MC.SV.SyncPlacementStatePlan( owner, bx, by, bz, stateId )
 		elseif MC.SV.SyncCell then
 			MC.SV.SyncCell( owner, bx, by, bz ) -- undo the client's place prediction
 		end
 	elseif CLIENT and not game.SinglePlayer() and IsFirstTimePredicted() and owner == LocalPlayer() then
 		local id = selectedID( owner )
-		local bx, by, bz, placeId, orient = placeTarget( owner, aim, owner:GetEyeTrace(), id, true )
-		local plan = bx and MC.BuildPlacementPlan and MC.BuildPlacementPlan( bx, by, bz, placeId, orient )
-		if plan and MC.CanPreviewPlacePlan( owner, plan ) and MC.PredictSetBlock then
-			MC.PredictSetBlock( bx, by, bz, placeId, orient )
+		local bx, by, bz, stateId = placeTarget( owner, aim, owner:GetEyeTrace(), id, true )
+		local plan = bx and MC.BuildPlacementStatePlan and MC.BuildPlacementStatePlan( bx, by, bz, stateId )
+		if plan and MC.CanPreviewPlacePlan( owner, plan ) and MC.PredictSetBlockState then
+			MC.PredictSetBlockState( bx, by, bz, stateId )
 		end
 	end
 end

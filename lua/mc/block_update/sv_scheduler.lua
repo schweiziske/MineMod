@@ -93,7 +93,7 @@ local function combinedQueueCount()
 	return ReadyCount + ScheduledCount
 end
 
-local function enqueueReady( bx, by, bz, kind, depth, revision, expectedStateId, knownKey )
+local function enqueueReady( bx, by, bz, kind, depth, revision, expectedStateId, knownKey, sourceX, sourceY, sourceZ )
 	if not updatesEnabled() then return false, "block_updates_disabled" end
 	kind = math.floor( tonumber( kind ) or 0 )
 	if not MC.IsBlockUpdateKind or not MC.IsBlockUpdateKind( kind ) then return false, "invalid_update_kind" end
@@ -110,6 +110,11 @@ local function enqueueReady( bx, by, bz, kind, depth, revision, expectedStateId,
 	if existing then
 		if depth < existing.depth then existing.depth = depth end
 		if revision and ( not existing.revision or revision > existing.revision ) then existing.revision = revision end
+		if existing.sourceX == nil then
+			existing.sourceX, existing.sourceY, existing.sourceZ = sourceX, sourceY, sourceZ
+		elseif existing.sourceX ~= sourceX or existing.sourceY ~= sourceY or existing.sourceZ ~= sourceZ then
+			existing.sourceX, existing.sourceY, existing.sourceZ = false, false, false
+		end
 		Stats.deduplicated = Stats.deduplicated + 1
 		return false, "duplicate_update"
 	end
@@ -133,6 +138,7 @@ local function enqueueReady( bx, by, bz, kind, depth, revision, expectedStateId,
 		depth = depth,
 		revision = revision,
 		expectedStateId = expectedStateId,
+		sourceX = sourceX, sourceY = sourceY, sourceZ = sourceZ,
 	}
 	Ready[ReadyTail] = entry
 	byCell[key] = entry
@@ -234,11 +240,11 @@ local function promoteDueScheduled()
 	end
 end
 
-function SV.EnqueueBlockUpdate( bx, by, bz, kind, depth, revision )
+function SV.EnqueueBlockUpdate( bx, by, bz, kind, depth, revision, sourceX, sourceY, sourceZ )
 	bx = math.floor( tonumber( bx ) or 0 )
 	by = math.floor( tonumber( by ) or 0 )
 	bz = math.floor( tonumber( bz ) or 0 )
-	return enqueueReady( bx, by, bz, kind or Kind.NEIGHBOR, depth, revision )
+	return enqueueReady( bx, by, bz, kind or Kind.NEIGHBOR, depth, revision, nil, nil, sourceX, sourceY, sourceZ )
 end
 
 function SV.EnqueueTransactionNeighbours( changes, revision, depth )
@@ -246,23 +252,26 @@ function SV.EnqueueTransactionNeighbours( changes, revision, depth )
 	if not updatesEnabled() then return 0 end
 	if MC.HasBlockUpdateHandlers and not MC.HasBlockUpdateHandlers( Kind.NEIGHBOR ) then return 0 end
 	local added, seen = 0, {}
-	local function add( bx, by, bz )
+	local function add( bx, by, bz, sourceX, sourceY, sourceZ )
 		local key = MC.CellKey( bx, by, bz )
 		if seen[key] then return end
 		seen[key] = true
-		local ok = enqueueReady( bx, by, bz, Kind.NEIGHBOR, depth, revision, nil, key )
+		local ok = enqueueReady( bx, by, bz, Kind.NEIGHBOR, depth, revision, nil, key, sourceX, sourceY, sourceZ )
 		if ok then added = added + 1 end
 	end
 	for index = 1, #changes do
 		local change = changes[index]
 		local bx, by, bz = change.bx, change.by, change.bz
-		add( bx, by, bz )
-		add( bx + 1, by, bz )
-		add( bx - 1, by, bz )
-		add( bx, by + 1, bz )
-		add( bx, by - 1, bz )
-		add( bx, by, bz + 1 )
-		add( bx, by, bz - 1 )
+		add( bx, by, bz, bx, by, bz )
+		add( bx + 1, by, bz, bx, by, bz )
+		add( bx - 1, by, bz, bx, by, bz )
+		add( bx, by + 1, bz, bx, by, bz )
+		add( bx, by - 1, bz, bx, by, bz )
+		add( bx, by, bz + 1, bx, by, bz )
+		add( bx, by, bz - 1, bx, by, bz )
+	end
+	if MC.AppendRedstoneConductorFanout then
+		MC.AppendRedstoneConductorFanout( changes, add )
 	end
 	return added
 end
@@ -380,7 +389,8 @@ local function applyReturnedUpdates( result, entry )
 				request.bz ~= nil and request.bz or entry.bz,
 				request.kind or Kind.NEIGHBOR,
 				entry.depth + 1,
-				entry.revision
+				entry.revision,
+				entry.bx, entry.by, entry.bz
 			)
 		end
 	end
@@ -407,6 +417,7 @@ local function processEntry( entry )
 		depth = entry.depth,
 		revision = entry.revision,
 		logicTick = LogicTick,
+		sourceX = entry.sourceX, sourceY = entry.sourceY, sourceZ = entry.sourceZ,
 		GetBlockState = MC.GetBlockState,
 	}
 	local ok, result = xpcall( function() return callback( context ) end, debug.traceback )
@@ -480,6 +491,7 @@ function SV.ClearBlockUpdates( resetStats )
 	ScheduledHeap = {}
 	ScheduledByKind = {}
 	ScheduledCount = 0
+	if SV.ClearRedstoneRuntime then SV.ClearRedstoneRuntime() end
 	if resetStats == true then
 		for key in pairs( Stats ) do Stats[key] = 0 end
 	end
