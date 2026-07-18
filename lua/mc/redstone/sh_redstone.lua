@@ -43,6 +43,24 @@ local SignalEmitterCache = {}
 local DirectSignalEmitters = {}
 local DirectSignalEmitterCache = {}
 
+local RedstoneSoundResources = {
+	"sound/mc/random/click.ogg",
+	"sound/mc/tile/piston/in.ogg",
+	"sound/mc/tile/piston/out.ogg",
+}
+
+if SERVER and resource and resource.AddFile then
+	for index = 1, #RedstoneSoundResources do resource.AddFile( RedstoneSoundResources[index] ) end
+end
+
+function MC.PlayRedstoneSound( soundPath, bx, by, bz, volume, pitch )
+	if not SERVER or not sound or not sound.Play or type( soundPath ) ~= "string" then return false end
+	local position = MC.CellWorldCenter and MC.CellWorldCenter( bx, by, bz ) or Vector( 0, 0, 0 )
+	local sourcePitch = math.floor( ( tonumber( pitch ) or 1 ) * 100 + 0.5 )
+	sound.Play( soundPath, position, 70, sourcePitch, tonumber( volume ) or 1 )
+	return true
+end
+
 local function stateName( stateId )
 	local schema = BlockStateSchemaForState and BlockStateSchemaForState( stateId ) or nil
 	return schema and schema.name or nil
@@ -600,7 +618,9 @@ local function installLeverHandler()
 		local result = MC.SV.ApplyBlockTransaction( {
 			{ bx = bx, by = by, bz = bz, stateId = nextState },
 		}, { actor = ply, fx = false, netMode = "bulk", compareCollision = false } )
-		return result and result.ok == true and result.changed > 0 or false
+		local changed = result and result.ok == true and result.changed > 0 or false
+		if changed then MC.PlayRedstoneSound( "mc/random/click.ogg", bx, by, bz, 0.3, not powered and 0.6 or 0.5 ) end
+		return changed
 	end
 	return true
 end

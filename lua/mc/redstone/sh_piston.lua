@@ -238,6 +238,21 @@ local function pistonPowered( context )
 	) > 0
 end
 
+local function pistonSoundCommitted( data, transaction )
+	if not data or not transaction or transaction.ok ~= true or ( transaction.changed or 0 ) <= 0 then return end
+	MC.PlayRedstoneSound( data.sound, data.bx, data.by, data.bz, 0.5, data.pitch )
+end
+
+local function pistonSoundResult( context, extending )
+	local spread = extending and 0.25 or 0.15
+	local randomUnit = math.Rand and math.Rand( 0, 1 ) or math.random()
+	return {
+		sound = extending and "mc/tile/piston/out.ogg" or "mc/tile/piston/in.ogg",
+		bx = context.bx, by = context.by, bz = context.bz,
+		pitch = 0.6 + randomUnit * spread,
+	}
+end
+
 local pistonHandler = {
 	OnNeighborUpdate = function( context )
 		local offset = pistonOffset( context.stateId )
@@ -259,7 +274,12 @@ local pistonHandler = {
 		local extended = GetStateProperty( context.stateId, "extended" ) == true
 		if powered == extended then return nil end
 		local cells = powered and extendCells( context ) or retractCells( context )
-		return cells and { cells = cells, compareCollision = true } or nil
+		return cells and {
+			cells = cells,
+			compareCollision = true,
+			afterTransaction = pistonSoundCommitted,
+			afterTransactionData = pistonSoundResult( context, powered ),
+		} or nil
 	end,
 }
 
