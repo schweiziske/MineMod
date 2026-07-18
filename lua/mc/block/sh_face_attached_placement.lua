@@ -1,6 +1,6 @@
--- Vanilla FaceAttachedHorizontalDirectionalBlock placement shared by levers
--- and buttons. The clicked support face determines floor/wall/ceiling; floor
--- and ceiling variants retain the player's horizontal facing.
+-- Vanilla attachment support shared by levers, buttons and floor-only pressure
+-- plates. The clicked support face determines lever/button floor/wall/ceiling;
+-- pressure plates always validate the cell directly below.
 
 MC = MC or {}
 
@@ -18,6 +18,7 @@ local SupportFace = {
 }
 
 local FaceAttachedState = {}
+local PressurePlateState = {}
 
 local function stateName( stateId )
 	local schema = MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( stateId ) or nil
@@ -31,6 +32,15 @@ local function isFaceAttachedState( stateId )
 	local attached = name == "minecraft:lever" or name and string.match( name, "_button$" ) ~= nil or false
 	if name or MC.BlockStateRegistryFrozen then FaceAttachedState[stateId] = attached end
 	return attached
+end
+
+local function isPressurePlateState( stateId )
+	local cached = PressurePlateState[stateId]
+	if cached ~= nil then return cached end
+	local name = stateName( stateId )
+	local pressurePlate = name and string.match( name, "_pressure_plate$" ) ~= nil or false
+	if name or MC.BlockStateRegistryFrozen then PressurePlateState[stateId] = pressurePlate end
+	return pressurePlate
 end
 
 local function horizontalFacingForPlayer( ply )
@@ -65,6 +75,7 @@ function MC.ResolveFaceAttachedPlacementState( stateId, hitNormal, ply )
 end
 
 function MC.FaceAttachedSupportCell( bx, by, bz, stateId )
+	if isPressurePlateState( stateId ) then return bx, by, bz - 1, 1 end
 	if not isFaceAttachedState( stateId ) then return nil end
 	local face = MC.GetStateProperty( stateId, "face" )
 	if face == "floor" then return bx, by, bz - 1, 1 end

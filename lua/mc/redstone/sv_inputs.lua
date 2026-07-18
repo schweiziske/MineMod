@@ -14,6 +14,7 @@ local BS = MC.BS
 local Active = {}
 local ActiveIndex = {}
 local ScanCursor = 1
+local PlateNextCheckAt = {}
 
 local cvScanBudget = CreateConVar( "mc_redstone_input_scan_budget", "256", FCVAR_ARCHIVE,
 	"Maximum active pressure plates/daylight inputs checked per 0.1 second." )
@@ -61,6 +62,8 @@ end
 
 local function entityTriggersPlate( entity, name )
 	if not IsValid( entity ) or entity:IsWorld() then return false end
+	if entity:IsPlayer() and entity:GetMoveType() == MOVETYPE_NOCLIP then return false end
+	if entity.MCIgnoreBlockTriggers == true then return false end
 	if name == "minecraft:stone_pressure_plate" or name == "minecraft:polished_blackstone_pressure_plate" then
 		return entity:IsPlayer() or entity:IsNPC() or entity:IsNextBot()
 	end
@@ -69,10 +72,11 @@ end
 
 local function plateSignal( entry, stateId, name )
 	local minimum = MC.CellWorldMin( entry.bx, entry.by, entry.bz )
-	local inset = BS * 0.125
+	-- BasePressurePlateBlock.TOUCH_AABB: one pixel inset, four pixels tall.
+	local inset = BS / 16
 	local entities = ents.FindInBox(
 		minimum + Vector( inset, inset, 0 ),
-		minimum + Vector( BS - inset, BS - inset, BS * 0.5 )
+		minimum + Vector( BS - inset, BS - inset, BS * 0.25 )
 	)
 	local count = 0
 	for index = 1, #entities do
@@ -83,6 +87,49 @@ local function plateSignal( entry, stateId, name )
 		return math.min( 15, math.ceil( count / divisor ) )
 	end
 	return count > 0 and 15 or 0
+end
+
+local function pressurePlateSignalForState( stateId )
+	local power = GetStateProperty( stateId, "power" )
+	if power ~= nil then return math.max( 0, math.min( 15, tonumber( power ) or 0 ) ) end
+	return GetStateProperty( stateId, "powered" ) == true and 15 or 0
+end
+
+local function pressurePlateCheckDelay( stateId )
+	return GetStateProperty( stateId, "power" ) ~= nil and 0.5 or 1
+end
+
+local function heldPlateSignal( entry, stateId, detectedSignal )
+	local key = entry.key
+	local oldSignal = pressurePlateSignalForState( stateId )
+	local now = CurTime()
+	if detectedSignal > 0 then
+		local nextCheck = PlateNextCheckAt[key]
+		if oldSignal <= 0 or not nextCheck or now >= nextCheck then
+			PlateNextCheckAt[key] = now + pressurePlateCheckDelay( stateId )
+		end
+		return detectedSignal, oldSignal
+	end
+	if oldSignal > 0 then
+		local nextCheck = PlateNextCheckAt[key]
+		if nextCheck and now < nextCheck then return oldSignal, oldSignal end
+	end
+	PlateNextCheckAt[key] = nil
+	return 0, oldSignal
+end
+
+local function pressurePlatePitch( name, pressed )
+	if name == "minecraft:stone_pressure_plate" or name == "minecraft:polished_blackstone_pressure_plate" then
+		return pressed and 0.6 or 0.5
+	end
+	if name == "minecraft:light_weighted_pressure_plate" or name == "minecraft:heavy_weighted_pressure_plate" then
+		return pressed and 0.75 or 0.65
+	end
+	return pressed and 0.8 or 0.7
+end
+
+local function playPressurePlateSound( entry, name, pressed )
+	MC.PlayRedstoneSound( "mc/random/click.ogg", entry.bx, entry.by, entry.bz, 0.3, pressurePlatePitch( name, pressed ) )
 end
 
 local function updateEntry( entry )
@@ -138,7 +185,7 @@ local function updateEntry( entry )
 		end
 		return true
 	end
-	local signal = plateSignal( entry, stateId, name )
+	local signal, oldSignal = heldPlateSignal( entry, stateId, plateSignal( entry, stateId, name ) )
 	local nextState
 	if GetStateProperty( stateId, "power" ) ~= nil then
 		nextState = StateWith( stateId, "power", signal ) or stateId
@@ -146,9 +193,12 @@ local function updateEntry( entry )
 		nextState = StateWith( stateId, "powered", signal > 0 ) or stateId
 	end
 	if nextState ~= stateId then
-		SV.ApplyBlockTransaction( {
+		local result = SV.ApplyBlockTransaction( {
 			{ bx = entry.bx, by = entry.by, bz = entry.bz, stateId = nextState },
 		}, { actor = nil, fx = false, netMode = "bulk", compareCollision = true } )
+		if result and result.ok == true and ( result.changed or 0 ) > 0 and ( oldSignal > 0 ) ~= ( signal > 0 ) then
+			playPressurePlateSound( entry, name, signal > 0 )
+		end
 	end
 	return true
 end
@@ -192,11 +242,16 @@ local function installPressurePlate( name, block )
 		if previousRemoved then previousRemoved( context, stateId ) end
 		local index = ActiveIndex[CellKey( context.bx, context.by, context.bz )]
 		if index then removeAt( index ) end
+		PlateNextCheckAt[CellKey( context.bx, context.by, context.bz )] = nil
 	end
 	local previousUpdate = MC.BlockUpdateHandlerForName( name )
 	MC.RegisterBlockUpdateHandler( name, {
 		OnNeighborUpdate = function( context )
 			addActive( context.bx, context.by, context.bz )
+			if MC.FaceAttachedCanSurvive
+			and not MC.FaceAttachedCanSurvive( context.bx, context.by, context.bz, context.stateId ) then
+				return { cells = { { bx = context.bx, by = context.by, bz = context.bz, stateId = 0 } }, compareCollision = true }
+			end
 			return previousUpdate and previousUpdate.OnNeighborUpdate and previousUpdate.OnNeighborUpdate( context ) or nil
 		end,
 		OnScheduledTick = previousUpdate and previousUpdate.OnScheduledTick or nil,
@@ -298,6 +353,7 @@ function SV.ClearRedstoneRuntime()
 	ScanCursor = 1
 	SensorByCell = {}
 	SensorBuckets = {}
+	PlateNextCheckAt = {}
 end
 
 function SV.RebuildRedstoneRuntime()
