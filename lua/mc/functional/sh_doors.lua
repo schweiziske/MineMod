@@ -106,7 +106,7 @@ function MC.DoorCanOpenByHand( id )
 	return not ( b and b.name == "iron_door" )
 end
 
-local function playDoorSound( id, open, bx, by, bz )
+function MC.PlayDoorToggleSound( id, open, bx, by, bz )
 	if not SERVER then return end
 	local set = doorSoundSetForBlock( id )
 	local list = open and set.open or set.close
@@ -174,7 +174,7 @@ MC.BlockHandlers.door = MC.BlockHandlers.door or {
 		} )
 
 		if changed > 0 then
-			playDoorSound( id, nextOpen, bx, by, bz )
+			MC.PlayDoorToggleSound( id, nextOpen, bx, by, bz )
 		end
 
 		return changed > 0

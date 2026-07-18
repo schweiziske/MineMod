@@ -113,6 +113,20 @@ local function enqueueReady( bx, by, bz, kind, depth, revision, expectedStateId,
 		if existing.sourceX == nil then
 			existing.sourceX, existing.sourceY, existing.sourceZ = sourceX, sourceY, sourceZ
 		elseif existing.sourceX ~= sourceX or existing.sourceY ~= sourceY or existing.sourceZ ~= sourceZ then
+			local sources = existing.sources
+			if not sources then
+				sources = { { existing.sourceX, existing.sourceY, existing.sourceZ } }
+				existing.sources = sources
+			end
+			local duplicate = false
+			for index = 1, #sources do
+				local source = sources[index]
+				if source[1] == sourceX and source[2] == sourceY and source[3] == sourceZ then
+					duplicate = true
+					break
+				end
+			end
+			if not duplicate and #sources < 32 then sources[#sources + 1] = { sourceX, sourceY, sourceZ } end
 			existing.sourceX, existing.sourceY, existing.sourceZ = false, false, false
 		end
 		Stats.deduplicated = Stats.deduplicated + 1
@@ -254,7 +268,14 @@ function SV.EnqueueTransactionNeighbours( changes, revision, depth )
 	local added, seen = 0, {}
 	local function add( bx, by, bz, sourceX, sourceY, sourceZ )
 		local key = MC.CellKey( bx, by, bz )
-		if seen[key] then return end
+		if seen[key] then
+			local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or nil
+			local schema = stateId and MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( stateId ) or nil
+			if schema and schema.name == "minecraft:observer" then
+				enqueueReady( bx, by, bz, Kind.NEIGHBOR, depth, revision, nil, key, sourceX, sourceY, sourceZ )
+			end
+			return
+		end
 		seen[key] = true
 		local ok = enqueueReady( bx, by, bz, Kind.NEIGHBOR, depth, revision, nil, key, sourceX, sourceY, sourceZ )
 		if ok then added = added + 1 end
@@ -426,6 +447,7 @@ local function processEntry( entry )
 		revision = entry.revision,
 		logicTick = LogicTick,
 		sourceX = entry.sourceX, sourceY = entry.sourceY, sourceZ = entry.sourceZ,
+		sources = entry.sources,
 		GetBlockState = MC.GetBlockState,
 	}
 	local ok, result = xpcall( function() return callback( context ) end, debug.traceback )

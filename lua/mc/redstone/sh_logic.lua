@@ -97,12 +97,28 @@ end
 
 local function repeaterTick( context )
 	if sideSignal( context.stateId, context.bx, context.by, context.bz, true ) > 0 then return nil end
-	local powered = inputSignal( context.stateId, context.bx, context.by, context.bz ) > 0
-	if powered == ( GetStateProperty( context.stateId, "powered" ) == true ) then return nil end
-	return { cells = { {
-		bx = context.bx, by = context.by, bz = context.bz,
-		stateId = StateWith( context.stateId, "powered", powered ) or context.stateId,
-	} } }
+	local powered = GetStateProperty( context.stateId, "powered" ) == true
+	local input = inputSignal( context.stateId, context.bx, context.by, context.bz ) > 0
+	if powered then
+		if input then return nil end
+		return { cells = { {
+			bx = context.bx, by = context.by, bz = context.bz,
+			stateId = StateWith( context.stateId, "powered", false ) or context.stateId,
+		} } }
+	end
+	-- Vanilla RepeaterBlock.tick turns the output on unconditionally once the
+	-- delay elapses; a vanished input only schedules the matching turn-off.
+	-- Re-checking the input here would swallow every pulse shorter than the
+	-- repeater delay (observer pulses would die at the first repeater).
+	local onState = StateWith( context.stateId, "powered", true ) or context.stateId
+	local result = { cells = { { bx = context.bx, by = context.by, bz = context.bz, stateId = onState } } }
+	if not input then
+		result.schedule = { {
+			delayTicks = ( tonumber( GetStateProperty( context.stateId, "delay" ) ) or 1 ) * 2,
+			expectedStateId = onState,
+		} }
+	end
+	return result
 end
 
 MC.RegisterBlockUpdateHandler( "minecraft:repeater", {
@@ -130,30 +146,70 @@ local function comparatorOutput( stateId, bx, by, bz )
 	return input >= side and input or 0
 end
 
+-- Vanilla comparators hold their output strength in a block entity: changes
+-- propagate on a 2-tick schedule and the block in front is re-notified even
+-- when the boolean powered flag never moves. Publish strength through this
+-- cache so emitter queries stay cheap and analog changes reach the wire ahead.
+local ComparatorOutput = {}
+
+local NeighborOffsets = {
+	{ 1, 0, 0 }, { -1, 0, 0 },
+	{ 0, 1, 0 }, { 0, -1, 0 },
+	{ 0, 0, 1 }, { 0, 0, -1 },
+}
+
+local function publishedComparatorOutput( stateId, bx, by, bz )
+	if CLIENT then return comparatorOutput( stateId, bx, by, bz ) end
+	local key = MC.CellKey( bx, by, bz )
+	local cached = ComparatorOutput[key]
+	if cached == nil then
+		cached = comparatorOutput( stateId, bx, by, bz )
+		ComparatorOutput[key] = cached
+	end
+	return cached
+end
+
 MC.RegisterRedstoneSignalEmitter( "minecraft:comparator", function( stateId, bx, by, bz, towardX, towardY, towardZ )
-	return directionalOutput( stateId, towardX, towardY, towardZ, comparatorOutput( stateId, bx, by, bz ) )
+	return directionalOutput( stateId, towardX, towardY, towardZ, publishedComparatorOutput( stateId, bx, by, bz ) )
 end )
 MC.RegisterRedstoneDirectSignalEmitter( "minecraft:comparator", function( stateId, bx, by, bz, towardX, towardY, towardZ )
-	return directionalOutput( stateId, towardX, towardY, towardZ, comparatorOutput( stateId, bx, by, bz ) )
+	return directionalOutput( stateId, towardX, towardY, towardZ, publishedComparatorOutput( stateId, bx, by, bz ) )
 end )
-
-local function comparatorDesiredState( context )
-	local output = comparatorOutput( context.stateId, context.bx, context.by, context.bz )
-	return output > 0
-end
 
 MC.RegisterBlockUpdateHandler( "minecraft:comparator", {
 	OnNeighborUpdate = function( context )
-		if comparatorDesiredState( context ) == ( GetStateProperty( context.stateId, "powered" ) == true ) then return nil end
+		local live = comparatorOutput( context.stateId, context.bx, context.by, context.bz )
+		if live == publishedComparatorOutput( context.stateId, context.bx, context.by, context.bz )
+		and ( live > 0 ) == ( GetStateProperty( context.stateId, "powered" ) == true ) then return nil end
 		return { schedule = { { delayTicks = 2, expectedStateId = context.stateId } } }
 	end,
 	OnScheduledTick = function( context )
-		local powered = comparatorDesiredState( context )
-		if powered == ( GetStateProperty( context.stateId, "powered" ) == true ) then return nil end
-		return { cells = { {
-			bx = context.bx, by = context.by, bz = context.bz,
-			stateId = StateWith( context.stateId, "powered", powered ) or context.stateId,
-		} } }
+		local output = comparatorOutput( context.stateId, context.bx, context.by, context.bz )
+		local key = MC.CellKey( context.bx, context.by, context.bz )
+		local strengthChanged = ComparatorOutput[key] ~= output
+		ComparatorOutput[key] = output
+		local powered = output > 0
+		if powered ~= ( GetStateProperty( context.stateId, "powered" ) == true ) then
+			return { cells = { {
+				bx = context.bx, by = context.by, bz = context.bz,
+				stateId = StateWith( context.stateId, "powered", powered ) or context.stateId,
+			} } }
+		end
+		if not strengthChanged then return nil end
+		-- The powered flag did not move, so no transaction fans out: hand-deliver
+		-- the front-of-comparator updates vanilla's updateNeighborsInFront sends
+		-- on every analog strength change.
+		local facing = facingOffset( context.stateId )
+		local frontX, frontY, frontZ = context.bx - facing[1], context.by - facing[2], context.bz - facing[3]
+		local updates = { { bx = frontX, by = frontY, bz = frontZ } }
+		for index = 1, 6 do
+			local side = NeighborOffsets[index]
+			local nx, ny, nz = frontX + side[1], frontY + side[2], frontZ + side[3]
+			if nx ~= context.bx or ny ~= context.by or nz ~= context.bz then
+				updates[#updates + 1] = { bx = nx, by = ny, bz = nz }
+			end
+		end
+		return { updates = updates }
 	end,
 } )
 
@@ -201,21 +257,47 @@ MC.RegisterRedstoneDirectSignalEmitter( "minecraft:observer", function( stateId,
 	return directionalOutput( stateId, towardX, towardY, towardZ, 15 )
 end )
 
+local function reserveObserverOffTick( context, poweredState )
+	if not SERVER or not MC.SV or not MC.SV.ScheduleBlockTick then return true end
+	local scheduled, reason = MC.SV.ScheduleBlockTick(
+		context.bx, context.by, context.bz, 2, MC.BlockUpdateKind.SCHEDULED, poweredState
+	)
+	return scheduled == true or reason == "scheduled_tick_exists"
+end
+
 MC.RegisterBlockUpdateHandler( "minecraft:observer", {
 	OnNeighborUpdate = function( context )
-		if GetStateProperty( context.stateId, "powered" ) == true then return nil end
+		if GetStateProperty( context.stateId, "powered" ) == true then
+			-- Never leave permanent output if queue pressure discarded the original
+			-- pulse-off reservation. Either restore it or fail safe to unpowered.
+			if reserveObserverOffTick( context, context.stateId ) then return nil end
+			return { cells = { {
+				bx = context.bx, by = context.by, bz = context.bz,
+				stateId = StateWith( context.stateId, "powered", false ) or context.stateId,
+			} } }
+		end
 		local facing = facingOffset( context.stateId )
-		if context.sourceX ~= context.bx + facing[1]
-		or context.sourceY ~= context.by + facing[2]
-		or context.sourceZ ~= context.bz + facing[3] then return nil end
+		local watchedX, watchedY, watchedZ = context.bx + facing[1], context.by + facing[2], context.bz + facing[3]
+		local watched = context.sourceX == watchedX and context.sourceY == watchedY and context.sourceZ == watchedZ
+		if not watched and context.sources then
+			for index = 1, #context.sources do
+				local source = context.sources[index]
+				if source[1] == watchedX and source[2] == watchedY and source[3] == watchedZ then
+					watched = true
+					break
+				end
+			end
+		end
+		if not watched then return nil end
 		return { schedule = { { delayTicks = 2, expectedStateId = context.stateId } } }
 	end,
 	OnScheduledTick = function( context )
 		local powered = GetStateProperty( context.stateId, "powered" ) == true
 		local nextState = StateWith( context.stateId, "powered", not powered ) or context.stateId
-		local result = { cells = { { bx = context.bx, by = context.by, bz = context.bz, stateId = nextState } } }
-		if not powered then result.schedule = { { delayTicks = 2, expectedStateId = nextState } } end
-		return result
+		-- Reserve the falling edge before publishing the rising edge. If the
+		-- scheduler is full, skip this pulse instead of creating stuck power.
+		if not powered and not reserveObserverOffTick( context, nextState ) then return nil end
+		return { cells = { { bx = context.bx, by = context.by, bz = context.bz, stateId = nextState } } }
 	end,
 } )
 
