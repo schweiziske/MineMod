@@ -115,6 +115,17 @@ local function markLightingDirtyForChange( bx, by, bz, oldId, oldOrient, newId, 
 	end
 end
 
+-- State-aware variant: block light emission/opacity can depend on state
+-- properties (redstone lamp lit=true emits 15 while its legacy block id emits
+-- 0), so every path that writes stateIds must not downgrade to id+orient here.
+local function markLightingDirtyForStateChange( bx, by, bz, oldStateId, newStateId, rateLimited )
+	if MC.MarkLightingDirtyForStateChange then
+		MC.MarkLightingDirtyForStateChange( bx, by, bz, oldStateId, newStateId, rateLimited )
+	elseif MC.MarkLightingDirtyAroundCell then
+		MC.MarkLightingDirtyAroundCell( bx, by, bz, nil, rateLimited )
+	end
+end
+
 local function addCellPhysBounds( boundsByKey, key, bounds )
 	local list = boundsByKey[key]
 	if not list then
@@ -266,13 +277,10 @@ function MC.ApplyStateNetCell( bx, by, bz, stateId, revision, meshRateLimited )
 	if MC.ReconcileStatePredictionCells then
 		MC.ReconcileStatePredictionCells( { { bx = bx, by = by, bz = bz } }, revision, false )
 	end
-	local oldId = MC.GetBlock( bx, by, bz )
-	local oldOrient = MC.GetBlockOrient( bx, by, bz )
+	local oldStateId = MC.GetBlockState( bx, by, bz ) or 0
 	local _, _, _, changed, setError = MC.SetBlockStateRaw( bx, by, bz, stateId )
 	if not changed then return changed == false, setError end
-	local newId = MC.GetBlock( bx, by, bz )
-	local newOrient = MC.GetBlockOrient( bx, by, bz )
-	markLightingDirtyForChange( bx, by, bz, oldId, oldOrient, newId, newOrient, meshRateLimited )
+	markLightingDirtyForStateChange( bx, by, bz, oldStateId, stateId, meshRateLimited )
 	MC.MarkDirty( bx, by, bz, meshRateLimited )
 	MC.MarkCellPhysNeighbours( bx, by, bz, false, meshRateLimited == true )
 	return true
@@ -286,13 +294,10 @@ function MC.ApplyStateNetCellsBulk( cells, revision, meshRateLimited )
 	for _, cell in ipairs( cells or {} ) do
 		local stateId = math.floor( tonumber( cell.stateId ) or -1 )
 		if MC.IsValidBlockState and MC.IsValidBlockState( stateId ) then
-			local oldId = MC.GetBlock( cell.bx, cell.by, cell.bz )
-			local oldOrient = MC.GetBlockOrient( cell.bx, cell.by, cell.bz )
+			local oldStateId = MC.GetBlockState( cell.bx, cell.by, cell.bz ) or 0
 			local _, _, _, changed = MC.SetBlockStateRaw( cell.bx, cell.by, cell.bz, stateId )
 			if changed then
-				local newId = MC.GetBlock( cell.bx, cell.by, cell.bz )
-				local newOrient = MC.GetBlockOrient( cell.bx, cell.by, cell.bz )
-				markLightingDirtyForChange( cell.bx, cell.by, cell.bz, oldId, oldOrient, newId, newOrient, meshRateLimited )
+				markLightingDirtyForStateChange( cell.bx, cell.by, cell.bz, oldStateId, stateId, meshRateLimited )
 				MC.MarkDirty( cell.bx, cell.by, cell.bz, meshRateLimited )
 				collectCellPhysBounds( boundsByKey, cell.bx, cell.by, cell.bz )
 			end
@@ -320,11 +325,9 @@ local function rollbackPredictionCell( pending )
 	if not pending then return end
 	local currentStateId = MC.GetBlockState( pending.bx, pending.by, pending.bz )
 	if currentStateId ~= pending.stateId then return end
-	local current = MC.GetBlock( pending.bx, pending.by, pending.bz )
-	local currentOrient = MC.GetBlockOrient( pending.bx, pending.by, pending.bz )
 	MC.SetBlockStateRaw( pending.bx, pending.by, pending.bz, pending.oldStateId or 0 )
 	markPredictedCellDirty( pending.bx, pending.by, pending.bz, false,
-		current, currentOrient, pending.oldId, pending.oldOrient )
+		currentStateId, pending.oldStateId or 0 )
 end
 
 -- Reconcile a whole predicted placement/break plan against one authoritative
@@ -382,8 +385,8 @@ function MC.ClientEditPredictionEnabled()
 	return true
 end
 
-markPredictedCellDirty = function( bx, by, bz, priority, oldId, oldOrient, newId, newOrient )
-	markLightingDirtyForChange( bx, by, bz, oldId, oldOrient, newId, newOrient )
+markPredictedCellDirty = function( bx, by, bz, priority, oldStateId, newStateId )
+	markLightingDirtyForStateChange( bx, by, bz, oldStateId, newStateId )
 	MC.MarkDirty( bx, by, bz )
 	MC.MarkCellPhysNeighbours( bx, by, bz, priority == true )
 end
@@ -442,7 +445,7 @@ local function predictCells( cells, priorityFn )
 			}
 			group.keys[#group.keys + 1] = key
 			markPredictedCellDirty( cell.bx, cell.by, cell.bz, priorityFn and priorityFn( cell ) or false,
-				oldStates[i].id, oldStates[i].orient, id, orient )
+				oldStates[i].stateId or 0, stateId )
 		end
 	end
 	if #group.keys == 0 then MC.PendingPredictionGroups[groupId] = nil end
