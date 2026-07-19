@@ -43,6 +43,38 @@ local ShapeIndex = {
 	outer_right = 4,
 }
 
+local StairRampCorner = {
+	nw = { 0, 0 },
+	ne = { 1, 0 },
+	sw = { 0, 1 },
+	se = { 1, 1 },
+}
+
+-- Canonical north-facing ramp footprints. Rotating these around the block
+-- gives every facing while keeping straight/corner boundaries identical.
+local StairRampTopCornerKeys = {
+	straight = { "nw", "ne" },
+	outer_left = { "nw" },
+	outer_right = { "ne" },
+	inner_left = { "nw", "ne", "sw" },
+	inner_right = { "nw", "ne", "se" },
+}
+
+local StairRampRotationSteps = {
+	[MC.Direction.NORTH] = 0,
+	[MC.Direction.EAST] = 1,
+	[MC.Direction.SOUTH] = 2,
+	[MC.Direction.WEST] = 3,
+}
+
+local function rotateRampXY( x, y, steps )
+	steps = steps % 4
+	if steps == 1 then return 1 - y, x end
+	if steps == 2 then return 1 - x, 1 - y end
+	if steps == 3 then return y, 1 - x end
+	return x, y
+end
+
 local function neighbour( bx, by, bz, direction )
 	if bx == nil or by == nil or bz == nil or not MC.GetBlock or not MC.GetBlockOrient then return nil end
 	local off = DirectionOffset[direction]
@@ -126,11 +158,43 @@ function MC.StairBoxes( id, orient, bx, by, bz, resolvedShape )
 	return boxes
 end
 
+local StairRampConvexes = {}
+
+function MC.StairCollisionConvexes( id, orient, bx, by, bz, resolvedShape )
+	orient = MC.NormalizeOrient( id, orient )
+	local facing = MC.StairOrientFacing( orient )
+	local top = MC.StairOrientHalf( orient ) == "top"
+	local shape = resolvedShape or MC.StairShapeAt( id, orient, bx, by, bz )
+	local key = orient + ( ShapeIndex[shape] or 0 ) * 8
+	local cached = StairRampConvexes[key]
+	if cached then return cached end
+
+	local points = {}
+	local frameZ = top and 1 or 0
+	for _, cornerKey in ipairs( { "nw", "ne", "sw", "se" } ) do
+		local corner = StairRampCorner[cornerKey]
+		points[#points + 1] = { corner[1], corner[2], frameZ }
+	end
+
+	local rampZ = top and 0 or 1
+	local steps = StairRampRotationSteps[facing] or 0
+	for _, cornerKey in ipairs( StairRampTopCornerKeys[shape] or StairRampTopCornerKeys.straight ) do
+		local corner = StairRampCorner[cornerKey]
+		local x, y = rotateRampXY( corner[1], corner[2], steps )
+		points[#points + 1] = { x, y, rampZ }
+	end
+
+	cached = { points }
+	StairRampConvexes[key] = cached
+	return cached
+end
+
 -- State-native collision has a stateId-only cache by default. Stair corners
 -- cannot use it because vanilla derives inner/outer shape from horizontal
 -- neighbours. Register every stair family as position-dependent and return an
--- interned shape built by the exact same MC.StairShapeAt/MC.StairBoxes path the
--- renderer uses.
+-- interned shape with stepped boxes for selection and one smooth convex ramp
+-- for physics. Inner/outer corners stay single convex hulls so their joins do
+-- not introduce internal compound faces.
 local StairCollisionShapes = {}
 
 local function stairCollision( stateId, schema, visual, bx, by, bz )
@@ -143,8 +207,10 @@ local function stairCollision( stateId, schema, visual, bx, by, bz )
 	local key = orient + ( ShapeIndex[shape] or 0 ) * 8
 	local cached = StairCollisionShapes[key]
 	if cached then return cached end
-	if not MC.RegisterBlockStateCollisionShape then return { boxes = MC.StairBoxes( id, orient, bx, by, bz, shape ) } end
-	cached = MC.RegisterBlockStateCollisionShape( { boxes = MC.StairBoxes( id, orient, bx, by, bz, shape ) } )
+	local boxes = MC.StairBoxes( id, orient, bx, by, bz, shape )
+	local convexes = MC.StairCollisionConvexes( id, orient, bx, by, bz, shape )
+	if not MC.RegisterBlockStateCollisionShape then return { boxes = boxes, convexes = convexes } end
+	cached = MC.RegisterBlockStateCollisionShape( { boxes = boxes, convexes = convexes } )
 	StairCollisionShapes[key] = cached
 	return cached
 end
