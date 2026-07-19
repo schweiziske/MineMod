@@ -260,6 +260,10 @@ if CLIENT then
 		[5] = Color( 215, 215, 215, 255 ),
 		[6] = Color( 215, 215, 215, 255 ),
 	}
+	-- Unlit atlas geometry at RGB 255 reads substantially hotter than the chunk
+	-- shader under GMod's HDR/bloom pass. Keep the sampled hue and contrast, but
+	-- leave headroom so the held block does not clip to glowing white outdoors.
+	local HELD_LIGHT_GAIN = 0.48
 
 	local HELD_FACE_NORMALS = {
 		[1] = Vector( 0, 0, 1 ),
@@ -341,17 +345,26 @@ if CLIENT then
 		return cvarBool( HELD_ANIM_CVAR, true )
 	end
 
-	local function heldBlockBrightnessAt( pos )
-		if not ( MC.WorldToCell and MC.SampleLighting ) then return 1 end
-		local bx, by, bz = MC.WorldToCell( pos )
-		if bx == nil then return 1 end
-		-- Held inventory models do not emit voxel light. Sample only the light
-		-- already present at the player's hand, like Minecraft's item renderer.
-		local brightness, level, blockLight, skyLight = MC.SampleLighting( bx, by, bz, 0 )
-		if MC.ApplySunShadowToBrightness then
-			brightness = MC.ApplySunShadowToBrightness( pos, brightness, level, blockLight, 0, skyLight )
+	local function heldBlockLightingAt( pos, state )
+		local r, g, b = 1, 1, 1
+		if MC.SampleDynamicLightingRGB then
+			r, g, b = MC.SampleDynamicLightingRGB( pos, 0 )
+		elseif MC.WorldToCell and MC.SampleLighting then
+			local bx, by, bz = MC.WorldToCell( pos )
+			if bx ~= nil then
+				local brightness = MC.SampleLighting( bx, by, bz, 0 )
+				r = math.Clamp( tonumber( brightness ) or 1, 0, 1 )
+				g, b = r, r
+			end
 		end
-		return math.Clamp( tonumber( brightness ) or 1, 0, 1 )
+
+		state = state or {}
+		local dt = RealFrameTime and RealFrameTime() or FrameTime and FrameTime() or 0.016
+		local blend = 1 - math.exp( -math.Clamp( dt, 0, 0.1 ) * 12 )
+		state.r = state.r and Lerp( blend, state.r, r ) or r
+		state.g = state.g and Lerp( blend, state.g, g ) or g
+		state.b = state.b and Lerp( blend, state.b, b ) or b
+		return state
 	end
 
 	local function rotatedUV( uf, vf, rot, flipU, flipV )
@@ -409,7 +422,16 @@ if CLIENT then
 		end
 
 		scale = scale or 8
-		brightness = math.Clamp( tonumber( brightness ) or 1, 0, 1 )
+		local lightR, lightG, lightB
+		if type( brightness ) == "table" then
+			local rawR = math.Clamp( tonumber( brightness.r ) or 1, 0, 1 )
+			local rawG = math.Clamp( tonumber( brightness.g ) or rawR, 0, 1 )
+			local rawB = math.Clamp( tonumber( brightness.b ) or rawR, 0, 1 )
+			lightR, lightG, lightB = rawR * HELD_LIGHT_GAIN, rawG * HELD_LIGHT_GAIN, rawB * HELD_LIGHT_GAIN
+		else
+			lightR = math.Clamp( tonumber( brightness ) or 1, 0, 1 ) * HELD_LIGHT_GAIN
+			lightG, lightB = lightR, lightR
+		end
 		local tintR, tintG, tintB = 255, 255, 255
 		if stateId and MC.BlockStateTintCode and MC.BlockTintRGB then
 			local tintCode = MC.BlockStateTintCode( stateId, id, 0 )
@@ -440,9 +462,9 @@ if CLIENT then
 						mesh.Normal( normal )
 						mesh.TexCoord( 0, u, v )
 						mesh.Color(
-							math.Clamp( math.floor( shade.r * brightness * tintR / 255 + 0.5 ), 0, 255 ),
-							math.Clamp( math.floor( shade.g * brightness * tintG / 255 + 0.5 ), 0, 255 ),
-							math.Clamp( math.floor( shade.b * brightness * tintB / 255 + 0.5 ), 0, 255 ),
+							math.Clamp( math.floor( shade.r * lightR * tintR / 255 + 0.5 ), 0, 255 ),
+							math.Clamp( math.floor( shade.g * lightG * tintG / 255 + 0.5 ), 0, 255 ),
+							math.Clamp( math.floor( shade.b * lightB * tintB / 255 + 0.5 ), 0, 255 ),
 							shade.a
 						)
 						mesh.AdvanceVertex()
@@ -557,7 +579,10 @@ if CLIENT then
 		if not MC.IsValidBlock( id ) then return end
 
 		local pos, ang, scale = firstPersonHeldPose( wep )
-		local brightness = heldBlockBrightnessAt( pos )
+		-- Eye-space sampling is more stable than the animated hand position and
+		-- matches the light environment the first-person camera actually sees.
+		wep.MCHeldLight = heldBlockLightingAt( EyePos(), wep.MCHeldLight )
+		local brightness = wep.MCHeldLight
 
 		render.OverrideDepthEnable( true, false )
 			local stateId = selectedStateId( ply, id )
@@ -597,7 +622,8 @@ if CLIENT then
 		if not MC.IsValidBlock( id ) then return end
 
 		local pos, ang, scale = thirdPersonHeldPose( ply )
-		local brightness = heldBlockBrightnessAt( pos )
+		ply.MCHeldLight = heldBlockLightingAt( pos, ply.MCHeldLight )
+		local brightness = ply.MCHeldLight
 		local stateId = selectedStateId( ply, id )
 		if not stateId or not MC.DrawCreativeHeldBlockState( stateId, pos, ang, scale, brightness ) then
 			MC.DrawCreativeHeldBlock( id, selectedOrient( ply, id ) or creativeHeldOrient( id ), pos, ang, scale, brightness )
