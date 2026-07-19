@@ -13,17 +13,164 @@ local Offset = {
 	up = { 0, 0, 1 }, down = { 0, 0, -1 },
 }
 
+-- Vanilla PushReaction.BLOCK plus block-entity blocks: pistons can never move
+-- these and any structure containing one refuses to move.
 local Immovable = {
 	["minecraft:bedrock"] = true,
 	["minecraft:barrier"] = true,
 	["minecraft:end_portal"] = true,
 	["minecraft:end_portal_frame"] = true,
+	["minecraft:end_gateway"] = true,
+	["minecraft:nether_portal"] = true,
 	["minecraft:obsidian"] = true,
 	["minecraft:crying_obsidian"] = true,
 	["minecraft:respawn_anchor"] = true,
 	["minecraft:reinforced_deepslate"] = true,
 	["minecraft:moving_piston"] = true,
 	["minecraft:piston_head"] = true,
+	["minecraft:spawner"] = true,
+	["minecraft:trial_spawner"] = true,
+	["minecraft:vault"] = true,
+	["minecraft:enchanting_table"] = true,
+	["minecraft:beacon"] = true,
+	["minecraft:jukebox"] = true,
+	["minecraft:lectern"] = true,
+	["minecraft:hopper"] = true,
+	["minecraft:dispenser"] = true,
+	["minecraft:dropper"] = true,
+	["minecraft:crafter"] = true,
+	["minecraft:brewing_stand"] = true,
+	["minecraft:barrel"] = true,
+	["minecraft:smoker"] = true,
+	["minecraft:daylight_detector"] = true,
+	["minecraft:bell"] = true,
+	["minecraft:conduit"] = true,
+	["minecraft:lodestone"] = true,
+	["minecraft:beehive"] = true,
+	["minecraft:bee_nest"] = true,
+	["minecraft:campfire"] = true,
+	["minecraft:soul_campfire"] = true,
+	["minecraft:chiseled_bookshelf"] = true,
+	["minecraft:suspicious_sand"] = true,
+	["minecraft:suspicious_gravel"] = true,
+	["minecraft:sculk_sensor"] = true,
+	["minecraft:calibrated_sculk_sensor"] = true,
+	["minecraft:sculk_catalyst"] = true,
+	["minecraft:sculk_shrieker"] = true,
+	["minecraft:jigsaw"] = true,
+	["minecraft:structure_block"] = true,
+}
+
+local ImmovablePatterns = {
+	"chest$",          -- chest, trapped_chest, ender_chest, copper chests
+	"furnace$",        -- furnace, blast_furnace
+	"command_block$",
+	"anvil$",          -- anvil, chipped_anvil, damaged_anvil
+}
+
+-- Vanilla PushReaction.DESTROY: fragile attachables pop off instead of moving.
+-- An extending piston breaks them and claims the cell; sticky pulls and
+-- slime/honey adhesion ignore them entirely.
+local DestroyOnPush = {
+	["minecraft:torch"] = true,
+	["minecraft:soul_torch"] = true,
+	["minecraft:rail"] = true,
+	["minecraft:redstone_wire"] = true,
+	["minecraft:repeater"] = true,
+	["minecraft:comparator"] = true,
+	["minecraft:lever"] = true,
+	["minecraft:tripwire"] = true,
+	["minecraft:tripwire_hook"] = true,
+	["minecraft:snow"] = true,
+	["minecraft:fire"] = true,
+	["minecraft:soul_fire"] = true,
+	["minecraft:cobweb"] = true,
+	["minecraft:cactus"] = true,
+	["minecraft:sugar_cane"] = true,
+	["minecraft:vine"] = true,
+	["minecraft:glow_lichen"] = true,
+	["minecraft:lily_pad"] = true,
+	["minecraft:nether_wart"] = true,
+	["minecraft:cocoa"] = true,
+	["minecraft:bamboo"] = true,
+	["minecraft:bamboo_sapling"] = true,
+	["minecraft:kelp"] = true,
+	["minecraft:kelp_plant"] = true,
+	["minecraft:seagrass"] = true,
+	["minecraft:tall_seagrass"] = true,
+	["minecraft:sea_pickle"] = true,
+	["minecraft:ladder"] = true,
+	["minecraft:scaffolding"] = true,
+	["minecraft:short_grass"] = true,
+	["minecraft:grass"] = true,
+	["minecraft:tall_grass"] = true,
+	["minecraft:fern"] = true,
+	["minecraft:large_fern"] = true,
+	["minecraft:dead_bush"] = true,
+	["minecraft:sweet_berry_bush"] = true,
+	["minecraft:wheat"] = true,
+	["minecraft:carrots"] = true,
+	["minecraft:potatoes"] = true,
+	["minecraft:beetroots"] = true,
+	["minecraft:melon_stem"] = true,
+	["minecraft:pumpkin_stem"] = true,
+	["minecraft:attached_melon_stem"] = true,
+	["minecraft:attached_pumpkin_stem"] = true,
+	["minecraft:dandelion"] = true,
+	["minecraft:poppy"] = true,
+	["minecraft:blue_orchid"] = true,
+	["minecraft:allium"] = true,
+	["minecraft:azure_bluet"] = true,
+	["minecraft:oxeye_daisy"] = true,
+	["minecraft:cornflower"] = true,
+	["minecraft:lily_of_the_valley"] = true,
+	["minecraft:wither_rose"] = true,
+	["minecraft:torchflower"] = true,
+	["minecraft:pitcher_plant"] = true,
+	["minecraft:sunflower"] = true,
+	["minecraft:lilac"] = true,
+	["minecraft:rose_bush"] = true,
+	["minecraft:peony"] = true,
+	["minecraft:brown_mushroom"] = true,
+	["minecraft:red_mushroom"] = true,
+	["minecraft:crimson_fungus"] = true,
+	["minecraft:warped_fungus"] = true,
+	["minecraft:crimson_roots"] = true,
+	["minecraft:warped_roots"] = true,
+	["minecraft:nether_sprouts"] = true,
+	["minecraft:hanging_roots"] = true,
+	["minecraft:spore_blossom"] = true,
+	["minecraft:big_dripleaf"] = true,
+	["minecraft:small_dripleaf"] = true,
+	["minecraft:cave_vines"] = true,
+	["minecraft:cave_vines_plant"] = true,
+	["minecraft:twisting_vines"] = true,
+	["minecraft:twisting_vines_plant"] = true,
+	["minecraft:weeping_vines"] = true,
+	["minecraft:weeping_vines_plant"] = true,
+	["minecraft:flower_pot"] = true,
+	["minecraft:decorated_pot"] = true,
+}
+
+local DestroyOnPushPatterns = {
+	"_torch$",           -- wall/redstone/soul torch variants
+	"_button$",
+	"_pressure_plate$",
+	"_rail$",            -- powered/detector/activator rails
+	"_sapling$",
+	"_propagule$",
+	"_sign$",
+	"_banner$",
+	"_door$",
+	"_bed$",
+	"_candle$",
+	"_skull$",
+	"_head$",            -- mob heads; piston_head is caught by Immovable first
+	"_coral$",
+	"_coral_fan$",
+	"_coral_wall_fan$",
+	"azalea$",
+	"_pot$",
 }
 
 local function stateName( stateId )
@@ -57,14 +204,50 @@ local function adhesiveCanStick( adhesive, neighborState )
 	return not neighborAdhesive or neighborAdhesive == adhesive
 end
 
-local function movable( stateId, bx, by, bz )
-	if not stateId or stateId == 0 then return true end
+local ReactionByName = {}
+
+local function pushReactionForName( name )
+	if not name then return "normal" end
+	local cached = ReactionByName[name]
+	if cached then return cached end
+	local reaction = "normal"
+	if Immovable[name] then
+		reaction = "block"
+	elseif DestroyOnPush[name] then
+		reaction = "destroy"
+	elseif string.match( name, "_glazed_terracotta$" ) then
+		-- PUSH_ONLY: pushable by an extending piston, never pulled or stuck.
+		reaction = "push_only"
+	else
+		for index = 1, #ImmovablePatterns do
+			if string.match( name, ImmovablePatterns[index] ) then
+				reaction = "block"
+				break
+			end
+		end
+		if reaction == "normal" then
+			for index = 1, #DestroyOnPushPatterns do
+				if string.match( name, DestroyOnPushPatterns[index] ) then
+					reaction = "destroy"
+					break
+				end
+			end
+		end
+	end
+	ReactionByName[name] = reaction
+	return reaction
+end
+
+local function pushReactionAt( stateId, bx, by, bz )
+	if not stateId or stateId == 0 then return "air" end
 	local name = stateName( stateId )
-	if Immovable[name] then return false end
 	if ( name == "minecraft:piston" or name == "minecraft:sticky_piston" )
-	and GetStateProperty( stateId, "extended" ) == true then return false end
-	if MC.GetBlockEntity and MC.GetBlockEntity( bx, by, bz ) then return false end
-	return true
+	and GetStateProperty( stateId, "extended" ) == true then return "block" end
+	local reaction = pushReactionForName( name )
+	if reaction == "normal" and MC.GetBlockEntity and MC.GetBlockEntity( bx, by, bz ) then
+		return "block"
+	end
+	return reaction
 end
 
 local function airState()
@@ -80,9 +263,12 @@ local NeighborOffsets = {
 -- Collect a complete piston structure before writing anything. Destination
 -- recursion resolves the normal push chain; adhesive recursion adds blocks on
 -- every face of slime/honey. The same planner is used in reverse for sticky
--- piston retraction.
-local function collectMovement( startX, startY, startZ, move, protected, vacated )
+-- piston retraction. When extending, DESTROY-reaction blocks (torches, dust,
+-- rails, plants...) pop and free their cell instead of joining or blocking the
+-- structure; when pulling they simply make that line immovable.
+local function collectMovement( startX, startY, startZ, move, protected, vacated, extending )
 	local blocks, byKey = {}, {}
+	local destroys, destroyedByKey = {}, {}
 	local visiting, count = {}, 0
 
 	local function stateAt( x, y, z )
@@ -92,12 +278,22 @@ local function collectMovement( startX, startY, startZ, move, protected, vacated
 
 	local function add( x, y, z )
 		local key = movementKey( x, y, z )
-		if byKey[key] then return true end
+		if byKey[key] or destroyedByKey[key] then return true end
 		if protected and protected[key] then return false end
 		if visiting[key] then return true end
 		local stateId = stateAt( x, y, z )
 		if not stateId or stateId == 0 then return true end
-		if not movable( stateId, x, y, z ) then return false end
+		local reaction = pushReactionAt( stateId, x, y, z )
+		if reaction == "destroy" then
+			-- Popped blocks terminate their push line: the cell becomes free, so
+			-- nothing beyond them needs room. They never count toward the limit.
+			if not extending then return false end
+			destroyedByKey[key] = true
+			destroys[#destroys + 1] = { x = x, y = y, z = z }
+			return true
+		end
+		if reaction == "push_only" and not extending then return false end
+		if reaction ~= "normal" and reaction ~= "push_only" then return false end
 		count = count + 1
 		if count > 12 then return false end
 
@@ -118,7 +314,7 @@ local function collectMovement( startX, startY, startZ, move, protected, vacated
 			if not ( protected and protected[backKey] )
 			and not ( vacated and vacated[backKey] ) then
 				local backState = stateAt( backX, backY, backZ )
-				if backState ~= 0 and movable( backState, backX, backY, backZ )
+				if backState ~= 0 and pushReactionAt( backState, backX, backY, backZ ) == "normal"
 				and adhesiveCanStick( adhesive, backState )
 				and not add( backX, backY, backZ ) then
 					visiting[key] = nil
@@ -127,8 +323,9 @@ local function collectMovement( startX, startY, startZ, move, protected, vacated
 			end
 
 			-- addBranchingBlocks considers only directions perpendicular to the
-			-- push axis. Unpushable side neighbours are ignored rather than making
-			-- the complete structure fail (for example slime beside obsidian).
+			-- push axis. Anything that is not a plain movable block (immovable,
+			-- pop-off attachables, glazed terracotta, block entities) is ignored
+			-- rather than stuck or destroyed, matching vanilla adhesion rules.
 			for index = 1, 6 do
 				local side = NeighborOffsets[index]
 				if side[1] * move[1] + side[2] * move[2] + side[3] * move[3] == 0 then
@@ -137,7 +334,7 @@ local function collectMovement( startX, startY, startZ, move, protected, vacated
 					if not ( protected and protected[neighborKey] )
 					and not ( vacated and vacated[neighborKey] ) then
 						local neighborState = stateAt( nx, ny, nz )
-						if neighborState ~= 0 and movable( neighborState, nx, ny, nz )
+						if neighborState ~= 0 and pushReactionAt( neighborState, nx, ny, nz ) == "normal"
 						and adhesiveCanStick( adhesive, neighborState )
 						and not add( nx, ny, nz ) then
 							visiting[key] = nil
@@ -157,10 +354,10 @@ local function collectMovement( startX, startY, startZ, move, protected, vacated
 	end
 
 	if not add( startX, startY, startZ ) then return nil end
-	return blocks
+	return blocks, destroys
 end
 
-local function appendMovementCells( cells, writes, blocks, move )
+local function appendMovementCells( cells, writes, blocks, move, destroys )
 	local function write( x, y, z, stateId )
 		local key = movementKey( x, y, z )
 		local index = writes[key]
@@ -169,6 +366,13 @@ local function appendMovementCells( cells, writes, blocks, move )
 		else
 			cells[#cells + 1] = { bx = x, by = y, bz = z, stateId = stateId }
 			writes[key] = #cells
+		end
+	end
+	-- Popped blocks clear first so a moved block landing in their cell wins.
+	if destroys then
+		for index = 1, #destroys do
+			local cell = destroys[index]
+			write( cell.x, cell.y, cell.z, airState() )
 		end
 	end
 	for index = 1, #blocks do
@@ -307,12 +511,18 @@ local function extendCells( context )
 	local offset = pistonOffset( context.stateId )
 	local frontX, frontY, frontZ = context.bx + offset[1], context.by + offset[2], context.bz + offset[3]
 	local protected = { [movementKey( context.bx, context.by, context.bz )] = true }
-	local blocks = collectMovement( frontX, frontY, frontZ, offset, protected )
+	local blocks, destroys = collectMovement( frontX, frontY, frontZ, offset, protected, nil, true )
 	if not blocks then return nil end
 	local headState = pistonHeadState( context.stateId )
 	if not headState then return nil end
 	local cells, writes = {}, {}
-	local write = appendMovementCells( cells, writes, blocks, offset )
+	local write = appendMovementCells( cells, writes, blocks, offset, destroys )
+	-- Defense in depth: the head may only occupy a cell that is empty, was
+	-- vacated by the moved structure or belonged to a popped block. If any
+	-- unaccounted block still sits in front, refuse to extend instead of
+	-- overwriting it.
+	local frontStateNow = GetBlockState( frontX, frontY, frontZ )
+	if frontStateNow ~= 0 and not writes[movementKey( frontX, frontY, frontZ )] then return nil end
 	write( frontX, frontY, frontZ, headState )
 	write( context.bx, context.by, context.bz, StateWith( context.stateId, "extended", true ) or context.stateId )
 	return cells
@@ -332,14 +542,18 @@ local function retractCells( context )
 		local reverse = { -offset[1], -offset[2], -offset[3] }
 		local protected = { [movementKey( context.bx, context.by, context.bz )] = true }
 		local vacated = { [movementKey( frontX, frontY, frontZ )] = true }
-		local blocks = collectMovement( pullX, pullY, pullZ, reverse, protected, vacated )
+		local blocks = collectMovement( pullX, pullY, pullZ, reverse, protected, vacated, false )
 		if blocks and #blocks > 0 then
 			appendMovementCells( cells, writes, blocks, reverse )
 		end
 	end
 	local frontKey = movementKey( frontX, frontY, frontZ )
 	if not writes[frontKey] then
-		cells[#cells + 1] = { bx = frontX, by = frontY, bz = frontZ, stateId = frontState }
+		-- Only clear the front cell while our matching head still occupies it;
+		-- anything else standing there must survive the retraction untouched.
+		if matchingHead( context.stateId, GetBlockState( frontX, frontY, frontZ ) ) then
+			cells[#cells + 1] = { bx = frontX, by = frontY, bz = frontZ, stateId = frontState }
+		end
 	end
 	return cells
 end
