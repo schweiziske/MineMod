@@ -919,13 +919,13 @@ function SV.RemoveBlocksBulk( cells, options )
 	return result.changed
 end
 
-function SV.Use( ply, bx, by, bz )
+function SV.Use( ply, bx, by, bz, selectedBlockID )
 	local id = MC.GetBlock( bx, by, bz )
 	if id == 0 then return false end
 	local b = MC.Blocks[id]
 	if not b or not b.handlers or not b.handlers.OnUse then return false end
 	if not SV.Validate( ply, bx, by, bz, false ) then return false end
-	return b.handlers.OnUse( ply, bx, by, bz, MC.GetBlockOrient( bx, by, bz ) ) == true
+	return b.handlers.OnUse( ply, bx, by, bz, MC.GetBlockOrient( bx, by, bz ), selectedBlockID ) == true
 end
 
 local function trimArg( s )

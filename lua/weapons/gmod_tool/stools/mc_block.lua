@@ -72,6 +72,10 @@ local function placeTarget( ply, aim, tr, id, avoidUseBlocks )
 		stateId = MC.ResolveFaceAttachedPlacementState( stateId, tr.HitNormal, ply )
 		if not stateId then return nil end
 	end
+	if MC.ResolveSignPlacementState then
+		stateId = MC.ResolveSignPlacementState( stateId, tr.HitNormal, ply, bx, by, bz )
+		if not stateId then return nil end
+	end
 	return bx, by, bz, stateId
 end
 
@@ -126,7 +130,7 @@ function TOOL:RightClick( tr )
 	else
 		ux, uy, uz = breakCell( tr )
 	end
-	if MC.SV.Use( ply, ux, uy, uz ) then return true end
+	if MC.SV.Use( ply, ux, uy, uz, id ) then return true end
 
 	local bx, by, bz, stateId = placeTarget( ply, aim, tr, id )
 	if bx and not MC.SV.PlaceState( ply, bx, by, bz, stateId ) and MC.SV.SyncPlacementStatePlan then

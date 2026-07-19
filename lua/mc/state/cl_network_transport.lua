@@ -188,6 +188,7 @@ local function setBlockEntityAt( bx, by, bz, record )
 		chunk.blockEntities[li] = nil
 		if next( chunk.blockEntities ) == nil then chunk.blockEntities = nil end
 	end
+	if MC.MarkSignRenderEntriesDirty then MC.MarkSignRenderEntriesDirty() end
 end
 
 local function decodeBlockEntity( cell, revision )

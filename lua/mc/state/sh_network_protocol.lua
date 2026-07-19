@@ -94,6 +94,7 @@ Net.MessageNames = {
 	"mc_preset_data", "mc_preset_data_part", "mc_preset_place",
 	"mc_preset_cover_begin", "mc_preset_cover_part", "mc_preset_cover_ack",
 	"mc_preset_cover_req", "mc_preset_cover_download_begin", "mc_preset_cover_download_part",
+	"mc_sign_open", "mc_sign_update",
 
 	-- Phase 4 state-aware transport.
 	"mc_state_hello", "mc_state_hello_ack",
