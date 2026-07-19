@@ -44,10 +44,17 @@ end
 function MC.BlockSelectionBoxesForState( stateId, bx, by, bz )
 	stateId = math.floor( tonumber( stateId ) or -1 )
 	if stateId < 0 then return nil end
-	if stateId == LastStateId and bx == LastX and by == LastY and bz == LastZ then return LastBoxes end
-
 	local id = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or nil
 	local block = id and MC.Blocks and MC.Blocks[id] or nil
+	local schema = MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( stateId ) or nil
+	local collisionResolver = schema and MC.BlockStateCollisionResolvers
+		and MC.BlockStateCollisionResolvers[schema.name] or nil
+	local positionDependent = collisionResolver and collisionResolver.positionDependent == true
+		or id and MC.BlockCollisionDependsOnNeighbours and MC.BlockCollisionDependsOnNeighbours( id ) == true
+	if not positionDependent and stateId == LastStateId and bx == LastX and by == LastY and bz == LastZ then
+		return LastBoxes
+	end
+
 	local boxes
 	-- Keep the existing crossed-plane selection shape instead of replacing it
 	-- with the full AABB of its diagonal quads.
@@ -77,6 +84,10 @@ function MC.BlockSelectionBoxesForState( stateId, bx, by, bz )
 	end
 
 	if boxes == nil and MC.BlockBoxesForState then boxes = MC.BlockBoxesForState( stateId, bx, by, bz ) end
-	LastStateId, LastX, LastY, LastZ, LastBoxes = stateId, bx, by, bz, boxes
+	if positionDependent then
+		LastStateId, LastX, LastY, LastZ, LastBoxes = nil, nil, nil, nil, nil
+	else
+		LastStateId, LastX, LastY, LastZ, LastBoxes = stateId, bx, by, bz, boxes
+	end
 	return boxes
 end

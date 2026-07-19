@@ -29,6 +29,19 @@ local Axis = {
 	[MC.Direction.WEST] = "x",
 	[MC.Direction.EAST] = "x",
 }
+local DirectionByName = {
+	north = MC.Direction.NORTH,
+	south = MC.Direction.SOUTH,
+	west = MC.Direction.WEST,
+	east = MC.Direction.EAST,
+}
+local ShapeIndex = {
+	straight = 0,
+	inner_left = 1,
+	inner_right = 2,
+	outer_left = 3,
+	outer_right = 4,
+}
 
 local function neighbour( bx, by, bz, direction )
 	if bx == nil or by == nil or bz == nil or not MC.GetBlock or not MC.GetBlockOrient then return nil end
@@ -100,11 +113,11 @@ local function stepRects( facing, shape )
 	end
 end
 
-function MC.StairBoxes( id, orient, bx, by, bz )
+function MC.StairBoxes( id, orient, bx, by, bz, resolvedShape )
 	orient = MC.NormalizeOrient( id, orient )
 	local facing = MC.StairOrientFacing( orient )
 	local top = MC.StairOrientHalf( orient ) == "top"
-	local shape = MC.StairShapeAt( id, orient, bx, by, bz )
+	local shape = resolvedShape or MC.StairShapeAt( id, orient, bx, by, bz )
 	local boxes = { top and { 0, 0, 0.5, 1, 1, 1 } or { 0, 0, 0, 1, 1, 0.5 } }
 	local z0, z1 = top and 0 or 0.5, top and 0.5 or 1
 	for _, rect in ipairs( stepRects( facing, shape ) ) do
@@ -112,3 +125,56 @@ function MC.StairBoxes( id, orient, bx, by, bz )
 	end
 	return boxes
 end
+
+-- State-native collision has a stateId-only cache by default. Stair corners
+-- cannot use it because vanilla derives inner/outer shape from horizontal
+-- neighbours. Register every stair family as position-dependent and return an
+-- interned shape built by the exact same MC.StairShapeAt/MC.StairBoxes path the
+-- renderer uses.
+local StairCollisionShapes = {}
+
+local function stairCollision( stateId, schema, visual, bx, by, bz )
+	local id = visual and visual.id or schema and schema.blockId
+	if id == nil then return nil end
+	local facingName = MC.GetStateProperty and MC.GetStateProperty( stateId, "facing" ) or "north"
+	local half = MC.GetStateProperty and MC.GetStateProperty( stateId, "half" ) or "bottom"
+	local orient = MC.MakeStairOrient( DirectionByName[facingName] or MC.Direction.NORTH, half )
+	local shape = MC.StairShapeAt( id, orient, bx, by, bz )
+	local key = orient + ( ShapeIndex[shape] or 0 ) * 8
+	local cached = StairCollisionShapes[key]
+	if cached then return cached end
+	if not MC.RegisterBlockStateCollisionShape then return { boxes = MC.StairBoxes( id, orient, bx, by, bz, shape ) } end
+	cached = MC.RegisterBlockStateCollisionShape( { boxes = MC.StairBoxes( id, orient, bx, by, bz, shape ) } )
+	StairCollisionShapes[key] = cached
+	return cached
+end
+
+local function registerStairCollisionResolvers()
+	if not MC.RegisterBlockStateCollision then return 0 end
+	local registered = 0
+	for id, block in pairs( MC.Blocks or {} ) do
+		if block and block.shape == "stairs" then
+			local schema = MC.BlockStateSchemas and MC.BlockStateSchemas[id]
+			if schema and MC.RegisterBlockStateCollision( schema.name, {
+				positionDependent = true,
+				Resolve = stairCollision,
+			} ) then
+				registered = registered + 1
+			end
+		end
+	end
+	return registered
+end
+
+local function ensureStairCollisionResolvers()
+	local registered = registerStairCollisionResolvers()
+	-- Generated schemas finalize on the loader's zero-delay timer. On a fresh
+	-- boot this module runs just before that callback; on hot reload they are
+	-- already available and registration completes immediately.
+	if registered == 0 and not MC.BlockStateRegistryFrozen and timer and timer.Simple then
+		timer.Simple( 0, ensureStairCollisionResolvers )
+	end
+	return registered
+end
+
+ensureStairCollisionResolvers()

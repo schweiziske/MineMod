@@ -25,6 +25,13 @@ local ShapeConnections = {
 	north_east = { NORTH, EAST },
 }
 
+local CornerShapes = {
+	south_east = true,
+	south_west = true,
+	north_west = true,
+	north_east = true,
+}
+
 local function primaryState( changes, changeCount, bx, by, bz )
 	for index = 1, changeCount do
 		local cell = changes[index]
@@ -62,6 +69,85 @@ end
 
 local function shapeForState( stateId )
 	return MC.GetStateProperty and MC.GetStateProperty( stateId, "shape" ) or "north_south"
+end
+
+-- The generated rail_corner quad follows Minecraft's model-face UV order, but
+-- the runtime top-plane UV convention is a quarter turn behind it. Connection
+-- states remain vanilla-native; rotate only the four corner model textures so
+-- the visible ends point at the neighbours selected by RailState.
+local RailCornerRegisteredModels = {}
+
+local function transformRailCornerModel( modelData )
+	local quads = modelData and modelData.modelQuads
+	if not quads then return modelData end
+
+	local transformed = {
+		compact = modelData.compact,
+		generatedStateVisual = modelData.generatedStateVisual,
+		geometryId = modelData.geometryId,
+		surfaceId = modelData.surfaceId,
+		modelSurfaces = modelData.modelSurfaces,
+		modelQuads = {},
+	}
+	for index = 1, #quads do
+		local source = quads[index]
+		local quad = {}
+		for key, value in pairs( source ) do quad[key] = value end
+		-- The underside uses a vertically reversed UV rectangle, so it needs the
+		-- opposite texture-space turn to meet the same two world-space edges.
+		local correction = source.face == ( MC.Face and MC.Face.BOTTOM or 2 ) and 1 or 3
+		quad.rot = ( ( quad.rot or 0 ) + correction ) % 4
+		transformed.modelQuads[index] = quad
+	end
+	return transformed
+end
+
+local function registerRailCornerModel( stateId )
+	if not CLIENT or not CornerShapes[shapeForState( stateId )] then return false end
+	if not MC.StateVisualPlanRangeFast or not MC.StateVisualPlanModelAtFast
+	or not MC.RegisterStateVisualModelTransform then return false end
+	local planId, groupOffset, groupCount = MC.StateVisualPlanRangeFast( stateId )
+	if not planId or groupCount ~= 1 then return false end
+	local modelId = MC.StateVisualPlanModelAtFast( planId, groupOffset, 0, 0, 0, 0 )
+	if not modelId then return false end
+	if not RailCornerRegisteredModels[modelId] then
+		local registered = MC.RegisterStateVisualModelTransform( modelId, transformRailCornerModel )
+		if not registered then return false end
+		RailCornerRegisteredModels[modelId] = true
+	end
+	return true
+end
+
+local function registerAllRailCornerModels()
+	if not CLIENT then return 0 end
+	local schema = MC.BlockStateSchemaByName and MC.BlockStateSchemaByName["minecraft:rail"]
+	if not schema or not schema.firstStateId or not schema.lastStateId then return 0 end
+	local total = 0
+	for stateId = schema.firstStateId, schema.lastStateId do
+		if registerRailCornerModel( stateId ) then total = total + 1 end
+	end
+	return total
+end
+
+local function railVisual( stateId )
+	registerRailCornerModel( stateId )
+end
+
+if MC.RegisterBlockStateVisual then
+	MC.RegisterBlockStateVisual( "minecraft:rail", { Resolve = railVisual } )
+end
+
+if CLIENT and timer and timer.Simple then
+	registerAllRailCornerModels()
+	timer.Simple( 0, function()
+		if registerAllRailCornerModels() <= 0 then return end
+		if MC.ClearDecodedStateVisualModels then MC.ClearDecodedStateVisualModels() end
+		local renderMesh = MC.RenderMesh
+		if renderMesh and renderMesh.resetShapeModelTemplateCache then
+			renderMesh.resetShapeModelTemplateCache()
+		end
+		if MC.MarkAllMeshesDirty then MC.MarkAllMeshesDirty( "rail_corner_visual_reload" ) end
+	end )
 end
 
 local function shapeConnectsTo( shape, bx, by, targetX, targetY )
