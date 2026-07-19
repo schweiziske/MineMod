@@ -586,6 +586,7 @@ local function resetClientWorldForSnapshot( expectedChunks, expectedBlocks )
 	MC.PendingFull = {}
 	MC.PendingPredictions = {}
 	MC.PendingPredictionGroups = {}
+	if MC.MarkSignRenderEntriesDirty then MC.MarkSignRenderEntriesDirty() end
 	MC.SyncProgress = {
 		expected = math.max( 0, math.floor( tonumber( expectedBlocks ) or 0 ) ),
 		received = 0,
@@ -745,6 +746,7 @@ function MC.LoadSnapshotSaveData( data )
 	for _, cell in ipairs( queued ) do
 		applyNetCell( cell.bx, cell.by, cell.bz, cell.id, cell.orient )
 	end
+	if MC.MarkSignRenderEntriesDirty then MC.MarkSignRenderEntriesDirty() end
 
 	return true
 end

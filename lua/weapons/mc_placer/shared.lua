@@ -87,6 +87,10 @@ local function placeTarget( ply, aim, fallbackTrace, id, avoidUseBlocks )
 		stateId = MC.ResolveFaceAttachedPlacementState( stateId, tr.HitNormal, ply )
 		if not stateId then return nil end
 	end
+	if MC.ResolveSignPlacementState then
+		stateId = MC.ResolveSignPlacementState( stateId, tr.HitNormal, ply, bx, by, bz )
+		if not stateId then return nil end
+	end
 	return bx, by, bz, stateId
 end
 
@@ -145,9 +149,9 @@ function SWEP:SecondaryAttack()
 		else
 			ux, uy, uz = breakCell( tr )
 		end
-		if MC.SV.Use( owner, ux, uy, uz ) then return end
-
 		local id = selectedID( owner )
+		if MC.SV.Use( owner, ux, uy, uz, id ) then return end
+
 		local bx, by, bz, stateId = placeTarget( owner, aim, tr, id )
 		if not bx then return end
 		if MC.SV.PlaceState( owner, bx, by, bz, stateId ) then

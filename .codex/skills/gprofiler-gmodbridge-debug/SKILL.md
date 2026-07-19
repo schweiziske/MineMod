@@ -6,6 +6,7 @@ description: Use when debugging Garry's Mod plugins with GProfiler, gmodbridge, 
 # GProfiler + gmodbridge 调试
 
 ## 概要
+!!!!只有用户要求使用的时候 你才能使用！！！！
 
 先判断问题类型，再选工具：
 
