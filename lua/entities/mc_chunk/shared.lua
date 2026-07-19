@@ -38,8 +38,16 @@ local function freezePhysicsObject( ent )
 	return false
 end
 
-local function clientCollisionAABBOnly()
-	return CLIENT
+-- General client prediction stays box-only; slopes need server geometry parity
+-- so movement follows the rendered incline instead of an invisible full cube.
+local function clientCollisionAABBOnly( visual )
+	if not CLIENT then return false end
+
+	local block = visual and visual.block or nil
+	if not block and visual and MC.Blocks then block = MC.Blocks[visual.id] end
+	if not block then return true end
+	if block.creativeCategory == "slopes" then return false end
+	return not string.match( tostring( block.name or "" ), "_slope$" )
 end
 
 local function removeSubchunkEntity( subchunk )
@@ -366,7 +374,8 @@ local function greedyBoxes( chunk, bounds )
 							if MC.BlockVisualIsFullCube and MC.BlockVisualIsFullCube( visual, bx, by, bz ) then
 								solid[li] = true
 							else
-								local blockConvexes = not clientCollisionAABBOnly() and MC.BlockVisualCollisionConvexes
+								local aabbOnly = clientCollisionAABBOnly( visual )
+								local blockConvexes = not aabbOnly and MC.BlockVisualCollisionConvexes
 									and MC.BlockVisualCollisionConvexes( visual, bx, by, bz ) or nil
 								if blockConvexes then
 									for _, convex in ipairs( blockConvexes ) do
@@ -375,7 +384,7 @@ local function greedyBoxes( chunk, bounds )
 								else
 									local blockBoxes = MC.BlockVisualCollisionBoxes
 										and MC.BlockVisualCollisionBoxes( visual, bx, by, bz ) or nil
-									if clientCollisionAABBOnly() and ( not blockBoxes or #blockBoxes == 0 ) and MC.BlockVisualBoxes then
+									if aabbOnly and ( not blockBoxes or #blockBoxes == 0 ) and MC.BlockVisualBoxes then
 										blockBoxes = MC.BlockVisualBoxes( visual, bx, by, bz )
 									end
 									for _, box in ipairs( blockBoxes or {} ) do
