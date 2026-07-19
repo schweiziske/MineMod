@@ -367,6 +367,26 @@ MC.ConfigConVars = {
 				"混合前应用到 Source 光照采样值的倍数。" ),
 		} ),
 
+		category( "entity_lighting", "lighting", "Entity and vehicle lighting", "实体与载具光照",
+			"Apply interpolated MC world lighting to props and standard Source vehicles.",
+			"将 MC 世界的插值光照应用到道具与原生 Source 载具。", {
+			item( "mc_entity_lighting", "Entity lighting master", "实体光照总开关", "bool",
+				"Master switch for MC lighting on supported entity types.",
+				"控制受支持实体类型的 MC 光照总开关。" ),
+			item( "mc_entity_lighting_props", "Prop lighting", "道具光照", "bool",
+				"Apply MC lighting to common physics, dynamic and ragdoll props.",
+				"将 MC 光照应用到常见物理、动态与布娃娃道具。" ),
+			item( "mc_entity_lighting_vehicles", "Vehicle lighting", "载具光照", "bool",
+				"Apply MC lighting to the standard jeep, airboat and prisoner pod.",
+				"将 MC 光照应用到原生吉普车、汽艇和座椅载具。" ),
+			item( "mc_entity_lighting_gain", "Entity exposure", "实体曝光", "number",
+				"Brightness multiplier used by prop and vehicle lighting.",
+				"道具与载具光照使用的亮度倍数。" ),
+			item( "mc_entity_lighting_reflections", "Reflection strength", "反射强度", "number",
+				"How strongly envmap and Phong reflections remain visible in MC lighting.",
+				"MC 光照下保留环境反射与 Phong 高光的强度。" ),
+		} ),
+
 		category( "creative_general", "creative", "Held block behaviour", "手持方块行为",
 			"Enable the held model and placement or break animation.",
 			"控制手持方块模型以及放置、破坏动画。", {

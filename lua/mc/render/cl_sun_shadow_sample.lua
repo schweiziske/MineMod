@@ -18,6 +18,10 @@ local SHADOW_MAX_PASSTHROUGH = 4
 local cacheFrame = -1
 local cacheFactor = {}
 
+local TORCH_WARM = { 1.0, 0.82, 0.58 }
+local NIGHT_BLUE = { 0.28, 0.42, 1.0 }
+local SUNSET_ORANGE = { 1.0, 0.62, 0.36 }
+
 local function convarFloat( cvar, fallback, minV, maxV )
 	local v = cvar and cvar.GetFloat and cvar:GetFloat()
 	return math.Clamp( tonumber( v ) or fallback, minV, maxV )
@@ -77,6 +81,102 @@ function MC.SampleSunShadow( pos )
 	return factor
 end
 
+local function lerp( t, a, b )
+	return a + ( b - a ) * t
+end
+
+local function trilerp( c000, c100, c010, c110, c001, c101, c011, c111, fx, fy, fz )
+	local x00 = lerp( fx, c000, c100 )
+	local x10 = lerp( fx, c010, c110 )
+	local x01 = lerp( fx, c001, c101 )
+	local x11 = lerp( fx, c011, c111 )
+	return lerp( fz, lerp( fy, x00, x10 ), lerp( fy, x01, x11 ) )
+end
+
+-- Light values live at voxel centers. Interpolating around those centers keeps
+-- a held item from snapping between two integer cells as the hand bobs across
+-- a boundary, while still using the exact propagated block/sky fields.
+function MC.SampleDynamicLightLevels( pos, emission )
+	if not ( pos and MC.SampleLighting and MC.BS ) then return 15, 15 end
+	local gx = pos.x / MC.BS - 0.5
+	local gy = pos.y / MC.BS - 0.5
+	local gz = pos.z / MC.BS - 0.5
+	local x0, y0, z0 = math.floor( gx ), math.floor( gy ), math.floor( gz )
+	local fx, fy, fz = gx - x0, gy - y0, gz - z0
+	local block, sky = {}, {}
+	local index = 0
+	for dz = 0, 1 do
+		for dy = 0, 1 do
+			for dx = 0, 1 do
+				index = index + 1
+				local _, _, b, s = MC.SampleLighting( x0 + dx, y0 + dy, z0 + dz, 0 )
+				block[index] = tonumber( b ) or 0
+				sky[index] = tonumber( s ) or 0
+			end
+		end
+	end
+	local blockLevel = trilerp( block[1], block[2], block[3], block[4], block[5], block[6], block[7], block[8], fx, fy, fz )
+	local skyLevel = trilerp( sky[1], sky[2], sky[3], sky[4], sky[5], sky[6], sky[7], sky[8], fx, fy, fz )
+	return math.max( blockLevel, math.Clamp( tonumber( emission ) or 0, 0, 15 ) ), skyLevel
+end
+
+local function blockCurveUnit( level )
+	local unit = math.Clamp( ( tonumber( level ) or 0 ) / 15, 0, 1 )
+	local gamma = convarFloat( MC.MeshGpuLightGamma, 1, 0.25, 4 )
+	if gamma ~= 1 then unit = unit ^ ( 1 / gamma ) end
+	return math.Clamp( unit * convarFloat( MC.MeshGpuLightBrightness, 1, 0.1, 4 ), 0, 1 )
+end
+
+-- Dynamic unlit geometry cannot sample the GPU lightmap texture directly, so
+-- reproduce its custom lightmap composition here: warm block light, colored
+-- sky light, nonlinear sky falloff and the same ambient floor. Shadowing only
+-- attenuates the directional part of sky illumination; cave ambient and block
+-- light remain visible instead of the whole result being multiplied darker.
+function MC.SampleDynamicLightingRGB( pos, emission )
+	local blockLevel, skyLevel = MC.SampleDynamicLightLevels( pos, emission )
+	local dayBrightness = MC.DayCycleSkyBrightness and MC.DayCycleSkyBrightness() or 1
+	local nightGamma = convarFloat( MC.MeshGpuLightmapNightGamma, 0.6, 0.25, 1 )
+	if nightGamma ~= 1 then dayBrightness = math.Clamp( dayBrightness, 0, 1 ) ^ nightGamma end
+	local nightBlend = MC.DayCycleNightBlend and MC.DayCycleNightBlend() or 0
+	local horizon = MC.DayCycleHorizonBlend and MC.DayCycleHorizonBlend() or 0
+	local sunset = horizon * ( 1 - nightBlend ) * convarFloat( MC.MeshGpuLightmapSunset, 0.5, 0, 1 )
+	local nightTint = nightBlend * convarFloat( MC.DayCycleNightTint, 0.85, 0, 1 )
+	local torchWarmth = convarFloat( MC.MeshGpuLightmapTorchWarmth, 0.7, 0, 1 )
+	local ambient = math.max(
+		convarFloat( MC.LightAmbientMin, 0, 0, 1 ),
+		convarFloat( MC.MeshGpuLightmapAmbient, 0.04, 0, 1 )
+	)
+
+	local skyR = lerp( sunset, 1, SUNSET_ORANGE[1] )
+	local skyG = lerp( sunset, 1, SUNSET_ORANGE[2] )
+	local skyB = lerp( sunset, 1, SUNSET_ORANGE[3] )
+	skyR = lerp( nightTint, skyR, NIGHT_BLUE[1] )
+	skyG = lerp( nightTint, skyG, NIGHT_BLUE[2] )
+	skyB = lerp( nightTint, skyB, NIGHT_BLUE[3] )
+
+	local torchR = lerp( torchWarmth, 1, TORCH_WARM[1] )
+	local torchG = lerp( torchWarmth, 1, TORCH_WARM[2] )
+	local torchB = lerp( torchWarmth, 1, TORCH_WARM[3] )
+	local blockUnit = blockCurveUnit( blockLevel )
+	local skyCurve = convarFloat( MC.MeshGpuLightmapSkyCurve, 3, 1, 6 )
+	local skyFloor = convarFloat( MC.MeshGpuLightmapSkyMin, 0.1, 0, 1 )
+	local skyShape = 1 - ( 1 - math.Clamp( skyLevel / 15, 0, 1 ) ) ^ skyCurve
+	skyShape = skyFloor + ( 1 - skyFloor ) * skyShape
+	local skyUnit = math.Clamp( skyShape * dayBrightness * convarFloat( MC.MeshGpuSunBrightness, 1, 0, 4 ), 0, 1 )
+
+	-- Treat 65% of sky illumination as ambient and 35% as directional. This
+	-- mirrors the chunk shader's separation closely enough without crushing an
+	-- item to black whenever the ray sample reports a shadow.
+	local shadow = MC.SampleSunShadow( pos )
+	local skyShadow = 0.65 + 0.35 * shadow
+	local sr, sg, sb = skyUnit * skyR * skyShadow, skyUnit * skyG * skyShadow, skyUnit * skyB * skyShadow
+	local hueMax = math.max( skyR, skyG, skyB, 0.001 )
+	local r = math.max( math.min( blockUnit * torchR + sr, 1 ), ambient * skyR / hueMax )
+	local g = math.max( math.min( blockUnit * torchG + sg, 1 ), ambient * skyG / hueMax )
+	local b = math.max( math.min( blockUnit * torchB + sb, 1 ), ambient * skyB / hueMax )
+	return math.Clamp( r, 0, 1 ), math.Clamp( g, 0, 1 ), math.Clamp( b, 0, 1 ), blockLevel, skyLevel
+end
+
 -- Applies day/night sky intensity and the directional shadow to a
 -- MC.SampleLighting result. MC.SampleLighting stores time-independent voxel
 -- sky levels, while chunk shaders apply the current day-cycle intensity later;
@@ -84,6 +184,10 @@ end
 -- Block light and explicit self emission are omnidirectional, so they set a
 -- floor the shadow can never darken below.
 function MC.ApplySunShadowToBrightness( pos, brightness, level, blockLight, emission, skyLight )
+	if MC.SampleDynamicLightingRGB then
+		local r, g, b = MC.SampleDynamicLightingRGB( pos, emission )
+		return math.max( r, g, b )
+	end
 	brightness = math.Clamp( tonumber( brightness ) or 1, 0, 1 )
 	blockLight = math.Clamp( tonumber( blockLight ) or 0, 0, 15 )
 	emission = math.Clamp( tonumber( emission ) or 0, 0, 15 )

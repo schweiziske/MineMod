@@ -137,17 +137,16 @@ function MC.GetBlockParticleMaterial( id, col, row )
 	return particleMaterialForTile( tileName, col, row ), tileName, tile
 end
 
-local function particleBrightnessAt( pos )
-	if not ( MC.WorldToCell and MC.SampleLighting ) then return 1 end
-	local bx, by, bz = MC.WorldToCell( pos )
-	if bx == nil then return 1 end
-	-- Terrain fragments are lit by the world cell they occupy; breaking an
-	-- emitting block does not make every fragment a new level-15 light source.
-	local brightness, level, blockLight, skyLight = MC.SampleLighting( bx, by, bz, 0 )
-	if MC.ApplySunShadowToBrightness then
-		brightness = MC.ApplySunShadowToBrightness( pos, brightness, level, blockLight, 0, skyLight )
+local function particleLightingAt( pos )
+	if MC.SampleDynamicLightingRGB then
+		return MC.SampleDynamicLightingRGB( pos, 0 )
 	end
-	return math.Clamp( tonumber( brightness ) or 1, 0, 1 )
+	if not ( MC.WorldToCell and MC.SampleLighting ) then return 1, 1, 1 end
+	local bx, by, bz = MC.WorldToCell( pos )
+	if bx == nil then return 1, 1, 1 end
+	local brightness = MC.SampleLighting( bx, by, bz, 0 )
+	brightness = math.Clamp( tonumber( brightness ) or 1, 0, 1 )
+	return brightness, brightness, brightness
 end
 
 local function addTerrainParticle( emitter, tileName, pos, relX, relY, relZ, bs, tintCode )
@@ -178,13 +177,18 @@ local function addTerrainParticle( emitter, tileName, pos, relX, relY, relZ, bs,
 	p:SetCollide( true )
 	p:SetBounce( 0 )
 	p:SetLighting( false )
-	local brightness = particleBrightnessAt( pos )
-	local shade = math.Clamp( math.floor( 153 * brightness + 0.5 ), 0, 255 )
+	local lightR, lightG, lightB = particleLightingAt( pos )
+	-- Keep particles slightly brighter than held blocks while leaving enough
+	-- HDR headroom to avoid clipped, glowing fragments outdoors.
+	local baseShade = 153 -- 0.60 * 255
+	local shadeR = math.Clamp( math.floor( baseShade * lightR + 0.5 ), 0, 255 )
+	local shadeG = math.Clamp( math.floor( baseShade * lightG + 0.5 ), 0, 255 )
+	local shadeB = math.Clamp( math.floor( baseShade * lightB + 0.5 ), 0, 255 )
 	if tintCode and tintCode ~= 0 and MC.BlockTintRGB then
 		local tr, tg, tb = MC.BlockTintRGB( tintCode )
-		p:SetColor( math.floor( shade * tr / 255 + 0.5 ), math.floor( shade * tg / 255 + 0.5 ), math.floor( shade * tb / 255 + 0.5 ) )
+		p:SetColor( math.floor( shadeR * tr / 255 + 0.5 ), math.floor( shadeG * tg / 255 + 0.5 ), math.floor( shadeB * tb / 255 + 0.5 ) )
 	else
-		p:SetColor( shade, shade, shade )
+		p:SetColor( shadeR, shadeG, shadeB )
 	end
 end
 
