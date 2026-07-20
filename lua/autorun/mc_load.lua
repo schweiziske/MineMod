@@ -183,24 +183,35 @@ for _, f in ipairs( SHARED ) do includeTracked( f ) end
 -- treated the same as a missing DLL so the pure-Lua backend keeps its smaller
 -- 8^3 update granularity.
 if CLIENT then
-	local nativeLoaded = pcall( require, "mcswep_native_mesh" )
-	local nativeUsable = nativeLoaded and istable( mcmesh ) and isfunction( mcmesh.AbiVersion )
-	if nativeUsable then
-		local abiOK, abi = pcall( mcmesh.AbiVersion )
-		nativeUsable = abiOK and abi == 3
-	end
-	if nativeUsable then
-		for _, name in ipairs( {
-			"Handshake", "SetBlockDefs", "SetLightDefs", "CreateChunk", "ApplyChunk", "SetCellsBatch",
-			"SetCell", "GetCell", "GetChunkCells", "Think", "DrawChunk", "UnloadChunk",
-			"ClearWorld", "Shutdown", "GetStats", "StartBlockLightRebuild",
-			"PollBlockLightRebuild", "RebuildBlockLight", "GetBlockLightChunk", "GetSkyLightChunk",
-		} ) do
-			if not isfunction( mcmesh[name] ) then nativeUsable = false break end
+	local nativeUsable = MC.NativeMeshModuleProbeDone == true and MC.NativeMeshModuleAvailable == true
+	if MC.NativeMeshModuleProbeDone ~= true then
+		local nativeLoaded, nativeLoadError = pcall( require, "mcswep_native_mesh" )
+		nativeUsable = nativeLoaded and istable( mcmesh ) and isfunction( mcmesh.AbiVersion )
+		local nativeFailureReason = nativeLoaded and "invalid module table" or tostring( nativeLoadError or "module not found" )
+		if nativeUsable then
+			local abiOK, abi = pcall( mcmesh.AbiVersion )
+			nativeUsable = abiOK and abi == 4
+			if not nativeUsable then nativeFailureReason = "ABI mismatch" end
 		end
+		if nativeUsable then
+			for _, name in ipairs( {
+				"Handshake", "SetBlockDefs", "SetLightDefs", "CreateChunk", "ApplyChunk", "SetCellsBatch",
+				"SetCell", "GetCell", "GetChunkCells", "Think", "DrawChunk", "UnloadChunk",
+				"ClearWorld", "Shutdown", "GetStats", "StartBlockLightRebuild",
+				"PollBlockLightRebuild", "RebuildBlockLight", "GetBlockLightChunk", "GetSkyLightChunk",
+			} ) do
+				if not isfunction( mcmesh[name] ) then
+					nativeUsable = false
+					nativeFailureReason = "missing export " .. name
+					break
+				end
+			end
+		end
+		MC.NativeMeshModuleProbeDone = true
+		MC.NativeMeshModuleAvailable = nativeUsable
+		MC.NativeMeshModuleFailureReason = nativeUsable and nil or nativeFailureReason
 	end
 	MC.RENDER_SECTION_SIZE = nativeUsable and 16 or 8
-	MC.NativeMeshModuleAvailable = nativeUsable
 	MsgN( "[MC] render section size = " .. MC.RENDER_SECTION_SIZE
 		.. ( nativeUsable and " (native module)" or " (Lua fallback)" ) )
 end
