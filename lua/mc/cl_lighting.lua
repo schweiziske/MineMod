@@ -921,10 +921,10 @@ end
 function MC.RebuildLightingCells()
 	local perfStart = SysTime()
 	ensureLightSourceIndex()
-	if MC.ClearSkyFlood then MC.ClearSkyFlood() end
-	if MC.QueueAllSkyFlood then MC.QueueAllSkyFlood() end
-	local minX, minY, minZ, maxX, maxY, maxZ = loadedWorldBounds()
 	local native = nativeBlockLightBackend()
+	if MC.ClearSkyFlood then MC.ClearSkyFlood() end
+	if not native and MC.QueueAllSkyFlood then MC.QueueAllSkyFlood() end
+	local minX, minY, minZ, maxX, maxY, maxZ = loadedWorldBounds()
 	if native then
 		native.ScheduleBlockLightRebuild( 0 )
 		MC.LightBlockChunks = {}
