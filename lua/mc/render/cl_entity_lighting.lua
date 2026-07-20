@@ -7,7 +7,7 @@ MC.EntityLightingEnabled = MC.EntityLightingEnabled or CreateClientConVar(
 	"Apply interpolated Minecraft lighting to players and common prop models"
 )
 MC.EntityLightingPlayers = MC.EntityLightingPlayers or CreateClientConVar(
-	"mc_entity_lighting_players", "1", true, false,
+	"mc_entity_lighting_players", "0", true, false,
 	"Apply Minecraft entity lighting to players"
 )
 MC.EntityLightingProps = MC.EntityLightingProps or CreateClientConVar(

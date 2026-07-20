@@ -325,7 +325,7 @@ function SV.Validate( ply, bx, by, bz, placing )
 	local reach = C.Reach:GetFloat()
 	if reach > 0 and IsValid( ply ) then
 		if not MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, reach ) then
-			notify( ply, "Too far (mc_reach)" )
+			--notify( ply, "Too far (mc_reach)" )
 			return false
 		end
 	end
@@ -737,7 +737,7 @@ local function validateReach( ply, bx, by, bz )
 	local reach = C.Reach:GetFloat()
 	if reach > 0 and IsValid( ply ) then
 		if not MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, reach ) then
-			notify( ply, "Too far (mc_reach)" )
+			--notify( ply, "Too far (mc_reach)" )
 			return false
 		end
 	end
@@ -765,7 +765,7 @@ local function validatePlacementPlan( ply, plan )
 		else
 			if existingId ~= 0 then return false end
 			if wouldTrapPlayer( cell.bx, cell.by, cell.bz, cell.id, cell.orient, cell.stateId ) then
-				notify( ply, "A player is in the way" )
+				--notify( ply, "A player is in the way" )
 				return false
 			end
 			add = add + 1
