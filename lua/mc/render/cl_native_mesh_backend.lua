@@ -37,7 +37,7 @@ local CONVAR_ENABLED = CreateClientConVar( "mc_native_mesh", "1", true, false,
 local CONVAR_THINK_MS = CreateClientConVar( "mc_native_think_ms", "3", true, false,
 	"Per-frame budget (ms) for native mesh finalization" )
 
-local ADAPTER_ABI = 3   -- M5.6 MCBD v4 visual transform format v2
+local ADAPTER_ABI = 4   -- M5.7 state-native liquid metrics
 
 local function newPackProfile()
 	return {
@@ -67,6 +67,8 @@ end
 
 local state = {
 	active = false,
+	moduleProbeDone = MC.NativeMeshModuleProbeDone == true,
+	moduleUnavailable = MC.NativeMeshModuleProbeDone == true and MC.NativeMeshModuleAvailable == false,
 	failed = false,          -- 娓叉煋涓€旂疆浣? Think 閲岀粺涓€澶勭悊鍥為€€
 	shuttingDown = false,
 	shutdownCalled = false,
@@ -94,6 +96,16 @@ local state = {
 
 local function log( msg )
 	print( "[mcswep-native] " .. tostring( msg ) )
+end
+
+local function lockToLuaBackend( reason )
+	state.moduleProbeDone = true
+	state.moduleUnavailable = true
+	MC.NativeMeshModuleProbeDone = true
+	MC.NativeMeshModuleAvailable = false
+	MC.NativeMeshModuleFailureReason = reason or MC.NativeMeshModuleFailureReason or "native module unavailable"
+	timer.Remove( "mcswep_native_bootstrap" )
+	return false
 end
 
 -- Transitional formal backend surface used by the MC mother addon.  New
@@ -649,6 +661,7 @@ local function stateMapPayload()
 	local parts = {}
 	for stateId = 0, count - 1 do
 		local blockId, orient, stairPlans = 0, 0, {0,0,0,0,0}
+		local stateLiquidKind, stateLiquidAmount = 0, 0
 		if stateId ~= 0 then
 			local exact, projectionError
 			blockId, orient, exact, projectionError = MC.LegacyFromState( stateId )
@@ -674,11 +687,23 @@ local function stateMapPayload()
 					stairPlans[index] = checkedInt( planId or 0, 1, 65535, "stair plan" )
 				end
 			end
+			if MC.LiquidStateMetrics then
+				local kind, ownHeight, _, _, waterlogged = MC.LiquidStateMetrics( stateId )
+				if kind and not waterlogged then
+					stateLiquidKind = checkedInt( LIQUID[kind] or 0, 1, 2, "state liquid kind" )
+					local scaled = checkedNumber( ownHeight, 0, 1, "state liquid height" ) * 9
+					stateLiquidAmount = checkedInt( math.floor( scaled + 0.5 ), 1, 8, "state liquid amount" )
+					if math.abs( scaled - stateLiquidAmount ) > 0.000001 then
+						error( "state liquid height is not quantized", 0 )
+					end
+				end
+			end
 			parts[#parts + 1] = u32le( stateId ) .. u16le( checkedInt( blockId, 1, 65535, "state block id" ) )
-				.. u8( checkedInt( orient or 0, 0, 255, "state orient" ) ) .. u8( stateFlags ) .. u8( 0 )
+				.. u8( checkedInt( orient or 0, 0, 255, "state orient" ) ) .. u8( stateFlags )
+				.. u8( stateLiquidKind ) .. u8( stateLiquidAmount ) .. u8( 0 )
 				.. u16le(stairPlans[1])..u16le(stairPlans[2])..u16le(stairPlans[3])..u16le(stairPlans[4])..u16le(stairPlans[5])
 		else
-			parts[#parts + 1] = u32le( 0 ) .. u16le( 0 ) .. u8( 0 ) .. u8( 0 ) .. u8( 0 ) .. string.rep( "\0", 10 )
+			parts[#parts + 1] = u32le( 0 ) .. u16le( 0 ) .. string.rep( "\0", 15 )
 		end
 	end
 	return table.concat( parts ), count
@@ -717,10 +742,16 @@ local function visualCatalogPayload( totalStateCount )
 	end
 	for _,name in ipairs({"minecraft:piston","minecraft:sticky_piston","minecraft:piston_head"}) do
 		local schema=MC.BlockStateSchemaByName and MC.BlockStateSchemaByName[name]
-		if schema and MC.StateVisualPlanRangeFast and MC.StateVisualPlanModelAtFast then for stateId=schema.firstStateId,schema.lastStateId do
+		if not schema or not MC.StateVisualPlanRangeFast or not MC.StateVisualPlanModelAtFast then
+			error("piston visual transform registry unavailable",0)
+		end
+		for stateId=schema.firstStateId,schema.lastStateId do
 			local planId,groupOffset,groupCount=MC.StateVisualPlanRangeFast(stateId)
-			if groupCount==1 then local modelId=MC.StateVisualPlanModelAtFast(planId,groupOffset,0,0,0,0);if modelId then addTransform(modelId,0,{2},"piston") end end
-		end end
+			if not planId or groupCount~=1 then error("piston visual plan invalid for state "..stateId,0) end
+			local modelId=MC.StateVisualPlanModelAtFast(planId,groupOffset,0,0,0,0)
+			if not modelId then error("piston visual model missing for state "..stateId,0) end
+			addTransform(modelId,0,{2},"piston")
+		end
 	end
 	local railSchema=MC.BlockStateSchemaByName and MC.BlockStateSchemaByName["minecraft:rail"]
 	local railCorners={south_east=true,south_west=true,north_west=true,north_east=true}
@@ -1196,25 +1227,31 @@ local function tryStart()
 	if state.shuttingDown or state.shutdownCalled then return false end
 	if state.active then return true end
 	if not CONVAR_ENABLED:GetBool() then return false end
+	if state.moduleUnavailable
+	or ( MC.NativeMeshModuleProbeDone == true and MC.NativeMeshModuleAvailable == false ) then
+		return lockToLuaBackend( MC.NativeMeshModuleFailureReason )
+	end
 	if not ( MC and MC.BuildChunkMesh and MC.World and MC.Meshes and MC.MeshesTrans
 		and MC.GetChunkByKey and MC.ChunkKeyToCoords ) then return false end
 	if not mcmesh then
-		local ok = pcall( require, "mcswep_native_mesh" )
-		if not ok or not mcmesh then return false end
+		if state.moduleProbeDone then return lockToLuaBackend( "module missing after initial probe" ) end
+		state.moduleProbeDone = true
+		local ok, loadError = pcall( require, "mcswep_native_mesh" )
+		if not ok or not mcmesh then return lockToLuaBackend( tostring( loadError or "module not found" ) ) end
+		MC.NativeMeshModuleProbeDone = true
+		MC.NativeMeshModuleAvailable = true
 	end
 	if not ( mcmesh.AbiVersion and mcmesh.AbiVersion() == ADAPTER_ABI ) then
 		log( "ABI mismatch (module " .. tostring( mcmesh.AbiVersion and mcmesh.AbiVersion() )
 			.. ", adapter " .. ADAPTER_ABI .. "), staying on Lua path" )
-		timer.Remove( "mcswep_native_bootstrap" )
-		return false
+		return lockToLuaBackend( "ABI mismatch" )
 	end
 	-- 瀵煎嚭闈㈡鏌? 濂戠害鍑芥暟蹇呴』鍏ㄩ儴瀛樺湪(绌哄３涔熻), 缂轰竴涓氨鐐瑰悕骞剁暀鍦?Lua 璺緞
 	for _, fname in ipairs( { "Handshake", "SetBlockDefs", "SetLightDefs", "CreateChunk", "ApplyChunk", "SetCellsBatch", "SetCell", "GetCell", "GetChunkCells", "RebuildBlockLight", "StartBlockLightRebuild", "PollBlockLightRebuild", "GetBlockLightChunk", "GetSkyLightChunk", "UnloadChunk",
 		"ClearWorld", "Think", "DrawChunk", "GetStats", "Shutdown" } ) do
 		if not isfunction( mcmesh[fname] ) then
 			log( "module missing mcmesh." .. fname .. "(), staying on Lua path" )
-			timer.Remove( "mcswep_native_bootstrap" )
-			return false
+			return lockToLuaBackend( "missing export " .. fname )
 		end
 	end
 	-- GPU 鍏夌収妗ｆ闂ㄦ: 闈?GPU light texture 椋庢牸涓?native 鐨勫浐瀹?payload 浼氶敊鍏?
@@ -1252,7 +1289,7 @@ local function tryStart()
 	local blob, census, defCount, opaqueCount, translucentCount
 	local metadata = MC.BlockStateRegistryMetadata or {}
 	local catalog = MC.StateVisualCatalog or {}
-	local cacheKey = "mcbd4-visual2-stateflags2:" .. tostring( metadata.schemaHash or "" ) .. ":" .. tostring( catalog.visualPlanSha256 or "" )
+	local cacheKey = "mcbd4-state-liquid1-visual2-stateflags2-pistonuv1:" .. tostring( metadata.schemaHash or "" ) .. ":" .. tostring( catalog.visualPlanSha256 or "" )
 		.. ":" .. tostring( MC.BlockStateCount or 0 )
 	local builtFresh, loadedFromDisk, loadedFromArtifact = false, false, false
 	if state.defCache and state.defCache.key == cacheKey then
@@ -1357,12 +1394,16 @@ local function tryStart()
 	return true
 end
 
-timer.Create( "mcswep_native_bootstrap", 1, 0, function()
-	if tryStart() then timer.Remove( "mcswep_native_bootstrap" ) end
-end )
+if not state.moduleUnavailable and CONVAR_ENABLED:GetBool() then
+	timer.Create( "mcswep_native_bootstrap", 1, 0, function()
+		if tryStart() then timer.Remove( "mcswep_native_bootstrap" ) end
+	end )
+end
 
 cvars.AddChangeCallback( "mc_native_mesh", function( _, _, new )
 	if new == "1" and not state.active then
+		if state.moduleUnavailable
+		or ( MC.NativeMeshModuleProbeDone == true and MC.NativeMeshModuleAvailable == false ) then return end
 		if tryStart() then return end
 		timer.Create( "mcswep_native_bootstrap", 1, 0, function()
 			if tryStart() then timer.Remove( "mcswep_native_bootstrap" ) end
@@ -1414,6 +1455,9 @@ concommand.Add( "mc_native_status", function()
 		"backend        = " .. ( state.active and "NATIVE" or "LUA" ),
 		"convar         = mc_native_mesh " .. ( CONVAR_ENABLED:GetBool() and "1" or "0" ),
 		"module loaded  = " .. tostring( mcmesh ~= nil ),
+		"module probe   = done=" .. tostring( state.moduleProbeDone )
+			.. " lockedLua=" .. tostring( state.moduleUnavailable ),
+		"module reason  = " .. tostring( MC.NativeMeshModuleFailureReason or "" ),
 		"proxied chunks = " .. table.Count( state.proxied ),
 		"block light    = " .. ( state.lightRunning and "running" or ( state.lightPending and "pending" or state.lightLastStatus ) )
 			.. " ready=" .. tostring( state.lightReady ) .. " lastMS=" .. math.Round( state.lightLastMS or 0, 3 )
