@@ -459,6 +459,26 @@ function Store.RecordEdit( bx, by, bz, id, orient, stateId )
 	edits[tostring( li )] = { state = spec }
 end
 
+-- Storage-level bulk edits such as /fill already know their Chunk and local
+-- indexes. Record the lazy-save overlay without repeating coordinate decoding
+-- and block-state formatting for every cell.
+function Store.RecordChunkStateEdits( key, localIndexes, stateId )
+	if not Store.IsLazyWorld() then return end
+	key = tostring( key or "" )
+	if key == "" or not istable( localIndexes ) then return end
+	local spec = MC.FormatBlockState( stateId )
+	if not spec then return end
+	local edits = Store.EditChunks[key]
+	if not edits then
+		edits = {}
+		Store.EditChunks[key] = edits
+	end
+	for index = 1, #localIndexes, 2 do
+		local li = math.floor( tonumber( localIndexes[index] ) or -1 )
+		if MC.LocalIndexInRange( li ) then edits[tostring( li )] = { state = spec } end
+	end
+end
+
 function Store.SaveOverlay()
 	return {
 		v = 2,

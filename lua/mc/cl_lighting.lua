@@ -1051,7 +1051,7 @@ function MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, old
 	end
 	local native = nativeBlockLightBackend()
 	if native then
-		-- ABI 5 SetCell already updated block + sky fields synchronously in C++
+		-- ABI 5+ SetCell already updated block + sky fields synchronously in C++
 		-- and returned exact dirty masks. Do not enqueue a second full-world job.
 		return 0, 0
 	end

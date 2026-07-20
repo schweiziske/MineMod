@@ -98,17 +98,18 @@ local function encodeOpaqueBlockEntities( chunk, options )
 	return #out > 0 and out or nil
 end
 
-function SV.BuildStateSaveData( slotName, options )
-	local chunks, palette, paletteIndex = {}, {}, {}
-	local specByStateId = {}
-	local blockCount = 0
-	for _, chunk in ipairs( orderedWorldChunks() ) do
-		local cells = {}
-		local encodeError
-		local chunkBlockCount = 0
+local function newStateEncoder()
+	return { palette = {}, paletteIndex = {}, specByStateId = {} }
+end
+
+local function encodeStateChunk( chunk, cx, cy, cz, encoder, options )
+	local cells = {}
+	local encodeError
+	local chunkBlockCount = 0
+	if chunk and chunk.count and chunk.count > 0 then
 		MC.ForEachBlockState( chunk, function( _, _, _, lx, ly, lz, stateId )
 			if encodeError then return end
-			local spec = specByStateId[stateId]
+			local spec = encoder.specByStateId[stateId]
 			if not spec then
 				local err
 				spec, err = MC.FormatBlockState( stateId )
@@ -116,31 +117,43 @@ function SV.BuildStateSaveData( slotName, options )
 					encodeError = err or "invalid_state"
 					return
 				end
-				specByStateId[stateId] = spec
+				encoder.specByStateId[stateId] = spec
 			end
-			local paletteId = paletteIndex[spec]
+			local paletteId = encoder.paletteIndex[spec]
 			if paletteId == nil then
-				paletteId = #palette
-				palette[#palette + 1] = spec
-				paletteIndex[spec] = paletteId
+				paletteId = #encoder.palette
+				encoder.palette[#encoder.palette + 1] = spec
+				encoder.paletteIndex[spec] = paletteId
 			end
 			local li = lx + ly * MC.CS + lz * MC.CS * MC.CS
 			cells[#cells + 1] = li
 			cells[#cells + 1] = paletteId
 			chunkBlockCount = chunkBlockCount + 1
 		end )
-		if encodeError then return nil, nil, "state_encode_failed:" .. tostring( encodeError ) end
-		local storedChunkCount = math.max( 0, math.floor( tonumber( chunk.count ) or 0 ) )
-		if chunkBlockCount ~= storedChunkCount then
-			return nil, nil, "chunk_count_mismatch:" .. tostring( chunk.key or "?")
-				.. ":" .. tostring( storedChunkCount ) .. ":" .. tostring( chunkBlockCount )
-		end
+	end
+	if encodeError then return nil, nil, "state_encode_failed:" .. tostring( encodeError ) end
+	local storedChunkCount = chunk and math.max( 0, math.floor( tonumber( chunk.count ) or 0 ) ) or 0
+	if chunkBlockCount ~= storedChunkCount then
+		return nil, nil, "chunk_count_mismatch:" .. tostring( chunk and chunk.key or MC.ChunkKey( cx, cy, cz ) )
+			.. ":" .. tostring( storedChunkCount ) .. ":" .. tostring( chunkBlockCount )
+	end
+	local blockEntities, blockEntityError = chunk and encodeBlockEntities( chunk, options ) or nil
+	if blockEntityError then return nil, nil, "block_entity_encode_failed:" .. tostring( blockEntityError ) end
+	local opaqueBlockEntities, opaqueError = chunk and encodeOpaqueBlockEntities( chunk, options ) or nil
+	if opaqueError then return nil, nil, "opaque_block_entity_encode_failed:" .. tostring( opaqueError ) end
+	return { cx, cy, cz, packSparseCells( cells ), blockEntities, opaqueBlockEntities }, chunkBlockCount
+end
+
+function SV.BuildStateSaveData( slotName, options )
+	local chunks = {}
+	local encoder = newStateEncoder()
+	local blockCount = 0
+	for _, chunk in ipairs( orderedWorldChunks() ) do
+		local record, chunkBlockCount, encodeError = encodeStateChunk(
+			chunk, chunk.cx, chunk.cy, chunk.cz, encoder, options )
+		if not record then return nil, nil, encodeError end
 		blockCount = blockCount + chunkBlockCount
-		local blockEntities, blockEntityError = encodeBlockEntities( chunk, options )
-		if blockEntityError then return nil, nil, "block_entity_encode_failed:" .. tostring( blockEntityError ) end
-		local opaqueBlockEntities, opaqueError = encodeOpaqueBlockEntities( chunk, options )
-		if opaqueError then return nil, nil, "opaque_block_entity_encode_failed:" .. tostring( opaqueError ) end
-		chunks[#chunks + 1] = { chunk.cx, chunk.cy, chunk.cz, packSparseCells( cells ), blockEntities, opaqueBlockEntities }
+		chunks[#chunks + 1] = record
 	end
 
 	return {
@@ -155,7 +168,41 @@ function SV.BuildStateSaveData( slotName, options )
 		bs = MC.BS,
 		cs = MC.CS,
 		h = MC.CH,
-		p = palette,
+		p = encoder.palette,
+		chunks = chunks,
+	}, chunks
+end
+
+-- Build a save-compatible payload for a partial-world authoritative replace.
+-- refs may contain live chunks or tombstones { cx, cy, cz, chunk = nil }.
+-- Empty records are intentional: the client uses them to delete old chunks.
+function SV.BuildStateChunkPatchData( refs, options )
+	if not istable( refs ) or #refs < 1 then return nil, nil, "missing_chunk_refs" end
+	local encoder = newStateEncoder()
+	local chunks = {}
+	local blockCount = 0
+	for index, ref in ipairs( refs ) do
+		local chunk = ref
+		if istable( ref ) and ref.patchRef == true then chunk = ref.chunk end
+		local cx = math.floor( tonumber( ref and ref.cx or chunk and chunk.cx ) or 0 )
+		local cy = math.floor( tonumber( ref and ref.cy or chunk and chunk.cy ) or 0 )
+		local cz = math.floor( tonumber( ref and ref.cz or chunk and chunk.cz ) or 0 )
+		local record, count, encodeError = encodeStateChunk( chunk, cx, cy, cz, encoder, options )
+		if not record then return nil, nil, "chunk_patch_encode_failed:" .. tostring( index ) .. ":" .. tostring( encodeError ) end
+		chunks[#chunks + 1] = record
+		blockCount = blockCount + count
+	end
+	return {
+		v = 10,
+		formatVersion = 10,
+		chunkPatch = true,
+		schemaHash = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or nil,
+		sourceDataVersion = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.worldVersion or nil,
+		blockCount = blockCount,
+		bs = MC.BS,
+		cs = MC.CS,
+		h = MC.CH,
+		p = encoder.palette,
 		chunks = chunks,
 	}, chunks
 end
