@@ -921,10 +921,10 @@ end
 function MC.RebuildLightingCells()
 	local perfStart = SysTime()
 	ensureLightSourceIndex()
-	if MC.ClearSkyFlood then MC.ClearSkyFlood() end
-	if MC.QueueAllSkyFlood then MC.QueueAllSkyFlood() end
-	local minX, minY, minZ, maxX, maxY, maxZ = loadedWorldBounds()
 	local native = nativeBlockLightBackend()
+	if MC.ClearSkyFlood then MC.ClearSkyFlood() end
+	if not native and MC.QueueAllSkyFlood then MC.QueueAllSkyFlood() end
+	local minX, minY, minZ, maxX, maxY, maxZ = loadedWorldBounds()
 	if native then
 		native.ScheduleBlockLightRebuild( 0 )
 		MC.LightBlockChunks = {}
@@ -1002,6 +1002,15 @@ function MC.BeginLightingBulkLoad()
 		MC.LightChunkSources = {}
 		MC.LightSourceIndexReady = true
 		MC.LightCellsReady = false
+		-- Snapshot reset replaces MC.World without sending per-chunk unload/load
+		-- notifications. Drop the old column index now so the final sky reflood
+		-- rebuilds it from the newly hydrated world instead of reusing stale tops.
+		if MC.ClearSkyColumnCache then
+			MC.ClearSkyColumnCache()
+		else
+			if MC.ClearSkyFlood then MC.ClearSkyFlood() end
+			if MC.QueueAllSkyFlood then MC.QueueAllSkyFlood() end
+		end
 	end
 end
 
@@ -1042,8 +1051,8 @@ function MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, old
 	end
 	local native = nativeBlockLightBackend()
 	if native then
-		native.ScheduleBlockLightRebuild( 0.05 )
-		if MC.MarkGpuChunkLightTextureDirtyCell then MC.MarkGpuChunkLightTextureDirtyCell( bx, by, bz ) end
+		-- ABI 5 SetCell already updated block + sky fields synchronously in C++
+		-- and returned exact dirty masks. Do not enqueue a second full-world job.
 		return 0, 0
 	end
 	local perfStart = perfNow()
