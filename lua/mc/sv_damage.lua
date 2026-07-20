@@ -21,6 +21,32 @@ local TRACE_INSET = 1
 local EXPLOSION_GRID = 15
 local EXPLOSION_STEP = 0.3
 local EXPLOSION_AIR_COST = 0.22500001
+local EXPLOSION_RAY_X, EXPLOSION_RAY_Y, EXPLOSION_RAY_Z = {}, {}, {}
+local EXPLOSION_RAY_COUNT = 0
+local EXPLOSION_BLOCK_STEP_COST = {}
+
+-- Ray directions never change. Building these once avoids 1,352 square roots
+-- and the boundary-grid traversal on every explosion.
+do
+	local sqrt = math.sqrt
+	for xx = 0, EXPLOSION_GRID do
+		for yy = 0, EXPLOSION_GRID do
+			for zz = 0, EXPLOSION_GRID do
+				if xx == 0 or xx == EXPLOSION_GRID or yy == 0 or yy == EXPLOSION_GRID
+				or zz == 0 or zz == EXPLOSION_GRID then
+					local dx = xx / EXPLOSION_GRID * 2 - 1
+					local dy = yy / EXPLOSION_GRID * 2 - 1
+					local dz = zz / EXPLOSION_GRID * 2 - 1
+					local len = sqrt( dx * dx + dy * dy + dz * dz )
+					EXPLOSION_RAY_COUNT = EXPLOSION_RAY_COUNT + 1
+					EXPLOSION_RAY_X[EXPLOSION_RAY_COUNT] = dx / len * EXPLOSION_STEP
+					EXPLOSION_RAY_Y[EXPLOSION_RAY_COUNT] = dy / len * EXPLOSION_STEP
+					EXPLOSION_RAY_Z[EXPLOSION_RAY_COUNT] = dz / len * EXPLOSION_STEP
+				end
+			end
+		end
+	end
+end
 
 local function conVarBool( cv, fallback )
 	if not cv then return fallback end
@@ -149,82 +175,76 @@ function SV.ApplyBlockExplosion( center, damage, options )
 
 	local maxBlocks = math.max( 0, conVarInt( C.BlockExplosionMaxBlocks, 4096 ) )
 	local cx, cy, cz = center.x / MC.BS, center.y / MC.BS, center.z / MC.BS
-	local cells, order = {}, {}
+	local removals, selected, stepCost = {}, {}, {}
+	local removalCount = 0
 	local stopped = false
 
-	-- per-explosion cell cache: all ~1350 rays re-sample the same cells near the
-	-- center, and the sub-block march revisits each cell several times per ray, so
-	-- block/property lookups dominate. Resolve each cell once per explosion.
+	-- Pack coordinates relative to the blast into small numeric keys. The old
+	-- MC.CellKey path performed chunk division and global coordinate packing for
+	-- every 0.3-block ray step, including repeated samples of the same cell.
 	local floor = math.floor
-	local sqrt = math.sqrt
+	local ceil = math.ceil
 	local rand = math.Rand
-	local cellKey = MC.CellKey
 	local getBlock = MC.GetBlock
 	local resistanceOf = MC.BlockExplosionResistance
 	local hardnessOf = MC.BlockHardness
-	local stepCost = {}  -- cellKey -> power cost per sample step (0 = air)
-	local breakable = {} -- cellKey -> block may be destroyed
+	local keyRadius = ceil( radius * 1.3 / EXPLOSION_AIR_COST * EXPLOSION_STEP ) + 2
+	local keySpan = keyRadius * 2 + 1
+	local keyPlane = keySpan * keySpan
+	local keyX0 = floor( cx ) - keyRadius
+	local keyY0 = floor( cy ) - keyRadius
+	local keyZ0 = floor( cz ) - keyRadius
 
-	for xx = 0, EXPLOSION_GRID do
-		if stopped then break end
-		for yy = 0, EXPLOSION_GRID do
-			if stopped then break end
-			for zz = 0, EXPLOSION_GRID do
-				if stopped then break end
-				if xx == 0 or xx == EXPLOSION_GRID or yy == 0 or yy == EXPLOSION_GRID or zz == 0 or zz == EXPLOSION_GRID then
-					local dx = xx / EXPLOSION_GRID * 2 - 1
-					local dy = yy / EXPLOSION_GRID * 2 - 1
-					local dz = zz / EXPLOSION_GRID * 2 - 1
-					local len = sqrt( dx * dx + dy * dy + dz * dz )
-					if len > 0 then
-						local sx = dx / len * EXPLOSION_STEP
-						local sy = dy / len * EXPLOSION_STEP
-						local sz = dz / len * EXPLOSION_STEP
-						local power = radius * ( 0.7 + rand( 0, 0.6 ) )
-						local x, y, z = cx, cy, cz
+	for rayIndex = 1, EXPLOSION_RAY_COUNT do
+		local sx = EXPLOSION_RAY_X[rayIndex]
+		local sy = EXPLOSION_RAY_Y[rayIndex]
+		local sz = EXPLOSION_RAY_Z[rayIndex]
+		local power = radius * ( 0.7 + rand( 0, 0.6 ) )
+		local x, y, z = cx, cy, cz
 
-						while power > 0 do
-							local bx, by, bz = floor( x ), floor( y ), floor( z )
-							local key = cellKey( bx, by, bz )
-							local cost = stepCost[key]
-							if cost == nil then
-								local id = getBlock( bx, by, bz )
-								if id == 0 then
-									cost = 0
-								else
-									local explosionResistance = resistanceOf and resistanceOf( id ) or 1
-									cost = ( explosionResistance + 0.3 ) * EXPLOSION_STEP
-									breakable[key] = ( hardnessOf and hardnessOf( id ) or 1 ) >= 0
-								end
-								stepCost[key] = cost
-							end
-							if cost > 0 then
-								power = power - cost
-								if power > 0 and breakable[key] and not cells[key] then
-									cells[key] = { bx = bx, by = by, bz = bz }
-									order[#order + 1] = key
-									if maxBlocks > 0 and #order >= maxBlocks then
-										stopped = true
-										break
-									end
-								end
-							end
-
-							x = x + sx
-							y = y + sy
-							z = z + sz
-							power = power - EXPLOSION_AIR_COST
+		while power > 0 do
+			local bx, by, bz = floor( x ), floor( y ), floor( z )
+			local key = bx - keyX0 + ( by - keyY0 ) * keySpan + ( bz - keyZ0 ) * keyPlane
+			local encodedCost = stepCost[key]
+			if encodedCost == nil then
+				local id = getBlock( bx, by, bz )
+				if id == 0 then
+					encodedCost = 0
+				else
+					encodedCost = EXPLOSION_BLOCK_STEP_COST[id]
+					if encodedCost == nil then
+						local explosionResistance = resistanceOf and resistanceOf( id ) or 1
+						encodedCost = ( explosionResistance + 0.3 ) * EXPLOSION_STEP
+						if ( hardnessOf and hardnessOf( id ) or 1 ) < 0 then
+							encodedCost = -encodedCost
 						end
+						EXPLOSION_BLOCK_STEP_COST[id] = encodedCost
+					end
+				end
+				stepCost[key] = encodedCost
+			end
+
+			local breakable = encodedCost >= 0
+			local cost = breakable and encodedCost or -encodedCost
+			if cost > 0 then
+				power = power - cost
+				if power > 0 and breakable and not selected[key] then
+					selected[key] = true
+					removalCount = removalCount + 1
+					removals[removalCount] = { bx = bx, by = by, bz = bz }
+					if maxBlocks > 0 and removalCount >= maxBlocks then
+						stopped = true
+						break
 					end
 				end
 			end
-		end
-	end
 
-	local removals = {}
-	for _, key in ipairs( order ) do
-		local cell = cells[key]
-		removals[#removals + 1] = cell
+			x = x + sx
+			y = y + sy
+			z = z + sz
+			power = power - EXPLOSION_AIR_COST
+		end
+		if stopped then break end
 	end
 	local broken = SV.RemoveBlocksBulk( removals, {
 		actor = damageActor( options ),
@@ -233,6 +253,8 @@ function SV.ApplyBlockExplosion( center, damage, options )
 		handlers = options.handlers,
 		priorityPhys = false,
 		explosionMeshThrottle = true,
+		netPaced = true,
+		stateStream = true,
 		deferPhys = true,
 	} )
 

@@ -383,6 +383,40 @@ function MC.ReconcileStatePredictionCells( cells, revision, correction )
 	return cleared
 end
 
+-- A chunk hydration payload has already overwritten the affected cells with
+-- authoritative storage. Drop predictions in those chunks without rolling
+-- them back; if a multi-cell prediction crosses the boundary, roll back only
+-- the untouched members of that prediction group.
+function MC.DiscardPredictionsForChunkKeys( chunkKeys )
+	if not istable( chunkKeys ) then return 0 end
+	local groups = {}
+	for key, pending in pairs( MC.PendingPredictions or {} ) do
+		local cx, cy, cz = MC.CellToChunk( pending.bx, pending.by, pending.bz )
+		if chunkKeys[MC.ChunkKey( cx, cy, cz )] then groups[pending.groupId or key] = true end
+	end
+	local cleared = 0
+	for groupId in pairs( groups ) do
+		local group = MC.PendingPredictionGroups and MC.PendingPredictionGroups[groupId]
+		local keys = group and group.keys or {}
+		if #keys == 0 then
+			for key, pending in pairs( MC.PendingPredictions or {} ) do
+				if ( pending.groupId or key ) == groupId then keys[#keys + 1] = key end
+			end
+		end
+		for _, key in ipairs( keys ) do
+			local pending = MC.PendingPredictions[key]
+			if pending then
+				local cx, cy, cz = MC.CellToChunk( pending.bx, pending.by, pending.bz )
+				if not chunkKeys[MC.ChunkKey( cx, cy, cz )] then rollbackPredictionCell( pending ) end
+				MC.PendingPredictions[key] = nil
+				cleared = cleared + 1
+			end
+		end
+		if MC.PendingPredictionGroups then MC.PendingPredictionGroups[groupId] = nil end
+	end
+	return cleared
+end
+
 function MC.ClientEditPredictionEnabled()
 	if game.SinglePlayer and game.SinglePlayer() then return false end
 	if game.MaxPlayers and game.MaxPlayers() <= 1 then return false end
@@ -542,6 +576,11 @@ local function resetChunk( cx, cy, cz )
 	return c
 end
 
+-- State chunk streams share the same ACK-windowed reliable queue as legacy
+-- bulk transfers. The state transport loads after this file and calls through
+-- this narrow public helper instead of maintaining a second congestion window.
+MC.QueueReliableAck = queueReliableAck
+
 local function activeNativeChunkBackend()
 	local backend = MC.GetChunkBackend and MC.GetChunkBackend() or nil
 	return backend and backend.native and backend.IsActive and backend.IsActive() and backend or nil
@@ -667,7 +706,7 @@ local function loadSnapshotBlockEntities( chunk, envelopes, strict )
 	return true
 end
 
-local function loadSnapshotChunk( data, cache, palette, strict )
+local function loadSnapshotChunk( data, cache, palette, strict, options )
 	local rawCX, rawCY, rawCZ = tonumber( data[1] ), tonumber( data[2] ), tonumber( data[3] )
 	if strict and ( not rawCX or not rawCY or not rawCZ
 		or rawCX ~= math.floor( rawCX ) or rawCY ~= math.floor( rawCY ) or rawCZ ~= math.floor( rawCZ ) ) then
@@ -739,12 +778,50 @@ local function loadSnapshotChunk( data, cache, palette, strict )
 
 	if MC.FinalizeChunkStateStorage then MC.FinalizeChunkStateStorage( c ) end
 	if MC.IndexChunkLightSources then MC.IndexChunkLightSources( c ) end
-	if c.count > 0 then
-		MC.MarkChunkDirty( c.key )
-	else
-		MC.World[c.key] = nil
-	end
+	local deferDirty = istable( options ) and options.deferDirty == true
+	if c.count <= 0 then MC.World[c.key] = nil end
+	if not deferDirty and MC.MarkChunkDirty then MC.MarkChunkDirty( c.key ) end
 	return c.count
+end
+
+-- Hydrate only the listed chunks while keeping the rest of MC.World intact.
+-- This is the client half of the storage-level /fill fast path: each Native
+-- Chunk receives one replace batch, while the Lua backend rebuilds its packed
+-- state sections directly from the same save-compatible payload.
+function MC.LoadStateChunkPatchData( data )
+	if not istable( data ) or data.chunkPatch ~= true or not istable( data.chunks ) then
+		return false, "invalid_chunk_patch"
+	end
+	local expectedHash = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or nil
+	if not isstring( data.schemaHash ) or data.schemaHash == ""
+	or expectedHash and data.schemaHash ~= expectedHash then return false, "state_registry_mismatch" end
+	if math.floor( tonumber( data.cs ) or -1 ) ~= MC.CS
+	or math.floor( tonumber( data.h ) or -1 ) ~= MC.CH then return false, "chunk_geometry_mismatch" end
+
+	local cache = {}
+	local palette = data.p or data.palette
+	local touched = {}
+	local blocks = 0
+	for index, chunkData in ipairs( data.chunks ) do
+		if not istable( chunkData ) then return false, "invalid_chunk_patch_record:" .. tostring( index ) end
+		local cx = tonumber( chunkData[1] )
+		local cy = tonumber( chunkData[2] )
+		local cz = tonumber( chunkData[3] )
+		if not cx or not cy or not cz or cx ~= math.floor( cx )
+		or cy ~= math.floor( cy ) or cz ~= math.floor( cz ) then
+			return false, "invalid_chunk_patch_coords:" .. tostring( index )
+		end
+		local loaded, loadError = loadSnapshotChunk(
+			chunkData, cache, palette, true, { deferDirty = true } )
+		if loaded == nil then return false, loadError or "chunk_patch_hydrate_failed" end
+		blocks = blocks + loaded
+		touched[#touched + 1] = {
+			cx = cx, cy = cy, cz = cz,
+			key = MC.ChunkKey( cx, cy, cz ),
+			count = loaded,
+		}
+	end
+	return true, { chunks = touched, blocks = blocks }
 end
 
 function MC.LoadSnapshotSaveData( data )

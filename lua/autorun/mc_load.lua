@@ -213,7 +213,7 @@ if CLIENT then
 		local nativeFailureReason = nativeLoaded and "invalid module table" or tostring( nativeLoadError or "module not found" )
 		if nativeUsable then
 			local abiOK, abi = pcall( mcmesh.AbiVersion )
-			nativeUsable = abiOK and abi == 5
+			nativeUsable = abiOK and abi == 6
 			if not nativeUsable then nativeFailureReason = "ABI mismatch" end
 		end
 		if nativeUsable then

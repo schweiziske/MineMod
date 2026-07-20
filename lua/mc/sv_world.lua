@@ -367,7 +367,7 @@ local function compactReliableQueue( q )
 	q.head = 1
 end
 
-function SV.EnqueueReliableNet( target, bytes, sendFn, waitAck )
+function SV.EnqueueReliableNet( target, bytes, sendFn, waitAck, fullSpeed )
 	if not isfunction( sendFn ) then return false end
 	bytes = math.max( 1, math.floor( tonumber( bytes ) or 1 ) )
 	local queued = false
@@ -382,6 +382,7 @@ function SV.EnqueueReliableNet( target, bytes, sendFn, waitAck )
 			bytes = bytes,
 			send = sendFn,
 			waitAck = waitAck == true and not ply:IsBot(),
+			fullSpeed = fullSpeed == true,
 		}
 		queued = true
 	end
@@ -407,14 +408,22 @@ timer.Create( "mc_reliable_net", SYNC_TIMER_INTERVAL, 0, function()
 
 		local sent = 0
 		local sentBytes = 0
-		local messageBudget = syncMessagesPerTick()
-		local byteBudget = math.min( sharedReliableBudget(), syncInFlightLimit() )
+		local firstItem = q.items[q.head or 1]
+		local fullSpeed = firstItem and firstItem.fullSpeed == true
+		local messageBudget = fullSpeed and 128 or syncMessagesPerTick()
 		local inflightLimit = syncInFlightLimit()
+		if fullSpeed then
+			inflightLimit = math.max( inflightLimit,
+				MC.Net and MC.Net.CHUNK_PATCH_FAST_WINDOW_BYTES or 262144 )
+		end
+		local byteBudget = fullSpeed and inflightLimit
+			or math.min( sharedReliableBudget(), inflightLimit )
 
 		while sent < messageBudget do
-			if deadline and SysTime() >= deadline then break end
+			if not fullSpeed and deadline and SysTime() >= deadline then break end
 			local item = q.items[q.head or 1]
 			if not item then break end
+			if ( item.fullSpeed == true ) ~= fullSpeed then break end
 			local itemBytes = math.max( 1, math.floor( tonumber( item.bytes ) or 1 ) )
 			if item.waitAck and ( q.inflightBytes or 0 ) + itemBytes > inflightLimit then break end
 			if sent > 0 and sentBytes + itemBytes > byteBudget then break end

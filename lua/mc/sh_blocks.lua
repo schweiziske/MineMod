@@ -2056,6 +2056,10 @@ function MC.ClearBlockConnectionMaskCache( bx, by, bz )
 	end
 end
 
+function MC.ClearAllBlockConnectionMaskCaches()
+	for kind in pairs( ConnectionMaskCache ) do ConnectionMaskCache[kind] = {} end
+end
+
 local ConnectionBoxesCache = {
 	fence = {},
 	pane = {},

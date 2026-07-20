@@ -334,9 +334,13 @@ function SV.ApplyBlockTransaction( cells, options )
 	for key in pairs( dirty ) do
 		local chunk = MC.GetChunkByKey( key )
 		if chunk and chunk.count and chunk.count > 0 then
-			SV.EnsureChunkEnt( chunk )
-			if options.deferPhys then SV.MarkPhysDirtyBulk( key )
-			else SV.MarkPhysDirty( key, priorityPhys, dirtyBounds[key] ) end
+			if istable( options.physCollector ) then
+				options.physCollector[key] = true
+			else
+				SV.EnsureChunkEnt( chunk )
+				if options.deferPhys then SV.MarkPhysDirtyBulk( key )
+				else SV.MarkPhysDirty( key, priorityPhys, dirtyBounds[key] ) end
+			end
 		end
 	end
 	if options.immediatePhys == true then Host.flushPhysDirtyKeys( immediateDirty ) end
@@ -348,6 +352,8 @@ function SV.ApplyBlockTransaction( cells, options )
 			explosionMeshThrottle = options.explosionMeshThrottle == true,
 			netPaced = options.netPaced == true,
 			cellsPerMessage = options.cellsPerMessage,
+			stateStream = options.stateStream == true,
+			stateGroupId = options.stateGroupId,
 		}
 		if SV.BroadcastStateTransaction then
 			local sent, networkError = SV.BroadcastStateTransaction( networkChanges, revision, netOptions )
