@@ -427,10 +427,19 @@ if CLIENT then
 			local rawR = math.Clamp( tonumber( brightness.r ) or 1, 0, 1 )
 			local rawG = math.Clamp( tonumber( brightness.g ) or rawR, 0, 1 )
 			local rawB = math.Clamp( tonumber( brightness.b ) or rawR, 0, 1 )
-			lightR, lightG, lightB = rawR * HELD_LIGHT_GAIN, rawG * HELD_LIGHT_GAIN, rawB * HELD_LIGHT_GAIN
+			if MC.ScaleDynamicLightingRGB then
+				lightR, lightG, lightB = MC.ScaleDynamicLightingRGB( rawR, rawG, rawB, HELD_LIGHT_GAIN )
+			else
+				lightR, lightG, lightB = rawR * HELD_LIGHT_GAIN, rawG * HELD_LIGHT_GAIN, rawB * HELD_LIGHT_GAIN
+			end
 		else
-			lightR = math.Clamp( tonumber( brightness ) or 1, 0, 1 ) * HELD_LIGHT_GAIN
-			lightG, lightB = lightR, lightR
+			local raw = math.Clamp( tonumber( brightness ) or 1, 0, 1 )
+			if MC.ScaleDynamicLightingRGB then
+				lightR, lightG, lightB = MC.ScaleDynamicLightingRGB( raw, raw, raw, HELD_LIGHT_GAIN )
+			else
+				lightR = raw * HELD_LIGHT_GAIN
+				lightG, lightB = lightR, lightR
+			end
 		end
 		local tintR, tintG, tintB = 255, 255, 255
 		if stateId and MC.BlockStateTintCode and MC.BlockTintRGB then
