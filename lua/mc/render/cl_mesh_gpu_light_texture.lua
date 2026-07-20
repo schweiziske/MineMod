@@ -172,7 +172,10 @@ local function currentDayCycleSkyBrightness()
 	return cachedSkyBrightness
 end
 
-local function cellSelfEmission( bx, by, bz )
+local function cellSelfEmission( bx, by, bz, p )
+	-- Native block-light already contains the source cell's emission. Avoid an
+	-- extra GetBlock/GetCell/LegacyFromState round trip for every atlas texel.
+	if p and p.nativeLightReady then return 0 end
 	if not ( MC.GetBlock and MC.BlockLightEmission ) then return 0 end
 	local id = MC.GetBlock( bx, by, bz )
 	if not id or id == 0 then return 0 end
@@ -184,6 +187,8 @@ end
 -- of once per texel (a whole-chunk bake touches ~11k cells).
 local function bakeLightParams()
 	local p = { lightmapMode = MC.GlobalLightmapActive and MC.GlobalLightmapActive() or false }
+	local backend = MC.GetChunkBackend and MC.GetChunkBackend() or nil
+	p.nativeLightReady = backend and backend.native and backend.IsLightReady and backend.IsLightReady() == true or false
 	if not p.lightmapMode then
 		p.gamma = convarNumber( MC.MeshGpuLightGamma, 1, 0.25, 4 )
 		p.brightness = convarNumber( MC.MeshGpuLightBrightness, 1, 0.1, 4 )
@@ -198,7 +203,7 @@ end
 local function lightTextureBytes( bx, by, bz, p )
 	local brightness, level, block, sky = 1, 15, 15, 15
 	if MC.SampleLighting then
-		brightness, level, block, sky = MC.SampleLighting( bx, by, bz, cellSelfEmission( bx, by, bz ) )
+		brightness, level, block, sky = MC.SampleLighting( bx, by, bz, cellSelfEmission( bx, by, bz, p ) )
 	end
 	level = tonumber( level ) or 15
 	block = tonumber( block ) or level
@@ -442,6 +447,50 @@ function MC.MarkGpuChunkLightTextureDirtyCell( bx, by, bz )
 		end
 	end
 	return marked > 0, firstKey, marked
+end
+
+-- C++ light workers return one 8192-bit mask per changed source chunk. Apply
+-- it directly to atlas dirty sets without 27 generic chunk lookups per cell;
+-- only cells on a source boundary can affect a neighbour's one-texel halo.
+function MC.MarkGpuChunkLightTextureDirtyNative( cx, cy, cz, dirtyBits )
+	if not isstring( dirtyBits ) or #dirtyBits ~= ( MC.CS * MC.CS * MC.CH ) / 8 then return 0, 0 end
+	local markedCells, markedChunks = 0, 0
+	local seenChunks = {}
+	for byteIndex = 1, #dirtyBits do
+		local value = string.byte( dirtyBits, byteIndex ) or 0
+		if value ~= 0 then
+			for bitIndex = 0, 7 do
+				if bit.band( value, bit.lshift( 1, bitIndex ) ) ~= 0 then
+					local li = ( byteIndex - 1 ) * 8 + bitIndex
+					local lx, ly, lz = MC.DecodeLocal( li )
+					local dx0, dx1 = lx == 0 and -1 or 0, lx == MC.CS - 1 and 1 or 0
+					local dy0, dy1 = ly == 0 and -1 or 0, ly == MC.CS - 1 and 1 or 0
+					local dz0, dz1 = lz == 0 and -1 or 0, lz == MC.CH - 1 and 1 or 0
+					for dz = dz0, dz1 do for dy = dy0, dy1 do for dx = dx0, dx1 do
+						local key = MC.ChunkKey( cx + dx, cy + dy, cz + dz )
+						local chunk = MC.World and MC.World[key] or nil
+						if chunk then
+							local packed = packedPaddedCell(
+								cx * MC.CS + lx - chunk.cx * MC.CS + LIGHT_TEX_PAD,
+								cy * MC.CS + ly - chunk.cy * MC.CS + LIGHT_TEX_PAD,
+								cz * MC.CH + lz - chunk.cz * MC.CH + LIGHT_TEX_PAD )
+							if packed then
+								local dirty = MC.GpuChunkLightDirtyCells[key]
+								if dirty ~= true then
+									if not dirty then dirty = {}; MC.GpuChunkLightDirtyCells[key] = dirty end
+									dirty[packed] = true
+								end
+								MC.GpuChunkLightDirtyChunks[key] = true
+								if not seenChunks[key] then seenChunks[key] = true; markedChunks = markedChunks + 1 end
+							end
+						end
+					end end end
+					markedCells = markedCells + 1
+				end
+			end
+		end
+	end
+	return markedCells, markedChunks
 end
 
 function MC.MarkGpuChunkLightTextureDirtyForChangedCells( changed )

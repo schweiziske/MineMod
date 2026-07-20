@@ -555,6 +555,58 @@ function MC.ChunkCoordsFromOrigin( v )
 end
 
 --------------------------------------------------------------------- chunk store
+MC.ChunkBackends = MC.ChunkBackends or {}
+MC.ChunkBackends.lua = MC.ChunkBackends.lua or {
+	name = "lua",
+	native = false,
+	IsActive = function() return true end,
+	CreateChunk = function() return true end,
+}
+
+function MC.RegisterChunkBackend( name, backend )
+	if not isstring( name ) or name == "" or not istable( backend ) then return false end
+	backend.name = name
+	MC.ChunkBackends[name] = backend
+	return true
+end
+
+function MC.GetChunkBackend()
+	local native = MC.ChunkBackends and MC.ChunkBackends.native
+	if native and native.IsActive and native.IsActive() then return native end
+	return MC.ChunkBackends.lua
+end
+
+-- Native chunks keep these tables only as lightweight indexed compatibility
+-- views. They do not duplicate all 8192 cells; a legacy numeric lookup is
+-- resolved from the NativeChunk on demand. Code that needs iteration must use
+-- MC.ForEachBlock/MC.ForEachBlockState because Lua 5.1 pairs() cannot expose a
+-- virtual native key set.
+function MC.AttachNativeChunkCompatibilityProxy( chunk )
+	if not CLIENT or not chunk then return false end
+	local function stateAt( li )
+		if not MC.LocalIndexInRange( li ) then return 0 end
+		local backend = MC.GetChunkBackend and MC.GetChunkBackend() or nil
+		if not backend or not backend.native or not backend.GetCell or not backend.Epoch
+		or chunk.nativeMeshEpoch == nil or chunk.nativeMeshEpoch ~= backend.Epoch() then return 0 end
+		return backend.GetCell( chunk, li ) or 0
+	end
+	chunk.blocks = setmetatable( {}, { __index = function( _, li )
+		if not isnumber( li ) then return nil end
+		local stateId = stateAt( li )
+		if stateId == 0 then return nil end
+		local id = MC.LegacyFromState( stateId )
+		return id
+	end } )
+	chunk.orients = setmetatable( {}, { __index = function( _, li )
+		if not isnumber( li ) then return nil end
+		local stateId = stateAt( li )
+		if stateId == 0 then return nil end
+		local _, orient = MC.LegacyFromState( stateId )
+		return orient or 0
+	end } )
+	return true
+end
+
 function MC.GetChunkByKey( key )
 	local chunk = MC.World[key]
 	if chunk ~= nil then return chunk end
@@ -576,13 +628,20 @@ function MC.EnsureChunk( cx, cy, cz )
 	if not c then
 		c = { cx = cx, cy = cy, cz = cz, key = key, blocks = {}, orients = {}, count = 0 }
 		MC.World[key] = c
+		local backend = MC.GetChunkBackend and MC.GetChunkBackend() or nil
+		if backend and backend.CreateChunk then
+			local ok = backend.CreateChunk( c )
+			c.chunkBackend = ok == true and backend.name or "lua"
+		else
+			c.chunkBackend = "lua"
+		end
 	elseif c.key ~= key then
 		if c.key ~= nil then MC.World[c.key] = nil end
 		c.key = key
 		MC.World[key] = c
 	end
 	c.cz = c.cz or cz
-	c.orients = c.orients or {}
+	if not c.nativeStateStorage then c.orients = c.orients or {} end
 	return c
 end
 
@@ -677,6 +736,13 @@ end
 -- not leave a half-migrated chunk behind.
 function MC.MigrateChunkStateStorage( chunk )
 	if not chunk then return nil, "missing_chunk" end
+	if chunk.nativeStateStorage then
+		local native = MC.ChunkBackends and MC.ChunkBackends.native
+		if native and native.MaterializeLuaStorage then
+			return native.MaterializeLuaStorage( chunk )
+		end
+		return nil, "native_state_materialization_unavailable"
+	end
 	if chunk.stateStorageMigrated then return true end
 	if not MC.StateSection then return nil, "state_section_unavailable" end
 	local sections, err = buildStateSectionsFromLegacy( chunk )
@@ -703,14 +769,23 @@ end
 -- loaders. It deliberately does not touch collision/render versions.
 function MC.ResetChunkStateStorage( chunk )
 	if not chunk then return nil, "missing_chunk" end
-	chunk.stateSections = {}
+	local backend = CLIENT and MC.GetChunkBackend and MC.GetChunkBackend() or nil
+	local nativeStorage = backend and backend.native and backend.Epoch
+		and chunk.nativeMeshEpoch ~= nil and chunk.nativeMeshEpoch == backend.Epoch()
+	chunk.stateSections = nativeStorage and nil or {}
 	chunk.stateStorageMigrated = true
-	chunk.blocks = {}
-	chunk.orients = {}
+	chunk.nativeStateStorage = nativeStorage == true
+	if nativeStorage then
+		MC.AttachNativeChunkCompatibilityProxy( chunk )
+	else
+		chunk.blocks = {}
+		chunk.orients = {}
+	end
 	chunk.blockEntities = nil
 	chunk.opaqueBlockEntities = nil
 	chunk.opaqueStates = nil
 	chunk.count = 0
+	chunk.nativeMeshEpoch = nil
 	chunk.renderSectionBlocks = nil
 	chunk.renderSectionBlocksReady = nil
 	chunk.renderSectionIndexVersion = nil
@@ -729,32 +804,41 @@ function MC.SetChunkLocalStateRaw( chunk, li, stateId )
 	if stateId < 0 or ( MC.IsValidBlockState and not MC.IsValidBlockState( stateId ) ) then
 		return nil, "invalid_state_id"
 	end
-	local migrated, migrationError = MC.MigrateChunkStateStorage( chunk )
-	if not migrated then return nil, migrationError end
-
-	local sectionIndex, sectionLocalIndex = stateSectionAddress( li )
-	local section = chunk.stateSections[sectionIndex]
-	local oldStateId = section and MC.StateSection.Get( section, sectionLocalIndex ) or 0
-	if oldStateId == stateId then return false, oldStateId end
-	if not section then
-		section = MC.StateSection.New()
-		chunk.stateSections[sectionIndex] = section
+	local oldStateId = 0
+	if chunk.nativeStateStorage then
+		local backend = CLIENT and MC.ChunkBackends and MC.ChunkBackends.native or nil
+		if not MC.NativeChunkBulkLoading and backend and backend.GetCell then
+			oldStateId = backend.GetCell( chunk, li ) or 0
+		end
+		if oldStateId == stateId then return false, oldStateId end
+	else
+		local migrated, migrationError = MC.MigrateChunkStateStorage( chunk )
+		if not migrated then return nil, migrationError end
+		local sectionIndex, sectionLocalIndex = stateSectionAddress( li )
+		local section = chunk.stateSections[sectionIndex]
+		oldStateId = section and MC.StateSection.Get( section, sectionLocalIndex ) or 0
+		if oldStateId == stateId then return false, oldStateId end
+		if not section then
+			section = MC.StateSection.New()
+			chunk.stateSections[sectionIndex] = section
+		end
+		local changed, setError = MC.StateSection.Set( section, sectionLocalIndex, stateId )
+		if changed == nil then return nil, setError end
+		if section.count <= 0 then chunk.stateSections[sectionIndex] = nil end
 	end
-
-	local changed, setError = MC.StateSection.Set( section, sectionLocalIndex, stateId )
-	if changed == nil then return nil, setError end
-	if section.count <= 0 then chunk.stateSections[sectionIndex] = nil end
 
 	local id, orient
 	if stateId ~= 0 then id, orient = MC.LegacyFromState( stateId ) end
-	chunk.blocks = chunk.blocks or {}
-	chunk.orients = chunk.orients or {}
-	if stateId == 0 or id == nil then
-		chunk.blocks[li] = nil
-		chunk.orients[li] = nil
-	else
-		chunk.blocks[li] = id
-		chunk.orients[li] = orient or 0
+	if not chunk.nativeStateStorage then
+		chunk.blocks = chunk.blocks or {}
+		chunk.orients = chunk.orients or {}
+		if stateId == 0 or id == nil then
+			chunk.blocks[li] = nil
+			chunk.orients[li] = nil
+		else
+			chunk.blocks[li] = id
+			chunk.orients[li] = orient or 0
+		end
 	end
 	if oldStateId == 0 then chunk.count = ( chunk.count or 0 ) + 1 end
 	if stateId == 0 then chunk.count = math.max( 0, ( chunk.count or 0 ) - 1 ) end
@@ -771,6 +855,11 @@ function MC.SetChunkLocalStateRaw( chunk, li, stateId )
 	if chunk.opaqueBlockEntities and chunk.opaqueBlockEntities[li] then
 		chunk.opaqueBlockEntities[li] = nil
 		if next( chunk.opaqueBlockEntities ) == nil then chunk.opaqueBlockEntities = nil end
+	end
+	local chunkBackend = CLIENT and MC.GetChunkBackend and MC.GetChunkBackend() or nil
+	if chunkBackend and chunkBackend.native and not MC.NativeChunkBulkLoading and chunk.nativeMeshEpoch ~= nil
+	and chunkBackend.Epoch and chunk.nativeMeshEpoch == chunkBackend.Epoch() then
+		chunkBackend.SetCell( chunk, li, stateId )
 	end
 	return true, oldStateId, id, orient or 0
 end
@@ -792,16 +881,17 @@ function MC.GetBlockState( bx, by, bz )
 	if not MC.LocalIndexInRange( li ) then return 0 end
 	local c = MC.World[MC.ChunkKey( cx, cy, cz )]
 	if not c then return 0 end
-	local migrated, err = MC.MigrateChunkStateStorage( c )
-	if not migrated then return nil, err end
-	local sectionIndex, sectionLocalIndex = stateSectionAddress( li )
-	local section = c.stateSections and c.stateSections[sectionIndex]
-	if not section then return 0 end
-	return MC.StateSection.Get( section, sectionLocalIndex ) or 0
+	return MC.GetChunkBlockStateByLocalIndex( c, li )
 end
 
 function MC.GetChunkBlockStateByLocalIndex( chunk, li )
 	if not chunk or not MC.LocalIndexInRange( li ) then return 0 end
+	local backend = CLIENT and MC.GetChunkBackend and MC.GetChunkBackend() or nil
+	if backend and backend.native and backend.GetCell and backend.Epoch
+	and chunk.nativeMeshEpoch ~= nil and chunk.nativeMeshEpoch == backend.Epoch() then
+		local stateId = backend.GetCell( chunk, li )
+		if stateId ~= nil then return stateId end
+	end
 	local migrated, err = MC.MigrateChunkStateStorage( chunk )
 	if not migrated then return nil, err end
 	local sectionIndex, sectionLocalIndex = stateSectionAddress( li )
@@ -815,7 +905,11 @@ function MC.GetBlock( bx, by, bz )
 	if not MC.LocalIndexInRange( li ) then return 0 end
 	local c = MC.World[MC.ChunkKey( cx, cy, cz )]
 	if not c then return 0 end
-	return c.blocks[li] or 0
+	if not c.nativeStateStorage and c.blocks then return c.blocks[li] or 0 end
+	local stateId = MC.GetChunkBlockStateByLocalIndex( c, li )
+	if not stateId or stateId == 0 then return 0 end
+	local id = MC.LegacyFromState( stateId )
+	return id or 0
 end
 
 function MC.GetBlockOrient( bx, by, bz )
@@ -823,9 +917,15 @@ function MC.GetBlockOrient( bx, by, bz )
 	if not MC.LocalIndexInRange( li ) then return 0 end
 	local c = MC.World[MC.ChunkKey( cx, cy, cz )]
 	if not c then return 0 end
-	local id = c.blocks[li]
-	if not id then return 0 end
-	return MC.NormalizeOrient and MC.NormalizeOrient( id, c.orients and c.orients[li] ) or ( c.orients and c.orients[li] or 0 )
+	if not c.nativeStateStorage and c.blocks then
+		local id = c.blocks[li]
+		if not id then return 0 end
+		return MC.NormalizeOrient and MC.NormalizeOrient( id, c.orients and c.orients[li] ) or ( c.orients and c.orients[li] or 0 )
+	end
+	local stateId = MC.GetChunkBlockStateByLocalIndex( c, li )
+	if not stateId or stateId == 0 then return 0 end
+	local _, orient = MC.LegacyFromState( stateId )
+	return orient or 0
 end
 
 function MC.GetCellBlockBoxes( bx, by, bz )
@@ -873,10 +973,12 @@ function MC._SetBlockStateStorageRaw( bx, by, bz, stateId )
 	if stateId == 0 and not c then return nil, false, false, false end
 	local created = c == nil
 	if not c then c = MC.EnsureChunk( cx, cy, cz ) end
-	local migrated, migrationError = MC.MigrateChunkStateStorage( c )
-	if not migrated then
-		if created then MC.World[key] = nil end
-		return nil, false, false, false, migrationError
+	if not c.nativeStateStorage then
+		local migrated, migrationError = MC.MigrateChunkStateStorage( c )
+		if not migrated then
+			if created then MC.World[key] = nil end
+			return nil, false, false, false, migrationError
+		end
 	end
 
 	local changed, oldOrError, id, orient = MC.SetChunkLocalStateRaw( c, li, stateId )
@@ -915,6 +1017,18 @@ end
 -- cb( bx,by,bz, lx,ly,lz, stateId )
 function MC.ForEachBlockState( chunk, cb )
 	if not chunk or not cb then return end
+	if chunk.nativeStateStorage then
+		local backend = CLIENT and MC.ChunkBackends and MC.ChunkBackends.native or nil
+		local cells = backend and backend.GetChunkCells and backend.GetChunkCells( chunk ) or nil
+		if not cells then return end
+		local ox, oy, oz = chunk.cx * CS, chunk.cy * CS, chunk.cz * CH
+		for i = 1, #cells, 2 do
+			local li, stateId = cells[i], cells[i + 1]
+			local lx, ly, lz = MC.DecodeLocal( li )
+			cb( ox + lx, oy + ly, oz + lz, lx, ly, lz, stateId )
+		end
+		return
+	end
 	local migrated = MC.MigrateChunkStateStorage( chunk )
 	if not migrated then return end
 	local ox, oy, oz = chunk.cx * CS, chunk.cy * CS, chunk.cz * CH
@@ -932,6 +1046,12 @@ end
 
 --- Iterate every (bx,by,bz,id,orient) in a chunk. cb( bx,by,bz, lx,ly,lz, id, orient )
 function MC.ForEachBlock( chunk, cb )
+	if chunk.nativeStateStorage or not chunk.blocks then
+		return MC.ForEachBlockState( chunk, function( bx, by, bz, lx, ly, lz, stateId )
+			local id, orient = MC.LegacyFromState( stateId )
+			if id then cb( bx, by, bz, lx, ly, lz, id, orient or 0 ) end
+		end )
+	end
 	local ox, oy, oz = chunk.cx * CS, chunk.cy * CS, chunk.cz * CH
 	chunk.orients = chunk.orients or {}
 	for li, id in pairs( chunk.blocks or {} ) do

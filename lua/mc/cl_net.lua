@@ -9,6 +9,14 @@ MC.PendingFull = MC.PendingFull or {}
 MC.SnapshotBuffers = MC.SnapshotBuffers or {}
 MC.SnapshotQueuedDeltas = MC.SnapshotQueuedDeltas or {}
 MC.SyncProgress = MC.SyncProgress or { expected = 0, received = 0, chunks = 0, doneChunks = 0, active = false, lastUpdate = 0 }
+MC.NativeLoadProfile = MC.NativeLoadProfile or { decompressMS = 0, jsonMS = 0, hydrateMS = 0, chunks = 0, cells = 0 }
+
+concommand.Add( "mc_native_load_profile", function()
+	local p = MC.NativeLoadProfile or {}
+	print( string.format( "[mcswep-native] load decompress=%.3fms json=%.3fms hydrate=%.3fms chunks=%d cells=%d",
+		tonumber( p.decompressMS ) or 0, tonumber( p.jsonMS ) or 0, tonumber( p.hydrateMS ) or 0,
+		tonumber( p.chunks ) or 0, tonumber( p.cells ) or 0 ) )
+end, nil, "Print snapshot decode and NativeChunk hydration timings" )
 
 local PendingFullAckBytes = 0
 local NextFullAckAt = 0
@@ -534,8 +542,16 @@ local function resetChunk( cx, cy, cz )
 	return c
 end
 
+local function activeNativeChunkBackend()
+	local backend = MC.GetChunkBackend and MC.GetChunkBackend() or nil
+	return backend and backend.native and backend.IsActive and backend.IsActive() and backend or nil
+end
+
 local function readCellsIntoChunk( c, count )
 	local changed = false
+	local nativeBackend = activeNativeChunkBackend()
+	local nativeCells = nativeBackend and {} or nil
+	MC.NativeChunkBulkLoading = nativeCells ~= nil
 	for _ = 1, count do
 		local li = net.ReadUInt( Net.LOCAL_BITS )
 		local id = net.ReadUInt( Net.ID_BITS )
@@ -543,11 +559,19 @@ local function readCellsIntoChunk( c, count )
 		if id ~= 0 and MC.LocalIndexInRange( li ) then
 			local stateId = MC.StateFromLegacy( id, orient )
 			if stateId then
-				local cellChanged = MC.SetChunkLocalStateRaw( c, li, stateId )
-				if cellChanged then changed = true end
+				if nativeCells then
+					nativeCells[#nativeCells + 1] = li; nativeCells[#nativeCells + 1] = stateId
+					c.count = ( c.count or 0 ) + 1
+					changed = true
+				else
+					local cellChanged = MC.SetChunkLocalStateRaw( c, li, stateId )
+					if cellChanged then changed = true end
+				end
 			end
 		end
 	end
+	MC.NativeChunkBulkLoading = false
+	if nativeCells then nativeBackend.ApplyChunkCells( c, nativeCells, true ) end
 	if changed and MC.FinalizeChunkStateStorage then MC.FinalizeChunkStateStorage( c ) end
 	if changed and MC.IndexChunkLightSources then MC.IndexChunkLightSources( c ) end
 end
@@ -657,6 +681,9 @@ local function loadSnapshotChunk( data, cache, palette, strict )
 	local c = MC.EnsureChunk( cx, cy, cz )
 	MC.ResetChunkStateStorage( c )
 	local seen = {}
+	local nativeBackend = activeNativeChunkBackend()
+	local nativeCells = nativeBackend and {} or nil
+	MC.NativeChunkBulkLoading = nativeCells ~= nil
 	local loadError
 
 	if isstring( cells ) then
@@ -668,8 +695,13 @@ local function loadSnapshotChunk( data, cache, palette, strict )
 				local stateId = snapshotPaletteEntry( cache, palette, piText )
 				if strict and ( not stateId or stateId == 0 ) then loadError = "invalid_snapshot_state" break end
 				if stateId and stateId ~= 0 then
-					local changed = MC.SetChunkLocalStateRaw( c, li, stateId )
-					if strict and changed ~= true then loadError = "snapshot_state_write_failed" break end
+					if nativeCells then
+						nativeCells[#nativeCells + 1] = li; nativeCells[#nativeCells + 1] = stateId
+						c.count = ( c.count or 0 ) + 1
+					else
+						local changed = MC.SetChunkLocalStateRaw( c, li, stateId )
+						if strict and changed ~= true then loadError = "snapshot_state_write_failed" break end
+					end
 					seen[li] = true
 				end
 			end
@@ -684,8 +716,13 @@ local function loadSnapshotChunk( data, cache, palette, strict )
 				local stateId = snapshotPaletteEntry( cache, palette, cells[i + 1] )
 				if strict and ( not stateId or stateId == 0 ) then loadError = "invalid_snapshot_state" break end
 				if stateId and stateId ~= 0 then
-					local changed = MC.SetChunkLocalStateRaw( c, li, stateId )
-					if strict and changed ~= true then loadError = "snapshot_state_write_failed" break end
+					if nativeCells then
+						nativeCells[#nativeCells + 1] = li; nativeCells[#nativeCells + 1] = stateId
+						c.count = ( c.count or 0 ) + 1
+					else
+						local changed = MC.SetChunkLocalStateRaw( c, li, stateId )
+						if strict and changed ~= true then loadError = "snapshot_state_write_failed" break end
+					end
 					seen[li] = true
 				end
 			end
@@ -693,7 +730,11 @@ local function loadSnapshotChunk( data, cache, palette, strict )
 	elseif strict then
 		loadError = "invalid_snapshot_cells"
 	end
-	if loadError then return nil, loadError end
+	if loadError then MC.NativeChunkBulkLoading = false; return nil, loadError end
+	MC.NativeChunkBulkLoading = false
+	if nativeCells and not nativeBackend.ApplyChunkCells( c, nativeCells, true ) then
+		return nil, "native_chunk_batch_failed"
+	end
 	if not loadSnapshotBlockEntities( c, blockEntities, strict ) then return nil, "invalid_snapshot_block_entities" end
 
 	if MC.FinalizeChunkStateStorage then MC.FinalizeChunkStateStorage( c ) end
@@ -707,6 +748,7 @@ local function loadSnapshotChunk( data, cache, palette, strict )
 end
 
 function MC.LoadSnapshotSaveData( data )
+	local hydrateStarted = SysTime()
 	if not istable( data ) or not istable( data.chunks ) then return false end
 	if data.v == 9 or data.v == 10 then
 		local expectedHash = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or nil
@@ -716,6 +758,7 @@ function MC.LoadSnapshotSaveData( data )
 	end
 	local palette = data.p or data.palette
 	resetClientWorldForSnapshot( #data.chunks, 0 )
+	if MC.BeginLightingBulkLoad then MC.BeginLightingBulkLoad() end
 
 	local cache = {}
 	local blocks = 0
@@ -723,15 +766,18 @@ function MC.LoadSnapshotSaveData( data )
 		if istable( chunkData ) then
 			local loaded, loadError = loadSnapshotChunk( chunkData, cache, palette, data.v == 9 or data.v == 10 )
 			if loaded == nil then
+				if MC.CancelLightingBulkLoad then MC.CancelLightingBulkLoad() end
 				resetClientWorldForSnapshot( 0, 0 )
 				return false, loadError
 			end
 			blocks = blocks + loaded
 		elseif data.v == 9 or data.v == 10 then
+			if MC.CancelLightingBulkLoad then MC.CancelLightingBulkLoad() end
 			resetClientWorldForSnapshot( 0, 0 )
 			return false, "invalid_snapshot_chunk"
 		end
 	end
+	if MC.EndLightingBulkLoad then MC.EndLightingBulkLoad() end
 
 	MC.SyncProgress.expected = blocks
 	MC.SyncProgress.received = blocks
@@ -750,6 +796,9 @@ function MC.LoadSnapshotSaveData( data )
 		applyNetCell( cell.bx, cell.by, cell.bz, cell.id, cell.orient )
 	end
 	if MC.MarkSignRenderEntriesDirty then MC.MarkSignRenderEntriesDirty() end
+	MC.NativeLoadProfile.hydrateMS = ( SysTime() - hydrateStarted ) * 1000
+	MC.NativeLoadProfile.chunks = #data.chunks
+	MC.NativeLoadProfile.cells = blocks
 
 	return true
 end
@@ -942,6 +991,10 @@ function MC.LoadHttpChunkRecord( key, record, partData )
 	local savedHeight = math.floor( tonumber( partData and partData.h ) or tonumber( state.height ) or MC.CH )
 	local cache = {}
 	local touched = {}
+	local nativeBatches = {}
+	local nativeBackend = activeNativeChunkBackend()
+	local nativeActive = nativeBackend ~= nil
+	MC.NativeChunkBulkLoading = nativeActive == true
 	local blocks = 0
 
 	local function loadOneCell( li, paletteIndex )
@@ -955,11 +1008,20 @@ function MC.LoadHttpChunkRecord( key, record, partData )
 		local id, orient = httpPaletteEntry( state, cache, paletteIndex )
 		if not id or id == 0 or ( MC.IsValidBlock and not MC.IsValidBlock( id ) ) then return end
 		local chunk = MC.EnsureChunk( cx, cy, cz )
-		chunk.orients = chunk.orients or {}
-		if chunk.blocks[nli] ~= nil then return end
-		chunk.blocks[nli] = id
-		chunk.orients[nli] = MC.NormalizeOrient( id, orient )
-		chunk.count = ( chunk.count or 0 ) + 1
+		local existingState = MC.GetChunkBlockStateByLocalIndex( chunk, nli )
+		if existingState and existingState ~= 0 then return end
+		local normalized = MC.NormalizeOrient( id, orient )
+		local stateId = MC.StateFromLegacy( id, normalized )
+		if stateId == nil then return end
+		if nativeActive then
+			local batch = nativeBatches[chunk.key]
+			if not batch then batch = {}; nativeBatches[chunk.key] = batch end
+			batch[#batch + 1] = nli; batch[#batch + 1] = stateId
+			chunk.count = ( chunk.count or 0 ) + 1
+		else
+			local changed = MC.SetChunkLocalStateRaw( chunk, nli, stateId )
+			if changed ~= true then return end
+		end
 		touched[chunk.key] = chunk
 		blocks = blocks + 1
 	end
@@ -971,6 +1033,13 @@ function MC.LoadHttpChunkRecord( key, record, partData )
 	elseif istable( cells ) then
 		for i = 1, #cells, 2 do
 			loadOneCell( cells[i], cells[i + 1] )
+		end
+	end
+	MC.NativeChunkBulkLoading = false
+	if nativeActive then
+		for touchedKey, batch in pairs( nativeBatches ) do
+			local chunk = touched[touchedKey]
+			if chunk then nativeBackend.ApplyChunkCells( chunk, batch, false ) end
 		end
 	end
 
@@ -1267,8 +1336,12 @@ net.Receive( "mc_snapshot_part", function()
 		return
 	end
 
+	local decompressStarted = SysTime()
 	local json = util.Decompress( payload )
+	MC.NativeLoadProfile.decompressMS = ( SysTime() - decompressStarted ) * 1000
+	local jsonStarted = SysTime()
 	local data = json and util.JSONToTable( json ) or nil
+	MC.NativeLoadProfile.jsonMS = ( SysTime() - jsonStarted ) * 1000
 	if not data or not MC.LoadSnapshotSaveData( data ) then
 		if MC.SnapshotLoadingToken == token then MC.SnapshotLoadingToken = nil end
 		MsgN( "[MC] snapshot sync failed: invalid payload" )
