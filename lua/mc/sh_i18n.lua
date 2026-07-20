@@ -89,6 +89,12 @@ MC.LanguageData = MC.LanguageData or {
 	zh_cn = {
 		["language.zh_cn"] = "中文",
 		["language.en_us"] = "English",
+		["native.dll_missing"] = "未检测到优化DLL，当前使用 Lua 后端。 下载地址：",
+		["native.dll_open_hint"] = "(推荐下载)",
+		["native.dll_console"] = "Native DLL 下载地址: {url}",
+		["native.dll_command_help"] = "打开 MCSWEP Native DLL 的 GitHub 页面",
+		["join.config_hint"] = "控制台输入 mc_config 打开配置界面，输入 mc_save_manager 打开存档管理器。",
+		["join.config_hide_hint"] = "输入 mc_join_notice 0 关闭进服提示。",
 
 		["tool.name"] = "MC 方块",
 		["tool.desc"] = "放置 / 破坏 Minecraft 方块（IMesh 渲染，不生成实体）",
@@ -283,6 +289,12 @@ MC.LanguageData = MC.LanguageData or {
 	en_us = {
 		["language.zh_cn"] = "Chinese",
 		["language.en_us"] = "English",
+		["native.dll_missing"] = "Optional Native DLL was not detected; using the Lua backend. ",
+		["native.dll_open_hint"] = " (recommended download)",
+		["native.dll_console"] = "Native DLL download: {url}",
+		["native.dll_command_help"] = "Open the MCSWEP Native DLL GitHub page",
+		["join.config_hint"] = "Enter mc_config in the console to open settings, or mc_save_manager to open the save manager.",
+		["join.config_hide_hint"] = "Enter mc_join_notice 0 to disable this join notice.",
 
 		["tool.name"] = "MC Block",
 		["tool.desc"] = "Place and break Minecraft blocks using IMesh chunks instead of entities",

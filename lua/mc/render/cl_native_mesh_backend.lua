@@ -37,7 +37,7 @@ local CONVAR_ENABLED = CreateClientConVar( "mc_native_mesh", "1", true, false,
 local CONVAR_THINK_MS = CreateClientConVar( "mc_native_think_ms", "3", true, false,
 	"Per-frame budget (ms) for native mesh finalization" )
 
-local ADAPTER_ABI = 4   -- M5.7 state-native liquid metrics
+local ADAPTER_ABI = 5   -- incremental native lighting + partial async commits
 
 local function newPackProfile()
 	return {
@@ -92,7 +92,37 @@ local state = {
 	lightLastChangedCells = 0,
 	lightScheduleCalls = 0,
 	lightCoalesced = 0,
+	incrementalLightCalls = 0,
+	incrementalLightCells = 0,
+	incrementalLightLastMS = 0,
 }
+
+local function applyNativeLightChanges( result, urgent )
+	if not istable( result ) then return 0 end
+	state.lightReady = state.lightReady or result.status == "incremental"
+	state.lightCache = {}
+	state.skyCache = {}
+	state.lightLastStatus = tostring( result.status or "incremental" )
+	state.lightLastMS = tonumber( result.ms ) or 0
+	state.lightLastChangedChunks = tonumber( result.changedChunkCount ) or 0
+	state.lightLastChangedCells = tonumber( result.changedCellCount ) or 0
+	if result.status == "incremental" then
+		state.incrementalLightCalls = state.incrementalLightCalls + 1
+		state.incrementalLightCells = state.incrementalLightCells + state.lightLastChangedCells
+		state.incrementalLightLastMS = state.lightLastMS
+	end
+	local changed = result.changedCellChunks
+	if urgent ~= true and state.lightLastChangedCells > 65536 and MC.QueueAllGpuChunkLightTextureRefresh then
+		MC.QueueAllGpuChunkLightTextureRefresh()
+	elseif istable( changed ) and MC.MarkGpuChunkLightTextureDirtyNative then
+		for i = 1, #changed, 4 do
+			MC.MarkGpuChunkLightTextureDirtyNative( changed[i], changed[i + 1], changed[i + 2], changed[i + 3], urgent == true )
+		end
+	elseif MC.QueueAllGpuChunkLightTextureRefresh then
+		MC.QueueAllGpuChunkLightTextureRefresh()
+	end
+	return state.lightLastChangedCells
+end
 
 local function log( msg )
 	print( "[mcswep-native] " .. tostring( msg ) )
@@ -114,6 +144,7 @@ end
 -- marker surviving a native ClearWorld/Shutdown cycle.
 MC.NativeChunkBackend = MC.NativeChunkBackend or {}
 MC.NativeChunkBackend.native = true
+MC.NativeChunkBackend.incrementalLighting = true
 function MC.NativeChunkBackend.IsActive()
 	return state.active and not state.failed and mcmesh ~= nil
 end
@@ -135,16 +166,16 @@ function MC.NativeChunkBackend.ApplyChunkCells( chunk, cells, replace )
 	state.packProfile.nativeBatchCalls = state.packProfile.nativeBatchCalls + 1
 	state.packProfile.nativeBatchCells = state.packProfile.nativeBatchCells + math.floor( #cells / 2 )
 	chunk.nativeMeshEpoch = state.epoch
-	MC.NativeChunkBackend.ScheduleBlockLightRebuild( 0.02 )
+	if ( MC.LightingBulkLoadDepth or 0 ) <= 0 then MC.NativeChunkBackend.ScheduleBlockLightRebuild( 0.02 ) end
 	return true
 end
 function MC.NativeChunkBackend.SetCell( chunk, li, stateId )
 	if not MC.NativeChunkBackend.IsActive() or not chunk or not isfunction( mcmesh.SetCell ) then return false end
-	local ok, result = pcall( mcmesh.SetCell, chunk.cx, chunk.cy, chunk.cz, li, stateId )
+	local ok, result, lightResult = pcall( mcmesh.SetCell, chunk.cx, chunk.cy, chunk.cz, li, stateId )
 	if not ok or result ~= true then state.failed = true; return false end
 	state.packProfile.nativeSetCellCalls = state.packProfile.nativeSetCellCalls + 1
 	chunk.nativeMeshEpoch = state.epoch
-	MC.NativeChunkBackend.ScheduleBlockLightRebuild( 0.05 )
+	applyNativeLightChanges( lightResult, true )
 	return true
 end
 function MC.NativeChunkBackend.GetCell( chunk, li )
@@ -215,9 +246,9 @@ function MC.NativeChunkBackend.ScheduleBlockLightRebuild( delay )
 	if state.lightPending or state.lightRunning then state.lightCoalesced = state.lightCoalesced + 1 end
 	if not state.lightPending then state.lightFirstPending = now end
 	state.lightPending = true
-	state.lightReady = false
-	state.lightCache = {}
-	state.skyCache = {}
+	-- Keep the last committed light field live while a full snapshot rebuild is
+	-- pending. Initial world hydration starts with lightReady=false naturally;
+	-- later structural rebuilds no longer flash back to empty Lua caches.
 	local wanted = now + math.max( 0, tonumber( delay ) or 0 )
 	local deadline = ( state.lightFirstPending or now ) + 0.25
 	state.lightDue = math.min( deadline, math.max( state.lightDue or 0, wanted ) )
@@ -1139,6 +1170,16 @@ deactivate = function( reason )
 	elseif mcmesh and isfunction( mcmesh.ClearWorld ) then pcall( mcmesh.ClearWorld ) end
 	if MC.MarkChunkDrawListDirty then MC.MarkChunkDrawListDirty() end
 	if state.shuttingDown then return end
+	-- Sky reflood requests made while Native owned lighting were redirected to
+	-- C++. Once ownership returns to Lua those requests no longer exist in the
+	-- Lua queue, so rebuild the column cache before fallback meshes are built.
+	if MC.ClearSkyColumnCache then
+		MC.ClearSkyColumnCache()
+	else
+		if MC.ClearSkyFlood then MC.ClearSkyFlood() end
+		if MC.QueueAllSkyFlood then MC.QueueAllSkyFlood() end
+	end
+	if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
 	-- 鍏ㄥ浘浜よ繕 Lua 閲嶅缓(姣?tick 涓€鎵? 閬垮厤鍥為€€鐬棿涓€娆℃€у皷宄?
 	local keys = {}
 	for key, chunk in pairs( MC.World or {} ) do
@@ -1173,22 +1214,16 @@ hook.Add( "Think", "mcswep_native_think", function()
 		local lightResult = MC.NativeChunkBackend.PollBlockLightRebuild()
 		if istable( lightResult ) and lightResult.status ~= "running" then
 			state.lightRunning = false
-			if lightResult.status == "committed" then
-				state.lightReady = true
-				state.lightCache = {}
-				state.skyCache = {}
-				state.lightLastStatus = "committed"
-				state.lightLastMS = tonumber( lightResult.ms ) or 0
-				state.lightLastChangedChunks = tonumber( lightResult.changedChunkCount ) or 0
-				state.lightLastChangedCells = tonumber( lightResult.changedCellCount ) or 0
-				local changed = lightResult.changedCellChunks
-				if state.lightLastChangedCells <= 65536 and istable( changed )
-				and MC.MarkGpuChunkLightTextureDirtyNative then
-					for i = 1, #changed, 4 do
-						MC.MarkGpuChunkLightTextureDirtyNative( changed[i], changed[i + 1], changed[i + 2], changed[i + 3] )
-					end
-				elseif MC.QueueAllGpuChunkLightTextureRefresh then
-					MC.QueueAllGpuChunkLightTextureRefresh()
+			if lightResult.status == "committed" or lightResult.status == "partial" then
+				if lightResult.status == "committed" then state.lightReady = true end
+				applyNativeLightChanges( lightResult, false )
+				if lightResult.status == "partial" then
+					-- Unchanged columns were committed; only dependency columns touched
+					-- during the worker run need another snapshot. Existing/incremental
+					-- light remains visible while that completion pass runs.
+					state.lightPending = true
+					state.lightFirstPending = CurTime()
+					state.lightDue = state.lightFirstPending
 				end
 			elseif lightResult.status == "stale" then
 				state.lightLastStatus = "stale"

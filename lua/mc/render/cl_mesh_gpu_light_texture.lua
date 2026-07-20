@@ -63,6 +63,7 @@ for slot = TILE_COUNT - 1, FIRST_SLOT, -1 do
 end
 
 local pendingBake = {}
+local urgentBake = {} -- native incremental edits; flushed before visibility/background work
 local pendingIndir = {} -- residueIndex -> tile index (0 = point at white)
 local statsEvictions = 0
 local statsBakes = 0
@@ -452,7 +453,7 @@ end
 -- C++ light workers return one 8192-bit mask per changed source chunk. Apply
 -- it directly to atlas dirty sets without 27 generic chunk lookups per cell;
 -- only cells on a source boundary can affect a neighbour's one-texel halo.
-function MC.MarkGpuChunkLightTextureDirtyNative( cx, cy, cz, dirtyBits )
+function MC.MarkGpuChunkLightTextureDirtyNative( cx, cy, cz, dirtyBits, urgent )
 	if not isstring( dirtyBits ) or #dirtyBits ~= ( MC.CS * MC.CS * MC.CH ) / 8 then return 0, 0 end
 	local markedCells, markedChunks = 0, 0
 	local seenChunks = {}
@@ -481,6 +482,8 @@ function MC.MarkGpuChunkLightTextureDirtyNative( cx, cy, cz, dirtyBits )
 									dirty[packed] = true
 								end
 								MC.GpuChunkLightDirtyChunks[key] = true
+								pendingBake[key] = true
+								if urgent == true then urgentBake[key] = true end
 								if not seenChunks[key] then seenChunks[key] = true; markedChunks = markedChunks + 1 end
 							end
 						end
@@ -685,12 +688,18 @@ hook.Add( "PreRender", "mc_gpu_light_texture_flush", function()
 	end
 	if next( pendingBake ) then
 		local budget = flushBudget()
-		for key in pairs( pendingBake ) do
+		for key in pairs( urgentBake ) do
+			urgentBake[key] = nil
 			pendingBake[key] = nil
 			local chunk = MC.GetChunkByKey and MC.GetChunkByKey( key ) or nil
-			if chunk then
-				MC.RefreshGpuChunkLightTexture( key )
-				budget = budget - 1
+			if chunk then MC.RefreshGpuChunkLightTexture( key ); budget = budget - 1 end
+			if budget <= 0 then break end
+		end
+		if budget > 0 then
+			for key in pairs( pendingBake ) do
+				pendingBake[key] = nil
+				local chunk = MC.GetChunkByKey and MC.GetChunkByKey( key ) or nil
+				if chunk then MC.RefreshGpuChunkLightTexture( key ); budget = budget - 1 end
 				if budget <= 0 then break end
 			end
 		end
@@ -703,6 +712,7 @@ function MC.ClearGpuChunkLightTexture( key )
 	MC.GpuChunkLightDirtyCells[key] = nil
 	MC.GpuChunkLightDirtyChunks[key] = nil
 	pendingBake[key] = nil
+	urgentBake[key] = nil
 end
 
 function MC.ClearAllGpuChunkLightTextures()
@@ -719,6 +729,7 @@ function MC.ClearAllGpuChunkLightTextures()
 		freeSlots[freeSlotCount] = slot
 	end
 	pendingBake = {}
+	urgentBake = {}
 	pendingIndir = {}
 	MC.GpuChunkLightDirtyCells = {}
 	MC.GpuChunkLightDirtyChunks = {}
@@ -750,6 +761,7 @@ function MC.GpuLightAtlasDebug()
 		residueBySlot = residueBySlot,
 		residueOwner = residueOwner,
 		pendingBake = pendingBake,
+		urgentBake = urgentBake,
 		pendingIndir = pendingIndir,
 		TILE = TILE,
 		TILES_PER_ROW = TILES_PER_ROW,

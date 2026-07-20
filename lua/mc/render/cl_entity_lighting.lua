@@ -26,6 +26,10 @@ MC.EntityLightingReflections = MC.EntityLightingReflections or CreateClientConVa
 	"mc_entity_lighting_reflections", "0.35", true, false,
 	"Reflection strength for Minecraft-lit entities; also scales with sampled brightness"
 )
+MC.EntityLightingInterval = MC.EntityLightingInterval or CreateClientConVar(
+	"mc_entity_lighting_interval", "0.10", true, false,
+	"Seconds between expensive voxel-light samples per entity; 0 updates every draw"
+)
 MC.EntityLightingPlayerGamma = MC.EntityLightingPlayerGamma or CreateClientConVar(
 	"mc_entity_lighting_player_gamma", "2.2", true, false,
 	"Display-to-linear conversion exponent for Source player ambient-cube lighting"
@@ -86,6 +90,10 @@ local function playerLightingGamma()
 	return math.Clamp( MC.EntityLightingPlayerGamma and MC.EntityLightingPlayerGamma:GetFloat() or 2.2, 1, 4 )
 end
 
+local function sampleInterval()
+	return math.Clamp( MC.EntityLightingInterval and MC.EntityLightingInterval:GetFloat() or 0.10, 0, 2 )
+end
+
 local function samplePosition( ent, player )
 	if player and ent.EyePos then return ent:EyePos() end
 	local mins, maxs = ent:OBBMins(), ent:OBBMaxs()
@@ -97,20 +105,38 @@ local function samplePosition( ent, player )
 end
 
 local function sampledRGB( ent, player )
-	local r, g, b = 1, 1, 1
-	if MC.SampleDynamicLightingRGB then
-		r, g, b = MC.SampleDynamicLightingRGB( samplePosition( ent, player ), 0 )
-	end
+	local now = CurTime()
 	local state = lightStates[ent]
 	if not state then
-		state = { r = r, g = g, b = b }
+		local r, g, b = 1, 1, 1
+		if MC.SampleDynamicLightingRGB then
+			r, g, b = MC.SampleDynamicLightingRGB( samplePosition( ent, player ), 0 )
+		end
+		local interval = sampleInterval()
+		local phase = interval > 0 and ( ( ent:EntIndex() % 7 ) / 7 ) * interval or 0
+		state = {
+			r = r, g = g, b = b,
+			targetR = r, targetG = g, targetB = b,
+			nextSample = now + interval + phase,
+			lastUpdate = now,
+		}
 		lightStates[ent] = state
 	else
-		local dt = RealFrameTime and RealFrameTime() or FrameTime and FrameTime() or 0.016
+		local interval = sampleInterval()
+		if interval <= 0 or now >= ( state.nextSample or 0 ) then
+			local r, g, b = 1, 1, 1
+			if MC.SampleDynamicLightingRGB then
+				r, g, b = MC.SampleDynamicLightingRGB( samplePosition( ent, player ), 0 )
+			end
+			state.targetR, state.targetG, state.targetB = r, g, b
+			state.nextSample = now + interval
+		end
+		local dt = math.Clamp( now - ( state.lastUpdate or now ), 0, 0.1 )
+		state.lastUpdate = now
 		local blend = 1 - math.exp( -math.Clamp( dt, 0, 0.1 ) * 12 )
-		state.r = Lerp( blend, state.r, r )
-		state.g = Lerp( blend, state.g, g )
-		state.b = Lerp( blend, state.b, b )
+		state.r = Lerp( blend, state.r, state.targetR or state.r )
+		state.g = Lerp( blend, state.g, state.targetG or state.g )
+		state.b = Lerp( blend, state.b, state.targetB or state.b )
 	end
 	local mul = gain()
 	return state.r * mul, state.g * mul, state.b * mul
