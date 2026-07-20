@@ -229,7 +229,9 @@ function MC.UpdateSkyLightForBlockChange( bx, by, bz, oldOpacity, newOpacity )
 	if not skyFloodEnabled() then return end
 	if ( tonumber( oldOpacity ) or 0 ) == ( tonumber( newOpacity ) or 0 ) then return end
 	local native = nativeSkyBackend()
-	if native then native.ScheduleBlockLightRebuild( 0.05 ); return end
+	-- ABI 5 SetCell performs the native incremental sky update before this
+	-- notification reaches the legacy Lua flood hook.
+	if native then return end
 	bx, by, bz = math.floor( bx ), math.floor( by ), math.floor( bz )
 
 	local changed = newChangedCells()
@@ -435,6 +437,8 @@ end
 -- per column chunk is a complete reflood set.
 function MC.QueueSkyFloodColumn( cx, cy )
 	if not MC.ChunkKey then return end
+	local native = nativeSkyBackend()
+	if native then native.ScheduleBlockLightRebuild( 0.02 ); return end
 	local czList = MC.SkyColumnChunkCzList and MC.SkyColumnChunkCzList( cx, cy ) or nil
 	if czList then
 		for cz in pairs( czList ) do
@@ -458,6 +462,8 @@ function MC.QueueSkyFloodColumn( cx, cy )
 end
 
 function MC.QueueAllSkyFlood()
+	local native = nativeSkyBackend()
+	if native then native.ScheduleBlockLightRebuild( 0 ); return end
 	for key in pairs( MC.World or {} ) do
 		MC.QueueSkyFloodChunk( key )
 	end

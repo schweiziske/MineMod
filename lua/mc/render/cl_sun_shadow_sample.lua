@@ -177,6 +177,17 @@ function MC.SampleDynamicLightingRGB( pos, emission )
 	return math.Clamp( r, 0, 1 ), math.Clamp( g, 0, 1 ), math.Clamp( b, 0, 1 ), blockLevel, skyLevel
 end
 
+-- Keep every unlit dynamic renderer on the same exposure conversion. The
+-- caller still chooses its own headroom (held blocks use 0.48, terrain
+-- particles use 0.60), but clamping and RGB scaling must stay identical.
+function MC.ScaleDynamicLightingRGB( r, g, b, gain )
+	gain = math.max( tonumber( gain ) or 1, 0 )
+	local rawR = math.Clamp( tonumber( r ) or 1, 0, 1 )
+	local rawG = math.Clamp( tonumber( g ) or rawR, 0, 1 )
+	local rawB = math.Clamp( tonumber( b ) or rawR, 0, 1 )
+	return math.Clamp( rawR * gain, 0, 1 ), math.Clamp( rawG * gain, 0, 1 ), math.Clamp( rawB * gain, 0, 1 )
+end
+
 -- Applies day/night sky intensity and the directional shadow to a
 -- MC.SampleLighting result. MC.SampleLighting stores time-independent voxel
 -- sky levels, while chunk shaders apply the current day-cycle intensity later;

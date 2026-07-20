@@ -183,14 +183,37 @@ for _, f in ipairs( SHARED ) do includeTracked( f ) end
 -- treated the same as a missing DLL so the pure-Lua backend keeps its smaller
 -- 8^3 update granularity.
 if CLIENT then
+	MC.JoinNoticeEnabled = MC.JoinNoticeEnabled or CreateClientConVar(
+		"mc_join_notice", "1", true, false,
+		"Show the MCSWEP configuration hint after joining a server"
+	)
+	if not MC.JoinNoticeScheduled then
+		MC.JoinNoticeScheduled = true
+		timer.Simple( 4, function()
+			if MC.JoinNoticeShown or not MC.JoinNoticeEnabled:GetBool() then return end
+			MC.JoinNoticeShown = true
+			if chat and chat.AddText then
+				chat.AddText(
+					Color( 80, 190, 255 ), "[MCSWEP] ",
+					Color( 235, 235, 235 ), MC.T( "join.config_hint",
+						"控制台输入 mc_config 打开配置界面，输入 mc_save_manager 打开存档管理器。" ),
+					Color( 160, 255, 160 ), "  " .. MC.T( "join.config_hide_hint",
+						"输入 mc_join_notice 0 关闭进服提示。" )
+				)
+			end
+		end )
+	end
+
 	local nativeUsable = MC.NativeMeshModuleProbeDone == true and MC.NativeMeshModuleAvailable == true
+	local nativeMissing = MC.NativeMeshModuleMissing == true
 	if MC.NativeMeshModuleProbeDone ~= true then
 		local nativeLoaded, nativeLoadError = pcall( require, "mcswep_native_mesh" )
+		nativeMissing = not nativeLoaded
 		nativeUsable = nativeLoaded and istable( mcmesh ) and isfunction( mcmesh.AbiVersion )
 		local nativeFailureReason = nativeLoaded and "invalid module table" or tostring( nativeLoadError or "module not found" )
 		if nativeUsable then
 			local abiOK, abi = pcall( mcmesh.AbiVersion )
-			nativeUsable = abiOK and abi == 4
+			nativeUsable = abiOK and abi == 5
 			if not nativeUsable then nativeFailureReason = "ABI mismatch" end
 		end
 		if nativeUsable then
@@ -209,11 +232,36 @@ if CLIENT then
 		end
 		MC.NativeMeshModuleProbeDone = true
 		MC.NativeMeshModuleAvailable = nativeUsable
+		MC.NativeMeshModuleMissing = nativeMissing
 		MC.NativeMeshModuleFailureReason = nativeUsable and nil or nativeFailureReason
 	end
 	MC.RENDER_SECTION_SIZE = nativeUsable and 16 or 8
 	MsgN( "[MC] render section size = " .. MC.RENDER_SECTION_SIZE
 		.. ( nativeUsable and " (native module)" or " (Lua fallback)" ) )
+
+	if nativeMissing and not MC.NativeMeshInstallNoticeScheduled then
+		MC.NativeMeshInstallNoticeScheduled = true
+		local nativeURL = "https://github.com/ABSD546316187/mcswep_native_mesh"
+		timer.Simple( 1, function()
+			if MC.NativeMeshInstallNoticeShown then return end
+			MC.NativeMeshInstallNoticeShown = true
+			if chat and chat.AddText then
+				chat.AddText(
+					Color( 80, 190, 255 ), "[MCSWEP] ",
+					Color( 255, 210, 90 ), MC.T( "native.dll_missing",
+						"未检测到优化DLL，当前使用 Lua 后端。 下载地址：" ),
+					Color( 130, 210, 255 ), nativeURL,
+					Color( 160, 255, 160 ), MC.T( "native.dll_open_hint",
+						"(推荐下载)" )
+				)
+			end
+			MsgN( "[MCSWEP] " .. MC.T( "native.dll_console",
+				"Native DLL 下载地址: {url}", { url = nativeURL } ) )
+		end )
+		concommand.Add( "mc_native_download", function()
+			if gui and gui.OpenURL then gui.OpenURL( nativeURL ) end
+		end, nil, MC.T( "native.dll_command_help", "打开 MCSWEP Native DLL 的 GitHub 页面" ) )
+	end
 end
 
 if SERVER then
