@@ -28,6 +28,13 @@ local function skyFloodEnabled()
 	return not cv or ( cv.GetBool and cv:GetBool() == true )
 end
 
+local function nativeSkyBackend()
+	local backend = MC.GetChunkBackend and MC.GetChunkBackend() or nil
+	if backend and backend.native and backend.IsActive and backend.IsActive()
+	and backend.ScheduleBlockLightRebuild and backend.GetSkyLightAt then return backend end
+	return nil
+end
+
 MC.SkyFloodEnabled = skyFloodEnabled
 
 local function chunkLoadedForCell( bx, by, bz )
@@ -78,6 +85,9 @@ end
 function MC.SkyVoxelLight( bx, by, bz )
 	if not skyFloodEnabled() then return 15 end
 	bx, by, bz = math.floor( bx ), math.floor( by ), math.floor( bz )
+	local native = nativeSkyBackend()
+	local nativeLevel = native and native.GetSkyLightAt( bx, by, bz ) or nil
+	if nativeLevel ~= nil then return nativeLevel end
 	return skyLevelAt( bx, by, bz )
 end
 
@@ -218,6 +228,8 @@ end
 function MC.UpdateSkyLightForBlockChange( bx, by, bz, oldOpacity, newOpacity )
 	if not skyFloodEnabled() then return end
 	if ( tonumber( oldOpacity ) or 0 ) == ( tonumber( newOpacity ) or 0 ) then return end
+	local native = nativeSkyBackend()
+	if native then native.ScheduleBlockLightRebuild( 0.05 ); return end
 	bx, by, bz = math.floor( bx ), math.floor( by ), math.floor( bz )
 
 	local changed = newChangedCells()
@@ -253,6 +265,8 @@ end
 -- (exposed) and interior. Called from cl_sky_column with the flip span.
 function MC.NoteSkyExposureSpanChanged( bx, by, zFrom, zTo )
 	if not skyFloodEnabled() then return end
+	local native = nativeSkyBackend()
+	if native then native.ScheduleBlockLightRebuild( 0.05 ); return end
 	bx, by = math.floor( bx ), math.floor( by )
 	zFrom, zTo = math.floor( zFrom ), math.floor( zTo )
 	if zFrom > zTo then zFrom, zTo = zTo, zFrom end
@@ -407,6 +421,8 @@ local pendingCount = 0
 
 function MC.QueueSkyFloodChunk( key )
 	if key == nil then return end
+	local native = nativeSkyBackend()
+	if native then native.ScheduleBlockLightRebuild( 0.02 ); return end
 	if not pendingReflood[key] then
 		pendingReflood[key] = true
 		pendingCount = pendingCount + 1

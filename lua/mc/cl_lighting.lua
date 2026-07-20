@@ -264,6 +264,13 @@ local function lightOpacity( id, orient )
 	return MC.BlockLightOpacity and MC.BlockLightOpacity( id, orient ) or 15
 end
 
+local function nativeBlockLightBackend()
+	local backend = MC.GetChunkBackend and MC.GetChunkBackend() or nil
+	if backend and backend.native and backend.IsActive and backend.IsActive()
+	and backend.ScheduleBlockLightRebuild and backend.GetBlockLightAt then return backend end
+	return nil
+end
+
 local function lightEmissionForState( stateId, bx, by, bz )
 	return MC.BlockLightEmissionForState and MC.BlockLightEmissionForState( stateId, bx, by, bz ) or 0
 end
@@ -371,12 +378,20 @@ end
 
 function MC.MarkAllMeshesDirty()
 	MC.ClearLightingCache()
+	local marked = 0
 	for key, chunk in pairs( MC.World or {} ) do
 		if chunk and chunk.count and chunk.count > 0 and MC.MarkChunkDirty then
 			MC.MarkChunkDirty( key )
+			marked = marked + 1
 		end
 	end
+	return marked
 end
+
+concommand.Add( "mc_mesh_rebuild", function()
+	local marked = MC.MarkAllMeshesDirty()
+	print( string.format( "[MC mesh] queued full rebuild for %d chunks", marked or 0 ) )
+end )
 
 local function markLoadedMeshesDirty()
 	clearGpuLightTextures()
@@ -431,8 +446,13 @@ function MC.IndexChunkLightSources( chunk )
 		return
 	end
 	MC.ClearChunkLightSources( chunk.key )
+	if nativeBlockLightBackend() then
+		MC.LightSourceIndexReady = true
+		return
+	end
 	indexChunkSources( chunk )
 	MC.LightSourceIndexReady = true
+	if ( MC.LightingBulkLoadDepth or 0 ) > 0 then return end
 	if MC.UpdateLightingForChunkLoaded then
 		MC.UpdateLightingForChunkLoaded( chunk )
 	else
@@ -443,6 +463,11 @@ end
 function MC.ReindexAllLightingSources()
 	MC.LightSourceCells = {}
 	MC.LightChunkSources = {}
+	if nativeBlockLightBackend() then
+		MC.LightSourceIndexReady = true
+		MC.LightCellsReady = false
+		return
+	end
 	for _, chunk in pairs( MC.World or {} ) do
 		indexChunkSources( chunk )
 	end
@@ -899,7 +924,13 @@ function MC.RebuildLightingCells()
 	if MC.ClearSkyFlood then MC.ClearSkyFlood() end
 	if MC.QueueAllSkyFlood then MC.QueueAllSkyFlood() end
 	local minX, minY, minZ, maxX, maxY, maxZ = loadedWorldBounds()
-	rebuildBlockLightCells()
+	local native = nativeBlockLightBackend()
+	if native then
+		native.ScheduleBlockLightRebuild( 0 )
+		MC.LightBlockChunks = {}
+	else
+		rebuildBlockLightCells()
+	end
 	MC.LightCellsReady = true
 	local stats = MC.LightPerfStats or {}
 	MC.LightPerfStats = stats
@@ -920,6 +951,8 @@ function MC.UpdateLightingCellsAroundCell( bx, by, bz, radius, rateLimited )
 		noteLightingDisabledSkip( "around_cell", bx, by, bz )
 		return 0, 0
 	end
+	local native = nativeBlockLightBackend()
+	if native then native.ScheduleBlockLightRebuild( 0.05 ); return 0, 0 end
 	local perfStart = SysTime()
 	ensureLightSourceIndex()
 	local changed = newChangedLightCells()
@@ -950,6 +983,7 @@ function MC.UpdateLightingCellsAroundCell( bx, by, bz, radius, rateLimited )
 end
 
 function MC.NoteLightingCellChanged( bx, by, bz, oldId, oldOrient, newId, newOrient )
+	if nativeBlockLightBackend() then return end
 	ensureLightSourceIndex()
 	local key = cellKey( bx, by, bz )
 	local old = MC.LightSourceCells[key]
@@ -961,7 +995,31 @@ function MC.NoteLightingCellChanged( bx, by, bz, oldId, oldOrient, newId, newOri
 	addLightSource( bx, by, bz, lightEmission( newId ) )
 end
 
+function MC.BeginLightingBulkLoad()
+	MC.LightingBulkLoadDepth = ( MC.LightingBulkLoadDepth or 0 ) + 1
+	if MC.LightingBulkLoadDepth == 1 then
+		MC.LightSourceCells = {}
+		MC.LightChunkSources = {}
+		MC.LightSourceIndexReady = true
+		MC.LightCellsReady = false
+	end
+end
+
+function MC.EndLightingBulkLoad()
+	local depth = math.max( 0, ( MC.LightingBulkLoadDepth or 0 ) - 1 )
+	MC.LightingBulkLoadDepth = depth
+	if depth > 0 then return end
+	if MC.RebuildLightingCells then MC.RebuildLightingCells() end
+end
+
+function MC.CancelLightingBulkLoad()
+	MC.LightingBulkLoadDepth = 0
+	MC.LightSourceIndexReady = false
+	MC.LightCellsReady = false
+end
+
 function MC.NoteLightingStateCellChanged( bx, by, bz, newStateId )
+	if nativeBlockLightBackend() then return end
 	ensureLightSourceIndex()
 	local key = cellKey( bx, by, bz )
 	local old = MC.LightSourceCells[key]
@@ -980,6 +1038,12 @@ end
 function MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, oldOpacity, newOpacity )
 	if not lightEnabled() then
 		noteLightingDisabledSkip( "block_change", bx, by, bz )
+		return 0, 0
+	end
+	local native = nativeBlockLightBackend()
+	if native then
+		native.ScheduleBlockLightRebuild( 0.05 )
+		if MC.MarkGpuChunkLightTextureDirtyCell then MC.MarkGpuChunkLightTextureDirtyCell( bx, by, bz ) end
 		return 0, 0
 	end
 	local perfStart = perfNow()
@@ -1104,11 +1168,17 @@ function MC.SampleLighting( bx, by, bz, selfEmission )
 	end
 	ensureLightSourceIndex()
 	bx, by, bz = math.floor( bx ), math.floor( by ), math.floor( bz )
-	local block = chunkLoadedForCell( bx, by, bz ) and getStoredLight( MC.LightBlockChunks, bx, by, bz ) or 0
+	local native = nativeBlockLightBackend()
+	local nativeBlock, nativeSky
+	if native and native.GetLightingAt then nativeBlock, nativeSky = native.GetLightingAt( bx, by, bz ) end
+	local block = nativeBlock ~= nil and nativeBlock
+		or ( chunkLoadedForCell( bx, by, bz ) and getStoredLight( MC.LightBlockChunks, bx, by, bz ) or 0 )
 	-- Voxel sky light from the flood fill: 15 above open sky, smooth falloff
 	-- into interiors, 0 fully enclosed. This is the AMBIENT sky term only —
 	-- directional sun shadow stays the shadow map's job.
-	local sky = MC.SkyVoxelLight and MC.SkyVoxelLight( bx, by, bz ) or 0
+	local sky
+	if nativeSky ~= nil and ( not MC.SkyFloodEnabled or MC.SkyFloodEnabled() ) then sky = nativeSky
+	else sky = MC.SkyVoxelLight and MC.SkyVoxelLight( bx, by, bz ) or 0 end
 	local level = math.max( block, sky, math.Clamp( math.floor( tonumber( selfEmission ) or 0 ), 0, 15 ) )
 	local brightness = ambientMin() + ( 1 - ambientMin() ) * ( level / 15 )
 	noteLightSample( sampleStart )
