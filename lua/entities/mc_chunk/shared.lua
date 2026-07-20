@@ -38,8 +38,17 @@ local function freezePhysicsObject( ent )
 	return false
 end
 
-local function clientCollisionAABBOnly()
-	return CLIENT
+-- General client prediction stays box-only; ramps and stairs need server
+-- geometry parity so movement follows the incline instead of fallback boxes.
+local function clientCollisionAABBOnly( visual )
+	if not CLIENT then return false end
+
+	local block = visual and visual.block or nil
+	if not block and visual and MC.Blocks then block = MC.Blocks[visual.id] end
+	if not block then return true end
+	if block.shape == "stairs" then return false end
+	if block.creativeCategory == "slopes" then return false end
+	return not string.match( tostring( block.name or "" ), "_slope$" )
 end
 
 local function removeSubchunkEntity( subchunk )
@@ -303,6 +312,30 @@ local function collisionWindowsForBounds( bounds )
 	return ordered
 end
 
+local function straightStairRampCoordinates( facing, x, y, z )
+	if facing == MC.Direction.NORTH then
+		local u = -y - 1
+		return u, x, z - u
+	end
+	if facing == MC.Direction.SOUTH then
+		local u = y
+		return u, x, z - u
+	end
+	if facing == MC.Direction.WEST then
+		local u = -x - 1
+		return u, y, z - u
+	end
+	local u = x
+	return u, y, z - u
+end
+
+local function straightStairRampPoint( facing, u, v, z )
+	if facing == MC.Direction.NORTH then return { v, -u, z } end
+	if facing == MC.Direction.SOUTH then return { v, u, z } end
+	if facing == MC.Direction.WEST then return { -u, v, z } end
+	return { u, v, z }
+end
+
 -- greedy-merge solid cells into a minimal set of boxes (local cell coords);
 -- high corner is exclusive. Shared so both realms can build collision.
 local function greedyBoxes( chunk, bounds )
@@ -315,6 +348,8 @@ local function greedyBoxes( chunk, bounds )
 	local solid = {}
 	local customConvexes = {}
 	local shapeGroups = {}
+	local stairRampGroups = {}
+	local stairRampGroupOrder = {}
 	local function shapeKey( box )
 		return table.concat( { box[1], box[2], box[3], box[4], box[5], box[6] }, ":" )
 	end
@@ -349,7 +384,86 @@ local function greedyBoxes( chunk, bounds )
 		end
 		if #points >= 4 then customConvexes[#customConvexes + 1] = points end
 	end
+	local function stairRampCellKey( u, v ) return u .. ":" .. v end
+	local function addStraightStairRamp( lx, ly, lz, facing )
+		local u, v, level = straightStairRampCoordinates( facing, lx, ly, lz )
+		local groupKey = facing .. ":" .. level
+		local group = stairRampGroups[groupKey]
+		if not group then
+			group = { facing = facing, level = level, cells = {}, ordered = {} }
+			stairRampGroups[groupKey] = group
+			stairRampGroupOrder[#stairRampGroupOrder + 1] = group
+		end
+		local key = stairRampCellKey( u, v )
+		if group.cells[key] then return end
+		local cell = { u = u, v = v }
+		group.cells[key] = cell
+		group.ordered[#group.ordered + 1] = cell
+	end
+	local function addMergedStraightStairRamp( group, u0, u1, v0, v1 )
+		-- One convex envelope removes the vertical high-edge face between rising
+		-- stair cells. The lower profile only fills the triangular seam beneath
+		-- the continuous walkable plane instead of filling the whole staircase.
+		local profile = {
+			{ u0, group.level + u0 },
+			{ u0 + 1, group.level + u0 },
+			{ u1 + 1, group.level + u1 },
+			{ u1 + 1, group.level + u1 + 1 },
+		}
+		local points = {}
+		local seen = {}
+		for _, edge in ipairs( profile ) do
+			for _, v in ipairs( { v0, v1 + 1 } ) do
+				local point = straightStairRampPoint( group.facing, edge[1], v, edge[2] )
+				local key = point[1] .. ":" .. point[2] .. ":" .. point[3]
+				if not seen[key] then
+					seen[key] = true
+					points[#points + 1] = point
+				end
+			end
+		end
+		if #points >= 4 then customConvexes[#customConvexes + 1] = points end
+	end
+	local function flushStraightStairRamps()
+		table.sort( stairRampGroupOrder, function( a, b )
+			if a.facing ~= b.facing then return a.facing < b.facing end
+			return a.level < b.level
+		end )
+		for _, group in ipairs( stairRampGroupOrder ) do
+			table.sort( group.ordered, function( a, b )
+				if a.u ~= b.u then return a.u < b.u end
+				return a.v < b.v
+			end )
+			local visited = {}
+			for _, start in ipairs( group.ordered ) do
+				local startKey = stairRampCellKey( start.u, start.v )
+				if not visited[startKey] then
+					local v1 = start.v
+					while group.cells[stairRampCellKey( start.u, v1 + 1 )]
+					and not visited[stairRampCellKey( start.u, v1 + 1 )] do
+						v1 = v1 + 1
+					end
 
+					local u1 = start.u
+					while true do
+						local nextU = u1 + 1
+						local complete = true
+						for v = start.v, v1 do
+							local key = stairRampCellKey( nextU, v )
+							if not group.cells[key] or visited[key] then complete = false break end
+						end
+						if not complete then break end
+						u1 = nextU
+					end
+
+					for u = start.u, u1 do
+						for v = start.v, v1 do visited[stairRampCellKey( u, v )] = true end
+					end
+					addMergedStraightStairRamp( group, start.u, u1, start.v, v1 )
+				end
+			end
+		end
+	end
 	for _, window in ipairs( windows ) do
 		for lz = window.z0, window.z1 - 1 do
 			for ly = window.y0, window.y1 - 1 do
@@ -366,16 +480,25 @@ local function greedyBoxes( chunk, bounds )
 							if MC.BlockVisualIsFullCube and MC.BlockVisualIsFullCube( visual, bx, by, bz ) then
 								solid[li] = true
 							else
-								local blockConvexes = not clientCollisionAABBOnly() and MC.BlockVisualCollisionConvexes
+								local block = visual.block or MC.Blocks and MC.Blocks[id] or nil
+								local orient = visual.renderOrient or 0
+								local aabbOnly = clientCollisionAABBOnly( visual )
+								local blockConvexes = not aabbOnly and MC.BlockVisualCollisionConvexes
 									and MC.BlockVisualCollisionConvexes( visual, bx, by, bz ) or nil
 								if blockConvexes then
-									for _, convex in ipairs( blockConvexes ) do
-										addCustomConvex( lx, ly, lz, convex )
+									local stairShape = block and block.shape == "stairs" and MC.StairShapeAt
+										and MC.StairShapeAt( id, orient, bx, by, bz ) or nil
+									if stairShape == "straight" and MC.StairOrientHalf( orient ) == "bottom" then
+										addStraightStairRamp( lx, ly, lz, MC.StairOrientFacing( orient ) )
+									else
+										for _, convex in ipairs( blockConvexes ) do
+											addCustomConvex( lx, ly, lz, convex )
+										end
 									end
 								else
 									local blockBoxes = MC.BlockVisualCollisionBoxes
 										and MC.BlockVisualCollisionBoxes( visual, bx, by, bz ) or nil
-									if clientCollisionAABBOnly() and ( not blockBoxes or #blockBoxes == 0 ) and MC.BlockVisualBoxes then
+									if aabbOnly and ( not blockBoxes or #blockBoxes == 0 ) and MC.BlockVisualBoxes then
 										blockBoxes = MC.BlockVisualBoxes( visual, bx, by, bz )
 									end
 									for _, box in ipairs( blockBoxes or {} ) do
@@ -520,6 +643,7 @@ local function greedyBoxes( chunk, bounds )
 	for _, group in pairs( shapeGroups ) do
 		addMergedShapeGroup( group )
 	end
+	flushStraightStairRamps()
 
 	return boxes, customConvexes
 end

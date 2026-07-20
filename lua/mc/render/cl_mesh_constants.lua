@@ -17,7 +17,7 @@ local BS  = MC.BS
 local CS  = MC.CS
 local CH  = MC.CH
 local CS2 = CS * CS
-local RENDER_SECTION_SIZE = 8
+local RENDER_SECTION_SIZE = MC.RENDER_SECTION_SIZE or 8
 local RENDER_SECTIONS_XY = math.ceil( MC.CS / RENDER_SECTION_SIZE )
 local RENDER_SECTIONS_Z = math.ceil( MC.CH / RENDER_SECTION_SIZE )
 

@@ -106,6 +106,7 @@ local CLIENT_FILES = {
 	"mc/render/cl_mesh_shadow_map.lua",
 	"mc/render/cl_mesh_heightfield.lua",
 	"mc/render/cl_sun_shadow_sample.lua",
+	"mc/render/cl_entity_lighting.lua",
 	"mc/render/cl_mesh_materials.lua",
 	"mc/render/cl_mesh_global_lightmap.lua",
 	"mc/render/cl_mesh_light_samples.lua",
@@ -136,6 +137,7 @@ local CLIENT_FILES = {
 	"mc/cl_debug.lua",
 	"mc/cl_light_bench.lua",
 	"mc/cl_player.lua",
+	"mc/render/cl_native_mesh_backend.lua",
 }
 
 local LOAD_PERF_FILES = {
@@ -176,10 +178,74 @@ end
 
 for _, f in ipairs( SHARED ) do includeTracked( f ) end
 
+-- Pick one render-section layout before any client render module caches its
+-- derived section counts.  A native module that cannot actually be loaded is
+-- treated the same as a missing DLL so the pure-Lua backend keeps its smaller
+-- 8^3 update granularity.
+if CLIENT then
+	local nativeLoaded = pcall( require, "mcswep_native_mesh" )
+	local nativeUsable = nativeLoaded and istable( mcmesh ) and isfunction( mcmesh.AbiVersion )
+	if nativeUsable then
+		local abiOK, abi = pcall( mcmesh.AbiVersion )
+		nativeUsable = abiOK and abi == 3
+	end
+	if nativeUsable then
+		for _, name in ipairs( {
+			"Handshake", "SetBlockDefs", "SetLightDefs", "CreateChunk", "ApplyChunk", "SetCellsBatch",
+			"SetCell", "GetCell", "GetChunkCells", "Think", "DrawChunk", "UnloadChunk",
+			"ClearWorld", "Shutdown", "GetStats", "StartBlockLightRebuild",
+			"PollBlockLightRebuild", "RebuildBlockLight", "GetBlockLightChunk", "GetSkyLightChunk",
+		} ) do
+			if not isfunction( mcmesh[name] ) then nativeUsable = false break end
+		end
+	end
+	MC.RENDER_SECTION_SIZE = nativeUsable and 16 or 8
+	MC.NativeMeshModuleAvailable = nativeUsable
+	MsgN( "[MC] render section size = " .. MC.RENDER_SECTION_SIZE
+		.. ( nativeUsable and " (native module)" or " (Lua fallback)" ) )
+end
+
 if SERVER then
 	for _, f in ipairs( SERVER_FILES ) do includeTracked( f ) end
 else
 	for _, f in ipairs( CLIENT_FILES ) do includeTracked( f ) end
+
+	-- Formal mesh backend dispatch.  Public MC mesh functions remain stable;
+	-- optional backends register implementations instead of monkey-patching the
+	-- mother addon at runtime.  The Lua implementation is always the fallback.
+	MC.MeshBackends = MC.MeshBackends or {}
+	MC.MeshBackends.lua = {
+		name = "lua",
+		native = false,
+		IsActive = function() return true end,
+		BuildChunkMesh = MC.BuildChunkMesh,
+		RebuildChunkMeshLighting = MC.RebuildChunkMeshLighting,
+		FreeChunkMesh = MC.FreeChunkMesh,
+	}
+	function MC.RegisterMeshBackend( name, backend )
+		if not isstring( name ) or name == "" or not istable( backend ) then return false end
+		backend.name = name
+		MC.MeshBackends[name] = backend
+		return true
+	end
+	function MC.GetMeshBackend()
+		local native = MC.MeshBackends and MC.MeshBackends.native
+		if native and native.IsActive and native.IsActive() then return native end
+		return MC.MeshBackends.lua
+	end
+	function MC.BuildChunkMesh( ... )
+		local backend = MC.GetMeshBackend()
+		return backend.BuildChunkMesh( ... )
+	end
+	function MC.RebuildChunkMeshLighting( ... )
+		local backend = MC.GetMeshBackend()
+		local fn = backend.RebuildChunkMeshLighting or backend.BuildChunkMesh
+		return fn( ... )
+	end
+	function MC.FreeChunkMesh( ... )
+		local backend = MC.GetMeshBackend()
+		return backend.FreeChunkMesh( ... )
+	end
 end
 
 local loadPerfEndKB = collectgarbage and collectgarbage( "count" ) or loadPerfStartKB
@@ -187,6 +253,8 @@ MC.LoadPerfStats.totalMS = math.Round( ( ( SysTime and SysTime() or loadPerfStar
 MC.LoadPerfStats.totalMemoryKB = math.Round( loadPerfEndKB - loadPerfStartKB, 3 )
 
 function MC.GeneratedRuntimeDiagnostics()
+	local chunkBackend = MC.GetChunkBackend and MC.GetChunkBackend() or nil
+	local meshBackend = CLIENT and MC.GetMeshBackend and MC.GetMeshBackend() or nil
 	return {
 		realm = SERVER and "server" or "client",
 		luaHeapKB = collectgarbage and math.Round( collectgarbage( "count" ), 3 ) or 0,
@@ -200,6 +268,10 @@ function MC.GeneratedRuntimeDiagnostics()
 		blockStagingReleased = MC.GeneratedBlockRegistrationTablesReleased == true,
 		schemaStagingReleased = MC.GeneratedBlockStateSchemasReleased == true,
 		pendingSchemasReleased = MC.PendingBlockStateSchemasReleased == true,
+		renderSectionSize = MC.RENDER_SECTION_SIZE or 8,
+		nativeModuleAvailable = MC.NativeMeshModuleAvailable == true,
+		chunkBackend = chunkBackend and chunkBackend.name or "lua",
+		meshBackend = meshBackend and meshBackend.name or "lua",
 	}
 end
 

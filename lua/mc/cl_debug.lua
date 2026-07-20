@@ -167,12 +167,10 @@ concommand.Add( "mc_client_diag", function()
 		if c.count and c.count > 0 then
 			chunks = chunks + 1
 			blocks = blocks + c.count
-			for li in pairs( c.blocks or {} ) do
-				local _, _, lz = MC.DecodeLocal( li )
-				local bz = c.cz * MC.CH + lz
+			MC.ForEachBlockState( c, function( _, _, bz )
 				minBZ = minBZ and math.min( minBZ, bz ) or bz
 				maxBZ = maxBZ and math.max( maxBZ, bz ) or bz
-			end
+			end )
 		end
 	end
 
