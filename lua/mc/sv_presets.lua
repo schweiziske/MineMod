@@ -582,7 +582,9 @@ local function sendPresetData( ply, presetName )
 		return
 	end
 
-	local parts = math.ceil( #compressed / PRESET_DATA_PART_BYTES )
+	local partBytes = SV.ReliableNetPayloadBytes
+		and SV.ReliableNetPayloadBytes( 64, PRESET_DATA_PART_BYTES ) or PRESET_DATA_PART_BYTES
+	local parts = math.ceil( #compressed / partBytes )
 	net.Start( "mc_preset_data" )
 		net.WriteString( data.name or presetName )
 		net.WriteString( "" )
@@ -593,8 +595,8 @@ local function sendPresetData( ply, presetName )
 
 	for part = 1, parts do
 		local partIndex = part
-		local first = ( partIndex - 1 ) * PRESET_DATA_PART_BYTES + 1
-		local len = math.min( PRESET_DATA_PART_BYTES, #compressed - first + 1 )
+		local first = ( partIndex - 1 ) * partBytes + 1
+		local len = math.min( partBytes, #compressed - first + 1 )
 		SV.EnqueueReliableNet( ply, len + 64, function( target )
 			local chunk = string.sub( compressed, first, first + len - 1 )
 			net.Start( "mc_preset_data_part" )

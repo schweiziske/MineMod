@@ -148,6 +148,7 @@ MC.LanguageData = MC.LanguageData or {
 		["creative.state.approx_preview"] = "预览使用兼容模型，状态数据仍完整",
 		["palette.title"] = "选择方块",
 		["sync.progress"] = "MC 同步 {received}/{expected} 方块  {done}/{chunks} 区块",
+		["sync.progress_bytes"] = "MC 同步 {received}/{expected} KB  {done}/{chunks} 分片",
 		["sync.complete"] = "MC 同步完成  {label}",
 
 		["save.no_cover"] = "暂无截图",
@@ -348,6 +349,7 @@ MC.LanguageData = MC.LanguageData or {
 		["creative.state.approx_preview"] = "Preview uses a compatibility model; state data remains complete",
 		["palette.title"] = "Select Block",
 		["sync.progress"] = "MC sync {received}/{expected} blocks  {done}/{chunks} chunks",
+		["sync.progress_bytes"] = "MC sync {received}/{expected} KB  {done}/{chunks} parts",
 		["sync.complete"] = "MC sync complete  {label}",
 
 		["save.no_cover"] = "No screenshot",

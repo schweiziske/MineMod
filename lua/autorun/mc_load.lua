@@ -213,7 +213,7 @@ if CLIENT then
 		local nativeFailureReason = nativeLoaded and "invalid module table" or tostring( nativeLoadError or "module not found" )
 		if nativeUsable then
 			local abiOK, abi = pcall( mcmesh.AbiVersion )
-			nativeUsable = abiOK and abi == 5
+			nativeUsable = abiOK and abi == 6
 			if not nativeUsable then nativeFailureReason = "ABI mismatch" end
 		end
 		if nativeUsable then
@@ -241,7 +241,7 @@ if CLIENT then
 
 	if nativeMissing and not MC.NativeMeshInstallNoticeScheduled then
 		MC.NativeMeshInstallNoticeScheduled = true
-		local nativeURL = "https://github.com/ABSD546316187/mcswep_native_mesh"
+		local nativeURL = "https://github.com/schweiziske/mc_swep"
 		timer.Simple( 1, function()
 			if MC.NativeMeshInstallNoticeShown then return end
 			MC.NativeMeshInstallNoticeShown = true

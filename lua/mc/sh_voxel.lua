@@ -797,7 +797,7 @@ end
 -- collision/render/network side effects; callers finalize each touched chunk
 -- once after the batch. The state section remains authoritative and the old
 -- blocks/orients tables are updated only as a derived compatibility mirror.
-function MC.SetChunkLocalStateRaw( chunk, li, stateId )
+function MC.SetChunkLocalStateRaw( chunk, li, stateId, knownOldStateId )
 	li = math.floor( tonumber( li ) or -1 )
 	stateId = math.floor( tonumber( stateId ) or -1 )
 	if not chunk or not MC.LocalIndexInRange( li ) then return nil, "invalid_local_index" end
@@ -807,7 +807,9 @@ function MC.SetChunkLocalStateRaw( chunk, li, stateId )
 	local oldStateId = 0
 	if chunk.nativeStateStorage then
 		local backend = CLIENT and MC.ChunkBackends and MC.ChunkBackends.native or nil
-		if not MC.NativeChunkBulkLoading and backend and backend.GetCell then
+		if knownOldStateId ~= nil then
+			oldStateId = math.floor( tonumber( knownOldStateId ) or 0 )
+		elseif not MC.NativeChunkBulkLoading and backend and backend.GetCell then
 			oldStateId = backend.GetCell( chunk, li ) or 0
 		end
 		if oldStateId == stateId then return false, oldStateId end
@@ -960,7 +962,7 @@ end
 
 --- Authoritative low-level state mutation used by both realms.
 -- stateId zero removes. Returns: chunk, created, emptied, changed[, error].
-function MC._SetBlockStateStorageRaw( bx, by, bz, stateId )
+function MC._SetBlockStateStorageRaw( bx, by, bz, stateId, knownOldStateId )
 	local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
 	if not MC.LocalIndexInRange( li ) then return nil, false, false, false end
 	local key = MC.ChunkKey( cx, cy, cz )
@@ -981,7 +983,7 @@ function MC._SetBlockStateStorageRaw( bx, by, bz, stateId )
 		end
 	end
 
-	local changed, oldOrError, id, orient = MC.SetChunkLocalStateRaw( c, li, stateId )
+	local changed, oldOrError, id, orient = MC.SetChunkLocalStateRaw( c, li, stateId, knownOldStateId )
 	if changed == nil then
 		if created then MC.World[key] = nil end
 		return nil, false, false, false, oldOrError
@@ -999,8 +1001,8 @@ function MC._SetBlockStateStorageRaw( bx, by, bz, stateId )
 	return c, created, emptied, true
 end
 
-function MC.SetBlockStateRaw( bx, by, bz, stateId )
-	return MC._SetBlockStateStorageRaw( bx, by, bz, stateId )
+function MC.SetBlockStateRaw( bx, by, bz, stateId, knownOldStateId )
+	return MC._SetBlockStateStorageRaw( bx, by, bz, stateId, knownOldStateId )
 end
 
 --- Legacy low-level mutation adapter. New callers should pass stateId to

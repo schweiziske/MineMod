@@ -37,7 +37,7 @@ local CONVAR_ENABLED = CreateClientConVar( "mc_native_mesh", "1", true, false,
 local CONVAR_THINK_MS = CreateClientConVar( "mc_native_think_ms", "3", true, false,
 	"Per-frame budget (ms) for native mesh finalization" )
 
-local ADAPTER_ABI = 5   -- incremental native lighting + partial async commits
+local ADAPTER_ABI = 6   -- ABI 5 lighting contract + per-state native visual routing
 
 local function newPackProfile()
 	return {
@@ -550,11 +550,16 @@ local function packFaceTex( tile, uvs, flags )
 	return table.concat( p )
 end
 local FACE_UV_FLAGS = { {0,16},{16,16},{16,0},{0,0} }
+local function blockModelSurfaceTile( b, data, fallback )
+	if data and MC.BlockModelSurface then return MC.BlockModelSurface( b, data ) end
+	if data and data.tile ~= nil then return data.tile end
+	return fallback or 0
+end
 local function resolveFaceTex( b, id, orient, face )
 	local baked = b.baked and ( b.baked[orient] or b.baked[MC.DefaultOrient( id )] or b.baked[0] )
 	baked = baked and baked[face]
 	local tile, rot, fu, fv, rect, raw
-	if baked then tile, rot, rect, raw = baked.tile or 0, baked.rot or 0, baked.uv, baked.uvs
+	if baked then tile, rot, rect, raw = blockModelSurfaceTile( b, baked ), baked.rot or 0, baked.uv, baked.uvs
 	else tile, rot, fu, fv = MC.BlockFace( id, face, orient ) end
 	local out = {}
 	if raw then
@@ -571,7 +576,7 @@ local function resolveFaceTex( b, id, orient, face )
 end
 
 local function shapeQuad( b, id, orient, box, boxIndex, face, fd, explicitUV, flags )
-	local tile = fd and fd.tile or MC.BlockFace( id, face, orient )
+	local tile = fd and blockModelSurfaceTile( b, fd ) or MC.BlockFace( id, face, orient )
 	local corners, verts = faceCorners( box, face ), {}
 	local rect = explicitUV or ( fd and fd.uv )
 	for i = 1, 4 do
@@ -595,6 +600,11 @@ local function modelQuads( b, orient )
 	local out = {}
 	for qi, q in ipairs( quads ) do
 		if q.verts and q.verts[1] and q.verts[2] and q.verts[3] and q.verts[4] then
+			-- Compact/generated block models address their texture through a local
+			-- surface slot.  Reading q.tile directly turns every such model into
+			-- atlas tile zero (dirt) when the native backend uses the legacy model
+			-- emitter.  Keep the packed definition identical to Lua's model path.
+			local tile = blockModelSurfaceTile( b, q )
 			local rect = q.uv or {0,0,16,16}; local verts = {}
 			for i = 1, 4 do
 				local x, y, z, rawU, rawV = MC.ModelQuadVertex( q, i )
@@ -605,7 +615,7 @@ local function modelQuads( b, orient )
 				if b.orient == "door" then uf = 1 - uf end
 				verts[i] = {x,y,z,uf == 1 and rect[3] or rect[1],vf == 1 and rect[4] or rect[2]}
 			end
-			out[#out+1] = packQuad( q.face or FACE_TOP, 0, 65535, q.tile or 0, verts,
+			out[#out+1] = packQuad( q.face or FACE_TOP, 0, 65535, tile, verts,
 				"block " .. tostring( b.id ) .. " " .. tostring( b.name or "?")
 				.. " orient " .. tostring( orient ) .. " model quad " .. tostring( qi ) )
 		end
@@ -701,6 +711,12 @@ local function stateMapPayload()
 			local stateFlags = exact and 1 or 0
 			local visual = MC.ResolveBlockStateVisual and MC.ResolveBlockStateVisual( stateId ) or nil
 			local rule = block and ( block.stateRule or block.orient ) or nil
+			-- Match the Lua emitter selection instead of blindly consuming every
+			-- imported visual plan.  Doors, beds and ordinary compact models are
+			-- intentionally rendered by the mother plugin's base model path; only
+			-- actual visual overrides (plus native dynamic stairs) use the catalog.
+			local useGeneratedVisual = ( block and block.shape == "stairs" )
+				or ( visual and visual.generatedVisualOverride == true )
 			local keepGeneratedFaces = rule == "door"
 			local stateFullCube = not keepGeneratedFaces and (
 				visual and MC.BlockVisualIsFullCube and MC.BlockVisualIsFullCube( visual ) == true
@@ -710,6 +726,7 @@ local function stateMapPayload()
 			if not keepGeneratedFaces and ( not visual or visual.cullGeneratedFaces ~= false ) then
 				stateFlags = stateFlags + 8
 			end
+			if useGeneratedVisual then stateFlags = stateFlags + 16 end
 			if block and block.shape == "stairs" and MC.StateWith and MC.StateVisualPlanIdFast then
 				stateFlags = stateFlags + 2
 				for index, shape in ipairs( { "straight", "inner_left", "inner_right", "outer_left", "outer_right" } ) do
@@ -1324,7 +1341,7 @@ local function tryStart()
 	local blob, census, defCount, opaqueCount, translucentCount
 	local metadata = MC.BlockStateRegistryMetadata or {}
 	local catalog = MC.StateVisualCatalog or {}
-	local cacheKey = "mcbd4-state-liquid1-visual2-stateflags2-pistonuv1:" .. tostring( metadata.schemaHash or "" ) .. ":" .. tostring( catalog.visualPlanSha256 or "" )
+	local cacheKey = "mcbd4-state-liquid1-visual2-stateflags3-renderroute1-modelsurface2-pistonuv1:" .. tostring( metadata.schemaHash or "" ) .. ":" .. tostring( catalog.visualPlanSha256 or "" )
 		.. ":" .. tostring( MC.BlockStateCount or 0 )
 	local builtFresh, loadedFromDisk, loadedFromArtifact = false, false, false
 	if state.defCache and state.defCache.key == cacheKey then

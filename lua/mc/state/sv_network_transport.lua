@@ -16,14 +16,31 @@ local TRANSPORT_RELOAD = SV.StateNetworkTransportLoaded == true
 SV.StateNetworkTransportLoaded = true
 
 local SNAPSHOT_PART_BYTES = N.STATE_SNAPSHOT_PART_BYTES
+local STREAM_PART_BYTES = N.STATE_STREAM_PART_BYTES or 30000
+local MAX_STREAM_CELLS = N.MAX_STATE_STREAM_CELLS or 131072
+local CHUNK_PATCH_PART_BYTES = N.CHUNK_PATCH_PART_BYTES or 30000
+local CHUNK_PATCH_MAX_BYTES = N.CHUNK_PATCH_MAX_BYTES or 16777216
 local BLOCK_ENTITY_PAYLOAD_MAX = N.BLOCK_ENTITY_PAYLOAD_MAX
 local TRANSACTION_PAYLOAD_MAX = N.STATE_TRANSACTION_PAYLOAD_MAX
 local TRANSACTION_FLAG_CORRECTION = N.TransactionFlag.CORRECTION
 local TRANSACTION_FLAG_MESH_RATE_LIMITED = N.TransactionFlag.MESH_RATE_LIMITED
+local TRANSACTION_FLAG_COALESCED_BULK = N.TransactionFlag.COALESCED_BULK or 0x04
 local BLOCK_ENTITY_NONE = N.BlockEntityOp.NONE
 local BLOCK_ENTITY_REMOVE = N.BlockEntityOp.REMOVE
 local BLOCK_ENTITY_UPSERT = N.BlockEntityOp.UPSERT
 local ALL_CAPABILITIES = bit.bor( N.REQUIRED_CAPABILITIES, N.Capability.BLOCK_ENTITY_ENVELOPE )
+
+local function reliablePayloadBytes( overheadBytes, protocolMaximum )
+	if SV.ReliableNetPayloadBytes then
+		return SV.ReliableNetPayloadBytes( overheadBytes, protocolMaximum )
+	end
+	return math.max( 1, math.min( protocolMaximum, 2048 - overheadBytes ) )
+end
+
+local function reliableBudgetBytes()
+	if SV.ReliableNetBudgetBytes then return SV.ReliableNetBudgetBytes() end
+	return 2048
+end
 
 SV.StateNetClients = SV.StateNetClients or setmetatable( {}, { __mode = "k" } )
 -- Lua 5.1 math.random cannot portably accept the full unsigned 32-bit range.
@@ -182,6 +199,224 @@ local function snapshotTargets( targets, reason )
 	return true, #targets, reason
 end
 
+local function preparedItemBytes( item )
+	local bytes = 5 -- localIndex + stateId + Block Entity op
+	local envelope = item.envelope
+	if envelope.op == BLOCK_ENTITY_UPSERT then
+		bytes = bytes + #envelope.type + #envelope.payload + 10
+	end
+	return bytes
+end
+
+-- Large ordered edits are encoded as chunk-local patches. Coordinates are
+-- written once per segment and every part stays below the reliable byte budget;
+-- this replaces the old full-world snapshot fallback used by /fill.
+local function buildStateStreamParts( prepared, cellsPerPart, partByteLimit )
+	if #prepared < 1 or #prepared > MAX_STREAM_CELLS then return nil, "state_stream_cell_limit" end
+	cellsPerPart = math.Clamp( math.floor( tonumber( cellsPerPart ) or 4096 ), 1, MAX_STREAM_CELLS )
+	partByteLimit = math.Clamp( math.floor( tonumber( partByteLimit ) or STREAM_PART_BYTES ), 256, STREAM_PART_BYTES )
+	local chunks, order = {}, {}
+	for _, item in ipairs( prepared ) do
+		local change = item.change
+		local cx, cy, cz, li = MC.CellToChunk( change.bx, change.by, change.bz )
+		local key = MC.ChunkKey( cx, cy, cz )
+		local chunk = chunks[key]
+		if not chunk then
+			chunk = { cx = cx, cy = cy, cz = cz, items = {} }
+			chunks[key] = chunk
+			order[#order + 1] = chunk
+		end
+		item.localIndex = li
+		item.streamBytes = preparedItemBytes( item )
+		if item.streamBytes + 128 > partByteLimit then return nil, "state_stream_item_too_large" end
+		chunk.items[#chunk.items + 1] = item
+	end
+
+	local parts = {}
+	local part = { segments = {}, cellCount = 0, bytes = 96 }
+	local function flushPart()
+		if part.cellCount <= 0 then return end
+		parts[#parts + 1] = part
+		part = { segments = {}, cellCount = 0, bytes = 96 }
+	end
+
+	for _, chunk in ipairs( order ) do
+		local segment
+		for _, item in ipairs( chunk.items ) do
+			local segmentBytes = segment and 0 or 12
+			if part.cellCount > 0 and ( part.cellCount >= cellsPerPart
+			or part.bytes + segmentBytes + item.streamBytes > partByteLimit ) then
+				flushPart()
+				segment = nil
+				segmentBytes = 12
+			end
+			if not segment then
+				segment = { cx = chunk.cx, cy = chunk.cy, cz = chunk.cz, items = {} }
+				part.segments[#part.segments + 1] = segment
+				part.bytes = part.bytes + segmentBytes
+			end
+			segment.items[#segment.items + 1] = item
+			part.cellCount = part.cellCount + 1
+			part.bytes = part.bytes + item.streamBytes
+		end
+	end
+	flushPart()
+	if #parts < 1 or #parts > 65535 then return nil, "state_stream_part_limit" end
+	return parts
+end
+
+local function sendStateStreamPart( target, generation, revision, flags, groupId, partIndex, partCount, totalCells, part, ackBytes )
+	if not validPlayer( target ) then return false end
+	net.Start( "mc_state_chunk_stream" )
+		net.WriteUInt( generation, N.GENERATION_BITS )
+		net.WriteUInt( revision, N.REVISION_BITS )
+		net.WriteUInt( flags, 8 )
+		net.WriteUInt( groupId, 32 )
+		net.WriteUInt( partIndex - 1, 16 )
+		net.WriteUInt( partCount, 16 )
+		net.WriteUInt( totalCells, 32 )
+		net.WriteUInt( #part.segments, 16 )
+		for _, segment in ipairs( part.segments ) do
+			net.WriteInt( segment.cx, N.COORD_BITS )
+			net.WriteInt( segment.cy, N.COORD_BITS )
+			net.WriteInt( segment.cz, N.COORD_BITS )
+			net.WriteUInt( #segment.items, N.COUNT_BITS )
+			for _, item in ipairs( segment.items ) do
+				net.WriteUInt( item.localIndex, N.LOCAL_BITS )
+				net.WriteUInt( math.floor( item.change.stateId ), N.STATE_ID_BITS )
+				writeBlockEntityEnvelope( item.envelope )
+			end
+		end
+		net.WriteUInt( ackBytes, 32 )
+	net.Send( target )
+	return true
+end
+
+local function queueStateStream( targets, prepared, revision, options )
+	local parts, partError = buildStateStreamParts( prepared, options.cellsPerMessage,
+		math.min( STREAM_PART_BYTES, reliableBudgetBytes() ) )
+	if not parts then return false, partError end
+	local flags = TRANSACTION_FLAG_COALESCED_BULK
+	if options.explosionMeshThrottle == true then flags = bit.bor( flags, TRANSACTION_FLAG_MESH_RATE_LIMITED ) end
+	local groupId = math.floor( tonumber( options.stateGroupId ) or 0 ) % 4294967296
+	local generation = SV.WorldGeneration
+	local partCount, totalCells = #parts, #prepared
+	for partIndex, streamPart in ipairs( parts ) do
+		local queuedIndex, queuedPart = partIndex, streamPart
+		local ackBytes = math.max( 1, math.ceil( queuedPart.bytes ) )
+		local sendFn = function( ply )
+			return sendStateStreamPart( ply, generation, revision, flags, groupId,
+				queuedIndex, partCount, totalCells, queuedPart, ackBytes )
+		end
+		if SV.EnqueueReliableNet then
+			SV.EnqueueReliableNet( targets, ackBytes, sendFn, true )
+		else
+			for _, ply in ipairs( targets ) do sendFn( ply ) end
+		end
+	end
+	return true, #targets, #parts
+end
+
+function SV.EndStateBulkGroup( groupId, revision, recipients )
+	groupId = math.floor( tonumber( groupId ) or 0 ) % 4294967296
+	if groupId == 0 then return false, "invalid_bulk_group" end
+	revision = math.floor( tonumber( revision ) or SV.BlockRevision )
+	local generation = SV.WorldGeneration
+	local targets = readyTargets( recipients )
+	if #targets == 0 then return true, 0 end
+	local function sendEnd( ply )
+		if not validPlayer( ply ) then return false end
+		net.Start( "mc_state_bulk_group_end" )
+			net.WriteUInt( generation, N.GENERATION_BITS )
+			net.WriteUInt( revision, N.REVISION_BITS )
+			net.WriteUInt( groupId, 32 )
+		net.Send( ply )
+		return true
+	end
+	if SV.EnqueueReliableNet then SV.EnqueueReliableNet( targets, 32, sendEnd, false )
+	else for _, ply in ipairs( targets ) do sendEnd( ply ) end end
+	return true, #targets
+end
+
+-- Queue one compressed partial-world snapshot. The payload contains the final
+-- authoritative state of only the touched chunks, including empty tombstones.
+-- Every part uses the same byte-budgeted, ACK-windowed queue as join snapshots
+-- and ordered state streams. Large edits no longer have a bypass lane.
+function SV.QueueStateChunkHydration( refs, revision, groupId, recipients )
+	revision = math.floor( tonumber( revision ) or SV.BlockRevision )
+	groupId = math.floor( tonumber( groupId ) or 0 ) % 4294967296
+	if groupId == 0 then return false, "invalid_chunk_patch_group" end
+	local targets = readyTargets( recipients )
+	if #targets == 0 then return true, 0, 0, 0 end
+	if not SV.BuildStateChunkPatchData then return false, "chunk_patch_encoder_unavailable" end
+
+	local data, chunks, buildError = SV.BuildStateChunkPatchData( refs, { forClient = true } )
+	if not data then return false, buildError or "chunk_patch_encode_failed" end
+	local json = util.TableToJSON( data, false )
+	local payload = json and util.Compress( json ) or nil
+	if not payload or #payload < 1 then return false, "chunk_patch_compress_failed" end
+	if #payload > CHUNK_PATCH_MAX_BYTES then return false, "chunk_patch_too_large" end
+	local chunkPatchPartBytes = reliablePayloadBytes( 96, CHUNK_PATCH_PART_BYTES )
+	local partCount = math.ceil( #payload / chunkPatchPartBytes )
+	if partCount < 1 or partCount > 65535 then return false, "chunk_patch_part_limit" end
+
+	local generation = SV.WorldGeneration
+	local token = nextSnapshotToken()
+	local totalBytes = #payload
+	local chunkCount = #chunks
+	local cellCount = math.max( 0, math.floor( tonumber( data.blockCount ) or 0 ) )
+	local crc = util.CRC( payload )
+	local function sendBegin( ply )
+		if not validPlayer( ply ) then return false end
+		net.Start( "mc_state_chunk_patch_begin" )
+			net.WriteUInt( generation, N.GENERATION_BITS )
+			net.WriteUInt( revision, N.REVISION_BITS )
+			net.WriteUInt( groupId, 32 )
+			net.WriteUInt( token, 32 )
+			net.WriteUInt( totalBytes, 32 )
+			net.WriteUInt( partCount, 16 )
+			net.WriteUInt( chunkCount, 16 )
+			net.WriteUInt( cellCount, 32 )
+			net.WriteString( schemaHash() )
+			net.WriteString( blockEntityRegistryHash() )
+		net.Send( ply )
+		return true
+	end
+	SV.EnqueueReliableNet( targets, 128, sendBegin, false )
+
+	for partIndex = 0, partCount - 1 do
+		local queuedIndex = partIndex
+		local offset = queuedIndex * chunkPatchPartBytes + 1
+		local queuedBytes = string.sub( payload, offset, offset + chunkPatchPartBytes - 1 )
+		local ackBytes = #queuedBytes + 96
+		SV.EnqueueReliableNet( targets, ackBytes, function( ply )
+			if not validPlayer( ply ) then return false end
+			net.Start( "mc_state_chunk_patch_part" )
+				net.WriteUInt( generation, N.GENERATION_BITS )
+				net.WriteUInt( token, 32 )
+				net.WriteUInt( queuedIndex, 16 )
+				net.WriteUInt( #queuedBytes, 16 )
+				net.WriteData( queuedBytes, #queuedBytes )
+				net.WriteUInt( ackBytes, 32 )
+			net.Send( ply )
+			return true
+		end, true )
+	end
+
+	SV.EnqueueReliableNet( targets, 96, function( ply )
+		if not validPlayer( ply ) then return false end
+		net.Start( "mc_state_chunk_patch_end" )
+			net.WriteUInt( generation, N.GENERATION_BITS )
+			net.WriteUInt( revision, N.REVISION_BITS )
+			net.WriteUInt( groupId, 32 )
+			net.WriteUInt( token, 32 )
+			net.WriteString( crc )
+		net.Send( ply )
+		return true
+	end, false )
+	return true, #targets, partCount, totalBytes
+end
+
 function SV.BroadcastStateTransaction( changes, revision, options )
 	options = istable( options ) and options or {}
 	if istable( changes ) and changes.changes then
@@ -206,6 +441,12 @@ function SV.BroadcastStateTransaction( changes, revision, options )
 		if envelope.op == BLOCK_ENTITY_UPSERT then
 			estimatedBytes = estimatedBytes + #envelope.type + #envelope.payload + 8
 		end
+	end
+	if options.stateStream == true
+	or ( options.netPaced == true and ( #changes > N.MAX_STATE_BULK_CELLS or estimatedBytes > TRANSACTION_PAYLOAD_MAX ) ) then
+		local streamed, streamResult, partCount = queueStateStream( targets, prepared, revision, options )
+		if streamed then return true, streamResult, "streamed", partCount end
+		return snapshotTargets( targets, streamResult or "state_stream_failed" )
 	end
 	if #changes > N.MAX_STATE_BULK_CELLS or estimatedBytes > TRANSACTION_PAYLOAD_MAX then
 		return snapshotTargets( targets, "too_many_changes_for_incremental_packet" )
@@ -276,7 +517,8 @@ function SV.SendStateSnapshot( ply, payload, baseRevision )
 	local snapshotGeneration = SV.WorldGeneration
 	local token = nextSnapshotToken()
 	local totalBytes = #payload
-	local partCount = math.ceil( totalBytes / SNAPSHOT_PART_BYTES )
+	local snapshotPartBytes = reliablePayloadBytes( 64, SNAPSHOT_PART_BYTES )
+	local partCount = math.ceil( totalBytes / snapshotPartBytes )
 	if partCount > 65535 then return false, "snapshot_too_large" end
 	if SV.ClearReliableNet then SV.ClearReliableNet( ply ) end
 
@@ -290,24 +532,26 @@ function SV.SendStateSnapshot( ply, payload, baseRevision )
 		net.WriteString( blockEntityRegistryHash() )
 	net.Send( ply )
 
-	local function enqueue( bytes, callback )
-		if SV.EnqueueReliableNet then return SV.EnqueueReliableNet( ply, bytes, callback, false ) end
+	local function enqueue( bytes, callback, waitAck )
+		if SV.EnqueueReliableNet then return SV.EnqueueReliableNet( ply, bytes, callback, waitAck ) end
 		return callback( ply )
 	end
 
 	for partIndex = 0, partCount - 1 do
-		local offset = partIndex * SNAPSHOT_PART_BYTES + 1
-		local bytes = string.sub( payload, offset, offset + SNAPSHOT_PART_BYTES - 1 )
+		local offset = partIndex * snapshotPartBytes + 1
+		local bytes = string.sub( payload, offset, offset + snapshotPartBytes - 1 )
 		local queuedIndex, queuedBytes = partIndex, bytes
-		enqueue( #queuedBytes + 64, function( target )
+		local ackBytes = #queuedBytes + 64
+		enqueue( ackBytes, function( target )
 			net.Start( "mc_state_snapshot_part" )
 				net.WriteUInt( snapshotGeneration, N.GENERATION_BITS )
 				net.WriteUInt( token, 32 )
 				net.WriteUInt( queuedIndex, 16 )
 				net.WriteUInt( #queuedBytes, 16 )
 				net.WriteData( queuedBytes, #queuedBytes )
+				net.WriteUInt( ackBytes, 32 )
 			net.Send( target )
-		end )
+		end, true )
 	end
 
 	enqueue( 128, function( target )

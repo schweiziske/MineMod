@@ -11,9 +11,11 @@ MC = MC or {}
 local Net = MC.Net or {}
 MC.Net = Net
 
--- Protocol 4 is the first protocol whose authoritative cell value is stateId.
-Net.PROTOCOL_VERSION = 4
-Net.MIN_PROTOCOL_VERSION = 4
+-- Protocol 6 adds compressed partial-world chunk hydration. Large commands
+-- such as /fill now publish final Chunk payloads instead of replaying a paced
+-- list of per-cell transactions on the client.
+Net.PROTOCOL_VERSION = 7
+Net.MIN_PROTOCOL_VERSION = 7
 
 -- Shared coordinate and collection widths.
 Net.COORD_BITS = 20          -- signed block/chunk coordinate payloads
@@ -32,10 +34,15 @@ Net.MAX_STATE_BULK_CELLS = 768 -- stays comfortably below GMod's net message lim
 Net.BLOCK_ENTITY_PAYLOAD_MAX = 32768
 Net.STATE_TRANSACTION_PAYLOAD_MAX = 56000
 Net.STATE_SNAPSHOT_PART_BYTES = 30000
+Net.STATE_STREAM_PART_BYTES = 30000
+Net.MAX_STATE_STREAM_CELLS = 131072
+Net.CHUNK_PATCH_PART_BYTES = 30000
+Net.CHUNK_PATCH_MAX_BYTES = 16777216
 
 Net.TransactionFlag = {
 	CORRECTION = 0x01,
 	MESH_RATE_LIMITED = 0x02,
+	COALESCED_BULK = 0x04,
 }
 
 Net.BlockEntityOp = {
@@ -59,6 +66,8 @@ Net.Capability = {
 	STATE_SNAPSHOT = 0x0004,
 	BLOCK_ENTITY_ENVELOPE = 0x0008,
 	REGISTRY_HASH = 0x0010,
+	STATE_STREAM = 0x0020,
+	CHUNK_HYDRATION = 0x0040,
 }
 
 Net.REQUIRED_CAPABILITIES = bit.bor(
@@ -66,7 +75,9 @@ Net.REQUIRED_CAPABILITIES = bit.bor(
 	Net.Capability.SECTION_PALETTE,
 	Net.Capability.STATE_SNAPSHOT,
 	Net.Capability.BLOCK_ENTITY_ENVELOPE,
-	Net.Capability.REGISTRY_HASH
+	Net.Capability.REGISTRY_HASH,
+	Net.Capability.STATE_STREAM,
+	Net.Capability.CHUNK_HYDRATION
 )
 
 function Net.HasCapability( mask, capability )
@@ -78,11 +89,9 @@ function Net.ValidateStateId( stateId )
 	return stateId ~= nil and stateId >= 0 and stateId <= Net.MAX_STATE_ID and stateId % 1 == 0
 end
 
--- Keep all network-string allocation centralized.  Legacy names remain
--- registered while Phase 4 callers migrate incrementally.
+-- Keep all network-string allocation centralized. The state-aware protocol is
+-- the only full-map transport; removed legacy names must not be reintroduced.
 Net.MessageNames = {
-	"mc_full", "mc_full_begin", "mc_full_part", "mc_full_end", "mc_full_ack",
-	"mc_snapshot_begin", "mc_snapshot_part", "mc_snapshot_ack",
 	"mc_http_manifest", "mc_http_chunk", "mc_http_chunk_bulk", "mc_http_failed",
 	"mc_unload_chunk", "mc_set", "mc_set_bulk", "mc_set_bulk_fast",
 	"mc_reliable_ack", "mc_fx", "mc_creative_place_anim", "mc_creative_break_anim",
@@ -99,6 +108,8 @@ Net.MessageNames = {
 	-- Phase 4 state-aware transport.
 	"mc_state_hello", "mc_state_hello_ack",
 	"mc_state_set", "mc_state_set_bulk",
+	"mc_state_chunk_stream", "mc_state_bulk_group_end",
+	"mc_state_chunk_patch_begin", "mc_state_chunk_patch_part", "mc_state_chunk_patch_end",
 	"mc_state_snapshot_begin", "mc_state_snapshot_part", "mc_state_snapshot_end",
 	"mc_state_snapshot_ack",
 	"mc_state_resync_request",
