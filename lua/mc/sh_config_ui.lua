@@ -29,12 +29,12 @@ local function item( name, label, labelZH, kind, help, helpZH, options )
 	return entry
 end
 
-local function category( id, group, label, labelZH, description, descriptionZH, items )
+local function category( id, group, label, labelZH, description, descriptionZH, items, options )
 	for _, entry in ipairs( items or {} ) do
 		entry.category = id
 	end
 
-	return {
+	local entry = {
 		id = id,
 		group = group,
 		label = label,
@@ -43,6 +43,12 @@ local function category( id, group, label, labelZH, description, descriptionZH, 
 		descriptionZH = descriptionZH or "",
 		items = items or {},
 	}
+
+	for key, value in pairs( options or {} ) do
+		entry[key] = value
+	end
+
+	return entry
 end
 
 MC.ConfigGroups = {
@@ -115,6 +121,17 @@ MC.ConfigConVars = {
 				"Cache visible geometry templates for fences, panes, walls and pipes.",
 				"缓存栅栏、玻璃板、墙与管道等连接形状的可见几何模板。" ),
 		} ),
+
+		category( "native_mesh", "rendering", "Native mesh backend", "原生网格后端",
+			"Controls for the optional native DLL that builds and finalizes chunk meshes.",
+			"控制可选的原生 DLL，由它负责构建并落地区块网格。", {
+			item( "mc_native_mesh", "Use native mesh backend", "使用原生网格后端", "bool",
+				"Use mcswep_native_mesh when the compatible client DLL is installed; disable to use the Lua backend.",
+				"安装兼容的客户端 DLL 时使用 mcswep_native_mesh；关闭后改用 Lua 后端。" ),
+			item( "mc_native_think_ms", "Native finalization budget", "原生网格落地预算", "number",
+				"Maximum milliseconds per frame used to commit completed native mesh work.",
+				"每帧用于提交已完成原生网格任务的最大毫秒数。", { unit = "ms" } ),
+		}, { requiresNativeMesh = true } ),
 
 		category( "client_collision", "rendering", "Client prediction collision", "客户端预测碰撞",
 			"Local collision used to keep movement smooth while the server stays authoritative.",
