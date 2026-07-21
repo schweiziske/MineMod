@@ -704,12 +704,18 @@ local function stateMapPayload()
 		local blockId, orient, stairPlans = 0, 0, {0,0,0,0,0}
 		local stateLiquidKind, stateLiquidAmount = 0, 0
 		if stateId ~= 0 then
-			local exact, projectionError
-			blockId, orient, exact, projectionError = MC.LegacyFromState( stateId )
-			if not blockId then error( "state " .. stateId .. " projection failed: " .. tostring( projectionError ), 0 ) end
-			local block = MC.Blocks and MC.Blocks[blockId]
-			local stateFlags = exact and 1 or 0
+			local legacyBlockId, legacyOrient, exact, projectionError = MC.LegacyFromState( stateId )
+			if not legacyBlockId then error( "state " .. stateId .. " projection failed: " .. tostring( projectionError ), 0 ) end
 			local visual = MC.ResolveBlockStateVisual and MC.ResolveBlockStateVisual( stateId ) or nil
+			-- Legacy projection is still useful for the compatibility/exactness flag,
+			-- but it must not choose native render geometry. Compound states such as
+			-- facing=south,lit=false used to project to the default north orient here.
+			blockId = visual and visual.id or legacyBlockId
+			orient = visual and visual.renderOrient or legacyOrient
+			if MC.NormalizeOrient then orient = MC.NormalizeOrient( blockId, orient ) end
+			local block = MC.Blocks and MC.Blocks[blockId]
+			if not block then error( "state " .. stateId .. " visual block is unavailable", 0 ) end
+			local stateFlags = exact and 1 or 0
 			local rule = block and ( block.stateRule or block.orient ) or nil
 			-- Match the Lua emitter selection instead of blindly consuming every
 			-- imported visual plan.  Doors, beds and ordinary compact models are
@@ -1341,7 +1347,7 @@ local function tryStart()
 	local blob, census, defCount, opaqueCount, translucentCount
 	local metadata = MC.BlockStateRegistryMetadata or {}
 	local catalog = MC.StateVisualCatalog or {}
-	local cacheKey = "mcbd4-state-liquid1-visual2-stateflags3-renderroute1-modelsurface2-pistonuv1:" .. tostring( metadata.schemaHash or "" ) .. ":" .. tostring( catalog.visualPlanSha256 or "" )
+	local cacheKey = "mcbd4-state-liquid1-visual2-stateflags3-renderroute2-modelsurface2-pistonuv1:" .. tostring( metadata.schemaHash or "" ) .. ":" .. tostring( catalog.visualPlanSha256 or "" )
 		.. ":" .. tostring( MC.BlockStateCount or 0 )
 	local builtFresh, loadedFromDisk, loadedFromArtifact = false, false, false
 	if state.defCache and state.defCache.key == cacheKey then
