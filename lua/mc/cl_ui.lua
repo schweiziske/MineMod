@@ -1785,12 +1785,22 @@ hook.Add( "HUDPaint", "mc_sync_progress", function()
 	local sw = ScrW()
 	local w, h = 420, 18
 	local x, y = sw * 0.5 - w * 0.5, 96
-	local label = L( "sync.progress", "MC 同步 {received}/{expected} 方块  {done}/{chunks} 区块", {
-		received = p.received,
-		expected = p.expected,
-		done = p.doneChunks,
-		chunks = p.chunks,
-	} )
+	local label
+	if p.bytes == true then
+		label = L( "sync.progress_bytes", "MC 同步 {received}/{expected} KB  {done}/{chunks} 分片", {
+			received = math.floor( ( p.received or 0 ) / 1024 + 0.5 ),
+			expected = math.max( 1, math.floor( ( p.expected or 0 ) / 1024 + 0.5 ) ),
+			done = p.doneChunks,
+			chunks = p.chunks,
+		} )
+	else
+		label = L( "sync.progress", "MC 同步 {received}/{expected} 方块  {done}/{chunks} 区块", {
+			received = p.received,
+			expected = p.expected,
+			done = p.doneChunks,
+			chunks = p.chunks,
+		} )
+	end
 	if complete then label = L( "sync.complete", "MC 同步完成  {label}", { label = label } ) end
 
 	draw.RoundedBox( 4, x - 10, y - 28, w + 20, 58, Color( 0, 0, 0, 180 ) )

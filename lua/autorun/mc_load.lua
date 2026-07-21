@@ -241,7 +241,7 @@ if CLIENT then
 
 	if nativeMissing and not MC.NativeMeshInstallNoticeScheduled then
 		MC.NativeMeshInstallNoticeScheduled = true
-		local nativeURL = "https://github.com/ABSD546316187/mcswep_native_mesh"
+		local nativeURL = "https://github.com/schweiziske/mc_swep"
 		timer.Simple( 1, function()
 			if MC.NativeMeshInstallNoticeShown then return end
 			MC.NativeMeshInstallNoticeShown = true

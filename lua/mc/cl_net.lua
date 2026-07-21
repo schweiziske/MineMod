@@ -5,9 +5,6 @@
 MC = MC or {}
 
 local Net = MC.Net
-MC.PendingFull = MC.PendingFull or {}
-MC.SnapshotBuffers = MC.SnapshotBuffers or {}
-MC.SnapshotQueuedDeltas = MC.SnapshotQueuedDeltas or {}
 MC.SyncProgress = MC.SyncProgress or { expected = 0, received = 0, chunks = 0, doneChunks = 0, active = false, lastUpdate = 0 }
 MC.NativeLoadProfile = MC.NativeLoadProfile or { decompressMS = 0, jsonMS = 0, hydrateMS = 0, chunks = 0, cells = 0 }
 
@@ -17,30 +14,6 @@ concommand.Add( "mc_native_load_profile", function()
 		tonumber( p.decompressMS ) or 0, tonumber( p.jsonMS ) or 0, tonumber( p.hydrateMS ) or 0,
 		tonumber( p.chunks ) or 0, tonumber( p.cells ) or 0 ) )
 end, nil, "Print snapshot decode and NativeChunk hydration timings" )
-
-local PendingFullAckBytes = 0
-local NextFullAckAt = 0
-
-local function flushFullAck()
-	if PendingFullAckBytes <= 0 then return end
-	local bytes = math.min( PendingFullAckBytes, 4294967295 )
-	PendingFullAckBytes = 0
-	net.Start( "mc_full_ack" )
-		net.WriteUInt( bytes, 32 )
-	net.SendToServer()
-	NextFullAckAt = CurTime() + 0.02
-end
-
-local function queueFullAck( bytes, immediate )
-	bytes = math.max( 0, math.ceil( tonumber( bytes ) or 0 ) )
-	if bytes <= 0 then return end
-	PendingFullAckBytes = math.min( PendingFullAckBytes + bytes, 4294967295 )
-	if immediate or PendingFullAckBytes >= 65536 or CurTime() >= NextFullAckAt then
-		flushFullAck()
-	end
-end
-
-timer.Create( "mc_full_ack_flush", 0.05, 0, flushFullAck )
 
 local PendingReliableAckBytes = 0
 local NextReliableAckAt = 0
@@ -66,14 +39,6 @@ local function queueReliableAck( bytes )
 end
 
 timer.Create( "mc_reliable_ack_flush", 0.05, 0, flushReliableAck )
-
-local function sendSnapshotAck( token, bytes, complete )
-	net.Start( "mc_snapshot_ack" )
-		net.WriteString( token or "" )
-		net.WriteUInt( math.Clamp( math.ceil( tonumber( bytes ) or 0 ), 0, 4294967295 ), 32 )
-		net.WriteBool( complete == true )
-	net.SendToServer()
-end
 
 local function touchProgress()
 	MC.SyncProgress.lastUpdate = CurTime()
@@ -209,18 +174,6 @@ local function flushCellPhysBounds( boundsByKey, bulk )
 			MC.MarkChunkPhysDirty( key, false, boundsList )
 		end
 	end
-end
-
-local function queueSnapshotDelta( bx, by, bz, id, orient )
-	if not MC.SnapshotLoadingToken then return end
-	MC.SnapshotQueuedDeltas = MC.SnapshotQueuedDeltas or {}
-	MC.SnapshotQueuedDeltas[#MC.SnapshotQueuedDeltas + 1] = {
-		bx = bx,
-		by = by,
-		bz = bz,
-		id = id,
-		orient = orient,
-	}
 end
 
 local function applyNetCell( bx, by, bz, id, orient, meshRateLimited )
@@ -649,7 +602,6 @@ local function resetClientWorldForSnapshot( expectedChunks, expectedBlocks )
 	MC.PhysDirtyBulk = {}
 	MC.PhysDirtyBulkOrder = {}
 	if MC.ResetClientCollisionState then MC.ResetClientCollisionState() end
-	MC.PendingFull = {}
 	MC.PendingPredictions = {}
 	MC.PendingPredictionGroups = {}
 	if MC.MarkSignRenderEntriesDirty then MC.MarkSignRenderEntriesDirty() end
@@ -662,7 +614,6 @@ local function resetClientWorldForSnapshot( expectedChunks, expectedBlocks )
 		lastUpdate = CurTime(),
 		snapshot = true,
 	}
-	PendingFullAckBytes = 0
 end
 
 MC.ResetClientWorldForStateSync = resetClientWorldForSnapshot
@@ -866,12 +817,6 @@ function MC.LoadSnapshotSaveData( data )
 		MC.RefreshClientCollisionInterest( true )
 	end
 
-	local queued = MC.SnapshotQueuedDeltas or {}
-	MC.SnapshotQueuedDeltas = {}
-	MC.SnapshotLoadingToken = nil
-	for _, cell in ipairs( queued ) do
-		applyNetCell( cell.bx, cell.by, cell.bz, cell.id, cell.orient )
-	end
 	if MC.MarkSignRenderEntriesDirty then MC.MarkSignRenderEntriesDirty() end
 	MC.NativeLoadProfile.hydrateMS = ( SysTime() - hydrateStarted ) * 1000
 	MC.NativeLoadProfile.chunks = #data.chunks
@@ -1348,147 +1293,6 @@ net.Receive( "mc_http_chunk_bulk", function()
 	end
 end )
 
-net.Receive( "mc_snapshot_begin", function()
-	local token = net.ReadString()
-	local isError = net.ReadBool()
-	local message = net.ReadString()
-	local expectedParts = net.ReadUInt( 32 )
-	local totalBytes = net.ReadUInt( 32 )
-	local chunks = net.ReadUInt( 32 )
-	local blocks = net.ReadUInt( 32 )
-	if isError or token == "" or expectedParts < 1 or totalBytes < 1 then
-		MsgN( "[MC] snapshot sync failed: " .. tostring( message ) )
-		return
-	end
-
-	MC.SnapshotLoadingToken = token
-	MC.SnapshotQueuedDeltas = {}
-	MC.SnapshotBuffers[token] = {
-		expectedParts = expectedParts,
-		totalBytes = totalBytes,
-		chunks = chunks,
-		blocks = blocks,
-		receivedParts = 0,
-		receivedBytes = 0,
-		parts = {},
-	}
-	MC.SyncProgress = {
-		expected = blocks,
-		received = 0,
-		chunks = chunks,
-		doneChunks = 0,
-		active = true,
-		lastUpdate = CurTime(),
-		snapshot = true,
-	}
-end )
-
-net.Receive( "mc_snapshot_part", function()
-	local token = net.ReadString()
-	local index = net.ReadUInt( 32 )
-	local len = net.ReadUInt( 16 )
-	local chunk = net.ReadData( len )
-	local download = MC.SnapshotBuffers[token]
-	if not download or index < 1 or index > download.expectedParts then return end
-	if len < 1 or len > 60000 or not chunk or #chunk ~= len or download.parts[index] then return end
-
-	download.parts[index] = chunk
-	download.receivedParts = download.receivedParts + 1
-	download.receivedBytes = download.receivedBytes + len
-	MC.SyncProgress.received = math.min( download.blocks, math.floor( download.blocks * download.receivedBytes / math.max( 1, download.totalBytes ) ) )
-	MC.SyncProgress.lastUpdate = CurTime()
-	sendSnapshotAck( token, len, false )
-
-	if download.receivedBytes > download.totalBytes then
-		MC.SnapshotBuffers[token] = nil
-		if MC.SnapshotLoadingToken == token then MC.SnapshotLoadingToken = nil end
-		return
-	end
-	if download.receivedParts < download.expectedParts then return end
-
-	local payload = table.concat( download.parts )
-	MC.SnapshotBuffers[token] = nil
-	if #payload ~= download.totalBytes then
-		if MC.SnapshotLoadingToken == token then MC.SnapshotLoadingToken = nil end
-		return
-	end
-
-	local decompressStarted = SysTime()
-	local json = util.Decompress( payload )
-	MC.NativeLoadProfile.decompressMS = ( SysTime() - decompressStarted ) * 1000
-	local jsonStarted = SysTime()
-	local data = json and util.JSONToTable( json ) or nil
-	MC.NativeLoadProfile.jsonMS = ( SysTime() - jsonStarted ) * 1000
-	if not data or not MC.LoadSnapshotSaveData( data ) then
-		if MC.SnapshotLoadingToken == token then MC.SnapshotLoadingToken = nil end
-		MsgN( "[MC] snapshot sync failed: invalid payload" )
-		return
-	end
-	sendSnapshotAck( token, 0, true )
-end )
-
-net.Receive( "mc_full", function()
-	local cx = net.ReadInt( Net.COORD_BITS )
-	local cy = net.ReadInt( Net.COORD_BITS )
-	local cz = net.ReadInt( Net.COORD_BITS )
-	local count = net.ReadUInt( Net.COUNT_BITS )
-
-	local c = resetChunk( cx, cy, cz )
-	beginProgressChunk( count )
-	readCellsIntoChunk( c, count )
-	addProgressCells( count )
-	reviveChunkEnt( c )
-	if c.count == 0 then MC.World[c.key] = nil end
-
-	markNeighbours( cx, cy, cz )
-	MC.MarkChunkPhysDirty( c.key, true )
-	finishProgressChunk( c.key )
-end )
-
-net.Receive( "mc_full_begin", function()
-	local cx = net.ReadInt( Net.COORD_BITS )
-	local cy = net.ReadInt( Net.COORD_BITS )
-	local cz = net.ReadInt( Net.COORD_BITS )
-	local expected = net.ReadUInt( Net.COUNT_BITS )
-	queueFullAck( MC.EstimateSyncBeginBytes() )
-	local c = resetChunk( cx, cy, cz )
-	MC.PendingFull[c.key] = { expected = expected, received = 0 }
-	beginProgressChunk( expected )
-	reviveChunkEnt( c )
-end )
-
-net.Receive( "mc_full_part", function()
-	local cx = net.ReadInt( Net.COORD_BITS )
-	local cy = net.ReadInt( Net.COORD_BITS )
-	local cz = net.ReadInt( Net.COORD_BITS )
-	local count = net.ReadUInt( Net.COUNT_BITS )
-	queueFullAck( MC.EstimateSyncPartBytes( count ) )
-	local c = MC.EnsureChunk( cx, cy, cz )
-	readCellsIntoChunk( c, count )
-	addProgressCells( count )
-	reviveChunkEnt( c )
-
-	local pending = MC.PendingFull[c.key]
-	if pending then pending.received = pending.received + count end
-end )
-
-net.Receive( "mc_full_end", function()
-	local cx = net.ReadInt( Net.COORD_BITS )
-	local cy = net.ReadInt( Net.COORD_BITS )
-	local cz = net.ReadInt( Net.COORD_BITS )
-	queueFullAck( MC.EstimateSyncEndBytes(), true )
-	local key = MC.ChunkKey( cx, cy, cz )
-	local c = MC.GetChunkByKey( key )
-	MC.PendingFull[key] = nil
-	if c and c.count == 0 then
-		MC.World[key] = nil
-	end
-
-	markNeighbours( cx, cy, cz )
-	MC.MarkChunkPhysDirty( key, true )
-	finishProgressChunk( key )
-end )
-
 net.Receive( "mc_set", function()
 	local bx = net.ReadInt( Net.COORD_BITS )
 	local by = net.ReadInt( Net.COORD_BITS )
@@ -1496,7 +1300,6 @@ net.Receive( "mc_set", function()
 	local id = net.ReadUInt( Net.ID_BITS )
 	local orient = net.ReadUInt( Net.ORIENT_BITS )
 
-	queueSnapshotDelta( bx, by, bz, id, orient )
 	if queueHttpDelta( bx, by, bz, id, orient ) then return end
 	applyNetCell( bx, by, bz, id, orient )
 end )
@@ -1526,7 +1329,6 @@ local function receiveSetBulk()
 	end
 	local applied = {}
 	for _, cell in ipairs( changes ) do
-		queueSnapshotDelta( cell.bx, cell.by, cell.bz, cell.id, cell.orient )
 		if not queueHttpDelta( cell.bx, cell.by, cell.bz, cell.id, cell.orient ) then
 			applied[#applied + 1] = cell
 		end
@@ -1565,7 +1367,6 @@ net.Receive( "mc_unload_chunk", function()
 	if MC.ClientPhysBuiltObjectCounts then MC.ClientPhysBuiltObjectCounts[key] = nil end
 	if MC.ClientPhysTargetSignatures then MC.ClientPhysTargetSignatures[key] = nil end
 	if MC.ClearChunkLightSources then MC.ClearChunkLightSources( key ) end
-	MC.PendingFull[key] = nil
 	local httpState = MC.HttpChunkSync
 	if httpState then
 		httpState.requestedKeys[key] = nil
@@ -1608,12 +1409,10 @@ net.Receive( "mc_clear", function()
 	MC.PhysDirtyBulkOrder = {}
 	MC.ClientCollisionAABBDebugBoxes = {}
 	if MC.ResetClientCollisionState then MC.ResetClientCollisionState() end
-	MC.PendingFull = {}
 	MC.PendingPredictions = {}
 	MC.PendingPredictionGroups = {}
 	MC.HttpChunkSync = nil
 	MC.SyncProgress = { expected = 0, received = 0, chunks = 0, doneChunks = 0, active = false, lastUpdate = CurTime() }
-	PendingFullAckBytes = 0
 end )
 
 net.Receive( "mc_collision_debug", function()

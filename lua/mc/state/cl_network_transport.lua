@@ -216,7 +216,6 @@ local function resetClientWorld()
 	MC.PhysDirtyPriority = {}
 	MC.PhysDirtyBulk = {}
 	MC.PhysDirtyBulkOrder = {}
-	MC.PendingFull = {}
 	MC.PendingPredictions = {}
 	MC.PendingPredictionGroups = {}
 	if MC.ResetClientCollisionState then MC.ResetClientCollisionState() end
@@ -595,6 +594,16 @@ function T.BeginSnapshot( metadata )
 		ended = false,
 		crc = nil,
 	}
+	MC.SyncProgress = {
+		expected = totalBytes,
+		received = 0,
+		chunks = partCount,
+		doneChunks = 0,
+		active = true,
+		lastUpdate = CurTime(),
+		snapshot = true,
+		bytes = true,
+	}
 	T.awaitingSnapshot = true
 	T.desynced = false
 	T.resyncRequested = false
@@ -612,6 +621,14 @@ function T.AcceptSnapshotPart( generation, token, partIndex, data )
 	snapshot.receivedParts = snapshot.receivedParts + 1
 	snapshot.receivedBytes = snapshot.receivedBytes + #data
 	if snapshot.receivedBytes > snapshot.totalBytes then return false, "snapshot_too_large" end
+	local progress = MC.SyncProgress
+	if progress and progress.bytes == true then
+		progress.expected = snapshot.totalBytes
+		progress.received = snapshot.receivedBytes
+		progress.chunks = snapshot.partCount
+		progress.doneChunks = snapshot.receivedParts
+		progress.lastUpdate = CurTime()
+	end
 	return true
 end
 
@@ -1053,6 +1070,8 @@ if net and net.Receive then
 		local partIndex = net.ReadUInt( 16 )
 		local length = net.ReadUInt( 16 )
 		local data = length > 0 and length <= SNAPSHOT_PART_MAX and net.ReadData( length ) or nil
+		local ackBytes = math.Clamp( net.ReadUInt( 32 ), 0, SNAPSHOT_PART_MAX + 4096 )
+		if MC.QueueReliableAck then MC.QueueReliableAck( ackBytes ) end
 		local ok, err = T.AcceptSnapshotPart( generation, token, partIndex, data )
 		if not ok then T.RequestResync( err or "snapshot_part_rejected" ) end
 	end )

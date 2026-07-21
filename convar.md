@@ -37,15 +37,10 @@
 
 | ConVar | 默认 | 作用 |
 | --- | --- | --- |
-| `mc_sync_cells_per_part` | `2048` | 流式同步时每个 net part 包含的方块格数。 |
-| `mc_sync_messages_per_tick` | `4` | 每个 0.05 秒 tick 发送多少条流式同步消息。 |
-| `mc_sync_reliable_budget` | `32768` | 每个 0.05 秒 tick 允许的可靠同步字节预算。 |
-| `mc_sync_fast` | `1` | 使用带 ack 窗口的快速全图同步。 |
+| `mc_sync_messages_per_tick` | `4` | 每 0.05 秒最多向每个玩家发送多少条排队状态消息。 |
+| `mc_sync_reliable_budget` | `3400` | 每 0.05 秒、每个玩家的排队状态字节硬上限；约 68 KB/s，204 KB 在无拥塞时约 3 秒。 |
 | `mc_sync_frame_ms` | `4` | 每 tick 大约花多少毫秒服务器 CPU 时间做完整同步。 |
-| `mc_sync_inflight_limit` | `65536` | 单个同步客户端允许未 ack 的最大同步字节数。 |
-| `mc_sync_snapshot` | `1` | 用压缩存档快照同步客户端，再发送增量编辑。 |
-| `mc_sync_snapshot_part_bytes` | `32768` | 快照同步每个 net part 的字节数。 |
-| `mc_sync_snapshot_max_chunks` | `0` | 旧设置；当前完整快照突发同步基本忽略这个限制。 |
+| `mc_sync_inflight_limit` | `32768` | 单个客户端允许等待处理确认的最大排队状态字节数。 |
 | `mc_chunk_http_enabled` | `0` | 允许客户端通过 HTTP 拉取 lazy-save 基础 chunk，而不是走 GMod net。 |
 | `mc_chunk_http_base_url` | 空 | HTTP 根地址，指向服务端 `garrysmod/data` 下的 lazy save manifest/part。 |
 | `mc_stream_chunk_span_xy` | `0` | 旧的客户端 chunk 范围同步水平半径；直接全量同步会忽略。 |
