@@ -33,8 +33,10 @@ MC.MeshShadowFaceFix = MC.MeshShadowFaceFix or ( CreateClientConVar and CreateCl
 -- (mc_mesh_gpu_shader_fancy / _light_fast / _light_vanilla). Legacy archived
 -- values from the pre-rename mc_light_style profile convar ("shader", "best",
 -- numbers) normalize to fancy.
+-- Disabled for now: plain = smooth lighting without grading.
+-- Disabled for now: vanilla = 1:1 Minecraft lightmap composition (no shadows).
 MC.LightStyle = MC.LightStyle or ( CreateClientConVar and CreateClientConVar( "mc_light_style", "fancy", true, false,
-	"MC chunk lighting look: fancy = PCF shadows + cool/warm grading (default), plain = smooth lighting without grading, fast = low-sample legacy look, vanilla = 1:1 Minecraft lightmap composition (no shadows)" ) )
+	"MC chunk lighting look: fancy = PCF shadows + cool/warm grading (default), fast = low-sample legacy look" ) )
 MC.MeshShadowMapTint = MC.MeshShadowMapTint or ( CreateClientConVar and CreateClientConVar( "mc_shadow_tint", "0.6", true, false,
 	"Fancy look: how strongly shadows shift toward a cool sky tint (0 = plain darkening)" ) )
 MC.MeshShadowMapEdgeFade = MC.MeshShadowMapEdgeFade or ( CreateClientConVar and CreateClientConVar( "mc_shadow_edge_fade", "0.1", true, false,
@@ -175,11 +177,34 @@ end
 -- the world. Distinct from the legacy mc_light_profile pipeline selector
 -- above. Unknown values — including archived leftovers from when this NAME
 -- held the profile selector ("shader", "best", numbers) — fall back to fancy.
+local function normalizeGpuLightStyle( style )
+	style = stringLower( tostring( style or "" ) )
+	if style == "fast" then return "fast" end
+	-- if style == "plain" then return "plain" end
+	-- if style == "vanilla" then return "vanilla" end
+	return "fancy"
+end
+
 function MC.LightStyleName()
 	local cv = MC.LightStyle
-	local style = cv and cv.GetString and stringLower( tostring( cv:GetString() or "" ) ) or "fancy"
-	if style == "plain" or style == "fast" or style == "vanilla" then return style end
-	return "fancy"
+	return normalizeGpuLightStyle( cv and cv.GetString and cv:GetString() or "fancy" )
+end
+
+local function enforceGpuLightStyle( value )
+	local raw = stringLower( tostring( value or "" ) )
+	local normalized = normalizeGpuLightStyle( raw )
+	if raw == normalized or not RunConsoleCommand then return end
+	RunConsoleCommand( "mc_light_style", normalized )
+end
+
+if cvars and cvars.AddChangeCallback then
+	cvars.AddChangeCallback( "mc_light_style", function( _, _, value )
+		enforceGpuLightStyle( value )
+	end, "mc_light_style_supported_values" )
+end
+
+if MC.LightStyle and MC.LightStyle.GetString then
+	enforceGpuLightStyle( MC.LightStyle:GetString() )
 end
 
 function RM.CurrentLightProfile()
