@@ -36,6 +36,15 @@ SWEP.UseHands      = true
 SWEP.Primary   = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "none" }
 SWEP.Secondary = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "none" }
 
+if CLIENT then
+	-- Keep the weapon selection icon as the same flat grass-block face used by
+	-- the addon asset.  The matching materials/entities icon is also used by
+	-- the spawn menu content panel.
+	SWEP.WepSelectIcon = surface.GetTextureID( "vgui/entities/mc_placer" )
+	SWEP.BounceWeaponIcon = false
+	SWEP.DrawWeaponInfoBox = false
+end
+
 local STEP = 0.13
 
 local function defaultSelectedID()
