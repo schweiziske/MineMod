@@ -358,15 +358,19 @@ local function collectMovement( startX, startY, startZ, move, protected, vacated
 end
 
 local function appendMovementCells( cells, writes, blocks, move, destroys )
-	local function write( x, y, z, stateId )
+	local function write( x, y, z, stateId, movedFromX, movedFromY, movedFromZ )
 		local key = movementKey( x, y, z )
 		local index = writes[key]
+		local cell
 		if index then
-			cells[index].stateId = stateId
+			cell = cells[index]
+			cell.stateId = stateId
 		else
-			cells[#cells + 1] = { bx = x, by = y, bz = z, stateId = stateId }
+			cell = { bx = x, by = y, bz = z, stateId = stateId }
+			cells[#cells + 1] = cell
 			writes[key] = #cells
 		end
+		cell.movedFromX, cell.movedFromY, cell.movedFromZ = movedFromX, movedFromY, movedFromZ
 	end
 	-- Popped blocks clear first so a moved block landing in their cell wins.
 	if destroys then
@@ -381,7 +385,10 @@ local function appendMovementCells( cells, writes, blocks, move, destroys )
 	end
 	for index = 1, #blocks do
 		local block = blocks[index]
-		write( block.x + move[1], block.y + move[2], block.z + move[3], block.stateId )
+		write(
+			block.x + move[1], block.y + move[2], block.z + move[3], block.stateId,
+			block.x, block.y, block.z
+		)
 	end
 	return write
 end

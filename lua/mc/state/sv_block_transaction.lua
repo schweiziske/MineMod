@@ -115,6 +115,9 @@ local function callLifecycleHandler( info, actor, revision )
 		newBlockId = info.id,
 		oldOrient = info.oldOrient,
 		newOrient = info.orient,
+		movedFromX = info.movedFromX,
+		movedFromY = info.movedFromY,
+		movedFromZ = info.movedFromZ,
 		revision = revision,
 	}
 	local oldHandlers = MC.Blocks[info.old] and MC.Blocks[info.old].handlers or nil
@@ -142,6 +145,9 @@ local function callLifecycleHandler( info, actor, revision )
 		end
 	elseif newHandlers and newHandlers.OnStateChanged then
 		newHandlers.OnStateChanged( context, info.oldStateId, info.stateId )
+	end
+	if info.movedFromX ~= nil and newHandlers and newHandlers.OnMoved then
+		newHandlers.OnMoved( context, info.stateId )
 	end
 end
 
@@ -199,6 +205,17 @@ function SV.ApplyBlockTransaction( cells, options )
 		info.id = id
 		info.orient = orient
 		info.blockEntityRequest = cell.blockEntity
+		if cell.movedFromX ~= nil or cell.movedFromY ~= nil or cell.movedFromZ ~= nil then
+			local movedFromX = tonumber( cell.movedFromX )
+			local movedFromY = tonumber( cell.movedFromY )
+			local movedFromZ = tonumber( cell.movedFromZ )
+			if not movedFromX or not movedFromY or not movedFromZ then return failure( "invalid_move_source", i ) end
+			info.movedFromX = math.floor( movedFromX )
+			info.movedFromY = math.floor( movedFromY )
+			info.movedFromZ = math.floor( movedFromZ )
+		else
+			info.movedFromX, info.movedFromY, info.movedFromZ = nil, nil, nil
+		end
 		info.sourceIndex = i
 	end
 

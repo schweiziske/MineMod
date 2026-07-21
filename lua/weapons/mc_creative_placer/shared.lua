@@ -16,10 +16,10 @@ local function blockDisplayText( blockOrID )
 end
 
 SWEP.PrintName     = L( "weapon.mc_creative_placer.name", "MC 创造方块放置器" )
-SWEP.Author        = "MC"
+SWEP.Author        = "schweiziske"
 SWEP.Purpose       = L( "weapon.mc_creative_placer.purpose", "放置 / 破坏 Minecraft 方块，并从创造物品栏选择方块" )
 SWEP.Instructions  = L( "weapon.mc_creative_placer.instructions", "左键破坏  右键放置  Reload 创造物品栏" )
-SWEP.Category      = "MC"
+SWEP.Category      = "Minecraft"
 
 SWEP.Spawnable     = true
 SWEP.AdminOnly     = false
@@ -37,12 +37,18 @@ SWEP.Primary   = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "no
 SWEP.Secondary = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "none" }
 
 if CLIENT then
-	-- Keep the weapon selection icon as the same flat grass-block face used by
-	-- the addon asset.  The matching materials/entities icon is also used by
-	-- the spawn menu content panel.
-	SWEP.WepSelectIcon = surface.GetTextureID( "vgui/entities/mc_placer" )
+	-- The weapon selector uses the dedicated translucent icon; the spawn menu
+	-- content panel uses materials/entities/mc_creative_placer.png.
+	SWEP.WepSelectIcon = surface.GetTextureID( "vgui/entities/mc_creative_placer" )
 	SWEP.BounceWeaponIcon = false
 	SWEP.DrawWeaponInfoBox = false
+
+	function SWEP:DrawWeaponSelection( x, y, width, height, alpha )
+		local size = math.min( width, height )
+		surface.SetDrawColor( 255, 255, 255, alpha or 255 )
+		surface.SetTexture( self.WepSelectIcon )
+		surface.DrawTexturedRect( x + ( width - size ) * 0.5, y + ( height - size ) * 0.5, size, size )
+	end
 end
 
 local STEP = 0.13
