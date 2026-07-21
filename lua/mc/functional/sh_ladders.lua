@@ -8,14 +8,11 @@
 
 MC = MC or {}
 
-local LADDER_CONTACT_PADDING = 3
-local LADDER_CLIMB_SPEED = 115
-local LADDER_DESCEND_SPEED = 95
-local LADDER_IDLE_SLIDE_SPEED = 20
-local LADDER_SIDE_SPEED = 115 / 2
-local LADDER_DETACH_PUSH = -135
-local LADDER_DETACH_UP = 85
-MC.LadderMoveTypePlayers = MC.LadderMoveTypePlayers or {}
+-- CGameMovement defaults from Source SDK 2013.
+local LADDER_DISTANCE = 2
+local MAX_CLIMB_SPEED = 200
+local LADDER_JUMP_OFF_SPEED = 270
+MC.LadderMoveTypePlayers = setmetatable( MC.LadderMoveTypePlayers or {}, { __mode = "k" } )
 
 function MC.IsLadderBlock( id )
 	local b = MC.Blocks and MC.Blocks[id]
@@ -33,22 +30,16 @@ local function blockBoxWorldBounds( bx, by, bz, box )
 		base.z + box[6] * bs
 end
 
-local function boxesOverlap( ax0, ay0, az0, ax1, ay1, az1, bx0, by0, bz0, bx1, by1, bz1 )
-	return ax0 <= bx1 and ax1 >= bx0
-		and ay0 <= by1 and ay1 >= by0
-		and az0 <= bz1 and az1 >= bz0
-end
-
-local function playerMoveAABB( ply, mv, padding )
+local function playerMoveAABB( ply, mv )
 	local pos = mv:GetOrigin()
 	local mins = ply:OBBMins()
 	local maxs = ply:OBBMaxs()
-	return pos.x + mins.x - padding,
-		pos.y + mins.y - padding,
-		pos.z + mins.z - padding,
-		pos.x + maxs.x + padding,
-		pos.y + maxs.y + padding,
-		pos.z + maxs.z + padding
+	return pos.x + mins.x,
+		pos.y + mins.y,
+		pos.z + mins.z,
+		pos.x + maxs.x,
+		pos.y + maxs.y,
+		pos.z + maxs.z
 end
 
 local function ladderNormalFromBox( box )
@@ -63,46 +54,87 @@ local function ladderNormalFromBox( box )
 	return Vector( 0, cy >= 0.5 and 1 or -1, 0 )
 end
 
-local function ladderContactAtCell( bx, by, bz, x0, y0, z0, x1, y1, z1 )
+local function sweptAABBHitFraction( ax0, ay0, az0, ax1, ay1, az1, offset, bx0, by0, bz0, bx1, by1, bz1 )
+	local function axisTimes( amin, amax, delta, bmin, bmax )
+		if math.abs( delta ) <= 0.000001 then
+			if amax < bmin or amin > bmax then return nil end
+			return -math.huge, math.huge
+		end
+
+		if delta > 0 then
+			return ( bmin - amax ) / delta, ( bmax - amin ) / delta
+		end
+		return ( bmax - amin ) / delta, ( bmin - amax ) / delta
+	end
+
+	local xEnter, xExit = axisTimes( ax0, ax1, offset.x, bx0, bx1 )
+	if not xEnter then return nil end
+	local yEnter, yExit = axisTimes( ay0, ay1, offset.y, by0, by1 )
+	if not yEnter then return nil end
+	local zEnter, zExit = axisTimes( az0, az1, offset.z, bz0, bz1 )
+	if not zEnter then return nil end
+
+	local enter = math.max( xEnter, yEnter, zEnter )
+	local leave = math.min( xExit, yExit, zExit )
+	if enter > leave or leave < 0 or enter > 1 then return nil end
+	return math.max( 0, enter )
+end
+
+local function ladderContactAtCell( bx, by, bz, x0, y0, z0, x1, y1, z1, offset, wishdir )
 	local id = MC.GetBlock( bx, by, bz )
 	if not MC.IsLadderBlock( id ) then return nil end
 
 	local orient = MC.GetBlockOrient and MC.GetBlockOrient( bx, by, bz ) or 0
 	local boxes = MC.BlockBoxes and MC.BlockBoxes( id, orient, bx, by, bz ) or nil
+	local best
 	for _, box in ipairs( boxes or { { 0, 0, 0, 1, 1, 1 } } ) do
 		local lx0, ly0, lz0, lx1, ly1, lz1 = blockBoxWorldBounds( bx, by, bz, box )
-		if boxesOverlap( x0, y0, z0, x1, y1, z1, lx0, ly0, lz0, lx1, ly1, lz1 ) then
-			return {
+		local normal = ladderNormalFromBox( box )
+		local approach = wishdir:Dot( normal )
+		local fraction = approach < -0.0001 and sweptAABBHitFraction(
+			x0, y0, z0, x1, y1, z1, offset,
+			lx0, ly0, lz0, lx1, ly1, lz1
+		) or nil
+		if fraction and ( not best or fraction < best.fraction or fraction == best.fraction and approach < best.approach ) then
+			best = {
 				bx = bx,
 				by = by,
 				bz = bz,
 				id = id,
 				orient = orient,
-				normal = ladderNormalFromBox( box ),
+				normal = normal,
+				fraction = fraction,
+				approach = approach,
 			}
 		end
 	end
 
-	return nil
+	return best
 end
 
-function MC.PlayerLadderContact( ply, mv )
+function MC.PlayerLadderContact( ply, mv, wishdir )
 	if not IsValid( ply ) or not mv or not MC.WorldToCell or not MC.GetBlock then return nil end
-	local padding = LADDER_CONTACT_PADDING
-	local x0, y0, z0, x1, y1, z1 = playerMoveAABB( ply, mv, padding )
-	local minBx, minBy, minBz = MC.WorldToCell( Vector( x0, y0, z0 ) )
-	local maxBx, maxBy, maxBz = MC.WorldToCell( Vector( x1, y1, z1 ) )
+	if not wishdir then return nil end
+	local offset = wishdir * LADDER_DISTANCE
+	local x0, y0, z0, x1, y1, z1 = playerMoveAABB( ply, mv )
+	local sweepX0, sweepY0, sweepZ0 = x0 + math.min( 0, offset.x ), y0 + math.min( 0, offset.y ), z0 + math.min( 0, offset.z )
+	local sweepX1, sweepY1, sweepZ1 = x1 + math.max( 0, offset.x ), y1 + math.max( 0, offset.y ), z1 + math.max( 0, offset.z )
+	local minBx, minBy, minBz = MC.WorldToCell( Vector( sweepX0, sweepY0, sweepZ0 ) )
+	local maxBx, maxBy, maxBz = MC.WorldToCell( Vector( sweepX1, sweepY1, sweepZ1 ) )
 
+	local best
 	for bz = minBz, maxBz do
 		for by = minBy, maxBy do
 			for bx = minBx, maxBx do
-				local contact = ladderContactAtCell( bx, by, bz, x0, y0, z0, x1, y1, z1 )
-				if contact then return contact end
+				local contact = ladderContactAtCell( bx, by, bz, x0, y0, z0, x1, y1, z1, offset, wishdir )
+				if contact and ( not best or contact.fraction < best.fraction or contact.fraction == best.fraction and contact.approach < best.approach ) then
+					best = contact
+				end
 			end
 		end
 	end
 
-	return nil
+	return best
 end
 
 local function canApplyLadderMove( ply )
@@ -118,6 +150,9 @@ function MC.ClearLadderMoveType( ply )
 	if ply:GetMoveType() == MOVETYPE_LADDER then
 		ply:SetMoveType( MOVETYPE_WALK )
 	end
+	if ply.SetMoveCollide and MOVECOLLIDE_DEFAULT then
+		ply:SetMoveCollide( MOVECOLLIDE_DEFAULT )
+	end
 	return true
 end
 
@@ -125,66 +160,76 @@ local function wantsDetachFromLadder( mv )
 	return mv:KeyDown( IN_JUMP )
 end
 
-local function horizontalUnit( vec )
-	local x, y = vec.x, vec.y
-	local len = math.sqrt( x * x + y * y )
-	if len <= 0.001 then return Vector( 0, 0, 0 ) end
-	return Vector( x / len, y / len, 0 )
-end
-
 local function moveAngles( ply, mv )
 	if mv.GetMoveAngles then return mv:GetMoveAngles() end
 	return ply:EyeAngles()
 end
 
-local function ladderSideDirection( ply, mv, contact )
-	local normal = contact and contact.normal or Vector( 0, 1, 0 )
-	local tangent = horizontalUnit( Vector( -normal.y, normal.x, 0 ) )
-	local right = horizontalUnit( moveAngles( ply, mv ):Right() )
-	if right:Dot( tangent ) < 0 then tangent = -tangent end
-	return tangent
-end
-
-local function sourceLadderVerticalSpeed( ply, mv )
-	if mv:KeyDown( IN_DUCK ) then return -LADDER_DESCEND_SPEED end
-	local input = 0
-	if mv:GetForwardSpeed() > 10 then
-		input = 1
-	elseif mv:GetForwardSpeed() < -10 then
-		input = -1
+local function sourceLadderWishDirection( ply, mv )
+	local state = MC.LadderMoveTypePlayers[ply]
+	if istable( state ) and state.normal then
+		return -state.normal
 	end
 
-	local z = moveAngles( ply, mv ):Forward().z
-	local speed = input * z * LADDER_CLIMB_SPEED
-	if math.abs( speed ) < 1 then return -LADDER_IDLE_SLIDE_SPEED end
-	return math.Clamp( speed, -LADDER_DESCEND_SPEED, LADDER_CLIMB_SPEED )
+	local forwardMove = mv:GetForwardSpeed()
+	local sideMove = mv:GetSideSpeed()
+	if forwardMove == 0 and sideMove == 0 then return nil end
+
+	local angles = moveAngles( ply, mv )
+	local wishdir = angles:Forward() * forwardMove + angles:Right() * sideMove
+	local length = wishdir:Length()
+	if length <= 0.0001 then return nil end
+	return wishdir / length
+end
+
+local function sourceLadderInputSpeeds( mv )
+	local forwardSpeed, rightSpeed = 0, 0
+	if mv:KeyDown( IN_BACK ) then forwardSpeed = forwardSpeed - MAX_CLIMB_SPEED end
+	if mv:KeyDown( IN_FORWARD ) then forwardSpeed = forwardSpeed + MAX_CLIMB_SPEED end
+	if mv:KeyDown( IN_MOVELEFT ) then rightSpeed = rightSpeed - MAX_CLIMB_SPEED end
+	if mv:KeyDown( IN_MOVERIGHT ) then rightSpeed = rightSpeed + MAX_CLIMB_SPEED end
+	return forwardSpeed, rightSpeed
+end
+
+local function sourceLadderOnFloor( ply, mv )
+	if ply.IsOnGround and ply:IsOnGround() then return true end
+	if not util or not util.PointContents or not CONTENTS_SOLID then return false end
+	local origin = mv:GetOrigin()
+	local floor = Vector( origin.x, origin.y, origin.z + ply:OBBMins().z - 1 )
+	return util.PointContents( floor ) == CONTENTS_SOLID
 end
 
 local function detachLadderVelocity( ply, mv, contact )
-	local normal = horizontalUnit( contact and contact.normal or Vector( 0, 0, 0 ) )
-	if normal.x == 0 and normal.y == 0 then
-		normal = horizontalUnit( moveAngles( ply, mv ):Forward() )
-	end
+	mv:SetVelocity( contact.normal * LADDER_JUMP_OFF_SPEED )
+end
 
-	local vel = mv:GetVelocity()
-	vel.x = normal.x * LADDER_DETACH_PUSH
-	vel.y = normal.y * LADDER_DETACH_PUSH
-	vel.z = math.max( vel.z, LADDER_DETACH_UP )
-	mv:SetVelocity( vel )
-	mv:SetForwardSpeed( 0 )
-	mv:SetSideSpeed( 0 )
+local function sourceLadderVelocity( ply, mv, contact )
+	local forwardSpeed, rightSpeed = sourceLadderInputSpeeds( mv )
+	if forwardSpeed == 0 and rightSpeed == 0 then return Vector( 0, 0, 0 ) end
+
+	local angles = moveAngles( ply, mv )
+	local velocity = angles:Forward() * forwardSpeed + angles:Right() * rightSpeed
+	local normal = contact.normal
+	local perpendicular = Vector( 0, 0, 1 ):Cross( normal )
+	perpendicular:Normalize()
+
+	local normalSpeed = velocity:Dot( normal )
+	local intoLadder = normal * normalSpeed
+	local lateral = velocity - intoLadder
+	local vertical = normal:Cross( perpendicular )
+	velocity = lateral + vertical * -normalSpeed
+
+	if sourceLadderOnFloor( ply, mv ) and normalSpeed > 0 then
+		velocity = velocity + normal * MAX_CLIMB_SPEED
+	end
+	return velocity
 end
 
 local function applyLadderVelocity( ply, mv, contact )
-	local vel = mv:GetVelocity()
-	local side = math.Clamp( mv:GetSideSpeed(), -LADDER_SIDE_SPEED, LADDER_SIDE_SPEED )
-	local sideDir = ladderSideDirection( ply, mv, contact )
-	vel.x = sideDir.x * side
-	vel.y = sideDir.y * side
-	vel.z = sourceLadderVerticalSpeed( ply, mv )
-	mv:SetVelocity( vel )
+	mv:SetVelocity( sourceLadderVelocity( ply, mv, contact ) )
 	mv:SetForwardSpeed( 0 )
 	mv:SetSideSpeed( 0 )
+	if mv.SetUpSpeed then mv:SetUpSpeed( 0 ) end
 end
 
 function MC.ApplyLadderMove( ply, mv )
@@ -192,20 +237,33 @@ function MC.ApplyLadderMove( ply, mv )
 		return MC.ClearLadderMoveType( ply )
 	end
 
-	local contact = MC.PlayerLadderContact( ply, mv )
+	local wishdir = sourceLadderWishDirection( ply, mv )
+	if not wishdir then
+		return MC.ClearLadderMoveType( ply )
+	end
+
+	local contact = MC.PlayerLadderContact( ply, mv, wishdir )
 	if not contact then
 		return MC.ClearLadderMoveType( ply )
 	end
+
+	MC.LadderMoveTypePlayers[ply] = {
+		normal = Vector( contact.normal.x, contact.normal.y, contact.normal.z ),
+	}
+	if ply:GetMoveType() ~= MOVETYPE_LADDER then
+		ply:SetMoveType( MOVETYPE_LADDER )
+	end
+	if ply.SetMoveCollide and MOVECOLLIDE_DEFAULT then
+		ply:SetMoveCollide( MOVECOLLIDE_DEFAULT )
+	end
+	ply:SetGravity( 0 )
+
 	if wantsDetachFromLadder( mv ) then
 		detachLadderVelocity( ply, mv, contact )
 		MC.ClearLadderMoveType( ply )
 		return false, contact
 	end
 
-	MC.LadderMoveTypePlayers[ply] = true
-	if ply:GetMoveType() ~= MOVETYPE_LADDER then
-		ply:SetMoveType( MOVETYPE_LADDER )
-	end
 	applyLadderVelocity( ply, mv, contact )
 	return true, contact
 end

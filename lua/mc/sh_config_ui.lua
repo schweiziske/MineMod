@@ -157,9 +157,9 @@ MC.ConfigConVars = {
 				"Choose the final GPU lighting composition.",
 				"选择最终的 GPU 光照合成风格。", { choices = {
 					choice( "fancy", "Fancy", "细腻" ),
-					choice( "plain", "Plain", "朴素" ),
+					-- choice( "plain", "Plain", "朴素" ),
 					choice( "fast", "Fast", "快速" ),
-					choice( "vanilla", "Vanilla Minecraft", "原版 Minecraft" ),
+					-- choice( "vanilla", "Vanilla Minecraft", "原版 Minecraft" ),
 				} } ),
 		} ),
 
