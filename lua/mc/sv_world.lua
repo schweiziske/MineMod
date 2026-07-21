@@ -1061,7 +1061,7 @@ local function loadSavedBlockEntities( chunk, envelopes )
 	return true
 end
 
-local function loadSavedOpaqueBlockEntities( chunk, records, sourceDataVersion )
+local function loadSavedOpaqueBlockEntities( chunk, records )
 	if records == nil then return true end
 	if not chunk or not istable( records ) then return false, "invalid_opaque_block_entities" end
 	local seen, totalBytes = {}, 0
@@ -1074,14 +1074,15 @@ local function loadSavedOpaqueBlockEntities( chunk, records, sourceDataVersion )
 		or record.encoding ~= "typed-nbt-json-v1" or not istable( record.data ) then
 			return false, "invalid_opaque_block_entity_record"
 		end
+		local sourceDataVersion = tonumber( record.sourceDataVersion )
+		if not sourceDataVersion or sourceDataVersion < 0 or sourceDataVersion ~= math.floor( sourceDataVersion ) then
+			return false, "invalid_opaque_block_entity_version"
+		end
 		local json = util.TableToJSON( record.data, false )
 		local bytes = json and #json or 0
 		if bytes < 1 or bytes > 1048576 then return false, "opaque_block_entity_too_large" end
 		totalBytes = totalBytes + bytes
 		if totalBytes > 8388608 then return false, "opaque_chunk_budget_exceeded" end
-		if sourceDataVersion and tonumber( record.sourceDataVersion ) ~= tonumber( sourceDataVersion ) then
-			return false, "opaque_block_entity_version_mismatch"
-		end
 		local lx, ly, lz = MC.DecodeLocal( localIndex )
 		local stateId = MC.GetBlockState(
 			chunk.cx * MC.CS + lx,
@@ -1794,11 +1795,7 @@ local function loadSaveChunks( data, cache, deferWorldEffects )
 		end
 		if strict and opaqueBlockEntities ~= nil then
 			local chunk = MC.GetChunk( cx, cy, cz )
-			local loadedOpaque, opaqueError = loadSavedOpaqueBlockEntities(
-				chunk,
-				opaqueBlockEntities,
-				data.sourceDataVersion or data.source and data.source.dataVersion
-			)
+			local loadedOpaque, opaqueError = loadSavedOpaqueBlockEntities( chunk, opaqueBlockEntities )
 			if not loadedOpaque then return false, opaqueError end
 		end
 		for key, c in pairs( touched ) do

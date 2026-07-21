@@ -947,6 +947,14 @@ local function stateValue( b, state )
 	return value, true
 end
 
+local function simpleOrientStateValue( b, state, map )
+	if not map then return stateValue( b, state ) end
+	local key = b.orient == "axis" and "axis" or "facing"
+	local value = map[key]
+	if value == nil and b.orient == "horizontal_facing" then value = map.horizontal_facing end
+	return value, value ~= nil
+end
+
 local function numericOrient( rule, state )
 	local n = tonumber( state )
 	if not n or math.floor( n ) ~= n or not rule.allowed[n] then return nil end
@@ -1012,7 +1020,7 @@ function MC.StateToOrient( id, state )
 		if part ~= "head" then part = "foot" end
 		return facing and MC.MakeBedOrient( facing, part ) or MC.DefaultOrient( id )
 	end
-	local value, validKey = stateValue( b, state )
+	local value, validKey = simpleOrientStateValue( b, state, map )
 	if not validKey or not value or value == "" then return MC.DefaultOrient( id ) end
 	return rule.values[value] or MC.DefaultOrient( id )
 end
@@ -1070,7 +1078,7 @@ function MC.IsOrientStateValid( id, state )
 		end
 		return HorizontalPartBaseByFacing[DirectionValue[trim( string.lower( tostring( state ) ) )]] ~= nil
 	end
-	local value, validKey = stateValue( b, state )
+	local value, validKey = simpleOrientStateValue( b, state, map )
 	return validKey and value ~= nil and rule.values[value] ~= nil
 end
 

@@ -88,6 +88,10 @@ local function encodeOpaqueBlockEntities( chunk, options )
 		or record.encoding ~= "typed-nbt-json-v1" or not istable( record.data ) then
 			return nil, "invalid_opaque_block_entity_record"
 		end
+		local sourceDataVersion = tonumber( record.sourceDataVersion )
+		if not sourceDataVersion or sourceDataVersion < 0 or sourceDataVersion ~= math.floor( sourceDataVersion ) then
+			return nil, "invalid_opaque_block_entity_version"
+		end
 		local json = util.TableToJSON( record.data, false )
 		if not json or #json < 1 or #json > 1048576 then return nil, "opaque_block_entity_too_large" end
 		totalBytes = totalBytes + #json
