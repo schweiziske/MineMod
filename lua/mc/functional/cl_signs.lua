@@ -264,7 +264,13 @@ local function openEditor( bx, by, bz, lines )
 	local lineWidth, lineHeight = maxLineWidth * editorScale, logicalLineHeight * editorScale
 	local signWidth = ( hanging and 72 or 94 ) * editorScale
 	local signHeight = ( hanging and 72 or 101 ) * editorScale
-	local linesTop = hanging and 66 + ( signHeight - lineHeight * 4 ) * 0.5 or 74
+	-- Hanging-sign GUI textures are 16 px tall: rows 0-5 are the beam/chains,
+	-- while rows 6-15 are the writable board face. Center text on the board only.
+	local hangingBoardTop = signHeight * 6 / 16
+	local hangingBoardHeight = signHeight * 10 / 16
+	local linesTop = hanging
+		and 66 + hangingBoardTop + ( hangingBoardHeight - lineHeight * 4 ) * 0.5
+		or 74
 	local materialKey = ( hanging and "hanging:" or "plain:" ) .. wood
 	local signMaterial = SIGN_GUI_MATERIALS[materialKey]
 	if not signMaterial then

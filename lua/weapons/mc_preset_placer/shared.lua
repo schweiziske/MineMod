@@ -34,7 +34,7 @@ if CLIENT then
 	SWEP.DrawWeaponInfoBox = false
 
 	function SWEP:DrawWeaponSelection( x, y, width, height, alpha )
-		local size = math.min( width, height )
+		local size = math.min( width, height ) * 0.70
 		surface.SetDrawColor( 255, 255, 255, alpha or 255 )
 		surface.SetTexture( self.WepSelectIcon )
 		surface.DrawTexturedRect( x + ( width - size ) * 0.5, y + ( height - size ) * 0.5, size, size )
@@ -70,18 +70,38 @@ function SWEP:Deploy()
 	return true
 end
 
+function SWEP:PrimaryAttackClient()
+	if not CLIENT then return end
+	local owner = self:GetOwner()
+	if not IsValid( owner ) or owner ~= LocalPlayer() then return end
+
+	if MC.PresetMode == "place" and MC.ActivePreset then
+		if MC.PlaceActivePreset then MC.PlaceActivePreset() end
+	else
+		if MC.PresetAdvanceSelection then MC.PresetAdvanceSelection() end
+	end
+end
+
 function SWEP:PrimaryAttack()
 	self:SetNextPrimaryFire( CurTime() + STEP )
 	local owner = self:GetOwner()
 	if not IsValid( owner ) then return end
 
-	if CLIENT and IsFirstTimePredicted() and owner == LocalPlayer() then
-		if MC.PresetMode == "place" and MC.ActivePreset then
-			if MC.PlaceActivePreset then MC.PlaceActivePreset() end
-		else
-			if MC.PresetAdvanceSelection then MC.PresetAdvanceSelection() end
-		end
+	if SERVER then
+		if game.SinglePlayer() then self:CallOnClient( "PrimaryAttackClient" ) end
+		return
 	end
+	if game.SinglePlayer() then return end
+	if IsFirstTimePredicted() and owner == LocalPlayer() then
+		self:PrimaryAttackClient()
+	end
+end
+
+function SWEP:SecondaryAttackClient()
+	if not CLIENT then return end
+	local owner = self:GetOwner()
+	if not IsValid( owner ) or owner ~= LocalPlayer() then return end
+	if MC.PresetUndoSelection then MC.PresetUndoSelection() end
 end
 
 function SWEP:SecondaryAttack()
@@ -89,16 +109,31 @@ function SWEP:SecondaryAttack()
 	local owner = self:GetOwner()
 	if not IsValid( owner ) then return end
 
-	if CLIENT and IsFirstTimePredicted() and owner == LocalPlayer() and MC.PresetUndoSelection then
-		MC.PresetUndoSelection()
+	if SERVER then
+		if game.SinglePlayer() then self:CallOnClient( "SecondaryAttackClient" ) end
+		return
+	end
+	if game.SinglePlayer() then return end
+	if IsFirstTimePredicted() and owner == LocalPlayer() then
+		self:SecondaryAttackClient()
 	end
 end
 
+-- In single-player weapon input is handled by the server realm. Keep the UI
+-- opener client-only, but explicitly bridge Reload across realms there.
+function SWEP:OpenPresetManagerClient()
+	if not CLIENT then return end
+	if IsValid( MC.PresetManagerFrame ) and MC.PresetManagerFrame:IsVisible() then return end
+	if MC.OpenPresetManager then MC.OpenPresetManager() end
+end
+
 function SWEP:Reload()
-	if CLIENT then
-		if IsValid( MC.PresetManagerFrame ) and MC.PresetManagerFrame:IsVisible() then return end
-		if MC.OpenPresetManager then MC.OpenPresetManager() end
+	if SERVER then
+		if game.SinglePlayer() then self:CallOnClient( "OpenPresetManagerClient" ) end
+		return
 	end
+	if game.SinglePlayer() then return end
+	self:OpenPresetManagerClient()
 end
 
 if CLIENT then
