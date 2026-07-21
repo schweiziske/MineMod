@@ -420,3 +420,293 @@ function SV.ApplyBlockTransaction( cells, options )
 
 	return { ok = true, changed = #finalized, revision = revision, changes = finalized }
 end
+
+local function hydrateChunkForMutation( key )
+	local store = SV.ChunkStore
+	if not store or not store.IsLazyWorld or not store.IsLazyWorld() then
+		return true, MC.GetChunkByKey( key )
+	end
+	local stringKey = tostring( key )
+	if store.LoadedKeys and store.LoadedKeys[stringKey] then
+		return true, MC.GetChunkByKey( key )
+	end
+	local hasBase = store.HasBaseChunk and store.HasBaseChunk( key ) or false
+	local hasEdits = store.HasChunkEdits and store.HasChunkEdits( key ) or false
+	if not hasBase and not hasEdits then return true, MC.GetChunkByKey( key ) end
+	if not store.HydrateChunkNow then return false, "lazy_chunk_hydrator_unavailable" end
+	store.LastError = nil
+	local chunk = store.HydrateChunkNow( key, false )
+	if store.LastError then return false, store.LastError end
+	return true, chunk or MC.GetChunkByKey( key )
+end
+
+local function addHydrationPhysNeighbours( keys, cx, cy, cz )
+	keys[MC.ChunkKey( cx, cy, cz )] = true
+	keys[MC.ChunkKey( cx - 1, cy, cz )] = true
+	keys[MC.ChunkKey( cx + 1, cy, cz )] = true
+	keys[MC.ChunkKey( cx, cy - 1, cz )] = true
+	keys[MC.ChunkKey( cx, cy + 1, cz )] = true
+end
+
+local function rollbackHydrationWrites( written, plans )
+	for index = #written, 1, -1 do
+		local info = written[index]
+		local chunk = info.plan and info.plan.chunk
+		if chunk and info.stateId ~= info.oldStateId then
+			pcall( MC.SetChunkLocalStateRaw, chunk, info.li, info.oldStateId, info.stateId )
+		end
+		setCellBlockEntity( info.bx, info.by, info.bz, info.oldBlockEntity )
+	end
+	for _, plan in ipairs( plans or {} ) do
+		local chunk = plan.chunk
+		if chunk then
+			MC.FinalizeChunkStateStorage( chunk )
+			if ( chunk.count or 0 ) <= 0 then
+				MC.World[plan.key] = nil
+				if IsValid( chunk.ent ) then chunk.ent:Remove() end
+			end
+		end
+	end
+end
+
+-- Storage-level heterogeneous transaction used by large preset placement.
+-- Cells are preflighted atomically, grouped by Chunk, written with one Chunk
+-- finalization each, then published as one compressed partial-world hydration.
+function SV.ApplyBlockHydrationTransaction( cells, options )
+	options = Host.normalizeWriteOptions( options )
+	if not istable( cells ) or #cells == 0 then
+		return { ok = true, changed = 0, revision = SV.BlockRevision or 0, changes = {} }
+	end
+	if options.network ~= false and not SV.QueueStateChunkHydration then
+		return failure( "chunk_hydration_transport_unavailable" )
+	end
+	if not MC.SetChunkLocalStateRaw or not MC.GetChunkBlockStateByLocalIndex then
+		return failure( "state_storage_unavailable" )
+	end
+
+	local byCell, ordered = {}, {}
+	local plansByKey, plans = {}, {}
+	for index = 1, #cells do
+		local cell = cells[index]
+		if not istable( cell ) then return failure( "invalid_change", index ) end
+		local bx = math.floor( tonumber( cell.bx ) or 0 )
+		local by = math.floor( tonumber( cell.by ) or 0 )
+		local bz = math.floor( tonumber( cell.bz ) or 0 )
+		local stateId, stateError
+		if cell.stateId ~= nil then
+			stateId = math.floor( tonumber( cell.stateId ) or -1 )
+		elseif cell.id ~= nil then
+			stateId, stateError = Host.stateFromLegacyWrite( cell.id, cell.orient )
+		else
+			return failure( "missing_state", index )
+		end
+		if not stateId or not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then
+			return failure( stateError or "invalid_state", index )
+		end
+
+		local cellKey = MC.CellKey( bx, by, bz )
+		local info = byCell[cellKey]
+		if info then
+			if options.rejectDuplicateCells then return failure( "duplicate_cell", index ) end
+		else
+			local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
+			local chunkKey = MC.ChunkKey( cx, cy, cz )
+			local plan = plansByKey[chunkKey]
+			if not plan then
+				plan = { key = chunkKey, cx = cx, cy = cy, cz = cz, items = {}, finalized = {} }
+				plansByKey[chunkKey] = plan
+				plans[#plans + 1] = plan
+			end
+			info = { key = cellKey, bx = bx, by = by, bz = bz, li = li, plan = plan }
+			byCell[cellKey] = info
+			ordered[#ordered + 1] = info
+			plan.items[#plan.items + 1] = info
+		end
+		info.stateId = stateId
+		info.blockEntityRequest = cell.blockEntity
+		info.sourceIndex = index
+	end
+
+	for _, plan in ipairs( plans ) do
+		local hydrated, chunkOrError = hydrateChunkForMutation( plan.key )
+		if not hydrated then return failure( chunkOrError or "chunk_hydration_failed" ) end
+		plan.chunk = chunkOrError or MC.GetChunkByKey( plan.key )
+	end
+
+	local finalized = {}
+	local blockDelta = 0
+	for _, info in ipairs( ordered ) do
+		local chunk = info.plan.chunk
+		info.oldStateId = chunk and MC.GetChunkBlockStateByLocalIndex( chunk, info.li ) or 0
+		if info.oldStateId == nil then return failure( "invalid_old_state", info.sourceIndex ) end
+		local id, orient, projectionError = legacyProjectionForWrite( info.stateId, false )
+		if id == nil then return failure( projectionError or "state_not_network_projectable", info.sourceIndex ) end
+		local oldId, oldOrient, oldProjectionError = legacyProjectionForWrite( info.oldStateId, false )
+		if oldId == nil then return failure( oldProjectionError or "old_state_not_network_projectable", info.sourceIndex ) end
+		info.id, info.orient = id, orient
+		info.old, info.oldOrient = oldId, oldOrient
+		info.oldBlockEntity = blockEntityAtCell( info.bx, info.by, info.bz )
+		info.newBlockEntity, info.blockEntityError = prepareBlockEntity( info, info.blockEntityRequest )
+		if info.blockEntityError then return failure( info.blockEntityError, info.sourceIndex ) end
+		info.blockEntityChanged = info.newBlockEntity ~= info.oldBlockEntity
+		if options.validateChange then
+			local valid, validationError = options.validateChange( info, info.sourceIndex )
+			if valid ~= true then return failure( validationError or "change_rejected", info.sourceIndex ) end
+		end
+		if info.stateId ~= info.oldStateId or info.blockEntityChanged then
+			info.kind = info.stateId ~= info.oldStateId
+				and lifecycleKind( info.oldStateId, info.stateId ) or "block_entity_changed"
+			if info.oldStateId == 0 and info.stateId ~= 0 then blockDelta = blockDelta + 1 end
+			if info.oldStateId ~= 0 and info.stateId == 0 then blockDelta = blockDelta - 1 end
+			finalized[#finalized + 1] = info
+			info.plan.finalized[#info.plan.finalized + 1] = info
+		end
+	end
+
+	local maxBlockCount = math.max( 0, math.floor( tonumber( options.maxBlockCount ) or 0 ) )
+	if maxBlockCount > 0 and ( SV.BlockCount or 0 ) + blockDelta > maxBlockCount then
+		return failure( "block_limit" )
+	end
+	if #finalized == 0 then
+		return { ok = true, changed = 0, revision = SV.BlockRevision or 0, changes = {} }
+	end
+
+	local written = {}
+	for _, plan in ipairs( plans ) do
+		if #plan.finalized > 0 then
+			local chunk = plan.chunk
+			if not chunk then
+				chunk = MC.EnsureChunk( plan.cx, plan.cy, plan.cz )
+				plan.chunk = chunk
+				plan.created = true
+			end
+			for _, info in ipairs( plan.finalized ) do
+				written[#written + 1] = info
+				if info.stateId ~= info.oldStateId then
+					local called, changed, oldOrError = pcall(
+						MC.SetChunkLocalStateRaw, chunk, info.li, info.stateId, info.oldStateId )
+					if not called or changed ~= true then
+						rollbackHydrationWrites( written, plans )
+						return failure( called and ( oldOrError or "raw_write_failed" ) or "raw_write_error", info.sourceIndex )
+					end
+				end
+				setCellBlockEntity( info.bx, info.by, info.bz, info.newBlockEntity )
+			end
+		end
+	end
+
+	local patchRefs, physKeys = {}, {}
+	for _, plan in ipairs( plans ) do
+		if #plan.finalized > 0 then
+			local chunk = plan.chunk
+			MC.FinalizeChunkStateStorage( chunk )
+			local statePairs = {}
+			for _, info in ipairs( plan.finalized ) do
+				if info.stateId ~= info.oldStateId then
+					statePairs[#statePairs + 1] = info.li
+					statePairs[#statePairs + 1] = info.stateId
+				end
+			end
+			if SV.ChunkStore and SV.ChunkStore.RecordChunkStateMap and #statePairs > 0 then
+				SV.ChunkStore.RecordChunkStateMap( plan.key, statePairs )
+			end
+			if chunk.count and chunk.count > 0 then
+				SV.EnsureChunkEnt( chunk )
+			else
+				MC.World[plan.key] = nil
+				if IsValid( chunk.ent ) then chunk.ent:Remove() end
+				plan.chunk = nil
+				SV.PhysDirty[plan.key] = nil
+				SV.PhysDirtyPriority[plan.key] = nil
+				if SV.PhysDirtyBulk then SV.PhysDirtyBulk[plan.key] = nil end
+			end
+			addHydrationPhysNeighbours( physKeys, plan.cx, plan.cy, plan.cz )
+			patchRefs[#patchRefs + 1] = {
+				patchRef = true,
+				cx = plan.cx, cy = plan.cy, cz = plan.cz,
+				chunk = plan.chunk,
+			}
+		end
+	end
+
+	SV.BlockCount = math.max( 0, ( SV.BlockCount or 0 ) + blockDelta )
+	for key in pairs( physKeys ) do
+		local chunk = MC.GetChunkByKey( key )
+		if chunk and chunk.count and chunk.count > 0 then
+			SV.EnsureChunkEnt( chunk )
+			if SV.MarkPhysDirtyBulk then SV.MarkPhysDirtyBulk( key ) end
+		end
+	end
+	if MC.ClearAllBlockConnectionMaskCaches then MC.ClearAllBlockConnectionMaskCaches() end
+	SV.StreamInterestDirty = true
+	SV.Dirty = true
+
+	local generationRotated = false
+	if MC.Net and ( SV.BlockRevision or 0 ) >= MC.Net.MAX_REVISION and SV.AdvanceWorldGeneration then
+		SV.AdvanceWorldGeneration( true )
+		generationRotated = true
+	end
+	SV.BlockRevision = ( SV.BlockRevision or 0 ) + 1
+	local revision = SV.BlockRevision
+	for _, info in ipairs( finalized ) do
+		if info.blockEntityChanged and info.newBlockEntity then info.newBlockEntity.revision = revision end
+	end
+
+	local networkFallback
+	if generationRotated and SV.BeginSync then
+		for _, ply in ipairs( player.GetAll() ) do SV.BeginSync( ply ) end
+	elseif options.network ~= false then
+		local groupId = math.floor( tonumber( options.stateGroupId ) or revision ) % 4294967296
+		if groupId == 0 then groupId = 1 end
+		local queued, queueError = SV.QueueStateChunkHydration( patchRefs, revision, groupId, options.recipients )
+		if queued ~= true then
+			networkFallback = queueError or "chunk_hydration_queue_failed"
+			if SV.BeginSync then for _, ply in ipairs( player.GetAll() ) do SV.BeginSync( ply ) end end
+		end
+	end
+
+	local actor = options.actor
+	local shouldFx = options.fx
+	if shouldFx == nil then shouldFx = IsValid( actor ) end
+	if shouldFx then
+		local fxInfo = finalized[math.max( 1, math.floor( tonumber( options.fxIndex ) or 1 ) )] or finalized[1]
+		if options.fxPreferPlaced == true and ( not fxInfo or fxInfo.id == 0 ) then
+			for _, info in ipairs( finalized ) do if info.id ~= 0 then fxInfo = info break end end
+		end
+		if fxInfo then
+			if fxInfo.kind == "removed" and fxInfo.old ~= 0 then
+				Host.broadcastFx( 2, fxInfo.bx, fxInfo.by, fxInfo.bz, fxInfo.old, fxInfo.oldOrient, fxInfo.oldStateId )
+			elseif fxInfo.id ~= 0 then
+				Host.broadcastFx( 1, fxInfo.bx, fxInfo.by, fxInfo.bz, fxInfo.id, fxInfo.orient, fxInfo.stateId )
+			end
+		end
+	end
+
+	if options.handlers ~= false then
+		for _, info in ipairs( finalized ) do
+			if info.kind ~= "block_entity_changed" then
+				local ok, handlerError = pcall( callLifecycleHandler, info, actor, revision )
+				if not ok then
+					local message = "[MC] block lifecycle handler failed: " .. tostring( handlerError ) .. "\n"
+					if ErrorNoHalt then ErrorNoHalt( message ) else print( message ) end
+				end
+			end
+		end
+	end
+	if options.blockUpdates ~= false and SV.EnqueueTransactionNeighbours then
+		local ok, updateError = pcall( SV.EnqueueTransactionNeighbours, finalized, revision, options.updateDepth )
+		if not ok then
+			local message = "[MC] block update enqueue failed: " .. tostring( updateError ) .. "\n"
+			if ErrorNoHalt then ErrorNoHalt( message ) else print( message ) end
+		end
+	end
+
+	return {
+		ok = true,
+		changed = #finalized,
+		revision = revision,
+		changes = finalized,
+		chunks = #patchRefs,
+		networkFallback = networkFallback,
+	}
+end
