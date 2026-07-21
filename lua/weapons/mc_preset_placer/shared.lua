@@ -11,10 +11,10 @@ local function L( key, fallback, vars )
 end
 
 SWEP.PrintName     = L( "weapon.mc_preset_placer.name", "MC 预设放置器" )
-SWEP.Author        = "MC"
+SWEP.Author        = "schweiziske"
 SWEP.Purpose       = L( "weapon.mc_preset_placer.purpose", "保存和放置 Minecraft 方块建筑预设" )
 SWEP.Instructions  = L( "weapon.mc_preset_placer.instructions", "R 打开预设界面  左键选择/放置  右键撤销  G 旋转" )
-SWEP.Category      = "MC"
+SWEP.Category      = "Minecraft"
 
 SWEP.Spawnable     = true
 SWEP.AdminOnly     = false
@@ -27,6 +27,19 @@ SWEP.Base          = "weapon_base"
 SWEP.ViewModel     = "models/weapons/c_toolgun.mdl"
 SWEP.WorldModel    = "models/weapons/w_toolgun.mdl"
 SWEP.UseHands      = true
+
+if CLIENT then
+	SWEP.WepSelectIcon = surface.GetTextureID( "vgui/entities/mc_preset_placer" )
+	SWEP.BounceWeaponIcon = false
+	SWEP.DrawWeaponInfoBox = false
+
+	function SWEP:DrawWeaponSelection( x, y, width, height, alpha )
+		local size = math.min( width, height )
+		surface.SetDrawColor( 255, 255, 255, alpha or 255 )
+		surface.SetTexture( self.WepSelectIcon )
+		surface.DrawTexturedRect( x + ( width - size ) * 0.5, y + ( height - size ) * 0.5, size, size )
+	end
+end
 
 SWEP.Primary   = { ClipSize = -1, DefaultClip = -1, Automatic = false, Ammo = "none" }
 SWEP.Secondary = { ClipSize = -1, DefaultClip = -1, Automatic = false, Ammo = "none" }
