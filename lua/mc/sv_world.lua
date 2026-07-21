@@ -37,11 +37,7 @@ SV.PhysDirty  = SV.PhysDirty or {}   -- chunkKey -> due time (collision needs re
 SV.PhysDirtyPriority = SV.PhysDirtyPriority or {} -- player edits should not wait behind bulk rebuilds
 SV.PhysDirtyBulk = SV.PhysDirtyBulk or {} -- chunkKey -> true when explosion/preset collision rebuild is throttled
 SV.PhysDirtyBulkOrder = SV.PhysDirtyBulkOrder or {}
-SV.SyncQueue  = SV.SyncQueue or {}   -- player -> { keys = {}, i = 1, active = nil }
-SV.SnapshotQueue = SV.SnapshotQueue or {} -- player -> compressed save snapshot transfer state
 SV.ReliableNetQueues = SV.ReliableNetQueues or {} -- player -> shared reliable send queue
-SV.PlayerLoadedChunks = SV.PlayerLoadedChunks or {} -- player -> { [chunkKey] = true }
-SV.PlayerFullSnapshot = SV.PlayerFullSnapshot or {} -- player -> true once full-world snapshot mode owns visibility
 SV.PlayerHTTPDisabled = SV.PlayerHTTPDisabled or {} -- player -> true after client-side HTTP fetch is blocked/failed
 SV.ServerCollisionActiveChunks = SV.ServerCollisionActiveChunks or {} -- chunkKey -> true for non-empty chunks with server collision
 SV.ServerCollisionSignatures = SV.ServerCollisionSignatures or {} -- chunkKey -> sorted bounds signature
@@ -50,33 +46,21 @@ SV.NextBulkCollisionRebuildAt = SV.NextBulkCollisionRebuildAt or 0
 SV.CollisionDebugPlayers = SV.CollisionDebugPlayers or setmetatable( {}, { __mode = "k" } )
 SV.Dirty      = SV.Dirty or false    -- world changed since last save
 
-local function syncFastEnabled()
-	return not C.SyncFast or C.SyncFast:GetBool()
-end
-
-local function syncCellsPerPart()
-	if C.SyncCells then
-		return math.Clamp( C.SyncCells:GetInt(), 1, MC.CS * MC.CS * MC.CH )
-	end
-	return C.SyncCellsPerPart or 2048
-end
-
 local function syncMessagesPerTick()
 	if C.SyncMsgs then
-		return math.Clamp( C.SyncMsgs:GetInt(), 1, syncFastEnabled() and 128 or 16 )
+		return math.Clamp( C.SyncMsgs:GetInt(), 1, 16 )
 	end
 	return C.SyncMessagesPerTick or 4
 end
 
 local function syncReliableBudget()
 	if C.SyncBudget then
-		return math.Clamp( C.SyncBudget:GetInt(), 2048, syncFastEnabled() and 8192 or 6144 )
+		return math.Clamp( C.SyncBudget:GetInt(), 1024, 8192 )
 	end
-	return C.SyncReliableBudget or 32768
+	return math.Clamp( C.SyncReliableBudget or 2048, 1024, 8192 )
 end
 
 local function syncFrameSeconds()
-	if not syncFastEnabled() then return nil end
 	if C.SyncFrame then
 		return math.Clamp( C.SyncFrame:GetFloat(), 0.25, 20 ) / 1000
 	end
@@ -84,56 +68,53 @@ local function syncFrameSeconds()
 end
 
 local function syncInFlightLimit()
-	if not syncFastEnabled() then return math.huge end
 	if C.SyncWindow then
-		return math.Clamp( C.SyncWindow:GetInt(), 32768, 131072 )
+		return math.Clamp( C.SyncWindow:GetInt(), 8192, 65536 )
 	end
-	return C.SyncInFlightLimit or 65536
+	return math.Clamp( C.SyncInFlightLimit or 32768, 8192, 65536 )
 end
 
 local function sharedReliableBudget()
-	return math.min( syncReliableBudget(), 32768 )
+	return syncReliableBudget()
 end
 
-local function syncSnapshotEnabled()
-	if C.SyncSnapshot then return C.SyncSnapshot:GetBool() end
-	return ( C.SyncSnapshot or 1 ) ~= 0
+function SV.ReliableNetBudgetBytes()
+	return sharedReliableBudget()
 end
 
-local function syncSnapshotPartBytes()
-	if C.SyncSnapshotPartBytes then
-		return math.Clamp( C.SyncSnapshotPartBytes:GetInt(), 4096, 60000 )
-	end
-	return C.SyncSnapshotPartBytes or 32768
+function SV.ReliableNetPayloadBytes( overheadBytes, protocolMaximum )
+	overheadBytes = math.max( 0, math.floor( tonumber( overheadBytes ) or 0 ) )
+	protocolMaximum = math.max( 1, math.floor( tonumber( protocolMaximum ) or GMOD_NET_MAX_BYTES ) )
+	return math.max( 1, math.min( protocolMaximum, sharedReliableBudget() - overheadBytes ) )
 end
 
+-- Disabled-by-default compatibility hook for old lazy-save manifests. The
+-- production join path below intentionally does not call it.
 local function httpChunkDeliveryEnabled()
 	if C.ChunkHTTPEnabled then return C.ChunkHTTPEnabled:GetBool() end
 	return ( MC.Config.ChunkHTTPEnabled or 0 ) ~= 0
 end
 
 local function httpChunkBaseURL()
-	local url
-	if C.ChunkHTTPBaseURL and C.ChunkHTTPBaseURL.GetString then
-		url = C.ChunkHTTPBaseURL:GetString()
-	else
-		url = MC.Config.ChunkHTTPBaseURL
-	end
+	local url = C.ChunkHTTPBaseURL and C.ChunkHTTPBaseURL.GetString
+		and C.ChunkHTTPBaseURL:GetString() or MC.Config.ChunkHTTPBaseURL
 	url = string.Trim( tostring( url or "" ) )
 	return string.gsub( url, "/+$", "" )
 end
 
-local function httpChunkDeliveryActive()
-	return httpChunkDeliveryEnabled()
-		and httpChunkBaseURL() ~= ""
-		and SV.ChunkStore
-		and SV.ChunkStore.IsLazyWorld
-		and SV.ChunkStore.IsLazyWorld()
-end
-
-local function playerHttpChunkDeliveryActive( ply )
-	return httpChunkDeliveryActive()
-		and not ( SV.PlayerHTTPDisabled and SV.PlayerHTTPDisabled[ply] )
+local function sendHttpManifest( ply )
+	if not IsValid( ply ) or not httpChunkDeliveryEnabled() or httpChunkBaseURL() == "" then return false end
+	if not SV.ChunkStore or not SV.ChunkStore.HttpManifestPayload then return false end
+	local payload = SV.ChunkStore.HttpManifestPayload()
+	if not payload or not payload.path or payload.path == "" then return false end
+	net.Start( "mc_http_manifest" )
+		net.WriteString( httpChunkBaseURL() )
+		net.WriteString( payload.path )
+		net.WriteUInt( math.max( 0, math.floor( tonumber( payload.chunks ) or 0 ) ), 32 )
+		net.WriteUInt( math.max( 0, math.floor( tonumber( payload.blocks ) or 0 ) ), 32 )
+		net.WriteUInt( math.Clamp( math.floor( tonumber( payload.height ) or MC.CH ), 1, 65535 ), 16 )
+	net.Send( ply )
+	return true
 end
 
 function SV.IsChunkCollisionActive( key )
@@ -367,7 +348,7 @@ local function compactReliableQueue( q )
 	q.head = 1
 end
 
-function SV.EnqueueReliableNet( target, bytes, sendFn, waitAck, fullSpeed )
+function SV.EnqueueReliableNet( target, bytes, sendFn, waitAck )
 	if not isfunction( sendFn ) then return false end
 	bytes = math.max( 1, math.floor( tonumber( bytes ) or 1 ) )
 	local queued = false
@@ -382,7 +363,6 @@ function SV.EnqueueReliableNet( target, bytes, sendFn, waitAck, fullSpeed )
 			bytes = bytes,
 			send = sendFn,
 			waitAck = waitAck == true and not ply:IsBot(),
-			fullSpeed = fullSpeed == true,
 		}
 		queued = true
 	end
@@ -408,25 +388,17 @@ timer.Create( "mc_reliable_net", SYNC_TIMER_INTERVAL, 0, function()
 
 		local sent = 0
 		local sentBytes = 0
-		local firstItem = q.items[q.head or 1]
-		local fullSpeed = firstItem and firstItem.fullSpeed == true
-		local messageBudget = fullSpeed and 128 or syncMessagesPerTick()
+		local messageBudget = syncMessagesPerTick()
 		local inflightLimit = syncInFlightLimit()
-		if fullSpeed then
-			inflightLimit = math.max( inflightLimit,
-				MC.Net and MC.Net.CHUNK_PATCH_FAST_WINDOW_BYTES or 262144 )
-		end
-		local byteBudget = fullSpeed and inflightLimit
-			or math.min( sharedReliableBudget(), inflightLimit )
+		local byteBudget = math.min( sharedReliableBudget(), inflightLimit )
 
 		while sent < messageBudget do
-			if not fullSpeed and deadline and SysTime() >= deadline then break end
+			if deadline and SysTime() >= deadline then break end
 			local item = q.items[q.head or 1]
 			if not item then break end
-			if ( item.fullSpeed == true ) ~= fullSpeed then break end
 			local itemBytes = math.max( 1, math.floor( tonumber( item.bytes ) or 1 ) )
 			if item.waitAck and ( q.inflightBytes or 0 ) + itemBytes > inflightLimit then break end
-			if sent > 0 and sentBytes + itemBytes > byteBudget then break end
+			if sentBytes + itemBytes > byteBudget then break end
 
 			if item.send( ply ) == false then
 				SV.ReliableNetQueues[ply] = nil
@@ -490,6 +462,12 @@ local function estimateBulkSetBytes( count )
 	return math.ceil( ( BULK_SET_HEADER_BITS + count * BULK_SET_CELL_BITS ) / 8 ) + NET_MESSAGE_OVERHEAD_BYTES
 end
 
+local function bulkSetCellsForBudget( bytes )
+	local payloadBits = ( math.floor( tonumber( bytes ) or 0 ) - NET_MESSAGE_OVERHEAD_BYTES ) * 8 - BULK_SET_HEADER_BITS
+	if payloadBits < BULK_SET_CELL_BITS then return 0 end
+	return math.floor( payloadBits / BULK_SET_CELL_BITS )
+end
+
 local function sendSetBulkMessage( changes, target, netName, explosionMeshThrottle, first, count, ackBytes )
 	target = liveBulkTarget( target )
 	if not target then return false end
@@ -522,6 +500,8 @@ local function sendSetBulk( changes, target, options )
 	local i = 1
 
 	if options.netPaced == true then
+		cellsPerMessage = math.min( cellsPerMessage, bulkSetCellsForBudget( sharedReliableBudget() ) )
+		if cellsPerMessage < 1 then return end
 		while i <= #changes do
 			local first = i
 			local count = math.min( cellsPerMessage, #changes - i + 1 )
@@ -970,8 +950,6 @@ local function clearWorldNoNet()
 	SV.PhysDirtyPriority = {}
 	SV.PhysDirtyBulk = {}
 	SV.PhysDirtyBulkOrder = {}
-	SV.SyncQueue = {}
-	SV.PlayerLoadedChunks = {}
 end
 
 local function beginWorldLoadStage()
@@ -1010,8 +988,6 @@ local function commitWorldLoadStage( previous )
 	for _, chunk in pairs( previous.world or {} ) do
 		if IsValid( chunk.ent ) then chunk.ent:Remove() end
 	end
-	SV.SyncQueue = {}
-	SV.PlayerLoadedChunks = {}
 	for _, chunk in pairs( MC.World ) do
 		if chunk.count and chunk.count > 0 then
 			SV.EnsureChunkEnt( chunk )
@@ -1419,191 +1395,20 @@ concommand.Add( "mc_import_probe", function( ply, _, args )
 end )
 
 ------------------------------------------------------------------ world streaming
-local function sendFullBegin( ply, active )
-	net.Start( "mc_full_begin" )
-		net.WriteInt( active.cx, Net.COORD_BITS )
-		net.WriteInt( active.cy, Net.COORD_BITS )
-		net.WriteInt( active.cz, Net.COORD_BITS )
-		net.WriteUInt( #active.lis, Net.COUNT_BITS )
-	net.Send( ply )
-	return MC.EstimateSyncBeginBytes()
-end
-
-local function sendFullPart( ply, active, byteLimit )
-	local chunk = MC.GetChunkByKey( active.key )
-	if not chunk then
-		active.i = #active.lis + 1
-		return nil
-	end
-
-	local maxCells = syncCellsPerPart()
-	if byteLimit then
-		maxCells = math.min( maxCells, MC.SyncCellsForByteBudget( byteLimit ) )
-		if maxCells <= 0 then return nil, "budget" end
-	end
-
-	local first = active.i
-	local last = active.i - 1
-	local count = 0
-	while active.i <= #active.lis and count < maxCells do
-		local li = active.lis[active.i]
-		local id = chunk.blocks[li]
-		if id and id ~= 0 then
-			count = count + 1
-			last = active.i
-		end
-		active.i = active.i + 1
-	end
-
-	if count == 0 then return nil end
-
-	net.Start( "mc_full_part" )
-		net.WriteInt( active.cx, Net.COORD_BITS )
-		net.WriteInt( active.cy, Net.COORD_BITS )
-		net.WriteInt( active.cz, Net.COORD_BITS )
-		net.WriteUInt( count, Net.COUNT_BITS )
-		for i = first, last do
-			local li = active.lis[i]
-			local id = chunk.blocks[li]
-			if id and id ~= 0 then
-				net.WriteUInt( li, Net.LOCAL_BITS )
-				net.WriteUInt( id, Net.ID_BITS )
-				net.WriteUInt( MC.NormalizeOrient( id, chunk.orients and chunk.orients[li] ), Net.ORIENT_BITS )
-			end
-		end
-	net.Send( ply )
-	return MC.EstimateSyncPartBytes( count )
-end
-
-local function sendFullEnd( ply, active )
-	net.Start( "mc_full_end" )
-		net.WriteInt( active.cx, Net.COORD_BITS )
-		net.WriteInt( active.cy, Net.COORD_BITS )
-		net.WriteInt( active.cz, Net.COORD_BITS )
-	net.Send( ply )
-	return MC.EstimateSyncEndBytes()
-end
-
-local function ensureSyncQueue( ply )
-	local q = SV.SyncQueue[ply]
-	if not q then
-		q = { keys = {}, i = 1, inflightBytes = 0, queuedKeys = {} }
-		SV.SyncQueue[ply] = q
-	end
-	q.queuedKeys = q.queuedKeys or {}
-	return q
-end
-
-local function sendHttpManifest( ply )
-	if not IsValid( ply ) or not playerHttpChunkDeliveryActive( ply ) then return false end
-	if not SV.ChunkStore or not SV.ChunkStore.HttpManifestPayload then return false end
-	local payload = SV.ChunkStore.HttpManifestPayload()
-	if not payload or not payload.path or payload.path == "" then return false end
-	net.Start( "mc_http_manifest" )
-		net.WriteString( httpChunkBaseURL() )
-		net.WriteString( payload.path )
-		net.WriteUInt( math.max( 0, math.floor( tonumber( payload.chunks ) or 0 ) ), 32 )
-		net.WriteUInt( math.max( 0, math.floor( tonumber( payload.blocks ) or 0 ) ), 32 )
-		net.WriteUInt( math.Clamp( math.floor( tonumber( payload.height ) or MC.CH ), 1, 65535 ), 16 )
-	net.Send( ply )
-	return true
-end
-
-local function queueSyncKey( ply, key )
-	local chunk = MC.GetChunkByKey( key )
-	if not chunk or not chunk.count or chunk.count <= 0 then return false end
-	local q = ensureSyncQueue( ply )
-	if q.queuedKeys[key] then return true end
-	if q.active and q.active.key == key then return true end
-	q.keys[#q.keys + 1] = key
-	q.queuedKeys[key] = true
-	return true
-end
-
-local function queueAllLoadedChunksForPlayer( ply )
-	if not IsValid( ply ) then return end
-	local q = ensureSyncQueue( ply )
-	q.keys = {}
-	q.i = 1
-	q.active = nil
-	q.queuedKeys = {}
-	q.inflightBytes = 0
-
-	local keys = {}
-	for key, chunk in pairs( MC.World or {} ) do
-		if chunk.count and chunk.count > 0 then
-			keys[#keys + 1] = key
-		end
-	end
-	table.sort( keys, function( a, b ) return tostring( a ) < tostring( b ) end )
-
-	local loaded = {}
-	for _, key in ipairs( keys ) do
-		if queueSyncKey( ply, key ) then
-			loaded[key] = true
-		end
-	end
-	SV.PlayerLoadedChunks[ply] = loaded
-	return #keys
-end
-
-local function makeSyncActive( key )
-	local chunk = MC.GetChunkByKey( key )
-	if not chunk or chunk.count <= 0 then return nil end
-
-	local lis = {}
-	for li, id in pairs( chunk.blocks ) do
-		if id and id ~= 0 and MC.LocalIndexInRange( li ) then
-			lis[#lis + 1] = li
-		end
-	end
-	table.sort( lis )
-
-	return {
-		key = key,
-		cx = chunk.cx,
-		cy = chunk.cy,
-		cz = chunk.cz,
-		lis = lis,
-		i = 1,
-		begun = false,
-	}
-end
-
 function SV.BeginSync( ply )
-	SV.PlayerLoadedChunks[ply] = {}
-	SV.PlayerFullSnapshot[ply] = nil
-	SV.SyncQueue[ply] = { keys = {}, i = 1, inflightBytes = 0, queuedKeys = {} }
 	SV.ClearReliableNet( ply )
-	if SV.SendStateHello then
-		SV.SyncQueue[ply] = nil
-		SV.SendStateHello( ply )
-		return
+	if not SV.SendStateHello then
+		ErrorNoHalt( "[MC] state transport unavailable; refusing legacy full-map sync\n" )
+		return false
 	end
-	if syncSnapshotEnabled() and SV.BeginSnapshotSync and SV.BeginSnapshotSync( ply ) then
-		return
-	end
-	sendHttpManifest( ply )
-	queueAllLoadedChunksForPlayer( ply )
+	return SV.SendStateHello( ply )
 end
 
 local function restartPlayerFullSync( ply )
 	if not IsValid( ply ) then return end
 	net.Start( "mc_clear" )
 	net.Send( ply )
-	SV.PlayerLoadedChunks[ply] = {}
-	SV.PlayerFullSnapshot[ply] = nil
-	SV.SyncQueue[ply] = { keys = {}, i = 1, inflightBytes = 0, queuedKeys = {} }
-	SV.ClearReliableNet( ply )
-	if SV.SendStateHello then
-		SV.SyncQueue[ply] = nil
-		SV.SendStateHello( ply )
-		return
-	end
-	if syncSnapshotEnabled() and SV.BeginSnapshotSync and SV.BeginSnapshotSync( ply ) then
-		return
-	end
-	queueAllLoadedChunksForPlayer( ply )
+	SV.BeginSync( ply )
 end
 
 net.Receive( "mc_http_failed", function( _, ply )
@@ -1707,35 +1512,6 @@ end )
 
 hook.Remove( "SetupMove", "mc_server_collision_interest_move" )
 
-local function sendSyncStep( ply, q, byteLimit )
-	while not q.active do
-		if q.i > #q.keys then return false end
-		local key = q.keys[q.i]
-		q.i = q.i + 1
-		if q.queuedKeys then q.queuedKeys[key] = nil end
-		q.active = makeSyncActive( key )
-	end
-
-	local active = q.active
-	if not active.begun then
-		local bytes = MC.EstimateSyncBeginBytes()
-		if byteLimit and byteLimit < bytes then return nil, "budget" end
-		active.begun = true
-		return sendFullBegin( ply, active )
-	end
-
-	while active.i <= #active.lis do
-		local bytes, reason = sendFullPart( ply, active, byteLimit )
-		if bytes then return bytes end
-		if reason == "budget" then return nil, reason end
-	end
-
-	local bytes = MC.EstimateSyncEndBytes()
-	if byteLimit and byteLimit < bytes then return nil, "budget" end
-	q.active = nil
-	return sendFullEnd( ply, active )
-end
-
 timer.Create( "mc_interest_sync", INTEREST_TIMER_INTERVAL, 0, function()
 	SV.StreamInterestDirty = false
 	SV.RefreshServerCollision()
@@ -1743,44 +1519,6 @@ end )
 
 timer.Create( "mc_bulk_collision_rebuild", 0.05, 0, function()
 	flushBulkCollisionQueue()
-end )
-
--- drip small chunk parts to each syncing player; large chunks must never be one
--- reliable net message.
-timer.Create( "mc_sync", SYNC_TIMER_INTERVAL, 0, function()
-	local frameBudget = syncFrameSeconds()
-	local deadline = frameBudget and ( SysTime() + frameBudget ) or nil
-	for ply, q in pairs( SV.SyncQueue ) do
-		if not IsValid( ply ) then SV.SyncQueue[ply] = nil continue end
-		local sent = 0
-		local sentBytes = 0
-		local budget = syncMessagesPerTick()
-		local byteBudget = syncReliableBudget()
-		local window = syncInFlightLimit()
-		while sent < budget and sentBytes < byteBudget do
-			if deadline and SysTime() >= deadline then break end
-			local remainingWindow = window - ( q.inflightBytes or 0 )
-			if remainingWindow <= 0 then break end
-			local stepBudget = math.min( byteBudget - sentBytes, remainingWindow )
-			if stepBudget <= 0 then break end
-			local bytes, reason = sendSyncStep( ply, q, stepBudget )
-			if not bytes then
-				if reason == "budget" then break end
-				break
-			end
-			sent = sent + 1
-			sentBytes = sentBytes + bytes
-			q.inflightBytes = ( q.inflightBytes or 0 ) + bytes
-		end
-		if q.i > #q.keys and not q.active then SV.SyncQueue[ply] = nil end
-	end
-end )
-
-net.Receive( "mc_full_ack", function( _, ply )
-	local q = SV.SyncQueue[ply]
-	if not q then return end
-	local bytes = math.Clamp( net.ReadUInt( 32 ), 0, 4194304 )
-	q.inflightBytes = math.max( 0, ( q.inflightBytes or 0 ) - bytes )
 end )
 
 timer.Create( "mc_block_tick", 1, 0, function()
@@ -1851,138 +1589,6 @@ local function buildSaveData( slotName )
 	if not SV.BuildStateSaveData then return nil, nil, "state_save_codec_unavailable" end
 	return SV.BuildStateSaveData( slotName )
 end
-local function sendSnapshotBegin( ply, token, err, parts, totalBytes, chunks, blocks )
-	net.Start( "mc_snapshot_begin" )
-		net.WriteString( token or "" )
-		net.WriteBool( err ~= nil )
-		net.WriteString( err or "" )
-		net.WriteUInt( math.max( 0, math.floor( tonumber( parts ) or 0 ) ), 32 )
-		net.WriteUInt( math.max( 0, math.floor( tonumber( totalBytes ) or 0 ) ), 32 )
-		net.WriteUInt( math.max( 0, math.floor( tonumber( chunks ) or 0 ) ), 32 )
-		net.WriteUInt( math.max( 0, math.floor( tonumber( blocks ) or 0 ) ), 32 )
-	net.Send( ply )
-end
-
-local function sendSnapshotError( ply, err )
-	if not IsValid( ply ) then return end
-	sendSnapshotBegin( ply, "", tostring( err or "snapshot_failed" ), 0, 0, 0, 0 )
-end
-
-local function sendSnapshotPart( ply, token, part, data, offset, len )
-	net.Start( "mc_snapshot_part" )
-		net.WriteString( token )
-		net.WriteUInt( part, 32 )
-		net.WriteUInt( len, 16 )
-		net.WriteData( string.sub( data, offset, offset + len - 1 ), len )
-	net.Send( ply )
-	return true
-end
-
-function SV.BeginSnapshotSync( ply )
-	if not IsValid( ply ) then return false end
-
-	local data, chunks, buildError = buildSaveData( "snapshot" )
-	if not data then
-		sendSnapshotError( ply, buildError or "snapshot_encode_failed" )
-		return false
-	end
-	local snapshotBlocks, countError = reconcileBuiltBlockCount( data, "snapshot" )
-	if not snapshotBlocks then
-		sendSnapshotError( ply, countError or "snapshot_count_failed" )
-		return false
-	end
-	local json = util.TableToJSON( data )
-	if not json or json == "" then
-		sendSnapshotError( ply, "snapshot_json_failed" )
-		return false
-	end
-
-	local compressed = util.Compress( json )
-	if not compressed or compressed == "" then
-		sendSnapshotError( ply, "snapshot_compress_failed" )
-		return false
-	end
-
-	local partBytes = math.Clamp( syncSnapshotPartBytes(), 4096, sharedReliableBudget() )
-	local parts = math.ceil( #compressed / partBytes )
-	if parts < 1 then
-		sendSnapshotError( ply, "snapshot_empty" )
-		return false
-	end
-
-	local token = tostring( ply:EntIndex() ) .. ":" .. util.CRC( tostring( SysTime() ) .. ":" .. tostring( #compressed ) )
-	SV.SyncQueue[ply] = nil
-	SV.PlayerLoadedChunks[ply] = {}
-	SV.PlayerFullSnapshot[ply] = true
-	SV.SnapshotQueue[ply] = nil
-	SV.ClearReliableNet( ply )
-
-	sendSnapshotBegin( ply, token, nil, parts, #compressed, #chunks, snapshotBlocks )
-	for part = 1, parts do
-		local partIndex = part
-		local offset = ( partIndex - 1 ) * partBytes + 1
-		local len = math.min( partBytes, #compressed - offset + 1 )
-		SV.EnqueueReliableNet( ply, len + NET_MESSAGE_OVERHEAD_BYTES, function( target )
-			return sendSnapshotPart( target, token, partIndex, compressed, offset, len )
-		end )
-	end
-	return true
-end
-
-timer.Create( "mc_snapshot_sync", SYNC_TIMER_INTERVAL, 0, function()
-	for ply, q in pairs( SV.SnapshotQueue ) do
-		if not IsValid( ply ) then SV.SnapshotQueue[ply] = nil continue end
-		local sent = 0
-		local sentBytes = 0
-		local budget = syncMessagesPerTick()
-		local byteBudget = syncReliableBudget()
-		local window = syncInFlightLimit()
-
-		while q.part <= q.parts and sent < budget and sentBytes < byteBudget do
-			local remainingBytes = q.totalBytes - q.offset + 1
-			if remainingBytes <= 0 then break end
-			local len = math.min( q.partBytes, remainingBytes )
-			if sentBytes + len > byteBudget then break end
-			local remainingWindow = window - ( q.inflightBytes or 0 )
-			if remainingWindow < len then break end
-
-			local chunk = string.sub( q.data, q.offset, q.offset + len - 1 )
-			net.Start( "mc_snapshot_part" )
-				net.WriteString( q.token )
-				net.WriteUInt( q.part, 32 )
-				net.WriteUInt( len, 16 )
-				net.WriteData( chunk, len )
-			net.Send( ply )
-
-			q.offset = q.offset + len
-			q.part = q.part + 1
-			q.inflightBytes = ( q.inflightBytes or 0 ) + len
-			sent = sent + 1
-			sentBytes = sentBytes + len
-		end
-
-		if q.part > q.parts and ( q.inflightBytes or 0 ) <= 0 then
-			SV.SnapshotQueue[ply] = nil
-		end
-	end
-end )
-
-net.Receive( "mc_snapshot_ack", function( _, ply )
-	local token = net.ReadString()
-	local bytes = math.Clamp( net.ReadUInt( 32 ), 0, 4194304 )
-	local complete = net.ReadBool()
-	local q = SV.SnapshotQueue[ply]
-	if q and q.token == token then
-		q.inflightBytes = math.max( 0, ( q.inflightBytes or 0 ) - bytes )
-		if complete then
-			SV.SnapshotQueue[ply] = nil
-		end
-	end
-	if complete then
-		SV.PlayerFullSnapshot[ply] = true
-	end
-end )
-
 -- file.Write silently rejects non-whitelisted extensions, so save working files
 -- must never use a .tmp/.bak suffix: stage them on whitelisted siblings.
 local function savePathSibling( path, suffix )
@@ -2385,10 +1991,7 @@ hook.Add( "PlayerInitialSpawn", "mc_sync", function( ply )
 end )
 
 hook.Add( "PlayerDisconnected", "mc_sync_clean", function( ply )
-	SV.SyncQueue[ply] = nil
-	SV.SnapshotQueue[ply] = nil
-	SV.PlayerLoadedChunks[ply] = nil
-	SV.PlayerFullSnapshot[ply] = nil
+	SV.ReliableNetQueues[ply] = nil
 	SV.PlayerHTTPDisabled[ply] = nil
 end )
 
@@ -2445,10 +2048,7 @@ concommand.Add( "mc_clear", function( ply )
 	SV.PhysDirtyPriority = {}
 	SV.PhysDirtyBulk = {}
 	SV.PhysDirtyBulkOrder = {}
-	SV.SyncQueue = {}
-	SV.SnapshotQueue = {}
-	SV.PlayerLoadedChunks = {}
-	SV.PlayerFullSnapshot = {}
+	SV.ReliableNetQueues = {}
 	if SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
 	SV.Dirty = true
 	for _, target in ipairs( player.GetAll() ) do SV.BeginSync( target ) end

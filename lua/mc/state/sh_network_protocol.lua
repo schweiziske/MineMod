@@ -14,8 +14,8 @@ MC.Net = Net
 -- Protocol 6 adds compressed partial-world chunk hydration. Large commands
 -- such as /fill now publish final Chunk payloads instead of replaying a paced
 -- list of per-cell transactions on the client.
-Net.PROTOCOL_VERSION = 6
-Net.MIN_PROTOCOL_VERSION = 6
+Net.PROTOCOL_VERSION = 7
+Net.MIN_PROTOCOL_VERSION = 7
 
 -- Shared coordinate and collection widths.
 Net.COORD_BITS = 20          -- signed block/chunk coordinate payloads
@@ -38,7 +38,6 @@ Net.STATE_STREAM_PART_BYTES = 30000
 Net.MAX_STATE_STREAM_CELLS = 131072
 Net.CHUNK_PATCH_PART_BYTES = 30000
 Net.CHUNK_PATCH_MAX_BYTES = 16777216
-Net.CHUNK_PATCH_FAST_WINDOW_BYTES = 262144
 
 Net.TransactionFlag = {
 	CORRECTION = 0x01,
@@ -90,11 +89,9 @@ function Net.ValidateStateId( stateId )
 	return stateId ~= nil and stateId >= 0 and stateId <= Net.MAX_STATE_ID and stateId % 1 == 0
 end
 
--- Keep all network-string allocation centralized.  Legacy names remain
--- registered while Phase 4 callers migrate incrementally.
+-- Keep all network-string allocation centralized. The state-aware protocol is
+-- the only full-map transport; removed legacy names must not be reintroduced.
 Net.MessageNames = {
-	"mc_full", "mc_full_begin", "mc_full_part", "mc_full_end", "mc_full_ack",
-	"mc_snapshot_begin", "mc_snapshot_part", "mc_snapshot_ack",
 	"mc_http_manifest", "mc_http_chunk", "mc_http_chunk_bulk", "mc_http_failed",
 	"mc_unload_chunk", "mc_set", "mc_set_bulk", "mc_set_bulk_fast",
 	"mc_reliable_ack", "mc_fx", "mc_creative_place_anim", "mc_creative_break_anim",

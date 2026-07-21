@@ -47,42 +47,13 @@ MC.Atlas = {
 	MATERIAL_TRANSLUCENT = "mc/atlas_365_translucent",
 }
 
------------------------------------------------------------------- net sizing
--- Protocol constants and network strings live in state/sh_network_protocol.lua.
--- It is loaded before this file; the legacy fields used below remain available
--- while the state-aware transport is introduced.
-
-local SYNC_MESSAGE_OVERHEAD_BYTES = 64
-local SYNC_CELL_BITS = MC.Net.LOCAL_BITS + MC.Net.ID_BITS + MC.Net.ORIENT_BITS
-
-function MC.EstimateSyncBeginBytes()
-	return math.ceil( ( MC.Net.COORD_BITS * 3 + MC.Net.COUNT_BITS ) / 8 ) + SYNC_MESSAGE_OVERHEAD_BYTES
-end
-
-function MC.EstimateSyncPartBytes( cells )
-	cells = math.max( 0, math.floor( tonumber( cells ) or 0 ) )
-	local bits = MC.Net.COORD_BITS * 3 + MC.Net.COUNT_BITS + cells * SYNC_CELL_BITS
-	return math.ceil( bits / 8 ) + SYNC_MESSAGE_OVERHEAD_BYTES
-end
-
-function MC.EstimateSyncEndBytes()
-	return math.ceil( ( MC.Net.COORD_BITS * 3 ) / 8 ) + SYNC_MESSAGE_OVERHEAD_BYTES
-end
-
-function MC.SyncCellsForByteBudget( bytes )
-	bytes = math.floor( tonumber( bytes ) or 0 )
-	local bits = ( bytes - SYNC_MESSAGE_OVERHEAD_BYTES ) * 8 - MC.Net.COORD_BITS * 3 - MC.Net.COUNT_BITS
-	if bits < SYNC_CELL_BITS then return 0 end
-	return math.floor( bits / SYNC_CELL_BITS )
-end
-
-MC.Config.SyncCellsPerPart = 2048
+------------------------------------------------------------------ reliable transport pacing
+-- All large state payloads (join snapshots, ordered streams, Chunk hydration,
+-- paced legacy bulk messages and preset downloads) share this one queue.
 MC.Config.SyncMessagesPerTick = 4
-MC.Config.SyncReliableBudget = 32768
+MC.Config.SyncReliableBudget = 3400
 MC.Config.SyncFrameMS = 4
-MC.Config.SyncInFlightLimit = 65536
-MC.Config.SyncSnapshot = 1
-MC.Config.SyncSnapshotPartBytes = 32768
+MC.Config.SyncInFlightLimit = 32768
 MC.Config.FillBatchCells = 4096
 MC.Config.FillBatchChunks = 16
 MC.Config.FillBatchInterval = 0.05
@@ -98,7 +69,6 @@ MC.Config.ServerCollisionAimRadius = 1
 MC.Config.ClientCollisionAimRadius = 1
 MC.Config.LargeWorldLazyLoad = 0
 MC.Config.LargeWorldChunkThreshold = 2048
-MC.Config.SyncSnapshotMaxChunks = 0
 MC.Config.ChunkStorePartCache = 8
 MC.Config.ChunkStoreLoadsPerTick = 8
 MC.Config.ChunkStoreFrameMS = 3
@@ -123,15 +93,15 @@ if SERVER then
 	MC.Config.Autosave    = GetConVar( "mc_autosave" ) or CreateConVar( "mc_autosave", "0", F, "Seconds between autosaves (0 disables)" )
 	MC.Config.SavePublic  = GetConVar( "mc_save_public" ) or CreateConVar( "mc_save_public", "0", F, "Allow non-admin players to list/load/save MC saves; delete remains admin-only" )
 	MC.Config.PresetPublic = GetConVar( "mc_preset_public" ) or CreateConVar( "mc_preset_public", "0", F, "Allow non-admin players to list/load/save/place MC presets" )
-	MC.Config.SyncCells   = GetConVar( "mc_sync_cells_per_part" ) or CreateConVar( "mc_sync_cells_per_part", tostring( MC.Config.SyncCellsPerPart ), F, "Blocks per streamed sync net message" )
-	MC.Config.SyncMsgs    = GetConVar( "mc_sync_messages_per_tick" ) or CreateConVar( "mc_sync_messages_per_tick", tostring( MC.Config.SyncMessagesPerTick ), F, "Streamed sync net messages per 0.05s tick" )
-	MC.Config.SyncBudget  = GetConVar( "mc_sync_reliable_budget" ) or CreateConVar( "mc_sync_reliable_budget", tostring( MC.Config.SyncReliableBudget ), F, "Approx max reliable sync bytes per 0.05s tick" )
-	MC.Config.SyncFast    = GetConVar( "mc_sync_fast" ) or CreateConVar( "mc_sync_fast", "1", F, "Use ack-windowed fast full-map sync" )
+	MC.Config.SyncMsgs    = GetConVar( "mc_sync_messages_per_tick" ) or CreateConVar( "mc_sync_messages_per_tick", tostring( MC.Config.SyncMessagesPerTick ), F, "Maximum queued reliable state messages sent per player per 0.05s tick", 1, 16 )
+	MC.Config.SyncBudget  = GetConVar( "mc_sync_reliable_budget" ) or CreateConVar( "mc_sync_reliable_budget", tostring( MC.Config.SyncReliableBudget ), F, "Hard queued reliable state byte budget per player per 0.05s tick", 1024, 8192 )
 	MC.Config.SyncFrame   = GetConVar( "mc_sync_frame_ms" ) or CreateConVar( "mc_sync_frame_ms", tostring( MC.Config.SyncFrameMS ), F, "Approx server CPU milliseconds spent streaming full sync each tick" )
-	MC.Config.SyncWindow  = GetConVar( "mc_sync_inflight_limit" ) or CreateConVar( "mc_sync_inflight_limit", tostring( MC.Config.SyncInFlightLimit ), F, "Max unacknowledged full-sync bytes per syncing client" )
-	MC.Config.SyncSnapshot = GetConVar( "mc_sync_snapshot" ) or CreateConVar( "mc_sync_snapshot", tostring( MC.Config.SyncSnapshot ), F, "Sync clients by sending one compressed save snapshot, then incremental edits" )
-	MC.Config.SyncSnapshotPartBytes = GetConVar( "mc_sync_snapshot_part_bytes" ) or CreateConVar( "mc_sync_snapshot_part_bytes", tostring( MC.Config.SyncSnapshotPartBytes ), F, "Bytes per snapshot sync net part" )
-	MC.Config.SyncSnapshotMaxChunks = GetConVar( "mc_sync_snapshot_max_chunks" ) or CreateConVar( "mc_sync_snapshot_max_chunks", tostring( MC.Config.SyncSnapshotMaxChunks ), F, "Legacy setting; full snapshot burst sync ignores this limit" )
+	MC.Config.SyncWindow  = GetConVar( "mc_sync_inflight_limit" ) or CreateConVar( "mc_sync_inflight_limit", tostring( MC.Config.SyncInFlightLimit ), F, "Maximum acknowledged reliable state bytes in flight per player", 8192, 65536 )
+
+	-- Migrate the old misleading defaults. They were displayed as 32/64KB even
+	-- though the old sender silently clamped or bypassed them on different paths.
+	if MC.Config.SyncBudget:GetInt() == 32768 then MC.Config.SyncBudget:SetInt( MC.Config.SyncReliableBudget ) end
+	if MC.Config.SyncWindow:GetInt() == 65536 then MC.Config.SyncWindow:SetInt( MC.Config.SyncInFlightLimit ) end
 	MC.Config.ChunkHTTPEnabled = GetConVar( "mc_chunk_http_enabled" ) or CreateConVar( "mc_chunk_http_enabled", tostring( MC.Config.ChunkHTTPEnabled ), F, "Allow clients to fetch lazy-save base chunks over HTTP instead of GMod net" )
 	MC.Config.ChunkHTTPBaseURL = GetConVar( "mc_chunk_http_base_url" ) or CreateConVar( "mc_chunk_http_base_url", tostring( MC.Config.ChunkHTTPBaseURL ), F, "HTTP root URL serving garrysmod/data for mc lazy save manifests and parts" )
 	MC.Config.StreamChunkSpanXY = GetConVar( "mc_stream_chunk_span_xy" ) or CreateConVar( "mc_stream_chunk_span_xy", tostring( MC.Config.StreamChunkSpanXY ), F, "Legacy client chunk range sync span; direct full sync ignores this" )
