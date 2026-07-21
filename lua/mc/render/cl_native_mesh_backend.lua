@@ -369,7 +369,10 @@ local function defsDiskPath( cacheKey )
 end
 local function defsBundledPath( cacheKey )
 	local crc = util and util.CRC and util.CRC( cacheKey ) or tostring( #cacheKey )
-	return "lua/mc/generated/native_defs_" .. tostring( crc ) .. ".dat"
+	-- Workshop's GMAD whitelist rejects arbitrary .dat files under lua/.
+	-- This is still opaque binary data read through file.Read; the .lua suffix
+	-- only gives the bundled cache a packageable path and it is never included.
+	return "lua/mc/generated/native_defs_" .. tostring( crc ) .. ".lua"
 end
 local function parseDefsCacheData( cacheKey, data )
 	if not isstring( data ) or string.sub( data, 1, #DEFS_DISK_MAGIC ) ~= DEFS_DISK_MAGIC then return nil end

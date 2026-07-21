@@ -44,7 +44,7 @@ if CLIENT then
 	SWEP.DrawWeaponInfoBox = false
 
 	function SWEP:DrawWeaponSelection( x, y, width, height, alpha )
-		local size = math.min( width, height )
+		local size = math.min( width, height ) * 0.70
 		surface.SetDrawColor( 255, 255, 255, alpha or 255 )
 		surface.SetTexture( self.WepSelectIcon )
 		surface.DrawTexturedRect( x + ( width - size ) * 0.5, y + ( height - size ) * 0.5, size, size )
@@ -253,17 +253,27 @@ function SWEP:SecondaryAttack()
 	end
 end
 
+-- In single-player weapon input is handled by the server realm. Keep the UI
+-- opener client-only, but explicitly bridge Reload across realms there.
+function SWEP:OpenCreativeInventoryClient()
+	if not CLIENT then return end
+	if IsValid( MC.CreativeFrame ) and MC.CreativeFrame:IsVisible() then return end
+	MC.OpenCreativeInventory( function( id, stateId )
+		if stateId ~= nil and MC.SetCreativeHotbarSlotStateID then
+			MC.SetCreativeHotbarSlotStateID( MC.GetCreativeHotbarSelectedSlot(), id, stateId )
+		else
+			MC.SetCreativeHotbarSlot( MC.GetCreativeHotbarSelectedSlot(), id )
+		end
+	end, { closeOnSelect = false } )
+end
+
 function SWEP:Reload()
-	if CLIENT then
-		if IsValid( MC.CreativeFrame ) and MC.CreativeFrame:IsVisible() then return end
-		MC.OpenCreativeInventory( function( id, stateId )
-			if stateId ~= nil and MC.SetCreativeHotbarSlotStateID then
-				MC.SetCreativeHotbarSlotStateID( MC.GetCreativeHotbarSelectedSlot(), id, stateId )
-			else
-				MC.SetCreativeHotbarSlot( MC.GetCreativeHotbarSelectedSlot(), id )
-			end
-		end, { closeOnSelect = false } )
+	if SERVER then
+		if game.SinglePlayer() then self:CallOnClient( "OpenCreativeInventoryClient" ) end
+		return
 	end
+	if game.SinglePlayer() then return end
+	self:OpenCreativeInventoryClient()
 end
 
 if CLIENT then
