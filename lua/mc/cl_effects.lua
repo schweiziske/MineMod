@@ -32,8 +32,16 @@ local ParticleAtlasTextureName = nil
 local ParticleFallbackMaterial = Material( "particle/particle_noisesphere" )
 local PredictedFx = MC.PredictedFx or {}
 MC.PredictedFx = PredictedFx
-local ParticleUvSteps = 8
+local ParticleUvSteps = 4
 local MaxDestroyParticles = 64
+local ParticleWarmQueue = {}
+local ParticleReadyBursts = {}
+local ParticleWarmByTile = {}
+local ParticleEmitterPrewarmed = false
+local ParticleAtlasPrewarmed = false
+local ParticleWarmMaterialsPerFrame = 4
+local ParticleWarmFrameSeconds = 0.001
+local ParticleWarmBurstsPerFrame = 2
 
 function MC.GetBlockParticleTile( id )
 	if MC.BlockParticleTile then
@@ -102,7 +110,7 @@ local function particleMaterialForTile( tileName, col, row )
 	local scaleY = atlas.TILE * 0.25 / atlas.H
 	local translateX = ( atlasColumn * stride + pad + col * sampleOffset * atlas.TILE ) / atlas.W
 	local translateY = ( atlasRow * stride + pad + row * sampleOffset * atlas.TILE ) / atlas.H
-	local matName = "mc_particle_atlas_v1_" .. tile .. "_" .. col .. "_" .. row
+	local matName = "mc_particle_atlas_v2_" .. tile .. "_" .. col .. "_" .. row
 	local transform = string.format(
 		"center 0 0 scale %.9f %.9f rotate 0 translate %.9f %.9f",
 		scaleX, scaleY, translateX, translateY
@@ -263,7 +271,7 @@ local function modelParticleBoxes( b )
 	return b._particleBoxes
 end
 
-local function spawnBreakParticles( id, orient, bx, by, bz, options )
+local function spawnBreakParticlesNow( id, orient, bx, by, bz, options )
 	options = istable( options ) and options or {}
 	local b = MC.Blocks and MC.Blocks[id]
 	if b and b.spawnTerrainParticles == false then return 0 end
@@ -325,6 +333,109 @@ local function spawnBreakParticles( id, orient, bx, by, bz, options )
 	emitter:Finish()
 	return count
 end
+
+local function copyParticleOptions( options )
+	local copy = {}
+	for key, value in pairs( options or {} ) do copy[key] = value end
+	return copy
+end
+
+local function prewarmParticleEmitter( material, atlas )
+	if atlas and ParticleAtlasPrewarmed or not atlas and ParticleEmitterPrewarmed then return true end
+	local ply = LocalPlayer()
+	if not IsValid( ply ) then return false end
+	local pos = ply:EyePos() + ply:EyeAngles():Forward() * 32
+	local emitter = ParticleEmitter( pos )
+	if not emitter then return false end
+	local particle = emitter:Add( material, pos )
+	if particle then
+		particle:SetDieTime( 0.05 )
+		particle:SetStartAlpha( 1 )
+		particle:SetEndAlpha( 1 )
+		particle:SetStartSize( 0.01 )
+		particle:SetEndSize( 0.01 )
+		particle:SetVelocity( vector_origin )
+		particle:SetGravity( vector_origin )
+		particle:SetCollide( false )
+		particle:SetLighting( false )
+	end
+	emitter:Finish()
+	if atlas then ParticleAtlasPrewarmed = true else ParticleEmitterPrewarmed = true end
+	return true
+end
+
+local function queueParticleTileWarm( tileName, request )
+	local tile = type( tileName ) == "number" and tileName or MC.Tiles and MC.Tiles[tileName]
+	if tile == nil then return false end
+	local state = ParticleWarmByTile[tile]
+	if state and state.ready then return false end
+	if not state then
+		state = { tile = tile, nextVariant = 0, pending = {} }
+		ParticleWarmByTile[tile] = state
+		ParticleWarmQueue[#ParticleWarmQueue + 1] = state
+	end
+	state.pending[#state.pending + 1] = request
+	return true
+end
+
+local function spawnBreakParticles( id, orient, bx, by, bz, options )
+	options = istable( options ) and options or {}
+	local tileName = options.tileName or tileNameForBlock( id )
+	local queuedOptions = copyParticleOptions( options )
+	queuedOptions.tileName = tileName
+	local request = {
+		id = id, orient = orient,
+		bx = bx, by = by, bz = bz,
+		options = queuedOptions,
+		expires = CurTime() + 3,
+	}
+	if queueParticleTileWarm( tileName, request ) then return 0 end
+	return spawnBreakParticlesNow( id, orient, bx, by, bz, options )
+end
+
+hook.Remove( "Think", "mc_particle_material_prewarm" )
+hook.Add( "Think", "mc_particle_material_prewarm", function()
+	if not ParticleEmitterPrewarmed then prewarmParticleEmitter( ParticleFallbackMaterial, false ) end
+
+	local state = ParticleWarmQueue[1]
+	if state then
+		local atlasTexture = particleAtlasTexture()
+		if atlasTexture then
+			local started = SysTime()
+			local built = 0
+			local variantCount = ParticleUvSteps * ParticleUvSteps
+			while state.nextVariant < variantCount and built < ParticleWarmMaterialsPerFrame
+			and ( built == 0 or SysTime() - started < ParticleWarmFrameSeconds ) do
+				local variant = state.nextVariant
+				local col = math.floor( variant / ParticleUvSteps )
+				local row = variant % ParticleUvSteps
+				local material = particleMaterialForTile( state.tile, col, row )
+				if not ParticleAtlasPrewarmed then prewarmParticleEmitter( material, true ) end
+				state.nextVariant = variant + 1
+				built = built + 1
+			end
+
+			if state.nextVariant >= variantCount then
+				state.ready = true
+				for _, request in ipairs( state.pending ) do
+					ParticleReadyBursts[#ParticleReadyBursts + 1] = request
+				end
+				state.pending = {}
+				table.remove( ParticleWarmQueue, 1 )
+			end
+		end
+	end
+
+	for _ = 1, ParticleWarmBurstsPerFrame do
+		local request = ParticleReadyBursts[1]
+		if not request then break end
+		table.remove( ParticleReadyBursts, 1 )
+		if CurTime() <= request.expires then
+			spawnBreakParticlesNow( request.id, request.orient,
+				request.bx, request.by, request.bz, request.options )
+		end
+	end
+end )
 
 function MC.SpawnBlockBreakParticles( id, orient, bx, by, bz, options )
 	return spawnBreakParticles( id, orient, bx, by, bz, options )

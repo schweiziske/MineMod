@@ -229,7 +229,7 @@ function MC.UpdateSkyLightForBlockChange( bx, by, bz, oldOpacity, newOpacity )
 	if not skyFloodEnabled() then return end
 	if ( tonumber( oldOpacity ) or 0 ) == ( tonumber( newOpacity ) or 0 ) then return end
 	local native = nativeSkyBackend()
-	-- ABI 5 SetCell performs the native incremental sky update before this
+	-- ABI 5+ SetCell performs the native incremental sky update before this
 	-- notification reaches the legacy Lua flood hook.
 	if native then return end
 	bx, by, bz = math.floor( bx ), math.floor( by ), math.floor( bz )

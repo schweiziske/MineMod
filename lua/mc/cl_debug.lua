@@ -197,8 +197,9 @@ concommand.Add( "mc_client_diag", function()
 		if IsValid( e ) then entsRegistered = entsRegistered + 1 end
 	end
 
-	local pending = 0
-	for _ in pairs( MC.PendingFull or {} ) do pending = pending + 1 end
+	local transport = MC.StateNetworkTransport or {}
+	local snapshot = transport.snapshot
+	local pending = snapshot and math.max( 0, ( snapshot.partCount or 0 ) - ( snapshot.receivedParts or 0 ) ) or 0
 	local progress = MC.SyncProgress or {}
 	local renderStats = MC.RenderStats or {}
 	local physStats = MC.ClientPhysStats or {}
