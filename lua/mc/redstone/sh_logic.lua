@@ -265,6 +265,29 @@ local function reserveObserverOffTick( context, poweredState )
 	return scheduled == true or reason == "scheduled_tick_exists"
 end
 
+local observerBlock = MC.BlockByName and MC.BlockByName["minecraft:observer"]
+if observerBlock then
+	local handlers = observerBlock.handlers or {}
+	observerBlock.handlers = handlers
+	local previousMoved = handlers.OnMoved
+	handlers.OnMoved = function( context, stateId )
+		if previousMoved then previousMoved( context, stateId ) end
+		if not SERVER or not MC.SV or not MC.SV.ScheduleBlockTick then return end
+		-- A piston move creates the observer at a new cell without changing the
+		-- block in front through the normal watched-neighbour path. Vanilla still
+		-- emits a pulse after that position change, so migrate the scheduled edge
+		-- to the destination explicitly and discard stale ticks at both cells.
+		if MC.SV.CancelBlockTick then
+			MC.SV.CancelBlockTick( context.movedFromX, context.movedFromY, context.movedFromZ,
+				MC.BlockUpdateKind.SCHEDULED )
+			MC.SV.CancelBlockTick( context.bx, context.by, context.bz, MC.BlockUpdateKind.SCHEDULED )
+		end
+		MC.SV.ScheduleBlockTick(
+			context.bx, context.by, context.bz, 2, MC.BlockUpdateKind.SCHEDULED, stateId
+		)
+	end
+end
+
 MC.RegisterBlockUpdateHandler( "minecraft:observer", {
 	OnNeighborUpdate = function( context )
 		if GetStateProperty( context.stateId, "powered" ) == true then

@@ -408,14 +408,7 @@ end
 
 local function presetClearCells( data, origin, rotation )
 	if MC.PresetClearCells then
-		local cells = MC.PresetClearCells( data, origin, rotation )
-		local out = {}
-		for _, cell in ipairs( cells ) do
-			if MC.GetBlock( cell.bx, cell.by, cell.bz ) ~= 0 then
-				out[#out + 1] = cell
-			end
-		end
-		return out
+		return MC.PresetClearCells( data, origin, rotation )
 	end
 
 	local out = {}
@@ -435,24 +428,72 @@ local function presetClearCells( data, origin, rotation )
 	return out
 end
 
-local function validatePresetPlacement( ply, data, cells, overwrite )
+local function validatePresetData( ply, data )
 	if not canEditPresets( ply ) then return false, "permission" end
 	if not data or not data.anchor then return false, "invalid_preset" end
 	local maxPreset = presetMaxBlocks()
 	local _, _, _, volume = presetSize( data )
 	if maxPreset > 0 and volume > maxPreset then return false, "preset_too_large" end
-	if maxPreset > 0 and #cells > maxPreset then return false, "preset_too_large" end
+	if maxPreset > 0 and #( data.cells or {} ) > maxPreset then return false, "preset_too_large" end
+	return true
+end
 
-	local add = 0
+local function presetStateCells( data, origin, rotation )
+	local transformed = presetCellTable( data, origin, rotation )
+	local out, stateCache = {}, {}
+	for _, cell in ipairs( transformed ) do
+		local cacheKey = tostring( cell.id ) .. ":" .. tostring( cell.orient or 0 )
+		local cached = stateCache[cacheKey]
+		if cached == nil then
+			local stateId, exact, err = MC.StateFromLegacy( cell.id, cell.orient )
+			if not stateId or exact ~= true then return nil, err or "state_not_legacy_projectable" end
+			cached = stateId
+			stateCache[cacheKey] = cached
+		end
+		out[#out + 1] = {
+			bx = cell.bx, by = cell.by, bz = cell.bz,
+			stateId = cached,
+		}
+	end
+	return out
+end
+
+local function presetFinalCells( data, origin, overwrite, rotation )
+	local placed, stateError = presetStateCells( data, origin, rotation )
+	if not placed then return nil, stateError end
+	if not overwrite then return placed end
+
+	-- Insert preset blocks first so the placement FX still prefers a real block,
+	-- then add air only for volume cells not occupied by the saved structure.
+	local final, byKey = {}, {}
+	local function setFinal( bx, by, bz, stateId, onlyIfMissing )
+		local key = MC.CellKey( bx, by, bz )
+		local index = byKey[key]
+		if index then
+			if not onlyIfMissing then final[index].stateId = stateId end
+			return
+		end
+		byKey[key] = #final + 1
+		final[#final + 1] = { bx = bx, by = by, bz = bz, stateId = stateId }
+	end
+	for _, cell in ipairs( placed ) do setFinal( cell.bx, cell.by, cell.bz, cell.stateId, false ) end
+	for _, cell in ipairs( presetClearCells( data, origin, rotation ) ) do
+		setFinal( cell.bx, cell.by, cell.bz, 0, true )
+	end
+	return final
+end
+
+local function validateFinalPresetCells( cells, overwrite )
+	local blockDelta = 0
 	for _, cell in ipairs( cells ) do
 		if not worldBoundsOK( cell.bx, cell.by, cell.bz ) then return false, "out_of_bounds" end
-		local old = MC.GetBlock( cell.bx, cell.by, cell.bz )
-		if not overwrite and old ~= 0 then return false, "occupied" end
-		if old == 0 and cell.id ~= 0 then add = add + 1 end
+		local oldStateId = MC.GetBlockState( cell.bx, cell.by, cell.bz ) or 0
+		if not overwrite and oldStateId ~= 0 then return false, "occupied" end
+		if oldStateId == 0 and cell.stateId ~= 0 then blockDelta = blockDelta + 1 end
+		if oldStateId ~= 0 and cell.stateId == 0 then blockDelta = blockDelta - 1 end
 	end
-
 	local maxBlocks = C.MaxBlocks and C.MaxBlocks:GetInt() or 0
-	if maxBlocks > 0 and SV.BlockCount + add > maxBlocks then return false, "block_limit" end
+	if maxBlocks > 0 and SV.BlockCount + blockDelta > maxBlocks then return false, "block_limit" end
 	return true
 end
 
@@ -465,40 +506,38 @@ function SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 	local data, err = SV.LoadPreset( presetName )
 	if not data then return false, err end
 
-	local cells = presetCellTable( data, origin, rotation )
-	local ok, validateErr = validatePresetPlacement( ply, data, cells, overwrite )
+	local ok, validateErr = validatePresetData( ply, data )
 	if not ok then return false, validateErr end
-
-	local cleared = 0
-	if overwrite then
-		local clearCells = presetClearCells( data, origin, rotation )
-		if #clearCells > 0 then
-			if SV.RemoveBlocksBulk then
-				cleared = SV.RemoveBlocksBulk( clearCells, {
-					actor = ply,
-					fx = false,
-					handlers = true,
-					priorityPhys = false,
-					deferPhys = true,
-					netPaced = true,
-					cellsPerMessage = PRESET_BULK_CELLS_PER_MESSAGE,
-				} )
-			else
-				for _, cell in ipairs( clearCells ) do
-					local removed = SV.SetBlock( cell.bx, cell.by, cell.bz, 0, 0, {
-						actor = ply,
-						fx = false,
-						handlers = true,
-						priorityPhys = false,
-					} )
-					if removed then cleared = cleared + 1 end
-				end
-			end
-		end
+	local cells, cellsError = presetFinalCells( data, origin, overwrite, rotation )
+	if not cells then return false, cellsError end
+	for _, cell in ipairs( cells ) do
+		if not worldBoundsOK( cell.bx, cell.by, cell.bz ) then return false, "out_of_bounds" end
 	end
 
 	local changed, bulkErr
-	if SV.SetBlocksBulk then
+	if SV.ApplyBlockHydrationTransaction then
+		local result = SV.ApplyBlockHydrationTransaction( cells, {
+			actor = ply,
+			fx = true,
+			fxIndex = 1,
+			fxPreferPlaced = true,
+			handlers = true,
+			blockUpdates = true,
+			maxBlockCount = C.MaxBlocks and C.MaxBlocks:GetInt() or 0,
+			validateChange = function( info )
+				if not overwrite and info.oldStateId ~= 0 then return false, "occupied" end
+				return true
+			end,
+		} )
+		if result.ok == true then
+			changed = result.changed
+		elseif result.error ~= "chunk_hydration_transport_unavailable" then
+			return false, result.error or "preset_hydration_failed"
+		end
+	end
+	if changed == nil and SV.SetBlocksBulk then
+		local valid, fallbackError = validateFinalPresetCells( cells, overwrite )
+		if not valid then return false, fallbackError end
 		changed, bulkErr = SV.SetBlocksBulk( cells, {
 			actor = ply,
 			fx = true,
@@ -507,22 +546,14 @@ function SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 			priorityPhys = false,
 			deferPhys = true,
 			netPaced = true,
+			stateStream = true,
 			cellsPerMessage = PRESET_BULK_CELLS_PER_MESSAGE,
 		} )
-	else
-		changed = 0
-		for _, cell in ipairs( cells ) do
-			local cellOk = SV.SetBlock( cell.bx, cell.by, cell.bz, cell.id, cell.orient, {
-				actor = ply,
-				fx = changed == 0,
-				handlers = true,
-				priorityPhys = false,
-			} )
-			if cellOk then changed = changed + 1 end
-		end
+	elseif changed == nil then
+		return false, "bulk_api_unavailable"
 	end
 
-	local totalChanged = ( changed or 0 ) + cleared
+	local totalChanged = changed or 0
 	if totalChanged <= 0 then return false, bulkErr or "unchanged" end
 	if IsValid( ply ) then
 		local key = overwrite and "server.preset_overwritten" or "server.preset_placed"

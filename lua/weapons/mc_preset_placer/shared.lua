@@ -11,10 +11,10 @@ local function L( key, fallback, vars )
 end
 
 SWEP.PrintName     = L( "weapon.mc_preset_placer.name", "MC 预设放置器" )
-SWEP.Author        = "MC"
+SWEP.Author        = "schweiziske"
 SWEP.Purpose       = L( "weapon.mc_preset_placer.purpose", "保存和放置 Minecraft 方块建筑预设" )
 SWEP.Instructions  = L( "weapon.mc_preset_placer.instructions", "R 打开预设界面  左键选择/放置  右键撤销  G 旋转" )
-SWEP.Category      = "MC"
+SWEP.Category      = "Minecraft"
 
 SWEP.Spawnable     = true
 SWEP.AdminOnly     = false
@@ -27,6 +27,19 @@ SWEP.Base          = "weapon_base"
 SWEP.ViewModel     = "models/weapons/c_toolgun.mdl"
 SWEP.WorldModel    = "models/weapons/w_toolgun.mdl"
 SWEP.UseHands      = true
+
+if CLIENT then
+	SWEP.WepSelectIcon = surface.GetTextureID( "vgui/entities/mc_preset_placer" )
+	SWEP.BounceWeaponIcon = false
+	SWEP.DrawWeaponInfoBox = false
+
+	function SWEP:DrawWeaponSelection( x, y, width, height, alpha )
+		local size = math.min( width, height ) * 0.70
+		surface.SetDrawColor( 255, 255, 255, alpha or 255 )
+		surface.SetTexture( self.WepSelectIcon )
+		surface.DrawTexturedRect( x + ( width - size ) * 0.5, y + ( height - size ) * 0.5, size, size )
+	end
+end
 
 SWEP.Primary   = { ClipSize = -1, DefaultClip = -1, Automatic = false, Ammo = "none" }
 SWEP.Secondary = { ClipSize = -1, DefaultClip = -1, Automatic = false, Ammo = "none" }
@@ -57,18 +70,38 @@ function SWEP:Deploy()
 	return true
 end
 
+function SWEP:PrimaryAttackClient()
+	if not CLIENT then return end
+	local owner = self:GetOwner()
+	if not IsValid( owner ) or owner ~= LocalPlayer() then return end
+
+	if MC.PresetMode == "place" and MC.ActivePreset then
+		if MC.PlaceActivePreset then MC.PlaceActivePreset() end
+	else
+		if MC.PresetAdvanceSelection then MC.PresetAdvanceSelection() end
+	end
+end
+
 function SWEP:PrimaryAttack()
 	self:SetNextPrimaryFire( CurTime() + STEP )
 	local owner = self:GetOwner()
 	if not IsValid( owner ) then return end
 
-	if CLIENT and IsFirstTimePredicted() and owner == LocalPlayer() then
-		if MC.PresetMode == "place" and MC.ActivePreset then
-			if MC.PlaceActivePreset then MC.PlaceActivePreset() end
-		else
-			if MC.PresetAdvanceSelection then MC.PresetAdvanceSelection() end
-		end
+	if SERVER then
+		if game.SinglePlayer() then self:CallOnClient( "PrimaryAttackClient" ) end
+		return
 	end
+	if game.SinglePlayer() then return end
+	if IsFirstTimePredicted() and owner == LocalPlayer() then
+		self:PrimaryAttackClient()
+	end
+end
+
+function SWEP:SecondaryAttackClient()
+	if not CLIENT then return end
+	local owner = self:GetOwner()
+	if not IsValid( owner ) or owner ~= LocalPlayer() then return end
+	if MC.PresetUndoSelection then MC.PresetUndoSelection() end
 end
 
 function SWEP:SecondaryAttack()
@@ -76,16 +109,31 @@ function SWEP:SecondaryAttack()
 	local owner = self:GetOwner()
 	if not IsValid( owner ) then return end
 
-	if CLIENT and IsFirstTimePredicted() and owner == LocalPlayer() and MC.PresetUndoSelection then
-		MC.PresetUndoSelection()
+	if SERVER then
+		if game.SinglePlayer() then self:CallOnClient( "SecondaryAttackClient" ) end
+		return
+	end
+	if game.SinglePlayer() then return end
+	if IsFirstTimePredicted() and owner == LocalPlayer() then
+		self:SecondaryAttackClient()
 	end
 end
 
+-- In single-player weapon input is handled by the server realm. Keep the UI
+-- opener client-only, but explicitly bridge Reload across realms there.
+function SWEP:OpenPresetManagerClient()
+	if not CLIENT then return end
+	if IsValid( MC.PresetManagerFrame ) and MC.PresetManagerFrame:IsVisible() then return end
+	if MC.OpenPresetManager then MC.OpenPresetManager() end
+end
+
 function SWEP:Reload()
-	if CLIENT then
-		if IsValid( MC.PresetManagerFrame ) and MC.PresetManagerFrame:IsVisible() then return end
-		if MC.OpenPresetManager then MC.OpenPresetManager() end
+	if SERVER then
+		if game.SinglePlayer() then self:CallOnClient( "OpenPresetManagerClient" ) end
+		return
 	end
+	if game.SinglePlayer() then return end
+	self:OpenPresetManagerClient()
 end
 
 if CLIENT then
