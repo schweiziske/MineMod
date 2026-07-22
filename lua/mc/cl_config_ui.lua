@@ -90,6 +90,13 @@ local function unitLabel( unit )
 	return configText( labels[1], labels[2] )
 end
 
+local function configEntryVisible( entry )
+	if entry.requiresNativeMesh then
+		return MC.NativeMeshModuleAvailable ~= false
+	end
+	return true
+end
+
 local function getCVarValue( scope, name )
 	if scope == "server" then
 		return MC.ConfigServerValues[name] or ""
@@ -648,7 +655,23 @@ function MC.OpenConfigMenu()
 	styleScrollPanel( settingsScroll )
 
 	local function categoriesForScope()
-		return ( MC.ConfigConVars and MC.ConfigConVars[activeScope] ) or {}
+		local visible = {}
+		for _, entryCategory in ipairs( ( MC.ConfigConVars and MC.ConfigConVars[activeScope] ) or {} ) do
+			if configEntryVisible( entryCategory ) then
+				local items = {}
+				for _, entry in ipairs( entryCategory.items or {} ) do
+					if configEntryVisible( entry ) then items[#items + 1] = entry end
+				end
+
+				if #items > 0 then
+					local visibleCategory = {}
+					for key, value in pairs( entryCategory ) do visibleCategory[key] = value end
+					visibleCategory.items = items
+					visible[#visible + 1] = visibleCategory
+				end
+			end
+		end
+		return visible
 	end
 
 	local function activeCategoryData()
@@ -850,6 +873,13 @@ function MC.OpenConfigMenu()
 
 	updateScopeHint()
 	rebuildCategories()
+	MC.ConfigRefreshVisibility = function()
+		if IsValid( fr ) then rebuildCategories() end
+	end
+	fr.OnRemove = function()
+		if MC.ConfigFrame == fr then MC.ConfigFrame = nil end
+		MC.ConfigRefreshVisibility = nil
+	end
 end
 
 net.Receive( "mc_config_values", function()

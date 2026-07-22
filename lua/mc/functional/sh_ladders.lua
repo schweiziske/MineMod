@@ -47,11 +47,13 @@ local function ladderNormalFromBox( box )
 	local sy = math.abs( box[5] - box[2] )
 	if sx < sy then
 		local cx = ( box[1] + box[4] ) * 0.5
-		return Vector( cx >= 0.5 and 1 or -1, 0, 0 )
+		-- The thin box sits against the supporting block; Source's ladder
+		-- plane normal points the other way, outward toward the player.
+		return Vector( cx >= 0.5 and -1 or 1, 0, 0 )
 	end
 
 	local cy = ( box[2] + box[5] ) * 0.5
-	return Vector( 0, cy >= 0.5 and 1 or -1, 0 )
+	return Vector( 0, cy >= 0.5 and -1 or 1, 0 )
 end
 
 local function sweptAABBHitFraction( ax0, ay0, az0, ax1, ay1, az1, offset, bx0, by0, bz0, bx1, by1, bz1 )

@@ -479,6 +479,33 @@ function Store.RecordChunkStateEdits( key, localIndexes, stateId )
 	end
 end
 
+-- Heterogeneous storage-level edits use alternating localIndex/stateId pairs.
+-- Preset hydration can therefore update the lazy-save overlay once per Chunk
+-- without decoding world coordinates or formatting the same state repeatedly.
+function Store.RecordChunkStateMap( key, localStatePairs )
+	if not Store.IsLazyWorld() then return end
+	key = tostring( key or "" )
+	if key == "" or not istable( localStatePairs ) then return end
+	local edits = Store.EditChunks[key]
+	if not edits then
+		edits = {}
+		Store.EditChunks[key] = edits
+	end
+	local specs = {}
+	for index = 1, #localStatePairs, 2 do
+		local li = math.floor( tonumber( localStatePairs[index] ) or -1 )
+		local stateId = math.floor( tonumber( localStatePairs[index + 1] ) or -1 )
+		if MC.LocalIndexInRange( li ) and stateId >= 0 then
+			local spec = specs[stateId]
+			if spec == nil then
+				spec = MC.FormatBlockState( stateId ) or false
+				specs[stateId] = spec
+			end
+			if spec then edits[tostring( li )] = { state = spec } end
+		end
+	end
+end
+
 function Store.SaveOverlay()
 	return {
 		v = 2,

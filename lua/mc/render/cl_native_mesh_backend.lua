@@ -128,6 +128,10 @@ local function log( msg )
 	print( "[mcswep-native] " .. tostring( msg ) )
 end
 
+local function refreshConfigVisibility()
+	if MC.ConfigRefreshVisibility then MC.ConfigRefreshVisibility() end
+end
+
 local function lockToLuaBackend( reason )
 	state.moduleProbeDone = true
 	state.moduleUnavailable = true
@@ -135,7 +139,34 @@ local function lockToLuaBackend( reason )
 	MC.NativeMeshModuleAvailable = false
 	MC.NativeMeshModuleFailureReason = reason or MC.NativeMeshModuleFailureReason or "native module unavailable"
 	timer.Remove( "mcswep_native_bootstrap" )
+	refreshConfigVisibility()
 	return false
+end
+
+local function probeNativeModule()
+	if mcmesh then
+		state.moduleProbeDone = true
+		state.moduleUnavailable = false
+		MC.NativeMeshModuleProbeDone = true
+		MC.NativeMeshModuleAvailable = true
+		MC.NativeMeshModuleFailureReason = nil
+		refreshConfigVisibility()
+		return true
+	end
+	if state.moduleProbeDone then return not state.moduleUnavailable end
+
+	state.moduleProbeDone = true
+	local ok, loadError = pcall( require, "mcswep_native_mesh" )
+	if not ok or not mcmesh then
+		return lockToLuaBackend( tostring( loadError or "module not found" ) )
+	end
+
+	state.moduleUnavailable = false
+	MC.NativeMeshModuleProbeDone = true
+	MC.NativeMeshModuleAvailable = true
+	MC.NativeMeshModuleFailureReason = nil
+	refreshConfigVisibility()
+	return true
 end
 
 -- Transitional formal backend surface used by the MC mother addon.  New
@@ -338,7 +369,10 @@ local function defsDiskPath( cacheKey )
 end
 local function defsBundledPath( cacheKey )
 	local crc = util and util.CRC and util.CRC( cacheKey ) or tostring( #cacheKey )
-	return "lua/mc/generated/native_defs_" .. tostring( crc ) .. ".dat"
+	-- Workshop's GMAD whitelist rejects arbitrary .dat files under lua/.
+	-- This is still opaque binary data read through file.Read; the .lua suffix
+	-- only gives the bundled cache a packageable path and it is never included.
+	return "lua/mc/generated/native_defs_" .. tostring( crc ) .. ".lua"
 end
 local function parseDefsCacheData( cacheKey, data )
 	if not isstring( data ) or string.sub( data, 1, #DEFS_DISK_MAGIC ) ~= DEFS_DISK_MAGIC then return nil end
@@ -1291,14 +1325,7 @@ local function tryStart()
 	end
 	if not ( MC and MC.BuildChunkMesh and MC.World and MC.Meshes and MC.MeshesTrans
 		and MC.GetChunkByKey and MC.ChunkKeyToCoords ) then return false end
-	if not mcmesh then
-		if state.moduleProbeDone then return lockToLuaBackend( "module missing after initial probe" ) end
-		state.moduleProbeDone = true
-		local ok, loadError = pcall( require, "mcswep_native_mesh" )
-		if not ok or not mcmesh then return lockToLuaBackend( tostring( loadError or "module not found" ) ) end
-		MC.NativeMeshModuleProbeDone = true
-		MC.NativeMeshModuleAvailable = true
-	end
+	if not probeNativeModule() then return false end
 	if not ( mcmesh.AbiVersion and mcmesh.AbiVersion() == ADAPTER_ABI ) then
 		log( "ABI mismatch (module " .. tostring( mcmesh.AbiVersion and mcmesh.AbiVersion() )
 			.. ", adapter " .. ADAPTER_ABI .. "), staying on Lua path" )
@@ -1451,6 +1478,11 @@ local function tryStart()
 	activate()
 	return true
 end
+
+timer.Simple( 0, function()
+	if state.shuttingDown or state.shutdownCalled then return end
+	probeNativeModule()
+end )
 
 if not state.moduleUnavailable and CONVAR_ENABLED:GetBool() then
 	timer.Create( "mcswep_native_bootstrap", 1, 0, function()

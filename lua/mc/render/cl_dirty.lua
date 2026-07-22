@@ -397,9 +397,9 @@ hook.Add( "Think", "mc_meshbuild", function()
 		end
 	end
 	flushBulkCollisionQueue()
-	if geometrySections > 0 or lightSections > 0 then
-		maybePrintMeshBuildFramePerf( frameStart, geometryKeys, geometrySections, lightKeys, lightSections )
-	end
+	-- if geometrySections > 0 or lightSections > 0 then
+	-- 	maybePrintMeshBuildFramePerf( frameStart, geometryKeys, geometrySections, lightKeys, lightSections )
+	-- end
 end )
 
 -- free all meshes (used by mc_clear)
