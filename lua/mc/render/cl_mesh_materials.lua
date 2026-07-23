@@ -13,24 +13,73 @@ local function atlasPngPath( path )
 	return path .. ".png"
 end
 
--- single atlas material: alpha cutout (glass/leaves), vertex-shaded, backface-culled
-MC.Material = Material( atlasPngPath( MC.Atlas.MATERIAL or "mc/atlas_365" ), "alphatest vertexcolor" )
-MC.MaterialOpaqueCPU = MC.Material
+local function atlasMaterialTexture( material )
+	local texture = material and material.GetTexture and material:GetTexture( "$basetexture" ) or nil
+	if not texture or ( texture.IsError and texture:IsError() ) then return nil end
+	return texture
+end
 
--- second material over the same atlas pixels for translucent blocks: real alpha
--- blending in the translucent pass. GMod caches materials by path, so the build
--- writes a separate translucent atlas VMT/VTF instead of rebinding one texture
--- through two different flag sets.
-local function translucentAtlasPath( path )
-	path = path or "mc/atlas_365"
-	return path:gsub( "%.png$", "" ) .. "_translucent"
+local function loadAtlasSource( path )
+	-- Material() caches generated PNG materials. Older texture-pack code changed
+	-- the cached "alphatest vertexcolor" object itself, so asking for that same
+	-- object after a Lua refresh can return its stale/error $basetexture. Use a
+	-- separate, read-only PNG material cache entry and only copy its ITexture to
+	-- the mutable render proxies below.
+	return Material( atlasPngPath( path ), "noclamp mips" )
 end
-local transPath = MC.Atlas.MATERIAL_TRANSLUCENT or translucentAtlasPath( MC.Atlas.MATERIAL )
-MC.MaterialTranslucent = Material( atlasPngPath( transPath ), "translucent vertexcolor" )
-if not MC.MaterialTranslucent or MC.MaterialTranslucent:IsError() then
-	-- missing copy: fall back to the cutout material rather than drawing white
-	MC.MaterialTranslucent = MC.Material
+
+local function createCpuAtlasProxy( name, texture, translucent )
+	local textureName = texture and texture.GetName and texture:GetName() or nil
+	if not ( CreateMaterial and textureName and textureName ~= "" ) then return nil end
+	local params = {
+		["$basetexture"] = textureName,
+		["$vertexcolor"] = "1",
+		["$nocull"] = "0",
+	}
+	if translucent then
+		params["$translucent"] = "1"
+	else
+		params["$alphatest"] = "1"
+		params["$alphatestreference"] = "0.5"
+	end
+	local material = CreateMaterial( name, "UnlitGeneric", params )
+	if not material or material:IsError() then return nil end
+	material:SetTexture( "$basetexture", texture )
+	return material
 end
+
+-- Source materials remain immutable. Chunk meshes reference separate proxy
+-- materials whose textures can be changed repeatedly without corrupting the
+-- saved default source during Lua refreshes.
+local defaultOpaqueSource = loadAtlasSource( MC.Atlas.MATERIAL or "mc/atlas_365" )
+local defaultOpaqueTexture = atlasMaterialTexture( defaultOpaqueSource )
+
+local defaultTranslucentSource = loadAtlasSource(
+	MC.Atlas.MATERIAL_TRANSLUCENT or "mc/atlas_365_translucent"
+)
+local defaultTranslucentTexture = atlasMaterialTexture( defaultTranslucentSource )
+if not defaultTranslucentTexture then
+	defaultTranslucentSource = defaultOpaqueSource
+	defaultTranslucentTexture = defaultOpaqueTexture
+end
+
+MC.Material = createCpuAtlasProxy( "mc_atlas_cpu_opaque_proxy1", defaultOpaqueTexture, false ) or defaultOpaqueSource
+MC.MaterialOpaqueCPU = MC.Material
+MC.MaterialTranslucent = createCpuAtlasProxy( "mc_atlas_cpu_translucent_proxy1", defaultTranslucentTexture, true )
+	 or MC.Material
+
+local AtlasSources = {
+	default = {
+		opaque = defaultOpaqueSource,
+		translucent = defaultTranslucentSource,
+		opaqueTexture = defaultOpaqueTexture,
+		translucentTexture = defaultTranslucentTexture,
+	},
+	programmer_art = {
+		opaquePath = atlasPngPath( MC.Atlas.MATERIAL_PROGRAMMER_ART or "mc/atlas_365_programmer_art" ),
+		translucentPath = atlasPngPath( MC.Atlas.MATERIAL_PROGRAMMER_ART_TRANSLUCENT or "mc/atlas_365_programmer_art_translucent" ),
+	},
+}
 
 local function materialBaseTexture( material )
 	local baseTex = material and material.GetTexture and material:GetTexture( "$basetexture" )
@@ -609,4 +658,125 @@ if not MC.MaterialIconOpaque then
 	-- atlas texture unavailable: fall back to the cutout material rather than
 	-- drawing white/error icons (semi-transparent blocks just look blank)
 	MC.MaterialIconOpaque = MC.Material
+end
+
+local function validAtlasTexture( texture )
+	if not texture then return false end
+	if texture.IsError and texture:IsError() then return false end
+	return true
+end
+
+local function setAtlasTexture( material, texture )
+	if not ( material and texture and material.SetTexture ) then return false end
+	material:SetTexture( "$basetexture", texture )
+	return true
+end
+
+local function normalizeTexturePack( value )
+	value = string.lower( tostring( value or "default" ) )
+	if value == "programmer_art" then return "programmer_art" end
+	return "default"
+end
+
+local function resolveAtlasSource( name )
+	local source = AtlasSources[name]
+	if not source then return nil end
+	if name == "programmer_art" then
+		if not source.opaque or source.opaque:IsError() then
+			source.opaque = loadAtlasSource( source.opaquePath )
+		end
+		if not source.translucent or source.translucent:IsError() then
+			source.translucent = loadAtlasSource( source.translucentPath )
+		end
+		source.opaqueTexture = atlasMaterialTexture( source.opaque ) or source.opaqueTexture
+		source.translucentTexture = atlasMaterialTexture( source.translucent )
+			or source.translucentTexture or source.opaqueTexture
+	end
+	return source
+end
+
+local function refreshGpuAtlasTextures( opaqueTexture, translucentTexture )
+	local opaqueMaterialNames = {
+		"MaterialGpuOpaque",
+		"MaterialGpuLightTexture",
+		"MaterialGpuLightTextureLinearDebug",
+		"MaterialGpuLightTexturePpFix",
+		"MaterialGpuLightTextureFancy",
+		"MaterialGpuLightTextureFancyLinearDebug",
+		"MaterialGpuLightTextureFancyPpFix",
+		"MaterialGpuLightTextureHeight",
+		"MaterialGpuLightTextureFast",
+		"MaterialGpuLightTextureVanilla",
+	}
+	for _, name in ipairs( opaqueMaterialNames ) do setAtlasTexture( MC[name], opaqueTexture ) end
+
+	local translucentMaterialNames = {
+		"MaterialGpuLightTextureVanillaTranslucent",
+		"MaterialGpuLightTextureTranslucent",
+		"MaterialGpuLightTextureTranslucentLinearDebug",
+		"MaterialGpuLightTextureTranslucentPpFix",
+	}
+	for _, name in ipairs( translucentMaterialNames ) do setAtlasTexture( MC[name], translucentTexture ) end
+end
+
+function MC.TexturePackName()
+	return MC.ActiveTexturePack or "default"
+end
+
+function MC.SetTexturePack( value )
+	local requested = string.lower( tostring( value or "default" ) )
+	local name = normalizeTexturePack( requested )
+	local source = resolveAtlasSource( name ) or AtlasSources.default
+	local opaqueTexture = source and source.opaqueTexture
+	local translucentTexture = source and source.translucentTexture or opaqueTexture
+	if not validAtlasTexture( opaqueTexture ) then
+		return false, "missing_atlas_" .. name
+	end
+	if not validAtlasTexture( translucentTexture ) then translucentTexture = opaqueTexture end
+
+	-- MC.Material/MC.MaterialTranslucent are stable proxy objects referenced by
+	-- existing mesh records. Updating their texture is enough to switch CPU
+	-- meshes, icon panels and translucent draws without a full world rebuild.
+	setAtlasTexture( MC.Material, opaqueTexture )
+	setAtlasTexture( MC.MaterialTranslucent, translucentTexture )
+	setAtlasTexture( MC.MaterialIconOpaque, opaqueTexture )
+	refreshGpuAtlasTextures( opaqueTexture, translucentTexture )
+	if MC.RefreshShadowDepthAtlas then MC.RefreshShadowDepthAtlas( opaqueTexture ) end
+	if MC.RefreshHeightfieldDepthAtlas then MC.RefreshHeightfieldDepthAtlas( opaqueTexture ) end
+
+	MC.ActiveTexturePack = name
+	MC.Atlas.ACTIVE_MATERIAL = name == "programmer_art"
+		and ( MC.Atlas.MATERIAL_PROGRAMMER_ART or "mc/atlas_365_programmer_art" )
+		or ( MC.Atlas.MATERIAL or "mc/atlas_365" )
+	MC.Atlas.ACTIVE_MATERIAL_TRANSLUCENT = name == "programmer_art"
+		and ( MC.Atlas.MATERIAL_PROGRAMMER_ART_TRANSLUCENT or "mc/atlas_365_programmer_art_translucent" )
+		or ( MC.Atlas.MATERIAL_TRANSLUCENT or "mc/atlas_365_translucent" )
+
+	if MC.RefreshBlockParticleMaterials then MC.RefreshBlockParticleMaterials( opaqueTexture ) end
+	return true, name, requested == name
+end
+
+if cvars and cvars.AddChangeCallback then
+	if cvars.RemoveChangeCallback then
+		cvars.RemoveChangeCallback( "mc_texture_pack", "mc_texture_pack_refresh" )
+	end
+	cvars.AddChangeCallback( "mc_texture_pack", function( _, _, value )
+		local ok, active, alreadyNormalized = MC.SetTexturePack( value )
+		if MC.RefreshConfigControlValue then MC.RefreshConfigControlValue( "mc_texture_pack", value ) end
+		if not ok then
+			MsgN( "[MC] texture pack unavailable: " .. tostring( value ) )
+		elseif not alreadyNormalized and RunConsoleCommand then
+			RunConsoleCommand( "mc_texture_pack", active )
+		end
+	end, "mc_texture_pack_refresh" )
+end
+
+if MC.TexturePack and MC.TexturePack.GetString then
+	local ok, active, alreadyNormalized = MC.SetTexturePack( MC.TexturePack:GetString() )
+	if ok and not alreadyNormalized and RunConsoleCommand then RunConsoleCommand( "mc_texture_pack", active ) end
+	if not ok and timer and timer.Simple then
+		timer.Simple( 0, function()
+			if MC.TexturePack and MC.TexturePack.GetString then MC.SetTexturePack( MC.TexturePack:GetString() ) end
+		end )
+	end
 end

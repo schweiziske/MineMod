@@ -136,6 +136,20 @@ local function particleMaterialForTile( tileName, col, row )
 	return mat
 end
 
+function MC.RefreshBlockParticleMaterials( atlasTexture )
+	if not atlasTexture or ( atlasTexture.IsError and atlasTexture:IsError() ) then return false end
+	ParticleAtlasTexture = atlasTexture
+	ParticleAtlasTextureName = atlasTexture.GetName and atlasTexture:GetName() or ParticleAtlasTextureName
+	for _, byTile in pairs( ParticleMaterialCache ) do
+		for _, byColumn in pairs( byTile ) do
+			for _, material in pairs( byColumn ) do
+				if material and material.SetTexture then material:SetTexture( "$basetexture", atlasTexture ) end
+			end
+		end
+	end
+	return true
+end
+
 function MC.GetParticleMaterialForTile( tileName, col, row )
 	return particleMaterialForTile( tileName, col, row )
 end

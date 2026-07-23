@@ -71,6 +71,23 @@ node _build\build_block_connections.cjs
 node _build\build_block_properties.cjs
 ```
 
+单独烘焙 Programmer Art atlas（按 `out/version.json` 自动下载 Mojang 官方资源包，不覆盖默认 atlas）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File _build\bake_programmer_art_atlas.ps1
+```
+
+烘焙完成后可在游戏内配置菜单的“世界显示 -> 材质包”中即时切换，也可使用控制台：
+
+```text
+mc_texture_pack programmer_art
+mc_texture_pack default
+```
+
+默认输出 `materials/mc/atlas_365_programmer_art.{png,vmt}` 和对应的
+`_translucent` 文件。也可以通过 `-PackPath <zip或目录>` 使用本地资源包；Programmer
+Art 没有提供的现代方块贴图会自动回退到当前 `out/assets/minecraft`。
+
 导入 Parkour Spiral：
 
 ```powershell
@@ -102,6 +119,7 @@ mc_presets_ui
 ```powershell
 node _tools\test_block_properties.js
 node _tools\test_atlas_padding_policy.js
+node _tools\test_programmer_art_atlas_bake.js
 node _tools\test_block_damage_api.js
 node _tools\test_creative_inventory.js
 node _tools\test_preset_placer.js

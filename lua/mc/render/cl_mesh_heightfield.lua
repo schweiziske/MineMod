@@ -176,6 +176,15 @@ function MC.MarkHeightfieldShadowDirty()
 	hfDirty = true
 end
 
+function MC.RefreshHeightfieldDepthAtlas( atlasTexture )
+	if not atlasTexture or ( atlasTexture.IsError and atlasTexture:IsError() ) then return false end
+	if hfDepthMaterial and hfDepthMaterial.SetTexture then
+		hfDepthMaterial:SetTexture( "$basetexture", atlasTexture )
+	end
+	hfDirty = true
+	return true
+end
+
 local function meshVersion()
 	if MC.ChunkDrawListVersion then return MC.ChunkDrawListVersion() end
 	return 0

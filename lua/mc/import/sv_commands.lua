@@ -5,7 +5,7 @@ MC.Import = MC.Import or {}
 MC.SV = MC.SV or {}
 
 local Import, SV = MC.Import, MC.SV
-local USAGE = "用法: mc_import <mc_import/文件.json> [replace|append] [reject|preserve]"
+local USAGE = "Usage: mc_import <mc_import/file.json> [replace|append] [reject|preserve]"
 
 local function tell( ply, message )
 	message = tostring( message or "" )
@@ -31,11 +31,11 @@ local function runImport( ply, args )
 	if not options then tell( ply, argumentError ) return end
 	local result, importError, errorIndex = SV.ImportWorldPath( options.path, options )
 	if not result then
-		tell( ply, "导入失败: " .. tostring( importError ) .. ( errorIndex and ( " #" .. tostring( errorIndex ) ) or "" ) )
+		tell( ply, "Import failed: " .. tostring( importError ) .. ( errorIndex and ( " #" .. tostring( errorIndex ) ) or "" ) )
 		return
 	end
-	tell( ply, "导入完成: " .. tostring( result.imported ) .. " 个状态格，当前总数 " .. tostring( result.total ) )
-	tell( ply, "验证: DataVersion=" .. tostring( result.dataVersion ) .. " " .. tostring( result.lossSummary or "" ) )
+	tell( ply, "Import complete: " .. tostring( result.imported ) .. " state cells, current total " .. tostring( result.total ) )
+	tell( ply, "Validation: DataVersion=" .. tostring( result.dataVersion ) .. " " .. tostring( result.lossSummary or "" ) )
 	MsgN( "[MC] imported " .. options.path .. " (" .. options.mode .. ", " .. options.unknownPolicy .. ")" )
 end
 

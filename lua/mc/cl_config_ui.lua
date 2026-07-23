@@ -220,6 +220,12 @@ local function registerControl( name, control )
 	table.insert( MC.ConfigControlRows[name], control )
 end
 
+function MC.RefreshConfigControlValue( name, value )
+	for _, control in ipairs( MC.ConfigControlRows and MC.ConfigControlRows[name] or {} ) do
+		if IsValid( control ) and control.MCSetValue then control:MCSetValue( value ) end
+	end
+end
+
 local function createBoolControl( parent, scope, item, editable )
 	local holder = vgui.Create( "DPanel", parent )
 	holder:Dock( FILL )

@@ -45,6 +45,8 @@ MC.Atlas = {
 	INSET = 0.5,
 	MATERIAL = "mc/atlas_365",
 	MATERIAL_TRANSLUCENT = "mc/atlas_365_translucent",
+	MATERIAL_PROGRAMMER_ART = "mc/atlas_365_programmer_art",
+	MATERIAL_PROGRAMMER_ART_TRANSLUCENT = "mc/atlas_365_programmer_art_translucent",
 }
 
 ------------------------------------------------------------------ reliable transport pacing

@@ -336,6 +336,33 @@ local function isFullBlockBox( box )
 	return box[1] == 0 and box[2] == 0 and box[3] == 0 and box[4] == 1 and box[5] == 1 and box[6] == 1
 end
 
+local function projectionTileUVRect( tile, uv )
+	if not uv then return MC.TileUV( tile ) end
+	local atlas = MC.Atlas
+	local col = tile % atlas.COLS
+	local row = math.floor( tile / atlas.COLS )
+	local stride = atlas.STRIDE or atlas.TILE
+	local pad = atlas.PAD or 0
+	local inset = atlas.INSET or 0.5
+	local baseX = col * stride + pad
+	local baseY = row * stride + pad
+	local u0 = baseX + ( tonumber( uv[1] ) or 0 ) / 16 * atlas.TILE + inset
+	local v0 = baseY + ( tonumber( uv[2] ) or 0 ) / 16 * atlas.TILE + inset
+	local u1 = baseX + ( tonumber( uv[3] ) or 16 ) / 16 * atlas.TILE - inset
+	local v1 = baseY + ( tonumber( uv[4] ) or 16 ) / 16 * atlas.TILE - inset
+	return u0 / atlas.W, v0 / atlas.H, u1 / atlas.W, v1 / atlas.H
+end
+
+local function projectionStateModels( stateId, dx, dy, dz )
+	if not stateId or not MC.VisitStateVisualModels or not MC.StateVisualModelData then return nil end
+	local models = {}
+	MC.VisitStateVisualModels( stateId, dx, dy, dz, function( modelId )
+		local data = MC.StateVisualModelData( modelId )
+		if data and data.modelQuads and #data.modelQuads > 0 then models[#models + 1] = data end
+	end )
+	return #models > 0 and models or nil
+end
+
 function MC.BuildPresetProjectionMesh( preset, rotation )
 	freePresetProjectionMeshes()
 	if not preset or not istable( preset.cells ) then return nil end
@@ -357,9 +384,16 @@ function MC.BuildPresetProjectionMesh( preset, rotation )
 		local id = math.floor( tonumber( cell.id ) or 0 )
 		local orient = MC.NormalizeOrient( id, cell.orient )
 		if MC.IsValidBlock and MC.IsValidBlock( id ) then
-			local info = { dx = dx, dy = dy, dz = dz, id = id, orient = orient }
+			local fullCube = false
+			fullCube = cell.stateId and MC.BlockIsFullCubeForState and MC.BlockIsFullCubeForState( cell.stateId, dx, dy, dz )
+				or not cell.stateId and MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) or false
+			local info = {
+				dx = dx, dy = dy, dz = dz, id = id, orient = orient, stateId = cell.stateId,
+				fullCube = fullCube,
+				models = not fullCube and projectionStateModels( cell.stateId, dx, dy, dz ) or nil,
+			}
 			cellInfo[#cellInfo + 1] = info
-			if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
+			if fullCube then
 				fullCells[cellKey( dx, dy, dz )] = true
 			end
 		end
@@ -381,7 +415,12 @@ function MC.BuildPresetProjectionMesh( preset, rotation )
 	end
 
 	local function emitBoxFace( info, box, face )
-		local tile, rot = MC.BlockFace( info.id, face, info.orient )
+		local tile, rot
+		if info.stateId and MC.BlockFaceForState then
+			tile, rot = MC.BlockFaceForState( info.stateId, face, info.dx, info.dy, info.dz )
+		else
+			tile, rot = MC.BlockFace( info.id, face, info.orient )
+		end
 		local u0, v0, u1, v1 = MC.TileUV( tile or 0 )
 		local corners = BOX_FACE_CORNERS[face]( box )
 		local normal = FACE_NORMALS[face] or N_UP
@@ -398,13 +437,38 @@ function MC.BuildPresetProjectionMesh( preset, rotation )
 		end
 	end
 
+	local function emitModelQuad( info, modelData, quad )
+		local tile = MC.BlockModelSurface and MC.BlockModelSurface( modelData, quad ) or quad.tile or 0
+		local u0, v0, u1, v1 = projectionTileUVRect( tile or 0, quad.uv )
+		local normal = FACE_NORMALS[quad.face or MC.Face.TOP] or N_UP
+		for t = 1, 6 do
+			local vertexIndex = TRI[t]
+			local x, y, z, uf, vf = MC.ModelQuadVertex( quad, vertexIndex )
+			uf, vf = rotatedUVFlags( uf, vf, quad.rot or 0 )
+			push( {
+				pos = Vector( ( info.dx + x ) * MC.BS, ( info.dy + y ) * MC.BS, ( info.dz + z ) * MC.BS ),
+				normal = normal,
+				u = uf == 1 and u1 or u0,
+				v = vf == 1 and v1 or v0,
+				color = PROJECTION_COLOR,
+			} )
+		end
+	end
+
 	for _, info in ipairs( cellInfo ) do
-		local boxes = MC.BlockBoxes and MC.BlockBoxes( info.id, info.orient ) or { { 0, 0, 0, 1, 1, 1 } }
-		for _, box in ipairs( boxes ) do
-			for face = 1, 6 do
-				local off = FACE_OFFSETS[face]
-				local hidden = isFullBlockBox( box ) and fullCells[cellKey( info.dx + off[1], info.dy + off[2], info.dz + off[3] )]
-				if not hidden then emitBoxFace( info, box, face ) end
+		if info.models then
+			for _, modelData in ipairs( info.models ) do
+				for _, quad in ipairs( modelData.modelQuads ) do emitModelQuad( info, modelData, quad ) end
+			end
+		else
+			local boxes = info.stateId and MC.BlockBoxesForState and MC.BlockBoxesForState( info.stateId, info.dx, info.dy, info.dz )
+				or MC.BlockBoxes and MC.BlockBoxes( info.id, info.orient ) or { { 0, 0, 0, 1, 1, 1 } }
+			for _, box in ipairs( boxes ) do
+				for face = 1, 6 do
+					local off = FACE_OFFSETS[face]
+					local hidden = isFullBlockBox( box ) and fullCells[cellKey( info.dx + off[1], info.dy + off[2], info.dz + off[3] )]
+					if not hidden then emitBoxFace( info, box, face ) end
+				end
 			end
 		end
 	end

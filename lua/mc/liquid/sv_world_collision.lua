@@ -5,9 +5,11 @@
 MC = MC or {}
 MC.SV = MC.SV or {}
 MC.WaterSpread = MC.WaterSpread or {}
+MC.LavaSpread = MC.LavaSpread or {}
 
 local SV = MC.SV
 local Water = MC.WaterSpread
+local Lava = MC.LavaSpread
 local Liquid = MC.Liquid
 local bitBand = bit.band
 local bitBor = bit.bor
@@ -70,6 +72,16 @@ function Water.WorldCanTraverse( sx, sy, sz, tx, ty, tz, face )
 	local opposite = Liquid and Liquid.OppositeFace and Liquid.OppositeFace( face ) or nil
 	if opposite then rememberTraversal( MC.CellKey( tx, ty, tz ), opposite, blocked ) end
 	return not blocked
+end
+
+-- Water and lava both traverse the same static Source-world BSP. Keep the
+-- cache shared so adding lava does not double trace the same cell faces.
+function Lava.WorldCellBlocked( bx, by, bz )
+	return Water.WorldCellBlocked( bx, by, bz )
+end
+
+function Lava.WorldCanTraverse( sx, sy, sz, tx, ty, tz, face )
+	return Water.WorldCanTraverse( sx, sy, sz, tx, ty, tz, face )
 end
 
 function SV.ClearWaterWorldCollisionCache()

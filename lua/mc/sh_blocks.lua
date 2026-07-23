@@ -368,6 +368,7 @@ function MC.RegisterBlock( def )
 	local handlerName = def.handler
 	if not handlerName and stateRule == "door" then handlerName = "door" end
 	if not handlerName and stateRule == "trapdoor" then handlerName = "trapdoor" end
+	if not handlerName and connectionKind == "fence_gate" then handlerName = "fence_gate" end
 	local handler = def.handlers or ( handlerName and MC.BlockHandlers[handlerName] ) or nil
 	if handler and handler.OnTick then MC.HasBlockTickHandlers = true end
 

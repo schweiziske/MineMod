@@ -24,7 +24,17 @@ local SwimParameters = {
 	finishGravityScale = 0.5,
 }
 
+-- Lava needs to feel like a dense, sticky liquid rather than water with a
+-- different colour. It has deliberately weak input acceleration and quickly
+-- damps both player input and carried velocity.
+local LavaSwimParameters = {
+	speed = 0.35,
+	jumpScale = 0.25,
+	dragPerSecond = 4,
+}
+
 MC.LiquidMovementParameters = SwimParameters
+MC.LavaLiquidMovementParameters = LavaSwimParameters
 MC.LiquidMovePlayers = setmetatable( {}, { __mode = "k" } )
 MC.LiquidMoveContacts = setmetatable( {}, { __mode = "k" } )
 local NextSwimSoundAt = setmetatable( {}, { __mode = "k" } )
@@ -121,6 +131,21 @@ local function swimAcceleration( ply, move )
 	return acceleration
 end
 
+local function lavaSwimAcceleration( ply, move )
+	local angles = move.GetMoveAngles and move:GetMoveAngles() or ply:EyeAngles()
+	local acceleration = angles:Forward() * move:GetForwardSpeed()
+		+ angles:Right() * move:GetSideSpeed()
+		+ angles:Up() * ( move.GetUpSpeed and move:GetUpSpeed() or 0 )
+	local length = acceleration:Length()
+	if length > 0 then
+		acceleration:Mul( math.min( length, ply:GetMaxSpeed() ) / length * LavaSwimParameters.speed )
+	end
+	if move:KeyDown( IN_JUMP ) then
+		acceleration.z = acceleration.z + ply:GetMaxSpeed() * LavaSwimParameters.jumpScale
+	end
+	return acceleration
+end
+
 local function updateWaterTransitionSound( ply, contact )
 	if not SERVER then return end
 	local inWater = contact and contact.kind == "water" or false
@@ -151,14 +176,20 @@ end
 local function applyGWaterSwim( ply, move, contact )
 	local velocity = move:GetVelocity()
 	local factor = tickFactor()
-	local currentScale = contact.kind == "lava" and LAVA_CURRENT_SCALE or WATER_CURRENT_SCALE
+	local lava = contact.kind == "lava"
+	local currentScale = lava and LAVA_CURRENT_SCALE or WATER_CURRENT_SCALE
 	velocity = applyCurrent( velocity, contact, currentScale, factor )
 
 	local frameTime = FrameTime()
 	local acceleration = swimAcceleration( ply, move )
+	if lava then acceleration = lavaSwimAcceleration( ply, move ) end
 	playJumpSwimSound( ply, move, contact )
 	velocity = velocity + acceleration * frameTime
-	velocity:Mul( max( 0, 1 - frameTime * SwimParameters.dragPerSecond ) )
+	if lava then
+		velocity:Mul( max( 0, 1 - frameTime * LavaSwimParameters.dragPerSecond ) )
+	else
+		velocity:Mul( max( 0, 1 - frameTime * SwimParameters.dragPerSecond ) )
+	end
 
 	local gravityScale = ply:GetGravity()
 	if gravityScale == 0 then gravityScale = 1 end

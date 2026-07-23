@@ -47,7 +47,7 @@ MC.MeshShadowMapWarmth = MC.MeshShadowMapWarmth or ( CreateClientConVar and Crea
 	"Fancy look: warm tint on sunlit faces and torch-lit areas (0 = neutral)" ) )
 MC.MeshBloom = MC.MeshBloom or ( CreateClientConVar and CreateClientConVar( "mc_light_bloom", "1", true, false,
 	"Fancy GPU look: spread bright torch and sun highlight seeds with a screen-space bloom pass" ) )
-MC.MeshBloomStrength = MC.MeshBloomStrength or ( CreateClientConVar and CreateClientConVar( "mc_light_bloom_strength", "0.8", true, false,
+MC.MeshBloomStrength = MC.MeshBloomStrength or ( CreateClientConVar and CreateClientConVar( "mc_light_bloom_strength", "0.3", true, false,
 	"Fancy GPU bloom intensity (night automatically receives a small boost)" ) )
 MC.MeshBloomThreshold = MC.MeshBloomThreshold or ( CreateClientConVar and CreateClientConVar( "mc_light_bloom_threshold", "0.7", true, false,
 	"Fancy GPU bloom brightness threshold; higher values restrict bloom to hotter pixels" ) )
@@ -117,6 +117,8 @@ MC.MeshHfShadowUpdateInterval = MC.MeshHfShadowUpdateInterval or ( CreateClientC
 	"Heightfield shadow mode: minimum seconds between height map redraws when meshes changed or the window recentered" ) )
 MC.MeshConnectionVisibleTemplate = MC.MeshConnectionVisibleTemplate or ( CreateClientConVar and CreateClientConVar( "mc_mesh_connection_visible_template", "1", true, false,
 	"Experimental: use cached visible geometry templates for fence/pane/wall/pipe connection shapes" ) )
+MC.TexturePack = MC.TexturePack or ( CreateClientConVar and CreateClientConVar( "mc_texture_pack", "default", true, false,
+	"MC atlas texture pack: default or programmer_art" ) )
 
 local MC_LIGHT_STYLE_FAST = "fast"
 local MC_LIGHT_STYLE_VANILLA = "vanilla"
