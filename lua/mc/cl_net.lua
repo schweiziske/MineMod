@@ -1356,6 +1356,12 @@ net.Receive( "mc_unload_chunk", function()
 	end
 	if MC.ChunkEnts then MC.ChunkEnts[key] = nil end
 	MC.World[key] = nil
+	-- If this chunk sat inside the local AABB/aim interest, prediction carriers
+	-- still hold its convex pages; rebuilding against the now-missing chunk
+	-- releases them (ghost collision otherwise outlives the unload).
+	if MC.RebuildChunkPhys then
+		MC.RebuildChunkPhys( key, MC.ClientCollisionEnabled and MC.ClientCollisionEnabled() or false )
+	end
 	if MC.MarkChunkUnloaded then MC.MarkChunkUnloaded( key ) end
 	MC.MeshDirty[key] = nil
 	if MC.MeshDirtyRateLimited then MC.MeshDirtyRateLimited[key] = nil end
