@@ -407,14 +407,19 @@ end
 
 hook.Remove( "PostDrawOpaqueRenderables", "mc_draw_chunks" )
 hook.Remove( "PostDrawTranslucentRenderables", "mc_draw_chunks" )
+-- bSky mirrors the engine's DF_DRAWSKYBOX draw flag: it is also true for the
+-- MAIN pass whenever the 2D sky is drawn within it (maps without a 3D skybox,
+-- or r_3dsky 0) and for water reflection passes, and it is false underwater.
+-- Guarding on it blanks the whole world outdoors on 2D-sky maps, so only the
+-- real 3D-skybox pass (bSky3D) is skipped.
 hook.Add( "PostDrawOpaqueRenderables", "mc_draw_chunks", function( bDepth, bSky, bSky3D )
-	if bSky or bSky3D then return end
+	if bSky3D then return end
 	if not meshRenderingEnabled() then return end
 	drawAllChunks( MC.Meshes, MC.DrawChunk )
 end )
 -- translucent blocks only; the bulk of the world stays in the opaque pass above
 hook.Add( "PostDrawTranslucentRenderables", "mc_draw_chunks", function( bDepth, bSky, bSky3D )
-	if bSky or bSky3D then return end
+	if bSky3D then return end
 	if not meshRenderingEnabled() then return end
 	drawAllChunks( MC.MeshesTrans, MC.DrawChunkTranslucent )
 end )

@@ -739,7 +739,8 @@ if CLIENT then
 	end
 
 	hook.Add( "PostDrawTranslucentRenderables", "mc_creative_held_block", function( _, bSky, bSky3D )
-		if bSky or bSky3D then return end
+		-- bSky (DF_DRAWSKYBOX) is also true on the main pass on 2D-sky maps; skip only the 3D skybox pass
+		if bSky3D then return end
 		local ply = LocalPlayer()
 		if not IsValid( ply ) or not ply:Alive() or ply:ShouldDrawLocalPlayer() then return end
 		local wep = ply:GetActiveWeapon()
@@ -750,7 +751,8 @@ if CLIENT then
 	end )
 
 	hook.Add( "PostDrawTranslucentRenderables", "mc_creative_ghost", function( _, bSky, bSky3D )
-		if bSky or bSky3D then return end
+		-- bSky (DF_DRAWSKYBOX) is also true on the main pass on 2D-sky maps; skip only the 3D skybox pass
+		if bSky3D then return end
 		local ply = LocalPlayer()
 		if not IsValid( ply ) or not ply:Alive() then return end
 		local wep = ply:GetActiveWeapon()

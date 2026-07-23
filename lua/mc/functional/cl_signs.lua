@@ -221,7 +221,8 @@ local function rebuildSignRenderEntries()
 end
 
 hook.Add( "PostDrawTranslucentRenderables", "mc_sign_block_entities", function( _, bSky, bSky3D )
-	if bSky or bSky3D then return end
+	-- bSky (DF_DRAWSKYBOX) is also true on the main pass on 2D-sky maps; skip only the 3D skybox pass
+	if bSky3D then return end
 	local revision = tonumber( MC.AppliedStateRevision ) or 0
 	local generation = tonumber( MC.StateWorldGeneration ) or 0
 	if SignRenderDirty or revision ~= SignRenderRevision or generation ~= SignRenderGeneration then

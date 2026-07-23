@@ -207,37 +207,75 @@ if CLIENT then
 		end )
 	end
 
-	local nativeUsable = MC.NativeMeshModuleProbeDone == true and MC.NativeMeshModuleAvailable == true
-	local nativeMissing = MC.NativeMeshModuleMissing == true
-	if MC.NativeMeshModuleProbeDone ~= true then
-		local nativeLoaded, nativeLoadError = pcall( require, "mcswep_native_mesh" )
-		nativeMissing = not nativeLoaded
-		nativeUsable = nativeLoaded and istable( mcmesh ) and isfunction( mcmesh.AbiVersion )
-		local nativeFailureReason = nativeLoaded and "invalid module table" or tostring( nativeLoadError or "module not found" )
-		if nativeUsable then
-			local abiOK, abi = pcall( mcmesh.AbiVersion )
-			nativeUsable = abiOK and abi == 6
-			if not nativeUsable then nativeFailureReason = "ABI mismatch" end
+	local NATIVE_MODULE_EXPORTS = {
+		"Handshake", "SetBlockDefs", "SetLightDefs", "CreateChunk", "ApplyChunk", "SetCellsBatch",
+		"SetCell", "GetCell", "GetChunkCells", "Think", "DrawChunk", "UnloadChunk",
+		"ClearWorld", "Shutdown", "GetStats", "StartBlockLightRebuild",
+		"PollBlockLightRebuild", "RebuildBlockLight", "GetBlockLightChunk", "GetSkyLightChunk",
+	}
+
+	local function expectedNativeModulePath()
+		if not ( system and system.IsWindows and system.IsWindows() ) then return nil end
+		local arch = jit and jit.arch or nil
+		if arch == "x64" then return "lua/bin/gmcl_mcswep_native_mesh_win64.dll" end
+		if arch == "x86" then return "lua/bin/gmcl_mcswep_native_mesh_win32.dll" end
+		return nil
+	end
+
+	function MC.ProbeNativeMeshModule()
+		if MC.NativeMeshModuleProbeDone == true then
+			return MC.NativeMeshModuleAvailable == true
 		end
-		if nativeUsable then
-			for _, name in ipairs( {
-				"Handshake", "SetBlockDefs", "SetLightDefs", "CreateChunk", "ApplyChunk", "SetCellsBatch",
-				"SetCell", "GetCell", "GetChunkCells", "Think", "DrawChunk", "UnloadChunk",
-				"ClearWorld", "Shutdown", "GetStats", "StartBlockLightRebuild",
-				"PollBlockLightRebuild", "RebuildBlockLight", "GetBlockLightChunk", "GetSkyLightChunk",
-			} ) do
+
+		local modulePath = expectedNativeModulePath()
+		MC.NativeMeshModulePath = modulePath
+		local modulePresent = mcmesh ~= nil
+		local loaded, loadError = modulePresent, nil
+		if not modulePresent then
+			if not modulePath then
+				MC.NativeMeshModuleProbeDone = true
+				MC.NativeMeshModuleAvailable = false
+				MC.NativeMeshModuleMissing = false
+				MC.NativeMeshModuleFailureReason = "unsupported native module platform or architecture"
+				return false
+			end
+			modulePresent = file and file.Exists and file.Exists( modulePath, "GAME" ) == true
+			if not modulePresent then
+				MC.NativeMeshModuleProbeDone = true
+				MC.NativeMeshModuleAvailable = false
+				MC.NativeMeshModuleMissing = true
+				MC.NativeMeshModuleFailureReason = "module not installed: " .. modulePath
+				return false
+			end
+			loaded, loadError = pcall( require, "mcswep_native_mesh" )
+		end
+
+		local usable = loaded and istable( mcmesh ) and isfunction( mcmesh.AbiVersion )
+		local failureReason = loaded and "invalid module table" or tostring( loadError or "module load failed" )
+		if usable then
+			local abiOK, abi = pcall( mcmesh.AbiVersion )
+			usable = abiOK and abi == 6
+			if not usable then failureReason = "ABI mismatch" end
+		end
+		if usable then
+			for _, name in ipairs( NATIVE_MODULE_EXPORTS ) do
 				if not isfunction( mcmesh[name] ) then
-					nativeUsable = false
-					nativeFailureReason = "missing export " .. name
+					usable = false
+					failureReason = "missing export " .. name
 					break
 				end
 			end
 		end
+
 		MC.NativeMeshModuleProbeDone = true
-		MC.NativeMeshModuleAvailable = nativeUsable
-		MC.NativeMeshModuleMissing = nativeMissing
-		MC.NativeMeshModuleFailureReason = nativeUsable and nil or nativeFailureReason
+		MC.NativeMeshModuleAvailable = usable
+		MC.NativeMeshModuleMissing = false
+		MC.NativeMeshModuleFailureReason = usable and nil or failureReason
+		return usable
 	end
+
+	local nativeUsable = MC.ProbeNativeMeshModule()
+	local nativeMissing = MC.NativeMeshModuleMissing == true
 	MC.RENDER_SECTION_SIZE = nativeUsable and 16 or 8
 	MsgN( "[MC] render section size = " .. MC.RENDER_SECTION_SIZE
 		.. ( nativeUsable and " (native module)" or " (Lua fallback)" ) )
