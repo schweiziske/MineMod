@@ -1,0 +1,8 @@
+"UnlitGeneric"
+{
+  "$basetexture" "mc/atlas_365_programmer_art_translucent"
+  "$translucent" "1"
+  "$vertexcolor" "1"
+  "$vertexalpha" "1"
+  "$pointsample" "1"
+}

@@ -326,14 +326,18 @@ function SV.SavePreset( presetName, cornerA, cornerB, anchor, cover, ply )
 	for z = minz, maxz do
 		for y = miny, maxy do
 			for x = minx, maxx do
-				local id = MC.GetBlock( x, y, z )
-				if id ~= 0 then
+				local stateId = MC.GetBlockState( x, y, z )
+				local id = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or MC.GetBlock( x, y, z )
+				if stateId and stateId ~= 0 and id and id ~= 0 then
+					local stateSpec = MC.FormatBlockState and MC.FormatBlockState( stateId ) or nil
+					if not stateSpec then return false, "state_encode_failed" end
 					cells[#cells + 1] = {
 						x - minx,
 						y - miny,
 						z - minz,
 						id,
 						MC.GetBlockOrient( x, y, z ) or 0,
+						stateSpec,
 					}
 					if maxPreset > 0 and #cells > maxPreset then return false, "preset_too_large" end
 				end
@@ -345,7 +349,7 @@ function SV.SavePreset( presetName, cornerA, cornerB, anchor, cover, ply )
 	ensurePresetDirs()
 	local now = os.time()
 	local data = {
-		v = 1,
+		v = 2,
 		name = presetName,
 		map = game.GetMap(),
 		createdAt = now,
@@ -440,19 +444,18 @@ end
 
 local function presetStateCells( data, origin, rotation )
 	local transformed = presetCellTable( data, origin, rotation )
-	local out, stateCache = {}, {}
+	local out = {}
 	for _, cell in ipairs( transformed ) do
-		local cacheKey = tostring( cell.id ) .. ":" .. tostring( cell.orient or 0 )
-		local cached = stateCache[cacheKey]
-		if cached == nil then
-			local stateId, exact, err = MC.StateFromLegacy( cell.id, cell.orient )
+		if cell.stateError then return nil, cell.stateError end
+		local stateId = cell.stateId
+		if not stateId then
+			local exact, err
+			stateId, exact, err = MC.StateFromLegacy( cell.id, cell.orient )
 			if not stateId or exact ~= true then return nil, err or "state_not_legacy_projectable" end
-			cached = stateId
-			stateCache[cacheKey] = cached
 		end
 		out[#out + 1] = {
 			bx = cell.bx, by = cell.by, bz = cell.bz,
-			stateId = cached,
+			stateId = stateId,
 		}
 	end
 	return out

@@ -32,6 +32,7 @@ local SHARED = {
 	"mc/functional/sh_furnace.lua",
 	"mc/functional/sh_doors.lua",
 	"mc/functional/sh_trapdoors.lua",
+	"mc/functional/sh_fence_gates.lua",
 	"mc/functional/sh_ladders.lua",
 	"mc/liquid/sh_registry.lua",
 	"mc/liquid/sh_shapes.lua",
@@ -81,6 +82,8 @@ local SERVER_FILES = {
 	"mc/liquid/sv_world_collision.lua",
 	"mc/liquid/sv_water_state.lua",
 	"mc/liquid/sv_water_spread.lua",
+	"mc/liquid/sv_lava_state.lua",
+	"mc/liquid/sv_lava_spread.lua",
 	"mc/liquid/sv_water_cleanup.lua",
 	"mc/import/sv_reader.lua",
 	"mc/import/sv_decoder.lua",
@@ -177,6 +180,20 @@ if SERVER then
 	AddCSLuaFile()
 	for _, f in ipairs( SHARED ) do AddCSLuaFile( f ) end
 	for _, f in ipairs( CLIENT_FILES ) do AddCSLuaFile( f ) end
+	if resource and resource.AddFile then
+		for _, fileName in ipairs( {
+			"materials/mc/atlas_365.png",
+			"materials/mc/atlas_365.vmt",
+			"materials/mc/atlas_365_translucent.png",
+			"materials/mc/atlas_365_translucent.vmt",
+			"materials/mc/atlas_365_programmer_art.png",
+			"materials/mc/atlas_365_programmer_art.vmt",
+			"materials/mc/atlas_365_programmer_art_translucent.png",
+			"materials/mc/atlas_365_programmer_art_translucent.vmt",
+		} ) do
+			resource.AddFile( fileName )
+		end
+	end
 end
 
 for _, f in ipairs( SHARED ) do includeTracked( f ) end

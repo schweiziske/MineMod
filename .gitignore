@@ -1,3 +1,4 @@
-_build/
+_build/*
+!_build/bake_programmer_art_atlas.ps1
 __pycache__/
 *.pyc

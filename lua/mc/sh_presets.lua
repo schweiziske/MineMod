@@ -115,6 +115,72 @@ function MC.PresetRotateBlockOrient( id, orient, rotation )
 	return orient
 end
 
+local HorizontalFacingClockwise = {
+	north = "east",
+	east = "south",
+	south = "west",
+	west = "north",
+}
+
+function MC.PresetRotateState( stateId, rotation )
+	rotation = MC.PresetNormalizeRotation( rotation )
+	stateId = int( stateId, -1 )
+	if rotation == 0 or not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return stateId end
+
+	local facing = MC.GetStateProperty and MC.GetStateProperty( stateId, "facing" ) or nil
+	if HorizontalFacingClockwise[facing] then
+		for _ = 1, rotation do facing = HorizontalFacingClockwise[facing] end
+		stateId = MC.StateWith( stateId, "facing", facing ) or stateId
+	end
+
+	local axis = MC.GetStateProperty and MC.GetStateProperty( stateId, "axis" ) or nil
+	if rotation % 2 == 1 and ( axis == "x" or axis == "z" ) then
+		stateId = MC.StateWith( stateId, "axis", axis == "x" and "z" or "x" ) or stateId
+	end
+
+	local signRotation = MC.GetStateProperty and MC.GetStateProperty( stateId, "rotation" ) or nil
+	if tonumber( signRotation ) then
+		stateId = MC.StateWith( stateId, "rotation", ( int( signRotation, 0 ) + rotation * 4 ) % 16 ) or stateId
+	end
+
+	-- Connection-style states (fences, walls, panes, redstone wire, multiface
+	-- blocks) store one property per horizontal side. Move those values with
+	-- the structure instead of leaving their north/east/south/west labels behind.
+	local cardinal = { "north", "east", "south", "west" }
+	local cardinalValues = {}
+	local hasCardinal = false
+	for index = 1, 4 do
+		local value = MC.GetStateProperty and MC.GetStateProperty( stateId, cardinal[index] ) or nil
+		if value ~= nil then
+			cardinalValues[index] = value
+			hasCardinal = true
+		end
+	end
+	if hasCardinal then
+		for index = 1, 4 do
+			local value = cardinalValues[index]
+			if value ~= nil then
+				local target = cardinal[( index - 1 + rotation ) % 4 + 1]
+				stateId = MC.StateWith( stateId, target, value ) or stateId
+			end
+		end
+	end
+	return stateId
+end
+
+function MC.PresetCellState( cell )
+	if type( cell ) ~= "table" then return nil, "invalid_preset_cell" end
+	local savedState = cell[6] or cell.state
+	if savedState ~= nil and savedState ~= "" and MC.ParseBlockState then
+		local stateId, err = MC.ParseBlockState( savedState )
+		if stateId then return stateId end
+		return nil, err or "invalid_saved_state"
+	end
+	if not MC.StateFromLegacy then return nil, "state_registry_unavailable" end
+	local stateId, _, err = MC.StateFromLegacy( int( cell[4], 0 ), int( cell[5], 0 ) )
+	return stateId, err
+end
+
 local function originXYZ( origin )
 	return int( origin and origin.bx, 0 ), int( origin and origin.by, 0 ), int( origin and origin.bz, 0 )
 end
@@ -128,7 +194,13 @@ function MC.PresetCells( data, origin, rotation )
 		local dx = int( cell[1], 0 )
 		local dy = int( cell[2], 0 )
 		local dz = int( cell[3], 0 )
-		local id = int( cell[4], 0 )
+		local savedId = int( cell[4], 0 )
+		local stateId, stateError = MC.PresetCellState( cell )
+		if stateId then stateId = MC.PresetRotateState( stateId, rotation ) end
+		local id, orient
+		if stateId and MC.LegacyFromState then id, orient = MC.LegacyFromState( stateId ) end
+		id = int( id, savedId )
+		orient = orient ~= nil and orient or MC.PresetRotateBlockOrient( id, cell[5], rotation )
 		local tx, ty, tz = MC.PresetRotateLocalCell( data, dx, dy, dz, rotation )
 		out[#out + 1] = {
 			bx = ox + tx,
@@ -138,7 +210,9 @@ function MC.PresetCells( data, origin, rotation )
 			dy = ty,
 			dz = tz,
 			id = id,
-			orient = MC.PresetRotateBlockOrient( id, cell[5], rotation ),
+			orient = orient,
+			stateId = stateId,
+			stateError = stateError,
 		}
 	end
 	return out

@@ -461,6 +461,17 @@ local sigZFar, sigSize, sigCasterDist = 0, 0, 0
 local sigRadius0, sigRadius1 = 0, 0
 local sigDrawVersion = -1
 
+function MC.RefreshShadowDepthAtlas( atlasTexture )
+	if not atlasTexture or ( atlasTexture.IsError and atlasTexture:IsError() ) then return false end
+	for _, material in pairs( mcShadowDepthMaterials ) do
+		if material and material.SetTexture then material:SetTexture( "$basetexture", atlasTexture ) end
+	end
+	-- Alpha-tested caster silhouettes may differ between texture packs.
+	sigValid = false
+	mcShadowNextUpdate = 0
+	return true
+end
+
 local function cascadeOriginsMatchSig( origins )
 	if #origins ~= sigOriginCount then return false end
 	for k = 1, #origins do
