@@ -220,13 +220,13 @@ local function drawPlayerWithSourceLighting( ply )
 	if not ok then ErrorNoHalt( "[MC] player Source lighting draw failed: " .. tostring( err ) .. "\n" ) end
 end
 
-local function drawWrappedProp( ent, oldOverride )
+local function drawWrappedProp( ent, oldOverride, ... )
 	local materialState = beginModelLighting( ent, false )
 	local ok, err
 	if oldOverride then
-		ok, err = pcall( oldOverride, ent )
+		ok, err = pcall( oldOverride, ent, ... )
 	else
-		ok, err = pcall( ent.DrawModel, ent )
+		ok, err = pcall( ent.DrawModel, ent, ... )
 	end
 	endModelLighting( materialState )
 	if not ok then ErrorNoHalt( "[MC] entity lighting draw failed: " .. tostring( err ) .. "\n" ) end
@@ -247,6 +247,10 @@ local function wrapProp( ent )
 	local class = ent:GetClass()
 	if not ( PROP_CLASSES[class] or VEHICLE_CLASSES[class] ) then return end
 	if wrappedProps[ent] then return end
+	-- Sandbox temporarily owns RenderOverride while its spawn effect clips and
+	-- refracts the new prop. Let it restore that override before we wrap it; the
+	-- periodic scan will pick the prop up after the half-second effect ends.
+	if IsValid( ent.SpawnEffect ) then return end
 	local oldOverride = ent.RenderOverride
 	-- Lua auto-refresh leaves the previous wrapper attached to live entities.
 	-- Recover its captured original override so wrappers never stack and an old
@@ -265,12 +269,12 @@ local function wrapProp( ent )
 			end
 		end
 	end
-	local wrapper = function( self )
+	local wrapper = function( self, ... )
 		if not entityClassEnabled( self ) then
-			if oldOverride then return oldOverride( self ) end
-			return self:DrawModel()
+			if oldOverride then return oldOverride( self, ... ) end
+			return self:DrawModel( ... )
 		end
-		return drawWrappedProp( self, oldOverride )
+		return drawWrappedProp( self, oldOverride, ... )
 	end
 	wrappedProps[ent] = { oldOverride = oldOverride, wrapper = wrapper }
 	ent.RenderOverride = wrapper

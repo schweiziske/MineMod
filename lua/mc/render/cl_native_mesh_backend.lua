@@ -144,27 +144,15 @@ local function lockToLuaBackend( reason )
 end
 
 local function probeNativeModule()
-	if mcmesh then
-		state.moduleProbeDone = true
-		state.moduleUnavailable = false
-		MC.NativeMeshModuleProbeDone = true
-		MC.NativeMeshModuleAvailable = true
-		MC.NativeMeshModuleFailureReason = nil
-		refreshConfigVisibility()
-		return true
-	end
 	if state.moduleProbeDone then return not state.moduleUnavailable end
 
 	state.moduleProbeDone = true
-	local ok, loadError = pcall( require, "mcswep_native_mesh" )
+	local ok = MC.ProbeNativeMeshModule and MC.ProbeNativeMeshModule() or false
 	if not ok or not mcmesh then
-		return lockToLuaBackend( tostring( loadError or "module not found" ) )
+		return lockToLuaBackend( MC.NativeMeshModuleFailureReason or "module unavailable" )
 	end
 
 	state.moduleUnavailable = false
-	MC.NativeMeshModuleProbeDone = true
-	MC.NativeMeshModuleAvailable = true
-	MC.NativeMeshModuleFailureReason = nil
 	refreshConfigVisibility()
 	return true
 end
