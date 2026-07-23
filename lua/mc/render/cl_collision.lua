@@ -757,14 +757,19 @@ local function rebuildChunkPhys( key, enabled, bounds )
 		clearClientPhysBuildState( key )
 		return true
 	end
-	if not chunk then
-		rememberClientPhysSkip( key, "no_world" )
-		clearClientPhysBuildState( key )
-		scheduleClientPhysRetry( key, bounds, "no_world" )
-		return false
-	end
-	if not chunk.count or chunk.count <= 0 then
-		if MC.ClientCollisionInterest then MC.ClientCollisionInterest[key] = nil end
+	-- Missing chunk data and empty chunks must release carrier collision NOW.
+	-- Emptied chunks are removed from MC.World outright (_SetBlockStateStorageRaw),
+	-- so breaking the last block of a chunk arrives here as "not chunk"; keeping
+	-- the old carrier pages would leave the removed block solid for the owning
+	-- client only (invisible ghost collision -> endless prediction errors on that
+	-- spot). Interest is deliberately KEPT: MarkCellPhysNeighbours only marks keys
+	-- present in the interest table, so stripping the key would make the next
+	-- block placed in this chunk build no client collision until an AABB/aim
+	-- anchor change forces a full interest refresh. No retry needed either: every
+	-- path that (re)creates a chunk marks phys dirty itself (net cell edits,
+	-- predicted edits and rollbacks, HTTP/state chunk loads).
+	if not chunk or not chunk.count or chunk.count <= 0 then
+		rememberClientPhysSkip( key, chunk and "empty_chunk" or "no_world" )
 		releaseCarrierCollisionForChunk( key )
 		MC.PhysDirty[key] = nil
 		MC.PhysDirtyPriority[key] = nil
