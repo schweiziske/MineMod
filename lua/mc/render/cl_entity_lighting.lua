@@ -2,36 +2,36 @@
 -- Opt-in because replacing prop RenderOverride can interact with other addons.
 MC = MC or {}
 
-MC.EntityLightingEnabled = MC.EntityLightingEnabled or CreateClientConVar(
-	"mc_entity_lighting", "1", true, false,
+MC.EntityLightingEnabled = CreateClientConVar(
+	"mc_light_entity", "0", true, false,
 	"Apply interpolated Minecraft lighting to players and common prop models"
 )
-MC.EntityLightingPlayers = MC.EntityLightingPlayers or CreateClientConVar(
-	"mc_entity_lighting_players", "0", true, false,
+MC.EntityLightingPlayers = CreateClientConVar(
+	"mc_light_entity_players", "0", true, false,
 	"Apply Minecraft entity lighting to players"
 )
-MC.EntityLightingProps = MC.EntityLightingProps or CreateClientConVar(
-	"mc_entity_lighting_props", "1", true, false,
+MC.EntityLightingProps = CreateClientConVar(
+	"mc_light_entity_props", "1", true, false,
 	"Apply Minecraft entity lighting to common prop classes"
 )
-MC.EntityLightingVehicles = MC.EntityLightingVehicles or CreateClientConVar(
-	"mc_entity_lighting_vehicles", "1", true, false,
+MC.EntityLightingVehicles = CreateClientConVar(
+	"mc_light_entity_vehicles", "1", true, false,
 	"Apply Minecraft entity lighting to standard Source vehicle classes"
 )
-MC.EntityLightingGain = MC.EntityLightingGain or CreateClientConVar(
-	"mc_entity_lighting_gain", "0.48", true, false,
+MC.EntityLightingGain = CreateClientConVar(
+	"mc_light_entity_gain", "0.48", true, false,
 	"Exposure multiplier for Minecraft-lit Source entities"
 )
-MC.EntityLightingReflections = MC.EntityLightingReflections or CreateClientConVar(
-	"mc_entity_lighting_reflections", "0.35", true, false,
+MC.EntityLightingReflections = CreateClientConVar(
+	"mc_light_entity_reflections", "0.35", true, false,
 	"Reflection strength for Minecraft-lit entities; also scales with sampled brightness"
 )
-MC.EntityLightingInterval = MC.EntityLightingInterval or CreateClientConVar(
-	"mc_entity_lighting_interval", "0.10", true, false,
+MC.EntityLightingInterval = CreateClientConVar(
+	"mc_light_entity_interval", "0.10", true, false,
 	"Seconds between expensive voxel-light samples per entity; 0 updates every draw"
 )
-MC.EntityLightingPlayerGamma = MC.EntityLightingPlayerGamma or CreateClientConVar(
-	"mc_entity_lighting_player_gamma", "2.2", true, false,
+MC.EntityLightingPlayerGamma = CreateClientConVar(
+	"mc_light_entity_player_gamma", "2.2", true, false,
 	"Display-to-linear conversion exponent for Source player ambient-cube lighting"
 )
 
@@ -55,20 +55,32 @@ local lightStates = setmetatable( {}, { __mode = "k" } )
 local playerSourceDrawActive = false
 local nextPropScan = 0
 
+local function convarValueEnabled( value )
+	local number = tonumber( value )
+	if number ~= nil then return number ~= 0 end
+	value = string.lower( tostring( value or "" ) )
+	return value == "true" or value == "yes" or value == "on"
+end
+
+local masterEnabled = MC.EntityLightingEnabled and MC.EntityLightingEnabled:GetBool() or false
+local playerLightingEnabled = MC.EntityLightingPlayers and MC.EntityLightingPlayers:GetBool() or false
+local propLightingEnabled = MC.EntityLightingProps and MC.EntityLightingProps:GetBool() or false
+local vehicleLightingEnabled = MC.EntityLightingVehicles and MC.EntityLightingVehicles:GetBool() or false
+
 local function enabled()
-	return MC.EntityLightingEnabled and MC.EntityLightingEnabled:GetBool()
+	return masterEnabled
 end
 
 local function playersEnabled()
-	return enabled() and MC.EntityLightingPlayers and MC.EntityLightingPlayers:GetBool()
+	return enabled() and playerLightingEnabled
 end
 
 local function propsEnabled()
-	return enabled() and MC.EntityLightingProps and MC.EntityLightingProps:GetBool()
+	return enabled() and propLightingEnabled
 end
 
 local function vehiclesEnabled()
-	return enabled() and MC.EntityLightingVehicles and MC.EntityLightingVehicles:GetBool()
+	return enabled() and vehicleLightingEnabled
 end
 
 local function entityClassEnabled( ent )
@@ -244,8 +256,7 @@ end
 
 local function wrapProp( ent )
 	if not IsValid( ent ) then return end
-	local class = ent:GetClass()
-	if not ( PROP_CLASSES[class] or VEHICLE_CLASSES[class] ) then return end
+	if not entityClassEnabled( ent ) then return end
 	if wrappedProps[ent] then return end
 	-- Sandbox temporarily owns RenderOverride while its spawn effect clips and
 	-- refracts the new prop. Let it restore that override before we wrap it; the
@@ -280,7 +291,16 @@ local function wrapProp( ent )
 	ent.RenderOverride = wrapper
 end
 
+local function clearLightStates()
+	for ent in pairs( lightStates ) do lightStates[ent] = nil end
+end
+
 local function refreshProps()
+	if not enabled() then
+		for ent in pairs( wrappedProps ) do unwrapProp( ent ) end
+		clearLightStates()
+		return
+	end
 	if not ( propsEnabled() or vehiclesEnabled() ) then
 		for ent in pairs( wrappedProps ) do unwrapProp( ent ) end
 		return
@@ -321,9 +341,36 @@ hook.Add( "Think", "mc_entity_lighting_props", function()
 	refreshProps()
 end )
 
-cvars.AddChangeCallback( "mc_entity_lighting", refreshProps, "mc_entity_lighting_refresh" )
-cvars.AddChangeCallback( "mc_entity_lighting_props", refreshProps, "mc_entity_lighting_props_refresh" )
-cvars.AddChangeCallback( "mc_entity_lighting_vehicles", refreshProps, "mc_entity_lighting_vehicles_refresh" )
+if cvars.RemoveChangeCallback then
+	-- Remove callbacks left by the retired archived ConVars during Lua refresh.
+	cvars.RemoveChangeCallback( "mc_entity_lighting", "mc_entity_lighting_refresh" )
+	cvars.RemoveChangeCallback( "mc_entity_lighting_players", "mc_entity_lighting_players_refresh" )
+	cvars.RemoveChangeCallback( "mc_entity_lighting_props", "mc_entity_lighting_props_refresh" )
+	cvars.RemoveChangeCallback( "mc_entity_lighting_vehicles", "mc_entity_lighting_vehicles_refresh" )
+	cvars.RemoveChangeCallback( "mc_light_entity", "mc_light_entity_refresh" )
+	cvars.RemoveChangeCallback( "mc_light_entity_players", "mc_light_entity_players_refresh" )
+	cvars.RemoveChangeCallback( "mc_light_entity_props", "mc_light_entity_props_refresh" )
+	cvars.RemoveChangeCallback( "mc_light_entity_vehicles", "mc_light_entity_vehicles_refresh" )
+end
+
+cvars.AddChangeCallback( "mc_light_entity", function( _, _, newValue )
+	masterEnabled = convarValueEnabled( newValue )
+	refreshProps()
+end, "mc_light_entity_refresh" )
+cvars.AddChangeCallback( "mc_light_entity_players", function( _, _, newValue )
+	playerLightingEnabled = convarValueEnabled( newValue )
+	if not playersEnabled() then
+		for _, ply in ipairs( player.GetAll() ) do lightStates[ply] = nil end
+	end
+end, "mc_light_entity_players_refresh" )
+cvars.AddChangeCallback( "mc_light_entity_props", function( _, _, newValue )
+	propLightingEnabled = convarValueEnabled( newValue )
+	refreshProps()
+end, "mc_light_entity_props_refresh" )
+cvars.AddChangeCallback( "mc_light_entity_vehicles", function( _, _, newValue )
+	vehicleLightingEnabled = convarValueEnabled( newValue )
+	refreshProps()
+end, "mc_light_entity_vehicles_refresh" )
 
 if previousWrappedProps then
 	for ent, record in pairs( previousWrappedProps ) do

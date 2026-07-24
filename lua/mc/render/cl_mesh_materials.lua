@@ -68,6 +68,11 @@ MC.MaterialOpaqueCPU = MC.Material
 MC.MaterialTranslucent = createCpuAtlasProxy( "mc_atlas_cpu_translucent_proxy1", defaultTranslucentTexture, true )
 	 or MC.Material
 
+-- The proxy materials above are recreated with the default atlas on every map
+-- load/Lua refresh. An old global value must not make startup sync believe the
+-- newly-created proxies already use that pack.
+MC.ActiveTexturePack = nil
+
 local AtlasSources = {
 	default = {
 		opaque = defaultOpaqueSource,
@@ -756,6 +761,26 @@ function MC.SetTexturePack( value )
 	return true, name, requested == name
 end
 
+local TEXTURE_PACK_SYNC_TIMER = "mc_texture_pack_startup_sync"
+local TEXTURE_PACK_INIT_HOOK = "mc_texture_pack_init_sync"
+local TEXTURE_PACK_SYNC_INTERVAL = 0.25
+local TEXTURE_PACK_SYNC_ATTEMPTS = 20
+
+local function syncTexturePackFromConVar( force )
+	if not ( MC.TexturePack and MC.TexturePack.GetString ) then return false end
+	local configured = MC.TexturePack:GetString()
+	if not force and MC.ActiveTexturePack == normalizeTexturePack( configured ) then return true end
+	return MC.SetTexturePack( configured )
+end
+
+local function startTexturePackStartupSync()
+	if not ( timer and timer.Create ) then return end
+	if timer.Remove then timer.Remove( TEXTURE_PACK_SYNC_TIMER ) end
+	timer.Create( TEXTURE_PACK_SYNC_TIMER, TEXTURE_PACK_SYNC_INTERVAL, TEXTURE_PACK_SYNC_ATTEMPTS, function()
+		syncTexturePackFromConVar( false )
+	end )
+end
+
 if cvars and cvars.AddChangeCallback then
 	if cvars.RemoveChangeCallback then
 		cvars.RemoveChangeCallback( "mc_texture_pack", "mc_texture_pack_refresh" )
@@ -771,12 +796,15 @@ if cvars and cvars.AddChangeCallback then
 	end, "mc_texture_pack_refresh" )
 end
 
-if MC.TexturePack and MC.TexturePack.GetString then
-	local ok, active, alreadyNormalized = MC.SetTexturePack( MC.TexturePack:GetString() )
-	if ok and not alreadyNormalized and RunConsoleCommand then RunConsoleCommand( "mc_texture_pack", active ) end
-	if not ok and timer and timer.Simple then
-		timer.Simple( 0, function()
-			if MC.TexturePack and MC.TexturePack.GetString then MC.SetTexturePack( MC.TexturePack:GetString() ) end
-		end )
-	end
+-- Archived client ConVars may be restored after this file's first read. Keep a
+-- short reconciliation window even when applying the temporary default succeeds.
+syncTexturePackFromConVar( true )
+startTexturePackStartupSync()
+
+if hook and hook.Add then
+	if hook.Remove then hook.Remove( "InitPostEntity", TEXTURE_PACK_INIT_HOOK ) end
+	hook.Add( "InitPostEntity", TEXTURE_PACK_INIT_HOOK, function()
+		syncTexturePackFromConVar( true )
+		startTexturePackStartupSync()
+	end )
 end
