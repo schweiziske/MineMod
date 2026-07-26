@@ -63,18 +63,63 @@ if SERVER then
 	MC.Config.ClusterCollisionInset = GetConVar( "mc_cluster_collision_inset" )
 		or CreateConVar( "mc_cluster_collision_inset", "0.5", F,
 			"Collision skin inset per face in units; keeps converted structures from starting flush against block collision. 0 disables", 0, 8 )
+
+	-- Lua-created FCVAR_REPLICATED convars never actually reach clients
+	-- (long-standing engine bug), so the client would enforce default caps
+	-- (e.g. select up to 8191 while the server caps at 5000) and build its
+	-- prediction mirror with mismatched physics settings. Push every limit
+	-- the client reads as a networked global instead; change callbacks keep
+	-- live edits in sync.
+	local REPLICATED_LIMITS = {
+		{ name = "mc_cluster_max_blocks" },
+		{ name = "mc_cluster_max_extent" },
+		{ name = "mc_cluster_max_convexes" },
+		{ name = "mc_cluster_merge_cells" },
+		{ name = "mc_cluster_collision_inset", float = true },
+	}
+	local function pushLimit( entry )
+		local cv = GetConVar( entry.name )
+		if not cv then return end
+		if entry.float then
+			SetGlobalFloat( entry.name, cv:GetFloat() )
+		else
+			SetGlobalInt( entry.name, cv:GetInt() )
+		end
+	end
+	local function pushAllLimits()
+		for _, entry in ipairs( REPLICATED_LIMITS ) do pushLimit( entry ) end
+	end
+	for _, entry in ipairs( REPLICATED_LIMITS ) do
+		cvars.RemoveChangeCallback( entry.name, "mc_cluster_limit_push" )
+		cvars.AddChangeCallback( entry.name, function() pushLimit( entry ) end, "mc_cluster_limit_push" )
+	end
+	pushAllLimits()
+	hook.Add( "InitPostEntity", "mc_cluster_limit_push", pushAllLimits )
 end
 
+-- Server reads the convar; clients read the server-pushed networked global
+-- (see REPLICATED_LIMITS above). Pure-Lua test environments have neither and
+-- land on the default.
 local function clampedConVarInt( name, default, minValue, maxValue )
-	local cv = GetConVar( name )
-	local n = cv and cv:GetInt() or default
-	return math.Clamp( n, minValue, maxValue )
+	local value
+	if SERVER then
+		local cv = GetConVar( name )
+		value = cv and cv:GetInt() or default
+	else
+		value = GetGlobalInt and GetGlobalInt( name, default ) or default
+	end
+	return math.Clamp( math.floor( tonumber( value ) or default ), minValue, maxValue )
 end
 
 local function clampedConVarFloat( name, default, minValue, maxValue )
-	local cv = GetConVar( name )
-	local n = cv and cv:GetFloat() or default
-	return math.Clamp( n, minValue, maxValue )
+	local value
+	if SERVER then
+		local cv = GetConVar( name )
+		value = cv and cv:GetFloat() or default
+	else
+		value = GetGlobalFloat and GetGlobalFloat( name, default ) or default
+	end
+	return math.Clamp( tonumber( value ) or default, minValue, maxValue )
 end
 
 function MC.ClusterMaxBlocks()

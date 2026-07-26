@@ -747,16 +747,17 @@ end )
 ------------------------------------------------------------ preview rendering
 local COLOR_SELECTED_WIRE = Color( 120, 225, 255, 255 )
 local COLOR_SELECTED_FILL = Color( 90, 200, 255, 42 )
-local COLOR_AABB = Color( 120, 225, 255, 220 )
 local COLOR_CORNER = Color( 255, 220, 80, 255 )
 local COLOR_CORNER_FILL = Color( 255, 220, 80, 60 )
 local COLOR_PENDING_BOX = Color( 255, 220, 80, 230 )
-local OUTLINE_DRAW_LIMIT = 400
 
 -- Cell-exact boxes z-fight with the block faces they sit on; push every
--- selection box outward so the lines float clearly off the surface.
+-- selection box outward so the lines float clearly off the surface. Fills
+-- use a smaller inflate than wires so their surfaces are never coplanar.
 local CELL_INFLATE = 1.6
+local FILL_INFLATE = 1.1
 local CORNER_INFLATE = 2.8
+local CORNER_FILL_INFLATE = 2.3
 
 local function activeClusterTool( ply )
 	if not IsValid( ply ) then return false end
@@ -791,30 +792,144 @@ local function drawInflatedRegionBox( minx, miny, minz, maxx, maxy, maxz, color 
 	render.DrawWireframeBox( base, angle_zero, mins, maxs, color, true )
 end
 
-local function drawSelection()
-	local sel = MC.ClusterSelection
+-- The selection overlay is batched into IMeshes rebuilt only when the
+-- selection version changes: immediate-mode DrawWireframeBox is 12 draws per
+-- cell, which both crawled at a few hundred cells and forced a draw cap that
+-- silently skipped cells. Batched, every selected cell renders in a handful
+-- of draw calls. The vertexalpha material is translucent, so the engine
+-- depth-tests without depth-writing (fills cannot occlude each other or the
+-- wires). Survives Lua refresh via the MC global.
+local overlay = MC.ClusterSelectionOverlay or { version = -1, meshes = {} }
+MC.ClusterSelectionOverlay = overlay
+overlay.version = -1 -- force one rebuild after every file (re)load
+
+local OVERLAY_MAX_CELLS_PER_MESH = 1500 -- quads 36k verts, lines 36k verts: both under the IMesh cap
+
+local overlayMat
+
+local function overlayMaterial()
+	if overlayMat and not overlayMat:IsError() then return overlayMat end
+	overlayMat = CreateMaterial( "mc_cluster_sel_overlay1", "UnlitGeneric", {
+		["$basetexture"] = "color/white",
+		["$vertexcolor"] = "1",
+		["$vertexalpha"] = "1",
+		["$nocull"] = "1",
+	} )
+	return overlayMat
+end
+
+-- box corners: 1..4 bottom (x0y0 x1y0 x0y1 x1y1), 5..8 top
+local OVERLAY_FACES = {
+	{ 1, 2, 4, 3 }, { 5, 6, 8, 7 },
+	{ 1, 2, 6, 5 }, { 3, 4, 8, 7 },
+	{ 1, 3, 7, 5 }, { 2, 4, 8, 6 },
+}
+local OVERLAY_EDGES = {
+	{ 1, 2 }, { 2, 4 }, { 4, 3 }, { 3, 1 },
+	{ 5, 6 }, { 6, 8 }, { 8, 7 }, { 7, 5 },
+	{ 1, 5 }, { 2, 6 }, { 3, 7 }, { 4, 8 },
+}
+
+local function cellCorners( cell, inflate, out )
+	local x0 = cell.bx * MC.BS - inflate
+	local y0 = cell.by * MC.BS - inflate
+	local z0 = cell.bz * MC.BS - inflate
+	local x1 = ( cell.bx + 1 ) * MC.BS + inflate
+	local y1 = ( cell.by + 1 ) * MC.BS + inflate
+	local z1 = ( cell.bz + 1 ) * MC.BS + inflate
+	out[1].x, out[1].y, out[1].z = x0, y0, z0
+	out[2].x, out[2].y, out[2].z = x1, y0, z0
+	out[3].x, out[3].y, out[3].z = x0, y1, z0
+	out[4].x, out[4].y, out[4].z = x1, y1, z0
+	out[5].x, out[5].y, out[5].z = x0, y0, z1
+	out[6].x, out[6].y, out[6].z = x1, y0, z1
+	out[7].x, out[7].y, out[7].z = x0, y1, z1
+	out[8].x, out[8].y, out[8].z = x1, y1, z1
+	return out
+end
+
+local function freeSelectionOverlay()
+	for _, entry in ipairs( overlay.meshes ) do
+		if entry.fill then entry.fill:Destroy() end
+		if entry.wire then entry.wire:Destroy() end
+	end
+	overlay.meshes = {}
+end
+
+local overlayCorners = {}
+for i = 1, 8 do overlayCorners[i] = Vector() end
+
+local buildOverlayBatch
+
+local function rebuildSelectionOverlay( sel )
+	freeSelectionOverlay()
+	overlay.version = sel.version
 	if sel.count == 0 then return end
 
-	render.SetColorMaterial()
-	local drawn = 0
+	local mat = overlayMaterial()
+	local batch = {}
+	local batchN = 0
 	for _, cell in pairs( sel.cells ) do
-		drawCellFill( cell.bx, cell.by, cell.bz, COLOR_SELECTED_FILL )
-		drawn = drawn + 1
-		if drawn >= OUTLINE_DRAW_LIMIT then break end
-	end
-
-	drawn = 0
-	for _, cell in pairs( sel.cells ) do
-		drawCellBox( cell.bx, cell.by, cell.bz, COLOR_SELECTED_WIRE )
-		drawn = drawn + 1
-		if drawn >= OUTLINE_DRAW_LIMIT then break end
-	end
-
-	if sel.count > OUTLINE_DRAW_LIMIT then
-		local aabb = selectionAABB()
-		if aabb.valid then
-			drawInflatedRegionBox( aabb.minx, aabb.miny, aabb.minz, aabb.maxx, aabb.maxy, aabb.maxz, COLOR_AABB )
+		batchN = batchN + 1
+		batch[batchN] = cell
+		if batchN >= OVERLAY_MAX_CELLS_PER_MESH then
+			overlay.meshes[#overlay.meshes + 1] = buildOverlayBatch( mat, batch, batchN )
+			batch, batchN = {}, 0
 		end
+	end
+	if batchN > 0 then
+		overlay.meshes[#overlay.meshes + 1] = buildOverlayBatch( mat, batch, batchN )
+	end
+end
+
+buildOverlayBatch = function( mat, cells, count )
+	local meshObj = Mesh( mat )
+	mesh.Begin( meshObj, MATERIAL_QUADS, count * 6 )
+	for i = 1, count do
+		local corners = cellCorners( cells[i], FILL_INFLATE, overlayCorners )
+		for _, face in ipairs( OVERLAY_FACES ) do
+			for v = 1, 4 do
+				local p = corners[face[v]]
+				mesh.Position( p )
+				mesh.Color( COLOR_SELECTED_FILL.r, COLOR_SELECTED_FILL.g, COLOR_SELECTED_FILL.b, COLOR_SELECTED_FILL.a )
+				mesh.AdvanceVertex()
+			end
+		end
+	end
+	mesh.End()
+
+	local lineObj = Mesh( mat )
+	mesh.Begin( lineObj, MATERIAL_LINES, count * 12 )
+	for i = 1, count do
+		local corners = cellCorners( cells[i], CELL_INFLATE, overlayCorners )
+		for _, edge in ipairs( OVERLAY_EDGES ) do
+			for v = 1, 2 do
+				local p = corners[edge[v]]
+				mesh.Position( p )
+				mesh.Color( COLOR_SELECTED_WIRE.r, COLOR_SELECTED_WIRE.g, COLOR_SELECTED_WIRE.b, COLOR_SELECTED_WIRE.a )
+				mesh.AdvanceVertex()
+			end
+		end
+	end
+	mesh.End()
+
+	return { fill = meshObj, wire = lineObj }
+end
+
+local function drawSelection()
+	local sel = MC.ClusterSelection
+	if sel.count == 0 then
+		if #overlay.meshes > 0 then freeSelectionOverlay() end
+		return
+	end
+	if overlay.version ~= sel.version then rebuildSelectionOverlay( sel ) end
+
+	render.SetMaterial( overlayMaterial() )
+	for _, entry in ipairs( overlay.meshes ) do
+		entry.fill:Draw()
+	end
+	for _, entry in ipairs( overlay.meshes ) do
+		entry.wire:Draw()
 	end
 end
 
@@ -822,7 +937,9 @@ local function drawPendingBox( aim )
 	local corner = MC.ClusterBoxCorner
 	if not corner then return end
 	render.SetColorMaterial()
-	drawCellFill( corner.bx, corner.by, corner.bz, COLOR_CORNER_FILL, CORNER_INFLATE )
+	render.OverrideDepthEnable( true, false )
+	drawCellFill( corner.bx, corner.by, corner.bz, COLOR_CORNER_FILL, CORNER_FILL_INFLATE )
+	render.OverrideDepthEnable( false, false )
 	drawCellBox( corner.bx, corner.by, corner.bz, COLOR_CORNER, CORNER_INFLATE )
 	if not aim then return end
 	drawInflatedRegionBox(

@@ -551,7 +551,10 @@ if SERVER then
 		if block and editableSignName( block.mcid ) then
 			block.handlers.OnUse = function( ply, bx, by, bz, _, selectedBlockID )
 				local stateId = MC.GetBlockState( bx, by, bz )
-				if shouldChainHangingSign( ply, bx, by, bz, stateId, selectedBlockID ) then return false end
+				-- Chaining is a placement gesture: only callers that declare the
+				-- held block (the placer SWEP) may trigger it. A nil selection is a
+				-- pure interaction (+use key) and must always open the editor.
+				if selectedBlockID ~= nil and shouldChainHangingSign( ply, bx, by, bz, stateId, selectedBlockID ) then return false end
 				return SV.OpenSignEditor( ply, bx, by, bz )
 			end
 			block.handlers.OnPlaced = function( context )
