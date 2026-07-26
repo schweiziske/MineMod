@@ -431,34 +431,42 @@ function MC.QueueSkyFloodChunk( key )
 	end
 end
 
--- A chunk (un)load changes column tops for its whole footprint, which can
--- flip exposure arbitrarily deep in the same chunk column; lateral BFS light
--- reaches at most 14 blocks (< one chunk), so column + 4 lateral neighbors
--- per column chunk is a complete reflood set.
-function MC.QueueSkyFloodColumn( cx, cy )
-	if not MC.ChunkKey then return end
-	local native = nativeSkyBackend()
-	if native then native.ScheduleBlockLightRebuild( 0.02 ); return end
+-- Queue one column's chunks at ITS OWN known czs. The column index keeps czs
+-- for edit-emptied chunks too (they never send an unload notification), so
+-- refloods keep chasing their orphaned stores; refloodChunkSky treats a
+-- missing chunk as "drop stored values and chase what they fed out".
+local function queueColumnLoadedChunks( cx, cy )
 	local czList = MC.SkyColumnChunkCzList and MC.SkyColumnChunkCzList( cx, cy ) or nil
 	if czList then
 		for cz in pairs( czList ) do
 			MC.QueueSkyFloodChunk( MC.ChunkKey( cx, cy, cz ) )
-			MC.QueueSkyFloodChunk( MC.ChunkKey( cx + 1, cy, cz ) )
-			MC.QueueSkyFloodChunk( MC.ChunkKey( cx - 1, cy, cz ) )
-			MC.QueueSkyFloodChunk( MC.ChunkKey( cx, cy + 1, cz ) )
-			MC.QueueSkyFloodChunk( MC.ChunkKey( cx, cy - 1, cz ) )
 		end
 		return
 	end
 	for key, chunk in pairs( MC.World or {} ) do
 		if chunk and chunk.cx == cx and chunk.cy == cy then
 			MC.QueueSkyFloodChunk( key )
-			MC.QueueSkyFloodChunk( MC.ChunkKey( cx + 1, cy, chunk.cz ) )
-			MC.QueueSkyFloodChunk( MC.ChunkKey( cx - 1, cy, chunk.cz ) )
-			MC.QueueSkyFloodChunk( MC.ChunkKey( cx, cy + 1, chunk.cz ) )
-			MC.QueueSkyFloodChunk( MC.ChunkKey( cx, cy - 1, chunk.cz ) )
 		end
 	end
+end
+
+-- A chunk (un)load changes column tops for its whole footprint, which can
+-- flip exposure arbitrarily deep in the same chunk column; lateral BFS light
+-- reaches at most 14 blocks (< one chunk), so this column plus the 4 lateral
+-- neighbor columns form the complete reflood set. Each column is queued at
+-- its OWN czs: the old loop queued laterals only at the CHANGED column's czs,
+-- so lateral chunks loaded at other depths kept stale border light forever
+-- (their implicit-exposed feeders were never stored, leaving the decrease
+-- wave nothing to chase, and the increase wave can only brighten).
+function MC.QueueSkyFloodColumn( cx, cy )
+	if not MC.ChunkKey then return end
+	local native = nativeSkyBackend()
+	if native then native.ScheduleBlockLightRebuild( 0.02 ); return end
+	queueColumnLoadedChunks( cx, cy )
+	queueColumnLoadedChunks( cx + 1, cy )
+	queueColumnLoadedChunks( cx - 1, cy )
+	queueColumnLoadedChunks( cx, cy + 1 )
+	queueColumnLoadedChunks( cx, cy - 1 )
 end
 
 function MC.QueueAllSkyFlood()
