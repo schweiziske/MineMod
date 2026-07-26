@@ -133,6 +133,7 @@ function SV.ApplyBlockDamage( bx, by, bz, amount, options )
 
 	if rec.damage + 0.0001 < health then
 		SV.BlockDamage[key] = rec
+		if MC.RunEvent then MC.RunEvent( "MC.BlockDamaged", bx, by, bz, id, rec.damage, health, damageActor( options ) ) end
 		return false, "damaged", rec.damage, health
 	end
 
@@ -258,6 +259,9 @@ function SV.ApplyBlockExplosion( center, damage, options )
 		deferPhys = true,
 	} )
 
+	if broken > 0 and MC.RunEvent then
+		MC.RunEvent( "MC.BlocksExploded", center, radius, removals, broken, damageActor( options ) )
+	end
 	return broken > 0, broken, radius
 end
 

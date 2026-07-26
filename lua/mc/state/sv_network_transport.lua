@@ -596,6 +596,7 @@ net.Receive( "mc_state_snapshot_ack", function( _, ply )
 	if not client or generation ~= SV.WorldGeneration or token ~= client.pendingSnapshotToken then return end
 	client.pendingSnapshotToken = nil
 	client.appliedRevision = success and appliedRevision or nil
+	if success and MC.RunEvent then MC.RunEvent( "MC.PlayerWorldSynced", ply, appliedRevision ) end
 end )
 
 net.Receive( "mc_state_resync_request", function( _, ply )

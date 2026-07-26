@@ -63,8 +63,7 @@ function ENT:Think()
 	end
 
 	self:ApplyNetworkedBounds()
-	-- every tick: the prediction collision must follow the moving entity
-	self:SyncClientPhysics()
+	self:UpdatePredictionMirror()
 	self:SetNextClientThink( CurTime() )
 	return true
 end
@@ -91,27 +90,54 @@ function ENT:ApplyClusterRecord( record )
 	-- the client, so without this local mirror players fall straight through
 	-- (worst on moving clusters, e.g. balloon-lifted). The mirror stays
 	-- frozen and is teleported to the interpolated transform every tick.
-	local convexes = MC.BuildClusterConvexes and MC.BuildClusterConvexes( record.cells, record.size ) or nil
-	if convexes then
-		self:ApplyClusterPhysics( convexes, true )
-		self.ClusterPhysPos = nil
-		self:SyncClientPhysics()
-	end
+	-- Client prediction collision (mc_chunk pattern), but only while the
+	-- entity RESTS. IVP treats the frozen mirror as static geometry, and
+	-- moving static geometry is its most expensive operation — teleporting
+	-- the mirror along every frame cost ~470 fps while the cluster moved.
+	-- So: destroyed the moment the entity moves (no collision beats
+	-- wrongly-placed collision; riding a moving cluster is
+	-- server-authoritative anyway), rebuilt in place once it settles.
+	self.ClusterMirrorConvexes = MC.ClusterCollisionConvexes and MC.ClusterCollisionConvexes( record ) or nil
+	self.ClusterLastMovePos = self:GetPos()
+	self.ClusterLastMoveAng = self:GetAngles()
+	self.ClusterLastMoveTime = 0
+	self:RebuildPredictionMirror()
 end
 
-function ENT:SyncClientPhysics()
-	local phys = self:GetPhysicsObject()
-	if not IsValid( phys ) then return end
+local MIRROR_SETTLE_DELAY = 0.3
+
+function ENT:RebuildPredictionMirror()
+	local convexes = self.ClusterMirrorConvexes
+	if not convexes then return end
+	self:ApplyClusterPhysics( convexes, true )
+	-- MOVETYPE_VPHYSICS on the CLIENT hands the entity's motion to the
+	-- local physics object and kills network interpolation (snapshot-rate
+	-- stutter); NONE keeps normal interpolation.
+	self:SetMoveType( MOVETYPE_NONE )
+	self.ClusterMirrorAlive = true
+end
+
+function ENT:DestroyPredictionMirror()
+	if not self.ClusterMirrorAlive then return end
+	self.ClusterMirrorAlive = false
+	self:PhysicsDestroy()
+end
+
+function ENT:UpdatePredictionMirror()
 	local pos, ang = self:GetPos(), self:GetAngles()
-	if self.ClusterPhysPos
-		and pos:DistToSqr( self.ClusterPhysPos ) < 0.01
-		and ang == self.ClusterPhysAng then
+	local moved = not self.ClusterLastMovePos
+		or pos:DistToSqr( self.ClusterLastMovePos ) > 0.01
+		or ang ~= self.ClusterLastMoveAng
+	if moved then
+		self.ClusterLastMovePos = pos
+		self.ClusterLastMoveAng = ang
+		self.ClusterLastMoveTime = CurTime()
+		self:DestroyPredictionMirror()
 		return
 	end
-	phys:SetPos( pos )
-	phys:SetAngles( ang )
-	self.ClusterPhysPos = pos
-	self.ClusterPhysAng = ang
+	if not self.ClusterMirrorAlive and CurTime() - self.ClusterLastMoveTime > MIRROR_SETTLE_DELAY then
+		self:RebuildPredictionMirror()
+	end
 end
 
 local function drawMeshList( self, list )

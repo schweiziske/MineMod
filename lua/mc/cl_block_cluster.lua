@@ -610,6 +610,7 @@ function MC.ClusterSendConvert()
 	end
 	net.Start( "mc_cluster_convert" )
 		net.WriteUInt( sel.count, 13 )
+		net.WriteBool( MC.ClusterSelectMode == "crate" )
 		for _, cell in pairs( sel.cells ) do
 			net.WriteInt( cell.bx, Net.COORD_BITS )
 			net.WriteInt( cell.by, Net.COORD_BITS )
@@ -872,7 +873,7 @@ hook.Add( "PostDrawTranslucentRenderables", "mc_cluster_selection_outline", func
 		return
 	end
 
-	if MC.ClusterSelectMode == "box" then
+	if MC.ClusterSelectMode == "box" or MC.ClusterSelectMode == "crate" then
 		drawPendingBox( aim )
 	end
 	if aim then
