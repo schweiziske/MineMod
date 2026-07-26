@@ -18,6 +18,18 @@ MC.EntityLightingVehicles = CreateClientConVar(
 	"mc_light_entity_vehicles", "1", true, false,
 	"Apply Minecraft entity lighting to standard Source vehicle classes"
 )
+-- Consumed by cl_block_cluster.lua (mc_block_cluster entities); lives here so
+-- the whole mc_light_entity family is declared in one place. Cluster gain
+-- defaults to 1 because the cluster mesh uses chunk-style vertex lighting;
+-- the 0.48 entity gain is an exposure correction for Source models only.
+MC.EntityLightingClusters = CreateClientConVar(
+	"mc_light_entity_cluster", "1", true, false,
+	"Apply Minecraft entity lighting to block structure entities (mc_block_cluster)"
+)
+MC.EntityLightingClusterGain = CreateClientConVar(
+	"mc_light_entity_cluster_gain", "1", true, false,
+	"Exposure multiplier for Minecraft-lit block structures; 1 matches chunk vertex lighting"
+)
 MC.EntityLightingGain = CreateClientConVar(
 	"mc_light_entity_gain", "0.48", true, false,
 	"Exposure multiplier for Minecraft-lit Source entities"

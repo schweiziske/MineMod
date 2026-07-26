@@ -315,6 +315,73 @@ function MC.BuildClusterMeshes( record )
 	return built
 end
 
+------------------------------------------------------------- voxel lighting
+-- Classic-style clusters are unlit meshes; modulate them with the same voxel
+-- light sampler the entity lighting system uses (MC.SampleDynamicLightingRGB:
+-- block + sky light, day cycle) so structures match the chunks around them.
+-- mc_light_entity_cluster is a sub-item of the mc_light_entity family (both
+-- convars are declared in cl_entity_lighting.lua): the master switch and the
+-- cluster switch must both be on, mirroring the props/vehicles sub-switches.
+local function clusterLightInterval()
+	local cv = MC.EntityLightingInterval or GetConVar( "mc_light_entity_interval" )
+	return math.Clamp( cv and cv:GetFloat() or 0.10, 0, 2 )
+end
+
+function MC.ClusterLightRGB( ent )
+	if MC.ClusterEngineStyle == true then return 1, 1, 1 end -- engine lighting owns shading there
+	local master = MC.EntityLightingEnabled or GetConVar( "mc_light_entity" )
+	if not ( master and master:GetBool() ) then return 1, 1, 1 end
+	local clusterSwitch = MC.EntityLightingClusters or GetConVar( "mc_light_entity_cluster" )
+	if not ( clusterSwitch and clusterSwitch:GetBool() ) then return 1, 1, 1 end
+	if not MC.SampleDynamicLightingRGB then return 1, 1, 1 end
+
+	local sx, sy, sz
+	local record = ent.ClusterRecord
+	if record then
+		sx, sy, sz = record.size[1], record.size[2], record.size[3]
+	elseif ent.GetSizeX then
+		sx, sy, sz = ent:GetSizeX(), ent:GetSizeY(), ent:GetSizeZ()
+	end
+
+	local samplePos
+	if sx and sx > 0 and sy > 0 and sz > 0 then
+		-- structure center at 65% height, same convention as entity lighting
+		samplePos = ent:LocalToWorld( Vector( sx * MC.BS * 0.5, sy * MC.BS * 0.5, sz * MC.BS * 0.65 ) )
+	else
+		samplePos = ent:GetPos()
+	end
+
+	local now = CurTime()
+	local interval = clusterLightInterval()
+	local state = ent.ClusterLightState
+	if not state then
+		local r, g, b = MC.SampleDynamicLightingRGB( samplePos, 0 )
+		state = {
+			r = r, g = g, b = b,
+			targetR = r, targetG = g, targetB = b,
+			nextSample = now + interval * ( ( ent:EntIndex() % 7 ) / 7 ),
+			lastUpdate = now,
+		}
+		ent.ClusterLightState = state
+	else
+		if interval <= 0 or now >= ( state.nextSample or 0 ) then
+			local r, g, b = MC.SampleDynamicLightingRGB( samplePos, 0 )
+			state.targetR, state.targetG, state.targetB = r, g, b
+			state.nextSample = now + interval
+		end
+		local dt = math.Clamp( now - ( state.lastUpdate or now ), 0, 0.1 )
+		state.lastUpdate = now
+		local blend = 1 - math.exp( -dt * 12 )
+		state.r = Lerp( blend, state.r, state.targetR or state.r )
+		state.g = Lerp( blend, state.g, state.targetG or state.g )
+		state.b = Lerp( blend, state.b, state.targetB or state.b )
+	end
+
+	local gainCv = MC.EntityLightingClusterGain or GetConVar( "mc_light_entity_cluster_gain" )
+	local mul = math.Clamp( gainCv and gainCv:GetFloat() or 1, 0, 4 )
+	return state.r * mul, state.g * mul, state.b * mul
+end
+
 ------------------------------------------------------------- selection model
 MC.ClusterSelection = MC.ClusterSelection or { cells = {}, count = 0, version = 0 }
 MC.ClusterSelectMode = MC.ClusterSelectMode or "fine" -- "fine" | "box"
@@ -378,14 +445,17 @@ local function selectionTryAdd( bx, by, bz )
 end
 
 local ADD_FAIL_TEXT = {
-	count = "选区已达方块数上限",
-	extent = "选区尺寸超过上限",
-	air = "那里没有方块",
+	count = { "cluster.add_failed_count", "选区已达方块数上限" },
+	extent = { "cluster.add_failed_extent", "选区尺寸超过上限" },
+	air = { "cluster.add_failed_air", "那里没有方块" },
 }
 
 function MC.ClusterSelectionAdd( bx, by, bz )
 	local ok, reason = selectionTryAdd( bx, by, bz )
-	if not ok then chat( L( "cluster.add_failed", ADD_FAIL_TEXT[reason] or "无法加选" ) ) end
+	if not ok then
+		local entry = ADD_FAIL_TEXT[reason]
+		chat( entry and L( entry[1], entry[2] ) or L( "cluster.add_failed", "无法加选" ) )
+	end
 	return ok
 end
 

@@ -58,10 +58,14 @@ end
 function ENT:Think()
 	if not self.ClusterRecord then
 		self:TryClusterData()
-	else
-		self:ApplyNetworkedBounds()
+		self:SetNextClientThink( CurTime() + 1 )
+		return true
 	end
-	self:SetNextClientThink( CurTime() + 1 )
+
+	self:ApplyNetworkedBounds()
+	-- every tick: the prediction collision must follow the moving entity
+	self:SyncClientPhysics()
+	self:SetNextClientThink( CurTime() )
 	return true
 end
 
@@ -81,19 +85,53 @@ function ENT:ApplyClusterRecord( record )
 	self:FreeClusterMeshes()
 	self.ClusterMeshes = MC.BuildClusterMeshes and MC.BuildClusterMeshes( record ) or nil
 	self:ApplyNetworkedBounds()
+
+	-- Client prediction collision, same pattern as the mc_chunk shell: player
+	-- movement is predicted locally, and custom server physics never reaches
+	-- the client, so without this local mirror players fall straight through
+	-- (worst on moving clusters, e.g. balloon-lifted). The mirror stays
+	-- frozen and is teleported to the interpolated transform every tick.
+	local convexes = MC.BuildClusterConvexes and MC.BuildClusterConvexes( record.cells, record.size ) or nil
+	if convexes then
+		self:ApplyClusterPhysics( convexes, true )
+		self.ClusterPhysPos = nil
+		self:SyncClientPhysics()
+	end
+end
+
+function ENT:SyncClientPhysics()
+	local phys = self:GetPhysicsObject()
+	if not IsValid( phys ) then return end
+	local pos, ang = self:GetPos(), self:GetAngles()
+	if self.ClusterPhysPos
+		and pos:DistToSqr( self.ClusterPhysPos ) < 0.01
+		and ang == self.ClusterPhysAng then
+		return
+	end
+	phys:SetPos( pos )
+	phys:SetAngles( ang )
+	self.ClusterPhysPos = pos
+	self.ClusterPhysAng = ang
 end
 
 local function drawMeshList( self, list )
 	if not list or #list == 0 then return end
 
-	-- colour tool support (engine-style extras only)
 	local tinted, alpha = false, false
 	if MC.ClusterEngineStyle == true then
+		-- colour tool support (engine-style extras only)
 		local color = self:GetColor()
 		tinted = color.r ~= 255 or color.g ~= 255 or color.b ~= 255
 		alpha = color.a < 255
 		if tinted then render.SetColorModulation( color.r / 255, color.g / 255, color.b / 255 ) end
 		if alpha then render.SetBlend( color.a / 255 ) end
+	elseif MC.ClusterLightRGB then
+		-- classic style: modulate the unlit mesh with sampled voxel light
+		local lr, lg, lb = MC.ClusterLightRGB( self )
+		if lr ~= 1 or lg ~= 1 or lb ~= 1 then
+			tinted = true
+			render.SetColorModulation( lr, lg, lb )
+		end
 	end
 
 	cam.PushModelMatrix( self:GetWorldTransformMatrix() )
@@ -144,5 +182,6 @@ function ENT:OnRemove()
 			expires = CurTime() + 5,
 		}
 	end
+	self:PhysicsDestroy()
 	self:FreeClusterMeshes()
 end

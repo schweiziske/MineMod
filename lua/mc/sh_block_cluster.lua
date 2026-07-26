@@ -23,6 +23,12 @@ MC.ClusterEngineStyle = false
 
 -- Same single-entity safety cap as mc_chunk physics.
 MC.ClusterMaxConvexes = 128
+
+-- Max merged box extent per axis, in cells. vphysics (IVP) can crash srcds
+-- outright when a single convex is very large; everything proven in this
+-- addon (mc_chunk greedy windows, carriers) stays within the 8-cell
+-- collision subchunk envelope, so the cluster merger must too.
+MC.ClusterMaxMergeCells = 8
 MC.ClusterPayloadMaxBytes = 56000
 MC.ClusterAbsoluteMaxBlocks = 8191 -- convert net message count field is 13 bits
 
@@ -227,19 +233,20 @@ function MC.BuildClusterConvexes( cells, size )
 
 	local convexes = {}
 	local visited = {}
+	local mergeLimit = MC.ClusterMaxMergeCells
 	for dz = 0, sz - 1 do
 		for dy = 0, sy - 1 do
 			for dx = 0, sx - 1 do
 				local li = cellIndex( dx, dy, dz, sx, sy )
 				if solid[li] and not visited[li] then
 					local x1 = dx
-					while x1 + 1 < sx do
+					while x1 + 1 < sx and x1 - dx + 1 < mergeLimit do
 						local i2 = cellIndex( x1 + 1, dy, dz, sx, sy )
 						if solid[i2] and not visited[i2] then x1 = x1 + 1 else break end
 					end
 
 					local y1 = dy
-					while y1 + 1 < sy do
+					while y1 + 1 < sy and y1 - dy + 1 < mergeLimit do
 						local rowOK = true
 						for x = dx, x1 do
 							local i2 = cellIndex( x, y1 + 1, dz, sx, sy )
@@ -250,7 +257,7 @@ function MC.BuildClusterConvexes( cells, size )
 					end
 
 					local z1 = dz
-					while z1 + 1 < sz do
+					while z1 + 1 < sz and z1 - dz + 1 < mergeLimit do
 						local layerOK = true
 						for y = dy, y1 do
 							for x = dx, x1 do
