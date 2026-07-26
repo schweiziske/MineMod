@@ -33,20 +33,8 @@ SWEP.ViewModel     = "models/weapons/c_toolgun.mdl"
 SWEP.WorldModel    = "models/weapons/w_toolgun.mdl"
 SWEP.UseHands      = true
 
-if CLIENT then
-	SWEP.WepSelectIcon = surface.GetTextureID( "vgui/entities/mc_cluster_tool" )
-	SWEP.BounceWeaponIcon = false
-	SWEP.DrawWeaponInfoBox = false
-
-	function SWEP:DrawWeaponSelection( x, y, width, height, alpha )
-		if not self.WepSelectIcon or self.WepSelectIcon <= 0 then return end
-		local size = math.min( width, height ) * 0.70
-		surface.SetDrawColor( 255, 255, 255, alpha or 255 )
-		surface.SetTexture( self.WepSelectIcon )
-		surface.DrawTexturedRect( x + ( width - size ) * 0.5, y + ( height - size ) * 0.5, size, size )
-	end
-end
-
+-- Spawn menu icon: materials/entities/mc_cluster_tool.png (auto-detected).
+-- Weapon-selection HUD stays on the engine default deliberately.
 SWEP.Primary   = { ClipSize = -1, DefaultClip = -1, Automatic = false, Ammo = "none" }
 SWEP.Secondary = { ClipSize = -1, DefaultClip = -1, Automatic = false, Ammo = "none" }
 
@@ -157,14 +145,9 @@ function SWEP:ToggleModeClient()
 
 	local prev = MC.ClusterSelectMode or "fine"
 	local nextMode = MODE_CYCLE[prev] or "fine"
-	-- crate conversions must come from box selection only: crossing the
-	-- crate boundary clears any set assembled in the other modes
-	if ( prev == "crate" ) ~= ( nextMode == "crate" )
-		and MC.ClusterSelectionCount and MC.ClusterSelectionCount() > 0 then
-		MC.ClusterSelectionClear( true )
-	end
+	-- the selection survives mode switches; crate mode only changes HOW the
+	-- conversion collides (single box), not what is selected
 	MC.ClusterSelectMode = nextMode
-	MC.ClusterBoxCorner = nil
 
 	if nextMode == "box" then
 		clientChat( L( "weapon.mc_cluster_tool.mode_box", "已切换到框选模式" ) )

@@ -964,7 +964,19 @@ hook.Add( "KeyPress", "mc_use_interact", function( ply, key )
 	local aim = MC.PlayerBlockAim and MC.PlayerBlockAim( ply )
 	if not aim then return end
 	if useInteractObstructed( ply, aim ) then return end
-	SV.Use( ply, aim.bx, aim.by, aim.bz )
+	if SV.Use( ply, aim.bx, aim.by, aim.bz ) then
+		ply.mcUseInteractTick = engine.TickCount()
+	end
+end )
+
+-- The eye-ray check above cannot see everything the engine +use can reach:
+-- FindUseEntity falls back to an ~80u radius/cone sweep, so a chair, button or
+-- prop near (but not under) the crosshair would activate on the same E press
+-- that just used a block. When the press interacted with a block, the block
+-- wins and the engine use is suppressed for that press.
+hook.Add( "PlayerUse", "mc_use_interact_exclusive", function( ply )
+	local tick = ply.mcUseInteractTick
+	if tick and engine.TickCount() - tick <= 1 then return false end
 end )
 
 local function trimArg( s )
