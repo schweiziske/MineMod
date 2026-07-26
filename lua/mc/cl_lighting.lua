@@ -378,6 +378,15 @@ end
 
 function MC.MarkAllMeshesDirty()
 	MC.ClearLightingCache()
+	-- ClearLightingCache wipes the stored block-light field but re-queues only
+	-- SKY flood; block light comes back solely through RebuildLightingCells.
+	-- Without this every caller (mc_mesh_rebuild, the shader/light-texture
+	-- toggles, rail/observer/piston visual reloads) blacked out all torch
+	-- light until a manual mc_light_rebuild. Inside a lighting bulk load the
+	-- rebuild is deferred: EndLightingBulkLoad performs it once at the end.
+	if ( tonumber( MC.LightingBulkLoadDepth ) or 0 ) <= 0 and MC.RebuildLightingCells then
+		MC.RebuildLightingCells()
+	end
 	local marked = 0
 	for key, chunk in pairs( MC.World or {} ) do
 		if chunk and chunk.count and chunk.count > 0 and MC.MarkChunkDirty then
@@ -589,6 +598,8 @@ end
 
 local function runLightDecreaseQueue( removeQ, addQ, changed )
 	local processed = 0
+	ensureLightSourceIndex()
+	local sources = MC.LightSourceCells
 	while removeQ.head <= removeQ.tail do
 		local bx, by, bz, oldLevel = popLightQueue( removeQ )
 		if bx then
@@ -603,8 +614,26 @@ local function runLightDecreaseQueue( removeQ, addQ, changed )
 				-- surviving frontier re-seeds the region and the glow sticks.
 				local neighborLevel = getStoredLight( MC.LightBlockChunks, nx, ny, nz )
 				if neighborLevel > 0 and neighborLevel < oldLevel then
-					setBlockLightChanged( changed, nx, ny, nz, 0 )
-					pushLightQueue( removeQ, nx, ny, nz, neighborLevel )
+					-- A dimmer cell engulfed by the removed field may itself be
+					-- an emitter (torch next to broken glowstone). Flattening it
+					-- to 0 lost that source forever: nothing later re-seeded it,
+					-- because the post-wave re-seed only looks at stored values
+					-- (all zero by then) around the CHANGED cell. Keep its own
+					-- emission as the floor and re-flood from it in the increase
+					-- pass; the removal wave still chases the brighter removed
+					-- contribution past it.
+					local source = sources and sources[cellKey( nx, ny, nz )]
+					local emission = source and source.level or 0
+					if emission > 0 and chunkLoadedForCell( nx, ny, nz ) then
+						if emission < neighborLevel then
+							setBlockLightChanged( changed, nx, ny, nz, emission )
+							pushLightQueue( removeQ, nx, ny, nz, neighborLevel )
+						end
+						pushLightQueue( addQ, nx, ny, nz, emission )
+					else
+						setBlockLightChanged( changed, nx, ny, nz, 0 )
+						pushLightQueue( removeQ, nx, ny, nz, neighborLevel )
+					end
 				elseif neighborLevel >= oldLevel then
 					pushLightQueue( addQ, nx, ny, nz, neighborLevel )
 				end

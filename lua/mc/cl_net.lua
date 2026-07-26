@@ -585,7 +585,10 @@ end
 
 local function resetClientWorldForSnapshot( expectedChunks, expectedBlocks )
 	if MC.FreeAllMeshes then MC.FreeAllMeshes() end
-	if MC.MarkAllMeshesDirty then MC.MarkAllMeshesDirty() end
+	-- Only the lighting-cache wipe is wanted here: MC.World/MeshDirty are
+	-- replaced a few lines below, so MarkAllMeshesDirty's chunk marking would
+	-- be discarded and its block-light rebuild would run on the old world.
+	if MC.ClearLightingCache then MC.ClearLightingCache() end
 	for _, e in pairs( MC.ChunkEnts or {} ) do
 		if IsValid( e ) then
 			if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
@@ -1397,7 +1400,13 @@ end )
 net.Receive( "mc_clear", function()
 	MC.FreeAllMeshes()
 	if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
-	if MC.MarkAllMeshesDirty then MC.MarkAllMeshesDirty() end
+	-- The world is emptied below: wipe lighting caches directly instead of
+	-- MarkAllMeshesDirty (which would re-flood block light on the old world),
+	-- and drop the sky column tops — otherwise pre-clear terrain keeps
+	-- shading the now-empty space (entities sampled sky=0 under phantom
+	-- column tops until a chunk load happened to cover them).
+	if MC.ClearLightingCache then MC.ClearLightingCache() end
+	if MC.ClearSkyColumnCache then MC.ClearSkyColumnCache() end
 	for key, e in pairs( MC.ChunkEnts or {} ) do
 		if IsValid( e ) then
 			if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
