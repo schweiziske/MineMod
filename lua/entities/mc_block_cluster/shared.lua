@@ -11,7 +11,8 @@ ENT.PrintName = "MC 方块结构"
 ENT.Author    = "schweiziske"
 ENT.Spawnable = false
 ENT.AdminOnly = false
-ENT.DisableDuplicator = true -- the cluster record does not round-trip through the duplicator
+-- duplicator support lives in sv_block_cluster.lua (RegisterEntityClass);
+-- the record rides in the copied entity table and rebuilds everything
 
 local PHYSICS_MODEL = "models/hunter/blocks/cube025x025x025.mdl"
 

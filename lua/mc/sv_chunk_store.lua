@@ -375,6 +375,7 @@ function Store.HydrateChunkNow( key, priority )
 	end
 
 	local chunk = existing
+	local hydratedKeys = {}
 	local entries = baseChunkEntriesForRuntimeKey( key )
 	for _, item in ipairs( entries ) do
 		local entry = item.entry
@@ -393,8 +394,11 @@ function Store.HydrateChunkNow( key, priority )
 		end
 		local loadedChunk, touched = loadBaseChunkIntoWorld( key, record )
 		chunk = chunk or loadedChunk
+		-- A saved chunk whose geometry differs from runtime spills into
+		-- neighboring runtime chunks; every one of them counts as hydrated.
 		for touchedKey in pairs( touched or {} ) do
 			Store.LoadedKeys[tostring( touchedKey )] = true
+			hydratedKeys[touchedKey] = true
 		end
 	end
 
@@ -413,6 +417,15 @@ function Store.HydrateChunkNow( key, priority )
 	if chunk and chunk.count and chunk.count > 0 and priority then
 		SV.EnsureChunkEnt( chunk )
 		SV.MarkPhysDirty( key, true )
+	end
+	hydratedKeys[MC.CanonicalChunkKey and MC.CanonicalChunkKey( key ) or key] = true
+	for hydratedKey in pairs( hydratedKeys ) do
+		if SV.InvalidateLightingChunk then SV.InvalidateLightingChunk( hydratedKey ) end
+		if MC.RunEvent then
+			local cx, cy, cz
+			if MC.ChunkKeyToCoords then cx, cy, cz = MC.ChunkKeyToCoords( hydratedKey ) end
+			MC.RunEvent( "MC.ChunkHydrated", hydratedKey, cx, cy, cz )
+		end
 	end
 	return chunk
 end

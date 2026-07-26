@@ -140,6 +140,7 @@ if SERVER then
 	MC.Config.BlockExplosionMaxBlocks = GetConVar( "mc_block_explosion_max_blocks" ) or CreateConVar( "mc_block_explosion_max_blocks", "4096", F, "Maximum MC blocks one GMod explosion may destroy; 0 = unlimited" )
 	MC.Config.BlockExplosionFxLimit = GetConVar( "mc_block_explosion_fx_limit" ) or CreateConVar( "mc_block_explosion_fx_limit", "16", F, "Max block break particle/sound effects broadcast per explosion; 0 = none" )
 	MC.Config.PresetMaxBlocks = GetConVar( "mc_preset_max_blocks" ) or CreateConVar( "mc_preset_max_blocks", "100000", F, "Max non-air blocks one MC preset may save/place; 0 = unlimited" )
+	MC.Config.UseInteract = GetConVar( "mc_use_interact" ) or CreateConVar( "mc_use_interact", "1", F, "Pressing +use (E) on an aimed usable MC block interacts with it regardless of the held weapon" )
 
 	local reach = MC.Config.Reach:GetFloat()
 	if math.abs( reach - 8192 ) < 0.01 or math.abs( reach - 182.5 ) < 0.01 then

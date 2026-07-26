@@ -29,6 +29,15 @@ local function T( ply, key, fallback, vars )
 	return MC.TFor and MC.TFor( ply, key, fallback, vars ) or fallback
 end
 
+-- Strip bulky/transient fields from dupes; the record alone rebuilds
+-- everything (blob, physics, datatables) in the paste factory.
+function ENT:OnEntityCopyTableFinish( data )
+	data.ClusterBlob = nil
+	data.ClusterBroken = nil
+	data.ClusterOwnerSID = nil
+	data.mcNextUseInfo = nil
+end
+
 function ENT:Use( activator )
 	if not IsValid( activator ) or not activator:IsPlayer() then return end
 	if ( self.mcNextUseInfo or 0 ) > CurTime() then return end
@@ -52,7 +61,7 @@ function ENT:RebuildClusterPhysics( frozen )
 	local record = self.ClusterRecord
 	if not record then return false, "no_record" end
 
-	local convexes, err, convexCount = MC.BuildClusterConvexes( record.cells, record.size )
+	local convexes, err, convexCount = MC.ClusterCollisionConvexes( record )
 	if not convexes then return false, err, convexCount end
 	if not self:ApplyClusterPhysics( convexes, frozen ) then return false, "phys_apply_failed" end
 

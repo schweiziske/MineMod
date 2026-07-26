@@ -274,6 +274,9 @@ local function canEdit( ply )
 		notify( ply, L( ply, "server.admin_build", "只有管理员可以建造 (mc_admin_only)" ) )
 		return false
 	end
+	-- Public veto: protection/zone addons deny by returning false. The
+	-- listener is responsible for notifying the player.
+	if MC.RunEvent and MC.RunEvent( "MC.CanPlayerEdit", ply ) == false then return false end
 	return true
 end
 
@@ -302,6 +305,7 @@ end
 function SV.Validate( ply, bx, by, bz, placing )
 	if not cooldownOK( ply ) then return false end
 	if not canEdit( ply ) then return false end
+	if MC.RunEvent and MC.RunEvent( "MC.CanPlayerEditCell", ply, bx, by, bz, placing == true ) == false then return false end
 
 	local reach = C.Reach:GetFloat()
 	if reach > 0 and IsValid( ply ) then
@@ -737,6 +741,7 @@ local function validatePlacementPlan( ply, plan )
 	if not plan or not plan.cells or #plan.cells == 0 then return false end
 	if not cooldownOK( ply ) then return false end
 	if not canEdit( ply ) then return false end
+	if MC.RunEvent and MC.RunEvent( "MC.CanPlayerEditCell", ply, plan.bx, plan.by, plan.bz, true ) == false then return false end
 	if not validateReach( ply, plan.bx, plan.by, plan.bz ) then return false end
 
 	local add = 0
@@ -773,6 +778,7 @@ local function validateBreakPlan( ply, plan )
 	if not plan or not plan.cells or #plan.cells == 0 then return false end
 	if not cooldownOK( ply ) then return false end
 	if not canEdit( ply ) then return false end
+	if MC.RunEvent and MC.RunEvent( "MC.CanPlayerEditCell", ply, plan.bx, plan.by, plan.bz, false ) == false then return false end
 	return validateReach( ply, plan.bx, plan.by, plan.bz )
 end
 
@@ -788,7 +794,9 @@ function SV.PlaceState( ply, bx, by, bz, stateId )
 		fxIndex = 1,
 		netMode = "bulk",
 	})
-	return result.ok == true and result.changed > 0
+	local placed = result.ok == true and result.changed > 0
+	if placed and MC.RunEvent then MC.RunEvent( "MC.PlayerPlacedBlock", ply, plan.bx, plan.by, plan.bz, plan.stateId or stateId ) end
+	return placed
 end
 
 function SV.Place( ply, bx, by, bz, id, orient )
@@ -802,7 +810,9 @@ function SV.Place( ply, bx, by, bz, id, orient )
 		fxIndex = 1,
 		netMode = "bulk",
 	} )
-	return result.ok == true and result.changed > 0
+	local placed = result.ok == true and result.changed > 0
+	if placed and MC.RunEvent then MC.RunEvent( "MC.PlayerPlacedBlock", ply, plan.bx, plan.by, plan.bz, plan.stateId ) end
+	return placed
 end
 
 function SV.Break( ply, bx, by, bz )
@@ -815,7 +825,12 @@ function SV.Break( ply, bx, by, bz )
 		fxIndex = 1,
 		netMode = "bulk",
 	} )
-	return result.ok == true and result.changed > 0
+	local broke = result.ok == true and result.changed > 0
+	if broke and MC.RunEvent then
+		local first = result.changes and result.changes[1]
+		MC.RunEvent( "MC.PlayerBrokeBlock", ply, plan.bx, plan.by, plan.bz, first and first.oldStateId or 0 )
+	end
+	return broke
 end
 
 function SV.SyncPlacementPlan( ply, bx, by, bz, id, orient )
@@ -914,8 +929,43 @@ function SV.Use( ply, bx, by, bz, selectedBlockID )
 	local b = MC.Blocks[id]
 	if not b or not b.handlers or not b.handlers.OnUse then return false end
 	if not SV.Validate( ply, bx, by, bz, false ) then return false end
-	return b.handlers.OnUse( ply, bx, by, bz, MC.GetBlockOrient( bx, by, bz ), selectedBlockID ) == true
+	local used = b.handlers.OnUse( ply, bx, by, bz, MC.GetBlockOrient( bx, by, bz ), selectedBlockID ) == true
+	if used and MC.RunEvent then
+		MC.RunEvent( "MC.PlayerUsedBlock", ply, bx, by, bz, MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0 )
+	end
+	return used
 end
+
+-- +use (E) interaction: activate the aimed usable block without requiring the
+-- placer SWEP. The engine +use still runs its own entity path, so skip when
+-- the eye trace hits a foreign entity or the map closer than the block —
+-- pressing E on a prop or button must not also toggle the block behind it.
+local USE_INTERACT_OWN_COLLISION = {
+	mc_chunk = true,
+	mc_chunk_phys = true,
+	mc_collision_carrier = true,
+}
+
+local function useInteractObstructed( ply, aim )
+	local tr = ply:GetEyeTrace()
+	if not tr.Hit then return false end
+	if IsValid( tr.Entity ) then
+		if USE_INTERACT_OWN_COLLISION[tr.Entity:GetClass()] then return false end
+	elseif not tr.HitWorld then
+		return false
+	end
+	return tr.HitPos:Distance( ply:EyePos() ) < ( aim.Distance or math.huge )
+end
+
+hook.Add( "KeyPress", "mc_use_interact", function( ply, key )
+	if key ~= IN_USE then return end
+	if C.UseInteract and not C.UseInteract:GetBool() then return end
+	if not IsValid( ply ) or not ply:Alive() or ply:InVehicle() then return end
+	local aim = MC.PlayerBlockAim and MC.PlayerBlockAim( ply )
+	if not aim then return end
+	if useInteractObstructed( ply, aim ) then return end
+	SV.Use( ply, aim.bx, aim.by, aim.bz )
+end )
 
 local function trimArg( s )
 	return string.match( tostring( s or "" ), "^%s*(.-)%s*$" )
@@ -950,6 +1000,7 @@ local function clearWorldNoNet()
 	SV.PhysDirtyPriority = {}
 	SV.PhysDirtyBulk = {}
 	SV.PhysDirtyBulkOrder = {}
+	if SV.FlushLightingCaches then SV.FlushLightingCaches() end
 end
 
 local function beginWorldLoadStage()
@@ -1208,6 +1259,7 @@ local function importCells( data, appendMode, deferResync )
 	end
 
 	SV.Dirty = true
+	if SV.FlushLightingCaches then SV.FlushLightingCaches() end
 	if not appendMode and SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
 	if not deferResync then
 		resyncAllClients()
@@ -1607,6 +1659,7 @@ function SV.SaveToPath( path, slotName )
 	local function finishSave( ok, ... )
 		if ok and saveIsDefault then SV.Dirty = false end
 		SV.SaveInProgress = false
+		if ok and MC.RunEvent then MC.RunEvent( "MC.WorldSaved", path, slotName ) end
 		return ok, ...
 	end
 
@@ -1904,6 +1957,9 @@ function SV.LoadFromPath( path, resyncClients, requestedName )
 		if not validParts then return false, partError end
 	end
 
+	-- Last chance for external code to read the outgoing world.
+	if MC.RunEvent then MC.RunEvent( "MC.PreWorldLoad", path, requestedName ) end
+
 	local stagedLoad = data.v == 9 or data.v == 10
 	local previousWorld = stagedLoad and beginWorldLoadStage() or nil
 	if not stagedLoad then clearWorldNoNet() end
@@ -1926,10 +1982,12 @@ function SV.LoadFromPath( path, resyncClients, requestedName )
 	if SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
 
 	SV.Dirty = false
+	if SV.FlushLightingCaches then SV.FlushLightingCaches() end
 	if resyncClients then resyncAllClients() end
 	MsgN( "[MC] loaded " .. SV.BlockCount .. " blocks" ..
 		( requestedName and ( " from \"" .. requestedName .. "\"" ) or "" ) ..
 		( data.map and ( " saved on map " .. tostring( data.map ) ) or "" ) )
+	if MC.RunEvent then MC.RunEvent( "MC.WorldLoaded", path, requestedName, SV.BlockCount ) end
 	return true
 end
 
@@ -2033,8 +2091,7 @@ concommand.Add( "mc_save_diag", function( ply )
 	if IsValid( ply ) then ply:PrintMessage( HUD_PRINTCONSOLE, msg ) end
 end )
 
-concommand.Add( "mc_clear", function( ply )
-	if IsValid( ply ) and not ply:IsAdmin() then return end
+function SV.ClearWorld()
 	if SV.ClearBlockUpdates then SV.ClearBlockUpdates() end
 	for _, c in pairs( MC.World ) do
 		if IsValid( c.ent ) then c.ent:Remove() end
@@ -2048,8 +2105,15 @@ concommand.Add( "mc_clear", function( ply )
 	SV.ReliableNetQueues = {}
 	if SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
 	SV.Dirty = true
+	if SV.FlushLightingCaches then SV.FlushLightingCaches() end
 	for _, target in ipairs( player.GetAll() ) do SV.BeginSync( target ) end
 	MsgN( "[MC] world cleared" )
+	if MC.RunEvent then MC.RunEvent( "MC.WorldCleared" ) end
+end
+
+concommand.Add( "mc_clear", function( ply )
+	if IsValid( ply ) and not ply:IsAdmin() then return end
+	SV.ClearWorld()
 end )
 
 concommand.Add( "mc_resync", function( ply )

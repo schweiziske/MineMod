@@ -158,6 +158,7 @@ function Import.CreateWorldSink( options )
 		end
 		self.committed = true
 		SV.Dirty = true
+		if SV.FlushLightingCaches then SV.FlushLightingCaches() end
 		if SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
 		Host.resyncAllClients()
 		return true

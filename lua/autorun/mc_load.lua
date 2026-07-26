@@ -71,6 +71,7 @@ local SHARED = {
 	"mc/redstone/sh_devices.lua",
 	"mc/redstone/sh_piston.lua",
 	"mc/sh_multiblock.lua",
+	"mc/api/sh_api.lua",
 }
 local SERVER_FILES = {
 	"mc/sv_world.lua",
@@ -100,7 +101,9 @@ local SERVER_FILES = {
 	"mc/sv_presets.lua",
 	"mc/sv_block_cluster.lua",
 	"mc/sv_damage.lua",
+	"mc/sv_lighting.lua",
 	"mc/sv_player.lua",
+	"mc/api/sv_api.lua",
 }
 local CLIENT_FILES = {
 	"mc/cl_lighting.lua",
@@ -147,6 +150,7 @@ local CLIENT_FILES = {
 	"mc/cl_light_bench.lua",
 	"mc/cl_player.lua",
 	"mc/render/cl_native_mesh_backend.lua",
+	"mc/api/cl_api.lua",
 }
 
 local LOAD_PERF_FILES = {
@@ -394,5 +398,12 @@ function MC.GeneratedRuntimeDiagnostics()
 		meshBackend = meshBackend and meshBackend.name or "lua",
 	}
 end
+
+-- Public API lifecycle. MC.APIAvailable fires synchronously while the block/
+-- state registries are still open (external addons register custom content
+-- here). The freeze happens on the zero-delay timers scheduled during include,
+-- so queuing the ready signal now runs it after them.
+if MC.RunEvent then MC.RunEvent( "MC.APIAvailable", MC.API and MC.API.VERSION or 0 ) end
+if MC.API and MC.API._FireReady then timer.Simple( 0, MC.API._FireReady ) end
 
 MsgN( "[MC] Voxel block addon loaded (" .. ( SERVER and "server" or "client" ) .. ")" )

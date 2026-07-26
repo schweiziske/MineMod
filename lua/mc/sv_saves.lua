@@ -252,6 +252,7 @@ function SV.DeleteSave( slotName )
 	file.Delete( SV.SaveMetaPath( slotName ) )
 	SV.DeleteSaveCovers( slotName )
 	MsgN( "[MC] deleted save \"" .. slotName .. "\"" )
+	if MC.RunEvent then MC.RunEvent( "MC.SaveDeleted", slotName ) end
 	return true
 end
 

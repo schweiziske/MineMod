@@ -151,6 +151,23 @@ local function callLifecycleHandler( info, actor, revision )
 	end
 end
 
+-- Public event: one MC.BlocksChanged per committed transaction. The change
+-- list is rebuilt as plain data (never the internal info tables) and only
+-- when someone is actually listening, so bulk commits stay free by default.
+local function fireBlocksChangedEvent( finalized, revision, actor )
+	if not MC.EventHasListeners or not MC.EventHasListeners( "MC.BlocksChanged" ) then return end
+	local eventChanges = {}
+	for i, info in ipairs( finalized ) do
+		eventChanges[i] = {
+			bx = info.bx, by = info.by, bz = info.bz,
+			stateId = info.stateId,
+			oldStateId = info.oldStateId,
+			kind = info.kind,
+		}
+	end
+	MC.RunEvent( "MC.BlocksChanged", eventChanges, revision, actor )
+end
+
 local function restoreTransactionStates( written, oldChunks )
 	for i = #written, 1, -1 do
 		local info = written[i]
@@ -308,6 +325,9 @@ function SV.ApplyBlockTransaction( cells, options )
 	for _, info in ipairs( finalized ) do
 		if info.blockEntityChanged and info.newBlockEntity then info.newBlockEntity.revision = revision end
 	end
+	-- Synchronous, pre-handler: block handlers and event listeners of this
+	-- transaction must already see fresh server lighting.
+	if SV.InvalidateLightingCells then SV.InvalidateLightingCells( finalized ) end
 	local actor = options.actor
 	local priorityPhys = options.priorityPhys == true
 	local dirty, immediateDirty, dirtyBounds = {}, {}, {}
@@ -435,6 +455,7 @@ function SV.ApplyBlockTransaction( cells, options )
 		end
 	end
 
+	fireBlocksChangedEvent( finalized, revision, actor )
 	return { ok = true, changed = #finalized, revision = revision, changes = finalized }
 end
 
@@ -668,6 +689,7 @@ function SV.ApplyBlockHydrationTransaction( cells, options )
 	for _, info in ipairs( finalized ) do
 		if info.blockEntityChanged and info.newBlockEntity then info.newBlockEntity.revision = revision end
 	end
+	if SV.InvalidateLightingCells then SV.InvalidateLightingCells( finalized ) end
 
 	local networkFallback
 	if generationRotated and SV.BeginSync then
@@ -718,6 +740,7 @@ function SV.ApplyBlockHydrationTransaction( cells, options )
 		end
 	end
 
+	fireBlocksChangedEvent( finalized, revision, actor )
 	return {
 		ok = true,
 		changed = #finalized,

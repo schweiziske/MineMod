@@ -461,6 +461,71 @@ local function runFullSpeedFill( spec )
 	}
 end
 
+-- Public programmatic fill: the /fill engine (raw chunk writes + one
+-- compressed hydration publish; block handlers do NOT run for filled cells).
+-- Coordinates are inclusive cell bounds in any order. stateId 0 clears.
+-- options: actor (attribution + event), ignoreVolumeLimit (skip mc_fill_max).
+-- Returns the fill result table { changed, chunks, added, removed, revision,
+-- ... } or nil, err ("invalid_state" | "world_limit" | "fill_too_large" |
+-- "max_blocks" | commit errors).
+function SV.FillVolume( x1, y1, z1, x2, y2, z2, stateId, options )
+	options = istable( options ) and options or {}
+	x1, y1, z1 = tonumber( x1 ), tonumber( y1 ), tonumber( z1 )
+	x2, y2, z2 = tonumber( x2 ), tonumber( y2 ), tonumber( z2 )
+	if not x1 or not y1 or not z1 or not x2 or not y2 or not z2 then return nil, "invalid_cell" end
+	stateId = math.floor( tonumber( stateId ) or -1 )
+	if stateId < 0 or ( stateId ~= 0 and ( not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) ) ) then
+		return nil, "invalid_state"
+	end
+	local blockId, orient = 0, 0
+	if stateId ~= 0 and MC.LegacyFromState then
+		local id, legacyOrient = MC.LegacyFromState( stateId )
+		blockId, orient = id or 0, legacyOrient or 0
+	end
+
+	local minx, maxx = math.min( math.floor( x1 ), math.floor( x2 ) ), math.max( math.floor( x1 ), math.floor( x2 ) )
+	local miny, maxy = math.min( math.floor( y1 ), math.floor( y2 ) ), math.max( math.floor( y1 ), math.floor( y2 ) )
+	local minz, maxz = math.min( math.floor( z1 ), math.floor( z2 ) ), math.max( math.floor( z1 ), math.floor( z2 ) )
+	if not SV.WorldBoundsOK( minx, miny, minz ) or not SV.WorldBoundsOK( maxx, maxy, maxz ) then
+		return nil, "world_limit"
+	end
+
+	local volume = ( maxx - minx + 1 ) * ( maxy - miny + 1 ) * ( maxz - minz + 1 )
+	if options.ignoreVolumeLimit ~= true then
+		local fillMax = C.FillMax and C.FillMax:GetInt() or 32768
+		if fillMax > 0 and volume > fillMax then return nil, "fill_too_large" end
+	end
+
+	local result, fillError = runFullSpeedFill( {
+		minx = minx, maxx = maxx,
+		miny = miny, maxy = maxy,
+		minz = minz, maxz = maxz,
+		blockId = blockId, orient = orient, stateId = stateId,
+		volume = volume,
+	} )
+	if not result then return nil, fillError end
+
+	print( string.format(
+		"[MC fill] mode=chunk-hydration volume=%d changed=%d chunks=%d revision=%d scan=%.3fms apply=%.3fms netpack=%.3fms parts=%d bytes=%d recipients=%d elapsed=%.3fms",
+		volume, result.changed or 0, result.chunks or 0, result.revision or SV.BlockRevision or 0,
+		result.scanMS or 0, result.applyMS or 0, result.netMS or 0,
+		result.parts or 0, result.bytes or 0, result.recipients or 0, result.elapsedMS or 0
+	) )
+	if result.fallbackReason then
+		print( "[MC fill] Chunk hydration fell back to full client resync: " .. tostring( result.fallbackReason ) )
+	end
+	if ( result.changed or 0 ) > 0 and SV.FlushLightingCaches then SV.FlushLightingCaches() end
+	if ( result.changed or 0 ) > 0 and MC.RunEvent then
+		MC.RunEvent( "MC.WorldFilled", {
+			x1 = minx, y1 = miny, z1 = minz,
+			x2 = maxx, y2 = maxy, z2 = maxz,
+			stateId = stateId,
+			changed = result.changed,
+		}, options.actor )
+	end
+	return result
+end
+
 local function runFill( ply, args )
 	if #args < 8 then sendFillUsage( ply ) return end
 	if not SV.CanEdit( ply ) then return end
@@ -482,47 +547,22 @@ local function runFill( ply, args )
 		return
 	end
 
-	x1, y1, z1 = math.floor( x1 ), math.floor( y1 ), math.floor( z1 )
-	x2, y2, z2 = math.floor( x2 ), math.floor( y2 ), math.floor( z2 )
-	local minx, maxx = math.min( x1, x2 ), math.max( x1, x2 )
-	local miny, maxy = math.min( y1, y2 ), math.max( y1, y2 )
-	local minz, maxz = math.min( z1, z2 ), math.max( z1, z2 )
-
-	if not SV.WorldBoundsOK( minx, miny, minz ) or not SV.WorldBoundsOK( maxx, maxy, maxz ) then
-		chat( ply, L( ply, "server.world_limit", "超出建造范围 (mc_world_limit)" ) )
-		return
-	end
-
-	local volume = ( maxx - minx + 1 ) * ( maxy - miny + 1 ) * ( maxz - minz + 1 )
-	local fillMax = C.FillMax and C.FillMax:GetInt() or 32768
-	if fillMax > 0 and volume > fillMax then
-		chat( ply, L( ply, "server.fill_too_large", "填充范围太大 ({volume} > mc_fill_max {max})", { volume = volume, max = fillMax } ) )
-		return
-	end
-
-	local result, fillError = runFullSpeedFill( {
-		minx = minx, maxx = maxx,
-		miny = miny, maxy = maxy,
-		minz = minz, maxz = maxz,
-		blockId = id, orient = orient, stateId = stateId,
-		volume = volume,
-	} )
+	local result, fillError = SV.FillVolume( x1, y1, z1, x2, y2, z2, stateId, { actor = ply } )
 	if not result then
-		if fillError == "max_blocks" then
+		if fillError == "world_limit" then
+			chat( ply, L( ply, "server.world_limit", "超出建造范围 (mc_world_limit)" ) )
+		elseif fillError == "fill_too_large" then
+			local volume = ( math.abs( math.floor( x2 ) - math.floor( x1 ) ) + 1 )
+				* ( math.abs( math.floor( y2 ) - math.floor( y1 ) ) + 1 )
+				* ( math.abs( math.floor( z2 ) - math.floor( z1 ) ) + 1 )
+			local fillMax = C.FillMax and C.FillMax:GetInt() or 32768
+			chat( ply, L( ply, "server.fill_too_large", "填充范围太大 ({volume} > mc_fill_max {max})", { volume = volume, max = fillMax } ) )
+		elseif fillError == "max_blocks" then
 			chat( ply, L( ply, "server.fill_max_blocks", "Fill would exceed mc_max_blocks" ) )
 		else
 			chat( ply, "Fill failed: " .. tostring( fillError or "unknown_error" ) )
 		end
 		return
-	end
-	print( string.format(
-		"[MC fill] mode=chunk-hydration volume=%d changed=%d chunks=%d revision=%d scan=%.3fms apply=%.3fms netpack=%.3fms parts=%d bytes=%d recipients=%d elapsed=%.3fms",
-		volume, result.changed or 0, result.chunks or 0, result.revision or SV.BlockRevision or 0,
-		result.scanMS or 0, result.applyMS or 0, result.netMS or 0,
-		result.parts or 0, result.bytes or 0, result.recipients or 0, result.elapsedMS or 0
-	) )
-	if result.fallbackReason then
-		print( "[MC fill] Chunk hydration fell back to full client resync: " .. tostring( result.fallbackReason ) )
 	end
 	chat( ply, L( ply, "server.filled", "Filled {count} blocks", { count = result.changed or 0 } ) )
 end

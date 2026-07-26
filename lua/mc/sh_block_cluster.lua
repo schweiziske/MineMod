@@ -21,21 +21,31 @@ MC = MC or {}
 -- the engine-style pipeline again.
 MC.ClusterEngineStyle = false
 
--- Same single-entity safety cap as mc_chunk physics.
-MC.ClusterMaxConvexes = 128
-
--- Max merged box extent per axis, in cells. vphysics (IVP) can crash srcds
--- outright when a single convex is very large; everything proven in this
--- addon (mc_chunk greedy windows, carriers) stays within the 8-cell
--- collision subchunk envelope, so the cluster merger must too.
-MC.ClusterMaxMergeCells = 8
+-- Tunable physics limits (convars below; this table is the fallback when no
+-- convar exists, e.g. pure-Lua test environments). Live-tested guidance
+-- (2026-07-26):
+--  * maxConvexes — precise-mode cap. Moving multiconvex impacts against
+--    chunk collision crash srcds probabilistically, scaling with convex
+--    count: 64 keeps the dice small; 256 initialized fine frozen but died
+--    on unfreeze/impact. Crate-mode records bypass the cap entirely.
+--  * mergeCells — max merged box edge in cells. IVP can crash outright on
+--    very large single convexes; everything proven in this addon stays
+--    within the 8-cell collision-subchunk envelope.
+--  * collisionInset — per-face collision skin shrink in units, so
+--    converted-in-place structures never start flush / zero-distance
+--    against the surrounding chunk collision.
+MC.ClusterDefaults = {
+	maxConvexes = 64,
+	mergeCells = 8,
+	collisionInset = 0.5,
+}
 MC.ClusterPayloadMaxBytes = 56000
 MC.ClusterAbsoluteMaxBlocks = 8191 -- convert net message count field is 13 bits
 
 if SERVER then
 	local F = bit.bor( FCVAR_ARCHIVE, FCVAR_NOTIFY, FCVAR_REPLICATED )
 	MC.Config.ClusterMaxBlocks = GetConVar( "mc_cluster_max_blocks" )
-		or CreateConVar( "mc_cluster_max_blocks", "4096", F, "Max blocks one cluster entity may hold", 1, MC.ClusterAbsoluteMaxBlocks )
+		or CreateConVar( "mc_cluster_max_blocks", "8191", F, "Max blocks one cluster entity may hold", 1, MC.ClusterAbsoluteMaxBlocks )
 	MC.Config.ClusterMaxExtent = GetConVar( "mc_cluster_max_extent" )
 		or CreateConVar( "mc_cluster_max_extent", "96", F, "Max cluster selection edge length in blocks", 1, 255 )
 	MC.Config.ClusterHealthPerBlock = GetConVar( "mc_cluster_health_per_block" )
@@ -44,6 +54,15 @@ if SERVER then
 		or CreateConVar( "mc_cluster_mass_per_block", "10", F, "Cluster entity mass per block (kg)" )
 	MC.Config.ClusterMaxPerPlayer = GetConVar( "mc_cluster_max_per_player" )
 		or CreateConVar( "mc_cluster_max_per_player", "8", F, "Max cluster entities per player; 0 = unlimited" )
+	MC.Config.ClusterMaxConvexes = GetConVar( "mc_cluster_max_convexes" )
+		or CreateConVar( "mc_cluster_max_convexes", "64", F,
+			"Max collision convexes per precise-mode cluster (crate mode bypasses). 64 tested-safe; higher risks srcds crashes on unfreeze/impact", 1, 1024 )
+	MC.Config.ClusterMergeCells = GetConVar( "mc_cluster_merge_cells" )
+		or CreateConVar( "mc_cluster_merge_cells", "8", F,
+			"Max merged collision box edge in cells; above the 8-cell envelope IVP can crash srcds on large convexes", 1, 32 )
+	MC.Config.ClusterCollisionInset = GetConVar( "mc_cluster_collision_inset" )
+		or CreateConVar( "mc_cluster_collision_inset", "0.5", F,
+			"Collision skin inset per face in units; keeps converted structures from starting flush against block collision. 0 disables", 0, 8 )
 end
 
 local function clampedConVarInt( name, default, minValue, maxValue )
@@ -52,12 +71,30 @@ local function clampedConVarInt( name, default, minValue, maxValue )
 	return math.Clamp( n, minValue, maxValue )
 end
 
+local function clampedConVarFloat( name, default, minValue, maxValue )
+	local cv = GetConVar( name )
+	local n = cv and cv:GetFloat() or default
+	return math.Clamp( n, minValue, maxValue )
+end
+
 function MC.ClusterMaxBlocks()
-	return clampedConVarInt( "mc_cluster_max_blocks", 4096, 1, MC.ClusterAbsoluteMaxBlocks )
+	return clampedConVarInt( "mc_cluster_max_blocks", 8191, 1, MC.ClusterAbsoluteMaxBlocks )
 end
 
 function MC.ClusterMaxExtent()
 	return clampedConVarInt( "mc_cluster_max_extent", 96, 1, 255 )
+end
+
+function MC.ClusterMaxConvexes()
+	return clampedConVarInt( "mc_cluster_max_convexes", MC.ClusterDefaults.maxConvexes, 1, 1024 )
+end
+
+function MC.ClusterMaxMergeCells()
+	return clampedConVarInt( "mc_cluster_merge_cells", MC.ClusterDefaults.mergeCells, 1, 32 )
+end
+
+function MC.ClusterCollisionInset()
+	return clampedConVarFloat( "mc_cluster_collision_inset", MC.ClusterDefaults.collisionInset, 0, 8 )
 end
 
 --------------------------------------------------------------- payload codec
@@ -66,7 +103,12 @@ end
 
 function MC.ClusterEncode( record )
 	if not record or not istable( record.cells ) or not istable( record.size ) then return nil, "invalid_record" end
-	local json = util.TableToJSON( { v = 1, size = record.size, cells = record.cells } )
+	local json = util.TableToJSON( {
+		v = 1,
+		size = record.size,
+		cells = record.cells,
+		crate = record.crate == true or nil,
+	} )
 	if not json then return nil, "encode_failed" end
 	local compressed = util.Compress( json )
 	if not compressed or #compressed == 0 then return nil, "compress_failed" end
@@ -81,7 +123,7 @@ function MC.ClusterDecode( blob )
 	local data = util.JSONToTable( json )
 	local ok, err = MC.ClusterValidateRecord( data )
 	if not ok then return nil, err end
-	return { size = data.size, cells = data.cells }
+	return { size = data.size, cells = data.cells, crate = data.crate == true }
 end
 
 function MC.ClusterValidateRecord( data )
@@ -182,6 +224,19 @@ function MC.ClusterSnapTargets( record, pos, rotation )
 end
 
 ------------------------------------------------------------ physics building
+-- Collision skin inset (mc_cluster_collision_inset): every convex shrinks
+-- inward so converted-in-place structures never start flush / zero-distance
+-- against the surrounding chunk collision (the unfreeze contact burst and
+-- seam grinding both start there). Uniform per-box inset — adjacent merged
+-- boxes gain a 2*inset internal gap, accepted for simplicity. Thin shapes
+-- clamp so carpets/plates cannot shrink away. Visually invisible at 0.5u on
+-- 36.5u blocks; paste snapping uses the entity transform and is unaffected.
+local function axisInset( extent )
+	local inset = MC.ClusterCollisionInset()
+	if inset <= 0 or extent <= 0 then return 0 end
+	return math.min( inset, extent * 0.25 )
+end
+
 local function cellIndex( dx, dy, dz, sx, sy )
 	return dx + dy * sx + dz * sx * sy
 end
@@ -190,12 +245,40 @@ local function appendBoxConvex( convexes, x0, y0, z0, x1, y1, z1 )
 	local BS = MC.BS
 	x0, y0, z0 = x0 * BS, y0 * BS, z0 * BS
 	x1, y1, z1 = x1 * BS, y1 * BS, z1 * BS
+	local ix = axisInset( x1 - x0 )
+	local iy = axisInset( y1 - y0 )
+	local iz = axisInset( z1 - z0 )
+	x0, y0, z0 = x0 + ix, y0 + iy, z0 + iz
+	x1, y1, z1 = x1 - ix, y1 - iy, z1 - iz
 	convexes[#convexes + 1] = {
 		Vector( x0, y0, z0 ), Vector( x1, y0, z0 ),
 		Vector( x0, y1, z0 ), Vector( x1, y1, z0 ),
 		Vector( x0, y0, z1 ), Vector( x1, y0, z1 ),
 		Vector( x0, y1, z1 ), Vector( x1, y1, z1 ),
 	}
+end
+
+-- Arbitrary convex point sets (stairs etc.): approximate the inward offset
+-- with a per-axis shrink toward the centroid — exact for boxes, negligible
+-- slope change for wedges at 0.5u scale.
+local function insetConvexPoints( points )
+	local minX, minY, minZ = math.huge, math.huge, math.huge
+	local maxX, maxY, maxZ = -math.huge, -math.huge, -math.huge
+	for _, p in ipairs( points ) do
+		minX, minY, minZ = math.min( minX, p.x ), math.min( minY, p.y ), math.min( minZ, p.z )
+		maxX, maxY, maxZ = math.max( maxX, p.x ), math.max( maxY, p.y ), math.max( maxZ, p.z )
+	end
+	local ex, ey, ez = maxX - minX, maxY - minY, maxZ - minZ
+	local sx = ex > 0 and ( ex - 2 * axisInset( ex ) ) / ex or 1
+	local sy = ey > 0 and ( ey - 2 * axisInset( ey ) ) / ey or 1
+	local sz = ez > 0 and ( ez - 2 * axisInset( ez ) ) / ez or 1
+	local cx, cy, cz = ( minX + maxX ) * 0.5, ( minY + maxY ) * 0.5, ( minZ + maxZ ) * 0.5
+	for _, p in ipairs( points ) do
+		p.x = cx + ( p.x - cx ) * sx
+		p.y = cy + ( p.y - cy ) * sy
+		p.z = cz + ( p.z - cz ) * sz
+	end
+	return points
 end
 
 -- Build entity-local physics convexes for a cluster record. Full-cube
@@ -233,7 +316,7 @@ function MC.BuildClusterConvexes( cells, size )
 
 	local convexes = {}
 	local visited = {}
-	local mergeLimit = MC.ClusterMaxMergeCells
+	local mergeLimit = MC.ClusterMaxMergeCells()
 	for dz = 0, sz - 1 do
 		for dy = 0, sy - 1 do
 			for dx = 0, sx - 1 do
@@ -300,11 +383,31 @@ function MC.BuildClusterConvexes( cells, size )
 					points[#points + 1] = Vector( ( part.dx + px ) * BS, ( part.dy + py ) * BS, ( part.dz + pz ) * BS )
 				end
 			end
-			if #points >= 4 then convexes[#convexes + 1] = points end
+			if #points >= 4 then convexes[#convexes + 1] = insetConvexPoints( points ) end
 		end
 	end
 
 	if #convexes == 0 then return nil, "no_collision" end
-	if #convexes > MC.ClusterMaxConvexes then return nil, "too_complex", #convexes end
+	if #convexes > MC.ClusterMaxConvexes() then return nil, "too_complex", #convexes end
 	return convexes
+end
+
+-- Collision for a record. Crate records ("箱体" conversions) collide as one
+-- full-size AABB box — physically trivial regardless of structure size —
+-- while precise records use the greedy multiconvex under the convex cap.
+-- The block cells stay exact either way, so paste-back is always precise.
+function MC.ClusterCollisionConvexes( record )
+	if record.crate == true then
+		local x1 = record.size[1] * MC.BS
+		local y1 = record.size[2] * MC.BS
+		local z1 = record.size[3] * MC.BS
+		local ix, iy, iz = axisInset( x1 ), axisInset( y1 ), axisInset( z1 )
+		return { {
+			Vector( ix, iy, iz ), Vector( x1 - ix, iy, iz ),
+			Vector( ix, y1 - iy, iz ), Vector( x1 - ix, y1 - iy, iz ),
+			Vector( ix, iy, z1 - iz ), Vector( x1 - ix, iy, z1 - iz ),
+			Vector( ix, y1 - iy, z1 - iz ), Vector( x1 - ix, y1 - iy, z1 - iz ),
+		} }
+	end
+	return MC.BuildClusterConvexes( record.cells, record.size )
 end

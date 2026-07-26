@@ -674,6 +674,14 @@ MC.ConfigConVars = {
 				"两次碰撞重建批次之间的秒数。", { unit = "s" } ),
 		} ),
 
+		category( "interaction", "gameplay", "Block interaction", "方块互动",
+			"How players activate doors, levers and other usable blocks.",
+			"玩家激活门、拉杆等可互动方块的方式。", {
+			item( "mc_use_interact", "Use key interacts with blocks", "按 E 与方块互动", "bool",
+				"Pressing the use key (E) on an aimed usable block interacts with it regardless of the held weapon; the placer's right-click keeps working.",
+				"对准可互动方块按使用键（E）即可互动，无需手持放置器；放置器右键互动不受影响。" ),
+		} ),
+
 		category( "block_updates", "gameplay", "Block updates", "方块更新",
 			"Controls queued neighbour updates and scheduled block ticks.",
 			"控制水、红石及其他方块的邻居更新与计划刻。", {

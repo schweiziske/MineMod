@@ -378,7 +378,24 @@ function SV.SavePreset( presetName, cornerA, cornerB, anchor, cover, ply )
 	}
 	writePresetMeta( presetName, data )
 	MsgN( string.format( "[MC] saved preset \"%s\" (%d blocks, %dx%dx%d)", presetName, #cells, data.size[1], data.size[2], data.size[3] ) )
+	if MC.RunEvent then MC.RunEvent( "MC.PresetSaved", presetName, ply ) end
 	return true, data
+end
+
+-- Delete a preset (.dat + meta + covers) and drop its cache entry.
+function SV.DeletePreset( presetName )
+	presetName = SV.PresetName( presetName )
+	if not presetName then return false, "missing_preset_name" end
+	local path = SV.PresetPath( presetName )
+	if not file.Exists( path, "DATA" ) then return false, "preset_not_found" end
+	file.Delete( path )
+	local metaPath = SV.PresetMetaPath( presetName )
+	if file.Exists( metaPath, "DATA" ) then file.Delete( metaPath ) end
+	deletePresetCovers( presetName )
+	PresetCache[presetName] = nil
+	MsgN( "[MC] deleted preset \"" .. presetName .. "\"" )
+	if MC.RunEvent then MC.RunEvent( "MC.PresetDeleted", presetName ) end
+	return true
 end
 
 local function presetCellTable( data, origin, rotation )
@@ -506,6 +523,9 @@ function SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 	origin = asCell( origin )
 	if not origin then return false, "invalid_origin" end
 	if not presetPlaceCooldownOK( ply ) then return false, "preset_place_cooldown" end
+	-- Same coarse gate as every other player edit path (admin convar plus the
+	-- MC.CanPlayerEdit protection veto); console callers skip it.
+	if IsValid( ply ) and SV.CanEdit and not SV.CanEdit( ply ) then return false, "permission" end
 	local data, err = SV.LoadPreset( presetName )
 	if not data then return false, err end
 
@@ -562,6 +582,10 @@ function SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 		local key = overwrite and "server.preset_overwritten" or "server.preset_placed"
 		local fallback = overwrite and "已覆盖预设: {name} ({changes} changes)" or "已放置预设: {name} ({changes} changes)"
 		ply:ChatPrint( "[MC] " .. L( ply, key, fallback, { name = tostring( data.name or presetName ), changes = totalChanged } ) )
+	end
+	if MC.RunEvent then
+		MC.RunEvent( "MC.PresetPlaced", ply, tostring( data.name or presetName ),
+			{ bx = origin.bx, by = origin.by, bz = origin.bz }, rotation, totalChanged, overwrite )
 	end
 	return true, totalChanged
 end

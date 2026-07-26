@@ -66,6 +66,10 @@ local function broadcastClusterFx( ent, isSpawn )
 end
 
 function SV.SpawnCluster( record, pos, ang, frozen, ownerSID )
+	if MC.ClusterValidateRecord then
+		local recordOK, recordErr = MC.ClusterValidateRecord( record )
+		if not recordOK then return nil, recordErr end
+	end
 	local blob, encodeErr = MC.ClusterEncode( record )
 	if not blob then return nil, encodeErr end
 
@@ -85,6 +89,14 @@ function SV.SpawnCluster( record, pos, ang, frozen, ownerSID )
 		return nil, err, convexCount
 	end
 	pushClusterData( ent )
+	-- The record lives on the entity (ent.ClusterRecord); hand listeners a
+	-- copy so external code cannot desync blob/physics/mesh through it.
+	if MC.RunEvent and MC.EventHasListeners and MC.EventHasListeners( "MC.ClusterSpawned" ) then
+		local size, cells = record.size, record.cells
+		local eventRecord = { size = { size[1], size[2], size[3] }, cells = {} }
+		for i = 1, #cells do eventRecord.cells[i] = cells[i] end
+		MC.RunEvent( "MC.ClusterSpawned", ent, eventRecord )
+	end
 	return ent
 end
 
@@ -95,6 +107,54 @@ local function assignClusterOwner( ent, ply )
 	if ent.CPPISetOwner then ent:CPPISetOwner( ply ) end
 	if cleanup and cleanup.Add then cleanup.Add( ply, "props", ent ) end
 end
+
+-- Public: grant a spawned cluster prop-protection ownership, creator label
+-- and cleanup registration (the convert path does this automatically).
+SV.AssignClusterOwner = assignClusterOwner
+
+------------------------------------------------------------------ duplicator
+-- Dupe support (dupe tool and Adv Dupe use the same registry): the cluster
+-- record rides in the copied entity table (heavy/transient fields are
+-- stripped in ENT:OnEntityCopyTableFinish) and this factory rebuilds the
+-- entity from it. Registered classes skip the generic table-apply, so
+-- ownership is reassigned to the pasting player here. Same caps as the
+-- convert path; dupes always paste frozen and the duplicator applies the
+-- saved motion state afterwards.
+duplicator.RegisterEntityClass( CLUSTER_CLASS, function( ply, data )
+	local source = istable( data ) and istable( data.ClusterRecord ) and data.ClusterRecord or nil
+	if not source then return nil end
+	local record = { size = source.size, cells = source.cells, crate = source.crate == true }
+	if not MC.ClusterValidateRecord( record ) then return nil end
+
+	local count = math.floor( #record.cells / 4 )
+	local maxExtent = MC.ClusterMaxExtent()
+	if count > MC.ClusterMaxBlocks()
+		or record.size[1] > maxExtent
+		or record.size[2] > maxExtent
+		or record.size[3] > maxExtent then
+		return nil
+	end
+
+	local sid = IsValid( ply ) and ply:SteamID64() or nil
+	local maxPer = C.ClusterMaxPerPlayer and C.ClusterMaxPerPlayer:GetInt() or 8
+	if maxPer > 0 and countPlayerClusters( sid ) >= maxPer then
+		notify( ply, L( ply, "cluster.per_player_limit",
+			"你的结构实体已达上限 ({max} 个, mc_cluster_max_per_player)", { max = maxPer } ) )
+		return nil
+	end
+
+	local ent = SV.SpawnCluster( record, data.Pos or vector_origin, data.Angle or angle_zero, true, sid )
+	if not IsValid( ent ) then return nil end
+	assignClusterOwner( ent, ply )
+	if istable( data.ClusterOriginCell ) then ent.ClusterOriginCell = data.ClusterOriginCell end
+
+	local health = tonumber( data.ClusterHealth )
+	if health and ( ent.ClusterMaxHealth or 0 ) > 0 then
+		ent.ClusterHealth = math.Clamp( health, 1, ent.ClusterMaxHealth )
+		ent:SetHealth( math.floor( ent.ClusterHealth ) )
+	end
+	return ent
+end, "Data" )
 
 ---------------------------------------------------------------- paste / undo
 -- Place a cluster's blocks back onto the grid at targetMin with a quarter
@@ -159,9 +219,15 @@ local function placeClusterAt( ply, ent, targetMin, rotation )
 	end
 	if ( changed or 0 ) <= 0 then return false, "unchanged" end
 
+	if MC.RunEvent then MC.RunEvent( "MC.ClusterPasted", ply, ent, changed ) end
 	ent:Remove()
 	return true, changed
 end
+
+-- Public: place a cluster entity's blocks back onto the grid. targetMin is
+-- the { bx, by, bz } array-form world cell of the record's min corner;
+-- rotation 0..3 clockwise quarter turns. Never overwrites occupied cells.
+SV.PlaceClusterAt = placeClusterAt
 
 local PASTE_FAIL_TEXT = {
 	occupied = { "cluster.paste_err_occupied", "目标位置被方块占用" },
@@ -187,6 +253,7 @@ local function registerClusterUndo( ply, ent, originCell )
 	undo.SetCustomUndoText( L( ply, "cluster.undo_text", "撤销 MC 方块结构 (放回原位)" ) )
 	undo.AddFunction( function()
 		if not IsValid( ent ) then return end
+		if SV.CanEdit and not SV.CanEdit( ply ) then return end
 		local ok, err, blocked = placeClusterAt( ply, ent, originCell, 0 )
 		if ok then
 			notify( ply, L( ply, "cluster.undo_restored", "已把结构放回原位" ) )
@@ -199,6 +266,7 @@ end
 
 net.Receive( "mc_cluster_convert", function( _, ply )
 	local count = net.ReadUInt( 13 )
+	local crate = net.ReadBool()
 	local maxBlocks = MC.ClusterMaxBlocks()
 	if count < 1 or count > maxBlocks then
 		notify( ply, L( ply, "cluster.too_many", "选区超过上限 ({max} 方块, mc_cluster_max_blocks)", { max = maxBlocks } ) )
@@ -274,13 +342,14 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 	local record = {
 		size = { maxx - minx + 1, maxy - miny + 1, maxz - minz + 1 },
 		cells = cells,
+		crate = crate or nil,
 	}
 
-	-- validate physics before touching the world
-	local convexes, convexErr, convexCount = MC.BuildClusterConvexes( record.cells, record.size )
+	-- validate physics before touching the world (crate = one box, never fails)
+	local convexes, convexErr, convexCount = MC.ClusterCollisionConvexes( record )
 	if not convexes then
 		if convexErr == "too_complex" then
-			notify( ply, L( ply, "cluster.too_complex", "结构太复杂: {n}/{max} 个碰撞凸包", { n = convexCount or 0, max = MC.ClusterMaxConvexes } ) )
+			notify( ply, L( ply, "cluster.too_complex", "结构太复杂: {n}/{max} 个碰撞凸包", { n = convexCount or 0, max = MC.ClusterMaxConvexes() } ) )
 		elseif convexErr == "no_collision" then
 			notify( ply, L( ply, "cluster.no_collision", "选区里没有可碰撞的方块" ) )
 		else
@@ -297,11 +366,38 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 	ent.ClusterOriginCell = { minx, miny, minz }
 	assignClusterOwner( ent, ply )
 
-	local changed = SV.RemoveBlocksBulk( removeCells, {
-		actor = ply,
-		fx = false,
-		priorityPhys = true,
-	} )
+	-- Removal rides the hydration fast lane (chunk patches touch only the
+	-- affected chunks), mirroring preset placement and paste-back. The plain
+	-- bulk fallback below brackets every coalesced group with a WHOLE-WORLD
+	-- light rebuild client-side — exactly the per-grab tax converting must
+	-- not pay — so it only runs when hydration transport is unavailable.
+	local changed
+	if SV.ApplyBlockHydrationTransaction then
+		local airCells = {}
+		for i, cell in ipairs( removeCells ) do
+			airCells[i] = { bx = cell.bx, by = cell.by, bz = cell.bz, stateId = 0 }
+		end
+		local result = SV.ApplyBlockHydrationTransaction( airCells, {
+			actor = ply,
+			fx = false,
+			handlers = true,
+			blockUpdates = true,
+		} )
+		if result.ok == true then
+			changed = result.changed
+		elseif result.error ~= "chunk_hydration_transport_unavailable" then
+			ent:Remove()
+			notify( ply, L( ply, "cluster.remove_failed", "移除方块失败，转换已取消" ) )
+			return
+		end
+	end
+	if changed == nil then
+		changed = SV.RemoveBlocksBulk( removeCells, {
+			actor = ply,
+			fx = false,
+			priorityPhys = true,
+		} )
+	end
 	if ( changed or 0 ) <= 0 then
 		ent:Remove()
 		notify( ply, L( ply, "cluster.remove_failed", "移除方块失败，转换已取消" ) )
@@ -312,10 +408,17 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 	end
 
 	registerClusterUndo( ply, ent, ent.ClusterOriginCell )
+	if MC.RunEvent then MC.RunEvent( "MC.ClusterConverted", ply, ent, #removeCells ) end
 	if MC.ClusterEngineStyle == true then broadcastClusterFx( ent, true ) end
-	notify( ply, L( ply, "cluster.converted",
-		"已转换 {n} 个方块为结构实体 (初始为冻结状态, 物理枪解冻后可搬运, 对准后按 G 放回网格)",
-		{ n = #removeCells } ) )
+	if crate then
+		notify( ply, L( ply, "cluster.converted_crate",
+			"已转换 {n} 个方块为箱体结构 (整箱碰撞, 物理枪解冻可搬运, 对准按 G 放回网格)",
+			{ n = #removeCells } ) )
+	else
+		notify( ply, L( ply, "cluster.converted",
+			"已转换 {n} 个方块为结构实体 (初始为冻结状态, 物理枪解冻后可搬运, 对准后按 G 放回网格)",
+			{ n = #removeCells } ) )
+	end
 end )
 
 --------------------------------------------------------------------- payload
@@ -381,8 +484,58 @@ function SV.BreakCluster( ent, attacker )
 	if not IsValid( ent ) or ent.ClusterBroken then return end
 	ent.ClusterBroken = true
 
+	if MC.RunEvent then MC.RunEvent( "MC.ClusterBroken", ent, attacker ) end
 	broadcastClusterFx( ent, false )
 	ent:Remove()
+end
+
+-- Public: snapshot the non-air cells of an inclusive world cell box into a
+-- cluster record without modifying the world. The record AABB is tightened
+-- to the occupied cells; the same extent/count caps as the player convert
+-- path apply. Pair with SV.SpawnCluster / MC.API.Cluster.Spawn.
+function SV.CaptureClusterRecord( x1, y1, z1, x2, y2, z2 )
+	local minx, maxx = math.min( x1, x2 ), math.max( x1, x2 )
+	local miny, maxy = math.min( y1, y2 ), math.max( y1, y2 )
+	local minz, maxz = math.min( z1, z2 ), math.max( z1, z2 )
+	local maxExtent = MC.ClusterMaxExtent()
+	if maxx - minx + 1 > maxExtent or maxy - miny + 1 > maxExtent or maxz - minz + 1 > maxExtent then
+		return nil, "too_large"
+	end
+
+	local maxBlocks = MC.ClusterMaxBlocks()
+	local found = {}
+	local count = 0
+	local ominx, ominy, ominz = math.huge, math.huge, math.huge
+	local omaxx, omaxy, omaxz = -math.huge, -math.huge, -math.huge
+	for bz = minz, maxz do
+		for by = miny, maxy do
+			for bx = minx, maxx do
+				local stateId = MC.GetBlockState( bx, by, bz ) or 0
+				if stateId ~= 0 then
+					count = count + 1
+					if count > maxBlocks then return nil, "too_many_cells" end
+					found[#found + 1] = { bx, by, bz, stateId }
+					ominx, ominy, ominz = math.min( ominx, bx ), math.min( ominy, by ), math.min( ominz, bz )
+					omaxx, omaxy, omaxz = math.max( omaxx, bx ), math.max( omaxy, by ), math.max( omaxz, bz )
+				end
+			end
+		end
+	end
+	if count == 0 then return nil, "empty" end
+
+	local cells = {}
+	local n = 0
+	for _, cell in ipairs( found ) do
+		cells[n + 1] = cell[1] - ominx
+		cells[n + 2] = cell[2] - ominy
+		cells[n + 3] = cell[3] - ominz
+		cells[n + 4] = cell[4]
+		n = n + 4
+	end
+	return {
+		size = { omaxx - ominx + 1, omaxy - ominy + 1, omaxz - ominz + 1 },
+		cells = cells,
+	}, nil, { bx = ominx, by = ominy, bz = ominz }
 end
 
 ---------------------------------------------------------------- persistence
@@ -415,6 +568,7 @@ local function saveClustersSidecar( path )
 			origin = ent.ClusterOriginCell,
 			size = ent.ClusterRecord.size,
 			cells = ent.ClusterRecord.cells,
+			crate = ent.ClusterRecord.crate == true or nil,
 		}
 	end
 
@@ -455,7 +609,7 @@ local function loadClustersSidecar( path )
 
 	local loaded = 0
 	for _, entry in ipairs( data.clusters ) do
-		local record = { size = entry.size, cells = entry.cells }
+		local record = { size = entry.size, cells = entry.cells, crate = entry.crate == true }
 		local ok = MC.ClusterValidateRecord( record )
 		local pos = istable( entry.pos ) and Vector( tonumber( entry.pos[1] ) or 0, tonumber( entry.pos[2] ) or 0, tonumber( entry.pos[3] ) or 0 ) or nil
 		if ok and pos then
