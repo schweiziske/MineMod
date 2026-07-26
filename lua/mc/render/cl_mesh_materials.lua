@@ -129,8 +129,8 @@ do
 			mat:SetTexture( "$basetexture", baseTex )
 			MC.MaterialGpuOpaque = mat
 		end
-		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex41_centroid_vface_opaque", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth34_clean_pcf_vface_ps30",
+		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex44_centroid_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth35_clean_pcf_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,
@@ -193,8 +193,8 @@ do
 		-- ONLY material allowed to define $c3_* (its pixel shader declares and
 		-- uses register c3); defining $c3 on the plain material would make the
 		-- engine upload c3 over that shader's inline literal constants.
-		local fancyMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy23_centroid_vface_opaque", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy31_clean_pcf_vface_ps30",
+		local fancyMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy28_centroid_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy32_clean_pcf_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,
@@ -231,8 +231,8 @@ do
 			["$c0_x"] = "0", ["$c0_y"] = "0", ["$c0_z"] = "0", ["$c0_w"] = "-4", ["$c1_x"] = "0", ["$c1_y"] = "0", ["$c1_z"] = "-1", ["$c1_w"] = "0.0001", ["$c2_x"] = "0", ["$c2_y"] = "0", ["$c2_z"] = "0", ["$c2_w"] = "0", ["$c3_x"] = "0.6", ["$c3_y"] = "0.1", ["$c3_z"] = "0", ["$c3_w"] = "0.35",
 		} )
 		if fancyLinearMat and not fancyLinearMat:IsError() then fancyLinearMat:SetTexture( "$basetexture", baseTex ); MC.MaterialGpuLightTextureFancyLinearDebug = fancyLinearMat end
-		local fancyPpFixMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy26_facefix_centroid_vface_opaque", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy29_facefix_vface_ps30",
+		local fancyPpFixMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy29_facefix_centroid_vface_opaque", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy33_facefix_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,
@@ -351,8 +351,8 @@ do
 		if not ( transTex and transTexName and transTexName ~= "" ) then
 			transTex, transTexName = baseTex, baseName
 		end
-		local transGpuMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans15_centroid_vface", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy_trans22_clean_pcf_vface_ps30",
+		local transGpuMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans20_centroid_vface", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy_trans23_clean_pcf_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = transTexName,
 			["$x360appchooser"] = 1,
@@ -390,8 +390,8 @@ do
 			["$c0_x"] = "0", ["$c0_y"] = "0", ["$c0_z"] = "0", ["$c0_w"] = "-4", ["$c1_x"] = "0", ["$c1_y"] = "0", ["$c1_z"] = "-1", ["$c1_w"] = "0.0001", ["$c2_x"] = "0", ["$c2_y"] = "0", ["$c2_z"] = "0", ["$c2_w"] = "0", ["$c3_x"] = "0.6", ["$c3_y"] = "0.1", ["$c3_z"] = "0", ["$c3_w"] = "0.35",
 		} )
 		if transLinearMat and not transLinearMat:IsError() then transLinearMat:SetTexture( "$basetexture", transTex ); MC.MaterialGpuLightTextureTranslucentLinearDebug = transLinearMat end
-		local transPpFixMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans18_facefix_centroid_vface", "screenspace_general_8tex", {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy_trans20_facefix_vface_ps30",
+		local transPpFixMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans21_facefix_centroid_vface", "screenspace_general_8tex", {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy_trans24_facefix_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = transTexName,
 			["$x360appchooser"] = 1,
