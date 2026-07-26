@@ -59,6 +59,7 @@ local SHARED = {
 	"mc/block/sh_rails.lua",
 	"mc/block/sh_neighbor_states.lua",
 	"mc/sh_presets.lua",
+	"mc/sh_block_cluster.lua",
 	"mc/sh_player.lua",
 	"mc/state/sh_section.lua",
 	"mc/state/cl_state_visual_catalog.lua",
@@ -97,6 +98,7 @@ local SERVER_FILES = {
 	"mc/sv_chunk_store.lua",
 	"mc/sv_saves.lua",
 	"mc/sv_presets.lua",
+	"mc/sv_block_cluster.lua",
 	"mc/sv_damage.lua",
 	"mc/sv_player.lua",
 }
@@ -134,6 +136,7 @@ local CLIENT_FILES = {
 	"mc/cl_ui.lua",
 	"mc/cl_save_ui.lua",
 	"mc/cl_presets.lua",
+	"mc/cl_block_cluster.lua",
 	"mc/cl_effects.lua",
 	"mc/liquid/cl_effects.lua",
 	"mc/cl_net.lua",
