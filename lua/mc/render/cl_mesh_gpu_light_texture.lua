@@ -201,19 +201,10 @@ local function bakeLightParams()
 	return p
 end
 
-local function lightTextureBytes( bx, by, bz, p )
-	local brightness, level, block, sky = 1, 15, 15, 15
-	if MC.SampleLighting then
-		brightness, level, block, sky = MC.SampleLighting( bx, by, bz, cellSelfEmission( bx, by, bz, p ) )
-	end
-	level = tonumber( level ) or 15
-	block = tonumber( block ) or level
-	-- Sky now carries the flooded voxel sky light (cl_sky_flood): 15 above
-	-- open sky, -1 per lateral block into interiors, 0 fully enclosed. It is
-	-- an AMBIENT term only — the shader's shadow map is the one directional
-	-- shadow; no column/pillar exposure override here anymore.
-	sky = tonumber( sky ) or level
-
+-- Compose the three texture bytes from already-known 0-15 block/sky levels.
+-- Shared by the per-cell sampling path (lightTextureBytes) and the native
+-- halo-blob fast path in refreshWholeChunk, so both bake identical bytes.
+local function composeLightTextureBytes( block, sky, p )
 	if p.lightmapMode then
 		-- Global lightmap mode: chunk textures store RAW linear levels; the
 		-- 16x16 lightmap applies the brightness curve, sun brightness and all
@@ -240,6 +231,21 @@ local function lightTextureBytes( bx, by, bz, p )
 		tintWeight = math.Clamp( p.night * dom * p.nightTint, 0, 1 )
 	end
 	return lightByteFromUnit( tintWeight ), lightByteFromUnit( blockUnit ), lightByteFromUnit( skyUnit )
+end
+
+local function lightTextureBytes( bx, by, bz, p )
+	local brightness, level, block, sky = 1, 15, 15, 15
+	if MC.SampleLighting then
+		brightness, level, block, sky = MC.SampleLighting( bx, by, bz, cellSelfEmission( bx, by, bz, p ) )
+	end
+	level = tonumber( level ) or 15
+	block = tonumber( block ) or level
+	-- Sky now carries the flooded voxel sky light (cl_sky_flood): 15 above
+	-- open sky, -1 per lateral block into interiors, 0 fully enclosed. It is
+	-- an AMBIENT term only — the shader's shadow map is the one directional
+	-- shadow; no column/pillar exposure override here anymore.
+	sky = tonumber( sky ) or level
+	return composeLightTextureBytes( block, sky, p )
 end
 
 local function paddedCellWorldCoords( chunk, lx, ly, lz )
@@ -527,6 +533,26 @@ end
 -- tile pixel) advance by exactly one per cell, so px/py track cellPixel().
 local function refreshWholeChunk( chunk, tileX, tileY )
 	local p = bakeLightParams()
+	-- Native fast path: one call returns the whole padded halo grid as
+	-- (block, sky) byte pairs in exactly this loop's cell order, replacing
+	-- ~11k per-cell SampleLighting round trips per tile. Gated on the same
+	-- semantics the sampler applies: with lighting disabled SampleLighting
+	-- reports fullbright, and with sky flood disabled it substitutes the Lua
+	-- sky field — both cases must keep the per-cell path.
+	local halo
+	if p.nativeLightReady
+		and ( not MC.LightEnabled or MC.LightEnabled:GetBool() )
+		and ( not MC.SkyFloodEnabled or MC.SkyFloodEnabled() ) then
+		local backend = MC.GetChunkBackend and MC.GetChunkBackend() or nil
+		local fetch = backend and backend.GetLightingHaloChunk
+		if fetch then
+			halo = fetch( chunk.cx, chunk.cy, chunk.cz )
+			if halo and #halo ~= LIGHT_GRID_CELLS * 2 then halo = nil end
+		end
+	end
+	local stringByte = string.byte
+	local skyExposedAt = MC.SkyExposedAt
+	local haloIndex = 1
 	local baseX = chunk.cx * MC.CS - LIGHT_TEX_PAD
 	local baseY = chunk.cy * MC.CS - LIGHT_TEX_PAD
 	local baseZ = chunk.cz * MC.CH - LIGHT_TEX_PAD
@@ -539,7 +565,20 @@ local function refreshWholeChunk( chunk, tileX, tileY )
 		for ly = 0, LIGHT_GRID_XY - 1 do
 			local by = baseY + ly
 			for lx = 0, LIGHT_GRID_XY - 1 do
-				local r, g, b = lightTextureBytes( baseX + lx, by, bz, p )
+				local r, g, b
+				if halo then
+					local block = stringByte( halo, haloIndex )
+					local sky = stringByte( halo, haloIndex + 1 )
+					haloIndex = haloIndex + 2
+					if sky == 255 then
+						-- Sentinel: cell's chunk is not mirrored natively; same
+						-- column-exposure fallback the per-cell sampler uses.
+						sky = ( skyExposedAt and skyExposedAt( baseX + lx, by, bz ) ) and 15 or 0
+					end
+					r, g, b = composeLightTextureBytes( block, sky, p )
+				else
+					r, g, b = lightTextureBytes( baseX + lx, by, bz, p )
+				end
 				-- px == 0 starts a new tile row: a run never spans rows.
 				if runLen and px > 0 and r == runR and g == runG and b == runB then
 					runLen = runLen + 1
@@ -680,6 +719,15 @@ local function flushIndirWrites()
 	end
 end
 
+-- One-shot full drain: the next PreRender ignores the per-frame bake budget
+-- and finishes every pending tile in a single frame. Requested by the native
+-- light path after a huge rebuild — the user prefers one visible hitch over
+-- several seconds of budgeted 20fps crawl.
+local stormFlush = false
+function MC.RequestGpuChunkLightTextureFullFlush()
+	stormFlush = true
+end
+
 hook.Remove( "PreRender", "mc_gpu_light_texture_flush" )
 hook.Add( "PreRender", "mc_gpu_light_texture_flush", function()
 	-- All RT work lives here, never inside the chunk draw pass.
@@ -687,7 +735,7 @@ hook.Add( "PreRender", "mc_gpu_light_texture_flush", function()
 		if ensureAtlas() and not materialsBound then bindAtlasToMaterials() end
 	end
 	if next( pendingBake ) then
-		local budget = flushBudget()
+		local budget = stormFlush and math.huge or flushBudget()
 		for key in pairs( urgentBake ) do
 			urgentBake[key] = nil
 			pendingBake[key] = nil
@@ -704,6 +752,7 @@ hook.Add( "PreRender", "mc_gpu_light_texture_flush", function()
 			end
 		end
 	end
+	if stormFlush and not next( pendingBake ) then stormFlush = false end
 	flushIndirWrites()
 end )
 
@@ -731,6 +780,7 @@ function MC.ClearAllGpuChunkLightTextures()
 	pendingBake = {}
 	urgentBake = {}
 	pendingIndir = {}
+	stormFlush = false
 	MC.GpuChunkLightDirtyCells = {}
 	MC.GpuChunkLightDirtyChunks = {}
 	-- Repaint the whole indirection region black next PreRender: every chunk
@@ -779,6 +829,44 @@ end
 -- queue spread the rebake cost. Used by the day/night level steps.
 local pendingRefreshKeys = nil
 local pendingRefreshIndex = 1
+
+-- Whole-chunk dirty from a native changed-chunk quadruple list (cx, cy, cz,
+-- mask; the mask is ignored — at this scale per-bit decoding is what the old
+-- >65536 QueueAll fallback was dodging). Marks each changed chunk plus its
+-- 27-neighborhood (their halo texels duplicate this chunk's border cells),
+-- but only chunks that already own an atlas tile: slotless chunks whole-bake
+-- on their first draw anyway. Unlike QueueAllGpuChunkLightTextureRefresh this
+-- touches ONLY chunks the native diff reported, so a burst of streamed chunk
+-- loads no longer re-bakes every slotted tile on the map.
+function MC.MarkGpuChunkLightTextureDirtyChunkList( changed )
+	if not istable( changed ) or not MC.ChunkKey then return 0 end
+	local marked = 0
+	local seen = {}
+	for i = 1, #changed, 4 do
+		local cx = tonumber( changed[i] )
+		local cy = tonumber( changed[i + 1] )
+		local cz = tonumber( changed[i + 2] )
+		if cx then
+			for dz = -1, 1 do
+				for dy = -1, 1 do
+					for dx = -1, 1 do
+						local key = MC.ChunkKey( cx + dx, cy + dy, cz + dz )
+						if not seen[key] then
+							seen[key] = true
+							if slotByKey[key] then
+								MC.GpuChunkLightDirtyCells[key] = true
+								MC.GpuChunkLightDirtyChunks[key] = true
+								pendingBake[key] = true
+								marked = marked + 1
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+	return marked
+end
 
 function MC.QueueAllGpuChunkLightTextureRefresh()
 	local keys = {}

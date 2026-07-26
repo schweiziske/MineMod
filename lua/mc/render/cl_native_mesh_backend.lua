@@ -112,8 +112,15 @@ local function applyNativeLightChanges( result, urgent )
 		state.incrementalLightLastMS = state.lightLastMS
 	end
 	local changed = result.changedCellChunks
-	if urgent ~= true and state.lightLastChangedCells > 65536 and MC.QueueAllGpuChunkLightTextureRefresh then
-		MC.QueueAllGpuChunkLightTextureRefresh()
+	if urgent ~= true and state.lightLastChangedCells > 65536
+	and istable( changed ) and MC.MarkGpuChunkLightTextureDirtyChunkList then
+		-- Huge rebuild (DLL activation, a burst of streamed chunk loads):
+		-- whole-dirty only the chunks the native diff actually reported and
+		-- drain them all in ONE PreRender. The old QueueAll fallback re-baked
+		-- every slotted tile on the map at 2 chunks/frame — a multi-second
+		-- 20fps crawl; one visible hitch is the preferred trade here.
+		MC.MarkGpuChunkLightTextureDirtyChunkList( changed )
+		if MC.RequestGpuChunkLightTextureFullFlush then MC.RequestGpuChunkLightTextureFullFlush() end
 	elseif istable( changed ) and MC.MarkGpuChunkLightTextureDirtyNative then
 		for i = 1, #changed, 4 do
 			MC.MarkGpuChunkLightTextureDirtyNative( changed[i], changed[i + 1], changed[i + 2], changed[i + 3], urgent == true )
@@ -272,6 +279,18 @@ function MC.NativeChunkBackend.ScheduleBlockLightRebuild( delay )
 	local deadline = ( state.lightFirstPending or now ) + 0.25
 	state.lightDue = math.min( deadline, math.max( state.lightDue or 0, wanted ) )
 	return true
+end
+-- Whole padded halo grid ((CS+2)^2 x (CH+2) cells, byte pairs block/sky in
+-- packedPaddedCell order) in ONE native call — the GPU light-texture whole
+-- bake used to make ~11k per-cell sampler calls per tile. sky byte 255 means
+-- the cell's chunk is not mirrored; the consumer falls back to the Lua
+-- column-exposure test, matching GetLightingAt's missing-blob semantics.
+function MC.NativeChunkBackend.GetLightingHaloChunk( cx, cy, cz )
+	if not state.lightReady then return nil end
+	if not ( mcmesh and isfunction( mcmesh.GetLightingHalo ) ) then return nil end
+	local ok, blob = pcall( mcmesh.GetLightingHalo, cx, cy, cz )
+	if not ok or not isstring( blob ) then return nil end
+	return blob
 end
 function MC.NativeChunkBackend.GetSkyLightAt( bx, by, bz )
 	if not state.lightReady then return nil end
