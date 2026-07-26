@@ -394,8 +394,9 @@ local mcCsmRow1, mcCsmRow2, mcCsmNearRadius
 local function computeCsmRows( cascades )
 	if #cascades.viewProjs < 3 then
 		-- Distorted single map: no remap rows. c17.x still carries the window
-		-- half radius (the shader's distortion path derives its local filter
-		-- footprint from it) and c18 the border fade.
+		-- half radius for layout stability, but the clean-PCF shaders only
+		-- READ c17.y (kernel scale bias, uploaded 0 — the register's mandatory
+		-- live reference); c18 carries pad / border fade.
 		mcCsmRow1 = { 0, 0, 0, 0 }
 		mcCsmRow2 = { 0, 0, 0, 0 }
 		mcCsmNearRadius = cascades.radii[1]
@@ -431,6 +432,11 @@ local function csmTableMatrix( filterKernelUV, biasKernelUV )
 	-- PCF taps are the only receiver-space footprint in the clean path.
 	local pad = filterKernelUV
 	mcCsmTableMatrix = mcCsmTableMatrix or Matrix()
+	-- Row 3 -> c17 = (near half-radius, kernel scale bias, 0, 0). The shaders
+	-- multiply their PCF kernel by (1 + c17.y): keep .y at 0 for an exact
+	-- identity — it exists as the register's mandatory live read (an unread
+	-- c15..c18 register gets stripped by fxc and its slot clobbered by this
+	-- very upload; that shipped broken in the fancy31/trans22/smooth34 gen).
 	mcCsmTableMatrix:SetUnpacked(
 		mcCsmRow1[1], mcCsmRow1[2], mcCsmRow1[3], mcCsmRow1[4],
 		mcCsmRow2[1], mcCsmRow2[2], mcCsmRow2[3], mcCsmRow2[4],
@@ -858,14 +864,28 @@ function MC.BindMeshShadowMap( material, force )
 
 	if material.SetMatrix and matrix then
 		material:SetMatrix( "$viewprojmat", matrix )
-		-- Cascade remap table -> c15..c18. The chunk shaders DECLARE and USE
-		-- those registers (see the .fxc sources), so the engine upload is safe
-		-- there — but it must never land on shaders that leave c15..c18 free
-		-- for compiler literals (vanilla/fast/height already returned above).
-		local filterKernelUV, biasKernelUV = shadowKernelUVs()
-		local csmTable = csmTableMatrix( filterKernelUV, biasKernelUV )
-		if csmTable then
-			material:SetMatrix( "$invviewprojmat", csmTable )
+		-- Cascade remap table -> c15..c18. Only safe on shaders that keep a
+		-- LIVE read of every one of those four registers (the clean-PCF .fxc
+		-- pin c17 through the kernelUV scale; see the register comment there).
+		-- It must never land on shaders that leave any of c15..c18 free for
+		-- compiler literals: vanilla/fast/height already returned above, and
+		-- the linear-debug shaders compile the whole PCF path out, so ALL four
+		-- registers hold light-grid literals there — uploading the table wrecks
+		-- the debug view's own sampling constants.
+		local isLinearDebug = material == MC.MaterialGpuLightTextureLinearDebug
+			or material == MC.MaterialGpuLightTextureFancyLinearDebug
+			or material == MC.MaterialGpuLightTextureTranslucentLinearDebug
+		if not isLinearDebug then
+			local filterKernelUV, biasKernelUV = shadowKernelUVs()
+			local csmTable = csmTableMatrix( filterKernelUV, biasKernelUV )
+			if csmTable then
+				material:SetMatrix( "$invviewprojmat", csmTable )
+			end
+		elseif material.SetUndefined then
+			-- Material vars persist for the session: clear any table a previous
+			-- frame/reload left behind so the engine stops re-uploading it over
+			-- the debug shader's literal constants.
+			material:SetUndefined( "$invviewprojmat" )
 		end
 	end
 	if material.SetFloat then
