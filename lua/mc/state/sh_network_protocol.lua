@@ -105,6 +105,9 @@ Net.MessageNames = {
 	"mc_preset_cover_req", "mc_preset_cover_download_begin", "mc_preset_cover_download_part",
 	"mc_sign_open", "mc_sign_update",
 
+	"mc_cluster_convert", "mc_cluster_data_req", "mc_cluster_data",
+	"mc_cluster_paste", "mc_cluster_break",
+
 	-- Phase 4 state-aware transport.
 	"mc_state_hello", "mc_state_hello_ack",
 	"mc_state_set", "mc_state_set_bulk",
