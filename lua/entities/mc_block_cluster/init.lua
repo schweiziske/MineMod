@@ -25,6 +25,10 @@ function ENT:SetClusterRecord( record, blob )
 	self:SetSizeZ( record.size[3] )
 end
 
+local function T( ply, key, fallback, vars )
+	return MC.TFor and MC.TFor( ply, key, fallback, vars ) or fallback
+end
+
 function ENT:Use( activator )
 	if not IsValid( activator ) or not activator:IsPlayer() then return end
 	if ( self.mcNextUseInfo or 0 ) > CurTime() then return end
@@ -32,12 +36,15 @@ function ENT:Use( activator )
 
 	local durability = ( self.ClusterMaxHealth or 0 ) > 0
 		and ( math.max( 0, math.floor( self.ClusterHealth or 0 ) ) .. "/" .. self.ClusterMaxHealth )
-		or "无敌"
-	local info = "方块结构: " .. self:GetBlockCount() .. " 方块  耐久 " .. durability
+		or T( activator, "cluster.use_invincible", "无敌" )
+	local info = T( activator, "cluster.use_info", "方块结构: {n} 方块  耐久 {hp}",
+		{ n = self:GetBlockCount(), hp = durability } )
 	local owner = self:GetOwnerLabel()
-	if owner ~= "" then info = info .. "  主人 " .. owner end
+	if owner ~= "" then info = info .. T( activator, "cluster.use_owner", "  主人 {name}", { name = owner } ) end
 	local phys = self:GetPhysicsObject()
-	if IsValid( phys ) and not phys:IsMotionEnabled() then info = info .. "  [已冻结]" end
+	if IsValid( phys ) and not phys:IsMotionEnabled() then
+		info = info .. T( activator, "cluster.use_frozen", "  [已冻结]" )
+	end
 	activator:ChatPrint( "[MC] " .. info )
 end
 

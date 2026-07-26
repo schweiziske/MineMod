@@ -164,17 +164,19 @@ local function placeClusterAt( ply, ent, targetMin, rotation )
 end
 
 local PASTE_FAIL_TEXT = {
-	occupied = "目标位置被方块占用",
-	out_of_bounds = "超出建造范围",
-	block_limit = "会超过全局方块上限 (mc_max_blocks)",
-	no_record = "结构数据缺失",
+	occupied = { "cluster.paste_err_occupied", "目标位置被方块占用" },
+	out_of_bounds = { "cluster.paste_err_bounds", "超出建造范围" },
+	block_limit = { "cluster.paste_err_limit", "会超过全局方块上限 (mc_max_blocks)" },
+	no_record = { "cluster.paste_err_record", "结构数据缺失" },
 }
 
 local function pasteFailText( ply, err, blocked )
 	if err == "occupied" and blocked then
 		return L( ply, "cluster.paste_occupied_n", "目标位置有 {n} 格被方块占用", { n = blocked } )
 	end
-	return PASTE_FAIL_TEXT[err] or tostring( err )
+	local entry = PASTE_FAIL_TEXT[err]
+	if entry then return L( ply, entry[1], entry[2] ) end
+	return tostring( err )
 end
 
 ------------------------------------------------------------------ conversion
