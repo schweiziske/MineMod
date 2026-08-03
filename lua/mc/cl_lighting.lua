@@ -377,16 +377,12 @@ function MC.ClearLightingCache()
 end
 
 function MC.MarkAllMeshesDirty()
-	MC.ClearLightingCache()
-	-- ClearLightingCache wipes the stored block-light field but re-queues only
-	-- SKY flood; block light comes back solely through RebuildLightingCells.
-	-- Without this every caller (mc_mesh_rebuild, the shader/light-texture
-	-- toggles, rail/observer/piston visual reloads) blacked out all torch
-	-- light until a manual mc_light_rebuild. Inside a lighting bulk load the
-	-- rebuild is deferred: EndLightingBulkLoad performs it once at the end.
-	if ( tonumber( MC.LightingBulkLoadDepth ) or 0 ) <= 0 and MC.RebuildLightingCells then
-		MC.RebuildLightingCells()
-	end
+	-- Mesh/material invalidation must not destroy the authoritative CPU light
+	-- field. Several startup visual registrations call this helper; rebuilding
+	-- all Lua block light for each one can stall or crash while joining a large
+	-- world without the optional native worker. Snapshot hydration already owns
+	-- its one full rebuild through EndLightingBulkLoad.
+	clearGpuLightTextures()
 	local marked = 0
 	for key, chunk in pairs( MC.World or {} ) do
 		if chunk and chunk.count and chunk.count > 0 and MC.MarkChunkDirty then

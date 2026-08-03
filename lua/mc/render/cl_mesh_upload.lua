@@ -94,8 +94,8 @@ local function writeMeshVertex( vert, meshPosition, meshNormal, meshTexCoord, me
 	meshAdvanceVertex()
 end
 
-local function uploadMeshVertices( meshObj, verts, perf, hasSecondaryUV )
-	if meshBeginUploadEnabled() and mesh and mesh.Begin and meshObj then
+local function uploadMeshVertices( meshObj, verts, perf, hasSecondaryUV, forceBuildFromTriangles )
+	if not forceBuildFromTriangles and meshBeginUploadEnabled() and mesh and mesh.Begin and meshObj then
 		local vertexCount = #verts
 		local triCount = math.floor( vertexCount / 3 )
 		local uploadStart = SysTime()
