@@ -136,6 +136,40 @@ function SWEP:SecondaryAttack()
 	end
 end
 
+function SWEP:ClusterActionClient( action )
+	if not CLIENT then return end
+	local owner = self:GetOwner()
+	if not IsValid( owner ) or owner ~= LocalPlayer() then return end
+	local now = CurTime()
+	local cooldown = action == "flood" and 0.3 or 0.2
+	if ( self.mcNextClientClusterAction or 0 ) > now then return end
+	self.mcNextClientClusterAction = now + cooldown
+
+	if action == "convert" then
+		local aimedCluster = MC.ClusterAimedCluster and MC.ClusterAimedCluster() or nil
+		if IsValid( aimedCluster ) then
+			if MC.ClusterSendPaste then MC.ClusterSendPaste( aimedCluster ) end
+		elseif MC.ClusterSendConvert then
+			MC.ClusterSendConvert()
+		end
+	elseif action == "clear" then
+		if MC.ClusterSelectionCount and MC.ClusterSelectionCount() > 0 and MC.ClusterSelectionClear then
+			MC.ClusterSelectionClear()
+		end
+	elseif action == "flood" then
+		if MC.ClusterSelectMode == "crate" then
+			clientChat( L( "weapon.mc_cluster_tool.crate_no_flood", "箱体模式只支持框选" ) )
+			return
+		end
+		local aim = aimedBlock()
+		if aim and MC.ClusterFloodSelect then
+			MC.ClusterFloodSelect( aim.bx, aim.by, aim.bz )
+		else
+			clientChat( L( "weapon.mc_cluster_tool.aim_block", "请准星对准一个 MC 方块" ) )
+		end
+	end
+end
+
 local MODE_CYCLE = { fine = "box", box = "crate", crate = "fine" }
 
 function SWEP:ToggleModeClient()
@@ -173,6 +207,27 @@ function SWEP:Reload()
 	self:ToggleModeClient()
 end
 
+function SWEP:Think()
+	if not SERVER or not game.SinglePlayer() then return end
+	local owner = self:GetOwner()
+	if not IsValid( owner ) or owner:GetActiveWeapon() ~= self then return end
+	if owner:KeyPressed( IN_USE ) then self:CallOnClient( "ClusterActionClient", "flood" ) end
+end
+
+if SERVER then
+	-- Some single-player input paths run only on the server. The client retains
+	-- its handlers below as a fallback; ClusterActionClient coalesces duplicates.
+	hook.Add( "PlayerButtonDown", "mc_cluster_tool_singleplayer_keys", function( ply, button )
+		if not game.SinglePlayer() or not IsValid( ply ) then return end
+		local wep = ply:GetActiveWeapon()
+		if not IsValid( wep ) or wep:GetClass() ~= "mc_cluster_tool" then return end
+		if button ~= KEY_G and button ~= KEY_X then return end
+		if ( wep.mcNextSinglePlayerAction or 0 ) > CurTime() then return end
+		wep.mcNextSinglePlayerAction = CurTime() + 0.2
+		wep:CallOnClient( "ClusterActionClient", button == KEY_G and "convert" or "clear" )
+	end )
+end
+
 if CLIENT then
 	function SWEP:GetPrintName()
 		return L( "weapon.mc_cluster_tool.name", self.PrintName or "MC 结构搬运器" )
@@ -191,56 +246,24 @@ if CLIENT then
 		return class == "TextEntry" or class == "DTextEntry"
 	end
 
-	local lastActionAt = 0
-	local function actionDebounced()
-		local now = CurTime()
-		if now - lastActionAt < 0.2 then return false end
-		lastActionAt = now
-		return true
-	end
-
-	local function convertOrPaste()
-		local aimedCluster = MC.ClusterAimedCluster and MC.ClusterAimedCluster() or nil
-		if IsValid( aimedCluster ) then
-			if MC.ClusterSendPaste then MC.ClusterSendPaste( aimedCluster ) end
-			return
-		end
-		if MC.ClusterSendConvert then MC.ClusterSendConvert() end
-	end
-
 	hook.Add( "PlayerButtonDown", "mc_cluster_tool_keys", function( ply, button )
 		if not IsValid( ply ) or ply ~= LocalPlayer() then return end
 		if not activeClusterTool( ply ) or textEntryHasFocus() then return end
 
 		if button == KEY_G then
-			if actionDebounced() then convertOrPaste() end
+			ply:GetActiveWeapon():ClusterActionClient( "convert" )
 		elseif button == KEY_X then
-			if actionDebounced() and MC.ClusterSelectionCount and MC.ClusterSelectionCount() > 0 then
-				MC.ClusterSelectionClear()
-			end
+			ply:GetActiveWeapon():ClusterActionClient( "clear" )
 		end
 	end )
 
-	local lastFloodAt = 0
 	hook.Add( "PlayerBindPress", "mc_cluster_tool_flood", function( ply, bind, pressed )
 		if not pressed or not IsValid( ply ) or ply ~= LocalPlayer() then return end
 		if not activeClusterTool( ply ) or textEntryHasFocus() then return end
 
 		local lower = string.lower( tostring( bind or "" ) )
 		if lower == "+use" then
-			local now = CurTime()
-			if now - lastFloodAt < 0.3 then return true end
-			lastFloodAt = now
-			if MC.ClusterSelectMode == "crate" then
-				clientChat( L( "weapon.mc_cluster_tool.crate_no_flood", "箱体模式只支持框选" ) )
-				return true
-			end
-			local aim = aimedBlock()
-			if aim and MC.ClusterFloodSelect then
-				MC.ClusterFloodSelect( aim.bx, aim.by, aim.bz )
-			else
-				clientChat( L( "weapon.mc_cluster_tool.aim_block", "请准星对准一个 MC 方块" ) )
-			end
+			ply:GetActiveWeapon():ClusterActionClient( "flood" )
 			return true
 		end
 	end )

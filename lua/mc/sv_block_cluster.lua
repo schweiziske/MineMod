@@ -26,6 +26,14 @@ local function notify( ply, msg )
 	if IsValid( ply ) then ply:ChatPrint( "[MC] " .. msg ) end
 end
 
+local function canUseClusters( ply )
+	if not IsValid( ply ) or ply:IsAdmin() then return true end
+	local public = C.ClusterPublic or GetConVar( "mc_cluster_public" )
+	if public and public:GetBool() then return true end
+	notify( ply, L( ply, "cluster.admin_only", "只有管理员可以使用结构搬运器 (mc_cluster_public 0)" ) )
+	return false
+end
+
 local function clusterCooldownOK( ply )
 	if not IsValid( ply ) then return true end
 	local t = CurTime()
@@ -253,6 +261,7 @@ local function registerClusterUndo( ply, ent, originCell )
 	undo.SetCustomUndoText( L( ply, "cluster.undo_text", "撤销 MC 方块结构 (放回原位)" ) )
 	undo.AddFunction( function()
 		if not IsValid( ent ) then return end
+		if not canUseClusters( ply ) then return end
 		if SV.CanEdit and not SV.CanEdit( ply ) then return end
 		local ok, err, blocked = placeClusterAt( ply, ent, originCell, 0 )
 		if ok then
@@ -267,6 +276,7 @@ end
 net.Receive( "mc_cluster_convert", function( _, ply )
 	local count = net.ReadUInt( 13 )
 	local crate = net.ReadBool()
+	if not canUseClusters( ply ) then return end
 	local maxBlocks = MC.ClusterMaxBlocks()
 	if count < 1 or count > maxBlocks then
 		notify( ply, L( ply, "cluster.too_many", "选区超过上限 ({max} 方块, mc_cluster_max_blocks)", { max = maxBlocks } ) )
@@ -456,6 +466,7 @@ net.Receive( "mc_cluster_paste", function( _, ply )
 	local index = net.ReadUInt( 16 )
 	local ent = Entity( index )
 	if not IsValid( ent ) or ent:GetClass() ~= CLUSTER_CLASS then return end
+	if not canUseClusters( ply ) then return end
 	if not SV.CanEdit( ply ) then return end
 	if not clusterCooldownOK( ply ) then return end
 	if IsValid( ply ) and ply:EyePos():DistToSqr( ent:WorldSpaceCenter() ) > 4096 * 4096 then return end

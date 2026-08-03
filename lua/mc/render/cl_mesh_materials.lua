@@ -28,6 +28,14 @@ local function loadAtlasSource( path )
 	return Material( atlasPngPath( path ), "noclamp mips" )
 end
 
+local function loadAtlasIconSource( path )
+	-- Generated PNG materials are cached by path, including whether their
+	-- ITexture was created with mipmaps. The translucent atlas is a byte-for-byte
+	-- copy, so reserve that cache key for crisp UI icons while the opaque path
+	-- keeps the mip chain used by world rendering.
+	return Material( atlasPngPath( path ), "noclamp alphatest vertexcolor" )
+end
+
 local function createCpuAtlasProxy( name, texture, translucent )
 	local textureName = texture and texture.GetName and texture:GetName() or nil
 	if not ( CreateMaterial and textureName and textureName ~= "" ) then return nil end
@@ -54,14 +62,12 @@ end
 local defaultOpaqueSource = loadAtlasSource( MC.Atlas.MATERIAL or "mc/atlas_365" )
 local defaultOpaqueTexture = atlasMaterialTexture( defaultOpaqueSource )
 
-local defaultTranslucentSource = loadAtlasSource(
+local defaultTranslucentSource = defaultOpaqueSource
+local defaultTranslucentTexture = defaultOpaqueTexture
+local defaultIconSource = loadAtlasIconSource(
 	MC.Atlas.MATERIAL_TRANSLUCENT or "mc/atlas_365_translucent"
 )
-local defaultTranslucentTexture = atlasMaterialTexture( defaultTranslucentSource )
-if not defaultTranslucentTexture then
-	defaultTranslucentSource = defaultOpaqueSource
-	defaultTranslucentTexture = defaultOpaqueTexture
-end
+local defaultIconTexture = atlasMaterialTexture( defaultIconSource ) or defaultOpaqueTexture
 
 MC.Material = createCpuAtlasProxy( "mc_atlas_cpu_opaque_proxy1", defaultOpaqueTexture, false ) or defaultOpaqueSource
 MC.MaterialOpaqueCPU = MC.Material
@@ -77,12 +83,15 @@ local AtlasSources = {
 	default = {
 		opaque = defaultOpaqueSource,
 		translucent = defaultTranslucentSource,
+		icon = defaultIconSource,
 		opaqueTexture = defaultOpaqueTexture,
 		translucentTexture = defaultTranslucentTexture,
+		iconTexture = defaultIconTexture,
 	},
 	programmer_art = {
 		opaquePath = atlasPngPath( MC.Atlas.MATERIAL_PROGRAMMER_ART or "mc/atlas_365_programmer_art" ),
 		translucentPath = atlasPngPath( MC.Atlas.MATERIAL_PROGRAMMER_ART_TRANSLUCENT or "mc/atlas_365_programmer_art_translucent" ),
+		iconPath = atlasPngPath( MC.Atlas.MATERIAL_PROGRAMMER_ART_TRANSLUCENT or "mc/atlas_365_programmer_art_translucent" ),
 	},
 }
 
@@ -665,6 +674,37 @@ if not MC.MaterialIconOpaque then
 	MC.MaterialIconOpaque = MC.Material
 end
 
+local function createCreativeIconMaterial( name, texture, alphaTest )
+	local textureName = texture and texture.GetName and texture:GetName() or nil
+	if not ( CreateMaterial and textureName and textureName ~= "" ) then return nil end
+	local params = {
+		["$basetexture"] = textureName,
+		["$vertexcolor"] = "1",
+		["$vertexalpha"] = "1",
+		["$nocull"] = "1",
+		["$pointsample"] = "1",
+		["$nomip"] = "1",
+		["$nolod"] = "1",
+	}
+	if alphaTest then
+		params["$alphatest"] = "1"
+		params["$alphatestreference"] = "0.5"
+	end
+	local material = CreateMaterial( name, "UnlitGeneric", params )
+	if not material or material:IsError() then return nil end
+	material:SetTexture( "$basetexture", texture )
+	return material
+end
+
+-- Creative inventory only: these materials use the separately cached no-mip
+-- atlas texture. World meshes continue using MC.Material and its mip chain.
+MC.MaterialCreativeIcon = createCreativeIconMaterial(
+	"mc_atlas_creative_icon_cutout_v1", defaultIconTexture, true
+) or MC.Material
+MC.MaterialCreativeIconOpaque = createCreativeIconMaterial(
+	"mc_atlas_creative_icon_opaque_v1", defaultIconTexture, false
+) or MC.MaterialIconOpaque
+
 local function validAtlasTexture( texture )
 	if not texture then return false end
 	if texture.IsError and texture:IsError() then return false end
@@ -690,12 +730,13 @@ local function resolveAtlasSource( name )
 		if not source.opaque or source.opaque:IsError() then
 			source.opaque = loadAtlasSource( source.opaquePath )
 		end
-		if not source.translucent or source.translucent:IsError() then
-			source.translucent = loadAtlasSource( source.translucentPath )
+		if not source.icon or source.icon:IsError() then
+			source.icon = loadAtlasIconSource( source.iconPath )
 		end
 		source.opaqueTexture = atlasMaterialTexture( source.opaque ) or source.opaqueTexture
-		source.translucentTexture = atlasMaterialTexture( source.translucent )
-			or source.translucentTexture or source.opaqueTexture
+		source.translucent = source.opaque
+		source.translucentTexture = source.opaqueTexture
+		source.iconTexture = atlasMaterialTexture( source.icon ) or source.iconTexture or source.opaqueTexture
 	end
 	return source
 end
@@ -734,10 +775,12 @@ function MC.SetTexturePack( value )
 	local source = resolveAtlasSource( name ) or AtlasSources.default
 	local opaqueTexture = source and source.opaqueTexture
 	local translucentTexture = source and source.translucentTexture or opaqueTexture
+	local iconTexture = source and source.iconTexture or opaqueTexture
 	if not validAtlasTexture( opaqueTexture ) then
 		return false, "missing_atlas_" .. name
 	end
 	if not validAtlasTexture( translucentTexture ) then translucentTexture = opaqueTexture end
+	if not validAtlasTexture( iconTexture ) then iconTexture = opaqueTexture end
 
 	-- MC.Material/MC.MaterialTranslucent are stable proxy objects referenced by
 	-- existing mesh records. Updating their texture is enough to switch CPU
@@ -745,6 +788,8 @@ function MC.SetTexturePack( value )
 	setAtlasTexture( MC.Material, opaqueTexture )
 	setAtlasTexture( MC.MaterialTranslucent, translucentTexture )
 	setAtlasTexture( MC.MaterialIconOpaque, opaqueTexture )
+	setAtlasTexture( MC.MaterialCreativeIcon, iconTexture )
+	setAtlasTexture( MC.MaterialCreativeIconOpaque, iconTexture )
 	refreshGpuAtlasTextures( opaqueTexture, translucentTexture )
 	if MC.RefreshShadowDepthAtlas then MC.RefreshShadowDepthAtlas( opaqueTexture ) end
 	if MC.RefreshHeightfieldDepthAtlas then MC.RefreshHeightfieldDepthAtlas( opaqueTexture ) end

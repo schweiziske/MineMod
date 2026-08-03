@@ -319,7 +319,11 @@ function MC.RebuildChunkMeshLighting( key, sectionIndex )
 			if not changed then return true, false end
 			meshPerfAdd( meshPerf, "recolorMS", recolorStart )
 		end
-		uploadMeshVertices( record.mesh, record.verts, meshPerf, record.hasSecondaryUV )
+		-- Direct mesh.Begin is safe for initial construction but corrupts GMod's
+		-- render state when it rewrites this already-owned IMesh. The engine's
+		-- BuildFromTriangles path safely updates the existing object and avoids
+		-- allocating and destroying an IMesh for every light-only recolor.
+		uploadMeshVertices( record.mesh, record.verts, meshPerf, record.hasSecondaryUV, true )
 		meshPerf.vertices = meshPerf.vertices + vertexCount
 		meshPerf.faces = meshPerf.faces + math.floor( vertexCount / 6 )
 		meshPerf.meshes = meshPerf.meshes + 1

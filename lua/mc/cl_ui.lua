@@ -335,11 +335,11 @@ local function iconMaterialFor( id )
 	return MC.Material
 end
 
-function MC.DrawBlockIcon( id, x, y, w, h, stateId )
+function MC.DrawBlockIcon( id, x, y, w, h, stateId, materialOverride )
 	if not MC.Blocks[id] then return end
 	if not stateId and MC.StateFromLegacy then stateId = MC.StateFromLegacy( id, 0 ) end
 	local tintCode = stateId and MC.BlockStateTintCode and MC.BlockStateTintCode( stateId, id, 0 ) or 0
-	MC.DrawTile( MC.BlockIconTile( id ), x, y, w, h, iconMaterialFor( id ), tintCode )
+	MC.DrawTile( MC.BlockIconTile( id ), x, y, w, h, materialOverride or iconMaterialFor( id ), tintCode )
 end
 
 local function iconRotatedUV( uf, vf, rot, flipU, flipV )
@@ -429,7 +429,7 @@ local function iconBoxes( id, orient, visual )
 	return MC.BlockBoxes and MC.BlockBoxes( id, orient ) or nil
 end
 
-function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual )
+function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual, materialOverride )
 	local b = visual and visual.block or MC.Blocks[id]
 	if not b then return end
 	orient = visual and visual.renderOrient or ( MC.NormalizeOrient and MC.NormalizeOrient( id, orient ) or math.floor( tonumber( orient ) or 0 ) )
@@ -437,7 +437,7 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual )
 	if b.iconSource and MC.ResolveBlock then
 		local source = MC.ResolveBlock( b.iconSource )
 		if source and source.id and source.id ~= id then
-			MC.DrawMinecraftBlockIcon( source.id, x, y, w, h, nil, forceModel, visual )
+			MC.DrawMinecraftBlockIcon( source.id, x, y, w, h, nil, forceModel, visual, materialOverride )
 			return
 		end
 	end
@@ -451,11 +451,11 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual )
 	-- as stairs and fences as fence posts instead of a flat full-block square.
 	if not forceModel then
 		if b.icon then
-			MC.DrawBlockIcon( id, x, y, w, h, tintStateId )
+			MC.DrawBlockIcon( id, x, y, w, h, tintStateId, materialOverride )
 			return
 		end
 		if b.shape == "cross" then
-			MC.DrawBlockIcon( id, x, y, w, h, tintStateId )
+			MC.DrawBlockIcon( id, x, y, w, h, tintStateId, materialOverride )
 			return
 		end
 	end
@@ -466,7 +466,7 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual )
 	local has3DShape = b.solid ~= false or b.shape ~= nil or b.connection ~= nil
 	local boxes = has3DShape and iconBoxes( id, orient, visual ) or nil
 	if not boxes or #boxes == 0 then
-		MC.DrawBlockIcon( id, x, y, w, h, tintStateId )
+		MC.DrawBlockIcon( id, x, y, w, h, tintStateId, materialOverride )
 		return
 	end
 
@@ -506,7 +506,7 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual )
 		appendIconBoxFaces( pool, box, faces, project )
 	end
 	table.sort( pool, function( a, c ) return a.depth < c.depth end )
-	local mat = iconMaterialFor( id )
+	local mat = materialOverride or iconMaterialFor( id )
 	for _, f in ipairs( pool ) do
 		drawIconQuad( f.tile, f.verts, f.shade, f.rot, f.flipU, f.flipV, mat, f.tintCode )
 	end
@@ -573,12 +573,12 @@ local function loadCreativeInventoryState()
 	return MC.CreativeInventoryState
 end
 
-function MC.DrawMinecraftBlockStateIcon( stateId, x, y, w, h, forceModel )
+function MC.DrawMinecraftBlockStateIcon( stateId, x, y, w, h, forceModel, materialOverride )
 	stateId = math.floor( tonumber( stateId ) or -1 )
 	if not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return false end
 	local visual = MC.ResolveBlockStateVisual and MC.ResolveBlockStateVisual( stateId ) or nil
 	if not visual then return false end
-	MC.DrawMinecraftBlockIcon( visual.id, x, y, w, h, visual.renderOrient, forceModel or visual.forceModelIcon == true, visual )
+	MC.DrawMinecraftBlockIcon( visual.id, x, y, w, h, visual.renderOrient, forceModel or visual.forceModelIcon == true, visual, materialOverride )
 	return true
 end
 
@@ -1136,6 +1136,23 @@ local CREATIVE_UI = {
 	textDim = Color( 165, 174, 188, 220 ),
 }
 
+local function creativeInventoryIconMaterialFor( id )
+	if MC.IsTranslucentBlock and MC.IsTranslucentBlock( id ) then
+		return MC.MaterialCreativeIconOpaque or MC.MaterialIconOpaque
+	end
+	return MC.MaterialCreativeIcon or MC.Material
+end
+
+local function drawCreativeInventoryBlockIcon( id, x, y, w, h )
+	MC.DrawMinecraftBlockIcon( id, x, y, w, h, nil, nil, nil, creativeInventoryIconMaterialFor( id ) )
+end
+
+local function drawCreativeInventoryBlockStateIcon( id, stateId, x, y, w, h, forceModel )
+	return MC.DrawMinecraftBlockStateIcon(
+		stateId, x, y, w, h, forceModel, creativeInventoryIconMaterialFor( id )
+	)
+end
+
 local function paintCreativeButtonSurface( s, w, h, label, selected )
 	local enabled = s:IsEnabled()
 	local bg = selected and Color( 76, 82, 70, 255 ) or ( enabled and CREATIVE_UI.control or CREATIVE_UI.controlDisabled )
@@ -1308,7 +1325,7 @@ function MC.OpenCreativeStatePicker( id, onSelect, parent, selectedStateId )
 	preview.Paint = function( _, w, h )
 		draw.RoundedBox( 5, 0, 0, w, h, CREATIVE_UI.panel )
 		draw.RoundedBox( 4, 5, 5, 136, h - 10, CREATIVE_UI.panelInner )
-		MC.DrawMinecraftBlockStateIcon( selectedStateId, 15, 17, 116, 116, true )
+		drawCreativeInventoryBlockStateIcon( id, selectedStateId, 15, 17, 116, 116, true )
 		local state = MC.FormatBlockState( selectedStateId ) or "?"
 		draw.SimpleText( blockDisplayText( b ), "mc_hud", 154, 16, CREATIVE_UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 		draw.DrawText( state, "mc_hud_fit_16", 154, 46, CREATIVE_UI.textDim, TEXT_ALIGN_LEFT )
@@ -1413,7 +1430,7 @@ local function addCreativeButton( layout, id, onBlockClicked, frame, closeOnSele
 			surface.DrawOutlinedRect( 1, 1, w - 2, h - 2, 2 )
 		end
 		local icon = math.min( w - 22, h - 38, 76 )
-		MC.DrawMinecraftBlockIcon( id, w * 0.5 - icon * 0.5, 8, icon, icon )
+		drawCreativeInventoryBlockIcon( id, w * 0.5 - icon * 0.5, 8, icon, icon )
 		MC.DrawFittedText( blockDisplayText( b ), "mc_hud_small", { "mc_hud_fit_16" }, w * 0.5, h - 17, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, w - 8 )
 	end
 
@@ -1450,8 +1467,8 @@ local function createCreativeHotbarPanel( parent )
 			draw.RoundedBox( 3, 4, 4, w - 8, h - 8, selected and Color( 58, 60, 64 ) or Color( 34, 37, 43 ) )
 			draw.SimpleText( tostring( i ), "mc_hud_small", 8, 6, selected and Color( 255, 244, 170 ) or Color( 205, 212, 224 ), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
 			if id then
-				if not stateId or not MC.DrawMinecraftBlockStateIcon( stateId, w * 0.5 - 22, 11, 44, 44 ) then
-					MC.DrawMinecraftBlockIcon( id, w * 0.5 - 22, 11, 44, 44 )
+				if not stateId or not drawCreativeInventoryBlockStateIcon( id, stateId, w * 0.5 - 22, 11, 44, 44 ) then
+					drawCreativeInventoryBlockIcon( id, w * 0.5 - 22, 11, 44, 44 )
 				end
 			end
 			if b then

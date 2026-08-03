@@ -495,8 +495,8 @@ MC.ConfigConVars = {
 
 	server = {
 		category( "permissions", "access", "Permissions", "权限",
-			"Who may edit blocks and use shared saves or presets.",
-			"控制谁可以编辑方块以及使用公共存档或预设。", {
+			"Who may edit blocks and use shared saves, presets, or the structure grabber.",
+			"控制谁可以编辑方块以及使用公共存档、预设或结构搬运器。", {
 			item( "mc_admin_only", "Admin-only block editing", "仅管理员编辑方块", "bool",
 				"Only administrators may place or break MC blocks.",
 				"只有管理员可以放置或破坏 MC 方块。" ),
@@ -506,6 +506,9 @@ MC.ConfigConVars = {
 			item( "mc_preset_public", "Public presets", "公共预设", "bool",
 				"Allow non-admin players to list, load, save and place presets.",
 				"允许非管理员列出、读取、保存和放置预设。" ),
+			item( "mc_cluster_public", "Public structure grabber", "公共结构搬运器", "bool",
+				"Allow non-admin players to convert MC blocks into movable structures and place them back.",
+				"允许非管理员把 MC 方块转换为可搬运结构，并放回网格。" ),
 		} ),
 
 		category( "world_limits", "access", "World limits", "世界限制",

@@ -95,6 +95,7 @@ if SERVER then
 	MC.Config.Autosave    = GetConVar( "mc_autosave" ) or CreateConVar( "mc_autosave", "0", F, "Seconds between autosaves (0 disables)" )
 	MC.Config.SavePublic  = GetConVar( "mc_save_public" ) or CreateConVar( "mc_save_public", "0", F, "Allow non-admin players to list/load/save MC saves; delete remains admin-only" )
 	MC.Config.PresetPublic = GetConVar( "mc_preset_public" ) or CreateConVar( "mc_preset_public", "0", F, "Allow non-admin players to list/load/save/place MC presets" )
+	MC.Config.ClusterPublic = GetConVar( "mc_cluster_public" ) or CreateConVar( "mc_cluster_public", "0", F, "Allow non-admin players to use the MC structure grabber" )
 	MC.Config.SyncMsgs    = GetConVar( "mc_sync_messages_per_tick" ) or CreateConVar( "mc_sync_messages_per_tick", tostring( MC.Config.SyncMessagesPerTick ), F, "Maximum queued reliable state messages sent per player per 0.05s tick", 1, 16 )
 	MC.Config.SyncBudget  = GetConVar( "mc_sync_reliable_budget" ) or CreateConVar( "mc_sync_reliable_budget", tostring( MC.Config.SyncReliableBudget ), F, "Hard queued reliable state byte budget per player per 0.05s tick", 1024, 8192 )
 	MC.Config.SyncFrame   = GetConVar( "mc_sync_frame_ms" ) or CreateConVar( "mc_sync_frame_ms", tostring( MC.Config.SyncFrameMS ), F, "Approx server CPU milliseconds spent streaming full sync each tick" )
