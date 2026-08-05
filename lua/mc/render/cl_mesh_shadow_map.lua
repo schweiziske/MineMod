@@ -543,18 +543,24 @@ local function drawMCShadowCasters( material, maxDistSqr )
 	local eye = EyePos()
 	local eyeX, eyeY, eyeZ = eye.x, eye.y, eye.z
 	local pushMatrix, popMatrix = cam.PushModelMatrix, cam.PopModelMatrix
+	local prepareEntry = MC.PrepareChunkDrawEntry
 	local drawnChunks, drawnMeshes = 0, 0
 
 	render.SetMaterial( material )
 	for i = 1, count do
 		local e = entries[i]
 		if store[e.key] == e.list then
+			local frame = prepareEntry and prepareEntry( e, false ) or e.frame
+			local centerX = frame and frame.x or e.x
+			local centerY = frame and frame.y or e.y
+			local centerZ = frame and frame.z or e.z
 			local within = true
 			if maxDistSqr and maxDistSqr > 0 then
-				local dx, dy, dz = e.x - eyeX, e.y - eyeY, e.z - eyeZ
+				local dx, dy, dz = centerX - eyeX, centerY - eyeY, centerZ - eyeZ
 				within = dx * dx + dy * dy + dz * dz <= maxDistSqr
 			end
 			if within then
+				if prepareEntry then prepareEntry( e, true ) end
 				pushMatrix( e.matrix )
 					local n = drawShadowMeshList( e.list )
 				popMatrix()
@@ -916,7 +922,10 @@ end
 
 hook.Remove( "PreRender", "mc_mesh_shadow_map_render" )
 hook.Add( "PreRender", "mc_mesh_shadow_map_render", function()
+	local perf = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
+	local started = perf and SysTime() or nil
 	renderMCShadowMap()
+	if perf then MC.StreamPerformanceAddFrameStage( "render.shadow", ( SysTime() - started ) * 1000 ) end
 end )
 
 if cvars and cvars.AddChangeCallback then

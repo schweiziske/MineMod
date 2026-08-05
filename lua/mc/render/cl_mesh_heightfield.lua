@@ -209,13 +209,18 @@ end
 
 local function chunkZBounds()
 	local meshes = MC.Meshes
-	if not meshes then return nil end
+	if not ( meshes and MC.OpaqueChunkDrawEntries ) then return nil end
+	local entries, count = MC.OpaqueChunkDrawEntries()
 	local chunkH = MC.ChunkWorldH or 0
+	local halfH = chunkH * 0.5
+	local prepareEntry = MC.PrepareChunkDrawEntry
 	local minZ, maxZ
-	for key in pairs( meshes ) do
-		local chunk = MC.GetChunkByKey and MC.GetChunkByKey( key ) or nil
-		if chunk then
-			local z0 = chunk.cz * chunkH
+	for i = 1, count do
+		local e = entries[i]
+		if meshes[e.key] == e.list then
+			local frame = prepareEntry and prepareEntry( e, false ) or e.frame
+			local centerZ = frame and frame.z or e.z
+			local z0 = centerZ - halfH
 			local z1 = z0 + chunkH
 			if not minZ or z0 < minZ then minZ = z0 end
 			if not maxZ or z1 > maxZ then maxZ = z1 end
@@ -250,6 +255,7 @@ local function drawHeightfieldCasters( material, anchorX, anchorY, range )
 	local minX, maxX = anchorX - range - chunkW, anchorX + range
 	local minY, maxY = anchorY - range - chunkW, anchorY + range
 	local pushMatrix, popMatrix = cam.PushModelMatrix, cam.PopModelMatrix
+	local prepareEntry = MC.PrepareChunkDrawEntry
 	local drawnChunks, drawnMeshes = 0, 0
 
 	render.SetMaterial( material )
@@ -257,10 +263,14 @@ local function drawHeightfieldCasters( material, anchorX, anchorY, range )
 		local e = entries[i]
 		local list = e.list
 		if store[e.key] == list then
+			local frame = prepareEntry and prepareEntry( e, false ) or e.frame
+			local centerX = frame and frame.x or e.x
+			local centerY = frame and frame.y or e.y
 			-- Entries carry the chunk CENTER; the window filter keeps running
 			-- on the chunk origin (min side is already widened by chunkW).
-			local ox, oy = e.x - halfW, e.y - halfW
+			local ox, oy = centerX - halfW, centerY - halfW
 			if ox <= maxX and ox >= minX and oy <= maxY and oy >= minY then
+				if prepareEntry then prepareEntry( e, true ) end
 				pushMatrix( e.matrix )
 					local drawn = 0
 					for j = 1, #list do
@@ -499,7 +509,10 @@ end
 
 hook.Remove( "PreRender", "mc_mesh_heightfield_render" )
 hook.Add( "PreRender", "mc_mesh_heightfield_render", function()
+	local perf = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
+	local started = perf and SysTime() or nil
 	renderHeightfield()
+	if perf then MC.StreamPerformanceAddFrameStage( "render.heightfield", ( SysTime() - started ) * 1000 ) end
 end )
 
 if cvars and cvars.AddChangeCallback then

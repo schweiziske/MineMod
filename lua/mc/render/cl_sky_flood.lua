@@ -490,10 +490,17 @@ end
 
 hook.Remove( "Think", "mc_sky_flood_queue" )
 hook.Add( "Think", "mc_sky_flood_queue", function()
-	if pendingCount <= 0 then return end
+	local perf = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
+	local started = perf and SysTime() or nil
+	local processed = 0
+	if pendingCount <= 0 then
+		if perf then MC.StreamPerformanceAddFrameStage( "lighting.sky_flood", ( SysTime() - started ) * 1000 ) end
+		return
+	end
 	if not skyFloodEnabled() then
 		pendingReflood = {}
 		pendingCount = 0
+		if perf then MC.StreamPerformanceAddFrameStage( "lighting.sky_flood", ( SysTime() - started ) * 1000 ) end
 		return
 	end
 	local budget = refloodBudget()
@@ -501,9 +508,11 @@ hook.Add( "Think", "mc_sky_flood_queue", function()
 		pendingReflood[key] = nil
 		pendingCount = pendingCount - 1
 		refloodChunkSky( key )
+		processed = processed + 1
 		budget = budget - 1
 		if budget <= 0 then break end
 	end
+	if perf then MC.StreamPerformanceAddFrameStage( "lighting.sky_flood", ( SysTime() - started ) * 1000, { skyFloodChunks = processed } ) end
 end )
 
 function MC.ClearSkyFlood()

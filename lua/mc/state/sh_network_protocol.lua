@@ -11,11 +11,10 @@ MC = MC or {}
 local Net = MC.Net or {}
 MC.Net = Net
 
--- Protocol 6 adds compressed partial-world chunk hydration. Large commands
--- such as /fill now publish final Chunk payloads instead of replaying a paced
--- list of per-cell transactions on the client.
-Net.PROTOCOL_VERSION = 7
-Net.MIN_PROTOCOL_VERSION = 7
+-- Protocol 8 adds server-authoritative horizontal column streaming and ordered
+-- revision skip/pending control payloads.
+Net.PROTOCOL_VERSION = 8
+Net.MIN_PROTOCOL_VERSION = 8
 
 -- Shared coordinate and collection widths.
 Net.COORD_BITS = 20          -- signed block/chunk coordinate payloads
@@ -38,6 +37,8 @@ Net.STATE_STREAM_PART_BYTES = 30000
 Net.MAX_STATE_STREAM_CELLS = 131072
 Net.CHUNK_PATCH_PART_BYTES = 30000
 Net.CHUNK_PATCH_MAX_BYTES = 16777216
+Net.MAX_STREAM_COLUMNS = 64
+Net.MAX_STREAM_VERTICAL_CHUNKS = 1024
 
 Net.TransactionFlag = {
 	CORRECTION = 0x01,
@@ -68,6 +69,8 @@ Net.Capability = {
 	REGISTRY_HASH = 0x0010,
 	STATE_STREAM = 0x0020,
 	CHUNK_HYDRATION = 0x0040,
+	BINARY_CHUNK_PATCH = 0x0080,
+	BINARY_STATE_SNAPSHOT = 0x0100,
 }
 
 Net.REQUIRED_CAPABILITIES = bit.bor(
@@ -113,6 +116,8 @@ Net.MessageNames = {
 	"mc_state_set", "mc_state_set_bulk",
 	"mc_state_chunk_stream", "mc_state_bulk_group_end",
 	"mc_state_chunk_patch_begin", "mc_state_chunk_patch_part", "mc_state_chunk_patch_end",
+	"mc_state_binary_patch_begin", "mc_state_binary_patch_part", "mc_state_binary_patch_end",
+	"mc_stream_columns", "mc_stream_patch_pending", "mc_state_revision_skip",
 	"mc_state_snapshot_begin", "mc_state_snapshot_part", "mc_state_snapshot_end",
 	"mc_state_snapshot_ack",
 	"mc_state_resync_request",

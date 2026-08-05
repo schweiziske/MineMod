@@ -585,6 +585,8 @@ end
 
 local function resetClientWorldForSnapshot( expectedChunks, expectedBlocks )
 	if MC.FreeAllMeshes then MC.FreeAllMeshes() end
+	local backend = MC.GetChunkBackend and MC.GetChunkBackend() or nil
+	if backend and backend.native == true and backend.ClearWorld then backend.ClearWorld() end
 	-- Only the lighting-cache wipe is wanted here: MC.World/MeshDirty are
 	-- replaced a few lines below, so MarkAllMeshesDirty's chunk marking would
 	-- be discarded and its block-light rebuild would run on the old world.
@@ -600,6 +602,8 @@ local function resetClientWorldForSnapshot( expectedChunks, expectedBlocks )
 	MC.LoadedChunkKeys = {}
 	MC.MeshDirty = {}
 	MC.MeshDirtyRateLimited = {}
+	MC.MeshLightDirtyRateLimited = {}
+	if MC.ResetStreamCleanupState then MC.ResetStreamCleanupState() end
 	MC.PhysDirty = {}
 	MC.PhysDirtyPriority = {}
 	MC.PhysDirtyBulk = {}
@@ -661,6 +665,8 @@ local function loadSnapshotBlockEntities( chunk, envelopes, strict )
 end
 
 local function loadSnapshotChunk( data, cache, palette, strict, options )
+	local perfEnabled = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
+	local chunkStarted = perfEnabled and SysTime() or nil
 	local rawCX, rawCY, rawCZ = tonumber( data[1] ), tonumber( data[2] ), tonumber( data[3] )
 	if strict and ( not rawCX or not rawCY or not rawCZ
 		or rawCX ~= math.floor( rawCX ) or rawCY ~= math.floor( rawCY ) or rawCZ ~= math.floor( rawCZ ) ) then
@@ -671,13 +677,16 @@ local function loadSnapshotChunk( data, cache, palette, strict, options )
 	local cz = math.floor( rawCZ or 0 )
 	local cells = data[4]
 	local blockEntities = data[5]
+	local storageStarted = perfEnabled and SysTime() or nil
 	local c = MC.EnsureChunk( cx, cy, cz )
 	MC.ResetChunkStateStorage( c )
+	if perfEnabled then MC.StreamPerformanceAddStage( "hydrate.ensure_reset", ( SysTime() - storageStarted ) * 1000 ) end
 	local seen = {}
 	local nativeBackend = activeNativeChunkBackend()
 	local nativeCells = nativeBackend and {} or nil
 	MC.NativeChunkBulkLoading = nativeCells ~= nil
 	local loadError
+	local cellsStarted = perfEnabled and SysTime() or nil
 
 	if isstring( cells ) then
 		for entry in string.gmatch( cells, "[^;]+" ) do
@@ -723,26 +732,244 @@ local function loadSnapshotChunk( data, cache, palette, strict, options )
 	elseif strict then
 		loadError = "invalid_snapshot_cells"
 	end
+	if perfEnabled then MC.StreamPerformanceAddStage( nativeCells and "hydrate.native_cells_prepare" or "hydrate.lua_cells", ( SysTime() - cellsStarted ) * 1000, { hydratedCells = c.count or 0 } ) end
 	if loadError then MC.NativeChunkBulkLoading = false; return nil, loadError end
 	MC.NativeChunkBulkLoading = false
+	local nativeStarted = perfEnabled and SysTime() or nil
 	if nativeCells and not nativeBackend.ApplyChunkCells( c, nativeCells, true ) then
+		if perfEnabled then MC.StreamPerformanceAddStage( "hydrate.native_apply", ( SysTime() - nativeStarted ) * 1000 ) end
 		return nil, "native_chunk_batch_failed"
 	end
+	if perfEnabled and nativeCells then MC.StreamPerformanceAddStage( "hydrate.native_apply", ( SysTime() - nativeStarted ) * 1000 ) end
+	local blockEntitiesStarted = perfEnabled and SysTime() or nil
 	if not loadSnapshotBlockEntities( c, blockEntities, strict ) then return nil, "invalid_snapshot_block_entities" end
+	if perfEnabled then MC.StreamPerformanceAddStage( "hydrate.block_entities", ( SysTime() - blockEntitiesStarted ) * 1000 ) end
 
+	local finalizeStarted = perfEnabled and SysTime() or nil
 	if MC.FinalizeChunkStateStorage then MC.FinalizeChunkStateStorage( c ) end
-	if MC.IndexChunkLightSources then MC.IndexChunkLightSources( c ) end
+	if perfEnabled then MC.StreamPerformanceAddStage( "hydrate.storage_finalize", ( SysTime() - finalizeStarted ) * 1000 ) end
+	local deferLighting = istable( options ) and options.deferLighting == true
+	if not deferLighting and MC.IndexChunkLightSources then MC.IndexChunkLightSources( c ) end
 	local deferDirty = istable( options ) and options.deferDirty == true
 	if c.count <= 0 then MC.World[c.key] = nil end
 	if not deferDirty and MC.MarkChunkDirty then MC.MarkChunkDirty( c.key ) end
+	if perfEnabled then
+		local chunkMS = ( SysTime() - chunkStarted ) * 1000
+		MC.StreamPerformanceAddStage( "hydrate.chunk_total", chunkMS, { hydratedChunks = 1 } )
+		local state = MC.StreamPerformanceStats
+		if state and ( not state.worstHydrateChunk or chunkMS > state.worstHydrateChunk.ms ) then
+			state.worstHydrateChunk = { key = c.key, cells = c.count or 0, ms = chunkMS }
+		end
+	end
 	return c.count
+end
+
+local function validateSnapshotChunkData( data, cache, palette )
+	if not istable( data ) then return nil, "invalid_snapshot_chunk" end
+	local cx, cy, cz = tonumber( data[1] ), tonumber( data[2] ), tonumber( data[3] )
+	if not cx or not cy or not cz or cx ~= math.floor( cx ) or cy ~= math.floor( cy ) or cz ~= math.floor( cz ) then
+		return nil, "invalid_snapshot_chunk_coords"
+	end
+	local cells, seen, states, count = data[4], {}, {}, 0
+	local function validateCell( liValue, paletteIndex )
+		local li = math.floor( tonumber( liValue ) or -1 )
+		if not MC.LocalIndexInRange( li ) or seen[li] then return false, "invalid_snapshot_cell" end
+		local stateId = snapshotPaletteEntry( cache, palette, paletteIndex )
+		if not stateId or stateId == 0 or not MC.IsValidBlockState( stateId ) then return false, "invalid_snapshot_state" end
+		seen[li], states[li], count = true, stateId, count + 1
+		return true
+	end
+	if isstring( cells ) then
+		for entry in string.gmatch( cells, "[^;]+" ) do
+			local liText, piText = string.match( entry, "^(-?%d+):(-?%d+)$" )
+			if not liText then return nil, "invalid_snapshot_cell" end
+			local ok, err = validateCell( liText, piText ); if not ok then return nil, err end
+		end
+	elseif istable( cells ) then
+		if #cells % 2 ~= 0 then return nil, "invalid_snapshot_cells" end
+		for i = 1, #cells, 2 do local ok, err = validateCell( cells[i], cells[i + 1] ); if not ok then return nil, err end end
+	else
+		return nil, "invalid_snapshot_cells"
+	end
+	local envelopes = data[5]
+	if envelopes ~= nil then
+		if not istable( envelopes ) then return nil, "invalid_snapshot_block_entities" end
+		local beSeen = {}
+		for _, envelope in ipairs( envelopes ) do
+			local li = istable( envelope ) and math.floor( tonumber( envelope.localIndex ) or -1 ) or -1
+			if not MC.LocalIndexInRange( li ) or beSeen[li] then return nil, "invalid_snapshot_block_entities" end
+			beSeen[li] = true
+			local definition = MC.BlockEntityTypes and MC.BlockEntityTypes[envelope.type]
+			if not definition then return nil, "invalid_snapshot_block_entities" end
+			if not definition.serverOnly then
+				local record = MC.DecodeBlockEntityEnvelope and MC.DecodeBlockEntityEnvelope( states[li] or 0, envelope ) or nil
+				if not record then return nil, "invalid_snapshot_block_entities" end
+			end
+		end
+	end
+	return { cx = cx, cy = cy, cz = cz, key = MC.ChunkKey( cx, cy, cz ), count = count }
 end
 
 -- Hydrate only the listed chunks while keeping the rest of MC.World intact.
 -- This is the client half of the storage-level /fill fast path: each Native
 -- Chunk receives one replace batch, while the Lua backend rebuilds its packed
 -- state sections directly from the same save-compatible payload.
+-- Finalize a patch whose state cells were already committed atomically by the
+-- native decoder. Lua retains only chunk shells, Block Entities, and the
+-- lighting/collision bookkeeping consumed by the rest of the addon.
+function MC.FinalizeNativeStateChunkPatch( committed, backendEpoch, options )
+	if not istable( committed ) or not istable( committed.chunks ) then return false, "invalid_native_patch_result" end
+	local backend = activeNativeChunkBackend()
+	if not backend or not backend.Epoch or backend.Epoch() ~= backendEpoch then return false, "native_patch_epoch_mismatch" end
+	local oldChunks, prepared, blocks = {}, {}, 0
+	for index, item in ipairs( committed.chunks ) do
+		local cx, cy, cz = tonumber( item.cx ), tonumber( item.cy ), tonumber( item.cz )
+		local count = math.floor( tonumber( item.count ) or -1 )
+		if not cx or not cy or not cz or cx ~= math.floor( cx ) or cy ~= math.floor( cy ) or cz ~= math.floor( cz )
+		or count < 0 or count > ( MC.CS or 16 ) * ( MC.CS or 16 ) * ( MC.CH or 32 ) then
+			return false, "invalid_native_patch_chunk:" .. tostring( index )
+		end
+		local key = MC.ChunkKey( cx, cy, cz )
+		local old = MC.World and MC.World[key]
+		if old then oldChunks[#oldChunks + 1] = old end
+		local envelopes
+		if isstring( item.blockEntitiesJSON ) and item.blockEntitiesJSON ~= "" then
+			envelopes = util.JSONToTable( item.blockEntitiesJSON )
+			if not istable( envelopes ) then return false, "invalid_native_patch_block_entities:" .. tostring( index ) end
+		end
+		prepared[index] = { cx = cx, cy = cy, cz = cz, key = key, count = count, blockEntities = envelopes }
+		blocks = blocks + count
+	end
+	if math.floor( tonumber( committed.blocks ) or -1 ) ~= blocks then return false, "native_patch_block_count_mismatch" end
+	local fullSnapshot = istable( options ) and options.fullSnapshot == true
+	local lightingBatch = not fullSnapshot and MC.BeginPartialLightingBatch
+		and MC.BeginPartialLightingBatch( oldChunks ) or nil
+	local touched, newChunks = {}, {}
+	for _, item in ipairs( prepared ) do
+		local c = MC.EnsureChunk( item.cx, item.cy, item.cz )
+		MC.ResetChunkStateStorage( c )
+		c.count = item.count
+		c.nativeMeshEpoch = backendEpoch
+		c.nativeStateStorage = true
+		c.chunkBackend = "native"
+		c.stateSections = nil
+		if MC.AttachNativeChunkCompatibilityProxy then MC.AttachNativeChunkCompatibilityProxy( c ) end
+		if not loadSnapshotBlockEntities( c, item.blockEntities, true ) then
+			if MC.CancelPartialLightingBatch then MC.CancelPartialLightingBatch( lightingBatch ) end
+			return false, "invalid_native_patch_block_entities"
+		end
+		if MC.FinalizeChunkStateStorage then MC.FinalizeChunkStateStorage( c ) end
+		if MC.IndexChunkLightSources then MC.IndexChunkLightSources( c ) end
+		touched[#touched + 1] = { cx = item.cx, cy = item.cy, cz = item.cz, key = item.key, count = item.count }
+		if item.count <= 0 then
+			MC.World[item.key] = nil
+			if MC.PhysDirty then MC.PhysDirty[item.key] = nil end
+			if MC.PhysDirtyPriority then MC.PhysDirtyPriority[item.key] = nil end
+		else
+			newChunks[#newChunks + 1] = c
+		end
+	end
+	if lightingBatch and MC.EndPartialLightingBatch then MC.EndPartialLightingBatch( lightingBatch, newChunks, true ) end
+	return true, { chunks = touched, blocks = blocks }
+end
+
+local function forEachBinarySectionCell( item, callback )
+	for sectionIndex = 1, 2 do
+		local section = item.sections and item.sections[sectionIndex]
+		if section then
+			MC.StateSection.ForEach( section, function( sectionLocalIndex, stateId )
+				callback( ( sectionIndex - 1 ) * 4096 + sectionLocalIndex, stateId )
+			end )
+		end
+	end
+end
+
+-- Commits an already validated Binary Section patch. The Lua backend adopts
+-- the packed sections directly; Native keeps its existing replace-batch API so
+-- enabling the transport never disables native mesh ownership.
+function MC.LoadBinaryStateChunkPatchData( data, options )
+	if not istable( data ) or not istable( data.chunks ) then return false, "invalid_binary_patch" end
+	local prepared, oldChunks, seen, blocks = {}, {}, {}, 0
+	for index, item in ipairs( data.chunks ) do
+		local cx, cy, cz = tonumber( item.cx ), tonumber( item.cy ), tonumber( item.cz )
+		local count = math.floor( tonumber( item.count ) or -1 )
+		if not cx or not cy or not cz or cx ~= math.floor( cx ) or cy ~= math.floor( cy ) or cz ~= math.floor( cz )
+		or count < 0 or count > 8192 or not istable( item.sections ) or not istable( item.blockEntities ) then
+			return false, "invalid_binary_chunk:" .. tostring( index )
+		end
+		local key = MC.ChunkKey( cx, cy, cz )
+		if seen[key] then return false, "duplicate_binary_chunk:" .. tostring( index ) end
+		seen[key] = true
+		prepared[index] = item
+		blocks = blocks + count
+		local old = MC.World and MC.World[key]
+		if old then oldChunks[#oldChunks + 1] = old end
+	end
+	if math.floor( tonumber( data.blocks ) or -1 ) ~= blocks then return false, "binary_patch_block_count_mismatch" end
+
+	local fullSnapshot = istable( options ) and options.fullSnapshot == true
+	local lightingBatch = not fullSnapshot and MC.BeginPartialLightingBatch
+		and MC.BeginPartialLightingBatch( oldChunks ) or nil
+	local nativeBackend = activeNativeChunkBackend()
+	local touched, newChunks = {}, {}
+	for index, item in ipairs( prepared ) do
+		local c = MC.EnsureChunk( item.cx, item.cy, item.cz )
+		MC.ResetChunkStateStorage( c )
+		local commitError
+		if nativeBackend then
+			local nativeCells = {}
+			forEachBinarySectionCell( item, function( localIndex, stateId )
+				nativeCells[#nativeCells + 1] = localIndex
+				nativeCells[#nativeCells + 1] = stateId
+			end )
+			c.count = item.count
+			if nativeBackend.ApplyChunkCells( c, nativeCells, true ) ~= true then
+				commitError = "native_binary_chunk_commit_failed"
+			else
+				c.nativeStateStorage = true
+				c.chunkBackend = "native"
+				c.stateSections = nil
+				c.stateStorageMigrated = true
+				if MC.AttachNativeChunkCompatibilityProxy then MC.AttachNativeChunkCompatibilityProxy( c ) end
+			end
+		else
+			c.stateSections = item.sections
+			c.stateStorageMigrated = true
+			c.nativeStateStorage = false
+			c.count = item.count
+			c.blocks, c.orients = {}, {}
+			forEachBinarySectionCell( item, function( localIndex, stateId )
+				if commitError then return end
+				local id, orient = MC.LegacyFromState( stateId )
+				if not id then commitError = "binary_state_projection_failed" return end
+				c.blocks[localIndex] = id
+				c.orients[localIndex] = orient or 0
+			end )
+		end
+		if commitError or not loadSnapshotBlockEntities( c, item.blockEntities, true ) then
+			if MC.CancelPartialLightingBatch then MC.CancelPartialLightingBatch( lightingBatch ) end
+			resetClientWorldForSnapshot( 0, 0 )
+			return false, commitError or "invalid_binary_block_entities:" .. tostring( index )
+		end
+		if MC.FinalizeChunkStateStorage then MC.FinalizeChunkStateStorage( c ) end
+		if MC.IndexChunkLightSources then MC.IndexChunkLightSources( c ) end
+		local touchedItem = { cx = item.cx, cy = item.cy, cz = item.cz, key = c.key, count = item.count }
+		touched[#touched + 1] = touchedItem
+		if item.count <= 0 then
+			MC.World[c.key] = nil
+			if MC.PhysDirty then MC.PhysDirty[c.key] = nil end
+			if MC.PhysDirtyPriority then MC.PhysDirtyPriority[c.key] = nil end
+		else
+			newChunks[#newChunks + 1] = c
+		end
+	end
+	if lightingBatch and MC.EndPartialLightingBatch then MC.EndPartialLightingBatch( lightingBatch, newChunks, true ) end
+	return true, { chunks = touched, blocks = blocks }
+end
+
 function MC.LoadStateChunkPatchData( data )
+	local perfEnabled = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
+	local loaderStarted = perfEnabled and SysTime() or nil
 	if not istable( data ) or data.chunkPatch ~= true or not istable( data.chunks ) then
 		return false, "invalid_chunk_patch"
 	end
@@ -754,26 +981,60 @@ function MC.LoadStateChunkPatchData( data )
 
 	local cache = {}
 	local palette = data.p or data.palette
-	local touched = {}
+	local touched, oldChunks, prepared = {}, {}, {}
+	local seenChunks = {}
 	local blocks = 0
+	local validationStarted = perfEnabled and SysTime() or nil
+	-- Phase one validates and resolves every sparse state/BE envelope without
+	-- touching MC.World. Hostile later records therefore cannot leave an earlier
+	-- chunk committed or a partial-light batch open.
 	for index, chunkData in ipairs( data.chunks ) do
-		if not istable( chunkData ) then return false, "invalid_chunk_patch_record:" .. tostring( index ) end
-		local cx = tonumber( chunkData[1] )
-		local cy = tonumber( chunkData[2] )
-		local cz = tonumber( chunkData[3] )
-		if not cx or not cy or not cz or cx ~= math.floor( cx )
-		or cy ~= math.floor( cy ) or cz ~= math.floor( cz ) then
-			return false, "invalid_chunk_patch_coords:" .. tostring( index )
-		end
+		local item, err = validateSnapshotChunkData( chunkData, cache, palette )
+		if not item then return false, tostring( err ) .. ":" .. tostring( index ) end
+		if seenChunks[item.key] then return false, "duplicate_chunk_patch_coords:" .. tostring( index ) end
+		seenChunks[item.key], prepared[index] = true, item
+		local old = MC.World and MC.World[item.key]
+		if old then oldChunks[#oldChunks + 1] = old end
+		blocks = blocks + item.count
+	end
+	if perfEnabled then MC.StreamPerformanceAddStage( "hydrate.prevalidate", ( SysTime() - validationStarted ) * 1000, { validatedChunks = #prepared, validatedCells = blocks } ) end
+	if math.floor( tonumber( data.blockCount ) or -1 ) ~= blocks then return false, "chunk_patch_block_count_mismatch" end
+	local lightBeginStarted = perfEnabled and SysTime() or nil
+	local lightingBatch = MC.BeginPartialLightingBatch and MC.BeginPartialLightingBatch( oldChunks ) or nil
+	if perfEnabled then MC.StreamPerformanceAddStage( "lighting.begin_partial", ( SysTime() - lightBeginStarted ) * 1000 ) end
+	local hydrationStarted = perfEnabled and SysTime() or nil
+	for index, chunkData in ipairs( data.chunks ) do
+		local item = prepared[index]
+		local cx, cy, cz = item.cx, item.cy, item.cz
 		local loaded, loadError = loadSnapshotChunk(
-			chunkData, cache, palette, true, { deferDirty = true } )
-		if loaded == nil then return false, loadError or "chunk_patch_hydrate_failed" end
-		blocks = blocks + loaded
+			chunkData, cache, palette, true, { deferDirty = true, deferLighting = true } )
+		if loaded == nil then
+			-- All semantic failures were rejected in phase one. A failure here is an
+			-- internal/native commit failure; force a clean resync reset rather than
+			-- attempting to continue with mixed backend ownership.
+			if MC.CancelPartialLightingBatch then MC.CancelPartialLightingBatch( lightingBatch ) end
+			resetClientWorldForSnapshot( 0, 0 )
+			return false, loadError or "chunk_patch_hydrate_failed"
+		end
 		touched[#touched + 1] = {
 			cx = cx, cy = cy, cz = cz,
 			key = MC.ChunkKey( cx, cy, cz ),
 			count = loaded,
 		}
+	end
+	if perfEnabled then MC.StreamPerformanceAddStage( "hydrate.commit_chunks", ( SysTime() - hydrationStarted ) * 1000 ) end
+	local collectStarted = perfEnabled and SysTime() or nil
+	local newChunks = {}
+	for _, item in ipairs( touched ) do
+		local chunk = MC.World and MC.World[item.key]
+		if chunk then newChunks[#newChunks + 1] = chunk end
+	end
+	if perfEnabled then MC.StreamPerformanceAddStage( "hydrate.collect_new", ( SysTime() - collectStarted ) * 1000 ) end
+	local lightEndStarted = perfEnabled and SysTime() or nil
+	if lightingBatch and MC.EndPartialLightingBatch then MC.EndPartialLightingBatch( lightingBatch, newChunks, true ) end
+	if perfEnabled then
+		MC.StreamPerformanceAddStage( "lighting.end_partial", ( SysTime() - lightEndStarted ) * 1000 )
+		MC.StreamPerformanceAddStage( "hydrate.loader_total", ( SysTime() - loaderStarted ) * 1000 )
 	end
 	return true, { chunks = touched, blocks = blocks }
 end
@@ -1342,15 +1603,368 @@ end
 net.Receive( "mc_set_bulk", receiveSetBulk )
 net.Receive( "mc_set_bulk_fast", receiveSetBulk )
 
-net.Receive( "mc_unload_chunk", function()
-	local cx = net.ReadInt( Net.COORD_BITS )
-	local cy = net.ReadInt( Net.COORD_BITS )
-	local cz = net.ReadInt( Net.COORD_BITS )
-	local key = MC.ChunkKey( cx, cy, cz )
+MC.StreamProfile = MC.StreamProfile or { patch = {}, unload = {} }
 
+-- Detached cleanup is a sparse FIFO: consumed entries are nilled while newer
+-- entries remain at higher numeric indices. Never use # or ipairs on it.
+MC.StreamCleanupQueue = MC.StreamCleanupQueue or {}
+MC.StreamCleanupHead = MC.StreamCleanupHead or 1
+if MC.StreamCleanupTail == nil then
+	local tail = 0
+	for index in pairs( MC.StreamCleanupQueue ) do
+		if isnumber( index ) and index > tail then tail = index end
+	end
+	MC.StreamCleanupTail = tail
+end
+local streamCleanupPendingByKey = {}
+MC.StreamCleanupPending = 0
+for index = MC.StreamCleanupHead, MC.StreamCleanupTail do
+	local item = MC.StreamCleanupQueue[index]
+	if item and not item.done then
+		MC.StreamCleanupPending = MC.StreamCleanupPending + 1
+		streamCleanupPendingByKey[item.key] = ( streamCleanupPendingByKey[item.key] or 0 ) + 1
+	end
+end
+
+local function newStreamPerfAggregate()
+	return { count = 0, totalMS = 0, maxMS = 0, lastMS = 0 }
+end
+
+local function streamPerfCopy( value, seen )
+	if not istable( value ) then return value end
+	seen = seen or {}
+	if seen[value] then return seen[value] end
+	local copy = {}
+	seen[value] = copy
+	for key, item in pairs( value ) do copy[streamPerfCopy( key, seen )] = streamPerfCopy( item, seen ) end
+	return copy
+end
+
+local function streamPerfQueueDepths()
+	local geometryKeys, geometrySections, lightKeys, lightSections = 0, 0, 0, 0
+	for _, sections in pairs( MC.MeshDirty or {} ) do
+		geometryKeys = geometryKeys + 1
+		geometrySections = geometrySections + ( sections == true and ( MC.RENDER_SECTION_COUNT or 1 ) or table.Count( sections ) )
+	end
+	for _, sections in pairs( MC.MeshLightDirty or {} ) do
+		lightKeys = lightKeys + 1
+		lightSections = lightSections + ( sections == true and ( MC.RENDER_SECTION_COUNT or 1 ) or table.Count( sections ) )
+	end
+	local collision = 0
+	local order, head, bulk = MC.PhysDirtyBulkOrder or {}, MC.PhysDirtyBulkOrderHead or 1, MC.PhysDirtyBulk or {}
+	for index = head, #order do
+		local key = order[index]
+		if bulk[key] and MC.PhysDirty and MC.PhysDirty[key] then collision = collision + 1 end
+	end
+	local cleanup = math.max( 0, MC.StreamCleanupPending or 0 )
+	return {
+		geometryKeys = geometryKeys, geometrySections = geometrySections,
+		lightKeys = lightKeys, lightSections = lightSections,
+		collision = collision, cleanup = cleanup,
+	}
+end
+
+local function newStreamPerformanceState( options )
+	options = istable( options ) and options or {}
+	return {
+		enabled = true,
+		startedAt = SysTime(),
+		maxPatches = math.Clamp( math.floor( tonumber( options.maxPatches ) or 32 ), 1, 128 ),
+		maxFrames = math.Clamp( math.floor( tonumber( options.maxAftermathFrames ) or 256 ), 16, 2048 ),
+		stages = {}, counters = {}, failures = {}, patches = {}, patchByRevision = {}, frames = {},
+		frameStages = {}, frameOrder = {}, latestCompletedFrame = nil,
+		cleanup = {
+			enqueued = 0, drained = 0, cleaned = 0, staleToken = 0, reloaded = 0,
+			synchronous = 0, duplicate = 0, nativeOnly = 0, retainedChunks = 0,
+			pending = 0, peakPending = 0,
+		},
+		memory = { baselineKB = 0, currentKB = 0, peakKB = 0, possibleNaturalGC = 0 },
+		peaks = streamPerfQueueDepths(), latestQueues = streamPerfQueueDepths(),
+		activeStage = nil, appliedPatches = 0, decodedPatches = 0, successfulPatches = 0,
+		totalBytes = 0, totalChunks = 0, totalCells = 0, overlapped = false,
+	}
+end
+
+MC.StreamPerformanceStats = MC.StreamPerformanceStats or newStreamPerformanceState()
+MC.StreamPerformanceStats.enabled = false
+
+function MC.StreamPerformanceEnabled()
+	return MC.StreamPerformanceStats and MC.StreamPerformanceStats.enabled == true
+end
+
+function MC.ResetStreamPerformanceStats( options )
+	MC.StreamPerformanceStats = newStreamPerformanceState( options )
+	local state = MC.StreamPerformanceStats
+	local memory = state.memory
+	memory.baselineKB = collectgarbage( "count" )
+	memory.currentKB, memory.peakKB = memory.baselineKB, memory.baselineKB
+	local queue, head, tail = MC.StreamCleanupQueue or {}, MC.StreamCleanupHead or 1, MC.StreamCleanupTail or 0
+	state.cleanup.pending = math.max( 0, MC.StreamCleanupPending or 0 )
+	state.cleanup.peakPending = state.cleanup.pending
+	for index = head, tail do
+		local item = queue[index]
+		if item and not item.done and item.chunk then state.cleanup.retainedChunks = state.cleanup.retainedChunks + 1 end
+	end
+	return true
+end
+
+function MC.SetStreamPerformanceEnabled( enabled )
+	local state = MC.StreamPerformanceStats
+	if not state then state = newStreamPerformanceState(); MC.StreamPerformanceStats = state end
+	state.enabled = enabled == true
+	if not state.enabled then state.stoppedAt = SysTime() end
+	return state.enabled
+end
+
+function MC.StreamPerformanceAddStage( name, ms, counters )
+	local state = MC.StreamPerformanceStats
+	if not state or not state.enabled then return end
+	name, ms = tostring( name or "unknown" ), math.max( 0, tonumber( ms ) or 0 )
+	local aggregate = state.stages[name]
+	if not aggregate then aggregate = newStreamPerfAggregate(); state.stages[name] = aggregate end
+	aggregate.count = aggregate.count + 1
+	aggregate.totalMS = aggregate.totalMS + ms
+	aggregate.lastMS = ms
+	if ms > aggregate.maxMS then aggregate.maxMS = ms end
+	for key, value in pairs( counters or {} ) do
+		if isnumber( value ) then state.counters[key] = ( state.counters[key] or 0 ) + value end
+	end
+end
+
+local function finalizeStreamPerformanceFrame( state, frame )
+	if not frame or frame.finalized then return end
+	frame.finalized = true
+	frame.memoryKB = collectgarbage( "count" )
+	local memory = state.memory
+	local previousKB = memory.currentKB > 0 and memory.currentKB or memory.baselineKB
+	frame.memoryDeltaKB = frame.memoryKB - previousKB
+	memory.currentKB = frame.memoryKB
+	memory.peakKB = math.max( memory.peakKB or 0, frame.memoryKB )
+	if frame.memoryDeltaKB < -64 then
+		frame.possibleNaturalGC = true
+		memory.possibleNaturalGC = ( memory.possibleNaturalGC or 0 ) + 1
+	end
+	local cleanup = state.cleanup or {}
+	frame.cleanupPending = cleanup.pending or 0
+	frame.cleanupRetainedChunks = cleanup.retainedChunks or 0
+	frame.cleanupEnqueued = cleanup.enqueued or 0
+	frame.cleanupDrained = cleanup.drained or 0
+	frame.collision = streamPerfQueueDepths().collision
+	state.latestCompletedFrame = frame
+end
+
+function MC.StreamPerformanceAddFrameStage( name, ms, counters )
+	local state = MC.StreamPerformanceStats
+	if not state or not state.enabled then return end
+	local number = FrameNumber and FrameNumber() or 0
+	local frame = state.frameStages[number]
+	if not frame then
+		local previousNumber = state.frameOrder[#state.frameOrder]
+		if previousNumber ~= nil then finalizeStreamPerformanceFrame( state, state.frameStages[previousNumber] ) end
+		frame = { number = number, stages = {}, measuredMCMS = 0 }
+		state.frameStages[number] = frame
+		state.frameOrder[#state.frameOrder + 1] = number
+		while #state.frameOrder > 4 do
+			local removed = table.remove( state.frameOrder, 1 )
+			if removed ~= number and state.latestCompletedFrame ~= state.frameStages[removed] then state.frameStages[removed] = nil end
+		end
+	end
+	name, ms = tostring( name or "unknown" ), math.max( 0, tonumber( ms ) or 0 )
+	frame.stages[name] = ( frame.stages[name] or 0 ) + ms
+	frame.measuredMCMS = frame.measuredMCMS + ms
+	for key, value in pairs( counters or {} ) do
+		if isnumber( value ) then frame[key] = ( frame[key] or 0 ) + value end
+	end
+end
+
+function MC.StreamPerformanceLatestCompletedFrame()
+	local state = MC.StreamPerformanceStats
+	if not state or not state.enabled then return nil end
+	return state.latestCompletedFrame
+end
+
+function MC.StreamPerformanceSetStage( name )
+	local state = MC.StreamPerformanceStats
+	if state and state.enabled then state.activeStage = name end
+end
+
+function MC.StreamPerformancePatchBegin( metadata )
+	local state = MC.StreamPerformanceStats
+	if not state or not state.enabled then return end
+	local revision = tonumber( metadata and metadata.revision ) or -1
+	local record = {
+		generation = metadata and metadata.generation, revision = revision,
+		bytes = metadata and metadata.totalBytes or 0, parts = metadata and metadata.partCount or 0,
+		chunks = metadata and metadata.chunkCount or 0, cells = metadata and metadata.cellCount or 0,
+		beganAt = SysTime(), status = "receiving", stages = {},
+	}
+	state.patchByRevision[revision] = record
+	state.patches[#state.patches + 1] = record
+	while #state.patches > state.maxPatches do
+		local removed = table.remove( state.patches, 1 )
+		if removed and state.patchByRevision[removed.revision] == removed then state.patchByRevision[removed.revision] = nil end
+	end
+end
+
+function MC.StreamPerformancePatchStage( revision, name, ms )
+	local state = MC.StreamPerformanceStats
+	if not state or not state.enabled then return end
+	MC.StreamPerformanceAddStage( "patch." .. tostring( name ), ms )
+	local record = state.patchByRevision[tonumber( revision )]
+	if record then record.stages[name] = ( record.stages[name] or 0 ) + math.max( 0, tonumber( ms ) or 0 ) end
+end
+
+function MC.StreamPerformancePatchDecoded( revision )
+	local state = MC.StreamPerformanceStats
+	if not state or not state.enabled then return end
+	local record = state.patchByRevision[tonumber( revision )]
+	if not record then return end
+	record.decodedAt, record.status = SysTime(), "decoded_waiting_revision"
+	state.decodedPatches = state.decodedPatches + 1
+	state.totalBytes = state.totalBytes + ( record.bytes or 0 )
+	state.totalChunks = state.totalChunks + ( record.chunks or 0 )
+	state.totalCells = state.totalCells + ( record.cells or 0 )
+end
+
+function MC.StreamPerformancePatchApplied( revision, success, reason )
+	local state = MC.StreamPerformanceStats
+	if not state or not state.enabled then return end
+	local now = SysTime()
+	local record = state.patchByRevision[tonumber( revision )]
+	if record then
+		record.appliedAt = now
+		record.status = success == true and "aftermath_pending" or "apply_failed"
+		record.error = reason
+	end
+	state.appliedPatches = state.appliedPatches + 1
+	if success == true then state.successfulPatches = state.successfulPatches + 1
+	else state.failures[tostring( reason or "apply_failed" )] = ( state.failures[tostring( reason or "apply_failed" )] or 0 ) + 1 end
+	if state.aftermathStartedAt then state.overlapped = true end
+	state.aftermathStartedAt = state.aftermathStartedAt or now
+	state.latestQueues = streamPerfQueueDepths()
+	for key, value in pairs( state.latestQueues ) do state.peaks[key] = math.max( state.peaks[key] or 0, value ) end
+end
+
+function MC.StreamPerformancePatchFailure( revision, reason )
+	local state = MC.StreamPerformanceStats
+	if not state or not state.enabled then return end
+	local record = state.patchByRevision[tonumber( revision )]
+	if record then record.status, record.error = "decode_failed", tostring( reason or "unknown" ) end
+	state.failures[tostring( reason or "unknown" )] = ( state.failures[tostring( reason or "unknown" )] or 0 ) + 1
+end
+
+function MC.StreamPerformanceRecordAftermathFrame( sample )
+	local state = MC.StreamPerformanceStats
+	if not state or not state.enabled then return end
+	sample = istable( sample ) and sample or {}
+	sample.time = SysTime()
+	sample.queues = streamPerfQueueDepths()
+	state.latestQueues = sample.queues
+	for key, value in pairs( sample.queues ) do state.peaks[key] = math.max( state.peaks[key] or 0, value ) end
+	state.frames[#state.frames + 1] = sample
+	while #state.frames > state.maxFrames do table.remove( state.frames, 1 ) end
+	if state.aftermathStartedAt and sample.queues.geometryKeys == 0 and sample.queues.lightKeys == 0
+	and sample.queues.collision == 0 and sample.queues.cleanup == 0 then
+		state.lastDrainMS = ( sample.time - state.aftermathStartedAt ) * 1000
+		state.aftermathStartedAt = nil
+		for _, record in ipairs( state.patches ) do
+			if record.status == "aftermath_pending" then record.status, record.drainedAt = "completed_drained", sample.time end
+		end
+	end
+end
+
+function MC.GetStreamPerformanceSnapshot()
+	local state = MC.StreamPerformanceStats or {}
+	local copy = streamPerfCopy( state )
+	copy.patchByRevision = nil
+	copy.elapsedMS = ( ( state.stoppedAt or SysTime() ) - ( state.startedAt or SysTime() ) ) * 1000
+	copy.latestQueues = streamPerfQueueDepths()
+	return copy
+end
+
+function MC.GetStreamPerformanceSummary()
+	local snapshot = MC.GetStreamPerformanceSnapshot()
+	local summary = {
+		enabled = snapshot.enabled == true, elapsedMS = snapshot.elapsedMS or 0,
+		decodedPatches = snapshot.decodedPatches or 0, appliedPatches = snapshot.appliedPatches or 0,
+		successfulPatches = snapshot.successfulPatches or 0, totalBytes = snapshot.totalBytes or 0,
+		totalChunks = snapshot.totalChunks or 0, totalCells = snapshot.totalCells or 0,
+		stages = {}, counters = snapshot.counters or {}, failures = snapshot.failures or {},
+		peaks = snapshot.peaks or {}, latestQueues = snapshot.latestQueues or {},
+		lastDrainMS = snapshot.lastDrainMS, overlapped = snapshot.overlapped == true,
+	}
+	for name, aggregate in pairs( snapshot.stages or {} ) do
+		summary.stages[name] = {
+			count = aggregate.count or 0, totalMS = aggregate.totalMS or 0,
+			averageMS = ( aggregate.count or 0 ) > 0 and ( aggregate.totalMS or 0 ) / aggregate.count or 0,
+			maxMS = aggregate.maxMS or 0, lastMS = aggregate.lastMS or 0,
+		}
+	end
+	return summary
+end
+
+MC.StreamHiddenChunkKeys = MC.StreamHiddenChunkKeys or {}
+MC.StreamDetachTokens = MC.StreamDetachTokens or {}
+
+function MC.SetStreamChunkHidden( key, hidden )
+	if not key then return end
+	MC.StreamHiddenChunkKeys[key] = hidden and true or nil
+	local backend = MC.NativeChunkBackend
+	if backend and backend.SetChunkVisible then backend.SetChunkVisible( key, not hidden ) end
+end
+
+local function streamCleanupPerf()
+	local state = MC.StreamPerformanceStats
+	return state and state.enabled and state.cleanup or nil
+end
+
+local function noteCleanupEnqueued( key, chunk, nativeOnly )
+	MC.StreamCleanupPending = ( MC.StreamCleanupPending or 0 ) + 1
+	local duplicate = ( streamCleanupPendingByKey[key] or 0 ) > 0
+	streamCleanupPendingByKey[key] = ( streamCleanupPendingByKey[key] or 0 ) + 1
+	local perf = streamCleanupPerf()
+	if not perf then return end
+	perf.enqueued = perf.enqueued + 1
+	perf.pending = perf.pending + 1
+	perf.peakPending = math.max( perf.peakPending, perf.pending )
+	if chunk then perf.retainedChunks = perf.retainedChunks + 1 end
+	if nativeOnly then perf.nativeOnly = perf.nativeOnly + 1 end
+	if duplicate then perf.duplicate = perf.duplicate + 1 end
+end
+
+local function noteCleanupConsumed( item, reason, synchronous )
+	if not item then return end
+	MC.StreamCleanupPending = math.max( 0, ( MC.StreamCleanupPending or 0 ) - 1 )
+	local count = math.max( 0, ( streamCleanupPendingByKey[item.key] or 1 ) - 1 )
+	streamCleanupPendingByKey[item.key] = count > 0 and count or nil
+	local perf = streamCleanupPerf()
+	if not perf then return end
+	perf.drained = perf.drained + 1
+	if reason == "cleaned" then perf.cleaned = perf.cleaned + 1
+	elseif reason == "stale_token" then perf.staleToken = perf.staleToken + 1
+	elseif reason == "reloaded" then perf.reloaded = perf.reloaded + 1 end
+	if synchronous then perf.synchronous = perf.synchronous + 1 end
+	perf.pending = math.max( 0, perf.pending - 1 )
+	if item.chunk then perf.retainedChunks = math.max( 0, perf.retainedChunks - 1 ) end
+end
+
+if CreateClientConVar then
+	MC.StreamUnloadFrameMS = MC.StreamUnloadFrameMS or CreateClientConVar( "mc_stream_unload_frame_ms", "3", true, false,
+		"Milliseconds per frame for detached streaming chunk cleanup", 2, 4 )
+	MC.StreamUnloadChunksPerFrame = MC.StreamUnloadChunksPerFrame or CreateClientConVar( "mc_stream_unload_chunks_per_frame", "1", true, false,
+		"Detached streaming chunks cleaned per frame", 1, 2 )
+	MC.StreamProfileDebug = MC.StreamProfileDebug or CreateClientConVar( "mc_stream_profile_debug", "0", true, false,
+		"Print dynamic streaming patch and unload frame profiles" )
+end
+
+local function cleanupDetachedChunk( item )
+	if not item then return false, "invalid" end
+	if MC.StreamDetachTokens[item.key] ~= item.token then return false, "stale_token" end
+	if MC.World[item.key] ~= nil then return false, "reloaded" end
+	local key, cx, cy, cz = item.key, item.cx, item.cy, item.cz
 	MC.FreeChunkMesh( key )
+	if MC.EvictChunkDrawMatrix then MC.EvictChunkDrawMatrix( key ) end
 	if MC.ClearGpuChunkLightTexture then MC.ClearGpuChunkLightTexture( key ) end
-	if MC.NoteSkyColumnChunkUnloaded then MC.NoteSkyColumnChunkUnloaded( cx, cy, cz ) end
 	local e = MC.ChunkEnts and MC.ChunkEnts[key]
 	if IsValid( e ) then
 		if e.ClearClientCollisionAABBDebugBoxes then e:ClearClientCollisionAABBDebugBoxes() end
@@ -1358,43 +1972,180 @@ net.Receive( "mc_unload_chunk", function()
 		e:PhysicsDestroy()
 	end
 	if MC.ChunkEnts then MC.ChunkEnts[key] = nil end
-	MC.World[key] = nil
-	-- If this chunk sat inside the local AABB/aim interest, prediction carriers
-	-- still hold its convex pages; rebuilding against the now-missing chunk
-	-- releases them (ghost collision otherwise outlives the unload).
-	if MC.RebuildChunkPhys then
-		MC.RebuildChunkPhys( key, MC.ClientCollisionEnabled and MC.ClientCollisionEnabled() or false )
-	end
-	if MC.MarkChunkUnloaded then MC.MarkChunkUnloaded( key ) end
-	MC.MeshDirty[key] = nil
+	if MC.RebuildChunkPhys then MC.RebuildChunkPhys( key, false ) end
+	MC.MeshDirty[key], MC.MeshLightDirty[key] = nil, nil
 	if MC.MeshDirtyRateLimited then MC.MeshDirtyRateLimited[key] = nil end
-	MC.PhysDirty[key] = nil
-	MC.PhysDirtyPriority[key] = nil
+	if MC.MeshLightDirtyRateLimited then MC.MeshLightDirtyRateLimited[key] = nil end
+	MC.PhysDirty[key], MC.PhysDirtyPriority[key] = nil, nil
 	if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
 	if MC.ClientPhysBuiltSignatures then MC.ClientPhysBuiltSignatures[key] = nil end
 	if MC.ClientPhysBuiltHadObjects then MC.ClientPhysBuiltHadObjects[key] = nil end
 	if MC.ClientPhysBuiltObjectCounts then MC.ClientPhysBuiltObjectCounts[key] = nil end
 	if MC.ClientPhysTargetSignatures then MC.ClientPhysTargetSignatures[key] = nil end
-	if MC.ClearChunkLightSources then MC.ClearChunkLightSources( key ) end
-	local httpState = MC.HttpChunkSync
-	if httpState then
-		httpState.requestedKeys[key] = nil
-		httpState.pendingKeys[key] = nil
-		httpState.loadingKeys[key] = nil
-		httpState.loadedKeys[key] = nil
-		if httpState.queuedDeltas then httpState.queuedDeltas[key] = nil end
-		for _, waiting in pairs( httpState.pendingByPart or {} ) do
-			waiting[key] = nil
-		end
-	end
+	MC.SetStreamChunkHidden( key, false )
+	return true, "cleaned"
+end
 
-	for predKey, pending in pairs( MC.PendingPredictions or {} ) do
-		local pcx, pcy, pcz = MC.CellToChunk( pending.bx, pending.by, pending.bz )
-		if pcx == cx and pcy == cy and pcz == cz then
-			MC.PendingPredictions[predKey] = nil
-			if pending.groupId then MC.PendingPredictionGroups[pending.groupId] = nil end
+function MC.FlushDetachedChunkCleanupForKeys( keys )
+	local lightOld = {}
+	local queue = MC.StreamCleanupQueue or {}
+	for index = MC.StreamCleanupHead or 1, MC.StreamCleanupTail or 0 do
+		local item = queue[index]
+		if item and keys[item.key] and not item.done then
+			item.done = true
+			if item.chunk then lightOld[#lightOld + 1] = item.chunk end
+			local _, reason = cleanupDetachedChunk( item )
+			noteCleanupConsumed( item, reason, true )
+			queue[index] = nil
 		end
 	end
+	local head, tail = MC.StreamCleanupHead or 1, MC.StreamCleanupTail or 0
+	while head <= tail and queue[head] == nil do head = head + 1 end
+	MC.StreamCleanupHead = head
+	if head > tail then
+		MC.StreamCleanupQueue, MC.StreamCleanupHead, MC.StreamCleanupTail = {}, 1, 0
+	end
+	if #lightOld > 0 and MC.BeginPartialLightingBatch and MC.EndPartialLightingBatch then
+		local batch = MC.BeginPartialLightingBatch( lightOld )
+		MC.EndPartialLightingBatch( batch, {}, true )
+	end
+end
+
+function MC.ResetStreamCleanupState()
+	local backend = MC.NativeChunkBackend
+	if backend and backend.SetChunkVisible then
+		for key in pairs( MC.StreamHiddenChunkKeys or {} ) do backend.SetChunkVisible( key, true ) end
+	end
+	MC.StreamHiddenChunkKeys, MC.StreamDetachTokens, MC.StreamCleanupQueue = {}, {}, {}
+	MC.StreamCleanupHead, MC.StreamCleanupTail, MC.StreamCleanupPending = 1, 0, 0
+	streamCleanupPendingByKey = {}
+	local perf = streamCleanupPerf()
+	if perf then
+		perf.pending, perf.retainedChunks = 0, 0
+	end
+end
+
+function MC.UnloadClientChunks( chunks )
+	if not istable( chunks ) or #chunks == 0 then return 0 end
+	local perfEnabled = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
+	local perfStarted = perfEnabled and SysTime() or nil
+	local memoryBefore = perfEnabled and collectgarbage( "count" ) or nil
+	local unloading, oldChunks, neighbours = {}, {}, {}
+	for _, coords in ipairs( chunks ) do
+		local cx, cy, cz = coords.cx, coords.cy, coords.cz
+		if isnumber( cx ) and isnumber( cy ) and isnumber( cz ) then unloading[MC.ChunkKey( cx, cy, cz )] = true end
+	end
+	for _, coords in ipairs( chunks ) do
+		local cx, cy, cz = coords.cx, coords.cy, coords.cz
+		local key = MC.ChunkKey( cx, cy, cz )
+		local chunk = MC.World[key]
+		MC.World[key] = nil
+		if MC.MarkChunkUnloaded then MC.MarkChunkUnloaded( key ) end
+		MC.SetStreamChunkHidden( key, true )
+		local token = ( MC.StreamDetachTokens[key] or 0 ) + 1
+		MC.StreamDetachTokens[key] = token
+		if chunk then oldChunks[#oldChunks + 1] = chunk end
+		local backend = MC.GetChunkBackend and MC.GetChunkBackend() or nil
+		local nativeMayOwn = backend and backend.native == true and ( not backend.IsActive or backend.IsActive() == true )
+		local hasResources = chunk ~= nil
+			or MC.Meshes[key] ~= nil or MC.MeshesTrans[key] ~= nil
+			or MC.MeshSections and MC.MeshSections[key] ~= nil
+			or MC.ChunkEnts and MC.ChunkEnts[key] ~= nil
+			or MC.GpuChunkLightDirtyChunks and MC.GpuChunkLightDirtyChunks[key] ~= nil
+			or MC.GpuChunkLightDirtyCells and MC.GpuChunkLightDirtyCells[key] ~= nil
+			or MC.LightBlockChunks and MC.LightBlockChunks[key] ~= nil
+			or MC.LightSkyChunks and MC.LightSkyChunks[key] ~= nil
+			or MC.ClientPhysBuiltSignatures and MC.ClientPhysBuiltSignatures[key] ~= nil
+			or MC.ClientPhysBuiltHadObjects and MC.ClientPhysBuiltHadObjects[key] ~= nil
+			or MC.ClientPhysBuiltObjectCounts and MC.ClientPhysBuiltObjectCounts[key] ~= nil
+			or MC.ClientPhysTargetSignatures and MC.ClientPhysTargetSignatures[key] ~= nil
+			or nativeMayOwn
+		if hasResources then
+			local tail = ( MC.StreamCleanupTail or 0 ) + 1
+			MC.StreamCleanupTail = tail
+			MC.StreamCleanupQueue[tail] = { key = key, cx = cx, cy = cy, cz = cz, token = token, chunk = chunk }
+			noteCleanupEnqueued( key, chunk, nativeMayOwn and chunk == nil
+				and MC.Meshes[key] == nil and MC.MeshesTrans[key] == nil
+				and ( not MC.MeshSections or MC.MeshSections[key] == nil )
+				and ( not MC.ChunkEnts or MC.ChunkEnts[key] == nil ) )
+		else
+			MC.SetStreamChunkHidden( key, false )
+		end
+		for _, d in ipairs( { {1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1} } ) do
+			local neighbour = MC.ChunkKey( cx + d[1], cy + d[2], cz + d[3] )
+			if not unloading[neighbour] and MC.GetChunkByKey( neighbour ) then
+				neighbours[neighbour] = { cx = cx + d[1], cy = cy + d[2], cz = cz + d[3], dx = -d[1], dy = -d[2], dz = -d[3] }
+			end
+		end
+	end
+	for key, face in pairs( neighbours ) do
+		local cx, cy, cz, dx, dy, dz = face.cx, face.cy, face.cz, face.dx, face.dy, face.dz
+		local minX, minY, minZ = cx * MC.CS, cy * MC.CS, cz * MC.CH
+		local maxX, maxY, maxZ = minX + MC.CS - 1, minY + MC.CS - 1, minZ + MC.CH - 1
+		if dx == 1 then minX = maxX elseif dx == -1 then maxX = minX end
+		if dy == 1 then minY = maxY elseif dy == -1 then maxY = minY end
+		if dz == 1 then minZ = maxZ elseif dz == -1 then maxZ = minZ end
+		if MC.MarkRenderSectionsDirtyInBounds then MC.MarkRenderSectionsDirtyInBounds( minX, minY, minZ, maxX, maxY, maxZ )
+		elseif MC.MarkChunkDirty then MC.MarkChunkDirty( key ) end
+		if MC.MeshDirtyRateLimited then MC.MeshDirtyRateLimited[key] = true end
+	end
+	if MC.MarkSignRenderEntriesDirty then MC.MarkSignRenderEntriesDirty() end
+	if MC.ClearAllBlockConnectionMaskCaches then MC.ClearAllBlockConnectionMaskCaches() end
+	if perfEnabled then
+		local elapsed = ( SysTime() - perfStarted ) * 1000
+		local memoryDelta = collectgarbage( "count" ) - memoryBefore
+		MC.StreamPerformanceAddStage( "cleanup.enqueue", elapsed, { cleanupUnloadCoords = #chunks, cleanupEnqueueMemoryKB = memoryDelta } )
+		MC.StreamPerformanceAddFrameStage( "cleanup.enqueue", elapsed, { cleanupUnloadCoords = #chunks, cleanupEnqueueMemoryKB = memoryDelta } )
+	end
+	return #chunks
+end
+
+hook.Remove( "Think", "mc_stream_detached_cleanup" )
+hook.Add( "Think", "mc_stream_detached_cleanup", function()
+	local queue, head, tail = MC.StreamCleanupQueue or {}, MC.StreamCleanupHead or 1, MC.StreamCleanupTail or 0
+	if head > tail then return end
+	local perfEnabled = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
+	local memoryBefore = perfEnabled and collectgarbage( "count" ) or nil
+	local started = SysTime()
+	local ms = MC.StreamUnloadFrameMS and MC.StreamUnloadFrameMS:GetFloat() or 3
+	local limit = MC.StreamUnloadChunksPerFrame and MC.StreamUnloadChunksPerFrame:GetInt() or 1
+	local processed, lightOld = 0, {}
+	while head <= tail and processed < math.Clamp( limit, 1, 2 ) do
+		local item = queue[head]; queue[head] = nil; head = head + 1
+		if item and not item.done then
+			if item.chunk then lightOld[#lightOld + 1] = item.chunk end
+			local _, reason = cleanupDetachedChunk( item )
+			noteCleanupConsumed( item, reason, false )
+		end
+		processed = processed + 1
+		if processed > 0 and SysTime() >= started + math.Clamp( ms, 2, 4 ) / 1000 then break end
+	end
+	if #lightOld > 0 and MC.BeginPartialLightingBatch and MC.EndPartialLightingBatch then
+		local lightingBatch = MC.BeginPartialLightingBatch( lightOld )
+		MC.EndPartialLightingBatch( lightingBatch, {}, true )
+	end
+	MC.StreamCleanupHead = head
+	local elapsed = ( SysTime() - started ) * 1000
+	MC.StreamProfile.unload = { ms = elapsed, chunks = processed, remaining = math.max( 0, MC.StreamCleanupPending or 0 ) }
+	if perfEnabled then
+		local memoryDelta = collectgarbage( "count" ) - memoryBefore
+		MC.StreamPerformanceAddStage( "cleanup.drain", elapsed, { cleanupDrained = processed, cleanupDrainMemoryKB = memoryDelta } )
+		MC.StreamPerformanceAddFrameStage( "cleanup.drain", elapsed, { cleanupDrained = processed, cleanupDrainMemoryKB = memoryDelta } )
+	end
+	if MC.StreamProfileDebug and MC.StreamProfileDebug:GetBool() and elapsed >= 8 then
+		print( string.format( "[MC stream] unload frame %.2fms chunks=%d", elapsed, processed ) )
+	end
+	if head > tail then
+		MC.StreamCleanupQueue, MC.StreamCleanupHead, MC.StreamCleanupTail = {}, 1, 0
+	end
+end )
+
+function MC.UnloadClientChunk( cx, cy, cz )
+	return MC.UnloadClientChunks( { { cx = cx, cy = cy, cz = cz } } )
+end
+
+net.Receive( "mc_unload_chunk", function()
+	MC.UnloadClientChunk( net.ReadInt( Net.COORD_BITS ), net.ReadInt( Net.COORD_BITS ), net.ReadInt( Net.COORD_BITS ) )
 end )
 
 net.Receive( "mc_clear", function()
@@ -1418,6 +2169,8 @@ net.Receive( "mc_clear", function()
 	MC.LoadedChunkKeys = {}
 	MC.MeshDirty = {}
 	MC.MeshDirtyRateLimited = {}
+	MC.MeshLightDirtyRateLimited = {}
+	if MC.ResetStreamCleanupState then MC.ResetStreamCleanupState() end
 	MC.PhysDirty = {}
 	MC.PhysDirtyPriority = {}
 	MC.PhysDirtyBulk = {}

@@ -37,6 +37,8 @@
 
 | ConVar | 默认 | 作用 |
 | --- | --- | --- |
+| `mc_binary_chunk_patch` | `0` | 实验性区块传输协议。启用后，以 palette + packed 32-bit words 的 Binary Section 发送区块，不再为地形生成 JSON 或 `"localIndex:paletteId"` 文本；不支持该能力的客户端自动走旧协议。 |
+| `mc_binary_net_profile` | `0` | 收集 Binary Section 服务端编码、LZMA、CRC、切包入队、`net.Send` CPU 与发送队列墙钟时间。使用 `mc_binary_net_report` 查看。 |
 | `mc_sync_messages_per_tick` | `4` | 每 0.05 秒最多向每个玩家发送多少条排队状态消息。 |
 | `mc_sync_reliable_budget` | `3400` | 每 0.05 秒、每个玩家的排队状态字节硬上限；约 68 KB/s，204 KB 在无拥塞时约 3 秒。 |
 | `mc_sync_frame_ms` | `4` | 每 tick 大约花多少毫秒服务器 CPU 时间做完整同步。 |
@@ -55,6 +57,7 @@
 
 | ConVar | 默认 | 作用 |
 | --- | --- | --- |
+| `mc_server_collision` | `0` | 是否建立服务器权威 MC 碰撞。关闭会立即清除现有 `mc_chunk` / `mc_chunk_phys` 碰撞实体和待重建队列；客户端预测碰撞不受影响。当前默认关闭用于定位卡顿。 |
 | `mc_server_collision_chunk_span` | `0` | 服务器碰撞 AABB 周围额外保活的 chunk 半径。 |
 | `mc_server_collision_aabb_padding` | 约 `36.5` | 玩家/实体 AABB 外扩多少 Source 单位，用于保持 MC chunk 碰撞激活。 |
 | `mc_collision_aim_distance` | 约 `18688` | 以准星方块为中心维护碰撞兴趣的 trace 距离，和建造距离无关。 |

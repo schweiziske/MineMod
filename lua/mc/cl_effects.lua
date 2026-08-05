@@ -297,7 +297,8 @@ local function spawnBreakParticlesNow( id, orient, bx, by, bz, options )
 	end
 	if not boxes or #boxes == 0 then return 0 end
 
-	local base = MC.CellWorldMin( bx, by, bz )
+	local base = MC.CellRenderMin and MC.CellRenderMin( bx, by, bz )
+		or MC.CellWorldMin( bx, by, bz )
 	local bs = MC.BS
 	local emitter = ParticleEmitter( options.emitterPos or base + Vector( bs * 0.5, bs * 0.5, bs * 0.5 ) )
 	if not emitter then return 0 end
@@ -469,7 +470,8 @@ local function prunePredictedFx()
 end
 
 function MC.PlayBlockFx( kind, id, orient, bx, by, bz, predicted, stateId )
-	local pos = MC.CellWorldCenter( bx, by, bz )
+	local pos = MC.CellRenderCenter and MC.CellRenderCenter( bx, by, bz )
+		or MC.CellWorldCenter( bx, by, bz )
 	playBlockSound( kind, id, pos )
 	if kind == 2 then
 		local tintCode = stateId and MC.BlockStateTintCode and MC.BlockStateTintCode( stateId, id, 0 ) or 0
