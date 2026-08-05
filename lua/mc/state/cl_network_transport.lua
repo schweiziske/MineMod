@@ -23,6 +23,8 @@ local STREAM_PART_MAX = Net.STATE_STREAM_PART_BYTES or 30000
 local MAX_STREAM_CELLS = Net.MAX_STATE_STREAM_CELLS or 131072
 local CHUNK_PATCH_PART_MAX = Net.CHUNK_PATCH_PART_BYTES or 30000
 local CHUNK_PATCH_MAX_BYTES = Net.CHUNK_PATCH_MAX_BYTES or 16777216
+local STREAM_PATCH_MAX_CHUNKS = 64
+local STREAM_PATCH_MAX_CELLS = 131072
 local BLOCK_ENTITY_PAYLOAD_MAX = Net.BLOCK_ENTITY_PAYLOAD_MAX or 32768
 local GAP_GRACE_SECONDS = 0.35
 
@@ -39,6 +41,10 @@ T.activeBulkGroup = T.activeBulkGroup
 T.chunkPatch = T.chunkPatch
 T.snapshot = T.snapshot
 T.awaitingSnapshot = T.awaitingSnapshot or false
+T.streaming = T.streaming or false
+T.subscribedColumns = T.subscribedColumns or {}
+T.pendingRevisionSkips = T.pendingRevisionSkips or {}
+T.pendingPatchAnnouncements = T.pendingPatchAnnouncements or {}
 T.resyncRequested = T.resyncRequested or false
 MC.AppliedStateRevision = T.appliedRevision
 MC.StateWorldGeneration = T.generation
@@ -70,7 +76,9 @@ local function supportedCapabilities()
 		capability.BLOCK_ENTITY_ENVELOPE or 0,
 		capability.REGISTRY_HASH or 0,
 		capability.STATE_STREAM or 0,
-		capability.CHUNK_HYDRATION or 0
+		capability.CHUNK_HYDRATION or 0,
+		capability.BINARY_CHUNK_PATCH or 0,
+		capability.BINARY_STATE_SNAPSHOT or 0
 	)
 end
 
@@ -102,7 +110,7 @@ local function activeNativeBatchBackend()
 	return backend
 end
 
-local function beginBulkGroup( groupId, rateLimited )
+local function beginBulkGroup( groupId, rateLimited, partialLighting )
 	groupId = math.floor( tonumber( groupId ) or 0 )
 	local active = T.activeBulkGroup
 	if active then
@@ -115,8 +123,9 @@ local function beginBulkGroup( groupId, rateLimited )
 		physKeys = {},
 		lightingStarted = false,
 		rateLimited = rateLimited == true,
+		partialLighting = partialLighting == true,
 	}
-	if MC.BeginLightingBulkLoad then
+	if not group.partialLighting and MC.BeginLightingBulkLoad then
 		MC.BeginLightingBulkLoad()
 		group.lightingStarted = true
 	end
@@ -129,16 +138,17 @@ local function addBulkChunkKey( keys, cx, cy, cz )
 	keys[MC.ChunkKey( cx, cy, cz )] = true
 end
 
-local function noteBulkChunk( group, cx, cy, cz )
+local function noteBulkChunk( group, cx, cy, cz, renderOnly )
 	if not group then return end
 	addBulkChunkKey( group.renderKeys, cx, cy, cz )
-	addBulkChunkKey( group.physKeys, cx, cy, cz )
 	addBulkChunkKey( group.renderKeys, cx - 1, cy, cz )
 	addBulkChunkKey( group.renderKeys, cx + 1, cy, cz )
 	addBulkChunkKey( group.renderKeys, cx, cy - 1, cz )
 	addBulkChunkKey( group.renderKeys, cx, cy + 1, cz )
 	addBulkChunkKey( group.renderKeys, cx, cy, cz - 1 )
 	addBulkChunkKey( group.renderKeys, cx, cy, cz + 1 )
+	if renderOnly == true then return end
+	addBulkChunkKey( group.physKeys, cx, cy, cz )
 	addBulkChunkKey( group.physKeys, cx - 1, cy, cz )
 	addBulkChunkKey( group.physKeys, cx + 1, cy, cz )
 	addBulkChunkKey( group.physKeys, cx, cy - 1, cz )
@@ -167,10 +177,9 @@ end
 local function finalizeBulkGroup( groupId )
 	local group = T.activeBulkGroup
 	if not group or ( groupId and group.id ~= groupId ) then return false end
-	-- BeginLightingBulkLoad clears the global source index. A partial Chunk patch
-	-- only re-indexes touched chunks, so force one authoritative whole-world index
-	-- rebuild before lighting commits. Native treats this as a cheap worker kick.
-	MC.LightSourceIndexReady = false
+	-- Full snapshots/coalesced edit groups retain the legacy global rebuild.
+	-- Streaming partial patches update source/light state incrementally in cl_net.
+	if not group.partialLighting then MC.LightSourceIndexReady = false end
 	if group.lightingStarted and MC.EndLightingBulkLoad then MC.EndLightingBulkLoad() end
 	if MC.ClearAllBlockConnectionMaskCaches then MC.ClearAllBlockConnectionMaskCaches() end
 	for key in pairs( group.renderKeys ) do
@@ -200,7 +209,42 @@ local function finishPendingBulkGroups()
 	if revision and ( T.appliedRevision or 0 ) >= revision then finalizeBulkGroup( group.id ) end
 end
 
+local function activeNativeCompressedPatchBackend()
+	local backend = MC.GetChunkBackend and MC.GetChunkBackend() or nil
+	if not backend or backend.native ~= true or not backend.SupportsCompressedPatches
+	or backend.SupportsCompressedPatches() ~= true then return nil end
+	return backend
+end
+
+local function activeNativeBinarySectionPatchBackend()
+	local backend = MC.GetChunkBackend and MC.GetChunkBackend() or nil
+	if not backend or backend.native ~= true or not backend.SupportsBinarySectionPatches
+	or backend.SupportsBinarySectionPatches() ~= true then return nil end
+	return backend
+end
+
+local function cancelActiveBinarySnapshot()
+	local binary = T.snapshot and T.snapshot.binary
+	if not binary or not binary.activeJobId then return end
+	local backend = activeNativeBinarySectionPatchBackend() or MC.NativeChunkBackend
+	if backend and backend.CancelCompressedPatchDecode then
+		backend.CancelCompressedPatchDecode( binary.activeJobId )
+	end
+	binary.activeJobId = nil
+end
+
+local function cancelPendingNativePatches()
+	cancelActiveBinarySnapshot()
+	local backend = MC.NativeChunkBackend
+	for _, patch in pairs( T.pendingChunkPatches or {} ) do
+		if patch.nativeJobId and backend and backend.CancelCompressedPatchDecode then
+			backend.CancelCompressedPatchDecode( patch.nativeJobId )
+		end
+	end
+end
+
 local function resetClientWorld()
+	cancelPendingNativePatches()
 	cancelBulkGroup()
 	T.chunkPatch = nil
 	T.pendingChunkPatches = {}
@@ -212,6 +256,8 @@ local function resetClientWorld()
 	MC.LoadedChunkKeys = {}
 	MC.MeshDirty = {}
 	MC.MeshDirtyRateLimited = {}
+	MC.MeshLightDirtyRateLimited = {}
+	if MC.ResetStreamCleanupState then MC.ResetStreamCleanupState() end
 	MC.PhysDirty = {}
 	MC.PhysDirtyPriority = {}
 	MC.PhysDirtyBulk = {}
@@ -234,6 +280,7 @@ end
 
 function T.RequestResync( reason )
 	if T.resyncRequested then return false end
+	cancelPendingNativePatches()
 	cancelBulkGroup()
 	T.chunkPatch = nil
 	T.pendingChunkPatches = {}
@@ -273,6 +320,11 @@ function T.AcceptHello( hello )
 
 	if T.generation ~= nil and T.generation ~= generation then resetClientWorld() end
 	if T.activeBulkGroup then cancelBulkGroup() end
+	cancelPendingNativePatches()
+	T.streaming = math.floor( tonumber( hello.streamMode ) or 0 ) == 1
+	T.subscribedColumns = {}
+	T.pendingRevisionSkips = {}
+	T.pendingPatchAnnouncements = {}
 	T.generation = generation
 	publishAppliedRevision( revision )
 	T.ready = true
@@ -285,7 +337,7 @@ function T.AcceptHello( hello )
 	T.pendingChunkPatches = {}
 	T.chunkPatch = nil
 	T.snapshot = nil
-	T.awaitingSnapshot = true
+	T.awaitingSnapshot = not T.streaming
 	return true
 end
 
@@ -353,11 +405,13 @@ local function applyTransactionNow( transaction )
 		local key = MC.CellKey( cell.bx, cell.by, cell.bz )
 		if seen[key] then return false, "duplicate_cell" end
 		seen[key] = true
-		prepared[#prepared + 1] = {
+		local subscribed = not T.streaming or T.subscribedColumns[MC.ChunkColumnKey(
+			math.floor( cell.bx / ( MC.CS or 16 ) ), math.floor( cell.by / ( MC.CS or 16 ) ) )] == true
+		if subscribed then prepared[#prepared + 1] = {
 			cell = cell,
 			oldStateId = MC.GetBlockState( cell.bx, cell.by, cell.bz ) or 0,
 			oldBlockEntity = cloneValue( blockEntityAt( cell.bx, cell.by, cell.bz ) ),
-		}
+		} end
 	end
 	local correction = bit.band( transaction.flags or 0, FLAG_CORRECTION ) ~= 0
 	local coalesced = bit.band( transaction.flags or 0, FLAG_COALESCED_BULK ) ~= 0
@@ -473,17 +527,84 @@ local function drainCorrections()
 end
 
 local function applyChunkPatchNow( patch )
-	local group, groupError = beginBulkGroup( patch.groupId or 0, false )
-	if not group then return false, groupError or "chunk_patch_group_failed" end
-	if not MC.LoadStateChunkPatchData then
-		cancelBulkGroup()
-		return false, "chunk_patch_loader_unavailable"
+	local perfEnabled = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
+	local applyStarted = perfEnabled and SysTime() or nil
+	if perfEnabled and MC.StreamPerformanceSetStage then MC.StreamPerformanceSetStage( "patch.apply" ) end
+	local group, groupError = beginBulkGroup( patch.groupId or 0, true, true )
+	if not group then
+		if perfEnabled then MC.StreamPerformanceSetStage( nil ) end
+		return false, groupError or "chunk_patch_group_failed"
 	end
-	local ok, result = MC.LoadStateChunkPatchData( patch.data )
+	local nativeBackend
+	if patch.nativeJobId then
+		if patch.nativeBinary then nativeBackend = activeNativeBinarySectionPatchBackend()
+		else nativeBackend = activeNativeCompressedPatchBackend() end
+	end
+	if patch.nativeJobId and ( not nativeBackend or nativeBackend.Epoch() ~= patch.nativeEpoch ) then
+		cancelBulkGroup()
+		return false, "native_patch_backend_unavailable"
+	end
+	local ok, result
+	if patch.binaryData then
+		if not MC.LoadBinaryStateChunkPatchData then
+			cancelBulkGroup()
+			return false, "binary_patch_loader_unavailable"
+		end
+		local data = patch.binaryData
+		if T.streaming then
+			local filtered, filteredBlocks = {}, 0
+			for _, chunk in ipairs( data.chunks or {} ) do
+				if T.subscribedColumns[MC.ChunkColumnKey( chunk.cx, chunk.cy )] == true then
+					filtered[#filtered + 1] = chunk
+					filteredBlocks = filteredBlocks + ( chunk.count or 0 )
+				end
+			end
+			data = { chunks = filtered, blocks = filteredBlocks }
+		end
+		ok, result = MC.LoadBinaryStateChunkPatchData( data )
+	elseif nativeBackend then
+		local committed
+		if patch.nativeBinary then
+			committed = nativeBackend.CommitBinarySectionPatch( patch.nativeJobId, patch.nativeInclude )
+		else
+			committed = nativeBackend.CommitCompressedPatch( patch.nativeJobId, patch.nativePalette, patch.nativeInclude )
+		end
+		if committed then ok, result = MC.FinalizeNativeStateChunkPatch( committed, patch.nativeEpoch )
+		else ok, result = false, "native_patch_commit_failed" end
+	else
+		if not MC.LoadStateChunkPatchData then
+			cancelBulkGroup()
+			if perfEnabled then MC.StreamPerformanceSetStage( nil ) end
+			return false, "chunk_patch_loader_unavailable"
+		end
+		local filterStarted = perfEnabled and SysTime() or nil
+		if T.streaming and istable( patch.data.chunks ) then
+			local filtered, filteredBlocks = {}, 0
+			for _, chunk in ipairs( patch.data.chunks ) do
+				if istable( chunk ) and T.subscribedColumns[MC.ChunkColumnKey( tonumber( chunk[1] ) or chunk.cx, tonumber( chunk[2] ) or chunk.cy )] then
+					filtered[#filtered + 1] = chunk
+					local cells = chunk[4]
+					if istable( cells ) then filteredBlocks = filteredBlocks + math.floor( #cells / 2 )
+					elseif isstring( cells ) then for _ in string.gmatch( cells, "[^;]+" ) do filteredBlocks = filteredBlocks + 1 end end
+				end
+			end
+			patch.data.chunks = filtered
+			patch.data.blockCount = filteredBlocks
+		end
+		if perfEnabled then MC.StreamPerformancePatchStage( patch.revision, "subscription_filter", ( SysTime() - filterStarted ) * 1000 ) end
+		local loaderStarted = perfEnabled and SysTime() or nil
+		ok, result = MC.LoadStateChunkPatchData( patch.data )
+		if perfEnabled then MC.StreamPerformancePatchStage( patch.revision, "loader", ( SysTime() - loaderStarted ) * 1000 ) end
+	end
 	if ok ~= true or not istable( result ) then
 		cancelBulkGroup()
+		if perfEnabled then
+			MC.StreamPerformancePatchApplied( patch.revision, false, result or "chunk_patch_apply_failed" )
+			MC.StreamPerformanceSetStage( nil )
+		end
 		return false, result or "chunk_patch_apply_failed"
 	end
+	local publishStarted = perfEnabled and SysTime() or nil
 	local predictionKeys = {}
 	for _, chunk in ipairs( result.chunks or {} ) do
 		noteBulkChunk( group, chunk.cx, chunk.cy, chunk.cz )
@@ -492,7 +613,17 @@ local function applyChunkPatchNow( patch )
 	if MC.DiscardPredictionsForChunkKeys then MC.DiscardPredictionsForChunkKeys( predictionKeys ) end
 	if not finalizeBulkGroup( group.id ) then
 		cancelBulkGroup()
+		if perfEnabled then
+			MC.StreamPerformancePatchApplied( patch.revision, false, "chunk_patch_finalize_failed" )
+			MC.StreamPerformanceSetStage( nil )
+		end
 		return false, "chunk_patch_finalize_failed"
+	end
+	if perfEnabled then
+		MC.StreamPerformancePatchStage( patch.revision, "dirty_publish", ( SysTime() - publishStarted ) * 1000 )
+		MC.StreamPerformancePatchStage( patch.revision, "apply_total", ( SysTime() - applyStarted ) * 1000 )
+		MC.StreamPerformancePatchApplied( patch.revision, true )
+		MC.StreamPerformanceSetStage( nil )
 	end
 	return true
 end
@@ -504,9 +635,17 @@ local function drainTransactions()
 		local transaction = T.pendingTransactions[revision]
 		local patch = T.pendingChunkPatches[revision]
 		if transaction and patch then T.RequestResync( "duplicate_revision_payload" ) return end
-		if not transaction and not patch then break end
+		local skipTo = T.pendingRevisionSkips[revision]
+		if not transaction and not patch and not skipTo then break end
+		if skipTo and ( transaction or patch ) then T.RequestResync( "skip_payload_conflict" ) return end
+		if skipTo then
+			T.pendingRevisionSkips[revision] = nil
+			publishAppliedRevision( skipTo )
+			continue
+		end
 		local ok, err
 		if patch then
+			if patch.nativeJobId and not patch.nativeReady then break end
 			T.pendingChunkPatches[revision] = nil
 			ok, err = applyChunkPatchNow( patch )
 		else
@@ -515,6 +654,7 @@ local function drainTransactions()
 		end
 		if not ok then T.RequestResync( err or ( patch and "chunk_patch_apply_failed" or "transaction_apply_failed" ) ) return end
 		publishAppliedRevision( revision )
+		T.pendingPatchAnnouncements[revision] = nil
 	end
 
 	local lowest
@@ -522,6 +662,9 @@ local function drainTransactions()
 		if revision > T.appliedRevision and ( not lowest or revision < lowest ) then lowest = revision end
 	end
 	for revision in pairs( T.pendingChunkPatches ) do
+		if revision > T.appliedRevision and ( not lowest or revision < lowest ) then lowest = revision end
+	end
+	for revision in pairs( T.pendingRevisionSkips ) do
 		if revision > T.appliedRevision and ( not lowest or revision < lowest ) then lowest = revision end
 	end
 	if lowest and lowest > T.appliedRevision + 1 then T.gapSince = T.gapSince or SysTime()
@@ -559,6 +702,51 @@ function T.AcceptTransaction( transaction )
 	return not T.desynced
 end
 
+function T.AcceptRevisionSkip( generation, fromRevision, toRevision )
+	if not T.ready or generation ~= T.generation then return false, "generation_mismatch" end
+	if not validUInt32( fromRevision ) or not validUInt32( toRevision ) or toRevision < fromRevision then return false, "invalid_skip_range" end
+	if toRevision <= T.appliedRevision then return true, "stale" end
+	if fromRevision <= T.appliedRevision then fromRevision = T.appliedRevision + 1 end
+	for revision = fromRevision, toRevision do
+		if T.pendingTransactions[revision] or T.pendingChunkPatches[revision] then return false, "skip_payload_conflict" end
+	end
+	T.pendingRevisionSkips[fromRevision] = toRevision
+	drainTransactions()
+	return not T.desynced
+end
+
+function T.AcceptPatchPending( generation, revision )
+	if not T.ready or generation ~= T.generation or not validUInt32( revision ) then return false end
+	if revision == T.appliedRevision + 1 then T.pendingPatchAnnouncements[revision] = SysTime() + 30; T.gapSince = nil end
+	return true
+end
+
+function T.ApplyStreamColumns( generation, minCZ, maxCZ, subscriptions, unsubscriptions )
+	if not T.streaming or generation ~= T.generation then return false, "generation_mismatch" end
+	local span = maxCZ - minCZ + 1
+	if span < 1 or span > ( Net.MAX_STREAM_VERTICAL_CHUNKS or 1024 ) then return false, "invalid_vertical_span" end
+	T.streamMinCZ, T.streamMaxCZ = minCZ, maxCZ
+	local unload = {}
+	for _, column in ipairs( unsubscriptions ) do
+		local key = MC.ChunkColumnKey( column.cx, column.cy )
+		T.subscribedColumns[key] = nil
+		for cz = minCZ, maxCZ do unload[#unload + 1] = { cx = column.cx, cy = column.cy, cz = cz } end
+	end
+	if #unload > 0 and MC.UnloadClientChunks then MC.UnloadClientChunks( unload ) end
+	for _, column in ipairs( subscriptions ) do
+		T.subscribedColumns[MC.ChunkColumnKey( column.cx, column.cy )] = true
+		local keys = {}
+		for cz = minCZ, maxCZ do keys[MC.ChunkKey( column.cx, column.cy, cz )] = true end
+		if MC.FlushDetachedChunkCleanupForKeys then MC.FlushDetachedChunkCleanupForKeys( keys ) end
+		for key in pairs( keys ) do
+			if MC.SetStreamChunkHidden then MC.SetStreamChunkHidden( key, false )
+			elseif MC.StreamHiddenChunkKeys then MC.StreamHiddenChunkKeys[key] = nil end
+			MC.MarkChunkLoaded( key )
+		end
+	end
+	return true
+end
+
 function T.BeginSnapshot( metadata )
 	if not T.ready or not istable( metadata ) then return false, "transport_not_ready" end
 	if metadata.generation ~= T.generation then return false, "generation_mismatch" end
@@ -579,6 +767,7 @@ function T.BeginSnapshot( metadata )
 	for revision in pairs( T.pendingChunkPatches ) do
 		if revision <= baseRevision then T.pendingChunkPatches[revision] = nil end
 	end
+	cancelActiveBinarySnapshot()
 	cancelBulkGroup()
 	T.pendingStreams = {}
 	T.chunkPatch = nil
@@ -642,6 +831,153 @@ local function sendSnapshotAck( snapshot, success )
 	net.SendToServer()
 end
 
+local function finishSnapshotApplication( snapshot )
+	T.snapshot = nil
+	T.awaitingSnapshot = false
+	publishAppliedRevision( snapshot.baseRevision )
+	for revision in pairs( T.pendingTransactions ) do
+		if revision <= snapshot.baseRevision then T.pendingTransactions[revision] = nil end
+	end
+	for revision in pairs( T.pendingChunkPatches ) do
+		if revision <= snapshot.baseRevision then T.pendingChunkPatches[revision] = nil end
+	end
+	T.pendingCorrections = {}
+	drainTransactions()
+	sendSnapshotAck( snapshot, not T.desynced )
+	return not T.desynced
+end
+
+local function rejectBinarySnapshot( snapshot, reason )
+	cancelActiveBinarySnapshot()
+	cancelBulkGroup()
+	sendSnapshotAck( snapshot, false )
+	T.snapshot = nil
+	resetClientWorld()
+	T.awaitingSnapshot = true
+	T.RequestResync( reason or "binary_snapshot_failed" )
+	return false, reason or "binary_snapshot_failed"
+end
+
+local function validateBinarySnapshotBatchChunks( binary, chunks, expectedCount )
+	if not istable( chunks ) or #chunks ~= expectedCount then return nil, "binary_snapshot_batch_chunk_count" end
+	local keys = {}
+	for index, chunk in ipairs( chunks ) do
+		local cx, cy, cz = tonumber( chunk.cx ), tonumber( chunk.cy ), tonumber( chunk.cz )
+		if not cx or not cy or not cz or cx ~= math.floor( cx )
+		or cy ~= math.floor( cy ) or cz ~= math.floor( cz ) then
+			return nil, "invalid_binary_snapshot_chunk:" .. tostring( index )
+		end
+		local key = MC.ChunkKey( cx, cy, cz )
+		if binary.seenChunks[key] or keys[key] then return nil, "duplicate_binary_snapshot_chunk" end
+		keys[key] = true
+	end
+	return keys
+end
+
+local function noteBinarySnapshotBatch( snapshot, result, keys )
+	local binary = snapshot.binary
+	for key in pairs( keys ) do binary.seenChunks[key] = true end
+	for _, chunk in ipairs( result.chunks or {} ) do
+		noteBulkChunk( binary.bulkGroup, chunk.cx, chunk.cy, chunk.cz, true )
+	end
+	binary.committedChunks = binary.committedChunks + #( result.chunks or {} )
+	binary.committedCells = binary.committedCells + math.floor( tonumber( result.blocks ) or 0 )
+	binary.nextBatch = binary.nextBatch + 1
+	local progress = MC.SyncProgress
+	if progress then
+		progress.expected = binary.cellCount
+		progress.received = binary.committedCells
+		progress.chunks = binary.chunkCount
+		progress.doneChunks = binary.committedChunks
+		progress.active = true
+		progress.lastUpdate = CurTime()
+		progress.bytes = false
+	end
+end
+
+local function finishBinarySnapshot( snapshot )
+	local binary = snapshot.binary
+	if binary.committedChunks ~= binary.chunkCount or binary.committedCells ~= binary.cellCount then
+		return rejectBinarySnapshot( snapshot, "binary_snapshot_commit_count_mismatch" )
+	end
+	if not finalizeBulkGroup( binary.bulkGroup.id ) then
+		return rejectBinarySnapshot( snapshot, "binary_snapshot_finalize_failed" )
+	end
+	if MC.SyncProgress then
+		MC.SyncProgress.expected = binary.cellCount
+		MC.SyncProgress.received = binary.cellCount
+		MC.SyncProgress.chunks = binary.chunkCount
+		MC.SyncProgress.doneChunks = binary.chunkCount
+		MC.SyncProgress.active = false
+		MC.SyncProgress.lastUpdate = CurTime()
+		MC.SyncProgress.bytes = false
+	end
+	if MC.RefreshClientCollisionInterest then MC.RefreshClientCollisionInterest( true ) end
+	return finishSnapshotApplication( snapshot )
+end
+
+function T.PollBinarySnapshot()
+	local snapshot = T.snapshot
+	local binary = snapshot and snapshot.binary
+	if not binary or T.desynced then return false end
+	if binary.nextBatch > #binary.batches then return finishBinarySnapshot( snapshot ) end
+
+	local batch = binary.batches[binary.nextBatch]
+	local nativeBackend = activeNativeBinarySectionPatchBackend()
+	if binary.activeJobId and not nativeBackend then
+		return rejectBinarySnapshot( snapshot, "native_binary_snapshot_backend_unavailable" )
+	end
+	if nativeBackend then
+		if not binary.activeJobId then
+			local jobId, epoch = nativeBackend.StartBinarySectionPatchDecode(
+				batch.payload, batch.compression, batch.rawBytes,
+				snapshot.generation, snapshot.baseRevision, batch.chunkCount, batch.cellCount )
+			if not jobId then return rejectBinarySnapshot( snapshot, "native_binary_snapshot_submit_failed" ) end
+			binary.activeJobId, binary.activeEpoch = jobId, epoch
+			return true
+		end
+		local status = nativeBackend.PollBinarySectionPatchDecode( binary.activeJobId )
+		if not status then return rejectBinarySnapshot( snapshot, "native_binary_snapshot_poll_failed" ) end
+		if status.status == "failed" or status.status == "cancelled" then
+			return rejectBinarySnapshot( snapshot, status.error or "native_binary_snapshot_decode_failed" )
+		end
+		if status.status ~= "ready" then return false end
+		if status.generation ~= snapshot.generation or status.revision ~= snapshot.baseRevision
+		or status.backendEpoch ~= binary.activeEpoch then
+			return rejectBinarySnapshot( snapshot, "native_binary_snapshot_stale" )
+		end
+		local keys, keyError = validateBinarySnapshotBatchChunks( binary, status.chunks, batch.chunkCount )
+		if not keys then return rejectBinarySnapshot( snapshot, keyError ) end
+		local include = {}
+		for index = 1, batch.chunkCount do include[index] = index end
+		local committed = nativeBackend.CommitBinarySectionPatch( binary.activeJobId, include )
+		binary.activeJobId = nil
+		if not committed then return rejectBinarySnapshot( snapshot, "native_binary_snapshot_commit_failed" ) end
+		local ok, result = MC.FinalizeNativeStateChunkPatch( committed, binary.activeEpoch, { fullSnapshot = true } )
+		if ok ~= true or not istable( result ) then
+			return rejectBinarySnapshot( snapshot, result or "native_binary_snapshot_finalize_failed" )
+		end
+		noteBinarySnapshotBatch( snapshot, result, keys )
+		return true
+	end
+
+	local decoded, decodeError = MC.BinarySectionPatch.DecodeTransportPayload(
+		batch.payload, batch.compression, batch.rawBytes, {
+			chunkCount = batch.chunkCount,
+			cellCount = batch.cellCount,
+			revision = snapshot.baseRevision,
+		} )
+	if not decoded then return rejectBinarySnapshot( snapshot, decodeError or "binary_snapshot_decode_failed" ) end
+	local keys, keyError = validateBinarySnapshotBatchChunks( binary, decoded.chunks, batch.chunkCount )
+	if not keys then return rejectBinarySnapshot( snapshot, keyError ) end
+	local ok, result = MC.LoadBinaryStateChunkPatchData( decoded, { fullSnapshot = true } )
+	if ok ~= true or not istable( result ) then
+		return rejectBinarySnapshot( snapshot, result or "binary_snapshot_load_failed" )
+	end
+	noteBinarySnapshotBatch( snapshot, result, keys )
+	return true
+end
+
 function T.EndSnapshot( generation, baseRevision, token, crc )
 	local snapshot = T.snapshot
 	if not snapshot or generation ~= snapshot.generation or token ~= snapshot.token
@@ -656,6 +992,43 @@ function T.EndSnapshot( generation, baseRevision, token, crc )
 		T.RequestResync( "snapshot_crc_mismatch" )
 		return false, "snapshot_crc_mismatch"
 	end
+	-- Drop reliable-part strings before decompression/container expansion. The
+	-- assembled payload remains alive locally, avoiding a third full-size copy.
+	snapshot.parts = nil
+	if MC.BinarySectionPatch and MC.BinarySectionPatch.IsSnapshotPayload
+	and MC.BinarySectionPatch.IsSnapshotPayload( compressed ) then
+		local decoded, decodeError = MC.BinarySectionPatch.DecodeSnapshotPayload( compressed )
+		if not decoded then return rejectBinarySnapshot( snapshot, decodeError or "binary_snapshot_decode_failed" ) end
+		if MC.ResetClientWorldForStateSync then
+			MC.ResetClientWorldForStateSync( decoded.chunkCount, decoded.cellCount )
+		else
+			resetClientWorld()
+		end
+		local bulkGroup, groupError = beginBulkGroup( snapshot.token, true, false )
+		if not bulkGroup then return rejectBinarySnapshot( snapshot, groupError or "binary_snapshot_group_failed" ) end
+		snapshot.binary = {
+			batches = decoded.batches,
+			chunkCount = decoded.chunkCount,
+			cellCount = decoded.cellCount,
+			nextBatch = 1,
+			committedChunks = 0,
+			committedCells = 0,
+			seenChunks = {},
+			bulkGroup = bulkGroup,
+		}
+		MC.SyncProgress = {
+			expected = decoded.cellCount,
+			received = 0,
+			chunks = decoded.chunkCount,
+			doneChunks = 0,
+			active = true,
+			lastUpdate = CurTime(),
+			snapshot = true,
+			bytes = false,
+		}
+		return T.PollBinarySnapshot()
+	end
+
 	local json = util.Decompress( compressed )
 	local saveData = json and util.JSONToTable( json ) or nil
 	local ok, loadError = saveData and MC.LoadSnapshotSaveData and MC.LoadSnapshotSaveData( saveData )
@@ -666,27 +1039,15 @@ function T.EndSnapshot( generation, baseRevision, token, crc )
 		return false, loadError or "snapshot_decode_failed"
 	end
 
-	T.snapshot = nil
-	T.awaitingSnapshot = false
-	publishAppliedRevision( baseRevision )
-	for revision in pairs( T.pendingTransactions ) do
-		if revision <= baseRevision then T.pendingTransactions[revision] = nil end
-	end
-	for revision in pairs( T.pendingChunkPatches ) do
-		if revision <= baseRevision then T.pendingChunkPatches[revision] = nil end
-	end
-	-- Corrections received before/during the snapshot target predictions that
-	-- the snapshot loader has just discarded. Reapplying them could overwrite
-	-- a newer ordered transaction, so the snapshot itself supersedes them.
-	T.pendingCorrections = {}
-	drainTransactions()
-	sendSnapshotAck( snapshot, not T.desynced )
-	return not T.desynced
+	return finishSnapshotApplication( snapshot )
 end
 
 function T.CheckRevisionGap( now )
 	if not T.gapSince or T.snapshot or T.chunkPatch or T.awaitingSnapshot or T.desynced then return false end
 	now = tonumber( now ) or SysTime()
+	local announcedDeadline = T.pendingPatchAnnouncements[T.appliedRevision + 1]
+	if announcedDeadline and now <= announcedDeadline then return false end
+	if announcedDeadline and now > announcedDeadline then T.pendingPatchAnnouncements[T.appliedRevision + 1] = nil end
 	if now - T.gapSince < GAP_GRACE_SECONDS then return false end
 	return T.RequestResync( "revision_gap" )
 end
@@ -826,16 +1187,28 @@ function T.BeginChunkPatch( metadata )
 	local totalBytes = math.floor( tonumber( metadata.totalBytes ) or -1 )
 	local partCount = math.floor( tonumber( metadata.partCount ) or -1 )
 	local chunkCount = math.floor( tonumber( metadata.chunkCount ) or -1 )
+	local cellCount = math.floor( tonumber( metadata.cellCount ) or -1 )
+	local binary = metadata.binary == true
+	local rawBytes = binary and math.floor( tonumber( metadata.rawBytes ) or -1 ) or nil
+	local compression = binary and math.floor( tonumber( metadata.compression ) or -1 ) or nil
 	if not validUInt32( revision ) or revision <= ( T.appliedRevision or 0 )
 	or groupId <= 0 or not validUInt32( token )
 	or totalBytes < 1 or totalBytes > CHUNK_PATCH_MAX_BYTES
-	or partCount < 1 or partCount > 65535 or chunkCount < 1 or chunkCount > 65535 then
+	or partCount < 1 or partCount > 65535 or chunkCount < 1 or chunkCount > STREAM_PATCH_MAX_CHUNKS
+	or cellCount < 0 or cellCount > STREAM_PATCH_MAX_CELLS then
 		return false, "invalid_chunk_patch_header"
+	end
+	if binary and ( not MC.BinarySectionPatch
+	or rawBytes < 1 or rawBytes > ( MC.BinarySectionPatch.MAX_RAW_BYTES or CHUNK_PATCH_MAX_BYTES )
+	or compression < ( MC.BinarySectionPatch.COMPRESSION_NONE or 0 )
+	or compression > ( MC.BinarySectionPatch.COMPRESSION_LZMA or 1 ) ) then
+		return false, "invalid_binary_patch_header"
 	end
 	if T.chunkPatch then return false, "overlapping_chunk_patch" end
 	if T.pendingTransactions[revision] or T.pendingChunkPatches[revision] then
 		return false, "duplicate_chunk_patch_revision"
 	end
+	T.pendingPatchAnnouncements[revision] = nil
 	T.chunkPatch = {
 		generation = metadata.generation,
 		revision = revision,
@@ -844,11 +1217,17 @@ function T.BeginChunkPatch( metadata )
 		totalBytes = totalBytes,
 		partCount = partCount,
 		chunkCount = chunkCount,
-		cellCount = math.max( 0, math.floor( tonumber( metadata.cellCount ) or 0 ) ),
+		cellCount = cellCount,
+		binary = binary,
+		rawBytes = rawBytes,
+		compression = compression,
 		parts = {},
 		receivedParts = 0,
 		receivedBytes = 0,
 	}
+	if MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled() and MC.StreamPerformancePatchBegin then
+		MC.StreamPerformancePatchBegin( T.chunkPatch )
+	end
 	T.gapSince = nil
 	return true
 end
@@ -871,20 +1250,94 @@ function T.AcceptChunkPatchPart( generation, token, partIndex, data )
 end
 
 function T.EndChunkPatch( generation, revision, groupId, token, crc )
+	local perfEnabled = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
+	local debugEnabled = MC.StreamProfileDebug and MC.StreamProfileDebug:GetBool()
+	local profileEnabled = perfEnabled or debugEnabled
+	local totalStarted = profileEnabled and SysTime() or nil
 	local patch = T.chunkPatch
 	if not patch or generation ~= patch.generation or revision ~= patch.revision
 	or groupId ~= patch.groupId or token ~= patch.token then return false, "chunk_patch_identity_mismatch" end
+	if patch.binary then return false, "chunk_patch_encoding_mismatch" end
 	if patch.receivedParts ~= patch.partCount or patch.receivedBytes ~= patch.totalBytes then
 		return false, "chunk_patch_incomplete"
 	end
-	local payload = table.concat( patch.parts )
-	if tostring( crc or "" ) ~= "" and util.CRC( payload ) ~= tostring( crc ) then
-		return false, "chunk_patch_crc_mismatch"
+	local function profileFailure( reason )
+		if perfEnabled then
+			MC.StreamPerformancePatchFailure( revision, reason )
+			MC.StreamPerformanceSetStage( nil )
+		end
+		return false, reason
 	end
+	if perfEnabled and MC.StreamPerformanceSetStage then MC.StreamPerformanceSetStage( "patch.concat" ) end
+	local started = perfEnabled and SysTime() or nil
+	local payload = table.concat( patch.parts )
+	if perfEnabled then MC.StreamPerformancePatchStage( revision, "concat", ( SysTime() - started ) * 1000 ) end
+	if perfEnabled and MC.StreamPerformanceSetStage then MC.StreamPerformanceSetStage( "patch.crc" ) end
+	started = perfEnabled and SysTime() or nil
+	if tostring( crc or "" ) ~= "" and util.CRC( payload ) ~= tostring( crc ) then
+		if perfEnabled then MC.StreamPerformancePatchStage( revision, "crc", ( SysTime() - started ) * 1000 ) end
+		return profileFailure( "chunk_patch_crc_mismatch" )
+	end
+	if perfEnabled then MC.StreamPerformancePatchStage( revision, "crc", ( SysTime() - started ) * 1000 ) end
+	local nativeBackend = activeNativeCompressedPatchBackend()
+	if nativeBackend then
+		started = perfEnabled and SysTime() or nil
+		local jobId, epoch = nativeBackend.StartCompressedPatchDecode(
+			payload, generation, revision, patch.chunkCount, patch.cellCount )
+		if not jobId then return profileFailure( "native_patch_submit_failed" ) end
+		T.pendingPatchAnnouncements[revision] = nil
+		T.chunkPatch = nil
+		T.pendingChunkPatches[revision] = {
+			generation = generation,
+			revision = revision,
+			groupId = groupId,
+			nativeJobId = jobId,
+			nativeEpoch = epoch,
+		}
+		local elapsed = profileEnabled and ( SysTime() - totalStarted ) * 1000 or 0
+		if perfEnabled then
+			MC.StreamPerformancePatchStage( revision, "native_submit", ( SysTime() - started ) * 1000 )
+			MC.StreamPerformancePatchStage( revision, "end_callback_before_drain", elapsed )
+		end
+		if perfEnabled and MC.StreamPerformanceSetStage then MC.StreamPerformanceSetStage( nil ) end
+		return true
+	end
+	if perfEnabled and MC.StreamPerformanceSetStage then MC.StreamPerformanceSetStage( "patch.decompress" ) end
+	started = perfEnabled and SysTime() or nil
 	local json = util.Decompress( payload )
+	if perfEnabled then MC.StreamPerformancePatchStage( revision, "decompress", ( SysTime() - started ) * 1000 ) end
+	if perfEnabled and MC.StreamPerformanceSetStage then MC.StreamPerformanceSetStage( "patch.json" ) end
+	started = perfEnabled and SysTime() or nil
 	local data = json and util.JSONToTable( json ) or nil
+	if perfEnabled then MC.StreamPerformancePatchStage( revision, "json", ( SysTime() - started ) * 1000 ) end
+	if perfEnabled and MC.StreamPerformanceSetStage then MC.StreamPerformanceSetStage( "patch.decode_validate" ) end
+	started = perfEnabled and SysTime() or nil
 	if not istable( data ) or data.chunkPatch ~= true or not istable( data.chunks )
-	or #data.chunks ~= patch.chunkCount then return false, "chunk_patch_decode_failed" end
+	or #data.chunks ~= patch.chunkCount
+	or math.floor( tonumber( data.blockCount ) or -1 ) ~= patch.cellCount then
+		return profileFailure( "chunk_patch_decode_failed" )
+	end
+	local seen, counted = {}, 0
+	for _, chunk in ipairs( data.chunks ) do
+		if not istable( chunk ) then return profileFailure( "invalid_chunk_patch_record" ) end
+		local cx, cy, cz = tonumber( chunk[1] ), tonumber( chunk[2] ), tonumber( chunk[3] )
+		if not cx or not cy or not cz or cx ~= math.floor( cx ) or cy ~= math.floor( cy ) or cz ~= math.floor( cz ) then
+			return profileFailure( "invalid_chunk_patch_coords" )
+		end
+		if T.streaming and ( cz < ( T.streamMinCZ or cz ) or cz > ( T.streamMaxCZ or cz ) ) then
+			return profileFailure( "chunk_patch_vertical_bounds" )
+		end
+		local key = MC.ChunkKey( cx, cy, cz )
+		if seen[key] then return profileFailure( "duplicate_chunk_patch_coords" ) end
+		seen[key] = true
+		local cells = chunk[4]
+		if istable( cells ) then counted = counted + math.floor( #cells / 2 )
+		elseif isstring( cells ) then for _ in string.gmatch( cells, "[^;]+" ) do counted = counted + 1 end
+		else return profileFailure( "invalid_chunk_patch_cells" ) end
+	end
+	if counted ~= patch.cellCount then return profileFailure( "chunk_patch_cell_count_mismatch" ) end
+	if perfEnabled then MC.StreamPerformancePatchStage( revision, "decode_validate", ( SysTime() - started ) * 1000 ) end
+	T.pendingPatchAnnouncements[revision] = nil
 	T.chunkPatch = nil
 	T.pendingChunkPatches[revision] = {
 		generation = generation,
@@ -892,8 +1345,170 @@ function T.EndChunkPatch( generation, revision, groupId, token, crc )
 		groupId = groupId,
 		data = data,
 	}
+	local elapsed = profileEnabled and ( SysTime() - totalStarted ) * 1000 or 0
+	if profileEnabled then
+		MC.StreamProfile = MC.StreamProfile or { patch = {}, unload = {} }
+		MC.StreamProfile.patch = { decodeMS = elapsed, chunks = patch.chunkCount, cells = patch.cellCount, bytes = patch.totalBytes }
+	end
+	if perfEnabled then
+		MC.StreamPerformancePatchStage( revision, "end_callback_before_drain", elapsed )
+		MC.StreamPerformancePatchDecoded( revision )
+	end
+	if debugEnabled and elapsed >= 25 then
+		print( string.format( "[MC stream] patch decode %.2fms chunks=%d cells=%d bytes=%d", elapsed, patch.chunkCount, patch.cellCount, patch.totalBytes ) )
+	end
+	if perfEnabled and MC.StreamPerformanceSetStage then MC.StreamPerformanceSetStage( "revision.drain" ) end
+	started = perfEnabled and SysTime() or nil
 	drainTransactions()
+	if perfEnabled then
+		MC.StreamPerformanceAddStage( "revision.drain", ( SysTime() - started ) * 1000 )
+		MC.StreamPerformanceAddStage( "patch.end_callback_total", ( SysTime() - totalStarted ) * 1000 )
+		MC.StreamPerformanceSetStage( nil )
+	end
 	return not T.desynced
+end
+
+function T.EndBinaryChunkPatch( generation, revision, groupId, token, crc )
+	local perfEnabled = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
+	local totalStarted = perfEnabled and SysTime() or nil
+	local patch = T.chunkPatch
+	if not patch or patch.binary ~= true or generation ~= patch.generation or revision ~= patch.revision
+	or groupId ~= patch.groupId or token ~= patch.token then return false, "binary_patch_identity_mismatch" end
+	if patch.receivedParts ~= patch.partCount or patch.receivedBytes ~= patch.totalBytes then
+		return false, "binary_patch_incomplete"
+	end
+	local function fail( reason )
+		if perfEnabled then
+			MC.StreamPerformancePatchFailure( revision, reason )
+			MC.StreamPerformanceSetStage( nil )
+		end
+		return false, reason
+	end
+	if perfEnabled and MC.StreamPerformanceSetStage then MC.StreamPerformanceSetStage( "patch.concat" ) end
+	local started = perfEnabled and SysTime() or nil
+	local payload = table.concat( patch.parts )
+	if perfEnabled then MC.StreamPerformancePatchStage( revision, "concat", ( SysTime() - started ) * 1000 ) end
+	if tostring( crc or "" ) ~= "" and util.CRC( payload ) ~= tostring( crc ) then
+		return fail( "binary_patch_crc_mismatch" )
+	end
+	if not MC.BinarySectionPatch or not MC.BinarySectionPatch.DecodeTransportPayload then
+		return fail( "binary_patch_decoder_unavailable" )
+	end
+	local nativeBackend = activeNativeBinarySectionPatchBackend()
+	if nativeBackend then
+		started = perfEnabled and SysTime() or nil
+		local jobId, epoch = nativeBackend.StartBinarySectionPatchDecode(
+			payload, patch.compression, patch.rawBytes,
+			generation, revision, patch.chunkCount, patch.cellCount )
+		if not jobId then return fail( "native_binary_patch_submit_failed" ) end
+		T.pendingPatchAnnouncements[revision] = nil
+		T.chunkPatch = nil
+		T.pendingChunkPatches[revision] = {
+			generation = generation,
+			revision = revision,
+			groupId = groupId,
+			nativeJobId = jobId,
+			nativeEpoch = epoch,
+			nativeBinary = true,
+		}
+		if perfEnabled then
+			MC.StreamPerformancePatchStage( revision, "native_binary_submit", ( SysTime() - started ) * 1000 )
+			MC.StreamPerformancePatchStage( revision, "end_callback_before_drain", ( SysTime() - totalStarted ) * 1000 )
+			MC.StreamPerformanceSetStage( nil )
+		end
+		return true
+	end
+	if perfEnabled and MC.StreamPerformanceSetStage then MC.StreamPerformanceSetStage( "patch.binary_decode" ) end
+	started = perfEnabled and SysTime() or nil
+	local decoded, decodeError = MC.BinarySectionPatch.DecodeTransportPayload(
+		payload, patch.compression, patch.rawBytes, {
+			chunkCount = patch.chunkCount,
+			cellCount = patch.cellCount,
+			revision = revision,
+		} )
+	if perfEnabled then MC.StreamPerformancePatchStage( revision, "binary_decode", ( SysTime() - started ) * 1000 ) end
+	if not decoded then return fail( decodeError or "binary_patch_decode_failed" ) end
+	for _, chunk in ipairs( decoded.chunks ) do
+		if T.streaming and ( chunk.cz < ( T.streamMinCZ or chunk.cz )
+		or chunk.cz > ( T.streamMaxCZ or chunk.cz ) ) then return fail( "binary_patch_vertical_bounds" ) end
+	end
+	T.pendingPatchAnnouncements[revision] = nil
+	T.chunkPatch = nil
+	T.pendingChunkPatches[revision] = {
+		generation = generation,
+		revision = revision,
+		groupId = groupId,
+		binaryData = decoded,
+	}
+	if perfEnabled then
+		MC.StreamPerformancePatchDecoded( revision )
+		MC.StreamPerformancePatchStage( revision, "end_callback_before_drain", ( SysTime() - totalStarted ) * 1000 )
+		MC.StreamPerformanceSetStage( "revision.drain" )
+	end
+	started = perfEnabled and SysTime() or nil
+	drainTransactions()
+	if perfEnabled then
+		MC.StreamPerformanceAddStage( "revision.drain", ( SysTime() - started ) * 1000 )
+		MC.StreamPerformanceAddStage( "patch.end_callback_total", ( SysTime() - totalStarted ) * 1000 )
+		MC.StreamPerformanceSetStage( nil )
+	end
+	return not T.desynced
+end
+
+function T.PollNativeChunkPatches()
+	if T.desynced then return false end
+	local hasNativeJobs = false
+	for _, patch in pairs( T.pendingChunkPatches ) do
+		if patch.nativeJobId then hasNativeJobs = true break end
+	end
+	if not hasNativeJobs then return false end
+	local progressed = false
+	for revision, patch in pairs( T.pendingChunkPatches ) do
+		if patch.nativeJobId and not patch.nativeReady then
+			local patchBackend
+			if patch.nativeBinary then patchBackend = activeNativeBinarySectionPatchBackend()
+			else patchBackend = activeNativeCompressedPatchBackend() end
+			if not patchBackend then T.RequestResync( "native_patch_backend_unavailable" ) return false end
+			local status
+			if patch.nativeBinary then status = patchBackend.PollBinarySectionPatchDecode( patch.nativeJobId )
+			else status = patchBackend.PollCompressedPatchDecode( patch.nativeJobId ) end
+			if not status then T.RequestResync( "native_patch_poll_failed" ) return false end
+			if status.status == "failed" or status.status == "cancelled" then
+				T.RequestResync( status.error or "native_patch_decode_failed" )
+				return false
+			elseif status.status == "ready" then
+				if status.generation ~= T.generation or status.revision ~= revision
+				or status.backendEpoch ~= patch.nativeEpoch then
+					patchBackend.CancelCompressedPatchDecode( patch.nativeJobId )
+					T.RequestResync( "native_patch_stale" )
+					return false
+				end
+				local palette = {}
+				if not patch.nativeBinary then
+					for index, spec in ipairs( status.palette or {} ) do
+						local stateId = isstring( spec ) and MC.ParseBlockState and MC.ParseBlockState( spec ) or nil
+						if not stateId or stateId == 0 then
+							patchBackend.CancelCompressedPatchDecode( patch.nativeJobId )
+							T.RequestResync( "native_patch_palette_failed:" .. tostring( index ) )
+							return false
+						end
+						palette[index] = stateId
+					end
+				end
+				local include = {}
+				for index, chunk in ipairs( status.chunks or {} ) do
+					local subscribed = not T.streaming or T.subscribedColumns[MC.ChunkColumnKey( chunk.cx, chunk.cy )] == true
+					local vertical = not T.streaming or ( chunk.cz >= ( T.streamMinCZ or chunk.cz ) and chunk.cz <= ( T.streamMaxCZ or chunk.cz ) )
+					if subscribed and vertical then include[#include + 1] = index end
+				end
+				patch.nativePalette, patch.nativeInclude, patch.nativeReady = palette, include, true
+				if MC.StreamPerformancePatchDecoded then MC.StreamPerformancePatchDecoded( revision ) end
+				progressed = true
+			end
+		end
+	end
+	if progressed then drainTransactions() end
+	return progressed
 end
 
 if net and net.Receive then
@@ -906,10 +1521,34 @@ if net and net.Receive then
 			maxStateId = net.ReadUInt( Net.STATE_ID_BITS or 20 ),
 			schemaHash = net.ReadString(),
 			blockEntityHash = net.ReadString(),
+			streamMode = net.ReadUInt( 2 ),
 		}
 		local accepted, err = T.AcceptHello( hello )
 		sendHelloAck( accepted )
 		if not accepted then T.RequestResync( err or "hello_rejected" ) end
+	end )
+
+	net.Receive( "mc_stream_patch_pending", function()
+		T.AcceptPatchPending( net.ReadUInt( Net.GENERATION_BITS or 32 ), net.ReadUInt( Net.REVISION_BITS or 32 ) )
+	end )
+
+	net.Receive( "mc_state_revision_skip", function()
+		local ok, err = T.AcceptRevisionSkip( net.ReadUInt( Net.GENERATION_BITS or 32 ), net.ReadUInt( Net.REVISION_BITS or 32 ), net.ReadUInt( Net.REVISION_BITS or 32 ) )
+		if not ok and not T.resyncRequested then T.RequestResync( err or "revision_skip_rejected" ) end
+	end )
+
+	net.Receive( "mc_stream_columns", function()
+		local generation = net.ReadUInt( Net.GENERATION_BITS or 32 )
+		local minCZ, maxCZ = net.ReadInt( Net.COORD_BITS or 20 ), net.ReadInt( Net.COORD_BITS or 20 )
+		local subscriptions, unsubscriptions = {}, {}
+		local count = net.ReadUInt( 7 )
+		if count > ( Net.MAX_STREAM_COLUMNS or 64 ) then T.RequestResync( "invalid_stream_column_count" ) return end
+		for i = 1, count do subscriptions[i] = { cx = net.ReadInt( Net.COORD_BITS or 20 ), cy = net.ReadInt( Net.COORD_BITS or 20 ) } end
+		count = net.ReadUInt( 7 )
+		if count > ( Net.MAX_STREAM_COLUMNS or 64 ) then T.RequestResync( "invalid_stream_column_count" ) return end
+		for i = 1, count do unsubscriptions[i] = { cx = net.ReadInt( Net.COORD_BITS or 20 ), cy = net.ReadInt( Net.COORD_BITS or 20 ) } end
+		local ok, err = T.ApplyStreamColumns( generation, minCZ, maxCZ, subscriptions, unsubscriptions )
+		if not ok and not T.resyncRequested then T.RequestResync( err or "stream_columns_rejected" ) end
 	end )
 
 	net.Receive( "mc_state_set", function()
@@ -1050,6 +1689,56 @@ if net and net.Receive then
 		if not ok and not T.resyncRequested then T.RequestResync( err or "chunk_patch_end_rejected" ) end
 	end )
 
+	net.Receive( "mc_state_binary_patch_begin", function()
+		local metadata = {
+			binary = true,
+			generation = net.ReadUInt( Net.GENERATION_BITS or 32 ),
+			revision = net.ReadUInt( Net.REVISION_BITS or 32 ),
+			groupId = net.ReadUInt( 32 ),
+			token = net.ReadUInt( 32 ),
+			totalBytes = net.ReadUInt( 32 ),
+			rawBytes = net.ReadUInt( 32 ),
+			compression = net.ReadUInt( 2 ),
+			partCount = net.ReadUInt( 16 ),
+			chunkCount = net.ReadUInt( 16 ),
+			cellCount = net.ReadUInt( 32 ),
+			schemaHash = net.ReadString(),
+			blockEntityHash = net.ReadString(),
+		}
+		local ok, err = T.BeginChunkPatch( metadata )
+		if not ok and not T.resyncRequested then T.RequestResync( err or "binary_patch_begin_rejected" ) end
+	end )
+
+	net.Receive( "mc_state_binary_patch_part", function()
+		local generation = net.ReadUInt( Net.GENERATION_BITS or 32 )
+		local token = net.ReadUInt( 32 )
+		local partIndex = net.ReadUInt( 16 )
+		local length = net.ReadUInt( 16 )
+		if length < 1 or length > CHUNK_PATCH_PART_MAX then
+			T.RequestResync( "invalid_binary_patch_part_length" )
+			return
+		end
+		local data = net.ReadData( length )
+		if not isstring( data ) or #data ~= length then
+			T.RequestResync( "invalid_binary_patch_part_data" )
+			return
+		end
+		local ackBytes = math.Clamp( net.ReadUInt( 32 ), 0, CHUNK_PATCH_PART_MAX + 4096 )
+		if MC.QueueReliableAck then MC.QueueReliableAck( ackBytes ) end
+		local ok, err = T.AcceptChunkPatchPart( generation, token, partIndex, data )
+		if not ok and not T.resyncRequested then T.RequestResync( err or "binary_patch_part_rejected" ) end
+	end )
+
+	net.Receive( "mc_state_binary_patch_end", function()
+		local generation = net.ReadUInt( Net.GENERATION_BITS or 32 )
+		local revision = net.ReadUInt( Net.REVISION_BITS or 32 )
+		local groupId = net.ReadUInt( 32 )
+		local token = net.ReadUInt( 32 )
+		local crc = net.ReadString()
+		local ok, err = T.EndBinaryChunkPatch( generation, revision, groupId, token, crc )
+		if not ok and not T.resyncRequested then T.RequestResync( err or "binary_patch_end_rejected" ) end
+	end )
+
 	net.Receive( "mc_state_snapshot_begin", function()
 		local metadata = {
 			generation = net.ReadUInt( Net.GENERATION_BITS or 32 ),
@@ -1086,4 +1775,8 @@ if net and net.Receive then
 	end )
 
 	timer.Create( "mc_state_revision_gap", 0.1, 0, function() T.CheckRevisionGap() end )
+	timer.Create( "mc_state_native_patch_poll", 0.01, 0, function()
+		T.PollBinarySnapshot()
+		T.PollNativeChunkPatches()
+	end )
 end

@@ -43,10 +43,18 @@ function SV.SaveSlotName( name )
 end
 
 function SV.SaveSlotPath( slotName )
-	return SAVE_SLOT_DIR .. "/" .. slotName .. ".dat"
+	return SAVE_SLOT_DIR .. "/" .. slotName .. "/manifest.json"
 end
 
 function SV.SaveMetaPath( slotName )
+	return SAVE_SLOT_DIR .. "/" .. slotName .. "/meta.json"
+end
+
+function SV.LegacySaveSlotPath( slotName )
+	return SAVE_SLOT_DIR .. "/" .. slotName .. ".dat"
+end
+
+local function legacySaveMetaPath( slotName )
 	return SAVE_SLOT_DIR .. "/" .. slotName .. ".json"
 end
 
@@ -100,6 +108,7 @@ end
 
 local function writeSaveMeta( slotName, path, data, chunks, blocks, cover )
 	ensureSaveDirs()
+	file.CreateDir( SAVE_SLOT_DIR .. "/" .. slotName )
 	local savedAt = data.savedAt or os.time()
 	local meta = {
 		v = 1,
@@ -118,8 +127,10 @@ local function writeSaveMeta( slotName, path, data, chunks, blocks, cover )
 	if json then file.Write( SV.SaveMetaPath( slotName ), json ) end
 end
 
-local function readSaveMeta( slotName )
-	local raw = file.Read( SV.SaveMetaPath( slotName ), "DATA" )
+local function readSaveMeta( slotName, path )
+	local metaPath = string.EndsWith( tostring( path or "" ), ".dat" )
+		and legacySaveMetaPath( slotName ) or SV.SaveMetaPath( slotName )
+	local raw = file.Read( metaPath, "DATA" )
 	return raw and util.JSONToTable( raw ) or nil
 end
 
@@ -185,9 +196,15 @@ local function readSaveDataSummary( slotName, path )
 	}
 end
 
-local function writeMetaTable( slotName, meta )
+local function writeMetaTable( slotName, meta, path )
 	local json = util.TableToJSON( meta, true )
-	if json then file.Write( SV.SaveMetaPath( slotName ), json ) end
+	if not json then return end
+	if string.EndsWith( tostring( path or "" ), ".dat" ) then
+		file.Write( legacySaveMetaPath( slotName ), json )
+		return
+	end
+	file.CreateDir( SAVE_SLOT_DIR .. "/" .. slotName )
+	file.Write( SV.SaveMetaPath( slotName ), json )
 end
 
 local function saveMetaComplete( meta )
@@ -199,7 +216,7 @@ local function saveMetaComplete( meta )
 end
 
 local function readSaveListMeta( slotName, path )
-	local meta = readSaveMeta( slotName ) or {}
+	local meta = readSaveMeta( slotName, path ) or {}
 	if saveMetaComplete( meta ) then
 		meta.name = meta.name or slotName
 		meta.path = meta.path or path
@@ -224,7 +241,7 @@ local function readSaveListMeta( slotName, path )
 	if meta.chunks == nil then meta.chunks = summary.chunks end
 	if meta.blocks == nil then meta.blocks = summary.blocks end
 	if meta.cover == nil then meta.cover = summary.cover end
-	writeMetaTable( slotName, meta )
+	writeMetaTable( slotName, meta, path )
 	return meta
 end
 
@@ -240,16 +257,27 @@ end
 function SV.LoadSave( slotName, resyncClients )
 	slotName = SV.SaveSlotName( slotName )
 	if not slotName then return false, "missing_save_name" end
-	return SV.LoadFromPath( SV.SaveSlotPath( slotName ), resyncClients, slotName )
+	local path = SV.SaveSlotPath( slotName )
+	if not file.Exists( path, "DATA" ) then path = SV.LegacySaveSlotPath( slotName ) end
+	return SV.LoadFromPath( path, resyncClients, slotName )
 end
 
 function SV.DeleteSave( slotName )
 	slotName = SV.SaveSlotName( slotName )
 	if not slotName then return false, "missing_save_name" end
 	local path = SV.SaveSlotPath( slotName )
-	if not file.Exists( path, "DATA" ) then return false, "save_not_found" end
-	file.Delete( path )
+	local legacyPath = SV.LegacySaveSlotPath( slotName )
+	if not file.Exists( path, "DATA" ) and not file.Exists( legacyPath, "DATA" ) then return false, "save_not_found" end
+	local root = SAVE_SLOT_DIR .. "/" .. slotName
+	local regionDir = root .. "/regions"
+	local regionFiles = file.Find( regionDir .. "/*", "DATA" ) or {}
+	for _, name in ipairs( regionFiles ) do file.Delete( regionDir .. "/" .. name ) end
+	file.Delete( regionDir )
+	for _, name in ipairs( file.Find( root .. "/*", "DATA" ) or {} ) do file.Delete( root .. "/" .. name ) end
+	file.Delete( root )
+	file.Delete( legacyPath )
 	file.Delete( SV.SaveMetaPath( slotName ) )
+	file.Delete( legacySaveMetaPath( slotName ) )
 	SV.DeleteSaveCovers( slotName )
 	MsgN( "[MC] deleted save \"" .. slotName .. "\"" )
 	if MC.RunEvent then MC.RunEvent( "MC.SaveDeleted", slotName ) end
@@ -259,10 +287,19 @@ end
 function SV.SaveList()
 	ensureSaveDirs()
 	local files = file.Find( SAVE_SLOT_DIR .. "/*.dat", "DATA" ) or {}
-	local out = {}
+	local _, directories = file.Find( SAVE_SLOT_DIR .. "/*", "DATA" )
+	local paths = {}
+	for _, slotName in ipairs( directories or {} ) do
+		local clean = SV.SaveSlotName( slotName )
+		local path = clean and SV.SaveSlotPath( clean ) or nil
+		if clean == slotName and path and file.Exists( path, "DATA" ) then paths[clean] = path end
+	end
 	for _, fn in ipairs( files ) do
 		local slotName = string.gsub( fn, "%.dat$", "" )
-		local path = SAVE_SLOT_DIR .. "/" .. fn
+		if not paths[slotName] then paths[slotName] = SAVE_SLOT_DIR .. "/" .. fn end
+	end
+	local out = {}
+	for slotName, path in pairs( paths ) do
 		local meta = readSaveListMeta( slotName, path )
 		out[#out + 1] = {
 			name = meta.name or slotName,
@@ -487,7 +524,7 @@ local function runSaveListCommand( ply )
 	if not canUseSaves( ply ) then printSaveUseDenied( ply ) return end
 	local saves = SV.SaveList()
 	if #saves == 0 then
-		printSaveManagerLine( ply, "[MC] no named saves in data/mc/saves" )
+		printSaveManagerLine( ply, "[MC] no named saves in data/mc/saves/<name>" )
 		return
 	end
 	printSaveManagerLine( ply, "[MC] named saves:" )

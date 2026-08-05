@@ -51,6 +51,34 @@ local function countPlayerClusters( sid )
 	return n
 end
 
+-- Lazy MCB4 worlds keep chunks off the heap until something asks for them, and
+-- MC.GetBlockState reports a non-resident chunk as air. Capturing a selection
+-- in that state would silently drop those cells from the cluster AND leave the
+-- real blocks in the world, where they reappear the moment the chunk hydrates.
+-- Force every chunk the selection touches in first, and refuse the conversion
+-- rather than truncate it if one will not load. The selection is already
+-- bounded by mc_cluster_max_extent / max_blocks, so this is a small, finite
+-- set - the same work walking into the area would have done anyway.
+local function hydrateSelectionChunks( cells )
+	local store = SV.ChunkStore
+	if not store or not store.IsLazyWorld or not store.IsLazyWorld() then return true end
+	if not store.HydrateChunkNow then return true end
+	local pending = {}
+	for _, cell in ipairs( cells ) do
+		local cx, cy, cz = MC.CellToChunk( cell.bx, cell.by, cell.bz )
+		local key = tostring( MC.ChunkKey( cx, cy, cz ) )
+		if not store.LoadedKeys[key] then pending[key] = true end
+	end
+	for key in pairs( pending ) do
+		store.HydrateChunkNow( key, true )
+		-- A chunk with nothing on disk hydrates to nil but is still marked
+		-- loaded ("known empty"); only a missing LoadedKeys flag means the
+		-- load actually failed.
+		if not store.LoadedKeys[key] then return false end
+	end
+	return true
+end
+
 --------------------------------------------------------------------- spawning
 -- Proactive payload push: clients also request on demand (late joiners, full
 -- updates), but pushing at spawn removes the round-trip for everyone present.
@@ -180,8 +208,17 @@ local function placeClusterAt( ply, ent, targetMin, rotation )
 		local by = targetMin[2] + rotatedCells[i + 1]
 		local bz = targetMin[3] + rotatedCells[i + 2]
 		if not SV.WorldBoundsOK( bx, by, bz ) then return false, "out_of_bounds" end
-		if ( MC.GetBlockState( bx, by, bz ) or 0 ) ~= 0 then blocked = blocked + 1 end
 		cells[#cells + 1] = { bx = bx, by = by, bz = bz, stateId = rotatedCells[i + 3] }
+	end
+	-- Same lazy-world trap as conversion: a non-resident chunk reads as air, so
+	-- the occupancy check below would clear a target that is actually solid and
+	-- paste into it. Hydrate the destination first; the transaction's
+	-- validateChange still guards the commit, but failing there would leave a
+	-- half-placed structure and a consumed entity.
+	if not hydrateSelectionChunks( cells ) then return false, "not_loaded" end
+	for _, cell in ipairs( cells ) do
+		local bx, by, bz = cell.bx, cell.by, cell.bz
+		if ( MC.GetBlockState( bx, by, bz ) or 0 ) ~= 0 then blocked = blocked + 1 end
 	end
 	if blocked > 0 then return false, "occupied", blocked end
 
@@ -242,6 +279,7 @@ local PASTE_FAIL_TEXT = {
 	out_of_bounds = { "cluster.paste_err_bounds", "超出建造范围" },
 	block_limit = { "cluster.paste_err_limit", "会超过全局方块上限 (mc_max_blocks)" },
 	no_record = { "cluster.paste_err_record", "结构数据缺失" },
+	not_loaded = { "cluster.not_loaded", "选区内有区块未能加载，请稍后重试" },
 }
 
 local function pasteFailText( ply, err, blocked )
@@ -328,6 +366,11 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 			notify( ply, L( ply, "cluster.too_far", "选区离你太远" ) )
 			return
 		end
+	end
+
+	if not hydrateSelectionChunks( requested ) then
+		notify( ply, L( ply, "cluster.not_loaded", "选区内有区块未能加载，请稍后重试" ) )
+		return
 	end
 
 	local cells = {}
@@ -650,7 +693,11 @@ end
 SV.ClusterOrigSaveToPath = SV.ClusterOrigSaveToPath or SV.SaveToPath
 function SV.SaveToPath( path, slotName )
 	local ok, a, b, c, d = SV.ClusterOrigSaveToPath( path, slotName )
-	if ok then saveClustersSidecar( path ) end
+	-- Save the sidecar next to the file that was ACTUALLY written. On a lazy
+	-- world the region persistence layer can redirect a default save to the
+	-- chunk store's active manifest, and writing the sidecar at the requested
+	-- path instead would orphan it from its save.
+	if ok then saveClustersSidecar( isstring( a ) and a or path ) end
 	return ok, a, b, c, d
 end
 
@@ -667,8 +714,15 @@ function SV.DeleteSave( slotName )
 	if ok and SV.SaveSlotName and SV.SaveSlotPath then
 		local slot = SV.SaveSlotName( slotName )
 		if slot then
+			-- Directory saves keep the sidecar inside the slot folder, which
+			-- DeleteSave already swept; the legacy .dat layout keeps it beside
+			-- the save, where nothing else would remove it.
 			local sidecar = clusterSidecarPath( SV.SaveSlotPath( slot ) )
 			if file.Exists( sidecar, "DATA" ) then file.Delete( sidecar ) end
+			if SV.LegacySaveSlotPath then
+				local legacySidecar = clusterSidecarPath( SV.LegacySaveSlotPath( slot ) )
+				if file.Exists( legacySidecar, "DATA" ) then file.Delete( legacySidecar ) end
+			end
 		end
 	end
 	return ok, err

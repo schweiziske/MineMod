@@ -275,13 +275,21 @@ function MC.ReachAllowsEye( eyePos, bx, by, bz, reach )
 	return dx * dx + dy * dy + dz * dz <= reach * reach
 end
 
+local function entityWorldAABB( ent )
+	if MC.EntityWorldAABB then
+		local minimum, maximum = MC.EntityWorldAABB( ent )
+		if minimum and maximum then return minimum, maximum end
+	end
+	return ent:WorldSpaceAABB()
+end
+
 function MC.BlockAABBOverlapsPlayerHull( bx, by, bz, padding )
 	padding = math.max( 0, tonumber( padding ) or 0 )
 	local mn = MC.CellWorldMin( bx, by, bz )
 	local mxx, mxy, mxz = mn.x + BS, mn.y + BS, mn.z + BS
 	for _, p in ipairs( player.GetAll() ) do
 		if p:Alive() then
-			local pmn, pmx = p:WorldSpaceAABB()
+			local pmn, pmx = entityWorldAABB( p )
 			if mn.x - padding < pmx.x and mxx + padding > pmn.x
 			and mn.y - padding < pmx.y and mxy + padding > pmn.y
 			and mn.z - padding < pmx.z and mxz + padding > pmn.z then
@@ -298,7 +306,7 @@ local function blockAABBOverlapsPlayerHullSidePadding( bx, by, bz, padding )
 	local mxx, mxy, mxz = mn.x + BS, mn.y + BS, mn.z + BS
 	for _, p in ipairs( player.GetAll() ) do
 		if p:Alive() then
-			local pmn, pmx = p:WorldSpaceAABB()
+			local pmn, pmx = entityWorldAABB( p )
 			if mn.x - padding < pmx.x and mxx + padding > pmn.x
 			and mn.y - padding < pmx.y and mxy + padding > pmn.y
 			and mn.z < pmx.z and mxz > pmn.z then
@@ -346,12 +354,13 @@ local function previewCanEdit( ply )
 	return true
 end
 
-local function previewWorldBoundsOK( bx, by )
+local function previewWorldBoundsOK( bx, by, bz )
 	local cv = GetConVar( "mc_world_limit" )
+	if MC.WorldBoundsOK then return MC.WorldBoundsOK( bx, by, bz, cv and cv:GetInt() or nil ) end
 	if not cv then return true end
 	local protoMax = bit.lshift( 1, MC.Net.COORD_BITS - 1 ) - 1
 	local lim = math.min( cv:GetInt(), protoMax )
-	return math.abs( bx ) <= lim and math.abs( by ) <= lim
+	return math.abs( bx ) <= lim and math.abs( by ) <= lim and math.abs( bz ) <= lim
 end
 
 local function previewWouldTrapPlayer( bx, by, bz, id, orient, stateId )
@@ -362,16 +371,16 @@ function MC.CanPreviewBreak( ply, bx, by, bz )
 	if not IsValid( ply ) then return false end
 	return MC.GetBlock( bx, by, bz ) ~= 0
 		and previewCanEdit( ply )
-		and MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, MC.CurrentReach() )
+		and MC.ReachAllowsEye( MC.EntityEyeWorldPos and MC.EntityEyeWorldPos( ply ) or ply:EyePos(), bx, by, bz, MC.CurrentReach() )
 end
 
 function MC.CanPreviewPlace( ply, bx, by, bz, id, orient, stateId )
 	if not IsValid( ply ) then return false end
 	return MC.GetBlock( bx, by, bz ) == 0
 		and previewCanEdit( ply )
-		and previewWorldBoundsOK( bx, by )
+		and previewWorldBoundsOK( bx, by, bz )
 		and not previewWouldTrapPlayer( bx, by, bz, id, orient, stateId )
-		and MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, MC.CurrentReach() )
+		and MC.ReachAllowsEye( MC.EntityEyeWorldPos and MC.EntityEyeWorldPos( ply ) or ply:EyePos(), bx, by, bz, MC.CurrentReach() )
 end
 
 local INF = math.huge
@@ -534,7 +543,7 @@ end
 
 function MC.PlayerBlockAim( ply, reach )
 	if not IsValid( ply ) then return nil end
-	local eye = ply:EyePos()
+	local eye = MC.EntityEyeWorldPos and MC.EntityEyeWorldPos( ply ) or ply:EyePos()
 	local maxDist = tonumber( reach )
 	if not maxDist or maxDist <= 0 then
 		maxDist = MC.CurrentReach()
@@ -550,6 +559,7 @@ end
 
 -- recover chunk coords from a chunk entity's world origin (client side)
 function MC.ChunkCoordsFromOrigin( v )
+	if CLIENT and MC.RenderToWorldPos then v = MC.RenderToWorldPos( v ) end
 	local w = MC.ChunkWorld
 	return math.Round( v.x / w ), math.Round( v.y / w ), math.Round( v.z / MC.ChunkWorldH )
 end
@@ -749,6 +759,7 @@ function MC.MigrateChunkStateStorage( chunk )
 	if not sections then return nil, err end
 	chunk.stateSections = sections
 	chunk.stateStorageMigrated = true
+	chunk.packedStateOnly = nil
 	return true
 end
 
@@ -759,6 +770,7 @@ function MC.InvalidateChunkStateStorage( chunk )
 	if not chunk then return end
 	chunk.stateSections = nil
 	chunk.stateStorageMigrated = nil
+	chunk.packedStateOnly = nil
 	chunk.renderSectionBlocks = nil
 	chunk.renderSectionBlocksReady = nil
 	chunk.renderSectionIndexVersion = nil
@@ -774,6 +786,7 @@ function MC.ResetChunkStateStorage( chunk )
 		and chunk.nativeMeshEpoch ~= nil and chunk.nativeMeshEpoch == backend.Epoch()
 	chunk.stateSections = nativeStorage and nil or {}
 	chunk.stateStorageMigrated = true
+	chunk.packedStateOnly = nil
 	chunk.nativeStateStorage = nativeStorage == true
 	if nativeStorage then
 		MC.AttachNativeChunkCompatibilityProxy( chunk )
@@ -907,7 +920,7 @@ function MC.GetBlock( bx, by, bz )
 	if not MC.LocalIndexInRange( li ) then return 0 end
 	local c = MC.World[MC.ChunkKey( cx, cy, cz )]
 	if not c then return 0 end
-	if not c.nativeStateStorage and c.blocks then return c.blocks[li] or 0 end
+	if not c.nativeStateStorage and not c.packedStateOnly and c.blocks then return c.blocks[li] or 0 end
 	local stateId = MC.GetChunkBlockStateByLocalIndex( c, li )
 	if not stateId or stateId == 0 then return 0 end
 	local id = MC.LegacyFromState( stateId )
@@ -919,7 +932,7 @@ function MC.GetBlockOrient( bx, by, bz )
 	if not MC.LocalIndexInRange( li ) then return 0 end
 	local c = MC.World[MC.ChunkKey( cx, cy, cz )]
 	if not c then return 0 end
-	if not c.nativeStateStorage and c.blocks then
+	if not c.nativeStateStorage and not c.packedStateOnly and c.blocks then
 		local id = c.blocks[li]
 		if not id then return 0 end
 		return MC.NormalizeOrient and MC.NormalizeOrient( id, c.orients and c.orients[li] ) or ( c.orients and c.orients[li] or 0 )
@@ -1048,7 +1061,7 @@ end
 
 --- Iterate every (bx,by,bz,id,orient) in a chunk. cb( bx,by,bz, lx,ly,lz, id, orient )
 function MC.ForEachBlock( chunk, cb )
-	if chunk.nativeStateStorage or not chunk.blocks then
+	if chunk.nativeStateStorage or chunk.packedStateOnly or not chunk.blocks then
 		return MC.ForEachBlockState( chunk, function( bx, by, bz, lx, ly, lz, stateId )
 			local id, orient = MC.LegacyFromState( stateId )
 			if id then cb( bx, by, bz, lx, ly, lz, id, orient or 0 ) end

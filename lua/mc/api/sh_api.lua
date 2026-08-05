@@ -129,6 +129,17 @@ end
 API.ResolveStateInput = resolveStateInput
 
 -------------------------------------------------------------------- API.Coords
+-- THREE distinct spaces exist; mixing them is the most common API mistake:
+--   MC world space   the voxel world's own continuous frame. All cell math
+--                    below, and every bx/by/bz in this API, live here.
+--   engine space     what ent:GetPos() / EyePos() / traces return. Identical
+--                    to world space on a normal map, but on InfMap worlds the
+--                    active world adapter re-origins it per player, so the
+--                    same engine vector means different cells for different
+--                    players.
+--   render space     world space shifted for drawing only (client).
+-- Convert engine -> world with EngineToCell / EntityCell, never by handing a
+-- raw ent:GetPos() to WorldToCell.
 API.Coords = API.Coords or {}
 local Coords = API.Coords
 
@@ -136,13 +147,36 @@ function Coords.BlockSize()
 	return MC.BS or 36.5
 end
 
--- Vector -> integer cell coords.
+-- MC world-space Vector -> integer cell coords.
 function Coords.WorldToCell( pos )
 	if not isvector( pos ) then return nil, nil, nil end
 	return MC.WorldToCell( pos )
 end
 
--- Min corner / center of a cell in world units.
+-- Engine-space Vector -> integer cell coords. context is the player/entity the
+-- position came from; on InfMap worlds it selects the right origin offset, and
+-- omitting it silently reads the wrong cell far from the map centre.
+function Coords.EngineToCell( pos, context )
+	if not isvector( pos ) then return nil, nil, nil end
+	local worldPos = MC.EngineToWorldPos and MC.EngineToWorldPos( pos, context ) or pos
+	return MC.WorldToCell( worldPos )
+end
+
+-- Cell an entity currently occupies (feet). InfMap-safe.
+function Coords.EntityCell( ent )
+	if not IsValid( ent ) then return nil, nil, nil end
+	local worldPos = MC.EntityWorldPos and MC.EntityWorldPos( ent ) or ent:GetPos()
+	return MC.WorldToCell( worldPos )
+end
+
+-- Cell an entity is looking from (eyes). InfMap-safe.
+function Coords.EntityEyeCell( ent )
+	if not IsValid( ent ) then return nil, nil, nil end
+	local worldPos = MC.EntityEyeWorldPos and MC.EntityEyeWorldPos( ent ) or ent:EyePos()
+	return MC.WorldToCell( worldPos )
+end
+
+-- Min corner / center of a cell in MC world units.
 function Coords.CellMin( bx, by, bz )
 	local x, y, z = cellCoords( bx, by, bz )
 	if not x then return nil end
@@ -153,6 +187,22 @@ function Coords.CellCenter( bx, by, bz )
 	local x, y, z = cellCoords( bx, by, bz )
 	if not x then return nil end
 	return MC.CellWorldCenter( x, y, z )
+end
+
+-- Render-space counterparts. Only correct inside a client render hook of the
+-- current frame; use these (not CellMin/CellCenter) to draw on InfMap worlds.
+function Coords.CellRenderMin( bx, by, bz )
+	local x, y, z = cellCoords( bx, by, bz )
+	if not x then return nil end
+	if not MC.CellRenderMin then return MC.CellWorldMin( x, y, z ) end
+	return MC.CellRenderMin( x, y, z )
+end
+
+function Coords.CellRenderCenter( bx, by, bz )
+	local x, y, z = cellCoords( bx, by, bz )
+	if not x then return nil end
+	if not MC.CellRenderCenter then return MC.CellWorldCenter( x, y, z ) end
+	return MC.CellRenderCenter( x, y, z )
 end
 
 function Coords.CellToChunk( bx, by, bz )
@@ -200,7 +250,12 @@ end
 
 -- Iterate every NON-AIR cell in the inclusive cell box, chunk-aware (skips
 -- missing chunks wholesale). cb( bx, by, bz, stateId ); return false to stop.
--- On lazy-loaded worlds only hydrated chunks are visited.
+--
+-- Returns ok, skippedChunks. A chunk is skipped when it is not resident: on
+-- lazy MCB4 worlds it may not be hydrated from disk yet, and on the client
+-- horizontal column streaming only keeps chunks near the player. Both look
+-- exactly like "all air" from in here, so ANY caller drawing a gameplay
+-- conclusion from an empty result must check skippedChunks > 0 first.
 function World.ForEachBlock( x1, y1, z1, x2, y2, z2, cb )
 	if not isfunction( cb ) then return false, "invalid_callback" end
 	local ax, ay, az = cellCoords( x1, y1, z1 )
@@ -212,11 +267,18 @@ function World.ForEachBlock( x1, y1, z1, x2, y2, z2, cb )
 	if not MC.GetChunk or not MC.GetChunkBlockStateByLocalIndex then return false, "world_unavailable" end
 
 	local CS, CH = MC.CS or 16, MC.CH or 32
+	local skipped = 0
 	for cz = math.floor( minz / CH ), math.floor( maxz / CH ) do
 		for cy = math.floor( miny / CS ), math.floor( maxy / CS ) do
 			for cx = math.floor( minx / CS ), math.floor( maxx / CS ) do
 				local chunk = MC.GetChunk( cx, cy, cz )
-				if chunk then
+				if not chunk then
+					-- "Known empty" is loaded and really is air; anything else
+					-- is an absence we cannot see through.
+					if not ( MC.IsChunkLoaded and MC.IsChunkLoaded( cx, cy, cz ) ) then
+						skipped = skipped + 1
+					end
+				else
 					local x0, xEnd = math.max( minx, cx * CS ), math.min( maxx, cx * CS + CS - 1 )
 					local y0, yEnd = math.max( miny, cy * CS ), math.min( maxy, cy * CS + CS - 1 )
 					local z0, zEnd = math.max( minz, cz * CH ), math.min( maxz, cz * CH + CH - 1 )
@@ -227,7 +289,7 @@ function World.ForEachBlock( x1, y1, z1, x2, y2, z2, cb )
 							for bxi = x0, xEnd do
 								local stateId = MC.GetChunkBlockStateByLocalIndex( chunk, bxi - cx * CS + row )
 								if stateId and stateId ~= 0 then
-									if cb( bxi, by, bz, stateId ) == false then return true end
+									if cb( bxi, by, bz, stateId ) == false then return true, skipped end
 								end
 							end
 						end
@@ -236,7 +298,7 @@ function World.ForEachBlock( x1, y1, z1, x2, y2, z2, cb )
 			end
 		end
 	end
-	return true
+	return true, skipped
 end
 
 -- Fresh shape info for a world cell (selection boxes, collision, extent).

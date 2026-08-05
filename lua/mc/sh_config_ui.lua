@@ -581,6 +581,12 @@ MC.ConfigConVars = {
 		category( "full_sync", "network", "Full-map synchronization", "全量同步",
 			"One shared paced queue for join snapshots, large edits, Chunk hydration and preset data.",
 			"加入快照、大型编辑、区块补水和预设数据共用同一个限速队列。", {
+			item( "mc_binary_chunk_patch", "Binary Section patches", "二进制 Section 补丁", "bool",
+				"Send Chunk hydration as palette and packed-word Binary Sections instead of terrain JSON.",
+				"使用调色板与 packed word 的二进制 Section 传输区块，不再生成地形 JSON。", { advanced = true } ),
+			item( "mc_binary_net_profile", "Binary network profiling", "二进制网络分析", "bool",
+				"Collect server timings for Binary Section encoding, compression, queueing and net.Send.",
+				"收集服务端 Binary Section 编码、压缩、排队与 net.Send 耗时。", { advanced = true } ),
 			item( "mc_sync_messages_per_tick", "Messages per tick", "每 tick 消息数", "number",
 				"Maximum queued state messages sent to each player per 0.05-second interval.",
 				"每 0.05 秒最多向每个玩家发送的排队状态消息数。" ),
@@ -640,6 +646,9 @@ MC.ConfigConVars = {
 		category( "collision_interest", "physics", "Collision interest", "碰撞关注范围",
 			"Where the server and client keep chunk collision active.",
 			"服务器与客户端保持区块碰撞激活的范围。", {
+			item( "mc_server_collision", "Server collision", "服务器碰撞", "bool",
+				"Build authoritative MC collision on the server.",
+				"在服务器建立权威 MC 方块碰撞。" ),
 			item( "mc_server_collision_chunk_span", "Server chunk span", "服务器区块范围", "number",
 				"Extra chunk radius around server collision AABBs.",
 				"服务器碰撞 AABB 周围额外保留的区块半径。", { unit = "chunks" } ),

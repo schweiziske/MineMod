@@ -15,6 +15,7 @@ local loadPerfStartKB = collectgarbage and collectgarbage( "count" ) or 0
 local SHARED = {
 	"mc/state/sh_network_protocol.lua",
 	"mc/sh_config.lua",
+	"mc/sh_world_adapter.lua",
 	"mc/sh_config_ui.lua",
 	"mc/sh_daycycle.lua",
 	"mc/sh_i18n.lua",
@@ -62,6 +63,7 @@ local SHARED = {
 	"mc/sh_block_cluster.lua",
 	"mc/sh_player.lua",
 	"mc/state/sh_section.lua",
+	"mc/state/sh_binary_section_patch.lua",
 	"mc/state/cl_state_visual_catalog.lua",
 	"mc/state/cl_state_selection_boxes.lua",
 	"mc/sh_voxel.lua",
@@ -77,8 +79,11 @@ local SERVER_FILES = {
 	"mc/sv_world.lua",
 	"mc/creative/sv_state_selection.lua",
 	"mc/state/sv_save_codec.lua",
+	"mc/state/sv_region_save.lua",
+	"mc/state/sv_region_persistence.lua",
 	"mc/state/sv_network_transport.lua",
 	"mc/state/sv_block_transaction.lua",
+	"mc/state/sv_column_streaming.lua",
 	"mc/block_update/sv_scheduler.lua",
 	"mc/redstone/sv_inputs.lua",
 	"mc/liquid/sv_world_collision.lua",
@@ -235,8 +240,10 @@ if CLIENT then
 		"Handshake", "SetBlockDefs", "SetLightDefs", "CreateChunk", "ApplyChunk", "SetCellsBatch",
 		"SetCell", "GetCell", "GetChunkCells", "Think", "DrawChunk", "UnloadChunk",
 		"ClearWorld", "Shutdown", "GetStats", "StartBlockLightRebuild",
-		"PollBlockLightRebuild", "RebuildBlockLight", "GetBlockLightChunk", "GetSkyLightChunk",
+		"PollBlockLightRebuild", "CancelBlockLightRebuild", "RebuildBlockLight", "GetBlockLightChunk", "GetSkyLightChunk",
+		"DrawVisible", "SetChunkVisible", "SetSimpleGreedy", "SetDirectionalDraw", "SetOcclusionCull", "SetLod",
 	}
+	local NATIVE_MODULE_ABI = 11
 
 	local function expectedNativeModulePath()
 		if not ( system and system.IsWindows and system.IsWindows() ) then return nil end
@@ -253,7 +260,7 @@ if CLIENT then
 
 		local modulePath = expectedNativeModulePath()
 		MC.NativeMeshModulePath = modulePath
-		local modulePresent = mcmesh ~= nil
+		local modulePresent = istable( mcmesh ) and isfunction( mcmesh.AbiVersion )
 		local loaded, loadError = modulePresent, nil
 		if not modulePresent then
 			if not modulePath then
@@ -275,10 +282,15 @@ if CLIENT then
 		end
 
 		local usable = loaded and istable( mcmesh ) and isfunction( mcmesh.AbiVersion )
-		local failureReason = loaded and "invalid module table" or tostring( loadError or "module load failed" )
+		local failureReason
+		if usable then failureReason = nil
+		elseif loadError ~= nil then failureReason = tostring( loadError )
+		elseif mcmesh ~= nil then failureReason = "invalid module table (type=" .. tostring( type( mcmesh ) ) .. ")"
+		else failureReason = "module did not publish mcmesh"
+		end
 		if usable then
 			local abiOK, abi = pcall( mcmesh.AbiVersion )
-			usable = abiOK and abi == 6
+			usable = abiOK and abi == NATIVE_MODULE_ABI
 			if not usable then failureReason = "ABI mismatch" end
 		end
 		if usable then
@@ -401,8 +413,8 @@ end
 
 -- Public API lifecycle. MC.APIAvailable fires synchronously while the block/
 -- state registries are still open (external addons register custom content
--- here). The freeze happens on the zero-delay timers scheduled during include,
--- so queuing the ready signal now runs it after them.
+-- here). The freeze happens on the zero-delay timers scheduled during include
+-- (sh_block_states.lua), so queuing the ready signal now runs it after them.
 if MC.RunEvent then MC.RunEvent( "MC.APIAvailable", MC.API and MC.API.VERSION or 0 ) end
 if MC.API and MC.API._FireReady then timer.Simple( 0, MC.API._FireReady ) end
 

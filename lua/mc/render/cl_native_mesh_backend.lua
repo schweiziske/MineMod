@@ -36,8 +36,53 @@ local CONVAR_ENABLED = CreateClientConVar( "mc_native_mesh", "1", true, false,
 	"MCSWEP native mesh backend: 1 = use mcswep_native_mesh module when available, 0 = pure Lua" )
 local CONVAR_THINK_MS = CreateClientConVar( "mc_native_think_ms", "3", true, false,
 	"Per-frame budget (ms) for native mesh finalization" )
+local CONVAR_GREEDY = CreateClientConVar( "mc_native_greedy", "1", true, false,
+	"Simple native greedy meshing for opaque full cubes" )
+local CONVAR_DIRECTIONAL_DRAW = CreateClientConVar( "mc_native_directional_draw", "0", true, false,
+	"Draw only native opaque face-direction ranges which can face the camera" )
+local CONVAR_OCCLUSION_CULL = CreateClientConVar( "mc_native_occlusion_cull", "0", true, false,
+	"Conservative native Section portal occlusion culling" )
+local CONVAR_LOD = CreateClientConVar( "mc_native_lod", "0", true, false,
+	"Native 2x2x2 far-distance opaque LOD" )
+local CONVAR_LOD_START = CreateClientConVar( "mc_native_lod_start", "24", true, false,
+	"Native LOD start distance in chunks" )
 
-local ADAPTER_ABI = 6   -- ABI 5 lighting contract + per-state native visual routing
+local ADAPTER_ABI = 11  -- ABI 11 can cancel an in-flight whole-world light rebuild
+local PERF_SAMPLE_CAPACITY = 240
+
+local function newPerfRing()
+	return { values = {}, next = 1, count = 0 }
+end
+
+local function newNativePerf()
+	return {
+		startedAt = SysTime(),
+		draw = { [0] = newPerfRing(), [1] = newPerfRing() },
+		think = newPerfRing(),
+	}
+end
+
+local function nextPerfSample( ring )
+	local sample = ring.values[ring.next]
+	if not sample then
+		sample = {}
+		ring.values[ring.next] = sample
+	end
+	ring.next = ring.next % PERF_SAMPLE_CAPACITY + 1
+	ring.count = math.min( ring.count + 1, PERF_SAMPLE_CAPACITY )
+	return sample
+end
+
+local function percentile( ring, field, fraction )
+	local values = {}
+	for _, sample in pairs( ring.values ) do
+		local value = tonumber( sample[field] )
+		if value then values[#values + 1] = value end
+	end
+	if #values == 0 then return nil end
+	table.sort( values )
+	return values[math.Clamp( math.ceil( #values * fraction ), 1, #values )]
+end
 
 local function newPackProfile()
 	return {
@@ -69,6 +114,7 @@ local state = {
 	active = false,
 	moduleProbeDone = MC.NativeMeshModuleProbeDone == true,
 	moduleUnavailable = MC.NativeMeshModuleProbeDone == true and MC.NativeMeshModuleAvailable == false,
+	startupFailureReason = nil,
 	failed = false,          -- 娓叉煋涓€旂疆浣? Think 閲岀粺涓€澶勭悊鍥為€€
 	shuttingDown = false,
 	shutdownCalled = false,
@@ -95,7 +141,16 @@ local state = {
 	incrementalLightCalls = 0,
 	incrementalLightCells = 0,
 	incrementalLightLastMS = 0,
+	nextVisibleTouch = 0,
+	nativeDrawLast = {},
+	nativeDrawMeta = {},
+	nativePerf = newNativePerf(),
 }
+
+local function nativeLightingEnabled()
+	local cv = MC.LightEnabled or ( GetConVar and GetConVar( "mc_light_enabled" ) )
+	return not cv or not cv.GetBool or cv:GetBool() == true
+end
 
 local function applyNativeLightChanges( result, urgent )
 	if not istable( result ) then return 0 end
@@ -175,6 +230,114 @@ function MC.NativeChunkBackend.IsActive()
 	return state.active and not state.failed and mcmesh ~= nil
 end
 function MC.NativeChunkBackend.Epoch() return state.epoch end
+
+local function signedI32LE( blob, index )
+	local a, b, c, d = string.byte( blob, index, index + 3 )
+	if not d then return nil end
+	local value = a + b * 256 + c * 65536 + d * 16777216
+	return value >= 2147483648 and value - 4294967296 or value
+end
+
+local function touchNativeVisibleKeys( blob )
+	if not isstring( blob ) or #blob % 12 ~= 0 or not MC.TouchGpuChunkLightTexture then return end
+	for index = 1, #blob, 12 do
+		local cx = signedI32LE( blob, index )
+		local cy = signedI32LE( blob, index + 4 )
+		local cz = signedI32LE( blob, index + 8 )
+		if cx and cy and cz then MC.TouchGpuChunkLightTexture( MC.ChunkKey( cx, cy, cz ) ) end
+	end
+end
+
+local function nativePassMeta( pass )
+	local cached = state.nativeDrawMeta[pass]
+	local now = RealTime()
+	if cached and now < ( cached.nextRefresh or 0 ) then return cached end
+	local translucent = pass == 1
+	local material = MC.CurrentChunkMaterial and MC.CurrentChunkMaterial( translucent )
+		or ( translucent and MC.MaterialTranslucent or MC.Material )
+	local materialName = tostring( material or "unavailable" )
+	if material and material.GetName then
+		local ok, name = pcall( material.GetName, material )
+		if ok and name then materialName = tostring( name ) end
+	end
+	local lightTexture = MC.IsGpuLightTextureMaterial and MC.IsGpuLightTextureMaterial( material ) == true
+		or material == MC.MaterialGpuLightTexture
+		or material == MC.MaterialGpuOpaque
+	local meta = cached or {}
+	meta.material = materialName
+	meta.profile = tostring( MC.CurrentMeshLightStyle and MC.CurrentMeshLightStyle() or "unknown" )
+	meta.lightTexture = lightTexture == true
+	meta.nextRefresh = now + 1
+	state.nativeDrawMeta[pass] = meta
+	return meta
+end
+
+local function recordNativeDrawSample( pass, result )
+	local meta = nativePassMeta( pass )
+	local sample = nextPerfSample( state.nativePerf.draw[pass] )
+	sample.frame = FrameNumber()
+	sample.frameMS = FrameTime() * 1000
+	sample.testedChunks = tonumber( result.tested ) or 0
+	sample.visibleChunks = tonumber( result.visible ) or 0
+	sample.drawnChunks = tonumber( result.drawn ) or 0
+	sample.testedSections = tonumber( result.sectionsTested ) or 0
+	sample.visibleSections = tonumber( result.sectionsVisible ) or 0
+	sample.drawnSections = tonumber( result.sectionsDrawn ) or 0
+	sample.meshes = tonumber( result.meshesDrawn ) or 0
+	sample.verticesCandidate = tonumber( result.verticesCandidate ) or 0
+	sample.vertices = tonumber( result.verticesDrawn ) or 0
+	sample.verticesFullDetail = tonumber( result.verticesFullDetail ) or sample.verticesCandidate
+	sample.verticesLodCulled = tonumber( result.verticesLodCulled ) or 0
+	sample.verticesDirectionCulled = tonumber( result.verticesDirectionCulled ) or 0
+	sample.lodSections = tonumber( result.lodSectionsDrawn ) or 0
+	sample.lodMeshes = tonumber( result.lodMeshesDrawn ) or 0
+	sample.lodStartChunks = tonumber( result.lodStartChunks ) or 0
+	sample.occlusionTestedSections = tonumber( result.sectionsOcclusionTested ) or 0
+	sample.occlusionCulledSections = tonumber( result.sectionsOcclusionCulled ) or 0
+	sample.occlusionCulledChunks = tonumber( result.chunksOcclusionCulled ) or 0
+	sample.occlusionComponentSections = tonumber( result.occlusionComponentSections ) or 0
+	sample.occlusionReachableSections = tonumber( result.occlusionReachableSections ) or 0
+	sample.triangles = tonumber( result.trianglesDrawn ) or 0
+	sample.directionalDraw = result.directionalDraw == true
+	sample.lod = result.lod == true
+	sample.lodApplied = result.lodApplied == true
+	sample.occlusionCull = result.occlusionCull == true
+	sample.occlusionApplied = result.occlusionApplied == true
+	sample.drawUs = tonumber( result.nativeUs ) or 0
+	sample.cullUs = tonumber( result.cullUs ) or 0
+	sample.material = meta.material
+	sample.profile = meta.profile
+	sample.lightTexture = meta.lightTexture
+end
+
+function MC.NativeChunkBackend.DrawVisible( pass, eye, forward, right, up, tanX, tanY,
+	offsetX, offsetY, offsetZ, distance, frustum, horizontalDistance )
+	if not MC.NativeChunkBackend.IsActive() or not isfunction( mcmesh.DrawVisible ) then return nil end
+	local collectKeys = pass == 0 and RealTime() >= state.nextVisibleTouch
+	if collectKeys then state.nextVisibleTouch = RealTime() + 0.25 end
+	local ok, result = pcall( mcmesh.DrawVisible,
+		pass, eye.x, eye.y, eye.z,
+		forward.x, forward.y, forward.z,
+		right.x, right.y, right.z,
+		up.x, up.y, up.z,
+		tanX, tanY, offsetX, offsetY, offsetZ, distance,
+		frustum == true, horizontalDistance == true, collectKeys )
+	if not ok or not istable( result ) then state.failed = true; return nil end
+	-- Native culling is one frame asynchronous. Consume a completed key batch
+	-- whenever it arrives instead of requiring it to match this frame's request.
+	touchNativeVisibleKeys( result.visibleKeys )
+	state.nativeDrawLast[pass] = result
+	recordNativeDrawSample( pass, result )
+	return result
+end
+
+function MC.NativeChunkBackend.SetChunkVisible( key, visible )
+	if not MC.NativeChunkBackend.IsActive() or not isfunction( mcmesh.SetChunkVisible ) then return false end
+	local cx, cy, cz = MC.ChunkKeyToCoords( key )
+	if not cx then return false end
+	local ok, result = pcall( mcmesh.SetChunkVisible, cx, cy, cz, visible == true )
+	return ok and result == true
+end
 function MC.NativeChunkBackend.CreateChunk( chunk )
 	if not MC.NativeChunkBackend.IsActive() or not chunk or not isfunction( mcmesh.CreateChunk ) then return false end
 	local ok, result = pcall( mcmesh.CreateChunk, chunk.cx, chunk.cy, chunk.cz )
@@ -193,6 +356,87 @@ function MC.NativeChunkBackend.ApplyChunkCells( chunk, cells, replace )
 	state.packProfile.nativeBatchCells = state.packProfile.nativeBatchCells + math.floor( #cells / 2 )
 	chunk.nativeMeshEpoch = state.epoch
 	if ( MC.LightingBulkLoadDepth or 0 ) <= 0 then MC.NativeChunkBackend.ScheduleBlockLightRebuild( 0.02 ) end
+	return true
+end
+function MC.NativeChunkBackend.SupportsCompressedPatches()
+	return MC.NativeChunkBackend.IsActive()
+		and mcmesh and isfunction( mcmesh.StartCompressedPatchDecode )
+		and isfunction( mcmesh.PollCompressedPatchDecode )
+		and isfunction( mcmesh.CommitCompressedPatch )
+		and isfunction( mcmesh.CancelCompressedPatchDecode )
+end
+function MC.NativeChunkBackend.StartCompressedPatchDecode( compressed, generation, revision, chunks, cells )
+	if not MC.NativeChunkBackend.SupportsCompressedPatches() or not isstring( compressed ) then return nil end
+	local ok, jobId = pcall( mcmesh.StartCompressedPatchDecode,
+		compressed, generation, revision, state.epoch, chunks, cells )
+	if not ok or not isnumber( jobId ) or jobId <= 0 then return nil end
+	return jobId, state.epoch
+end
+function MC.NativeChunkBackend.PollCompressedPatchDecode( jobId )
+	if not MC.NativeChunkBackend.SupportsCompressedPatches() then return nil end
+	local ok, result = pcall( mcmesh.PollCompressedPatchDecode, jobId )
+	if not ok or not istable( result ) then state.failed = true; return nil end
+	return result
+end
+function MC.NativeChunkBackend.CommitCompressedPatch( jobId, palette, include )
+	if not MC.NativeChunkBackend.SupportsCompressedPatches() then return nil end
+	local ok, result = pcall( mcmesh.CommitCompressedPatch, jobId, palette, include )
+	if not ok or not istable( result ) then state.failed = true; return nil end
+	MC.NativeChunkBackend.ScheduleBlockLightRebuild( 0.02 )
+	return result
+end
+function MC.NativeChunkBackend.SupportsBinarySectionPatches()
+	return MC.NativeChunkBackend.IsActive()
+		and mcmesh and isfunction( mcmesh.StartBinarySectionPatchDecode )
+		and isfunction( mcmesh.PollBinarySectionPatchDecode )
+		and isfunction( mcmesh.CommitBinarySectionPatch )
+		and isfunction( mcmesh.CancelCompressedPatchDecode )
+end
+function MC.NativeChunkBackend.StartBinarySectionPatchDecode( payload, compression, rawBytes, generation, revision, chunks, cells )
+	if not MC.NativeChunkBackend.SupportsBinarySectionPatches() or not isstring( payload ) then return nil end
+	local ok, jobId = pcall( mcmesh.StartBinarySectionPatchDecode,
+		payload, compression, rawBytes, generation, revision, state.epoch, chunks, cells )
+	if not ok or not isnumber( jobId ) or jobId <= 0 then return nil end
+	return jobId, state.epoch
+end
+function MC.NativeChunkBackend.PollBinarySectionPatchDecode( jobId )
+	if not MC.NativeChunkBackend.SupportsBinarySectionPatches() then return nil end
+	local ok, result = pcall( mcmesh.PollBinarySectionPatchDecode, jobId )
+	if not ok or not istable( result ) then state.failed = true; return nil end
+	return result
+end
+function MC.NativeChunkBackend.CommitBinarySectionPatch( jobId, include )
+	if not MC.NativeChunkBackend.SupportsBinarySectionPatches() then return nil end
+	local ok, result = pcall( mcmesh.CommitBinarySectionPatch, jobId, include )
+	if not ok or not istable( result ) then state.failed = true; return nil end
+	MC.NativeChunkBackend.ScheduleBlockLightRebuild( 0.02 )
+	return result
+end
+function MC.NativeChunkBackend.CancelCompressedPatchDecode( jobId )
+	if not mcmesh or not isfunction( mcmesh.CancelCompressedPatchDecode ) then return false end
+	local ok, result = pcall( mcmesh.CancelCompressedPatchDecode, jobId )
+	return ok and result == true
+end
+function MC.NativeChunkBackend.CancelAllCompressedPatchDecodes()
+	if not mcmesh or not isfunction( mcmesh.CancelAllCompressedPatchDecodes ) then return false end
+	local ok, result = pcall( mcmesh.CancelAllCompressedPatchDecodes, state.epoch )
+	return ok and result == true
+end
+function MC.NativeChunkBackend.ClearWorld()
+	if not MC.NativeChunkBackend.IsActive() or not mcmesh or not isfunction( mcmesh.ClearWorld ) then return false end
+	MC.NativeChunkBackend.CancelAllCompressedPatchDecodes()
+	if isfunction( mcmesh.CancelBlockLightRebuild ) then pcall( mcmesh.CancelBlockLightRebuild ) end
+	local ok = pcall( mcmesh.ClearWorld )
+	if not ok then state.failed = true return false end
+	for key in pairs( state.proxied ) do
+		MC.Meshes[key] = nil
+		MC.MeshesTrans[key] = nil
+	end
+	state.proxied = {}
+	state.pushedFrame = {}
+	state.lightPending, state.lightRunning, state.lightReady = false, false, false
+	state.lightCache, state.skyCache, state.lightDue, state.lightFirstPending = {}, {}, 0, 0
+	if MC.MarkChunkDrawListDirty then MC.MarkChunkDrawListDirty() end
 	return true
 end
 function MC.NativeChunkBackend.SetCell( chunk, li, stateId )
@@ -246,6 +490,10 @@ function MC.NativeChunkBackend.RebuildBlockLight()
 	return ok and result or false
 end
 function MC.NativeChunkBackend.StartBlockLightRebuild()
+	if not nativeLightingEnabled() then
+		MC.NativeChunkBackend.CancelBlockLightRebuild( "disabled" )
+		return false
+	end
 	if not MC.NativeChunkBackend.IsActive() or not isfunction( mcmesh.StartBlockLightRebuild ) then return false end
 	local ok, result = pcall( mcmesh.StartBlockLightRebuild )
 	return ok and result == true
@@ -254,6 +502,21 @@ function MC.NativeChunkBackend.PollBlockLightRebuild()
 	if not MC.NativeChunkBackend.IsActive() or not isfunction( mcmesh.PollBlockLightRebuild ) then return false end
 	local ok, result = pcall( mcmesh.PollBlockLightRebuild )
 	return ok and result or false
+end
+function MC.NativeChunkBackend.CancelBlockLightRebuild( reason )
+	local ok, result = false, false
+	if mcmesh and isfunction( mcmesh.CancelBlockLightRebuild ) then
+		ok, result = pcall( mcmesh.CancelBlockLightRebuild )
+	end
+	state.lightPending = false
+	state.lightRunning = false
+	state.lightDue = 0
+	state.lightFirstPending = 0
+	state.lightReady = false
+	state.lightCache = {}
+	state.skyCache = {}
+	state.lightLastStatus = tostring( reason or "cancelled" )
+	return ok and result == true
 end
 function MC.NativeChunkBackend.GetBlockLightChunk( cx, cy, cz )
 	if not MC.NativeChunkBackend.IsActive() or not isfunction( mcmesh.GetBlockLightChunk ) then return nil end
@@ -267,6 +530,12 @@ function MC.NativeChunkBackend.GetSkyLightChunk( cx, cy, cz )
 end
 function MC.NativeChunkBackend.ScheduleBlockLightRebuild( delay )
 	if not MC.NativeChunkBackend.IsActive() then return false end
+	if not nativeLightingEnabled() then
+		if state.lightPending or state.lightRunning or state.lightReady or state.lightLastStatus ~= "disabled" then
+			MC.NativeChunkBackend.CancelBlockLightRebuild( "disabled" )
+		end
+		return false
+	end
 	local now = CurTime()
 	state.lightScheduleCalls = state.lightScheduleCalls + 1
 	if state.lightPending or state.lightRunning then state.lightCoalesced = state.lightCoalesced + 1 end
@@ -279,18 +548,6 @@ function MC.NativeChunkBackend.ScheduleBlockLightRebuild( delay )
 	local deadline = ( state.lightFirstPending or now ) + 0.25
 	state.lightDue = math.min( deadline, math.max( state.lightDue or 0, wanted ) )
 	return true
-end
--- Whole padded halo grid ((CS+2)^2 x (CH+2) cells, byte pairs block/sky in
--- packedPaddedCell order) in ONE native call — the GPU light-texture whole
--- bake used to make ~11k per-cell sampler calls per tile. sky byte 255 means
--- the cell's chunk is not mirrored; the consumer falls back to the Lua
--- column-exposure test, matching GetLightingAt's missing-blob semantics.
-function MC.NativeChunkBackend.GetLightingHaloChunk( cx, cy, cz )
-	if not state.lightReady then return nil end
-	if not ( mcmesh and isfunction( mcmesh.GetLightingHalo ) ) then return nil end
-	local ok, blob = pcall( mcmesh.GetLightingHalo, cx, cy, cz )
-	if not ok or not isstring( blob ) then return nil end
-	return blob
 end
 function MC.NativeChunkBackend.GetSkyLightAt( bx, by, bz )
 	if not state.lightReady then return nil end
@@ -319,6 +576,15 @@ function MC.NativeChunkBackend.GetBlockLightAt( bx, by, bz )
 	end
 	if blob == false then return 0 end
 	return string.byte( blob, li + 1 ) or 0
+end
+-- Whole padded light tile as flat run records (4 bytes each: px, py, len,
+-- block | sky<<4). One C++ call replaces ~11k Lua per-texel samples during a
+-- whole-chunk atlas bake. Optional export: an older DLL simply returns nil and
+-- the bake falls back to the per-cell Lua path.
+function MC.NativeChunkBackend.GetChunkLightTile( cx, cy, cz )
+	if not MC.NativeChunkBackend.IsLightReady() or not isfunction( mcmesh.GetChunkLightTile ) then return nil end
+	local ok, result = pcall( mcmesh.GetChunkLightTile, cx, cy, cz )
+	return ok and isstring( result ) and result or nil
 end
 function MC.NativeChunkBackend.IsLightReady()
 	return MC.NativeChunkBackend.IsActive() and state.lightReady == true
@@ -431,6 +697,19 @@ local function gpuLightProfileActive()
 		mat = ok2 and m or nil
 	end
 	return mat ~= nil
+end
+
+local function nativeGreedyMaterialCompatible()
+	if not MC.CurrentChunkMaterial then return false end
+	local ok, material = pcall( MC.CurrentChunkMaterial, false )
+	if not ok or not material then return false end
+	if material == MC.MaterialGpuOpaque then return true end
+	return MC.IsGpuLightTextureMaterial
+		and MC.IsGpuLightTextureMaterial( material ) == true
+end
+
+local function effectiveNativeGreedy()
+	return CONVAR_GREEDY:GetBool() and nativeGreedyMaterialCompatible()
 end
 
 ----------------------------------------------------------------- blockdefs 鎵撳寘
@@ -1203,12 +1482,15 @@ local function activate()
 	for _, chunk in pairs( MC.World or {} ) do
 		if chunk and ( chunk.count or 0 ) > 0 then adoptNativeChunkStorage( chunk ) end
 	end
+	for key in pairs( MC.StreamHiddenChunkKeys or {} ) do MC.NativeChunkBackend.SetChunkVisible( key, false ) end
+	state.nextVisibleTouch = 0
 	log( ">>> backend now: NATIVE (" .. pushed .. " chunks pushed in "
 		.. math.Round( ( SysTime() - t0 ) * 1000, 1 ) .. "ms)" )
 	MC.NativeChunkBackend.ScheduleBlockLightRebuild( 0 )
 end
 
 deactivate = function( reason )
+	MC.NativeChunkBackend.CancelAllCompressedPatchDecodes()
 	state.active = false
 	local materialized, materializeFailed = 0, 0
 	for _, chunk in pairs( MC.World or {} ) do
@@ -1274,7 +1556,11 @@ hook.Add( "Think", "mcswep_native_think", function()
 		log( "detected backend registry reload, re-registering" )
 		if not patch() then return deactivate( "backend registry reload failed" ) end
 	end
-	if state.lightRunning then
+	if not nativeLightingEnabled() then
+		if state.lightPending or state.lightRunning or state.lightReady or state.lightLastStatus ~= "disabled" then
+			MC.NativeChunkBackend.CancelBlockLightRebuild( "disabled" )
+		end
+	elseif state.lightRunning then
 		local lightResult = MC.NativeChunkBackend.PollBlockLightRebuild()
 		if istable( lightResult ) and lightResult.status ~= "running" then
 			state.lightRunning = false
@@ -1304,7 +1590,34 @@ hook.Add( "Think", "mcswep_native_think", function()
 			state.lightFirstPending = 0
 		end
 	end
+	local nativeThinkStarted = SysTime()
 	local ok, result = pcall( mcmesh.Think, math.Clamp( CONVAR_THINK_MS:GetFloat(), 0.5, 16 ) )
+	local nativeThinkMS = ( SysTime() - nativeThinkStarted ) * 1000
+	if MC.StreamPerformanceAddFrameStage then
+		MC.StreamPerformanceAddFrameStage( "native.think", nativeThinkMS, {
+			nativePending = istable( result ) and ( tonumber( result.pending ) or 0 ) or 0,
+			nativeCommitted = istable( result ) and ( tonumber( result.committed ) or 0 ) or 0,
+		} )
+	end
+	if ok and istable( result ) and istable( result.profile ) then
+		local visited = tonumber( result.profile.resultsVisited ) or 0
+		local queueWaitUs = tonumber( result.profile.queueWaitUs ) or 0
+		MC.NativeMeshLastThinkProfile = {
+			completedAt = SysTime(), callMS = nativeThinkMS,
+			pending = tonumber( result.pending ) or 0,
+			committed = tonumber( result.committed ) or 0,
+			profile = table.Copy( result.profile ),
+		}
+		local sample = nextPerfSample( state.nativePerf.think )
+		sample.frame = FrameNumber()
+		sample.callMS = nativeThinkMS
+		sample.uploadUs = tonumber( result.profile.uploadUs ) or 0
+		sample.bytesUploaded = tonumber( result.profile.bytesUploaded ) or 0
+		sample.verticesUploaded = tonumber( result.profile.verticesUploaded ) or 0
+		sample.queueWaitUs = queueWaitUs
+		sample.queueWaitAvgUs = visited > 0 and queueWaitUs / visited or 0
+		sample.queueSamples = visited
+	end
 	if not ok then
 		log( "Think error: " .. tostring( result ) )
 		return deactivate( "Think error" )
@@ -1323,23 +1636,24 @@ end )
 
 ----------------------------------------------------------------- 鍚姩寮曞
 local function tryStart()
-	if state.shuttingDown or state.shutdownCalled then return false end
+	state.startupFailureReason = nil
+	if state.shuttingDown or state.shutdownCalled then state.startupFailureReason = "shutting down"; return false end
 	if state.active then return true end
-	if not CONVAR_ENABLED:GetBool() then return false end
+	if not CONVAR_ENABLED:GetBool() then state.startupFailureReason = "mc_native_mesh disabled"; return false end
 	if state.moduleUnavailable
 	or ( MC.NativeMeshModuleProbeDone == true and MC.NativeMeshModuleAvailable == false ) then
 		return lockToLuaBackend( MC.NativeMeshModuleFailureReason )
 	end
 	if not ( MC and MC.BuildChunkMesh and MC.World and MC.Meshes and MC.MeshesTrans
-		and MC.GetChunkByKey and MC.ChunkKeyToCoords ) then return false end
-	if not probeNativeModule() then return false end
+		and MC.GetChunkByKey and MC.ChunkKeyToCoords ) then state.startupFailureReason = "MC pipeline not ready"; return false end
+	if not probeNativeModule() then state.startupFailureReason = MC.NativeMeshModuleFailureReason or "module probe failed"; return false end
 	if not ( mcmesh.AbiVersion and mcmesh.AbiVersion() == ADAPTER_ABI ) then
 		log( "ABI mismatch (module " .. tostring( mcmesh.AbiVersion and mcmesh.AbiVersion() )
 			.. ", adapter " .. ADAPTER_ABI .. "), staying on Lua path" )
 		return lockToLuaBackend( "ABI mismatch" )
 	end
 	-- 瀵煎嚭闈㈡鏌? 濂戠害鍑芥暟蹇呴』鍏ㄩ儴瀛樺湪(绌哄３涔熻), 缂轰竴涓氨鐐瑰悕骞剁暀鍦?Lua 璺緞
-	for _, fname in ipairs( { "Handshake", "SetBlockDefs", "SetLightDefs", "CreateChunk", "ApplyChunk", "SetCellsBatch", "SetCell", "GetCell", "GetChunkCells", "RebuildBlockLight", "StartBlockLightRebuild", "PollBlockLightRebuild", "GetBlockLightChunk", "GetSkyLightChunk", "UnloadChunk",
+	for _, fname in ipairs( { "Handshake", "SetBlockDefs", "SetLightDefs", "SetSimpleGreedy", "SetDirectionalDraw", "SetOcclusionCull", "SetLod", "CreateChunk", "ApplyChunk", "SetCellsBatch", "SetCell", "GetCell", "GetChunkCells", "RebuildBlockLight", "StartBlockLightRebuild", "PollBlockLightRebuild", "CancelBlockLightRebuild", "GetBlockLightChunk", "GetSkyLightChunk", "DrawVisible", "SetChunkVisible", "UnloadChunk",
 		"ClearWorld", "Think", "DrawChunk", "GetStats", "Shutdown" } ) do
 		if not isfunction( mcmesh[fname] ) then
 			log( "module missing mcmesh." .. fname .. "(), staying on Lua path" )
@@ -1348,6 +1662,7 @@ local function tryStart()
 	end
 	-- GPU 鍏夌収妗ｆ闂ㄦ: 闈?GPU light texture 椋庢牸涓?native 鐨勫浐瀹?payload 浼氶敊鍏?
 	if not gpuLightProfileActive() then
+		state.startupFailureReason = "non-GPU light profile"
 		return false   -- 闈欓粯: 鐜╁鍙兘鍒囦簡鍏夌収椋庢牸, bootstrap 涓嬬閲嶈瘯
 	end
 	-- 鏉愯川鍦ㄥ姞杞芥棭鏈熷彲鑳藉皻鏈垱寤? 鏈氨缁垯闈欓粯杩斿洖, bootstrap 瀹氭椂鍣ㄤ笅绉掗噸璇?
@@ -1355,6 +1670,7 @@ local function tryStart()
 	local matTranslucent = MC.CurrentChunkMaterial and MC.CurrentChunkMaterial( true )
 	if not ( matOpaque and matOpaque.GetName and not matOpaque:IsError()
 		and matTranslucent and matTranslucent.GetName and not matTranslucent:IsError() ) then
+		state.startupFailureReason = "chunk materials not ready"
 		return false
 	end
 	-- 鏉愯川鍚嶅甫 "!" 鍓嶇紑: chunk 鏉愯川鏄繍琛屾椂 CreateMaterial 鐨? C++ 渚?
@@ -1364,9 +1680,31 @@ local function tryStart()
 		MC.CS or 16, MC.CH or 32, MC.RENDER_SECTION_SIZE or 8, MC.BS or 36.5,
 		"!" .. matOpaque:GetName(), "!" .. matTranslucent:GetName() )
 	if shook ~= true then
+		state.startupFailureReason = "handshake rejected"
 		log( "handshake rejected, staying on Lua path" )
 		timer.Remove( "mcswep_native_bootstrap" )
 		return false
+	end
+	local greedyOK, greedyResult = pcall( mcmesh.SetSimpleGreedy, effectiveNativeGreedy() )
+	if not greedyOK or greedyResult ~= true then
+		state.startupFailureReason = "greedy switch rejected"
+		return lockToLuaBackend( "greedy switch rejected" )
+	end
+	local directionalOK, directionalResult = pcall( mcmesh.SetDirectionalDraw, CONVAR_DIRECTIONAL_DRAW:GetBool() )
+	if not directionalOK or directionalResult ~= true then
+		state.startupFailureReason = "directional draw switch rejected"
+		return lockToLuaBackend( "directional draw switch rejected" )
+	end
+	local occlusionOK, occlusionResult = pcall( mcmesh.SetOcclusionCull, CONVAR_OCCLUSION_CULL:GetBool() )
+	if not occlusionOK or occlusionResult ~= true then
+		state.startupFailureReason = "occlusion cull switch rejected"
+		return lockToLuaBackend( "occlusion cull switch rejected" )
+	end
+	local lodStart = math.Clamp( CONVAR_LOD_START:GetFloat(), 0, 4096 )
+	local lodOK, lodResult = pcall( mcmesh.SetLod, CONVAR_LOD:GetBool(), lodStart )
+	if not lodOK or lodResult ~= true then
+		state.startupFailureReason = "LOD switch rejected"
+		return lockToLuaBackend( "LOD switch rejected" )
 	end
 	-- 鏂瑰潡闈欐€佹暟鎹? 鎻℃墜鍚庛€侀涓?ApplyChunk 鍓嶄笂浼犱竴娆°€傚け璐ュ繀椤诲厛娓呯悊
 	-- handshake 鍒涘缓鐨?native 鐘舵€侊紝鍚﹀垯 bootstrap 鐨勪笅涓€娆￠噸璇曚細缁ф壙鍗婂惎鍔ㄧ姸鎬併€?
@@ -1419,6 +1757,7 @@ local function tryStart()
 	end
 	local packMS = ( SysTime() - packStarted ) * 1000
 	if not blob then
+		state.startupFailureReason = "MCBD pack/cache unavailable"
 		clearFailedStartup()
 		return false -- MC.Blocks/Atlas 灏氭湭灏辩华鎴栧畾涔夐潪娉? 涓嬬浠庡共鍑€鐘舵€侀噸璇?
 	end
@@ -1442,6 +1781,7 @@ local function tryStart()
 		end
 	end
 	if not blockAccepted then
+		state.startupFailureReason = "SetBlockDefs rejected"
 		log( "SetBlockDefs rejected (" .. tostring( blob and #blob or 0 ) .. " bytes), staying on Lua path" )
 		clearFailedStartup()
 		timer.Remove( "mcswep_native_bootstrap" )
@@ -1457,6 +1797,7 @@ local function tryStart()
 		lightAccepted = mcmesh.SetLightDefs( lightBlob ) == true
 	end
 	if not lightAccepted then
+		state.startupFailureReason = "SetLightDefs rejected"
 		log( "SetLightDefs rejected (" .. tostring( #lightBlob ) .. " bytes), staying on Lua path" )
 		clearFailedStartup()
 		return false
@@ -1509,6 +1850,54 @@ cvars.AddChangeCallback( "mc_native_mesh", function( _, _, new )
 	-- "0" 鐨勫叧闂敱 Think 閲岀殑 convar 妫€鏌ュ鐞?
 end, "mcswep_native_bridge" )
 
+cvars.AddChangeCallback( "mc_light_enabled", function( _, _, newValue )
+	local value = string.lower( tostring( newValue or "" ) )
+	local enabled = value ~= "0" and value ~= "false" and value ~= "off"
+	if not enabled then
+		MC.NativeChunkBackend.CancelBlockLightRebuild( "disabled" )
+		return
+	end
+	if state.active and MC.NativeChunkBackend.ScheduleBlockLightRebuild( 0 ) then
+		state.lightLastStatus = "queued"
+	end
+end, "mcswep_native_lighting" )
+
+cvars.AddChangeCallback( "mc_native_greedy", function()
+	if not state.active or not mcmesh or not isfunction( mcmesh.SetSimpleGreedy ) then return end
+	local effective = effectiveNativeGreedy()
+	local ok, accepted = pcall( mcmesh.SetSimpleGreedy, effective )
+	if not ok or accepted ~= true then return log( "greedy switch failed" ) end
+	log( "simple greedy requested=" .. ( CONVAR_GREEDY:GetBool() and "1" or "0" )
+		.. " effective=" .. ( effective and "1" or "0" ) .. "; native sections queued for rebuild" )
+end, "mcswep_native_greedy" )
+
+cvars.AddChangeCallback( "mc_native_directional_draw", function( _, _, new )
+	if not state.active or not mcmesh or not isfunction( mcmesh.SetDirectionalDraw ) then return end
+	local ok, accepted = pcall( mcmesh.SetDirectionalDraw, tonumber( new ) == 1 )
+	if not ok or accepted ~= true then return log( "directional draw switch failed" ) end
+	log( "directional draw=" .. ( tonumber( new ) == 1 and "1" or "0" ) .. "; no mesh rebuild required" )
+end, "mcswep_native_directional_draw" )
+
+cvars.AddChangeCallback( "mc_native_occlusion_cull", function( _, _, new )
+	if not state.active or not mcmesh or not isfunction( mcmesh.SetOcclusionCull ) then return end
+	local ok, accepted = pcall( mcmesh.SetOcclusionCull, tonumber( new ) == 1 )
+	if not ok or accepted ~= true then return log( "occlusion cull switch failed" ) end
+	log( "occlusion cull=" .. ( tonumber( new ) == 1 and "1" or "0" ) .. "; no mesh rebuild required" )
+end, "mcswep_native_occlusion_cull" )
+
+local function applyNativeLod()
+	if not state.active or not mcmesh or not isfunction( mcmesh.SetLod ) then return end
+	local enabled = CONVAR_LOD:GetBool()
+	local startChunks = math.Clamp( CONVAR_LOD_START:GetFloat(), 0, 4096 )
+	local ok, accepted = pcall( mcmesh.SetLod, enabled, startChunks )
+	if not ok or accepted ~= true then return log( "LOD switch failed" ) end
+	log( "LOD=" .. ( enabled and "1" or "0" ) .. " startChunks=" .. math.Round( startChunks, 2 )
+		.. ( enabled and "; first activation queues missing LOD meshes" or "; full-detail draw restored immediately" ) )
+end
+
+cvars.AddChangeCallback( "mc_native_lod", applyNativeLod, "mcswep_native_lod" )
+cvars.AddChangeCallback( "mc_native_lod_start", applyNativeLod, "mcswep_native_lod_start" )
+
 -- Process teardown is not a fallback: stop scheduling, restore Lua functions,
 -- discard proxy bookkeeping, and call the native shutdown exactly once.
 hook.Add( "ShutDown", "mcswep_native_shutdown", function()
@@ -1519,6 +1908,12 @@ hook.Add( "ShutDown", "mcswep_native_shutdown", function()
 	timer.Remove( "mcswep_native_fallback_rebuild" )
 	hook.Remove( "Think", "mcswep_native_think" )
 	cvars.RemoveChangeCallback( "mc_native_mesh", "mcswep_native_bridge" )
+	cvars.RemoveChangeCallback( "mc_light_enabled", "mcswep_native_lighting" )
+	cvars.RemoveChangeCallback( "mc_native_greedy", "mcswep_native_greedy" )
+	cvars.RemoveChangeCallback( "mc_native_directional_draw", "mcswep_native_directional_draw" )
+	cvars.RemoveChangeCallback( "mc_native_occlusion_cull", "mcswep_native_occlusion_cull" )
+	cvars.RemoveChangeCallback( "mc_native_lod", "mcswep_native_lod" )
+	cvars.RemoveChangeCallback( "mc_native_lod_start", "mcswep_native_lod_start" )
 	unpatch()
 	state.active = false
 	state.failed = false
@@ -1547,14 +1942,121 @@ concommand.Add( "mc_native_toggle", function()
 	end
 end, nil, "Hot-swap MCSWEP mesh backend between native (mcswep_native_mesh) and pure Lua for A/B comparison" )
 
+local function latestPerfSample( ring )
+	if ring.count == 0 then return nil end
+	local index = ( ring.next - 2 ) % PERF_SAMPLE_CAPACITY + 1
+	return ring.values[index]
+end
+
+local function perfNumber( value, decimals )
+	if value == nil then return "n/a" end
+	return tostring( math.Round( tonumber( value ) or 0, decimals or 2 ) )
+end
+
+local function nativeProfilingEnabled()
+	if not mcmesh or not isfunction( mcmesh.GetStats ) then return false end
+	local ok, stats = pcall( mcmesh.GetStats )
+	return ok and istable( stats ) and stats.profilingEnabled == true
+end
+
+concommand.Add( "mc_native_perf", function( _, _, args )
+	local action = string.lower( tostring( args and args[1] or "" ) )
+	if action == "on" then
+		if not mcmesh or not isfunction( mcmesh.SetProfiling ) then
+			return log( "perf profiling unavailable: mcmesh.SetProfiling missing" )
+		end
+		local ok, enabled = pcall( mcmesh.SetProfiling, true, true )
+		if not ok or enabled ~= true then return log( "perf profiling enable failed" ) end
+		state.nativePerf = newNativePerf()
+		log( "perf profiling enabled; bounded window reset" )
+	elseif action == "off" then
+		if mcmesh and isfunction( mcmesh.SetProfiling ) then pcall( mcmesh.SetProfiling, false, false ) end
+		log( "perf profiling disabled; draw counters remain available" )
+	elseif action == "reset" then
+		local enabled = nativeProfilingEnabled()
+		if mcmesh and isfunction( mcmesh.SetProfiling ) then pcall( mcmesh.SetProfiling, enabled, true ) end
+		state.nativePerf = newNativePerf()
+		log( "perf window reset" )
+	elseif action ~= "" then
+		return log( "usage: mc_native_perf [on|off|reset]" )
+	end
+
+	log( "perf window = " .. PERF_SAMPLE_CAPACITY .. " samples, age="
+		.. perfNumber( SysTime() - state.nativePerf.startedAt, 1 ) .. "s nativeDetail="
+		.. tostring( nativeProfilingEnabled() ) )
+	local frameRing = state.nativePerf.draw[0]
+	local frame = latestPerfSample( frameRing )
+	if frame then
+		log( "perf.frame frameMS(current/p50/p95)=" .. perfNumber( frame.frameMS ) .. "/"
+			.. perfNumber( percentile( frameRing, "frameMS", 0.50 ) ) .. "/"
+			.. perfNumber( percentile( frameRing, "frameMS", 0.95 ) ) )
+	end
+	for pass = 0, 1 do
+		local ring = state.nativePerf.draw[pass]
+		local sample = latestPerfSample( ring )
+		local label = pass == 0 and "opaque" or "translucent"
+		if sample then
+			log( "perf." .. label .. " samples=" .. ring.count
+				.. " chunks(drawn/visible/tested)=" .. sample.drawnChunks .. "/" .. sample.visibleChunks .. "/" .. sample.testedChunks
+				.. " sections(drawn/visible/tested)=" .. sample.drawnSections .. "/" .. sample.visibleSections .. "/" .. sample.testedSections
+				.. " meshes=" .. sample.meshes .. " vertices(drawn/candidate)=" .. sample.vertices .. "/" .. sample.verticesCandidate
+				.. " lodCulled=" .. sample.verticesLodCulled .. " directionCulled=" .. sample.verticesDirectionCulled
+				.. " triangles=" .. sample.triangles
+				.. " directional=" .. tostring( sample.directionalDraw )
+				.. " lod=" .. tostring( sample.lod ) .. "/" .. tostring( sample.lodApplied )
+				.. " lodSections/meshes=" .. sample.lodSections .. "/" .. sample.lodMeshes
+				.. " lodStart=" .. sample.lodStartChunks
+				.. " occlusion=" .. tostring( sample.occlusionCull ) .. "/" .. tostring( sample.occlusionApplied ) )
+			log( "perf." .. label .. " occlusion sections(culled/tested/reachable/component)="
+				.. sample.occlusionCulledSections .. "/" .. sample.occlusionTestedSections .. "/"
+				.. sample.occlusionReachableSections .. "/" .. sample.occlusionComponentSections
+				.. " chunksCulled=" .. sample.occlusionCulledChunks )
+			log( "perf." .. label .. " drawUs(current/p50/p95)=" .. perfNumber( sample.drawUs ) .. "/"
+				.. perfNumber( percentile( ring, "drawUs", 0.50 ) ) .. "/" .. perfNumber( percentile( ring, "drawUs", 0.95 ) )
+				.. " cullFrameUs(current/p50/p95)=" .. perfNumber( sample.cullUs ) .. "/"
+				.. perfNumber( percentile( ring, "cullUs", 0.50 ) ) .. "/" .. perfNumber( percentile( ring, "cullUs", 0.95 ) ) )
+			log( "perf." .. label .. " material=" .. sample.material .. " lightProfile=" .. sample.profile
+				.. " lightTexture=" .. tostring( sample.lightTexture ) )
+		else
+			log( "perf." .. label .. " = no native draw samples" )
+		end
+	end
+
+	local thinkRing = state.nativePerf.think
+	local think = latestPerfSample( thinkRing )
+	if think then
+		log( "perf.upload samples=" .. thinkRing.count .. " bytes/frame(current/p50/p95)="
+			.. perfNumber( think.bytesUploaded, 0 ) .. "/" .. perfNumber( percentile( thinkRing, "bytesUploaded", 0.50 ), 0 )
+			.. "/" .. perfNumber( percentile( thinkRing, "bytesUploaded", 0.95 ), 0 )
+			.. " uploadUs(current/p50/p95)=" .. perfNumber( think.uploadUs ) .. "/"
+			.. perfNumber( percentile( thinkRing, "uploadUs", 0.50 ) ) .. "/" .. perfNumber( percentile( thinkRing, "uploadUs", 0.95 ) ) )
+		log( "perf.queue avgPerResultUs(current/p50/p95)=" .. perfNumber( think.queueWaitAvgUs ) .. "/"
+			.. perfNumber( percentile( thinkRing, "queueWaitAvgUs", 0.50 ) ) .. "/"
+			.. perfNumber( percentile( thinkRing, "queueWaitAvgUs", 0.95 ) )
+			.. " currentResults=" .. think.queueSamples )
+	else
+		log( "perf.upload/queue = unavailable (run mc_native_perf on, then reproduce the load)" )
+	end
+	log( "perf.alphatest = unavailable: combined in opaque native meshes" )
+	log( "perf.shadow = unavailable: shadow caster does not use native DrawVisible" )
+	log( "perf.gpu = unavailable: source_api_unavailable" )
+end, nil, "Print bounded native render telemetry; on/off controls detailed upload and queue profiling" )
+
 concommand.Add( "mc_native_status", function()
 	local lines = {
 		"backend        = " .. ( state.active and "NATIVE" or "LUA" ),
 		"convar         = mc_native_mesh " .. ( CONVAR_ENABLED:GetBool() and "1" or "0" ),
+		"simple greedy  = requested=" .. ( CONVAR_GREEDY:GetBool() and "1" or "0" )
+			.. " effective=" .. ( effectiveNativeGreedy() and "1" or "0" ),
+		"direction draw = requested=" .. ( CONVAR_DIRECTIONAL_DRAW:GetBool() and "1" or "0" ),
+		"occlusion cull = requested=" .. ( CONVAR_OCCLUSION_CULL:GetBool() and "1" or "0" ),
+		"native LOD     = requested=" .. ( CONVAR_LOD:GetBool() and "1" or "0" )
+			.. " startChunks=" .. math.Round( math.Clamp( CONVAR_LOD_START:GetFloat(), 0, 4096 ), 2 ),
 		"module loaded  = " .. tostring( mcmesh ~= nil ),
 		"module probe   = done=" .. tostring( state.moduleProbeDone )
 			.. " lockedLua=" .. tostring( state.moduleUnavailable ),
 		"module reason  = " .. tostring( MC.NativeMeshModuleFailureReason or "" ),
+		"startup reason = " .. tostring( state.startupFailureReason or "" ),
 		"proxied chunks = " .. table.Count( state.proxied ),
 		"block light    = " .. ( state.lightRunning and "running" or ( state.lightPending and "pending" or state.lightLastStatus ) )
 			.. " ready=" .. tostring( state.lightReady ) .. " lastMS=" .. math.Round( state.lightLastMS or 0, 3 )
@@ -1571,6 +2073,35 @@ concommand.Add( "mc_native_status", function()
 			end
 		end
 	end
+	for pass = 0, 1 do
+		local draw = state.nativeDrawLast[pass]
+		if draw then
+			local meta = state.nativeDrawMeta[pass] or {}
+			lines[#lines + 1] = ( pass == 0 and "draw.opaque" or "draw.trans" )
+				.. " = chunks(drawn/visible/tested) " .. tostring( draw.drawn or 0 ) .. "/"
+				.. tostring( draw.visible or 0 ) .. "/" .. tostring( draw.tested or 0 )
+				.. " sections(drawn/visible/tested)=" .. tostring( draw.sectionsDrawn or 0 ) .. "/"
+				.. tostring( draw.sectionsVisible or 0 ) .. "/" .. tostring( draw.sectionsTested or 0 )
+				.. " meshes=" .. tostring( draw.meshesDrawn or 0 )
+				.. " vertices(drawn/candidate)=" .. tostring( draw.verticesDrawn or 0 ) .. "/"
+				.. tostring( draw.verticesCandidate or 0 )
+				.. " lodCulled=" .. tostring( draw.verticesLodCulled or 0 )
+				.. " directionCulled=" .. tostring( draw.verticesDirectionCulled or 0 )
+				.. " directional=" .. tostring( draw.directionalDraw == true )
+				.. " lod=" .. tostring( draw.lod == true ) .. "/" .. tostring( draw.lodApplied == true )
+				.. " lodSections/meshes=" .. tostring( draw.lodSectionsDrawn or 0 ) .. "/"
+				.. tostring( draw.lodMeshesDrawn or 0 )
+				.. " occlusion=" .. tostring( draw.occlusionCull == true ) .. "/" .. tostring( draw.occlusionApplied == true )
+				.. " occlusionSections=" .. tostring( draw.sectionsOcclusionCulled or 0 ) .. "/"
+				.. tostring( draw.sectionsOcclusionTested or 0 )
+				.. " triangles=" .. tostring( draw.trianglesDrawn or 0 )
+				.. " drawUs=" .. math.Round( tonumber( draw.nativeUs ) or 0, 2 )
+				.. " cullUs=" .. math.Round( tonumber( draw.cullUs ) or 0, 2 )
+				.. " material=" .. tostring( meta.material or "unknown" )
+				.. " lightTexture=" .. tostring( meta.lightTexture == true )
+		end
+	end
+	lines[#lines + 1] = "gpu timing     = unavailable (source_api_unavailable)"
 	for _, l in ipairs( packProfileLines() ) do lines[#lines + 1] = l end
 	for _, l in ipairs( lines ) do log( l ) end
 end, nil, "Print MCSWEP native mesh backend state and module stats" )

@@ -1,5 +1,5 @@
 --[[----------------------------------------------------------------------------
-	Lazy v8 save chunk store.
+	Lazy v8/v10 save chunk store.
 
 	The manifest stays loaded, while imported base chunks remain in part files
 	until player/entity interest asks for them. Player edits are recorded in a
@@ -22,11 +22,15 @@ local function resetTables()
 	Store.Parts = {}
 	Store.PartCache = {}
 	Store.PartOrder = {}
+	Store.NumericPalette = nil
+	Store.NumericPaletteSource = nil
 	Store.LoadedKeys = {}
 	Store.QueuedKeys = {}
 	Store.LoadQueue = {}
 	Store.EditChunks = {}
 	Store.EditOverlayPath = nil
+	Store.MinRuntimeCZ = nil
+	Store.MaxRuntimeCZ = nil
 	Store.Active = false
 end
 
@@ -64,15 +68,36 @@ local function cfgFloat( cv, fallback, minValue, maxValue )
 	return v
 end
 
-local function readSaveJSON( path )
+local function timingAdd( timing, field, value )
+	if timing then timing[field] = ( timing[field] or 0 ) + ( tonumber( value ) or 0 ) end
+end
+
+local function readSaveJSON( path, timing )
+	local readStarted = timing and SysTime() or nil
 	local raw = file.Read( path, "DATA" )
+	if timing then
+		timingAdd( timing, "fileReadMS", ( SysTime() - readStarted ) * 1000 )
+		timingAdd( timing, "storedBytes", raw and #raw or 0 )
+	end
 	if not raw or raw == "" then return nil, "empty_file" end
 	if string.sub( raw, 1, 1 ) == "{" then
-		return util.JSONToTable( raw ), nil
+		if timing then timingAdd( timing, "jsonBytes", #raw ) end
+		local jsonStarted = timing and SysTime() or nil
+		local data = util.JSONToTable( raw )
+		if timing then timingAdd( timing, "jsonMS", ( SysTime() - jsonStarted ) * 1000 ) end
+		return data, nil
 	end
+	local decompressStarted = timing and SysTime() or nil
 	local json = util.Decompress( raw )
+	if timing then
+		timingAdd( timing, "decompressMS", ( SysTime() - decompressStarted ) * 1000 )
+		timingAdd( timing, "jsonBytes", json and #json or 0 )
+	end
 	if not json then return nil, "decompress_failed" end
-	return util.JSONToTable( json ), nil
+	local jsonStarted = timing and SysTime() or nil
+	local data = util.JSONToTable( json )
+	if timing then timingAdd( timing, "jsonMS", ( SysTime() - jsonStarted ) * 1000 ) end
+	return data, nil
 end
 
 local function stripExtension( path )
@@ -97,6 +122,73 @@ end
 local function partEntryPath( entry )
 	if istable( entry ) then return entry.path end
 	return entry
+end
+
+-- The MCB4 sidecar ships as .json because GMAD's whitelist rejects .mcb and
+-- .dat, but imports made before that switch still spell it .mcb. Accept either
+-- spelling for the same part so a manifest stays portable between them.
+local FAST_SUFFIXES = { ".json", ".mcb" }
+
+local function resolveFastPath( path, forbidden )
+	if not isstring( path ) or path == "" then return nil end
+	if file.Exists( path, "DATA" ) then return path end
+	for _, suffix in ipairs( FAST_SUFFIXES ) do
+		if string.EndsWith( path, suffix ) then
+			local stem = string.sub( path, 1, #path - #suffix )
+			for _, alt in ipairs( FAST_SUFFIXES ) do
+				local candidate = stem .. alt
+				-- Never fall through onto the side-data lane: that file is real
+				-- JSON and would feed text into the MCB4 decoder.
+				if alt ~= suffix and candidate ~= forbidden and file.Exists( candidate, "DATA" ) then
+					return candidate
+				end
+			end
+			break
+		end
+	end
+	return nil
+end
+
+local function numericPalette()
+	if Store.NumericPaletteSource == Store.Palette then return Store.NumericPalette end
+	Store.NumericPaletteSource = Store.Palette
+	Store.NumericPalette = false
+	if not istable( Store.Palette ) then return nil end
+	local resolved = {}
+	for index = 1, #Store.Palette do
+		local value = Store.Palette[index]
+		local stateId = isnumber( value ) and math.floor( value )
+			or ( isstring( value ) and MC.ParseBlockState and MC.ParseBlockState( value ) or nil )
+		if stateId == nil or MC.IsValidBlockState and not MC.IsValidBlockState( stateId ) then return nil end
+		resolved[index] = stateId
+	end
+	Store.NumericPalette = resolved
+	return resolved
+end
+
+local function readFastFragment( partNo, entry, timing )
+	local part = Store.Parts[math.floor( tonumber( partNo ) or 0 )]
+	if not istable( part ) or part.fastFormat ~= "MCB4" then return nil, "fast_part_unavailable" end
+	local offset = math.floor( tonumber( entry and entry.fastOffset ) or -1 )
+	local length = math.floor( tonumber( entry and entry.fastBytes ) or -1 )
+	local declaredBytes = math.floor( tonumber( part.fastBytes ) or -1 )
+	if offset < 0 or length < 16 or declaredBytes < 0 or offset + length > declaredBytes then
+		return nil, "invalid_fast_range"
+	end
+	local fastPath = resolveFastPath( manifestRelativePath( part.fastPath ), manifestRelativePath( partEntryPath( part ) ) )
+	if not fastPath then return nil, "missing_fast_part" end
+	local started = timing and SysTime() or nil
+	local handle = file.Open( fastPath, "rb", "DATA" )
+	if not handle then return nil, "fast_open_failed" end
+	handle:Seek( offset )
+	local fragment = handle:Read( length )
+	handle:Close()
+	if timing then
+		timingAdd( timing, "fastReadMS", ( SysTime() - started ) * 1000 )
+		timingAdd( timing, "fastBytes", isstring( fragment ) and #fragment or 0 )
+	end
+	if not isstring( fragment ) or #fragment ~= length then return nil, "fast_short_read" end
+	return fragment
 end
 
 local function overlayPathForManifest( manifest, manifestPath )
@@ -128,23 +220,43 @@ local function evictPartCache()
 	end
 end
 
-local function loadPart( partNo )
+local function loadPart( partNo, timing )
+	local loadStarted = timing and SysTime() or nil
+	if timing then timingAdd( timing, "partLoads", 1 ) end
 	partNo = math.floor( tonumber( partNo ) or 0 )
-	if partNo <= 0 then return nil, "invalid_part" end
+	if partNo <= 0 then
+		if timing then timingAdd( timing, "partLoadMS", ( SysTime() - loadStarted ) * 1000 ) end
+		return nil, "invalid_part"
+	end
 	local cached = Store.PartCache[partNo]
 	if cached then
+		if timing then timingAdd( timing, "partCacheHits", 1 ) end
 		touchPart( partNo )
+		if timing then timingAdd( timing, "partLoadMS", ( SysTime() - loadStarted ) * 1000 ) end
 		return cached, nil
 	end
+	if timing then timingAdd( timing, "partCacheMisses", 1 ) end
 
 	local entry = Store.Parts[partNo]
 	local partPath = manifestRelativePath( partEntryPath( entry ) )
-	if not partPath then return nil, "invalid_part_path" end
-	if not file.Exists( partPath, "DATA" ) then return nil, "missing_part: " .. partPath end
+	if not partPath then
+		if timing then timingAdd( timing, "partLoadMS", ( SysTime() - loadStarted ) * 1000 ) end
+		return nil, "invalid_part_path"
+	end
+	if not file.Exists( partPath, "DATA" ) then
+		if timing then timingAdd( timing, "partLoadMS", ( SysTime() - loadStarted ) * 1000 ) end
+		return nil, "missing_part: " .. partPath
+	end
 
-	local data, err = readSaveJSON( partPath )
-	if err then return nil, err end
-	if not istable( data ) or not istable( data.chunks ) then return nil, "invalid_part: " .. partPath end
+	local data, err = readSaveJSON( partPath, timing )
+	if err then
+		if timing then timingAdd( timing, "partLoadMS", ( SysTime() - loadStarted ) * 1000 ) end
+		return nil, err
+	end
+	if not istable( data ) or not istable( data.chunks ) then
+		if timing then timingAdd( timing, "partLoadMS", ( SysTime() - loadStarted ) * 1000 ) end
+		return nil, "invalid_part: " .. partPath
+	end
 	data.cs = data.cs or ( Store.Manifest and Store.Manifest.cs ) or MC.CS
 	data.h = data.h or ( Store.Manifest and Store.Manifest.h ) or MC.CH
 	data.p = data.p or Store.Palette
@@ -152,6 +264,7 @@ local function loadPart( partNo )
 	Store.PartCache[partNo] = data
 	touchPart( partNo )
 	evictPartCache()
+	if timing then timingAdd( timing, "partLoadMS", ( SysTime() - loadStarted ) * 1000 ) end
 	return data, nil
 end
 
@@ -195,6 +308,35 @@ local function savedHeightForManifest()
 	return savedHeight
 end
 
+local function includeRuntimeCZ( cz )
+	cz = tonumber( cz )
+	if cz == nil then return end
+	cz = math.floor( cz )
+	if Store.MinRuntimeCZ == nil or cz < Store.MinRuntimeCZ then Store.MinRuntimeCZ = cz end
+	if Store.MaxRuntimeCZ == nil or cz > Store.MaxRuntimeCZ then Store.MaxRuntimeCZ = cz end
+end
+
+local function includeRuntimeChunkKey( key )
+	local _, _, cz = MC.ChunkKeyToCoords( key )
+	includeRuntimeCZ( cz )
+end
+
+local function rebuildVerticalBounds()
+	Store.MinRuntimeCZ = nil
+	Store.MaxRuntimeCZ = nil
+	local savedHeight = savedHeightForManifest()
+	for savedKey in pairs( Store.ChunkIndex or {} ) do
+		local _, _, savedCZ = MC.ChunkKeyToCoords( savedKey )
+		if savedCZ ~= nil then
+			local minBZ = savedCZ * savedHeight
+			local maxBZ = minBZ + savedHeight - 1
+			includeRuntimeCZ( math.floor( minBZ / MC.CH ) )
+			includeRuntimeCZ( math.floor( maxBZ / MC.CH ) )
+		end
+	end
+	for editKey in pairs( Store.EditChunks or {} ) do includeRuntimeChunkKey( editKey ) end
+end
+
 local function baseChunkEntriesForRuntimeKey( key )
 	local rx, ry, rz = MC.ChunkKeyToCoords( key )
 	if not rx then return {} end
@@ -223,6 +365,29 @@ local function baseChunkEntriesForRuntimeKey( key )
 	return entries
 end
 
+local function runtimeKeysForManifest()
+	local keys = {}
+	local savedChunkSize = savedChunkSizeForManifest()
+	local savedHeight = savedHeightForManifest()
+	for savedKey in pairs( Store.ChunkIndex or {} ) do
+		local sx, sy, sz = MC.ChunkKeyToCoords( savedKey )
+		if sx ~= nil and sy ~= nil and sz ~= nil then
+			local minBX, maxBX = sx * savedChunkSize, ( sx + 1 ) * savedChunkSize - 1
+			local minBY, maxBY = sy * savedChunkSize, ( sy + 1 ) * savedChunkSize - 1
+			local minBZ, maxBZ = sz * savedHeight, ( sz + 1 ) * savedHeight - 1
+			for cz = math.floor( minBZ / MC.CH ), math.floor( maxBZ / MC.CH ) do
+				for cy = math.floor( minBY / MC.CS ), math.floor( maxBY / MC.CS ) do
+					for cx = math.floor( minBX / MC.CS ), math.floor( maxBX / MC.CS ) do
+						keys[MC.ChunkKeyString( cx, cy, cz )] = true
+					end
+				end
+			end
+		end
+	end
+	for key in pairs( Store.EditChunks or {} ) do keys[tostring( key )] = true end
+	return keys
+end
+
 local function ensureChunkForKey( key )
 	local chunk = MC.GetChunkByKey( key )
 	if chunk then return chunk end
@@ -233,6 +398,11 @@ end
 
 function Store.IsLazyWorld()
 	return Store.Active == true
+end
+
+function Store.GetVerticalBounds()
+	if not Store.IsLazyWorld() then return nil end
+	return Store.MinRuntimeCZ, Store.MaxRuntimeCZ
 end
 
 function Store.HasBaseChunk( key )
@@ -284,7 +454,29 @@ function Store.LoadLazyManifest( manifest, manifestPath )
 	if not tonumber( SV.BlockCount ) or SV.BlockCount <= 0 then
 		SV.BlockCount = tonumber( manifest.stats and manifest.stats.blocks ) or 0
 	end
+	rebuildVerticalBounds()
 	SV.StreamInterestDirty = true
+	return true
+end
+
+-- Normal GMod maps do not have an InfMap owner and must still be able to open
+-- a v10/MCB4 save. Hydrate every indexed runtime chunk once, then discard the
+-- manifest/cache so the rest of the server remains on the direct-world path.
+function Store.LoadAllChunksEager()
+	if not Store.IsLazyWorld() then return true end
+	local keys = runtimeKeysForManifest()
+	local ordered = {}
+	for key in pairs( keys ) do ordered[#ordered + 1] = key end
+	table.sort( ordered )
+	for _, key in ipairs( ordered ) do
+		local hasBase = #baseChunkEntriesForRuntimeKey( key ) > 0
+		local hasEdit = Store.EditChunks and Store.EditChunks[key] ~= nil
+		local chunk = Store.HydrateChunkNow( key, true )
+		if ( hasBase or hasEdit ) and not chunk then
+			return false, Store.LastError or "eager_chunk_hydration_failed"
+		end
+	end
+	Store.Reset()
 	return true
 end
 
@@ -315,8 +507,188 @@ function Store.ApplyOverlayToChunk( chunk )
 	return chunk
 end
 
-local function loadBaseChunkIntoWorld( key, record )
+local MCB4_SECTION_CELLS = 4096
+local MCB4_OCCUPANCY_BYTES = 512
+local MCB4_BITS = {}
+for value = 0, 255 do
+	local offsets = {}
+	for bitIndex = 0, 7 do
+		if bit.band( value, bit.lshift( 1, bitIndex ) ) ~= 0 then offsets[#offsets + 1] = bitIndex end
+	end
+	MCB4_BITS[value] = offsets
+end
+
+local function readU16LE( data, offset )
+	local a, b = string.byte( data, offset, offset + 1 )
+	if b == nil then return nil end
+	return a + b * 256
+end
+
+local function readI32LE( data, offset )
+	local a, b, c, d = string.byte( data, offset, offset + 3 )
+	if d == nil then return nil end
+	local value = a + b * 256 + c * 65536 + d * 16777216
+	return value >= 2147483648 and value - 4294967296 or value
+end
+
+local function bitsForPalette( size )
+	local bits, capacity = 0, 1
+	while capacity < size do bits, capacity = bits + 1, capacity * 2 end
+	return bits
+end
+
+local function packedWrite( words, bits, cellIndex, value )
+	if bits <= 0 then return end
+	local bitOffset = cellIndex * bits
+	local wordIndex = math.floor( bitOffset / 32 ) + 1
+	local shift = bitOffset % 32
+	if shift + bits <= 32 then
+		words[wordIndex] = bit.bor( words[wordIndex] or 0, bit.lshift( value, shift ) )
+		return
+	end
+	local lowBits = 32 - shift
+	local lowMask = 2 ^ lowBits - 1
+	words[wordIndex] = bit.bor( words[wordIndex] or 0, bit.lshift( bit.band( value, lowMask ), shift ) )
+	words[wordIndex + 1] = bit.bor( words[wordIndex + 1] or 0, bit.rshift( value, lowBits ) )
+end
+
+local function packedByteValue( data, offset, bitOffset, bits )
+	local byteOffset = math.floor( bitOffset / 8 )
+	local shift = bitOffset % 8
+	local a, b, c = string.byte( data, offset + byteOffset, offset + byteOffset + 2 )
+	local value = ( a or 0 ) + ( b or 0 ) * 256 + ( c or 0 ) * 65536
+	return math.floor( value / 2 ^ shift ) % 2 ^ bits
+end
+
+local function decodeMCB4Section( data, cursor, numeric, expectedSectionCount )
+	local sectionY = readU16LE( data, cursor )
+	local cellCount = readU16LE( data, cursor + 2 )
+	local paletteCount = readU16LE( data, cursor + 4 )
+	local sourceBits = string.byte( data, cursor + 6 )
+	if sectionY == nil or sectionY >= expectedSectionCount or cellCount == nil or cellCount < 1
+	or cellCount > MCB4_SECTION_CELLS or paletteCount == nil or paletteCount < 1
+	or paletteCount > MCB4_SECTION_CELLS or sourceBits == nil or sourceBits < 1 or sourceBits > 12
+	or paletteCount > 2 ^ sourceBits then return nil, nil, "invalid_fast_section_header" end
+	cursor = cursor + 7
+	local sourceStates = {}
+	local seenStates = {}
+	for index = 1, paletteCount do
+		local globalIndex = readU16LE( data, cursor )
+		local stateId = globalIndex ~= nil and numeric[globalIndex + 1] or nil
+		if stateId == nil or stateId == 0 or seenStates[stateId] then return nil, nil, "invalid_fast_palette" end
+		sourceStates[index] = stateId
+		seenStates[stateId] = true
+		cursor = cursor + 2
+	end
+	local occupancyOffset = cursor
+	local packedOffset = occupancyOffset + MCB4_OCCUPANCY_BYTES
+	local packedBytes = math.ceil( cellCount * sourceBits / 8 )
+	if packedOffset + packedBytes - 1 > #data then return nil, nil, "truncated_fast_section" end
+
+	-- A completely full section does not need an air palette entry. Keeping it
+	-- would make the pathological 4096-state case require 13 bits, while the
+	-- authoritative Section format is deliberately capped at 12.
+	local hasAir = cellCount < MCB4_SECTION_CELLS
+	local palette = hasAir and { 0 } or {}
+	local paletteIndex = hasAir and { [0] = 0 } or {}
+	local refCount = hasAir and { [0] = MCB4_SECTION_CELLS - cellCount } or {}
+	local paletteOffset = hasAir and 1 or 0
+	for index, stateId in ipairs( sourceStates ) do
+		local runtimeIndex = index - 1 + paletteOffset
+		palette[runtimeIndex + 1] = stateId
+		paletteIndex[stateId] = runtimeIndex
+		refCount[runtimeIndex] = 0
+	end
+	local runtimeBits = bitsForPalette( #palette )
+	local words = {}
+	local occupied = 0
+	for byteIndex = 0, MCB4_OCCUPANCY_BYTES - 1 do
+		local occupancy = string.byte( data, occupancyOffset + byteIndex )
+		if occupancy == nil then return nil, nil, "truncated_fast_occupancy" end
+		for _, bitIndex in ipairs( MCB4_BITS[occupancy] ) do
+			local sourceIndex = packedByteValue( data, packedOffset, occupied * sourceBits, sourceBits )
+			if sourceIndex >= paletteCount then return nil, nil, "fast_palette_index_out_of_range" end
+			local runtimeIndex = sourceIndex + paletteOffset
+			packedWrite( words, runtimeBits, byteIndex * 8 + bitIndex, runtimeIndex )
+			refCount[runtimeIndex] = refCount[runtimeIndex] + 1
+			occupied = occupied + 1
+		end
+	end
+	if occupied ~= cellCount then return nil, nil, "fast_occupancy_count_mismatch" end
+	return {
+		palette = palette,
+		paletteIndex = paletteIndex,
+		refCount = refCount,
+		paletteSize = #palette,
+		bitsPerEntry = runtimeBits,
+		entryMask = 2 ^ runtimeBits - 1,
+		words = words,
+		count = cellCount,
+		deadPaletteEntries = hasAir and refCount[0] == 0 and 1 or 0,
+	}, packedOffset + packedBytes, sectionY
+end
+
+local function loadFastChunkIntoWorld( key, entry, timing )
+	if savedChunkSizeForManifest() ~= MC.CS or savedHeightForManifest() ~= MC.CH then
+		return nil, nil, "fast_geometry_mismatch"
+	end
+	local numeric = numericPalette()
+	if not numeric then return nil, nil, "fast_palette_unavailable" end
+	local fragment, readError = readFastFragment( entry.part, entry, timing )
+	if not fragment then return nil, nil, readError end
+	local decodeStarted = timing and SysTime() or nil
+	local expectedCX, expectedCY, expectedCZ = MC.ChunkKeyToCoords( key )
+	local cx, cy, cz = readI32LE( fragment, 1 ), readI32LE( fragment, 5 ), readI32LE( fragment, 9 )
+	local totalCount, sectionCount = readU16LE( fragment, 13 ), readU16LE( fragment, 15 )
+	if cx ~= expectedCX or cy ~= expectedCY or cz ~= expectedCZ then return nil, nil, "fast_coordinate_mismatch" end
+	local expectedSections = math.floor( MC.CH / 16 )
+	if totalCount == nil or totalCount > MC.CS * MC.CS * MC.CH or sectionCount == nil
+	or sectionCount > expectedSections then return nil, nil, "invalid_fast_header" end
+	local sections, seen, decodedCount = {}, {}, 0
+	local cursor = 17
+	for _ = 1, sectionCount do
+		local section, nextCursor, sectionYOrError = decodeMCB4Section( fragment, cursor, numeric, expectedSections )
+		if not section then return nil, nil, sectionYOrError end
+		if seen[sectionYOrError] then return nil, nil, "duplicate_fast_section" end
+		seen[sectionYOrError] = true
+		sections[sectionYOrError + 1] = section
+		decodedCount = decodedCount + section.count
+		cursor = nextCursor
+	end
+	if decodedCount ~= totalCount or cursor ~= #fragment + 1 then return nil, nil, "fast_length_or_count_mismatch" end
+	if timing then timingAdd( timing, "fastDecodeMS", ( SysTime() - decodeStarted ) * 1000 ) end
+
+	local existing = MC.GetChunkByKey( key )
+	if existing and ( existing.count or 0 ) > 0 then return nil, nil, "fast_existing_chunk" end
+	local installStarted = timing and SysTime() or nil
+	local chunk = existing or MC.EnsureChunk( cx, cy, cz )
+	chunk.stateSections = sections
+	chunk.stateStorageMigrated = true
+	chunk.packedStateOnly = true
+	chunk.nativeStateStorage = false
+	chunk.blocks = {}
+	chunk.orients = {}
+	chunk.count = decodedCount
+	chunk.blockEntities = nil
+	chunk.opaqueBlockEntities = nil
+	chunk.opaqueStates = nil
+	Store.ApplyOverlayToChunk( chunk )
+	MC.FinalizeChunkStateStorage( chunk )
+	if chunk.count <= 0 then MC.World[MC.ChunkKey( cx, cy, cz )] = nil end
+	if timing then
+		timingAdd( timing, "fastInstallMS", ( SysTime() - installStarted ) * 1000 )
+		timingAdd( timing, "fastHits", 1 )
+		timingAdd( timing, "records", 1 )
+		timingAdd( timing, "cellsVisited", decodedCount )
+		timingAdd( timing, "cellsWritten", decodedCount )
+		timingAdd( timing, "touchedChunks", 1 )
+	end
+	return chunk, { [MC.ChunkKey( cx, cy, cz )] = chunk }
+end
+
+local function loadBaseChunkIntoWorld( key, record, timing )
 	if not istable( record ) or #record < 4 then return nil end
+	if timing then timingAdd( timing, "records", 1 ) end
 	local srcCX = math.floor( tonumber( record[1] ) or 0 )
 	local srcCY = math.floor( tonumber( record[2] ) or 0 )
 	local srcCZ = math.floor( tonumber( record[3] ) or 0 )
@@ -325,8 +697,10 @@ local function loadBaseChunkIntoWorld( key, record )
 	local savedHeight = savedHeightForManifest()
 	local cache = {}
 	local touched = {}
+	local cellsVisited, cellsWritten = 0, 0
 
 	local function loadOneCell( li, paletteIndex )
+		if timing then cellsVisited = cellsVisited + 1 end
 		local lx, ly, lz = decodeLocalWithGeometry( li, savedChunkSize, savedHeight )
 		if not lx then return end
 		local bx = srcCX * savedChunkSize + lx
@@ -339,10 +713,14 @@ local function loadBaseChunkIntoWorld( key, record )
 		local existingState = MC.GetBlockState( bx, by, bz )
 		if MC.LocalIndexInRange( nli ) and stateId and stateId ~= 0 and existingState == 0 then
 			local changed = MC.SetChunkLocalStateRaw( chunk, nli, stateId )
-			if changed then touched[targetKey] = chunk end
+			if changed then
+				touched[targetKey] = chunk
+				if timing then cellsWritten = cellsWritten + 1 end
+			end
 		end
 	end
 
+	local applyStarted = timing and SysTime() or nil
 	if isstring( cells ) then
 		for liText, piText in string.gmatch( cells, "([^:;]+):([^:;]*):?[^;]*;?" ) do
 			loadOneCell( liText, piText )
@@ -352,14 +730,22 @@ local function loadBaseChunkIntoWorld( key, record )
 			loadOneCell( cells[i], cells[i + 1] )
 		end
 	end
+	if timing then
+		timingAdd( timing, "cellsVisited", cellsVisited )
+		timingAdd( timing, "cellsWritten", cellsWritten )
+		timingAdd( timing, "stateApplyMS", ( SysTime() - applyStarted ) * 1000 )
+	end
 
+	local finalizeStarted = timing and SysTime() or nil
 	for touchedKey, chunk in pairs( touched ) do
+		if timing then timingAdd( timing, "touchedChunks", 1 ) end
 		Store.ApplyOverlayToChunk( chunk )
 		MC.FinalizeChunkStateStorage( chunk )
 		if chunk.count <= 0 then
 			MC.World[touchedKey] = nil
 		end
 	end
+	if timing then timingAdd( timing, "overlayFinalizeMS", ( SysTime() - finalizeStarted ) * 1000 ) end
 
 	return MC.GetChunkByKey( key ), touched
 end
@@ -368,41 +754,85 @@ function Store.HydrateChunkNow( key, priority )
 	if not Store.IsLazyWorld() then return MC.GetChunkByKey( key ) end
 	key = tostring( key or "" )
 	if key == "" then return nil end
+	local profiling = SV.BinaryNetHydrationProfileEnabled and SV.BinaryNetHydrationProfileEnabled() == true
+	local sample = profiling and {
+		key = key, startedAt = SysTime(), priority = priority == true,
+		entries = 0, records = 0, cellsVisited = 0, cellsWritten = 0, touchedChunks = 0,
+		partCacheHits = 0, partCacheMisses = 0, storedBytes = 0, jsonBytes = 0,
+		fastAttempts = 0, fastHits = 0, fastFallbacks = 0, fastBytes = 0,
+	} or nil
+	local function finishProfile( success, errorText, warm )
+		if not sample then return end
+		sample.success = success == true
+		sample.error = errorText
+		sample.warm = warm == true
+		sample.totalMS = ( SysTime() - sample.startedAt ) * 1000
+		if SV.RecordChunkHydrationProfile then SV.RecordChunkHydrationProfile( sample ) end
+	end
 	local existing = MC.GetChunkByKey( key )
 	if existing and Store.LoadedKeys[key] then
 		Store.LoadedKeys[key] = true
+		finishProfile( true, nil, true )
 		return existing
 	end
 
 	local chunk = existing
+	-- A saved chunk whose geometry differs from runtime spills into neighboring
+	-- runtime chunks; every one of them counts as hydrated. Keys are
+	-- canonicalized on the way in because `key` is a string here while `touched`
+	-- can carry packed numeric keys - without that, the same chunk would be
+	-- announced twice under two spellings.
 	local hydratedKeys = {}
+	local function markHydrated( touchedKey )
+		local canonical = MC.CanonicalChunkKey and MC.CanonicalChunkKey( touchedKey ) or touchedKey
+		if canonical ~= nil then hydratedKeys[canonical] = true end
+	end
 	local entries = baseChunkEntriesForRuntimeKey( key )
+	if sample then sample.entries = #entries end
 	for _, item in ipairs( entries ) do
 		local entry = item.entry
-		local partData, err = loadPart( entry.part )
-		if not partData then
-			Store.LastError = err
-			Store.QueuedKeys[key] = nil
-			return nil
+		local loadedChunk, touched
+		if tonumber( entry.fastOffset ) ~= nil and tonumber( entry.fastBytes ) ~= nil then
+			if sample then timingAdd( sample, "fastAttempts", 1 ) end
+			local fastError
+			loadedChunk, touched, fastError = loadFastChunkIntoWorld( item.key, entry, sample )
+			if not loadedChunk then
+				if sample then
+					timingAdd( sample, "fastFallbacks", 1 )
+					sample.fastLastError = fastError
+				end
+			end
+		elseif sample then
+			timingAdd( sample, "fastFallbacks", 1 )
+			sample.fastLastError = "fast_metadata_unavailable"
 		end
-		local idx = math.floor( tonumber( entry.index ) or 0 )
-		local record = partData and partData.chunks and partData.chunks[idx]
-		if not istable( record ) then
-			Store.LastError = "invalid_chunk_index"
-			Store.QueuedKeys[key] = nil
-			return nil
+		if not loadedChunk then
+			local partData, err = loadPart( entry.part, sample )
+			if not partData then
+				Store.LastError = err
+				Store.QueuedKeys[key] = nil
+				finishProfile( false, err, false )
+				return nil
+			end
+			local idx = math.floor( tonumber( entry.index ) or 0 )
+			local record = partData and partData.chunks and partData.chunks[idx]
+			if not istable( record ) then
+				Store.LastError = "invalid_chunk_index"
+				Store.QueuedKeys[key] = nil
+				finishProfile( false, Store.LastError, false )
+				return nil
+			end
+			loadedChunk, touched = loadBaseChunkIntoWorld( key, record, sample )
 		end
-		local loadedChunk, touched = loadBaseChunkIntoWorld( key, record )
 		chunk = chunk or loadedChunk
-		-- A saved chunk whose geometry differs from runtime spills into
-		-- neighboring runtime chunks; every one of them counts as hydrated.
 		for touchedKey in pairs( touched or {} ) do
 			Store.LoadedKeys[tostring( touchedKey )] = true
-			hydratedKeys[touchedKey] = true
+			markHydrated( touchedKey )
 		end
 	end
 
 	if not chunk and Store.EditChunks and Store.EditChunks[key] then
+		local finalizeStarted = sample and SysTime() or nil
 		chunk = ensureChunkForKey( key )
 		Store.ApplyOverlayToChunk( chunk )
 		if chunk then MC.FinalizeChunkStateStorage( chunk ) end
@@ -410,15 +840,18 @@ function Store.HydrateChunkNow( key, priority )
 			MC.World[MC.CanonicalChunkKey( key )] = nil
 			chunk = nil
 		end
+		if sample then timingAdd( sample, "overlayFinalizeMS", ( SysTime() - finalizeStarted ) * 1000 ) end
 	end
 
 	Store.LoadedKeys[key] = true
 	Store.QueuedKeys[key] = nil
 	if chunk and chunk.count and chunk.count > 0 and priority then
+		local collisionStarted = sample and SysTime() or nil
 		SV.EnsureChunkEnt( chunk )
 		SV.MarkPhysDirty( key, true )
+		if sample then timingAdd( sample, "collisionQueueMS", ( SysTime() - collisionStarted ) * 1000 ) end
 	end
-	hydratedKeys[MC.CanonicalChunkKey and MC.CanonicalChunkKey( key ) or key] = true
+	markHydrated( key )
 	for hydratedKey in pairs( hydratedKeys ) do
 		if SV.InvalidateLightingChunk then SV.InvalidateLightingChunk( hydratedKey ) end
 		if MC.RunEvent then
@@ -427,6 +860,7 @@ function Store.HydrateChunkNow( key, priority )
 			MC.RunEvent( "MC.ChunkHydrated", hydratedKey, cx, cy, cz )
 		end
 	end
+	finishProfile( true, nil, false )
 	return chunk
 end
 
@@ -461,6 +895,7 @@ function Store.RecordEdit( bx, by, bz, id, orient, stateId )
 	if not Store.IsLazyWorld() then return end
 	local cx, cy, cz, li = MC.CellToChunk( bx, by, bz )
 	local key = tostring( MC.ChunkKey( cx, cy, cz ) )
+	includeRuntimeCZ( cz )
 	local edits = Store.EditChunks[key]
 	if not edits then
 		edits = {}
@@ -479,6 +914,7 @@ function Store.RecordChunkStateEdits( key, localIndexes, stateId )
 	if not Store.IsLazyWorld() then return end
 	key = tostring( key or "" )
 	if key == "" or not istable( localIndexes ) then return end
+	includeRuntimeChunkKey( key )
 	local spec = MC.FormatBlockState( stateId )
 	if not spec then return end
 	local edits = Store.EditChunks[key]
@@ -499,6 +935,7 @@ function Store.RecordChunkStateMap( key, localStatePairs )
 	if not Store.IsLazyWorld() then return end
 	key = tostring( key or "" )
 	if key == "" or not istable( localStatePairs ) then return end
+	includeRuntimeChunkKey( key )
 	local edits = Store.EditChunks[key]
 	if not edits then
 		edits = {}

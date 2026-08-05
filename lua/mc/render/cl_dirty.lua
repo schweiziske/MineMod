@@ -192,7 +192,14 @@ local function nextDirtyMeshKeys( rateLimited )
 	end
 	return sortedDirtyKeys( filtered )
 end
-local function nextLightDirtyMeshKeys() return sortedDirtyKeys( MC.MeshLightDirty ) end
+local function nextLightDirtyMeshKeys( rateLimited )
+	local filtered = {}
+	for key in pairs( MC.MeshLightDirty ) do
+		local limited = MC.MeshLightDirtyRateLimited and MC.MeshLightDirtyRateLimited[key] == true
+		if limited == ( rateLimited == true ) then filtered[key] = true end
+	end
+	return sortedDirtyKeys( filtered )
+end
 
 local function bulkCollisionInterval()
 	local cvar = GetConVar and GetConVar( "mc_bulk_collision_interval" ) or nil
@@ -207,6 +214,8 @@ local function bulkCollisionChunksPerInterval()
 end
 
 local function flushBulkCollisionQueue()
+	local perfEnabled = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
+	local flushStarted = perfEnabled and SysTime() or nil
 	local now = CurTime()
 	if now < ( MC.NextBulkCollisionRebuildAt or 0 ) then return end
 	local order = MC.PhysDirtyBulkOrder or {}
@@ -214,13 +223,21 @@ local function flushBulkCollisionQueue()
 	local tail = #order
 	local bulk = MC.PhysDirtyBulk or {}
 	local limit = bulkCollisionChunksPerInterval()
-	local built = 0
+	local built, attempted = 0, 0
+	local worstMS, worstKey = 0, nil
 
 	while built < limit and head <= tail do
 		local key = order[head]
 		head = head + 1
 		if bulk[key] and MC.PhysDirty[key] then
+			local rebuildStarted = perfEnabled and SysTime() or nil
 			MC.RebuildChunkPhys( key, MC.ClientCollisionEnabled and MC.ClientCollisionEnabled() or false )
+			if perfEnabled then
+				local rebuildMS = ( SysTime() - rebuildStarted ) * 1000
+				MC.StreamPerformanceAddStage( "collision.chunk_rebuild", rebuildMS, { collisionChunks = 1 } )
+				if rebuildMS > worstMS then worstMS, worstKey = rebuildMS, key end
+			end
+			attempted = attempted + 1
 			built = built + 1
 		else
 			bulk[key] = nil
@@ -246,6 +263,13 @@ local function flushBulkCollisionQueue()
 
 	if built > 0 then
 		MC.NextBulkCollisionRebuildAt = now + bulkCollisionInterval()
+	end
+	if perfEnabled then
+		MC.StreamPerformanceAddStage( "collision.flush", ( SysTime() - flushStarted ) * 1000, { collisionAttempts = attempted } )
+		local state = MC.StreamPerformanceStats
+		if worstKey and state and ( not state.worstCollisionChunk or worstMS > state.worstCollisionChunk.ms ) then
+			state.worstCollisionChunk = { key = worstKey, ms = worstMS }
+		end
 	end
 end
 
@@ -289,7 +313,7 @@ local function buildDirtyMeshKey( key, sections, rebuiltSections, sectionLimit, 
 	return built
 end
 
-local function buildLightDirtyMeshKey( key, sections, rebuiltSections )
+local function buildLightDirtyMeshKey( key, sections, rebuiltSections, sectionLimit, deadline )
 	local geometryDirty = MC.MeshDirty[key]
 	if geometryDirty == true then
 		MC.MeshLightDirty[key] = nil
@@ -303,6 +327,7 @@ local function buildLightDirtyMeshKey( key, sections, rebuiltSections )
 
 	local built = 0
 	for sectionIndex in pairs( sections ) do
+		if built > 0 and ( sectionLimit and built >= sectionLimit or deadline and SysTime() >= deadline ) then break end
 		if ( istable( geometryDirty ) and geometryDirty[sectionIndex] ) or ( istable( rebuilt ) and rebuilt[sectionIndex] ) then
 			if istable( rebuilt ) and rebuilt[sectionIndex] then sections[sectionIndex] = nil end
 		else
@@ -312,7 +337,12 @@ local function buildLightDirtyMeshKey( key, sections, rebuiltSections )
 		end
 	end
 
-	MC.MeshLightDirty[key] = next( sections ) and sections or nil
+	if next( sections ) then
+		MC.MeshLightDirty[key] = sections
+	else
+		MC.MeshLightDirty[key] = nil
+		if MC.MeshLightDirtyRateLimited then MC.MeshLightDirtyRateLimited[key] = nil end
+	end
 	return built
 end
 
@@ -388,15 +418,41 @@ hook.Add( "Think", "mc_meshbuild", function()
 		end
 	end
 	if next( MC.MeshLightDirty ) then
-		for _, key in ipairs( nextLightDirtyMeshKeys() ) do
+		-- Interactive light edits remain immediate. Streaming-origin recolors share
+		-- the same pure-Lua 4ms/8-section pacing as geometry.
+		for _, key in ipairs( nextLightDirtyMeshKeys( false ) ) do
 			local built = buildLightDirtyMeshKey( key, MC.MeshLightDirty[key], rebuiltSections )
-			if built > 0 then
-				lightKeys = lightKeys + 1
-				lightSections = lightSections + built
-			end
+			if built > 0 then lightKeys, lightSections = lightKeys + 1, lightSections + built end
+		end
+		local nativeFast = nativeChunkBackendActive()
+		local frameSeconds, sectionBudget = fillMeshBudget()
+		local deadline = not nativeFast and SysTime() + frameSeconds or nil
+		local remaining = not nativeFast and sectionBudget or nil
+		for _, key in ipairs( nextLightDirtyMeshKeys( true ) ) do
+			if remaining and remaining <= 0 or deadline and SysTime() >= deadline then break end
+			local built = buildLightDirtyMeshKey( key, MC.MeshLightDirty[key], rebuiltSections, remaining, deadline )
+			if remaining then remaining = remaining - built end
+			if built > 0 then lightKeys, lightSections = lightKeys + 1, lightSections + built end
 		end
 	end
 	flushBulkCollisionQueue()
+	if MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled() then
+		local frameMS = ( SysTime() - frameStart ) * 1000
+		MC.StreamPerformanceAddStage( "aftermath.frame", frameMS, {
+			geometryKeys = geometryKeys, geometrySections = geometrySections,
+			lightKeys = lightKeys, lightSections = lightSections,
+		} )
+		if MC.StreamPerformanceAddFrameStage then
+			MC.StreamPerformanceAddFrameStage( "aftermath.frame", frameMS, {
+				geometryKeys = geometryKeys, geometrySections = geometrySections,
+				lightKeys = lightKeys, lightSections = lightSections,
+			} )
+		end
+		MC.StreamPerformanceRecordAftermathFrame( {
+			ms = frameMS, geometryKeys = geometryKeys, geometrySections = geometrySections,
+			lightKeys = lightKeys, lightSections = lightSections,
+		} )
+	end
 	-- if geometrySections > 0 or lightSections > 0 then
 	-- 	maybePrintMeshBuildFramePerf( frameStart, geometryKeys, geometrySections, lightKeys, lightSections )
 	-- end
@@ -407,6 +463,7 @@ function MC.FreeAllMeshes()
 	for key in pairs( MC.Meshes ) do MC.FreeChunkMesh( key ) end
 	for key in pairs( MC.MeshesTrans ) do MC.FreeChunkMesh( key ) end
 	MC.MeshLightDirty = {}
+	MC.MeshLightDirtyRateLimited = {}
 	MC.MeshBlockEmitCache = {}
 	MC.MeshBlockEmitDirty = {}
 	if MC.ResetClientCollisionState then MC.ResetClientCollisionState() end

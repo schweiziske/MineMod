@@ -14,6 +14,10 @@ local SV  = MC.SV
 local Net = MC.Net
 local C   = MC.Config
 
+-- Compatibility cleanup for versions that globally vetoed PlayerUse after an
+-- MC block interaction. MC must never stop other addons' PlayerUse hooks.
+hook.Remove( "PlayerUse", "mc_use_interact_exclusive" )
+
 local function L( ply, key, fallback, vars )
 	return MC.TFor and MC.TFor( ply, key, fallback, vars ) or fallback
 end
@@ -30,6 +34,7 @@ local BULK_SET_FAST_CELLS_PER_MESSAGE = math.max( 1, math.min(
 local BULK_BREAK_FX_LIMIT = 64
 local SYNC_TIMER_INTERVAL = 0.05
 local INTEREST_TIMER_INTERVAL = 0.25
+local COLLISION_UNLOAD_DELAY = 0.75
 
 SV.BlockCount = SV.BlockCount or 0
 SV.BlockRevision = SV.BlockRevision or 0 -- one increment per committed authoritative transaction
@@ -41,7 +46,10 @@ SV.ReliableNetQueues = SV.ReliableNetQueues or {} -- player -> shared reliable s
 SV.PlayerHTTPDisabled = SV.PlayerHTTPDisabled or {} -- player -> true after client-side HTTP fetch is blocked/failed
 SV.ServerCollisionActiveChunks = SV.ServerCollisionActiveChunks or {} -- chunkKey -> true for non-empty chunks with server collision
 SV.ServerCollisionSignatures = SV.ServerCollisionSignatures or {} -- chunkKey -> sorted bounds signature
+SV.ServerCollisionLastSeen = SV.ServerCollisionLastSeen or {} -- chunkKey -> last player-interest time
+SV.ServerCollisionLazyMode = SV.ServerCollisionLazyMode == true
 SV.ServerCollisionRefreshTick = SV.ServerCollisionRefreshTick or nil
+SV.ServerCollisionDisabledClean = false
 SV.NextBulkCollisionRebuildAt = SV.NextBulkCollisionRebuildAt or 0
 SV.CollisionDebugPlayers = SV.CollisionDebugPlayers or setmetatable( {}, { __mode = "k" } )
 SV.Dirty      = SV.Dirty or false    -- world changed since last save
@@ -117,7 +125,118 @@ local function sendHttpManifest( ply )
 	return true
 end
 
+local function lazyServerCollisionEnabled()
+	return MC.ChunkStreamingEnabled and MC.ChunkStreamingEnabled() == true
+end
+
+local function serverCollisionEnabled()
+	if C.ServerCollision then return C.ServerCollision:GetBool() end
+	return ( MC.Config.ServerCollision or 0 ) ~= 0
+end
+
+local function serverCollisionAABBPadding()
+	if C.ServerCollisionAABBPadding then
+		return math.Clamp( C.ServerCollisionAABBPadding:GetFloat(), 0, MC.BS * 8 )
+	end
+	return MC.Config.ServerCollisionAABBPadding or MC.BS
+end
+
+local function serverCollisionExtraRadius()
+	if C.ServerCollisionChunkSpan then
+		return math.Clamp( C.ServerCollisionChunkSpan:GetInt(), 0, 8 )
+	end
+	return math.Clamp( math.floor( tonumber( MC.Config.ServerCollisionChunkSpan ) or 0 ), 0, 8 )
+end
+
+local function serverCollisionAimRadius()
+	if C.ServerCollisionAimRadius then
+		return math.Clamp( C.ServerCollisionAimRadius:GetInt(), 0, 8 )
+	end
+	return math.Clamp( math.floor( tonumber( MC.Config.ServerCollisionAimRadius ) or 1 ), 0, 8 )
+end
+
+local function collisionLookaheadTime()
+	if C.ServerCollisionLookaheadTime then
+		return math.Clamp( C.ServerCollisionLookaheadTime:GetFloat(), 0, 2 )
+	end
+	return math.Clamp( tonumber( MC.Config.ServerCollisionLookaheadTime ) or 0.5, 0, 2 )
+end
+
+local function collisionLookaheadMax()
+	if C.ServerCollisionLookaheadMax then
+		return math.Clamp( C.ServerCollisionLookaheadMax:GetInt(), 0, 16 )
+	end
+	return math.Clamp( math.floor( tonumber( MC.Config.ServerCollisionLookaheadMax ) or 4 ), 0, 16 )
+end
+
+local function addCollisionChunkRange( desired, minBX, minBY, minBZ, maxBX, maxBY, maxBZ, extra )
+	local minCX, minCY, minCZ = MC.CellToChunk( minBX, minBY, minBZ )
+	local maxCX, maxCY, maxCZ = MC.CellToChunk( maxBX, maxBY, maxBZ )
+	for cz = minCZ - extra, maxCZ + extra do
+		for cy = minCY - extra, maxCY + extra do
+			for cx = minCX - extra, maxCX + extra do
+				desired[MC.ChunkKey( cx, cy, cz )] = true
+			end
+		end
+	end
+end
+
+local function addCollisionAABB( desired, mins, maxs, padding )
+	if not mins or not maxs then return end
+	padding = math.max( 0, tonumber( padding ) or 0 )
+	local minBX = math.floor( ( mins.x - padding ) / MC.BS )
+	local minBY = math.floor( ( mins.y - padding ) / MC.BS )
+	local minBZ = math.floor( ( mins.z - padding ) / MC.BS )
+	local maxBX = math.floor( ( maxs.x + padding ) / MC.BS )
+	local maxBY = math.floor( ( maxs.y + padding ) / MC.BS )
+	local maxBZ = math.floor( ( maxs.z + padding ) / MC.BS )
+	addCollisionChunkRange( desired, minBX, minBY, minBZ, maxBX, maxBY, maxBZ,
+		serverCollisionExtraRadius() )
+end
+
+local function addCollisionCellNeighborhood( desired, bx, by, bz, radius )
+	radius = math.max( 0, math.floor( tonumber( radius ) or 0 ) )
+	addCollisionChunkRange( desired, bx - radius, by - radius, bz - radius,
+		bx + radius, by + radius, bz + radius, 0 )
+end
+
+local function collectServerCollisionInterest()
+	local desired = {}
+	local padding = serverCollisionAABBPadding()
+	local lookaheadTime = collisionLookaheadTime()
+	local lookaheadChunks = collisionLookaheadMax()
+	local lookaheadLimit = lookaheadChunks * math.max( MC.ChunkWorld, MC.ChunkWorldH )
+
+	for _, ply in ipairs( player.GetAll() ) do
+		if not IsValid( ply ) then continue end
+		local mins, maxs
+		if MC.EntityWorldAABB then mins, maxs = MC.EntityWorldAABB( ply )
+		else mins, maxs = ply:WorldSpaceAABB() end
+		addCollisionAABB( desired, mins, maxs, padding )
+
+		local velocity = ply:GetVelocity()
+		if lookaheadTime > 0 and lookaheadLimit > 0 and velocity and velocity:LengthSqr() > 1 then
+			local offset = velocity * lookaheadTime
+			local distance = offset:Length()
+			if distance > lookaheadLimit then offset:Mul( lookaheadLimit / distance ) end
+			addCollisionAABB( desired, mins + offset, maxs + offset, padding )
+		end
+
+		local hit = MC.PlayerBlockAim and MC.PlayerBlockAim( ply ) or nil
+		if hit and hit.bx then
+			addCollisionCellNeighborhood( desired, hit.bx, hit.by, hit.bz, serverCollisionAimRadius() )
+		end
+	end
+
+	return desired
+end
+
 function SV.IsChunkCollisionActive( key )
+	if not serverCollisionEnabled() then return false end
+	if lazyServerCollisionEnabled() then
+		key = MC.CanonicalChunkKey and MC.CanonicalChunkKey( key ) or key
+		return SV.ServerCollisionActiveChunks and SV.ServerCollisionActiveChunks[key] == true
+	end
 	local chunk = MC.GetChunkByKey( key )
 	return chunk and chunk.count and chunk.count > 0
 end
@@ -138,6 +257,7 @@ end
 
 ------------------------------------------------------------------ chunk entities
 function SV.EnsureChunkEnt( chunk, force )
+	if not serverCollisionEnabled() then return nil end
 	if IsValid( chunk.ent ) then return chunk.ent end
 	if not force and not SV.IsChunkCollisionActive( chunk.key ) then return nil end
 	local e = ents.Create( "mc_chunk" )
@@ -156,6 +276,12 @@ local rebuildPhysKey
 
 function SV.MarkPhysDirty( key, priority, bounds )
 	if not key then return end
+	if not serverCollisionEnabled() then
+		SV.PhysDirty[key] = nil
+		SV.PhysDirtyPriority[key] = nil
+		if SV.PhysDirtyBulk then SV.PhysDirtyBulk[key] = nil end
+		return
+	end
 	if SV.PhysDirtyBulk then SV.PhysDirtyBulk[key] = nil end
 	if priority then
 		SV.PhysDirty[key] = true
@@ -169,6 +295,12 @@ end
 
 function SV.MarkPhysDirtyBulk( key )
 	if not key then return end
+	if not serverCollisionEnabled() then
+		SV.PhysDirty[key] = nil
+		SV.PhysDirtyPriority[key] = nil
+		SV.PhysDirtyBulk[key] = nil
+		return
+	end
 	SV.PhysDirty[key] = true
 	SV.PhysDirtyPriority[key] = nil
 	if not SV.PhysDirtyBulk[key] then
@@ -184,6 +316,9 @@ function rebuildPhysKey( key, bounds )
 			chunk.ent:Remove()
 			chunk.ent = nil
 		end
+		SV.PhysDirty[key] = nil
+		SV.PhysDirtyPriority[key] = nil
+		if SV.PhysDirtyBulk then SV.PhysDirtyBulk[key] = nil end
 		return
 	end
 	if chunk and IsValid( chunk.ent ) then
@@ -221,6 +356,7 @@ local function bulkCollisionChunksPerInterval()
 end
 
 local function flushBulkCollisionQueue()
+	if not serverCollisionEnabled() then return end
 	local now = CurTime()
 	if now < ( SV.NextBulkCollisionRebuildAt or 0 ) then return end
 	local limit = bulkCollisionChunksPerInterval()
@@ -285,6 +421,7 @@ function SV.CanEdit( ply )
 end
 
 local function worldBoundsOK( bx, by, bz )
+	if MC.WorldBoundsOK then return MC.WorldBoundsOK( bx, by, bz, C.WorldLimit:GetInt() ) end
 	local protoMax = bit.lshift( 1, Net.COORD_BITS - 1 ) - 1
 	local lim = math.min( C.WorldLimit:GetInt(), protoMax )
 	return math.abs( bx ) <= lim
@@ -297,6 +434,7 @@ function SV.WorldBoundsOK( bx, by, bz )
 end
 
 function SV.WorldCoordinateLimit()
+	if MC.WorldCoordinateLimit then return MC.WorldCoordinateLimit( C.WorldLimit:GetInt() ) end
 	local protoMax = bit.lshift( 1, Net.COORD_BITS - 1 ) - 1
 	return math.min( C.WorldLimit:GetInt(), protoMax )
 end
@@ -372,6 +510,12 @@ function SV.EnqueueReliableNet( target, bytes, sendFn, waitAck )
 	end
 
 	return queued
+end
+
+function SV.ReliableNetQueueDepth( target )
+	local q = SV.ReliableNetQueues[target]
+	if not q then return 0, 0 end
+	return math.max( 0, #q.items - ( q.head or 1 ) + 1 ), math.max( 0, q.inflightBytes or 0 )
 end
 
 function SV.ClearReliableNet( target )
@@ -940,6 +1084,8 @@ end
 -- placer SWEP. The engine +use still runs its own entity path, so skip when
 -- the eye trace hits a foreign entity or the map closer than the block —
 -- pressing E on a prop or button must not also toggle the block behind it.
+-- Both distances are measured in engine space, which stays correct under a
+-- world adapter: those only translate, never scale.
 local USE_INTERACT_OWN_COLLISION = {
 	mc_chunk = true,
 	mc_chunk_phys = true,
@@ -957,6 +1103,14 @@ local function useInteractObstructed( ply, aim )
 	return tr.HitPos:Distance( ply:EyePos() ) < ( aim.Distance or math.huge )
 end
 
+-- Deliberately one-sided: this hook only ADDS the block interaction, it never
+-- suppresses the engine's own +use. Upstream also registered a PlayerUse hook
+-- returning false to win the press outright, because FindUseEntity falls back
+-- to an ~80u radius/cone sweep and a chair or button near (but not under) the
+-- crosshair activates on the same press. MC does not get to globally veto
+-- other addons' PlayerUse, so that half is intentionally not ported and the
+-- double-activation is accepted. See docs/main-sync-p0-baseline-2026-08-04.md.
+-- _tools/test_player_use_isolation.js enforces this repo-wide.
 hook.Add( "KeyPress", "mc_use_interact", function( ply, key )
 	if key ~= IN_USE then return end
 	if C.UseInteract and not C.UseInteract:GetBool() then return end
@@ -964,12 +1118,9 @@ hook.Add( "KeyPress", "mc_use_interact", function( ply, key )
 	local aim = MC.PlayerBlockAim and MC.PlayerBlockAim( ply )
 	if not aim then return end
 	if useInteractObstructed( ply, aim ) then return end
+	-- No selectedBlockID: this is a pure interaction, not a placement gesture.
 	SV.Use( ply, aim.bx, aim.by, aim.bz )
 end )
-
--- Compatibility cleanup for versions that globally vetoed PlayerUse after an
--- MC block interaction. MC must never stop other addons' PlayerUse hooks.
-hook.Remove( "PlayerUse", "mc_use_interact_exclusive" )
 
 local function trimArg( s )
 	return string.match( tostring( s or "" ), "^%s*(.-)%s*$" )
@@ -999,11 +1150,19 @@ local function clearWorldNoNet()
 		if IsValid( c.ent ) then c.ent:Remove() end
 	end
 	MC.World = {}
+	MC.LoadedChunkKeys = {}
 	SV.BlockCount = 0
 	SV.PhysDirty = {}
 	SV.PhysDirtyPriority = {}
 	SV.PhysDirtyBulk = {}
 	SV.PhysDirtyBulkOrder = {}
+	SV.ServerCollisionActiveChunks = {}
+	SV.ServerCollisionSignatures = {}
+	SV.ServerCollisionLastSeen = {}
+	SV.ServerCollisionLazyMode = false
+	-- The world was replaced wholesale, which no per-cell/per-chunk
+	-- invalidation reports. Every failure exit of SV.LoadFromPath routes
+	-- through here, so this one call covers all of them.
 	if SV.FlushLightingCaches then SV.FlushLightingCaches() end
 end
 
@@ -1016,6 +1175,10 @@ local function beginWorldLoadStage()
 		physDirtyPriority = SV.PhysDirtyPriority,
 		physDirtyBulk = SV.PhysDirtyBulk,
 		physDirtyBulkOrder = SV.PhysDirtyBulkOrder,
+		serverCollisionActiveChunks = SV.ServerCollisionActiveChunks,
+		serverCollisionSignatures = SV.ServerCollisionSignatures,
+		serverCollisionLastSeen = SV.ServerCollisionLastSeen,
+		serverCollisionLazyMode = SV.ServerCollisionLazyMode,
 	}
 	MC.World = {}
 	MC.LoadedChunkKeys = {}
@@ -1024,6 +1187,11 @@ local function beginWorldLoadStage()
 	SV.PhysDirtyPriority = {}
 	SV.PhysDirtyBulk = {}
 	SV.PhysDirtyBulkOrder = {}
+	SV.ServerCollisionActiveChunks = {}
+	SV.ServerCollisionSignatures = {}
+	SV.ServerCollisionLastSeen = {}
+	SV.ServerCollisionLazyMode = false
+	if SV.FlushLightingCaches then SV.FlushLightingCaches() end
 	return previous
 end
 
@@ -1035,6 +1203,13 @@ local function restoreWorldLoadStage( previous )
 	SV.PhysDirtyPriority = previous.physDirtyPriority
 	SV.PhysDirtyBulk = previous.physDirtyBulk
 	SV.PhysDirtyBulkOrder = previous.physDirtyBulkOrder
+	SV.ServerCollisionActiveChunks = previous.serverCollisionActiveChunks
+	SV.ServerCollisionSignatures = previous.serverCollisionSignatures
+	SV.ServerCollisionLastSeen = previous.serverCollisionLastSeen
+	SV.ServerCollisionLazyMode = previous.serverCollisionLazyMode
+	-- Rolling back is another wholesale swap: anything cached against the
+	-- half-loaded staged world has to go, or it outlives the rollback.
+	if SV.FlushLightingCaches then SV.FlushLightingCaches() end
 end
 
 local function commitWorldLoadStage( previous )
@@ -1317,6 +1492,7 @@ local function importManifest( data, manifestPath, appendMode )
 	end
 
 	SV.Dirty = true
+	if SV.FlushLightingCaches then SV.FlushLightingCaches() end
 	if not appendMode and SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
 	resyncAllClients()
 	return {
@@ -1477,10 +1653,100 @@ net.Receive( "mc_http_failed", function( _, ply )
 	restartPlayerFullSync( ply )
 end )
 
-function SV.RefreshServerCollision( force )
-	local tick = engine and engine.TickCount and engine.TickCount() or CurTime()
-	if not force and SV.ServerCollisionRefreshTick == tick then return end
-	SV.ServerCollisionRefreshTick = tick
+local function clearServerCollisionChunk( key )
+	local chunk = MC.GetChunkByKey( key )
+	if chunk and IsValid( chunk.ent ) then
+		chunk.ent:Remove()
+		chunk.ent = nil
+	end
+	SV.ServerCollisionSignatures[key] = nil
+	SV.PhysDirty[key] = nil
+	SV.PhysDirtyPriority[key] = nil
+	if SV.PhysDirtyBulk then SV.PhysDirtyBulk[key] = nil end
+end
+
+local function clearAllServerCollision()
+	for key, chunk in pairs( MC.World or {} ) do
+		if IsValid( chunk.ent ) then chunk.ent:Remove() end
+		chunk.ent = nil
+		SV.ServerCollisionSignatures[key] = nil
+	end
+
+	-- Remove any orphaned collision entities left by a prior hot reload.
+	for _, ent in ipairs( ents.FindByClass( "mc_chunk" ) ) do
+		if IsValid( ent ) then ent:Remove() end
+	end
+	for _, ent in ipairs( ents.FindByClass( "mc_chunk_phys" ) ) do
+		if IsValid( ent ) then ent:Remove() end
+	end
+
+	SV.ServerCollisionActiveChunks = {}
+	SV.ServerCollisionSignatures = {}
+	SV.ServerCollisionLastSeen = {}
+	SV.ServerCollisionLazyMode = false
+	SV.PhysDirty = {}
+	SV.PhysDirtyPriority = {}
+	SV.PhysDirtyBulk = {}
+	SV.PhysDirtyBulkOrder = {}
+	SV.NextBulkCollisionRebuildAt = 0
+	SV.ServerCollisionDisabledClean = true
+end
+
+local function queueLazyCollisionChunk( key )
+	local store = SV.ChunkStore
+	if not store or not store.IsLazyWorld or not store.IsLazyWorld() or not store.QueueChunkLoad then return end
+	local storageKey = tostring( key )
+	if store.LoadedKeys and store.LoadedKeys[storageKey] then return end
+	store.QueueChunkLoad( key, true )
+end
+
+local function refreshLazyServerCollision()
+	local now = CurTime()
+	local desired = collectServerCollisionInterest()
+	local previous = SV.ServerCollisionActiveChunks or {}
+	local lastSeen = SV.ServerCollisionLastSeen or {}
+	local modeChanged = SV.ServerCollisionLazyMode ~= true
+	SV.ServerCollisionLazyMode = true
+
+	for key in pairs( desired ) do lastSeen[key] = now end
+	if not modeChanged then
+		for key in pairs( previous ) do
+			if not desired[key] and now - ( lastSeen[key] or 0 ) < COLLISION_UNLOAD_DELAY then
+				desired[key] = true
+			end
+		end
+	end
+
+	SV.ServerCollisionLastSeen = lastSeen
+	SV.ServerCollisionActiveChunks = desired
+	for key in pairs( desired ) do
+		queueLazyCollisionChunk( key )
+		local chunk = MC.GetChunkByKey( key )
+		if chunk and chunk.count and chunk.count > 0 then
+			local oldSignature = SV.ServerCollisionSignatures[key]
+			SV.ServerCollisionSignatures[key] = "full"
+			if not IsValid( chunk.ent ) then
+				SV.EnsureChunkEnt( chunk )
+				SV.MarkPhysDirty( key, true )
+			elseif oldSignature ~= "full" then
+				SV.MarkPhysDirty( key, true )
+			end
+		elseif chunk then
+			clearServerCollisionChunk( key )
+		end
+	end
+
+	for key in pairs( previous ) do
+		if not desired[key] then
+			clearServerCollisionChunk( key )
+			lastSeen[key] = nil
+		end
+	end
+end
+
+local function refreshFullServerCollision()
+	SV.ServerCollisionLazyMode = false
+	SV.ServerCollisionLastSeen = {}
 	local desired = {}
 	SV.ServerCollisionActiveChunks = desired
 	for key, c in pairs( MC.World or {} ) do
@@ -1495,16 +1761,22 @@ function SV.RefreshServerCollision( force )
 				SV.MarkPhysDirty( key, true )
 			end
 		else
-			if IsValid( c.ent ) then
-				c.ent:Remove()
-				c.ent = nil
-			end
-			SV.ServerCollisionSignatures[key] = nil
-			SV.PhysDirty[key] = nil
-			SV.PhysDirtyPriority[key] = nil
-			if SV.PhysDirtyBulk then SV.PhysDirtyBulk[key] = nil end
+			clearServerCollisionChunk( key )
 		end
 	end
+end
+
+function SV.RefreshServerCollision( force )
+	local tick = engine and engine.TickCount and engine.TickCount() or CurTime()
+	if not force and SV.ServerCollisionRefreshTick == tick then return end
+	SV.ServerCollisionRefreshTick = tick
+	if not serverCollisionEnabled() then
+		if not SV.ServerCollisionDisabledClean then clearAllServerCollision() end
+		return
+	end
+	SV.ServerCollisionDisabledClean = false
+	if lazyServerCollisionEnabled() then refreshLazyServerCollision()
+	else refreshFullServerCollision() end
 end
 
 function SV.RefreshChunkInterest()
@@ -1576,6 +1848,18 @@ end )
 
 timer.Create( "mc_bulk_collision_rebuild", 0.05, 0, function()
 	flushBulkCollisionQueue()
+end )
+
+if cvars and cvars.AddChangeCallback then
+	cvars.AddChangeCallback( "mc_server_collision", function()
+		SV.ServerCollisionRefreshTick = nil
+		SV.ServerCollisionDisabledClean = false
+		SV.RefreshServerCollision( true )
+	end, "mc_server_collision_toggle" )
+end
+
+timer.Simple( 0, function()
+	if not serverCollisionEnabled() then clearAllServerCollision() end
 end )
 
 timer.Create( "mc_block_tick", 1, 0, function()
@@ -1871,6 +2155,7 @@ local function loadSaveChunks( data, cache, deferWorldEffects )
 end
 
 local function savePartPath( manifestPath, partPath )
+	partPath = istable( partPath ) and partPath.path or partPath
 	partPath = string.Trim( tostring( partPath or "" ) )
 	if partPath == "" then return nil end
 	partPath = string.gsub( partPath, "\\", "/" )
@@ -1916,6 +2201,14 @@ local function validateSavePartFiles( data, manifestPath )
 	return true
 end
 
+local function hasMCB4SaveParts( data )
+	if data and data.fastFormat == "MCB4" then return true end
+	for _, part in ipairs( data and data.parts or {} ) do
+		if istable( part ) and part.fastFormat == "MCB4" then return true end
+	end
+	return false
+end
+
 function SV.LoadFromPath( path, resyncClients, requestedName )
 	if not file.Exists( path, "DATA" ) then return false, "save_not_found" end
 
@@ -1940,10 +2233,6 @@ function SV.LoadFromPath( path, resyncClients, requestedName )
 		end
 	end
 
-	if data.map and data.map ~= game.GetMap() then
-		MsgN( "[MC] WARNING: save map " .. tostring( data.map ) .. " != current " .. game.GetMap() )
-	end
-
 	if data.bs and data.bs ~= MC.BS then
 		MsgN( "[MC] WARNING: save BlockSize " .. data.bs .. " != current " .. MC.BS .. " (positions may be off)" )
 	end
@@ -1955,21 +2244,86 @@ function SV.LoadFromPath( path, resyncClients, requestedName )
 				" -> " .. MC.CS .. "x" .. MC.CS .. "x" .. MC.CH )
 		end
 	end
-	local isV8PartManifest = data.v == 8 and istable( data.parts )
+	local isLazyPartManifest = ( data.v == 8 or data.v == 10 ) and istable( data.parts )
+	local lazyStreaming = isLazyPartManifest
+		and istable( data.chunkIndex )
+		and MC.ChunkStreamingEnabled and MC.ChunkStreamingEnabled()
+		and SV.ChunkStore and SV.ChunkStore.LoadLazyManifest
+
+	-- Last chance for external code to read the OUTGOING world. This branch
+	-- has three load paths (lazy manifest, MCB4 eager, staged/parts) where
+	-- main had one, so the announce is idempotent and each path fires it
+	-- immediately before its own first destructive step - never before the
+	-- validation that could still reject the save.
+	local preWorldLoadFired = false
+	local function announcePreWorldLoad()
+		if preWorldLoadFired then return end
+		preWorldLoadFired = true
+		if MC.RunEvent then MC.RunEvent( "MC.PreWorldLoad", path, requestedName ) end
+	end
+	local function announceWorldLoaded()
+		-- All three success exits land here. Each one repopulated the world
+		-- after clearWorldNoNet/beginWorldLoadStage flushed, so flush again
+		-- before listeners get a chance to sample lighting.
+		if SV.FlushLightingCaches then SV.FlushLightingCaches() end
+		if MC.RunEvent then MC.RunEvent( "MC.WorldLoaded", path, requestedName, SV.BlockCount ) end
+	end
+
+	if lazyStreaming then
+		announcePreWorldLoad()
+		clearWorldNoNet()
+		local loaded, loadError = SV.ChunkStore.LoadLazyManifest( data, path )
+		if not loaded then
+			clearWorldNoNet()
+			return false, loadError or "lazy_manifest_load_failed"
+		end
+		if SV.RebuildRedstoneRuntime then SV.RebuildRedstoneRuntime() end
+		if SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
+		SV.Dirty = false
+		if resyncClients then resyncAllClients() end
+		local indexedChunks = 0
+		for _ in pairs( data.chunkIndex ) do indexedChunks = indexedChunks + 1 end
+		MsgN( "[MC] loaded lazy manifest " .. indexedChunks .. " chunks / " .. SV.BlockCount .. " blocks" ..
+			( requestedName and ( " from \"" .. requestedName .. "\"" ) or "" ) )
+		announceWorldLoaded()
+		return true
+	end
+	if data.v == 10 and hasMCB4SaveParts( data ) and SV.ChunkStore and SV.ChunkStore.LoadAllChunksEager then
+		announcePreWorldLoad()
+		clearWorldNoNet()
+		local indexedChunks = 0
+		for _ in pairs( data.chunkIndex or {} ) do indexedChunks = indexedChunks + 1 end
+		local staged, loadError = SV.ChunkStore.LoadLazyManifest( data, path )
+		if not staged then
+			clearWorldNoNet()
+			return false, loadError or "mcb4_manifest_load_failed"
+		end
+		local loaded, eagerError = SV.ChunkStore.LoadAllChunksEager()
+		if not loaded then
+			clearWorldNoNet()
+			return false, eagerError or "mcb4_eager_load_failed"
+		end
+		if SV.RebuildRedstoneRuntime then SV.RebuildRedstoneRuntime() end
+		if SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
+		SV.Dirty = false
+		if resyncClients then resyncAllClients() end
+		MsgN( "[MC] loaded full MCB4 manifest " .. indexedChunks .. " chunks" ..
+			( requestedName and ( " from \"" .. requestedName .. "\"" ) or "" ) )
+		announceWorldLoaded()
+		return true
+	end
 	if istable( data.parts ) then
 		local validParts, partError = validateSavePartFiles( data, path )
 		if not validParts then return false, partError end
 	end
 
-	-- Last chance for external code to read the outgoing world.
-	if MC.RunEvent then MC.RunEvent( "MC.PreWorldLoad", path, requestedName ) end
-
+	announcePreWorldLoad()
 	local stagedLoad = data.v == 9 or data.v == 10
 	local previousWorld = stagedLoad and beginWorldLoadStage() or nil
 	if not stagedLoad then clearWorldNoNet() end
 
 	local cache = {}
-	if isV8PartManifest or istable( data.parts ) then
+	if isLazyPartManifest or istable( data.parts ) then
 		local ok, err = loadSaveParts( data, path, cache, stagedLoad )
 		if not ok then
 			if stagedLoad then restoreWorldLoadStage( previousWorld ) else clearWorldNoNet() end
@@ -1986,12 +2340,11 @@ function SV.LoadFromPath( path, resyncClients, requestedName )
 	if SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
 
 	SV.Dirty = false
-	if SV.FlushLightingCaches then SV.FlushLightingCaches() end
 	if resyncClients then resyncAllClients() end
 	MsgN( "[MC] loaded " .. SV.BlockCount .. " blocks" ..
 		( requestedName and ( " from \"" .. requestedName .. "\"" ) or "" ) ..
 		( data.map and ( " saved on map " .. tostring( data.map ) ) or "" ) )
-	if MC.RunEvent then MC.RunEvent( "MC.WorldLoaded", path, requestedName, SV.BlockCount ) end
+	announceWorldLoaded()
 	return true
 end
 
@@ -2106,10 +2459,14 @@ function SV.ClearWorld()
 	SV.PhysDirtyPriority = {}
 	SV.PhysDirtyBulk = {}
 	SV.PhysDirtyBulkOrder = {}
+	SV.ServerCollisionActiveChunks = {}
+	SV.ServerCollisionSignatures = {}
+	SV.ServerCollisionLastSeen = {}
+	SV.ServerCollisionLazyMode = false
 	SV.ReliableNetQueues = {}
+	if SV.FlushLightingCaches then SV.FlushLightingCaches() end
 	if SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
 	SV.Dirty = true
-	if SV.FlushLightingCaches then SV.FlushLightingCaches() end
 	for _, target in ipairs( player.GetAll() ) do SV.BeginSync( target ) end
 	MsgN( "[MC] world cleared" )
 	if MC.RunEvent then MC.RunEvent( "MC.WorldCleared" ) end
@@ -2204,6 +2561,11 @@ end )
 -- force a collision rebuild on every existing chunk (admin); use after updating code
 concommand.Add( "mc_rebuild", function( ply )
 	if IsValid( ply ) and not ply:IsAdmin() then return end
+	if not serverCollisionEnabled() then
+		MsgN( "[MC] server collision is disabled (mc_server_collision 0)" )
+		if IsValid( ply ) then ply:ChatPrint( "[MC] server collision is disabled" ) end
+		return
+	end
 	local n = 0
 	for key, c in pairs( MC.World ) do
 		if c.count > 0 then

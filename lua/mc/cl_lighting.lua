@@ -377,12 +377,16 @@ function MC.ClearLightingCache()
 end
 
 function MC.MarkAllMeshesDirty()
-	-- Mesh/material invalidation must not destroy the authoritative CPU light
-	-- field. Several startup visual registrations call this helper; rebuilding
-	-- all Lua block light for each one can stall or crash while joining a large
-	-- world without the optional native worker. Snapshot hydration already owns
-	-- its one full rebuild through EndLightingBulkLoad.
-	clearGpuLightTextures()
+	MC.ClearLightingCache()
+	-- ClearLightingCache wipes the stored block-light field but re-queues only
+	-- SKY flood; block light comes back solely through RebuildLightingCells.
+	-- Without this every caller (mc_mesh_rebuild, the shader/light-texture
+	-- toggles, rail/observer/piston visual reloads) blacked out all torch
+	-- light until a manual mc_light_rebuild. Inside a lighting bulk load the
+	-- rebuild is deferred: EndLightingBulkLoad performs it once at the end.
+	if ( tonumber( MC.LightingBulkLoadDepth ) or 0 ) <= 0 and MC.RebuildLightingCells then
+		MC.RebuildLightingCells()
+	end
 	local marked = 0
 	for key, chunk in pairs( MC.World or {} ) do
 		if chunk and chunk.count and chunk.count > 0 and MC.MarkChunkDirty then
@@ -793,6 +797,62 @@ function MC.UpdateLightingForChunkLoaded( chunk )
 	return changedCount, dirtySections
 end
 
+-- Partial streaming batches preserve the global source index and propagated
+-- field. Old touched chunks are removed into one decrease queue, then all new
+-- sources and loaded borders seed one combined increase. This is also used by
+-- progressive unload frames, avoiding one flood per chunk.
+function MC.BeginPartialLightingBatch( oldChunks )
+	local batch = { started = perfNow(), changed = newChangedLightCells(), removeQ = newLightQueue(), addQ = newLightQueue(), old = {}, sources = 0 }
+	local native = nativeBlockLightBackend()
+	batch.native = native
+	for _, chunk in ipairs( oldChunks or {} ) do
+		local key = chunk and chunk.key
+		if key and not batch.old[key] then
+			batch.old[key] = true
+			if MC.NoteSkyColumnChunkUnloaded then MC.NoteSkyColumnChunkUnloaded( chunk.cx, chunk.cy, chunk.cz ) end
+			if not native then clearChunkStoredBlockLightToQueue( key, batch.changed, batch.removeQ ) end
+			local sources = MC.LightChunkSources and MC.LightChunkSources[key]
+			for sourceKey in pairs( sources or {} ) do MC.LightSourceCells[sourceKey] = nil end
+			if MC.LightChunkSources then MC.LightChunkSources[key] = nil end
+		end
+	end
+	return batch
+end
+
+function MC.CancelPartialLightingBatch( batch )
+	if not batch then return end
+	-- The caller resets the client world after an internal commit failure. Keep
+	-- this hook explicit so no streaming rate-limit mode can leak into later edits.
+	MC.PartialLightingRateLimited = false
+end
+
+function MC.EndPartialLightingBatch( batch, newChunks, rateLimited )
+	if not batch then return 0, 0 end
+	local native = batch.native or nativeBlockLightBackend()
+	for _, chunk in ipairs( newChunks or {} ) do
+		if chunk and chunk.key then
+			if MC.NoteSkyColumnChunkLoaded then MC.NoteSkyColumnChunkLoaded( chunk ) end
+			if not native then
+				indexChunkSources( chunk )
+				batch.sources = batch.sources + seedChunkLightSources( batch.addQ, batch.changed, chunk )
+				seedChunkBorderLight( batch.addQ, chunk )
+			end
+		end
+	end
+	MC.LightSourceIndexReady = true
+	if native then
+		native.ScheduleBlockLightRebuild( 0.02 )
+		MC.LightBlockChunks = {}
+		MC.LightCellsReady = true
+		return 0, 0
+	end
+	MC.PartialLightingRateLimited = rateLimited == true
+	local changed, sections = finishChunkLightQueues( batch.started, batch.changed, batch.removeQ, batch.addQ,
+		batch.sources, "partial:" .. tostring( table.Count( batch.old ) ), "partial_batch" )
+	MC.PartialLightingRateLimited = false
+	return changed, sections
+end
+
 function MC.MarkLightSectionsDirtyForChangedCells( changed )
 	local dirty = {}
 	local dirtyCells = {}
@@ -861,6 +921,10 @@ function MC.MarkLightSectionsDirtyForChangedCells( changed )
 							meshLightDirty[key] = sections
 						end
 						sections[sectionIndex] = true
+						if MC.PartialLightingRateLimited then
+							MC.MeshLightDirtyRateLimited = MC.MeshLightDirtyRateLimited or {}
+							MC.MeshLightDirtyRateLimited[key] = true
+						end
 					end
 					local dirtyKey = key * 32 + sectionIndex
 					if not dirty[dirtyKey] then

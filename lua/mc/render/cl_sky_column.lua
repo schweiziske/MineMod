@@ -177,14 +177,14 @@ function MC.NoteSkyColumnBlockChange( bx, by, bz, oldOpacity, newOpacity )
 end
 
 local function markChunkColumnDirty( cx, cy, exceptCz )
-	if not ( MC.GpuChunkLightDirtyChunks and MC.GpuChunkLightDirtyCells and MC.ChunkKey ) then return end
+	if not ( MC.MarkGpuChunkLightTextureDirty and MC.ChunkKey ) then return end
 	local list = chunkColumns and chunkColumns[chunkColKey( cx, cy )] or nil
 	if not list then return end
 	for cz in pairs( list ) do
 		if cz ~= exceptCz then
-			local key = MC.ChunkKey( cx, cy, cz )
-			MC.GpuChunkLightDirtyChunks[key] = true
-			MC.GpuChunkLightDirtyCells[key] = true
+			-- Through the public marker so the atlas can coalesce the burst of
+			-- whole-chunk dirties a streaming column produces.
+			MC.MarkGpuChunkLightTextureDirty( MC.ChunkKey( cx, cy, cz ) )
 		end
 	end
 end

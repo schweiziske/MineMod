@@ -291,6 +291,7 @@ local function collectClientPlayerAABBCollisionInterestKeys( lp, desired, radius
 	if not IsValid( lp ) then return nil end
 	radius = math.max( 0, math.floor( tonumber( radius ) or 0 ) )
 	local pos = lp:GetPos()
+	if MC.EntityWorldPos then pos = MC.EntityWorldPos( lp ) end
 	local bx, by, bz = MC.WorldToCell( pos )
 
 	-- re-anchor only when the player leaves the core around the anchor;
@@ -453,6 +454,9 @@ local function releaseCarrierCollisionForChunk( key )
 	if MC.ClientCollisionAABBDebugBoxes then
 		MC.ClientCollisionAABBDebugBoxes[key] = nil
 	end
+	if MC.ClientCarrierConvexPages then
+		MC.ClientCarrierConvexPages[key] = nil
+	end
 end
 
 function MC.ReleaseAllClientCarrierCollision()
@@ -559,7 +563,8 @@ end
 local function buildCarrierCollisionForChunk( key, chunk, bounds )
 	if not MC.BuildChunkCollisionConvexGroups then return false, "builder_missing", 0, 0 end
 	local groups, totalConvexes, boxes, customConvexes = MC.BuildChunkCollisionConvexGroups( chunk, bounds )
-	local origin = MC.ChunkWorldOrigin( chunk.cx, chunk.cy, chunk.cz )
+	local origin = MC.ChunkRenderOrigin and MC.ChunkRenderOrigin( chunk.cx, chunk.cy, chunk.cz )
+		or MC.ChunkWorldOrigin( chunk.cx, chunk.cy, chunk.cz )
 	rememberCarrierAABBDebugBoxes( key, origin, boxes )
 	if MC.ClientPhysStats then
 		MC.ClientPhysStats.lastClientPhysBoxes = boxes and #boxes or 0
@@ -604,7 +609,34 @@ local function buildCarrierCollisionForChunk( key, chunk, bounds )
 			return false, "carrier_apply_failed", #convexes, #pages
 		end
 	end
+	MC.ClientCarrierConvexPages = MC.ClientCarrierConvexPages or {}
+	MC.ClientCarrierConvexPages[key] = pages
 	return true, nil, #convexes, #pages
+end
+
+local function shiftCarrierConvexPages( pages, dx, dy, dz )
+	for _, page in ipairs( pages or {} ) do
+		for _, convex in ipairs( page ) do
+			for _, point in ipairs( convex ) do
+				point.x = point.x + dx
+				point.y = point.y + dy
+				point.z = point.z + dz
+			end
+		end
+	end
+end
+
+local function shiftClientCollisionDebugBoxes( key, dx, dy, dz )
+	local boxes = MC.ClientCollisionAABBDebugBoxes and MC.ClientCollisionAABBDebugBoxes[key]
+	if not boxes then return end
+	for _, box in ipairs( boxes ) do
+		box.mins.x = box.mins.x + dx
+		box.mins.y = box.mins.y + dy
+		box.mins.z = box.mins.z + dz
+		box.maxs.x = box.maxs.x + dx
+		box.maxs.y = box.maxs.y + dy
+		box.maxs.z = box.maxs.z + dz
+	end
 end
 
 local function clientPhysAlreadyBuilt( key, chunk, bounds )
@@ -633,6 +665,7 @@ function MC.RefreshClientCollisionInterest( force )
 
 	if enabled and radius > 0 and IsValid( lp ) then
 		local pos = lp:GetPos()
+		if MC.EntityWorldPos then pos = MC.EntityWorldPos( lp ) end
 		local bx, by, bz = MC.WorldToCell( pos )
 		local cx, cy, cz = MC.CellToChunk( bx, by, bz )
 		centerKey = MC.ChunkKey( cx, cy, cz )
@@ -732,6 +765,18 @@ hook.Add( "SetupMove", "mc_client_collision_interest_move", function( ply )
 	-- the resulting prediction errors shake the view.
 	if IsFirstTimePredicted and not IsFirstTimePredicted() then return end
 	MC.RefreshClientCollisionInterest()
+end )
+
+-- Adapter activation/deactivation changes the coordinate space of every
+-- world-space carrier convex. Drop the old pages and rebuild the current
+-- interest in the new frame; ordinary maps therefore never inherit InfMap
+-- collision after the bridge is removed or disabled.
+hook.Remove( "MCWorldAdapterChanged", "mc_client_collision_adapter_frame" )
+hook.Add( "MCWorldAdapterChanged", "mc_client_collision_adapter_frame", function()
+	MC.ResetClientCollisionState()
+	timer.Simple( 0, function()
+		if MC.RefreshClientCollisionInterest then MC.RefreshClientCollisionInterest( true ) end
+	end )
 end )
 
 
@@ -842,6 +887,53 @@ local function rebuildChunkPhys( key, enabled, bounds )
 	if MC.PhysDirtyBulk then MC.PhysDirtyBulk[key] = nil end
 	clearClientPhysRetry( key )
 	return true
+end
+
+-- Floating-origin transitions translate already-built convex pages instead of
+-- rescanning voxels and regrouping collision on every InfMap partition change.
+function MC.RebaseClientCollisionFrame( delta )
+	if not delta then return false, "missing_delta" end
+	local dx = tonumber( delta.x ) or 0
+	local dy = tonumber( delta.y ) or 0
+	local dz = tonumber( delta.z ) or 0
+	if dx == 0 and dy == 0 and dz == 0 then
+		return true, { rebased = 0, rebuilt = 0 }
+	end
+
+	local started = SysTime()
+	local failed = {}
+	local rebased = 0
+	for key, carriers in pairs( MC.CollisionCarrierAssignments or {} ) do
+		local pages = MC.ClientCarrierConvexPages and MC.ClientCarrierConvexPages[key]
+		local valid = pages and #pages == #carriers
+		if valid then
+			shiftCarrierConvexPages( pages, dx, dy, dz )
+			shiftClientCollisionDebugBoxes( key, dx, dy, dz )
+			for index, carrier in ipairs( carriers ) do
+				if not IsValid( carrier ) or not carrier.ApplyCarrierConvexes
+				or not carrier:ApplyCarrierConvexes( pages[index] ) then
+					valid = false
+					break
+				end
+			end
+		end
+		if valid then rebased = rebased + 1
+		else failed[#failed + 1] = key end
+	end
+
+	local rebuilt = 0
+	for _, key in ipairs( failed ) do
+		releaseCarrierCollisionForChunk( key )
+		clearClientPhysBuildState( key )
+		if rebuildChunkPhys( key, clientCollisionEnabled() ) then rebuilt = rebuilt + 1 end
+	end
+
+	MC.ClientPhysStats = MC.ClientPhysStats or {}
+	MC.ClientPhysStats.lastFrameRebaseMS = math.Round( ( SysTime() - started ) * 1000, 3 )
+	MC.ClientPhysStats.lastFrameRebaseChunks = rebased
+	MC.ClientPhysStats.lastFrameRebaseFallbacks = #failed
+	MC.ClientPhysStats.lastFrameRebaseDelta = Vector( dx, dy, dz )
+	return #failed == 0, { rebased = rebased, rebuilt = rebuilt, failed = #failed }
 end
 
 function MC.RebuildChunkPhys( key, enabled, bounds )
