@@ -244,6 +244,7 @@ if CLIENT then
 		"DrawVisible", "SetChunkVisible", "SetSimpleGreedy", "SetDirectionalDraw", "SetOcclusionCull", "SetLod",
 	}
 	local NATIVE_MODULE_ABI = 11
+	local NATIVE_MODULE_URL = "https://github.com/schweiziske/mc_swep"
 
 	local function expectedNativeModulePath()
 		if not ( system and system.IsWindows and system.IsWindows() ) then return nil end
@@ -267,6 +268,9 @@ if CLIENT then
 				MC.NativeMeshModuleProbeDone = true
 				MC.NativeMeshModuleAvailable = false
 				MC.NativeMeshModuleMissing = false
+				MC.NativeMeshModuleABI = nil
+				MC.NativeMeshModuleExpectedABI = NATIVE_MODULE_ABI
+				MC.NativeMeshModuleOutdated = false
 				MC.NativeMeshModuleFailureReason = "unsupported native module platform or architecture"
 				return false
 			end
@@ -275,6 +279,9 @@ if CLIENT then
 				MC.NativeMeshModuleProbeDone = true
 				MC.NativeMeshModuleAvailable = false
 				MC.NativeMeshModuleMissing = true
+				MC.NativeMeshModuleABI = nil
+				MC.NativeMeshModuleExpectedABI = NATIVE_MODULE_ABI
+				MC.NativeMeshModuleOutdated = false
 				MC.NativeMeshModuleFailureReason = "module not installed: " .. modulePath
 				return false
 			end
@@ -283,6 +290,7 @@ if CLIENT then
 
 		local usable = loaded and istable( mcmesh ) and isfunction( mcmesh.AbiVersion )
 		local failureReason
+		local moduleABI
 		if usable then failureReason = nil
 		elseif loadError ~= nil then failureReason = tostring( loadError )
 		elseif mcmesh ~= nil then failureReason = "invalid module table (type=" .. tostring( type( mcmesh ) ) .. ")"
@@ -290,8 +298,12 @@ if CLIENT then
 		end
 		if usable then
 			local abiOK, abi = pcall( mcmesh.AbiVersion )
-			usable = abiOK and abi == NATIVE_MODULE_ABI
-			if not usable then failureReason = "ABI mismatch" end
+			moduleABI = abiOK and tonumber( abi ) or nil
+			usable = moduleABI == NATIVE_MODULE_ABI
+			if not usable then
+				failureReason = "ABI mismatch (module " .. tostring( moduleABI or abi )
+					.. ", required " .. NATIVE_MODULE_ABI .. ")"
+			end
 		end
 		if usable then
 			for _, name in ipairs( NATIVE_MODULE_EXPORTS ) do
@@ -306,34 +318,57 @@ if CLIENT then
 		MC.NativeMeshModuleProbeDone = true
 		MC.NativeMeshModuleAvailable = usable
 		MC.NativeMeshModuleMissing = false
+		MC.NativeMeshModuleABI = moduleABI
+		MC.NativeMeshModuleExpectedABI = NATIVE_MODULE_ABI
+		MC.NativeMeshModuleOutdated = moduleABI ~= nil and moduleABI < NATIVE_MODULE_ABI
 		MC.NativeMeshModuleFailureReason = usable and nil or failureReason
 		return usable
 	end
 
 	local nativeUsable = MC.ProbeNativeMeshModule()
 	local nativeMissing = MC.NativeMeshModuleMissing == true
+	local nativeOutdated = MC.NativeMeshModuleOutdated == true
 	MC.RENDER_SECTION_SIZE = nativeUsable and 16 or 8
 	MsgN( "[MC] render section size = " .. MC.RENDER_SECTION_SIZE
 		.. ( nativeUsable and " (native module)" or " (Lua fallback)" ) )
 
-	if nativeMissing and not MC.NativeMeshInstallNoticeScheduled then
+	if ( nativeMissing or nativeOutdated ) and not MC.NativeMeshInstallNoticeScheduled then
 		MC.NativeMeshInstallNoticeScheduled = true
-		local nativeURL = "https://github.com/schweiziske/mc_swep"
+		local nativeURL = NATIVE_MODULE_URL
 		timer.Simple( 1, function()
 			if MC.NativeMeshInstallNoticeShown then return end
 			MC.NativeMeshInstallNoticeShown = true
 			if chat and chat.AddText then
-				chat.AddText(
-					Color( 80, 190, 255 ), "[MCSWEP] ",
-					Color( 255, 210, 90 ), MC.T( "native.dll_missing",
-						"未检测到优化DLL，当前使用 Lua 后端。 下载地址：" ),
-					Color( 130, 210, 255 ), nativeURL,
-					Color( 160, 255, 160 ), MC.T( "native.dll_open_hint",
-						"(推荐下载)" )
-				)
+				if nativeOutdated then
+					chat.AddText(
+						Color( 80, 190, 255 ), "[MCSWEP] ",
+						Color( 255, 120, 90 ), MC.T( "native.dll_outdated",
+							"Native DLL 版本过期（当前 ABI {actual}，需要 ABI {required}），当前使用 Lua 后端。下载地址：", {
+								actual = tostring( MC.NativeMeshModuleABI or "?" ),
+								required = tostring( NATIVE_MODULE_ABI ),
+							} ),
+						Color( 130, 210, 255 ), nativeURL
+					)
+				else
+					chat.AddText(
+						Color( 80, 190, 255 ), "[MCSWEP] ",
+						Color( 255, 210, 90 ), MC.T( "native.dll_missing",
+							"未检测到优化DLL，当前使用 Lua 后端。 下载地址：" ),
+						Color( 130, 210, 255 ), nativeURL,
+						Color( 160, 255, 160 ), MC.T( "native.dll_open_hint",
+							"(推荐下载)" )
+					)
+				end
 			end
-			MsgN( "[MCSWEP] " .. MC.T( "native.dll_console",
-				"Native DLL 下载地址: {url}", { url = nativeURL } ) )
+			local consoleKey = nativeOutdated and "native.dll_outdated_console" or "native.dll_console"
+			local consoleFallback = nativeOutdated
+				and "Native DLL 版本过期（当前 ABI {actual}，需要 ABI {required}）。下载地址: {url}"
+				or "Native DLL 下载地址: {url}"
+			MsgN( "[MCSWEP] " .. MC.T( consoleKey, consoleFallback, {
+				actual = tostring( MC.NativeMeshModuleABI or "?" ),
+				required = tostring( NATIVE_MODULE_ABI ),
+				url = nativeURL,
+			} ) )
 		end )
 		concommand.Add( "mc_native_download", function()
 			if gui and gui.OpenURL then gui.OpenURL( nativeURL ) end
