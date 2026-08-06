@@ -261,20 +261,14 @@ MC.ConfigConVars = {
 		} ),
 
 		category( "sky_light", "lighting", "Sky-light updates", "天空光更新",
-			"Voxel sky flood and per-frame light texture work budgets.",
-			"体素天空光传播与每帧光照纹理工作预算。", {
+			"Voxel sky flood controls.",
+			"体素天空光传播设置。", {
 			item( "mc_light_sky_flood", "Voxel sky flood", "体素天空光传播", "bool",
 				"Flood Minecraft-style sky light into partially enclosed spaces.",
 				"将 Minecraft 风格天空光传播到半封闭空间。" ),
 			item( "mc_light_sky_flood_per_frame", "Sky flood budget", "天空光传播预算", "number",
 				"Chunks of queued sky-light work processed per frame.",
 				"每帧处理的天空光队列区块数。", { unit = "chunks/frame" } ),
-			item( "mc_light_refresh_per_frame", "Day/night refresh budget", "昼夜刷新预算", "number",
-				"Chunk light textures refreshed per frame during time changes.",
-				"昼夜亮度变化时每帧刷新的区块光照纹理数。", { unit = "chunks/frame" } ),
-			item( "mc_light_flush_per_frame", "Texture bake budget", "纹理烘焙预算", "number",
-				"Chunk light textures baked per PreRender; 0 means unlimited.",
-				"每次 PreRender 烘焙的区块光照纹理数；0 表示不限。", { unit = "chunks/frame" } ),
 		} ),
 
 		category( "shadow_look", "lighting", "Shadow appearance", "阴影观感",

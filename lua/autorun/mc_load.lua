@@ -241,9 +241,10 @@ if CLIENT then
 		"SetCell", "GetCell", "GetChunkCells", "Think", "DrawChunk", "UnloadChunk",
 		"ClearWorld", "Shutdown", "GetStats", "StartBlockLightRebuild",
 		"PollBlockLightRebuild", "CancelBlockLightRebuild", "RebuildBlockLight", "GetBlockLightChunk", "GetSkyLightChunk",
+		"BindLightAtlasMaterial", "GetLightAtlasStats", "GetLightAtlasSlot",
 		"DrawVisible", "SetChunkVisible", "SetSimpleGreedy", "SetDirectionalDraw", "SetOcclusionCull", "SetLod",
 	}
-	local NATIVE_MODULE_ABI = 11
+	local NATIVE_MODULE_ABI = 12
 	local NATIVE_MODULE_URL = "https://github.com/schweiziske/mc_swep"
 
 	local function expectedNativeModulePath()

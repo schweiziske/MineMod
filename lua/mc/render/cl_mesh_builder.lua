@@ -23,6 +23,19 @@ local recolorLightMeta = RM.recolorLightMeta
 local effectiveLightStyleForMaterial = RM.effectiveLightStyleForMaterial
 local setMeshSampleCacheOrigin = RM.setMeshSampleCacheOrigin
 local uploadMeshVertices = RM.uploadMeshVertices
+local setGpuLightPayloadSlot = RM.SetGpuLightPayloadSlot
+
+local function prepareGpuLightPayload( key )
+	if setGpuLightPayloadSlot then setGpuLightPayloadSlot( 0 ) end
+	if not ( MC.UsingGpuLightTexture and MC.UsingGpuLightTexture() ) then return true end
+	if not MC.PrepareGpuChunkLightTexture then return true end
+	local slot, _, ready = MC.PrepareGpuChunkLightTexture( key )
+	-- Slot 0 is the permanent fullbright tile. If the selected backend cannot
+	-- finish a real tile synchronously, the mesh is still safe and never points
+	-- at uninitialized/foreign atlas memory.
+	if setGpuLightPayloadSlot then setGpuLightPayloadSlot( ready and slot or 0 ) end
+	return ready == true
+end
 
 function MC.BuildChunkMesh( key, sectionIndex )
 	local buildStart = SysTime()
@@ -94,6 +107,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 		end
 		return
 	end
+	prepareGpuLightPayload( key )
 	local ctx = RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, meshLightStyle, buildStart, meshLightProfile )
 
 	local loopStart = SysTime()
@@ -211,6 +225,7 @@ function MC.RebuildChunkMeshLighting( key, sectionIndex )
 		end
 		return MC.BuildChunkMesh( key, sectionIndex )
 	end
+	prepareGpuLightPayload( key )
 
 	setMeshSampleCacheOrigin( chunk.cx * C.CS, chunk.cy * C.CS, chunk.cz * C.CH )
 	meshPerf.prepMS = meshPerfMS( buildStart )

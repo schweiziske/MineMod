@@ -404,12 +404,8 @@ function MC.DrawChunk( key, material, isGpuLightTexture )
 			or material == MC.MaterialGpuLightTexture
 	end
 	if isGpuLightTexture then
-		-- Light data lives in one shared atlas bound to $texture1 once, so the
-		-- per-chunk work here is pure Lua: LRU-touch the chunk's atlas slot and
-		-- queue a budgeted PreRender bake if it is dirty or unassigned. The
-		-- per-chunk SetTexture this used to do was the last per-chunk material
-		-- state write in the frame.
-		if MC.TouchGpuChunkLightTexture then MC.TouchGpuChunkLightTexture( key ) end
+		-- The Native mesh payload already names an immutable atlas slot. Drawing
+		-- performs no slot touch, allocation, upload or per-chunk material write.
 		if MC.BindMeshShadowMap then MC.BindMeshShadowMap( material ) end
 	end
 	if material == MC.MaterialGpuOpaque or isGpuLightTexture then
@@ -425,9 +421,7 @@ function MC.DrawChunkTranslucent( key, material )
 	end
 	local isGpuLightTexture = MC.IsGpuLightTextureMaterial and MC.IsGpuLightTextureMaterial( material ) or false
 	if isGpuLightTexture then
-		-- Same per-frame binds as the opaque GPU path: LRU-touch the chunk's
-		-- light atlas slot and upload the shadow constants once per material.
-		if MC.TouchGpuChunkLightTexture then MC.TouchGpuChunkLightTexture( key ) end
+		-- Shared shadow constants only; chunk-light atlas state is immutable.
 		if MC.BindMeshShadowMap then MC.BindMeshShadowMap( material ) end
 	end
 	drawMeshList( MC.MeshesTrans[key], material, isGpuLightTexture and "test" or false, nil, isGpuLightTexture )
@@ -484,7 +478,8 @@ local function drawNativeChunks( translucent )
 	local frustum = not MC.MeshFrustumCull or MC.MeshFrustumCull:GetBool()
 	local adapter = MC.GetWorldAdapter and MC.GetWorldAdapter() or nil
 	local horizontalDistance = adapter and isfunction( adapter.ChunkDrawDistanceVisible ) or false
-	local material = MC.CurrentChunkMaterial and MC.CurrentChunkMaterial( translucent )
+	local nativeMaterial = MC.NativeChunkMaterial or MC.CurrentChunkMaterial
+	local material = nativeMaterial and nativeMaterial( translucent )
 		or ( translucent and MC.MaterialTranslucent or MC.Material )
 	local isGpuLightTexture = MC.IsGpuLightTextureMaterial and MC.IsGpuLightTextureMaterial( material )
 		or material == MC.MaterialGpuLightTexture

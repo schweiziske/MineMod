@@ -213,6 +213,31 @@ local function gpuShaderPayloadColor( faceIndex, mul, alpha, tintCode )
 	return colorFromRGBA( gpuShaderPayloadValues( faceIndex, mul, alpha, tintCode ) )
 end
 
+-- Packed chunk-light payload is intentionally separate from the older GPU
+-- shader AO payload above. Reusing gpuShaderPayloadValues() would corrupt the
+-- non-light-texture shader's vertex AO channel.
+local gpuLightPayloadSlot = 0
+local function setGpuLightPayloadSlot( slot )
+	gpuLightPayloadSlot = mathClamp( mathFloor( tonumber( slot ) or 0 ), 0, 5459 )
+	return gpuLightPayloadSlot
+end
+
+local function gpuLightTexturePayloadValues( faceIndex, alpha, tintCode )
+	local slot = gpuLightPayloadSlot
+	local slotLow = slot % 256
+	local slotHigh = mathFloor( slot / 256 )
+	local face = mathClamp( mathFloor( tonumber( faceIndex ) or 0 ), 0, 7 )
+	return
+		slotLow,
+		face + slotHigh * 8,
+		mathClamp( mathFloor( tonumber( tintCode ) or 0 ), 0, 255 ),
+		alpha or 255
+end
+
+local function gpuLightTexturePayloadColor( faceIndex, alpha, tintCode )
+	return colorFromRGBA( gpuLightTexturePayloadValues( faceIndex, alpha, tintCode ) )
+end
+
 local function applyBlockTint( r, g, b, tintCode )
 	if not blockTintRGB or not tintCode or tintCode == 0 then return r, g, b end
 	local tr, tg, tb = blockTintRGB( tintCode )
@@ -223,7 +248,7 @@ local function litFaceColorValues( shade, bx, by, bz, id, faceIndex, cn, selfEmi
 	style = style or MC_LIGHT_STYLE_VANILLA
 	local shadeR, shadeG, shadeB, shadeA = shade.r or 255, shade.g or 255, shade.b or 255, shade.a or 255
 	if style == MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE then
-		return gpuShaderPayloadValues( faceIndex, 1, shadeA, tintCode )
+		return gpuLightTexturePayloadValues( faceIndex, shadeA, tintCode )
 	end
 	shadeR, shadeG, shadeB = applyBlockTint( shadeR, shadeG, shadeB, tintCode )
 	if not MC.SampleLighting then return shadeR, shadeG, shadeB, shadeA end
@@ -268,7 +293,7 @@ local function litFaceColorMetaValues( meta, style )
 	local faceIndex = meta.faceIndex
 	local tintCode = meta.tintCode or 0
 	if style == MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE then
-		return gpuShaderPayloadValues( faceIndex, 1, shadeA, tintCode )
+		return gpuLightTexturePayloadValues( faceIndex, shadeA, tintCode )
 	end
 	shadeR, shadeG, shadeB = applyBlockTint( shadeR, shadeG, shadeB, tintCode )
 	if not MC.SampleLighting then return shadeR, shadeG, shadeB, shadeA end
@@ -330,7 +355,7 @@ end
 
 local function fullCubeCornerColor( shadeR, shadeG, shadeB, shadeA, bx, by, bz, faceIndex, cx, cy, cz, selfEmission, style, rScale, gScale, bScale, receiveAO )
 	if style == MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE then
-		return gpuShaderPayloadColor( faceIndex, 1, shadeA )
+		return gpuLightTexturePayloadColor( faceIndex, shadeA )
 	end
 	local key = nil
 	if style ~= MC_LIGHT_STYLE_SHADER and style ~= MC_LIGHT_STYLE_GPU_SHADER then
@@ -457,7 +482,7 @@ end
 local function fullCubeFaceCornerColors( shadeIndex, bx, by, bz, faceIndex, selfEmission, style, receiveAO )
 	local shadeR, shadeG, shadeB, shadeA = shadeRGBAByIndex( shadeIndex )
 	if style == MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE then
-		local color = gpuShaderPayloadColor( faceIndex, 1, shadeA )
+		local color = gpuLightTexturePayloadColor( faceIndex, shadeA )
 		return color, color, color, color
 	end
 	if not MC.SampleLighting then
@@ -587,6 +612,7 @@ RM.minecraftBestCornerAOValues = minecraftBestCornerAOValues
 RM.minecraftShaderCornerAOValues = minecraftShaderCornerAOValues
 RM.shaderFaceTint = shaderFaceTint
 RM.resetMeshColorObjectCache = resetMeshColorObjectCache
+RM.SetGpuLightPayloadSlot = setGpuLightPayloadSlot
 RM.colorFromRGBA = colorFromRGBA
 RM.litFaceColorValues = litFaceColorValues
 RM.litFaceColorMetaValues = litFaceColorMetaValues

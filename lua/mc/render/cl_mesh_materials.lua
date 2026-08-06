@@ -6,6 +6,15 @@ local MC_LIGHT_STYLE_SHADER = RM.MC_LIGHT_STYLE_SHADER
 local MC_LIGHT_STYLE_GPU_SHADER = RM.MC_LIGHT_STYLE_GPU_SHADER
 local MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE = RM.MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE
 
+local function gpuLightMaterialParams( params )
+	-- The packed atlas stores arbitrary bytes, so sampler1 must bypass sRGB
+	-- decoding. White is a safe fullbright slot-0 fallback until Native binds
+	-- its procedural 4096x4096 texture after the ABI handshake.
+	params["$texture1"] = "vgui/white"
+	params["$linearread_texture1"] = 1
+	return params
+end
+
 local function atlasPngPath( path )
 	path = path or "mc/atlas_365"
 	path = path:gsub( "%.vmt$", "" )
@@ -106,6 +115,8 @@ local function atlasBaseTexture()
 end
 
 MC.MaterialGpuOpaque = nil
+MC.MaterialNativeSlotOpaque = nil
+MC.MaterialNativeSlotTranslucent = nil
 MC.MaterialGpuLightTexture = nil
 MC.MaterialGpuLightTextureLinearDebug = nil
 MC.MaterialGpuLightTexturePpFix = nil
@@ -138,7 +149,29 @@ do
 			mat:SetTexture( "$basetexture", baseTex )
 			MC.MaterialGpuOpaque = mat
 		end
-		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex44_centroid_vface_opaque", "screenspace_general_8tex", {
+		-- Native vertices always carry the stable light-atlas slot payload.  When
+		-- mc_light_texture is disabled we still need the light-texture vertex
+		-- shader to unpack the face index from G; the cheap legacy pixel shader
+		-- then draws ordinary full-bright/face-shaded terrain without sampling
+		-- the chunk-light atlas.  Keeping one immutable Native payload avoids a
+		-- whole-world mesh rebuild (and mixed old/new payloads) on every toggle.
+		local nativeSlotMat = CreateMaterial( "mc_atlas_native_slot_payload1_centroid_vface_opaque", "screenspace_general", {
+			["$pixshader"] = "mc_gpu_chunk_payload4_vface_ps30",
+			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
+			["$basetexture"] = baseName,
+			["$x360appchooser"] = 1,
+			["$vertexcolor"] = 1,
+			["$linearwrite"] = 0,
+			["$alphatest"] = "1",
+			["$alphatestreference"] = "0.5",
+			["$alphatested"] = 1,
+			["$nocull"] = "0",
+		} )
+		if nativeSlotMat and not nativeSlotMat:IsError() then
+			nativeSlotMat:SetTexture( "$basetexture", baseTex )
+			MC.MaterialNativeSlotOpaque = nativeSlotMat
+		end
+		local lightTexMat = CreateMaterial( "mc_atlas_gpu_lighttex44_centroid_vface_opaque", "screenspace_general_8tex", gpuLightMaterialParams {
 			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth35_clean_pcf_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
@@ -172,13 +205,13 @@ do
 			lightTexMat:SetTexture( "$basetexture", baseTex )
 			MC.MaterialGpuLightTexture = lightTexMat
 		end
-		local linearMat = CreateMaterial( "mc_atlas_gpu_lighttex43_linear_debug_centroid_vface_opaque", "screenspace_general_8tex", {
+		local linearMat = CreateMaterial( "mc_atlas_gpu_lighttex43_linear_debug_centroid_vface_opaque", "screenspace_general_8tex", gpuLightMaterialParams {
 			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth33_linear_debug_vface_ps30", ["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30", ["$basetexture"] = baseName,
 			["$x360appchooser"] = 1, ["$vertexcolor"] = 1, ["$linearwrite"] = 0, ["$alphatest"] = "1", ["$alphatestreference"] = "0.5", ["$alphatested"] = 1, ["$nocull"] = "0",
 			["$c0_x"] = "0", ["$c0_y"] = "0", ["$c0_z"] = "0", ["$c0_w"] = "-4", ["$c1_x"] = "0", ["$c1_y"] = "0", ["$c1_z"] = "-1", ["$c1_w"] = "0.0001", ["$c2_x"] = "0", ["$c2_y"] = "0", ["$c2_z"] = "0", ["$c2_w"] = "0",
 		} )
 		if linearMat and not linearMat:IsError() then linearMat:SetTexture( "$basetexture", baseTex ); MC.MaterialGpuLightTextureLinearDebug = linearMat end
-		local lightTexPpFixMat = CreateMaterial( "mc_atlas_gpu_lighttex42_ppfix_centroid_vface_opaque", "screenspace_general_8tex", {
+		local lightTexPpFixMat = CreateMaterial( "mc_atlas_gpu_lighttex42_ppfix_centroid_vface_opaque", "screenspace_general_8tex", gpuLightMaterialParams {
 			["$pixshader"] = "mc_gpu_chunk_lighttex_vanilla_smooth32_ppfix_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
@@ -202,7 +235,7 @@ do
 		-- ONLY material allowed to define $c3_* (its pixel shader declares and
 		-- uses register c3); defining $c3 on the plain material would make the
 		-- engine upload c3 over that shader's inline literal constants.
-		local fancyMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy28_centroid_vface_opaque", "screenspace_general_8tex", {
+		local fancyMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy28_centroid_vface_opaque", "screenspace_general_8tex", gpuLightMaterialParams {
 			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy32_clean_pcf_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
@@ -234,13 +267,13 @@ do
 			fancyMat:SetTexture( "$basetexture", baseTex )
 			MC.MaterialGpuLightTextureFancy = fancyMat
 		end
-		local fancyLinearMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy27_linear_debug_centroid_vface_opaque", "screenspace_general_8tex", {
+		local fancyLinearMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy27_linear_debug_centroid_vface_opaque", "screenspace_general_8tex", gpuLightMaterialParams {
 			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy30_linear_debug_vface_ps30", ["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30", ["$basetexture"] = baseName,
 			["$x360appchooser"] = 1, ["$vertexcolor"] = 1, ["$linearwrite"] = 0, ["$alphatest"] = "1", ["$alphatestreference"] = "0.5", ["$alphatested"] = 1, ["$nocull"] = "0",
 			["$c0_x"] = "0", ["$c0_y"] = "0", ["$c0_z"] = "0", ["$c0_w"] = "-4", ["$c1_x"] = "0", ["$c1_y"] = "0", ["$c1_z"] = "-1", ["$c1_w"] = "0.0001", ["$c2_x"] = "0", ["$c2_y"] = "0", ["$c2_z"] = "0", ["$c2_w"] = "0", ["$c3_x"] = "0.6", ["$c3_y"] = "0.1", ["$c3_z"] = "0", ["$c3_w"] = "0.35",
 		} )
 		if fancyLinearMat and not fancyLinearMat:IsError() then fancyLinearMat:SetTexture( "$basetexture", baseTex ); MC.MaterialGpuLightTextureFancyLinearDebug = fancyLinearMat end
-		local fancyPpFixMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy29_facefix_centroid_vface_opaque", "screenspace_general_8tex", {
+		local fancyPpFixMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy29_facefix_centroid_vface_opaque", "screenspace_general_8tex", gpuLightMaterialParams {
 			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy33_facefix_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
@@ -267,7 +300,7 @@ do
 		-- $viewprojmat/$invviewprojmat must NEVER be defined or set on this
 		-- material (the engine would upload c11..c18 over compiler-placed
 		-- inline literal constants).
-		local heightMat = CreateMaterial( "mc_atlas_gpu_lighttex_height7_centroid_vface_opaque", "screenspace_general_8tex", {
+		local heightMat = CreateMaterial( "mc_atlas_gpu_lighttex_height7_centroid_vface_opaque", "screenspace_general_8tex", gpuLightMaterialParams {
 			["$pixshader"] = "mc_gpu_chunk_lighttex_height6_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
@@ -306,7 +339,7 @@ do
 		-- reads $c0 only (day-cycle sky brightness / ambient / night blue /
 		-- tint strength, set once per frame); never define $c1..$c3 or
 		-- $viewprojmat on this material.
-		local fastMat = CreateMaterial( "mc_atlas_gpu_lighttex_fast7_centroid_vface_opaque", "screenspace_general", {
+		local fastMat = CreateMaterial( "mc_atlas_gpu_lighttex_fast7_centroid_vface_opaque", "screenspace_general", gpuLightMaterialParams {
 			["$pixshader"] = "mc_gpu_chunk_lighttex_fast6_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
@@ -335,7 +368,7 @@ do
 		-- never define (or receive via SetFloat/SetMatrix) any $c*_,
 		-- $viewprojmat, $invviewprojmat or $eyepos parameters 鈥?the engine
 		-- would upload those registers over compiler-placed literal constants.
-		local vanillaMat = CreateMaterial( "mc_atlas_gpu_lighttex_mcvanilla4_centroid_vface_opaque", "screenspace_general_8tex", {
+		local vanillaMat = CreateMaterial( "mc_atlas_gpu_lighttex_mcvanilla4_centroid_vface_opaque", "screenspace_general_8tex", gpuLightMaterialParams {
 			["$pixshader"] = "mc_gpu_chunk_lighttex_mcvanilla4_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = baseName,
@@ -360,7 +393,27 @@ do
 		if not ( transTex and transTexName and transTexName ~= "" ) then
 			transTex, transTexName = baseTex, baseName
 		end
-		local transGpuMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans20_centroid_vface", "screenspace_general_8tex", {
+		-- Translucent Native compatibility path.  The vanilla translucent shader
+		-- already decodes the same slot payload and preserves real texture alpha.
+		-- Both lighting samplers stay white, so mc_light_texture=0 performs no
+		-- per-chunk light lookup while retaining face shade and block tint.
+		local nativeSlotTransMat = CreateMaterial( "mc_atlas_native_slot_payload1_centroid_vface_translucent", "screenspace_general_8tex", gpuLightMaterialParams {
+			["$pixshader"] = "mc_gpu_chunk_lighttex_mcvanilla_trans4_vface_ps30",
+			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
+			["$basetexture"] = transTexName,
+			["$texture2"] = "vgui/white",
+			["$x360appchooser"] = 1,
+			["$vertexcolor"] = 1,
+			["$linearwrite"] = 0,
+			["$alphablend"] = 1,
+			["$translucent"] = 1,
+			["$nocull"] = "0",
+		} )
+		if nativeSlotTransMat and not nativeSlotTransMat:IsError() then
+			nativeSlotTransMat:SetTexture( "$basetexture", transTex )
+			MC.MaterialNativeSlotTranslucent = nativeSlotTransMat
+		end
+		local transGpuMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans20_centroid_vface", "screenspace_general_8tex", gpuLightMaterialParams {
 			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy_trans23_clean_pcf_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = transTexName,
@@ -393,13 +446,13 @@ do
 			transGpuMat:SetTexture( "$basetexture", transTex )
 			MC.MaterialGpuLightTextureTranslucent = transGpuMat
 		end
-		local transLinearMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans19_linear_debug_centroid_vface", "screenspace_general_8tex", {
+		local transLinearMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans19_linear_debug_centroid_vface", "screenspace_general_8tex", gpuLightMaterialParams {
 			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy_trans21_linear_debug_vface_ps30", ["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30", ["$basetexture"] = transTexName,
 			["$x360appchooser"] = 1, ["$vertexcolor"] = 1, ["$linearwrite"] = 0, ["$alphablend"] = 1, ["$translucent"] = 1, ["$nocull"] = "0",
 			["$c0_x"] = "0", ["$c0_y"] = "0", ["$c0_z"] = "0", ["$c0_w"] = "-4", ["$c1_x"] = "0", ["$c1_y"] = "0", ["$c1_z"] = "-1", ["$c1_w"] = "0.0001", ["$c2_x"] = "0", ["$c2_y"] = "0", ["$c2_z"] = "0", ["$c2_w"] = "0", ["$c3_x"] = "0.6", ["$c3_y"] = "0.1", ["$c3_z"] = "0", ["$c3_w"] = "0.35",
 		} )
 		if transLinearMat and not transLinearMat:IsError() then transLinearMat:SetTexture( "$basetexture", transTex ); MC.MaterialGpuLightTextureTranslucentLinearDebug = transLinearMat end
-		local transPpFixMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans21_facefix_centroid_vface", "screenspace_general_8tex", {
+		local transPpFixMat = CreateMaterial( "mc_atlas_gpu_lighttex_fancy_trans21_facefix_centroid_vface", "screenspace_general_8tex", gpuLightMaterialParams {
 			["$pixshader"] = "mc_gpu_chunk_lighttex_fancy_trans24_facefix_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = transTexName,
@@ -422,7 +475,7 @@ do
 		-- the translucent atlas, real alpha blending. Selected instead of the
 		-- fancy translucent material while mc_light_style is "vanilla" so
 		-- glass/water follow the vanilla composition (no shadow sampling).
-		local vanillaTransMat = CreateMaterial( "mc_atlas_gpu_lighttex_mcvanilla_trans4_centroid_vface", "screenspace_general_8tex", {
+		local vanillaTransMat = CreateMaterial( "mc_atlas_gpu_lighttex_mcvanilla_trans4_centroid_vface", "screenspace_general_8tex", gpuLightMaterialParams {
 			["$pixshader"] = "mc_gpu_chunk_lighttex_mcvanilla_trans4_vface_ps30",
 			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
 			["$basetexture"] = transTexName,
@@ -577,6 +630,19 @@ local function gpuTranslucentMaterial()
 		if ppFixMat and not ppFixMat:IsError() then return ppFixMat end
 	end
 	if mat and not mat:IsError() then return mat end
+	return nil
+end
+
+-- Native meshes use a different immutable vertex payload from Lua meshes.
+-- Resolve their draw/handshake material separately so disabling the light
+-- texture never feeds slot bytes into the legacy Lua GPU-payload shader.
+function MC.NativeChunkMaterial( translucent )
+	if shaderProfileUsesGpuLightTexture() then
+		return translucent and gpuTranslucentMaterial() or activeGpuLightTextureMaterial()
+	end
+	if not shaderProfileUsesGpuPayload() then return nil end
+	local material = translucent and MC.MaterialNativeSlotTranslucent or MC.MaterialNativeSlotOpaque
+	if material and not material:IsError() then return material end
 	return nil
 end
 
@@ -744,6 +810,7 @@ end
 local function refreshGpuAtlasTextures( opaqueTexture, translucentTexture )
 	local opaqueMaterialNames = {
 		"MaterialGpuOpaque",
+		"MaterialNativeSlotOpaque",
 		"MaterialGpuLightTexture",
 		"MaterialGpuLightTextureLinearDebug",
 		"MaterialGpuLightTexturePpFix",
@@ -757,6 +824,7 @@ local function refreshGpuAtlasTextures( opaqueTexture, translucentTexture )
 	for _, name in ipairs( opaqueMaterialNames ) do setAtlasTexture( MC[name], opaqueTexture ) end
 
 	local translucentMaterialNames = {
+		"MaterialNativeSlotTranslucent",
 		"MaterialGpuLightTextureVanillaTranslucent",
 		"MaterialGpuLightTextureTranslucent",
 		"MaterialGpuLightTextureTranslucentLinearDebug",
@@ -852,4 +920,12 @@ if hook and hook.Add then
 		syncTexturePackFromConVar( true )
 		startTexturePackStartupSync()
 	end )
+end
+
+-- This file owns the GPU material objects and may be re-run independently by
+-- Lua autorefresh. Rebind the atlas immediately so already-live Lua or Native
+-- meshes never render replacement materials with an empty $texture1.
+if MC.EnsureGpuChunkLightTextureBinding
+and MC.UsingGpuLightTexture and MC.UsingGpuLightTexture() then
+	MC.EnsureGpuChunkLightTextureBinding()
 end
