@@ -67,24 +67,6 @@ MC.DayCycleMoonLight = MC.DayCycleMoonLight or ( CreateClientConVar and CreateCl
 	"Day cycle: moonlight sky level at deep night, 0-15 (MC default 4; lower = darker nights)" ) )
 MC.DayCycleNightTint = MC.DayCycleNightTint or ( CreateClientConVar and CreateClientConVar( "mc_daycycle_night_tint", "0.85", true, false,
 	"Day cycle: how strongly sky-lit surfaces shift toward moonlight blue at night (0 = neutral)" ) )
-MC.MeshGpuLightRefreshPerFrame = MC.MeshGpuLightRefreshPerFrame or ( CreateClientConVar and CreateClientConVar( "mc_light_refresh_per_frame", "2", true, false,
-	"GPU light texture: chunks re-rendered per frame during day/night level steps (higher = faster but choppier)" ) )
-MC.MeshGpuLightFlushPerFrame = MC.MeshGpuLightFlushPerFrame or ( CreateClientConVar and CreateClientConVar( "mc_light_flush_per_frame", "8", true, false,
-	"GPU light texture: max chunk textures baked per frame in the PreRender flush (draw path never bakes; 0 = unlimited)" ) )
-MC.MeshGpuLightFlushMS = MC.MeshGpuLightFlushMS or ( CreateClientConVar and CreateClientConVar( "mc_light_flush_ms", "3", true, false,
-	"GPU light texture: stop starting additional chunk bakes after this many milliseconds per frame (0 = unlimited)" ) )
-MC.MeshGpuLightIndirPerFrame = MC.MeshGpuLightIndirPerFrame or ( CreateClientConVar and CreateClientConVar( "mc_light_indir_per_frame", "8", true, false,
-	"GPU light texture: max atlas indirection entries written per frame (0 = unlimited)" ) )
--- Whole-tile rebakes coalesce: an arriving chunk is dirtied repeatedly (its own
--- arrival, each neighbour's, the native light commit, the sky flood settling)
--- and only the settled state is worth ~11k texels. Never delays a first bake
--- (those light white until baked) or an interactive edit (those are urgent).
-MC.MeshGpuLightSettleMS = MC.MeshGpuLightSettleMS or ( CreateClientConVar and CreateClientConVar( "mc_light_settle_ms", "120", true, false,
-	"GPU light texture: wait this long after the last whole-chunk light change before rebaking an already-baked tile (0 = rebake immediately)" ) )
-MC.MeshGpuLightSettleMaxMS = MC.MeshGpuLightSettleMaxMS or ( CreateClientConVar and CreateClientConVar( "mc_light_settle_max_ms", "600", true, false,
-	"GPU light texture: hard cap on how long mc_light_settle_ms may defer one rebake, so a continuously churning chunk still refreshes" ) )
-MC.MeshGpuLightNativeTile = MC.MeshGpuLightNativeTile or ( CreateClientConVar and CreateClientConVar( "mc_light_native_tile", "1", true, false,
-	"GPU light texture: build whole-chunk bakes from one native run-encoded tile instead of ~11k per-texel Lua samples (0 = force the Lua sampler)" ) )
 MC.MeshGpuLightmap = MC.MeshGpuLightmap or ( CreateClientConVar and CreateClientConVar( "mc_lightmap", "1", true, false,
 	"Procedural 16x16 global lightmap: warm torch light, colored day/night sky axis (0 = grayscale fallback)" ) )
 MC.MeshGpuLightmapTorchWarmth = MC.MeshGpuLightmapTorchWarmth or ( CreateClientConVar and CreateClientConVar( "mc_lightmap_torch_warmth", "0.7", true, false,

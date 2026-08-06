@@ -125,10 +125,16 @@ function MC.SkyLightLevelAt( bx, by, bz )
 end
 
 local function markColumnSpanDirty( bx, by, zFrom, zTo )
-	if not MC.MarkGpuChunkLightTextureDirtyCell then return end
+	if not ( MC.MarkGpuChunkLightTextureDirtyForChangedCells or MC.MarkGpuChunkLightTextureDirtyCell ) then return end
 	if zFrom > zTo then zFrom, zTo = zTo, zFrom end
-	for bz = zFrom, zTo do
-		MC.MarkGpuChunkLightTextureDirtyCell( bx, by, bz )
+	if MC.MarkGpuChunkLightTextureDirtyForChangedCells then
+		local changed = { count = zTo - zFrom + 1, x = {}, y = {}, z = {} }
+		for i = 1, changed.count do
+			changed.x[i], changed.y[i], changed.z[i] = bx, by, zFrom + i - 1
+		end
+		MC.MarkGpuChunkLightTextureDirtyForChangedCells( changed )
+	else
+		for bz = zFrom, zTo do MC.MarkGpuChunkLightTextureDirtyCell( bx, by, bz ) end
 	end
 end
 
@@ -176,15 +182,15 @@ function MC.NoteSkyColumnBlockChange( bx, by, bz, oldOpacity, newOpacity )
 	end
 end
 
-local function markChunkColumnDirty( cx, cy, exceptCz )
+local function markChunkColumnDirty( cx, cy, exceptCz, dirtyKeys )
 	if not ( MC.MarkGpuChunkLightTextureDirty and MC.ChunkKey ) then return end
 	local list = chunkColumns and chunkColumns[chunkColKey( cx, cy )] or nil
 	if not list then return end
 	for cz in pairs( list ) do
 		if cz ~= exceptCz then
-			-- Through the public marker so the atlas can coalesce the burst of
-			-- whole-chunk dirties a streaming column produces.
-			MC.MarkGpuChunkLightTextureDirty( MC.ChunkKey( cx, cy, cz ) )
+			local key = MC.ChunkKey( cx, cy, cz )
+			if dirtyKeys then dirtyKeys[key] = true
+			else MC.MarkGpuChunkLightTextureDirty( key ) end
 		end
 	end
 end
@@ -199,9 +205,17 @@ local function invalidateChunkFootprint( cx, cy, cz )
 	end
 	-- Sky exposure in this column (and the lateral neighbors whose light
 	-- texture pads sample our edge cells) may have changed wholesale.
+	local dirtyKeys = {}
 	for dcx = -1, 1 do
 		for dcy = -1, 1 do
-			markChunkColumnDirty( cx + dcx, cy + dcy, ( dcx == 0 and dcy == 0 ) and cz or nil )
+			markChunkColumnDirty( cx + dcx, cy + dcy, ( dcx == 0 and dcy == 0 ) and cz or nil, dirtyKeys )
+		end
+	end
+	if next( dirtyKeys ) then
+		if MC.MarkGpuChunkLightTextureDirtyKeys then
+			MC.MarkGpuChunkLightTextureDirtyKeys( dirtyKeys )
+		else
+			for key in pairs( dirtyKeys ) do MC.MarkGpuChunkLightTextureDirty( key ) end
 		end
 	end
 end
@@ -236,25 +250,6 @@ function MC.ClearSkyColumnCache()
 	if MC.QueueAllSkyFlood then MC.QueueAllSkyFlood() end
 end
 
--- Day/night: refresh light textures when the quantized sky level steps
--- (about a dozen refreshes per sunrise/sunset, none while it is stable).
--- Uses the amortized queue so a step never rebuilds every chunk in one frame.
-local lastSkyLevel
-timer.Create( "mc_sky_column_daystep", 1, 0, function()
-	local levelNow = MC.DayCycleSkyLevel and MC.DayCycleSkyLevel() or 15
-	if lastSkyLevel == nil then
-		lastSkyLevel = levelNow
-		return
-	end
-	if levelNow ~= lastSkyLevel then
-		lastSkyLevel = levelNow
-		-- Global-lightmap mode: chunk bytes are time-independent (exposure
-		-- only) and the lightmap module regenerates itself; nothing to do.
-		if MC.GlobalLightmapActive and MC.GlobalLightmapActive() then return end
-		if MC.QueueAllGpuChunkLightTextureRefresh then
-			MC.QueueAllGpuChunkLightTextureRefresh()
-		elseif MC.ClearAllGpuChunkLightTextures then
-			MC.ClearAllGpuChunkLightTextures()
-		end
-	end
-end )
+-- Day/night never invalidates chunk tiles: they contain raw block/sky levels,
+-- and the shared 16x16 global lightmap applies the current time-of-day color.
+timer.Remove( "mc_sky_column_daystep" )

@@ -18,7 +18,6 @@ MC = MC or {}
 
 local LIGHTMAP_SIZE = 16
 local lightmapRT
-local offRT
 
 local function convarNumber( cv, fallback, minValue, maxValue )
 	local value = cv and cv.GetFloat and cv:GetFloat() or fallback
@@ -52,31 +51,10 @@ local function ensureLightmapRT()
 	return lightmapRT
 end
 
-local function ensureOffRT()
-	if offRT then return offRT end
-	if not GetRenderTargetEx then return nil end
-	-- Black texture: binding it restores composeGlobalLightmap()'s grayscale
-	-- fallback path (a bound texture cannot be unbound).
-	offRT = GetRenderTargetEx(
-		"mc_global_lightmap_off",
-		2,
-		2,
-		RT_SIZE_LITERAL,
-		MATERIAL_RT_DEPTH_NONE,
-		bit.bor( 1, 4, 8, 256, 512 ),
-		0,
-		IMAGE_FORMAT_RGBA8888
-	)
-	if offRT and render and render.PushRenderTarget then
-		render.PushRenderTarget( offRT )
-			render.Clear( 0, 0, 0, 255, true, true )
-		render.PopRenderTarget()
-	end
-	return offRT
-end
-
 function MC.GlobalLightmapActive()
-	return lightmapEnabled()
+	-- Chunk atlases always contain raw block/sky levels. mc_lightmap changes
+	-- only this 16x16 texture's contents; it never changes chunk tile semantics.
+	return true
 end
 
 -- Same curve family the per-cell bake used before the lightmap took over:
@@ -292,6 +270,7 @@ local function generateGlobalLightmap()
 	local target = ensureLightmapRT()
 	if not ( target and render and render.PushRenderTarget and cam and surface ) then return false end
 
+	local grayscale = not lightmapEnabled()
 	local dayBrightness = MC.DayCycleSkyBrightness and MC.DayCycleSkyBrightness() or 1
 	-- Perceptual night lift: the linear moonlight floor (moon level / 15, 2/15
 	-- at the default) is nearly black on screen, so dusk reads as a sudden
@@ -306,7 +285,7 @@ local function generateGlobalLightmap()
 	local sunset = horizon * ( 1 - nightBlend ) * convarNumber( MC.MeshGpuLightmapSunset, 0.5, 0, 1 )
 	local nightTint = nightBlend * convarNumber( MC.DayCycleNightTint, 0.85, 0, 1 )
 	local torchWarmth = convarNumber( MC.MeshGpuLightmapTorchWarmth, 0.7, 0, 1 )
-	local ambient = convarNumber( MC.MeshGpuLightmapAmbient, 0.04, 0, 1 )
+	local ambient = convarNumber( MC.MeshGpuLightmapAmbient, 0.18, 0, 1 )
 	local sunMul = convarNumber( MC.MeshGpuSunBrightness, 1, 0, 4 )
 	-- Camera-based cave darkening (see updateEyeFactor above). Default OFF:
 	-- the camera cell also loses sky light when merely standing under a large
@@ -364,6 +343,10 @@ local function generateGlobalLightmap()
 					r = math.max( r, ambient * floorR )
 					g = math.max( g, ambient * floorG )
 					bl = math.max( bl, ambient * floorB )
+					if grayscale then
+						local gray = math.max( unit, ( s / 15 ) * dayBrightness * sunMul, ambient )
+						r, g, bl = gray, gray, gray
+					end
 					surface.SetDrawColor(
 						math.floor( math.Clamp( r, 0, 1 ) * 255 + 0.5 ),
 						math.floor( math.Clamp( g, 0, 1 ) * 255 + 0.5 ),
@@ -379,7 +362,7 @@ local function generateGlobalLightmap()
 end
 
 local function bindToMaterials()
-	local target = lightmapEnabled() and ensureLightmapRT() or ensureOffRT()
+	local target = ensureLightmapRT()
 	if not target then return end
 	local function bind( mat )
 		if mat and mat.SetTexture and not mat:IsError() then
@@ -401,10 +384,7 @@ local function bindToMaterials()
 end
 
 function MC.RefreshGlobalLightmap()
-	local ok = false
-	if lightmapEnabled() then
-		ok = generateGlobalLightmap()
-	end
+	local ok = generateGlobalLightmap()
 	bindToMaterials()
 	return ok
 end
@@ -424,7 +404,6 @@ hook.Add( "Think", "mc_global_lightmap_refresh", function()
 		MC.RefreshGlobalLightmap()
 		return
 	end
-	if not lightmapEnabled() then return end
 	if vanillaLightmapActive() then
 		-- Vanilla redraws every Minecraft tick, exactly like the game: the
 		-- torch flicker walks each tick and the timeline moves with the clock.
@@ -457,10 +436,7 @@ end )
 
 if cvars and cvars.AddChangeCallback then
 	cvars.AddChangeCallback( "mc_lightmap", function()
-		-- Chunk light texture byte semantics differ between lightmap and
-		-- fallback mode (raw levels vs curved units), so a toggle re-bakes.
 		MC.RefreshGlobalLightmap()
-		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
 	end, "mc_global_lightmap_toggle" )
 	for _, name in ipairs( { "mc_lightmap_torch_warmth", "mc_lightmap_ambient", "mc_lightmap_sunset", "mc_lightmap_night_gamma", "mc_lightmap_sky_curve", "mc_lightmap_sky_min", "mc_lightmap_eye_dark", "mc_light_style", "mc_lightmap_vanilla_gamma", "mc_lightmap_vanilla_flicker" } ) do
 		cvars.AddChangeCallback( name, function()
