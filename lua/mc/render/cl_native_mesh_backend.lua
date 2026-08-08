@@ -36,11 +36,11 @@ local CONVAR_ENABLED = CreateClientConVar( "mc_native_mesh", "1", true, false,
 	"MCSWEP native mesh backend: 1 = use mcswep_native_mesh module when available, 0 = pure Lua" )
 local CONVAR_THINK_MS = CreateClientConVar( "mc_native_think_ms", "3", true, false,
 	"Per-frame budget (ms) for native mesh finalization" )
-local CONVAR_GREEDY = CreateClientConVar( "mc_native_greedy", "1", true, false,
+local CONVAR_GREEDY = CreateClientConVar( "mc_native_greedy", "0", true, false,
 	"Simple native greedy meshing for opaque full cubes" )
-local CONVAR_DIRECTIONAL_DRAW = CreateClientConVar( "mc_native_directional_draw", "0", true, false,
+local CONVAR_DIRECTIONAL_DRAW = CreateClientConVar( "mc_native_directional_draw", "1", true, false,
 	"Draw only native opaque face-direction ranges which can face the camera" )
-local CONVAR_OCCLUSION_CULL = CreateClientConVar( "mc_native_occlusion_cull", "0", true, false,
+local CONVAR_OCCLUSION_CULL = CreateClientConVar( "mc_native_occlusion_cull", "1", true, false,
 	"Conservative native Section portal occlusion culling" )
 local CONVAR_LOD = CreateClientConVar( "mc_native_lod", "0", true, false,
 	"Native 2x2x2 far-distance opaque LOD" )
