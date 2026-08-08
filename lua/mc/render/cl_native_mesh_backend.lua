@@ -47,7 +47,6 @@ local CONVAR_LOD = CreateClientConVar( "mc_native_lod", "0", true, false,
 local CONVAR_LOD_START = CreateClientConVar( "mc_native_lod_start", "24", true, false,
 	"Native LOD start distance in chunks" )
 
-local ADAPTER_ABI = 12  -- ABI 12 adds the stable packed chunk-light atlas
 local PERF_SAMPLE_CAPACITY = 240
 
 local function newPerfRing()
@@ -165,7 +164,7 @@ local function applyNativeLightChanges( result )
 		state.incrementalLightCells = state.incrementalLightCells + state.lightLastChangedCells
 		state.incrementalLightLastMS = state.lightLastMS
 	end
-	-- ABI 12 already completed its atlas upload barrier before returning.
+	-- The current native ABI completes its atlas upload barrier before returning.
 	return state.lightLastChangedCells
 end
 
@@ -1627,9 +1626,9 @@ local function tryStart()
 	if not ( MC and MC.BuildChunkMesh and MC.World and MC.Meshes and MC.MeshesTrans
 		and MC.GetChunkByKey and MC.ChunkKeyToCoords ) then state.startupFailureReason = "MC pipeline not ready"; return false end
 	if not probeNativeModule() then state.startupFailureReason = MC.NativeMeshModuleFailureReason or "module probe failed"; return false end
-	if not ( mcmesh.AbiVersion and mcmesh.AbiVersion() == ADAPTER_ABI ) then
+	if not ( mcmesh.AbiVersion and mcmesh.AbiVersion() == MC.NativeMeshABI ) then
 		log( "ABI mismatch (module " .. tostring( mcmesh.AbiVersion and mcmesh.AbiVersion() )
-			.. ", adapter " .. ADAPTER_ABI .. "), staying on Lua path" )
+			.. ", adapter " .. tostring( MC.NativeMeshABI ) .. "), staying on Lua path" )
 		return lockToLuaBackend( "ABI mismatch" )
 	end
 	-- 瀵煎嚭闈㈡鏌? 濂戠害鍑芥暟蹇呴』鍏ㄩ儴瀛樺湪(绌哄３涔熻), 缂轰竴涓氨鐐瑰悕骞剁暀鍦?Lua 璺緞
