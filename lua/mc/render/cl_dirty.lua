@@ -184,23 +184,6 @@ local function sortedDirtyKeys( dirty )
 	return keys
 end
 
-local function nextDirtyMeshKeys( rateLimited )
-	local filtered = {}
-	for key in pairs( MC.MeshDirty ) do
-		local isRateLimited = MC.MeshDirtyRateLimited and MC.MeshDirtyRateLimited[key] == true
-		if isRateLimited == ( rateLimited == true ) then filtered[key] = true end
-	end
-	return sortedDirtyKeys( filtered )
-end
-local function nextLightDirtyMeshKeys( rateLimited )
-	local filtered = {}
-	for key in pairs( MC.MeshLightDirty ) do
-		local limited = MC.MeshLightDirtyRateLimited and MC.MeshLightDirtyRateLimited[key] == true
-		if limited == ( rateLimited == true ) then filtered[key] = true end
-	end
-	return sortedDirtyKeys( filtered )
-end
-
 local function bulkCollisionInterval()
 	local cvar = GetConVar and GetConVar( "mc_bulk_collision_interval" ) or nil
 	local interval = cvar and cvar:GetFloat() or ( MC.Config.BulkCollisionInterval or 0.12 )
@@ -288,7 +271,7 @@ local function noteRebuiltMeshSection( rebuiltSections, key, sectionIndex )
 	sections[sectionIndex] = true
 end
 
-local function buildDirtyMeshKey( key, sections, rebuiltSections, sectionLimit, deadline )
+local function buildDirtyMeshKey( key, sections, rebuiltSections )
 	if sections == true then
 		sections = {}
 		for sectionIndex = 1, RENDER_SECTION_COUNT do sections[sectionIndex] = true end
@@ -297,7 +280,6 @@ local function buildDirtyMeshKey( key, sections, rebuiltSections, sectionLimit, 
 
 	local built = 0
 	for sectionIndex in pairs( sections ) do
-		if built > 0 and ( sectionLimit and built >= sectionLimit or deadline and SysTime() >= deadline ) then break end
 		MC.BuildChunkMesh( key, sectionIndex )
 		noteRebuiltMeshSection( rebuiltSections, key, sectionIndex )
 		sections[sectionIndex] = nil
@@ -313,7 +295,7 @@ local function buildDirtyMeshKey( key, sections, rebuiltSections, sectionLimit, 
 	return built
 end
 
-local function buildLightDirtyMeshKey( key, sections, rebuiltSections, sectionLimit, deadline )
+local function buildLightDirtyMeshKey( key, sections, rebuiltSections )
 	local geometryDirty = MC.MeshDirty[key]
 	if geometryDirty == true then
 		MC.MeshLightDirty[key] = nil
@@ -327,7 +309,6 @@ local function buildLightDirtyMeshKey( key, sections, rebuiltSections, sectionLi
 
 	local built = 0
 	for sectionIndex in pairs( sections ) do
-		if built > 0 and ( sectionLimit and built >= sectionLimit or deadline and SysTime() >= deadline ) then break end
 		if ( istable( geometryDirty ) and geometryDirty[sectionIndex] ) or ( istable( rebuilt ) and rebuilt[sectionIndex] ) then
 			if istable( rebuilt ) and rebuilt[sectionIndex] then sections[sectionIndex] = nil end
 		else
@@ -365,27 +346,6 @@ local function maybePrintMeshBuildFramePerf( totalStart, geometryKeys, geometryS
 	) )
 end
 
-local function nativeChunkBackendActive()
-	local backend = MC.GetChunkBackend and MC.GetChunkBackend() or nil
-	return backend and backend.native == true and ( not backend.IsActive or backend.IsActive() == true )
-end
-
-local function fillMeshBudget()
-	local ms = GetConVar and GetConVar( "mc_fill_mesh_frame_ms" ) or nil
-	local sections = GetConVar and GetConVar( "mc_fill_mesh_sections_per_frame" ) or nil
-	return math.max( 0.5, ms and ms:GetFloat() or 4 ) / 1000,
-		math.max( 1, sections and sections:GetInt() or 8 )
-end
-
-if CreateClientConVar then
-	CreateClientConVar( "mc_fill_mesh_frame_ms", "4", true, false,
-		"Pure-Lua milliseconds per frame for /fill mesh rebuilds", 0.5, 20 )
-	CreateClientConVar( "mc_fill_mesh_sections_per_frame", "8", true, false,
-		"Pure-Lua render sections per frame for /fill mesh rebuilds", 1, 128 )
-end
-
--- Ordinary edits and native-worker submissions still drain immediately. Only
--- /fill keys marked MeshDirtyRateLimited use a small pure-Lua frame budget.
 hook.Remove( "Think", "mc_meshbuild" )
 hook.Add( "Think", "mc_meshbuild", function()
 	local frameStart = SysTime()
@@ -394,7 +354,7 @@ hook.Add( "Think", "mc_meshbuild", function()
 	local rebuiltSections
 	if next( MC.MeshDirty ) then
 		rebuiltSections = {}
-		for _, key in ipairs( nextDirtyMeshKeys( false ) ) do
+		for _, key in ipairs( sortedDirtyKeys( MC.MeshDirty ) ) do
 			local sections = MC.MeshDirty[key]
 			local built = buildDirtyMeshKey( key, sections, rebuiltSections )
 			if built > 0 then
@@ -402,36 +362,10 @@ hook.Add( "Think", "mc_meshbuild", function()
 				geometrySections = geometrySections + built
 			end
 		end
-		local nativeFast = nativeChunkBackendActive()
-		local frameSeconds, sectionBudget = fillMeshBudget()
-		local deadline = not nativeFast and SysTime() + frameSeconds or nil
-		local remaining = not nativeFast and sectionBudget or nil
-		for _, key in ipairs( nextDirtyMeshKeys( true ) ) do
-			if remaining and remaining <= 0 or deadline and SysTime() >= deadline then break end
-			local sections = MC.MeshDirty[key]
-			local built = buildDirtyMeshKey( key, sections, rebuiltSections, remaining, deadline )
-			if remaining then remaining = remaining - built end
-			if built > 0 then
-				geometryKeys = geometryKeys + 1
-				geometrySections = geometrySections + built
-			end
-		end
 	end
 	if next( MC.MeshLightDirty ) then
-		-- Interactive light edits remain immediate. Streaming-origin recolors share
-		-- the same pure-Lua 4ms/8-section pacing as geometry.
-		for _, key in ipairs( nextLightDirtyMeshKeys( false ) ) do
+		for _, key in ipairs( sortedDirtyKeys( MC.MeshLightDirty ) ) do
 			local built = buildLightDirtyMeshKey( key, MC.MeshLightDirty[key], rebuiltSections )
-			if built > 0 then lightKeys, lightSections = lightKeys + 1, lightSections + built end
-		end
-		local nativeFast = nativeChunkBackendActive()
-		local frameSeconds, sectionBudget = fillMeshBudget()
-		local deadline = not nativeFast and SysTime() + frameSeconds or nil
-		local remaining = not nativeFast and sectionBudget or nil
-		for _, key in ipairs( nextLightDirtyMeshKeys( true ) ) do
-			if remaining and remaining <= 0 or deadline and SysTime() >= deadline then break end
-			local built = buildLightDirtyMeshKey( key, MC.MeshLightDirty[key], rebuiltSections, remaining, deadline )
-			if remaining then remaining = remaining - built end
 			if built > 0 then lightKeys, lightSections = lightKeys + 1, lightSections + built end
 		end
 	end

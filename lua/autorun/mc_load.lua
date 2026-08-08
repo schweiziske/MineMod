@@ -244,7 +244,7 @@ if CLIENT then
 		"BindLightAtlasMaterial", "GetLightAtlasStats", "GetLightAtlasSlot",
 		"DrawVisible", "SetChunkVisible", "SetSimpleGreedy", "SetDirectionalDraw", "SetOcclusionCull", "SetLod",
 	}
-	local NATIVE_MODULE_ABI = 12
+	MC.NativeMeshABI = 7
 	local NATIVE_MODULE_URL = "https://github.com/schweiziske/mc_swep"
 
 	local function expectedNativeModulePath()
@@ -270,7 +270,7 @@ if CLIENT then
 				MC.NativeMeshModuleAvailable = false
 				MC.NativeMeshModuleMissing = false
 				MC.NativeMeshModuleABI = nil
-				MC.NativeMeshModuleExpectedABI = NATIVE_MODULE_ABI
+				MC.NativeMeshModuleExpectedABI = MC.NativeMeshABI
 				MC.NativeMeshModuleOutdated = false
 				MC.NativeMeshModuleFailureReason = "unsupported native module platform or architecture"
 				return false
@@ -281,7 +281,7 @@ if CLIENT then
 				MC.NativeMeshModuleAvailable = false
 				MC.NativeMeshModuleMissing = true
 				MC.NativeMeshModuleABI = nil
-				MC.NativeMeshModuleExpectedABI = NATIVE_MODULE_ABI
+				MC.NativeMeshModuleExpectedABI = MC.NativeMeshABI
 				MC.NativeMeshModuleOutdated = false
 				MC.NativeMeshModuleFailureReason = "module not installed: " .. modulePath
 				return false
@@ -300,10 +300,10 @@ if CLIENT then
 		if usable then
 			local abiOK, abi = pcall( mcmesh.AbiVersion )
 			moduleABI = abiOK and tonumber( abi ) or nil
-			usable = moduleABI == NATIVE_MODULE_ABI
+			usable = moduleABI == MC.NativeMeshABI
 			if not usable then
 				failureReason = "ABI mismatch (module " .. tostring( moduleABI or abi )
-					.. ", required " .. NATIVE_MODULE_ABI .. ")"
+					.. ", required " .. MC.NativeMeshABI .. ")"
 			end
 		end
 		if usable then
@@ -320,8 +320,8 @@ if CLIENT then
 		MC.NativeMeshModuleAvailable = usable
 		MC.NativeMeshModuleMissing = false
 		MC.NativeMeshModuleABI = moduleABI
-		MC.NativeMeshModuleExpectedABI = NATIVE_MODULE_ABI
-		MC.NativeMeshModuleOutdated = moduleABI ~= nil and moduleABI < NATIVE_MODULE_ABI
+		MC.NativeMeshModuleExpectedABI = MC.NativeMeshABI
+		MC.NativeMeshModuleOutdated = moduleABI ~= nil and moduleABI < MC.NativeMeshABI
 		MC.NativeMeshModuleFailureReason = usable and nil or failureReason
 		return usable
 	end
@@ -346,7 +346,7 @@ if CLIENT then
 						Color( 255, 120, 90 ), MC.T( "native.dll_outdated",
 							"Native DLL 版本过期（当前 ABI {actual}，需要 ABI {required}），当前使用 Lua 后端。下载地址：", {
 								actual = tostring( MC.NativeMeshModuleABI or "?" ),
-								required = tostring( NATIVE_MODULE_ABI ),
+								required = tostring( MC.NativeMeshABI ),
 							} ),
 						Color( 130, 210, 255 ), nativeURL
 					)
@@ -367,7 +367,7 @@ if CLIENT then
 				or "Native DLL 下载地址: {url}"
 			MsgN( "[MCSWEP] " .. MC.T( consoleKey, consoleFallback, {
 				actual = tostring( MC.NativeMeshModuleABI or "?" ),
-				required = tostring( NATIVE_MODULE_ABI ),
+				required = tostring( MC.NativeMeshABI ),
 				url = nativeURL,
 			} ) )
 		end )
