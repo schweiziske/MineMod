@@ -321,6 +321,7 @@ function SV.ClosePlayerInventory( ply, reason, token )
 	if token and token ~= "" and token ~= record.session.token then return false, "invalid_session" end
 	local session = record.session
 	local wasCrafting = session.crafting == true
+	local closeCallback = session.onClose
 	if session.crafting == true and SV.CloseCraftingMenu then
 		SV.CloseCraftingMenu( record, session, { reason = "close" } )
 	end
@@ -333,6 +334,10 @@ function SV.ClosePlayerInventory( ply, reason, token )
 		net.Send( ply )
 	end
 	record.session = nil
+	if type( closeCallback ) == "function" then
+		local called, callbackError = pcall( closeCallback, record, session, reason or "closed" )
+		if not called and ErrorNoHalt then ErrorNoHalt( "[MC Inventory] close callback failed: " .. tostring( callbackError ) .. "\n" ) end
+	end
 	if wasCrafting and IsValid( ply ) and SV.SendActiveInventorySnapshot then
 		SV.SendActiveInventorySnapshot( ply, "crafting_close" )
 	end
@@ -508,9 +513,9 @@ end )
 hook.Add( "PlayerDisconnected", "mc_inventory_network_cleanup", function( ply )
 	local record = SV.GetPlayerInventoryRecord( ply, false )
 	if not record then return end
-	if record.session and record.session.crafting == true and SV.CloseCraftingMenu then
-		SV.CloseCraftingMenu( record, record.session, { reason = "disconnect" } )
+	if record.session then
+		SV.ClosePlayerInventory( ply, "disconnect" )
+	else
+		returnCarriedToPlayer( record, { reason = "disconnect" } )
 	end
-	returnCarriedToPlayer( record, { reason = "disconnect" } )
-	record.session = nil
 end )
