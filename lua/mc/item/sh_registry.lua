@@ -60,6 +60,17 @@ function MC.RegisterItem( definition )
 	local maxDamage = normalizedInteger( definition.maxDamage, 0, 16777215, 0 )
 	if not maxDamage then return nil, "invalid_max_damage" end
 	if maxDamage > 0 then maxStack = 1 end
+	local useDuration = normalizedInteger( definition.useDuration, 0, 72000, 0 )
+	if useDuration == nil then return nil, "invalid_use_duration" end
+	local toolDamagePerBlock = normalizedInteger( definition.toolDamagePerBlock, 0, 255, maxDamage > 0 and 1 or 0 )
+	if toolDamagePerBlock == nil then return nil, "invalid_tool_damage" end
+	local foodNutrition = normalizedInteger( definition.foodNutrition, 0, 255, 0 )
+	if foodNutrition == nil then return nil, "invalid_food_nutrition" end
+	local foodSaturation = tonumber( definition.foodSaturation )
+	if foodSaturation == nil or foodSaturation ~= foodSaturation or foodSaturation == math.huge or foodSaturation == -math.huge
+		or foodSaturation < 0 or foodSaturation > 255 then
+		foodSaturation = 0
+	end
 
 	local blockName = definition.block ~= nil and normalizeName( definition.block ) or nil
 	if definition.block ~= nil and not blockName then return nil, "invalid_block_item" end
@@ -79,6 +90,15 @@ function MC.RegisterItem( definition )
 		kind = string.lower( trim( definition.kind ~= nil and definition.kind or ( blockName and "block" or "item" ) ) ),
 		tags = copyList( definition.tags ),
 		source = trim( definition.source ) ~= "" and trim( definition.source ) or nil,
+		useDuration = useDuration,
+		useAnimation = trim( definition.useAnimation ) ~= "" and string.lower( trim( definition.useAnimation ) ) or "none",
+		consumable = definition.consumable == true,
+		foodNutrition = foodNutrition,
+		foodSaturation = foodSaturation,
+		foodAlwaysEdible = definition.foodAlwaysEdible == true,
+		toolDamagePerBlock = toolDamagePerBlock,
+		unbreakable = definition.unbreakable == true,
+		useHandler = isfunction and isfunction( definition.useHandler ) and definition.useHandler or nil,
 	}
 
 	if registered.rarity ~= "common" and registered.rarity ~= "uncommon"
@@ -158,6 +178,13 @@ function MC.RefreshItemRegistryHash()
 				tostring( definition.texture or "" ),
 				tostring( definition.model or "" ),
 				tostring( definition.kind or "item" ),
+				tostring( definition.useDuration or 0 ),
+				tostring( definition.useAnimation or "none" ),
+				tostring( definition.consumable == true ),
+			tostring( definition.foodNutrition or 0 ),
+			tostring( definition.foodSaturation or 0 ),
+			tostring( definition.toolDamagePerBlock or 0 ),
+			tostring( definition.unbreakable == true ),
 			}, "\0" ) .. "\n"
 		end
 	end

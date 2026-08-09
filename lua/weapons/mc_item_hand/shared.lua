@@ -155,13 +155,18 @@ function SWEP:SecondaryAttack()
 	if not IsValid( ply ) then return end
 	local aim = aimedBlock( ply )
 	local trace = aim or ply:GetEyeTrace()
-	if not trace or not trace.Hit then return end
+	if not trace then return end
 	if SERVER then
 		local ux, uy, uz
 		if aim then ux, uy, uz = aim.bx, aim.by, aim.bz
-		else ux, uy, uz = MC.WorldToCell( trace.HitPos - trace.HitNormal * 0.5 ) end
+		elseif trace.Hit and MC.WorldToCell then ux, uy, uz = MC.WorldToCell( trace.HitPos - trace.HitNormal * 0.5 ) end
 		local record, stack, definition = selectedRecord( ply )
 		if aim and MC.SV and MC.SV.Use and MC.SV.Use( ply, ux, uy, uz, definition and definition.blockId or 0 ) then return end
+		if MC.SV and MC.SV.UseSelectedItem and MC.SV.UseSelectedItem( ply, {
+			reason = "right_click",
+			target = aim and { bx = ux, by = uy, bz = uz } or nil,
+		} ) then return end
+		if not trace.Hit then return end
 		if not definition or not definition.blockId or not MC.SV or not MC.SV.PlaceState then return end
 		local bx, by, bz, stateId = placeTarget( ply, aim, trace, definition.blockId )
 		if not bx then return end

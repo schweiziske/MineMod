@@ -970,6 +970,9 @@ function SV.Break( ply, bx, by, bz )
 		netMode = "bulk",
 	} )
 	local broke = result.ok == true and result.changed > 0
+	if broke and MC.SV and MC.SV.DamageSelectedItem then
+		MC.SV.DamageSelectedItem( ply, 1, { reason = "mine", useToolScale = true } )
+	end
 	if broke and MC.RunEvent then
 		local first = result.changes and result.changes[1]
 		MC.RunEvent( "MC.PlayerBrokeBlock", ply, plan.bx, plan.by, plan.bz, first and first.oldStateId or 0 )
