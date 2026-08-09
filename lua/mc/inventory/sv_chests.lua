@@ -12,6 +12,7 @@ MC.SV = MC.SV or {}
 
 local SV = MC.SV
 local CHEST_SLOTS = 27
+SV.ChestOpeners = SV.ChestOpeners or {}
 local CHEST_BLOCK_NAMES = {
 	chest = true, trapped_chest = true, copper_chest = true,
 	exposed_copper_chest = true, weathered_copper_chest = true,
@@ -21,6 +22,26 @@ local CHEST_BLOCK_NAMES = {
 }
 
 local function copyStack( stack ) return MC.CopyItemStack( stack ) end
+
+local function chestOpenKey( position )
+	return position and MC.CellKey and MC.CellKey( position.bx, position.by, position.bz ) or nil
+end
+
+local function adjustChestOpeners( positions, delta )
+	for _, position in ipairs( positions or {} ) do
+		local key = chestOpenKey( position )
+		if key then
+			local count = math.max( 0, ( tonumber( SV.ChestOpeners[key] ) or 0 ) + delta )
+			if count == 0 then SV.ChestOpeners[key] = nil else SV.ChestOpeners[key] = count end
+			if MC.RunEvent then MC.RunEvent( "MC.ChestOpenCountChanged", position.bx, position.by, position.bz, count ) end
+		end
+	end
+end
+
+function SV.GetChestOpenCount( bx, by, bz )
+	local key = MC.CellKey and MC.CellKey( bx, by, bz ) or nil
+	return key and ( tonumber( SV.ChestOpeners[key] ) or 0 ) or 0
+end
 
 local function recordChestOverlay( bx, by, bz, record )
 	local store = SV.ChunkStore
@@ -261,11 +282,15 @@ function SV.OpenChest( ply, bx, by, bz )
 		openedAt = now,
 		lastActionId = nil,
 		chestRecords = menu.chestRecords,
-		positions = positions,
-		validate = function() return chestMenuStillValid( ply, positions ) end,
-		playerOffset = menu.playerOffset,
-		chestSlots = menu.chestSlots,
-	}
+			positions = positions,
+			validate = function() return chestMenuStillValid( ply, positions ) end,
+			playerOffset = menu.playerOffset,
+			chestSlots = menu.chestSlots,
+			onClose = function()
+				adjustChestOpeners( positions, -1 )
+			end,
+		}
+	adjustChestOpeners( positions, 1 )
 	if SV.SendActiveInventoryOpen then SV.SendActiveInventoryOpen( ply, record, "chest" ) end
 	return true
 end
