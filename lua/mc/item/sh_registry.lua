@@ -139,23 +139,33 @@ function MC.FinalizeItemRegistry()
 	MC.ItemsByRuntimeId = byRuntime
 	MC.ItemsByBlockId = byBlock
 
-	local canonical = { "mc-item-registry-v1\n" }
+	MC.RefreshItemRegistryHash()
+	MC.ItemRegistryFrozen = true
+	return #ordered
+end
+
+function MC.RefreshItemRegistryHash()
+	local ordered = MC.ItemsByRuntimeId or {}
+	local canonical = { "mc-item-registry-v2\n" }
 	for runtimeId = 0, #ordered - 1 do
-		local definition = byRuntime[runtimeId]
-		canonical[#canonical + 1] = table.concat( {
-			definition.name,
-			tostring( definition.maxStack ),
-			tostring( definition.maxDamage ),
-			tostring( definition.blockName or "" ),
-			tostring( definition.texture or "" ),
-			tostring( definition.kind or "item" ),
-		}, "\0" ) .. "\n"
+		local definition = ordered[runtimeId]
+		if definition then
+			canonical[#canonical + 1] = table.concat( {
+				definition.name,
+				tostring( definition.maxStack ),
+				tostring( definition.maxDamage ),
+				tostring( definition.blockName or "" ),
+				tostring( definition.texture or "" ),
+				tostring( definition.model or "" ),
+				tostring( definition.kind or "item" ),
+			}, "\0" ) .. "\n"
+		end
 	end
+	canonical[#canonical + 1] = "item-model-catalog\0" .. tostring( MC.ItemModelRegistryHash or "" ) .. "\n"
 	canonical = table.concat( canonical )
 	MC.ItemRegistryHash = util and util.SHA256 and util.SHA256( canonical )
 		or util and util.CRC and util.CRC( canonical ) or canonical
-	MC.ItemRegistryFrozen = true
-	return #ordered
+	return MC.ItemRegistryHash
 end
 
 function MC.GetItem( value )
