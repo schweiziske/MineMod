@@ -32,6 +32,7 @@ SWEP.Primary = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "none
 SWEP.Secondary = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "none" }
 
 local ATTACK_INTERVAL = 0.12
+local USE_TICK_INTERVAL = 0.05
 
 local function aimedBlock( ply )
 	return MC.PlayerBlockAim and MC.PlayerBlockAim( ply ) or nil
@@ -80,6 +81,13 @@ local function infiniteMaterials( ply )
 	return MC.SV and MC.SV.PlayerHasInfiniteMaterials and MC.SV.PlayerHasInfiniteMaterials( ply ) == true
 end
 
+local function isUseCandidate( stack, definition )
+	if not stack or not definition then return false end
+	if MC.ItemBehavior and MC.ItemBehavior( stack ) then return true end
+	if MC.ItemIsConsumable and MC.ItemIsConsumable( stack ) then return true end
+	return isfunction and isfunction( definition.useHandler ) and definition.useHandler ~= nil
+end
+
 local function consumeSelected( ply )
 	local record, stack, definition = selectedRecord( ply )
 	if not record or not stack or not definition then return nil end
@@ -103,14 +111,39 @@ end
 
 function SWEP:Initialize()
 	self:SetHoldType( "normal" )
+	self.MCSecondaryHeld = false
+	self.MCSecondaryMode = nil
+	self.MCSecondaryStartedAt = 0
 end
 
 function SWEP:Deploy()
 	self:SetHoldType( "normal" )
+	self.MCSecondaryHeld = false
+	self.MCSecondaryMode = nil
 	return true
 end
 
+function SWEP:MCReleaseSecondary( reason )
+	local ply = self:GetOwner()
+	local mode = self.MCSecondaryMode
+	self.MCSecondaryHeld = false
+	self.MCSecondaryMode = nil
+	self.MCSecondaryStartedAt = 0
+	if SERVER and mode == "item" and IsValid( ply ) and MC.SV and MC.SV.ReleaseSelectedItemUse then
+		return MC.SV.ReleaseSelectedItemUse( ply, { reason = reason or "released" } )
+	end
+	return false, "not_using"
+end
+
 function SWEP:Reload()
+	if SERVER then
+		local ply = self:GetOwner()
+		if IsValid( ply ) and MC.SV and MC.SV.CancelSelectedItemUse then
+			MC.SV.CancelSelectedItemUse( ply, "inventory_open" )
+		end
+	end
+	self.MCSecondaryHeld = false
+	self.MCSecondaryMode = nil
 	if SERVER then
 		if game.SinglePlayer() then self:CallOnClient( "OpenInventoryClient" ) end
 		return
@@ -136,6 +169,9 @@ function SWEP:PrimaryAttack()
 	self:SetNextPrimaryFire( CurTime() + ATTACK_INTERVAL )
 	local ply = self:GetOwner()
 	if not IsValid( ply ) then return end
+	if SERVER and MC.SV and MC.SV.CancelSelectedItemUse then
+		MC.SV.CancelSelectedItemUse( ply, "primary_attack" )
+	end
 	local aim = aimedBlock( ply )
 	if SERVER then
 		local bx, by, bz = breakTarget( ply, aim, ply:GetEyeTrace() )
@@ -150,22 +186,34 @@ function SWEP:PrimaryAttack()
 end
 
 function SWEP:SecondaryAttack()
-	self:SetNextSecondaryFire( CurTime() + ATTACK_INTERVAL )
+	self:SetNextSecondaryFire( CurTime() + ( self.MCSecondaryHeld and USE_TICK_INTERVAL or ATTACK_INTERVAL ) )
 	local ply = self:GetOwner()
 	if not IsValid( ply ) then return end
+	if self.MCSecondaryHeld then return end
+	self.MCSecondaryHeld = true
+	self.MCSecondaryStartedAt = CurTime()
+	self.MCSecondaryMode = nil
 	local aim = aimedBlock( ply )
 	local trace = aim or ply:GetEyeTrace()
-	if not trace then return end
+	if not trace then self.MCSecondaryHeld = false return end
 	if SERVER then
 		local ux, uy, uz
 		if aim then ux, uy, uz = aim.bx, aim.by, aim.bz
 		elseif trace.Hit and MC.WorldToCell then ux, uy, uz = MC.WorldToCell( trace.HitPos - trace.HitNormal * 0.5 ) end
 		local record, stack, definition = selectedRecord( ply )
-		if aim and MC.SV and MC.SV.Use and MC.SV.Use( ply, ux, uy, uz, definition and definition.blockId or 0 ) then return end
-		if MC.SV and MC.SV.UseSelectedItem and MC.SV.UseSelectedItem( ply, {
+		if aim and MC.SV and MC.SV.Use and MC.SV.Use( ply, ux, uy, uz, definition and definition.blockId or 0 ) then
+			self.MCSecondaryMode = "block"
+			return
+		end
+		local useCandidate = isUseCandidate( stack, definition )
+		local used, useResult = MC.SV and MC.SV.BeginSelectedItemUse and MC.SV.BeginSelectedItemUse( ply, {
 			reason = "right_click",
 			target = aim and { bx = ux, by = uy, bz = uz } or nil,
-		} ) then return end
+		} ) or false, "item_use_unavailable"
+		if used or useCandidate then
+			self.MCSecondaryMode = used and "item" or "item_rejected"
+			return
+		end
 		if not trace.Hit then return end
 		if not definition or not definition.blockId or not MC.SV or not MC.SV.PlaceState then return end
 		local bx, by, bz, stateId = placeTarget( ply, aim, trace, definition.blockId )
@@ -175,9 +223,11 @@ function SWEP:SecondaryAttack()
 		if not infiniteMaterials( ply ) and not consumedRecord then return end
 		if not MC.SV.PlaceState( ply, bx, by, bz, stateId ) then
 			restoreConsumed( consumedRecord, snapshot )
+			self.MCSecondaryHeld = false
 			return
 		end
 		if not commitConsumed( consumedRecord, snapshot, ply ) then restoreConsumed( consumedRecord, snapshot ) end
+		self.MCSecondaryMode = "place"
 	elseif IsFirstTimePredicted() and ply == LocalPlayer() then
 		local state = MC.ClientInventory
 		local stack = state and state.slots[( state.selected or 0 ) + 1] or nil
@@ -188,7 +238,70 @@ function SWEP:SecondaryAttack()
 		if plan and MC.CanPreviewPlacePlan and MC.CanPreviewPlacePlan( ply, plan ) and MC.PredictSetBlockState then
 			MC.PredictSetBlockState( bx, by, bz, stateId )
 		end
+		self.MCSecondaryMode = "place"
 	end
+end
+
+function SWEP:KeyRelease( ply, key )
+	if key ~= IN_ATTACK2 then return end
+	if ply ~= self:GetOwner() then return end
+	self:MCReleaseSecondary( "released" )
+end
+
+function SWEP:Think()
+	local ply = self:GetOwner()
+	if not IsValid( ply ) or not ply:Alive() then
+		if SERVER and IsValid( ply ) and MC.SV and MC.SV.CancelSelectedItemUse then
+			MC.SV.CancelSelectedItemUse( ply, "owner_invalid" )
+		end
+		self.MCSecondaryHeld = false
+		self.MCSecondaryMode = nil
+		return
+	end
+
+	if SERVER then
+		local active = ply:GetActiveWeapon()
+		if active ~= self then
+			if MC.SV and MC.SV.CancelSelectedItemUse then MC.SV.CancelSelectedItemUse( ply, "weapon_switched" ) end
+			self.MCSecondaryHeld = false
+			self.MCSecondaryMode = nil
+			return
+		end
+		if self.MCSecondaryHeld and not ply:KeyDown( IN_ATTACK2 )
+			and CurTime() - ( self.MCSecondaryStartedAt or 0 ) >= 0.02 then
+			self:MCReleaseSecondary( "released" )
+		end
+		if self.MCSecondaryHeld and self.MCSecondaryMode == "item"
+			and ply:KeyDown( IN_ATTACK2 ) and MC.SV and MC.SV.TickSelectedItemUse then
+			MC.SV.TickSelectedItemUse( ply, { reason = "right_click_tick" } )
+		end
+	end
+
+	self:NextThink( CurTime() + USE_TICK_INTERVAL )
+	return true
+end
+
+function SWEP:Holster()
+	if SERVER then
+		local ply = self:GetOwner()
+		if IsValid( ply ) and MC.SV and MC.SV.CancelSelectedItemUse then
+			MC.SV.CancelSelectedItemUse( ply, "holster" )
+		end
+	end
+	self.MCSecondaryHeld = false
+	self.MCSecondaryMode = nil
+	return true
+end
+
+function SWEP:OnRemove()
+	if SERVER then
+		local ply = self:GetOwner()
+		if IsValid( ply ) and MC.SV and MC.SV.CancelSelectedItemUse then
+			MC.SV.CancelSelectedItemUse( ply, "weapon_removed" )
+		end
+	end
+	self.MCSecondaryHeld = false
+	self.MCSecondaryMode = nil
 end
 
 if CLIENT then
@@ -238,7 +351,21 @@ if CLIENT then
 			render.OverrideDepthEnable( false, false )
 		elseif MC.InventoryUI and MC.InventoryUI.ItemRenderer then
 			local normal = firstPerson and EyeAngles():Forward() or ang:Forward()
-			MC.InventoryUI.ItemRenderer.DrawHeldItem( stack, pos, normal, firstPerson and 2.4 or 1.1 )
+			local using = ply:GetNWBool( "mc_item_using", false )
+			local useProgress = ply:GetNWFloat( "mc_item_using_progress", 0 )
+			local useStart = ply:GetNWFloat( "mc_item_using_start", 0 )
+			local useDuration = ply:GetNWFloat( "mc_item_using_duration", 0 )
+			if using and useDuration > 0 and MC.ItemUseProgress then
+				useProgress = MC.ItemUseProgress( useStart, useDuration, CurTime() )
+			end
+			MC.InventoryUI.ItemRenderer.DrawHeldItem( stack, pos, normal, firstPerson and 2.4 or 1.1,
+				nil, {
+					displayContext = firstPerson and "firstperson_righthand" or "thirdperson_righthand",
+					using = using,
+					useProgress = math.Clamp( tonumber( useProgress ) or 0, 0, 1 ),
+					useDuration = useDuration,
+					crossbowPull = useProgress,
+				} )
 		end
 	end
 

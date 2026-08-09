@@ -1,4 +1,6 @@
--- Server-authoritative right-click use/consume path for held Minecraft items.
+-- Server-authoritative item-use state machine.
+-- Timings/behavior kinds are classified in item/sh_behavior.lua from the
+-- corresponding Minecraft Item subclasses in out/.
 
 if not SERVER then return end
 
@@ -7,6 +9,8 @@ MC.SV = MC.SV or {}
 
 local SV = MC.SV
 local HUNGER_MAX = 20
+local USE_NET_ROOT = "mc_item_using"
+local USE_NET_PREFIX = USE_NET_ROOT .. "_"
 
 local function activeMinecraftHand( ply, context )
 	if context and context.allowAnyWeapon == true then return true end
@@ -20,10 +24,41 @@ local function foodState( ply )
 	return level, saturation
 end
 
+local function setUseNetwork( ply, state )
+	if not IsValid( ply ) then return end
+	if not ply.SetNWBool then return end
+	local using = state ~= nil
+	ply:SetNWBool( USE_NET_ROOT, using )
+	if not using then
+		if ply.SetNWString then ply:SetNWString( USE_NET_PREFIX .. "item", "" ) end
+		if ply.SetNWFloat then
+			ply:SetNWFloat( USE_NET_PREFIX .. "start", 0 )
+			ply:SetNWFloat( USE_NET_PREFIX .. "duration", 0 )
+			ply:SetNWFloat( USE_NET_PREFIX .. "progress", 0 )
+		end
+		return
+	end
+	if ply.SetNWString then ply:SetNWString( USE_NET_PREFIX .. "item", tostring( state.itemName or "" ) ) end
+	if ply.SetNWFloat then
+		ply:SetNWFloat( USE_NET_PREFIX .. "start", tonumber( state.startedAt ) or CurTime() )
+		ply:SetNWFloat( USE_NET_PREFIX .. "duration", tonumber( state.duration ) or 0 )
+		ply:SetNWFloat( USE_NET_PREFIX .. "progress", 0 )
+	end
+end
+
+local function selectedRecordStack( ply )
+	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply, false ) or nil
+	if not record or not record.container then return nil, nil, nil end
+	local stack = SV.GetSelectedPlayerStack and SV.GetSelectedPlayerStack( ply ) or nil
+	local definition = stack and MC.GetItem( stack.item ) or nil
+	return record, stack, definition
+end
+
 local function consumeOne( record, stack, ply, context )
 	if SV.PlayerHasInfiniteMaterials and SV.PlayerHasInfiniteMaterials( ply ) then return nil, true end
 	local snapshot = MC.ContainerSnapshot( record.container )
-	local replacement = stack.count > 1 and MC.CopyItemStack( stack, stack.count - 1 ) or nil
+	local replacement
+	if stack.count > 1 then replacement = MC.CopyItemStack( stack, stack.count - 1 ) end
 	local selected = math.Clamp( math.floor( tonumber( record.selected ) or 0 ), 0, 8 )
 	local ok, err = MC.ContainerSetStack( record.container, selected, replacement )
 	if not ok then MC.ContainerRestore( record.container, snapshot ) return nil, false, err or "item_consume_failed" end
@@ -39,50 +74,191 @@ local function consumeOne( record, stack, ply, context )
 	return result, false
 end
 
-function SV.UseSelectedItem( ply, context )
-	context = context or {}
-	if not IsValid( ply ) or not ply:Alive() or not activeMinecraftHand( ply, context ) then return false, "invalid_item_use" end
-	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply, false ) or nil
-	if not record or not record.container then return false, "inventory_not_loaded" end
-	local now = CurTime()
-	if record.lastItemUse and now - record.lastItemUse < 0.08 then return false, "item_use_cooldown" end
-	local stack = SV.GetSelectedPlayerStack and SV.GetSelectedPlayerStack( ply ) or nil
-	local definition = stack and MC.GetItem( stack.item ) or nil
-	if not stack or not definition then return false, "empty_hand" end
-
-	if definition.useHandler then
-		local called, handled = pcall( definition.useHandler, ply, stack, context )
-		if called and handled == true then
-			record.lastItemUse = now
-			if MC.RunEvent then MC.RunEvent( "MC.ItemUsed", ply, stack, context ) end
-			return true
-		end
+local function sameUsingStack( state, stack )
+	if not state or not stack then return false end
+	if state.stackHash and MC.ItemStackHash then
+		return state.stackHash == MC.ItemStackHash( stack )
 	end
+	return state.itemName == stack.item
+		and ( tonumber( state.damage ) or 0 ) == ( tonumber( stack.damage ) or 0 )
+end
 
+local function clearUse( ply, record, reason, finished )
+	if record then record.itemUse = nil end
+	setUseNetwork( ply, nil )
+	if MC.RunEvent then
+		MC.RunEvent( finished and "MC.ItemUseFinished" or "MC.ItemUseCancelled", ply, reason or ( finished and "finished" or "cancelled" ) )
+	end
+end
+
+local function mergedContext( state, context )
+	local result = {}
+	for key, value in pairs( state and state.context or {} ) do result[key] = value end
+	for key, value in pairs( context or {} ) do result[key] = value end
+	return result
+end
+
+local function finishFood( ply, record, stack, context )
 	local food = MC.ItemFoodData and MC.ItemFoodData( stack ) or nil
-	if not food and not ( MC.ItemIsConsumable and MC.ItemIsConsumable( stack ) ) then return false, "item_not_usable" end
-	if food then
-		local hunger, saturation = foodState( ply )
-		if hunger >= HUNGER_MAX and not food.alwaysEdible then return false, "food_full" end
-		local result, infinite, consumeError = consumeOne( record, stack, ply, context )
-		if consumeError then return false, consumeError end
-		local newHunger = math.Clamp( hunger + math.floor( tonumber( food.nutrition ) or 0 ), 0, HUNGER_MAX )
-		local newSaturation = math.max( saturation, math.min( newHunger, saturation + ( tonumber( food.saturation ) or 0 ) * 2 ) )
-		ply:SetNWInt( "mc_food_level", newHunger )
-		ply:SetNWFloat( "mc_food_saturation", newSaturation )
-		record.lastItemUse = now
-		if MC.RunEvent then MC.RunEvent( "MC.ItemConsumed", ply, stack, food, infinite == true ) end
-		return true, result
-	end
-
-	-- A custom consumable without FoodProperties is still allowed to invoke
-	-- the lifecycle event; the registered handler can apply its own effects.
+	if not food then return false, "food_data_missing" end
+	local hunger, saturation = foodState( ply )
+	if hunger >= HUNGER_MAX and not food.alwaysEdible then return false, "food_full" end
 	local result, infinite, consumeError = consumeOne( record, stack, ply, context )
 	if consumeError then return false, consumeError end
-	record.lastItemUse = now
+	local nutrition = math.floor( tonumber( food.nutrition ) or 0 )
+	local newHunger = math.Clamp( hunger + nutrition, 0, HUNGER_MAX )
+	local newSaturation = math.max( saturation, math.min( newHunger, saturation + ( tonumber( food.saturation ) or 0 ) * 2 ) )
+	ply:SetNWInt( "mc_food_level", newHunger )
+	ply:SetNWFloat( "mc_food_saturation", newSaturation )
+	if MC.RunEvent then MC.RunEvent( "MC.ItemConsumed", ply, stack, food, infinite == true ) end
+	return true, result
+end
+
+local function finishGeneric( ply, record, stack, context )
+	local result, infinite, consumeError = consumeOne( record, stack, ply, context )
+	if consumeError then return false, consumeError end
 	if MC.RunEvent then MC.RunEvent( "MC.ItemConsumed", ply, stack, nil, infinite == true ) end
 	return true, result
 end
 
+local function dispatchFinishedUse( ply, record, stack, definition, state, context )
+	local kind = state.kind
+	if kind == "food" then return finishFood( ply, record, stack, context ) end
+	if kind == "bow" and SV.FireBow then return SV.FireBow( ply, record, stack, state, context ) end
+	if kind == "crossbow" and SV.FinishCrossbowUse then return SV.FinishCrossbowUse( ply, record, stack, state, context ) end
+	if kind == "trident" and SV.ThrowTrident then return SV.ThrowTrident( ply, record, stack, state, context ) end
+	if kind == "projectile" and SV.ThrowItemProjectile then return SV.ThrowItemProjectile( ply, record, stack, context ) end
+	if kind == "shield" or kind == "spyglass" or kind == "brush" then
+		if MC.RunEvent then MC.RunEvent( "MC.ItemUsed", ply, stack, context ) end
+		return true
+	end
+	if definition and definition.useHandler then
+		local called, handled = pcall( definition.useHandler, ply, stack, context )
+		if called and handled == true then
+			if MC.RunEvent then MC.RunEvent( "MC.ItemUsed", ply, stack, context ) end
+			return true
+		end
+	end
+	if MC.ItemIsConsumable and MC.ItemIsConsumable( stack ) then return finishGeneric( ply, record, stack, context ) end
+	return false, "item_not_usable"
+end
+
+function SV.BeginSelectedItemUse( ply, context )
+	context = context or {}
+	if not IsValid( ply ) or not ply:Alive() or not activeMinecraftHand( ply, context ) then return false, "invalid_item_use" end
+	local record, stack, definition = selectedRecordStack( ply )
+	if not record then return false, "inventory_not_loaded" end
+	if not stack or not definition then return false, "empty_hand" end
+	if record.itemUse then return true, "already_using" end
+	local now = CurTime()
+	if record.lastItemUse and now - record.lastItemUse < 0.08 then return false, "item_use_cooldown" end
+	local kind = MC.ItemBehavior and MC.ItemBehavior( stack ) or nil
+	if not kind and MC.ItemFoodData and MC.ItemFoodData( stack ) then kind = "food" end
+	local spec = MC.ItemBehaviorSpec and MC.ItemBehaviorSpec( stack ) or nil
+	if not kind and not ( MC.ItemIsConsumable and MC.ItemIsConsumable( stack ) ) and not definition.useHandler then
+		return false, "item_not_usable"
+	end
+	if kind == "food" then
+		local food = MC.ItemFoodData( stack )
+		local hunger = foodState( ply )
+		if hunger >= HUNGER_MAX and not food.alwaysEdible then return false, "food_full" end
+	end
+	local duration = spec and spec.duration or 0
+	if context.instant == true or duration <= 0 then
+		local instantState = { kind = kind or "generic", itemName = stack.item, damage = stack.damage, startedAt = now, duration = 0 }
+		local ok, resultOrError = dispatchFinishedUse( ply, record, stack, definition, instantState, context )
+		if ok then record.lastItemUse = now end
+		return ok, resultOrError
+	end
+	record.itemUse = {
+		kind = kind or "generic",
+		itemName = stack.item,
+		damage = stack.damage,
+		stackHash = MC.ItemStackHash and MC.ItemStackHash( stack ) or nil,
+		selected = record.selected,
+		startedAt = now,
+		duration = duration,
+		context = context,
+	}
+	setUseNetwork( ply, record.itemUse )
+	if MC.RunEvent then MC.RunEvent( "MC.ItemUseStarted", ply, stack, record.itemUse ) end
+	return true, "started"
+end
+
+function SV.TickSelectedItemUse( ply, context )
+	context = context or {}
+	if not IsValid( ply ) or not ply:Alive() or not activeMinecraftHand( ply, context ) then
+		SV.CancelSelectedItemUse( ply, "invalid_item_use" )
+		return false, "invalid_item_use"
+	end
+	local record, stack, definition = selectedRecordStack( ply )
+	local state = record and record.itemUse or nil
+	if not state then return false, "not_using" end
+	if not stack or not sameUsingStack( state, stack ) or state.selected ~= record.selected then
+		clearUse( ply, record, "selected_item_changed" )
+		return false, "selected_item_changed"
+	end
+	local progress = MC.ItemUseProgress and MC.ItemUseProgress( state.startedAt, state.duration, CurTime() )
+		or math.Clamp( ( CurTime() - state.startedAt ) * 20 / state.duration, 0, 1 )
+	if ply.SetNWFloat then ply:SetNWFloat( USE_NET_PREFIX .. "progress", progress ) end
+	if state.kind == "food" and progress >= 1 then
+		local ok, resultOrError = dispatchFinishedUse( ply, record, stack, definition, state, mergedContext( state, context ) )
+		if ok then record.lastItemUse = CurTime() end
+		clearUse( ply, record, ok and "finished" or resultOrError, ok )
+		return ok, resultOrError
+	end
+	return true, progress
+end
+
+function SV.ReleaseSelectedItemUse( ply, context )
+	context = context or {}
+	if not IsValid( ply ) or not ply:Alive() or not activeMinecraftHand( ply, context ) then
+		SV.CancelSelectedItemUse( ply, "invalid_item_use" )
+		return false, "invalid_item_use"
+	end
+	local record, stack, definition = selectedRecordStack( ply )
+	local state = record and record.itemUse or nil
+	if not state then return false, "not_using" end
+	if not stack or not sameUsingStack( state, stack ) or state.selected ~= record.selected then
+		clearUse( ply, record, "selected_item_changed" )
+		return false, "selected_item_changed"
+	end
+	local progress = MC.ItemUseProgress and MC.ItemUseProgress( state.startedAt, state.duration, CurTime() ) or 0
+	if state.kind == "food" and progress < 1 then
+		clearUse( ply, record, "released_early" )
+		return false, "released_early"
+	end
+	state.progress = progress
+	local ok, resultOrError = dispatchFinishedUse( ply, record, stack, definition, state, mergedContext( state, context ) )
+	if ok then record.lastItemUse = CurTime() end
+	clearUse( ply, record, ok and "finished" or resultOrError, ok )
+	return ok, resultOrError
+end
+
+function SV.CancelSelectedItemUse( ply, reason )
+	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply, false ) or nil
+	if not record or not record.itemUse then return false end
+	clearUse( ply, record, reason or "cancelled" )
+	return true
+end
+
+-- Compatibility API used by older callers/tests: perform an instant use.
+function SV.UseSelectedItem( ply, context )
+	context = context or {}
+	context.instant = true
+	return SV.BeginSelectedItemUse( ply, context )
+end
+
 MC.UseSelectedItem = SV.UseSelectedItem
 
+if hook and hook.Add then
+	hook.Add( "PlayerDeath", "mc_item_use_cancel_death", function( ply )
+		SV.CancelSelectedItemUse( ply, "death" )
+	end )
+	hook.Add( "PlayerDisconnected", "mc_item_use_cancel_disconnect", function( ply )
+		SV.CancelSelectedItemUse( ply, "disconnect" )
+	end )
+	hook.Add( "ShutDown", "mc_item_use_cancel_shutdown", function()
+		for ply in pairs( SV.PlayerInventories or {} ) do SV.CancelSelectedItemUse( ply, "shutdown" ) end
+	end )
+end

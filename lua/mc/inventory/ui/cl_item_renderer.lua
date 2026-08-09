@@ -132,9 +132,13 @@ function Renderer.DisplayName( stack )
 	return MC.ItemDisplayName and MC.ItemDisplayName( definition ) or tostring( definition.displayName or definition.name )
 end
 
-function Renderer.DrawHeldItem( stack, pos, normal, size, color )
+function Renderer.DrawHeldItem( stack, pos, normal, size, color, options )
 	if not Renderer.CanDraw( stack ) or not pos or not normal then return false end
-	local materials = Renderer.MaterialsForStack( stack, { displayContext = "firstperson_righthand" } )
+	options = options or {}
+	local modelOptions = {}
+	for key, value in pairs( options ) do modelOptions[key] = value end
+	modelOptions.displayContext = modelOptions.displayContext or "firstperson_righthand"
+	local materials = Renderer.MaterialsForStack( stack, modelOptions )
 	if #materials == 0 then return false end
 	color = color or Color( 255, 255, 255, 255 )
 	for index, material in ipairs( materials ) do
