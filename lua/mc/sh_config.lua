@@ -161,6 +161,9 @@ if SERVER then
 	MC.Config.BlockExplosionFxLimit = GetConVar( "mc_block_explosion_fx_limit" ) or CreateConVar( "mc_block_explosion_fx_limit", "16", F, "Max block break particle/sound effects broadcast per explosion; 0 = none" )
 	MC.Config.PresetMaxBlocks = GetConVar( "mc_preset_max_blocks" ) or CreateConVar( "mc_preset_max_blocks", "100000", F, "Max non-air blocks one MC preset may save/place; 0 = unlimited" )
 	MC.Config.UseInteract = GetConVar( "mc_use_interact" ) or CreateConVar( "mc_use_interact", "1", F, "Pressing +use (E) on an aimed usable MC block interacts with it regardless of the held weapon" )
+	MC.Config.InventoryPersist = GetConVar( "mc_inventory_persist" ) or CreateConVar( "mc_inventory_persist", "1", F, "Persist Minecraft-style player inventories by SteamID64" )
+	MC.Config.InventoryActionRate = GetConVar( "mc_inventory_action_rate" ) or CreateConVar( "mc_inventory_action_rate", "80", F, "Maximum authoritative inventory actions accepted per player each second", 10, 200 )
+	MC.Config.InventoryCreative = GetConVar( "mc_inventory_creative" ) or CreateConVar( "mc_inventory_creative", "1", F, "Allow Minecraft creative clone/catalog actions in the item inventory" )
 
 	local reach = MC.Config.Reach:GetFloat()
 	if math.abs( reach - 8192 ) < 0.01 or math.abs( reach - 182.5 ) < 0.01 then

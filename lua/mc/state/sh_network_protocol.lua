@@ -117,6 +117,11 @@ Net.MessageNames = {
 	"mc_cluster_convert", "mc_cluster_data_req", "mc_cluster_data",
 	"mc_cluster_paste", "mc_cluster_break",
 
+	-- Server-authoritative item inventory/container protocol.
+	"mc_inventory_sync_begin", "mc_inventory_sync_part", "mc_inventory_sync_end",
+	"mc_inventory_delta", "mc_inventory_open_request", "mc_inventory_open",
+	"mc_inventory_action", "mc_inventory_close", "mc_inventory_resync", "mc_inventory_select",
+
 	-- Phase 4 state-aware transport.
 	"mc_state_hello", "mc_state_hello_ack",
 	"mc_state_set", "mc_state_set_bulk",

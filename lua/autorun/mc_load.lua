@@ -46,6 +46,7 @@ local SHARED = {
 	"mc/item/sh_registry.lua",
 	"mc/generated/sh_generated_items.lua",
 	"mc/item/sh_stack.lua",
+	"mc/item/sh_codec.lua",
 	"mc/inventory/sh_slot.lua",
 	"mc/inventory/sh_container.lua",
 	"mc/inventory/sh_click.lua",
@@ -116,6 +117,8 @@ local SERVER_FILES = {
 	"mc/sv_damage.lua",
 	"mc/sv_lighting.lua",
 	"mc/sv_player.lua",
+	"mc/inventory/sv_player_inventory.lua",
+	"mc/inventory/sv_network.lua",
 	"mc/api/sv_api.lua",
 }
 local CLIENT_FILES = {
@@ -163,6 +166,8 @@ local CLIENT_FILES = {
 	"mc/debug/cl_gallery.lua",
 	"mc/cl_light_bench.lua",
 	"mc/cl_player.lua",
+	"mc/inventory/cl_state.lua",
+	"mc/inventory/cl_network.lua",
 	"mc/render/cl_native_mesh_backend.lua",
 	"mc/api/cl_api.lua",
 }
