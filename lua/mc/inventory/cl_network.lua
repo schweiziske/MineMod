@@ -253,8 +253,15 @@ net.Receive( "mc_inventory_open", function()
 	local slotCount = net.ReadUInt( 8 )
 	local playerOffset = net.ReadUInt( 8 )
 	local chestSlots = net.ReadUInt( 8 )
+	local crafting = net.ReadBool()
+	local craftingWidth = net.ReadUInt( 4 )
+	local craftingHeight = net.ReadUInt( 4 )
+	local resultSlot = net.ReadUInt( 8 )
 	if protocol ~= PROTOCOL_VERSION or containerId < 1 or token == "" or #token > 128 or err
-	or slotCount < 1 or slotCount > 127 or playerOffset + 36 > slotCount or chestSlots > slotCount then
+	or slotCount < 1 or slotCount > 127 or playerOffset + 36 > slotCount or chestSlots > slotCount
+	or ( crafting and ( craftingWidth < 1 or craftingHeight < 1 or craftingWidth * craftingHeight > 9
+		or resultSlot >= slotCount or resultSlot == nil
+		or playerOffset < resultSlot + craftingWidth * craftingHeight + 1 ) ) then
 		State.lastError = err or "invalid_inventory_open"
 		return
 	end
@@ -267,19 +274,27 @@ net.Receive( "mc_inventory_open", function()
 		slotCount = slotCount,
 		playerOffset = playerOffset,
 		chestSlots = chestSlots,
+		crafting = crafting,
+		craftingWidth = craftingWidth,
+		craftingHeight = craftingHeight,
+		resultSlot = resultSlot,
 	}
 	State.revision = revision
 	State.selected = selected
 	State.cursor = cursor
 	local menuSlots = {}
 	if kind == "player" or kind == "" then
-		for index = 0, 35 do menuSlots[index + 1] = MC.CopyItemStack( State.slots[index + 1] ) end
+		for index = 0, 35 do menuSlots[playerOffset + index + 1] = MC.CopyItemStack( State.slots[index + 1] ) end
 	end
 	State.menu = {
 		kind = kind ~= "" and kind or "player",
 		slotCount = slotCount,
 		playerOffset = playerOffset,
 		chestSlots = chestSlots,
+		crafting = crafting,
+		craftingWidth = craftingWidth,
+		craftingHeight = craftingHeight,
+		resultSlot = resultSlot,
 		slots = menuSlots,
 	}
 	State.actions = {}

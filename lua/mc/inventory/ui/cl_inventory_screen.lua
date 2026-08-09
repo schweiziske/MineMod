@@ -3,8 +3,8 @@
 
     Survival uses inventory.png at 176x166.  Creative uses the 195x136 tab
     backgrounds, 9x5 visible item window, original tab sprites and scrollbar.
-    Only the 36 implemented player slots are interactive until equipment and
-    crafting containers are added in their own phases.
+    Survival player and crafting-table menus use the same 36 player slots plus
+    the transient vanilla crafting grid/result slots.
 ------------------------------------------------------------------------------]]
 
 MC = MC or {}
@@ -16,6 +16,7 @@ local CREATIVE_W, CREATIVE_H = 195, 136
 local CREATIVE_COLS, CREATIVE_ROWS = 9, 5
 
 local SURVIVAL_BACKGROUND = UI.GetGuiMaterial( "container/inventory" )
+local CRAFTING_BACKGROUND = UI.GetGuiMaterial( "container/crafting_table" )
 local CHEST_BACKGROUND = UI.GetGuiMaterial( "container/generic_54" )
 local CREATIVE_ITEMS_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_items" )
 local CREATIVE_SEARCH_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_item_search" )
@@ -235,6 +236,9 @@ function PANEL:Configure( session, state )
 	self.State = state or MC.ClientInventory
 	self.MenuKind = session and session.kind or "player"
 	self.Chest = self.MenuKind == "chest"
+	self.CraftingTable = self.MenuKind == "crafting_table"
+	self.Crafting = session and session.crafting == true
+		or self.State and self.State.menu and self.State.menu.crafting == true or false
 	self.Creative = session and session.creative == true
 	if self.Creative and not UI.CreativeTabsByKey[self.SelectedTabKey] then self.SelectedTabKey = "building_blocks" end
 	self.ScrollRow = 0
@@ -335,9 +339,9 @@ function PANEL:PlaceInventorySlot( ordinal, inventoryIndex, x, y )
 	return ordinal + 1
 end
 
-function PANEL:PlaceMenuSlot( ordinal, menuIndex, playerIndex, x, y )
+function PANEL:PlaceMenuSlot( ordinal, menuIndex, playerIndex, x, y, role )
 	local slot = self:AcquireSlot( ordinal )
-	slot:SetMenuSlot( menuIndex, playerIndex )
+	slot:SetMenuSlot( menuIndex, playerIndex, role )
 	slot:SetPos( self.Left + x * self.Scale, self.Top + y * self.Scale )
 	self.MenuSlotViews[menuIndex] = self.MenuSlotViews[menuIndex] or {}
 	self.MenuSlotViews[menuIndex][#self.MenuSlotViews[menuIndex] + 1] = slot
@@ -381,6 +385,30 @@ function PANEL:LayoutVisibleSlots()
 		end
 		for index = 0, 8 do
 			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index, 8 + index * 18, inventoryTop + 58 )
+		end
+	elseif self.Crafting and not self.Creative then
+		local width = math.Clamp( math.floor( tonumber( self.Session and self.Session.craftingWidth ) or ( self.CraftingTable and 3 or 2 ) ), 1, 3 )
+		local height = math.Clamp( math.floor( tonumber( self.Session and self.Session.craftingHeight ) or width ), 1, 3 )
+		local resultSlot = math.floor( tonumber( self.Session and self.Session.resultSlot ) or 0 )
+		local inputStartX, inputStartY, resultX, resultY
+		if self.CraftingTable then
+			inputStartX, inputStartY, resultX, resultY = 30, 17, 124, 35
+		else
+			inputStartX, inputStartY, resultX, resultY = 98, 18, 154, 28
+		end
+		ordinal = self:PlaceMenuSlot( ordinal, resultSlot, nil, resultX, resultY, "result" )
+		for index = 0, width * height - 1 do
+			ordinal = self:PlaceMenuSlot( ordinal, index + 1, nil,
+				inputStartX + index % width * 18, inputStartY + math.floor( index / width ) * 18, "input" )
+		end
+		local playerOffset = math.floor( tonumber( self.Session and self.Session.playerOffset ) or ( width * height + 1 ) )
+		for index = 9, 35 do
+			local position = index - 9
+			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index,
+				8 + position % 9 * 18, 84 + math.floor( position / 9 ) * 18 )
+		end
+		for index = 0, 8 do
+			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index, 8 + index * 18, 142 )
 		end
 	elseif not self.Creative then
 		for index = 9, 35 do
@@ -428,7 +456,7 @@ function PANEL:LayoutSpecialControls()
 		self.Scrollbar:SetPos( self.Left + 175 * self.Scale, self.Top + 18 * self.Scale )
 		self.Scrollbar:SetSize( 12 * self.Scale, 112 * self.Scale )
 	end
-	local preview = not self.Chest and ( not self.Creative or tab and tab.key == "inventory" )
+	local preview = not self.Chest and not self.CraftingTable and ( not self.Creative or tab and tab.key == "inventory" )
 	self.PlayerPreview:SetVisible( preview == true )
 	if preview then
 		if self.Creative then
@@ -457,7 +485,7 @@ function PANEL:RefreshInventorySlots( changed )
 end
 
 function PANEL:RefreshMenuSlots( changed )
-	if not self.Chest then return end
+	if not self.Chest and not self.Crafting then return end
 	if type( changed ) == "table" then
 		for _, index in ipairs( changed ) do
 			for _, slot in ipairs( self.MenuSlotViews[index] or {} ) do
@@ -537,6 +565,7 @@ function PANEL:ClearHoveredSlot( slot ) if self.HoveredSlot == slot then self.Ho
 
 function PANEL:BackgroundMaterial()
 	if self.Chest then return CHEST_BACKGROUND end
+	if self.CraftingTable then return CRAFTING_BACKGROUND end
 	if not self.Creative then return SURVIVAL_BACKGROUND end
 	if self.SelectedTabKey == "search" then return CREATIVE_SEARCH_BACKGROUND end
 	if self.SelectedTabKey == "inventory" then return CREATIVE_INVENTORY_BACKGROUND end
@@ -564,6 +593,15 @@ function PANEL:Paint( w, h )
 		UI.DrawText( title, self.Left + 8 * self.Scale, self.Top + 6 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
 		UI.DrawText( "Inventory", self.Left + 8 * self.Scale,
 			self.Top + ( self.ChestRows * 18 + 20 ) * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+	elseif self.Crafting then
+		local titleX = self.CraftingTable and 8 or 97
+		UI.DrawText( "Crafting", self.Left + titleX * self.Scale, self.Top + 6 * self.Scale,
+			self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+		UI.DrawText( "Inventory", self.Left + 8 * self.Scale, self.Top + 72 * self.Scale,
+			self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+	elseif not self.Creative then
+		UI.DrawText( "Inventory", self.Left + 8 * self.Scale, self.Top + 72 * self.Scale,
+			self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
 	end
 	return true
 end

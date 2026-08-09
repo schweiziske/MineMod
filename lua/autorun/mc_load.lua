@@ -58,6 +58,7 @@ local SHARED = {
 	"mc/block_entity/sh_registry.lua",
 	"mc/functional/sh_chest_data.lua",
 	"mc/functional/sh_chests.lua",
+	"mc/functional/sh_crafting.lua",
 	"mc/block_update/sh_registry.lua",
 	"mc/state/sh_project_block_state_schemas.lua",
 	"mc/state/sh_state_collision.lua",
@@ -125,6 +126,7 @@ local SERVER_FILES = {
 	"mc/inventory/sv_player_inventory.lua",
 	"mc/inventory/sv_item_drops.lua",
 	"mc/inventory/sv_chests.lua",
+	"mc/inventory/sv_crafting.lua",
 	"mc/inventory/sv_network.lua",
 	"mc/api/sv_api.lua",
 }
