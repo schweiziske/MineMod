@@ -17,8 +17,12 @@ end
 
 local SAVE_DIR = "mc"
 local SAVE_SLOT_DIR = "mc/saves"
+local WORKSHOP_SAVE_SLOT_DIR = "mc/workshop_saves"
+local MOUNTED_SAVE_SLOT_DIR = "data_static/mc/saves"
+local MOUNTED_SAVE_KEY_PREFIX = "@mounted:"
 local SAVE_COVER_DIR = "mc/save_covers"
 local MAX_NET_SAVES = 4095
+local SAVE_LIST_NET_BUDGET = 60000
 local SAVE_COVER_PART_BYTES = 16384
 local MAX_SAVE_COVER_BYTES = 1024 * 1024 * 2
 local SAVE_COVER_UPLOAD_TIMEOUT = 20
@@ -28,6 +32,7 @@ local SAVE_PUBLIC_HELP = "Allow non-admin players to list/load/save MC saves; de
 local function ensureSaveDirs()
 	file.CreateDir( SAVE_DIR )
 	file.CreateDir( SAVE_SLOT_DIR )
+	file.CreateDir( WORKSHOP_SAVE_SLOT_DIR )
 	file.CreateDir( SAVE_COVER_DIR )
 end
 
@@ -50,12 +55,87 @@ function SV.SaveMetaPath( slotName )
 	return SAVE_SLOT_DIR .. "/" .. slotName .. "/meta.json"
 end
 
+function SV.WorkshopSaveSlotPath( slotName )
+	return WORKSHOP_SAVE_SLOT_DIR .. "/" .. slotName .. "/manifest.json"
+end
+
+function SV.WorkshopSaveMetaPath( slotName )
+	return WORKSHOP_SAVE_SLOT_DIR .. "/" .. slotName .. "/meta.json"
+end
+
+function SV.MountedSaveSlotPath( packageName )
+	return MOUNTED_SAVE_SLOT_DIR .. "/" .. packageName .. "/manifest.json"
+end
+
+local function mountedSaveKey( packageName )
+	return MOUNTED_SAVE_KEY_PREFIX .. packageName
+end
+
+local function mountedPackageFromKey( value )
+	value = string.Trim( tostring( value or "" ) )
+	if not string.StartWith( value, MOUNTED_SAVE_KEY_PREFIX ) then return nil end
+	local packageName = string.sub( value, #MOUNTED_SAVE_KEY_PREFIX + 1 )
+	local clean = SV.SaveSlotName( packageName )
+	if clean ~= packageName then return nil end
+	return clean
+end
+
 function SV.LegacySaveSlotPath( slotName )
 	return SAVE_SLOT_DIR .. "/" .. slotName .. ".dat"
 end
 
 local function legacySaveMetaPath( slotName )
 	return SAVE_SLOT_DIR .. "/" .. slotName .. ".json"
+end
+
+local function manifestMetaPath( manifestPath, slotName )
+	if string.EndsWith( tostring( manifestPath or "" ), ".dat" ) then return legacySaveMetaPath( slotName ) end
+	return string.GetPathFromFilename( manifestPath ) .. "meta.json"
+end
+
+function SV.ResolveSaveSlot( slotName )
+	local mountedPackage = mountedPackageFromKey( slotName )
+	if mountedPackage then
+		local mountedPath = SV.MountedSaveSlotPath( mountedPackage )
+		if file.Exists( mountedPath, "GAME" ) then
+			return {
+				name = mountedPackage,
+				key = mountedSaveKey( mountedPackage ),
+				path = mountedPath,
+				source = "mounted",
+				root = MOUNTED_SAVE_SLOT_DIR,
+				realm = "GAME",
+			}
+		end
+		return nil
+	end
+
+	slotName = SV.SaveSlotName( slotName )
+	if not slotName then return nil end
+	local localPath = SV.SaveSlotPath( slotName )
+	if file.Exists( localPath, "DATA" ) then
+		return { name = slotName, key = slotName, path = localPath, source = "local", root = SAVE_SLOT_DIR, realm = "DATA" }
+	end
+	local workshopPath = SV.WorkshopSaveSlotPath( slotName )
+	if file.Exists( workshopPath, "DATA" ) then
+		return { name = slotName, key = slotName, path = workshopPath, source = "workshop", root = WORKSHOP_SAVE_SLOT_DIR, realm = "DATA" }
+	end
+	local legacyPath = SV.LegacySaveSlotPath( slotName )
+	if file.Exists( legacyPath, "DATA" ) then
+		return { name = slotName, key = slotName, path = legacyPath, source = "local", root = SAVE_SLOT_DIR, realm = "DATA", legacy = true }
+	end
+	local mountedPath = SV.MountedSaveSlotPath( slotName )
+	if file.Exists( mountedPath, "GAME" ) then
+		return {
+			name = slotName,
+			key = mountedSaveKey( slotName ),
+			path = mountedPath,
+			source = "mounted",
+			root = MOUNTED_SAVE_SLOT_DIR,
+			realm = "GAME",
+		}
+	end
+	return nil
 end
 
 function SV.SaveCoverPath( slotName )
@@ -106,12 +186,16 @@ local function saveCoverBelongsToSlot( cover, slotName )
 	return cover == base .. ".jpg" or string.StartWith( cover, base .. "_" )
 end
 
-local function writeSaveMeta( slotName, path, data, chunks, blocks, cover )
+local function writeSaveMeta( slotName, path, data, chunks, blocks, cover, source )
 	ensureSaveDirs()
-	file.CreateDir( SAVE_SLOT_DIR .. "/" .. slotName )
+	local root = string.GetPathFromFilename( path )
+	file.CreateDir( root )
+	local metaPath = manifestMetaPath( path, slotName )
+	local previousRaw = file.Read( metaPath, "DATA" )
+	local previous = previousRaw and util.JSONToTable( previousRaw ) or {}
 	local savedAt = data.savedAt or os.time()
 	local meta = {
-		v = 1,
+		v = 2,
 		name = slotName,
 		path = path,
 		map = data.map or game.GetMap(),
@@ -122,16 +206,26 @@ local function writeSaveMeta( slotName, path, data, chunks, blocks, cover )
 		chunks = chunks,
 		blocks = blocks,
 		cover = sanitizeSaveCover( cover or data.cover, slotName ),
+		source = source == "workshop" and "workshop" or "local",
+		workshopId = previous.workshopId,
+		workshopOwner = previous.workshopOwner,
+		workshopPublishedAt = previous.workshopPublishedAt,
+		workshopContentHash = previous.workshopContentHash,
+		workshopArchiveBytes = previous.workshopArchiveBytes,
+		workshopImportedAt = previous.workshopImportedAt,
+		workshopImportedBy = previous.workshopImportedBy,
 	}
 	local json = util.TableToJSON( meta, true )
-	if json then file.Write( SV.SaveMetaPath( slotName ), json ) end
+	if json then file.Write( metaPath, json ) end
 end
 
-local function readSaveMeta( slotName, path )
-	local metaPath = string.EndsWith( tostring( path or "" ), ".dat" )
-		and legacySaveMetaPath( slotName ) or SV.SaveMetaPath( slotName )
-	local raw = file.Read( metaPath, "DATA" )
-	return raw and util.JSONToTable( raw ) or nil
+local function readSaveMeta( slotName, path, source, realm )
+	local metaPath = manifestMetaPath( path, slotName )
+	realm = realm == "GAME" and "GAME" or "DATA"
+	local raw = file.Read( metaPath, realm )
+	local meta = raw and util.JSONToTable( raw ) or nil
+	if istable( meta ) and ( source == "workshop" or source == "mounted" ) then meta.source = source end
+	return meta
 end
 
 local function savedBlockCount( data )
@@ -150,8 +244,9 @@ local function savedBlockCount( data )
 	return #data.chunks, blocks
 end
 
-local function readSaveJSON( path )
-	local raw = file.Read( path, "DATA" )
+local function readSaveJSON( path, realm )
+	realm = realm == "GAME" and "GAME" or "DATA"
+	local raw = file.Read( path, realm )
 	if not raw or raw == "" then return nil end
 	if string.sub( raw, 1, 1 ) == "{" then
 		return util.JSONToTable( raw )
@@ -160,8 +255,8 @@ local function readSaveJSON( path )
 	return json and util.JSONToTable( json ) or nil
 end
 
-local function readSaveDataSummary( slotName, path )
-	local data = readSaveJSON( path )
+local function readSaveDataSummary( slotName, path, realm )
+	local data = readSaveJSON( path, realm )
 	if data and istable( data.parts ) and istable( data.stats ) then
 		local savedAt = tonumber( data.savedAt )
 		return {
@@ -198,13 +293,17 @@ end
 
 local function writeMetaTable( slotName, meta, path )
 	local json = util.TableToJSON( meta, true )
-	if not json then return end
+	if not json then return false end
+	path = path or meta.path or SV.SaveSlotPath( slotName )
+	local metaPath
 	if string.EndsWith( tostring( path or "" ), ".dat" ) then
-		file.Write( legacySaveMetaPath( slotName ), json )
-		return
+		metaPath = legacySaveMetaPath( slotName )
+	else
+		file.CreateDir( string.GetPathFromFilename( path ) )
+		metaPath = manifestMetaPath( path, slotName )
 	end
-	file.CreateDir( SAVE_SLOT_DIR .. "/" .. slotName )
-	file.Write( SV.SaveMetaPath( slotName ), json )
+	file.Write( metaPath, json )
+	return file.Read( metaPath, "DATA" ) == json
 end
 
 local function saveMetaComplete( meta )
@@ -215,15 +314,17 @@ local function saveMetaComplete( meta )
 		and meta.chunks ~= nil
 end
 
-local function readSaveListMeta( slotName, path )
-	local meta = readSaveMeta( slotName, path ) or {}
+local function readSaveListMeta( slotName, path, source, realm )
+	realm = realm == "GAME" and "GAME" or "DATA"
+	local meta = readSaveMeta( slotName, path, source, realm ) or {}
+	if source == "workshop" or source == "mounted" then meta.source = source end
 	if saveMetaComplete( meta ) then
 		meta.name = meta.name or slotName
 		meta.path = meta.path or path
 		return meta
 	end
 
-	local summary = readSaveDataSummary( slotName, path )
+	local summary = readSaveDataSummary( slotName, path, realm )
 	if not summary then
 		meta.name = meta.name or slotName
 		meta.path = meta.path or path
@@ -241,43 +342,90 @@ local function readSaveListMeta( slotName, path )
 	if meta.chunks == nil then meta.chunks = summary.chunks end
 	if meta.blocks == nil then meta.blocks = summary.blocks end
 	if meta.cover == nil then meta.cover = summary.cover end
-	writeMetaTable( slotName, meta, path )
+	if realm == "DATA" then writeMetaTable( slotName, meta, path ) end
 	return meta
 end
 
+function SV.SaveExists( slotName )
+	return SV.ResolveSaveSlot( slotName ) ~= nil
+end
+
+function SV.GetSaveMeta( slotName )
+	local resolved = SV.ResolveSaveSlot( slotName )
+	if not resolved then return nil, "save_not_found" end
+	return readSaveListMeta( resolved.name, resolved.path, resolved.source, resolved.realm ), resolved.path, resolved.source
+end
+
+function SV.WriteSaveMetaTable( slotName, meta, path )
+	slotName = SV.SaveSlotName( slotName )
+	if not slotName or not istable( meta ) then return false, "invalid_save_meta" end
+	path = path or SV.SaveSlotPath( slotName )
+	meta.name = slotName
+	meta.path = path
+	if string.StartWith( string.lower( path ), string.lower( WORKSHOP_SAVE_SLOT_DIR .. "/" ) ) then meta.source = "workshop" end
+	if not writeMetaTable( slotName, meta, path ) then return false, "meta_write_failed" end
+	return true
+end
+
+function SV.UpdateSaveWorkshopMetadata( slotName, workshopId, contentHash, ownerSteamId64, archiveBytes )
+	local meta, path, source = SV.GetSaveMeta( slotName )
+	if not meta then return false, path end
+	if source == "mounted" then return false, "mounted_save_read_only" end
+	workshopId = MC.Workshop and MC.Workshop.NormalizeWorkshopId( workshopId ) or nil
+	if not workshopId then return false, "invalid_workshop_id" end
+	meta.v = math.max( math.floor( tonumber( meta.v ) or 1 ), 2 )
+	local resolved = SV.ResolveSaveSlot( slotName )
+	meta.source = resolved and resolved.source == "workshop" and "workshop" or "local"
+	meta.workshopId = workshopId
+	meta.workshopOwner = string.Trim( tostring( ownerSteamId64 or meta.workshopOwner or "" ) )
+	meta.workshopPublishedAt = os.time()
+	if MC.Workshop and MC.Workshop.IsContentHash( contentHash ) then
+		meta.workshopContentHash = string.lower( tostring( contentHash ) )
+	end
+	archiveBytes = math.floor( tonumber( archiveBytes ) or 0 )
+	if MC.Workshop and archiveBytes >= 17 and archiveBytes <= MC.Workshop.MAX_WORKSHOP_ARCHIVE_BYTES then
+		meta.workshopArchiveBytes = archiveBytes
+	end
+	return SV.WriteSaveMetaTable( slotName, meta, path )
+end
+
 function SV.SaveNamed( slotName, cover )
+	if mountedPackageFromKey( slotName ) then return false, "mounted_save_read_only" end
 	slotName = SV.SaveSlotName( slotName )
 	if not slotName then return false, "missing_save_name" end
 	ensureSaveDirs()
-	local ok, path, data, chunks, blocks = SV.SaveToPath( SV.SaveSlotPath( slotName ), slotName )
-	if ok then writeSaveMeta( slotName, path, data, chunks, blocks, cover ) end
+	local resolved = SV.ResolveSaveSlot( slotName )
+	if resolved and resolved.source == "mounted" then return false, "mounted_save_read_only" end
+	local source = resolved and resolved.source or "local"
+	local targetPath = resolved and not resolved.legacy and resolved.path or SV.SaveSlotPath( slotName )
+	local ok, path, data, chunks, blocks = SV.SaveToPath( targetPath, slotName )
+	if ok then writeSaveMeta( slotName, path, data, chunks, blocks, cover, source ) end
 	return ok, path
 end
 
 function SV.LoadSave( slotName, resyncClients )
-	slotName = SV.SaveSlotName( slotName )
-	if not slotName then return false, "missing_save_name" end
-	local path = SV.SaveSlotPath( slotName )
-	if not file.Exists( path, "DATA" ) then path = SV.LegacySaveSlotPath( slotName ) end
-	return SV.LoadFromPath( path, resyncClients, slotName )
+	local resolved = SV.ResolveSaveSlot( slotName )
+	if not resolved then return false, "save_not_found" end
+	return SV.LoadFromPath( resolved.path, resyncClients, resolved.key or resolved.name, resolved.realm )
 end
 
 function SV.DeleteSave( slotName )
-	slotName = SV.SaveSlotName( slotName )
-	if not slotName then return false, "missing_save_name" end
-	local path = SV.SaveSlotPath( slotName )
-	local legacyPath = SV.LegacySaveSlotPath( slotName )
-	if not file.Exists( path, "DATA" ) and not file.Exists( legacyPath, "DATA" ) then return false, "save_not_found" end
-	local root = SAVE_SLOT_DIR .. "/" .. slotName
-	local regionDir = root .. "/regions"
-	local regionFiles = file.Find( regionDir .. "/*", "DATA" ) or {}
-	for _, name in ipairs( regionFiles ) do file.Delete( regionDir .. "/" .. name ) end
-	file.Delete( regionDir )
-	for _, name in ipairs( file.Find( root .. "/*", "DATA" ) or {} ) do file.Delete( root .. "/" .. name ) end
-	file.Delete( root )
-	file.Delete( legacyPath )
-	file.Delete( SV.SaveMetaPath( slotName ) )
-	file.Delete( legacySaveMetaPath( slotName ) )
+	local resolved = SV.ResolveSaveSlot( slotName )
+	if not resolved then return false, "save_not_found" end
+	if resolved.source == "mounted" then return false, "mounted_save_read_only" end
+	slotName = resolved.name
+	if resolved.legacy then
+		file.Delete( resolved.path )
+		file.Delete( legacySaveMetaPath( slotName ) )
+	else
+		local root = string.GetPathFromFilename( resolved.path )
+		root = string.gsub( root, "/+$", "" )
+		local regionDir = root .. "/regions"
+		for _, name in ipairs( file.Find( regionDir .. "/*", "DATA" ) or {} ) do file.Delete( regionDir .. "/" .. name ) end
+		file.Delete( regionDir )
+		for _, name in ipairs( file.Find( root .. "/*", "DATA" ) or {} ) do file.Delete( root .. "/" .. name ) end
+		file.Delete( root )
+	end
 	SV.DeleteSaveCovers( slotName )
 	MsgN( "[MC] deleted save \"" .. slotName .. "\"" )
 	if MC.RunEvent then MC.RunEvent( "MC.SaveDeleted", slotName ) end
@@ -287,28 +435,43 @@ end
 function SV.SaveList()
 	ensureSaveDirs()
 	local files = file.Find( SAVE_SLOT_DIR .. "/*.dat", "DATA" ) or {}
-	local _, directories = file.Find( SAVE_SLOT_DIR .. "/*", "DATA" )
 	local paths = {}
-	for _, slotName in ipairs( directories or {} ) do
-		local clean = SV.SaveSlotName( slotName )
-		local path = clean and SV.SaveSlotPath( clean ) or nil
-		if clean == slotName and path and file.Exists( path, "DATA" ) then paths[clean] = path end
+	local function collectRoot( root, source, pathForSlot, realm )
+		realm = realm == "GAME" and "GAME" or "DATA"
+		local _, directories = file.Find( root .. "/*", realm )
+		for _, slotName in ipairs( directories or {} ) do
+			local clean = SV.SaveSlotName( slotName )
+			local path = clean and pathForSlot( clean ) or nil
+			local key = source == "mounted" and mountedSaveKey( slotName ) or clean
+			if clean == slotName and path and file.Exists( path, realm ) and not paths[key] then
+				paths[key] = { name = slotName, key = key, path = path, source = source, realm = realm }
+			end
+		end
 	end
+	collectRoot( SAVE_SLOT_DIR, "local", SV.SaveSlotPath, "DATA" )
+	collectRoot( WORKSHOP_SAVE_SLOT_DIR, "workshop", SV.WorkshopSaveSlotPath, "DATA" )
+	collectRoot( MOUNTED_SAVE_SLOT_DIR, "mounted", SV.MountedSaveSlotPath, "GAME" )
 	for _, fn in ipairs( files ) do
 		local slotName = string.gsub( fn, "%.dat$", "" )
-		if not paths[slotName] then paths[slotName] = SAVE_SLOT_DIR .. "/" .. fn end
+		if not paths[slotName] then
+			paths[slotName] = { name = slotName, key = slotName, path = SAVE_SLOT_DIR .. "/" .. fn, source = "local", realm = "DATA" }
+		end
 	end
 	local out = {}
-	for slotName, path in pairs( paths ) do
-		local meta = readSaveListMeta( slotName, path )
+	for _, descriptor in pairs( paths ) do
+		local slotName, path, source, realm = descriptor.name, descriptor.path, descriptor.source, descriptor.realm
+		local meta = readSaveListMeta( slotName, path, source, realm )
 		out[#out + 1] = {
 			name = meta.name or slotName,
+			key = descriptor.key or slotName,
 			map = meta.map or "unknown",
 			blocks = math.floor( tonumber( meta.blocks ) or 0 ),
 			chunks = math.floor( tonumber( meta.chunks ) or 0 ),
 			savedAtText = meta.savedAtText or "?",
-			cover = sanitizeSaveCover( meta.cover, slotName ) or "",
+			cover = source == "mounted" and "" or ( sanitizeSaveCover( meta.cover, slotName ) or "" ),
 			path = path,
+			source = source,
+			workshopId = MC.Workshop and MC.Workshop.NormalizeWorkshopId( meta.workshopId ) or "",
 		}
 	end
 	table.sort( out, function( a, b ) return tostring( a.name ) < tostring( b.name ) end )
@@ -349,6 +512,9 @@ end
 local function canDeleteSaves( ply )
 	return not IsValid( ply ) or ply:IsAdmin()
 end
+
+SV.CanUseSaves = canUseSaves
+SV.CanDeleteSaves = canDeleteSaves
 
 local function printSaveUseDenied( ply )
 	printSaveManagerLine( ply, "[MC] only admins may list/load/save MC saves (set mc_save_public 1 to allow everyone)" )
@@ -495,7 +661,21 @@ end )
 local function sendSaveList( ply, message, isError, saves )
 	if not IsValid( ply ) then return end
 	saves = saves or SV.SaveList()
-	local count = math.min( #saves, MAX_NET_SAVES )
+	local count, estimatedBytes = 0, 32 + #tostring( message or "" )
+	for index = 1, math.min( #saves, MAX_NET_SAVES ) do
+		local save = saves[index]
+		local rowBytes = 24
+			+ #tostring( save.name or "" )
+			+ #tostring( save.key or "" )
+			+ #tostring( save.map or "" )
+			+ #tostring( save.savedAtText or "" )
+			+ #tostring( save.cover or "" )
+			+ #tostring( save.source or "" )
+			+ #tostring( save.workshopId or "" )
+		if estimatedBytes + rowBytes > SAVE_LIST_NET_BUDGET then break end
+		estimatedBytes = estimatedBytes + rowBytes
+		count = index
+	end
 	local function uint32( value )
 		return math.floor( math.Clamp( tonumber( value ) or 0, 0, 4294967295 ) )
 	end
@@ -506,14 +686,19 @@ local function sendSaveList( ply, message, isError, saves )
 		for i = 1, count do
 			local save = saves[i]
 			net.WriteString( tostring( save.name or "" ) )
+			net.WriteString( tostring( save.key or save.name or "" ) )
 			net.WriteString( tostring( save.map or "unknown" ) )
 			net.WriteUInt( uint32( save.blocks ), 32 )
 			net.WriteUInt( uint32( save.chunks ), 32 )
 			net.WriteString( tostring( save.savedAtText or "?" ) )
 			net.WriteString( tostring( save.cover or "" ) )
+			net.WriteString( tostring( save.source or "local" ) )
+			net.WriteString( tostring( save.workshopId or "" ) )
 		end
 	net.Send( ply )
 end
+
+SV.SendSaveList = sendSaveList
 
 concommand.Add( "mc_save", function( ply, _, args )
 	if not canUseSaves( ply ) then printSaveUseDenied( ply ) return end
@@ -524,7 +709,7 @@ local function runSaveListCommand( ply )
 	if not canUseSaves( ply ) then printSaveUseDenied( ply ) return end
 	local saves = SV.SaveList()
 	if #saves == 0 then
-		printSaveManagerLine( ply, "[MC] no named saves in data/mc/saves/<name>" )
+		printSaveManagerLine( ply, "[MC] no named saves in DATA:mc/saves, DATA:mc/workshop_saves, or GAME:data_static/mc/saves" )
 		return
 	end
 	printSaveManagerLine( ply, "[MC] named saves:" )

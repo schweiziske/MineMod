@@ -647,11 +647,11 @@ local function removeAllClusters()
 	end
 end
 
-local function loadClustersSidecar( path )
+local function loadClustersSidecar( path, realm )
 	removeAllClusters()
 
 	local sidecar = clusterSidecarPath( path )
-	local raw = file.Read( sidecar, "DATA" )
+	local raw = file.Read( sidecar, realm == "GAME" and "GAME" or "DATA" )
 	if not raw or raw == "" then return end
 
 	local json = string.sub( raw, 1, 1 ) == "{" and raw or util.Decompress( raw )
@@ -702,9 +702,9 @@ function SV.SaveToPath( path, slotName )
 end
 
 SV.ClusterOrigLoadFromPath = SV.ClusterOrigLoadFromPath or SV.LoadFromPath
-function SV.LoadFromPath( path, resyncClients, requestedName )
-	local ok, err = SV.ClusterOrigLoadFromPath( path, resyncClients, requestedName )
-	if ok then loadClustersSidecar( path ) end
+function SV.LoadFromPath( path, resyncClients, requestedName, realm )
+	local ok, err = SV.ClusterOrigLoadFromPath( path, resyncClients, requestedName, realm )
+	if ok then loadClustersSidecar( path, realm ) end
 	return ok, err
 end
 

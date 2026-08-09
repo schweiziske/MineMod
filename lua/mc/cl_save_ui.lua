@@ -57,12 +57,31 @@ local function trim( value )
 	return string.Trim( tostring( value or "" ) )
 end
 
+local function saveKey( save )
+	return save and trim( save.key ) ~= "" and save.key or save and save.name or ""
+end
+
+local function isMountedSave( save )
+	return save and save.source == "mounted"
+end
+
 local function canUseSaveManager()
 	local ply = LocalPlayer()
 	if not IsValid( ply ) then return false end
 	if ply:IsAdmin() then return true end
 	local cv = GetConVar( "mc_save_public" )
 	return cv and cv:GetBool() or false
+end
+
+local function canManageWorkshop()
+	if MC.CanManageWorkshop then return MC.CanManageWorkshop() end
+	local ply = LocalPlayer()
+	if not IsValid( ply ) then return false end
+	local cv = GetConVar( "mc_workshop_manage" )
+	local mode = cv and math.Clamp( cv:GetInt(), 0, 2 ) or 0
+	if mode <= 0 then return ply:IsSuperAdmin() end
+	if mode == 1 then return ply:IsAdmin() end
+	return true
 end
 
 local function saveSlotName( name )
@@ -120,6 +139,13 @@ local function setStatus( frame, message, isError )
 	if not IsValid( frame ) or not IsValid( frame.StatusLabel ) then return end
 	frame.StatusLabel:SetText( message or "" )
 	frame.StatusLabel:SetTextColor( isError and UI.error or UI.textDim )
+end
+
+function MC.SetSaveManagerWorkshopStatus( message, isError, pending )
+	local frame = MC.SaveManagerFrame
+	if not IsValid( frame ) then return end
+	setStatus( frame, message, isError )
+	if frame.SetWorkshopPending then frame:SetWorkshopPending( pending == true ) end
 end
 
 local function captureSaveCover( slotName, callback )
@@ -319,7 +345,7 @@ local function createSaveRow( parent, frame, save )
 		frame:SelectSave( save )
 	end
 	row.Paint = function( s, w, h )
-		local selected = frame.SelectedSave and frame.SelectedSave.name == save.name
+		local selected = frame.SelectedSave and saveKey( frame.SelectedSave ) == saveKey( save )
 		local bg = selected and UI.rowSelected or ( s:IsHovered() and UI.rowHover or UI.row )
 		surface.SetDrawColor( bg )
 		surface.DrawRect( 0, 0, w, h )
@@ -329,7 +355,17 @@ local function createSaveRow( parent, frame, save )
 		end
 
 		local sameMap = save.map == game.GetMap()
-		MC.DrawFittedText( save.name, "mc_hud", { "mc_hud_small", "mc_hud_fit_16" }, 14, 11, UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, w - 158 )
+		local workshopId = MC.Workshop and MC.Workshop.NormalizeWorkshopId( save.workshopId ) or nil
+		local workshopText = workshopId and ( "Workshop #" .. workshopId )
+			or isMountedSave( save ) and L( "workshop.source_mounted_badge", "已挂载" ) or nil
+		local titleWidth = w - 28
+		if workshopText then
+			surface.SetFont( "mc_library_section" )
+			local badgeWidth = surface.GetTextSize( workshopText ) + 16
+			titleWidth = math.max( 80, titleWidth - badgeWidth - 8 )
+			MC.LibraryDrawPill( workshopText, w - badgeWidth - 14, 9, UI.accentSoft, UI.text )
+		end
+		MC.DrawFittedText( save.name, "mc_hud", { "mc_hud_small", "mc_hud_fit_16" }, 14, 11, UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, titleWidth )
 		local mapText = L( "save.map_prefix", "地图: {map}", { map = tostring( save.map ) } )
 		local mapW = MC.LibraryDrawPill( mapText, 14, 43, sameMap and UI.accentSoft or UI.mapMismatch, sameMap and UI.text or UI.error )
 		local groupName = MC.LibraryGetGroupName( MC.LibraryGetItemGroup( "save", save.name ) )
@@ -358,6 +394,7 @@ function MC.OpenSaveManager()
 	fr:DockPadding( 12, 68, 12, 12 )
 	fr.MapFilter = "*"
 	fr.GroupFilter = "*"
+	fr.SourceFilter = "*"
 	fr.SearchText = ""
 	fr.Paint = function( _, w, h )
 		surface.SetDrawColor( UI.frame )
@@ -410,6 +447,19 @@ function MC.OpenSaveManager()
 	saveNew.DoClick = function()
 		sendSaveAction( "save", nameEntry:GetValue(), true )
 	end
+	fr.SaveCurrentButton = saveNew
+
+	local importWorkshop = vgui.Create( "DButton", header )
+	importWorkshop:SetSize( 136, 28 )
+	styleButton( importWorkshop, L( "workshop.import", "读取创意工坊" ) )
+	importWorkshop:SetEnabled( canManageWorkshop() )
+	importWorkshop:SetTooltip( canManageWorkshop()
+		and L( "workshop.import_hint", "输入 Workshop ID 或 Steam 创意工坊链接；服务端批准后才会接收并读取世界包。" )
+		or L( "workshop.permission_hint", "当前 mc_workshop_manage 不允许你管理创意工坊世界。" ) )
+	importWorkshop.DoClick = function()
+		if MC.PromptWorkshopImport then MC.PromptWorkshopImport() end
+	end
+	fr.ImportWorkshopButton = importWorkshop
 
 	local refresh = vgui.Create( "DButton", header )
 	refresh:SetPos( 646, 32 )
@@ -425,6 +475,25 @@ function MC.OpenSaveManager()
 	fr.StatusLabel:SetTextColor( UI.textDim )
 	fr.StatusLabel:SetText( L( "save.loading", "读取中..." ) )
 	fr.StatusLabel:SetContentAlignment( 6 )
+
+	header.PerformLayout = function( _, w )
+		local x, gap = 14, 10
+		local statusWidth = math.max( 150, math.floor( w * 0.18 ) )
+		local entryWidth = math.max( 210, w - x - 110 - 136 - 76 - statusWidth - gap * 4 - 14 )
+		nameEntry:SetPos( x, 32 )
+		nameEntry:SetSize( entryWidth, 28 )
+		x = x + entryWidth + gap
+		saveNew:SetPos( x, 32 )
+		saveNew:SetSize( 110, 28 )
+		x = x + 110 + gap
+		importWorkshop:SetPos( x, 32 )
+		x = x + 136 + gap
+		refresh:SetPos( x, 32 )
+		refresh:SetSize( 76, 28 )
+		x = x + 76 + gap
+		fr.StatusLabel:SetPos( x, 32 )
+		fr.StatusLabel:SetSize( math.max( 80, w - x - 14 ), 28 )
+	end
 
 	local body = vgui.Create( "DPanel", fr )
 	body:Dock( FILL )
@@ -510,7 +579,7 @@ function MC.OpenSaveManager()
 	local actions = vgui.Create( "DPanel", fr.RightPane )
 	actions:Dock( BOTTOM )
 	actions:DockMargin( 10, 0, 10, 10 )
-	actions:SetTall( 86 )
+	actions:SetTall( 126 )
 	actions.Paint = function() end
 
 	fr.DetailPanel = vgui.Create( "DPanel", fr.RightPane )
@@ -518,7 +587,7 @@ function MC.OpenSaveManager()
 	fr.DetailPanel:DockMargin( 10, 10, 10, 6 )
 	fr.DetailPanel.Paint = function( _, w, h )
 		local save = fr.SelectedSave
-		local infoHeight = save and 194 or 64
+		local infoHeight = save and 246 or 64
 		local coverAspect = 16 / 9
 		local coverY = 8
 		local coverW = w - 16
@@ -542,8 +611,21 @@ function MC.OpenSaveManager()
 		infoLine( 8, infoY + 58, L( "save.field_map", "地图" ), save.map, sameMap and UI.text or UI.error )
 		infoLine( 8, infoY + 84, L( "save.field_saved", "保存" ), save.savedAtText )
 		infoLine( 8, infoY + 110, L( "save.field_size", "规模" ), string.format( "%d blocks / %d chunks", save.blocks or 0, save.chunks or 0 ) )
+		local workshopId = MC.Workshop and MC.Workshop.NormalizeWorkshopId( save.workshopId ) or nil
+		local sourceText
+		if save.source == "mounted" then
+			sourceText = L( "workshop.source_mounted", "创意工坊挂载（只读）" )
+		elseif save.source == "workshop" then
+			sourceText = L( "workshop.source_imported", "创意工坊导入" )
+		elseif workshopId then
+			sourceText = L( "workshop.source_published", "本地存档（已发布）" )
+		else
+			sourceText = L( "workshop.source_local", "本地存档" )
+		end
+		infoLine( 8, infoY + 136, L( "workshop.field_source", "来源" ), sourceText )
+		infoLine( 8, infoY + 162, L( "workshop.field_id", "Workshop ID" ), workshopId or L( "save.none", "无" ), workshopId and UI.warm or UI.textDim )
 		local groupName = MC.LibraryGetGroupName( MC.LibraryGetItemGroup( "save", save.name ) ) or L( "library.group_none", "未分组" )
-		infoLine( 8, infoY + 136, L( "library.group", "分组" ), groupName )
+		infoLine( 8, infoY + 188, L( "library.group", "分组" ), groupName )
 	end
 
 	local load = vgui.Create( "DButton", actions )
@@ -558,7 +640,7 @@ function MC.OpenSaveManager()
 			L( "save.load_confirm_body", "读取存档会替换当前 MC 方块世界，并重新同步所有客户端。" ),
 			L( "save.load_confirm_title", "读取存档: {name}", { name = save.name } ),
 			L( "save.load", "读取" ),
-			function() sendSaveAction( "load", save.name, false ) end,
+			function() sendSaveAction( "load", saveKey( save ), false ) end,
 			L( "save.cancel", "取消" )
 		)
 	end
@@ -571,6 +653,7 @@ function MC.OpenSaveManager()
 	overwrite.DoClick = function()
 		local save = fr.SelectedSave
 		if not save then setStatus( fr, L( "save.select_first", "先选择一个存档" ), true ) return end
+		if isMountedSave( save ) then setStatus( fr, L( "save.mounted_read_only", "挂载的创意工坊存档只能读取" ), true ) return end
 		Derma_Query(
 			L( "save.overwrite_confirm_body", "用当前世界覆盖这个命名存档，并刷新截图？" ),
 			L( "save.overwrite_confirm_title", "覆盖存档: {name}", { name = save.name } ),
@@ -580,14 +663,16 @@ function MC.OpenSaveManager()
 		)
 	end
 
+	local delete
 	if LocalPlayer():IsAdmin() then
-		local delete = vgui.Create( "DButton", actions )
+		delete = vgui.Create( "DButton", actions )
 		delete:SetPos( 254, 8 )
 		delete:SetSize( 96, 30 )
 		styleButton( delete, L( "save.delete", "删除" ), true )
 		delete.DoClick = function()
 			local save = fr.SelectedSave
 			if not save then setStatus( fr, L( "save.select_first", "先选择一个存档" ), true ) return end
+			if isMountedSave( save ) then setStatus( fr, L( "save.mounted_read_only", "挂载的创意工坊存档只能读取" ), true ) return end
 			Derma_Query(
 				L( "save.delete_confirm_body", "删除后不会自动恢复。" ),
 				L( "save.delete_confirm_title", "删除存档: {name}", { name = save.name } ),
@@ -597,6 +682,38 @@ function MC.OpenSaveManager()
 			)
 		end
 	end
+
+	local publishWorkshop = vgui.Create( "DButton", actions )
+	styleButton( publishWorkshop, L( "workshop.publish", "发布到创意工坊" ) )
+	publishWorkshop:SetTooltip( canManageWorkshop()
+		and L( "workshop.publish_hint", "服务端导出存档后，客户端截图并打开 GMod 发布窗口。" )
+		or L( "workshop.permission_hint", "当前 mc_workshop_manage 不允许你管理创意工坊世界。" ) )
+	publishWorkshop.DoClick = function()
+		local save = fr.SelectedSave
+		if not save then setStatus( fr, L( "save.select_first", "先选择一个存档" ), true ) return end
+		if isMountedSave( save ) then setStatus( fr, L( "save.mounted_read_only", "挂载的创意工坊存档只能读取" ), true ) return end
+		Derma_Query(
+			L( "workshop.publish_confirm_body", "客户端将向服务端请求这个存档，隐藏界面拍摄封面，然后打开 Garry's Mod 创意工坊发布窗口。是否继续？" ),
+			L( "workshop.publish_confirm_title", "发布到创意工坊: {name}", { name = save.name } ),
+			L( "workshop.publish", "发布到创意工坊" ),
+			function()
+				if MC.PublishSaveToWorkshop then MC.PublishSaveToWorkshop( save ) end
+			end,
+			L( "save.cancel", "取消" )
+		)
+	end
+
+	local viewWorkshop = vgui.Create( "DButton", actions )
+	MC.LibraryStyleButton( viewWorkshop, L( "workshop.view", "查看创意工坊" ), "quiet", UI )
+	viewWorkshop.DoClick = function()
+		local save = fr.SelectedSave
+		if save and MC.ViewWorkshopFile then MC.ViewWorkshopFile( save.workshopId ) end
+	end
+	fr.PublishWorkshopButton = publishWorkshop
+	fr.ViewWorkshopButton = viewWorkshop
+	fr.LoadSaveButton = load
+	fr.OverwriteSaveButton = overwrite
+	fr.DeleteSaveButton = delete
 
 	local groupLabel = vgui.Create( "DLabel", actions )
 	groupLabel:SetFont( "mc_library_section" )
@@ -616,9 +733,21 @@ function MC.OpenSaveManager()
 		fr:RefreshSaveRows( "", false )
 	end
 	actions.PerformLayout = function( _, w )
-		groupLabel:SetPos( 0, 48 )
+		load:SetPos( 0, 6 )
+		load:SetSize( 88, 30 )
+		overwrite:SetPos( 96, 6 )
+		overwrite:SetSize( 134, 30 )
+		if IsValid( delete ) then
+			delete:SetPos( 238, 6 )
+			delete:SetSize( math.max( 72, math.min( 92, w - 238 ) ), 30 )
+		end
+		publishWorkshop:SetPos( 0, 46 )
+		publishWorkshop:SetSize( math.min( 166, math.max( 132, w * 0.54 ) ), 30 )
+		viewWorkshop:SetPos( publishWorkshop:GetWide() + 8, 46 )
+		viewWorkshop:SetSize( math.max( 112, w - publishWorkshop:GetWide() - 8 ), 30 )
+		groupLabel:SetPos( 0, 88 )
 		groupLabel:SetSize( 54, 30 )
-		groupCombo:SetPos( 62, 48 )
+		groupCombo:SetPos( 62, 88 )
 		groupCombo:SetSize( math.max( 120, w - 62 ), 30 )
 	end
 	fr.GroupCombo = groupCombo
@@ -636,12 +765,37 @@ function MC.OpenSaveManager()
 		self.UpdatingGroupCombo = false
 	end
 
+	function fr:RefreshWorkshopActions()
+		local save = self.SelectedSave
+		local busy = self.WorkshopPending == true or ( MC.WorkshopBusy and MC.WorkshopBusy() )
+		local workshopAllowed = canManageWorkshop()
+		local mounted = isMountedSave( save )
+		local workshopId = save and MC.Workshop and MC.Workshop.NormalizeWorkshopId( save.workshopId ) or nil
+		if IsValid( load ) then load:SetEnabled( canManage and save ~= nil and not busy ) end
+		if IsValid( overwrite ) then overwrite:SetEnabled( canManage and save ~= nil and not mounted and not busy ) end
+		if IsValid( delete ) then delete:SetEnabled( save ~= nil and not mounted and not busy ) end
+		if IsValid( publishWorkshop ) then publishWorkshop:SetEnabled( workshopAllowed and save ~= nil and not mounted and not busy ) end
+		if IsValid( viewWorkshop ) then
+			viewWorkshop:SetVisible( workshopId ~= nil )
+			viewWorkshop:SetEnabled( workshopId ~= nil and not busy )
+		end
+		if IsValid( groupCombo ) then groupCombo:SetEnabled( save ~= nil and not busy ) end
+		if IsValid( importWorkshop ) then importWorkshop:SetEnabled( workshopAllowed and not busy ) end
+		if IsValid( saveNew ) then saveNew:SetEnabled( canManage and not busy ) end
+	end
+
+	function fr:SetWorkshopPending( pending )
+		self.WorkshopPending = pending == true
+		self:RefreshWorkshopActions()
+	end
+
 	function fr:SelectSave( save )
 		self.SelectedSave = save
 		if save and IsValid( self.NameEntry ) then self.NameEntry:SetValue( save.name or "" ) end
 		if IsValid( self.SaveListPanel ) then self.SaveListPanel:InvalidateLayout( true ) end
 		if IsValid( self.DetailPanel ) then self.DetailPanel:InvalidateLayout( true ) end
 		self:RefreshGroupCombo()
+		self:RefreshWorkshopActions()
 	end
 
 	local function addFilterHeading( textValue, withAdd )
@@ -667,13 +821,15 @@ function MC.OpenSaveManager()
 		end
 	end
 
-	local function addFilterButton( label, count, value, isMap, groupID )
+	local function addFilterButton( label, count, value, kind, groupID )
 		local btn = vgui.Create( "DButton", filterList )
 		btn:SetText( "" )
 		btn:SetCursor( "hand" )
 		btn.MCRowHeight = 34
 		btn.Paint = function( s, w, h )
-			local selected = isMap and fr.MapFilter == value or ( not isMap and fr.GroupFilter == value )
+			local selected = kind == "map" and fr.MapFilter == value
+				or kind == "source" and fr.SourceFilter == value
+				or kind == "group" and fr.GroupFilter == value
 			local bg = selected and UI.panel or ( s:IsHovered() and UI.quietHover or UI.transparent )
 			surface.SetDrawColor( bg )
 			surface.DrawRect( 0, 0, w, h )
@@ -685,7 +841,9 @@ function MC.OpenSaveManager()
 			draw.SimpleText( tostring( count or 0 ), "mc_library_section", w - 10, h * 0.5, UI.textDim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER )
 		end
 		btn.DoClick = function()
-			if isMap then fr.MapFilter = value else fr.GroupFilter = value end
+			if kind == "map" then fr.MapFilter = value
+			elseif kind == "source" then fr.SourceFilter = value
+			else fr.GroupFilter = value end
 			fr:RefreshSaveRows( "", false, true )
 		end
 		if groupID then
@@ -718,26 +876,39 @@ function MC.OpenSaveManager()
 			if not found then self.MapFilter = "*" end
 		end
 		if self.GroupFilter ~= "*" and self.GroupFilter ~= "@none" and not MC.LibraryGetGroupName( self.GroupFilter ) then self.GroupFilter = "*" end
+		if self.SourceFilter ~= "*" and self.SourceFilter ~= "@local" and self.SourceFilter ~= "@workshop" then self.SourceFilter = "*" end
+		local workshopCount = 0
+		for _, save in ipairs( saves ) do
+			if save.source == "workshop" or save.source == "mounted"
+				or MC.Workshop and MC.Workshop.NormalizeWorkshopId( save.workshopId ) then
+				workshopCount = workshopCount + 1
+			end
+		end
+		addFilterHeading( L( "workshop.filter_source", "来源" ) )
+		addFilterButton( L( "library.all", "全部" ), #saves, "*", "source" )
+		addFilterButton( L( "workshop.filter_local", "本地存档" ), #saves - workshopCount, "@local", "source" )
+		addFilterButton( L( "workshop.filter_workshop", "创意工坊" ), workshopCount, "@workshop", "source" )
+
 		addFilterHeading( L( "library.maps", "保存地图" ) )
-		addFilterButton( L( "library.all", "全部" ), #saves, "*", true )
+		addFilterButton( L( "library.all", "全部" ), #saves, "*", "map" )
 		local currentCount = 0
 		for _, save in ipairs( saves ) do if save.map == game.GetMap() then currentCount = currentCount + 1 end end
-		addFilterButton( L( "library.current_map", "当前地图" ), currentCount, "@current", true )
+		addFilterButton( L( "library.current_map", "当前地图" ), currentCount, "@current", "map" )
 		for _, mapInfo in ipairs( MC.LibraryCollectMaps( saves ) ) do
-			addFilterButton( mapInfo.name, mapInfo.count, "map:" .. mapInfo.name, true )
+			addFilterButton( mapInfo.name, mapInfo.count, "map:" .. mapInfo.name, "map" )
 		end
 
 		addFilterHeading( L( "library.groups", "自定义分组" ), true )
-		addFilterButton( L( "library.all_groups", "全部分组" ), #saves, "*", false )
+		addFilterButton( L( "library.all_groups", "全部分组" ), #saves, "*", "group" )
 		local ungrouped = 0
 		local groupCounts = {}
 		for _, save in ipairs( saves ) do
 			local groupID = MC.LibraryGetItemGroup( "save", save.name )
 			if groupID then groupCounts[groupID] = ( groupCounts[groupID] or 0 ) + 1 else ungrouped = ungrouped + 1 end
 		end
-		addFilterButton( L( "library.group_none", "未分组" ), ungrouped, "@none", false )
+		addFilterButton( L( "library.group_none", "未分组" ), ungrouped, "@none", "group" )
 		for _, group in ipairs( MC.LibraryGetGroups() ) do
-			addFilterButton( group.name, groupCounts[group.id] or 0, group.id, false, group.id )
+			addFilterButton( group.name, groupCounts[group.id] or 0, group.id, "group", group.id )
 		end
 
 		local totalH = 0
@@ -751,13 +922,26 @@ function MC.OpenSaveManager()
 		for _, child in ipairs( list:GetChildren() ) do child:Remove() end
 		local saves = MC.SaveManagerSaves or {}
 		MC.LibrarySortNewestFirst( saves, "savedAtText" )
+		if MC.SaveManagerPendingSelection then
+			self.SourceFilter = "*"
+			self.MapFilter = "*"
+			self.GroupFilter = "*"
+			skipFilters = false
+		end
 		if not skipFilters then self:RefreshFilters() end
 		local filtered = {}
 		for _, save in ipairs( saves ) do
-			if MC.LibraryItemMatches( save, "save", self.MapFilter, self.GroupFilter, self.SearchText ) then filtered[#filtered + 1] = save end
+			local workshopLinked = save.source == "workshop" or save.source == "mounted"
+				or MC.Workshop and MC.Workshop.NormalizeWorkshopId( save.workshopId ) ~= nil
+			local sourceMatches = self.SourceFilter == "*"
+				or self.SourceFilter == "@workshop" and workshopLinked
+				or self.SourceFilter == "@local" and not workshopLinked
+			if sourceMatches and MC.LibraryItemMatches( save, "save", self.MapFilter, self.GroupFilter, self.SearchText ) then
+				filtered[#filtered + 1] = save
+			end
 		end
 		local rowCount = 0
-		local selectedName = self.SelectedSave and self.SelectedSave.name
+		local selectedName = MC.SaveManagerPendingSelection or self.SelectedSave and saveKey( self.SelectedSave )
 		local nextSelected
 
 		if #filtered == 0 then
@@ -771,11 +955,12 @@ function MC.OpenSaveManager()
 			self:SelectSave( nil )
 		else
 			for _, save in ipairs( filtered ) do
-				if selectedName and save.name == selectedName then nextSelected = save end
+				if selectedName and saveKey( save ) == selectedName then nextSelected = save end
 				createSaveRow( list, self, save )
 				rowCount = rowCount + 1
 			end
 			self:SelectSave( nextSelected or filtered[1] )
+			if nextSelected and MC.SaveManagerPendingSelection == saveKey( nextSelected ) then MC.SaveManagerPendingSelection = nil end
 		end
 
 		local totalH = rowCount > 0 and rowCount * ROW_HEIGHT + math.max( 0, rowCount - 1 ) * ROW_GAP or 0
@@ -783,9 +968,17 @@ function MC.OpenSaveManager()
 		list:SetTall( totalH )
 		list:InvalidateLayout( true )
 		local countText = L( "library.showing", "显示 {visible} / {total}", { visible = #filtered, total = #saves } )
-		setStatus( self, message ~= "" and message or countText, isError )
+		local workshopStatus = MC.Workshop and MC.Workshop.Client and MC.Workshop.Client.status or nil
+		if self.WorkshopPending and workshopStatus and workshopStatus.pending then
+			setStatus( self, workshopStatus.message, workshopStatus.isError )
+		else
+			setStatus( self, message ~= "" and message or countText, isError )
+		end
 	end
 
+	fr:RefreshWorkshopActions()
+	local workshopStatus = MC.Workshop and MC.Workshop.Client and MC.Workshop.Client.status or nil
+	if workshopStatus then MC.SetSaveManagerWorkshopStatus( workshopStatus.message, workshopStatus.isError, workshopStatus.pending ) end
 	MC.RequestSaveList()
 end
 
@@ -797,11 +990,14 @@ net.Receive( "mc_save_list_data", function()
 	for i = 1, count do
 		saves[i] = {
 			name = net.ReadString(),
+			key = net.ReadString(),
 			map = net.ReadString(),
 			blocks = net.ReadUInt( 32 ),
 			chunks = net.ReadUInt( 32 ),
 			savedAtText = net.ReadString(),
 			cover = net.ReadString(),
+			source = net.ReadString(),
+			workshopId = net.ReadString(),
 		}
 	end
 	MC.SaveManagerSaves = saves

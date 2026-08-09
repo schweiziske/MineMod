@@ -103,6 +103,7 @@ if SERVER then
 	MC.Config.ImportMax   = GetConVar( "mc_import_max" ) or CreateConVar( "mc_import_max", "0", F, "Max blocks one mc_import may load; 0 = unlimited" )
 	MC.Config.Autosave    = GetConVar( "mc_autosave" ) or CreateConVar( "mc_autosave", "0", F, "Seconds between autosaves (0 disables)" )
 	MC.Config.SavePublic  = GetConVar( "mc_save_public" ) or CreateConVar( "mc_save_public", "0", F, "Allow non-admin players to list/load/save MC saves; delete remains admin-only" )
+	MC.Config.WorkshopManage = GetConVar( "mc_workshop_manage" ) or CreateConVar( "mc_workshop_manage", "0", F, "Who may publish/import MC Workshop worlds: 0 superadmins, 1 admins, 2 everyone", 0, 2 )
 	MC.Config.PresetPublic = GetConVar( "mc_preset_public" ) or CreateConVar( "mc_preset_public", "0", F, "Allow non-admin players to list/load/save/place MC presets" )
 	MC.Config.ClusterPublic = GetConVar( "mc_cluster_public" ) or CreateConVar( "mc_cluster_public", "0", F, "Allow non-admin players to use the MC structure grabber" )
 	MC.Config.SyncMsgs    = GetConVar( "mc_sync_messages_per_tick" ) or CreateConVar( "mc_sync_messages_per_tick", tostring( MC.Config.SyncMessagesPerTick ), F, "Maximum queued reliable state messages sent per player per 0.05s tick", 1, 16 )
