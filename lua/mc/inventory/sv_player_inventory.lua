@@ -239,6 +239,14 @@ function SV.GetSelectedPlayerStack( ply )
 	return record and MC.CopyItemStack( record.storage[record.selected + 1] ) or nil
 end
 
+function SV.PlayerHasInfiniteMaterials( ply )
+	if MC.RunEvent then
+		local allowed = MC.RunEvent( "MC.PlayerHasInfiniteMaterials", ply )
+		if allowed ~= nil then return allowed == true end
+	end
+	return not MC.Config.InventoryCreative or MC.Config.InventoryCreative:GetBool()
+end
+
 function SV.SetPlayerSelectedSlot( ply, selected, context )
 	local record = SV.GetPlayerInventoryRecord( ply )
 	if not record then return false, "inventory_not_loaded" end

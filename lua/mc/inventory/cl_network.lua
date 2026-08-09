@@ -110,14 +110,21 @@ local function pumpActions()
 	local action = table.remove( State.actions, 1 )
 	action.revision = State.revision
 	State.inflight = action
-	net.Start( "mc_inventory_action" )
+	local messageName = action.kind == "creative_pick" and "mc_inventory_creative_pick" or "mc_inventory_action"
+	net.Start( messageName )
 		net.WriteUInt( State.session.containerId, 16 )
 		net.WriteString( State.session.token )
 		net.WriteUInt( action.revision, 32 )
 		net.WriteUInt( action.actionId, 16 )
-		net.WriteUInt( action.input, 3 )
-		net.WriteInt( action.slot, 16 )
-		net.WriteInt( action.button, 8 )
+		if action.kind == "creative_pick" then
+			net.WriteUInt( action.runtimeId, MC.ItemStackRuntimeIdBits )
+			net.WriteUInt( action.count, 7 )
+			net.WriteInt( action.targetSlot, 8 )
+		else
+			net.WriteUInt( action.input, 3 )
+			net.WriteInt( action.slot, 16 )
+			net.WriteInt( action.button, 8 )
+		end
 	net.SendToServer()
 end
 
@@ -132,10 +139,53 @@ function MC.QueueInventoryInput( input, slot, button )
 	local actionId = State.nextActionId % BACKGROUND_ACTION
 	State.nextActionId = ( actionId + 1 ) % BACKGROUND_ACTION
 	State.actions[#State.actions + 1] = {
+		kind = "input",
 		actionId = actionId,
 		input = input,
 		slot = slot,
 		button = button,
+	}
+	pumpActions()
+	return true, actionId
+end
+
+function MC.QueueCreativeInventoryPick( item, count, targetSlot )
+	if not State.session or State.session.creative ~= true then return false, "creative_inventory_unavailable" end
+	local definition = MC.GetItem( item )
+	if not definition or definition.name == "minecraft:air" or definition.runtimeId == nil then return false, "unknown_item" end
+	count = math.floor( tonumber( count ) or definition.maxStack or 1 )
+	count = math.Clamp( count, 1, definition.maxStack or 1 )
+	targetSlot = math.floor( tonumber( targetSlot ) or -1 )
+	if targetSlot < -1 or targetSlot > 8 then return false, "invalid_creative_target" end
+	if #State.actions >= 64 then return false, "inventory_action_queue_full" end
+	local actionId = State.nextActionId % BACKGROUND_ACTION
+	State.nextActionId = ( actionId + 1 ) % BACKGROUND_ACTION
+	State.actions[#State.actions + 1] = {
+		kind = "creative_pick",
+		actionId = actionId,
+		runtimeId = definition.runtimeId,
+		count = count,
+		targetSlot = targetSlot,
+	}
+	pumpActions()
+	return true, actionId
+end
+
+function MC.QueueCreativeInventoryClear( targetSlot )
+	if not State.session or State.session.creative ~= true then return false, "creative_inventory_unavailable" end
+	targetSlot = math.floor( tonumber( targetSlot ) or -1 )
+	if targetSlot < -1 or targetSlot > 8 then return false, "invalid_creative_target" end
+	if #State.actions >= 64 then return false, "inventory_action_queue_full" end
+	local air = MC.GetItem( "minecraft:air" )
+	if not air or air.runtimeId == nil then return false, "item_registry_unavailable" end
+	local actionId = State.nextActionId % BACKGROUND_ACTION
+	State.nextActionId = ( actionId + 1 ) % BACKGROUND_ACTION
+	State.actions[#State.actions + 1] = {
+		kind = "creative_pick",
+		actionId = actionId,
+		runtimeId = air.runtimeId,
+		count = 0,
+		targetSlot = targetSlot,
 	}
 	pumpActions()
 	return true, actionId
