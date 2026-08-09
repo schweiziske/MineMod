@@ -79,7 +79,7 @@ end
 
 local function fillBatchCells()
 	local configured = C.FillBatchCells and C.FillBatchCells:GetInt() or MC.Config.FillBatchCells or 512
-	local streamLimit = MC.Net and MC.Net.MAX_STATE_STREAM_CELLS or 131072
+	local streamLimit = MC.Net and MC.Net.MAX_STATE_STREAM_CELLS or 4294967295
 	return math.min( streamLimit, math.max( 1, configured ) )
 end
 

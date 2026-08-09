@@ -34,7 +34,7 @@ Net.BLOCK_ENTITY_PAYLOAD_MAX = 32768
 Net.STATE_TRANSACTION_PAYLOAD_MAX = 56000
 Net.STATE_SNAPSHOT_PART_BYTES = 30000
 Net.STATE_STREAM_PART_BYTES = 30000
-Net.MAX_STATE_STREAM_CELLS = 131072
+Net.MAX_STATE_STREAM_CELLS = 4294967295 -- no artificial cap; bounded only by the 32-bit wire count
 Net.CHUNK_PATCH_PART_BYTES = 30000
 Net.CHUNK_PATCH_MAX_BYTES = 16777216
 Net.MAX_STREAM_COLUMNS = 64
@@ -106,6 +106,7 @@ Net.MessageNames = {
 	"mc_workshop_load_request", "mc_workshop_load_approval",
 	"mc_workshop_upload_begin", "mc_workshop_upload_part", "mc_workshop_shared_ready", "mc_workshop_upload_result",
 	"mc_workshop_base_announce", "mc_workshop_base_ready",
+	"mc_workshop_dirty_target", "mc_workshop_base_applied",
 	"mc_workshop_bind_id", "mc_workshop_bind_result",
 	"mc_preset_list_req", "mc_preset_list_data", "mc_preset_save", "mc_preset_load_req",
 	"mc_preset_data", "mc_preset_data_part", "mc_preset_place",

@@ -2270,6 +2270,12 @@ function SV.LoadFromPath( path, resyncClients, requestedName, realm )
 		-- after clearWorldNoNet/beginWorldLoadStage flushed, so flush again
 		-- before listeners get a chance to sample lighting.
 		if SV.FlushLightingCaches then SV.FlushLightingCaches() end
+		-- Workshop ownership must be fixed before public WorldLoaded listeners
+		-- can mutate the freshly loaded world; those mutations then enter dirty
+		-- tracking instead of being mistaken for package baseline data.
+		if MC.Workshop and MC.Workshop.ActivateLoadedBase then
+			MC.Workshop.ActivateLoadedBase( requestedName )
+		end
 		if MC.RunEvent then MC.RunEvent( "MC.WorldLoaded", path, requestedName, SV.BlockCount ) end
 	end
 
@@ -2284,12 +2290,12 @@ function SV.LoadFromPath( path, resyncClients, requestedName, realm )
 		if SV.RebuildRedstoneRuntime then SV.RebuildRedstoneRuntime() end
 		if SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
 		SV.Dirty = false
-		if resyncClients then resyncAllClients() end
 		local indexedChunks = 0
 		for _ in pairs( data.chunkIndex ) do indexedChunks = indexedChunks + 1 end
 		MsgN( "[MC] loaded lazy manifest " .. indexedChunks .. " chunks / " .. SV.BlockCount .. " blocks" ..
 			( requestedName and ( " from \"" .. requestedName .. "\"" ) or "" ) )
 		announceWorldLoaded()
+		if resyncClients then resyncAllClients() end
 		return true
 	end
 	if data.v == 10 and hasMCB4SaveParts( data ) and SV.ChunkStore and SV.ChunkStore.LoadAllChunksEager then
@@ -2310,10 +2316,10 @@ function SV.LoadFromPath( path, resyncClients, requestedName, realm )
 		if SV.RebuildRedstoneRuntime then SV.RebuildRedstoneRuntime() end
 		if SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
 		SV.Dirty = false
-		if resyncClients then resyncAllClients() end
 		MsgN( "[MC] loaded full MCB4 manifest " .. indexedChunks .. " chunks" ..
 			( requestedName and ( " from \"" .. requestedName .. "\"" ) or "" ) )
 		announceWorldLoaded()
+		if resyncClients then resyncAllClients() end
 		return true
 	end
 	if istable( data.parts ) then
@@ -2344,11 +2350,11 @@ function SV.LoadFromPath( path, resyncClients, requestedName, realm )
 	if SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
 
 	SV.Dirty = false
-	if resyncClients then resyncAllClients() end
 	MsgN( "[MC] loaded " .. SV.BlockCount .. " blocks" ..
 		( requestedName and ( " from \"" .. requestedName .. "\"" ) or "" ) ..
 		( data.map and ( " saved on map " .. tostring( data.map ) ) or "" ) )
 	announceWorldLoaded()
+	if resyncClients then resyncAllClients() end
 	return true
 end
 
@@ -2471,6 +2477,7 @@ function SV.ClearWorld()
 	if SV.FlushLightingCaches then SV.FlushLightingCaches() end
 	if SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
 	SV.Dirty = true
+	if MC.Workshop and MC.Workshop.DeactivateServerBase then MC.Workshop.DeactivateServerBase() end
 	for _, target in ipairs( player.GetAll() ) do SV.BeginSync( target ) end
 	MsgN( "[MC] world cleared" )
 	if MC.RunEvent then MC.RunEvent( "MC.WorldCleared" ) end

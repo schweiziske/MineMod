@@ -246,6 +246,8 @@ MC.LanguageData = MC.LanguageData or {
 		["sync.progress"] = "MC 同步 {received}/{expected} 方块  {done}/{chunks} 区块",
 		["sync.progress_bytes"] = "MC 同步 {received}/{expected} KB  {done}/{chunks} 分片",
 		["sync.complete"] = "MC 同步完成  {label}",
+		["sync.workshop_progress"] = "本地读取创意工坊世界 {received}/{expected} 方块  {done}/{chunks} 区块",
+		["sync.workshop_complete"] = "创意工坊基础世界已从本地读取完成",
 
 		["save.no_cover"] = "暂无截图",
 		["save.auto_cover"] = "保存一次会自动截图",
@@ -606,6 +608,8 @@ MC.LanguageData = MC.LanguageData or {
 		["sync.progress"] = "MC sync {received}/{expected} blocks  {done}/{chunks} chunks",
 		["sync.progress_bytes"] = "MC sync {received}/{expected} KB  {done}/{chunks} parts",
 		["sync.complete"] = "MC sync complete  {label}",
+		["sync.workshop_progress"] = "Loading Workshop world locally {received}/{expected} blocks  {done}/{chunks} chunks",
+		["sync.workshop_complete"] = "Workshop base world loaded locally",
 
 		["save.no_cover"] = "No screenshot",
 		["save.auto_cover"] = "Saving once will capture one automatically",
