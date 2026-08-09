@@ -18,9 +18,37 @@ function Renderer.Definition( stack )
 	return definitionFor( stack )
 end
 
+function Renderer.MaterialForLayer( layer )
+	if type( layer ) ~= "string" or layer == "" then return nil end
+	if not string.match( layer, "%.png$" ) then layer = layer .. ".png" end
+	return UI.GetMaterial( layer )
+end
+
 function Renderer.MaterialForDefinition( definition )
-	if not definition or not definition.texture then return nil end
-	return UI.GetMaterial( definition.texture .. ".png" )
+	if not definition then return nil end
+	if definition.texture then return Renderer.MaterialForLayer( definition.texture ) end
+	return nil
+end
+
+function Renderer.ModelPlan( stack, options )
+	if MC.ResolveItemModel then
+		return MC.ResolveItemModel( stack, options or {} )
+	end
+	local definition = definitionFor( stack )
+	if definition and definition.texture then
+		return { layers = { definition.texture }, kind = "flat", modelId = definition.model }
+	end
+	return { layers = {}, kind = "missing" }
+end
+
+function Renderer.MaterialsForStack( stack, options )
+	local plan = Renderer.ModelPlan( stack, options )
+	local materials = {}
+	for _, layer in ipairs( plan.layers or {} ) do
+		local material = Renderer.MaterialForLayer( layer )
+		if material then materials[#materials + 1] = material end
+	end
+	return materials, plan
 end
 
 local function blockStateFor( definition )
@@ -37,11 +65,13 @@ function Renderer.DrawIcon( stack, x, y, size, options )
 	if not Renderer.CanDraw( stack ) then return false end
 	options = options or {}
 	local definition = definitionFor( stack )
-	local material = Renderer.MaterialForDefinition( definition )
+	local materials, plan = Renderer.MaterialsForStack( stack, options )
 	local drawn = false
-	if material then
+	if #materials > 0 then
 		UI.WithPointFiltering( function()
-			drawn = UI.DrawTexture( material, x, y, size, size )
+			for _, material in ipairs( materials ) do
+				if UI.DrawTexture( material, x, y, size, size ) then drawn = true end
+			end
 		end )
 	elseif definition.blockId and MC.DrawMinecraftBlockStateIcon then
 		local stateId = blockStateFor( definition )
@@ -56,7 +86,7 @@ function Renderer.DrawIcon( stack, x, y, size, options )
 		-- throwing from Paint; the checker is deliberately Minecraft-like.
 		draw.RoundedBox( 0, x + size * 0.12, y + size * 0.12, size * 0.76, size * 0.76, Color( 180, 0, 180, 220 ) )
 		surface.SetDrawColor( 30, 0, 30, 255 )
-	surface.DrawRect( x + size * 0.20, y + size * 0.20, size * 0.18, size * 0.18 )
+		surface.DrawRect( x + size * 0.20, y + size * 0.20, size * 0.18, size * 0.18 )
 		surface.DrawRect( x + size * 0.62, y + size * 0.62, size * 0.18, size * 0.18 )
 		drawn = true
 	end
@@ -104,13 +134,14 @@ end
 
 function Renderer.DrawHeldItem( stack, pos, normal, size, color )
 	if not Renderer.CanDraw( stack ) or not pos or not normal then return false end
-	local definition = definitionFor( stack )
-	local material = Renderer.MaterialForDefinition( definition )
-	if not material then return false end
-	render.SetMaterial( material )
+	local materials = Renderer.MaterialsForStack( stack, { displayContext = "firstperson_righthand" } )
+	if #materials == 0 then return false end
 	color = color or Color( 255, 255, 255, 255 )
-	render.DrawQuadEasy( pos, normal, size, size, color, 0 )
-	render.DrawQuadEasy( pos, -normal, size, size, color, 180 )
+	for index, material in ipairs( materials ) do
+		render.SetMaterial( material )
+		local offset = normal * ( ( index - 1 ) * 0.002 )
+		render.DrawQuadEasy( pos + offset, normal, size, size, color, 0 )
+		render.DrawQuadEasy( pos - offset, -normal, size, size, color, 180 )
+	end
 	return true
 end
-
