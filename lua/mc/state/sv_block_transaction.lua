@@ -78,6 +78,16 @@ local function setCellBlockEntity( bx, by, bz, record )
 	end
 end
 
+local function recordBlockEntityOverlay( info )
+	local store = SV.ChunkStore
+	if not info.blockEntityChanged or not store or not store.RecordBlockEntityEdit then return end
+	local saved, saveError = store.RecordBlockEntityEdit(
+		info.bx, info.by, info.bz, info.newBlockEntity, info.stateId )
+	if saved == true then return end
+	local message = "[MC] lazy Block Entity overlay record failed: " .. tostring( saveError or "unknown" ) .. "\n"
+	if ErrorNoHalt then ErrorNoHalt( message ) else print( message ) end
+end
+
 local function lifecycleKind( oldStateId, stateId )
 	if oldStateId == 0 then return "placed" end
 	if stateId == 0 then return "removed" end
@@ -115,6 +125,8 @@ local function callLifecycleHandler( info, actor, revision )
 		newBlockId = info.id,
 		oldOrient = info.oldOrient,
 		newOrient = info.orient,
+		oldBlockEntity = info.oldBlockEntity and copyValue( info.oldBlockEntity ) or nil,
+		newBlockEntity = info.newBlockEntity and copyValue( info.newBlockEntity ) or nil,
 		movedFromX = info.movedFromX,
 		movedFromY = info.movedFromY,
 		movedFromZ = info.movedFromZ,
@@ -343,6 +355,7 @@ function SV.ApplyBlockTransaction( cells, options )
 		elseif info.blockEntityDefinition and info.blockEntityDefinition.affectsCollision then
 			Host.collectCellPhysDirty( dirty, immediateDirty, dirtyBounds, info.bx, info.by, info.bz )
 		end
+		recordBlockEntityOverlay( info )
 		networkChanges[#networkChanges + 1] = {
 			bx = info.bx, by = info.by, bz = info.bz,
 			stateId = info.stateId,
@@ -688,6 +701,7 @@ function SV.ApplyBlockHydrationTransaction( cells, options )
 	local revision = SV.BlockRevision
 	for _, info in ipairs( finalized ) do
 		if info.blockEntityChanged and info.newBlockEntity then info.newBlockEntity.revision = revision end
+		recordBlockEntityOverlay( info )
 	end
 	if SV.InvalidateLightingCells then SV.InvalidateLightingCells( finalized ) end
 

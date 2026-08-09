@@ -1956,7 +1956,15 @@ function SV.SaveToPath( path, slotName )
 		local json = util.TableToJSON( overlay )
 		if not json then return finishSave( false, "overlay_json_failed" ) end
 		ensureSaveDir()
-		file.Write( overlaySavePath( path ), json )
+		local targetOverlayPath = overlaySavePath( path )
+		local normalizedTarget = string.gsub( tostring( path or "" ), "\\\\", "/" )
+		if SV.ChunkStore.ManifestPath == normalizedTarget and SV.ChunkStore.EditOverlayPath then
+			targetOverlayPath = SV.ChunkStore.EditOverlayPath
+		end
+		file.Write( targetOverlayPath, json )
+		if not file.Exists( targetOverlayPath, "DATA" ) and not file.Exists( targetOverlayPath, "GAME" ) then
+			return finishSave( false, "overlay_write_failed" )
+		end
 		MsgN( "[MC] saved lazy edit overlay / " .. SV.BlockCount .. " blocks" ..
 			( slotName and ( " as \"" .. slotName .. "\" on map " .. game.GetMap() ) or "" ) )
 		return finishSave( true, path, overlay, 0, SV.BlockCount )

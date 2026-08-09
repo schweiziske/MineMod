@@ -14,6 +14,7 @@ function PANEL:Init()
 	self:SetCursor( "hand" )
 	self.Stack = nil
 	self.InventoryIndex = nil
+	self.MenuIndex = nil
 	self.Kind = "empty"
 	self.Scale = 1
 end
@@ -29,9 +30,18 @@ function PANEL:SetScale( scale )
 	return self
 end
 
-function PANEL:SetInventorySlot( index )
+function PANEL:SetInventorySlot( index, menuIndex )
 	self.Kind = "inventory"
 	self.InventoryIndex = math.floor( tonumber( index ) or -1 )
+	self.MenuIndex = math.floor( tonumber( menuIndex ~= nil and menuIndex or index ) or -1 )
+	self:RefreshInventoryStack()
+	return self
+end
+
+function PANEL:SetMenuSlot( index, playerIndex )
+	self.Kind = "menu"
+	self.MenuIndex = math.floor( tonumber( index ) or -1 )
+	self.InventoryIndex = playerIndex ~= nil and math.floor( tonumber( playerIndex ) or -1 ) or nil
 	self:RefreshInventoryStack()
 	return self
 end
@@ -40,6 +50,7 @@ function PANEL:SetCreativeItem( item )
 	local definition = MC.GetItem and MC.GetItem( item ) or nil
 	self.Kind = "creative"
 	self.InventoryIndex = nil
+	self.MenuIndex = nil
 	self.Stack = definition and MC.NewItemStack( definition.name, 1 ) or nil
 	return self
 end
@@ -47,14 +58,15 @@ end
 function PANEL:SetDestroySlot()
 	self.Kind = "destroy"
 	self.InventoryIndex = nil
+	self.MenuIndex = nil
 	self.Stack = nil
 	return self
 end
 
 function PANEL:RefreshInventoryStack()
-	if self.Kind ~= "inventory" or not self.InventoryIndex then return end
+	if ( self.Kind ~= "inventory" and self.Kind ~= "menu" ) or self.MenuIndex == nil then return end
 	local state = MC.ClientInventory
-	self.Stack = state and MC.CopyItemStack( state.slots[self.InventoryIndex + 1] ) or nil
+	self.Stack = state and state.menu and MC.CopyItemStack( state.menu.slots[self.MenuIndex + 1] ) or nil
 end
 
 function PANEL:GetStack()
@@ -62,8 +74,10 @@ function PANEL:GetStack()
 end
 
 function PANEL:IsInventorySlot()
-	return self.Kind == "inventory" and self.InventoryIndex ~= nil
+	return ( self.Kind == "inventory" or self.Kind == "menu" ) and self.MenuIndex ~= nil
 end
+
+function PANEL:GetActionIndex() return self.MenuIndex end
 
 function PANEL:CanQuickCraft()
 	return self:IsInventorySlot()

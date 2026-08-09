@@ -9,6 +9,7 @@ local PROTOCOL_VERSION = 1
 local SNAPSHOT_PART_BYTES = 30000
 local SNAPSHOT_MAX_BYTES = 1024 * 1024
 local BACKGROUND_ACTION = 65535
+local SLOT_BITS = 7
 
 State.transfers = State.transfers or {}
 
@@ -133,7 +134,8 @@ function MC.QueueInventoryInput( input, slot, button )
 	input = math.floor( tonumber( input ) or -1 )
 	slot = math.floor( tonumber( slot ) or -999 )
 	button = math.floor( tonumber( button ) or 0 )
-	if input < 0 or input > 6 or ( slot ~= -999 and ( slot < 0 or slot >= 36 ) )
+	local slotCount = State.session and math.floor( tonumber( State.session.slotCount ) or 36 ) or 36
+	if input < 0 or input > 6 or ( slot ~= -999 and ( slot < 0 or slot >= slotCount ) )
 	or button < -128 or button > 127 then return false, "invalid_inventory_action" end
 	if #State.actions >= 64 then return false, "inventory_action_queue_full" end
 	local actionId = State.nextActionId % BACKGROUND_ACTION
@@ -200,20 +202,30 @@ net.Receive( "mc_inventory_delta", function()
 	local revision = net.ReadUInt( 32 )
 	local selected = net.ReadUInt( 4 )
 	local errorCode = net.ReadString()
-	local changedCount = net.ReadUInt( 6 )
-	local changed, decodeError = {}, nil
+	local changedCount = net.ReadUInt( SLOT_BITS )
+	local changed, seen, decodeError = {}, {}, nil
 	for _ = 1, changedCount do
-		local index = net.ReadUInt( 6 )
+		local index = net.ReadUInt( SLOT_BITS )
 		local stack, err = MC.ReadItemStackNet()
 		if err then decodeError = err end
+		if seen[index] then decodeError = decodeError or "duplicate_inventory_delta_slot" end
+		seen[index] = true
 		changed[index] = stack or false
 	end
 	local cursor, cursorError = MC.ReadItemStackNet()
 	decodeError = decodeError or cursorError
-	if protocol ~= PROTOCOL_VERSION or containerId ~= 1 or #token > 128 or #errorCode > 96 or decodeError then
+	local background = not State.session and containerId == 1 and token == ""
+	local validSession = background or State.session and State.session.containerId == containerId and State.session.token == token
+	local validSlotCount = not State.session or changedCount <= math.floor( tonumber( State.session.slotCount ) or 36 )
+	if protocol ~= PROTOCOL_VERSION or not validSession or not validSlotCount or #token > 128 or #errorCode > 96 or decodeError then
 		State.lastError = decodeError or "invalid_inventory_delta"
 		MC.RequestInventoryResync()
 		return
+	end
+	if background and ( not State.menu or State.menu.kind ~= "player" ) then
+		local slots = {}
+		for index = 0, 35 do slots[index + 1] = MC.CopyItemStack( State.slots[index + 1] ) end
+		State.menu = { kind = "player", slotCount = 36, playerOffset = 0, chestSlots = 0, slots = slots }
 	end
 	local cursorApplies = State.session and token == State.session.token or false
 	MC.ApplyClientInventoryDelta( revision, selected, changed, cursor, cursorApplies )
@@ -237,7 +249,12 @@ net.Receive( "mc_inventory_open", function()
 	local creative = net.ReadBool()
 	local reason = net.ReadString()
 	local cursor, err = MC.ReadItemStackNet()
-	if protocol ~= PROTOCOL_VERSION or containerId ~= 1 or token == "" or #token > 128 or err then
+	local kind = net.ReadString()
+	local slotCount = net.ReadUInt( 8 )
+	local playerOffset = net.ReadUInt( 8 )
+	local chestSlots = net.ReadUInt( 8 )
+	if protocol ~= PROTOCOL_VERSION or containerId < 1 or token == "" or #token > 128 or err
+	or slotCount < 1 or slotCount > 127 or playerOffset + 36 > slotCount or chestSlots > slotCount then
 		State.lastError = err or "invalid_inventory_open"
 		return
 	end
@@ -246,10 +263,25 @@ net.Receive( "mc_inventory_open", function()
 		token = token,
 		creative = creative,
 		reason = reason,
+		kind = kind ~= "" and kind or "player",
+		slotCount = slotCount,
+		playerOffset = playerOffset,
+		chestSlots = chestSlots,
 	}
 	State.revision = revision
 	State.selected = selected
 	State.cursor = cursor
+	local menuSlots = {}
+	if kind == "player" or kind == "" then
+		for index = 0, 35 do menuSlots[index + 1] = MC.CopyItemStack( State.slots[index + 1] ) end
+	end
+	State.menu = {
+		kind = kind ~= "" and kind or "player",
+		slotCount = slotCount,
+		playerOffset = playerOffset,
+		chestSlots = chestSlots,
+		slots = menuSlots,
+	}
 	State.actions = {}
 	State.inflight = nil
 	emit( "MC.InventoryOpened", State.session, State )

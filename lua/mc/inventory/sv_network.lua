@@ -1,8 +1,10 @@
 --[[----------------------------------------------------------------------------
-	Authoritative player-inventory transport.
+	Authoritative inventory/container transport.
 
-	Full state is compressed and chunked. Normal interaction responses contain
-	only changed slots plus the carried stack, revision and action acknowledgement.
+	The player inventory and chest menus share one ordered action protocol.  A
+	chest menu is a temporary container whose chest slots point at block-entity
+	storage and whose trailing slots point at the same 36 player slots.  The
+	server never accepts arbitrary client stacks.
 ------------------------------------------------------------------------------]]
 
 MC = MC or {}
@@ -13,6 +15,8 @@ local PROTOCOL_VERSION = 1
 local SNAPSHOT_PART_BYTES = 30000
 local SNAPSHOT_MAX_BYTES = 1024 * 1024
 local BACKGROUND_ACTION = 65535
+local SLOT_BITS = 7
+local MAX_MENU_SLOTS = 127
 
 local function creativeAllowed( ply )
 	return SV.PlayerHasInfiniteMaterials and SV.PlayerHasInfiniteMaterials( ply ) == true
@@ -31,13 +35,55 @@ local function actionRateAllowed( record )
 	return true
 end
 
+local function activeContainer( record )
+	return record and record.session and record.session.container or record and record.container or nil
+end
+
+function SV.GetActiveInventoryContainer( record ) return activeContainer( record ) end
+
+local function activeSession( record ) return record and record.session or nil end
+local function sessionToken( record ) return activeSession( record ) and record.session.token or "" end
+
 local function nextTransferId( record )
 	record.snapshotTransferId = ( math.floor( tonumber( record.snapshotTransferId ) or 0 ) + 1 ) % 65536
 	return record.snapshotTransferId
 end
 
+local function menuState( record )
+	local container = activeContainer( record )
+	if not container then return nil end
+	local session = activeSession( record )
+	local state = {
+		version = 1,
+		revision = container.revision,
+		selected = record.selected,
+		registryHash = tostring( MC.ItemRegistryHash or "" ),
+		menuKind = session and session.kind or "player",
+		slotCount = #container.slots,
+		playerOffset = session and session.playerOffset or 0,
+		chestSlots = session and session.chestSlots or 0,
+		items = {},
+		playerItems = {},
+	}
+	if #container.slots > MAX_MENU_SLOTS then return nil, "inventory_menu_too_large" end
+	for _, slot in ipairs( container.slots ) do
+		local stack = MC.InventorySlotGet( slot )
+		if not MC.IsEmptyItemStack( stack ) then
+			state.items[#state.items + 1] = { slot = slot.index, stack = MC.InventoryDataStack( stack ) }
+		end
+	end
+	for index = 0, 35 do
+		local stack = record.storage[index + 1]
+		if not MC.IsEmptyItemStack( stack ) then
+			state.playerItems[#state.playerItems + 1] = { slot = index, stack = MC.InventoryDataStack( stack ) }
+		end
+	end
+	return state
+end
+
 local function snapshotPayload( record )
-	local state = SV.PlayerInventoryState( record )
+	local state, stateError = menuState( record )
+	if not state then return nil, stateError or "inventory_snapshot_state_failed" end
 	local json = util.TableToJSON( state, false )
 	if not json then return nil, "inventory_snapshot_json_failed" end
 	local compressed = util.Compress( json )
@@ -46,10 +92,12 @@ local function snapshotPayload( record )
 	return compressed, #json
 end
 
-function SV.SendPlayerInventorySnapshot( ply, reason )
+function SV.SendActiveInventorySnapshot( ply, reason )
 	if not IsValid( ply ) then return false, "invalid_player" end
 	local record = SV.GetPlayerInventoryRecord( ply )
 	if not record then return false, "inventory_not_loaded" end
+	local container = activeContainer( record )
+	if not container then return false, "inventory_container_missing" end
 	local payload, rawBytesOrError = snapshotPayload( record )
 	if not payload then return false, rawBytesOrError end
 	local transferId = nextTransferId( record )
@@ -59,7 +107,7 @@ function SV.SendPlayerInventorySnapshot( ply, reason )
 	net.Start( "mc_inventory_sync_begin" )
 		net.WriteUInt( PROTOCOL_VERSION, 8 )
 		net.WriteUInt( transferId, 16 )
-		net.WriteUInt( record.container.revision, 32 )
+		net.WriteUInt( container.revision, 32 )
 		net.WriteUInt( record.selected, 4 )
 		net.WriteUInt( rawBytesOrError, 32 )
 		net.WriteUInt( #payload, 32 )
@@ -81,43 +129,60 @@ function SV.SendPlayerInventorySnapshot( ply, reason )
 
 	net.Start( "mc_inventory_sync_end" )
 		net.WriteUInt( transferId, 16 )
-		net.WriteUInt( record.container.revision, 32 )
+		net.WriteUInt( container.revision, 32 )
 	net.Send( ply )
 	return true
 end
 
-local function sessionToken( record )
-	return record.session and record.session.token or ""
-end
+SV.SendPlayerInventorySnapshot = SV.SendActiveInventorySnapshot
 
 local function sendDelta( record, result, accepted, actionId, errorCode )
-	local ply = record.owner
+	local ply = record and record.owner
 	if not IsValid( ply ) then return false end
+	local container = activeContainer( record )
+	if not container then return false end
 	local changedSlots = result and result.changedSlots or {}
-	if #changedSlots > 36 then return false end
+	if #changedSlots > MAX_MENU_SLOTS then return false end
+	for _, index in ipairs( changedSlots ) do
+		index = math.floor( tonumber( index ) or -1 )
+		if index < 0 or index > MAX_MENU_SLOTS or not MC.ContainerGetSlot( container, index ) then return false end
+	end
 	net.Start( "mc_inventory_delta" )
 		net.WriteUInt( PROTOCOL_VERSION, 8 )
-		net.WriteUInt( 1, 16 )
+		net.WriteUInt( container.id, 16 )
 		net.WriteString( sessionToken( record ) )
 		net.WriteBool( accepted == true )
 		net.WriteUInt( math.floor( tonumber( actionId ) or BACKGROUND_ACTION ) % 65536, 16 )
-		net.WriteUInt( record.container.revision, 32 )
+		net.WriteUInt( container.revision, 32 )
 		net.WriteUInt( record.selected, 4 )
 		net.WriteString( string.sub( tostring( errorCode or "" ), 1, 96 ) )
-		net.WriteUInt( #changedSlots, 6 )
+		net.WriteUInt( #changedSlots, SLOT_BITS )
 		for _, index in ipairs( changedSlots ) do
-			net.WriteUInt( index, 6 )
-			MC.WriteItemStackNet( MC.ContainerGetStack( record.container, index ) )
+			net.WriteUInt( index, SLOT_BITS )
+			MC.WriteItemStackNet( MC.ContainerGetStack( container, index ) )
 		end
-		MC.WriteItemStackNet( record.container.cursor )
+		MC.WriteItemStackNet( container.cursor )
 	net.Send( ply )
 	return true
 end
 
-function SV.PublishPlayerInventoryCommit( record, result, context )
+function SV.PublishActiveInventoryCommit( record, result, context )
 	context = context or {}
 	context.inventoryDeltaPublished = true
 	return sendDelta( record, result, true, context.actionId, "" )
+end
+
+function SV.PublishPlayerInventoryCommit( record, result, context )
+	local session = record and record.session
+	if session and session.kind ~= "player" then
+		session.container.revision = math.max( session.container.revision + 1, record.container.revision )
+		local mapped = { changedSlots = {} }
+		for _, index in ipairs( result and result.changedSlots or {} ) do
+			mapped.changedSlots[#mapped.changedSlots + 1] = ( session.playerOffset or 0 ) + index
+		end
+		return SV.PublishActiveInventoryCommit( record, mapped, context )
+	end
+	return SV.PublishActiveInventoryCommit( record, result, context )
 end
 
 function SV.PublishPlayerInventorySelection( record, context )
@@ -126,17 +191,37 @@ end
 
 local function sendRejected( record, actionId, errorCode, resync )
 	sendDelta( record, { changedSlots = {} }, false, actionId, errorCode )
-	if resync then SV.SendPlayerInventorySnapshot( record.owner, errorCode ) end
+	if resync and record and record.owner then SV.SendActiveInventorySnapshot( record.owner, errorCode ) end
 end
 
-local function newSessionToken( ply, record )
+local function newSessionToken( ply, record, kind )
 	local seed = table.concat( {
-		tostring( record.ownerId or ply:EntIndex() ),
-		tostring( SysTime() ),
-		tostring( math.random() ),
-		tostring( record.container.revision ),
+		tostring( record.ownerId or ply:EntIndex() ), tostring( SysTime() ),
+		tostring( math.random() ), tostring( ( activeContainer( record ) or {} ).revision or 0 ), tostring( kind or "player" ),
 	}, ":" )
 	return util.SHA256 and util.SHA256( seed ) or util.CRC( seed )
+end
+
+function SV.SendActiveInventoryOpen( ply, record, reason )
+	local session = record and record.session
+	local container = activeContainer( record )
+	if not IsValid( ply ) or not session or not container then return false end
+	net.Start( "mc_inventory_open" )
+		net.WriteUInt( PROTOCOL_VERSION, 8 )
+		net.WriteUInt( container.id, 16 )
+		net.WriteString( session.token )
+		net.WriteUInt( container.revision, 32 )
+		net.WriteUInt( record.selected, 4 )
+		net.WriteBool( session.kind == "player" and creativeAllowed( ply ) or false )
+		net.WriteString( string.sub( tostring( reason or session.kind or "player" ), 1, 64 ) )
+		MC.WriteItemStackNet( container.cursor )
+		net.WriteString( tostring( session.kind or "player" ) )
+		net.WriteUInt( math.Clamp( #container.slots, 0, MAX_MENU_SLOTS ), 8 )
+		net.WriteUInt( math.Clamp( math.floor( tonumber( session.playerOffset ) or 0 ), 0, MAX_MENU_SLOTS ), 8 )
+		net.WriteUInt( math.Clamp( math.floor( tonumber( session.chestSlots ) or 0 ), 0, MAX_MENU_SLOTS ), 8 )
+	net.Send( ply )
+	SV.SendActiveInventorySnapshot( ply, "open" )
+	return true
 end
 
 function SV.OpenPlayerInventory( ply, reason )
@@ -146,53 +231,66 @@ function SV.OpenPlayerInventory( ply, reason )
 	local now = CurTime()
 	if record.lastOpenRequest and now - record.lastOpenRequest < 0.15 then return false, "open_rate_limited" end
 	record.lastOpenRequest = now
-
+	if record.session and record.session.kind ~= "player" then SV.ClosePlayerInventory( ply, "switch" ) end
 	if not record.session then
 		record.container.cursor = MC.CopyItemStack( record.carried )
 		record.carried = nil
 		record.session = {
-			token = newSessionToken( ply, record ),
+			token = newSessionToken( ply, record, "player" ),
+			kind = "player",
+			container = record.container,
 			openedAt = now,
 			lastActionId = nil,
+			playerOffset = 0,
+			chestSlots = 0,
 		}
 	end
-	net.Start( "mc_inventory_open" )
-		net.WriteUInt( PROTOCOL_VERSION, 8 )
-		net.WriteUInt( record.container.id, 16 )
-		net.WriteString( record.session.token )
-		net.WriteUInt( record.container.revision, 32 )
-		net.WriteUInt( record.selected, 4 )
-		net.WriteBool( creativeAllowed( ply ) )
-		net.WriteString( string.sub( tostring( reason or "player" ), 1, 64 ) )
-		MC.WriteItemStackNet( record.container.cursor )
-	net.Send( ply )
-	SV.SendPlayerInventorySnapshot( ply, "open" )
-	return true
+	return SV.SendActiveInventoryOpen( ply, record, reason or "player" )
 end
 
-local function returnCarriedToInventory( record, context )
-	local container = record.container
-	if MC.IsEmptyItemStack( container.cursor ) then return end
-	local snapshot = MC.ContainerSnapshot( container )
+local function returnCarriedToPlayer( record, context )
+	local session = record and record.session
+	local container = activeContainer( record )
+	if not container or MC.IsEmptyItemStack( container.cursor ) then return end
 	local carried = MC.CopyItemStack( container.cursor )
 	container.cursor = nil
+	if session and session.kind == "player" then
+		local snapshot = MC.ContainerSnapshot( container )
+		local targets = {}
+		for slot = 0, 35 do targets[#targets + 1] = slot end
+		local remaining = select( 1, MC.ContainerMoveStackTo( container, carried, targets, context or {} ) )
+		record.carried = MC.CopyItemStack( remaining )
+		SV.CommitPlayerInventoryMutation( record, snapshot, context or { reason = "close" } )
+		return
+	end
+	local playerContainer = record.container
+	local snapshot = MC.ContainerSnapshot( playerContainer )
 	local targets = {}
 	for slot = 0, 35 do targets[#targets + 1] = slot end
-	local remaining = select( 1, MC.ContainerMoveStackTo( container, carried, targets, context ) )
+	local remaining = select( 1, MC.ContainerMoveStackTo( playerContainer, carried, targets, context or {} ) )
 	record.carried = MC.CopyItemStack( remaining )
-	SV.CommitPlayerInventoryMutation( record, snapshot, context )
+	local changed = MC.ContainerChangedSlots( playerContainer, snapshot )
+	if #changed > 0 then
+		playerContainer.revision = playerContainer.revision + 1
+		record.revision = playerContainer.revision
+		record.dirty = true
+		if SV.UpdatePlayerHeldNetwork then SV.UpdatePlayerHeldNetwork( record ) end
+	end
 end
 
 function SV.ClosePlayerInventory( ply, reason, token )
 	local record = SV.GetPlayerInventoryRecord( ply, false )
 	if not record or not record.session then return false, "inventory_not_open" end
 	if token and token ~= "" and token ~= record.session.token then return false, "invalid_session" end
-	returnCarriedToInventory( record, { reason = "close" } )
-	net.Start( "mc_inventory_close" )
-		net.WriteUInt( record.container.id, 16 )
-		net.WriteString( record.session.token )
-		net.WriteString( string.sub( tostring( reason or "closed" ), 1, 96 ) )
-	net.Send( ply )
+	local session = record.session
+	returnCarriedToPlayer( record, { reason = "close" } )
+	if IsValid( ply ) then
+		net.Start( "mc_inventory_close" )
+			net.WriteUInt( session.container.id, 16 )
+			net.WriteString( session.token )
+			net.WriteString( string.sub( tostring( reason or "closed" ), 1, 96 ) )
+		net.Send( ply )
+	end
 	record.session = nil
 	return true
 end
@@ -206,9 +304,13 @@ local function actionSequenceAllowed( session, actionId )
 	return true
 end
 
-net.Receive( "mc_inventory_open_request", function( _, ply )
-	SV.OpenPlayerInventory( ply, "request" )
-end )
+local function sessionStillValid( session )
+	if not session or type( session.validate ) ~= "function" then return true end
+	local called, valid = pcall( session.validate )
+	return called and valid == true
+end
+
+net.Receive( "mc_inventory_open_request", function( _, ply ) SV.OpenPlayerInventory( ply, "request" ) end )
 
 net.Receive( "mc_inventory_action", function( _, ply )
 	local containerId = net.ReadUInt( 16 )
@@ -219,32 +321,26 @@ net.Receive( "mc_inventory_action", function( _, ply )
 	local slot = net.ReadInt( 16 )
 	local button = net.ReadInt( 8 )
 	local record = SV.GetPlayerInventoryRecord( ply, false )
-	if not record or not record.session then return end
-	if containerId ~= record.container.id or token ~= record.session.token then
-		sendRejected( record, actionId, "invalid_session", true )
+	local session, container = record and record.session, record and activeContainer( record )
+	if not record or not session or not container then return end
+	if containerId ~= container.id or token ~= session.token then sendRejected( record, actionId, "invalid_session", true ) return end
+	if not sessionStillValid( session ) then
+		sendRejected( record, actionId, "container_unavailable", false )
+		SV.ClosePlayerInventory( ply, "container_unavailable" )
 		return
 	end
 	if not actionRateAllowed( record ) then sendRejected( record, actionId, "rate_limited", false ) return end
-	if not actionSequenceAllowed( record.session, actionId ) then sendRejected( record, actionId, "stale_action", true ) return end
-	record.session.lastActivity = CurTime()
-
+	if not actionSequenceAllowed( session, actionId ) then sendRejected( record, actionId, "stale_action", true ) return end
+	session.lastActivity = CurTime()
 	local context = {
-		player = ply,
-		actionId = actionId,
-		creative = creativeAllowed( ply ),
+		player = ply, actionId = actionId,
+		creative = session.kind == "player" and creativeAllowed( ply ) or false,
 		canDrop = type( SV.SpawnItemDrop ) == "function",
 	}
-	local result = MC.ExecuteContainerInput( record.container, {
-		revision = revision,
-		actionId = actionId,
-		input = input,
-		slot = slot,
-		button = button,
+	local result = MC.ExecuteContainerInput( container, {
+		revision = revision, actionId = actionId, input = input, slot = slot, button = button,
 	}, context )
-	if not result.ok then
-		sendRejected( record, actionId, result.error, result.error == "revision_mismatch" )
-		return
-	end
+	if not result.ok then sendRejected( record, actionId, result.error, result.error == "revision_mismatch" ) return end
 	if not context.inventoryDeltaPublished then sendDelta( record, result, true, actionId, "" ) end
 	if #result.drops > 0 and type( SV.SpawnItemDrop ) == "function" then
 		for _, stack in ipairs( result.drops ) do SV.SpawnItemDrop( ply:GetShootPos(), stack, ply ) end
@@ -260,33 +356,27 @@ net.Receive( "mc_inventory_creative_pick", function( _, ply )
 	local count = net.ReadUInt( 7 )
 	local targetSlot = net.ReadInt( 8 )
 	local record = SV.GetPlayerInventoryRecord( ply, false )
-	if not record or not record.session then return end
-	if containerId ~= record.container.id or token ~= record.session.token then
-		sendRejected( record, actionId, "invalid_session", true )
-		return
-	end
+	local session, container = record and record.session, record and activeContainer( record )
+	if not record or not session or not container then return end
+	if session.kind ~= "player" or containerId ~= container.id or token ~= session.token then sendRejected( record, actionId, "invalid_session", true ) return end
+	if not sessionStillValid( session ) then sendRejected( record, actionId, "container_unavailable", false ) return end
 	if not actionRateAllowed( record ) then sendRejected( record, actionId, "rate_limited", false ) return end
-	if not actionSequenceAllowed( record.session, actionId ) then sendRejected( record, actionId, "stale_action", true ) return end
+	if not actionSequenceAllowed( session, actionId ) then sendRejected( record, actionId, "stale_action", true ) return end
 	if revision ~= record.container.revision then sendRejected( record, actionId, "revision_mismatch", true ) return end
 	if not creativeAllowed( ply ) then sendRejected( record, actionId, "creative_only", false ) return end
 	if targetSlot < -1 or targetSlot > 8 then sendRejected( record, actionId, "invalid_creative_target", false ) return end
 	local definition = MC.GetItem( runtimeId )
 	if not definition then sendRejected( record, actionId, "unknown_item", false ) return end
-	if definition.name == "minecraft:air" then count = 0
-	else count = math.Clamp( math.floor( tonumber( count ) or 1 ), 1, definition.maxStack or 1 ) end
-	local snapshot = MC.ContainerSnapshot( record.container )
+	if definition.name == "minecraft:air" then count = 0 else count = math.Clamp( math.floor( tonumber( count ) or 1 ), 1, definition.maxStack or 1 ) end
+	local snapshot = MC.ContainerSnapshot( container )
 	local stack = count > 0 and MC.NewItemStack( definition.name, count ) or nil
 	local ok, err
-	if targetSlot >= 0 then
-		ok, err = MC.ContainerSetStack( record.container, targetSlot, stack )
-	else
-		ok, err = MC.ContainerSetCursor( record.container, stack )
-	end
-	if not ok then MC.ContainerRestore( record.container, snapshot ) sendRejected( record, actionId, err or "invalid_item", false ) return end
-	record.session.lastActivity = CurTime()
+	if targetSlot >= 0 then ok, err = MC.ContainerSetStack( container, targetSlot, stack ) else ok, err = MC.ContainerSetCursor( container, stack ) end
+	if not ok then MC.ContainerRestore( container, snapshot ) sendRejected( record, actionId, err or "invalid_item", false ) return end
+	session.lastActivity = CurTime()
 	local context = { player = ply, actionId = actionId, creative = true, canDrop = type( SV.SpawnItemDrop ) == "function" }
 	local result = SV.CommitPlayerInventoryMutation( record, snapshot, context )
-	if not result then MC.ContainerRestore( record.container, snapshot ) sendRejected( record, actionId, "creative_pick_failed", true ) return end
+	if not result then MC.ContainerRestore( container, snapshot ) sendRejected( record, actionId, "creative_pick_failed", true ) return end
 	if not context.inventoryDeltaPublished then sendDelta( record, result, true, actionId, "" ) end
 end )
 
@@ -294,13 +384,14 @@ net.Receive( "mc_inventory_close", function( _, ply )
 	local containerId = net.ReadUInt( 16 )
 	local token = net.ReadString()
 	local record = SV.GetPlayerInventoryRecord( ply, false )
-	if record and containerId == record.container.id then SV.ClosePlayerInventory( ply, "client", token ) end
+	local container = record and activeContainer( record )
+	if record and container and containerId == container.id then SV.ClosePlayerInventory( ply, "client", token ) end
 end )
 
 net.Receive( "mc_inventory_resync", function( _, ply )
 	local record = SV.GetPlayerInventoryRecord( ply, false )
 	if not record or not actionRateAllowed( record ) then return end
-	SV.SendPlayerInventorySnapshot( ply, "requested" )
+	SV.SendActiveInventorySnapshot( ply, "requested" )
 end )
 
 net.Receive( "mc_inventory_select", function( _, ply )
@@ -317,6 +408,6 @@ end )
 hook.Add( "PlayerDisconnected", "mc_inventory_network_cleanup", function( ply )
 	local record = SV.GetPlayerInventoryRecord( ply, false )
 	if not record then return end
-	if record.container and record.container.cursor then record.carried = MC.CopyItemStack( record.container.cursor ) end
+	returnCarriedToPlayer( record, { reason = "disconnect" } )
 	record.session = nil
 end )
