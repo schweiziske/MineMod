@@ -80,6 +80,22 @@ local function mountedPackageFromKey( value )
 	return clean
 end
 
+local function mountedSaveDescriptor( packageName, path )
+	local info = MC.Workshop and MC.Workshop.GetMountedPackageInfo
+		and MC.Workshop.GetMountedPackageInfo( packageName ) or nil
+	return {
+		name = packageName,
+		key = mountedSaveKey( packageName ),
+		path = path or SV.MountedSaveSlotPath( packageName ),
+		source = "mounted",
+		root = MOUNTED_SAVE_SLOT_DIR,
+		realm = "GAME",
+		workshopId = info and info.workshopId or nil,
+		archiveBytes = info and info.archiveBytes or 0,
+		addonFile = info and info.file or nil,
+	}
+end
+
 function SV.LegacySaveSlotPath( slotName )
 	return SAVE_SLOT_DIR .. "/" .. slotName .. ".dat"
 end
@@ -98,14 +114,7 @@ function SV.ResolveSaveSlot( slotName )
 	if mountedPackage then
 		local mountedPath = SV.MountedSaveSlotPath( mountedPackage )
 		if file.Exists( mountedPath, "GAME" ) then
-			return {
-				name = mountedPackage,
-				key = mountedSaveKey( mountedPackage ),
-				path = mountedPath,
-				source = "mounted",
-				root = MOUNTED_SAVE_SLOT_DIR,
-				realm = "GAME",
-			}
+			return mountedSaveDescriptor( mountedPackage, mountedPath )
 		end
 		return nil
 	end
@@ -126,14 +135,7 @@ function SV.ResolveSaveSlot( slotName )
 	end
 	local mountedPath = SV.MountedSaveSlotPath( slotName )
 	if file.Exists( mountedPath, "GAME" ) then
-		return {
-			name = slotName,
-			key = mountedSaveKey( slotName ),
-			path = mountedPath,
-			source = "mounted",
-			root = MOUNTED_SAVE_SLOT_DIR,
-			realm = "GAME",
-		}
+		return mountedSaveDescriptor( slotName, mountedPath )
 	end
 	return nil
 end
@@ -444,7 +446,11 @@ function SV.SaveList()
 			local path = clean and pathForSlot( clean ) or nil
 			local key = source == "mounted" and mountedSaveKey( slotName ) or clean
 			if clean == slotName and path and file.Exists( path, realm ) and not paths[key] then
-				paths[key] = { name = slotName, key = key, path = path, source = source, realm = realm }
+				if source == "mounted" then
+					paths[key] = mountedSaveDescriptor( slotName, path )
+				else
+					paths[key] = { name = slotName, key = key, path = path, source = source, realm = realm }
+				end
 			end
 		end
 	end
@@ -461,6 +467,8 @@ function SV.SaveList()
 	for _, descriptor in pairs( paths ) do
 		local slotName, path, source, realm = descriptor.name, descriptor.path, descriptor.source, descriptor.realm
 		local meta = readSaveListMeta( slotName, path, source, realm )
+		local workshopId = MC.Workshop and MC.Workshop.NormalizeWorkshopId( meta.workshopId ) or nil
+		if not workshopId and MC.Workshop then workshopId = MC.Workshop.NormalizeWorkshopId( descriptor.workshopId ) end
 		out[#out + 1] = {
 			name = meta.name or slotName,
 			key = descriptor.key or slotName,
@@ -471,7 +479,7 @@ function SV.SaveList()
 			cover = source == "mounted" and "" or ( sanitizeSaveCover( meta.cover, slotName ) or "" ),
 			path = path,
 			source = source,
-			workshopId = MC.Workshop and MC.Workshop.NormalizeWorkshopId( meta.workshopId ) or "",
+			workshopId = workshopId or "",
 		}
 	end
 	table.sort( out, function( a, b ) return tostring( a.name ) < tostring( b.name ) end )

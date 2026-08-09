@@ -456,6 +456,14 @@ function W.WorkshopPackageId( name, contentHash )
 	return slug .. "_" .. string.sub( suffix, 1, 12 )
 end
 
+function W.WorkshopPackageContentHash( packageId )
+	packageId = W.SafeSlotName( packageId )
+	if not packageId then return nil end
+	local suffix = string.lower( tostring( string.match( packageId, "_([0-9a-fA-F]+)$" ) or "" ) )
+	if not W.IsContentHash( suffix ) then return nil end
+	return suffix
+end
+
 local function encodeGMAFiles( files, title )
 	local paths, totalBytes = {}, 0
 	for path, data in pairs( files or {} ) do
