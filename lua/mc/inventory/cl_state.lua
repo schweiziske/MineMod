@@ -55,6 +55,10 @@ function MC.ApplyClientInventorySnapshot( data )
 	if tostring( data.registryHash or "" ) ~= tostring( MC.ItemRegistryHash or "" ) then
 		return false, "item_registry_mismatch"
 	end
+	if data.recipeRegistryHash ~= nil
+	and tostring( data.recipeRegistryHash or "" ) ~= tostring( MC.RecipeRegistryHash or "" ) then
+		return false, "recipe_registry_mismatch"
+	end
 	local slotCount = math.floor( tonumber( data.slotCount ) or 36 )
 	if slotCount < 1 or slotCount > 127 then return false, "invalid_inventory_slot_count" end
 	local playerOffset = math.floor( tonumber( data.playerOffset ) or 0 )
@@ -80,6 +84,7 @@ function MC.ApplyClientInventorySnapshot( data )
 	State.slots = playerSlots
 	State.menu = {
 		kind = tostring( data.menuKind or "player" ),
+		recipeRegistryHash = tostring( data.recipeRegistryHash or MC.RecipeRegistryHash or "" ),
 		slotCount = slotCount,
 		playerOffset = playerOffset,
 		chestSlots = math.max( 0, math.floor( tonumber( data.chestSlots ) or 0 ) ),
@@ -101,7 +106,10 @@ end
 function MC.ApplyClientInventoryDelta( revision, selected, changed, cursor, cursorApplies )
 	revision = math.max( 0, math.floor( tonumber( revision ) or 0 ) )
 	if revision < State.revision then return false, "stale_inventory_delta" end
-	local menu = State.menu or { kind = "player", slotCount = 36, playerOffset = 0, chestSlots = 0, slots = State.slots }
+	local menu = State.menu or {
+		kind = "player", slotCount = 36, playerOffset = 0, chestSlots = 0,
+		recipeRegistryHash = tostring( MC.RecipeRegistryHash or "" ), slots = State.slots,
+	}
 	State.menu = menu
 	local menuChanged, playerChanged = {}, {}
 	for index, stack in pairs( changed or {} ) do

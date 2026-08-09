@@ -177,6 +177,10 @@ function PANEL:Init()
 	self.MenuSlotViews = {}
 	self.CurrentItems = {}
 	self.SelectedTabKey = UI.LastCreativeTab or "building_blocks"
+	self.RecipeBookOpen = false
+	self.RecipeBookToggle = vgui.Create( "MCRecipeBookToggle", self )
+	self.RecipeBookToggle:Configure( self, self.Scale )
+	self.RecipeBook = UI.CreateRecipeBook and UI.CreateRecipeBook( self ) or nil
 
 	self.SearchEntry = vgui.Create( "DTextEntry", self )
 	self.SearchEntry:SetDrawBackground( false )
@@ -240,6 +244,11 @@ function PANEL:Configure( session, state )
 	self.Crafting = session and session.crafting == true
 		or self.State and self.State.menu and self.State.menu.crafting == true or false
 	self.Creative = session and session.creative == true
+	if not self.Crafting or self.Creative then self.RecipeBookOpen = false end
+	if IsValid( self.RecipeBook ) then
+		self.RecipeBook:Configure( self )
+		self.RecipeBook:SetVisible( self.RecipeBookOpen and self.Crafting and not self.Creative )
+	end
 	if self.Creative and not UI.CreativeTabsByKey[self.SelectedTabKey] then self.SelectedTabKey = "building_blocks" end
 	self.ScrollRow = 0
 	self:RefreshCreativeItems()
@@ -285,10 +294,16 @@ function PANEL:Reflow()
 		self.Left = math.floor( ( ScrW() - SURVIVAL_W * self.Scale ) * 0.5 )
 		self.Top = math.floor( ( ScrH() - SURVIVAL_H * self.Scale ) * 0.5 )
 	end
+	self.BaseLeft = self.Left
+	if self.RecipeBookOpen and self.Crafting and not self.Creative then
+		local combined = ( self.ContentW + 149 ) * self.Scale
+		if ScrW() >= combined + 8 * self.Scale then self.Left = self.BaseLeft + 74 * self.Scale end
+	end
 	self.SearchEntry:SetFont( "MCInventorySearch" .. tostring( self.Scale ) )
 	self:LayoutTabs()
 	self:LayoutVisibleSlots()
 	self:LayoutSpecialControls()
+	self:LayoutRecipeBook()
 end
 
 function PANEL:LayoutTabs()
@@ -470,6 +485,42 @@ function PANEL:LayoutSpecialControls()
 	end
 end
 
+function PANEL:LayoutRecipeBook()
+	if not IsValid( self.RecipeBookToggle ) then return end
+	local enabled = self.Crafting and not self.Creative and not self.Chest
+	self.RecipeBookToggle:SetVisible( enabled )
+	if not enabled then
+		if IsValid( self.RecipeBook ) then self.RecipeBook:SetVisible( false ) end
+		return
+	end
+	self.RecipeBookToggle:Configure( self, self.Scale )
+	local toggleY = self.CraftingTable and 31 or 60
+	self.RecipeBookToggle:SetPos( self.Left + ( self.CraftingTable and 5 or 104 ) * self.Scale,
+		self.Top + toggleY * self.Scale )
+	self.RecipeBookToggle:MoveToFront()
+	if IsValid( self.RecipeBook ) then
+		local bookX = self.Left - 149 * self.Scale
+		if bookX < 2 * self.Scale then bookX = 2 * self.Scale end
+		self.RecipeBook:SetGeometry( bookX, self.Top, self.Scale )
+		self.RecipeBook:SetVisible( self.RecipeBookOpen )
+		if self.RecipeBookOpen then self.RecipeBook:MoveToFront() end
+	end
+end
+
+function PANEL:SetRecipeBookOpen( open )
+	open = open == true and self.Crafting and not self.Creative and not self.Chest
+	if self.RecipeBookOpen == open and ( not open or IsValid( self.RecipeBook ) ) then
+		if IsValid( self.RecipeBook ) then self.RecipeBook:SetVisible( open ) end
+		return
+	end
+	self.RecipeBookOpen = open
+	self:Reflow()
+end
+
+function PANEL:ToggleRecipeBook()
+	self:SetRecipeBookOpen( not self.RecipeBookOpen )
+end
+
 function PANEL:RefreshInventorySlots( changed )
 	if type( changed ) == "table" then
 		for _, index in ipairs( changed ) do
@@ -626,7 +677,14 @@ function PANEL:PointInsideContent( x, y )
 	local top = self.Top
 	local bottom = self.Top + self.ContentH * self.Scale
 	if self.Creative then top = top - 32 * self.Scale bottom = bottom + 32 * self.Scale end
-	return x >= self.Left and y >= top and x < self.Left + self.ContentW * self.Scale and y < bottom
+	local insideMain = x >= self.Left and y >= top and x < self.Left + self.ContentW * self.Scale and y < bottom
+	if insideMain then return true end
+	if self.RecipeBookOpen and IsValid( self.RecipeBook ) then
+		local bookX, bookY = self.RecipeBook:GetPos()
+		return x >= bookX - 30 * self.Scale and y >= bookY
+			and x < bookX + self.RecipeBook:GetWide() and y < bookY + self.RecipeBook:GetTall()
+	end
+	return false
 end
 
 function PANEL:OnMousePressed( code )
@@ -635,8 +693,13 @@ function PANEL:OnMousePressed( code )
 end
 
 function PANEL:OnKeyCodePressed( code )
-	if code == KEY_ESCAPE then self:CloseInventory( true ) return end
+	if code == KEY_ESCAPE then
+		if self.RecipeBookOpen then self:SetRecipeBookOpen( false ) else self:CloseInventory( true ) end
+		return
+	end
 	if self.SearchEntry:IsVisible() and self.SearchEntry:HasFocus() then return end
+	if IsValid( self.RecipeBook ) and self.RecipeBook.SearchEntry
+	and self.RecipeBook.SearchEntry:IsVisible() and self.RecipeBook.SearchEntry:HasFocus() then return end
 	local hotbar = NUMBER_KEYS[code]
 	if hotbar ~= nil and IsValid( self.HoveredSlot ) then UI.Drag.HandleNumberKey( self.HoveredSlot, hotbar ) return end
 	if code == KEY_Q and IsValid( self.HoveredSlot ) then UI.Drag.HandleThrowKey( self.HoveredSlot ) return end
@@ -645,7 +708,10 @@ end
 
 function PANEL:Think()
 	local escape = input.IsKeyDown( KEY_ESCAPE )
-	if escape and not self.EscapeWasDown then self:CloseInventory( true ) return end
+	if escape and not self.EscapeWasDown then
+		if self.RecipeBookOpen then self:SetRecipeBookOpen( false ) else self:CloseInventory( true ) end
+		return
+	end
 	self.EscapeWasDown = escape
 end
 
@@ -660,6 +726,7 @@ end
 
 function PANEL:OnRemove()
 	UI.Drag.Cancel()
+	if IsValid( self.RecipeBook ) then self.RecipeBook:SetVisible( false ) end
 	if UI.Screen == self then UI.Screen = nil end
 end
 

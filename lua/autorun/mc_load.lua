@@ -50,9 +50,11 @@ local SHARED = {
 	"mc/item/sh_codec.lua",
 	"mc/recipe/sh_registry.lua",
 	"mc/generated/sh_generated_recipes.lua",
+	"mc/recipe/sh_book.lua",
 	"mc/inventory/sh_slot.lua",
 	"mc/inventory/sh_container.lua",
 	"mc/inventory/sh_click.lua",
+	"mc/inventory/sh_crafting.lua",
 	"mc/generated/sh_generated_mcswep_blocks.lua",
 	"mc/sh_block_states.lua",
 	"mc/block_entity/sh_registry.lua",
@@ -182,6 +184,7 @@ local CLIENT_FILES = {
 	"mc/inventory/ui/cl_tooltip.lua",
 	"mc/inventory/ui/cl_slot.lua",
 	"mc/inventory/ui/cl_drag.lua",
+	"mc/inventory/ui/cl_recipe_book.lua",
 	"mc/inventory/ui/cl_inventory_screen.lua",
 	"mc/inventory/ui/cl_hotbar.lua",
 	"mc/render/cl_native_mesh_backend.lua",
@@ -232,6 +235,7 @@ if SERVER then
 			"materials/mc/atlas_365_programmer_art.vmt",
 			"materials/mc/atlas_365_programmer_art_translucent.png",
 			"materials/mc/atlas_365_programmer_art_translucent.vmt",
+			"materials/mc/gui/recipe_book.png",
 		} ) do
 			resource.AddFile( fileName )
 		end
@@ -247,6 +251,7 @@ if SERVER then
 			"materials/mc/gui/hud",
 			"materials/mc/gui/sprites/container",
 			"materials/mc/gui/sprites/container/creative_inventory",
+			"materials/mc/gui/sprites/recipe_book",
 		} ) do
 			for _, fileName in ipairs( file.Find( resourceRoot .. "/*.png", "GAME" ) or {} ) do
 				resource.AddFile( resourceRoot .. "/" .. fileName )

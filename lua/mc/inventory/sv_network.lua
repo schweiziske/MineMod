@@ -58,6 +58,7 @@ local function menuState( record )
 		revision = container.revision,
 		selected = record.selected,
 		registryHash = tostring( MC.ItemRegistryHash or "" ),
+		recipeRegistryHash = tostring( MC.RecipeRegistryHash or "" ),
 		menuKind = session and session.kind or "player",
 		slotCount = #container.slots,
 		playerOffset = session and session.playerOffset or 0,
@@ -384,6 +385,62 @@ net.Receive( "mc_inventory_action", function( _, ply )
 		revision = revision, actionId = actionId, input = input, slot = slot, button = button,
 	}, context )
 	if not result.ok then sendRejected( record, actionId, result.error, result.error == "revision_mismatch" ) return end
+	if not context.inventoryDeltaPublished then sendDelta( record, result, true, actionId, "" ) end
+	if #result.drops > 0 and type( SV.SpawnItemDrop ) == "function" then
+		for _, stack in ipairs( result.drops ) do SV.SpawnItemDrop( ply:GetShootPos(), stack, ply ) end
+	end
+end )
+
+-- Recipe-book placement is a separate ordered action.  The client sends only
+-- the recipe identifier; the server resolves the generated definition,
+-- checks the active menu dimensions and atomically selects real input stacks.
+net.Receive( "mc_inventory_recipe_place", function( _, ply )
+	local containerId = net.ReadUInt( 16 )
+	local token = net.ReadString()
+	local revision = net.ReadUInt( 32 )
+	local actionId = net.ReadUInt( 16 )
+	local recipeId = net.ReadString()
+	local useMax = net.ReadBool()
+	local record = SV.GetPlayerInventoryRecord( ply, false )
+	local session, container = record and record.session, record and activeContainer( record )
+	if not record or not session or not container then return end
+	if containerId ~= container.id or token ~= session.token then
+		sendRejected( record, actionId, "invalid_session", true )
+		return
+	end
+	if not sessionStillValid( session ) then
+		sendRejected( record, actionId, "container_unavailable", false )
+		SV.ClosePlayerInventory( ply, "container_unavailable" )
+		return
+	end
+	if session.crafting ~= true then sendRejected( record, actionId, "recipe_book_unavailable", false ) return end
+	if #recipeId < 1 or #recipeId > 128 then sendRejected( record, actionId, "invalid_recipe_id", false ) return end
+	if not actionRateAllowed( record ) then sendRejected( record, actionId, "rate_limited", false ) return end
+	if not actionSequenceAllowed( session, actionId ) then sendRejected( record, actionId, "stale_action", true ) return end
+	if revision ~= container.revision then sendRejected( record, actionId, "revision_mismatch", true ) return end
+	local recipe = MC.GetRecipe and MC.GetRecipe( recipeId ) or nil
+	if not recipe or recipe.supported ~= true then sendRejected( record, actionId, "unknown_recipe", false ) return end
+	local data = container.crafting
+	local width = data and data.width or session.craftingWidth
+	local height = data and data.height or session.craftingHeight
+	if MC.RecipeBook and MC.RecipeBook.RecipeFitsGrid
+	and not MC.RecipeBook.RecipeFitsGrid( recipe, width, height ) then
+		sendRejected( record, actionId, "recipe_does_not_fit", false )
+		return
+	end
+	session.lastActivity = CurTime()
+	local context = {
+		player = ply,
+		actionId = actionId,
+		creative = session.creative == true,
+		canDrop = type( SV.SpawnItemDrop ) == "function",
+		recipeBook = true,
+	}
+	local result, errorCode = MC.CraftingPlaceRecipe( container, recipe, context, useMax == true )
+	if not result then
+		sendRejected( record, actionId, errorCode or "recipe_place_failed", errorCode == "revision_mismatch" )
+		return
+	end
 	if not context.inventoryDeltaPublished then sendDelta( record, result, true, actionId, "" ) end
 	if #result.drops > 0 and type( SV.SpawnItemDrop ) == "function" then
 		for _, stack in ipairs( result.drops ) do SV.SpawnItemDrop( ply:GetShootPos(), stack, ply ) end

@@ -111,7 +111,9 @@ local function pumpActions()
 	local action = table.remove( State.actions, 1 )
 	action.revision = State.revision
 	State.inflight = action
-	local messageName = action.kind == "creative_pick" and "mc_inventory_creative_pick" or "mc_inventory_action"
+	local messageName = action.kind == "creative_pick" and "mc_inventory_creative_pick"
+		or action.kind == "recipe_place" and "mc_inventory_recipe_place"
+		or "mc_inventory_action"
 	net.Start( messageName )
 		net.WriteUInt( State.session.containerId, 16 )
 		net.WriteString( State.session.token )
@@ -121,12 +123,33 @@ local function pumpActions()
 			net.WriteUInt( action.runtimeId, MC.ItemStackRuntimeIdBits )
 			net.WriteUInt( action.count, 7 )
 			net.WriteInt( action.targetSlot, 8 )
+		elseif action.kind == "recipe_place" then
+			net.WriteString( action.recipeId )
+			net.WriteBool( action.useMax == true )
 		else
 			net.WriteUInt( action.input, 3 )
 			net.WriteInt( action.slot, 16 )
 			net.WriteInt( action.button, 8 )
 		end
 	net.SendToServer()
+end
+
+function MC.QueueRecipeBookPlacement( recipeId, useMax )
+	if not State.session or State.session.crafting ~= true then return false, "recipe_book_unavailable" end
+	recipeId = tostring( recipeId or "" )
+	if #recipeId < 1 or #recipeId > 128 then return false, "invalid_recipe_id" end
+	if not MC.GetRecipe or not MC.GetRecipe( recipeId ) then return false, "unknown_recipe" end
+	if #State.actions >= 64 then return false, "inventory_action_queue_full" end
+	local actionId = State.nextActionId % BACKGROUND_ACTION
+	State.nextActionId = ( actionId + 1 ) % BACKGROUND_ACTION
+	State.actions[#State.actions + 1] = {
+		kind = "recipe_place",
+		actionId = actionId,
+		recipeId = recipeId,
+		useMax = useMax == true,
+	}
+	pumpActions()
+	return true, actionId
 end
 
 function MC.QueueInventoryInput( input, slot, button )
@@ -288,6 +311,7 @@ net.Receive( "mc_inventory_open", function()
 	end
 	State.menu = {
 		kind = kind ~= "" and kind or "player",
+		recipeRegistryHash = tostring( MC.RecipeRegistryHash or "" ),
 		slotCount = slotCount,
 		playerOffset = playerOffset,
 		chestSlots = chestSlots,

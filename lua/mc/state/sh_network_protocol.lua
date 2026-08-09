@@ -121,6 +121,7 @@ Net.MessageNames = {
 	"mc_inventory_sync_begin", "mc_inventory_sync_part", "mc_inventory_sync_end",
 	"mc_inventory_delta", "mc_inventory_open_request", "mc_inventory_open",
 	"mc_inventory_action", "mc_inventory_creative_pick", "mc_inventory_close", "mc_inventory_resync", "mc_inventory_select",
+	"mc_inventory_recipe_place",
 
 	-- Phase 4 state-aware transport.
 	"mc_state_hello", "mc_state_hello_ack",
