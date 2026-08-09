@@ -15,6 +15,7 @@ local loadPerfStartKB = collectgarbage and collectgarbage( "count" ) or 0
 local SHARED = {
 	"mc/state/sh_network_protocol.lua",
 	"mc/sh_config.lua",
+	"mc/workshop/sh_workshop_bundle.lua",
 	"mc/sh_world_adapter.lua",
 	"mc/sh_config_ui.lua",
 	"mc/sh_daycycle.lua",
@@ -103,6 +104,7 @@ local SERVER_FILES = {
 	"mc/sv_collision_carriers.lua",
 	"mc/sv_chunk_store.lua",
 	"mc/sv_saves.lua",
+	"mc/workshop/sv_workshop.lua",
 	"mc/sv_presets.lua",
 	"mc/sv_block_cluster.lua",
 	"mc/sv_damage.lua",
@@ -143,6 +145,7 @@ local CLIENT_FILES = {
 	"mc/cl_config_ui.lua",
 	"mc/cl_ui.lua",
 	"mc/cl_save_ui.lua",
+	"mc/workshop/cl_workshop.lua",
 	"mc/cl_presets.lua",
 	"mc/cl_block_cluster.lua",
 	"mc/cl_effects.lua",

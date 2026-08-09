@@ -497,6 +497,13 @@ MC.ConfigConVars = {
 			item( "mc_save_public", "Public saves", "公共存档", "bool",
 				"Allow non-admin players to list, load and save worlds; deletion stays admin-only.",
 				"允许非管理员列出、读取和保存世界；删除仍仅限管理员。" ),
+			item( "mc_workshop_manage", "Workshop world management", "创意工坊世界管理", "choice",
+				"Choose who may export saves to Workshop or ask the server to import Workshop worlds.",
+				"选择谁可以把存档发布到创意工坊，或申请由服务端导入创意工坊世界。", { choices = {
+					choice( "0", "Superadmins", "仅超级管理员" ),
+					choice( "1", "Administrators", "管理员" ),
+					choice( "2", "Everyone", "所有玩家" ),
+				} } ),
 			item( "mc_preset_public", "Public presets", "公共预设", "bool",
 				"Allow non-admin players to list, load, save and place presets.",
 				"允许非管理员列出、读取、保存和放置预设。" ),

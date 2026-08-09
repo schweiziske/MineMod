@@ -285,15 +285,14 @@ function Saves.List()
 	return sv.SaveList()
 end
 
--- True for both save layouts. SaveSlotPath is the directory manifest
--- (data/mc/saves/<name>/manifest.json); older slots are a single .dat and
--- stay loadable, so reporting them as missing here would contradict
--- Saves.Load, which falls back to the legacy path too.
+-- True across local, Workshop-cache, and legacy save roots.
 function Saves.Exists( name )
 	local sv = SV()
-	if not sv or not sv.SaveSlotName or not sv.SaveSlotPath then return false end
+	if not sv or not sv.SaveSlotName then return false end
 	local slot = sv.SaveSlotName( name )
 	if not slot then return false end
+	if sv.SaveExists then return sv.SaveExists( slot ) end
+	if not sv.SaveSlotPath then return false end
 	if file.Exists( sv.SaveSlotPath( slot ), "DATA" ) then return true end
 	if not sv.LegacySaveSlotPath then return false end
 	return file.Exists( sv.LegacySaveSlotPath( slot ), "DATA" )

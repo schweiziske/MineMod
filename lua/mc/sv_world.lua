@@ -2022,8 +2022,9 @@ local function savedChunkSizeForData( data )
 	return savedChunkSize
 end
 
-local function readSaveJSON( path )
-	local raw = file.Read( path, "DATA" )
+local function readSaveJSON( path, realm )
+	realm = realm == "GAME" and "GAME" or "DATA"
+	local raw = file.Read( path, realm )
 	if not raw or raw == "" then return nil, "empty_save" end
 	if string.sub( raw, 1, 1 ) == "{" then
 		return util.JSONToTable( raw ), nil
@@ -2164,13 +2165,14 @@ local function savePartPath( manifestPath, partPath )
 	return string.GetPathFromFilename( manifestPath ) .. partPath
 end
 
-local function loadSaveParts( data, manifestPath, cache, deferWorldEffects )
+local function loadSaveParts( data, manifestPath, cache, deferWorldEffects, realm )
+	realm = realm == "GAME" and "GAME" or "DATA"
 	for _, part in ipairs( data.parts or {} ) do
 		local partPath = savePartPath( manifestPath, part )
 		if not partPath then return false, "invalid_save_part" end
-		if not file.Exists( partPath, "DATA" ) then return false, "missing_save_part: " .. partPath end
+		if not file.Exists( partPath, realm ) then return false, "missing_save_part: " .. partPath end
 
-		local partData = readSaveJSON( partPath )
+		local partData = readSaveJSON( partPath, realm )
 		if not partData or not istable( partData.chunks ) then
 			return false, "invalid_save_part: " .. partPath
 		end
@@ -2188,12 +2190,13 @@ local function loadSaveParts( data, manifestPath, cache, deferWorldEffects )
 	return true
 end
 
-local function validateSavePartFiles( data, manifestPath )
+local function validateSavePartFiles( data, manifestPath, realm )
+	realm = realm == "GAME" and "GAME" or "DATA"
 	for _, part in ipairs( data.parts or {} ) do
 		local partPath = savePartPath( manifestPath, part )
 		if not partPath then return false, "invalid_save_part" end
-		if not file.Exists( partPath, "DATA" ) then return false, "missing_save_part: " .. partPath end
-		local partData, partError = readSaveJSON( partPath )
+		if not file.Exists( partPath, realm ) then return false, "missing_save_part: " .. partPath end
+		local partData, partError = readSaveJSON( partPath, realm )
 		if partError or not partData or not istable( partData.chunks ) then
 			return false, "invalid_save_part: " .. partPath
 		end
@@ -2209,10 +2212,11 @@ local function hasMCB4SaveParts( data )
 	return false
 end
 
-function SV.LoadFromPath( path, resyncClients, requestedName )
-	if not file.Exists( path, "DATA" ) then return false, "save_not_found" end
+function SV.LoadFromPath( path, resyncClients, requestedName, realm )
+	realm = realm == "GAME" and "GAME" or "DATA"
+	if not file.Exists( path, realm ) then return false, "save_not_found" end
 
-	local data, err = readSaveJSON( path )
+	local data, err = readSaveJSON( path, realm )
 	if err then return false, err end
 	if not data or ( not data.chunks and not data.parts ) then return false, "invalid_save" end
 	if data.format == "mc_world_import" then
@@ -2272,7 +2276,7 @@ function SV.LoadFromPath( path, resyncClients, requestedName )
 	if lazyStreaming then
 		announcePreWorldLoad()
 		clearWorldNoNet()
-		local loaded, loadError = SV.ChunkStore.LoadLazyManifest( data, path )
+		local loaded, loadError = SV.ChunkStore.LoadLazyManifest( data, path, realm )
 		if not loaded then
 			clearWorldNoNet()
 			return false, loadError or "lazy_manifest_load_failed"
@@ -2293,7 +2297,7 @@ function SV.LoadFromPath( path, resyncClients, requestedName )
 		clearWorldNoNet()
 		local indexedChunks = 0
 		for _ in pairs( data.chunkIndex or {} ) do indexedChunks = indexedChunks + 1 end
-		local staged, loadError = SV.ChunkStore.LoadLazyManifest( data, path )
+		local staged, loadError = SV.ChunkStore.LoadLazyManifest( data, path, realm )
 		if not staged then
 			clearWorldNoNet()
 			return false, loadError or "mcb4_manifest_load_failed"
@@ -2313,7 +2317,7 @@ function SV.LoadFromPath( path, resyncClients, requestedName )
 		return true
 	end
 	if istable( data.parts ) then
-		local validParts, partError = validateSavePartFiles( data, path )
+		local validParts, partError = validateSavePartFiles( data, path, realm )
 		if not validParts then return false, partError end
 	end
 
@@ -2324,7 +2328,7 @@ function SV.LoadFromPath( path, resyncClients, requestedName )
 
 	local cache = {}
 	if isLazyPartManifest or istable( data.parts ) then
-		local ok, err = loadSaveParts( data, path, cache, stagedLoad )
+		local ok, err = loadSaveParts( data, path, cache, stagedLoad, realm )
 		if not ok then
 			if stagedLoad then restoreWorldLoadStage( previousWorld ) else clearWorldNoNet() end
 			return false, err

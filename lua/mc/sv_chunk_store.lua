@@ -17,6 +17,7 @@ local function resetTables()
 	Store.Manifest = nil
 	Store.ManifestPath = nil
 	Store.BaseDir = nil
+	Store.Realm = "DATA"
 	Store.Palette = {}
 	Store.ChunkIndex = {}
 	Store.Parts = {}
@@ -74,7 +75,7 @@ end
 
 local function readSaveJSON( path, timing )
 	local readStarted = timing and SysTime() or nil
-	local raw = file.Read( path, "DATA" )
+	local raw = file.Read( path, Store.Realm or "DATA" )
 	if timing then
 		timingAdd( timing, "fileReadMS", ( SysTime() - readStarted ) * 1000 )
 		timingAdd( timing, "storedBytes", raw and #raw or 0 )
@@ -131,7 +132,8 @@ local FAST_SUFFIXES = { ".json", ".mcb" }
 
 local function resolveFastPath( path, forbidden )
 	if not isstring( path ) or path == "" then return nil end
-	if file.Exists( path, "DATA" ) then return path end
+	local realm = Store.Realm or "DATA"
+	if file.Exists( path, realm ) then return path end
 	for _, suffix in ipairs( FAST_SUFFIXES ) do
 		if string.EndsWith( path, suffix ) then
 			local stem = string.sub( path, 1, #path - #suffix )
@@ -139,7 +141,7 @@ local function resolveFastPath( path, forbidden )
 				local candidate = stem .. alt
 				-- Never fall through onto the side-data lane: that file is real
 				-- JSON and would feed text into the MCB4 decoder.
-				if alt ~= suffix and candidate ~= forbidden and file.Exists( candidate, "DATA" ) then
+				if alt ~= suffix and candidate ~= forbidden and file.Exists( candidate, realm ) then
 					return candidate
 				end
 			end
@@ -178,7 +180,7 @@ local function readFastFragment( partNo, entry, timing )
 	local fastPath = resolveFastPath( manifestRelativePath( part.fastPath ), manifestRelativePath( partEntryPath( part ) ) )
 	if not fastPath then return nil, "missing_fast_part" end
 	local started = timing and SysTime() or nil
-	local handle = file.Open( fastPath, "rb", "DATA" )
+	local handle = file.Open( fastPath, "rb", Store.Realm or "DATA" )
 	if not handle then return nil, "fast_open_failed" end
 	handle:Seek( offset )
 	local fragment = handle:Read( length )
@@ -243,7 +245,7 @@ local function loadPart( partNo, timing )
 		if timing then timingAdd( timing, "partLoadMS", ( SysTime() - loadStarted ) * 1000 ) end
 		return nil, "invalid_part_path"
 	end
-	if not file.Exists( partPath, "DATA" ) then
+	if not file.Exists( partPath, Store.Realm or "DATA" ) then
 		if timing then timingAdd( timing, "partLoadMS", ( SysTime() - loadStarted ) * 1000 ) end
 		return nil, "missing_part: " .. partPath
 	end
@@ -430,9 +432,10 @@ function Store.HttpManifestPayload()
 	}
 end
 
-function Store.LoadLazyManifest( manifest, manifestPath )
+function Store.LoadLazyManifest( manifest, manifestPath, realm )
 	resetTables()
 	Store.Active = true
+	Store.Realm = realm == "GAME" and "GAME" or "DATA"
 	Store.Manifest = manifest
 	Store.ManifestPath = cleanDataPath( manifestPath )
 	Store.BaseDir = string.GetPathFromFilename( Store.ManifestPath or "" )
@@ -441,7 +444,7 @@ function Store.LoadLazyManifest( manifest, manifestPath )
 	Store.Parts = manifest.parts or {}
 	Store.EditOverlayPath = overlayPathForManifest( manifest, Store.ManifestPath )
 
-	if Store.EditOverlayPath and file.Exists( Store.EditOverlayPath, "DATA" ) then
+	if Store.EditOverlayPath and file.Exists( Store.EditOverlayPath, Store.Realm ) then
 		local overlay = readSaveJSON( Store.EditOverlayPath )
 		if istable( overlay ) and istable( overlay.edits ) then
 			Store.EditChunks = overlay.edits

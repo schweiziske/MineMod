@@ -39,3 +39,37 @@ _Avoid_: 方块状态、每方块 GMod Entity、Tile Entity
 **状态无损导入（State-Lossless Import）**:
 Minecraft 存档中的方块名称和全部合法状态属性在导入后保持一致；该术语不承诺实体、行为或方块实体也已实现。
 _Avoid_: 完美导入
+
+## Workshop 世界同步
+
+**世界包（World Package）**:
+通过 Workshop 发布的只读世界数据集合，拥有稳定的内容身份并包含一个基线快照。
+_Avoid_: 存档、运行时世界、Workshop ID
+
+**基线快照（Base Snapshot）**:
+世界包中不可变的体素世界状态，是判断运行时差异的唯一参照。
+_Avoid_: 当前世界、备份
+
+**运行时世界（Runtime World）**:
+服务端当前权威世界，由一个基线快照和属于该基线的覆盖层共同定义。
+_Avoid_: Workshop 地图、基线
+
+**覆盖层（Overlay）**:
+运行时世界相对某个确定基线快照的规范化差异集合。
+_Avoid_: 完整存档、编辑历史、Dirty 列表
+
+**差异格（Dirty Cell）**:
+当前方块状态或方块实体确实不同于基线的格子；曾经被编辑但已经还原的格子不是差异格。
+_Avoid_: 被编辑过的格子、脏历史
+
+**基线 Hash（Base Hash）**:
+标识一个基线快照完整内容的密码学指纹；Workshop item ID 不属于该身份。
+_Avoid_: Workshop ID、文件名、版本备注
+
+**世界世代（World Generation）**:
+一次活动运行时世界会话的身份，用于把旧世界的网络数据与当前世界隔离。
+_Avoid_: 地图版本、修订号
+
+**修订屏障（Revision Barrier）**:
+客户端加载基线时选定的权威修订点；客户端先得到该点的覆盖层，再连续接收之后的事务。
+_Avoid_: 暂停世界、最终修订
