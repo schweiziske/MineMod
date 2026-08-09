@@ -102,15 +102,15 @@ end
 local function drawDamage( stack, definition, x, y, size, scale )
 	local maxDamage = tonumber( definition and definition.maxDamage ) or 0
 	if maxDamage <= 0 then return end
-	local damage = math.Clamp( tonumber( stack.damage ) or 0, 0, maxDamage )
-	local remaining = 1 - damage / maxDamage
+	local info = MC.ItemDurabilityInfo and MC.ItemDurabilityInfo( stack ) or nil
+	local remaining = info and info.remaining or 1
 	local barWidth = math.max( 2, size - 2 * scale )
 	local barHeight = math.max( 1, scale )
 	local barX, barY = x + scale, y + size - 2 * scale
 	draw.RoundedBox( 0, barX, barY, barWidth, barHeight, Color( 0, 0, 0, 255 ) )
-	local red = math.floor( 255 * ( 1 - remaining ) )
-	local green = math.floor( 255 * remaining )
-	draw.RoundedBox( 0, barX, barY, math.max( 1, math.floor( barWidth * remaining ) ), barHeight, Color( red, green, 0, 255 ) )
+	local color = info and info.color or { r = 255, g = 0, b = 0 }
+	draw.RoundedBox( 0, barX, barY, math.max( 1, math.floor( barWidth * remaining ) ), barHeight,
+		Color( color.r, color.g, color.b, 255 ) )
 end
 
 function Renderer.DrawStack( stack, x, y, size, options )
