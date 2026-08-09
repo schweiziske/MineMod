@@ -250,6 +250,67 @@ function Player.Resync( ply )
 	return true
 end
 
+----------------------------------------------------------------- API.Inventory
+API.Inventory = API.Inventory or {}
+local Inventory = API.Inventory
+
+local function validInventoryPlayer( ply )
+	return IsValid( ply ) and ply.IsPlayer and ply:IsPlayer()
+end
+
+function Inventory.Get( ply )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return nil, "invalid_player" end
+	if not sv or not sv.GetPlayerInventoryRecord then return nil, "inventory_api_unavailable" end
+	local record = sv.GetPlayerInventoryRecord( ply )
+	if not record then return nil, "inventory_not_loaded" end
+	local result = { selected = record.selected, revision = record.container.revision, slots = {} }
+	for slot = 0, 35 do result.slots[slot] = deepCopy( record.storage[slot + 1] ) end
+	return result
+end
+
+function Inventory.GetSlot( ply, slot )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return nil, "invalid_player" end
+	slot = math.floor( tonumber( slot ) or -1 )
+	if slot < 0 or slot > 35 then return nil, "invalid_slot" end
+	if not sv or not sv.GetPlayerInventoryStack then return nil, "inventory_api_unavailable" end
+	return deepCopy( sv.GetPlayerInventoryStack( ply, slot ) )
+end
+
+function Inventory.Give( ply, item, count, components, damage )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return 0, nil, "invalid_player" end
+	if not sv or not sv.InsertPlayerItem then return 0, nil, "inventory_api_unavailable" end
+	local stack, err = MC.NewItemStack( item, count or 1, components, damage )
+	if not stack then return 0, nil, err or "invalid_stack" end
+	local remainder, result = sv.InsertPlayerItem( ply, stack, { reason = "api_give" } )
+	if result == nil then return 0, stack, "inventory_insert_failed" end
+	local remainingCount = remainder and remainder.count or 0
+	return stack.count - remainingCount, deepCopy( remainder )
+end
+
+function Inventory.Remove( ply, item, count )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return 0, "invalid_player" end
+	if not sv or not sv.RemovePlayerItem then return 0, "inventory_api_unavailable" end
+	return sv.RemovePlayerItem( ply, item, count or 1, { reason = "api_remove" } )
+end
+
+function Inventory.Select( ply, slot )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return false, "invalid_player" end
+	if not sv or not sv.SetPlayerSelectedSlot then return false, "inventory_api_unavailable" end
+	return sv.SetPlayerSelectedSlot( ply, slot, { reason = "api_select" } )
+end
+
+function Inventory.Open( ply )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return false, "invalid_player" end
+	if not sv or not sv.OpenPlayerInventory then return false, "inventory_api_unavailable" end
+	return sv.OpenPlayerInventory( ply, "api" )
+end
+
 --------------------------------------------------------------------- API.Saves
 API.Saves = API.Saves or {}
 local Saves = API.Saves
