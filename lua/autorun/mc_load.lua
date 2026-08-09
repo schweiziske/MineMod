@@ -43,6 +43,12 @@ local SHARED = {
 	"mc/liquid/sh_movement.lua",
 	"mc/custom/sh_custom_blocks.lua",
 	"mc/sh_blocks.lua",
+	"mc/item/sh_registry.lua",
+	"mc/generated/sh_generated_items.lua",
+	"mc/item/sh_stack.lua",
+	"mc/inventory/sh_slot.lua",
+	"mc/inventory/sh_container.lua",
+	"mc/inventory/sh_click.lua",
 	"mc/generated/sh_generated_mcswep_blocks.lua",
 	"mc/sh_block_states.lua",
 	"mc/block_update/sh_registry.lua",
@@ -207,6 +213,18 @@ if SERVER then
 			"materials/mc/atlas_365_programmer_art_translucent.vmt",
 		} ) do
 			resource.AddFile( fileName )
+		end
+		for _, fileName in ipairs( file.Find( "materials/mc/item/*.png", "GAME" ) or {} ) do
+			resource.AddFile( "materials/mc/item/" .. fileName )
+		end
+		for _, resourceRoot in ipairs( {
+			"materials/mc/gui/container",
+			"materials/mc/gui/hud",
+			"materials/mc/gui/sprites/container",
+		} ) do
+			for _, fileName in ipairs( file.Find( resourceRoot .. "/*.png", "GAME" ) or {} ) do
+				resource.AddFile( resourceRoot .. "/" .. fileName )
+			end
 		end
 	end
 end
