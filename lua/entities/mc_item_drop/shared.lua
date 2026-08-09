@@ -7,6 +7,7 @@ ENT.AdminOnly = false
 
 function ENT:SetupDataTables()
 	self:NetworkVar( "String", 0, "ItemName" )
+	self:NetworkVar( "String", 1, "ItemComponents" )
 	self:NetworkVar( "Int", 0, "ItemCount" )
 	self:NetworkVar( "Int", 1, "ItemDamage" )
 end

@@ -5,6 +5,10 @@ include( "shared.lua" )
 local PHYSICS_MODEL = "models/hunter/blocks/cube025x025x025.mdl"
 local ITEM_LIFETIME = 300
 
+local function now()
+	return CurTime()
+end
+
 function ENT:Initialize()
 	self:SetModel( PHYSICS_MODEL )
 	self:SetModelScale( 0.45, 0 )
@@ -16,8 +20,11 @@ function ENT:Initialize()
 	self:UseTriggerBounds( true, 18 )
 	self:SetUseType( SIMPLE_USE )
 	self:DrawShadow( false )
-	self.MCCreatedAt = CurTime()
-	self.MCPickupReadyAt = CurTime() + 0.5
+	self.MCCreatedAt = now()
+	self.MCLifetime = ITEM_LIFETIME
+	self.MCPickupReadyAt = now() + 0.5
+	self.MCNextMergeAt = now() + 0.5
+	self.MCPickingUp = false
 	local physics = self:GetPhysicsObject()
 	if IsValid( physics ) then
 		physics:SetMass( 0.2 )
@@ -32,7 +39,21 @@ function ENT:UpdateTransmitState()
 end
 
 function ENT:SetPickupDelay( seconds )
-	self.MCPickupReadyAt = CurTime() + math.max( 0, tonumber( seconds ) or 0 )
+	self.MCPickupReadyAt = now() + math.max( 0, tonumber( seconds ) or 0 )
+end
+
+function ENT:SetNeverPickup()
+	self.MCPickupReadyAt = math.huge
+end
+
+function ENT:SetUnlimitedLifetime()
+	self.MCLifetime = nil
+	self.MCCreatedAt = -math.huge
+end
+
+function ENT:SetDropOwner( actor, target )
+	self.MCDropActor = IsValid( actor ) and actor or nil
+	self.MCPickupTarget = IsValid( target ) and target or nil
 end
 
 function ENT:SetDropStack( input )
@@ -42,6 +63,12 @@ function ENT:SetDropStack( input )
 	self:SetItemName( stack.item )
 	self:SetItemCount( stack.count )
 	self:SetItemDamage( stack.damage or 0 )
+	local components = stack.components and util and util.TableToJSON and util.TableToJSON( stack.components, false ) or ""
+	-- NetworkVar strings are intentionally kept below the engine's compact
+	-- string limit; oversized component payloads remain server-side and simply
+	-- use the definition/texture fallback on clients.
+	if type( components ) ~= "string" or #components > 480 then components = "" end
+	self:SetItemComponents( components )
 	return true
 end
 
@@ -52,6 +79,7 @@ end
 function ENT:TryPickup( ply )
 	if self.MCPickingUp or CurTime() < ( self.MCPickupReadyAt or 0 ) then return false end
 	if not IsValid( ply ) or not ply:IsPlayer() or not ply:Alive() then return false end
+	if IsValid( self.MCPickupTarget ) and self.MCPickupTarget ~= ply then return false end
 	local stack = self.MCItemStack
 	if MC.IsEmptyItemStack( stack ) or not MC.SV or not MC.SV.InsertPlayerItem then return false end
 	self.MCPickingUp = true
@@ -80,10 +108,16 @@ function ENT:Use( activator )
 end
 
 function ENT:Think()
-	if CurTime() - ( self.MCCreatedAt or CurTime() ) >= ITEM_LIFETIME then
+	local current = CurTime()
+	if self.MCLifetime and current - ( self.MCCreatedAt or current ) >= self.MCLifetime then
 		self:Remove()
 		return
 	end
-	self:NextThink( CurTime() + 1 )
+	if current >= ( self.MCNextMergeAt or 0 ) then
+		self.MCNextMergeAt = current + 0.5
+		if MC.SV and MC.SV.TryMergeItemDrop then MC.SV.TryMergeItemDrop( self ) end
+		if not IsValid( self ) then return end
+	end
+	self:NextThink( current + 0.25 )
 	return true
 end
