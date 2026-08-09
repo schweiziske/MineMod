@@ -48,6 +48,8 @@ local SHARED = {
 	"mc/generated/sh_generated_creative_tabs.lua",
 	"mc/item/sh_stack.lua",
 	"mc/item/sh_codec.lua",
+	"mc/recipe/sh_registry.lua",
+	"mc/generated/sh_generated_recipes.lua",
 	"mc/inventory/sh_slot.lua",
 	"mc/inventory/sh_container.lua",
 	"mc/inventory/sh_click.lua",
