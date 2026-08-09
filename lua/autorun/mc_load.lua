@@ -45,6 +45,7 @@ local SHARED = {
 	"mc/sh_blocks.lua",
 	"mc/item/sh_registry.lua",
 	"mc/generated/sh_generated_items.lua",
+	"mc/generated/sh_generated_creative_tabs.lua",
 	"mc/item/sh_stack.lua",
 	"mc/item/sh_codec.lua",
 	"mc/inventory/sh_slot.lua",
@@ -168,6 +169,13 @@ local CLIENT_FILES = {
 	"mc/cl_player.lua",
 	"mc/inventory/cl_state.lua",
 	"mc/inventory/cl_network.lua",
+	"mc/inventory/ui/cl_theme.lua",
+	"mc/inventory/ui/cl_item_renderer.lua",
+	"mc/inventory/ui/cl_tooltip.lua",
+	"mc/inventory/ui/cl_slot.lua",
+	"mc/inventory/ui/cl_drag.lua",
+	"mc/inventory/ui/cl_inventory_screen.lua",
+	"mc/inventory/ui/cl_hotbar.lua",
 	"mc/render/cl_native_mesh_backend.lua",
 	"mc/api/cl_api.lua",
 }
@@ -222,10 +230,15 @@ if SERVER then
 		for _, fileName in ipairs( file.Find( "materials/mc/item/*.png", "GAME" ) or {} ) do
 			resource.AddFile( "materials/mc/item/" .. fileName )
 		end
+		for _, fileName in ipairs( file.Find( "materials/mc/font/*.png", "GAME" ) or {} ) do
+			resource.AddFile( "materials/mc/font/" .. fileName )
+		end
 		for _, resourceRoot in ipairs( {
 			"materials/mc/gui/container",
+			"materials/mc/gui/container/creative_inventory",
 			"materials/mc/gui/hud",
 			"materials/mc/gui/sprites/container",
+			"materials/mc/gui/sprites/container/creative_inventory",
 		} ) do
 			for _, fileName in ipairs( file.Find( resourceRoot .. "/*.png", "GAME" ) or {} ) do
 				resource.AddFile( resourceRoot .. "/" .. fileName )

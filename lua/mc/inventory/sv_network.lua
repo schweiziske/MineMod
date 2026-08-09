@@ -15,11 +15,7 @@ local SNAPSHOT_MAX_BYTES = 1024 * 1024
 local BACKGROUND_ACTION = 65535
 
 local function creativeAllowed( ply )
-	if MC.RunEvent then
-		local allowed = MC.RunEvent( "MC.PlayerHasInfiniteMaterials", ply )
-		if allowed ~= nil then return allowed == true end
-	end
-	return not MC.Config.InventoryCreative or MC.Config.InventoryCreative:GetBool()
+	return SV.PlayerHasInfiniteMaterials and SV.PlayerHasInfiniteMaterials( ply ) == true
 end
 
 local function actionRateAllowed( record )
@@ -253,6 +249,45 @@ net.Receive( "mc_inventory_action", function( _, ply )
 	if #result.drops > 0 and type( SV.SpawnItemDrop ) == "function" then
 		for _, stack in ipairs( result.drops ) do SV.SpawnItemDrop( ply:GetShootPos(), stack, ply ) end
 	end
+end )
+
+net.Receive( "mc_inventory_creative_pick", function( _, ply )
+	local containerId = net.ReadUInt( 16 )
+	local token = net.ReadString()
+	local revision = net.ReadUInt( 32 )
+	local actionId = net.ReadUInt( 16 )
+	local runtimeId = net.ReadUInt( MC.ItemStackRuntimeIdBits )
+	local count = net.ReadUInt( 7 )
+	local targetSlot = net.ReadInt( 8 )
+	local record = SV.GetPlayerInventoryRecord( ply, false )
+	if not record or not record.session then return end
+	if containerId ~= record.container.id or token ~= record.session.token then
+		sendRejected( record, actionId, "invalid_session", true )
+		return
+	end
+	if not actionRateAllowed( record ) then sendRejected( record, actionId, "rate_limited", false ) return end
+	if not actionSequenceAllowed( record.session, actionId ) then sendRejected( record, actionId, "stale_action", true ) return end
+	if revision ~= record.container.revision then sendRejected( record, actionId, "revision_mismatch", true ) return end
+	if not creativeAllowed( ply ) then sendRejected( record, actionId, "creative_only", false ) return end
+	if targetSlot < -1 or targetSlot > 8 then sendRejected( record, actionId, "invalid_creative_target", false ) return end
+	local definition = MC.GetItem( runtimeId )
+	if not definition then sendRejected( record, actionId, "unknown_item", false ) return end
+	if definition.name == "minecraft:air" then count = 0
+	else count = math.Clamp( math.floor( tonumber( count ) or 1 ), 1, definition.maxStack or 1 ) end
+	local snapshot = MC.ContainerSnapshot( record.container )
+	local stack = count > 0 and MC.NewItemStack( definition.name, count ) or nil
+	local ok, err
+	if targetSlot >= 0 then
+		ok, err = MC.ContainerSetStack( record.container, targetSlot, stack )
+	else
+		ok, err = MC.ContainerSetCursor( record.container, stack )
+	end
+	if not ok then MC.ContainerRestore( record.container, snapshot ) sendRejected( record, actionId, err or "invalid_item", false ) return end
+	record.session.lastActivity = CurTime()
+	local context = { player = ply, actionId = actionId, creative = true, canDrop = type( SV.SpawnItemDrop ) == "function" }
+	local result = SV.CommitPlayerInventoryMutation( record, snapshot, context )
+	if not result then MC.ContainerRestore( record.container, snapshot ) sendRejected( record, actionId, "creative_pick_failed", true ) return end
+	if not context.inventoryDeltaPublished then sendDelta( record, result, true, actionId, "" ) end
 end )
 
 net.Receive( "mc_inventory_close", function( _, ply )
