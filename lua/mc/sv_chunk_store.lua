@@ -13,6 +13,16 @@ local SV = MC.SV
 local Store = SV.ChunkStore or {}
 SV.ChunkStore = Store
 
+local function copyValue( value, seen )
+	if type( value ) ~= "table" then return value end
+	seen = seen or {}
+	if seen[value] then return seen[value] end
+	local out = {}
+	seen[value] = out
+	for key, item in pairs( value ) do out[copyValue( key, seen )] = copyValue( item, seen ) end
+	return out
+end
+
 local function resetTables()
 	Store.Manifest = nil
 	Store.ManifestPath = nil
@@ -444,13 +454,22 @@ function Store.LoadLazyManifest( manifest, manifestPath, realm )
 	Store.Parts = manifest.parts or {}
 	Store.EditOverlayPath = overlayPathForManifest( manifest, Store.ManifestPath )
 
-	if Store.EditOverlayPath and file.Exists( Store.EditOverlayPath, Store.Realm ) then
-		local overlay = readSaveJSON( Store.EditOverlayPath )
-		if istable( overlay ) and istable( overlay.edits ) then
-			Store.EditChunks = overlay.edits
-		end
-		if istable( overlay ) and tonumber( overlay.blockCount ) then
-			SV.BlockCount = math.max( 0, math.floor( tonumber( overlay.blockCount ) or 0 ) )
+	local overlayCandidates = {}
+	if Store.EditOverlayPath then overlayCandidates[#overlayCandidates + 1] = Store.EditOverlayPath end
+	-- Older lazy saves wrote a sibling *_edits.dat even when the manifest later
+	-- advertised edits.json. Keep that spelling as a compatibility fallback.
+	local legacyOverlayPath = stripExtension( Store.ManifestPath ) .. "_edits.dat"
+	if legacyOverlayPath ~= Store.EditOverlayPath then overlayCandidates[#overlayCandidates + 1] = legacyOverlayPath end
+	for _, overlayPath in ipairs( overlayCandidates ) do
+		if file.Exists( overlayPath, Store.Realm ) then
+			local overlay = readSaveJSON( overlayPath )
+			if istable( overlay ) and istable( overlay.edits ) then
+				Store.EditChunks = overlay.edits
+			end
+			if istable( overlay ) and tonumber( overlay.blockCount ) then
+				SV.BlockCount = math.max( 0, math.floor( tonumber( overlay.blockCount ) or 0 ) )
+			end
+			break
 		end
 	end
 
@@ -491,6 +510,35 @@ local function applyCellToChunk( chunk, li, stateId )
 	return MC.SetChunkLocalStateRaw( chunk, li, stateId )
 end
 
+local function clearBlockEntityAt( chunk, localIndex )
+	if chunk.blockEntities then
+		chunk.blockEntities[localIndex] = nil
+		if next( chunk.blockEntities ) == nil then chunk.blockEntities = nil end
+	end
+	if chunk.opaqueBlockEntities then
+		chunk.opaqueBlockEntities[localIndex] = nil
+		if next( chunk.opaqueBlockEntities ) == nil then chunk.opaqueBlockEntities = nil end
+	end
+end
+
+local function installBlockEntityEnvelope( chunk, localIndex, stateId, envelope )
+	if not istable( envelope ) then return false, "invalid_overlay_block_entity" end
+	local record, decodeError = MC.DecodeBlockEntityEnvelope( stateId, envelope )
+	if not record then return false, decodeError or "invalid_overlay_block_entity" end
+	clearBlockEntityAt( chunk, localIndex )
+	chunk.blockEntities = chunk.blockEntities or {}
+	chunk.blockEntities[localIndex] = record
+	return true
+end
+
+local function applyOverlayBlockEntity( chunk, localIndex, stateId, edit )
+	if edit.blockEntity ~= nil then
+		return installBlockEntityEnvelope( chunk, localIndex, stateId, edit.blockEntity )
+	end
+	if edit.removeBlockEntity == true then clearBlockEntityAt( chunk, localIndex ) end
+	return true
+end
+
 function Store.ApplyOverlayToChunk( chunk )
 	if not chunk or not chunk.key then return chunk end
 	local editKey = tostring( chunk.key )
@@ -498,13 +546,18 @@ function Store.ApplyOverlayToChunk( chunk )
 	if not istable( edits ) then return chunk end
 	for li, edit in pairs( edits ) do
 		if istable( edit ) then
+			local localIndex = math.floor( tonumber( li ) or -1 )
+			if not MC.LocalIndexInRange( localIndex ) then return nil, "invalid_overlay_local_index" end
 			local stateId
 			if isstring( edit.state ) then
 				stateId = MC.ParseBlockState( edit.state )
 			else
 				stateId = MC.StateFromLegacy( edit.id, edit.orient )
 			end
-			if stateId then applyCellToChunk( chunk, li, stateId ) end
+			if stateId == nil or not MC.IsValidBlockState( stateId ) then return nil, "invalid_overlay_state" end
+			applyCellToChunk( chunk, localIndex, stateId )
+			local applied, entityError = applyOverlayBlockEntity( chunk, localIndex, stateId, edit )
+			if applied ~= true then return nil, entityError end
 		end
 	end
 	return chunk
@@ -675,7 +728,8 @@ local function loadFastChunkIntoWorld( key, entry, timing )
 	chunk.blockEntities = nil
 	chunk.opaqueBlockEntities = nil
 	chunk.opaqueStates = nil
-	Store.ApplyOverlayToChunk( chunk )
+	local overlaid, overlayError = Store.ApplyOverlayToChunk( chunk )
+	if not overlaid then return nil, nil, overlayError or "overlay_apply_failed" end
 	MC.FinalizeChunkStateStorage( chunk )
 	if chunk.count <= 0 then MC.World[MC.ChunkKey( cx, cy, cz )] = nil end
 	if timing then
@@ -687,6 +741,83 @@ local function loadFastChunkIntoWorld( key, entry, timing )
 		timingAdd( timing, "touchedChunks", 1 )
 	end
 	return chunk, { [MC.ChunkKey( cx, cy, cz )] = chunk }
+end
+
+local function savedBlockEntityCell( record, localIndex )
+	local savedChunkSize = savedChunkSizeForManifest()
+	local savedHeight = savedHeightForManifest()
+	local lx, ly, lz = decodeLocalWithGeometry( localIndex, savedChunkSize, savedHeight )
+	if lx == nil then return nil end
+	local sourceCX = math.floor( tonumber( record[1] ) or 0 )
+	local sourceCY = math.floor( tonumber( record[2] ) or 0 )
+	local sourceCZ = math.floor( tonumber( record[3] ) or 0 )
+	return sourceCX * savedChunkSize + lx, sourceCY * savedChunkSize + ly, sourceCZ * savedHeight + lz
+end
+
+local function applySavedBlockEntities( record, touched )
+	local envelopes = record[5]
+	if envelopes == nil then return true end
+	if not istable( envelopes ) or not MC.DecodeBlockEntityEnvelope then return false, "invalid_block_entities" end
+	local seen = {}
+	for _, envelope in ipairs( envelopes ) do
+		if not istable( envelope ) then return false, "invalid_block_entity_envelope" end
+		local sourceIndex = math.floor( tonumber( envelope.localIndex ) or -1 )
+		if seen[sourceIndex] then return false, "duplicate_block_entity_index" end
+		local bx, by, bz = savedBlockEntityCell( record, sourceIndex )
+		if bx == nil then return false, "invalid_block_entity_index" end
+		seen[sourceIndex] = true
+		local cx, cy, cz, localIndex = MC.CellToChunk( bx, by, bz )
+		local chunk = MC.GetChunk( cx, cy, cz ) or MC.EnsureChunk( cx, cy, cz )
+		local stateId = MC.GetBlockState( bx, by, bz )
+		local blockEntity, decodeError = MC.DecodeBlockEntityEnvelope( stateId, envelope )
+		if not blockEntity then return false, decodeError or "invalid_block_entity" end
+		clearBlockEntityAt( chunk, localIndex )
+		chunk.blockEntities = chunk.blockEntities or {}
+		chunk.blockEntities[localIndex] = blockEntity
+		touched[MC.ChunkKey( cx, cy, cz )] = chunk
+	end
+	return true
+end
+
+local function applySavedOpaqueBlockEntities( record, touched )
+	local records = record[6]
+	if records == nil then return true end
+	if not istable( records ) then return false, "invalid_opaque_block_entities" end
+	local seen, totalBytes = {}, 0
+	for _, source in ipairs( records ) do
+		if not istable( source ) then return false, "invalid_opaque_block_entity" end
+		local sourceIndex = math.floor( tonumber( source.localIndex ) or -1 )
+		if seen[sourceIndex] then return false, "duplicate_opaque_block_entity_index" end
+		local bx, by, bz = savedBlockEntityCell( record, sourceIndex )
+		if bx == nil then return false, "invalid_opaque_block_entity_index" end
+		seen[sourceIndex] = true
+		if not isstring( source.sourceType ) or source.sourceType == ""
+		or source.encoding ~= "typed-nbt-json-v1" or not istable( source.data ) then
+			return false, "invalid_opaque_block_entity_record"
+		end
+		local sourceDataVersion = tonumber( source.sourceDataVersion )
+		if not sourceDataVersion or sourceDataVersion < 0 or sourceDataVersion ~= math.floor( sourceDataVersion ) then
+			return false, "invalid_opaque_block_entity_version"
+		end
+		local json = util.TableToJSON( source.data, false )
+		local bytes = json and #json or 0
+		if bytes < 1 or bytes > 1048576 then return false, "opaque_block_entity_too_large" end
+		totalBytes = totalBytes + bytes
+		if totalBytes > 8388608 then return false, "opaque_chunk_budget_exceeded" end
+
+		local cx, cy, cz, localIndex = MC.CellToChunk( bx, by, bz )
+		local chunk = MC.GetChunk( cx, cy, cz ) or MC.EnsureChunk( cx, cy, cz )
+		if MC.GetBlockState( bx, by, bz ) == 0 then return false, "opaque_block_entity_without_state" end
+		if chunk.blockEntities and chunk.blockEntities[localIndex] then
+			return false, "opaque_block_entity_conflicts_active"
+		end
+		chunk.opaqueBlockEntities = chunk.opaqueBlockEntities or {}
+		local stored = copyValue( source )
+		stored.localIndex = nil
+		chunk.opaqueBlockEntities[localIndex] = stored
+		touched[MC.ChunkKey( cx, cy, cz )] = chunk
+	end
+	return true
 end
 
 local function loadBaseChunkIntoWorld( key, record, timing )
@@ -738,11 +869,16 @@ local function loadBaseChunkIntoWorld( key, record, timing )
 		timingAdd( timing, "cellsWritten", cellsWritten )
 		timingAdd( timing, "stateApplyMS", ( SysTime() - applyStarted ) * 1000 )
 	end
+	local activeOK, activeError = applySavedBlockEntities( record, touched )
+	if activeOK ~= true then return nil, nil, activeError end
+	local opaqueOK, opaqueError = applySavedOpaqueBlockEntities( record, touched )
+	if opaqueOK ~= true then return nil, nil, opaqueError end
 
 	local finalizeStarted = timing and SysTime() or nil
 	for touchedKey, chunk in pairs( touched ) do
 		if timing then timingAdd( timing, "touchedChunks", 1 ) end
-		Store.ApplyOverlayToChunk( chunk )
+		local overlaid, overlayError = Store.ApplyOverlayToChunk( chunk )
+		if not overlaid then return nil, nil, overlayError or "overlay_apply_failed" end
 		MC.FinalizeChunkStateStorage( chunk )
 		if chunk.count <= 0 then
 			MC.World[touchedKey] = nil
@@ -794,7 +930,7 @@ function Store.HydrateChunkNow( key, priority )
 	if sample then sample.entries = #entries end
 	for _, item in ipairs( entries ) do
 		local entry = item.entry
-		local loadedChunk, touched
+		local loadedChunk, touched, loadError
 		if tonumber( entry.fastOffset ) ~= nil and tonumber( entry.fastBytes ) ~= nil then
 			if sample then timingAdd( sample, "fastAttempts", 1 ) end
 			local fastError
@@ -825,7 +961,13 @@ function Store.HydrateChunkNow( key, priority )
 				finishProfile( false, Store.LastError, false )
 				return nil
 			end
-			loadedChunk, touched = loadBaseChunkIntoWorld( key, record, sample )
+			loadedChunk, touched, loadError = loadBaseChunkIntoWorld( key, record, sample )
+			if not loadedChunk and loadError then
+				Store.LastError = loadError
+				Store.QueuedKeys[key] = nil
+				finishProfile( false, loadError, false )
+				return nil
+			end
 		end
 		chunk = chunk or loadedChunk
 		for touchedKey in pairs( touched or {} ) do
@@ -837,7 +979,13 @@ function Store.HydrateChunkNow( key, priority )
 	if not chunk and Store.EditChunks and Store.EditChunks[key] then
 		local finalizeStarted = sample and SysTime() or nil
 		chunk = ensureChunkForKey( key )
-		Store.ApplyOverlayToChunk( chunk )
+		local overlaid, overlayError = Store.ApplyOverlayToChunk( chunk )
+		if not overlaid then
+			Store.LastError = overlayError or "overlay_apply_failed"
+			Store.QueuedKeys[key] = nil
+			finishProfile( false, Store.LastError, false )
+			return nil
+		end
 		if chunk then MC.FinalizeChunkStateStorage( chunk ) end
 		if chunk and chunk.count <= 0 then
 			MC.World[MC.CanonicalChunkKey( key )] = nil
@@ -907,7 +1055,11 @@ function Store.RecordEdit( bx, by, bz, id, orient, stateId )
 	stateId = stateId or MC.StateFromLegacy( id, orient )
 	local spec = stateId and MC.FormatBlockState( stateId ) or nil
 	if not spec then return end
-	edits[tostring( li )] = { state = spec }
+	local localKey = tostring( li )
+	local edit = istable( edits[localKey] ) and edits[localKey] or {}
+	edit.state = spec
+	edit.id, edit.orient = nil, nil
+	edits[localKey] = edit
 end
 
 -- Storage-level bulk edits such as /fill already know their Chunk and local
@@ -927,7 +1079,13 @@ function Store.RecordChunkStateEdits( key, localIndexes, stateId )
 	end
 	for index = 1, #localIndexes, 2 do
 		local li = math.floor( tonumber( localIndexes[index] ) or -1 )
-		if MC.LocalIndexInRange( li ) then edits[tostring( li )] = { state = spec } end
+		if MC.LocalIndexInRange( li ) then
+			local localKey = tostring( li )
+			local edit = istable( edits[localKey] ) and edits[localKey] or {}
+			edit.state = spec
+			edit.id, edit.orient = nil, nil
+			edits[localKey] = edit
+		end
 	end
 end
 
@@ -949,19 +1107,59 @@ function Store.RecordChunkStateMap( key, localStatePairs )
 		local li = math.floor( tonumber( localStatePairs[index] ) or -1 )
 		local stateId = math.floor( tonumber( localStatePairs[index + 1] ) or -1 )
 		if MC.LocalIndexInRange( li ) and stateId >= 0 then
-			local spec = specs[stateId]
+				local spec = specs[stateId]
 			if spec == nil then
 				spec = MC.FormatBlockState( stateId ) or false
 				specs[stateId] = spec
 			end
-			if spec then edits[tostring( li )] = { state = spec } end
+			if spec then
+				local localKey = tostring( li )
+				local edit = istable( edits[localKey] ) and edits[localKey] or {}
+				edit.state = spec
+				edit.id, edit.orient = nil, nil
+				edits[localKey] = edit
+			end
 		end
 	end
 end
 
+-- Block Entity mutations share the same per-cell overlay entry as state
+-- mutations. This covers signs and inventories that change without replacing
+-- their block, while keeping server-only payloads out of the normal net path.
+function Store.RecordBlockEntityEdit( bx, by, bz, record, stateId )
+	if not Store.IsLazyWorld() then return true end
+	local cx, cy, cz, localIndex = MC.CellToChunk( bx, by, bz )
+	local key = tostring( MC.ChunkKey( cx, cy, cz ) )
+	includeRuntimeCZ( cz )
+	stateId = math.floor( tonumber( stateId ) or tonumber( MC.GetBlockState( bx, by, bz ) ) or -1 )
+	if not MC.IsValidBlockState( stateId ) then return false, "invalid_block_entity_overlay_state" end
+	local spec = MC.FormatBlockState( stateId )
+	if not spec then return false, "invalid_block_entity_overlay_state" end
+	local edits = Store.EditChunks[key]
+	if not edits then
+		edits = {}
+		Store.EditChunks[key] = edits
+	end
+	local localKey = tostring( localIndex )
+	local edit = istable( edits[localKey] ) and edits[localKey] or {}
+	edit.state = spec
+	edit.id, edit.orient = nil, nil
+	if record ~= nil then
+		local envelope, encodeError = MC.EncodeBlockEntityEnvelope( stateId, record, false )
+		if not envelope then return false, encodeError or "block_entity_overlay_encode_failed" end
+		edit.blockEntity = copyValue( envelope )
+		edit.removeBlockEntity = nil
+	else
+		edit.blockEntity = nil
+		edit.removeBlockEntity = true
+	end
+	edits[localKey] = edit
+	return true
+end
+
 function Store.SaveOverlay()
 	return {
-		v = 2,
+		v = 3,
 		base = Store.ManifestPath,
 		blockCount = math.max( 0, math.floor( tonumber( SV.BlockCount ) or 0 ) ),
 		edits = Store.EditChunks or {},

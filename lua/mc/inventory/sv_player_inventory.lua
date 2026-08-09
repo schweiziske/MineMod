@@ -72,6 +72,8 @@ local function updateHeldNetwork( record )
 	ply:SetNWInt( "mc_selected_block", definition and definition.blockId or 0 )
 end
 
+SV.UpdatePlayerHeldNetwork = updateHeldNetwork
+
 local function onContainerCommit( record, container, result, context )
 	record.revision = container.revision
 	record.dirty = true

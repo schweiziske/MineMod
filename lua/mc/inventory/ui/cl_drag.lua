@@ -26,7 +26,7 @@ end
 
 local function slotKey( slot )
 	if not IsValid( slot ) then return "invalid" end
-	if slot.Kind == "inventory" then return "inventory:" .. tostring( slot.InventoryIndex ) end
+	if slot:IsInventorySlot() then return "menu:" .. tostring( slot:GetActionIndex() ) end
 	if slot.Kind == "creative" and slot.Stack then return "creative:" .. tostring( slot.Stack.item ) end
 	return tostring( slot.Kind )
 end
@@ -77,7 +77,7 @@ local function activateClick( active )
 	else
 		return
 	end
-	MC.QueueInventoryInput( inputType, slot.InventoryIndex, button )
+	MC.QueueInventoryInput( inputType, slot:GetActionIndex(), button )
 end
 
 local function craftTypeForMouse( mouseCode )
@@ -90,7 +90,7 @@ end
 
 local function addQuickCraftSlot( active, slot )
 	if not active.started or not IsValid( slot ) or not slot:CanQuickCraft() then return end
-	local index = slot.InventoryIndex
+	local index = slot:GetActionIndex()
 	if active.queued[index] then return end
 	active.queued[index] = slot
 	MC.QueueInventoryInput( MC.ContainerInput.QUICK_CRAFT, index, active.craftType * 4 + 1 )
@@ -154,7 +154,8 @@ end
 
 function Drag.IsQueued( slot )
 	local active = Drag.Active
-	return active and active.started and slot.InventoryIndex ~= nil and active.queued[slot.InventoryIndex] ~= nil or false
+	local index = IsValid( slot ) and slot.GetActionIndex and slot:GetActionIndex() or nil
+	return active and active.started and index ~= nil and active.queued[index] ~= nil or false
 end
 
 function Drag.Cancel()
@@ -174,13 +175,13 @@ function Drag.HandleNumberKey( slot, hotbarIndex )
 	hotbarIndex = math.floor( tonumber( hotbarIndex ) or -1 )
 	if hotbarIndex < 0 or hotbarIndex > 8 or not IsValid( slot ) then return false end
 	if slot.Kind == "creative" then return creativePick( slot, nil, hotbarIndex ) end
-	if slot:IsInventorySlot() then return MC.QueueInventoryInput( MC.ContainerInput.SWAP, slot.InventoryIndex, hotbarIndex ) end
+	if slot:IsInventorySlot() then return MC.QueueInventoryInput( MC.ContainerInput.SWAP, slot:GetActionIndex(), hotbarIndex ) end
 	return false
 end
 
 function Drag.HandleThrowKey( slot )
 	if not IsValid( slot ) or not slot:IsInventorySlot() then return false end
-	return MC.QueueInventoryInput( MC.ContainerInput.THROW, slot.InventoryIndex, controlDown() and 1 or 0 )
+	return MC.QueueInventoryInput( MC.ContainerInput.THROW, slot:GetActionIndex(), controlDown() and 1 or 0 )
 end
 
 hook.Add( "Think", "mc_inventory_drag_input", function()

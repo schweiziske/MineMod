@@ -16,6 +16,7 @@ local CREATIVE_W, CREATIVE_H = 195, 136
 local CREATIVE_COLS, CREATIVE_ROWS = 9, 5
 
 local SURVIVAL_BACKGROUND = UI.GetGuiMaterial( "container/inventory" )
+local CHEST_BACKGROUND = UI.GetGuiMaterial( "container/generic_54" )
 local CREATIVE_ITEMS_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_items" )
 local CREATIVE_SEARCH_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_item_search" )
 local CREATIVE_INVENTORY_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_inventory" )
@@ -172,6 +173,7 @@ function PANEL:Init()
 	self.SlotPanels = {}
 	self.VisibleSlotCount = 0
 	self.InventorySlotViews = {}
+	self.MenuSlotViews = {}
 	self.CurrentItems = {}
 	self.SelectedTabKey = UI.LastCreativeTab or "building_blocks"
 
@@ -217,6 +219,7 @@ function PANEL:Init()
 	end
 
 	hook.Add( "MC.InventoryChanged", self, function( panel, changed ) panel:RefreshInventorySlots( changed ) end )
+	hook.Add( "MC.InventoryMenuChanged", self, function( panel, changed ) panel:RefreshMenuSlots( changed ) end )
 	hook.Add( "MC.InventorySelectionChanged", self, function( panel ) panel:RefreshInventorySlots() end )
 	hook.Add( "MC.InventoryCursorChanged", self, function( panel ) panel:InvalidateLayout() end )
 	hook.Add( "MC.InventoryActionResult", self, function( panel, _, accepted, errorCode )
@@ -230,6 +233,8 @@ end
 function PANEL:Configure( session, state )
 	self.Session = session
 	self.State = state or MC.ClientInventory
+	self.MenuKind = session and session.kind or "player"
+	self.Chest = self.MenuKind == "chest"
 	self.Creative = session and session.creative == true
 	if self.Creative and not UI.CreativeTabsByKey[self.SelectedTabKey] then self.SelectedTabKey = "building_blocks" end
 	self.ScrollRow = 0
@@ -261,7 +266,12 @@ function PANEL:Reflow()
 	if not IsValid( self ) then return end
 	self:SetSize( ScrW(), ScrH() )
 	self.Scale = UI.GuiScale()
-	if self.Creative then
+	if self.Chest then
+		self.ChestRows = math.Clamp( math.floor( tonumber( self.Session and self.Session.chestSlots ) or 27 ) / 9, 1, 6 )
+		self.ContentW, self.ContentH = 176, 114 + self.ChestRows * 18
+		self.Left = math.floor( ( ScrW() - self.ContentW * self.Scale ) * 0.5 )
+		self.Top = math.floor( ( ScrH() - self.ContentH * self.Scale ) * 0.5 )
+	elseif self.Creative then
 		local totalHeight = ( CREATIVE_H + 56 ) * self.Scale
 		self.ContentW, self.ContentH = CREATIVE_W, CREATIVE_H
 		self.Left = math.floor( ( ScrW() - CREATIVE_W * self.Scale ) * 0.5 )
@@ -307,6 +317,7 @@ end
 function PANEL:BeginSlotLayout()
 	self.VisibleSlotCount = 0
 	self.InventorySlotViews = {}
+	self.MenuSlotViews = {}
 end
 
 function PANEL:FinishSlotLayout()
@@ -317,10 +328,23 @@ end
 
 function PANEL:PlaceInventorySlot( ordinal, inventoryIndex, x, y )
 	local slot = self:AcquireSlot( ordinal )
-	slot:SetInventorySlot( inventoryIndex )
+	slot:SetInventorySlot( inventoryIndex, inventoryIndex )
 	slot:SetPos( self.Left + x * self.Scale, self.Top + y * self.Scale )
 	self.InventorySlotViews[inventoryIndex] = self.InventorySlotViews[inventoryIndex] or {}
 	self.InventorySlotViews[inventoryIndex][#self.InventorySlotViews[inventoryIndex] + 1] = slot
+	return ordinal + 1
+end
+
+function PANEL:PlaceMenuSlot( ordinal, menuIndex, playerIndex, x, y )
+	local slot = self:AcquireSlot( ordinal )
+	slot:SetMenuSlot( menuIndex, playerIndex )
+	slot:SetPos( self.Left + x * self.Scale, self.Top + y * self.Scale )
+	self.MenuSlotViews[menuIndex] = self.MenuSlotViews[menuIndex] or {}
+	self.MenuSlotViews[menuIndex][#self.MenuSlotViews[menuIndex] + 1] = slot
+	if playerIndex ~= nil then
+		self.InventorySlotViews[playerIndex] = self.InventorySlotViews[playerIndex] or {}
+		self.InventorySlotViews[playerIndex][#self.InventorySlotViews[playerIndex] + 1] = slot
+	end
 	return ordinal + 1
 end
 
@@ -342,7 +366,23 @@ function PANEL:LayoutVisibleSlots()
 	if not self.Left then return end
 	self:BeginSlotLayout()
 	local ordinal = 1
-	if not self.Creative then
+	if self.Chest then
+		local chestSlots = math.floor( tonumber( self.Session and self.Session.chestSlots ) or 27 )
+		local rows = math.max( 1, math.floor( chestSlots / 9 ) )
+		for index = 0, chestSlots - 1 do
+			ordinal = self:PlaceMenuSlot( ordinal, index, nil, 8 + index % 9 * 18, 18 + math.floor( index / 9 ) * 18 )
+		end
+		local playerOffset = math.floor( tonumber( self.Session and self.Session.playerOffset ) or chestSlots )
+		local inventoryTop = 31 + rows * 18
+		for index = 9, 35 do
+			local position = index - 9
+			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index,
+				8 + position % 9 * 18, inventoryTop + math.floor( position / 9 ) * 18 )
+		end
+		for index = 0, 8 do
+			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index, 8 + index * 18, inventoryTop + 58 )
+		end
+	elseif not self.Creative then
 		for index = 9, 35 do
 			local position = index - 9
 			ordinal = self:PlaceInventorySlot( ordinal, index, 8 + position % 9 * 18, 84 + math.floor( position / 9 ) * 18 )
@@ -388,7 +428,7 @@ function PANEL:LayoutSpecialControls()
 		self.Scrollbar:SetPos( self.Left + 175 * self.Scale, self.Top + 18 * self.Scale )
 		self.Scrollbar:SetSize( 12 * self.Scale, 112 * self.Scale )
 	end
-	local preview = not self.Creative or tab and tab.key == "inventory"
+	local preview = not self.Chest and ( not self.Creative or tab and tab.key == "inventory" )
 	self.PlayerPreview:SetVisible( preview == true )
 	if preview then
 		if self.Creative then
@@ -413,6 +453,21 @@ function PANEL:RefreshInventorySlots( changed )
 	if self.Creative and self.SelectedTabKey == "hotbar" then
 		self:RefreshCreativeItems()
 		self:LayoutVisibleSlots()
+	end
+end
+
+function PANEL:RefreshMenuSlots( changed )
+	if not self.Chest then return end
+	if type( changed ) == "table" then
+		for _, index in ipairs( changed ) do
+			for _, slot in ipairs( self.MenuSlotViews[index] or {} ) do
+				if IsValid( slot ) then slot:RefreshInventoryStack() end
+			end
+		end
+	else
+		for _, slot in ipairs( self.SlotPanels ) do
+			if IsValid( slot ) and slot:IsInventorySlot() then slot:RefreshInventoryStack() end
+		end
 	end
 end
 
@@ -481,6 +536,7 @@ function PANEL:SetHoveredSlot( slot ) self.HoveredSlot = slot end
 function PANEL:ClearHoveredSlot( slot ) if self.HoveredSlot == slot then self.HoveredSlot = nil end end
 
 function PANEL:BackgroundMaterial()
+	if self.Chest then return CHEST_BACKGROUND end
 	if not self.Creative then return SURVIVAL_BACKGROUND end
 	if self.SelectedTabKey == "search" then return CREATIVE_SEARCH_BACKGROUND end
 	if self.SelectedTabKey == "inventory" then return CREATIVE_INVENTORY_BACKGROUND end
@@ -493,8 +549,22 @@ function PANEL:Paint( w, h )
 	local mat = self:BackgroundMaterial()
 	local width, height = self.ContentW * self.Scale, self.ContentH * self.Scale
 	UI.WithPointFiltering( function()
-		UI.DrawTexture( mat, self.Left, self.Top, width, height, 0, 0, self.ContentW / 256, self.ContentH / 256 )
+		if self.Chest then
+			local upperHeight = self.ChestRows * 18 + 17
+			UI.DrawTexture( mat, self.Left, self.Top, width, upperHeight * self.Scale,
+				0, 0, self.ContentW / 256, upperHeight / 256 )
+			UI.DrawTexture( mat, self.Left, self.Top + upperHeight * self.Scale, width, 96 * self.Scale,
+				0, 126 / 256, self.ContentW / 256, 222 / 256 )
+		else
+			UI.DrawTexture( mat, self.Left, self.Top, width, height, 0, 0, self.ContentW / 256, self.ContentH / 256 )
+		end
 	end )
+	if self.Chest then
+		local title = self.ChestRows > 3 and "Large Chest" or "Chest"
+		UI.DrawText( title, self.Left + 8 * self.Scale, self.Top + 6 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+		UI.DrawText( "Inventory", self.Left + 8 * self.Scale,
+			self.Top + ( self.ChestRows * 18 + 20 ) * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+	end
 	return true
 end
 

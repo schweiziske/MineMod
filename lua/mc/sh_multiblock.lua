@@ -130,6 +130,12 @@ local function appendRailUpdates( cells, seen, changeCount )
 	for index = 1, #updates do mergeStateUpdate( cells, seen, updates[index] ) end
 end
 
+local function appendChestUpdates( cells, seen, changeCount )
+	if not MC.BuildChestConnectionStateUpdates then return end
+	local updates = MC.BuildChestConnectionStateUpdates( cells, changeCount )
+	for index = 1, #updates do mergeStateUpdate( cells, seen, updates[index] ) end
+end
+
 local function appendNeighbourStateUpdates( cells, seen, changeCount )
 	if not MC.BuildNeighbourStateUpdates then return end
 	local updates = MC.BuildNeighbourStateUpdates( cells, changeCount )
@@ -167,6 +173,7 @@ function MC.BuildPlacementStatePlan( bx, by, bz, stateId )
 		if not addStateCell( cells, seen, bx, by, bz, stateId ) then return nil end
 	end
 	local primaryChangeCount = #cells
+	appendChestUpdates( cells, seen, primaryChangeCount )
 	appendBlockConnectionUpdates( cells, seen, primaryChangeCount )
 	appendRedstoneUpdates( cells, seen, primaryChangeCount )
 	appendRailUpdates( cells, seen, primaryChangeCount )
@@ -240,6 +247,7 @@ function MC.BuildBreakPlan( bx, by, bz )
 		end
 	end
 	local primaryChangeCount = #cells
+	appendChestUpdates( cells, seen, primaryChangeCount )
 	appendBlockConnectionUpdates( cells, seen, primaryChangeCount )
 	appendRedstoneUpdates( cells, seen, primaryChangeCount )
 	appendRailUpdates( cells, seen, primaryChangeCount )

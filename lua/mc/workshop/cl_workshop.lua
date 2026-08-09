@@ -1123,6 +1123,39 @@ local function removeWorkshopBlockEntity( item, localIndex )
 	end
 end
 
+local function workshopItemState( item, localIndex )
+	local sectionIndex = math.floor( localIndex / MCB4_SECTION_CELLS ) + 1
+	local section = item.sections and item.sections[sectionIndex]
+	return section and MC.StateSection.Get( section, localIndex % MCB4_SECTION_CELLS ) or 0
+end
+
+local function removeIncompatibleWorkshopBlockEntity( item, localIndex, stateId )
+	local expected = MC.BlockEntityTypeForState and MC.BlockEntityTypeForState( stateId ) or nil
+	for index = #( item.blockEntities or {} ), 1, -1 do
+		local envelope = item.blockEntities[index]
+		if istable( envelope ) and math.floor( tonumber( envelope.localIndex ) or -1 ) == localIndex
+		and envelope.type ~= expected then
+			table.remove( item.blockEntities, index )
+		end
+	end
+end
+
+local function appendWorkshopBlockEntity( item, localIndex, stateId, envelope )
+	if not istable( envelope ) then return false, "invalid_workshop_overlay_block_entity" end
+	local record, definition = MC.DecodeBlockEntityEnvelope( stateId, envelope )
+	if not record then return false, definition or "invalid_workshop_overlay_block_entity" end
+	removeWorkshopBlockEntity( item, localIndex )
+	if definition and definition.serverOnly then return true end
+	item.blockEntities[#item.blockEntities + 1] = {
+		localIndex = localIndex,
+		type = envelope.type,
+		codecVersion = envelope.codecVersion,
+		data = envelope.data,
+		revision = envelope.revision,
+	}
+	return true
+end
+
 local function applyWorkshopOverlay( decoded, manifest, itemsByKey )
 	local overlayRaw = manifest.editOverlay and decoded.files[manifest.editOverlay] or nil
 	if not overlayRaw then return true, nil end
@@ -1156,12 +1189,37 @@ local function applyWorkshopOverlay( decoded, manifest, itemsByKey )
 			if MC.StateSection.Set( section, localIndex % MCB4_SECTION_CELLS, stateId ) == nil then
 				return false, "workshop_overlay_write_failed"
 			end
-			removeWorkshopBlockEntity( item, localIndex )
+			if edit.blockEntity ~= nil then
+				local applied, entityError = appendWorkshopBlockEntity( item, localIndex, stateId, edit.blockEntity )
+				if applied ~= true then return false, entityError end
+			elseif edit.removeBlockEntity == true then
+				removeWorkshopBlockEntity( item, localIndex )
+			else
+				removeIncompatibleWorkshopBlockEntity( item, localIndex, stateId )
+			end
 		end
 		item.count = ( item.sections[1] and item.sections[1].count or 0 )
 			+ ( item.sections[2] and item.sections[2].count or 0 )
 	end
 	return true, overlay
+end
+
+local function filterWorkshopBlockEntities( item )
+	local filtered, seen = {}, {}
+	for _, envelope in ipairs( item.blockEntities or {} ) do
+		if not istable( envelope ) then return false, "invalid_workshop_block_entity" end
+		local localIndex = math.floor( tonumber( envelope.localIndex ) or -1 )
+		if not MC.LocalIndexInRange( localIndex ) or seen[localIndex] then
+			return false, "invalid_workshop_block_entity_index"
+		end
+		seen[localIndex] = true
+		local stateId = workshopItemState( item, localIndex )
+		local record, definition = MC.DecodeBlockEntityEnvelope( stateId, envelope )
+		if not record then return false, definition or "invalid_workshop_block_entity" end
+		if not definition.serverOnly then filtered[#filtered + 1] = envelope end
+	end
+	item.blockEntities = filtered
+	return true
 end
 
 local function buildWorkshopBinaryWorld( decoded )
@@ -1215,6 +1273,8 @@ local function buildWorkshopBinaryWorld( decoded )
 	if not overlayOK then return nil, overlayOrError end
 	local chunks, blocks = {}, 0
 	for _, item in pairs( itemsByKey ) do
+		local entitiesOK, entityError = filterWorkshopBlockEntities( item )
+		if entitiesOK ~= true then return nil, entityError end
 		chunks[#chunks + 1] = item
 		blocks = blocks + math.max( 0, math.floor( tonumber( item.count ) or 0 ) )
 	end

@@ -364,6 +364,11 @@ function MC.RegisterBlock( def )
 		stateRule = "trapdoor"
 	elseif string.match( name, "_bed$" ) then
 		stateRule = "bed"
+	elseif name == "chest" or name == "trapped_chest" or string.match( name, "_copper_chest$" ) then
+		-- Keep the vanilla facing/type state projectable through the legacy
+		-- id+orient store.  Waterlogged remains at the schema default until the
+		-- fluid layer gains a persisted fluid state for block entities.
+		stateRule = "chest"
 	end
 	local handlerName = def.handler
 	if not handlerName and stateRule == "door" then handlerName = "door" end
@@ -617,6 +622,33 @@ function MC.BedOrientPart( orient )
 	return math.floor( tonumber( orient ) or 0 ) >= 4 and "head" or "foot"
 end
 
+local ChestOrientByFacing = {
+	[MC.Direction.NORTH] = 0,
+	[MC.Direction.SOUTH] = 1,
+	[MC.Direction.WEST] = 2,
+	[MC.Direction.EAST] = 3,
+}
+
+function MC.MakeChestOrient( facing, chestType )
+	local base = ChestOrientByFacing[facing] or ChestOrientByFacing[MC.Direction.NORTH]
+	local offset = chestType == "left" and 4 or chestType == "right" and 8 or 0
+	return base + offset
+end
+
+function MC.ChestOrientFacing( orient )
+	local base = math.floor( tonumber( orient ) or 0 ) % 4
+	if base == 1 then return MC.Direction.SOUTH end
+	if base == 2 then return MC.Direction.WEST end
+	if base == 3 then return MC.Direction.EAST end
+	return MC.Direction.NORTH
+end
+
+function MC.ChestOrientType( orient )
+	local group = math.floor( tonumber( orient ) or 0 ) / 4
+	group = math.floor( group ) % 3
+	return group == 1 and "left" or group == 2 and "right" or "single"
+end
+
 local function reverseValues( values )
 	local out = {}
 	for _, v in pairs( values ) do out[v] = true end
@@ -724,6 +756,15 @@ MC.OrientRules = {
 		default = 0,
 		allowed = { [0] = true, [1] = true, [2] = true, [3] = true, [4] = true, [5] = true, [6] = true, [7] = true },
 		order = { 0, 1, 2, 3, 4, 5, 6, 7 },
+	},
+	chest = {
+		default = 0,
+		allowed = (function()
+			local allowed = {}
+			for i = 0, 11 do allowed[i] = true end
+			return allowed
+		end)(),
+		order = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 },
 	},
 }
 MC.OrientRules.horizontal_facing.allowed = reverseValues( MC.OrientRules.horizontal_facing.values )
@@ -863,6 +904,11 @@ function MC.OrientToState( id, orient )
 		orient = MC.NormalizeOrient( id, orient )
 		return ( DirectionName[MC.BedOrientFacing( orient )] or "north" ) .. "," .. MC.BedOrientPart( orient )
 	end
+	if b.orient == "chest" then
+		orient = MC.NormalizeOrient( id, orient )
+		return "facing=" .. ( DirectionName[MC.ChestOrientFacing( orient )] or "north" ) ..
+			",type=" .. MC.ChestOrientType( orient )
+	end
 	return rule.names[MC.NormalizeOrient( id, orient )] or ""
 end
 
@@ -898,6 +944,11 @@ function MC.BlockStateText( id, orient )
 		local facing = DirectionName[MC.BedOrientFacing( orient )] or "north"
 		return "facing=" .. facing .. ",part=" .. MC.BedOrientPart( orient )
 	end
+	if b.orient == "chest" then
+		orient = MC.NormalizeOrient( id, orient )
+		local facing = DirectionName[MC.ChestOrientFacing( orient )] or "north"
+		return "facing=" .. facing .. ",type=" .. MC.ChestOrientType( orient )
+	end
 	local state = MC.OrientToState( id, orient )
 	if state == "" then return "" end
 	return ( b.orient == "axis" and "axis=" or "facing=" ) .. state
@@ -912,6 +963,7 @@ function MC.BlockStateHint( id )
 	if b.orient == "door" then return "facing=north/south/west/east,half=lower/upper,hinge=left/right,open=true/false,powered=true/false" end
 	if b.orient == "trapdoor" then return "facing=north/south/west/east,half=top/bottom,open=true/false,powered=true/false" end
 	if b.orient == "bed" then return "facing=north/south/west/east,part=foot/head" end
+	if b.orient == "chest" then return "facing=north/south/west/east,type=single/left/right" end
 	local names = {}
 	for _, value in ipairs( rule.order ) do names[#names + 1] = rule.names[value] end
 	return ( b.orient == "axis" and "axis=" or "facing=" ) .. table.concat( names, "/" )
@@ -1021,6 +1073,13 @@ function MC.StateToOrient( id, state )
 		if part ~= "head" then part = "foot" end
 		return facing and MC.MakeBedOrient( facing, part ) or MC.DefaultOrient( id )
 	end
+	if b.orient == "chest" then
+		local facing = map and DirectionValue[map.facing] or DirectionValue[trim( state )]
+		if not HorizontalPartBaseByFacing[facing] then facing = nil end
+		local chestType = map and map.type or "single"
+		if chestType ~= "left" and chestType ~= "right" then chestType = "single" end
+		return facing and MC.MakeChestOrient( facing, chestType ) or MC.DefaultOrient( id )
+	end
 	local value, validKey = simpleOrientStateValue( b, state, map )
 	if not validKey or not value or value == "" then return MC.DefaultOrient( id ) end
 	return rule.values[value] or MC.DefaultOrient( id )
@@ -1078,6 +1137,13 @@ function MC.IsOrientStateValid( id, state )
 			return HorizontalPartBaseByFacing[facing] ~= nil and ( part == "foot" or part == "head" )
 		end
 		return HorizontalPartBaseByFacing[DirectionValue[trim( string.lower( tostring( state ) ) )]] ~= nil
+	end
+	if b.orient == "chest" then
+		if not map then return false end
+		local facing = DirectionValue[map.facing]
+		local chestType = map.type or "single"
+		return HorizontalPartBaseByFacing[facing] ~= nil
+			and ( chestType == "single" or chestType == "left" or chestType == "right" )
 	end
 	local value, validKey = simpleOrientStateValue( b, state, map )
 	return validKey and value ~= nil and rule.values[value] ~= nil
@@ -1266,6 +1332,9 @@ function MC.OrientForPlacement( ply, tr, id )
 	end
 	if b and b.orient == "bed" then
 		return MC.MakeBedOrient( horizontalLookDirectionFromForward( forward ), "foot" )
+	end
+	if b and b.orient == "chest" then
+		return MC.MakeChestOrient( horizontalLookDirectionFromForward( forward ), "single" )
 	end
 	return MC.OrientForVectors( id, forward, tr and tr.HitNormal or nil )
 end
