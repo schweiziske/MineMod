@@ -115,11 +115,19 @@ function SWEP:Reload()
 		if game.SinglePlayer() then self:CallOnClient( "OpenInventoryClient" ) end
 		return
 	end
-	self:OpenInventoryClient()
+	if MC.InventoryUI and MC.InventoryUI.ToggleFromWeapon then
+		MC.InventoryUI.ToggleFromWeapon( self )
+	else
+		self:OpenInventoryClient()
+	end
 end
 
 function SWEP:OpenInventoryClient()
 	if not CLIENT then return end
+	if MC.InventoryUI and MC.InventoryUI.ToggleFromWeapon then
+		MC.InventoryUI.ToggleFromWeapon( self )
+		return
+	end
 	if MC.InventoryUI and IsValid( MC.InventoryUI.Screen ) then return end
 	if MC.RequestInventoryOpen then MC.RequestInventoryOpen() end
 end

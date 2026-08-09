@@ -183,6 +183,7 @@ local CLIENT_FILES = {
 	"mc/inventory/cl_network.lua",
 	"mc/inventory/ui/cl_theme.lua",
 	"mc/item/cl_model_resolver.lua",
+	"mc/inventory/ui/cl_entry.lua",
 	"mc/inventory/ui/cl_item_renderer.lua",
 	"mc/inventory/ui/cl_tooltip.lua",
 	"mc/inventory/ui/cl_slot.lua",
