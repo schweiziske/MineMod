@@ -2,9 +2,9 @@
 	Authoritative inventory/container transport.
 
 	The player inventory and chest menus share one ordered action protocol.  A
-	chest menu is a temporary container whose chest slots point at block-entity
-	storage and whose trailing slots point at the same 36 player slots.  The
-	server never accepts arbitrary client stacks.
+	chest and crafting menus are temporary containers whose external slots point
+	into block/transient storage and whose trailing slots point at the same 36
+	player slots.  The server never accepts arbitrary client stacks.
 ------------------------------------------------------------------------------]]
 
 MC = MC or {}
@@ -62,6 +62,10 @@ local function menuState( record )
 		slotCount = #container.slots,
 		playerOffset = session and session.playerOffset or 0,
 		chestSlots = session and session.chestSlots or 0,
+		crafting = session and session.crafting == true or false,
+		craftingWidth = session and session.craftingWidth or 0,
+		craftingHeight = session and session.craftingHeight or 0,
+		resultSlot = session and session.resultSlot or 0,
 		items = {},
 		playerItems = {},
 	}
@@ -174,7 +178,7 @@ end
 
 function SV.PublishPlayerInventoryCommit( record, result, context )
 	local session = record and record.session
-	if session and session.kind ~= "player" then
+	if session and ( session.kind ~= "player" or session.crafting == true or ( tonumber( session.playerOffset ) or 0 ) ~= 0 ) then
 		session.container.revision = math.max( session.container.revision + 1, record.container.revision )
 		local mapped = { changedSlots = {} }
 		for _, index in ipairs( result and result.changedSlots or {} ) do
@@ -212,13 +216,17 @@ function SV.SendActiveInventoryOpen( ply, record, reason )
 		net.WriteString( session.token )
 		net.WriteUInt( container.revision, 32 )
 		net.WriteUInt( record.selected, 4 )
-		net.WriteBool( session.kind == "player" and creativeAllowed( ply ) or false )
+		net.WriteBool( session.creative == true )
 		net.WriteString( string.sub( tostring( reason or session.kind or "player" ), 1, 64 ) )
 		MC.WriteItemStackNet( container.cursor )
 		net.WriteString( tostring( session.kind or "player" ) )
 		net.WriteUInt( math.Clamp( #container.slots, 0, MAX_MENU_SLOTS ), 8 )
 		net.WriteUInt( math.Clamp( math.floor( tonumber( session.playerOffset ) or 0 ), 0, MAX_MENU_SLOTS ), 8 )
 		net.WriteUInt( math.Clamp( math.floor( tonumber( session.chestSlots ) or 0 ), 0, MAX_MENU_SLOTS ), 8 )
+		net.WriteBool( session.crafting == true )
+		net.WriteUInt( math.Clamp( math.floor( tonumber( session.craftingWidth ) or 0 ), 0, 15 ), 4 )
+		net.WriteUInt( math.Clamp( math.floor( tonumber( session.craftingHeight ) or 0 ), 0, 15 ), 4 )
+		net.WriteUInt( math.Clamp( math.floor( tonumber( session.resultSlot ) or 0 ), 0, MAX_MENU_SLOTS ), 8 )
 	net.Send( ply )
 	SV.SendActiveInventorySnapshot( ply, "open" )
 	return true
@@ -233,17 +241,44 @@ function SV.OpenPlayerInventory( ply, reason )
 	record.lastOpenRequest = now
 	if record.session and record.session.kind ~= "player" then SV.ClosePlayerInventory( ply, "switch" ) end
 	if not record.session then
-		record.container.cursor = MC.CopyItemStack( record.carried )
-		record.carried = nil
-		record.session = {
-			token = newSessionToken( ply, record, "player" ),
-			kind = "player",
-			container = record.container,
-			openedAt = now,
-			lastActionId = nil,
-			playerOffset = 0,
-			chestSlots = 0,
-		}
+		-- The vanilla creative inventory is a separate screen without the
+		-- survival 2x2 grid.  Keep its historical zero-based player container so
+		-- creative-pick actions continue to target hotbar slots 0..8.
+		local menu, playerOffset = not creativeAllowed( ply ) and SV.BuildPlayerCraftingMenu
+			and SV.BuildPlayerCraftingMenu( ply, record ) or nil
+		if menu then
+			menu.cursor = MC.CopyItemStack( record.carried )
+			record.carried = nil
+			record.session = {
+				token = newSessionToken( ply, record, "player" ),
+				kind = "player",
+				container = menu,
+				openedAt = now,
+				lastActionId = nil,
+				crafting = true,
+				creative = false,
+				craftingWidth = 2,
+				craftingHeight = 2,
+				resultSlot = 0,
+				playerOffset = playerOffset,
+				chestSlots = 0,
+			}
+		else
+			-- Keep the old direct inventory fallback available during a partial
+			-- hot-reload or when an external addon replaces the crafting provider.
+			record.container.cursor = MC.CopyItemStack( record.carried )
+			record.carried = nil
+			record.session = {
+				token = newSessionToken( ply, record, "player" ),
+				kind = "player",
+				container = record.container,
+				openedAt = now,
+				lastActionId = nil,
+				playerOffset = 0,
+				chestSlots = 0,
+				creative = creativeAllowed( ply ),
+			}
+		end
 	end
 	return SV.SendActiveInventoryOpen( ply, record, reason or "player" )
 end
@@ -254,7 +289,7 @@ local function returnCarriedToPlayer( record, context )
 	if not container or MC.IsEmptyItemStack( container.cursor ) then return end
 	local carried = MC.CopyItemStack( container.cursor )
 	container.cursor = nil
-	if session and session.kind == "player" then
+	if session and session.kind == "player" and session.crafting ~= true then
 		local snapshot = MC.ContainerSnapshot( container )
 		local targets = {}
 		for slot = 0, 35 do targets[#targets + 1] = slot end
@@ -269,9 +304,10 @@ local function returnCarriedToPlayer( record, context )
 	for slot = 0, 35 do targets[#targets + 1] = slot end
 	local remaining = select( 1, MC.ContainerMoveStackTo( playerContainer, carried, targets, context or {} ) )
 	record.carried = MC.CopyItemStack( remaining )
+	if not MC.IsEmptyItemStack( remaining ) then record.dirty = true end
 	local changed = MC.ContainerChangedSlots( playerContainer, snapshot )
 	if #changed > 0 then
-		playerContainer.revision = playerContainer.revision + 1
+		playerContainer.revision = math.max( playerContainer.revision + 1, container.revision or 0 )
 		record.revision = playerContainer.revision
 		record.dirty = true
 		if SV.UpdatePlayerHeldNetwork then SV.UpdatePlayerHeldNetwork( record ) end
@@ -283,6 +319,10 @@ function SV.ClosePlayerInventory( ply, reason, token )
 	if not record or not record.session then return false, "inventory_not_open" end
 	if token and token ~= "" and token ~= record.session.token then return false, "invalid_session" end
 	local session = record.session
+	local wasCrafting = session.crafting == true
+	if session.crafting == true and SV.CloseCraftingMenu then
+		SV.CloseCraftingMenu( record, session, { reason = "close" } )
+	end
 	returnCarriedToPlayer( record, { reason = "close" } )
 	if IsValid( ply ) then
 		net.Start( "mc_inventory_close" )
@@ -292,6 +332,9 @@ function SV.ClosePlayerInventory( ply, reason, token )
 		net.Send( ply )
 	end
 	record.session = nil
+	if wasCrafting and IsValid( ply ) and SV.SendActiveInventorySnapshot then
+		SV.SendActiveInventorySnapshot( ply, "crafting_close" )
+	end
 	return true
 end
 
@@ -334,7 +377,7 @@ net.Receive( "mc_inventory_action", function( _, ply )
 	session.lastActivity = CurTime()
 	local context = {
 		player = ply, actionId = actionId,
-		creative = session.kind == "player" and creativeAllowed( ply ) or false,
+		creative = session.creative == true,
 		canDrop = type( SV.SpawnItemDrop ) == "function",
 	}
 	local result = MC.ExecuteContainerInput( container, {
@@ -358,7 +401,7 @@ net.Receive( "mc_inventory_creative_pick", function( _, ply )
 	local record = SV.GetPlayerInventoryRecord( ply, false )
 	local session, container = record and record.session, record and activeContainer( record )
 	if not record or not session or not container then return end
-	if session.kind ~= "player" or containerId ~= container.id or token ~= session.token then sendRejected( record, actionId, "invalid_session", true ) return end
+	if session.kind ~= "player" or session.creative ~= true or containerId ~= container.id or token ~= session.token then sendRejected( record, actionId, "invalid_session", true ) return end
 	if not sessionStillValid( session ) then sendRejected( record, actionId, "container_unavailable", false ) return end
 	if not actionRateAllowed( record ) then sendRejected( record, actionId, "rate_limited", false ) return end
 	if not actionSequenceAllowed( session, actionId ) then sendRejected( record, actionId, "stale_action", true ) return end
@@ -408,6 +451,9 @@ end )
 hook.Add( "PlayerDisconnected", "mc_inventory_network_cleanup", function( ply )
 	local record = SV.GetPlayerInventoryRecord( ply, false )
 	if not record then return end
+	if record.session and record.session.crafting == true and SV.CloseCraftingMenu then
+		SV.CloseCraftingMenu( record, record.session, { reason = "disconnect" } )
+	end
 	returnCarriedToPlayer( record, { reason = "disconnect" } )
 	record.session = nil
 end )

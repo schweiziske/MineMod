@@ -59,6 +59,15 @@ function MC.ApplyClientInventorySnapshot( data )
 	if slotCount < 1 or slotCount > 127 then return false, "invalid_inventory_slot_count" end
 	local playerOffset = math.floor( tonumber( data.playerOffset ) or 0 )
 	if playerOffset < 0 or playerOffset + 36 > slotCount then return false, "invalid_player_slot_offset" end
+	local crafting = data.crafting == true
+	local craftingWidth = math.floor( tonumber( data.craftingWidth ) or 0 )
+	local craftingHeight = math.floor( tonumber( data.craftingHeight ) or 0 )
+	local resultSlot = math.floor( tonumber( data.resultSlot ) or 0 )
+	if crafting and ( craftingWidth < 1 or craftingHeight < 1 or craftingWidth * craftingHeight > 9
+		or resultSlot < 0 or resultSlot >= slotCount
+		or playerOffset < resultSlot + craftingWidth * craftingHeight + 1 ) then
+		return false, "invalid_crafting_menu"
+	end
 	local menuSlots, menuError = decodeEntries( data.items, slotCount, "invalid_inventory_menu_slot" )
 	if not menuSlots then return false, menuError end
 	local playerSlots
@@ -74,6 +83,10 @@ function MC.ApplyClientInventorySnapshot( data )
 		slotCount = slotCount,
 		playerOffset = playerOffset,
 		chestSlots = math.max( 0, math.floor( tonumber( data.chestSlots ) or 0 ) ),
+		crafting = crafting,
+		craftingWidth = math.max( 0, craftingWidth ),
+		craftingHeight = math.max( 0, craftingHeight ),
+		resultSlot = math.max( 0, resultSlot ),
 		slots = menuSlots,
 	}
 	State.revision = math.max( 0, math.floor( tonumber( data.revision ) or 0 ) )

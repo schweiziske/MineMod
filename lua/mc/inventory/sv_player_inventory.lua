@@ -360,12 +360,20 @@ end )
 hook.Add( "PlayerDisconnected", "mc_player_inventory_save", function( ply )
 	local record = SV.PlayerInventories[ply]
 	if not record then return end
+	if record.session and SV.ClosePlayerInventory then
+		-- Return transient crafting inputs/cursor before the persistence hook
+		-- serializes the 36-slot player inventory.
+		SV.ClosePlayerInventory( ply, "disconnect" )
+	end
 	SV.SavePlayerInventory( record, true )
 	SV.PlayerInventories[ply] = nil
 end )
 
 hook.Add( "ShutDown", "mc_player_inventory_shutdown_save", function()
-	for _, record in pairs( SV.PlayerInventories ) do SV.SavePlayerInventory( record, true ) end
+	for _, record in pairs( SV.PlayerInventories ) do
+		if record.session and SV.ClosePlayerInventory then SV.ClosePlayerInventory( record.owner, "shutdown" ) end
+		SV.SavePlayerInventory( record, true )
+	end
 end )
 
 timer.Create( "mc_player_inventory_autosave", SAVE_INTERVAL, 0, function()

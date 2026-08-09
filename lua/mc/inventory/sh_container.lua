@@ -29,6 +29,7 @@ function MC.NewInventoryContainer( options )
 		cursor = nil,
 		quickCraft = { status = 0, type = 0, slots = {} },
 		context = options.context,
+		beforeCommit = options.beforeCommit,
 		onCommit = options.onCommit,
 	}
 	if options.cursor ~= nil then

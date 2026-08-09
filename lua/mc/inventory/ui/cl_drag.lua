@@ -180,7 +180,7 @@ function Drag.HandleNumberKey( slot, hotbarIndex )
 end
 
 function Drag.HandleThrowKey( slot )
-	if not IsValid( slot ) or not slot:IsInventorySlot() then return false end
+	if not IsValid( slot ) or not slot:IsInventorySlot() or slot.Kind == "result" then return false end
 	return MC.QueueInventoryInput( MC.ContainerInput.THROW, slot:GetActionIndex(), controlDown() and 1 or 0 )
 end
 

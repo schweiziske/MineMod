@@ -38,8 +38,8 @@ function PANEL:SetInventorySlot( index, menuIndex )
 	return self
 end
 
-function PANEL:SetMenuSlot( index, playerIndex )
-	self.Kind = "menu"
+function PANEL:SetMenuSlot( index, playerIndex, role )
+	self.Kind = role == "result" and "result" or "menu"
 	self.MenuIndex = math.floor( tonumber( index ) or -1 )
 	self.InventoryIndex = playerIndex ~= nil and math.floor( tonumber( playerIndex ) or -1 ) or nil
 	self:RefreshInventoryStack()
@@ -64,7 +64,7 @@ function PANEL:SetDestroySlot()
 end
 
 function PANEL:RefreshInventoryStack()
-	if ( self.Kind ~= "inventory" and self.Kind ~= "menu" ) or self.MenuIndex == nil then return end
+	if ( self.Kind ~= "inventory" and self.Kind ~= "menu" and self.Kind ~= "result" ) or self.MenuIndex == nil then return end
 	local state = MC.ClientInventory
 	self.Stack = state and state.menu and MC.CopyItemStack( state.menu.slots[self.MenuIndex + 1] ) or nil
 end
@@ -74,13 +74,13 @@ function PANEL:GetStack()
 end
 
 function PANEL:IsInventorySlot()
-	return ( self.Kind == "inventory" or self.Kind == "menu" ) and self.MenuIndex ~= nil
+	return ( self.Kind == "inventory" or self.Kind == "menu" or self.Kind == "result" ) and self.MenuIndex ~= nil
 end
 
 function PANEL:GetActionIndex() return self.MenuIndex end
 
 function PANEL:CanQuickCraft()
-	return self:IsInventorySlot()
+	return self:IsInventorySlot() and self.Kind ~= "result"
 end
 
 function PANEL:Paint( w, h )

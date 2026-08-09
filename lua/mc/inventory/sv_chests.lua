@@ -257,6 +257,7 @@ function SV.OpenChest( ply, bx, by, bz )
 		token = sessionToken( ply, record ),
 		kind = "chest",
 		container = menu,
+		creative = false,
 		openedAt = now,
 		lastActionId = nil,
 		chestRecords = menu.chestRecords,

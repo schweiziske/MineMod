@@ -77,6 +77,10 @@ local function executePickup( container, slotIndex, button, state, context )
 	if slotIndex == OUTSIDE_SLOT then return pickupOutside( container, button, state, context ) end
 	local slot = MC.ContainerGetSlot( container, slotIndex )
 	if not slot then return false, "invalid_slot" end
+	if slot.meta and slot.meta.role == "result" then
+		if type( container.takeResult ) ~= "function" then return false, "result_unavailable" end
+		return container.takeResult( container, slotIndex, button, state, context, "pickup" )
+	end
 
 	local clicked = MC.InventorySlotGet( slot )
 	local carried = container.cursor
@@ -120,8 +124,13 @@ local function executePickup( container, slotIndex, button, state, context )
 	return true
 end
 
-local function executeQuickMove( container, slotIndex, context )
+local function executeQuickMove( container, slotIndex, state, context )
 	if slotIndex < 0 then return false, "invalid_slot" end
+	local slot = MC.ContainerGetSlot( container, slotIndex )
+	if slot and slot.meta and slot.meta.role == "result" then
+		if type( container.takeResult ) ~= "function" then return false, "result_unavailable" end
+		return container.takeResult( container, slotIndex, 0, state, context, "quick_move" )
+	end
 	return MC.ContainerQuickMove( container, slotIndex, context )
 end
 
@@ -138,6 +147,14 @@ end
 local function executeSwap( container, slotIndex, button, state, context )
 	if button < 0 or button > 8 then return false, "invalid_hotbar_button" end
 	local target = MC.ContainerGetSlot( container, slotIndex )
+	if target and target.meta and target.meta.role == "result" then
+		-- Vanilla treats a number-key click on a result as taking the crafted
+		-- output into the selected hotbar slot.  The crafting menu may opt into
+		-- this path; otherwise reject it rather than exposing a normal storage
+		-- swap that could duplicate the output.
+		if type( container.takeResult ) ~= "function" then return false, "result_unavailable" end
+		return container.takeResult( container, slotIndex, button, state, context, "swap" )
+	end
 	local hotbarIndex = container.hotbarSlots[button + 1]
 	local hotbar = hotbarIndex ~= nil and MC.ContainerGetSlot( container, hotbarIndex ) or nil
 	if not target or not hotbar then return false, "missing_hotbar_slot" end
@@ -205,6 +222,7 @@ local function executeThrow( container, slotIndex, button, state, context )
 	if not MC.IsEmptyItemStack( container.cursor ) then return true end
 	local slot = MC.ContainerGetSlot( container, slotIndex )
 	if not slot then return false, "invalid_slot" end
+	if slot.meta and slot.meta.role == "result" then return false, "result_cannot_throw" end
 	local stack = MC.InventorySlotGet( slot )
 	if MC.IsEmptyItemStack( stack ) then return true end
 	local amount = button == 0 and 1 or stack.count
@@ -307,6 +325,7 @@ local function executePickupAll( container, slotIndex, button, context )
 			if carried.count >= MC.ItemStackMaxCount( carried ) then break end
 			local stack = MC.InventorySlotGet( slot )
 			if not MC.IsEmptyItemStack( stack ) and MC.ItemStacksCanMerge( stack, carried )
+			and not ( slot.meta and slot.meta.role == "result" )
 			and MC.InventorySlotMayTake( slot, context )
 			and ( pass == 2 or stack.count < MC.ItemStackMaxCount( stack ) ) then
 				local room = MC.ItemStackMaxCount( carried ) - carried.count
@@ -321,7 +340,7 @@ end
 
 local handlers = {
 	[MC.ContainerInput.PICKUP] = executePickup,
-	[MC.ContainerInput.QUICK_MOVE] = function( container, slotIndex, _, _, context ) return executeQuickMove( container, slotIndex, context ) end,
+	[MC.ContainerInput.QUICK_MOVE] = function( container, slotIndex, _, state, context ) return executeQuickMove( container, slotIndex, state, context ) end,
 	[MC.ContainerInput.SWAP] = executeSwap,
 	[MC.ContainerInput.CLONE] = function( container, slotIndex, _, _, context ) return executeClone( container, slotIndex, context ) end,
 	[MC.ContainerInput.THROW] = executeThrow,
@@ -352,6 +371,17 @@ function MC.ExecuteContainerInput( container, request, context )
 			error = called and ( err or "input_rejected" ) or "input_error",
 			revision = container.revision,
 		}
+	end
+	if type( container.beforeCommit ) == "function" then
+		local refreshCalled, refreshOK, refreshError = pcall( container.beforeCommit, container, context or container.context or {} )
+		if not refreshCalled or refreshOK == false then
+			MC.ContainerRestore( container, snapshot )
+			return {
+				ok = false,
+				error = refreshCalled and ( refreshError or "before_commit_rejected" ) or "before_commit_error",
+				revision = container.revision,
+			}
+		end
 	end
 
 	local changedSlots = MC.ContainerChangedSlots( container, snapshot )
