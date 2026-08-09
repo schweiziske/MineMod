@@ -905,6 +905,383 @@ local function startWorkshopDownload( import )
 	end )
 end
 
+local MCB4_SECTION_CELLS = 4096
+local MCB4_OCCUPANCY_BYTES = 512
+local MCB4_BIT_OFFSETS = {}
+
+local function readU16LE( data, offset )
+	local a, b = string.byte( data, offset, offset + 1 )
+	if b == nil then return nil end
+	return a + b * 256
+end
+
+local function readI32LE( data, offset )
+	local a, b, c, d = string.byte( data, offset, offset + 3 )
+	if d == nil then return nil end
+	local value = a + b * 256 + c * 65536 + d * 16777216
+	return value >= 2147483648 and value - 4294967296 or value
+end
+
+local function mcb4BitOffsets( value )
+	local cached = MCB4_BIT_OFFSETS[value]
+	if cached then return cached end
+	local out = {}
+	for bitIndex = 0, 7 do
+		if bit.band( value, bit.lshift( 1, bitIndex ) ) ~= 0 then out[#out + 1] = bitIndex end
+	end
+	MCB4_BIT_OFFSETS[value] = out
+	return out
+end
+
+local function bitsForPalette( size )
+	local bits, capacity = 0, 1
+	while capacity < size do bits, capacity = bits + 1, capacity * 2 end
+	return bits
+end
+
+local function packedWrite( words, bits, cellIndex, value )
+	if bits <= 0 then return end
+	local bitOffset = cellIndex * bits
+	local wordIndex = math.floor( bitOffset / 32 ) + 1
+	local shift = bitOffset % 32
+	if shift + bits <= 32 then
+		words[wordIndex] = bit.bor( words[wordIndex] or 0, bit.lshift( value, shift ) )
+		return
+	end
+	local lowBits = 32 - shift
+	local lowMask = 2 ^ lowBits - 1
+	words[wordIndex] = bit.bor( words[wordIndex] or 0,
+		bit.lshift( bit.band( value, lowMask ), shift ) )
+	words[wordIndex + 1] = bit.bor( words[wordIndex + 1] or 0, bit.rshift( value, lowBits ) )
+end
+
+local function packedByteValue( data, offset, bitOffset, bits )
+	local byteOffset = math.floor( bitOffset / 8 )
+	local shift = bitOffset % 8
+	local a, b, c = string.byte( data, offset + byteOffset, offset + byteOffset + 2 )
+	local value = ( a or 0 ) + ( b or 0 ) * 256 + ( c or 0 ) * 65536
+	return math.floor( value / 2 ^ shift ) % 2 ^ bits
+end
+
+local function decodeWorkshopMCB4Section( data, cursor, numericPalette, expectedSections )
+	local sectionY = readU16LE( data, cursor )
+	local cellCount = readU16LE( data, cursor + 2 )
+	local paletteCount = readU16LE( data, cursor + 4 )
+	local sourceBits = string.byte( data, cursor + 6 )
+	if sectionY == nil or sectionY >= expectedSections or cellCount == nil or cellCount < 1
+	or cellCount > MCB4_SECTION_CELLS or paletteCount == nil or paletteCount < 1
+	or paletteCount > MCB4_SECTION_CELLS or sourceBits == nil or sourceBits < 1 or sourceBits > 12
+	or paletteCount > 2 ^ sourceBits then return nil, nil, "invalid_fast_section_header" end
+	cursor = cursor + 7
+
+	local sourceStates, seenStates = {}, {}
+	for index = 1, paletteCount do
+		local globalIndex = readU16LE( data, cursor )
+		local stateId = globalIndex ~= nil and numericPalette[globalIndex + 1] or nil
+		if stateId == nil or stateId == 0 or seenStates[stateId] then return nil, nil, "invalid_fast_palette" end
+		sourceStates[index] = stateId
+		seenStates[stateId] = true
+		cursor = cursor + 2
+	end
+
+	local occupancyOffset = cursor
+	local packedOffset = occupancyOffset + MCB4_OCCUPANCY_BYTES
+	local packedBytes = math.ceil( cellCount * sourceBits / 8 )
+	if packedOffset + packedBytes - 1 > #data then return nil, nil, "truncated_fast_section" end
+
+	local hasAir = cellCount < MCB4_SECTION_CELLS
+	local palette = hasAir and { 0 } or {}
+	local paletteIndex = hasAir and { [0] = 0 } or {}
+	local refCount = hasAir and { [0] = MCB4_SECTION_CELLS - cellCount } or {}
+	local paletteOffset = hasAir and 1 or 0
+	for index, stateId in ipairs( sourceStates ) do
+		local runtimeIndex = index - 1 + paletteOffset
+		palette[runtimeIndex + 1] = stateId
+		paletteIndex[stateId] = runtimeIndex
+		refCount[runtimeIndex] = 0
+	end
+	local runtimeBits = bitsForPalette( #palette )
+	local words, occupied = {}, 0
+	for byteIndex = 0, MCB4_OCCUPANCY_BYTES - 1 do
+		local occupancy = string.byte( data, occupancyOffset + byteIndex )
+		if occupancy == nil then return nil, nil, "truncated_fast_occupancy" end
+		for _, bitIndex in ipairs( mcb4BitOffsets( occupancy ) ) do
+			local sourceIndex = packedByteValue( data, packedOffset, occupied * sourceBits, sourceBits )
+			if sourceIndex >= paletteCount then return nil, nil, "fast_palette_index_out_of_range" end
+			local runtimeIndex = sourceIndex + paletteOffset
+			packedWrite( words, runtimeBits, byteIndex * 8 + bitIndex, runtimeIndex )
+			refCount[runtimeIndex] = refCount[runtimeIndex] + 1
+			occupied = occupied + 1
+		end
+	end
+	if occupied ~= cellCount then return nil, nil, "fast_occupancy_count_mismatch" end
+	return {
+		palette = palette,
+		paletteIndex = paletteIndex,
+		refCount = refCount,
+		paletteSize = #palette,
+		bitsPerEntry = runtimeBits,
+		entryMask = 2 ^ runtimeBits - 1,
+		words = words,
+		count = cellCount,
+		deadPaletteEntries = hasAir and refCount[0] == 0 and 1 or 0,
+	}, packedOffset + packedBytes, sectionY
+end
+
+local function workshopChunkCoords( key )
+	local x, y, z = string.match( tostring( key or "" ), "^(%-?%d+):(%-?%d+):(%-?%d+)$" )
+	if not x then return nil end
+	return tonumber( x ), tonumber( y ), tonumber( z )
+end
+
+local function decodeWorkshopFastChunk( fragment, expectedCX, expectedCY, expectedCZ, numericPalette )
+	local cx, cy, cz = readI32LE( fragment, 1 ), readI32LE( fragment, 5 ), readI32LE( fragment, 9 )
+	local totalCount, sectionCount = readU16LE( fragment, 13 ), readU16LE( fragment, 15 )
+	if cx ~= expectedCX or cy ~= expectedCY or cz ~= expectedCZ then return nil, "fast_coordinate_mismatch" end
+	local expectedSections = math.floor( ( MC.CH or 32 ) / 16 )
+	if totalCount == nil or totalCount > ( MC.CS or 16 ) * ( MC.CS or 16 ) * ( MC.CH or 32 )
+	or sectionCount == nil or sectionCount > expectedSections then return nil, "invalid_fast_header" end
+	local sections, seen, decodedCount, cursor = {}, {}, 0, 17
+	for _ = 1, sectionCount do
+		local section, nextCursor, sectionYOrError = decodeWorkshopMCB4Section(
+			fragment, cursor, numericPalette, expectedSections )
+		if not section then return nil, sectionYOrError end
+		if seen[sectionYOrError] then return nil, "duplicate_fast_section" end
+		seen[sectionYOrError] = true
+		sections[sectionYOrError + 1] = section
+		decodedCount = decodedCount + section.count
+		cursor = nextCursor
+	end
+	if decodedCount ~= totalCount or cursor ~= #fragment + 1 then return nil, "fast_length_or_count_mismatch" end
+	return { cx = cx, cy = cy, cz = cz, count = decodedCount, sections = sections, blockEntities = {} }
+end
+
+local function decodeWorkshopJSONFile( raw )
+	if not isstring( raw ) or raw == "" then return nil end
+	local json = string.sub( raw, 1, 1 ) == "{" and raw or util.Decompress( raw )
+	return json and util.JSONToTable( json ) or nil
+end
+
+local function buildWorkshopNumericPalette( manifest )
+	local out = {}
+	for index, spec in ipairs( manifest.p or {} ) do
+		local stateId = MC.ParseBlockState and MC.ParseBlockState( spec ) or nil
+		if stateId == nil or stateId == 0 or MC.IsValidBlockState and not MC.IsValidBlockState( stateId ) then
+			return nil, "invalid_workshop_palette:" .. tostring( index )
+		end
+		out[index] = stateId
+	end
+	return out
+end
+
+local function decodeWorkshopSideChunk( record, numericPalette )
+	if not istable( record ) or #record < 4 then return nil, "invalid_side_chunk" end
+	local cx, cy, cz = tonumber( record[1] ), tonumber( record[2] ), tonumber( record[3] )
+	if not cx or not cy or not cz or cx ~= math.floor( cx ) or cy ~= math.floor( cy ) or cz ~= math.floor( cz ) then
+		return nil, "invalid_side_chunk_coords"
+	end
+	local sections = { MC.StateSection.New(), MC.StateSection.New() }
+	local cells, seen = record[4], {}
+	local function apply( localIndexValue, paletteIndexValue )
+		local localIndex = math.floor( tonumber( localIndexValue ) or -1 )
+		local paletteIndex = math.floor( tonumber( paletteIndexValue ) or -1 )
+		local stateId = numericPalette[paletteIndex + 1]
+		if not MC.LocalIndexInRange( localIndex ) or seen[localIndex] or not stateId then return false end
+		seen[localIndex] = true
+		local sectionIndex = math.floor( localIndex / MCB4_SECTION_CELLS ) + 1
+		local changed = MC.StateSection.Set( sections[sectionIndex], localIndex % MCB4_SECTION_CELLS, stateId )
+		return changed ~= nil
+	end
+	if isstring( cells ) then
+		for entry in string.gmatch( cells, "[^;]+" ) do
+			local li, pi = string.match( entry, "^(-?%d+):(-?%d+)$" )
+			if not li or not apply( li, pi ) then return nil, "invalid_side_cell" end
+		end
+	elseif istable( cells ) and #cells % 2 == 0 then
+		for index = 1, #cells, 2 do
+			if not apply( cells[index], cells[index + 1] ) then return nil, "invalid_side_cell" end
+		end
+	else
+		return nil, "invalid_side_cells"
+	end
+	return {
+		cx = cx,
+		cy = cy,
+		cz = cz,
+		count = ( sections[1].count or 0 ) + ( sections[2].count or 0 ),
+		sections = sections,
+		blockEntities = istable( record[5] ) and record[5] or {},
+	}
+end
+
+local function removeWorkshopBlockEntity( item, localIndex )
+	for index = #( item.blockEntities or {} ), 1, -1 do
+		local envelope = item.blockEntities[index]
+		if istable( envelope ) and math.floor( tonumber( envelope.localIndex ) or -1 ) == localIndex then
+			table.remove( item.blockEntities, index )
+		end
+	end
+end
+
+local function applyWorkshopOverlay( decoded, manifest, itemsByKey )
+	local overlayRaw = manifest.editOverlay and decoded.files[manifest.editOverlay] or nil
+	if not overlayRaw then return true, nil end
+	local overlay = decodeWorkshopJSONFile( overlayRaw )
+	if not istable( overlay ) or not istable( overlay.edits ) then return false, "invalid_workshop_overlay" end
+	for key, edits in pairs( overlay.edits ) do
+		local cx, cy, cz = workshopChunkCoords( key )
+		if not cx or not istable( edits ) then return false, "invalid_workshop_overlay_chunk" end
+		local item = itemsByKey[key]
+		if not item then
+			item = {
+				cx = cx, cy = cy, cz = cz, count = 0,
+				sections = { MC.StateSection.New(), MC.StateSection.New() },
+				blockEntities = {},
+			}
+			itemsByKey[key] = item
+		end
+		for localIndexText, edit in pairs( edits ) do
+			local localIndex = math.floor( tonumber( localIndexText ) or -1 )
+			if not MC.LocalIndexInRange( localIndex ) or not istable( edit ) then
+				return false, "invalid_workshop_overlay_cell"
+			end
+			local stateId = isstring( edit.state ) and MC.ParseBlockState( edit.state )
+				or MC.StateFromLegacy( edit.id, edit.orient )
+			if stateId == nil or MC.IsValidBlockState and not MC.IsValidBlockState( stateId ) then
+				return false, "invalid_workshop_overlay_state"
+			end
+			local sectionIndex = math.floor( localIndex / MCB4_SECTION_CELLS ) + 1
+			local section = item.sections[sectionIndex] or MC.StateSection.New()
+			item.sections[sectionIndex] = section
+			if MC.StateSection.Set( section, localIndex % MCB4_SECTION_CELLS, stateId ) == nil then
+				return false, "workshop_overlay_write_failed"
+			end
+			removeWorkshopBlockEntity( item, localIndex )
+		end
+		item.count = ( item.sections[1] and item.sections[1].count or 0 )
+			+ ( item.sections[2] and item.sections[2].count or 0 )
+	end
+	return true, overlay
+end
+
+local function buildWorkshopBinaryWorld( decoded )
+	if not decoded or not istable( decoded.files ) then return nil, "invalid_workshop_world" end
+	local manifest = decodeWorkshopJSONFile( decoded.files["manifest.json"] )
+	if not istable( manifest ) or not istable( manifest.parts ) or not istable( manifest.chunkIndex ) then
+		return nil, "invalid_workshop_manifest"
+	end
+	local expectedHash = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or nil
+	if expectedHash and manifest.schemaHash ~= expectedHash then return nil, "state_registry_mismatch" end
+	if math.floor( tonumber( manifest.cs ) or -1 ) ~= MC.CS
+	or math.floor( tonumber( manifest.h ) or -1 ) ~= MC.CH or MC.CH ~= 32 then
+		return nil, "chunk_geometry_mismatch"
+	end
+	local numericPalette, paletteError = buildWorkshopNumericPalette( manifest )
+	if not numericPalette then return nil, paletteError end
+
+	local itemsByKey, sideCache, keys = {}, {}, {}
+	for key in pairs( manifest.chunkIndex ) do keys[#keys + 1] = key end
+	table.sort( keys )
+	for _, key in ipairs( keys ) do
+		local entry = manifest.chunkIndex[key]
+		local part = manifest.parts[math.floor( tonumber( entry.part ) or 0 )]
+		local cx, cy, cz = workshopChunkCoords( key )
+		if not part or not cx then return nil, "invalid_workshop_chunk_index" end
+		local item, itemError
+		if entry.fastOffset ~= nil and entry.fastBytes ~= nil then
+			local raw = part.fastPath and decoded.files[part.fastPath] or nil
+			local offset = math.floor( tonumber( entry.fastOffset ) or -1 )
+			local bytes = math.floor( tonumber( entry.fastBytes ) or -1 )
+			local fragment = raw and offset >= 0 and bytes >= 16
+				and string.sub( raw, offset + 1, offset + bytes ) or nil
+			if not fragment or #fragment ~= bytes then return nil, "workshop_fast_range_failed" end
+			item, itemError = decodeWorkshopFastChunk( fragment, cx, cy, cz, numericPalette )
+		else
+			local sidePath = part.path
+			local side = sideCache[sidePath]
+			if side == nil then
+				side = decodeWorkshopJSONFile( sidePath and decoded.files[sidePath] ) or false
+				sideCache[sidePath] = side
+			end
+			local index = math.floor( tonumber( entry.index ) or 0 )
+			if side then item, itemError = decodeWorkshopSideChunk( side.chunks and side.chunks[index], numericPalette )
+			else itemError = "invalid_workshop_side_part" end
+		end
+		if not item then return nil, itemError or "workshop_chunk_decode_failed" end
+		itemsByKey[key] = item
+	end
+
+	local overlayOK, overlayOrError = applyWorkshopOverlay( decoded, manifest, itemsByKey )
+	if not overlayOK then return nil, overlayOrError end
+	local chunks, blocks = {}, 0
+	for _, item in pairs( itemsByKey ) do
+		chunks[#chunks + 1] = item
+		blocks = blocks + math.max( 0, math.floor( tonumber( item.count ) or 0 ) )
+	end
+	table.sort( chunks, function( a, b )
+		if a.cz ~= b.cz then return a.cz < b.cz end
+		if a.cy ~= b.cy then return a.cy < b.cy end
+		return a.cx < b.cx
+	end )
+	local expectedBlocks = math.floor( tonumber( istable( overlayOrError ) and overlayOrError.blockCount
+		or manifest.blockCount ) or -1 )
+	if expectedBlocks >= 0 and expectedBlocks ~= blocks then return nil, "workshop_block_count_mismatch" end
+	return { chunks = chunks, blocks = blocks, manifest = manifest }
+end
+
+W.BuildClientBaseWorldData = buildWorkshopBinaryWorld
+
+local function loadWorkshopBaseWorld( base, decoded )
+	local transport = MC.StateNetworkTransport
+	if not transport or not transport.GetAppliedRevision or not transport.AcceptExternalBase
+	or not MC.ResetClientWorldForStateSync or not MC.LoadBinaryStateChunkPatchData then
+		return false, "workshop_world_loader_unavailable"
+	end
+	local stateGeneration, baseRevision, _, desynced = transport.GetAppliedRevision()
+	if stateGeneration == nil or desynced then return false, "transport_not_ready" end
+	local worldData, worldError = buildWorkshopBinaryWorld( decoded )
+	if not worldData then return false, worldError end
+	local startedAt = SysTime()
+	MC.ResetClientWorldForStateSync( #worldData.chunks, worldData.blocks )
+	if MC.BeginLightingBulkLoad then MC.BeginLightingBulkLoad() end
+	local loaded, result = MC.LoadBinaryStateChunkPatchData( worldData, { fullSnapshot = true } )
+	if loaded ~= true then
+		if MC.CancelLightingBulkLoad then MC.CancelLightingBulkLoad() end
+		MC.ResetClientWorldForStateSync( 0, 0 )
+		return false, result or "workshop_world_load_failed"
+	end
+	if MC.EndLightingBulkLoad then MC.EndLightingBulkLoad() end
+	for _, chunk in ipairs( result.chunks or {} ) do
+		if MC.MarkChunkLoaded then MC.MarkChunkLoaded( chunk.key ) end
+		if MC.MarkChunkDirty then MC.MarkChunkDirty( chunk.key ) end
+	end
+	MC.SyncProgress.expected = worldData.blocks
+	MC.SyncProgress.received = worldData.blocks
+	MC.SyncProgress.chunks = #worldData.chunks
+	MC.SyncProgress.doneChunks = #worldData.chunks
+	MC.SyncProgress.active = false
+	MC.SyncProgress.snapshot = false
+	MC.SyncProgress.workshop = true
+	MC.SyncProgress.lastUpdate = CurTime()
+	if MC.RefreshClientCollisionInterest then MC.RefreshClientCollisionInterest( true ) end
+	if MC.MarkSignRenderEntriesDirty then MC.MarkSignRenderEntriesDirty() end
+	MC.NativeLoadProfile.hydrateMS = ( SysTime() - startedAt ) * 1000
+	MC.NativeLoadProfile.chunks = #worldData.chunks
+	MC.NativeLoadProfile.cells = worldData.blocks
+	local accepted, acceptError = transport.AcceptExternalBase( stateGeneration, baseRevision )
+	if accepted ~= true then
+		MC.ResetClientWorldForStateSync( 0, 0 )
+		return false, acceptError or "workshop_base_adopt_failed"
+	end
+	base.stateGeneration = stateGeneration
+	base.baseRevision = baseRevision
+	base.localChunks = #worldData.chunks
+	base.localBlocks = worldData.blocks
+	MsgN( string.format( "[MC Workshop] loaded base locally from GMA chunks=%u blocks=%u state=%u:%u",
+		#worldData.chunks, worldData.blocks, stateGeneration, baseRevision ) )
+	return true
+end
+
 local function baseDownloadActive( base )
 	return Client.baseRequirement == base and Client.baseDownload == base
 end
@@ -927,9 +1304,12 @@ local function reportBaseReady( base, ready, actualHash, err )
 			packageId = base.packageId,
 			archiveBytes = base.archiveBytes,
 			cachePath = base.cachePath,
+			stateGeneration = base.stateGeneration,
+			baseRevision = base.baseRevision,
 		}
-		setBaseStatus( base, "ready" )
-		MsgN( string.format( "[MC Workshop] base READY %s hash=%s", base.workshopId, base.contentHash ) )
+		setBaseStatus( base, "catching_up" )
+		MsgN( string.format( "[MC Workshop] base loaded locally %s hash=%s; waiting for dirty changes",
+			base.workshopId, base.contentHash ) )
 	else
 		Client.baseReady = nil
 		setBaseStatus( base, "failed", err )
@@ -994,6 +1374,9 @@ local function validateBasePayload( base, payload, softFail, alreadyCached )
 	base.cachePath = cachePath
 	base.decodedMetadata = decoded.metadata
 	base.archiveInfo = archiveInfoOrError
+	setBaseStatus( base, "loading" )
+	local loaded, loadError = loadWorkshopBaseWorld( base, decoded )
+	if loaded ~= true then return reject( loadError or "workshop_world_load_failed", actualHash ) end
 	clearBaseDownload()
 	reportBaseReady( base, true, actualHash )
 	return true
@@ -1289,11 +1672,62 @@ net.Receive( "mc_workshop_upload_result", function()
 	clearImport( true )
 end )
 
+local function acknowledgeDirtyTargetIfReady()
+	local target = Client.baseCatchup
+	local base = Client.baseRequirement
+	local transport = MC.StateNetworkTransport
+	if not target or not base or target.generation ~= base.generation
+	or not transport or not transport.GetAppliedRevision then return false end
+	local stateGeneration, appliedRevision, awaitingSnapshot, desynced = transport.GetAppliedRevision()
+	if desynced or awaitingSnapshot or stateGeneration ~= target.stateGeneration
+	or appliedRevision ~= target.targetRevision then return false end
+	net.Start( "mc_workshop_base_applied" )
+		net.WriteUInt( target.generation, 32 )
+		net.WriteUInt( target.stateGeneration, 32 )
+		net.WriteUInt( target.targetRevision, 32 )
+	net.SendToServer()
+	Client.baseCatchup = nil
+	setBaseStatus( base, "ready" )
+	MsgN( string.format( "[MC Workshop] base READY %s revision=%u dirty=%u",
+		base.workshopId, target.targetRevision, target.dirtyCount ) )
+	return true
+end
+
+hook.Add( "MC.StateRevisionApplied", "MC_WorkshopDirtyTargetAck", function()
+	acknowledgeDirtyTargetIfReady()
+end )
+
+net.Receive( "mc_workshop_dirty_target", function()
+	local generation = net.ReadUInt( 32 )
+	local stateGeneration = net.ReadUInt( 32 )
+	local targetRevision = net.ReadUInt( 32 )
+	local dirtyCount = net.ReadUInt( 32 )
+	local ok = net.ReadBool()
+	local err = net.ReadString()
+	local base = Client.baseRequirement
+	if not base or generation ~= base.generation then return end
+	if not ok then
+		Client.baseCatchup = nil
+		setBaseStatus( base, "failed", err ~= "" and err or "dirty_sync_failed" )
+		MsgN( "[MC Workshop] dirty sync failed: " .. tostring( err ) )
+		return
+	end
+	Client.baseCatchup = {
+		generation = generation,
+		stateGeneration = stateGeneration,
+		targetRevision = targetRevision,
+		dirtyCount = dirtyCount,
+	}
+	setBaseStatus( base, "applying_dirty" )
+	acknowledgeDirtyTargetIfReady()
+end )
+
 net.Receive( "mc_workshop_base_announce", function()
 	local generation = net.ReadUInt( 32 )
 	local active = net.ReadBool()
 	if not active then
 		clearBaseDownload()
+		Client.baseCatchup = nil
 		Client.baseRequirement = nil
 		Client.baseReady = nil
 		setBaseStatus( nil, "inactive" )
@@ -1329,6 +1763,7 @@ net.Receive( "mc_workshop_base_announce", function()
 	end
 
 	clearBaseDownload()
+	Client.baseCatchup = nil
 	local base = {
 		generation = generation,
 		workshopId = workshopId,

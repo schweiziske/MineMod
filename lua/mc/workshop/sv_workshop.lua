@@ -346,6 +346,14 @@ local function announceBaseToAll()
 	for _, ply in ipairs( player.GetHumans() ) do sendBaseAnnouncement( ply ) end
 end
 
+function W.DeactivateServerBase()
+	if not W.ServerBase then return false end
+	W.ServerBase = nil
+	nextBaseGeneration()
+	announceBaseToAll()
+	return true
+end
+
 local function activateBaseForSlot( slotName )
 	local resolved = SV.ResolveSaveSlot and SV.ResolveSaveSlot( slotName ) or nil
 	if not resolved then
@@ -375,16 +383,55 @@ local function activateBaseForSlot( slotName )
 	if archiveBytes < 17 or archiveBytes > W.MAX_WORKSHOP_ARCHIVE_BYTES then archiveBytes = 0 end
 	W.ServerBase = {
 		generation = nextBaseGeneration(),
+		stateGeneration = math.floor( tonumber( SV.WorldGeneration ) or 0 ),
+		baseRevision = math.floor( tonumber( SV.BlockRevision ) or 0 ),
 		slotName = resolved and resolved.name or tostring( slotName or "" ),
 		workshopId = workshopId,
 		contentHash = contentHash,
 		archiveBytes = archiveBytes,
 		packageId = packageId,
 		clients = {},
+		dirtyCells = {},
 	}
-	announceBaseToAll()
-	MsgN( string.format( "[MC Workshop] announced base %s hash=%s slot=%s package=%s",
-		workshopId, contentHash, W.ServerBase.slotName, tostring( packageId or "imported" ) ) )
+	MsgN( string.format( "[MC Workshop] activated base %s hash=%s slot=%s package=%s state=%u:%u",
+		workshopId, contentHash, W.ServerBase.slotName, tostring( packageId or "imported" ),
+		W.ServerBase.stateGeneration, W.ServerBase.baseRevision ) )
+	return true
+end
+
+function W.ActivateLoadedBase( slotName )
+	local resolved = SV.ResolveSaveSlot and SV.ResolveSaveSlot( slotName ) or nil
+	W.ServerLoadedSlot = resolved and ( resolved.key or resolved.name )
+		or ( SV.SaveSlotName and SV.SaveSlotName( slotName ) or W.SafeSlotName( slotName ) )
+	return activateBaseForSlot( slotName )
+end
+
+function W.StateHelloRevisionForPlayer( _, fallback )
+	local base = W.ServerBase
+	if not base or base.stateGeneration ~= SV.WorldGeneration then return fallback end
+	return base.baseRevision
+end
+
+function W.ShouldUseServerBaseForPlayer( ply )
+	local base = W.ServerBase
+	return IsValid( ply ) and not ply:IsBot() and base ~= nil
+		and base.stateGeneration == SV.WorldGeneration
+end
+
+function W.HandleStateHelloAck( ply, stateClient )
+	local base = W.ServerBase
+	if not base or base.stateGeneration ~= SV.WorldGeneration or not IsValid( ply ) or ply:IsBot() then return false end
+	stateClient.ready = false
+	stateClient.protocolReady = true
+	stateClient.workshopBaseGeneration = base.generation
+	base.clients[ply] = {
+		phase = "downloading",
+		ready = nil,
+		appliedRevision = base.baseRevision,
+		updatedAt = CurTime(),
+	}
+	base.allReadyFired = false
+	sendBaseAnnouncement( ply )
 	return true
 end
 
@@ -395,7 +442,7 @@ function W.GetServerBaseReadiness()
 	for _, ply in ipairs( player.GetHumans() ) do
 		local state = base.clients[ply]
 		if state and state.ready == true then ready = ready + 1
-		elseif state and state.ready == false then failed = failed + 1
+		elseif state and state.error then failed = failed + 1
 		else pending = pending + 1 end
 	end
 	return {
@@ -408,6 +455,101 @@ function W.GetServerBaseReadiness()
 		pending = pending,
 		failed = failed,
 	}
+end
+
+local function dirtyCellKey( bx, by, bz )
+	return tostring( bx ) .. ":" .. tostring( by ) .. ":" .. tostring( bz )
+end
+
+local function buildDirtyChanges( base )
+	local out = {}
+	for _, cell in pairs( base and base.dirtyCells or {} ) do
+		local blockEntity = MC.GetBlockEntity and MC.GetBlockEntity( cell.bx, cell.by, cell.bz ) or nil
+		out[#out + 1] = {
+			bx = cell.bx,
+			by = cell.by,
+			bz = cell.bz,
+			stateId = MC.GetBlockState( cell.bx, cell.by, cell.bz ) or 0,
+			blockEntityChanged = true,
+			blockEntity = blockEntity,
+			removeBlockEntity = blockEntity == nil,
+		}
+	end
+	table.sort( out, function( a, b )
+		if a.bz ~= b.bz then return a.bz < b.bz end
+		if a.by ~= b.by then return a.by < b.by end
+		return a.bx < b.bx
+	end )
+	return out
+end
+
+local function sendDirtyTarget( ply, base, targetRevision, dirtyCount, ok, err )
+	if not IsValid( ply ) then return end
+	net.Start( "mc_workshop_dirty_target" )
+		net.WriteUInt( base.generation, 32 )
+		net.WriteUInt( base.stateGeneration, 32 )
+		net.WriteUInt( targetRevision, 32 )
+		net.WriteUInt( math.max( 0, math.floor( tonumber( dirtyCount ) or 0 ) ), 32 )
+		net.WriteBool( ok == true )
+		net.WriteString( tostring( err or "" ) )
+	net.Send( ply )
+end
+
+local function fireAllReadyIfComplete( base )
+	local counts = W.GetServerBaseReadiness()
+	if counts.pending == 0 and counts.failed == 0 and not base.allReadyFired and MC.RunEvent then
+		base.allReadyFired = true
+		MC.RunEvent( "MC.WorkshopBaseReady", base.generation, base.workshopId, base.contentHash )
+	end
+	return counts
+end
+
+local function beginDirtyCatchup( ply, base )
+	local stateClient = SV.StateNetClients and SV.StateNetClients[ply]
+	local client = base and base.clients and base.clients[ply]
+	if not stateClient or stateClient.protocolReady ~= true or not client then return false, "protocol_not_ready" end
+	local appliedRevision = math.floor( tonumber( client.appliedRevision ) or base.baseRevision )
+	local targetRevision = math.floor( tonumber( SV.BlockRevision ) or 0 )
+	if appliedRevision < base.baseRevision or appliedRevision > targetRevision then return false, "revision_mismatch" end
+
+	local changes = buildDirtyChanges( base )
+	local queued, queueError = true, nil
+	stateClient.ready = true
+	if targetRevision > appliedRevision and #changes > 0 then
+		queued, queueError = SV.BroadcastStateTransaction( changes, targetRevision, {
+			recipients = ply,
+			stateStream = true,
+			netPaced = true,
+			stateGroupId = targetRevision > 0 and targetRevision or 1,
+			noSnapshotFallback = true,
+		} )
+	end
+	if queued == true then
+		client.phase = "dirty"
+		client.targetRevision = targetRevision
+		client.dirtyCount = #changes
+		client.updatedAt = CurTime()
+		sendDirtyTarget( ply, base, targetRevision, #changes, true )
+		if targetRevision > appliedRevision then
+			local skipTo = #changes > 0 and targetRevision - 1 or targetRevision
+			if skipTo >= appliedRevision + 1 then
+				local skipped, skipError = SV.SendStateRevisionSkip( ply, appliedRevision + 1, skipTo )
+				if skipped ~= true then queued, queueError = false, skipError or "revision_skip_failed" end
+			end
+		end
+	end
+	stateClient.ready = false
+	if queued ~= true then
+		if SV.ClearReliableNet then SV.ClearReliableNet( ply ) end
+		client.phase = "failed"
+		client.error = queueError or "dirty_sync_failed"
+		client.updatedAt = CurTime()
+		sendDirtyTarget( ply, base, targetRevision, #changes, false, client.error )
+		return false, client.error
+	end
+	MsgN( string.format( "[MC Workshop] dirty catch-up %s base=%s revision=%u->%u cells=%u",
+		ply:Nick(), base.workshopId, appliedRevision, targetRevision, #changes ) )
+	return true
 end
 
 local function makeUploadToken( ply, requestId )
@@ -763,7 +905,11 @@ net.Receive( "mc_workshop_bind_id", function( _, ply )
 			ply:Nick(), slotName, workshopId ) )
 		SV.SendSaveList( ply, L( ply, "workshop.publish_bound", "已关联创意工坊 ID: {id}", { id = workshopId } ), false )
 	end
-	if ok and W.ServerLoadedSlot == slotName then activateBaseForSlot( slotName ) end
+	if ok and W.ServerLoadedSlot == slotName then
+		if SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
+		activateBaseForSlot( slotName )
+		if SV.BeginSync then for _, target in ipairs( player.GetAll() ) do SV.BeginSync( target ) end end
+	end
 end )
 
 net.Receive( "mc_workshop_base_ready", function( _, ply )
@@ -778,39 +924,72 @@ net.Receive( "mc_workshop_base_ready", function( _, ply )
 		ready = false
 		err = "hash_mismatch"
 	end
-	base.clients[ply] = {
-		ready = ready == true,
-		actualHash = actualHash,
-		error = ready and nil or ( err ~= "" and err or "base_not_ready" ),
-		updatedAt = CurTime(),
-	}
-	local counts = W.GetServerBaseReadiness()
-	if ready then
-		MsgN( string.format( "[MC Workshop] %s READY for base %s (%d ready, %d pending, %d failed)",
-			ply:Nick(), base.workshopId, counts.ready, counts.pending, counts.failed ) )
-	else
+	local client = base.clients[ply] or {}
+	base.clients[ply] = client
+	client.actualHash = actualHash
+	client.updatedAt = CurTime()
+	if not ready then
+		client.ready = false
+		client.phase = "failed"
+		client.error = err ~= "" and err or "base_not_ready"
 		base.allReadyFired = false
 		MsgN( string.format( "[MC Workshop] %s failed base %s: %s",
-			ply:Nick(), base.workshopId, base.clients[ply].error ) )
+			ply:Nick(), base.workshopId, client.error ) )
+		return
 	end
-	if counts.pending == 0 and counts.failed == 0 and not base.allReadyFired and MC.RunEvent then
-		base.allReadyFired = true
-		MC.RunEvent( "MC.WorkshopBaseReady", base.generation, base.workshopId, base.contentHash )
+	client.ready = nil
+	client.error = nil
+	client.phase = "base_loaded"
+	client.appliedRevision = base.baseRevision
+	local started, catchupError = beginDirtyCatchup( ply, base )
+	if not started then
+		client.ready = false
+		client.phase = "failed"
+		client.error = catchupError or "dirty_sync_failed"
 	end
 end )
 
-hook.Add( "MC.WorldLoaded", "MC_WorkshopAnnounceLoadedBase", function( _, slotName )
-	local resolved = SV.ResolveSaveSlot and SV.ResolveSaveSlot( slotName ) or nil
-	W.ServerLoadedSlot = resolved and ( resolved.key or resolved.name )
-		or ( SV.SaveSlotName and SV.SaveSlotName( slotName ) or W.SafeSlotName( slotName ) )
-	activateBaseForSlot( slotName )
+net.Receive( "mc_workshop_base_applied", function( _, ply )
+	local generation = net.ReadUInt( 32 )
+	local stateGeneration = net.ReadUInt( 32 )
+	local appliedRevision = net.ReadUInt( 32 )
+	local base = W.ServerBase
+	local client = base and base.clients and base.clients[ply]
+	local stateClient = SV.StateNetClients and SV.StateNetClients[ply]
+	if not base or not client or not stateClient
+		or generation ~= base.generation or stateGeneration ~= base.stateGeneration
+		or appliedRevision ~= client.targetRevision then return end
+	client.appliedRevision = appliedRevision
+	stateClient.appliedRevision = appliedRevision
+	if appliedRevision < SV.BlockRevision then
+		beginDirtyCatchup( ply, base )
+		return
+	end
+	client.phase = "ready"
+	client.ready = true
+	client.error = nil
+	client.updatedAt = CurTime()
+	stateClient.ready = true
+	stateClient.workshopSynced = true
+	local counts = fireAllReadyIfComplete( base )
+	MsgN( string.format( "[MC Workshop] %s READY for base %s at revision %u (%d ready, %d pending, %d failed)",
+		ply:Nick(), base.workshopId, appliedRevision, counts.ready, counts.pending, counts.failed ) )
+	if MC.RunEvent then MC.RunEvent( "MC.PlayerWorldSynced", ply, appliedRevision ) end
 end )
 
-hook.Add( "MC.PlayerWorldSynced", "MC_WorkshopAnnounceBaseToSyncedPlayer", function( ply )
-	if W.ServerBase and W.ServerBase.clients and W.ServerBase.clients[ply] == nil then
-		W.ServerBase.allReadyFired = false
+hook.Add( "MC.BlocksChanged", "MC_WorkshopTrackBaseDirty", function( changes, revision )
+	local base = W.ServerBase
+	if not base or base.stateGeneration ~= SV.WorldGeneration or revision <= base.baseRevision then return end
+	for _, change in ipairs( changes or {} ) do
+		local bx = math.floor( tonumber( change.bx ) or 0 )
+		local by = math.floor( tonumber( change.by ) or 0 )
+		local bz = math.floor( tonumber( change.bz ) or 0 )
+		base.dirtyCells[dirtyCellKey( bx, by, bz )] = { bx = bx, by = by, bz = bz }
 	end
-	sendBaseAnnouncement( ply )
+end )
+
+hook.Add( "MC.WorldCleared", "MC_WorkshopClearBase", function()
+	W.DeactivateServerBase()
 end )
 
 hook.Add( "PlayerDisconnected", "MC_WorkshopClearTransfers", function( ply )

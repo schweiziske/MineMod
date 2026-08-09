@@ -17,7 +17,7 @@ SV.StateNetworkTransportLoaded = true
 
 local SNAPSHOT_PART_BYTES = N.STATE_SNAPSHOT_PART_BYTES
 local STREAM_PART_BYTES = N.STATE_STREAM_PART_BYTES or 30000
-local MAX_STREAM_CELLS = N.MAX_STATE_STREAM_CELLS or 131072
+local MAX_STREAM_CELLS = N.MAX_STATE_STREAM_CELLS or 4294967295
 local CHUNK_PATCH_PART_BYTES = N.CHUNK_PATCH_PART_BYTES or 30000
 local CHUNK_PATCH_MAX_BYTES = N.CHUNK_PATCH_MAX_BYTES or 16777216
 local BLOCK_ENTITY_PAYLOAD_MAX = N.BLOCK_ENTITY_PAYLOAD_MAX
@@ -199,12 +199,23 @@ end
 
 function SV.SendStateHello( ply )
 	if not validPlayer( ply ) then return false, "invalid_player" end
-	SV.StateHelloRevisions[ply] = SV.BlockRevision
+	local helloRevision = SV.BlockRevision
+	if MC.Workshop and MC.Workshop.StateHelloRevisionForPlayer then
+		local override = tonumber( MC.Workshop.StateHelloRevisionForPlayer( ply, helloRevision ) )
+		if override and override >= 0 and override <= N.MAX_REVISION and override == math.floor( override ) then
+			helloRevision = override
+		end
+	end
+	if MC.Workshop and MC.Workshop.ShouldUseServerBaseForPlayer
+	and MC.Workshop.ShouldUseServerBaseForPlayer( ply ) and SV.StateNetClients[ply] then
+		SV.StateNetClients[ply].ready = false
+	end
+	SV.StateHelloRevisions[ply] = helloRevision
 	net.Start( "mc_state_hello" )
 		net.WriteUInt( N.PROTOCOL_VERSION, 16 )
 		net.WriteUInt( ALL_CAPABILITIES, N.CAPABILITY_BITS )
 		net.WriteUInt( SV.WorldGeneration, N.GENERATION_BITS )
-		net.WriteUInt( SV.BlockRevision, N.REVISION_BITS )
+		net.WriteUInt( helloRevision, N.REVISION_BITS )
 		net.WriteUInt( math.min( N.MAX_STATE_ID, math.max( 0, ( MC.BlockStateCount or 1 ) - 1 ) ), N.STATE_ID_BITS )
 		net.WriteString( schemaHash() )
 		net.WriteString( blockEntityRegistryHash() )
@@ -1230,6 +1241,7 @@ function SV.BroadcastStateTransaction( changes, revision, options )
 		if not ok then return false, err, i end
 		local envelope, envelopeError = prepareBlockEntityEnvelope( change )
 		if not envelope then
+			if options.noSnapshotFallback == true then return false, envelopeError or "block_entity_envelope_failed" end
 			return snapshotTargets( targets, envelopeError )
 		end
 		prepared[i] = { change = change, envelope = envelope }
@@ -1242,9 +1254,11 @@ function SV.BroadcastStateTransaction( changes, revision, options )
 	or ( options.netPaced == true and ( #changes > N.MAX_STATE_BULK_CELLS or estimatedBytes > TRANSACTION_PAYLOAD_MAX ) ) then
 		local streamed, streamResult, partCount = queueStateStream( targets, prepared, revision, options )
 		if streamed then return true, streamResult, "streamed", partCount end
+		if options.noSnapshotFallback == true then return false, streamResult or "state_stream_failed" end
 		return snapshotTargets( targets, streamResult or "state_stream_failed" )
 	end
 	if #changes > N.MAX_STATE_BULK_CELLS or estimatedBytes > TRANSACTION_PAYLOAD_MAX then
+		if options.noSnapshotFallback == true then return false, "too_many_changes_for_incremental_packet" end
 		return snapshotTargets( targets, "too_many_changes_for_incremental_packet" )
 	end
 
@@ -1323,6 +1337,14 @@ function SV.BuildBinaryStateSnapshotPayload()
 end
 
 function SV.SendStateSnapshot( ply, payload, baseRevision, binarySnapshot )
+	if MC.Workshop and MC.Workshop.ShouldUseServerBaseForPlayer
+	and MC.Workshop.ShouldUseServerBaseForPlayer( ply ) then
+		MsgN( string.format( "[MC Workshop] blocked full state snapshot for %s; restarting GMA base sync",
+			IsValid( ply ) and ply:Nick() or tostring( ply ) ) )
+		if SV.ClearReliableNet then SV.ClearReliableNet( ply ) end
+		SV.SendStateHello( ply )
+		return false, "workshop_base_replaces_snapshot"
+	end
 	if SV.StreamingEnabled() then
 		if SV.ReinitializeColumnStreaming then SV.ReinitializeColumnStreaming( ply, "snapshot_forbidden_in_streaming_mode" ) end
 		return false, "snapshot_forbidden_in_streaming_mode"
@@ -1414,6 +1436,10 @@ net.Receive( "mc_state_hello_ack", function( _, ply )
 		error = not ok and err or generation ~= SV.WorldGeneration and "generation_mismatch" or nil,
 	}
 	if SV.StateNetClients[ply].ready then
+		if MC.Workshop and MC.Workshop.HandleStateHelloAck
+		and MC.Workshop.HandleStateHelloAck( ply, SV.StateNetClients[ply] ) == true then
+			return
+		end
 		local helloRevision = math.floor( tonumber( SV.StateHelloRevisions[ply] ) or SV.BlockRevision )
 		if helloRevision < SV.BlockRevision then
 			SV.SendStateRevisionSkip( ply, helloRevision + 1, SV.BlockRevision )

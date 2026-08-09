@@ -20,7 +20,7 @@ local BE_REMOVE = Net.BlockEntityOp and Net.BlockEntityOp.REMOVE or 1
 local BE_UPSERT = Net.BlockEntityOp and Net.BlockEntityOp.UPSERT or 2
 local SNAPSHOT_PART_MAX = Net.STATE_SNAPSHOT_PART_BYTES or 30000
 local STREAM_PART_MAX = Net.STATE_STREAM_PART_BYTES or 30000
-local MAX_STREAM_CELLS = Net.MAX_STATE_STREAM_CELLS or 131072
+local MAX_STREAM_CELLS = Net.MAX_STATE_STREAM_CELLS or 4294967295
 local CHUNK_PATCH_PART_MAX = Net.CHUNK_PATCH_PART_BYTES or 30000
 local CHUNK_PATCH_MAX_BYTES = Net.CHUNK_PATCH_MAX_BYTES or 16777216
 local STREAM_PATCH_MAX_CHUNKS = 64
@@ -53,6 +53,7 @@ local function publishAppliedRevision( revision )
 	T.appliedRevision = revision
 	MC.AppliedStateRevision = revision
 	MC.StateWorldGeneration = T.generation
+	if MC.RunEvent then MC.RunEvent( "MC.StateRevisionApplied", T.generation, revision ) end
 end
 
 local function localSchemaHash()
@@ -671,6 +672,27 @@ local function drainTransactions()
 	else T.gapSince = nil end
 	drainCorrections()
 	finishPendingBulkGroups()
+end
+
+-- A verified Workshop package is an external snapshot source. The state hello
+-- already fixed generation/schema/revision; this only releases ordered dirty
+-- transactions after the package has been committed into MC.World.
+function T.AcceptExternalBase( generation, baseRevision )
+	baseRevision = tonumber( baseRevision )
+	if not T.ready or T.desynced then return false, "transport_not_ready" end
+	if generation ~= T.generation then return false, "generation_mismatch" end
+	if not validUInt32( baseRevision ) or baseRevision ~= T.appliedRevision then
+		return false, "base_revision_mismatch"
+	end
+	T.snapshot = nil
+	T.awaitingSnapshot = false
+	T.resyncRequested = false
+	drainTransactions()
+	return not T.desynced
+end
+
+function T.GetAppliedRevision()
+	return T.generation, T.appliedRevision, T.awaitingSnapshot == true, T.desynced == true
 end
 
 function T.AcceptTransaction( transaction )
