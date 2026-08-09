@@ -59,6 +59,7 @@ local ERROR_TEXT = {
 	unsupported_bundle_save_version = { "workshop.error_version", "该 MC 世界存档版本不受支持" },
 	bundle_crc_mismatch = { "workshop.error_corrupt", "创意工坊世界包校验失败" },
 	hash_mismatch = { "workshop.error_corrupt", "创意工坊世界包校验失败" },
+	package_mismatch = { "workshop.error_corrupt", "创意工坊世界包校验失败" },
 	capture_empty = { "workshop.error_capture_empty", "无法从当前游戏画面拍摄创意工坊封面" },
 	capture_too_large = { "workshop.error_capture_too_large", "拍摄到的创意工坊封面超过大小限制" },
 	capture_write_failed = { "workshop.error_capture_write", "无法把创意工坊封面写入客户端数据目录" },
@@ -137,6 +138,7 @@ local function setBaseStatus( base, status, err )
 		generation = base and base.generation or 0,
 		workshopId = base and base.workshopId or nil,
 		contentHash = base and base.contentHash or nil,
+		packageId = base and base.packageId or nil,
 		status = tostring( status or "idle" ),
 		error = err and tostring( err ) or nil,
 	}
@@ -922,6 +924,7 @@ local function reportBaseReady( base, ready, actualHash, err )
 			generation = base.generation,
 			workshopId = base.workshopId,
 			contentHash = base.contentHash,
+			packageId = base.packageId,
 			archiveBytes = base.archiveBytes,
 			cachePath = base.cachePath,
 		}
@@ -953,17 +956,27 @@ local function validateBasePayload( base, payload, softFail, alreadyCached )
 	if base.archiveBytes > 0 and #payload ~= base.archiveBytes then
 		return reject( "size_mismatch" )
 	end
-	local actualHash = W.ContentHash( payload )
-	if actualHash ~= base.contentHash then
-		return reject( "hash_mismatch", actualHash )
+	local actualHash
+	if not base.packageId then
+		actualHash = W.ContentHash( payload )
+		if actualHash ~= base.contentHash then
+			return reject( "hash_mismatch", actualHash )
+		end
 	end
-	local bundle, archiveError = W.DecodeWorkshopArchive( payload )
+	local bundle, archiveInfoOrError = W.DecodeWorkshopArchive( payload )
 	if not bundle then
-		return reject( archiveError, actualHash )
+		return reject( archiveInfoOrError, actualHash )
 	end
 	local decoded, decodeError = W.DecodeBundle( bundle )
 	if not decoded then
 		return reject( decodeError, actualHash )
+	end
+	if base.packageId then
+		if not istable( archiveInfoOrError ) or archiveInfoOrError.packageId ~= base.packageId then
+			return reject( "package_mismatch" )
+		end
+		actualHash = W.WorkshopPackageContentHash( archiveInfoOrError.packageId )
+		if actualHash ~= base.contentHash then return reject( "hash_mismatch", actualHash ) end
 	end
 
 	local cachePath = W.WorkshopArchiveCachePath( base.workshopId, base.contentHash )
@@ -980,6 +993,7 @@ local function validateBasePayload( base, payload, softFail, alreadyCached )
 	end
 	base.cachePath = cachePath
 	base.decodedMetadata = decoded.metadata
+	base.archiveInfo = archiveInfoOrError
 	clearBaseDownload()
 	reportBaseReady( base, true, actualHash )
 	return true
@@ -1290,15 +1304,19 @@ net.Receive( "mc_workshop_base_announce", function()
 	local contentHash = string.lower( net.ReadString() or "" )
 	local archiveBytes = net.ReadUInt( 32 )
 	local slotName = W.SafeSlotName( net.ReadString() )
+	local rawPackageId = net.ReadString()
+	local packageId = rawPackageId ~= "" and W.SafeSlotName( rawPackageId ) or nil
 	if generation < 1 or not workshopId or not W.IsContentHash( contentHash )
-		or archiveBytes > W.MAX_WORKSHOP_ARCHIVE_BYTES or not slotName then
+		or archiveBytes > W.MAX_WORKSHOP_ARCHIVE_BYTES or not slotName
+		or rawPackageId ~= "" and not packageId
+		or packageId and W.WorkshopPackageContentHash( packageId ) ~= contentHash then
 		MsgN( "[MC Workshop] rejected invalid base announcement" )
 		return
 	end
 
 	local current = Client.baseRequirement
 	if current and current.generation == generation and current.workshopId == workshopId
-		and current.contentHash == contentHash then
+		and current.contentHash == contentHash and current.packageId == packageId then
 		local ready = Client.baseReady
 		if ready and ready.generation == generation and ready.contentHash == contentHash then
 			reportBaseReady( current, true, contentHash )
@@ -1317,6 +1335,7 @@ net.Receive( "mc_workshop_base_announce", function()
 		contentHash = contentHash,
 		archiveBytes = archiveBytes,
 		slotName = slotName,
+		packageId = packageId,
 	}
 	Client.baseRequirement = base
 	Client.baseReady = nil

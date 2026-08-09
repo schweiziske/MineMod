@@ -24,6 +24,7 @@ local APPROVAL_TIMEOUT = 20
 local UploadSessions = {}
 local ExportSessions = {}
 local RequestTimes = {}
+local MountedAddonIndex = { signature = nil, packages = {} }
 W.ServerBaseGeneration = math.floor( tonumber( W.ServerBaseGeneration ) or 0 ) % 4294967296
 
 local function L( ply, key, fallback, vars )
@@ -57,6 +58,114 @@ local function rateAllowed( ply, operation )
 	state[operation] = now + REQUEST_COOLDOWN
 	return true
 end
+
+local function mountedPackageIds()
+	local _, directories = file.Find( W.WORKSHOP_GMA_SAVE_ROOT .. "/*", "GAME" )
+	local out = {}
+	for _, packageId in ipairs( directories or {} ) do
+		local clean = W.SafeSlotName( packageId )
+		if clean == packageId and file.Exists(
+			W.WORKSHOP_GMA_SAVE_ROOT .. "/" .. packageId .. "/manifest.json", "GAME"
+		) then
+			out[#out + 1] = packageId
+		end
+	end
+	table.sort( out )
+	return out
+end
+
+local function addonOwnsPackage( addon, packageId )
+	if not addon or addon.mounted ~= true or not isstring( addon.title ) or addon.title == "" then return false end
+	local manifestPath = W.WORKSHOP_GMA_SAVE_ROOT .. "/" .. packageId .. "/manifest.json"
+	local ok, exists = pcall( file.Exists, manifestPath, addon.title )
+	return ok and exists == true
+end
+
+local function mountedAddonSignature( addons )
+	local rows = {}
+	for _, addon in ipairs( addons or {} ) do
+		local workshopId = W.NormalizeWorkshopId( addon and addon.wsid )
+		if workshopId and addon.mounted == true then
+			rows[#rows + 1] = table.concat( {
+				workshopId,
+				tostring( addon.file or "" ),
+				tostring( addon.size or 0 ),
+				tostring( addon.updated or 0 ),
+			}, ":" )
+		end
+	end
+	table.sort( rows )
+	return table.concat( rows, "|" )
+end
+
+local function refreshMountedAddonIndex( force )
+	local ok, addons = pcall( engine.GetAddons )
+	if not ok or not istable( addons ) then
+		MountedAddonIndex.signature = nil
+		MountedAddonIndex.packages = {}
+		return false
+	end
+	local signature = mountedAddonSignature( addons )
+	if force ~= true and MountedAddonIndex.signature == signature then return true end
+
+	local packages, diagnostics = {}, {}
+	local packageIds = mountedPackageIds()
+	for _, addon in ipairs( addons ) do
+		local workshopId = W.NormalizeWorkshopId( addon and addon.wsid )
+		local diagnostic = {
+			workshopId = workshopId,
+			title = tostring( addon and addon.title or "" ),
+			file = tostring( addon and addon.file or "" ),
+			mounted = addon and addon.mounted == true or false,
+			downloaded = addon and addon.downloaded == true or false,
+			size = math.max( 0, math.floor( tonumber( addon and addon.size ) or 0 ) ),
+			packages = {},
+		}
+		diagnostics[#diagnostics + 1] = diagnostic
+		if workshopId and addon.mounted == true then
+			for _, packageId in ipairs( packageIds ) do
+				if addonOwnsPackage( addon, packageId ) then
+					diagnostic.packages[#diagnostic.packages + 1] = packageId
+					local candidate = {
+						packageId = packageId,
+						workshopId = workshopId,
+						archiveBytes = math.max( 0, math.floor( tonumber( addon.size ) or 0 ) ),
+						updated = math.max( 0, math.floor( tonumber( addon.updated ) or 0 ) ),
+						file = addon.file,
+						title = tostring( addon.title or "" ),
+					}
+					local previous = packages[packageId]
+					if not previous or candidate.updated >= previous.updated then packages[packageId] = candidate end
+					MsgN( string.format( "[MC Workshop] mounted package %s -> Workshop %s (%s)",
+						packageId, workshopId, tostring( addon.title ) ) )
+				end
+			end
+		end
+	end
+	MountedAddonIndex.signature = signature
+	MountedAddonIndex.packages = packages
+	file.CreateDir( "mc" )
+	local diagnosticJSON = util.TableToJSON( {
+		updatedAt = os.time(),
+		addons = #addons,
+		packages = packages,
+		addonDetails = diagnostics,
+	}, true )
+	if diagnosticJSON then file.Write( "mc/workshop_mounted_index.json", diagnosticJSON ) end
+	return true
+end
+
+function W.GetMountedPackageInfo( packageId, forceRefresh )
+	packageId = W.SafeSlotName( packageId )
+	if not packageId then return nil end
+	refreshMountedAddonIndex( forceRefresh == true )
+	local info = MountedAddonIndex.packages[packageId]
+	return info and table.Copy( info ) or nil
+end
+
+timer.Simple( 1, function()
+	refreshMountedAddonIndex( true )
+end )
 
 local function readBoundedFile( path, maxBytes )
 	local size = file.Size( path, "DATA" )
@@ -228,6 +337,7 @@ local function sendBaseAnnouncement( ply )
 			net.WriteString( base.contentHash )
 			net.WriteUInt( base.archiveBytes, 32 )
 			net.WriteString( base.slotName )
+			net.WriteString( base.packageId or "" )
 		end
 	net.Send( ply )
 end
@@ -237,10 +347,24 @@ local function announceBaseToAll()
 end
 
 local function activateBaseForSlot( slotName )
-	slotName = SV.SaveSlotName and SV.SaveSlotName( slotName ) or W.SafeSlotName( slotName )
-	local meta = slotName and SV.GetSaveMeta and SV.GetSaveMeta( slotName ) or nil
+	local resolved = SV.ResolveSaveSlot and SV.ResolveSaveSlot( slotName ) or nil
+	if not resolved then
+		local clean = SV.SaveSlotName and SV.SaveSlotName( slotName ) or W.SafeSlotName( slotName )
+		resolved = clean and SV.ResolveSaveSlot and SV.ResolveSaveSlot( clean ) or nil
+	end
+	local resolvedKey = resolved and ( resolved.key or resolved.name ) or slotName
+	local meta = resolved and SV.GetSaveMeta and SV.GetSaveMeta( resolvedKey ) or nil
 	local workshopId = meta and W.NormalizeWorkshopId( meta.workshopId ) or nil
 	local contentHash = meta and string.lower( tostring( meta.workshopContentHash or "" ) ) or ""
+	local archiveBytes = math.floor( tonumber( meta and meta.workshopArchiveBytes ) or 0 )
+	local packageId
+	if resolved and resolved.source == "mounted" then
+		local info = W.GetMountedPackageInfo( resolved.name )
+		workshopId = info and W.NormalizeWorkshopId( info.workshopId ) or workshopId
+		packageId = resolved.name
+		contentHash = W.WorkshopPackageContentHash( packageId ) or ""
+		archiveBytes = math.floor( tonumber( info and info.archiveBytes ) or 0 )
+	end
 	if not workshopId or not W.IsContentHash( contentHash ) then
 		W.ServerBase = nil
 		nextBaseGeneration()
@@ -248,19 +372,19 @@ local function activateBaseForSlot( slotName )
 		return false
 	end
 
-	local archiveBytes = math.floor( tonumber( meta.workshopArchiveBytes ) or 0 )
 	if archiveBytes < 17 or archiveBytes > W.MAX_WORKSHOP_ARCHIVE_BYTES then archiveBytes = 0 end
 	W.ServerBase = {
 		generation = nextBaseGeneration(),
-		slotName = slotName,
+		slotName = resolved and resolved.name or tostring( slotName or "" ),
 		workshopId = workshopId,
 		contentHash = contentHash,
 		archiveBytes = archiveBytes,
+		packageId = packageId,
 		clients = {},
 	}
 	announceBaseToAll()
-	MsgN( string.format( "[MC Workshop] announced base %s hash=%s slot=%s",
-		workshopId, contentHash, slotName ) )
+	MsgN( string.format( "[MC Workshop] announced base %s hash=%s slot=%s package=%s",
+		workshopId, contentHash, W.ServerBase.slotName, tostring( packageId or "imported" ) ) )
 	return true
 end
 
@@ -279,6 +403,7 @@ function W.GetServerBaseReadiness()
 		generation = base.generation,
 		workshopId = base.workshopId,
 		contentHash = base.contentHash,
+		packageId = base.packageId,
 		ready = ready,
 		pending = pending,
 		failed = failed,
@@ -675,7 +800,9 @@ net.Receive( "mc_workshop_base_ready", function( _, ply )
 end )
 
 hook.Add( "MC.WorldLoaded", "MC_WorkshopAnnounceLoadedBase", function( _, slotName )
-	W.ServerLoadedSlot = SV.SaveSlotName and SV.SaveSlotName( slotName ) or W.SafeSlotName( slotName )
+	local resolved = SV.ResolveSaveSlot and SV.ResolveSaveSlot( slotName ) or nil
+	W.ServerLoadedSlot = resolved and ( resolved.key or resolved.name )
+		or ( SV.SaveSlotName and SV.SaveSlotName( slotName ) or W.SafeSlotName( slotName ) )
 	activateBaseForSlot( slotName )
 end )
 
