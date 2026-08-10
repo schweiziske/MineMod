@@ -163,7 +163,13 @@ function SV.BeginSelectedItemUse( ply, context )
 		local hunger = foodState( ply )
 		if hunger >= HUNGER_MAX and not food.alwaysEdible then return false, "food_full" end
 	end
+	if ( kind == "bow" or kind == "crossbow" or kind == "trident" )
+		and SV.CanBeginProjectileUse then
+		local allowed, projectileError = SV.CanBeginProjectileUse( ply, record, stack, kind )
+		if allowed ~= true then return false, projectileError or "projectile_unavailable" end
+	end
 	local duration = spec and spec.duration or 0
+	if kind == "crossbow" and MC.ItemCrossbowCharged and MC.ItemCrossbowCharged( stack ) then duration = 0 end
 	if context.instant == true or duration <= 0 then
 		local instantState = { kind = kind or "generic", itemName = stack.item, damage = stack.damage, startedAt = now, duration = 0 }
 		local ok, resultOrError = dispatchFinishedUse( ply, record, stack, definition, instantState, context )
@@ -201,7 +207,8 @@ function SV.TickSelectedItemUse( ply, context )
 	local progress = MC.ItemUseProgress and MC.ItemUseProgress( state.startedAt, state.duration, CurTime() )
 		or math.Clamp( ( CurTime() - state.startedAt ) * 20 / state.duration, 0, 1 )
 	if ply.SetNWFloat then ply:SetNWFloat( USE_NET_PREFIX .. "progress", progress ) end
-	if state.kind == "food" and progress >= 1 then
+	if ( state.kind == "food" or state.kind == "crossbow" ) and progress >= 1 then
+		state.progress = progress
 		local ok, resultOrError = dispatchFinishedUse( ply, record, stack, definition, state, mergedContext( state, context ) )
 		if ok then record.lastItemUse = CurTime() end
 		clearUse( ply, record, ok and "finished" or resultOrError, ok )

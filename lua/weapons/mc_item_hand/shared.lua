@@ -365,6 +365,7 @@ if CLIENT then
 					useProgress = math.Clamp( tonumber( useProgress ) or 0, 0, 1 ),
 					useDuration = useDuration,
 					crossbowPull = useProgress,
+					chargeType = MC.ItemCrossbowChargeType and MC.ItemCrossbowChargeType( stack ) or "none",
 				} )
 		end
 	end

@@ -81,7 +81,8 @@ local function propertyValue( property, stack, definition, options )
 	end
 	if property == "minecraft:context_dimension" then return options.dimension or "minecraft:overworld" end
 	if property == "minecraft:charge_type" then
-		return options.chargeType or componentValue( stack, definition, property)
+		return options.chargeType or MC.ItemCrossbowChargeType and MC.ItemCrossbowChargeType( stack )
+			or componentValue( stack, definition, property)
 	end
 	if property == "minecraft:time" then
 		if finite( options.time ) then return options.time end
@@ -180,8 +181,10 @@ local function resolveNode( node, stack, definition, options, depth )
 end
 
 local function cacheKey( stack, definition, options )
+	if type( stack ) == "table" and type( stack.components ) == "table" and next( stack.components ) ~= nil then return nil end
 	if type( options ) == "table" and ( type( options.properties ) == "table" or options.time ~= nil
-		or options.compass ~= nil or options.fullness ~= nil or options.useProgress ~= nil ) then return nil end
+		or options.compass ~= nil or options.fullness ~= nil or options.useProgress ~= nil
+		or options.chargeType ~= nil ) then return nil end
 	local context = tostring( options and options.displayContext or "gui" )
 	local using = options and options.using == true and "1" or "0"
 	local broken = options and options.broken == true and "1" or "0"
@@ -213,4 +216,3 @@ function Resolver.ClearCache()
 end
 
 function MC.ResolveItemModel( stackOrDefinition, options ) return Resolver.Resolve( stackOrDefinition, options ) end
-
