@@ -12,6 +12,12 @@ MC.SV = MC.SV or {}
 local SV = MC.SV
 
 local MERGE_RADIUS = 24
+local MINECRAFT_TICKS_PER_SECOND = 20
+
+local function appendDeathDrop( drops, stack )
+	if MC.IsEmptyItemStack( stack ) then return end
+	drops[#drops + 1] = MC.CopyItemStack( stack )
+end
 
 local function samePickupTarget( left, right )
 	local a, b = left and left.MCPickupTarget, right and right.MCPickupTarget
@@ -105,6 +111,42 @@ local function randomVelocity()
 	)
 end
 
+local function minecraftVelocityScale()
+	return math.max( 1, tonumber( MC.BS ) or 36.5 ) * MINECRAFT_TICKS_PER_SECOND
+end
+
+-- LivingEntity#createItemStackToDrop(false, true): 0.3 block/tick along the
+-- player's view, plus Minecraft's small random spread and upward bias.
+function SV.PlayerThrownDropVelocity( ply )
+	local aim = IsValid( ply ) and ply.GetAimVector and ply:GetAimVector() or Vector( 1, 0, 0 )
+	local direction = math.Rand( 0, math.pi * 2 )
+	local spread = 0.02 * math.Rand( 0, 1 )
+	local velocity = aim * 0.3 + Vector(
+		math.cos( direction ) * spread,
+		math.sin( direction ) * spread,
+		0.1 + ( math.Rand( 0, 1 ) - math.Rand( 0, 1 ) ) * 0.1
+	)
+	return velocity * minecraftVelocityScale()
+end
+
+-- LivingEntity#createItemStackToDrop(true, false): inventory contents fan out
+-- horizontally with a fixed upward kick when the player dies.
+function SV.PlayerDeathDropVelocity()
+	local power = math.Rand( 0, 1 ) * 0.5
+	local direction = math.Rand( 0, math.pi * 2 )
+	return Vector(
+		-math.sin( direction ) * power,
+		math.cos( direction ) * power,
+		0.2
+	) * minecraftVelocityScale()
+end
+
+function SV.PlayerItemDropPosition( ply )
+	if not IsValid( ply ) then return nil end
+	local eyePosition = ply.EyePos and ply:EyePos() or ply:GetPos()
+	return eyePosition - Vector( 0, 0, ( tonumber( MC.BS ) or 36.5 ) * 0.3 )
+end
+
 function SV.SpawnItemDrop( position, input, actor, options )
 	local stack, stackError = MC.NormalizeItemStack( input )
 	if not stack then return nil, stackError or "invalid_stack" end
@@ -150,4 +192,74 @@ function SV.SpawnItemDrop( position, input, actor, options )
 		physics:AddAngleVelocity( VectorRand() * 120 )
 	end
 	return ent
+end
+
+-- Close transient menus first, then atomically move the persistent inventory
+-- into a drop snapshot. Clearing before spawning makes repeated death hooks safe.
+function SV.DropPlayerInventoryOnDeath( ply )
+	if not IsValid( ply ) or not ply:IsPlayer() then return 0, "invalid_player" end
+	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply, false ) or nil
+	if not record then return 0, "inventory_not_loaded" end
+
+	if record.session and SV.ClosePlayerInventory then
+		SV.ClosePlayerInventory( ply, "death" )
+	end
+	if MC.Config.KeepInventory and MC.Config.KeepInventory:GetBool() then
+		return 0, "keep_inventory"
+	end
+
+	local drops = {}
+	local container = record.container
+	local inventorySnapshot = container and MC.ContainerSnapshot( container ) or nil
+	if container then
+		for slot = 0, 35 do appendDeathDrop( drops, MC.ContainerGetStack( container, slot ) ) end
+		appendDeathDrop( drops, container.cursor )
+	else
+		for slot = 1, 36 do appendDeathDrop( drops, record.storage and record.storage[slot] ) end
+	end
+	local equipmentSnapshot = SV.EquipmentSnapshot and SV.EquipmentSnapshot( record ) or {}
+	for _, slot in ipairs( MC.EquipmentSlotOrder or {} ) do
+		appendDeathDrop( drops, record.equipment and record.equipment[slot] )
+	end
+	appendDeathDrop( drops, record.carried )
+
+	if container and inventorySnapshot then
+		for slot = 0, 35 do MC.ContainerSetStack( container, slot, nil ) end
+		container.cursor = nil
+		SV.CommitPlayerInventoryMutation( record, inventorySnapshot, { reason = "death_drop" } )
+	else
+		for slot = 1, 36 do record.storage[slot] = nil end
+		record.revision = math.max( 0, math.floor( tonumber( record.revision ) or 0 ) ) + 1
+		record.dirty = true
+	end
+
+	for _, slot in ipairs( MC.EquipmentSlotOrder or {} ) do record.equipment[slot] = nil end
+	if SV.CommitEquipmentMutation then
+		SV.CommitEquipmentMutation( record, equipmentSnapshot, { reason = "death_drop" } )
+	elseif SV.UpdatePlayerEquipmentNetwork then
+		SV.UpdatePlayerEquipmentNetwork( record )
+		record.dirty = true
+	end
+	record.carried = nil
+	record.dirty = true
+	if SV.UpdatePlayerHeldNetwork then SV.UpdatePlayerHeldNetwork( record ) end
+
+	if SV.SavePlayerInventory then
+		local saved, saveError = SV.SavePlayerInventory( record, true )
+		if saved ~= true and ErrorNoHalt then
+			ErrorNoHalt( "[MC Inventory] death drop save failed: " .. tostring( saveError ) .. "\n" )
+		end
+	end
+
+	local position = SV.PlayerItemDropPosition( ply ) or ply:GetPos()
+	local spawned = 0
+	for _, stack in ipairs( drops ) do
+		local ent = SV.SpawnItemDrop( position, stack, ply, {
+			pickupDelay = 1.0,
+			noMerge = true,
+			velocity = SV.PlayerDeathDropVelocity(),
+		} )
+		if IsValid( ent ) then spawned = spawned + 1 end
+	end
+	return spawned, #drops
 end

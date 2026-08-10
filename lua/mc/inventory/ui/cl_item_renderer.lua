@@ -85,7 +85,7 @@ function Renderer.DrawIcon( stack, x, y, size, options )
 	if #materials > 0 then
 		UI.WithPointFiltering( function()
 			for _, material in ipairs( materials ) do
-				if UI.DrawTexture( material, x, y, size, size ) then drawn = true end
+				if UI.DrawTexture( material, x, y, size, size, nil, nil, nil, nil, options.worldColor ) then drawn = true end
 			end
 		end )
 	elseif MC.DrawMinecraftBlockStateIcon then
@@ -93,7 +93,7 @@ function Renderer.DrawIcon( stack, x, y, size, options )
 		if stateId then
 			UI.WithPointFiltering( function()
 				drawn = MC.DrawMinecraftBlockStateIcon( stateId, x, y, size, size,
-					options.forceModel == true, blockIconMaterial( blockId ) ) == true
+					options.forceModel == true, blockIconMaterial( blockId ), options.worldColor ) == true
 			end )
 		end
 	end

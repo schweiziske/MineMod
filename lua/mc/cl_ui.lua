@@ -314,12 +314,17 @@ function MC.DrawFittedText( text, font, fallbackFonts, x, y, color, ax, ay, maxw
 	draw.SimpleText( text, useFont, x, y, color, ax, ay )
 end
 
-function MC.DrawTile( tile, x, y, w, h, mat, tintCode )
+function MC.DrawTile( tile, x, y, w, h, mat, tintCode, worldColor )
 	local u0, v0, u1, v1 = MC.TileUV( tile )
 	surface.SetMaterial( mat or MC.Material )
 	local r, g, b = 255, 255, 255
 	if tintCode and tintCode ~= 0 and MC.BlockTintRGB then
 		r, g, b = MC.BlockTintRGB( tintCode )
+	end
+	if worldColor then
+		r = math.floor( r * ( worldColor.r or 255 ) / 255 + 0.5 )
+		g = math.floor( g * ( worldColor.g or 255 ) / 255 + 0.5 )
+		b = math.floor( b * ( worldColor.b or 255 ) / 255 + 0.5 )
 	end
 	surface.SetDrawColor( r, g, b, 255 )
 	surface.DrawTexturedRectUV( x, y, w, h, u0, v0, u1, v1 )
@@ -335,11 +340,11 @@ local function iconMaterialFor( id )
 	return MC.Material
 end
 
-function MC.DrawBlockIcon( id, x, y, w, h, stateId, materialOverride )
+function MC.DrawBlockIcon( id, x, y, w, h, stateId, materialOverride, worldColor )
 	if not MC.Blocks[id] then return end
 	if not stateId and MC.StateFromLegacy then stateId = MC.StateFromLegacy( id, 0 ) end
 	local tintCode = stateId and MC.BlockStateTintCode and MC.BlockStateTintCode( stateId, id, 0 ) or 0
-	MC.DrawTile( MC.BlockIconTile( id ), x, y, w, h, materialOverride or iconMaterialFor( id ), tintCode )
+	MC.DrawTile( MC.BlockIconTile( id ), x, y, w, h, materialOverride or iconMaterialFor( id ), tintCode, worldColor )
 end
 
 local function iconRotatedUV( uf, vf, rot, flipU, flipV )
@@ -356,7 +361,7 @@ end
 -- 0..1, lerped into the tile's atlas rect after the per-face rotate/flip; this
 -- lets partial boxes (slabs, stairs, fence posts, ...) sample only the slice of
 -- the texture they actually cover, just like the in-world mesh.
-local function drawIconQuad( tile, verts, shade, rot, flipU, flipV, mat, tintCode )
+local function drawIconQuad( tile, verts, shade, rot, flipU, flipV, mat, tintCode, worldColor )
 	local u0, v0, u1, v1 = MC.TileUV( tile )
 	local poly = {}
 	for i = 1, 4 do
@@ -371,6 +376,11 @@ local function drawIconQuad( tile, verts, shade, rot, flipU, flipV, mat, tintCod
 		r = math.floor( shade * tr / 255 + 0.5 )
 		g = math.floor( shade * tg / 255 + 0.5 )
 		b = math.floor( shade * tb / 255 + 0.5 )
+	end
+	if worldColor then
+		r = math.floor( r * ( worldColor.r or 255 ) / 255 + 0.5 )
+		g = math.floor( g * ( worldColor.g or 255 ) / 255 + 0.5 )
+		b = math.floor( b * ( worldColor.b or 255 ) / 255 + 0.5 )
 	end
 	surface.SetDrawColor( r, g, b, 255 )
 	surface.DrawPoly( poly )
@@ -429,7 +439,7 @@ local function iconBoxes( id, orient, visual )
 	return MC.BlockBoxes and MC.BlockBoxes( id, orient ) or nil
 end
 
-function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual, materialOverride )
+function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual, materialOverride, worldColor )
 	local b = visual and visual.block or MC.Blocks[id]
 	if not b then return end
 	orient = visual and visual.renderOrient or ( MC.NormalizeOrient and MC.NormalizeOrient( id, orient ) or math.floor( tonumber( orient ) or 0 ) )
@@ -437,7 +447,7 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual, 
 	if b.iconSource and MC.ResolveBlock then
 		local source = MC.ResolveBlock( b.iconSource )
 		if source and source.id and source.id ~= id then
-			MC.DrawMinecraftBlockIcon( source.id, x, y, w, h, nil, forceModel, visual, materialOverride )
+			MC.DrawMinecraftBlockIcon( source.id, x, y, w, h, nil, forceModel, visual, materialOverride, worldColor )
 			return
 		end
 	end
@@ -451,11 +461,11 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual, 
 	-- as stairs and fences as fence posts instead of a flat full-block square.
 	if not forceModel then
 		if b.icon then
-			MC.DrawBlockIcon( id, x, y, w, h, tintStateId, materialOverride )
+			MC.DrawBlockIcon( id, x, y, w, h, tintStateId, materialOverride, worldColor )
 			return
 		end
 		if b.shape == "cross" then
-			MC.DrawBlockIcon( id, x, y, w, h, tintStateId, materialOverride )
+			MC.DrawBlockIcon( id, x, y, w, h, tintStateId, materialOverride, worldColor )
 			return
 		end
 	end
@@ -466,7 +476,7 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual, 
 	local has3DShape = b.solid ~= false or b.shape ~= nil or b.connection ~= nil
 	local boxes = has3DShape and iconBoxes( id, orient, visual ) or nil
 	if not boxes or #boxes == 0 then
-		MC.DrawBlockIcon( id, x, y, w, h, tintStateId, materialOverride )
+		MC.DrawBlockIcon( id, x, y, w, h, tintStateId, materialOverride, worldColor )
 		return
 	end
 
@@ -514,7 +524,7 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual, 
 	table.sort( pool, function( a, c ) return a.depth < c.depth end )
 	local mat = materialOverride or iconMaterialFor( id )
 	for _, f in ipairs( pool ) do
-		drawIconQuad( f.tile, f.verts, f.shade, f.rot, f.flipU, f.flipV, mat, f.tintCode )
+		drawIconQuad( f.tile, f.verts, f.shade, f.rot, f.flipU, f.flipV, mat, f.tintCode, worldColor )
 	end
 end
 
@@ -579,12 +589,12 @@ local function loadCreativeInventoryState()
 	return MC.CreativeInventoryState
 end
 
-function MC.DrawMinecraftBlockStateIcon( stateId, x, y, w, h, forceModel, materialOverride )
+function MC.DrawMinecraftBlockStateIcon( stateId, x, y, w, h, forceModel, materialOverride, worldColor )
 	stateId = math.floor( tonumber( stateId ) or -1 )
 	if not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return false end
 	local visual = MC.ResolveBlockStateVisual and MC.ResolveBlockStateVisual( stateId ) or nil
 	if not visual then return false end
-	MC.DrawMinecraftBlockIcon( visual.id, x, y, w, h, visual.renderOrient, forceModel or visual.forceModelIcon == true, visual, materialOverride )
+	MC.DrawMinecraftBlockIcon( visual.id, x, y, w, h, visual.renderOrient, forceModel or visual.forceModelIcon == true, visual, materialOverride, worldColor )
 	return true
 end
 

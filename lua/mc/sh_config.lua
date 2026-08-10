@@ -164,6 +164,7 @@ if SERVER then
 	MC.Config.InventoryPersist = GetConVar( "mc_inventory_persist" ) or CreateConVar( "mc_inventory_persist", "1", F, "Persist Minecraft-style player inventories by SteamID64" )
 	MC.Config.InventoryActionRate = GetConVar( "mc_inventory_action_rate" ) or CreateConVar( "mc_inventory_action_rate", "80", F, "Maximum authoritative inventory actions accepted per player each second", 10, 200 )
 	MC.Config.InventoryCreative = GetConVar( "mc_inventory_creative" ) or CreateConVar( "mc_inventory_creative", "1", F, "Allow Minecraft creative clone/catalog actions in the item inventory" )
+	MC.Config.KeepInventory = GetConVar( "mc_keep_inventory" ) or CreateConVar( "mc_keep_inventory", "0", F, "Keep Minecraft inventory and equipment after death" )
 
 	local reach = MC.Config.Reach:GetFloat()
 	if math.abs( reach - 8192 ) < 0.01 or math.abs( reach - 182.5 ) < 0.01 then

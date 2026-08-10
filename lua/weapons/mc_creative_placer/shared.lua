@@ -32,6 +32,8 @@ SWEP.Base          = "weapon_base"
 SWEP.ViewModel     = "models/weapons/c_toolgun.mdl"
 SWEP.WorldModel    = "models/weapons/w_toolgun.mdl"
 SWEP.UseHands      = true
+SWEP.DrawViewModel = false
+SWEP.DrawWorldModel = false
 
 SWEP.Primary   = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "none" }
 SWEP.Secondary = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "none" }
@@ -714,17 +716,17 @@ if CLIENT then
 	end
 
 	function SWEP:PreDrawViewModel()
-		return creativeHeldModelEnabled()
+		return true
 	end
 
 	function SWEP:DrawWorldModel()
 		local owner = self:GetOwner()
 		if IsValid( owner ) and creativeHeldModelEnabled() then
 			drawThirdPersonHeldBlock( owner )
-			return
 		end
-		self:DrawModel()
 	end
+
+	function SWEP:DrawWorldModelTranslucent() end
 
 	function SWEP:GetPrintName()
 		return L( "weapon.mc_creative_placer.name", self.PrintName or "MC 创造方块放置器" )

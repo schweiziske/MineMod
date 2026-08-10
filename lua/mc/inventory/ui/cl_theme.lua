@@ -106,10 +106,11 @@ function UI.WithPointFiltering( callback )
 	if not ok and ErrorNoHalt then ErrorNoHalt( "[MC Inventory UI] draw error: " .. tostring( err ) .. "\n" ) end
 end
 
-function UI.DrawTexture( mat, x, y, w, h, u0, v0, u1, v1 )
+function UI.DrawTexture( mat, x, y, w, h, u0, v0, u1, v1, color )
 	if not mat then return false end
 	surface.SetMaterial( mat )
-	surface.SetDrawColor( 255, 255, 255, 255 )
+	color = color or color_white
+	surface.SetDrawColor( color.r or 255, color.g or 255, color.b or 255, color.a or 255 )
 	if u0 ~= nil then
 		surface.DrawTexturedRectUV( x, y, w, h, u0, v0, u1, v1 )
 	else
