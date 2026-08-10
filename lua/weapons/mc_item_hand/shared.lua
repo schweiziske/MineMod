@@ -607,5 +607,10 @@ if CLIENT then
 		drawHeld( ply, false )
 	end )
 
+	function SWEP:PreDrawViewModel()
+		return true
+	end
+
 	function SWEP:DrawWorldModel() end
+	function SWEP:DrawWorldModelTranslucent() end
 end

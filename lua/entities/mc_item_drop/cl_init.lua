@@ -23,13 +23,34 @@ local function networkStack( ent )
 	}
 end
 
+local function worldLightingColor( ent, position )
+	local now = CurTime()
+	if not ent.MCNextLightSample or now >= ent.MCNextLightSample then
+		ent.MCNextLightSample = now + 0.1 + ent:EntIndex() % 5 * 0.01
+		local r, g, b = 1, 1, 1
+		if MC.SampleDynamicLightingRGB then r, g, b = MC.SampleDynamicLightingRGB( position, 0 ) end
+		if MC.ScaleDynamicLightingRGB then
+			r, g, b = MC.ScaleDynamicLightingRGB( r, g, b, 0.48 )
+		else
+			r, g, b = r * 0.48, g * 0.48, b * 0.48
+		end
+		ent.MCWorldLightColor = ent.MCWorldLightColor or Color( 255, 255, 255, 255 )
+		ent.MCWorldLightColor.r = math.floor( math.Clamp( r, 0, 1 ) * 255 + 0.5 )
+		ent.MCWorldLightColor.g = math.floor( math.Clamp( g, 0, 1 ) * 255 + 0.5 )
+		ent.MCWorldLightColor.b = math.floor( math.Clamp( b, 0, 1 ) * 255 + 0.5 )
+	end
+	return ent.MCWorldLightColor or color_white
+end
+
 function ENT:DrawTranslucent()
 	local renderer = MC.InventoryUI and MC.InventoryUI.ItemRenderer
 	if not renderer then return end
 	local stack = networkStack( self )
 	if not stack or not renderer.CanDraw( stack ) then return end
 	local base = self:GetPos() + Vector( 0, 0, 7 + math.sin( CurTime() * 3 + self:EntIndex() ) * 1.5 )
-	local angles = Angle( 0, EyeAngles().y - 90, 90 )
+	local seed = self:EntIndex() * 37
+	local angles = Angle( 0, ( CurTime() * 90 + seed ) % 360, 90 )
+	local worldColor = worldLightingColor( self, base )
 	local count = math.max( 1, tonumber( stack.count ) or 1 )
 	local copies = count >= 16 and 4 or count >= 8 and 3 or count >= 2 and 2 or 1
 	for index = 1, copies do
@@ -39,7 +60,7 @@ function ENT:DrawTranslucent()
 			offset = Vector( math.sin( phase ) * 1.4, math.cos( phase * 1.3 ) * 1.4, ( index - 1 ) * 0.35 )
 		end
 		cam.Start3D2D( base + offset, angles, 0.75 )
-			renderer.DrawStack( stack, -8, -8, 16, { drawCount = false, scale = 1, displayContext = "ground" } )
+			renderer.DrawStack( stack, -8, -8, 16, { drawCount = false, scale = 1, displayContext = "ground", worldColor = worldColor } )
 		cam.End3D2D()
 	end
 end

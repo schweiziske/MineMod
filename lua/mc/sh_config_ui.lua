@@ -762,6 +762,14 @@ MC.ConfigConVars = {
 				"Maximum particle and sound effects broadcast per explosion; 0 sends none.",
 				"单次爆炸最多广播的粒子与声音效果数；0 表示不发送。" ),
 		} ),
+
+		category( "inventory_death", "gameplay", "Inventory and death", "背包与死亡",
+			"Controls whether Minecraft inventory and equipment are dropped when a player dies.",
+			"控制玩家死亡时是否掉落 Minecraft 背包和装备。", {
+			item( "mc_keep_inventory", "Keep inventory on death", "死亡不掉落", "bool",
+				"Keep all Minecraft inventory and equipment after death.",
+				"玩家死亡后保留全部 Minecraft 背包与装备。" ),
+		} ),
 	},
 }
 

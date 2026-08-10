@@ -478,7 +478,13 @@ net.Receive( "mc_inventory_action", function( _, ply )
 	if not result.ok then sendRejected( record, actionId, result.error, result.error == "revision_mismatch" ) return end
 	if not context.inventoryDeltaPublished then sendDelta( record, result, true, actionId, "" ) end
 	if #result.drops > 0 and type( SV.SpawnItemDrop ) == "function" then
-		for _, stack in ipairs( result.drops ) do SV.SpawnItemDrop( ply:GetShootPos(), stack, ply ) end
+		local position = SV.PlayerItemDropPosition and SV.PlayerItemDropPosition( ply ) or ply:GetShootPos()
+		for _, stack in ipairs( result.drops ) do
+			SV.SpawnItemDrop( position, stack, ply, {
+				noMerge = true,
+				velocity = SV.PlayerThrownDropVelocity and SV.PlayerThrownDropVelocity( ply ) or nil,
+			} )
+		end
 	end
 end )
 
@@ -534,7 +540,13 @@ net.Receive( "mc_inventory_recipe_place", function( _, ply )
 	end
 	if not context.inventoryDeltaPublished then sendDelta( record, result, true, actionId, "" ) end
 	if #result.drops > 0 and type( SV.SpawnItemDrop ) == "function" then
-		for _, stack in ipairs( result.drops ) do SV.SpawnItemDrop( ply:GetShootPos(), stack, ply ) end
+		local position = SV.PlayerItemDropPosition and SV.PlayerItemDropPosition( ply ) or ply:GetShootPos()
+		for _, stack in ipairs( result.drops ) do
+			SV.SpawnItemDrop( position, stack, ply, {
+				noMerge = true,
+				velocity = SV.PlayerThrownDropVelocity and SV.PlayerThrownDropVelocity( ply ) or nil,
+			} )
+		end
 	end
 end )
 
@@ -597,7 +609,7 @@ net.Receive( "mc_inventory_select", function( _, ply )
 end )
 
 hook.Add( "PlayerDeath", "mc_inventory_close_on_death", function( ply )
-	if SV.GetPlayerInventoryRecord( ply, false ) then SV.ClosePlayerInventory( ply, "death" ) end
+	if SV.DropPlayerInventoryOnDeath then SV.DropPlayerInventoryOnDeath( ply ) end
 end )
 
 hook.Add( "PlayerDisconnected", "mc_inventory_network_cleanup", function( ply )
