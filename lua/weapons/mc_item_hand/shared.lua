@@ -23,9 +23,10 @@ SWEP.Slot = 1
 SWEP.SlotPos = 5
 SWEP.DrawAmmo = false
 SWEP.DrawCrosshair = true
+SWEP.Base = "weapon_base"
 SWEP.UseHands = true
-SWEP.ViewModel = ""
-SWEP.WorldModel = ""
+SWEP.ViewModel = "models/weapons/c_toolgun.mdl"
+SWEP.WorldModel = "models/weapons/w_toolgun.mdl"
 SWEP.DrawViewModel = false
 SWEP.DrawWorldModel = false
 SWEP.Primary = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "none" }
@@ -107,6 +108,11 @@ local function isUseCandidate( stack, definition )
 	if MC.ItemBehavior and MC.ItemBehavior( stack ) then return true end
 	if MC.ItemIsConsumable and MC.ItemIsConsumable( stack ) then return true end
 	return isfunction and isfunction( definition.useHandler ) and definition.useHandler ~= nil
+end
+
+local function blockHasUse( id )
+	local block = MC.Blocks and MC.Blocks[id]
+	return block and block.handlers and block.handlers.OnUse ~= nil
 end
 
 local function consumeSelected( ply )
@@ -244,6 +250,13 @@ function SWEP:SecondaryAttack()
 		if aim then ux, uy, uz = aim.bx, aim.by, aim.bz
 		elseif trace.Hit and MC.WorldToCell then ux, uy, uz = MC.WorldToCell( trace.HitPos - trace.HitNormal * 0.5 ) end
 		local record, stack, definition = selectedRecord( ply )
+		-- Functional blocks use the press edge, like the legacy creative placer.
+		-- Automatic secondary attacks must not toggle a gate/door every tick while
+		-- the player keeps the button held down.
+		if aim and blockHasUse( aim.Block ) and not ply:KeyPressed( IN_ATTACK2 ) then
+			self.MCSecondaryMode = "block"
+			return
+		end
 		if aim and MC.SV and MC.SV.Use and MC.SV.Use( ply, ux, uy, uz, definition and definition.blockId or 0 ) then
 			self.MCSecondaryMode = "block"
 			return
@@ -291,6 +304,13 @@ function SWEP:SecondaryAttack()
 			net.WriteInt( bz, MC.Net.COORD_BITS )
 		net.Send( ply )
 	elseif IsFirstTimePredicted() and ply == LocalPlayer() then
+		-- Match the server's use-first order. Without this guard the client draws
+		-- a predicted placement beside doors, gates, chests, and other usable
+		-- blocks while the server correctly performs only their OnUse action.
+		if aim and blockHasUse( aim.Block ) then
+			self.MCSecondaryMode = "block"
+			return
+		end
 		local state = MC.ClientInventory
 		local stack = state and state.slots[( state.selected or 0 ) + 1] or nil
 		local definition = stack and MC.GetItem( stack.item ) or nil

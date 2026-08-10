@@ -351,7 +351,11 @@ local handlers = {
 function MC.ExecuteContainerInput( container, request, context )
 	if type( container ) ~= "table" or type( request ) ~= "table" then return { ok = false, error = "invalid_request" } end
 	local expectedRevision = request.revision ~= nil and math.floor( tonumber( request.revision ) or -1 ) or nil
-	if expectedRevision ~= nil and expectedRevision ~= container.revision then
+	-- Reliable net messages are processed in action-id order.  Several locally
+	-- predicted clicks can therefore share an older authoritative base while the
+	-- server advances the container between them.  A future revision is invalid;
+	-- an older one is reconciled by the authoritative delta returned below.
+	if expectedRevision ~= nil and expectedRevision > container.revision then
 		return { ok = false, error = "revision_mismatch", revision = container.revision, full = MC.ContainerFullState( container ) }
 	end
 	local input = math.floor( tonumber( request.input ) or -1 )

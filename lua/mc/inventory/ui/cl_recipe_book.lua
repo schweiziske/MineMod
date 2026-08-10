@@ -13,7 +13,10 @@ MC.InventoryUI = MC.InventoryUI or {}
 local UI = MC.InventoryUI
 local Book = MC.RecipeBook
 local PANEL_W, PANEL_H = 147, 166
+local TAB_MARGIN = 30
 local ITEMS_PER_PAGE = 20
+
+UI.RecipeBookLeftMargin = TAB_MARGIN
 
 local BOOK_BACKGROUND = UI.GetGuiMaterial( "recipe_book" )
 local function sprite( name ) return UI.GetGuiMaterial( "sprites/recipe_book/" .. name ) end
@@ -226,9 +229,8 @@ end
 function BOOK:Init()
 	self:SetMouseInputEnabled( true )
 	self:SetKeyboardInputEnabled( true )
-	-- Some GMod branches do not expose SetClipsToBounds on EditablePanel.
-	-- The recipe-book parent is already allowed to draw outside its bounds on
-	-- those branches, so keep the call optional instead of aborting panel Init.
+	-- Some GMod branches do not expose SetClipsToBounds on EditablePanel.  The
+	-- tab strip therefore lives inside this panel's real bounds (see TAB_MARGIN).
 	if self.SetClipsToBounds then self:SetClipsToBounds( false ) end
 	self:SetVisible( false )
 	self.Scale = 2
@@ -302,7 +304,7 @@ function BOOK:Configure( screen )
 	self.GridWidth = math.Clamp( math.floor( tonumber( session and session.craftingWidth ) or 2 ), 1, 3 )
 	self.GridHeight = math.Clamp( math.floor( tonumber( session and session.craftingHeight ) or self.GridWidth ), 1, 3 )
 	self.Scale = screen and screen.Scale or UI.GuiScale()
-	self:SetSize( PANEL_W * self.Scale, PANEL_H * self.Scale )
+	self:SetSize( ( TAB_MARGIN + PANEL_W ) * self.Scale, PANEL_H * self.Scale )
 	self.SearchEntry:SetFont( "MCInventorySearch" .. tostring( self.Scale ) )
 	local oldSearch = self.SearchEntry:GetValue() or ""
 	self.SearchEntry:SetValue( oldSearch )
@@ -322,18 +324,18 @@ end
 
 function BOOK:SetGeometry( x, y, scale )
 	self.Scale = math.max( 1, math.floor( tonumber( scale ) or self.Scale or 1 ) )
-	self:SetSize( PANEL_W * self.Scale, PANEL_H * self.Scale )
-	self:SetPos( math.floor( x or 0 ), math.floor( y or 0 ) )
+	self:SetSize( ( TAB_MARGIN + PANEL_W ) * self.Scale, PANEL_H * self.Scale )
+	self:SetPos( math.floor( x or 0 ) - TAB_MARGIN * self.Scale, math.floor( y or 0 ) )
 	self.SearchEntry:SetFont( "MCInventorySearch" .. tostring( self.Scale ) )
-	self.SearchEntry:SetPos( 25 * self.Scale, 12 * self.Scale )
+	self.SearchEntry:SetPos( ( TAB_MARGIN + 25 ) * self.Scale, 12 * self.Scale )
 	self.SearchEntry:SetSize( 81 * self.Scale, 14 * self.Scale )
-	for index, tab in ipairs( self.Tabs ) do tab:SetPos( -30 * self.Scale, ( 3 + ( index - 1 ) * 27 ) * self.Scale ) end
-	self.FilterButton:SetPos( 110 * self.Scale, 12 * self.Scale )
-	self.BackButton:SetPos( 38 * self.Scale, 137 * self.Scale )
-	self.ForwardButton:SetPos( 93 * self.Scale, 137 * self.Scale )
+	for index, tab in ipairs( self.Tabs ) do tab:SetPos( 0, ( 3 + ( index - 1 ) * 27 ) * self.Scale ) end
+	self.FilterButton:SetPos( ( TAB_MARGIN + 110 ) * self.Scale, 12 * self.Scale )
+	self.BackButton:SetPos( ( TAB_MARGIN + 38 ) * self.Scale, 137 * self.Scale )
+	self.ForwardButton:SetPos( ( TAB_MARGIN + 93 ) * self.Scale, 137 * self.Scale )
 	for index, button in ipairs( self.RecipeButtons ) do
 		local visibleIndex = index - 1
-		button:SetPos( ( 11 + ( visibleIndex % 5 ) * 25 ) * self.Scale,
+		button:SetPos( ( TAB_MARGIN + 11 + ( visibleIndex % 5 ) * 25 ) * self.Scale,
 			( 31 + math.floor( visibleIndex / 5 ) * 25 ) * self.Scale )
 	end
 end
@@ -435,17 +437,18 @@ end
 function BOOK:Paint( w, h )
 	local entries = ensureEntries( self )
 	UI.WithPointFiltering( function()
-		UI.DrawTexture( BOOK_BACKGROUND, 0, 0, w, h, 0, 0, PANEL_W / 256, PANEL_H / 256 )
+		UI.DrawTexture( BOOK_BACKGROUND, TAB_MARGIN * self.Scale, 0,
+			PANEL_W * self.Scale, PANEL_H * self.Scale, 0, 0, PANEL_W / 256, PANEL_H / 256 )
 	end )
 	local pages = math.max( 1, math.ceil( #entries / ITEMS_PER_PAGE ) )
 	if pages > 1 then
-		UI.DrawText( tostring( self.Page + 1 ) .. " / " .. tostring( pages ), 73 * self.Scale,
+		UI.DrawText( tostring( self.Page + 1 ) .. " / " .. tostring( pages ), ( TAB_MARGIN + 73 ) * self.Scale,
 			141 * self.Scale, self.Scale, UI.Colors.text, TEXT_ALIGN_CENTER, true )
 	end
 	if self.RegistryMismatch then
 		surface.SetDrawColor( 0, 0, 0, 120 )
-		surface.DrawRect( 0, 0, w, h )
-		UI.DrawText( "Recipe data mismatch", w * 0.5, 76 * self.Scale,
+		surface.DrawRect( TAB_MARGIN * self.Scale, 0, PANEL_W * self.Scale, h )
+		UI.DrawText( "Recipe data mismatch", ( TAB_MARGIN + PANEL_W * 0.5 ) * self.Scale, 76 * self.Scale,
 			self.Scale, Color( 255, 120, 90 ), TEXT_ALIGN_CENTER, true )
 	end
 	return true
@@ -462,7 +465,8 @@ function BOOK:PaintOver()
 		UI.Tooltip.DrawLines( { { text = Book.CATEGORY_TITLES[self.HoveredTab.Key] or "Search", color = UI.Colors.text } }, mouseX, mouseY, self.Scale )
 	end
 	if self.ErrorUntil and RealTime() < self.ErrorUntil then
-		UI.DrawText( self.ErrorText, self:GetX() + self:GetWide() * 0.5, self:GetY() - 14 * self.Scale,
+		UI.DrawText( self.ErrorText, self:GetX() + ( TAB_MARGIN + PANEL_W * 0.5 ) * self.Scale,
+			self:GetY() - 14 * self.Scale,
 			self.Scale, Color( 255, 85, 85 ), TEXT_ALIGN_CENTER, true )
 	end
 end

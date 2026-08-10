@@ -19,12 +19,60 @@ MC.ClientInventory = MC.ClientInventory or {
 	session = nil,
 	actions = {},
 	nextActionId = 0,
+	authoritative = nil,
+	predictedContainer = nil,
+	predictedRevision = 0,
 }
 
 local State = MC.ClientInventory
 State.slots = State.slots or {}
 State.equipment = State.equipment or {}
 State.actions = State.actions or {}
+
+local function copyArray( values, count )
+	local output = {}
+	for index = 1, count or #values do output[index] = MC.CopyItemStack( values and values[index] ) end
+	return output
+end
+
+local function rememberAuthoritative()
+	local menu = State.menu
+	State.authoritative = {
+		revision = State.revision,
+		selected = State.selected,
+		cursor = MC.CopyItemStack( State.cursor ),
+		menuSlots = copyArray( menu and menu.slots or {}, menu and menu.slotCount or 0 ),
+		playerSlots = copyArray( State.slots, 36 ),
+		equipment = {},
+	}
+	for slot, stack in pairs( State.equipment or {} ) do
+		State.authoritative.equipment[slot] = MC.CopyItemStack( stack )
+	end
+end
+
+local function updateAuthoritativeFromDelta( revision, selected, changed, cursor, cursorApplies )
+	local authoritative = State.authoritative
+	if not authoritative then
+		rememberAuthoritative()
+		authoritative = State.authoritative
+	end
+	local menu = State.menu
+	for index, stack in pairs( changed or {} ) do
+		index = math.floor( tonumber( index ) or -1 )
+		if index < 0 or not menu or index >= menu.slotCount then return false, "invalid_inventory_slot" end
+		authoritative.menuSlots[index + 1] = MC.CopyItemStack( stack )
+		local playerIndex = menu.playerSlotMap and menu.playerSlotMap[index] or index - menu.playerOffset
+		if playerIndex ~= nil and playerIndex >= 0 and playerIndex < 36 then
+			authoritative.playerSlots[playerIndex + 1] = MC.CopyItemStack( stack )
+		end
+		local equipmentSlot = menu.equipmentSlotMap and menu.equipmentSlotMap[index] or nil
+		if equipmentSlot then authoritative.equipment[equipmentSlot] = MC.CopyItemStack( stack ) end
+	end
+	authoritative.revision = revision
+	authoritative.selected = math.Clamp( math.floor( tonumber( selected ) or authoritative.selected or 0 ), 0, 8 )
+	if cursorApplies then authoritative.cursor = MC.CopyItemStack( cursor ) end
+	return true
+end
 
 local function emit( eventName, ... )
 	if MC.RunEvent then MC.RunEvent( eventName, ... ) end
@@ -160,6 +208,10 @@ function MC.ApplyClientInventorySnapshot( data )
 	State.revision = math.max( 0, math.floor( tonumber( data.revision ) or 0 ) )
 	State.selected = math.Clamp( math.floor( tonumber( data.selected ) or 0 ), 0, 8 )
 	State.ready = true
+	State.actions = {}
+	State.predictedContainer = nil
+	State.predictedRevision = State.revision
+	rememberAuthoritative()
 	emit( "MC.InventorySnapshot", State )
 	emit( "MC.InventoryChanged", nil, State.revision, State )
 	emit( "MC.InventoryMenuChanged", nil, State.revision, State )
@@ -176,27 +228,31 @@ function MC.ApplyClientInventoryDelta( revision, selected, changed, cursor, curs
 	}
 	State.menu = menu
 	local menuChanged, playerChanged, equipmentChanged = {}, {}, {}
-	for index, stack in pairs( changed or {} ) do
+	for index in pairs( changed or {} ) do
 		index = math.floor( tonumber( index ) or -1 )
 		if index < 0 or index >= menu.slotCount then return false, "invalid_inventory_slot" end
-		menu.slots[index + 1] = MC.CopyItemStack( stack )
 		menuChanged[#menuChanged + 1] = index
 		local playerIndex = menu.playerSlotMap and menu.playerSlotMap[index] or index - menu.playerOffset
-		if playerIndex ~= nil and playerIndex >= 0 and playerIndex < 36 then
-			State.slots[playerIndex + 1] = MC.CopyItemStack( stack )
-			playerChanged[#playerChanged + 1] = playerIndex
-		end
+		if playerIndex ~= nil and playerIndex >= 0 and playerIndex < 36 then playerChanged[#playerChanged + 1] = playerIndex end
 		local equipmentSlot = menu.equipmentSlotMap and menu.equipmentSlotMap[index] or nil
-		if equipmentSlot then
-			State.equipment[equipmentSlot] = MC.CopyItemStack( stack )
-			equipmentChanged[#equipmentChanged + 1] = equipmentSlot
-		end
+		if equipmentSlot then equipmentChanged[#equipmentChanged + 1] = equipmentSlot end
+	end
+	local cursorApplies = cursorApplies == true
+	local remembered, rememberError = updateAuthoritativeFromDelta( revision, selected, changed, cursor, cursorApplies )
+	if not remembered then return false, rememberError end
+	local predictionRebuilt = MC.RebuildClientPrediction and MC.RebuildClientPrediction( true ) == true
+	if not predictionRebuilt then
+		for index, stack in pairs( changed or {} ) do menu.slots[index + 1] = MC.CopyItemStack( stack ) end
+		State.slots = copyArray( State.authoritative.playerSlots, 36 )
+		State.equipment = State.authoritative.equipment
+		State.revision = revision
+		State.selected = State.authoritative.selected
+		if cursorApplies then State.cursor = MC.CopyItemStack( cursor ) end
 	end
 	table.sort( menuChanged )
 	table.sort( playerChanged )
 	State.revision = revision
 	State.selected = math.Clamp( math.floor( tonumber( selected ) or State.selected ), 0, 8 )
-	if cursorApplies then State.cursor = MC.CopyItemStack( cursor ) end
 	if #menuChanged > 0 then emit( "MC.InventoryMenuChanged", menuChanged, revision, State ) end
 	if #playerChanged > 0 then emit( "MC.InventoryChanged", playerChanged, revision, State ) end
 	if #equipmentChanged > 0 then emit( "MC.EquipmentChanged", equipmentChanged, revision, State ) end
@@ -210,6 +266,7 @@ function MC.ApplyClientEquipmentDelta( revision, changed )
 	if revision < State.revision then return false, "stale_equipment_delta" end
 	local changedSlots = {}
 	State.equipment = State.equipment or {}
+	if not State.authoritative then rememberAuthoritative() end
 	for slot, stack in pairs( changed or {} ) do
 		slot = MC.NormalizeEquipmentSlot and MC.NormalizeEquipmentSlot( slot ) or nil
 		if not slot then return false, "invalid_equipment_slot" end
@@ -220,6 +277,12 @@ function MC.ApplyClientEquipmentDelta( revision, changed )
 		if menuIndex ~= nil then State.menu.slots[menuIndex + 1] = MC.CopyItemStack( stack ) end
 	end
 	State.revision = revision
+	for slot, stack in pairs( changed or {} ) do
+		State.authoritative.equipment[slot] = MC.CopyItemStack( stack )
+		local menuIndex = State.menu and State.menu.menuEquipmentMap and State.menu.menuEquipmentMap[slot] or nil
+		if menuIndex ~= nil then State.authoritative.menuSlots[menuIndex + 1] = MC.CopyItemStack( stack ) end
+	end
+	if MC.RebuildClientPrediction then MC.RebuildClientPrediction( true ) end
 	table.sort( changedSlots )
 	emit( "MC.EquipmentChanged", changedSlots, revision, State )
 	emit( "MC.InventoryMenuChanged", nil, revision, State )
