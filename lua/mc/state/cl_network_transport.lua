@@ -193,6 +193,7 @@ local function finalizeBulkGroup( groupId )
 		if MC.MarkChunkPhysDirtyBulk then MC.MarkChunkPhysDirtyBulk( key ) end
 	end
 	if MC.MarkSignRenderEntriesDirty then MC.MarkSignRenderEntriesDirty() end
+	if MC.MarkBannerRenderEntriesDirty then MC.MarkBannerRenderEntriesDirty() end
 	T.activeBulkGroup = nil
 	T.pendingBulkGroupEnds[group.id] = nil
 	return true
@@ -376,6 +377,7 @@ local function setBlockEntityAt( bx, by, bz, record )
 		if next( chunk.blockEntities ) == nil then chunk.blockEntities = nil end
 	end
 	if MC.MarkSignRenderEntriesDirty then MC.MarkSignRenderEntriesDirty() end
+	if MC.MarkBannerRenderEntriesDirty then MC.MarkBannerRenderEntriesDirty() end
 end
 
 local function decodeBlockEntity( cell, revision )

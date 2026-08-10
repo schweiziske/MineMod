@@ -10,7 +10,7 @@ local UI = MC.InventoryUI
 function UI.IsInventoryWeapon( weapon )
 	if not IsValid( weapon ) then return false end
 	local class = weapon:GetClass()
-	return class == "mc_inventory" or class == "mc_item_hand"
+	return class == "mc_inventory" or class == "mc_item_hand" or class == "mc_creative_placer"
 end
 
 function UI.ActiveInventoryWeapon()

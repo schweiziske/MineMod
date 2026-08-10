@@ -86,6 +86,7 @@ function MC.RegisterItem( definition )
 		texture = texture,
 		model = trim( definition.model ) ~= "" and trim( definition.model ) or nil,
 		displayName = trim( definition.displayName ) ~= "" and trim( definition.displayName ) or nil,
+		displayNameZH = trim( definition.displayNameZH ) ~= "" and trim( definition.displayNameZH ) or nil,
 		rarity = string.lower( trim( definition.rarity ~= nil and definition.rarity or "common" ) ),
 		kind = string.lower( trim( definition.kind ~= nil and definition.kind or ( blockName and "block" or "item" ) ) ),
 		tags = copyList( definition.tags ),
@@ -229,9 +230,13 @@ function MC.ItemForBlockState( stateId )
 	return blockId and MC.ItemForBlock( blockId ) or nil
 end
 
-function MC.ItemDisplayName( value )
+function MC.ItemDisplayName( value, lang )
 	local definition = MC.GetItem( value )
 	if not definition then return tostring( value or "" ) end
+	lang = tostring( lang or ( MC.Language and MC.Language() ) or "en_us" )
+	if lang == "zh_cn" and definition.displayNameZH and definition.displayNameZH ~= "" then
+		return definition.displayNameZH
+	end
 	if definition.displayName and definition.displayName ~= "" then return definition.displayName end
 	if definition.blockId and MC.Blocks and MC.Blocks[definition.blockId] then
 		local block = MC.Blocks[definition.blockId]

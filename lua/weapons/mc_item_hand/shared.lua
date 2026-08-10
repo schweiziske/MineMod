@@ -84,6 +84,7 @@ local function placeTarget( ply, aim, trace, id )
 	if stateId and MC.ResolveTorchPlacementState then stateId = MC.ResolveTorchPlacementState( stateId, hit.HitNormal ) end
 	if stateId and MC.ResolveFaceAttachedPlacementState then stateId = MC.ResolveFaceAttachedPlacementState( stateId, hit.HitNormal, ply ) end
 	if stateId and MC.ResolveSignPlacementState then stateId = MC.ResolveSignPlacementState( stateId, hit.HitNormal, ply, bx, by, bz ) end
+	if stateId and MC.ResolveBannerPlacementState then stateId = MC.ResolveBannerPlacementState( stateId, hit.HitNormal, ply, bx, by, bz ) end
 	if not stateId then return nil end
 	return bx, by, bz, stateId
 end
@@ -202,24 +203,39 @@ function SWEP:PrimaryAttack()
 		end
 		local bx, by, bz = breakTarget( ply, aim, eyeTrace )
 		if not bx then return end
-		if MC.SV and MC.SV.Break then MC.SV.Break( ply, bx, by, bz ) end
+		if MC.SV and MC.SV.Break and MC.SV.Break( ply, bx, by, bz ) then
+			net.Start( "mc_creative_break_anim" )
+				net.WriteInt( bx, MC.Net.COORD_BITS )
+				net.WriteInt( by, MC.Net.COORD_BITS )
+				net.WriteInt( bz, MC.Net.COORD_BITS )
+			net.Send( ply )
+		elseif MC.SV and MC.SV.SyncBreakPlan then
+			MC.SV.SyncBreakPlan( ply, bx, by, bz )
+		elseif MC.SV and MC.SV.SyncCell then
+			MC.SV.SyncCell( ply, bx, by, bz )
+		end
 	elseif CLIENT and IsFirstTimePredicted() and ply == LocalPlayer() then
 		if traceCombatTarget( ply, eyeTrace ) then return end
 		local bx, by, bz = breakTarget( ply, aim, eyeTrace )
 		if bx and MC.CanPreviewBreak and MC.CanPreviewBreak( ply, bx, by, bz ) and MC.PredictBreakBlock then
-			MC.PredictBreakBlock( bx, by, bz, ply )
+			if MC.PredictBreakBlock( bx, by, bz, ply ) then
+				self:StartCreativePlaceAnimation( bx, by, bz )
+			end
 		end
 	end
 end
 
 function SWEP:SecondaryAttack()
-	self:SetNextSecondaryFire( CurTime() + ( self.MCSecondaryHeld and USE_TICK_INTERVAL or ATTACK_INTERVAL ) )
+	local repeatingPlacement = self.MCSecondaryHeld and self.MCSecondaryMode == "place"
+	self:SetNextSecondaryFire( CurTime() + ATTACK_INTERVAL )
 	local ply = self:GetOwner()
 	if not IsValid( ply ) then return end
-	if self.MCSecondaryHeld then return end
-	self.MCSecondaryHeld = true
-	self.MCSecondaryStartedAt = CurTime()
-	self.MCSecondaryMode = nil
+	if self.MCSecondaryHeld and not repeatingPlacement then return end
+	if not repeatingPlacement then
+		self.MCSecondaryHeld = true
+		self.MCSecondaryStartedAt = CurTime()
+		self.MCSecondaryMode = nil
+	end
 	local aim = aimedBlock( ply )
 	local trace = aim or ply:GetEyeTrace()
 	if not trace then self.MCSecondaryHeld = false return end
@@ -241,31 +257,53 @@ function SWEP:SecondaryAttack()
 			self.MCSecondaryMode = used and "item" or "item_rejected"
 			return
 		end
+		if not definition or not definition.blockId or not MC.SV or not MC.SV.PlaceState then
+			self:MCReleaseSecondary( "not_placeable" )
+			return
+		end
+		-- Block placement is the automatic right-click mode. Keeping this mode
+		-- armed lets weapon_base invoke SecondaryAttack again while the key stays down.
+		self.MCSecondaryMode = "place"
 		if not trace.Hit then return end
-		if not definition or not definition.blockId or not MC.SV or not MC.SV.PlaceState then return end
 		local bx, by, bz, stateId = placeTarget( ply, aim, trace, definition.blockId )
 		if not bx then return end
 		if not infiniteMaterials( ply ) and not stack then return end
+		local blockEntity
+		if MC.IsBannerState and MC.IsBannerState( stateId ) and MC.BannerRecordFromItemStack then
+			blockEntity = MC.BannerRecordFromItemStack( stack )
+			if not blockEntity then return end
+		end
 		local consumedRecord, snapshot = consumeSelected( ply )
 		if not infiniteMaterials( ply ) and not consumedRecord then return end
-		if not MC.SV.PlaceState( ply, bx, by, bz, stateId ) then
+		if not MC.SV.PlaceState( ply, bx, by, bz, stateId, { blockEntity = blockEntity } ) then
 			restoreConsumed( consumedRecord, snapshot )
-			self.MCSecondaryHeld = false
+			if MC.SV.SyncPlacementStatePlan then
+				MC.SV.SyncPlacementStatePlan( ply, bx, by, bz, stateId )
+			elseif MC.SV.SyncCell then
+				MC.SV.SyncCell( ply, bx, by, bz )
+			end
 			return
 		end
 		if not commitConsumed( consumedRecord, snapshot, ply ) then restoreConsumed( consumedRecord, snapshot ) end
-		self.MCSecondaryMode = "place"
+		net.Start( "mc_creative_place_anim" )
+			net.WriteInt( bx, MC.Net.COORD_BITS )
+			net.WriteInt( by, MC.Net.COORD_BITS )
+			net.WriteInt( bz, MC.Net.COORD_BITS )
+		net.Send( ply )
 	elseif IsFirstTimePredicted() and ply == LocalPlayer() then
 		local state = MC.ClientInventory
 		local stack = state and state.slots[( state.selected or 0 ) + 1] or nil
 		local definition = stack and MC.GetItem( stack.item ) or nil
 		if not definition or not definition.blockId then return end
+		self.MCSecondaryMode = "place"
+		if not trace.Hit then return end
 		local bx, by, bz, stateId = placeTarget( ply, aim, trace, definition.blockId )
 		local plan = bx and MC.BuildPlacementStatePlan and MC.BuildPlacementStatePlan( bx, by, bz, stateId )
 		if plan and MC.CanPreviewPlacePlan and MC.CanPreviewPlacePlan( ply, plan ) and MC.PredictSetBlockState then
-			MC.PredictSetBlockState( bx, by, bz, stateId )
+			if MC.PredictSetBlockState( bx, by, bz, stateId ) then
+				self:StartCreativePlaceAnimation( bx, by, bz )
+			end
 		end
-		self.MCSecondaryMode = "place"
 	end
 end
 
@@ -286,18 +324,20 @@ function SWEP:Think()
 		return
 	end
 
+	local active = ply:GetActiveWeapon()
+	if active ~= self then
+		if SERVER and MC.SV and MC.SV.CancelSelectedItemUse then
+			MC.SV.CancelSelectedItemUse( ply, "weapon_switched" )
+		end
+		self.MCSecondaryHeld = false
+		self.MCSecondaryMode = nil
+		return
+	end
+	if self.MCSecondaryHeld and not ply:KeyDown( IN_ATTACK2 )
+		and CurTime() - ( self.MCSecondaryStartedAt or 0 ) >= 0.02 then
+		self:MCReleaseSecondary( "released" )
+	end
 	if SERVER then
-		local active = ply:GetActiveWeapon()
-		if active ~= self then
-			if MC.SV and MC.SV.CancelSelectedItemUse then MC.SV.CancelSelectedItemUse( ply, "weapon_switched" ) end
-			self.MCSecondaryHeld = false
-			self.MCSecondaryMode = nil
-			return
-		end
-		if self.MCSecondaryHeld and not ply:KeyDown( IN_ATTACK2 )
-			and CurTime() - ( self.MCSecondaryStartedAt or 0 ) >= 0.02 then
-			self:MCReleaseSecondary( "released" )
-		end
 		if self.MCSecondaryHeld and self.MCSecondaryMode == "item"
 			and ply:KeyDown( IN_ATTACK2 ) and MC.SV and MC.SV.TickSelectedItemUse then
 			MC.SV.TickSelectedItemUse( ply, { reason = "right_click_tick" } )
@@ -332,6 +372,66 @@ function SWEP:OnRemove()
 end
 
 if CLIENT then
+	local ITEM_PLACE_ANIM_DURATION = 0.30
+	local ITEM_HAND_HEIGHT_RECOVERY = 8
+
+	local function itemHeldAnimationEnabled()
+		local cvar = GetConVar and GetConVar( "mc_creative_held_anim" ) or nil
+		return not cvar or cvar:GetBool()
+	end
+
+	local function placeAnimKey( bx, by, bz )
+		if bx == nil then return nil end
+		return MC.CellKey( bx, by, bz )
+	end
+
+	-- Kept on the hand SWEP so the legacy creative pose can drive exactly the
+	-- same swing and equip-height animation for inventory-selected blocks.
+	function SWEP:StartCreativePlaceAnimation( bx, by, bz )
+		if not itemHeldAnimationEnabled() then return end
+		local now = CurTime()
+		local key = placeAnimKey( bx, by, bz )
+		if key and self.MCCreativePlaceAnimKey == key
+		and now - ( self.MCCreativePlaceAnimStart or 0 ) < 0.75 then return end
+		self.MCCreativePlaceAnimKey = key
+		self.MCCreativePlaceAnimStart = now
+		self.MCCreativeOldMainHandHeight = 0
+		self.MCCreativeMainHandHeight = 0
+		self.MCCreativeHandHeightLast = now
+	end
+
+	function SWEP:CreativePlaceAnim()
+		if not itemHeldAnimationEnabled() then return 0 end
+		local start = self.MCCreativePlaceAnimStart
+		if not start then return 0 end
+		local progress = ( CurTime() - start ) / ITEM_PLACE_ANIM_DURATION
+		if progress <= 0 or progress >= 1 then return 0 end
+		return progress
+	end
+
+	function SWEP:UpdateCreativeMainHandHeight()
+		local now = CurTime()
+		if self.MCCreativeMainHandHeight == nil then
+			self.MCCreativeOldMainHandHeight = 1
+			self.MCCreativeMainHandHeight = 1
+			self.MCCreativeHandHeightLast = now
+			return
+		end
+		local last = self.MCCreativeHandHeightLast or now
+		local dt = math.Clamp( now - last, 0, 0.25 )
+		if dt <= 0 then return end
+		self.MCCreativeOldMainHandHeight = self.MCCreativeMainHandHeight
+		local step = math.min( ITEM_HAND_HEIGHT_RECOVERY * dt, ITEM_HAND_HEIGHT_RECOVERY / 20 )
+		self.MCCreativeMainHandHeight = math.Clamp( self.MCCreativeMainHandHeight + step, 0, 1 )
+		self.MCCreativeHandHeightLast = now
+	end
+
+	function SWEP:CreativeMainHandInverseHeight()
+		if not itemHeldAnimationEnabled() then return 0 end
+		self:UpdateCreativeMainHandHeight()
+		return 1 - math.Clamp( self.MCCreativeMainHandHeight or 1, 0, 1 )
+	end
+
 	local function selectedStack( ply )
 		if ply == LocalPlayer() and MC.ClientInventory then
 			return MC.ClientInventory.slots[( MC.ClientInventory.selected or 0 ) + 1]
@@ -361,24 +461,59 @@ if CLIENT then
 		return MC.DefaultBlockState( definition.blockId )
 	end
 
-	local function handPose( ply, hand )
-		local eyeAng = ply:EyeAngles()
-		local side = hand == "offhand" and -1 or 1
-		local pos = EyePos() + eyeAng:Forward() * 8 + eyeAng:Right() * ( 4 * side ) - eyeAng:Up() * 4
-		local ang = Angle( eyeAng.p + 8, eyeAng.y + 28 * side, eyeAng.r + 12 * side )
-		return pos, ang, math.max( 0.35, ( MC.BS or 36.5 ) / 100 )
+	-- Minecraft applies the attack/equip animation to the hand that actually
+	-- performed the interaction.  The offhand still renders its item, but it
+	-- must not borrow the active weapon's main-hand animation state.
+	local function animationWeaponFor( ply, leftHand )
+		if leftHand then return nil end
+		return ply:GetActiveWeapon()
 	end
 
 	local function heldPose( ply, firstPerson, hand )
-		if firstPerson then return handPose( ply, hand ) end
-		local left = hand == "offhand"
-		local bone = ply:LookupBone( left and "ValveBiped.Bip01_L_Hand" or "ValveBiped.Bip01_R_Hand" )
+		local leftHand = hand == "offhand"
+		if firstPerson and MC.CreativeHeldFirstPersonPose then
+			return MC.CreativeHeldFirstPersonPose( animationWeaponFor( ply, leftHand ), leftHand )
+		end
+		if not firstPerson and MC.CreativeHeldThirdPersonPose then
+			return MC.CreativeHeldThirdPersonPose( ply, leftHand )
+		end
+		if firstPerson then
+			local eyeAng = ply:EyeAngles()
+			local side = leftHand and -1 or 1
+			return EyePos() + eyeAng:Forward() * 11.5 + eyeAng:Right() * ( 12 * side ) - eyeAng:Up() * 8.3,
+				eyeAng, 6.4
+		end
+		local bone = ply:LookupBone( leftHand and "ValveBiped.Bip01_L_Hand" or "ValveBiped.Bip01_R_Hand" )
 		local pos, ang
 		if bone then pos, ang = ply:GetBonePosition( bone ) end
 		if not pos or not ang then pos, ang = ply:GetShootPos() + ply:EyeAngles():Forward() * 10, ply:EyeAngles() end
-		local side = left and -1 or 1
+		local side = leftHand and -1 or 1
 		pos = pos + ang:Forward() * 2 + ang:Right() * ( 2 * side ) + ang:Up()
 		return pos, ang, 0.45
+	end
+
+	local function heldItemPose( ply, firstPerson, hand )
+		local leftHand = hand == "offhand"
+		if firstPerson and MC.CreativeHeldFirstPersonAnchor then
+			local pos, ang = MC.CreativeHeldFirstPersonAnchor( animationWeaponFor( ply, leftHand ), leftHand )
+			return pos - ply:EyeAngles():Up() * 2.5, ang, 9.4
+		end
+		if not firstPerson and MC.CreativeHeldThirdPersonAnchor then
+			local pos, ang = MC.CreativeHeldThirdPersonAnchor( ply, leftHand )
+			return pos, ang, 7.5
+		end
+		if firstPerson then
+			local eyeAng = ply:EyeAngles()
+			local side = leftHand and -1 or 1
+			return EyePos() + eyeAng:Forward() * 11.5 + eyeAng:Right() * ( 12 * side ) - eyeAng:Up() * 10.8,
+				eyeAng, 9.4
+		end
+		local bone = ply:LookupBone( leftHand and "ValveBiped.Bip01_L_Hand" or "ValveBiped.Bip01_R_Hand" )
+		local pos, ang
+		if bone then pos, ang = ply:GetBonePosition( bone ) end
+		if not pos or not ang then pos, ang = ply:GetShootPos(), ply:EyeAngles() end
+		local side = leftHand and -1 or 1
+		return pos + ang:Forward() * 2.5 + ang:Right() * ( 2.2 * side ) - ang:Up() * 1.8, ang, 7.5
 	end
 
 	local function drawHeldStack( ply, stack, firstPerson, hand, useState )
@@ -388,11 +523,20 @@ if CLIENT then
 		local pos, ang, scale = heldPose( ply, firstPerson, hand )
 		local stateId = selectedState( ply, stack )
 		if definition.blockId and stateId and MC.DrawCreativeHeldBlockState then
+			local brightness = 0.8
+			if MC.CreativeHeldLightingAt then
+				local owner = firstPerson and ply:GetActiveWeapon() or ply
+				local field = hand == "offhand" and "MCItemHandOffhandLight" or "MCItemHandMainhandLight"
+				if IsValid( owner ) then
+					owner[field] = MC.CreativeHeldLightingAt( firstPerson and EyePos() or pos, owner[field] )
+					brightness = owner[field]
+				end
+			end
 			render.OverrideDepthEnable( firstPerson, false )
-			MC.DrawCreativeHeldBlockState( stateId, pos, ang, scale, 0.8 )
+			MC.DrawCreativeHeldBlockState( stateId, pos, ang, scale, brightness )
 			render.OverrideDepthEnable( false, false )
 		elseif MC.InventoryUI and MC.InventoryUI.ItemRenderer then
-			local normal = firstPerson and EyeAngles():Forward() or ang:Forward()
+			pos, ang, scale = heldItemPose( ply, firstPerson, hand )
 			local using = useState.using and useState.hand == hand
 			local useProgress = using and useState.progress or 0
 			local useStart = using and useState.startedAt or 0
@@ -400,7 +544,7 @@ if CLIENT then
 			if using and useDuration > 0 and MC.ItemUseProgress then
 				useProgress = MC.ItemUseProgress( useStart, useDuration, CurTime() )
 			end
-			MC.InventoryUI.ItemRenderer.DrawHeldItem( stack, pos, normal, firstPerson and 2.4 or 1.1,
+			MC.InventoryUI.ItemRenderer.DrawHeldItem( stack, pos, ang, scale,
 				nil, {
 					displayContext = firstPerson and ( hand == "offhand" and "firstperson_lefthand" or "firstperson_righthand" )
 						or ( hand == "offhand" and "thirdperson_lefthand" or "thirdperson_righthand" ),

@@ -12,15 +12,39 @@ local function fontAtlasMaterial( path )
 	-- VMT by name makes $basetexture fall back to a missing .vtf and produces
 	-- the error texture, which becomes almost solid black after vertex tinting.
 	-- Load the PNG directly, just like the main block atlas does.
-	return Material( path .. ".png", "alphatest vertexcolor vertexalpha nocull" )
+	local source = Material( path .. ".png", "alphatest vertexcolor vertexalpha nocull" )
+	if not ( CreateMaterial and source and source.GetTexture ) then return source end
+	local texture = source:GetTexture( "$basetexture" )
+	local textureName = texture and texture.GetName and texture:GetName() or nil
+	if not textureName or textureName == "" or ( texture.IsError and texture:IsError() ) then return source end
+	local identity = path .. ".png|sign_pixel"
+	local suffix = util and util.CRC and util.CRC( identity ) or string.gsub( identity, "[^%w_]", "_" )
+	local value = CreateMaterial( "mc_sign_pixel_" .. tostring( suffix ), "UnlitGeneric", {
+		["$basetexture"] = textureName,
+		["$vertexcolor"] = "1",
+		["$vertexalpha"] = "1",
+		["$nocull"] = "1",
+		["$alphatest"] = "1",
+		["$alphatestreference"] = "0.5",
+		["$pointsample"] = "1",
+		["$nomip"] = "1",
+		["$nolod"] = "1",
+		["$clamps"] = "1",
+		["$clampt"] = "1",
+	} )
+	if value and not value:IsError() then
+		value:SetTexture( "$basetexture", texture )
+		return value
+	end
+	return source
 end
 
 local FONT_ATLASES = {
-	{ material = fontAtlasMaterial( "mc/font/ascii" ), first = 32, last = 126, cols = 16, rows = 16, ascii = true },
-	{ material = fontAtlasMaterial( "mc/font/unifont_cjk_0" ), first = 0x3000, last = 0x6FFF, cols = 128, rows = 128 },
-	{ material = fontAtlasMaterial( "mc/font/unifont_cjk_1" ), first = 0x7000, last = 0x9FFF, cols = 128, rows = 96 },
-	{ material = fontAtlasMaterial( "mc/font/unifont_cjk_compat" ), first = 0xF900, last = 0xFAFF, cols = 128, rows = 4 },
-	{ material = fontAtlasMaterial( "mc/font/unifont_fullwidth" ), first = 0xFF01, last = 0xFF5E, cols = 128, rows = 1 },
+	{ material = fontAtlasMaterial( "mc/font/ascii" ), first = 32, last = 126, textureW = 128, textureH = 128, cellW = 8, cellH = 8, cols = 16, rows = 16, ascii = true },
+	{ material = fontAtlasMaterial( "mc/font/unifont_cjk_0" ), first = 0x3000, last = 0x6FFF, textureW = 2048, textureH = 2048, cellW = 16, cellH = 16, cols = 128, rows = 128 },
+	{ material = fontAtlasMaterial( "mc/font/unifont_cjk_1" ), first = 0x7000, last = 0x9FFF, textureW = 2048, textureH = 1536, cellW = 16, cellH = 16, cols = 128, rows = 96 },
+	{ material = fontAtlasMaterial( "mc/font/unifont_cjk_compat" ), first = 0xF900, last = 0xFAFF, textureW = 2048, textureH = 64, cellW = 16, cellH = 16, cols = 128, rows = 4 },
+	{ material = fontAtlasMaterial( "mc/font/unifont_fullwidth" ), first = 0xFF01, last = 0xFF5E, textureW = 2048, textureH = 16, cellW = 16, cellH = 16, cols = 128, rows = 1 },
 }
 
 surface.CreateFont( "mc_sign_fallback", {
@@ -44,6 +68,18 @@ surface.CreateFont( "mc_sign_title", {
 	extended = true,
 } )
 
+local function atlasGlyphUV( atlas, slot )
+	local column = slot % atlas.cols
+	local row = math.floor( slot / atlas.cols )
+	if row < 0 or row >= atlas.rows then return nil end
+	local inset = math.min( 0.5, ( atlas.cellW - 1 ) * 0.5, ( atlas.cellH - 1 ) * 0.5 )
+	local left, top = column * atlas.cellW, row * atlas.cellH
+	return ( left + inset ) / atlas.textureW,
+		( top + inset ) / atlas.textureH,
+		( left + atlas.cellW - inset ) / atlas.textureW,
+		( top + atlas.cellH - inset ) / atlas.textureH
+end
+
 local function utf8Glyphs( text )
 	local glyphs, count, index = {}, 0, 1
 	while index <= #text do
@@ -63,11 +99,8 @@ local function utf8Glyphs( text )
 			local candidate = FONT_ATLASES[atlasIndex]
 			if codepoint >= candidate.first and codepoint <= candidate.last then
 				local slot = candidate.ascii and codepoint or codepoint - candidate.first
-				local column = slot % candidate.cols
-				local row = math.floor( slot / candidate.cols )
 				atlas = candidate
-				u0, v0 = column / candidate.cols, row / candidate.rows
-				u1, v1 = ( column + 1 ) / candidate.cols, ( row + 1 ) / candidate.rows
+				u0, v0, u1, v1 = atlasGlyphUV( candidate, slot )
 				break
 			end
 		end

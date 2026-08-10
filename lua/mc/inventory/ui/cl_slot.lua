@@ -16,6 +16,7 @@ function PANEL:Init()
 	self.InventoryIndex = nil
 	self.MenuIndex = nil
 	self.Kind = "empty"
+	self.CreativeItem = nil
 	self.Scale = 1
 end
 
@@ -32,6 +33,7 @@ end
 
 function PANEL:SetInventorySlot( index, menuIndex )
 	self.Kind = "inventory"
+	self.CreativeItem = nil
 	self.InventoryIndex = math.floor( tonumber( index ) or -1 )
 	self.MenuIndex = math.floor( tonumber( menuIndex ~= nil and menuIndex or index ) or -1 )
 	self:RefreshInventoryStack()
@@ -40,6 +42,7 @@ end
 
 function PANEL:SetMenuSlot( index, playerIndex, role )
 	self.Kind = role == "result" and "result" or "menu"
+	self.CreativeItem = nil
 	self.MenuIndex = math.floor( tonumber( index ) or -1 )
 	self.InventoryIndex = playerIndex ~= nil and math.floor( tonumber( playerIndex ) or -1 ) or nil
 	self:RefreshInventoryStack()
@@ -49,6 +52,7 @@ end
 function PANEL:SetCreativeItem( item )
 	local definition = MC.GetItem and MC.GetItem( item ) or nil
 	self.Kind = "creative"
+	self.CreativeItem = item
 	self.InventoryIndex = nil
 	self.MenuIndex = nil
 	self.Stack = definition and MC.NewItemStack( definition.name, 1 ) or nil
@@ -57,6 +61,7 @@ end
 
 function PANEL:SetDestroySlot()
 	self.Kind = "destroy"
+	self.CreativeItem = nil
 	self.InventoryIndex = nil
 	self.MenuIndex = nil
 	self.Stack = nil
@@ -66,7 +71,32 @@ end
 function PANEL:RefreshInventoryStack()
 	if ( self.Kind ~= "inventory" and self.Kind ~= "menu" and self.Kind ~= "result" ) or self.MenuIndex == nil then return end
 	local state = MC.ClientInventory
+	if self.Kind == "inventory" and self.InventoryIndex ~= nil then
+		-- Player slots are mirrored independently from an open menu.  Reading the
+		-- authoritative 36-slot mirror prevents a late open snapshot from leaving
+		-- the hotbar visually empty until another UI action causes a repaint.
+		self.Stack = state and MC.CopyItemStack( state.slots and state.slots[self.InventoryIndex + 1] ) or nil
+		return
+	end
 	self.Stack = state and state.menu and MC.CopyItemStack( state.menu.slots[self.MenuIndex + 1] ) or nil
+end
+
+function PANEL:Think()
+	if self.Kind == "creative" then
+		-- Creative slots can be laid out one frame before the generated item
+		-- registry finalizes. Retry their saved item ID so a tab click is never
+		-- needed to make the icon appear.
+		if not self.Stack and self.CreativeItem and MC.GetItem then self:SetCreativeItem( self.CreativeItem ) end
+		return
+	end
+	if self.Kind ~= "inventory" then return end
+	local state = MC.ClientInventory
+	local menu = state and state.menu or nil
+	local revision = state and state.revision or 0
+	if self.ObservedState ~= state or self.ObservedMenu ~= menu or self.ObservedRevision ~= revision then
+		self.ObservedState, self.ObservedMenu, self.ObservedRevision = state, menu, revision
+		self:RefreshInventoryStack()
+	end
 end
 
 function PANEL:GetStack()
