@@ -218,10 +218,18 @@ vgui.Register( "MCRecipeBookToggle", TOGGLE, "DButton" )
 
 local BOOK = {}
 
+local function ensureEntries( panel )
+	if type( panel.Entries ) ~= "table" then panel.Entries = {} end
+	return panel.Entries
+end
+
 function BOOK:Init()
 	self:SetMouseInputEnabled( true )
 	self:SetKeyboardInputEnabled( true )
-	self:SetClipsToBounds( false )
+	-- Some GMod branches do not expose SetClipsToBounds on EditablePanel.
+	-- The recipe-book parent is already allowed to draw outside its bounds on
+	-- those branches, so keep the call optional instead of aborting panel Init.
+	if self.SetClipsToBounds then self:SetClipsToBounds( false ) end
 	self:SetVisible( false )
 	self.Scale = 2
 	self.SelectedCategory = "search"
@@ -354,7 +362,7 @@ function BOOK:ToggleFilter()
 end
 
 function BOOK:CanTurnPage( direction )
-	local pages = math.max( 1, math.ceil( #self.Entries / ITEMS_PER_PAGE ) )
+	local pages = math.max( 1, math.ceil( #ensureEntries( self ) / ITEMS_PER_PAGE ) )
 	return direction < 0 and self.Page > 0 or direction > 0 and self.Page < pages - 1
 end
 
@@ -386,20 +394,22 @@ function BOOK:RefreshEntries( force )
 	if not force and key == self.EntryKey then return end
 	self.EntryKey = key
 	local category = self.SelectedCategory == "search" and nil or self.SelectedCategory
-	self.Entries = Book and Book.BuildEntries and Book.BuildEntries( self.GridWidth, self.GridHeight, {
+	local entries = Book and Book.BuildEntries and Book.BuildEntries( self.GridWidth, self.GridHeight, {
 		category = category,
 		query = query,
 		onlyCraftable = self.OnlyCraftable,
 		stacks = self:CollectStacks(),
 	} ) or {}
+	self.Entries = type( entries ) == "table" and entries or {}
 	self.Page = math.Clamp( self.Page, 0, math.max( 0, math.ceil( #self.Entries / ITEMS_PER_PAGE ) - 1 ) )
 	self:LayoutButtons()
 end
 
 function BOOK:LayoutButtons()
+	local entries = ensureEntries( self )
 	local first = self.Page * ITEMS_PER_PAGE
 	for index, button in ipairs( self.RecipeButtons ) do
-		local entry = self.Entries[first + index]
+		local entry = entries[first + index]
 		if entry then
 			button:Configure( self, entry.recipe, entry.craftable, self.Scale )
 			button:SetVisible( true )
@@ -423,10 +433,11 @@ function BOOK:PlaceRecipe( recipe, useMax )
 end
 
 function BOOK:Paint( w, h )
+	local entries = ensureEntries( self )
 	UI.WithPointFiltering( function()
 		UI.DrawTexture( BOOK_BACKGROUND, 0, 0, w, h, 0, 0, PANEL_W / 256, PANEL_H / 256 )
 	end )
-	local pages = math.max( 1, math.ceil( #self.Entries / ITEMS_PER_PAGE ) )
+	local pages = math.max( 1, math.ceil( #entries / ITEMS_PER_PAGE ) )
 	if pages > 1 then
 		UI.DrawText( tostring( self.Page + 1 ) .. " / " .. tostring( pages ), 73 * self.Scale,
 			141 * self.Scale, self.Scale, UI.Colors.text, TEXT_ALIGN_CENTER, true )

@@ -926,11 +926,13 @@ local function validateBreakPlan( ply, plan )
 	return validateReach( ply, plan.bx, plan.by, plan.bz )
 end
 
-function SV.PlaceState( ply, bx, by, bz, stateId )
+function SV.PlaceState( ply, bx, by, bz, stateId, options )
 	stateId = math.floor( tonumber( stateId ) or -1 )
 	if stateId <= 0 or not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return false end
 	local plan = MC.BuildPlacementStatePlan and MC.BuildPlacementStatePlan( bx, by, bz, stateId )
 	if not validatePlacementPlan( ply, plan ) then return false end
+	options = normalizeWriteOptions( options )
+	if options.blockEntity ~= nil then plan.cells[1].blockEntity = options.blockEntity end
 	local result = SV.ApplyBlockTransaction( plan.cells, {
 		actor = ply,
 		priorityPhys = true,

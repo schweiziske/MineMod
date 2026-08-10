@@ -2,7 +2,7 @@
     Minecraft inventory UI theme and low-allocation drawing helpers.
 
     The container textures are the visual system.  This file only supplies the
-    pixel-font fallback, nearest-neighbour texture drawing and semantic colors;
+    built-in GMod font text, crisp texture drawing and semantic colors;
     layout and inventory state stay in the screen/slot modules.
 ------------------------------------------------------------------------------]]
 
@@ -30,8 +30,9 @@ UI.Colors = UI.Colors or {
 }
 
 UI.Materials = UI.Materials or {}
+UI.PixelMaterials = UI.PixelMaterials or {}
 
-local function material( path, flags )
+local function sourceMaterial( path, flags )
 	local key = tostring( path ) .. "|" .. tostring( flags or "" )
 	local cached = UI.Materials[key]
 	if cached then return cached end
@@ -40,13 +41,58 @@ local function material( path, flags )
 	return value
 end
 
+local function pixelMaterial( path, flags )
+	local sourcePath = tostring( path or "" )
+	local sourceFlags = tostring( flags or "vertexcolor vertexalpha nocull" )
+	local key = sourcePath .. "|" .. sourceFlags .. "|pixel_v2"
+	local cached = UI.PixelMaterials[key]
+	if cached then return cached end
+
+	local source = sourceMaterial( sourcePath, sourceFlags )
+	if not ( CreateMaterial and source and source.GetTexture ) then
+		UI.PixelMaterials[key] = source
+		return source
+	end
+
+	local texture = source:GetTexture( "$basetexture" )
+	local textureName = texture and texture.GetName and texture:GetName() or nil
+	if not textureName or textureName == "" or ( texture.IsError and texture:IsError() ) then
+		UI.PixelMaterials[key] = source
+		return source
+	end
+
+	local identity = sourcePath .. "|" .. sourceFlags
+	local suffix = util and util.CRC and util.CRC( identity ) or string.gsub( identity, "[^%w_]", "_" )
+	local value = CreateMaterial( "mc_inventory_pixel_" .. tostring( suffix ), "UnlitGeneric", {
+		["$basetexture"] = textureName,
+		["$vertexcolor"] = "1",
+		["$vertexalpha"] = "1",
+		["$nocull"] = "1",
+		["$alphatest"] = "1",
+		["$alphatestreference"] = "0.5",
+		["$pointsample"] = "1",
+		["$nomip"] = "1",
+		["$nolod"] = "1",
+		["$clamps"] = "1",
+		["$clampt"] = "1",
+	} )
+	if value and not value:IsError() then
+		value:SetTexture( "$basetexture", texture )
+		UI.PixelMaterials[key] = value
+		return value
+	end
+
+	UI.PixelMaterials[key] = source
+	return source
+end
+
 function UI.GetMaterial( path )
 	if not isstring( path ) or path == "" then return nil end
-	return material( path, "vertexcolor vertexalpha nocull" )
+	return pixelMaterial( path, "vertexcolor vertexalpha nocull" )
 end
 
 function UI.GetGuiMaterial( name )
-	return material( "mc/gui/" .. tostring( name ) .. ".png", "vertexcolor vertexalpha nocull" )
+	return pixelMaterial( "mc/gui/" .. tostring( name ) .. ".png", "vertexcolor vertexalpha nocull" )
 end
 
 function UI.WithPointFiltering( callback )
@@ -77,101 +123,52 @@ function UI.DrawGuiRegion( name, x, y, w, h, sourceW, sourceH )
 	return UI.DrawTexture( mat, x, y, w, h, 0, 0, ( sourceW or w ) / 256, ( sourceH or h ) / 256 )
 end
 
-local FONT_ATLASES = {
-	{ material = material( "mc/font/ascii.png", "vertexcolor vertexalpha nocull" ), first = 32, last = 126, cols = 16, rows = 16, ascii = true },
-	{ material = material( "mc/font/nonlatin_european.png", "vertexcolor vertexalpha nocull" ), first = 0x00A1, last = 0x2FFF, cols = 16, rows = 16 },
-	{ material = material( "mc/font/unifont_cjk_0.png", "vertexcolor vertexalpha nocull" ), first = 0x3000, last = 0x6FFF, cols = 128, rows = 128 },
-	{ material = material( "mc/font/unifont_cjk_1.png", "vertexcolor vertexalpha nocull" ), first = 0x7000, last = 0x9FFF, cols = 128, rows = 96 },
-	{ material = material( "mc/font/unifont_cjk_compat.png", "vertexcolor vertexalpha nocull" ), first = 0xF900, last = 0xFAFF, cols = 128, rows = 4 },
-	{ material = material( "mc/font/unifont_fullwidth.png", "vertexcolor vertexalpha nocull" ), first = 0xFF01, last = 0xFF5E, cols = 128, rows = 1 },
-}
-
-local function nextCodepoint( text, index )
-	local first = string.byte( text, index )
-	if not first then return nil end
-	if first < 0x80 then return first, index + 1, string.sub( text, index, index ) end
-	if first >= 0xC2 and first <= 0xDF then
-		local b = string.byte( text, index + 1 ) or 0
-		return ( first - 0xC0 ) * 64 + b - 0x80, index + 2, string.sub( text, index, index + 1 )
+local INVENTORY_FONTS = {}
+if surface and surface.CreateFont then
+	for fontScale = 1, 4 do
+		local name = "MCInventoryRoboto" .. fontScale
+		INVENTORY_FONTS[fontScale] = name
+		surface.CreateFont( name, {
+			font = "Roboto",
+			size = 8 * fontScale,
+			weight = 500,
+			antialias = true,
+			extended = true,
+		} )
 	end
-	if first >= 0xE0 and first <= 0xEF then
-		local b, c = string.byte( text, index + 1 ) or 0, string.byte( text, index + 2 ) or 0
-		return ( first - 0xE0 ) * 4096 + ( b - 0x80 ) * 64 + c - 0x80, index + 3, string.sub( text, index, index + 2 )
-	end
-	if first >= 0xF0 and first <= 0xF4 then
-		local b, c, d = string.byte( text, index + 1 ) or 0, string.byte( text, index + 2 ) or 0, string.byte( text, index + 3 ) or 0
-		return ( first - 0xF0 ) * 262144 + ( b - 0x80 ) * 4096 + ( c - 0x80 ) * 64 + d - 0x80, index + 4, string.sub( text, index, index + 3 )
-	end
-	return 0xFFFD, index + 1, string.sub( text, index, index )
 end
 
-local glyphCache, glyphCacheCount = {}, 0
-local function glyphsFor( text )
-	text = tostring( text or "" )
-	local cached = glyphCache[text]
-	if cached then return cached end
-	local glyphs, width, index = {}, 0, 1
-	while index <= #text do
-		local codepoint, nextIndex, bytes = nextCodepoint( text, index )
-		local atlas, u0, v0, u1, v1
-		for _, candidate in ipairs( FONT_ATLASES ) do
-			if codepoint >= candidate.first and codepoint <= candidate.last then
-				local slot = candidate.ascii and codepoint or codepoint - candidate.first
-				local column, row = slot % candidate.cols, math.floor( slot / candidate.cols )
-				atlas = candidate
-				u0, v0 = column / candidate.cols, row / candidate.rows
-				u1, v1 = ( column + 1 ) / candidate.cols, ( row + 1 ) / candidate.rows
-				break
-			end
-		end
-		local advance = MC.SignGlyphAdvance and MC.SignGlyphAdvance( codepoint ) or ( codepoint == 32 and 4 or 6 )
-		glyphs[#glyphs + 1] = { text = bytes, atlas = atlas, u0 = u0, v0 = v0, u1 = u1, v1 = v1, advance = advance }
-		width = width + advance
-		index = nextIndex
-	end
-	cached = { glyphs = glyphs, width = width }
-	if glyphCacheCount >= 2048 then glyphCache, glyphCacheCount = {}, 0 end
-	glyphCache[text], glyphCacheCount = cached, glyphCacheCount + 1
-	return cached
+local function inventoryFont( scale )
+	local fontScale = math.Clamp( math.floor( tonumber( scale ) or 1 ), 1, 4 )
+	return INVENTORY_FONTS[fontScale] or "Roboto"
 end
 
 function UI.MeasureText( text, scale )
-	return glyphsFor( text ).width * ( tonumber( scale ) or 1 )
+	text = tostring( text or "" )
+	scale = tonumber( scale ) or 1
+	local font = inventoryFont( scale )
+	if surface and surface.SetFont and surface.GetTextSize then
+		surface.SetFont( font )
+		local width = surface.GetTextSize( text )
+		return width
+	end
+	return #text * 6 * scale
 end
 
-function UI.DrawText( text, x, y, scale, color, align, shadow )
+function UI.DrawText( text, x, y, scale, color, align, _shadow, verticalAlign )
+	text = tostring( text or "" )
 	scale = tonumber( scale ) or 1
 	color = color or UI.Colors.text
-	local line = glyphsFor( text )
-	local width = line.width * scale
-	if align == TEXT_ALIGN_CENTER then x = x - width * 0.5
-	elseif align == TEXT_ALIGN_RIGHT then x = x - width end
-	local function drawAt( ox, oy, drawColor )
-		local cursor = x + ox
-		for _, glyph in ipairs( line.glyphs ) do
-			if glyph.atlas then
-				surface.SetMaterial( glyph.atlas.material )
-				surface.SetDrawColor( drawColor )
-				surface.DrawTexturedRectUV( cursor, y + oy, 8 * scale, 8 * scale, glyph.u0, glyph.v0, glyph.u1, glyph.v1 )
-			else
-				draw.SimpleText( glyph.text, "MCInventoryFallback", cursor + glyph.advance * scale * 0.5, y + oy + 4 * scale, drawColor, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
-			end
-			cursor = cursor + glyph.advance * scale
-		end
+	verticalAlign = verticalAlign or TEXT_ALIGN_TOP
+	local font = inventoryFont( scale )
+	local width = UI.MeasureText( text, scale )
+	if _shadow == true then
+		-- Keep the shadow at one screen pixel; scaling it with the bitmap UI made
+		-- the old text look like it had a heavy outline at larger resolutions.
+		draw.SimpleText( text, font, x + 2, y + 2, UI.Colors.textShadow, align, verticalAlign )
 	end
-	if shadow then drawAt( scale, scale, UI.Colors.textShadow ) end
-	drawAt( 0, 0, color )
+	draw.SimpleText( text, font, x, y, color, align, verticalAlign )
 	return width
-end
-
-if surface and surface.CreateFont then
-	surface.CreateFont( "MCInventoryFallback", {
-		font = "Tahoma",
-		size = 8,
-		weight = 500,
-		antialias = false,
-		extended = true,
-	} )
 end
 
 function UI.GuiScale()
@@ -183,4 +180,3 @@ function UI.RarityColor( rarity )
 	rarity = string.lower( tostring( rarity or "common" ) )
 	return UI.Colors[rarity] or UI.Colors.common
 end
-

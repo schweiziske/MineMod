@@ -152,6 +152,10 @@ local function placeTarget( ply, aim, fallbackTrace, id, avoidUseBlocks )
 		stateId = MC.ResolveSignPlacementState( stateId, tr.HitNormal, ply, bx, by, bz )
 		if not stateId then return nil end
 	end
+	if stateId and MC.ResolveBannerPlacementState then
+		stateId = MC.ResolveBannerPlacementState( stateId, tr.HitNormal, ply, bx, by, bz )
+		if not stateId then return nil end
+	end
 	if not stateId then return nil end
 	return bx, by, bz, stateId
 end
@@ -186,7 +190,7 @@ function SWEP:PrimaryAttack()
 		local bx, by, bz = breakTarget( owner, aim, owner:GetEyeTrace() )
 		if not bx then return end
 		if MC.SV.Break( owner, bx, by, bz ) then
-			//self:EmitSound( "buttons/button15.wav", 60, 120, 0.25 )
+			-- self:EmitSound( "buttons/button15.wav", 60, 120, 0.25 )
 			net.Start( "mc_creative_break_anim" )
 				net.WriteInt( bx, MC.Net.COORD_BITS )
 				net.WriteInt( by, MC.Net.COORD_BITS )
@@ -228,7 +232,7 @@ function SWEP:SecondaryAttack()
 		local bx, by, bz, stateId = placeTarget( owner, aim, tr, id )
 		if not bx then return end
 		if MC.SV.PlaceState( owner, bx, by, bz, stateId ) then
-			//self:EmitSound( "buttons/button14.wav", 60, 150, 0.25 )
+			-- self:EmitSound( "buttons/button14.wav", 60, 150, 0.25 )
 			net.Start( "mc_creative_place_anim" )
 				net.WriteInt( bx, MC.Net.COORD_BITS )
 				net.WriteInt( by, MC.Net.COORD_BITS )
@@ -257,6 +261,10 @@ end
 -- opener client-only, but explicitly bridge Reload across realms there.
 function SWEP:OpenCreativeInventoryClient()
 	if not CLIENT then return end
+	if MC.InventoryUI and MC.InventoryUI.ToggleFromWeapon
+	and MC.InventoryUI.ToggleFromWeapon( self ) then
+		return
+	end
 	if IsValid( MC.CreativeFrame ) and MC.CreativeFrame:IsVisible() then return end
 	MC.OpenCreativeInventory( function( id, stateId )
 		if stateId ~= nil and MC.SetCreativeHotbarSlotStateID then
@@ -583,8 +591,9 @@ if CLIENT then
 		return ang
 	end
 
-	local function firstPersonHeldPose( wep )
+	local function firstPersonHeldMotion( wep, leftHand )
 		local eyeAng = EyeAngles()
+		local side = leftHand and -1 or 1
 		local bob = math.sin( CurTime() * 1.8 ) * HELD_FP_DEFAULTS.bob
 		local placeAnim = IsValid( wep ) and wep:CreativePlaceAnim() or 0
 		local inverseArmHeight = IsValid( wep ) and wep:CreativeMainHandInverseHeight() or 0
@@ -597,15 +606,39 @@ if CLIENT then
 		local zSwingPosition = -0.2 * swingLinear
 		local pos = EyePos()
 			+ eyeAng:Forward() * ( cvarFloat( HELD_FP_CVARS.forward, HELD_FP_DEFAULTS.forward ) - zSwingPosition * HELD_PLACE_ANIM.forwardScale )
-			+ eyeAng:Right() * ( cvarFloat( HELD_FP_CVARS.right, HELD_FP_DEFAULTS.right ) + xSwingPosition * HELD_PLACE_ANIM.rightScale )
+			+ eyeAng:Right() * side * ( cvarFloat( HELD_FP_CVARS.right, HELD_FP_DEFAULTS.right ) + xSwingPosition * HELD_PLACE_ANIM.rightScale )
 			+ eyeAng:Up() * ( cvarFloat( HELD_FP_CVARS.up, HELD_FP_DEFAULTS.up ) + bob + ySwingPosition * HELD_PLACE_ANIM.upScale - inverseArmHeight * HELD_HAND_HEIGHT.upScale )
+		return pos, eyeAng,
+			swingRoot * HELD_PLACE_ANIM.pitch,
+			side * swingSquared * HELD_PLACE_ANIM.yaw,
+			side * swingRoot * HELD_PLACE_ANIM.roll
+	end
+
+	local function firstPersonHeldPose( wep, leftHand )
+		local side = leftHand and -1 or 1
+		local pos, eyeAng, swingPitch, swingYaw, swingRoll = firstPersonHeldMotion( wep, leftHand )
 		local ang = applyMinecraftDisplayRotation(
 			eyeAng,
-			cvarFloat( HELD_FP_CVARS.pitch, HELD_FP_DEFAULTS.pitch ) + swingRoot * HELD_PLACE_ANIM.pitch,
-			cvarFloat( HELD_FP_CVARS.yaw, HELD_FP_DEFAULTS.yaw ) + swingSquared * HELD_PLACE_ANIM.yaw,
-			cvarFloat( HELD_FP_CVARS.roll, HELD_FP_DEFAULTS.roll ) + swingRoot * HELD_PLACE_ANIM.roll
+			cvarFloat( HELD_FP_CVARS.pitch, HELD_FP_DEFAULTS.pitch ) + swingPitch,
+			side * cvarFloat( HELD_FP_CVARS.yaw, HELD_FP_DEFAULTS.yaw ) + swingYaw,
+			side * cvarFloat( HELD_FP_CVARS.roll, HELD_FP_DEFAULTS.roll ) + swingRoll
 		)
 		return pos, ang, cvarFloat( HELD_FP_CVARS.scale, HELD_FP_DEFAULTS.scale )
+	end
+
+	-- Inventory-held blocks and flat items share the same vanilla-derived hand
+	-- motion. Flat items use the unrotated anchor, then apply their model display.
+	function MC.CreativeHeldFirstPersonPose( weapon, leftHand )
+		return firstPersonHeldPose( weapon, leftHand == true )
+	end
+
+	function MC.CreativeHeldFirstPersonAnchor( weapon, leftHand )
+		local pos, eyeAng, swingPitch, swingYaw, swingRoll = firstPersonHeldMotion( weapon, leftHand == true )
+		return pos, applyMinecraftDisplayRotation( eyeAng, swingPitch, swingYaw, swingRoll )
+	end
+
+	function MC.CreativeHeldLightingAt( pos, state )
+		return heldBlockLightingAt( pos, state )
 	end
 
 	local function drawFirstPersonHeldBlock( ply, wep )
@@ -626,29 +659,45 @@ if CLIENT then
 		render.OverrideDepthEnable( false, false )
 	end
 
-	local function rightHandTransform( ply )
-		local bone = ply:LookupBone( "ValveBiped.Bip01_R_Hand" )
+	local function playerHandTransform( ply, leftHand )
+		local bone = ply:LookupBone( leftHand and "ValveBiped.Bip01_L_Hand" or "ValveBiped.Bip01_R_Hand" )
 		if bone then
 			local pos, ang = ply:GetBonePosition( bone )
 			if pos and ang then return pos, ang end
 		end
 		local ang = ply:EyeAngles()
-		return ply:GetShootPos() + ang:Forward() * 12 + ang:Right() * 7 - ang:Up() * 5, ang
+		local side = leftHand and -1 or 1
+		return ply:GetShootPos() + ang:Forward() * 12 + ang:Right() * ( 7 * side ) - ang:Up() * 5, ang
 	end
 
-	local function thirdPersonHeldPose( ply )
-		local pos, ang = rightHandTransform( ply )
+	local function thirdPersonHeldPose( ply, leftHand )
+		local side = leftHand and -1 or 1
+		local pos, ang = playerHandTransform( ply, leftHand )
 		pos = pos
 			+ ang:Forward() * cvarFloat( HELD_TP_CVARS.forward, HELD_TP_DEFAULTS.forward )
-			+ ang:Right() * cvarFloat( HELD_TP_CVARS.right, HELD_TP_DEFAULTS.right )
+			+ ang:Right() * side * cvarFloat( HELD_TP_CVARS.right, HELD_TP_DEFAULTS.right )
 			+ ang:Up() * cvarFloat( HELD_TP_CVARS.up, HELD_TP_DEFAULTS.up )
 		local blockAng = applyMinecraftDisplayRotation(
 			ang,
 			cvarFloat( HELD_TP_CVARS.pitch, HELD_TP_DEFAULTS.pitch ),
-			cvarFloat( HELD_TP_CVARS.yaw, HELD_TP_DEFAULTS.yaw ),
-			cvarFloat( HELD_TP_CVARS.roll, HELD_TP_DEFAULTS.roll )
+			side * cvarFloat( HELD_TP_CVARS.yaw, HELD_TP_DEFAULTS.yaw ),
+			side * cvarFloat( HELD_TP_CVARS.roll, HELD_TP_DEFAULTS.roll )
 		)
 		return pos, blockAng, cvarFloat( HELD_TP_CVARS.scale, HELD_TP_DEFAULTS.scale )
+	end
+
+	function MC.CreativeHeldThirdPersonPose( ply, leftHand )
+		return thirdPersonHeldPose( ply, leftHand == true )
+	end
+
+	function MC.CreativeHeldThirdPersonAnchor( ply, leftHand )
+		local side = leftHand and -1 or 1
+		local pos, ang = playerHandTransform( ply, leftHand == true )
+		pos = pos
+			+ ang:Forward() * cvarFloat( HELD_TP_CVARS.forward, HELD_TP_DEFAULTS.forward )
+			+ ang:Right() * side * cvarFloat( HELD_TP_CVARS.right, HELD_TP_DEFAULTS.right )
+			+ ang:Up() * cvarFloat( HELD_TP_CVARS.up, HELD_TP_DEFAULTS.up )
+		return pos, ang
 	end
 
 	local function drawThirdPersonHeldBlock( ply )
@@ -688,7 +737,9 @@ if CLIENT then
 		local ply = LocalPlayer()
 		if not IsValid( ply ) then return end
 		local wep = ply:GetActiveWeapon()
-		if not IsValid( wep ) or wep:GetClass() ~= "mc_creative_placer" then return end
+		if not IsValid( wep ) then return end
+		local class = wep:GetClass()
+		if class ~= "mc_creative_placer" and class ~= "mc_item_hand" then return end
 		wep:StartCreativePlaceAnimation( bx, by, bz )
 	end
 
@@ -699,35 +750,37 @@ if CLIENT then
 		local ply = LocalPlayer()
 		local id = selectedID( ply )
 		local b = MC.Blocks[id]
-		if not b then return end
 
 		local sw, sh = ScrW(), ScrH()
-		local tr = aimedBlock( ply ) or ply:GetEyeTrace()
-		local stateId = selectedStateId( ply, id )
-		if not stateId then
-			local orient = tr.Hit and MC.OrientForPlacement( ply, tr, id ) or MC.DefaultOrient( id )
-			stateId = MC.StateFromLegacy( id, orient )
-		end
-		local stateSpec = stateId and MC.FormatBlockState( stateId ) or ""
-		local state = string.match( stateSpec, "%[(.*)%]$" ) or ""
-		local w, h = 64, 64
 		local slotSize = 54
 		local hotbarY = sh - slotSize - 30
-		local panelW = 380
-		local panelH = state ~= "" and 118 or 96
-		local px = sw * 0.5 - panelW * 0.5
-		local py = hotbarY - panelH - 14
-		local x, y = px + 18, py + ( panelH - h ) * 0.5
-		local tx = x + w + 18
-		local maxTextW = panelW - ( tx - px ) - 18
 
-		draw.RoundedBox( 6, px, py, panelW, panelH, Color( 0, 0, 0, 175 ) )
-		if not stateId or not MC.DrawMinecraftBlockStateIcon or not MC.DrawMinecraftBlockStateIcon( stateId, x, y, w, h ) then
-			MC.DrawMinecraftBlockIcon( id, x, y, w, h )
-		end
-		MC.DrawFittedText( blockDisplayText( b ), "mc_hud_big", { "mc_hud_fit_24", "mc_hud_fit_20", "mc_hud_fit_16" }, tx, py + 22, color_white, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, maxTextW )
-		if state ~= "" then
-			draw.SimpleText( state, "mc_hud_small", tx, py + 58, Color( 210, 230, 255 ), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
+		if b then
+			local tr = aimedBlock( ply ) or ply:GetEyeTrace()
+			local stateId = selectedStateId( ply, id )
+			if not stateId then
+				local orient = tr.Hit and MC.OrientForPlacement( ply, tr, id ) or MC.DefaultOrient( id )
+				stateId = MC.StateFromLegacy( id, orient )
+			end
+			local stateSpec = stateId and MC.FormatBlockState( stateId ) or ""
+			local state = string.match( stateSpec, "%[(.*)%]$" ) or ""
+			local w, h = 64, 64
+			local panelW = 380
+			local panelH = state ~= "" and 118 or 96
+			local px = sw * 0.5 - panelW * 0.5
+			local py = hotbarY - panelH - 14
+			local x, y = px + 18, py + ( panelH - h ) * 0.5
+			local tx = x + w + 18
+			local maxTextW = panelW - ( tx - px ) - 18
+
+			draw.RoundedBox( 6, px, py, panelW, panelH, Color( 0, 0, 0, 175 ) )
+			if not stateId or not MC.DrawMinecraftBlockStateIcon or not MC.DrawMinecraftBlockStateIcon( stateId, x, y, w, h ) then
+				MC.DrawMinecraftBlockIcon( id, x, y, w, h )
+			end
+			MC.DrawFittedText( blockDisplayText( b ), "mc_hud_big", { "mc_hud_fit_24", "mc_hud_fit_20", "mc_hud_fit_16" }, tx, py + 22, color_white, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, maxTextW )
+			if state ~= "" then
+				draw.SimpleText( state, "mc_hud_small", tx, py + 58, Color( 210, 230, 255 ), TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP )
+			end
 		end
 		if MC.DrawCreativeHotbar then
 			MC.DrawCreativeHotbar( sw * 0.5, hotbarY, { slotSize = slotSize } )

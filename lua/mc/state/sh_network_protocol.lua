@@ -112,7 +112,7 @@ Net.MessageNames = {
 	"mc_preset_data", "mc_preset_data_part", "mc_preset_place",
 	"mc_preset_cover_begin", "mc_preset_cover_part", "mc_preset_cover_ack",
 	"mc_preset_cover_req", "mc_preset_cover_download_begin", "mc_preset_cover_download_part",
-	"mc_sign_open", "mc_sign_update",
+	"mc_sign_open", "mc_sign_update", "mc_banner_update",
 
 	"mc_cluster_convert", "mc_cluster_data_req", "mc_cluster_data",
 	"mc_cluster_paste", "mc_cluster_break",

@@ -1325,6 +1325,7 @@ local function loadWorkshopBaseWorld( base, decoded )
 	MC.SyncProgress.lastUpdate = CurTime()
 	if MC.RefreshClientCollisionInterest then MC.RefreshClientCollisionInterest( true ) end
 	if MC.MarkSignRenderEntriesDirty then MC.MarkSignRenderEntriesDirty() end
+	if MC.MarkBannerRenderEntriesDirty then MC.MarkBannerRenderEntriesDirty() end
 	MC.NativeLoadProfile.hydrateMS = ( SysTime() - startedAt ) * 1000
 	MC.NativeLoadProfile.chunks = #worldData.chunks
 	MC.NativeLoadProfile.cells = worldData.blocks

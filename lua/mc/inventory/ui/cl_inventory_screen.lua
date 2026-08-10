@@ -26,10 +26,10 @@ local SCROLLER_DISABLED = UI.GetGuiMaterial( "sprites/container/creative_invento
 
 for scale = 2, 4 do
 	surface.CreateFont( "MCInventorySearch" .. scale, {
-		font = "Tahoma",
+		font = "Roboto",
 		size = 8 * scale,
 		weight = 500,
-		antialias = false,
+		antialias = true,
 		extended = true,
 	} )
 end
@@ -43,6 +43,8 @@ local function tabRows()
 				row = source.row == "bottom" and "bottom" or "top",
 				column = math.Clamp( math.floor( tonumber( source.column ) or 0 ), 0, 6 ),
 				title = tostring( source.title or source.key ),
+				titleZH = tostring( source.titleZH or source.title or source.key ),
+				titleKey = source.titleKey,
 				icon = source.icon,
 				items = type( source.items ) == "table" and source.items or {},
 				alignedRight = source.key == "inventory",
@@ -50,6 +52,12 @@ local function tabRows()
 		end
 	end
 	return result
+end
+
+local function tabTitle( tab )
+	if not tab then return "" end
+	if MC.Language and MC.Language() == "zh_cn" then return tab.titleZH or tab.title end
+	return tab.title
 end
 
 UI.CreativeTabs = tabRows()
@@ -170,6 +178,11 @@ function PANEL:Init()
 	self:SetKeyboardInputEnabled( true )
 	self:MakePopup()
 	self.Scale = UI.GuiScale()
+	self.ContentW, self.ContentH = SURVIVAL_W, SURVIVAL_H
+	self.Left = math.floor( ( ScrW() - self.ContentW * self.Scale ) * 0.5 )
+	self.Top = math.floor( ( ScrH() - self.ContentH * self.Scale ) * 0.5 )
+	self.BaseLeft = self.Left
+	self.ChestRows = 1
 	self.ScrollRow = 0
 	self.SlotPanels = {}
 	self.VisibleSlotCount = 0
@@ -214,6 +227,9 @@ function PANEL:Init()
 		if not IsValid( entity ) then return end
 		entity:SetAngles( Angle( 0, 18, 0 ) )
 	end
+	if util and util.IsValidModel and util.IsValidModel( "models/player/kleiner.mdl" ) then
+		self.PlayerPreview:SetModel( "models/player/kleiner.mdl" )
+	end
 
 	self.TabButtons = {}
 	for _, tab in ipairs( UI.CreativeTabs ) do
@@ -226,6 +242,7 @@ function PANEL:Init()
 	hook.Add( "MC.InventoryChanged", self, function( panel, changed ) panel:RefreshInventorySlots( changed ) end )
 	hook.Add( "MC.EquipmentChanged", self, function( panel ) panel:RefreshMenuSlots() end )
 	hook.Add( "MC.InventoryMenuChanged", self, function( panel, changed ) panel:RefreshMenuSlots( changed ) end )
+	hook.Add( "MC.InventorySnapshot", self, function( panel, state ) panel:ApplyLatestClientState( state ) end )
 	hook.Add( "MC.InventorySelectionChanged", self, function( panel ) panel:RefreshInventorySlots() end )
 	hook.Add( "MC.InventoryCursorChanged", self, function( panel ) panel:InvalidateLayout() end )
 	hook.Add( "MC.InventoryActionResult", self, function( panel, _, accepted, errorCode )
@@ -255,14 +272,34 @@ function PANEL:Configure( session, state )
 	self:RefreshCreativeItems()
 	self:Reflow()
 	self:RefreshInventorySlots()
+	self.ObservedStateMenu = self.State and self.State.menu or nil
+	self.ObservedStateReady = self.State and self.State.ready == true or false
+	self.ConfigureGeneration = ( self.ConfigureGeneration or 0 ) + 1
+	local generation = self.ConfigureGeneration
+	timer.Simple( 0, function()
+		if not IsValid( self ) or self.ConfigureGeneration ~= generation then return end
+		self:ApplyLatestClientState( MC.ClientInventory )
+	end )
 	self:RequestFocus()
+end
+
+function PANEL:ApplyLatestClientState( state )
+	if not IsValid( self ) then return end
+	self.State = state or MC.ClientInventory or self.State
+	self.ObservedStateMenu = self.State and self.State.menu or nil
+	self.ObservedStateReady = self.State and self.State.ready == true or false
+	if self.Creative then self:RefreshCreativeItems() end
+	self:LayoutVisibleSlots()
+	self:LayoutSpecialControls()
 end
 
 function PANEL:ConfigurePlayerPreview()
 	local ply = LocalPlayer()
 	if not IsValid( ply ) then return end
 	local model = ply:GetModel()
-	if model and model ~= "" and ( not IsValid( self.PlayerPreview.Entity ) or self.PlayerPreview.Entity:GetModel() ~= model ) then
+	if not isstring( model ) or model == "" then return end
+	if util and util.IsValidModel and not util.IsValidModel( model ) then return end
+	if not IsValid( self.PlayerPreview.Entity ) or self.PlayerPreview.Entity:GetModel() ~= model then
 		self.PlayerPreview:SetModel( model )
 	end
 	local entity = self.PlayerPreview.Entity
@@ -349,7 +386,7 @@ end
 function PANEL:PlaceInventorySlot( ordinal, inventoryIndex, x, y )
 	local slot = self:AcquireSlot( ordinal )
 	slot:SetInventorySlot( inventoryIndex, inventoryIndex )
-	slot:SetPos( self.Left + x * self.Scale, self.Top + y * self.Scale )
+	slot:SetPos( self.Left + x * self.Scale - self.Scale, self.Top + y * self.Scale - self.Scale )
 	self.InventorySlotViews[inventoryIndex] = self.InventorySlotViews[inventoryIndex] or {}
 	self.InventorySlotViews[inventoryIndex][#self.InventorySlotViews[inventoryIndex] + 1] = slot
 	return ordinal + 1
@@ -358,7 +395,7 @@ end
 function PANEL:PlaceMenuSlot( ordinal, menuIndex, playerIndex, x, y, role )
 	local slot = self:AcquireSlot( ordinal )
 	slot:SetMenuSlot( menuIndex, playerIndex, role )
-	slot:SetPos( self.Left + x * self.Scale, self.Top + y * self.Scale )
+	slot:SetPos( self.Left + x * self.Scale - self.Scale, self.Top + y * self.Scale - self.Scale )
 	self.MenuSlotViews[menuIndex] = self.MenuSlotViews[menuIndex] or {}
 	self.MenuSlotViews[menuIndex][#self.MenuSlotViews[menuIndex] + 1] = slot
 	if playerIndex ~= nil then
@@ -371,14 +408,14 @@ end
 function PANEL:PlaceCreativeSlot( ordinal, item, x, y )
 	local slot = self:AcquireSlot( ordinal )
 	slot:SetCreativeItem( item )
-	slot:SetPos( self.Left + x * self.Scale, self.Top + y * self.Scale )
+	slot:SetPos( self.Left + x * self.Scale - self.Scale, self.Top + y * self.Scale - self.Scale )
 	return ordinal + 1
 end
 
 function PANEL:PlaceDestroySlot( ordinal, x, y )
 	local slot = self:AcquireSlot( ordinal )
 	slot:SetDestroySlot()
-	slot:SetPos( self.Left + x * self.Scale, self.Top + y * self.Scale )
+	slot:SetPos( self.Left + x * self.Scale - self.Scale, self.Top + y * self.Scale - self.Scale )
 	return ordinal + 1
 end
 
@@ -650,6 +687,10 @@ function PANEL:BackgroundMaterial()
 end
 
 function PANEL:Paint( w, h )
+	if type( self.ContentW ) ~= "number" or type( self.ContentH ) ~= "number"
+	or type( self.Scale ) ~= "number" or type( self.Left ) ~= "number" or type( self.Top ) ~= "number" then
+		self:Reflow()
+	end
 	surface.SetDrawColor( UI.Colors.overlay )
 	surface.DrawRect( 0, 0, w, h )
 	local mat = self:BackgroundMaterial()
@@ -691,7 +732,7 @@ function PANEL:PaintOver()
 	elseif IsValid( self.HoveredSlot ) and not MC.IsEmptyItemStack( self.HoveredSlot:GetStack() ) then
 		UI.Tooltip.DrawStack( self.HoveredSlot:GetStack(), mouseX, mouseY, self.Scale )
 	elseif self.HoveredTab then
-		UI.Tooltip.DrawLines( { { text = self.HoveredTab.title, color = UI.Colors.text } }, mouseX, mouseY, self.Scale )
+		UI.Tooltip.DrawLines( { { text = tabTitle( self.HoveredTab ), color = UI.Colors.text } }, mouseX, mouseY, self.Scale )
 	end
 	if self.ErrorUntil and RealTime() < self.ErrorUntil then
 		UI.DrawText( self.ErrorText, ScrW() * 0.5, self.Top - 44 * self.Scale, self.Scale, Color( 255, 85, 85, 255 ), TEXT_ALIGN_CENTER, true )
@@ -726,6 +767,10 @@ function PANEL:OnKeyCodePressed( code )
 	if self.SearchEntry:IsVisible() and self.SearchEntry:HasFocus() then return end
 	if IsValid( self.RecipeBook ) and self.RecipeBook.SearchEntry
 	and self.RecipeBook.SearchEntry:IsVisible() and self.RecipeBook.SearchEntry:HasFocus() then return end
+	if code == KEY_E then
+		self:CloseInventory( true )
+		return
+	end
 	local hotbar = NUMBER_KEYS[code]
 	if hotbar ~= nil and IsValid( self.HoveredSlot ) then UI.Drag.HandleNumberKey( self.HoveredSlot, hotbar ) return end
 	if code == KEY_Q and IsValid( self.HoveredSlot ) then UI.Drag.HandleThrowKey( self.HoveredSlot ) return end
@@ -733,6 +778,12 @@ function PANEL:OnKeyCodePressed( code )
 end
 
 function PANEL:Think()
+	local state = MC.ClientInventory
+	local menu = state and state.menu or nil
+	local ready = state and state.ready == true or false
+	if state and ( menu ~= self.ObservedStateMenu or ready ~= self.ObservedStateReady ) then
+		self:ApplyLatestClientState( state )
+	end
 	local escape = input.IsKeyDown( KEY_ESCAPE )
 	if escape and not self.EscapeWasDown then
 		if self.RecipeBookOpen then self:SetRecipeBookOpen( false ) else self:CloseInventory( true ) end

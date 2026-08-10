@@ -151,6 +151,8 @@ function MC.BuildPlacementStatePlan( bx, by, bz, stateId )
 	local id = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or nil
 	if id == nil or not MC.IsValidBlock or not MC.IsValidBlock( id ) then return nil end
 	if MC.FaceAttachedCanSurvive and not MC.FaceAttachedCanSurvive( bx, by, bz, stateId ) then return nil end
+	if MC.IsBannerState and MC.IsBannerState( stateId )
+	and MC.BannerCanSurvive and not MC.BannerCanSurvive( bx, by, bz, stateId ) then return nil end
 	local cells = {}
 	local seen = {}
 

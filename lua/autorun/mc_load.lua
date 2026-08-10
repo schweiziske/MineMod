@@ -74,6 +74,7 @@ local SHARED = {
 	"mc/state/sh_state_tints.lua",
 	"mc/import/sh_format.lua",
 	"mc/functional/sh_signs.lua",
+	"mc/functional/sh_banners.lua",
 	"mc/block/sh_stairs.lua",
 	"mc/block/sh_torch_placement.lua",
 	"mc/block/sh_face_attached_placement.lua",
@@ -173,6 +174,7 @@ local CLIENT_FILES = {
 	"mc/render/cl_dirty.lua",
 	"mc/cl_render.lua",
 	"mc/functional/cl_signs.lua",
+	"mc/functional/cl_banners.lua",
 	"mc/cl_config_ui.lua",
 	"mc/cl_ui.lua",
 	"mc/cl_save_ui.lua",
@@ -259,6 +261,7 @@ if SERVER then
 			resource.AddFile( "materials/mc/font/" .. fileName )
 		end
 		for _, resourceRoot in ipairs( {
+			"materials/mc/entity/banner",
 			"materials/mc/gui/container",
 			"materials/mc/gui/container/creative_inventory",
 			"materials/mc/gui/hud",

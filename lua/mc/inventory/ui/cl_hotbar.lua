@@ -12,13 +12,26 @@ local function handActive()
 	local ply = LocalPlayer()
 	if not IsValid( ply ) or not ply:Alive() then return false end
 	local weapon = ply:GetActiveWeapon()
-	if UI.IsInventoryWeapon then return UI.IsInventoryWeapon( weapon ) end
-	return IsValid( weapon ) and weapon:GetClass() == "mc_item_hand"
+	if not IsValid( weapon ) then return false end
+	local class = weapon:GetClass()
+	return class == "mc_item_hand" or class == "mc_inventory"
+end
+
+local function inventoryScreenVisible()
+	return IsValid( UI.Screen ) and UI.Screen:IsVisible()
+end
+
+local function inventoryTextEntryFocused()
+	if not inventoryScreenVisible() or not vgui.GetKeyboardFocus then return false end
+	local focus = vgui.GetKeyboardFocus()
+	if not IsValid( focus ) then return false end
+	local class = focus.GetClassName and focus:GetClassName() or ""
+	return class == "TextEntry" or class == "DTextEntry"
 end
 
 local function selectedStack()
 	local state = MC.ClientInventory
-	return state and state.slots[( state.selected or 0 ) + 1] or nil
+	return state and state.slots and state.slots[( state.selected or 0 ) + 1] or nil
 end
 
 local function announceSelection()
@@ -33,9 +46,9 @@ hook.Add( "MC.InventoryChanged", "mc_inventory_hotbar_item_name", function( chan
 end )
 
 hook.Add( "HUDPaint", "mc_inventory_hotbar", function()
-	if not handActive() or IsValid( UI.Screen ) then return end
-	local state = MC.ClientInventory
-	if not state or state.ready ~= true then return end
+	if not handActive() or inventoryScreenVisible() then return end
+	local state = MC.ClientInventory or {}
+	local slots = type( state.slots ) == "table" and state.slots or {}
 	local scale = UI.GuiScale()
 	local width, height = 182 * scale, 22 * scale
 	local x = math.floor( ( ScrW() - width ) * 0.5 )
@@ -45,7 +58,7 @@ hook.Add( "HUDPaint", "mc_inventory_hotbar", function()
 		UI.DrawTexture( HOTBAR_SELECTION, x + ( ( state.selected or 0 ) * 20 - 1 ) * scale, y - scale, 24 * scale, 23 * scale )
 	end )
 	for index = 0, 8 do
-		local stack = state.slots[index + 1]
+		local stack = slots[index + 1]
 		if not MC.IsEmptyItemStack( stack ) then
 			UI.ItemRenderer.DrawStack( stack, x + ( 3 + index * 20 ) * scale, y + 3 * scale, 16 * scale, { scale = scale } )
 		end
@@ -59,8 +72,15 @@ hook.Add( "HUDPaint", "mc_inventory_hotbar", function()
 end )
 
 hook.Add( "PlayerBindPress", "mc_inventory_hotbar_input", function( ply, bind, pressed )
-	if not pressed or ply ~= LocalPlayer() or not handActive() or IsValid( UI.Screen ) then return end
+	if not pressed or ply ~= LocalPlayer() or not handActive() then return end
 	bind = string.lower( tostring( bind or "" ) )
+	if inventoryScreenVisible() then
+		if bind == "+use" and not inventoryTextEntryFocused() then
+			UI.Screen:CloseInventory( true )
+			return true
+		end
+		return
+	end
 	local number = string.match( bind, "^slot([1-9])$" )
 	if number then
 		MC.SelectInventoryHotbarSlot( tonumber( number ) - 1 )

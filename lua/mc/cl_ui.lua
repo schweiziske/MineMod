@@ -491,14 +491,20 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual, 
 		faces.yp.tintCode = tintCode
 	end
 
+	-- Vanilla block/item models are anchored at the exact centre of the 16x16
+	-- GUI slot, then use the block-model GUI transform: X=30, Y=225 and a
+	-- uniform 0.625 scale. This orthographic projection is the 2D equivalent;
+	-- keeping the model origin at (0.5, 0.5, 0.5) also aligns partial blocks
+	-- exactly as Minecraft does instead of tuning their top edge separately.
 	local size = math.min( w, h )
-	local cx = x + w * 0.5
-	local topY = y + h * 0.1
-	local halfW = size * 0.38
-	local halfH = size * 0.2
-	local cubeH = size * 0.43
+	local cx, cy = x + w * 0.5, y + h * 0.5
+	local modelScale = size * 0.625
+	local horizontal = modelScale * 0.70710678118655
+	local groundVertical = horizontal * 0.5
+	local blockVertical = modelScale * 0.86602540378444
 	local function project( px, py, pz )
-		return cx + ( px - py ) * halfW, topY + ( px + py ) * halfH + ( 1 - pz ) * cubeH
+		return cx + ( px - py ) * horizontal,
+			cy + ( px + py - 1 ) * groundVertical - ( pz - 0.5 ) * blockVertical
 	end
 
 	local pool = {}

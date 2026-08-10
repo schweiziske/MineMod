@@ -8,6 +8,18 @@ local UI = MC.InventoryUI
 local Tooltip = {}
 UI.Tooltip = Tooltip
 
+local function vanillaItemText( key, fallback )
+	local catalog = MC.GeneratedInventoryText and MC.GeneratedInventoryText[key] or nil
+	if type( catalog ) ~= "table" then return fallback end
+	local language = MC.Language and MC.Language() or "en_us"
+	return catalog[language] or catalog.en_us or fallback
+end
+
+local function formatVanillaText( template, ... )
+	local ok, value = pcall( string.format, tostring( template or "" ), ... )
+	return ok and value or tostring( template or "" )
+end
+
 local function componentCount( value )
 	if type( value ) ~= "table" then return 0 end
 	local count = 0
@@ -25,11 +37,17 @@ function Tooltip.LinesForStack( stack )
 	local maxDamage = tonumber( definition.maxDamage ) or 0
 	if maxDamage > 0 then
 		local damage = math.Clamp( math.floor( tonumber( stack.damage ) or 0 ), 0, maxDamage )
-		lines[#lines + 1] = { text = "Durability: " .. tostring( maxDamage - damage ) .. " / " .. tostring( maxDamage ), color = UI.Colors.text }
+		lines[#lines + 1] = {
+			text = formatVanillaText( vanillaItemText( "durability", "Durability: %s / %s" ), maxDamage - damage, maxDamage ),
+			color = UI.Colors.text,
+		}
 	end
 	local components = componentCount( stack.components )
 	if components > 0 then
-		lines[#lines + 1] = { text = tostring( components ) .. " data component" .. ( components == 1 and "" or "s" ), color = UI.Colors.textDim }
+		lines[#lines + 1] = {
+			text = formatVanillaText( vanillaItemText( "components", "%s component(s)" ), components ),
+			color = UI.Colors.textDim,
+		}
 	end
 	return lines
 end
@@ -64,4 +82,3 @@ end
 function Tooltip.DrawStack( stack, mouseX, mouseY, scale )
 	Tooltip.DrawLines( Tooltip.LinesForStack( stack ), mouseX, mouseY, scale )
 end
-
