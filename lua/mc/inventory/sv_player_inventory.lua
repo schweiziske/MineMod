@@ -2,8 +2,8 @@
 	Persistent, server-authoritative player inventories.
 
 	The 36 non-equipment slots follow Minecraft Inventory: 0..8 hotbar and
-	9..35 main storage.  Menus expose the same zero-based indices; UI layout is
-	free to draw main storage above the hotbar without remapping transactions.
+	9..35 main storage. Armor/offhand live in a separate EntityEquipment-style
+	table, matching the boundary used by the reference sources in out/.
 ------------------------------------------------------------------------------]]
 
 MC = MC or {}
@@ -87,13 +87,25 @@ local function onContainerCommit( record, container, result, context )
 	end
 end
 
-local function newRecord( ply, storage, selected, carried )
+local function normalizedEquipment( equipment )
+	local result = {}
+	for _, slot in ipairs( MC.EquipmentSlotOrder or {} ) do
+		local stack = equipment and equipment[slot] or nil
+		if not MC.IsEmptyItemStack( stack ) and MC.ItemCanEquipInSlot( stack, slot ) then
+			result[slot] = MC.CopyItemStack( stack, slot == "offhand" and stack.count or 1 )
+		end
+	end
+	return result
+end
+
+local function newRecord( ply, storage, selected, carried, equipment )
 	local record = {
 		owner = ply,
 		ownerId = safeOwnerId( ply ),
 		storage = storage or {},
 		selected = math.Clamp( math.floor( tonumber( selected ) or 0 ), 0, 8 ),
 		carried = MC.CopyItemStack( carried ),
+		equipment = normalizedEquipment( equipment ),
 		revision = 0,
 		dirty = false,
 		loadedAt = SysTime and SysTime() or 0,
@@ -130,8 +142,19 @@ local function decodeSavedRecord( ply, data )
 			if stack then storage[slot + 1] = stack end
 		end
 	end
+	local equipment, equipmentSeen = {}, {}
+	for _, entry in ipairs( data.equipment or {} ) do
+		local slot = MC.NormalizeEquipmentSlot and MC.NormalizeEquipmentSlot( entry and entry.slot ) or nil
+		if slot and not equipmentSeen[slot] then
+			equipmentSeen[slot] = true
+			local stack = MC.InventoryStackFromData( entry.stack )
+			if stack and MC.ItemCanEquipInSlot( stack, slot ) then
+				equipment[slot] = MC.CopyItemStack( stack, slot == "offhand" and stack.count or 1 )
+			end
+		end
+	end
 	local carried = MC.InventoryStackFromData( data.carried )
-	return newRecord( ply, storage, data.selected, carried )
+	return newRecord( ply, storage, data.selected, carried, equipment )
 end
 
 local function readRecord( ply )
@@ -155,11 +178,18 @@ local function encodedRecord( record )
 		itemRegistry = tostring( MC.ItemRegistryHash or "" ),
 		selected = record.selected,
 		items = {},
+		equipment = {},
 	}
 	for slot = 0, INVENTORY_SIZE - 1 do
 		local stack = record.storage[slot + 1]
 		if not MC.IsEmptyItemStack( stack ) then
 			data.items[#data.items + 1] = { slot = slot, stack = MC.InventoryDataStack( stack ) }
+		end
+	end
+	for _, slot in ipairs( MC.EquipmentSlotOrder or {} ) do
+		local stack = record.equipment and record.equipment[slot] or nil
+		if not MC.IsEmptyItemStack( stack ) then
+			data.equipment[#data.equipment + 1] = { slot = slot, stack = MC.InventoryDataStack( stack ) }
 		end
 	end
 	local carried = record.container and record.container.cursor or record.carried
@@ -216,6 +246,7 @@ function SV.LoadPlayerInventory( ply )
 	if not record then return nil, err end
 	SV.PlayerInventories[ply] = record
 	updateHeldNetwork( record )
+	if SV.UpdatePlayerEquipmentNetwork then SV.UpdatePlayerEquipmentNetwork( record ) end
 	return record
 end
 
@@ -241,6 +272,12 @@ function SV.GetSelectedPlayerStack( ply )
 	return record and MC.CopyItemStack( record.storage[record.selected + 1] ) or nil
 end
 
+function SV.GetPlayerEquipmentStack( ply, slot )
+	local record = SV.GetPlayerInventoryRecord( ply, false )
+	slot = MC.NormalizeEquipmentSlot and MC.NormalizeEquipmentSlot( slot ) or nil
+	return record and slot and MC.CopyItemStack( record.equipment and record.equipment[slot] ) or nil
+end
+
 function SV.PlayerHasInfiniteMaterials( ply )
 	if MC.RunEvent then
 		local allowed = MC.RunEvent( "MC.PlayerHasInfiniteMaterials", ply )
@@ -256,6 +293,7 @@ function SV.SetPlayerSelectedSlot( ply, selected, context )
 	if selected < 0 or selected > 8 then return false, "invalid_hotbar_slot" end
 	if record.selected == selected then return true end
 	record.selected = selected
+	record.lastAttackAt = CurTime and CurTime() or record.lastAttackAt
 	record.dirty = true
 	updateHeldNetwork( record )
 	if type( SV.PublishPlayerInventorySelection ) == "function" then
@@ -341,10 +379,15 @@ function SV.PlayerInventoryState( record )
 		selected = record.selected,
 		registryHash = tostring( MC.ItemRegistryHash or "" ),
 		items = {},
+		equipment = {},
 	}
 	for slot = 0, INVENTORY_SIZE - 1 do
 		local stack = record.storage[slot + 1]
 		if stack then state.items[#state.items + 1] = { slot = slot, stack = MC.InventoryDataStack( stack ) } end
+	end
+	for _, slot in ipairs( MC.EquipmentSlotOrder or {} ) do
+		local stack = record.equipment and record.equipment[slot] or nil
+		if stack then state.equipment[#state.equipment + 1] = { slot = slot, stack = MC.InventoryDataStack( stack ) } end
 	end
 	return state
 end

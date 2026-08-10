@@ -224,6 +224,7 @@ function PANEL:Init()
 	end
 
 	hook.Add( "MC.InventoryChanged", self, function( panel, changed ) panel:RefreshInventorySlots( changed ) end )
+	hook.Add( "MC.EquipmentChanged", self, function( panel ) panel:RefreshMenuSlots() end )
 	hook.Add( "MC.InventoryMenuChanged", self, function( panel, changed ) panel:RefreshMenuSlots( changed ) end )
 	hook.Add( "MC.InventorySelectionChanged", self, function( panel ) panel:RefreshInventorySlots() end )
 	hook.Add( "MC.InventoryCursorChanged", self, function( panel ) panel:InvalidateLayout() end )
@@ -416,14 +417,34 @@ function PANEL:LayoutVisibleSlots()
 			ordinal = self:PlaceMenuSlot( ordinal, index + 1, nil,
 				inputStartX + index % width * 18, inputStartY + math.floor( index / width ) * 18, "input" )
 		end
-		local playerOffset = math.floor( tonumber( self.Session and self.Session.playerOffset ) or ( width * height + 1 ) )
-		for index = 9, 35 do
-			local position = index - 9
-			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index,
-				8 + position % 9 * 18, 84 + math.floor( position / 9 ) * 18 )
-		end
-		for index = 0, 8 do
-			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index, 8 + index * 18, 142 )
+		if not self.CraftingTable and self.MenuKind == "player" then
+			for index, equipment in ipairs( {
+				{ slot = "head", menu = MC.EquipmentMenuSlots.head },
+				{ slot = "chest", menu = MC.EquipmentMenuSlots.chest },
+				{ slot = "legs", menu = MC.EquipmentMenuSlots.legs },
+				{ slot = "feet", menu = MC.EquipmentMenuSlots.feet },
+			} ) do
+				ordinal = self:PlaceMenuSlot( ordinal, equipment.menu, nil, 8, 8 + ( index - 1 ) * 18, "equipment" )
+			end
+			ordinal = self:PlaceMenuSlot( ordinal, MC.EquipmentMenuSlots.offhand, nil, 77, 62, "equipment" )
+			for index = 9, 35 do
+				local position = index - 9
+				ordinal = self:PlaceMenuSlot( ordinal, index, index,
+					8 + position % 9 * 18, 84 + math.floor( position / 9 ) * 18 )
+			end
+			for index = 0, 8 do
+				ordinal = self:PlaceMenuSlot( ordinal, 36 + index, index, 8 + index * 18, 142 )
+			end
+		else
+			local playerOffset = math.floor( tonumber( self.Session and self.Session.playerOffset ) or ( width * height + 1 ) )
+			for index = 9, 35 do
+				local position = index - 9
+				ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index,
+					8 + position % 9 * 18, 84 + math.floor( position / 9 ) * 18 )
+			end
+			for index = 0, 8 do
+				ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index, 8 + index * 18, 142 )
+			end
 		end
 	elseif not self.Creative then
 		for index = 9, 35 do
@@ -434,6 +455,12 @@ function PANEL:LayoutVisibleSlots()
 	else
 		local tab = UI.CreativeTabsByKey[self.SelectedTabKey]
 		if tab and tab.key == "inventory" then
+			local creativeEquipment = MC.CreativeEquipmentMenuSlots or {}
+			ordinal = self:PlaceMenuSlot( ordinal, creativeEquipment.head or 36, nil, 54, 6, "equipment" )
+			ordinal = self:PlaceMenuSlot( ordinal, creativeEquipment.chest or 37, nil, 54, 33, "equipment" )
+			ordinal = self:PlaceMenuSlot( ordinal, creativeEquipment.legs or 38, nil, 108, 6, "equipment" )
+			ordinal = self:PlaceMenuSlot( ordinal, creativeEquipment.feet or 39, nil, 108, 33, "equipment" )
+			ordinal = self:PlaceMenuSlot( ordinal, creativeEquipment.offhand or 40, nil, 35, 20, "equipment" )
 			for index = 9, 35 do
 				local position = index - 9
 				ordinal = self:PlaceInventorySlot( ordinal, index, 9 + position % 9 * 18, 54 + math.floor( position / 9 ) * 18 )
@@ -536,7 +563,6 @@ function PANEL:RefreshInventorySlots( changed )
 end
 
 function PANEL:RefreshMenuSlots( changed )
-	if not self.Chest and not self.Crafting then return end
 	if type( changed ) == "table" then
 		for _, index in ipairs( changed ) do
 			for _, slot in ipairs( self.MenuSlotViews[index] or {} ) do

@@ -69,6 +69,9 @@ local function menuState( record )
 		resultSlot = session and session.resultSlot or 0,
 		items = {},
 		playerItems = {},
+		equipmentItems = {},
+		playerSlotMap = {},
+		equipmentSlotMap = {},
 	}
 	if #container.slots > MAX_MENU_SLOTS then return nil, "inventory_menu_too_large" end
 	for _, slot in ipairs( container.slots ) do
@@ -83,6 +86,20 @@ local function menuState( record )
 			state.playerItems[#state.playerItems + 1] = { slot = index, stack = MC.InventoryDataStack( stack ) }
 		end
 	end
+	for _, slot in ipairs( MC.EquipmentSlotOrder or {} ) do
+		local stack = record.equipment and record.equipment[slot] or nil
+		if not MC.IsEmptyItemStack( stack ) then
+			state.equipmentItems[#state.equipmentItems + 1] = { slot = slot, stack = MC.InventoryDataStack( stack ) }
+		end
+	end
+	for playerIndex, menuIndex in pairs( session and session.playerMenuMap or {} ) do
+		state.playerSlotMap[#state.playerSlotMap + 1] = { player = playerIndex, menu = menuIndex }
+	end
+	for slot, menuIndex in pairs( session and session.equipmentMenuMap or {} ) do
+		state.equipmentSlotMap[#state.equipmentSlotMap + 1] = { slot = slot, menu = menuIndex }
+	end
+	table.sort( state.playerSlotMap, function( left, right ) return left.player < right.player end )
+	table.sort( state.equipmentSlotMap, function( left, right ) return left.menu < right.menu end )
 	return state
 end
 
@@ -179,15 +196,74 @@ end
 
 function SV.PublishPlayerInventoryCommit( record, result, context )
 	local session = record and record.session
-	if session and ( session.kind ~= "player" or session.crafting == true or ( tonumber( session.playerOffset ) or 0 ) ~= 0 ) then
+	if session and session.container and session.container ~= record.container then
 		session.container.revision = math.max( session.container.revision + 1, record.container.revision )
 		local mapped = { changedSlots = {} }
 		for _, index in ipairs( result and result.changedSlots or {} ) do
-			mapped.changedSlots[#mapped.changedSlots + 1] = ( session.playerOffset or 0 ) + index
+			local menuIndex = session.playerMenuMap and session.playerMenuMap[index]
+				or ( session.playerOffset or 0 ) + index
+			if menuIndex ~= nil and MC.ContainerGetSlot( session.container, menuIndex ) then
+				mapped.changedSlots[#mapped.changedSlots + 1] = menuIndex
+			end
 		end
 		return SV.PublishActiveInventoryCommit( record, mapped, context )
 	end
 	return SV.PublishActiveInventoryCommit( record, result, context )
+end
+
+local function commitDirectContainerMutation( container, snapshot, context )
+	local changedSlots = MC.ContainerChangedSlots( container, snapshot )
+	local cursorChanged = not MC.ItemStacksEqual( container.cursor, snapshot.cursor )
+	if #changedSlots > 0 or cursorChanged then container.revision = container.revision + 1 end
+	local changed = {}
+	for _, index in ipairs( changedSlots ) do changed[index] = MC.CopyItemStack( MC.ContainerGetStack( container, index ) ) end
+	local result = {
+		ok = true,
+		revision = container.revision,
+		changedSlots = changedSlots,
+		changed = changed,
+		cursorChanged = cursorChanged,
+		cursor = MC.CopyItemStack( container.cursor ),
+		drops = {},
+	}
+	if type( container.onCommit ) == "function" and ( #changedSlots > 0 or cursorChanged ) then
+		local called, commitError = pcall( container.onCommit, container, result, context or container.context or {} )
+		if not called then
+			MC.ContainerRestore( container, snapshot )
+			return nil, commitError or "container_commit_failed"
+		end
+	end
+	return result
+end
+
+function SV.PublishEquipmentCommit( record, result, context )
+	context = context or {}
+	local session = record and record.session
+	if session and session.container then
+		session.container.revision = math.max( session.container.revision, result.revision or 0 )
+	end
+	if session and session.equipmentMenuMap and session.container then
+		local mapped = { changedSlots = {} }
+		for _, slot in ipairs( result.changedSlots or {} ) do
+			local menuIndex = session.equipmentMenuMap[slot]
+			if menuIndex ~= nil then mapped.changedSlots[#mapped.changedSlots + 1] = menuIndex end
+		end
+		if #mapped.changedSlots > 0 then return SV.PublishActiveInventoryCommit( record, mapped, context ) end
+	end
+	local ply = record and record.owner
+	if not IsValid( ply ) then return false end
+	local changed = result and result.changedSlots or {}
+	if #changed > #( MC.EquipmentSlotOrder or {} ) then return false end
+	net.Start( "mc_equipment_delta" )
+		net.WriteUInt( PROTOCOL_VERSION, 8 )
+		net.WriteUInt( math.max( 0, math.floor( tonumber( result and result.revision ) or 0 ) ), 32 )
+		net.WriteUInt( #changed, 3 )
+		for _, slot in ipairs( changed ) do
+			net.WriteUInt( MC.EquipmentSlotIds[slot] or 0, 3 )
+			MC.WriteItemStackNet( record.equipment and record.equipment[slot] or nil )
+		end
+	net.Send( ply )
+	return true
 end
 
 function SV.PublishPlayerInventorySelection( record, context )
@@ -242,11 +318,13 @@ function SV.OpenPlayerInventory( ply, reason )
 	record.lastOpenRequest = now
 	if record.session and record.session.kind ~= "player" then SV.ClosePlayerInventory( ply, "switch" ) end
 	if not record.session then
-		-- The vanilla creative inventory is a separate screen without the
-		-- survival 2x2 grid.  Keep its historical zero-based player container so
-		-- creative-pick actions continue to target hotbar slots 0..8.
-		local menu, playerOffset = not creativeAllowed( ply ) and SV.BuildPlayerCraftingMenu
-			and SV.BuildPlayerCraftingMenu( ply, record ) or nil
+		local creative = creativeAllowed( ply )
+		local menu, playerOffset
+		if creative and SV.BuildCreativeInventoryMenu then
+			menu, playerOffset = SV.BuildCreativeInventoryMenu( ply, record )
+		elseif not creative and SV.BuildPlayerCraftingMenu then
+			menu, playerOffset = SV.BuildPlayerCraftingMenu( ply, record )
+		end
 		if menu then
 			menu.cursor = MC.CopyItemStack( record.carried )
 			record.carried = nil
@@ -256,12 +334,15 @@ function SV.OpenPlayerInventory( ply, reason )
 				container = menu,
 				openedAt = now,
 				lastActionId = nil,
-				crafting = true,
-				creative = false,
-				craftingWidth = 2,
-				craftingHeight = 2,
+				crafting = not creative,
+				creative = creative,
+				craftingWidth = creative and 0 or 2,
+				craftingHeight = creative and 0 or 2,
 				resultSlot = 0,
 				playerOffset = playerOffset,
+				playerMenuMap = menu.playerMenuMap,
+				menuPlayerMap = menu.menuPlayerMap,
+				equipmentMenuMap = menu.equipmentMenuMap,
 				chestSlots = 0,
 			}
 		else
@@ -277,7 +358,7 @@ function SV.OpenPlayerInventory( ply, reason )
 				lastActionId = nil,
 				playerOffset = 0,
 				chestSlots = 0,
-				creative = creativeAllowed( ply ),
+				creative = creative,
 			}
 		end
 	end
@@ -296,7 +377,12 @@ local function returnCarriedToPlayer( record, context )
 		for slot = 0, 35 do targets[#targets + 1] = slot end
 		local remaining = select( 1, MC.ContainerMoveStackTo( container, carried, targets, context or {} ) )
 		record.carried = MC.CopyItemStack( remaining )
-		SV.CommitPlayerInventoryMutation( record, snapshot, context or { reason = "close" } )
+		if not MC.IsEmptyItemStack( remaining ) then record.dirty = true end
+		if container == record.container then
+			SV.CommitPlayerInventoryMutation( record, snapshot, context or { reason = "close" } )
+		else
+			commitDirectContainerMutation( container, snapshot, context or { reason = "close" } )
+		end
 		return
 	end
 	local playerContainer = record.container
@@ -467,7 +553,7 @@ net.Receive( "mc_inventory_creative_pick", function( _, ply )
 	if not sessionStillValid( session ) then sendRejected( record, actionId, "container_unavailable", false ) return end
 	if not actionRateAllowed( record ) then sendRejected( record, actionId, "rate_limited", false ) return end
 	if not actionSequenceAllowed( session, actionId ) then sendRejected( record, actionId, "stale_action", true ) return end
-	if revision ~= record.container.revision then sendRejected( record, actionId, "revision_mismatch", true ) return end
+	if revision ~= container.revision then sendRejected( record, actionId, "revision_mismatch", true ) return end
 	if not creativeAllowed( ply ) then sendRejected( record, actionId, "creative_only", false ) return end
 	if targetSlot < -1 or targetSlot > 8 then sendRejected( record, actionId, "invalid_creative_target", false ) return end
 	local definition = MC.GetItem( runtimeId )
@@ -480,8 +566,12 @@ net.Receive( "mc_inventory_creative_pick", function( _, ply )
 	if not ok then MC.ContainerRestore( container, snapshot ) sendRejected( record, actionId, err or "invalid_item", false ) return end
 	session.lastActivity = CurTime()
 	local context = { player = ply, actionId = actionId, creative = true, canDrop = type( SV.SpawnItemDrop ) == "function" }
-	local result = SV.CommitPlayerInventoryMutation( record, snapshot, context )
-	if not result then MC.ContainerRestore( container, snapshot ) sendRejected( record, actionId, "creative_pick_failed", true ) return end
+	local result, commitError = commitDirectContainerMutation( container, snapshot, context )
+	if not result then
+		MC.ContainerRestore( container, snapshot )
+		sendRejected( record, actionId, commitError or "creative_pick_failed", true )
+		return
+	end
 	if not context.inventoryDeltaPublished then sendDelta( record, result, true, actionId, "" ) end
 end )
 

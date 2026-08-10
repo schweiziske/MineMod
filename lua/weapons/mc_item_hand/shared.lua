@@ -33,9 +33,29 @@ SWEP.Secondary = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "no
 
 local ATTACK_INTERVAL = 0.12
 local USE_TICK_INTERVAL = 0.05
+local COMBAT_INFRASTRUCTURE = {
+	mc_block_cluster = true, mc_chunk = true, mc_chunk_phys = true,
+	mc_collision_carrier = true, mc_item_drop = true, mc_projectile = true,
+}
 
 local function aimedBlock( ply )
 	return MC.PlayerBlockAim and MC.PlayerBlockAim( ply ) or nil
+end
+
+local function traceCombatTarget( ply, trace )
+	local target = trace and trace.Entity or nil
+	if not IsValid( target ) or target == ply or target.IsWorld and target:IsWorld() then return nil end
+	if COMBAT_INFRASTRUCTURE[target.GetClass and target:GetClass() or ""] then return nil end
+	local attackable = target.IsPlayer and target:IsPlayer()
+		or target.IsNPC and target:IsNPC()
+		or target.IsNextBot and target:IsNextBot()
+		or target.Health and tonumber( target:Health() ) and target:Health() > 0
+	if not attackable then return nil end
+	local start = ply.GetShootPos and ply:GetShootPos() or ply:EyePos()
+	local hit = trace.HitPos or target.WorldSpaceCenter and target:WorldSpaceCenter() or target:GetPos()
+	local reach = ( tonumber( MC.BS or MC.Config and MC.Config.BlockSize ) or 36.5 ) * 3
+	if hit and ( hit - start ):LengthSqr() > reach * reach + 1 then return nil end
+	return target
 end
 
 local function breakTarget( ply, aim, trace )
@@ -173,12 +193,19 @@ function SWEP:PrimaryAttack()
 		MC.SV.CancelSelectedItemUse( ply, "primary_attack" )
 	end
 	local aim = aimedBlock( ply )
+	local eyeTrace = ply:GetEyeTrace()
 	if SERVER then
-		local bx, by, bz = breakTarget( ply, aim, ply:GetEyeTrace() )
+		local target = MC.SV and MC.SV.TraceSelectedItemAttack and select( 1, MC.SV.TraceSelectedItemAttack( ply ) ) or nil
+		if target then
+			if MC.SV.AttackSelectedItem then MC.SV.AttackSelectedItem( ply, target, { reason = "primary_attack" } ) end
+			return
+		end
+		local bx, by, bz = breakTarget( ply, aim, eyeTrace )
 		if not bx then return end
 		if MC.SV and MC.SV.Break then MC.SV.Break( ply, bx, by, bz ) end
 	elseif CLIENT and IsFirstTimePredicted() and ply == LocalPlayer() then
-		local bx, by, bz = breakTarget( ply, aim, ply:GetEyeTrace() )
+		if traceCombatTarget( ply, eyeTrace ) then return end
+		local bx, by, bz = breakTarget( ply, aim, eyeTrace )
 		if bx and MC.CanPreviewBreak and MC.CanPreviewBreak( ply, bx, by, bz ) and MC.PredictBreakBlock then
 			MC.PredictBreakBlock( bx, by, bz, ply )
 		end
@@ -311,7 +338,21 @@ if CLIENT then
 		end
 		local runtime = IsValid( ply ) and ply:GetNWInt( "mc_selected_item_runtime", 0 ) or 0
 		local definition = MC.GetItem( runtime )
-		return definition and MC.NewItemStack( definition.name, 1 ) or nil
+		return definition and MC.NewItemStack( definition.name,
+			math.max( 1, ply:GetNWInt( "mc_selected_item_count", 1 ) ), nil,
+			math.max( 0, ply:GetNWInt( "mc_selected_item_damage", 0 ) ) ) or nil
+	end
+
+	local function equipmentStack( ply, slot )
+		if ply == LocalPlayer() and MC.ClientInventory then
+			return MC.CopyItemStack( MC.ClientInventory.equipment and MC.ClientInventory.equipment[slot] )
+		end
+		local prefix = "mc_equipment_" .. slot .. "_"
+		local runtime = IsValid( ply ) and ply:GetNWInt( prefix .. "runtime", 0 ) or 0
+		local definition = MC.GetItem( runtime )
+		if not definition then return nil end
+		return MC.NewItemStack( definition.name, math.max( 1, ply:GetNWInt( prefix .. "count", 1 ) ), nil,
+			math.max( 0, ply:GetNWInt( prefix .. "damage", 0 ) ) )
 	end
 
 	local function selectedState( ply, stack )
@@ -320,30 +361,31 @@ if CLIENT then
 		return MC.DefaultBlockState( definition.blockId )
 	end
 
-	local function handPose( ply )
+	local function handPose( ply, hand )
 		local eyeAng = ply:EyeAngles()
-		local pos = EyePos() + eyeAng:Forward() * 8 + eyeAng:Right() * 4 - eyeAng:Up() * 4
-		local ang = Angle( eyeAng.p + 8, eyeAng.y + 28, eyeAng.r + 12 )
+		local side = hand == "offhand" and -1 or 1
+		local pos = EyePos() + eyeAng:Forward() * 8 + eyeAng:Right() * ( 4 * side ) - eyeAng:Up() * 4
+		local ang = Angle( eyeAng.p + 8, eyeAng.y + 28 * side, eyeAng.r + 12 * side )
 		return pos, ang, math.max( 0.35, ( MC.BS or 36.5 ) / 100 )
 	end
 
-	local function drawHeld( ply, firstPerson )
-		if not IsValid( ply ) or not ply:Alive() then return end
-		local weapon = ply:GetActiveWeapon()
-		if not IsValid( weapon ) or weapon:GetClass() ~= "mc_item_hand" then return end
-		local stack = selectedStack( ply )
+	local function heldPose( ply, firstPerson, hand )
+		if firstPerson then return handPose( ply, hand ) end
+		local left = hand == "offhand"
+		local bone = ply:LookupBone( left and "ValveBiped.Bip01_L_Hand" or "ValveBiped.Bip01_R_Hand" )
+		local pos, ang
+		if bone then pos, ang = ply:GetBonePosition( bone ) end
+		if not pos or not ang then pos, ang = ply:GetShootPos() + ply:EyeAngles():Forward() * 10, ply:EyeAngles() end
+		local side = left and -1 or 1
+		pos = pos + ang:Forward() * 2 + ang:Right() * ( 2 * side ) + ang:Up()
+		return pos, ang, 0.45
+	end
+
+	local function drawHeldStack( ply, stack, firstPerson, hand, useState )
 		if MC.IsEmptyItemStack( stack ) then return end
 		local definition = MC.GetItem( stack.item )
 		if not definition then return end
-		local pos, ang, scale
-		if firstPerson then pos, ang, scale = handPose( ply )
-		else
-			local bone = ply:LookupBone( "ValveBiped.Bip01_R_Hand" )
-			if bone then pos, ang = ply:GetBonePosition( bone ) end
-			if not pos or not ang then pos, ang = ply:GetShootPos() + ply:EyeAngles():Forward() * 10, ply:EyeAngles() end
-			pos = pos + ang:Forward() * 2 + ang:Right() * 2 + ang:Up() * 1
-			scale = 0.45
-		end
+		local pos, ang, scale = heldPose( ply, firstPerson, hand )
 		local stateId = selectedState( ply, stack )
 		if definition.blockId and stateId and MC.DrawCreativeHeldBlockState then
 			render.OverrideDepthEnable( firstPerson, false )
@@ -351,16 +393,17 @@ if CLIENT then
 			render.OverrideDepthEnable( false, false )
 		elseif MC.InventoryUI and MC.InventoryUI.ItemRenderer then
 			local normal = firstPerson and EyeAngles():Forward() or ang:Forward()
-			local using = ply:GetNWBool( "mc_item_using", false )
-			local useProgress = ply:GetNWFloat( "mc_item_using_progress", 0 )
-			local useStart = ply:GetNWFloat( "mc_item_using_start", 0 )
-			local useDuration = ply:GetNWFloat( "mc_item_using_duration", 0 )
+			local using = useState.using and useState.hand == hand
+			local useProgress = using and useState.progress or 0
+			local useStart = using and useState.startedAt or 0
+			local useDuration = using and useState.duration or 0
 			if using and useDuration > 0 and MC.ItemUseProgress then
 				useProgress = MC.ItemUseProgress( useStart, useDuration, CurTime() )
 			end
 			MC.InventoryUI.ItemRenderer.DrawHeldItem( stack, pos, normal, firstPerson and 2.4 or 1.1,
 				nil, {
-					displayContext = firstPerson and "firstperson_righthand" or "thirdperson_righthand",
+					displayContext = firstPerson and ( hand == "offhand" and "firstperson_lefthand" or "firstperson_righthand" )
+						or ( hand == "offhand" and "thirdperson_lefthand" or "thirdperson_righthand" ),
 					using = using,
 					useProgress = math.Clamp( tonumber( useProgress ) or 0, 0, 1 ),
 					useDuration = useDuration,
@@ -368,6 +411,24 @@ if CLIENT then
 					chargeType = MC.ItemCrossbowChargeType and MC.ItemCrossbowChargeType( stack ) or "none",
 				} )
 		end
+	end
+
+	local function drawHeld( ply, firstPerson )
+		if not IsValid( ply ) or not ply:Alive() then return end
+		local weapon = ply:GetActiveWeapon()
+		if not IsValid( weapon ) or weapon:GetClass() ~= "mc_item_hand" then return end
+		local using = ply:GetNWBool( "mc_item_using", false )
+		local useHand = ply:GetNWString( "mc_item_using_hand", "" )
+		if useHand ~= "offhand" then useHand = "mainhand" end
+		local useState = {
+			using = using,
+			hand = useHand,
+			progress = ply:GetNWFloat( "mc_item_using_progress", 0 ),
+			startedAt = ply:GetNWFloat( "mc_item_using_start", 0 ),
+			duration = ply:GetNWFloat( "mc_item_using_duration", 0 ),
+		}
+		drawHeldStack( ply, selectedStack( ply ), firstPerson, "mainhand", useState )
+		drawHeldStack( ply, equipmentStack( ply, "offhand" ), firstPerson, "offhand", useState )
 	end
 
 	hook.Add( "PostDrawTranslucentRenderables", "mc_item_hand_first_person", function( _, sky3d )

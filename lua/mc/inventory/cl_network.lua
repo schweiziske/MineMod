@@ -251,7 +251,12 @@ net.Receive( "mc_inventory_delta", function()
 		State.menu = { kind = "player", slotCount = 36, playerOffset = 0, chestSlots = 0, slots = slots }
 	end
 	local cursorApplies = State.session and token == State.session.token or false
-	MC.ApplyClientInventoryDelta( revision, selected, changed, cursor, cursorApplies )
+	local applied, applyError = MC.ApplyClientInventoryDelta( revision, selected, changed, cursor, cursorApplies )
+	if not applied then
+		State.lastError = applyError or "inventory_delta_rejected"
+		MC.RequestInventoryResync()
+		return
+	end
 	if actionId ~= BACKGROUND_ACTION and State.inflight and State.inflight.actionId == actionId then
 		State.inflight = nil
 		if not accepted then
@@ -262,6 +267,59 @@ net.Receive( "mc_inventory_delta", function()
 	end
 	emit( "MC.InventoryActionResult", actionId, accepted, errorCode, revision, State )
 end )
+
+net.Receive( "mc_equipment_delta", function()
+	local protocol = net.ReadUInt( 8 )
+	local revision = net.ReadUInt( 32 )
+	local count = net.ReadUInt( 3 )
+	local changed, seen, decodeError = {}, {}, nil
+	for _ = 1, count do
+		local id = net.ReadUInt( 3 )
+		local slot = MC.EquipmentSlotsById and MC.EquipmentSlotsById[id] or nil
+		local stack, stackError = MC.ReadItemStackNet()
+		if not slot or seen[slot] then decodeError = decodeError or "invalid_equipment_delta_slot" end
+		if stackError then decodeError = decodeError or stackError end
+		if slot then seen[slot], changed[slot] = true, stack or false end
+	end
+	if protocol ~= PROTOCOL_VERSION or count > 5 or decodeError then
+		State.lastError = decodeError or "invalid_equipment_delta"
+		MC.RequestInventoryResync()
+		return
+	end
+	local ok, err = MC.ApplyClientEquipmentDelta( revision, changed )
+	if not ok then State.lastError = err MC.RequestInventoryResync() end
+end )
+
+local function initialOpenMaps( kind, creative, crafting, slotCount, playerOffset )
+	local playerByMenu, menuByPlayer, equipmentByMenu, menuByEquipment = {}, {}, {}, {}
+	if ( kind == "player" or kind == "" ) and crafting and not creative and slotCount >= 46 then
+		for playerIndex = 9, 35 do
+			playerByMenu[playerIndex], menuByPlayer[playerIndex] = playerIndex, playerIndex
+		end
+		for playerIndex = 0, 8 do
+			local menuIndex = 36 + playerIndex
+			playerByMenu[menuIndex], menuByPlayer[playerIndex] = playerIndex, menuIndex
+		end
+		for slot, menuIndex in pairs( MC.EquipmentMenuSlots or {} ) do
+			equipmentByMenu[menuIndex], menuByEquipment[slot] = slot, menuIndex
+		end
+	elseif ( kind == "player" or kind == "" ) and creative and slotCount >= 41 and playerOffset == 0 then
+		for playerIndex = 0, 35 do
+			playerByMenu[playerIndex], menuByPlayer[playerIndex] = playerIndex, playerIndex
+		end
+		for slot, menuIndex in pairs( MC.CreativeEquipmentMenuSlots or {} ) do
+			equipmentByMenu[menuIndex], menuByEquipment[slot] = slot, menuIndex
+		end
+	else
+		for playerIndex = 0, 35 do
+			local menuIndex = playerOffset + playerIndex
+			if menuIndex >= 0 and menuIndex < slotCount then
+				playerByMenu[menuIndex], menuByPlayer[playerIndex] = playerIndex, menuIndex
+			end
+		end
+	end
+	return playerByMenu, menuByPlayer, equipmentByMenu, menuByEquipment
+end
 
 net.Receive( "mc_inventory_open", function()
 	local protocol = net.ReadUInt( 8 )
@@ -305,9 +363,14 @@ net.Receive( "mc_inventory_open", function()
 	State.revision = revision
 	State.selected = selected
 	State.cursor = cursor
+	local playerByMenu, menuByPlayer, equipmentByMenu, menuByEquipment = initialOpenMaps(
+		kind, creative, crafting, slotCount, playerOffset )
 	local menuSlots = {}
-	if kind == "player" or kind == "" then
-		for index = 0, 35 do menuSlots[playerOffset + index + 1] = MC.CopyItemStack( State.slots[index + 1] ) end
+	for playerIndex, menuIndex in pairs( menuByPlayer ) do
+		menuSlots[menuIndex + 1] = MC.CopyItemStack( State.slots[playerIndex + 1] )
+	end
+	for slot, menuIndex in pairs( menuByEquipment ) do
+		menuSlots[menuIndex + 1] = MC.CopyItemStack( State.equipment and State.equipment[slot] )
 	end
 	State.menu = {
 		kind = kind ~= "" and kind or "player",
@@ -320,6 +383,10 @@ net.Receive( "mc_inventory_open", function()
 		craftingHeight = craftingHeight,
 		resultSlot = resultSlot,
 		slots = menuSlots,
+		playerSlotMap = playerByMenu,
+		menuPlayerMap = menuByPlayer,
+		equipmentSlotMap = equipmentByMenu,
+		menuEquipmentMap = menuByEquipment,
 	}
 	State.actions = {}
 	State.inflight = nil

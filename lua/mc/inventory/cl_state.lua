@@ -1,10 +1,9 @@
 --[[----------------------------------------------------------------------------
 	Client mirror of the authoritative player inventory and active menu.
 
-	State.slots always remains the 36-slot player inventory used by the hotbar
-	and held-item renderer.  State.menu is the currently synchronized menu view
-	(player, chest, crafting, ...), so block containers never replace that base
-	player state.
+	State.slots remains the 36-slot non-equipment inventory used by the hotbar.
+	State.equipment mirrors EntityEquipment (armor/offhand), while State.menu is
+	the currently synchronized player/chest/crafting view.
 ------------------------------------------------------------------------------]]
 
 MC = MC or {}
@@ -14,6 +13,7 @@ MC.ClientInventory = MC.ClientInventory or {
 	revision = 0,
 	selected = 0,
 	slots = {},
+	equipment = {},
 	menu = nil,
 	cursor = nil,
 	session = nil,
@@ -22,6 +22,9 @@ MC.ClientInventory = MC.ClientInventory or {
 }
 
 local State = MC.ClientInventory
+State.slots = State.slots or {}
+State.equipment = State.equipment or {}
+State.actions = State.actions or {}
 
 local function emit( eventName, ... )
 	if MC.RunEvent then MC.RunEvent( eventName, ... ) end
@@ -42,9 +45,60 @@ local function decodeEntries( entries, slotCount, errorCode )
 	return slots
 end
 
-local function playerSlotsFromMenu( menuSlots, playerOffset )
+local function decodeEquipmentEntries( entries )
+	if entries ~= nil and type( entries ) ~= "table" then return nil, "invalid_equipment_items" end
+	local equipment, seen = {}, {}
+	for _, entry in ipairs( entries or {} ) do
+		local slot = MC.NormalizeEquipmentSlot and MC.NormalizeEquipmentSlot( entry and entry.slot ) or nil
+		if not slot or seen[slot] then return nil, "invalid_equipment_slot" end
+		seen[slot] = true
+		local stack, err = MC.InventoryStackFromData( entry.stack )
+		if not stack and err then return nil, err end
+		if stack and not MC.ItemCanEquipInSlot( stack, slot ) then return nil, "equipment_slot_rejected" end
+		equipment[slot] = stack
+	end
+	return equipment
+end
+
+local function decodeSlotMaps( data, slotCount )
+	if data.playerSlotMap ~= nil and type( data.playerSlotMap ) ~= "table" then
+		return nil, "invalid_player_slot_map"
+	end
+	if data.equipmentSlotMap ~= nil and type( data.equipmentSlotMap ) ~= "table" then
+		return nil, "invalid_equipment_slot_map"
+	end
+	local playerByMenu, menuByPlayer, equipmentByMenu, menuByEquipment = {}, {}, {}, {}
+	for _, entry in ipairs( data.playerSlotMap or {} ) do
+		local playerIndex = math.floor( tonumber( entry and entry.player ) or -1 )
+		local menuIndex = math.floor( tonumber( entry and entry.menu ) or -1 )
+		if playerIndex < 0 or playerIndex >= 36 or menuIndex < 0 or menuIndex >= slotCount
+		or playerByMenu[menuIndex] ~= nil or menuByPlayer[playerIndex] ~= nil then
+			return nil, "invalid_player_slot_map"
+		end
+		playerByMenu[menuIndex], menuByPlayer[playerIndex] = playerIndex, menuIndex
+	end
+	for _, entry in ipairs( data.equipmentSlotMap or {} ) do
+		local slot = MC.NormalizeEquipmentSlot and MC.NormalizeEquipmentSlot( entry and entry.slot ) or nil
+		local menuIndex = math.floor( tonumber( entry and entry.menu ) or -1 )
+		if not slot or menuIndex < 0 or menuIndex >= slotCount
+		or equipmentByMenu[menuIndex] ~= nil or menuByEquipment[slot] ~= nil
+		or playerByMenu[menuIndex] ~= nil then
+			return nil, "invalid_equipment_slot_map"
+		end
+		equipmentByMenu[menuIndex], menuByEquipment[slot] = slot, menuIndex
+	end
+	return {
+		playerByMenu = playerByMenu, menuByPlayer = menuByPlayer,
+		equipmentByMenu = equipmentByMenu, menuByEquipment = menuByEquipment,
+	}
+end
+
+local function playerSlotsFromMenu( menuSlots, playerOffset, menuByPlayer )
 	local slots = {}
-	for index = 0, 35 do slots[index + 1] = MC.CopyItemStack( menuSlots[playerOffset + index + 1] ) end
+	for index = 0, 35 do
+		local menuIndex = menuByPlayer and menuByPlayer[index] or playerOffset + index
+		slots[index + 1] = menuIndex ~= nil and MC.CopyItemStack( menuSlots[menuIndex + 1] ) or nil
+	end
 	return slots
 end
 
@@ -74,14 +128,19 @@ function MC.ApplyClientInventorySnapshot( data )
 	end
 	local menuSlots, menuError = decodeEntries( data.items, slotCount, "invalid_inventory_menu_slot" )
 	if not menuSlots then return false, menuError end
+	local maps, mapError = decodeSlotMaps( data, slotCount )
+	if not maps then return false, mapError end
 	local playerSlots
 	if type( data.playerItems ) == "table" then
 		playerSlots, menuError = decodeEntries( data.playerItems, 36, "invalid_inventory_slot" )
 		if not playerSlots then return false, menuError end
 	else
-		playerSlots = playerSlotsFromMenu( menuSlots, playerOffset )
+		playerSlots = playerSlotsFromMenu( menuSlots, playerOffset, maps.menuByPlayer )
 	end
+	local equipment, equipmentError = decodeEquipmentEntries( data.equipmentItems )
+	if not equipment then return false, equipmentError end
 	State.slots = playerSlots
+	State.equipment = equipment
 	State.menu = {
 		kind = tostring( data.menuKind or "player" ),
 		recipeRegistryHash = tostring( data.recipeRegistryHash or MC.RecipeRegistryHash or "" ),
@@ -93,6 +152,10 @@ function MC.ApplyClientInventorySnapshot( data )
 		craftingHeight = math.max( 0, craftingHeight ),
 		resultSlot = math.max( 0, resultSlot ),
 		slots = menuSlots,
+		playerSlotMap = maps.playerByMenu,
+		menuPlayerMap = maps.menuByPlayer,
+		equipmentSlotMap = maps.equipmentByMenu,
+		menuEquipmentMap = maps.menuByEquipment,
 	}
 	State.revision = math.max( 0, math.floor( tonumber( data.revision ) or 0 ) )
 	State.selected = math.Clamp( math.floor( tonumber( data.selected ) or 0 ), 0, 8 )
@@ -100,6 +163,7 @@ function MC.ApplyClientInventorySnapshot( data )
 	emit( "MC.InventorySnapshot", State )
 	emit( "MC.InventoryChanged", nil, State.revision, State )
 	emit( "MC.InventoryMenuChanged", nil, State.revision, State )
+	emit( "MC.EquipmentChanged", nil, State.revision, State )
 	return true
 end
 
@@ -111,16 +175,21 @@ function MC.ApplyClientInventoryDelta( revision, selected, changed, cursor, curs
 		recipeRegistryHash = tostring( MC.RecipeRegistryHash or "" ), slots = State.slots,
 	}
 	State.menu = menu
-	local menuChanged, playerChanged = {}, {}
+	local menuChanged, playerChanged, equipmentChanged = {}, {}, {}
 	for index, stack in pairs( changed or {} ) do
 		index = math.floor( tonumber( index ) or -1 )
 		if index < 0 or index >= menu.slotCount then return false, "invalid_inventory_slot" end
 		menu.slots[index + 1] = MC.CopyItemStack( stack )
 		menuChanged[#menuChanged + 1] = index
-		local playerIndex = index - menu.playerOffset
-		if playerIndex >= 0 and playerIndex < 36 then
+		local playerIndex = menu.playerSlotMap and menu.playerSlotMap[index] or index - menu.playerOffset
+		if playerIndex ~= nil and playerIndex >= 0 and playerIndex < 36 then
 			State.slots[playerIndex + 1] = MC.CopyItemStack( stack )
 			playerChanged[#playerChanged + 1] = playerIndex
+		end
+		local equipmentSlot = menu.equipmentSlotMap and menu.equipmentSlotMap[index] or nil
+		if equipmentSlot then
+			State.equipment[equipmentSlot] = MC.CopyItemStack( stack )
+			equipmentChanged[#equipmentChanged + 1] = equipmentSlot
 		end
 	end
 	table.sort( menuChanged )
@@ -130,8 +199,30 @@ function MC.ApplyClientInventoryDelta( revision, selected, changed, cursor, curs
 	if cursorApplies then State.cursor = MC.CopyItemStack( cursor ) end
 	if #menuChanged > 0 then emit( "MC.InventoryMenuChanged", menuChanged, revision, State ) end
 	if #playerChanged > 0 then emit( "MC.InventoryChanged", playerChanged, revision, State ) end
+	if #equipmentChanged > 0 then emit( "MC.EquipmentChanged", equipmentChanged, revision, State ) end
 	emit( "MC.InventorySelectionChanged", State.selected, State )
 	if cursorApplies then emit( "MC.InventoryCursorChanged", State.cursor, State ) end
+	return true
+end
+
+function MC.ApplyClientEquipmentDelta( revision, changed )
+	revision = math.max( 0, math.floor( tonumber( revision ) or 0 ) )
+	if revision < State.revision then return false, "stale_equipment_delta" end
+	local changedSlots = {}
+	State.equipment = State.equipment or {}
+	for slot, stack in pairs( changed or {} ) do
+		slot = MC.NormalizeEquipmentSlot and MC.NormalizeEquipmentSlot( slot ) or nil
+		if not slot then return false, "invalid_equipment_slot" end
+		if stack and not MC.ItemCanEquipInSlot( stack, slot ) then return false, "equipment_slot_rejected" end
+		State.equipment[slot] = MC.CopyItemStack( stack )
+		changedSlots[#changedSlots + 1] = slot
+		local menuIndex = State.menu and State.menu.menuEquipmentMap and State.menu.menuEquipmentMap[slot] or nil
+		if menuIndex ~= nil then State.menu.slots[menuIndex + 1] = MC.CopyItemStack( stack ) end
+	end
+	State.revision = revision
+	table.sort( changedSlots )
+	emit( "MC.EquipmentChanged", changedSlots, revision, State )
+	emit( "MC.InventoryMenuChanged", nil, revision, State )
 	return true
 end
 
@@ -139,6 +230,11 @@ function MC.GetClientInventoryStack( slot )
 	slot = math.floor( tonumber( slot ) or -1 )
 	if slot < 0 or slot >= 36 then return nil end
 	return MC.CopyItemStack( State.slots[slot + 1] )
+end
+
+function MC.GetClientEquipmentStack( slot )
+	slot = MC.NormalizeEquipmentSlot and MC.NormalizeEquipmentSlot( slot ) or nil
+	return slot and MC.CopyItemStack( State.equipment and State.equipment[slot] ) or nil
 end
 
 function MC.GetClientMenuStack( slot )
