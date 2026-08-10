@@ -99,4 +99,3 @@ function ENT:Think()
 	self:NextThink( now + 0.01 )
 	return true
 end
-
