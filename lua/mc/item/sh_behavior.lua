@@ -19,11 +19,10 @@ local KINDS = {
 }
 
 local PROJECTILES = {
-	["minecraft:arrow"] = true, ["minecraft:spectral_arrow"] = true,
 	["minecraft:egg"] = true, ["minecraft:snowball"] = true,
 	["minecraft:ender_pearl"] = true, ["minecraft:experience_bottle"] = true,
 	["minecraft:splash_potion"] = true, ["minecraft:lingering_potion"] = true,
-	["minecraft:firework_rocket"] = true, ["minecraft:wind_charge"] = true,
+	["minecraft:wind_charge"] = true, ["minecraft:firework_rocket"] = true,
 }
 
 local function definitionFor( stackOrDefinition )
@@ -79,6 +78,18 @@ function MC.ItemCrossbowCharged( stack )
 	if type( stack ) ~= "table" or type( stack.components ) ~= "table" then return false end
 	local value = stack.components["minecraft:charged_projectiles"] or stack.components.charged_projectiles
 	return type( value ) == "table" and next( value ) ~= nil or value == true
+end
+
+function MC.ItemCrossbowChargeType( stack )
+	if type( stack ) ~= "table" or type( stack.components ) ~= "table" then return "none" end
+	local value = stack.components["minecraft:charged_projectiles"] or stack.components.charged_projectiles
+	if type( value ) ~= "table" then return value == true and "arrow" or "none" end
+	for _, projectile in ipairs( value ) do
+		local item = type( projectile ) == "table" and projectile.item or projectile
+		if item == "minecraft:firework_rocket" then return "rocket" end
+		if item == "minecraft:arrow" or item == "minecraft:spectral_arrow" then return "arrow" end
+	end
+	return next( value ) ~= nil and "arrow" or "none"
 end
 
 function MC.ItemUseProgress( startedAt, duration, now )
