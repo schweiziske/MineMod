@@ -508,7 +508,7 @@ net.Receive( "mc_inventory_recipe_place", function( _, ply )
 	if #recipeId < 1 or #recipeId > 128 then sendRejected( record, actionId, "invalid_recipe_id", false ) return end
 	if not actionRateAllowed( record ) then sendRejected( record, actionId, "rate_limited", false ) return end
 	if not actionSequenceAllowed( session, actionId ) then sendRejected( record, actionId, "stale_action", true ) return end
-	if revision ~= container.revision then sendRejected( record, actionId, "revision_mismatch", true ) return end
+	if revision > container.revision then sendRejected( record, actionId, "revision_mismatch", true ) return end
 	local recipe = MC.GetRecipe and MC.GetRecipe( recipeId ) or nil
 	if not recipe or recipe.supported ~= true then sendRejected( record, actionId, "unknown_recipe", false ) return end
 	local data = container.crafting
@@ -553,7 +553,7 @@ net.Receive( "mc_inventory_creative_pick", function( _, ply )
 	if not sessionStillValid( session ) then sendRejected( record, actionId, "container_unavailable", false ) return end
 	if not actionRateAllowed( record ) then sendRejected( record, actionId, "rate_limited", false ) return end
 	if not actionSequenceAllowed( session, actionId ) then sendRejected( record, actionId, "stale_action", true ) return end
-	if revision ~= container.revision then sendRejected( record, actionId, "revision_mismatch", true ) return end
+	if revision > container.revision then sendRejected( record, actionId, "revision_mismatch", true ) return end
 	if not creativeAllowed( ply ) then sendRejected( record, actionId, "creative_only", false ) return end
 	if targetSlot < -1 or targetSlot > 8 then sendRejected( record, actionId, "invalid_creative_target", false ) return end
 	local definition = MC.GetItem( runtimeId )

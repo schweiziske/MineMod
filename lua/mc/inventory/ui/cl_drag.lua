@@ -1,6 +1,6 @@
 -- Central pointer/drag state machine for Minecraft container input semantics.
--- Slots never move themselves; this module emits ordered menu actions and the
--- authoritative delta later refreshes the views.
+-- The shared click state machine predicts the local view immediately; the
+-- authoritative delta later reconciles it without blocking the next input.
 
 MC = MC or {}
 MC.InventoryUI = MC.InventoryUI or {}
@@ -39,6 +39,23 @@ local function creativePick( slot, count, target )
 	return MC.QueueCreativeInventoryPick( definition, count or definition.maxStack, target )
 end
 
+local function slotAtCursor( active )
+	local source = active and active.slot
+	local screen = IsValid( source ) and source.Screen or nil
+	if not IsValid( screen ) or type( screen.SlotPanels ) ~= "table" then return active and active.hover end
+	local mouseX, mouseY = gui.MousePos()
+	for index = 1, screen.VisibleSlotCount or #screen.SlotPanels do
+		local slot = screen.SlotPanels[index]
+		if IsValid( slot ) and slot:IsVisible() and slot:IsMouseInputEnabled() then
+			local x, y = slot:LocalToScreen( 0, 0 )
+			if mouseX >= x and mouseY >= y and mouseX < x + slot:GetWide() and mouseY < y + slot:GetTall() then
+				return slot
+			end
+		end
+	end
+	return nil
+end
+
 local function activateClick( active )
 	local slot = active and active.slot
 	if not IsValid( slot ) then return end
@@ -47,6 +64,13 @@ local function activateClick( active )
 		return
 	end
 	if slot.Kind == "creative" then
+		-- Creative catalog slots are virtual.  When a cursor stack is carried,
+		-- Minecraft consumes it on a left click instead of replacing it with the
+		-- catalog entry; the server confirms the clear through the normal delta.
+		if active.mouseCode == MOUSE_LEFT and not MC.IsEmptyItemStack( cursorStack() ) then
+			MC.QueueCreativeInventoryClear( -1 )
+			return
+		end
 		local definition = slot.Stack and MC.GetItem( slot.Stack.item ) or nil
 		if not definition then return end
 		local count = active.mouseCode == MOUSE_RIGHT and 1 or definition.maxStack
@@ -115,7 +139,7 @@ local function finishActive( activate )
 	Drag.Active = nil
 	if active.started then
 		MC.QueueInventoryInput( MC.ContainerInput.QUICK_CRAFT, -999, active.craftType * 4 + 2 )
-	elseif activate ~= false then
+	elseif activate ~= false and not active.activated then
 		activateClick( active )
 	end
 end
@@ -133,9 +157,16 @@ function Drag.BeginPointer( slot, mouseCode )
 		cursorWasEmpty = MC.IsEmptyItemStack( cursorStack() ),
 		hadStack = not MC.IsEmptyItemStack( slot:GetStack() ),
 		started = false,
+		activated = false,
 		queued = {},
 	}
 	if slot.MouseCapture then slot:MouseCapture( true ) end
+	-- Vanilla executes clicks immediately when the cursor is empty.  Only a
+	-- carried stack waits for release so the same gesture can become quick-craft.
+	if Drag.Active.cursorWasEmpty then
+		activateClick( Drag.Active )
+		Drag.Active.activated = true
+	end
 end
 
 function Drag.ReleasePointer( slot, mouseCode )
@@ -193,11 +224,14 @@ hook.Add( "Think", "mc_inventory_drag_input", function()
 		finishActive( true )
 		return
 	end
+	if active.activated then return end
 	if not active.started then
 		local x, y = gui.MousePos()
 		local dx, dy = x - active.startX, y - active.startY
+		active.hover = slotAtCursor( active ) or active.hover
 		if dx * dx + dy * dy >= MOVE_THRESHOLD_SQR then startQuickCraft( active ) end
-	elseif IsValid( active.hover ) then
+	else
+		active.hover = slotAtCursor( active )
 		addQuickCraftSlot( active, active.hover )
 	end
 end )

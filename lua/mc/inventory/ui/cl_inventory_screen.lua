@@ -334,8 +334,11 @@ function PANEL:Reflow()
 	end
 	self.BaseLeft = self.Left
 	if self.RecipeBookOpen and self.Crafting and not self.Creative then
-		local combined = ( self.ContentW + 149 ) * self.Scale
-		if ScrW() >= combined + 8 * self.Scale then self.Left = self.BaseLeft + 74 * self.Scale end
+		local bookSpan = 149 + ( UI.RecipeBookLeftMargin or 30 )
+		local combined = ( self.ContentW + bookSpan ) * self.Scale
+		if ScrW() >= combined + 8 * self.Scale then
+			self.Left = self.BaseLeft + math.floor( bookSpan * 0.5 ) * self.Scale
+		end
 	end
 	self.SearchEntry:SetFont( "MCInventorySearch" .. tostring( self.Scale ) )
 	self:LayoutTabs()
@@ -564,7 +567,8 @@ function PANEL:LayoutRecipeBook()
 	self.RecipeBookToggle:MoveToFront()
 	if IsValid( self.RecipeBook ) then
 		local bookX = self.Left - 149 * self.Scale
-		if bookX < 2 * self.Scale then bookX = 2 * self.Scale end
+		local minimumBookX = ( ( UI.RecipeBookLeftMargin or 30 ) + 2 ) * self.Scale
+		if bookX < minimumBookX then bookX = minimumBookX end
 		self.RecipeBook:SetGeometry( bookX, self.Top, self.Scale )
 		self.RecipeBook:SetVisible( self.RecipeBookOpen )
 		if self.RecipeBookOpen then self.RecipeBook:MoveToFront() end
@@ -748,7 +752,7 @@ function PANEL:PointInsideContent( x, y )
 	if insideMain then return true end
 	if self.RecipeBookOpen and IsValid( self.RecipeBook ) then
 		local bookX, bookY = self.RecipeBook:GetPos()
-		return x >= bookX - 30 * self.Scale and y >= bookY
+		return x >= bookX and y >= bookY
 			and x < bookX + self.RecipeBook:GetWide() and y < bookY + self.RecipeBook:GetTall()
 	end
 	return false
