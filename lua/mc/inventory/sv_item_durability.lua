@@ -57,6 +57,9 @@ function SV.DamageSelectedItem( ply, amount, context )
 	if MC.RunEvent then
 		MC.RunEvent( "MC.ItemDurabilityChanged", ply, slotIndex, stack, replacement, newDamage, broken )
 	end
+	if broken and record.itemUse and record.itemUse.hand ~= "offhand" and SV.CancelSelectedItemUse then
+		SV.CancelSelectedItemUse( ply, "selected_item_broken" )
+	end
 	return result, broken
 end
 

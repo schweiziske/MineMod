@@ -182,7 +182,13 @@ function MC.ContainerQuickMove( container, sourceIndex, context )
 
 	local rule = container.transferRules[sourceSlot.group]
 	if type( rule ) ~= "table" then return false, "no_quick_move_rule" end
-	local targets = MC.ContainerResolveTargets( container, rule.targets or rule, rule.reverse == true )
+	local targetSpec = rule.targets or rule
+	if type( rule.resolve ) == "function" then
+		local called, resolved = pcall( rule.resolve, container, source, sourceSlot, context or {} )
+		if not called or type( resolved ) ~= "table" then return false, "quick_move_resolve_failed" end
+		targetSpec = resolved
+	end
+	local targets = MC.ContainerResolveTargets( container, targetSpec, rule.reverse == true )
 	local filtered = {}
 	for _, index in ipairs( targets ) do if index ~= sourceIndex then filtered[#filtered + 1] = index end end
 	local remaining, changed = MC.ContainerMoveStackTo( container, source, filtered, context )

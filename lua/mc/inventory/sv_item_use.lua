@@ -30,7 +30,10 @@ local function setUseNetwork( ply, state )
 	local using = state ~= nil
 	ply:SetNWBool( USE_NET_ROOT, using )
 	if not using then
-		if ply.SetNWString then ply:SetNWString( USE_NET_PREFIX .. "item", "" ) end
+		if ply.SetNWString then
+			ply:SetNWString( USE_NET_PREFIX .. "item", "" )
+			ply:SetNWString( USE_NET_PREFIX .. "hand", "" )
+		end
 		if ply.SetNWFloat then
 			ply:SetNWFloat( USE_NET_PREFIX .. "start", 0 )
 			ply:SetNWFloat( USE_NET_PREFIX .. "duration", 0 )
@@ -38,7 +41,10 @@ local function setUseNetwork( ply, state )
 		end
 		return
 	end
-	if ply.SetNWString then ply:SetNWString( USE_NET_PREFIX .. "item", tostring( state.itemName or "" ) ) end
+	if ply.SetNWString then
+		ply:SetNWString( USE_NET_PREFIX .. "item", tostring( state.itemName or "" ) )
+		ply:SetNWString( USE_NET_PREFIX .. "hand", tostring( state.hand or "mainhand" ) )
+	end
 	if ply.SetNWFloat then
 		ply:SetNWFloat( USE_NET_PREFIX .. "start", tonumber( state.startedAt ) or CurTime() )
 		ply:SetNWFloat( USE_NET_PREFIX .. "duration", tonumber( state.duration ) or 0 )
@@ -46,16 +52,39 @@ local function setUseNetwork( ply, state )
 	end
 end
 
-local function selectedRecordStack( ply )
+local function recordStackForHand( ply, hand )
 	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply, false ) or nil
 	if not record or not record.container then return nil, nil, nil end
-	local stack = SV.GetSelectedPlayerStack and SV.GetSelectedPlayerStack( ply ) or nil
+	local stack
+	if hand == "offhand" then
+		stack = MC.CopyItemStack( record.equipment and record.equipment.offhand )
+	else
+		stack = SV.GetSelectedPlayerStack and SV.GetSelectedPlayerStack( ply ) or nil
+		hand = "mainhand"
+	end
 	local definition = stack and MC.GetItem( stack.item ) or nil
-	return record, stack, definition
+	return record, stack, definition, hand
 end
+
+local function selectedRecordStack( ply ) return recordStackForHand( ply, "mainhand" ) end
 
 local function consumeOne( record, stack, ply, context )
 	if SV.PlayerHasInfiniteMaterials and SV.PlayerHasInfiniteMaterials( ply ) then return nil, true end
+	if context.hand == "offhand" then
+		if not SV.EquipmentSnapshot or not SV.CommitEquipmentMutation then return nil, false, "equipment_unavailable" end
+		local snapshot = SV.EquipmentSnapshot( record )
+		local replacement
+		if stack.count > 1 then replacement = MC.CopyItemStack( stack, stack.count - 1 ) end
+		record.equipment.offhand = replacement
+		local result, commitError = SV.CommitEquipmentMutation( record, snapshot, {
+			player = ply, reason = context.reason or "item_use", actionId = context.actionId,
+		} )
+		if not result then
+			for _, slot in ipairs( MC.EquipmentSlotOrder or {} ) do record.equipment[slot] = MC.CopyItemStack( snapshot[slot] ) end
+			return nil, false, commitError or "item_consume_commit_failed"
+		end
+		return result, false
+	end
 	local snapshot = MC.ContainerSnapshot( record.container )
 	local replacement
 	if stack.count > 1 then replacement = MC.CopyItemStack( stack, stack.count - 1 ) end
@@ -74,6 +103,15 @@ local function consumeOne( record, stack, ply, context )
 	return result, false
 end
 
+local function useDetails( stack, definition )
+	if not stack or not definition then return nil, nil, false end
+	local kind = MC.ItemBehavior and MC.ItemBehavior( stack ) or nil
+	if not kind and MC.ItemFoodData and MC.ItemFoodData( stack ) then kind = "food" end
+	local spec = MC.ItemBehaviorSpec and MC.ItemBehaviorSpec( stack ) or nil
+	local usable = kind ~= nil or MC.ItemIsConsumable and MC.ItemIsConsumable( stack ) or definition.useHandler ~= nil
+	return kind, spec, usable == true
+end
+
 local function sameUsingStack( state, stack )
 	if not state or not stack then return false end
 	if state.stackHash and MC.ItemStackHash then
@@ -81,6 +119,10 @@ local function sameUsingStack( state, stack )
 	end
 	return state.itemName == stack.item
 		and ( tonumber( state.damage ) or 0 ) == ( tonumber( stack.damage ) or 0 )
+end
+
+local function shieldDisabled( ply )
+	return SV.IsPlayerShieldDisabled and SV.IsPlayerShieldDisabled( ply ) == true
 end
 
 local function clearUse( ply, record, reason, finished )
@@ -146,18 +188,25 @@ end
 function SV.BeginSelectedItemUse( ply, context )
 	context = context or {}
 	if not IsValid( ply ) or not ply:Alive() or not activeMinecraftHand( ply, context ) then return false, "invalid_item_use" end
-	local record, stack, definition = selectedRecordStack( ply )
+	local record, stack, definition, hand = selectedRecordStack( ply )
 	if not record then return false, "inventory_not_loaded" end
-	if not stack or not definition then return false, "empty_hand" end
 	if record.itemUse then return true, "already_using" end
 	local now = CurTime()
 	if record.lastItemUse and now - record.lastItemUse < 0.08 then return false, "item_use_cooldown" end
-	local kind = MC.ItemBehavior and MC.ItemBehavior( stack ) or nil
-	if not kind and MC.ItemFoodData and MC.ItemFoodData( stack ) then kind = "food" end
-	local spec = MC.ItemBehaviorSpec and MC.ItemBehaviorSpec( stack ) or nil
-	if not kind and not ( MC.ItemIsConsumable and MC.ItemIsConsumable( stack ) ) and not definition.useHandler then
-		return false, "item_not_usable"
+	local kind, spec, usable = useDetails( stack, definition )
+	if not usable and ( not definition or not definition.blockId ) then
+		local offRecord, offStack, offDefinition = recordStackForHand( ply, "offhand" )
+		local offKind, offSpec, offUsable = useDetails( offStack, offDefinition )
+		if offRecord and offUsable and offKind == "shield" then
+			stack, definition, hand, kind, spec, usable = offStack, offDefinition, "offhand", offKind, offSpec, true
+		end
 	end
+	if not stack or not definition then return false, "empty_hand" end
+	if not usable then return false, "item_not_usable" end
+	if kind == "shield" and shieldDisabled( ply ) then return false, "shield_disabled" end
+	local useContext = {}
+	for key, value in pairs( context ) do useContext[key] = value end
+	useContext.hand = hand
 	if kind == "food" then
 		local food = MC.ItemFoodData( stack )
 		local hunger = foodState( ply )
@@ -171,8 +220,9 @@ function SV.BeginSelectedItemUse( ply, context )
 	local duration = spec and spec.duration or 0
 	if kind == "crossbow" and MC.ItemCrossbowCharged and MC.ItemCrossbowCharged( stack ) then duration = 0 end
 	if context.instant == true or duration <= 0 then
-		local instantState = { kind = kind or "generic", itemName = stack.item, damage = stack.damage, startedAt = now, duration = 0 }
-		local ok, resultOrError = dispatchFinishedUse( ply, record, stack, definition, instantState, context )
+		local instantState = { kind = kind or "generic", itemName = stack.item, damage = stack.damage,
+			hand = hand, startedAt = now, duration = 0 }
+		local ok, resultOrError = dispatchFinishedUse( ply, record, stack, definition, instantState, useContext )
 		if ok then record.lastItemUse = now end
 		return ok, resultOrError
 	end
@@ -181,10 +231,11 @@ function SV.BeginSelectedItemUse( ply, context )
 		itemName = stack.item,
 		damage = stack.damage,
 		stackHash = MC.ItemStackHash and MC.ItemStackHash( stack ) or nil,
-		selected = record.selected,
+		hand = hand,
+		selected = hand == "mainhand" and record.selected or nil,
 		startedAt = now,
 		duration = duration,
-		context = context,
+		context = useContext,
 	}
 	setUseNetwork( ply, record.itemUse )
 	if MC.RunEvent then MC.RunEvent( "MC.ItemUseStarted", ply, stack, record.itemUse ) end
@@ -197,10 +248,16 @@ function SV.TickSelectedItemUse( ply, context )
 		SV.CancelSelectedItemUse( ply, "invalid_item_use" )
 		return false, "invalid_item_use"
 	end
-	local record, stack, definition = selectedRecordStack( ply )
+	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply, false ) or nil
 	local state = record and record.itemUse or nil
 	if not state then return false, "not_using" end
-	if not stack or not sameUsingStack( state, stack ) or state.selected ~= record.selected then
+	if state.kind == "shield" and shieldDisabled( ply ) then
+		clearUse( ply, record, "shield_disabled" )
+		return false, "shield_disabled"
+	end
+	local _, stack, definition = recordStackForHand( ply, state.hand )
+	if not stack or not sameUsingStack( state, stack )
+		or state.hand == "mainhand" and state.selected ~= record.selected then
 		clearUse( ply, record, "selected_item_changed" )
 		return false, "selected_item_changed"
 	end
@@ -223,10 +280,16 @@ function SV.ReleaseSelectedItemUse( ply, context )
 		SV.CancelSelectedItemUse( ply, "invalid_item_use" )
 		return false, "invalid_item_use"
 	end
-	local record, stack, definition = selectedRecordStack( ply )
+	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply, false ) or nil
 	local state = record and record.itemUse or nil
 	if not state then return false, "not_using" end
-	if not stack or not sameUsingStack( state, stack ) or state.selected ~= record.selected then
+	if state.kind == "shield" and shieldDisabled( ply ) then
+		clearUse( ply, record, "shield_disabled" )
+		return false, "shield_disabled"
+	end
+	local _, stack, definition = recordStackForHand( ply, state.hand )
+	if not stack or not sameUsingStack( state, stack )
+		or state.hand == "mainhand" and state.selected ~= record.selected then
 		clearUse( ply, record, "selected_item_changed" )
 		return false, "selected_item_changed"
 	end

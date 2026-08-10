@@ -33,12 +33,81 @@ local function playerTargets( offset )
 	return targets
 end
 
-local function selectedChanged( record, changedSlots, offset )
-	local selectedIndex = offset + math.Clamp( math.floor( tonumber( record.selected ) or 0 ), 0, 8 )
+local function selectedChanged( record, changedSlots, offset, playerMenuMap )
+	local selected = math.Clamp( math.floor( tonumber( record.selected ) or 0 ), 0, 8 )
+	local selectedIndex = playerMenuMap and playerMenuMap[selected] or offset + selected
 	for _, index in ipairs( changedSlots or {} ) do
 		if index == selectedIndex then return true end
 	end
 	return false
+end
+
+local function addLinearPlayerSlots( slots, storage, offset )
+	local playerMenuMap, menuPlayerMap = {}, {}
+	for _, definition in ipairs( playerSlotDefinitions( storage, offset ) ) do
+		slots[#slots + 1] = definition
+		local playerIndex = definition.storageIndex - 1
+		playerMenuMap[playerIndex] = definition.index
+		menuPlayerMap[definition.index] = playerIndex
+	end
+	local hotbar = {}
+	for button = 0, 8 do hotbar[button + 1] = offset + button end
+	return playerMenuMap, menuPlayerMap, hotbar, playerTargets( offset )
+end
+
+local function equipmentSlotDefinition( record, slot, menuIndex )
+	return {
+		index = menuIndex,
+		storage = record.equipment,
+		storageIndex = slot,
+		group = slot == "offhand" and "offhand" or "armor_" .. slot,
+		maxStack = slot == "offhand" and ( MC.ItemAbsoluteMaxStack or 99 ) or 1,
+		mayPlace = function( _, stack ) return MC.ItemCanEquipInSlot( stack, slot ) end,
+		meta = { role = "equipment", equipmentSlot = slot },
+	}
+end
+
+local function addInventoryMenuSlots( slots, record )
+	local playerMenuMap, menuPlayerMap, equipmentMenuMap = {}, {}, {}
+	for _, slot in ipairs( { "head", "chest", "legs", "feet" } ) do
+		local menuIndex = MC.EquipmentMenuSlots[slot]
+		slots[#slots + 1] = equipmentSlotDefinition( record, slot, menuIndex )
+		equipmentMenuMap[slot] = menuIndex
+	end
+	for playerIndex = 9, 35 do
+		local menuIndex = playerIndex
+		slots[#slots + 1] = {
+			index = menuIndex, storage = record.storage, storageIndex = playerIndex + 1, group = "main",
+		}
+		playerMenuMap[playerIndex], menuPlayerMap[menuIndex] = menuIndex, playerIndex
+	end
+	local hotbar = {}
+	for playerIndex = 0, 8 do
+		local menuIndex = 36 + playerIndex
+		slots[#slots + 1] = {
+			index = menuIndex, storage = record.storage, storageIndex = playerIndex + 1, group = "hotbar",
+		}
+		playerMenuMap[playerIndex], menuPlayerMap[menuIndex] = menuIndex, playerIndex
+		hotbar[playerIndex + 1] = menuIndex
+	end
+	local offhandIndex = MC.EquipmentMenuSlots.offhand
+	slots[#slots + 1] = equipmentSlotDefinition( record, "offhand", offhandIndex )
+	equipmentMenuMap.offhand = offhandIndex
+	local targets = {}
+	for index = 36, 44 do targets[#targets + 1] = index end
+	for index = 9, 35 do targets[#targets + 1] = index end
+	return playerMenuMap, menuPlayerMap, equipmentMenuMap, hotbar, targets
+end
+
+local function inventoryQuickMoveTargets( fallbackGroup )
+	return function( _, source )
+		local slot = MC.ItemEquipmentSlot and MC.ItemEquipmentSlot( source ) or nil
+		local targets = {}
+		if slot and slot ~= "offhand" then targets[#targets + 1] = "armor_" .. slot
+		elseif slot == "offhand" then targets[#targets + 1] = "offhand" end
+		targets[#targets + 1] = fallbackGroup
+		return targets
+	end
 end
 
 local function blockNameAt( bx, by, bz )
@@ -83,23 +152,40 @@ local function buildMenu( ply, record, width, height, kind, tablePosition )
 		}
 	end
 	local playerOffset = inputCount + 1
-	for _, definition in ipairs( playerSlotDefinitions( record.storage, playerOffset ) ) do slots[#slots + 1] = definition end
+	local playerMenuMap, menuPlayerMap, equipmentMenuMap, hotbarSlots, craftingTargets
+	if kind == "player" then
+		playerOffset = 9
+		playerMenuMap, menuPlayerMap, equipmentMenuMap, hotbarSlots, craftingTargets = addInventoryMenuSlots( slots, record )
+	else
+		playerMenuMap, menuPlayerMap, hotbarSlots, craftingTargets = addLinearPlayerSlots( slots, record.storage, playerOffset )
+	end
+	local transferRules
+	if kind == "player" then
+		transferRules = {
+			crafting = { targets = { "hotbar", "main" } },
+			main = { resolve = inventoryQuickMoveTargets( "hotbar" ) },
+			hotbar = { resolve = inventoryQuickMoveTargets( "main" ) },
+			armor_head = { targets = { "hotbar", "main" } },
+			armor_chest = { targets = { "hotbar", "main" } },
+			armor_legs = { targets = { "hotbar", "main" } },
+			armor_feet = { targets = { "hotbar", "main" } },
+			offhand = { targets = { "hotbar", "main" } },
+		}
+	else
+		transferRules = {
+			crafting = { targets = { "hotbar", "main" } },
+			main = { targets = { "crafting" } },
+			hotbar = { targets = { "crafting" } },
+		}
+	end
 
 	local menu, err = MC.NewInventoryContainer( {
 		id = kind == "player" and record.container.id or ( record.nextContainerId or 2 ),
 		kind = kind,
 		revision = record.container.revision,
 		slots = slots,
-		hotbarSlots = (function()
-			local map = {}
-			for button = 0, 8 do map[button + 1] = playerOffset + button end
-			return map
-		end)(),
-		transferRules = {
-			crafting = { targets = { "hotbar", "main" } },
-			main = { targets = { "crafting" } },
-			hotbar = { targets = { "crafting" } },
-		},
+		hotbarSlots = hotbarSlots,
+		transferRules = transferRules,
 		context = { player = ply, crafting = true },
 	} )
 	if not menu then return nil, err end
@@ -114,10 +200,13 @@ local function buildMenu( ply, record, width, height, kind, tablePosition )
 		resultSlot = resultSlot,
 		inputSlots = inputSlots,
 		playerOffset = playerOffset,
-		playerTargets = playerTargets( playerOffset ),
+		playerTargets = craftingTargets,
 		tablePosition = tablePosition,
 	}
 	menu.playerOffset = playerOffset
+	menu.playerMenuMap = playerMenuMap
+	menu.menuPlayerMap = menuPlayerMap
+	menu.equipmentMenuMap = equipmentMenuMap
 	menu.craftingWidth = width
 	menu.craftingHeight = height
 	menu.resultSlot = resultSlot
@@ -132,17 +221,26 @@ local function buildMenu( ply, record, width, height, kind, tablePosition )
 		-- The menu and the persistent player container share the player storage
 		-- table.  Keep their revisions monotonic even when only the transient
 		-- grid changed, so a close/reopen cannot accept an old action.
-		local playerChanged = false
+		local playerChanged, equipmentChanged = false, false
 		for _, index in ipairs( result.changedSlots or {} ) do
-			if index >= playerOffset then playerChanged = true break end
+			if menuPlayerMap[index] ~= nil then playerChanged = true end
+			if equipmentMenuMap then
+				for _, equipmentIndex in pairs( equipmentMenuMap ) do
+					if index == equipmentIndex then equipmentChanged = true break end
+				end
+			end
 		end
 		committed.revision = math.max( committed.revision, record.container.revision )
 		record.container.revision = committed.revision
 		record.revision = committed.revision
-		if playerChanged then
+		if playerChanged or equipmentChanged then
 			record.dirty = true
-			if selectedChanged( record, result.changedSlots, playerOffset ) and SV.UpdatePlayerHeldNetwork then
+			if playerChanged and selectedChanged( record, result.changedSlots, playerOffset, playerMenuMap ) and SV.UpdatePlayerHeldNetwork then
 				SV.UpdatePlayerHeldNetwork( record )
+			end
+			if equipmentChanged and SV.UpdatePlayerEquipmentNetwork then SV.UpdatePlayerEquipmentNetwork( record ) end
+			if equipmentChanged and MC.RunEvent then
+				MC.RunEvent( "MC.EquipmentChanged", record.owner, nil, result, context or {} )
 			end
 		end
 		if SV.PublishActiveInventoryCommit then
@@ -184,6 +282,9 @@ function SV.OpenCraftingTable( ply, bx, by, bz )
 		craftingHeight = 3,
 		resultSlot = 0,
 		playerOffset = playerOffsetOrError,
+		playerMenuMap = menu.playerMenuMap,
+		menuPlayerMap = menu.menuPlayerMap,
+		equipmentMenuMap = menu.equipmentMenuMap,
 		chestSlots = 0,
 		validate = function() return tableStillValid( ply, bx, by, bz ) end,
 	}
