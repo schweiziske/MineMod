@@ -623,6 +623,19 @@ if CLIENT then
 		drawHeld( ply, true )
 	end )
 
+	hook.Add( "PostDrawTranslucentRenderables", "mc_item_hand_block_outline", function( _, _, sky3d )
+		if sky3d then return end
+		local ply = LocalPlayer()
+		if not IsValid( ply ) or not ply:Alive() then return end
+		local weapon = ply:GetActiveWeapon()
+		if not IsValid( weapon ) or weapon:GetClass() ~= "mc_item_hand" then return end
+
+		local aim = aimedBlock( ply )
+		if not aim or not MC.DrawBlockOutline then return end
+		MC.DrawBlockOutline( aim.Block, aim.Orient, aim.bx, aim.by, aim.bz,
+			Color( 0, 0, 0, 235 ), aim.StateId )
+	end )
+
 	hook.Add( "PostPlayerDraw", "mc_item_hand_third_person", function( ply )
 		if not IsValid( ply ) or ply == LocalPlayer() or not ply:Alive() then return end
 		drawHeld( ply, false )

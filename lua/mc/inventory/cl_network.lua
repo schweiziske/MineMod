@@ -130,6 +130,21 @@ local function predictionTransferRules( menu, creative )
 			hotbar = { targets = { "chest", "main" } },
 		}
 	end
+	if menu.kind == "furnace" or menu.kind == "blast_furnace" then
+		local recipeType = menu.kind == "blast_furnace" and "minecraft:blasting" or "minecraft:smelting"
+		local function furnaceTargets( _, source )
+			if MC.FindCookingRecipe( source, recipeType ) then return { "furnace_input" } end
+			if MC.FurnaceFuelTime( source ) > 0 then return { "furnace_fuel" } end
+			return { "hotbar" }
+		end
+		return {
+			furnace_input = { targets = { "main", "hotbar" } },
+			furnace_fuel = { targets = { "main", "hotbar" } },
+			furnace_result = { targets = { "main", "hotbar" } },
+			main = { resolve = furnaceTargets },
+			hotbar = { resolve = furnaceTargets },
+		}
+	end
 	local rules = {
 		main = { resolve = inventoryTargets( "hotbar" ) },
 		hotbar = { resolve = inventoryTargets( "main" ) },
@@ -148,12 +163,22 @@ local function buildPredictionContainer()
 	if not menu or not session or not MC.NewInventoryContainer then return nil end
 	local definitions, playerTargets, inputSlots = {}, {}, {}
 	local crafting, creative = session.crafting == true, session.creative == true
+	local furnace = menu.kind == "furnace" or menu.kind == "blast_furnace"
+	local recipeType = menu.kind == "blast_furnace" and "minecraft:blasting" or "minecraft:smelting"
 	local inputCount = crafting and math.max( 1, ( session.craftingWidth or 0 ) * ( session.craftingHeight or 0 ) ) or 0
 	for index = 0, menu.slotCount - 1 do
 		local playerIndex = menu.menuPlayerMap and menu.menuPlayerMap[index] or nil
 		local equipmentSlot = menu.equipmentSlotMap and menu.equipmentSlotMap[index] or nil
 		local group, meta, maxStack, mayPlace = "main", nil, nil, nil
-		if crafting and index == ( session.resultSlot or 0 ) then
+		if furnace and index == 0 then
+			group, meta = "furnace_input", { role = "input" }
+			mayPlace = function( _, stack ) return MC.FindCookingRecipe( stack, recipeType ) ~= nil end
+		elseif furnace and index == 1 then
+			group, meta = "furnace_fuel", { role = "fuel" }
+			mayPlace = function( _, stack ) return MC.FurnaceFuelTime( stack ) > 0 end
+		elseif furnace and index == 2 then
+			group, meta, mayPlace = "furnace_result", { role = "result" }, function() return false end
+		elseif crafting and index == ( session.resultSlot or 0 ) then
 			group, meta, mayPlace = "result", { role = "result" }, function() return false end
 		elseif crafting and index >= 1 and index <= inputCount then
 			group, meta = "crafting", { role = "input", position = index - 1 }
@@ -194,6 +219,12 @@ local function buildPredictionContainer()
 		}
 		container.beforeCommit = MC.CraftingRefreshResult
 		container.takeResult = MC.CraftingTakeResult
+	elseif furnace then
+		container.furnace = {
+			inputSlot = 0, fuelSlot = 1, resultSlot = 2,
+			playerTargets = playerTargets, recipeType = recipeType,
+		}
+		container.takeResult = MC.FurnaceTakeResult
 	end
 	return container
 end
@@ -225,7 +256,10 @@ local function predictAction( container, action )
 	if action.kind == "recipe_place" then
 		local recipe = MC.GetRecipe and MC.GetRecipe( action.recipeId ) or nil
 		if not recipe then return { ok = false, error = "unknown_recipe" } end
-		local result, err = MC.CraftingPlaceRecipe( container, recipe, context, action.useMax == true )
+		local furnace = State.session and ( State.session.kind == "furnace" or State.session.kind == "blast_furnace" )
+		local result, err
+		if furnace then result, err = MC.FurnacePlaceRecipe( container, recipe, context, action.useMax == true )
+		else result, err = MC.CraftingPlaceRecipe( container, recipe, context, action.useMax == true ) end
 		return result or { ok = false, error = err or "recipe_place_failed" }
 	end
 	if action.kind == "creative_pick" then
@@ -314,7 +348,8 @@ local function enqueueAction( action )
 end
 
 function MC.QueueRecipeBookPlacement( recipeId, useMax )
-	if not State.session or State.session.crafting ~= true then return false, "recipe_book_unavailable" end
+	local furnace = State.session and ( State.session.kind == "furnace" or State.session.kind == "blast_furnace" )
+	if not State.session or State.session.crafting ~= true and not furnace then return false, "recipe_book_unavailable" end
 	recipeId = tostring( recipeId or "" )
 	if #recipeId < 1 or #recipeId > 128 then return false, "invalid_recipe_id" end
 	if not MC.GetRecipe or not MC.GetRecipe( recipeId ) then return false, "unknown_recipe" end

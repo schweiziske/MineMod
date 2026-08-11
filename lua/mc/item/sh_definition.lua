@@ -133,7 +133,7 @@ function MC.ItemDurabilityInfo( stackOrDefinition )
 	elseif i == 4 then r, g, b = t, p, value
 	else r, g, b = value, p, q end
 	return {
-		visible = true,
+		visible = damage > 0,
 		width = math.Clamp( math.floor( 13 * remaining + 0.5 ), 0, 13 ),
 		remaining = remaining,
 		color = { r = math.floor( r * 255 + 0.5 ), g = math.floor( g * 255 + 0.5 ), b = math.floor( b * 255 + 0.5 ) },

@@ -511,7 +511,7 @@ net.Receive( "mc_inventory_recipe_place", function( _, ply )
 		SV.ClosePlayerInventory( ply, "container_unavailable" )
 		return
 	end
-	if session.crafting ~= true then sendRejected( record, actionId, "recipe_book_unavailable", false ) return end
+	if session.crafting ~= true and session.furnace ~= true then sendRejected( record, actionId, "recipe_book_unavailable", false ) return end
 	if #recipeId < 1 or #recipeId > 128 then sendRejected( record, actionId, "invalid_recipe_id", false ) return end
 	if not actionRateAllowed( record ) then sendRejected( record, actionId, "rate_limited", false ) return end
 	if not actionSequenceAllowed( session, actionId ) then sendRejected( record, actionId, "stale_action", true ) return end
@@ -521,7 +521,7 @@ net.Receive( "mc_inventory_recipe_place", function( _, ply )
 	local data = container.crafting
 	local width = data and data.width or session.craftingWidth
 	local height = data and data.height or session.craftingHeight
-	if MC.RecipeBook and MC.RecipeBook.RecipeFitsGrid
+	if session.crafting == true and MC.RecipeBook and MC.RecipeBook.RecipeFitsGrid
 	and not MC.RecipeBook.RecipeFitsGrid( recipe, width, height ) then
 		sendRejected( record, actionId, "recipe_does_not_fit", false )
 		return
@@ -534,7 +534,12 @@ net.Receive( "mc_inventory_recipe_place", function( _, ply )
 		canDrop = type( SV.SpawnItemDrop ) == "function",
 		recipeBook = true,
 	}
-	local result, errorCode = MC.CraftingPlaceRecipe( container, recipe, context, useMax == true )
+	local result, errorCode
+	if session.furnace == true then
+		result, errorCode = MC.FurnacePlaceRecipe( container, recipe, context, useMax == true )
+	else
+		result, errorCode = MC.CraftingPlaceRecipe( container, recipe, context, useMax == true )
+	end
 	if not result then
 		sendRejected( record, actionId, errorCode or "recipe_place_failed", errorCode == "revision_mismatch" )
 		return

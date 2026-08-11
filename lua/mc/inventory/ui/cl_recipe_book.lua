@@ -61,13 +61,17 @@ end
 
 function BUTTON:DoClick()
 	if IsValid( self.Owner ) and self.Recipe then
+		UI.PlayButtonSound()
 		local shift = input.IsKeyDown( KEY_LSHIFT ) or input.IsKeyDown( KEY_RSHIFT )
 		self.Owner:PlaceRecipe( self.Recipe, shift )
 	end
 end
 
 function BUTTON:DoRightClick()
-	if IsValid( self.Owner ) and self.Recipe then self.Owner:PlaceRecipe( self.Recipe, true ) end
+	if IsValid( self.Owner ) and self.Recipe then
+		UI.PlayButtonSound()
+		self.Owner:PlaceRecipe( self.Recipe, true )
+	end
 end
 
 function BUTTON:OnCursorEntered()
@@ -93,8 +97,8 @@ function TAB:Init()
 	self.Icon = nil
 end
 
-function TAB:Configure( owner, key, icon, scale )
-	self.Owner, self.Key, self.Icon = owner, key, icon
+function TAB:Configure( owner, key, icon, scale, mode )
+	self.Owner, self.Key, self.Icon, self.Mode = owner, key, icon, mode
 	self.Scale = math.max( 1, math.floor( tonumber( scale ) or 1 ) )
 	self:SetSize( 35 * self.Scale, 27 * self.Scale )
 	return self
@@ -119,7 +123,10 @@ function TAB:Paint( w, h )
 end
 
 function TAB:DoClick()
-	if IsValid( self.Owner ) then self.Owner:SelectCategory( self.Key ) end
+	if IsValid( self.Owner ) then
+		UI.PlayButtonSound()
+		self.Owner:SelectCategory( self.Key )
+	end
 end
 
 function TAB:OnCursorEntered()
@@ -157,7 +164,10 @@ function FILTER:Paint( w, h )
 end
 
 function FILTER:DoClick()
-	if IsValid( self.Owner ) then self.Owner:ToggleFilter() end
+	if IsValid( self.Owner ) then
+		UI.PlayButtonSound()
+		self.Owner:ToggleFilter()
+	end
 end
 
 vgui.Register( "MCRecipeBookFilter", FILTER, "DButton" )
@@ -187,7 +197,10 @@ function ARROW:Paint( w, h )
 end
 
 function ARROW:DoClick()
-	if IsValid( self.Owner ) then self.Owner:TurnPage( self.Direction ) end
+	if IsValid( self.Owner ) and self.Owner:CanTurnPage( self.Direction ) then
+		UI.PlayButtonSound()
+		self.Owner:TurnPage( self.Direction )
+	end
 end
 
 vgui.Register( "MCRecipeBookArrow", ARROW, "DButton" )
@@ -214,7 +227,10 @@ function TOGGLE:Paint( w, h )
 end
 
 function TOGGLE:DoClick()
-	if IsValid( self.Owner ) then self.Owner:ToggleRecipeBook() end
+	if IsValid( self.Owner ) then
+		UI.PlayButtonSound()
+		self.Owner:ToggleRecipeBook()
+	end
 end
 
 vgui.Register( "MCRecipeBookToggle", TOGGLE, "DButton" )
@@ -264,15 +280,17 @@ function BOOK:Init()
 
 	self.Tabs = {}
 	local tabInfo = {
-		{ key = "search", icon = nil },
-		{ key = "equipment", icon = "minecraft:iron_axe" },
-		{ key = "building", icon = "minecraft:bricks" },
-		{ key = "misc", icon = "minecraft:lava_bucket" },
-		{ key = "redstone", icon = "minecraft:redstone" },
+		{ key = "search", icon = nil, mode = "all" },
+		{ key = "equipment", icon = "minecraft:iron_axe", mode = "crafting" },
+		{ key = "building", icon = "minecraft:bricks", mode = "crafting" },
+		{ key = "redstone", icon = "minecraft:redstone", mode = "crafting" },
+		{ key = "food", icon = "minecraft:cooked_beef", mode = "furnace" },
+		{ key = "blocks", icon = "minecraft:stone", mode = "furnace" },
+		{ key = "misc", icon = "minecraft:lava_bucket", mode = "all" },
 	}
 	for _, info in ipairs( tabInfo ) do
 		local tab = vgui.Create( "MCRecipeBookTab", self )
-		tab:Configure( self, info.key, info.icon, self.Scale )
+		tab:Configure( self, info.key, info.icon, self.Scale, info.mode )
 		self.Tabs[#self.Tabs + 1] = tab
 	end
 
@@ -303,12 +321,17 @@ function BOOK:Configure( screen )
 	local session = state and state.session or nil
 	self.GridWidth = math.Clamp( math.floor( tonumber( session and session.craftingWidth ) or 2 ), 1, 3 )
 	self.GridHeight = math.Clamp( math.floor( tonumber( session and session.craftingHeight ) or self.GridWidth ), 1, 3 )
+	self.Furnace = session and ( session.kind == "furnace" or session.kind == "blast_furnace" ) or false
+	self.RecipeType = session and session.kind == "blast_furnace" and "minecraft:blasting" or "minecraft:smelting"
+	local allowed = self.Furnace and { search = true, food = true, blocks = true, misc = true }
+		or { search = true, equipment = true, building = true, misc = true, redstone = true }
+	if not allowed[self.SelectedCategory] then self.SelectedCategory = "search" self.Page = 0 end
 	self.Scale = screen and screen.Scale or UI.GuiScale()
 	self:SetSize( ( TAB_MARGIN + PANEL_W ) * self.Scale, PANEL_H * self.Scale )
 	self.SearchEntry:SetFont( "MCInventorySearch" .. tostring( self.Scale ) )
 	local oldSearch = self.SearchEntry:GetValue() or ""
 	self.SearchEntry:SetValue( oldSearch )
-	for _, tab in ipairs( self.Tabs ) do tab:Configure( self, tab.Key, tab.Icon, self.Scale ) end
+	for _, tab in ipairs( self.Tabs ) do tab:Configure( self, tab.Key, tab.Icon, self.Scale, tab.Mode ) end
 	self.FilterButton:Configure( self, self.Scale )
 	self.BackButton:Configure( self, -1, self.Scale )
 	self.ForwardButton:Configure( self, 1, self.Scale )
@@ -329,7 +352,12 @@ function BOOK:SetGeometry( x, y, scale )
 	self.SearchEntry:SetFont( "MCInventorySearch" .. tostring( self.Scale ) )
 	self.SearchEntry:SetPos( ( TAB_MARGIN + 25 ) * self.Scale, 12 * self.Scale )
 	self.SearchEntry:SetSize( 81 * self.Scale, 14 * self.Scale )
-	for index, tab in ipairs( self.Tabs ) do tab:SetPos( 0, ( 3 + ( index - 1 ) * 27 ) * self.Scale ) end
+	local visibleTab = 0
+	for _, tab in ipairs( self.Tabs ) do
+		local visible = tab.Mode == "all" or tab.Mode == ( self.Furnace and "furnace" or "crafting" )
+		tab:SetVisible( visible )
+		if visible then tab:SetPos( 0, ( 3 + visibleTab * 27 ) * self.Scale ) visibleTab = visibleTab + 1 end
+	end
 	self.FilterButton:SetPos( ( TAB_MARGIN + 110 ) * self.Scale, 12 * self.Scale )
 	self.BackButton:SetPos( ( TAB_MARGIN + 38 ) * self.Scale, 137 * self.Scale )
 	self.ForwardButton:SetPos( ( TAB_MARGIN + 93 ) * self.Scale, 137 * self.Scale )
@@ -377,11 +405,23 @@ end
 function BOOK:CollectStacks()
 	local state = MC.ClientInventory or {}
 	local stacks = {}
-	for _, stack in ipairs( state.slots or {} ) do stacks[#stacks + 1] = stack end
 	local menu = state.menu
+	local menuByPlayer = menu and menu.menuPlayerMap or nil
+	for playerIndex = 0, 35 do
+		local menuIndex = menuByPlayer and menuByPlayer[playerIndex] or nil
+		local stack = menuIndex ~= nil and menu and menu.slots and menu.slots[menuIndex + 1]
+			or state.slots and state.slots[playerIndex + 1] or nil
+		if not MC.IsEmptyItemStack( stack ) then stacks[#stacks + 1] = stack end
+	end
 	if menu and menu.crafting then
 		local count = math.max( 0, ( menu.craftingWidth or self.GridWidth ) * ( menu.craftingHeight or self.GridHeight ) )
-		for index = 1, count do stacks[#stacks + 1] = menu.slots and menu.slots[index + 1] or nil end
+		for index = 1, count do
+			local stack = menu.slots and menu.slots[index + 1] or nil
+			if not MC.IsEmptyItemStack( stack ) then stacks[#stacks + 1] = stack end
+		end
+	end
+	if self.Furnace and menu and menu.slots and not MC.IsEmptyItemStack( menu.slots[1] ) then
+		stacks[#stacks + 1] = menu.slots[1]
 	end
 	return stacks
 end
@@ -390,18 +430,24 @@ function BOOK:RefreshEntries( force )
 	if not self.Screen then return end
 	local state = MC.ClientInventory or {}
 	local query = string.lower( tostring( self.SearchEntry:GetValue() or "" ) )
-	local revision = tonumber( state.revision ) or 0
+	local revision = math.max( tonumber( state.revision ) or 0, tonumber( state.predictedRevision ) or 0 )
 	local key = table.concat( { self.SelectedCategory, query, tostring( self.OnlyCraftable ),
 		tostring( self.GridWidth ), tostring( self.GridHeight ), tostring( revision ), tostring( self.RegistryMismatch ) }, "\0" )
 	if not force and key == self.EntryKey then return end
 	self.EntryKey = key
 	local category = self.SelectedCategory == "search" and nil or self.SelectedCategory
-	local entries = Book and Book.BuildEntries and Book.BuildEntries( self.GridWidth, self.GridHeight, {
+	local options = {
 		category = category,
 		query = query,
 		onlyCraftable = self.OnlyCraftable,
 		stacks = self:CollectStacks(),
-	} ) or {}
+	}
+	local entries
+	if self.Furnace then
+		entries = Book and Book.BuildCookingEntries and Book.BuildCookingEntries( self.RecipeType, options ) or {}
+	else
+		entries = Book and Book.BuildEntries and Book.BuildEntries( self.GridWidth, self.GridHeight, options ) or {}
+	end
 	self.Entries = type( entries ) == "table" and entries or {}
 	self.Page = math.Clamp( self.Page, 0, math.max( 0, math.ceil( #self.Entries / ITEMS_PER_PAGE ) - 1 ) )
 	self:LayoutButtons()
@@ -454,19 +500,21 @@ function BOOK:Paint( w, h )
 	return true
 end
 
-function BOOK:PaintOver()
-	local mouseX, mouseY = gui.MousePos()
+function BOOK:HoveredTooltipLines()
 	if IsValid( self.HoveredRecipe ) and self.HoveredRecipe.Recipe then
 		local recipe = self.HoveredRecipe.Recipe
 		local lines = UI.Tooltip.LinesForStack( recipe.result )
 		lines[#lines + 1] = { text = self.HoveredRecipe.Craftable and "Click to place" or "Missing ingredients", color = self.HoveredRecipe.Craftable and UI.Colors.text or Color( 255, 120, 90 ) }
-		UI.Tooltip.DrawLines( lines, mouseX, mouseY, self.Scale )
-	elseif IsValid( self.HoveredTab ) then
-		UI.Tooltip.DrawLines( { { text = Book.CATEGORY_TITLES[self.HoveredTab.Key] or "Search", color = UI.Colors.text } }, mouseX, mouseY, self.Scale )
+		return lines
 	end
+	if IsValid( self.HoveredTab ) then
+		return { { text = Book.CATEGORY_TITLES[self.HoveredTab.Key] or "Search", color = UI.Colors.text } }
+	end
+end
+
+function BOOK:PaintOver()
 	if self.ErrorUntil and RealTime() < self.ErrorUntil then
-		UI.DrawText( self.ErrorText, self:GetX() + ( TAB_MARGIN + PANEL_W * 0.5 ) * self.Scale,
-			self:GetY() - 14 * self.Scale,
+		UI.DrawText( self.ErrorText, ( TAB_MARGIN + PANEL_W * 0.5 ) * self.Scale, -14 * self.Scale,
 			self.Scale, Color( 255, 85, 85 ), TEXT_ALIGN_CENTER, true )
 	end
 end

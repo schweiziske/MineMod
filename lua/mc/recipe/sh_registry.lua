@@ -20,6 +20,11 @@ MC.ItemTags = MC.ItemTags or {}
 MC.RecipeRegistryFrozen = MC.RecipeRegistryFrozen or false
 MC.RecipeRegistryHash = MC.RecipeRegistryHash or nil
 
+local COOKING_DEFAULT_TICKS = {
+	["minecraft:smelting"] = 200,
+	["minecraft:blasting"] = 100,
+}
+
 local function trim( value )
 	return string.match( tostring( value or "" ), "^%s*(.-)%s*$" )
 end
@@ -105,6 +110,27 @@ local function normalizeResult( result )
 	} )
 	if not stack then return nil, stackError or "invalid_recipe_result" end
 	return stack
+end
+
+local function normalizeCooking( recipeType, source )
+	local ingredient, ingredientError = normalizeIngredient( source.ingredient )
+	if not ingredient then return nil, ingredientError end
+	local result, resultError = normalizeResult( source.result )
+	if not result then return nil, resultError end
+	local cookingTime = math.floor( tonumber( source.cookingtime or source.cooking_time )
+		or COOKING_DEFAULT_TICKS[recipeType] or 200 )
+	if cookingTime < 1 or cookingTime > 72000 then return nil, "invalid_cooking_time" end
+	local experience = tonumber( source.experience ) or 0
+	if experience ~= experience or experience == math.huge or experience == -math.huge
+		or experience < 0 or experience > 1024 then
+		return nil, "invalid_cooking_experience"
+	end
+	return {
+		ingredient = ingredient,
+		result = result,
+		cookingTime = cookingTime,
+		experience = experience,
+	}
 end
 
 local function firstNonEmpty( line )
@@ -246,7 +272,8 @@ function MC.FinalizeItemTags()
 		for _, raw in ipairs( source and source.values or {} ) do
 			local value = tagValueName( raw )
 			if isstring( value ) and string.sub( value, 1, 1 ) == "#" then
-				for _, nested in ipairs( resolve( normalizeTagName( value ) ) ) do
+				local nestedEntry = resolve( normalizeTagName( value ) )
+				for _, nested in ipairs( nestedEntry.items or {} ) do
 					if not seen[nested] then seen[nested] = true; list[#list + 1] = nested end
 				end
 			elseif value then
@@ -341,6 +368,11 @@ function MC.RegisterRecipe( idOrDefinition, data )
 		for key, value in pairs( normalized ) do recipe[key] = value end
 		recipe.result = result
 		recipe.supported = true
+	elseif COOKING_DEFAULT_TICKS[recipeType] then
+		local normalized, err = normalizeCooking( recipeType, source )
+		if not normalized then return nil, err end
+		for key, value in pairs( normalized ) do recipe[key] = value end
+		recipe.supported = true
 	else
 		-- Keep every vanilla JSON recipe addressable. Machine/special recipe
 		-- behavior can be attached later without changing the registry format.
@@ -367,9 +399,12 @@ function MC.FinalizeRecipeRegistry()
 	end
 	MC.Recipes, MC.RecipesById, MC.RecipesByType = ordered, byId, byType
 	MC.CraftingRecipes = {}
+	MC.CookingRecipes = {}
 	for _, recipe in ipairs( ordered ) do
 		if recipe.type == "minecraft:crafting_shaped" or recipe.type == "minecraft:crafting_shapeless" then
 			MC.CraftingRecipes[#MC.CraftingRecipes + 1] = recipe
+		elseif COOKING_DEFAULT_TICKS[recipe.type] then
+			MC.CookingRecipes[#MC.CookingRecipes + 1] = recipe
 		end
 	end
 	local canonicalText = table.concat( canonical )
@@ -462,6 +497,15 @@ end
 function MC.FindCraftingRecipe( grid, width, height )
 	for _, recipe in ipairs( MC.CraftingRecipes or {} ) do
 		if MC.RecipeMatchesGrid( recipe, grid, width, height ) then return recipe end
+	end
+	return nil
+end
+
+function MC.FindCookingRecipe( stack, recipeType )
+	recipeType = normalizeName( recipeType or "minecraft:smelting" )
+	if not recipeType or MC.IsEmptyItemStack( stack ) then return nil end
+	for _, recipe in ipairs( MC.RecipesByType[recipeType] or {} ) do
+		if recipe.supported == true and MC.IngredientMatches( recipe.ingredient, stack ) then return recipe end
 	end
 	return nil
 end

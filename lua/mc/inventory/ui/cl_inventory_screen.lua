@@ -18,17 +18,15 @@ local CREATIVE_COLS, CREATIVE_ROWS = 9, 5
 local SURVIVAL_BACKGROUND = UI.GetGuiMaterial( "container/inventory" )
 local CRAFTING_BACKGROUND = UI.GetGuiMaterial( "container/crafting_table" )
 local CHEST_BACKGROUND = UI.GetGuiMaterial( "container/generic_54" )
+local FURNACE_BACKGROUND = UI.GetGuiMaterial( "container/furnace" )
+local BLAST_FURNACE_BACKGROUND = UI.GetGuiMaterial( "container/blast_furnace" )
+local FURNACE_LIT = UI.GetGuiMaterial( "sprites/container/furnace/lit_progress" )
+local FURNACE_BURN = UI.GetGuiMaterial( "sprites/container/furnace/burn_progress" )
 local CREATIVE_ITEMS_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_items" )
 local CREATIVE_SEARCH_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_item_search" )
 local CREATIVE_INVENTORY_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_inventory" )
 local SCROLLER = UI.GetGuiMaterial( "sprites/container/creative_inventory/scroller" )
 local SCROLLER_DISABLED = UI.GetGuiMaterial( "sprites/container/creative_inventory/scroller_disabled" )
-local RECIPE_BOOK_OPEN_SOUNDS = {
-	"mc/item/book/open_flip1.ogg",
-	"mc/item/book/open_flip2.ogg",
-	"mc/item/book/open_flip3.ogg",
-}
-
 for scale = 2, 4 do
 	surface.CreateFont( "MCInventorySearch" .. scale, {
 		font = "Roboto",
@@ -112,7 +110,10 @@ function TAB:Paint( w, h )
 end
 
 function TAB:DoClick()
-	if IsValid( self.Screen ) then self.Screen:SelectCreativeTab( self.Tab.key ) end
+	if IsValid( self.Screen ) then
+		UI.PlayButtonSound()
+		self.Screen:SelectCreativeTab( self.Tab.key )
+	end
 end
 
 function TAB:OnCursorEntered()
@@ -264,13 +265,15 @@ function PANEL:Configure( session, state )
 	self.MenuKind = session and session.kind or "player"
 	self.Chest = self.MenuKind == "chest"
 	self.CraftingTable = self.MenuKind == "crafting_table"
+	self.Furnace = self.MenuKind == "furnace" or self.MenuKind == "blast_furnace"
+	self.BlastFurnace = self.MenuKind == "blast_furnace"
 	self.Crafting = session and session.crafting == true
 		or self.State and self.State.menu and self.State.menu.crafting == true or false
 	self.Creative = session and session.creative == true
-	if not self.Crafting or self.Creative then self.RecipeBookOpen = false end
+	if not self.Crafting and not self.Furnace or self.Creative then self.RecipeBookOpen = false end
 	if IsValid( self.RecipeBook ) then
 		self.RecipeBook:Configure( self )
-		self.RecipeBook:SetVisible( self.RecipeBookOpen and self.Crafting and not self.Creative )
+		self.RecipeBook:SetVisible( self.RecipeBookOpen and ( self.Crafting or self.Furnace ) and not self.Creative )
 	end
 	if self.Creative and not UI.CreativeTabsByKey[self.SelectedTabKey] then self.SelectedTabKey = "building_blocks" end
 	self.ScrollRow = 0
@@ -327,6 +330,10 @@ function PANEL:Reflow()
 		self.ContentW, self.ContentH = 176, 114 + self.ChestRows * 18
 		self.Left = math.floor( ( ScrW() - self.ContentW * self.Scale ) * 0.5 )
 		self.Top = math.floor( ( ScrH() - self.ContentH * self.Scale ) * 0.5 )
+	elseif self.Furnace then
+		self.ContentW, self.ContentH = SURVIVAL_W, SURVIVAL_H
+		self.Left = math.floor( ( ScrW() - SURVIVAL_W * self.Scale ) * 0.5 )
+		self.Top = math.floor( ( ScrH() - SURVIVAL_H * self.Scale ) * 0.5 )
 	elseif self.Creative then
 		local totalHeight = ( CREATIVE_H + 56 ) * self.Scale
 		self.ContentW, self.ContentH = CREATIVE_W, CREATIVE_H
@@ -338,7 +345,7 @@ function PANEL:Reflow()
 		self.Top = math.floor( ( ScrH() - SURVIVAL_H * self.Scale ) * 0.5 )
 	end
 	self.BaseLeft = self.Left
-	if self.RecipeBookOpen and self.Crafting and not self.Creative then
+	if self.RecipeBookOpen and ( self.Crafting or self.Furnace ) and not self.Creative then
 		local bookSpan = 149 + ( UI.RecipeBookLeftMargin or 30 )
 		local combined = ( self.ContentW + bookSpan ) * self.Scale
 		if ScrW() >= combined + 8 * self.Scale then
@@ -447,6 +454,19 @@ function PANEL:LayoutVisibleSlots()
 		for index = 0, 8 do
 			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index, 8 + index * 18, inventoryTop + 58 )
 		end
+	elseif self.Furnace then
+		ordinal = self:PlaceMenuSlot( ordinal, 0, nil, 56, 17, "input" )
+		ordinal = self:PlaceMenuSlot( ordinal, 1, nil, 56, 53, "fuel" )
+		ordinal = self:PlaceMenuSlot( ordinal, 2, nil, 116, 35, "result" )
+		local playerOffset = math.floor( tonumber( self.Session and self.Session.playerOffset ) or 3 )
+		for index = 9, 35 do
+			local position = index - 9
+			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index,
+				8 + position % 9 * 18, 84 + math.floor( position / 9 ) * 18 )
+		end
+		for index = 0, 8 do
+			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index, 8 + index * 18, 142 )
+		end
 	elseif self.Crafting and not self.Creative then
 		local width = math.Clamp( math.floor( tonumber( self.Session and self.Session.craftingWidth ) or ( self.CraftingTable and 3 or 2 ) ), 1, 3 )
 		local height = math.Clamp( math.floor( tonumber( self.Session and self.Session.craftingHeight ) or width ), 1, 3 )
@@ -543,7 +563,8 @@ function PANEL:LayoutSpecialControls()
 		self.Scrollbar:SetPos( self.Left + 175 * self.Scale, self.Top + 18 * self.Scale )
 		self.Scrollbar:SetSize( 12 * self.Scale, 112 * self.Scale )
 	end
-	local preview = not self.Chest and not self.CraftingTable and ( not self.Creative or tab and tab.key == "inventory" )
+	local preview = not self.Chest and not self.Furnace and not self.CraftingTable
+		and ( not self.Creative or tab and tab.key == "inventory" )
 	self.PlayerPreview:SetVisible( preview == true )
 	if preview then
 		if self.Creative then
@@ -559,15 +580,15 @@ end
 
 function PANEL:LayoutRecipeBook()
 	if not IsValid( self.RecipeBookToggle ) then return end
-	local enabled = self.Crafting and not self.Creative and not self.Chest
+	local enabled = ( self.Crafting or self.Furnace ) and not self.Creative and not self.Chest
 	self.RecipeBookToggle:SetVisible( enabled )
 	if not enabled then
 		if IsValid( self.RecipeBook ) then self.RecipeBook:SetVisible( false ) end
 		return
 	end
 	self.RecipeBookToggle:Configure( self, self.Scale )
-	local toggleY = self.CraftingTable and 31 or 60
-	self.RecipeBookToggle:SetPos( self.Left + ( self.CraftingTable and 5 or 104 ) * self.Scale,
+	local toggleY = self.CraftingTable and 31 or self.Furnace and 35 or 60
+	self.RecipeBookToggle:SetPos( self.Left + ( self.CraftingTable and 5 or self.Furnace and 20 or 104 ) * self.Scale,
 		self.Top + toggleY * self.Scale )
 	self.RecipeBookToggle:MoveToFront()
 	if IsValid( self.RecipeBook ) then
@@ -581,16 +602,12 @@ function PANEL:LayoutRecipeBook()
 end
 
 function PANEL:SetRecipeBookOpen( open )
-	open = open == true and self.Crafting and not self.Creative and not self.Chest
+	open = open == true and ( self.Crafting or self.Furnace ) and not self.Creative and not self.Chest
 	if self.RecipeBookOpen == open and ( not open or IsValid( self.RecipeBook ) ) then
 		if IsValid( self.RecipeBook ) then self.RecipeBook:SetVisible( open ) end
 		return
 	end
-	local wasOpen = self.RecipeBookOpen == true
 	self.RecipeBookOpen = open
-	if open and not wasOpen then
-		surface.PlaySound( RECIPE_BOOK_OPEN_SOUNDS[math.random( #RECIPE_BOOK_OPEN_SOUNDS )] )
-	end
 	self:Reflow()
 end
 
@@ -692,6 +709,7 @@ function PANEL:ClearHoveredSlot( slot ) if self.HoveredSlot == slot then self.Ho
 
 function PANEL:BackgroundMaterial()
 	if self.Chest then return CHEST_BACKGROUND end
+	if self.Furnace then return self.BlastFurnace and BLAST_FURNACE_BACKGROUND or FURNACE_BACKGROUND end
 	if self.CraftingTable then return CRAFTING_BACKGROUND end
 	if not self.Creative then return SURVIVAL_BACKGROUND end
 	if self.SelectedTabKey == "search" then return CREATIVE_SEARCH_BACKGROUND end
@@ -719,11 +737,39 @@ function PANEL:Paint( w, h )
 			UI.DrawTexture( mat, self.Left, self.Top, width, height, 0, 0, self.ContentW / 256, self.ContentH / 256 )
 		end
 	end )
+	if self.Furnace then
+		local state = self.Session and self.Session.furnaceState or {}
+		local litTotal = math.max( 0, tonumber( state.litTotalTime ) or 0 )
+		local litRemaining = math.max( 0, tonumber( state.litTimeRemaining ) or 0 )
+		local litHeight = litTotal > 0 and math.ceil( math.Clamp( litRemaining / litTotal, 0, 1 ) * 13 ) + 1 or 0
+		local cookTotal = math.max( 0, tonumber( state.cookingTotalTime ) or 0 )
+		local cookSpent = math.max( 0, tonumber( state.cookingTimeSpent ) or 0 )
+		local cookWidth = cookTotal > 0 and math.ceil( math.Clamp( cookSpent / cookTotal, 0, 1 ) * 24 ) or 0
+		UI.WithPointFiltering( function()
+			if litHeight > 0 then
+				UI.DrawTexture( FURNACE_LIT, self.Left + 56 * self.Scale,
+					self.Top + ( 36 + 14 - litHeight ) * self.Scale, 14 * self.Scale, litHeight * self.Scale,
+					0, 1 - litHeight / 14, 1, 1 )
+			end
+			if cookWidth > 0 then
+				UI.DrawTexture( FURNACE_BURN, self.Left + 79 * self.Scale, self.Top + 34 * self.Scale,
+					cookWidth * self.Scale, 16 * self.Scale, 0, 0, cookWidth / 24, 1 )
+			end
+		end )
+	end
 	if self.Chest then
 		local title = self.ChestRows > 3 and "Large Chest" or "Chest"
 		UI.DrawText( title, self.Left + 8 * self.Scale, self.Top + 6 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
 		UI.DrawText( "Inventory", self.Left + 8 * self.Scale,
 			self.Top + ( self.ChestRows * 18 + 20 ) * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+	elseif self.Furnace then
+		local chinese = MC.Language and MC.Language() == "zh_cn"
+		local title = self.BlastFurnace and ( chinese and "高炉" or "Blast Furnace" )
+			or ( chinese and "熔炉" or "Furnace" )
+		UI.DrawText( title, self.Left + 88 * self.Scale, self.Top + 6 * self.Scale,
+			self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_CENTER, false )
+		UI.DrawText( chinese and "物品栏" or "Inventory", self.Left + 8 * self.Scale,
+			self.Top + 72 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
 	elseif self.Crafting then
 		local titleX = self.CraftingTable and 8 or 97
 		UI.DrawText( "Crafting", self.Left + titleX * self.Scale, self.Top + 6 * self.Scale,
@@ -746,6 +792,9 @@ function PANEL:PaintOver()
 		UI.Tooltip.DrawStack( self.HoveredSlot:GetStack(), mouseX, mouseY, self.Scale )
 	elseif self.HoveredTab then
 		UI.Tooltip.DrawLines( { { text = tabTitle( self.HoveredTab ), color = UI.Colors.text } }, mouseX, mouseY, self.Scale )
+	elseif self.RecipeBookOpen and IsValid( self.RecipeBook ) and self.RecipeBook.HoveredTooltipLines then
+		local lines = self.RecipeBook:HoveredTooltipLines()
+		if lines then UI.Tooltip.DrawLines( lines, mouseX, mouseY, self.Scale ) end
 	end
 	if self.ErrorUntil and RealTime() < self.ErrorUntil then
 		UI.DrawText( self.ErrorText, ScrW() * 0.5, self.Top - 44 * self.Scale, self.Scale, Color( 255, 85, 85, 255 ), TEXT_ALIGN_CENTER, true )

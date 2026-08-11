@@ -148,9 +148,6 @@ function SV.DamagePlayerArmor( ply, amount, context )
 	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply, false ) or nil
 	amount = math.max( 0, math.floor( tonumber( amount ) or 0 ) )
 	if not record or amount <= 0 then return nil, {}, "invalid_armor_damage" end
-	if SV.PlayerHasInfiniteMaterials and SV.PlayerHasInfiniteMaterials( ply ) then
-		return nil, {}, "infinite_materials"
-	end
 	local snapshot = SV.EquipmentSnapshot( record )
 	local broken = {}
 	for _, slot in ipairs( { "head", "chest", "legs", "feet" } ) do

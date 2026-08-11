@@ -67,6 +67,26 @@ local function damageEnabled()
 	return conVarBool( C.BlockDamage, true )
 end
 
+local function isChunkCollisionOwner( ent )
+	if not IsValid( ent ) then return false end
+	local class = ent:GetClass()
+	return class == "mc_chunk" or class == "mc_chunk_phys"
+end
+
+function SV.IsChunkCollisionPlayerDamage( target, dmg )
+	if not IsValid( target ) or not target:IsPlayer() or not dmg or not dmg.IsDamageType then return false end
+	-- Source reports landing damage separately. Never swallow it even if a
+	-- chunk entity happens to be present in a mixed damage mask.
+	if dmg:IsDamageType( DMG_FALL ) or not dmg:IsDamageType( DMG_CRUSH ) then return false end
+	return isChunkCollisionOwner( dmg:GetAttacker() ) or isChunkCollisionOwner( dmg:GetInflictor() )
+end
+
+hook.Add( "EntityTakeDamage", "mc_ignore_chunk_player_crush_damage", function( target, dmg )
+	if not SV.IsChunkCollisionPlayerDamage( target, dmg ) then return end
+	dmg:SetDamage( 0 )
+	return true
+end )
+
 local function damageActor( options )
 	options = options or {}
 	return options.actor or options.attacker or nil
@@ -302,12 +322,6 @@ end
 
 local function vectorUsable( v )
 	return v and v.LengthSqr and v:LengthSqr() > 0.0001
-end
-
-local function isChunkCollisionOwner( ent )
-	if not IsValid( ent ) then return false end
-	local class = ent:GetClass()
-	return class == "mc_chunk" or class == "mc_chunk_phys"
 end
 
 -- march from pos along dir and return the first non-air cell, or nil
