@@ -113,6 +113,12 @@ MC.MeshHfShadowUpdateInterval = MC.MeshHfShadowUpdateInterval or ( CreateClientC
 	"Heightfield shadow mode: minimum seconds between height map redraws when meshes changed or the window recentered" ) )
 MC.MeshConnectionVisibleTemplate = MC.MeshConnectionVisibleTemplate or ( CreateClientConVar and CreateClientConVar( "mc_mesh_connection_visible_template", "1", true, false,
 	"Experimental: use cached visible geometry templates for fence/pane/wall/pipe connection shapes" ) )
+MC.MeshLazyBuild = MC.MeshLazyBuild or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lazy_build", "0", true, false,
+	"Keep full client world data resident but only build chunk meshes inside the current view distance" ) )
+MC.MeshLazyDistance = MC.MeshLazyDistance or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lazy_distance", "10000", true, false,
+	"Lazy chunk mesh build/draw distance used while mc_mesh_draw_distance is 0" ) )
+MC.MeshBuildFrameMS = MC.MeshBuildFrameMS or ( CreateClientConVar and CreateClientConVar( "mc_mesh_build_frame_ms", "3", true, false,
+	"Approximate client milliseconds spent building lazy chunk meshes per frame; 0 = unlimited" ) )
 MC.TexturePack = MC.TexturePack or ( CreateClientConVar and CreateClientConVar( "mc_texture_pack", "default", true, false,
 	"MC atlas texture pack: default or programmer_art" ) )
 
