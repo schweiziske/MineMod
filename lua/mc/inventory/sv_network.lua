@@ -20,6 +20,7 @@ local MAX_MENU_SLOTS = 127
 
 local function creativeAllowed( ply )
 	return SV.PlayerHasInfiniteMaterials and SV.PlayerHasInfiniteMaterials( ply ) == true
+		and ( not MC.Config.InventoryCreative or MC.Config.InventoryCreative:GetBool() )
 end
 
 local function actionRateAllowed( record )

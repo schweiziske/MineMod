@@ -103,6 +103,11 @@ local function infiniteMaterials( ply )
 	return MC.SV and MC.SV.PlayerHasInfiniteMaterials and MC.SV.PlayerHasInfiniteMaterials( ply ) == true
 end
 
+local function creativeMode( ply )
+	if SERVER then return MC.SV and MC.SV.PlayerIsCreative and MC.SV.PlayerIsCreative( ply ) == true end
+	return MC.PlayerIsCreative and MC.PlayerIsCreative( ply ) == true
+end
+
 local function isUseCandidate( stack, definition )
 	if not stack or not definition then return false end
 	if MC.ItemBehavior and MC.ItemBehavior( stack ) then return true end
@@ -168,6 +173,7 @@ function SWEP:Reload()
 		if IsValid( ply ) and MC.SV and MC.SV.CancelSelectedItemUse then
 			MC.SV.CancelSelectedItemUse( ply, "inventory_open" )
 		end
+		if IsValid( ply ) and MC.SV and MC.SV.CancelMining then MC.SV.CancelMining( ply, "inventory_open" ) end
 	end
 	self.MCSecondaryHeld = false
 	self.MCSecondaryMode = nil
@@ -204,11 +210,17 @@ function SWEP:PrimaryAttack()
 	if SERVER then
 		local target = MC.SV and MC.SV.TraceSelectedItemAttack and select( 1, MC.SV.TraceSelectedItemAttack( ply ) ) or nil
 		if target then
+			if MC.SV and MC.SV.CancelMining then MC.SV.CancelMining( ply, "combat_target" ) end
 			if MC.SV.AttackSelectedItem then MC.SV.AttackSelectedItem( ply, target, { reason = "primary_attack" } ) end
 			return
 		end
 		local bx, by, bz = breakTarget( ply, aim, eyeTrace )
 		if not bx then return end
+		if not creativeMode( ply ) then
+			if MC.SV and MC.SV.BeginMining then MC.SV.BeginMining( ply, bx, by, bz ) end
+			return
+		end
+		if MC.SV and MC.SV.CancelMining then MC.SV.CancelMining( ply, "creative_break" ) end
 		if MC.SV and MC.SV.Break and MC.SV.Break( ply, bx, by, bz ) then
 			net.Start( "mc_creative_break_anim" )
 				net.WriteInt( bx, MC.Net.COORD_BITS )
@@ -223,6 +235,10 @@ function SWEP:PrimaryAttack()
 	elseif CLIENT and IsFirstTimePredicted() and ply == LocalPlayer() then
 		if traceCombatTarget( ply, eyeTrace ) then return end
 		local bx, by, bz = breakTarget( ply, aim, eyeTrace )
+		if bx and not creativeMode( ply ) then
+			self:StartCreativePlaceAnimation( bx, by, bz )
+			return
+		end
 		if bx and MC.CanPreviewBreak and MC.CanPreviewBreak( ply, bx, by, bz ) and MC.PredictBreakBlock then
 			if MC.PredictBreakBlock( bx, by, bz, ply ) then
 				self:StartCreativePlaceAnimation( bx, by, bz )
@@ -236,6 +252,7 @@ function SWEP:SecondaryAttack()
 	self:SetNextSecondaryFire( CurTime() + ATTACK_INTERVAL )
 	local ply = self:GetOwner()
 	if not IsValid( ply ) then return end
+	if SERVER and MC.SV and MC.SV.CancelMining then MC.SV.CancelMining( ply, "secondary_attack" ) end
 	if self.MCSecondaryHeld and not repeatingPlacement then return end
 	if not repeatingPlacement then
 		self.MCSecondaryHeld = true
@@ -339,6 +356,7 @@ function SWEP:Think()
 		if SERVER and IsValid( ply ) and MC.SV and MC.SV.CancelSelectedItemUse then
 			MC.SV.CancelSelectedItemUse( ply, "owner_invalid" )
 		end
+		if SERVER and IsValid( ply ) and MC.SV and MC.SV.CancelMining then MC.SV.CancelMining( ply, "owner_invalid" ) end
 		self.MCSecondaryHeld = false
 		self.MCSecondaryMode = nil
 		return
@@ -349,6 +367,7 @@ function SWEP:Think()
 		if SERVER and MC.SV and MC.SV.CancelSelectedItemUse then
 			MC.SV.CancelSelectedItemUse( ply, "weapon_switched" )
 		end
+		if SERVER and MC.SV and MC.SV.CancelMining then MC.SV.CancelMining( ply, "weapon_switched" ) end
 		self.MCSecondaryHeld = false
 		self.MCSecondaryMode = nil
 		return
@@ -374,6 +393,7 @@ function SWEP:Holster()
 		if IsValid( ply ) and MC.SV and MC.SV.CancelSelectedItemUse then
 			MC.SV.CancelSelectedItemUse( ply, "holster" )
 		end
+		if IsValid( ply ) and MC.SV and MC.SV.CancelMining then MC.SV.CancelMining( ply, "holster" ) end
 	end
 	self.MCSecondaryHeld = false
 	self.MCSecondaryMode = nil
@@ -386,6 +406,7 @@ function SWEP:OnRemove()
 		if IsValid( ply ) and MC.SV and MC.SV.CancelSelectedItemUse then
 			MC.SV.CancelSelectedItemUse( ply, "weapon_removed" )
 		end
+		if IsValid( ply ) and MC.SV and MC.SV.CancelMining then MC.SV.CancelMining( ply, "weapon_removed" ) end
 	end
 	self.MCSecondaryHeld = false
 	self.MCSecondaryMode = nil

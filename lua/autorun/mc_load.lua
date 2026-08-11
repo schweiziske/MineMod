@@ -15,6 +15,7 @@ local loadPerfStartKB = collectgarbage and collectgarbage( "count" ) or 0
 local SHARED = {
 	"mc/state/sh_network_protocol.lua",
 	"mc/sh_config.lua",
+	"mc/sh_game_mode.lua",
 	"mc/workshop/sh_workshop_bundle.lua",
 	"mc/sh_world_adapter.lua",
 	"mc/sh_config_ui.lua",
@@ -100,6 +101,7 @@ local SHARED = {
 }
 local SERVER_FILES = {
 	"mc/sv_world.lua",
+	"mc/sv_game_mode.lua",
 	"mc/creative/sv_state_selection.lua",
 	"mc/state/sv_save_codec.lua",
 	"mc/state/sv_region_save.lua",
@@ -137,6 +139,7 @@ local SERVER_FILES = {
 	"mc/inventory/sv_item_durability.lua",
 	"mc/inventory/sv_item_use.lua",
 	"mc/inventory/sv_item_drops.lua",
+	"mc/mining/sv_mining.lua",
 	"mc/inventory/sv_projectiles.lua",
 	"mc/inventory/sv_combat.lua",
 	"mc/inventory/sv_chests.lua",
@@ -145,6 +148,7 @@ local SERVER_FILES = {
 	"mc/api/sv_api.lua",
 }
 local CLIENT_FILES = {
+	"mc/mining/cl_mining.lua",
 	"mc/cl_lighting.lua",
 	"mc/render/cl_mesh_cache.lua",
 	"mc/render/cl_mesh_constants.lua",
@@ -260,6 +264,9 @@ if SERVER then
 		end
 		for _, fileName in ipairs( file.Find( "materials/mc/font/*.png", "GAME" ) or {} ) do
 			resource.AddFile( "materials/mc/font/" .. fileName )
+		end
+		for _, fileName in ipairs( file.Find( "materials/mc/block/destroy_stage_*.png", "GAME" ) or {} ) do
+			resource.AddFile( "materials/mc/block/" .. fileName )
 		end
 		for _, resourceRoot in ipairs( {
 			"materials/mc/entity/chest",
