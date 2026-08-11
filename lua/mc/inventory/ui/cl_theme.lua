@@ -11,6 +11,12 @@ MC.InventoryUI = MC.InventoryUI or {}
 
 local UI = MC.InventoryUI
 
+UI.ButtonSound = "mc/random/click.ogg"
+
+function UI.PlayButtonSound()
+	if surface and surface.PlaySound then surface.PlaySound( UI.ButtonSound ) end
+end
+
 UI.Colors = UI.Colors or {
 	overlay = Color( 0, 0, 0, 105 ),
 	text = Color( 255, 255, 255, 255 ),

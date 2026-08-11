@@ -24,6 +24,8 @@ Book.CATEGORY_TITLES = Book.CATEGORY_TITLES or {
 	equipment = "Equipment",
 	misc = "Miscellaneous",
 	redstone = "Redstone",
+	food = "Food",
+	blocks = "Blocks",
 }
 
 local function lower( value )
@@ -74,7 +76,9 @@ end
 local function recipeIngredients( recipe )
 	if recipe and recipe._bookIngredients then return recipe._bookIngredients end
 	local output = {}
-	if recipe.type == "minecraft:crafting_shaped" then
+	if recipe and recipe.ingredient then
+		output[1] = recipe.ingredient
+	elseif recipe.type == "minecraft:crafting_shaped" then
 		for _, ingredient in ipairs( recipe.ingredients or {} ) do
 			if ingredient then output[#output + 1] = ingredient end
 		end
@@ -83,6 +87,13 @@ local function recipeIngredients( recipe )
 	end
 	if recipe then recipe._bookIngredients = output end
 	return output
+end
+
+local function cookingCategory( recipe )
+	local category = lower( recipe and recipe.category )
+	if category == "food" then return "food" end
+	if category == "blocks" then return "blocks" end
+	return "misc"
 end
 
 local function copyCounts( counts )
@@ -246,6 +257,44 @@ function Book.BuildEntries( width, height, options )
 				selected, craftable = recipe, true
 				break
 			end
+		end
+		entry.recipe, entry.craftable = selected, craftable
+		if not onlyCraftable or craftable then output[#output + 1] = entry end
+	end
+	table.sort( output, entrySort )
+	return output
+end
+
+function Book.BuildCookingEntries( recipeType, options )
+	options = type( options ) == "table" and options or {}
+	recipeType = lower( recipeType or "minecraft:smelting" )
+	local category = options.category and lower( options.category ) or nil
+	local query = lower( options.query )
+	local counts = options.counts or Book.BuildItemCounts( options.stacks, options.additionalStacks )
+	local onlyCraftable = options.onlyCraftable == true
+	local groups, order = {}, {}
+	for _, recipe in ipairs( MC.RecipesByType and MC.RecipesByType[recipeType] or {} ) do
+		local recipeCategoryName = cookingCategory( recipe )
+		local allowed = recipe.supported == true
+			and ( not category or category == "search" or category == recipeCategoryName )
+		if allowed and query ~= "" and string.find( recipeSearchText( recipe ), query, 1, true ) == nil then
+			allowed = false
+		end
+		if allowed then
+			local groupKey = recipeCategoryName .. "\0" .. ( recipe.group ~= "" and recipe.group or recipe.id )
+			local entry = groups[groupKey]
+			if not entry then
+				entry = { key = groupKey, category = recipeCategoryName, recipes = {}, recipe = recipe }
+				groups[groupKey], order[#order + 1] = entry, entry
+			end
+			entry.recipes[#entry.recipes + 1] = recipe
+		end
+	end
+	local output = {}
+	for _, entry in ipairs( order ) do
+		local selected, craftable = entry.recipes[1], false
+		for _, recipe in ipairs( entry.recipes ) do
+			if Book.RecipeCanCraft( recipe, counts, 1 ) then selected, craftable = recipe, true break end
 		end
 		entry.recipe, entry.craftable = selected, craftable
 		if not onlyCraftable or craftable then output[#output + 1] = entry end

@@ -82,6 +82,7 @@ function ENT:TryPickup( ply )
 	if IsValid( self.MCPickupTarget ) and self.MCPickupTarget ~= ply then return false end
 	local stack = self.MCItemStack
 	if MC.IsEmptyItemStack( stack ) or not MC.SV or not MC.SV.InsertPlayerItem then return false end
+	local pickupPosition = self:GetPos()
 	self.MCPickingUp = true
 	local remaining, result = MC.SV.InsertPlayerItem( ply, stack, {
 		reason = "pickup",
@@ -90,6 +91,11 @@ function ENT:TryPickup( ply )
 	self.MCPickingUp = false
 	if not result or result.ok ~= true then return false end
 	if remaining and remaining.count >= stack.count then return false end
+	local moved = math.max( 0, ( tonumber( stack.count ) or 0 ) - ( tonumber( remaining and remaining.count ) or 0 ) )
+	if moved > 0 and sound and sound.Play then
+		local pitch = math.Clamp( math.floor( ( ( math.Rand( 0, 1 ) - math.Rand( 0, 1 ) ) * 0.7 + 1 ) * 200 + 0.5 ), 1, 255 )
+		sound.Play( "mc/random/pop.ogg", pickupPosition, 70, pitch, 0.2 )
+	end
 	if MC.IsEmptyItemStack( remaining ) then
 		self:Remove()
 	else

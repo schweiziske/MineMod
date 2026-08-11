@@ -65,6 +65,7 @@ local SHARED = {
 	"mc/generated/sh_generated_mcswep_blocks.lua",
 	"mc/sh_block_states.lua",
 	"mc/block_entity/sh_registry.lua",
+	"mc/functional/sh_furnace_data.lua",
 	"mc/functional/sh_chest_data.lua",
 	"mc/functional/sh_chests.lua",
 	"mc/functional/sh_crafting.lua",
@@ -142,6 +143,7 @@ local SERVER_FILES = {
 	"mc/mining/sv_mining.lua",
 	"mc/inventory/sv_projectiles.lua",
 	"mc/inventory/sv_combat.lua",
+	"mc/inventory/sv_furnaces.lua",
 	"mc/inventory/sv_chests.lua",
 	"mc/inventory/sv_crafting.lua",
 	"mc/inventory/sv_network.lua",
@@ -197,6 +199,7 @@ local CLIENT_FILES = {
 	"mc/cl_player.lua",
 	"mc/inventory/cl_state.lua",
 	"mc/inventory/cl_network.lua",
+	"mc/inventory/cl_furnaces.lua",
 	"mc/inventory/ui/cl_theme.lua",
 	"mc/item/cl_model_resolver.lua",
 	"mc/inventory/ui/cl_entry.lua",
@@ -275,6 +278,7 @@ if SERVER then
 			"materials/mc/gui/container/creative_inventory",
 			"materials/mc/gui/hud",
 			"materials/mc/gui/sprites/container",
+			"materials/mc/gui/sprites/container/furnace",
 			"materials/mc/gui/sprites/container/creative_inventory",
 			"materials/mc/gui/sprites/recipe_book",
 		} ) do
@@ -285,6 +289,7 @@ if SERVER then
 		for _, resourceRoot in ipairs( {
 			"sound/mc/block/chest",
 			"sound/mc/item/book",
+			"sound/mc/random",
 		} ) do
 			for _, fileName in ipairs( file.Find( resourceRoot .. "/*.ogg", "GAME" ) or {} ) do
 				resource.AddFile( resourceRoot .. "/" .. fileName )

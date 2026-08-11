@@ -120,6 +120,7 @@ local function drawDamage( stack, definition, x, y, size, scale )
 	local maxDamage = tonumber( definition and definition.maxDamage ) or 0
 	if maxDamage <= 0 then return end
 	local info = MC.ItemDurabilityInfo and MC.ItemDurabilityInfo( stack ) or nil
+	if not info or info.visible ~= true then return end
 	local remaining = info and info.remaining or 1
 	local barWidth = math.max( 2, size - 2 * scale )
 	local barHeight = math.max( 1, scale )

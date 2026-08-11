@@ -241,6 +241,7 @@ end
 
 local function applyEquipmentCombatDamage( target, damageInfo )
 	if not validPlayer( target ) then return end
+	if SV.IsChunkCollisionPlayerDamage and SV.IsChunkCollisionPlayerDamage( target, damageInfo ) then return end
 	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( target, false ) or nil
 	if not record then return end
 	local damage = math.max( 0, tonumber( damageInfo:GetDamage() ) or 0 )
