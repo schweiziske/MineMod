@@ -61,6 +61,11 @@ local ShapeModelTemplateCache = {
 local GeneratedModelTemplateCache = {}
 local SpecialBlockVisualEmitters = {}
 
+local function specialEmitterForBlock( block )
+	if not block then return nil end
+	return SpecialBlockVisualEmitters[block.mcid] or SpecialBlockVisualEmitters[block.name]
+end
+
 function MC.RegisterSpecialBlockVisualEmitter( blockName, emitter )
 	if type( emitter ) ~= "function" then return nil, "invalid_special_visual_emitter" end
 	blockName = string.lower( string.match( tostring( blockName or "" ), "^%s*(.-)%s*$" ) )
@@ -70,6 +75,11 @@ function MC.RegisterSpecialBlockVisualEmitter( blockName, emitter )
 		SpecialBlockVisualEmitters[string.sub( blockName, 11 )] = emitter
 	end
 	return emitter
+end
+
+function MC.BlockUsesSpecialVisualEmitter( block )
+	if type( block ) ~= "table" then block = MC.Blocks and MC.Blocks[block] or nil end
+	return specialEmitterForBlock( block ) ~= nil
 end
 
 local function stateFace( ctx, id, face, orient, bx, by, bz )
@@ -936,6 +946,7 @@ local function selectBaseBlockEmitter( ctx, b, id, orient, blockIsFullCube, bx, 
 end
 
 local function selectBlockEmitter( ctx, b, id, orient, blockIsFullCube, bx, by, bz )
+	if specialEmitterForBlock( b ) then return BlockEmitters.special end
 	if isLiquidBlock( id ) then return BlockEmitters.liquid end
 	if ctx.currentVisual and ctx.currentVisual.generatedVisualOverride then return BlockEmitters.statePlan end
 	return selectBaseBlockEmitter( ctx, b, id, orient, blockIsFullCube, bx, by, bz )
@@ -1061,16 +1072,18 @@ local function emitStatePlanBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy,
 		end
 	end
 	if rendered then return "statePlan", false, 0 end
-	local special = b and ( SpecialBlockVisualEmitters[b.mcid] or SpecialBlockVisualEmitters[b.name] ) or nil
-	if special then
-		local kind, cacheable, vertices = special( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
-		if kind then return kind, cacheable, vertices end
-	end
 	-- A plan that intentionally references a built-in/entity/special renderer
 	-- must stay absent from the static chunk mesh until that renderer registers.
 	-- Falling back to the generic cube path turns chests, banners, skulls,
 	-- portals and invisible technical blocks into grass-textured full cubes.
 	return "statePlan", false, 0
+end
+
+local function emitSpecialBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
+	local special = specialEmitterForBlock( b )
+	if not special then return "special", false, 0 end
+	local kind, cacheable, vertices = special( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
+	return kind or "special", cacheable == true, tonumber( vertices ) or 0
 end
 
 emitLiquidBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
@@ -1155,6 +1168,7 @@ end
 
 BlockEmitters.cross = emitCrossBlockRecord
 BlockEmitters.model = emitModelBlockRecord
+BlockEmitters.special = emitSpecialBlockRecord
 BlockEmitters.statePlan = emitStatePlanBlockRecord
 BlockEmitters.liquid = emitLiquidBlockRecord
 BlockEmitters.fullCube = emitFullCubeBlockRecord

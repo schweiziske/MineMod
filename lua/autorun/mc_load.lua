@@ -173,6 +173,7 @@ local CLIENT_FILES = {
 	"mc/render/cl_mesh_bloom.lua",
 	"mc/render/cl_dirty.lua",
 	"mc/cl_render.lua",
+	"mc/functional/cl_chests.lua",
 	"mc/functional/cl_signs.lua",
 	"mc/functional/cl_banners.lua",
 	"mc/cl_config_ui.lua",
@@ -261,6 +262,7 @@ if SERVER then
 			resource.AddFile( "materials/mc/font/" .. fileName )
 		end
 		for _, resourceRoot in ipairs( {
+			"materials/mc/entity/chest",
 			"materials/mc/entity/banner",
 			"materials/mc/gui/container",
 			"materials/mc/gui/container/creative_inventory",
@@ -270,6 +272,14 @@ if SERVER then
 			"materials/mc/gui/sprites/recipe_book",
 		} ) do
 			for _, fileName in ipairs( file.Find( resourceRoot .. "/*.png", "GAME" ) or {} ) do
+				resource.AddFile( resourceRoot .. "/" .. fileName )
+			end
+		end
+		for _, resourceRoot in ipairs( {
+			"sound/mc/block/chest",
+			"sound/mc/item/book",
+		} ) do
+			for _, fileName in ipairs( file.Find( resourceRoot .. "/*.ogg", "GAME" ) or {} ) do
 				resource.AddFile( resourceRoot .. "/" .. fileName )
 			end
 		end

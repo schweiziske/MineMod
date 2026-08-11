@@ -1011,6 +1011,9 @@ function MC._SetBlockStateStorageRaw( bx, by, bz, stateId, knownOldStateId )
 		updateCachedRenderSectionCell( c, li, stateId )
 	end
 	if emptied then MC.World[key] = nil end
+	if CLIENT and MC.NoteChestStateChanged then
+		MC.NoteChestStateChanged( bx, by, bz, oldOrError or 0, stateId )
+	end
 	return c, created, emptied, true
 end
 
