@@ -9,6 +9,13 @@ local sectionIndexForLocal = MC.RenderSectionIndexForLocal
 local clearChunkBlockEmitCache = MC.ClearChunkBlockEmitCache
 local clearSectionBlockEmitCache = MC.ClearSectionBlockEmitCache
 local markBlockEmitCacheDirty = MC.MarkBlockEmitCacheDirty
+local meshDirtyRevision = 0
+
+local function wakeMeshBuilder()
+	meshDirtyRevision = meshDirtyRevision + 1
+end
+
+MC.WakeLazyMeshBuilder = wakeMeshBuilder
 
 function MC.MarkChunkDirty( key )
 	local sections = {}
@@ -16,6 +23,7 @@ function MC.MarkChunkDirty( key )
 	MC.MeshDirty[key] = sections
 	MC.MeshLightDirty[key] = nil
 	clearChunkBlockEmitCache( key )
+	wakeMeshBuilder()
 end
 
 local function markChunkSectionDirty( key, sectionIndex )
@@ -26,7 +34,9 @@ local function markChunkSectionDirty( key, sectionIndex )
 		sections = {}
 		MC.MeshDirty[key] = sections
 	end
+	if MC.MeshDirty[key][sectionIndex] then return end
 	MC.MeshDirty[key][sectionIndex] = true
+	wakeMeshBuilder()
 end
 
 local function markChunkSectionLightDirty( key, sectionIndex )
@@ -38,7 +48,9 @@ local function markChunkSectionLightDirty( key, sectionIndex )
 		sections = {}
 		MC.MeshLightDirty[key] = sections
 	end
+	if sections[sectionIndex] then return end
 	sections[sectionIndex] = true
+	wakeMeshBuilder()
 end
 
 function MC.MarkLightSectionDirty( key, sectionIndex )
@@ -160,21 +172,64 @@ local function playerChunkCoords()
 	return MC.CellToChunk( bx, by, bz )
 end
 
-local function sortedDirtyKeys( dirty )
+local function lazyMeshBuildEnabled()
+	return MC.MeshLazyBuild and MC.MeshLazyBuild.GetBool and MC.MeshLazyBuild:GetBool() == true
+end
+
+local function lazyMeshBuildDistance()
+	if not lazyMeshBuildEnabled() then return 0 end
+	local distance = MC.EffectiveMeshDrawDistance and MC.EffectiveMeshDrawDistance() or 0
+	return math.max( 0, tonumber( distance ) or 0 )
+end
+
+local function chunkDistanceMetrics( cx, cy, cz, pcx, pcy, pcz )
+	local dx = ( cx - pcx ) * ( MC.ChunkWorld or ( MC.CS * MC.BS ) )
+	local dy = ( cy - pcy ) * ( MC.ChunkWorld or ( MC.CS * MC.BS ) )
+	local dz = ( cz - pcz ) * ( MC.ChunkWorldH or ( MC.CH * MC.BS ) )
+	return dx * dx + dy * dy + dz * dz, dx, dy, dz
+end
+
+local function sortedDirtyKeys( dirty, buildDistance )
 	local keys = {}
 	local scores = {}
 	local pcx, pcy, pcz = playerChunkCoords()
+	if buildDistance and buildDistance > 0 and not pcx then return keys end
+	local maxDistSq
+	if buildDistance and buildDistance > 0 then
+		local halfW = ( MC.ChunkWorld or ( MC.CS * MC.BS ) ) * 0.5
+		local halfH = ( MC.ChunkWorldH or ( MC.CH * MC.BS ) ) * 0.5
+		-- Prebuild one storage chunk beyond the draw boundary. The eligibility
+		-- scan only needs to wake when the player crosses a chunk boundary, yet
+		-- no drawable chunk can enter the exact eye-centered sphere while absent.
+		local prefetch = math.max( MC.ChunkWorld or 0, MC.ChunkWorldH or 0 )
+		local radius = buildDistance + prefetch + math.sqrt( halfW * halfW * 2 + halfH * halfH )
+		maxDistSq = radius * radius
+	end
 	for key in pairs( dirty ) do
-		keys[#keys + 1] = key
 		if pcx then
 			local cx, cy, cz = MC.ChunkKeyToCoords( key )
 			if cx then
-				local dx, dy, dz = cx - pcx, cy - pcy, cz - pcz
-				scores[key] = dx * dx + dy * dy + dz * dz * 2
+				local score, dx, dy, dz = chunkDistanceMetrics( cx, cy, cz, pcx, pcy, pcz )
+				local visible = true
+				if maxDistSq then
+					if MC.ChunkDrawDistanceVisible then
+						visible = MC.ChunkDrawDistanceVisible( dx, dy, dz, maxDistSq )
+					else
+						visible = score <= maxDistSq
+					end
+				end
+				if visible then
+					keys[#keys + 1] = key
+					scores[key] = score
+				end
 			else
-				scores[key] = math.huge
+				if not maxDistSq then
+					keys[#keys + 1] = key
+					scores[key] = math.huge
+				end
 			end
 		else
+			keys[#keys + 1] = key
 			scores[key] = 0
 		end
 	end
@@ -271,11 +326,31 @@ local function noteRebuiltMeshSection( rebuiltSections, key, sectionIndex )
 	sections[sectionIndex] = true
 end
 
-local function buildDirtyMeshKey( key, sections, rebuiltSections )
+local function nativeMeshBackendActive()
+	local backend = MC.GetMeshBackend and MC.GetMeshBackend() or nil
+	return backend and backend.native == true and ( not backend.IsActive or backend.IsActive() == true )
+end
+
+local function buildDirtyMeshKey( key, sections, rebuiltSections, deadline )
 	if sections == true then
 		sections = {}
 		for sectionIndex = 1, RENDER_SECTION_COUNT do sections[sectionIndex] = true end
 		MC.MeshDirty[key] = sections
+	end
+	if nativeMeshBackendActive() then
+		local sectionIndex = next( sections )
+		if sectionIndex == nil then
+			MC.MeshDirty[key] = nil
+			return 0
+		end
+		-- Native builds and uploads a complete storage chunk per submission; its
+		-- sectionIndex argument is compatibility-only. Submit once and retire the
+		-- whole Lua dirty set instead of calling the bridge 32 times.
+		MC.BuildChunkMesh( key, sectionIndex )
+		noteRebuiltMeshSection( rebuiltSections, key, true )
+		MC.MeshDirty[key] = nil
+		if MC.MeshDirtyRateLimited then MC.MeshDirtyRateLimited[key] = nil end
+		return 1
 	end
 
 	local built = 0
@@ -284,6 +359,7 @@ local function buildDirtyMeshKey( key, sections, rebuiltSections )
 		noteRebuiltMeshSection( rebuiltSections, key, sectionIndex )
 		sections[sectionIndex] = nil
 		built = built + 1
+		if deadline and SysTime() >= deadline then break end
 	end
 
 	if next( sections ) == nil then
@@ -295,7 +371,7 @@ local function buildDirtyMeshKey( key, sections, rebuiltSections )
 	return built
 end
 
-local function buildLightDirtyMeshKey( key, sections, rebuiltSections )
+local function buildLightDirtyMeshKey( key, sections, rebuiltSections, deadline )
 	local geometryDirty = MC.MeshDirty[key]
 	if geometryDirty == true then
 		MC.MeshLightDirty[key] = nil
@@ -304,6 +380,13 @@ local function buildLightDirtyMeshKey( key, sections, rebuiltSections )
 	local rebuilt = rebuiltSections and rebuiltSections[key]
 	if rebuilt == true then
 		MC.MeshLightDirty[key] = nil
+		return 0
+	end
+	if nativeMeshBackendActive() then
+		-- Native geometry carries stable GPU-light atlas slots; light dirties are
+		-- handled by the atlas/native lighting pipeline, not section mesh rebuilds.
+		MC.MeshLightDirty[key] = nil
+		if MC.MeshLightDirtyRateLimited then MC.MeshLightDirtyRateLimited[key] = nil end
 		return 0
 	end
 
@@ -315,6 +398,7 @@ local function buildLightDirtyMeshKey( key, sections, rebuiltSections )
 			MC.RebuildChunkMeshLighting( key, sectionIndex )
 			sections[sectionIndex] = nil
 			built = built + 1
+			if deadline and SysTime() >= deadline then break end
 		end
 	end
 
@@ -347,27 +431,54 @@ local function maybePrintMeshBuildFramePerf( totalStart, geometryKeys, geometryS
 end
 
 hook.Remove( "Think", "mc_meshbuild" )
+local lazyIdleRevision = -1
+local lazyIdlePCX, lazyIdlePCY, lazyIdlePCZ
 hook.Add( "Think", "mc_meshbuild", function()
 	local frameStart = SysTime()
 	local geometryKeys, geometrySections = 0, 0
 	local lightKeys, lightSections = 0, 0
 	local rebuiltSections
+	local lazyDistance = lazyMeshBuildDistance()
+	local lazy = lazyDistance > 0
+	local pcx, pcy, pcz = playerChunkCoords()
+	if lazy and lazyIdleRevision == meshDirtyRevision
+	and lazyIdlePCX == pcx and lazyIdlePCY == pcy and lazyIdlePCZ == pcz then
+		flushBulkCollisionQueue()
+		return
+	end
+	local budgetMS = lazy and ( MC.MeshBuildFrameMS and MC.MeshBuildFrameMS.GetFloat
+		and MC.MeshBuildFrameMS:GetFloat() or 3 ) or 0
+	budgetMS = math.max( 0, tonumber( budgetMS ) or 0 )
+	local deadline = budgetMS > 0 and frameStart + budgetMS / 1000 or nil
+	local foundEligible = false
 	if next( MC.MeshDirty ) then
 		rebuiltSections = {}
-		for _, key in ipairs( sortedDirtyKeys( MC.MeshDirty ) ) do
+		local keys = sortedDirtyKeys( MC.MeshDirty, lazy and lazyDistance or nil )
+		foundEligible = #keys > 0
+		for _, key in ipairs( keys ) do
 			local sections = MC.MeshDirty[key]
-			local built = buildDirtyMeshKey( key, sections, rebuiltSections )
+			local built = buildDirtyMeshKey( key, sections, rebuiltSections, deadline )
 			if built > 0 then
 				geometryKeys = geometryKeys + 1
 				geometrySections = geometrySections + built
 			end
+			if deadline and SysTime() >= deadline then break end
 		end
 	end
-	if next( MC.MeshLightDirty ) then
-		for _, key in ipairs( sortedDirtyKeys( MC.MeshLightDirty ) ) do
-			local built = buildLightDirtyMeshKey( key, MC.MeshLightDirty[key], rebuiltSections )
+	if next( MC.MeshLightDirty ) and ( not deadline or SysTime() < deadline ) then
+		local keys = sortedDirtyKeys( MC.MeshLightDirty, lazy and lazyDistance or nil )
+		foundEligible = foundEligible or #keys > 0
+		for _, key in ipairs( keys ) do
+			local built = buildLightDirtyMeshKey( key, MC.MeshLightDirty[key], rebuiltSections, deadline )
 			if built > 0 then lightKeys, lightSections = lightKeys + 1, lightSections + built end
+			if deadline and SysTime() >= deadline then break end
 		end
+	end
+	if lazy and not foundEligible then
+		lazyIdleRevision = meshDirtyRevision
+		lazyIdlePCX, lazyIdlePCY, lazyIdlePCZ = pcx, pcy, pcz
+	else
+		lazyIdleRevision = -1
 	end
 	flushBulkCollisionQueue()
 	if MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled() then
@@ -391,6 +502,12 @@ hook.Add( "Think", "mc_meshbuild", function()
 	-- 	maybePrintMeshBuildFramePerf( frameStart, geometryKeys, geometrySections, lightKeys, lightSections )
 	-- end
 end )
+
+if cvars and cvars.AddChangeCallback then
+	for _, name in ipairs( { "mc_mesh_lazy_build", "mc_mesh_lazy_distance", "mc_mesh_draw_distance", "mc_mesh_build_frame_ms" } ) do
+		cvars.AddChangeCallback( name, wakeMeshBuilder, "mc_mesh_lazy_build_" .. name )
+	end
+end
 
 -- free all meshes (used by mc_clear)
 function MC.FreeAllMeshes()

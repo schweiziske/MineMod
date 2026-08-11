@@ -19,9 +19,20 @@ MC.MeshCullMode = MC.MeshCullMode or ( CreateClientConVar and CreateClientConVar
 MC.MeshFrustumCull = MC.MeshFrustumCull or ( CreateClientConVar and CreateClientConVar( "mc_mesh_frustum_cull", "1", true, false,
 	"Skip drawing MC chunk meshes outside the view frustum" ) )
 MC.MeshDrawDistance = MC.MeshDrawDistance or ( CreateClientConVar and CreateClientConVar( "mc_mesh_draw_distance", "0", true, false,
-	"Max distance in units at which MC chunk meshes are drawn; 0 = unlimited" ) )
+	"Max distance in units at which MC chunk meshes are drawn; 0 = lazy distance while lazy building is enabled, otherwise unlimited" ) )
 MC.MeshGpuDepthPrepass = MC.MeshGpuDepthPrepass or ( CreateClientConVar and CreateClientConVar( "mc_mesh_depth_prepass", "0", true, false,
 	"Draw a CPU-material depth-only prepass before GPU chunk shading (doubles geometry cost; the main pass already force-writes depth)" ) )
+
+function MC.EffectiveMeshDrawDistance()
+	local distance = MC.MeshDrawDistance and MC.MeshDrawDistance.GetFloat and MC.MeshDrawDistance:GetFloat() or 0
+	distance = math.max( 0, tonumber( distance ) or 0 )
+	if distance > 0 then return distance end
+	if MC.MeshLazyBuild and MC.MeshLazyBuild.GetBool and MC.MeshLazyBuild:GetBool() then
+		local lazyDistance = MC.MeshLazyDistance and MC.MeshLazyDistance.GetFloat and MC.MeshLazyDistance:GetFloat() or 10000
+		return math.max( 0, tonumber( lazyDistance ) or 10000 )
+	end
+	return 0
+end
 
 local function meshCullMode()
 	local cv = MC.MeshCullMode
@@ -327,7 +338,8 @@ local function updateCullState()
 	local hx = MC.ChunkWorld * 0.5
 	local hz = MC.ChunkWorldH * 0.5
 
-	local dist = MC.MeshDrawDistance and MC.MeshDrawDistance.GetFloat and MC.MeshDrawDistance:GetFloat() or 0
+	local dist = MC.EffectiveMeshDrawDistance and MC.EffectiveMeshDrawDistance()
+		or ( MC.MeshDrawDistance and MC.MeshDrawDistance.GetFloat and MC.MeshDrawDistance:GetFloat() or 0 )
 	if dist > 0 then
 		-- Chunk bounding-sphere slack so a chunk whose center sits past the
 		-- limit but whose blocks reach inside it does not pop.
@@ -474,7 +486,8 @@ local function drawNativeChunks( translucent )
 	local tanX = tanY * aspect
 	local offsetX, offsetY, offsetZ = 0, 0, 0
 	if MC.ChunkRenderFrameOffset then offsetX, offsetY, offsetZ = MC.ChunkRenderFrameOffset() end
-	local distance = MC.MeshDrawDistance and MC.MeshDrawDistance:GetFloat() or 0
+	local distance = MC.EffectiveMeshDrawDistance and MC.EffectiveMeshDrawDistance()
+		or ( MC.MeshDrawDistance and MC.MeshDrawDistance:GetFloat() or 0 )
 	local frustum = not MC.MeshFrustumCull or MC.MeshFrustumCull:GetBool()
 	local adapter = MC.GetWorldAdapter and MC.GetWorldAdapter() or nil
 	local horizontalDistance = adapter and isfunction( adapter.ChunkDrawDistanceVisible ) or false
