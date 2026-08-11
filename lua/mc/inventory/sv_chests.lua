@@ -13,6 +13,13 @@ MC.SV = MC.SV or {}
 local SV = MC.SV
 local CHEST_SLOTS = 27
 SV.ChestOpeners = SV.ChestOpeners or {}
+SV.ChestOpenPositions = SV.ChestOpenPositions or {}
+util.AddNetworkString( "mc_chest_open_state" )
+local CHEST_CLOSE_SOUNDS = {
+	"mc/block/chest/close1.ogg",
+	"mc/block/chest/close2.ogg",
+	"mc/block/chest/close3.ogg",
+}
 local CHEST_BLOCK_NAMES = {
 	chest = true, trapped_chest = true, copper_chest = true,
 	exposed_copper_chest = true, weathered_copper_chest = true,
@@ -27,13 +34,43 @@ local function chestOpenKey( position )
 	return position and MC.CellKey and MC.CellKey( position.bx, position.by, position.bz ) or nil
 end
 
+local function sendChestOpenState( position, count, target )
+	if not position then return end
+	net.Start( "mc_chest_open_state" )
+		net.WriteInt( position.bx, MC.Net.COORD_BITS )
+		net.WriteInt( position.by, MC.Net.COORD_BITS )
+		net.WriteInt( position.bz, MC.Net.COORD_BITS )
+		net.WriteUInt( math.min( math.max( math.floor( tonumber( count ) or 0 ), 0 ), 255 ), 8 )
+	if target then net.Send( target ) else net.Broadcast() end
+end
+
 local function adjustChestOpeners( positions, delta )
+	local playedOpenSound = false
+	local playedCloseSound = false
 	for _, position in ipairs( positions or {} ) do
 		local key = chestOpenKey( position )
 		if key then
-			local count = math.max( 0, ( tonumber( SV.ChestOpeners[key] ) or 0 ) + delta )
-			if count == 0 then SV.ChestOpeners[key] = nil else SV.ChestOpeners[key] = count end
+			local previousCount = tonumber( SV.ChestOpeners[key] ) or 0
+			local count = math.max( 0, previousCount + delta )
+			if count == 0 then
+				SV.ChestOpeners[key] = nil
+				SV.ChestOpenPositions[key] = nil
+			else
+				SV.ChestOpeners[key] = count
+				SV.ChestOpenPositions[key] = { bx = position.bx, by = position.by, bz = position.bz }
+			end
+			sendChestOpenState( position, count )
 			if MC.RunEvent then MC.RunEvent( "MC.ChestOpenCountChanged", position.bx, position.by, position.bz, count ) end
+			if not playedOpenSound and previousCount == 0 and count > 0 then
+				playedOpenSound = true
+				local soundPosition = MC.CellWorldCenter( position.bx, position.by, position.bz )
+				sound.Play( "mc/block/chest/open.ogg", soundPosition, 65, math.random( 90, 100 ), 0.5 )
+			end
+			if not playedCloseSound and previousCount > 0 and count == 0 then
+				playedCloseSound = true
+				local soundPosition = MC.CellWorldCenter( position.bx, position.by, position.bz )
+				sound.Play( CHEST_CLOSE_SOUNDS[math.random( #CHEST_CLOSE_SOUNDS )], soundPosition, 65, math.random( 90, 100 ), 0.5 )
+			end
 		end
 	end
 end
@@ -42,6 +79,18 @@ function SV.GetChestOpenCount( bx, by, bz )
 	local key = MC.CellKey and MC.CellKey( bx, by, bz ) or nil
 	return key and ( tonumber( SV.ChestOpeners[key] ) or 0 ) or 0
 end
+
+hook.Add( "PlayerInitialSpawn", "mc_chest_open_state_sync", function( ply )
+	timer.Simple( 1, function()
+		if not IsValid( ply ) then return end
+		for key, count in pairs( SV.ChestOpeners ) do
+			if count > 0 then
+				local position = SV.ChestOpenPositions[key]
+				if position then sendChestOpenState( position, count, ply ) end
+			end
+		end
+	end )
+end )
 
 local function recordChestOverlay( bx, by, bz, record )
 	local store = SV.ChunkStore

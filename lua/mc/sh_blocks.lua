@@ -370,6 +370,7 @@ function MC.RegisterBlock( def )
 		-- fluid layer gains a persisted fluid state for block entities.
 		stateRule = "chest"
 	end
+	local doesNotOcclude = stateRule == "chest"
 	local handlerName = def.handler
 	if not handlerName and stateRule == "door" then handlerName = "door" end
 	if not handlerName and stateRule == "trapdoor" then handlerName = "trapdoor" end
@@ -385,7 +386,9 @@ function MC.RegisterBlock( def )
 		disp = displayName,
 		dispZH = displayName,
 		solid = shouldForceSolid( name, mcid ) or solid,
-		transparent = def.transparent == true,
+		-- Chests have collision, but their block-entity model neither blocks
+		-- neighbouring faces nor seals voxel light like a full cube.
+		transparent = def.transparent == true or doesNotOcclude,
 		shape = def.shape,
 		custom = def.custom == true,
 		creativeCategory = def.creativeCategory,
@@ -1334,7 +1337,9 @@ function MC.OrientForPlacement( ply, tr, id )
 		return MC.MakeBedOrient( horizontalLookDirectionFromForward( forward ), "foot" )
 	end
 	if b and b.orient == "chest" then
-		return MC.MakeChestOrient( horizontalLookDirectionFromForward( forward ), "single" )
+		-- Vanilla chests face the player who placed them.
+		local facing = oppositeDirection( horizontalLookDirectionFromForward( forward ) )
+		return MC.MakeChestOrient( facing, "single" )
 	end
 	return MC.OrientForVectors( id, forward, tr and tr.HitNormal or nil )
 end

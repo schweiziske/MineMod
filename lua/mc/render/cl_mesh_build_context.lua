@@ -148,6 +148,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	local blockVisualBoxes = MC.BlockVisualBoxes
 	local isPaneBlock = MC.IsPaneBlock
 	local blockBoxes = MC.BlockBoxes
+	local blockUsesSpecialVisualEmitter = MC.BlockUsesSpecialVisualEmitter
 
 	local sectionBuffers = {}
 	local cur
@@ -214,6 +215,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			nb = nbVisual and nbVisual.id or blockTypeForState and blockTypeForState( nbState ) or 0
 		end
 		if nb == 0 then return true end
+		if blockUsesSpecialVisualEmitter and blockUsesSpecialVisualEmitter( nb ) then return true end
 		if sameLiquidKind( curId, nb ) then return false end
 		local d = blocksById[nb]
 		if translucent == nil then
@@ -256,6 +258,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			nb = nbVisual and nbVisual.id or blockTypeForState and blockTypeForState( nbState ) or 0
 		end
 		if nb == 0 then return false end
+		if blockUsesSpecialVisualEmitter and blockUsesSpecialVisualEmitter( nb ) then return false end
 		if sameLiquidKind( curId, nb ) then return true end
 		local d = blocksById[nb]
 		if translucent == nil then

@@ -23,6 +23,11 @@ local CREATIVE_SEARCH_BACKGROUND = UI.GetGuiMaterial( "container/creative_invent
 local CREATIVE_INVENTORY_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_inventory" )
 local SCROLLER = UI.GetGuiMaterial( "sprites/container/creative_inventory/scroller" )
 local SCROLLER_DISABLED = UI.GetGuiMaterial( "sprites/container/creative_inventory/scroller_disabled" )
+local RECIPE_BOOK_OPEN_SOUNDS = {
+	"mc/item/book/open_flip1.ogg",
+	"mc/item/book/open_flip2.ogg",
+	"mc/item/book/open_flip3.ogg",
+}
 
 for scale = 2, 4 do
 	surface.CreateFont( "MCInventorySearch" .. scale, {
@@ -581,7 +586,11 @@ function PANEL:SetRecipeBookOpen( open )
 		if IsValid( self.RecipeBook ) then self.RecipeBook:SetVisible( open ) end
 		return
 	end
+	local wasOpen = self.RecipeBookOpen == true
 	self.RecipeBookOpen = open
+	if open and not wasOpen then
+		surface.PlaySound( RECIPE_BOOK_OPEN_SOUNDS[math.random( #RECIPE_BOOK_OPEN_SOUNDS )] )
+	end
 	self:Reflow()
 end
 
