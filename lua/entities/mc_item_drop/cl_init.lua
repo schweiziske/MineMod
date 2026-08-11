@@ -49,7 +49,9 @@ function ENT:DrawTranslucent()
 	if not stack or not renderer.CanDraw( stack ) then return end
 	local base = self:GetPos() + Vector( 0, 0, 7 + math.sin( CurTime() * 3 + self:EntIndex() ) * 1.5 )
 	local seed = self:EntIndex() * 37
-	local angles = Angle( 0, ( CurTime() * 90 + seed ) % 360, 90 )
+	local yaw = ( CurTime() * 90 + seed ) % 360
+	local flatAngles = Angle( 0, yaw, 90 )
+	local blockAngles = Angle( 0, yaw, 0 )
 	local worldColor = worldLightingColor( self, base )
 	local count = math.max( 1, tonumber( stack.count ) or 1 )
 	local copies = count >= 16 and 4 or count >= 8 and 3 or count >= 2 and 2 or 1
@@ -59,9 +61,16 @@ function ENT:DrawTranslucent()
 			local phase = ( self:EntIndex() * 17 + index * 31 ) * 0.17
 			offset = Vector( math.sin( phase ) * 1.4, math.cos( phase * 1.3 ) * 1.4, ( index - 1 ) * 0.35 )
 		end
-		cam.Start3D2D( base + offset, angles, 0.75 )
-			renderer.DrawStack( stack, -8, -8, 16, { drawCount = false, scale = 1, displayContext = "ground", worldColor = worldColor } )
-		cam.End3D2D()
+		local position = base + offset
+		local drewBlock = renderer.DrawDroppedBlock
+			and renderer.DrawDroppedBlock( stack, position, blockAngles, 12, worldColor,
+				{ displayContext = "ground" } )
+		if not drewBlock then
+			cam.Start3D2D( position, flatAngles, 0.75 )
+				renderer.DrawStack( stack, -8, -8, 16,
+					{ drawCount = false, scale = 1, displayContext = "ground", worldColor = worldColor } )
+			cam.End3D2D()
+		end
 	end
 end
 

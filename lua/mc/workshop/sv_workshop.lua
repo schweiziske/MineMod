@@ -370,8 +370,8 @@ local function activateBaseForSlot( slotName )
 		local info = W.GetMountedPackageInfo( resolved.name )
 		workshopId = info and W.NormalizeWorkshopId( info.workshopId ) or workshopId
 		packageId = resolved.name
-		contentHash = W.WorkshopPackageContentHash( packageId ) or ""
 		archiveBytes = math.floor( tonumber( info and info.archiveBytes ) or 0 )
+		contentHash = W.WorkshopMountedContentHash( workshopId, packageId, archiveBytes ) or ""
 	end
 	if not workshopId or not W.IsContentHash( contentHash ) then
 		W.ServerBase = nil

@@ -247,7 +247,9 @@ function MC.ClearSkyColumnCache()
 	tops = {}
 	chunkColumns = nil
 	if MC.ClearSkyFlood then MC.ClearSkyFlood() end
-	if MC.QueueAllSkyFlood then MC.QueueAllSkyFlood() end
+	if ( tonumber( MC.LightingBulkLoadDepth ) or 0 ) <= 0 and MC.QueueAllSkyFlood then
+		MC.QueueAllSkyFlood()
+	end
 end
 
 -- Day/night never invalidates chunk tiles: they contain raw block/sky levels,
