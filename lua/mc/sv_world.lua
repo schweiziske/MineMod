@@ -926,6 +926,12 @@ local function validateBreakPlan( ply, plan )
 	return validateReach( ply, plan.bx, plan.by, plan.bz )
 end
 
+function SV.ValidateBreakTarget( ply, bx, by, bz )
+	local plan = MC.BuildBreakPlan and MC.BuildBreakPlan( bx, by, bz )
+	if not validateBreakPlan( ply, plan ) then return nil, "break_rejected" end
+	return plan
+end
+
 function SV.PlaceState( ply, bx, by, bz, stateId, options )
 	stateId = math.floor( tonumber( stateId ) or -1 )
 	if stateId <= 0 or not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return false end
@@ -961,7 +967,8 @@ function SV.Place( ply, bx, by, bz, id, orient )
 	return placed
 end
 
-function SV.Break( ply, bx, by, bz )
+function SV.Break( ply, bx, by, bz, options )
+	options = istable( options ) and options or {}
 	local plan = MC.BuildBreakPlan and MC.BuildBreakPlan( bx, by, bz )
 	if not validateBreakPlan( ply, plan ) then return false end
 	local result = SV.ApplyBlockTransaction( plan.cells, {
@@ -972,14 +979,14 @@ function SV.Break( ply, bx, by, bz )
 		netMode = "bulk",
 	} )
 	local broke = result.ok == true and result.changed > 0
-	if broke and MC.SV and MC.SV.DamageSelectedItem then
+	if broke and options.damageTool ~= false and MC.SV and MC.SV.DamageSelectedItem then
 		MC.SV.DamageSelectedItem( ply, 1, { reason = "mine", useToolScale = true } )
 	end
 	if broke and MC.RunEvent then
 		local first = result.changes and result.changes[1]
 		MC.RunEvent( "MC.PlayerBrokeBlock", ply, plan.bx, plan.by, plan.bz, first and first.oldStateId or 0 )
 	end
-	return broke
+	return broke, result
 end
 
 function SV.SyncPlacementPlan( ply, bx, by, bz, id, orient )

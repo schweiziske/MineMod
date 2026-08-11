@@ -403,6 +403,7 @@ function MC.RegisterBlock( def )
 		soundType = def.soundType or generatedSoundTypes[mcid] or generatedSoundTypes[name] or "STONE",
 		spawnTerrainParticles = def.spawnTerrainParticles ~= false and generatedNoTerrainParticles[mcid] ~= true,
 		hardness = propertyNumber( def.hardness, propertyNumber( generatedProps.hardness, 1 ) ),
+		requiresCorrectToolForDrops = def.requiresCorrectToolForDrops == true or generatedProps.requiresCorrectToolForDrops == true,
 		explosionResistance = propertyNumber( def.explosionResistance, propertyNumber( generatedProps.explosionResistance, propertyNumber( generatedProps.hardness, 1 ) ) ),
 		lightEmission = math.Clamp( propertyNumber( def.lightEmission, generatedLight or 0 ), 0, 15 ),
 		textures = { top = top, side = side, bottom = bottom, front = front, particle = particle, icon = icon },
@@ -807,6 +808,11 @@ function MC.BlockHardness( id )
 	local b = MC.Blocks[tonumber( id ) or -1]
 	if not b then return 1 end
 	return tonumber( b.hardness ) or 1
+end
+
+function MC.BlockRequiresCorrectTool( id )
+	local b = MC.Blocks[tonumber( id ) or -1]
+	return b and b.requiresCorrectToolForDrops == true or false
 end
 
 function MC.BlockExplosionResistance( id )

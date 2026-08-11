@@ -26,6 +26,24 @@ local function playBlockSound( kind, id, pos )
 	sound.Play( snd, pos, 72, math.floor( pitch + 0.5 ), volume )
 end
 
+function MC.PlayBlockMiningHitSound( id, pos )
+	local set = generatedSoundSetForBlock( id )
+	if not set then return false end
+	-- New sound catalogs may expose SoundType#getHitSound separately. Existing
+	-- catalogs contain the same vanilla samples under breaks, so keep them as
+	-- the compatibility fallback instead of substituting placement audio.
+	local list = set.hits or set.breaks
+	if not list or #list == 0 then return false end
+
+	local snd = list[math.random( #list )]
+	-- Source's positional attenuation makes vanilla's /8 hit volume too quiet
+	-- in GMod. Keep the SoundType scaling but raise the audible result by 2x.
+	local volume = ((tonumber( set.volume ) or 1) + 1) / 4
+	local pitch = (tonumber( set.pitch ) or 1) * 0.5
+	sound.Play( snd, pos, 72, math.Clamp( math.floor( pitch * 100 + 0.5 ), 1, 255 ), volume )
+	return true
+end
+
 local ParticleMaterialCache = {}
 local ParticleAtlasTexture = nil
 local ParticleAtlasTextureName = nil

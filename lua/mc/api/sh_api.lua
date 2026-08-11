@@ -461,6 +461,10 @@ function Blocks.Hardness( id )
 	return MC.BlockHardness and MC.BlockHardness( id ) or 1
 end
 
+function Blocks.RequiresCorrectTool( id )
+	return MC.BlockRequiresCorrectTool and MC.BlockRequiresCorrectTool( id ) == true
+end
+
 function Blocks.ExplosionResistance( id )
 	return MC.BlockExplosionResistance and MC.BlockExplosionResistance( id ) or 1
 end
@@ -741,6 +745,10 @@ API.Events = {
 	["MC.WorkshopBaseReady"] = { realm = "server", args = "generation, workshopId, contentHash", desc = "all required players finished loading the approved Workshop base world" },
 	["MC.ChestOpenCountChanged"] = { realm = "server", args = "bx, by, bz, openCount", desc = "a chest block entity opener count changed" },
 	["MC.PlayerHasInfiniteMaterials"] = { realm = "server", args = "ply", desc = "query: return true/false to override whether inventory mutations consume materials" },
+	["MC.PlayerGameModeChanged"] = { realm = "server", args = "ply, oldMode, newMode, actor", desc = "a player's authoritative Minecraft game mode changed" },
+	["MC.PlayerMiningStarted"] = { realm = "server", args = "ply, session", desc = "a server-authoritative survival mining session started" },
+	["MC.PlayerMiningCancelled"] = { realm = "server", args = "ply, session, reason", desc = "an unfinished survival mining session was cancelled" },
+	["MC.PlayerMinedBlock"] = { realm = "server", args = "ply, bx, by, bz, oldStateId, drop, transaction", desc = "a survival mining session completed and committed its block transaction" },
 	["MC.ItemDurabilityChanged"] = { realm = "server", args = "ply, slot, oldStack, newStack, damage, broken", desc = "the selected item took authoritative durability damage" },
 	["MC.ItemUseStarted"] = { realm = "server", args = "ply, stack, useState", desc = "a held-item use state started" },
 	["MC.ItemConsumed"] = { realm = "server", args = "ply, stack, foodData, infinite", desc = "a consumable finished its authoritative use" },

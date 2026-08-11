@@ -21,14 +21,14 @@ MC.GeneratedBlockProperties["acacia_wall_sign"] = { hardness = 1, explosionResis
 MC.GeneratedBlockProperties["acacia_wood"] = { hardness = 2, explosionResistance = 2 }
 MC.GeneratedBlockProperties["activator_rail"] = { hardness = 0.7, explosionResistance = 0.7 }
 MC.GeneratedBlockProperties["allium"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["amethyst_block"] = { hardness = 1.5, explosionResistance = 1.5 }
+MC.GeneratedBlockProperties["amethyst_block"] = { hardness = 1.5, explosionResistance = 1.5, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["amethyst_cluster"] = { hardness = 1.5, explosionResistance = 1.5 }
-MC.GeneratedBlockProperties["ancient_debris"] = { hardness = 30, explosionResistance = 1200 }
-MC.GeneratedBlockProperties["andesite"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["andesite_slab"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["andesite_stairs"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["andesite_wall"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["anvil"] = { hardness = 5, explosionResistance = 1200 }
+MC.GeneratedBlockProperties["ancient_debris"] = { hardness = 30, explosionResistance = 1200, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["andesite"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["andesite_slab"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["andesite_stairs"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["andesite_wall"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["anvil"] = { hardness = 5, explosionResistance = 1200, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["attached_melon_stem"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["attached_pumpkin_stem"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["azalea"] = { hardness = 0, explosionResistance = 0 }
@@ -56,7 +56,7 @@ MC.GeneratedBlockProperties["bamboo_wall_hanging_sign"] = { hardness = 1, explos
 MC.GeneratedBlockProperties["bamboo_wall_sign"] = { hardness = 1, explosionResistance = 1 }
 MC.GeneratedBlockProperties["barrel"] = { hardness = 2.5, explosionResistance = 2.5 }
 MC.GeneratedBlockProperties["barrier"] = { hardness = -1, explosionResistance = 3600000.8 }
-MC.GeneratedBlockProperties["basalt"] = { hardness = 1.25, explosionResistance = 4.2 }
+MC.GeneratedBlockProperties["basalt"] = { hardness = 1.25, explosionResistance = 4.2, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["beacon"] = { hardness = 3, explosionResistance = 3 }
 MC.GeneratedBlockProperties["bedrock"] = { hardness = -1, explosionResistance = 3600000 }
 MC.GeneratedBlockProperties["bee_nest"] = { hardness = 0.3, explosionResistance = 0.3 }
@@ -88,74 +88,74 @@ MC.GeneratedBlockProperties["black_bed"] = { hardness = 0.2, explosionResistance
 MC.GeneratedBlockProperties["black_candle"] = { hardness = 0.1, explosionResistance = 0.1 }
 MC.GeneratedBlockProperties["black_candle_cake"] = { hardness = 0.5, explosionResistance = 0.5 }
 MC.GeneratedBlockProperties["black_carpet"] = { hardness = 0.1, explosionResistance = 0.1 }
-MC.GeneratedBlockProperties["black_concrete"] = { hardness = 1.8, explosionResistance = 1.8 }
+MC.GeneratedBlockProperties["black_concrete"] = { hardness = 1.8, explosionResistance = 1.8, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["black_concrete_powder"] = { hardness = 0.5, explosionResistance = 0.5 }
-MC.GeneratedBlockProperties["black_glazed_terracotta"] = { hardness = 1.4, explosionResistance = 1.4 }
+MC.GeneratedBlockProperties["black_glazed_terracotta"] = { hardness = 1.4, explosionResistance = 1.4, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["black_shulker_box"] = { hardness = 2, explosionResistance = 2 }
 MC.GeneratedBlockProperties["black_stained_glass"] = { hardness = 0.3, explosionResistance = 0.3 }
 MC.GeneratedBlockProperties["black_stained_glass_pane"] = { hardness = 0.3, explosionResistance = 0.3 }
-MC.GeneratedBlockProperties["black_terracotta"] = { hardness = 1.25, explosionResistance = 4.2 }
+MC.GeneratedBlockProperties["black_terracotta"] = { hardness = 1.25, explosionResistance = 4.2, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["black_wall_banner"] = { hardness = 1, explosionResistance = 1 }
 MC.GeneratedBlockProperties["black_wool"] = { hardness = 0.8, explosionResistance = 0.8 }
-MC.GeneratedBlockProperties["blackstone"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["blackstone_slab"] = { hardness = 2, explosionResistance = 6 }
-MC.GeneratedBlockProperties["blackstone_stairs"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["blackstone_wall"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["blast_furnace"] = { hardness = 3.5, explosionResistance = 3.5 }
+MC.GeneratedBlockProperties["blackstone"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["blackstone_slab"] = { hardness = 2, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["blackstone_stairs"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["blackstone_wall"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["blast_furnace"] = { hardness = 3.5, explosionResistance = 3.5, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["blue_banner"] = { hardness = 1, explosionResistance = 1 }
 MC.GeneratedBlockProperties["blue_bed"] = { hardness = 0.2, explosionResistance = 0.2 }
 MC.GeneratedBlockProperties["blue_candle"] = { hardness = 0.1, explosionResistance = 0.1 }
 MC.GeneratedBlockProperties["blue_candle_cake"] = { hardness = 0.5, explosionResistance = 0.5 }
 MC.GeneratedBlockProperties["blue_carpet"] = { hardness = 0.1, explosionResistance = 0.1 }
-MC.GeneratedBlockProperties["blue_concrete"] = { hardness = 1.8, explosionResistance = 1.8 }
+MC.GeneratedBlockProperties["blue_concrete"] = { hardness = 1.8, explosionResistance = 1.8, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["blue_concrete_powder"] = { hardness = 0.5, explosionResistance = 0.5 }
-MC.GeneratedBlockProperties["blue_glazed_terracotta"] = { hardness = 1.4, explosionResistance = 1.4 }
+MC.GeneratedBlockProperties["blue_glazed_terracotta"] = { hardness = 1.4, explosionResistance = 1.4, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["blue_ice"] = { hardness = 2.8, explosionResistance = 2.8 }
 MC.GeneratedBlockProperties["blue_orchid"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["blue_shulker_box"] = { hardness = 2, explosionResistance = 2 }
 MC.GeneratedBlockProperties["blue_stained_glass"] = { hardness = 0.3, explosionResistance = 0.3 }
 MC.GeneratedBlockProperties["blue_stained_glass_pane"] = { hardness = 0.3, explosionResistance = 0.3 }
-MC.GeneratedBlockProperties["blue_terracotta"] = { hardness = 1.25, explosionResistance = 4.2 }
+MC.GeneratedBlockProperties["blue_terracotta"] = { hardness = 1.25, explosionResistance = 4.2, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["blue_wall_banner"] = { hardness = 1, explosionResistance = 1 }
 MC.GeneratedBlockProperties["blue_wool"] = { hardness = 0.8, explosionResistance = 0.8 }
-MC.GeneratedBlockProperties["bone_block"] = { hardness = 2, explosionResistance = 2 }
+MC.GeneratedBlockProperties["bone_block"] = { hardness = 2, explosionResistance = 2, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["bookshelf"] = { hardness = 1.5, explosionResistance = 1.5 }
 MC.GeneratedBlockProperties["brain_coral"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["brain_coral_block"] = { hardness = 1.5, explosionResistance = 6 }
+MC.GeneratedBlockProperties["brain_coral_block"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["brain_coral_fan"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["brain_coral_wall_fan"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["brewing_stand"] = { hardness = 0.5, explosionResistance = 0.5 }
-MC.GeneratedBlockProperties["brick_slab"] = { hardness = 2, explosionResistance = 6 }
-MC.GeneratedBlockProperties["brick_stairs"] = { hardness = 2, explosionResistance = 6 }
-MC.GeneratedBlockProperties["brick_wall"] = { hardness = 2, explosionResistance = 6 }
-MC.GeneratedBlockProperties["bricks"] = { hardness = 2, explosionResistance = 6 }
+MC.GeneratedBlockProperties["brick_slab"] = { hardness = 2, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["brick_stairs"] = { hardness = 2, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["brick_wall"] = { hardness = 2, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["bricks"] = { hardness = 2, explosionResistance = 6, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["brown_banner"] = { hardness = 1, explosionResistance = 1 }
 MC.GeneratedBlockProperties["brown_bed"] = { hardness = 0.2, explosionResistance = 0.2 }
 MC.GeneratedBlockProperties["brown_candle"] = { hardness = 0.1, explosionResistance = 0.1 }
 MC.GeneratedBlockProperties["brown_candle_cake"] = { hardness = 0.5, explosionResistance = 0.5 }
 MC.GeneratedBlockProperties["brown_carpet"] = { hardness = 0.1, explosionResistance = 0.1 }
-MC.GeneratedBlockProperties["brown_concrete"] = { hardness = 1.8, explosionResistance = 1.8 }
+MC.GeneratedBlockProperties["brown_concrete"] = { hardness = 1.8, explosionResistance = 1.8, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["brown_concrete_powder"] = { hardness = 0.5, explosionResistance = 0.5 }
-MC.GeneratedBlockProperties["brown_glazed_terracotta"] = { hardness = 1.4, explosionResistance = 1.4 }
+MC.GeneratedBlockProperties["brown_glazed_terracotta"] = { hardness = 1.4, explosionResistance = 1.4, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["brown_mushroom"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["brown_mushroom_block"] = { hardness = 0.2, explosionResistance = 0.2 }
 MC.GeneratedBlockProperties["brown_shulker_box"] = { hardness = 2, explosionResistance = 2 }
 MC.GeneratedBlockProperties["brown_stained_glass"] = { hardness = 0.3, explosionResistance = 0.3 }
 MC.GeneratedBlockProperties["brown_stained_glass_pane"] = { hardness = 0.3, explosionResistance = 0.3 }
-MC.GeneratedBlockProperties["brown_terracotta"] = { hardness = 1.25, explosionResistance = 4.2 }
+MC.GeneratedBlockProperties["brown_terracotta"] = { hardness = 1.25, explosionResistance = 4.2, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["brown_wall_banner"] = { hardness = 1, explosionResistance = 1 }
 MC.GeneratedBlockProperties["brown_wool"] = { hardness = 0.8, explosionResistance = 0.8 }
 MC.GeneratedBlockProperties["bubble_column"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["bubble_coral"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["bubble_coral_block"] = { hardness = 1.5, explosionResistance = 6 }
+MC.GeneratedBlockProperties["bubble_coral_block"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["bubble_coral_fan"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["bubble_coral_wall_fan"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["budding_amethyst"] = { hardness = 1.5, explosionResistance = 1.5 }
+MC.GeneratedBlockProperties["budding_amethyst"] = { hardness = 1.5, explosionResistance = 1.5, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["bush"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["cactus"] = { hardness = 0.4, explosionResistance = 0.4 }
 MC.GeneratedBlockProperties["cactus_flower"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["cake"] = { hardness = 0.5, explosionResistance = 0.5 }
-MC.GeneratedBlockProperties["calcite"] = { hardness = 0.75, explosionResistance = 0.75 }
+MC.GeneratedBlockProperties["calcite"] = { hardness = 0.75, explosionResistance = 0.75, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["calibrated_sculk_sensor"] = { hardness = 1.5, explosionResistance = 1.5 }
 MC.GeneratedBlockProperties["campfire"] = { hardness = 2, explosionResistance = 2 }
 MC.GeneratedBlockProperties["candle"] = { hardness = 0.1, explosionResistance = 0.1 }
@@ -163,11 +163,11 @@ MC.GeneratedBlockProperties["candle_cake"] = { hardness = 0.5, explosionResistan
 MC.GeneratedBlockProperties["carrots"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["cartography_table"] = { hardness = 2.5, explosionResistance = 2.5 }
 MC.GeneratedBlockProperties["carved_pumpkin"] = { hardness = 1, explosionResistance = 1 }
-MC.GeneratedBlockProperties["cauldron"] = { hardness = 2, explosionResistance = 2 }
+MC.GeneratedBlockProperties["cauldron"] = { hardness = 2, explosionResistance = 2, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["cave_air"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["cave_vines"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["cave_vines_plant"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["chain_command_block"] = { hardness = -1, explosionResistance = 3600000 }
+MC.GeneratedBlockProperties["chain_command_block"] = { hardness = -1, explosionResistance = 3600000, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["cherry_button"] = { hardness = 0.5, explosionResistance = 0.5 }
 MC.GeneratedBlockProperties["cherry_door"] = { hardness = 3, explosionResistance = 3 }
 MC.GeneratedBlockProperties["cherry_fence"] = { hardness = 2, explosionResistance = 3 }
@@ -187,69 +187,69 @@ MC.GeneratedBlockProperties["cherry_wall_hanging_sign"] = { hardness = 1, explos
 MC.GeneratedBlockProperties["cherry_wall_sign"] = { hardness = 1, explosionResistance = 1 }
 MC.GeneratedBlockProperties["cherry_wood"] = { hardness = 2, explosionResistance = 2 }
 MC.GeneratedBlockProperties["chest"] = { hardness = 2.5, explosionResistance = 2.5 }
-MC.GeneratedBlockProperties["chipped_anvil"] = { hardness = 5, explosionResistance = 1200 }
+MC.GeneratedBlockProperties["chipped_anvil"] = { hardness = 5, explosionResistance = 1200, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["chiseled_bookshelf"] = { hardness = 1.5, explosionResistance = 1.5 }
-MC.GeneratedBlockProperties["chiseled_cinnabar"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["chiseled_copper"] = { hardness = 3, explosionResistance = 6 }
-MC.GeneratedBlockProperties["chiseled_deepslate"] = { hardness = 3.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["chiseled_nether_bricks"] = { hardness = 2, explosionResistance = 6 }
-MC.GeneratedBlockProperties["chiseled_polished_blackstone"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["chiseled_quartz_block"] = { hardness = 0.8, explosionResistance = 0.8 }
-MC.GeneratedBlockProperties["chiseled_red_sandstone"] = { hardness = 0.8, explosionResistance = 0.8 }
-MC.GeneratedBlockProperties["chiseled_resin_bricks"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["chiseled_sandstone"] = { hardness = 0.8, explosionResistance = 0.8 }
-MC.GeneratedBlockProperties["chiseled_stone_bricks"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["chiseled_sulfur"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["chiseled_tuff"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["chiseled_tuff_bricks"] = { hardness = 1.5, explosionResistance = 6 }
+MC.GeneratedBlockProperties["chiseled_cinnabar"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["chiseled_copper"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["chiseled_deepslate"] = { hardness = 3.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["chiseled_nether_bricks"] = { hardness = 2, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["chiseled_polished_blackstone"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["chiseled_quartz_block"] = { hardness = 0.8, explosionResistance = 0.8, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["chiseled_red_sandstone"] = { hardness = 0.8, explosionResistance = 0.8, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["chiseled_resin_bricks"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["chiseled_sandstone"] = { hardness = 0.8, explosionResistance = 0.8, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["chiseled_stone_bricks"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["chiseled_sulfur"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["chiseled_tuff"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["chiseled_tuff_bricks"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["chorus_flower"] = { hardness = 0.4, explosionResistance = 0.4 }
 MC.GeneratedBlockProperties["chorus_plant"] = { hardness = 0.4, explosionResistance = 0.4 }
-MC.GeneratedBlockProperties["cinnabar"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cinnabar_brick_slab"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cinnabar_brick_stairs"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cinnabar_brick_wall"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cinnabar_bricks"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cinnabar_slab"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cinnabar_stairs"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cinnabar_wall"] = { hardness = 1.5, explosionResistance = 6 }
+MC.GeneratedBlockProperties["cinnabar"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cinnabar_brick_slab"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cinnabar_brick_stairs"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cinnabar_brick_wall"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cinnabar_bricks"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cinnabar_slab"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cinnabar_stairs"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cinnabar_wall"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["clay"] = { hardness = 0.6, explosionResistance = 0.6 }
 MC.GeneratedBlockProperties["closed_eyeblossom"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["coal_block"] = { hardness = 5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["coal_ore"] = { hardness = 3, explosionResistance = 3 }
+MC.GeneratedBlockProperties["coal_block"] = { hardness = 5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["coal_ore"] = { hardness = 3, explosionResistance = 3, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["coarse_dirt"] = { hardness = 0.5, explosionResistance = 0.5 }
-MC.GeneratedBlockProperties["cobbled_deepslate"] = { hardness = 3.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cobbled_deepslate_slab"] = { hardness = 3.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cobbled_deepslate_stairs"] = { hardness = 3.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cobbled_deepslate_wall"] = { hardness = 3.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cobblestone"] = { hardness = 2, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cobblestone_slab"] = { hardness = 2, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cobblestone_stairs"] = { hardness = 2, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cobblestone_wall"] = { hardness = 2, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cobweb"] = { hardness = 4, explosionResistance = 4 }
+MC.GeneratedBlockProperties["cobbled_deepslate"] = { hardness = 3.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cobbled_deepslate_slab"] = { hardness = 3.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cobbled_deepslate_stairs"] = { hardness = 3.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cobbled_deepslate_wall"] = { hardness = 3.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cobblestone"] = { hardness = 2, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cobblestone_slab"] = { hardness = 2, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cobblestone_stairs"] = { hardness = 2, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cobblestone_wall"] = { hardness = 2, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cobweb"] = { hardness = 4, explosionResistance = 4, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["cocoa"] = { hardness = 0.2, explosionResistance = 3 }
-MC.GeneratedBlockProperties["command_block"] = { hardness = -1, explosionResistance = 3600000 }
+MC.GeneratedBlockProperties["command_block"] = { hardness = -1, explosionResistance = 3600000, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["comparator"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["composter"] = { hardness = 0.6, explosionResistance = 0.6 }
 MC.GeneratedBlockProperties["conduit"] = { hardness = 3, explosionResistance = 3 }
-MC.GeneratedBlockProperties["copper_bars"] = { hardness = 5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["copper_block"] = { hardness = 3, explosionResistance = 6 }
-MC.GeneratedBlockProperties["copper_bulb"] = { hardness = 3, explosionResistance = 6 }
-MC.GeneratedBlockProperties["copper_chain"] = { hardness = 5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["copper_chest"] = { hardness = 3, explosionResistance = 6 }
+MC.GeneratedBlockProperties["copper_bars"] = { hardness = 5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["copper_block"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["copper_bulb"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["copper_chain"] = { hardness = 5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["copper_chest"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["copper_door"] = { hardness = 3, explosionResistance = 6 }
 MC.GeneratedBlockProperties["copper_golem_statue"] = { hardness = 3, explosionResistance = 6 }
-MC.GeneratedBlockProperties["copper_grate"] = { hardness = 3, explosionResistance = 6 }
+MC.GeneratedBlockProperties["copper_grate"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["copper_lantern"] = { hardness = 3.5, explosionResistance = 3.5 }
-MC.GeneratedBlockProperties["copper_ore"] = { hardness = 3, explosionResistance = 3 }
+MC.GeneratedBlockProperties["copper_ore"] = { hardness = 3, explosionResistance = 3, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["copper_torch"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["copper_trapdoor"] = { hardness = 3, explosionResistance = 6 }
+MC.GeneratedBlockProperties["copper_trapdoor"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["copper_wall_torch"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["cornflower"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["cracked_deepslate_bricks"] = { hardness = 3.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cracked_deepslate_tiles"] = { hardness = 3.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cracked_nether_bricks"] = { hardness = 2, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cracked_polished_blackstone_bricks"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cracked_stone_bricks"] = { hardness = 1.5, explosionResistance = 6 }
+MC.GeneratedBlockProperties["cracked_deepslate_bricks"] = { hardness = 3.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cracked_deepslate_tiles"] = { hardness = 3.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cracked_nether_bricks"] = { hardness = 2, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cracked_polished_blackstone_bricks"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cracked_stone_bricks"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["crafter"] = { hardness = 1.5, explosionResistance = 3.5 }
 MC.GeneratedBlockProperties["crafting_table"] = { hardness = 2.5, explosionResistance = 2.5 }
 MC.GeneratedBlockProperties["creaking_heart"] = { hardness = 10, explosionResistance = 10 }
@@ -262,7 +262,7 @@ MC.GeneratedBlockProperties["crimson_fence_gate"] = { hardness = 2, explosionRes
 MC.GeneratedBlockProperties["crimson_fungus"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["crimson_hanging_sign"] = { hardness = 1, explosionResistance = 1 }
 MC.GeneratedBlockProperties["crimson_hyphae"] = { hardness = 2, explosionResistance = 2 }
-MC.GeneratedBlockProperties["crimson_nylium"] = { hardness = 0.4, explosionResistance = 0.4 }
+MC.GeneratedBlockProperties["crimson_nylium"] = { hardness = 0.4, explosionResistance = 0.4, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["crimson_planks"] = { hardness = 2, explosionResistance = 3 }
 MC.GeneratedBlockProperties["crimson_pressure_plate"] = { hardness = 0.5, explosionResistance = 0.5 }
 MC.GeneratedBlockProperties["crimson_roots"] = { hardness = 0, explosionResistance = 0 }
@@ -274,29 +274,29 @@ MC.GeneratedBlockProperties["crimson_stem"] = { hardness = 2, explosionResistanc
 MC.GeneratedBlockProperties["crimson_trapdoor"] = { hardness = 3, explosionResistance = 3 }
 MC.GeneratedBlockProperties["crimson_wall_hanging_sign"] = { hardness = 1, explosionResistance = 1 }
 MC.GeneratedBlockProperties["crimson_wall_sign"] = { hardness = 1, explosionResistance = 1 }
-MC.GeneratedBlockProperties["crying_obsidian"] = { hardness = 50, explosionResistance = 1200 }
-MC.GeneratedBlockProperties["cut_copper"] = { hardness = 3, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cut_copper_slab"] = { hardness = 3, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cut_copper_stairs"] = { hardness = 3, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cut_red_sandstone"] = { hardness = 0.8, explosionResistance = 0.8 }
-MC.GeneratedBlockProperties["cut_red_sandstone_slab"] = { hardness = 2, explosionResistance = 6 }
-MC.GeneratedBlockProperties["cut_sandstone"] = { hardness = 0.8, explosionResistance = 0.8 }
-MC.GeneratedBlockProperties["cut_sandstone_slab"] = { hardness = 2, explosionResistance = 6 }
+MC.GeneratedBlockProperties["crying_obsidian"] = { hardness = 50, explosionResistance = 1200, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cut_copper"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cut_copper_slab"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cut_copper_stairs"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cut_red_sandstone"] = { hardness = 0.8, explosionResistance = 0.8, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cut_red_sandstone_slab"] = { hardness = 2, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cut_sandstone"] = { hardness = 0.8, explosionResistance = 0.8, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["cut_sandstone_slab"] = { hardness = 2, explosionResistance = 6, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["cyan_banner"] = { hardness = 1, explosionResistance = 1 }
 MC.GeneratedBlockProperties["cyan_bed"] = { hardness = 0.2, explosionResistance = 0.2 }
 MC.GeneratedBlockProperties["cyan_candle"] = { hardness = 0.1, explosionResistance = 0.1 }
 MC.GeneratedBlockProperties["cyan_candle_cake"] = { hardness = 0.5, explosionResistance = 0.5 }
 MC.GeneratedBlockProperties["cyan_carpet"] = { hardness = 0.1, explosionResistance = 0.1 }
-MC.GeneratedBlockProperties["cyan_concrete"] = { hardness = 1.8, explosionResistance = 1.8 }
+MC.GeneratedBlockProperties["cyan_concrete"] = { hardness = 1.8, explosionResistance = 1.8, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["cyan_concrete_powder"] = { hardness = 0.5, explosionResistance = 0.5 }
-MC.GeneratedBlockProperties["cyan_glazed_terracotta"] = { hardness = 1.4, explosionResistance = 1.4 }
+MC.GeneratedBlockProperties["cyan_glazed_terracotta"] = { hardness = 1.4, explosionResistance = 1.4, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["cyan_shulker_box"] = { hardness = 2, explosionResistance = 2 }
 MC.GeneratedBlockProperties["cyan_stained_glass"] = { hardness = 0.3, explosionResistance = 0.3 }
 MC.GeneratedBlockProperties["cyan_stained_glass_pane"] = { hardness = 0.3, explosionResistance = 0.3 }
-MC.GeneratedBlockProperties["cyan_terracotta"] = { hardness = 1.25, explosionResistance = 4.2 }
+MC.GeneratedBlockProperties["cyan_terracotta"] = { hardness = 1.25, explosionResistance = 4.2, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["cyan_wall_banner"] = { hardness = 1, explosionResistance = 1 }
 MC.GeneratedBlockProperties["cyan_wool"] = { hardness = 0.8, explosionResistance = 0.8 }
-MC.GeneratedBlockProperties["damaged_anvil"] = { hardness = 5, explosionResistance = 1200 }
+MC.GeneratedBlockProperties["damaged_anvil"] = { hardness = 5, explosionResistance = 1200, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["dandelion"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["dark_oak_button"] = { hardness = 0.5, explosionResistance = 0.5 }
 MC.GeneratedBlockProperties["dark_oak_door"] = { hardness = 3, explosionResistance = 3 }
@@ -316,99 +316,99 @@ MC.GeneratedBlockProperties["dark_oak_trapdoor"] = { hardness = 3, explosionResi
 MC.GeneratedBlockProperties["dark_oak_wall_hanging_sign"] = { hardness = 1, explosionResistance = 1 }
 MC.GeneratedBlockProperties["dark_oak_wall_sign"] = { hardness = 1, explosionResistance = 1 }
 MC.GeneratedBlockProperties["dark_oak_wood"] = { hardness = 2, explosionResistance = 2 }
-MC.GeneratedBlockProperties["dark_prismarine"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["dark_prismarine_slab"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["dark_prismarine_stairs"] = { hardness = 1.5, explosionResistance = 6 }
+MC.GeneratedBlockProperties["dark_prismarine"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dark_prismarine_slab"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dark_prismarine_stairs"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["daylight_detector"] = { hardness = 0.2, explosionResistance = 0.2 }
-MC.GeneratedBlockProperties["dead_brain_coral"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["dead_brain_coral_block"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["dead_brain_coral_fan"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["dead_brain_coral_wall_fan"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["dead_bubble_coral"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["dead_bubble_coral_block"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["dead_bubble_coral_fan"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["dead_bubble_coral_wall_fan"] = { hardness = 0, explosionResistance = 0 }
+MC.GeneratedBlockProperties["dead_brain_coral"] = { hardness = 0, explosionResistance = 0, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dead_brain_coral_block"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dead_brain_coral_fan"] = { hardness = 0, explosionResistance = 0, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dead_brain_coral_wall_fan"] = { hardness = 0, explosionResistance = 0, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dead_bubble_coral"] = { hardness = 0, explosionResistance = 0, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dead_bubble_coral_block"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dead_bubble_coral_fan"] = { hardness = 0, explosionResistance = 0, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dead_bubble_coral_wall_fan"] = { hardness = 0, explosionResistance = 0, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["dead_bush"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["dead_fire_coral"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["dead_fire_coral_block"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["dead_fire_coral_fan"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["dead_fire_coral_wall_fan"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["dead_horn_coral"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["dead_horn_coral_block"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["dead_horn_coral_fan"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["dead_horn_coral_wall_fan"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["dead_tube_coral"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["dead_tube_coral_block"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["dead_tube_coral_fan"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["dead_tube_coral_wall_fan"] = { hardness = 0, explosionResistance = 0 }
+MC.GeneratedBlockProperties["dead_fire_coral"] = { hardness = 0, explosionResistance = 0, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dead_fire_coral_block"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dead_fire_coral_fan"] = { hardness = 0, explosionResistance = 0, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dead_fire_coral_wall_fan"] = { hardness = 0, explosionResistance = 0, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dead_horn_coral"] = { hardness = 0, explosionResistance = 0, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dead_horn_coral_block"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dead_horn_coral_fan"] = { hardness = 0, explosionResistance = 0, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dead_horn_coral_wall_fan"] = { hardness = 0, explosionResistance = 0, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dead_tube_coral"] = { hardness = 0, explosionResistance = 0, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dead_tube_coral_block"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dead_tube_coral_fan"] = { hardness = 0, explosionResistance = 0, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dead_tube_coral_wall_fan"] = { hardness = 0, explosionResistance = 0, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["decorated_pot"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["deepslate"] = { hardness = 3, explosionResistance = 6 }
-MC.GeneratedBlockProperties["deepslate_brick_slab"] = { hardness = 3.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["deepslate_brick_stairs"] = { hardness = 3.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["deepslate_brick_wall"] = { hardness = 3.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["deepslate_bricks"] = { hardness = 3.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["deepslate_coal_ore"] = { hardness = 4.5, explosionResistance = 3 }
-MC.GeneratedBlockProperties["deepslate_copper_ore"] = { hardness = 4.5, explosionResistance = 3 }
-MC.GeneratedBlockProperties["deepslate_diamond_ore"] = { hardness = 4.5, explosionResistance = 3 }
-MC.GeneratedBlockProperties["deepslate_emerald_ore"] = { hardness = 4.5, explosionResistance = 3 }
-MC.GeneratedBlockProperties["deepslate_gold_ore"] = { hardness = 4.5, explosionResistance = 3 }
-MC.GeneratedBlockProperties["deepslate_iron_ore"] = { hardness = 4.5, explosionResistance = 3 }
-MC.GeneratedBlockProperties["deepslate_lapis_ore"] = { hardness = 4.5, explosionResistance = 3 }
-MC.GeneratedBlockProperties["deepslate_redstone_ore"] = { hardness = 4.5, explosionResistance = 3 }
-MC.GeneratedBlockProperties["deepslate_tile_slab"] = { hardness = 3.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["deepslate_tile_stairs"] = { hardness = 3.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["deepslate_tile_wall"] = { hardness = 3.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["deepslate_tiles"] = { hardness = 3.5, explosionResistance = 6 }
+MC.GeneratedBlockProperties["deepslate"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["deepslate_brick_slab"] = { hardness = 3.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["deepslate_brick_stairs"] = { hardness = 3.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["deepslate_brick_wall"] = { hardness = 3.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["deepslate_bricks"] = { hardness = 3.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["deepslate_coal_ore"] = { hardness = 4.5, explosionResistance = 3, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["deepslate_copper_ore"] = { hardness = 4.5, explosionResistance = 3, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["deepslate_diamond_ore"] = { hardness = 4.5, explosionResistance = 3, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["deepslate_emerald_ore"] = { hardness = 4.5, explosionResistance = 3, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["deepslate_gold_ore"] = { hardness = 4.5, explosionResistance = 3, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["deepslate_iron_ore"] = { hardness = 4.5, explosionResistance = 3, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["deepslate_lapis_ore"] = { hardness = 4.5, explosionResistance = 3, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["deepslate_redstone_ore"] = { hardness = 4.5, explosionResistance = 3, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["deepslate_tile_slab"] = { hardness = 3.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["deepslate_tile_stairs"] = { hardness = 3.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["deepslate_tile_wall"] = { hardness = 3.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["deepslate_tiles"] = { hardness = 3.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["detector_rail"] = { hardness = 0.7, explosionResistance = 0.7 }
-MC.GeneratedBlockProperties["diamond_block"] = { hardness = 5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["diamond_ore"] = { hardness = 3, explosionResistance = 3 }
-MC.GeneratedBlockProperties["diorite"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["diorite_slab"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["diorite_stairs"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["diorite_wall"] = { hardness = 1.5, explosionResistance = 6 }
+MC.GeneratedBlockProperties["diamond_block"] = { hardness = 5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["diamond_ore"] = { hardness = 3, explosionResistance = 3, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["diorite"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["diorite_slab"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["diorite_stairs"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["diorite_wall"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["dirt"] = { hardness = 0.5, explosionResistance = 0.5 }
 MC.GeneratedBlockProperties["dirt_path"] = { hardness = 0.65, explosionResistance = 0.65 }
-MC.GeneratedBlockProperties["dispenser"] = { hardness = 3.5, explosionResistance = 3.5 }
+MC.GeneratedBlockProperties["dispenser"] = { hardness = 3.5, explosionResistance = 3.5, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["dragon_egg"] = { hardness = 3, explosionResistance = 9 }
 MC.GeneratedBlockProperties["dragon_head"] = { hardness = 1, explosionResistance = 1 }
 MC.GeneratedBlockProperties["dragon_wall_head"] = { hardness = 1, explosionResistance = 1 }
 MC.GeneratedBlockProperties["dried_ghast"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["dried_kelp_block"] = { hardness = 0.5, explosionResistance = 2.5 }
-MC.GeneratedBlockProperties["dripstone_block"] = { hardness = 1.5, explosionResistance = 1 }
-MC.GeneratedBlockProperties["dropper"] = { hardness = 3.5, explosionResistance = 3.5 }
-MC.GeneratedBlockProperties["emerald_block"] = { hardness = 5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["emerald_ore"] = { hardness = 3, explosionResistance = 3 }
-MC.GeneratedBlockProperties["enchanting_table"] = { hardness = 5, explosionResistance = 1200 }
+MC.GeneratedBlockProperties["dripstone_block"] = { hardness = 1.5, explosionResistance = 1, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["dropper"] = { hardness = 3.5, explosionResistance = 3.5, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["emerald_block"] = { hardness = 5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["emerald_ore"] = { hardness = 3, explosionResistance = 3, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["enchanting_table"] = { hardness = 5, explosionResistance = 1200, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["end_gateway"] = { hardness = -1, explosionResistance = 3600000 }
 MC.GeneratedBlockProperties["end_portal"] = { hardness = -1, explosionResistance = 3600000 }
 MC.GeneratedBlockProperties["end_portal_frame"] = { hardness = -1, explosionResistance = 3600000 }
 MC.GeneratedBlockProperties["end_rod"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["end_stone"] = { hardness = 3, explosionResistance = 9 }
-MC.GeneratedBlockProperties["end_stone_brick_slab"] = { hardness = 3, explosionResistance = 9 }
-MC.GeneratedBlockProperties["end_stone_brick_stairs"] = { hardness = 3, explosionResistance = 9 }
-MC.GeneratedBlockProperties["end_stone_brick_wall"] = { hardness = 3, explosionResistance = 9 }
-MC.GeneratedBlockProperties["end_stone_bricks"] = { hardness = 3, explosionResistance = 9 }
+MC.GeneratedBlockProperties["end_stone"] = { hardness = 3, explosionResistance = 9, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["end_stone_brick_slab"] = { hardness = 3, explosionResistance = 9, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["end_stone_brick_stairs"] = { hardness = 3, explosionResistance = 9, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["end_stone_brick_wall"] = { hardness = 3, explosionResistance = 9, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["end_stone_bricks"] = { hardness = 3, explosionResistance = 9, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["ender_chest"] = { hardness = 22.5, explosionResistance = 600 }
-MC.GeneratedBlockProperties["exposed_chiseled_copper"] = { hardness = 3, explosionResistance = 6 }
-MC.GeneratedBlockProperties["exposed_copper"] = { hardness = 3, explosionResistance = 6 }
-MC.GeneratedBlockProperties["exposed_copper_bars"] = { hardness = 5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["exposed_copper_bulb"] = { hardness = 3, explosionResistance = 6 }
-MC.GeneratedBlockProperties["exposed_copper_chain"] = { hardness = 5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["exposed_copper_chest"] = { hardness = 3, explosionResistance = 6 }
+MC.GeneratedBlockProperties["exposed_chiseled_copper"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["exposed_copper"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["exposed_copper_bars"] = { hardness = 5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["exposed_copper_bulb"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["exposed_copper_chain"] = { hardness = 5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["exposed_copper_chest"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["exposed_copper_door"] = { hardness = 3, explosionResistance = 6 }
 MC.GeneratedBlockProperties["exposed_copper_golem_statue"] = { hardness = 3, explosionResistance = 6 }
-MC.GeneratedBlockProperties["exposed_copper_grate"] = { hardness = 3, explosionResistance = 6 }
+MC.GeneratedBlockProperties["exposed_copper_grate"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["exposed_copper_lantern"] = { hardness = 3.5, explosionResistance = 3.5 }
-MC.GeneratedBlockProperties["exposed_copper_trapdoor"] = { hardness = 3, explosionResistance = 6 }
-MC.GeneratedBlockProperties["exposed_cut_copper"] = { hardness = 3, explosionResistance = 6 }
-MC.GeneratedBlockProperties["exposed_cut_copper_slab"] = { hardness = 3, explosionResistance = 6 }
-MC.GeneratedBlockProperties["exposed_cut_copper_stairs"] = { hardness = 3, explosionResistance = 6 }
-MC.GeneratedBlockProperties["exposed_lightning_rod"] = { hardness = 3, explosionResistance = 6 }
+MC.GeneratedBlockProperties["exposed_copper_trapdoor"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["exposed_cut_copper"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["exposed_cut_copper_slab"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["exposed_cut_copper_stairs"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["exposed_lightning_rod"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["farmland"] = { hardness = 0.6, explosionResistance = 0.6 }
 MC.GeneratedBlockProperties["fern"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["fire"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["fire_coral"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["fire_coral_block"] = { hardness = 1.5, explosionResistance = 6 }
+MC.GeneratedBlockProperties["fire_coral_block"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["fire_coral_fan"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["fire_coral_wall_fan"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["firefly_bush"] = { hardness = 0, explosionResistance = 0 }
@@ -418,20 +418,20 @@ MC.GeneratedBlockProperties["flowering_azalea"] = { hardness = 0, explosionResis
 MC.GeneratedBlockProperties["flowering_azalea_leaves"] = { hardness = 0.2, explosionResistance = 0.2 }
 MC.GeneratedBlockProperties["frogspawn"] = { hardness = 0, explosionResistance = 0 }
 MC.GeneratedBlockProperties["frosted_ice"] = { hardness = 0.5, explosionResistance = 0.5 }
-MC.GeneratedBlockProperties["furnace"] = { hardness = 3.5, explosionResistance = 3.5 }
-MC.GeneratedBlockProperties["gilded_blackstone"] = { hardness = 1.5, explosionResistance = 6 }
+MC.GeneratedBlockProperties["furnace"] = { hardness = 3.5, explosionResistance = 3.5, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["gilded_blackstone"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["glass"] = { hardness = 0.3, explosionResistance = 0.3 }
 MC.GeneratedBlockProperties["glass_pane"] = { hardness = 0.3, explosionResistance = 0.3 }
 MC.GeneratedBlockProperties["glow_item_frame"] = { hardness = 0.5, explosionResistance = 0.5 }
 MC.GeneratedBlockProperties["glow_lichen"] = { hardness = 0.2, explosionResistance = 0.2 }
 MC.GeneratedBlockProperties["glowstone"] = { hardness = 0.3, explosionResistance = 0.3 }
-MC.GeneratedBlockProperties["gold_block"] = { hardness = 3, explosionResistance = 6 }
-MC.GeneratedBlockProperties["gold_ore"] = { hardness = 3, explosionResistance = 3 }
+MC.GeneratedBlockProperties["gold_block"] = { hardness = 3, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["gold_ore"] = { hardness = 3, explosionResistance = 3, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["golden_dandelion"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["granite"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["granite_slab"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["granite_stairs"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["granite_wall"] = { hardness = 1.5, explosionResistance = 6 }
+MC.GeneratedBlockProperties["granite"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["granite_slab"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["granite_stairs"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
+MC.GeneratedBlockProperties["granite_wall"] = { hardness = 1.5, explosionResistance = 6, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["grass_block"] = { hardness = 0.6, explosionResistance = 0.6 }
 MC.GeneratedBlockProperties["gravel"] = { hardness = 0.6, explosionResistance = 0.6 }
 MC.GeneratedBlockProperties["gray_banner"] = { hardness = 1, explosionResistance = 1 }
@@ -439,84 +439,15 @@ MC.GeneratedBlockProperties["gray_bed"] = { hardness = 0.2, explosionResistance 
 MC.GeneratedBlockProperties["gray_candle"] = { hardness = 0.1, explosionResistance = 0.1 }
 MC.GeneratedBlockProperties["gray_candle_cake"] = { hardness = 0.5, explosionResistance = 0.5 }
 MC.GeneratedBlockProperties["gray_carpet"] = { hardness = 0.1, explosionResistance = 0.1 }
-MC.GeneratedBlockProperties["gray_concrete"] = { hardness = 1.8, explosionResistance = 1.8 }
+MC.GeneratedBlockProperties["gray_concrete"] = { hardness = 1.8, explosionResistance = 1.8, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["gray_concrete_powder"] = { hardness = 0.5, explosionResistance = 0.5 }
-MC.GeneratedBlockProperties["gray_glazed_terracotta"] = { hardness = 1.4, explosionResistance = 1.4 }
+MC.GeneratedBlockProperties["gray_glazed_terracotta"] = { hardness = 1.4, explosionResistance = 1.4, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["gray_shulker_box"] = { hardness = 2, explosionResistance = 2 }
 MC.GeneratedBlockProperties["gray_stained_glass"] = { hardness = 0.3, explosionResistance = 0.3 }
 MC.GeneratedBlockProperties["gray_stained_glass_pane"] = { hardness = 0.3, explosionResistance = 0.3 }
-MC.GeneratedBlockProperties["gray_terracotta"] = { hardness = 1.25, explosionResistance = 4.2 }
+MC.GeneratedBlockProperties["gray_terracotta"] = { hardness = 1.25, explosionResistance = 4.2, requiresCorrectToolForDrops = true }
 MC.GeneratedBlockProperties["gray_wall_banner"] = { hardness = 1, explosionResistance = 1 }
 MC.GeneratedBlockProperties["gray_wool"] = { hardness = 0.8, explosionResistance = 0.8 }
 MC.GeneratedBlockProperties["green_banner"] = { hardness = 1, explosionResistance = 1 }
 MC.GeneratedBlockProperties["green_bed"] = { hardness = 0.2, explosionResistance = 0.2 }
 MC.GeneratedBlockProperties["green_candle"] = { hardness = 0.1, explosionResistance = 0.1 }
-MC.GeneratedBlockProperties["green_candle_cake"] = { hardness = 0.5, explosionResistance = 0.5 }
-MC.GeneratedBlockProperties["green_carpet"] = { hardness = 0.1, explosionResistance = 0.1 }
-MC.GeneratedBlockProperties["green_concrete"] = { hardness = 1.8, explosionResistance = 1.8 }
-MC.GeneratedBlockProperties["green_concrete_powder"] = { hardness = 0.5, explosionResistance = 0.5 }
-MC.GeneratedBlockProperties["green_glazed_terracotta"] = { hardness = 1.4, explosionResistance = 1.4 }
-MC.GeneratedBlockProperties["green_shulker_box"] = { hardness = 2, explosionResistance = 2 }
-MC.GeneratedBlockProperties["green_stained_glass"] = { hardness = 0.3, explosionResistance = 0.3 }
-MC.GeneratedBlockProperties["green_stained_glass_pane"] = { hardness = 0.3, explosionResistance = 0.3 }
-MC.GeneratedBlockProperties["green_terracotta"] = { hardness = 1.25, explosionResistance = 4.2 }
-MC.GeneratedBlockProperties["green_wall_banner"] = { hardness = 1, explosionResistance = 1 }
-MC.GeneratedBlockProperties["green_wool"] = { hardness = 0.8, explosionResistance = 0.8 }
-MC.GeneratedBlockProperties["grindstone"] = { hardness = 2, explosionResistance = 6 }
-MC.GeneratedBlockProperties["hanging_roots"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["hay_block"] = { hardness = 0.5, explosionResistance = 0.5 }
-MC.GeneratedBlockProperties["heavy_core"] = { hardness = 10, explosionResistance = 1200 }
-MC.GeneratedBlockProperties["heavy_weighted_pressure_plate"] = { hardness = 0.5, explosionResistance = 0.5 }
-MC.GeneratedBlockProperties["honey_block"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["honeycomb_block"] = { hardness = 0.6, explosionResistance = 0.6 }
-MC.GeneratedBlockProperties["hopper"] = { hardness = 3, explosionResistance = 4.8 }
-MC.GeneratedBlockProperties["horn_coral"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["horn_coral_block"] = { hardness = 1.5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["horn_coral_fan"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["horn_coral_wall_fan"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["ice"] = { hardness = 0.5, explosionResistance = 0.5 }
-MC.GeneratedBlockProperties["infested_chiseled_stone_bricks"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["infested_cobblestone"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["infested_cracked_stone_bricks"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["infested_deepslate"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["infested_mossy_stone_bricks"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["infested_stone"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["infested_stone_bricks"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["iron_bars"] = { hardness = 5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["iron_block"] = { hardness = 5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["iron_chain"] = { hardness = 5, explosionResistance = 6 }
-MC.GeneratedBlockProperties["iron_door"] = { hardness = 5, explosionResistance = 5 }
-MC.GeneratedBlockProperties["iron_ore"] = { hardness = 3, explosionResistance = 3 }
-MC.GeneratedBlockProperties["iron_trapdoor"] = { hardness = 5, explosionResistance = 5 }
-MC.GeneratedBlockProperties["item_frame"] = { hardness = 0.5, explosionResistance = 0.5 }
-MC.GeneratedBlockProperties["jack_o_lantern"] = { hardness = 1, explosionResistance = 1 }
-MC.GeneratedBlockProperties["jigsaw"] = { hardness = -1, explosionResistance = 3600000 }
-MC.GeneratedBlockProperties["jukebox"] = { hardness = 2, explosionResistance = 6 }
-MC.GeneratedBlockProperties["jungle_button"] = { hardness = 0.5, explosionResistance = 0.5 }
-MC.GeneratedBlockProperties["jungle_door"] = { hardness = 3, explosionResistance = 3 }
-MC.GeneratedBlockProperties["jungle_fence"] = { hardness = 2, explosionResistance = 3 }
-MC.GeneratedBlockProperties["jungle_fence_gate"] = { hardness = 2, explosionResistance = 3 }
-MC.GeneratedBlockProperties["jungle_hanging_sign"] = { hardness = 1, explosionResistance = 1 }
-MC.GeneratedBlockProperties["jungle_leaves"] = { hardness = 0.2, explosionResistance = 0.2 }
-MC.GeneratedBlockProperties["jungle_log"] = { hardness = 2, explosionResistance = 2 }
-MC.GeneratedBlockProperties["jungle_planks"] = { hardness = 2, explosionResistance = 3 }
-MC.GeneratedBlockProperties["jungle_pressure_plate"] = { hardness = 0.5, explosionResistance = 0.5 }
-MC.GeneratedBlockProperties["jungle_sapling"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["jungle_shelf"] = { hardness = 2, explosionResistance = 3 }
-MC.GeneratedBlockProperties["jungle_sign"] = { hardness = 1, explosionResistance = 1 }
-MC.GeneratedBlockProperties["jungle_slab"] = { hardness = 2, explosionResistance = 3 }
-MC.GeneratedBlockProperties["jungle_stairs"] = { hardness = 2, explosionResistance = 3 }
-MC.GeneratedBlockProperties["jungle_trapdoor"] = { hardness = 3, explosionResistance = 3 }
-MC.GeneratedBlockProperties["jungle_wall_hanging_sign"] = { hardness = 1, explosionResistance = 1 }
-MC.GeneratedBlockProperties["jungle_wall_sign"] = { hardness = 1, explosionResistance = 1 }
-MC.GeneratedBlockProperties["jungle_wood"] = { hardness = 2, explosionResistance = 2 }
-MC.GeneratedBlockProperties["kelp"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["kelp_plant"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["ladder"] = { hardness = 0.4, explosionResistance = 0.4 }
-MC.GeneratedBlockProperties["lantern"] = { hardness = 3.5, explosionResistance = 3.5 }
-MC.GeneratedBlockProperties["lapis_block"] = { hardness = 3, explosionResistance = 3 }
-MC.GeneratedBlockProperties["lapis_ore"] = { hardness = 3, explosionResistance = 3 }
-MC.GeneratedBlockProperties["large_amethyst_bud"] = { hardness = 1.5, explosionResistance = 1.5 }
-MC.GeneratedBlockProperties["large_fern"] = { hardness = 0, explosionResistance = 0 }
-MC.GeneratedBlockProperties["lava"] = { hardness = 100, explosionResistance = 100 }
-MC.GeneratedBlockProperties["lava_cauldron"] = { hardness = 2, explosionResistance = 2 }

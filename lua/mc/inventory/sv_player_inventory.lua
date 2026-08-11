@@ -283,7 +283,7 @@ function SV.PlayerHasInfiniteMaterials( ply )
 		local allowed = MC.RunEvent( "MC.PlayerHasInfiniteMaterials", ply )
 		if allowed ~= nil then return allowed == true end
 	end
-	return not MC.Config.InventoryCreative or MC.Config.InventoryCreative:GetBool()
+	return SV.PlayerIsCreative and SV.PlayerIsCreative( ply ) == true
 end
 
 function SV.SetPlayerSelectedSlot( ply, selected, context )
