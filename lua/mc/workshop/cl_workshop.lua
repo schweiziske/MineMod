@@ -1302,8 +1302,11 @@ local function loadWorkshopBaseWorld( base, decoded )
 	local worldData, worldError = buildWorkshopBinaryWorld( decoded )
 	if not worldData then return false, worldError end
 	local startedAt = SysTime()
-	MC.ResetClientWorldForStateSync( #worldData.chunks, worldData.blocks )
 	if MC.BeginLightingBulkLoad then MC.BeginLightingBulkLoad() end
+	-- Enter the bulk guard before resetting the old world. Reset/clear helpers
+	-- otherwise queue sky and block-light work for the old map while the GMA is
+	-- still being hydrated, then the final world gets rebuilt a second time.
+	MC.ResetClientWorldForStateSync( #worldData.chunks, worldData.blocks )
 	local loaded, result = MC.LoadBinaryStateChunkPatchData( worldData, { fullSnapshot = true } )
 	if loaded ~= true then
 		if MC.CancelLightingBulkLoad then MC.CancelLightingBulkLoad() end
@@ -1416,7 +1419,8 @@ local function validateBasePayload( base, payload, softFail, alreadyCached )
 		if not istable( archiveInfoOrError ) or archiveInfoOrError.packageId ~= base.packageId then
 			return reject( "package_mismatch" )
 		end
-		actualHash = W.WorkshopPackageContentHash( archiveInfoOrError.packageId )
+		local identityBytes = base.archiveBytes > 0 and #payload or 0
+		actualHash = W.WorkshopMountedContentHash( base.workshopId, archiveInfoOrError.packageId, identityBytes )
 		if actualHash ~= base.contentHash then return reject( "hash_mismatch", actualHash ) end
 	end
 
@@ -1804,7 +1808,7 @@ net.Receive( "mc_workshop_base_announce", function()
 	if generation < 1 or not workshopId or not W.IsContentHash( contentHash )
 		or archiveBytes > W.MAX_WORKSHOP_ARCHIVE_BYTES or not slotName
 		or rawPackageId ~= "" and not packageId
-		or packageId and W.WorkshopPackageContentHash( packageId ) ~= contentHash then
+		or packageId and not W.WorkshopMountedContentHash( workshopId, packageId, archiveBytes ) then
 		MsgN( "[MC Workshop] rejected invalid base announcement" )
 		return
 	end

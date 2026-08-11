@@ -1050,8 +1050,8 @@ function MC.LoadSnapshotSaveData( data )
 		if math.floor( tonumber( data.cs ) or -1 ) ~= MC.CS or math.floor( tonumber( data.h ) or -1 ) ~= MC.CH then return false end
 	end
 	local palette = data.p or data.palette
-	resetClientWorldForSnapshot( #data.chunks, 0 )
 	if MC.BeginLightingBulkLoad then MC.BeginLightingBulkLoad() end
+	resetClientWorldForSnapshot( #data.chunks, 0 )
 
 	local cache = {}
 	local blocks = 0

@@ -231,7 +231,9 @@ local function validateManifestReferences( files )
 	end
 	local manifest = util.JSONToTable( raw )
 	if not istable( manifest ) then return nil, "invalid_bundle_manifest_json" end
-	local version = math.floor( tonumber( manifest.formatVersion or manifest.v ) or -1 )
+	-- `v` is the MC save schema. `formatVersion` belongs to the Minecraft
+	-- importer envelope and is commonly 1 even when the save itself is v10.
+	local version = math.floor( tonumber( manifest.v or manifest.formatVersion ) or -1 )
 	if version ~= 10 then return nil, "unsupported_bundle_save_version" end
 	if manifest.map ~= nil and ( not isstring( manifest.map ) or #manifest.map > 64 ) then
 		return nil, "invalid_bundle_map"
@@ -462,6 +464,19 @@ function W.WorkshopPackageContentHash( packageId )
 	local suffix = string.lower( tostring( string.match( packageId, "_([0-9a-fA-F]+)$" ) or "" ) )
 	if not W.IsContentHash( suffix ) then return nil end
 	return suffix
+end
+
+-- Mounted addons do not have to use the package-id naming convention produced
+-- by our publisher.  Their Workshop identity is the addon id plus the GMA
+-- byte size advertised by engine.GetAddons, not an optional name suffix.
+function W.WorkshopMountedContentHash( workshopId, packageId, archiveBytes )
+	workshopId = W.NormalizeWorkshopId( workshopId )
+	packageId = W.SafeSlotName( packageId )
+	archiveBytes = math.max( 0, math.floor( tonumber( archiveBytes ) or 0 ) )
+	if not workshopId or not packageId then return nil end
+	return W.ContentHash( table.concat( {
+		"mc-mounted-v1", workshopId, packageId, tostring( archiveBytes ),
+	}, "\0" ) )
 end
 
 local function encodeGMAFiles( files, title )

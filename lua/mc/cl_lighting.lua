@@ -373,7 +373,12 @@ function MC.ClearLightingCache()
 	MC.LightSourceCells = {}
 	MC.LightChunkSources = {}
 	MC.LightSourceIndexReady = false
-	if MC.QueueAllSkyFlood then MC.QueueAllSkyFlood() end
+	-- Full Workshop/snapshot hydration owns the lighting bulk window. Do not
+	-- enqueue work against the old or half-loaded world; EndLightingBulkLoad
+	-- performs the single rebuild after every chunk has been committed.
+	if ( tonumber( MC.LightingBulkLoadDepth ) or 0 ) <= 0 and MC.QueueAllSkyFlood then
+		MC.QueueAllSkyFlood()
+	end
 end
 
 function MC.MarkAllMeshesDirty()

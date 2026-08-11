@@ -34,6 +34,17 @@ local function selectedStack()
 	return state and state.slots and state.slots[( state.selected or 0 ) + 1] or nil
 end
 
+local USE_INTERACT_OWN_COLLISION = {
+	mc_chunk = true,
+	mc_chunk_phys = true,
+	mc_collision_carrier = true,
+}
+
+local function traceHasForeignUseTarget( trace )
+	if not trace or trace.HitWorld or not IsValid( trace.Entity ) then return false end
+	return USE_INTERACT_OWN_COLLISION[trace.Entity:GetClass()] ~= true
+end
+
 local function announceSelection()
 	selectedNameUntil = RealTime() + 2
 end
@@ -100,12 +111,15 @@ hook.Add( "PlayerBindPress", "mc_inventory_hotbar_input", function( ply, bind, p
 		local aim = MC.PlayerBlockAim and MC.PlayerBlockAim( ply ) or nil
 		local usableBlock = aim and MC.Blocks and MC.Blocks[aim.Block]
 		usableBlock = usableBlock and usableBlock.handlers and usableBlock.handlers.OnUse ~= nil
-		-- Preserve entity and functional-block use.  A plain world/air +use is
-		-- the Minecraft inventory key and is consumed locally so it does not also
-		-- trigger Garry's Mod's generic use sweep.
-		if not IsValid( trace.Entity ) and not usableBlock then
-			if MC.RequestInventoryOpen then MC.RequestInventoryOpen() end
+		-- Foreign entities retain Garry's Mod's normal +use path. MC collision
+		-- carriers are only implementation details and must not block the inventory key.
+		if traceHasForeignUseTarget( trace ) then return end
+		if usableBlock then
+			net.Start( "mc_block_use_request" )
+			net.SendToServer()
 			return true
 		end
+		if MC.RequestInventoryOpen then MC.RequestInventoryOpen() end
+		return true
 	end
 end )

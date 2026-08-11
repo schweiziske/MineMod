@@ -1023,13 +1023,13 @@ function T.EndSnapshot( generation, baseRevision, token, crc )
 	and MC.BinarySectionPatch.IsSnapshotPayload( compressed ) then
 		local decoded, decodeError = MC.BinarySectionPatch.DecodeSnapshotPayload( compressed )
 		if not decoded then return rejectBinarySnapshot( snapshot, decodeError or "binary_snapshot_decode_failed" ) end
+		local bulkGroup, groupError = beginBulkGroup( snapshot.token, true, false )
+		if not bulkGroup then return rejectBinarySnapshot( snapshot, groupError or "binary_snapshot_group_failed" ) end
 		if MC.ResetClientWorldForStateSync then
 			MC.ResetClientWorldForStateSync( decoded.chunkCount, decoded.cellCount )
 		else
 			resetClientWorld()
 		end
-		local bulkGroup, groupError = beginBulkGroup( snapshot.token, true, false )
-		if not bulkGroup then return rejectBinarySnapshot( snapshot, groupError or "binary_snapshot_group_failed" ) end
 		snapshot.binary = {
 			batches = decoded.batches,
 			chunkCount = decoded.chunkCount,

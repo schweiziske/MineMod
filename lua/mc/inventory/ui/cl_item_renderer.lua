@@ -72,6 +72,124 @@ local function blockIconMaterial( blockId )
 	return MC.MaterialCreativeIcon or MC.Material
 end
 
+local droppedBlockMeshes = {}
+local DROP_TRIANGLES = { 1, 3, 2, 1, 4, 3 }
+
+local function rotatedUV( u, v, rotation )
+	rotation = math.floor( tonumber( rotation ) or 0 ) % 4
+	if rotation == 1 then return v, 1 - u end
+	if rotation == 2 then return 1 - u, 1 - v end
+	if rotation == 3 then return 1 - v, u end
+	return u, v
+end
+
+local function droppedBlockState( stack, options )
+	local definition = definitionFor( stack )
+	if not definition or definition.blockId == nil then return nil end
+	local plan = Renderer.ModelPlan( stack, options or { displayContext = "ground" } )
+	local modelId = tostring( plan and plan.modelId or "" )
+	if not string.find( modelId, ":block/", 1, true ) then return nil end
+	return blockStateFor( definition )
+end
+
+local function droppedBlockMesh( stateId, blockId )
+	local cached = droppedBlockMeshes[stateId]
+	if cached ~= nil then return cached ~= false and cached or nil end
+	if not ( Mesh and MC.VisitStateVisualModels and MC.StateVisualModelData
+		and MC.BlockModelSurface and MC.ModelQuadVertex and MC.TileUV ) then
+		droppedBlockMeshes[stateId] = false
+		return nil
+	end
+
+	local vertices = {}
+	MC.VisitStateVisualModels( stateId, 0, 0, 0, function( modelId )
+		local model = MC.StateVisualModelData( modelId )
+		for _, quad in ipairs( model and model.modelQuads or {} ) do
+			local tile = MC.BlockModelSurface( model, quad )
+			local atlasU0, atlasV0, atlasU1, atlasV1 = MC.TileUV( tile )
+			local uv = quad.uv
+			local faceU0 = ( uv and tonumber( uv[1] ) or 0 ) / 16
+			local faceV0 = ( uv and tonumber( uv[2] ) or 0 ) / 16
+			local faceU1 = ( uv and tonumber( uv[3] ) or 16 ) / 16
+			local faceV1 = ( uv and tonumber( uv[4] ) or 16 ) / 16
+			local points, texture = {}, {}
+			for index = 1, 4 do
+				local x, y, z, u, v = MC.ModelQuadVertex( quad, index )
+				u, v = rotatedUV( u, v, quad.rot )
+				u = faceU0 + ( faceU1 - faceU0 ) * u
+				v = faceV0 + ( faceV1 - faceV0 ) * v
+				points[index] = Vector( x - 0.5, y - 0.5, z - 0.5 )
+				texture[index] = {
+					u = atlasU0 + ( atlasU1 - atlasU0 ) * u,
+					v = atlasV0 + ( atlasV1 - atlasV0 ) * v,
+				}
+			end
+
+			local edgeA, edgeB = points[3] - points[1], points[2] - points[1]
+			local normal = edgeA:Cross( edgeB )
+			if normal:LengthSqr() > 0.000001 then normal:Normalize() else normal = Vector( 0, 0, 1 ) end
+			local face = MC.RenderMeshConstants and MC.RenderMeshConstants.FACES
+				and MC.RenderMeshConstants.FACES[quad.face or 1] or nil
+			local shade = face and face.sh or color_white
+			local r, g, b = shade.r or 255, shade.g or 255, shade.b or 255
+			local tintCode = MC.BlockStateTintCode
+				and MC.BlockStateTintCode( stateId, blockId, quad.tintIndex or -1 ) or 0
+			if tintCode ~= 0 and MC.BlockTintRGB then
+				local tr, tg, tb = MC.BlockTintRGB( tintCode )
+				r, g, b = r * tr / 255, g * tg / 255, b * tb / 255
+			end
+			local color = Color( math.floor( r + 0.5 ), math.floor( g + 0.5 ), math.floor( b + 0.5 ), 255 )
+			for _, corner in ipairs( DROP_TRIANGLES ) do
+				vertices[#vertices + 1] = {
+					pos = points[corner], normal = normal,
+					u = texture[corner].u, v = texture[corner].v, color = color,
+				}
+			end
+		end
+	end )
+	if #vertices == 0 then droppedBlockMeshes[stateId] = false return nil end
+
+	local translucent = MC.IsTranslucentBlock and MC.IsTranslucentBlock( blockId ) == true
+	local material = translucent and ( MC.MaterialTranslucent or MC.Material ) or MC.Material
+	local blockMesh = Mesh( material )
+	blockMesh:BuildFromTriangles( vertices )
+	cached = { mesh = blockMesh, translucent = translucent }
+	droppedBlockMeshes[stateId] = cached
+	return cached
+end
+
+function Renderer.DrawDroppedBlock( stack, position, angles, size, worldColor, options )
+	local stateId, blockId = droppedBlockState( stack, options )
+	if not stateId then return false end
+	local cached = droppedBlockMesh( stateId, blockId )
+	if not cached or not cached.mesh then return false end
+	local matrix = Matrix()
+	matrix:SetTranslation( position )
+	matrix:SetAngles( angles )
+	size = math.max( 0.01, tonumber( size ) or 12 )
+	matrix:SetScale( Vector( size, size, size ) )
+	worldColor = worldColor or color_white
+	render.SetColorModulation( ( worldColor.r or 255 ) / 255,
+		( worldColor.g or 255 ) / 255, ( worldColor.b or 255 ) / 255 )
+	render.SetBlend( ( worldColor.a or 255 ) / 255 )
+	cam.PushModelMatrix( matrix, true )
+		cached.mesh:Draw()
+	cam.PopModelMatrix()
+	render.SetBlend( 1 )
+	render.SetColorModulation( 1, 1, 1 )
+	return true
+end
+
+local function clearDroppedBlockMeshes()
+	for _, cached in pairs( droppedBlockMeshes ) do
+		if cached and cached.mesh and cached.mesh.Destroy then cached.mesh:Destroy() end
+	end
+	droppedBlockMeshes = {}
+end
+
+hook.Add( "ShutDown", "mc_item_drop_block_meshes", clearDroppedBlockMeshes )
+hook.Add( "OnReloaded", "mc_item_drop_block_meshes", clearDroppedBlockMeshes )
+
 function Renderer.CanDraw( stack )
 	return not MC.IsEmptyItemStack( stack ) and definitionFor( stack ) ~= nil
 end

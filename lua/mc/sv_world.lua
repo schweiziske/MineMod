@@ -1115,23 +1115,36 @@ local function useInteractObstructed( ply, aim )
 	return tr.HitPos:Distance( ply:EyePos() ) < ( aim.Distance or math.huge )
 end
 
--- Deliberately one-sided: this hook only ADDS the block interaction, it never
--- suppresses the engine's own +use. Upstream also registered a PlayerUse hook
+-- For ordinary weapons this hook only adds the block interaction and never
+-- suppresses the engine's own +use. The inventory hand consumes its client bind
+-- and uses mc_block_use_request so it can choose block interaction versus inventory.
+-- Upstream also registered a PlayerUse hook
 -- returning false to win the press outright, because FindUseEntity falls back
 -- to an ~80u radius/cone sweep and a chair or button near (but not under) the
 -- crosshair activates on the same press. MC does not get to globally veto
 -- other addons' PlayerUse, so that half is intentionally not ported and the
 -- double-activation is accepted. See docs/main-sync-p0-baseline-2026-08-04.md.
 -- _tools/test_player_use_isolation.js enforces this repo-wide.
-hook.Add( "KeyPress", "mc_use_interact", function( ply, key )
-	if key ~= IN_USE then return end
+local function tryUseAimedBlock( ply )
 	if C.UseInteract and not C.UseInteract:GetBool() then return end
 	if not IsValid( ply ) or not ply:Alive() or ply:InVehicle() then return end
+	local now = CurTime()
+	if now < ( ply.MCNextBlockUseInteract or 0 ) then return end
+	ply.MCNextBlockUseInteract = now + 0.05
 	local aim = MC.PlayerBlockAim and MC.PlayerBlockAim( ply )
 	if not aim then return end
 	if useInteractObstructed( ply, aim ) then return end
 	-- No selectedBlockID: this is a pure interaction, not a placement gesture.
-	SV.Use( ply, aim.bx, aim.by, aim.bz )
+	return SV.Use( ply, aim.bx, aim.by, aim.bz )
+end
+
+hook.Add( "KeyPress", "mc_use_interact", function( ply, key )
+	if key ~= IN_USE then return end
+	tryUseAimedBlock( ply )
+end )
+
+net.Receive( "mc_block_use_request", function( _, ply )
+	tryUseAimedBlock( ply )
 end )
 
 local function trimArg( s )
