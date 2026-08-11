@@ -75,6 +75,45 @@ end
 local droppedBlockMeshes = {}
 local DROP_TRIANGLES = { 1, 3, 2, 1, 4, 3 }
 
+local function droppedBlockMaterial( translucent )
+	local material = translucent and ( MC.MaterialTranslucent or MC.Material ) or MC.Material
+	if not material or material.IsError and material:IsError() then return nil end
+	return material
+end
+
+local function droppedBlockCullMode()
+	local convar = MC.MeshCullMode
+	local value = convar and convar.GetString and string.lower( tostring( convar:GetString() or "" ) ) or "ccw"
+	if value == "ccw" or value == "counterclockwise" or value == "counter-clockwise" then
+		return MATERIAL_CULLMODE_CCW or 0
+	end
+	return MATERIAL_CULLMODE_CW or 1
+end
+
+local function droppedTileUVRect( tile, uv )
+	if not uv then return MC.TileUV( tile ) end
+	local atlas = MC.Atlas
+	if not atlas or not atlas.COLS or not atlas.W or not atlas.H then return MC.TileUV( tile ) end
+	local col = tile % atlas.COLS
+	local row = math.floor( tile / atlas.COLS )
+	local stride = atlas.STRIDE or atlas.TILE
+	local padding = atlas.PAD or 0
+	local inset = atlas.INSET or 0.5
+	local baseX = col * stride + padding
+	local baseY = row * stride + padding
+	local tileSize = atlas.TILE
+	local u0 = baseX + ( tonumber( uv[1] ) or 0 ) / 16 * tileSize
+	local v0 = baseY + ( tonumber( uv[2] ) or 0 ) / 16 * tileSize
+	local u1 = baseX + ( tonumber( uv[3] ) or 16 ) / 16 * tileSize
+	local v1 = baseY + ( tonumber( uv[4] ) or 16 ) / 16 * tileSize
+	local uDirection = u1 >= u0 and 1 or -1
+	local vDirection = v1 >= v0 and 1 or -1
+	return ( u0 + inset * uDirection ) / atlas.W,
+		( v0 + inset * vDirection ) / atlas.H,
+		( u1 - inset * uDirection ) / atlas.W,
+		( v1 - inset * vDirection ) / atlas.H
+end
+
 local function rotatedUV( u, v, rotation )
 	rotation = math.floor( tonumber( rotation ) or 0 ) % 4
 	if rotation == 1 then return v, 1 - u end
@@ -97,27 +136,26 @@ local function droppedBlockMesh( stateId, blockId )
 	if cached ~= nil then return cached ~= false and cached or nil end
 	if not ( Mesh and MC.VisitStateVisualModels and MC.StateVisualModelData
 		and MC.BlockModelSurface and MC.ModelQuadVertex and MC.TileUV ) then
-		droppedBlockMeshes[stateId] = false
 		return nil
 	end
 
 	local vertices = {}
+	local visitedModel = false
+	local missingModel = false
 	MC.VisitStateVisualModels( stateId, 0, 0, 0, function( modelId )
+		visitedModel = true
 		local model = MC.StateVisualModelData( modelId )
+		if not model then
+			missingModel = true
+			return
+		end
 		for _, quad in ipairs( model and model.modelQuads or {} ) do
 			local tile = MC.BlockModelSurface( model, quad )
-			local atlasU0, atlasV0, atlasU1, atlasV1 = MC.TileUV( tile )
-			local uv = quad.uv
-			local faceU0 = ( uv and tonumber( uv[1] ) or 0 ) / 16
-			local faceV0 = ( uv and tonumber( uv[2] ) or 0 ) / 16
-			local faceU1 = ( uv and tonumber( uv[3] ) or 16 ) / 16
-			local faceV1 = ( uv and tonumber( uv[4] ) or 16 ) / 16
+			local atlasU0, atlasV0, atlasU1, atlasV1 = droppedTileUVRect( tile, quad.uv )
 			local points, texture = {}, {}
 			for index = 1, 4 do
 				local x, y, z, u, v = MC.ModelQuadVertex( quad, index )
 				u, v = rotatedUV( u, v, quad.rot )
-				u = faceU0 + ( faceU1 - faceU0 ) * u
-				v = faceV0 + ( faceV1 - faceV0 ) * v
 				points[index] = Vector( x - 0.5, y - 0.5, z - 0.5 )
 				texture[index] = {
 					u = atlasU0 + ( atlasU1 - atlasU0 ) * u,
@@ -147,10 +185,16 @@ local function droppedBlockMesh( stateId, blockId )
 			end
 		end
 	end )
-	if #vertices == 0 then droppedBlockMeshes[stateId] = false return nil end
+	if #vertices == 0 then
+		-- A drop can render before generated model data finishes loading. Only
+		-- cache a genuine empty model; transient misses must retry next frame.
+		if visitedModel and not missingModel then droppedBlockMeshes[stateId] = false end
+		return nil
+	end
 
 	local translucent = MC.IsTranslucentBlock and MC.IsTranslucentBlock( blockId ) == true
-	local material = translucent and ( MC.MaterialTranslucent or MC.Material ) or MC.Material
+	local material = droppedBlockMaterial( translucent )
+	if not material then return nil end
 	local blockMesh = Mesh( material )
 	blockMesh:BuildFromTriangles( vertices )
 	cached = { mesh = blockMesh, translucent = translucent }
@@ -163,6 +207,8 @@ function Renderer.DrawDroppedBlock( stack, position, angles, size, worldColor, o
 	if not stateId then return false end
 	local cached = droppedBlockMesh( stateId, blockId )
 	if not cached or not cached.mesh then return false end
+	local material = droppedBlockMaterial( cached.translucent )
+	if not material then return false end
 	local matrix = Matrix()
 	matrix:SetTranslation( position )
 	matrix:SetAngles( angles )
@@ -172,9 +218,21 @@ function Renderer.DrawDroppedBlock( stack, position, angles, size, worldColor, o
 	render.SetColorModulation( ( worldColor.r or 255 ) / 255,
 		( worldColor.g or 255 ) / 255, ( worldColor.b or 255 ) / 255 )
 	render.SetBlend( ( worldColor.a or 255 ) / 255 )
+	local filtered = render.PushFilterMin and render.PushFilterMag and TEXFILTER and TEXFILTER.POINT
+	if filtered then
+		render.PushFilterMin( TEXFILTER.POINT )
+		render.PushFilterMag( TEXFILTER.POINT )
+	end
+	if render.CullMode then render.CullMode( droppedBlockCullMode() ) end
+	render.SetMaterial( material )
 	cam.PushModelMatrix( matrix, true )
 		cached.mesh:Draw()
 	cam.PopModelMatrix()
+	if render.CullMode then render.CullMode( MATERIAL_CULLMODE_CCW or 0 ) end
+	if filtered then
+		render.PopFilterMag()
+		render.PopFilterMin()
+	end
 	render.SetBlend( 1 )
 	render.SetColorModulation( 1, 1, 1 )
 	return true

@@ -748,7 +748,7 @@ API.Events = {
 	["MC.PlayerGameModeChanged"] = { realm = "server", args = "ply, oldMode, newMode, actor", desc = "a player's authoritative Minecraft game mode changed" },
 	["MC.PlayerMiningStarted"] = { realm = "server", args = "ply, session", desc = "a server-authoritative survival mining session started" },
 	["MC.PlayerMiningCancelled"] = { realm = "server", args = "ply, session, reason", desc = "an unfinished survival mining session was cancelled" },
-	["MC.PlayerMinedBlock"] = { realm = "server", args = "ply, bx, by, bz, oldStateId, drop, transaction", desc = "a survival mining session completed and committed its block transaction" },
+	["MC.PlayerMinedBlock"] = { realm = "server", args = "ply, bx, by, bz, oldStateId, drops, transaction, dropError", desc = "a survival mining session completed and committed its block transaction" },
 	["MC.ItemDurabilityChanged"] = { realm = "server", args = "ply, slot, oldStack, newStack, damage, broken", desc = "the selected item took authoritative durability damage" },
 	["MC.ItemUseStarted"] = { realm = "server", args = "ply, stack, useState", desc = "a held-item use state started" },
 	["MC.ItemConsumed"] = { realm = "server", args = "ply, stack, foodData, infinite", desc = "a consumable finished its authoritative use" },

@@ -140,6 +140,8 @@ local SERVER_FILES = {
 	"mc/inventory/sv_item_durability.lua",
 	"mc/inventory/sv_item_use.lua",
 	"mc/inventory/sv_item_drops.lua",
+	"mc/generated/sv_generated_block_loot.lua",
+	"mc/mining/sv_block_loot.lua",
 	"mc/mining/sv_mining.lua",
 	"mc/inventory/sv_projectiles.lua",
 	"mc/inventory/sv_combat.lua",

@@ -48,19 +48,28 @@ function SV.CancelMining( ply, reason )
 	return true
 end
 
-local function spawnSimpleBlockDrop( ply, session, oldStateId )
-	if not SV.SpawnItemDrop or not MC.ItemForBlockState or not MC.NewItemStack then return nil end
-	local definition = MC.ItemForBlockState( oldStateId )
-	if not definition then return nil, "no_block_item" end
-	local stack = MC.NewItemStack( definition.name, 1 )
-	if not stack then return nil, "invalid_block_item" end
+local function spawnBlockDrops( ply, session, stacks )
+	if not SV.SpawnItemDrop then return {} end
 	local position = MC.CellWorldCenter and MC.CellWorldCenter( session.bx, session.by, session.bz )
 		or Vector( session.bx * MC.BS, session.by * MC.BS, session.bz * MC.BS )
-	return SV.SpawnItemDrop( position, stack, ply, { pickupDelay = 0.5 } )
+	local entities = {}
+	for _, stack in ipairs( stacks or {} ) do
+		local entity = SV.SpawnItemDrop( position, stack, ply, { pickupDelay = 0.5 } )
+		if entity then entities[#entities + 1] = entity end
+	end
+	return entities
 end
 
 local function completeMining( ply, session )
 	local oldStateId = MC.GetBlockState and MC.GetBlockState( session.bx, session.by, session.bz ) or 0
+	local toolStack = SV.GetSelectedPlayerStack and SV.GetSelectedPlayerStack( ply ) or nil
+	local stacks, dropError = {}, "block_loot_unavailable"
+	if SV.ResolveBlockDrops then
+		stacks, dropError = SV.ResolveBlockDrops( oldStateId, toolStack, {
+			player = ply,
+			bx = session.bx, by = session.by, bz = session.bz,
+		} )
+	end
 	local broke, result = SV.Break( ply, session.bx, session.by, session.bz, { damageTool = false } )
 	if not broke then
 		SV.CancelMining( ply, "break_rejected" )
@@ -68,8 +77,8 @@ local function completeMining( ply, session )
 	end
 	SV.MiningSessions[ply] = nil
 	sendStage( ply, session, nil )
-	local drop = spawnSimpleBlockDrop( ply, session, oldStateId )
-	if MC.RunEvent then MC.RunEvent( "MC.PlayerMinedBlock", ply, session.bx, session.by, session.bz, oldStateId, drop, result ) end
+	local drops = spawnBlockDrops( ply, session, stacks )
+	if MC.RunEvent then MC.RunEvent( "MC.PlayerMinedBlock", ply, session.bx, session.by, session.bz, oldStateId, drops, result, dropError ) end
 	return true
 end
 
