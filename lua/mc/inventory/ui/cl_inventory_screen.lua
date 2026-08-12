@@ -50,7 +50,7 @@ local function tabRows()
 				titleKey = source.titleKey,
 				icon = source.icon,
 				items = type( source.items ) == "table" and source.items or {},
-				alignedRight = source.key == "inventory",
+				alignedRight = ( tonumber( source.column ) or 0 ) >= 5,
 			}
 		end
 	end
@@ -208,6 +208,7 @@ function PANEL:Init()
 	self.SearchEntry:SetCursorColor( Color( 45, 45, 45, 255 ) )
 	self.SearchEntry:SetUpdateOnType( true )
 	self.SearchEntry:SetVisible( false )
+	self.SearchEntry:SetZPos( 20 )
 	self.SearchEntry.OnChange = function( entry )
 		if not IsValid( self ) then return end
 		local generation = ( self.SearchGeneration or 0 ) + 1
@@ -223,15 +224,17 @@ function PANEL:Init()
 	self.Scrollbar = vgui.Create( "MCInventoryScrollbar", self )
 	self.Scrollbar:SetScreen( self )
 	self.Scrollbar:SetVisible( false )
+	self.Scrollbar:SetZPos( 20 )
 
 	self.PlayerPreview = vgui.Create( "DModelPanel", self )
 	self.PlayerPreview:SetMouseInputEnabled( false )
 	self.PlayerPreview:SetAnimated( false )
-	self.PlayerPreview:SetFOV( 26 )
+	self.PlayerPreview:SetFOV( 31 )
 	self.PlayerPreview:SetVisible( false )
+	self.PlayerPreview:SetZPos( 20 )
 	self.PlayerPreview.LayoutEntity = function( panel, entity )
 		if not IsValid( entity ) then return end
-		entity:SetAngles( Angle( 0, 18, 0 ) )
+		entity:SetAngles( Angle( 0, 10, 0 ) )
 	end
 	if util and util.IsValidModel and util.IsValidModel( "models/player/kleiner.mdl" ) then
 		self.PlayerPreview:SetModel( "models/player/kleiner.mdl" )
@@ -242,7 +245,16 @@ function PANEL:Init()
 		local button = vgui.Create( "MCInventoryCreativeTab", self )
 		button:Configure( self, tab, self.Scale )
 		button:SetVisible( false )
+		button:SetZPos( 0 )
 		self.TabButtons[#self.TabButtons + 1] = button
+	end
+
+	self.ContentLayer = vgui.Create( "DPanel", self )
+	self.ContentLayer:SetMouseInputEnabled( false )
+	self.ContentLayer:SetKeyboardInputEnabled( false )
+	self.ContentLayer:SetZPos( 10 )
+	self.ContentLayer.Paint = function( _, w, h )
+		if IsValid( self ) then return self:PaintContent( w, h ) end
 	end
 
 	hook.Add( "MC.InventoryChanged", self, function( panel, changed ) panel:RefreshInventorySlots( changed ) end )
@@ -353,6 +365,7 @@ function PANEL:Reflow()
 		end
 	end
 	self.SearchEntry:SetFont( "MCInventorySearch" .. tostring( self.Scale ) )
+	self.ContentLayer:SetSize( ScrW(), ScrH() )
 	self:LayoutTabs()
 	self:LayoutVisibleSlots()
 	self:LayoutSpecialControls()
@@ -364,11 +377,11 @@ function PANEL:LayoutTabs()
 		local tab = UI.CreativeTabs[index]
 		button:Configure( self, tab, self.Scale )
 		button:SetVisible( self.Creative )
+		button:SetZPos( tab.key == self.SelectedTabKey and 15 or 0 )
 		if self.Creative then
-			local x = tab.alignedRight and CREATIVE_W - 27 * ( 7 - tab.column ) + 1 or 27 * tab.column
+			local x = tab.alignedRight and CREATIVE_W - 26.07 - ( 6 - tab.column ) * 27 or 27 * tab.column
 			local y = tab.row == "top" and -28 or CREATIVE_H - 4
 			button:SetPos( self.Left + x * self.Scale, self.Top + y * self.Scale )
-			if tab.key == self.SelectedTabKey then button:MoveToFront() end
 		end
 	end
 end
@@ -381,6 +394,7 @@ function PANEL:AcquireSlot( ordinal )
 		self.SlotPanels[ordinal] = slot
 	end
 	slot:SetScale( self.Scale )
+	slot:SetZPos( 20 )
 	slot:SetVisible( true )
 	self.VisibleSlotCount = math.max( self.VisibleSlotCount, ordinal )
 	return slot
@@ -724,6 +738,10 @@ function PANEL:Paint( w, h )
 	end
 	surface.SetDrawColor( UI.Colors.overlay )
 	surface.DrawRect( 0, 0, w, h )
+	return true
+end
+
+function PANEL:PaintContent()
 	local mat = self:BackgroundMaterial()
 	local width, height = self.ContentW * self.Scale, self.ContentH * self.Scale
 	UI.WithPointFiltering( function()
