@@ -170,6 +170,16 @@ function World.Explode( center, damage, opts )
 	return sv.ApplyBlockExplosion( center, damage, istable( opts ) and opts or { actor = opts } )
 end
 
+-- Minecraft Explosion.BlockInteraction.TRIGGER_BLOCK. Uses Java's 16x16x16
+-- boundary rays and calls only block onExplosionHit overrides; ordinary blocks
+-- are never removed. Returns ok, triggeredBlockCount, selectedCellCountOrStatus.
+function World.TriggerExplosion( center, radius, opts )
+	local sv = SV()
+	if not sv or not sv.TriggerBlockExplosion then return false, 0, "trigger_explosion_unavailable" end
+	if not isvector( center ) then return false, 0, "invalid_center" end
+	return sv.TriggerBlockExplosion( center, radius, istable( opts ) and opts or { actor = opts } )
+end
+
 -- Broadcast place/break fx for a block without changing the world.
 function World.PlayFx( kind, bx, by, bz, block )
 	local sv = SV()
@@ -250,6 +260,100 @@ function Player.Resync( ply )
 	return true
 end
 
+------------------------------------------------------------------- API.Mining
+-- Public, tool-agnostic survival mining. External SWEPs provide only an item
+-- id/stack and their active weapon entity; MCSWEP remains authoritative for
+-- reach, block state, vanilla speed, crack stages, loot and the transaction.
+API.Mining = API.Mining or {}
+local Mining = API.Mining
+
+local function validMiningPlayer( ply )
+	return IsValid( ply ) and ply.IsPlayer and ply:IsPlayer()
+end
+
+local function normalizeMiningStack( input )
+	if input == nil then return nil end
+	if isstring( input ) then
+		if input == "" then return nil, "invalid_item" end
+		return { item = string.find( input, ":", 1, true ) and input or "minecraft:" .. input, count = 1 }
+	end
+	if not istable( input ) or not isstring( input.item ) or input.item == "" then return nil, "invalid_item" end
+	return deepCopy( input )
+end
+
+function Mining.Start( ply, bx, by, bz, options )
+	local sv = SV()
+	if not validMiningPlayer( ply ) then return false, "invalid_player" end
+	if not sv or not sv.BeginMining then return false, "mining_api_unavailable" end
+	local x, y, z = cellCoords( bx, by, bz )
+	if not x then return false, "invalid_cell" end
+	options = istable( options ) and options or {}
+	local stack, stackError = normalizeMiningStack( options.toolStack or options.item )
+	if stackError then return false, stackError end
+	local weapon = options.weapon
+	if not IsValid( weapon ) then return false, "invalid_weapon" end
+	return sv.BeginMining( ply, x, y, z, {
+		external = true,
+		toolStack = stack,
+		weapon = weapon,
+		sourceId = options.sourceId,
+		sourceToken = options.sourceToken,
+		requireAttackHeld = options.requireAttackHeld,
+		requireAim = options.requireAim,
+		modifiers = istable( options.modifiers ) and deepCopy( options.modifiers ) or nil,
+		onCancel = isfunction( options.onCancel ) and options.onCancel or nil,
+		onComplete = isfunction( options.onComplete ) and options.onComplete or nil,
+		onDurabilityDamage = isfunction( options.onDurabilityDamage ) and options.onDurabilityDamage or nil,
+		validate = isfunction( options.validate ) and options.validate or nil,
+	} )
+end
+
+function Mining.Cancel( ply, reason )
+	local sv = SV()
+	if not validMiningPlayer( ply ) then return false, "invalid_player" end
+	if not sv or not sv.CancelMining then return false, "mining_api_unavailable" end
+	return sv.CancelMining( ply, tostring( reason or "external_cancel" ) )
+end
+
+function Mining.Get( ply )
+	local sv = SV()
+	if not validMiningPlayer( ply ) then return nil, "invalid_player" end
+	if not sv or not sv.GetMiningSession then return nil, "mining_api_unavailable" end
+	return deepCopy( sv.GetMiningSession( ply ) )
+end
+
+function Mining.ProgressPerTick( ply, bx, by, bz, item, modifiers )
+	if not validMiningPlayer( ply ) then return nil, "invalid_player" end
+	local x, y, z = cellCoords( bx, by, bz )
+	if not x then return nil, "invalid_cell" end
+	local stack, stackError = normalizeMiningStack( item )
+	if stackError then return nil, stackError end
+	local stateId = MC.GetBlockState and MC.GetBlockState( x, y, z ) or 0
+	if stateId == 0 then return nil, "air" end
+	if not MC.BlockMiningProgressPerTick then return nil, "mining_rules_unavailable" end
+	local progress, err, mining, resolvedModifiers = MC.BlockMiningProgressPerTick(
+		stateId, stack, ply, istable( modifiers ) and deepCopy( modifiers ) or nil )
+	if not progress then return nil, err end
+	return progress, nil, deepCopy( mining ), deepCopy( resolvedModifiers )
+end
+
+function Mining.IsCreative( ply )
+	local sv = SV()
+	if not validMiningPlayer( ply ) then return false, "invalid_player" end
+	return sv and sv.PlayerIsCreative and sv.PlayerIsCreative( ply ) == true or false
+end
+
+function Mining.BreakCreative( ply, bx, by, bz )
+	local sv = SV()
+	if not validMiningPlayer( ply ) then return false, "invalid_player" end
+	if not sv or not sv.Break then return false, "mining_api_unavailable" end
+	if not ( sv.PlayerIsCreative and sv.PlayerIsCreative( ply ) ) then return false, "not_creative" end
+	local x, y, z = cellCoords( bx, by, bz )
+	if not x then return false, "invalid_cell" end
+	if sv.CancelMining then sv.CancelMining( ply, "creative_break" ) end
+	return sv.Break( ply, x, y, z, { damageTool = false } )
+end
+
 ----------------------------------------------------------------- API.Inventory
 API.Inventory = API.Inventory or {}
 local Inventory = API.Inventory
@@ -278,6 +382,17 @@ function Inventory.GetSlot( ply, slot )
 	return deepCopy( sv.GetPlayerInventoryStack( ply, slot ) )
 end
 
+function Inventory.GetSelected( ply )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return nil, nil, "invalid_player" end
+	if not sv or not sv.GetPlayerInventoryRecord or not sv.GetSelectedPlayerStack then
+		return nil, nil, "inventory_api_unavailable"
+	end
+	local record = sv.GetPlayerInventoryRecord( ply, false )
+	if not record then return nil, nil, "inventory_not_loaded" end
+	return deepCopy( sv.GetSelectedPlayerStack( ply ) ), record.selected
+end
+
 function Inventory.Give( ply, item, count, components, damage )
 	local sv = SV()
 	if not validInventoryPlayer( ply ) then return 0, nil, "invalid_player" end
@@ -302,6 +417,27 @@ function Inventory.Select( ply, slot )
 	if not validInventoryPlayer( ply ) then return false, "invalid_player" end
 	if not sv or not sv.SetPlayerSelectedSlot then return false, "inventory_api_unavailable" end
 	return sv.SetPlayerSelectedSlot( ply, slot, { reason = "api_select" } )
+end
+
+function Inventory.DamageSelected( ply, amount, context )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return nil, false, "invalid_player" end
+	if not sv or not sv.DamageSelectedItem then return nil, false, "inventory_api_unavailable" end
+	local result, broken, err = sv.DamageSelectedItem( ply, amount, deepCopy( context or {} ) )
+	return deepCopy( result ), broken == true, err
+end
+
+function Inventory.ConsumeSelected( ply, amount, replacement, context )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return nil, 0, nil, false, "invalid_player" end
+	if not sv or not sv.ConsumeSelectedItem then return nil, 0, nil, false, "inventory_api_unavailable" end
+	local result, consumed, overflow, infinite, err = sv.ConsumeSelectedItem(
+		ply,
+		amount,
+		deepCopy( replacement ),
+		deepCopy( context or {} )
+	)
+	return deepCopy( result ), consumed, deepCopy( overflow ), infinite == true, err
 end
 
 function Inventory.Open( ply )

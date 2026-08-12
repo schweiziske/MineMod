@@ -99,6 +99,7 @@ local SHARED = {
 	"mc/redstone/sh_piston.lua",
 	"mc/sh_multiblock.lua",
 	"mc/api/sh_api.lua",
+	"mc/integration/sh_hand_weapon_bridge.lua",
 }
 local SERVER_FILES = {
 	"mc/sv_world.lua",
@@ -133,9 +134,13 @@ local SERVER_FILES = {
 	"mc/sv_presets.lua",
 	"mc/sv_block_cluster.lua",
 	"mc/sv_damage.lua",
+	"mc/explosion/sv_java_rays.lua",
+	"mc/explosion/sv_trigger_handlers.lua",
+	"mc/explosion/sv_trigger_explosion.lua",
 	"mc/sv_lighting.lua",
 	"mc/sv_player.lua",
 	"mc/inventory/sv_player_inventory.lua",
+	"mc/inventory/sv_selected_mutation.lua",
 	"mc/inventory/sv_equipment.lua",
 	"mc/inventory/sv_item_durability.lua",
 	"mc/inventory/sv_item_use.lua",
@@ -150,9 +155,11 @@ local SERVER_FILES = {
 	"mc/inventory/sv_crafting.lua",
 	"mc/inventory/sv_network.lua",
 	"mc/api/sv_api.lua",
+	"mc/integration/sv_hand_weapon_bridge.lua",
 }
 local CLIENT_FILES = {
 	"mc/mining/cl_mining.lua",
+	"mc/mining/cl_hand_swing.lua",
 	"mc/cl_lighting.lua",
 	"mc/render/cl_mesh_cache.lua",
 	"mc/render/cl_mesh_constants.lua",
@@ -200,6 +207,7 @@ local CLIENT_FILES = {
 	"mc/cl_light_bench.lua",
 	"mc/cl_player.lua",
 	"mc/inventory/cl_state.lua",
+	"mc/integration/cl_hand_weapon_bridge.lua",
 	"mc/inventory/cl_network.lua",
 	"mc/inventory/cl_furnaces.lua",
 	"mc/inventory/ui/cl_theme.lua",

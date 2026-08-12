@@ -58,7 +58,7 @@ local function changedStackMap( container, changedSlots )
 	return changed
 end
 
-local function updateHeldNetwork( record )
+local function updateHeldNetwork( record, context )
 	local ply = record and record.owner
 	if not IsValid( ply ) then return end
 	local selected = math.Clamp( math.floor( tonumber( record.selected ) or 0 ), 0, 8 )
@@ -70,6 +70,9 @@ local function updateHeldNetwork( record )
 	ply:SetNWInt( "mc_selected_item_damage", stack and stack.damage or 0 )
 	ply:SetNWInt( "mc_selected_item_runtime", definition and definition.runtimeId or 0 )
 	ply:SetNWInt( "mc_selected_block", definition and definition.blockId or 0 )
+	if MC.RunEvent then
+		MC.RunEvent( "MC.PlayerHeldItemChanged", ply, selected, MC.CopyItemStack( stack ), context or {} )
+	end
 end
 
 SV.UpdatePlayerHeldNetwork = updateHeldNetwork
@@ -81,7 +84,7 @@ local function onContainerCommit( record, container, result, context )
 	for _, index in ipairs( result.changedSlots or {} ) do
 		if index == record.selected then selectedChanged = true break end
 	end
-	if selectedChanged then updateHeldNetwork( record ) end
+	if selectedChanged then updateHeldNetwork( record, context ) end
 	if type( SV.PublishPlayerInventoryCommit ) == "function" then
 		SV.PublishPlayerInventoryCommit( record, result, context or {} )
 	end
@@ -245,7 +248,7 @@ function SV.LoadPlayerInventory( ply )
 	local record, err = readRecord( ply )
 	if not record then return nil, err end
 	SV.PlayerInventories[ply] = record
-	updateHeldNetwork( record )
+	updateHeldNetwork( record, { reason = "inventory_load" } )
 	if SV.UpdatePlayerEquipmentNetwork then SV.UpdatePlayerEquipmentNetwork( record ) end
 	return record
 end
@@ -295,7 +298,7 @@ function SV.SetPlayerSelectedSlot( ply, selected, context )
 	record.selected = selected
 	record.lastAttackAt = CurTime and CurTime() or record.lastAttackAt
 	record.dirty = true
-	updateHeldNetwork( record )
+	updateHeldNetwork( record, context or { reason = "selected" } )
 	if type( SV.PublishPlayerInventorySelection ) == "function" then
 		SV.PublishPlayerInventorySelection( record, context or {} )
 	end

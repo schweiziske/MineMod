@@ -1,5 +1,6 @@
 -- Server-owned survival mining sessions. One 20 TPS pass touches only players
--- who are actively mining; the world is never scanned.
+-- who are actively mining; the world is never scanned. Internal mc_item_hand
+-- sessions and external MC.API.Mining sessions use the same authoritative path.
 
 if not SERVER then return end
 
@@ -9,6 +10,35 @@ MC.SV = MC.SV or {}
 local SV = MC.SV
 local TICK_INTERVAL = 1 / 20
 SV.MiningSessions = SV.MiningSessions or {}
+
+local function safeCall( callback, ... )
+	if not isfunction( callback ) then return end
+	local ok, err = pcall( callback, ... )
+	if not ok then ErrorNoHalt( "[MC Mining] callback failed: " .. tostring( err ) .. "\n" ) end
+end
+
+local function copyStack( stack )
+	if type( stack ) ~= "table" then return nil end
+	if MC.CopyItemStack then return MC.CopyItemStack( stack ) end
+	return table.Copy( stack )
+end
+
+local function publicSession( session )
+	if not session then return nil end
+	return {
+		bx = session.bx, by = session.by, bz = session.bz,
+		stateId = session.stateId,
+		blockId = session.blockId,
+		progress = session.progress,
+		stage = session.stage,
+		startedAt = session.startedAt,
+		source = session.source,
+		sourceId = session.sourceId,
+		item = session.toolStack and session.toolStack.item or nil,
+		weapon = IsValid( session.weapon ) and session.weapon or nil,
+		mining = session.lastMining and table.Copy( session.lastMining ) or nil,
+	}
+end
 
 local function sendStage( ply, session, stage )
 	if not session then return end
@@ -31,12 +61,26 @@ local function selectedFingerprint( ply )
 	return table.concat( { tostring( selected ), stack.item, tostring( stack.damage or 0 ), components }, "\0" )
 end
 
-local function handProgressPerTick( blockId )
-	local hardness = MC.BlockHardness and MC.BlockHardness( blockId ) or 1
-	if hardness < 0 then return nil, "unbreakable" end
-	if hardness == 0 then return 1 end
-	local divisor = MC.BlockRequiresCorrectTool and MC.BlockRequiresCorrectTool( blockId ) and 100 or 30
-	return 1 / hardness / divisor
+local function normalizeExternalOptions( options )
+	if type( options ) ~= "table" or options.external ~= true then return nil end
+	local stack = copyStack( options.toolStack )
+	if not stack and isstring( options.item ) and options.item ~= "" then
+		local item = string.find( options.item, ":", 1, true ) and options.item or "minecraft:" .. options.item
+		stack = { item = item, count = 1 }
+	end
+	return {
+		toolStack = stack,
+		weapon = IsValid( options.weapon ) and options.weapon or nil,
+		sourceId = tostring( options.sourceId or "external" ),
+		sourceToken = tostring( options.sourceToken or ( IsValid( options.weapon ) and options.weapon:EntIndex() or "external" ) ),
+		requireAttackHeld = options.requireAttackHeld ~= false,
+		requireAim = options.requireAim ~= false,
+		modifiers = type( options.modifiers ) == "table" and table.Copy( options.modifiers ) or nil,
+		onCancel = isfunction( options.onCancel ) and options.onCancel or nil,
+		onComplete = isfunction( options.onComplete ) and options.onComplete or nil,
+		onDurabilityDamage = isfunction( options.onDurabilityDamage ) and options.onDurabilityDamage or nil,
+		validate = isfunction( options.validate ) and options.validate or nil,
+	}
 end
 
 function SV.CancelMining( ply, reason )
@@ -44,8 +88,14 @@ function SV.CancelMining( ply, reason )
 	if not session then return false end
 	SV.MiningSessions[ply] = nil
 	sendStage( ply, session, nil )
-	if MC.RunEvent then MC.RunEvent( "MC.PlayerMiningCancelled", ply, session, reason or "cancelled" ) end
+	local snapshot = publicSession( session )
+	safeCall( session.onCancel, ply, snapshot, reason or "cancelled" )
+	if MC.RunEvent then MC.RunEvent( "MC.PlayerMiningCancelled", ply, snapshot, reason or "cancelled" ) end
 	return true
+end
+
+function SV.GetMiningSession( ply )
+	return publicSession( SV.MiningSessions[ply] )
 end
 
 local function spawnBlockDrops( ply, session, stacks )
@@ -60,12 +110,33 @@ local function spawnBlockDrops( ply, session, stacks )
 	return entities
 end
 
+local function damageMiningTool( ply, session, oldStateId )
+	local hardness = MC.BlockHardness and MC.BlockHardness( session.blockId ) or 1
+	if hardness == 0 then return 0 end
+	local mining = session.lastMining or ( MC.BlockMiningToolSpec and MC.BlockMiningToolSpec( oldStateId, session.toolStack ) )
+	local damage = mining and mining.held
+		and math.max( 0, math.floor( tonumber( mining.held.damagePerBlock ) or 0 ) ) or 0
+	if damage <= 0 then return 0 end
+	if session.source == "inventory" then
+		if SV.DamageSelectedItem then SV.DamageSelectedItem( ply, 1, { reason = "mine", useToolScale = true } ) end
+	else
+		safeCall( session.onDurabilityDamage, ply, damage, {
+			reason = "mine",
+			bx = session.bx, by = session.by, bz = session.bz,
+			stateId = oldStateId,
+			item = session.toolStack and session.toolStack.item or nil,
+			weapon = session.weapon,
+			mining = mining and table.Copy( mining ) or nil,
+		} )
+	end
+	return damage
+end
+
 local function completeMining( ply, session )
 	local oldStateId = MC.GetBlockState and MC.GetBlockState( session.bx, session.by, session.bz ) or 0
-	local toolStack = SV.GetSelectedPlayerStack and SV.GetSelectedPlayerStack( ply ) or nil
 	local stacks, dropError = {}, "block_loot_unavailable"
 	if SV.ResolveBlockDrops then
-		stacks, dropError = SV.ResolveBlockDrops( oldStateId, toolStack, {
+		stacks, dropError = SV.ResolveBlockDrops( oldStateId, session.toolStack, {
 			player = ply,
 			bx = session.bx, by = session.by, bz = session.bz,
 		} )
@@ -78,24 +149,52 @@ local function completeMining( ply, session )
 	SV.MiningSessions[ply] = nil
 	sendStage( ply, session, nil )
 	local drops = spawnBlockDrops( ply, session, stacks )
-	if MC.RunEvent then MC.RunEvent( "MC.PlayerMinedBlock", ply, session.bx, session.by, session.bz, oldStateId, drops, result, dropError ) end
+	local durabilityDamage = damageMiningTool( ply, session, oldStateId )
+	local snapshot = publicSession( session )
+	local completion = {
+		oldStateId = oldStateId,
+		drops = drops,
+		transaction = result,
+		dropError = dropError,
+		durabilityDamage = durabilityDamage,
+	}
+	safeCall( session.onComplete, ply, snapshot, completion )
+	if MC.RunEvent then
+		MC.RunEvent( "MC.PlayerMinedBlock", ply, session.bx, session.by, session.bz,
+			oldStateId, drops, result, dropError, snapshot, durabilityDamage )
+	end
 	return true
 end
 
-function SV.BeginMining( ply, bx, by, bz )
+function SV.BeginMining( ply, bx, by, bz, options )
 	if not IsValid( ply ) or not ply:IsPlayer() or not ply:Alive() then return false, "invalid_player" end
 	if SV.PlayerIsCreative and SV.PlayerIsCreative( ply ) then return false, "creative_mode" end
 	bx, by, bz = math.floor( tonumber( bx ) or 0 ), math.floor( tonumber( by ) or 0 ), math.floor( tonumber( bz ) or 0 )
 	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
 	if not stateId or stateId == 0 then SV.CancelMining( ply, "air" ) return false, "air" end
 
+	local external = normalizeExternalOptions( options )
+	local source = external and "external" or "inventory"
+	local sourceToken = external and external.sourceToken or "inventory"
 	local existing = SV.MiningSessions[ply]
-	if existing and existing.bx == bx and existing.by == by and existing.bz == bz and existing.stateId == stateId then
-		return true, existing
+	if existing and existing.bx == bx and existing.by == by and existing.bz == bz
+		and existing.stateId == stateId and existing.source == source and existing.sourceToken == sourceToken then
+		return true, publicSession( existing )
 	end
 	if existing then SV.CancelMining( ply, "target_changed" ) end
+
 	local blockId = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or MC.GetBlock( bx, by, bz )
-	local progressPerTick, progressError = handProgressPerTick( blockId )
+	local progressPerTick, progressError, mining
+	if MC.BlockMiningProgressPerTick then
+		progressPerTick, progressError, mining = MC.BlockMiningProgressPerTick(
+			stateId,
+			external and external.toolStack or ( SV.GetSelectedPlayerStack and SV.GetSelectedPlayerStack( ply ) or nil ),
+			ply,
+			external and external.modifiers or nil
+		)
+	else
+		progressError = "mining_rules_unavailable"
+	end
 	if not progressPerTick then return false, progressError end
 	local plan, validationError
 	if SV.ValidateBreakTarget then
@@ -104,35 +203,72 @@ function SV.BeginMining( ply, bx, by, bz )
 		validationError = "break_validation_unavailable"
 	end
 	if not plan then return false, validationError end
-	local fingerprint, fingerprintError = selectedFingerprint( ply )
-	if not fingerprint then return false, fingerprintError end
+
+	local fingerprint
+	local toolStack
+	if external then
+		toolStack = external.toolStack
+	else
+		fingerprint, validationError = selectedFingerprint( ply )
+		if not fingerprint then return false, validationError end
+		toolStack = copyStack( SV.GetSelectedPlayerStack and SV.GetSelectedPlayerStack( ply ) or nil )
+	end
 
 	local session = {
 		bx = bx, by = by, bz = bz,
 		stateId = stateId,
 		blockId = blockId,
 		progress = 0,
-		progressPerTick = progressPerTick,
 		stage = -1,
 		selectedFingerprint = fingerprint,
+		toolStack = toolStack,
 		startedAt = CurTime(),
+		source = source,
+		sourceId = external and external.sourceId or "mc_item_hand",
+		sourceToken = sourceToken,
+		weapon = external and external.weapon or nil,
+		requireAttackHeld = not external or external.requireAttackHeld,
+		requireAim = not external or external.requireAim,
+		modifiers = external and external.modifiers or nil,
+		onCancel = external and external.onCancel or nil,
+		onComplete = external and external.onComplete or nil,
+		onDurabilityDamage = external and external.onDurabilityDamage or nil,
+		validate = external and external.validate or nil,
+		lastMining = mining,
 	}
 	SV.MiningSessions[ply] = session
-	if MC.RunEvent then MC.RunEvent( "MC.PlayerMiningStarted", ply, session ) end
-	return true, session
+	local snapshot = publicSession( session )
+	if MC.RunEvent then MC.RunEvent( "MC.PlayerMiningStarted", ply, snapshot ) end
+	if progressPerTick >= 1 then
+		session.progress = 1
+		session.lastMining = mining
+		completeMining( ply, session )
+	end
+	return true, snapshot
 end
 
 local function sessionStillValid( ply, session )
 	if not IsValid( ply ) or not ply:Alive() or ply:InVehicle() then return false, "player_invalid" end
 	if SV.PlayerIsCreative and SV.PlayerIsCreative( ply ) then return false, "creative_mode" end
-	if not ply:KeyDown( IN_ATTACK ) then return false, "released" end
+	if session.requireAttackHeld and not ply:KeyDown( IN_ATTACK ) then return false, "released" end
 	local weapon = ply:GetActiveWeapon()
-	if not IsValid( weapon ) or weapon:GetClass() ~= "mc_item_hand" then return false, "weapon_changed" end
+	if session.source == "inventory" then
+		if not IsValid( weapon ) or weapon:GetClass() ~= "mc_item_hand" then return false, "weapon_changed" end
+		local fingerprint, fingerprintError = selectedFingerprint( ply )
+		if not fingerprint or fingerprint ~= session.selectedFingerprint then return false, fingerprintError or "held_item_changed" end
+	else
+		if not IsValid( session.weapon ) or weapon ~= session.weapon then return false, "weapon_changed" end
+		if session.validate then
+			local ok, allowed, reason = pcall( session.validate, ply, publicSession( session ) )
+			if not ok then return false, "external_validation_error" end
+			if allowed == false then return false, tostring( reason or "external_cancel" ) end
+		end
+	end
 	if MC.GetBlockState( session.bx, session.by, session.bz ) ~= session.stateId then return false, "block_changed" end
-	local aim = MC.PlayerBlockAim and MC.PlayerBlockAim( ply ) or nil
-	if not aim or aim.bx ~= session.bx or aim.by ~= session.by or aim.bz ~= session.bz then return false, "aim_changed" end
-	local fingerprint, fingerprintError = selectedFingerprint( ply )
-	if not fingerprint or fingerprint ~= session.selectedFingerprint then return false, fingerprintError or "held_item_changed" end
+	if session.requireAim then
+		local aim = MC.PlayerBlockAim and MC.PlayerBlockAim( ply ) or nil
+		if not aim or aim.bx ~= session.bx or aim.by ~= session.by or aim.bz ~= session.bz then return false, "aim_changed" end
+	end
 	local reach = MC.CurrentReach and MC.CurrentReach() or ( MC.BS or 36.5 ) * 5
 	local eye = MC.EntityEyeWorldPos and MC.EntityEyeWorldPos( ply ) or ply:EyePos()
 	if reach > 0 and not MC.ReachAllowsEye( eye, session.bx, session.by, session.bz, reach ) then return false, "out_of_reach" end
@@ -145,13 +281,20 @@ timer.Create( "mc_survival_mining_tick", TICK_INTERVAL, 0, function()
 		if not valid then
 			SV.CancelMining( ply, reason )
 		else
-			session.progress = math.min( 1, session.progress + session.progressPerTick )
-			local stage = math.Clamp( math.floor( session.progress * 10 ), 0, 9 )
-			if stage ~= session.stage then
-				session.stage = stage
-				sendStage( ply, session, stage )
+			local progressPerTick, progressError, mining = MC.BlockMiningProgressPerTick
+				and MC.BlockMiningProgressPerTick( session.stateId, session.toolStack, ply, session.modifiers )
+			if not progressPerTick then
+				SV.CancelMining( ply, progressError or "mining_rules_unavailable" )
+			else
+				session.lastMining = mining
+				session.progress = math.min( 1, session.progress + progressPerTick )
+				local stage = math.Clamp( math.floor( session.progress * 10 ), 0, 9 )
+				if stage ~= session.stage then
+					session.stage = stage
+					sendStage( ply, session, stage )
+				end
+				if session.progress >= 1 then completeMining( ply, session ) end
 			end
-			if session.progress >= 1 then completeMining( ply, session ) end
 		end
 	end
 end )
