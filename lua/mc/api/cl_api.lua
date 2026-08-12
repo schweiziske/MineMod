@@ -151,6 +151,18 @@ function Effects.PlayBlockEffect( kind, bx, by, bz, block, opts )
 	return MC.PlayBlockEffect( kind, id or 0, orient or 0, x, y, z, options )
 end
 
+-- Cached IMaterial showing one block's atlas tile, for addons drawing their own
+-- particles. col/row pick a sub-cell of the tile (Minecraft's break particles
+-- use a 2x2 split); omit them for the whole tile. Returns nil for air/unknown.
+-- The material is shared and cached - never mutate it, and do not free it.
+function Effects.BlockParticleMaterial( block, col, row )
+	if not MC.GetBlockParticleMaterial then return nil, "effects_unavailable" end
+	local stateId, id, _, stateErr = stateAndLegacy( block )
+	if not stateId then return nil, stateErr or "invalid_state" end
+	if not id or id == 0 then return nil, "air" end
+	return MC.GetBlockParticleMaterial( id, col, row )
+end
+
 -------------------------------------------------------------------- API.Light
 API.Light = API.Light or {}
 local Light = API.Light

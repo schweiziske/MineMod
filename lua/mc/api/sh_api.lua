@@ -41,11 +41,53 @@ function MC.RunEvent( name, ... )
 	return result
 end
 
-------------------------------------------------------------------- ready state
+--------------------------------------------------------------------- lifecycle
+-- Two phases. Both replay for late subscribers, so an addon shipped separately
+-- from the engine is immune to Garry's Mod autorun order:
+--   register (MC.APIAvailable) : block/state registries are still OPEN.
+--                                Register content, handlers and resolvers here.
+--   ready    (MC.APIReady)     : registries frozen; the full API is usable.
+--                                Start networking, UI and timers here.
+--
+-- The register phase stays usable across addons only because the registry
+-- freeze runs on a zero-delay timer (sh_block_states.lua), i.e. after every
+-- autorun file in the load tick. Do not make that freeze synchronous.
+--
+-- Canonical bootstrap for a separate addon (covers both load orders, and needs
+-- no redundant OnReloaded/timer retries):
+--   local function boot() ... end
+--   if MC and MC.API and MC.API.OnRegister then MC.API.OnRegister( boot )
+--   else hook.Add( "MC.APIAvailable", "myaddon_boot", boot ) end
+local registerCallbacks = {}
 local readyCallbacks = {}
+
+local function runPhaseCallbacks( queued, phase )
+	for _, cb in ipairs( queued ) do
+		local ok, err = pcall( cb )
+		if not ok then ErrorNoHalt( "[MC] API." .. phase .. " callback error: " .. tostring( err ) .. "\n" ) end
+	end
+end
+
+function API.IsAvailable()
+	return API._available == true
+end
 
 function API.IsReady()
 	return API._ready == true
+end
+
+-- Runs cb immediately if the register phase already happened, otherwise queues
+-- it. Use this (not OnReady) to register blocks, items, handlers and resolvers:
+-- once the registries freeze, registration is rejected.
+function API.OnRegister( cb )
+	if not isfunction( cb ) then return false end
+	if API._available then
+		local ok, err = pcall( cb )
+		if not ok then ErrorNoHalt( "[MC] API.OnRegister callback error: " .. tostring( err ) .. "\n" ) end
+		return true
+	end
+	registerCallbacks[#registerCallbacks + 1] = cb
+	return true
 end
 
 -- Runs cb immediately if the API is ready, otherwise queues it. This is the
@@ -61,6 +103,29 @@ function API.OnReady( cb )
 	return true
 end
 
+-- Engine/API version negotiation for separately shipped addons. Returns false
+-- plus a human readable reason instead of failing halfway through a load.
+function API.Require( minVersion, addonName )
+	local wanted = math.floor( tonumber( minVersion ) or 0 )
+	local label = tostring( addonName or "addon" )
+	if API.VERSION < wanted then
+		local err = label .. " requires MC API v" .. wanted .. ", engine provides v" .. API.VERSION
+		ErrorNoHalt( "[MC] " .. err .. "\n" )
+		return false, err
+	end
+	return true
+end
+
+-- Called once by the loader while the registries are still open.
+function API._FireAvailable()
+	if API._available then return end
+	API._available = true
+	MC.RunEvent( "MC.APIAvailable", API.VERSION )
+	local queued = registerCallbacks
+	registerCallbacks = {}
+	runPhaseCallbacks( queued, "OnRegister" )
+end
+
 -- Called once by the loader after the block/state registries have frozen.
 function API._FireReady()
 	if API._ready then return end
@@ -68,10 +133,7 @@ function API._FireReady()
 	MC.RunEvent( "MC.APIReady", API.VERSION )
 	local queued = readyCallbacks
 	readyCallbacks = {}
-	for _, cb in ipairs( queued ) do
-		local ok, err = pcall( cb )
-		if not ok then ErrorNoHalt( "[MC] API.OnReady callback error: " .. tostring( err ) .. "\n" ) end
-	end
+	runPhaseCallbacks( queued, "OnReady" )
 end
 
 --------------------------------------------------------------------- utilities

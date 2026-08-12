@@ -641,14 +641,38 @@ function Schedule.BlockUpdate( bx, by, bz )
 end
 
 -- Cancel the pending scheduled tick at a cell. The scheduler keeps ONE tick
--- slot per cell with no ownership, so this cancels whoever's tick is there
--- (observers rely on exactly that); returns false when nothing was pending.
+-- slot per cell per update kind with no ownership, so this cancels whoever's
+-- tick is there - minecraft:observer blocks rely on exactly that. It is NOT a
+-- way to detach a Schedule.Observe listener; use Schedule.Unobserve for that.
+-- Returns false when nothing was pending.
 function Schedule.CancelBlockTick( bx, by, bz )
 	local sv = SV()
 	if not sv or not sv.CancelBlockTick then return false, "scheduler_unavailable" end
 	local x, y, z = cellCoords( bx, by, bz )
 	if not x then return false, "invalid_cell" end
 	return sv.CancelBlockTick( x, y, z ) == true
+end
+
+-- Attach behavior to a block WITHOUT taking over its handler slot.
+--
+-- match is a block name ("minecraft:wheat") or a function( stateId, schema ).
+-- definition takes OnScheduledTick / OnNeighborUpdate with the same contract as
+-- a block handler, so an observer may return its own cells/schedule/updates.
+-- The block's own handler runs first; observers follow in registration order.
+--
+-- Use this rather than a broadcast hook: per-block updates run thousands of
+-- times a second under liquids and redstone, so dispatch is filtered by state
+-- and cached. States nobody observes cost one table lookup.
+function Schedule.Observe( key, match, definition )
+	if not MC.RegisterBlockUpdateObserver then return false, "scheduler_unavailable" end
+	local observer, err = MC.RegisterBlockUpdateObserver( key, match, definition )
+	if not observer then return false, err or "invalid_observer" end
+	return true
+end
+
+function Schedule.Unobserve( key )
+	if not MC.UnregisterBlockUpdateObserver then return false, "scheduler_unavailable" end
+	return MC.UnregisterBlockUpdateObserver( key ) == true
 end
 
 -- Pulse a redstone target block or lightning rod at the cell.
