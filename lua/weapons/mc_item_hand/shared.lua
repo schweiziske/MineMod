@@ -644,15 +644,16 @@ if CLIENT then
 			Color( 0, 0, 0, 235 ), aim.StateId )
 	end )
 
-	hook.Add( "PostPlayerDraw", "mc_item_hand_third_person", function( ply )
-		if not IsValid( ply ) or ply == LocalPlayer() or not ply:Alive() then return end
-		drawHeld( ply, false )
-	end )
+	hook.Remove( "PostPlayerDraw", "mc_item_hand_third_person" )
 
 	function SWEP:PreDrawViewModel()
 		return true
 	end
 
-	function SWEP:DrawWorldModel() end
+	function SWEP:DrawWorldModel()
+		local owner = self:GetOwner()
+		if IsValid( owner ) then drawHeld( owner, false ) end
+	end
+
 	function SWEP:DrawWorldModelTranslucent() end
 end
