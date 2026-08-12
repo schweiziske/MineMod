@@ -418,6 +418,12 @@ if CLIENT then
 	local ITEM_PLACE_ANIM_DURATION = 0.30
 	local ITEM_HAND_HEIGHT_RECOVERY = 8
 	local HELD_ITEM_LIGHT_GAIN = 0.48
+	-- Calibrated Source-space view from MC_weapons' item view renderer.
+	local MC_WEAPONS_FP = {
+		forward = 19.5, right = 10.3, up = -7,
+		pitch = -3, yaw = 110, roll = 20,
+		size = 36.5 * 0.5, fov = 70,
+	}
 
 	local function itemHeldAnimationEnabled()
 		local cvar = GetConVar and GetConVar( "mc_creative_held_anim" ) or nil
@@ -541,19 +547,46 @@ if CLIENT then
 
 	local function heldItemPose( ply, firstPerson, hand )
 		local leftHand = hand == "offhand"
-		if firstPerson and MC.CreativeHeldFirstPersonAnchor then
-			local pos, ang = MC.CreativeHeldFirstPersonAnchor( animationWeaponFor( ply, leftHand ), leftHand )
-			return pos - ply:EyeAngles():Up() * 2.5, ang, 9.4
+		if firstPerson then
+			local eyeAng = ply:EyeAngles()
+			local side = leftHand and -1 or 1
+			local weapon = animationWeaponFor( ply, leftHand )
+			local swing = IsValid( weapon ) and weapon:CreativePlaceAnim() or 0
+			local equip = IsValid( weapon ) and weapon:CreativeMainHandInverseHeight() or 0
+			local swingRoot = math.sqrt( math.max( swing, 0 ) )
+			local swingSin = math.sin( swingRoot * math.pi )
+			local swingSin2 = math.sin( swingRoot * math.pi * 2 )
+			local swingSinFull = math.sin( swing * math.pi )
+
+			local pos = EyePos()
+				+ eyeAng:Forward() * MC_WEAPONS_FP.forward
+				+ eyeAng:Right() * ( side * MC_WEAPONS_FP.right )
+				+ eyeAng:Up() * MC_WEAPONS_FP.up
+			pos = pos
+				+ eyeAng:Right() * ( side * -0.4 * swingSin * MC_WEAPONS_FP.size )
+				+ eyeAng:Up() * ( ( -0.6 * equip + 0.2 * swingSin2 ) * MC_WEAPONS_FP.size )
+				+ eyeAng:Forward() * ( 0.2 * swingSinFull * MC_WEAPONS_FP.size )
+			local worldFov = math.Clamp( tonumber( ply:GetFOV() ) or 90, 20, 120 )
+			local fovScale = math.tan( math.rad( worldFov ) * 0.5 )
+				/ math.tan( math.rad( MC_WEAPONS_FP.fov ) * 0.5 )
+			local eyePos = EyePos()
+			local offset = pos - eyePos
+			local depth = offset:Dot( eyeAng:Forward() )
+			pos = eyePos
+				+ eyeAng:Forward() * depth
+				+ eyeAng:Right() * ( offset:Dot( eyeAng:Right() ) * fovScale )
+				+ eyeAng:Up() * ( offset:Dot( eyeAng:Up() ) * fovScale )
+
+			local ang = Angle( eyeAng.p, eyeAng.y, eyeAng.r )
+			ang:RotateAroundAxis( ang:Up(), side * ( 45 - 20 * math.sin( swing * swing * math.pi ) ) )
+			ang:RotateAroundAxis( ang:Forward(), side * swingSin * 20 )
+			ang:RotateAroundAxis( ang:Right(), swingSin * -80 )
+			ang:RotateAroundAxis( ang:Up(), side * -45 )
+			return pos, ang, MC_WEAPONS_FP.size * fovScale
 		end
 		if not firstPerson and MC.CreativeHeldThirdPersonAnchor then
 			local pos, ang = MC.CreativeHeldThirdPersonAnchor( ply, leftHand )
 			return pos, ang, 7.5
-		end
-		if firstPerson then
-			local eyeAng = ply:EyeAngles()
-			local side = leftHand and -1 or 1
-			return EyePos() + eyeAng:Forward() * 11.5 + eyeAng:Right() * ( 12 * side ) - eyeAng:Up() * 10.8,
-				eyeAng, 9.4
 		end
 		local bone = ply:LookupBone( leftHand and "ValveBiped.Bip01_L_Hand" or "ValveBiped.Bip01_R_Hand" )
 		local pos, ang
@@ -628,6 +661,7 @@ if CLIENT then
 			if using and useDuration > 0 and MC.ItemUseProgress then
 				useProgress = MC.ItemUseProgress( useStart, useDuration, CurTime() )
 			end
+			render.OverrideDepthEnable( firstPerson, false )
 			MC.InventoryUI.ItemRenderer.DrawHeldItem( stack, pos, ang, scale,
 				color, {
 					displayContext = firstPerson and ( hand == "offhand" and "firstperson_lefthand" or "firstperson_righthand" )
@@ -637,7 +671,9 @@ if CLIENT then
 					useDuration = useDuration,
 					crossbowPull = useProgress,
 					chargeType = MC.ItemCrossbowChargeType and MC.ItemCrossbowChargeType( stack ) or "none",
+					mcWeaponsView = firstPerson and MC_WEAPONS_FP or nil,
 				} )
+			render.OverrideDepthEnable( false, false )
 		end
 	end
 
