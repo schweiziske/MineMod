@@ -421,6 +421,9 @@ function SV.ClosePlayerInventory( ply, reason, token )
 		net.Send( ply )
 	end
 	record.session = nil
+	if SV.UpdatePlayerHeldNetwork then
+		SV.UpdatePlayerHeldNetwork( record, { reason = "inventory_closed" } )
+	end
 	if type( closeCallback ) == "function" then
 		local called, callbackError = pcall( closeCallback, record, session, reason or "closed" )
 		if not called and ErrorNoHalt then ErrorNoHalt( "[MC Inventory] close callback failed: " .. tostring( callbackError ) .. "\n" ) end

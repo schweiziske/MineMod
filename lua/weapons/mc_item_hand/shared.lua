@@ -236,7 +236,9 @@ function SWEP:PrimaryAttack()
 		if traceCombatTarget( ply, eyeTrace ) then return end
 		local bx, by, bz = breakTarget( ply, aim, eyeTrace )
 		if bx and not creativeMode( ply ) then
-			self:StartCreativePlaceAnimation( bx, by, bz )
+			if MC.HandMiningSwing and MC.HandMiningSwing.Begin then
+				MC.HandMiningSwing.Begin( self, bx, by, bz )
+			end
 			return
 		end
 		if bx and MC.CanPreviewBreak and MC.CanPreviewBreak( ply, bx, by, bz ) and MC.PredictBreakBlock then
@@ -443,6 +445,9 @@ if CLIENT then
 
 	function SWEP:CreativePlaceAnim()
 		if not itemHeldAnimationEnabled() then return 0 end
+		local mining = MC.HandMiningSwing and MC.HandMiningSwing.Progress
+			and MC.HandMiningSwing.Progress( self ) or 0
+		if mining > 0 then return mining end
 		local start = self.MCCreativePlaceAnimStart
 		if not start then return 0 end
 		local progress = ( CurTime() - start ) / ITEM_PLACE_ANIM_DURATION
@@ -628,7 +633,10 @@ if CLIENT then
 		local ply = LocalPlayer()
 		if not IsValid( ply ) or not ply:Alive() then return end
 		local weapon = ply:GetActiveWeapon()
-		if not IsValid( weapon ) or weapon:GetClass() ~= "mc_item_hand" then return end
+		if not IsValid( weapon ) then return end
+		if MC.IsInventoryHeldItemWeaponActive then
+			if not MC.IsInventoryHeldItemWeaponActive( ply ) then return end
+		elseif weapon:GetClass() ~= "mc_item_hand" then return end
 
 		local aim = aimedBlock( ply )
 		if not aim or not MC.DrawBlockOutline then return end

@@ -46,6 +46,109 @@ local function enchantmentLevel( stack, enchantment )
 	return 0
 end
 
+local FLOAT_MAX = 3.402823466e38
+local MINING_MODIFIER_KEYS = {
+	miningEfficiency = true,
+	digSpeedAmplifier = true,
+	miningFatigueAmplifier = true,
+	blockBreakSpeed = true,
+	submergedMiningSpeed = true,
+	eyeInWater = true,
+	onGround = true,
+}
+
+local function mergeMiningModifiers( target, source )
+	if type( source ) ~= "table" then return target end
+	for key in pairs( MINING_MODIFIER_KEYS ) do
+		if source[key] ~= nil then target[key] = source[key] end
+	end
+	return target
+end
+
+local function resolveMiningModifiers( ply, stateId, stack, overrides )
+	local efficiency = enchantmentLevel( stack, "minecraft:efficiency" )
+	local modifiers = {
+		-- data/minecraft/enchantment/efficiency.json:
+		-- levels_squared with added=1, applied to MINING_EFFICIENCY.
+		miningEfficiency = efficiency > 0 and efficiency * efficiency + 1 or 0,
+		digSpeedAmplifier = nil,
+		miningFatigueAmplifier = nil,
+		-- Attributes.java vanilla base values.
+		blockBreakSpeed = 1,
+		submergedMiningSpeed = 0.2,
+		eyeInWater = IsValid( ply ) and ply.WaterLevel and ply:WaterLevel() >= 3 or false,
+		onGround = not IsValid( ply ) or not ply.IsOnGround or ply:IsOnGround(),
+	}
+	if MC.RunEvent then
+		-- Status-effect/attribute addons return a fresh override table here. This
+		-- is the extension point for Haste, Conduit Power, Mining Fatigue and
+		-- Aqua Affinity without coupling mining to one effect implementation.
+		mergeMiningModifiers( modifiers,
+			MC.RunEvent( "MC.PlayerMiningModifiers", ply, stateId, stack, table.Copy( modifiers ) ) )
+	end
+	return mergeMiningModifiers( modifiers, overrides )
+end
+
+local function itemMiningSpeed( mining )
+	local held = mining and mining.held
+	if not held then return 1 end
+	if held.type == "sword" then
+		-- ToolMaterial#applySwordProperties rule order is significant.
+		if mining.block == "minecraft:cobweb" then return 15 end
+		local swordMining = catalog and catalog.swordMining or nil
+		if swordMining and swordMining.instantlyMines and swordMining.instantlyMines[mining.block] then
+			return FLOAT_MAX
+		end
+		if swordMining and swordMining.efficient and swordMining.efficient[mining.block] then return 1.5 end
+		return 1
+	end
+	if mining.requiredType and held.type == mining.requiredType then
+		return tonumber( held.miningSpeed ) or 1
+	end
+	return 1
+end
+
+-- Player#getDestroySpeed(BlockState), kept server-side because status effects,
+-- water state and grounded state are authoritative there.
+function MC.BlockMiningSpeed( stateId, stack, ply, overrides )
+	local mining = MC.BlockMiningToolSpec( stateId, stack )
+	if not mining.block then return nil, "unknown_block" end
+	local speed = itemMiningSpeed( mining )
+	local modifiers = resolveMiningModifiers( ply, stateId, stack, overrides )
+
+	if speed > 1 then speed = speed + math.max( 0, tonumber( modifiers.miningEfficiency ) or 0 ) end
+	local digSpeedAmplifier = tonumber( modifiers.digSpeedAmplifier )
+	if digSpeedAmplifier and digSpeedAmplifier >= 0 then
+		speed = speed * ( 1 + ( math.floor( digSpeedAmplifier ) + 1 ) * 0.2 )
+	end
+	local fatigue = tonumber( modifiers.miningFatigueAmplifier )
+	if fatigue and fatigue >= 0 then
+		fatigue = math.floor( fatigue )
+		local factor = fatigue == 0 and 0.3 or fatigue == 1 and 0.09 or fatigue == 2 and 0.0027 or 0.00081
+		speed = speed * factor
+	end
+	speed = speed * math.max( 0, tonumber( modifiers.blockBreakSpeed ) or 1 )
+	if modifiers.eyeInWater == true then
+		speed = speed * math.max( 0, tonumber( modifiers.submergedMiningSpeed ) or 0.2 )
+	end
+	if modifiers.onGround == false then speed = speed / 5 end
+	return speed, nil, mining, modifiers
+end
+
+-- BlockBehaviour#getDestroyProgress: getDestroySpeed / hardness /
+-- (hasCorrectToolForDrops ? 30 : 100). One call is one Minecraft tick.
+function MC.BlockMiningProgressPerTick( stateId, stack, ply, overrides )
+	local blockName, blockId = blockNameForState( stateId )
+	if not blockName or not blockId then return nil, "unknown_block" end
+	local hardness = MC.BlockHardness and MC.BlockHardness( blockId ) or 1
+	if hardness < 0 then return nil, "unbreakable" end
+	local speed, speedError, mining, modifiers = MC.BlockMiningSpeed( stateId, stack, ply, overrides )
+	if not speed then return nil, speedError end
+	if hardness == 0 then return 1, nil, mining, modifiers end
+	local divisor = mining.correctForDrops and 30 or 100
+	return speed / hardness / divisor, nil, mining, modifiers
+end
+
 function MC.BlockMiningToolSpec( stateId, stack )
 	local blockName, blockId = blockNameForState( stateId )
 	local heldTool = MC.ItemToolSpec and MC.ItemToolSpec( stack ) or nil

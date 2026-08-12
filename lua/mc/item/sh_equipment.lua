@@ -169,6 +169,9 @@ function MC.ItemToolSpec( stackOrDefinition )
 		attackDamage = 1 + damageBaseline + material.attackBonus,
 		attackSpeed = math.max( 0.1, 4 + speedModifier ),
 		damagePerAttack = tonumber( baseline.damagePerAttack ) or ( toolType == "sword" and 1 or 2 ),
+		-- ToolMaterial#applySwordProperties constructs Tool(..., damagePerBlock=2);
+		-- ordinary tool properties use damagePerBlock=1.
+		damagePerBlock = toolType == "sword" and 2 or 1,
 		disableBlockingSeconds = toolType == "axe" and 5 or 0,
 	}
 end

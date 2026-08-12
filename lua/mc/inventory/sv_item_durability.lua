@@ -20,10 +20,10 @@ function SV.DamageSelectedItem( ply, amount, context )
 	context = context or {}
 	amount = math.floor( tonumber( amount ) or 0 )
 	if amount <= 0 or not IsValid( ply ) then return nil, false, "invalid_durability_amount" end
-	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply, false ) or nil
-	if not record or not record.container then return nil, false, "inventory_not_loaded" end
+	local record, matchedSlotIndex, matchedStack, matchError = SV.SelectedStackMatches( ply, context )
+	if not record then return nil, false, matchError end
 	local slotIndex, slot = selectedSlot( record )
-	local stack = slot and MC.InventorySlotGet( slot ) or nil
+	local stack = matchedSlotIndex == slotIndex and matchedStack or slot and MC.InventorySlotGet( slot ) or nil
 	local definition = stack and MC.GetItem( stack.item ) or nil
 	local maxDamage = tonumber( definition and definition.maxDamage ) or 0
 	if not stack or not definition or maxDamage <= 0 or MC.ItemIsUnbreakable( stack ) then
