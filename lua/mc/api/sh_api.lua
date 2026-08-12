@@ -773,6 +773,77 @@ function DayCycle.SetTicks( ticks )
 	return true
 end
 
+-------------------------------------------------------------------- API.Config
+-- Lets an external addon put its own ConVars into the in-game MC settings menu
+-- instead of asking players to type console commands. The menu data itself is
+-- plain metadata (see mc/sh_config_ui.lua); these entry points only validate and
+-- append, so registering twice with the same category id is a no-op.
+--
+--   scope    "client" | "server" (server entries are admin-only and networked)
+--   group    { id, label, zhLabel }
+--   category { id, group, label, zhLabel, description, descriptionZH, items = {
+--                { name = "cvar_name", label, labelZH, kind = "bool|number|choice|string",
+--                  help, helpZH, unit, choices = { { value, label, labelZH }, ... } }, ... } }
+API.Config = API.Config or {}
+local Config = API.Config
+
+local function configScope( scope )
+	if scope ~= "client" and scope ~= "server" then return nil end
+	if not istable( MC.ConfigConVars ) or not istable( MC.ConfigGroups ) then return nil end
+	MC.ConfigConVars[scope] = MC.ConfigConVars[scope] or {}
+	MC.ConfigGroups[scope] = MC.ConfigGroups[scope] or {}
+	return scope
+end
+
+function Config.HasGroup( scope, id )
+	if not configScope( scope ) then return false end
+	for _, group in ipairs( MC.ConfigGroups[scope] ) do
+		if group.id == id then return true end
+	end
+	return false
+end
+
+function Config.HasCategory( scope, id )
+	if not configScope( scope ) then return false end
+	for _, category in ipairs( MC.ConfigConVars[scope] ) do
+		if category.id == id then return true end
+	end
+	return false
+end
+
+function Config.RegisterGroup( scope, group )
+	if not configScope( scope ) then return false, "config_ui_unavailable" end
+	if not istable( group ) or not isstring( group.id ) or group.id == "" then return false, "invalid_group" end
+	if Config.HasGroup( scope, group.id ) then return true end
+	table.insert( MC.ConfigGroups[scope], {
+		id = group.id,
+		label = tostring( group.label or group.id ),
+		zhLabel = tostring( group.zhLabel or group.label or group.id ),
+	} )
+	return true
+end
+
+function Config.RegisterCategory( scope, category )
+	if not configScope( scope ) then return false, "config_ui_unavailable" end
+	if not istable( category ) or not isstring( category.id ) or category.id == "" then
+		return false, "invalid_category"
+	end
+	if not istable( category.items ) or #category.items == 0 then return false, "invalid_items" end
+	if Config.HasCategory( scope, category.id ) then return true end
+
+	local entry = deepCopy( category )
+	entry.scope = scope
+	for _, item in ipairs( entry.items ) do
+		if not isstring( item.name ) or item.name == "" then return false, "invalid_item" end
+		item.category = entry.id
+		item.scope = scope
+		item.kind = item.kind or "number"
+	end
+
+	table.insert( MC.ConfigConVars[scope], entry )
+	return true
+end
+
 -------------------------------------------------------------------- API.Events
 -- Documentation of every event the core fires (hook.Run). Listen with
 -- hook.Add( name, id, fn ). "veto" events deny the action when a listener
