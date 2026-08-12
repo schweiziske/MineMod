@@ -32,7 +32,6 @@ local SHARED = {
 	"mc/generated/sh_generated_state_collision_families.lua",
 	"mc/generated/sh_generated_sound_types.lua",
 	"mc/generated/sh_generated_lang.lua",
-	"mc/functional/sh_furnace.lua",
 	"mc/functional/sh_doors.lua",
 	"mc/functional/sh_trapdoors.lua",
 	"mc/functional/sh_fence_gates.lua",
@@ -44,31 +43,9 @@ local SHARED = {
 	"mc/liquid/sh_movement.lua",
 	"mc/custom/sh_custom_blocks.lua",
 	"mc/sh_blocks.lua",
-	"mc/item/sh_registry.lua",
-	"mc/generated/sh_generated_items.lua",
-	"mc/item/sh_model_registry.lua",
-	"mc/generated/sh_generated_item_models.lua",
-	"mc/generated/sh_generated_creative_tabs.lua",
-	"mc/item/sh_stack.lua",
-	"mc/item/sh_definition.lua",
-	"mc/item/sh_behavior.lua",
-	"mc/item/sh_equipment.lua",
-	"mc/item/sh_projectile_defs.lua",
-	"mc/item/sh_codec.lua",
-	"mc/recipe/sh_registry.lua",
-	"mc/generated/sh_generated_recipes.lua",
-	"mc/recipe/sh_book.lua",
-	"mc/inventory/sh_slot.lua",
-	"mc/inventory/sh_container.lua",
-	"mc/inventory/sh_click.lua",
-	"mc/inventory/sh_crafting.lua",
 	"mc/generated/sh_generated_mcswep_blocks.lua",
 	"mc/sh_block_states.lua",
 	"mc/block_entity/sh_registry.lua",
-	"mc/functional/sh_furnace_data.lua",
-	"mc/functional/sh_chest_data.lua",
-	"mc/functional/sh_chests.lua",
-	"mc/functional/sh_crafting.lua",
 	"mc/block_update/sh_registry.lua",
 	"mc/state/sh_project_block_state_schemas.lua",
 	"mc/state/sh_state_collision.lua",
@@ -139,27 +116,10 @@ local SERVER_FILES = {
 	"mc/explosion/sv_trigger_explosion.lua",
 	"mc/sv_lighting.lua",
 	"mc/sv_player.lua",
-	"mc/inventory/sv_player_inventory.lua",
-	"mc/inventory/sv_selected_mutation.lua",
-	"mc/inventory/sv_equipment.lua",
-	"mc/inventory/sv_item_durability.lua",
-	"mc/inventory/sv_item_use.lua",
-	"mc/inventory/sv_item_drops.lua",
-	"mc/generated/sv_generated_block_loot.lua",
-	"mc/mining/sv_block_loot.lua",
-	"mc/mining/sv_mining.lua",
-	"mc/inventory/sv_projectiles.lua",
-	"mc/inventory/sv_combat.lua",
-	"mc/inventory/sv_furnaces.lua",
-	"mc/inventory/sv_chests.lua",
-	"mc/inventory/sv_crafting.lua",
-	"mc/inventory/sv_network.lua",
 	"mc/api/sv_api.lua",
 	"mc/integration/sv_hand_weapon_bridge.lua",
 }
 local CLIENT_FILES = {
-	"mc/mining/cl_mining.lua",
-	"mc/mining/cl_hand_swing.lua",
 	"mc/cl_lighting.lua",
 	"mc/render/cl_mesh_cache.lua",
 	"mc/render/cl_mesh_constants.lua",
@@ -188,7 +148,6 @@ local CLIENT_FILES = {
 	"mc/render/cl_mesh_bloom.lua",
 	"mc/render/cl_dirty.lua",
 	"mc/cl_render.lua",
-	"mc/functional/cl_chests.lua",
 	"mc/functional/cl_signs.lua",
 	"mc/functional/cl_banners.lua",
 	"mc/cl_config_ui.lua",
@@ -206,20 +165,7 @@ local CLIENT_FILES = {
 	"mc/debug/cl_gallery.lua",
 	"mc/cl_light_bench.lua",
 	"mc/cl_player.lua",
-	"mc/inventory/cl_state.lua",
 	"mc/integration/cl_hand_weapon_bridge.lua",
-	"mc/inventory/cl_network.lua",
-	"mc/inventory/cl_furnaces.lua",
-	"mc/inventory/ui/cl_theme.lua",
-	"mc/item/cl_model_resolver.lua",
-	"mc/inventory/ui/cl_entry.lua",
-	"mc/inventory/ui/cl_item_renderer.lua",
-	"mc/inventory/ui/cl_tooltip.lua",
-	"mc/inventory/ui/cl_slot.lua",
-	"mc/inventory/ui/cl_drag.lua",
-	"mc/inventory/ui/cl_recipe_book.lua",
-	"mc/inventory/ui/cl_inventory_screen.lua",
-	"mc/inventory/ui/cl_hotbar.lua",
 	"mc/render/cl_native_mesh_backend.lua",
 	"mc/api/cl_api.lua",
 }
@@ -259,6 +205,11 @@ if SERVER then
 	for _, f in ipairs( SHARED ) do AddCSLuaFile( f ) end
 	for _, f in ipairs( CLIENT_FILES ) do AddCSLuaFile( f ) end
 	if resource and resource.AddFile then
+		-- Engine assets only: anything the world still needs when no game layer
+		-- is installed. Item icons, container GUI, HUD, mining cracks and their
+		-- sounds ship with mcgame_load.lua instead. sound/mc/random stays here
+		-- because it mixes block-break and engine-UI clips; the game layer may
+		-- reference engine assets, never the other way round.
 		for _, fileName in ipairs( {
 			"materials/mc/atlas_365.png",
 			"materials/mc/atlas_365.vmt",
@@ -268,37 +219,21 @@ if SERVER then
 			"materials/mc/atlas_365_programmer_art.vmt",
 			"materials/mc/atlas_365_programmer_art_translucent.png",
 			"materials/mc/atlas_365_programmer_art_translucent.vmt",
-			"materials/mc/gui/recipe_book.png",
 		} ) do
 			resource.AddFile( fileName )
-		end
-		for _, fileName in ipairs( file.Find( "materials/mc/item/*.png", "GAME" ) or {} ) do
-			resource.AddFile( "materials/mc/item/" .. fileName )
 		end
 		for _, fileName in ipairs( file.Find( "materials/mc/font/*.png", "GAME" ) or {} ) do
 			resource.AddFile( "materials/mc/font/" .. fileName )
 		end
-		for _, fileName in ipairs( file.Find( "materials/mc/block/destroy_stage_*.png", "GAME" ) or {} ) do
-			resource.AddFile( "materials/mc/block/" .. fileName )
-		end
 		for _, resourceRoot in ipairs( {
 			"materials/mc/entity/chest",
 			"materials/mc/entity/banner",
-			"materials/mc/gui/container",
-			"materials/mc/gui/container/creative_inventory",
-			"materials/mc/gui/hud",
-			"materials/mc/gui/sprites/container",
-			"materials/mc/gui/sprites/container/furnace",
-			"materials/mc/gui/sprites/container/creative_inventory",
-			"materials/mc/gui/sprites/recipe_book",
 		} ) do
 			for _, fileName in ipairs( file.Find( resourceRoot .. "/*.png", "GAME" ) or {} ) do
 				resource.AddFile( resourceRoot .. "/" .. fileName )
 			end
 		end
 		for _, resourceRoot in ipairs( {
-			"sound/mc/block/chest",
-			"sound/mc/item/book",
 			"sound/mc/random",
 		} ) do
 			for _, fileName in ipairs( file.Find( resourceRoot .. "/*.ogg", "GAME" ) or {} ) do
@@ -547,11 +482,13 @@ function MC.GeneratedRuntimeDiagnostics()
 	}
 end
 
--- Public API lifecycle. MC.APIAvailable fires synchronously while the block/
+-- Public API lifecycle. The register phase fires synchronously while the block/
 -- state registries are still open (external addons register custom content
 -- here). The freeze happens on the zero-delay timers scheduled during include
 -- (sh_block_states.lua), so queuing the ready signal now runs it after them.
-if MC.RunEvent then MC.RunEvent( "MC.APIAvailable", MC.API and MC.API.VERSION or 0 ) end
+-- Both phases replay for late subscribers via API.OnRegister / API.OnReady,
+-- which is what makes a separately shipped addon immune to autorun order.
+if MC.API and MC.API._FireAvailable then MC.API._FireAvailable() end
 if MC.API and MC.API._FireReady then timer.Simple( 0, MC.API._FireReady ) end
 
 MsgN( "[MC] Voxel block addon loaded (" .. ( SERVER and "server" or "client" ) .. ")" )

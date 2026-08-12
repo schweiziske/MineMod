@@ -97,7 +97,7 @@ local function enqueueReady( bx, by, bz, kind, depth, revision, expectedStateId,
 	if not updatesEnabled() then return false, "block_updates_disabled" end
 	kind = math.floor( tonumber( kind ) or 0 )
 	if not MC.IsBlockUpdateKind or not MC.IsBlockUpdateKind( kind ) then return false, "invalid_update_kind" end
-	if MC.HasBlockUpdateHandlers and not MC.HasBlockUpdateHandlers( kind ) then return false, "no_update_handlers" end
+	if MC.HasBlockUpdateListeners and not MC.HasBlockUpdateListeners( kind ) then return false, "no_update_handlers" end
 	depth = math.max( 0, math.floor( tonumber( depth ) or 0 ) )
 	if depth > depthLimit() then
 		Stats.droppedDepth = Stats.droppedDepth + 1
@@ -264,7 +264,7 @@ end
 function SV.EnqueueTransactionNeighbours( changes, revision, depth )
 	if type( changes ) ~= "table" or #changes == 0 then return 0 end
 	if not updatesEnabled() then return 0 end
-	if MC.HasBlockUpdateHandlers and not MC.HasBlockUpdateHandlers( Kind.NEIGHBOR ) then return 0 end
+	if MC.HasBlockUpdateListeners and not MC.HasBlockUpdateListeners( Kind.NEIGHBOR ) then return 0 end
 	local added, seen = 0, {}
 	local function add( bx, by, bz, sourceX, sourceY, sourceZ )
 		local key = MC.CellKey( bx, by, bz )
@@ -425,20 +425,11 @@ local function applyAfterTransaction( result, transaction )
 	if not ok then reportHandlerError( callbackError ) end
 end
 
-local function processEntry( entry )
-	local stateId = MC.GetBlockState( entry.bx, entry.by, entry.bz )
-	if entry.expectedStateId ~= nil and stateId ~= entry.expectedStateId then
-		Stats.stale = Stats.stale + 1
-		return 0
-	end
-	local handler = MC.BlockUpdateHandlerForState and MC.BlockUpdateHandlerForState( stateId ) or nil
-	local callbackName = MC.BlockUpdateCallbackName and MC.BlockUpdateCallbackName( entry.kind ) or nil
-	local callback = handler and callbackName and handler[callbackName] or nil
-	if not callback then
-		Stats.noHandler = Stats.noHandler + 1
-		return 0
-	end
-
+-- One listener invocation: run it, then apply whatever it asked for. Returns
+-- the number of cells it submitted. Each listener gets its own transaction, so
+-- an observer can never corrupt the primary handler's result - and a listener
+-- that errors out does not stop the others.
+local function runListener( callback, entry, stateId )
 	local context = {
 		bx = entry.bx, by = entry.by, bz = entry.bz,
 		stateId = stateId,
@@ -481,6 +472,47 @@ local function processEntry( entry )
 	applyAfterTransaction( result, transaction )
 	applyReturnedUpdates( result, entry )
 	applyReturnedSchedules( result, entry )
+	return cellCount
+end
+
+local function processEntry( entry )
+	local stateId = MC.GetBlockState( entry.bx, entry.by, entry.bz )
+	if entry.expectedStateId ~= nil and stateId ~= entry.expectedStateId then
+		Stats.stale = Stats.stale + 1
+		return 0
+	end
+	local callbackName = MC.BlockUpdateCallbackName and MC.BlockUpdateCallbackName( entry.kind ) or nil
+	if not callbackName then
+		Stats.noHandler = Stats.noHandler + 1
+		return 0
+	end
+	local handler = MC.BlockUpdateHandlerForState and MC.BlockUpdateHandlerForState( stateId ) or nil
+	local callback = handler and handler[callbackName] or nil
+	local observers = MC.BlockUpdateObserversForState and MC.BlockUpdateObserversForState( stateId ) or nil
+	if not callback and not observers then
+		Stats.noHandler = Stats.noHandler + 1
+		return 0
+	end
+
+	-- The block's own handler defines its canonical behavior and runs first;
+	-- observers are additive and see the world the handler left behind. They are
+	-- selected from the state as it was when this entry was popped, so an
+	-- observer that cares whether the handler already changed the cell must
+	-- re-read it through context.GetBlockState.
+	local cellCount = 0
+	if callback then cellCount = runListener( callback, entry, stateId ) end
+	if observers then
+		-- Without this the per-tick cell budget could be multiplied by the number
+		-- of observers on a single cell.
+		local budget = positiveConVar( cvMaxCells, DEFAULT_MAX_CELLS )
+		for index = 1, #observers do
+			if cellCount >= budget then break end
+			local observerCallback = observers[index][callbackName]
+			if observerCallback then
+				cellCount = cellCount + runListener( observerCallback, entry, stateId )
+			end
+		end
+	end
 	return cellCount
 end
 

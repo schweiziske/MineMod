@@ -135,6 +135,114 @@ function MC.UnregisterBlockUpdateStateHandler( key )
 	return true
 end
 
+-- Observers are additive listeners. A block has at most ONE handler - that slot
+-- is the block's canonical behavior and registering over it replaces it - but
+-- any number of observers, which run afterwards in registration order.
+--
+-- This is what lets a separately shipped game layer attach behavior to engine
+-- blocks (a scheduled tick on wheat, a neighbor reaction on water) without
+-- displacing the engine's own handler for them. Observers get the same result
+-- contract as handlers, so each one may return its own cells/schedule/updates.
+--
+-- Dispatch is per-state and cached, so states nobody observes cost one table
+-- lookup and blocks with no listeners never enter the queue at all.
+local ObserverByKey = {}
+local ObserverOrder = {}
+local ObserversByState = {}
+local ObserverCountByKind = {
+	[Kind.NEIGHBOR] = 0,
+	[Kind.SCHEDULED] = 0,
+}
+
+local function removeObserverCount( observer )
+	if not observer then return end
+	if observer.OnNeighborUpdate then ObserverCountByKind[Kind.NEIGHBOR] = ObserverCountByKind[Kind.NEIGHBOR] - 1 end
+	if observer.OnScheduledTick then ObserverCountByKind[Kind.SCHEDULED] = ObserverCountByKind[Kind.SCHEDULED] - 1 end
+end
+
+local function addObserverCount( observer )
+	if observer.OnNeighborUpdate then ObserverCountByKind[Kind.NEIGHBOR] = ObserverCountByKind[Kind.NEIGHBOR] + 1 end
+	if observer.OnScheduledTick then ObserverCountByKind[Kind.SCHEDULED] = ObserverCountByKind[Kind.SCHEDULED] + 1 end
+end
+
+-- match is either a block name ("minecraft:wheat") or a
+-- function( stateId, schema ) predicate for cross-block families.
+function MC.RegisterBlockUpdateObserver( key, match, definition )
+	key = tostring( key or "" )
+	if key == "" then return nil, "invalid_observer_key" end
+	local matcher
+	if isfunction( match ) then
+		matcher = match
+	else
+		local name = normalizeBlockName( match )
+		if not name then return nil, "invalid_block_name" end
+		matcher = function( _, schema ) return schema ~= nil and schema.name == name end
+	end
+	local observer, err = normalizeDefinition( key, definition )
+	if not observer then return nil, err end
+	observer.MatchState = matcher
+
+	local previous = ObserverByKey[key]
+	if previous then
+		removeObserverCount( previous )
+		for index = 1, #ObserverOrder do
+			if ObserverOrder[index] == previous then ObserverOrder[index] = observer break end
+		end
+	else
+		ObserverOrder[#ObserverOrder + 1] = observer
+	end
+	ObserverByKey[key] = observer
+	addObserverCount( observer )
+	ObserversByState = {}
+	return observer
+end
+
+function MC.UnregisterBlockUpdateObserver( key )
+	key = tostring( key or "" )
+	local previous = ObserverByKey[key]
+	if not previous then return false end
+	removeObserverCount( previous )
+	ObserverByKey[key] = nil
+	for index = 1, #ObserverOrder do
+		if ObserverOrder[index] == previous then table.remove( ObserverOrder, index ) break end
+	end
+	ObserversByState = {}
+	return true
+end
+
+function MC.HasBlockUpdateObservers( kind )
+	return ( ObserverCountByKind[tonumber( kind )] or 0 ) > 0
+end
+
+-- Anything at all that wants this update kind. Enqueue gates must use this, not
+-- HasBlockUpdateHandlers: an observer-only block still needs its updates queued.
+function MC.HasBlockUpdateListeners( kind )
+	kind = tonumber( kind )
+	return ( HandlerCountByKind[kind] or 0 ) > 0 or ( ObserverCountByKind[kind] or 0 ) > 0
+end
+
+-- Returns the ordered observer list for a state, or nil when there is none.
+function MC.BlockUpdateObserversForState( stateId )
+	stateId = tonumber( stateId )
+	if stateId == nil then return nil end
+	local cached = ObserversByState[stateId]
+	if cached ~= nil then return cached or nil end
+	if #ObserverOrder == 0 then return nil end
+	local schema = MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( stateId ) or nil
+	local matched
+	for index = 1, #ObserverOrder do
+		local candidate = ObserverOrder[index]
+		if candidate.MatchState( stateId, schema ) == true then
+			matched = matched or {}
+			matched[#matched + 1] = candidate
+		end
+	end
+	-- Same caveat as handlers: before the state registry freezes a missing schema
+	-- may only mean the deferred finalization timer has not run yet.
+	if schema or MC.BlockStateRegistryFrozen then ObserversByState[stateId] = matched or false end
+	return matched
+end
+
 function MC.BlockUpdateHandlerForState( stateId )
 	stateId = tonumber( stateId )
 	if stateId == nil then return nil end

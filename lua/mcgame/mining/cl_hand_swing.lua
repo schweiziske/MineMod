@@ -47,7 +47,8 @@ function Swing.DurationTicks( ply, weapon )
 		hasteAmplifier = nil,
 		miningFatigueAmplifier = nil,
 	}
-	local supplied = hook.Run( "MC.HandSwingModifiers", ply, weapon, defaults )
+	local supplied = MC.RunEvent and MC.RunEvent( "MC.HandSwingModifiers", ply, weapon, defaults )
+		or hook.Run( "MC.HandSwingModifiers", ply, weapon, defaults )
 	return Swing.DurationFromModifiers( istable( supplied ) and supplied or defaults )
 end
 
