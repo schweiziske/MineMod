@@ -35,6 +35,7 @@ local SHARED = {
 	"mcgame/generated/sh_generated_items.lua",
 	"mcgame/item/sh_model_registry.lua",
 	"mcgame/generated/sh_generated_item_models.lua",
+	"mcgame/generated/sh_generated_item_sprite_masks.lua",
 	"mcgame/generated/sh_generated_creative_tabs.lua",
 	"mcgame/item/sh_stack.lua",
 	"mcgame/item/sh_definition.lua",
