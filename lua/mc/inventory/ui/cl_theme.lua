@@ -37,6 +37,7 @@ UI.Colors = UI.Colors or {
 
 UI.Materials = UI.Materials or {}
 UI.PixelMaterials = UI.PixelMaterials or {}
+UI.WorldItemHDRColorScale = 0.1
 
 local function sourceMaterial( path, flags )
 	local key = tostring( path ) .. "|" .. tostring( flags or "" )
@@ -47,10 +48,12 @@ local function sourceMaterial( path, flags )
 	return value
 end
 
-local function pixelMaterial( path, flags )
+local function pixelMaterial( path, flags, hdrColorScale, noCull )
 	local sourcePath = tostring( path or "" )
 	local sourceFlags = tostring( flags or "vertexcolor vertexalpha nocull" )
-	local key = sourcePath .. "|" .. sourceFlags .. "|pixel_v2"
+	local hdrKey = hdrColorScale and tostring( hdrColorScale ) or "ui"
+	if noCull == nil then noCull = true end
+	local key = sourcePath .. "|" .. sourceFlags .. "|pixel_v4|" .. hdrKey .. "|" .. ( noCull and "double" or "culled" )
 	local cached = UI.PixelMaterials[key]
 	if cached then return cached end
 
@@ -67,13 +70,13 @@ local function pixelMaterial( path, flags )
 		return source
 	end
 
-	local identity = sourcePath .. "|" .. sourceFlags
+	local identity = sourcePath .. "|" .. sourceFlags .. "|" .. hdrKey
 	local suffix = util and util.CRC and util.CRC( identity ) or string.gsub( identity, "[^%w_]", "_" )
-	local value = CreateMaterial( "mc_inventory_pixel_" .. tostring( suffix ), "UnlitGeneric", {
+	local params = {
 		["$basetexture"] = textureName,
 		["$vertexcolor"] = "1",
 		["$vertexalpha"] = "1",
-		["$nocull"] = "1",
+		["$nocull"] = noCull and "1" or "0",
 		["$alphatest"] = "1",
 		["$alphatestreference"] = "0.5",
 		["$pointsample"] = "1",
@@ -81,9 +84,12 @@ local function pixelMaterial( path, flags )
 		["$nolod"] = "1",
 		["$clamps"] = "1",
 		["$clampt"] = "1",
-	} )
+	}
+	if hdrColorScale then params["$hdrcolorscale"] = tostring( hdrColorScale ) end
+	local value = CreateMaterial( "mc_inventory_pixel_" .. tostring( suffix ), "UnlitGeneric", params )
 	if value and not value:IsError() then
 		value:SetTexture( "$basetexture", texture )
+		if hdrColorScale and value.SetFloat then value:SetFloat( "$hdrcolorscale", hdrColorScale ) end
 		UI.PixelMaterials[key] = value
 		return value
 	end
@@ -95,6 +101,11 @@ end
 function UI.GetMaterial( path )
 	if not isstring( path ) or path == "" then return nil end
 	return pixelMaterial( path, "vertexcolor vertexalpha nocull" )
+end
+
+function UI.GetWorldItemMaterial( path )
+	if not isstring( path ) or path == "" then return nil end
+	return pixelMaterial( path, "vertexcolor vertexalpha", UI.WorldItemHDRColorScale, false )
 end
 
 function UI.GetGuiMaterial( name )

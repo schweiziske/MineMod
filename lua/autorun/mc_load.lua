@@ -48,6 +48,7 @@ local SHARED = {
 	"mc/generated/sh_generated_items.lua",
 	"mc/item/sh_model_registry.lua",
 	"mc/generated/sh_generated_item_models.lua",
+	"mc/generated/sh_generated_item_sprite_masks.lua",
 	"mc/generated/sh_generated_creative_tabs.lua",
 	"mc/item/sh_stack.lua",
 	"mc/item/sh_definition.lua",
