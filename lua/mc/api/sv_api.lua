@@ -447,6 +447,42 @@ function Inventory.Open( ply )
 	return sv.OpenPlayerInventory( ply, "api" )
 end
 
+-- Projectile ammo for external bow/crossbow SWEPs. kind is "bow" (arrow /
+-- spectral arrow) or "crossbow" (also firework rockets). Creative players
+-- report ammo without owning any and never consume it.
+function Inventory.HasAmmo( ply, kind )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return false, "invalid_player" end
+	if not sv or not sv.FindProjectileAmmo then return false, "inventory_api_unavailable" end
+	if sv.PlayerHasInfiniteMaterials and sv.PlayerHasInfiniteMaterials( ply ) then return true end
+	local _, stack, err = sv.FindProjectileAmmo( ply, kind )
+	if not stack then return false, err end
+	return true, nil, deepCopy( stack )
+end
+
+-- Returns consumed, itemName, err, infinite.
+function Inventory.ConsumeAmmo( ply, kind, amount, context )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return 0, nil, "invalid_player" end
+	if not sv or not sv.ConsumeProjectileAmmo then return 0, nil, "inventory_api_unavailable" end
+	return sv.ConsumeProjectileAmmo( ply, kind, amount, deepCopy( context or {} ) )
+end
+
+-- Spawn a world item drop (the same mc_item_drop entity block loot and player
+-- drops use), so external addons never have to invent their own pickup entity.
+-- options: { velocity = Vector, pickupDelay = seconds, lifetime = seconds
+--            (<=0 means never expire), target = ply (owner-only pickup) }.
+function Inventory.SpawnDrop( position, item, count, actor, options )
+	local sv = SV()
+	if not sv or not sv.SpawnItemDrop then return nil, "inventory_api_unavailable" end
+	if not isvector( position ) then return nil, "invalid_position" end
+	local stack, stackError = MC.NewItemStack( item, count or 1 )
+	if not stack then return nil, stackError or "invalid_stack" end
+	local ent, err = sv.SpawnItemDrop( position, stack, actor, deepCopy( options or {} ) )
+	if not IsValid( ent ) then return nil, err or "item_drop_failed" end
+	return ent
+end
+
 --------------------------------------------------------------------- API.Saves
 API.Saves = API.Saves or {}
 local Saves = API.Saves

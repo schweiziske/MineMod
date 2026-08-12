@@ -319,6 +319,56 @@ function SV.ThrowItemProjectile( ply, record, stack, context )
 	return true, ent
 end
 
+-- Ammo helpers for EXTERNAL projectile SWEPs (exposed through
+-- MC.API.Inventory.HasAmmo / ConsumeAmmo). MCSWEP's own bow/crossbow path above
+-- consumes ammo inside its launch transaction; an external SWEP owns its own
+-- projectile entity, so it needs the ammo half on its own. Same allowed-item
+-- table, same creative "infinite materials" rule, same container commit.
+function SV.FindProjectileAmmo( ply, kind )
+	if not validPlayer( ply ) then return nil, nil, "invalid_player" end
+	if not SV.GetPlayerInventoryRecord then return nil, nil, "inventory_api_unavailable" end
+	local record = SV.GetPlayerInventoryRecord( ply, false )
+	if not record then return nil, nil, "inventory_not_loaded" end
+	local slot, stack = findAmmo( record, kind == "crossbow" and "crossbow" or "bow" )
+	if not stack then return nil, nil, "projectile_ammo_missing" end
+	return slot, MC.CopyItemStack( stack )
+end
+
+-- Returns consumed, itemName, err, infinite.
+function SV.ConsumeProjectileAmmo( ply, kind, amount, context )
+	amount = math.max( math.floor( tonumber( amount ) or 1 ), 1 )
+	if not validPlayer( ply ) then return 0, nil, "invalid_player" end
+	if not SV.GetPlayerInventoryRecord then return 0, nil, "inventory_api_unavailable" end
+	local record = SV.GetPlayerInventoryRecord( ply, false )
+	if not record then return 0, nil, "inventory_not_loaded" end
+
+	kind = kind == "crossbow" and "crossbow" or "bow"
+	local slot, stack = findAmmo( record, kind )
+
+	if infiniteMaterials( ply ) then
+		return amount, stack and stack.item or "minecraft:arrow", nil, true
+	end
+
+	if not slot or not stack then return 0, nil, "projectile_ammo_missing" end
+	local take = math.min( amount, stack.count )
+	local itemName = stack.item
+
+	local snapshot = MC.ContainerSnapshot( record.container )
+	local ok, consumeError = consumeStackAt( record, slot, take )
+	if not ok then
+		MC.ContainerRestore( record.container, snapshot )
+		return 0, nil, consumeError or "projectile_ammo_consume_failed"
+	end
+
+	local result, commitError = commitOnly( record, snapshot, ply, {
+		player = ply,
+		reason = ( istable( context ) and context.reason ) or "external_projectile_ammo",
+		actionId = istable( context ) and context.actionId or nil,
+	} )
+	if not result then return 0, nil, commitError end
+	return take, itemName, nil, false
+end
+
 local function safeTeleport( ply, position )
 	if not validPlayer( ply ) or not position then return false end
 	local mins, maxs = ply:OBBMins(), ply:OBBMaxs()
