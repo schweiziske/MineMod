@@ -452,6 +452,35 @@ function Renderer.HeldTransform( plan, displayContext, basePos, baseAng, baseSiz
 	}
 end
 
+local function mcWeaponsFirstPersonTransform( plan, displayContext, basePos, baseAng, baseSize, view )
+	local display = displayValues( plan, displayContext )
+	local rotation, scale = display.rotation or {}, display.scale or {}
+	local leftHand = string.find( displayContext or "", "lefthand", 1, true ) ~= nil
+	local side = leftHand and -1 or 1
+	local defaultRotation = DEFAULT_DISPLAY.firstperson_righthand.rotation
+	local ang = Angle( baseAng.p, baseAng.y, baseAng.r )
+	local pitch = ( tonumber( view.pitch ) or -3 )
+		+ ( tonumber( rotation[1] ) or defaultRotation[1] ) - defaultRotation[1]
+	local yaw = side * ( tonumber( view.yaw ) or 110 )
+		+ ( tonumber( rotation[2] ) or side * defaultRotation[2] ) - side * defaultRotation[2]
+	local roll = side * ( tonumber( view.roll ) or 20 )
+		+ ( tonumber( rotation[3] ) or side * defaultRotation[3] ) - side * defaultRotation[3]
+	ang:RotateAroundAxis( ang:Up(), yaw )
+	ang:RotateAroundAxis( ang:Right(), pitch )
+	ang:RotateAroundAxis( ang:Forward(), roll )
+	return {
+		pos = basePos,
+		-- MC_weapons' compiled item models map model (X,Y,Z) to MC (Z,X,Y).
+		xAxis = -ang:Right(),
+		yAxis = ang:Up(),
+		normal = ang:Forward(),
+		width = baseSize * math.abs( tonumber( scale[1] ) or 0.68 ),
+		height = baseSize * math.abs( tonumber( scale[2] ) or tonumber( scale[1] ) or 0.68 ),
+		depthScale = math.abs( tonumber( scale[3] ) or 0.68 ),
+		depth = baseSize * math.abs( tonumber( scale[3] ) or 0.68 ),
+	}
+end
+
 local function drawFlatHeldLayer( material, transform, layerOffset, color )
 	local center = transform.pos + transform.normal * layerOffset
 	local x = transform.xAxis * ( transform.width * 0.5 )
@@ -652,7 +681,13 @@ function Renderer.DrawHeldItem( stack, pos, orientation, size, color, options )
 		baseAng = Angle( orientation.p, orientation.y, orientation.r )
 	end
 	if not baseAng then return false end
-	local transform = Renderer.HeldTransform( plan, modelOptions.displayContext, pos, baseAng, size )
+	local transform
+	if type( modelOptions.mcWeaponsView ) == "table" then
+		transform = mcWeaponsFirstPersonTransform( plan, modelOptions.displayContext, pos, baseAng, size,
+			modelOptions.mcWeaponsView )
+	else
+		transform = Renderer.HeldTransform( plan, modelOptions.displayContext, pos, baseAng, size )
+	end
 	if not transform then return false end
 	UI.WithPointFiltering( function()
 		for index, material in ipairs( materials ) do
