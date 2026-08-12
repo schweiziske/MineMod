@@ -29,7 +29,8 @@ Garry's Mod 里的 Minecraft 风格方块系统。方块不按实体逐个生成
 ## 主要文件
 
 ```text
-lua/autorun/mc_load.lua                  加载入口
+lua/autorun/mc_load.lua                  引擎加载入口
+lua/autorun/mcgame_load.lua              生存游戏层加载入口(经引擎 register 阶段启动)
 lua/mc/sh_config.lua                     尺寸、ConVar、net bit、atlas 配置
 lua/mc/sh_blocks.lua                     方块注册、状态、朝向、碰撞盒
 lua/mc/sh_presets.lua                    建筑预设坐标/朝向旋转和覆盖体积变换
@@ -52,13 +53,15 @@ lua/weapons/mc_creative_placer/shared.lua 创造物品栏方块放置器 SWEP
 lua/weapons/mc_preset_placer/shared.lua  建筑预设放置器 SWEP
 lua/weapons/gmod_tool/stools/mc_block.lua 工具枪方块工具
 lua/mc/generated/                        生成的方块、tile、中文名 Lua
+lua/mcgame/                              生存游戏层:物品、物品栏、配方、挖掘、掉落物
 _build/build_atlas.ps1                   生成 atlas 和方块表
 _build/build_block_properties.cjs        生成 hardness/explosionResistance 表
 _build/build_block_connections.cjs       生成连接/贴附类方块表
 _tools/mc_convert_8x8_save.py            老版本 Parkour Spiral 转存工具
 _tools/mc_import_world.py                通用 Minecraft 存档导出工具
+docs/api.md                              对外 API(外部插件唯一受支持入口)
 docs/maintenance-update-guide.md         维护更新指南
-docs/interface-usage.md                  接口使用介绍
+docs/interface-usage.md                  接口使用介绍(已过期)
 ```
 
 ## 常用命令
@@ -169,7 +172,9 @@ git diff --check
 
 ## 文档入口
 
+- [对外 API(v1)](docs/api.md) — 外部插件唯一受支持入口
+- [引擎层 / 游戏层分离](docs/engine-game-layer-split-2026-08-12.md)
 - [维护更新指南](docs/maintenance-update-guide.md)
-- [接口使用介绍](docs/interface-usage.md)
+- [接口使用介绍](docs/interface-usage.md)(已过期,保留作内部符号参考)
 - [mc_import_world.py 用法](docs/mc-import-world.md)
 - [Chunk 高度修改说明](docs/chunk-height.md)
