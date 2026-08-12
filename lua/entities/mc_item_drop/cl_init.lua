@@ -50,7 +50,7 @@ function ENT:DrawTranslucent()
 	local base = self:GetPos() + Vector( 0, 0, 7 + math.sin( CurTime() * 3 + self:EntIndex() ) * 1.5 )
 	local seed = self:EntIndex() * 37
 	local yaw = ( CurTime() * 90 + seed ) % 360
-	local flatAngles = Angle( 0, yaw, 90 )
+	local flatAngles = Angle( 0, yaw, 0 )
 	local blockAngles = Angle( 0, yaw, 0 )
 	local worldColor = worldLightingColor( self, base )
 	local count = math.max( 1, tonumber( stack.count ) or 1 )
@@ -66,10 +66,8 @@ function ENT:DrawTranslucent()
 			and renderer.DrawDroppedBlock( stack, position, blockAngles, 12, worldColor,
 				{ displayContext = "ground" } )
 		if not drewBlock then
-			cam.Start3D2D( position, flatAngles, 0.75 )
-				renderer.DrawStack( stack, -8, -8, 16,
-					{ drawCount = false, scale = 1, displayContext = "ground", worldColor = worldColor } )
-			cam.End3D2D()
+			renderer.DrawHeldItem( stack, position, flatAngles, 12, worldColor,
+				{ displayContext = "ground" } )
 		end
 	end
 end

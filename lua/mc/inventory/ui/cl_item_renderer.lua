@@ -18,9 +18,10 @@ function Renderer.Definition( stack )
 	return definitionFor( stack )
 end
 
-function Renderer.MaterialForLayer( layer )
+function Renderer.MaterialForLayer( layer, worldItem )
 	if type( layer ) ~= "string" or layer == "" then return nil end
 	if not string.match( layer, "%.png$" ) then layer = layer .. ".png" end
+	if worldItem == true and UI.GetWorldItemMaterial then return UI.GetWorldItemMaterial( layer ) end
 	return UI.GetMaterial( layer )
 end
 
@@ -45,7 +46,7 @@ function Renderer.MaterialsForStack( stack, options )
 	local plan = Renderer.ModelPlan( stack, options )
 	local materials = {}
 	for _, layer in ipairs( plan.layers or {} ) do
-		local material = Renderer.MaterialForLayer( layer )
+		local material = Renderer.MaterialForLayer( layer, options and options.worldItem == true )
 		if material then materials[#materials + 1] = material end
 	end
 	return materials, plan
@@ -75,9 +76,37 @@ end
 local droppedBlockMeshes = {}
 local DROP_TRIANGLES = { 1, 3, 2, 1, 4, 3 }
 
+local droppedBlockMaterials = {}
+
 local function droppedBlockMaterial( translucent )
-	local material = translucent and ( MC.MaterialTranslucent or MC.Material ) or MC.Material
-	if not material or material.IsError and material:IsError() then return nil end
+	local source = translucent and ( MC.MaterialTranslucent or MC.Material ) or MC.Material
+	if not source or source.IsError and source:IsError() then return nil end
+	if not ( CreateMaterial and source.GetTexture ) then return source end
+	local texture = source:GetTexture( "$basetexture" )
+	local textureName = texture and texture.GetName and texture:GetName() or nil
+	if not textureName or textureName == "" or texture.IsError and texture:IsError() then return source end
+
+	local key = translucent and "translucent" or "opaque"
+	local material = droppedBlockMaterials[key]
+	if not material or material.IsError and material:IsError() then
+		local params = {
+			["$basetexture"] = textureName,
+			["$vertexcolor"] = "1",
+			["$nocull"] = "0",
+			["$hdrcolorscale"] = tostring( UI.WorldItemHDRColorScale or 0.25 ),
+		}
+		if translucent then
+			params["$translucent"] = "1"
+		else
+			params["$alphatest"] = "1"
+			params["$alphatestreference"] = "0.5"
+		end
+		material = CreateMaterial( "mc_item_drop_hdr_" .. key .. "_v3", "UnlitGeneric", params )
+		if not material or material:IsError() then return source end
+		droppedBlockMaterials[key] = material
+	end
+	material:SetTexture( "$basetexture", texture )
+	if material.SetFloat then material:SetFloat( "$hdrcolorscale", UI.WorldItemHDRColorScale or 0.25 ) end
 	return material
 end
 
@@ -329,6 +358,7 @@ end
 local DEFAULT_DISPLAY = {
 	firstperson_righthand = { rotation = { 0, -90, 25 }, translation = { 1.13, 3.2, 1.13 }, scale = { 0.68, 0.68, 0.68 } },
 	thirdperson_righthand = { rotation = { 0, 0, 0 }, translation = { 0, 3, 1 }, scale = { 0.55, 0.55, 0.55 } },
+	ground = { rotation = { 0, 0, 0 }, translation = { 0, 2, 0 }, scale = { 0.5, 0.5, 0.5 } },
 }
 
 local function displayValues( plan, context )
@@ -418,10 +448,11 @@ function Renderer.HeldTransform( plan, displayContext, basePos, baseAng, baseSiz
 		width = baseSize * math.abs( tonumber( scale[1] ) or 1 ),
 		height = baseSize * math.abs( tonumber( scale[2] ) or tonumber( scale[1] ) or 1 ),
 		depthScale = math.abs( tonumber( scale[3] ) or 1 ),
+		depth = baseSize * math.abs( tonumber( scale[3] ) or 1 ),
 	}
 end
 
-local function drawHeldLayer( material, transform, layerOffset, color )
+local function drawFlatHeldLayer( material, transform, layerOffset, color )
 	local center = transform.pos + transform.normal * layerOffset
 	local x = transform.xAxis * ( transform.width * 0.5 )
 	local y = transform.yAxis * ( transform.height * 0.5 )
@@ -453,12 +484,152 @@ local function drawHeldLayer( material, transform, layerOffset, color )
 	mesh.End()
 end
 
+local heldSpriteMeshes = {}
+local heldSpriteDrawMatrix = Matrix()
+local SPRITE_HALF_DEPTH = 1 / 32
+local bitPowers = {}
+for index = 0, 31 do bitPowers[index] = 2 ^ index end
+
+local function spriteMaskForLayer( layer )
+	if type( layer ) ~= "string" or layer == "" then return nil end
+	layer = string.gsub( layer, "%.png$", "" )
+	return MC.ItemSpriteMasks and MC.ItemSpriteMasks[layer] or nil
+end
+
+local function maskOpaque( mask, x, y )
+	if x < 0 or y < 0 or x >= mask.width or y >= mask.height then return false end
+	local row = tonumber( mask.rows[y + 1] ) or 0
+	return math.floor( row / bitPowers[x] ) % 2 == 1
+end
+
+local function appendVertex( target, position, normal, u, v )
+	target[#target + 1] = { pos = position, normal = normal, u = u, v = v, color = color_white }
+end
+
+local function appendQuad( target, a, b, c, d, normal, au, av, bu, bv, cu, cv, du, dv )
+	appendVertex( target, a, normal, au, av )
+	appendVertex( target, c, normal, cu, cv )
+	appendVertex( target, b, normal, bu, bv )
+	appendVertex( target, a, normal, au, av )
+	appendVertex( target, d, normal, du, dv )
+	appendVertex( target, c, normal, cu, cv )
+end
+
+local function appendSolidUVQuad( target, a, b, c, d, normal, u, v )
+	appendQuad( target, a, b, c, d, normal, u, v, u, v, u, v, u, v )
+end
+
+local function buildHeldSpriteMesh( layer, material )
+	local mask = spriteMaskForLayer( layer )
+	if not mask or not Mesh or not material or material.IsError and material:IsError() then return nil end
+	local width, height = tonumber( mask.width ) or 0, tonumber( mask.height ) or 0
+	if width < 1 or height < 1 or width > 32 or height > 32 then return nil end
+
+	local vertices = {}
+	local front = SPRITE_HALF_DEPTH
+	local back = -SPRITE_HALF_DEPTH
+	local bottomLeft = Vector( -0.5, -0.5, front )
+	local bottomRight = Vector( 0.5, -0.5, front )
+	local topRight = Vector( 0.5, 0.5, front )
+	local topLeft = Vector( -0.5, 0.5, front )
+	appendQuad( vertices, bottomLeft, bottomRight, topRight, topLeft, Vector( 0, 0, 1 ),
+		0, 1, 1, 1, 1, 0, 0, 0 )
+	appendQuad( vertices,
+		Vector( -0.5, -0.5, back ), Vector( -0.5, 0.5, back ),
+		Vector( 0.5, 0.5, back ), Vector( 0.5, -0.5, back ), Vector( 0, 0, -1 ),
+		0, 1, 0, 0, 1, 0, 1, 1 )
+
+	for y = 0, height - 1 do
+		for x = 0, width - 1 do
+			if maskOpaque( mask, x, y ) then
+				local x0, x1 = x / width - 0.5, ( x + 1 ) / width - 0.5
+				local y1, y0 = 0.5 - y / height, 0.5 - ( y + 1 ) / height
+				local u, v = ( x + 0.5 ) / width, ( y + 0.5 ) / height
+				if not maskOpaque( mask, x - 1, y ) then
+					appendSolidUVQuad( vertices, Vector( x0, y1, back ), Vector( x0, y0, back ),
+						Vector( x0, y0, front ), Vector( x0, y1, front ), Vector( -1, 0, 0 ), u, v )
+				end
+				if not maskOpaque( mask, x + 1, y ) then
+					appendSolidUVQuad( vertices, Vector( x1, y0, back ), Vector( x1, y1, back ),
+						Vector( x1, y1, front ), Vector( x1, y0, front ), Vector( 1, 0, 0 ), u, v )
+				end
+				if not maskOpaque( mask, x, y - 1 ) then
+					appendSolidUVQuad( vertices, Vector( x1, y1, back ), Vector( x0, y1, back ),
+						Vector( x0, y1, front ), Vector( x1, y1, front ), Vector( 0, 1, 0 ), u, v )
+				end
+				if not maskOpaque( mask, x, y + 1 ) then
+					appendSolidUVQuad( vertices, Vector( x0, y0, back ), Vector( x1, y0, back ),
+						Vector( x1, y0, front ), Vector( x0, y0, front ), Vector( 0, -1, 0 ), u, v )
+				end
+			end
+		end
+	end
+
+	local spriteMesh = Mesh( material )
+	spriteMesh:BuildFromTriangles( vertices )
+	return spriteMesh
+end
+
+local function heldSpriteMesh( layer, material )
+	local key = string.gsub( tostring( layer or "" ), "%.png$", "" )
+	local cached = heldSpriteMeshes[key]
+	if cached == false then return nil end
+	if cached and cached.material == material and cached.mesh then return cached.mesh end
+	if cached and cached.mesh and cached.mesh.Destroy then cached.mesh:Destroy() end
+	local spriteMesh = buildHeldSpriteMesh( key, material )
+	heldSpriteMeshes[key] = spriteMesh and { material = material, mesh = spriteMesh } or false
+	return spriteMesh
+end
+
+local function drawExtrudedHeldLayer( layer, material, transform, layerOffset, color )
+	local spriteMesh = heldSpriteMesh( layer, material )
+	if not spriteMesh then return false end
+	local matrix = heldSpriteDrawMatrix
+	matrix:SetTranslation( transform.pos + transform.normal * layerOffset )
+	matrix:SetForward( transform.xAxis * transform.width )
+	-- Source matrices expose a world-space Right vector, but their local +Y
+	-- column is Left. Negate here so the sprite's local +Y remains Minecraft up.
+	matrix:SetRight( -transform.yAxis * transform.height )
+	matrix:SetUp( transform.normal * transform.depth )
+	render.SetColorModulation( ( color.r or 255 ) / 255, ( color.g or 255 ) / 255, ( color.b or 255 ) / 255 )
+	render.SetBlend( ( color.a or 255 ) / 255 )
+	render.SetMaterial( material )
+	if render.CullMode then
+		local determinant = transform.xAxis:Cross( transform.yAxis ):Dot( transform.normal )
+		local mirrored = determinant < 0
+		local cullMode = droppedBlockCullMode()
+		if mirrored then
+			cullMode = cullMode == ( MATERIAL_CULLMODE_CCW or 0 )
+				and ( MATERIAL_CULLMODE_CW or 1 ) or ( MATERIAL_CULLMODE_CCW or 0 )
+		end
+		render.CullMode( cullMode )
+	end
+	cam.PushModelMatrix( matrix, true )
+		spriteMesh:Draw()
+	cam.PopModelMatrix()
+	if render.CullMode then render.CullMode( MATERIAL_CULLMODE_CCW or 0 ) end
+	render.SetBlend( 1 )
+	render.SetColorModulation( 1, 1, 1 )
+	return true
+end
+
+local function clearHeldSpriteMeshes()
+	for _, cached in pairs( heldSpriteMeshes ) do
+		if cached and cached.mesh and cached.mesh.Destroy then cached.mesh:Destroy() end
+	end
+	heldSpriteMeshes = {}
+end
+
+hook.Add( "ShutDown", "mc_item_held_sprite_meshes", clearHeldSpriteMeshes )
+hook.Add( "OnReloaded", "mc_item_held_sprite_meshes", clearHeldSpriteMeshes )
+
 function Renderer.DrawHeldItem( stack, pos, orientation, size, color, options )
 	if not Renderer.CanDraw( stack ) or not pos or not orientation then return false end
 	options = options or {}
 	local modelOptions = {}
 	for key, value in pairs( options ) do modelOptions[key] = value end
 	modelOptions.displayContext = modelOptions.displayContext or "firstperson_righthand"
+	modelOptions.worldItem = true
 	local materials, plan = Renderer.MaterialsForStack( stack, modelOptions )
 	if #materials == 0 then return false end
 	color = color or Color( 255, 255, 255, 255 )
@@ -485,7 +656,11 @@ function Renderer.DrawHeldItem( stack, pos, orientation, size, color, options )
 	if not transform then return false end
 	UI.WithPointFiltering( function()
 		for index, material in ipairs( materials ) do
-			drawHeldLayer( material, transform, ( index - 1 ) * 0.01 * transform.depthScale, color )
+			local layer = plan.layers and plan.layers[index] or nil
+			local offset = ( index - 1 ) * 0.01 * transform.depthScale
+			if not drawExtrudedHeldLayer( layer, material, transform, offset, color ) then
+				drawFlatHeldLayer( material, transform, offset, color )
+			end
 		end
 	end )
 	return true

@@ -417,6 +417,7 @@ end
 if CLIENT then
 	local ITEM_PLACE_ANIM_DURATION = 0.30
 	local ITEM_HAND_HEIGHT_RECOVERY = 8
+	local HELD_ITEM_LIGHT_GAIN = 0.48
 
 	local function itemHeldAnimationEnabled()
 		local cvar = GetConVar and GetConVar( "mc_creative_held_anim" ) or nil
@@ -562,6 +563,42 @@ if CLIENT then
 		return pos + ang:Forward() * 2.5 + ang:Right() * ( 2.2 * side ) - ang:Up() * 1.8, ang, 7.5
 	end
 
+	local function heldItemLightingColor( ply, pos, firstPerson, hand )
+		local owner = firstPerson and ply:GetActiveWeapon() or ply
+		local lightField = hand == "offhand" and "MCItemHandOffhandLight" or "MCItemHandMainhandLight"
+		local colorField = hand == "offhand" and "MCItemHandOffhandColor" or "MCItemHandMainhandColor"
+		local lighting
+		if MC.CreativeHeldLightingAt and IsValid( owner ) then
+			owner[lightField] = MC.CreativeHeldLightingAt( firstPerson and EyePos() or pos, owner[lightField] )
+			lighting = owner[lightField]
+		end
+
+		local r, g, b = 1, 1, 1
+		if type( lighting ) == "table" then
+			r = math.Clamp( tonumber( lighting.r ) or 1, 0, 1 )
+			g = math.Clamp( tonumber( lighting.g ) or r, 0, 1 )
+			b = math.Clamp( tonumber( lighting.b ) or r, 0, 1 )
+		end
+		if MC.ScaleDynamicLightingRGB then
+			r, g, b = MC.ScaleDynamicLightingRGB( r, g, b, HELD_ITEM_LIGHT_GAIN )
+		else
+			r = math.Clamp( r * HELD_ITEM_LIGHT_GAIN, 0, HELD_ITEM_LIGHT_GAIN )
+			g = math.Clamp( g * HELD_ITEM_LIGHT_GAIN, 0, HELD_ITEM_LIGHT_GAIN )
+			b = math.Clamp( b * HELD_ITEM_LIGHT_GAIN, 0, HELD_ITEM_LIGHT_GAIN )
+		end
+
+		local color = IsValid( owner ) and owner[colorField] or nil
+		if not color then
+			color = Color( 255, 255, 255, 255 )
+			if IsValid( owner ) then owner[colorField] = color end
+		end
+		color.r = math.floor( math.min( r, HELD_ITEM_LIGHT_GAIN ) * 255 + 0.5 )
+		color.g = math.floor( math.min( g, HELD_ITEM_LIGHT_GAIN ) * 255 + 0.5 )
+		color.b = math.floor( math.min( b, HELD_ITEM_LIGHT_GAIN ) * 255 + 0.5 )
+		color.a = 255
+		return color
+	end
+
 	local function drawHeldStack( ply, stack, firstPerson, hand, useState )
 		if MC.IsEmptyItemStack( stack ) then return end
 		local definition = MC.GetItem( stack.item )
@@ -583,6 +620,7 @@ if CLIENT then
 			render.OverrideDepthEnable( false, false )
 		elseif MC.InventoryUI and MC.InventoryUI.ItemRenderer then
 			pos, ang, scale = heldItemPose( ply, firstPerson, hand )
+			local color = heldItemLightingColor( ply, pos, firstPerson, hand )
 			local using = useState.using and useState.hand == hand
 			local useProgress = using and useState.progress or 0
 			local useStart = using and useState.startedAt or 0
@@ -591,7 +629,7 @@ if CLIENT then
 				useProgress = MC.ItemUseProgress( useStart, useDuration, CurTime() )
 			end
 			MC.InventoryUI.ItemRenderer.DrawHeldItem( stack, pos, ang, scale,
-				nil, {
+				color, {
 					displayContext = firstPerson and ( hand == "offhand" and "firstperson_lefthand" or "firstperson_righthand" )
 						or ( hand == "offhand" and "thirdperson_lefthand" or "thirdperson_righthand" ),
 					using = using,
