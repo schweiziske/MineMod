@@ -464,7 +464,8 @@ end
 -- Public programmatic fill: the /fill engine (raw chunk writes + one
 -- compressed hydration publish; block handlers do NOT run for filled cells).
 -- Coordinates are inclusive cell bounds in any order. stateId 0 clears.
--- options: actor (attribution + event), ignoreVolumeLimit (skip mc_fill_max).
+-- options: actor (attribution + event), ignoreVolumeLimit (skip mc_fill_max),
+-- quiet (suppress per-call performance diagnostics for trusted bulk builders).
 -- Returns the fill result table { changed, chunks, added, removed, revision,
 -- ... } or nil, err ("invalid_state" | "world_limit" | "fill_too_large" |
 -- "max_blocks" | commit errors).
@@ -505,13 +506,15 @@ function SV.FillVolume( x1, y1, z1, x2, y2, z2, stateId, options )
 	} )
 	if not result then return nil, fillError end
 
-	print( string.format(
-		"[MC fill] mode=chunk-hydration volume=%d changed=%d chunks=%d revision=%d scan=%.3fms apply=%.3fms netpack=%.3fms parts=%d bytes=%d recipients=%d elapsed=%.3fms",
-		volume, result.changed or 0, result.chunks or 0, result.revision or SV.BlockRevision or 0,
-		result.scanMS or 0, result.applyMS or 0, result.netMS or 0,
-		result.parts or 0, result.bytes or 0, result.recipients or 0, result.elapsedMS or 0
-	) )
-	if result.fallbackReason then
+	if options.quiet ~= true then
+		print( string.format(
+			"[MC fill] mode=chunk-hydration volume=%d changed=%d chunks=%d revision=%d scan=%.3fms apply=%.3fms netpack=%.3fms parts=%d bytes=%d recipients=%d elapsed=%.3fms",
+			volume, result.changed or 0, result.chunks or 0, result.revision or SV.BlockRevision or 0,
+			result.scanMS or 0, result.applyMS or 0, result.netMS or 0,
+			result.parts or 0, result.bytes or 0, result.recipients or 0, result.elapsedMS or 0
+		) )
+	end
+	if result.fallbackReason and options.quiet ~= true then
 		print( "[MC fill] Chunk hydration fell back to full client resync: " .. tostring( result.fallbackReason ) )
 	end
 	if ( result.changed or 0 ) > 0 and SV.FlushLightingCaches then SV.FlushLightingCaches() end
