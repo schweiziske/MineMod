@@ -7,6 +7,8 @@ MC.InventoryUI = MC.InventoryUI or {}
 local UI = MC.InventoryUI
 local Tooltip = {}
 UI.Tooltip = Tooltip
+local ENCHANTMENT_GRAY = Color( 170, 170, 170, 255 )
+local CURSE_RED = Color( 255, 85, 85, 255 )
 
 local function vanillaItemText( key, fallback )
 	local catalog = MC.GeneratedInventoryText and MC.GeneratedInventoryText[key] or nil
@@ -20,11 +22,45 @@ local function formatVanillaText( template, ... )
 	return ok and value or tostring( template or "" )
 end
 
-local function componentCount( value )
-	if type( value ) ~= "table" then return 0 end
-	local count = 0
-	for _ in pairs( value ) do count = count + 1 end
-	return count
+local function componentValue( stack, key )
+	local components = type( stack ) == "table" and stack.components or nil
+	if type( components ) ~= "table" then return nil end
+	if components[key] ~= nil then return components[key] end
+	local namespaced = string.find( key, ":", 1, true ) and key or "minecraft:" .. key
+	return components[namespaced]
+end
+
+local function tooltipVisible( stack, stored )
+	local component = componentValue( stack, stored and "stored_enchantments" or "enchantments" )
+	if type( component ) ~= "table" then return true end
+	if component.show_in_tooltip ~= nil then return component.show_in_tooltip == true end
+	if component.showInTooltip ~= nil then return component.showInTooltip == true end
+	return true
+end
+
+local function enchantmentLines( stack )
+	if not MC.GetItemEnchantments then return {} end
+	local stored = stack.item == "minecraft:enchanted_book"
+	if not tooltipVisible( stack, stored ) then return {} end
+	local levels = MC.GetItemEnchantments( stack, stored )
+	if type( levels ) ~= "table" or next( levels ) == nil then return {} end
+	local ordered = MCITEM and MCITEM.OrderedEnchantmentIds
+		and MCITEM.OrderedEnchantmentIds( levels ) or {}
+	if #ordered == 0 then
+		for id in pairs( levels ) do ordered[#ordered + 1] = id end
+		table.sort( ordered )
+	end
+	local result = {}
+	for _, id in ipairs( ordered ) do
+		local level = tonumber( levels[id] ) or 0
+		if level > 0 then
+			local text = MCITEM and MCITEM.EnchantmentLevelName
+				and MCITEM.EnchantmentLevelName( id, level ) or tostring( id ) .. " " .. tostring( level )
+			local curse = MCITEM and MCITEM.IsCurseEnchantment and MCITEM.IsCurseEnchantment( id ) == true
+			result[#result + 1] = { text = text, color = curse and CURSE_RED or ( UI.Colors.textDim or ENCHANTMENT_GRAY ) }
+		end
+	end
+	return result
 end
 
 function Tooltip.LinesForStack( stack )
@@ -34,19 +70,13 @@ function Tooltip.LinesForStack( stack )
 	local lines = {
 		{ text = UI.ItemRenderer.DisplayName( stack ), color = UI.RarityColor( definition.rarity ) },
 	}
+	for _, line in ipairs( enchantmentLines( stack ) ) do lines[#lines + 1] = line end
 	local maxDamage = tonumber( definition.maxDamage ) or 0
 	if maxDamage > 0 then
 		local damage = math.Clamp( math.floor( tonumber( stack.damage ) or 0 ), 0, maxDamage )
 		lines[#lines + 1] = {
 			text = formatVanillaText( vanillaItemText( "durability", "Durability: %s / %s" ), maxDamage - damage, maxDamage ),
 			color = UI.Colors.text,
-		}
-	end
-	local components = componentCount( stack.components )
-	if components > 0 then
-		lines[#lines + 1] = {
-			text = formatVanillaText( vanillaItemText( "components", "%s component(s)" ), components ),
-			color = UI.Colors.textDim,
 		}
 	end
 	return lines

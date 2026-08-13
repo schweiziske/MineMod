@@ -20,8 +20,18 @@ local CRAFTING_BACKGROUND = UI.GetGuiMaterial( "container/crafting_table" )
 local CHEST_BACKGROUND = UI.GetGuiMaterial( "container/generic_54" )
 local FURNACE_BACKGROUND = UI.GetGuiMaterial( "container/furnace" )
 local BLAST_FURNACE_BACKGROUND = UI.GetGuiMaterial( "container/blast_furnace" )
+local BREWING_BACKGROUND = UI.GetGuiMaterial( "container/brewing_stand" )
+local ANVIL_BACKGROUND = UI.GetGuiMaterial( "container/anvil" )
+local ANVIL_ERROR = UI.GetGuiMaterial( "sprites/container/anvil/error" )
+local ANVIL_TEXT_FIELD = UI.GetGuiMaterial( "sprites/container/anvil/text_field" )
+local ANVIL_TEXT_FIELD_DISABLED = UI.GetGuiMaterial( "sprites/container/anvil/text_field_disabled" )
 local FURNACE_LIT = UI.GetGuiMaterial( "sprites/container/furnace/lit_progress" )
 local FURNACE_BURN = UI.GetGuiMaterial( "sprites/container/furnace/burn_progress" )
+local BREWING_FUEL = UI.GetGuiMaterial( "sprites/container/brewing_stand/fuel_length" )
+local BREWING_PROGRESS = UI.GetGuiMaterial( "sprites/container/brewing_stand/brew_progress" )
+local BREWING_BUBBLES = UI.GetGuiMaterial( "sprites/container/brewing_stand/bubbles" )
+local BREWING_SLOT_FUEL = UI.GetGuiMaterial( "sprites/container/slot/brewing_fuel" )
+local BREWING_SLOT_POTION = UI.GetGuiMaterial( "sprites/container/slot/potion" )
 local CREATIVE_ITEMS_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_items" )
 local CREATIVE_SEARCH_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_item_search" )
 local CREATIVE_INVENTORY_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_inventory" )
@@ -221,6 +231,35 @@ function PANEL:Init()
 		end )
 	end
 
+	self.AnvilEntry = vgui.Create( "DTextEntry", self )
+	self.AnvilEntry:SetDrawBackground( false )
+	self.AnvilEntry:SetTextColor( Color( 45, 45, 45, 255 ) )
+	self.AnvilEntry:SetHighlightColor( Color( 120, 150, 190, 120 ) )
+	self.AnvilEntry:SetCursorColor( Color( 45, 45, 45, 255 ) )
+	self.AnvilEntry:SetUpdateOnType( true )
+	self.AnvilEntry:SetVisible( false )
+	self.AnvilEntry:SetZPos( 30 )
+	self.AnvilEntry.OnChange = function( entry )
+		if not IsValid( self ) or self.ApplyingAnvilState or not self.Anvil then return end
+		local value = entry:GetValue() or ""
+		local filtered, errorCode = MC.AnvilValidateName and MC.AnvilValidateName( value ) or value
+		if not filtered then
+			self.AnvilLocalError = errorCode or "invalid_name"
+			return
+		end
+		self.AnvilLocalError = nil
+		if filtered ~= value then
+			self.ApplyingAnvilState = true
+			entry:SetText( filtered )
+			entry:SetCaretPos( #filtered )
+			self.ApplyingAnvilState = false
+		end
+		-- Send every accepted edit immediately. Reliable net ordering then puts
+		-- the authoritative rename ahead of a result-slot click made afterwards.
+		local ok, err = MC.RequestAnvilRename( entry:GetValue() or "" )
+		if not ok then self.AnvilLocalError = err or "anvil_rename_failed" end
+	end
+
 	self.Scrollbar = vgui.Create( "MCInventoryScrollbar", self )
 	self.Scrollbar:SetScreen( self )
 	self.Scrollbar:SetVisible( false )
@@ -274,6 +313,7 @@ function PANEL:Init()
 		panel:RefreshCreativeItems()
 		panel:LayoutVisibleSlots()
 	end )
+	hook.Add( "MCAnvilStateChanged", self, function( panel, anvilState ) panel:ApplyAnvilState( anvilState ) end )
 	hook.Add( "OnScreenSizeChanged", self, function( panel ) panel:Reflow() end )
 end
 
@@ -285,6 +325,8 @@ function PANEL:Configure( session, state )
 	self.CraftingTable = self.MenuKind == "crafting_table"
 	self.Furnace = self.MenuKind == "furnace" or self.MenuKind == "blast_furnace"
 	self.BlastFurnace = self.MenuKind == "blast_furnace"
+	self.Brewing = self.MenuKind == "brewing_stand"
+	self.Anvil = self.MenuKind == "anvil"
 	self.Crafting = session and session.crafting == true
 		or self.State and self.State.menu and self.State.menu.crafting == true or false
 	self.Creative = session and session.creative == true
@@ -298,6 +340,7 @@ function PANEL:Configure( session, state )
 	self:RefreshCreativeItems()
 	self:Reflow()
 	self:RefreshInventorySlots()
+	self:ApplyAnvilState( session and session.anvilState )
 	self.ObservedStateMenu = self.State and self.State.menu or nil
 	self.ObservedStateReady = self.State and self.State.ready == true or false
 	self.ConfigureGeneration = ( self.ConfigureGeneration or 0 ) + 1
@@ -309,6 +352,26 @@ function PANEL:Configure( session, state )
 	self:RequestFocus()
 end
 
+function PANEL:ApplyAnvilState( anvilState )
+	if not self.Anvil or not IsValid( self.AnvilEntry ) then return end
+	anvilState = anvilState or self.Session and self.Session.anvilState or {}
+	self.AnvilState = anvilState
+	self.AnvilLocalError = nil
+	local left = MC.GetClientMenuStack and MC.GetClientMenuStack( 0 ) or nil
+	local display = tostring( anvilState.renameText or "" )
+	if anvilState.renameExplicit ~= true and not MC.IsEmptyItemStack( left ) then
+		display = UI.ItemRenderer and UI.ItemRenderer.DisplayName and UI.ItemRenderer.DisplayName( left ) or display
+	end
+	self.ApplyingAnvilState = true
+	self.AnvilEntry:SetText( display )
+	self.AnvilEntry:SetCaretPos( #display )
+	self.ApplyingAnvilState = false
+	local editable = not MC.IsEmptyItemStack( left )
+	self.AnvilEntry:SetTextColor( editable and Color( 45, 45, 45, 255 ) or Color( 120, 120, 120, 255 ) )
+	self.AnvilEntry:SetEditable( editable )
+	self.AnvilEntry:SetEnabled( editable )
+end
+
 function PANEL:ApplyLatestClientState( state )
 	if not IsValid( self ) then return end
 	self.State = state or MC.ClientInventory or self.State
@@ -317,6 +380,7 @@ function PANEL:ApplyLatestClientState( state )
 	if self.Creative then self:RefreshCreativeItems() end
 	self:LayoutVisibleSlots()
 	self:LayoutSpecialControls()
+	if self.Anvil then self:ApplyAnvilState( self.Session and self.Session.anvilState ) end
 end
 
 function PANEL:ConfigurePlayerPreview()
@@ -348,7 +412,7 @@ function PANEL:Reflow()
 		self.ContentW, self.ContentH = 176, 114 + self.ChestRows * 18
 		self.Left = math.floor( ( ScrW() - self.ContentW * self.Scale ) * 0.5 )
 		self.Top = math.floor( ( ScrH() - self.ContentH * self.Scale ) * 0.5 )
-	elseif self.Furnace then
+	elseif self.Furnace or self.Brewing or self.Anvil then
 		self.ContentW, self.ContentH = SURVIVAL_W, SURVIVAL_H
 		self.Left = math.floor( ( ScrW() - SURVIVAL_W * self.Scale ) * 0.5 )
 		self.Top = math.floor( ( ScrH() - SURVIVAL_H * self.Scale ) * 0.5 )
@@ -474,6 +538,34 @@ function PANEL:LayoutVisibleSlots()
 		for index = 0, 8 do
 			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index, 8 + index * 18, inventoryTop + 58 )
 		end
+	elseif self.Anvil then
+		ordinal = self:PlaceMenuSlot( ordinal, 0, nil, 27, 47, "input" )
+		ordinal = self:PlaceMenuSlot( ordinal, 1, nil, 76, 47, "input" )
+		ordinal = self:PlaceMenuSlot( ordinal, 2, nil, 134, 47, "result" )
+		local playerOffset = math.floor( tonumber( self.Session and self.Session.playerOffset ) or 3 )
+		for index = 9, 35 do
+			local position = index - 9
+			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index,
+				8 + position % 9 * 18, 84 + math.floor( position / 9 ) * 18 )
+		end
+		for index = 0, 8 do
+			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index, 8 + index * 18, 142 )
+		end
+	elseif self.Brewing then
+		ordinal = self:PlaceMenuSlot( ordinal, 0, nil, 56, 51, "bottle" )
+		ordinal = self:PlaceMenuSlot( ordinal, 1, nil, 79, 58, "bottle" )
+		ordinal = self:PlaceMenuSlot( ordinal, 2, nil, 102, 51, "bottle" )
+		ordinal = self:PlaceMenuSlot( ordinal, 3, nil, 79, 17, "ingredient" )
+		ordinal = self:PlaceMenuSlot( ordinal, 4, nil, 17, 17, "fuel" )
+		local playerOffset = math.floor( tonumber( self.Session and self.Session.playerOffset ) or 5 )
+		for index = 9, 35 do
+			local position = index - 9
+			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index,
+				8 + position % 9 * 18, 84 + math.floor( position / 9 ) * 18 )
+		end
+		for index = 0, 8 do
+			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index, 8 + index * 18, 142 )
+		end
 	elseif self.Furnace then
 		ordinal = self:PlaceMenuSlot( ordinal, 0, nil, 56, 17, "input" )
 		ordinal = self:PlaceMenuSlot( ordinal, 1, nil, 56, 53, "fuel" )
@@ -571,22 +663,28 @@ function PANEL:LayoutSpecialControls()
 	if not self.Left then return end
 	local tab = self.Creative and UI.CreativeTabsByKey[self.SelectedTabKey] or nil
 	local search = tab and tab.key == "search"
-	self.SearchEntry:SetVisible( search == true )
-	if search then
+	if IsValid( self.SearchEntry ) then self.SearchEntry:SetVisible( search == true ) end
+	if search and IsValid( self.SearchEntry ) then
 		self.SearchEntry:SetPos( self.Left + 82 * self.Scale, self.Top + 6 * self.Scale )
 		self.SearchEntry:SetSize( 80 * self.Scale, 10 * self.Scale )
 		self.SearchEntry:RequestFocus()
 	end
 	local scroll = self.Creative and tab and tab.key ~= "inventory" and self:MaxScrollRows() > 0
-	self.Scrollbar:SetVisible( scroll == true )
-	if scroll then
+	if IsValid( self.Scrollbar ) then self.Scrollbar:SetVisible( scroll == true ) end
+	if scroll and IsValid( self.Scrollbar ) then
 		self.Scrollbar:SetPos( self.Left + 175 * self.Scale, self.Top + 18 * self.Scale )
 		self.Scrollbar:SetSize( 12 * self.Scale, 112 * self.Scale )
 	end
-	local preview = not self.Chest and not self.Furnace and not self.CraftingTable
+	if IsValid( self.AnvilEntry ) then self.AnvilEntry:SetVisible( self.Anvil == true ) end
+	if self.Anvil and IsValid( self.AnvilEntry ) then
+		self.AnvilEntry:SetFont( "MCInventorySearch" .. tostring( self.Scale ) )
+		self.AnvilEntry:SetPos( self.Left + 62 * self.Scale, self.Top + 23 * self.Scale )
+		self.AnvilEntry:SetSize( 103 * self.Scale, 13 * self.Scale )
+	end
+	local preview = not self.Chest and not self.Furnace and not self.Brewing and not self.Anvil and not self.CraftingTable
 		and ( not self.Creative or tab and tab.key == "inventory" )
-	self.PlayerPreview:SetVisible( preview == true )
-	if preview then
+	if IsValid( self.PlayerPreview ) then self.PlayerPreview:SetVisible( preview == true ) end
+	if preview and IsValid( self.PlayerPreview ) then
 		if self.Creative then
 			self.PlayerPreview:SetPos( self.Left + 73 * self.Scale, self.Top + 6 * self.Scale )
 			self.PlayerPreview:SetSize( 32 * self.Scale, 43 * self.Scale )
@@ -661,6 +759,9 @@ function PANEL:RefreshMenuSlots( changed )
 			if IsValid( slot ) and slot:IsInventorySlot() then slot:RefreshInventoryStack() end
 		end
 	end
+	if self.Anvil and ( type( changed ) ~= "table" or table.HasValue( changed, 0 ) ) then
+		self:ApplyAnvilState( self.Session and self.Session.anvilState )
+	end
 end
 
 function PANEL:RefreshCreativeItems()
@@ -731,6 +832,8 @@ function PANEL:ClearHoveredSlot( slot ) if self.HoveredSlot == slot then self.Ho
 
 function PANEL:BackgroundMaterial()
 	if self.Chest then return CHEST_BACKGROUND end
+	if self.Anvil then return ANVIL_BACKGROUND end
+	if self.Brewing then return BREWING_BACKGROUND end
 	if self.Furnace then return self.BlastFurnace and BLAST_FURNACE_BACKGROUND or FURNACE_BACKGROUND end
 	if self.CraftingTable then return CRAFTING_BACKGROUND end
 	if not self.Creative then return SURVIVAL_BACKGROUND end
@@ -783,11 +886,86 @@ function PANEL:PaintContent()
 			end
 		end )
 	end
+	if self.Brewing then
+		local state = self.Session and self.Session.brewingState or {}
+		local fuel = math.Clamp( math.floor( tonumber( state.fuel ) or 0 ), 0, 20 )
+		local fuelLength = math.Clamp( math.ceil( 18 * fuel / 20 ), 0, 18 )
+		local brewTime = math.Clamp( math.floor( tonumber( state.brewTime ) or 0 ), 0, 400 )
+		local bubbleLengths = { 29, 24, 20, 16, 11, 6, 0 }
+		UI.WithPointFiltering( function()
+			for slot, position in ipairs( { { 56, 51 }, { 79, 58 }, { 102, 51 } } ) do
+				local stack = MC.GetClientMenuStack and MC.GetClientMenuStack( slot - 1 ) or nil
+				if MC.IsEmptyItemStack( stack ) then
+					UI.DrawTexture( BREWING_SLOT_POTION, self.Left + position[1] * self.Scale,
+						self.Top + position[2] * self.Scale, 16 * self.Scale, 16 * self.Scale )
+				end
+			end
+			local fuelStack = MC.GetClientMenuStack and MC.GetClientMenuStack( 4 ) or nil
+			if MC.IsEmptyItemStack( fuelStack ) then
+				UI.DrawTexture( BREWING_SLOT_FUEL, self.Left + 17 * self.Scale, self.Top + 17 * self.Scale,
+					16 * self.Scale, 16 * self.Scale )
+			end
+			if fuelLength > 0 then
+				UI.DrawTexture( BREWING_FUEL, self.Left + 60 * self.Scale, self.Top + 44 * self.Scale,
+					fuelLength * self.Scale, 4 * self.Scale, 0, 0, fuelLength / 18, 1 )
+			end
+			if brewTime > 0 then
+				local progressLength = math.floor( 28 * ( 1 - brewTime / 400 ) )
+				if progressLength > 0 then
+					UI.DrawTexture( BREWING_PROGRESS, self.Left + 97 * self.Scale, self.Top + 16 * self.Scale,
+						9 * self.Scale, progressLength * self.Scale, 0, 0, 1, progressLength / 28 )
+				end
+				local bubbleLength = bubbleLengths[math.floor( brewTime / 2 ) % 7 + 1]
+				if bubbleLength > 0 then
+					UI.DrawTexture( BREWING_BUBBLES, self.Left + 63 * self.Scale,
+						self.Top + ( 14 + 29 - bubbleLength ) * self.Scale,
+						12 * self.Scale, bubbleLength * self.Scale,
+						0, ( 29 - bubbleLength ) / 29, 1, 1 )
+				end
+			end
+		end )
+	end
+	if self.Anvil then
+		local left = MC.GetClientMenuStack and MC.GetClientMenuStack( 0 ) or nil
+		UI.WithPointFiltering( function()
+			UI.DrawTexture( MC.IsEmptyItemStack( left ) and ANVIL_TEXT_FIELD_DISABLED or ANVIL_TEXT_FIELD,
+				self.Left + 59 * self.Scale, self.Top + 20 * self.Scale, 110 * self.Scale, 16 * self.Scale )
+			local state = self.AnvilState or self.Session and self.Session.anvilState or {}
+			local right = MC.GetClientMenuStack and MC.GetClientMenuStack( 1 ) or nil
+			if not MC.IsEmptyItemStack( left ) and not MC.IsEmptyItemStack( right ) and state.resultAvailable ~= true then
+				UI.DrawTexture( ANVIL_ERROR, self.Left + 99 * self.Scale, self.Top + 45 * self.Scale,
+					28 * self.Scale, 21 * self.Scale )
+			end
+		end )
+	end
 	if self.Chest then
 		local title = self.ChestRows > 3 and "Large Chest" or "Chest"
 		UI.DrawText( title, self.Left + 8 * self.Scale, self.Top + 6 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
 		UI.DrawText( "Inventory", self.Left + 8 * self.Scale,
 			self.Top + ( self.ChestRows * 18 + 20 ) * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+	elseif self.Anvil then
+		local chinese = MC.Language and MC.Language() == "zh_cn"
+		UI.DrawText( chinese and "物品栏" or "Inventory", self.Left + 8 * self.Scale,
+			self.Top + 72 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+		local state = self.AnvilState or self.Session and self.Session.anvilState or {}
+		local errorCode = self.AnvilLocalError or state.error
+		if state.tooExpensive then
+			UI.DrawText( chinese and "过于昂贵！" or "Too Expensive!", self.Left + 166 * self.Scale,
+				self.Top + 69 * self.Scale, self.Scale, Color( 255, 85, 85 ), TEXT_ALIGN_RIGHT, true )
+		elseif ( tonumber( state.cost ) or 0 ) > 0 and state.resultAvailable then
+			local label = ( chinese and "附魔花费：" or "Enchantment Cost: " ) .. tostring( state.cost )
+			UI.DrawText( label, self.Left + 166 * self.Scale, self.Top + 69 * self.Scale,
+				self.Scale, Color( 128, 255, 32 ), TEXT_ALIGN_RIGHT, true )
+		elseif errorCode == "name_too_long" then
+			UI.DrawText( chinese and "名称过长" or "Name too long", self.Left + 166 * self.Scale,
+				self.Top + 69 * self.Scale, self.Scale, Color( 255, 85, 85 ), TEXT_ALIGN_RIGHT, true )
+		end
+	elseif self.Brewing then
+		local chinese = MC.Language and MC.Language() == "zh_cn"
+		UI.DrawText( chinese and "酿造台" or "Brewing Stand", self.Left + 88 * self.Scale,
+			self.Top + 6 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_CENTER, false )
+		UI.DrawText( chinese and "物品栏" or "Inventory", self.Left + 8 * self.Scale,
+			self.Top + 72 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
 	elseif self.Furnace then
 		local chinese = MC.Language and MC.Language() == "zh_cn"
 		local title = self.BlastFurnace and ( chinese and "高炉" or "Blast Furnace" )

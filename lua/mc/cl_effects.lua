@@ -13,6 +13,25 @@ local function generatedSoundSetForBlock( id )
 	return sets[soundType] or sets.STONE
 end
 
+local function selectSoundCandidate( list )
+	if not list or #list == 0 then return nil end
+	local totalWeight = 0
+	for _, candidate in ipairs( list ) do
+		local weight = istable( candidate ) and tonumber( candidate.weight ) or 1
+		totalWeight = totalWeight + math.max( 1, math.floor( weight or 1 ) )
+	end
+	local choice = math.random( totalWeight )
+	for _, candidate in ipairs( list ) do
+		local weight = istable( candidate ) and tonumber( candidate.weight ) or 1
+		choice = choice - math.max( 1, math.floor( weight or 1 ) )
+		if choice <= 0 then
+			if istable( candidate ) then return candidate end
+			return { sound = candidate, volume = 1, pitch = 1 }
+		end
+	end
+	return nil
+end
+
 local function playBlockSound( kind, id, pos )
 	local set = generatedSoundSetForBlock( id )
 	if not set then return end
@@ -20,28 +39,29 @@ local function playBlockSound( kind, id, pos )
 	local list = kind == 2 and set.breaks or set.place
 	if not list or #list == 0 then return end
 
-	local snd = list[math.random( #list )]
-	local volume = ((tonumber( set.volume ) or 1) + 1) * 0.5
-	local pitch = (tonumber( set.pitch ) or 1) * 80 * math.Rand( 0.96, 1.04 )
-	sound.Play( snd, pos, 72, math.floor( pitch + 0.5 ), volume )
+	local selected = selectSoundCandidate( list )
+	if not selected or not selected.sound then return end
+	local volume = ((tonumber( set.volume ) or 1) + 1) * 0.5 * (tonumber( selected.volume ) or 1)
+	local pitch = (tonumber( set.pitch ) or 1) * (tonumber( selected.pitch ) or 1) * 80 * math.Rand( 0.96, 1.04 )
+	sound.Play( selected.sound, pos, 72, math.floor( pitch + 0.5 ), volume )
 end
 
 function MC.PlayBlockMiningHitSound( id, pos )
 	local set = generatedSoundSetForBlock( id )
 	if not set then return false end
-	-- New sound catalogs may expose SoundType#getHitSound separately. Existing
-	-- catalogs contain the same vanilla samples under breaks, so keep them as
-	-- the compatibility fallback instead of substituting placement audio.
-	local list = set.hits or set.breaks
-	if not list or #list == 0 then return false end
+	-- SoundType#getHitSound is a separate Java event.  Generated catalogs must
+	-- carry it explicitly: break samples are not a valid mining-progress alias.
+	local candidates = set.hits
+	if not candidates or #candidates == 0 then return false end
 
-	local snd = list[math.random( #list )]
+	local selected = selectSoundCandidate( candidates )
+	if not selected or not selected.sound then return false end
 	-- MultiPlayerGameMode.continueDestroyBlock uses
 	-- `SoundType#getVolume() + 1.0F) / 8.0F` for the hit event.
 	-- Keep the Java gain; do not compensate it with a Source-only multiplier.
-	local volume = ((tonumber( set.volume ) or 1) + 1) / 8
-	local pitch = (tonumber( set.pitch ) or 1) * 0.5
-	sound.Play( snd, pos, 72, math.Clamp( math.floor( pitch * 100 + 0.5 ), 1, 255 ), volume )
+	local volume = ((tonumber( set.volume ) or 1) + 1) / 8 * (tonumber( selected.volume ) or 1)
+	local pitch = (tonumber( set.pitch ) or 1) * 0.5 * (tonumber( selected.pitch ) or 1)
+	sound.Play( selected.sound, pos, 72, math.Clamp( math.floor( pitch * 100 + 0.5 ), 1, 255 ), volume )
 	return true
 end
 

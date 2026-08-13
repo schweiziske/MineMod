@@ -17,6 +17,9 @@ end
 for _, f in ipairs( parts ) do
 	include( f )
 end
+local hitLoader = "mc/generated/sh_generated_sound_hits.lua"
+if SERVER then AddCSLuaFile( hitLoader ) end
+include( hitLoader )
 if SERVER then
 	for _, f in ipairs( MC.GeneratedSoundResources ) do
 		-- resource.AddFile( f )
