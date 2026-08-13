@@ -38,11 +38,13 @@ local SHARED = {
 	"mcgame/generated/sh_generated_item_sprite_masks.lua",
 	"mcgame/generated/sh_generated_creative_tabs.lua",
 	"mcgame/item/sh_stack.lua",
+	"mcgame/item/sh_potion_contents.lua",
 	"mcgame/item/sh_definition.lua",
 	"mcgame/item/sh_behavior.lua",
 	"mcgame/item/sh_equipment.lua",
 	"mcgame/item/sh_projectile_defs.lua",
 	"mcgame/item/sh_codec.lua",
+	"mcgame/inventory/sh_creative_stacks.lua",
 	"mcgame/recipe/sh_registry.lua",
 	"mcgame/generated/sh_generated_recipes.lua",
 	"mcgame/recipe/sh_book.lua",
@@ -84,6 +86,7 @@ local CLIENT_FILES = {
 	"mcgame/inventory/ui/cl_entry.lua",
 	"mcgame/inventory/ui/cl_item_renderer.lua",
 	"mcgame/inventory/ui/cl_tooltip.lua",
+	"mcgame/inventory/ui/cl_effects.lua",
 	"mcgame/inventory/ui/cl_slot.lua",
 	"mcgame/inventory/ui/cl_drag.lua",
 	"mcgame/inventory/ui/cl_recipe_book.lua",
@@ -103,6 +106,7 @@ if SERVER then
 		-- without any of them.
 		for _, fileName in ipairs( {
 			"materials/mc/gui/recipe_book.png",
+			"materials/mc/misc/enchanted_glint_item.png",
 		} ) do
 			resource.AddFile( fileName )
 		end
@@ -119,6 +123,9 @@ if SERVER then
 			"materials/mc/gui/sprites/container",
 			"materials/mc/gui/sprites/container/furnace",
 			"materials/mc/gui/sprites/container/creative_inventory",
+			"materials/mc/gui/sprites/hud",
+			"materials/mc/gui/sprites/container/inventory",
+			"materials/mc/gui/mob_effect",
 			"materials/mc/gui/sprites/recipe_book",
 		} ) do
 			for _, fileName in ipairs( file.Find( resourceRoot .. "/*.png", "GAME" ) or {} ) do

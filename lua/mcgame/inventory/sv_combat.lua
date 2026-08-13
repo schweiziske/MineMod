@@ -274,6 +274,13 @@ local function applyEquipmentCombatDamage( target, damageInfo )
 		local force = damageInfo:GetDamageForce()
 		if force then damageInfo:SetDamageForce( force * math.Clamp( 1 - knockback, 0, 1 ) ) end
 	end
+	-- MCITEM status mitigation is deliberately invoked after the vanilla-shaped
+	-- shield/armor calculation. Java LivingEntity.actuallyHurt consumes
+	-- absorption after armor and magic resistance; exposing this boundary keeps
+	-- an addon hook from depending on EntityTakeDamage registration order.
+	damageInfo:SetDamage( math.max( 0, damage ) )
+	hook.Run( "MCITEM.DamageAfterEquipmentMitigation", target, damageInfo, metadata )
+	damage = math.max( 0, tonumber( damageInfo:GetDamage() ) or 0 )
 	damageInfo:SetDamage( damage )
 	if metadata then
 		metadata.blockedDamage = blockedDamage

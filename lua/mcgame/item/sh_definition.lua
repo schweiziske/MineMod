@@ -27,31 +27,33 @@ local function numberField( value, minimum, maximum, fallback )
 	return math.max( minimum, math.min( maximum, value ) )
 end
 
--- Values mirror out/net/minecraft/world/food/Foods.java.  Keeping this small
--- immutable table in the shared definition layer lets the first consumable
--- path work even before every Item.Properties component is serialized into
--- the generated registry.
+-- Values mirror out/net/minecraft/world/food/Foods.java.  The second value is
+-- the final FoodProperties.saturation value, not the old saturation modifier:
+-- FoodData.eat(nutrition, modifier) performs nutrition * modifier * 2, while
+-- FoodData.eat(FoodProperties) receives the already-computed saturation field.
+-- Keeping final values here makes component-backed and fallback-backed stacks
+-- obey the same contract.
 local VANILLA_FOOD = {
-	["minecraft:apple"] = { 4, 0.3 }, ["minecraft:baked_potato"] = { 5, 0.6 },
-	["minecraft:beef"] = { 3, 0.3 }, ["minecraft:beetroot"] = { 1, 0.6 },
-	["minecraft:beetroot_soup"] = { 6, 0.6 }, ["minecraft:bread"] = { 5, 0.6 },
-	["minecraft:carrot"] = { 3, 0.6 }, ["minecraft:chicken"] = { 2, 0.3 },
-	["minecraft:chorus_fruit"] = { 4, 0.3, true }, ["minecraft:cod"] = { 2, 0.1 },
-	["minecraft:cooked_beef"] = { 8, 0.8 }, ["minecraft:cooked_chicken"] = { 6, 0.6 },
-	["minecraft:cooked_cod"] = { 5, 0.6 }, ["minecraft:cooked_mutton"] = { 6, 0.8 },
-	["minecraft:cooked_porkchop"] = { 8, 0.8 }, ["minecraft:cooked_rabbit"] = { 5, 0.6 },
-	["minecraft:cooked_salmon"] = { 6, 0.8 }, ["minecraft:cookie"] = { 2, 0.1 },
-	["minecraft:dried_kelp"] = { 1, 0.3 }, ["minecraft:enchanted_golden_apple"] = { 4, 1.2, true },
-	["minecraft:golden_apple"] = { 4, 1.2, true }, ["minecraft:golden_carrot"] = { 6, 1.2 },
-	["minecraft:honey_bottle"] = { 6, 0.1, true }, ["minecraft:melon_slice"] = { 2, 0.3 },
-	["minecraft:mushroom_stew"] = { 6, 0.6 }, ["minecraft:mutton"] = { 2, 0.3 },
-	["minecraft:poisonous_potato"] = { 2, 0.3 }, ["minecraft:porkchop"] = { 3, 0.3 },
-	["minecraft:potato"] = { 1, 0.3 }, ["minecraft:pufferfish"] = { 1, 0.1 },
-	["minecraft:pumpkin_pie"] = { 8, 0.3 }, ["minecraft:rabbit"] = { 3, 0.3 },
-	["minecraft:rabbit_stew"] = { 10, 0.6 }, ["minecraft:rotten_flesh"] = { 4, 0.1 },
-	["minecraft:salmon"] = { 2, 0.1 }, ["minecraft:spider_eye"] = { 2, 0.8 },
-	["minecraft:suspicious_stew"] = { 6, 0.6, true }, ["minecraft:sweet_berries"] = { 2, 0.1 },
-	["minecraft:glow_berries"] = { 2, 0.1 }, ["minecraft:tropical_fish"] = { 1, 0.1 },
+	["minecraft:apple"] = { 4, 2.4 }, ["minecraft:baked_potato"] = { 5, 6.0 },
+	["minecraft:beef"] = { 3, 1.8 }, ["minecraft:beetroot"] = { 1, 1.2 },
+	["minecraft:beetroot_soup"] = { 6, 7.2 }, ["minecraft:bread"] = { 5, 6.0 },
+	["minecraft:carrot"] = { 3, 3.6 }, ["minecraft:chicken"] = { 2, 1.2 },
+	["minecraft:chorus_fruit"] = { 4, 2.4, true }, ["minecraft:cod"] = { 2, 0.4 },
+	["minecraft:cooked_beef"] = { 8, 12.8 }, ["minecraft:cooked_chicken"] = { 6, 7.2 },
+	["minecraft:cooked_cod"] = { 5, 6.0 }, ["minecraft:cooked_mutton"] = { 6, 9.6 },
+	["minecraft:cooked_porkchop"] = { 8, 12.8 }, ["minecraft:cooked_rabbit"] = { 5, 6.0 },
+	["minecraft:cooked_salmon"] = { 6, 9.6 }, ["minecraft:cookie"] = { 2, 0.4 },
+	["minecraft:dried_kelp"] = { 1, 0.6 }, ["minecraft:enchanted_golden_apple"] = { 4, 9.6, true },
+	["minecraft:golden_apple"] = { 4, 9.6, true }, ["minecraft:golden_carrot"] = { 6, 14.4 },
+	["minecraft:honey_bottle"] = { 6, 1.2, true }, ["minecraft:melon_slice"] = { 2, 1.2 },
+	["minecraft:mushroom_stew"] = { 6, 7.2 }, ["minecraft:mutton"] = { 2, 1.2 },
+	["minecraft:poisonous_potato"] = { 2, 1.2 }, ["minecraft:porkchop"] = { 3, 1.8 },
+	["minecraft:potato"] = { 1, 0.6 }, ["minecraft:pufferfish"] = { 1, 0.2 },
+	["minecraft:pumpkin_pie"] = { 8, 4.8 }, ["minecraft:rabbit"] = { 3, 1.8 },
+	["minecraft:rabbit_stew"] = { 10, 12.0 }, ["minecraft:rotten_flesh"] = { 4, 0.8 },
+	["minecraft:salmon"] = { 2, 0.4 }, ["minecraft:spider_eye"] = { 2, 3.2 },
+	["minecraft:suspicious_stew"] = { 6, 7.2, true }, ["minecraft:sweet_berries"] = { 2, 0.4 },
+	["minecraft:glow_berries"] = { 2, 0.4 }, ["minecraft:tropical_fish"] = { 1, 0.2 },
 }
 
 function MC.ItemUseDuration( stackOrDefinition, user )

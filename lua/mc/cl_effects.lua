@@ -36,9 +36,10 @@ function MC.PlayBlockMiningHitSound( id, pos )
 	if not list or #list == 0 then return false end
 
 	local snd = list[math.random( #list )]
-	-- Source's positional attenuation makes vanilla's /8 hit volume too quiet
-	-- in GMod. Keep the SoundType scaling but raise the audible result by 2x.
-	local volume = ((tonumber( set.volume ) or 1) + 1) / 4
+	-- MultiPlayerGameMode.continueDestroyBlock uses
+	-- `SoundType#getVolume() + 1.0F) / 8.0F` for the hit event.
+	-- Keep the Java gain; do not compensate it with a Source-only multiplier.
+	local volume = ((tonumber( set.volume ) or 1) + 1) / 8
 	local pitch = (tonumber( set.pitch ) or 1) * 0.5
 	sound.Play( snd, pos, 72, math.Clamp( math.floor( pitch * 100 + 0.5 ), 1, 255 ), volume )
 	return true

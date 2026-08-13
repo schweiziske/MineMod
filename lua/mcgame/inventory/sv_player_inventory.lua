@@ -70,6 +70,7 @@ local function updateHeldNetwork( record, context )
 	ply:SetNWInt( "mc_selected_item_damage", stack and stack.damage or 0 )
 	ply:SetNWInt( "mc_selected_item_runtime", definition and definition.runtimeId or 0 )
 	ply:SetNWInt( "mc_selected_block", definition and definition.blockId or 0 )
+	ply:SetNWBool( "mc_selected_item_foil", stack and MC.ItemStackHasFoil and MC.ItemStackHasFoil( stack ) or false )
 	if MC.RunEvent then
 		MC.RunEvent( "MC.PlayerHeldItemChanged", ply, selected, MC.CopyItemStack( stack ), context or {} )
 	end

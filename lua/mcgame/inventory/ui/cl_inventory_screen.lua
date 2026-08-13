@@ -268,6 +268,12 @@ function PANEL:Init()
 		panel.ErrorText = tostring( errorCode ~= "" and errorCode or "inventory_action_rejected" )
 		panel.ErrorUntil = RealTime() + 2.5
 	end )
+	hook.Add( "MC.CreativeStackProvidersChanged", self, function( panel )
+		if not panel.Creative then return end
+		panel.ScrollRow = 0
+		panel:RefreshCreativeItems()
+		panel:LayoutVisibleSlots()
+	end )
 	hook.Add( "OnScreenSizeChanged", self, function( panel ) panel:Reflow() end )
 end
 
@@ -665,22 +671,24 @@ function PANEL:RefreshCreativeItems()
 	local source = tab.items
 	if tab.key == "hotbar" then
 		source = {}
-		local seen = {}
 		for index = 0, 8 do
 			local stack = MC.ClientInventory and MC.ClientInventory.slots[index + 1]
-			if stack and not seen[stack.item] then seen[stack.item] = true source[#source + 1] = stack.item end
+			if stack then source[#source + 1] = MC.CopyItemStack( stack, 1 ) end
 		end
 	end
+	local stacks = MC.BuildCreativeTabStacks and MC.BuildCreativeTabStacks( tab.key, source ) or {}
 	local query = tab.key == "search" and string.lower( self.SearchEntry:GetValue() or "" ) or ""
-	for _, itemName in ipairs( source or {} ) do
-		local definition = MC.GetItem and MC.GetItem( itemName ) or nil
+	for _, stack in ipairs( stacks ) do
+		local definition = MC.GetItem and MC.GetItem( stack.item ) or nil
 		if definition and definition.name ~= "minecraft:air" then
 			local include = true
 			if query ~= "" then
-				local haystack = string.lower( tostring( definition.name ) .. " " .. tostring( MC.ItemDisplayName( definition ) ) )
+				local displayName = UI.ItemRenderer and UI.ItemRenderer.DisplayName and UI.ItemRenderer.DisplayName( stack )
+					or MC.ItemDisplayName and MC.ItemDisplayName( definition ) or definition.name
+				local haystack = string.lower( tostring( definition.name ) .. " " .. tostring( displayName ) )
 				include = string.find( haystack, query, 1, true ) ~= nil
 			end
-			if include then self.CurrentItems[#self.CurrentItems + 1] = definition.name end
+			if include then self.CurrentItems[#self.CurrentItems + 1] = MC.CopyItemStack( stack, 1 ) end
 		end
 	end
 	self.ScrollRow = math.Clamp( self.ScrollRow, 0, self:MaxScrollRows() )
@@ -802,6 +810,7 @@ function PANEL:PaintContent()
 end
 
 function PANEL:PaintOver()
+	if UI.DrawActiveEffectsInventory then UI.DrawActiveEffectsInventory( self ) end
 	local mouseX, mouseY = gui.MousePos()
 	local carried = MC.ClientInventory and MC.ClientInventory.cursor or nil
 	if not MC.IsEmptyItemStack( carried ) then

@@ -27,7 +27,9 @@ end
 local function slotKey( slot )
 	if not IsValid( slot ) then return "invalid" end
 	if slot:IsInventorySlot() then return "menu:" .. tostring( slot:GetActionIndex() ) end
-	if slot.Kind == "creative" and slot.Stack then return "creative:" .. tostring( slot.Stack.item ) end
+	if slot.Kind == "creative" and slot.Stack then
+		return "creative:" .. tostring( MC.ItemStackHash and MC.ItemStackHash( slot.Stack ) or slot.Stack.item )
+	end
 	return tostring( slot.Kind )
 end
 
@@ -36,7 +38,7 @@ local function creativePick( slot, count, target )
 	if MC.IsEmptyItemStack( stack ) then return false end
 	local definition = MC.GetItem( stack.item )
 	if not definition then return false end
-	return MC.QueueCreativeInventoryPick( definition, count or definition.maxStack, target )
+	return MC.QueueCreativeInventoryPick( stack, count or definition.maxStack, target )
 end
 
 local function slotAtCursor( active )

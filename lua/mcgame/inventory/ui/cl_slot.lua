@@ -50,12 +50,12 @@ function PANEL:SetMenuSlot( index, playerIndex, role )
 end
 
 function PANEL:SetCreativeItem( item )
-	local definition = MC.GetItem and MC.GetItem( item ) or nil
+	local stack = MC.NormalizeItemStack and MC.NormalizeItemStack( item ) or nil
 	self.Kind = "creative"
-	self.CreativeItem = item
+	self.CreativeItem = MC.CopyItemStack( stack, 1 )
 	self.InventoryIndex = nil
 	self.MenuIndex = nil
-	self.Stack = definition and MC.NewItemStack( definition.name, 1 ) or nil
+	self.Stack = MC.CopyItemStack( stack, 1 )
 	return self
 end
 

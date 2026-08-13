@@ -319,8 +319,7 @@ local function pumpActions()
 				net.WriteUInt( action.revision, 32 )
 				net.WriteUInt( action.actionId, 16 )
 				if action.kind == "creative_pick" then
-					net.WriteUInt( action.runtimeId, MC.ItemStackRuntimeIdBits )
-					net.WriteUInt( action.count, 7 )
+					MC.WriteItemStackNet( action.stack )
 					net.WriteInt( action.targetSlot, 8 )
 				elseif action.kind == "recipe_place" then
 					net.WriteString( action.recipeId )
@@ -369,17 +368,23 @@ end
 
 function MC.QueueCreativeInventoryPick( item, count, targetSlot )
 	if not State.session or State.session.creative ~= true then return false, "creative_inventory_unavailable" end
-	local definition = MC.GetItem( item )
+	local source, sourceError = MC.NormalizeItemStack( item )
+	if not source then return false, sourceError or "unknown_item" end
+	local definition = MC.GetItem( source.item )
 	if not definition or definition.name == "minecraft:air" or definition.runtimeId == nil then return false, "unknown_item" end
 	count = math.floor( tonumber( count ) or definition.maxStack or 1 )
 	count = math.Clamp( count, 1, definition.maxStack or 1 )
 	targetSlot = math.floor( tonumber( targetSlot ) or -1 )
 	if targetSlot < -1 or targetSlot > 8 then return false, "invalid_creative_target" end
-	local stack, stackError = MC.NewItemStack( definition.name, count )
+	local stack, stackError = MC.NormalizeItemStack( {
+		item = source.item,
+		count = count,
+		damage = source.damage,
+		components = source.components,
+	} )
 	if not stack then return false, stackError or "item_stack_failed" end
 	return enqueueAction( {
-		kind = "creative_pick", runtimeId = definition.runtimeId, count = count,
-		targetSlot = targetSlot, stack = stack,
+		kind = "creative_pick", targetSlot = targetSlot, stack = stack,
 	} )
 end
 
@@ -387,11 +392,8 @@ function MC.QueueCreativeInventoryClear( targetSlot )
 	if not State.session or State.session.creative ~= true then return false, "creative_inventory_unavailable" end
 	targetSlot = math.floor( tonumber( targetSlot ) or -1 )
 	if targetSlot < -1 or targetSlot > 8 then return false, "invalid_creative_target" end
-	local air = MC.GetItem( "minecraft:air" )
-	if not air or air.runtimeId == nil then return false, "item_registry_unavailable" end
 	return enqueueAction( {
-		kind = "creative_pick", runtimeId = air.runtimeId, count = 0,
-		targetSlot = targetSlot, stack = nil,
+		kind = "creative_pick", targetSlot = targetSlot, stack = nil,
 	} )
 end
 

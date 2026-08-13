@@ -131,3 +131,117 @@ function SV.ConsumeSelectedItem( ply, amount, replacement, context )
 end
 
 MC.ConsumeSelectedItem = SV.ConsumeSelectedItem
+
+-- Atomically take one copy of the selected stack after applying a durability
+-- use that is not allowed to break the item.  This mirrors the ordering used by
+-- TridentItem.releaseUsing: nextDamageWillBreak(), hurtWithoutBreaking(1), then
+-- consumeAndReturn(1).  External projectile addons receive the complete stack
+-- (damage + components) without having to compose separate damage/consume
+-- transactions that could race or duplicate the item.
+local function selectedDurabilityTakeState( ply, durabilityAmount, context )
+	context = context or {}
+	durabilityAmount = math.floor( tonumber( durabilityAmount ) or 0 )
+	if durabilityAmount < 0 then return nil, nil, nil, nil, nil, "invalid_durability_amount" end
+	durabilityAmount = math.min( durabilityAmount, 255 )
+
+	local record, slotIndex, stack, matchError = SV.SelectedStackMatches( ply, context )
+	if not record then return nil, nil, nil, nil, nil, matchError end
+	if stack.count < 1 then return nil, nil, nil, nil, nil, "selected_item_count_too_low" end
+
+	local definition = MC.GetItem and MC.GetItem( stack.item ) or nil
+	if not definition then return nil, nil, nil, nil, nil, "unknown_selected_item" end
+	local maximum = math.max( 0, math.floor( tonumber( definition.maxDamage ) or 0 ) )
+	local currentDamage = math.max( 0, math.floor( tonumber( stack.damage ) or 0 ) )
+	local unbreakable = MC.ItemIsUnbreakable and MC.ItemIsUnbreakable( stack ) == true or false
+	local damageable = maximum > 0 and not unbreakable
+	local infinite = SV.PlayerHasInfiniteMaterials and SV.PlayerHasInfiniteMaterials( ply ) == true or false
+
+	-- nextDamageWillBreak() is checked before hurtWithoutBreaking().  Equality is
+	-- rejected: a trident at maxDamage - 1 cannot begin or finish a throw.
+	if damageable and durabilityAmount > 0 and currentDamage + durabilityAmount >= maximum then
+		return nil, nil, nil, nil, nil, "selected_item_would_break"
+	end
+
+	-- ItemStack.processDurabilityChange returns zero for infinite-material players,
+	-- so hurtWithoutBreaking leaves both the held stack and projectile copy at the
+	-- original damage value in creative mode.
+	local nextDamage = damageable and not infinite and currentDamage + durabilityAmount or currentDamage
+	return record, slotIndex, stack, infinite, nextDamage, nil, durabilityAmount
+end
+
+function SV.CanTakeSelectedItemWithDurability( ply, durabilityAmount, context )
+	local _, _, stack, infinite, _, err = selectedDurabilityTakeState( ply, durabilityAmount, context )
+	if not stack then return false, false, nil, err end
+	return true, infinite == true, MC.CopyItemStack( stack ), nil
+end
+
+function SV.TakeSelectedItemWithDurability( ply, durabilityAmount, context )
+	context = context or {}
+	local record, slotIndex, stack, infinite, nextDamage, stateError, normalizedAmount =
+		selectedDurabilityTakeState( ply, durabilityAmount, context )
+	if not record then return nil, false, nil, stateError end
+	durabilityAmount = normalizedAmount
+
+	local extracted = MC.CopyItemStack( stack, 1 )
+	if not extracted then return nil, false, nil, "selected_item_copy_failed" end
+	extracted.damage = nextDamage > 0 and nextDamage or nil
+
+	if infinite then
+		local result = { ok = true, infinite = true, changedSlots = {}, changed = {} }
+		if MC.RunEvent then
+			MC.RunEvent(
+				"MC.SelectedItemTakenWithDurability",
+				ply,
+				slotIndex,
+				MC.CopyItemStack( stack ),
+				MC.CopyItemStack( extracted ),
+				durabilityAmount,
+				true,
+				result
+			)
+		end
+		return extracted, true, result
+	end
+
+	local snapshot = MC.ContainerSnapshot( record.container )
+	local remaining = stack.count > 1 and MC.CopyItemStack( stack, stack.count - 1 ) or nil
+	-- ItemStack is damaged before consumeAndReturn copies/splits it.  Damageable
+	-- stacks are non-stackable in valid Minecraft data, but preserving this order
+	-- also makes the helper deterministic for externally supplied definitions.
+	if remaining then remaining.damage = nextDamage > 0 and nextDamage or nil end
+	local ok, setError = MC.ContainerSetStack( record.container, slotIndex, remaining )
+	if not ok then
+		MC.ContainerRestore( record.container, snapshot )
+		return nil, false, nil, setError or "selected_take_failed"
+	end
+
+	local result, commitError = SV.CommitPlayerInventoryMutation( record, snapshot, {
+		player = ply,
+		reason = context.reason or "selected_take_with_durability",
+		actionId = context.actionId,
+	} )
+	if not result then
+		MC.ContainerRestore( record.container, snapshot )
+		return nil, false, nil, commitError or "selected_take_commit_failed"
+	end
+
+	result.infinite = false
+	result.durabilityDamage = durabilityAmount
+	if MC.RunEvent then
+		local eventResult = MC.API and MC.API.DeepCopy and MC.API.DeepCopy( result ) or result
+		MC.RunEvent(
+			"MC.SelectedItemTakenWithDurability",
+			ply,
+			slotIndex,
+			MC.CopyItemStack( stack ),
+			MC.CopyItemStack( extracted ),
+			durabilityAmount,
+			false,
+			eventResult
+		)
+	end
+	return extracted, false, result
+end
+
+MC.TakeSelectedItemWithDurability = SV.TakeSelectedItemWithDurability
+MC.CanTakeSelectedItemWithDurability = SV.CanTakeSelectedItemWithDurability

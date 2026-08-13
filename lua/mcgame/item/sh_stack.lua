@@ -226,6 +226,64 @@ function MC.ItemStackHash( stack )
 	return util and util.CRC and util.CRC( canonical ) or canonical
 end
 
+-- ItemStack.hasFoil() in Java 26.2.  The explicit component is intentionally
+-- checked before every fallback: `false` is not the same as absence and must
+-- suppress enchantments as well as an item's built-in foil state.
+local DEFAULT_FOIL_ITEMS = {
+	["minecraft:enchanted_golden_apple"] = true,
+	["minecraft:experience_bottle"] = true,
+	["minecraft:written_book"] = true,
+	["minecraft:nether_star"] = true,
+	["minecraft:enchanted_book"] = true,
+	["minecraft:end_crystal"] = true,
+	["minecraft:debug_stick"] = true,
+}
+
+local function stackComponentPresence( stack, key )
+	local components = type( stack ) == "table" and stack.components or nil
+	if type( components ) ~= "table" then return nil, false end
+	if components[key] ~= nil then return components[key], true end
+	if string.find( key, ":", 1, true ) == nil then
+		local namespaced = "minecraft:" .. key
+		if components[namespaced] ~= nil then return components[namespaced], true end
+	end
+	return nil, false
+end
+
+local function enchantmentLevelPresent( value )
+	if type( value ) == "number" then return value > 0 end
+	if type( value ) ~= "table" then return false end
+	local level = tonumber( value.level or value.lvl )
+	if level then return level > 0 end
+	for key, entry in pairs( value ) do
+		if key ~= "show_in_tooltip" and key ~= "showInTooltip" and enchantmentLevelPresent( entry ) then
+			return true
+		end
+	end
+	return false
+end
+
+function MC.ItemStackHasFoil( stack )
+	if MC.IsEmptyItemStack( stack ) then return false end
+	local override, hasOverride = stackComponentPresence( stack, "enchantment_glint_override" )
+	if hasOverride and type( override ) == "boolean" then return override end
+
+	local enchantments = select( 1, stackComponentPresence( stack, "enchantments" ) )
+	if type( enchantments ) == "table" then
+		local levels = type( enchantments.levels ) == "table" and enchantments.levels or enchantments
+		if enchantmentLevelPresent( levels ) then return true end
+	end
+
+	local item = tostring( stack.item or "" )
+	if not string.find( item, ":", 1, true ) then item = "minecraft:" .. item end
+	if DEFAULT_FOIL_ITEMS[item] then return true end
+	if item == "minecraft:compass" then
+		local _, hasLodestoneTracker = stackComponentPresence( stack, "lodestone_tracker" )
+		if hasLodestoneTracker then return true end
+	end
+	return false
+end
+
 function MC.ItemStackToData( stack )
 	return MC.CopyItemStack( stack )
 end

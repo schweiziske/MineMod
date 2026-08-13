@@ -66,6 +66,10 @@ function Bridge.Reconcile( ply, stack, context )
 
 	local weapon, giveError = ensureOwnedWeapon( ply, targetClass )
 	if not weapon then return false, giveError end
+	if targetClass ~= Bridge.HandClass and targetClass ~= Bridge.InventoryClass then
+		weapon:SetNW2Bool( "MCITEM_InventoryProxy", true )
+		weapon:SetNW2Bool( "MCITEM_ItemFoil", stack and MC.ItemStackHasFoil and MC.ItemStackHasFoil( stack ) or false )
+	end
 	if currentClass ~= targetClass then ply:SelectWeapon( targetClass ) end
 	timer.Simple( 0, function() cleanupProxyWeapons( ply, targetClass ) end )
 	return true, targetClass
