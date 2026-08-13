@@ -104,6 +104,285 @@ local AtlasSources = {
 	},
 }
 
+MC.TexturePackDefinitions = MC.TexturePackDefinitions or {}
+MC.TexturePackLeases = MC.TexturePackLeases or {}
+MC.TexturePackLeaseSerial = MC.TexturePackLeaseSerial or 0
+MC.TexturePackRevision = MC.TexturePackRevision or 0
+
+local refreshTexturePackSelection
+
+local function normalizeTexturePackName( value )
+	value = string.lower( tostring( value or "" ) )
+	value = string.match( value, "^%s*(.-)%s*$" ) or ""
+	if value == "" or not string.match( value, "^[a-z0-9_%-]+$" ) then return nil end
+	return value
+end
+
+local function normalizeAtlasPath( value )
+	value = tostring( value or "" )
+	value = string.match( value, "^%s*(.-)%s*$" ) or ""
+	value = string.gsub( value, "\\", "/" )
+	value = string.gsub( value, "%.vmt$", "" )
+	value = string.gsub( value, "%.png$", "" )
+	if value == "" or string.find( value, "%.%.", 1, true ) then return nil end
+	if not string.match( value, "^[a-zA-Z0-9_/%-]+$") then return nil end
+	return value
+end
+
+local function normalizeTexturePackOwner( value )
+	value = string.lower( tostring( value or "" ) )
+	value = string.match( value, "^%s*(.-)%s*$" ) or ""
+	if value == "" or #value > 96 or not string.match( value, "^[a-z0-9_%.:%-]+$" ) then return nil end
+	return value
+end
+
+local function atlasSourceFromDefinition( definition )
+	return {
+		opaquePath = atlasPngPath( definition.opaquePath ),
+		translucentPath = atlasPngPath( definition.translucentPath ),
+		iconPath = atlasPngPath( definition.iconPath ),
+		custom = true,
+		owner = definition.owner,
+	}
+end
+
+for name, definition in pairs( MC.TexturePackDefinitions ) do
+	if normalizeTexturePackName( name ) == name and type( definition ) == "table" then
+		local opaquePath = normalizeAtlasPath( definition.opaquePath )
+		local translucentPath = normalizeAtlasPath( definition.translucentPath ) or opaquePath
+		local iconPath = normalizeAtlasPath( definition.iconPath ) or translucentPath
+		local owner = normalizeTexturePackOwner( definition.owner )
+		if opaquePath and owner then
+			definition.opaquePath = opaquePath
+			definition.translucentPath = translucentPath
+			definition.iconPath = iconPath
+			definition.owner = owner
+			AtlasSources[name] = atlasSourceFromDefinition( definition )
+		else
+			MC.TexturePackDefinitions[name] = nil
+		end
+	else
+		MC.TexturePackDefinitions[name] = nil
+	end
+end
+
+function MC.RegisterTexturePack( name, definition, owner )
+	name = normalizeTexturePackName( name )
+	if not name or name == "default" or name == "programmer_art" then
+		return false, "invalid_texture_pack_name"
+	end
+	if type( definition ) ~= "table" then return false, "invalid_texture_pack_definition" end
+	owner = normalizeTexturePackOwner( owner )
+	if not owner or owner == "mc" then return false, "invalid_texture_pack_owner" end
+	local existing = MC.TexturePackDefinitions[name]
+	if existing and existing.owner ~= owner then return false, "owned_by_" .. tostring( existing.owner ) end
+	local opaquePath = normalizeAtlasPath( definition.opaque or definition.opaquePath or definition.material )
+	if not opaquePath then return false, "invalid_opaque_atlas_path" end
+	local translucentPath = normalizeAtlasPath( definition.translucent or definition.translucentPath ) or opaquePath
+	local iconPath = normalizeAtlasPath( definition.icon or definition.iconPath ) or translucentPath
+
+	local previousDefinition = existing
+	local previousSource = AtlasSources[name]
+	local stored = {
+		name = name,
+		owner = owner,
+		opaquePath = opaquePath,
+		translucentPath = translucentPath,
+		iconPath = iconPath,
+	}
+	MC.TexturePackDefinitions[name] = stored
+	AtlasSources[name] = atlasSourceFromDefinition( stored )
+	MC.TexturePackRevision = MC.TexturePackRevision + 1
+	if refreshTexturePackSelection then
+		local ok, err = refreshTexturePackSelection( true )
+		if not ok then
+			MC.TexturePackDefinitions[name] = previousDefinition
+			AtlasSources[name] = previousSource
+			MC.TexturePackRevision = MC.TexturePackRevision + 1
+			refreshTexturePackSelection( true )
+			return false, err
+		end
+	end
+	if hook and hook.Run then hook.Run( "MC.TexturePackRegistered", name, owner ) end
+	return true, name
+end
+
+function MC.UnregisterTexturePack( name, owner )
+	name = normalizeTexturePackName( name )
+	owner = normalizeTexturePackOwner( owner )
+	if not name or not owner then return false, "invalid_texture_pack_owner" end
+	local existing = MC.TexturePackDefinitions[name]
+	if not existing then return false, "not_registered" end
+	if existing.owner ~= owner then return false, "owner_mismatch" end
+
+	local removedDefinition = existing
+	local removedSource = AtlasSources[name]
+	local removedLeases = {}
+	MC.TexturePackDefinitions[name] = nil
+	AtlasSources[name] = nil
+	for leaseOwner, lease in pairs( MC.TexturePackLeases ) do
+		if lease.name == name then
+			removedLeases[leaseOwner] = lease
+			MC.TexturePackLeases[leaseOwner] = nil
+		end
+	end
+	MC.TexturePackRevision = MC.TexturePackRevision + 1
+	if refreshTexturePackSelection then
+		local current = MC.ActiveTexturePack
+		if current == name then MC.ActiveTexturePack = nil end
+		local ok, err = refreshTexturePackSelection( true )
+		if not ok then
+			MC.TexturePackDefinitions[name] = removedDefinition
+			AtlasSources[name] = removedSource
+			for leaseOwner, lease in pairs( removedLeases ) do MC.TexturePackLeases[leaseOwner] = lease end
+			MC.ActiveTexturePack = current
+			MC.TexturePackRevision = MC.TexturePackRevision + 1
+			refreshTexturePackSelection( true )
+			return false, err
+		end
+	end
+	if hook and hook.Run then hook.Run( "MC.TexturePackUnregistered", name, owner ) end
+	return true
+end
+
+function MC.UnregisterTexturePackOwner( owner )
+	owner = normalizeTexturePackOwner( owner )
+	if not owner then return 0 end
+	local names = {}
+	for name, definition in pairs( MC.TexturePackDefinitions ) do
+		if definition.owner == owner then names[#names + 1] = name end
+	end
+	local removedLease = MC.TexturePackLeases[owner]
+	MC.TexturePackLeases[owner] = nil
+	for _, name in ipairs( names ) do
+		MC.TexturePackDefinitions[name] = nil
+		AtlasSources[name] = nil
+	end
+	if #names > 0 then MC.TexturePackRevision = MC.TexturePackRevision + 1 end
+	if refreshTexturePackSelection then
+		for _, name in ipairs( names ) do
+			if MC.ActiveTexturePack == name then MC.ActiveTexturePack = nil break end
+		end
+		local ok, err = refreshTexturePackSelection( true )
+		if not ok then
+			if removedLease then MC.TexturePackLeases[owner] = removedLease end
+			if ErrorNoHalt then
+				ErrorNoHalt( "[MC] texture pack owner cleanup failed: " .. tostring( err ) .. "\n" )
+			end
+		end
+	end
+	if #names > 0 and hook and hook.Run then hook.Run( "MC.TexturePackOwnerUnregistered", owner, #names ) end
+	return #names
+end
+
+function MC.TexturePackDefinitionOwner( name )
+	name = normalizeTexturePackName( name )
+	if name == "default" or name == "programmer_art" then return "mc" end
+	local definition = name and MC.TexturePackDefinitions[name] or nil
+	return definition and definition.owner or nil
+end
+
+function MC.AcquireTexturePack( owner, name, priority )
+	owner = normalizeTexturePackOwner( owner )
+	name = normalizeTexturePackName( name )
+	if not owner or owner == "mc" then return false, "invalid_texture_pack_owner" end
+	if not name or not AtlasSources[name] then return false, "texture_pack_not_registered" end
+	local definitionOwner = MC.TexturePackDefinitionOwner( name )
+	if definitionOwner ~= "mc" and definitionOwner ~= owner then
+		return false, "owned_by_" .. tostring( definitionOwner )
+	end
+
+	local previousLease = MC.TexturePackLeases[owner]
+	MC.TexturePackLeaseSerial = MC.TexturePackLeaseSerial + 1
+	MC.TexturePackLeases[owner] = {
+		owner = owner,
+		name = name,
+		priority = math.Clamp( math.floor( tonumber( priority ) or 0 ), -32768, 32767 ),
+		serial = MC.TexturePackLeaseSerial,
+	}
+	if refreshTexturePackSelection then
+		local ok, activeOrError = refreshTexturePackSelection( true )
+		if not ok then
+			MC.TexturePackLeases[owner] = previousLease
+			refreshTexturePackSelection( true )
+			return false, activeOrError
+		end
+	end
+	if hook and hook.Run then hook.Run( "MC.TexturePackLeaseChanged", owner, name, true ) end
+	return true, MC.TexturePackName and MC.TexturePackName() or name
+end
+
+function MC.ReleaseTexturePack( owner )
+	owner = normalizeTexturePackOwner( owner )
+	if not owner then return false, "invalid_texture_pack_owner" end
+	local lease = MC.TexturePackLeases[owner]
+	if not lease then return false, "not_acquired" end
+	MC.TexturePackLeases[owner] = nil
+	local ok, activeOrError = true, MC.TexturePackName and MC.TexturePackName() or "default"
+	if refreshTexturePackSelection then ok, activeOrError = refreshTexturePackSelection( true ) end
+	if not ok then
+		MC.TexturePackLeases[owner] = lease
+		refreshTexturePackSelection( true )
+		return false, activeOrError
+	end
+	if hook and hook.Run then hook.Run( "MC.TexturePackLeaseChanged", owner, lease.name, false ) end
+	return ok, activeOrError
+end
+
+function MC.TexturePackLeaseOwner()
+	local winner
+	for owner, lease in pairs( MC.TexturePackLeases ) do
+		if AtlasSources[lease.name]
+		and ( not winner or lease.priority > winner.priority
+			or ( lease.priority == winner.priority and lease.serial > winner.serial ) ) then
+			winner = {
+				owner = owner,
+				name = lease.name,
+				priority = lease.priority,
+				serial = lease.serial,
+			}
+		end
+	end
+	return winner and winner.owner or nil
+end
+
+function MC.ListTexturePacks()
+	local result = {
+		{ name = "default", owner = "mc", builtin = true },
+		{ name = "programmer_art", owner = "mc", builtin = true },
+	}
+	for name, definition in pairs( MC.TexturePackDefinitions ) do
+		result[#result + 1] = {
+			name = name,
+			owner = definition.owner,
+			opaquePath = definition.opaquePath,
+			translucentPath = definition.translucentPath,
+			iconPath = definition.iconPath,
+			builtin = false,
+		}
+	end
+	table.sort( result, function( left, right ) return left.name < right.name end )
+	return result
+end
+
+function MC.ListTexturePackLeases()
+	local result = {}
+	for owner, lease in pairs( MC.TexturePackLeases ) do
+		result[#result + 1] = {
+			owner = owner,
+			name = lease.name,
+			priority = lease.priority,
+			serial = lease.serial,
+		}
+	end
+	table.sort( result, function( left, right )
+		if left.priority ~= right.priority then return left.priority > right.priority end
+		if left.serial ~= right.serial then return left.serial > right.serial end
+		return left.owner < right.owner
+	end )
+	return result
+end
+
 local function materialBaseTexture( material )
 	local baseTex = material and material.GetTexture and material:GetTexture( "$basetexture" )
 	local baseName = baseTex and not baseTex:IsError() and baseTex.GetName and baseTex:GetName() or nil
@@ -784,24 +1063,26 @@ local function setAtlasTexture( material, texture )
 end
 
 local function normalizeTexturePack( value )
-	value = string.lower( tostring( value or "default" ) )
-	if value == "programmer_art" then return "programmer_art" end
+	value = normalizeTexturePackName( value ) or "default"
+	if AtlasSources[value] then return value end
 	return "default"
 end
 
 local function resolveAtlasSource( name )
 	local source = AtlasSources[name]
 	if not source then return nil end
-	if name == "programmer_art" then
+	if name == "programmer_art" or source.custom == true then
 		if not source.opaque or source.opaque:IsError() then
 			source.opaque = loadAtlasSource( source.opaquePath )
+		end
+		if not source.translucent or source.translucent:IsError() then
+			source.translucent = loadAtlasSource( source.translucentPath or source.opaquePath )
 		end
 		if not source.icon or source.icon:IsError() then
 			source.icon = loadAtlasIconSource( source.iconPath )
 		end
 		source.opaqueTexture = atlasMaterialTexture( source.opaque ) or source.opaqueTexture
-		source.translucent = source.opaque
-		source.translucentTexture = source.opaqueTexture
+		source.translucentTexture = atlasMaterialTexture( source.translucent ) or source.opaqueTexture
 		source.iconTexture = atlasMaterialTexture( source.icon ) or source.iconTexture or source.opaqueTexture
 	end
 	return source
@@ -838,7 +1119,7 @@ function MC.TexturePackName()
 end
 
 function MC.SetTexturePack( value )
-	local requested = string.lower( tostring( value or "default" ) )
+	local requested = normalizeTexturePackName( value ) or "default"
 	local name = normalizeTexturePack( requested )
 	local source = resolveAtlasSource( name ) or AtlasSources.default
 	local opaqueTexture = source and source.opaqueTexture
@@ -863,15 +1144,42 @@ function MC.SetTexturePack( value )
 	if MC.RefreshHeightfieldDepthAtlas then MC.RefreshHeightfieldDepthAtlas( opaqueTexture ) end
 
 	MC.ActiveTexturePack = name
-	MC.Atlas.ACTIVE_MATERIAL = name == "programmer_art"
-		and ( MC.Atlas.MATERIAL_PROGRAMMER_ART or "mc/atlas_365_programmer_art" )
-		or ( MC.Atlas.MATERIAL or "mc/atlas_365" )
-	MC.Atlas.ACTIVE_MATERIAL_TRANSLUCENT = name == "programmer_art"
-		and ( MC.Atlas.MATERIAL_PROGRAMMER_ART_TRANSLUCENT or "mc/atlas_365_programmer_art_translucent" )
-		or ( MC.Atlas.MATERIAL_TRANSLUCENT or "mc/atlas_365_translucent" )
+	MC.Atlas.ACTIVE_MATERIAL = source.opaquePath
+		or ( name == "programmer_art"
+			and ( MC.Atlas.MATERIAL_PROGRAMMER_ART or "mc/atlas_365_programmer_art" )
+			or ( MC.Atlas.MATERIAL or "mc/atlas_365" ) )
+	MC.Atlas.ACTIVE_MATERIAL_TRANSLUCENT = source.translucentPath
+		or ( name == "programmer_art"
+			and ( MC.Atlas.MATERIAL_PROGRAMMER_ART_TRANSLUCENT or "mc/atlas_365_programmer_art_translucent" )
+			or ( MC.Atlas.MATERIAL_TRANSLUCENT or "mc/atlas_365_translucent" ) )
 
 	if MC.RefreshBlockParticleMaterials then MC.RefreshBlockParticleMaterials( opaqueTexture ) end
 	return true, name, requested == name
+end
+
+local function configuredTexturePackName()
+	if not ( MC.TexturePack and MC.TexturePack.GetString ) then return "default" end
+	return normalizeTexturePack( MC.TexturePack:GetString() )
+end
+
+local function winningTexturePackLease()
+	local winner
+	for owner, lease in pairs( MC.TexturePackLeases ) do
+		if not AtlasSources[lease.name] then
+			MC.TexturePackLeases[owner] = nil
+		elseif not winner or lease.priority > winner.priority
+		or ( lease.priority == winner.priority and lease.serial > winner.serial ) then
+			winner = lease
+		end
+	end
+	return winner
+end
+
+refreshTexturePackSelection = function( force )
+	local lease = winningTexturePackLease()
+	local selected = lease and lease.name or configuredTexturePackName()
+	if not force and MC.ActiveTexturePack == selected then return true, selected, true end
+	return MC.SetTexturePack( selected )
 end
 
 local TEXTURE_PACK_SYNC_TIMER = "mc_texture_pack_startup_sync"
@@ -880,10 +1188,7 @@ local TEXTURE_PACK_SYNC_INTERVAL = 0.25
 local TEXTURE_PACK_SYNC_ATTEMPTS = 20
 
 local function syncTexturePackFromConVar( force )
-	if not ( MC.TexturePack and MC.TexturePack.GetString ) then return false end
-	local configured = MC.TexturePack:GetString()
-	if not force and MC.ActiveTexturePack == normalizeTexturePack( configured ) then return true end
-	return MC.SetTexturePack( configured )
+	return refreshTexturePackSelection( force )
 end
 
 local function startTexturePackStartupSync()
@@ -899,12 +1204,13 @@ if cvars and cvars.AddChangeCallback then
 		cvars.RemoveChangeCallback( "mc_texture_pack", "mc_texture_pack_refresh" )
 	end
 	cvars.AddChangeCallback( "mc_texture_pack", function( _, _, value )
-		local ok, active, alreadyNormalized = MC.SetTexturePack( value )
+		local normalized = normalizeTexturePack( value )
+		local ok, active, alreadyNormalized = refreshTexturePackSelection( true )
 		if MC.RefreshConfigControlValue then MC.RefreshConfigControlValue( "mc_texture_pack", value ) end
 		if not ok then
 			MsgN( "[MC] texture pack unavailable: " .. tostring( value ) )
-		elseif not alreadyNormalized and RunConsoleCommand then
-			RunConsoleCommand( "mc_texture_pack", active )
+		elseif normalized ~= string.lower( tostring( value or "default" ) ) and RunConsoleCommand then
+			RunConsoleCommand( "mc_texture_pack", normalized )
 		end
 	end, "mc_texture_pack_refresh" )
 end
