@@ -9,6 +9,9 @@ MC.SV = MC.SV or {}
 
 local SV = MC.SV
 local HUNGER_MAX = 20
+local HUNGER_DEFAULT = 20
+local SATURATION_DEFAULT = 5
+local EXHAUSTION_DEFAULT = 0
 local USE_NET_ROOT = "mc_item_using"
 local USE_NET_PREFIX = USE_NET_ROOT .. "_"
 
@@ -19,9 +22,16 @@ local function activeMinecraftHand( ply, context )
 end
 
 local function foodState( ply )
-	local level = math.Clamp( ply:GetNWInt( "mc_food_level", HUNGER_MAX ), 0, HUNGER_MAX )
-	local saturation = math.max( 0, ply:GetNWFloat( "mc_food_saturation", 0 ) )
+	local level = math.Clamp( ply:GetNWInt( "mc_food_level", HUNGER_DEFAULT ), 0, HUNGER_MAX )
+	local saturation = math.max( 0, ply:GetNWFloat( "mc_food_saturation", SATURATION_DEFAULT ) )
 	return level, saturation
+end
+
+local function resetFoodState( ply )
+	if not IsValid( ply ) or not ply:IsPlayer() then return end
+	ply:SetNWInt( "mc_food_level", HUNGER_DEFAULT )
+	ply:SetNWFloat( "mc_food_saturation", SATURATION_DEFAULT )
+	ply:SetNWFloat( "mc_food_exhaustion", EXHAUSTION_DEFAULT )
 end
 
 local function setUseNetwork( ply, state )
@@ -149,7 +159,10 @@ local function finishFood( ply, record, stack, context )
 	if consumeError then return false, consumeError end
 	local nutrition = math.floor( tonumber( food.nutrition ) or 0 )
 	local newHunger = math.Clamp( hunger + nutrition, 0, HUNGER_MAX )
-	local newSaturation = math.max( saturation, math.min( newHunger, saturation + ( tonumber( food.saturation ) or 0 ) * 2 ) )
+	-- MC.ItemFoodData.saturation is the final FoodProperties.saturation value.
+	-- The `* 2` belongs only to FoodData.eat(nutrition, modifier), not to the
+	-- component-backed FoodProperties path used by MCITEM/MCSWEP stacks.
+	local newSaturation = math.max( saturation, math.min( newHunger, saturation + ( tonumber( food.saturation ) or 0 ) ) )
 	ply:SetNWInt( "mc_food_level", newHunger )
 	ply:SetNWFloat( "mc_food_saturation", newSaturation )
 	if MC.RunEvent then MC.RunEvent( "MC.ItemConsumed", ply, stack, food, infinite == true ) end
@@ -322,6 +335,7 @@ end
 MC.UseSelectedItem = SV.UseSelectedItem
 
 if hook and hook.Add then
+	hook.Add( "PlayerSpawn", "mc_item_food_state_spawn", resetFoodState )
 	hook.Add( "PlayerDeath", "mc_item_use_cancel_death", function( ply )
 		SV.CancelSelectedItemUse( ply, "death" )
 	end )

@@ -564,8 +564,7 @@ net.Receive( "mc_inventory_creative_pick", function( _, ply )
 	local token = net.ReadString()
 	local revision = net.ReadUInt( 32 )
 	local actionId = net.ReadUInt( 16 )
-	local runtimeId = net.ReadUInt( MC.ItemStackRuntimeIdBits )
-	local count = net.ReadUInt( 7 )
+	local requestedStack, stackError = MC.ReadItemStackNet()
 	local targetSlot = net.ReadInt( 8 )
 	local record = SV.GetPlayerInventoryRecord( ply, false )
 	local session, container = record and record.session, record and activeContainer( record )
@@ -577,11 +576,19 @@ net.Receive( "mc_inventory_creative_pick", function( _, ply )
 	if revision > container.revision then sendRejected( record, actionId, "revision_mismatch", true ) return end
 	if not creativeAllowed( ply ) then sendRejected( record, actionId, "creative_only", false ) return end
 	if targetSlot < -1 or targetSlot > 8 then sendRejected( record, actionId, "invalid_creative_target", false ) return end
-	local definition = MC.GetItem( runtimeId )
-	if not definition then sendRejected( record, actionId, "unknown_item", false ) return end
-	if definition.name == "minecraft:air" then count = 0 else count = math.Clamp( math.floor( tonumber( count ) or 1 ), 1, definition.maxStack or 1 ) end
+	if stackError then sendRejected( record, actionId, stackError, false ) return end
+	local stack
+	if requestedStack then
+		local definition = MC.GetItem( requestedStack.item )
+		if not definition or definition.name == "minecraft:air" then sendRejected( record, actionId, "unknown_item", false ) return end
+		stack, stackError = MC.NormalizeItemStack( requestedStack )
+		if not stack then sendRejected( record, actionId, stackError or "invalid_item", false ) return end
+		if not MC.CreativeCatalogContainsStack or not MC.CreativeCatalogContainsStack( stack ) then
+			sendRejected( record, actionId, "creative_stack_not_catalogued", false )
+			return
+		end
+	end
 	local snapshot = MC.ContainerSnapshot( container )
-	local stack = count > 0 and MC.NewItemStack( definition.name, count ) or nil
 	local ok, err
 	if targetSlot >= 0 then ok, err = MC.ContainerSetStack( container, targetSlot, stack ) else ok, err = MC.ContainerSetCursor( container, stack ) end
 	if not ok then MC.ContainerRestore( container, snapshot ) sendRejected( record, actionId, err or "invalid_item", false ) return end

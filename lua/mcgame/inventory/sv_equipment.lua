@@ -68,6 +68,7 @@ function SV.UpdatePlayerEquipmentNetwork( record )
 		ply:SetNWInt( prefix .. "runtime", definition and definition.runtimeId or 0 )
 		ply:SetNWInt( prefix .. "count", stack and stack.count or 0 )
 		ply:SetNWInt( prefix .. "damage", stack and stack.damage or 0 )
+		ply:SetNWBool( prefix .. "foil", stack and MC.ItemStackHasFoil and MC.ItemStackHasFoil( stack ) or false )
 	end
 	local armor, toughness, knockback = SV.PlayerEquipmentTotals( record )
 	ply:SetNWInt( "mc_armor", armor )

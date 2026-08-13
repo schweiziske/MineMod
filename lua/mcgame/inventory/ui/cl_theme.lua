@@ -112,6 +112,17 @@ function UI.GetGuiMaterial( name )
 	return pixelMaterial( "mc/gui/" .. tostring( name ) .. ".png", "vertexcolor vertexalpha nocull" )
 end
 
+function UI.GetMobEffectMaterial( effectId )
+	effectId = string.lower( tostring( effectId or "" ) )
+	if effectId == "" or not string.match( effectId, "^[a-z0-9_]+$" ) then return nil end
+	return UI.GetMaterial( "mc/gui/mob_effect/" .. effectId .. ".png" )
+end
+
+function UI.GetEffectBackgroundMaterial( ambient, inventory )
+	local prefix = inventory and "sprites/container/inventory/" or "sprites/hud/"
+	return UI.GetGuiMaterial( prefix .. "effect_background" .. ( ambient and "_ambient" or "" ) )
+end
+
 function UI.WithPointFiltering( callback )
 	if not isfunction( callback ) then return end
 	local pushedMin, pushedMag = false, false

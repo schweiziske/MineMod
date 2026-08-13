@@ -427,6 +427,39 @@ function Inventory.DamageSelected( ply, amount, context )
 	return deepCopy( result ), broken == true, err
 end
 
+-- Atomically applies a non-breaking durability use and extracts one complete
+-- copy of the selected ItemStack.  Used by external trident implementations so
+-- damage/components travel with the projectile and return unchanged on pickup.
+-- Returns stack, infinite, mutationResult, err.  In infinite-material mode the
+-- selected slot is unchanged and the returned projectile stack is still a copy.
+function Inventory.TakeSelectedWithDurability( ply, amount, context )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return nil, false, nil, "invalid_player" end
+	if not sv or not sv.TakeSelectedItemWithDurability then
+		return nil, false, nil, "inventory_api_unavailable"
+	end
+	local stack, infinite, result, err = sv.TakeSelectedItemWithDurability(
+		ply,
+		amount,
+		deepCopy( context or {} )
+	)
+	return deepCopy( stack ), infinite == true, deepCopy( result ), err
+end
+
+function Inventory.CanTakeSelectedWithDurability( ply, amount, context )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return false, false, nil, "invalid_player" end
+	if not sv or not sv.CanTakeSelectedItemWithDurability then
+		return false, false, nil, "inventory_api_unavailable"
+	end
+	local allowed, infinite, stack, err = sv.CanTakeSelectedItemWithDurability(
+		ply,
+		amount,
+		deepCopy( context or {} )
+	)
+	return allowed == true, infinite == true, deepCopy( stack ), err
+end
+
 function Inventory.ConsumeSelected( ply, amount, replacement, context )
 	local sv = SV()
 	if not validInventoryPlayer( ply ) then return nil, 0, nil, false, "invalid_player" end
@@ -438,6 +471,15 @@ function Inventory.ConsumeSelected( ply, amount, replacement, context )
 		deepCopy( context or {} )
 	)
 	return deepCopy( result ), consumed, deepCopy( overflow ), infinite == true, err
+end
+
+function Inventory.HasInfiniteMaterials( ply )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return false, "invalid_player" end
+	if not sv or not sv.PlayerHasInfiniteMaterials then
+		return false, "inventory_api_unavailable"
+	end
+	return sv.PlayerHasInfiniteMaterials( ply ) == true
 end
 
 function Inventory.Open( ply )
@@ -477,6 +519,19 @@ function Inventory.SpawnDrop( position, item, count, actor, options )
 	if not sv or not sv.SpawnItemDrop then return nil, "inventory_api_unavailable" end
 	if not isvector( position ) then return nil, "invalid_position" end
 	local stack, stackError = MC.NewItemStack( item, count or 1 )
+	if not stack then return nil, stackError or "invalid_stack" end
+	local ent, err = sv.SpawnItemDrop( position, stack, actor, deepCopy( options or {} ) )
+	if not IsValid( ent ) then return nil, err or "item_drop_failed" end
+	return ent
+end
+
+-- Full-ItemStack twin of SpawnDrop.  This is the path for damaged or component-
+-- bearing items (thrown tridents, potion stacks, enchanted equipment, etc.).
+function Inventory.SpawnDropStack( position, input, actor, options )
+	local sv = SV()
+	if not sv or not sv.SpawnItemDrop then return nil, "inventory_api_unavailable" end
+	if not isvector( position ) then return nil, "invalid_position" end
+	local stack, stackError = MC.NormalizeItemStack( deepCopy( input ) )
 	if not stack then return nil, stackError or "invalid_stack" end
 	local ent, err = sv.SpawnItemDrop( position, stack, actor, deepCopy( options or {} ) )
 	if not IsValid( ent ) then return nil, err or "item_drop_failed" end

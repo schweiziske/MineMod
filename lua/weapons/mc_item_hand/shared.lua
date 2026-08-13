@@ -491,8 +491,14 @@ if CLIENT then
 		end
 		local runtime = IsValid( ply ) and ply:GetNWInt( "mc_selected_item_runtime", 0 ) or 0
 		local definition = MC.GetItem( runtime )
+		-- Remote inventory proxies must preserve an authoritative false.  Omitting
+		-- the component would let vanilla-default foil items become shiny again.
+		local components = {
+			["minecraft:enchantment_glint_override"] = IsValid( ply )
+				and ply:GetNWBool( "mc_selected_item_foil", false ) or false,
+		}
 		return definition and MC.NewItemStack( definition.name,
-			math.max( 1, ply:GetNWInt( "mc_selected_item_count", 1 ) ), nil,
+			math.max( 1, ply:GetNWInt( "mc_selected_item_count", 1 ) ), components,
 			math.max( 0, ply:GetNWInt( "mc_selected_item_damage", 0 ) ) ) or nil
 	end
 
@@ -504,7 +510,10 @@ if CLIENT then
 		local runtime = IsValid( ply ) and ply:GetNWInt( prefix .. "runtime", 0 ) or 0
 		local definition = MC.GetItem( runtime )
 		if not definition then return nil end
-		return MC.NewItemStack( definition.name, math.max( 1, ply:GetNWInt( prefix .. "count", 1 ) ), nil,
+		local components = {
+			["minecraft:enchantment_glint_override"] = ply:GetNWBool( prefix .. "foil", false ),
+		}
+		return MC.NewItemStack( definition.name, math.max( 1, ply:GetNWInt( prefix .. "count", 1 ) ), components,
 			math.max( 0, ply:GetNWInt( prefix .. "damage", 0 ) ) )
 	end
 

@@ -1,6 +1,7 @@
 --[[----------------------------------------------------------------------------
-	Bounded ItemStack wire codec. Clients submit fixed inventory actions, never
-	arbitrary stack payloads; this is for authoritative snapshots and deltas.
+	Bounded ItemStack wire codec. Normal inventory actions never submit arbitrary
+	stacks. The creative-only catalog pick action uses this same codec and is
+	validated again by the authoritative server before it mutates a container.
 ------------------------------------------------------------------------------]]
 
 MC = MC or {}
