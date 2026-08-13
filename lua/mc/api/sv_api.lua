@@ -108,7 +108,8 @@ function World.RemoveBlocks( cells, opts )
 end
 
 -- Volume fill through the fast chunk pipeline (the /fill engine).
--- opts: actor, ignoreVolumeLimit (skip mc_fill_max). Returns the fill result
+-- opts: actor, ignoreVolumeLimit (skip mc_fill_max), quiet (suppress the
+-- per-call performance line). Returns the fill result
 -- table { changed, chunks, added, removed, revision, ... } or nil, err.
 function World.Fill( x1, y1, z1, x2, y2, z2, block, opts )
 	local sv = SV()
@@ -122,6 +123,7 @@ function World.Fill( x1, y1, z1, x2, y2, z2, block, opts )
 	return sv.FillVolume( ax, ay, az, bx, by, bz, stateId, {
 		actor = opts.actor,
 		ignoreVolumeLimit = opts.ignoreVolumeLimit == true,
+		quiet = opts.quiet == true,
 	} )
 end
 
