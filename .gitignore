@@ -2,6 +2,7 @@ _build/*
 !_build/bake_programmer_art_atlas.ps1
 !_build/generate_item_models.py
 !_build/generate_item_sprite_masks.py
+!_build/test_texture_pack_leases.lua
 __pycache__/
 *.pyc
 _tools/equestria_mcb4_import_2.err

@@ -213,3 +213,61 @@ function Render.MarkCellDirty( bx, by, bz )
 	if MC.MarkLightCellDirty then MC.MarkLightCellDirty( x, y, z ) end
 	return true
 end
+
+-- Register or replace a client-side atlas pack using the same tile layout as
+-- the active MCSWEP atlas. Definitions and temporary activation leases are
+-- owner-scoped so multiple addons can coexist and unload in any order.
+-- path values are material paths without extension, for example
+-- "mcbr/atlas_backrooms". The registry lives entirely on the client; callers
+-- must ship matching PNG/VMT files.
+function Render.RegisterTexturePack( name, definition, owner )
+	if not MC.RegisterTexturePack then return false, "texture_pack_api_unavailable" end
+	return MC.RegisterTexturePack( name, definition, owner )
+end
+
+function Render.UnregisterTexturePack( name, owner )
+	if not MC.UnregisterTexturePack then return false, "texture_pack_api_unavailable" end
+	return MC.UnregisterTexturePack( name, owner )
+end
+
+function Render.UnregisterTexturePackOwner( owner )
+	if not MC.UnregisterTexturePackOwner then return 0 end
+	return MC.UnregisterTexturePackOwner( owner )
+end
+
+function Render.AcquireTexturePack( owner, name, priority )
+	if not MC.AcquireTexturePack then return false, "texture_pack_api_unavailable" end
+	return MC.AcquireTexturePack( owner, name, priority )
+end
+
+function Render.ReleaseTexturePack( owner )
+	if not MC.ReleaseTexturePack then return false, "texture_pack_api_unavailable" end
+	return MC.ReleaseTexturePack( owner )
+end
+
+-- Low-level immediate switch. Gamemodes should prefer Acquire/Release so the
+-- archived player preference and other addons are restored automatically.
+function Render.SetTexturePack( name )
+	if not MC.SetTexturePack then return false, "texture_pack_api_unavailable" end
+	return MC.SetTexturePack( name )
+end
+
+function Render.GetTexturePack()
+	if not MC.TexturePackName then return "default" end
+	return MC.TexturePackName()
+end
+
+function Render.GetTexturePackLeaseOwner()
+	if not MC.TexturePackLeaseOwner then return nil end
+	return MC.TexturePackLeaseOwner()
+end
+
+function Render.ListTexturePacks()
+	if not MC.ListTexturePacks then return {} end
+	return MC.ListTexturePacks()
+end
+
+function Render.ListTexturePackLeases()
+	if not MC.ListTexturePackLeases then return {} end
+	return MC.ListTexturePackLeases()
+end
