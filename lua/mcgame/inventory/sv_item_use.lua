@@ -27,6 +27,10 @@ local function foodState( ply )
 	return level, saturation
 end
 
+local function playerCanEatAtFull( ply )
+	return SV.PlayerIsCreative and SV.PlayerIsCreative( ply ) == true
+end
+
 local function resetFoodState( ply )
 	if not IsValid( ply ) or not ply:IsPlayer() then return end
 	ply:SetNWInt( "mc_food_level", HUNGER_DEFAULT )
@@ -154,7 +158,9 @@ local function finishFood( ply, record, stack, context )
 	local food = MC.ItemFoodData and MC.ItemFoodData( stack ) or nil
 	if not food then return false, "food_data_missing" end
 	local hunger, saturation = foodState( ply )
-	if hunger >= HUNGER_MAX and not food.alwaysEdible then return false, "food_full" end
+	if hunger >= HUNGER_MAX and not food.alwaysEdible and not playerCanEatAtFull( ply ) then
+		return false, "food_full"
+	end
 	local result, infinite, consumeError = consumeOne( record, stack, ply, context )
 	if consumeError then return false, consumeError end
 	local nutrition = math.floor( tonumber( food.nutrition ) or 0 )
@@ -223,7 +229,9 @@ function SV.BeginSelectedItemUse( ply, context )
 	if kind == "food" then
 		local food = MC.ItemFoodData( stack )
 		local hunger = foodState( ply )
-		if hunger >= HUNGER_MAX and not food.alwaysEdible then return false, "food_full" end
+		if hunger >= HUNGER_MAX and not food.alwaysEdible and not playerCanEatAtFull( ply ) then
+			return false, "food_full"
+		end
 	end
 	if ( kind == "bow" or kind == "crossbow" or kind == "trident" )
 		and SV.CanBeginProjectileUse then

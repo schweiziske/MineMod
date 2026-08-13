@@ -706,6 +706,28 @@ function Liquid.GetAt( bx, by, bz )
 	return { kind = kind, level = level, falling = falling == true, waterlogged = waterlogged == true }
 end
 
+-- Bucket-facing read-only description.  A source is a level-0 water/lava
+-- state; waterlogged blocks also contain a source water FluidState even though
+-- their visible block identity is not minecraft:water.
+function Liquid.GetBucketSource( bx, by, bz )
+	local x, y, z = cellCoords( bx, by, bz )
+	if not x then return nil, "invalid_cell" end
+	local stateId = World.GetBlockState( x, y, z )
+	if stateId == 0 or not MC.LiquidStateMetrics then return nil end
+	local kind, _, level, falling, waterlogged = MC.LiquidStateMetrics( stateId )
+	if not kind then return nil end
+	local source = waterlogged == true or ( math.floor( tonumber( level ) or -1 ) == 0 and falling ~= true )
+	return {
+		bx = x, by = y, bz = z,
+		stateId = stateId,
+		kind = kind,
+		level = level,
+		falling = falling == true,
+		waterlogged = waterlogged == true,
+		source = source,
+	}
+end
+
 -- Liquid contact at an exact world position (fresh table or nil).
 function Liquid.AtPos( pos )
 	if not isvector( pos ) or not MC.LiquidAtPos then return nil end
@@ -857,6 +879,8 @@ API.Events = {
 	["MC.PlayerPlacedBlock"] = { realm = "server", args = "ply, bx, by, bz, stateId", desc = "player placement committed" },
 	["MC.PlayerBrokeBlock"] = { realm = "server", args = "ply, bx, by, bz, oldStateId", desc = "player break committed" },
 	["MC.PlayerUsedBlock"] = { realm = "server", args = "ply, bx, by, bz, stateId", desc = "player right-click used a block (OnUse returned true)" },
+	["MC.PlayerPickedUpFluid"] = { realm = "server", args = "ply, kind, bx, by, bz, oldStateId, newStateId", desc = "a bucket source pickup committed after the caller's inventory transaction" },
+	["MC.PlayerPlacedFluid"] = { realm = "server", args = "ply, kind, bx, by, bz, stateId", desc = "a bucket source placement committed after the caller's inventory transaction" },
 	["MC.BlockDamaged"] = { realm = "server", args = "bx, by, bz, id, damage, health, actor", desc = "block took damage but survived" },
 	["MC.BlocksExploded"] = { realm = "server", args = "center, radius, cells{bx,by,bz}[], broken, actor", desc = "explosion removed blocks" },
 	["MC.TriggerExplosionBlock"] = { realm = "server", args = "context", desc = "query: return true/false to override one TRIGGER_BLOCK onExplosionHit interaction" },

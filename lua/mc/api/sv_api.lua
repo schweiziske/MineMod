@@ -247,6 +247,389 @@ function Player.CanEdit( ply )
 	return sv and sv.CanEdit and sv.CanEdit( ply ) == true or false
 end
 
+-------------------------------------------------------------------- API.Liquid
+-- Player-authoritative bucket operations.  These are intentionally narrower
+-- than World.SetBlock: callers name a fluid kind, while the API owns source
+-- checks, waterlogged transitions, aim-face targeting and player validation.
+local Liquid = API.Liquid
+
+local function validLiquidPlayer( ply )
+	return IsValid( ply ) and ply.IsPlayer and ply:IsPlayer() and ply:Alive()
+end
+
+local function normalizeLiquidKind( kind )
+	kind = string.lower( tostring( kind or "" ) )
+	kind = string.gsub( kind, "^minecraft:", "" )
+	if kind == "water" or kind == "lava" then return kind end
+	return nil
+end
+
+local BUCKET_OWN_COLLISION = {
+	mc_chunk = true,
+	mc_chunk_phys = true,
+	mc_collision_carrier = true,
+}
+
+local function bucketWorldObstructionDistance( ply, eye, direction, reach )
+	if not util or not util.TraceLine then return nil end
+	local traceData = {
+		start = eye,
+		endpos = eye + direction * reach,
+		filter = function( entity )
+			if entity == ply then return false end
+			if not IsValid( entity ) then return true end
+			if BUCKET_OWN_COLLISION[entity:GetClass()] == true then return false end
+			-- Java's block clip ignores living entities. Physical props and map
+			-- entities remain valid Source-world obstructions.
+			if entity.IsPlayer and entity:IsPlayer() then return false end
+			if entity.IsNPC and entity:IsNPC() then return false end
+			if entity.IsNextBot and entity:IsNextBot() then return false end
+			return true
+		end,
+	}
+	if MASK_SHOT ~= nil then traceData.mask = MASK_SHOT end
+	local trace = util.TraceLine( traceData )
+	if not trace or trace.Hit ~= true then return nil end
+	if isvector( trace.HitPos ) then return trace.HitPos:Distance( eye ) end
+	return math.Clamp( tonumber( trace.Fraction ) or 1, 0, 1 ) * reach
+end
+
+local function rayDistancePastCell( origin, direction, bx, by, bz )
+	if not MC.CellWorldMin then return nil end
+	local base = MC.CellWorldMin( bx, by, bz )
+	if not isvector( base ) then return nil end
+	local blockSize = MC.BS or 36.5
+	local epsilon = 1e-8
+	local distance = math.huge
+	if direction.x > epsilon then
+		distance = math.min( distance, ( base.x + blockSize - origin.x ) / direction.x )
+	elseif direction.x < -epsilon then
+		distance = math.min( distance, ( base.x - origin.x ) / direction.x )
+	end
+	if direction.y > epsilon then
+		distance = math.min( distance, ( base.y + blockSize - origin.y ) / direction.y )
+	elseif direction.y < -epsilon then
+		distance = math.min( distance, ( base.y - origin.y ) / direction.y )
+	end
+	if direction.z > epsilon then
+		distance = math.min( distance, ( base.z + blockSize - origin.z ) / direction.z )
+	elseif direction.z < -epsilon then
+		distance = math.min( distance, ( base.z - origin.z ) / direction.z )
+	end
+	if distance == math.huge then return nil end
+	return math.max( 0, distance ) + math.max( blockSize / 4096, 0.01 )
+end
+
+-- BucketItem clips block OUTLINE geometry in both modes. Pure liquid blocks
+-- have an empty outline in Java, so skip them while retaining waterlogged
+-- containers and every ordinary block selection shape.
+local function bucketOutlineHit( eye, direction, reach )
+	if not MC.TraceBlockRay or not MC.LiquidStateMetrics then return nil end
+	local origin = eye
+	local travelled = 0
+	local blockSize = MC.BS or 36.5
+	local maxSteps = math.ceil( reach / blockSize ) * 3 + 8
+	for _ = 1, maxSteps do
+		local remaining = reach - travelled
+		if remaining <= 0 then break end
+		local hit = MC.TraceBlockRay( origin, direction, remaining )
+		if not hit then return nil end
+		local kind, _, _, _, waterlogged = MC.LiquidStateMetrics( hit.StateId or 0 )
+		if not kind or waterlogged == true then
+			local localDistance = tonumber( hit.Distance )
+				or isvector( hit.HitPos ) and hit.HitPos:Distance( origin ) or 0
+			hit.Distance = travelled + localDistance
+			hit.HitPos = eye + direction * hit.Distance
+			hit.Fraction = reach > 0 and hit.Distance / reach or 0
+			return hit
+		end
+
+		local advance = rayDistancePastCell( origin, direction, hit.bx, hit.by, hit.bz )
+		if not advance then return nil end
+		travelled = travelled + advance
+		origin = eye + direction * travelled
+	end
+	return nil
+end
+
+local function bucketAim( ply, sourceOnly )
+	if not validLiquidPlayer( ply ) then return nil, "invalid_player" end
+	local eye = MC.EntityEyeWorldPos and MC.EntityEyeWorldPos( ply ) or ply:EyePos()
+	local direction = ply:EyeAngles():Forward()
+	if direction:LengthSqr() <= 0 then return nil, "invalid_ray" end
+	direction:Normalize()
+	local reach = MC.CurrentReach and MC.CurrentReach() or ( ( MC.BS or 36.5 ) * 5 )
+	local outlineHit = bucketOutlineHit( eye, direction, reach )
+	local worldObstruction = bucketWorldObstructionDistance( ply, eye, direction, reach )
+	local obstructionTolerance = math.max( ( MC.BS or 36.5 ) / 4096, 0.01 )
+
+	if sourceOnly == true then
+		if not MC.LiquidStateMetrics or not MC.WorldToCell or not MC.GetBlockState
+		or not MC.LiquidHeightAtCell or not MC.CellWorldMin then
+			return nil, "trace_unavailable"
+		end
+
+		-- A waterlogged BucketPickup may be selected through its block OUTLINE even
+		-- when the ray is above the contained fluid surface. Keep it as a candidate,
+		-- but first let a nearer source-fluid shape win the combined Java clip.
+		local outlineSource
+		if outlineHit then
+			local description = Liquid.GetBucketSource(
+				outlineHit.bx, outlineHit.by, outlineHit.bz )
+			outlineSource = description and description.source == true
+				and description.waterlogged == true
+		end
+
+		-- Java combines Block.OUTLINE with Fluid.SOURCE_ONLY and takes the nearer
+		-- shape. Sample the exact source-fluid height, while outlineHit blocks the
+		-- ray at ordinary MC geometry and the Source trace blocks it at map/prop
+		-- geometry. Flowing and pure-liquid block outlines are intentionally skipped.
+		local blockSize = MC.BS or 36.5
+		local step = math.max( blockSize / 128, 0.125 )
+		local lastKey, stateId, kind, source
+		for distance = 0, reach, step do
+			if outlineHit and distance + obstructionTolerance >= outlineHit.Distance then break end
+			if worldObstruction and distance + obstructionTolerance >= worldObstruction then break end
+			local pos = eye + direction * distance
+			local bx, by, bz = MC.WorldToCell( pos )
+			local key = tostring( bx ) .. ":" .. tostring( by ) .. ":" .. tostring( bz )
+			if key ~= lastKey then
+				lastKey = key
+				stateId = MC.GetBlockState( bx, by, bz ) or 0
+				local level, falling, waterlogged
+				kind, _, level, falling, waterlogged = MC.LiquidStateMetrics( stateId )
+				source = kind and ( waterlogged == true
+					or ( math.floor( tonumber( level ) or -1 ) == 0 and falling ~= true ) )
+			end
+			if source then
+				local surface = MC.LiquidHeightAtCell( bx, by, bz, kind )
+				local base = MC.CellWorldMin( bx, by, bz )
+				local localZ = ( pos.z - base.z ) / blockSize
+				if localZ >= -1e-4 and localZ <= surface + 1e-4 then
+					return {
+						Hit = true, HitMCBlock = true,
+						bx = bx, by = by, bz = bz,
+						StateId = stateId,
+						HitPos = pos,
+						Distance = distance,
+					}
+				end
+			end
+		end
+		if outlineSource then
+			if worldObstruction and worldObstruction + obstructionTolerance < outlineHit.Distance then
+				return nil, "blocked"
+			end
+			return outlineHit
+		end
+		if outlineHit or worldObstruction then return nil, "blocked" end
+		return nil, "miss"
+	end
+	if not outlineHit or outlineHit.HitMCBlock ~= true then return nil, "miss" end
+	if worldObstruction and worldObstruction + obstructionTolerance < outlineHit.Distance then
+		return nil, "blocked"
+	end
+	return outlineHit
+end
+
+local function hitNormalOffset( normal )
+	if not isvector( normal ) then return nil end
+	local ax, ay, az = math.abs( normal.x ), math.abs( normal.y ), math.abs( normal.z )
+	if ax >= ay and ax >= az and ax > 0 then return normal.x >= 0 and 1 or -1, 0, 0 end
+	if ay >= az and ay > 0 then return 0, normal.y >= 0 and 1 or -1, 0 end
+	if az > 0 then return 0, 0, normal.z >= 0 and 1 or -1 end
+	return nil
+end
+
+local function dewaterloggedState( stateId )
+	if not MC.IsWaterloggedState or not MC.IsWaterloggedState( stateId ) then return nil end
+	if not MC.StateWith then return nil end
+	return MC.StateWith( stateId, "waterlogged", false )
+end
+
+local function sourceStateForKind( kind )
+	local spread = kind == "water" and MC.WaterSpread or MC.LavaSpread
+	if not spread or not spread.BlockStateForFluid then return nil end
+	return spread.BlockStateForFluid( 8, false, true )
+end
+
+local function validatePlayerFluidPlacement( ply, bx, by, bz, addsBlock )
+	local sv = SV()
+	if not sv or not sv.CanEdit or not sv.WorldBoundsOK then return false, "world_api_unavailable" end
+
+	-- Mirrors SV.Validate while keeping two distinct placement facts:
+	-- protection hooks see a placement for every bucket empty, but the global
+	-- non-air block cap only applies when the transaction adds a new occupied cell.
+	local now = CurTime()
+	if ( ply.mcNextOp or 0 ) > now then return false, "cooldown" end
+	ply.mcNextOp = now + 0.03
+	if not sv.CanEdit( ply ) then return false, "edit_rejected" end
+	if MC.RunEvent and MC.RunEvent( "MC.CanPlayerEditCell", ply, bx, by, bz, true ) == false then
+		return false, "cell_rejected"
+	end
+
+	local config = MC.Config
+	local reach = config and config.Reach and config.Reach:GetFloat() or 0
+	if reach > 0 and not MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, reach ) then
+		return false, "out_of_reach"
+	end
+	if not sv.WorldBoundsOK( bx, by, bz ) then return false, "world_limit" end
+	local maxBlocks = config and config.MaxBlocks and config.MaxBlocks:GetInt() or 0
+	if addsBlock == true and maxBlocks > 0 and ( tonumber( sv.BlockCount ) or 0 ) >= maxBlocks then
+		return false, "max_blocks"
+	end
+	return true
+end
+
+local function playerFluidWrite( ply, bx, by, bz, stateId, placing, addsBlock, skipValidation )
+	local sv = SV()
+	if not sv or not sv.Validate or not sv.SetBlockState then return false, "world_api_unavailable" end
+	if skipValidation ~= true then
+		local valid, validationError
+		if placing == true then
+			valid, validationError = validatePlayerFluidPlacement( ply, bx, by, bz, addsBlock == true )
+		else
+			valid = sv.Validate( ply, bx, by, bz, false ) == true
+			validationError = valid and nil or "edit_rejected"
+		end
+		if not valid then return false, validationError end
+	end
+	local result = sv.SetBlockState( bx, by, bz, stateId, {
+		actor = ply,
+		priorityPhys = true,
+		immediatePhys = true,
+		fx = false,
+		compareCollision = true,
+	} )
+	if not result or result.ok ~= true then return false, result and result.error or "write_failed" end
+	if result.changed <= 0 then return false, "unchanged" end
+	return true, result
+end
+
+local function validatedPlayerFluidWrite( ply, bx, by, bz, stateId, placing, addsBlock )
+	return playerFluidWrite( ply, bx, by, bz, stateId, placing, addsBlock )
+end
+
+local function rollbackPlayerFluidWrite( ply, bx, by, bz, expectedStateId, restoreStateId )
+	if ( MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0 ) ~= expectedStateId then
+		return false, "rollback_state_changed"
+	end
+	return playerFluidWrite( ply, bx, by, bz, restoreStateId, false, false, true )
+end
+
+-- Removes only a source FluidState. Returns result { kind, bx/by/bz,
+-- waterlogged, oldStateId, newStateId } or nil, err.
+function Liquid.PickupSource( ply )
+	local hit, hitError = bucketAim( ply, true )
+	if not hit then return nil, hitError end
+	local bx, by, bz = cellCoords( hit.bx, hit.by, hit.bz )
+	if not bx then return nil, "invalid_cell" end
+	local description, descriptionError = Liquid.GetBucketSource( bx, by, bz )
+	if not description then return nil, descriptionError or "not_liquid" end
+	if description.source ~= true then return nil, "not_source" end
+
+	local nextStateId = 0
+	if description.waterlogged then
+		nextStateId = dewaterloggedState( description.stateId )
+		if nextStateId == nil then return nil, "waterlogged_transition_unavailable" end
+	end
+	if ( MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0 ) ~= description.stateId then
+		return nil, "state_changed"
+	end
+	local changed, writeError = validatedPlayerFluidWrite( ply, bx, by, bz, nextStateId, false, false )
+	if not changed then return nil, writeError end
+	return {
+		kind = description.kind,
+		bx = bx, by = by, bz = bz,
+		waterlogged = description.waterlogged == true,
+		oldStateId = description.stateId,
+		newStateId = nextStateId,
+	}
+end
+
+function Liquid.RollbackPickup( ply, result )
+	if not istable( result ) then return false, "invalid_result" end
+	return rollbackPlayerFluidWrite(
+		ply, result.bx, result.by, result.bz, result.newStateId, result.oldStateId )
+end
+
+function Liquid.CommitPickup( ply, result )
+	if not validLiquidPlayer( ply ) or not istable( result ) then return false, "invalid_result" end
+	if MC.RunEvent then
+		MC.RunEvent(
+			"MC.PlayerPickedUpFluid", ply, result.kind, result.bx, result.by, result.bz,
+			result.oldStateId, result.newStateId )
+	end
+	return true
+end
+
+-- Places a source using BucketItem's target rule: water first tries the hit
+-- cell when it can be waterlogged; otherwise water/lava use the adjacent cell
+-- selected by the hit face. Returns a result table or nil, err.
+function Liquid.PlaceSource( ply, kind )
+	kind = normalizeLiquidKind( kind )
+	if not kind then return nil, "invalid_liquid_kind" end
+	local hit, hitError = bucketAim( ply )
+	if not hit then return nil, hitError end
+	local hitX, hitY, hitZ = cellCoords( hit.bx, hit.by, hit.bz )
+	if not hitX then return nil, "invalid_cell" end
+	local hitStateId = MC.GetBlockState and MC.GetBlockState( hitX, hitY, hitZ ) or 0
+	local spread = kind == "water" and MC.WaterSpread or MC.LavaSpread
+	if not spread or not spread.CanHoldAny or not spread.CanHoldSpecific or not spread.PlaceFluidInState then
+		return nil, "liquid_rules_unavailable"
+	end
+
+	local targetX, targetY, targetZ = hitX, hitY, hitZ
+	local targetStateId, waterlogged, expectedStateId = nil, false, hitStateId
+	local sneaking = ply.KeyDown and ply:KeyDown( IN_DUCK ) == true
+	if kind == "water" and not sneaking and spread.WaterloggedState then
+		targetStateId = spread.WaterloggedState( hitStateId )
+		waterlogged = targetStateId ~= nil
+	end
+
+	if not targetStateId then
+		local dx, dy, dz = hitNormalOffset( hit.HitNormal )
+		if dx == nil then return nil, "invalid_hit_normal" end
+		targetX, targetY, targetZ = hitX + dx, hitY + dy, hitZ + dz
+		local existing = MC.GetBlockState and MC.GetBlockState( targetX, targetY, targetZ ) or 0
+		expectedStateId = existing
+		if not spread.CanHoldAny( existing, targetX, targetY, targetZ )
+		or not spread.CanHoldSpecific( existing ) then return nil, "target_rejected" end
+		targetStateId = spread.PlaceFluidInState( existing, 8, false, true )
+		waterlogged = kind == "water" and targetStateId ~= sourceStateForKind( kind )
+	end
+
+	if not targetStateId or targetStateId == 0 then return nil, "source_state_unavailable" end
+	if ( MC.GetBlockState and MC.GetBlockState( targetX, targetY, targetZ ) or 0 ) ~= expectedStateId then
+		return nil, "state_changed"
+	end
+	local changed, writeError = validatedPlayerFluidWrite(
+		ply, targetX, targetY, targetZ, targetStateId, true, expectedStateId == 0 )
+	if not changed then return nil, writeError end
+	return {
+		kind = kind,
+		bx = targetX, by = targetY, bz = targetZ,
+		waterlogged = waterlogged == true,
+		oldStateId = expectedStateId,
+		stateId = targetStateId,
+	}
+end
+
+function Liquid.RollbackPlacement( ply, result )
+	if not istable( result ) then return false, "invalid_result" end
+	return rollbackPlayerFluidWrite(
+		ply, result.bx, result.by, result.bz, result.stateId, result.oldStateId )
+end
+
+function Liquid.CommitPlacement( ply, result )
+	if not validLiquidPlayer( ply ) or not istable( result ) then return false, "invalid_result" end
+	if MC.RunEvent then
+		MC.RunEvent(
+			"MC.PlayerPlacedFluid", ply, result.kind, result.bx, result.by, result.bz, result.stateId )
+	end
+	return true
+end
+
 -- Full world resync for one player (or every player when ply is nil).
 function Player.Resync( ply )
 	local sv = SV()

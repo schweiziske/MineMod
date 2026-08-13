@@ -31,6 +31,8 @@ local REQUIRED_API_VERSION = 1
 
 local SHARED = {
 	"mcgame/functional/sh_furnace.lua",
+	"mcgame/functional/sh_brewing.lua",
+	"mcgame/functional/sh_anvil.lua",
 	"mcgame/item/sh_registry.lua",
 	"mcgame/generated/sh_generated_items.lua",
 	"mcgame/item/sh_model_registry.lua",
@@ -52,7 +54,9 @@ local SHARED = {
 	"mcgame/inventory/sh_container.lua",
 	"mcgame/inventory/sh_click.lua",
 	"mcgame/inventory/sh_crafting.lua",
+	"mcgame/inventory/sh_anvil.lua",
 	"mcgame/functional/sh_furnace_data.lua",
+	"mcgame/functional/sh_brewing_data.lua",
 	"mcgame/functional/sh_chest_data.lua",
 	"mcgame/functional/sh_chests.lua",
 	"mcgame/functional/sh_crafting.lua",
@@ -70,8 +74,10 @@ local SERVER_FILES = {
 	"mcgame/inventory/sv_projectiles.lua",
 	"mcgame/inventory/sv_combat.lua",
 	"mcgame/inventory/sv_furnaces.lua",
+	"mcgame/inventory/sv_brewing.lua",
 	"mcgame/inventory/sv_chests.lua",
 	"mcgame/inventory/sv_crafting.lua",
+	"mcgame/inventory/sv_anvil.lua",
 	"mcgame/inventory/sv_network.lua",
 }
 local CLIENT_FILES = {
@@ -80,7 +86,9 @@ local CLIENT_FILES = {
 	"mcgame/functional/cl_chests.lua",
 	"mcgame/inventory/cl_state.lua",
 	"mcgame/inventory/cl_network.lua",
+	"mcgame/inventory/cl_anvil.lua",
 	"mcgame/inventory/cl_furnaces.lua",
+	"mcgame/inventory/cl_brewing.lua",
 	"mcgame/inventory/ui/cl_theme.lua",
 	"mcgame/item/cl_model_resolver.lua",
 	"mcgame/inventory/ui/cl_entry.lua",

@@ -21,22 +21,14 @@ local function hasFoil( stack )
 	return MC.ItemStackHasFoil and MC.ItemStackHasFoil( stack ) == true
 end
 
-local function updateGlintTextureTransform( textureScale )
+local function glintUV( u, v, textureScale )
 	local elapsed = ( CurTime and CurTime() or 0 ) * 1000 * GLINT_SPEED * 8
 	local offsetU = -( elapsed % 110000 ) / 110000
 	local offsetV = ( elapsed % 30000 ) / 30000
 	local cosine, sine = math.cos( GLINT_ROTATION ), math.sin( GLINT_ROTATION )
 	textureScale = textureScale or GLINT_TEXTURE_SCALE
-	if GLINT_MATERIAL.SetMatrix then
-		local transform = Matrix()
-		transform:SetField( 1, 1, cosine * textureScale )
-		transform:SetField( 1, 2, -sine * textureScale )
-		transform:SetField( 1, 4, offsetU )
-		transform:SetField( 2, 1, sine * textureScale )
-		transform:SetField( 2, 2, cosine * textureScale )
-		transform:SetField( 2, 4, offsetV )
-		GLINT_MATERIAL:SetMatrix( "$basetexturetransform", transform )
-	end
+	return ( u * cosine - v * sine ) * textureScale + offsetU,
+		( u * sine + v * cosine ) * textureScale + offsetV
 end
 
 local function beginGlintBlend()
@@ -53,29 +45,20 @@ local function endGlintBlend( active )
 	render.SetColorModulation( 1, 1, 1 )
 end
 
-local function drawGlintQuad( points, textureScale )
-	if not GLINT_MATERIAL or GLINT_MATERIAL.IsError and GLINT_MATERIAL:IsError() then return false end
-	updateGlintTextureTransform( textureScale )
-	render.SetMaterial( GLINT_MATERIAL )
-	local function emit( position, u, v )
-		mesh.Position( position )
-		mesh.TexCoord( 0, u, v )
-		mesh.Color( 255, 255, 255, 255 )
-		mesh.AdvanceVertex()
-	end
-	mesh.Begin( MATERIAL_QUADS, 2 )
-	emit( points[1], 0, 0 ); emit( points[2], 1, 0 ); emit( points[3], 1, 1 ); emit( points[4], 0, 1 )
-	emit( points[4], 0, 1 ); emit( points[3], 1, 1 ); emit( points[2], 1, 0 ); emit( points[1], 0, 0 )
-	mesh.End()
-	return true
-end
-
 local function drawGlintSurfaceRect( x, y, width, height )
 	if not GLINT_MATERIAL or GLINT_MATERIAL.IsError and GLINT_MATERIAL:IsError() then return false end
-	updateGlintTextureTransform( GLINT_TEXTURE_SCALE )
 	surface.SetMaterial( GLINT_MATERIAL )
 	surface.SetDrawColor( GLINT_COLOR.r, GLINT_COLOR.g, GLINT_COLOR.b, GLINT_COLOR.a )
-	surface.DrawTexturedRectUV( x, y, width, height, 0, 0, 1, 1 )
+	local u0, v0 = glintUV( 0, 0, GLINT_TEXTURE_SCALE )
+	local u1, v1 = glintUV( 1, 0, GLINT_TEXTURE_SCALE )
+	local u2, v2 = glintUV( 1, 1, GLINT_TEXTURE_SCALE )
+	local u3, v3 = glintUV( 0, 1, GLINT_TEXTURE_SCALE )
+	surface.DrawPoly( {
+		{ x = x, y = y, u = u0, v = v0 },
+		{ x = x + width, y = y, u = u1, v = v1 },
+		{ x = x + width, y = y + height, u = u2, v = v2 },
+		{ x = x, y = y + height, u = u3, v = v3 },
+	} )
 	return true
 end
 
@@ -191,6 +174,7 @@ local function blockIconMaterial( blockId )
 end
 
 local droppedBlockMeshes = {}
+local droppedBlockGlintGeometry = {}
 local DROP_TRIANGLES = { 1, 3, 2, 1, 4, 3 }
 
 local droppedBlockMaterials = {}
@@ -285,7 +269,7 @@ local function droppedBlockMesh( stateId, blockId )
 		return nil
 	end
 
-	local vertices = {}
+	local vertices, glintVertices = {}, {}
 	local visitedModel = false
 	local missingModel = false
 	MC.VisitStateVisualModels( stateId, 0, 0, 0, function( modelId )
@@ -328,6 +312,10 @@ local function droppedBlockMesh( stateId, blockId )
 					pos = points[corner], normal = normal,
 					u = texture[corner].u, v = texture[corner].v, color = color,
 				}
+				glintVertices[#glintVertices + 1] = {
+					pos = points[corner], normal = normal,
+					u = texture[corner].u, v = texture[corner].v,
+				}
 			end
 		end
 	end )
@@ -343,9 +331,27 @@ local function droppedBlockMesh( stateId, blockId )
 	if not material then return nil end
 	local blockMesh = Mesh( material )
 	blockMesh:BuildFromTriangles( vertices )
+	droppedBlockGlintGeometry[stateId] = glintVertices
 	cached = { mesh = blockMesh, translucent = translucent }
 	droppedBlockMeshes[stateId] = cached
 	return cached
+end
+
+local function drawDynamicGlintTriangles( vertices )
+	if type( vertices ) ~= "table" or #vertices < 3
+		or not GLINT_MATERIAL or GLINT_MATERIAL.IsError and GLINT_MATERIAL:IsError() then return false end
+	render.SetMaterial( GLINT_MATERIAL )
+	mesh.Begin( MATERIAL_TRIANGLES, #vertices / 3 )
+	for _, vertex in ipairs( vertices ) do
+		local u, v = glintUV( vertex.u or 0, vertex.v or 0, GLINT_TEXTURE_SCALE )
+		mesh.Position( vertex.pos )
+		if vertex.normal then mesh.Normal( vertex.normal ) end
+		mesh.TexCoord( 0, u, v )
+		mesh.Color( 255, 255, 255, 255 )
+		mesh.AdvanceVertex()
+	end
+	mesh.End()
+	return true
 end
 
 function Renderer.DrawDroppedBlock( stack, position, angles, size, worldColor, options )
@@ -383,12 +389,10 @@ function Renderer.DrawDroppedBlock( stack, position, angles, size, worldColor, o
 	end
 	if hasFoil( stack ) and GLINT_MATERIAL and not ( GLINT_MATERIAL.IsError and GLINT_MATERIAL:IsError() ) then
 		local blended = beginGlintBlend()
-		updateGlintTextureTransform( GLINT_TEXTURE_SCALE )
 		render.SetColorModulation( GLINT_STRENGTH, GLINT_STRENGTH, GLINT_STRENGTH )
 		render.SetBlend( 1 )
-		render.SetMaterial( GLINT_MATERIAL )
 		cam.PushModelMatrix( matrix, true )
-			cached.mesh:Draw()
+			drawDynamicGlintTriangles( droppedBlockGlintGeometry[stateId] )
 		cam.PopModelMatrix()
 		endGlintBlend( blended )
 	end
@@ -403,6 +407,7 @@ local function clearDroppedBlockMeshes()
 		if cached and cached.mesh and cached.mesh.Destroy then cached.mesh:Destroy() end
 	end
 	droppedBlockMeshes = {}
+	droppedBlockGlintGeometry = {}
 end
 
 hook.Add( "ShutDown", "mc_item_drop_block_meshes", clearDroppedBlockMeshes )
@@ -494,6 +499,12 @@ end
 function Renderer.DisplayName( stack )
 	local definition = definitionFor( stack )
 	if not definition then return "" end
+	local customName, hasCustomName
+	if MC.GetItemCustomName then customName, hasCustomName = MC.GetItemCustomName( stack ) end
+	if hasCustomName then return customName end
+	local enchantedBookName = MCITEM and MCITEM.EnchantedBookDisplayName
+		and MCITEM.EnchantedBookDisplayName( stack ) or nil
+	if enchantedBookName and enchantedBookName ~= "" then return enchantedBookName end
 	local potionName = MC.PotionContents and MC.PotionContents.DisplayName
 		and MC.PotionContents.DisplayName( stack ) or nil
 	if potionName and potionName ~= "" then return potionName end
@@ -659,7 +670,7 @@ local function drawFlatHeldLayer( material, transform, layerOffset, color )
 end
 
 local heldSpriteMeshes = {}
-local glintSpriteMeshes = {}
+local glintSpriteGeometry = {}
 local heldSpriteDrawMatrix = Matrix()
 local SPRITE_HALF_DEPTH = 1 / 32
 local bitPowers = {}
@@ -715,32 +726,7 @@ local function appendMaskedFaces( vertices, mask, width, height, front, back )
 	end
 end
 
-local function buildHeldSpriteMesh( layer, material, maskedFaces )
-	local mask = spriteMaskForLayer( layer )
-	if not mask or not Mesh or not material or material.IsError and material:IsError() then return nil end
-	local width, height = tonumber( mask.width ) or 0, tonumber( mask.height ) or 0
-	if width < 1 or height < 1 or width > 32 or height > 32 then return nil end
-
-	local vertices = {}
-	local front = SPRITE_HALF_DEPTH
-	local back = -SPRITE_HALF_DEPTH
-	if maskedFaces then
-		-- Glint has no item alpha of its own.  Emit only opaque item pixels for
-		-- both faces so the bound glint material cannot turn the sprite into a quad.
-		appendMaskedFaces( vertices, mask, width, height, front, back )
-	else
-		local bottomLeft = Vector( -0.5, -0.5, front )
-		local bottomRight = Vector( 0.5, -0.5, front )
-		local topRight = Vector( 0.5, 0.5, front )
-		local topLeft = Vector( -0.5, 0.5, front )
-		appendQuad( vertices, bottomLeft, bottomRight, topRight, topLeft, Vector( 0, 0, 1 ),
-			0, 1, 1, 1, 1, 0, 0, 0 )
-		appendQuad( vertices,
-			Vector( -0.5, -0.5, back ), Vector( -0.5, 0.5, back ),
-			Vector( 0.5, 0.5, back ), Vector( 0.5, -0.5, back ), Vector( 0, 0, -1 ),
-			0, 1, 0, 0, 1, 0, 1, 1 )
-	end
-
+local function appendMaskedSides( vertices, mask, width, height, front, back )
 	for y = 0, height - 1 do
 		for x = 0, width - 1 do
 			if maskOpaque( mask, x, y ) then
@@ -766,6 +752,29 @@ local function buildHeldSpriteMesh( layer, material, maskedFaces )
 			end
 		end
 	end
+end
+
+local function buildHeldSpriteMesh( layer, material )
+	local mask = spriteMaskForLayer( layer )
+	if not mask or not Mesh or not material or material.IsError and material:IsError() then return nil end
+	local width, height = tonumber( mask.width ) or 0, tonumber( mask.height ) or 0
+	if width < 1 or height < 1 or width > 32 or height > 32 then return nil end
+
+	local vertices = {}
+	local front = SPRITE_HALF_DEPTH
+	local back = -SPRITE_HALF_DEPTH
+	local bottomLeft = Vector( -0.5, -0.5, front )
+	local bottomRight = Vector( 0.5, -0.5, front )
+	local topRight = Vector( 0.5, 0.5, front )
+	local topLeft = Vector( -0.5, 0.5, front )
+	appendQuad( vertices, bottomLeft, bottomRight, topRight, topLeft, Vector( 0, 0, 1 ),
+		0, 1, 1, 1, 1, 0, 0, 0 )
+	appendQuad( vertices,
+		Vector( -0.5, -0.5, back ), Vector( -0.5, 0.5, back ),
+		Vector( 0.5, 0.5, back ), Vector( 0.5, -0.5, back ), Vector( 0, 0, -1 ),
+		0, 1, 0, 0, 1, 0, 1, 1 )
+
+	appendMaskedSides( vertices, mask, width, height, front, back )
 
 	local spriteMesh = Mesh( material )
 	spriteMesh:BuildFromTriangles( vertices )
@@ -783,16 +792,26 @@ local function heldSpriteMesh( layer, material )
 	return spriteMesh
 end
 
-local function glintSpriteMesh( layer )
+local function glintGeometryForLayer( layer )
 	local key = string.gsub( tostring( layer or "" ), "%.png$", "" )
-	local cached = glintSpriteMeshes[key]
+	local cached = glintSpriteGeometry[key]
 	if cached == false then return nil end
-	if cached and cached.mesh then return cached.mesh end
-	-- Bind the glint material when the mesh is created.  render.SetMaterial does
-	-- not reliably replace a Mesh(material) binding on every GMod renderer path.
-	local spriteMesh = buildHeldSpriteMesh( key, GLINT_MATERIAL, true )
-	glintSpriteMeshes[key] = spriteMesh and { mesh = spriteMesh } or false
-	return spriteMesh
+	if cached then return cached end
+	local mask = spriteMaskForLayer( key )
+	local width, height = tonumber( mask and mask.width ) or 0, tonumber( mask and mask.height ) or 0
+	if width < 1 or height < 1 or width > 32 or height > 32 then
+		glintSpriteGeometry[key] = false
+		return nil
+	end
+	local vertices = {}
+	-- Keep the pass in the sprite silhouette and offset it slightly beyond the
+	-- base front/back surfaces to prevent first/third-person depth fighting.
+	appendMaskedFaces( vertices, mask, width, height,
+		SPRITE_HALF_DEPTH + 0.0005, -SPRITE_HALF_DEPTH - 0.0005 )
+	appendMaskedSides( vertices, mask, width, height,
+		SPRITE_HALF_DEPTH + 0.0005, -SPRITE_HALF_DEPTH - 0.0005 )
+	glintSpriteGeometry[key] = vertices
+	return vertices
 end
 
 local function drawExtrudedHeldLayer( layer, material, transform, layerOffset, color )
@@ -832,10 +851,7 @@ local function clearHeldSpriteMeshes()
 		if cached and cached.mesh and cached.mesh.Destroy then cached.mesh:Destroy() end
 	end
 	heldSpriteMeshes = {}
-	for _, cached in pairs( glintSpriteMeshes ) do
-		if cached and cached.mesh and cached.mesh.Destroy then cached.mesh:Destroy() end
-	end
-	glintSpriteMeshes = {}
+	glintSpriteGeometry = {}
 end
 
 hook.Add( "ShutDown", "mc_item_held_sprite_meshes", clearHeldSpriteMeshes )
@@ -868,22 +884,21 @@ function Renderer.DrawHeldItem( stack, pos, orientation, size, color, options )
 			end
 		end )
 		if hasFoil( stack ) and GLINT_MATERIAL and not ( GLINT_MATERIAL.IsError and GLINT_MATERIAL:IsError() ) then
-		local blended = beginGlintBlend()
-		render.SetColorModulation( GLINT_STRENGTH, GLINT_STRENGTH, GLINT_STRENGTH )
-		render.SetBlend( 1 )
-		for index = 1, #materials do
+			local blended = beginGlintBlend()
+			render.SetColorModulation( GLINT_STRENGTH, GLINT_STRENGTH, GLINT_STRENGTH )
+			render.SetBlend( 1 )
+			for index = 1, #materials do
 				local offset = normal * ( ( index - 1 ) * 0.002 + 0.001 )
 				local layer = plan.layers and plan.layers[index] or nil
-				local spriteMesh = glintSpriteMesh( layer )
-				if spriteMesh then
+				local geometry = glintGeometryForLayer( layer )
+				if geometry then
 					local matrix = heldSpriteDrawMatrix
 					matrix:SetTranslation( pos + offset )
 					matrix:SetForward( x * size )
 					matrix:SetRight( -y * size )
 					matrix:SetUp( normal * math.max( size * 0.02, 0.001 ) )
-					updateGlintTextureTransform( GLINT_TEXTURE_SCALE )
 					cam.PushModelMatrix( matrix, true )
-						spriteMesh:Draw()
+						drawDynamicGlintTriangles( geometry )
 					cam.PopModelMatrix()
 				end
 			end
@@ -922,18 +937,17 @@ function Renderer.DrawHeldItem( stack, pos, orientation, size, color, options )
 		for index = 1, #materials do
 			local layer = plan.layers and plan.layers[index] or nil
 			local offset = ( index - 1 ) * 0.01 * transform.depthScale + 0.001
-			local spriteMesh = glintSpriteMesh( layer )
-			if spriteMesh then
+			local geometry = glintGeometryForLayer( layer )
+			if geometry then
 				local matrix = heldSpriteDrawMatrix
 				matrix:SetTranslation( transform.pos + transform.normal * offset )
 				matrix:SetForward( transform.xAxis * transform.width )
 				matrix:SetRight( -transform.yAxis * transform.height )
 				matrix:SetUp( transform.normal * transform.depth )
-				updateGlintTextureTransform( GLINT_TEXTURE_SCALE )
 				render.SetColorModulation( GLINT_STRENGTH, GLINT_STRENGTH, GLINT_STRENGTH )
 				render.SetBlend( 1 )
 				cam.PushModelMatrix( matrix, true )
-					spriteMesh:Draw()
+					drawDynamicGlintTriangles( geometry )
 				cam.PopModelMatrix()
 			end
 		end
