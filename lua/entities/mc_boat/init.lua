@@ -11,12 +11,6 @@ local BOAT_NATIVE_SEAT_LIFT = 0.25
 local BOAT_YAW_BLEND_TIME = 1 / TICKS_PER_SECOND
 local BOAT_JAVA_HEIGHT = 0.5625
 local BOAT_JAVA_STEADY_IMMERSION = 0.65
--- Java hides the water drawn inside a boat with BoatModel.createWaterPatch()
--- and RenderTypes.waterMask(). Source has no equivalent in this renderer, so
--- retain only a small Source-only lift. This leaves about 0.240625 block of the
--- authored lower hull in the water at Java's 65% equilibrium: deep enough for
--- stable water contact without reproducing the masked water inside the boat.
-local BOAT_SOURCE_WATERLINE_LIFT = 0.125
 
 local function blockScale()
 	return math.max( 1, tonumber( MC and MC.BS ) or 36.5 )
@@ -79,6 +73,19 @@ end
 local function entityWorldBounds( entity )
 	if MC and MC.EntityWorldAABB then return MC.EntityWorldAABB( entity ) end
 	return entity:WorldSpaceAABB()
+end
+
+local function setAnglesPreservingVelocity( entity, angles )
+	local physics = entity:GetPhysicsObject()
+	local velocity = IsValid( physics ) and physics:GetVelocity() or nil
+	entity:SetAngles( angles )
+	if not IsValid( physics ) then return end
+	-- Entity:SetAngles resets a VPhysics object's linear velocity. Boat yaw is
+	-- interpolated every rendered server frame, so failing to restore it makes
+	-- the hull look correctly animated while every paddle impulse is erased.
+	if velocity and physics.SetVelocityInstantaneous then physics:SetVelocityInstantaneous( velocity ) end
+	if physics.SetAngleVelocityInstantaneous then physics:SetAngleVelocityInstantaneous( Vector( 0, 0, 0 ) ) end
+	physics:Wake()
 end
 
 local function waterCell( bx, by, bz )
@@ -344,7 +351,11 @@ function ENT:ApplySmoothedYaw( current )
 	local fraction = math.Clamp( ( current - ( self.MCTurnStartedAt or current ) ) / BOAT_YAW_BLEND_TIME, 0, 1 )
 	local yaw = normalizeYaw( start + yawDifference( target, start ) * fraction )
 	self.MCSmoothedYaw = yaw
-	self:SetAngles( Angle( 0, yaw, 0 ) )
+	local angles = self:GetAngles()
+	if math.abs( angles.p ) > 0.001 or math.abs( angles.r ) > 0.001
+	or math.abs( yawDifference( yaw, angles.y ) ) > 0.001 then
+		setAnglesPreservingVelocity( self, Angle( 0, yaw, 0 ) )
+	end
 end
 
 function ENT:TryEnterPlayer( activator )
@@ -403,11 +414,12 @@ function ENT:FloatBoat( status, oldStatus )
 		local scale = blockScale()
 		local javaTransitionTarget = waterLevelAbove( self ) - height + scale * 0.101
 		-- AbstractBoat's raw transition target sits about 0.096 block below its
-		-- eventual 65%-immersed equilibrium. Apply that correction together with
-		-- the Source-only waterline lift so placement does not visibly jump down
-		-- for one tick and then bob back up.
+		-- eventual 65%-immersed equilibrium. Apply only that steady-state
+		-- correction: the renderer already contains Java's +0.375 model transform,
+		-- so an additional Source lift makes the visible hull and its water probe
+		-- sit too high.
 		local steadyStateCorrection = height * ( 1 - BOAT_JAVA_STEADY_IMMERSION ) - scale * 0.101
-		local targetZ = javaTransitionTarget + steadyStateCorrection + scale * BOAT_SOURCE_WATERLINE_LIFT
+		local targetZ = javaTransitionTarget + steadyStateCorrection
 		if canMoveToVerticalPosition( self, targetZ ) then
 			local position = self:GetPos()
 			self:SetPos( Vector( position.x, position.y, targetZ ) )
@@ -420,8 +432,7 @@ function ENT:FloatBoat( status, oldStatus )
 		return status
 	elseif status == "in_water" then
 		local mins, maxs = entityWorldBounds( self )
-		local effectiveWaterLevel = ( self.MCWaterLevel or mins.z )
-			+ blockScale() * BOAT_SOURCE_WATERLINE_LIFT
+		local effectiveWaterLevel = self.MCWaterLevel or mins.z
 		buoyancy = ( effectiveWaterLevel - mins.z ) / math.max( 1, maxs.z - mins.z )
 		friction = 0.9
 	elseif status == "under_flowing_water" then
@@ -574,7 +585,7 @@ end
 function ENT:StabilizeUpright()
 	local angles = self:GetAngles()
 	if math.abs( angles.p ) > 0.001 or math.abs( angles.r ) > 0.001 then
-		self:SetAngles( Angle( 0, angles.y, 0 ) )
+		setAnglesPreservingVelocity( self, Angle( 0, angles.y, 0 ) )
 	end
 	local physics = self:GetPhysicsObject()
 	if IsValid( physics ) and physics.SetAngleVelocityInstantaneous then
