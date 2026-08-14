@@ -224,6 +224,7 @@ local function droppedTileUVRect( tile, uv )
 	if not uv then return MC.TileUV( tile ) end
 	local atlas = MC.Atlas
 	if not atlas or not atlas.COLS or not atlas.W or not atlas.H then return MC.TileUV( tile ) end
+	tile = MC.ResolveAtlasTile and MC.ResolveAtlasTile( tile ) or tile
 	local col = tile % atlas.COLS
 	local row = math.floor( tile / atlas.COLS )
 	local stride = atlas.STRIDE or atlas.TILE
@@ -412,6 +413,7 @@ end
 
 hook.Add( "ShutDown", "mc_item_drop_block_meshes", clearDroppedBlockMeshes )
 hook.Add( "OnReloaded", "mc_item_drop_block_meshes", clearDroppedBlockMeshes )
+hook.Add( "MC.AtlasProfileChanged", "mc_item_drop_block_meshes", clearDroppedBlockMeshes )
 
 function Renderer.CanDraw( stack )
 	return not MC.IsEmptyItemStack( stack ) and definitionFor( stack ) ~= nil

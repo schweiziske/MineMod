@@ -752,6 +752,11 @@ local MAX_BLOCKS, MAX_ORIENTS = 65535, 64
 local MAX_BOXES, MAX_QUADS, MAX_TEMPLATES = 1000000, 4000000, 1000000
 local MAX_BLOB_BYTES = 512 * 1024 * 1024
 
+local function resolveAtlasTile( tile, label )
+	tile = MC.ResolveAtlasTile and MC.ResolveAtlasTile( tile ) or tile
+	return checkedInt( tile or 0, 0, 65535, label or "tile" )
+end
+
 local function orientsForBlock( b )
 	local rule = b.orient and MC.OrientRules and MC.OrientRules[b.orient]
 	if not rule or not rule.allowed then return { 0 } end
@@ -820,7 +825,7 @@ end
 -- coordinates [-16,16] (models legitimately extend outside the unit cube); UVs 0..16.
 local function packQuad( face, flags, boxIndex, tile, verts, context )
 	face, flags = checkedInt( face, 1, 6, "quad face" ), checkedInt( flags or 0, 0, 1, "quad flags" )
-	boxIndex, tile = checkedInt( boxIndex or 65535, 0, 65535, "box index" ), checkedInt( tile or 0, 0, 65535, "tile" )
+	boxIndex, tile = checkedInt( boxIndex or 65535, 0, 65535, "box index" ), resolveAtlasTile( tile, "tile" )
 	if type( verts ) ~= "table" or #verts ~= 4 then error( ( context or "quad" ) .. " needs four vertices", 0 ) end
 	local p = { u8( face ), u8( flags ), u16le( boxIndex ), u16le( tile ), u16le( 0 ) }
 	for i = 1, 4 do
@@ -844,7 +849,7 @@ end
 
 -- FaceTex36: tile:u16 flags:u8 reserved:u8 + four tile-local {u,v}:f32.
 local function packFaceTex( tile, uvs, flags )
-	local p = { u16le( checkedInt( tile or 0, 0, 65535, "tile" ) ), u8( flags or 0 ), u8( 0 ) }
+	local p = { u16le( resolveAtlasTile( tile, "tile" ) ), u8( flags or 0 ), u8( 0 ) }
 	for i = 1, 4 do
 		p[#p+1] = f32le( checkedNumber( uvs[i][1], 0, 16, "face u" ) )
 		p[#p+1] = f32le( checkedNumber( uvs[i][2], 0, 16, "face v" ) )
@@ -1074,7 +1079,22 @@ local function visualCatalogPayload( totalStateCount )
 	local cc=count("choiceGroupCount",65535); local ca=count("choiceAlternativeCount",65535); local pc=count("visualPlanCount",65535); local pg=count("visualPlanGroupCount",65535)
 	local fields={{"geometryIndex",gc*6},{"geometryData",gq*32},{"surfaceIndex",sc*6},{"surfaceData",se*2},{"modelMap",mc*4},{"groupIndex",cc*3},{"groupData",ca*3},{"planIndex",pc*3},{"planData",pg*2},{"statePlans",cs*2}}
 	local data={u32le(checkedInt(c.coordinateScale or 0,1,1048576,"coordinate scale")),u32le(checkedInt(c.packedQuadBytes or 0,1,256,"packed quad bytes")),u32le(cs),u32le(gc),u32le(gq),u32le(sc),u32le(se),u32le(mc),u32le(cc),u32le(ca),u32le(pc),u32le(pg)}
-	for _,f in ipairs(fields) do local raw=c[f[1]];if type(raw)~="string" or #raw~=f[2] then error("visual "..f[1].." length mismatch",0) end;data[#data+1]=raw end
+	for _,f in ipairs(fields) do
+		local raw=c[f[1]]
+		if type(raw)~="string" or #raw~=f[2] then error("visual "..f[1].." length mismatch",0) end
+		if f[1]=="surfaceData" and #raw>0 then
+			local remapped={}
+			for offset=1,#raw,2 do
+				local lo,hi=raw:byte(offset,offset+1);local packed=(lo or 0)+(hi or 0)*256
+				local logical=bit_band(packed,0x0FFF);local emission=packed-logical
+				local physical=resolveAtlasTile(logical,"visual surface tile")
+				if physical>0x0FFF then error("visual surface tile exceeds 12-bit range",0) end
+				remapped[#remapped+1]=u16le(emission+physical)
+			end
+			raw=table.concat(remapped)
+		end
+		data[#data+1]=raw
+	end
 	local tintSeen,tintIndexes={},{}
 	for offset=1,#c.geometryData,32 do local packed=c.geometryData:byte(offset) or 0;local tv=bit_rshift(packed,3);if tv>0 and not tintSeen[tv-1] then tintSeen[tv-1]=true;tintIndexes[#tintIndexes+1]=tv-1 end end
 	table.sort(tintIndexes);if #tintIndexes>31 then error("too many visual tint indexes",0) end
@@ -1366,6 +1386,21 @@ local function adoptNativeChunkStorage( chunk )
 	return true
 end
 
+local function materializeNativeWorldForRestart()
+	local converted = {}
+	for _, chunk in pairs( MC.World or {} ) do
+		if chunk and chunk.nativeStateStorage then
+			local ok, err = MC.NativeChunkBackend.MaterializeLuaStorage( chunk )
+			if not ok then
+				for _, restored in ipairs( converted ) do adoptNativeChunkStorage( restored ) end
+				return nil, err or "native_state_materialization_failed"
+			end
+			converted[#converted + 1] = chunk
+		end
+	end
+	return converted
+end
+
 local function unloadChunkNative( key )
 	local cx, cy, cz = MC.ChunkKeyToCoords( key )
 	if cx then
@@ -1470,14 +1505,18 @@ local function activate()
 	MC.NativeChunkBackend.ScheduleBlockLightRebuild( 0 )
 end
 
-deactivate = function( reason )
+deactivate = function( reason, options )
+	options = options or {}
 	MC.NativeChunkBackend.CancelAllCompressedPatchDecodes()
 	state.active = false
-	local materialized, materializeFailed = 0, 0
-	for _, chunk in pairs( MC.World or {} ) do
-		if chunk and chunk.nativeStateStorage then
-			local ok = MC.NativeChunkBackend.MaterializeLuaStorage( chunk )
-			if ok then materialized = materialized + 1 else materializeFailed = materializeFailed + 1 end
+	local materialized = tonumber( options.materialized ) or 0
+	local materializeFailed = 0
+	if options.alreadyMaterialized ~= true then
+		for _, chunk in pairs( MC.World or {} ) do
+			if chunk and chunk.nativeStateStorage then
+				local ok = MC.NativeChunkBackend.MaterializeLuaStorage( chunk )
+				if ok then materialized = materialized + 1 else materializeFailed = materializeFailed + 1 end
+			end
 		end
 	end
 	state.epoch = state.epoch + 1
@@ -1496,7 +1535,12 @@ deactivate = function( reason )
 	if mcmesh and isfunction( mcmesh.Shutdown ) then pcall( mcmesh.Shutdown )
 	elseif mcmesh and isfunction( mcmesh.ClearWorld ) then pcall( mcmesh.ClearWorld ) end
 	if MC.MarkChunkDrawListDirty then MC.MarkChunkDrawListDirty() end
-	if state.shuttingDown then return end
+	if state.shuttingDown then return materializeFailed == 0, materialized, materializeFailed end
+	if options.restarting == true then
+		log( ">>> backend restart prepared (" .. tostring( reason ) .. "), materialized="
+			.. materialized .. " failed=" .. materializeFailed )
+		return materializeFailed == 0, materialized, materializeFailed
+	end
 	-- Sky reflood requests made while Native owned lighting were redirected to
 	-- C++. Once ownership returns to Lua those requests no longer exist in the
 	-- Lua queue, so rebuild the column cache before fallback meshes are built.
@@ -1521,6 +1565,7 @@ deactivate = function( reason )
 	end
 	log( ">>> backend now: LUA (" .. tostring( reason ) .. "), "
 		.. #keys .. " chunks rebuilt, materialized=" .. materialized .. " failed=" .. materializeFailed )
+	return materializeFailed == 0, materialized, materializeFailed
 end
 
 ----------------------------------------------------------------- 甯у惊鐜?/ 鐪嬫姢
@@ -1706,8 +1751,9 @@ local function tryStart()
 	local blob, census, defCount, opaqueCount, translucentCount
 	local metadata = MC.BlockStateRegistryMetadata or {}
 	local catalog = MC.StateVisualCatalog or {}
-	local cacheKey = "mcbd4-state-liquid1-visual2-stateflags3-renderroute2-modelsurface2-pistonuv1:" .. tostring( metadata.schemaHash or "" ) .. ":" .. tostring( catalog.visualPlanSha256 or "" )
-		.. ":" .. tostring( MC.BlockStateCount or 0 )
+	local atlasProfileKey = MC.AtlasProfileCacheKey and MC.AtlasProfileCacheKey() or "default"
+	local cacheKey = "mcbd4-state-liquid1-visual2-stateflags3-renderroute2-modelsurface2-pistonuv1-atlasprofile1:" .. tostring( metadata.schemaHash or "" ) .. ":" .. tostring( catalog.visualPlanSha256 or "" )
+		.. ":" .. tostring( MC.BlockStateCount or 0 ) .. ":" .. tostring( atlasProfileKey )
 	local builtFresh, loadedFromDisk, loadedFromArtifact = false, false, false
 	if state.defCache and state.defCache.key == cacheKey then
 		state.packProfile.defsCacheHits = state.packProfile.defsCacheHits + 1
@@ -1814,15 +1860,79 @@ local function tryStart()
 	return true
 end
 
+local function queueNativeBootstrap()
+	if state.shuttingDown or state.shutdownCalled or state.moduleUnavailable
+	or not CONVAR_ENABLED:GetBool() then return false end
+	timer.Create( "mcswep_native_bootstrap", 1, 0, function()
+		if tryStart() then timer.Remove( "mcswep_native_bootstrap" ) end
+	end )
+	return true
+end
+
+local function queueLuaAtlasRebuild()
+	local marked = 0
+	for key, chunk in pairs( MC.World or {} ) do
+		if chunk and ( chunk.count or 0 ) > 0 and MC.MarkChunkDirty then
+			MC.MarkChunkDirty( key )
+			marked = marked + 1
+		end
+	end
+	return marked
+end
+
+function MC.NativeChunkBackend.InvalidateDefinitions()
+	state.defCache = nil
+	return true
+end
+
+-- Reload MCBD definitions and atlas metadata without changing mc_native_mesh.
+-- Active native-owned chunk state is materialized only for the duration of the
+-- same-DLL restart, then uploaded and adopted again by activate().
+function MC.NativeChunkBackend.ReconfigureDefinitions( reason )
+	reason = tostring( reason or "definition reconfigure" )
+	state.defCache = nil
+	if state.shuttingDown or state.shutdownCalled then return false, "shutting_down" end
+	if not CONVAR_ENABLED:GetBool() then
+		return false, "mc_native_mesh_disabled_lua_meshes_queued_" .. queueLuaAtlasRebuild()
+	end
+
+	local wasActive = state.active == true
+	if wasActive then
+		local converted, materializeError = materializeNativeWorldForRestart()
+		if not converted then return false, materializeError end
+		local stopped = deactivate( reason, {
+			restarting = true,
+			alreadyMaterialized = true,
+			materialized = #converted,
+		} )
+		if not stopped then
+			deactivate( reason .. " materialization failure" )
+			queueNativeBootstrap()
+			return false, "native_restart_materialization_failed"
+		end
+	end
+
+	if tryStart() then
+		return true, wasActive and "native_restarted" or "native_started"
+	end
+
+	local failure = state.startupFailureReason or "native_restart_failed"
+	if wasActive then
+		deactivate( reason .. " restart failed" )
+	else
+		queueLuaAtlasRebuild()
+	end
+	queueNativeBootstrap()
+	return false, failure
+end
+
 timer.Simple( 0, function()
 	if state.shuttingDown or state.shutdownCalled then return end
 	probeNativeModule()
 end )
 
 if not state.moduleUnavailable and CONVAR_ENABLED:GetBool() then
-	timer.Create( "mcswep_native_bootstrap", 1, 0, function()
-		if tryStart() then timer.Remove( "mcswep_native_bootstrap" ) end
-	end )
+	queueNativeBootstrap()
 end
 
 cvars.AddChangeCallback( "mc_native_mesh", function( _, _, new )

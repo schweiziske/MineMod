@@ -129,6 +129,7 @@ end
 local function tileUVRectWithUV( tile, uv )
 	if not uv then return MC.TileUV( tile ) end
 	local atlas = MC.Atlas
+	tile = MC.ResolveAtlasTile and MC.ResolveAtlasTile( tile ) or tile
 	local col = tile % atlas.COLS
 	local row = math.floor( tile / atlas.COLS )
 	local stride = atlas.STRIDE or atlas.TILE
@@ -997,5 +998,14 @@ hook.Add( "PostDrawTranslucentRenderables", "mc_cluster_selection_outline", func
 		local inSelection = MC.ClusterSelection.cells[MC.CellKey( aim.bx, aim.by, aim.bz )] ~= nil
 		MC.DrawBlockOutline( aim.Block, aim.Orient, aim.bx, aim.by, aim.bz,
 			inSelection and Color( 255, 120, 120, 235 ) or Color( 255, 255, 255, 235 ), aim.StateId )
+	end
+end )
+
+hook.Add( "MC.AtlasProfileChanged", "mc_block_cluster_atlas", function()
+	for _, ent in ipairs( ents.FindByClass( "mc_block_cluster" ) ) do
+		if IsValid( ent ) and ent.ClusterRecord and ent.FreeClusterMeshes then
+			ent:FreeClusterMeshes()
+			ent.ClusterMeshes = MC.BuildClusterMeshes and MC.BuildClusterMeshes( ent.ClusterRecord ) or nil
+		end
 	end
 end )

@@ -214,9 +214,10 @@ function Render.MarkCellDirty( bx, by, bz )
 	return true
 end
 
--- Register or replace a client-side atlas pack using the same tile layout as
--- the active MCSWEP atlas. Definitions and temporary activation leases are
--- owner-scoped so multiple addons can coexist and unload in any order.
+-- Register or replace a client-side atlas pack. A definition may name a
+-- registered atlas profile when its physical layout differs from the default.
+-- Definitions and temporary activation leases are owner-scoped so multiple
+-- addons can coexist and unload in any order.
 -- path values are material paths without extension, for example
 -- "mcbr/atlas_backrooms". The registry lives entirely on the client; callers
 -- must ship matching PNG/VMT files.
@@ -270,4 +271,39 @@ end
 function Render.ListTexturePackLeases()
 	if not MC.ListTexturePackLeases then return {} end
 	return MC.ListTexturePackLeases()
+end
+
+function Render.RegisterAtlasProfile( name, definition, owner )
+	if not MC.RegisterAtlasProfile then return false, "atlas_profile_api_unavailable" end
+	return MC.RegisterAtlasProfile( name, definition, owner )
+end
+
+function Render.UnregisterAtlasProfile( name, owner )
+	if not MC.UnregisterAtlasProfile then return false, "atlas_profile_api_unavailable" end
+	return MC.UnregisterAtlasProfile( name, owner )
+end
+
+function Render.UnregisterAtlasProfileOwner( owner )
+	if not MC.UnregisterAtlasProfileOwner then return 0 end
+	return MC.UnregisterAtlasProfileOwner( owner )
+end
+
+function Render.SetAtlasProfile( name )
+	if not MC.SetAtlasProfile then return false, "atlas_profile_api_unavailable" end
+	return MC.SetAtlasProfile( name )
+end
+
+function Render.GetAtlasProfile()
+	if not MC.AtlasProfileName then return "default" end
+	return MC.AtlasProfileName()
+end
+
+function Render.ResolveAtlasTile( tile )
+	if not MC.ResolveAtlasTile then return math.floor( tonumber( tile ) or 0 ) end
+	return MC.ResolveAtlasTile( tile )
+end
+
+function Render.ListAtlasProfiles()
+	if not MC.ListAtlasProfiles then return {} end
+	return MC.ListAtlasProfiles()
 end

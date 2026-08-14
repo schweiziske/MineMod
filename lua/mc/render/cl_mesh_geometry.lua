@@ -230,6 +230,7 @@ end
 local function tileUVRect( tile, uv )
 	if not uv then return MC.TileUV( tile ) end
 	local A = MC.Atlas
+	tile = MC.ResolveAtlasTile and MC.ResolveAtlasTile( tile ) or tile
 	local col = tile % A.COLS
 	local row = math.floor( tile / A.COLS )
 	local stride = A.STRIDE or A.TILE
@@ -246,6 +247,7 @@ end
 
 local function tileUVPointRaw( tile, u, v )
 	local A = MC.Atlas
+	tile = MC.ResolveAtlasTile and MC.ResolveAtlasTile( tile ) or tile
 	local col = tile % A.COLS
 	local row = math.floor( tile / A.COLS )
 	local stride = A.STRIDE or A.TILE
