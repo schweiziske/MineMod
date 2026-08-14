@@ -939,16 +939,19 @@ function SV.PlaceState( ply, bx, by, bz, stateId, options )
 	if not validatePlacementPlan( ply, plan ) then return false end
 	options = normalizeWriteOptions( options )
 	if options.blockEntity ~= nil then plan.cells[1].blockEntity = options.blockEntity end
-	local result = SV.ApplyBlockTransaction( plan.cells, {
-		actor = ply,
-		priorityPhys = true,
-		immediatePhys = true,
-		fxIndex = 1,
-		netMode = "bulk",
-	})
+	local transactionOptions = {}
+	for key, value in pairs( options ) do transactionOptions[key] = value end
+	transactionOptions.actor = ply
+	transactionOptions.priorityPhys = true
+	transactionOptions.immediatePhys = true
+	transactionOptions.fxIndex = 1
+	transactionOptions.netMode = "bulk"
+	local result = SV.ApplyBlockTransaction( plan.cells, transactionOptions )
 	local placed = result.ok == true and result.changed > 0
-	if placed and MC.RunEvent then MC.RunEvent( "MC.PlayerPlacedBlock", ply, plan.bx, plan.by, plan.bz, plan.stateId or stateId ) end
-	return placed
+	if placed and options.playerPlacementEvent ~= false and MC.RunEvent then
+		MC.RunEvent( "MC.PlayerPlacedBlock", ply, plan.bx, plan.by, plan.bz, plan.stateId or stateId )
+	end
+	return placed, result
 end
 
 function SV.Place( ply, bx, by, bz, id, orient )

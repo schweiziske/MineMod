@@ -46,6 +46,7 @@ local OPTIONAL_CALLBACKS = {
 	"ClientRender",
 	"OnUse",
 	"OnTick",
+	"CollectComponents",
 }
 
 function MC.RegisterBlockEntityType( definition )
@@ -133,7 +134,7 @@ function MC.EncodeBlockEntityEnvelope( stateId, record, forClient )
 	if forClient == true and definition.serverOnly then return nil, "server_only" end
 	local payload = record.data
 	if definition.Encode then
-		local ok, encoded, encodeError = pcall( definition.Encode, copyValue( record.data ) )
+		local ok, encoded, encodeError = pcall( definition.Encode, copyValue( record.data ), forClient == true )
 		if not ok or encoded == nil then return nil, encodeError or encoded or "block_entity_encode_failed" end
 		payload = encoded
 	end
@@ -220,6 +221,28 @@ function MC.GetBlockEntity( bx, by, bz )
 	local record = chunk and chunk.blockEntities and chunk.blockEntities[localIndex] or nil
 	if not record then return nil end
 	return copyValue( record )
+end
+
+-- CopyComponentsFunction reads BlockEntity#collectComponents before the block
+-- is removed. Keep the same boundary here so loot evaluation does not need to
+-- know the private storage format of banners, chests, or future block entities.
+function MC.CollectBlockEntityComponents( stateId, record )
+	if type( record ) ~= "table" then return nil end
+	local definition = ( MC.BlockEntityTypes and MC.BlockEntityTypes[record.type] )
+		or ( MC.PendingBlockEntityTypes and MC.PendingBlockEntityTypes[record.type] )
+	local output = {}
+	local stored = type( record.components ) == "table" and record.components
+		or type( record.data ) == "table" and type( record.data.components ) == "table" and record.data.components or nil
+	for name, value in pairs( stored or {} ) do output[name] = copyValue( value ) end
+	if definition and definition.CollectComponents then
+		local ok, implicit, collectError = pcall( definition.CollectComponents,
+			copyValue( record.data ), stateId, copyValue( record ) )
+		if not ok then return nil, "block_entity_component_collect_failed" end
+		if implicit == nil and collectError ~= nil then return nil, collectError end
+		if implicit ~= nil and type( implicit ) ~= "table" then return nil, "invalid_block_entity_components" end
+		for name, value in pairs( implicit or {} ) do output[name] = copyValue( value ) end
+	end
+	return next( output ) and output or nil
 end
 
 if timer and timer.Simple then

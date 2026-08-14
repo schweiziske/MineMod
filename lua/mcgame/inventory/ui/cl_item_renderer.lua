@@ -9,9 +9,24 @@ UI.ItemRenderer = Renderer
 
 local GLINT_STRENGTH = 0.75
 local GLINT_SPEED = 0.5
-local GLINT_TEXTURE_SCALE = 8
+local GLINT_JAVA_TEXTURE_SCALE = 8
+-- Java applies the 8x transform to a sprite's tiny UV window inside the item
+-- atlas.  These materials are standalone PNGs with a full 0..1 UV range, so
+-- using 8 directly packs the 128px glint into an unreadable purple average.
+-- A default 16px sprite spans about 1/64 of the vanilla item atlas axis.
+local GLINT_ITEM_TEXTURE_SCALE = GLINT_JAVA_TEXTURE_SCALE / 64
+-- Java's entity/hand glint transform uses 0.5. It also produces a visibly
+-- moving diagonal pattern on the enlarged first- and third-person sprite.
+local GLINT_ENTITY_TEXTURE_SCALE = 0.5
 local GLINT_ROTATION = math.rad( 10 )
-local GLINT_MATERIAL = Material( "mc/misc/enchanted_glint_item.png", "smooth noclamp vertexcolor vertexalpha nocull" )
+-- This renderer supplies moving UVs explicitly, so the PNG auto-material is
+-- sufficient. Do not copy its texture into a white-backed material at
+-- startup: Source may still expose the white placeholder while PNG loading is
+-- pending, which would permanently turn the additive glint pass solid white.
+local GLINT_MATERIAL = Material(
+	"mc/misc/enchanted_glint_item.png",
+	"smooth noclamp vertexcolor vertexalpha nocull"
+)
 local GLINT_COLOR = Color( math.floor( 255 * GLINT_STRENGTH + 0.5 ),
 	math.floor( 255 * GLINT_STRENGTH + 0.5 ), math.floor( 255 * GLINT_STRENGTH + 0.5 ), 255 )
 local GLINT_BLEND_AVAILABLE = render and render.OverrideBlend
@@ -22,11 +37,14 @@ local function hasFoil( stack )
 end
 
 local function glintUV( u, v, textureScale )
-	local elapsed = ( CurTime and CurTime() or 0 ) * 1000 * GLINT_SPEED * 8
+	-- Vanilla drives this transform from wall-clock milliseconds.  RealTime
+	-- keeps the shimmer moving even when simulation time is paused or scaled.
+	local now = RealTime and RealTime() or ( CurTime and CurTime() or 0 )
+	local elapsed = now * 1000 * GLINT_SPEED * 8
 	local offsetU = -( elapsed % 110000 ) / 110000
 	local offsetV = ( elapsed % 30000 ) / 30000
 	local cosine, sine = math.cos( GLINT_ROTATION ), math.sin( GLINT_ROTATION )
-	textureScale = textureScale or GLINT_TEXTURE_SCALE
+	textureScale = textureScale or GLINT_ITEM_TEXTURE_SCALE
 	return ( u * cosine - v * sine ) * textureScale + offsetU,
 		( u * sine + v * cosine ) * textureScale + offsetV
 end
@@ -49,10 +67,10 @@ local function drawGlintSurfaceRect( x, y, width, height )
 	if not GLINT_MATERIAL or GLINT_MATERIAL.IsError and GLINT_MATERIAL:IsError() then return false end
 	surface.SetMaterial( GLINT_MATERIAL )
 	surface.SetDrawColor( GLINT_COLOR.r, GLINT_COLOR.g, GLINT_COLOR.b, GLINT_COLOR.a )
-	local u0, v0 = glintUV( 0, 0, GLINT_TEXTURE_SCALE )
-	local u1, v1 = glintUV( 1, 0, GLINT_TEXTURE_SCALE )
-	local u2, v2 = glintUV( 1, 1, GLINT_TEXTURE_SCALE )
-	local u3, v3 = glintUV( 0, 1, GLINT_TEXTURE_SCALE )
+	local u0, v0 = glintUV( 0, 0, GLINT_ITEM_TEXTURE_SCALE )
+	local u1, v1 = glintUV( 1, 0, GLINT_ITEM_TEXTURE_SCALE )
+	local u2, v2 = glintUV( 1, 1, GLINT_ITEM_TEXTURE_SCALE )
+	local u3, v3 = glintUV( 0, 1, GLINT_ITEM_TEXTURE_SCALE )
 	surface.DrawPoly( {
 		{ x = x, y = y, u = u0, v = v0 },
 		{ x = x + width, y = y, u = u1, v = v1 },
@@ -338,13 +356,13 @@ local function droppedBlockMesh( stateId, blockId )
 	return cached
 end
 
-local function drawDynamicGlintTriangles( vertices )
+local function drawDynamicGlintTriangles( vertices, textureScale )
 	if type( vertices ) ~= "table" or #vertices < 3
 		or not GLINT_MATERIAL or GLINT_MATERIAL.IsError and GLINT_MATERIAL:IsError() then return false end
 	render.SetMaterial( GLINT_MATERIAL )
 	mesh.Begin( MATERIAL_TRIANGLES, #vertices / 3 )
 	for _, vertex in ipairs( vertices ) do
-		local u, v = glintUV( vertex.u or 0, vertex.v or 0, GLINT_TEXTURE_SCALE )
+		local u, v = glintUV( vertex.u or 0, vertex.v or 0, textureScale or GLINT_ITEM_TEXTURE_SCALE )
 		mesh.Position( vertex.pos )
 		if vertex.normal then mesh.Normal( vertex.normal ) end
 		mesh.TexCoord( 0, u, v )
@@ -900,7 +918,7 @@ function Renderer.DrawHeldItem( stack, pos, orientation, size, color, options )
 					matrix:SetRight( -y * size )
 					matrix:SetUp( normal * math.max( size * 0.02, 0.001 ) )
 					cam.PushModelMatrix( matrix, true )
-						drawDynamicGlintTriangles( geometry )
+						drawDynamicGlintTriangles( geometry, GLINT_ENTITY_TEXTURE_SCALE )
 					cam.PopModelMatrix()
 				end
 			end
@@ -949,7 +967,7 @@ function Renderer.DrawHeldItem( stack, pos, orientation, size, color, options )
 				render.SetColorModulation( GLINT_STRENGTH, GLINT_STRENGTH, GLINT_STRENGTH )
 				render.SetBlend( 1 )
 				cam.PushModelMatrix( matrix, true )
-					drawDynamicGlintTriangles( geometry )
+					drawDynamicGlintTriangles( geometry, GLINT_ENTITY_TEXTURE_SCALE )
 				cam.PopModelMatrix()
 			end
 		end

@@ -4,6 +4,8 @@ include( "shared.lua" )
 
 local PHYSICS_MODEL = "models/hunter/blocks/cube025x025x025.mdl"
 local ITEM_LIFETIME = 300
+local TRIGGER_PADDING = 18
+local PICKUP_SCAN_EXTENT = 5 + TRIGGER_PADDING
 
 local function now()
 	return CurTime()
@@ -17,7 +19,7 @@ function ENT:Initialize()
 	self:SetSolid( SOLID_VPHYSICS )
 	self:SetCollisionGroup( COLLISION_GROUP_WEAPON )
 	self:SetTrigger( true )
-	self:UseTriggerBounds( true, 18 )
+	self:UseTriggerBounds( true, TRIGGER_PADDING )
 	self:SetUseType( SIMPLE_USE )
 	self:DrawShadow( false )
 	self.MCCreatedAt = now()
@@ -113,11 +115,31 @@ function ENT:Use( activator )
 	self:TryPickup( activator )
 end
 
+-- Minecraft calls playerTouch for every entity in the player's inflated
+-- pickup AABB on every aiStep. Source's StartTouch only fires on the overlap
+-- transition, so a player already standing inside the trigger when the pickup
+-- delay expires otherwise never gets another attempt until leaving/re-entering.
+function ENT:TryPickupOverlaps()
+	if CurTime() < ( self.MCPickupReadyAt or 0 ) or not ents or not ents.FindInBox then return false end
+	local position = self:GetPos()
+	local extent = Vector( PICKUP_SCAN_EXTENT, PICKUP_SCAN_EXTENT, PICKUP_SCAN_EXTENT )
+	for _, other in ipairs( ents.FindInBox( position - extent, position + extent ) or {} ) do
+		if self:TryPickup( other ) then return true end
+		if not IsValid( self ) then return true end
+	end
+	return false
+end
+
 function ENT:Think()
 	local current = CurTime()
 	if self.MCLifetime and current - ( self.MCCreatedAt or current ) >= self.MCLifetime then
 		self:Remove()
 		return
+	end
+	if current >= ( self.MCPickupReadyAt or 0 ) and self:TryPickupOverlaps() then
+		if not IsValid( self ) then return end
+		self:NextThink( current + 0.25 )
+		return true
 	end
 	if current >= ( self.MCNextMergeAt or 0 ) then
 		self.MCNextMergeAt = current + 0.5

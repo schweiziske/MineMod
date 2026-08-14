@@ -149,6 +149,43 @@ end
 
 API.DeepCopy = deepCopy
 
+---------------------------------------------------------------------- sound
+-- Stable wrapper around the generated Java sound-event catalog.  External
+-- addons must call MC.API.Sound rather than the internal MC.PlayJavaSoundEvent
+-- helper so load order and catalog failures stay contained.
+API.Sound = API.Sound or {}
+local Sound = API.Sound
+
+function Sound.Candidates( eventName )
+	eventName = tostring( eventName or "" )
+	if eventName == "" then return nil, "invalid_sound_event" end
+	local candidates = MC.JavaSoundEventCandidates and MC.JavaSoundEventCandidates( eventName ) or nil
+	if not candidates or #candidates == 0 then return nil, "unknown_sound_event" end
+	return deepCopy( candidates )
+end
+
+-- options: volume multiplier, pitch multiplier, soundLevel.
+-- Returns ok, selectedCandidateCopy, err.
+function Sound.Play( eventName, position, options )
+	eventName = tostring( eventName or "" )
+	if eventName == "" then return false, nil, "invalid_sound_event" end
+	if not position or tonumber( position.x ) == nil or tonumber( position.y ) == nil
+	or tonumber( position.z ) == nil then
+		return false, nil, "invalid_sound_position"
+	end
+	options = istable( options ) and options or {}
+	if not MC.PlayJavaSoundEvent then return false, nil, "sound_api_unavailable" end
+	local ok, candidate = MC.PlayJavaSoundEvent(
+		eventName,
+		position,
+		math.max( 0, tonumber( options.volume ) or 1 ),
+		math.max( 0.01, tonumber( options.pitch ) or 1 ),
+		math.Clamp( tonumber( options.soundLevel ) or 72, 0, 511 )
+	)
+	if ok ~= true then return false, nil, "unknown_or_unplayable_sound_event" end
+	return true, deepCopy( candidate )
+end
+
 local function cellCoord( v )
 	v = tonumber( v )
 	if v == nil or v ~= v then return nil end -- reject nil and NaN
@@ -697,14 +734,36 @@ end
 API.Liquid = API.Liquid or {}
 local Liquid = API.Liquid
 
--- Fresh table { kind, level, falling, waterlogged } or nil when not liquid.
+-- Fresh table { kind, height, level, falling, waterlogged } or nil when not
+-- liquid.  `height` is the exact 0..1 FluidState surface height for this cell,
+-- including the full-height case when the same liquid continues above it.
 function Liquid.GetAt( bx, by, bz )
 	local stateId = World.GetBlockState( bx, by, bz )
 	if stateId == 0 or not MC.LiquidStateMetrics then return nil end
-	local kind, _, level, falling, waterlogged = MC.LiquidStateMetrics( stateId )
+	local kind, ownHeight, level, falling, waterlogged = MC.LiquidStateMetrics( stateId )
 	if not kind then return nil end
-	return { kind = kind, level = level, falling = falling == true, waterlogged = waterlogged == true }
+	local height = ownHeight
+	if MC.LiquidHeightAtCell then height = MC.LiquidHeightAtCell( bx, by, bz, kind ) end
+	return {
+		kind = kind,
+		height = math.Clamp( tonumber( height ) or 0, 0, 1 ),
+		level = level,
+		falling = falling == true,
+		waterlogged = waterlogged == true,
+	}
 end
+
+--------------------------------------------------------------------- API.Fire
+-- Player-authoritative flint-and-steel interaction.  The server layer owns
+-- aim-face targeting, edit/reach validation, replaceability, support and the
+-- normal-fire vs soul-fire decision; external item addons only request one use.
+API.Fire = API.Fire or {}
+
+------------------------------------------------------------------- API.Shears
+-- Player-authoritative Java 26.2 GrowingPlantHeadBlock interaction.
+-- The server layer restricts this surface to the four actual head blocks and
+-- only permits the age property transition to its vanilla maximum (25).
+API.Shears = API.Shears or {}
 
 -- Bucket-facing read-only description.  A source is a level-0 water/lava
 -- state; waterlogged blocks also contain a source water FluidState even though
@@ -881,6 +940,7 @@ API.Events = {
 	["MC.PlayerUsedBlock"] = { realm = "server", args = "ply, bx, by, bz, stateId", desc = "player right-click used a block (OnUse returned true)" },
 	["MC.PlayerPickedUpFluid"] = { realm = "server", args = "ply, kind, bx, by, bz, oldStateId, newStateId", desc = "a bucket source pickup committed after the caller's inventory transaction" },
 	["MC.PlayerPlacedFluid"] = { realm = "server", args = "ply, kind, bx, by, bz, stateId", desc = "a bucket source placement committed after the caller's inventory transaction" },
+	["MC.PlayerIgnitedBlock"] = { realm = "server", args = "ply, bx, by, bz, stateId, source", desc = "a flint-and-steel style interaction lit or placed fire" },
 	["MC.BlockDamaged"] = { realm = "server", args = "bx, by, bz, id, damage, health, actor", desc = "block took damage but survived" },
 	["MC.BlocksExploded"] = { realm = "server", args = "center, radius, cells{bx,by,bz}[], broken, actor", desc = "explosion removed blocks" },
 	["MC.TriggerExplosionBlock"] = { realm = "server", args = "context", desc = "query: return true/false to override one TRIGGER_BLOCK onExplosionHit interaction" },
@@ -919,8 +979,11 @@ API.Events = {
 	["MC.PlayerMinedBlock"] = { realm = "server", args = "ply, bx, by, bz, oldStateId, drops, transaction, dropError, session, durabilityDamage", desc = "a survival mining session completed and committed its block transaction" },
 	["MC.ItemDurabilityChanged"] = { realm = "server", args = "ply, slot, oldStack, newStack, damage, broken", desc = "the selected item took authoritative durability damage" },
 	["MC.SelectedItemConsumed"] = { realm = "server", args = "ply, slot, oldStack, amount, replacement, result", desc = "an API consumer atomically consumed the selected stack and handled its container remainder" },
+	["MC.SelectedItemReplaced"] = { realm = "server", args = "ply, slot, oldStack, newStack, result", desc = "an API consumer atomically replaced the complete selected ItemStack" },
 	["MC.SelectedItemTakenWithDurability"] = { realm = "server", args = "ply, slot, oldStack, extractedStack, durabilityDamage, infinite, result", desc = "an API consumer atomically took a complete selected stack after a non-breaking durability use" },
 	["MC.ItemUseStarted"] = { realm = "server", args = "ply, stack, useState", desc = "a held-item use state started" },
+	["MC.ItemUseFinished"] = { realm = "server", args = "ply, reason", desc = "a held-item use state completed" },
+	["MC.ItemUseCancelled"] = { realm = "server", args = "ply, reason", desc = "a held-item use state was cancelled" },
 	["MC.ItemConsumed"] = { realm = "server", args = "ply, stack, foodData, infinite", desc = "a consumable finished its authoritative use" },
 	["MC.ItemUsed"] = { realm = "server", args = "ply, stack, context", desc = "a non-consumable held item completed use" },
 	["MC.BowFired"] = { realm = "server", args = "ply, projectile, power, broken", desc = "a bow fired a server-owned projectile" },
@@ -933,5 +996,9 @@ API.Events = {
 	["MC.EquipmentBroken"] = { realm = "server", args = "ply, equipmentSlot, oldStack", desc = "an equipped item broke" },
 	["MC.ShieldDisabled"] = { realm = "server", args = "ply, seconds, reason", desc = "blocking was disabled for a cooldown" },
 	["MC.ShieldBlockedDamage"] = { realm = "server", args = "ply, attacker, blockedDamage, hand", desc = "an active shield blocked incoming damage" },
+	["MC.ShieldBypass"] = { realm = "server", args = "ply, damageInfo, metadata", desc = "return true only for an exact custom source that must bypass an active shield" },
+	["MC.HeldItemConsumed"] = { realm = "server", args = "ply, hand, oldStack, amount, mutationResult", desc = "a real mainhand/offhand stack was atomically consumed, including in creative mode" },
+	["MC.DeathProtectionBypass"] = { realm = "server", args = "ply, damageInfo, metadata", desc = "return true only for an exact source that must bypass held death protection" },
+	["MC.DeathProtectionTriggered"] = { realm = "server", args = "ply, hand, stack, damageInfo, metadata", desc = "a held death-protection stack committed and the lethal final damage was cancelled" },
 	["MC.PlayerAttackedEntity"] = { realm = "server", args = "ply, target, metadata", desc = "the Minecraft hand completed an authoritative melee attack" },
 }

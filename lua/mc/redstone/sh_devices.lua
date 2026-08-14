@@ -275,19 +275,11 @@ end
 
 MC.RegisterBlockUpdateHandler( "minecraft:tnt", {
 	OnNeighborUpdate = function( context )
-		if not powerAt( context.bx, context.by, context.bz ) then return nil end
-		return { schedule = { { delayTicks = 1, expectedStateId = context.stateId } } }
-	end,
-	OnScheduledTick = function( context )
-		if not SERVER or not powerAt( context.bx, context.by, context.bz ) then return nil end
-		local center = MC.CellWorldCenter( context.bx, context.by, context.bz )
-		timer.Simple( 4, function()
-			if MC.SV and MC.SV.ApplyBlockExplosion then
-				MC.SV.ApplyBlockExplosion( center, 100, { fx = true } )
-			end
-			if util and util.BlastDamage then util.BlastDamage( game.GetWorld(), game.GetWorld(), center, MC.BS * 4, 100 ) end
-		end )
-		return { cells = { { bx = context.bx, by = context.by, bz = context.bz, stateId = MC.DefaultBlockState( "minecraft:air" ) or 0 } } }
+		if SERVER and powerAt( context.bx, context.by, context.bz )
+		and MC.SV and MC.SV.PrimeTntBlock then
+			MC.SV.PrimeTntBlock( context.bx, context.by, context.bz, nil )
+		end
+		return nil
 	end,
 } )
 

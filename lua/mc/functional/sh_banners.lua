@@ -195,6 +195,14 @@ if MC.RegisterBlockEntityType then
 		end,
 		Encode = function( data ) return MC.NormalizeBannerData( data, MAX_STORED_PATTERNS ) end,
 		Decode = function( data ) return MC.NormalizeBannerData( data, MAX_STORED_PATTERNS ) end,
+		CollectComponents = function( data )
+			local normalized, err = MC.NormalizeBannerData( data, MAX_STORED_PATTERNS )
+			if not normalized then return nil, err end
+			local components = {}
+			if #normalized.patterns > 0 then components["minecraft:banner_patterns"] = normalized.patterns end
+			if normalized.customName then components["minecraft:custom_name"] = normalized.customName end
+			return next( components ) and components or nil
+		end,
 	} )
 end
 
@@ -278,7 +286,7 @@ local unsupportedUpdate = {
 		and context.sourceZ == context.bz and not context.sources then return nil end
 		if MC.BannerCanSurvive( context.bx, context.by, context.bz, context.stateId ) then return nil end
 		local air = MC.DefaultBlockState and MC.DefaultBlockState( "minecraft:air" ) or 0
-		return { cells = { { bx = context.bx, by = context.by, bz = context.bz, stateId = air } } }
+		return { dropResources = true, cells = { { bx = context.bx, by = context.by, bz = context.bz, stateId = air } } }
 	end,
 }
 

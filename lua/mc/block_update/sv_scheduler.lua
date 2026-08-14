@@ -384,6 +384,67 @@ local function returnedCells( result )
 	return nil
 end
 
+-- Game-layer integrations sometimes need to inspect the old state before a
+-- returned transaction removes it, then publish an opaque side effect only
+-- after the commit succeeds. The scheduler owns that two-phase ordering while
+-- remaining independent of inventories, loot tables and entity classes.
+SV.BlockUpdateResultEffects = SV.BlockUpdateResultEffects or {}
+local ResultEffects = SV.BlockUpdateResultEffects
+
+function SV.RegisterBlockUpdateResultEffect( identifier, definition )
+	if type( identifier ) ~= "string" or identifier == "" or #identifier > 64 then
+		return false, "invalid_result_effect_id"
+	end
+	if type( definition ) ~= "table" or not isfunction( definition.Prepare )
+		or not isfunction( definition.Commit ) then
+		return false, "invalid_result_effect"
+	end
+	ResultEffects[identifier] = definition
+	return true
+end
+
+function SV.UnregisterBlockUpdateResultEffect( identifier )
+	if type( identifier ) ~= "string" or ResultEffects[identifier] == nil then return false end
+	ResultEffects[identifier] = nil
+	return true
+end
+
+local function orderedResultEffectIds()
+	local identifiers = {}
+	for identifier in pairs( ResultEffects ) do identifiers[#identifiers + 1] = identifier end
+	table.sort( identifiers )
+	return identifiers
+end
+
+local function prepareReturnedEffects( result, cells )
+	if type( result ) ~= "table" or type( cells ) ~= "table" then return nil end
+	local prepared
+	for _, identifier in ipairs( orderedResultEffectIds() ) do
+		local definition = ResultEffects[identifier]
+		local ok, plan = xpcall( function() return definition.Prepare( result, cells ) end, debug.traceback )
+		if not ok then
+			reportHandlerError( identifier .. " prepare: " .. tostring( plan ) )
+		elseif plan ~= nil then
+			prepared = prepared or {}
+			prepared[#prepared + 1] = { identifier = identifier, definition = definition, plan = plan }
+		end
+	end
+	return prepared
+end
+
+local function commitReturnedEffects( prepared, transaction )
+	if not prepared then return end
+	for index = 1, #prepared do
+		local entry = prepared[index]
+		local ok, commitError = xpcall( function()
+			entry.definition.Commit( entry.plan, transaction )
+		end, debug.traceback )
+		if not ok then
+			reportHandlerError( entry.identifier .. " commit: " .. tostring( commitError ) )
+		end
+	end
+end
+
 local function applyReturnedSchedules( result, entry )
 	if type( result ) ~= "table" or type( result.schedule ) ~= "table" then return end
 	for index = 1, #result.schedule do
@@ -454,6 +515,7 @@ local function runListener( callback, entry, stateId )
 		return 0
 	end
 	local transaction
+	local returnedEffects = prepareReturnedEffects( result, cells )
 	if cellCount > 0 then
 		transaction = SV.ApplyBlockTransaction( cells, {
 			actor = nil,
@@ -469,6 +531,7 @@ local function runListener( callback, entry, stateId )
 		end
 		Stats.changedCells = Stats.changedCells + ( transaction.changed or 0 )
 	end
+	commitReturnedEffects( returnedEffects, transaction )
 	applyAfterTransaction( result, transaction )
 	applyReturnedUpdates( result, entry )
 	applyReturnedSchedules( result, entry )

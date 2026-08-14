@@ -11,6 +11,7 @@ function ENT:SetupDataTables()
 	self:NetworkVar( "Int", 0, "ProjectileDamage" )
 	self:NetworkVar( "Vector", 0, "ProjectileVelocity" )
 	self:NetworkVar( "Bool", 0, "ProjectileCritical" )
+	self:NetworkVar( "Bool", 1, "ProjectileOnFire" )
 end
 
 function ENT:SetProjectileItem( item, damage )

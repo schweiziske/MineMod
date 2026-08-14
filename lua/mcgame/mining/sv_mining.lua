@@ -9,7 +9,10 @@ MC.SV = MC.SV or {}
 
 local SV = MC.SV
 local TICK_INTERVAL = 1 / 20
+local CREATIVE_DESTROY_DELAY_TICKS = 5
+local CREATIVE_DESTROY_DELAY = CREATIVE_DESTROY_DELAY_TICKS * TICK_INTERVAL
 SV.MiningSessions = SV.MiningSessions or {}
+SV.CreativeDestroyStates = SV.CreativeDestroyStates or setmetatable( {}, { __mode = "k" } )
 
 local function safeCall( callback, ... )
 	if not isfunction( callback ) then return end
@@ -21,6 +24,27 @@ local function copyStack( stack )
 	if type( stack ) ~= "table" then return nil end
 	if MC.CopyItemStack then return MC.CopyItemStack( stack ) end
 	return table.Copy( stack )
+end
+
+local function creativeDestroyStack( ply, options )
+	options = type( options ) == "table" and options or {}
+	local stack = options.toolStack or options.stack
+	if type( stack ) == "table" then return stack end
+	if type( options.item ) == "string" and options.item ~= "" then
+		return { item = string.find( options.item, ":", 1, true )
+			and options.item or "minecraft:" .. options.item, count = 1 }
+	end
+	return SV.GetSelectedPlayerStack and SV.GetSelectedPlayerStack( ply ) or nil
+end
+
+local function currentAimAllowsBlockAttack( ply, bx, by, bz )
+	if not MC.PlayerBlockAim then return true, nil end
+	local aim = MC.PlayerBlockAim( ply )
+	if not aim or aim.bx ~= bx or aim.by ~= by or aim.bz ~= bz then return false, "aim_changed" end
+	if MC.EntityOccludesBlockAim and MC.EntityOccludesBlockAim( ply, aim ) then
+		return false, "entity_occluded"
+	end
+	return true, aim
 end
 
 local function publicSession( session )
@@ -98,6 +122,42 @@ function SV.GetMiningSession( ply )
 	return publicSession( SV.MiningSessions[ply] )
 end
 
+-- MultiPlayerGameMode uses destroyDelay = 5 after every creative block break.
+-- A fresh attack press still breaks immediately; only continueDestroyBlock is
+-- throttled.  Keeping this state on the player makes mc_item_hand and external
+-- MCITEM proxy SWEPs obey the same cadence even when the selected SWEP changes.
+function SV.TryCreativeBreak( ply, bx, by, bz, options )
+	if not IsValid( ply ) or not ply:IsPlayer() or not ply:Alive() then return false, "invalid_player" end
+	if not ( SV.PlayerIsCreative and SV.PlayerIsCreative( ply ) ) then return false, "not_creative" end
+	bx, by, bz = math.floor( tonumber( bx ) or 0 ), math.floor( tonumber( by ) or 0 ), math.floor( tonumber( bz ) or 0 )
+	options = istable( options ) and options or {}
+	local stack = creativeDestroyStack( ply, options )
+	if MC.ItemCanDestroyBlocksInCreative and not MC.ItemCanDestroyBlocksInCreative( stack ) then
+		if SV.CancelMining then SV.CancelMining( ply, "creative_item_cannot_destroy" ) end
+		return false, "creative_item_cannot_destroy"
+	end
+	local aimAllowed, aimError = currentAimAllowsBlockAttack( ply, bx, by, bz )
+	if not aimAllowed then
+		if SV.CancelMining then SV.CancelMining( ply, aimError ) end
+		return false, aimError
+	end
+
+	local now = CurTime()
+	local state = SV.CreativeDestroyStates[ply]
+	if not state then
+		state = { nextContinueAt = 0 }
+		SV.CreativeDestroyStates[ply] = state
+	end
+	if options.initialPress ~= true and now < ( state.nextContinueAt or 0 ) then
+		return false, "creative_destroy_delay", state.nextContinueAt
+	end
+
+	state.nextContinueAt = now + CREATIVE_DESTROY_DELAY
+	if SV.CancelMining then SV.CancelMining( ply, "creative_break" ) end
+	if not SV.Break then return false, "break_api_unavailable" end
+	return SV.Break( ply, bx, by, bz, { damageTool = false } )
+end
+
 local function spawnBlockDrops( ply, session, stacks )
 	if not SV.SpawnItemDrop then return {} end
 	local position = MC.CellWorldCenter and MC.CellWorldCenter( session.bx, session.by, session.bz )
@@ -139,6 +199,8 @@ local function completeMining( ply, session )
 		stacks, dropError = SV.ResolveBlockDrops( oldStateId, session.toolStack, {
 			player = ply,
 			bx = session.bx, by = session.by, bz = session.bz,
+			blockEntity = MC.GetBlockEntity
+				and MC.GetBlockEntity( session.bx, session.by, session.bz ) or nil,
 		} )
 	end
 	local broke, result = SV.Break( ply, session.bx, session.by, session.bz, { damageTool = false } )
@@ -174,6 +236,11 @@ function SV.BeginMining( ply, bx, by, bz, options )
 	if not stateId or stateId == 0 then SV.CancelMining( ply, "air" ) return false, "air" end
 
 	local external = normalizeExternalOptions( options )
+	local requireAim = not external or external.requireAim
+	if requireAim then
+		local aimAllowed, aimError = currentAimAllowsBlockAttack( ply, bx, by, bz )
+		if not aimAllowed then return false, aimError end
+	end
 	local source = external and "external" or "inventory"
 	local sourceToken = external and external.sourceToken or "inventory"
 	local existing = SV.MiningSessions[ply]
@@ -266,8 +333,8 @@ local function sessionStillValid( ply, session )
 	end
 	if MC.GetBlockState( session.bx, session.by, session.bz ) ~= session.stateId then return false, "block_changed" end
 	if session.requireAim then
-		local aim = MC.PlayerBlockAim and MC.PlayerBlockAim( ply ) or nil
-		if not aim or aim.bx ~= session.bx or aim.by ~= session.by or aim.bz ~= session.bz then return false, "aim_changed" end
+		local aimAllowed, aimError = currentAimAllowsBlockAttack( ply, session.bx, session.by, session.bz )
+		if not aimAllowed then return false, aimError end
 	end
 	local reach = MC.CurrentReach and MC.CurrentReach() or ( MC.BS or 36.5 ) * 5
 	local eye = MC.EntityEyeWorldPos and MC.EntityEyeWorldPos( ply ) or ply:EyePos()
@@ -300,4 +367,13 @@ timer.Create( "mc_survival_mining_tick", TICK_INTERVAL, 0, function()
 end )
 
 hook.Add( "PlayerDeath", "mc_cancel_mining_on_death", function( ply ) SV.CancelMining( ply, "death" ) end )
-hook.Add( "PlayerDisconnected", "mc_cancel_mining_on_disconnect", function( ply ) SV.CancelMining( ply, "disconnect" ) end )
+hook.Add( "PlayerDeath", "mc_clear_creative_destroy_delay_on_death", function( ply )
+	SV.CreativeDestroyStates[ply] = nil
+end )
+hook.Add( "PlayerDisconnected", "mc_cancel_mining_on_disconnect", function( ply )
+	SV.CancelMining( ply, "disconnect" )
+	SV.CreativeDestroyStates[ply] = nil
+end )
+hook.Add( "MC.PlayerGameModeChanged", "mc_clear_creative_destroy_delay_on_mode_change", function( ply )
+	SV.CreativeDestroyStates[ply] = nil
+end )

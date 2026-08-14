@@ -259,7 +259,11 @@ local function installPressurePlate( name, block )
 			addActive( context.bx, context.by, context.bz )
 			if MC.FaceAttachedCanSurvive
 			and not MC.FaceAttachedCanSurvive( context.bx, context.by, context.bz, context.stateId ) then
-				return { cells = { { bx = context.bx, by = context.by, bz = context.bz, stateId = 0 } }, compareCollision = true }
+				return {
+					dropResources = true,
+					cells = { { bx = context.bx, by = context.by, bz = context.bz, stateId = 0 } },
+					compareCollision = true,
+				}
 			end
 			return previousUpdate and previousUpdate.OnNeighborUpdate and previousUpdate.OnNeighborUpdate( context ) or nil
 		end,

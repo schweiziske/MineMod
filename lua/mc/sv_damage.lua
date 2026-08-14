@@ -454,6 +454,12 @@ function SV.HandleChunkDamage( ent, dmg )
 	if not damageEnabled() then return false end
 
 	if dmg:IsDamageType( DMG_BLAST ) then
+		-- ApplyMinecraftExplosion damages every reached entity with DMG_BLAST. A
+		-- chunk collision owner must not bridge that internal damage back into the
+		-- generic GMod block-explosion path and recursively create another blast.
+		if ( tonumber( SV.MinecraftExplosionDamageDepth ) or 0 ) > 0 then
+			return false, "minecraft_explosion_internal"
+		end
 		local center = explosionCenter( ent, dmg )
 		if not center then return false end
 		return SV.ApplyBlockExplosion( center, dmg:GetDamage(), {

@@ -473,7 +473,7 @@ net.Receive( "mc_inventory_action", function( _, ply )
 	session.lastActivity = CurTime()
 	local context = {
 		player = ply, actionId = actionId,
-		creative = session.creative == true,
+		creative = creativeAllowed( ply ),
 		canDrop = type( SV.SpawnItemDrop ) == "function",
 	}
 	local result = MC.ExecuteContainerInput( container, {
@@ -533,7 +533,7 @@ net.Receive( "mc_inventory_recipe_place", function( _, ply )
 	local context = {
 		player = ply,
 		actionId = actionId,
-		creative = session.creative == true,
+		creative = creativeAllowed( ply ),
 		canDrop = type( SV.SpawnItemDrop ) == "function",
 		recipeBook = true,
 	}

@@ -202,7 +202,9 @@ function SV.FireBow( ply, record, stack, state, context )
 	local projectileDamage = ( tonumber( definition.damage ) or 2 ) + 3 * power
 	local ent, result = mutateAndLaunch( ply, record, ammo, ammo.item, 0, velocity, definition, {
 		damage = projectileDamage, critical = power >= 1, pickup = not infinite,
-		infinite = infinite, reason = context.reason or "bow", actionId = context.actionId,
+		infinite = infinite,
+		onFire = MC.GetEnchantmentLevel and MC.GetEnchantmentLevel( weaponStack, "minecraft:flame" ) > 0 or false,
+		reason = context.reason or "bow", actionId = context.actionId,
 	}, function()
 		if not infinite and ( not ammoSlot or not consumeStackAt( record, ammoSlot, 1 ) ) then
 			return false, "projectile_ammo_consume_failed"
@@ -261,7 +263,12 @@ function SV.FinishCrossbowUse( ply, record, stack, state, context )
 	local velocity = direction * MC.ProjectileSpeed( definition, power / 3.15 )
 	local ent, result = mutateAndLaunch( ply, record, projectile, projectile.item, projectile.damage or 0, velocity, definition, {
 		damage = definition.damage, pickup = not infinite and definition.pickup == true,
-		infinite = infinite, reason = context.reason or "crossbow", actionId = context.actionId,
+		infinite = infinite,
+		-- AbstractArrow with any positive Piercing level bypasses shields entirely.
+		-- Firework rockets are not AbstractArrow and therefore never inherit it.
+		shieldBypass = definition.kind == "arrow" and MC.GetEnchantmentLevel
+			and MC.GetEnchantmentLevel( stack, "minecraft:piercing" ) > 0 or false,
+		reason = context.reason or "crossbow", actionId = context.actionId,
 	}, function()
 		local nextStack = infinite and clearedStack or replacement
 		local ok, err = MC.ContainerSetStack( record.container, selectedIndex, nextStack )
@@ -334,39 +341,174 @@ function SV.FindProjectileAmmo( ply, kind )
 	return slot, MC.CopyItemStack( stack )
 end
 
--- Returns consumed, itemName, err, infinite.
-function SV.ConsumeProjectileAmmo( ply, kind, amount, context )
-	amount = math.max( math.floor( tonumber( amount ) or 1 ), 1 )
-	if not validPlayer( ply ) then return 0, nil, "invalid_player" end
-	if not SV.GetPlayerInventoryRecord then return 0, nil, "inventory_api_unavailable" end
+function SV.SelectProjectileAmmo( ply, kind )
+	if not validPlayer( ply ) then return nil, nil, false, false, "invalid_player" end
+	if not SV.GetPlayerInventoryRecord then return nil, nil, false, false, "inventory_api_unavailable" end
 	local record = SV.GetPlayerInventoryRecord( ply, false )
-	if not record then return 0, nil, "inventory_not_loaded" end
-
+	if not record then return nil, nil, false, false, "inventory_not_loaded" end
 	kind = kind == "crossbow" and "crossbow" or "bow"
 	local slot, stack = findAmmo( record, kind )
+	local infinite = infiniteMaterials( ply )
+	if stack then return MC.CopyItemStack( stack, 1 ), slot, infinite, false, nil end
+	if not infinite then return nil, nil, false, false, "projectile_ammo_missing" end
+	local fallback = MC.NewItemStack( "minecraft:arrow", 1 )
+	if not fallback then return nil, nil, true, true, "default_arrow_missing" end
+	return fallback, nil, true, true, nil
+end
 
-	if infiniteMaterials( ply ) then
-		return amount, stack and stack.item or "minecraft:arrow", nil, true
+function SV.TakeProjectileAmmo( ply, kind, amount, context )
+	amount = math.max( math.floor( tonumber( amount ) or 1 ), 1 )
+	if not validPlayer( ply ) then return nil, 0, false, false, "invalid_player" end
+	if not SV.GetPlayerInventoryRecord then return nil, 0, false, false, "inventory_api_unavailable" end
+	local record = SV.GetPlayerInventoryRecord( ply, false )
+	if not record then return nil, 0, false, false, "inventory_not_loaded" end
+	kind = kind == "crossbow" and "crossbow" or "bow"
+	local slot, stack = findAmmo( record, kind )
+	local infinite = infiniteMaterials( ply )
+	if not stack then
+		if not infinite then return nil, 0, false, false, "projectile_ammo_missing" end
+		local fallback = MC.NewItemStack( "minecraft:arrow", amount )
+		if not fallback then return nil, 0, true, true, "default_arrow_missing" end
+		return fallback, amount, true, true, nil
 	end
 
-	if not slot or not stack then return 0, nil, "projectile_ammo_missing" end
 	local take = math.min( amount, stack.count )
-	local itemName = stack.item
+	local selectedStack = MC.CopyItemStack( stack, take )
+	if infinite then return selectedStack, take, true, false, nil end
 
 	local snapshot = MC.ContainerSnapshot( record.container )
 	local ok, consumeError = consumeStackAt( record, slot, take )
 	if not ok then
 		MC.ContainerRestore( record.container, snapshot )
-		return 0, nil, consumeError or "projectile_ammo_consume_failed"
+		return nil, 0, false, false, consumeError or "projectile_ammo_consume_failed"
 	end
-
 	local result, commitError = commitOnly( record, snapshot, ply, {
 		player = ply,
 		reason = ( istable( context ) and context.reason ) or "external_projectile_ammo",
 		actionId = istable( context ) and context.actionId or nil,
 	} )
-	if not result then return 0, nil, commitError end
-	return take, itemName, nil, false
+	if not result then return nil, 0, false, false, commitError end
+	return selectedStack, take, false, false, nil
+end
+
+-- External resolver-driven crossbows must not compose "take one arrow" and
+-- "write charged_projectiles" as two commits.  A disconnect, revision race or
+-- failed second commit between those operations would either eat or duplicate
+-- the projectile.  This helper performs Java's tryLoadProjectiles transition as
+-- one authoritative inventory transaction and returns the exact stored stack.
+function SV.LoadSelectedCrossbowProjectile( ply, kind, context )
+	context = context or {}
+	if not validPlayer( ply ) then return nil, false, false, nil, "invalid_player" end
+	local record, selectedIndex, weaponStack, matchError = SV.SelectedStackMatches( ply, context )
+	if not record then return nil, false, false, nil, matchError end
+	if not MC.ItemBehavior or MC.ItemBehavior( weaponStack ) ~= "crossbow" then
+		return nil, false, false, nil, "selected_item_not_crossbow"
+	end
+	if chargedProjectile( weaponStack ) then
+		return nil, false, false, nil, "crossbow_already_charged"
+	end
+
+	kind = kind == "crossbow" and "crossbow" or "bow"
+	local ammoSlot, ammo = findAmmo( record, kind )
+	local infinite = infiniteMaterials( ply )
+	local generated = false
+	if not ammo then
+		if not infinite then return nil, false, false, nil, "projectile_ammo_missing" end
+		ammo = MC.NewItemStack( "minecraft:arrow", 1 )
+		generated = true
+	end
+	if not ammo then return nil, infinite, generated, nil, "default_arrow_missing" end
+	ammo = MC.CopyItemStack( ammo, 1 )
+
+	local snapshot = MC.ContainerSnapshot( record.container )
+	if not infinite then
+		local consumed, consumeError = consumeStackAt( record, ammoSlot, 1 )
+		if consumed ~= true then
+			MC.ContainerRestore( record.container, snapshot )
+			return nil, false, false, nil, consumeError or "projectile_ammo_consume_failed"
+		end
+	end
+	local replacement = setChargedProjectile( weaponStack, ammo )
+	local stored, storeError = MC.ContainerSetStack( record.container, selectedIndex, replacement )
+	if stored ~= true then
+		MC.ContainerRestore( record.container, snapshot )
+		return nil, infinite, generated, nil, storeError or "crossbow_charge_failed"
+	end
+	local result, commitError = commitOnly( record, snapshot, ply, {
+		player = ply,
+		reason = context.reason or "external_crossbow_charge",
+		actionId = context.actionId,
+	} )
+	if not result then return nil, infinite, generated, nil, commitError end
+	if MC.RunEvent then MC.RunEvent( "MC.CrossbowCharged", ply, MC.CopyItemStack( ammo ) ) end
+	return MC.CopyItemStack( ammo ), infinite, generated, result, nil
+end
+
+-- Completes an external charged-crossbow shot as one selected-slot commit:
+-- clear charged_projectiles and apply the one point of durability (or break the
+-- crossbow).  The caller may spawn its projectile first, but must delete it if
+-- this function rejects the expected charged stack or the commit fails.
+function SV.CommitSelectedCrossbowShot( ply, durabilityAmount, context )
+	context = context or {}
+	if not validPlayer( ply ) then return nil, false, nil, false, "invalid_player" end
+	local record, selectedIndex, weaponStack, matchError = SV.SelectedStackMatches( ply, context )
+	if not record then return nil, false, nil, false, matchError end
+	if not MC.ItemBehavior or MC.ItemBehavior( weaponStack ) ~= "crossbow" then
+		return nil, false, nil, false, "selected_item_not_crossbow"
+	end
+	local projectile = chargedProjectile( weaponStack )
+	if not projectile then return nil, false, nil, false, "crossbow_not_charged" end
+	if context.expectedProjectileHash ~= nil then
+		local hash = MC.ItemStackHash and MC.ItemStackHash( projectile ) or nil
+		if hash ~= tostring( context.expectedProjectileHash ) then
+			return nil, false, nil, false, "charged_projectile_changed"
+		end
+	end
+
+	durabilityAmount = math.Clamp( math.floor( tonumber( durabilityAmount ) or 1 ), 1, 255 )
+	local infinite = infiniteMaterials( ply )
+	local cleared = setChargedProjectile( weaponStack, nil )
+	local replacement, broken, newDamage = damageStack( cleared, infinite and 0 or durabilityAmount )
+	if infinite then
+		replacement = cleared
+		broken = false
+		newDamage = math.max( 0, math.floor( tonumber( weaponStack.damage ) or 0 ) )
+	end
+
+	local snapshot = MC.ContainerSnapshot( record.container )
+	local changed, changeError = MC.ContainerSetStack( record.container, selectedIndex, replacement )
+	if changed ~= true then
+		MC.ContainerRestore( record.container, snapshot )
+		return nil, false, nil, infinite, changeError or "crossbow_shot_mutation_failed"
+	end
+	local result, commitError = commitOnly( record, snapshot, ply, {
+		player = ply,
+		reason = context.reason or "external_crossbow_shot",
+		actionId = context.actionId,
+	} )
+	if not result then return nil, false, nil, infinite, commitError end
+
+	local definition = MC.GetItem and MC.GetItem( weaponStack.item ) or nil
+	if not infinite and definition and ( tonumber( definition.maxDamage ) or 0 ) > 0
+	and not ( MC.ItemIsUnbreakable and MC.ItemIsUnbreakable( weaponStack ) )
+	and MC.RunEvent then
+		MC.RunEvent(
+			"MC.ItemDurabilityChanged",
+			ply,
+			selectedIndex,
+			MC.CopyItemStack( weaponStack ),
+			MC.CopyItemStack( replacement ),
+			newDamage,
+			broken == true
+		)
+	end
+	return result, broken == true, MC.CopyItemStack( projectile ), infinite, nil
+end
+
+-- Returns consumed, itemName, err, infinite.
+function SV.ConsumeProjectileAmmo( ply, kind, amount, context )
+	local stack, consumed, infinite, _, err = SV.TakeProjectileAmmo( ply, kind, amount, context )
+	return consumed or 0, stack and stack.item or nil, err, infinite == true, stack
 end
 
 local function safeTeleport( ply, position )
@@ -397,6 +539,9 @@ function SV.HandleProjectileImpact( ent, trace )
 			damageInfo:SetInflictor( ent )
 			damageInfo:SetDamagePosition( trace.HitPos )
 			hitEntity:TakeDamageInfo( damageInfo )
+		end
+		if ent.GetProjectileOnFire and ent:GetProjectileOnFire() and hitEntity.Ignite then
+			hitEntity:Ignite( 5, 0 )
 		end
 	end
 	if definition.teleport and validPlayer( owner ) and trace and trace.HitPos then

@@ -16,8 +16,16 @@ local USE_NET_ROOT = "mc_item_using"
 local USE_NET_PREFIX = USE_NET_ROOT .. "_"
 
 local function activeMinecraftHand( ply, context )
-	if context and context.allowAnyWeapon == true then return true end
 	local weapon = IsValid( ply ) and ply:GetActiveWeapon() or nil
+	if context and context.allowAnyWeapon == true then
+		-- External resolver-driven SWEPs may reuse this state machine, but the
+		-- bridge must stay bound to the exact weapon class that requested the
+		-- operation.  A bare allowAnyWeapon flag would let any active weapon
+		-- start or keep another selected stack's use state alive.
+		local expectedClass = tostring( context.expectedClass or "" )
+		return expectedClass ~= "" and IsValid( weapon ) and weapon.GetClass
+			and weapon:GetClass() == expectedClass
+	end
 	return IsValid( weapon ) and weapon:GetClass() == "mc_item_hand"
 end
 
@@ -122,7 +130,9 @@ local function useDetails( stack, definition )
 	local kind = MC.ItemBehavior and MC.ItemBehavior( stack ) or nil
 	if not kind and MC.ItemFoodData and MC.ItemFoodData( stack ) then kind = "food" end
 	local spec = MC.ItemBehaviorSpec and MC.ItemBehaviorSpec( stack ) or nil
-	local usable = kind ~= nil or MC.ItemIsConsumable and MC.ItemIsConsumable( stack ) or definition.useHandler ~= nil
+	local usable = kind ~= nil or stack.item == "minecraft:flint_and_steel"
+		or stack.item == "minecraft:fire_charge"
+		or MC.ItemIsConsumable and MC.ItemIsConsumable( stack ) or definition.useHandler ~= nil
 	return kind, spec, usable == true
 end
 
@@ -143,7 +153,8 @@ local function clearUse( ply, record, reason, finished )
 	if record then record.itemUse = nil end
 	setUseNetwork( ply, nil )
 	if MC.RunEvent then
-		MC.RunEvent( finished and "MC.ItemUseFinished" or "MC.ItemUseCancelled", ply, reason or ( finished and "finished" or "cancelled" ) )
+		if finished then MC.RunEvent( "MC.ItemUseFinished", ply, reason or "finished" )
+		else MC.RunEvent( "MC.ItemUseCancelled", ply, reason or "cancelled" ) end
 	end
 end
 
@@ -193,6 +204,12 @@ local function dispatchFinishedUse( ply, record, stack, definition, state, conte
 		if MC.RunEvent then MC.RunEvent( "MC.ItemUsed", ply, stack, context ) end
 		return true
 	end
+	if stack and stack.item == "minecraft:flint_and_steel" and SV.UseSelectedFlintAndSteel then
+		return SV.UseSelectedFlintAndSteel( ply, context )
+	end
+	if stack and stack.item == "minecraft:fire_charge" and SV.UseSelectedFireCharge then
+		return SV.UseSelectedFireCharge( ply, context )
+	end
 	if definition and definition.useHandler then
 		local called, handled = pcall( definition.useHandler, ply, stack, context )
 		if called and handled == true then
@@ -209,6 +226,15 @@ function SV.BeginSelectedItemUse( ply, context )
 	if not IsValid( ply ) or not ply:Alive() or not activeMinecraftHand( ply, context ) then return false, "invalid_item_use" end
 	local record, stack, definition, hand = selectedRecordStack( ply )
 	if not record then return false, "inventory_not_loaded" end
+	-- Resolver-driven SWEPs are selected from the mainhand stack. Pinning the
+	-- expected item before the ordinary offhand-shield fallback prevents a stale
+	-- resolver weapon from starting some other selected stack (or an offhand
+	-- shield) after the hotbar selection changes between weapon resolution and
+	-- the server-authoritative Begin call.
+	local expectedItem = tostring( context.expectedItem or "" )
+	if expectedItem ~= "" and ( not stack or stack.item ~= expectedItem ) then
+		return false, "selected_item_mismatch"
+	end
 	if record.itemUse then return true, "already_using" end
 	local now = CurTime()
 	if record.lastItemUse and now - record.lastItemUse < 0.08 then return false, "item_use_cooldown" end

@@ -165,11 +165,15 @@ function SV.SpawnItemDrop( position, input, actor, options )
 
 	local ent = ents.Create( "mc_item_drop" )
 	if not IsValid( ent ) then return nil, "item_drop_entity_unavailable" end
-	ent:SetPos( position + Vector(
-		math.Rand( -3, 3 ),
-		math.Rand( -3, 3 ),
-		math.Rand( 1, 5 )
-	) )
+	local spawnPosition = position
+	if options.positionJitter ~= false then
+		spawnPosition = position + Vector(
+			math.Rand( -3, 3 ),
+			math.Rand( -3, 3 ),
+			math.Rand( 1, 5 )
+		)
+	end
+	ent:SetPos( spawnPosition )
 	ent:Spawn()
 	ent:Activate()
 	local accepted, setError = ent:SetDropStack( stack )
