@@ -176,6 +176,16 @@ function MC.ItemToolSpec( stackOrDefinition )
 	}
 end
 
+-- Tool#canDestroyBlocksInCreative. Java 26.2 installs a Tool component with
+-- this flag disabled on swords, maces and tridents: they may still swing and
+-- attack entities in creative, but startDestroyBlock must never remove a block.
+function MC.ItemCanDestroyBlocksInCreative( stackOrDefinition )
+	local name = pathName( stackOrDefinition )
+	if name == "mace" or name == "trident" then return false end
+	local toolType = select( 1, toolIdentity( stackOrDefinition ) )
+	return toolType ~= "sword"
+end
+
 function MC.ItemAttackSpec( stackOrDefinition )
 	local tool = MC.ItemToolSpec( stackOrDefinition )
 	if tool then return tool end

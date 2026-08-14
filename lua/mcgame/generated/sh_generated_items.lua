@@ -723,7 +723,7 @@ MC.GeneratedItemDefinitions = {
 	{"minecraft:leather_horse_armor",1,0,nil,"mc/item/leather_horse_armor","Leather Horse Armor","common","item","minecraft:item/leather_horse_armor","皮革马铠"},
 	{"minecraft:leather_leggings",1,75,nil,"mc/item/leather_leggings","Leather Pants","common","item","minecraft:item/leather_leggings_quartz_trim","皮革裤子"},
 	{"minecraft:lectern",64,0,"minecraft:lectern",nil,"Lectern","common","block","minecraft:block/lectern","讲台"},
-	{"minecraft:lever",64,0,"minecraft:lever",nil,"Lever","common","block","minecraft:item/lever","拉杆"},
+	{"minecraft:lever",64,0,"minecraft:lever","mc/item/lever","Lever","common","block","minecraft:item/lever","拉杆"},
 	{"minecraft:light",64,0,"minecraft:light","mc/item/light","Light","epic","block","minecraft:item/light_00","光源方块"},
 	{"minecraft:light_blue_banner",16,0,"minecraft:light_blue_banner",nil,"Light Blue Banner","common","block",nil,"淡蓝色旗帜"},
 	{"minecraft:light_blue_bed",1,0,"minecraft:light_blue_bed",nil,"Light Blue Bed","common","block","minecraft:block/light_blue_bed_head","淡蓝色床"},

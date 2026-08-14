@@ -63,6 +63,10 @@ end
 
 function SWEP:SecondaryAttack()
 	self:SetNextSecondaryFire( CurTime() + 0.2 )
+	local owner = self:GetOwner()
+	if IsValid( owner ) and MC and MC.TryInteractMinecraftVehicle then
+		MC.TryInteractMinecraftVehicle( owner )
+	end
 end
 
 function SWEP:Holster()

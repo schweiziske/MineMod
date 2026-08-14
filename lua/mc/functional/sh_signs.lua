@@ -426,7 +426,7 @@ local unsupportedUpdate = {
 		and context.sourceZ == context.bz and not context.sources then return nil end
 		if MC.SignCanSurvive( context.bx, context.by, context.bz, context.stateId ) then return nil end
 		local air = MC.DefaultBlockState and MC.DefaultBlockState( "minecraft:air" ) or 0
-		return { cells = { { bx = context.bx, by = context.by, bz = context.bz, stateId = air } } }
+		return { dropResources = true, cells = { { bx = context.bx, by = context.by, bz = context.bz, stateId = air } } }
 	end,
 }
 

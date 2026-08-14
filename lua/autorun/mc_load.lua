@@ -22,6 +22,8 @@ local SHARED = {
 	"mc/sh_daycycle.lua",
 	"mc/sh_i18n.lua",
 	"mc/generated/sh_generated_tiles.lua",
+	"mc/generated/sh_generated_block_animations_default.lua",
+	"mc/generated/sh_generated_block_animations_programmer_art.lua",
 	"mc/generated/sh_generated_blocks.lua",
 	"mc/generated/sh_generated_block_state_schemas.lua",
 	"mc/generated/sh_generated_state_visual_catalog.lua",
@@ -31,6 +33,8 @@ local SHARED = {
 	"mc/generated/sh_generated_block_collision.lua",
 	"mc/generated/sh_generated_state_collision_families.lua",
 	"mc/generated/sh_generated_sound_types.lua",
+	"mc/generated/sh_generated_event_sounds.lua",
+	"mc/sh_event_sounds.lua",
 	"mc/generated/sh_generated_lang.lua",
 	"mc/functional/sh_doors.lua",
 	"mc/functional/sh_trapdoors.lua",
@@ -114,6 +118,7 @@ local SERVER_FILES = {
 	"mc/explosion/sv_java_rays.lua",
 	"mc/explosion/sv_trigger_handlers.lua",
 	"mc/explosion/sv_trigger_explosion.lua",
+	"mc/explosion/sv_block_explosion.lua",
 	"mc/sv_lighting.lua",
 	"mc/sv_player.lua",
 	"mc/api/sv_api.lua",
@@ -149,6 +154,8 @@ local CLIENT_FILES = {
 	"mc/render/cl_mesh_bloom.lua",
 	"mc/render/cl_dirty.lua",
 	"mc/cl_render.lua",
+	"mc/render/cl_block_animations.lua",
+	"mc/functional/cl_fire_campfires.lua",
 	"mc/functional/cl_signs.lua",
 	"mc/functional/cl_banners.lua",
 	"mc/cl_config_ui.lua",
@@ -158,6 +165,7 @@ local CLIENT_FILES = {
 	"mc/cl_presets.lua",
 	"mc/cl_block_cluster.lua",
 	"mc/cl_effects.lua",
+	"mc/explosion/cl_explosion.lua",
 	"mc/liquid/cl_effects.lua",
 	"mc/cl_net.lua",
 	"mc/state/cl_network_transport.lua",
@@ -229,6 +237,11 @@ if SERVER then
 		for _, resourceRoot in ipairs( {
 			"materials/mc/entity/chest",
 			"materials/mc/entity/banner",
+			"materials/mc/entity/boat",
+			"materials/mc/entity/minecart",
+			"materials/mc/particle",
+			"materials/mc/animated/default",
+			"materials/mc/animated/programmer_art",
 		} ) do
 			for _, fileName in ipairs( file.Find( resourceRoot .. "/*.png", "GAME" ) or {} ) do
 				resource.AddFile( resourceRoot .. "/" .. fileName )
@@ -236,6 +249,14 @@ if SERVER then
 		end
 		for _, resourceRoot in ipairs( {
 			"sound/mc/random",
+			"sound/mc/fire",
+			"sound/mc/block/campfire",
+			"sound/mc/entity/boat",
+			"sound/mc/entity/bobber",
+			"sound/mc/minecart",
+			"sound/mc/item/shield",
+			"sound/mc/item/totem",
+			"sound/mc/mob/sheep",
 		} ) do
 			for _, fileName in ipairs( file.Find( resourceRoot .. "/*.ogg", "GAME" ) or {} ) do
 				resource.AddFile( resourceRoot .. "/" .. fileName )

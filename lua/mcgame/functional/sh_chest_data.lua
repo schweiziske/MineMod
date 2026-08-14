@@ -72,6 +72,11 @@ if not ( MC.BlockEntityTypes and MC.BlockEntityTypes[CHEST_TYPE] )
 		Validate = validateData,
 		Encode = encodeData,
 		Decode = decodeData,
+		CollectComponents = function( data )
+			local normalized, err = normalizedData( data )
+			if not normalized then return nil, err end
+			return normalized.customName and { ["minecraft:custom_name"] = normalized.customName } or nil
+		end,
 		CreateDefault = function()
 			return {
 				type = CHEST_TYPE,

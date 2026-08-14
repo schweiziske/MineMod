@@ -217,7 +217,11 @@ end
 testCondition = function( condition, context )
 	if type( condition ) ~= "table" then return true end
 	local kind = condition.condition
-	if kind == "minecraft:survives_explosion" then return true end
+	if kind == "minecraft:survives_explosion" then
+		local radius = tonumber( context.explosionRadius )
+		if not radius or radius <= 0 then return true end
+		return math.Rand( 0, 1 ) <= 1 / radius
+	end
 	if kind == "minecraft:match_tool" then return matchTool( condition.predicate, context ) end
 	if kind == "minecraft:inverted" then return not testCondition( condition.term, context ) end
 	if kind == "minecraft:any_of" then
@@ -289,11 +293,105 @@ local function numberProvider( provider )
 	return tonumber( provider.value ) or 0
 end
 
+local function componentName( value )
+	local name = tostring( value or "" )
+	if name == "" then return nil end
+	if not string.find( name, ":", 1, true ) then name = "minecraft:" .. name end
+	return name
+end
+
+local function componentSet( values )
+	if type( values ) ~= "table" then return nil end
+	local output = {}
+	for _, value in ipairs( values ) do
+		local name = componentName( value )
+		if name then output[name] = true end
+	end
+	return output
+end
+
+local function copyComponents( components )
+	if type( components ) ~= "table" then return nil end
+	if MC.CopyItemComponents then return MC.CopyItemComponents( components ) end
+	if table.Copy then return table.Copy( components ) end
+	local output = {}
+	for key, value in pairs( components ) do
+		if type( value ) == "table" then output[key] = copyComponents( value ) else output[key] = value end
+	end
+	return output
+end
+
+local function copyComponentValue( value )
+	local wrapped, copyError = copyComponents( { value = value } )
+	if type( wrapped ) ~= "table" then return nil, copyError or "component_copy_failed" end
+	return wrapped.value
+end
+
+local function copyLootComponents( stack, fn, context )
+	local sourceName = tostring( fn.source or "" )
+	local source, sourceError
+	if sourceName == "block_entity" or sourceName == "minecraft:block_entity" then
+		if MC.CollectBlockEntityComponents then
+			source, sourceError = MC.CollectBlockEntityComponents( context.stateId, context.blockEntity )
+		end
+	elseif sourceName == "tool" or sourceName == "minecraft:tool" then
+		source = context.tool and context.tool.components or nil
+	end
+	if sourceError then
+		warnOnce( "copy_components:" .. tostring( sourceError ),
+			"failed to collect block entity components: " .. tostring( sourceError ) )
+		return stack
+	end
+	if type( source ) ~= "table" then return stack end
+
+	local include = componentSet( fn.include )
+	local exclude = componentSet( fn.exclude )
+	local destination, destinationError = copyComponents( stack.components )
+	if destinationError then
+		warnOnce( "copy_components:" .. tostring( destinationError ),
+			"failed to copy destination components: " .. tostring( destinationError ) )
+		return stack
+	end
+	destination = destination or {}
+	for rawName, value in pairs( source ) do
+		local name = componentName( rawName )
+		if name and ( include == nil or include[name] ) and not ( exclude and exclude[name] ) then
+			local copiedValue, valueError = copyComponentValue( value )
+			if valueError then
+				warnOnce( "copy_components:" .. tostring( valueError ),
+					"failed to copy component " .. tostring( name ) .. ": " .. tostring( valueError ) )
+				return stack
+			end
+			destination[name] = copiedValue
+		end
+	end
+	local normalized, copyError
+	if MC.CopyItemComponents then normalized, copyError = MC.CopyItemComponents( destination )
+	else normalized = destination end
+	if copyError then
+		warnOnce( "copy_components:" .. tostring( copyError ),
+			"failed to copy block entity components: " .. tostring( copyError ) )
+		return stack
+	end
+	stack.components = normalized
+	return stack
+end
+
 local function applyFunction( stack, fn, context )
 	if type( stack ) ~= "table" or type( fn ) ~= "table" then return stack end
 	if not conditionsPass( fn.conditions, context ) then return stack end
 	local kind = fn["function"]
-	if kind == "minecraft:explosion_decay" then return stack end
+	if kind == "minecraft:explosion_decay" then
+		local radius = tonumber( context.explosionRadius )
+		if not radius or radius <= 0 then return stack end
+		local probability = 1 / radius
+		local survived = 0
+		for _ = 1, math.max( 0, math.floor( tonumber( stack.count ) or 0 ) ) do
+			if math.Rand( 0, 1 ) <= probability then survived = survived + 1 end
+		end
+		stack.count = survived
+		return stack
+	end
 	if kind == "minecraft:set_count" then
 		local count = math.floor( numberProvider( fn.count ) )
 		stack.count = fn.add == true and stack.count + count or count
@@ -319,7 +417,8 @@ local function applyFunction( stack, fn, context )
 		end
 		return stack
 	end
-	if kind == "minecraft:copy_state" or kind == "minecraft:copy_components" then return stack end
+	if kind == "minecraft:copy_components" then return copyLootComponents( stack, fn, context ) end
+	if kind == "minecraft:copy_state" then return stack end
 	warnOnce( "function:" .. tostring( kind ), "unsupported function " .. tostring( kind ) .. "; leaving the stack unchanged" )
 	return stack
 end
@@ -373,7 +472,13 @@ function SV.ResolveBlockDrops( stateId, toolStack, context )
 	context = context or {}
 	local mining = MC.BlockMiningToolSpec( stateId, toolStack )
 	if not mining.block then return {}, "unknown_block" end
-	if not mining.correctForDrops then return {}, "incorrect_tool" end
+	-- BlockBehaviour.onExplosionHit evaluates the loot table with an empty tool.
+	-- The table's own match_tool alternatives still see that empty tool, but the
+	-- ordinary player-mining precheck must not reject the table up front.
+	if not mining.correctForDrops and context.explosion ~= true and context.explosionRadius == nil
+	and context.skipCorrectToolCheck ~= true then
+		return {}, "incorrect_tool"
+	end
 	local lootTable = catalog and catalog.tables and catalog.tables[mining.block] or nil
 	if not lootTable then return {}, "missing_loot_table" end
 	context.stateId, context.block, context.tool = stateId, mining.block, toolStack

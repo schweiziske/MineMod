@@ -35,8 +35,11 @@ function ENT:Initialize()
 	self.MCPickup = false
 	self.MCSourceStack = nil
 	self.MCInfinite = false
+	self.MCOnFire = false
+	self.MCShieldBypass = false
 	self.MCIgnoreOwnerUntil = CurTime() + 0.15
 	self:SetProjectileVelocity( self.MCVelocity )
+	self:SetProjectileOnFire( false )
 end
 
 function ENT:Launch( velocity, options )
@@ -51,8 +54,11 @@ function ENT:Launch( velocity, options )
 	self.MCPickup = options.pickup == true
 	self.MCInfinite = options.infinite == true
 	self.MCSourceStack = MC.CopyItemStack and MC.CopyItemStack( options.sourceStack ) or nil
+	self.MCOnFire = options.onFire == true
+	self.MCShieldBypass = options.shieldBypass == true
 	self.MCIgnoreOwnerUntil = CurTime() + math.max( 0, tonumber( options.ignoreOwnerFor ) or 0.15 )
 	self:SetProjectileCritical( options.critical == true )
+	self:SetProjectileOnFire( self.MCOnFire )
 	self:SetProjectileVelocity( self.MCVelocity )
 	if self.MCVelocity:LengthSqr() > 0 then self:SetAngles( self.MCVelocity:Angle() ) end
 	return true

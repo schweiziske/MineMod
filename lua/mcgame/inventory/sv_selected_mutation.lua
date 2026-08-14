@@ -132,6 +132,131 @@ end
 
 MC.ConsumeSelectedItem = SV.ConsumeSelectedItem
 
+-- Death-protection items are consumed from either currently held hand even in
+-- infinite-material mode. Java LivingEntity.checkTotemDeathProtection calls
+-- ItemStack.shrink(1) directly, so this deliberately does not share the normal
+-- creative no-consume behavior of ConsumeSelectedItem.
+local function heldStackMatches( stack, context )
+	if not stack then return false end
+	if context.expectedItem and stack.item ~= context.expectedItem then return false end
+	if context.expectedHash and MC.ItemStackHash and MC.ItemStackHash( stack ) ~= context.expectedHash then return false end
+	return true
+end
+
+function SV.ConsumeHeldItem( ply, amount, context )
+	context = context or {}
+	amount = math.floor( tonumber( amount ) or 0 )
+	if amount <= 0 then return nil, 0, nil, "invalid_consume_amount" end
+	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply, false ) or nil
+	if not record then return nil, 0, nil, "inventory_not_loaded" end
+
+	local hand = tostring( context.hand or "mainhand" )
+	if hand == "main" then hand = "mainhand" end
+	if hand == "off" then hand = "offhand" end
+	if hand ~= "mainhand" and hand ~= "offhand" then return nil, 0, nil, "invalid_hand" end
+
+	if hand == "offhand" then
+		local stack = record.equipment and record.equipment.offhand or nil
+		if not heldStackMatches( stack, context ) then return nil, 0, nil, "held_item_mismatch" end
+		if stack.count < amount then return nil, 0, nil, "held_item_count_too_low" end
+		if not SV.EquipmentSnapshot or not SV.CommitEquipmentMutation then
+			return nil, 0, nil, "equipment_api_unavailable"
+		end
+		local snapshot = SV.EquipmentSnapshot( record )
+		local remainingCount = stack.count - amount
+		record.equipment.offhand = remainingCount > 0 and MC.CopyItemStack( stack, remainingCount ) or nil
+		local result, commitError = SV.CommitEquipmentMutation( record, snapshot, {
+			player = ply,
+			reason = context.reason or "held_item_consume",
+			actionId = context.actionId,
+		} )
+		if not result then
+			record.equipment.offhand = MC.CopyItemStack( snapshot.offhand )
+			return nil, 0, nil, commitError or "held_item_consume_commit_failed"
+		end
+		if MC.RunEvent then
+			MC.RunEvent( "MC.HeldItemConsumed", ply, hand, MC.CopyItemStack( stack ), amount, result )
+		end
+		return result, amount, MC.CopyItemStack( stack )
+	end
+
+	local slotIndex = math.Clamp( math.floor( tonumber( record.selected ) or 0 ), 0, 8 )
+	local stack = record.storage and record.storage[slotIndex + 1] or nil
+	if not heldStackMatches( stack, context ) then return nil, 0, nil, "held_item_mismatch" end
+	if stack.count < amount then return nil, 0, nil, "held_item_count_too_low" end
+	local snapshot = MC.ContainerSnapshot( record.container )
+	local remainingCount = stack.count - amount
+	local remaining = remainingCount > 0 and MC.CopyItemStack( stack, remainingCount ) or nil
+	local ok, setError = MC.ContainerSetStack( record.container, slotIndex, remaining )
+	if not ok then
+		MC.ContainerRestore( record.container, snapshot )
+		return nil, 0, nil, setError or "held_item_consume_failed"
+	end
+	local result, commitError = SV.CommitPlayerInventoryMutation( record, snapshot, {
+		player = ply,
+		reason = context.reason or "held_item_consume",
+		actionId = context.actionId,
+	} )
+	if not result then
+		MC.ContainerRestore( record.container, snapshot )
+		return nil, 0, nil, commitError or "held_item_consume_commit_failed"
+	end
+	if MC.RunEvent then
+		MC.RunEvent( "MC.HeldItemConsumed", ply, hand, MC.CopyItemStack( stack ), amount, result )
+	end
+	return result, amount, MC.CopyItemStack( stack )
+end
+
+MC.ConsumeHeldItem = SV.ConsumeHeldItem
+
+-- Atomically replace the complete selected ItemStack. External resolver-driven
+-- SWEPs use this for component state that belongs to the item itself (not the
+-- transient weapon entity), notably a crossbow's charged_projectiles payload.
+function SV.ReplaceSelectedItem( ply, input, context )
+	context = context or {}
+	local record, slotIndex, stack, matchError = SV.SelectedStackMatches( ply, context )
+	if not record then return nil, nil, matchError end
+
+	local replacement, replacementError = MC.NormalizeItemStack( input )
+	if input ~= nil and not replacement then return nil, nil, replacementError or "invalid_replacement" end
+	if replacement and replacement.item ~= stack.item and context.allowItemChange ~= true then
+		return nil, nil, "selected_item_change_rejected"
+	end
+	if SV.PlayerHasInfiniteMaterials and SV.PlayerHasInfiniteMaterials( ply )
+	and context.mutateInInfinite ~= true then
+		return { ok = true, infinite = true, changedSlots = {} }, MC.CopyItemStack( stack )
+	end
+
+	local snapshot = MC.ContainerSnapshot( record.container )
+	local ok, setError = MC.ContainerSetStack( record.container, slotIndex, replacement )
+	if not ok then
+		MC.ContainerRestore( record.container, snapshot )
+		return nil, nil, setError or "selected_replace_failed"
+	end
+	local result, commitError = SV.CommitPlayerInventoryMutation( record, snapshot, {
+		player = ply,
+		reason = context.reason or "selected_replace",
+		actionId = context.actionId,
+	} )
+	if not result then
+		MC.ContainerRestore( record.container, snapshot )
+		return nil, nil, commitError or "selected_replace_commit_failed"
+	end
+	if MC.RunEvent then
+		MC.RunEvent(
+			"MC.SelectedItemReplaced",
+			ply,
+			slotIndex,
+			MC.CopyItemStack( stack ),
+			MC.CopyItemStack( replacement ),
+			result
+		)
+	end
+	return result, MC.CopyItemStack( replacement )
+end
+
+MC.ReplaceSelectedItem = SV.ReplaceSelectedItem
+
 -- Atomically take one copy of the selected stack after applying a durability
 -- use that is not allowed to break the item.  This mirrors the ordering used by
 -- TridentItem.releaseUsing: nextDamageWillBreak(), hurtWithoutBreaking(1), then

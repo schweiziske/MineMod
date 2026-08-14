@@ -34,6 +34,9 @@ SWEP.Secondary = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "no
 
 local ATTACK_INTERVAL = 0.12
 local USE_TICK_INTERVAL = 0.05
+local CREATIVE_DESTROY_DELAY = 5 / 20
+local PROXY_INTERACT_NET = "mc_inventory_proxy_world_interact"
+if SERVER then util.AddNetworkString( PROXY_INTERACT_NET ) end
 local COMBAT_INFRASTRUCTURE = {
 	mc_block_cluster = true, mc_chunk = true, mc_chunk_phys = true,
 	mc_collision_carrier = true, mc_item_drop = true, mc_projectile = true,
@@ -45,9 +48,12 @@ end
 
 local function traceCombatTarget( ply, trace )
 	local target = trace and trace.Entity or nil
+	local vehicle = MC.ResolveMinecraftVehicle and MC.ResolveMinecraftVehicle( target ) or nil
+	if vehicle then target = vehicle end
 	if not IsValid( target ) or target == ply or target.IsWorld and target:IsWorld() then return nil end
 	if COMBAT_INFRASTRUCTURE[target.GetClass and target:GetClass() or ""] then return nil end
-	local attackable = target.IsPlayer and target:IsPlayer()
+	local attackable = vehicle ~= nil
+		or target.IsPlayer and target:IsPlayer()
 		or target.IsNPC and target:IsNPC()
 		or target.IsNextBot and target:IsNextBot()
 		or target.Health and tonumber( target:Health() ) and target:Health() > 0
@@ -108,6 +114,10 @@ local function creativeMode( ply )
 	return MC.PlayerIsCreative and MC.PlayerIsCreative( ply ) == true
 end
 
+local function creativeBlockAttackAllowed( stack )
+	return not MC.ItemCanDestroyBlocksInCreative or MC.ItemCanDestroyBlocksInCreative( stack ) == true
+end
+
 local function isUseCandidate( stack, definition )
 	if not stack or not definition then return false end
 	if MC.ItemBehavior and MC.ItemBehavior( stack ) then return true end
@@ -115,10 +125,171 @@ local function isUseCandidate( stack, definition )
 	return isfunction and isfunction( definition.useHandler ) and definition.useHandler ~= nil
 end
 
-local function blockHasUse( id )
+local function blockHasUse( id, stack )
 	local block = MC.Blocks and MC.Blocks[id]
-	return block and block.handlers and block.handlers.OnUse ~= nil
+	local handlers = block and block.handlers
+	if not handlers or handlers.OnUse == nil then return false end
+	if handlers.CanUse ~= nil then return handlers.CanUse( stack ) == true end
+	return true
 end
+
+local function inventoryProxyWeapon( weapon )
+	if not IsValid( weapon ) then return false end
+	if SERVER and weapon.MCHandWeaponBridgeProxy == true then return true end
+	if weapon.GetNW2Bool and weapon:GetNW2Bool( "MCITEM_InventoryProxy", false ) == true then return true end
+	if CLIENT and MC.IsInventoryHeldItemWeaponActive then
+		local owner = weapon:GetOwner()
+		return IsValid( owner ) and owner:GetActiveWeapon() == weapon
+			and MC.IsInventoryHeldItemWeaponActive( owner ) == true
+	end
+	return false
+end
+
+local function activeInventoryProxy( ply )
+	local weapon = IsValid( ply ) and ply:GetActiveWeapon() or nil
+	return inventoryProxyWeapon( weapon )
+end
+
+local function selectedStackForRealm( ply )
+	if SERVER then
+		local _, stack = selectedRecord( ply )
+		return stack
+	end
+	local state = MC.ClientInventory
+	return state and state.slots and state.slots[( state.selected or 0 ) + 1] or nil
+end
+
+local function proxyWorldInteractionCandidate( ply, stack )
+	local vehicle = MC.TraceMinecraftVehicle and select( 1, MC.TraceMinecraftVehicle( ply, 3, MASK_SOLID ) ) or nil
+	if IsValid( vehicle ) then return "vehicle", vehicle end
+	local aim = aimedBlock( ply )
+	if aim and blockHasUse( aim.Block, stack ) then return "block", aim end
+	return nil, nil
+end
+
+local function performProxyWorldInteraction( ply, stack, kind, target )
+	if not SERVER or not MC.SV or not kind or not target then return false end
+	local now = CurTime()
+	if now < ( ply.MCProxyWorldInteractNextAt or 0 ) then return true end
+	ply.MCProxyWorldInteractNextAt = now + 0.05
+	if MC.SV.CancelMining then MC.SV.CancelMining( ply, "secondary_attack" ) end
+	if kind == "vehicle" and MC.SV.UseMinecraftVehicle then
+		return MC.SV.UseMinecraftVehicle( ply, target ) == true
+	end
+	if kind == "block" and MC.SV.Use then
+		local definition = stack and MC.GetItem( stack.item ) or nil
+		return MC.SV.Use( ply, target.bx, target.by, target.bz, definition and definition.blockId or 0 ) == true
+	end
+	return false
+end
+
+local function tryInventoryProxyWorldInteraction( weapon )
+	if not inventoryProxyWeapon( weapon ) then return false end
+	local ply = weapon:GetOwner()
+	if not IsValid( ply ) or not ply:Alive() or ply:GetActiveWeapon() ~= weapon then return false end
+	local stack = selectedStackForRealm( ply )
+	local kind, target = proxyWorldInteractionCandidate( ply, stack )
+	if not kind then return false end
+	if weapon.SetNextSecondaryFire then weapon:SetNextSecondaryFire( CurTime() + ATTACK_INTERVAL ) end
+	if SERVER then
+		performProxyWorldInteraction( ply, stack, kind, target )
+	elseif IsFirstTimePredicted() then
+		net.Start( PROXY_INTERACT_NET )
+		net.SendToServer()
+	end
+	return true
+end
+
+-- External weapon_mcitem classes remain responsible for their standalone
+-- behavior. Inventory-owned proxy instances call this preflight first so
+-- Minecraft entity/block use wins over eating, charging, or throwing.
+MC.TryInventoryProxyWorldInteraction = tryInventoryProxyWorldInteraction
+
+-- Resolver-driven weapon_mcitem_* instances own their own SecondaryAttack.
+-- Minecraft still gives entity/block interaction precedence over item use, so
+-- consume that user-command before the proxy can start eating/charging and
+-- route the press through the same authoritative MCSWEP handlers as the hand.
+hook.Add( "StartCommand", "mc_inventory_proxy_world_interaction", function( ply, command )
+	if not activeInventoryProxy( ply ) then
+		ply.MCInventoryProxySecondaryHeld = false
+		ply.MCInventoryProxySecondaryConsumed = false
+		return
+	end
+	if not command:KeyDown( IN_ATTACK2 ) then
+		ply.MCInventoryProxySecondaryHeld = false
+		ply.MCInventoryProxySecondaryConsumed = false
+		return
+	end
+
+	if not ply.MCInventoryProxySecondaryHeld then
+		ply.MCInventoryProxySecondaryHeld = true
+		local stack = selectedStackForRealm( ply )
+		local kind, target = proxyWorldInteractionCandidate( ply, stack )
+		if kind then
+			ply.MCInventoryProxySecondaryConsumed = true
+			if SERVER then
+				performProxyWorldInteraction( ply, stack, kind, target )
+			elseif net then
+				-- Removing IN_ATTACK2 client-side prevents the proxy's predicted food/
+				-- charge action and also removes it from the outgoing usercmd. Send a
+				-- payload-free request; the server recomputes and validates the target.
+				net.Start( PROXY_INTERACT_NET )
+				net.SendToServer()
+			end
+		end
+	end
+
+	if ply.MCInventoryProxySecondaryConsumed and command.RemoveKey then
+		command:RemoveKey( IN_ATTACK2 )
+	end
+end )
+
+if SERVER then
+	net.Receive( PROXY_INTERACT_NET, function( _, ply )
+		if not activeInventoryProxy( ply ) or not ply:Alive() then return end
+		local stack = selectedStackForRealm( ply )
+		local kind, target = proxyWorldInteractionCandidate( ply, stack )
+		performProxyWorldInteraction( ply, stack, kind, target )
+	end )
+end
+
+local FOOD_WORLD_USE_WRAPPER_VERSION = 1
+local function installFoodWorldUsePreflight()
+	if not weapons or not weapons.GetStored then return false end
+	local stored = weapons.GetStored( "weapon_mcitem_food_base" )
+	if not stored or not isfunction( stored.SecondaryAttack ) then return false end
+	if stored.MCMCSWEPWorldUseWrapperVersion == FOOD_WORLD_USE_WRAPPER_VERSION
+		and stored.SecondaryAttack == stored.MCMCSWEPWorldUseWrapper then return true end
+	local original = stored.SecondaryAttack == stored.MCMCSWEPWorldUseWrapper
+		and stored.MCMCSWEPWorldUseOriginalSecondary or stored.SecondaryAttack
+	stored.MCMCSWEPWorldUseOriginalSecondary = original
+	local wrapper = function( weapon, ... )
+		if MC.TryInventoryProxyWorldInteraction
+			and MC.TryInventoryProxyWorldInteraction( weapon ) == true then
+			local food = MCITEM and MCITEM.Food
+			if food and food.CancelUse and weapon.IsMCUsingItem and weapon:IsMCUsingItem() then
+				food.CancelUse( weapon, "world_interaction" )
+			end
+			return
+		end
+		return original( weapon, ... )
+	end
+	stored.MCMCSWEPWorldUseWrapper = wrapper
+	stored.SecondaryAttack = wrapper
+	stored.MCMCSWEPWorldUseWrapperVersion = FOOD_WORLD_USE_WRAPPER_VERSION
+	return true
+end
+
+local function scheduleFoodWorldUsePreflight()
+	if not timer then return end
+	timer.Simple( 0, installFoodWorldUsePreflight )
+	timer.Create( "mc_inventory_food_world_use_preflight", 0.5, 20, function()
+		if installFoodWorldUsePreflight() then timer.Remove( "mc_inventory_food_world_use_preflight" ) end
+	end )
+end
+
+scheduleFoodWorldUsePreflight()
+hook.Add( "OnReloaded", "mc_inventory_food_world_use_preflight", scheduleFoodWorldUsePreflight )
 
 local function consumeSelected( ply )
 	local record, stack, definition = selectedRecord( ply )
@@ -143,6 +314,8 @@ end
 
 function SWEP:Initialize()
 	self:SetHoldType( "normal" )
+	self.MCCreativeAttackHeld = false
+	self.MCCreativeBreakReadyAt = 0
 	self.MCSecondaryHeld = false
 	self.MCSecondaryMode = nil
 	self.MCSecondaryStartedAt = 0
@@ -150,6 +323,7 @@ end
 
 function SWEP:Deploy()
 	self:SetHoldType( "normal" )
+	self.MCCreativeAttackHeld = false
 	self.MCSecondaryHeld = false
 	self.MCSecondaryMode = nil
 	return true
@@ -202,11 +376,17 @@ function SWEP:PrimaryAttack()
 	self:SetNextPrimaryFire( CurTime() + ATTACK_INTERVAL )
 	local ply = self:GetOwner()
 	if not IsValid( ply ) then return end
+	local initialPress = self.MCCreativeAttackHeld ~= true
+		or ply.KeyPressed and ply:KeyPressed( IN_ATTACK ) == true
+	self.MCCreativeAttackHeld = true
 	if SERVER and MC.SV and MC.SV.CancelSelectedItemUse then
 		MC.SV.CancelSelectedItemUse( ply, "primary_attack" )
 	end
 	local aim = aimedBlock( ply )
 	local eyeTrace = ply:GetEyeTrace()
+	local creative = creativeMode( ply )
+	local selectedStack = selectedStackForRealm( ply )
+	local canDestroyInCreative = not creative or creativeBlockAttackAllowed( selectedStack )
 	if SERVER then
 		local target = MC.SV and MC.SV.TraceSelectedItemAttack and select( 1, MC.SV.TraceSelectedItemAttack( ply ) ) or nil
 		if target then
@@ -214,19 +394,41 @@ function SWEP:PrimaryAttack()
 			if MC.SV.AttackSelectedItem then MC.SV.AttackSelectedItem( ply, target, { reason = "primary_attack" } ) end
 			return
 		end
+		if aim and MC.EntityOccludesBlockAim and MC.EntityOccludesBlockAim( ply, aim ) then
+			if MC.SV and MC.SV.CancelMining then MC.SV.CancelMining( ply, "entity_occluded" ) end
+			return
+		end
 		local bx, by, bz = breakTarget( ply, aim, eyeTrace )
 		if not bx then return end
-		if not creativeMode( ply ) then
+		if not creative then
 			if MC.SV and MC.SV.BeginMining then MC.SV.BeginMining( ply, bx, by, bz ) end
 			return
 		end
-		if MC.SV and MC.SV.CancelMining then MC.SV.CancelMining( ply, "creative_break" ) end
-		if MC.SV and MC.SV.Break and MC.SV.Break( ply, bx, by, bz ) then
+		if not canDestroyInCreative then
+			if MC.SV and MC.SV.CancelMining then MC.SV.CancelMining( ply, "creative_item_cannot_destroy" ) end
+			return
+		end
+		local now = CurTime()
+		if not initialPress and now < ( self.MCCreativeBreakReadyAt or 0 ) then
+			self:SetNextPrimaryFire( self.MCCreativeBreakReadyAt )
+			return
+		end
+		local broke, breakResult, nextContinueAt = false, "mining_api_unavailable", nil
+		if MC.SV and MC.SV.TryCreativeBreak then
+			broke, breakResult, nextContinueAt = MC.SV.TryCreativeBreak(
+				ply, bx, by, bz, { initialPress = initialPress }
+			)
+		end
+		if broke then
+			self.MCCreativeBreakReadyAt = now + CREATIVE_DESTROY_DELAY
 			net.Start( "mc_creative_break_anim" )
 				net.WriteInt( bx, MC.Net.COORD_BITS )
 				net.WriteInt( by, MC.Net.COORD_BITS )
 				net.WriteInt( bz, MC.Net.COORD_BITS )
 			net.Send( ply )
+		elseif breakResult == "creative_destroy_delay" and tonumber( nextContinueAt ) then
+			self.MCCreativeBreakReadyAt = math.max( self.MCCreativeBreakReadyAt or 0, nextContinueAt )
+			self:SetNextPrimaryFire( self.MCCreativeBreakReadyAt )
 		elseif MC.SV and MC.SV.SyncBreakPlan then
 			MC.SV.SyncBreakPlan( ply, bx, by, bz )
 		elseif MC.SV and MC.SV.SyncCell then
@@ -234,15 +436,23 @@ function SWEP:PrimaryAttack()
 		end
 	elseif CLIENT and IsFirstTimePredicted() and ply == LocalPlayer() then
 		if traceCombatTarget( ply, eyeTrace ) then return end
+		if aim and MC.EntityOccludesBlockAim and MC.EntityOccludesBlockAim( ply, aim ) then return end
 		local bx, by, bz = breakTarget( ply, aim, eyeTrace )
-		if bx and not creativeMode( ply ) then
+		if bx and ( not creative or not canDestroyInCreative ) then
 			if MC.HandMiningSwing and MC.HandMiningSwing.Begin then
 				MC.HandMiningSwing.Begin( self, bx, by, bz )
 			end
 			return
 		end
-		if bx and MC.CanPreviewBreak and MC.CanPreviewBreak( ply, bx, by, bz ) and MC.PredictBreakBlock then
+		local now = CurTime()
+		if bx and not initialPress and now < ( self.MCCreativeBreakReadyAt or 0 ) then
+			self:SetNextPrimaryFire( self.MCCreativeBreakReadyAt )
+			return
+		end
+		if bx
+		and MC.CanPreviewBreak and MC.CanPreviewBreak( ply, bx, by, bz ) and MC.PredictBreakBlock then
 			if MC.PredictBreakBlock( bx, by, bz, ply ) then
+				self.MCCreativeBreakReadyAt = now + CREATIVE_DESTROY_DELAY
 				self:StartCreativePlaceAnimation( bx, by, bz )
 			end
 		end
@@ -261,6 +471,12 @@ function SWEP:SecondaryAttack()
 		self.MCSecondaryStartedAt = CurTime()
 		self.MCSecondaryMode = nil
 	end
+	local vehicle = MC.TraceMinecraftVehicle and select( 1, MC.TraceMinecraftVehicle( ply, 3, MASK_SOLID ) ) or nil
+	if IsValid( vehicle ) then
+		self.MCSecondaryMode = "vehicle"
+		if SERVER and MC.SV and MC.SV.UseMinecraftVehicle then MC.SV.UseMinecraftVehicle( ply, vehicle ) end
+		return
+	end
 	local aim = aimedBlock( ply )
 	local trace = aim or ply:GetEyeTrace()
 	if not trace then self.MCSecondaryHeld = false return end
@@ -272,10 +488,6 @@ function SWEP:SecondaryAttack()
 		-- Functional blocks use the press edge, like the legacy creative placer.
 		-- Automatic secondary attacks must not toggle a gate/door every tick while
 		-- the player keeps the button held down.
-		if aim and blockHasUse( aim.Block ) and not ply:KeyPressed( IN_ATTACK2 ) then
-			self.MCSecondaryMode = "block"
-			return
-		end
 		if aim and MC.SV and MC.SV.Use and MC.SV.Use( ply, ux, uy, uz, definition and definition.blockId or 0 ) then
 			self.MCSecondaryMode = "block"
 			return
@@ -323,15 +535,15 @@ function SWEP:SecondaryAttack()
 			net.WriteInt( bz, MC.Net.COORD_BITS )
 		net.Send( ply )
 	elseif IsFirstTimePredicted() and ply == LocalPlayer() then
+		local state = MC.ClientInventory
+		local stack = state and state.slots[( state.selected or 0 ) + 1] or nil
 		-- Match the server's use-first order. Without this guard the client draws
 		-- a predicted placement beside doors, gates, chests, and other usable
 		-- blocks while the server correctly performs only their OnUse action.
-		if aim and blockHasUse( aim.Block ) then
+		if aim and blockHasUse( aim.Block, stack ) then
 			self.MCSecondaryMode = "block"
 			return
 		end
-		local state = MC.ClientInventory
-		local stack = state and state.slots[( state.selected or 0 ) + 1] or nil
 		local definition = stack and MC.GetItem( stack.item ) or nil
 		if not definition or not definition.blockId then return end
 		self.MCSecondaryMode = "place"
@@ -359,6 +571,7 @@ function SWEP:Think()
 			MC.SV.CancelSelectedItemUse( ply, "owner_invalid" )
 		end
 		if SERVER and IsValid( ply ) and MC.SV and MC.SV.CancelMining then MC.SV.CancelMining( ply, "owner_invalid" ) end
+		self.MCCreativeAttackHeld = false
 		self.MCSecondaryHeld = false
 		self.MCSecondaryMode = nil
 		return
@@ -370,9 +583,13 @@ function SWEP:Think()
 			MC.SV.CancelSelectedItemUse( ply, "weapon_switched" )
 		end
 		if SERVER and MC.SV and MC.SV.CancelMining then MC.SV.CancelMining( ply, "weapon_switched" ) end
+		self.MCCreativeAttackHeld = false
 		self.MCSecondaryHeld = false
 		self.MCSecondaryMode = nil
 		return
+	end
+	if self.MCCreativeAttackHeld and not ply:KeyDown( IN_ATTACK ) then
+		self.MCCreativeAttackHeld = false
 	end
 	if self.MCSecondaryHeld and not ply:KeyDown( IN_ATTACK2 )
 		and CurTime() - ( self.MCSecondaryStartedAt or 0 ) >= 0.02 then
@@ -397,6 +614,7 @@ function SWEP:Holster()
 		end
 		if IsValid( ply ) and MC.SV and MC.SV.CancelMining then MC.SV.CancelMining( ply, "holster" ) end
 	end
+	self.MCCreativeAttackHeld = false
 	self.MCSecondaryHeld = false
 	self.MCSecondaryMode = nil
 	return true
@@ -410,6 +628,7 @@ function SWEP:OnRemove()
 		end
 		if IsValid( ply ) and MC.SV and MC.SV.CancelMining then MC.SV.CancelMining( ply, "weapon_removed" ) end
 	end
+	self.MCCreativeAttackHeld = false
 	self.MCSecondaryHeld = false
 	self.MCSecondaryMode = nil
 end

@@ -14,10 +14,22 @@ local function selectedStack( ply )
 	return state and state.slots and state.slots[selected + 1] or nil
 end
 
-local function activeClass( ply )
+local function activeWeapon( ply )
 	if not IsValid( ply ) or not ply:Alive() then return nil end
 	local weapon = ply:GetActiveWeapon()
-	return IsValid( weapon ) and weapon:GetClass() or nil
+	return IsValid( weapon ) and weapon or nil
+end
+
+local function isInventoryProxy( weapon )
+	return IsValid( weapon ) and weapon.GetNW2Bool
+		and weapon:GetNW2Bool( "MCITEM_InventoryProxy", false ) == true
+end
+
+local function transitionTarget( ply )
+	if not IsValid( ply ) or not ply.GetNW2Bool
+	or ply:GetNW2Bool( "MC_HandWeaponTransition", false ) ~= true then return nil end
+	local className = ply.GetNW2String and ply:GetNW2String( "MC_HandWeaponTargetClass", "" ) or ""
+	return className ~= "" and className or nil
 end
 
 local function selectedResolvesTo( ply, className )
@@ -28,17 +40,27 @@ local function selectedResolvesTo( ply, className )
 end
 
 function Bridge.IsClientInventoryWeaponActive( ply )
-	local className = activeClass( ply )
-	if not className then return false end
+	local weapon = activeWeapon( ply )
+	local targetClass = transitionTarget( ply )
+	if not weapon then return targetClass ~= nil end
+	local className = weapon:GetClass()
 	if className == Bridge.HandClass or className == Bridge.InventoryClass then return true end
-	return Bridge.IsManagedClass( className ) or selectedResolvesTo( ply, className )
+	if targetClass == className then return true end
+	-- A managed class from the spawn menu is not an inventory weapon merely
+	-- because a resolver knows its name. It enters the lifecycle only when the
+	-- selected stack really resolves to it (prediction window) or the server has
+	-- promoted that exact instance to an authoritative inventory proxy.
+	return isInventoryProxy( weapon ) or selectedResolvesTo( ply, className )
 end
 
 function Bridge.IsClientHeldItemWeaponActive( ply )
-	local className = activeClass( ply )
-	if not className then return false end
+	local weapon = activeWeapon( ply )
+	local targetClass = transitionTarget( ply )
+	if not weapon then return targetClass ~= nil end
+	local className = weapon:GetClass()
 	if className == Bridge.HandClass then return true end
-	return Bridge.IsManagedClass( className ) or selectedResolvesTo( ply, className )
+	if targetClass == className then return true end
+	return isInventoryProxy( weapon ) or selectedResolvesTo( ply, className )
 end
 
 function MC.IsInventoryWeaponActive( ply )

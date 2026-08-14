@@ -12,7 +12,10 @@ local function handActive()
 	local ply = LocalPlayer()
 	if not IsValid( ply ) or not ply:Alive() then return false end
 	local weapon = ply:GetActiveWeapon()
-	if not IsValid( weapon ) then return false end
+	if not IsValid( weapon ) then
+		return MC.IsInventoryWeaponActive and MC.IsInventoryWeaponActive( ply ) == true or false
+	end
+	if UI.IsInventoryWeapon then return UI.IsInventoryWeapon( weapon ) end
 	if MC.IsInventoryWeaponActive then return MC.IsInventoryWeaponActive( ply ) end
 	local class = weapon:GetClass()
 	return class == "mc_item_hand" or class == "mc_inventory"

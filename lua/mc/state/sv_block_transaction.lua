@@ -326,6 +326,28 @@ function SV.ApplyBlockTransaction( cells, options )
 		end
 	end
 
+	-- A very small number of game-layer actions need to commit another
+	-- authoritative store together with this block write.  Run that commit only
+	-- after every raw world write has succeeded, but before revision changes,
+	-- persistence overlays, networking, FX, lifecycle handlers or public events
+	-- can observe the new state.  Returning anything other than true restores
+	-- the old world state and makes the whole transaction fail.
+	--
+	-- This is deliberately an internal transaction option, not part of MC.API:
+	-- external addons still cannot submit arbitrary world mutations or callbacks.
+	local beforePublishResult
+	if isfunction( options.beforePublish ) then
+		local called, accepted, resultOrError = pcall( options.beforePublish, finalized )
+		if not called or accepted ~= true then
+			restoreTransactionStates( written, oldChunks )
+			return failure(
+				called and ( resultOrError or "before_publish_rejected" )
+					or "before_publish_error"
+			)
+		end
+		beforePublishResult = resultOrError
+	end
+
 	SV.BlockCount = math.max( 0, SV.BlockCount + blockDelta )
 	local generationRotated = false
 	if MC.Net and ( SV.BlockRevision or 0 ) >= MC.Net.MAX_REVISION and SV.AdvanceWorldGeneration then
@@ -469,7 +491,13 @@ function SV.ApplyBlockTransaction( cells, options )
 	end
 
 	fireBlocksChangedEvent( finalized, revision, actor )
-	return { ok = true, changed = #finalized, revision = revision, changes = finalized }
+	return {
+		ok = true,
+		changed = #finalized,
+		revision = revision,
+		changes = finalized,
+		beforePublishResult = beforePublishResult,
+	}
 end
 
 local function hydrateChunkForMutation( key )

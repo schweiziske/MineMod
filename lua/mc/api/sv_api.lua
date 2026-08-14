@@ -266,6 +266,68 @@ local function normalizeLiquidKind( kind )
 	return nil
 end
 
+--------------------------------------------------------------------- API.Fire
+local Fire = API.Fire
+
+-- Returns ok, resultOrError.  result is a fresh table containing the committed
+-- cell and selected fire type.  MCITEM deliberately cannot set arbitrary world
+-- state through this surface.
+function Fire.Ignite( ply, context )
+	local sv = SV()
+	if not IsValid( ply ) or not ply.IsPlayer or not ply:IsPlayer() or not ply:Alive() then
+		return false, "invalid_player"
+	end
+	if not sv or not sv.IgnitePlayerAim then return false, "fire_api_unavailable" end
+	local ok, resultOrError = sv.IgnitePlayerAim( ply, deepCopy( context or {} ) )
+	if ok ~= true then return false, resultOrError or "ignite_failed" end
+	return true, deepCopy( resultOrError )
+end
+
+-- Resolver-driven external flint-and-steel SWEPs use this entry point instead
+-- of composing Fire.Ignite + Inventory.DamageSelected.  The game layer binds
+-- the world write and selected-stack durability into one server transaction;
+-- an inventory rejection leaves the world unchanged.
+function Fire.UseFlintAndSteel( ply, context )
+	local sv = SV()
+	if not IsValid( ply ) or not ply.IsPlayer or not ply:IsPlayer() or not ply:Alive() then
+		return false, "invalid_player"
+	end
+	if not sv or not sv.UseSelectedFlintAndSteel then return false, "fire_api_unavailable" end
+	local ok, resultOrError = sv.UseSelectedFlintAndSteel( ply, deepCopy( context or {} ) )
+	if ok ~= true then return false, resultOrError or "ignite_failed" end
+	return true, deepCopy( resultOrError )
+end
+
+------------------------------------------------------------------- API.Shears
+local Shears = API.Shears
+
+-- Standalone external SWEP path: validates the player's current block aim and
+-- performs only the constrained age=25 GrowingPlantHeadBlock transition.
+function Shears.MaxAgePlant( ply, context )
+	local sv = SV()
+	if not IsValid( ply ) or not ply.IsPlayer or not ply:IsPlayer() or not ply:Alive() then
+		return false, "invalid_player"
+	end
+	if not sv or not sv.MaxAgePlayerPlantAim then return false, "shears_api_unavailable" end
+	local ok, resultOrError = sv.MaxAgePlayerPlantAim( ply, deepCopy( context or {} ) )
+	if ok ~= true then return false, resultOrError or "shears_use_failed" end
+	return true, deepCopy( resultOrError )
+end
+
+-- Inventory-proxy path: binds the age transition and selected shears damage
+-- into the same pre-publication world transaction. Creative/infinite-material
+-- mode preserves the selected stack exactly, matching ItemStack.hurtAndBreak.
+function Shears.UseSelectedOnBlock( ply, context )
+	local sv = SV()
+	if not IsValid( ply ) or not ply.IsPlayer or not ply:IsPlayer() or not ply:Alive() then
+		return false, "invalid_player"
+	end
+	if not sv or not sv.UseSelectedShearsOnBlock then return false, "shears_api_unavailable" end
+	local ok, resultOrError = sv.UseSelectedShearsOnBlock( ply, deepCopy( context or {} ) )
+	if ok ~= true then return false, resultOrError or "shears_use_failed" end
+	return true, deepCopy( resultOrError )
+end
+
 local BUCKET_OWN_COLLISION = {
 	mc_chunk = true,
 	mc_chunk_phys = true,
@@ -722,21 +784,40 @@ function Mining.ProgressPerTick( ply, bx, by, bz, item, modifiers )
 	return progress, nil, deepCopy( mining ), deepCopy( resolvedModifiers )
 end
 
+-- Resolve the vanilla block loot for an arbitrary state/tool without changing
+-- the world.  Unlike player mining this mirrors BlockState#getDrops directly:
+-- the loot table's own match_tool predicates decide correctness, so the
+-- survival mining precheck is deliberately bypassed.  Returned stacks and
+-- metadata are fresh copies.
+function Mining.ResolveDrops( block, toolStack, context )
+	local sv = SV()
+	if not sv or not sv.ResolveBlockDrops then return nil, "mining_api_unavailable" end
+	local stateId, stateError = resolveStateInput( block )
+	if stateId == nil then return nil, stateError or "invalid_state" end
+	if stateId == 0 then return {}, nil end
+	local stack, stackError = normalizeMiningStack( toolStack )
+	if stackError then return nil, stackError end
+	local copy = istable( context ) and deepCopy( context ) or {}
+	copy.skipCorrectToolCheck = true
+	local drops, err, mining = sv.ResolveBlockDrops( stateId, stack, copy )
+	if not drops then return nil, err or "block_loot_failed" end
+	return deepCopy( drops ), err, deepCopy( mining )
+end
+
 function Mining.IsCreative( ply )
 	local sv = SV()
 	if not validMiningPlayer( ply ) then return false, "invalid_player" end
 	return sv and sv.PlayerIsCreative and sv.PlayerIsCreative( ply ) == true or false
 end
 
-function Mining.BreakCreative( ply, bx, by, bz )
+function Mining.BreakCreative( ply, bx, by, bz, options )
 	local sv = SV()
 	if not validMiningPlayer( ply ) then return false, "invalid_player" end
-	if not sv or not sv.Break then return false, "mining_api_unavailable" end
+	if not sv or not sv.TryCreativeBreak then return false, "mining_api_unavailable" end
 	if not ( sv.PlayerIsCreative and sv.PlayerIsCreative( ply ) ) then return false, "not_creative" end
 	local x, y, z = cellCoords( bx, by, bz )
 	if not x then return false, "invalid_cell" end
-	if sv.CancelMining then sv.CancelMining( ply, "creative_break" ) end
-	return sv.Break( ply, x, y, z, { damageTool = false } )
+	return sv.TryCreativeBreak( ply, x, y, z, istable( options ) and deepCopy( options ) or nil )
 end
 
 ----------------------------------------------------------------- API.Inventory
@@ -858,6 +939,32 @@ function Inventory.ConsumeSelected( ply, amount, replacement, context )
 	return deepCopy( result ), consumed, deepCopy( overflow ), infinite == true, err
 end
 
+-- Atomically consumes a real item from mainhand/offhand, including in creative
+-- mode. Intended for Java mechanics such as death protection whose source code
+-- directly shrinks the held stack. Returns result, consumed, oldStack, err.
+function Inventory.ConsumeHeld( ply, hand, amount, context )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return nil, 0, nil, "invalid_player" end
+	if not sv or not sv.ConsumeHeldItem then return nil, 0, nil, "inventory_api_unavailable" end
+	local copy = deepCopy( context or {} )
+	copy.hand = hand
+	local result, consumed, oldStack, err = sv.ConsumeHeldItem(
+		ply,
+		amount,
+		copy
+	)
+	return deepCopy( result ), consumed, deepCopy( oldStack ), err
+end
+
+function Inventory.ReplaceSelected( ply, replacement, context )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return nil, nil, "invalid_player" end
+	if not sv or not sv.ReplaceSelectedItem then return nil, nil, "inventory_api_unavailable" end
+	local result, stack, err = sv.ReplaceSelectedItem(
+		ply, deepCopy( replacement ), deepCopy( context or {} ) )
+	return deepCopy( result ), deepCopy( stack ), err
+end
+
 function Inventory.HasInfiniteMaterials( ply )
 	local sv = SV()
 	if not validInventoryPlayer( ply ) then return false, "invalid_player" end
@@ -887,12 +994,131 @@ function Inventory.HasAmmo( ply, kind )
 	return true, nil, deepCopy( stack )
 end
 
--- Returns consumed, itemName, err, infinite.
+-- Selects the same complete ammo ItemStack the built-in projectile path would
+-- use. Infinite-material players still prefer an owned arrow type; only an
+-- actually empty inventory falls back to a generated normal arrow.
+-- Returns stack, slot, infinite, generated, err.
+function Inventory.SelectAmmo( ply, kind )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return nil, nil, false, false, "invalid_player" end
+	if not sv or not sv.SelectProjectileAmmo then return nil, nil, false, false, "inventory_api_unavailable" end
+	local stack, slot, infinite, generated, err = sv.SelectProjectileAmmo( ply, kind )
+	return deepCopy( stack ), slot, infinite == true, generated == true, err
+end
+
+-- Compatibility wrapper. Returns consumed, itemName, err, infinite, stack.
 function Inventory.ConsumeAmmo( ply, kind, amount, context )
 	local sv = SV()
 	if not validInventoryPlayer( ply ) then return 0, nil, "invalid_player" end
 	if not sv or not sv.ConsumeProjectileAmmo then return 0, nil, "inventory_api_unavailable" end
-	return sv.ConsumeProjectileAmmo( ply, kind, amount, deepCopy( context or {} ) )
+	local consumed, itemName, err, infinite, stack = sv.ConsumeProjectileAmmo(
+		ply, kind, amount, deepCopy( context or {} )
+	)
+	return consumed, itemName, err, infinite, deepCopy( stack )
+end
+
+-- Atomically selects and (outside infinite-material mode) consumes projectile
+-- ammunition. Returns stack, consumed, infinite, generated, err.
+function Inventory.TakeAmmo( ply, kind, amount, context )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return nil, 0, false, false, "invalid_player" end
+	if not sv or not sv.TakeProjectileAmmo then return nil, 0, false, false, "inventory_api_unavailable" end
+	local stack, consumed, infinite, generated, err = sv.TakeProjectileAmmo(
+		ply, kind, amount, deepCopy( context or {} )
+	)
+	return deepCopy( stack ), consumed, infinite == true, generated == true, err
+end
+
+-- Atomically selects one projectile and stores it in the selected crossbow's
+-- charged_projectiles component. Returns stack, infinite, generated, result,
+-- err. `kind="bow"` intentionally excludes firework rockets.
+function Inventory.LoadCrossbowProjectile( ply, kind, context )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return nil, false, false, nil, "invalid_player" end
+	if not sv or not sv.LoadSelectedCrossbowProjectile then
+		return nil, false, false, nil, "inventory_api_unavailable"
+	end
+	local stack, infinite, generated, result, err = sv.LoadSelectedCrossbowProjectile(
+		ply,
+		kind,
+		deepCopy( context or {} )
+	)
+	return deepCopy( stack ), infinite == true, generated == true, deepCopy( result ), err
+end
+
+-- Atomically clears charged_projectiles and damages the selected crossbow.
+-- The external projectile must be removed when this call fails.
+function Inventory.CommitCrossbowShot( ply, durabilityAmount, context )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return nil, false, nil, false, "invalid_player" end
+	if not sv or not sv.CommitSelectedCrossbowShot then
+		return nil, false, nil, false, "inventory_api_unavailable"
+	end
+	local result, broken, projectile, infinite, err = sv.CommitSelectedCrossbowShot(
+		ply,
+		durabilityAmount,
+		deepCopy( context or {} )
+	)
+	return deepCopy( result ), broken == true, deepCopy( projectile ), infinite == true, err
+end
+
+-- Public selected-item use bridge for resolver-driven external SWEPs. These
+-- are the same state-machine functions used by mc_item_hand, but every call is
+-- pinned to the caller-supplied active SWEP class. The private allowAnyWeapon
+-- flag is never accepted without that exact-class assertion.
+local function externalUseContext( ply, context )
+	local copy = deepCopy( context or {} )
+	local expectedClass = tostring( copy.expectedClass or "" )
+	if expectedClass == "" then return nil, "expected_weapon_class_missing" end
+	local weapon = IsValid( ply ) and ply.GetActiveWeapon and ply:GetActiveWeapon() or nil
+	if not IsValid( weapon ) or not weapon.GetClass or weapon:GetClass() ~= expectedClass then
+		return nil, "active_weapon_mismatch"
+	end
+	copy.expectedClass = expectedClass
+	copy.allowAnyWeapon = true
+	return copy
+end
+
+function Inventory.BeginSelectedUse( ply, context )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return false, "invalid_player" end
+	if not sv or not sv.BeginSelectedItemUse then return false, "inventory_api_unavailable" end
+	local useContext, contextError = externalUseContext( ply, context )
+	if not useContext then return false, contextError end
+	return sv.BeginSelectedItemUse( ply, useContext )
+end
+
+function Inventory.TickSelectedUse( ply, context )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return false, "invalid_player" end
+	if not sv or not sv.TickSelectedItemUse then return false, "inventory_api_unavailable" end
+	local useContext, contextError = externalUseContext( ply, context )
+	if not useContext then return false, contextError end
+	return sv.TickSelectedItemUse( ply, useContext )
+end
+
+function Inventory.ReleaseSelectedUse( ply, context )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return false, "invalid_player" end
+	if not sv or not sv.ReleaseSelectedItemUse then return false, "inventory_api_unavailable" end
+	local useContext, contextError = externalUseContext( ply, context )
+	if not useContext then return false, contextError end
+	return sv.ReleaseSelectedItemUse( ply, useContext )
+end
+
+function Inventory.CancelSelectedUse( ply, reason )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return false, "invalid_player" end
+	if not sv or not sv.CancelSelectedItemUse then return false, "inventory_api_unavailable" end
+	return sv.CancelSelectedItemUse( ply, tostring( reason or "external_cancelled" ) )
+end
+
+function Inventory.IsShieldDisabled( ply )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return false, "invalid_player" end
+	if not sv or not sv.IsPlayerShieldDisabled then return false, "inventory_api_unavailable" end
+	return sv.IsPlayerShieldDisabled( ply ) == true, nil,
+		math.max( 0, ( tonumber( ply:GetNWFloat( "mc_shield_disabled_until", 0 ) ) or 0 ) - CurTime() )
 end
 
 -- Spawn a world item drop (the same mc_item_drop entity block loot and player

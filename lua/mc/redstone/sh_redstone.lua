@@ -644,7 +644,7 @@ installLeverHandler()
 local function faceAttachedNeighborUpdate( context )
 	if not MC.FaceAttachedCanSurvive
 		or MC.FaceAttachedCanSurvive( context.bx, context.by, context.bz, context.stateId ) then return nil end
-	return { cells = { {
+	return { dropResources = true, cells = { {
 		bx = context.bx, by = context.by, bz = context.bz, stateId = 0,
 	} } }
 end
