@@ -2474,6 +2474,7 @@ end
 
 function MC.TileUV( tile )
 	local A = MC.Atlas
+	tile = MC.ResolveAtlasTile and MC.ResolveAtlasTile( tile ) or tile
 	local col = tile % A.COLS
 	local row = math.floor( tile / A.COLS )
 	local stride = A.STRIDE or A.TILE

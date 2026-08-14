@@ -96,11 +96,13 @@ local AtlasSources = {
 		opaqueTexture = defaultOpaqueTexture,
 		translucentTexture = defaultTranslucentTexture,
 		iconTexture = defaultIconTexture,
+		atlasProfile = "default",
 	},
 	programmer_art = {
 		opaquePath = atlasPngPath( MC.Atlas.MATERIAL_PROGRAMMER_ART or "mc/atlas_365_programmer_art" ),
 		translucentPath = atlasPngPath( MC.Atlas.MATERIAL_PROGRAMMER_ART_TRANSLUCENT or "mc/atlas_365_programmer_art_translucent" ),
 		iconPath = atlasPngPath( MC.Atlas.MATERIAL_PROGRAMMER_ART_TRANSLUCENT or "mc/atlas_365_programmer_art_translucent" ),
+		atlasProfile = "default",
 	},
 }
 
@@ -136,6 +138,16 @@ local function normalizeTexturePackOwner( value )
 	return value
 end
 
+local function normalizeAtlasProfile( value )
+	if not MC.NormalizeAtlasProfileName or not MC.AtlasProfileExists then
+		value = string.lower( tostring( value or "default" ) )
+		return value == "default" and "default" or nil
+	end
+	local name = MC.NormalizeAtlasProfileName( value ) or "default"
+	if not MC.AtlasProfileExists( name ) then return nil end
+	return name
+end
+
 local function atlasSourceFromDefinition( definition )
 	return {
 		opaquePath = atlasPngPath( definition.opaquePath ),
@@ -143,6 +155,7 @@ local function atlasSourceFromDefinition( definition )
 		iconPath = atlasPngPath( definition.iconPath ),
 		custom = true,
 		owner = definition.owner,
+		atlasProfile = definition.atlasProfile or "default",
 	}
 end
 
@@ -152,11 +165,13 @@ for name, definition in pairs( MC.TexturePackDefinitions ) do
 		local translucentPath = normalizeAtlasPath( definition.translucentPath ) or opaquePath
 		local iconPath = normalizeAtlasPath( definition.iconPath ) or translucentPath
 		local owner = normalizeTexturePackOwner( definition.owner )
-		if opaquePath and owner then
+		local atlasProfile = normalizeAtlasProfile( definition.atlasProfile )
+		if opaquePath and owner and atlasProfile then
 			definition.opaquePath = opaquePath
 			definition.translucentPath = translucentPath
 			definition.iconPath = iconPath
 			definition.owner = owner
+			definition.atlasProfile = atlasProfile
 			AtlasSources[name] = atlasSourceFromDefinition( definition )
 		else
 			MC.TexturePackDefinitions[name] = nil
@@ -180,6 +195,12 @@ function MC.RegisterTexturePack( name, definition, owner )
 	if not opaquePath then return false, "invalid_opaque_atlas_path" end
 	local translucentPath = normalizeAtlasPath( definition.translucent or definition.translucentPath ) or opaquePath
 	local iconPath = normalizeAtlasPath( definition.icon or definition.iconPath ) or translucentPath
+	local atlasProfile = normalizeAtlasProfile( definition.atlasProfile or definition.profile )
+	if not atlasProfile then return false, "atlas_profile_not_registered" end
+	local profileOwner = MC.AtlasProfileDefinitionOwner and MC.AtlasProfileDefinitionOwner( atlasProfile ) or "mc"
+	if profileOwner ~= "mc" and profileOwner ~= owner then
+		return false, "atlas_profile_owned_by_" .. tostring( profileOwner )
+	end
 
 	local previousDefinition = existing
 	local previousSource = AtlasSources[name]
@@ -189,6 +210,7 @@ function MC.RegisterTexturePack( name, definition, owner )
 		opaquePath = opaquePath,
 		translucentPath = translucentPath,
 		iconPath = iconPath,
+		atlasProfile = atlasProfile,
 	}
 	MC.TexturePackDefinitions[name] = stored
 	AtlasSources[name] = atlasSourceFromDefinition( stored )
@@ -348,8 +370,8 @@ end
 
 function MC.ListTexturePacks()
 	local result = {
-		{ name = "default", owner = "mc", builtin = true },
-		{ name = "programmer_art", owner = "mc", builtin = true },
+		{ name = "default", owner = "mc", atlasProfile = "default", builtin = true },
+		{ name = "programmer_art", owner = "mc", atlasProfile = "default", builtin = true },
 	}
 	for name, definition in pairs( MC.TexturePackDefinitions ) do
 		result[#result + 1] = {
@@ -358,6 +380,7 @@ function MC.ListTexturePacks()
 			opaquePath = definition.opaquePath,
 			translucentPath = definition.translucentPath,
 			iconPath = definition.iconPath,
+			atlasProfile = definition.atlasProfile or "default",
 			builtin = false,
 		}
 	end
@@ -1142,6 +1165,11 @@ function MC.SetTexturePack( value )
 	refreshGpuAtlasTextures( opaqueTexture, translucentTexture )
 	if MC.RefreshShadowDepthAtlas then MC.RefreshShadowDepthAtlas( opaqueTexture ) end
 	if MC.RefreshHeightfieldDepthAtlas then MC.RefreshHeightfieldDepthAtlas( opaqueTexture ) end
+	local profileName = source.atlasProfile or "default"
+	if MC.SetAtlasProfile then
+		local profileOK, profileResult = MC.SetAtlasProfile( profileName )
+		if not profileOK then return false, profileResult or "atlas_profile_switch_failed" end
+	end
 
 	MC.ActiveTexturePack = name
 	MC.Atlas.ACTIVE_MATERIAL = source.opaquePath

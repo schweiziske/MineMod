@@ -339,6 +339,7 @@ end
 local function projectionTileUVRect( tile, uv )
 	if not uv then return MC.TileUV( tile ) end
 	local atlas = MC.Atlas
+	tile = MC.ResolveAtlasTile and MC.ResolveAtlasTile( tile ) or tile
 	local col = tile % atlas.COLS
 	local row = math.floor( tile / atlas.COLS )
 	local stride = atlas.STRIDE or atlas.TILE
@@ -1280,6 +1281,12 @@ hook.Add( "PostDrawTranslucentRenderables", "mc_preset_projection", function( _,
 	if not IsValid( wep ) or wep:GetClass() ~= "mc_preset_placer" then return end
 	if MC.PresetMode ~= "place" then return end
 	MC.DrawPresetProjection()
+end )
+
+hook.Add( "MC.AtlasProfileChanged", "mc_preset_projection_atlas", function()
+	if MC.ActivePreset and MC.BuildPresetProjectionMesh then
+		MC.BuildPresetProjectionMesh( MC.ActivePreset, MC.PresetRotation )
+	end
 end )
 
 concommand.Add( "mc_preset_manager", function()

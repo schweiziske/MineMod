@@ -94,8 +94,12 @@ end
 function MC.GetBlockParticleTileName( id )
 	if not MC.TileNames then return nil, nil end
 	local tile = MC.GetBlockParticleTile( id )
+	if tile == nil then return nil, nil end
 	local name = MC.TileNames[tile]
-	if not name or name == "" then return nil end
+	-- External blocks may intentionally use legal unnamed tail slots. The
+	-- particle material path accepts a numeric tile and still applies the active
+	-- atlas profile, so do not discard those custom block particles.
+	if not name or name == "" then return tile, tile end
 	return name, tile
 end
 
@@ -140,10 +144,11 @@ local function particleMaterialForTile( tileName, col, row )
 	local atlas = MC.Atlas
 	local atlasTexture, atlasTextureName = particleAtlasTexture()
 	if not atlas or not atlasTexture or not atlasTextureName then return ParticleFallbackMaterial end
+	local resolvedTile = MC.ResolveAtlasTile and MC.ResolveAtlasTile( tile ) or tile
 	local stride = atlas.STRIDE or atlas.TILE
 	local pad = atlas.PAD or 0
-	local atlasColumn = tile % atlas.COLS
-	local atlasRow = math.floor( tile / atlas.COLS )
+	local atlasColumn = resolvedTile % atlas.COLS
+	local atlasRow = math.floor( resolvedTile / atlas.COLS )
 	local sampleOffset = 0.75 / ( ParticleUvSteps - 1 )
 	local scaleX = atlas.TILE * 0.25 / atlas.W
 	local scaleY = atlas.TILE * 0.25 / atlas.H
@@ -188,6 +193,13 @@ function MC.RefreshBlockParticleMaterials( atlasTexture )
 	end
 	return true
 end
+
+hook.Add( "MC.AtlasProfileChanged", "mc_particle_atlas_profile", function()
+	ParticleMaterialCache = {}
+	ParticleWarmQueue = {}
+	ParticleWarmByTile = {}
+	ParticleAtlasPrewarmed = false
+end )
 
 function MC.GetParticleMaterialForTile( tileName, col, row )
 	return particleMaterialForTile( tileName, col, row )
