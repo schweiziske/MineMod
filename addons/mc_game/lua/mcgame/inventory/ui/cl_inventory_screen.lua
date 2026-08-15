@@ -1079,7 +1079,8 @@ function PANEL:PaintContent()
 			end
 		end )
 		if MC.DrawEnchantingBook2D then
-			MC.DrawEnchantingBook2D( self.Left + 33 * self.Scale, self.Top + 44 * self.Scale,
+			-- EnchantmentScreen.extractBook: exact 38x31 PIP bounds at +14,+14.
+			MC.DrawEnchantingBook2D( self.Left + 14 * self.Scale, self.Top + 14 * self.Scale,
 				self.EnchantingBookOpen or 0, self.EnchantingBookFlip or 0, self.Scale )
 		end
 	end

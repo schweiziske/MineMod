@@ -20,42 +20,24 @@ local Fonts = {}
 local LineCache = {}
 local LineCacheCount = 0
 
+local function nextPowerOfTwo( value )
+	value = math.max( 1, math.ceil( tonumber( value ) or 1 ) )
+	local result = 1
+	while result < value do result = result * 2 end
+	return result
+end
+
 local function fontMaterial( path )
 	local cached = Materials[path]
 	if cached then return cached end
-	local source = Material( path .. ".png", "alphatest vertexcolor vertexalpha nocull" )
-	if not ( CreateMaterial and source and source.GetTexture ) then
-		Materials[path] = source
-		return source
-	end
-	local texture = source:GetTexture( "$basetexture" )
-	local textureName = texture and texture.GetName and texture:GetName() or nil
-	if not textureName or textureName == "" or texture.IsError and texture:IsError() then
-		Materials[path] = source
-		return source
-	end
-	local suffix = util and util.CRC and util.CRC( path .. "|bitmap_font_v1" )
-		or string.gsub( path, "[^%w_]", "_" )
-	local value = CreateMaterial( "mc_bitmap_font_" .. tostring( suffix ), "UnlitGeneric", {
-		["$basetexture"] = textureName,
-		["$vertexcolor"] = "1",
-		["$vertexalpha"] = "1",
-		["$nocull"] = "1",
-		["$alphatest"] = "1",
-		["$alphatestreference"] = "0.5",
-		["$pointsample"] = "1",
-		["$nomip"] = "1",
-		["$nolod"] = "1",
-		["$clamps"] = "1",
-		["$clampt"] = "1",
-	} )
-	if value and not value:IsError() then
-		value:SetTexture( "$basetexture", texture )
-		Materials[path] = value
-		return value
-	end
-	Materials[path] = source
-	return source
+	-- Material() already owns the runtime PNG ITexture. Re-feeding its generated
+	-- name (for example "0110000mc/font/ascii") into CreateMaterial makes Source
+	-- look for a nonexistent VTF with that internal prefix and produces the
+	-- purple/black error texture. Keep the original PNG material and enforce
+	-- nearest-neighbour sampling only while glyphs are drawn.
+	local value = Material( path .. ".png", "alphatest vertexcolor vertexalpha nocull" )
+	Materials[path] = value
+	return value
 end
 
 local function normalizeFontName( name )
@@ -98,10 +80,18 @@ local function generatedProvider( definition )
 	local cellWidth = math.max( 1, tonumber( definition.cell_width ) or 8 )
 	local cellHeight = math.max( 1, tonumber( definition.cell_height ) or 8 )
 	local logicalHeight = math.max( 1, tonumber( definition.height ) or 8 )
+	local textureWidth = math.max( 1, tonumber( definition.texture_width ) or columns * cellWidth )
+	local textureHeight = math.max( 1, tonumber( definition.texture_height ) or rows * cellHeight )
 	return {
 		material = fontMaterial( tostring( definition.material or "mc/font/ascii" ) ),
-		textureWidth = math.max( 1, tonumber( definition.texture_width ) or columns * cellWidth ),
-		textureHeight = math.max( 1, tonumber( definition.texture_height ) or rows * cellHeight ),
+		textureWidth = textureWidth,
+		textureHeight = textureHeight,
+		-- Runtime PNG ITextures are padded at the lower/right edge to a
+		-- power-of-two mapping size. The source pixels stay at the upper-left;
+		-- UVs therefore use the padded dimensions, while glyph layout and
+		-- BitmapProvider advances continue to use the authored dimensions.
+		mappingWidth = nextPowerOfTwo( textureWidth ),
+		mappingHeight = nextPowerOfTwo( textureHeight ),
 		columns = columns,
 		rows = rows,
 		cellWidth = cellWidth,
@@ -133,10 +123,10 @@ local function addGeneratedProviders( font, definitions )
 						drawWidth = provider.drawWidth,
 						drawHeight = provider.drawHeight,
 						topOffset = provider.topOffset,
-						u0 = ( left + 0.01 ) / provider.textureWidth,
-						v0 = ( top + 0.01 ) / provider.textureHeight,
-						u1 = ( left + provider.cellWidth - 0.01 ) / provider.textureWidth,
-						v1 = ( top + provider.cellHeight - 0.01 ) / provider.textureHeight,
+						u0 = ( left + 0.01 ) / provider.mappingWidth,
+						v0 = ( top + 0.01 ) / provider.mappingHeight,
+						u1 = ( left + provider.cellWidth - 0.01 ) / provider.mappingWidth,
+						v1 = ( top + provider.cellHeight - 0.01 ) / provider.mappingHeight,
 					}
 				end
 			end
@@ -148,6 +138,7 @@ local function rangeProvider( path, first, last, textureWidth, textureHeight, co
 	return {
 		material = fontMaterial( path ), first = first, last = last,
 		textureWidth = textureWidth, textureHeight = textureHeight,
+		mappingWidth = nextPowerOfTwo( textureWidth ), mappingHeight = nextPowerOfTwo( textureHeight ),
 		columns = columns, rows = rows,
 		cellWidth = textureWidth / columns, cellHeight = textureHeight / rows,
 	}
@@ -194,10 +185,10 @@ local function glyphFor( font, codepoint, bytes )
 					drawWidth = 8,
 					drawHeight = 8,
 					topOffset = 0,
-					u0 = ( left + 0.01 ) / provider.textureWidth,
-					v0 = ( top + 0.01 ) / provider.textureHeight,
-					u1 = ( left + provider.cellWidth - 0.01 ) / provider.textureWidth,
-					v1 = ( top + provider.cellHeight - 0.01 ) / provider.textureHeight,
+					u0 = ( left + 0.01 ) / provider.mappingWidth,
+					v0 = ( top + 0.01 ) / provider.mappingHeight,
+					u1 = ( left + provider.cellWidth - 0.01 ) / provider.mappingWidth,
+					v1 = ( top + provider.cellHeight - 0.01 ) / provider.mappingHeight,
 				}
 				font.glyphs[codepoint] = glyph
 				return glyph
@@ -318,9 +309,24 @@ function BitmapFont.Draw( text, x, y, options )
 	local verticalAlign = options.verticalAlign
 	if verticalAlign == ALIGN_MIDDLE then y = y - LINE_HEIGHT * scale * 0.5
 	elseif verticalAlign == ALIGN_BOTTOM then y = y - LINE_HEIGHT * scale end
+	-- Java's GUI rasterizer lands bitmap glyphs on integer framebuffer pixels.
+	-- In particular, centred odd-width strings must not start on a half pixel or
+	-- Source will make one glyph column appear stretched even with POINT filtering.
+	x, y = math.floor( x ), math.floor( y )
 	local color = options.color or color_white or Color( 255, 255, 255, 255 )
+	local pushedMin, pushedMag = false, false
+	if render and render.PushFilterMin and TEXFILTER then
+		render.PushFilterMin( TEXFILTER.POINT )
+		pushedMin = true
+	end
+	if render and render.PushFilterMag and TEXFILTER then
+		render.PushFilterMag( TEXFILTER.POINT )
+		pushedMag = true
+	end
 	if options.shadow == true then drawLineAt( line, x + scale, y + scale, scale, shadowColor( color ) ) end
 	drawLineAt( line, x, y, scale, color )
+	if pushedMag and render.PopFilterMag then render.PopFilterMag() end
+	if pushedMin and render.PopFilterMin then render.PopFilterMin() end
 	return width
 end
 
