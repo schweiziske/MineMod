@@ -4,6 +4,7 @@ MC = MC or {}
 MC.InventoryUI = MC.InventoryUI or {}
 
 local UI = MC.InventoryUI
+local HandWeapon = MC.API and MC.API.HandWeapon or {}
 local HOTBAR = UI.GetGuiMaterial( "hud/hotbar" )
 local HOTBAR_SELECTION = UI.GetGuiMaterial( "hud/hotbar_selection" )
 local selectedNameUntil = 0
@@ -13,10 +14,13 @@ local function handActive()
 	if not IsValid( ply ) or not ply:Alive() then return false end
 	local weapon = ply:GetActiveWeapon()
 	if not IsValid( weapon ) then
-		return MC.IsInventoryWeaponActive and MC.IsInventoryWeaponActive( ply ) == true or false
+		return type( HandWeapon.IsInventoryActive ) == "function"
+			and HandWeapon.IsInventoryActive( ply ) == true or false
 	end
 	if UI.IsInventoryWeapon then return UI.IsInventoryWeapon( weapon ) end
-	if MC.IsInventoryWeaponActive then return MC.IsInventoryWeaponActive( ply ) end
+	if type( HandWeapon.IsInventoryActive ) == "function" then
+		return HandWeapon.IsInventoryActive( ply ) == true
+	end
 	local class = weapon:GetClass()
 	return class == "mc_item_hand" or class == "mc_inventory"
 end
@@ -81,7 +85,8 @@ hook.Add( "HUDPaint", "mc_inventory_hotbar", function()
 	local stack = selectedStack()
 	if RealTime() < selectedNameUntil and not MC.IsEmptyItemStack( stack ) then
 		local definition = MC.GetItem( stack.item )
-		UI.DrawText( UI.ItemRenderer.DisplayName( stack ), ScrW() * 0.5, y - 12 * scale, scale,
+		local nameOffset = UI.SurvivalHUDBaseActive and UI.SurvivalHUDBaseActive() and 37 or 12
+		UI.DrawText( UI.ItemRenderer.DisplayName( stack ), ScrW() * 0.5, y - nameOffset * scale, scale,
 			UI.RarityColor( definition and definition.rarity ), TEXT_ALIGN_CENTER, true )
 	end
 end )

@@ -44,11 +44,13 @@ end
 
 local function exitMinecraftVehicleDriver( driver, reason )
 	if not IsValid( driver ) then return false end
-	if MC.SV and MC.SV.ExitMinecraftVehiclePlayer then
-		return MC.SV.ExitMinecraftVehiclePlayer( driver, reason ) == true
-	end
+	driver.MCAllowMinecraftVehicleExit = true
 	driver:ExitVehicle()
-	return not driver:InVehicle()
+	driver.MCAllowMinecraftVehicleExit = nil
+	if driver:InVehicle() then return false end
+	driver.MCMinecraftVehicleNextEnterAt = CurTime() + 0.25
+	driver.MCMinecraftVehicleLastExitReason = tostring( reason or "forced" )
+	return true
 end
 
 local function normalizeYaw( yaw )
@@ -868,10 +870,13 @@ function ENT:DestroyVehicle( attacker, suppressDrop )
 	self.MCDestroyed = true
 	local driver = seatDriver( self )
 	if IsValid( driver ) then exitMinecraftVehicleDriver( driver, "destroyed" ) end
-	if not suppressDrop and MC.SV and MC.SV.SpawnItemDrop then
-		MC.SV.SpawnItemDrop( self:GetPos(), { item = self:GetMinecartItemName(), count = 1 }, attacker, {
-			pickupDelay = 0.5,
+	if MC.RunEvent then
+		MC.RunEvent( "MC.MinecraftVehicleDestroyed", self, {
+			dropItem = self:GetMinecartItemName(),
+			position = Vector( self:GetPos().x, self:GetPos().y, self:GetPos().z ),
 			velocity = Vector( 0, 0, javaVelocity( 0.1 ) ),
+			attacker = attacker,
+			suppressDrop = suppressDrop == true,
 		} )
 	end
 	self:Remove()

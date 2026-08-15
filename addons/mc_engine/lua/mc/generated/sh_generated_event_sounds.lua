@@ -11,6 +11,11 @@ MC.GeneratedEventSounds = {
 		{ sound = "mc/block/campfire/crackle5.ogg", volume = 1, pitch = 1, weight = 1, stream = false },
 		{ sound = "mc/block/campfire/crackle6.ogg", volume = 1, pitch = 1, weight = 1, stream = false },
 	},
+	["block.enchantment_table.use"] = {
+		{ sound = "mc/block/enchantment_table/enchant1.ogg", volume = 1, pitch = 1, weight = 1, stream = false },
+		{ sound = "mc/block/enchantment_table/enchant2.ogg", volume = 1, pitch = 1, weight = 1, stream = false },
+		{ sound = "mc/block/enchantment_table/enchant3.ogg", volume = 1, pitch = 1, weight = 1, stream = false },
+	},
 	["block.fire.ambient"] = {
 		{ sound = "mc/fire/fire.ogg", volume = 1, pitch = 1, weight = 1, stream = false },
 	},
@@ -65,6 +70,9 @@ MC.GeneratedEventSounds = {
 	["entity.minecart.riding"] = {
 		{ sound = "mc/minecart/base.ogg", volume = 1, pitch = 1, weight = 1, stream = false },
 	},
+	["entity.player.levelup"] = {
+		{ sound = "mc/random/levelup.ogg", volume = 1, pitch = 1, weight = 1, stream = false },
+	},
 	["entity.sheep.shear"] = {
 		{ sound = "mc/mob/sheep/shear.ogg", volume = 1, pitch = 1, weight = 1, stream = false },
 	},
@@ -95,6 +103,9 @@ MC.GeneratedEventSoundResources = {
 	"sound/mc/block/campfire/crackle4.ogg",
 	"sound/mc/block/campfire/crackle5.ogg",
 	"sound/mc/block/campfire/crackle6.ogg",
+	"sound/mc/block/enchantment_table/enchant1.ogg",
+	"sound/mc/block/enchantment_table/enchant2.ogg",
+	"sound/mc/block/enchantment_table/enchant3.ogg",
 	"sound/mc/entity/boat/paddle_land1.ogg",
 	"sound/mc/entity/boat/paddle_land2.ogg",
 	"sound/mc/entity/boat/paddle_land3.ogg",
@@ -133,5 +144,6 @@ MC.GeneratedEventSoundResources = {
 	"sound/mc/random/explode4.ogg",
 	"sound/mc/random/fizz.ogg",
 	"sound/mc/random/fuse.ogg",
+	"sound/mc/random/levelup.ogg",
 	"sound/mc/random/splash.ogg",
 }

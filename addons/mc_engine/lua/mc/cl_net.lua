@@ -613,7 +613,7 @@ local function resetClientWorldForSnapshot( expectedChunks, expectedBlocks )
 	MC.PendingPredictionGroups = {}
 	if MC.MarkSignRenderEntriesDirty then MC.MarkSignRenderEntriesDirty() end
 	if MC.MarkBannerRenderEntriesDirty then MC.MarkBannerRenderEntriesDirty() end
-	if MC.MarkCampfireRenderEntriesDirty then MC.MarkCampfireRenderEntriesDirty() end
+	if MC.RunEvent then MC.RunEvent( "MC.ClientWorldProjectionChanged", "snapshot_reset", {} ) end
 	MC.SyncProgress = {
 		expected = math.max( 0, math.floor( tonumber( expectedBlocks ) or 0 ) ),
 		received = 0,
@@ -1085,7 +1085,12 @@ function MC.LoadSnapshotSaveData( data )
 
 	if MC.MarkSignRenderEntriesDirty then MC.MarkSignRenderEntriesDirty() end
 	if MC.MarkBannerRenderEntriesDirty then MC.MarkBannerRenderEntriesDirty() end
-	if MC.MarkCampfireRenderEntriesDirty then MC.MarkCampfireRenderEntriesDirty() end
+	if MC.RunEvent then
+		MC.RunEvent( "MC.ClientWorldProjectionChanged", "native_snapshot_hydrated", {
+			chunks = #data.chunks,
+			blocks = blocks,
+		} )
+	end
 	MC.NativeLoadProfile.hydrateMS = ( SysTime() - hydrateStarted ) * 1000
 	MC.NativeLoadProfile.chunks = #data.chunks
 	MC.NativeLoadProfile.cells = blocks
@@ -2095,7 +2100,9 @@ function MC.UnloadClientChunks( chunks )
 	end
 	if MC.MarkSignRenderEntriesDirty then MC.MarkSignRenderEntriesDirty() end
 	if MC.MarkBannerRenderEntriesDirty then MC.MarkBannerRenderEntriesDirty() end
-	if MC.MarkCampfireRenderEntriesDirty then MC.MarkCampfireRenderEntriesDirty() end
+	if MC.RunEvent then
+		MC.RunEvent( "MC.ClientWorldProjectionChanged", "chunks_unloaded", { chunks = #chunks } )
+	end
 	if MC.ClearAllBlockConnectionMaskCaches then MC.ClearAllBlockConnectionMaskCaches() end
 	if perfEnabled then
 		local elapsed = ( SysTime() - perfStarted ) * 1000
@@ -2188,7 +2195,7 @@ net.Receive( "mc_clear", function()
 	MC.HttpChunkSync = nil
 	if MC.MarkSignRenderEntriesDirty then MC.MarkSignRenderEntriesDirty() end
 	if MC.MarkBannerRenderEntriesDirty then MC.MarkBannerRenderEntriesDirty() end
-	if MC.MarkCampfireRenderEntriesDirty then MC.MarkCampfireRenderEntriesDirty() end
+	if MC.RunEvent then MC.RunEvent( "MC.ClientWorldProjectionChanged", "world_cleared", {} ) end
 	MC.SyncProgress = { expected = 0, received = 0, chunks = 0, doneChunks = 0, active = false, lastUpdate = CurTime() }
 end )
 

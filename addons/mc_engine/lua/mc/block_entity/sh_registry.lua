@@ -77,6 +77,37 @@ function MC.RegisterBlockEntityType( definition )
 	return registered
 end
 
+function MC.IsBlockEntityTypeRegistered( typeName )
+	local name = normalizeName( typeName )
+	if not name then return false end
+	return ( MC.PendingBlockEntityTypes and MC.PendingBlockEntityTypes[name] ) ~= nil
+		or ( MC.BlockEntityTypes and MC.BlockEntityTypes[name] ) ~= nil
+end
+
+-- Public registration-time bridge between a block-state schema and a block
+-- entity codec. Game/content addons must use this instead of mutating the
+-- pending/finalized schema tables, which are engine-owned implementation data.
+function MC.BindBlockEntityType( blockNames, typeName )
+	if MC.BlockStateRegistryFrozen then return false, "registry_frozen" end
+	local normalizedType = normalizeName( typeName )
+	if not normalizedType or not MC.IsBlockEntityTypeRegistered( normalizedType ) then
+		return false, "unknown_block_entity_type"
+	end
+	local names = isstring( blockNames ) and { blockNames } or blockNames
+	if not istable( names ) or #names == 0 then return false, "invalid_block_names" end
+	local schemas = MC.PendingBlockStateSchemas
+	if not istable( schemas ) then return false, "state_registry_unavailable" end
+	local resolved = {}
+	for index, value in ipairs( names ) do
+		local name = normalizeName( value )
+		local schema = name and schemas[name] or nil
+		if not schema then return false, "unknown_block_state_schema" end
+		resolved[index] = schema
+	end
+	for _, schema in ipairs( resolved ) do schema.blockEntityType = normalizedType end
+	return true, #resolved
+end
+
 function MC.FinalizeBlockEntityRegistry()
 	if MC.BlockEntityRegistryFrozen then return #MC.BlockEntityTypesById end
 	if not MC.BlockStateRegistryFrozen and MC.FinalizePreparedBlockStateRegistry then
@@ -184,6 +215,106 @@ function MC.ValidateBlockEntityRecord( stateId, record )
 		if ok ~= true then return false, err or "invalid_block_entity_data" end
 	end
 	return true, definition
+end
+
+-- Construct the canonical default attachment for a state without exposing a
+-- registered definition table to callers. Bound states are expected to supply
+-- CreateDefault so raw fills, imports and legacy saves can restore the same
+-- Block Entity invariant as ordinary transactions.
+function MC.CreateDefaultBlockEntityRecord( stateId )
+	local expected = MC.BlockEntityTypeForState( stateId )
+	if not expected then return nil, "not_block_entity_state" end
+	local definition = ( MC.BlockEntityTypes and MC.BlockEntityTypes[expected] )
+		or ( MC.PendingBlockEntityTypes and MC.PendingBlockEntityTypes[expected] )
+	if not definition then return nil, "unknown_block_entity_type" end
+	if CLIENT and definition.serverOnly then return nil, "server_only" end
+	if not definition.CreateDefault then return nil, "block_entity_default_unavailable" end
+	local called, record, createError = pcall( definition.CreateDefault, stateId )
+	if not called or type( record ) ~= "table" then
+		return nil, createError or record or "block_entity_create_default_failed"
+	end
+	record = copyValue( record )
+	if record.type == nil then record.type = expected end
+	if record.codecVersion == nil then record.codecVersion = definition.codecVersion end
+	local valid, validationError = MC.ValidateBlockEntityRecord( stateId, record )
+	if valid ~= true then return nil, validationError or "invalid_default_block_entity" end
+	return record
+end
+
+local function removeChunkBlockEntity( chunk, localIndex )
+	if not chunk.blockEntities or chunk.blockEntities[localIndex] == nil then return false end
+	chunk.blockEntities[localIndex] = nil
+	if next( chunk.blockEntities ) == nil then chunk.blockEntities = nil end
+	return true
+end
+
+-- Reconcile one cell after a low-level state write. This is intentionally an
+-- engine invariant, not a game-layer repair pass: registered callbacks may be
+-- supplied by another addon, but the engine owns when their records exist.
+function MC.ReconcileChunkLocalBlockEntity( chunk, localIndex, stateId )
+	localIndex = math.floor( tonumber( localIndex ) or -1 )
+	stateId = math.floor( tonumber( stateId ) or -1 )
+	if type( chunk ) ~= "table" or localIndex < 0 then return nil, "invalid_chunk_cell" end
+	local expected = MC.BlockEntityTypeForState( stateId )
+	local definition = expected and ( ( MC.BlockEntityTypes and MC.BlockEntityTypes[expected] )
+		or ( MC.PendingBlockEntityTypes and MC.PendingBlockEntityTypes[expected] ) ) or nil
+	local changed = false
+
+	-- Opaque records are archive-preservation payloads. Never manufacture a
+	-- second, authoritative record beside one; a later gameplay state mutation
+	-- removes the opaque attachment before this function runs.
+	if chunk.opaqueBlockEntities and chunk.opaqueBlockEntities[localIndex] ~= nil then
+		return removeChunkBlockEntity( chunk, localIndex )
+	end
+
+	if not expected or CLIENT and definition and definition.serverOnly then
+		return removeChunkBlockEntity( chunk, localIndex )
+	end
+
+	local current = chunk.blockEntities and chunk.blockEntities[localIndex] or nil
+	if current then
+		local valid = MC.ValidateBlockEntityRecord( stateId, current )
+		if valid == true then return false end
+		changed = removeChunkBlockEntity( chunk, localIndex ) or changed
+	end
+
+	local record, createError = MC.CreateDefaultBlockEntityRecord( stateId )
+	if not record then
+		if createError == "server_only" then return changed end
+		return nil, createError
+	end
+	chunk.blockEntities = chunk.blockEntities or {}
+	chunk.blockEntities[localIndex] = record
+	return true
+end
+
+-- Bulk loaders may install native/packed state storage without visiting the
+-- per-cell Lua setter. Finalization calls this once per touched chunk to add
+-- missing defaults and discard stale/incompatible attachments.
+function MC.ReconcileChunkBlockEntities( chunk )
+	if type( chunk ) ~= "table" then return nil, "missing_chunk" end
+	if not MC.GetChunkBlockStateByLocalIndex or not MC.ForEachBlockState then
+		return nil, "state_storage_unavailable"
+	end
+	local changed = 0
+	local existing = {}
+	for localIndex in pairs( chunk.blockEntities or {} ) do existing[#existing + 1] = localIndex end
+	for _, localIndex in ipairs( existing ) do
+		local stateId = MC.GetChunkBlockStateByLocalIndex( chunk, localIndex ) or 0
+		local reconciled, err = MC.ReconcileChunkLocalBlockEntity( chunk, localIndex, stateId )
+		if reconciled == nil then return nil, err end
+		if reconciled then changed = changed + 1 end
+	end
+	local reconcileError
+	MC.ForEachBlockState( chunk, function( bx, by, bz, _, _, _, stateId )
+		if reconcileError then return end
+		local _, _, _, localIndex = MC.CellToChunk( bx, by, bz )
+		local reconciled, err = MC.ReconcileChunkLocalBlockEntity( chunk, localIndex, stateId )
+		if reconciled == nil then reconcileError = err return end
+		if reconciled then changed = changed + 1 end
+	end )
+	if reconcileError then return nil, reconcileError end
+	return true, changed
 end
 
 function MC.DecodeBlockEntityEnvelope( stateId, envelope )

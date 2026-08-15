@@ -7,11 +7,8 @@ MC.HandWeaponBridge = MC.HandWeaponBridge or {}
 
 local Bridge = MC.HandWeaponBridge
 
-local function selectedStack( ply )
-	if ply ~= LocalPlayer() then return nil end
-	local state = MC.ClientInventory
-	local selected = state and math.Clamp( math.floor( tonumber( state.selected ) or 0 ), 0, 8 ) or 0
-	return state and state.slots and state.slots[selected + 1] or nil
+local function selectedPayload( ply )
+	return Bridge.GetSelected and Bridge.GetSelected( ply ) or nil
 end
 
 local function activeWeapon( ply )
@@ -33,13 +30,16 @@ local function transitionTarget( ply )
 end
 
 local function selectedResolvesTo( ply, className )
-	local stack = selectedStack( ply )
+	local stack = selectedPayload( ply )
 	if not stack or not Bridge.Resolve then return false end
 	local resolved = Bridge.Resolve( stack, ply )
 	return resolved == className
 end
 
-function Bridge.IsClientInventoryWeaponActive( ply )
+-- Engine-side presentation state is deliberately expressed in generic terms.
+-- The game addon may expose compatibility names for its own inventory/HUD
+-- consumers, but the standalone engine must not define survival concepts.
+function Bridge.IsClientManagedWeaponActive( ply )
 	local weapon = activeWeapon( ply )
 	local targetClass = transitionTarget( ply )
 	if not weapon then return targetClass ~= nil end
@@ -53,7 +53,7 @@ function Bridge.IsClientInventoryWeaponActive( ply )
 	return isInventoryProxy( weapon ) or selectedResolvesTo( ply, className )
 end
 
-function Bridge.IsClientHeldItemWeaponActive( ply )
+function Bridge.IsClientSelectedWeaponActive( ply )
 	local weapon = activeWeapon( ply )
 	local targetClass = transitionTarget( ply )
 	if not weapon then return targetClass ~= nil end
@@ -63,10 +63,19 @@ function Bridge.IsClientHeldItemWeaponActive( ply )
 	return isInventoryProxy( weapon ) or selectedResolvesTo( ply, className )
 end
 
-function MC.IsInventoryWeaponActive( ply )
-	return Bridge.IsClientInventoryWeaponActive( ply )
+-- Public client queries. Game addons must not reach into HandWeaponBridge;
+-- these wrappers are the supported boundary for HUD and inventory lifecycle.
+MC.API = MC.API or {}
+MC.API.HandWeapon = MC.API.HandWeapon or {}
+
+function MC.API.HandWeapon.IsManagedActive( ply )
+	return Bridge.IsClientManagedWeaponActive( ply )
 end
 
-function MC.IsInventoryHeldItemWeaponActive( ply )
-	return Bridge.IsClientHeldItemWeaponActive( ply )
+function MC.API.HandWeapon.IsSelectedActive( ply )
+	return Bridge.IsClientSelectedWeaponActive( ply )
 end
+
+-- Compatibility names retained on the public API for existing game clients.
+MC.API.HandWeapon.IsInventoryActive = MC.API.HandWeapon.IsManagedActive
+MC.API.HandWeapon.IsHeldItemActive = MC.API.HandWeapon.IsSelectedActive

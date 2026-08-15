@@ -3,7 +3,8 @@
 -- generated chest block after the block catalog has been registered.
 
 MC = MC or {}
-MC.BlockHandlers = MC.BlockHandlers or {}
+
+local Blocks = MC.API and MC.API.Blocks
 
 local CHEST_BLOCK_NAMES = {
 	chest = true,
@@ -25,7 +26,7 @@ local function dropContents( context )
 	end
 end
 
-MC.BlockHandlers.chest = MC.BlockHandlers.chest or {
+local HANDLERS = {
 	OnUse = function( ply, bx, by, bz )
 		if not SERVER or not MC.SV or not MC.SV.OpenChest then return false end
 		return MC.SV.OpenChest( ply, bx, by, bz ) == true
@@ -34,14 +35,14 @@ MC.BlockHandlers.chest = MC.BlockHandlers.chest or {
 	OnReplaced = function( context ) dropContents( context ) end,
 }
 
-for _, block in pairs( MC.Blocks or {} ) do
-	if CHEST_BLOCK_NAMES[block.name] then
-		block.handlers = MC.BlockHandlers.chest
-		block.handlerName = "chest"
+if Blocks then
+	for name in pairs( CHEST_BLOCK_NAMES ) do
+		Blocks.SetHandlers( "minecraft:" .. name, HANDLERS )
 	end
 end
 
 function MC.IsChestBlock( id )
-	local block = MC.Blocks and MC.Blocks[id]
-	return block and CHEST_BLOCK_NAMES[block.name] == true or false
+	local block = Blocks and Blocks.Resolve( id ) or nil
+	local name = block and string.gsub( block.mcid or block.name or "", "^minecraft:", "" ) or ""
+	return CHEST_BLOCK_NAMES[name] == true
 end

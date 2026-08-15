@@ -1,9 +1,9 @@
 --[[----------------------------------------------------------------------------
-	Generic selected-item -> SWEP integration registry.
+	Generic selected-payload -> SWEP integration registry.
 
 	MCSWEP deliberately knows nothing about external addon class names. Addons
 	register resolvers through MC.API.HandWeapon; the server bridge only switches
-	between mc_item_hand/mc_inventory and classes returned by those resolvers.
+	between registered base classes and classes returned by those resolvers.
 ------------------------------------------------------------------------------]]
 
 MC = MC or {}
@@ -17,9 +17,14 @@ Bridge.Resolvers = Bridge.Resolvers or {}
 Bridge.ResolverOrder = Bridge.ResolverOrder or {}
 Bridge.ManagedClasses = Bridge.ManagedClasses or {}
 Bridge.ResolverErrors = Bridge.ResolverErrors or {}
+Bridge.SelectionProviders = Bridge.SelectionProviders or {}
+Bridge.SelectionProviderOrder = Bridge.SelectionProviderOrder or {}
+Bridge.PresentationProviders = Bridge.PresentationProviders or {}
+Bridge.PresentationProviderOrder = Bridge.PresentationProviderOrder or {}
 
-Bridge.HandClass = "mc_item_hand"
-Bridge.InventoryClass = "mc_inventory"
+Bridge.HandClass = Bridge.HandClass or nil
+Bridge.InventoryClass = Bridge.InventoryClass or nil
+Bridge.BaseClassOwner = Bridge.BaseClassOwner or nil
 
 local function validIdentifier( value, maximum )
 	return isstring( value ) and value ~= "" and #value <= maximum
@@ -47,6 +52,107 @@ local function rebuildResolverOrder()
 	Bridge.ResolverOrder = order
 end
 
+local function rebuildProviderOrder( registry, target )
+	local order = {}
+	for id, entry in pairs( registry ) do
+		order[#order + 1] = {
+			id = id,
+			priority = entry.priority,
+			provider = entry.provider,
+		}
+	end
+	table.sort( order, function( left, right )
+		if left.priority == right.priority then return left.id < right.id end
+		return left.priority > right.priority
+	end )
+	Bridge[target] = order
+end
+
+function Bridge.RegisterSelectionProvider( id, provider, priority )
+	if not validIdentifier( id, 64 ) then return false, "invalid_provider_id" end
+	if not istable( provider ) or not isfunction( provider.GetSelected ) then
+		return false, "invalid_selection_provider"
+	end
+	if provider.IsSessionOpen ~= nil and not isfunction( provider.IsSessionOpen ) then
+		return false, "invalid_session_provider"
+	end
+	Bridge.SelectionProviders[id] = {
+		provider = provider,
+		priority = math.Clamp( math.floor( tonumber( priority ) or 0 ), -32768, 32767 ),
+	}
+	rebuildProviderOrder( Bridge.SelectionProviders, "SelectionProviderOrder" )
+	return true
+end
+
+function Bridge.UnregisterSelectionProvider( id )
+	if not validIdentifier( id, 64 ) or not Bridge.SelectionProviders[id] then return false end
+	Bridge.SelectionProviders[id] = nil
+	rebuildProviderOrder( Bridge.SelectionProviders, "SelectionProviderOrder" )
+	return true
+end
+
+function Bridge.GetSelected( ply )
+	for _, entry in ipairs( Bridge.SelectionProviderOrder ) do
+		local ok, stack = pcall( entry.provider.GetSelected, ply )
+		if ok then return API.DeepCopy and API.DeepCopy( stack ) or stack end
+		if ErrorNoHalt then
+			ErrorNoHalt( "[MC] hand selection provider " .. entry.id .. " failed: " .. tostring( stack ) .. "\n" )
+		end
+	end
+	return nil
+end
+
+function Bridge.IsSelectionSessionOpen( ply )
+	for _, entry in ipairs( Bridge.SelectionProviderOrder ) do
+		if isfunction( entry.provider.IsSessionOpen ) then
+			local ok, open = pcall( entry.provider.IsSessionOpen, ply )
+			if ok then return open == true end
+			if ErrorNoHalt then
+				ErrorNoHalt( "[MC] hand session provider " .. entry.id .. " failed: " .. tostring( open ) .. "\n" )
+			end
+		end
+	end
+	return false
+end
+
+function Bridge.RegisterPresentationProvider( id, provider, priority )
+	if not validIdentifier( id, 64 ) then return false, "invalid_provider_id" end
+	if not isfunction( provider ) then return false, "invalid_presentation_provider" end
+	Bridge.PresentationProviders[id] = {
+		provider = provider,
+		priority = math.Clamp( math.floor( tonumber( priority ) or 0 ), -32768, 32767 ),
+	}
+	rebuildProviderOrder( Bridge.PresentationProviders, "PresentationProviderOrder" )
+	return true
+end
+
+function Bridge.UnregisterPresentationProvider( id )
+	if not validIdentifier( id, 64 ) or not Bridge.PresentationProviders[id] then return false end
+	Bridge.PresentationProviders[id] = nil
+	rebuildProviderOrder( Bridge.PresentationProviders, "PresentationProviderOrder" )
+	return true
+end
+
+function Bridge.ApplyPresentation( weapon, stack, ply )
+	local handled = false
+	for _, entry in ipairs( Bridge.PresentationProviderOrder ) do
+		local ok, result = pcall(
+			entry.provider,
+			weapon,
+			API.DeepCopy and API.DeepCopy( stack ) or stack,
+			ply
+		)
+		if not ok then
+			if ErrorNoHalt then
+				ErrorNoHalt( "[MC] hand presentation provider " .. entry.id .. " failed: " .. tostring( result ) .. "\n" )
+			end
+		elseif result ~= false then
+			handled = true
+		end
+	end
+	return handled
+end
+
 function Bridge.RegisterResolver( id, resolver, priority )
 	if not validIdentifier( id, 64 ) then return false, "invalid_resolver_id" end
 	if not isfunction( resolver ) then return false, "invalid_resolver" end
@@ -55,6 +161,18 @@ function Bridge.RegisterResolver( id, resolver, priority )
 	Bridge.ResolverErrors[id] = nil
 	rebuildResolverOrder()
 	if MC.RunEvent then MC.RunEvent( "MC.HandWeaponResolversChanged", id ) end
+	return true
+end
+
+function Bridge.ConfigureBaseClasses( owner, handClass, inventoryClass )
+	if not validIdentifier( owner, 64 ) then return false, "invalid_owner" end
+	if not validClassName( handClass ) or not validClassName( inventoryClass ) then
+		return false, "invalid_weapon_class"
+	end
+	if Bridge.BaseClassOwner and Bridge.BaseClassOwner ~= owner then return false, "base_classes_owned" end
+	Bridge.BaseClassOwner = owner
+	Bridge.HandClass = handClass
+	Bridge.InventoryClass = inventoryClass
 	return true
 end
 
@@ -93,14 +211,11 @@ function Bridge.IsInventoryControlledClass( value )
 end
 
 local function resolverStackCopy( stack )
-	if MC.CopyItemStack then return MC.CopyItemStack( stack ) end
 	return API.DeepCopy and API.DeepCopy( stack ) or stack
 end
 
 function Bridge.Resolve( stack, ply )
-	if type( stack ) ~= "table" or ( MC.IsEmptyItemStack and MC.IsEmptyItemStack( stack ) ) then
-		return nil, "empty_stack"
-	end
+	if type( stack ) ~= "table" then return nil, "empty_stack" end
 	for _, entry in ipairs( Bridge.ResolverOrder ) do
 		local called, resolved = pcall( entry.resolve, resolverStackCopy( stack ), ply )
 		if not called then
@@ -124,12 +239,32 @@ end
 API.HandWeapon = API.HandWeapon or {}
 local HandWeapon = API.HandWeapon
 
+function HandWeapon.ConfigureBaseClasses( owner, handClass, inventoryClass )
+	return Bridge.ConfigureBaseClasses( owner, handClass, inventoryClass )
+end
+
 function HandWeapon.RegisterResolver( id, resolver, priority )
 	return Bridge.RegisterResolver( id, resolver, priority )
 end
 
 function HandWeapon.UnregisterResolver( id )
 	return Bridge.UnregisterResolver( id )
+end
+
+function HandWeapon.RegisterSelectionProvider( id, provider, priority )
+	return Bridge.RegisterSelectionProvider( id, provider, priority )
+end
+
+function HandWeapon.UnregisterSelectionProvider( id )
+	return Bridge.UnregisterSelectionProvider( id )
+end
+
+function HandWeapon.RegisterPresentationProvider( id, provider, priority )
+	return Bridge.RegisterPresentationProvider( id, provider, priority )
+end
+
+function HandWeapon.UnregisterPresentationProvider( id )
+	return Bridge.UnregisterPresentationProvider( id )
 end
 
 function HandWeapon.RegisterManagedClass( className )
@@ -156,4 +291,16 @@ function HandWeapon.Refresh( ply )
 	if not SERVER then return false, "server_only" end
 	if not Bridge.Reconcile then return false, "hand_weapon_bridge_unavailable" end
 	return Bridge.Reconcile( ply, nil, { reason = "api_refresh" } )
+end
+
+function HandWeapon.Reconcile( ply, stack, context )
+	if not SERVER then return false, "server_only" end
+	if not Bridge.Reconcile then return false, "hand_weapon_bridge_unavailable" end
+	return Bridge.Reconcile( ply, stack, context )
+end
+
+function HandWeapon.QueueRefresh( ply, stack, context )
+	if not SERVER then return false, "server_only" end
+	if not Bridge.QueueReconcile then return false, "hand_weapon_bridge_unavailable" end
+	return Bridge.QueueReconcile( ply, stack, context )
 end

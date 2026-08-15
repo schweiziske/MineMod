@@ -263,8 +263,10 @@ end
 -- opener client-only, but explicitly bridge Reload across realms there.
 function SWEP:OpenCreativeInventoryClient()
 	if not CLIENT then return end
-	if MC.InventoryUI and MC.InventoryUI.ToggleFromWeapon
-	and MC.InventoryUI.ToggleFromWeapon( self ) then
+	local inventoryUI = MC.API and MC.API.GetCapability
+		and MC.API.GetCapability( "mc.game.inventory_ui", 1 ) or nil
+	if inventoryUI and inventoryUI.ToggleFromWeapon
+	and inventoryUI.ToggleFromWeapon( self ) then
 		return
 	end
 	if IsValid( MC.CreativeFrame ) and MC.CreativeFrame:IsVisible() then return end

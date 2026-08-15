@@ -113,16 +113,9 @@ Net.MessageNames = {
 	"mc_preset_cover_begin", "mc_preset_cover_part", "mc_preset_cover_ack",
 	"mc_preset_cover_req", "mc_preset_cover_download_begin", "mc_preset_cover_download_part",
 	"mc_sign_open", "mc_sign_update", "mc_banner_update",
-	"mc_mining_progress",
 
 	"mc_cluster_convert", "mc_cluster_data_req", "mc_cluster_data",
 	"mc_cluster_paste", "mc_cluster_break",
-
-	-- Server-authoritative item inventory/container protocol.
-	"mc_inventory_sync_begin", "mc_inventory_sync_part", "mc_inventory_sync_end",
-	"mc_inventory_delta", "mc_inventory_open_request", "mc_inventory_open",
-	"mc_inventory_action", "mc_inventory_creative_pick", "mc_inventory_close", "mc_inventory_resync", "mc_inventory_select",
-	"mc_inventory_recipe_place", "mc_equipment_delta", "mc_block_use_request",
 
 	-- Phase 4 state-aware transport.
 	"mc_state_hello", "mc_state_hello_ack",

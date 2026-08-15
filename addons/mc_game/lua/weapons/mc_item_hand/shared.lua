@@ -65,6 +65,58 @@ local function traceCombatTarget( ply, trace )
 	return target
 end
 
+local function copiedInteractionStack( stack )
+	if not istable( stack ) then return nil end
+	if MC.CopyItemStack then return MC.CopyItemStack( stack ) end
+	if MC.API and MC.API.DeepCopy then return MC.API.DeepCopy( stack ) end
+	return table.Copy and table.Copy( stack ) or stack
+end
+
+local function hasCreativeEntityReach( ply )
+	if SERVER then
+		return MC.SV and MC.SV.PlayerIsCreative and MC.SV.PlayerIsCreative( ply ) == true
+	end
+	return MC.PlayerIsCreative and MC.PlayerIsCreative( ply ) == true
+end
+
+local function traceItemEntityTarget( ply )
+	if not IsValid( ply ) or not ply.GetEyeTrace then return nil, nil end
+	local trace = ply:GetEyeTrace()
+	local target = trace and trace.Entity or nil
+	if not IsValid( target ) or target == ply or target.IsWorld and target:IsWorld() then return nil, trace end
+	if COMBAT_INFRASTRUCTURE[target.GetClass and target:GetClass() or ""] then return nil, trace end
+
+	-- Player.DEFAULT_ENTITY_INTERACTION_RANGE is 3 blocks; creative adds the
+	-- +2 attribute modifier in Player.java.  Use the traced surface point so a
+	-- large entity is not rejected because its origin/centre is farther away.
+	local reachBlocks = 3 + ( hasCreativeEntityReach( ply ) and 2 or 0 )
+	local reach = ( tonumber( MC.BS or MC.Config and MC.Config.BlockSize ) or 36.5 ) * reachBlocks
+	local start = ply.GetShootPos and ply:GetShootPos() or ply:EyePos()
+	local hit = trace.HitPos or target.WorldSpaceCenter and target:WorldSpaceCenter() or target:GetPos()
+	if hit and ( hit - start ):LengthSqr() > reach * reach + 1 then return nil, trace end
+	return target, trace
+end
+
+local function runItemEntityInteraction( ply, target, stack, trace, preview, source )
+	if not IsValid( ply ) or not IsValid( target ) or not istable( stack ) then return nil end
+	local eventStack = copiedInteractionStack( stack )
+	local eventContext = {
+		preview = preview == true,
+		hand = "mainhand",
+		source = source or "minecraft_hand",
+		hitPos = trace and trace.HitPos and Vector( trace.HitPos ) or nil,
+		hitNormal = trace and trace.HitNormal and Vector( trace.HitNormal ) or nil,
+	}
+	local ok, result = pcall( function()
+		return hook.Run( "MC.UseItemOnEntity", ply, target, eventStack, eventContext )
+	end )
+	if ok then return result end
+	if ErrorNoHalt then
+		ErrorNoHalt( "[MC Game] event listener error in MC.UseItemOnEntity: " .. tostring( result ) .. "\n" )
+	end
+	return nil
+end
+
 local function breakTarget( ply, aim, trace )
 	if aim then return aim.bx, aim.by, aim.bz end
 	if not trace or not trace.Hit or not MC.WorldToCell then return nil end
@@ -162,6 +214,11 @@ end
 local function proxyWorldInteractionCandidate( ply, stack )
 	local vehicle = MC.TraceMinecraftVehicle and select( 1, MC.TraceMinecraftVehicle( ply, 3, MASK_SOLID ) ) or nil
 	if IsValid( vehicle ) then return "vehicle", vehicle end
+	local entity, trace = traceItemEntityTarget( ply )
+	if IsValid( entity ) then
+		local preview = runItemEntityInteraction( ply, entity, stack, trace, true, "inventory_proxy_preview" )
+		if preview ~= nil then return "entity", { entity = entity, trace = trace } end
+	end
 	local aim = aimedBlock( ply )
 	if aim and blockHasUse( aim.Block, stack ) then return "block", aim end
 	return nil, nil
@@ -175,6 +232,11 @@ local function performProxyWorldInteraction( ply, stack, kind, target )
 	if MC.SV.CancelMining then MC.SV.CancelMining( ply, "secondary_attack" ) end
 	if kind == "vehicle" and MC.SV.UseMinecraftVehicle then
 		return MC.SV.UseMinecraftVehicle( ply, target ) == true
+	end
+	if kind == "entity" and IsValid( target.entity ) then
+		local result = runItemEntityInteraction(
+			ply, target.entity, stack, target.trace, false, "inventory_proxy" )
+		return result ~= nil
 	end
 	if kind == "block" and MC.SV.Use then
 		local definition = stack and MC.GetItem( stack.item ) or nil
@@ -478,13 +540,23 @@ function SWEP:SecondaryAttack()
 		return
 	end
 	local aim = aimedBlock( ply )
-	local trace = aim or ply:GetEyeTrace()
+	local eyeTrace = ply:GetEyeTrace()
+	local trace = aim or eyeTrace
 	if not trace then self.MCSecondaryHeld = false return end
 	if SERVER then
+		local record, stack, definition = selectedRecord( ply )
+		local entity = traceItemEntityTarget( ply )
+		if IsValid( entity ) then
+			local entityResult = runItemEntityInteraction(
+				ply, entity, stack, eyeTrace, false, "hand_secondary" )
+			if entityResult ~= nil then
+				self.MCSecondaryMode = entityResult == true and "entity" or "entity_rejected"
+				return
+			end
+		end
 		local ux, uy, uz
 		if aim then ux, uy, uz = aim.bx, aim.by, aim.bz
 		elseif trace.Hit and MC.WorldToCell then ux, uy, uz = MC.WorldToCell( trace.HitPos - trace.HitNormal * 0.5 ) end
-		local record, stack, definition = selectedRecord( ply )
 		-- Functional blocks use the press edge, like the legacy creative placer.
 		-- Automatic secondary attacks must not toggle a gate/door every tick while
 		-- the player keeps the button held down.
@@ -537,6 +609,15 @@ function SWEP:SecondaryAttack()
 	elseif IsFirstTimePredicted() and ply == LocalPlayer() then
 		local state = MC.ClientInventory
 		local stack = state and state.slots[( state.selected or 0 ) + 1] or nil
+		local entity = traceItemEntityTarget( ply )
+		if IsValid( entity ) then
+			local entityResult = runItemEntityInteraction(
+				ply, entity, stack, eyeTrace, true, "hand_preview" )
+			if entityResult ~= nil then
+				self.MCSecondaryMode = entityResult == true and "entity" or "entity_rejected"
+				return
+			end
+		end
 		-- Match the server's use-first order. Without this guard the client draws
 		-- a predicted placement beside doors, gates, chests, and other usable
 		-- blocks while the server correctly performs only their OnUse action.
@@ -840,8 +921,9 @@ if CLIENT then
 			g = math.Clamp( tonumber( lighting.g ) or r, 0, 1 )
 			b = math.Clamp( tonumber( lighting.b ) or r, 0, 1 )
 		end
-		if MC.ScaleDynamicLightingRGB then
-			r, g, b = MC.ScaleDynamicLightingRGB( r, g, b, HELD_ITEM_LIGHT_GAIN )
+		local Light = MC.API and MC.API.Light
+		if Light and Light.ScaleRGB then
+			r, g, b = Light.ScaleRGB( r, g, b, HELD_ITEM_LIGHT_GAIN )
 		else
 			r = math.Clamp( r * HELD_ITEM_LIGHT_GAIN, 0, HELD_ITEM_LIGHT_GAIN )
 			g = math.Clamp( g * HELD_ITEM_LIGHT_GAIN, 0, HELD_ITEM_LIGHT_GAIN )

@@ -3,10 +3,8 @@
 if not SERVER then return end
 
 MC = MC or {}
-MC.SV = MC.SV or {}
 MC.HandWeaponBridge = MC.HandWeaponBridge or {}
 
-local SV = MC.SV
 local Bridge = MC.HandWeaponBridge
 local SWITCH_CONFIRM_ATTEMPTS = 8
 
@@ -94,7 +92,7 @@ local function cleanupProxyWeapons( ply, keepClass )
 end
 
 local function selectedStack( ply )
-	return SV.GetSelectedPlayerStack and SV.GetSelectedPlayerStack( ply ) or nil
+	return Bridge.GetSelected and Bridge.GetSelected( ply ) or nil
 end
 
 local function finishSwitch( ply, targetClass, targetWeapon, generation, attempt )
@@ -164,12 +162,11 @@ function Bridge.Reconcile( ply, stack, context )
 	if not mayAutoSwitch( currentWeapon, context ) then return false, "foreign_weapon_active" end
 	local currentClass = IsValid( currentWeapon ) and currentWeapon:GetClass() or nil
 	local generation = nextSwitchGeneration( ply )
-	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply, false ) or nil
 	-- Any open inventory/container session owns the weapon lifecycle. Slot changes
 	-- update the authoritative selection immediately, but the visible SWEP changes
 	-- only after ClosePlayerInventory clears the session and republishes the held
 	-- item. This keeps the screen open while clicking ordinary or enchanted tools.
-	if record and record.session then
+	if Bridge.IsSelectionSessionOpen and Bridge.IsSelectionSessionOpen( ply ) then
 		setTransition( ply, nil )
 		return false, "inventory_screen_open"
 	end
@@ -193,12 +190,7 @@ function Bridge.Reconcile( ply, stack, context )
 	if targetClass ~= Bridge.HandClass and targetClass ~= Bridge.InventoryClass then
 		weapon.MCHandWeaponBridgeProxy = true
 		weapon:SetNW2Bool( "MCITEM_InventoryProxy", true )
-		if isfunction( Bridge.ApplyWeaponPresentation ) then
-			local ok, presentationError = pcall( Bridge.ApplyWeaponPresentation, weapon, stack, ply )
-			if not ok and ErrorNoHalt then
-				ErrorNoHalt( "[MC] hand weapon presentation failed: " .. tostring( presentationError ) .. "\n" )
-			end
-		end
+		if Bridge.ApplyPresentation then Bridge.ApplyPresentation( weapon, stack, ply ) end
 	end
 	if switching then
 		ply:SelectWeapon( targetClass )
@@ -215,12 +207,6 @@ function Bridge.Reconcile( ply, stack, context )
 	end
 	return true, targetClass
 end
-
-hook.Add( "MC.PlayerHeldItemChanged", "mc_hand_weapon_bridge_selected_item", function( ply, _, stack, context )
-	local queuedContext = copyContext( context )
-	queuedContext.allowMissingWeapon = true
-	Bridge.QueueReconcile( ply, stack, queuedContext )
-end )
 
 local refreshQueued = false
 local function queueRefreshAll()

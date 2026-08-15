@@ -492,6 +492,82 @@ net.Receive( "mc_inventory_action", function( _, ply )
 	end
 end )
 
+-- Ordered business-menu button. Unlike a normal slot click, this carries only
+-- an option index; the active container owns all authoritative computation and
+-- mutation. It deliberately shares the normal token/rate/action/revision gate.
+net.Receive( "mc_inventory_menu_button", function( _, ply )
+	local containerId = net.ReadUInt( 16 )
+	local token = net.ReadString()
+	local revision = net.ReadUInt( 32 )
+	local actionId = net.ReadUInt( 16 )
+	local button = net.ReadUInt( 2 )
+	local record = SV.GetPlayerInventoryRecord( ply, false )
+	local session, container = record and record.session, record and activeContainer( record )
+	if not record or not session or not container then return end
+	local function finishState( result, errorCode )
+		if type( container.afterMenuButton ) == "function" then
+			pcall( container.afterMenuButton, container, result, errorCode )
+		elseif type( container.sendMenuState ) == "function" then
+			pcall( container.sendMenuState, container )
+		end
+	end
+	if containerId ~= container.id or token ~= session.token then
+		sendRejected( record, actionId, "invalid_session", true )
+		finishState( nil, "invalid_session" )
+		return
+	end
+	if not sessionStillValid( session ) then
+		sendRejected( record, actionId, "container_unavailable", false )
+		SV.ClosePlayerInventory( ply, "container_unavailable" )
+		return
+	end
+	if session.kind ~= "enchanting_table" or type( container.menuButton ) ~= "function" then
+		sendRejected( record, actionId, "menu_button_unavailable", false )
+		finishState( nil, "menu_button_unavailable" )
+		return
+	end
+	if button < 0 or button > 2 then
+		sendRejected( record, actionId, "invalid_menu_button", false )
+		finishState( nil, "invalid_menu_button" )
+		return
+	end
+	if not actionRateAllowed( record ) then
+		sendRejected( record, actionId, "rate_limited", false )
+		finishState( nil, "rate_limited" )
+		return
+	end
+	if not actionSequenceAllowed( session, actionId ) then
+		sendRejected( record, actionId, "stale_action", true )
+		finishState( nil, "stale_action" )
+		return
+	end
+	-- Menu options can change when bookshelves or the seed change without a
+	-- client slot click. Require the exact advertised revision so an old button
+	-- can never silently select a newly generated option.
+	if revision ~= container.revision then
+		sendRejected( record, actionId, "revision_mismatch", true )
+		finishState( nil, "revision_mismatch" )
+		return
+	end
+	session.lastActivity = CurTime()
+	local context = {
+		player = ply,
+		actionId = actionId,
+		creative = creativeAllowed( ply ),
+		canDrop = type( SV.SpawnItemDrop ) == "function",
+		menuButton = true,
+	}
+	local called, result, errorCode = pcall( container.menuButton, container, button, context )
+	if not called or type( result ) ~= "table" or result.ok ~= true then
+		errorCode = called and ( errorCode or result and result.error or "menu_button_rejected" ) or "menu_button_error"
+		sendRejected( record, actionId, errorCode, errorCode == "revision_mismatch" or not called )
+		finishState( nil, errorCode )
+		return
+	end
+	if not context.inventoryDeltaPublished then sendDelta( record, result, true, actionId, "" ) end
+	finishState( result, nil )
+end )
+
 -- Recipe-book placement is a separate ordered action.  The client sends only
 -- the recipe identifier; the server resolves the generated definition,
 -- checks the active menu dimensions and atomically selects real input stacks.

@@ -3,6 +3,11 @@
 MC = MC or {}
 MC.SV = MC.SV or {}
 
+local API = MC.API or {}
+local World = API.World or {}
+local Coords = API.Coords or {}
+local Blocks = API.Blocks or {}
+local PlayerAPI = API.Player or {}
 local SV = MC.SV
 local ANVIL_SLOTS = 3
 local INVENTORY_SIZE = 36
@@ -25,11 +30,9 @@ if resource and resource.AddFile then
 end
 
 local function blockInfoAt( bx, by, bz )
-	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or nil
-	local schema = stateId and MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( stateId ) or nil
-	local block = schema and MC.Blocks and MC.Blocks[schema.blockId] or nil
-	if not block and MC.GetBlock then block = MC.Blocks and MC.Blocks[MC.GetBlock( bx, by, bz )] or nil end
-	return block and ( block.mcid or block.name ) or nil, stateId, block
+	if type( World.GetBlockInfo ) ~= "function" then return nil end
+	local info = World.GetBlockInfo( bx, by, bz )
+	return info and ( info.mcid or info.name ) or nil, info and info.stateId or 0, info
 end
 
 local function anvilStillValid( ply, bx, by, bz )
@@ -38,8 +41,8 @@ local function anvilStillValid( ply, bx, by, bz )
 	if name ~= "minecraft:anvil" and name ~= "minecraft:chipped_anvil" and name ~= "minecraft:damaged_anvil" then
 		return false
 	end
-	local reach = MC.Config and MC.Config.Reach and MC.Config.Reach:GetFloat() or 0
-	return reach <= 0 or not MC.ReachAllowsEye or MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, reach )
+	if type( PlayerAPI.CanReachCell ) ~= "function" then return false end
+	return PlayerAPI.CanReachCell( ply, bx, by, bz ) == true
 end
 
 local function playerSlots( storage, offset )
@@ -122,6 +125,10 @@ local function takeResult( menu, slotIndex, button, state, context, mode )
 	local result = MC.ContainerGetStack( menu, data.resultSlot )
 	local info = data.info or {}
 	if MC.IsEmptyItemStack( result ) or info.resultAvailable ~= true then return false, info.error or "no_anvil_result" end
+	if data.creative ~= true then
+		if type( SV.PlayerHasExperienceLevels ) ~= "function" then return false, "experience_service_unavailable" end
+		if not SV.PlayerHasExperienceLevels( data.record.owner, info.cost ) then return false, "insufficient_experience" end
+	end
 
 	local inserted, insertError
 	if mode == "quick_move" then
@@ -153,9 +160,12 @@ local function takeResult( menu, slotIndex, button, state, context, mode )
 		cost = info.cost,
 		infinite = data.creative == true,
 		bx = data.bx, by = data.by, bz = data.bz,
+		renameText = data.renameText,
+		renameExplicit = data.renameExplicit,
+		leftHash = data.leftHash,
 	}
 	data.renameText, data.renameExplicit, data.leftHash = "", false, nil
-	return refreshResult( menu )
+	return true
 end
 
 local function sendState( record )
@@ -173,6 +183,8 @@ local function sendState( record )
 		net.WriteUInt( math.Clamp( math.floor( tonumber( info.cost ) or 0 ), 0, 2147483647 ), 32 )
 		net.WriteBool( info.resultAvailable == true )
 		net.WriteBool( info.tooExpensive == true and data.creative ~= true )
+		net.WriteBool( data.creative == true or info.resultAvailable == true
+			and SV.PlayerHasExperienceLevels and SV.PlayerHasExperienceLevels( ply, info.cost ) == true )
 		net.WriteString( string.sub( tostring( info.error or "" ), 1, 96 ) )
 	net.Send( ply )
 	return true
@@ -180,25 +192,32 @@ end
 
 local function damageAnvilAfterUse( data )
 	if not data or data.infinite == true then
-		if data then sound.Play( "mc/random/anvil_use.ogg", MC.CellWorldCenter( data.bx, data.by, data.bz ), 75, 100, 1 ) end
+		if data then sound.Play( "mc/random/anvil_use.ogg", Coords.CellCenter( data.bx, data.by, data.bz ), 75, 100, 1 ) end
 		return
 	end
-	local position = MC.CellWorldCenter( data.bx, data.by, data.bz )
+	local position = Coords.CellCenter( data.bx, data.by, data.bz )
 	if math.Rand( 0, 1 ) >= 0.12 then sound.Play( "mc/random/anvil_use.ogg", position, 75, 100, 1 ) return end
 	local name, stateId = blockInfoAt( data.bx, data.by, data.bz )
 	local nextName = name == "minecraft:anvil" and "minecraft:chipped_anvil"
 		or name == "minecraft:chipped_anvil" and "minecraft:damaged_anvil" or nil
 	if nextName then
-		local nextResolved = MC.ResolveBlock and MC.ResolveBlock( nextName ) or nil
-		local nextState = nextResolved and MC.DefaultBlockState and MC.DefaultBlockState( nextResolved.id ) or nil
-		local facing = stateId and MC.GetStateProperty and MC.GetStateProperty( stateId, "facing" ) or nil
-		if nextState and facing and MC.StateWith then nextState = MC.StateWith( nextState, "facing", facing ) or nextState end
-		if nextState and SV.SetBlockState then
-			SV.SetBlockState( data.bx, data.by, data.bz, nextState, { actor = nil, fx = false, handlers = false, compareCollision = true } )
+		local nextResolved = type( Blocks.Resolve ) == "function" and Blocks.Resolve( nextName ) or nil
+		local nextState = nextResolved and type( Blocks.DefaultState ) == "function"
+			and Blocks.DefaultState( nextResolved.id ) or nil
+		local facing = stateId and type( Blocks.GetProperty ) == "function"
+			and Blocks.GetProperty( stateId, "facing" ) or nil
+		if nextState and facing and type( Blocks.WithProperty ) == "function" then
+			nextState = Blocks.WithProperty( nextState, "facing", facing ) or nextState
+		end
+		if nextState and type( World.SetBlock ) == "function" then
+			World.SetBlock( data.bx, data.by, data.bz, nextState,
+				{ actor = nil, fx = false, handlers = false, compareCollision = true } )
 		end
 		sound.Play( "mc/random/anvil_use.ogg", position, 75, 100, 1 )
 	else
-		if SV.SetBlockState then SV.SetBlockState( data.bx, data.by, data.bz, 0, { actor = nil, fx = false, handlers = false } ) end
+		if type( World.RemoveBlock ) == "function" then
+			World.RemoveBlock( data.bx, data.by, data.bz, { actor = nil, fx = false, handlers = false } )
+		end
 		sound.Play( "mc/random/anvil_break.ogg", position, 75, 100, 1 )
 	end
 end
@@ -236,14 +255,57 @@ local function buildMenu( ply, record, bx, by, bz )
 	menu.anvil = {
 		leftSlot = 0, rightSlot = 1, resultSlot = 2, playerTargets = targets,
 		renameText = "", renameExplicit = false,
-		creative = SV.PlayerIsCreative and SV.PlayerIsCreative( ply ) == true,
+		creative = SV.PlayerHasInfiniteMaterials and SV.PlayerHasInfiniteMaterials( ply ) == true,
+		record = record,
 		bx = bx, by = by, bz = bz,
 	}
-	menu.beforeCommit = refreshResult
+	menu.beforeCommit = function( committed, context )
+		local refreshed, refreshError = refreshResult( committed )
+		if not refreshed then return false, refreshError or "anvil_result_refresh_failed" end
+		local use = committed.anvil and committed.anvil.pendingUse
+		if use and use.infinite ~= true and not use.experienceToken then
+			if type( SV.TrySpendPlayerExperienceLevels ) ~= "function" then
+				return false, "experience_service_unavailable"
+			end
+			local spendContext = {
+				reason = "anvil_take_result",
+				actionId = context and context.actionId,
+				cost = use.cost,
+				bx = use.bx, by = use.by, bz = use.bz,
+			}
+			committed.anvil.transactionActive = true
+			local spendCalled, token, spendError = pcall( SV.TrySpendPlayerExperienceLevels,
+				record.owner, use.cost, spendContext )
+			committed.anvil.transactionActive = false
+			if not spendCalled or not token then
+				return false, spendCalled and ( spendError or "insufficient_experience" ) or "experience_spend_error"
+			end
+			use.experienceToken = token
+		end
+		return true
+	end
+	menu.onInputRollback = function( committed, _, context )
+		local use = committed.anvil and committed.anvil.pendingUse
+		if not use then return end
+		if use.experienceToken and SV.RollbackPlayerExperienceSpend then
+			SV.RollbackPlayerExperienceSpend( use.experienceToken, {
+				reason = "anvil_input_rollback",
+				actionId = context and context.actionId,
+			} )
+		end
+		committed.anvil.renameText = use.renameText or ""
+		committed.anvil.renameExplicit = use.renameExplicit == true
+		committed.anvil.leftHash = use.leftHash
+		committed.anvil.pendingUse = nil
+		refreshResult( committed )
+		sendState( record )
+	end
 	menu.takeResult = takeResult
 	local refreshed, refreshError = refreshResult( menu )
 	if not refreshed then return nil, refreshError or "anvil_result_refresh_failed" end
 	menu.onCommit = function( committed, result, context )
+		local use = committed.anvil and committed.anvil.pendingUse
+		if use then committed.anvil.pendingUse = nil end
 		local playerChanged = false
 		for _, index in ipairs( result.changedSlots or {} ) do if menuMap[index] ~= nil then playerChanged = true break end end
 		committed.revision = math.max( committed.revision, record.container.revision or 0 )
@@ -253,9 +315,9 @@ local function buildMenu( ply, record, bx, by, bz )
 			if SV.UpdatePlayerHeldNetwork then SV.UpdatePlayerHeldNetwork( record ) end
 		end
 		if SV.PublishActiveInventoryCommit then SV.PublishActiveInventoryCommit( record, result, context or {} ) end
-		local use = committed.anvil and committed.anvil.pendingUse
-		if use then committed.anvil.pendingUse = nil damageAnvilAfterUse( use ) end
+		if use then damageAnvilAfterUse( use ) end
 		sendState( record )
+		return true
 	end
 	return menu
 end
@@ -272,7 +334,6 @@ end
 
 function SV.OpenAnvil( ply, bx, by, bz )
 	if not anvilStillValid( ply, bx, by, bz ) then return false, "anvil_unavailable" end
-	if not SV.PlayerIsCreative or not SV.PlayerIsCreative( ply ) then return false, "creative_only" end
 	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply ) or nil
 	if not record then return false, "inventory_not_loaded" end
 	if record.session and SV.ClosePlayerInventory then SV.ClosePlayerInventory( ply, "switch" ) end
@@ -288,7 +349,7 @@ function SV.OpenAnvil( ply, bx, by, bz )
 		validate = function() return anvilStillValid( ply, bx, by, bz ) end,
 		onClose = function( closedRecord, closedSession )
 			local closedMenu = closedSession.container
-			local position = MC.CellWorldCenter( bx, by, bz )
+			local position = Coords.CellCenter( bx, by, bz )
 			local before = MC.ContainerSnapshot( closedRecord.container )
 			returnInputStack( closedRecord, closedMenu, 0, position )
 			returnInputStack( closedRecord, closedMenu, 1, position )
@@ -323,7 +384,6 @@ net.Receive( "mc_anvil_rename", function( bytes, ply )
 		SV.ClosePlayerInventory( ply, "container_unavailable" )
 		return
 	end
-	if not SV.PlayerIsCreative or not SV.PlayerIsCreative( ply ) then SV.ClosePlayerInventory( ply, "creative_only" ) return end
 	local now = CurTime()
 	local rate = session.anvilRenameRate
 	if not rate or now - rate.startedAt >= 1 then
@@ -360,5 +420,14 @@ hook.Add( "MC.BlocksChanged", "mc_anvil_menu_validity", function()
 		if session and session.kind == "anvil" and not session.validate() then
 			SV.ClosePlayerInventory( ply, "anvil_unavailable" )
 		end
+	end
+end )
+
+hook.Add( "MC.PlayerExperienceChanged", "mc_anvil_experience_refresh", function( ply )
+	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply, false ) or nil
+	local session = record and record.session
+	local data = session and session.container and session.container.anvil
+	if session and session.kind == "anvil" and data and data.transactionActive ~= true then
+		sendState( record )
 	end
 end )

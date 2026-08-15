@@ -6,13 +6,16 @@ MC = MC or {}
 MC.InventoryUI = MC.InventoryUI or {}
 
 local UI = MC.InventoryUI
+local HandWeapon = MC.API and MC.API.HandWeapon or {}
 
 function UI.IsInventoryWeapon( weapon )
 	if not IsValid( weapon ) then return false end
 	local class = weapon:GetClass()
 	if class == "mc_creative_placer" then return true end
 	local owner = weapon:GetOwner()
-	if MC.IsInventoryWeaponActive and IsValid( owner ) then return MC.IsInventoryWeaponActive( owner ) end
+	if type( HandWeapon.IsInventoryActive ) == "function" and IsValid( owner ) then
+		return HandWeapon.IsInventoryActive( owner ) == true
+	end
 	return class == "mc_inventory" or class == "mc_item_hand"
 end
 

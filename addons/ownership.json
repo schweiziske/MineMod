@@ -18,11 +18,7 @@
     "mc_preset_placer": "engine"
   },
   "knownMixed": [
-    "entities/mc_boat",
-    "entities/mc_minecart",
-    "entities/mc_primed_tnt",
     "entities/mc_item_drop",
-    "weapons/mc_creative_placer",
     "weapons/mc_item_hand"
   ]
 }

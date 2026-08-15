@@ -15,6 +15,7 @@ net.Receive( "mc_anvil_state", function()
 	local cost = net.ReadUInt( 32 )
 	local resultAvailable = net.ReadBool()
 	local tooExpensive = net.ReadBool()
+	local canTake = net.ReadBool()
 	local errorCode = net.ReadString()
 	local state = MC.ClientInventory
 	local session = state and state.session
@@ -25,6 +26,7 @@ net.Receive( "mc_anvil_state", function()
 		cost = cost,
 		resultAvailable = resultAvailable,
 		tooExpensive = tooExpensive,
+		canTake = canTake,
 		error = errorCode ~= "" and errorCode or nil,
 		receivedAt = RealTime(),
 	}

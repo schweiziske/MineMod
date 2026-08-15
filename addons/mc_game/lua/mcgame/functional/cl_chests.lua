@@ -3,7 +3,14 @@
 
 MC = MC or {}
 
-local BS = MC.BS or 36.5
+local API = MC.API or {}
+local Coords = API.Coords or {}
+local Light = API.Light or {}
+local Network = API.Network or {}
+local Render = API.Render or {}
+local World = API.World or {}
+local BS = Coords.BlockSize and Coords.BlockSize() or 36.5
+local COORD_BITS = Network.CoordinateBits and Network.CoordinateBits() or 20
 local SCALE = BS / 16
 local UP = Vector( 0, 0, 1 )
 local MAX_RENDER_DISTANCE_SQR = ( BS * 64 ) ^ 2
@@ -27,64 +34,35 @@ for baseName in pairs( TEXTURE_BASES ) do
 end
 
 local Entries = {}
-local EntriesByChunk = {}
-local ScannedChunks = {}
 local OpenStates = {}
 local LastChunkRefresh = 0
-local LastGeneration = tonumber( MC.StateWorldGeneration ) or 0
+local EntriesDirty = true
 
 local function cellKey( bx, by, bz )
-	return MC.CellKey and MC.CellKey( bx, by, bz ) or ( bx .. ":" .. by .. ":" .. bz )
-end
-
-local function chunkKeyForCell( bx, by, bz )
-	local cx, cy, cz = MC.CellToChunk( bx, by, bz )
-	return MC.ChunkKey( cx, cy, cz )
+	return tostring( math.floor( tonumber( bx ) or 0 ) ) .. ":"
+		.. tostring( math.floor( tonumber( by ) or 0 ) ) .. ":"
+		.. tostring( math.floor( tonumber( bz ) or 0 ) )
 end
 
 local function removeEntry( key )
-	local entry = Entries[key]
-	if not entry then return end
 	Entries[key] = nil
-	local chunkEntries = EntriesByChunk[entry.chunkKey]
-	if chunkEntries then
-		chunkEntries[key] = nil
-		if next( chunkEntries ) == nil then EntriesByChunk[entry.chunkKey] = nil end
-	end
 end
 
 local function addEntry( bx, by, bz )
 	local key = cellKey( bx, by, bz )
-	local chunkKey = chunkKeyForCell( bx, by, bz )
 	local entry = Entries[key]
 	if entry then
-		entry.bx, entry.by, entry.bz, entry.chunkKey = bx, by, bz, chunkKey
+		entry.bx, entry.by, entry.bz = bx, by, bz
 		return entry
 	end
-	entry = { key = key, chunkKey = chunkKey, bx = bx, by = by, bz = bz, nextLightAt = 0 }
+	entry = { key = key, bx = bx, by = by, bz = bz, nextLightAt = 0 }
 	Entries[key] = entry
-	EntriesByChunk[chunkKey] = EntriesByChunk[chunkKey] or {}
-	EntriesByChunk[chunkKey][key] = true
 	return entry
 end
 
-local function removeChunkEntries( key )
-	for entryKey in pairs( EntriesByChunk[key] or {} ) do Entries[entryKey] = nil end
-	EntriesByChunk[key] = nil
-end
-
-local function scanChunk( key, chunk )
-	removeChunkEntries( key )
-	if MC.ForEachBlockState then
-		MC.ForEachBlockState( chunk, function( bx, by, bz, _, _, _, stateId )
-			if MC.IsChestState and MC.IsChestState( stateId ) then addEntry( bx, by, bz ) end
-		end )
-	end
-	ScannedChunks[key] = chunk
-end
-
 function MC.MarkChestRenderEntriesDirty()
-	Entries, EntriesByChunk, ScannedChunks = {}, {}, {}
+	Entries = {}
+	EntriesDirty = true
 end
 
 function MC.NoteChestStateChanged( bx, by, bz, oldStateId, newStateId )
@@ -96,22 +74,22 @@ function MC.NoteChestStateChanged( bx, by, bz, oldStateId, newStateId )
 end
 
 local function refreshChunks()
-	local generation = tonumber( MC.StateWorldGeneration ) or 0
-	if generation ~= LastGeneration then
-		MC.MarkChestRenderEntriesDirty()
-		OpenStates = {}
-		LastGeneration = generation
-	end
-	for key, chunk in pairs( ScannedChunks ) do
-		if not MC.World or MC.World[key] ~= chunk then
-			removeChunkEntries( key )
-			ScannedChunks[key] = nil
-		end
-	end
-	for key, chunk in pairs( MC.World or {} ) do
-		if ScannedChunks[key] ~= chunk then scanChunk( key, chunk ) end
-	end
+	if not EntriesDirty or not World.ForEachLoadedBlock then return end
+	Entries = {}
+	World.ForEachLoadedBlock( function( bx, by, bz, stateId )
+		if MC.IsChestState and MC.IsChestState( stateId ) then addEntry( bx, by, bz ) end
+	end )
+	EntriesDirty = false
 end
+
+hook.Add( "MC.ClientBlockStateChanged", "mcgame_chest_state_projection", function( bx, by, bz, oldStateId, newStateId )
+	MC.NoteChestStateChanged( bx, by, bz, oldStateId, newStateId )
+end )
+
+hook.Add( "MC.ClientWorldProjectionChanged", "mcgame_chest_world_projection", function()
+	MC.MarkChestRenderEntriesDirty()
+	OpenStates = {}
+end )
 
 local function facingBasis( facing )
 	local forward
@@ -179,32 +157,36 @@ local function drawBox( origin, right, forward, up, x, y, z, width, height, dept
 	mesh.End()
 end
 
-local function entryColor( entry, center )
+local function entryColor( entry, worldCenter )
 	local now = CurTime()
 	if not entry.lightColor or now >= entry.nextLightAt then
 		local r, g, b = 1, 1, 1
-		if MC.SampleDynamicLightingRGB then r, g, b = MC.SampleDynamicLightingRGB( center, 0 ) end
+		if Light.SampleRGB and worldCenter then r, g, b = Light.SampleRGB( worldCenter, 0 ) end
 		entry.lightColor = Color(
 			math.Clamp( math.floor( r * 255 + 0.5 ), 0, 255 ),
 			math.Clamp( math.floor( g * 255 + 0.5 ), 0, 255 ),
 			math.Clamp( math.floor( b * 255 + 0.5 ), 0, 255 ), 255
 		)
-		entry.nextLightAt = now + 0.1 + ( tonumber( entry.key ) or 0 ) % 17 * 0.003
+		local stagger = math.abs( entry.bx * 31 + entry.by * 17 + entry.bz * 13 ) % 17
+		entry.nextLightAt = now + 0.1 + stagger * 0.003
 	end
 	return entry.lightColor
 end
 
-local function drawChest( entry, stateId, openness )
+local function drawChest( entry, stateId, openness, renderCenter )
 	local info = MC.ChestStateInfo and MC.ChestStateInfo( stateId ) or nil
 	if not info then return false end
 	local right, forward = facingBasis( info.facing )
-	local center = MC.CellWorldCenter( entry.bx, entry.by, entry.bz )
-	local base = Vector( center.x, center.y, center.z - BS * 0.5 )
+	renderCenter = renderCenter or ( Coords.CellRenderCenter
+		and Coords.CellRenderCenter( entry.bx, entry.by, entry.bz ) or nil )
+	if not renderCenter then return false end
+	local base = Vector( renderCenter.x, renderCenter.y, renderCenter.z - BS * 0.5 )
 	local origin = base - right * ( BS * 0.5 ) - forward * ( BS * 0.5 )
 	local x, width, lockX, lockWidth, hidden = 1, 14, 7, 2, nil
 	if info.type == "right" then x, width, lockX, lockWidth, hidden = 1, 15, 15, 1, { east = true }
 	elseif info.type == "left" then x, width, lockX, lockWidth, hidden = 0, 15, 0, 1, { west = true } end
-	local color = entryColor( entry, center )
+	local worldCenter = Coords.CellCenter and Coords.CellCenter( entry.bx, entry.by, entry.bz ) or nil
+	local color = entryColor( entry, worldCenter )
 	render.SetMaterial( materialFor( info ) )
 	drawBox( origin, right, forward, UP, x, 0, 1, width, 10, 14, 0, 19, color, hidden )
 
@@ -226,9 +208,9 @@ local function opennessFor( key )
 end
 
 net.Receive( "mc_chest_open_state", function()
-	local bx = net.ReadInt( MC.Net.COORD_BITS )
-	local by = net.ReadInt( MC.Net.COORD_BITS )
-	local bz = net.ReadInt( MC.Net.COORD_BITS )
+	local bx = net.ReadInt( COORD_BITS )
+	local by = net.ReadInt( COORD_BITS )
+	local bz = net.ReadInt( COORD_BITS )
 	local count = net.ReadUInt( 8 )
 	local key = cellKey( bx, by, bz )
 	local state = OpenStates[key] or { openness = 0 }
@@ -249,17 +231,15 @@ hook.Add( "Think", "mc_chest_lid_animation", function()
 	end
 end )
 
-if MC.RegisterSpecialBlockVisualEmitter then
+if Render.RegisterSpecialBlockEmitter then
 	local function chestEmitter( _, _, _, _, bx, by, bz )
 		addEntry( bx, by, bz )
 		return "chest", false, 0
 	end
 	for _, blockName in ipairs( CHEST_BLOCK_NAMES ) do
-		MC.RegisterSpecialBlockVisualEmitter( "minecraft:" .. blockName, chestEmitter )
+		Render.RegisterSpecialBlockEmitter( "minecraft:" .. blockName, chestEmitter )
 	end
-	if MC.MarkAllMeshesDirty and next( MC.World or {} ) ~= nil then
-		MC.MarkAllMeshesDirty( "chest_special_visual_registration" )
-	end
+	if Render.MarkAllDirty then Render.MarkAllDirty() end
 end
 
 hook.Add( "PostDrawTranslucentRenderables", "mc_chest_block_entities", function( _, _, bSky3D )
@@ -268,11 +248,11 @@ hook.Add( "PostDrawTranslucentRenderables", "mc_chest_block_entities", function(
 	if render.PushFilterMin then render.PushFilterMin( TEXFILTER.POINT ) end
 	if render.PushFilterMag then render.PushFilterMag( TEXFILTER.POINT ) end
 	for key, entry in pairs( Entries ) do
-		local center = MC.CellWorldCenter( entry.bx, entry.by, entry.bz )
-		if eye:DistToSqr( center ) <= MAX_RENDER_DISTANCE_SQR then
-			local stateId = MC.GetBlockState( entry.bx, entry.by, entry.bz )
+		local center = Coords.CellRenderCenter and Coords.CellRenderCenter( entry.bx, entry.by, entry.bz ) or nil
+		if center and eye:DistToSqr( center ) <= MAX_RENDER_DISTANCE_SQR then
+			local stateId = World.GetBlockState and World.GetBlockState( entry.bx, entry.by, entry.bz ) or 0
 			if not MC.IsChestState( stateId ) then removeEntry( key )
-			else drawChest( entry, stateId, opennessFor( key ) ) end
+			else drawChest( entry, stateId, opennessFor( key ), center ) end
 		end
 	end
 	if render.PopFilterMag then render.PopFilterMag() end

@@ -1,5 +1,5 @@
 --[[----------------------------------------------------------------------------
-	MC : public API, client layer (v1).
+	MC : public API, client layer (v2).
 
 	Drawing, UI windows, effects, voxel light sampling and render dirty
 	marking. Same contract as the shared layer: validated inputs, no thrown
@@ -212,6 +212,25 @@ function Render.MarkCellDirty( bx, by, bz )
 	if MC.MarkDirty then MC.MarkDirty( x, y, z ) end
 	if MC.MarkLightCellDirty then MC.MarkLightCellDirty( x, y, z ) end
 	return true
+end
+
+-- Register client-only dynamic geometry for a block whose static chunk faces
+-- must be suppressed (for example chests). The callback signature is the
+-- engine mesh-emitter contract; the registry itself remains private.
+function Render.RegisterSpecialBlockEmitter( blockName, emitter )
+	if not MC.RegisterSpecialBlockVisualEmitter then return false, "render_api_unavailable" end
+	if not isfunction( emitter ) then return false, "invalid_emitter" end
+	local registered, err = MC.RegisterSpecialBlockVisualEmitter( blockName, emitter )
+	if not registered then return false, err or "register_failed" end
+	return true
+end
+
+-- Queue every loaded chunk for a geometry/light rebuild. This is intentionally
+-- explicit and expensive; callers should use it only after changing a global
+-- renderer registration or resource profile.
+function Render.MarkAllDirty()
+	if not MC.MarkAllMeshesDirty then return false, "render_api_unavailable" end
+	return true, MC.MarkAllMeshesDirty()
 end
 
 -- Register or replace a client-side atlas pack. A definition may name a

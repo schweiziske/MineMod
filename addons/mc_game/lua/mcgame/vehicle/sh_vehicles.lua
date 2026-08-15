@@ -9,8 +9,17 @@
 MC = MC or {}
 MC.VehicleItems = MC.VehicleItems or {}
 
+local EngineAPI = MC.API
+local World = EngineAPI and EngineAPI.World
+local Blocks = EngineAPI and EngineAPI.Blocks
+local Coords = EngineAPI and EngineAPI.Coords
+local Liquid = EngineAPI and EngineAPI.Liquid
+
+local function engineBlockSize()
+	return Coords and Coords.BlockSize and Coords.BlockSize() or 36.5
+end
+
 local VEHICLE_INTERACT_NET = "mc_minecraft_vehicle_interact"
-if SERVER then util.AddNetworkString( VEHICLE_INTERACT_NET ) end
 
 local BOAT_ITEMS = {
 	["minecraft:oak_boat"] = "oak",
@@ -169,14 +178,14 @@ end
 
 function MC.TraceMinecraftVehicle( ply, reachBlocks, mask )
 	if not IsValid( ply ) or not ply:IsPlayer() or not util or not util.TraceLine then return nil, nil end
-	local start = MC.EntityEyeWorldPos and MC.EntityEyeWorldPos( ply )
+	local start = Coords and Coords.EntityEyeWorldPos and Coords.EntityEyeWorldPos( ply )
 		or ply.GetShootPos and ply:GetShootPos() or ply:EyePos()
 	local direction = ply.GetAimVector and ply:GetAimVector()
 		or ply.EyeAngles and ply:EyeAngles():Forward() or nil
 	if not start or not direction or direction:LengthSqr() <= 0 then return nil, nil end
 	direction = Vector( direction.x, direction.y, direction.z )
 	direction:Normalize()
-	local blockSize = tonumber( MC.BS or MC.Config and MC.Config.BlockSize ) or 36.5
+	local blockSize = engineBlockSize()
 	local reach = blockSize * math.max( 1, tonumber( reachBlocks ) or 5 )
 	local weapon = ply.GetActiveWeapon and ply:GetActiveWeapon() or nil
 	local trace = util.TraceLine( {
@@ -351,13 +360,11 @@ hook.Add( "StartCommand", "mc_minecraft_vehicle_shift_exit", function( ply, comm
 end )
 
 local function isRailState( stateId )
-	local id = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or nil
-	local block = id and MC.Blocks and MC.Blocks[id] or nil
-	local name = block and ( block.mcid or block.name ) or ""
-	return name == "minecraft:rail" or name == "rail"
-		or name == "minecraft:powered_rail" or name == "powered_rail"
-		or name == "minecraft:detector_rail" or name == "detector_rail"
-		or name == "minecraft:activator_rail" or name == "activator_rail"
+	local name = Blocks and Blocks.Name and Blocks.Name( stateId ) or ""
+	return name == "minecraft:rail"
+		or name == "minecraft:powered_rail"
+		or name == "minecraft:detector_rail"
+		or name == "minecraft:activator_rail"
 end
 
 local RAY_EPSILON = 1e-7
@@ -378,8 +385,8 @@ local function rayAxisSlab( origin, direction, minimum, maximum, tMin, tMax, nea
 end
 
 local function rayFluidBox( start, direction, maxDistance, bx, by, bz, height )
-	local blockSize = tonumber( MC.BS ) or 36.5
-	local minimum = MC.CellWorldMin( bx, by, bz )
+	local blockSize = engineBlockSize()
+	local minimum = Coords.CellMin( bx, by, bz )
 	local maximum = minimum + Vector( blockSize, blockSize, math.Clamp( height, 0, 1 ) * blockSize )
 	local tMin, tMax, normal = 0, maxDistance, Vector( 0, 0, 0 )
 	tMin, tMax, normal = rayAxisSlab( start.x, direction.x, minimum.x, maximum.x, tMin, tMax,
@@ -404,7 +411,7 @@ local function axisStep( origin, direction, cell, blockSize )
 end
 
 local function distancePastCell( origin, direction, bx, by, bz, blockSize )
-	local minimum = MC.CellWorldMin( bx, by, bz )
+	local minimum = Coords.CellMin( bx, by, bz )
 	local distance = math.huge
 	if direction.x > RAY_EPSILON then distance = math.min( distance, ( minimum.x + blockSize - origin.x ) / direction.x )
 	elseif direction.x < -RAY_EPSILON then distance = math.min( distance, ( minimum.x - origin.x ) / direction.x ) end
@@ -417,23 +424,18 @@ local function distancePastCell( origin, direction, bx, by, bz, blockSize )
 end
 
 local function traceBlockOutline( start, direction, maxDistance )
-	if not MC.TraceBlockRay then return nil end
+	if not World or not World.TraceRay then return nil end
 	local origin = start
 	local travelled = 0
-	local blockSize = tonumber( MC.BS ) or 36.5
+	local blockSize = engineBlockSize()
 	local maxSteps = math.ceil( maxDistance / blockSize ) * 3 + 8
 	for _ = 1, maxSteps do
 		local remaining = maxDistance - travelled
 		if remaining <= 0 then break end
-		local hit = MC.TraceBlockRay( origin, direction, remaining )
+		local hit = World.TraceRay( origin, direction, remaining )
 		if not hit then return nil end
-		local kind, waterlogged
-		if MC.LiquidStateMetrics then
-			local _, _, _, value
-			kind, _, _, _, value = MC.LiquidStateMetrics( hit.StateId or 0 )
-			waterlogged = value
-		end
-		if not kind or waterlogged == true then
+		local fluid = Liquid and Liquid.GetAt and Liquid.GetAt( hit.bx, hit.by, hit.bz ) or nil
+		if not fluid or fluid.waterlogged == true then
 			local localDistance = tonumber( hit.Distance )
 				or isvector( hit.HitPos ) and hit.HitPos:Distance( origin ) or 0
 			hit.Distance = travelled + localDistance
@@ -450,12 +452,12 @@ local function traceBlockOutline( start, direction, maxDistance )
 end
 
 local function traceFluidRay( start, direction, maxDistance )
-	if not MC.GetBlockState or not MC.LiquidStateMetrics or not MC.LiquidHeightAtCell then return nil end
+	if not World or not World.GetBlockState or not Liquid or not Liquid.GetAt then return nil end
 	direction = Vector( direction.x, direction.y, direction.z )
 	if direction:LengthSqr() <= RAY_EPSILON then return nil end
 	direction:Normalize()
-	local blockSize = tonumber( MC.BS ) or 36.5
-	local bx, by, bz = MC.WorldToCell( start )
+	local blockSize = engineBlockSize()
+	local bx, by, bz = Coords.WorldToCell( start )
 	local sx, tx, dx = axisStep( start.x, direction.x, bx, blockSize )
 	local sy, ty, dy = axisStep( start.y, direction.y, by, blockSize )
 	local sz, tz, dz = axisStep( start.z, direction.z, bz, blockSize )
@@ -463,17 +465,16 @@ local function traceFluidRay( start, direction, maxDistance )
 	local maxSteps = math.ceil( maxDistance / blockSize ) * 3 + 8
 
 	for _ = 1, maxSteps do
-		local stateId = MC.GetBlockState( bx, by, bz ) or 0
-		local kind = MC.LiquidStateMetrics( stateId )
-		if kind then
-			local height = MC.LiquidHeightAtCell( bx, by, bz, kind )
-			local hitDistance, hitNormal = rayFluidBox( start, direction, maxDistance, bx, by, bz, height )
+		local stateId = World.GetBlockState( bx, by, bz ) or 0
+		local fluid = Liquid.GetAt( bx, by, bz )
+		if fluid then
+			local hitDistance, hitNormal = rayFluidBox( start, direction, maxDistance, bx, by, bz, fluid.height )
 			if hitDistance and hitDistance + RAY_EPSILON >= distance then
 				return {
 					Hit = true,
 					HitMCFluid = true,
 					StateId = stateId,
-					FluidKind = kind,
+					FluidKind = fluid.kind,
 					bx = bx, by = by, bz = bz,
 					HitPos = start + direction * hitDistance,
 					HitNormal = hitNormal,
@@ -502,9 +503,9 @@ end
 
 local function traceVehiclePlacement( ply, includeFluids )
 	if not IsValid( ply ) or not ply:IsPlayer() then return nil end
-	local blockSize = tonumber( MC.BS ) or 36.5
+	local blockSize = engineBlockSize()
 	local maxDistance = blockSize * 5
-	local start = MC.EntityEyeWorldPos and MC.EntityEyeWorldPos( ply ) or ply:EyePos()
+	local start = Coords and Coords.EntityEyeWorldPos and Coords.EntityEyeWorldPos( ply ) or ply:EyePos()
 	local direction = ply:EyeAngles():Forward()
 	direction:Normalize()
 	local blockHit = traceBlockOutline( start, direction, maxDistance )
@@ -517,13 +518,12 @@ MC.TraceVehiclePlacement = traceVehiclePlacement
 
 local function playerStartsInsidePickableEntity( ply )
 	if not ents then return false end
-	local eye = MC.EntityEyeWorldPos and MC.EntityEyeWorldPos( ply ) or ply:EyePos()
-	local blockSize = tonumber( MC.BS ) or 36.5
+	local eye = Coords and Coords.EntityEyeWorldPos and Coords.EntityEyeWorldPos( ply ) or ply:EyePos()
+	local blockSize = engineBlockSize()
 	local direction = ply:EyeAngles():Forward()
 	direction:Normalize()
-	local playerMin, playerMax
-	if MC.EntityWorldAABB then playerMin, playerMax = MC.EntityWorldAABB( ply )
-	else playerMin, playerMax = ply:WorldSpaceAABB() end
+	local playerMin, playerMax = Coords and Coords.EntityWorldAABB and Coords.EntityWorldAABB( ply )
+	if not playerMin then playerMin, playerMax = ply:WorldSpaceAABB() end
 	local reach = direction * blockSize * 5
 	local queryMin = Vector( math.min( playerMin.x, playerMin.x + reach.x ),
 		math.min( playerMin.y, playerMin.y + reach.y ), math.min( playerMin.z, playerMin.z + reach.z ) )
@@ -549,7 +549,7 @@ local function playerStartsInsidePickableEntity( ply )
 end
 
 local function voxelHullBlocked( className, position )
-	local blockSize = tonumber( MC.BS ) or 36.5
+	local blockSize = engineBlockSize()
 	local mins, maxs
 	if className == "mc_boat" then
 		mins = Vector( -0.6875 * blockSize, -0.6875 * blockSize, 0 )
@@ -558,20 +558,19 @@ local function voxelHullBlocked( className, position )
 		mins = Vector( -0.49 * blockSize, -0.49 * blockSize, 0 )
 		maxs = Vector( 0.49 * blockSize, 0.49 * blockSize, 0.7 * blockSize )
 	end
-	if not MC.GetBlockState then return false end
+	if not World or not World.GetBlockState then return false end
 	local worldMin, worldMax = position + mins, position + maxs
-	local minBx, minBy, minBz = MC.WorldToCell( worldMin )
-	local maxBx, maxBy, maxBz = MC.WorldToCell( worldMax )
+	local minBx, minBy, minBz = Coords.WorldToCell( worldMin )
+	local maxBx, maxBy, maxBz = Coords.WorldToCell( worldMax )
 	for bz = minBz, maxBz do
 		for by = minBy, maxBy do
 			for bx = minBx, maxBx do
-				local stateId = MC.GetBlockState( bx, by, bz ) or 0
-				if stateId ~= 0 and not ( MC.LiquidKindForState and MC.LiquidKindForState( stateId ) ) then
-					local boxes = MC.GetBlockCollisionBoxesForState
-						and MC.GetBlockCollisionBoxesForState( stateId, bx, by, bz ) or nil
-					if boxes == nil and MC.BlockHasCollisionForState
-					and MC.BlockHasCollisionForState( stateId, bx, by, bz ) then boxes = { { 0, 0, 0, 1, 1, 1 } } end
-					local cellMin = MC.CellWorldMin( bx, by, bz )
+				local stateId = World.GetBlockState( bx, by, bz ) or 0
+				if stateId ~= 0 and not ( Liquid and Liquid.GetAt and Liquid.GetAt( bx, by, bz ) ) then
+					local shape = World.GetCellShape and World.GetCellShape( bx, by, bz ) or nil
+					local boxes = shape and shape.collisionBoxes or nil
+					if boxes == nil and shape and shape.hasCollision then boxes = { { 0, 0, 0, 1, 1, 1 } } end
+					local cellMin = Coords.CellMin( bx, by, bz )
 					for _, box in ipairs( boxes or {} ) do
 						local boxMin = cellMin + Vector( box[1] * blockSize, box[2] * blockSize, box[3] * blockSize )
 						local boxMax = cellMin + Vector( box[4] * blockSize, box[5] * blockSize, box[6] * blockSize )
@@ -592,7 +591,7 @@ local function spawnBlocked( className, position )
 		local class = IsValid( entity ) and entity:GetClass() or ""
 		return class ~= "mc_chunk" and class ~= "mc_chunk_phys" and class ~= "mc_collision_carrier"
 	end
-	local blockSize = tonumber( MC.BS ) or 36.5
+	local blockSize = engineBlockSize()
 	local halfWidth = className == "mc_boat" and 0.6875 or 0.49
 	local height = className == "mc_boat" and 0.5625 or 0.7
 	local trace = util.TraceHull( {
@@ -662,12 +661,12 @@ function SV.UseVehicleItem( ply, stack, context )
 		if not hit then return false, "minecart_miss" end
 		bx, by, bz = hit.bx, hit.by, hit.bz
 	end
-	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
+	local stateId = World and World.GetBlockState and World.GetBlockState( bx, by, bz ) or 0
 	if not isRailState( stateId ) then return false, "minecart_requires_rail" end
-	local shape = MC.GetStateProperty and MC.GetStateProperty( stateId, "shape" ) or "north_south"
+	local shape = Blocks and Blocks.GetProperty and Blocks.GetProperty( stateId, "shape" ) or "north_south"
 	local slope = string.sub( tostring( shape ), 1, 10 ) == "ascending_"
-	local blockSize = tonumber( MC.BS ) or 36.5
-	local position = MC.CellWorldMin( bx, by, bz ) + Vector( blockSize * 0.5, blockSize * 0.5, blockSize * ( 0.0625 + ( slope and 0.5 or 0 ) ) )
+	local blockSize = engineBlockSize()
+	local position = Coords.CellMin( bx, by, bz ) + Vector( blockSize * 0.5, blockSize * 0.5, blockSize * ( 0.0625 + ( slope and 0.5 or 0 ) ) )
 	local yaw = ( shape == "east_west" or shape == "ascending_east" or shape == "ascending_west" ) and 0 or 90
 	return spawnVehicle( ply, stack, spec, position, Angle( 0, yaw, 0 ), function( entity )
 		entity:SetMinecartItemName( stack.item )

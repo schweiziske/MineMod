@@ -4,6 +4,10 @@ MC = MC or {}
 MC.SV = MC.SV or {}
 
 local SV = MC.SV
+local API = MC.API or {}
+local World = API.World
+local Blocks = API.Blocks
+local Coords = API.Coords
 local FURNACE_SLOTS = MC.FurnaceSlotCount and MC.FurnaceSlotCount() or 3
 
 SV.Furnaces = SV.Furnaces or {}
@@ -20,35 +24,27 @@ local function blockNameAt( bx, by, bz )
 end
 
 local function mutableBlockEntity( bx, by, bz )
-	local cx, cy, cz, localIndex = MC.CellToChunk( bx, by, bz )
-	local chunk = MC.GetChunk( cx, cy, cz )
-	return chunk and chunk.blockEntities and chunk.blockEntities[localIndex] or nil, chunk, localIndex
+	if not World or not World.GetBlockEntity then return nil end
+	return World.GetBlockEntity( bx, by, bz )
 end
 
 local function ensureBlockEntity( bx, by, bz )
-	local record, chunk, localIndex = mutableBlockEntity( bx, by, bz )
-	if record then return record, chunk end
-	if not chunk or localIndex == nil then return nil end
+	local record = mutableBlockEntity( bx, by, bz )
+	if record then return record end
 	local stateId = stateAt( bx, by, bz )
 	if not MC.IsFurnaceState( stateId ) then return nil end
-	local definition = MC.BlockEntityTypes and MC.BlockEntityTypes["minecraft:furnace"]
-	if not definition or not definition.CreateDefault then return nil end
-	local ok, created = pcall( definition.CreateDefault, stateId )
-	if not ok or type( created ) ~= "table" then return nil end
-	chunk.blockEntities = chunk.blockEntities or {}
-	chunk.blockEntities[localIndex] = created
-	created.dirty = true
-	SV.Dirty = true
-	if SV.ChunkStore and SV.ChunkStore.RecordBlockEntityEdit then
-		SV.ChunkStore.RecordBlockEntityEdit( bx, by, bz, created )
-	end
-	return created, chunk
+	if not Blocks or not Blocks.CreateDefaultBlockEntity or not World or not World.SetBlockEntity then return nil end
+	local created = Blocks.CreateDefaultBlockEntity( stateId )
+	if type( created ) ~= "table" then return nil end
+	local written = World.SetBlockEntity( bx, by, bz, created, { reason = "furnace_default" } )
+	if written ~= true then return nil end
+	return created
 end
 
 local function recordOverlay( runtime )
-	local store = SV.ChunkStore
-	if not store or not store.RecordBlockEntityEdit then return true end
-	local saved, err = store.RecordBlockEntityEdit( runtime.bx, runtime.by, runtime.bz, runtime.record )
+	if not World or not World.SetBlockEntity then return false end
+	local saved, err = World.SetBlockEntity( runtime.bx, runtime.by, runtime.bz,
+		runtime.record, { reason = "furnace_runtime" } )
 	if saved ~= true and ErrorNoHalt then ErrorNoHalt( "[MC Furnace] overlay write failed: " .. tostring( err ) .. "\n" ) end
 	return saved == true
 end
@@ -60,8 +56,6 @@ local function syncRecord( runtime, writeOverlay )
 	runtime.record.data = rebuilt.data
 	runtime.record.revision = math.max( 0, math.floor( tonumber( runtime.record.revision ) or 0 ) ) + 1
 	runtime.record.dirty = true
-	if runtime.chunk then runtime.chunk.mcFurnaceDirty = true end
-	SV.Dirty = true
 	if writeOverlay then recordOverlay( runtime ) end
 end
 
@@ -174,10 +168,11 @@ local function tickRuntime( runtime, stateId, logicTick )
 	schedule( runtime )
 	if nextState ~= stateId then
 		return {
-			cells = { { bx = runtime.bx, by = runtime.by, bz = runtime.bz, stateId = nextState } },
+			cells = { { bx = runtime.bx, by = runtime.by, bz = runtime.bz, stateId = nextState,
+				blockEntity = runtime.record } },
 			afterTransaction = function()
-				local record, chunk = mutableBlockEntity( runtime.bx, runtime.by, runtime.bz )
-				if record then runtime.record, runtime.chunk = record, chunk end
+				local record = mutableBlockEntity( runtime.bx, runtime.by, runtime.bz )
+				if record then runtime.record = record end
 			end,
 		}
 	end
@@ -191,11 +186,11 @@ local function runtimeAt( bx, by, bz, create )
 	if not create then return nil end
 	local name, stateId, info = blockNameAt( bx, by, bz )
 	if not name then return nil end
-	local record, chunk = ensureBlockEntity( bx, by, bz )
+	local record = ensureBlockEntity( bx, by, bz )
 	if not record or not MC.FurnaceStorageFromRecord then return nil end
 	local data = record.data or {}
 	runtime = {
-		bx = bx, by = by, bz = bz, key = key, record = record, chunk = chunk,
+		bx = bx, by = by, bz = bz, key = key, record = record,
 		storage = MC.FurnaceStorageFromRecord( record ), menus = {},
 		recipeType = info.recipeType, litTimeRemaining = tonumber( data.litTimeRemaining ) or 0,
 		litTotalTime = tonumber( data.litTotalTime ) or 0,
@@ -340,21 +335,23 @@ end
 MC.RegisterBlockUpdateHandler( "minecraft:furnace", { OnScheduledTick = SV.FurnaceTickAt } )
 MC.RegisterBlockUpdateHandler( "minecraft:blast_furnace", { OnScheduledTick = SV.FurnaceTickAt } )
 
-local function warmChunk( _, cx, cy, cz )
+local function warmBlockEntities( cx, cy, cz )
 	for key, runtime in pairs( SV.Furnaces ) do
 		if runtime.bx == nil then SV.Furnaces[key] = nil end
 	end
-	local chunk = cx and MC.GetChunk( cx, cy, cz ) or nil
-	if not chunk or not chunk.blockEntities then return end
-	for localIndex in pairs( chunk.blockEntities ) do
-		local lx, ly, lz = MC.DecodeLocal( localIndex )
-		local bx, by, bz = cx * MC.CS + lx, cy * MC.CS + ly, cz * MC.CH + lz
+	if not World or not World.ForEachBlockEntity then return end
+	World.ForEachBlockEntity( "minecraft:furnace", function( bx, by, bz )
+		if cx ~= nil and Coords and Coords.CellToChunk then
+			local entryCX, entryCY, entryCZ = Coords.CellToChunk( bx, by, bz )
+			if entryCX ~= cx or entryCY ~= cy or entryCZ ~= cz then return end
+		end
 		local name = blockNameAt( bx, by, bz )
 		if name then runtimeAt( bx, by, bz, true ) end
-	end
+	end )
 end
+local function warmChunk( _, cx, cy, cz ) warmBlockEntities( cx, cy, cz ) end
 hook.Add( "MC.ChunkHydrated", "mc_furnace_chunk_warm", warmChunk )
-hook.Add( "MC.WorldLoaded", "mc_furnace_world_warm", function() for _, chunk in pairs( MC.World or {} ) do warmChunk( nil, chunk.cx, chunk.cy, chunk.cz ) end end )
+hook.Add( "MC.WorldLoaded", "mc_furnace_world_warm", function() warmBlockEntities() end )
 local function clearFurnaceRuntime()
 	for _, runtime in pairs( SV.Furnaces ) do
 		for ply in pairs( runtime.menus or {} ) do

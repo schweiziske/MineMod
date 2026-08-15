@@ -194,7 +194,9 @@ local function finalizeBulkGroup( groupId )
 	end
 	if MC.MarkSignRenderEntriesDirty then MC.MarkSignRenderEntriesDirty() end
 	if MC.MarkBannerRenderEntriesDirty then MC.MarkBannerRenderEntriesDirty() end
-	if MC.MarkCampfireRenderEntriesDirty then MC.MarkCampfireRenderEntriesDirty() end
+	if MC.RunEvent then
+		MC.RunEvent( "MC.ClientWorldProjectionChanged", "state_bulk_committed", { groupId = group.id } )
+	end
 	T.activeBulkGroup = nil
 	T.pendingBulkGroupEnds[group.id] = nil
 	return true
@@ -379,7 +381,11 @@ local function setBlockEntityAt( bx, by, bz, record )
 	end
 	if MC.MarkSignRenderEntriesDirty then MC.MarkSignRenderEntriesDirty() end
 	if MC.MarkBannerRenderEntriesDirty then MC.MarkBannerRenderEntriesDirty() end
-	if MC.MarkCampfireRenderEntriesDirty then MC.MarkCampfireRenderEntriesDirty() end
+	if MC.RunEvent then
+		MC.RunEvent( "MC.ClientWorldProjectionChanged", "block_entity_changed", {
+			bx = bx, by = by, bz = bz,
+		} )
+	end
 end
 
 local function decodeBlockEntity( cell, revision )

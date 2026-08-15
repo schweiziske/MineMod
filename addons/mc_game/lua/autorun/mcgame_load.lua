@@ -5,8 +5,8 @@
 	This layer is a CONSUMER of the MCSWEP voxel engine, not part of it. The
 	engine owns the world - blocks, states, streaming, rendering, collision,
 	lighting, liquids, redstone and block updates - and knows nothing about
-	items. Everything here sits on top of that through MC.API and the engine
-	registries.
+	items. Everything here sits on top of that through MC.API, registered
+	capabilities and documented events.
 
 	This is a separate addon that consumes the MCSWEP voxel engine:
 
@@ -26,16 +26,20 @@
 
 MC = MC or {}
 
-local REQUIRED_API_VERSION = 1
+local REQUIRED_API_VERSION = 2
 
 local SHARED = {
+	"mcgame/random/sh_legacy_random.lua",
+	"mcgame/inventory/sh_survival_hud.lua",
 	"mcgame/functional/sh_furnace.lua",
 	"mcgame/functional/sh_brewing.lua",
 	"mcgame/functional/sh_anvil.lua",
+	"mcgame/functional/sh_enchanting_table.lua",
 	"mcgame/functional/sh_campfire.lua",
 	"mcgame/functional/sh_tnt.lua",
 	"mcgame/item/sh_registry.lua",
 	"mcgame/generated/sh_generated_items.lua",
+	"mcgame/generated/sh_generated_enchanting.lua",
 	"mcgame/vehicle/sh_vehicles.lua",
 	"mcgame/item/sh_model_registry.lua",
 	"mcgame/generated/sh_generated_item_models.lua",
@@ -59,15 +63,19 @@ local SHARED = {
 	"mcgame/inventory/sh_crafting.lua",
 	"mcgame/inventory/sh_anvil.lua",
 	"mcgame/item/sh_public_api.lua",
+	"mcgame/inventory/sh_enchanting.lua",
 	"mcgame/functional/sh_furnace_data.lua",
 	"mcgame/functional/sh_brewing_data.lua",
 	"mcgame/functional/sh_chest_data.lua",
 	"mcgame/functional/sh_campfire_data.lua",
 	"mcgame/functional/sh_chests.lua",
 	"mcgame/functional/sh_crafting.lua",
+	"mcgame/api/sh_engine_bridge.lua",
 }
 local SERVER_FILES = {
 	"mcgame/inventory/sv_player_inventory.lua",
+	"mcgame/inventory/sv_experience.lua",
+	"mcgame/inventory/sv_enchanting.lua",
 	"mcgame/inventory/sv_hand_weapon_presentation.lua",
 	"mcgame/inventory/sv_selected_mutation.lua",
 	"mcgame/inventory/sv_equipment.lua",
@@ -84,6 +92,7 @@ local SERVER_FILES = {
 	"mcgame/mining/sv_mining.lua",
 	"mcgame/inventory/sv_projectiles.lua",
 	"mcgame/inventory/sv_combat.lua",
+	"mcgame/api/sv_public_api.lua",
 	"mcgame/explosion/sv_gameplay.lua",
 	"mcgame/inventory/sv_furnaces.lua",
 	"mcgame/inventory/sv_brewing.lua",
@@ -99,6 +108,7 @@ local CLIENT_FILES = {
 	"mcgame/functional/cl_campfires.lua",
 	"mcgame/inventory/cl_state.lua",
 	"mcgame/inventory/cl_network.lua",
+	"mcgame/inventory/cl_enchanting.lua",
 	"mcgame/inventory/cl_anvil.lua",
 	"mcgame/inventory/cl_furnaces.lua",
 	"mcgame/inventory/cl_brewing.lua",
@@ -113,6 +123,8 @@ local CLIENT_FILES = {
 	"mcgame/inventory/ui/cl_recipe_book.lua",
 	"mcgame/inventory/ui/cl_inventory_screen.lua",
 	"mcgame/inventory/ui/cl_hotbar.lua",
+	"mcgame/inventory/ui/cl_survival_hud.lua",
+	"mcgame/api/cl_engine_bridge.lua",
 }
 
 -- Neither of these needs the engine, so they stay at file scope: the client
@@ -143,11 +155,15 @@ if SERVER then
 			"materials/mc/gui/hud",
 			"materials/mc/gui/sprites/container",
 			"materials/mc/gui/sprites/container/furnace",
+			"materials/mc/gui/sprites/container/enchanting_table",
+			"materials/mc/gui/sprites/container/slot",
 			"materials/mc/gui/sprites/container/creative_inventory",
 			"materials/mc/gui/sprites/hud",
+			"materials/mc/gui/sprites/hud/heart",
 			"materials/mc/gui/sprites/container/inventory",
 			"materials/mc/gui/mob_effect",
 			"materials/mc/gui/sprites/recipe_book",
+			"materials/mc/entity/enchantment",
 		} ) do
 			for _, fileName in ipairs( file.Find( resourceRoot .. "/*.png", "GAME" ) or {} ) do
 				resource.AddFile( resourceRoot .. "/" .. fileName )
@@ -155,6 +171,7 @@ if SERVER then
 		end
 		for _, resourceRoot in ipairs( {
 			"sound/mc/block/chest",
+			"sound/mc/block/enchantment_table",
 			"sound/mc/item/book",
 		} ) do
 			for _, fileName in ipairs( file.Find( resourceRoot .. "/*.ogg", "GAME" ) or {} ) do
@@ -173,7 +190,11 @@ local function loadGameLayer()
 		ErrorNoHalt( "[MCGame] MCSWEP engine is missing; the game layer will not load\n" )
 		return
 	end
-	if api.Require and not api.Require( REQUIRED_API_VERSION, "MCSWEP game layer" ) then return end
+	if not api.Require then
+		ErrorNoHalt( "[MCGame] MCSWEP engine has no version negotiation API; v2 is required\n" )
+		return
+	end
+	if not api.Require( REQUIRED_API_VERSION, "MCSWEP game layer" ) then return end
 	MC.GameLayerLoaded = true
 
 	for _, f in ipairs( SHARED ) do include( f ) end

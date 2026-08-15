@@ -4,6 +4,10 @@ MC = MC or {}
 MC.SV = MC.SV or {}
 
 local SV = MC.SV
+local API = MC.API or {}
+local World = API.World
+local Blocks = API.Blocks
+local Coords = API.Coords
 local BREWING_SLOTS = MC.BrewingSlotCount and MC.BrewingSlotCount() or 5
 local BREWING_TIME = MC.BrewingTime and MC.BrewingTime() or 400
 local FUEL_USES = MC.BrewingFuelUses and MC.BrewingFuelUses() or 20
@@ -34,33 +38,26 @@ local function isBrewingStandAt( bx, by, bz )
 end
 
 local function mutableBlockEntity( bx, by, bz )
-	local cx, cy, cz, localIndex = MC.CellToChunk( bx, by, bz )
-	local chunk = MC.GetChunk( cx, cy, cz )
-	return chunk and chunk.blockEntities and chunk.blockEntities[localIndex] or nil, chunk, localIndex
+	if not World or not World.GetBlockEntity then return nil end
+	return World.GetBlockEntity( bx, by, bz )
 end
 
 local function ensureBlockEntity( bx, by, bz )
-	local record, chunk, localIndex = mutableBlockEntity( bx, by, bz )
-	if record then return record, chunk end
-	if not chunk or localIndex == nil or not isBrewingStandAt( bx, by, bz ) then return nil end
-	local definition = MC.BlockEntityTypes and MC.BlockEntityTypes["minecraft:brewing_stand"]
-	if not definition or not definition.CreateDefault then return nil end
-	local ok, created = pcall( definition.CreateDefault, stateAt( bx, by, bz ) )
-	if not ok or type( created ) ~= "table" then return nil end
-	chunk.blockEntities = chunk.blockEntities or {}
-	chunk.blockEntities[localIndex] = created
-	created.dirty = true
-	SV.Dirty = true
-	if SV.ChunkStore and SV.ChunkStore.RecordBlockEntityEdit then
-		SV.ChunkStore.RecordBlockEntityEdit( bx, by, bz, created )
-	end
-	return created, chunk
+	local record = mutableBlockEntity( bx, by, bz )
+	if record then return record end
+	if not isBrewingStandAt( bx, by, bz ) or not Blocks
+		or not Blocks.CreateDefaultBlockEntity or not World or not World.SetBlockEntity then return nil end
+	local created = Blocks.CreateDefaultBlockEntity( stateAt( bx, by, bz ) )
+	if type( created ) ~= "table" then return nil end
+	local written = World.SetBlockEntity( bx, by, bz, created, { reason = "brewing_default" } )
+	if written ~= true then return nil end
+	return created
 end
 
 local function recordOverlay( runtime )
-	local store = SV.ChunkStore
-	if not store or not store.RecordBlockEntityEdit then return true end
-	local saved, err = store.RecordBlockEntityEdit( runtime.bx, runtime.by, runtime.bz, runtime.record )
+	if not World or not World.SetBlockEntity then return false end
+	local saved, err = World.SetBlockEntity( runtime.bx, runtime.by, runtime.bz,
+		runtime.record, { reason = "brewing_runtime" } )
 	if saved ~= true and ErrorNoHalt then ErrorNoHalt( "[MC Brewing] overlay write failed: " .. tostring( err ) .. "\n" ) end
 	return saved == true
 end
@@ -72,8 +69,6 @@ local function syncRecord( runtime, writeOverlay )
 	runtime.record.data = rebuilt.data
 	runtime.record.revision = math.max( 0, math.floor( tonumber( runtime.record.revision ) or 0 ) ) + 1
 	runtime.record.dirty = true
-	if runtime.chunk then runtime.chunk.mcBrewingDirty = true end
-	SV.Dirty = true
 	if writeOverlay then recordOverlay( runtime ) end
 end
 
@@ -144,11 +139,12 @@ local function refreshBottleState( runtime, actor )
 	local nextState = bottleState( runtime, stateId )
 	if nextState == stateId then return end
 	local transaction = SV.ApplyBlockTransaction( {
-		{ bx = runtime.bx, by = runtime.by, bz = runtime.bz, stateId = nextState },
+		{ bx = runtime.bx, by = runtime.by, bz = runtime.bz, stateId = nextState,
+			blockEntity = runtime.record },
 	}, { actor = actor, fx = false, netMode = "bulk", compareCollision = false } )
 	if transaction and transaction.ok == true then
-		local record, chunk = mutableBlockEntity( runtime.bx, runtime.by, runtime.bz )
-		if record then runtime.record, runtime.chunk = record, chunk end
+		local record = mutableBlockEntity( runtime.bx, runtime.by, runtime.bz )
+		if record then runtime.record = record end
 	end
 end
 
@@ -182,10 +178,11 @@ local function tickRuntime( runtime, stateId, logicTick )
 	local nextState = bottleState( runtime, stateId )
 	if nextState ~= stateId then
 		return {
-			cells = { { bx = runtime.bx, by = runtime.by, bz = runtime.bz, stateId = nextState } },
+			cells = { { bx = runtime.bx, by = runtime.by, bz = runtime.bz, stateId = nextState,
+				blockEntity = runtime.record } },
 			afterTransaction = function()
-				local record, chunk = mutableBlockEntity( runtime.bx, runtime.by, runtime.bz )
-				if record then runtime.record, runtime.chunk = record, chunk end
+				local record = mutableBlockEntity( runtime.bx, runtime.by, runtime.bz )
+				if record then runtime.record = record end
 			end,
 		}
 	end
@@ -197,11 +194,11 @@ local function runtimeAt( bx, by, bz, create )
 	local runtime = SV.BrewingStands[key]
 	if runtime then return runtime end
 	if not create or not isBrewingStandAt( bx, by, bz ) then return nil end
-	local record, chunk = ensureBlockEntity( bx, by, bz )
+	local record = ensureBlockEntity( bx, by, bz )
 	if not record or not MC.BrewingStorageFromRecord then return nil end
 	local data = record.data or {}
 	runtime = {
-		bx = bx, by = by, bz = bz, key = key, record = record, chunk = chunk,
+		bx = bx, by = by, bz = bz, key = key, record = record,
 		storage = MC.BrewingStorageFromRecord( record ), menus = {},
 		brewTime = tonumber( data.brewTime ) or 0,
 		fuel = tonumber( data.fuel ) or 0,
@@ -354,20 +351,19 @@ end
 
 MC.RegisterBlockUpdateHandler( "minecraft:brewing_stand", { OnScheduledTick = SV.BrewingTickAt } )
 
-local function warmChunk( _, cx, cy, cz )
-	local chunk = cx and MC.GetChunk( cx, cy, cz ) or nil
-	if not chunk or not chunk.blockEntities then return end
-	for localIndex, blockEntity in pairs( chunk.blockEntities ) do
-		if blockEntity and blockEntity.type == "minecraft:brewing_stand" then
-			local lx, ly, lz = MC.DecodeLocal( localIndex )
-			runtimeAt( cx * MC.CS + lx, cy * MC.CS + ly, cz * MC.CH + lz, true )
+local function warmBlockEntities( cx, cy, cz )
+	if not World or not World.ForEachBlockEntity then return end
+	World.ForEachBlockEntity( "minecraft:brewing_stand", function( bx, by, bz )
+		if cx ~= nil and Coords and Coords.CellToChunk then
+			local entryCX, entryCY, entryCZ = Coords.CellToChunk( bx, by, bz )
+			if entryCX ~= cx or entryCY ~= cy or entryCZ ~= cz then return end
 		end
-	end
+		runtimeAt( bx, by, bz, true )
+	end )
 end
+local function warmChunk( _, cx, cy, cz ) warmBlockEntities( cx, cy, cz ) end
 hook.Add( "MC.ChunkHydrated", "mc_brewing_chunk_warm", warmChunk )
-hook.Add( "MC.WorldLoaded", "mc_brewing_world_warm", function()
-	for _, chunk in pairs( MC.World or {} ) do warmChunk( nil, chunk.cx, chunk.cy, chunk.cz ) end
-end )
+hook.Add( "MC.WorldLoaded", "mc_brewing_world_warm", function() warmBlockEntities() end )
 
 local function clearBrewingRuntime()
 	for _, runtime in pairs( SV.BrewingStands ) do

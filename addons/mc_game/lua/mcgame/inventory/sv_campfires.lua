@@ -6,16 +6,13 @@ MC = MC or {}
 MC.SV = MC.SV or {}
 
 local SV = MC.SV
+local API = MC.API or {}
+local World = API.World
+local Coords = API.Coords
 local CAMPFIRE_SLOTS = MC.CampfireSlotCount and MC.CampfireSlotCount() or 4
 local DOWSE_NET = "mc_campfire_dowse_fx"
 
 util.AddNetworkString( DOWSE_NET )
-
-local function mutableBlockEntity( bx, by, bz )
-	local cx, cy, cz, localIndex = MC.CellToChunk( bx, by, bz )
-	local chunk = MC.GetChunk( cx, cy, cz )
-	return chunk and chunk.blockEntities and chunk.blockEntities[localIndex] or nil, chunk
-end
 
 local function recordFromCurrent( record )
 	local storage = MC.CampfireStorageFromRecord( record )
@@ -32,20 +29,6 @@ local function copyRecordWith( storage, progress, totals )
 	return MC.CampfireRecordFromStorage( storage, progress, totals )
 end
 
-local function persistAfterTransaction( bx, by, bz )
-	local record = mutableBlockEntity( bx, by, bz )
-	if record then
-		record.dirty = true
-		SV.Dirty = true
-		if SV.ChunkStore and SV.ChunkStore.RecordBlockEntityEdit then
-			local saved, err = SV.ChunkStore.RecordBlockEntityEdit( bx, by, bz, record )
-			if saved ~= true and ErrorNoHalt then
-				ErrorNoHalt( "[MC Campfire] overlay write failed: " .. tostring( err or "unknown" ) .. "\n" )
-			end
-		end
-	end
-end
-
 local function stillCampfire( bx, by, bz )
 	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
 	return MC.CampfireStateInfo and MC.CampfireStateInfo( stateId ) or nil, stateId
@@ -54,7 +37,7 @@ end
 function SV.WakeCampfire( bx, by, bz )
 	local info, stateId = stillCampfire( bx, by, bz )
 	if not info then return false end
-	local record = MC.GetBlockEntity and MC.GetBlockEntity( bx, by, bz ) or nil
+	local record = World and World.GetBlockEntity and World.GetBlockEntity( bx, by, bz ) or nil
 	local storage, progress = recordFromCurrent( record )
 	local active = false
 	for slot = 1, CAMPFIRE_SLOTS do
@@ -73,7 +56,7 @@ function SV.UseCampfire( ply, bx, by, bz )
 	-- block placement path. Valid campfire inputs always consume the interaction,
 	-- including the full-four-slot case.
 	if not recipe then return false, "not_campfire_food" end
-	local record = MC.GetBlockEntity and MC.GetBlockEntity( bx, by, bz ) or nil
+	local record = World and World.GetBlockEntity and World.GetBlockEntity( bx, by, bz ) or nil
 	if not record then return true, "campfire_block_entity_unavailable" end
 	local storage, progress, totals = recordFromCurrent( record )
 	local emptySlot
@@ -112,7 +95,6 @@ function SV.UseCampfire( ply, bx, by, bz )
 		if snapshot then MC.ContainerRestore( inventoryRecord.container, snapshot ) end
 		return true, result and result.error or "campfire_update_failed"
 	end
-	persistAfterTransaction( bx, by, bz )
 	if SV.ScheduleBlockTick then SV.ScheduleBlockTick( bx, by, bz, 1, nil, stateId ) end
 	return true, { slot = emptySlot - 1, recipe = recipe.id, inventory = inventoryResult }
 end
@@ -199,7 +181,7 @@ end
 function SV.CampfireTickAt( context )
 	local info, stateId = stillCampfire( context.bx, context.by, context.bz )
 	if not info then return nil end
-	local record = MC.GetBlockEntity and MC.GetBlockEntity( context.bx, context.by, context.bz ) or nil
+	local record = World and World.GetBlockEntity and World.GetBlockEntity( context.bx, context.by, context.bz ) or nil
 	if not record then return nil end
 	local storage, progress, totals = recordFromCurrent( record )
 	local changed, keepTicking = false, false
@@ -237,7 +219,6 @@ function SV.CampfireTickAt( context )
 		afterTransactionData = { bx = context.bx, by = context.by, bz = context.bz, drops = completed },
 		afterTransaction = function( data, transaction )
 			if not transaction or transaction.ok ~= true then return end
-			persistAfterTransaction( data.bx, data.by, data.bz )
 			local pos = MC.CellWorldMin and MC.CellWorldMin( data.bx, data.by, data.bz )
 				or MC.CellWorldCenter( data.bx, data.by, data.bz )
 			for _, stack in ipairs( data.drops or {} ) do
@@ -267,17 +248,16 @@ end
 MC.RegisterBlockUpdateHandler( "minecraft:campfire", { OnScheduledTick = SV.CampfireTickAt } )
 MC.RegisterBlockUpdateHandler( "minecraft:soul_campfire", { OnScheduledTick = SV.CampfireTickAt } )
 
-local function warmChunk( _, cx, cy, cz )
-	local chunk = cx and MC.GetChunk( cx, cy, cz ) or nil
-	if not chunk or not chunk.blockEntities then return end
-	for localIndex, record in pairs( chunk.blockEntities ) do
-		if record.type == "minecraft:campfire" then
-			local lx, ly, lz = MC.DecodeLocal( localIndex )
-			SV.WakeCampfire( cx * MC.CS + lx, cy * MC.CS + ly, cz * MC.CH + lz )
+local function warmBlockEntities( cx, cy, cz )
+	if not World or not World.ForEachBlockEntity then return end
+	World.ForEachBlockEntity( "minecraft:campfire", function( bx, by, bz )
+		if cx ~= nil and Coords and Coords.CellToChunk then
+			local entryCX, entryCY, entryCZ = Coords.CellToChunk( bx, by, bz )
+			if entryCX ~= cx or entryCY ~= cy or entryCZ ~= cz then return end
 		end
-	end
+		SV.WakeCampfire( bx, by, bz )
+	end )
 end
+local function warmChunk( _, cx, cy, cz ) warmBlockEntities( cx, cy, cz ) end
 hook.Add( "MC.ChunkHydrated", "mc_campfire_chunk_warm", warmChunk )
-hook.Add( "MC.WorldLoaded", "mc_campfire_world_warm", function()
-	for _, chunk in pairs( MC.World or {} ) do warmChunk( nil, chunk.cx, chunk.cy, chunk.cz ) end
-end )
+hook.Add( "MC.WorldLoaded", "mc_campfire_world_warm", function() warmBlockEntities() end )

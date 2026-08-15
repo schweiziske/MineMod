@@ -348,6 +348,13 @@ local handlers = {
 	[MC.ContainerInput.PICKUP_ALL] = function( container, slotIndex, button, _, context ) return executePickupAll( container, slotIndex, button, context ) end,
 }
 
+local function restoreFailedInput( container, snapshot, context, errorCode )
+	MC.ContainerRestore( container, snapshot )
+	if type( container.onInputRollback ) == "function" then
+		pcall( container.onInputRollback, container, snapshot, context or container.context or {}, errorCode )
+	end
+end
+
 function MC.ExecuteContainerInput( container, request, context )
 	if type( container ) ~= "table" or type( request ) ~= "table" then return { ok = false, error = "invalid_request" } end
 	local expectedRevision = request.revision ~= nil and math.floor( tonumber( request.revision ) or -1 ) or nil
@@ -369,20 +376,22 @@ function MC.ExecuteContainerInput( container, request, context )
 	local state = { drops = {} }
 	local called, ok, err = pcall( handler, container, slotIndex, button, state, context or container.context or {} )
 	if not called or ok ~= true then
-		MC.ContainerRestore( container, snapshot )
+		local errorCode = called and ( err or "input_rejected" ) or "input_error"
+		restoreFailedInput( container, snapshot, context, errorCode )
 		return {
 			ok = false,
-			error = called and ( err or "input_rejected" ) or "input_error",
+			error = errorCode,
 			revision = container.revision,
 		}
 	end
 	if type( container.beforeCommit ) == "function" then
 		local refreshCalled, refreshOK, refreshError = pcall( container.beforeCommit, container, context or container.context or {} )
 		if not refreshCalled or refreshOK == false then
-			MC.ContainerRestore( container, snapshot )
+			local errorCode = refreshCalled and ( refreshError or "before_commit_rejected" ) or "before_commit_error"
+			restoreFailedInput( container, snapshot, context, errorCode )
 			return {
 				ok = false,
-				error = refreshCalled and ( refreshError or "before_commit_rejected" ) or "before_commit_error",
+				error = errorCode,
 				revision = container.revision,
 			}
 		end
