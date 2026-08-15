@@ -128,11 +128,22 @@ local GPU_LIGHT_MATERIAL_NAMES = {
 function MC.GetGpuChunkLightTextureMaterials()
 	local materials = {}
 	local signature = {}
+	local seen = {}
+	local function addMaterial( material, label )
+		if not material or seen[material] or not material.GetName or not material.SetTexture
+		or material:IsError() then return end
+		seen[material] = true
+		materials[#materials + 1] = material
+		signature[#signature + 1] = label .. ":" .. tostring( material )
+	end
 	for _, name in ipairs( GPU_LIGHT_MATERIAL_NAMES ) do
-		local material = MC[name]
-		if material and material.GetName and material.SetTexture and not material:IsError() then
-			materials[#materials + 1] = material
-			signature[#signature + 1] = name .. ":" .. tostring( material )
+		addMaterial( MC[name], name )
+	end
+	local pageCount = MC.AtlasPageCount and MC.AtlasPageCount() or 1
+	if MC.AtlasPageMaterial then
+		for page = 1, pageCount - 1 do
+			addMaterial( select( 1, MC.AtlasPageMaterial( page, false ) ), "atlas_page_" .. page .. "_opaque" )
+			addMaterial( select( 1, MC.AtlasPageMaterial( page, true ) ), "atlas_page_" .. page .. "_translucent" )
 		end
 	end
 	return materials, table.concat( signature, "|" )

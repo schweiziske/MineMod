@@ -120,7 +120,7 @@ local state = {
 	originals = nil,         -- { BuildChunkMesh=, RebuildChunkMeshLighting=, FreeChunkMesh= }
 	proxied = {},            -- key -> true (鎴戜滑鎺ョ鐨?chunk)
 	pushedFrame = {},        -- key -> FrameNumber (chunk 鎺ㄩ€佸幓閲?
-	defCache = nil,          -- immutable registry/catalog MCBD v4 blob for A/B toggles
+	defCache = nil,          -- immutable registry/catalog MCBD v5 blob for A/B toggles
 	packProfile = newPackProfile(),
 	epoch = 0,
 	nativeMeshBackend = nil,
@@ -695,8 +695,8 @@ local function effectiveNativeGreedy()
 end
 
 ----------------------------------------------------------------- blockdefs 鎵撳寘
--- MCBD v4 keeps the M5 typed legacy emitters and adds a complete stateId map.
--- Generated state plans are migrated in the next protocol stage.
+-- MCBD v5 adds independent atlas pages while preserving typed emitters,
+-- the complete stateId map and the generated visual catalog.
 local string_char = string.char
 local bit_band, bit_rshift = bit.band, bit.rshift
 local HUGE = math.huge
@@ -752,9 +752,15 @@ local MAX_BLOCKS, MAX_ORIENTS = 65535, 64
 local MAX_BOXES, MAX_QUADS, MAX_TEMPLATES = 1000000, 4000000, 1000000
 local MAX_BLOB_BYTES = 512 * 1024 * 1024
 
-local function resolveAtlasTile( tile, label )
-	tile = MC.ResolveAtlasTile and MC.ResolveAtlasTile( tile ) or tile
-	return checkedInt( tile or 0, 0, 65535, label or "tile" )
+local function resolveAtlasSurface( tile, label )
+	local page, physical
+	if MC.ResolveAtlasSurface then
+		page, physical = MC.ResolveAtlasSurface( tile )
+	else
+		page, physical = 0, MC.ResolveAtlasTile and MC.ResolveAtlasTile( tile ) or tile
+	end
+	return checkedInt( page or 0, 0, 63, ( label or "tile" ) .. " page" ),
+		checkedInt( physical or 0, 0, 65535, label or "tile" )
 end
 
 local function orientsForBlock( b )
@@ -820,14 +826,15 @@ local function rotateFlags( u, v, rot, flipU, flipV )
 	return u, v
 end
 
--- Quad88: face:u8 flags:u8 boxIndex:u16 tile:u16 reserved:u16,
+-- Quad88: face:u8 flags:u8 boxIndex:u16 tile:u16 page:u8 reserved:u8,
 -- then four {x,y,z,u,v}:f32. Quad positions are bounded block-local extension
 -- coordinates [-16,16] (models legitimately extend outside the unit cube); UVs 0..16.
 local function packQuad( face, flags, boxIndex, tile, verts, context )
 	face, flags = checkedInt( face, 1, 6, "quad face" ), checkedInt( flags or 0, 0, 1, "quad flags" )
-	boxIndex, tile = checkedInt( boxIndex or 65535, 0, 65535, "box index" ), resolveAtlasTile( tile, "tile" )
+	boxIndex = checkedInt( boxIndex or 65535, 0, 65535, "box index" )
+	local page, physical = resolveAtlasSurface( tile, "tile" )
 	if type( verts ) ~= "table" or #verts ~= 4 then error( ( context or "quad" ) .. " needs four vertices", 0 ) end
-	local p = { u8( face ), u8( flags ), u16le( boxIndex ), u16le( tile ), u16le( 0 ) }
+	local p = { u8( face ), u8( flags ), u16le( boxIndex ), u16le( physical ), u8( page ), u8( 0 ) }
 	for i = 1, 4 do
 		local v = verts[i]
 		local label = ( context or "quad" ) .. " vertex " .. i
@@ -847,9 +854,10 @@ local function packBox( box )
 	return table.concat( p )
 end
 
--- FaceTex36: tile:u16 flags:u8 reserved:u8 + four tile-local {u,v}:f32.
+-- FaceTex36: tile:u16 page:u8 flags:u8 + four tile-local {u,v}:f32.
 local function packFaceTex( tile, uvs, flags )
-	local p = { u16le( resolveAtlasTile( tile, "tile" ) ), u8( flags or 0 ), u8( 0 ) }
+	local page, physical = resolveAtlasSurface( tile, "tile" )
+	local p = { u16le( physical ), u8( page ), u8( flags or 0 ) }
 	for i = 1, 4 do
 		p[#p+1] = f32le( checkedNumber( uvs[i][1], 0, 16, "face u" ) )
 		p[#p+1] = f32le( checkedNumber( uvs[i][2], 0, 16, "face v" ) )
@@ -1082,18 +1090,22 @@ local function visualCatalogPayload( totalStateCount )
 	for _,f in ipairs(fields) do
 		local raw=c[f[1]]
 		if type(raw)~="string" or #raw~=f[2] then error("visual "..f[1].." length mismatch",0) end
-		if f[1]=="surfaceData" and #raw>0 then
-			local remapped={}
+		if f[1]=="surfaceData" then
+			local remapped,pages={},{}
 			for offset=1,#raw,2 do
 				local lo,hi=raw:byte(offset,offset+1);local packed=(lo or 0)+(hi or 0)*256
 				local logical=bit_band(packed,0x0FFF);local emission=packed-logical
-				local physical=resolveAtlasTile(logical,"visual surface tile")
+				local page,physical=resolveAtlasSurface(logical,"visual surface tile")
 				if physical>0x0FFF then error("visual surface tile exceeds 12-bit range",0) end
 				remapped[#remapped+1]=u16le(emission+physical)
+				pages[#pages+1]=u8(page)
 			end
 			raw=table.concat(remapped)
+			data[#data+1]=raw
+			data[#data+1]=table.concat(pages)
+		else
+			data[#data+1]=raw
 		end
-		data[#data+1]=raw
 	end
 	local tintSeen,tintIndexes={},{}
 	for offset=1,#c.geometryData,32 do local packed=c.geometryData:byte(offset) or 0;local tv=bit_rshift(packed,3);if tv>0 and not tintSeen[tv-1] then tintSeen[tv-1]=true;tintIndexes[#tintIndexes+1]=tv-1 end end
@@ -1146,6 +1158,33 @@ local function visualCatalogPayload( totalStateCount )
 	table.sort(transformed);data[#data+1]=u16le(#transformed)
 	for _,modelId in ipairs(transformed)do data[#data+1]=u16le(modelId)..transforms[modelId] end
 	local payload=table.concat(data);return payload,#payload
+end
+
+local function atlasPagesPayload()
+	local pageCount = checkedInt( MC.AtlasPageCount and MC.AtlasPageCount() or 1,
+		1, 64, "atlas page count" )
+	local layouts, extra = {}, {}
+	for page = 0, pageCount - 1 do
+		local A = MC.AtlasPageLayout and MC.AtlasPageLayout( page ) or ( page == 0 and MC.Atlas )
+		if type( A ) ~= "table" then error( "atlas page " .. page .. " layout unavailable", 0 ) end
+		local layout = {
+			COLS = checkedInt( A.COLS or 1, 1, 65535, "atlas cols" ),
+			ROWS = checkedInt( A.ROWS or 1, 1, 65535, "atlas rows" ),
+			TILE = checkedInt( A.TILE or 64, 1, 65535, "atlas tile" ),
+			PAD = checkedInt( A.PAD or 0, 0, 65535, "atlas pad" ),
+			STRIDE = checkedInt( A.STRIDE or A.TILE or 64, 1, 65535, "atlas stride" ),
+			W = checkedInt( A.W or 4096, 1, 65535, "atlas width" ),
+			H = checkedInt( A.H or 4096, 1, 65535, "atlas height" ),
+			INSET = checkedNumber( A.INSET or .5, 0, 65535, "atlas inset" ),
+		}
+		layouts[page] = layout
+		if page > 0 then
+			extra[#extra + 1] = u16le( layout.COLS ) .. u16le( layout.ROWS )
+				.. u16le( layout.TILE ) .. u16le( layout.PAD ) .. u16le( layout.STRIDE )
+				.. u16le( layout.W ) .. u16le( layout.H ) .. f32le( layout.INSET )
+		end
+	end
+	return layouts[0], pageCount, table.concat( extra )
 end
 
 local function packBlockDefsUnsafe()
@@ -1212,21 +1251,22 @@ local function packBlockDefsUnsafe()
 			..u8(CONNECTION[connKind] or 0)..u8(0)..u16le(#orients)..u16le(0)..u32le(0)..table.concat(orientParts)
 	end
 	if counts.orient>MAX_BLOCKS*MAX_ORIENTS or counts.box>MAX_BOXES or counts.quad>MAX_QUADS or counts.template>MAX_TEMPLATES then error("definition aggregate limit exceeded",0) end
-	local blockPayload=table.concat(body); local A=MC.Atlas
+	local blockPayload=table.concat(body)
+	local A, atlasPageCount, atlasPagePayload = atlasPagesPayload()
 	local states, stateCount = stateMapPayload()
 	local visualPayload, visualBytes = visualCatalogPayload( stateCount )
 	local metadata = MC.BlockStateRegistryMetadata or {}
 	local catalog = MC.StateVisualCatalog or {}
 	local schemaHash = hexHashBytes( metadata.schemaHash, "schema hash" )
 	local visualHash = hexHashBytes( catalog.visualPlanSha256 or catalog.blockstateSha256, "visual hash" )
-	local header="MCBD"..u32le(4)..u32le(128+#blockPayload+#states+visualBytes)
+	local header="MCBD"..u32le(5)..u32le(128+#atlasPagePayload+#blockPayload+#states+visualBytes)
 		..u16le(checkedInt(A.COLS or 1,1,65535,"atlas cols"))..u16le(checkedInt(A.ROWS or 1,1,65535,"atlas rows"))
 		..u16le(checkedInt(A.TILE or 64,1,65535,"atlas tile"))..u16le(checkedInt(A.PAD or 0,0,65535,"atlas pad"))
 		..u16le(checkedInt(A.STRIDE or A.TILE or 64,1,65535,"atlas stride"))..u16le(checkedInt(A.W or 4096,1,65535,"atlas width"))
-		..u16le(checkedInt(A.H or 4096,1,65535,"atlas height"))..u16le(0)..f32le(checkedNumber(A.INSET or .5,0,65535,"atlas inset"))
+		..u16le(checkedInt(A.H or 4096,1,65535,"atlas height"))..u16le(atlasPageCount)..f32le(checkedNumber(A.INSET or .5,0,65535,"atlas inset"))
 		..u32le(#ids)..u32le(counts.orient)..u32le(counts.box)..u32le(counts.quad)..u32le(counts.template)
-		..u32le(stateCount)..u32le(visualBytes)..u32le(visualBytes>0 and 2 or 0)..schemaHash..visualHash
-	local blob=header..blockPayload..states..visualPayload
+		..u32le(stateCount)..u32le(visualBytes)..u32le(visualBytes>0 and 3 or 0)..schemaHash..visualHash
+	local blob=header..atlasPagePayload..blockPayload..states..visualPayload
 	if #blob>MAX_BLOB_BYTES then error("definition blob too large",0) end
 	return blob, { emitters=emitterCensus, passes=passCensus }, #ids, passCensus[0], passCensus[1]
 end
@@ -1242,7 +1282,7 @@ local function packBlockDefs()
 	p.defsMaxMS = math.max( p.defsMaxMS, elapsedMS )
 	if not ok or type( a ) ~= "string" then
 		p.defsFailures = p.defsFailures + 1
-		log("MCBD v4 pack failed: "..tostring(a))
+		log("MCBD v5 pack failed: "..tostring(a))
 		return nil
 	end
 	p.defsBytes = #a
@@ -1677,7 +1717,7 @@ local function tryStart()
 		return lockToLuaBackend( "ABI mismatch" )
 	end
 	-- 瀵煎嚭闈㈡鏌? 濂戠害鍑芥暟蹇呴』鍏ㄩ儴瀛樺湪(绌哄３涔熻), 缂轰竴涓氨鐐瑰悕骞剁暀鍦?Lua 璺緞
-	for _, fname in ipairs( { "Handshake", "SetBlockDefs", "SetLightDefs", "SetSimpleGreedy", "SetDirectionalDraw", "SetOcclusionCull", "SetLod", "CreateChunk", "ApplyChunk", "SetCellsBatch", "SetCell", "GetCell", "GetChunkCells", "RebuildBlockLight", "StartBlockLightRebuild", "PollBlockLightRebuild", "CancelBlockLightRebuild", "GetBlockLightChunk", "GetSkyLightChunk", "BindLightAtlasMaterial", "GetLightAtlasStats", "GetLightAtlasSlot", "DrawVisible", "SetChunkVisible", "UnloadChunk",
+	for _, fname in ipairs( { "Handshake", "SetAtlasPageMaterial", "SetBlockDefs", "SetLightDefs", "SetSimpleGreedy", "SetDirectionalDraw", "SetOcclusionCull", "SetLod", "CreateChunk", "ApplyChunk", "SetCellsBatch", "SetCell", "GetCell", "GetChunkCells", "RebuildBlockLight", "StartBlockLightRebuild", "PollBlockLightRebuild", "CancelBlockLightRebuild", "GetBlockLightChunk", "GetSkyLightChunk", "BindLightAtlasMaterial", "GetLightAtlasStats", "GetLightAtlasSlot", "DrawVisible", "SetChunkVisible", "UnloadChunk",
 		"ClearWorld", "Think", "DrawChunk", "GetStats", "Shutdown" } ) do
 		if not isfunction( mcmesh[fname] ) then
 			log( "module missing mcmesh." .. fname .. "(), staying on Lua path" )
@@ -1709,6 +1749,25 @@ local function tryStart()
 		log( "handshake rejected, staying on Lua path" )
 		timer.Remove( "mcswep_native_bootstrap" )
 		return false
+	end
+	local atlasPageCount = MC.AtlasPageCount and MC.AtlasPageCount() or 1
+	for page = 0, atlasPageCount - 1 do
+		local matPageOpaque, opaqueError = MC.AtlasPageMaterial and MC.AtlasPageMaterial( page, false ) or nil
+		local matPageTranslucent, translucentError = MC.AtlasPageMaterial and MC.AtlasPageMaterial( page, true ) or nil
+		if not ( matPageOpaque and matPageOpaque.GetName and not matPageOpaque:IsError()
+			and matPageTranslucent and matPageTranslucent.GetName and not matPageTranslucent:IsError() ) then
+			state.startupFailureReason = "atlas page material unavailable " .. page .. " ("
+				.. tostring( opaqueError or translucentError or "unknown" ) .. ")"
+			if isfunction( mcmesh.Shutdown ) then pcall( mcmesh.Shutdown ) end
+			return false
+		end
+		local pageOK, pageResult = pcall( mcmesh.SetAtlasPageMaterial, page,
+			"!" .. matPageOpaque:GetName(), "!" .. matPageTranslucent:GetName() )
+		if not pageOK or pageResult ~= true then
+			state.startupFailureReason = "atlas page material rejected " .. page
+			if isfunction( mcmesh.Shutdown ) then pcall( mcmesh.Shutdown ) end
+			return false
+		end
 	end
 	if MC.NativeChunkBackend.BindLightAtlasMaterials() ~= true then
 		state.startupFailureReason = "light atlas material bind failed"
@@ -1752,7 +1811,7 @@ local function tryStart()
 	local metadata = MC.BlockStateRegistryMetadata or {}
 	local catalog = MC.StateVisualCatalog or {}
 	local atlasProfileKey = MC.AtlasProfileCacheKey and MC.AtlasProfileCacheKey() or "default"
-	local cacheKey = "mcbd4-state-liquid1-visual2-stateflags3-renderroute2-modelsurface2-pistonuv1-atlasprofile1:" .. tostring( metadata.schemaHash or "" ) .. ":" .. tostring( catalog.visualPlanSha256 or "" )
+	local cacheKey = "mcbd5-state-liquid1-visual3-stateflags3-renderroute2-modelsurface2-pistonuv1-atlaspages1:" .. tostring( metadata.schemaHash or "" ) .. ":" .. tostring( catalog.visualPlanSha256 or "" )
 		.. ":" .. tostring( MC.BlockStateCount or 0 ) .. ":" .. tostring( atlasProfileKey )
 	local builtFresh, loadedFromDisk, loadedFromArtifact = false, false, false
 	if state.defCache and state.defCache.key == cacheKey then
@@ -1846,7 +1905,7 @@ local function tryStart()
 		end
 	end
 	local parseMS = ( SysTime() - parseStarted ) * 1000
-	log( "SetBlockDefs v4 ok: " .. tostring( defCount ) .. " ids, "
+	log( "SetBlockDefs v5 ok: " .. tostring( defCount ) .. " ids, "
 		.. tostring( opaqueCount ) .. " opaque + " .. tostring( translucentCount )
 		.. " translucent orient definitions, " .. #blob .. " bytes, pack/cache="
 		.. math.Round( packMS, 1 ) .. "ms parse=" .. math.Round( parseMS, 1 ) .. "ms" )

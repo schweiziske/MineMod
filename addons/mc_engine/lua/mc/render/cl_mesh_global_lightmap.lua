@@ -369,6 +369,11 @@ local function bindToMaterials()
 			mat:SetTexture( "$texture2", target )
 		end
 	end
+	local materials = MC.GetGpuChunkLightTextureMaterials and MC.GetGpuChunkLightTextureMaterials() or nil
+	if type( materials ) == "table" and #materials > 0 then
+		for _, material in ipairs( materials ) do bind( material ) end
+		return
+	end
 	bind( MC.MaterialGpuLightTexture )
 	bind( MC.MaterialGpuLightTextureLinearDebug )
 	bind( MC.MaterialGpuLightTexturePpFix )

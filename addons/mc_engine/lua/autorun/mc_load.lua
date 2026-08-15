@@ -295,14 +295,14 @@ if CLIENT then
 	end
 
 	local NATIVE_MODULE_EXPORTS = {
-		"Handshake", "SetBlockDefs", "SetLightDefs", "CreateChunk", "ApplyChunk", "SetCellsBatch",
+		"Handshake", "SetAtlasPageMaterial", "SetBlockDefs", "SetLightDefs", "CreateChunk", "ApplyChunk", "SetCellsBatch",
 		"SetCell", "GetCell", "GetChunkCells", "Think", "DrawChunk", "UnloadChunk",
 		"ClearWorld", "Shutdown", "GetStats", "StartBlockLightRebuild",
 		"PollBlockLightRebuild", "CancelBlockLightRebuild", "RebuildBlockLight", "GetBlockLightChunk", "GetSkyLightChunk",
 		"BindLightAtlasMaterial", "GetLightAtlasStats", "GetLightAtlasSlot",
 		"DrawVisible", "SetChunkVisible", "SetSimpleGreedy", "SetDirectionalDraw", "SetOcclusionCull", "SetLod",
 	}
-	MC.NativeMeshABI = 7
+	MC.NativeMeshABI = 8
 	local NATIVE_MODULE_URL = "https://github.com/schweiziske/mc_swep"
 
 	local function expectedNativeModulePath()
