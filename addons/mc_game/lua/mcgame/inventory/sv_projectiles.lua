@@ -540,8 +540,15 @@ function SV.HandleProjectileImpact( ent, trace )
 			damageInfo:SetDamagePosition( trace.HitPos )
 			hitEntity:TakeDamageInfo( damageInfo )
 		end
-		if ent.GetProjectileOnFire and ent:GetProjectileOnFire() and hitEntity.Ignite then
-			hitEntity:Ignite( 5, 0 )
+		if ent.GetProjectileOnFire and ent:GetProjectileOnFire() then
+			local handled = MC.RunEvent and MC.RunEvent( "MC.IgniteEntity", hitEntity, 5, {
+				source = "burning_projectile",
+				projectile = ent,
+				owner = owner,
+				definition = definition,
+				trace = trace,
+			} ) or nil
+			if handled == nil and hitEntity.Ignite then hitEntity:Ignite( 5, 0 ) end
 		end
 	end
 	if definition.teleport and validPlayer( owner ) and trace and trace.HitPos then

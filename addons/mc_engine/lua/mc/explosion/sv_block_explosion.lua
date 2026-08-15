@@ -386,9 +386,25 @@ local function damageEntities( center, radius, options )
 				else direction = Vector( 0, 0, 0 ) end
 				local exposure = seenPercent( center, entity )
 				local impact = ( 1 - distance ) * exposure
-				local damage = ( ( impact * impact + impact ) * 0.5 ) * 7 * doubleRadius + 1
+				local minecraftDamage = ( ( impact * impact + impact ) * 0.5 ) * 7 * doubleRadius + 1
+				local damageScale = options.entityDamageScale
+				if isfunction( damageScale ) then
+					local ok, resolved = pcall(
+						damageScale, entity, minecraftDamage, center, radius, options )
+					if not ok then
+						reportIntegrationError( "entity-damage-scale", "options", resolved )
+						damageScale = 1
+					elseif resolved == false then
+						damageScale = 0
+					else
+						damageScale = tonumber( resolved ) or 1
+					end
+				else
+					damageScale = tonumber( damageScale ) or 1
+				end
+				local damage = minecraftDamage * math.max( 0, damageScale )
 				local didDamage = false
-				if not entityIsCreative( entity ) then
+				if damage > 0 and not entityIsCreative( entity ) then
 					didDamage = takeExplosionDamage( entity, damage, direction, center, source, actor )
 					if didDamage then damaged = damaged + 1 end
 				end
@@ -397,11 +413,12 @@ local function damageEntities( center, radius, options )
 				local creativeFlying = entityIsCreative( entity ) and entity.GetMoveType
 					and entity:GetMoveType() == MOVETYPE_NOCLIP
 				if not creativeFlying then applyExplosionPush( entity, direction, knockback ) end
-				hits[#hits + 1] = {
+					hits[#hits + 1] = {
 					entity = entity,
 					distance = distance,
 					exposure = exposure,
 					impact = impact,
+					minecraftDamage = minecraftDamage,
 					damage = damage,
 					knockback = knockback,
 					damaged = didDamage,
@@ -414,6 +431,75 @@ local function damageEntities( center, radius, options )
 		end
 	end
 	return damaged, hits
+end
+
+local SOUL_FIRE_BASE = {
+	["minecraft:soul_sand"] = true,
+	["minecraft:soul_soil"] = true,
+}
+
+local function blockNameForState( stateId )
+	local name = stateInfo( stateId )
+	return name
+end
+
+local function solidRenderAt( bx, by, bz )
+	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
+	if not stateId or stateId == 0 then return false end
+	if MC.BlockIsFullCubeForState then
+		return MC.BlockIsFullCubeForState( stateId, bx, by, bz ) == true
+	end
+	local _, block = stateInfo( stateId )
+	return block and block.solid == true and block.transparent ~= true or false
+end
+
+local function explosionFireStateAt( bx, by, bz )
+	local belowState = MC.GetBlockState and MC.GetBlockState( bx, by, bz - 1 ) or 0
+	local fireName = SOUL_FIRE_BASE[blockNameForState( belowState )]
+		and "minecraft:soul_fire" or "minecraft:fire"
+	return MC.ParseBlockState and MC.ParseBlockState( fireName ) or nil
+end
+
+-- ServerExplosion#createFire iterates the exact calculated position list after
+-- block interactions: 1/3 chance, target air, solid-render block below, then
+-- BaseFireBlock.getState (normal fire or soul fire). Keep this as a second
+-- transaction so the explosion removal commit and its loot/TNT callbacks stay
+-- atomic even if fire placement is unavailable.
+local function createExplosionFire( selected )
+	if not SV.ApplyBlockTransaction then return nil, "block_transaction_unavailable" end
+	local placements = {}
+	for _, cell in ipairs( selected ) do
+		local inBounds = not SV.WorldBoundsOK or SV.WorldBoundsOK( cell.bx, cell.by, cell.bz )
+		if inBounds and math.random( 1, 3 ) == 1
+		and ( MC.GetBlockState and MC.GetBlockState( cell.bx, cell.by, cell.bz ) or 0 ) == 0
+		and solidRenderAt( cell.bx, cell.by, cell.bz - 1 ) then
+			local stateId = explosionFireStateAt( cell.bx, cell.by, cell.bz )
+			if stateId and stateId ~= 0 then
+				placements[#placements + 1] = {
+					bx = cell.bx, by = cell.by, bz = cell.bz, stateId = stateId,
+				}
+			end
+		end
+	end
+	if #placements == 0 then return { ok = true, changed = 0, changes = {} } end
+	local transaction = SV.ApplyBlockTransaction( placements, {
+		actor = nil,
+		fx = false,
+		handlers = true,
+		blockUpdates = true,
+		compareCollision = true,
+		validateChange = function( info )
+			if info.oldStateId ~= 0 then return false, "explosion_fire_target_changed" end
+			if not solidRenderAt( info.bx, info.by, info.bz - 1 ) then
+				return false, "explosion_fire_support_changed"
+			end
+			return true
+		end,
+	} )
+	if not transaction or transaction.ok ~= true then
+		return transaction, transaction and transaction.error or "explosion_fire_failed"
+	end
+	return transaction
 end
 
 local function prepareBlockInteractions( snapshots, radius, options )
@@ -523,7 +609,10 @@ function SV.ApplyMinecraftExplosion( center, radius, options )
 	} )
 	if not selected then return false, selectionError or "selection_failed" end
 
-	local damagedCount, entityHits = damageEntities( center, radius, options )
+	local damagedCount, entityHits = 0, {}
+	if options.affectsEntities ~= false then
+		damagedCount, entityHits = damageEntities( center, radius, options )
+	end
 	local blockCount = #selected
 	local snapshots, snapshotByKey, removals = {}, {}, {}
 	if options.interactsWithBlocks ~= false then
@@ -531,11 +620,11 @@ function SV.ApplyMinecraftExplosion( center, radius, options )
 		for _, cell in ipairs( selected ) do
 			local stateId = MC.GetBlockState and MC.GetBlockState( cell.bx, cell.by, cell.bz ) or 0
 			if stateId ~= 0 then
-				local name, block, blockId, schema = stateInfo( stateId )
+				local name, _, blockId = stateInfo( stateId )
 				local snapshot = {
 					bx = cell.bx, by = cell.by, bz = cell.bz,
 					stateId = stateId,
-					name = name, block = block, blockId = blockId, schema = schema,
+					name = name, blockId = blockId,
 					blockEntity = MC.GetBlockEntity and MC.GetBlockEntity( cell.bx, cell.by, cell.bz ) or nil,
 				}
 				snapshots[#snapshots + 1] = snapshot
@@ -569,6 +658,13 @@ function SV.ApplyMinecraftExplosion( center, radius, options )
 	local transactionOK = transaction and transaction.ok == true
 	local blockInteractions = transactionOK
 		and commitBlockInteractions( preparedInteractions, transaction, snapshots, radius, options ) or {}
+	local fireTransaction, fireError = { ok = true, changed = 0, changes = {} }, nil
+	if transactionOK and options.createFire == true then
+		fireTransaction, fireError = createExplosionFire( selected )
+		if not fireTransaction or fireTransaction.ok ~= true then
+			reportIntegrationError( "fire", "options", fireError or "explosion_fire_failed" )
+		end
+	end
 	local recipients = sendExplosionEffects(
 		center, radius, blockCount, options, transactionOK and #removals > 0 )
 	local details = {
@@ -581,6 +677,9 @@ function SV.ApplyMinecraftExplosion( center, radius, options )
 		damagedEntities = damagedCount,
 		entityHits = entityHits,
 		blockInteractions = blockInteractions,
+		createdFire = fireTransaction and fireTransaction.ok == true and ( fireTransaction.changed or 0 ) or 0,
+		fireTransaction = fireTransaction,
+		fireError = fireError,
 		recipients = recipients,
 		transaction = transaction,
 	}

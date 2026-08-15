@@ -14,8 +14,39 @@ local INVENTORY_SIZE = 36
 local SAVE_VERSION = 1
 local SAVE_ROOT = "mc/player_inventories"
 local SAVE_INTERVAL = 30
+local EXPERIENCE_MAX = 2147483647
 
 SV.PlayerInventories = SV.PlayerInventories or {}
+
+local function normalizedExperienceInteger( value )
+	value = math.floor( tonumber( value ) or 0 )
+	return math.Clamp( value, 0, EXPERIENCE_MAX )
+end
+
+local function normalizedExperienceProgress( value )
+	value = tonumber( value ) or 0
+	if value ~= value or value == math.huge or value == -math.huge then return 0 end
+	return math.Clamp( value, 0, 0.999999999 )
+end
+
+local function normalizedEnchantmentSeed( value )
+	value = tonumber( value )
+	if not value then return nil end
+	value = bit.tobit( math.floor( value ) )
+	return value ~= 0 and value or nil
+end
+
+local function freshEnchantmentSeed( ply )
+	local entropy = table.concat( {
+		IsValid( ply ) and tostring( ply:SteamID64() or "" ) or "",
+		tostring( SysTime and SysTime() or 0 ),
+		tostring( CurTime and CurTime() or 0 ),
+		tostring( os.time() ),
+		tostring( math.random() ),
+	}, ":" )
+	local seed = normalizedEnchantmentSeed( util.CRC( entropy ) )
+	return seed or 1
+end
 
 local function persistentEnabled()
 	return not MC.Config.InventoryPersist or MC.Config.InventoryPersist:GetBool()
@@ -102,7 +133,8 @@ local function normalizedEquipment( equipment )
 	return result
 end
 
-local function newRecord( ply, storage, selected, carried, equipment )
+local function newRecord( ply, storage, selected, carried, equipment, savedState )
+	savedState = type( savedState ) == "table" and savedState or {}
 	local record = {
 		owner = ply,
 		ownerId = safeOwnerId( ply ),
@@ -111,6 +143,11 @@ local function newRecord( ply, storage, selected, carried, equipment )
 		carried = MC.CopyItemStack( carried ),
 		equipment = normalizedEquipment( equipment ),
 		revision = 0,
+		experienceTotal = normalizedExperienceInteger( savedState.experienceTotal ),
+		experienceLevel = normalizedExperienceInteger( savedState.experienceLevel ),
+		experienceProgress = normalizedExperienceProgress( savedState.experienceProgress ),
+		experienceRevision = 0,
+		enchantmentSeed = normalizedEnchantmentSeed( savedState.enchantmentSeed ) or freshEnchantmentSeed( ply ),
 		dirty = false,
 		loadedAt = SysTime and SysTime() or 0,
 	}
@@ -158,7 +195,25 @@ local function decodeSavedRecord( ply, data )
 		end
 	end
 	local carried = MC.InventoryStackFromData( data.carried )
-	return newRecord( ply, storage, data.selected, carried, equipment )
+	local experienceTotal = normalizedExperienceInteger( data.experienceTotal )
+	local experienceLevel = normalizedExperienceInteger( data.experienceLevel )
+	local experienceProgress = normalizedExperienceProgress( data.experienceProgress )
+	local enchantmentSeed = normalizedEnchantmentSeed( data.enchantmentSeed )
+	local record, err = newRecord( ply, storage, data.selected, carried, equipment, {
+		experienceTotal = experienceTotal,
+		experienceLevel = experienceLevel,
+		experienceProgress = experienceProgress,
+		enchantmentSeed = enchantmentSeed,
+	} )
+	if record and ( data.experienceTotal == nil or data.experienceLevel == nil
+		or data.experienceProgress == nil or data.enchantmentSeed == nil
+		or tonumber( data.experienceTotal ) ~= experienceTotal
+		or tonumber( data.experienceLevel ) ~= experienceLevel
+		or tonumber( data.experienceProgress ) ~= experienceProgress
+		or tonumber( data.enchantmentSeed ) ~= enchantmentSeed ) then
+		record.dirty = true
+	end
+	return record, err
 end
 
 local function readRecord( ply )
@@ -181,9 +236,14 @@ local function encodedRecord( record )
 		version = SAVE_VERSION,
 		itemRegistry = tostring( MC.ItemRegistryHash or "" ),
 		selected = record.selected,
+		experienceTotal = normalizedExperienceInteger( record.experienceTotal ),
+		experienceLevel = normalizedExperienceInteger( record.experienceLevel ),
+		experienceProgress = normalizedExperienceProgress( record.experienceProgress ),
+		enchantmentSeed = normalizedEnchantmentSeed( record.enchantmentSeed ) or freshEnchantmentSeed( record.owner ),
 		items = {},
 		equipment = {},
 	}
+	record.enchantmentSeed = data.enchantmentSeed
 	for slot = 0, INVENTORY_SIZE - 1 do
 		local stack = record.storage[slot + 1]
 		if not MC.IsEmptyItemStack( stack ) then
@@ -250,6 +310,7 @@ function SV.LoadPlayerInventory( ply )
 	if not record then return nil, err end
 	SV.PlayerInventories[ply] = record
 	updateHeldNetwork( record, { reason = "inventory_load" } )
+	if SV.UpdatePlayerExperienceNetwork then SV.UpdatePlayerExperienceNetwork( record, { reason = "inventory_load" } ) end
 	if SV.UpdatePlayerEquipmentNetwork then SV.UpdatePlayerEquipmentNetwork( record ) end
 	return record
 end

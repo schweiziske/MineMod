@@ -56,12 +56,6 @@ function SV.SetPlayerGameMode( ply, value, actor )
 	ply:SetNWString( "mc_gamemode", mode )
 	if not ply:IsBot() then ply:SetPData( PDATA_KEY, mode ) end
 
-	if SV.CancelMining then SV.CancelMining( ply, "game_mode_changed" ) end
-	if SV.CancelSelectedItemUse then SV.CancelSelectedItemUse( ply, "game_mode_changed" ) end
-	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply, false ) or nil
-	if SV.ClosePlayerInventory and record and record.session then
-		SV.ClosePlayerInventory( ply, "game_mode_changed" )
-	end
 	if MC.RunEvent and oldMode ~= mode then MC.RunEvent( "MC.PlayerGameModeChanged", ply, oldMode, mode, actor ) end
 	return true, oldMode, mode
 end
@@ -121,7 +115,6 @@ end )
 
 hook.Add( "PlayerDisconnected", "mc_clear_player_game_mode", function( ply )
 	SV.PlayerGameModes[ply] = nil
-	if SV.MiningSessions then SV.MiningSessions[ply] = nil end
 end )
 
 for _, ply in ipairs( player.GetAll() ) do SV.GetPlayerGameMode( ply ) end

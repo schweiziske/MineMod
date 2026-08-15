@@ -2,6 +2,8 @@
 
 MC = MC or {}
 
+local Blocks = MC.API and MC.API.Blocks
+
 local FURNACE_TYPE = "minecraft:furnace"
 local FURNACE_CODEC_VERSION = 1
 local FURNACE_SLOTS = 3
@@ -41,9 +43,8 @@ local function encodeData( data ) return normalizeData( data ) end
 local function decodeData( data ) return normalizeData( data ) end
 local function validateData( data ) return normalizeData( data ) ~= nil end
 
-if not ( MC.PendingBlockEntityTypes and MC.PendingBlockEntityTypes[FURNACE_TYPE] )
-	and MC.RegisterBlockEntityType then
-	MC.RegisterBlockEntityType( {
+if Blocks and not Blocks.IsBlockEntityTypeRegistered( FURNACE_TYPE ) then
+	Blocks.RegisterBlockEntityType( {
 		name = FURNACE_TYPE,
 		codecVersion = FURNACE_CODEC_VERSION,
 		serverOnly = true,
@@ -61,30 +62,18 @@ if not ( MC.PendingBlockEntityTypes and MC.PendingBlockEntityTypes[FURNACE_TYPE]
 	} )
 end
 
-local function mapFurnaceSchemas()
-	for blockName in pairs( FURNACE_BLOCKS ) do
-		local schema = ( MC.PendingBlockStateSchemas or {} )[blockName]
-			or ( MC.BlockStateSchemaByName or {} )[blockName]
-		if schema then schema.blockEntityType = FURNACE_TYPE end
-	end
-end
-mapFurnaceSchemas()
-
-for blockName in pairs( FURNACE_BLOCKS ) do
-	local block = ( MC.BlockByName or {} )[blockName]
-		or ( MC.BlockByName or {} )[string.gsub( blockName, "^minecraft:", "" )]
-	if block and MC.BlockHandlers and MC.BlockHandlers.furnace then
-		block.handlers = MC.BlockHandlers.furnace
-		block.handlerName = "furnace"
-	end
+if Blocks then
+	local names = {}
+	for blockName in pairs( FURNACE_BLOCKS ) do names[#names + 1] = blockName end
+	Blocks.BindBlockEntityType( names, FURNACE_TYPE )
 end
 
 local function stateInfo( stateId )
-	local schema = MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( stateId ) or nil
-	local recipeType = schema and FURNACE_BLOCKS[schema.name] or nil
+	local name = Blocks and Blocks.Name( stateId ) or nil
+	local recipeType = name and FURNACE_BLOCKS[name] or nil
 	if not recipeType then return nil end
-	return { name = schema.name, recipeType = recipeType,
-		lit = MC.GetStateProperty( stateId, "lit" ) == true }
+	return { name = name, recipeType = recipeType,
+		lit = Blocks.GetProperty( stateId, "lit" ) == true }
 end
 
 function MC.FurnaceStateInfo( stateId ) return stateInfo( stateId ) end

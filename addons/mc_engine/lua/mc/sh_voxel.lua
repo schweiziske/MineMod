@@ -825,14 +825,26 @@ function MC.SetChunkLocalStateRaw( chunk, li, stateId, knownOldStateId )
 		elseif not MC.NativeChunkBulkLoading and backend and backend.GetCell then
 			oldStateId = backend.GetCell( chunk, li ) or 0
 		end
-		if oldStateId == stateId then return false, oldStateId end
+		if oldStateId == stateId then
+			if MC.ReconcileChunkLocalBlockEntity then
+				local reconciled, reconcileError = MC.ReconcileChunkLocalBlockEntity( chunk, li, stateId )
+				if reconciled == nil then return nil, reconcileError end
+			end
+			return false, oldStateId
+		end
 	else
 		local migrated, migrationError = MC.MigrateChunkStateStorage( chunk )
 		if not migrated then return nil, migrationError end
 		local sectionIndex, sectionLocalIndex = stateSectionAddress( li )
 		local section = chunk.stateSections[sectionIndex]
 		oldStateId = section and MC.StateSection.Get( section, sectionLocalIndex ) or 0
-		if oldStateId == stateId then return false, oldStateId end
+		if oldStateId == stateId then
+			if MC.ReconcileChunkLocalBlockEntity then
+				local reconciled, reconcileError = MC.ReconcileChunkLocalBlockEntity( chunk, li, stateId )
+				if reconciled == nil then return nil, reconcileError end
+			end
+			return false, oldStateId
+		end
 		if not section then
 			section = MC.StateSection.New()
 			chunk.stateSections[sectionIndex] = section
@@ -857,19 +869,19 @@ function MC.SetChunkLocalStateRaw( chunk, li, stateId, knownOldStateId )
 	end
 	if oldStateId == 0 then chunk.count = ( chunk.count or 0 ) + 1 end
 	if stateId == 0 then chunk.count = math.max( 0, ( chunk.count or 0 ) - 1 ) end
-	if chunk.blockEntities and chunk.blockEntities[li] then
-		local expectedType = MC.BlockEntityTypeForState and MC.BlockEntityTypeForState( stateId ) or nil
-		if chunk.blockEntities[li].type ~= expectedType then
-			chunk.blockEntities[li] = nil
-			if next( chunk.blockEntities ) == nil then chunk.blockEntities = nil end
-		end
-	end
 	-- Opaque imported Block Entities are archive-only and cannot participate in
 	-- lifecycle compatibility checks. Any gameplay state mutation invalidates
 	-- the archived attachment at that cell instead of risking an orphan record.
 	if chunk.opaqueBlockEntities and chunk.opaqueBlockEntities[li] then
 		chunk.opaqueBlockEntities[li] = nil
 		if next( chunk.opaqueBlockEntities ) == nil then chunk.opaqueBlockEntities = nil end
+	end
+	if MC.ReconcileChunkLocalBlockEntity then
+		local reconciled, reconcileError = MC.ReconcileChunkLocalBlockEntity( chunk, li, stateId )
+		if reconciled == nil and ErrorNoHalt then
+			ErrorNoHalt( "[MC] Block Entity default reconciliation failed: "
+				.. tostring( reconcileError or "unknown" ) .. "\n" )
+		end
 	end
 	local chunkBackend = CLIENT and MC.GetChunkBackend and MC.GetChunkBackend() or nil
 	if chunkBackend and chunkBackend.native and not MC.NativeChunkBulkLoading and chunk.nativeMeshEpoch ~= nil
@@ -881,6 +893,10 @@ end
 
 function MC.FinalizeChunkStateStorage( chunk )
 	if not chunk then return nil, "missing_chunk" end
+	if MC.ReconcileChunkBlockEntities then
+		local reconciled, reconcileError = MC.ReconcileChunkBlockEntities( chunk )
+		if reconciled == nil then return nil, reconcileError end
+	end
 	MC.TouchChunkCollisionVersion( chunk )
 	if CLIENT then
 		chunk.renderSectionBlocks = nil
@@ -1011,8 +1027,8 @@ function MC._SetBlockStateStorageRaw( bx, by, bz, stateId, knownOldStateId )
 		updateCachedRenderSectionCell( c, li, stateId )
 	end
 	if emptied then MC.World[key] = nil end
-	if CLIENT and MC.NoteChestStateChanged then
-		MC.NoteChestStateChanged( bx, by, bz, oldOrError or 0, stateId )
+	if CLIENT and MC.RunEvent then
+		MC.RunEvent( "MC.ClientBlockStateChanged", bx, by, bz, oldOrError or 0, stateId, "storage_write" )
 	end
 	return c, created, emptied, true
 end

@@ -1,7 +1,8 @@
 -- Shared campfire interaction/lifecycle binding.
 
 MC = MC or {}
-MC.BlockHandlers = MC.BlockHandlers or {}
+
+local Blocks = MC.API and MC.API.Blocks
 
 local function dropContents( context )
 	if SERVER and MC.SV and MC.SV.DropCampfireContents then
@@ -14,7 +15,7 @@ local function isShovel( stack )
 	return spec and spec.type == "shovel" or false
 end
 
-MC.BlockHandlers.campfire = MC.BlockHandlers.campfire or {
+local HANDLERS = {
 	CanUse = function( stack )
 		return isShovel( stack ) or stack ~= nil and MC.FindCookingRecipe ~= nil
 			and MC.FindCookingRecipe( stack, "minecraft:campfire_cooking" ) ~= nil
@@ -50,10 +51,7 @@ MC.BlockHandlers.campfire = MC.BlockHandlers.campfire or {
 	OnReplaced = dropContents,
 }
 
-for _, block in pairs( MC.Blocks or {} ) do
-	if block.mcid == "minecraft:campfire" or block.mcid == "minecraft:soul_campfire"
-		or block.name == "campfire" or block.name == "soul_campfire" then
-		block.handlers = MC.BlockHandlers.campfire
-		block.handlerName = "campfire"
-	end
+if Blocks then
+	Blocks.SetHandlers( "minecraft:campfire", HANDLERS )
+	Blocks.SetHandlers( "minecraft:soul_campfire", HANDLERS )
 end

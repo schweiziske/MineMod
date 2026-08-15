@@ -3,12 +3,14 @@
 
 MC = MC or {}
 
+local Blocks = MC.API and MC.API.Blocks
+
 function MC.IsTntState( stateId )
-	local schema = MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( stateId ) or nil
-	return schema and schema.name == "minecraft:tnt" or false
+	local name = Blocks and Blocks.Name( stateId ) or nil
+	return name == "minecraft:tnt"
 end
 
 function MC.IsTntBlockId( blockId )
-	local block = MC.Blocks and MC.Blocks[tonumber( blockId ) or -1] or nil
+	local block = Blocks and Blocks.Resolve( tonumber( blockId ) or -1 ) or nil
 	return block and block.mcid == "minecraft:tnt" or false
 end

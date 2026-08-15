@@ -1,7 +1,8 @@
 MC = MC or {}
-MC.BlockHandlers = MC.BlockHandlers or {}
 
-MC.BlockHandlers.furnace = MC.BlockHandlers.furnace or {
+local Blocks = MC.API and MC.API.Blocks
+
+local HANDLERS = {
 	OnUse = function( ply, bx, by, bz )
 		if not SERVER or not MC.SV or not MC.SV.OpenFurnace then return false end
 		return MC.SV.OpenFurnace( ply, bx, by, bz ) == true
@@ -17,3 +18,8 @@ MC.BlockHandlers.furnace = MC.BlockHandlers.furnace or {
 		end
 	end,
 }
+
+if Blocks then
+	Blocks.SetHandlers( "minecraft:furnace", HANDLERS )
+	Blocks.SetHandlers( "minecraft:blast_furnace", HANDLERS )
+end

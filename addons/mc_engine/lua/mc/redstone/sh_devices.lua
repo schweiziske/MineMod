@@ -273,16 +273,6 @@ for name in pairs( MC.BlockByName ) do
 	if string.match( name, "copper_bulb$" ) then MC.RegisterBlockUpdateHandler( name, copperBulbHandler ) end
 end
 
-MC.RegisterBlockUpdateHandler( "minecraft:tnt", {
-	OnNeighborUpdate = function( context )
-		if SERVER and powerAt( context.bx, context.by, context.bz )
-		and MC.SV and MC.SV.PrimeTntBlock then
-			MC.SV.PrimeTntBlock( context.bx, context.by, context.bz, nil )
-		end
-		return nil
-	end,
-} )
-
 function MC.RedstoneDeviceDiagnostics()
 	return {
 		poweredRail = MC.BlockUpdateHandlerForName( "minecraft:powered_rail" ) ~= nil,

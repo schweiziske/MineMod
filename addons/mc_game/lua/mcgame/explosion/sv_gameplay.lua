@@ -8,16 +8,19 @@ if not SERVER then return end
 
 MC = MC or {}
 MC.SV = MC.SV or {}
-MC.Explosion = MC.Explosion or {}
+MC.GameExplosion = MC.GameExplosion or {}
 
 local SV = MC.SV
-local Explosion = MC.Explosion
+local API = MC.API
+local Explosion = API and API.Explosion
+local GameExplosion = MC.GameExplosion
 local TICKS_PER_SECOND = 20
 local MAX_DROPS_PER_COMBINED_STACK = 16
 local ARMOR_EQUIPMENT_SLOTS = { "head", "chest", "legs", "feet" }
 
 local function blockSize()
-	return math.max( 1, tonumber( MC.BS ) or 36.5 )
+	local coords = API and API.Coords
+	return math.max( 1, tonumber( coords and coords.BlockSize and coords.BlockSize() ) or 36.5 )
 end
 
 local function reportGameplayError( stage, message )
@@ -58,8 +61,8 @@ local function equipmentExplosionKnockbackResistance( entity )
 	)
 end
 
-Explosion.GetEnchantmentProtection = explosionEnchantmentProtection
-Explosion.GetEquipmentKnockbackResistance = equipmentExplosionKnockbackResistance
+GameExplosion.GetEnchantmentProtection = explosionEnchantmentProtection
+GameExplosion.GetEquipmentKnockbackResistance = equipmentExplosionKnockbackResistance
 
 if hook and hook.Add then
 	hook.Add( "MCITEM.DamageAfterEquipmentMitigation", "mc_explosion_enchantment_protection", function( entity, damageInfo )
@@ -71,7 +74,7 @@ if hook and hook.Add then
 	end )
 end
 
-if Explosion.RegisterKnockbackResistanceProvider then
+if Explosion and Explosion.RegisterKnockbackResistanceProvider then
 	local registered, registerError = Explosion.RegisterKnockbackResistanceProvider(
 		"mcgame_blast_protection",
 		equipmentExplosionKnockbackResistance
@@ -115,12 +118,6 @@ end
 
 local function shouldDropFromExplosion( snapshot, options )
 	if snapshot.name == "minecraft:tnt" or options.dropResources == false then return false end
-	local handlers = snapshot.block and snapshot.block.handlers or nil
-	if handlers and isfunction( handlers.DropFromExplosion ) then
-		local ok, result = pcall( handlers.DropFromExplosion, snapshot, options )
-		if not ok then reportGameplayError( "drop policy", result )
-		elseif result ~= nil then return result == true end
-	end
 	return true
 end
 
@@ -211,7 +208,7 @@ local function commitBlockInteraction( plan, _, _, _, options )
 	}
 end
 
-if not Explosion.RegisterBlockInteractionHandler then
+if not Explosion or not Explosion.RegisterBlockInteractionHandler then
 	reportGameplayError( "block registration", "block_interaction_registry_unavailable" )
 	return
 end

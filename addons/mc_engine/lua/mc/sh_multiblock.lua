@@ -90,6 +90,41 @@ local FacingDirection = {
 	east = MC.Direction.EAST,
 }
 
+MC.PlacementStateUpdateProviders = MC.PlacementStateUpdateProviders or {}
+MC.PlacementStateUpdateProviderOrder = MC.PlacementStateUpdateProviderOrder or {}
+
+local function rebuildPlacementStateProviderOrder()
+	local order = {}
+	for id, entry in pairs( MC.PlacementStateUpdateProviders ) do
+		order[#order + 1] = { id = id, priority = entry.priority, build = entry.build }
+	end
+	table.sort( order, function( left, right )
+		if left.priority == right.priority then return left.id < right.id end
+		return left.priority > right.priority
+	end )
+	MC.PlacementStateUpdateProviderOrder = order
+end
+
+function MC.RegisterPlacementStateUpdateProvider( id, build, priority )
+	id = tostring( id or "" )
+	if id == "" or #id > 128 then return false, "invalid_provider_id" end
+	if not isfunction( build ) then return false, "invalid_provider" end
+	MC.PlacementStateUpdateProviders[id] = {
+		build = build,
+		priority = math.Clamp( math.floor( tonumber( priority ) or 0 ), -32768, 32767 ),
+	}
+	rebuildPlacementStateProviderOrder()
+	return true
+end
+
+function MC.UnregisterPlacementStateUpdateProvider( id )
+	id = tostring( id or "" )
+	if not MC.PlacementStateUpdateProviders[id] then return false end
+	MC.PlacementStateUpdateProviders[id] = nil
+	rebuildPlacementStateProviderOrder()
+	return true
+end
+
 local function stateWith( stateId, property, value )
 	local nextState, err = MC.StateWith( stateId, property, value )
 	if not nextState then return nil, err or "invalid_part_state" end
@@ -130,10 +165,41 @@ local function appendRailUpdates( cells, seen, changeCount )
 	for index = 1, #updates do mergeStateUpdate( cells, seen, updates[index] ) end
 end
 
-local function appendChestUpdates( cells, seen, changeCount )
-	if not MC.BuildChestConnectionStateUpdates then return end
-	local updates = MC.BuildChestConnectionStateUpdates( cells, changeCount )
-	for index = 1, #updates do mergeStateUpdate( cells, seen, updates[index] ) end
+local function placementProviderInput( cells )
+	local copy = {}
+	for index, cell in ipairs( cells ) do
+		copy[index] = {
+			bx = cell.bx, by = cell.by, bz = cell.bz,
+			stateId = cell.stateId, id = cell.id, orient = cell.orient,
+			updateExisting = cell.updateExisting == true,
+		}
+	end
+	return copy
+end
+
+local function appendRegisteredStateUpdates( cells, seen, changeCount )
+	for _, entry in ipairs( MC.PlacementStateUpdateProviderOrder or {} ) do
+		local called, updates = pcall( entry.build, placementProviderInput( cells ), changeCount )
+		if not called then
+			if ErrorNoHalt then
+				ErrorNoHalt( "[MC] placement state provider " .. entry.id .. " failed: " .. tostring( updates ) .. "\n" )
+			end
+		elseif updates ~= nil and not istable( updates ) then
+			if ErrorNoHalt then
+				ErrorNoHalt( "[MC] placement state provider " .. entry.id .. " returned a non-table result\n" )
+			end
+		else
+			for _, update in ipairs( updates or {} ) do
+				local bx = math.floor( tonumber( update.bx ) or 0 )
+				local by = math.floor( tonumber( update.by ) or 0 )
+				local bz = math.floor( tonumber( update.bz ) or 0 )
+				local stateId = math.floor( tonumber( update.stateId ) or -1 )
+				if MC.IsValidBlockState and MC.IsValidBlockState( stateId ) then
+					mergeStateUpdate( cells, seen, { bx = bx, by = by, bz = bz, stateId = stateId } )
+				end
+			end
+		end
+	end
 end
 
 local function appendNeighbourStateUpdates( cells, seen, changeCount )
@@ -175,7 +241,7 @@ function MC.BuildPlacementStatePlan( bx, by, bz, stateId )
 		if not addStateCell( cells, seen, bx, by, bz, stateId ) then return nil end
 	end
 	local primaryChangeCount = #cells
-	appendChestUpdates( cells, seen, primaryChangeCount )
+	appendRegisteredStateUpdates( cells, seen, primaryChangeCount )
 	appendBlockConnectionUpdates( cells, seen, primaryChangeCount )
 	appendRedstoneUpdates( cells, seen, primaryChangeCount )
 	appendRailUpdates( cells, seen, primaryChangeCount )

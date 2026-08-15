@@ -982,12 +982,13 @@ function SV.Break( ply, bx, by, bz, options )
 		netMode = "bulk",
 	} )
 	local broke = result.ok == true and result.changed > 0
-	if broke and options.damageTool ~= false and MC.SV and MC.SV.DamageSelectedItem then
-		MC.SV.DamageSelectedItem( ply, 1, { reason = "mine", useToolScale = true } )
-	end
 	if broke and MC.RunEvent then
 		local first = result.changes and result.changes[1]
-		MC.RunEvent( "MC.PlayerBrokeBlock", ply, plan.bx, plan.by, plan.bz, first and first.oldStateId or 0 )
+		MC.RunEvent( "MC.PlayerBrokeBlock", ply, plan.bx, plan.by, plan.bz,
+			first and first.oldStateId or 0, {
+				damageTool = options.damageTool ~= false,
+				reason = tostring( options.reason or "mine" ),
+			} )
 	end
 	return broke, result
 end
@@ -1128,7 +1129,7 @@ end
 -- other addons' PlayerUse, so that half is intentionally not ported and the
 -- double-activation is accepted. See docs/main-sync-p0-baseline-2026-08-04.md.
 -- _tools/test_player_use_isolation.js enforces this repo-wide.
-local function tryUseAimedBlock( ply )
+function SV.TryUseAimedBlock( ply )
 	if C.UseInteract and not C.UseInteract:GetBool() then return end
 	if not IsValid( ply ) or not ply:Alive() or ply:InVehicle() then return end
 	local now = CurTime()
@@ -1143,11 +1144,7 @@ end
 
 hook.Add( "KeyPress", "mc_use_interact", function( ply, key )
 	if key ~= IN_USE then return end
-	tryUseAimedBlock( ply )
-end )
-
-net.Receive( "mc_block_use_request", function( _, ply )
-	tryUseAimedBlock( ply )
+	SV.TryUseAimedBlock( ply )
 end )
 
 local function trimArg( s )

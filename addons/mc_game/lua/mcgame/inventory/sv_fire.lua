@@ -284,6 +284,55 @@ function SV.ProjectileMayInteract( projectile, bx, by, bz )
 	return true
 end
 
+-- Server-owned projectile fire placement.  This is deliberately narrower than
+-- World.SetBlock: the caller supplies an actual block-impact point/normal, and
+-- this module owns clicked-cell validation, adjacent-air selection, edit
+-- protection, BaseFireBlock state selection and the final transaction.
+function SV.IgniteProjectileImpact( projectile, hitPos, hitNormal, context )
+	if not IsValid( projectile ) then return false, "invalid_projectile" end
+	if not isvector( hitPos ) or not isvector( hitNormal ) then return false, "invalid_impact" end
+	if not MC.WorldToCell or not MC.GetBlockState then return false, "world_api_unavailable" end
+	if not SV.SetBlockState then return false, "world_api_unavailable" end
+
+	local normal = Vector( hitNormal.x, hitNormal.y, hitNormal.z )
+	if normal:LengthSqr() <= 0.000001 then return false, "invalid_impact_normal" end
+	normal:Normalize()
+	local epsilon = math.max( ( MC.BS or 36.5 ) / 4096, 0.01 )
+	local bx, by, bz = MC.WorldToCell( hitPos - normal * epsilon )
+	if ( MC.GetBlockState( bx, by, bz ) or 0 ) == 0 then
+		-- Source map/prop impacts are not Minecraft BlockHits and cannot create a
+		-- voxel fire block merely because they happen to overlap an empty cell.
+		return false, "no_minecraft_block_target"
+	end
+
+	local dx, dy, dz = faceStep( { HitNormal = normal } )
+	local tx, ty, tz = bx + dx, by + dy, bz + dz
+	if ( MC.GetBlockState( tx, ty, tz ) or 0 ) ~= 0 then return false, "target_not_air" end
+	if not SV.ProjectileMayInteract( projectile, tx, ty, tz ) then return false, "edit_rejected" end
+
+	local stateId, fireNameOrError = fireStateAt( tx, ty, tz )
+	if not stateId then return false, fireNameOrError or "fire_cannot_survive" end
+	local owner = projectile:GetOwner()
+	local transaction = SV.SetBlockState( tx, ty, tz, stateId, {
+		actor = IsValid( owner ) and owner:IsPlayer() and owner or nil,
+		priorityPhys = true,
+		compareCollision = true,
+		blockUpdates = true,
+	} )
+	if not transaction or transaction.ok ~= true or transaction.changed <= 0 then
+		return false, transaction and transaction.error or "ignite_rejected"
+	end
+
+	context = istable( context ) and context or {}
+	return true, {
+		bx = tx, by = ty, bz = tz,
+		stateId = stateId,
+		source = fireNameOrError,
+		reason = tostring( context.reason or "projectile_impact" ),
+		transaction = transaction,
+	}
+end
+
 hook.Add( "MC.ProjectileImpact", "mc_campfire_burning_projectile", function( projectile, trace )
 	if not IsValid( projectile ) or not trace or not trace.HitPos or not MC.WorldToCell then return end
 	local burning = projectile:IsOnFire()
@@ -336,6 +385,14 @@ local function entityContactCells( entity )
 end
 
 local function applyFireContact( entity, damage, ignite )
+	-- BMB scans minecraft:fire/soul_fire itself and owns the corresponding
+	-- Minecraft fire state. Letting this generic Source adapter also Ignite and
+	-- damage it creates two flame renderers and two damage clocks. Campfires use
+	-- ignite=false and still keep their independent contact damage below.
+	if entity.IsBMBMob == true and ignite then
+		entity.MCNextFireContactDamage = nil
+		return
+	end
 	local current = CurTime()
 	if current < ( entity.MCNextFireContactDamage or 0 ) then return end
 	entity.MCNextFireContactDamage = current + FIRE_CONTACT_INTERVAL
@@ -347,7 +404,13 @@ local function applyFireContact( entity, damage, ignite )
 	info:SetAttacker( game.GetWorld() )
 	info:SetInflictor( game.GetWorld() )
 	info:SetDamagePosition( entity:WorldSpaceCenter() )
-	entity:TakeDamageInfo( info )
+	local wasEnvironmental = entity.BMBEnvironmentalDamageActive
+	if entity.IsBMBMob == true then entity.BMBEnvironmentalDamageActive = true end
+	local ok, err = pcall( entity.TakeDamageInfo, entity, info )
+	if IsValid( entity ) and entity.IsBMBMob == true then
+		entity.BMBEnvironmentalDamageActive = wasEnvironmental
+	end
+	if not ok then ErrorNoHalt( "[MC] fire contact damage failed: " .. tostring( err ) .. "\n" ) end
 end
 
 local function scanFireContacts()

@@ -1,5 +1,5 @@
 --[[----------------------------------------------------------------------------
-	MC : public API, shared layer (v1).
+	MC : public API, shared layer (v2).
 
 	The ONLY supported surface for external addons. Everything in MC.API:
 	- late-binds to internals at call time (load order and autorefresh safe)
@@ -20,7 +20,7 @@ MC.API = MC.API or {}
 
 local API = MC.API
 
-API.VERSION = 1
+API.VERSION = 2
 
 -------------------------------------------------------------------- event core
 -- Core write paths call these; they exist on both realms. Listener errors are
@@ -149,6 +149,188 @@ end
 
 API.DeepCopy = deepCopy
 
+--------------------------------------------------------------- API capabilities
+-- Optional surfaces supplied by separately shipped addons. Core callers use
+-- GetCapability/OnCapability instead of probing another layer's private tables;
+-- registration is replay-safe and reports an explicit per-capability version.
+API._capabilities = API._capabilities or {}
+API._capabilityCallbacks = API._capabilityCallbacks or {}
+
+local function capabilityName( value )
+	local name = string.lower( string.Trim( tostring( value or "" ) ) )
+	if name == "" or #name > 128 then return nil end
+	if not string.match( name, "^[a-z0-9_.:-]+$" ) then return nil end
+	return name
+end
+
+local function capabilityOwner( value )
+	local owner = tostring( value or "" )
+	if owner == "" or #owner > 128 then return nil end
+	return owner
+end
+
+local function capabilitySurface( surface )
+	if not istable( surface ) then return nil end
+	local copy = {}
+	for key, value in pairs( surface ) do copy[key] = value end
+	return copy
+end
+
+function API.RegisterCapability( name, version, surface, owner )
+	name = capabilityName( name )
+	owner = capabilityOwner( owner )
+	version = math.floor( tonumber( version ) or 0 )
+	local published = capabilitySurface( surface )
+	if not name then return false, "invalid_capability_name" end
+	if not owner then return false, "invalid_capability_owner" end
+	if version < 1 then return false, "invalid_capability_version" end
+	if not published then return false, "invalid_capability_surface" end
+	local existing = API._capabilities[name]
+	if existing and existing.owner ~= owner then return false, "capability_owned" end
+	API._capabilities[name] = { name = name, version = version, surface = published, owner = owner }
+	local callbacks = API._capabilityCallbacks[name]
+	if callbacks then
+		local pending = {}
+		for _, request in ipairs( callbacks ) do
+			if version >= request.minimum then
+				local ok, err = pcall( request.callback, published, version, owner )
+				if not ok and ErrorNoHalt then
+					ErrorNoHalt( "[MC] capability callback " .. name .. " failed: " .. tostring( err ) .. "\n" )
+				end
+			else
+				pending[#pending + 1] = request
+			end
+		end
+		API._capabilityCallbacks[name] = #pending > 0 and pending or nil
+	end
+	MC.RunEvent( "MC.APICapabilityAvailable", name, version, published, owner )
+	return true, published
+end
+
+function API.UnregisterCapability( name, owner )
+	name = capabilityName( name )
+	owner = capabilityOwner( owner )
+	local existing = name and API._capabilities[name] or nil
+	if not existing then return false, "capability_unavailable" end
+	if not owner or existing.owner ~= owner then return false, "capability_owner_mismatch" end
+	API._capabilities[name] = nil
+	MC.RunEvent( "MC.APICapabilityRemoved", name, existing.version, owner )
+	return true
+end
+
+function API.GetCapability( name, minimumVersion )
+	name = capabilityName( name )
+	if not name then return nil, "invalid_capability_name" end
+	local entry = API._capabilities[name]
+	if not entry then return nil, "capability_unavailable" end
+	local minimum = math.max( 1, math.floor( tonumber( minimumVersion ) or 1 ) )
+	if entry.version < minimum then return nil, "capability_version_too_old", entry.version end
+	return entry.surface, nil, entry.version, entry.owner
+end
+
+function API.HasCapability( name, minimumVersion )
+	return API.GetCapability( name, minimumVersion ) ~= nil
+end
+
+function API.RequireCapability( name, minimumVersion, addonName )
+	local surface, err, actual = API.GetCapability( name, minimumVersion )
+	if surface then return surface, actual end
+	local label = tostring( addonName or "addon" )
+	local wanted = math.max( 1, math.floor( tonumber( minimumVersion ) or 1 ) )
+	local message = label .. " requires capability " .. tostring( name ) .. " v" .. tostring( wanted )
+		.. ( actual and ", provider has v" .. tostring( actual ) or "" )
+	if ErrorNoHalt then ErrorNoHalt( "[MC] " .. message .. "\n" ) end
+	return nil, err or "capability_unavailable"
+end
+
+function API.OnCapability( name, minimumVersion, callback )
+	name = capabilityName( name )
+	local minimum = math.max( 1, math.floor( tonumber( minimumVersion ) or 1 ) )
+	if not name then return false, "invalid_capability_name" end
+	if not isfunction( callback ) then return false, "invalid_callback" end
+	local entry = API._capabilities[name]
+	if entry and entry.version >= minimum then
+		local ok, err = pcall( callback, entry.surface, entry.version, entry.owner )
+		if not ok and ErrorNoHalt then
+			ErrorNoHalt( "[MC] capability callback " .. name .. " failed: " .. tostring( err ) .. "\n" )
+		end
+		return true
+	end
+	local callbacks = API._capabilityCallbacks[name] or {}
+	callbacks[#callbacks + 1] = { minimum = minimum, callback = callback }
+	API._capabilityCallbacks[name] = callbacks
+	return true
+end
+
+API.Events = API.Events or {}
+API._eventOwners = API._eventOwners or {}
+
+function API.RegisterEvents( owner, definitions )
+	owner = capabilityOwner( owner )
+	if not owner then return false, "invalid_event_owner" end
+	if not istable( definitions ) then return false, "invalid_event_definitions" end
+	for name, definition in pairs( definitions ) do
+		if not isstring( name ) or name == "" or not istable( definition ) then
+			return false, "invalid_event_definition"
+		end
+		local existingOwner = API._eventOwners[name]
+		if existingOwner and existingOwner ~= owner then return false, "event_owned" end
+	end
+	for name, definition in pairs( definitions ) do
+		API.Events[name] = deepCopy( definition )
+		API._eventOwners[name] = owner
+	end
+	return true
+end
+
+---------------------------------------------------------------- API.Network
+-- Addons own their network names just like capabilities and events. Registering
+-- during MC.APIAvailable is early enough for every later net.Receive/net.Start
+-- include, while keeping the engine protocol table free of game-layer names.
+API.Network = API.Network or {}
+API._networkMessageOwners = API._networkMessageOwners or {}
+local Network = API.Network
+
+local function networkMessageName( value )
+	local name = tostring( value or "" )
+	if name == "" or #name > 128 then return nil end
+	if not string.match( name, "^[%w_%.:-]+$" ) then return nil end
+	return name
+end
+
+function Network.Register( owner, names )
+	owner = capabilityOwner( owner )
+	if not owner then return false, "invalid_network_owner" end
+	if isstring( names ) then names = { names } end
+	if not istable( names ) or #names == 0 then return false, "invalid_network_names" end
+	local normalized = {}
+	for index, value in ipairs( names ) do
+		local name = networkMessageName( value )
+		if not name then return false, "invalid_network_name" end
+		local existingOwner = API._networkMessageOwners[name]
+		if existingOwner and existingOwner ~= owner then return false, "network_name_owned" end
+		normalized[index] = name
+	end
+	for _, name in ipairs( normalized ) do
+		API._networkMessageOwners[name] = owner
+		if SERVER and util and util.AddNetworkString then util.AddNetworkString( name ) end
+	end
+	return true, deepCopy( normalized )
+end
+
+function Network.Owner( name )
+	name = networkMessageName( name )
+	return name and API._networkMessageOwners[name] or nil
+end
+
+-- Bit width used by the engine's signed block/chunk coordinate payloads.
+-- Game-owned network messages use this accessor instead of reaching into the
+-- engine protocol table, so a future protocol-width change stays centralized.
+function Network.CoordinateBits()
+	local bits = MC.Net and tonumber( MC.Net.COORD_BITS ) or 20
+	return math.Clamp( math.floor( bits ), 2, 31 )
+end
+
 ---------------------------------------------------------------------- sound
 -- Stable wrapper around the generated Java sound-event catalog.  External
 -- addons must call MC.API.Sound rather than the internal MC.PlayJavaSoundEvent
@@ -268,11 +450,41 @@ function Coords.EntityCell( ent )
 	return MC.WorldToCell( worldPos )
 end
 
+-- Continuous entity position in MC world space. This is the InfMap-safe
+-- counterpart of Entity:GetPos(); callers receive a fresh Vector.
+function Coords.EntityWorldPos( ent )
+	if not IsValid( ent ) then return nil, "invalid_entity" end
+	local position = MC.EntityWorldPos and MC.EntityWorldPos( ent ) or ent:GetPos()
+	if not isvector( position ) then return nil, "world_position_unavailable" end
+	return Vector( position.x, position.y, position.z )
+end
+
 -- Cell an entity is looking from (eyes). InfMap-safe.
 function Coords.EntityEyeCell( ent )
 	if not IsValid( ent ) then return nil, nil, nil end
 	local worldPos = MC.EntityEyeWorldPos and MC.EntityEyeWorldPos( ent ) or ent:EyePos()
 	return MC.WorldToCell( worldPos )
+end
+
+-- Continuous eye position in MC world space. This is the InfMap-safe
+-- counterpart of Entity:EyePos(); callers receive a fresh Vector.
+function Coords.EntityEyeWorldPos( ent )
+	if not IsValid( ent ) then return nil, "invalid_entity" end
+	local position = MC.EntityEyeWorldPos and MC.EntityEyeWorldPos( ent ) or ent:EyePos()
+	if not isvector( position ) then return nil, "eye_world_position_unavailable" end
+	return Vector( position.x, position.y, position.z )
+end
+
+-- InfMap-safe world-space bounds. Both vectors are fresh copies.
+function Coords.EntityWorldAABB( ent )
+	if not IsValid( ent ) then return nil, nil, "invalid_entity" end
+	local minimum, maximum
+	if MC.EntityWorldAABB then minimum, maximum = MC.EntityWorldAABB( ent )
+	elseif ent.WorldSpaceAABB then minimum, maximum = ent:WorldSpaceAABB() end
+	if not isvector( minimum ) or not isvector( maximum ) then
+		return nil, nil, "world_bounds_unavailable"
+	end
+	return Vector( minimum.x, minimum.y, minimum.z ), Vector( maximum.x, maximum.y, maximum.z )
 end
 
 -- Min corner / center of a cell in MC world units.
@@ -400,6 +612,27 @@ function World.ForEachBlock( x1, y1, z1, x2, y2, z2, cb )
 	return true, skipped
 end
 
+-- Iterate every currently loaded non-air cell without exposing MC.World or a
+-- chunk object. This is intended for rebuilding client-side derived indexes
+-- after MC.ClientWorldProjectionChanged, not for per-frame polling.
+function World.ForEachLoadedBlock( callback )
+	if not isfunction( callback ) then return false, "invalid_callback" end
+	if not MC.ForEachBlockState then return false, "world_iteration_unavailable" end
+	local visited = 0
+	for _, chunk in pairs( MC.World or {} ) do
+		local stopped = false
+		MC.ForEachBlockState( chunk, function( bx, by, bz, _, _, _, stateId )
+			visited = visited + 1
+			local ok, result = pcall( callback, bx, by, bz, stateId )
+			if not ok then stopped = "callback_failed" return false end
+			if result == false then stopped = true return false end
+		end )
+		if stopped == "callback_failed" then return false, stopped, visited end
+		if stopped == true then break end
+	end
+	return true, visited
+end
+
 -- Fresh shape info for a world cell (selection boxes, collision, extent).
 -- Box/convex tables are copies: safe to keep and mutate.
 function World.GetCellShape( bx, by, bz )
@@ -480,6 +713,42 @@ function World.GetBlockEntity( bx, by, bz )
 	return MC.GetBlockEntity( x, y, z )
 end
 
+-- Fresh snapshot of every currently loaded block entity, optionally filtered
+-- by type. Consumers never receive MC.World/chunk/blockEntities references.
+function World.ListBlockEntities( typeName )
+	typeName = typeName ~= nil and tostring( typeName ) or nil
+	local output = {}
+	for key, chunk in pairs( MC.World or {} ) do
+		local cx, cy, cz = chunk.cx, chunk.cy, chunk.cz
+		if cx == nil and MC.ChunkKeyToCoords then cx, cy, cz = MC.ChunkKeyToCoords( key ) end
+		if cx ~= nil then
+			for localIndex, record in pairs( chunk.blockEntities or {} ) do
+				if typeName == nil or record.type == typeName then
+					local lx, ly, lz = MC.DecodeLocal( localIndex )
+					output[#output + 1] = {
+						bx = cx * MC.CS + lx,
+						by = cy * MC.CS + ly,
+						bz = cz * MC.CH + lz,
+						record = deepCopy( record ),
+					}
+				end
+			end
+		end
+	end
+	return output
+end
+
+function World.ForEachBlockEntity( typeName, callback )
+	if not isfunction( callback ) then return false, "invalid_callback" end
+	local entries = World.ListBlockEntities( typeName )
+	for _, entry in ipairs( entries ) do
+		local ok, result = pcall( callback, entry.bx, entry.by, entry.bz, entry.record )
+		if not ok then return false, "callback_failed" end
+		if result == false then break end
+	end
+	return true, #entries
+end
+
 -------------------------------------------------------------------- API.Blocks
 API.Blocks = API.Blocks or {}
 local Blocks = API.Blocks
@@ -507,6 +776,24 @@ function Blocks.FormatState( stateId )
 	return MC.FormatBlockState( stateId )
 end
 
+-- Canonical minecraft:block_name for a state, without leaking the schema or
+-- block registry records that own it.
+function Blocks.Name( stateId )
+	if not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then
+		return nil, "invalid_state"
+	end
+	local schema = MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( stateId ) or nil
+	local name = schema and schema.name or nil
+	if not name then
+		local id = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or nil
+		local block = id and MC.Blocks and MC.Blocks[id] or nil
+		name = block and ( block.mcid or block.name ) or nil
+	end
+	if not name then return nil, "unknown_block" end
+	if not string.find( name, ":", 1, true ) then name = "minecraft:" .. name end
+	return name
+end
+
 function Blocks.IsValidState( stateId )
 	return MC.IsValidBlockState and MC.IsValidBlockState( stateId ) == true or false
 end
@@ -514,6 +801,20 @@ end
 -- Legacy block id owning a state (nil for invalid states).
 function Blocks.StateBlockId( stateId )
 	return MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or nil
+end
+
+-- Compatibility conversion for transaction plans that still carry the
+-- engine's legacy block id + orient pair. The resulting state id is the only
+-- value exposed; registry/cache tables remain private.
+function Blocks.StateFromLegacy( blockId, orient )
+	if not MC.StateFromLegacy then return nil, "state_registry_unavailable" end
+	blockId = tonumber( blockId )
+	if blockId == nil then return nil, "invalid_legacy_block_id" end
+	local stateId, ok, err = MC.StateFromLegacy(
+		math.floor( blockId ), math.floor( tonumber( orient ) or 0 )
+	)
+	if ok ~= true or stateId == nil then return nil, err or "legacy_state_unavailable" end
+	return stateId
 end
 
 function Blocks.DefaultState( input )
@@ -633,7 +934,7 @@ function Blocks.Register( def )
 end
 
 local HANDLER_KEYS = {
-	OnUse = true, OnPlace = true, OnBreak = true, OnTick = true,
+	CanUse = true, OnUse = true, OnPlace = true, OnBreak = true, OnTick = true,
 	OnPlaced = true, OnRemoved = true, OnReplaced = true, OnStateChanged = true, OnMoved = true,
 }
 
@@ -695,6 +996,68 @@ function Blocks.RegisterBlockEntityType( definition )
 	return true
 end
 
+function Blocks.IsBlockEntityTypeRegistered( typeName )
+	return MC.IsBlockEntityTypeRegistered and MC.IsBlockEntityTypeRegistered( typeName ) == true or false
+end
+
+function Blocks.BindBlockEntityType( blockNames, typeName )
+	if not MC.BindBlockEntityType then return false, "block_entity_api_unavailable" end
+	return MC.BindBlockEntityType( deepCopy( blockNames ), typeName )
+end
+
+-- Fresh default record for the Block Entity bound to a state, or nil when the
+-- state has no Block Entity. The registry definition itself remains private.
+function Blocks.CreateDefaultBlockEntity( stateId )
+	if not MC.CreateDefaultBlockEntityRecord then return nil, "block_entity_api_unavailable" end
+	local record, err = MC.CreateDefaultBlockEntityRecord( stateId )
+	return deepCopy( record ), err
+end
+
+function Blocks.RegisterPlacementStateProvider( id, provider, priority )
+	if not MC.RegisterPlacementStateUpdateProvider then return false, "placement_provider_api_unavailable" end
+	return MC.RegisterPlacementStateUpdateProvider( id, provider, priority )
+end
+
+function Blocks.UnregisterPlacementStateProvider( id )
+	if not MC.UnregisterPlacementStateUpdateProvider then return false end
+	return MC.UnregisterPlacementStateUpdateProvider( id )
+end
+
+function Blocks.IsFlammable( block )
+	local stateId, err = resolveStateInput( block )
+	if stateId == nil then return false, err end
+	if stateId == 0 then return false end
+	local schema = MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( stateId ) or nil
+	local name = schema and schema.name or nil
+	return name ~= nil and MC.GeneratedBlockFlammability
+		and MC.GeneratedBlockFlammability[name] == true or false
+end
+
+------------------------------------------------------------------ API.Banners
+-- Banner block data belongs to the engine; converting that data to/from an
+-- ItemStack belongs to the game addon. These helpers expose only the block
+-- half of that boundary.
+API.Banners = API.Banners or {}
+local Banners = API.Banners
+
+function Banners.MaxStoredPatterns()
+	return math.max( 0, math.floor( tonumber( MC.BannerMaxStoredPatterns ) or 16 ) )
+end
+
+function Banners.IsState( stateId )
+	return MC.IsBannerState and MC.IsBannerState( stateId ) == true or false
+end
+
+function Banners.IsWallState( stateId )
+	return MC.IsWallBannerState and MC.IsWallBannerState( stateId ) == true or false
+end
+
+function Banners.NormalizeData( data, maxLayers )
+	if not MC.NormalizeBannerData then return nil, "banner_api_unavailable" end
+	local normalized, err = MC.NormalizeBannerData( deepCopy( data ), maxLayers )
+	return deepCopy( normalized ), err
+end
+
 ------------------------------------------------------------------ API.Redstone
 API.Redstone = API.Redstone or {}
 local Redstone = API.Redstone
@@ -752,18 +1115,6 @@ function Liquid.GetAt( bx, by, bz )
 		waterlogged = waterlogged == true,
 	}
 end
-
---------------------------------------------------------------------- API.Fire
--- Player-authoritative flint-and-steel interaction.  The server layer owns
--- aim-face targeting, edit/reach validation, replaceability, support and the
--- normal-fire vs soul-fire decision; external item addons only request one use.
-API.Fire = API.Fire or {}
-
-------------------------------------------------------------------- API.Shears
--- Player-authoritative Java 26.2 GrowingPlantHeadBlock interaction.
--- The server layer restricts this surface to the four actual head blocks and
--- only permits the age property transition to its vanilla maximum (25).
-API.Shears = API.Shears or {}
 
 -- Bucket-facing read-only description.  A source is a level-0 water/lava
 -- state; waterlogged blocks also contain a source water FluidState even though
@@ -854,6 +1205,61 @@ function DayCycle.SetTicks( ticks )
 	return true
 end
 
+------------------------------------------------------------------ API.GameMode
+API.GameMode = API.GameMode or {}
+local GameMode = API.GameMode
+
+function GameMode.Get( ply )
+	if not IsValid( ply ) or not ply.IsPlayer or not ply:IsPlayer() then
+		return "survival", "invalid_player"
+	end
+	return MC.PlayerGameMode and MC.PlayerGameMode( ply ) or "survival"
+end
+
+function GameMode.IsCreative( ply )
+	local mode, err = GameMode.Get( ply )
+	return mode == "creative", err
+end
+
+----------------------------------------------------------------------- API.I18n
+API.I18n = API.I18n or {}
+local I18n = API.I18n
+
+function I18n.Language()
+	return MC.Language and MC.Language() or "en_us"
+end
+
+function I18n.LanguageForPlayer( ply )
+	if MC.LanguageForPlayer then return MC.LanguageForPlayer( ply ) end
+	return I18n.Language()
+end
+
+function I18n.Translate( key, fallback, vars, lang )
+	if MC.T then return MC.T( key, fallback, deepCopy( vars ), lang ) end
+	return tostring( fallback or key or "" )
+end
+
+function I18n.TranslateForPlayer( ply, key, fallback, vars )
+	if MC.TFor then return MC.TFor( ply, key, fallback, deepCopy( vars ) ) end
+	return I18n.Translate( key, fallback, vars, I18n.LanguageForPlayer( ply ) )
+end
+
+function I18n.LanguageOptions()
+	return deepCopy( MC.LanguageOptions and MC.LanguageOptions() or {} )
+end
+
+function I18n.SetLanguage( lang )
+	if not MC.SetLanguage then return nil, "i18n_unavailable" end
+	return MC.SetLanguage( lang )
+end
+
+function I18n.RegisterLanguageChanged( name, callback )
+	if not isfunction( callback ) then return false, "invalid_callback" end
+	if not MC.RegisterLanguageChanged then return false, "i18n_unavailable" end
+	MC.RegisterLanguageChanged( tostring( name or callback ), callback )
+	return true
+end
+
 -------------------------------------------------------------------- API.Config
 -- Lets an external addon put its own ConVars into the in-game MC settings menu
 -- instead of asking players to type console commands. The menu data itself is
@@ -929,18 +1335,21 @@ end
 -- Documentation of every event the core fires (hook.Run). Listen with
 -- hook.Add( name, id, fn ). "veto" events deny the action when a listener
 -- returns false.
-API.Events = {
+API.RegisterEvents( "mc.engine", {
 	["MC.APIAvailable"] = { realm = "shared", args = "version", desc = "MC has finished loading; registries still open - register custom blocks here" },
 	["MC.APIReady"] = { realm = "shared", args = "version", desc = "registries frozen; the full API is usable" },
+	["MC.APICapabilityAvailable"] = { realm = "shared", args = "name, version, surface, owner", desc = "an optional public API capability was registered or replaced" },
+	["MC.APICapabilityRemoved"] = { realm = "shared", args = "name, version, owner", desc = "an optional public API capability was removed by its owner" },
+	["MC.ClientBlockStateChanged"] = { realm = "client", args = "bx, by, bz, oldStateId, newStateId, reason", desc = "one client voxel state projection changed; observers update derived caches without engine-to-game calls" },
+	["MC.ClientWorldProjectionChanged"] = { realm = "client", args = "reason, context", desc = "a bulk snapshot/hydration/unload/reset changed client world projections" },
 	["MC.BlocksChanged"] = { realm = "server", args = "changes{bx,by,bz,stateId,oldStateId,kind}[], revision, actor", desc = "one committed world transaction; kind: placed|removed|replaced|state_changed|block_entity_changed (not fired by /fill volume fills or mc_import raw imports)" },
 	["MC.CanPlayerEdit"] = { realm = "server", args = "ply", desc = "veto: return false to deny all world editing for this player action" },
 	["MC.CanPlayerEditCell"] = { realm = "server", args = "ply, bx, by, bz, placing", desc = "veto: return false to deny a player place/break/use at a cell" },
 	["MC.PlayerPlacedBlock"] = { realm = "server", args = "ply, bx, by, bz, stateId", desc = "player placement committed" },
-	["MC.PlayerBrokeBlock"] = { realm = "server", args = "ply, bx, by, bz, oldStateId", desc = "player break committed" },
+	["MC.PlayerBrokeBlock"] = { realm = "server", args = "ply, bx, by, bz, oldStateId, context", desc = "player break committed; context.damageTool requests game-layer durability" },
 	["MC.PlayerUsedBlock"] = { realm = "server", args = "ply, bx, by, bz, stateId", desc = "player right-click used a block (OnUse returned true)" },
 	["MC.PlayerPickedUpFluid"] = { realm = "server", args = "ply, kind, bx, by, bz, oldStateId, newStateId", desc = "a bucket source pickup committed after the caller's inventory transaction" },
 	["MC.PlayerPlacedFluid"] = { realm = "server", args = "ply, kind, bx, by, bz, stateId", desc = "a bucket source placement committed after the caller's inventory transaction" },
-	["MC.PlayerIgnitedBlock"] = { realm = "server", args = "ply, bx, by, bz, stateId, source", desc = "a flint-and-steel style interaction lit or placed fire" },
 	["MC.BlockDamaged"] = { realm = "server", args = "bx, by, bz, id, damage, health, actor", desc = "block took damage but survived" },
 	["MC.BlocksExploded"] = { realm = "server", args = "center, radius, cells{bx,by,bz}[], broken, actor", desc = "explosion removed blocks" },
 	["MC.TriggerExplosionBlock"] = { realm = "server", args = "context", desc = "query: return true/false to override one TRIGGER_BLOCK onExplosionHit interaction" },
@@ -961,44 +1370,11 @@ API.Events = {
 	["MC.ClusterConverted"] = { realm = "server", args = "ply, ent, blockCount", desc = "a player converted world blocks into a cluster entity" },
 	["MC.ClusterPasted"] = { realm = "server", args = "ply, ent, changed", desc = "a cluster was placed back onto the grid (ent removes right after)" },
 	["MC.ClusterBroken"] = { realm = "server", args = "ent, attacker", desc = "a cluster entity broke (blocks are lost)" },
+	["MC.MinecraftVehicleDestroyed"] = { realm = "server", args = "vehicle, snapshot{dropItem,position,velocity,attacker,suppressDrop}", desc = "an engine-owned Minecraft vehicle was destroyed; game addons may create their own drop" },
 	["MC.PlayerWorldSynced"] = { realm = "server", args = "ply, revision", desc = "a player finished applying the world snapshot" },
 	["MC.ChunkHydrated"] = { realm = "server", args = "key, cx, cy, cz", desc = "a lazy-world chunk finished loading from disk (raw storage writes, no per-block events)" },
 	["MC.StateRevisionApplied"] = { realm = "client", args = "generation, revision", desc = "the client applied one authoritative state revision" },
 	["MC.WorkshopBaseReady"] = { realm = "server", args = "generation, workshopId, contentHash", desc = "all required players finished loading the approved Workshop base world" },
-	["MC.ChestOpenCountChanged"] = { realm = "server", args = "bx, by, bz, openCount", desc = "a chest block entity opener count changed" },
-	["MC.PlayerHasInfiniteMaterials"] = { realm = "server", args = "ply", desc = "query: return true/false to override whether inventory mutations consume materials" },
 	["MC.PlayerGameModeChanged"] = { realm = "server", args = "ply, oldMode, newMode, actor", desc = "a player's authoritative Minecraft game mode changed" },
-	["MC.PlayerHeldItemChanged"] = { realm = "server", args = "ply, selectedSlot, stack, context", desc = "the selected hotbar slot or its stack changed; stack is a copy" },
 	["MC.HandWeaponResolversChanged"] = { realm = "shared", args = "resolverId", desc = "an external selected-item SWEP resolver was registered or removed" },
-	["MC.CreativeStacksAPIReady"] = { realm = "shared", args = "creativeStacksAPI", desc = "the game-layer complete-ItemStack creative catalog API is available" },
-	["MC.CreativeStackProvidersChanged"] = { realm = "shared", args = "providerId", desc = "a creative ItemStack provider was registered or removed" },
-	["MC.PlayerMiningModifiers"] = { realm = "server", args = "ply, stateId, stack, defaults", desc = "query: return vanilla mining attribute/status overrides (Haste, Fatigue, Aqua Affinity, etc.)" },
-	["MC.HandSwingModifiers"] = { realm = "client", args = "ply, weapon, defaults", desc = "query: return baseDurationTicks/hasteAmplifier/miningFatigueAmplifier for the held-item swing; Java 26.2 duration precedence is applied by the client mining module" },
-	["MC.PlayerMiningStarted"] = { realm = "server", args = "ply, session", desc = "a server-authoritative survival mining session started" },
-	["MC.PlayerMiningCancelled"] = { realm = "server", args = "ply, session, reason", desc = "an unfinished survival mining session was cancelled" },
-	["MC.PlayerMinedBlock"] = { realm = "server", args = "ply, bx, by, bz, oldStateId, drops, transaction, dropError, session, durabilityDamage", desc = "a survival mining session completed and committed its block transaction" },
-	["MC.ItemDurabilityChanged"] = { realm = "server", args = "ply, slot, oldStack, newStack, damage, broken", desc = "the selected item took authoritative durability damage" },
-	["MC.SelectedItemConsumed"] = { realm = "server", args = "ply, slot, oldStack, amount, replacement, result", desc = "an API consumer atomically consumed the selected stack and handled its container remainder" },
-	["MC.SelectedItemReplaced"] = { realm = "server", args = "ply, slot, oldStack, newStack, result", desc = "an API consumer atomically replaced the complete selected ItemStack" },
-	["MC.SelectedItemTakenWithDurability"] = { realm = "server", args = "ply, slot, oldStack, extractedStack, durabilityDamage, infinite, result", desc = "an API consumer atomically took a complete selected stack after a non-breaking durability use" },
-	["MC.ItemUseStarted"] = { realm = "server", args = "ply, stack, useState", desc = "a held-item use state started" },
-	["MC.ItemUseFinished"] = { realm = "server", args = "ply, reason", desc = "a held-item use state completed" },
-	["MC.ItemUseCancelled"] = { realm = "server", args = "ply, reason", desc = "a held-item use state was cancelled" },
-	["MC.ItemConsumed"] = { realm = "server", args = "ply, stack, foodData, infinite", desc = "a consumable finished its authoritative use" },
-	["MC.ItemUsed"] = { realm = "server", args = "ply, stack, context", desc = "a non-consumable held item completed use" },
-	["MC.BowFired"] = { realm = "server", args = "ply, projectile, power, broken", desc = "a bow fired a server-owned projectile" },
-	["MC.CrossbowCharged"] = { realm = "server", args = "ply, ammoStack", desc = "a crossbow stored its authoritative charged projectile" },
-	["MC.CrossbowFired"] = { realm = "server", args = "ply, projectile, power, broken", desc = "a charged crossbow fired" },
-	["MC.TridentThrown"] = { realm = "server", args = "ply, projectile", desc = "a trident projectile was thrown" },
-	["MC.ProjectileThrown"] = { realm = "server", args = "ply, projectile, itemName", desc = "a throwable item created a server-owned projectile" },
-	["MC.ProjectileImpact"] = { realm = "server", args = "projectile, trace, hitEntity, definition", desc = "a Minecraft projectile resolved its authoritative impact" },
-	["MC.EquipmentChanged"] = { realm = "shared", args = "server: ply, changedSlots, result, context; client: changedSlots, revision, state", desc = "authoritative equipment state changed" },
-	["MC.EquipmentBroken"] = { realm = "server", args = "ply, equipmentSlot, oldStack", desc = "an equipped item broke" },
-	["MC.ShieldDisabled"] = { realm = "server", args = "ply, seconds, reason", desc = "blocking was disabled for a cooldown" },
-	["MC.ShieldBlockedDamage"] = { realm = "server", args = "ply, attacker, blockedDamage, hand", desc = "an active shield blocked incoming damage" },
-	["MC.ShieldBypass"] = { realm = "server", args = "ply, damageInfo, metadata", desc = "return true only for an exact custom source that must bypass an active shield" },
-	["MC.HeldItemConsumed"] = { realm = "server", args = "ply, hand, oldStack, amount, mutationResult", desc = "a real mainhand/offhand stack was atomically consumed, including in creative mode" },
-	["MC.DeathProtectionBypass"] = { realm = "server", args = "ply, damageInfo, metadata", desc = "return true only for an exact source that must bypass held death protection" },
-	["MC.DeathProtectionTriggered"] = { realm = "server", args = "ply, hand, stack, damageInfo, metadata", desc = "a held death-protection stack committed and the lethal final damage was cancelled" },
-	["MC.PlayerAttackedEntity"] = { realm = "server", args = "ply, target, metadata", desc = "the Minecraft hand completed an authoritative melee attack" },
-}
+} )

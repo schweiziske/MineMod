@@ -135,7 +135,8 @@ end
 
 function ENT:Draw()
 	if not self:GetArmed() then return end
-	local renderer = MC.InventoryUI and MC.InventoryUI.ItemRenderer
+	local renderer = MC.API and MC.API.GetCapability
+		and MC.API.GetCapability( "mc.game.item_renderer", 1 ) or nil
 	if not renderer then return end
 	local size = blockSize()
 	local fuse = interpolatedFuse( self )

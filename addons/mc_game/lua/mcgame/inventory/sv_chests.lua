@@ -11,6 +11,9 @@ MC = MC or {}
 MC.SV = MC.SV or {}
 
 local SV = MC.SV
+local API = MC.API or {}
+local World = API.World
+local Blocks = API.Blocks
 local CHEST_SLOTS = 27
 SV.ChestOpeners = SV.ChestOpeners or {}
 SV.ChestOpenPositions = SV.ChestOpenPositions or {}
@@ -93,9 +96,8 @@ hook.Add( "PlayerInitialSpawn", "mc_chest_open_state_sync", function( ply )
 end )
 
 local function recordChestOverlay( bx, by, bz, record )
-	local store = SV.ChunkStore
-	if not store or not store.RecordBlockEntityEdit then return true end
-	local saved, saveError = store.RecordBlockEntityEdit( bx, by, bz, record )
+	if not World or not World.SetBlockEntity then return false end
+	local saved, saveError = World.SetBlockEntity( bx, by, bz, record, { reason = "chest_runtime" } )
 	if saved == true then return true end
 	local message = "[MC Chest] lazy overlay record failed: " .. tostring( saveError or "unknown" ) .. "\n"
 	if ErrorNoHalt then ErrorNoHalt( message ) else print( message ) end
@@ -103,31 +105,19 @@ local function recordChestOverlay( bx, by, bz, record )
 end
 
 local function mutableBlockEntity( bx, by, bz )
-	if not MC.CellToChunk or not MC.GetChunk then return nil end
-	local cx, cy, cz, localIndex = MC.CellToChunk( bx, by, bz )
-	local chunk = MC.GetChunk( cx, cy, cz )
-	local record = chunk and chunk.blockEntities and chunk.blockEntities[localIndex] or nil
-	return record, chunk, localIndex
+	if not World or not World.GetBlockEntity then return nil end
+	return World.GetBlockEntity( bx, by, bz )
 end
 
 local function ensureMutableChestBlockEntity( bx, by, bz )
-	local record, chunk, localIndex = mutableBlockEntity( bx, by, bz )
-	if record then return record, chunk, localIndex end
-	if not chunk or localIndex == nil then return nil end
+	local record = mutableBlockEntity( bx, by, bz )
+	if record then return record end
 	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
-	local definition = MC.BlockEntityTypes and MC.BlockEntityTypes["minecraft:chest"] or nil
-	if not definition or not definition.CreateDefault then return nil end
-	local called, created = pcall( definition.CreateDefault, stateId )
-	if not called or type( created ) ~= "table" then return nil end
-	created.type = created.type or definition.name
-	created.codecVersion = created.codecVersion or definition.codecVersion
-	local valid = MC.ValidateBlockEntityRecord and MC.ValidateBlockEntityRecord( stateId, created )
-	if valid ~= true then return nil end
-	chunk.blockEntities = chunk.blockEntities or {}
-	chunk.blockEntities[localIndex] = created
-	SV.Dirty = true
-	recordChestOverlay( bx, by, bz, created )
-	return created, chunk, localIndex
+	if not Blocks or not Blocks.CreateDefaultBlockEntity then return nil end
+	local created = Blocks.CreateDefaultBlockEntity( stateId )
+	if type( created ) ~= "table" then return nil end
+	if not recordChestOverlay( bx, by, bz, created ) then return nil end
+	return created
 end
 
 local function stateInfoAt( bx, by, bz )
@@ -198,11 +188,9 @@ end
 local function markChestDirty( chestRecords )
 	for _, entry in ipairs( chestRecords or {} ) do
 		entry.record.dirty = true
-		if entry.chunk then entry.chunk.mcChestDirty = true end
 		local position = entry.position
 		if position then recordChestOverlay( position.bx, position.by, position.bz, entry.record ) end
 	end
-	SV.Dirty = true
 end
 
 local function encodeChestRecord( record, storage )
@@ -230,11 +218,11 @@ local function buildMenu( ply, record, positions )
 	local chestCount = #positions * CHEST_SLOTS
 	local storages, chestRecords = {}, {}
 	for index, position in ipairs( positions ) do
-		local be, chunk = ensureMutableChestBlockEntity( position.bx, position.by, position.bz )
+		local be = ensureMutableChestBlockEntity( position.bx, position.by, position.bz )
 		if not be or be.type ~= "minecraft:chest" then return nil, "chest_data_missing" end
 		local storage = MC.ChestStorageFromRecord( be )
 		storages[index] = storage
-		chestRecords[index] = { record = be, chunk = chunk, position = position }
+		chestRecords[index] = { record = be, position = position }
 	end
 
 	local slots = {}

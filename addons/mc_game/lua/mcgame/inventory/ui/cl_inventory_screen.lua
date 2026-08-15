@@ -22,6 +22,7 @@ local FURNACE_BACKGROUND = UI.GetGuiMaterial( "container/furnace" )
 local BLAST_FURNACE_BACKGROUND = UI.GetGuiMaterial( "container/blast_furnace" )
 local BREWING_BACKGROUND = UI.GetGuiMaterial( "container/brewing_stand" )
 local ANVIL_BACKGROUND = UI.GetGuiMaterial( "container/anvil" )
+local ENCHANTING_BACKGROUND = UI.GetGuiMaterial( "container/enchanting_table" )
 local ANVIL_ERROR = UI.GetGuiMaterial( "sprites/container/anvil/error" )
 local ANVIL_TEXT_FIELD = UI.GetGuiMaterial( "sprites/container/anvil/text_field" )
 local ANVIL_TEXT_FIELD_DISABLED = UI.GetGuiMaterial( "sprites/container/anvil/text_field_disabled" )
@@ -32,6 +33,20 @@ local BREWING_PROGRESS = UI.GetGuiMaterial( "sprites/container/brewing_stand/bre
 local BREWING_BUBBLES = UI.GetGuiMaterial( "sprites/container/brewing_stand/bubbles" )
 local BREWING_SLOT_FUEL = UI.GetGuiMaterial( "sprites/container/slot/brewing_fuel" )
 local BREWING_SLOT_POTION = UI.GetGuiMaterial( "sprites/container/slot/potion" )
+local ENCHANTING_SLOT_LAPIS = UI.GetGuiMaterial( "sprites/container/slot/lapis_lazuli" )
+local ENCHANTING_OPTION = UI.GetGuiMaterial( "sprites/container/enchanting_table/enchantment_slot" )
+local ENCHANTING_OPTION_HIGHLIGHTED = UI.GetGuiMaterial( "sprites/container/enchanting_table/enchantment_slot_highlighted" )
+local ENCHANTING_OPTION_DISABLED = UI.GetGuiMaterial( "sprites/container/enchanting_table/enchantment_slot_disabled" )
+local ENCHANTING_LEVEL = {
+	UI.GetGuiMaterial( "sprites/container/enchanting_table/level_1" ),
+	UI.GetGuiMaterial( "sprites/container/enchanting_table/level_2" ),
+	UI.GetGuiMaterial( "sprites/container/enchanting_table/level_3" ),
+}
+local ENCHANTING_LEVEL_DISABLED = {
+	UI.GetGuiMaterial( "sprites/container/enchanting_table/level_1_disabled" ),
+	UI.GetGuiMaterial( "sprites/container/enchanting_table/level_2_disabled" ),
+	UI.GetGuiMaterial( "sprites/container/enchanting_table/level_3_disabled" ),
+}
 local CREATIVE_ITEMS_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_items" )
 local CREATIVE_SEARCH_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_item_search" )
 local CREATIVE_INVENTORY_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_inventory" )
@@ -185,6 +200,79 @@ end
 
 vgui.Register( "MCInventoryScrollbar", SCROLL, "DPanel" )
 
+local ENCHANTING_BUTTON = {}
+
+function ENCHANTING_BUTTON:Init()
+	self:SetText( "" )
+	self:SetCursor( "arrow" )
+end
+
+function ENCHANTING_BUTTON:Configure( screen, optionIndex, scale )
+	self.Screen, self.OptionIndex, self.Scale = screen, optionIndex, scale
+	self:SetSize( 108 * scale, 19 * scale )
+end
+
+function ENCHANTING_BUTTON:OptionState()
+	if not IsValid( self.Screen ) then return nil end
+	local state = self.Screen.EnchantingState or self.Screen.Session and self.Screen.Session.enchantingState
+	return state and state.options and state.options[( self.OptionIndex or 0 ) + 1] or nil
+end
+
+function ENCHANTING_BUTTON:Paint( w, h )
+	local option = self:OptionState()
+	local scale = math.max( 1, tonumber( self.Scale ) or 1 )
+	local pending = MC.InventoryMenuButtonPending and MC.InventoryMenuButtonPending() or false
+	local enabled = option and option.available == true and not pending
+	local cost = math.max( 0, math.floor( tonumber( option and option.cost ) or 0 ) )
+	local background = cost <= 0 and ENCHANTING_OPTION_DISABLED
+		or enabled and self:IsHovered() and ENCHANTING_OPTION_HIGHLIGHTED
+		or enabled and ENCHANTING_OPTION or ENCHANTING_OPTION_DISABLED
+	self:SetCursor( enabled and "hand" or "arrow" )
+	UI.WithPointFiltering( function()
+		UI.DrawTexture( background, 0, 0, w, h )
+		if cost > 0 then
+			local levels = enabled and ENCHANTING_LEVEL or ENCHANTING_LEVEL_DISABLED
+			UI.DrawTexture( levels[( self.OptionIndex or 0 ) + 1], scale, scale, 16 * scale, 16 * scale )
+		end
+	end )
+	if cost <= 0 then return true end
+	local label = option and option.clue and MC.EnchantingClueName
+		and MC.EnchantingClueName( option.clue, option.clueLevel ) or ""
+	local textColor = enabled and ( self:IsHovered() and Color( 255, 255, 128 ) or Color( 104, 87, 122 ) )
+		or Color( 82, 82, 82 )
+	local costColor = enabled and Color( 64, 64, 64 ) or Color( 86, 45, 45 )
+	local screenX, screenY = self:LocalToScreen( 0, 0 )
+	render.SetScissorRect( screenX + 20 * scale, screenY, screenX + w - 20 * scale, screenY + h, true )
+	UI.DrawText( label, 20 * scale, 4 * scale, scale, textColor, TEXT_ALIGN_LEFT, false )
+	render.SetScissorRect( 0, 0, 0, 0, false )
+	UI.DrawText( tostring( cost ), w - 4 * scale, 8 * scale, scale, costColor, TEXT_ALIGN_RIGHT, false )
+	return true
+end
+
+function ENCHANTING_BUTTON:DoClick()
+	local option = self:OptionState()
+	if not option or option.available ~= true then return end
+	local ok, errorCode = MC.RequestEnchantingOption( self.OptionIndex )
+	if ok then
+		UI.PlayButtonSound()
+	elseif IsValid( self.Screen ) then
+		self.Screen.ErrorText = tostring( errorCode or "enchantment_unavailable" )
+		self.Screen.ErrorUntil = RealTime() + 2.5
+	end
+end
+
+function ENCHANTING_BUTTON:OnCursorEntered()
+	if IsValid( self.Screen ) then self.Screen.HoveredEnchantingOption = self.OptionIndex end
+end
+
+function ENCHANTING_BUTTON:OnCursorExited()
+	if IsValid( self.Screen ) and self.Screen.HoveredEnchantingOption == self.OptionIndex then
+		self.Screen.HoveredEnchantingOption = nil
+	end
+end
+
+vgui.Register( "MCEnchantingOption", ENCHANTING_BUTTON, "DButton" )
+
 local PANEL = {}
 
 function PANEL:Init()
@@ -260,6 +348,15 @@ function PANEL:Init()
 		if not ok then self.AnvilLocalError = err or "anvil_rename_failed" end
 	end
 
+	self.EnchantingButtons = {}
+	for optionIndex = 0, 2 do
+		local button = vgui.Create( "MCEnchantingOption", self )
+		button:Configure( self, optionIndex, self.Scale )
+		button:SetVisible( false )
+		button:SetZPos( 30 )
+		self.EnchantingButtons[optionIndex + 1] = button
+	end
+
 	self.Scrollbar = vgui.Create( "MCInventoryScrollbar", self )
 	self.Scrollbar:SetScreen( self )
 	self.Scrollbar:SetVisible( false )
@@ -314,6 +411,7 @@ function PANEL:Init()
 		panel:LayoutVisibleSlots()
 	end )
 	hook.Add( "MCAnvilStateChanged", self, function( panel, anvilState ) panel:ApplyAnvilState( anvilState ) end )
+	hook.Add( "MCEnchantingStateChanged", self, function( panel, enchantingState ) panel:ApplyEnchantingState( enchantingState ) end )
 	hook.Add( "OnScreenSizeChanged", self, function( panel ) panel:Reflow() end )
 end
 
@@ -327,6 +425,7 @@ function PANEL:Configure( session, state )
 	self.BlastFurnace = self.MenuKind == "blast_furnace"
 	self.Brewing = self.MenuKind == "brewing_stand"
 	self.Anvil = self.MenuKind == "anvil"
+	self.Enchanting = self.MenuKind == "enchanting_table"
 	self.Crafting = session and session.crafting == true
 		or self.State and self.State.menu and self.State.menu.crafting == true or false
 	self.Creative = session and session.creative == true
@@ -341,6 +440,7 @@ function PANEL:Configure( session, state )
 	self:Reflow()
 	self:RefreshInventorySlots()
 	self:ApplyAnvilState( session and session.anvilState )
+	self:ApplyEnchantingState( session and session.enchantingState )
 	self.ObservedStateMenu = self.State and self.State.menu or nil
 	self.ObservedStateReady = self.State and self.State.ready == true or false
 	self.ConfigureGeneration = ( self.ConfigureGeneration or 0 ) + 1
@@ -350,6 +450,14 @@ function PANEL:Configure( session, state )
 		self:ApplyLatestClientState( MC.ClientInventory )
 	end )
 	self:RequestFocus()
+end
+
+function PANEL:ApplyEnchantingState( enchantingState )
+	if not self.Enchanting then return end
+	self.EnchantingState = enchantingState or self.Session and self.Session.enchantingState or { options = {} }
+	for _, button in ipairs( self.EnchantingButtons or {} ) do
+		if IsValid( button ) then button:InvalidateLayout( true ) end
+	end
 end
 
 function PANEL:ApplyAnvilState( anvilState )
@@ -381,6 +489,7 @@ function PANEL:ApplyLatestClientState( state )
 	self:LayoutVisibleSlots()
 	self:LayoutSpecialControls()
 	if self.Anvil then self:ApplyAnvilState( self.Session and self.Session.anvilState ) end
+	if self.Enchanting then self:ApplyEnchantingState( self.Session and self.Session.enchantingState ) end
 end
 
 function PANEL:ConfigurePlayerPreview()
@@ -412,7 +521,7 @@ function PANEL:Reflow()
 		self.ContentW, self.ContentH = 176, 114 + self.ChestRows * 18
 		self.Left = math.floor( ( ScrW() - self.ContentW * self.Scale ) * 0.5 )
 		self.Top = math.floor( ( ScrH() - self.ContentH * self.Scale ) * 0.5 )
-	elseif self.Furnace or self.Brewing or self.Anvil then
+	elseif self.Furnace or self.Brewing or self.Anvil or self.Enchanting then
 		self.ContentW, self.ContentH = SURVIVAL_W, SURVIVAL_H
 		self.Left = math.floor( ( ScrW() - SURVIVAL_W * self.Scale ) * 0.5 )
 		self.Top = math.floor( ( ScrH() - SURVIVAL_H * self.Scale ) * 0.5 )
@@ -537,6 +646,18 @@ function PANEL:LayoutVisibleSlots()
 		end
 		for index = 0, 8 do
 			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index, 8 + index * 18, inventoryTop + 58 )
+		end
+	elseif self.Enchanting then
+		ordinal = self:PlaceMenuSlot( ordinal, 0, nil, 15, 47, "input" )
+		ordinal = self:PlaceMenuSlot( ordinal, 1, nil, 35, 47, "lapis" )
+		local playerOffset = math.floor( tonumber( self.Session and self.Session.playerOffset ) or 2 )
+		for index = 9, 35 do
+			local position = index - 9
+			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index,
+				8 + position % 9 * 18, 84 + math.floor( position / 9 ) * 18 )
+		end
+		for index = 0, 8 do
+			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index, 8 + index * 18, 142 )
 		end
 	elseif self.Anvil then
 		ordinal = self:PlaceMenuSlot( ordinal, 0, nil, 27, 47, "input" )
@@ -681,7 +802,16 @@ function PANEL:LayoutSpecialControls()
 		self.AnvilEntry:SetPos( self.Left + 62 * self.Scale, self.Top + 23 * self.Scale )
 		self.AnvilEntry:SetSize( 103 * self.Scale, 13 * self.Scale )
 	end
-	local preview = not self.Chest and not self.Furnace and not self.Brewing and not self.Anvil and not self.CraftingTable
+	for optionIndex, button in ipairs( self.EnchantingButtons or {} ) do
+		if IsValid( button ) then
+			button:SetVisible( self.Enchanting == true )
+			if self.Enchanting then
+				button:Configure( self, optionIndex - 1, self.Scale )
+				button:SetPos( self.Left + 60 * self.Scale, self.Top + ( 14 + ( optionIndex - 1 ) * 19 ) * self.Scale )
+			end
+		end
+	end
+	local preview = not self.Chest and not self.Furnace and not self.Brewing and not self.Anvil and not self.Enchanting and not self.CraftingTable
 		and ( not self.Creative or tab and tab.key == "inventory" )
 	if IsValid( self.PlayerPreview ) then self.PlayerPreview:SetVisible( preview == true ) end
 	if preview and IsValid( self.PlayerPreview ) then
@@ -832,6 +962,7 @@ function PANEL:ClearHoveredSlot( slot ) if self.HoveredSlot == slot then self.Ho
 
 function PANEL:BackgroundMaterial()
 	if self.Chest then return CHEST_BACKGROUND end
+	if self.Enchanting then return ENCHANTING_BACKGROUND end
 	if self.Anvil then return ANVIL_BACKGROUND end
 	if self.Brewing then return BREWING_BACKGROUND end
 	if self.Furnace then return self.BlastFurnace and BLAST_FURNACE_BACKGROUND or FURNACE_BACKGROUND end
@@ -938,11 +1069,30 @@ function PANEL:PaintContent()
 			end
 		end )
 	end
+	if self.Enchanting then
+		local lapis = MC.GetClientMenuStack and MC.GetClientMenuStack( 1 ) or nil
+		UI.WithPointFiltering( function()
+			if MC.IsEmptyItemStack( lapis ) then
+				UI.DrawTexture( ENCHANTING_SLOT_LAPIS, self.Left + 35 * self.Scale,
+					self.Top + 47 * self.Scale, 16 * self.Scale, 16 * self.Scale )
+			end
+		end )
+		if MC.DrawEnchantingBook2D then
+			MC.DrawEnchantingBook2D( self.Left + 33 * self.Scale, self.Top + 44 * self.Scale,
+				self.EnchantingBookOpen or 0, self.EnchantingBookFlip or 0, self.Scale )
+		end
+	end
 	if self.Chest then
 		local title = self.ChestRows > 3 and "Large Chest" or "Chest"
 		UI.DrawText( title, self.Left + 8 * self.Scale, self.Top + 6 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
 		UI.DrawText( "Inventory", self.Left + 8 * self.Scale,
 			self.Top + ( self.ChestRows * 18 + 20 ) * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+	elseif self.Enchanting then
+		local chinese = MC.Language and MC.Language() == "zh_cn"
+		UI.DrawText( chinese and "附魔" or "Enchant", self.Left + 114 * self.Scale,
+			self.Top + 6 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_CENTER, false )
+		UI.DrawText( chinese and "物品栏" or "Inventory", self.Left + 8 * self.Scale,
+			self.Top + 72 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
 	elseif self.Anvil then
 		local chinese = MC.Language and MC.Language() == "zh_cn"
 		UI.DrawText( chinese and "物品栏" or "Inventory", self.Left + 8 * self.Scale,
@@ -955,7 +1105,7 @@ function PANEL:PaintContent()
 		elseif ( tonumber( state.cost ) or 0 ) > 0 and state.resultAvailable then
 			local label = ( chinese and "附魔花费：" or "Enchantment Cost: " ) .. tostring( state.cost )
 			UI.DrawText( label, self.Left + 166 * self.Scale, self.Top + 69 * self.Scale,
-				self.Scale, Color( 128, 255, 32 ), TEXT_ALIGN_RIGHT, true )
+				self.Scale, state.canTake == false and Color( 255, 85, 85 ) or Color( 128, 255, 32 ), TEXT_ALIGN_RIGHT, true )
 		elseif errorCode == "name_too_long" then
 			UI.DrawText( chinese and "名称过长" or "Name too long", self.Left + 166 * self.Scale,
 				self.Top + 69 * self.Scale, self.Scale, Color( 255, 85, 85 ), TEXT_ALIGN_RIGHT, true )
@@ -995,6 +1145,11 @@ function PANEL:PaintOver()
 		UI.ItemRenderer.DrawStack( carried, mouseX - 8 * self.Scale, mouseY - 8 * self.Scale, 16 * self.Scale, { scale = self.Scale } )
 	elseif IsValid( self.HoveredSlot ) and not MC.IsEmptyItemStack( self.HoveredSlot:GetStack() ) then
 		UI.Tooltip.DrawStack( self.HoveredSlot:GetStack(), mouseX, mouseY, self.Scale )
+	elseif self.Enchanting and self.HoveredEnchantingOption ~= nil then
+		local state = self.EnchantingState or self.Session and self.Session.enchantingState
+		local option = state and state.options and state.options[self.HoveredEnchantingOption + 1] or nil
+		local lines = MC.EnchantingOptionTooltipLines and MC.EnchantingOptionTooltipLines( option ) or nil
+		if lines then UI.Tooltip.DrawLines( lines, mouseX, mouseY, self.Scale ) end
 	elseif self.HoveredTab then
 		UI.Tooltip.DrawLines( { { text = tabTitle( self.HoveredTab ), color = UI.Colors.text } }, mouseX, mouseY, self.Scale )
 	elseif self.RecipeBookOpen and IsValid( self.RecipeBook ) and self.RecipeBook.HoveredTooltipLines then
@@ -1050,6 +1205,33 @@ function PANEL:Think()
 	local ready = state and state.ready == true or false
 	if state and ( menu ~= self.ObservedStateMenu or ready ~= self.ObservedStateReady ) then
 		self:ApplyLatestClientState( state )
+	end
+	if self.Enchanting then
+		self.NextEnchantingBookTick = self.NextEnchantingBookTick or RealTime()
+		local steps = 0
+		while RealTime() >= self.NextEnchantingBookTick and steps < 4 do
+			self.NextEnchantingBookTick = self.NextEnchantingBookTick + 0.05
+			local stack = MC.GetClientMenuStack and MC.GetClientMenuStack( 0 ) or nil
+			local itemHash = MC.IsEmptyItemStack( stack ) and "" or ( MC.ItemStackHash and MC.ItemStackHash( stack ) or tostring( stack.item ) )
+			if itemHash ~= self.EnchantingBookItemHash then
+				self.EnchantingBookItemHash = itemHash
+				local target = self.EnchantingBookFlipTarget or 0
+				repeat target = target + math.random( 0, 3 ) - math.random( 0, 3 )
+				until math.abs( ( self.EnchantingBookFlip or 0 ) - target ) > 1
+				self.EnchantingBookFlipTarget = target
+			end
+			local hasOption = false
+			local enchantingState = self.EnchantingState or self.Session and self.Session.enchantingState
+			for _, option in ipairs( enchantingState and enchantingState.options or {} ) do
+				if ( tonumber( option.cost ) or 0 ) > 0 then hasOption = true break end
+			end
+			self.EnchantingBookOpen = math.Clamp( ( self.EnchantingBookOpen or 0 ) + ( hasOption and 0.2 or -0.2 ), 0, 1 )
+			local difference = math.Clamp( ( ( self.EnchantingBookFlipTarget or 0 ) - ( self.EnchantingBookFlip or 0 ) ) * 0.4, -0.2, 0.2 )
+			self.EnchantingBookFlipAcceleration = ( self.EnchantingBookFlipAcceleration or 0 )
+				+ ( difference - ( self.EnchantingBookFlipAcceleration or 0 ) ) * 0.9
+			self.EnchantingBookFlip = ( self.EnchantingBookFlip or 0 ) + self.EnchantingBookFlipAcceleration
+			steps = steps + 1
+		end
 	end
 	local escape = input.IsKeyDown( KEY_ESCAPE )
 	if escape and not self.EscapeWasDown then

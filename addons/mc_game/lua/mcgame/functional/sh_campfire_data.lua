@@ -5,6 +5,8 @@
 
 MC = MC or {}
 
+local Blocks = MC.API and MC.API.Blocks
+
 local CAMPFIRE_TYPE = "minecraft:campfire"
 local CAMPFIRE_CODEC_VERSION = 1
 local CAMPFIRE_SLOTS = 4
@@ -50,9 +52,8 @@ end
 
 local function validateData( data ) return normalizeData( data, false ) ~= nil end
 
-if not ( MC.PendingBlockEntityTypes and MC.PendingBlockEntityTypes[CAMPFIRE_TYPE] )
-	and MC.RegisterBlockEntityType then
-	MC.RegisterBlockEntityType( {
+if Blocks and not Blocks.IsBlockEntityTypeRegistered( CAMPFIRE_TYPE ) then
+	Blocks.RegisterBlockEntityType( {
 		name = CAMPFIRE_TYPE,
 		codecVersion = CAMPFIRE_CODEC_VERSION,
 		serverOnly = false,
@@ -69,19 +70,19 @@ if not ( MC.PendingBlockEntityTypes and MC.PendingBlockEntityTypes[CAMPFIRE_TYPE
 	} )
 end
 
-for blockName in pairs( CAMPFIRE_BLOCKS ) do
-	local schema = ( MC.PendingBlockStateSchemas or {} )[blockName]
-		or ( MC.BlockStateSchemaByName or {} )[blockName]
-	if schema then schema.blockEntityType = CAMPFIRE_TYPE end
+if Blocks then
+	local names = {}
+	for blockName in pairs( CAMPFIRE_BLOCKS ) do names[#names + 1] = blockName end
+	Blocks.BindBlockEntityType( names, CAMPFIRE_TYPE )
 end
 
 local function stateInfo( stateId )
-	local schema = MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( stateId ) or nil
-	if not schema or not CAMPFIRE_BLOCKS[schema.name] then return nil end
+	local name = Blocks and Blocks.Name( stateId ) or nil
+	if not name or not CAMPFIRE_BLOCKS[name] then return nil end
 	return {
-		name = schema.name,
-		lit = MC.GetStateProperty( stateId, "lit" ) == true,
-		facing = MC.GetStateProperty( stateId, "facing" ) or "north",
+		name = name,
+		lit = Blocks.GetProperty( stateId, "lit" ) == true,
+		facing = Blocks.GetProperty( stateId, "facing" ) or "north",
 	}
 end
 

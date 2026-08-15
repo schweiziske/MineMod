@@ -4,10 +4,13 @@ if not CLIENT then return end
 
 MC = MC or {}
 
-local BS = MC.BS or 36.5
+local API = MC.API or {}
+local Blocks = API.Blocks or {}
+local Coords = API.Coords or {}
+local World = API.World or {}
+local BS = Coords.BlockSize and Coords.BlockSize() or 36.5
 local MAX_RENDER_DISTANCE_SQR = ( BS * 64 ) ^ 2
 local Entries, EntryCount = {}, 0
-local LastRevision, LastGeneration = -1, -1
 local Dirty = true
 local FACING_INDEX = { south = 0, west = 1, north = 2, east = 3 }
 -- Java applies rotateY(-direction.toYRot()) then rotateX(90).  Under Source's
@@ -20,31 +23,20 @@ function MC.MarkCampfireRenderEntriesDirty() Dirty = true end
 local function rebuildEntries()
 	for index = 1, EntryCount do Entries[index] = nil end
 	EntryCount = 0
-	for _, chunk in pairs( MC.World or {} ) do
-		for localIndex, record in pairs( chunk.blockEntities or {} ) do
-			if record.type == "minecraft:campfire" then
-				local lx, ly, lz = MC.DecodeLocal( localIndex )
-				EntryCount = EntryCount + 1
-				Entries[EntryCount] = {
-					bx = chunk.cx * MC.CS + lx,
-					by = chunk.cy * MC.CS + ly,
-					bz = chunk.cz * MC.CH + lz,
-					record = record,
-				}
-			end
-		end
+	for _, entry in ipairs( World.ListBlockEntities
+		and World.ListBlockEntities( "minecraft:campfire" ) or {} ) do
+		EntryCount = EntryCount + 1
+		Entries[EntryCount] = entry
 	end
-	LastRevision = tonumber( MC.AppliedStateRevision ) or 0
-	LastGeneration = tonumber( MC.StateWorldGeneration ) or 0
 	Dirty = false
 end
 
 local function drawFood( entry, stateId )
 	local renderer = MC.InventoryUI and MC.InventoryUI.ItemRenderer
 	if not renderer then return end
-	local base = MC.CellRenderMin and MC.CellRenderMin( entry.bx, entry.by, entry.bz )
-		or MC.CellWorldMin( entry.bx, entry.by, entry.bz )
-	local facing = FACING_INDEX[MC.GetStateProperty( stateId, "facing" )] or 0
+	local base = Coords.CellRenderMin and Coords.CellRenderMin( entry.bx, entry.by, entry.bz ) or nil
+	if not base then return end
+	local facing = FACING_INDEX[Blocks.GetProperty and Blocks.GetProperty( stateId, "facing" )] or 0
 	for _, item in ipairs( entry.record.data and entry.record.data.items or {} ) do
 		local slot = math.floor( tonumber( item.slot ) or -1 )
 		local stack = item.stack
@@ -68,19 +60,20 @@ end
 
 hook.Add( "PostDrawTranslucentRenderables", "mc_campfire_food_items", function( _, _, skybox )
 	if skybox then return end
-	local revision = tonumber( MC.AppliedStateRevision ) or 0
-	local generation = tonumber( MC.StateWorldGeneration ) or 0
-	if Dirty or revision ~= LastRevision or generation ~= LastGeneration then rebuildEntries() end
+	if Dirty then rebuildEntries() end
 	local eye = EyePos()
 	for index = 1, EntryCount do
 		local entry = Entries[index]
-		local center = MC.CellRenderCenter and MC.CellRenderCenter( entry.bx, entry.by, entry.bz )
-			or MC.CellWorldCenter( entry.bx, entry.by, entry.bz )
-		if eye:DistToSqr( center ) <= MAX_RENDER_DISTANCE_SQR then
-			local stateId = MC.GetBlockState( entry.bx, entry.by, entry.bz )
+		local center = Coords.CellRenderCenter and Coords.CellRenderCenter( entry.bx, entry.by, entry.bz ) or nil
+		if center and eye:DistToSqr( center ) <= MAX_RENDER_DISTANCE_SQR then
+			local stateId = World.GetBlockState and World.GetBlockState( entry.bx, entry.by, entry.bz ) or 0
 			if MC.IsCampfireState and MC.IsCampfireState( stateId ) then drawFood( entry, stateId ) end
 		end
 	end
+end )
+
+hook.Add( "MC.ClientWorldProjectionChanged", "mcgame_campfire_world_projection", function()
+	Dirty = true
 end )
 
 hook.Add( "OnReloaded", "mc_campfire_food_items_reset", function() Dirty = true end )

@@ -8,6 +8,10 @@
 
 MC = MC or {}
 
+local API = MC.API or {}
+local Blocks = API.Blocks or {}
+local World = API.World or {}
+
 local CHEST_TYPE = "minecraft:chest"
 local CHEST_CODEC_VERSION = 1
 local CHEST_SLOTS = 27
@@ -62,10 +66,8 @@ local function validateData( data )
 	return normalized ~= nil, err
 end
 
-if not ( MC.BlockEntityTypes and MC.BlockEntityTypes[CHEST_TYPE] )
-	and not ( MC.PendingBlockEntityTypes and MC.PendingBlockEntityTypes[CHEST_TYPE] )
-	and MC.RegisterBlockEntityType then
-	MC.RegisterBlockEntityType( {
+if Blocks and not Blocks.IsBlockEntityTypeRegistered( CHEST_TYPE ) then
+	Blocks.RegisterBlockEntityType( {
 		name = CHEST_TYPE,
 		codecVersion = CHEST_CODEC_VERSION,
 		serverOnly = true,
@@ -87,39 +89,34 @@ if not ( MC.BlockEntityTypes and MC.BlockEntityTypes[CHEST_TYPE] )
 	} )
 end
 
-local function mapChestSchemas()
-	local pending = MC.PendingBlockStateSchemas or {}
-	local finalized = MC.BlockStateSchemaByName or {}
-	for name in pairs( CHEST_STATE_NAMES ) do
-		local schema = pending[name] or finalized[name]
-		if schema then schema.blockEntityType = CHEST_TYPE end
-	end
-end
-
 -- This file is loaded after sh_block_states.lua, while both registries are
 -- still open.  Keeping the mapping here means generated catalogs remain
 -- generated/source-owned and custom packs can opt out simply by omitting it.
-mapChestSchemas()
+if Blocks then
+	local names = {}
+	for name in pairs( CHEST_STATE_NAMES ) do names[#names + 1] = name end
+	Blocks.BindBlockEntityType( names, CHEST_TYPE )
+end
 
 local function stateAt( changes, changeCount, bx, by, bz )
 	for index = 1, changeCount do
 		local cell = changes[index]
 		if cell.bx == bx and cell.by == by and cell.bz == bz then
 			if cell.stateId ~= nil then return cell.stateId end
-			return MC.StateFromLegacy and MC.StateFromLegacy( cell.id or 0, cell.orient or 0 ) or 0
+			return Blocks.StateFromLegacy and Blocks.StateFromLegacy( cell.id or 0, cell.orient or 0 ) or 0
 		end
 	end
-	return MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
+	return World.GetBlockState and World.GetBlockState( bx, by, bz ) or 0
 end
 
 local function chestStateInfo( stateId )
-	local schema = MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( stateId ) or nil
-	if not schema or not CHEST_STATE_NAMES[schema.name] then return nil end
+	local name = Blocks.Name and Blocks.Name( stateId ) or nil
+	if not name or not CHEST_STATE_NAMES[name] then return nil end
 	return {
-		name = schema.name,
-		blockId = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or schema.blockId,
-		facing = MC.GetStateProperty( stateId, "facing" ) or "north",
-		type = MC.GetStateProperty( stateId, "type" ) or "single",
+		name = name,
+		blockId = Blocks.StateBlockId and Blocks.StateBlockId( stateId ) or nil,
+		facing = Blocks.GetProperty and Blocks.GetProperty( stateId, "facing" ) or "north",
+		type = Blocks.GetProperty and Blocks.GetProperty( stateId, "type" ) or "single",
 	}
 end
 
@@ -159,8 +156,14 @@ local function sameChest( left, right )
 	return left and right and left.name == right.name and left.facing == right.facing
 end
 
+local function cellKey( bx, by, bz )
+	return tostring( math.floor( tonumber( bx ) or 0 ) ) .. ":"
+		.. tostring( math.floor( tonumber( by ) or 0 ) ) .. ":"
+		.. tostring( math.floor( tonumber( bz ) or 0 ) )
+end
+
 local function addCandidate( candidates, seen, bx, by, bz )
-	local key = MC.CellKey( bx, by, bz )
+	local key = cellKey( bx, by, bz )
 	if seen[key] then return end
 	seen[key] = true
 	candidates[#candidates + 1] = { bx = bx, by = by, bz = bz }
@@ -171,7 +174,7 @@ local function candidatePartner( changes, changeCount, candidate, info, directio
 	local bx, by, bz = candidate.bx + dx, candidate.by + dy, candidate.bz
 	local neighbour = chestStateInfo( stateAt( changes, changeCount, bx, by, bz ) )
 	if not neighbour or neighbour.type ~= "single" or not sameChest( info, neighbour ) then return nil end
-	local key = MC.CellKey( bx, by, bz )
+	local key = cellKey( bx, by, bz )
 	if paired[key] then return nil end
 	return { bx = bx, by = by, bz = bz, info = neighbour, key = key }
 end
@@ -179,12 +182,12 @@ end
 local function addTypeUpdate( updates, changes, changeCount, bx, by, bz, info, chestType )
 	if not info or info.type == chestType then return end
 	local stateId = stateAt( changes, changeCount, bx, by, bz )
-	local nextState = MC.StateWith and MC.StateWith( stateId, "type", chestType ) or nil
+	local nextState = Blocks.WithProperty and Blocks.WithProperty( stateId, "type", chestType ) or nil
 	if nextState then updates[#updates + 1] = { bx = bx, by = by, bz = bz, stateId = nextState } end
 end
 
 function MC.BuildChestConnectionStateUpdates( changes, changeCount )
-	if type( changes ) ~= "table" or #changes == 0 or not MC.StateWith then return {} end
+	if type( changes ) ~= "table" or #changes == 0 or not Blocks.WithProperty then return {} end
 	changeCount = math.min( math.floor( tonumber( changeCount ) or #changes ), #changes )
 	local candidates, seen = {}, {}
 	for index = 1, changeCount do
@@ -216,7 +219,7 @@ function MC.BuildChestConnectionStateUpdates( changes, changeCount )
 	for _, candidate in ipairs( candidates ) do
 		local info = chestStateInfo( stateAt( changes, changeCount, candidate.bx, candidate.by, candidate.bz ) )
 		if info and info.type == "single" then
-			local key = MC.CellKey( candidate.bx, candidate.by, candidate.bz )
+			local key = cellKey( candidate.bx, candidate.by, candidate.bz )
 			if not paired[key] then
 				local directions = { clockwise( info.facing ), counterClockwise( info.facing ) }
 				for _, direction in ipairs( directions ) do
@@ -235,6 +238,14 @@ function MC.BuildChestConnectionStateUpdates( changes, changeCount )
 		end
 	end
 	return updates
+end
+
+if Blocks then
+	Blocks.RegisterPlacementStateProvider(
+		"mc.game.chest_connections",
+		MC.BuildChestConnectionStateUpdates,
+		100
+	)
 end
 
 local function storageFromData( data )

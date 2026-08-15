@@ -83,7 +83,8 @@ function SV.ConsumeSelectedItem( ply, amount, replacement, context )
 	if replacement ~= nil and not converted then
 		return nil, 0, nil, false, replacementError or "invalid_replacement"
 	end
-	if SV.PlayerHasInfiniteMaterials and SV.PlayerHasInfiniteMaterials( ply ) then
+	if SV.PlayerHasInfiniteMaterials and SV.PlayerHasInfiniteMaterials( ply )
+	and context.consumeInInfiniteMaterials ~= true then
 		return { ok = true, infinite = true, changedSlots = {} }, amount, nil, true
 	end
 

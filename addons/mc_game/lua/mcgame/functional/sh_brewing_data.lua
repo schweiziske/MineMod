@@ -2,6 +2,8 @@
 
 MC = MC or {}
 
+local Blocks = MC.API and MC.API.Blocks
+
 local BREWING_TYPE = "minecraft:brewing_stand"
 local BREWING_CODEC_VERSION = 1
 local BREWING_SLOTS = 5
@@ -36,17 +38,12 @@ local function normalizeData( data )
 	}
 end
 
-local function isRegistered( typeName )
-	return MC.PendingBlockEntityTypes and MC.PendingBlockEntityTypes[typeName]
-		or MC.BlockEntityTypes and MC.BlockEntityTypes[typeName]
-end
-
 local function encodeData( data ) return normalizeData( data ) end
 local function decodeData( data ) return normalizeData( data ) end
 local function validateData( data ) return normalizeData( data ) ~= nil end
 
-if not isRegistered( BREWING_TYPE ) and MC.RegisterBlockEntityType then
-	MC.RegisterBlockEntityType( {
+if Blocks and not Blocks.IsBlockEntityTypeRegistered( BREWING_TYPE ) then
+	Blocks.RegisterBlockEntityType( {
 		name = BREWING_TYPE,
 		codecVersion = BREWING_CODEC_VERSION,
 		serverOnly = true,
@@ -63,22 +60,10 @@ if not isRegistered( BREWING_TYPE ) and MC.RegisterBlockEntityType then
 	} )
 end
 
-local function mapBrewingSchema()
-	local schema = ( MC.PendingBlockStateSchemas or {} )[BREWING_TYPE]
-		or ( MC.BlockStateSchemaByName or {} )[BREWING_TYPE]
-	if schema then schema.blockEntityType = BREWING_TYPE end
-end
-mapBrewingSchema()
-
-local block = ( MC.BlockByName or {} )[BREWING_TYPE] or ( MC.BlockByName or {} ).brewing_stand
-if block and MC.BlockHandlers and MC.BlockHandlers.brewing then
-	block.handlers = MC.BlockHandlers.brewing
-	block.handlerName = "brewing"
-end
+if Blocks then Blocks.BindBlockEntityType( BREWING_TYPE, BREWING_TYPE ) end
 
 function MC.IsBrewingStandState( stateId )
-	local schema = MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( stateId ) or nil
-	return schema and schema.name == BREWING_TYPE or false
+	return Blocks and Blocks.Name( stateId ) == BREWING_TYPE or false
 end
 
 local function storageFromData( data )

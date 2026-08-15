@@ -1,7 +1,8 @@
 MC = MC or {}
-MC.BlockHandlers = MC.BlockHandlers or {}
 
-MC.BlockHandlers.brewing = MC.BlockHandlers.brewing or {
+local Blocks = MC.API and MC.API.Blocks
+
+local HANDLERS = {
 	OnUse = function( ply, bx, by, bz )
 		if not SERVER or not MC.SV or not MC.SV.OpenBrewingStand then return false end
 		return MC.SV.OpenBrewingStand( ply, bx, by, bz ) == true
@@ -17,3 +18,5 @@ MC.BlockHandlers.brewing = MC.BlockHandlers.brewing or {
 		end
 	end,
 }
+
+if Blocks then Blocks.SetHandlers( "minecraft:brewing_stand", HANDLERS ) end

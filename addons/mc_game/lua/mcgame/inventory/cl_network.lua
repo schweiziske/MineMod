@@ -145,6 +145,23 @@ local function predictionTransferRules( menu, creative )
 			hotbar = { resolve = furnaceTargets },
 		}
 	end
+	if menu.kind == "enchanting_table" then
+		local function enchantingTargets( _, source )
+			if not MC.IsEmptyItemStack( source ) and source.item == "minecraft:lapis_lazuli" then
+				return { "enchanting_lapis" }
+			end
+			if MC.EnchantingIsItemEnchantable and MC.EnchantingIsItemEnchantable( source ) then
+				return { "enchanting_item" }
+			end
+			return {}
+		end
+		return {
+			enchanting_item = { targets = { "main", "hotbar" }, reverse = true },
+			enchanting_lapis = { targets = { "main", "hotbar" }, reverse = true },
+			main = { resolve = enchantingTargets },
+			hotbar = { resolve = enchantingTargets },
+		}
+	end
 	local rules = {
 		main = { resolve = inventoryTargets( "hotbar" ) },
 		hotbar = { resolve = inventoryTargets( "main" ) },
@@ -164,13 +181,24 @@ local function buildPredictionContainer()
 	local definitions, playerTargets, inputSlots = {}, {}, {}
 	local crafting, creative = session.crafting == true, session.creative == true
 	local furnace = menu.kind == "furnace" or menu.kind == "blast_furnace"
+	local enchanting = menu.kind == "enchanting_table"
 	local recipeType = menu.kind == "blast_furnace" and "minecraft:blasting" or "minecraft:smelting"
 	local inputCount = crafting and math.max( 1, ( session.craftingWidth or 0 ) * ( session.craftingHeight or 0 ) ) or 0
 	for index = 0, menu.slotCount - 1 do
 		local playerIndex = menu.menuPlayerMap and menu.menuPlayerMap[index] or nil
 		local equipmentSlot = menu.equipmentSlotMap and menu.equipmentSlotMap[index] or nil
 		local group, meta, maxStack, mayPlace = "main", nil, nil, nil
-		if furnace and index == 0 then
+		if enchanting and index == 0 then
+			group, meta, maxStack = "enchanting_item", { role = "input" }, 1
+			mayPlace = function( _, stack )
+				return MC.EnchantingIsItemEnchantable and MC.EnchantingIsItemEnchantable( stack ) or false
+			end
+		elseif enchanting and index == 1 then
+			group, meta = "enchanting_lapis", { role = "lapis" }
+			mayPlace = function( _, stack )
+				return not MC.IsEmptyItemStack( stack ) and stack.item == "minecraft:lapis_lazuli"
+			end
+		elseif furnace and index == 0 then
 			group, meta = "furnace_input", { role = "input" }
 			mayPlace = function( _, stack ) return MC.FindCookingRecipe( stack, recipeType ) ~= nil end
 		elseif furnace and index == 1 then
@@ -262,6 +290,12 @@ local function predictAction( container, action )
 		else result, err = MC.CraftingPlaceRecipe( container, recipe, context, action.useMax == true ) end
 		return result or { ok = false, error = err or "recipe_place_failed" }
 	end
+	if action.kind == "menu_button" then
+		-- Business buttons never predict authoritative stack, experience or seed
+		-- changes. Keeping the local container untouched lets the normal delta
+		-- reconcile the single server-computed result.
+		return { ok = true, changedSlots = {}, cursorChanged = false, cursor = MC.CopyItemStack( container.cursor ) }
+	end
 	if action.kind == "creative_pick" then
 		local before = MC.ContainerSnapshot( container )
 		local ok, err
@@ -312,6 +346,7 @@ local function pumpActions()
 			action.revision = action.baseRevision or ( State.authoritative and State.authoritative.revision or State.revision )
 			local messageName = action.kind == "creative_pick" and "mc_inventory_creative_pick"
 				or action.kind == "recipe_place" and "mc_inventory_recipe_place"
+				or action.kind == "menu_button" and "mc_inventory_menu_button"
 				or "mc_inventory_action"
 			net.Start( messageName )
 				net.WriteUInt( State.session.containerId, 16 )
@@ -324,6 +359,8 @@ local function pumpActions()
 				elseif action.kind == "recipe_place" then
 					net.WriteString( action.recipeId )
 					net.WriteBool( action.useMax == true )
+				elseif action.kind == "menu_button" then
+					net.WriteUInt( action.button, 2 )
 				else
 					net.WriteUInt( action.input, 3 )
 					net.WriteInt( action.slot, 16 )
@@ -364,6 +401,21 @@ function MC.QueueInventoryInput( input, slot, button )
 	if input < 0 or input > 6 or ( slot ~= -999 and ( slot < 0 or slot >= slotCount ) )
 	or button < -128 or button > 127 then return false, "invalid_inventory_action" end
 	return enqueueAction( { kind = "input", input = input, slot = slot, button = button } )
+end
+
+function MC.InventoryMenuButtonPending()
+	for _, action in ipairs( State.actions or {} ) do
+		if action.kind == "menu_button" then return true, action.actionId end
+	end
+	return false
+end
+
+function MC.QueueInventoryMenuButton( button )
+	if not State.session then return false, "inventory_not_open" end
+	button = math.floor( tonumber( button ) or -1 )
+	if button < 0 or button > 2 then return false, "invalid_menu_button" end
+	if MC.InventoryMenuButtonPending() then return false, "menu_button_pending" end
+	return enqueueAction( { kind = "menu_button", button = button } )
 end
 
 function MC.QueueCreativeInventoryPick( item, count, targetSlot )
