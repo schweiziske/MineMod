@@ -322,6 +322,21 @@ function Render.ResolveAtlasTile( tile )
 	return MC.ResolveAtlasTile( tile )
 end
 
+function Render.ResolveAtlasSurface( tile )
+	if not MC.ResolveAtlasSurface then
+		return 0, math.floor( tonumber( tile ) or 0 ), MC.Atlas
+	end
+	return MC.ResolveAtlasSurface( tile )
+end
+
+function Render.GetAtlasPageCount()
+	return MC.AtlasPageCount and MC.AtlasPageCount() or 1
+end
+
+function Render.GetAtlasPageLayout( page )
+	return MC.AtlasPageLayout and MC.AtlasPageLayout( page ) or nil
+end
+
 function Render.ListAtlasProfiles()
 	if not MC.ListAtlasProfiles then return {} end
 	return MC.ListAtlasProfiles()

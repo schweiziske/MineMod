@@ -149,6 +149,14 @@ local function normalizeAtlasProfile( value )
 end
 
 local function atlasSourceFromDefinition( definition )
+	if definition.inheritBase == true then
+		return {
+			custom = true,
+			inheritBase = true,
+			owner = definition.owner,
+			atlasProfile = definition.atlasProfile or "default",
+		}
+	end
 	return {
 		opaquePath = atlasPngPath( definition.opaquePath ),
 		translucentPath = atlasPngPath( definition.translucentPath ),
@@ -161,12 +169,14 @@ end
 
 for name, definition in pairs( MC.TexturePackDefinitions ) do
 	if normalizeTexturePackName( name ) == name and type( definition ) == "table" then
+		local inheritBase = definition.inheritBase == true
 		local opaquePath = normalizeAtlasPath( definition.opaquePath )
 		local translucentPath = normalizeAtlasPath( definition.translucentPath ) or opaquePath
 		local iconPath = normalizeAtlasPath( definition.iconPath ) or translucentPath
 		local owner = normalizeTexturePackOwner( definition.owner )
 		local atlasProfile = normalizeAtlasProfile( definition.atlasProfile )
-		if opaquePath and owner and atlasProfile then
+		if ( opaquePath or inheritBase ) and owner and atlasProfile then
+			definition.inheritBase = inheritBase
 			definition.opaquePath = opaquePath
 			definition.translucentPath = translucentPath
 			definition.iconPath = iconPath
@@ -191,8 +201,9 @@ function MC.RegisterTexturePack( name, definition, owner )
 	if not owner or owner == "mc" then return false, "invalid_texture_pack_owner" end
 	local existing = MC.TexturePackDefinitions[name]
 	if existing and existing.owner ~= owner then return false, "owned_by_" .. tostring( existing.owner ) end
+	local inheritBase = definition.inheritBase == true
 	local opaquePath = normalizeAtlasPath( definition.opaque or definition.opaquePath or definition.material )
-	if not opaquePath then return false, "invalid_opaque_atlas_path" end
+	if not opaquePath and not inheritBase then return false, "invalid_opaque_atlas_path" end
 	local translucentPath = normalizeAtlasPath( definition.translucent or definition.translucentPath ) or opaquePath
 	local iconPath = normalizeAtlasPath( definition.icon or definition.iconPath ) or translucentPath
 	local atlasProfile = normalizeAtlasProfile( definition.atlasProfile or definition.profile )
@@ -207,6 +218,7 @@ function MC.RegisterTexturePack( name, definition, owner )
 	local stored = {
 		name = name,
 		owner = owner,
+		inheritBase = inheritBase,
 		opaquePath = opaquePath,
 		translucentPath = translucentPath,
 		iconPath = iconPath,
@@ -380,6 +392,7 @@ function MC.ListTexturePacks()
 			opaquePath = definition.opaquePath,
 			translucentPath = definition.translucentPath,
 			iconPath = definition.iconPath,
+			inheritBase = definition.inheritBase == true,
 			atlasProfile = definition.atlasProfile or "default",
 			builtin = false,
 		}
@@ -1094,6 +1107,29 @@ end
 local function resolveAtlasSource( name )
 	local source = AtlasSources[name]
 	if not source then return nil end
+	if source.inheritBase == true then
+		local configured = MC.TexturePack and MC.TexturePack.GetString
+			and normalizeTexturePackName( MC.TexturePack:GetString() ) or "default"
+		local base = AtlasSources[configured]
+		if not base or base.inheritBase == true or ( base.atlasProfile or "default" ) ~= "default" then
+			configured, base = "default", AtlasSources.default
+		end
+		base = resolveAtlasSource( configured ) or AtlasSources.default
+		if not base then return nil end
+		return {
+			opaque = base.opaque,
+			translucent = base.translucent,
+			icon = base.icon,
+			opaqueTexture = base.opaqueTexture,
+			translucentTexture = base.translucentTexture,
+			iconTexture = base.iconTexture,
+			opaquePath = base.opaquePath,
+			translucentPath = base.translucentPath,
+			iconPath = base.iconPath,
+			atlasProfile = source.atlasProfile or "default",
+			inheritedTexturePack = configured,
+		}
+	end
 	if name == "programmer_art" or source.custom == true then
 		if not source.opaque or source.opaque:IsError() then
 			source.opaque = loadAtlasSource( source.opaquePath )
