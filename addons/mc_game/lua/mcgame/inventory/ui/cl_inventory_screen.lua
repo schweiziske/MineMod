@@ -52,15 +52,6 @@ local CREATIVE_SEARCH_BACKGROUND = UI.GetGuiMaterial( "container/creative_invent
 local CREATIVE_INVENTORY_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_inventory" )
 local SCROLLER = UI.GetGuiMaterial( "sprites/container/creative_inventory/scroller" )
 local SCROLLER_DISABLED = UI.GetGuiMaterial( "sprites/container/creative_inventory/scroller_disabled" )
-for scale = 2, 4 do
-	surface.CreateFont( "MCInventorySearch" .. scale, {
-		font = "Roboto",
-		size = 8 * scale,
-		weight = 500,
-		antialias = true,
-		extended = true,
-	} )
-end
 
 local function tabRows()
 	local result = {}
@@ -236,16 +227,18 @@ function ENCHANTING_BUTTON:Paint( w, h )
 		end
 	end )
 	if cost <= 0 then return true end
-	local label = option and option.clue and MC.EnchantingClueName
-		and MC.EnchantingClueName( option.clue, option.clueLevel ) or ""
-	local textColor = enabled and ( self:IsHovered() and Color( 255, 255, 128 ) or Color( 104, 87, 122 ) )
-		or Color( 82, 82, 82 )
-	local costColor = enabled and Color( 64, 64, 64 ) or Color( 86, 45, 45 )
+	local label = tostring( option and option.displayName or "" )
+	local textColor = enabled and ( self:IsHovered() and Color( 255, 255, 128 ) or Color( 104, 94, 74 ) )
+		or Color( 52, 47, 37 )
+	local costColor = enabled and Color( 128, 255, 32 ) or Color( 64, 127, 16 )
+	local costWidth = UI.MeasureText( tostring( cost ), scale )
+	local textWidth = math.max( 0, 86 * scale - costWidth )
 	local screenX, screenY = self:LocalToScreen( 0, 0 )
-	render.SetScissorRect( screenX + 20 * scale, screenY, screenX + w - 20 * scale, screenY + h, true )
-	UI.DrawText( label, 20 * scale, 4 * scale, scale, textColor, TEXT_ALIGN_LEFT, false )
+	render.SetScissorRect( screenX + 20 * scale, screenY,
+		screenX + 20 * scale + textWidth, screenY + h, true )
+	UI.DrawText( label, 20 * scale, 2 * scale, scale, textColor, TEXT_ALIGN_LEFT, false, TEXT_ALIGN_TOP, "alt" )
 	render.SetScissorRect( 0, 0, 0, 0, false )
-	UI.DrawText( tostring( cost ), w - 4 * scale, 8 * scale, scale, costColor, TEXT_ALIGN_RIGHT, false )
+	UI.DrawText( tostring( cost ), 106 * scale, 9 * scale, scale, costColor, TEXT_ALIGN_RIGHT, false )
 	return true
 end
 
@@ -283,8 +276,10 @@ function PANEL:Init()
 	self:MakePopup()
 	self.Scale = UI.GuiScale()
 	self.ContentW, self.ContentH = SURVIVAL_W, SURVIVAL_H
-	self.Left = math.floor( ( ScrW() - self.ContentW * self.Scale ) * 0.5 )
-	self.Top = math.floor( ( ScrH() - self.ContentH * self.Scale ) * 0.5 )
+	local initialOffsetX, initialOffsetY = 0, 0
+	if UI.UIOffset then initialOffsetX, initialOffsetY = UI.UIOffset() end
+	self.Left = math.floor( ( ScrW() - self.ContentW * self.Scale ) * 0.5 + initialOffsetX )
+	self.Top = math.floor( ( ScrH() - self.ContentH * self.Scale ) * 0.5 + initialOffsetY )
 	self.BaseLeft = self.Left
 	self.ChestRows = 1
 	self.ScrollRow = 0
@@ -307,6 +302,8 @@ function PANEL:Init()
 	self.SearchEntry:SetUpdateOnType( true )
 	self.SearchEntry:SetVisible( false )
 	self.SearchEntry:SetZPos( 20 )
+	self.SearchEntry.MCBitmapScale = self.Scale
+	UI.ConfigureBitmapTextEntry( self.SearchEntry, { color = Color( 45, 45, 45, 255 ), padding = 1 } )
 	self.SearchEntry.OnChange = function( entry )
 		if not IsValid( self ) then return end
 		local generation = ( self.SearchGeneration or 0 ) + 1
@@ -327,6 +324,8 @@ function PANEL:Init()
 	self.AnvilEntry:SetUpdateOnType( true )
 	self.AnvilEntry:SetVisible( false )
 	self.AnvilEntry:SetZPos( 30 )
+	self.AnvilEntry.MCBitmapScale = self.Scale
+	UI.ConfigureBitmapTextEntry( self.AnvilEntry, { color = Color( 45, 45, 45, 255 ), padding = 1 } )
 	self.AnvilEntry.OnChange = function( entry )
 		if not IsValid( self ) or self.ApplyingAnvilState or not self.Anvil then return end
 		local value = entry:GetValue() or ""
@@ -339,7 +338,7 @@ function PANEL:Init()
 		if filtered ~= value then
 			self.ApplyingAnvilState = true
 			entry:SetText( filtered )
-			entry:SetCaretPos( #filtered )
+			entry:SetCaretPos( utf8 and utf8.len and ( utf8.len( filtered ) or #filtered ) or #filtered )
 			self.ApplyingAnvilState = false
 		end
 		-- Send every accepted edit immediately. Reliable net ordering then puts
@@ -472,10 +471,10 @@ function PANEL:ApplyAnvilState( anvilState )
 	end
 	self.ApplyingAnvilState = true
 	self.AnvilEntry:SetText( display )
-	self.AnvilEntry:SetCaretPos( #display )
+	self.AnvilEntry:SetCaretPos( utf8 and utf8.len and ( utf8.len( display ) or #display ) or #display )
 	self.ApplyingAnvilState = false
 	local editable = not MC.IsEmptyItemStack( left )
-	self.AnvilEntry:SetTextColor( editable and Color( 45, 45, 45, 255 ) or Color( 120, 120, 120, 255 ) )
+	self.AnvilEntry.MCBitmapColor = editable and Color( 45, 45, 45, 255 ) or Color( 120, 120, 120, 255 )
 	self.AnvilEntry:SetEditable( editable )
 	self.AnvilEntry:SetEnabled( editable )
 end
@@ -516,24 +515,26 @@ function PANEL:Reflow()
 	if not IsValid( self ) then return end
 	self:SetSize( ScrW(), ScrH() )
 	self.Scale = UI.GuiScale()
+	local offsetX, offsetY = 0, 0
+	if UI.UIOffset then offsetX, offsetY = UI.UIOffset() end
 	if self.Chest then
 		self.ChestRows = math.Clamp( math.floor( tonumber( self.Session and self.Session.chestSlots ) or 27 ) / 9, 1, 6 )
 		self.ContentW, self.ContentH = 176, 114 + self.ChestRows * 18
-		self.Left = math.floor( ( ScrW() - self.ContentW * self.Scale ) * 0.5 )
-		self.Top = math.floor( ( ScrH() - self.ContentH * self.Scale ) * 0.5 )
+		self.Left = math.floor( ( ScrW() - self.ContentW * self.Scale ) * 0.5 + offsetX )
+		self.Top = math.floor( ( ScrH() - self.ContentH * self.Scale ) * 0.5 + offsetY )
 	elseif self.Furnace or self.Brewing or self.Anvil or self.Enchanting then
 		self.ContentW, self.ContentH = SURVIVAL_W, SURVIVAL_H
-		self.Left = math.floor( ( ScrW() - SURVIVAL_W * self.Scale ) * 0.5 )
-		self.Top = math.floor( ( ScrH() - SURVIVAL_H * self.Scale ) * 0.5 )
+		self.Left = math.floor( ( ScrW() - SURVIVAL_W * self.Scale ) * 0.5 + offsetX )
+		self.Top = math.floor( ( ScrH() - SURVIVAL_H * self.Scale ) * 0.5 + offsetY )
 	elseif self.Creative then
 		local totalHeight = ( CREATIVE_H + 56 ) * self.Scale
 		self.ContentW, self.ContentH = CREATIVE_W, CREATIVE_H
-		self.Left = math.floor( ( ScrW() - CREATIVE_W * self.Scale ) * 0.5 )
-		self.Top = math.floor( ( ScrH() - totalHeight ) * 0.5 + 28 * self.Scale )
+		self.Left = math.floor( ( ScrW() - CREATIVE_W * self.Scale ) * 0.5 + offsetX )
+		self.Top = math.floor( ( ScrH() - totalHeight ) * 0.5 + 28 * self.Scale + offsetY )
 	else
 		self.ContentW, self.ContentH = SURVIVAL_W, SURVIVAL_H
-		self.Left = math.floor( ( ScrW() - SURVIVAL_W * self.Scale ) * 0.5 )
-		self.Top = math.floor( ( ScrH() - SURVIVAL_H * self.Scale ) * 0.5 )
+		self.Left = math.floor( ( ScrW() - SURVIVAL_W * self.Scale ) * 0.5 + offsetX )
+		self.Top = math.floor( ( ScrH() - SURVIVAL_H * self.Scale ) * 0.5 + offsetY )
 	end
 	self.BaseLeft = self.Left
 	if self.RecipeBookOpen and ( self.Crafting or self.Furnace ) and not self.Creative then
@@ -543,7 +544,8 @@ function PANEL:Reflow()
 			self.Left = self.BaseLeft + math.floor( bookSpan * 0.5 ) * self.Scale
 		end
 	end
-	self.SearchEntry:SetFont( "MCInventorySearch" .. tostring( self.Scale ) )
+	self.SearchEntry.MCBitmapScale = self.Scale
+	self.AnvilEntry.MCBitmapScale = self.Scale
 	self.ContentLayer:SetSize( ScrW(), ScrH() )
 	self:LayoutTabs()
 	self:LayoutVisibleSlots()
@@ -798,7 +800,6 @@ function PANEL:LayoutSpecialControls()
 	end
 	if IsValid( self.AnvilEntry ) then self.AnvilEntry:SetVisible( self.Anvil == true ) end
 	if self.Anvil and IsValid( self.AnvilEntry ) then
-		self.AnvilEntry:SetFont( "MCInventorySearch" .. tostring( self.Scale ) )
 		self.AnvilEntry:SetPos( self.Left + 62 * self.Scale, self.Top + 23 * self.Scale )
 		self.AnvilEntry:SetSize( 103 * self.Scale, 13 * self.Scale )
 	end
