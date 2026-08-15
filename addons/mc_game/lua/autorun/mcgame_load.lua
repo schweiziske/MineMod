@@ -8,8 +8,7 @@
 	items. Everything here sits on top of that through MC.API and the engine
 	registries.
 
-	It still lives in the same addon as the engine, but it loads like a separate
-	one so it can become one later without changes:
+	This is a separate addon that consumes the MCSWEP voxel engine:
 
 	  * every file is included from the engine's register phase, never at file
 	    scope, so "engine is loaded" is a structural guarantee instead of a
@@ -60,7 +59,6 @@ local SHARED = {
 	"mcgame/inventory/sh_crafting.lua",
 	"mcgame/inventory/sh_anvil.lua",
 	"mcgame/item/sh_public_api.lua",
-	"mcgame/generated/sh_generated_fire_flammables.lua",
 	"mcgame/functional/sh_furnace_data.lua",
 	"mcgame/functional/sh_brewing_data.lua",
 	"mcgame/functional/sh_chest_data.lua",

@@ -1,0 +1,28 @@
+{
+  "entities": {
+    "mc_block_cluster": "engine",
+    "mc_boat": "engine",
+    "mc_chunk": "engine",
+    "mc_chunk_phys": "engine",
+    "mc_collision_carrier": "engine",
+    "mc_item_drop": "game",
+    "mc_minecart": "engine",
+    "mc_primed_tnt": "engine",
+    "mc_projectile": "game"
+  },
+  "weapons": {
+    "mc_cluster_tool": "engine",
+    "mc_creative_placer": "engine",
+    "mc_inventory": "game",
+    "mc_item_hand": "game",
+    "mc_preset_placer": "engine"
+  },
+  "knownMixed": [
+    "entities/mc_boat",
+    "entities/mc_minecart",
+    "entities/mc_primed_tnt",
+    "entities/mc_item_drop",
+    "weapons/mc_creative_placer",
+    "weapons/mc_item_hand"
+  ]
+}
