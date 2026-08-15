@@ -102,7 +102,11 @@ end
 
 function UI.GetMaterial( path )
 	if not isstring( path ) or path == "" then return nil end
-	return pixelMaterial( path, "vertexcolor vertexalpha nocull" )
+	-- UI PNGs must retain their authored alpha. The hotbar background uses alpha
+	-- 186 and its selection frame uses 174; routing them through the world-item
+	-- alpha-test material turns those pixels opaque and makes the HUD look heavy.
+	-- POINT sampling is applied by WithPointFiltering at draw time.
+	return sourceMaterial( path, "vertexcolor vertexalpha nocull" )
 end
 
 function UI.GetWorldItemMaterial( path )
@@ -111,7 +115,7 @@ function UI.GetWorldItemMaterial( path )
 end
 
 function UI.GetGuiMaterial( name )
-	return pixelMaterial( "mc/gui/" .. tostring( name ) .. ".png", "vertexcolor vertexalpha nocull" )
+	return sourceMaterial( "mc/gui/" .. tostring( name ) .. ".png", "vertexcolor vertexalpha nocull" )
 end
 
 function UI.GetMobEffectMaterial( effectId )
