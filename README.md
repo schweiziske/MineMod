@@ -28,41 +28,36 @@ Garry's Mod 里的 Minecraft 风格方块系统。方块不按实体逐个生成
 
 ## 主要文件
 
+仓库现在发布为两个独立 addon。`addons/mc_engine` 可以单独运行；`addons/mc_game` 通过 `MC.API` 消费引擎。GMod 自动加载的实体和武器也只在一个 addon 中提供，归属记录在 `addons/ownership.json`。
+
 ```text
-lua/autorun/mc_load.lua                  引擎加载入口
-lua/autorun/mcgame_load.lua              生存游戏层加载入口(经引擎 register 阶段启动)
-lua/mc/sh_config.lua                     尺寸、ConVar、net bit、atlas 配置
-lua/mc/sh_blocks.lua                     方块注册、状态、朝向、碰撞盒
-lua/mc/sh_presets.lua                    建筑预设坐标/朝向旋转和覆盖体积变换
-lua/mc/sh_voxel.lua                      方块存储、坐标换算、方块射线
-lua/mc/functional/sh_ladders.lua         梯子 Source ladder movetype 的共享移动预测
-lua/mc/liquid/                           液体状态、流向、接触、游泳和水下效果
-lua/mc/render/cl_fluid_geometry.lua      原版式液面高度和邻面遮挡
-lua/mc/sv_world.lua                      服务端世界 API、放置、破坏、导入、保存、同步
-lua/mc/sv_saves.lua                      命名存档管理、元数据、存档 UI 网络接口
-lua/mc/sv_presets.lua                    建筑预设保存、读取、放置和封面网络接口
-lua/mc/sv_damage.lua                     GMod 伤害破坏方块、MC 风格爆炸坑
-lua/mc/cl_net.lua                        客户端同步接收
-lua/mc/cl_render.lua                     客户端 IMesh 渲染和预测碰撞 dirty
-lua/mc/cl_ui.lua                         方块图标、选择窗口、选中框
-lua/mc/cl_save_ui.lua                    命名存档管理 UI
-lua/mc/cl_presets.lua                    建筑预设 UI、截图和 IMesh 投影
-lua/entities/mc_chunk/                   chunk 实体和 multiconvex 碰撞
-lua/weapons/mc_placer/shared.lua         方块放置器 SWEP
-lua/weapons/mc_creative_placer/shared.lua 创造物品栏方块放置器 SWEP
-lua/weapons/mc_preset_placer/shared.lua  建筑预设放置器 SWEP
-lua/weapons/gmod_tool/stools/mc_block.lua 工具枪方块工具
-lua/mc/generated/                        生成的方块、tile、中文名 Lua
-lua/mcgame/                              生存游戏层:物品、物品栏、配方、挖掘、掉落物
-_build/build_atlas.ps1                   生成 atlas 和方块表
-_build/build_block_properties.cjs        生成 hardness/explosionResistance 表
-_build/build_block_connections.cjs       生成连接/贴附类方块表
-_tools/mc_convert_8x8_save.py            老版本 Parkour Spiral 转存工具
-_tools/mc_import_world.py                通用 Minecraft 存档导出工具
-docs/api.md                              对外 API(外部插件唯一受支持入口)
-docs/maintenance-update-guide.md         维护更新指南
-docs/interface-usage.md                  接口使用介绍(已过期)
+addons/mc_engine/addon.json                 独立引擎 addon 清单
+addons/mc_engine/lua/autorun/mc_load.lua    引擎加载入口
+addons/mc_engine/lua/mc/                    方块世界、状态、网络、渲染、碰撞、光照和生成数据
+addons/mc_engine/lua/entities/              引擎实体
+addons/mc_engine/lua/weapons/               引擎武器和工具
+addons/mc_engine/lua/bin/                   可选 native mesh 模块
+addons/mc_engine/shaders/fxc/               编译后的 chunk/阴影 shader(.vcs)
+addons/mc_engine/materials/pp/              阴影深度 pass 的磁盘 VMT
+addons/mc_game/addon.json                   生存游戏 addon 清单
+addons/mc_game/lua/autorun/mcgame_load.lua  游戏层入口(register 阶段启动)
+addons/mc_game/lua/mcgame/                  物品、物品栏、配方、挖掘、掉落物和容器
+addons/mc_game/lua/entities/                游戏实体
+addons/mc_game/lua/weapons/                 游戏武器
+addons/ownership.json                       实体和武器物理归属及 mixed 清单
+_build/build_atlas.ps1                      生成 atlas 和方块表
+_build/build_block_properties.cjs            生成 hardness/explosionResistance 表
+_build/build_block_connections.cjs           生成连接/贴附类方块表
+_tools/mc_convert_8x8_save.py                老版本 Parkour Spiral 转存工具
+_tools/mc_import_world.py                    通用 Minecraft 存档导出工具
+docs/api.md                                  对外 API(外部插件唯一受支持入口)
+docs/maintenance-update-guide.md             维护更新指南
+docs/interface-usage.md                      接口使用介绍(已过期)
 ```
+
+资源也按 addon 归属：世界 atlas、字体、方块实体材质、引擎声音、编译后的 shader（`shaders/fxc/`）、阴影深度 VMT（`materials/pp/`）、SWEP 图标（`materials/entities/`、`materials/vgui/entities/`）和 native 模块属于 `mc_engine`；物品图标、容器/HUD/配方界面、破坏阶段贴图及游戏音效属于 `mc_game`。相对挂载路径不能由两个 addon 重复提供。
+
+**仓库根目录不得再有 `materials/`、`sound/`、`shaders/` 等可挂载内容树** —— 留在根目录的内容对任何客户端都不会挂载。`_tools/test_layer_boundaries.js` 会在发现这类残留、以及 Lua 里 `Material()` 指向两个 addon 都没有的文件时报错。
 
 ## 常用命令
 
@@ -135,31 +130,31 @@ node _tools\test_generated_lua_size.js
 node _tools\test_interest_range_policy.js
 powershell -ExecutionPolicy Bypass -File _tools\check_streaming_sync.ps1
 $luaFiles = @(
-  "lua\autorun\mc_load.lua",
-  "lua\mc\sh_blocks.lua",
-  "lua\mc\sh_presets.lua",
-  "lua\mc\sh_config.lua",
-  "lua\mc\functional\sh_ladders.lua",
-  "lua\mc\liquid\sh_registry.lua",
-  "lua\mc\liquid\sh_shapes.lua",
-  "lua\mc\liquid\sh_flow.lua",
-  "lua\mc\liquid\sh_contact.lua",
-  "lua\mc\liquid\sh_movement.lua",
-  "lua\mc\cl_ui.lua",
-  "lua\mc\cl_save_ui.lua",
-  "lua\mc\cl_presets.lua",
-  "lua\mc\sv_saves.lua",
-  "lua\mc\sv_presets.lua",
-  "lua\mc\sv_damage.lua",
-  "lua\entities\mc_chunk\init.lua",
-  "lua\weapons\mc_creative_placer\shared.lua",
-  "lua\weapons\mc_preset_placer\shared.lua",
-  "lua\mc\generated\sh_generated_block_connections.lua",
-  "lua\mc\generated\sh_generated_block_properties.lua",
-  "lua\mc\generated\sh_generated_sound_types.lua"
+  "addons\mc_engine\lua\autorun\mc_load.lua",
+  "addons\mc_engine\lua\mc\sh_blocks.lua",
+  "addons\mc_engine\lua\mc\sh_presets.lua",
+  "addons\mc_engine\lua\mc\sh_config.lua",
+  "addons\mc_engine\lua\mc\functional\sh_ladders.lua",
+  "addons\mc_engine\lua\mc\liquid\sh_registry.lua",
+  "addons\mc_engine\lua\mc\liquid\sh_shapes.lua",
+  "addons\mc_engine\lua\mc\liquid\sh_flow.lua",
+  "addons\mc_engine\lua\mc\liquid\sh_contact.lua",
+  "addons\mc_engine\lua\mc\liquid\sh_movement.lua",
+  "addons\mc_engine\lua\mc\cl_ui.lua",
+  "addons\mc_engine\lua\mc\cl_save_ui.lua",
+  "addons\mc_engine\lua\mc\cl_presets.lua",
+  "addons\mc_engine\lua\mc\sv_saves.lua",
+  "addons\mc_engine\lua\mc\sv_presets.lua",
+  "addons\mc_engine\lua\mc\sv_damage.lua",
+  "addons\mc_engine\lua\entities\mc_chunk\init.lua",
+  "addons\mc_engine\lua\weapons\mc_creative_placer\shared.lua",
+  "addons\mc_engine\lua\weapons\mc_preset_placer\shared.lua",
+  "addons\mc_engine\lua\mc\generated\sh_generated_block_connections.lua",
+  "addons\mc_engine\lua\mc\generated\sh_generated_block_properties.lua",
+  "addons\mc_engine\lua\mc\generated\sh_generated_sound_types.lua"
 )
-$luaFiles += (Get-ChildItem "lua\mc\generated\sh_generated_block_properties_part*.lua").FullName
-$luaFiles += (Get-ChildItem "lua\mc\generated\sh_generated_sound_types_part*.lua").FullName
+$luaFiles += (Get-ChildItem "addons\mc_engine\lua\mc\generated\sh_generated_block_properties_part*.lua").FullName
+$luaFiles += (Get-ChildItem "addons\mc_engine\lua\mc\generated\sh_generated_sound_types_part*.lua").FullName
 foreach ($f in $luaFiles) {
   npm exec --yes --package luaparse -- luaparse $f > $null
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -168,7 +163,7 @@ python -m py_compile _tools\mc_convert_8x8_save.py _tools\mc_import_world.py
 git diff --check
 ```
 
-`lua/mc/sv_world.lua` 使用 GMod Lua 的 `continue`，普通 Lua parser 可能不认；不要把这个误判成新增语法错误。
+`addons/mc_engine/lua/mc/sv_world.lua` 使用 GMod Lua 的 `continue`，普通 Lua parser 可能不认；不要把这个误判成新增语法错误。
 
 ## 文档入口
 
