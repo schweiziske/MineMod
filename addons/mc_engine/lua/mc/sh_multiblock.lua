@@ -315,7 +315,7 @@ function MC.BuildBreakPlan( bx, by, bz )
 		end
 	end
 	local primaryChangeCount = #cells
-	appendChestUpdates( cells, seen, primaryChangeCount )
+	appendRegisteredStateUpdates( cells, seen, primaryChangeCount )
 	appendBlockConnectionUpdates( cells, seen, primaryChangeCount )
 	appendRedstoneUpdates( cells, seen, primaryChangeCount )
 	appendRailUpdates( cells, seen, primaryChangeCount )
