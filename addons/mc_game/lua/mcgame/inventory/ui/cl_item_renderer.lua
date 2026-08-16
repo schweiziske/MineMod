@@ -6,18 +6,49 @@ MC.InventoryUI = MC.InventoryUI or {}
 local UI = MC.InventoryUI
 local Renderer = {}
 UI.ItemRenderer = Renderer
+Renderer.SpecialIconRenderers = {}
+
+function Renderer.RegisterSpecialIconRenderer( typeName, callback )
+	typeName = string.lower( tostring( typeName or "" ) )
+	if typeName == "" then return false, "invalid_special_item_model_type" end
+	if not isfunction( callback ) then return false, "invalid_special_item_model_renderer" end
+	Renderer.SpecialIconRenderers[typeName] = callback
+	return true
+end
+
+local function drawSpecialIcon( stack, plan, x, y, size, options )
+	local special = plan and plan.special
+	local typeName = type( special ) == "table" and string.lower( tostring( special.type or "" ) ) or ""
+	local callback = Renderer.SpecialIconRenderers[typeName]
+	if not callback then return false end
+	local ok, result = pcall( callback, stack, plan, x, y, size, options or {} )
+	if not ok then
+		if ErrorNoHalt then ErrorNoHalt( "[MC Inventory] special item model " .. typeName
+			.. " failed: " .. tostring( result ) .. "\n" ) end
+		return false
+	end
+	if result == false or result == nil then return false end
+	if isfunction( result ) then return true, result end
+	if type( result ) == "table" then
+		return result.drawn ~= false, result.drawMask,
+			result.glintScaleU, result.glintScaleV,
+			result.glintOriginU, result.glintOriginV
+	end
+	return result == true
+end
 
 local GLINT_STRENGTH = 0.75
 local GLINT_SPEED = 0.5
 local GLINT_JAVA_TEXTURE_SCALE = 8
--- Java applies the 8x transform to a sprite's tiny UV window inside the item
--- atlas.  These materials are standalone PNGs with a full 0..1 UV range, so
--- using 8 directly packs the 128px glint into an unreadable purple average.
--- A default 16px sprite spans about 1/64 of the vanilla item atlas axis.
-local GLINT_ITEM_TEXTURE_SCALE = GLINT_JAVA_TEXTURE_SCALE / 64
--- Java's entity/hand glint transform uses 0.5. It also produces a visibly
--- moving diagonal pattern on the enlarged first- and third-person sprite.
-local GLINT_ENTITY_TEXTURE_SCALE = 0.5
+-- Java 26.2 stitches items and blocks separately.  The default item atlas is
+-- 1024x512 because mip-0 sprites still receive one border pixel from Stitcher.
+-- Generated sprite metadata supplies the exact content origin and dimensions;
+-- these constants are only a safe fallback for addon-only item textures.
+local GLINT_ITEM_ATLAS_WIDTH = 1024
+local GLINT_ITEM_ATLAS_HEIGHT = 512
+local GLINT_ITEM_TEXTURE_SCALE_U = GLINT_JAVA_TEXTURE_SCALE * 16 / GLINT_ITEM_ATLAS_WIDTH
+local GLINT_ITEM_TEXTURE_SCALE_V = GLINT_JAVA_TEXTURE_SCALE * 16 / GLINT_ITEM_ATLAS_HEIGHT
+local GLINT_BLOCK_TEXTURE_SCALE = GLINT_JAVA_TEXTURE_SCALE * 16 / 1024
 local GLINT_ROTATION = math.rad( 10 )
 -- This renderer supplies moving UVs explicitly, so the PNG auto-material is
 -- sufficient. Do not copy its texture into a white-backed material at
@@ -32,11 +63,91 @@ local GLINT_COLOR = Color( math.floor( 255 * GLINT_STRENGTH + 0.5 ),
 local GLINT_BLEND_AVAILABLE = render and render.OverrideBlend
 	and BLEND_SRC_COLOR ~= nil and BLEND_ONE ~= nil and BLEND_ZERO ~= nil and BLENDFUNC_ADD ~= nil
 
+local spriteMaskBitPowers = {}
+for index = 0, 31 do spriteMaskBitPowers[index] = 2 ^ index end
+
+local function spriteMaskForLayer( layer )
+	if type( layer ) ~= "string" or layer == "" then return nil end
+	layer = string.gsub( layer, "%.png$", "" )
+	return MC.ItemSpriteMasks and MC.ItemSpriteMasks[layer] or nil
+end
+
+local function maskOpaque( mask, x, y )
+	if not mask or not mask.rows or x < 0 or y < 0 or x >= mask.width or y >= mask.height then return false end
+	local row = tonumber( mask.rows[y + 1] ) or 0
+	return math.floor( row / spriteMaskBitPowers[x] ) % 2 == 1
+end
+
 local function hasFoil( stack )
 	return MC.ItemStackHasFoil and MC.ItemStackHasFoil( stack ) == true
 end
 
-local function glintUV( u, v, textureScale )
+local function itemGlintTransform( layer )
+	local mask = spriteMaskForLayer( layer )
+	local width = math.max( tonumber( mask and mask.width ) or 16, 1 )
+	local height = math.max( tonumber( mask and mask.height ) or 16, 1 )
+	local atlasWidth = tonumber( mask and mask.atlasWidth )
+		or tonumber( MC.ItemSpriteAtlasWidth ) or GLINT_ITEM_ATLAS_WIDTH
+	local atlasHeight = tonumber( mask and mask.atlasHeight )
+		or tonumber( MC.ItemSpriteAtlasHeight ) or GLINT_ITEM_ATLAS_HEIGHT
+	local atlasX, atlasY = tonumber( mask and mask.atlasX ), tonumber( mask and mask.atlasY )
+	if atlasX and atlasY and atlasWidth > 0 and atlasHeight > 0 then
+		return GLINT_JAVA_TEXTURE_SCALE * width / atlasWidth,
+			GLINT_JAVA_TEXTURE_SCALE * height / atlasHeight,
+			GLINT_JAVA_TEXTURE_SCALE * atlasX / atlasWidth,
+			GLINT_JAVA_TEXTURE_SCALE * atlasY / atlasHeight
+	end
+	return GLINT_ITEM_TEXTURE_SCALE_U, GLINT_ITEM_TEXTURE_SCALE_V, 0, 0
+end
+
+local function drawSpriteMaskRuns( mask, x, y, size )
+	local width = math.max( math.floor( tonumber( mask and mask.width ) or 0 ), 0 )
+	local height = math.max( math.floor( tonumber( mask and mask.height ) or 0 ), 0 )
+	if width < 1 or height < 1 or width > 32 or height > 32 then return false end
+
+	local pixelWidth, pixelHeight = size / width, size / height
+	for rowIndex = 0, height - 1 do
+		local column = 0
+		while column < width do
+			while column < width and not maskOpaque( mask, column, rowIndex ) do
+				column = column + 1
+			end
+			local runStart = column
+			while column < width and maskOpaque( mask, column, rowIndex ) do
+				column = column + 1
+			end
+			if runStart < column then
+				surface.DrawRect( x + runStart * pixelWidth, y + rowIndex * pixelHeight,
+					( column - runStart ) * pixelWidth, pixelHeight )
+			end
+		end
+	end
+	return true
+end
+
+local function iconSpriteMaskCallback( layers, x, y, size )
+	local masks = {}
+	for _, layer in ipairs( layers or {} ) do
+		local mask = spriteMaskForLayer( layer )
+		if mask then masks[#masks + 1] = mask end
+	end
+	if #masks == 0 then return nil end
+
+	return function()
+		-- Stencil writes happen for every submitted fragment, including fully
+		-- transparent texels. Draw the generated opaque-pixel runs instead of
+		-- re-submitting the texture's full rectangle.
+		-- Color/alpha writes are disabled by drawIconGlint while this callback
+		-- runs. Keep submitted pixels opaque so Source cannot discard them before
+		-- the stencil pass records their silhouette.
+		surface.SetDrawColor( 255, 255, 255, 255 )
+		for _, mask in ipairs( masks ) do
+			drawSpriteMaskRuns( mask, x, y, size )
+		end
+	end
+end
+
+local function glintUV( u, v, textureScaleU, textureScaleV, textureOriginU, textureOriginV )
 	-- Vanilla drives this transform from wall-clock milliseconds.  RealTime
 	-- keeps the shimmer moving even when simulation time is paused or scaled.
 	local now = RealTime and RealTime() or ( CurTime and CurTime() or 0 )
@@ -44,9 +155,12 @@ local function glintUV( u, v, textureScale )
 	local offsetU = -( elapsed % 110000 ) / 110000
 	local offsetV = ( elapsed % 30000 ) / 30000
 	local cosine, sine = math.cos( GLINT_ROTATION ), math.sin( GLINT_ROTATION )
-	textureScale = textureScale or GLINT_ITEM_TEXTURE_SCALE
-	return ( u * cosine - v * sine ) * textureScale + offsetU,
-		( u * sine + v * cosine ) * textureScale + offsetV
+	textureScaleU = textureScaleU or GLINT_ITEM_TEXTURE_SCALE_U
+	textureScaleV = textureScaleV or GLINT_ITEM_TEXTURE_SCALE_V
+	local atlasU = u * textureScaleU + ( textureOriginU or 0 )
+	local atlasV = v * textureScaleV + ( textureOriginV or 0 )
+	return atlasU * cosine - atlasV * sine + offsetU,
+		atlasU * sine + atlasV * cosine + offsetV
 end
 
 local function beginGlintBlend()
@@ -63,14 +177,15 @@ local function endGlintBlend( active )
 	render.SetColorModulation( 1, 1, 1 )
 end
 
-local function drawGlintSurfaceRect( x, y, width, height )
+local function drawGlintSurfaceRect( x, y, width, height,
+	textureScaleU, textureScaleV, textureOriginU, textureOriginV )
 	if not GLINT_MATERIAL or GLINT_MATERIAL.IsError and GLINT_MATERIAL:IsError() then return false end
 	surface.SetMaterial( GLINT_MATERIAL )
 	surface.SetDrawColor( GLINT_COLOR.r, GLINT_COLOR.g, GLINT_COLOR.b, GLINT_COLOR.a )
-	local u0, v0 = glintUV( 0, 0, GLINT_ITEM_TEXTURE_SCALE )
-	local u1, v1 = glintUV( 1, 0, GLINT_ITEM_TEXTURE_SCALE )
-	local u2, v2 = glintUV( 1, 1, GLINT_ITEM_TEXTURE_SCALE )
-	local u3, v3 = glintUV( 0, 1, GLINT_ITEM_TEXTURE_SCALE )
+	local u0, v0 = glintUV( 0, 0, textureScaleU, textureScaleV, textureOriginU, textureOriginV )
+	local u1, v1 = glintUV( 1, 0, textureScaleU, textureScaleV, textureOriginU, textureOriginV )
+	local u2, v2 = glintUV( 1, 1, textureScaleU, textureScaleV, textureOriginU, textureOriginV )
+	local u3, v3 = glintUV( 0, 1, textureScaleU, textureScaleV, textureOriginU, textureOriginV )
 	surface.DrawPoly( {
 		{ x = x, y = y, u = u0, v = v0 },
 		{ x = x + width, y = y, u = u1, v = v1 },
@@ -80,7 +195,8 @@ local function drawGlintSurfaceRect( x, y, width, height )
 	return true
 end
 
-local function drawIconGlint( stack, drawMask, x, y, size )
+local function drawIconGlint( stack, drawMask, x, y, size,
+	textureScaleU, textureScaleV, textureOriginU, textureOriginV )
 	if not hasFoil( stack ) or not isfunction( drawMask ) or not render or not render.SetStencilEnable then return false end
 	render.ClearStencil()
 	render.SetStencilEnable( true )
@@ -99,7 +215,8 @@ local function drawIconGlint( stack, drawMask, x, y, size )
 	render.SetStencilCompareFunction( STENCIL_EQUAL )
 	render.SetStencilPassOperation( STENCIL_KEEP )
 	local blended = beginGlintBlend()
-	drawGlintSurfaceRect( x, y, size, size )
+	drawGlintSurfaceRect( x, y, size, size,
+		textureScaleU, textureScaleV, textureOriginU, textureOriginV )
 	endGlintBlend( blended )
 	render.SetStencilEnable( false )
 	render.ClearStencil()
@@ -301,7 +418,12 @@ local function droppedBlockMesh( stateId, blockId )
 		for _, quad in ipairs( model and model.modelQuads or {} ) do
 			local tile = MC.BlockModelSurface( model, quad )
 			local atlasU0, atlasV0, atlasU1, atlasV1 = droppedTileUVRect( tile, quad.uv )
-			local points, texture = {}, {}
+			local points, texture, glintTexture = {}, {}, {}
+			local quadUV = quad.uv
+			local localU0 = ( tonumber( quadUV and quadUV[1] ) or 0 ) / 16
+			local localV0 = ( tonumber( quadUV and quadUV[2] ) or 0 ) / 16
+			local localU1 = ( tonumber( quadUV and quadUV[3] ) or 16 ) / 16
+			local localV1 = ( tonumber( quadUV and quadUV[4] ) or 16 ) / 16
 			for index = 1, 4 do
 				local x, y, z, u, v = MC.ModelQuadVertex( quad, index )
 				u, v = rotatedUV( u, v, quad.rot )
@@ -309,6 +431,10 @@ local function droppedBlockMesh( stateId, blockId )
 				texture[index] = {
 					u = atlasU0 + ( atlasU1 - atlasU0 ) * u,
 					v = atlasV0 + ( atlasV1 - atlasV0 ) * v,
+				}
+				glintTexture[index] = {
+					u = localU0 + ( localU1 - localU0 ) * u,
+					v = localV0 + ( localV1 - localV0 ) * v,
 				}
 			end
 
@@ -333,7 +459,7 @@ local function droppedBlockMesh( stateId, blockId )
 				}
 				glintVertices[#glintVertices + 1] = {
 					pos = points[corner], normal = normal,
-					u = texture[corner].u, v = texture[corner].v,
+					u = glintTexture[corner].u, v = glintTexture[corner].v,
 				}
 			end
 		end
@@ -356,13 +482,15 @@ local function droppedBlockMesh( stateId, blockId )
 	return cached
 end
 
-local function drawDynamicGlintTriangles( vertices, textureScale )
+local function drawDynamicGlintTriangles( vertices,
+	textureScaleU, textureScaleV, textureOriginU, textureOriginV )
 	if type( vertices ) ~= "table" or #vertices < 3
 		or not GLINT_MATERIAL or GLINT_MATERIAL.IsError and GLINT_MATERIAL:IsError() then return false end
 	render.SetMaterial( GLINT_MATERIAL )
 	mesh.Begin( MATERIAL_TRIANGLES, #vertices / 3 )
 	for _, vertex in ipairs( vertices ) do
-		local u, v = glintUV( vertex.u or 0, vertex.v or 0, textureScale or GLINT_ITEM_TEXTURE_SCALE )
+		local u, v = glintUV( vertex.u or 0, vertex.v or 0,
+			textureScaleU, textureScaleV, textureOriginU, textureOriginV )
 		mesh.Position( vertex.pos )
 		if vertex.normal then mesh.Normal( vertex.normal ) end
 		mesh.TexCoord( 0, u, v )
@@ -411,7 +539,8 @@ function Renderer.DrawDroppedBlock( stack, position, angles, size, worldColor, o
 		render.SetColorModulation( GLINT_STRENGTH, GLINT_STRENGTH, GLINT_STRENGTH )
 		render.SetBlend( 1 )
 		cam.PushModelMatrix( matrix, true )
-			drawDynamicGlintTriangles( droppedBlockGlintGeometry[stateId] )
+			drawDynamicGlintTriangles( droppedBlockGlintGeometry[stateId],
+				GLINT_BLOCK_TEXTURE_SCALE, GLINT_BLOCK_TEXTURE_SCALE )
 		cam.PopModelMatrix()
 		endGlintBlend( blended )
 	end
@@ -444,7 +573,15 @@ function Renderer.DrawIcon( stack, x, y, size, options )
 	local materials, plan = Renderer.MaterialsForStack( stack, options )
 	local drawn = false
 	local drawMask
-	if #materials > 0 then
+	local layeredItemGlint = false
+	local glintTextureScaleU, glintTextureScaleV
+	local glintTextureOriginU, glintTextureOriginV
+	if plan.kind == "special" then
+		drawn, drawMask, glintTextureScaleU, glintTextureScaleV,
+			glintTextureOriginU, glintTextureOriginV =
+			drawSpecialIcon( stack, plan, x, y, size, options )
+	end
+	if not drawn and #materials > 0 then
 		drawMask = function()
 			UI.WithPointFiltering( function()
 				for index, material in ipairs( materials ) do
@@ -453,11 +590,14 @@ function Renderer.DrawIcon( stack, x, y, size, options )
 				end
 			end )
 		end
+		layeredItemGlint = true
 		drawMask()
 		drawn = true
-	elseif MC.DrawMinecraftBlockStateIcon then
+	elseif not drawn and MC.DrawMinecraftBlockStateIcon then
 		local stateId, blockId = blockStateFor( definition )
 		if stateId then
+			glintTextureScaleU = GLINT_BLOCK_TEXTURE_SCALE
+			glintTextureScaleV = GLINT_BLOCK_TEXTURE_SCALE
 			drawMask = function()
 				UI.WithPointFiltering( function()
 					MC.DrawMinecraftBlockStateIcon( stateId, x, y, size, size,
@@ -468,7 +608,25 @@ function Renderer.DrawIcon( stack, x, y, size, options )
 			drawn = true
 		end
 	end
-	if drawn and drawMask then drawIconGlint( stack, drawMask, x, y, size ) end
+	if drawn and drawMask then
+		if layeredItemGlint and hasFoil( stack ) then
+			-- Vanilla's foil consumer sees every BakedQuad independently.  Keep
+			-- multi-layer icons separate so each texture contributes with its own
+			-- item-atlas UV window instead of sharing layer 1's phase.
+			for _, layer in ipairs( plan.layers or {} ) do
+				local layerMask = iconSpriteMaskCallback( { layer }, x, y, size )
+				if layerMask then
+					local scaleU, scaleV, originU, originV = itemGlintTransform( layer )
+					drawIconGlint( stack, layerMask, x, y, size,
+						scaleU, scaleV, originU, originV )
+				end
+			end
+		else
+			drawIconGlint( stack, drawMask, x, y, size,
+				glintTextureScaleU, glintTextureScaleV,
+				glintTextureOriginU, glintTextureOriginV )
+		end
+	end
 	if not drawn then
 		-- Keep missing/custom item definitions visible and diagnosable without
 		-- throwing from Paint; the checker is deliberately Minecraft-like.
@@ -484,8 +642,8 @@ end
 local function drawCount( stack, x, y, size, scale )
 	if not stack or ( tonumber( stack.count ) or 0 ) <= 1 then return end
 	local text = tostring( math.floor( tonumber( stack.count ) or 0 ) )
-	UI.DrawText( text, x + size, y + size, scale, UI.Colors.text,
-		TEXT_ALIGN_RIGHT, true, TEXT_ALIGN_BOTTOM )
+	UI.DrawText( text, x + 17 * scale, y + 9 * scale, scale, UI.Colors.text,
+		TEXT_ALIGN_RIGHT, true, TEXT_ALIGN_TOP )
 end
 
 local function drawDamage( stack, definition, x, y, size, scale )
@@ -693,20 +851,6 @@ local heldSpriteMeshes = {}
 local glintSpriteGeometry = {}
 local heldSpriteDrawMatrix = Matrix()
 local SPRITE_HALF_DEPTH = 1 / 32
-local bitPowers = {}
-for index = 0, 31 do bitPowers[index] = 2 ^ index end
-
-local function spriteMaskForLayer( layer )
-	if type( layer ) ~= "string" or layer == "" then return nil end
-	layer = string.gsub( layer, "%.png$", "" )
-	return MC.ItemSpriteMasks and MC.ItemSpriteMasks[layer] or nil
-end
-
-local function maskOpaque( mask, x, y )
-	if x < 0 or y < 0 or x >= mask.width or y >= mask.height then return false end
-	local row = tonumber( mask.rows[y + 1] ) or 0
-	return math.floor( row / bitPowers[x] ) % 2 == 1
-end
 
 local function appendVertex( target, position, normal, u, v )
 	target[#target + 1] = { pos = position, normal = normal, u = u, v = v, color = color_white }
@@ -912,13 +1056,16 @@ function Renderer.DrawHeldItem( stack, pos, orientation, size, color, options )
 				local layer = plan.layers and plan.layers[index] or nil
 				local geometry = glintGeometryForLayer( layer )
 				if geometry then
+					local glintScaleU, glintScaleV, glintOriginU, glintOriginV =
+						itemGlintTransform( layer )
 					local matrix = heldSpriteDrawMatrix
 					matrix:SetTranslation( pos + offset )
 					matrix:SetForward( x * size )
 					matrix:SetRight( -y * size )
 					matrix:SetUp( normal * math.max( size * 0.02, 0.001 ) )
 					cam.PushModelMatrix( matrix, true )
-						drawDynamicGlintTriangles( geometry, GLINT_ENTITY_TEXTURE_SCALE )
+						drawDynamicGlintTriangles( geometry,
+							glintScaleU, glintScaleV, glintOriginU, glintOriginV )
 					cam.PopModelMatrix()
 				end
 			end
@@ -959,6 +1106,8 @@ function Renderer.DrawHeldItem( stack, pos, orientation, size, color, options )
 			local offset = ( index - 1 ) * 0.01 * transform.depthScale + 0.001
 			local geometry = glintGeometryForLayer( layer )
 			if geometry then
+				local glintScaleU, glintScaleV, glintOriginU, glintOriginV =
+					itemGlintTransform( layer )
 				local matrix = heldSpriteDrawMatrix
 				matrix:SetTranslation( transform.pos + transform.normal * offset )
 				matrix:SetForward( transform.xAxis * transform.width )
@@ -967,7 +1116,8 @@ function Renderer.DrawHeldItem( stack, pos, orientation, size, color, options )
 				render.SetColorModulation( GLINT_STRENGTH, GLINT_STRENGTH, GLINT_STRENGTH )
 				render.SetBlend( 1 )
 				cam.PushModelMatrix( matrix, true )
-					drawDynamicGlintTriangles( geometry, GLINT_ENTITY_TEXTURE_SCALE )
+					drawDynamicGlintTriangles( geometry,
+						glintScaleU, glintScaleV, glintOriginU, glintOriginV )
 				cam.PopModelMatrix()
 			end
 		end

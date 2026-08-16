@@ -55,6 +55,7 @@ API.Network.Register( GAME_OWNER, {
 	"mc_inventory_close", "mc_inventory_resync", "mc_inventory_select",
 	"mc_inventory_recipe_place", "mc_equipment_delta", "mc_block_use_request",
 	"mc_enchanting_state", "mc_anvil_state", "mc_anvil_rename",
+	"mc_merchant_state", "mc_merchant_select",
 	"mc_brewing_state", "mc_furnace_state", "mc_campfire_dowse_fx",
 	"mc_chest_open_state", "mc_mining_progress",
 	"mc_minecraft_vehicle_interact", "mc_inventory_proxy_world_interact",

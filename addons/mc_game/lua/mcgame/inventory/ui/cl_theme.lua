@@ -137,11 +137,6 @@ function UI.GetGuiMaterial( name )
 					/ mappingWidth,
 				vScale = math.max( 1, tonumber( definition.height ) or 1 )
 					/ mappingHeight,
-				-- surface.DrawTexturedRectUV includes the leading texture boundary
-				-- in its rasterization. Starting half a texel earlier makes each
-				-- authored pixel occupy exactly GUI-scale framebuffer pixels.
-				uInset = 0.5 / mappingWidth,
-				vInset = 0.5 / mappingHeight,
 			}
 		end
 		return material
@@ -180,13 +175,11 @@ function UI.DrawTexture( mat, x, y, w, h, u0, v0, u1, v1, color )
 	if mapping then
 		local uScale = tonumber( mapping.uScale ) or 1
 		local vScale = tonumber( mapping.vScale ) or 1
-		local uInset = tonumber( mapping.uInset ) or 0
-		local vInset = tonumber( mapping.vInset ) or 0
 		if u0 ~= nil then
-			u0, v0 = u0 * uScale - uInset, ( v0 or 0 ) * vScale - vInset
+			u0, v0 = u0 * uScale, ( v0 or 0 ) * vScale
 			u1, v1 = ( u1 or 1 ) * uScale, ( v1 or 1 ) * vScale
 		else
-			u0, v0, u1, v1 = -uInset, -vInset, uScale, vScale
+			u0, v0, u1, v1 = 0, 0, uScale, vScale
 		end
 	end
 	if u0 ~= nil then
@@ -308,6 +301,17 @@ local function utf8Prefix( text, count )
 	return string.sub( text, 1, byteIndex - 1 )
 end
 
+local function utf8Length( text )
+	if utf8 and utf8.len then return utf8.len( text ) or #text end
+	local count, byteIndex = 0, 1
+	while byteIndex <= #text do
+		local first = string.byte( text, byteIndex )
+		local width = first < 0x80 and 1 or first < 0xE0 and 2 or first < 0xF0 and 3 or first < 0xF8 and 4 or 1
+		byteIndex, count = byteIndex + width, count + 1
+	end
+	return count
+end
+
 function UI.PaintBitmapTextEntry( entry, w, h )
 	if not IsValid( entry ) then return true end
 	local options = entry.MCBitmapTextOptions or {}
@@ -322,7 +326,8 @@ function UI.PaintBitmapTextEntry( entry, w, h )
 	local totalWidth = UI.MeasureText( text, scale, options.font )
 	local scroll = focused and math.max( 0, caretWidth - available + scale ) or 0
 	if not focused and totalWidth > available then scroll = 0 end
-	local top = math.floor( ( h - 8 * scale ) * 0.5 )
+	local top = options.verticalOffset ~= nil and tonumber( options.verticalOffset ) * scale
+		or math.floor( ( h - 8 * scale ) * 0.5 )
 	local screenX, screenY = entry:LocalToScreen( 0, 0 )
 	if render and render.SetScissorRect then
 		render.SetScissorRect( screenX + padding, screenY, screenX + w - padding, screenY + h, true )
@@ -346,10 +351,28 @@ function UI.PaintBitmapTextEntry( entry, w, h )
 		shown = tostring( entry:GetPlaceholderText() or "" )
 		color = options.placeholderColor or Color( 128, 128, 128, 255 )
 	end
-	UI.DrawText( shown, padding - scroll, top, scale, color, TEXT_ALIGN_LEFT, false, TEXT_ALIGN_TOP, options.font )
-	if focused and math.floor( RealTime() * 2 ) % 2 == 0 then
-		surface.SetDrawColor( options.cursorColor or color )
-		surface.DrawRect( padding + caretWidth - scroll, top, scale, 8 * scale )
+	UI.DrawText( shown, padding - scroll, top, scale, color, TEXT_ALIGN_LEFT,
+		options.shadow == true, TEXT_ALIGN_TOP, options.font )
+	local focusTime = tonumber( entry.MCBitmapFocusTime ) or 0
+	if focused and math.floor( math.max( 0, RealTime() - focusTime ) / 0.3 ) % 2 == 0 then
+		local cursorColor = options.cursorColor or color
+		local textLength = utf8Length( text )
+		local maxLength = tonumber( options.maxLength )
+		if not maxLength or maxLength ~= maxLength or maxLength == math.huge then
+			maxLength = math.huge
+		else
+			maxLength = math.max( 0, math.floor( maxLength ) )
+		end
+		local append = caret >= textLength and textLength < maxLength
+		if append then
+			local cursorX = padding + caretWidth - scroll + ( text ~= "" and scale or 0 )
+			UI.DrawText( "_", cursorX, top, scale, cursorColor, TEXT_ALIGN_LEFT,
+				options.shadow == true, TEXT_ALIGN_TOP, options.font )
+		else
+			local cursorX = padding + caretWidth - scroll
+			surface.SetDrawColor( cursorColor )
+			surface.DrawRect( cursorX, top - scale, scale, 11 * scale )
+		end
 	end
 	if render and render.SetScissorRect then render.SetScissorRect( 0, 0, 0, 0, false ) end
 	return true
@@ -362,6 +385,12 @@ function UI.ConfigureBitmapTextEntry( entry, options )
 	entry:SetTextColor( Color( 0, 0, 0, 0 ) )
 	entry:SetCursorColor( Color( 0, 0, 0, 0 ) )
 	entry:SetDrawBackground( false )
+	entry.MCBitmapFocusTime = RealTime()
+	local oldOnGetFocus = entry.OnGetFocus
+	entry.OnGetFocus = function( self, ... )
+		self.MCBitmapFocusTime = RealTime()
+		if oldOnGetFocus then return oldOnGetFocus( self, ... ) end
+	end
 	entry.Paint = UI.PaintBitmapTextEntry
 	return true
 end

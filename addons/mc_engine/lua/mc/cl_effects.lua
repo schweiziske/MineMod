@@ -46,7 +46,7 @@ local function playBlockSound( kind, id, pos )
 	sound.Play( selected.sound, pos, 72, math.floor( pitch + 0.5 ), volume )
 end
 
-function MC.PlayBlockMiningHitSound( id, pos )
+function MC.PlayBlockMiningHitSound( id, pos, volumeOverride, pitchOverride )
 	local set = generatedSoundSetForBlock( id )
 	if not set then return false end
 	-- SoundType#getHitSound is a separate Java event.  Generated catalogs must
@@ -56,11 +56,17 @@ function MC.PlayBlockMiningHitSound( id, pos )
 
 	local selected = selectSoundCandidate( candidates )
 	if not selected or not selected.sound then return false end
-	-- MultiPlayerGameMode.continueDestroyBlock uses
-	-- `SoundType#getVolume() + 1.0F) / 8.0F` for the hit event.
-	-- Keep the Java gain; do not compensate it with a Source-only multiplier.
-	local volume = ((tonumber( set.volume ) or 1) + 1) / 8 * (tonumber( selected.volume ) or 1)
-	local pitch = (tonumber( set.pitch ) or 1) * 0.5 * (tonumber( selected.pitch ) or 1)
+	-- Two-argument callers retain MultiPlayerGameMode.continueDestroyBlock's
+	-- `(SoundType#getVolume() + 1.0F) / 8.0F` and SoundType pitch * 0.5.
+	-- Explicit overrides are for other Java call sites that obtain the same
+	-- hit SoundEvent but pass their own Level.playLocalSound volume/pitch (for
+	-- example Sniffer.emitDiggingParticles uses exactly 0.5F, 0.5F).
+	local baseVolume = tonumber( volumeOverride )
+	if baseVolume == nil then baseVolume = ((tonumber( set.volume ) or 1) + 1) / 8 end
+	local basePitch = tonumber( pitchOverride )
+	if basePitch == nil then basePitch = (tonumber( set.pitch ) or 1) * 0.5 end
+	local volume = math.Clamp( baseVolume, 0, 4 ) * (tonumber( selected.volume ) or 1)
+	local pitch = math.Clamp( basePitch, 0.01, 2.55 ) * (tonumber( selected.pitch ) or 1)
 	sound.Play( selected.sound, pos, 72, math.Clamp( math.floor( pitch * 100 + 0.5 ), 1, 255 ), volume )
 	return true
 end
