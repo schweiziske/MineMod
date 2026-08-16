@@ -167,18 +167,27 @@ end
 
 -- Project voxel coordinates use bx/by as the horizontal plane and bz as the
 -- vertical axis. Java BlockPos x/y/z therefore maps to bx/bz/by here.
+function MC.EnchantingBookshelfOffsetValid( bx, by, bz, offset, blockNameAt )
+	if type( offset ) ~= "table" then return false end
+	bx, by, bz = math.floor( tonumber( bx ) or 0 ), math.floor( tonumber( by ) or 0 ), math.floor( tonumber( bz ) or 0 )
+	blockNameAt = type( blockNameAt ) == "function" and blockNameAt or defaultBlockNameAt
+	local offsetX = math.floor( tonumber( offset.x ) or 0 )
+	local offsetY = math.floor( tonumber( offset.y ) or 0 )
+	local offsetZ = math.floor( tonumber( offset.z ) or 0 )
+	local provider = blockNameAt( bx + offsetX, by + offsetZ, bz + offsetY )
+	if not MC.EnchantingBlockIsPowerProvider( provider ) then return false end
+	local middleX = MC.EnchantingTruncTowardZero( offsetX / 2 )
+	local middleZ = MC.EnchantingTruncTowardZero( offsetZ / 2 )
+	local transmitter = blockNameAt( bx + middleX, by + middleZ, bz + offsetY )
+	return MC.EnchantingBlockIsPowerTransmitter( transmitter )
+end
+
 function MC.EnchantingCountBookshelves( bx, by, bz, blockNameAt )
 	bx, by, bz = math.floor( tonumber( bx ) or 0 ), math.floor( tonumber( by ) or 0 ), math.floor( tonumber( bz ) or 0 )
 	blockNameAt = type( blockNameAt ) == "function" and blockNameAt or defaultBlockNameAt
 	local count = 0
 	for _, offset in ipairs( BOOKSHELF_OFFSETS ) do
-		local provider = blockNameAt( bx + offset.x, by + offset.z, bz + offset.y )
-		if MC.EnchantingBlockIsPowerProvider( provider ) then
-			local middleX = MC.EnchantingTruncTowardZero( offset.x / 2 )
-			local middleZ = MC.EnchantingTruncTowardZero( offset.z / 2 )
-			local transmitter = blockNameAt( bx + middleX, by + middleZ, bz + offset.y )
-			if MC.EnchantingBlockIsPowerTransmitter( transmitter ) then count = count + 1 end
-		end
+		if MC.EnchantingBookshelfOffsetValid( bx, by, bz, offset, blockNameAt ) then count = count + 1 end
 	end
 	return math.min( count, 15 ), count
 end

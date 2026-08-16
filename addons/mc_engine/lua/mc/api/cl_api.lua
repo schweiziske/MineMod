@@ -88,6 +88,35 @@ function UI.OpenPresetManager()
 	return true
 end
 
+-------------------------------------------------------------------- API.Font
+API.Font = API.Font or {}
+local Font = API.Font
+
+-- Minecraft bitmap-font metrics are returned in logical GUI pixels. Consumers
+-- choose their own integer GUI scale when drawing.
+function Font.Measure( text, fontName )
+	if not MC.BitmapFont or not MC.BitmapFont.Measure then return 0 end
+	return MC.BitmapFont.Measure( tostring( text or "" ), fontName )
+end
+
+-- Returns the longest UTF-8 prefix whose logical width does not exceed maxWidth.
+function Font.TrimToWidth( text, maxWidth, fontName )
+	if not MC.BitmapFont or not MC.BitmapFont.TrimToWidth then return "" end
+	return MC.BitmapFont.TrimToWidth( tostring( text or "" ), math.max( 0, tonumber( maxWidth ) or 0 ), fontName )
+end
+
+-- options: font="default"|"alt", scale, color, align, verticalAlign,
+-- shadow and maxWidth (the latter is in screen pixels, matching x/y).
+function Font.Draw( text, x, y, options )
+	if not MC.BitmapFont or not MC.BitmapFont.Draw then return 0 end
+	return MC.BitmapFont.Draw( tostring( text or "" ), tonumber( x ) or 0, tonumber( y ) or 0,
+		type( options ) == "table" and options or nil )
+end
+
+function Font.LineHeight()
+	return MC.BitmapFont and MC.BitmapFont.LineHeight and MC.BitmapFont.LineHeight() or 9
+end
+
 ------------------------------------------------------------------- API.Hotbar
 API.Hotbar = API.Hotbar or {}
 local Hotbar = API.Hotbar

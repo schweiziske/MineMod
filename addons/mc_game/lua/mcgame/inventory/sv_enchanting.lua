@@ -15,7 +15,7 @@ local Sound = API.Sound or {}
 local SV = MC.SV
 local ENCHANTING_SLOTS = 2
 local INVENTORY_SIZE = 36
-local STATE_VERSION = 1
+local STATE_VERSION = 2
 local INT_MAX = 2147483647
 
 if type( API.RegisterEvents ) == "function" then
@@ -176,6 +176,7 @@ local function sendState( record )
 		net.WriteString( session.token or "" )
 		net.WriteUInt( math.Clamp( math.floor( tonumber( menu.revision ) or 0 ), 0, 4294967295 ), 32 )
 		net.WriteUInt( math.Clamp( math.floor( tonumber( data.bookshelfCount ) or 0 ), 0, 15 ), 4 )
+		net.WriteInt( normalizedSeed( data.seed ) or 0, 32 )
 		for optionIndex = 0, 2 do
 			local option = data.options and data.options[optionIndex + 1] or nil
 			local available, errorCode = optionAvailability( menu, option )
