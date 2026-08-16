@@ -226,6 +226,9 @@ function SV.DropPlayerInventoryOnDeath( ply )
 		appendDeathDrop( drops, record.equipment and record.equipment[slot] )
 	end
 	appendDeathDrop( drops, record.carried )
+	for _, stack in ipairs( record.recoveryStacks or {} ) do
+		appendDeathDrop( drops, stack )
+	end
 
 	if container and inventorySnapshot then
 		for slot = 0, 35 do MC.ContainerSetStack( container, slot, nil ) end
@@ -245,6 +248,7 @@ function SV.DropPlayerInventoryOnDeath( ply )
 		record.dirty = true
 	end
 	record.carried = nil
+	record.recoveryStacks = {}
 	record.dirty = true
 	if SV.UpdatePlayerHeldNetwork then SV.UpdatePlayerHeldNetwork( record ) end
 

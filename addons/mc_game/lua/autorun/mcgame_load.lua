@@ -64,6 +64,7 @@ local SHARED = {
 	"mcgame/inventory/sh_anvil.lua",
 	"mcgame/item/sh_public_api.lua",
 	"mcgame/inventory/sh_enchanting.lua",
+	"mcgame/inventory/sh_merchant.lua",
 	"mcgame/functional/sh_furnace_data.lua",
 	"mcgame/functional/sh_brewing_data.lua",
 	"mcgame/functional/sh_chest_data.lua",
@@ -100,6 +101,7 @@ local SERVER_FILES = {
 	"mcgame/inventory/sv_crafting.lua",
 	"mcgame/inventory/sv_anvil.lua",
 	"mcgame/inventory/sv_network.lua",
+	"mcgame/inventory/sv_merchant.lua",
 }
 local CLIENT_FILES = {
 	"mcgame/generated/cl_generated_gui_sprites.lua",
@@ -107,6 +109,7 @@ local CLIENT_FILES = {
 	"mcgame/mining/cl_hand_swing.lua",
 	"mcgame/functional/cl_chests.lua",
 	"mcgame/functional/cl_campfires.lua",
+	"mcgame/functional/cl_barrier_markers.lua",
 	"mcgame/inventory/cl_state.lua",
 	"mcgame/inventory/cl_network.lua",
 	"mcgame/inventory/cl_enchanting.lua",
@@ -117,12 +120,14 @@ local CLIENT_FILES = {
 	"mcgame/item/cl_model_resolver.lua",
 	"mcgame/inventory/ui/cl_entry.lua",
 	"mcgame/inventory/ui/cl_item_renderer.lua",
+	"mcgame/inventory/ui/cl_special_item_models.lua",
 	"mcgame/inventory/ui/cl_tooltip.lua",
 	"mcgame/inventory/ui/cl_effects.lua",
 	"mcgame/inventory/ui/cl_slot.lua",
 	"mcgame/inventory/ui/cl_drag.lua",
 	"mcgame/inventory/ui/cl_recipe_book.lua",
 	"mcgame/inventory/ui/cl_inventory_screen.lua",
+	"mcgame/inventory/cl_merchant.lua",
 	"mcgame/inventory/ui/cl_hotbar.lua",
 	"mcgame/inventory/ui/cl_survival_hud.lua",
 	"mcgame/api/cl_engine_bridge.lua",
@@ -159,6 +164,7 @@ if SERVER then
 			"materials/mc/gui/sprites/container/brewing_stand",
 			"materials/mc/gui/sprites/container/furnace",
 			"materials/mc/gui/sprites/container/enchanting_table",
+			"materials/mc/gui/sprites/container/villager",
 			"materials/mc/gui/sprites/container/slot",
 			"materials/mc/gui/sprites/container/creative_inventory",
 			"materials/mc/gui/sprites/hud",
@@ -167,6 +173,7 @@ if SERVER then
 			"materials/mc/gui/mob_effect",
 			"materials/mc/gui/sprites/recipe_book",
 			"materials/mc/entity/enchantment",
+			"materials/mc/entity/shield",
 		} ) do
 			for _, fileName in ipairs( file.Find( resourceRoot .. "/*.png", "GAME" ) or {} ) do
 				resource.AddFile( resourceRoot .. "/" .. fileName )

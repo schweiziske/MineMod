@@ -133,6 +133,16 @@ local function normalizedEquipment( equipment )
 	return result
 end
 
+local function normalizedRecoveryStacks( stacks )
+	local result = {}
+	for _, stack in ipairs( type( stacks ) == "table" and stacks or {} ) do
+		if #result >= 64 then break end
+		local normalized = MC.NormalizeItemStack( stack )
+		if normalized then result[#result + 1] = normalized end
+	end
+	return result
+end
+
 local function newRecord( ply, storage, selected, carried, equipment, savedState )
 	savedState = type( savedState ) == "table" and savedState or {}
 	local record = {
@@ -141,6 +151,7 @@ local function newRecord( ply, storage, selected, carried, equipment, savedState
 		storage = storage or {},
 		selected = math.Clamp( math.floor( tonumber( selected ) or 0 ), 0, 8 ),
 		carried = MC.CopyItemStack( carried ),
+		recoveryStacks = normalizedRecoveryStacks( savedState.recoveryStacks ),
 		equipment = normalizedEquipment( equipment ),
 		revision = 0,
 		experienceTotal = normalizedExperienceInteger( savedState.experienceTotal ),
@@ -195,6 +206,12 @@ local function decodeSavedRecord( ply, data )
 		end
 	end
 	local carried = MC.InventoryStackFromData( data.carried )
+	local recoveryStacks = {}
+	for _, entry in ipairs( type( data.recoveryStacks ) == "table" and data.recoveryStacks or {} ) do
+		if #recoveryStacks >= 64 then break end
+		local stack = MC.InventoryStackFromData( entry )
+		if stack then recoveryStacks[#recoveryStacks + 1] = stack end
+	end
 	local experienceTotal = normalizedExperienceInteger( data.experienceTotal )
 	local experienceLevel = normalizedExperienceInteger( data.experienceLevel )
 	local experienceProgress = normalizedExperienceProgress( data.experienceProgress )
@@ -204,6 +221,7 @@ local function decodeSavedRecord( ply, data )
 		experienceLevel = experienceLevel,
 		experienceProgress = experienceProgress,
 		enchantmentSeed = enchantmentSeed,
+		recoveryStacks = recoveryStacks,
 	} )
 	if record and ( data.experienceTotal == nil or data.experienceLevel == nil
 		or data.experienceProgress == nil or data.enchantmentSeed == nil
@@ -258,6 +276,14 @@ local function encodedRecord( record )
 	end
 	local carried = record.container and record.container.cursor or record.carried
 	if not MC.IsEmptyItemStack( carried ) then data.carried = MC.InventoryDataStack( carried ) end
+	if type( record.recoveryStacks ) == "table" and #record.recoveryStacks > 0 then
+		data.recoveryStacks = {}
+		for _, stack in ipairs( record.recoveryStacks ) do
+			if not MC.IsEmptyItemStack( stack ) then
+				data.recoveryStacks[#data.recoveryStacks + 1] = MC.InventoryDataStack( stack )
+			end
+		end
+	end
 	local json = util.TableToJSON( data, true )
 	if not json then return nil, "inventory_json_failed" end
 	if #json > 1024 * 1024 then return nil, "inventory_save_too_large" end
