@@ -485,8 +485,11 @@ end
 function BOOK:Paint( w, h )
 	local entries = ensureEntries( self )
 	UI.WithPointFiltering( function()
+		-- RecipeBookComponent samples the 147x166 panel from (1,1) in the
+		-- official 256x256 texture, not from the outer transparent edge.
 		UI.DrawTexture( BOOK_BACKGROUND, TAB_MARGIN * self.Scale, 0,
-			PANEL_W * self.Scale, PANEL_H * self.Scale, 0, 0, PANEL_W / 256, PANEL_H / 256 )
+			PANEL_W * self.Scale, PANEL_H * self.Scale,
+			1 / 256, 1 / 256, ( 1 + PANEL_W ) / 256, ( 1 + PANEL_H ) / 256 )
 	end )
 	local pages = math.max( 1, math.ceil( #entries / ITEMS_PER_PAGE ) )
 	if pages > 1 then

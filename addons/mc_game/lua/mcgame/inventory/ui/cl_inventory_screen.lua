@@ -292,6 +292,10 @@ function PANEL:Init()
 	self.RecipeBookOpen = false
 	self.RecipeBookToggle = vgui.Create( "MCRecipeBookToggle", self )
 	self.RecipeBookToggle:Configure( self, self.Scale )
+	-- AbstractRecipeBookScreen adds this as a renderable widget above the
+	-- container background.  ContentLayer has ZPos 10, so keep the toggle above
+	-- it explicitly instead of relying on sibling creation order.
+	self.RecipeBookToggle:SetZPos( 40 )
 	self.RecipeBook = UI.CreateRecipeBook and UI.CreateRecipeBook( self ) or nil
 
 	self.SearchEntry = vgui.Create( "DTextEntry", self )
@@ -839,9 +843,13 @@ function PANEL:LayoutRecipeBook()
 		return
 	end
 	self.RecipeBookToggle:Configure( self, self.Scale )
-	local toggleY = self.CraftingTable and 31 or self.Furnace and 35 or 60
+	-- Java positions these from the screen centre: crafting/furnace at -49 and
+	-- the 2x2 player inventory at -22.  Relative to a 166-high container these
+	-- are y=34 and y=61 respectively.
+	local toggleY = self.CraftingTable and 34 or self.Furnace and 34 or 61
 	self.RecipeBookToggle:SetPos( self.Left + ( self.CraftingTable and 5 or self.Furnace and 20 or 104 ) * self.Scale,
 		self.Top + toggleY * self.Scale )
+	self.RecipeBookToggle:SetZPos( 40 )
 	self.RecipeBookToggle:MoveToFront()
 	if IsValid( self.RecipeBook ) then
 		local bookX = self.Left - 149 * self.Scale
@@ -1095,7 +1103,7 @@ function PANEL:PaintContent()
 	elseif self.Enchanting then
 		local chinese = MC.Language and MC.Language() == "zh_cn"
 		UI.DrawText( chinese and "附魔" or "Enchant", self.Left + 114 * self.Scale,
-			self.Top + 6 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_CENTER, false )
+			self.Top + 4 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_CENTER, false )
 		UI.DrawText( chinese and "物品栏" or "Inventory", self.Left + 8 * self.Scale,
 			self.Top + 72 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
 	elseif self.Anvil then
@@ -1130,11 +1138,16 @@ function PANEL:PaintContent()
 		UI.DrawText( chinese and "物品栏" or "Inventory", self.Left + 8 * self.Scale,
 			self.Top + 72 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
 	elseif self.Crafting then
-		local titleX = self.CraftingTable and 8 or 97
-		UI.DrawText( "Crafting", self.Left + titleX * self.Scale, self.Top + 6 * self.Scale,
+		local chinese = MC.Language and MC.Language() == "zh_cn"
+		-- CraftingScreen uses titleLabelX=29. InventoryScreen uses 97 and
+		-- overrides extractLabels to omit the player-inventory caption entirely.
+		local titleX = self.CraftingTable and 29 or 97
+		UI.DrawText( chinese and "合成" or "Crafting", self.Left + titleX * self.Scale, self.Top + 6 * self.Scale,
 			self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
-		UI.DrawText( "Inventory", self.Left + 8 * self.Scale, self.Top + 72 * self.Scale,
-			self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+		if self.CraftingTable then
+			UI.DrawText( chinese and "物品栏" or "Inventory", self.Left + 8 * self.Scale, self.Top + 72 * self.Scale,
+				self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+		end
 	elseif not self.Creative then
 		UI.DrawText( "Inventory", self.Left + 8 * self.Scale, self.Top + 72 * self.Scale,
 			self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
