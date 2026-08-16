@@ -9,6 +9,8 @@ if not CLIENT then return end
 MC = MC or {}
 
 local DATA = MC.GeneratedBitmapFontData or {}
+local UNIHEX_DATA = MC.GeneratedUnihexAtlasData or {}
+local UNIHEX_RANGES = type( UNIHEX_DATA.ranges ) == "table" and UNIHEX_DATA.ranges or {}
 local LINE_HEIGHT = 9
 local FONT_NAMES = { default = true, alt = true }
 local ALIGN_CENTER = TEXT_ALIGN_CENTER or 1
@@ -30,11 +32,10 @@ end
 local function fontMaterial( path )
 	local cached = Materials[path]
 	if cached then return cached end
-	-- Material() already owns the runtime PNG ITexture. Re-feeding its generated
-	-- name (for example "0110000mc/font/ascii") into CreateMaterial makes Source
-	-- look for a nonexistent VTF with that internal prefix and produces the
-	-- purple/black error texture. Keep the original PNG material and enforce
-	-- nearest-neighbour sampling only while glyphs are drawn.
+	-- Material() owns the runtime PNG texture. Passing its generated internal
+	-- name back through CreateMaterial is not a VTF lookup and can become the
+	-- purple/black error material. The generated atlases are already POT and the
+	-- draw path enforces POINT filtering, so keep the original PNG material.
 	local value = Material( path .. ".png", "alphatest vertexcolor vertexalpha nocull" )
 	Materials[path] = value
 	return value
@@ -82,20 +83,23 @@ local function generatedProvider( definition )
 	local logicalHeight = math.max( 1, tonumber( definition.height ) or 8 )
 	local textureWidth = math.max( 1, tonumber( definition.texture_width ) or columns * cellWidth )
 	local textureHeight = math.max( 1, tonumber( definition.texture_height ) or rows * cellHeight )
+	local mappingWidth = math.max( 1, tonumber( definition.mapping_width ) or nextPowerOfTwo( textureWidth ) )
+	local mappingHeight = math.max( 1, tonumber( definition.mapping_height ) or nextPowerOfTwo( textureHeight ) )
+	local strideX = math.max( cellWidth, tonumber( definition.cell_stride_x ) or cellWidth )
+	local strideY = math.max( cellHeight, tonumber( definition.cell_stride_y ) or cellHeight )
 	return {
 		material = fontMaterial( tostring( definition.material or "mc/font/ascii" ) ),
 		textureWidth = textureWidth,
 		textureHeight = textureHeight,
-		-- Runtime PNG ITextures are padded at the lower/right edge to a
-		-- power-of-two mapping size. The source pixels stay at the upper-left;
-		-- UVs therefore use the padded dimensions, while glyph layout and
-		-- BitmapProvider advances continue to use the authored dimensions.
-		mappingWidth = nextPowerOfTwo( textureWidth ),
-		mappingHeight = nextPowerOfTwo( textureHeight ),
+		mappingWidth = mappingWidth,
+		mappingHeight = mappingHeight,
 		columns = columns,
 		rows = rows,
 		cellWidth = cellWidth,
 		cellHeight = cellHeight,
+		strideX = strideX,
+		strideY = strideY,
+		separated = strideX > cellWidth or strideY > cellHeight,
 		drawWidth = cellWidth * logicalHeight / cellHeight,
 		drawHeight = logicalHeight,
 		topOffset = 7 - ( tonumber( definition.ascent ) or 7 ),
@@ -116,17 +120,20 @@ local function addGeneratedProviders( font, definitions )
 				local advance = string.byte( provider.advances, slot + 1 ) or 0
 				if codepoint ~= 0 and font.glyphs[codepoint] == nil then
 					local column, row = slot % provider.columns, math.floor( slot / provider.columns )
-					local left, top = column * provider.cellWidth, row * provider.cellHeight
+					local left, top = column * provider.strideX, row * provider.strideY
+					local startInset = provider.separated and 0.5 or -0.01
+					local endInset = provider.separated and 0 or 0.01
 					font.glyphs[codepoint] = {
 						advance = advance,
+						shadowOffset = 1,
 						material = provider.material,
 						drawWidth = provider.drawWidth,
 						drawHeight = provider.drawHeight,
 						topOffset = provider.topOffset,
-						u0 = ( left + 0.01 ) / provider.mappingWidth,
-						v0 = ( top + 0.01 ) / provider.mappingHeight,
-						u1 = ( left + provider.cellWidth - 0.01 ) / provider.mappingWidth,
-						v1 = ( top + provider.cellHeight - 0.01 ) / provider.mappingHeight,
+						u0 = ( left - startInset ) / provider.mappingWidth,
+						v0 = ( top - startInset ) / provider.mappingHeight,
+						u1 = ( left + provider.cellWidth - endInset ) / provider.mappingWidth,
+						v1 = ( top + provider.cellHeight - endInset ) / provider.mappingHeight,
 					}
 				end
 			end
@@ -141,6 +148,39 @@ local function rangeProvider( path, first, last, textureWidth, textureHeight, co
 		mappingWidth = nextPowerOfTwo( textureWidth ), mappingHeight = nextPowerOfTwo( textureHeight ),
 		columns = columns, rows = rows,
 		cellWidth = textureWidth / columns, cellHeight = textureHeight / rows,
+		strideX = textureWidth / columns, strideY = textureHeight / rows,
+		drawWidth = 8, drawHeight = 8,
+	}
+end
+
+local function generatedRangeProvider( definition )
+	if type( definition ) ~= "table" then return nil end
+	local cellWidth = math.max( 1, tonumber( definition.cellWidth ) or 16 )
+	local cellHeight = math.max( 1, tonumber( definition.cellHeight ) or 16 )
+	return {
+		material = fontMaterial( tostring( definition.material or "" ) ),
+		first = math.floor( tonumber( definition.first ) or 0 ),
+		last = math.floor( tonumber( definition.last ) or -1 ),
+		mappingWidth = math.max( 1, tonumber( definition.mappingWidth ) or 1 ),
+		mappingHeight = math.max( 1, tonumber( definition.mappingHeight ) or 1 ),
+		columns = math.max( 1, math.floor( tonumber( definition.columns ) or 1 ) ),
+		rows = math.max( 1, math.floor( tonumber( definition.rows ) or 1 ) ),
+		cellWidth = cellWidth,
+		cellHeight = cellHeight,
+		strideX = math.max( cellWidth, tonumber( definition.strideX ) or cellWidth ),
+		strideY = math.max( cellHeight, tonumber( definition.strideY ) or cellHeight ),
+		drawWidth = math.max( 1, tonumber( definition.drawWidth ) or 8 ),
+		drawHeight = math.max( 1, tonumber( definition.drawHeight ) or 8 ),
+		-- UnihexProvider.GlyphInfo overrides the normal bitmap-font shadow
+		-- offset: its 2x-oversampled glyphs use half a logical GUI pixel.
+		shadowOffset = 0.5,
+		-- Source and Minecraft place nearest-neighbour sample centres differently.
+		-- The transparent separator leaves room to bias both edges without sampling
+		-- an adjacent glyph; these guards were calibrated in fresh GMod captures at
+		-- the integer GUI scales used by the inventory HUD.
+		sampleStart = -0.4,
+		sampleEnd = 0.4,
+		separated = true,
 	}
 end
 
@@ -160,12 +200,18 @@ local function buildFont( name )
 	end
 	addGeneratedProviders( font, DATA.fonts and DATA.fonts[name] )
 	if name == "default" then
-		font.ranges = {
-			rangeProvider( "mc/font/unifont_cjk_0", 0x3000, 0x6FFF, 2048, 2048, 128, 128 ),
-			rangeProvider( "mc/font/unifont_cjk_1", 0x7000, 0x9FFF, 2048, 1536, 128, 96 ),
-			rangeProvider( "mc/font/unifont_cjk_compat", 0xF900, 0xFAFF, 2048, 64, 128, 4 ),
-			rangeProvider( "mc/font/unifont_fullwidth", 0xFF01, 0xFF5E, 2048, 16, 128, 1 ),
-		}
+		for _, definition in ipairs( UNIHEX_RANGES ) do
+			local provider = generatedRangeProvider( definition )
+			if provider and provider.last >= provider.first then font.ranges[#font.ranges + 1] = provider end
+		end
+		if #font.ranges == 0 then
+			font.ranges = {
+				rangeProvider( "mc/font/unifont_cjk_0", 0x3000, 0x6FFF, 2048, 2048, 128, 128 ),
+				rangeProvider( "mc/font/unifont_cjk_1", 0x7000, 0x9FFF, 2048, 1536, 128, 96 ),
+				rangeProvider( "mc/font/unifont_cjk_compat", 0xF900, 0xFAFF, 2048, 64, 128, 4 ),
+				rangeProvider( "mc/font/unifont_fullwidth", 0xFF01, 0xFF5E, 2048, 16, 128, 1 ),
+			}
+		end
 	end
 	return font
 end
@@ -178,24 +224,33 @@ local function glyphFor( font, codepoint, bytes )
 			local slot = codepoint - provider.first
 			local column, row = slot % provider.columns, math.floor( slot / provider.columns )
 			if row < provider.rows then
-				local left, top = column * provider.cellWidth, row * provider.cellHeight
+				local left = column * ( provider.strideX or provider.cellWidth )
+				local top = row * ( provider.strideY or provider.cellHeight )
+				local sampleStart = provider.sampleStart or -0.5
+				local sampleEnd = provider.sampleEnd or 0
+				local u0 = provider.separated and ( left + sampleStart ) / provider.mappingWidth
+					or ( left + 0.01 ) / provider.mappingWidth
+				local v0 = provider.separated and ( top + sampleStart ) / provider.mappingHeight
+					or ( top + 0.01 ) / provider.mappingHeight
+				local u1 = provider.separated and ( left + provider.cellWidth + sampleEnd ) / provider.mappingWidth
+					or ( left + provider.cellWidth - 0.01 ) / provider.mappingWidth
+				local v1 = provider.separated and ( top + provider.cellHeight + sampleEnd ) / provider.mappingHeight
+					or ( top + provider.cellHeight - 0.01 ) / provider.mappingHeight
 				glyph = {
 					advance = 9,
+					shadowOffset = provider.shadowOffset or 0.5,
 					material = provider.material,
-					drawWidth = 8,
-					drawHeight = 8,
+					drawWidth = provider.drawWidth or 8,
+					drawHeight = provider.drawHeight or 8,
 					topOffset = 0,
-					u0 = ( left + 0.01 ) / provider.mappingWidth,
-					v0 = ( top + 0.01 ) / provider.mappingHeight,
-					u1 = ( left + provider.cellWidth - 0.01 ) / provider.mappingWidth,
-					v1 = ( top + provider.cellHeight - 0.01 ) / provider.mappingHeight,
+					u0 = u0, v0 = v0, u1 = u1, v1 = v1,
 				}
 				font.glyphs[codepoint] = glyph
 				return glyph
 			end
 		end
 	end
-	return { advance = codepoint == 32 and 4 or 9, fallback = bytes }
+	return { advance = codepoint == 32 and 4 or 9, shadowOffset = 1, fallback = bytes }
 end
 
 local function shapedLine( text, fontName )
@@ -210,7 +265,8 @@ local function shapedLine( text, fontName )
 		local codepoint, nextIndex, bytes = nextCodepoint( text, index )
 		local glyph = glyphFor( font, codepoint, bytes )
 		glyphs[#glyphs + 1] = {
-			advance = glyph.advance, material = glyph.material,
+			advance = glyph.advance, shadowOffset = glyph.shadowOffset,
+			material = glyph.material,
 			drawWidth = glyph.drawWidth, drawHeight = glyph.drawHeight,
 			topOffset = glyph.topOffset, u0 = glyph.u0, v0 = glyph.v0, u1 = glyph.u1, v1 = glyph.v1,
 			fallback = glyph.fallback, text = bytes,
@@ -272,22 +328,23 @@ local function shadowColor( color )
 	)
 end
 
-local function drawLineAt( line, x, y, scale, color )
+local function drawLineAt( line, x, y, scale, color, shadow )
 	local cursor = x
 	for _, glyph in ipairs( line.glyphs ) do
+		local offset = shadow and ( glyph.shadowOffset or 1 ) * scale or 0
 		if glyph.material then
 			surface.SetMaterial( glyph.material )
 			surface.SetDrawColor( color.r or 255, color.g or 255, color.b or 255, color.a or 255 )
 			surface.DrawTexturedRectUV(
-				cursor,
-				y + ( glyph.topOffset or 0 ) * scale,
+				cursor + offset,
+				y + ( glyph.topOffset or 0 ) * scale + offset,
 				( glyph.drawWidth or 8 ) * scale,
 				( glyph.drawHeight or 8 ) * scale,
 				glyph.u0, glyph.v0, glyph.u1, glyph.v1
 			)
 		elseif glyph.fallback and draw and draw.SimpleText then
 			draw.SimpleText( glyph.fallback, fallbackFont( scale ),
-				cursor + glyph.advance * scale * 0.5, y + 4 * scale,
+				cursor + glyph.advance * scale * 0.5 + offset, y + 4 * scale + offset,
 				color, ALIGN_CENTER, ALIGN_MIDDLE )
 		end
 		cursor = cursor + glyph.advance * scale
@@ -323,8 +380,10 @@ function BitmapFont.Draw( text, x, y, options )
 		render.PushFilterMag( TEXFILTER.POINT )
 		pushedMag = true
 	end
-	if options.shadow == true then drawLineAt( line, x + scale, y + scale, scale, shadowColor( color ) ) end
-	drawLineAt( line, x, y, scale, color )
+	-- BitmapProvider uses GlyphInfo's 1.0 default. UnihexProvider explicitly
+	-- overrides it to 0.5 because those glyphs are baked at oversample 2.
+	if options.shadow == true then drawLineAt( line, x, y, scale, shadowColor( color ), true ) end
+	drawLineAt( line, x, y, scale, color, false )
 	if pushedMag and render.PopFilterMag then render.PopFilterMag() end
 	if pushedMin and render.PopFilterMin then render.PopFilterMin() end
 	return width

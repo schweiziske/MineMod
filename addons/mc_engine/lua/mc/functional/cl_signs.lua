@@ -8,44 +8,30 @@ local EDIT_TEXT_COLOR = Color( 55, 28, 10, 255 )
 local SIGN_GUI_MATERIALS = {}
 
 local function fontAtlasMaterial( path )
-	-- Font atlases ship as PNGs without matching VTFs. Loading the companion
-	-- VMT by name makes $basetexture fall back to a missing .vtf and produces
-	-- the error texture, which becomes almost solid black after vertex tinting.
-	-- Load the PNG directly, just like the main block atlas does.
-	local source = Material( path .. ".png", "alphatest vertexcolor vertexalpha nocull" )
-	if not ( CreateMaterial and source and source.GetTexture ) then return source end
-	local texture = source:GetTexture( "$basetexture" )
-	local textureName = texture and texture.GetName and texture:GetName() or nil
-	if not textureName or textureName == "" or ( texture.IsError and texture:IsError() ) then return source end
-	local identity = path .. ".png|sign_pixel"
-	local suffix = util and util.CRC and util.CRC( identity ) or string.gsub( identity, "[^%w_]", "_" )
-	local value = CreateMaterial( "mc_sign_pixel_" .. tostring( suffix ), "UnlitGeneric", {
-		["$basetexture"] = textureName,
-		["$vertexcolor"] = "1",
-		["$vertexalpha"] = "1",
-		["$nocull"] = "1",
-		["$alphatest"] = "1",
-		["$alphatestreference"] = "0.5",
-		["$pointsample"] = "1",
-		["$nomip"] = "1",
-		["$nolod"] = "1",
-		["$clamps"] = "1",
-		["$clampt"] = "1",
-	} )
-	if value and not value:IsError() then
-		value:SetTexture( "$basetexture", texture )
-		return value
-	end
-	return source
+	return Material( path .. ".png", "alphatest vertexcolor vertexalpha nocull" )
 end
 
 local FONT_ATLASES = {
-	{ material = fontAtlasMaterial( "mc/font/ascii" ), first = 32, last = 126, textureW = 128, textureH = 128, cellW = 8, cellH = 8, cols = 16, rows = 16, ascii = true },
-	{ material = fontAtlasMaterial( "mc/font/unifont_cjk_0" ), first = 0x3000, last = 0x6FFF, textureW = 2048, textureH = 2048, cellW = 16, cellH = 16, cols = 128, rows = 128 },
-	{ material = fontAtlasMaterial( "mc/font/unifont_cjk_1" ), first = 0x7000, last = 0x9FFF, textureW = 2048, textureH = 1536, cellW = 16, cellH = 16, cols = 128, rows = 96 },
-	{ material = fontAtlasMaterial( "mc/font/unifont_cjk_compat" ), first = 0xF900, last = 0xFAFF, textureW = 2048, textureH = 64, cellW = 16, cellH = 16, cols = 128, rows = 4 },
-	{ material = fontAtlasMaterial( "mc/font/unifont_fullwidth" ), first = 0xFF01, last = 0xFF5E, textureW = 2048, textureH = 16, cellW = 16, cellH = 16, cols = 128, rows = 1 },
+	{ material = fontAtlasMaterial( "mc/font/ascii" ), first = 32, last = 126,
+		textureW = 256, textureH = 256, cellW = 8, cellH = 8,
+		strideX = 9, strideY = 9, cols = 16, rows = 16, ascii = true, separated = true },
 }
+for _, definition in ipairs( MC.GeneratedUnihexAtlasData and MC.GeneratedUnihexAtlasData.ranges or {} ) do
+	FONT_ATLASES[#FONT_ATLASES + 1] = {
+		material = fontAtlasMaterial( tostring( definition.material or "" ) ),
+		first = math.floor( tonumber( definition.first ) or 0 ),
+		last = math.floor( tonumber( definition.last ) or -1 ),
+		textureW = math.max( 1, tonumber( definition.mappingWidth ) or 1 ),
+		textureH = math.max( 1, tonumber( definition.mappingHeight ) or 1 ),
+		cellW = math.max( 1, tonumber( definition.cellWidth ) or 16 ),
+		cellH = math.max( 1, tonumber( definition.cellHeight ) or 16 ),
+		strideX = math.max( 1, tonumber( definition.strideX ) or 17 ),
+		strideY = math.max( 1, tonumber( definition.strideY ) or 17 ),
+		cols = math.max( 1, math.floor( tonumber( definition.columns ) or 1 ) ),
+		rows = math.max( 1, math.floor( tonumber( definition.rows ) or 1 ) ),
+		separated = true,
+	}
+end
 
 surface.CreateFont( "mc_sign_fallback", {
 	font = "Microsoft YaHei",
@@ -72,10 +58,16 @@ local function atlasGlyphUV( atlas, slot )
 	local column = slot % atlas.cols
 	local row = math.floor( slot / atlas.cols )
 	if row < 0 or row >= atlas.rows then return nil end
+	local left = column * ( atlas.strideX or atlas.cellW )
+	local top = row * ( atlas.strideY or atlas.cellH )
+	if atlas.separated then
+		return ( left - 0.5 ) / atlas.textureW,
+			( top - 0.5 ) / atlas.textureH,
+			( left + atlas.cellW ) / atlas.textureW,
+			( top + atlas.cellH ) / atlas.textureH
+	end
 	local inset = math.min( 0.5, ( atlas.cellW - 1 ) * 0.5, ( atlas.cellH - 1 ) * 0.5 )
-	local left, top = column * atlas.cellW, row * atlas.cellH
-	return ( left + inset ) / atlas.textureW,
-		( top + inset ) / atlas.textureH,
+	return ( left + inset ) / atlas.textureW, ( top + inset ) / atlas.textureH,
 		( left + atlas.cellW - inset ) / atlas.textureW,
 		( top + atlas.cellH - inset ) / atlas.textureH
 end
@@ -132,6 +124,8 @@ local function drawMinecraftLine( text, centerX, topY, color, drawScale, fallbac
 	fallbackFont = fallbackFont or "mc_sign_fallback"
 	local line = cachedLine( text )
 	local x = centerX - line.width * drawScale * 0.5
+	if render and render.PushFilterMin and TEXFILTER then render.PushFilterMin( TEXFILTER.POINT ) end
+	if render and render.PushFilterMag and TEXFILTER then render.PushFilterMag( TEXFILTER.POINT ) end
 	for index = 1, #line.glyphs do
 		local glyph = line.glyphs[index]
 		if glyph.atlas then
@@ -146,6 +140,8 @@ local function drawMinecraftLine( text, centerX, topY, color, drawScale, fallbac
 		end
 		x = x + glyph.advance * drawScale
 	end
+	if render and render.PopFilterMag and TEXFILTER then render.PopFilterMag() end
+	if render and render.PopFilterMin and TEXFILTER then render.PopFilterMin() end
 end
 
 local function signYaw( stateId, name )

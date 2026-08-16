@@ -11,6 +11,8 @@ MC.InventoryUI = MC.InventoryUI or {}
 
 local UI = MC.InventoryUI
 local Font = MC.API and MC.API.Font or {}
+local GeneratedSprites = MC.GeneratedGuiSpriteData or {}
+local SpriteDefinitions = type( GeneratedSprites.sprites ) == "table" and GeneratedSprites.sprites or {}
 local MAX_GUI_SCALE = 32
 
 UI.ButtonSound = "mc/random/click.ogg"
@@ -39,6 +41,7 @@ UI.Colors = UI.Colors or {
 
 UI.Materials = UI.Materials or {}
 UI.PixelMaterials = UI.PixelMaterials or {}
+UI.GuiSpriteMappings = UI.GuiSpriteMappings or {}
 UI.WorldItemHDRColorScale = 0.1
 
 local function sourceMaterial( path, flags )
@@ -50,12 +53,15 @@ local function sourceMaterial( path, flags )
 	return value
 end
 
-local function pixelMaterial( path, flags, hdrColorScale, noCull )
+local function pixelMaterial( path, flags, hdrColorScale, noCull, alphaTest )
 	local sourcePath = tostring( path or "" )
 	local sourceFlags = tostring( flags or "vertexcolor vertexalpha nocull" )
 	local hdrKey = hdrColorScale and tostring( hdrColorScale ) or "ui"
 	if noCull == nil then noCull = true end
-	local key = sourcePath .. "|" .. sourceFlags .. "|pixel_v4|" .. hdrKey .. "|" .. ( noCull and "double" or "culled" )
+	if alphaTest == nil then alphaTest = true end
+	local alphaMode = alphaTest and "cutout" or "blend"
+	local key = sourcePath .. "|" .. sourceFlags .. "|pixel_v5|" .. hdrKey .. "|"
+		.. ( noCull and "double" or "culled" ) .. "|" .. alphaMode
 	local cached = UI.PixelMaterials[key]
 	if cached then return cached end
 
@@ -72,21 +78,25 @@ local function pixelMaterial( path, flags, hdrColorScale, noCull )
 		return source
 	end
 
-	local identity = sourcePath .. "|" .. sourceFlags .. "|" .. hdrKey
+	local identity = sourcePath .. "|" .. sourceFlags .. "|" .. hdrKey .. "|" .. alphaMode
 	local suffix = util and util.CRC and util.CRC( identity ) or string.gsub( identity, "[^%w_]", "_" )
 	local params = {
 		["$basetexture"] = textureName,
 		["$vertexcolor"] = "1",
 		["$vertexalpha"] = "1",
 		["$nocull"] = noCull and "1" or "0",
-		["$alphatest"] = "1",
-		["$alphatestreference"] = "0.5",
 		["$pointsample"] = "1",
 		["$nomip"] = "1",
 		["$nolod"] = "1",
 		["$clamps"] = "1",
 		["$clampt"] = "1",
 	}
+	if alphaTest then
+		params["$alphatest"] = "1"
+		params["$alphatestreference"] = "0.5"
+	else
+		params["$translucent"] = "1"
+	end
 	if hdrColorScale then params["$hdrcolorscale"] = tostring( hdrColorScale ) end
 	local value = CreateMaterial( "mc_inventory_pixel_" .. tostring( suffix ), "UnlitGeneric", params )
 	if value and not value:IsError() then
@@ -111,11 +121,32 @@ end
 
 function UI.GetWorldItemMaterial( path )
 	if not isstring( path ) or path == "" then return nil end
-	return pixelMaterial( path, "vertexcolor vertexalpha", UI.WorldItemHDRColorScale, false )
+	return pixelMaterial( path, "vertexcolor vertexalpha", UI.WorldItemHDRColorScale, false, true )
 end
 
 function UI.GetGuiMaterial( name )
-	return sourceMaterial( "mc/gui/" .. tostring( name ) .. ".png", "vertexcolor vertexalpha nocull" )
+	name = tostring( name or "" )
+	local definition = SpriteDefinitions[name]
+	if type( definition ) == "table" then
+		local material = pixelMaterial( definition.material, "vertexcolor vertexalpha nocull", nil, true, false )
+		if material then
+			local mappingWidth = math.max( 1, tonumber( definition.mappingWidth ) or 1 )
+			local mappingHeight = math.max( 1, tonumber( definition.mappingHeight ) or 1 )
+			UI.GuiSpriteMappings[material] = {
+				uScale = math.max( 1, tonumber( definition.width ) or 1 )
+					/ mappingWidth,
+				vScale = math.max( 1, tonumber( definition.height ) or 1 )
+					/ mappingHeight,
+				-- surface.DrawTexturedRectUV includes the leading texture boundary
+				-- in its rasterization. Starting half a texel earlier makes each
+				-- authored pixel occupy exactly GUI-scale framebuffer pixels.
+				uInset = 0.5 / mappingWidth,
+				vInset = 0.5 / mappingHeight,
+			}
+		end
+		return material
+	end
+	return sourceMaterial( "mc/gui/" .. name .. ".png", "vertexcolor vertexalpha nocull" )
 end
 
 function UI.GetMobEffectMaterial( effectId )
@@ -145,6 +176,19 @@ function UI.DrawTexture( mat, x, y, w, h, u0, v0, u1, v1, color )
 	surface.SetMaterial( mat )
 	color = color or color_white
 	surface.SetDrawColor( color.r or 255, color.g or 255, color.b or 255, color.a or 255 )
+	local mapping = UI.GuiSpriteMappings[mat]
+	if mapping then
+		local uScale = tonumber( mapping.uScale ) or 1
+		local vScale = tonumber( mapping.vScale ) or 1
+		local uInset = tonumber( mapping.uInset ) or 0
+		local vInset = tonumber( mapping.vInset ) or 0
+		if u0 ~= nil then
+			u0, v0 = u0 * uScale - uInset, ( v0 or 0 ) * vScale - vInset
+			u1, v1 = ( u1 or 1 ) * uScale, ( v1 or 1 ) * vScale
+		else
+			u0, v0, u1, v1 = -uInset, -vInset, uScale, vScale
+		end
+	end
 	if u0 ~= nil then
 		surface.DrawTexturedRectUV( x, y, w, h, u0, v0, u1, v1 )
 	else
