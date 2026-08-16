@@ -560,7 +560,10 @@ function PANEL:LayoutTabs()
 		button:SetVisible( self.Creative )
 		button:SetZPos( tab.key == self.SelectedTabKey and 15 or 0 )
 		if self.Creative then
-			local x = tab.alignedRight and CREATIVE_W - 26.07 - ( 6 - tab.column ) * 27 or 27 * tab.column
+			-- CreativeModeInventoryScreen.getTabX: right-aligned tabs use the
+			-- same integer formula as Java. A fractional compensation here lands
+			-- the selected tab between framebuffer pixels and opens a one-pixel seam.
+			local x = tab.alignedRight and CREATIVE_W - 27 * ( 7 - tab.column ) + 1 or 27 * tab.column
 			local y = tab.row == "top" and -28 or CREATIVE_H - 4
 			button:SetPos( self.Left + x * self.Scale, self.Top + y * self.Scale )
 		end

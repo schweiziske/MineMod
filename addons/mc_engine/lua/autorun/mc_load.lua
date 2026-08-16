@@ -158,6 +158,7 @@ local CLIENT_FILES = {
 	"mc/render/cl_block_animations.lua",
 	"mc/functional/cl_fire_campfires.lua",
 	"mc/generated/cl_generated_bitmap_font.lua",
+	"mc/generated/cl_generated_unifont_atlases.lua",
 	"mc/render/cl_bitmap_font.lua",
 	"mc/functional/cl_signs.lua",
 	"mc/functional/cl_banners.lua",

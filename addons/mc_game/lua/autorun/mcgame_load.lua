@@ -102,6 +102,7 @@ local SERVER_FILES = {
 	"mcgame/inventory/sv_network.lua",
 }
 local CLIENT_FILES = {
+	"mcgame/generated/cl_generated_gui_sprites.lua",
 	"mcgame/mining/cl_mining.lua",
 	"mcgame/mining/cl_hand_swing.lua",
 	"mcgame/functional/cl_chests.lua",
@@ -154,6 +155,8 @@ if SERVER then
 			"materials/mc/gui/container/creative_inventory",
 			"materials/mc/gui/hud",
 			"materials/mc/gui/sprites/container",
+			"materials/mc/gui/sprites/container/anvil",
+			"materials/mc/gui/sprites/container/brewing_stand",
 			"materials/mc/gui/sprites/container/furnace",
 			"materials/mc/gui/sprites/container/enchanting_table",
 			"materials/mc/gui/sprites/container/slot",
