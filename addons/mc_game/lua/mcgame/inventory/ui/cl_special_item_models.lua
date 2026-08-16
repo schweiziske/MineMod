@@ -9,7 +9,8 @@ MC.InventoryUI = MC.InventoryUI or {}
 
 local UI = MC.InventoryUI
 local Renderer = UI.ItemRenderer
-if not Renderer or not Renderer.RegisterSpecialIconRenderer then return end
+if not Renderer or not Renderer.RegisterSpecialIconRenderer
+	or not Renderer.RegisterSpecialWorldRenderer then return end
 
 local TEXTURE_SIZE = 64
 local MATERIAL_FLAGS = "alphatest vertexcolor vertexalpha nocull"
@@ -26,11 +27,26 @@ local LIGHT_FLAT_1 = Vector( -0.215012134, -0.971825316, 0.096567789 )
 -- The compact item-model catalog currently ships model nodes but not the base
 -- files referenced only by special nodes. Keep exact vanilla GUI transforms as
 -- fallbacks so special models do not silently render unrotated at scale 1.
-local CHEST_GUI_TRANSFORM = {
-	rotation = { 30, 45, 0 }, translation = { 0, 0, 0 }, scale = { 0.625, 0.625, 0.625 },
+local CHEST_DISPLAY = {
+	gui = { rotation = { 30, 45, 0 }, translation = { 0, 0, 0 }, scale = { 0.625, 0.625, 0.625 } },
+	ground = { rotation = { 0, 0, 0 }, translation = { 0, 3, 0 }, scale = { 0.25, 0.25, 0.25 } },
+	thirdperson_righthand = { rotation = { 75, 315, 0 }, translation = { 0, 2.5, 0 }, scale = { 0.375, 0.375, 0.375 } },
+	firstperson_righthand = { rotation = { 0, 315, 0 }, translation = { 0, 0, 0 }, scale = { 0.4, 0.4, 0.4 } },
 }
-local SHIELD_GUI_TRANSFORM = {
-	rotation = { 15, -25, -5 }, translation = { 2, 3, 0 }, scale = { 0.65, 0.65, 0.65 },
+local SHIELD_DISPLAY = {
+	gui = { rotation = { 15, -25, -5 }, translation = { 2, 3, 0 }, scale = { 0.65, 0.65, 0.65 } },
+	ground = { rotation = { 0, 0, 0 }, translation = { 2, 4, 2 }, scale = { 0.25, 0.25, 0.25 } },
+	thirdperson_righthand = { rotation = { 0, 90, 0 }, translation = { 10, 6, -4 }, scale = { 1, 1, 1 } },
+	thirdperson_lefthand = { rotation = { 0, 90, 0 }, translation = { 10, 6, 12 }, scale = { 1, 1, 1 } },
+	firstperson_righthand = { rotation = { 0, 180, 5 }, translation = { -10, 1.75, -10 }, scale = { 1.25, 1.25, 1.25 } },
+	firstperson_lefthand = { rotation = { 0, 180, 5 }, translation = { 10, 0, -10 }, scale = { 1.25, 1.25, 1.25 } },
+}
+local SHIELD_BLOCKING_DISPLAY = {
+	gui = SHIELD_DISPLAY.gui,
+	thirdperson_righthand = { rotation = { 45, 155, 0 }, translation = { -3.49, 11, -2 }, scale = { 1, 1, 1 } },
+	thirdperson_lefthand = { rotation = { 45, 155, 0 }, translation = { 11.51, 7, 2.5 }, scale = { 1, 1, 1 } },
+	firstperson_righthand = { rotation = { 0, 180, -5 }, translation = { -15, 3.25, -11 }, scale = { 1.25, 1.25, 1.25 } },
+	firstperson_lefthand = { rotation = { 0, 180, -5 }, translation = { 5, 5, -11 }, scale = { 1.25, 1.25, 1.25 } },
 }
 
 local DYE_COLORS = {
@@ -125,15 +141,21 @@ local function rotationBasis( rotation )
 	return axisX:GetNormalized(), axisY:GetNormalized(), axisZ:GetNormalized()
 end
 
-local function displayTransform( plan, fallback )
+local function displayTransform( plan, context, fallback )
+	context = tostring( context or "gui" )
 	local model = MC.GetItemModelFile and MC.GetItemModelFile( plan and plan.modelId ) or nil
-	local display = type( model ) == "table" and type( model.display ) == "table" and model.display.gui or nil
-	display = type( display ) == "table" and display or fallback or {}
+	local displays = type( model ) == "table" and type( model.display ) == "table" and model.display
+		or type( plan and plan.display ) == "table" and plan.display or nil
+	local display = type( displays ) == "table" and displays[context] or nil
+	if not display and type( fallback ) == "table" then
+		display = fallback.rotation and fallback or fallback[context]
+	end
+	display = type( display ) == "table" and display or {}
 	return display.rotation or {}, display.translation or {}, display.scale or {}
 end
 
-local function modelTransform( plan, localScale, fallbackDisplay )
-	local rotation, translation, scale = displayTransform( plan, fallbackDisplay )
+local function modelTransform( plan, localScale, fallbackDisplay, context )
+	local rotation, translation, scale = displayTransform( plan, context or "gui", fallbackDisplay )
 	local axisX, axisY, axisZ = rotationBasis( rotation )
 	localScale = type( localScale ) == "table" and localScale or { 1, 1, 1 }
 	local sx, sy, sz = tonumber( scale[1] ) or 1, tonumber( scale[2] ) or 1,
@@ -179,7 +201,7 @@ local function rotatePartX( value, pivotY, pivotZ, radians )
 		y * sine + z * cosine + pivotZ )
 end
 
-local function appendBox( faces, transformPoint, transformNormal, box, light0, light1 )
+local function appendBox( faces, transformPoint, transformNormal, box, light0, light1, keepBackfaces )
 	local x0, x1 = box.x, box.x + box.width
 	local y0, y1 = box.y, box.y + box.height
 	local z0, z1 = box.z, box.z + box.depth
@@ -208,15 +230,16 @@ local function appendBox( faces, transformPoint, transformNormal, box, light0, l
 		-- GuiItemAtlas renders these entity models with normal back-face culling
 		-- and a depth buffer.  surface.DrawPoly has neither here, so discard the
 		-- faces pointing away from the +Z GUI camera before painter sorting.
-		if transformedNormal.z <= 0.000001 then return end
+		if not keepBackfaces and transformedNormal.z <= 0.000001 then return end
 		faces[#faces + 1] = {
 			depth = ( a.z + b.z + c.z + d.z ) * 0.25,
 			shade = faceShade( transformedNormal, light0, light1 ),
+			normal = transformedNormal,
 			vertices = {
-				{ x = a.x, y = a.y, u = bu / TEXTURE_SIZE, v = av / TEXTURE_SIZE },
-				{ x = b.x, y = b.y, u = au / TEXTURE_SIZE, v = av / TEXTURE_SIZE },
-				{ x = c.x, y = c.y, u = au / TEXTURE_SIZE, v = bv / TEXTURE_SIZE },
-				{ x = d.x, y = d.y, u = bu / TEXTURE_SIZE, v = bv / TEXTURE_SIZE },
+				{ x = a.x, y = a.y, z = a.z, u = bu / TEXTURE_SIZE, v = av / TEXTURE_SIZE },
+				{ x = b.x, y = b.y, z = b.z, u = au / TEXTURE_SIZE, v = av / TEXTURE_SIZE },
+				{ x = c.x, y = c.y, z = c.z, u = au / TEXTURE_SIZE, v = bv / TEXTURE_SIZE },
+				{ x = d.x, y = d.y, z = d.z, u = bu / TEXTURE_SIZE, v = bv / TEXTURE_SIZE },
 			},
 		}
 	end
@@ -227,6 +250,49 @@ local function appendBox( faces, transformPoint, transformNormal, box, light0, l
 	add( t1, t0, t3, t2, u1, v1, u2, v2, 0, 0, -1 )
 	add( l1, t1, t2, l2, u2, v1, u3, v2, 1, 0, 0 )
 	add( l0, l1, l2, l3, u3, v1, u4, v2, 0, 0, 1 )
+end
+
+local function localModelTransform( localScale )
+	localScale = type( localScale ) == "table" and localScale or { 1, 1, 1 }
+	local lx, ly, lz = tonumber( localScale[1] ) or 1, tonumber( localScale[2] ) or 1,
+		tonumber( localScale[3] ) or 1
+	local function point( x, y, z )
+		return Vector( x / 16 * lx - 0.5, y / 16 * ly - 0.5, z / 16 * lz - 0.5 )
+	end
+	local function normal( x, y, z )
+		local value = Vector(
+			x / ( lx ~= 0 and lx or 1 ),
+			y / ( ly ~= 0 and ly or 1 ),
+			z / ( lz ~= 0 and lz or 1 )
+		)
+		return value:GetNormalized()
+	end
+	return point, normal
+end
+
+local function appendChestFaces( faces, transformPoint, transformNormal, special, keepBackfaces )
+	appendBox( faces, transformPoint, transformNormal,
+		{ x = 1, y = 0, z = 1, width = 14, height = 10, depth = 14, texU = 0, texV = 19 },
+		nil, nil, keepBackfaces )
+	local openness = math.Clamp( tonumber( special and special.openness ) or 0, 0, 1 )
+	local lidAngle = -openness * math.pi * 0.5
+	appendBox( faces, transformPoint, transformNormal, {
+		x = 1, y = 9, z = 1, width = 14, height = 5, depth = 14, texU = 0, texV = 0,
+		rotateX = lidAngle, pivotY = 9, pivotZ = 1,
+	}, nil, nil, keepBackfaces )
+	appendBox( faces, transformPoint, transformNormal, {
+		x = 7, y = 7, z = 15, width = 2, height = 4, depth = 1, texU = 0, texV = 0,
+		rotateX = lidAngle, pivotY = 9, pivotZ = 1,
+	}, nil, nil, keepBackfaces )
+end
+
+local function appendShieldFaces( faces, transformPoint, transformNormal, keepBackfaces )
+	appendBox( faces, transformPoint, transformNormal,
+		{ x = -6, y = -11, z = -2, width = 12, height = 22, depth = 1, texU = 0, texV = 0 },
+		LIGHT_FLAT_0, LIGHT_FLAT_1, keepBackfaces )
+	appendBox( faces, transformPoint, transformNormal,
+		{ x = -1, y = -3, z = -1, width = 2, height = 6, depth = 6, texU = 26, texV = 0 },
+		LIGHT_FLAT_0, LIGHT_FLAT_1, keepBackfaces )
 end
 
 local function projectFaces( faces, x, y, size )
@@ -272,6 +338,82 @@ local function resultFor( faces, layers, maskLayers, options )
 	}
 end
 
+local function worldPoint( transform, vertex, normal, offset )
+	return transform.pos
+		+ transform.xAxis * ( vertex.x * transform.width )
+		+ transform.yAxis * ( vertex.y * transform.height )
+		+ transform.normal * ( vertex.z * transform.depth )
+		+ normal * offset
+end
+
+local function worldNormal( transform, localNormal )
+	local width = math.max( math.abs( tonumber( transform.width ) or 0 ), 0.000001 )
+	local height = math.max( math.abs( tonumber( transform.height ) or 0 ), 0.000001 )
+	local depth = math.max( math.abs( tonumber( transform.depth ) or 0 ), 0.000001 )
+	return (
+		transform.xAxis * ( localNormal.x / width )
+		+ transform.yAxis * ( localNormal.y / height )
+		+ transform.normal * ( localNormal.z / depth )
+	):GetNormalized()
+end
+
+local function drawWorldLayers( faces, layers, transform, worldColor )
+	if not mesh or not mesh.Begin or not render or not render.SetMaterial then return false end
+	worldColor = worldColor or color_white
+	local layerStep = math.max( transform.width, transform.height, transform.depth, 1 ) * 0.0005
+	local drawn = false
+	UI.WithPointFiltering( function()
+		for layerIndex, layer in ipairs( layers ) do
+			if layer.material then
+				render.SetMaterial( layer.material )
+				mesh.Begin( MATERIAL_QUADS, #faces )
+				for _, face in ipairs( faces ) do
+					local normal = worldNormal( transform, face.normal )
+					local offset = ( layerIndex - 1 ) * layerStep
+					local color = multiplyColor( layer.color, worldColor, face.shade )
+					for _, vertex in ipairs( face.vertices ) do
+						mesh.Position( worldPoint( transform, vertex, normal, offset ) )
+						if mesh.Normal then mesh.Normal( normal ) end
+						mesh.TexCoord( 0, vertex.u, vertex.v )
+						mesh.Color( color.r, color.g, color.b, color.a )
+						mesh.AdvanceVertex()
+					end
+				end
+				mesh.End()
+			end
+		end
+		drawn = true
+	end )
+	return drawn
+end
+
+local function drawWorldGlintFaces( faces, transform, material, uvTransform, offset )
+	if not material or not isfunction( uvTransform ) then return false end
+	render.SetMaterial( material )
+	mesh.Begin( MATERIAL_QUADS, #faces )
+	for _, face in ipairs( faces ) do
+		local normal = worldNormal( transform, face.normal )
+		for _, vertex in ipairs( face.vertices ) do
+			local u, v = uvTransform( vertex.u, vertex.v )
+			mesh.Position( worldPoint( transform, vertex, normal, offset ) )
+			if mesh.Normal then mesh.Normal( normal ) end
+			mesh.TexCoord( 0, u, v )
+			mesh.Color( 255, 255, 255, 255 )
+			mesh.AdvanceVertex()
+		end
+	end
+	mesh.End()
+	return true
+end
+
+local function specialWorldTransform( plan, pos, orientation, size, options, fallbackDisplay )
+	if not Renderer.SpecialWorldTransform or not orientation
+		or not isfunction( orientation.Forward ) then return nil end
+	options = options or {}
+	return Renderer.SpecialWorldTransform( plan, options.displayContext or "firstperson_righthand",
+		pos, orientation, size, options, fallbackDisplay )
+end
+
 local function chestTextureName( value )
 	local name = identifierPath( value )
 	name = string.gsub( name, "^textures/entity/chest/", "" )
@@ -286,23 +428,26 @@ local function drawChestIcon( _, plan, x, y, size, options )
 	local material = modelMaterial( "mc/entity/chest/" .. texture .. ".png" )
 	if not material then return false end
 
-	local transformPoint, transformNormal = modelTransform( plan, nil, CHEST_GUI_TRANSFORM )
+	local transformPoint, transformNormal = modelTransform( plan, nil, CHEST_DISPLAY )
 	local faces = {}
-	appendBox( faces, transformPoint, transformNormal,
-		{ x = 1, y = 0, z = 1, width = 14, height = 10, depth = 14, texU = 0, texV = 19 } )
-	local openness = math.Clamp( tonumber( special.openness ) or 0, 0, 1 )
-	local lidAngle = -openness * math.pi * 0.5
-	appendBox( faces, transformPoint, transformNormal, {
-		x = 1, y = 9, z = 1, width = 14, height = 5, depth = 14, texU = 0, texV = 0,
-		rotateX = lidAngle, pivotY = 9, pivotZ = 1,
-	} )
-	appendBox( faces, transformPoint, transformNormal, {
-		x = 7, y = 7, z = 15, width = 2, height = 4, depth = 1, texU = 0, texV = 0,
-		rotateX = lidAngle, pivotY = 9, pivotZ = 1,
-	} )
+	appendChestFaces( faces, transformPoint, transformNormal, special, false )
 	projectFaces( faces, x, y, size )
 	local layers = { { material = material, color = color_white } }
 	return resultFor( faces, layers, layers, options )
+end
+
+local function drawChestWorld( _, plan, pos, orientation, size, color, options )
+	local special = plan and plan.special or nil
+	local texture = chestTextureName( special and special.texture )
+	if not texture then return false end
+	local material = modelMaterial( "mc/entity/chest/" .. texture .. ".png" )
+	if not material then return false end
+	local transform = specialWorldTransform( plan, pos, orientation, size, options, CHEST_DISPLAY )
+	if not transform then return false end
+	local transformPoint, transformNormal = localModelTransform()
+	local faces = {}
+	appendChestFaces( faces, transformPoint, transformNormal, special, true )
+	return drawWorldLayers( faces, { { material = material, color = color_white } }, transform, color )
 end
 
 local function shieldPatternLayers( stack )
@@ -325,7 +470,8 @@ local function shieldPatternLayers( stack )
 		{ material = baseMaterial, color = color_white },
 		{ material = fieldMaterial, color = dyeColor( baseColorValue, DYE_COLORS.white ) },
 	}
-	for _, pattern in ipairs( rawPatterns ) do
+	for index, pattern in ipairs( rawPatterns ) do
+		if index > 16 then break end
 		if type( pattern ) == "table" then
 			local patternName = identifierPath( pattern.pattern )
 			if string.match( patternName, "^[a-z0-9_]+$" ) then
@@ -343,17 +489,35 @@ local function drawShieldIcon( stack, plan, x, y, size, options )
 	local layers = shieldPatternLayers( stack )
 	if not layers then return false end
 	local transformPoint, transformNormal = modelTransform(
-		plan, { 1, -1, -1 }, SHIELD_GUI_TRANSFORM )
+		plan, { 1, -1, -1 }, SHIELD_DISPLAY )
 	local faces = {}
-	appendBox( faces, transformPoint, transformNormal,
-		{ x = -6, y = -11, z = -2, width = 12, height = 22, depth = 1, texU = 0, texV = 0 },
-		LIGHT_FLAT_0, LIGHT_FLAT_1 )
-	appendBox( faces, transformPoint, transformNormal,
-		{ x = -1, y = -3, z = -1, width = 2, height = 6, depth = 6, texU = 26, texV = 0 },
-		LIGHT_FLAT_0, LIGHT_FLAT_1 )
+	appendShieldFaces( faces, transformPoint, transformNormal, false )
 	projectFaces( faces, x, y, size )
 	return resultFor( faces, layers, { layers[1] }, options )
 end
 
+local function drawShieldWorld( stack, plan, pos, orientation, size, color, options )
+	local layers = shieldPatternLayers( stack )
+	if not layers then return false end
+	local blocking = tostring( plan and plan.modelId or "" ) == "minecraft:item/shield_blocking"
+	local fallbackDisplay = blocking and SHIELD_BLOCKING_DISPLAY or SHIELD_DISPLAY
+	local transform = specialWorldTransform( plan, pos, orientation, size, options, fallbackDisplay )
+	if not transform then return false end
+	local transformPoint, transformNormal = localModelTransform( { 1, -1, -1 } )
+	local faces = {}
+	appendShieldFaces( faces, transformPoint, transformNormal, true )
+	local drawn = drawWorldLayers( faces, layers, transform, color )
+	if drawn and Renderer.DrawSpecialWorldGlint then
+		local glintOffset = math.max( transform.width, transform.height, transform.depth, 1 )
+			* 0.0005 * ( #layers + 0.5 )
+		Renderer.DrawSpecialWorldGlint( stack, function( material, uvTransform )
+			return drawWorldGlintFaces( faces, transform, material, uvTransform, glintOffset )
+		end, ENTITY_GLINT_SCALE, ENTITY_GLINT_SCALE )
+	end
+	return drawn
+end
+
 Renderer.RegisterSpecialIconRenderer( "minecraft:chest", drawChestIcon )
 Renderer.RegisterSpecialIconRenderer( "minecraft:shield", drawShieldIcon )
+Renderer.RegisterSpecialWorldRenderer( "minecraft:chest", drawChestWorld )
+Renderer.RegisterSpecialWorldRenderer( "minecraft:shield", drawShieldWorld )

@@ -23,7 +23,8 @@ local RESERVOIR_SIZE = MAX_PARTICLES - RESERVOIR_START
 local MAX_CATCHUP_STEPS = 4
 local MARKER_MATERIAL = Material( "mc/item/barrier.png", "alphatest vertexcolor vertexalpha nocull" )
 
-local Particles = {}
+local Markers = {}
+local MarkerCount = 0
 local StateIsBarrier = {}
 local LightCache = {}
 local NextTick = 0
@@ -34,7 +35,8 @@ local function cellKey( bx, by, bz )
 end
 
 local function clearMarkers()
-	Particles = {}
+	Markers = {}
+	MarkerCount = 0
 	LightCache = {}
 	NextLightCacheSweep = 0
 end
@@ -60,8 +62,8 @@ local function isBarrierState( stateId )
 	return cached
 end
 
-local function admitParticle()
-	local count = #Particles
+local function admitMarker()
+	local count = MarkerCount
 	if count >= MAX_PARTICLES then return false end
 	if count < RESERVOIR_START then return true end
 	local freeSpace = ( MAX_PARTICLES - count ) / RESERVOIR_SIZE
@@ -70,24 +72,31 @@ local function admitParticle()
 end
 
 local function addMarker( bx, by, bz, now )
-	if not admitParticle() then return end
-	Particles[#Particles + 1] = {
+	local key = cellKey( bx, by, bz )
+	local marker = Markers[key]
+	if marker then
+		-- ParticleEngine may own several identical BlockMarker particles for one
+		-- cell. Their opaque billboards are visually one marker; extending the
+		-- latest expiry preserves that union without overdrawing the same quad.
+		marker.expiresAt = now + PARTICLE_LIFETIME
+		return
+	end
+	if not admitMarker() then return end
+	Markers[key] = {
 		bx = bx, by = by, bz = bz,
 		expiresAt = now + PARTICLE_LIFETIME,
 	}
+	MarkerCount = MarkerCount + 1
 end
 
 local function removeExpired( now )
-	local write = 1
-	for read = 1, #Particles do
-		local particle = Particles[read]
-		if particle.expiresAt > now then
-			Particles[write] = particle
-			write = write + 1
+	for key, marker in pairs( Markers ) do
+		if marker.expiresAt <= now then
+			Markers[key] = nil
+			MarkerCount = MarkerCount - 1
 		end
 	end
-	for index = #Particles, write, -1 do Particles[index] = nil end
-	if #Particles == 0 then
+	if MarkerCount == 0 then
 		LightCache = {}
 		NextLightCacheSweep = now + 1
 	elseif now >= NextLightCacheSweep then
@@ -161,14 +170,14 @@ local function markerColor( particle, now )
 end
 
 hook.Add( "PostDrawTranslucentRenderables", "mcgame_barrier_markers", function( _, drawingSkybox, drawing3DSkybox )
-	if drawingSkybox or drawing3DSkybox or #Particles == 0 then return end
+	if drawingSkybox or drawing3DSkybox or MarkerCount == 0 then return end
 	if not MARKER_MATERIAL or MARKER_MATERIAL.IsError and MARKER_MATERIAL:IsError() then return end
 
 	local now = CurTime()
 	if render.PushFilterMin then render.PushFilterMin( TEXFILTER.POINT ) end
 	if render.PushFilterMag then render.PushFilterMag( TEXFILTER.POINT ) end
 	render.SetMaterial( MARKER_MATERIAL )
-	for _, particle in ipairs( Particles ) do
+	for _, particle in pairs( Markers ) do
 		local center = Coords.CellRenderCenter
 			and Coords.CellRenderCenter( particle.bx, particle.by, particle.bz ) or nil
 		if center then render.DrawSprite( center, BS, BS, markerColor( particle, now ) ) end

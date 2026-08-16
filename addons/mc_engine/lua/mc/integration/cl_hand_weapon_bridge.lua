@@ -76,6 +76,42 @@ function MC.API.HandWeapon.IsSelectedActive( ply )
 	return Bridge.IsClientSelectedWeaponActive( ply )
 end
 
+-- Public presentation facade. Game-owned hand weapons consume these stable
+-- operations instead of reaching into the creative placer's pose, lighting,
+-- or held-block renderer implementation.
+function MC.API.HandWeapon.GetBlockFirstPersonPose( weapon, leftHand )
+	if not MC.CreativeHeldFirstPersonPose then return nil, "presentation_unavailable" end
+	return MC.CreativeHeldFirstPersonPose( weapon, leftHand == true )
+end
+
+function MC.API.HandWeapon.GetBlockThirdPersonPose( ply, leftHand )
+	if not IsValid( ply ) then return nil, "invalid_player" end
+	if not MC.CreativeHeldThirdPersonPose then return nil, "presentation_unavailable" end
+	return MC.CreativeHeldThirdPersonPose( ply, leftHand == true )
+end
+
+function MC.API.HandWeapon.GetItemThirdPersonAnchor( ply, leftHand )
+	if not IsValid( ply ) then return nil, "invalid_player" end
+	if not MC.CreativeHeldThirdPersonAnchor then return nil, "presentation_unavailable" end
+	return MC.CreativeHeldThirdPersonAnchor( ply, leftHand == true )
+end
+
+function MC.API.HandWeapon.SamplePresentationLighting( pos, state )
+	if not isvector( pos ) then return nil, "invalid_position" end
+	if state ~= nil and not istable( state ) then return nil, "invalid_lighting_state" end
+	if not MC.CreativeHeldLightingAt then return nil, "presentation_unavailable" end
+	return MC.CreativeHeldLightingAt( pos, state )
+end
+
+function MC.API.HandWeapon.DrawBlockState( stateId, pos, ang, scale, lighting )
+	stateId = math.floor( tonumber( stateId ) or 0 )
+	if stateId <= 0 then return false, "invalid_state" end
+	if not isvector( pos ) or not isangle( ang ) then return false, "invalid_transform" end
+	if not MC.DrawCreativeHeldBlockState then return false, "presentation_unavailable" end
+	return MC.DrawCreativeHeldBlockState( stateId, pos, ang,
+		math.max( tonumber( scale ) or 0.001, 0.001 ), lighting ) == true
+end
+
 -- Compatibility names retained on the public API for existing game clients.
 MC.API.HandWeapon.IsInventoryActive = MC.API.HandWeapon.IsManagedActive
 MC.API.HandWeapon.IsHeldItemActive = MC.API.HandWeapon.IsSelectedActive

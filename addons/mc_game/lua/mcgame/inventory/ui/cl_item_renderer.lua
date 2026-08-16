@@ -7,12 +7,21 @@ local UI = MC.InventoryUI
 local Renderer = {}
 UI.ItemRenderer = Renderer
 Renderer.SpecialIconRenderers = {}
+Renderer.SpecialWorldRenderers = {}
 
 function Renderer.RegisterSpecialIconRenderer( typeName, callback )
 	typeName = string.lower( tostring( typeName or "" ) )
 	if typeName == "" then return false, "invalid_special_item_model_type" end
 	if not isfunction( callback ) then return false, "invalid_special_item_model_renderer" end
 	Renderer.SpecialIconRenderers[typeName] = callback
+	return true
+end
+
+function Renderer.RegisterSpecialWorldRenderer( typeName, callback )
+	typeName = string.lower( tostring( typeName or "" ) )
+	if typeName == "" then return false, "invalid_special_item_model_type" end
+	if not isfunction( callback ) then return false, "invalid_special_item_world_renderer" end
+	Renderer.SpecialWorldRenderers[typeName] = callback
 	return true
 end
 
@@ -34,6 +43,21 @@ local function drawSpecialIcon( stack, plan, x, y, size, options )
 			result.glintScaleU, result.glintScaleV,
 			result.glintOriginU, result.glintOriginV
 	end
+	return result == true
+end
+
+local function drawSpecialWorld( stack, plan, pos, orientation, size, color, options )
+	local special = plan and plan.special
+	local typeName = type( special ) == "table" and string.lower( tostring( special.type or "" ) ) or ""
+	local callback = Renderer.SpecialWorldRenderers[typeName]
+	if not callback then return false end
+	local ok, result = pcall( callback, stack, plan, pos, orientation, size, color, options or {} )
+	if not ok then
+		if ErrorNoHalt then ErrorNoHalt( "[MC Inventory] special world item model " .. typeName
+			.. " failed: " .. tostring( result ) .. "\n" ) end
+		return false
+	end
+	if type( result ) == "table" then return result.drawn ~= false end
 	return result == true
 end
 
@@ -175,6 +199,25 @@ local function endGlintBlend( active )
 	if active then render.OverrideBlend( false ) end
 	render.SetBlend( 1 )
 	render.SetColorModulation( 1, 1, 1 )
+end
+
+function Renderer.DrawSpecialWorldGlint( stack, callback,
+	textureScaleU, textureScaleV, textureOriginU, textureOriginV )
+	if not hasFoil( stack ) or not isfunction( callback )
+		or not GLINT_MATERIAL or GLINT_MATERIAL.IsError and GLINT_MATERIAL:IsError() then return false end
+	local blended = beginGlintBlend()
+	render.SetColorModulation( GLINT_STRENGTH, GLINT_STRENGTH, GLINT_STRENGTH )
+	render.SetBlend( 1 )
+	local ok, result = pcall( callback, GLINT_MATERIAL, function( u, v )
+		return glintUV( u, v, textureScaleU, textureScaleV, textureOriginU, textureOriginV )
+	end )
+	endGlintBlend( blended )
+	if not ok then
+		if ErrorNoHalt then ErrorNoHalt( "[MC Inventory] special world glint failed: "
+			.. tostring( result ) .. "\n" ) end
+		return false
+	end
+	return result ~= false
 end
 
 local function drawGlintSurfaceRect( x, y, width, height,
@@ -701,28 +744,33 @@ local function displayValues( plan, context )
 	local leftHand = string.find( context, "lefthand", 1, true ) ~= nil
 	if not transform and leftHand and display then
 		local rightContext = string.gsub( context, "lefthand", "righthand", 1 )
-		local right = display[rightContext]
-		if right then
-			local rotation = right.rotation or {}
-			transform = {
-				rotation = { tonumber( rotation[1] ) or 0, -( tonumber( rotation[2] ) or 0 ), -( tonumber( rotation[3] ) or 0 ) },
-				translation = right.translation,
-				scale = right.scale,
-			}
-		end
+		transform = display[rightContext]
 	end
 	if not transform then
 		local rightContext = string.gsub( context, "lefthand", "righthand", 1 )
 		transform = DEFAULT_DISPLAY[rightContext] or DEFAULT_DISPLAY.firstperson_righthand
-		if leftHand then
-			local rotation = transform.rotation
-			transform = {
-				rotation = { rotation[1], -rotation[2], -rotation[3] },
-				translation = transform.translation,
-				scale = transform.scale,
-			}
-		end
 	end
+	if not leftHand then return transform end
+
+	-- ItemTransform.apply(leftHand) mirrors the selected transform even when a
+	-- model provides an explicit *_lefthand entry: translation X and rotations
+	-- Y/Z are negated after context selection. Keeping this in one place also
+	-- makes right-hand fallback transforms obey the same vanilla rule.
+	local rotation = transform.rotation or {}
+	local translation = transform.translation or {}
+	transform = {
+		rotation = {
+			tonumber( rotation[1] ) or 0,
+			-( tonumber( rotation[2] ) or 0 ),
+			-( tonumber( rotation[3] ) or 0 ),
+		},
+		translation = {
+			-( tonumber( translation[1] ) or 0 ),
+			tonumber( translation[2] ) or 0,
+			tonumber( translation[3] ) or 0,
+		},
+		scale = transform.scale,
+	}
 	return transform
 end
 
@@ -788,22 +836,32 @@ end
 
 local function mcWeaponsFirstPersonTransform( plan, displayContext, basePos, baseAng, baseSize, view )
 	local display = displayValues( plan, displayContext )
-	local rotation, scale = display.rotation or {}, display.scale or {}
+	local rotation, translation, scale = display.rotation or {}, display.translation or {}, display.scale or {}
 	local leftHand = string.find( displayContext or "", "lefthand", 1, true ) ~= nil
 	local side = leftHand and -1 or 1
 	local defaultRotation = DEFAULT_DISPLAY.firstperson_righthand.rotation
+	local defaultTranslation = DEFAULT_DISPLAY.firstperson_righthand.translation
+	local translationX = tonumber( translation[1] ) or defaultTranslation[1]
+	local defaultTranslationX = leftHand and -defaultTranslation[1] or defaultTranslation[1]
+	local baseXAxis = baseAng:Forward()
+	local baseYAxis = baseAng:Up()
+	local baseZAxis = leftHand and baseAng:Right() or -baseAng:Right()
+	local pos = basePos
+		+ baseXAxis * ( ( translationX - defaultTranslationX ) * baseSize / 16 )
+		+ baseYAxis * ( ( ( tonumber( translation[2] ) or defaultTranslation[2] ) - defaultTranslation[2] ) * baseSize / 16 )
+		+ baseZAxis * ( ( ( tonumber( translation[3] ) or defaultTranslation[3] ) - defaultTranslation[3] ) * baseSize / 16 )
 	local ang = Angle( baseAng.p, baseAng.y, baseAng.r )
 	local pitch = ( tonumber( view.pitch ) or -3 )
 		+ ( tonumber( rotation[1] ) or defaultRotation[1] ) - defaultRotation[1]
 	local yaw = side * ( tonumber( view.yaw ) or 110 )
-		+ ( tonumber( rotation[2] ) or side * defaultRotation[2] ) - side * defaultRotation[2]
+		+ ( tonumber( rotation[2] ) or defaultRotation[2] ) - defaultRotation[2]
 	local roll = side * ( tonumber( view.roll ) or 20 )
-		+ ( tonumber( rotation[3] ) or side * defaultRotation[3] ) - side * defaultRotation[3]
+		+ ( tonumber( rotation[3] ) or defaultRotation[3] ) - defaultRotation[3]
 	ang:RotateAroundAxis( ang:Up(), yaw )
 	ang:RotateAroundAxis( ang:Right(), pitch )
 	ang:RotateAroundAxis( ang:Forward(), roll )
 	return {
-		pos = basePos,
+		pos = pos,
 		-- MC_weapons' compiled item models map model (X,Y,Z) to MC (Z,X,Y).
 		xAxis = -ang:Right(),
 		yAxis = ang:Up(),
@@ -813,6 +871,29 @@ local function mcWeaponsFirstPersonTransform( plan, displayContext, basePos, bas
 		depthScale = math.abs( tonumber( scale[3] ) or 0.68 ),
 		depth = baseSize * math.abs( tonumber( scale[3] ) or 0.68 ),
 	}
+end
+
+function Renderer.SpecialWorldTransform( plan, displayContext, basePos, baseAng, baseSize, options, fallbackDisplay )
+	if not plan or not basePos or not baseAng then return nil end
+	local transformPlan = plan
+	if type( fallbackDisplay ) == "table" then
+		local merged = {}
+		for key, value in pairs( fallbackDisplay ) do merged[key] = value end
+		for key, value in pairs( type( plan.display ) == "table" and plan.display or {} ) do merged[key] = value end
+		transformPlan = {
+			display = merged,
+			modelId = plan.modelId,
+			kind = plan.kind,
+			special = plan.special,
+		}
+	end
+	options = options or {}
+	if type( options.mcWeaponsView ) == "table"
+	and string.find( displayContext or "", "firstperson_", 1, true ) == 1 then
+		return mcWeaponsFirstPersonTransform( transformPlan, displayContext,
+			basePos, baseAng, baseSize, options.mcWeaponsView )
+	end
+	return Renderer.HeldTransform( transformPlan, displayContext, basePos, baseAng, baseSize )
 end
 
 local function drawFlatHeldLayer( material, transform, layerOffset, color )
@@ -1029,8 +1110,12 @@ function Renderer.DrawHeldItem( stack, pos, orientation, size, color, options )
 	modelOptions.displayContext = modelOptions.displayContext or "firstperson_righthand"
 	modelOptions.worldItem = true
 	local materials, plan = Renderer.MaterialsForStack( stack, modelOptions )
-	if #materials == 0 then return false end
 	color = color or Color( 255, 255, 255, 255 )
+	if plan.kind == "special"
+	and drawSpecialWorld( stack, plan, pos, orientation, size, color, modelOptions ) then
+		return true
+	end
+	if #materials == 0 then return false end
 	-- Vector callers are world billboards (currently projectiles). Preserve that
 	-- contract; Angle callers are hand anchors and receive Minecraft transforms.
 	if isvector and isvector( orientation ) then

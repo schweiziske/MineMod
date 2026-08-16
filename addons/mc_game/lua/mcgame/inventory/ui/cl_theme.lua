@@ -137,6 +137,14 @@ function UI.GetGuiMaterial( name )
 					/ mappingWidth,
 				vScale = math.max( 1, tonumber( definition.height ) or 1 )
 					/ mappingHeight,
+				-- Source's D3D9 DrawTexturedRectUV path rasterizes the leading
+				-- texture boundary as a framebuffer sample. Compensate by half a
+				-- mapping texel so an authored pixel occupies exactly GUI-scale
+				-- screen pixels. Without this, 9x9 HUD sprites become visibly
+				-- wider and the first edge of container sprites can pick up the
+				-- API's red out-of-range border sample.
+				uInset = 0.5 / mappingWidth,
+				vInset = 0.5 / mappingHeight,
 			}
 		end
 		return material
@@ -175,11 +183,13 @@ function UI.DrawTexture( mat, x, y, w, h, u0, v0, u1, v1, color )
 	if mapping then
 		local uScale = tonumber( mapping.uScale ) or 1
 		local vScale = tonumber( mapping.vScale ) or 1
+		local uInset = tonumber( mapping.uInset ) or 0
+		local vInset = tonumber( mapping.vInset ) or 0
 		if u0 ~= nil then
-			u0, v0 = u0 * uScale, ( v0 or 0 ) * vScale
+			u0, v0 = u0 * uScale - uInset, ( v0 or 0 ) * vScale - vInset
 			u1, v1 = ( u1 or 1 ) * uScale, ( v1 or 1 ) * vScale
 		else
-			u0, v0, u1, v1 = 0, 0, uScale, vScale
+			u0, v0, u1, v1 = -uInset, -vInset, uScale, vScale
 		end
 	end
 	if u0 ~= nil then

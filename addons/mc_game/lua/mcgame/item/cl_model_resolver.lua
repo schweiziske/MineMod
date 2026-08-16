@@ -96,6 +96,9 @@ local function propertyValue( property, stack, definition, options )
 		-- locale-independent value here.
 		return os and os.date and os.date( "%m-%d" ) or ""
 	end
+	if property == "minecraft:display_context" then
+		return tostring( options.displayContext or "gui" )
+	end
 	if property == "minecraft:crossbow/pull" then
 		if finite( options.crossbowPull ) then return options.crossbowPull end
 		return finite( options.useProgress ) and math.Clamp( options.useProgress, 0, 1 ) or 0
@@ -183,7 +186,13 @@ local function resolveNode( node, stack, definition, options, depth )
 		return mergePlans( plans )
 	end
 	if nodeType == "special" then
-		return { layers = {}, modelId = node.b, kind = "special", special = node.m }
+		local modelId = tostring( node.b or "" )
+		local base = MC.GetItemModelFile and MC.GetItemModelFile( modelId ) or nil
+		return {
+			layers = {}, modelId = modelId ~= "" and modelId or nil,
+			kind = "special", special = node.m,
+			display = type( base ) == "table" and base.display or nil,
+		}
 	end
 	return emptyPlan()
 end
