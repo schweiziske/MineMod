@@ -137,11 +137,11 @@ local function drawFood( ply, xRight, yBase, scale, tick, random )
 	end
 end
 
-local function drawExperience( ply, hotbarY, scale )
-	local x = math.floor( ( ScrW() - 182 * scale ) * 0.5 )
-	local y = hotbarY - 7 * scale
+local function drawExperience( ply, centerX, bottom, scale )
+	local x = math.floor( centerX - 91 * scale )
+	local y = bottom - 29 * scale
 	local progress = math.Clamp( ply:GetNWFloat( "mc_experience_progress", 0 ), 0, 1 )
-	local progressWidth = math.min( 182, math.floor( progress * 183 ) )
+	local progressWidth = math.floor( progress * 183 )
 	UI.DrawTexture( EXPERIENCE_BACKGROUND, x, y, 182 * scale, 5 * scale )
 	if progressWidth > 0 then
 		UI.DrawTexture( EXPERIENCE_PROGRESS, x, y, progressWidth * scale, 5 * scale,
@@ -150,8 +150,8 @@ local function drawExperience( ply, hotbarY, scale )
 
 	local level = math.max( 0, ply:GetNWInt( "mc_experience_level", 0 ) )
 	if level <= 0 then return end
-	local textX = ScrW() * 0.5
-	local textY = hotbarY - 13 * scale
+	local textX = centerX
+	local textY = bottom - 35 * scale
 	for _, offset in ipairs( { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } } ) do
 		UI.DrawText( level, textX + offset[1] * scale, textY + offset[2] * scale,
 			scale, OUTLINE_COLOR, TEXT_ALIGN_CENTER, false )
@@ -168,7 +168,9 @@ hook.Add( "HUDPaint", "mc_inventory_survival_status", function()
 	end
 	if IsValid( UI.Screen ) and UI.Screen:IsVisible() then return end
 	local ply = LocalPlayer()
-	local scale = UI.GuiScale()
+	local scale = UI.HUDScale and UI.HUDScale() or UI.GuiScale()
+	local offsetX, offsetY = 0, 0
+	if UI.HUDOffset then offsetX, offsetY = UI.HUDOffset() end
 	local tick = math.max( 0, math.floor( CurTime() * 20 ) )
 	local currentHalves = MC.GModHealthToMinecraftHalves( ply:Health() )
 	local oldHalves, blink = updateHealthTracking( ply, currentHalves, tick )
@@ -178,16 +180,17 @@ hook.Add( "HUDPaint", "mc_inventory_survival_status", function()
 		oldHalves * 5,
 		MC.PlayerMinecraftAbsorptionAmount and MC.PlayerMinecraftAbsorptionAmount( ply ) or 0
 	)
-	local hotbarY = ScrH() - 22 * scale - 8 * scale
-	local yBase = hotbarY - 17 * scale
-	local xLeft = math.floor( ScrW() * 0.5 - 91 * scale )
-	local xRight = math.floor( ScrW() * 0.5 + 91 * scale )
+	local centerX = ScrW() * 0.5 + offsetX
+	local bottom = ScrH() + offsetY
+	local yBase = bottom - 39 * scale
+	local xLeft = math.floor( centerX - 91 * scale )
+	local xRight = math.floor( centerX + 91 * scale )
 	local random = MC.NewLegacyRandom( tick * 312871 )
 
 	UI.WithPointFiltering( function()
 		drawHearts( layout, xLeft, yBase, scale, blink, random )
 		drawFood( ply, xRight, yBase, scale, tick, random )
-		drawExperience( ply, hotbarY, scale )
+		drawExperience( ply, centerX, bottom, scale )
 	end )
 end )
 

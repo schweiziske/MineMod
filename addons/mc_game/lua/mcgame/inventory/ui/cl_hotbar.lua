@@ -68,10 +68,12 @@ hook.Add( "HUDPaint", "mc_inventory_hotbar", function()
 	if not handActive() or inventoryScreenVisible() then return end
 	local state = MC.ClientInventory or {}
 	local slots = type( state.slots ) == "table" and state.slots or {}
-	local scale = UI.GuiScale()
+	local scale = UI.HUDScale and UI.HUDScale() or UI.GuiScale()
+	local offsetX, offsetY = 0, 0
+	if UI.HUDOffset then offsetX, offsetY = UI.HUDOffset() end
 	local width, height = 182 * scale, 22 * scale
-	local x = math.floor( ( ScrW() - width ) * 0.5 )
-	local y = ScrH() - height - 8 * scale
+	local x = math.floor( ScrW() * 0.5 - 91 * scale + offsetX )
+	local y = ScrH() - height + offsetY
 	UI.WithPointFiltering( function()
 		UI.DrawTexture( HOTBAR, x, y, width, height )
 		UI.DrawTexture( HOTBAR_SELECTION, x + ( ( state.selected or 0 ) * 20 - 1 ) * scale, y - scale, 24 * scale, 23 * scale )
@@ -86,7 +88,7 @@ hook.Add( "HUDPaint", "mc_inventory_hotbar", function()
 	if RealTime() < selectedNameUntil and not MC.IsEmptyItemStack( stack ) then
 		local definition = MC.GetItem( stack.item )
 		local nameOffset = UI.SurvivalHUDBaseActive and UI.SurvivalHUDBaseActive() and 37 or 12
-		UI.DrawText( UI.ItemRenderer.DisplayName( stack ), ScrW() * 0.5, y - nameOffset * scale, scale,
+		UI.DrawText( UI.ItemRenderer.DisplayName( stack ), ScrW() * 0.5 + offsetX, y - nameOffset * scale, scale,
 			UI.RarityColor( definition and definition.rarity ), TEXT_ALIGN_CENTER, true )
 	end
 end )

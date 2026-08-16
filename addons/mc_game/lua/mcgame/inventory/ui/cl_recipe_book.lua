@@ -265,6 +265,8 @@ function BOOK:Init()
 	self.SearchEntry:SetHighlightColor( Color( 120, 150, 190, 120 ) )
 	self.SearchEntry:SetCursorColor( Color( 35, 35, 35, 255 ) )
 	self.SearchEntry:SetUpdateOnType( true )
+	self.SearchEntry.MCBitmapScale = self.Scale
+	UI.ConfigureBitmapTextEntry( self.SearchEntry, { color = Color( 35, 35, 35, 255 ), padding = 1 } )
 	self.SearchGeneration = 0
 	self.SearchEntry.OnChange = function()
 		if not IsValid( self ) then return end
@@ -328,7 +330,7 @@ function BOOK:Configure( screen )
 	if not allowed[self.SelectedCategory] then self.SelectedCategory = "search" self.Page = 0 end
 	self.Scale = screen and screen.Scale or UI.GuiScale()
 	self:SetSize( ( TAB_MARGIN + PANEL_W ) * self.Scale, PANEL_H * self.Scale )
-	self.SearchEntry:SetFont( "MCInventorySearch" .. tostring( self.Scale ) )
+	self.SearchEntry.MCBitmapScale = self.Scale
 	local oldSearch = self.SearchEntry:GetValue() or ""
 	self.SearchEntry:SetValue( oldSearch )
 	for _, tab in ipairs( self.Tabs ) do tab:Configure( self, tab.Key, tab.Icon, self.Scale, tab.Mode ) end
@@ -349,7 +351,7 @@ function BOOK:SetGeometry( x, y, scale )
 	self.Scale = math.max( 1, math.floor( tonumber( scale ) or self.Scale or 1 ) )
 	self:SetSize( ( TAB_MARGIN + PANEL_W ) * self.Scale, PANEL_H * self.Scale )
 	self:SetPos( math.floor( x or 0 ) - TAB_MARGIN * self.Scale, math.floor( y or 0 ) )
-	self.SearchEntry:SetFont( "MCInventorySearch" .. tostring( self.Scale ) )
+	self.SearchEntry.MCBitmapScale = self.Scale
 	self.SearchEntry:SetPos( ( TAB_MARGIN + 25 ) * self.Scale, 12 * self.Scale )
 	self.SearchEntry:SetSize( 81 * self.Scale, 14 * self.Scale )
 	local visibleTab = 0
@@ -483,8 +485,11 @@ end
 function BOOK:Paint( w, h )
 	local entries = ensureEntries( self )
 	UI.WithPointFiltering( function()
+		-- RecipeBookComponent samples the 147x166 panel from (1,1) in the
+		-- official 256x256 texture, not from the outer transparent edge.
 		UI.DrawTexture( BOOK_BACKGROUND, TAB_MARGIN * self.Scale, 0,
-			PANEL_W * self.Scale, PANEL_H * self.Scale, 0, 0, PANEL_W / 256, PANEL_H / 256 )
+			PANEL_W * self.Scale, PANEL_H * self.Scale,
+			1 / 256, 1 / 256, ( 1 + PANEL_W ) / 256, ( 1 + PANEL_H ) / 256 )
 	end )
 	local pages = math.max( 1, math.ceil( #entries / ITEMS_PER_PAGE ) )
 	if pages > 1 then

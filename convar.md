@@ -240,6 +240,14 @@
 | ConVar | 默认 | 作用 |
 | --- | --- | --- |
 | `mc_language` | `auto` | MC UI 语言：`auto`、`zh_cn` 或 `en_us`；`auto` 跟随 `gmod_language`。 |
+| `mc_inventory_hud_scale` | `0` | 热栏、生命、饥饿、经验和状态效果 HUD 的整数缩放；`0` 按原版 320×240 最小逻辑尺寸自动选择，手动范围 `1..32`。 |
+| `mc_inventory_hud_offset_x` | `0` | 整组生存 HUD 的水平偏移，单位为实际屏幕像素；正数向右。 |
+| `mc_inventory_hud_offset_y` | `0` | 整组生存 HUD 的垂直偏移，单位为实际屏幕像素；正数向下。 |
+| `mc_inventory_ui_scale` | `0` | 物品栏、容器、配方书、铁砧和附魔台的整数缩放；`0` 按原版 320×240 最小逻辑尺寸自动选择，手动范围 `1..32`。 |
+| `mc_inventory_ui_offset_x` | `0` | 物品栏/容器界面的水平偏移，单位为实际屏幕像素；正数向右。 |
+| `mc_inventory_ui_offset_y` | `0` | 物品栏/容器界面的垂直偏移，单位为实际屏幕像素；正数向下。 |
+
+例如 1920×1080 下若 HUD 偏大，可先试 `mc_inventory_hud_scale 3`；位置需要微调时再修改两个 offset。输入 `0` 可恢复自动缩放或默认位置。
 
 ## Fast 低采样 GPU 光照（旧版观感）
 

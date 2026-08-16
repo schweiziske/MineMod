@@ -242,9 +242,11 @@ end
 
 function UI.DrawActiveEffectsHUD(entity)
 	if not IsValid(entity) then return end
-	local scale = UI.GuiScale and UI.GuiScale() or 1
+	local scale = UI.HUDScale and UI.HUDScale() or UI.GuiScale and UI.GuiScale() or 1
+	local offsetX, offsetY = 0, 0
+	if UI.HUDOffset then offsetX, offsetY = UI.HUDOffset() end
 	for _, entry in ipairs(UI.ActiveEffectHUDLayout(ScrW(), ScrH(), scale, visibleEffects(entity))) do
-		local effect, x, y, ticks = entry.effect, entry.x, entry.y, entry.ticks
+		local effect, x, y, ticks = entry.effect, entry.x + offsetX, entry.y + offsetY, entry.ticks
 		local background = UI.GetEffectBackgroundMaterial(effect.ambient == true, false)
 		UI.WithPointFiltering(function()
 			UI.DrawTexture(background, x, y, 24 * scale, 24 * scale, nil, nil, nil, nil, Color(255,255,255,255))
