@@ -37,8 +37,6 @@ addons/mc_engine/lua/mc/                    方块世界、状态、网络、渲
 addons/mc_engine/lua/entities/              引擎实体
 addons/mc_engine/lua/weapons/               引擎武器和工具
 addons/mc_engine/lua/bin/                   可选 native mesh 模块
-addons/mc_engine/shaders/fxc/               编译后的 chunk/阴影 shader(.vcs)
-addons/mc_engine/materials/pp/              阴影深度 pass 的磁盘 VMT
 addons/mc_game/addon.json                   生存游戏 addon 清单
 addons/mc_game/lua/autorun/mcgame_load.lua  游戏层入口(register 阶段启动)
 addons/mc_game/lua/mcgame/                  物品、物品栏、配方、挖掘、掉落物和容器
@@ -55,9 +53,7 @@ docs/maintenance-update-guide.md             维护更新指南
 docs/interface-usage.md                      接口使用介绍(已过期)
 ```
 
-资源也按 addon 归属：世界 atlas、字体、方块实体材质、引擎声音、编译后的 shader（`shaders/fxc/`）、阴影深度 VMT（`materials/pp/`）、SWEP 图标（`materials/entities/`、`materials/vgui/entities/`）和 native 模块属于 `mc_engine`；物品图标、容器/HUD/配方界面、破坏阶段贴图及游戏音效属于 `mc_game`。相对挂载路径不能由两个 addon 重复提供。
-
-**仓库根目录不得再有 `materials/`、`sound/`、`shaders/` 等可挂载内容树** —— 留在根目录的内容对任何客户端都不会挂载。`_tools/test_layer_boundaries.js` 会在发现这类残留、以及 Lua 里 `Material()` 指向两个 addon 都没有的文件时报错。
+资源也按 addon 归属：世界 atlas、字体、方块实体材质、引擎声音和 native 模块属于 `mc_engine`；物品图标、容器/HUD/配方界面、破坏阶段贴图及游戏音效属于 `mc_game`。相对挂载路径不能由两个 addon 重复提供。
 
 ## 常用命令
 
