@@ -16,6 +16,7 @@ local Resolver = MC.ItemModelResolver
 local staticCache = {}
 local staticCacheCount = 0
 local MAX_CACHE = 2048
+local localTimeRoots = setmetatable( {}, { __mode = "k" } )
 
 local function finite( value )
 	return type( value ) == "number" and value == value and value ~= math.huge and value ~= -math.huge
@@ -87,6 +88,16 @@ local function propertyValue( property, stack, definition, options )
 	if property == "minecraft:time" then
 		if finite( options.time ) then return options.time end
 		return 0
+	end
+	if property == "minecraft:local_time" then
+		-- Vanilla's only current local-time item selection uses the `MM-dd`
+		-- pattern for the Christmas chest textures. The generator retains the
+		-- case values but not redundant formatting metadata, so expose that exact
+		-- locale-independent value here.
+		return os and os.date and os.date( "%m-%d" ) or ""
+	end
+	if property == "minecraft:display_context" then
+		return tostring( options.displayContext or "gui" )
 	end
 	if property == "minecraft:crossbow/pull" then
 		if finite( options.crossbowPull ) then return options.crossbowPull end
@@ -175,12 +186,37 @@ local function resolveNode( node, stack, definition, options, depth )
 		return mergePlans( plans )
 	end
 	if nodeType == "special" then
-		return { layers = {}, modelId = node.b, kind = "special", special = node.m }
+		local modelId = tostring( node.b or "" )
+		local base = MC.GetItemModelFile and MC.GetItemModelFile( modelId ) or nil
+		return {
+			layers = {}, modelId = modelId ~= "" and modelId or nil,
+			kind = "special", special = node.m,
+			display = type( base ) == "table" and base.display or nil,
+		}
 	end
 	return emptyPlan()
 end
 
-local function cacheKey( stack, definition, options )
+local function nodeUsesLocalTime( node, depth )
+	if type( node ) ~= "table" or depth > 32 then return false end
+	if node.p == "minecraft:local_time" then return true end
+	for _, child in pairs( node ) do
+		if type( child ) == "table" and nodeUsesLocalTime( child, depth + 1 ) then return true end
+	end
+	return false
+end
+
+local function localTimeKey( root )
+	if type( root ) ~= "table" then return "" end
+	local uses = localTimeRoots[root]
+	if uses == nil then
+		uses = nodeUsesLocalTime( root, 0 )
+		localTimeRoots[root] = uses
+	end
+	return uses and ( os and os.date and os.date( "%m-%d" ) or "" ) or ""
+end
+
+local function cacheKey( stack, definition, options, root )
 	if type( stack ) == "table" and type( stack.components ) == "table" and next( stack.components ) ~= nil then return nil end
 	if type( options ) == "table" and ( type( options.properties ) == "table" or options.time ~= nil
 		or options.compass ~= nil or options.fullness ~= nil or options.useProgress ~= nil
@@ -188,7 +224,8 @@ local function cacheKey( stack, definition, options )
 	local context = tostring( options and options.displayContext or "gui" )
 	local using = options and options.using == true and "1" or "0"
 	local broken = options and options.broken == true and "1" or "0"
-	return table.concat( { definition and definition.name or "", tostring( stack and stack.damage or 0 ), context, using, broken }, "|" )
+	return table.concat( { definition and definition.name or "", tostring( stack and stack.damage or 0 ),
+		context, using, broken, localTimeKey( root ) }, "|" )
 end
 
 function Resolver.Resolve( stackOrDefinition, options )
@@ -196,9 +233,9 @@ function Resolver.Resolve( stackOrDefinition, options )
 	local definition = definitionFor( stackOrDefinition )
 	if not definition then return emptyPlan() end
 	local stack = type( stackOrDefinition ) == "table" and stackOrDefinition.item and stackOrDefinition or nil
-	local key = cacheKey( stack, definition, options )
-	if key and staticCache[key] then return staticCache[key] end
 	local root = MC.GetItemModelDefinition and MC.GetItemModelDefinition( definition ) or nil
+	local key = cacheKey( stack, definition, options, root )
+	if key and staticCache[key] then return staticCache[key] end
 	local plan = root and resolveNode( root, stack, definition, options, 0 ) or emptyPlan()
 	if #plan.layers == 0 and definition.texture then
 		plan.layers = { definition.texture }
@@ -213,6 +250,7 @@ end
 
 function Resolver.ClearCache()
 	staticCache, staticCacheCount = {}, 0
+	localTimeRoots = setmetatable( {}, { __mode = "k" } )
 end
 
 function MC.ResolveItemModel( stackOrDefinition, options ) return Resolver.Resolve( stackOrDefinition, options ) end

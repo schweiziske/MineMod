@@ -64,6 +64,7 @@ local function tabRows()
 				title = tostring( source.title or source.key ),
 				titleZH = tostring( source.titleZH or source.title or source.key ),
 				titleKey = source.titleKey,
+				showTitle = source.key ~= "inventory",
 				icon = source.icon,
 				items = type( source.items ) == "table" and source.items or {},
 				alignedRight = ( tonumber( source.column ) or 0 ) >= 5,
@@ -220,7 +221,8 @@ function ENCHANTING_BUTTON:Paint( w, h )
 		or enabled and ENCHANTING_OPTION or ENCHANTING_OPTION_DISABLED
 	self:SetCursor( enabled and "hand" or "arrow" )
 	UI.WithPointFiltering( function()
-		UI.DrawTexture( background, 0, 0, w, h )
+		local screenX, screenY = self:LocalToScreen( 0, 0 )
+		UI.DrawTextureClipped( background, 0, 0, w, h, screenX, screenY, w, h )
 		if cost > 0 then
 			local levels = enabled and ENCHANTING_LEVEL or ENCHANTING_LEVEL_DISABLED
 			UI.DrawTexture( levels[( self.OptionIndex or 0 ) + 1], scale, scale, 16 * scale, 16 * scale )
@@ -300,14 +302,18 @@ function PANEL:Init()
 
 	self.SearchEntry = vgui.Create( "DTextEntry", self )
 	self.SearchEntry:SetDrawBackground( false )
-	self.SearchEntry:SetTextColor( Color( 45, 45, 45, 255 ) )
+	self.SearchEntry:SetTextColor( color_white )
 	self.SearchEntry:SetHighlightColor( Color( 120, 150, 190, 120 ) )
-	self.SearchEntry:SetCursorColor( Color( 45, 45, 45, 255 ) )
+	self.SearchEntry:SetCursorColor( color_white )
 	self.SearchEntry:SetUpdateOnType( true )
 	self.SearchEntry:SetVisible( false )
 	self.SearchEntry:SetZPos( 20 )
 	self.SearchEntry.MCBitmapScale = self.Scale
-	UI.ConfigureBitmapTextEntry( self.SearchEntry, { color = Color( 45, 45, 45, 255 ), padding = 1 } )
+	UI.ConfigureBitmapTextEntry( self.SearchEntry, {
+		color = color_white, cursorColor = color_white, padding = 0,
+		verticalOffset = 0, shadow = true, maxLength = 50,
+	} )
+	if self.SearchEntry.SetMaximumCharCount then self.SearchEntry:SetMaximumCharCount( 50 ) end
 	self.SearchEntry.OnChange = function( entry )
 		if not IsValid( self ) then return end
 		local generation = ( self.SearchGeneration or 0 ) + 1
@@ -322,14 +328,18 @@ function PANEL:Init()
 
 	self.AnvilEntry = vgui.Create( "DTextEntry", self )
 	self.AnvilEntry:SetDrawBackground( false )
-	self.AnvilEntry:SetTextColor( Color( 45, 45, 45, 255 ) )
+	self.AnvilEntry:SetTextColor( color_white )
 	self.AnvilEntry:SetHighlightColor( Color( 120, 150, 190, 120 ) )
-	self.AnvilEntry:SetCursorColor( Color( 45, 45, 45, 255 ) )
+	self.AnvilEntry:SetCursorColor( color_white )
 	self.AnvilEntry:SetUpdateOnType( true )
 	self.AnvilEntry:SetVisible( false )
 	self.AnvilEntry:SetZPos( 30 )
 	self.AnvilEntry.MCBitmapScale = self.Scale
-	UI.ConfigureBitmapTextEntry( self.AnvilEntry, { color = Color( 45, 45, 45, 255 ), padding = 1 } )
+	UI.ConfigureBitmapTextEntry( self.AnvilEntry, {
+		color = color_white, cursorColor = color_white, padding = 0,
+		verticalOffset = 0, shadow = true, maxLength = 50,
+	} )
+	if self.AnvilEntry.SetMaximumCharCount then self.AnvilEntry:SetMaximumCharCount( 50 ) end
 	self.AnvilEntry.OnChange = function( entry )
 		if not IsValid( self ) or self.ApplyingAnvilState or not self.Anvil then return end
 		local value = entry:GetValue() or ""
@@ -478,7 +488,8 @@ function PANEL:ApplyAnvilState( anvilState )
 	self.AnvilEntry:SetCaretPos( utf8 and utf8.len and ( utf8.len( display ) or #display ) or #display )
 	self.ApplyingAnvilState = false
 	local editable = not MC.IsEmptyItemStack( left )
-	self.AnvilEntry.MCBitmapColor = editable and Color( 45, 45, 45, 255 ) or Color( 120, 120, 120, 255 )
+	-- AnvilScreen sets both editable and uneditable EditBox colors to -1.
+	self.AnvilEntry.MCBitmapColor = color_white
 	self.AnvilEntry:SetEditable( editable )
 	self.AnvilEntry:SetEnabled( editable )
 end
@@ -793,11 +804,19 @@ function PANEL:LayoutSpecialControls()
 	if not self.Left then return end
 	local tab = self.Creative and UI.CreativeTabsByKey[self.SelectedTabKey] or nil
 	local search = tab and tab.key == "search"
-	if IsValid( self.SearchEntry ) then self.SearchEntry:SetVisible( search == true ) end
-	if search and IsValid( self.SearchEntry ) then
-		self.SearchEntry:SetPos( self.Left + 82 * self.Scale, self.Top + 6 * self.Scale )
-		self.SearchEntry:SetSize( 80 * self.Scale, 10 * self.Scale )
-		self.SearchEntry:RequestFocus()
+	if IsValid( self.SearchEntry ) then
+		if search then
+			self.SearchEntry:SetVisible( true )
+			self.SearchEntry:SetPos( self.Left + 82 * self.Scale, self.Top + 6 * self.Scale )
+			self.SearchEntry:SetSize( 80 * self.Scale, 9 * self.Scale )
+			self.SearchEntry:RequestFocus()
+		else
+			-- CreativeModeInventoryScreen clears and unfocuses the search box on
+			-- every transition away from the search tab.
+			if self.SearchEntry:GetValue() ~= "" then self.SearchEntry:SetText( "" ) end
+			if self.SearchEntry.KillFocus then self.SearchEntry:KillFocus() end
+			self.SearchEntry:SetVisible( false )
+		end
 	end
 	local scroll = self.Creative and tab and tab.key ~= "inventory" and self:MaxScrollRows() > 0
 	if IsValid( self.Scrollbar ) then self.Scrollbar:SetVisible( scroll == true ) end
@@ -807,8 +826,8 @@ function PANEL:LayoutSpecialControls()
 	end
 	if IsValid( self.AnvilEntry ) then self.AnvilEntry:SetVisible( self.Anvil == true ) end
 	if self.Anvil and IsValid( self.AnvilEntry ) then
-		self.AnvilEntry:SetPos( self.Left + 62 * self.Scale, self.Top + 23 * self.Scale )
-		self.AnvilEntry:SetSize( 103 * self.Scale, 13 * self.Scale )
+		self.AnvilEntry:SetPos( self.Left + 62 * self.Scale, self.Top + 24 * self.Scale )
+		self.AnvilEntry:SetSize( 103 * self.Scale, 12 * self.Scale )
 	end
 	for optionIndex, button in ipairs( self.EnchantingButtons or {} ) do
 		if IsValid( button ) then
@@ -1009,6 +1028,7 @@ function PANEL:PaintContent()
 			UI.DrawTexture( mat, self.Left, self.Top, width, height, 0, 0, self.ContentW / 256, self.ContentH / 256 )
 		end
 	end )
+	if self.Enchanting then UI.DrawEnchantingTopFrame( self.Left, self.Top, self.Scale ) end
 	if self.Furnace then
 		local state = self.Session and self.Session.furnaceState or {}
 		local litTotal = math.max( 0, tonumber( state.litTotalTime ) or 0 )
@@ -1071,8 +1091,9 @@ function PANEL:PaintContent()
 	if self.Anvil then
 		local left = MC.GetClientMenuStack and MC.GetClientMenuStack( 0 ) or nil
 		UI.WithPointFiltering( function()
-			UI.DrawTexture( MC.IsEmptyItemStack( left ) and ANVIL_TEXT_FIELD_DISABLED or ANVIL_TEXT_FIELD,
-				self.Left + 59 * self.Scale, self.Top + 20 * self.Scale, 110 * self.Scale, 16 * self.Scale )
+			local fieldX, fieldY = self.Left + 59 * self.Scale, self.Top + 20 * self.Scale
+			UI.DrawAnvilTextField( MC.IsEmptyItemStack( left ) and ANVIL_TEXT_FIELD_DISABLED or ANVIL_TEXT_FIELD,
+				fieldX, fieldY, self.Scale )
 			local state = self.AnvilState or self.Session and self.Session.anvilState or {}
 			local right = MC.GetClientMenuStack and MC.GetClientMenuStack( 1 ) or nil
 			if not MC.IsEmptyItemStack( left ) and not MC.IsEmptyItemStack( right ) and state.resultAvailable ~= true then
@@ -1102,12 +1123,15 @@ function PANEL:PaintContent()
 			self.Top + ( self.ChestRows * 18 + 20 ) * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
 	elseif self.Enchanting then
 		local chinese = MC.Language and MC.Language() == "zh_cn"
-		UI.DrawText( chinese and "附魔" or "Enchant", self.Left + 114 * self.Scale,
-			self.Top + 4 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_CENTER, false )
+		UI.DrawText( chinese and "附魔" or "Enchant", self.Left + 8 * self.Scale,
+			self.Top + 6 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
 		UI.DrawText( chinese and "物品栏" or "Inventory", self.Left + 8 * self.Scale,
 			self.Top + 72 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
 	elseif self.Anvil then
 		local chinese = MC.Language and MC.Language() == "zh_cn"
+		-- AnvilScreen sets titleLabelX=60; the inherited label Y remains 6.
+		UI.DrawText( chinese and "修复和命名" or "Repair & Name", self.Left + 60 * self.Scale,
+			self.Top + 6 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
 		UI.DrawText( chinese and "物品栏" or "Inventory", self.Left + 8 * self.Scale,
 			self.Top + 72 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
 		local state = self.AnvilState or self.Session and self.Session.anvilState or {}
@@ -1151,6 +1175,12 @@ function PANEL:PaintContent()
 	elseif not self.Creative then
 		UI.DrawText( "Inventory", self.Left + 8 * self.Scale, self.Top + 72 * self.Scale,
 			self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+	elseif self.Creative then
+		local tab = UI.CreativeTabsByKey[self.SelectedTabKey]
+		if tab and tab.showTitle ~= false then
+			UI.DrawText( tabTitle( tab ), self.Left + 8 * self.Scale, self.Top + 6 * self.Scale,
+				self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+		end
 	end
 	return true
 end

@@ -55,6 +55,7 @@ local SHARED = {
 	"mc/state/sh_project_block_state_schemas.lua",
 	"mc/state/sh_state_collision.lua",
 	"mc/state/sh_state_visuals.lua",
+	"mc/block/sh_barrier.lua",
 	"mc/state/sh_state_tints.lua",
 	"mc/import/sh_format.lua",
 	"mc/functional/sh_signs.lua",

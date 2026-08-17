@@ -38,24 +38,27 @@ function MC.PlayerMinecraftAbsorptionAmount( ply )
 	return 0
 end
 
-function MC.BuildSurvivalHeartLayout( maxHealth, currentHealth, oldHealth, absorption )
+function MC.BuildSurvivalHeartLayout( maxHealth, currentHealth, oldHealth, absorption, oldAbsorption )
 	maxHealth = math.max( 0, tonumber( maxHealth ) or 0 )
 	local currentHalves = MC.GModHealthToMinecraftHalves( currentHealth )
 	local oldHalves = MC.GModHealthToMinecraftHalves( oldHealth )
 	local absorptionHalves = math.ceil( math.max( 0, tonumber( absorption ) or 0 ) )
+	local oldAbsorptionHalves = math.ceil( math.max( 0,
+		oldAbsorption == nil and absorptionHalves or tonumber( oldAbsorption ) or 0 ) )
 	local maxHealthHalves = math.max(
 		maxHealth / GMOD_HP_PER_MINECRAFT_HALF_HEART,
 		currentHalves,
 		oldHalves
 	)
 	local healthContainerCount = math.ceil( maxHealthHalves / 2 )
-	local absorptionContainerCount = math.ceil( absorptionHalves / 2 )
+	local absorptionContainerCount = math.ceil( math.max( absorptionHalves, oldAbsorptionHalves ) / 2 )
 	local containerCount = healthContainerCount + absorptionContainerCount
 	local rowCount = math.max( 1, math.ceil( containerCount / 10 ) )
 	return {
 		currentHalves = currentHalves,
 		oldHalves = oldHalves,
 		absorptionHalves = absorptionHalves,
+		oldAbsorptionHalves = oldAbsorptionHalves,
 		maxHealthHalves = maxHealthHalves,
 		maxHealthUnits = maxHealthHalves,
 		healthContainerCount = healthContainerCount,

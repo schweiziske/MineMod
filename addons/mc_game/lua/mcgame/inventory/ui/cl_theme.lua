@@ -15,6 +15,26 @@ local GeneratedSprites = MC.GeneratedGuiSpriteData or {}
 local SpriteDefinitions = type( GeneratedSprites.sprites ) == "table" and GeneratedSprites.sprites or {}
 local MAX_GUI_SCALE = 32
 
+local function usesHudRasterPhase( name )
+	-- The already-calibrated HUD sprites need Source's leading half-texel
+	-- compensation to keep 9x9 hearts/food and the 182px bars pixel-even.
+	-- Container sprites have authored opaque borders and must keep Java's exact
+	-- atlas boundaries; a negative UV there exposes Source's red error border.
+	return string.sub( name, 1, 12 ) == "sprites/hud/"
+		or string.sub( name, 1, 4 ) == "hud/"
+end
+
+local function usesClippedContainerRasterPhase( name )
+	-- These opaque-edged widgets make Source's one-pixel leading raster phase
+	-- immediately visible. Keep the same calibrated half-texel phase as the HUD,
+	-- then clip the material's out-of-bounds guard pixel at the call site.
+	return name == "sprites/container/anvil/text_field"
+		or name == "sprites/container/anvil/text_field_disabled"
+		or name == "sprites/container/enchanting_table/enchantment_slot"
+		or name == "sprites/container/enchanting_table/enchantment_slot_disabled"
+		or name == "sprites/container/enchanting_table/enchantment_slot_highlighted"
+end
+
 UI.ButtonSound = "mc/random/click.ogg"
 
 function UI.PlayButtonSound()
@@ -132,16 +152,22 @@ function UI.GetGuiMaterial( name )
 		if material then
 			local mappingWidth = math.max( 1, tonumber( definition.mappingWidth ) or 1 )
 			local mappingHeight = math.max( 1, tonumber( definition.mappingHeight ) or 1 )
+			local hudRasterPhase = usesHudRasterPhase( name )
+			local clippedContainerRasterPhase = usesClippedContainerRasterPhase( name )
+			local calibratedRasterPhase = hudRasterPhase or clippedContainerRasterPhase
 			UI.GuiSpriteMappings[material] = {
 				uScale = math.max( 1, tonumber( definition.width ) or 1 )
 					/ mappingWidth,
 				vScale = math.max( 1, tonumber( definition.height ) or 1 )
 					/ mappingHeight,
-				-- surface.DrawTexturedRectUV includes the leading texture boundary
-				-- in its rasterization. Starting half a texel earlier makes each
-				-- authored pixel occupy exactly GUI-scale framebuffer pixels.
-				uInset = 0.5 / mappingWidth,
-				vInset = 0.5 / mappingHeight,
+				uInset = calibratedRasterPhase and 0.5 / mappingWidth or 0,
+				vInset = calibratedRasterPhase and 0.5 / mappingHeight or 0,
+				-- Source paints a pure-red guard sample when some translucent
+				-- generated materials touch the leading DrawTexturedRectUV edge.
+				-- Container sprites are stored on transparent POT canvases, so draw
+				-- that complete canvas instead: the authored pixels retain their
+				-- exact integer scale and the transparent padding remains invisible.
+				paddedFullDraw = not calibratedRasterPhase,
 			}
 		end
 		return material
@@ -180,6 +206,10 @@ function UI.DrawTexture( mat, x, y, w, h, u0, v0, u1, v1, color )
 	if mapping then
 		local uScale = tonumber( mapping.uScale ) or 1
 		local vScale = tonumber( mapping.vScale ) or 1
+		if u0 == nil and mapping.paddedFullDraw == true then
+			surface.DrawTexturedRect( x, y, w / uScale, h / vScale )
+			return true
+		end
 		local uInset = tonumber( mapping.uInset ) or 0
 		local vInset = tonumber( mapping.vInset ) or 0
 		if u0 ~= nil then
@@ -194,6 +224,50 @@ function UI.DrawTexture( mat, x, y, w, h, u0, v0, u1, v1, color )
 	else
 		surface.DrawTexturedRect( x, y, w, h )
 	end
+	return true
+end
+
+function UI.DrawTextureClipped( mat, x, y, w, h, clipX, clipY, clipW, clipH, u0, v0, u1, v1, color )
+	if not ( render and render.SetScissorRect ) then
+		return UI.DrawTexture( mat, x, y, w, h, u0, v0, u1, v1, color )
+	end
+	clipX = math.floor( tonumber( clipX ) or tonumber( x ) or 0 )
+	clipY = math.floor( tonumber( clipY ) or tonumber( y ) or 0 )
+	clipW = math.max( 0, math.floor( tonumber( clipW ) or tonumber( w ) or 0 ) )
+	clipH = math.max( 0, math.floor( tonumber( clipH ) or tonumber( h ) or 0 ) )
+	render.SetScissorRect( clipX, clipY, clipX + clipW, clipY + clipH, true )
+	local ok, result = pcall( UI.DrawTexture, mat, x, y, w, h, u0, v0, u1, v1, color )
+	render.SetScissorRect( 0, 0, 0, 0, false )
+	if not ok then error( result, 0 ) end
+	return result
+end
+
+function UI.DrawAnvilTextField( mat, x, y, scale )
+	scale = math.max( 1, math.floor( tonumber( scale ) or 1 ) )
+	x, y = math.floor( tonumber( x ) or 0 ), math.floor( tonumber( y ) or 0 )
+	-- The base anvil background intentionally stores a red 110x16 placeholder
+	-- at logical (59,20). Source's atlas raster phase exposes its top and left
+	-- edges by one framebuffer pixel before this widget is drawn. Restore the
+	-- exact surrounding background pixels from the Java PNG first.
+	surface.SetDrawColor( 198, 198, 198, 255 )
+	surface.DrawRect( x - 1, y - 1, 110 * scale + 1, 1 )
+	surface.DrawRect( x - 1, y, 1, 16 * scale )
+	return UI.DrawTexture( mat, x, y, 110 * scale, 16 * scale )
+end
+
+function UI.DrawEnchantingTopFrame( left, top, scale )
+	-- enchanting_table.png contains the outer 109x1 dark frame at logical
+	-- (59,13); the option sprite begins at (60,14). Source samples the atlas
+	-- transition one framebuffer pixel early, leaving the following bevel row
+	-- visible as a second line. Reconstruct that one authored row at its exact
+	-- Java coordinates so it remains a single Minecraft pixel at every GUI scale.
+	scale = math.max( 1, math.floor( tonumber( scale ) or 1 ) )
+	local x = math.floor( tonumber( left ) or 0 ) + 59 * scale
+	local y = math.floor( tonumber( top ) or 0 ) + 13 * scale
+	surface.SetDrawColor( 198, 198, 198, 255 )
+	surface.DrawRect( x - 1, y - 1, 109 * scale + 1, scale + 1 )
+	surface.SetDrawColor( 55, 55, 55, 255 )
+	surface.DrawRect( x, y, 109 * scale, scale )
 	return true
 end
 
@@ -308,6 +382,17 @@ local function utf8Prefix( text, count )
 	return string.sub( text, 1, byteIndex - 1 )
 end
 
+local function utf8Length( text )
+	if utf8 and utf8.len then return utf8.len( text ) or #text end
+	local count, byteIndex = 0, 1
+	while byteIndex <= #text do
+		local first = string.byte( text, byteIndex )
+		local width = first < 0x80 and 1 or first < 0xE0 and 2 or first < 0xF0 and 3 or first < 0xF8 and 4 or 1
+		byteIndex, count = byteIndex + width, count + 1
+	end
+	return count
+end
+
 function UI.PaintBitmapTextEntry( entry, w, h )
 	if not IsValid( entry ) then return true end
 	local options = entry.MCBitmapTextOptions or {}
@@ -322,7 +407,8 @@ function UI.PaintBitmapTextEntry( entry, w, h )
 	local totalWidth = UI.MeasureText( text, scale, options.font )
 	local scroll = focused and math.max( 0, caretWidth - available + scale ) or 0
 	if not focused and totalWidth > available then scroll = 0 end
-	local top = math.floor( ( h - 8 * scale ) * 0.5 )
+	local top = options.verticalOffset ~= nil and tonumber( options.verticalOffset ) * scale
+		or math.floor( ( h - 8 * scale ) * 0.5 )
 	local screenX, screenY = entry:LocalToScreen( 0, 0 )
 	if render and render.SetScissorRect then
 		render.SetScissorRect( screenX + padding, screenY, screenX + w - padding, screenY + h, true )
@@ -346,10 +432,28 @@ function UI.PaintBitmapTextEntry( entry, w, h )
 		shown = tostring( entry:GetPlaceholderText() or "" )
 		color = options.placeholderColor or Color( 128, 128, 128, 255 )
 	end
-	UI.DrawText( shown, padding - scroll, top, scale, color, TEXT_ALIGN_LEFT, false, TEXT_ALIGN_TOP, options.font )
-	if focused and math.floor( RealTime() * 2 ) % 2 == 0 then
-		surface.SetDrawColor( options.cursorColor or color )
-		surface.DrawRect( padding + caretWidth - scroll, top, scale, 8 * scale )
+	UI.DrawText( shown, padding - scroll, top, scale, color, TEXT_ALIGN_LEFT,
+		options.shadow == true, TEXT_ALIGN_TOP, options.font )
+	local focusTime = tonumber( entry.MCBitmapFocusTime ) or 0
+	if focused and math.floor( math.max( 0, RealTime() - focusTime ) / 0.3 ) % 2 == 0 then
+		local cursorColor = options.cursorColor or color
+		local textLength = utf8Length( text )
+		local maxLength = tonumber( options.maxLength )
+		if not maxLength or maxLength ~= maxLength or maxLength == math.huge then
+			maxLength = math.huge
+		else
+			maxLength = math.max( 0, math.floor( maxLength ) )
+		end
+		local append = caret >= textLength and textLength < maxLength
+		if append then
+			local cursorX = padding + caretWidth - scroll + ( text ~= "" and scale or 0 )
+			UI.DrawText( "_", cursorX, top, scale, cursorColor, TEXT_ALIGN_LEFT,
+				options.shadow == true, TEXT_ALIGN_TOP, options.font )
+		else
+			local cursorX = padding + caretWidth - scroll
+			surface.SetDrawColor( cursorColor )
+			surface.DrawRect( cursorX, top - scale, scale, 11 * scale )
+		end
 	end
 	if render and render.SetScissorRect then render.SetScissorRect( 0, 0, 0, 0, false ) end
 	return true
@@ -362,6 +466,12 @@ function UI.ConfigureBitmapTextEntry( entry, options )
 	entry:SetTextColor( Color( 0, 0, 0, 0 ) )
 	entry:SetCursorColor( Color( 0, 0, 0, 0 ) )
 	entry:SetDrawBackground( false )
+	entry.MCBitmapFocusTime = RealTime()
+	local oldOnGetFocus = entry.OnGetFocus
+	entry.OnGetFocus = function( self, ... )
+		self.MCBitmapFocusTime = RealTime()
+		if oldOnGetFocus then return oldOnGetFocus( self, ... ) end
+	end
 	entry.Paint = UI.PaintBitmapTextEntry
 	return true
 end
