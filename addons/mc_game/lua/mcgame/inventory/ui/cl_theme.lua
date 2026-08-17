@@ -24,6 +24,17 @@ local function usesHudRasterPhase( name )
 		or string.sub( name, 1, 4 ) == "hud/"
 end
 
+local function usesClippedContainerRasterPhase( name )
+	-- These opaque-edged widgets make Source's one-pixel leading raster phase
+	-- immediately visible. Keep the same calibrated half-texel phase as the HUD,
+	-- then clip the material's out-of-bounds guard pixel at the call site.
+	return name == "sprites/container/anvil/text_field"
+		or name == "sprites/container/anvil/text_field_disabled"
+		or name == "sprites/container/enchanting_table/enchantment_slot"
+		or name == "sprites/container/enchanting_table/enchantment_slot_disabled"
+		or name == "sprites/container/enchanting_table/enchantment_slot_highlighted"
+end
+
 UI.ButtonSound = "mc/random/click.ogg"
 
 function UI.PlayButtonSound()
@@ -142,19 +153,21 @@ function UI.GetGuiMaterial( name )
 			local mappingWidth = math.max( 1, tonumber( definition.mappingWidth ) or 1 )
 			local mappingHeight = math.max( 1, tonumber( definition.mappingHeight ) or 1 )
 			local hudRasterPhase = usesHudRasterPhase( name )
+			local clippedContainerRasterPhase = usesClippedContainerRasterPhase( name )
+			local calibratedRasterPhase = hudRasterPhase or clippedContainerRasterPhase
 			UI.GuiSpriteMappings[material] = {
 				uScale = math.max( 1, tonumber( definition.width ) or 1 )
 					/ mappingWidth,
 				vScale = math.max( 1, tonumber( definition.height ) or 1 )
 					/ mappingHeight,
-				uInset = hudRasterPhase and 0.5 / mappingWidth or 0,
-				vInset = hudRasterPhase and 0.5 / mappingHeight or 0,
+				uInset = calibratedRasterPhase and 0.5 / mappingWidth or 0,
+				vInset = calibratedRasterPhase and 0.5 / mappingHeight or 0,
 				-- Source paints a pure-red guard sample when some translucent
 				-- generated materials touch the leading DrawTexturedRectUV edge.
 				-- Container sprites are stored on transparent POT canvases, so draw
 				-- that complete canvas instead: the authored pixels retain their
 				-- exact integer scale and the transparent padding remains invisible.
-				paddedFullDraw = not hudRasterPhase,
+				paddedFullDraw = not calibratedRasterPhase,
 			}
 		end
 		return material
@@ -211,6 +224,50 @@ function UI.DrawTexture( mat, x, y, w, h, u0, v0, u1, v1, color )
 	else
 		surface.DrawTexturedRect( x, y, w, h )
 	end
+	return true
+end
+
+function UI.DrawTextureClipped( mat, x, y, w, h, clipX, clipY, clipW, clipH, u0, v0, u1, v1, color )
+	if not ( render and render.SetScissorRect ) then
+		return UI.DrawTexture( mat, x, y, w, h, u0, v0, u1, v1, color )
+	end
+	clipX = math.floor( tonumber( clipX ) or tonumber( x ) or 0 )
+	clipY = math.floor( tonumber( clipY ) or tonumber( y ) or 0 )
+	clipW = math.max( 0, math.floor( tonumber( clipW ) or tonumber( w ) or 0 ) )
+	clipH = math.max( 0, math.floor( tonumber( clipH ) or tonumber( h ) or 0 ) )
+	render.SetScissorRect( clipX, clipY, clipX + clipW, clipY + clipH, true )
+	local ok, result = pcall( UI.DrawTexture, mat, x, y, w, h, u0, v0, u1, v1, color )
+	render.SetScissorRect( 0, 0, 0, 0, false )
+	if not ok then error( result, 0 ) end
+	return result
+end
+
+function UI.DrawAnvilTextField( mat, x, y, scale )
+	scale = math.max( 1, math.floor( tonumber( scale ) or 1 ) )
+	x, y = math.floor( tonumber( x ) or 0 ), math.floor( tonumber( y ) or 0 )
+	-- The base anvil background intentionally stores a red 110x16 placeholder
+	-- at logical (59,20). Source's atlas raster phase exposes its top and left
+	-- edges by one framebuffer pixel before this widget is drawn. Restore the
+	-- exact surrounding background pixels from the Java PNG first.
+	surface.SetDrawColor( 198, 198, 198, 255 )
+	surface.DrawRect( x - 1, y - 1, 110 * scale + 1, 1 )
+	surface.DrawRect( x - 1, y, 1, 16 * scale )
+	return UI.DrawTexture( mat, x, y, 110 * scale, 16 * scale )
+end
+
+function UI.DrawEnchantingTopFrame( left, top, scale )
+	-- enchanting_table.png contains the outer 109x1 dark frame at logical
+	-- (59,13); the option sprite begins at (60,14). Source samples the atlas
+	-- transition one framebuffer pixel early, leaving the following bevel row
+	-- visible as a second line. Reconstruct that one authored row at its exact
+	-- Java coordinates so it remains a single Minecraft pixel at every GUI scale.
+	scale = math.max( 1, math.floor( tonumber( scale ) or 1 ) )
+	local x = math.floor( tonumber( left ) or 0 ) + 59 * scale
+	local y = math.floor( tonumber( top ) or 0 ) + 13 * scale
+	surface.SetDrawColor( 198, 198, 198, 255 )
+	surface.DrawRect( x - 1, y - 1, 109 * scale + 1, scale + 1 )
+	surface.SetDrawColor( 55, 55, 55, 255 )
+	surface.DrawRect( x, y, 109 * scale, scale )
 	return true
 end
 
