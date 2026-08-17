@@ -15,6 +15,15 @@ local GeneratedSprites = MC.GeneratedGuiSpriteData or {}
 local SpriteDefinitions = type( GeneratedSprites.sprites ) == "table" and GeneratedSprites.sprites or {}
 local MAX_GUI_SCALE = 32
 
+local function usesHudRasterPhase( name )
+	-- The already-calibrated HUD sprites need Source's leading half-texel
+	-- compensation to keep 9x9 hearts/food and the 182px bars pixel-even.
+	-- Container sprites have authored opaque borders and must keep Java's exact
+	-- atlas boundaries; a negative UV there exposes Source's red error border.
+	return string.sub( name, 1, 12 ) == "sprites/hud/"
+		or string.sub( name, 1, 4 ) == "hud/"
+end
+
 UI.ButtonSound = "mc/random/click.ogg"
 
 function UI.PlayButtonSound()
@@ -132,19 +141,14 @@ function UI.GetGuiMaterial( name )
 		if material then
 			local mappingWidth = math.max( 1, tonumber( definition.mappingWidth ) or 1 )
 			local mappingHeight = math.max( 1, tonumber( definition.mappingHeight ) or 1 )
+			local hudRasterPhase = usesHudRasterPhase( name )
 			UI.GuiSpriteMappings[material] = {
 				uScale = math.max( 1, tonumber( definition.width ) or 1 )
 					/ mappingWidth,
 				vScale = math.max( 1, tonumber( definition.height ) or 1 )
 					/ mappingHeight,
-				-- Source's D3D9 DrawTexturedRectUV path rasterizes the leading
-				-- texture boundary as a framebuffer sample. Compensate by half a
-				-- mapping texel so an authored pixel occupies exactly GUI-scale
-				-- screen pixels. Without this, 9x9 HUD sprites become visibly
-				-- wider and the first edge of container sprites can pick up the
-				-- API's red out-of-range border sample.
-				uInset = 0.5 / mappingWidth,
-				vInset = 0.5 / mappingHeight,
+				uInset = hudRasterPhase and 0.5 / mappingWidth or 0,
+				vInset = hudRasterPhase and 0.5 / mappingHeight or 0,
 			}
 		end
 		return material
