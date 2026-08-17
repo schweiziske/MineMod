@@ -23,6 +23,11 @@ local LIGHT_3D_1 = Vector( -0.103571370, -0.976606837, 0.188446429 )
 -- `gui_light: front`, while template_chest keeps the default side lighting.
 local LIGHT_FLAT_0 = Vector( -0.222518981, -0.171498585, 0.959725762 )
 local LIGHT_FLAT_1 = Vector( -0.215012134, -0.971825316, 0.096567789 )
+-- First-person hands are rendered after LevelRenderer selects Lighting.Entry.LEVEL,
+-- not with the GUI item lights above. Minecraft (X,Y-up,Z) maps to MCSWEP's
+-- Source (X,Z-horizontal,Y-up) as (x,z,y), hence the swapped final two axes.
+local LIGHT_LEVEL_0 = Vector( 0.161690417, -0.565916458, 0.808452083 )
+local LIGHT_LEVEL_1 = Vector( -0.161690417, 0.565916458, 0.808452083 )
 
 -- The compact item-model catalog currently ships model nodes but not the base
 -- files referenced only by special nodes. Keep exact vanilla GUI transforms as
@@ -408,7 +413,11 @@ local function drawWorldLayers( faces, layers, transform, worldColor )
 				for _, entry in ipairs( visible ) do
 					local face, normal = entry.face, entry.normal
 					local offset = ( layerIndex - 1 ) * layerStep
-					local color = multiplyColor( layer.color, worldColor, face.shade )
+					-- Entity/item shaders receive the pose-transformed normal. Recompute
+					-- cardinal lighting here after the complete held/world transform;
+					-- face.shade is only valid for the separate GUI projection.
+					local color = multiplyColor( layer.color, worldColor,
+						faceShade( normal, LIGHT_LEVEL_0, LIGHT_LEVEL_1 ) )
 					for _, vertex in ipairs( face.vertices ) do
 						mesh.Position( worldPoint( transform, vertex, normal, offset ) )
 						if mesh.Normal then mesh.Normal( normal ) end
