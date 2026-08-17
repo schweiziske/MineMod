@@ -221,7 +221,8 @@ function ENCHANTING_BUTTON:Paint( w, h )
 		or enabled and ENCHANTING_OPTION or ENCHANTING_OPTION_DISABLED
 	self:SetCursor( enabled and "hand" or "arrow" )
 	UI.WithPointFiltering( function()
-		UI.DrawTexture( background, 0, 0, w, h )
+		local screenX, screenY = self:LocalToScreen( 0, 0 )
+		UI.DrawTextureClipped( background, 0, 0, w, h, screenX, screenY, w, h )
 		if cost > 0 then
 			local levels = enabled and ENCHANTING_LEVEL or ENCHANTING_LEVEL_DISABLED
 			UI.DrawTexture( levels[( self.OptionIndex or 0 ) + 1], scale, scale, 16 * scale, 16 * scale )
@@ -1027,6 +1028,7 @@ function PANEL:PaintContent()
 			UI.DrawTexture( mat, self.Left, self.Top, width, height, 0, 0, self.ContentW / 256, self.ContentH / 256 )
 		end
 	end )
+	if self.Enchanting then UI.DrawEnchantingTopFrame( self.Left, self.Top, self.Scale ) end
 	if self.Furnace then
 		local state = self.Session and self.Session.furnaceState or {}
 		local litTotal = math.max( 0, tonumber( state.litTotalTime ) or 0 )
@@ -1089,8 +1091,9 @@ function PANEL:PaintContent()
 	if self.Anvil then
 		local left = MC.GetClientMenuStack and MC.GetClientMenuStack( 0 ) or nil
 		UI.WithPointFiltering( function()
-			UI.DrawTexture( MC.IsEmptyItemStack( left ) and ANVIL_TEXT_FIELD_DISABLED or ANVIL_TEXT_FIELD,
-				self.Left + 59 * self.Scale, self.Top + 20 * self.Scale, 110 * self.Scale, 16 * self.Scale )
+			local fieldX, fieldY = self.Left + 59 * self.Scale, self.Top + 20 * self.Scale
+			UI.DrawAnvilTextField( MC.IsEmptyItemStack( left ) and ANVIL_TEXT_FIELD_DISABLED or ANVIL_TEXT_FIELD,
+				fieldX, fieldY, self.Scale )
 			local state = self.AnvilState or self.Session and self.Session.anvilState or {}
 			local right = MC.GetClientMenuStack and MC.GetClientMenuStack( 1 ) or nil
 			if not MC.IsEmptyItemStack( left ) and not MC.IsEmptyItemStack( right ) and state.resultAvailable ~= true then
