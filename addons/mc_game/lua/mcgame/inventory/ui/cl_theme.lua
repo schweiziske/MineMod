@@ -149,6 +149,12 @@ function UI.GetGuiMaterial( name )
 					/ mappingHeight,
 				uInset = hudRasterPhase and 0.5 / mappingWidth or 0,
 				vInset = hudRasterPhase and 0.5 / mappingHeight or 0,
+				-- Source paints a pure-red guard sample when some translucent
+				-- generated materials touch the leading DrawTexturedRectUV edge.
+				-- Container sprites are stored on transparent POT canvases, so draw
+				-- that complete canvas instead: the authored pixels retain their
+				-- exact integer scale and the transparent padding remains invisible.
+				paddedFullDraw = not hudRasterPhase,
 			}
 		end
 		return material
@@ -187,6 +193,10 @@ function UI.DrawTexture( mat, x, y, w, h, u0, v0, u1, v1, color )
 	if mapping then
 		local uScale = tonumber( mapping.uScale ) or 1
 		local vScale = tonumber( mapping.vScale ) or 1
+		if u0 == nil and mapping.paddedFullDraw == true then
+			surface.DrawTexturedRect( x, y, w / uScale, h / vScale )
+			return true
+		end
 		local uInset = tonumber( mapping.uInset ) or 0
 		local vInset = tonumber( mapping.vInset ) or 0
 		if u0 ~= nil then
