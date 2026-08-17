@@ -2,7 +2,7 @@
 MC = MC or {}
 MC.GeneratedGuiSpriteData = {
 	version = "26.2",
-	sourceHash = "1acf0f261bd2c530e42d539d144edd9e321c361ad395dd1f9ca5df9d504508c6",
+	sourceHash = "7a42b8183d34d75305a8186707083086b6050765a2a3e2dfa6b1738961939d98",
 	sprites = {
 		["hud/hotbar"] = { material = "mc/gui/hud/hotbar__pot.png", width = 182, height = 22, mappingWidth = 256, mappingHeight = 32 },
 		["hud/hotbar_offhand_left"] = { material = "mc/gui/hud/hotbar_offhand_left__pot.png", width = 29, height = 24, mappingWidth = 32, mappingHeight = 32 },
@@ -80,7 +80,9 @@ MC.GeneratedGuiSpriteData = {
 		["sprites/hud/food_full"] = { material = "mc/gui/sprites/hud/food_full__pot.png", width = 9, height = 9, mappingWidth = 16, mappingHeight = 16 },
 		["sprites/hud/food_half"] = { material = "mc/gui/sprites/hud/food_half__pot.png", width = 9, height = 9, mappingWidth = 16, mappingHeight = 16 },
 		["sprites/hud/heart/absorbing_full"] = { material = "mc/gui/sprites/hud/heart/absorbing_full__pot.png", width = 9, height = 9, mappingWidth = 16, mappingHeight = 16 },
+		["sprites/hud/heart/absorbing_full_blinking"] = { material = "mc/gui/sprites/hud/heart/absorbing_full_blinking__pot.png", width = 9, height = 9, mappingWidth = 16, mappingHeight = 16 },
 		["sprites/hud/heart/absorbing_half"] = { material = "mc/gui/sprites/hud/heart/absorbing_half__pot.png", width = 9, height = 9, mappingWidth = 16, mappingHeight = 16 },
+		["sprites/hud/heart/absorbing_half_blinking"] = { material = "mc/gui/sprites/hud/heart/absorbing_half_blinking__pot.png", width = 9, height = 9, mappingWidth = 16, mappingHeight = 16 },
 		["sprites/hud/heart/container"] = { material = "mc/gui/sprites/hud/heart/container__pot.png", width = 9, height = 9, mappingWidth = 16, mappingHeight = 16 },
 		["sprites/hud/heart/container_blinking"] = { material = "mc/gui/sprites/hud/heart/container_blinking__pot.png", width = 9, height = 9, mappingWidth = 16, mappingHeight = 16 },
 		["sprites/hud/heart/full"] = { material = "mc/gui/sprites/hud/heart/full__pot.png", width = 9, height = 9, mappingWidth = 16, mappingHeight = 16 },

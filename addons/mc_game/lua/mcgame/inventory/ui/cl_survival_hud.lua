@@ -14,7 +14,9 @@ local HEART_FULL_BLINKING = UI.GetGuiMaterial( "sprites/hud/heart/full_blinking"
 local HEART_HALF = UI.GetGuiMaterial( "sprites/hud/heart/half" )
 local HEART_HALF_BLINKING = UI.GetGuiMaterial( "sprites/hud/heart/half_blinking" )
 local HEART_ABSORBING_FULL = UI.GetGuiMaterial( "sprites/hud/heart/absorbing_full" )
+local HEART_ABSORBING_FULL_BLINKING = UI.GetGuiMaterial( "sprites/hud/heart/absorbing_full_blinking" )
 local HEART_ABSORBING_HALF = UI.GetGuiMaterial( "sprites/hud/heart/absorbing_half" )
+local HEART_ABSORBING_HALF_BLINKING = UI.GetGuiMaterial( "sprites/hud/heart/absorbing_half_blinking" )
 local FOOD_EMPTY = UI.GetGuiMaterial( "sprites/hud/food_empty" )
 local FOOD_FULL = UI.GetGuiMaterial( "sprites/hud/food_full" )
 local FOOD_HALF = UI.GetGuiMaterial( "sprites/hud/food_half" )
@@ -28,6 +30,10 @@ local lastHealthHalves
 local displayHealthHalves
 local lastHealthChangeAt = 0
 local healthBlinkUntilTick = 0
+local lastAbsorptionHalves
+local displayAbsorptionHalves
+local lastAbsorptionChangeAt = 0
+local absorptionBlinkUntilTick = 0
 
 local function inventoryHandActive( ply )
 	local weapon = ply:GetActiveWeapon()
@@ -55,18 +61,22 @@ function UI.SurvivalHUDVisible()
 		and not ( IsValid( UI.Screen ) and UI.Screen:IsVisible() )
 end
 
-local function resetHealthTracking( ply, healthHalves )
+local function resetHealthTracking( ply, healthHalves, absorptionHalves )
 	trackedPlayer = ply
 	lastHealthHalves = healthHalves
 	displayHealthHalves = healthHalves
 	lastHealthChangeAt = RealTime()
 	healthBlinkUntilTick = 0
+	lastAbsorptionHalves = absorptionHalves
+	displayAbsorptionHalves = absorptionHalves
+	lastAbsorptionChangeAt = RealTime()
+	absorptionBlinkUntilTick = 0
 end
 
-local function updateHealthTracking( ply, healthHalves, tick )
-	if trackedPlayer ~= ply or lastHealthHalves == nil then
-		resetHealthTracking( ply, healthHalves )
-		return healthHalves, false
+local function updateHealthTracking( ply, healthHalves, absorptionHalves, tick )
+	if trackedPlayer ~= ply or lastHealthHalves == nil or lastAbsorptionHalves == nil then
+		resetHealthTracking( ply, healthHalves, absorptionHalves )
+		return healthHalves, false, absorptionHalves, false
 	end
 
 	local now = RealTime()
@@ -81,17 +91,32 @@ local function updateHealthTracking( ply, healthHalves, tick )
 		displayHealthHalves = healthHalves
 		lastHealthChangeAt = now
 	end
+	if absorptionHalves < lastAbsorptionHalves then
+		displayAbsorptionHalves = math.max( displayAbsorptionHalves or 0, lastAbsorptionHalves )
+		lastAbsorptionChangeAt = now
+		absorptionBlinkUntilTick = tick + 20
+	elseif absorptionHalves > lastAbsorptionHalves then
+		lastAbsorptionChangeAt = now
+		absorptionBlinkUntilTick = 0
+	end
+	if now - lastAbsorptionChangeAt > 1 then
+		displayAbsorptionHalves = absorptionHalves
+		lastAbsorptionChangeAt = now
+	end
 	lastHealthHalves = healthHalves
+	lastAbsorptionHalves = absorptionHalves
 	local blink = healthBlinkUntilTick > tick
 		and math.floor( ( healthBlinkUntilTick - tick ) / 3 ) % 2 == 1
-	return displayHealthHalves, blink
+	local absorptionBlink = absorptionBlinkUntilTick > tick
+		and math.floor( ( absorptionBlinkUntilTick - tick ) / 3 ) % 2 == 1
+	return displayHealthHalves, blink, displayAbsorptionHalves, absorptionBlink
 end
 
 local function drawHeart( material, x, y, scale )
 	UI.DrawTexture( material, x, y, 9 * scale, 9 * scale )
 end
 
-local function drawHearts( layout, xLeft, yBase, scale, blink, random )
+local function drawHearts( layout, xLeft, yBase, scale, blink, absorptionBlink, random )
 	for containerIndex = layout.containerCount - 1, 0, -1 do
 		local row = math.floor( containerIndex / 10 )
 		local column = containerIndex % 10
@@ -100,13 +125,17 @@ local function drawHearts( layout, xLeft, yBase, scale, blink, random )
 		if layout.currentHalves + layout.absorptionHalves <= 4 then
 			y = y + random:NextInt( 2 ) * scale
 		end
-		drawHeart( blink and HEART_CONTAINER_BLINKING or HEART_CONTAINER, x, y, scale )
+		drawHeart( ( blink or absorptionBlink ) and HEART_CONTAINER_BLINKING or HEART_CONTAINER, x, y, scale )
 
 		local halves = containerIndex * 2
 		if containerIndex >= layout.healthContainerCount then
-			local absorptionHalves = halves - layout.maxHealthContainerHalves
-			if absorptionHalves < layout.absorptionHalves then
-				drawHeart( absorptionHalves + 1 == layout.absorptionHalves
+			local absorptionIndex = halves - layout.maxHealthContainerHalves
+			if absorptionBlink and absorptionIndex < layout.oldAbsorptionHalves then
+				drawHeart( absorptionIndex + 1 == layout.oldAbsorptionHalves
+					and HEART_ABSORBING_HALF_BLINKING or HEART_ABSORBING_FULL_BLINKING, x, y, scale )
+			end
+			if absorptionIndex < layout.absorptionHalves then
+				drawHeart( absorptionIndex + 1 == layout.absorptionHalves
 					and HEART_ABSORBING_HALF or HEART_ABSORBING_FULL, x, y, scale )
 			end
 		end
@@ -164,6 +193,8 @@ hook.Add( "HUDPaint", "mc_inventory_survival_status", function()
 		trackedPlayer = nil
 		lastHealthHalves = nil
 		displayHealthHalves = nil
+		lastAbsorptionHalves = nil
+		displayAbsorptionHalves = nil
 		return
 	end
 	if IsValid( UI.Screen ) and UI.Screen:IsVisible() then return end
@@ -173,12 +204,16 @@ hook.Add( "HUDPaint", "mc_inventory_survival_status", function()
 	if UI.HUDOffset then offsetX, offsetY = UI.HUDOffset() end
 	local tick = math.max( 0, math.floor( CurTime() * 20 ) )
 	local currentHalves = MC.GModHealthToMinecraftHalves( ply:Health() )
-	local oldHalves, blink = updateHealthTracking( ply, currentHalves, tick )
+	local absorptionHalves = math.ceil( MC.PlayerMinecraftAbsorptionAmount
+		and MC.PlayerMinecraftAbsorptionAmount( ply ) or 0 )
+	local oldHalves, blink, oldAbsorptionHalves, absorptionBlink = updateHealthTracking(
+		ply, currentHalves, absorptionHalves, tick )
 	local layout = MC.BuildSurvivalHeartLayout(
 		ply.GetMaxHealth and ply:GetMaxHealth() or 100,
 		ply:Health(),
 		oldHalves * 5,
-		MC.PlayerMinecraftAbsorptionAmount and MC.PlayerMinecraftAbsorptionAmount( ply ) or 0
+		absorptionHalves,
+		oldAbsorptionHalves
 	)
 	local centerX = ScrW() * 0.5 + offsetX
 	local bottom = ScrH() + offsetY
@@ -188,7 +223,7 @@ hook.Add( "HUDPaint", "mc_inventory_survival_status", function()
 	local random = MC.NewLegacyRandom( tick * 312871 )
 
 	UI.WithPointFiltering( function()
-		drawHearts( layout, xLeft, yBase, scale, blink, random )
+		drawHearts( layout, xLeft, yBase, scale, blink, absorptionBlink, random )
 		drawFood( ply, xRight, yBase, scale, tick, random )
 		drawExperience( ply, centerX, bottom, scale )
 	end )
