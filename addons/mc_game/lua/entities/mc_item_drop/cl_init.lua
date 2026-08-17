@@ -27,10 +27,11 @@ local function worldLightingColor( ent, position )
 	local now = CurTime()
 	if not ent.MCNextLightSample or now >= ent.MCNextLightSample then
 		ent.MCNextLightSample = now + 0.1 + ent:EntIndex() % 5 * 0.01
+		local Light = MC.API and MC.API.Light or nil
 		local r, g, b = 1, 1, 1
-		if MC.SampleDynamicLightingRGB then r, g, b = MC.SampleDynamicLightingRGB( position, 0 ) end
-		if MC.ScaleDynamicLightingRGB then
-			r, g, b = MC.ScaleDynamicLightingRGB( r, g, b, 0.48 )
+		if Light and Light.SampleRGB then r, g, b = Light.SampleRGB( position, 0 ) end
+		if Light and Light.ScaleRGB then
+			r, g, b = Light.ScaleRGB( r, g, b, 0.48 )
 		else
 			r, g, b = r * 0.48, g * 0.48, b * 0.48
 		end
@@ -62,12 +63,22 @@ function ENT:DrawTranslucent()
 			offset = Vector( math.sin( phase ) * 1.4, math.cos( phase * 1.3 ) * 1.4, ( index - 1 ) * 0.35 )
 		end
 		local position = base + offset
-		local drewBlock = renderer.DrawDroppedBlock
-			and renderer.DrawDroppedBlock( stack, position, blockAngles, 12, worldColor,
-				{ displayContext = "ground" } )
-		if not drewBlock then
-			renderer.DrawHeldItem( stack, position, flatAngles, 12, worldColor,
-				{ displayContext = "ground" } )
+		local options = { displayContext = "ground" }
+		local plan = renderer.ModelPlan and renderer.ModelPlan( stack, options ) or nil
+		local prefersBlock = not plan or plan.kind == "block" or plan.kind == "missing"
+		-- Special entity models retain Minecraft's model-space Y-up axis in the
+		-- ground context. Flat generated sprites keep the addon's established
+		-- horizontal card pose, while chests/shields use the upright spin pose.
+		local itemAngles = plan and plan.kind == "special" and blockAngles or flatAngles
+		local drawn = false
+		if not prefersBlock and renderer.DrawHeldItem then
+			drawn = renderer.DrawHeldItem( stack, position, itemAngles, 12, worldColor, options ) == true
+		end
+		if not drawn and renderer.DrawDroppedBlock then
+			drawn = renderer.DrawDroppedBlock( stack, position, blockAngles, 12, worldColor, options ) == true
+		end
+		if not drawn and prefersBlock and renderer.DrawHeldItem then
+			renderer.DrawHeldItem( stack, position, itemAngles, 12, worldColor, options )
 		end
 	end
 end

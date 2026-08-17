@@ -192,6 +192,27 @@ function Effects.BlockParticleMaterial( block, col, row )
 	return MC.GetBlockParticleMaterial( id, col, row )
 end
 
+-- Play one local Java block-hit sound for a block state at a world position.
+-- This deliberately exposes the hit event rather than aliasing the louder
+-- break/place catalog; callers own cadence and replication. Optional
+-- `{ volume, pitch }` supplies the exact Level.playLocalSound multipliers for
+-- non-mining Java call sites. Omitting it preserves mining-progress semantics.
+function Effects.PlayBlockHitSound( block, pos, options )
+	if not MC.PlayBlockMiningHitSound then return false, "effects_unavailable" end
+	if not isvector( pos ) then return false, "invalid_position" end
+	if options ~= nil and not istable( options ) then return false, "invalid_options" end
+	local volume = options and tonumber( options.volume ) or nil
+	local pitch = options and tonumber( options.pitch ) or nil
+	if options and options.volume ~= nil and volume == nil then return false, "invalid_volume" end
+	if options and options.pitch ~= nil and pitch == nil then return false, "invalid_pitch" end
+	if volume ~= nil and volume < 0 then return false, "invalid_volume" end
+	if pitch ~= nil and pitch <= 0 then return false, "invalid_pitch" end
+	local stateId, id, _, stateErr = stateAndLegacy( block )
+	if not stateId then return false, stateErr or "invalid_state" end
+	if not id or id == 0 then return false, id == 0 and "air" or "unmapped_block" end
+	return MC.PlayBlockMiningHitSound( id, pos, volume, pitch ) == true
+end
+
 -------------------------------------------------------------------- API.Light
 API.Light = API.Light or {}
 local Light = API.Light

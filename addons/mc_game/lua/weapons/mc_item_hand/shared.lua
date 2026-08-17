@@ -819,8 +819,9 @@ if CLIENT then
 
 	local function selectedState( ply, stack )
 		local definition = stack and MC.GetItem( stack.item ) or nil
-		if not definition or not definition.blockId or not MC.DefaultBlockState then return nil end
-		return MC.DefaultBlockState( definition.blockId )
+		local Blocks = MC.API and MC.API.Blocks or nil
+		if not definition or not definition.blockId or not Blocks or not Blocks.DefaultState then return nil end
+		return Blocks.DefaultState( definition.blockId )
 	end
 
 	-- Minecraft applies the attack/equip animation to the hand that actually
@@ -833,11 +834,15 @@ if CLIENT then
 
 	local function heldPose( ply, firstPerson, hand )
 		local leftHand = hand == "offhand"
-		if firstPerson and MC.CreativeHeldFirstPersonPose then
-			return MC.CreativeHeldFirstPersonPose( animationWeaponFor( ply, leftHand ), leftHand )
+		local HandWeapon = MC.API and MC.API.HandWeapon or nil
+		if firstPerson and HandWeapon and HandWeapon.GetBlockFirstPersonPose then
+			local pos, ang, scale = HandWeapon.GetBlockFirstPersonPose(
+				animationWeaponFor( ply, leftHand ), leftHand )
+			if pos then return pos, ang, scale end
 		end
-		if not firstPerson and MC.CreativeHeldThirdPersonPose then
-			return MC.CreativeHeldThirdPersonPose( ply, leftHand )
+		if not firstPerson and HandWeapon and HandWeapon.GetBlockThirdPersonPose then
+			local pos, ang, scale = HandWeapon.GetBlockThirdPersonPose( ply, leftHand )
+			if pos then return pos, ang, scale end
 		end
 		if firstPerson then
 			local eyeAng = ply:EyeAngles()
@@ -893,9 +898,10 @@ if CLIENT then
 			ang:RotateAroundAxis( ang:Up(), side * -45 )
 			return pos, ang, MC_WEAPONS_FP.size * fovScale
 		end
-		if not firstPerson and MC.CreativeHeldThirdPersonAnchor then
-			local pos, ang = MC.CreativeHeldThirdPersonAnchor( ply, leftHand )
-			return pos, ang, 7.5
+		local HandWeapon = MC.API and MC.API.HandWeapon or nil
+		if not firstPerson and HandWeapon and HandWeapon.GetItemThirdPersonAnchor then
+			local pos, ang = HandWeapon.GetItemThirdPersonAnchor( ply, leftHand )
+			if pos then return pos, ang, 7.5 end
 		end
 		local bone = ply:LookupBone( leftHand and "ValveBiped.Bip01_L_Hand" or "ValveBiped.Bip01_R_Hand" )
 		local pos, ang
@@ -910,8 +916,11 @@ if CLIENT then
 		local lightField = hand == "offhand" and "MCItemHandOffhandLight" or "MCItemHandMainhandLight"
 		local colorField = hand == "offhand" and "MCItemHandOffhandColor" or "MCItemHandMainhandColor"
 		local lighting
-		if MC.CreativeHeldLightingAt and IsValid( owner ) then
-			owner[lightField] = MC.CreativeHeldLightingAt( firstPerson and EyePos() or pos, owner[lightField] )
+		local HandWeapon = MC.API and MC.API.HandWeapon or nil
+		if HandWeapon and HandWeapon.SamplePresentationLighting and IsValid( owner ) then
+			local sampled = HandWeapon.SamplePresentationLighting(
+				firstPerson and EyePos() or pos, owner[lightField] )
+			if type( sampled ) == "table" then owner[lightField] = sampled end
 			lighting = owner[lightField]
 		end
 
@@ -946,44 +955,65 @@ if CLIENT then
 		if MC.IsEmptyItemStack( stack ) then return end
 		local definition = MC.GetItem( stack.item )
 		if not definition then return end
+		local renderer = MC.InventoryUI and MC.InventoryUI.ItemRenderer or nil
+		local displayContext = firstPerson
+			and ( hand == "offhand" and "firstperson_lefthand" or "firstperson_righthand" )
+			or ( hand == "offhand" and "thirdperson_lefthand" or "thirdperson_righthand" )
+		local using = useState.using and useState.hand == hand
+		local useProgress = using and useState.progress or 0
+		local useStart = using and useState.startedAt or 0
+		local useDuration = using and useState.duration or 0
+		if using and useDuration > 0 and MC.ItemUseProgress then
+			useProgress = MC.ItemUseProgress( useStart, useDuration, CurTime() )
+		end
+		local modelOptions = {
+			displayContext = displayContext,
+			using = using,
+			useProgress = math.Clamp( tonumber( useProgress ) or 0, 0, 1 ),
+			useDuration = useDuration,
+			crossbowPull = useProgress,
+			chargeType = MC.ItemCrossbowChargeType and MC.ItemCrossbowChargeType( stack ) or "none",
+			mcWeaponsView = firstPerson and MC_WEAPONS_FP or nil,
+		}
+		local plan = renderer and renderer.ModelPlan and renderer.ModelPlan( stack, modelOptions ) or nil
+		local preferItemModel = plan and plan.kind ~= "block" and plan.kind ~= "missing"
+
+		local function tryDrawItemModel()
+			if not renderer or not renderer.DrawHeldItem then return false end
+			local pos, ang, scale = heldItemPose( ply, firstPerson, hand )
+			local color = heldItemLightingColor( ply, pos, firstPerson, hand )
+			render.OverrideDepthEnable( firstPerson, false )
+			local drawn = renderer.DrawHeldItem( stack, pos, ang, scale, color, modelOptions )
+			render.OverrideDepthEnable( false, false )
+			return drawn == true
+		end
+
+		-- Vanilla chooses the item-model definition before consulting the block
+		-- carried by a BlockItem. Barrier is a flat generated item and chests are
+		-- special entity models; only ordinary block-model plans belong on the
+		-- creative held-block renderer.
+		if preferItemModel and tryDrawItemModel() then return end
+
 		local pos, ang, scale = heldPose( ply, firstPerson, hand )
 		local stateId = selectedState( ply, stack )
-		if definition.blockId and stateId and MC.DrawCreativeHeldBlockState then
+		local HandWeapon = MC.API and MC.API.HandWeapon or nil
+		if definition.blockId and stateId and HandWeapon and HandWeapon.DrawBlockState then
 			local brightness = 0.8
-			if MC.CreativeHeldLightingAt then
+			if HandWeapon.SamplePresentationLighting then
 				local owner = firstPerson and ply:GetActiveWeapon() or ply
 				local field = hand == "offhand" and "MCItemHandOffhandLight" or "MCItemHandMainhandLight"
 				if IsValid( owner ) then
-					owner[field] = MC.CreativeHeldLightingAt( firstPerson and EyePos() or pos, owner[field] )
-					brightness = owner[field]
+					local sampled = HandWeapon.SamplePresentationLighting(
+						firstPerson and EyePos() or pos, owner[field] )
+					if type( sampled ) == "table" then owner[field] = sampled end
+					brightness = owner[field] or brightness
 				end
 			end
 			render.OverrideDepthEnable( firstPerson, false )
-			MC.DrawCreativeHeldBlockState( stateId, pos, ang, scale, brightness )
+			HandWeapon.DrawBlockState( stateId, pos, ang, scale, brightness )
 			render.OverrideDepthEnable( false, false )
-		elseif MC.InventoryUI and MC.InventoryUI.ItemRenderer then
-			pos, ang, scale = heldItemPose( ply, firstPerson, hand )
-			local color = heldItemLightingColor( ply, pos, firstPerson, hand )
-			local using = useState.using and useState.hand == hand
-			local useProgress = using and useState.progress or 0
-			local useStart = using and useState.startedAt or 0
-			local useDuration = using and useState.duration or 0
-			if using and useDuration > 0 and MC.ItemUseProgress then
-				useProgress = MC.ItemUseProgress( useStart, useDuration, CurTime() )
-			end
-			render.OverrideDepthEnable( firstPerson, false )
-			MC.InventoryUI.ItemRenderer.DrawHeldItem( stack, pos, ang, scale,
-				color, {
-					displayContext = firstPerson and ( hand == "offhand" and "firstperson_lefthand" or "firstperson_righthand" )
-						or ( hand == "offhand" and "thirdperson_lefthand" or "thirdperson_righthand" ),
-					using = using,
-					useProgress = math.Clamp( tonumber( useProgress ) or 0, 0, 1 ),
-					useDuration = useDuration,
-					crossbowPull = useProgress,
-					chargeType = MC.ItemCrossbowChargeType and MC.ItemCrossbowChargeType( stack ) or "none",
-					mcWeaponsView = firstPerson and MC_WEAPONS_FP or nil,
-				} )
-			render.OverrideDepthEnable( false, false )
+		elseif not preferItemModel then
+			tryDrawItemModel()
 		end
 	end
 

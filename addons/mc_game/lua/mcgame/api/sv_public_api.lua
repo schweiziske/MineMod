@@ -271,6 +271,23 @@ function Inventory.GetSelected( ply )
 	return deepCopy( sv.GetSelectedPlayerStack( ply ) ), record.selected
 end
 
+-- Read one equipped stack without exposing the live equipment table.  Slot
+-- aliases are normalized by the game layer (helmet/head, chestplate/chest,
+-- leggings/legs, boots/feet, offhand) and the returned ItemStack is a fresh
+-- copy suitable for external behavior checks such as piglin-safe armor.
+function Inventory.GetEquipmentSlot( ply, slot )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return nil, "invalid_player" end
+	slot = MC.NormalizeEquipmentSlot and MC.NormalizeEquipmentSlot( slot ) or nil
+	if not slot then return nil, "invalid_equipment_slot" end
+	if not sv or not sv.GetPlayerInventoryRecord or not sv.GetPlayerEquipmentStack then
+		return nil, "inventory_api_unavailable"
+	end
+	local record = sv.GetPlayerInventoryRecord( ply, false )
+	if not record then return nil, "inventory_not_loaded" end
+	return deepCopy( sv.GetPlayerEquipmentStack( ply, slot ) )
+end
+
 function Inventory.Give( ply, item, count, components, damage )
 	local sv = SV()
 	if not validInventoryPlayer( ply ) then return 0, nil, "invalid_player" end
