@@ -834,44 +834,24 @@ function Renderer.HeldTransform( plan, displayContext, basePos, baseAng, baseSiz
 	}
 end
 
-local function mcWeaponsFirstPersonTransform( plan, displayContext, basePos, baseAng, baseSize, view )
+local function mcWeaponsFirstPersonTransform( plan, displayContext, basePos, baseAng, baseSize, _view )
 	local display = displayValues( plan, displayContext )
 	local rotation, translation, scale = display.rotation or {}, display.translation or {}, display.scale or {}
-	local leftHand = string.find( displayContext or "", "lefthand", 1, true ) ~= nil
-	local side = leftHand and -1 or 1
-	local defaultRotation = DEFAULT_DISPLAY.firstperson_righthand.rotation
-	local defaultTranslation = DEFAULT_DISPLAY.firstperson_righthand.translation
-	local translationX = tonumber( translation[1] ) or defaultTranslation[1]
-	local defaultTranslationX = leftHand and -defaultTranslation[1] or defaultTranslation[1]
-	-- ItemTransform.apply() translates in the parent camera space before it
-	-- rotates the item model. Minecraft camera X/Y are screen right/up, while
-	-- positive camera Z points back toward the viewer; Source looks along
-	-- Angle:Forward(), so that parent-space Z axis is -Forward(). Left-hand X
-	-- mirroring has already been applied by displayValues() and must not be
-	-- repeated here.
-	local baseXAxis = baseAng:Right()
-	local baseYAxis = baseAng:Up()
-	local baseZAxis = -baseAng:Forward()
+	-- ItemInHandRenderer first applies its arm pose, then ItemTransform.apply()
+	-- performs T(translation) * rotationXYZ * scale * T(-0.5). basePos/baseAng
+	-- are that exact parent pose. Minecraft camera-space X/Y/Z map to Source
+	-- Right/Up/-Forward; displayValues() has already applied the left-hand fix.
+	local baseXAxis, baseYAxis, baseZAxis = baseAng:Right(), baseAng:Up(), -baseAng:Forward()
 	local pos = basePos
-		+ baseXAxis * ( ( translationX - defaultTranslationX ) * baseSize / 16 )
-		+ baseYAxis * ( ( ( tonumber( translation[2] ) or defaultTranslation[2] ) - defaultTranslation[2] ) * baseSize / 16 )
-		+ baseZAxis * ( ( ( tonumber( translation[3] ) or defaultTranslation[3] ) - defaultTranslation[3] ) * baseSize / 16 )
-	local ang = Angle( baseAng.p, baseAng.y, baseAng.r )
-	local pitch = ( tonumber( view.pitch ) or -3 )
-		+ ( tonumber( rotation[1] ) or defaultRotation[1] ) - defaultRotation[1]
-	local yaw = side * ( tonumber( view.yaw ) or 110 )
-		+ ( tonumber( rotation[2] ) or defaultRotation[2] ) - defaultRotation[2]
-	local roll = side * ( tonumber( view.roll ) or 20 )
-		+ ( tonumber( rotation[3] ) or defaultRotation[3] ) - defaultRotation[3]
-	ang:RotateAroundAxis( ang:Up(), yaw )
-	ang:RotateAroundAxis( ang:Right(), pitch )
-	ang:RotateAroundAxis( ang:Forward(), roll )
+		+ baseXAxis * ( ( tonumber( translation[1] ) or 0 ) * baseSize / 16 )
+		+ baseYAxis * ( ( tonumber( translation[2] ) or 0 ) * baseSize / 16 )
+		+ baseZAxis * ( ( tonumber( translation[3] ) or 0 ) * baseSize / 16 )
+	local xAxis, yAxis, zAxis = rotateBasis( baseXAxis, baseYAxis, baseZAxis, rotation )
 	return {
 		pos = pos,
-		-- MC_weapons' compiled item models map model (X,Y,Z) to MC (Z,X,Y).
-		xAxis = -ang:Right(),
-		yAxis = ang:Up(),
-		normal = ang:Forward(),
+		xAxis = xAxis,
+		yAxis = yAxis,
+		normal = zAxis,
 		width = baseSize * math.abs( tonumber( scale[1] ) or 0.68 ),
 		height = baseSize * math.abs( tonumber( scale[2] ) or tonumber( scale[1] ) or 0.68 ),
 		depthScale = math.abs( tonumber( scale[3] ) or 0.68 ),

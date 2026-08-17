@@ -718,10 +718,13 @@ if CLIENT then
 	local ITEM_PLACE_ANIM_DURATION = 0.30
 	local ITEM_HAND_HEIGHT_RECOVERY = 8
 	local HELD_ITEM_LIGHT_GAIN = 0.48
-	-- Calibrated Source-space view from MC_weapons' item view renderer.
+	-- ItemInHandRenderer.applyItemArmTransform from Java 26.2. The dimensionless
+	-- parent translation is (side * 0.56, -0.52, -0.72); size only converts the
+	-- vanilla camera-space pose into Source world units. Minecraft's hand HUD uses
+	-- a fixed 70-degree vertical FOV, converted to GMod's horizontal Start3D FOV
+	-- only while an item model is drawn.
 	local MC_WEAPONS_FP = {
-		forward = 19.5, right = 10.3, up = -7,
-		pitch = -3, yaw = 110, roll = 20,
+		armX = 0.56, armY = -0.52, armZ = -0.72,
 		size = 36.5 * 0.5, fov = 70,
 	}
 
@@ -873,30 +876,19 @@ if CLIENT then
 			local swingSinFull = math.sin( swing * math.pi )
 
 			local pos = EyePos()
-				+ eyeAng:Forward() * MC_WEAPONS_FP.forward
-				+ eyeAng:Right() * ( side * MC_WEAPONS_FP.right )
-				+ eyeAng:Up() * MC_WEAPONS_FP.up
+				+ eyeAng:Forward() * ( -MC_WEAPONS_FP.armZ * MC_WEAPONS_FP.size )
+				+ eyeAng:Right() * ( side * MC_WEAPONS_FP.armX * MC_WEAPONS_FP.size )
+				+ eyeAng:Up() * ( MC_WEAPONS_FP.armY * MC_WEAPONS_FP.size )
 			pos = pos
 				+ eyeAng:Right() * ( side * -0.4 * swingSin * MC_WEAPONS_FP.size )
 				+ eyeAng:Up() * ( ( -0.6 * equip + 0.2 * swingSin2 ) * MC_WEAPONS_FP.size )
 				+ eyeAng:Forward() * ( 0.2 * swingSinFull * MC_WEAPONS_FP.size )
-			local worldFov = math.Clamp( tonumber( ply:GetFOV() ) or 90, 20, 120 )
-			local fovScale = math.tan( math.rad( worldFov ) * 0.5 )
-				/ math.tan( math.rad( MC_WEAPONS_FP.fov ) * 0.5 )
-			local eyePos = EyePos()
-			local offset = pos - eyePos
-			local depth = offset:Dot( eyeAng:Forward() )
-			pos = eyePos
-				+ eyeAng:Forward() * depth
-				+ eyeAng:Right() * ( offset:Dot( eyeAng:Right() ) * fovScale )
-				+ eyeAng:Up() * ( offset:Dot( eyeAng:Up() ) * fovScale )
-
 			local ang = Angle( eyeAng.p, eyeAng.y, eyeAng.r )
 			ang:RotateAroundAxis( ang:Up(), side * ( 45 - 20 * math.sin( swing * swing * math.pi ) ) )
 			ang:RotateAroundAxis( ang:Forward(), side * swingSin * 20 )
 			ang:RotateAroundAxis( ang:Right(), swingSin * -80 )
 			ang:RotateAroundAxis( ang:Up(), side * -45 )
-			return pos, ang, MC_WEAPONS_FP.size * fovScale
+			return pos, ang, MC_WEAPONS_FP.size
 		end
 		local HandWeapon = MC.API and MC.API.HandWeapon or nil
 		if not firstPerson and HandWeapon and HandWeapon.GetItemThirdPersonAnchor then
@@ -909,6 +901,31 @@ if CLIENT then
 		if not pos or not ang then pos, ang = ply:GetShootPos(), ply:EyeAngles() end
 		local side = leftHand and -1 or 1
 		return pos + ang:Forward() * 2.5 + ang:Right() * ( 2.2 * side ) - ang:Up() * 1.8, ang, 7.5
+	end
+
+	local function drawFirstPersonItemModel( ply, renderer, stack, pos, ang, scale, color, modelOptions )
+		if not cam or not cam.Start3D or not cam.End3D then
+			render.OverrideDepthEnable( true, false )
+			local drawn = renderer.DrawHeldItem( stack, pos, ang, scale, color, modelOptions )
+			render.OverrideDepthEnable( false, false )
+			return drawn
+		end
+		local width, height = ScrW(), math.max( ScrH(), 1 )
+		-- cam.Start3D accepts horizontal FOV. Projection.setupPerspective in Java
+		-- accepts vertical FOV, so convert the fixed 70-degree hand projection by
+		-- the live viewport aspect instead of deriving it from the player's world
+		-- FOV. This keeps the item pose stable at every GMod FOV setting.
+		local horizontalFov = math.deg( 2 * math.atan(
+			math.tan( math.rad( MC_WEAPONS_FP.fov ) * 0.5 ) * width / height ) )
+		cam.Start3D( EyePos(), ply:EyeAngles(), horizontalFov,
+			0, 0, width, height, 0.05, 100 )
+		render.OverrideDepthEnable( true, false )
+		local ok, drawn = pcall( renderer.DrawHeldItem,
+			stack, pos, ang, scale, color, modelOptions )
+		render.OverrideDepthEnable( false, false )
+		cam.End3D()
+		if not ok then error( drawn, 0 ) end
+		return drawn
 	end
 
 	local function heldItemLightingColor( ply, pos, firstPerson, hand )
@@ -982,9 +999,13 @@ if CLIENT then
 			if not renderer or not renderer.DrawHeldItem then return false end
 			local pos, ang, scale = heldItemPose( ply, firstPerson, hand )
 			local color = heldItemLightingColor( ply, pos, firstPerson, hand )
-			render.OverrideDepthEnable( firstPerson, false )
-			local drawn = renderer.DrawHeldItem( stack, pos, ang, scale, color, modelOptions )
-			render.OverrideDepthEnable( false, false )
+			local drawn
+			if firstPerson then
+				drawn = drawFirstPersonItemModel(
+					ply, renderer, stack, pos, ang, scale, color, modelOptions )
+			else
+				drawn = renderer.DrawHeldItem( stack, pos, ang, scale, color, modelOptions )
+			end
 			return drawn == true
 		end
 
@@ -1020,7 +1041,15 @@ if CLIENT then
 	local function drawHeld( ply, firstPerson )
 		if not IsValid( ply ) or not ply:Alive() then return end
 		local weapon = ply:GetActiveWeapon()
-		if not IsValid( weapon ) or weapon:GetClass() ~= "mc_item_hand" then return end
+		if not IsValid( weapon ) then return end
+		-- MCITEM and other registered resolvers may promote the selected stack to
+		-- an inventory-proxy SWEP. The public bridge owns that lifecycle decision;
+		-- checking only the base mc_item_hand class makes every proxy-held item
+		-- disappear even though it resolves to the same selected inventory stack.
+		if weapon:GetClass() ~= "mc_item_hand" then
+			if not MC.IsInventoryHeldItemWeaponActive
+			or not MC.IsInventoryHeldItemWeaponActive( ply ) then return end
+		end
 		local using = ply:GetNWBool( "mc_item_using", false )
 		local useHand = ply:GetNWString( "mc_item_using_hand", "" )
 		if useHand ~= "offhand" then useHand = "mainhand" end
