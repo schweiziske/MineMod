@@ -15,6 +15,9 @@ _tools/equestria_mcb4_import.err
 _tools/equestria_mcb4_import.log
 _tools/equestria_region_import.err
 _tools/equestria_region_import.log
+_tools/hlsl_shader_lab/dx9_smoke_test.log
+_tools/hlsl_shader_lab/mcbr_preview.png
+_tools/hlsl_shader_lab/mcbr_preview_base_only.png
 test_lightatlas_sampling.obj
 addon.json
 !addons/mc_engine/addon.json
