@@ -357,18 +357,56 @@ local function worldNormal( transform, localNormal )
 	):GetNormalized()
 end
 
+local function visibleWorldFaces( faces, transform )
+	local view = render and render.GetViewSetup and render.GetViewSetup() or nil
+	local cameraPos = view and view.origin or ( EyePos and EyePos() or nil )
+	local visible = {}
+	for _, face in ipairs( faces ) do
+		local normal = worldNormal( transform, face.normal )
+		local center = Vector( 0, 0, 0 )
+		for _, vertex in ipairs( face.vertices ) do
+			center = center + worldPoint( transform, vertex, normal, 0 )
+		end
+		center = center * 0.25
+		-- The shared pixel material is intentionally nocull because the same
+		-- texture also serves 2D inventory polygons. Reproduce Minecraft's model
+		-- back-face culling here so first-person depth-test-without-write cannot
+		-- let hidden chest/shield faces paint over the visible shell.
+		if not cameraPos or normal:Dot( cameraPos - center ) > 0.000001 then
+			local cameraDelta = cameraPos and cameraPos - center or nil
+			visible[#visible + 1] = {
+				face = face,
+				normal = normal,
+				distanceSq = cameraDelta and cameraDelta:Dot( cameraDelta ) or 0,
+			}
+		end
+	end
+	-- The first-person hand pass intentionally depth-tests without writing to
+	-- the world depth buffer. Minecraft still gives the special model its own
+	-- depth buffer, so reproduce that ordering after culling: distant visible
+	-- faces are submitted first and nearer lid/lock faces finish the shell.
+	if cameraPos then
+		table.sort( visible, function( first, second )
+			return first.distanceSq > second.distanceSq
+		end )
+	end
+	return visible
+end
+
 local function drawWorldLayers( faces, layers, transform, worldColor )
 	if not mesh or not mesh.Begin or not render or not render.SetMaterial then return false end
 	worldColor = worldColor or color_white
 	local layerStep = math.max( transform.width, transform.height, transform.depth, 1 ) * 0.0005
+	local visible = visibleWorldFaces( faces, transform )
+	if #visible == 0 then return false end
 	local drawn = false
 	UI.WithPointFiltering( function()
 		for layerIndex, layer in ipairs( layers ) do
 			if layer.material then
 				render.SetMaterial( layer.material )
-				mesh.Begin( MATERIAL_QUADS, #faces )
-				for _, face in ipairs( faces ) do
-					local normal = worldNormal( transform, face.normal )
+				mesh.Begin( MATERIAL_QUADS, #visible )
+				for _, entry in ipairs( visible ) do
+					local face, normal = entry.face, entry.normal
 					local offset = ( layerIndex - 1 ) * layerStep
 					local color = multiplyColor( layer.color, worldColor, face.shade )
 					for _, vertex in ipairs( face.vertices ) do
@@ -389,10 +427,12 @@ end
 
 local function drawWorldGlintFaces( faces, transform, material, uvTransform, offset )
 	if not material or not isfunction( uvTransform ) then return false end
+	local visible = visibleWorldFaces( faces, transform )
+	if #visible == 0 then return false end
 	render.SetMaterial( material )
-	mesh.Begin( MATERIAL_QUADS, #faces )
-	for _, face in ipairs( faces ) do
-		local normal = worldNormal( transform, face.normal )
+	mesh.Begin( MATERIAL_QUADS, #visible )
+	for _, entry in ipairs( visible ) do
+		local face, normal = entry.face, entry.normal
 		for _, vertex in ipairs( face.vertices ) do
 			local u, v = uvTransform( vertex.u, vertex.v )
 			mesh.Position( worldPoint( transform, vertex, normal, offset ) )
