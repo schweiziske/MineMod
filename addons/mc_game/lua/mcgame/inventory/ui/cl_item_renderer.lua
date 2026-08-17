@@ -843,9 +843,15 @@ local function mcWeaponsFirstPersonTransform( plan, displayContext, basePos, bas
 	local defaultTranslation = DEFAULT_DISPLAY.firstperson_righthand.translation
 	local translationX = tonumber( translation[1] ) or defaultTranslation[1]
 	local defaultTranslationX = leftHand and -defaultTranslation[1] or defaultTranslation[1]
-	local baseXAxis = baseAng:Forward()
+	-- ItemTransform.apply() translates in the parent camera space before it
+	-- rotates the item model. Minecraft camera X/Y are screen right/up, while
+	-- positive camera Z points back toward the viewer; Source looks along
+	-- Angle:Forward(), so that parent-space Z axis is -Forward(). Left-hand X
+	-- mirroring has already been applied by displayValues() and must not be
+	-- repeated here.
+	local baseXAxis = baseAng:Right()
 	local baseYAxis = baseAng:Up()
-	local baseZAxis = leftHand and baseAng:Right() or -baseAng:Right()
+	local baseZAxis = -baseAng:Forward()
 	local pos = basePos
 		+ baseXAxis * ( ( translationX - defaultTranslationX ) * baseSize / 16 )
 		+ baseYAxis * ( ( ( tonumber( translation[2] ) or defaultTranslation[2] ) - defaultTranslation[2] ) * baseSize / 16 )
