@@ -720,6 +720,11 @@ local function emitQuad( ctx, cur, push, lightMeta, currentEmitLightStyle, corne
 		else
 			vertColor = color4
 		end
+		if ctx and ctx.fluidAnimationColorResolver then
+			vertColor = ctx.fluidAnimationColorResolver(
+				shade, faceIndex, lightCorners[ci], vertColor, bx, by, bz, id
+			) or vertColor
+		end
 		push( {
 			pos    = Vector( cn[1], cn[2], cn[3] ),
 			normal = normal,
@@ -775,7 +780,12 @@ local function emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle, verts
 		local ci = tri[t]
 		local vert = verts[ci]
 		local uv = uvCorners[ci]
-		local u, v = tileUVPointRaw( tile, uv and uv[1], uv and uv[2] )
+		local rawU, rawV = uv and uv[1], uv and uv[2]
+		local u, v, animationName
+		if ctx and ctx.fluidAnimationResolver then
+			u, v, animationName = ctx.fluidAnimationResolver( tile, faceIndex, rawU, rawV, bx, by, bz, id )
+		end
+		if u == nil or v == nil then u, v = tileUVPointRaw( tile, rawU, rawV ) end
 		local vertColor
 		if ci == 1 then
 			vertColor = color1
@@ -792,6 +802,7 @@ local function emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle, verts
 			u      = u,
 			v      = v,
 			color  = vertColor,
+			fluidAnimation = animationName,
 		}, lightMeta( shade, bx, by, bz, id, faceIndex, lightCorners[ci], emission, nil, faceCubic, 0 ) )
 	end
 end
