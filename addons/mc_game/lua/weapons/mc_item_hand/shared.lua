@@ -903,11 +903,46 @@ if CLIENT then
 		return pos + ang:Forward() * 2.5 + ang:Right() * ( 2.2 * side ) - ang:Up() * 1.8, ang, 7.5
 	end
 
+	local function setFirstPersonItemDepthState( enabled )
+		enabled = enabled == true
+		if enabled then
+			-- GameRenderer clears the main target's depth texture immediately before
+			-- renderItemInHand. Clearing Source's shared depth buffer here would break
+			-- later GMod hooks, so use the documented local equivalent instead: map
+			-- the hand pass to the near depth range while keeping depth writes disabled.
+			if render and render.OverrideDepthEnable then
+				render.OverrideDepthEnable( true, false )
+			end
+			if cam and cam.IgnoreZ then
+				cam.IgnoreZ( true )
+			elseif render and render.DepthRange then
+				render.DepthRange( 0, 0.01 )
+			end
+			return
+		end
+		if cam and cam.IgnoreZ then
+			cam.IgnoreZ( false )
+		elseif render and render.DepthRange then
+			render.DepthRange( 0, 1 )
+		end
+		if render and render.OverrideDepthEnable then
+			render.OverrideDepthEnable( false, false )
+		end
+	end
+
+	local function drawFirstPersonItemPass( renderer, stack, pos, ang, scale, color, modelOptions )
+		setFirstPersonItemDepthState( true )
+		local ok, drawn = pcall( renderer.DrawHeldItem,
+			stack, pos, ang, scale, color, modelOptions )
+		setFirstPersonItemDepthState( false )
+		return ok, drawn
+	end
+
 	local function drawFirstPersonItemModel( ply, renderer, stack, pos, ang, scale, color, modelOptions )
 		if not cam or not cam.Start3D or not cam.End3D then
-			render.OverrideDepthEnable( true, false )
-			local drawn = renderer.DrawHeldItem( stack, pos, ang, scale, color, modelOptions )
-			render.OverrideDepthEnable( false, false )
+			local ok, drawn = drawFirstPersonItemPass(
+				renderer, stack, pos, ang, scale, color, modelOptions )
+			if not ok then error( drawn, 0 ) end
 			return drawn
 		end
 		local width, height = ScrW(), math.max( ScrH(), 1 )
@@ -919,10 +954,8 @@ if CLIENT then
 			math.tan( math.rad( MC_WEAPONS_FP.fov ) * 0.5 ) * width / height ) )
 		cam.Start3D( EyePos(), ply:EyeAngles(), horizontalFov,
 			0, 0, width, height, 0.05, 100 )
-		render.OverrideDepthEnable( true, false )
-		local ok, drawn = pcall( renderer.DrawHeldItem,
-			stack, pos, ang, scale, color, modelOptions )
-		render.OverrideDepthEnable( false, false )
+		local ok, drawn = drawFirstPersonItemPass(
+			renderer, stack, pos, ang, scale, color, modelOptions )
 		cam.End3D()
 		if not ok then error( drawn, 0 ) end
 		return drawn
