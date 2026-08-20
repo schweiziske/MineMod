@@ -130,6 +130,13 @@ local function predictionTransferRules( menu, creative )
 			hotbar = { targets = { "chest", "main" } },
 		}
 	end
+	if menu.kind == "hopper" or menu.kind == "dispenser" or menu.kind == "dropper" then
+		return {
+			logistics_container = { targets = { "main", "hotbar" }, reverse = true },
+			main = { targets = { "logistics_container" } },
+			hotbar = { targets = { "logistics_container" } },
+		}
+	end
 	if menu.kind == "furnace" or menu.kind == "blast_furnace" then
 		local recipeType = menu.kind == "blast_furnace" and "minecraft:blasting" or "minecraft:smelting"
 		local function furnaceTargets( _, source )
@@ -182,6 +189,7 @@ local function buildPredictionContainer()
 	local crafting, creative = session.crafting == true, session.creative == true
 	local furnace = menu.kind == "furnace" or menu.kind == "blast_furnace"
 	local enchanting = menu.kind == "enchanting_table"
+	local logistics = menu.kind == "hopper" or menu.kind == "dispenser" or menu.kind == "dropper"
 	local recipeType = menu.kind == "blast_furnace" and "minecraft:blasting" or "minecraft:smelting"
 	local inputCount = crafting and math.max( 1, ( session.craftingWidth or 0 ) * ( session.craftingHeight or 0 ) ) or 0
 	for index = 0, menu.slotCount - 1 do
@@ -217,6 +225,8 @@ local function buildPredictionContainer()
 			meta = { role = "equipment", equipmentSlot = equipmentSlot }
 		elseif playerIndex ~= nil then
 			group = playerIndex < 9 and "hotbar" or "main"
+		elseif logistics and index < ( session.playerOffset or 0 ) then
+			group = "logistics_container"
 		elseif ( menu.kind == "chest" or menu.kind == "chest_double" ) and index < ( session.chestSlots or 0 ) then
 			group = "chest"
 		end

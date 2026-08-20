@@ -98,7 +98,12 @@ end )
 local function recordChestOverlay( bx, by, bz, record )
 	if not World or not World.SetBlockEntity then return false end
 	local saved, saveError = World.SetBlockEntity( bx, by, bz, record, { reason = "chest_runtime" } )
-	if saved == true then return true end
+	if saved == true then
+		-- World.GetBlockEntity returns a private copy of the transaction-stamped
+		-- record.  Menus must not keep the pre-write revision.
+		local persisted = World.GetBlockEntity and World.GetBlockEntity( bx, by, bz ) or nil
+		return type( persisted ) == "table" and persisted or record
+	end
 	local message = "[MC Chest] lazy overlay record failed: " .. tostring( saveError or "unknown" ) .. "\n"
 	if ErrorNoHalt then ErrorNoHalt( message ) else print( message ) end
 	return false
@@ -116,8 +121,7 @@ local function ensureMutableChestBlockEntity( bx, by, bz )
 	if not Blocks or not Blocks.CreateDefaultBlockEntity then return nil end
 	local created = Blocks.CreateDefaultBlockEntity( stateId )
 	if type( created ) ~= "table" then return nil end
-	if not recordChestOverlay( bx, by, bz, created ) then return nil end
-	return created
+	return recordChestOverlay( bx, by, bz, created ) or nil
 end
 
 local function stateInfoAt( bx, by, bz )
@@ -189,7 +193,10 @@ local function markChestDirty( chestRecords )
 	for _, entry in ipairs( chestRecords or {} ) do
 		entry.record.dirty = true
 		local position = entry.position
-		if position then recordChestOverlay( position.bx, position.by, position.bz, entry.record ) end
+		if position then
+			local persisted = recordChestOverlay( position.bx, position.by, position.bz, entry.record )
+			if type( persisted ) == "table" then entry.record = persisted end
+		end
 	end
 end
 
@@ -324,17 +331,18 @@ function SV.LogisticsChestContainerAt( bx, by, bz )
 	}
 end
 
-function SV.LogisticsCommitChestContainer( container )
+function SV.LogisticsCommitChestContainer( container, options )
 	if type( container ) ~= "table" or type( container.records ) ~= "table"
 		or type( container.storage ) ~= "table" then return false, "invalid_chest_commit" end
+	options = type( options ) == "table" and options or {}
 	for index, entry in ipairs( container.records ) do
 		local base = ( index - 1 ) * CHEST_SLOTS
 		local storage = container.storages[index] or {}
 		for slot = 1, CHEST_SLOTS do storage[slot] = MC.CopyItemStack( container.storage[base + slot] ) end
 		container.storages[index] = storage
-		encodeChestRecord( entry.record, storage )
+		if not options.persisted then encodeChestRecord( entry.record, storage ) end
 	end
-	markChestDirty( container.records )
+	if not options.persisted then markChestDirty( container.records ) end
 
 	for _, playerRecord in pairs( SV.PlayerInventories or {} ) do
 		local session = playerRecord.session
@@ -344,6 +352,9 @@ function SV.LogisticsCommitChestContainer( container )
 			for menuIndex, menuEntry in ipairs( menu.chestRecords ) do
 				for sourceIndex, sourceEntry in ipairs( container.records ) do
 					if samePosition( menuEntry.position, sourceEntry.position ) then
+						local position = sourceEntry.position
+						local persisted = position and mutableBlockEntity( position.bx, position.by, position.bz ) or nil
+						if persisted then menuEntry.record = persisted end
 						local target = menu.chestStorages[menuIndex]
 						local source = container.storages[sourceIndex]
 						for slot = 1, CHEST_SLOTS do

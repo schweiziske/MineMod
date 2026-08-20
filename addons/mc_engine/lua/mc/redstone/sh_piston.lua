@@ -569,9 +569,22 @@ end
 -- both trigger the piston and be displaced by the head, retriggering forever.
 local function pistonPowered( context )
 	local offset = pistonOffset( context.stateId )
-	return MC.RedstoneBestNeighborSignal(
+	if MC.RedstoneBestNeighborSignal(
 		context.bx, context.by, context.bz,
 		context.bx + offset[1], context.by + offset[2], context.bz + offset[3]
+	) > 0 then return true end
+	-- PistonBaseBlock#getNeighborSignal has two extra checks beyond ordinary
+	-- direct neighbours: weak/direct power delivered through the piston cell's
+	-- DOWN face, then quasi-connectivity from every non-DOWN neighbour of the
+	-- block above.  Sampling the upper cell while ignoring the piston itself
+	-- covers exactly those five directions in the engine's z-up coordinates.
+	if MC.RedstoneSignalAt
+	and MC.RedstoneSignalAt( context.bx, context.by, context.bz, 0, 0, -1 ) > 0 then
+		return true
+	end
+	return MC.RedstoneBestNeighborSignal(
+		context.bx, context.by, context.bz + 1,
+		context.bx, context.by, context.bz
 	) > 0
 end
 

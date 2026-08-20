@@ -18,6 +18,8 @@ local CREATIVE_COLS, CREATIVE_ROWS = 9, 5
 local SURVIVAL_BACKGROUND = UI.GetGuiMaterial( "container/inventory" )
 local CRAFTING_BACKGROUND = UI.GetGuiMaterial( "container/crafting_table" )
 local CHEST_BACKGROUND = UI.GetGuiMaterial( "container/generic_54" )
+local HOPPER_BACKGROUND = UI.GetGuiMaterial( "container/hopper" )
+local DISPENSER_BACKGROUND = UI.GetGuiMaterial( "container/dispenser" )
 local FURNACE_BACKGROUND = UI.GetGuiMaterial( "container/furnace" )
 local BLAST_FURNACE_BACKGROUND = UI.GetGuiMaterial( "container/blast_furnace" )
 local BREWING_BACKGROUND = UI.GetGuiMaterial( "container/brewing_stand" )
@@ -551,6 +553,8 @@ function PANEL:Configure( session, state )
 	self.State = state or MC.ClientInventory
 	self.MenuKind = session and session.kind or "player"
 	self.Chest = self.MenuKind == "chest"
+	self.Hopper = self.MenuKind == "hopper"
+	self.Dispenser = self.MenuKind == "dispenser" or self.MenuKind == "dropper"
 	self.CraftingTable = self.MenuKind == "crafting_table"
 	self.Furnace = self.MenuKind == "furnace" or self.MenuKind == "blast_furnace"
 	self.BlastFurnace = self.MenuKind == "blast_furnace"
@@ -657,7 +661,11 @@ function PANEL:Reflow()
 		self.ContentW, self.ContentH = 176, 114 + self.ChestRows * 18
 		self.Left = math.floor( ( ScrW() - self.ContentW * self.Scale ) * 0.5 + offsetX )
 		self.Top = math.floor( ( ScrH() - self.ContentH * self.Scale ) * 0.5 + offsetY )
-	elseif self.Furnace or self.Brewing or self.Anvil or self.Enchanting then
+	elseif self.Hopper then
+		self.ContentW, self.ContentH = 176, 133
+		self.Left = math.floor( ( ScrW() - self.ContentW * self.Scale ) * 0.5 + offsetX )
+		self.Top = math.floor( ( ScrH() - self.ContentH * self.Scale ) * 0.5 + offsetY )
+	elseif self.Dispenser or self.Furnace or self.Brewing or self.Anvil or self.Enchanting then
 		self.ContentW, self.ContentH = SURVIVAL_W, SURVIVAL_H
 		self.Left = math.floor( ( ScrW() - SURVIVAL_W * self.Scale ) * 0.5 + offsetX )
 		self.Top = math.floor( ( ScrH() - SURVIVAL_H * self.Scale ) * 0.5 + offsetY )
@@ -803,6 +811,33 @@ function PANEL:LayoutVisibleSlots()
 		end
 		for index = 0, 8 do
 			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index, 8 + index * 18, inventoryTop + 58 )
+		end
+	elseif self.Hopper then
+		for index = 0, 4 do
+			ordinal = self:PlaceMenuSlot( ordinal, index, nil, 44 + index * 18, 20 )
+		end
+		local playerOffset = math.floor( tonumber( self.Session and self.Session.playerOffset ) or 5 )
+		for index = 9, 35 do
+			local position = index - 9
+			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index,
+				8 + position % 9 * 18, 51 + math.floor( position / 9 ) * 18 )
+		end
+		for index = 0, 8 do
+			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index, 8 + index * 18, 109 )
+		end
+	elseif self.Dispenser then
+		for index = 0, 8 do
+			ordinal = self:PlaceMenuSlot( ordinal, index, nil,
+				62 + index % 3 * 18, 17 + math.floor( index / 3 ) * 18 )
+		end
+		local playerOffset = math.floor( tonumber( self.Session and self.Session.playerOffset ) or 9 )
+		for index = 9, 35 do
+			local position = index - 9
+			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index,
+				8 + position % 9 * 18, 84 + math.floor( position / 9 ) * 18 )
+		end
+		for index = 0, 8 do
+			ordinal = self:PlaceMenuSlot( ordinal, playerOffset + index, index, 8 + index * 18, 142 )
 		end
 	elseif self.Enchanting then
 		ordinal = self:PlaceMenuSlot( ordinal, 0, nil, 15, 47, "input" )
@@ -978,7 +1013,8 @@ function PANEL:LayoutSpecialControls()
 			end
 		end
 	end
-	local preview = not self.Chest and not self.Furnace and not self.Brewing and not self.Anvil and not self.Enchanting and not self.CraftingTable
+	local preview = not self.Chest and not self.Hopper and not self.Dispenser
+		and not self.Furnace and not self.Brewing and not self.Anvil and not self.Enchanting and not self.CraftingTable
 		and ( not self.Creative or tab and tab.key == "inventory" )
 	if IsValid( self.PlayerPreview ) then self.PlayerPreview:SetVisible( preview == true ) end
 	if preview and IsValid( self.PlayerPreview ) then
@@ -1160,6 +1196,8 @@ function PANEL:ClearHoveredSlot( slot ) if self.HoveredSlot == slot then self.Ho
 
 function PANEL:BackgroundMaterial()
 	if self.Chest then return CHEST_BACKGROUND end
+	if self.Hopper then return HOPPER_BACKGROUND end
+	if self.Dispenser then return DISPENSER_BACKGROUND end
 	if self.Enchanting then return ENCHANTING_BACKGROUND end
 	if self.Anvil then return ANVIL_BACKGROUND end
 	if self.Brewing then return BREWING_BACKGROUND end
@@ -1343,7 +1381,7 @@ function PANEL:PaintContent()
 			UI.DrawText( chinese and "物品栏" or "Inventory", self.Left + 8 * self.Scale, self.Top + 72 * self.Scale,
 				self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
 		end
-	elseif not self.Creative then
+	elseif not self.Creative and not self.Hopper and not self.Dispenser then
 		UI.DrawText( "Inventory", self.Left + 8 * self.Scale, self.Top + 72 * self.Scale,
 			self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
 	elseif self.Creative then
