@@ -42,6 +42,12 @@ local COMBAT_INFRASTRUCTURE = {
 	mc_collision_carrier = true, mc_item_drop = true, mc_projectile = true,
 }
 
+local function decorationCombatTarget( target )
+	return IsValid( target ) and MC.Decoration and MC.Decoration.Enabled
+		and MC.Decoration.Enabled() and MC.Decoration.EntityDecorationTarget
+		and MC.Decoration.EntityDecorationTarget( target ) == true
+end
+
 local function aimedBlock( ply )
 	return MC.PlayerBlockAim and MC.PlayerBlockAim( ply ) or nil
 end
@@ -53,6 +59,7 @@ local function traceCombatTarget( ply, trace )
 	if not IsValid( target ) or target == ply or target.IsWorld and target:IsWorld() then return nil end
 	if COMBAT_INFRASTRUCTURE[target.GetClass and target:GetClass() or ""] then return nil end
 	local attackable = vehicle ~= nil
+		or decorationCombatTarget( target )
 		or target.IsPlayer and target:IsPlayer()
 		or target.IsNPC and target:IsNPC()
 		or target.IsNextBot and target:IsNextBot()
@@ -97,12 +104,12 @@ local function traceItemEntityTarget( ply )
 	return target, trace
 end
 
-local function runItemEntityInteraction( ply, target, stack, trace, preview, source )
-	if not IsValid( ply ) or not IsValid( target ) or not istable( stack ) then return nil end
+local function runItemEntityInteraction( ply, target, stack, trace, preview, source, hand )
+	if not IsValid( ply ) or not IsValid( target ) then return nil end
 	local eventStack = copiedInteractionStack( stack )
 	local eventContext = {
 		preview = preview == true,
-		hand = "mainhand",
+		hand = hand == "offhand" and "offhand" or "mainhand",
 		source = source or "minecraft_hand",
 		hitPos = trace and trace.HitPos and Vector( trace.HitPos ) or nil,
 		hitNormal = trace and trace.HitNormal and Vector( trace.HitNormal ) or nil,
@@ -115,6 +122,27 @@ local function runItemEntityInteraction( ply, target, stack, trace, preview, sou
 		ErrorNoHalt( "[MC Game] event listener error in MC.UseItemOnEntity: " .. tostring( result ) .. "\n" )
 	end
 	return nil
+end
+
+local function offhandStackForRealm( ply )
+	if SERVER then
+		local record = MC.SV and MC.SV.GetPlayerInventoryRecord
+			and MC.SV.GetPlayerInventoryRecord( ply, false ) or nil
+		return record and record.equipment and record.equipment.offhand or nil
+	end
+	local state = MC.ClientInventory
+	return state and state.equipment and state.equipment.offhand or nil
+end
+
+-- Minecraft's client attempts MAIN_HAND first and only sends OFF_HAND when the
+-- first interaction returns PASS. nil is this bridge's PASS; false is FAIL and
+-- therefore stops the second hand.
+local function runItemEntityInteractionHands( ply, target, mainStack, trace, preview, source )
+	local result = runItemEntityInteraction(
+		ply, target, mainStack, trace, preview, source, "mainhand" )
+	if result ~= nil then return result, "mainhand" end
+	return runItemEntityInteraction(
+		ply, target, offhandStackForRealm( ply ), trace, preview, source, "offhand" ), "offhand"
 end
 
 local function breakTarget( ply, aim, trace )
@@ -216,10 +244,15 @@ local function proxyWorldInteractionCandidate( ply, stack )
 	if IsValid( vehicle ) then return "vehicle", vehicle end
 	local entity, trace = traceItemEntityTarget( ply )
 	if IsValid( entity ) then
-		local preview = runItemEntityInteraction( ply, entity, stack, trace, true, "inventory_proxy_preview" )
+		local preview = runItemEntityInteractionHands( ply, entity, stack, trace, true, "inventory_proxy_preview" )
 		if preview ~= nil then return "entity", { entity = entity, trace = trace } end
 	end
 	local aim = aimedBlock( ply )
+	local hit = aim or trace
+	if stack and hit and MC.Decoration and MC.Decoration.PreviewPlace then
+		local preview = MC.Decoration.PreviewPlace( ply, stack, hit )
+		if preview ~= nil then return "decoration", hit end
+	end
 	if aim and blockHasUse( aim.Block, stack ) then return "block", aim end
 	return nil, nil
 end
@@ -234,9 +267,13 @@ local function performProxyWorldInteraction( ply, stack, kind, target )
 		return MC.SV.UseMinecraftVehicle( ply, target ) == true
 	end
 	if kind == "entity" and IsValid( target.entity ) then
-		local result = runItemEntityInteraction(
+		local result = runItemEntityInteractionHands(
 			ply, target.entity, stack, target.trace, false, "inventory_proxy" )
 		return result ~= nil
+	end
+	if kind == "decoration" then
+		return hook.Run( "MC.TryPlaceDecoration", ply, copiedInteractionStack( stack ),
+			target, { source = "inventory_proxy" } ) ~= nil
 	end
 	if kind == "block" and MC.SV.Use then
 		local definition = stack and MC.GetItem( stack.item ) or nil
@@ -547,10 +584,20 @@ function SWEP:SecondaryAttack()
 		local record, stack, definition = selectedRecord( ply )
 		local entity = traceItemEntityTarget( ply )
 		if IsValid( entity ) then
-			local entityResult = runItemEntityInteraction(
+			local entityResult = runItemEntityInteractionHands(
 				ply, entity, stack, eyeTrace, false, "hand_secondary" )
 			if entityResult ~= nil then
 				self.MCSecondaryMode = entityResult == true and "entity" or "entity_rejected"
+				return
+			end
+		end
+		if stack and MC.Decoration and MC.Decoration.IsDecorationItem
+		and MC.Decoration.IsDecorationItem( stack ) and MC.Decoration.Enabled
+		and MC.Decoration.Enabled() then
+			local decorationResult = hook.Run( "MC.TryPlaceDecoration", ply,
+				copiedInteractionStack( stack ), trace, { source = "hand_secondary" } )
+			if decorationResult ~= nil then
+				self.MCSecondaryMode = decorationResult == true and "decoration" or "decoration_rejected"
 				return
 			end
 		end
@@ -611,10 +658,17 @@ function SWEP:SecondaryAttack()
 		local stack = state and state.slots[( state.selected or 0 ) + 1] or nil
 		local entity = traceItemEntityTarget( ply )
 		if IsValid( entity ) then
-			local entityResult = runItemEntityInteraction(
+			local entityResult = runItemEntityInteractionHands(
 				ply, entity, stack, eyeTrace, true, "hand_preview" )
 			if entityResult ~= nil then
 				self.MCSecondaryMode = entityResult == true and "entity" or "entity_rejected"
+				return
+			end
+		end
+		if stack and MC.Decoration and MC.Decoration.PreviewPlace then
+			local decorationResult = MC.Decoration.PreviewPlace( ply, stack, trace )
+			if decorationResult ~= nil then
+				self.MCSecondaryMode = decorationResult == true and "decoration" or "decoration_rejected"
 				return
 			end
 		end
@@ -831,8 +885,31 @@ if CLIENT then
 	-- performed the interaction.  The offhand still renders its item, but it
 	-- must not borrow the active weapon's main-hand animation state.
 	local function animationWeaponFor( ply, leftHand )
-		if leftHand then return nil end
-		return ply:GetActiveWeapon()
+		if leftHand or not IsValid( ply ) then return nil end
+		local weapon = ply:GetActiveWeapon()
+		if not IsValid( weapon ) then return nil end
+		-- The engine presentation bridge calls both callbacks as part of its
+		-- vanilla first-person hand pose.  They are optional capabilities, not
+		-- part of the SWEP base contract: MCITEM resolver weapons (for example
+		-- weapon_mcitem_cod) deliberately do not implement them.  Returning nil
+		-- here makes the bridge take its neutral IsValid(nil) path; checking only
+		-- the class would make every newly registered proxy a new hard-coded case.
+		if type( weapon.CreativePlaceAnim ) ~= "function"
+		or type( weapon.CreativeMainHandInverseHeight ) ~= "function" then
+			return nil
+		end
+		return weapon
+	end
+
+	-- Inventory-proxy SWEPs are allowed to drive held-item presentation, but
+	-- CreativePlaceAnim/CreativeMainHandInverseHeight are optional helpers owned
+	-- by mc_item_hand and mc_creative_placer.  Unknown weapons keep rendering
+	-- with the neutral vanilla pose instead of receiving an unconditional call.
+	local function optionalWeaponAnimation( weapon, methodName )
+		if not IsValid( weapon ) then return 0 end
+		local callback = weapon[methodName]
+		if type( callback ) ~= "function" then return 0 end
+		return tonumber( callback( weapon ) ) or 0
 	end
 
 	local function heldPose( ply, firstPerson, hand )
@@ -868,8 +945,8 @@ if CLIENT then
 			local eyeAng = ply:EyeAngles()
 			local side = leftHand and -1 or 1
 			local weapon = animationWeaponFor( ply, leftHand )
-			local swing = IsValid( weapon ) and weapon:CreativePlaceAnim() or 0
-			local equip = IsValid( weapon ) and weapon:CreativeMainHandInverseHeight() or 0
+			local swing = optionalWeaponAnimation( weapon, "CreativePlaceAnim" )
+			local equip = optionalWeaponAnimation( weapon, "CreativeMainHandInverseHeight" )
 			local swingRoot = math.sqrt( math.max( swing, 0 ) )
 			local swingSin = math.sin( swingRoot * math.pi )
 			local swingSin2 = math.sin( swingRoot * math.pi * 2 )
@@ -1093,7 +1170,13 @@ if CLIENT then
 			startedAt = ply:GetNWFloat( "mc_item_using_start", 0 ),
 			duration = ply:GetNWFloat( "mc_item_using_duration", 0 ),
 		}
-		drawHeldStack( ply, selectedStack( ply ), firstPerson, "mainhand", useState )
+		local HandWeapon = MC.API and MC.API.HandWeapon or nil
+		local ownsFirstPerson = firstPerson and HandWeapon
+			and HandWeapon.OwnsFirstPersonPresentation
+			and HandWeapon.OwnsFirstPersonPresentation( weapon ) == true
+		if not ownsFirstPerson then
+			drawHeldStack( ply, selectedStack( ply ), firstPerson, "mainhand", useState )
+		end
 		drawHeldStack( ply, equipmentStack( ply, "offhand" ), firstPerson, "offhand", useState )
 	end
 

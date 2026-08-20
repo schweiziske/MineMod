@@ -65,6 +65,8 @@ local function dropOverflow( ply, stack, context )
 	local position = SV.PlayerItemDropPosition and SV.PlayerItemDropPosition( ply ) or ply:GetShootPos()
 	local entity = SV.SpawnItemDrop( position, stack, ply, {
 		noMerge = true,
+		pickupDelay = MC.ItemEntityParity and MC.ItemEntityParity.Enabled
+			and MC.ItemEntityParity.Enabled() and 2.0 or nil,
 		velocity = SV.PlayerThrownDropVelocity and SV.PlayerThrownDropVelocity( ply ) or nil,
 		reason = context.reason or "selected_consume_overflow",
 	} )
@@ -133,10 +135,10 @@ end
 
 MC.ConsumeSelectedItem = SV.ConsumeSelectedItem
 
--- Death-protection items are consumed from either currently held hand even in
--- infinite-material mode. Java LivingEntity.checkTotemDeathProtection calls
--- ItemStack.shrink(1) directly, so this deliberately does not share the normal
--- creative no-consume behavior of ConsumeSelectedItem.
+-- Held-stack consumers use exact main/off-hand storage. The default remains a
+-- real shrink even in infinite-material mode because death protection calls
+-- ItemStack.shrink(1) directly. Callers whose Java path uses ItemStack.consume
+-- or Player#interactOn may opt into `respectInfiniteMaterials=true`.
 local function heldStackMatches( stack, context )
 	if not stack then return false end
 	if context.expectedItem and stack.item ~= context.expectedItem then return false end
@@ -160,6 +162,10 @@ function SV.ConsumeHeldItem( ply, amount, context )
 		local stack = record.equipment and record.equipment.offhand or nil
 		if not heldStackMatches( stack, context ) then return nil, 0, nil, "held_item_mismatch" end
 		if stack.count < amount then return nil, 0, nil, "held_item_count_too_low" end
+		if context.respectInfiniteMaterials == true and SV.PlayerHasInfiniteMaterials
+		and SV.PlayerHasInfiniteMaterials( ply ) then
+			return { ok = true, infinite = true, changedSlots = {} }, amount, MC.CopyItemStack( stack )
+		end
 		if not SV.EquipmentSnapshot or not SV.CommitEquipmentMutation then
 			return nil, 0, nil, "equipment_api_unavailable"
 		end
@@ -185,6 +191,10 @@ function SV.ConsumeHeldItem( ply, amount, context )
 	local stack = record.storage and record.storage[slotIndex + 1] or nil
 	if not heldStackMatches( stack, context ) then return nil, 0, nil, "held_item_mismatch" end
 	if stack.count < amount then return nil, 0, nil, "held_item_count_too_low" end
+	if context.respectInfiniteMaterials == true and SV.PlayerHasInfiniteMaterials
+	and SV.PlayerHasInfiniteMaterials( ply ) then
+		return { ok = true, infinite = true, changedSlots = {} }, amount, MC.CopyItemStack( stack )
+	end
 	local snapshot = MC.ContainerSnapshot( record.container )
 	local remainingCount = stack.count - amount
 	local remaining = remainingCount > 0 and MC.CopyItemStack( stack, remainingCount ) or nil

@@ -19,6 +19,41 @@ SV.BlockLootCatalog = catalog
 local TOOL_TIER = { wood = 0, gold = 0, stone = 1, copper = 1, iron = 2, diamond = 3, netherite = 4 }
 local warned = {}
 
+-- Block drops and block experience are separate Java effects.  In particular,
+-- Silk Touch changes the ordinary block-experience effect to zero, while the
+-- hard-coded BlockBehaviour overrides for a mob spawner and a natural
+-- Creaking Heart still award their own ranges.  Keep this table here (next to
+-- the authoritative tool/drop checks) so callers cannot accidentally award XP
+-- before a valid mining transaction has been established.
+local BLOCK_EXPERIENCE_RANGES = {
+	["minecraft:coal_ore"] = { 0, 2 },
+	["minecraft:deepslate_coal_ore"] = { 0, 2 },
+	["minecraft:nether_gold_ore"] = { 0, 1 },
+	["minecraft:lapis_ore"] = { 2, 5 },
+	["minecraft:deepslate_lapis_ore"] = { 2, 5 },
+	["minecraft:diamond_ore"] = { 3, 7 },
+	["minecraft:deepslate_diamond_ore"] = { 3, 7 },
+	["minecraft:emerald_ore"] = { 3, 7 },
+	["minecraft:deepslate_emerald_ore"] = { 3, 7 },
+	["minecraft:nether_quartz_ore"] = { 2, 5 },
+	["minecraft:redstone_ore"] = { 1, 5 },
+	["minecraft:deepslate_redstone_ore"] = { 1, 5 },
+	["minecraft:sculk"] = { 1, 1 },
+	["minecraft:sculk_catalyst"] = { 5, 5 },
+	["minecraft:sculk_sensor"] = { 5, 5 },
+	["minecraft:calibrated_sculk_sensor"] = { 5, 5 },
+	["minecraft:sculk_shrieker"] = { 5, 5 },
+}
+
+local ZERO_EXPERIENCE_BLOCKS = {
+	["minecraft:iron_ore"] = true,
+	["minecraft:deepslate_iron_ore"] = true,
+	["minecraft:gold_ore"] = true,
+	["minecraft:deepslate_gold_ore"] = true,
+	["minecraft:copper_ore"] = true,
+	["minecraft:deepslate_copper_ore"] = true,
+}
+
 local function warnOnce( key, message )
 	if warned[key] then return end
 	warned[key] = true
@@ -29,6 +64,18 @@ local function blockNameForState( stateId )
 	local blockId = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or nil
 	local block = blockId and MC.Blocks and MC.Blocks[blockId] or nil
 	return block and block.mcid or nil, blockId
+end
+
+local function randomInteger( minimum, maximum )
+	minimum, maximum = math.floor( tonumber( minimum ) or 0 ), math.floor( tonumber( maximum ) or 0 )
+	if maximum < minimum then minimum, maximum = maximum, minimum end
+	if minimum == maximum then return minimum end
+	return math.random( minimum, maximum )
+end
+
+local function stateProperty( stateId, property )
+	if not MC.GetStateProperty then return nil end
+	return MC.GetStateProperty( stateId, property )
 end
 
 local function enchantmentLevel( stack, enchantment )
@@ -44,6 +91,10 @@ local function enchantmentLevel( stack, enchantment )
 		end
 	end
 	return 0
+end
+
+local function hasSilkTouch( stack )
+	return enchantmentLevel( stack, "minecraft:silk_touch" ) > 0
 end
 
 local FLOAT_MAX = 3.402823466e38
@@ -403,14 +454,19 @@ local function applyFunction( stack, fn, context )
 		return stack
 	end
 	if kind == "minecraft:apply_bonus" then
-		local level = enchantmentLevel( context.tool, fn.enchantment or "minecraft:fortune" )
-		if level <= 0 then return stack end
+		local level = math.max( 0, enchantmentLevel( context.tool, fn.enchantment or "minecraft:fortune" ) )
 		if fn.formula == "minecraft:ore_drops" then
-			local bonus = math.max( 0, math.random( 0, level + 1 ) - 1 )
-			stack.count = stack.count * ( bonus + 1 )
+			if level > 0 then
+				local bonus = math.max( 0, math.random( 0, level + 1 ) - 1 )
+				stack.count = stack.count * ( bonus + 1 )
+			end
 		elseif fn.formula == "minecraft:uniform_bonus_count" then
-			stack.count = stack.count + math.random( 0, level * math.floor( tonumber( fn.parameters and fn.parameters.bonusMultiplier ) or 1 ) )
+			local maximum = level * math.floor( tonumber( fn.parameters and fn.parameters.bonusMultiplier ) or 1 )
+			if maximum > 0 then stack.count = stack.count + math.random( 0, maximum ) end
 		elseif fn.formula == "minecraft:binomial_with_bonus_count" then
+			-- ApplyBonusCount.BinomialWithBonusCount always runs its `extra`
+			-- rounds, even at enchantment level zero. Crop tables rely on those
+			-- base rounds for ordinary mature wheat/carrot/potato/beetroot drops.
 			local extra = math.floor( tonumber( fn.parameters and fn.parameters.extra ) or 0 )
 			local probability = tonumber( fn.parameters and fn.parameters.probability ) or 0
 			for _ = 1, level + extra do if math.Rand( 0, 1 ) < probability then stack.count = stack.count + 1 end end
@@ -479,7 +535,10 @@ function SV.ResolveBlockDrops( stateId, toolStack, context )
 	and context.skipCorrectToolCheck ~= true then
 		return {}, "incorrect_tool"
 	end
-	local lootTable = catalog and catalog.tables and catalog.tables[mining.block] or nil
+	local publicLoot = MC.ModBlockLootDefinitions and MC.ModBlockLootDefinitions[mining.block] or nil
+	if publicLoot and not publicLoot.lootTable then return {}, "block_loot_unresolved" end
+	local lootTable = publicLoot and publicLoot.lootTable
+		or catalog and catalog.tables and catalog.tables[mining.block] or nil
 	if not lootTable then return {}, "missing_loot_table" end
 	context.stateId, context.block, context.tool = stateId, mining.block, toolStack
 	local output = {}
@@ -500,4 +559,68 @@ function SV.ResolveBlockDrops( stateId, toolStack, context )
 		end
 	end
 	return output, nil, mining
+end
+
+-- Java's block-experience effect is evaluated independently from the item
+-- loot table.  Keep the resolver side-effect free with respect to the world;
+-- callers invoke it only after their authoritative block transaction commits.
+-- Returns value, error, metadata.  A valid block with no experience simply
+-- returns 0, nil rather than an artificial orb.
+function SV.ResolveBlockExperience( stateId, toolStack, context )
+	context = context or {}
+	local blockName, blockId = blockNameForState( stateId )
+	if not blockName or not blockId then return 0, "unknown_block" end
+	if context.successful == false or context.broken == false then
+		return 0, "break_not_committed"
+	end
+	if context.creative == true
+		or ( context.player and SV.PlayerIsCreative and SV.PlayerIsCreative( context.player ) ) then
+		return 0, "creative_mode"
+	end
+
+	local mining = MC.BlockMiningToolSpec and MC.BlockMiningToolSpec( stateId, toolStack ) or nil
+	if mining and mining.correctForDrops == false and context.skipCorrectToolCheck ~= true then
+		return 0, "incorrect_tool"
+	end
+
+	local natural = stateProperty( stateId, "natural" ) == true
+	local silkTouch = hasSilkTouch( toolStack )
+	local minimum, maximum
+	local special
+	if blockName == "minecraft:spawner" then
+		-- BaseSpawnerBlock drops 15 + two independent uniform(0, 14) rolls.
+		minimum, maximum, special = 15, 43, "spawner"
+	elseif blockName == "minecraft:creaking_heart" and natural then
+		-- Natural CreakingHeartBlock awards 20..24; player-placed hearts do not.
+		minimum, maximum, special = 20, 24, "natural_creaking_heart"
+	else
+		local range = BLOCK_EXPERIENCE_RANGES[blockName]
+		if range then
+			minimum, maximum = range[1], range[2]
+		elseif ZERO_EXPERIENCE_BLOCKS[blockName] then
+			minimum, maximum = 0, 0
+		else
+			minimum, maximum = 0, 0
+		end
+		if silkTouch then minimum, maximum = 0, 0 end
+	end
+
+	local value
+	if special == "spawner" then
+		value = 15 + randomInteger( 0, 14 ) + randomInteger( 0, 14 )
+	elseif minimum > 0 or maximum > 0 then
+		value = randomInteger( minimum, maximum )
+	else
+		value = 0
+	end
+	return value, nil, {
+		block = blockName,
+		blockId = blockId,
+		stateId = stateId,
+		silkTouch = silkTouch,
+		natural = natural,
+		special = special,
+		minimum = minimum,
+		maximum = maximum,
+	}
 end

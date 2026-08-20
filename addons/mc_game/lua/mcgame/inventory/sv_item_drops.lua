@@ -14,8 +14,22 @@ local SV = MC.SV
 local MERGE_RADIUS = 24
 local MINECRAFT_TICKS_PER_SECOND = 20
 
-local function appendDeathDrop( drops, stack )
-	if MC.IsEmptyItemStack( stack ) then return end
+local function itemParity()
+	local parity = MC and MC.ItemEntityParity
+	return parity and parity.Enabled and parity.Enabled() == true or false
+end
+
+local function shouldDropOnDeath( ply, stack, context )
+	if MC.IsEmptyItemStack( stack ) then return false end
+	if not hook or type( hook.Run ) ~= "function" then return true end
+	local called, result = pcall( hook.Run, "MC.ShouldDropItemStackOnDeath", ply, stack, context or {} )
+	-- A broken optional listener must not silently delete a player's inventory;
+	-- only an explicit false veto suppresses the drop.
+	return not called or result ~= false
+end
+
+local function appendDeathDrop( drops, stack, ply, context )
+	if not shouldDropOnDeath( ply, stack, context ) then return end
 	drops[#drops + 1] = MC.CopyItemStack( stack )
 end
 
@@ -60,6 +74,9 @@ local function mergeInto( target, sourceStack, sourceEntity )
 end
 
 function SV.TryMergeItemDrop( ent )
+	if itemParity() and MC.ItemEntityParity.TryMergeNeighbours then
+		return MC.ItemEntityParity.TryMergeNeighbours( ent )
+	end
 	if not IsValid( ent ) or ent.MCDropMerging or ent.MCPickupReadyAt == math.huge then return false end
 	if not ents or not ents.FindInSphere then return false end
 	ent.MCDropMerging = true
@@ -85,6 +102,9 @@ function SV.TryMergeItemDrop( ent )
 end
 
 local function mergeAtPosition( position, stack, actor, options )
+	-- ItemEntity constructors never perform a spawn-time coalescing pass. The
+	-- Java entity waits for its scheduled 2/40-tick neighbour scan instead.
+	if itemParity() then return nil end
 	if options.noMerge == true or not ents or not ents.FindInSphere then return nil end
 	for _, ent in ipairs( ents.FindInSphere( position, MERGE_RADIUS ) or {} ) do
 		local requestedTarget = options.target
@@ -181,17 +201,24 @@ function SV.SpawnItemDrop( position, input, actor, options )
 		ent:Remove()
 		return nil, setError or "item_drop_stack_rejected"
 	end
-	ent:SetPickupDelay( tonumber( options.pickupDelay ) or 0.5 )
+	local parity = MC.ItemEntityParity
+	local defaultDelay = itemParity() and parity.Constants.defaultPickupDelayTicks * parity.Constants.tickSeconds or 0.5
+	ent:SetPickupDelay( tonumber( options.pickupDelay ) or defaultDelay )
 	ent:SetDropOwner( actor, options.target )
 	if options.lifetime ~= nil then
 		local lifetime = tonumber( options.lifetime )
-		if lifetime and lifetime <= 0 then ent:SetUnlimitedLifetime() elseif lifetime then ent.MCLifetime = math.min( lifetime, 86400 ) end
+		if itemParity() and parity.SetLifetimeSeconds then
+			parity.SetLifetimeSeconds( ent, lifetime )
+		elseif lifetime and lifetime <= 0 then ent:SetUnlimitedLifetime()
+		elseif lifetime then ent.MCLifetime = math.min( lifetime, 86400 ) end
 	end
 
 	local velocity = options.velocity
 	if not isvector( velocity ) then velocity = randomVelocity() end
 	local physics = ent:GetPhysicsObject()
-	if IsValid( physics ) then
+	if itemParity() and parity.SetInitialVelocity then
+		parity.SetInitialVelocity( ent, velocity )
+	elseif IsValid( physics ) then
 		physics:SetVelocity( velocity )
 		physics:AddAngleVelocity( VectorRand() * 120 )
 	end
@@ -216,18 +243,31 @@ function SV.DropPlayerInventoryOnDeath( ply )
 	local container = record.container
 	local inventorySnapshot = container and MC.ContainerSnapshot( container ) or nil
 	if container then
-		for slot = 0, 35 do appendDeathDrop( drops, MC.ContainerGetStack( container, slot ) ) end
-		appendDeathDrop( drops, container.cursor )
+		for slot = 0, 35 do
+			appendDeathDrop( drops, MC.ContainerGetStack( container, slot ), ply, {
+				source = "inventory",
+				slot = slot,
+			} )
+		end
+		appendDeathDrop( drops, container.cursor, ply, { source = "cursor" } )
 	else
-		for slot = 1, 36 do appendDeathDrop( drops, record.storage and record.storage[slot] ) end
+		for slot = 1, 36 do
+			appendDeathDrop( drops, record.storage and record.storage[slot], ply, {
+				source = "inventory",
+				slot = slot - 1,
+			} )
+		end
 	end
 	local equipmentSnapshot = SV.EquipmentSnapshot and SV.EquipmentSnapshot( record ) or {}
 	for _, slot in ipairs( MC.EquipmentSlotOrder or {} ) do
-		appendDeathDrop( drops, record.equipment and record.equipment[slot] )
+		appendDeathDrop( drops, record.equipment and record.equipment[slot], ply, {
+			source = "equipment",
+			slot = slot,
+		} )
 	end
-	appendDeathDrop( drops, record.carried )
-	for _, stack in ipairs( record.recoveryStacks or {} ) do
-		appendDeathDrop( drops, stack )
+	appendDeathDrop( drops, record.carried, ply, { source = "carried" } )
+	for index, stack in ipairs( record.recoveryStacks or {} ) do
+		appendDeathDrop( drops, stack, ply, { source = "recovery", slot = index } )
 	end
 
 	if container and inventorySnapshot then
@@ -263,7 +303,7 @@ function SV.DropPlayerInventoryOnDeath( ply )
 	local spawned = 0
 	for _, stack in ipairs( drops ) do
 		local ent = SV.SpawnItemDrop( position, stack, ply, {
-			pickupDelay = 1.0,
+			pickupDelay = itemParity() and 2.0 or 1.0,
 			noMerge = true,
 			velocity = SV.PlayerDeathDropVelocity(),
 		} )

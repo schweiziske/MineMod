@@ -229,6 +229,7 @@ local function buildPredictionContainer()
 	end
 	local hotbarSlots = {}
 	for button = 0, 8 do hotbarSlots[button + 1] = playerMenuIndex( menu, button ) end
+	local equipmentMap = menu.menuEquipmentMap or {}
 	local container, err = MC.NewInventoryContainer( {
 		id = session.containerId, kind = menu.kind,
 		revision = State.authoritative and State.authoritative.revision or State.revision,
@@ -236,8 +237,26 @@ local function buildPredictionContainer()
 		transferRules = predictionTransferRules( menu, creative ),
 		cursor = State.authoritative and State.authoritative.cursor or State.cursor,
 		context = { creative = creative, crafting = crafting, clientPrediction = true },
+		getSwapStack = function( committed, button )
+			if button ~= 40 then return nil end
+			local index = equipmentMap.offhand
+			return index ~= nil and menu.slots[index + 1] or nil
+		end,
+		setSwapStack = function( committed, button, stack )
+			if button ~= 40 then return false, "invalid_swap_button" end
+			local index = equipmentMap.offhand
+			if index == nil then return false, "missing_offhand_slot" end
+			local normalized, setError = MC.NormalizeItemStack( stack )
+			if stack == nil then normalized = nil end
+			if stack ~= nil and not normalized then return false, setError end
+			menu.slots[index + 1] = normalized
+			return true
+		end,
 	} )
 	if not container then State.lastError = err or "inventory_prediction_container_failed" return nil end
+	if MC.ConfigurePlayerSwap then
+		MC.ConfigurePlayerSwap( container, { equipment = State.equipment }, menu.menuEquipmentMap )
+	end
 	if crafting then
 		container.crafting = {
 			width = math.max( 1, session.craftingWidth or 1 ),
@@ -274,7 +293,13 @@ local function syncPredictionMirrors( container )
 end
 
 local function predictAction( container, action )
-	local context = { creative = State.session and State.session.creative == true, clientPrediction = true, canDrop = true }
+	local context = {
+		creative = State.session and State.session.creative == true,
+		clientPrediction = true,
+		canDrop = true,
+		parityClicks = MC.GameplayParityInventoryClicksEnabled
+			and MC.GameplayParityInventoryClicksEnabled() or false,
+	}
 	if action.kind == "input" then
 		return MC.ExecuteContainerInput( container, {
 			revision = container.revision, actionId = action.actionId,

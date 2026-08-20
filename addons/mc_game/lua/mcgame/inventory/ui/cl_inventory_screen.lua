@@ -52,19 +52,40 @@ local CREATIVE_SEARCH_BACKGROUND = UI.GetGuiMaterial( "container/creative_invent
 local CREATIVE_INVENTORY_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_inventory" )
 local SCROLLER = UI.GetGuiMaterial( "sprites/container/creative_inventory/scroller" )
 local SCROLLER_DISABLED = UI.GetGuiMaterial( "sprites/container/creative_inventory/scroller_disabled" )
+local CREATIVE_PAGE_BUTTONS = UI.GetMaterial( "mc/gui/fabric/creative_buttons.png" )
+local CREATIVE_PAGE_BUTTON_ATLAS_SIZE = 256
+
+local function creativeTabShowsTitle( source )
+	if source.showTitle ~= nil then return source.showTitle ~= false end
+	return source.key ~= "inventory"
+end
+
+-- CreativeModeTab.noScrollBar is represented by canScroll=false at the
+-- neutral registry boundary. Vanilla's built-in inventory tab predates that
+-- metadata in the generated catalog, so keep its explicit Java exception here
+-- instead of treating an empty item list as a reason to hide the control.
+local function creativeTabCanScroll( tab )
+	if type( tab ) ~= "table" or tab.key == "inventory" then return false end
+	if tab.canScroll == false then return false end
+	return true
+end
 
 local function tabRows()
 	local result = {}
-	for _, source in ipairs( MC.GeneratedCreativeTabs or {} ) do
+	local sources = MC.GetCreativeTabCatalog and MC.GetCreativeTabCatalog() or MC.GeneratedCreativeTabs or {}
+	for _, source in ipairs( sources ) do
 		if type( source ) == "table" and isstring( source.key ) then
 			result[#result + 1] = {
 				key = source.key,
 				row = source.row == "bottom" and "bottom" or "top",
 				column = math.Clamp( math.floor( tonumber( source.column ) or 0 ), 0, 6 ),
+				page = math.max( 0, math.floor( tonumber( source.page ) or 0 ) ),
 				title = tostring( source.title or source.key ),
 				titleZH = tostring( source.titleZH or source.title or source.key ),
 				titleKey = source.titleKey,
-				showTitle = source.key ~= "inventory",
+				showTitle = creativeTabShowsTitle( source ),
+				canScroll = source.canScroll ~= false,
+				background = source.background,
 				icon = source.icon,
 				items = type( source.items ) == "table" and source.items or {},
 				alignedRight = ( tonumber( source.column ) or 0 ) >= 5,
@@ -83,6 +104,26 @@ end
 UI.CreativeTabs = tabRows()
 UI.CreativeTabsByKey = {}
 for _, tab in ipairs( UI.CreativeTabs ) do UI.CreativeTabsByKey[tab.key] = tab end
+
+function UI.RefreshCreativeTabs()
+	UI.CreativeTabs = tabRows()
+	UI.CreativeTabsByKey = {}
+	for _, tab in ipairs( UI.CreativeTabs ) do UI.CreativeTabsByKey[tab.key] = tab end
+	return UI.CreativeTabs
+end
+
+local function maxCreativeTabPage()
+	local maximum = 0
+	for _, tab in ipairs( UI.CreativeTabs or {} ) do maximum = math.max( maximum, tonumber( tab.page ) or 0 ) end
+	return maximum
+end
+
+local function firstCreativeTabOnPage( page )
+	for _, tab in ipairs( UI.CreativeTabs or {} ) do
+		if ( tonumber( tab.page ) or 0 ) == page then return tab end
+	end
+	return nil
+end
 
 local function modifierDown( left, right )
 	return input.IsKeyDown( left ) or input.IsKeyDown( right )
@@ -143,6 +184,65 @@ end
 
 vgui.Register( "MCInventoryCreativeTab", TAB, "DButton" )
 
+local CREATIVE_PAGE_BUTTON = {}
+
+function CREATIVE_PAGE_BUTTON:Init()
+	self:SetText( "" )
+	self:SetCursor( "hand" )
+	self:SetMouseInputEnabled( true )
+	self.PageActive = false
+end
+
+function CREATIVE_PAGE_BUTTON:Configure( screen, direction, scale )
+	self.Screen = screen
+	self.Direction = direction > 0 and 1 or -1
+	self:SetSize( 10 * scale, 12 * scale )
+end
+
+function CREATIVE_PAGE_BUTTON:SetPageActive( active )
+	self.PageActive = active == true
+	self:SetCursor( self.PageActive and "hand" or "arrow" )
+end
+
+function CREATIVE_PAGE_BUTTON:PageTooltipText()
+	if not IsValid( self.Screen ) then return nil end
+	local current = math.Clamp( math.floor( tonumber( self.Screen.CreativeTabPage ) or 0 ), 0, maxCreativeTabPage() ) + 1
+	local total = maxCreativeTabPage() + 1
+	if MC.Language and MC.Language() == "zh_cn" then return string.format( "第 %d/%d 页", current, total ) end
+	return string.format( "Page %d/%d", current, total )
+end
+
+function CREATIVE_PAGE_BUTTON:Paint( w, h )
+	local u = self.PageActive and self:IsHovered() and 20 or 0
+	if self.Direction > 0 then u = u + 10 end
+	local v = self.PageActive and 0 or 12
+	UI.WithPointFiltering( function()
+		UI.DrawTexture( CREATIVE_PAGE_BUTTONS, 0, 0, w, h,
+			u / CREATIVE_PAGE_BUTTON_ATLAS_SIZE, v / CREATIVE_PAGE_BUTTON_ATLAS_SIZE,
+			( u + 10 ) / CREATIVE_PAGE_BUTTON_ATLAS_SIZE, ( v + 12 ) / CREATIVE_PAGE_BUTTON_ATLAS_SIZE )
+	end )
+	return true
+end
+
+function CREATIVE_PAGE_BUTTON:DoClick()
+	if not self.PageActive or not IsValid( self.Screen ) then return end
+	local previousPage = self.Screen.CreativeTabPage or 0
+	self.Screen:SetCreativeTabPage( previousPage + self.Direction )
+	if self.Screen.CreativeTabPage ~= previousPage then UI.PlayButtonSound() end
+end
+
+function CREATIVE_PAGE_BUTTON:OnCursorEntered()
+	if IsValid( self.Screen ) then self.Screen.HoveredCreativePageButton = self end
+end
+
+function CREATIVE_PAGE_BUTTON:OnCursorExited()
+	if IsValid( self.Screen ) and self.Screen.HoveredCreativePageButton == self then
+		self.Screen.HoveredCreativePageButton = nil
+	end
+end
+
+vgui.Register( "MCInventoryCreativePageButton", CREATIVE_PAGE_BUTTON, "DButton" )
+
 local SCROLL = {}
 
 function SCROLL:Init()
@@ -152,14 +252,21 @@ end
 
 function SCROLL:SetScreen( screen ) self.Screen = screen end
 
+function SCROLL:CanScroll()
+	return IsValid( self.Screen ) and self.Screen:MaxScrollRows() > 0
+end
+
 function SCROLL:UpdateFromMouse()
-	if not IsValid( self.Screen ) then return end
+	if not self:CanScroll() then return end
 	local _, y = self:CursorPos()
-	self.Screen:SetScrollFraction( ( y - 7.5 * self.Screen.Scale ) / ( 95 * self.Screen.Scale ) )
+	-- CreativeModeInventoryScreen.mouseDragged uses the track height minus the
+	-- 15px thumb (112 - 15 = 97) for input. The rendered thumb itself travels
+	-- 95px, matching Java's (112 - 17) draw offset.
+	self.Screen:SetScrollFraction( ( y - 7.5 * self.Screen.Scale ) / ( 97 * self.Screen.Scale ) )
 end
 
 function SCROLL:OnMousePressed( code )
-	if code ~= MOUSE_LEFT then return end
+	if code ~= MOUSE_LEFT or not self:CanScroll() then return end
 	self.Dragging = true
 	self:MouseCapture( true )
 	self:UpdateFromMouse()
@@ -177,7 +284,7 @@ function SCROLL:Think()
 end
 
 function SCROLL:OnMouseWheeled( delta )
-	if IsValid( self.Screen ) then return self.Screen:OnMouseWheeled( delta ) end
+	if self:CanScroll() then return self.Screen:OnMouseWheeled( delta ) end
 end
 
 function SCROLL:Paint( w, h )
@@ -271,6 +378,7 @@ vgui.Register( "MCEnchantingOption", ENCHANTING_BUTTON, "DButton" )
 local PANEL = {}
 
 function PANEL:Init()
+	UI.RefreshCreativeTabs()
 	self:SetSize( ScrW(), ScrH() )
 	self:SetPos( 0, 0 )
 	self:SetMouseInputEnabled( true )
@@ -397,6 +505,15 @@ function PANEL:Init()
 		button:SetZPos( 0 )
 		self.TabButtons[#self.TabButtons + 1] = button
 	end
+	self.CreativeTabPage = 0
+	self.CreativePagePrevious = vgui.Create( "MCInventoryCreativePageButton", self )
+	self.CreativePagePrevious:Configure( self, -1, self.Scale )
+	self.CreativePagePrevious:SetVisible( false )
+	self.CreativePagePrevious:SetZPos( 25 )
+	self.CreativePageNext = vgui.Create( "MCInventoryCreativePageButton", self )
+	self.CreativePageNext:Configure( self, 1, self.Scale )
+	self.CreativePageNext:SetVisible( false )
+	self.CreativePageNext:SetZPos( 25 )
 
 	self.ContentLayer = vgui.Create( "DPanel", self )
 	self.ContentLayer:SetMouseInputEnabled( false )
@@ -429,6 +546,7 @@ function PANEL:Init()
 end
 
 function PANEL:Configure( session, state )
+	UI.RefreshCreativeTabs()
 	self.Session = session
 	self.State = state or MC.ClientInventory
 	self.MenuKind = session and session.kind or "player"
@@ -448,6 +566,8 @@ function PANEL:Configure( session, state )
 		self.RecipeBook:SetVisible( self.RecipeBookOpen and ( self.Crafting or self.Furnace ) and not self.Creative )
 	end
 	if self.Creative and not UI.CreativeTabsByKey[self.SelectedTabKey] then self.SelectedTabKey = "building_blocks" end
+	local selectedTab = self.Creative and UI.CreativeTabsByKey[self.SelectedTabKey] or nil
+	self.CreativeTabPage = selectedTab and selectedTab.page or 0
 	self.ScrollRow = 0
 	self:RefreshCreativeItems()
 	self:Reflow()
@@ -569,10 +689,12 @@ function PANEL:Reflow()
 end
 
 function PANEL:LayoutTabs()
+	local activePage = math.Clamp( math.floor( tonumber( self.CreativeTabPage ) or 0 ), 0, maxCreativeTabPage() )
+	self.CreativeTabPage = activePage
 	for index, button in ipairs( self.TabButtons ) do
 		local tab = UI.CreativeTabs[index]
 		button:Configure( self, tab, self.Scale )
-		button:SetVisible( self.Creative )
+		button:SetVisible( self.Creative and tab.page == activePage )
 		button:SetZPos( tab.key == self.SelectedTabKey and 15 or 0 )
 		if self.Creative then
 			-- CreativeModeInventoryScreen.getTabX: right-aligned tabs use the
@@ -582,6 +704,21 @@ function PANEL:LayoutTabs()
 			local y = tab.row == "top" and -28 or CREATIVE_H - 4
 			button:SetPos( self.Left + x * self.Scale, self.Top + y * self.Scale )
 		end
+	end
+	local maximumPage = maxCreativeTabPage()
+	local showPaging = self.Creative and maximumPage > 0
+	for _, control in ipairs( { self.CreativePagePrevious, self.CreativePageNext } ) do
+		if IsValid( control ) then
+			control:SetVisible( showPaging )
+			control:SetSize( 10 * self.Scale, 12 * self.Scale )
+		end
+	end
+	if showPaging then
+		self.CreativePagePrevious:SetPageActive( activePage > 0 )
+		self.CreativePageNext:SetPageActive( activePage < maximumPage )
+		-- FabricCreativeGuiComponents places its 10x12 buttons at creative left+171/181, top+4.
+		self.CreativePagePrevious:SetPos( self.Left + 171 * self.Scale, self.Top + 4 * self.Scale )
+		self.CreativePageNext:SetPos( self.Left + 181 * self.Scale, self.Top + 4 * self.Scale )
 	end
 end
 
@@ -818,7 +955,10 @@ function PANEL:LayoutSpecialControls()
 			self.SearchEntry:SetVisible( false )
 		end
 	end
-	local scroll = self.Creative and tab and tab.key ~= "inventory" and self:MaxScrollRows() > 0
+	-- Java keeps the scrollbar track and paints its disabled thumb whenever the
+	-- selected tab itself permits scrolling, even when ItemPickerMenu has <=45
+	-- entries. Visibility must therefore not depend on MaxScrollRows().
+	local scroll = self.Creative and creativeTabCanScroll( tab )
 	if IsValid( self.Scrollbar ) then self.Scrollbar:SetVisible( scroll == true ) end
 	if scroll and IsValid( self.Scrollbar ) then
 		self.Scrollbar:SetPos( self.Left + 175 * self.Scale, self.Top + 18 * self.Scale )
@@ -957,6 +1097,8 @@ function PANEL:RefreshCreativeItems()
 end
 
 function PANEL:MaxScrollRows()
+	local tab = self.Creative and UI.CreativeTabsByKey[self.SelectedTabKey] or nil
+	if not creativeTabCanScroll( tab ) then return 0 end
 	return math.max( 0, math.ceil( #self.CurrentItems / CREATIVE_COLS ) - CREATIVE_ROWS )
 end
 
@@ -972,13 +1114,38 @@ function PANEL:SetScrollFraction( fraction )
 	self:SetScrollRow( math.floor( math.Clamp( tonumber( fraction ) or 0, 0, 1 ) * maximum + 0.5 ) )
 end
 
+function PANEL:SetCreativeTabPage( page )
+	if not self.Creative then return end
+	page = math.Clamp( math.floor( tonumber( page ) or 0 ), 0, maxCreativeTabPage() )
+	if page == self.CreativeTabPage then return end
+	self.CreativeTabPage = page
+	local selected = UI.CreativeTabsByKey[self.SelectedTabKey]
+	if not selected or selected.page ~= page then
+		local replacement = firstCreativeTabOnPage( page )
+		if replacement then
+			self.SelectedTabKey = replacement.key
+			UI.LastCreativeTab = replacement.key
+		end
+	end
+	self.ScrollRow = 0
+	self.HoveredSlot = nil
+	self:RefreshCreativeItems()
+	self:LayoutTabs()
+	self:LayoutVisibleSlots()
+	self:LayoutSpecialControls()
+end
+
 function PANEL:OnMouseWheeled( delta )
-	if self.Scrollbar:IsVisible() then self:SetScrollRow( self.ScrollRow - math.floor( tonumber( delta ) or 0 ) ) return true end
+	if self.Scrollbar:IsVisible() and self:MaxScrollRows() > 0 then
+		self:SetScrollRow( self.ScrollRow - math.floor( tonumber( delta ) or 0 ) )
+		return true
+	end
 end
 
 function PANEL:SelectCreativeTab( key )
 	if not self.Creative or not UI.CreativeTabsByKey[key] or key == self.SelectedTabKey then return end
 	self.SelectedTabKey = key
+	self.CreativeTabPage = UI.CreativeTabsByKey[key].page or 0
 	UI.LastCreativeTab = key
 	self.ScrollRow = 0
 	self.HoveredSlot = nil
@@ -999,6 +1166,10 @@ function PANEL:BackgroundMaterial()
 	if self.Furnace then return self.BlastFurnace and BLAST_FURNACE_BACKGROUND or FURNACE_BACKGROUND end
 	if self.CraftingTable then return CRAFTING_BACKGROUND end
 	if not self.Creative then return SURVIVAL_BACKGROUND end
+	local tab = UI.CreativeTabsByKey[self.SelectedTabKey]
+	local background = tab and tab.background or nil
+	if background == "item_search" then return CREATIVE_SEARCH_BACKGROUND end
+	if background == "inventory" then return CREATIVE_INVENTORY_BACKGROUND end
 	if self.SelectedTabKey == "search" then return CREATIVE_SEARCH_BACKGROUND end
 	if self.SelectedTabKey == "inventory" then return CREATIVE_INVENTORY_BACKGROUND end
 	return CREATIVE_ITEMS_BACKGROUND
@@ -1198,6 +1369,9 @@ function PANEL:PaintOver()
 		local option = state and state.options and state.options[self.HoveredEnchantingOption + 1] or nil
 		local lines = MC.EnchantingOptionTooltipLines and MC.EnchantingOptionTooltipLines( option ) or nil
 		if lines then UI.Tooltip.DrawLines( lines, mouseX, mouseY, self.Scale ) end
+	elseif IsValid( self.HoveredCreativePageButton ) then
+		local text = self.HoveredCreativePageButton:PageTooltipText()
+		if text then UI.Tooltip.DrawLines( { { text = text, color = UI.Colors.text } }, mouseX, mouseY, self.Scale ) end
 	elseif self.HoveredTab then
 		UI.Tooltip.DrawLines( { { text = tabTitle( self.HoveredTab ), color = UI.Colors.text } }, mouseX, mouseY, self.Scale )
 	elseif self.RecipeBookOpen and IsValid( self.RecipeBook ) and self.RecipeBook.HoveredTooltipLines then
@@ -1244,6 +1418,12 @@ function PANEL:OnKeyCodePressed( code )
 	local hotbar = NUMBER_KEYS[code]
 	if hotbar ~= nil and IsValid( self.HoveredSlot ) then UI.Drag.HandleNumberKey( self.HoveredSlot, hotbar ) return end
 	if code == KEY_Q and IsValid( self.HoveredSlot ) then UI.Drag.HandleThrowKey( self.HoveredSlot ) return end
+	-- AbstractContainerScreen.checkHotbarKeyPressed sends button 40 for the
+	-- offhand swap key (default Minecraft key F).  Keep Ctrl+F reserved for the
+	-- creative search shortcut below.
+	if code == KEY_F and MC.GameplayParityInventoryClicksEnabled
+	and MC.GameplayParityInventoryClicksEnabled() and not modifierDown( KEY_LCONTROL, KEY_RCONTROL )
+	and IsValid( self.HoveredSlot ) then UI.Drag.HandleOffhandKey( self.HoveredSlot ) return end
 	if code == KEY_F and modifierDown( KEY_LCONTROL, KEY_RCONTROL ) and self.Creative then self:SelectCreativeTab( "search" ) end
 end
 

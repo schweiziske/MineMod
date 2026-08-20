@@ -10,9 +10,73 @@ MC = MC or {}
 MC.SV = MC.SV or {}
 
 local SV = MC.SV
+SV.CombatDamageContexts = SV.CombatDamageContexts or setmetatable( {}, { __mode = "k" } )
+SV.CombatDamageContextStacks = SV.CombatDamageContextStacks or setmetatable( {}, { __mode = "k" } )
+
+-- EntityTakeDamage can expose a second Lua userdata wrapper for the same
+-- underlying CTakeDamageInfo. Keep the direct weak-key lookup for the common
+-- case and a synchronous per-target stack for that wrapper boundary.
+function SV.PushCombatDamageContext( target, damageInfo, metadata )
+	local stack = SV.CombatDamageContextStacks[target]
+	if not stack then
+		stack = {}
+		SV.CombatDamageContextStacks[target] = stack
+	end
+	stack[#stack + 1] = {
+		damageInfo = damageInfo,
+		metadata = metadata,
+		previous = damageInfo and SV.CombatDamageContexts[damageInfo] or nil,
+	}
+	if damageInfo then SV.CombatDamageContexts[damageInfo] = metadata end
+	return metadata
+end
+
+function SV.PopCombatDamageContext( target, damageInfo, metadata )
+	local stack = SV.CombatDamageContextStacks[target]
+	if not stack then
+		if damageInfo and SV.CombatDamageContexts[damageInfo] == metadata then
+			SV.CombatDamageContexts[damageInfo] = nil
+		end
+		return
+	end
+	local index
+	for candidate = #stack, 1, -1 do
+		local entry = stack[candidate]
+		if entry.damageInfo == damageInfo and entry.metadata == metadata then
+			index = candidate
+			break
+		end
+	end
+	local entry = index and table.remove( stack, index ) or nil
+	if #stack == 0 then SV.CombatDamageContextStacks[target] = nil end
+	if damageInfo and SV.CombatDamageContexts[damageInfo] == metadata then
+		SV.CombatDamageContexts[damageInfo] = entry and entry.previous or nil
+	end
+end
+
+function SV.GetCombatDamageContext( target, damageInfo )
+	local direct = damageInfo and SV.CombatDamageContexts[damageInfo] or nil
+	if direct ~= nil then return direct end
+	local stack = SV.CombatDamageContextStacks[target]
+	local entry = stack and stack[#stack] or nil
+	return entry and entry.metadata or nil
+end
+
 local FIRE_CONTACT_INTERVAL = 0.5
 local FIRE_SECONDS = 8
 local FLAMMABLE = MC.GeneratedFireFlammableBlocks or {}
+
+local function modifiedIgnitionSeconds( entity, seconds, context )
+	seconds = math.max( 0, tonumber( seconds ) or 0 )
+	context = istable( context ) and context or {}
+	context.requestedIgnitionSeconds = context.requestedIgnitionSeconds or seconds
+	local modified = MC.RunEvent and MC.RunEvent(
+		"MC.ModifyEntityIgnitionDuration", entity, seconds, context ) or nil
+	context.ignitionDurationModified = true
+	if modified ~= nil then seconds = math.max( 0, tonumber( modified ) or seconds ) end
+	context.modifiedIgnitionSeconds = seconds
+	return seconds, context
+end
 local SOUL_BASE = {
 	["minecraft:soul_sand"] = true,
 	["minecraft:soul_soil"] = true,
@@ -358,11 +422,11 @@ local function contactInfo( stateId )
 	local id = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or nil
 	local block = id and MC.Blocks and MC.Blocks[id] or nil
 	local name = block and block.mcid or nil
-	if name == "minecraft:fire" then return 1, true end
-	if name == "minecraft:soul_fire" then return 2, true end
+	if name == "minecraft:fire" then return 1, true, "minecraft:in_fire" end
+	if name == "minecraft:soul_fire" then return 2, true, "minecraft:in_fire" end
 	if name == "minecraft:campfire" or name == "minecraft:soul_campfire" then
 		if not MC.GetStateProperty or MC.GetStateProperty( stateId, "lit" ) ~= true then return nil end
-		return name == "minecraft:soul_campfire" and 2 or 1, false
+		return name == "minecraft:soul_campfire" and 2 or 1, false, "minecraft:campfire"
 	end
 	return nil
 end
@@ -384,7 +448,7 @@ local function entityContactCells( entity )
 	return minX, minY, minZ, maxX, maxY, maxZ
 end
 
-local function applyFireContact( entity, damage, ignite )
+local function applyFireContact( entity, damage, ignite, damageTypeId )
 	-- BMB scans minecraft:fire/soul_fire itself and owns the corresponding
 	-- Minecraft fire state. Letting this generic Source adapter also Ignite and
 	-- damage it creates two flame renderers and two damage clocks. Campfires use
@@ -397,16 +461,41 @@ local function applyFireContact( entity, damage, ignite )
 	if current < ( entity.MCNextFireContactDamage or 0 ) then return end
 	entity.MCNextFireContactDamage = current + FIRE_CONTACT_INTERVAL
 	-- BaseFireBlock applies FIRE_IGNITE before its in-fire damage callback.
-	if ignite and entity.Ignite then entity:Ignite( FIRE_SECONDS, 0 ) end
+	if ignite and entity.Ignite then
+		local ignitionContext = {
+			source = "fire_block",
+			damageTypeId = tostring( damageTypeId or "minecraft:in_fire" ),
+			environmental = true,
+		}
+		local seconds = modifiedIgnitionSeconds( entity, FIRE_SECONDS, ignitionContext )
+		if seconds > 0 then
+			-- Let game-layer consumers (Fire Protection/BMB's independent fire
+			-- clock) handle the same ignition boundary used by projectiles.  A
+			-- listener returning false is an explicit rejection and must not fall
+			-- through to Source Ignite; only an absent listener (nil) preserves
+			-- the legacy Source fallback for addons that do not provide a clock.
+			local handled
+			if MC.RunEvent then
+				handled = MC.RunEvent( "MC.IgniteEntity", entity, seconds, ignitionContext )
+			end
+			if handled == nil then entity:Ignite( seconds, 0 ) end
+		end
+	end
 	local info = DamageInfo()
 	info:SetDamage( damage )
 	info:SetDamageType( DMG_BURN or DMG_SLOWBURN or 8 )
 	info:SetAttacker( game.GetWorld() )
 	info:SetInflictor( game.GetWorld() )
 	info:SetDamagePosition( entity:WorldSpaceCenter() )
+	local metadata = {
+		damageTypeId = tostring( damageTypeId or "minecraft:in_fire" ),
+		environmental = true,
+	}
+	SV.PushCombatDamageContext( entity, info, metadata )
 	local wasEnvironmental = entity.BMBEnvironmentalDamageActive
 	if entity.IsBMBMob == true then entity.BMBEnvironmentalDamageActive = true end
 	local ok, err = pcall( entity.TakeDamageInfo, entity, info )
+	SV.PopCombatDamageContext( entity, info, metadata )
 	if IsValid( entity ) and entity.IsBMBMob == true then
 		entity.BMBEnvironmentalDamageActive = wasEnvironmental
 	end
@@ -418,18 +507,20 @@ local function scanFireContacts()
 	for _, entity in ipairs( ents.GetAll() ) do
 		if damageableLivingEntity( entity ) then
 			local minX, minY, minZ, maxX, maxY, maxZ = entityContactCells( entity )
-			local bestDamage, shouldIgnite
+			local bestDamage, shouldIgnite, bestDamageTypeId
 			for bx = minX, maxX do
 				for by = minY, maxY do
 					for bz = minZ, maxZ do
-						local damage, ignite = contactInfo( MC.GetBlockState( bx, by, bz ) )
+						local damage, ignite, damageTypeId = contactInfo( MC.GetBlockState( bx, by, bz ) )
 						if damage and ( not bestDamage or damage > bestDamage ) then
-							bestDamage, shouldIgnite = damage, ignite
+							bestDamage, shouldIgnite, bestDamageTypeId = damage, ignite, damageTypeId
 						end
 					end
 				end
 			end
-			if bestDamage then applyFireContact( entity, bestDamage, shouldIgnite ) end
+			if bestDamage then
+				applyFireContact( entity, bestDamage, shouldIgnite, bestDamageTypeId )
+			end
 		end
 	end
 end

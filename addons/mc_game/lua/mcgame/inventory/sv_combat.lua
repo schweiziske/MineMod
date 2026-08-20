@@ -18,6 +18,56 @@ local INFRASTRUCTURE = {
 }
 
 SV.CombatDamageContexts = SV.CombatDamageContexts or setmetatable( {}, { __mode = "k" } )
+SV.CombatDamageContextStacks = SV.CombatDamageContextStacks or setmetatable( {}, { __mode = "k" } )
+
+-- sv_fire loads before this module in production, while focused runtime tests
+-- can load combat alone. Define the same small context API here as well so the
+-- wrapper-safe contract is available in both load paths and on auto-refresh.
+function SV.PushCombatDamageContext( target, damageInfo, metadata )
+	local stack = SV.CombatDamageContextStacks[target]
+	if not stack then
+		stack = {}
+		SV.CombatDamageContextStacks[target] = stack
+	end
+	stack[#stack + 1] = {
+		damageInfo = damageInfo,
+		metadata = metadata,
+		previous = damageInfo and SV.CombatDamageContexts[damageInfo] or nil,
+	}
+	if damageInfo then SV.CombatDamageContexts[damageInfo] = metadata end
+	return metadata
+end
+
+function SV.PopCombatDamageContext( target, damageInfo, metadata )
+	local stack = SV.CombatDamageContextStacks[target]
+	if not stack then
+		if damageInfo and SV.CombatDamageContexts[damageInfo] == metadata then
+			SV.CombatDamageContexts[damageInfo] = nil
+		end
+		return
+	end
+	local index
+	for candidate = #stack, 1, -1 do
+		local entry = stack[candidate]
+		if entry.damageInfo == damageInfo and entry.metadata == metadata then
+			index = candidate
+			break
+		end
+	end
+	local entry = index and table.remove( stack, index ) or nil
+	if #stack == 0 then SV.CombatDamageContextStacks[target] = nil end
+	if damageInfo and SV.CombatDamageContexts[damageInfo] == metadata then
+		SV.CombatDamageContexts[damageInfo] = entry and entry.previous or nil
+	end
+end
+
+function SV.GetCombatDamageContext( target, damageInfo )
+	local direct = damageInfo and SV.CombatDamageContexts[damageInfo] or nil
+	if direct ~= nil then return direct end
+	local stack = SV.CombatDamageContextStacks[target]
+	local entry = stack and stack[#stack] or nil
+	return entry and entry.metadata or nil
+end
 
 local function validPlayer( ply )
 	return IsValid( ply ) and ply.IsPlayer and ply:IsPlayer() and ply.Alive and ply:Alive()
@@ -435,6 +485,10 @@ function SV.AttackSelectedItem( ply, requestedTarget, context )
 	if damageInfo.SetDamageForce and ply.GetAimVector then damageInfo:SetDamageForce( ply:GetAimVector() * damage * 100 ) end
 	local metadata = {
 		attacker = ply,
+		-- Player.attack(Entity) creates DamageSource.playerAttack(player),
+		-- which is the exact #minecraft:is_player_attack branch used by
+		-- ArmorStand#hurtServer. Source DMG_CLUB is not a substitute.
+		damageTypeId = "minecraft:player_attack",
 		stack = MC.CopyItemStack( stack ),
 		spec = spec,
 		strength = strength,
@@ -443,18 +497,21 @@ function SV.AttackSelectedItem( ply, requestedTarget, context )
 		blockedDamage = 0,
 		fullyBlocked = false,
 	}
-	SV.CombatDamageContexts[damageInfo] = metadata
+	SV.PushCombatDamageContext( target, damageInfo, metadata )
 	local vehicleDamageSerial = target.MCVehicleDamageSerial
-	target:TakeDamageInfo( damageInfo )
-	-- Some Source base_anim configurations ignore TakeDamageInfo before the SENT
-	-- callback even when a Lua damage handler exists. Vehicles expose an
-	-- authoritative fallback; the serial makes it impossible to apply one hit
-	-- twice when the engine callback did run synchronously.
-	if IsValid( target ) and target.ApplyMinecraftVehicleDamage
-	and target.MCVehicleDamageSerial == vehicleDamageSerial then
-		target:ApplyMinecraftVehicleDamage( damageInfo )
-	end
-	SV.CombatDamageContexts[damageInfo] = nil
+	local damageCallOK, damageCallError = pcall( function()
+		target:TakeDamageInfo( damageInfo )
+		-- Some Source base_anim configurations ignore TakeDamageInfo before the SENT
+		-- callback even when a Lua damage handler exists. Vehicles expose an
+		-- authoritative fallback; the serial makes it impossible to apply one hit
+		-- twice when the engine callback did run synchronously.
+		if IsValid( target ) and target.ApplyMinecraftVehicleDamage
+		and target.MCVehicleDamageSerial == vehicleDamageSerial then
+			target:ApplyMinecraftVehicleDamage( damageInfo )
+		end
+	end )
+	SV.PopCombatDamageContext( target, damageInfo, metadata )
+	if not damageCallOK then error( damageCallError, 0 ) end
 	if metadata.fullyBlocked ~= true and ( tonumber( spec.damagePerAttack ) or 0 ) > 0 and SV.DamageSelectedItem then
 		SV.DamageSelectedItem( ply, spec.damagePerAttack, { player = ply, reason = "attack" } )
 	end
@@ -468,7 +525,21 @@ local function applyEquipmentCombatDamage( target, damageInfo )
 	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( target, false ) or nil
 	local damage = math.max( 0, tonumber( damageInfo:GetDamage() ) or 0 )
 	if damage <= 0 then return end
-	local metadata = SV.CombatDamageContexts[damageInfo]
+	local metadata = SV.GetCombatDamageContext( target, damageInfo )
+	-- Damage-immunity effects (for example Frost Walker's precise campfire
+	-- source tag) must resolve before shield/armor durability and mitigation.
+	-- The later post-equipment hook remains the boundary for protection-style
+	-- reductions that intentionally consume armor first.
+	hook.Run( "MCITEM.DamageBeforeEquipmentMitigation", target, damageInfo, metadata )
+	damage = math.max( 0, tonumber( damageInfo:GetDamage() ) or 0 )
+	if damage <= 0 then
+		damageInfo:SetDamage( 0 )
+		if metadata then
+			metadata.finalDamage = 0
+			metadata.fullyBlocked = true
+		end
+		return
+	end
 	local blockedDamage = 0
 	local shield, shieldState, shieldSpec = activeShield( target, record, damageInfo, metadata )
 	local sourcePosition = shield and damageSourcePosition( target, damageInfo ) or nil
@@ -503,7 +574,11 @@ local function applyEquipmentCombatDamage( target, damageInfo )
 		if SV.DamagePlayerArmor then
 			SV.DamagePlayerArmor( target, durabilityDamage, { player = target, reason = "armor_hit" } )
 		end
-		damage = MC.ArmorDamageAfterAbsorb and MC.ArmorDamageAfterAbsorb( damage, armor, toughness ) or damage
+		-- Pass the authoritative target/transaction through the generic armor
+		-- boundary. Breach providers must bind to this exact hit; a global
+		-- "last mace" context is unsafe when damage hooks nest.
+		damage = MC.ArmorDamageAfterAbsorb and MC.ArmorDamageAfterAbsorb(
+			damage, armor, toughness, target, damageInfo, metadata ) or damage
 	end
 	if knockback > 0 and damageInfo.GetDamageForce and damageInfo.SetDamageForce then
 		local force = damageInfo:GetDamageForce()

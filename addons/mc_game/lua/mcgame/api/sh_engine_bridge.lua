@@ -10,18 +10,22 @@ local GAME_OWNER = "mc.game"
 
 API.RegisterEvents( GAME_OWNER, {
 	["MC.UseItemOnEntity"] = { realm = "shared", args = "ply, target, stack, context", desc = "selected-item entity interaction query/action" },
+	["MC.TryPlaceDecoration"] = { realm = "shared", args = "ply, stack, hit, context", desc = "query/action: place a source-verified decoration entity" },
 	["MC.PlayerIgnitedBlock"] = { realm = "server", args = "ply, bx, by, bz, stateId, source", desc = "a game-layer ignition interaction committed" },
+	["MC.ModifyEntityIgnitionDuration"] = { realm = "server", args = "entity, seconds, context", desc = "query: modify a new entity ignition duration before it is applied" },
 	["MC.IgniteEntity"] = { realm = "server", args = "entity, seconds, context", desc = "query: handle or reject Minecraft item/projectile ignition" },
 	["MC.ChestOpenCountChanged"] = { realm = "server", args = "bx, by, bz, openCount", desc = "a chest opener count changed" },
 	["MC.PlayerHasInfiniteMaterials"] = { realm = "server", args = "ply", desc = "query: override whether game inventory mutations consume materials" },
 	["MC.PlayerHeldItemChanged"] = { realm = "server", args = "ply, selectedSlot, stack, context", desc = "the selected hotbar stack changed" },
 	["MC.CreativeStacksAPIReady"] = { realm = "shared", args = "creativeStacksAPI", desc = "the complete creative ItemStack catalog API is available" },
 	["MC.CreativeStackProvidersChanged"] = { realm = "shared", args = "providerId", desc = "a creative ItemStack provider changed" },
+	["MC.ItemsAPIReady"] = { realm = "shared", args = "itemsAPI", desc = "the public namespace-based item registry adapter is available" },
 	["MC.PlayerMiningModifiers"] = { realm = "server", args = "ply, stateId, stack, defaults", desc = "query: survival mining attribute/status overrides" },
 	["MC.HandSwingModifiers"] = { realm = "client", args = "ply, weapon, defaults", desc = "query: held-item mining swing modifiers" },
 	["MC.PlayerMiningStarted"] = { realm = "server", args = "ply, session", desc = "a survival mining session started" },
 	["MC.PlayerMiningCancelled"] = { realm = "server", args = "ply, session, reason", desc = "a survival mining session was cancelled" },
 	["MC.PlayerMinedBlock"] = { realm = "server", args = "ply, bx, by, bz, oldStateId, drops, transaction, dropError, session, durabilityDamage", desc = "a survival mining session committed" },
+	["MC.BlockExperienceAwarded"] = { realm = "server", args = "ply, bx, by, bz, experience, context", desc = "survival mining awarded block experience" },
 	["MC.ItemDurabilityChanged"] = { realm = "server", args = "ply, slot, oldStack, newStack, damage, broken", desc = "an inventory item took durability damage" },
 	["MC.SelectedItemConsumed"] = { realm = "server", args = "ply, slot, oldStack, amount, replacement, result", desc = "the selected stack was consumed" },
 	["MC.SelectedItemReplaced"] = { realm = "server", args = "ply, slot, oldStack, newStack, result", desc = "the selected stack was replaced" },
@@ -46,7 +50,30 @@ API.RegisterEvents( GAME_OWNER, {
 	["MC.DeathProtectionBypass"] = { realm = "server", args = "ply, damageInfo, metadata", desc = "query: bypass held death protection" },
 	["MC.DeathProtectionTriggered"] = { realm = "server", args = "ply, hand, stack, damageInfo, metadata", desc = "held death protection triggered" },
 	["MC.PlayerAttackedEntity"] = { realm = "server", args = "ply, target, metadata", desc = "the Minecraft hand completed a melee attack" },
+	["MC.EntityDropsEnabled"] = { realm = "server", args = "", desc = "query: return false to suppress decoration/entity item drops" },
+	["MC.DecorationPlaced"] = { realm = "server", args = "ply, entity, stack, context", desc = "a decoration entity was placed from a game item" },
+	["MC.DecorationAnalogOutputChanged"] = { realm = "shared", args = "entity, output, previous", desc = "a decoration entity's comparator-like analog output changed" },
+	["MC.EntityAnalogOutputAt"] = { realm = "shared", args = "bx, by, bz, dx, dy, dz, context", desc = "query: entity-provided comparator analog output in one target cell" },
+	["MC.EntityAnalogOutputChanged"] = { realm = "server", args = "entity, bx, by, bz, output, previous", desc = "an entity-provided comparator analog output changed at a cell" },
+	["MC.BlockPhysicsMobEffectQuery"] = { realm = "shared", args = "entity, effectId", desc = "query: optional external MobEffect presence for source-verified block physics; nil falls back to no effect" },
+	["MC.BlockPhysicsEquipmentEnchantmentLevel"] = { realm = "shared", args = "entity, slot, enchantmentId", desc = "query: optional equipment enchantment level for block physics; nil falls back to zero" },
+	["MC.PistonMovementCommitted"] = { realm = "server", args = "payload { bx,by,bz,extending,dx,dy,dz,movements[] }", desc = "engine piston transaction committed; movements contain sanitized source/destination cells" },
+	["MC.ItemEntityDamaged"] = { realm = "server", args = "entity, damageTypeId, damage, oldHealth, newHealth, source", desc = "a gameplay-parity ItemEntity accepted Minecraft damage" },
+	["MC.ItemEntityDestroyed"] = { realm = "server", args = "entity, stack, damageTypeId, source", desc = "a gameplay-parity ItemEntity was destroyed" },
+	["MC.DecorationMapRemoved"] = { realm = "server", args = "entity, stack", desc = "a framed map left an item frame and must be removed from map saved-data tracking" },
+	["MC.DecorationMapRenderData"] = { realm = "client", args = "entity, stack", desc = "query: return a cached material/texture, or 128x128 RGBA pixels with stable cacheKey/mapId + revision; decorations require renderOnFrame" },
+	["MC.DecorationGameEvent"] = { realm = "server", args = "entity, gameEventId, actor, context", desc = "a decoration emitted an authoritative Minecraft GameEvent" },
 } )
+
+-- Publish the game-owned adapters through the engine's capability table.  The
+-- engine never reaches into these tables; separately shipped addons can wait
+-- for the capability instead of probing mcgame internals.
+if API.RegisterCapability then
+	API.RegisterCapability( "mc.game.items", 1, API.Items or {}, GAME_OWNER )
+	API.RegisterCapability( "mc.game.creative", 1, API.Creative or {}, GAME_OWNER )
+	API.RegisterCapability( "mc.game.block_loot", 1, API.BlockLoot or {}, GAME_OWNER )
+	API.RegisterCapability( "mc.game.config", 1, API.Config or {}, GAME_OWNER )
+end
 
 API.Network.Register( GAME_OWNER, {
 	"mc_inventory_sync_begin", "mc_inventory_sync_part", "mc_inventory_sync_end",
@@ -56,6 +83,7 @@ API.Network.Register( GAME_OWNER, {
 	"mc_inventory_recipe_place", "mc_equipment_delta", "mc_block_use_request",
 	"mc_enchanting_state", "mc_anvil_state", "mc_anvil_rename",
 	"mc_merchant_state", "mc_merchant_select",
+	"mc_decoration_armor_stand_break_particles",
 	"mc_brewing_state", "mc_furnace_state", "mc_campfire_dowse_fx",
 	"mc_chest_open_state", "mc_mining_progress",
 	"mc_minecraft_vehicle_interact", "mc_inventory_proxy_world_interact",

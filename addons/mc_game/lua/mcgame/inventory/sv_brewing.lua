@@ -211,6 +211,22 @@ local function runtimeAt( bx, by, bz, create )
 	return runtime
 end
 
+-- Controlled logistics adapter: Hopper/Dropper writes share the live brewing
+-- runtime, including bottle block-state refresh and every open menu.
+function SV.LogisticsBrewingRuntimeAt( bx, by, bz, create )
+	return runtimeAt( bx, by, bz, create == true )
+end
+
+function SV.LogisticsCommitBrewingRuntime( runtime, changedSlots )
+	if type( runtime ) ~= "table" or type( changedSlots ) ~= "table" then return false, "invalid_brewing_commit" end
+	syncRecord( runtime, true )
+	refreshBottleState( runtime )
+	schedule( runtime )
+	publishRuntime( runtime, changedSlots )
+	broadcastState( runtime )
+	return true
+end
+
 local function tableStillValid( ply, runtime )
 	if not IsValid( ply ) or not ply:Alive() or not isBrewingStandAt( runtime.bx, runtime.by, runtime.bz ) then return false end
 	local reach = MC.Config and MC.Config.Reach and MC.Config.Reach:GetFloat() or 0

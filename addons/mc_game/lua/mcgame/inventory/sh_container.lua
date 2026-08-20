@@ -31,6 +31,18 @@ function MC.NewInventoryContainer( options )
 		context = options.context,
 		beforeCommit = options.beforeCommit,
 		onCommit = options.onCommit,
+		-- Menu-specific hooks mirror AbstractContainerMenu's overridable
+		-- canDragTo/canTakeItemForPickAll methods.  They stay on the menu so
+		-- the shared click state machine never reaches into an engine layer.
+		canDragTo = options.canDragTo,
+		canTakeItemForPickAll = options.canTakeItemForPickAll,
+		-- SWAP normally addresses the player's nine hotbar slots.  Menus that
+		-- have a separate EntityEquipment backing store may provide these two
+		-- callbacks for button 40 (the vanilla offhand index).
+		getSwapStack = options.getSwapStack,
+		setSwapStack = options.setSwapStack,
+		addToInventory = options.addToInventory,
+		parityClicks = options.parityClicks == true,
 	}
 	if options.cursor ~= nil then
 		local cursor, err = MC.NormalizeItemStack( options.cursor )
@@ -48,6 +60,74 @@ function MC.NewInventoryContainer( options )
 		end
 	end
 	return container
+end
+
+function MC.ContainerCanDragTo( container, slot, context )
+	if type( container ) == "table" and type( container.canDragTo ) == "function" then
+		local called, allowed = pcall( container.canDragTo, container, slot, context )
+		return called and allowed ~= false
+	end
+	return true
+end
+
+function MC.ContainerCanTakeItemForPickAll( container, carried, slot, context )
+	if type( container ) == "table" and type( container.canTakeItemForPickAll ) == "function" then
+		local called, allowed = pcall( container.canTakeItemForPickAll, container, carried, slot, context )
+		return called and allowed ~= false
+	end
+	return true
+end
+
+function MC.ContainerGetSwapStack( container, button, context )
+	button = math.floor( tonumber( button ) or -1 )
+	if button == 40 and type( container ) == "table" and type( container.getSwapStack ) == "function" then
+		local called, stack = pcall( container.getSwapStack, container, button, context )
+		if not called then return nil, nil, "swap_source_error" end
+		return MC.CopyItemStack( stack ), nil
+	end
+	local index = type( container ) == "table" and container.hotbarSlots
+		and container.hotbarSlots[button + 1] or nil
+	local slot = index ~= nil and MC.ContainerGetSlot( container, index ) or nil
+	return slot and MC.InventorySlotGet( slot ) or nil, slot
+end
+
+function MC.ContainerSetSwapStack( container, button, stack, context )
+	button = math.floor( tonumber( button ) or -1 )
+	if button == 40 and type( container ) == "table" and type( container.setSwapStack ) == "function" then
+		local called, ok, err = pcall( container.setSwapStack, container, button, stack, context )
+		if not called then return false, "swap_source_error" end
+		return ok ~= false, err
+	end
+	local index = type( container ) == "table" and container.hotbarSlots
+		and container.hotbarSlots[button + 1] or nil
+	local slot = index ~= nil and MC.ContainerGetSlot( container, index ) or nil
+	if not slot then return false, "missing_hotbar_slot" end
+	return MC.InventorySlotSet( slot, stack )
+end
+
+-- Bind the vanilla Inventory#getItem(40)/setItem(40) offhand endpoint to a
+-- menu.  Player crafting menus expose an actual offhand slot; chest/furnace
+-- menus do not, so those menus fall back to the persistent equipment table.
+-- The binding is deliberately game-layer-only and is installed by the menu
+-- owner immediately before input handling/prediction.
+function MC.ConfigurePlayerSwap( container, record, equipmentMenuMap )
+	if type( container ) ~= "table" then return false, "invalid_container" end
+	equipmentMenuMap = equipmentMenuMap or container.equipmentMenuMap or {}
+	record = record or container.swapRecord
+	container.swapRecord = record
+	container.getSwapStack = function()
+		local menuIndex = equipmentMenuMap.offhand
+		if menuIndex ~= nil then return MC.ContainerGetStack( container, menuIndex ) end
+		return record and record.equipment and MC.CopyItemStack( record.equipment.offhand ) or nil
+	end
+	container.setSwapStack = function( _, _, stack )
+		local menuIndex = equipmentMenuMap.offhand
+		if menuIndex ~= nil then return MC.ContainerSetStack( container, menuIndex, stack ) end
+		if not record or type( record.equipment ) ~= "table" then return false, "missing_offhand_storage" end
+		if MC.IsEmptyItemStack( stack ) then record.equipment.offhand = nil else record.equipment.offhand = MC.CopyItemStack( stack ) end
+		return true
+	end
+	return true
 end
 
 function MC.ContainerAddSlot( container, definition )
@@ -179,6 +259,7 @@ function MC.ContainerQuickMove( container, sourceIndex, context )
 	if not MC.InventorySlotMayTake( sourceSlot, context ) then return false, "take_denied" end
 	local source = MC.InventorySlotGet( sourceSlot )
 	if MC.IsEmptyItemStack( source ) then return true, false end
+	local sourceBefore = MC.CopyItemStack( source )
 
 	local rule = container.transferRules[sourceSlot.group]
 	if type( rule ) ~= "table" then return false, "no_quick_move_rule" end
@@ -192,10 +273,10 @@ function MC.ContainerQuickMove( container, sourceIndex, context )
 	local filtered = {}
 	for _, index in ipairs( targets ) do if index ~= sourceIndex then filtered[#filtered + 1] = index end end
 	local remaining, changed = MC.ContainerMoveStackTo( container, source, filtered, context )
-	if not changed then return true, false end
+	if not changed then return true, false, nil end
 	local ok, err = MC.InventorySlotSet( sourceSlot, remaining )
 	if not ok then return false, err end
-	return true, true
+	return true, true, sourceBefore
 end
 
 function MC.ContainerFullState( container )

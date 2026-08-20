@@ -213,17 +213,45 @@ local function completeMining( ply, session )
 	local drops = spawnBlockDrops( ply, session, stacks )
 	local durabilityDamage = damageMiningTool( ply, session, oldStateId )
 	local snapshot = publicSession( session )
+	local experience, experienceError, experienceMetadata = 0, "block_experience_unavailable", nil
+	if SV.ResolveBlockExperience then
+		experience, experienceError, experienceMetadata = SV.ResolveBlockExperience( oldStateId,
+			session.toolStack, {
+			player = ply,
+			bx = session.bx, by = session.by, bz = session.bz,
+			broken = true,
+			successful = true,
+			blockEntity = MC.GetBlockEntity
+				and MC.GetBlockEntity( session.bx, session.by, session.bz ) or nil,
+		} )
+	end
 	local completion = {
 		oldStateId = oldStateId,
 		drops = drops,
 		transaction = result,
 		dropError = dropError,
 		durabilityDamage = durabilityDamage,
+		experience = math.max( 0, math.floor( tonumber( experience ) or 0 ) ),
+		experienceError = experienceError,
+		experienceMetadata = experienceMetadata,
 	}
 	safeCall( session.onComplete, ply, snapshot, completion )
 	if MC.RunEvent then
 		MC.RunEvent( "MC.PlayerMinedBlock", ply, session.bx, session.by, session.bz,
 			oldStateId, drops, result, dropError, snapshot, durabilityDamage )
+		if completion.experience > 0 then
+			-- Emit only after SV.Break committed and all normal mining side effects
+			-- have a stable snapshot.  Creative breaks never enter completeMining.
+			MC.RunEvent( "MC.BlockExperienceAwarded", ply, session.bx, session.by,
+				session.bz, completion.experience, {
+					stateId = oldStateId,
+					block = experienceMetadata and experienceMetadata.block or nil,
+					toolStack = copyStack( session.toolStack ),
+					transaction = result,
+					metadata = experienceMetadata,
+					reason = "block_mined",
+				} )
+		end
 	end
 	return true
 end
