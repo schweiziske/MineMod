@@ -843,9 +843,11 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 			local u01, v01 = ( 0.5 - c + s ) * 16, ( 0.5 + c + s ) * 16
 			local u10, v10 = ( 0.5 + c + s ) * 16, ( 0.5 + c - s ) * 16
 			local u11, v11 = ( 0.5 + c - s ) * 16, ( 0.5 - c - s ) * 16
+			-- Keep FluidRenderer's V coordinates intact. Reversing V here makes
+			-- the animated sprite visibly travel against the computed flow.
 			topUV = {
-				{ u00, 16 - v00 }, { u11, 16 - v11 },
-				{ u10, 16 - v10 }, { u01, 16 - v01 },
+				{ u00, v00 }, { u11, v11 },
+				{ u10, v10 }, { u01, v01 },
 			}
 		end
 		emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle,

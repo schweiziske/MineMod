@@ -16,8 +16,6 @@ local TICK_SECONDS = 1 / 20
 local REFRESH_INTERVAL = 0.25
 local MAX_RENDER_DISTANCE_SQR = ( BS * 96 ) ^ 2
 local TRI = { 1, 3, 2, 1, 4, 3 }
-local WATER_TINT = Color( 63, 118, 228 )
-local LAVA_TINT = Color( 255, 255, 255 )
 local WATER_ANIMATIONS = {
 	water_still = true,
 	water_flow = true,
@@ -27,18 +25,15 @@ local LAVA_ANIMATIONS = {
 	lava_flow = true,
 }
 local FLUID_ANIMATIONS = {
-	water = { still = "water_still", flow = "water_flow", tint = WATER_TINT },
-	lava = { still = "lava_still", flow = "lava_flow", tint = LAVA_TINT },
+	water = { still = "water_still", flow = "water_flow" },
+	lava = { still = "lava_still", flow = "lava_flow" },
 }
 local FLUID_KIND_ORDER = { "water", "lava" }
 local FLUID_ANIMATION_SET = {}
-local FLUID_ANIMATION_TINTS = {}
 for _, kind in ipairs( FLUID_KIND_ORDER ) do
 	local fluid = FLUID_ANIMATIONS[kind]
 	FLUID_ANIMATION_SET[fluid.still] = true
 	FLUID_ANIMATION_SET[fluid.flow] = true
-	FLUID_ANIMATION_TINTS[fluid.still] = fluid.tint
-	FLUID_ANIMATION_TINTS[fluid.flow] = fluid.tint
 end
 -- Java intentionally changes these sprites at 10/20 Hz without mcmeta
 -- interpolation. On a high-refresh Source client that cadence reads as visual
@@ -334,7 +329,6 @@ local function fluidMeshesForChunk( chunkKey, animations )
 		return ( tonumber( u ) or 0 ) / logicalSize,
 			( tonumber( v ) or 0 ) / logicalSize, name
 	end
-	context.fluidAnimationColorResolver = function( shade ) return shade end
 	context.push = function( vertex )
 		local batches = buckets[vertex.fluidAnimation]
 		if not batches then return end
@@ -476,15 +470,6 @@ local function entryColor( entry, center, emission, channel )
 	return entry.lightColor
 end
 
-local function multiplyColor( color, tint )
-	return Color(
-		math.Clamp( math.floor( color.r * tint.r / 255 + 0.5 ), 0, 255 ),
-		math.Clamp( math.floor( color.g * tint.g / 255 + 0.5 ), 0, 255 ),
-		math.Clamp( math.floor( color.b * tint.b / 255 + 0.5 ), 0, 255 ),
-		255
-	)
-end
-
 local function drawFrame( meshObject, frame, color, alpha, translucent )
 	if not frame or alpha <= 0 then return end
 	local material = materialForPath( frame.material, translucent == true )
@@ -526,9 +511,7 @@ local function drawEntry( entry, stateId, animations, elapsedTicks, visualSignat
 			local meshObject = meshForStateAnimation(
 				stateId, entry.bx, entry.by, entry.bz, name, animation, visualSignature
 			)
-			local tint = FLUID_ANIMATION_TINTS[name]
-			local drawColor = tint and multiplyColor( color, tint ) or color
-			drawAnimationMesh( meshObject, name, animation, drawColor, elapsedTicks )
+			drawAnimationMesh( meshObject, name, animation, color, elapsedTicks )
 		end
 	end
 	cam.PopModelMatrix()
@@ -569,7 +552,6 @@ local function drawFluidChunk( chunkKey, animations, elapsedTicks, eye )
 		if fluid and blockId then
 			local emission = MC.BlockLightEmission and MC.BlockLightEmission( blockId ) or 0
 			local fluidColor = entryColor( record, center, emission, kind )
-			fluidColor = multiplyColor( fluidColor, fluid.tint )
 			for _, name in ipairs( { fluid.still, fluid.flow } ) do
 				for _, meshObject in ipairs( record.meshes[name] or {} ) do
 					drawAnimationMesh( meshObject, name, animations[name], fluidColor, elapsedTicks )
