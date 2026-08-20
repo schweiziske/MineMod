@@ -5,8 +5,12 @@
     "mc_chunk": "engine",
     "mc_chunk_phys": "engine",
     "mc_collision_carrier": "engine",
+    "mc_armor_stand": "game",
+    "mc_glow_item_frame": "game",
     "mc_item_drop": "game",
+    "mc_item_frame": "game",
     "mc_minecart": "engine",
+    "mc_painting": "game",
     "mc_primed_tnt": "engine",
     "mc_projectile": "game"
   },
