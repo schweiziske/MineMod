@@ -1230,6 +1230,21 @@ local function buildWorkshopBinaryWorld( decoded )
 	end
 	local expectedHash = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or nil
 	if expectedHash and manifest.schemaHash ~= expectedHash then return nil, "state_registry_mismatch" end
+	if MC.ValidateModRegistrySnapshot then
+		local registryOK, registryError = MC.ValidateModRegistrySnapshot( manifest.registry )
+		if registryOK ~= true then return nil, registryError or "invalid_workshop_registry_snapshot" end
+	end
+	if manifest.registryHash ~= nil then
+		if not isstring( manifest.registryHash ) or manifest.registryHash == "" then
+			return nil, "invalid_registry_hash"
+		end
+		local scopedHash = manifest.registry ~= nil and MC.ModRegistrySnapshotHash
+			and MC.ModRegistrySnapshotHash( manifest.registry ) or nil
+		local effectiveHash = MC.GetEffectiveBlockStateRegistryHash and MC.GetEffectiveBlockStateRegistryHash() or nil
+		local vanillaHash = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or nil
+		if manifest.registryHash ~= scopedHash and manifest.registryHash ~= effectiveHash
+		and manifest.registryHash ~= vanillaHash then return nil, "registry_hash_mismatch" end
+	end
 	if math.floor( tonumber( manifest.cs ) or -1 ) ~= MC.CS
 	or math.floor( tonumber( manifest.h ) or -1 ) ~= MC.CH or MC.CH ~= 32 then
 		return nil, "chunk_geometry_mismatch"

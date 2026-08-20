@@ -5,6 +5,7 @@ MC = MC or {}
 local GetBlockState = MC.GetBlockState
 local GetStateProperty = MC.GetStateProperty
 local StateWith = MC.StateWith
+local BlockIsFullCubeForState = MC.BlockIsFullCubeForState
 local Offset = {
 	north = { 0, -1, 0 }, south = { 0, 1, 0 },
 	west = { -1, 0, 0 }, east = { 1, 0, 0 },
@@ -41,6 +42,42 @@ end
 
 local function inputSignal( stateId, bx, by, bz )
 	return signalAtOffset( bx, by, bz, facingOffset( stateId ) )
+end
+
+local function comparatorInputConductor( stateId, bx, by, bz )
+	-- Keep this identical to the redstone core's BlockState#isRedstoneConductor
+	-- adapter. Slime is a vanilla full-shape conductor even though the imported
+	-- translucent visual is not classified as a normal full cube.
+	if stateName( stateId ) == "minecraft:slime_block" then return true end
+	return stateId ~= nil and stateId ~= 0 and BlockIsFullCubeForState
+		and BlockIsFullCubeForState( stateId, bx, by, bz ) == true or false
+end
+
+local function entityAnalogInput( bx, by, bz, facing )
+	if not MC.RunEvent then return nil end
+	local result = MC.RunEvent(
+		"MC.EntityAnalogOutputAt", bx, by, bz, facing[1], facing[2], facing[3],
+		{ source = "minecraft:comparator" }
+	)
+	local value = type( result ) == "table" and result.present == true and result.output
+		or type( result ) == "number" and result or nil
+	if value == nil then return nil end
+	return math.max( 0, math.min( 15, math.floor( tonumber( value ) or 0 ) ) )
+end
+
+-- ComparatorBlock#getInputSignal first samples the immediately adjacent block.
+-- Only when that result is below 15 and the adjacent block is a conductor does
+-- it look one more cell forward for the unique direction-matching ItemFrame.
+local function comparatorInputSignal( stateId, bx, by, bz )
+	local facing = facingOffset( stateId )
+	local input = signalAtOffset( bx, by, bz, facing )
+	if input >= 15 then return input end
+	local conductorX, conductorY, conductorZ = bx + facing[1], by + facing[2], bz + facing[3]
+	local conductorState = GetBlockState( conductorX, conductorY, conductorZ )
+	if not comparatorInputConductor( conductorState, conductorX, conductorY, conductorZ ) then return input end
+	local entityInput = entityAnalogInput(
+		conductorX + facing[1], conductorY + facing[2], conductorZ + facing[3], facing )
+	return entityInput ~= nil and entityInput or input
 end
 
 local function sideSignal( stateId, bx, by, bz, diodesOnly )
@@ -137,7 +174,7 @@ if repeaterBlock then
 end
 
 local function comparatorOutput( stateId, bx, by, bz )
-	local input = inputSignal( stateId, bx, by, bz )
+	local input = comparatorInputSignal( stateId, bx, by, bz )
 	local side = sideSignal( stateId, bx, by, bz, false )
 	if GetStateProperty( stateId, "mode" ) == "subtract" then
 		local output = input - side
@@ -212,6 +249,45 @@ MC.RegisterBlockUpdateHandler( "minecraft:comparator", {
 		return { updates = updates }
 	end,
 } )
+
+-- Level#updateNeighbourForOutputSignal only checks the four horizontal cells:
+-- a comparator immediately beside the changed position, or one cell farther
+-- away behind a redstone conductor. The comparator's own neighbour handler then
+-- preserves the vanilla two-tick refresh delay.
+local AnalogOutputDirections = {
+	{ 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 },
+}
+
+local function enqueueComparatorOutputUpdate( bx, by, bz, sourceX, sourceY, sourceZ )
+	if stateName( GetBlockState( bx, by, bz ) ) ~= "minecraft:comparator" then return false end
+	if not SERVER or not MC.SV or not MC.SV.EnqueueBlockUpdate
+		or not MC.BlockUpdateKind or not MC.BlockUpdateKind.NEIGHBOR then return false end
+	MC.SV.EnqueueBlockUpdate(
+		bx, by, bz, MC.BlockUpdateKind.NEIGHBOR, 0, nil, sourceX, sourceY, sourceZ )
+	return true
+end
+
+local function entityAnalogOutputChanged( _, bx, by, bz )
+	if not SERVER then return end
+	bx, by, bz = tonumber( bx ), tonumber( by ), tonumber( bz )
+	if bx == nil or by == nil or bz == nil then return end
+	bx, by, bz = math.floor( bx ), math.floor( by ), math.floor( bz )
+	for index = 1, 4 do
+		local direction = AnalogOutputDirections[index]
+		local nearX, nearY, nearZ = bx + direction[1], by + direction[2], bz
+		if not enqueueComparatorOutputUpdate( nearX, nearY, nearZ, bx, by, bz ) then
+			local nearState = GetBlockState( nearX, nearY, nearZ )
+			if comparatorInputConductor( nearState, nearX, nearY, nearZ ) then
+				enqueueComparatorOutputUpdate(
+					nearX + direction[1], nearY + direction[2], nearZ, bx, by, bz )
+			end
+		end
+	end
+end
+
+if hook and hook.Add then
+	hook.Add( "MC.EntityAnalogOutputChanged", "mc_redstone_entity_analog_output", entityAnalogOutputChanged )
+end
 
 local comparatorBlock = MC.BlockByName["minecraft:comparator"]
 if comparatorBlock then

@@ -110,4 +110,3 @@ function Explosion.SelectJavaExplosionCells( center, radius, options )
 
 	return selected
 end
-

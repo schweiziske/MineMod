@@ -395,11 +395,16 @@ function SV.WriteStateRegionSave( manifestPath, slotName )
 	end
 
 	local savedAt = os.time()
+	local registry = MC.BuildModRegistrySnapshot and MC.BuildModRegistrySnapshot( layout.palette ) or nil
+	local persistenceHash = registry and MC.ModRegistrySnapshotHash and MC.ModRegistrySnapshotHash( registry )
+		or MC.GetEffectiveBlockStateRegistryHash and MC.GetEffectiveBlockStateRegistryHash() or nil
 	local manifest = {
 		v = 10,
 		formatVersion = 10,
 		schemaHash = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or nil,
+		registryHash = persistenceHash,
 		sourceDataVersion = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.worldVersion or nil,
+		registry = registry,
 		map = game.GetMap(),
 		slotName = slotName,
 		savedAt = savedAt,

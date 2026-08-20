@@ -160,11 +160,20 @@ function SV.BuildStateSaveData( slotName, options )
 		chunks[#chunks + 1] = record
 	end
 
+	local registry = MC.BuildModRegistrySnapshot and MC.BuildModRegistrySnapshot( encoder.palette ) or nil
+	local persistenceHash = registry and MC.ModRegistrySnapshotHash and MC.ModRegistrySnapshotHash( registry )
+		or MC.GetEffectiveBlockStateRegistryHash and MC.GetEffectiveBlockStateRegistryHash() or nil
 	return {
 		v = 10,
 		formatVersion = 10,
 		schemaHash = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or nil,
+		registryHash = persistenceHash,
 		sourceDataVersion = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.worldVersion or nil,
+		-- The palette remains the authoritative string representation.  The
+		-- snapshot records the process-local numeric mapping that produced it so
+		-- loaders can reject missing content without ever reinterpreting an old
+		-- number as a different block.
+		registry = registry,
 		map = game.GetMap(),
 		slotName = slotName,
 		savedAt = os.time(),
@@ -196,12 +205,17 @@ function SV.BuildStateChunkPatchData( refs, options )
 		chunks[#chunks + 1] = record
 		blockCount = blockCount + count
 	end
+	local registry = MC.BuildModRegistrySnapshot and MC.BuildModRegistrySnapshot( encoder.palette ) or nil
+	local persistenceHash = registry and MC.ModRegistrySnapshotHash and MC.ModRegistrySnapshotHash( registry )
+		or MC.GetEffectiveBlockStateRegistryHash and MC.GetEffectiveBlockStateRegistryHash() or nil
 	return {
 		v = 10,
 		formatVersion = 10,
 		chunkPatch = true,
 		schemaHash = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or nil,
+		registryHash = persistenceHash,
 		sourceDataVersion = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.worldVersion or nil,
+		registry = registry,
 		blockCount = blockCount,
 		bs = MC.BS,
 		cs = MC.CS,

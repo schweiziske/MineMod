@@ -918,9 +918,9 @@ local function validatePlacementPlan( ply, plan )
 	return true
 end
 
-local function validateBreakPlan( ply, plan )
+local function validateBreakPlan( ply, plan, consumeCooldown )
 	if not plan or not plan.cells or #plan.cells == 0 then return false end
-	if not cooldownOK( ply ) then return false end
+	if consumeCooldown ~= false and not cooldownOK( ply ) then return false end
 	if not canEdit( ply ) then return false end
 	if MC.RunEvent and MC.RunEvent( "MC.CanPlayerEditCell", ply, plan.bx, plan.by, plan.bz, false ) == false then return false end
 	return validateReach( ply, plan.bx, plan.by, plan.bz )
@@ -928,7 +928,11 @@ end
 
 function SV.ValidateBreakTarget( ply, bx, by, bz )
 	local plan = MC.BuildBreakPlan and MC.BuildBreakPlan( bx, by, bz )
-	if not validateBreakPlan( ply, plan ) then return nil, "break_rejected" end
+	-- Mining start is a read-only preflight. Consuming the world-write cooldown
+	-- here makes hardness-0 blocks validate once and then fail SV.Break again in
+	-- the same frame. The completed break below remains the only operation that
+	-- consumes the cooldown.
+	if not validateBreakPlan( ply, plan, false ) then return nil, "break_rejected" end
 	return plan
 end
 
@@ -973,7 +977,7 @@ end
 function SV.Break( ply, bx, by, bz, options )
 	options = istable( options ) and options or {}
 	local plan = MC.BuildBreakPlan and MC.BuildBreakPlan( bx, by, bz )
-	if not validateBreakPlan( ply, plan ) then return false end
+	if not validateBreakPlan( ply, plan, true ) then return false end
 	local result = SV.ApplyBlockTransaction( plan.cells, {
 		actor = ply,
 		priorityPhys = true,
@@ -2067,6 +2071,23 @@ local function readSaveJSON( path, realm )
 	return util.JSONToTable( json ), nil
 end
 
+local function validateSavedRegistryMetadata( data )
+	if MC.ValidateModRegistrySnapshot then
+		local registryOK, registryError = MC.ValidateModRegistrySnapshot( data.registry )
+		if registryOK ~= true then return false, registryError or "invalid_registry_snapshot" end
+	end
+	if data.registryHash == nil then return true end
+	if not isstring( data.registryHash ) or data.registryHash == "" then return false, "invalid_registry_hash" end
+	local scopedHash = data.registry ~= nil and MC.ModRegistrySnapshotHash
+		and MC.ModRegistrySnapshotHash( data.registry ) or nil
+	local effectiveHash = MC.GetEffectiveBlockStateRegistryHash and MC.GetEffectiveBlockStateRegistryHash() or nil
+	local vanillaHash = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or nil
+	if data.registryHash ~= scopedHash and data.registryHash ~= effectiveHash and data.registryHash ~= vanillaHash then
+		return false, "registry_hash_mismatch"
+	end
+	return true
+end
+
 local function loadSaveChunks( data, cache, deferWorldEffects )
 	cache = cache or {}
 	local strict = data.v == 9 or data.v == 10
@@ -2217,6 +2238,10 @@ local function loadSaveParts( data, manifestPath, cache, deferWorldEffects, real
 		partData.palette = partData.palette or data.palette
 		partData.source = partData.source or data.source
 		partData.sourceDataVersion = partData.sourceDataVersion or data.sourceDataVersion
+		partData.registryHash = partData.registryHash or data.registryHash
+		partData.registry = partData.registry or data.registry
+		local registryOK, registryError = validateSavedRegistryMetadata( partData )
+		if not registryOK then return false, registryError end
 		local loaded, loadError = loadSaveChunks( partData, cache, deferWorldEffects )
 		if not loaded then return false, loadError end
 	end
@@ -2268,6 +2293,8 @@ function SV.LoadFromPath( path, resyncClients, requestedName, realm )
 		if savedChunkSizeForData( data ) ~= MC.CS or savedHeightForData( data ) ~= MC.CH then
 			return false, "state_geometry_mismatch"
 		end
+		local registryOK, registryError = validateSavedRegistryMetadata( data )
+		if not registryOK then return false, registryError end
 	end
 
 	if data.bs and data.bs ~= MC.BS then

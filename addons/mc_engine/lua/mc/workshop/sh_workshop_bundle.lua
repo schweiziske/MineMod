@@ -218,6 +218,7 @@ local function normalizeMetadata( metadata )
 		chunks = uint32( metadata.chunks ),
 		blocks = uint32( metadata.blocks ),
 		schemaHash = cleanText( metadata.schemaHash, 128 ),
+		registryHash = cleanText( metadata.registryHash, 128 ),
 		source = source,
 		workshopId = workshopId,
 		publisherSteamId64 = owner ~= "" and owner or nil,
@@ -240,6 +241,13 @@ local function validateManifestReferences( files )
 	end
 	if manifest.schemaHash ~= nil and ( not isstring( manifest.schemaHash ) or #manifest.schemaHash > 128 ) then
 		return nil, "invalid_bundle_schema_hash"
+	end
+	if manifest.registryHash ~= nil and ( not isstring( manifest.registryHash ) or #manifest.registryHash > 128 ) then
+		return nil, "invalid_bundle_registry_hash"
+	end
+	if MC.ValidateModRegistrySnapshot then
+		local registryOK, registryError = MC.ValidateModRegistrySnapshot( manifest.registry )
+		if registryOK ~= true then return nil, registryError or "invalid_bundle_registry_snapshot" end
 	end
 	local blockCount = tonumber( manifest.blockCount )
 	if blockCount ~= nil and ( blockCount < 0 or blockCount > UINT32 - 1 or blockCount % 1 ~= 0 ) then
@@ -697,6 +705,7 @@ function W.DecodeWorkshopArchive( archive )
 		chunks = meta.chunks or stats.chunks,
 		blocks = meta.blocks or manifest.blockCount or stats.blocks,
 		schemaHash = manifest.schemaHash,
+		registryHash = manifest.registryHash,
 		source = "workshop",
 		workshopId = meta.workshopId,
 		publisherSteamId64 = meta.workshopOwner,

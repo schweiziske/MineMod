@@ -52,9 +52,11 @@ local SHARED = {
 	"mc/sh_block_states.lua",
 	"mc/block_entity/sh_registry.lua",
 	"mc/block_update/sh_registry.lua",
+	"mc/farming/sh_rules.lua",
 	"mc/state/sh_project_block_state_schemas.lua",
 	"mc/state/sh_state_collision.lua",
 	"mc/state/sh_state_visuals.lua",
+	"mc/registry/sh_mod_registry.lua",
 	"mc/block/sh_barrier.lua",
 	"mc/state/sh_state_tints.lua",
 	"mc/import/sh_format.lua",
@@ -82,6 +84,8 @@ local SHARED = {
 	"mc/redstone/sh_piston.lua",
 	"mc/sh_multiblock.lua",
 	"mc/api/sh_api.lua",
+	"mc/api/sh_manifest.lua",
+	"mc/registry/sh_builtin_api_migration.lua",
 	"mc/integration/sh_hand_weapon_bridge.lua",
 }
 local SERVER_FILES = {
@@ -95,6 +99,8 @@ local SERVER_FILES = {
 	"mc/state/sv_block_transaction.lua",
 	"mc/state/sv_column_streaming.lua",
 	"mc/block_update/sv_scheduler.lua",
+	"mc/farming/sv_growth.lua",
+	"mc/farming/sv_trampling.lua",
 	"mc/redstone/sv_inputs.lua",
 	"mc/liquid/sv_world_collision.lua",
 	"mc/liquid/sv_water_state.lua",
@@ -516,6 +522,43 @@ end
 -- Both phases replay for late subscribers via API.OnRegister / API.OnReady,
 -- which is what makes a separately shipped addon immune to autorun order.
 if MC.API and MC.API._FireAvailable then MC.API._FireAvailable() end
-if MC.API and MC.API._FireReady then timer.Simple( 0, MC.API._FireReady ) end
+-- Creative metadata and optional consumer registries freeze at one shared
+-- boundary.  The extra zero-delay hop is intentional: a separately mounted
+-- addon may load after this file and still register its finalizer during the
+-- same bootstrap tick, before MC.APIReady is announced.
+if MC.API and MC.API._RunFreezeCallbacks then timer.Simple( 0, function()
+	local manifestOK, manifestError = true, nil
+	if MC.API._FireManifestEntrypoints then
+		manifestOK, manifestError = MC.API._FireManifestEntrypoints()
+	end
+	if not manifestOK then
+		local message = "[MC] manifest bootstrap failed: " .. tostring( manifestError or "unknown" ) .. "\n"
+		if ErrorNoHalt then ErrorNoHalt( message ) else print( message ) end
+		return
+	end
+	local freezeOK, freezeError = MC.API._RunFreezeCallbacks()
+	if not freezeOK then
+		local message = "[MC] registry bootstrap freeze failed: " .. tostring( freezeError or "unknown" ) .. "\n"
+		if ErrorNoHalt then ErrorNoHalt( message ) else print( message ) end
+		return
+	end
+	if MC.FinalizeModCreativeRegistry and not MC.ModCreativeRegistryFrozen then
+		MC.FinalizeModCreativeRegistry()
+		MC.ModBlockRegistryFrozen = true
+		if MC.RunEvent then MC.RunEvent( "MC.ModCreativeRegistryReady", MC.API and MC.API.ModRegistryVersion or "1.0" ) end
+	end
+	if MC.API and MC.API._FireReady then timer.Simple( 0, MC.API._FireReady ) end
+end )
+elseif MC.FinalizeModCreativeRegistry then timer.Simple( 0, function()
+	if not MC.ModCreativeRegistryFrozen then
+		MC.FinalizeModCreativeRegistry()
+		MC.ModBlockRegistryFrozen = true
+		if MC.RunEvent then MC.RunEvent( "MC.ModCreativeRegistryReady", MC.API and MC.API.ModRegistryVersion or "1.0" ) end
+	end
+	if MC.API and MC.API._FireReady then timer.Simple( 0, MC.API._FireReady ) end
+end )
+elseif MC.API and MC.API._FireReady then
+	timer.Simple( 0, MC.API._FireReady )
+end
 
 MsgN( "[MC] Voxel block addon loaded (" .. ( SERVER and "server" or "client" ) .. ")" )

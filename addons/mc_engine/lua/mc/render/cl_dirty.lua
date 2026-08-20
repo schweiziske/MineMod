@@ -21,21 +21,31 @@ function MC.MarkChunkDirty( key )
 	local sections = {}
 	for sectionIndex = 1, RENDER_SECTION_COUNT do sections[sectionIndex] = true end
 	MC.MeshDirty[key] = sections
+	if MC.MeshDirtyRateLimited then MC.MeshDirtyRateLimited[key] = nil end
 	MC.MeshLightDirty[key] = nil
 	clearChunkBlockEmitCache( key )
 	wakeMeshBuilder()
 end
 
-local function markChunkSectionDirty( key, sectionIndex )
+local function markChunkSectionDirty( key, sectionIndex, rateLimited )
 	if not key or not sectionIndex then return end
-	if MC.MeshDirty[key] == true then return end
+	MC.MeshDirtyRateLimited = MC.MeshDirtyRateLimited or {}
 	local sections = MC.MeshDirty[key]
+	if sections == true then
+		if rateLimited ~= true then MC.MeshDirtyRateLimited[key] = nil end
+		return
+	end
 	if not sections then
 		sections = {}
 		MC.MeshDirty[key] = sections
+		MC.MeshDirtyRateLimited[key] = rateLimited == true and true or nil
+	elseif rateLimited ~= true then
+		-- An ordinary edit sharing a chunk with pending explosion work stays
+		-- immediate; the low-priority queue must never delay player interaction.
+		MC.MeshDirtyRateLimited[key] = nil
 	end
-	if MC.MeshDirty[key][sectionIndex] then return end
-	MC.MeshDirty[key][sectionIndex] = true
+	if sections[sectionIndex] then return end
+	sections[sectionIndex] = true
 	wakeMeshBuilder()
 end
 
@@ -105,25 +115,25 @@ function MC.MarkRenderSectionsDirtyInBounds( minBX, minBY, minBZ, maxBX, maxBY, 
 	end
 end
 
-local function markBlockGeometryDirty( x, y, z )
+local function markBlockGeometryDirty( x, y, z, rateLimited )
 	local cx, cy, cz, li = MC.CellToChunk( x, y, z )
 	local lx, ly, lz = DecodeLocal( li )
 	local key = MC.ChunkKey( cx, cy, cz )
 	local sectionIndex = sectionIndexForLocal( lx, ly, lz )
 	if MC.ClearBlockConnectionMaskCache then MC.ClearBlockConnectionMaskCache( x, y, z ) end
 	markBlockEmitCacheDirty( x, y, z )
-	markChunkSectionDirty( key, sectionIndex )
+	markChunkSectionDirty( key, sectionIndex, rateLimited )
 	return key, sectionIndex
 end
 
 
 -- a block changed: its own chunk and any chunk owning a face-neighbour cell
 -- may need a rebuild (boundary faces).
-function MC.MarkDirty( bx, by, bz )
-	markBlockGeometryDirty( bx, by, bz )
-	markBlockGeometryDirty( bx + 1, by, bz ) ; markBlockGeometryDirty( bx - 1, by, bz )
-	markBlockGeometryDirty( bx, by + 1, bz ) ; markBlockGeometryDirty( bx, by - 1, bz )
-	markBlockGeometryDirty( bx, by, bz + 1 ) ; markBlockGeometryDirty( bx, by, bz - 1 )
+function MC.MarkDirty( bx, by, bz, rateLimited )
+	markBlockGeometryDirty( bx, by, bz, rateLimited )
+	markBlockGeometryDirty( bx + 1, by, bz, rateLimited ) ; markBlockGeometryDirty( bx - 1, by, bz, rateLimited )
+	markBlockGeometryDirty( bx, by + 1, bz, rateLimited ) ; markBlockGeometryDirty( bx, by - 1, bz, rateLimited )
+	markBlockGeometryDirty( bx, by, bz + 1, rateLimited ) ; markBlockGeometryDirty( bx, by, bz - 1, rateLimited )
 end
 
 -- FluidRenderer corner heights sample a horizontal 3x3 neighborhood. Each
@@ -135,13 +145,16 @@ function MC.MarkFluidGeometryDirtyForStateChange( bx, by, bz, oldStateId, newSta
 	local oldKind = MC.LiquidKindForState and MC.LiquidKindForState( oldStateId ) or nil
 	local newKind = MC.LiquidKindForState and MC.LiquidKindForState( newStateId ) or nil
 	if not oldKind and not newKind then return 0 end
+	local cx, cy, cz = MC.CellToChunk( bx, by, bz )
+	local sourceKey = MC.ChunkKey( cx, cy, cz )
+	local rateLimited = MC.MeshDirtyRateLimited and MC.MeshDirtyRateLimited[sourceKey] == true
 	for dy = -1, 1 do
 		for dx = -1, 1 do
 			-- MC.MarkDirty already handled the changed cell, its four horizontal
 			-- face neighbours and the cell directly below. Only add the corner
 			-- dependencies and the remaining lower-layer ring here.
-			if dx ~= 0 and dy ~= 0 then markBlockGeometryDirty( bx + dx, by + dy, bz ) end
-			if dx ~= 0 or dy ~= 0 then markBlockGeometryDirty( bx + dx, by + dy, bz - 1 ) end
+			if dx ~= 0 and dy ~= 0 then markBlockGeometryDirty( bx + dx, by + dy, bz, rateLimited ) end
+			if dx ~= 0 or dy ~= 0 then markBlockGeometryDirty( bx + dx, by + dy, bz - 1, rateLimited ) end
 		end
 	end
 	return 12
@@ -239,6 +252,40 @@ local function sortedDirtyKeys( dirty, buildDistance )
 	return keys
 end
 
+local function nextDirtyMeshKeys( rateLimited, buildDistance )
+	local filtered = {}
+	for key in pairs( MC.MeshDirty or {} ) do
+		local isRateLimited = MC.MeshDirtyRateLimited and MC.MeshDirtyRateLimited[key] == true
+		if isRateLimited == ( rateLimited == true ) then filtered[key] = true end
+	end
+	return sortedDirtyKeys( filtered, buildDistance )
+end
+
+local function nextLightDirtyMeshKeys( rateLimited, buildDistance )
+	local filtered = {}
+	for key in pairs( MC.MeshLightDirty or {} ) do
+		local isRateLimited = MC.MeshLightDirtyRateLimited and MC.MeshLightDirtyRateLimited[key] == true
+		if isRateLimited == ( rateLimited == true ) then filtered[key] = true end
+	end
+	return sortedDirtyKeys( filtered, buildDistance )
+end
+
+MC.ExplosionMeshFrameMS = MC.ExplosionMeshFrameMS or ( CreateClientConVar and CreateClientConVar(
+	"mc_explosion_mesh_frame_ms", "4", true, false,
+	"Pure-Lua milliseconds per frame for explosion-driven mesh rebuilds", 0.5, 20 ) )
+MC.ExplosionMeshSectionsPerFrame = MC.ExplosionMeshSectionsPerFrame or ( CreateClientConVar and CreateClientConVar(
+	"mc_explosion_mesh_sections_per_frame", "8", true, false,
+	"Pure-Lua render sections per frame for explosion-driven mesh rebuilds", 1, 128 ) )
+
+local function rateLimitedMeshBuildBudget()
+	local frameMS = MC.ExplosionMeshFrameMS and MC.ExplosionMeshFrameMS.GetFloat
+		and MC.ExplosionMeshFrameMS:GetFloat() or 4
+	local sections = MC.ExplosionMeshSectionsPerFrame and MC.ExplosionMeshSectionsPerFrame.GetInt
+		and MC.ExplosionMeshSectionsPerFrame:GetInt() or 8
+	return math.max( 0.5, tonumber( frameMS ) or 4 ) / 1000,
+		math.max( 1, math.floor( tonumber( sections ) or 8 ) )
+end
+
 local function bulkCollisionInterval()
 	local cvar = GetConVar and GetConVar( "mc_bulk_collision_interval" ) or nil
 	local interval = cvar and cvar:GetFloat() or ( MC.Config.BulkCollisionInterval or 0.12 )
@@ -331,7 +378,7 @@ local function nativeMeshBackendActive()
 	return backend and backend.native == true and ( not backend.IsActive or backend.IsActive() == true )
 end
 
-local function buildDirtyMeshKey( key, sections, rebuiltSections, deadline )
+local function buildDirtyMeshKey( key, sections, rebuiltSections, deadline, sectionLimit )
 	if sections == true then
 		sections = {}
 		for sectionIndex = 1, RENDER_SECTION_COUNT do sections[sectionIndex] = true end
@@ -355,11 +402,12 @@ local function buildDirtyMeshKey( key, sections, rebuiltSections, deadline )
 
 	local built = 0
 	for sectionIndex in pairs( sections ) do
+		if built > 0 and ( sectionLimit and built >= sectionLimit
+		or deadline and SysTime() >= deadline ) then break end
 		MC.BuildChunkMesh( key, sectionIndex )
 		noteRebuiltMeshSection( rebuiltSections, key, sectionIndex )
 		sections[sectionIndex] = nil
 		built = built + 1
-		if deadline and SysTime() >= deadline then break end
 	end
 
 	if next( sections ) == nil then
@@ -371,7 +419,7 @@ local function buildDirtyMeshKey( key, sections, rebuiltSections, deadline )
 	return built
 end
 
-local function buildLightDirtyMeshKey( key, sections, rebuiltSections, deadline )
+local function buildLightDirtyMeshKey( key, sections, rebuiltSections, deadline, sectionLimit )
 	local geometryDirty = MC.MeshDirty[key]
 	if geometryDirty == true then
 		MC.MeshLightDirty[key] = nil
@@ -392,13 +440,14 @@ local function buildLightDirtyMeshKey( key, sections, rebuiltSections, deadline 
 
 	local built = 0
 	for sectionIndex in pairs( sections ) do
+		if built > 0 and ( sectionLimit and built >= sectionLimit
+		or deadline and SysTime() >= deadline ) then break end
 		if ( istable( geometryDirty ) and geometryDirty[sectionIndex] ) or ( istable( rebuilt ) and rebuilt[sectionIndex] ) then
 			if istable( rebuilt ) and rebuilt[sectionIndex] then sections[sectionIndex] = nil end
 		else
 			MC.RebuildChunkMeshLighting( key, sectionIndex )
 			sections[sectionIndex] = nil
 			built = built + 1
-			if deadline and SysTime() >= deadline then break end
 		end
 	end
 
@@ -453,9 +502,10 @@ hook.Add( "Think", "mc_meshbuild", function()
 	local foundEligible = false
 	if next( MC.MeshDirty ) then
 		rebuiltSections = {}
-		local keys = sortedDirtyKeys( MC.MeshDirty, lazy and lazyDistance or nil )
-		foundEligible = #keys > 0
-		for _, key in ipairs( keys ) do
+		local buildDistance = lazy and lazyDistance or nil
+		local immediateKeys = nextDirtyMeshKeys( false, buildDistance )
+		foundEligible = #immediateKeys > 0
+		for _, key in ipairs( immediateKeys ) do
 			local sections = MC.MeshDirty[key]
 			local built = buildDirtyMeshKey( key, sections, rebuiltSections, deadline )
 			if built > 0 then
@@ -464,14 +514,48 @@ hook.Add( "Think", "mc_meshbuild", function()
 			end
 			if deadline and SysTime() >= deadline then break end
 		end
+		if not deadline or SysTime() < deadline then
+			local rateLimitedKeys = nextDirtyMeshKeys( true, buildDistance )
+			foundEligible = foundEligible or #rateLimitedKeys > 0
+			local nativeFast = nativeMeshBackendActive()
+			local frameSeconds, sectionBudget = rateLimitedMeshBuildBudget()
+			local rateDeadline = not nativeFast and SysTime() + frameSeconds or deadline
+			if deadline and ( not rateDeadline or deadline < rateDeadline ) then rateDeadline = deadline end
+			local remaining = not nativeFast and sectionBudget or nil
+			for _, key in ipairs( rateLimitedKeys ) do
+				if remaining and remaining <= 0 or rateDeadline and SysTime() >= rateDeadline then break end
+				local built = buildDirtyMeshKey( key, MC.MeshDirty[key], rebuiltSections, rateDeadline, remaining )
+				if remaining then remaining = remaining - built end
+				if built > 0 then
+					geometryKeys = geometryKeys + 1
+					geometrySections = geometrySections + built
+				end
+			end
+		end
 	end
 	if next( MC.MeshLightDirty ) and ( not deadline or SysTime() < deadline ) then
-		local keys = sortedDirtyKeys( MC.MeshLightDirty, lazy and lazyDistance or nil )
-		foundEligible = foundEligible or #keys > 0
-		for _, key in ipairs( keys ) do
+		local buildDistance = lazy and lazyDistance or nil
+		local immediateKeys = nextLightDirtyMeshKeys( false, buildDistance )
+		foundEligible = foundEligible or #immediateKeys > 0
+		for _, key in ipairs( immediateKeys ) do
 			local built = buildLightDirtyMeshKey( key, MC.MeshLightDirty[key], rebuiltSections, deadline )
 			if built > 0 then lightKeys, lightSections = lightKeys + 1, lightSections + built end
 			if deadline and SysTime() >= deadline then break end
+		end
+		if not deadline or SysTime() < deadline then
+			local rateLimitedKeys = nextLightDirtyMeshKeys( true, buildDistance )
+			foundEligible = foundEligible or #rateLimitedKeys > 0
+			local nativeFast = nativeMeshBackendActive()
+			local frameSeconds, sectionBudget = rateLimitedMeshBuildBudget()
+			local rateDeadline = not nativeFast and SysTime() + frameSeconds or deadline
+			if deadline and ( not rateDeadline or deadline < rateDeadline ) then rateDeadline = deadline end
+			local remaining = not nativeFast and sectionBudget or nil
+			for _, key in ipairs( rateLimitedKeys ) do
+				if remaining and remaining <= 0 or rateDeadline and SysTime() >= rateDeadline then break end
+				local built = buildLightDirtyMeshKey( key, MC.MeshLightDirty[key], rebuiltSections, rateDeadline, remaining )
+				if remaining then remaining = remaining - built end
+				if built > 0 then lightKeys, lightSections = lightKeys + 1, lightSections + built end
+			end
 		end
 	end
 	if lazy and not foundEligible then
@@ -504,7 +588,8 @@ hook.Add( "Think", "mc_meshbuild", function()
 end )
 
 if cvars and cvars.AddChangeCallback then
-	for _, name in ipairs( { "mc_mesh_lazy_build", "mc_mesh_lazy_distance", "mc_mesh_draw_distance", "mc_mesh_build_frame_ms" } ) do
+	for _, name in ipairs( { "mc_mesh_lazy_build", "mc_mesh_lazy_distance", "mc_mesh_draw_distance", "mc_mesh_build_frame_ms",
+		"mc_explosion_mesh_frame_ms", "mc_explosion_mesh_sections_per_frame" } ) do
 		cvars.AddChangeCallback( name, wakeMeshBuilder, "mc_mesh_lazy_build_" .. name )
 	end
 end

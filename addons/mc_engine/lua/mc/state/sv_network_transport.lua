@@ -57,6 +57,14 @@ SV.BlockRevision = math.floor( tonumber( SV.BlockRevision ) or 0 )
 SV.StateSnapshotToken = math.floor( tonumber( SV.StateSnapshotToken ) or 0 )
 
 local function schemaHash()
+	-- Numeric state transport is guarded by the network registry hash.  It
+	-- includes canonical block-name -> runtime block-id bindings for legacy
+	-- paths, while save metadata continues to use the string-scoped hash.
+	if MC.GetModRegistryNetworkHash then
+		return tostring( MC.GetModRegistryNetworkHash() or "" )
+	elseif MC.GetEffectiveBlockStateRegistryHash then
+		return tostring( MC.GetEffectiveBlockStateRegistryHash() or "" )
+	end
 	return MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or ""
 end
 

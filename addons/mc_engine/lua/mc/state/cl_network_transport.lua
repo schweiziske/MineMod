@@ -57,6 +57,11 @@ local function publishAppliedRevision( revision )
 end
 
 local function localSchemaHash()
+	if MC.GetModRegistryNetworkHash then
+		return tostring( MC.GetModRegistryNetworkHash() or "" )
+	elseif MC.GetEffectiveBlockStateRegistryHash then
+		return tostring( MC.GetEffectiveBlockStateRegistryHash() or "" )
+	end
 	local metadata = MC.BlockStateRegistryMetadata
 	return metadata and tostring( metadata.schemaHash or "" ) or ""
 end

@@ -93,10 +93,10 @@ end
 function MC.RegisterCustomBlock( def )
 	if MC.BlockStateRegistryFrozen then
 		if MsgN then MsgN( "[MC] custom block registration rejected after block-state registry freeze" ) end
-		return nil
+		return nil, "registry_frozen"
 	end
 	local prepared, key = prepareCustomDef( def )
-	if not prepared then return nil end
+	if not prepared then return nil, "invalid_definition" end
 	if MC.RegisterBlock and MC.RegisterProjectBlockStateSchema then
 		local stateRule = prepared.stateRule or prepared.orient
 		if string.match( prepared.name, "_door$" ) then
@@ -114,7 +114,7 @@ function MC.RegisterCustomBlock( def )
 		} )
 		if not schema then
 			if MsgN then MsgN( "[MC] custom block '" .. key .. "' has invalid state schema: " .. tostring( schemaError ) ) end
-			return nil
+			return nil, schemaError or "invalid_state_schema"
 		end
 	end
 
@@ -196,8 +196,14 @@ local SLOPE_QUADS = {
 	},
 }
 
-MC.RegisterCustomBlock( {
-	id = 61001,
+-- Kept as a definition here so the production block can be registered through
+-- the same public API that an external addon uses.  The migration module runs
+-- after MC.API.Blocks exists, before the bootstrap freeze.
+-- The legacy number is kept beside (not inside) the public-shaped definition.
+-- sh_mod_registry.lua captures this exact table/id pair into a private,
+-- one-shot reservation before MC.API.Blocks.RegisterNamespaced sees the definition.
+MC.MigratedBuiltinOakSlopeRuntimeId = 61001
+MC.MigratedBuiltinOakSlopeDefinition = {
 	name = "custom_oak_slope",
 	mcid = "mcswep:oak_slope",
 	disp = "自定义橡木斜坡",
@@ -211,7 +217,7 @@ MC.RegisterCustomBlock( {
 	modelQuads = SLOPE_QUADS,
 	hardness = 2,
 	explosionResistance = 3,
-} )
+}
 
 local COLOR_BLOCKS = {
 	{ id = 61010, name = "red_color_block", mcid = "mcswep:red_color_block", disp = "自定义红色块", tile = "red_concrete" },

@@ -8,15 +8,15 @@
 
 MC = MC or {}
 
-MC.BlockUpdateKind = MC.BlockUpdateKind or {
-	NEIGHBOR = 1,
-	SCHEDULED = 2,
-}
-
+MC.BlockUpdateKind = MC.BlockUpdateKind or {}
 local Kind = MC.BlockUpdateKind
+Kind.NEIGHBOR = 1
+Kind.SCHEDULED = 2
+Kind.RANDOM = Kind.RANDOM or 3
 local CallbackByKind = {
 	[Kind.NEIGHBOR] = "OnNeighborUpdate",
 	[Kind.SCHEDULED] = "OnScheduledTick",
+	[Kind.RANDOM] = "OnRandomTick",
 }
 
 local HandlerByName = {}
@@ -26,7 +26,13 @@ local StateHandlerOrder = {}
 local HandlerCountByKind = {
 	[Kind.NEIGHBOR] = 0,
 	[Kind.SCHEDULED] = 0,
+	[Kind.RANDOM] = 0,
 }
+local ListenerByKindState = {}
+
+local function invalidateListenerCache()
+	ListenerByKindState = {}
+end
 
 local function normalizeBlockName( value )
 	local name = string.lower( string.match( tostring( value or "" ), "^%s*(.-)%s*$" ) )
@@ -40,13 +46,16 @@ local function normalizeDefinition( name, definition )
 	if type( definition ) ~= "table" then return nil, "invalid_handler" end
 	local neighbor = definition.OnNeighborUpdate
 	local scheduled = definition.OnScheduledTick
+	local random = definition.OnRandomTick
 	if neighbor ~= nil and type( neighbor ) ~= "function" then return nil, "invalid_neighbor_handler" end
 	if scheduled ~= nil and type( scheduled ) ~= "function" then return nil, "invalid_scheduled_handler" end
-	if neighbor == nil and scheduled == nil then return nil, "empty_handler" end
+	if random ~= nil and type( random ) ~= "function" then return nil, "invalid_random_handler" end
+	if neighbor == nil and scheduled == nil and random == nil then return nil, "empty_handler" end
 	return {
 		name = name,
 		OnNeighborUpdate = neighbor,
 		OnScheduledTick = scheduled,
+		OnRandomTick = random,
 	}
 end
 
@@ -54,11 +63,13 @@ local function removeHandlerCount( handler )
 	if not handler then return end
 	if handler.OnNeighborUpdate then HandlerCountByKind[Kind.NEIGHBOR] = HandlerCountByKind[Kind.NEIGHBOR] - 1 end
 	if handler.OnScheduledTick then HandlerCountByKind[Kind.SCHEDULED] = HandlerCountByKind[Kind.SCHEDULED] - 1 end
+	if handler.OnRandomTick then HandlerCountByKind[Kind.RANDOM] = HandlerCountByKind[Kind.RANDOM] - 1 end
 end
 
 local function addHandlerCount( handler )
 	if handler.OnNeighborUpdate then HandlerCountByKind[Kind.NEIGHBOR] = HandlerCountByKind[Kind.NEIGHBOR] + 1 end
 	if handler.OnScheduledTick then HandlerCountByKind[Kind.SCHEDULED] = HandlerCountByKind[Kind.SCHEDULED] + 1 end
+	if handler.OnRandomTick then HandlerCountByKind[Kind.RANDOM] = HandlerCountByKind[Kind.RANDOM] + 1 end
 end
 
 function MC.IsBlockUpdateKind( kind )
@@ -85,6 +96,7 @@ function MC.RegisterBlockUpdateHandler( blockName, definition )
 	-- Registrations are cold-path operations. Replacing the cache keeps hot-path
 	-- state lookups to one table access after the first resolution.
 	HandlerByState = {}
+	invalidateListenerCache()
 	return handler
 end
 
@@ -95,6 +107,7 @@ function MC.UnregisterBlockUpdateHandler( blockName )
 	removeHandlerCount( previous )
 	HandlerByName[name] = nil
 	HandlerByState = {}
+	invalidateListenerCache()
 	return true
 end
 
@@ -119,6 +132,7 @@ function MC.RegisterBlockUpdateStateHandler( key, matcher, definition )
 	StateHandlerByKey[key] = handler
 	addHandlerCount( handler )
 	HandlerByState = {}
+	invalidateListenerCache()
 	return handler
 end
 
@@ -132,6 +146,7 @@ function MC.UnregisterBlockUpdateStateHandler( key )
 		if StateHandlerOrder[index] == previous then table.remove( StateHandlerOrder, index ) break end
 	end
 	HandlerByState = {}
+	invalidateListenerCache()
 	return true
 end
 
@@ -152,17 +167,20 @@ local ObserversByState = {}
 local ObserverCountByKind = {
 	[Kind.NEIGHBOR] = 0,
 	[Kind.SCHEDULED] = 0,
+	[Kind.RANDOM] = 0,
 }
 
 local function removeObserverCount( observer )
 	if not observer then return end
 	if observer.OnNeighborUpdate then ObserverCountByKind[Kind.NEIGHBOR] = ObserverCountByKind[Kind.NEIGHBOR] - 1 end
 	if observer.OnScheduledTick then ObserverCountByKind[Kind.SCHEDULED] = ObserverCountByKind[Kind.SCHEDULED] - 1 end
+	if observer.OnRandomTick then ObserverCountByKind[Kind.RANDOM] = ObserverCountByKind[Kind.RANDOM] - 1 end
 end
 
 local function addObserverCount( observer )
 	if observer.OnNeighborUpdate then ObserverCountByKind[Kind.NEIGHBOR] = ObserverCountByKind[Kind.NEIGHBOR] + 1 end
 	if observer.OnScheduledTick then ObserverCountByKind[Kind.SCHEDULED] = ObserverCountByKind[Kind.SCHEDULED] + 1 end
+	if observer.OnRandomTick then ObserverCountByKind[Kind.RANDOM] = ObserverCountByKind[Kind.RANDOM] + 1 end
 end
 
 -- match is either a block name ("minecraft:wheat") or a
@@ -194,6 +212,7 @@ function MC.RegisterBlockUpdateObserver( key, match, definition )
 	ObserverByKey[key] = observer
 	addObserverCount( observer )
 	ObserversByState = {}
+	invalidateListenerCache()
 	return observer
 end
 
@@ -207,6 +226,7 @@ function MC.UnregisterBlockUpdateObserver( key )
 		if ObserverOrder[index] == previous then table.remove( ObserverOrder, index ) break end
 	end
 	ObserversByState = {}
+	invalidateListenerCache()
 	return true
 end
 
@@ -268,4 +288,36 @@ end
 function MC.BlockUpdateHandlerForName( blockName )
 	local name = normalizeBlockName( blockName )
 	return name and HandlerByName[name] or nil
+end
+
+-- Hot-path query used by queue admission and the random-tick sampler. It
+-- answers for one concrete state and callback kind, including additive
+-- observers, and caches the result once the state registry is stable.
+function MC.BlockStateHasUpdateListener( stateId, kind )
+	stateId = tonumber( stateId )
+	kind = tonumber( kind )
+	local callbackName = stateId ~= nil and CallbackByKind[kind] or nil
+	if not callbackName then return false end
+	local byState = ListenerByKindState[kind]
+	if not byState then
+		byState = {}
+		ListenerByKindState[kind] = byState
+	end
+	local cached = byState[stateId]
+	if cached ~= nil then return cached == true end
+
+	local handler = MC.BlockUpdateHandlerForState( stateId )
+	local matched = handler ~= nil and handler[callbackName] ~= nil
+	if not matched then
+		local observers = MC.BlockUpdateObserversForState( stateId )
+		for index = 1, observers and #observers or 0 do
+			if observers[index][callbackName] then
+				matched = true
+				break
+			end
+		end
+	end
+	local schema = MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( stateId ) or nil
+	if matched or schema or MC.BlockStateRegistryFrozen then byState[stateId] = matched == true end
+	return matched == true
 end
