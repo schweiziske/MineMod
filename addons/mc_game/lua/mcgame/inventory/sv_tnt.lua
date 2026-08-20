@@ -30,6 +30,10 @@ local function createPendingPrimed( bx, by, bz, source )
 	if not ents or not ents.Create then return nil, "primed_tnt_entity_unavailable" end
 	local ent = ents.Create( "mc_primed_tnt" )
 	if not IsValid( ent ) then return nil, "primed_tnt_entity_unavailable" end
+	-- ApplyMinecraftExplosion forwards options.source as the damage inflictor.
+	-- This marker lets BlockAttachedEntity#ignoreExplosion distinguish that exact
+	-- direct source from the indirect actor fallback used by source-less blasts.
+	ent.MCExplosionDirectSource = true
 	local position = centerAt( bx, by, bz )
 	if MC.SetEntityEnginePos then MC.SetEntityEnginePos( ent, position ) else ent:SetPos( position ) end
 	ent:SetOwner( IsValid( source ) and source or NULL )

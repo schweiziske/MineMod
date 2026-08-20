@@ -352,7 +352,7 @@ function MC.MerchantApplyModifiers( resultSpec, modifiers, seed )
 		elseif functionId == "minecraft:exploration_map" then
 			-- A real exploration map requires the Java structure-tag search and map
 			-- saved-data allocation.  Never substitute an ordinary map.
-			return nil, 0, "exploration_map_unavailable"
+			return nil, 0, "exploration_map_pending"
 		else
 			return nil, 0, "unsupported_trade_modifier"
 		end

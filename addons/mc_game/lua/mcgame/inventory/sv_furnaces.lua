@@ -203,6 +203,28 @@ local function runtimeAt( bx, by, bz, create )
 	return runtime
 end
 
+-- Controlled logistics adapter: external container transfers must mutate the
+-- same runtime storage menus and furnace ticks use, then publish those slots.
+function SV.LogisticsFurnaceRuntimeAt( bx, by, bz, create )
+	return runtimeAt( bx, by, bz, create == true )
+end
+
+function SV.LogisticsCommitFurnaceRuntime( runtime, changedSlots )
+	if type( runtime ) ~= "table" or type( changedSlots ) ~= "table" then return false, "invalid_furnace_commit" end
+	local inputChanged = false
+	for _, slot in ipairs( changedSlots ) do if slot == 0 then inputChanged = true break end end
+	if inputChanged then
+		local recipe = MC.FindCookingRecipe and MC.FindCookingRecipe( stackAt( runtime, 0 ), runtime.recipeType ) or nil
+		runtime.cookingTimeSpent = 0
+		runtime.cookingTotalTime = recipe and recipe.cookingTime or 0
+	end
+	syncRecord( runtime, true )
+	schedule( runtime )
+	publishRuntime( runtime, changedSlots )
+	broadcastState( runtime )
+	return true
+end
+
 local function tableStillValid( ply, runtime )
 	if not IsValid( ply ) or not ply:Alive() then return false end
 	local name = blockNameAt( runtime.bx, runtime.by, runtime.bz )

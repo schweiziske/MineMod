@@ -21,6 +21,8 @@ local SCROLLER_DISABLED = UI.GetGuiMaterial( "sprites/container/villager/scrolle
 local TRADE_ARROW = UI.GetGuiMaterial( "sprites/container/villager/trade_arrow" )
 local TRADE_ARROW_OUT_OF_STOCK = UI.GetGuiMaterial( "sprites/container/villager/trade_arrow_out_of_stock" )
 local DISCOUNT_STRIKETHROUGH = UI.GetGuiMaterial( "sprites/container/villager/discount_strikethrough" )
+local TRADE_BUTTON = UI.GetGuiMaterial( "sprites/widget/button" )
+local TRADE_BUTTON_HIGHLIGHTED = UI.GetGuiMaterial( "sprites/widget/button_highlighted" )
 
 local LEVEL_MIN_XP = { [1] = 0, [2] = 10, [3] = 70, [4] = 150, [5] = 250 }
 local LEVEL_NAMES = {
@@ -49,7 +51,7 @@ local PROFESSION_NAMES = {
 	wandering_trader = { en = "Wandering Trader", zh = "流浪商人" },
 }
 local UNAVAILABLE_REASON_TEXT = {
-	exploration_map_unavailable = {
+	exploration_map_pending = {
 		en = "This trade needs structure-map data that is not available yet",
 		zh = "此交易需要尚未接入的结构地图数据",
 	},
@@ -274,13 +276,17 @@ end
 function MERCHANT_SCROLLER:SetScreen( screen ) self.Screen = screen end
 function MERCHANT_SCROLLER:Paint() return true end
 
+function MERCHANT_SCROLLER:CanScroll()
+	return IsValid( self.Screen ) and self.Screen:MaxMerchantScrollOffset() > 0
+end
+
 function MERCHANT_SCROLLER:UpdateFromCursor( y )
-	if not IsValid( self.Screen ) then return end
+	if not self:CanScroll() then return end
 	self.Screen:SetMerchantScrollFraction( ( y - 13.5 * self.Screen.Scale ) / ( 112 * self.Screen.Scale ) )
 end
 
 function MERCHANT_SCROLLER:OnMousePressed( code )
-	if code ~= MOUSE_LEFT then return end
+	if code ~= MOUSE_LEFT or not self:CanScroll() then return end
 	self.Dragging = true
 	self:MouseCapture( true )
 	local _, y = self:CursorPos()
@@ -308,7 +314,7 @@ function MERCHANT_SCROLLER:Think()
 end
 
 function MERCHANT_SCROLLER:OnMouseWheeled( delta )
-	return IsValid( self.Screen ) and self.Screen:OnMouseWheeled( delta )
+	return self:CanScroll() and self.Screen:OnMouseWheeled( delta )
 end
 
 vgui.Register( "MCMerchantScroller", MERCHANT_SCROLLER, "DPanel" )
@@ -407,7 +413,13 @@ function PANEL:LayoutSpecialControls()
 		end
 	end
 	if IsValid( self.MerchantScroller ) then
-		self.MerchantScroller:SetVisible( #offers > VISIBLE_OFFERS )
+		-- MerchantScreen.extractScroller always paints a thumb: the normal
+		-- 6x27 sprite is used only for >7 offers, otherwise the disabled sprite
+		-- stays at the top of the 139px track. Java skips extractContents when
+		-- there are no offers at all, so only that empty state hides the panel.
+		-- For 1..7 offers the hit panel remains alive; its input methods reject
+		-- dragging when there is no range.
+		self.MerchantScroller:SetVisible( #offers > 0 )
 		self.MerchantScroller:SetPos( self.Left + 94 * self.Scale, self.Top + 18 * self.Scale )
 		self.MerchantScroller:SetSize( 6 * self.Scale, 139 * self.Scale )
 	end
@@ -492,11 +504,19 @@ function PANEL:PaintContent()
 	local offers = state and state.offers or {}
 	local scale, left, top = self.Scale, self.Left, self.Top
 	UI.WithPointFiltering( function()
-		UI.DrawTexture( BACKGROUND, left, top, MERCHANT_W * scale, MERCHANT_H * scale,
-			0, 0, MERCHANT_W / 512, MERCHANT_H / 256 )
+		-- villager.png already stores the 276x166 screen on a transparent
+		-- 512x256 canvas. Draw that complete padded canvas through the shared
+		-- GUI mapping so Source cannot flatten its one-pixel slot bevels.
+		UI.DrawTextureClipped( BACKGROUND, left, top, MERCHANT_W * scale, MERCHANT_H * scale,
+			left, top, MERCHANT_W * scale, MERCHANT_H * scale )
 		for row = 0, VISIBLE_OFFERS - 1 do
 			local offer = offers[self.MerchantScrollOffset + row + 1]
 			if offer then
+				local buttonMaterial = self.HoveredMerchantRow == row
+					and TRADE_BUTTON_HIGHLIGHTED or TRADE_BUTTON
+				UI.DrawHorizontalNineSlice( buttonMaterial,
+					left + 5 * scale, top + ( 18 + row * 20 ) * scale,
+					88 * scale, 20 * scale, 200, 20, 3, scale )
 				local y = top + ( 19 + row * 20 ) * scale
 				if offer.unavailable and surface and surface.SetDrawColor and surface.DrawRect then
 					surface.SetDrawColor( UI.Colors.invalid )
@@ -520,7 +540,7 @@ function PANEL:PaintContent()
 			UI.DrawTexture( SCROLLER, left + 94 * scale,
 				top + ( 18 + scrollerOffset( #offers, self.MerchantScrollOffset ) ) * scale,
 				6 * scale, 27 * scale )
-		else
+		elseif #offers > 0 then
 			UI.DrawTexture( SCROLLER_DISABLED, left + 94 * scale, top + 18 * scale,
 				6 * scale, 27 * scale )
 		end

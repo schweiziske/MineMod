@@ -264,6 +264,182 @@ function PLAYER:AddMCExperience( value, context )
 	return SV.AddPlayerExperience( self, value, context )
 end
 
+local MENDING_REPAIR_FACTOR = 2
+
+local function stackMaxDamage( stack )
+	if not stack then return 0 end
+	if type( MC.ItemStackMaxDamage ) == "function" then
+		return math.max( 0, math.floor( tonumber( MC.ItemStackMaxDamage( stack ) ) or 0 ) )
+	end
+	local definition = type( MC.GetItem ) == "function" and MC.GetItem( stack.item ) or nil
+	return math.max( 0, math.floor( tonumber( definition and definition.maxDamage or stack.maxDamage ) or 0 ) )
+end
+
+local function ordinaryMendingLevel( stack )
+	-- Mending is read from the ordinary `enchantments` component only.  In
+	-- particular, an enchanted book's `stored_enchantments` must not make the
+	-- book participate in runtime repair selection.
+	if not stack or type( MC.GetItemEnchantments ) ~= "function" then return 0 end
+	local levels = select( 1, MC.GetItemEnchantments( stack, false ) )
+	if type( levels ) ~= "table" then return 0 end
+	return math.max( 0,
+		math.floor( tonumber( levels["minecraft:mending"] ) or tonumber( levels.mending ) or 0 ) )
+end
+
+local function isMendingCandidate( stack )
+	if not stack or ( tonumber( stack.damage ) or 0 ) <= 0 then return false end
+	if stackMaxDamage( stack ) <= 0 then return false end
+	if type( MC.ItemIsUnbreakable ) == "function" and MC.ItemIsUnbreakable( stack ) then return false end
+	return ordinaryMendingLevel( stack ) > 0
+end
+
+local function candidateStack( record, candidate )
+	if not record or not candidate then return nil end
+	if candidate.hand == "mainhand" then
+		return record.storage and record.storage[candidate.selected + 1] or nil
+	end
+	return record.equipment and record.equipment[candidate.slot] or nil
+end
+
+local function appendMendingCandidate( candidates, record, candidate )
+	local stack = candidateStack( record, candidate )
+	if not isMendingCandidate( stack ) then return end
+	candidate.mendingLevel = ordinaryMendingLevel( stack )
+	candidates[#candidates + 1] = candidate
+end
+
+local function mendingCandidates( record )
+	local candidates = {}
+	local selected = math.Clamp( math.floor( tonumber( record and record.selected ) or 0 ), 0, 8 )
+
+	-- EquipmentSlot.VALUES in Java 26.2 is mainhand, offhand, feet, legs,
+	-- chest, head (the remaining animal slots are empty for players).  Keep
+	-- this order so a deterministic test/random source observes the same
+	-- candidate sequence.
+	appendMendingCandidate( candidates, record, { hand = "mainhand", selected = selected } )
+	appendMendingCandidate( candidates, record, { hand = "offhand", slot = "offhand" } )
+	for _, slot in ipairs( { "feet", "legs", "chest", "head" } ) do
+		appendMendingCandidate( candidates, record, { hand = "equipment", slot = slot } )
+	end
+	return candidates
+end
+
+local function restoreEquipmentSlot( record, slot, stack )
+	if not record then return end
+	record.equipment = record.equipment or {}
+	record.equipment[slot] = MC.CopyItemStack( stack )
+end
+
+local function stackMatchesUseState( state, stack )
+	if not state or not stack then return false end
+	if state.stackHash and type( MC.ItemStackHash ) == "function" then
+		return state.stackHash == MC.ItemStackHash( stack )
+	end
+	return state.itemName == stack.item
+		and ( tonumber( state.damage ) or 0 ) == ( tonumber( stack.damage ) or 0 )
+end
+
+local function refreshItemUseAfterMending( record, candidate, before, after )
+	local state = record and record.itemUse
+	if not state or not after or state.hand ~= candidate.hand then return end
+	if candidate.hand == "mainhand" and state.selected ~= candidate.selected then return end
+	if not stackMatchesUseState( state, before ) then return end
+	state.itemName = after.item
+	state.damage = after.damage
+	state.stackHash = type( MC.ItemStackHash ) == "function" and MC.ItemStackHash( after ) or nil
+end
+
+local function repairMendingCandidate( ply, record, candidate, xp, context )
+	local before = candidateStack( record, candidate )
+	if not isMendingCandidate( before ) then return false, "candidate_changed" end
+	local damage = math.max( 0, math.floor( tonumber( before.damage ) or 0 ) )
+	local capacity = math.max( 0, math.floor( xp * MENDING_REPAIR_FACTOR ) )
+	if capacity <= 0 then return false, "no_repair_capacity" end
+	local repaired = math.min( capacity, damage )
+	if repaired <= 0 then return false, "no_repair" end
+	local after = MC.CopyItemStack( before )
+	if not after then return false, "invalid_candidate" end
+	after.damage = damage - repaired
+	if after.damage <= 0 then after.damage = nil end
+
+	local commitContext = copyContext( context, "mending" )
+	commitContext.player = commitContext.player or ply
+	commitContext.hand = candidate.hand
+	commitContext.slot = candidate.slot
+	commitContext.repaired = repaired
+	commitContext.experience = xp
+	commitContext.mendingLevel = candidate.mendingLevel or ordinaryMendingLevel( before )
+
+	if candidate.hand == "mainhand" then
+		if type( MC.ContainerSnapshot ) ~= "function"
+		or type( MC.ContainerSetStack ) ~= "function"
+		or type( MC.ContainerRestore ) ~= "function"
+		or type( SV.CommitPlayerInventoryMutation ) ~= "function"
+		or not record.container then
+			return false, "inventory_mutation_unavailable"
+		end
+		local snapshot = MC.ContainerSnapshot( record.container )
+		local ok, setError = MC.ContainerSetStack( record.container, candidate.selected, after )
+		if not ok then
+			MC.ContainerRestore( record.container, snapshot )
+			return false, setError or "mending_set_failed"
+		end
+		local result, commitError = SV.CommitPlayerInventoryMutation( record, snapshot, commitContext )
+		if not result then
+			MC.ContainerRestore( record.container, snapshot )
+			return false, commitError or "mending_commit_failed"
+		end
+		refreshItemUseAfterMending( record, candidate, before, after )
+		return repaired
+	end
+
+	if type( SV.EquipmentSnapshot ) ~= "function" or type( SV.CommitEquipmentMutation ) ~= "function" then
+		return false, "equipment_mutation_unavailable"
+	end
+	local snapshot = SV.EquipmentSnapshot( record )
+	if type( snapshot ) ~= "table" then return false, "equipment_snapshot_failed" end
+	record.equipment = record.equipment or {}
+	record.equipment[candidate.slot] = MC.CopyItemStack( after )
+	local result, commitError = SV.CommitEquipmentMutation( record, snapshot, commitContext )
+	if not result then
+		restoreEquipmentSlot( record, candidate.slot, snapshot[candidate.slot] )
+		return false, commitError or "mending_equipment_commit_failed"
+	end
+	refreshItemUseAfterMending( record, candidate, before, after )
+	return repaired
+end
+
+function SV.RepairPlayerItemsWithExperience( ply, value, context )
+	local remaining = clampedInteger( value, 0, INT_MAX )
+	if remaining <= 0 or not IsValid( ply ) or not ply:IsPlayer() then return remaining end
+	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply, false ) or nil
+	if not record or type( record.storage ) ~= "table" or type( record.equipment ) ~= "table" then return remaining end
+
+	-- Java's ExperienceOrb.repairPlayerItems recursively selects a fresh random
+	-- candidate after every successful repair.  Rebuild the list each round so
+	-- a stack that was fully repaired disappears immediately.
+	while remaining > 0 do
+		local candidates = mendingCandidates( record )
+		if #candidates == 0 then return remaining end
+		local pick = math.random( 1, #candidates )
+		local candidate = candidates[pick]
+		local repaired, repairError = repairMendingCandidate( ply, record, candidate, remaining, context )
+		if not repaired then
+			-- A failed authoritative mutation must not consume the orb.  A zero
+			-- capacity/progress is only reachable through a malformed integration;
+			-- Java's recursive implementation returns zero in that case.
+			if repairError == "no_repair_capacity" or repairError == "no_repair" then return 0 end
+			return remaining
+		end
+		-- Java computes `xp - repaired * xp / (xp * factor)` using integer
+		-- division.  With mending's factor 2 this is exactly floor(repaired/2),
+		-- including the intentional zero-cost one-point repair.
+		local spent = math.floor( repaired / MENDING_REPAIR_FACTOR )
+		remaining = math.max( 0, remaining - spent )
+	end
+	return remaining
+end
+
 function PLAYER:RepairMCItemsWithExperience( value, context )
 	value = clampedInteger( value, 0, INT_MAX )
 	if type( SV.RepairPlayerItemsWithExperience ) ~= "function" then return value end

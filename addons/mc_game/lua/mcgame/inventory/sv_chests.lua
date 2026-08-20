@@ -299,6 +299,72 @@ end
 
 function SV.GetChestMenuPositions( bx, by, bz ) return chestPositions( bx, by, bz ) end
 
+local function samePosition( left, right )
+	return left and right and left.bx == right.bx and left.by == right.by and left.bz == right.bz
+end
+
+-- Controlled logistics adapter. Chests do not otherwise have a shared runtime,
+-- so this snapshots authoritative records and the commit fans the result back
+-- into every independently opened chest menu.
+function SV.LogisticsChestContainerAt( bx, by, bz )
+	local positions = chestPositions( bx, by, bz )
+	if not positions then return nil, "not_chest" end
+	local records, storages, flat = {}, {}, {}
+	for index, position in ipairs( positions ) do
+		local record = ensureMutableChestBlockEntity( position.bx, position.by, position.bz )
+		if not record or record.type ~= "minecraft:chest" then return nil, "chest_data_missing" end
+		local storage = MC.ChestStorageFromRecord( record )
+		records[index], storages[index] = { record = record, position = position }, storage
+		local base = ( index - 1 ) * CHEST_SLOTS
+		for slot = 1, CHEST_SLOTS do flat[base + slot] = MC.CopyItemStack( storage[slot] ) end
+	end
+	return {
+		kind = "chest", bx = bx, by = by, bz = bz, size = #positions * CHEST_SLOTS,
+		positions = positions, records = records, storages = storages, storage = flat,
+	}
+end
+
+function SV.LogisticsCommitChestContainer( container )
+	if type( container ) ~= "table" or type( container.records ) ~= "table"
+		or type( container.storage ) ~= "table" then return false, "invalid_chest_commit" end
+	for index, entry in ipairs( container.records ) do
+		local base = ( index - 1 ) * CHEST_SLOTS
+		local storage = container.storages[index] or {}
+		for slot = 1, CHEST_SLOTS do storage[slot] = MC.CopyItemStack( container.storage[base + slot] ) end
+		container.storages[index] = storage
+		encodeChestRecord( entry.record, storage )
+	end
+	markChestDirty( container.records )
+
+	for _, playerRecord in pairs( SV.PlayerInventories or {} ) do
+		local session = playerRecord.session
+		local menu = session and session.kind == "chest" and session.container or nil
+		if menu and type( menu.chestRecords ) == "table" and type( menu.chestStorages ) == "table" then
+			local changed = {}
+			for menuIndex, menuEntry in ipairs( menu.chestRecords ) do
+				for sourceIndex, sourceEntry in ipairs( container.records ) do
+					if samePosition( menuEntry.position, sourceEntry.position ) then
+						local target = menu.chestStorages[menuIndex]
+						local source = container.storages[sourceIndex]
+						for slot = 1, CHEST_SLOTS do
+							if not MC.ItemStacksEqual( target[slot], source[slot] ) then
+								target[slot] = MC.CopyItemStack( source[slot] )
+								changed[#changed + 1] = ( menuIndex - 1 ) * CHEST_SLOTS + slot - 1
+							end
+						end
+						break
+					end
+				end
+			end
+			if #changed > 0 and SV.PublishActiveInventoryCommit then
+				menu.revision = math.max( tonumber( menu.revision ) or 0, tonumber( playerRecord.container.revision ) or 0 ) + 1
+				SV.PublishActiveInventoryCommit( playerRecord, { changedSlots = changed, revision = menu.revision }, {} )
+			end
+		end
+	end
+	return true
+end
+
 function SV.OpenChest( ply, bx, by, bz )
 	if not IsValid( ply ) or not ply:Alive() then return false end
 	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply ) or nil

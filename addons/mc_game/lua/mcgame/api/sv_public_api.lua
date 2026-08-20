@@ -322,6 +322,19 @@ function Inventory.DamageSelected( ply, amount, context )
 	return deepCopy( result ), broken == true, err
 end
 
+-- Apply authoritative durability damage to one equipment slot.  External
+-- addons use this instead of mutating the persistent equipment table directly;
+-- the server implementation consequently runs the shared durability modifier
+-- boundary (Unbreaking, future item-damage effects) and publishes one atomic
+-- equipment transaction.
+function Inventory.DamageEquipment( ply, slot, amount, context )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return nil, false, "invalid_player" end
+	if not sv or not sv.DamageEquipmentItem then return nil, false, "inventory_api_unavailable" end
+	local result, broken, err = sv.DamageEquipmentItem( ply, slot, amount, deepCopy( context or {} ) )
+	return deepCopy( result ), broken == true, err
+end
+
 -- Atomically applies a non-breaking durability use and extracts one complete
 -- copy of the selected ItemStack.  Used by external trident implementations so
 -- damage/components travel with the projectile and return unchanged on pickup.
@@ -371,9 +384,11 @@ function Inventory.ConsumeSelected( ply, amount, replacement, context )
 	return deepCopy( result ), consumed, deepCopy( overflow ), infinite == true, err
 end
 
--- Atomically consumes a real item from mainhand/offhand, including in creative
--- mode. Intended for Java mechanics such as death protection whose source code
--- directly shrinks the held stack. Returns result, consumed, oldStack, err.
+-- Atomically consumes a real item from mainhand/offhand. It includes creative
+-- mode by default for Java paths that directly shrink; callers whose source
+-- uses ItemStack.consume / Player#interactOn pass
+-- context.respectInfiniteMaterials=true. Returns result, consumed, oldStack,
+-- err.
 function Inventory.ConsumeHeld( ply, hand, amount, context )
 	local sv = SV()
 	if not validInventoryPlayer( ply ) then return nil, 0, nil, "invalid_player" end
@@ -461,9 +476,27 @@ function Inventory.TakeAmmo( ply, kind, amount, context )
 	return deepCopy( stack ), consumed, infinite == true, generated == true, err
 end
 
--- Atomically selects one projectile and stores it in the selected crossbow's
--- charged_projectiles component. Returns stack, infinite, generated, result,
--- err. `kind="bow"` intentionally excludes firework rockets.
+-- Atomically selects one projectile, consumes only that source item, and stores
+-- projectileCount complete entries in the selected crossbow's
+-- charged_projectiles component. Synthetic Multishot entries are marked
+-- intangible. Returns stacks, infinite, generated, result, err. `kind="bow"`
+-- intentionally excludes firework rockets.
+function Inventory.LoadCrossbowProjectiles( ply, kind, projectileCount, context )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return nil, false, false, nil, "invalid_player" end
+	if not sv or not sv.LoadSelectedCrossbowProjectiles then
+		return nil, false, false, nil, "inventory_api_unavailable"
+	end
+	local stacks, infinite, generated, result, err = sv.LoadSelectedCrossbowProjectiles(
+		ply,
+		kind,
+		projectileCount,
+		deepCopy( context or {} )
+	)
+	return deepCopy( stacks ), infinite == true, generated == true, deepCopy( result ), err
+end
+
+-- Compatibility wrapper for one-projectile external crossbows.
 function Inventory.LoadCrossbowProjectile( ply, kind, context )
 	local sv = SV()
 	if not validInventoryPlayer( ply ) then return nil, false, false, nil, "invalid_player" end
@@ -478,8 +511,23 @@ function Inventory.LoadCrossbowProjectile( ply, kind, context )
 	return deepCopy( stack ), infinite == true, generated == true, deepCopy( result ), err
 end
 
--- Atomically clears charged_projectiles and damages the selected crossbow.
--- The external projectile must be removed when this call fails.
+-- Atomically clears the complete charged_projectiles list and applies Java's
+-- per-projectile durability total (arrow=1, firework rocket=3). Every external
+-- projectile created for this list must be removed when the call fails.
+function Inventory.CommitCrossbowProjectilesShot( ply, context )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return nil, false, nil, false, "invalid_player" end
+	if not sv or not sv.CommitSelectedCrossbowProjectilesShot then
+		return nil, false, nil, false, "inventory_api_unavailable"
+	end
+	local result, broken, projectiles, infinite, err = sv.CommitSelectedCrossbowProjectilesShot(
+		ply,
+		deepCopy( context or {} )
+	)
+	return deepCopy( result ), broken == true, deepCopy( projectiles ), infinite == true, err
+end
+
+-- Compatibility wrapper for one-projectile external crossbows.
 function Inventory.CommitCrossbowShot( ply, durabilityAmount, context )
 	local sv = SV()
 	if not validInventoryPlayer( ply ) then return nil, false, nil, false, "invalid_player" end

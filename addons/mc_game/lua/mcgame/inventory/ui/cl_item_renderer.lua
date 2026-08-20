@@ -798,7 +798,7 @@ local function rotateBasis( xAxis, yAxis, zAxis, rotation )
 	return xAxis:GetNormalized(), yAxis:GetNormalized(), zAxis:GetNormalized()
 end
 
-function Renderer.HeldTransform( plan, displayContext, basePos, baseAng, baseSize )
+function Renderer.HeldTransform( plan, displayContext, basePos, baseAng, baseSize, parentBasis )
 	if not plan or not basePos or not baseAng then return nil end
 	local transform = displayValues( plan, displayContext or "firstperson_righthand" )
 	local rotation, translation, scale = transform.rotation or {}, transform.translation or {}, transform.scale or {}
@@ -807,15 +807,18 @@ function Renderer.HeldTransform( plan, displayContext, basePos, baseAng, baseSiz
 	-- Minecraft item models use X/Y for the sprite and Z for its thickness.
 	-- This basis makes the vanilla Y=-90 hand transform face back toward the camera.
 	local leftHand = string.find( displayContext or "", "lefthand", 1, true ) ~= nil
-	local xAxis = baseAng:Forward()
-	local yAxis = baseAng:Up()
-	local zAxis = leftHand and baseAng:Right() or -baseAng:Right()
+	local explicitBasis = type( parentBasis ) == "table"
+		and parentBasis.xAxis and parentBasis.yAxis and parentBasis.zAxis
+	local xAxis = explicitBasis and parentBasis.xAxis:GetNormalized() or baseAng:Forward()
+	local yAxis = explicitBasis and parentBasis.yAxis:GetNormalized() or baseAng:Up()
+	local zAxis = explicitBasis and parentBasis.zAxis:GetNormalized()
+		or ( leftHand and baseAng:Right() or -baseAng:Right() )
 	local pos = basePos
 		+ xAxis * ( ( tonumber( translation[1] ) or 0 ) * baseSize / 16 )
 		+ yAxis * ( ( tonumber( translation[2] ) or 0 ) * baseSize / 16 )
 		+ zAxis * ( ( tonumber( translation[3] ) or 0 ) * baseSize / 16 )
 	xAxis, yAxis, zAxis = rotateBasis( xAxis, yAxis, zAxis, rotation )
-	if string.find( displayContext or "", "firstperson_", 1, true ) == 1 then
+	if not explicitBasis and string.find( displayContext or "", "firstperson_", 1, true ) == 1 then
 		-- Right- and left-hand JSON rotations face opposite sides of the sprite.
 		-- Normalize their screen-space axes so the texture is not mirrored.
 		if xAxis:Dot( baseAng:Right() ) < 0 then xAxis = -xAxis end
@@ -879,7 +882,8 @@ function Renderer.SpecialWorldTransform( plan, displayContext, basePos, baseAng,
 		return mcWeaponsFirstPersonTransform( transformPlan, displayContext,
 			basePos, baseAng, baseSize, options.mcWeaponsView )
 	end
-	return Renderer.HeldTransform( transformPlan, displayContext, basePos, baseAng, baseSize )
+	return Renderer.HeldTransform( transformPlan, displayContext, basePos, baseAng, baseSize,
+		options.parentBasis )
 end
 
 local function drawFlatHeldLayer( material, transform, layerOffset, color )
@@ -1154,7 +1158,8 @@ function Renderer.DrawHeldItem( stack, pos, orientation, size, color, options )
 		transform = mcWeaponsFirstPersonTransform( plan, modelOptions.displayContext, pos, baseAng, size,
 			modelOptions.mcWeaponsView )
 	else
-		transform = Renderer.HeldTransform( plan, modelOptions.displayContext, pos, baseAng, size )
+		transform = Renderer.HeldTransform( plan, modelOptions.displayContext, pos, baseAng, size,
+			modelOptions.parentBasis )
 	end
 	if not transform then return false end
 	UI.WithPointFiltering( function()

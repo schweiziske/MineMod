@@ -38,6 +38,66 @@ local function restoreEquipment( record, snapshot )
 	for _, slot in ipairs( MC.EquipmentSlotOrder or {} ) do record.equipment[slot] = MC.CopyItemStack( snapshot and snapshot[slot] ) end
 end
 
+local function copyWithoutDamage( stack )
+	if not stack then return nil end
+	local copy = MC.CopyItemStack( stack )
+	if copy then copy.damage = nil end
+	return copy
+end
+
+-- Binding Curse prevents an actual equipment change, but durability updates
+-- must still be allowed to replace the stack's damage value.  Comparing a
+-- copy without damage gives the hook a precise "take" boundary instead of
+-- accidentally treating every hit as an attempted armor removal.
+local function equipmentChangeTakesStack( current, replacement )
+	if not current then return false end
+	if not replacement then return true end
+	if MC.ItemStacksEqual then
+		return not MC.ItemStacksEqual( copyWithoutDamage( current ), copyWithoutDamage( replacement ) )
+	end
+	return current.item ~= replacement.item
+		or ( tonumber( current.count ) or 0 ) ~= ( tonumber( replacement.count ) or 0 )
+end
+
+local function canTakeEquipmentStack( ply, slot, current, replacement, context )
+	if not equipmentChangeTakesStack( current, replacement ) then return true end
+	if not hook or type( hook.Run ) ~= "function" then return true end
+	local takeContext = {}
+	for key, value in pairs( context or {} ) do takeContext[key] = value end
+	takeContext.player = ply
+	takeContext.newStack = MC.CopyItemStack( replacement )
+	local called, result = pcall( hook.Run, "MC.CanTakeEquipmentStack", ply, slot, current, takeContext )
+	if not called then return false, "equipment_take_hook_error" end
+	if result == false then return false, "equipment_take_denied" end
+	return true
+end
+
+local function modifiedDurabilityAmount( ply, stack, amount, context )
+	amount = math.max( 0, math.floor( tonumber( amount ) or 0 ) )
+	if amount <= 0 then return amount end
+	if SV.ModifyItemDurabilityDamage then
+		return SV.ModifyItemDurabilityDamage( ply, stack, amount, context or {} )
+	end
+	if not hook or type( hook.Run ) ~= "function" then return amount end
+	local called, result = pcall( hook.Run, "MC.ModifyItemDurabilityDamage", ply, stack, amount, context or {} )
+	if not called or result == nil then return amount end
+	if result == false then return 0 end
+	local numeric = tonumber( result )
+	return numeric and math.max( 0, math.floor( numeric ) ) or amount
+end
+
+local function skippedEquipmentDamageResult( record, slot, amount )
+	return {
+		ok = true,
+		skipped = true,
+		reason = "durability_ignored",
+		revision = currentRevision( record ),
+		changedSlots = {},
+		slot = slot,
+		amount = math.max( 0, math.floor( tonumber( amount ) or 0 ) ),
+	}, false
+end
+
 function SV.EquipmentSnapshot( record )
 	return equipmentCopy( record and record.equipment )
 end
@@ -106,6 +166,9 @@ function SV.SetPlayerEquipmentStack( ply, slot, input, context )
 	local stack, stackError = MC.NormalizeItemStack( input )
 	if input ~= nil and not stack and stackError then return nil, stackError end
 	if stack and not MC.ItemCanEquipInSlot( stack, slot ) then return nil, "equipment_slot_rejected" end
+	local current = record.equipment and record.equipment[slot] or nil
+	local canTake, takeError = canTakeEquipmentStack( ply, slot, current, stack, context )
+	if not canTake then return nil, takeError or "equipment_take_denied" end
 	local snapshot = SV.EquipmentSnapshot( record )
 	record.equipment[slot] = stack and MC.CopyItemStack( stack, slot == "offhand" and stack.count or 1 ) or nil
 	local result, commitError = SV.CommitEquipmentMutation( record, snapshot, context or { reason = "equipment_set" } )
@@ -123,6 +186,14 @@ function SV.DamageEquipmentItem( ply, slot, amount, context )
 	local maximum = tonumber( definition and definition.maxDamage ) or 0
 	if not stack or maximum <= 0 or MC.ItemIsUnbreakable( stack ) then return nil, false, "equipment_not_damageable" end
 	if SV.PlayerHasInfiniteMaterials and SV.PlayerHasInfiniteMaterials( ply ) then return nil, false, "infinite_materials" end
+	amount = modifiedDurabilityAmount( ply, stack, amount, {
+		player = ply,
+		slot = slot,
+		isArmor = slot ~= "offhand",
+		reason = context and context.reason or "equipment_damage",
+		context = context,
+	} )
+	if amount <= 0 then return skippedEquipmentDamageResult( record, slot, amount ) end
 	local snapshot = SV.EquipmentSnapshot( record )
 	local damage = math.max( 0, math.floor( tonumber( stack.damage ) or 0 ) ) + amount
 	local broken = damage >= maximum
@@ -149,24 +220,37 @@ function SV.DamagePlayerArmor( ply, amount, context )
 	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply, false ) or nil
 	amount = math.max( 0, math.floor( tonumber( amount ) or 0 ) )
 	if not record or amount <= 0 then return nil, {}, "invalid_armor_damage" end
+	if SV.PlayerHasInfiniteMaterials and SV.PlayerHasInfiniteMaterials( ply ) then return nil, {}, "infinite_materials" end
 	local snapshot = SV.EquipmentSnapshot( record )
 	local broken = {}
+	local changed = false
 	for _, slot in ipairs( { "head", "chest", "legs", "feet" } ) do
 		local stack = record.equipment and record.equipment[slot] or nil
 		local definition = stack and MC.GetItem( stack.item ) or nil
 		local maximum = tonumber( definition and definition.maxDamage ) or 0
 		if stack and maximum > 0 and not MC.ItemIsUnbreakable( stack ) then
-			local damage = math.max( 0, math.floor( tonumber( stack.damage ) or 0 ) ) + amount
-			if damage >= maximum then
-				record.equipment[slot] = nil
-				broken[#broken + 1] = { slot = slot, stack = MC.CopyItemStack( stack ) }
-			else
-				local replacement = MC.CopyItemStack( stack )
-				replacement.damage = damage
-				record.equipment[slot] = replacement
+			local applied = modifiedDurabilityAmount( ply, stack, amount, {
+				player = ply,
+				slot = slot,
+				isArmor = true,
+				reason = context and context.reason or "armor_damage",
+				context = context,
+			} )
+			if applied > 0 then
+				changed = true
+				local damage = math.max( 0, math.floor( tonumber( stack.damage ) or 0 ) ) + applied
+				if damage >= maximum then
+					record.equipment[slot] = nil
+					broken[#broken + 1] = { slot = slot, stack = MC.CopyItemStack( stack ) }
+				else
+					local replacement = MC.CopyItemStack( stack )
+					replacement.damage = damage
+					record.equipment[slot] = replacement
+				end
 			end
 		end
 	end
+	if not changed then return skippedEquipmentDamageResult( record, "armor", amount ) end
 	local result, commitError = SV.CommitEquipmentMutation( record, snapshot, context or { reason = "armor_damage" } )
 	if not result then restoreEquipment( record, snapshot ) return nil, {}, commitError end
 	for _, entry in ipairs( broken ) do

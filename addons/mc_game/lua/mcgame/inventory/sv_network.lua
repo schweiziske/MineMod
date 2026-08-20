@@ -475,7 +475,12 @@ net.Receive( "mc_inventory_action", function( _, ply )
 		player = ply, actionId = actionId,
 		creative = creativeAllowed( ply ),
 		canDrop = type( SV.SpawnItemDrop ) == "function",
+		parityClicks = MC.GameplayParityInventoryClicksEnabled
+			and MC.GameplayParityInventoryClicksEnabled() or false,
 	}
+	if MC.ConfigurePlayerSwap then
+		MC.ConfigurePlayerSwap( container, record, session.equipmentMenuMap )
+	end
 	local result = MC.ExecuteContainerInput( container, {
 		revision = revision, actionId = actionId, input = input, slot = slot, button = button,
 	}, context )
@@ -486,6 +491,8 @@ net.Receive( "mc_inventory_action", function( _, ply )
 		for _, stack in ipairs( result.drops ) do
 			SV.SpawnItemDrop( position, stack, ply, {
 				noMerge = true,
+				pickupDelay = MC.ItemEntityParity and MC.ItemEntityParity.Enabled
+					and MC.ItemEntityParity.Enabled() and 2.0 or nil,
 				velocity = SV.PlayerThrownDropVelocity and SV.PlayerThrownDropVelocity( ply ) or nil,
 			} )
 		end
@@ -629,6 +636,8 @@ net.Receive( "mc_inventory_recipe_place", function( _, ply )
 		for _, stack in ipairs( result.drops ) do
 			SV.SpawnItemDrop( position, stack, ply, {
 				noMerge = true,
+				pickupDelay = MC.ItemEntityParity and MC.ItemEntityParity.Enabled
+					and MC.ItemEntityParity.Enabled() and 2.0 or nil,
 				velocity = SV.PlayerThrownDropVelocity and SV.PlayerThrownDropVelocity( ply ) or nil,
 			} )
 		end

@@ -37,6 +37,10 @@ end
 local function normalizedInteger( value, minimum, maximum, fallback )
 	value = tonumber( value )
 	if value == nil then return fallback end
+	-- Lua's comparisons with NaN are all false, so checking only the range
+	-- would accidentally admit NaN as a runtime stack/damage/count value.
+	-- Keep the registry's numeric fields finite before flooring them.
+	if value ~= value or value == math.huge or value == -math.huge then return nil end
 	value = math.floor( value )
 	if value < minimum or value > maximum then return nil end
 	return value
@@ -204,6 +208,7 @@ function MC.GetItem( value )
 		return name and ( MC.Items[name] or MC.PendingItems[name] ) or nil
 	end
 	if type( value ) == "number" then
+		if value ~= value or value == math.huge or value == -math.huge then return nil end
 		return MC.ItemsByRuntimeId[math.floor( value )]
 	end
 	local name = normalizeName( value )
@@ -256,14 +261,35 @@ function MC.ItemMaxDamage( value )
 	return definition and definition.maxDamage or 0
 end
 
-if timer and timer.Simple then
-	timer.Simple( 0, function()
-		if not MC.ItemRegistryFrozen then
-			local count, err = MC.FinalizeItemRegistry()
-			if not count then
-				local message = "[MC] item registry finalize failed: " .. tostring( err or "unknown" ) .. "\n"
-				if ErrorNoHalt then ErrorNoHalt( message ) else print( message ) end
-			end
-		end
-	end )
+local function finalizeItemsAtBootstrapBoundary()
+	if MC.ItemRegistryFrozen then return true end
+	local replayErrors = MC.ModItemRegistryReplayErrors
+	if type( replayErrors ) == "table" and #replayErrors > 0 then
+		local first = replayErrors[1]
+		local detail = type( first ) == "table"
+			and ( tostring( first.name or "?" ) .. ":" .. tostring( first.error or "register_failed" ) )
+			or tostring( first )
+		return false, "item_registry_replay_failed:" .. detail
+	end
+	local count, err = MC.FinalizeItemRegistry()
+	if not count then
+		local message = "[MC] item registry finalize failed: " .. tostring( err or "unknown" ) .. "\n"
+		if ErrorNoHalt then ErrorNoHalt( message ) else print( message ) end
+		return false, err or "item_registry_finalize_failed"
+	end
+	return true
+end
+
+if MC.API and MC.API._RegisterFreezeCallback then
+	if MC.API._freezeStarted then
+		finalizeItemsAtBootstrapBoundary()
+	else
+		MC.API._RegisterFreezeCallback( "mc.game.items", finalizeItemsAtBootstrapBoundary )
+	end
+elseif timer and timer.Simple then
+	-- Standalone test harnesses may include the game registry without the engine
+	-- facade; preserve their historical self-finalizing behavior.
+	timer.Simple( 0, finalizeItemsAtBootstrapBoundary )
+else
+	finalizeItemsAtBootstrapBoundary()
 end

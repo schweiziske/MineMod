@@ -16,6 +16,39 @@ local function selectedSlot( record )
 	return index, record and MC.ContainerGetSlot( record.container, index ) or nil
 end
 
+-- External game layers (for example MCITEM's Unbreaking implementation) may
+-- reduce the number of durability points consumed by one action.  The hook is
+-- deliberately a scalar boundary: nil keeps the requested amount, false
+-- cancels the durability mutation, and a number is clamped to a non-negative
+-- integer by the authoritative inventory layer.
+local function modifiedDurabilityAmount( ply, stack, amount, context )
+	amount = math.max( 0, math.floor( tonumber( amount ) or 0 ) )
+	if amount <= 0 or not hook or type( hook.Run ) ~= "function" then return amount end
+	local called, result = pcall( hook.Run, "MC.ModifyItemDurabilityDamage", ply, stack, amount, context or {} )
+	if not called or result == nil then return amount end
+	if result == false then return 0 end
+	local numeric = tonumber( result )
+	return numeric and math.max( 0, math.floor( numeric ) ) or amount
+end
+
+-- Kept public for the equipment durability path, which is loaded before this
+-- file in mcgame_load.lua but calls the helper only after all modules exist.
+function SV.ModifyItemDurabilityDamage( ply, stack, amount, context )
+	return modifiedDurabilityAmount( ply, stack, amount, context )
+end
+
+local function skippedDurabilityResult( record, slotIndex, amount )
+	return {
+		ok = true,
+		skipped = true,
+		reason = "durability_ignored",
+		revision = math.max( 0, math.floor( tonumber( record and record.revision ) or 0 ) ),
+		changedSlots = {},
+		slotIndex = slotIndex,
+		amount = math.max( 0, math.floor( tonumber( amount ) or 0 ) ),
+	}, false
+end
+
 function SV.DamageSelectedItem( ply, amount, context )
 	context = context or {}
 	amount = math.floor( tonumber( amount ) or 0 )
@@ -32,6 +65,15 @@ function SV.DamageSelectedItem( ply, amount, context )
 	if infiniteMaterials( ply ) then return nil, false, "infinite_materials" end
 	local damagePerUse = MC.ItemToolDamagePerBlock( stack )
 	if context.useToolScale == true and damagePerUse > 0 then amount = amount * damagePerUse end
+	amount = math.floor( math.max( 0, tonumber( amount ) or 0 ) )
+	amount = modifiedDurabilityAmount( ply, stack, amount, {
+		player = ply,
+		slot = "mainhand",
+		isArmor = false,
+		reason = context.reason or "durability",
+		context = context,
+	} )
+	if amount <= 0 then return skippedDurabilityResult( record, slotIndex, amount ) end
 	amount = math.Clamp( amount, 1, 255 )
 	local snapshot = MC.ContainerSnapshot( record.container )
 	local currentDamage = math.max( 0, math.floor( tonumber( stack.damage ) or 0 ) )

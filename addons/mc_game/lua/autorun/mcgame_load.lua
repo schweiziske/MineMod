@@ -30,6 +30,7 @@ local REQUIRED_API_VERSION = 2
 
 local SHARED = {
 	"mcgame/random/sh_legacy_random.lua",
+	"mcgame/inventory/sh_gameplay_parity.lua",
 	"mcgame/inventory/sh_survival_hud.lua",
 	"mcgame/functional/sh_furnace.lua",
 	"mcgame/functional/sh_brewing.lua",
@@ -60,6 +61,21 @@ local SHARED = {
 	"mcgame/inventory/sh_slot.lua",
 	"mcgame/inventory/sh_container.lua",
 	"mcgame/inventory/sh_click.lua",
+	"mcgame/logistics/sh_rules.lua",
+	"mcgame/logistics/sh_data.lua",
+	"mcgame/item_entity/sh_rules.lua",
+	"mcgame/item_entity/sh_world.lua",
+	"mcgame/block_physics/sh_rules.lua",
+	"mcgame/block_physics/sh_world.lua",
+	"mcgame/block_physics/sh_player.lua",
+	"mcgame/block_physics/sh_item_drop.lua",
+	"mcgame/decoration/sh_rules.lua",
+	"mcgame/decoration/sh_geometry.lua",
+	"mcgame/decoration/sh_equipment_visuals.lua",
+	"mcgame/decoration/sh_map_render.lua",
+	"mcgame/decoration/sh_entity_shared.lua",
+	"mcgame/decoration/sh_decorations.lua",
+	"mcgame/decoration/sh_redstone.lua",
 	"mcgame/inventory/sh_crafting.lua",
 	"mcgame/inventory/sh_anvil.lua",
 	"mcgame/item/sh_public_api.lua",
@@ -83,6 +99,9 @@ local SERVER_FILES = {
 	"mcgame/inventory/sv_item_durability.lua",
 	"mcgame/inventory/sv_item_use.lua",
 	"mcgame/inventory/sv_item_drops.lua",
+	"mcgame/item_entity/sv_contacts.lua",
+	"mcgame/item_entity/sv_runtime.lua",
+	"mcgame/item_entity/sv_piston.lua",
 	"mcgame/inventory/sv_fire.lua",
 	"mcgame/inventory/sv_shears.lua",
 	"mcgame/inventory/sv_campfires.lua",
@@ -93,6 +112,8 @@ local SERVER_FILES = {
 	"mcgame/mining/sv_mining.lua",
 	"mcgame/inventory/sv_projectiles.lua",
 	"mcgame/inventory/sv_combat.lua",
+	"mcgame/decoration/sv_effects.lua",
+	"mcgame/decoration/sv_decorations.lua",
 	"mcgame/api/sv_public_api.lua",
 	"mcgame/explosion/sv_gameplay.lua",
 	"mcgame/inventory/sv_furnaces.lua",
@@ -130,6 +151,18 @@ local CLIENT_FILES = {
 	"mcgame/inventory/cl_merchant.lua",
 	"mcgame/inventory/ui/cl_hotbar.lua",
 	"mcgame/inventory/ui/cl_survival_hud.lua",
+	"mcgame/decoration/cl_effects.lua",
+	"mcgame/decoration/cl_mesh.lua",
+	"mcgame/decoration/cl_model_part.lua",
+	"mcgame/decoration/cl_map_texture.lua",
+	"mcgame/decoration/cl_map_text.lua",
+	"mcgame/decoration/cl_painting.lua",
+	"mcgame/decoration/cl_item_frame.lua",
+	"mcgame/decoration/cl_armor_equipment.lua",
+	"mcgame/decoration/cl_armor_wings.lua",
+	"mcgame/decoration/cl_armor_head.lua",
+	"mcgame/decoration/cl_armor_stand.lua",
+	"mcgame/decoration/cl_render.lua",
 	"mcgame/api/cl_engine_bridge.lua",
 }
 
@@ -145,6 +178,7 @@ if SERVER then
 		-- without any of them.
 		for _, fileName in ipairs( {
 			"materials/mc/gui/recipe_book.png",
+			"materials/mc/misc/enchanted_glint_armor.png",
 			"materials/mc/misc/enchanted_glint_item.png",
 		} ) do
 			resource.AddFile( fileName )
@@ -154,6 +188,13 @@ if SERVER then
 		end
 		for _, fileName in ipairs( file.Find( "materials/mc/block/destroy_stage_*.png", "GAME" ) or {} ) do
 			resource.AddFile( "materials/mc/block/" .. fileName )
+		end
+		for _, fileName in ipairs( {
+			"materials/mc/block/birch_planks.png",
+			"materials/mc/block/item_frame.png",
+			"materials/mc/block/glow_item_frame.png",
+		} ) do
+			resource.AddFile( fileName )
 		end
 		for _, resourceRoot in ipairs( {
 			"materials/mc/gui/container",
@@ -172,8 +213,21 @@ if SERVER then
 			"materials/mc/gui/sprites/container/inventory",
 			"materials/mc/gui/mob_effect",
 			"materials/mc/gui/sprites/recipe_book",
+			"materials/mc/gui/sprites/widget",
 			"materials/mc/entity/enchantment",
 			"materials/mc/entity/shield",
+			"materials/mc/entity/armorstand",
+			"materials/mc/entity/equipment/humanoid",
+			"materials/mc/entity/equipment/humanoid_leggings",
+			"materials/mc/entity/equipment/wings",
+			"materials/mc/entity/skeleton",
+			"materials/mc/entity/zombie",
+			"materials/mc/entity/creeper",
+			"materials/mc/entity/enderdragon",
+			"materials/mc/entity/piglin",
+			"materials/mc/entity/player/slim",
+			"materials/mc/painting",
+			"materials/mc/map",
 		} ) do
 			for _, fileName in ipairs( file.Find( resourceRoot .. "/*.png", "GAME" ) or {} ) do
 				resource.AddFile( resourceRoot .. "/" .. fileName )
@@ -205,6 +259,15 @@ local function loadGameLayer()
 		return
 	end
 	if not api.Require( REQUIRED_API_VERSION, "MCSWEP game layer" ) then return end
+	-- Item definitions are included after sh_registry.lua.  If this addon is
+	-- mounted only after the engine has frozen, sh_registry would otherwise
+	-- finalize an empty item registry and the remaining includes would leave a
+	-- half-loaded game layer.  The public creative lifecycle is the cross-layer
+	-- freeze signal; reject the entire late load before mutating game state.
+	if api.Creative and api.Creative.IsFrozen and api.Creative.IsFrozen() then
+		ErrorNoHalt( "[MCGame] game layer loaded after the content registries froze; refusing partial late load\n" )
+		return
+	end
 	MC.GameLayerLoaded = true
 
 	for _, f in ipairs( SHARED ) do include( f ) end

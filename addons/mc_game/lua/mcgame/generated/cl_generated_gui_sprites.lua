@@ -2,7 +2,7 @@
 MC = MC or {}
 MC.GeneratedGuiSpriteData = {
 	version = "26.2",
-	sourceHash = "7a42b8183d34d75305a8186707083086b6050765a2a3e2dfa6b1738961939d98",
+	sourceHash = "4168b4742f43992cf23093dea1233c8cd79c2c678c151e3574df224e565b01a8",
 	sprites = {
 		["hud/hotbar"] = { material = "mc/gui/hud/hotbar__pot.png", width = 182, height = 22, mappingWidth = 256, mappingHeight = 32 },
 		["hud/hotbar_offhand_left"] = { material = "mc/gui/hud/hotbar_offhand_left__pot.png", width = 29, height = 24, mappingWidth = 32, mappingHeight = 32 },
@@ -118,5 +118,8 @@ MC.GeneratedGuiSpriteData = {
 		["sprites/recipe_book/slot_uncraftable"] = { material = "mc/gui/sprites/recipe_book/slot_uncraftable__pot.png", width = 25, height = 25, mappingWidth = 32, mappingHeight = 32 },
 		["sprites/recipe_book/tab"] = { material = "mc/gui/sprites/recipe_book/tab__pot.png", width = 35, height = 27, mappingWidth = 64, mappingHeight = 32 },
 		["sprites/recipe_book/tab_selected"] = { material = "mc/gui/sprites/recipe_book/tab_selected__pot.png", width = 35, height = 27, mappingWidth = 64, mappingHeight = 32 },
+		["sprites/widget/button"] = { material = "mc/gui/sprites/widget/button__pot.png", width = 200, height = 20, mappingWidth = 256, mappingHeight = 32 },
+		["sprites/widget/button_disabled"] = { material = "mc/gui/sprites/widget/button_disabled__pot.png", width = 200, height = 20, mappingWidth = 256, mappingHeight = 32 },
+		["sprites/widget/button_highlighted"] = { material = "mc/gui/sprites/widget/button_highlighted__pot.png", width = 200, height = 20, mappingWidth = 256, mappingHeight = 32 },
 	},
 }

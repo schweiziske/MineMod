@@ -34,6 +34,29 @@ local function resetQuickCraft( container )
 	container.quickCraft = { status = 0, type = 0, slots = {} }
 end
 
+local function parityClicksEnabled( container, context )
+	if type( context ) == "table" and context.parityClicks ~= nil then return context.parityClicks == true end
+	return type( container ) == "table" and container.parityClicks == true
+end
+
+-- ItemStack.isSameItem (used by vanilla's repeated quick-move/throw loops)
+-- intentionally ignores count and components.  Stack merging below still uses
+-- ItemStack.isSameItemSameComponents where the reference does.
+local function sameItem( left, right )
+	return not MC.IsEmptyItemStack( left ) and not MC.IsEmptyItemStack( right )
+		and left.item == right.item
+end
+
+local function canDragTo( container, slot, context )
+	if not MC.ContainerCanDragTo then return true end
+	return MC.ContainerCanDragTo( container, slot, context )
+end
+
+local function canTakeItemForPickAll( container, carried, slot, context )
+	if not MC.ContainerCanTakeItemForPickAll then return true end
+	return MC.ContainerCanTakeItemForPickAll( container, carried, slot, context )
+end
+
 local function canDrop( container, stack, context )
 	if context and context.canDrop == false then return false end
 	if type( container.canDrop ) == "function" then
@@ -131,7 +154,28 @@ local function executeQuickMove( container, slotIndex, state, context )
 		if type( container.takeResult ) ~= "function" then return false, "result_unavailable" end
 		return container.takeResult( container, slotIndex, 0, state, context, "quick_move" )
 	end
-	return MC.ContainerQuickMove( container, slotIndex, context )
+	if not parityClicksEnabled( container, context ) then
+		return MC.ContainerQuickMove( container, slotIndex, context )
+	end
+
+	-- AbstractContainerMenu keeps calling quickMoveStack while the returned
+	-- stack is still the same item as the source.  This matters for menus whose
+	-- target has less than one full stack of room: one packet may move several
+	-- partial stacks before the source finally becomes empty or changes type.
+	local changedAny = false
+	local limit = math.max( 1, math.floor( tonumber( MC.ItemAbsoluteMaxStack ) or 99 ) + 1 )
+	for _ = 1, limit do
+		local before = MC.CopyItemStack( MC.ContainerGetStack( container, slotIndex ) )
+		local called, ok, changed, returned = pcall( MC.ContainerQuickMove, container, slotIndex, context )
+		if not called then return false, "quick_move_error" end
+		if ok ~= true then return false, changed or "quick_move_rejected" end
+		if changed ~= true then break end
+		changedAny = true
+		local after = MC.ContainerGetStack( container, slotIndex )
+		local comparison = returned or before
+		if MC.IsEmptyItemStack( after ) or not sameItem( after, comparison ) then break end
+	end
+	return true, changedAny
 end
 
 local function findInventoryTargets( container, excluded )
@@ -145,8 +189,10 @@ local function findInventoryTargets( container, excluded )
 end
 
 local function executeSwap( container, slotIndex, button, state, context )
-	if button < 0 or button > 8 then return false, "invalid_hotbar_button" end
+	local parity = parityClicksEnabled( container, context )
+	if ( button < 0 or button > 8 ) and ( not parity or button ~= 40 ) then return false, "invalid_hotbar_button" end
 	local target = MC.ContainerGetSlot( container, slotIndex )
+	if not target then return false, "invalid_slot" end
 	if target and target.meta and target.meta.role == "result" then
 		-- Vanilla treats a number-key click on a result as taking the crafted
 		-- output into the selected hotbar slot.  The crafting menu may opt into
@@ -155,17 +201,14 @@ local function executeSwap( container, slotIndex, button, state, context )
 		if type( container.takeResult ) ~= "function" then return false, "result_unavailable" end
 		return container.takeResult( container, slotIndex, button, state, context, "swap" )
 	end
-	local hotbarIndex = container.hotbarSlots[button + 1]
-	local hotbar = hotbarIndex ~= nil and MC.ContainerGetSlot( container, hotbarIndex ) or nil
-	if not target or not hotbar then return false, "missing_hotbar_slot" end
-	if target == hotbar then return true end
-
-	local sourceStack = MC.InventorySlotGet( hotbar )
+	local sourceStack, sourceSlot, sourceError = MC.ContainerGetSwapStack( container, button, context )
+	if sourceError then return false, sourceError end
+	if sourceSlot and sourceSlot == target then return true end
+	if button == 40 and target.meta and target.meta.equipmentSlot == "offhand" then return true end
 	local targetStack = MC.InventorySlotGet( target )
 	if MC.IsEmptyItemStack( sourceStack ) and MC.IsEmptyItemStack( targetStack ) then return true end
 	if not MC.InventorySlotMayTake( target, context ) and not MC.IsEmptyItemStack( targetStack ) then return false, "take_denied" end
 	if not MC.IsEmptyItemStack( sourceStack ) and not MC.InventorySlotMayPlace( target, sourceStack, context ) then return false, "place_denied" end
-	if not MC.IsEmptyItemStack( targetStack ) and not MC.InventorySlotMayPlace( hotbar, targetStack, context ) then return false, "hotbar_place_denied" end
 
 	if MC.IsEmptyItemStack( targetStack ) then
 		local limit = MC.InventorySlotLimit( target, sourceStack )
@@ -174,34 +217,44 @@ local function executeSwap( container, slotIndex, button, state, context )
 		local remaining = sourceStack.count > placedCount and MC.CopyItemStack( sourceStack, sourceStack.count - placedCount ) or nil
 		local ok, err = MC.InventorySlotSet( target, placed )
 		if not ok then return false, err end
-		return MC.InventorySlotSet( hotbar, remaining )
+		return MC.ContainerSetSwapStack( container, button, remaining, context )
 	end
 
 	if MC.IsEmptyItemStack( sourceStack ) then
-		local ok, err = MC.InventorySlotSet( hotbar, targetStack )
+		local ok, err = MC.ContainerSetSwapStack( container, button, targetStack, context )
 		if not ok then return false, err end
-		return MC.InventorySlotSet( target, nil )
+		ok, err = MC.InventorySlotSet( target, nil )
+		return ok, err
 	end
 
 	local targetLimit = MC.InventorySlotLimit( target, sourceStack )
 	if sourceStack.count <= targetLimit then
 		local ok, err = MC.InventorySlotSet( target, sourceStack )
 		if not ok then return false, err end
-		return MC.InventorySlotSet( hotbar, targetStack )
+		return MC.ContainerSetSwapStack( container, button, targetStack, context )
 	end
 
-	-- Armor/result-like slots may accept only part of a hotbar stack.  Vanilla
-	-- returns the displaced item to the rest of the player inventory or drops it.
+	-- Vanilla puts only the target slot's capacity into the menu and returns the
+	-- displaced target stack through Inventory.add (or drops it if that fails).
 	local placed = MC.CopyItemStack( sourceStack, targetLimit )
 	local sourceRemainder = MC.CopyItemStack( sourceStack, sourceStack.count - targetLimit )
 	local ok, err = MC.InventorySlotSet( target, placed )
 	if not ok then return false, err end
-	ok, err = MC.InventorySlotSet( hotbar, sourceRemainder )
+	ok, err = MC.ContainerSetSwapStack( container, button, sourceRemainder, context )
 	if not ok then return false, err end
-	local displaced, moved = MC.ContainerMoveStackTo( container, targetStack, findInventoryTargets( container, hotbarIndex ), context )
+	local displaced = targetStack
+	local moved = false
+	if type( container.addToInventory ) == "function" then
+		local called, remainder, inserted = pcall( container.addToInventory, container, displaced, context )
+		if not called then return false, "inventory_add_error" end
+		moved = inserted == true or ( type( inserted ) == "number" and inserted > 0 )
+		displaced = remainder
+	else
+		local targets = findInventoryTargets( container, sourceSlot and sourceSlot.index or nil )
+		displaced, moved = MC.ContainerMoveStackTo( container, displaced, targets, context )
+	end
 	if not moved or not MC.IsEmptyItemStack( displaced ) then
-		local dropped = displaced or targetStack
-		local dropOK, dropError = queueDrop( container, state, dropped, context )
+		local dropOK, dropError = queueDrop( container, state, displaced or targetStack, context )
 		if not dropOK then return false, dropError end
 	end
 	return true
@@ -218,35 +271,81 @@ local function executeClone( container, slotIndex, context )
 end
 
 local function executeThrow( container, slotIndex, button, state, context )
-	if button ~= 0 and button ~= 1 then return false, "invalid_button" end
 	if not MC.IsEmptyItemStack( container.cursor ) then return true end
 	local slot = MC.ContainerGetSlot( container, slotIndex )
 	if not slot then return false, "invalid_slot" end
-	if slot.meta and slot.meta.role == "result" then return false, "result_cannot_throw" end
-	local stack = MC.InventorySlotGet( slot )
-	if MC.IsEmptyItemStack( stack ) then return true end
-	local amount = button == 0 and 1 or stack.count
+	local initial = MC.InventorySlotGet( slot )
+	if MC.IsEmptyItemStack( initial ) then return true end
+	local amount = button == 0 and 1 or initial.count
 	local extracted, err = MC.InventorySlotTake( slot, amount, context )
 	if err then return false, err end
-	return queueDrop( container, state, extracted, context )
+	local ok, dropError = queueDrop( container, state, extracted, context )
+	if not ok then return false, dropError end
+	if button == 1 and parityClicksEnabled( container, context ) then
+		local last = extracted
+		local limit = math.max( 1, math.floor( tonumber( MC.ItemAbsoluteMaxStack ) or 99 ) + 1 )
+		for _ = 1, limit do
+			local current = MC.InventorySlotGet( slot )
+			if MC.IsEmptyItemStack( last ) or not sameItem( current, last ) then break end
+			local nextStack, takeError = MC.InventorySlotTake( slot, amount, context )
+			if takeError then return false, takeError end
+			if MC.IsEmptyItemStack( nextStack ) then break end
+			ok, dropError = queueDrop( container, state, nextStack, context )
+			if not ok then return false, dropError end
+			last = nextStack
+		end
+	end
+	return true
 end
 
-local function quickCraftCanUse( slot, carried, context )
+local function quickCraftCanUse( container, slot, carried, context )
 	if not slot or not MC.InventorySlotCanDrag( slot, carried, context ) then return false end
+	if not canDragTo( container, slot, context ) then return false end
 	local existing = MC.InventorySlotGet( slot )
 	return MC.IsEmptyItemStack( existing ) or MC.ItemStacksCanMerge( existing, carried )
 end
 
 local function executeQuickCraft( container, slotIndex, button, state, context )
+	local parity = parityClicksEnabled( container, context )
 	local header = bit and bit.band and bit.band( button, 3 ) or button % 4
 	local craftType = bit and bit.rshift and bit.band( bit.rshift( button, 2 ), 3 ) or math.floor( button / 4 ) % 4
 	local quick = container.quickCraft
 
+	-- This is the exact header state gate in AbstractContainerMenu#doClick:
+	-- only status 1 -> header 2 and same-status repeats are legal.  Invalid
+	-- sequences are ignored after resetting, rather than becoming a rejected
+	-- mutation that changes the menu revision.
+	local expectedStatus = quick.status
+	if not parity then
+		if header == 0 then
+			if MC.IsEmptyItemStack( container.cursor ) then resetQuickCraft( container ) return false, "empty_cursor" end
+			if craftType ~= 0 and craftType ~= 1 and not ( craftType == 2 and context and context.creative == true ) then
+				resetQuickCraft( container )
+				return false, "invalid_quick_craft_type"
+			end
+			quick.status, quick.type, quick.slots = 1, craftType, {}
+			return true
+		end
+		if quick.status ~= 1 or quick.type ~= craftType or MC.IsEmptyItemStack( container.cursor ) then
+			resetQuickCraft( container )
+			return false, "quick_craft_sequence"
+		end
+	else
+		quick.status = header
+		if ( ( expectedStatus ~= 1 or quick.status ~= 2 ) and expectedStatus ~= quick.status ) then
+			resetQuickCraft( container )
+			return true
+		end
+		if MC.IsEmptyItemStack( container.cursor ) then
+			resetQuickCraft( container )
+			return true
+		end
+	end
+
 	if header == 0 then
-		if MC.IsEmptyItemStack( container.cursor ) then resetQuickCraft( container ) return false, "empty_cursor" end
 		if craftType ~= 0 and craftType ~= 1 and not ( craftType == 2 and context and context.creative == true ) then
 			resetQuickCraft( container )
-			return false, "invalid_quick_craft_type"
+			return true
 		end
 		quick.status = 1
 		quick.type = craftType
@@ -254,30 +353,36 @@ local function executeQuickCraft( container, slotIndex, button, state, context )
 		return true
 	end
 
-	if quick.status ~= 1 or quick.type ~= craftType or MC.IsEmptyItemStack( container.cursor ) then
+	if quick.type ~= craftType then
 		resetQuickCraft( container )
-		return false, "quick_craft_sequence"
+		return true
 	end
 	if header == 1 then
 		local slot = MC.ContainerGetSlot( container, slotIndex )
 		local selectedCount = 0
 		for _ in pairs( quick.slots ) do selectedCount = selectedCount + 1 end
-		if quickCraftCanUse( slot, container.cursor, context )
+		if quickCraftCanUse( container, slot, container.cursor, context )
 		and ( craftType == 2 or container.cursor.count > selectedCount ) then
 			quick.slots[slotIndex] = true
 		end
 		return true
 	end
-	if header ~= 2 then resetQuickCraft( container ) return false, "invalid_quick_craft_header" end
+	if header ~= 2 then
+		resetQuickCraft( container )
+		return parity and true or false, parity and nil or "invalid_quick_craft_header"
+	end
 
 	local indices = {}
 	for index in pairs( quick.slots ) do indices[#indices + 1] = index end
 	table.sort( indices )
 	if #indices == 1 then
 		local only = indices[1]
-		local pickupButton = craftType == 1 and 1 or 0
 		resetQuickCraft( container )
-		return executePickup( container, only, pickupButton, state, context )
+		-- AbstractContainerMenu calls doClick(only, quickcraftType, PICKUP).
+		-- Type 2 therefore intentionally does nothing here: button 2 is not a
+		-- normal pickup button, even in creative mode.
+		if parity and craftType == 2 then return true end
+		return executePickup( container, only, parity and craftType or ( craftType == 1 and 1 or 0 ), state, context )
 	end
 	if #indices == 0 then resetQuickCraft( container ) return true end
 
@@ -286,22 +391,21 @@ local function executeQuickCraft( container, slotIndex, button, state, context )
 	local each = craftType == 0 and math.floor( source.count / #indices ) or craftType == 1 and 1 or MC.ItemStackMaxCount( source )
 	for _, index in ipairs( indices ) do
 		local slot = MC.ContainerGetSlot( container, index )
-		if quickCraftCanUse( slot, source, context ) then
+		if quickCraftCanUse( container, slot, source, context )
+		and ( craftType == 2 or source.count >= #indices ) then
 			local existing = MC.InventorySlotGet( slot )
 			local current = existing and existing.count or 0
 			local targetCount = math.min( current + each, MC.InventorySlotLimit( slot, source ) )
 			local delta = math.max( 0, targetCount - current )
-			if craftType == 2 or delta <= remaining then
-				if delta > 0 then
-					local placed = existing and MC.CopyItemStack( existing, targetCount ) or MC.CopyItemStack( source, targetCount )
-					local ok, err = MC.InventorySlotSet( slot, placed )
-					if not ok then resetQuickCraft( container ) return false, err end
-					if craftType ~= 2 then remaining = remaining - delta end
-				end
+			if delta > 0 then
+				local placed = existing and MC.CopyItemStack( existing, targetCount ) or MC.CopyItemStack( source, targetCount )
+				local ok, err = MC.InventorySlotSet( slot, placed )
+				if not ok then resetQuickCraft( container ) return false, err end
+				if parity or craftType ~= 2 then remaining = remaining - delta end
 			end
 		end
 	end
-	local cursor = craftType == 2 and source or remaining > 0 and MC.CopyItemStack( source, remaining ) or nil
+	local cursor = not parity and craftType == 2 and source or remaining > 0 and MC.CopyItemStack( source, remaining ) or nil
 	resetQuickCraft( container )
 	return setCursor( container, cursor )
 end
@@ -311,8 +415,14 @@ local function executePickupAll( container, slotIndex, button, context )
 	if slotIndex < 0 then return false, "invalid_slot" end
 	local carried = container.cursor
 	if MC.IsEmptyItemStack( carried ) then return true end
-	local clicked = MC.ContainerGetStack( container, slotIndex )
-	if not MC.IsEmptyItemStack( clicked ) then return true end
+	local clickedSlot = MC.ContainerGetSlot( container, slotIndex )
+	if not clickedSlot then return false, "invalid_slot" end
+	local clicked = MC.InventorySlotGet( clickedSlot )
+	if not parityClicksEnabled( container, context ) then
+		if not MC.IsEmptyItemStack( clicked ) then return true end
+	elseif not MC.IsEmptyItemStack( clicked ) and MC.InventorySlotMayTake( clickedSlot, context ) then
+		return true
+	end
 
 	local ordered = {}
 	if button == 0 then
@@ -325,8 +435,8 @@ local function executePickupAll( container, slotIndex, button, context )
 			if carried.count >= MC.ItemStackMaxCount( carried ) then break end
 			local stack = MC.InventorySlotGet( slot )
 			if not MC.IsEmptyItemStack( stack ) and MC.ItemStacksCanMerge( stack, carried )
-			and not ( slot.meta and slot.meta.role == "result" )
 			and MC.InventorySlotMayTake( slot, context )
+			and canTakeItemForPickAll( container, carried, slot, context )
 			and ( pass == 2 or stack.count < MC.ItemStackMaxCount( stack ) ) then
 				local room = MC.ItemStackMaxCount( carried ) - carried.count
 				local extracted, err = MC.InventorySlotTake( slot, math.min( stack.count, room ), context )

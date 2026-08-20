@@ -11,6 +11,21 @@ local function callbackResult( callback, fallback, ... )
 	return called and result ~= false
 end
 
+-- Equipment slots have one additional, game-layer veto boundary.  Keeping it
+-- here makes every menu path (normal click, quick-move, number-key swap and
+-- pickup-all) honor effects such as Minecraft's Curse of Binding.  The
+-- authoritative server passes context.player; client previews without a player
+-- simply remain permissive and are corrected by the server action result.
+local function equipmentTakeAllowed( slot, stack, context )
+	if not stack or type( slot ) ~= "table" or type( slot.meta ) ~= "table"
+		or slot.meta.role ~= "equipment" then return true end
+	local player = type( context ) == "table" and context.player or nil
+	if not player or not hook or type( hook.Run ) ~= "function" then return true end
+	local called, result = pcall( hook.Run, "MC.CanTakeEquipmentStack", player,
+		slot.meta.equipmentSlot, stack, context or {} )
+	return called and result ~= false
+end
+
 function MC.NewInventorySlot( definition, index )
 	definition = definition or {}
 	index = math.floor( tonumber( index ~= nil and index or definition.index ) or -1 )
@@ -72,7 +87,9 @@ end
 
 function MC.InventorySlotMayTake( slot, context )
 	if type( slot ) ~= "table" or slot.active == false or slot.readOnly == true then return false end
-	return callbackResult( slot.mayTake, true, slot, MC.InventorySlotGet( slot ), context )
+	local stack = MC.InventorySlotGet( slot )
+	if not callbackResult( slot.mayTake, true, slot, stack, context ) then return false end
+	return equipmentTakeAllowed( slot, stack, context )
 end
 
 function MC.InventorySlotCanDrag( slot, stack, context )

@@ -15,6 +15,20 @@ local GeneratedSprites = MC.GeneratedGuiSpriteData or {}
 local SpriteDefinitions = type( GeneratedSprites.sprites ) == "table" and GeneratedSprites.sprites or {}
 local MAX_GUI_SCALE = 32
 
+-- Some legacy container PNGs already are transparent power-of-two canvases,
+-- just like the generated GUI sprites.  Keep them on the same padded draw path
+-- instead of cropping the atlas with DrawTexturedRectUV: Source otherwise
+-- shifts the one-pixel bevels that Java paints around slots and the outer frame.
+local PaddedGuiDefinitions = {
+	["container/villager"] = {
+		material = "mc/gui/container/villager.png",
+		width = 276,
+		height = 166,
+		mappingWidth = 512,
+		mappingHeight = 256,
+	},
+}
+
 local function usesHudRasterPhase( name )
 	-- The already-calibrated HUD sprites need Source's leading half-texel
 	-- compensation to keep 9x9 hearts/food and the 182px bars pixel-even.
@@ -33,6 +47,9 @@ local function usesClippedContainerRasterPhase( name )
 		or name == "sprites/container/enchanting_table/enchantment_slot"
 		or name == "sprites/container/enchanting_table/enchantment_slot_disabled"
 		or name == "sprites/container/enchanting_table/enchantment_slot_highlighted"
+		or name == "sprites/widget/button"
+		or name == "sprites/widget/button_disabled"
+		or name == "sprites/widget/button_highlighted"
 end
 
 UI.ButtonSound = "mc/random/click.ogg"
@@ -146,7 +163,7 @@ end
 
 function UI.GetGuiMaterial( name )
 	name = tostring( name or "" )
-	local definition = SpriteDefinitions[name]
+	local definition = SpriteDefinitions[name] or PaddedGuiDefinitions[name]
 	if type( definition ) == "table" then
 		local material = pixelMaterial( definition.material, "vertexcolor vertexalpha nocull", nil, true, false )
 		if material then
@@ -242,6 +259,40 @@ function UI.DrawTextureClipped( mat, x, y, w, h, clipX, clipY, clipW, clipH, u0,
 	return result
 end
 
+function UI.DrawHorizontalNineSlice( mat, x, y, w, h, sourceW, sourceH, border, scale, color )
+	if not mat then return false end
+	scale = math.max( 1, math.floor( tonumber( scale ) or 1 ) )
+	x, y = math.floor( tonumber( x ) or 0 ), math.floor( tonumber( y ) or 0 )
+	w, h = math.max( 0, math.floor( tonumber( w ) or 0 ) ), math.max( 0, math.floor( tonumber( h ) or 0 ) )
+	sourceW = math.max( 1, tonumber( sourceW ) or 1 )
+	sourceH = math.max( 1, tonumber( sourceH ) or 1 )
+	border = math.max( 0, tonumber( border ) or 0 )
+	if w <= 0 or h <= 0 or border * 2 >= sourceW then return false end
+
+	-- GuiSpriteScaling.NineSlice takes this three-slice branch when the target
+	-- keeps the authored height. The inner strip is tiled (stretch_inner=false),
+	-- while the two 3px button caps remain at their exact Minecraft size.
+	local capWidth = math.min( border * scale, math.floor( w * 0.5 ) )
+	local middleWidth = math.max( 0, w - capWidth * 2 )
+	local sourceMiddleWidth = sourceW - border * 2
+	local function drawRegion( drawX, drawW, sourceX, sourceWidth )
+		if drawW <= 0 or sourceWidth <= 0 then return end
+		UI.DrawTextureClipped( mat, drawX, y, drawW, h, drawX, y, drawW, h,
+			sourceX / sourceW, 0, ( sourceX + sourceWidth ) / sourceW, 1, color )
+	end
+
+	drawRegion( x, capWidth, 0, capWidth / scale )
+	local drawn = 0
+	local tileWidth = sourceMiddleWidth * scale
+	while drawn < middleWidth do
+		local pieceWidth = math.min( tileWidth, middleWidth - drawn )
+		drawRegion( x + capWidth + drawn, pieceWidth, border, pieceWidth / scale )
+		drawn = drawn + pieceWidth
+	end
+	drawRegion( x + w - capWidth, capWidth, sourceW - capWidth / scale, capWidth / scale )
+	return true
+end
+
 function UI.DrawAnvilTextField( mat, x, y, scale )
 	scale = math.max( 1, math.floor( tonumber( scale ) or 1 ) )
 	x, y = math.floor( tonumber( x ) or 0 ), math.floor( tonumber( y ) or 0 )
@@ -318,17 +369,42 @@ local function createClientSetting( name, default, help, minimum, maximum )
 end
 
 UI.HUDScaleConVar = UI.HUDScaleConVar or createClientSetting( "mc_inventory_hud_scale", 0,
-	"Minecraft inventory HUD scale: 0 uses the Java-style automatic integer scale", 0, MAX_GUI_SCALE )
+	"Minecraft inventory HUD scale: 0 is automatic; a positive value is the maximum scale allowed by the current resolution", 0, MAX_GUI_SCALE )
 UI.HUDOffsetXConVar = UI.HUDOffsetXConVar or createClientSetting( "mc_inventory_hud_offset_x", 0,
 	"Minecraft inventory HUD horizontal offset in screen pixels", -4096, 4096 )
 UI.HUDOffsetYConVar = UI.HUDOffsetYConVar or createClientSetting( "mc_inventory_hud_offset_y", 0,
 	"Minecraft inventory HUD vertical offset in screen pixels", -4096, 4096 )
 UI.UIScaleConVar = UI.UIScaleConVar or createClientSetting( "mc_inventory_ui_scale", 0,
-	"Minecraft inventory screen scale: 0 uses the Java-style automatic integer scale", 0, MAX_GUI_SCALE )
+	"Minecraft inventory screen scale: 0 is automatic; a positive value is the maximum scale allowed by the current resolution", 0, MAX_GUI_SCALE )
 UI.UIOffsetXConVar = UI.UIOffsetXConVar or createClientSetting( "mc_inventory_ui_offset_x", 0,
 	"Minecraft inventory screen horizontal offset in screen pixels", -4096, 4096 )
 UI.UIOffsetYConVar = UI.UIOffsetYConVar or createClientSetting( "mc_inventory_ui_offset_y", 0,
 	"Minecraft inventory screen vertical offset in screen pixels", -4096, 4096 )
+
+-- mc_config is engine-owned, so the optional game layer contributes its row
+-- through the public metadata API instead of making mc_engine hard-code a
+-- mc_game ConVar. RegisterCategory is idempotent across client autorefreshes.
+local configAPI = MC.API and MC.API.Config
+if configAPI and configAPI.RegisterCategory then
+	local configOK, configError = configAPI.RegisterCategory( "client", {
+		id = "inventory_ui",
+		group = "interface",
+		label = "Inventory UI",
+		zhLabel = "物品栏界面",
+		description = "Minecraft inventory interface scale and layout.",
+		descriptionZH = "Minecraft 物品栏界面尺寸与布局。",
+		items = { {
+			name = "mc_inventory_ui_scale",
+			label = "Interface scale",
+			labelZH = "界面尺寸",
+			kind = "number",
+			help = "Maximum GUI scale; 0 uses the largest integer scale allowed by the current resolution.",
+			helpZH = "最大界面缩放；0 表示根据当前分辨率自动使用可用的最大整数缩放。",
+			unit = "scale",
+		} },
+	} )
+	if configOK == false then UI.ConfigRegistrationError = tostring( configError or "config_registration_failed" ) end
+end
 
 local function convarNumber( convar, fallback )
 	if convar and convar.GetFloat then
@@ -347,7 +423,13 @@ end
 
 local function selectedScale( convar )
 	local requested = math.floor( convarNumber( convar, 0 ) )
-	return requested > 0 and math.Clamp( requested, 1, MAX_GUI_SCALE ) or UI.AutoGuiScale()
+	local automatic = UI.AutoGuiScale()
+	if requested <= 0 then return automatic end
+	-- Minecraft's guiScale option is a ceiling, not a forced size: Window's
+	-- calculateScale still clamps a manual value to what the current framebuffer
+	-- can support.  Recompute this on every read so resolution changes take
+	-- effect without requiring a restart or a convar rewrite.
+	return math.Clamp( math.min( requested, automatic ), 1, MAX_GUI_SCALE )
 end
 
 function UI.GuiScale()

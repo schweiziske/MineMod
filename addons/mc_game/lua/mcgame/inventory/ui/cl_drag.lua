@@ -12,6 +12,10 @@ UI.Drag = Drag
 local MOVE_THRESHOLD_SQR = 16
 local DOUBLE_CLICK_TIME = 0.28
 
+local function parityClicksEnabled()
+	return MC.GameplayParityInventoryClicksEnabled and MC.GameplayParityInventoryClicksEnabled() == true
+end
+
 local function shiftDown()
 	return input.IsKeyDown( KEY_LSHIFT ) or input.IsKeyDown( KEY_RSHIFT )
 end
@@ -31,6 +35,44 @@ local function slotKey( slot )
 		return "creative:" .. tostring( MC.ItemStackHash and MC.ItemStackHash( slot.Stack ) or slot.Stack.item )
 	end
 	return tostring( slot.Kind )
+end
+
+local function stackSameItem( left, right )
+	return MC.ItemStacksCanMerge and MC.ItemStacksCanMerge( left, right )
+		or ( not MC.IsEmptyItemStack( left ) and not MC.IsEmptyItemStack( right ) and left.item == right.item )
+	end
+
+local function slotBelongsToClickedContainer( screen, clicked, candidate )
+	if not IsValid( screen ) or not IsValid( candidate ) or not candidate:IsInventorySlot() then return false end
+	if not IsValid( clicked ) then return true end
+	local session = screen.Session or {}
+	local clickedIndex = clicked:GetActionIndex()
+	local candidateIndex = candidate:GetActionIndex()
+	if session.kind == "chest" or session.kind == "chest_double" then
+		local chestSlots = math.floor( tonumber( session.chestSlots ) or 27 )
+		local clickedInChest = clickedIndex < chestSlots
+		return ( candidateIndex < chestSlots ) == clickedInChest
+	end
+	-- For player crafting/inventory menus, all menu slots belong to the same
+	-- AbstractContainerMenu.  The result slot is intentionally excluded by the
+	-- caller because vanilla's canTakeItemForPickAll gate handles it.
+	return true
+end
+
+local function queueShiftDoubleClick( active, previous )
+	local source = previous and previous.lastQuickMoved
+	local clicked = active and active.slot
+	local screen = IsValid( clicked ) and clicked.Screen or nil
+	if MC.IsEmptyItemStack( source ) or not IsValid( screen ) or type( screen.SlotPanels ) ~= "table" then return false end
+	for index = 1, screen.VisibleSlotCount or #screen.SlotPanels do
+		local target = screen.SlotPanels[index]
+		if slotBelongsToClickedContainer( screen, clicked, target )
+		and target:IsInventorySlot()
+		and stackSameItem( target:GetStack(), source ) then
+			MC.QueueInventoryInput( MC.ContainerInput.QUICK_MOVE, target:GetActionIndex(), 0 )
+		end
+	end
+	return true
 end
 
 local function creativePick( slot, count, target )
@@ -82,18 +124,27 @@ local function activateClick( active )
 	end
 	if not slot:IsInventorySlot() then return end
 	local inputType, button
-	if shiftDown() and active.mouseCode ~= MOUSE_MIDDLE then
+	local now = RealTime()
+	local key = slotKey( slot )
+	local previous = Drag.LastClick
+	local isShift = shiftDown() and active.mouseCode ~= MOUSE_MIDDLE
+	local isDouble = active.mouseCode == MOUSE_LEFT and active.hadStack
+		and previous and previous.key == key and previous.mouseCode == MOUSE_LEFT
+		and previous.cursorWasEmpty and previous.hadStack and now - previous.time <= DOUBLE_CLICK_TIME
+	if isShift then
+		if parityClicksEnabled() and isDouble and previous.shift and queueShiftDoubleClick( active, previous ) then
+			Drag.LastClick = nil
+			return
+		end
 		inputType, button = MC.ContainerInput.QUICK_MOVE, 0
+		Drag.LastClick = {
+			key = key, mouseCode = active.mouseCode, cursorWasEmpty = active.cursorWasEmpty,
+			hadStack = active.hadStack, shift = true, lastQuickMoved = MC.CopyItemStack( slot:GetStack() ), time = now,
+		}
 	elseif active.mouseCode == MOUSE_MIDDLE then
 		inputType, button = MC.ContainerInput.CLONE, 0
 	elseif active.mouseCode == MOUSE_LEFT or active.mouseCode == MOUSE_RIGHT then
-		local now = RealTime()
-		local key = slotKey( slot )
-		local previous = Drag.LastClick
-		local double = active.mouseCode == MOUSE_LEFT and active.hadStack
-			and previous and previous.key == key and previous.mouseCode == MOUSE_LEFT
-			and previous.cursorWasEmpty and previous.hadStack and now - previous.time <= DOUBLE_CLICK_TIME
-		if double then
+		if isDouble then
 			inputType, button = MC.ContainerInput.PICKUP_ALL, 0
 			Drag.LastClick = nil
 		else
@@ -140,7 +191,9 @@ local function finishActive( activate )
 	if not active then return end
 	Drag.Active = nil
 	if active.started then
-		MC.QueueInventoryInput( MC.ContainerInput.QUICK_CRAFT, -999, active.craftType * 4 + 2 )
+		if activate ~= false then
+			MC.QueueInventoryInput( MC.ContainerInput.QUICK_CRAFT, -999, active.craftType * 4 + 2 )
+		end
 	elseif activate ~= false and not active.activated then
 		activateClick( active )
 	end
@@ -173,7 +226,21 @@ end
 
 function Drag.ReleasePointer( slot, mouseCode )
 	local active = Drag.Active
-	if not active or active.mouseCode ~= mouseCode then return end
+	if not active then
+		if Drag.SkipNextRelease then Drag.SkipNextRelease = nil end
+		return
+	end
+	if active.mouseCode ~= mouseCode then
+		-- AbstractContainerScreen cancels a quick-craft when a different mouse
+		-- button is released; the following release of the initiating button is
+		-- consumed and must not perform a normal pickup.
+		if IsValid( active.slot ) and active.slot.MouseCapture then active.slot:MouseCapture( false ) end
+		if parityClicksEnabled() then
+			finishActive( false )
+			Drag.SkipNextRelease = true
+		end
+		return
+	end
 	if IsValid( active.slot ) and active.slot.MouseCapture then active.slot:MouseCapture( false ) end
 	finishActive( true )
 end
@@ -195,6 +262,11 @@ function Drag.Cancel()
 	finishActive( false )
 end
 
+function Drag.ConsumeSkipRelease()
+	if Drag.SkipNextRelease then Drag.SkipNextRelease = nil return true end
+	return false
+end
+
 function Drag.DropOutside( mouseCode )
 	if mouseCode ~= MOUSE_LEFT and mouseCode ~= MOUSE_RIGHT then return false end
 	if MC.IsEmptyItemStack( cursorStack() ) then return false end
@@ -210,6 +282,12 @@ function Drag.HandleNumberKey( slot, hotbarIndex )
 	if slot.Kind == "creative" then return creativePick( slot, nil, hotbarIndex ) end
 	if slot:IsInventorySlot() then return MC.QueueInventoryInput( MC.ContainerInput.SWAP, slot:GetActionIndex(), hotbarIndex ) end
 	return false
+end
+
+function Drag.HandleOffhandKey( slot )
+	if not parityClicksEnabled() then return false end
+	if not IsValid( slot ) or not slot:IsInventorySlot() then return false end
+	return MC.QueueInventoryInput( MC.ContainerInput.SWAP, slot:GetActionIndex(), 40 )
 end
 
 function Drag.HandleThrowKey( slot )
