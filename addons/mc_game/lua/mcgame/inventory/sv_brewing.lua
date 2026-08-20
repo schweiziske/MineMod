@@ -42,6 +42,17 @@ local function mutableBlockEntity( bx, by, bz )
 	return World.GetBlockEntity( bx, by, bz )
 end
 
+local function revisionStamp( record )
+	return type( record ) == "table" and record.revision ~= nil and record.revision or false
+end
+
+local function rememberPersistedRecord( runtime, record )
+	if type( record ) ~= "table" then return false end
+	runtime.record = record
+	runtime.persistedRevision = revisionStamp( record )
+	return true
+end
+
 local function ensureBlockEntity( bx, by, bz )
 	local record = mutableBlockEntity( bx, by, bz )
 	if record then return record end
@@ -51,14 +62,21 @@ local function ensureBlockEntity( bx, by, bz )
 	if type( created ) ~= "table" then return nil end
 	local written = World.SetBlockEntity( bx, by, bz, created, { reason = "brewing_default" } )
 	if written ~= true then return nil end
-	return created
+	-- The engine stamps the persisted private copy with its transaction
+	-- revision; the pre-write default would immediately fail logistics CAS.
+	return mutableBlockEntity( bx, by, bz ) or created
 end
 
 local function recordOverlay( runtime )
 	if not World or not World.SetBlockEntity then return false end
 	local saved, err = World.SetBlockEntity( runtime.bx, runtime.by, runtime.bz,
 		runtime.record, { reason = "brewing_runtime" } )
-	if saved ~= true and ErrorNoHalt then ErrorNoHalt( "[MC Brewing] overlay write failed: " .. tostring( err ) .. "\n" ) end
+	if saved == true then
+		local persisted = mutableBlockEntity( runtime.bx, runtime.by, runtime.bz )
+		if persisted then rememberPersistedRecord( runtime, persisted ) end
+	elseif ErrorNoHalt then
+		ErrorNoHalt( "[MC Brewing] overlay write failed: " .. tostring( err ) .. "\n" )
+	end
 	return saved == true
 end
 
@@ -144,7 +162,7 @@ local function refreshBottleState( runtime, actor )
 	}, { actor = actor, fx = false, netMode = "bulk", compareCollision = false } )
 	if transaction and transaction.ok == true then
 		local record = mutableBlockEntity( runtime.bx, runtime.by, runtime.bz )
-		if record then runtime.record = record end
+		if record then rememberPersistedRecord( runtime, record ) end
 	end
 end
 
@@ -182,7 +200,7 @@ local function tickRuntime( runtime, stateId, logicTick )
 				blockEntity = runtime.record } },
 			afterTransaction = function()
 				local record = mutableBlockEntity( runtime.bx, runtime.by, runtime.bz )
-				if record then runtime.record = record end
+				if record then rememberPersistedRecord( runtime, record ) end
 			end,
 		}
 	end
@@ -199,6 +217,7 @@ local function runtimeAt( bx, by, bz, create )
 	local data = record.data or {}
 	runtime = {
 		bx = bx, by = by, bz = bz, key = key, record = record,
+		persistedRevision = revisionStamp( record ),
 		storage = MC.BrewingStorageFromRecord( record ), menus = {},
 		brewTime = tonumber( data.brewTime ) or 0,
 		fuel = tonumber( data.fuel ) or 0,
@@ -217,10 +236,21 @@ function SV.LogisticsBrewingRuntimeAt( bx, by, bz, create )
 	return runtimeAt( bx, by, bz, create == true )
 end
 
-function SV.LogisticsCommitBrewingRuntime( runtime, changedSlots )
+function SV.LogisticsCommitBrewingRuntime( runtime, changedSlots, options )
 	if type( runtime ) ~= "table" or type( changedSlots ) ~= "table" then return false, "invalid_brewing_commit" end
-	syncRecord( runtime, true )
-	refreshBottleState( runtime )
+	options = type( options ) == "table" and options or {}
+	if type( options.storage ) == "table" then
+		for slot = 1, BREWING_SLOTS do runtime.storage[slot] = MC.CopyItemStack( options.storage[slot] ) end
+	end
+	if type( options.state ) == "table" then
+		runtime.brewTime = options.state.brewTime or 0
+		runtime.fuel = options.state.fuel or 0
+	end
+	if type( options.record ) == "table" then rememberPersistedRecord( runtime, options.record ) end
+	if not options.persisted then
+		syncRecord( runtime, true )
+		refreshBottleState( runtime )
+	end
 	schedule( runtime )
 	publishRuntime( runtime, changedSlots )
 	broadcastState( runtime )

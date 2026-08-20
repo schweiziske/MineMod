@@ -44,6 +44,13 @@ L.Constants = L.Constants or {
 	fireworkEvent = 1004,
 	fireChargeEvent = 1018,
 	windChargeEvent = 1051,
+	containerDropItemWidth = 0.25,
+	containerDropSplitMinimum = 10,
+	containerDropSplitRange = 21,
+	containerDropVerticalMean = 0.2,
+	containerDropTriangleDeviation = 0.11485000171139836,
+	containerBlockInteractionRange = 4.5,
+	containerStillValidBuffer = 4,
 }
 
 local C = L.Constants
@@ -95,6 +102,32 @@ function L.OppositeDirection( direction )
 	return L.OppositeDirections[L.NormalizeDirection( direction )]
 end
 
+local function interactionStackEmpty( stack )
+	if MC.IsEmptyItemStack then return MC.IsEmptyItemStack( stack ) == true end
+	return type( stack ) ~= "table" or ( tonumber( stack.count ) or 0 ) <= 0
+end
+
+-- ServerPlayerGameMode#useItemOn suppresses the block's own interaction only
+-- when secondary use is active and at least one hand actually contains an
+-- item.  Empty-hand sneaking still opens/uses the clicked block.
+function L.SecondaryUseSuppressesBlock( secondaryUseActive, mainStack, offhandStack )
+	return secondaryUseActive == true
+		and ( not interactionStackEmpty( mainStack ) or not interactionStackEmpty( offhandStack ) )
+end
+
+-- HopperBlock#getStateForPlacement takes clickedFace.getOpposite(), then
+-- collapses either vertical result to DOWN.  Hit normals are Source axes:
+-- x=east, y=south, z=up.
+function L.HopperFacingForClickedNormal( normal )
+	if type( normal ) ~= "table" then return nil end
+	local x, y, z = tonumber( normal.x ) or 0, tonumber( normal.y ) or 0, tonumber( normal.z ) or 0
+	local ax, ay, az = math.abs( x ), math.abs( y ), math.abs( z )
+	if math.max( ax, ay, az ) <= 0.5 then return nil end
+	if az >= ax and az >= ay then return "down" end
+	if ax >= ay then return x >= 0 and "west" or "east" end
+	return y >= 0 and "north" or "south"
+end
+
 local FURNACE_SLOTS = {
 	up = { 0 }, down = { 2, 1 },
 	north = { 1 }, south = { 1 }, west = { 1 }, east = { 1 },
@@ -140,6 +173,26 @@ function L.CanTakeThroughFace( kind, slot, stack, direction )
 	return true
 end
 
+function L.CanPlaceInSlot( kind, slot, stack, existing )
+	kind, slot = tostring( kind or "" ), math.floor( tonumber( slot ) or -1 )
+	if MC.IsEmptyItemStack and MC.IsEmptyItemStack( stack ) then return false end
+	if type( stack ) ~= "table" or ( tonumber( stack.count ) or 0 ) <= 0 then return false end
+	if kind == "furnace" or kind == "blast_furnace" then
+		if slot == 2 then return false end
+		if slot ~= 1 then return true end
+		local fuel = MC.FurnaceFuelTime and MC.FurnaceFuelTime( stack ) or 0
+		local currentItem = type( existing ) == "table" and tostring( existing.item or "" ) or ""
+		return fuel > 0 or stack.item == "minecraft:bucket" and currentItem ~= "minecraft:bucket"
+	end
+	if kind == "brewing_stand" then
+		if slot == 3 then return MC.BrewingIsIngredient and MC.BrewingIsIngredient( stack ) == true end
+		if slot == 4 then return MC.BrewingIsFuel and MC.BrewingIsFuel( stack ) == true end
+		return slot >= 0 and slot <= 2 and MC.IsEmptyItemStack( existing )
+			and MC.BrewingIsBottle and MC.BrewingIsBottle( stack ) == true
+	end
+	return slot >= 0
+end
+
 function L.ContainerAnalogOutput( storage, size, maximumForStack )
 	size = math.max( 0, math.floor( tonumber( size ) or 0 ) )
 	if size == 0 then return 0 end
@@ -181,6 +234,42 @@ function L.BlocksPerTickToSource( value, blockSize )
 	return ( tonumber( value ) or 0 ) * ( tonumber( blockSize ) or 0 ) / C.tickSeconds
 end
 
+function L.ContainerDropSplitCount( remaining, nextInt )
+	remaining = math.max( 0, math.floor( tonumber( remaining ) or 0 ) )
+	if remaining == 0 or type( nextInt ) ~= "function" then return 0 end
+	local roll = math.floor( tonumber( nextInt( C.containerDropSplitRange )) or 0 )
+	roll = math.max( 0, math.min( C.containerDropSplitRange - 1, roll ) )
+	return math.min( remaining, C.containerDropSplitMinimum + roll )
+end
+
+function L.ContainerDropPositionFractions( nextDouble )
+	if type( nextDouble ) ~= "function" then return nil end
+	local width = C.containerDropItemWidth
+	local centerRange, halfSize = 1 - width, width / 2
+	-- Containers#dropItemStack samples Java X, vertical Y, then horizontal Z.
+	-- Return Source X/Y/Z while preserving that random-call order.
+	local xRandom = clamp( nextDouble(), 0, 1 )
+	local verticalRandom = clamp( nextDouble(), 0, 1 )
+	local yRandom = clamp( nextDouble(), 0, 1 )
+	return xRandom * centerRange + halfSize,
+		yRandom * centerRange + halfSize, verticalRandom * centerRange
+end
+
+local function triangle( mean, deviation, nextDouble )
+	return mean + deviation * ( clamp( nextDouble(), 0, 1 ) - clamp( nextDouble(), 0, 1 ) )
+end
+
+function L.ContainerDropVelocity( nextDouble )
+	if type( nextDouble ) ~= "function" then return nil end
+	local deviation = C.containerDropTriangleDeviation
+	-- Preserve Java's X, vertical Y, horizontal Z sampling order, then map to
+	-- Source's X/Y(horizontal)/Z(vertical) axes.
+	local vx = triangle( 0, deviation, nextDouble )
+	local vz = triangle( C.containerDropVerticalMean, deviation, nextDouble )
+	local vy = triangle( 0, deviation, nextDouble )
+	return vx, vy, vz
+end
+
 function L.DefaultDispensePosition( bx, by, bz, direction )
 	local dx, dy, dz = L.DirectionOffset( direction )
 	if not dx then return nil end
@@ -197,7 +286,7 @@ function L.DefaultDispenseVelocityMeans( direction, randomUnit )
 	if not dx then return nil end
 	local unit = clamp( randomUnit, 0, 1 )
 	local power = unit * C.defaultDispensePowerRange + C.defaultDispensePowerMinimum
-	return dx * power, dy * power, C.defaultDispenseVerticalMean + dz * power,
+	return dx * power, dy * power, C.defaultDispenseVerticalMean,
 		C.defaultDispenseTriangleUnit * C.defaultDispenseAccuracy
 end
 
@@ -206,7 +295,33 @@ L.DoesNotBlockHoppers = L.DoesNotBlockHoppers or {
 	["minecraft:beehive"] = true,
 }
 
+-- These are authoritative Java Container / WorldlyContainerHolder blocks for
+-- which this addon currently has no persistent inventory adapter.  Recognize
+-- them explicitly so Hopper/Dropper conservatively stop instead of treating a
+-- missing backend as air and performing a false default ejection.
+L.UnadaptedBlockContainers = L.UnadaptedBlockContainers or {
+	["minecraft:barrel"] = true,
+	["minecraft:smoker"] = true,
+	["minecraft:jukebox"] = true,
+	["minecraft:decorated_pot"] = true,
+	["minecraft:chiseled_bookshelf"] = true,
+	["minecraft:crafter"] = true,
+	["minecraft:composter"] = true,
+	["minecraft:shulker_box"] = true,
+}
+for _, color in ipairs( {
+	"white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray",
+	"light_gray", "cyan", "purple", "blue", "brown", "green", "red", "black",
+} ) do L.UnadaptedBlockContainers["minecraft:" .. color .. "_shulker_box"] = true end
+for _, wood in ipairs( {
+	"oak", "spruce", "birch", "jungle", "acacia", "dark_oak", "mangrove", "cherry",
+	"pale_oak", "bamboo", "crimson", "warped",
+} ) do L.UnadaptedBlockContainers["minecraft:" .. wood .. "_shelf"] = true end
+
+function L.IsUnadaptedBlockContainer( blockName )
+	return L.UnadaptedBlockContainers[tostring( blockName or "" )] == true
+end
+
 function L.BlockStopsHopperItems( blockName, fullCollision )
 	return fullCollision == true and L.DoesNotBlockHoppers[tostring( blockName or "")] ~= true
 end
-

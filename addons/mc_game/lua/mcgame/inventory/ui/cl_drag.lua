@@ -53,6 +53,10 @@ local function slotBelongsToClickedContainer( screen, clicked, candidate )
 		local clickedInChest = clickedIndex < chestSlots
 		return ( candidateIndex < chestSlots ) == clickedInChest
 	end
+	if session.kind == "hopper" or session.kind == "dispenser" or session.kind == "dropper" then
+		local playerOffset = math.floor( tonumber( session.playerOffset ) or 0 )
+		return ( candidateIndex < playerOffset ) == ( clickedIndex < playerOffset )
+	end
 	-- For player crafting/inventory menus, all menu slots belong to the same
 	-- AbstractContainerMenu.  The result slot is intentionally excluded by the
 	-- caller because vanilla's canTakeItemForPickAll gate handles it.

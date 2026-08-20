@@ -233,6 +233,9 @@ end
 function ENT:Think()
 	if itemParity() then
 		if not MC.ItemEntityParity.ThinkEntity or not MC.ItemEntityParity.ThinkEntity( self ) then return end
+		if IsValid( self ) and MC.LogisticsParity and MC.LogisticsParity.EntityInsideItemDrop then
+			MC.LogisticsParity.EntityInsideItemDrop( self )
+		end
 		if IsValid( self ) and MC.ItemEntityParity.TryPickupPlayers then
 			MC.ItemEntityParity.TryPickupPlayers( self )
 		end
@@ -241,13 +244,35 @@ function ENT:Think()
 		return true
 	end
 	local current = CurTime()
+	local logistics = MC.LogisticsParity
+	local logisticsEnabled = logistics and logistics.Enabled and logistics.Enabled() == true or false
+	if logisticsEnabled
+	and logistics.EntityInsideItemDrop then
+		logistics.EntityInsideItemDrop( self )
+		if not IsValid( self ) then return end
+	end
+	if logisticsEnabled then
+		local legacyAt = tonumber( self.MCLogisticsLegacyThinkAt )
+		if legacyAt and current < legacyAt then
+			self:NextThink( current + 0.05 )
+			return true
+		end
+		self.MCLogisticsLegacyThinkAt = current + 0.25
+	elseif self.MCLogisticsLegacyThinkAt then
+		local legacyAt = tonumber( self.MCLogisticsLegacyThinkAt ) or current
+		self.MCLogisticsLegacyThinkAt = nil
+		if current < legacyAt then
+			self:NextThink( legacyAt )
+			return true
+		end
+	end
 	if self.MCLifetime and current - ( self.MCCreatedAt or current ) >= self.MCLifetime then
 		self:Remove()
 		return
 	end
 	if current >= ( self.MCPickupReadyAt or 0 ) and self:TryPickupOverlaps() then
 		if not IsValid( self ) then return end
-		self:NextThink( current + 0.25 )
+		self:NextThink( current + ( logisticsEnabled and 0.05 or 0.25 ) )
 		return true
 	end
 	if current >= ( self.MCNextMergeAt or 0 ) then
@@ -255,6 +280,6 @@ function ENT:Think()
 		if MC.SV and MC.SV.TryMergeItemDrop then MC.SV.TryMergeItemDrop( self ) end
 		if not IsValid( self ) then return end
 	end
-	self:NextThink( current + 0.25 )
+	self:NextThink( current + ( logisticsEnabled and 0.05 or 0.25 ) )
 	return true
 end

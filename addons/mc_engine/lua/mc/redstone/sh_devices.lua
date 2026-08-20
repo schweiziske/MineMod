@@ -219,29 +219,62 @@ MC.RegisterBlockUpdateHandler( "minecraft:activator_rail", {
 } )
 MC.RegisterBlockUpdateHandler( "minecraft:hopper", directPoweredHandler( "enabled", true ) )
 
-local function triggeredHandler( name )
+local function logisticsParityEnabled( name, context )
+	return MC.RunEvent and MC.RunEvent( "MC.LogisticsParityEnabled", {
+		source = "redstone_device", block = name,
+		bx = context and context.bx, by = context and context.by, bz = context and context.bz,
+	} ) == true or false
+end
+
+local function legacyTriggeredNeighbor( context )
+	local powered = powerAt( context.bx, context.by, context.bz )
+	local triggered = GetStateProperty( context.stateId, "triggered" ) == true
+	if powered and not triggered then
+		local nextState = withBoolean( context.stateId, "triggered", true )
+		return {
+			cells = { { bx = context.bx, by = context.by, bz = context.bz, stateId = nextState } },
+			schedule = { { delayTicks = 4, expectedStateId = nextState } },
+		}
+	end
+	return nil
+end
+
+local function parityTriggeredNeighbor( context )
+	local powered = powerAt( context.bx, context.by, context.bz )
+		or powerAt( context.bx, context.by, context.bz + 1 )
+	local triggered = GetStateProperty( context.stateId, "triggered" ) == true
+	if powered and not triggered then
+		local nextState = withBoolean( context.stateId, "triggered", true )
+		return {
+			cells = { { bx = context.bx, by = context.by, bz = context.bz, stateId = nextState } },
+			-- Java schedules by block, not by the exact triggered state.  Omitting
+			-- expectedStateId preserves a four-tick pulse that falls before firing.
+			schedule = { { delayTicks = 4 } },
+		}
+	elseif not powered and triggered then
+		return singleCell( context, withBoolean( context.stateId, "triggered", false ) )
+	end
+	return nil
+end
+
+local function triggeredHandler( name, logisticsDevice )
 	MC.RegisterBlockUpdateHandler( name, {
 		OnNeighborUpdate = function( context )
-			local powered = powerAt( context.bx, context.by, context.bz )
-			local triggered = GetStateProperty( context.stateId, "triggered" ) == true
-			if powered and not triggered then
-				local nextState = withBoolean( context.stateId, "triggered", true )
-				return {
-					cells = { { bx = context.bx, by = context.by, bz = context.bz, stateId = nextState } },
-					schedule = { { delayTicks = 4, expectedStateId = nextState } },
-				}
+			if logisticsDevice and logisticsParityEnabled( name, context ) then
+				return parityTriggeredNeighbor( context )
 			end
-			return nil
+			return legacyTriggeredNeighbor( context )
 		end,
 		OnScheduledTick = function( context )
+			if logisticsDevice and logisticsParityEnabled( name, context ) then return nil end
 			if GetStateProperty( context.stateId, "triggered" ) ~= true then return nil end
 			return singleCell( context, withBoolean( context.stateId, "triggered", false ) )
 		end,
 	} )
 end
 
-triggeredHandler( "minecraft:dispenser" )
-triggeredHandler( "minecraft:dropper" )
+triggeredHandler( "minecraft:dispenser", true )
+triggeredHandler( "minecraft:dropper", true )
 triggeredHandler( "minecraft:crafter" )
 
 MC.RegisterBlockUpdateHandler( "minecraft:note_block", {

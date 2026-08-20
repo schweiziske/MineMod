@@ -65,19 +65,35 @@ local function entityAnalogInput( bx, by, bz, facing )
 	return math.max( 0, math.min( 15, math.floor( tonumber( value ) or 0 ) ) )
 end
 
+local function blockAnalogInput( bx, by, bz )
+	if not MC.RunEvent then return nil end
+	local result = MC.RunEvent(
+		"MC.BlockAnalogOutputAt", bx, by, bz,
+		{ source = "minecraft:comparator" }
+	)
+	local value = type( result ) == "table" and result.present == true and result.output
+		or type( result ) == "number" and result or nil
+	if value == nil then return nil end
+	return math.max( 0, math.min( 15, math.floor( tonumber( value ) or 0 ) ) )
+end
+
 -- ComparatorBlock#getInputSignal first samples the immediately adjacent block.
 -- Only when that result is below 15 and the adjacent block is a conductor does
 -- it look one more cell forward for the unique direction-matching ItemFrame.
 local function comparatorInputSignal( stateId, bx, by, bz )
 	local facing = facingOffset( stateId )
 	local input = signalAtOffset( bx, by, bz, facing )
-	if input >= 15 then return input end
 	local conductorX, conductorY, conductorZ = bx + facing[1], by + facing[2], bz + facing[3]
+	local blockInput = blockAnalogInput( conductorX, conductorY, conductorZ )
+	if blockInput ~= nil then return blockInput end
+	if input >= 15 then return input end
 	local conductorState = GetBlockState( conductorX, conductorY, conductorZ )
 	if not comparatorInputConductor( conductorState, conductorX, conductorY, conductorZ ) then return input end
-	local entityInput = entityAnalogInput(
-		conductorX + facing[1], conductorY + facing[2], conductorZ + facing[3], facing )
-	return entityInput ~= nil and entityInput or input
+	local targetX, targetY, targetZ = conductorX + facing[1], conductorY + facing[2], conductorZ + facing[3]
+	local targetBlockInput = blockAnalogInput( targetX, targetY, targetZ )
+	local entityInput = entityAnalogInput( targetX, targetY, targetZ, facing )
+	if targetBlockInput ~= nil and entityInput ~= nil then return math.max( targetBlockInput, entityInput ) end
+	return targetBlockInput ~= nil and targetBlockInput or entityInput ~= nil and entityInput or input
 end
 
 local function sideSignal( stateId, bx, by, bz, diodesOnly )
@@ -285,8 +301,27 @@ local function entityAnalogOutputChanged( _, bx, by, bz )
 	end
 end
 
+local function blockAnalogOutputChanged( bx, by, bz )
+	if not SERVER then return end
+	bx, by, bz = tonumber( bx ), tonumber( by ), tonumber( bz )
+	if bx == nil or by == nil or bz == nil then return end
+	bx, by, bz = math.floor( bx ), math.floor( by ), math.floor( bz )
+	for index = 1, 4 do
+		local direction = AnalogOutputDirections[index]
+		local nearX, nearY, nearZ = bx + direction[1], by + direction[2], bz
+		if not enqueueComparatorOutputUpdate( nearX, nearY, nearZ, bx, by, bz ) then
+			local nearState = GetBlockState( nearX, nearY, nearZ )
+			if comparatorInputConductor( nearState, nearX, nearY, nearZ ) then
+				enqueueComparatorOutputUpdate(
+					nearX + direction[1], nearY + direction[2], nearZ, bx, by, bz )
+			end
+		end
+	end
+end
+
 if hook and hook.Add then
 	hook.Add( "MC.EntityAnalogOutputChanged", "mc_redstone_entity_analog_output", entityAnalogOutputChanged )
+	hook.Add( "MC.BlockAnalogOutputChanged", "mc_redstone_block_analog_output", blockAnalogOutputChanged )
 end
 
 local comparatorBlock = MC.BlockByName["minecraft:comparator"]

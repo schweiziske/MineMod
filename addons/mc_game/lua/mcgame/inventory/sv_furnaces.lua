@@ -28,6 +28,17 @@ local function mutableBlockEntity( bx, by, bz )
 	return World.GetBlockEntity( bx, by, bz )
 end
 
+local function revisionStamp( record )
+	return type( record ) == "table" and record.revision ~= nil and record.revision or false
+end
+
+local function rememberPersistedRecord( runtime, record )
+	if type( record ) ~= "table" then return false end
+	runtime.record = record
+	runtime.persistedRevision = revisionStamp( record )
+	return true
+end
+
 local function ensureBlockEntity( bx, by, bz )
 	local record = mutableBlockEntity( bx, by, bz )
 	if record then return record end
@@ -38,14 +49,22 @@ local function ensureBlockEntity( bx, by, bz )
 	if type( created ) ~= "table" then return nil end
 	local written = World.SetBlockEntity( bx, by, bz, created, { reason = "furnace_default" } )
 	if written ~= true then return nil end
-	return created
+	-- SetBlockEntity commits a private copy and replaces its revision with the
+	-- world transaction revision.  Keep the live runtime on that authoritative
+	-- copy so a following logistics transaction does not look stale.
+	return mutableBlockEntity( bx, by, bz ) or created
 end
 
 local function recordOverlay( runtime )
 	if not World or not World.SetBlockEntity then return false end
 	local saved, err = World.SetBlockEntity( runtime.bx, runtime.by, runtime.bz,
 		runtime.record, { reason = "furnace_runtime" } )
-	if saved ~= true and ErrorNoHalt then ErrorNoHalt( "[MC Furnace] overlay write failed: " .. tostring( err ) .. "\n" ) end
+	if saved == true then
+		local persisted = mutableBlockEntity( runtime.bx, runtime.by, runtime.bz )
+		if persisted then rememberPersistedRecord( runtime, persisted ) end
+	elseif ErrorNoHalt then
+		ErrorNoHalt( "[MC Furnace] overlay write failed: " .. tostring( err ) .. "\n" )
+	end
 	return saved == true
 end
 
@@ -172,7 +191,7 @@ local function tickRuntime( runtime, stateId, logicTick )
 				blockEntity = runtime.record } },
 			afterTransaction = function()
 				local record = mutableBlockEntity( runtime.bx, runtime.by, runtime.bz )
-				if record then runtime.record = record end
+				if record then rememberPersistedRecord( runtime, record ) end
 			end,
 		}
 	end
@@ -191,6 +210,7 @@ local function runtimeAt( bx, by, bz, create )
 	local data = record.data or {}
 	runtime = {
 		bx = bx, by = by, bz = bz, key = key, record = record,
+		persistedRevision = revisionStamp( record ),
 		storage = MC.FurnaceStorageFromRecord( record ), menus = {},
 		recipeType = info.recipeType, litTimeRemaining = tonumber( data.litTimeRemaining ) or 0,
 		litTotalTime = tonumber( data.litTotalTime ) or 0,
@@ -209,8 +229,20 @@ function SV.LogisticsFurnaceRuntimeAt( bx, by, bz, create )
 	return runtimeAt( bx, by, bz, create == true )
 end
 
-function SV.LogisticsCommitFurnaceRuntime( runtime, changedSlots )
+function SV.LogisticsCommitFurnaceRuntime( runtime, changedSlots, options )
 	if type( runtime ) ~= "table" or type( changedSlots ) ~= "table" then return false, "invalid_furnace_commit" end
+	options = type( options ) == "table" and options or {}
+	if type( options.storage ) == "table" then
+		for slot = 1, FURNACE_SLOTS do runtime.storage[slot] = MC.CopyItemStack( options.storage[slot] ) end
+	end
+	if type( options.state ) == "table" then
+		runtime.litTimeRemaining = options.state.litTimeRemaining or runtime.litTimeRemaining
+		runtime.litTotalTime = options.state.litTotalTime or runtime.litTotalTime
+		runtime.cookingTimeSpent = options.state.cookingTimeSpent or 0
+		runtime.cookingTotalTime = options.state.cookingTotalTime or 0
+		runtime.recipeUses = options.state.recipeUses or runtime.recipeUses
+	end
+	if type( options.record ) == "table" then rememberPersistedRecord( runtime, options.record ) end
 	local inputChanged = false
 	for _, slot in ipairs( changedSlots ) do if slot == 0 then inputChanged = true break end end
 	if inputChanged then
@@ -218,7 +250,7 @@ function SV.LogisticsCommitFurnaceRuntime( runtime, changedSlots )
 		runtime.cookingTimeSpent = 0
 		runtime.cookingTotalTime = recipe and recipe.cookingTime or 0
 	end
-	syncRecord( runtime, true )
+	if not options.persisted then syncRecord( runtime, true ) end
 	schedule( runtime )
 	publishRuntime( runtime, changedSlots )
 	broadcastState( runtime )

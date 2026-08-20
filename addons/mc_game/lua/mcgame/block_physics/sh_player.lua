@@ -56,6 +56,7 @@ local function clearTransient( player, state )
 	state.previousVelocity = nil
 	state.fallApexZ = nil
 	state.lastAirVelocityZ = nil
+	state.slimeLandingHandled = nil
 end
 
 local function scaleMoveInput( move, horizontal, vertical )
@@ -121,6 +122,7 @@ end
 local function trackFall( state, sample, isGrounded, velocity )
 	if not sample or not sample.origin then return end
 	if not isGrounded then
+		state.slimeLandingHandled = false
 		state.fallApexZ = math.max( tonumber( state.fallApexZ ) or sample.origin.z, sample.origin.z )
 		local velocityZ = tonumber( velocity.z ) or 0
 		if velocityZ < 0 then
@@ -130,6 +132,28 @@ local function trackFall( state, sample, isGrounded, velocity )
 		state.fallApexZ = nil
 		state.lastAirVelocityZ = nil
 	end
+end
+
+local function queueSlimeBounce( player, state, sample, move )
+	if not sample or sample.onName ~= "minecraft:slime_block" or state.slimeLandingHandled == true then
+		return false
+	end
+	-- Treat this landing as consumed even when Shift suppresses the bounce. A
+	-- late OnPlayerHitGround callback must not re-evaluate a key released after
+	-- contact or enqueue the same bounce for the following frame.
+	state.slimeLandingHandled = true
+	if steppingCarefully( player, move ) then return false end
+	local incoming = math.min( tonumber( state.lastAirVelocityZ ) or 0, 0 )
+	if incoming >= 0 then return false end
+	local _, _, incomingBlocks = P.VelocityToBlocksPerTick( Vector( 0, 0, incoming ) )
+	local restitution = P.BounceRestitutionFor( sample.onName, true )
+	local bouncedBlocks = P.RestituteVerticalVelocity(
+		incomingBlocks, 0, C.defaultGravity, C.defaultVerticalDrag, restitution
+	)
+	local bounce = P.BlocksPerTickToVelocity( 0, 0, bouncedBlocks ).z
+	if bounce <= 0 then return false end
+	state.pendingBounce = math.max( tonumber( state.pendingBounce ) or 0, bounce )
+	return true
 end
 
 local function prepareHoneyJump( player, state, sample, move, isGrounded )
@@ -185,8 +209,15 @@ hook.Add( "SetupMove", "mcgame_block_physics_setup", function( player, move )
 	local sample = P.SampleEntity( player, move )
 	if not sample or not move.GetVelocity then return end
 	local isGrounded = grounded( player )
+	local wasGrounded = state.wasGrounded
 	local velocity = move:GetVelocity()
 	trackFall( state, sample, isGrounded, velocity )
+	-- Source occasionally omits OnPlayerHitGround for step/VPhysics landing
+	-- transitions. Entity#updateEntityMovementAfterFallOn still runs in Java,
+	-- so recover the same transition from consecutive movement frames.
+	if isGrounded and wasGrounded == false then
+		queueSlimeBounce( player, state, sample, move )
+	end
 	prepareHoneyJump( player, state, sample, move, isGrounded )
 	state.setupSample = sample
 	state.startVelocity = vectorCopy( velocity )
@@ -281,15 +312,7 @@ hook.Add( "OnPlayerHitGround", "mcgame_block_physics_landing", function( player 
 	state.lastFallDistance = currentFallDistance( player, state, sample )
 	state.lastLandingAt = CurTime and CurTime() or 0
 
-	if sample.onName == "minecraft:slime_block" and not steppingCarefully( player ) then
-		local incoming = math.min( tonumber( state.lastAirVelocityZ ) or 0, 0 )
-		local _, _, incomingBlocks = P.VelocityToBlocksPerTick( Vector( 0, 0, incoming ) )
-		local restitution = P.BounceRestitutionFor( sample.onName, true )
-		local bouncedBlocks = P.RestituteVerticalVelocity(
-			incomingBlocks, 0, C.defaultGravity, C.defaultVerticalDrag, restitution
-		)
-		state.pendingBounce = P.BlocksPerTickToVelocity( 0, 0, bouncedBlocks ).z
-	end
+	queueSlimeBounce( player, state, sample )
 
 	state.fallApexZ = nil
 	state.lastAirVelocityZ = nil

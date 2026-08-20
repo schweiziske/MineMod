@@ -151,6 +151,22 @@ local function breakTarget( ply, aim, trace )
 	return MC.WorldToCell( trace.HitPos - trace.HitNormal * 0.5 )
 end
 
+local function logisticsParityOrderEnabled()
+	local L = MC.LogisticsParity
+	return L and L.Enabled and L.Enabled() == true or false
+end
+
+local function applyLogisticsPlacementState( stateId, hit )
+	if not stateId or not logisticsParityOrderEnabled() then return stateId end
+	local L = MC.LogisticsParity
+	local Blocks = MC.API and MC.API.Blocks
+	if not Blocks or not Blocks.Name or not Blocks.WithProperty then return stateId end
+	if Blocks.Name( stateId ) ~= "minecraft:hopper" then return stateId end
+	local facing = L.HopperFacingForClickedNormal and L.HopperFacingForClickedNormal( hit and hit.HitNormal ) or nil
+	if not facing then return stateId end
+	return Blocks.WithProperty( stateId, "facing", facing ) or stateId
+end
+
 local function placeTarget( ply, aim, trace, id )
 	local hit = aim or trace
 	if not hit or not hit.Hit then return nil end
@@ -172,6 +188,7 @@ local function placeTarget( ply, aim, trace, id )
 	if stateId and MC.ResolveFaceAttachedPlacementState then stateId = MC.ResolveFaceAttachedPlacementState( stateId, hit.HitNormal, ply ) end
 	if stateId and MC.ResolveSignPlacementState then stateId = MC.ResolveSignPlacementState( stateId, hit.HitNormal, ply, bx, by, bz ) end
 	if stateId and MC.ResolveBannerPlacementState then stateId = MC.ResolveBannerPlacementState( stateId, hit.HitNormal, ply, bx, by, bz ) end
+	stateId = applyLogisticsPlacementState( stateId, hit )
 	if not stateId then return nil end
 	return bx, by, bz, stateId
 end
@@ -239,6 +256,13 @@ local function selectedStackForRealm( ply )
 	return state and state.slots and state.slots[( state.selected or 0 ) + 1] or nil
 end
 
+local function logisticsSecondaryUseSuppressesBlock( ply, stack )
+	local L = MC.LogisticsParity
+	if not logisticsParityOrderEnabled() or not L.SecondaryUseSuppressesBlock then return false end
+	local secondaryUseActive = IsValid( ply ) and ply.KeyDown and ply:KeyDown( IN_SPEED ) == true
+	return L.SecondaryUseSuppressesBlock( secondaryUseActive, stack, offhandStackForRealm( ply ) ) == true
+end
+
 local function proxyWorldInteractionCandidate( ply, stack )
 	local vehicle = MC.TraceMinecraftVehicle and select( 1, MC.TraceMinecraftVehicle( ply, 3, MASK_SOLID ) ) or nil
 	if IsValid( vehicle ) then return "vehicle", vehicle end
@@ -249,11 +273,18 @@ local function proxyWorldInteractionCandidate( ply, stack )
 	end
 	local aim = aimedBlock( ply )
 	local hit = aim or trace
+	local parityOrder = logisticsParityOrderEnabled()
+	local suppressBlockUse = parityOrder and logisticsSecondaryUseSuppressesBlock( ply, stack )
+	if parityOrder and not suppressBlockUse and aim and blockHasUse( aim.Block, stack ) then
+		return "block", aim
+	end
 	if stack and hit and MC.Decoration and MC.Decoration.PreviewPlace then
 		local preview = MC.Decoration.PreviewPlace( ply, stack, hit )
 		if preview ~= nil then return "decoration", hit end
 	end
-	if aim and blockHasUse( aim.Block, stack ) then return "block", aim end
+	if not parityOrder and not suppressBlockUse and aim and blockHasUse( aim.Block, stack ) then
+		return "block", aim
+	end
 	return nil, nil
 end
 
@@ -591,6 +622,16 @@ function SWEP:SecondaryAttack()
 				return
 			end
 		end
+		local parityOrder = logisticsParityOrderEnabled()
+		local suppressBlockUse = parityOrder and logisticsSecondaryUseSuppressesBlock( ply, stack )
+		local ux, uy, uz
+		if aim then ux, uy, uz = aim.bx, aim.by, aim.bz
+		elseif trace.Hit and MC.WorldToCell then ux, uy, uz = MC.WorldToCell( trace.HitPos - trace.HitNormal * 0.5 ) end
+		if parityOrder and not suppressBlockUse and aim and MC.SV and MC.SV.Use
+		and MC.SV.Use( ply, ux, uy, uz, definition and definition.blockId or 0 ) then
+			self.MCSecondaryMode = "block"
+			return
+		end
 		if stack and MC.Decoration and MC.Decoration.IsDecorationItem
 		and MC.Decoration.IsDecorationItem( stack ) and MC.Decoration.Enabled
 		and MC.Decoration.Enabled() then
@@ -601,13 +642,11 @@ function SWEP:SecondaryAttack()
 				return
 			end
 		end
-		local ux, uy, uz
-		if aim then ux, uy, uz = aim.bx, aim.by, aim.bz
-		elseif trace.Hit and MC.WorldToCell then ux, uy, uz = MC.WorldToCell( trace.HitPos - trace.HitNormal * 0.5 ) end
 		-- Functional blocks use the press edge, like the legacy creative placer.
 		-- Automatic secondary attacks must not toggle a gate/door every tick while
 		-- the player keeps the button held down.
-		if aim and MC.SV and MC.SV.Use and MC.SV.Use( ply, ux, uy, uz, definition and definition.blockId or 0 ) then
+		if not parityOrder and not suppressBlockUse and aim and MC.SV and MC.SV.Use
+		and MC.SV.Use( ply, ux, uy, uz, definition and definition.blockId or 0 ) then
 			self.MCSecondaryMode = "block"
 			return
 		end
@@ -665,6 +704,12 @@ function SWEP:SecondaryAttack()
 				return
 			end
 		end
+		local parityOrder = logisticsParityOrderEnabled()
+		local suppressBlockUse = parityOrder and logisticsSecondaryUseSuppressesBlock( ply, stack )
+		if parityOrder and not suppressBlockUse and aim and blockHasUse( aim.Block, stack ) then
+			self.MCSecondaryMode = "block"
+			return
+		end
 		if stack and MC.Decoration and MC.Decoration.PreviewPlace then
 			local decorationResult = MC.Decoration.PreviewPlace( ply, stack, trace )
 			if decorationResult ~= nil then
@@ -675,7 +720,7 @@ function SWEP:SecondaryAttack()
 		-- Match the server's use-first order. Without this guard the client draws
 		-- a predicted placement beside doors, gates, chests, and other usable
 		-- blocks while the server correctly performs only their OnUse action.
-		if aim and blockHasUse( aim.Block, stack ) then
+		if not parityOrder and not suppressBlockUse and aim and blockHasUse( aim.Block, stack ) then
 			self.MCSecondaryMode = "block"
 			return
 		end
