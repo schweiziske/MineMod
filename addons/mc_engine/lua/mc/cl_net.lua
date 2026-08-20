@@ -8,6 +8,41 @@ local Net = MC.Net
 MC.SyncProgress = MC.SyncProgress or { expected = 0, received = 0, chunks = 0, doneChunks = 0, active = false, lastUpdate = 0 }
 MC.NativeLoadProfile = MC.NativeLoadProfile or { decompressMS = 0, jsonMS = 0, hydrateMS = 0, chunks = 0, cells = 0 }
 
+local function effectiveStateRegistryHash()
+	if MC.GetEffectiveBlockStateRegistryHash then
+		return tostring( MC.GetEffectiveBlockStateRegistryHash() or "" )
+	end
+	local metadata = MC.BlockStateRegistryMetadata
+	return metadata and tostring( metadata.schemaHash or "" ) or ""
+end
+
+local function validateSavedRegistryMetadata( data )
+	if MC.ValidateModRegistrySnapshot then
+		local registryOK, registryError = MC.ValidateModRegistrySnapshot( data.registry )
+		if registryOK ~= true then return false, registryError or "invalid_registry_snapshot" end
+	end
+	if data.registryHash == nil then
+		local metadata = MC.BlockStateRegistryMetadata
+		local expectedVanillaHash = metadata and metadata.schemaHash or nil
+		if not isstring( data.schemaHash ) or data.schemaHash == ""
+		or expectedVanillaHash and data.schemaHash ~= expectedVanillaHash then
+			return false, "state_registry_mismatch"
+		end
+		return true
+	end
+	if not isstring( data.registryHash ) or data.registryHash == "" then
+		return false, "state_registry_mismatch"
+	end
+	local scopedHash = data.registry ~= nil and MC.ModRegistrySnapshotHash
+		and MC.ModRegistrySnapshotHash( data.registry ) or nil
+	local effectiveHash = effectiveStateRegistryHash()
+	local vanillaHash = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or nil
+	if data.registryHash ~= scopedHash and data.registryHash ~= effectiveHash and data.registryHash ~= vanillaHash then
+		return false, "state_registry_mismatch"
+	end
+	return true
+end
+
 concommand.Add( "mc_native_load_profile", function()
 	local p = MC.NativeLoadProfile or {}
 	print( string.format( "[mcswep-native] load decompress=%.3fms json=%.3fms hydrate=%.3fms chunks=%d cells=%d",
@@ -975,9 +1010,8 @@ function MC.LoadStateChunkPatchData( data )
 	if not istable( data ) or data.chunkPatch ~= true or not istable( data.chunks ) then
 		return false, "invalid_chunk_patch"
 	end
-	local expectedHash = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or nil
-	if not isstring( data.schemaHash ) or data.schemaHash == ""
-	or expectedHash and data.schemaHash ~= expectedHash then return false, "state_registry_mismatch" end
+	local registryOK, registryError = validateSavedRegistryMetadata( data )
+	if not registryOK then return false, registryError end
 	if math.floor( tonumber( data.cs ) or -1 ) ~= MC.CS
 	or math.floor( tonumber( data.h ) or -1 ) ~= MC.CH then return false, "chunk_geometry_mismatch" end
 
@@ -1045,9 +1079,8 @@ function MC.LoadSnapshotSaveData( data )
 	local hydrateStarted = SysTime()
 	if not istable( data ) or not istable( data.chunks ) then return false end
 	if data.v == 9 or data.v == 10 then
-		local expectedHash = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or nil
-		if not isstring( data.schemaHash ) or data.schemaHash == "" then return false end
-		if expectedHash and data.schemaHash ~= expectedHash then return false end
+		local registryOK = validateSavedRegistryMetadata( data )
+		if not registryOK then return false end
 		if math.floor( tonumber( data.cs ) or -1 ) ~= MC.CS or math.floor( tonumber( data.h ) or -1 ) ~= MC.CH then return false end
 	end
 	local palette = data.p or data.palette

@@ -442,6 +442,23 @@ function Store.HttpManifestPayload()
 	}
 end
 
+local function validateStoredRegistryMetadata( data )
+	if MC.ValidateModRegistrySnapshot then
+		local registryOK, registryError = MC.ValidateModRegistrySnapshot( data.registry )
+		if registryOK ~= true then return false, registryError or "invalid_registry_snapshot" end
+	end
+	if data.registryHash == nil then return true end
+	if not isstring( data.registryHash ) or data.registryHash == "" then return false, "invalid_registry_hash" end
+	local scopedHash = data.registry ~= nil and MC.ModRegistrySnapshotHash
+		and MC.ModRegistrySnapshotHash( data.registry ) or nil
+	local effectiveHash = MC.GetEffectiveBlockStateRegistryHash and MC.GetEffectiveBlockStateRegistryHash() or nil
+	local vanillaHash = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or nil
+	if data.registryHash ~= scopedHash and data.registryHash ~= effectiveHash and data.registryHash ~= vanillaHash then
+		return false, "registry_hash_mismatch"
+	end
+	return true
+end
+
 function Store.LoadLazyManifest( manifest, manifestPath, realm )
 	resetTables()
 	Store.Active = true
@@ -453,6 +470,11 @@ function Store.LoadLazyManifest( manifest, manifestPath, realm )
 	Store.ChunkIndex = manifest.chunkIndex or {}
 	Store.Parts = manifest.parts or {}
 	Store.EditOverlayPath = overlayPathForManifest( manifest, Store.ManifestPath )
+	local manifestRegistryOK, manifestRegistryError = validateStoredRegistryMetadata( manifest )
+	if not manifestRegistryOK then
+		resetTables()
+		return false, manifestRegistryError
+	end
 
 	local overlayCandidates = {}
 	if Store.EditOverlayPath then overlayCandidates[#overlayCandidates + 1] = Store.EditOverlayPath end
@@ -463,6 +485,13 @@ function Store.LoadLazyManifest( manifest, manifestPath, realm )
 	for _, overlayPath in ipairs( overlayCandidates ) do
 		if file.Exists( overlayPath, Store.Realm ) then
 			local overlay = readSaveJSON( overlayPath )
+			if istable( overlay ) then
+				local registryOK, registryError = validateStoredRegistryMetadata( overlay )
+				if not registryOK then
+					resetTables()
+					return false, registryError or "invalid_overlay_registry_snapshot"
+				end
+			end
 			if istable( overlay ) and istable( overlay.edits ) then
 				Store.EditChunks = overlay.edits
 			end
@@ -1158,10 +1187,21 @@ function Store.RecordBlockEntityEdit( bx, by, bz, record, stateId )
 end
 
 function Store.SaveOverlay()
+	local stateSpecs = {}
+	for _, edits in pairs( Store.EditChunks or {} ) do
+		for _, edit in pairs( istable( edits ) and edits or {} ) do
+			if istable( edit ) and isstring( edit.state ) then stateSpecs[#stateSpecs + 1] = edit.state end
+		end
+	end
+	local registry = MC.BuildModRegistrySnapshot and MC.BuildModRegistrySnapshot( stateSpecs ) or nil
+	local persistenceHash = registry and MC.ModRegistrySnapshotHash and MC.ModRegistrySnapshotHash( registry )
+		or MC.GetEffectiveBlockStateRegistryHash and MC.GetEffectiveBlockStateRegistryHash() or nil
 	return {
 		v = 3,
 		base = Store.ManifestPath,
 		blockCount = math.max( 0, math.floor( tonumber( SV.BlockCount ) or 0 ) ),
+		registryHash = persistenceHash,
+		registry = registry,
 		edits = Store.EditChunks or {},
 	}
 end

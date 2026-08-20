@@ -210,6 +210,17 @@ function Bridge.IsInventoryControlledClass( value )
 	return className == Bridge.HandClass or className == Bridge.InventoryClass or Bridge.IsManagedClass( className )
 end
 
+-- External resolver SWEPs may own a native first-person presentation path
+-- (animation plus model) that must not be duplicated by the inventory hand
+-- renderer. The capability is declared on the shared SWEP definition and read
+-- through this public API so game code never depends on an addon's internals.
+function Bridge.OwnsFirstPersonPresentation( value )
+	if IsValid( value ) and value.MCHandWeaponOwnsFirstPerson == true then return true end
+	local className = classNameFor( value )
+	local stored = className and weapons and weapons.GetStored and weapons.GetStored( className ) or nil
+	return stored ~= nil and stored.MCHandWeaponOwnsFirstPerson == true
+end
+
 local function resolverStackCopy( stack )
 	return API.DeepCopy and API.DeepCopy( stack ) or stack
 end
@@ -281,6 +292,10 @@ end
 
 function HandWeapon.IsInventoryControlledClass( value )
 	return Bridge.IsInventoryControlledClass( value )
+end
+
+function HandWeapon.OwnsFirstPersonPresentation( value )
+	return Bridge.OwnsFirstPersonPresentation( value )
 end
 
 function HandWeapon.Resolve( stack, ply )

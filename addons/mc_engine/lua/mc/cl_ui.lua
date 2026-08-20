@@ -541,6 +541,23 @@ MC.CreativeCategories = MC.CreativeCategories or {
 	{ id = "transparent", labelKey = "creative.category.transparent", label = "透明/玻璃" },
 	{ id = "plants", labelKey = "creative.category.plants", label = "植物" },
 }
+
+function MC.RefreshCreativeCategories()
+	local seen = {}
+	for _, category in ipairs( MC.CreativeCategories or {} ) do seen[category.id] = true end
+	local creative = MC.API and MC.API.Creative
+	for _, category in ipairs( creative and creative.ListCategories and creative.ListCategories() or {} ) do
+		if type( category ) == "table" and category.id and not seen[category.id] then
+			MC.CreativeCategories[#MC.CreativeCategories + 1] = {
+				id = category.id,
+				labelKey = category.titleKey,
+				label = category.title,
+			}
+			seen[category.id] = true
+		end
+	end
+	return MC.CreativeCategories
+end
 local CREATIVE_GRID_COLS = 9
 local CREATIVE_GRID_ROWS = 4
 local CREATIVE_PAGE_SIZE = CREATIVE_GRID_COLS * CREATIVE_GRID_ROWS
@@ -1089,6 +1106,7 @@ function MC.CreativeCategoryForBlock( b )
 end
 
 function MC.BuildCreativeBlockGroups( search )
+	MC.RefreshCreativeCategories()
 	local groups = {}
 	for _, cat in ipairs( MC.CreativeCategories ) do
 		groups[cat.id] = {}
@@ -1100,6 +1118,20 @@ function MC.BuildCreativeBlockGroups( search )
 			local cat = MC.CreativeCategoryForBlock( b )
 			groups[cat] = groups[cat] or {}
 			groups[cat][#groups[cat] + 1] = id
+			-- A public Creative.RegisterBlock entry is authoritative membership
+			-- for addon categories.  Keep the legacy single creativeCategory field
+			-- for vanilla content, but allow one block to appear in multiple
+			-- registered tabs just like CreativeModeTab search contents.
+			local canonical = b.mcid and MC.NormalizeResourceLocation
+				and MC.NormalizeResourceLocation( b.mcid ) or b.mcid
+			local memberships = MC.ModRegistry and MC.ModRegistry.creativeBlockCategories
+				and canonical and MC.ModRegistry.creativeBlockCategories[canonical] or nil
+			for categoryId in pairs( memberships or {} ) do
+				if categoryId ~= cat then
+					groups[categoryId] = groups[categoryId] or {}
+					groups[categoryId][#groups[categoryId] + 1] = id
+				end
+			end
 		end
 	end
 	return groups

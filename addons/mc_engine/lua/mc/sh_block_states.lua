@@ -252,6 +252,9 @@ function MC.RegisterBlockStateSchema( definition )
 	if definition.blockEntityType and not schema.blockEntityType then return nil, "invalid_block_entity_type" end
 
 	MC.PendingBlockStateSchemas[name] = schema
+	-- Any query made during bootstrap must not cache a partial effective hash;
+	-- the final value is recomputed once the registry freezes.
+	MC.BlockStateRegistryEffectiveHash = nil
 	return schema
 end
 
@@ -323,6 +326,21 @@ function MC.FinalizeBlockStateRegistry( metadata )
 	MC.BlockStateCount = firstStateId
 	MC.BlockStateRegistryMetadata = metadata or MC.GeneratedStateMetadata or {}
 	MC.BlockStateRegistryFrozen = true
+	-- The public block/item/creative registries share this bootstrap boundary.
+	-- Mark it before the outer loader's zero-delay callback so a third-party
+	-- timer cannot sneak a registration into the small ordering window between
+	-- state finalization and API._RunFreezeCallbacks().
+	MC.ModBlockRegistryFrozen = true
+	-- Keep the generated/import schema hash intact, but publish an effective
+	-- hash that also covers addon schemas and their block identities.  State
+	-- transport and new saves use this value to reject a client/world with a
+	-- different mod registry before numeric state ids are interpreted.
+	if MC.RefreshEffectiveBlockStateRegistryHash then
+		MC.RefreshEffectiveBlockStateRegistryHash()
+	end
+	if MC.RefreshModRegistryNetworkHash then
+		MC.RefreshModRegistryNetworkHash()
+	end
 	MC.PendingBlockStateSchemas = nil
 	MC.BlockStateRanges = nil
 	MC.PendingBlockStateSchemasReleased = true
@@ -563,6 +581,14 @@ end
 
 function MC.FinalizePreparedBlockStateRegistry()
 	if MC.BlockStateRegistryFrozen then return MC.BlockStateCount end
+	-- Addon manifests are collected for the whole autorun tick, then their
+	-- entrypoints run at the existing freeze timer boundary.  This is the last
+	-- safe point for an entrypoint to add block/state schemas: running them from
+	-- the loader's later consumer-freeze timer would be one timer too late.
+	if MC.API and MC.API._FireManifestEntrypoints then
+		local manifestOK, manifestError = MC.API._FireManifestEntrypoints()
+		if not manifestOK then return nil, manifestError or "manifest_bootstrap_failed" end
+	end
 	if MC.ProjectBlockStateSchemaError then return nil, "project_schema_error:" .. tostring( MC.ProjectBlockStateSchemaError ) end
 	local count, err = MC.FinalizeBlockStateRegistry( MC.GeneratedStateMetadata )
 	if not count then

@@ -1028,6 +1028,71 @@ function API.Light.SampleCell( bx, by, bz, selfEmission )
 	return sv.SampleLighting( x, y, z, selfEmission )
 end
 
+------------------------------------------------------------------- API.Farming
+-- Vanilla-style crop placement/growth entry points. opts is reserved for
+-- forward-compatible call-site metadata and must currently be a table when
+-- supplied; validation/reach and all writes remain authoritative in MC.SV.
+API.Farming = API.Farming or {}
+local FarmingAPI = API.Farming
+
+local function farmingOptionsValid( opts )
+	return opts == nil or istable( opts )
+end
+
+function FarmingAPI.CanSurvive( bx, by, bz, state )
+	local farming = MC.Farming
+	if not farming or not farming.CanSurvive then return false, "farming_api_unavailable" end
+	local x, y, z = cellCoords( bx, by, bz )
+	if not x then return false, "invalid_cell" end
+	local stateId, err = resolveStateInput( state )
+	if stateId == nil then return false, err or "invalid_state" end
+	return farming.CanSurvive( x, y, z, stateId ) == true
+end
+
+function FarmingAPI.Plant( ply, bx, by, bz, state, opts )
+	local farming = MC.Farming
+	if not farming or not farming.Plant then return false, "farming_api_unavailable" end
+	if not IsValid( ply ) or not ply.IsPlayer or not ply:IsPlayer() then
+		return false, "invalid_player"
+	end
+	if not farmingOptionsValid( opts ) then return false, "invalid_options" end
+	local x, y, z = cellCoords( bx, by, bz )
+	if not x then return false, "invalid_cell" end
+	local stateId, err = resolveStateInput( state )
+	if stateId == nil then return false, err or "invalid_state" end
+	local ok, result = farming.Plant( ply, x, y, z, stateId, opts )
+	if ok ~= true then return false, result or "placement_rejected" end
+	return true, deepCopy( result )
+end
+
+function FarmingAPI.ApplyBonemeal( ply, bx, by, bz, opts )
+	local farming = MC.Farming
+	if not farming or not farming.ApplyBonemeal then return false, "farming_api_unavailable" end
+	if not IsValid( ply ) or not ply.IsPlayer or not ply:IsPlayer() then
+		return false, "invalid_player"
+	end
+	if not farmingOptionsValid( opts ) then return false, "invalid_options" end
+	local x, y, z = cellCoords( bx, by, bz )
+	if not x then return false, "invalid_cell" end
+	local ok, result = farming.ApplyBonemeal( ply, x, y, z, opts )
+	if ok ~= true then return false, result or "bonemeal_rejected" end
+	return true, deepCopy( result )
+end
+
+function FarmingAPI.TryTrample( entity, bx, by, bz, fallDistance, opts )
+	local sv = SV()
+	if not sv or not sv.TryTrampleFarmland then return false, "farming_api_unavailable" end
+	if not IsValid( entity ) then return false, "invalid_entity" end
+	if not farmingOptionsValid( opts ) then return false, "invalid_options" end
+	local x, y, z = cellCoords( bx, by, bz )
+	if not x then return false, "invalid_cell" end
+	fallDistance = tonumber( fallDistance )
+	if not fallDistance or fallDistance ~= fallDistance then return false, "invalid_fall_distance" end
+	local ok, result = sv.TryTrampleFarmland( entity, x, y, z, fallDistance, opts )
+	if ok ~= true then return false, result or "trample_rejected" end
+	return true, deepCopy( result )
+end
+
 ------------------------------------------------------------------ API.Schedule
 -- Block update scheduler access for custom functional blocks.
 API.Schedule = API.Schedule or {}
@@ -1067,8 +1132,9 @@ end
 -- Attach behavior to a block WITHOUT taking over its handler slot.
 --
 -- match is a block name ("minecraft:wheat") or a function( stateId, schema ).
--- definition takes OnScheduledTick / OnNeighborUpdate with the same contract as
--- a block handler, so an observer may return its own cells/schedule/updates.
+-- definition takes OnScheduledTick / OnNeighborUpdate / OnRandomTick with the
+-- same context and { cells, schedule, updates } contract as a block handler.
+-- Random callbacks share the scheduler's callback/cell budgets and isolation.
 -- The block's own handler runs first; observers follow in registration order.
 --
 -- Use this rather than a broadcast hook: per-block updates run thousands of

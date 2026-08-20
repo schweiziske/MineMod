@@ -19,6 +19,12 @@ local DEFAULT_MAX_UPDATES = 4096
 local DEFAULT_MAX_CELLS = 16384
 local DEFAULT_MAX_DEPTH = 64
 local DEFAULT_MAX_QUEUE = 262144
+local DEFAULT_RANDOM_TICK_SPEED = 3
+local DEFAULT_RANDOM_MAX_SECTIONS = 1024
+local DEFAULT_RANDOM_MAX_SAMPLES = 4096
+local DEFAULT_RANDOM_MAX_CALLBACKS = 1024
+local RANDOM_SECTION_HEIGHT = 16
+local RANDOM_SECTION_COUNT = math.max( 1, math.floor( ( MC.CH or 32 ) / RANDOM_SECTION_HEIGHT ) )
 
 local cvEnabled = MC.Config and MC.Config.BlockUpdatesEnabled
 	or GetConVar( "mc_block_updates_enabled" )
@@ -30,6 +36,18 @@ local cvMaxDepth = CreateConVar( "mc_block_update_max_depth", tostring( DEFAULT_
 	"Maximum asynchronous neighbor-update cascade depth." )
 local cvMaxQueue = CreateConVar( "mc_block_update_max_queue", tostring( DEFAULT_MAX_QUEUE ), FCVAR_ARCHIVE,
 	"Maximum combined ready and scheduled block updates." )
+local cvRandomTickSpeed = CreateConVar( "mc_random_tick_speed", tostring( DEFAULT_RANDOM_TICK_SPEED ), FCVAR_ARCHIVE,
+	"Minecraft randomTickSpeed samples per eligible 16x16x16 section each 20 TPS tick.", 0, 4096 )
+local cvRandomMaxSections = CreateConVar( "mc_random_tick_max_sections_per_tick",
+	tostring( DEFAULT_RANDOM_MAX_SECTIONS ), FCVAR_ARCHIVE,
+	"Maximum loaded 16x16x16 sections inspected by the random-tick producer per logic tick.", 0, 65536 )
+local cvRandomMaxSamples = CreateConVar( "mc_random_tick_max_samples_per_tick",
+	tostring( DEFAULT_RANDOM_MAX_SAMPLES ), FCVAR_ARCHIVE,
+	"Maximum block positions sampled by the random-tick producer per logic tick.", 0, 262144 )
+local cvRandomMaxCallbacks = CreateConVar( "mc_random_tick_max_callbacks_per_tick",
+	tostring( DEFAULT_RANDOM_MAX_CALLBACKS ), FCVAR_ARCHIVE,
+	"Maximum sampled random-tick cells dispatched per logic tick; also counts against mc_block_update_max_per_tick.",
+	0, 65536 )
 
 local Ready = {}
 local ReadyHead = 1
@@ -43,6 +61,17 @@ local ScheduledCount = 0
 local Sequence = 0
 local LogicTick = 0
 local Running = false
+local RandomChunkCursor = nil
+local RandomSectionCursor = RANDOM_SECTION_COUNT
+local RandomTickValue = bit.tobit( math.random( 0, 2147483647 ) )
+local LastRandom = {
+	sectionVisits = 0,
+	eligibleSections = 0,
+	samples = 0,
+	hits = 0,
+	callbacks = 0,
+	submittedCells = 0,
+}
 
 local Stats = {
 	enqueued = 0,
@@ -60,12 +89,24 @@ local Stats = {
 	droppedDepth = 0,
 	droppedQueue = 0,
 	droppedResultCells = 0,
+	randomSectionVisits = 0,
+	randomEligibleSections = 0,
+	randomSamples = 0,
+	randomHits = 0,
+	randomCallbacks = 0,
+	randomBudgetStops = 0,
+	randomSectionErrors = 0,
 }
 
 local function positiveConVar( convar, fallback )
 	local value = convar and convar:GetInt() or fallback
 	if value < 1 then return fallback end
 	return value
+end
+
+local function nonNegativeConVar( convar, fallback )
+	local value = convar and convar:GetInt() or fallback
+	return math.max( 0, math.floor( tonumber( value ) or fallback ) )
 end
 
 local function queueLimit()
@@ -133,9 +174,7 @@ local function enqueueReady( bx, by, bz, kind, depth, revision, expectedStateId,
 		return false, "duplicate_update"
 	end
 	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or nil
-	local handler = MC.BlockUpdateHandlerForState and MC.BlockUpdateHandlerForState( stateId ) or nil
-	local callbackName = MC.BlockUpdateCallbackName and MC.BlockUpdateCallbackName( kind ) or nil
-	if not handler or not callbackName or not handler[callbackName] then
+	if not MC.BlockStateHasUpdateListener or not MC.BlockStateHasUpdateListener( stateId, kind ) then
 		Stats.noHandler = Stats.noHandler + 1
 		return false, "no_update_handler"
 	end
@@ -579,19 +618,169 @@ local function processEntry( entry )
 	return cellCount
 end
 
+-- Level.getBlockRandomPos in Java 26.2: randValue = randValue * 3 +
+-- 1013904223 (32-bit), then x/y/z are three four-bit fields of randValue >> 2.
+-- MCSWEP uses X/Y horizontally and Z vertically, so Java's Z maps to local Y
+-- and Java's Y maps to local Z here.
+local function nextRandomSectionCell()
+	RandomTickValue = bit.tobit( RandomTickValue * 3 + 1013904223 )
+	local value = bit.rshift( RandomTickValue, 2 )
+	local lx = bit.band( value, 15 )
+	local ly = bit.band( bit.rshift( value, 8 ), 15 )
+	local lz = bit.band( bit.rshift( value, 16 ), 15 )
+	local cs = MC.CS or 16
+	return lx + ly * cs + lz * cs * cs, lx, ly, lz
+end
+
+-- Iterate only MC.LoadedChunkKeys, never MC.World. The cursor advances at most
+-- the configured section budget each tick, so very large maps are handled over
+-- multiple ticks instead of reintroducing the old whole-world scan.
+local function nextLoadedRandomSection()
+	local loaded = MC.LoadedChunkKeys
+	if type( loaded ) ~= "table" or next( loaded ) == nil then
+		RandomChunkCursor = nil
+		RandomSectionCursor = RANDOM_SECTION_COUNT
+		return nil
+	end
+	if RandomChunkCursor ~= nil and loaded[RandomChunkCursor] ~= true then
+		RandomChunkCursor = nil
+		RandomSectionCursor = RANDOM_SECTION_COUNT
+	end
+	if RandomChunkCursor ~= nil and RandomSectionCursor < RANDOM_SECTION_COUNT then
+		RandomSectionCursor = RandomSectionCursor + 1
+		return RandomChunkCursor, RandomSectionCursor
+	end
+	local key = next( loaded, RandomChunkCursor )
+	if key == nil then key = next( loaded ) end
+	if key == nil then return nil end
+	RandomChunkCursor = key
+	RandomSectionCursor = 1
+	return key, RandomSectionCursor
+end
+
+local function sectionHasRandomListener( section )
+	if not section or ( section.count or 0 ) <= 0 or not MC.BlockStateHasUpdateListener then return false end
+	local palette = section.palette or {}
+	local refCount = section.refCount or {}
+	for localIndex = 0, ( section.paletteSize or #palette ) - 1 do
+		if ( refCount[localIndex] or 0 ) > 0 then
+			local stateId = palette[localIndex + 1] or 0
+			if stateId ~= 0 and MC.BlockStateHasUpdateListener( stateId, Kind.RANDOM ) then return true end
+		end
+	end
+	return false
+end
+
+local function resetLastRandom()
+	for key in pairs( LastRandom ) do LastRandom[key] = 0 end
+end
+
+local function produceRandomTicks( callbackBudget, cellBudget )
+	resetLastRandom()
+	local speed = nonNegativeConVar( cvRandomTickSpeed, DEFAULT_RANDOM_TICK_SPEED )
+	local maxSections = nonNegativeConVar( cvRandomMaxSections, DEFAULT_RANDOM_MAX_SECTIONS )
+	local maxSamples = nonNegativeConVar( cvRandomMaxSamples, DEFAULT_RANDOM_MAX_SAMPLES )
+	callbackBudget = math.max( 0, math.floor( tonumber( callbackBudget ) or 0 ) )
+	cellBudget = math.max( 0, math.floor( tonumber( cellBudget ) or 0 ) )
+	if speed <= 0 or maxSections <= 0 or maxSamples <= 0 or callbackBudget <= 0 or cellBudget <= 0
+	or not MC.HasBlockUpdateListeners or not MC.HasBlockUpdateListeners( Kind.RANDOM ) then return 0, 0 end
+
+	local callbacks, submittedCells = 0, 0
+	local cs = MC.CS or 16
+	local ch = MC.CH or 32
+	local firstChunkKey, firstSectionIndex
+	while LastRandom.sectionVisits < maxSections and LastRandom.samples < maxSamples
+	and callbacks < callbackBudget and submittedCells < cellBudget do
+		local chunkKey, sectionIndex = nextLoadedRandomSection()
+		if chunkKey == nil then break end
+		-- A generous budget must not make a small world random-tick repeatedly in
+		-- one logic tick. Stop before the first duplicate section after a complete
+		-- pass; when the budget is smaller, the persistent cursor resumes next tick.
+		if firstChunkKey == nil then
+			firstChunkKey, firstSectionIndex = chunkKey, sectionIndex
+		elseif chunkKey == firstChunkKey and sectionIndex == firstSectionIndex then
+			break
+		end
+		LastRandom.sectionVisits = LastRandom.sectionVisits + 1
+		local chunk = MC.GetChunkByKey and MC.GetChunkByKey( chunkKey ) or nil
+		if chunk and ( chunk.count or 0 ) > 0 then
+			local migrated = MC.MigrateChunkStateStorage and MC.MigrateChunkStateStorage( chunk )
+			if migrated then
+				local section = chunk.stateSections and chunk.stateSections[sectionIndex] or nil
+				if sectionHasRandomListener( section ) then
+					LastRandom.eligibleSections = LastRandom.eligibleSections + 1
+					local samplesThisSection = math.min( speed, maxSamples - LastRandom.samples )
+					for _ = 1, samplesThisSection do
+						local sectionLocalIndex, lx, ly, lz = nextRandomSectionCell()
+						LastRandom.samples = LastRandom.samples + 1
+						local stateId = MC.StateSection.GetFast( section, sectionLocalIndex )
+						if stateId ~= 0 and MC.BlockStateHasUpdateListener( stateId, Kind.RANDOM ) then
+							LastRandom.hits = LastRandom.hits + 1
+							local cx, cy, cz = chunk.cx, chunk.cy, chunk.cz
+							if cx == nil and MC.ChunkKeyToCoords then cx, cy, cz = MC.ChunkKeyToCoords( chunkKey ) end
+							if cx ~= nil and cy ~= nil and cz ~= nil then
+								local entry = {
+									bx = cx * cs + lx,
+									by = cy * cs + ly,
+									bz = cz * ch + ( sectionIndex - 1 ) * RANDOM_SECTION_HEIGHT + lz,
+									kind = Kind.RANDOM,
+									depth = 0,
+								}
+								callbacks = callbacks + 1
+								submittedCells = submittedCells + processEntry( entry )
+							end
+						end
+						if callbacks >= callbackBudget or submittedCells >= cellBudget then break end
+					end
+				end
+			else
+				Stats.randomSectionErrors = Stats.randomSectionErrors + 1
+			end
+		end
+	end
+
+	LastRandom.callbacks = callbacks
+	LastRandom.submittedCells = submittedCells
+	Stats.randomSectionVisits = Stats.randomSectionVisits + LastRandom.sectionVisits
+	Stats.randomEligibleSections = Stats.randomEligibleSections + LastRandom.eligibleSections
+	Stats.randomSamples = Stats.randomSamples + LastRandom.samples
+	Stats.randomHits = Stats.randomHits + LastRandom.hits
+	Stats.randomCallbacks = Stats.randomCallbacks + callbacks
+	if LastRandom.sectionVisits >= maxSections or LastRandom.samples >= maxSamples
+	or callbacks >= callbackBudget or submittedCells >= cellBudget then
+		Stats.randomBudgetStops = Stats.randomBudgetStops + 1
+	end
+	return callbacks, submittedCells
+end
+
+local function processReadyUntil( processed, submittedCells, updateLimit, cellLimit )
+	while processed < updateLimit and submittedCells < cellLimit do
+		local entry = popReady()
+		if not entry then break end
+		processed = processed + 1
+		submittedCells = submittedCells + processEntry( entry )
+	end
+	return processed, submittedCells
+end
+
 local function runLogicTick()
 	LogicTick = LogicTick + 1
 	promoteDueScheduled()
 
 	local maxUpdates = positiveConVar( cvMaxUpdates, DEFAULT_MAX_UPDATES )
 	local maxCells = positiveConVar( cvMaxCells, DEFAULT_MAX_CELLS )
+	local randomCallbackCap = math.min(
+		nonNegativeConVar( cvRandomMaxCallbacks, DEFAULT_RANDOM_MAX_CALLBACKS ), maxUpdates )
 	local processed, submittedCells = 0, 0
-	while processed < maxUpdates and submittedCells < maxCells do
-		local entry = popReady()
-		if not entry then break end
-		processed = processed + 1
-		submittedCells = submittedCells + processEntry( entry )
-	end
+	-- Reserve the configured random share during the first ready pass. Any share
+	-- the producer does not use is immediately returned to the ready queue below.
+	processed, submittedCells = processReadyUntil(
+		processed, submittedCells, maxUpdates - randomCallbackCap, maxCells )
+	local randomProcessed, randomCells = produceRandomTicks(
+		math.min( randomCallbackCap, maxUpdates - processed ), maxCells - submittedCells )
+	processed = processed + randomProcessed
+	submittedCells = submittedCells + randomCells
+	processed, submittedCells = processReadyUntil( processed, submittedCells, maxUpdates, maxCells )
 	Stats.processed = Stats.processed + processed
 	return processed, submittedCells
 end
@@ -618,6 +807,9 @@ function SV.ClearBlockUpdates( resetStats )
 	ScheduledHeap = {}
 	ScheduledByKind = {}
 	ScheduledCount = 0
+	RandomChunkCursor = nil
+	RandomSectionCursor = RANDOM_SECTION_COUNT
+	resetLastRandom()
 	if MC.ClearRedstoneWireRuntime then MC.ClearRedstoneWireRuntime() end
 	if SV.ClearRedstoneRuntime then SV.ClearRedstoneRuntime() end
 	if resetStats == true then
@@ -635,6 +827,20 @@ function SV.BlockUpdateDiagnostics()
 		scheduledPending = ScheduledCount,
 		heapSize = #ScheduledHeap,
 		running = Running,
+		randomTickSpeed = nonNegativeConVar( cvRandomTickSpeed, DEFAULT_RANDOM_TICK_SPEED ),
+		randomMaxSectionsPerTick = nonNegativeConVar( cvRandomMaxSections, DEFAULT_RANDOM_MAX_SECTIONS ),
+		randomMaxSamplesPerTick = nonNegativeConVar( cvRandomMaxSamples, DEFAULT_RANDOM_MAX_SAMPLES ),
+		randomMaxCallbacksPerTick = nonNegativeConVar( cvRandomMaxCallbacks, DEFAULT_RANDOM_MAX_CALLBACKS ),
+		randomCursorKey = RandomChunkCursor,
+		randomCursorSection = RandomSectionCursor,
+		randomLast = {
+			sectionVisits = LastRandom.sectionVisits,
+			eligibleSections = LastRandom.eligibleSections,
+			samples = LastRandom.samples,
+			hits = LastRandom.hits,
+			callbacks = LastRandom.callbacks,
+			submittedCells = LastRandom.submittedCells,
+		},
 	}
 	for key, value in pairs( Stats ) do out[key] = value end
 	return out

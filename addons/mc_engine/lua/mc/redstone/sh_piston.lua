@@ -575,18 +575,62 @@ local function pistonPowered( context )
 	) > 0
 end
 
-local function pistonSoundCommitted( data, transaction )
+local function pistonCommitted( data, transaction )
 	if not data or not transaction or transaction.ok ~= true or ( transaction.changed or 0 ) <= 0 then return end
 	MC.PlayRedstoneSound( data.sound, data.bx, data.by, data.bz, 0.5, data.pitch )
+	if MC.RunEvent then
+		MC.RunEvent( "MC.PistonMovementCommitted", {
+			bx = data.bx, by = data.by, bz = data.bz,
+			extending = data.extending == true,
+			dx = data.dx, dy = data.dy, dz = data.dz,
+			movements = data.movements,
+		} )
+	end
 end
 
-local function pistonSoundResult( context, extending )
+local function pistonCommitResult( context, extending, cells )
 	local spread = extending and 0.25 or 0.15
 	local randomUnit = math.Rand and math.Rand( 0, 1 ) or math.random()
+	local offset = pistonOffset( context.stateId )
+	local movements = {}
+	for index = 1, #cells do
+		local cell = cells[index]
+		if cell.movedFromX ~= nil then
+			movements[#movements + 1] = {
+				fromX = cell.movedFromX, fromY = cell.movedFromY, fromZ = cell.movedFromZ,
+				toX = cell.bx, toY = cell.by, toZ = cell.bz,
+				dx = cell.bx - cell.movedFromX,
+				dy = cell.by - cell.movedFromY,
+				dz = cell.bz - cell.movedFromZ,
+				stateId = cell.stateId,
+				blockName = stateName( cell.stateId ),
+			}
+		end
+	end
+	-- PistonBaseBlock also creates a source PistonMovingBlockEntity for the
+	-- extending head / retracting base. The engine has no moving-block entity,
+	-- so publish that generic movement explicitly beside moved world cells.
+	local frontX, frontY, frontZ = context.bx + offset[1], context.by + offset[2], context.bz + offset[3]
+	movements[#movements + 1] = extending and {
+		fromX = context.bx, fromY = context.by, fromZ = context.bz,
+		toX = frontX, toY = frontY, toZ = frontZ,
+		dx = offset[1], dy = offset[2], dz = offset[3],
+		blockName = "minecraft:piston_head", source = true,
+	} or {
+		fromX = frontX, fromY = frontY, fromZ = frontZ,
+		toX = context.bx, toY = context.by, toZ = context.bz,
+		dx = -offset[1], dy = -offset[2], dz = -offset[3],
+		blockName = stateName( context.stateId ), source = true,
+	}
 	return {
 		sound = extending and "mc/tile/piston/out.wav" or "mc/tile/piston/in.wav",
 		bx = context.bx, by = context.by, bz = context.bz,
 		pitch = 0.6 + randomUnit * spread,
+		extending = extending == true,
+		dx = extending and offset[1] or -offset[1],
+		dy = extending and offset[2] or -offset[2],
+		dz = extending and offset[3] or -offset[3],
+		movements = movements,
 	}
 end
 
@@ -614,8 +658,8 @@ local pistonHandler = {
 		return cells and {
 			cells = cells,
 			compareCollision = true,
-			afterTransaction = pistonSoundCommitted,
-			afterTransactionData = pistonSoundResult( context, powered ),
+			afterTransaction = pistonCommitted,
+			afterTransactionData = pistonCommitResult( context, powered, cells ),
 		} or nil
 	end,
 }

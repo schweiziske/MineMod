@@ -20,7 +20,329 @@ MC.API = MC.API or {}
 
 local API = MC.API
 
+-- Registration surfaces live at the top of this file so separately shipped
+-- addons can discover them immediately.  Give them the same copy boundary as
+-- the rest of the facade before the full utility section is declared below.
+local function copyRegistrationValue( value, seen )
+	if type( value ) ~= "table" then return value end
+	seen = seen or {}
+	if seen[value] then return seen[value] end
+	local out = {}
+	seen[value] = out
+	for key, child in pairs( value ) do out[copyRegistrationValue( key, seen )] = copyRegistrationValue( child, seen ) end
+	return out
+end
+
+local function registrationValuesEqual( left, right, seen )
+	if type( left ) ~= type( right ) then return false end
+	if type( left ) ~= "table" then return left == right end
+	seen = seen or {}
+	if seen[left] ~= nil then return seen[left] == right end
+	seen[left] = right
+	for key, value in pairs( left ) do
+		if not registrationValuesEqual( value, right[key], seen ) then return false end
+	end
+	for key in pairs( right ) do
+		if left[key] == nil then return false end
+	end
+	return true
+end
+
 API.VERSION = 2
+-- The engine API remains v2.  The content-registration contract is versioned
+-- independently so it can evolve as a v1.x surface without pretending that the
+-- whole API was downgraded to v1.
+API.ModRegistryVersion = API.ModRegistryVersion or ( MC.ModRegistryVersion or "1.0" )
+
+------------------------------------------------------------------ identifiers
+API.Identifiers = API.Identifiers or {}
+function API.Identifiers.Normalize( value )
+	if not MC.NormalizeResourceLocation then return nil, "identifier_api_unavailable" end
+	return MC.NormalizeResourceLocation( value )
+end
+
+function API.Identifiers.Parts( value )
+	if not MC.IdentifierParts then return nil, "identifier_api_unavailable" end
+	return MC.IdentifierParts( value )
+end
+
+---------------------------------------------------------------- neutral creative registry
+-- CreativeModeTab-shaped metadata belongs to the engine contract.  The game
+-- layer later turns string item entries into ItemStacks; the engine never
+-- imports or names that type.
+API.Creative = API.Creative or {}
+local Creative = API.Creative
+local creativeRegistry = MC.ModRegistry
+
+local function normalizeCreativeId( value )
+	-- Category registry keys follow the same Identifier rules as blocks/items.
+	-- A missing namespace therefore becomes minecraft:, never a legacy bare key.
+	return MC.ValidateModContentIdentifier and MC.ValidateModContentIdentifier( value )
+		or MC.NormalizeResourceLocation and MC.NormalizeResourceLocation( value ) or nil
+end
+
+local function creativeEntryCopy( entry )
+	if type( entry ) ~= "table" then return nil end
+	local kind = tostring( entry.kind or "item" )
+	if kind ~= "block" and kind ~= "item" and kind ~= "stack" then return nil end
+	if kind == "stack" then
+		local stack = entry.stack
+		if type( stack ) ~= "table" then return nil end
+		local item = stack.item or stack.id or stack.name
+		item = MC.ValidateModContentIdentifier and MC.ValidateModContentIdentifier( item )
+			or MC.NormalizeResourceLocation and MC.NormalizeResourceLocation( item ) or nil
+		if not item then return nil end
+		local count = stack.count == nil and 1 or tonumber( stack.count )
+		if count == nil or count ~= count or count == math.huge or count == -math.huge
+			or count ~= math.floor( count ) or count ~= 1 then return nil end
+		local damage = stack.damage == nil and 0 or tonumber( stack.damage )
+		if damage == nil or damage ~= damage or damage == math.huge or damage == -math.huge
+			or damage ~= math.floor( damage ) or damage < 0 then return nil end
+		if stack.components ~= nil and type( stack.components ) ~= "table" then return nil end
+		return {
+			kind = "stack",
+			stack = {
+				item = item,
+				count = 1,
+				damage = damage > 0 and damage or nil,
+				components = copyRegistrationValue( stack.components ),
+			},
+		}
+	end
+	local value = entry.name or entry.id or entry.item or entry.stack
+	if value == nil then return nil end
+	if type( value ) == "string" then
+		local normalized = MC.ValidateModContentIdentifier and MC.ValidateModContentIdentifier( value )
+			or MC.NormalizeResourceLocation and MC.NormalizeResourceLocation( value ) or value
+		if not normalized then return nil end
+		return { kind = kind, name = normalized }
+	end
+	return nil
+end
+
+function Creative.RegisterCategory( definition )
+	if MC.BlockStateRegistryFrozen or MC.ModBlockRegistryFrozen or MC.API._freezeStarted
+		or MC.ModCreativeRegistryFrozen or ( MC.ModRegistry and MC.ModRegistry.creativeFrozen ) then
+		return false, "registry_frozen"
+	end
+	if type( definition ) ~= "table" then return false, "invalid_definition" end
+	local id = normalizeCreativeId( definition.id or definition.key or definition.name )
+	if not id then return false, "invalid_identifier" end
+	if creativeRegistry.creativeCategories[id] then return false, "duplicate_creative_category" end
+	local row = string.lower( tostring( definition.row or "top" ) )
+	if row ~= "top" and row ~= "bottom" then return false, "invalid_creative_row" end
+	local column = tonumber( definition.column )
+	if column == nil or column ~= math.floor( column ) or column < 0 or column > 6 then return false, "invalid_creative_column" end
+	-- Vanilla occupies all fourteen page-zero slots.  Extra addon categories
+	-- therefore live on explicit tab pages while retaining CreativeModeTab's
+	-- row/column shape inside each page.
+	local page = tonumber( definition.page )
+	if page == nil then page = 1 end
+	if page ~= math.floor( page ) or page < 1 or page > 31 then return false, "invalid_creative_page" end
+	for _, existing in pairs( creativeRegistry.creativeCategories ) do
+		if existing.page == page and existing.row == row and existing.column == column then
+			return false, "creative_slot_occupied"
+		end
+	end
+	local title = tostring( definition.title or id )
+	local titleZH = tostring( definition.titleZH or title )
+	local icon = definition.icon ~= nil
+		and ( MC.ValidateModContentIdentifier and MC.ValidateModContentIdentifier( definition.icon )
+			or MC.NormalizeResourceLocation( definition.icon ) ) or nil
+	if definition.icon ~= nil and not icon then return false, "invalid_creative_icon" end
+	local background = definition.background ~= nil and tostring( definition.background ) or "items"
+	if background ~= "items" and background ~= "item_search" and background ~= "inventory" then
+		return false, "invalid_creative_background"
+	end
+	local record = {
+		id = id, key = id, row = row, column = column, page = page, title = title, titleZH = titleZH,
+		titleKey = definition.titleKey, icon = icon,
+		background = background, showTitle = definition.showTitle ~= false,
+		canScroll = definition.canScroll ~= false,
+	}
+	creativeRegistry.creativeCategories[id] = record
+	creativeRegistry.creativeEntries[id] = creativeRegistry.creativeEntries[id] or {}
+	creativeRegistry.creativeOrder[#creativeRegistry.creativeOrder + 1] = id
+	return true, copyRegistrationValue( record )
+end
+
+local function registerCreativeEntry( categoryId, entry )
+	if MC.BlockStateRegistryFrozen or MC.ModBlockRegistryFrozen or MC.API._freezeStarted
+		or MC.ModCreativeRegistryFrozen or ( MC.ModRegistry and MC.ModRegistry.creativeFrozen ) then return false, "registry_frozen" end
+	local id = normalizeCreativeId( categoryId )
+	if not id or not creativeRegistry.creativeCategories[id] then return false, "unknown_creative_category" end
+	local normalized = creativeEntryCopy( entry )
+	if not normalized then return false, "invalid_creative_entry" end
+	if normalized.name == nil and normalized.kind ~= "stack" then return false, "invalid_identifier" end
+	-- Do not resolve the target during bootstrap. CreativeModeTab generators
+	-- are allowed to mention a block/item registered later in the same
+	-- `MC.API.OnRegister` phase; the game adapter's freeze callback binds every
+	-- reference after item runtime ids have been assigned. Syntax is validated
+	-- above, so malformed ids still fail immediately without importing mc_game.
+	local entries = creativeRegistry.creativeEntries[id]
+	for _, existing in ipairs( entries ) do
+		local sameNamedEntry = normalized.kind ~= "stack"
+			and existing.kind == normalized.kind and existing.name == normalized.name
+		local sameStackEntry = normalized.kind == "stack" and existing.kind == "stack"
+			and registrationValuesEqual( existing.stack, normalized.stack )
+		if sameNamedEntry or sameStackEntry then return false, "duplicate_creative_entry" end
+	end
+	entries[#entries + 1] = normalized
+	if normalized.kind == "block" and normalized.name then
+		creativeRegistry.creativeBlockCategories[normalized.name] = creativeRegistry.creativeBlockCategories[normalized.name] or {}
+		creativeRegistry.creativeBlockCategories[normalized.name][id] = true
+	end
+	return true
+end
+
+function Creative.RegisterBlock( categoryId, blockName )
+	if MC.ValidateModContentIdentifier and not MC.ValidateModContentIdentifier( blockName ) then return false, "invalid_identifier" end
+	return registerCreativeEntry( categoryId, { kind = "block", name = blockName } )
+end
+
+function Creative.RegisterItem( categoryId, itemName )
+	if MC.ValidateModContentIdentifier and not MC.ValidateModContentIdentifier( itemName ) then return false, "invalid_identifier" end
+	return registerCreativeEntry( categoryId, { kind = "item", name = itemName } )
+end
+
+function Creative.RegisterStack( categoryId, stack )
+	if type( stack ) ~= "table" then return false, "invalid_creative_entry" end
+	return registerCreativeEntry( categoryId, { kind = "stack", stack = stack } )
+end
+
+function Creative.ListCategories()
+	local out = {}
+	for _, id in ipairs( creativeRegistry.creativeOrder or {} ) do
+		local category = creativeRegistry.creativeCategories[id]
+		if category then
+			local copy = copyRegistrationValue( category )
+			copy.entries = copyRegistrationValue( creativeRegistry.creativeEntries[id] or {} )
+			out[#out + 1] = copy
+		end
+	end
+	return out
+end
+
+function Creative.GetCategory( id )
+	id = normalizeCreativeId( id )
+	local category = id and creativeRegistry.creativeCategories[id] or nil
+	if not category then return nil, "unknown_creative_category" end
+	local copy = copyRegistrationValue( category )
+	copy.entries = copyRegistrationValue( creativeRegistry.creativeEntries[id] or {} )
+	return copy
+end
+
+function Creative.IsFrozen()
+	return MC.BlockStateRegistryFrozen == true or MC.API._freezeStarted == true
+		or MC.ModCreativeRegistryFrozen == true or creativeRegistry.creativeFrozen == true
+end
+
+---------------------------------------------------------------- item contract stub
+-- The engine owns the neutral queue only.  mc_game replaces these methods with
+-- the real item registry adapter when its shared layer is loaded.
+API.Items = API.Items or {}
+local Items = API.Items
+MC.ModPendingItemDefinitions = MC.ModPendingItemDefinitions or {}
+
+local function itemDefinitionName( definition )
+	if type( definition ) ~= "table" then return nil, "invalid_definition" end
+	local raw = definition.id or definition.name
+	local name = MC.ValidateModContentIdentifier and MC.ValidateModContentIdentifier( raw )
+		or MC.NormalizeResourceLocation and MC.NormalizeResourceLocation( raw ) or nil
+	if not name then return nil, "invalid_identifier" end
+	return name
+end
+
+function Items.Register( definition )
+	if MC.BlockStateRegistryFrozen or API._freezeStarted or API._ready then return nil, "registry_frozen" end
+	local name, err = itemDefinitionName( definition )
+	if not name then return nil, err end
+	local blockName
+	if definition.block ~= nil then
+		blockName = MC.ValidateModContentIdentifier and MC.ValidateModContentIdentifier( definition.block )
+			or MC.NormalizeResourceLocation and MC.NormalizeResourceLocation( definition.block ) or nil
+		if not blockName then return nil, "invalid_block_item" end
+		-- In an engine-only load there may be no block resolver yet. Keep the
+		-- canonical target in the pending definition and defer only the existence
+		-- check to the game adapter; when a resolver is available, fail early.
+		if MC.ResolveBlock and not MC.ResolveBlock( blockName ) then return nil, "unknown_block" end
+	end
+	if MC.ModPendingItemDefinitions[name] then return nil, "duplicate_item" end
+	local queued = copyRegistrationValue( definition )
+	queued.name, queued.id = name, nil
+	-- Persist the same canonical spelling that was validated above.  In
+	-- particular, Identifier's ":stone" shorthand must not reach the game
+	-- adapter as a raw value that its legacy item normalizer cannot replay.
+	if blockName ~= nil then queued.block = blockName end
+	MC.ModPendingItemDefinitions[name] = queued
+	return true, { name = name, pending = true }
+end
+
+function Items.Resolve( _ )
+	return nil, "item_registry_unavailable"
+end
+
+function Items.RuntimeId( _ )
+	return nil, "item_registry_unavailable"
+end
+
+function Items.NameForRuntimeId( _ )
+	return nil, "item_registry_unavailable"
+end
+
+function Items.ListNames()
+	return nil, "item_registry_unavailable"
+end
+
+function Items.RegistrySnapshot()
+	return nil, "item_registry_unavailable"
+end
+
+------------------------------------------------------------- block loot contract stub
+-- The engine owns only a neutral, namespace-only queue. mc_game replaces this
+-- method with the ItemStack-aware adapter and validates the BlockItem binding
+-- at the shared bootstrap freeze boundary.
+API.BlockLoot = API.BlockLoot or {}
+local BlockLoot = API.BlockLoot
+MC.ModPendingBlockLootDefinitions = MC.ModPendingBlockLootDefinitions or {}
+
+local function modContentName( value )
+	local name, err
+	if MC.ValidateModContentIdentifier then
+		name, err = MC.ValidateModContentIdentifier( value )
+	elseif MC.NormalizeResourceLocation then
+		name = MC.NormalizeResourceLocation( value )
+	end
+	return name, err or ( name and nil or "invalid_identifier" )
+end
+
+-- Register vanilla-style dropSelf behavior for a custom block. If itemName is
+-- omitted, mc_game resolves the BlockItem bound to blockName at freeze time.
+-- The existing `drops`/`lootTable` block-definition fields stay unsupported;
+-- this separate adapter is the only public path that is actually consumed.
+function BlockLoot.RegisterDefaultBlockItem( blockName, itemName )
+	if MC.BlockStateRegistryFrozen or API._freezeStarted or API._ready then
+		return nil, "registry_frozen"
+	end
+	local canonicalBlock, identifierError = modContentName( blockName )
+	if not canonicalBlock then return nil, identifierError end
+	if MC.ResolveBlock and not MC.ResolveBlock( canonicalBlock ) then return nil, "unknown_block" end
+	local canonicalItem
+	if itemName ~= nil then
+		canonicalItem, identifierError = modContentName( itemName )
+		if not canonicalItem then return nil, identifierError end
+	end
+	if MC.ModPendingBlockLootDefinitions[canonicalBlock] then return nil, "duplicate_block_loot" end
+	MC.ModPendingBlockLootDefinitions[canonicalBlock] = {
+		block = canonicalBlock,
+		item = canonicalItem,
+	}
+	return true, {
+		block = canonicalBlock,
+		item = canonicalItem,
+		pending = true,
+	}
+end
 
 -------------------------------------------------------------------- event core
 -- Core write paths call these; they exist on both realms. Listener errors are
@@ -60,6 +382,7 @@ end
 --   else hook.Add( "MC.APIAvailable", "myaddon_boot", boot ) end
 local registerCallbacks = {}
 local readyCallbacks = {}
+local freezeCallbacks = {}
 
 local function runPhaseCallbacks( queued, phase )
 	for _, cb in ipairs( queued ) do
@@ -103,11 +426,66 @@ function API.OnReady( cb )
 	return true
 end
 
--- Engine/API version negotiation for separately shipped addons. Returns false
--- plus a human readable reason instead of failing halfway through a load.
-function API.Require( minVersion, addonName )
-	local wanted = math.floor( tonumber( minVersion ) or 0 )
-	local label = tostring( addonName or "addon" )
+-- Internal cross-addon bootstrap seam. The engine owns the freeze boundary;
+-- optional consumers may contribute a finalizer without being imported here.
+function API._RegisterFreezeCallback( owner, cb )
+	if API._freezeStarted then return false, "registry_frozen" end
+	if not isfunction( cb ) then return false, "invalid_freeze_callback" end
+	owner = tostring( owner or "addon" )
+	for _, record in ipairs( freezeCallbacks ) do
+		if record.owner == owner then return false, "duplicate_freeze_callback" end
+	end
+	freezeCallbacks[#freezeCallbacks + 1] = { owner = owner, callback = cb }
+	return true
+end
+
+function API._RunFreezeCallbacks()
+	if API._freezeStarted then
+		return API._freezeFailed ~= true, API._freezeError
+	end
+	API._freezeStarted = true
+	local callbacks = freezeCallbacks
+	freezeCallbacks = {}
+	for _, record in ipairs( callbacks ) do
+		local ok, callbackResult, callbackError = pcall( record.callback )
+		if not ok or callbackResult == false then
+			local reason = not ok and callbackResult or callbackError or "callback_returned_false"
+			local reasonText = tostring( reason )
+			if reasonText == "" then reasonText = "callback_returned_false" end
+			if not API._freezeFailed then
+				API._freezeError = "registry_freeze_failed:" .. tostring( record.owner ) .. ":" .. reasonText
+			end
+			API._freezeFailed = true
+			local message = "[MC] API freeze callback '" .. tostring( record.owner )
+				.. "' failed: " .. reasonText .. "\n"
+			if ErrorNoHalt then ErrorNoHalt( message ) else print( message ) end
+		end
+	end
+	return API._freezeFailed ~= true, API._freezeError
+end
+
+-- Engine/API version negotiation for separately shipped addons.  String ids
+-- late-bind to the manifest module so this overload survives a single-file
+-- autorefresh of sh_api.lua; numeric calls retain the original v2 behavior.
+function API.Require( requirement, versionRange, addonName )
+	if type( requirement ) == "string" then
+		local label = tostring( addonName or "addon" )
+		if not API._ManifestDependencyStatus then
+			local err = "manifest_api_unavailable"
+			local message = label .. " dependency check failed for " .. tostring( requirement )
+				.. ": " .. err
+			if ErrorNoHalt then ErrorNoHalt( "[MC] " .. message .. "\n" ) else print( "[MC] " .. message ) end
+			return false, err
+		end
+		local ok, err = API._ManifestDependencyStatus( requirement, versionRange or "*", label )
+		if ok then return true end
+		local message = label .. " dependency check failed for " .. tostring( requirement )
+			.. ": " .. tostring( err )
+		if ErrorNoHalt then ErrorNoHalt( "[MC] " .. message .. "\n" ) else print( "[MC] " .. message ) end
+		return false, err
+	end
+	local wanted = math.floor( tonumber( requirement ) or 0 )
+	local label = tostring( versionRange or "addon" )
 	if API.VERSION < wanted then
 		local err = label .. " requires MC API v" .. wanted .. ", engine provides v" .. API.VERSION
 		ErrorNoHalt( "[MC] " .. err .. "\n" )
@@ -129,6 +507,7 @@ end
 -- Called once by the loader after the block/state registries have frozen.
 function API._FireReady()
 	if API._ready then return end
+	if API._freezeFailed then return false, API._freezeError or "registry_freeze_failed" end
 	API._ready = true
 	MC.RunEvent( "MC.APIReady", API.VERSION )
 	local queued = readyCallbacks
@@ -749,6 +1128,12 @@ function World.ForEachBlockEntity( typeName, callback )
 	return true, #entries
 end
 
+------------------------------------------------------------------- API.Farming
+-- Authoritative implementations live in sv_api.lua. Declare the namespace on
+-- both realms so separately shipped item addons can feature-detect it without
+-- depending on autorun/include order.
+API.Farming = API.Farming or {}
+
 -------------------------------------------------------------------- API.Blocks
 API.Blocks = API.Blocks or {}
 local Blocks = API.Blocks
@@ -756,13 +1141,35 @@ local Blocks = API.Blocks
 -- Accepts id / "stone" / "minecraft:stone" / alias. Fresh result table.
 function Blocks.Resolve( input )
 	if not MC.ResolveBlock then return nil, "block_registry_unavailable" end
-	local resolved = MC.ResolveBlock( input )
+	local lookup = input
+	if type( input ) == "string" and ( MC.ValidateModContentIdentifier or MC.NormalizeResourceLocation ) then
+		local canonical, identifierError
+		if MC.ValidateModContentIdentifier then
+			canonical, identifierError = MC.ValidateModContentIdentifier( input )
+		else
+			canonical, identifierError = MC.NormalizeResourceLocation( input )
+		end
+		if not canonical then return nil, identifierError or "invalid_identifier" end
+		lookup = canonical
+	end
+	local resolved = MC.ResolveBlock( lookup )
+	-- Preserve valid legacy aliases such as custom_oak_slope without restoring
+	-- the old trim/lowercase behavior.  Canonical minecraft:* lookup remains the
+	-- first choice; only an already-valid unqualified spelling gets the fallback.
+	if not resolved and type( input ) == "string" and not string.find( input, ":", 1, true ) then
+		resolved = MC.ResolveBlock( input )
+	end
 	if not resolved then return nil, "unknown_block" end
 	local defaultStateId = MC.DefaultBlockState and MC.DefaultBlockState( resolved.id ) or nil
+	local canonical = resolved.mcid
+	if canonical and MC.NormalizeResourceLocation then canonical = MC.NormalizeResourceLocation( canonical ) or canonical end
+	local modRecord = canonical and MC.ModBlockRecord and MC.ModBlockRecord( canonical ) or nil
 	return {
 		id = resolved.id,
-		name = resolved.name,
-		mcid = resolved.mcid,
+		blockId = resolved.id,
+		runtimeId = modRecord and modRecord.runtimeId or resolved.id,
+		name = canonical or resolved.name,
+		mcid = canonical or resolved.mcid,
 		defaultStateId = defaultStateId,
 	}
 end
@@ -880,6 +1287,59 @@ function Blocks.LightOpacity( stateId, bx, by, bz )
 	return MC.BlockLightOpacityForState( stateId, bx, by, bz )
 end
 
+local function stateShapeExtent( boxes, convexes )
+	local lo, hi = math.huge, -math.huge
+	for _, box in ipairs( boxes or {} ) do
+		local z1, z2 = tonumber( box[3] ), tonumber( box[6] )
+		if z1 and z1 < lo then lo = z1 end
+		if z2 and z2 > hi then hi = z2 end
+	end
+	for _, convex in ipairs( convexes or {} ) do
+		for _, point in ipairs( convex or {} ) do
+			local z = tonumber( point[3] ~= nil and point[3] or point.z )
+			if z and z < lo then lo = z end
+			if z and z > hi then hi = z end
+		end
+	end
+	if lo == math.huge or hi == -math.huge then return nil, nil end
+	return lo, hi
+end
+
+-- Exact state-level outline and collision geometry at a cell. Coordinates are
+-- mandatory because connection/state resolvers may depend on neighboring
+-- cells. Returned geometry is deeply copied and can be retained or mutated.
+function Blocks.StateShapeAt( stateId, bx, by, bz )
+	stateId = tonumber( stateId )
+	if stateId == nil or stateId ~= stateId or stateId ~= math.floor( stateId )
+	or not MC.IsValidBlockState or MC.IsValidBlockState( stateId ) ~= true then
+		return nil, "invalid_state"
+	end
+	local x, y, z = cellCoords( bx, by, bz )
+	if not x then return nil, "invalid_cell" end
+	if not MC.BlockBoxesForState or not MC.GetBlockCollisionBoxesForState
+	or not MC.BlockCollisionConvexesForState or not MC.BlockHasCollisionForState
+	or not MC.BlockIsFullCubeForState then
+		return nil, "shape_api_unavailable"
+	end
+	local boxes = MC.BlockBoxesForState( stateId, x, y, z )
+	local collisionBoxes = MC.GetBlockCollisionBoxesForState( stateId, x, y, z )
+	local collisionConvexes = MC.BlockCollisionConvexesForState( stateId, x, y, z )
+	local hasCollision = MC.BlockHasCollisionForState( stateId, x, y, z ) == true
+	local extentLo, extentHi
+	if hasCollision then extentLo, extentHi = stateShapeExtent( collisionBoxes, collisionConvexes ) end
+	return {
+		stateId = stateId,
+		bx = x, by = y, bz = z,
+		boxes = deepCopy( boxes ),
+		collisionBoxes = deepCopy( collisionBoxes ),
+		collisionConvexes = deepCopy( collisionConvexes ),
+		extentLo = extentLo,
+		extentHi = extentHi,
+		hasCollision = hasCollision,
+		fullCube = MC.BlockIsFullCubeForState( stateId, x, y, z ) == true,
+	}
+end
+
 local NARROW_CONNECTIONS = {
 	fence = true, fence_gate = true, wall = true, pane = true, bars = true, pipe6 = true,
 }
@@ -920,15 +1380,101 @@ function Blocks.List()
 	return out
 end
 
--- Register a custom block. MUST be called during file load (autorun include
--- time) or inside hook "MC.APIAvailable" - the registry freezes on the first
--- tick after load. See docs/api.md for the definition table fields.
--- Returns true, blockId (the live registry record is deliberately not leaked).
+-- Namespace-first registry views.  Runtime numbers are intentionally exposed
+-- only as query results for the current process; callers must persist Name /
+-- FormatState strings instead.
+function Blocks.ListNames()
+	local names = {}
+	local seen = {}
+	for _, id in ipairs( MC.BlockList or {} ) do
+		local block = MC.Blocks and MC.Blocks[id]
+		local name = block and ( block.mcid or block.name ) or nil
+		name = name and MC.NormalizeResourceLocation and ( MC.NormalizeResourceLocation( name ) or name ) or name
+		if name and not seen[name] then seen[name] = true; names[#names + 1] = name end
+	end
+	table.sort( names )
+	return names
+end
+
+function Blocks.RuntimeId( input )
+	local resolved, err = Blocks.Resolve( input )
+	if not resolved then return nil, err end
+	return resolved.runtimeId
+end
+
+function Blocks.NameForRuntimeId( runtimeId )
+	if MC.ModBlockNameForRuntimeId then
+		local name = MC.ModBlockNameForRuntimeId( runtimeId )
+		if name then return name end
+	end
+	local resolved = Blocks.Resolve( tonumber( runtimeId ) )
+	return resolved and resolved.name or nil, resolved and nil or "unknown_block"
+end
+
+function Blocks.StateName( stateId )
+	if not MC.FormatBlockState then return nil, "state_registry_unavailable" end
+	return MC.FormatBlockState( stateId )
+end
+
+function Blocks.RegistrySnapshot()
+	if not MC.BuildModRegistrySnapshot then return nil, "registry_unavailable" end
+	return API.DeepCopy( MC.BuildModRegistrySnapshot() )
+end
+
+function Blocks.ResolveRegistrySnapshot( snapshot )
+	if not MC.ResolveModRegistrySnapshot then return nil, "registry_unavailable" end
+	local resolved, err = MC.ResolveModRegistrySnapshot( snapshot )
+	if not resolved then return nil, err end
+	return API.DeepCopy( resolved )
+end
+
+function Blocks.RegistryHash()
+	if not MC.GetEffectiveBlockStateRegistryHash then return nil, "registry_unavailable" end
+	return tostring( MC.GetEffectiveBlockStateRegistryHash() or "" )
+end
+
+-- Hash used by the state-network handshake.  It is intentionally separate
+-- from RegistryHash/persistence schema hashing because it binds legacy block
+-- runtime mappings that must match while numeric transport is active.
+function Blocks.NetworkHash()
+	if MC.GetModRegistryNetworkHash then
+		return tostring( MC.GetModRegistryNetworkHash() or "" )
+	end
+	if not MC.GetEffectiveBlockStateRegistryHash then return nil, "registry_unavailable" end
+	return tostring( MC.GetEffectiveBlockStateRegistryHash() or "" )
+end
+
+-- Register a namespace-first block. MUST be called during file load (autorun
+-- include time) or inside hook "MC.APIAvailable" - the registry freezes on the
+-- first tick after load. See docs/api.md for the definition table fields.
+-- Returns true, a result record whose runtimeId is process-local. This is the
+-- Mod Registry v1.x entry; persisted identity is always result.name.
+function Blocks.RegisterNamespaced( def )
+	if not istable( def ) then return nil, "invalid_definition" end
+	if MC.BlockStateRegistryFrozen or MC.ModBlockRegistryFrozen or MC.API._freezeStarted then return nil, "registry_frozen" end
+	if not MC.RegisterModBlock then return nil, "block_registry_unavailable" end
+	local result, err = MC.RegisterModBlock( def )
+	if not result then return nil, err or "register_failed" end
+	return true, result
+end
+
+-- Compatibility entry retained from MC.API v1/v2. Numeric or omitted `id`
+-- keeps the old MC.RegisterCustomBlock behavior and returns true, blockId.
+-- A non-numeric string `id` with no legacy name/mcid fields is unambiguously a
+-- new namespace definition, so it is forwarded to RegisterNamespaced. New
+-- addons should call RegisterNamespaced explicitly instead of relying on this
+-- overload: it keeps old definitions byte-for-byte compatible while giving
+-- simple v1.x definitions a safe upgrade path.
 function Blocks.Register( def )
 	if not istable( def ) then return nil, "invalid_definition" end
-	if MC.BlockStateRegistryFrozen then return nil, "registry_frozen" end
+	local stringIdentity = type( def.id ) == "string" and tonumber( def.id ) == nil
+		and def.name == nil and def.mcid == nil
+	if stringIdentity then return Blocks.RegisterNamespaced( def ) end
+	if MC.BlockStateRegistryFrozen or MC.ModBlockRegistryFrozen or MC.API._freezeStarted then return nil, "registry_frozen" end
 	if not MC.RegisterCustomBlock then return nil, "block_registry_unavailable" end
 	local block = MC.RegisterCustomBlock( def )
+	-- Preserve the historical facade error: the compatibility overload never
+	-- exposed MC.RegisterCustomBlock's internal validation reasons.
 	if not block then return nil, "register_failed" end
 	return true, block.id or def.id
 end
@@ -1149,6 +1695,13 @@ function Liquid.PlayerEye( ply )
 	return MC.PlayerEyeLiquid( ply )
 end
 
+-- Exact forwarding of MC.LiquidFlowAtCell: three normalized components, or
+-- 0,0,0 for no/mismatched/still liquid. Do not reinterpret requiredKind.
+function Liquid.FlowAt( bx, by, bz, requiredKind )
+	if not MC.LiquidFlowAtCell then return 0, 0, 0 end
+	return MC.LiquidFlowAtCell( bx, by, bz, requiredKind )
+end
+
 ------------------------------------------------------------------ API.DayCycle
 API.DayCycle = API.DayCycle or {}
 local DayCycle = API.DayCycle
@@ -1181,6 +1734,12 @@ end
 
 function DayCycle.NightAmount()
 	return MC.DayCycleNightAmount and MC.DayCycleNightAmount() or 0
+end
+
+-- Continuous celestial-angle smoothstep. This is deliberately not an alias
+-- for the SkyLevel-quantized NightAmount curve.
+function DayCycle.NightBlend()
+	return MC.DayCycleNightBlend and MC.DayCycleNightBlend() or 0
 end
 
 function DayCycle.IsNight()
@@ -1338,6 +1897,7 @@ end
 API.RegisterEvents( "mc.engine", {
 	["MC.APIAvailable"] = { realm = "shared", args = "version", desc = "MC has finished loading; registries still open - register custom blocks here" },
 	["MC.APIReady"] = { realm = "shared", args = "version", desc = "registries frozen; the full API is usable" },
+	["MC.ModCreativeRegistryReady"] = { realm = "shared", args = "version", desc = "neutral CreativeModeTab metadata is frozen and queryable" },
 	["MC.APICapabilityAvailable"] = { realm = "shared", args = "name, version, surface, owner", desc = "an optional public API capability was registered or replaced" },
 	["MC.APICapabilityRemoved"] = { realm = "shared", args = "name, version, owner", desc = "an optional public API capability was removed by its owner" },
 	["MC.ClientBlockStateChanged"] = { realm = "client", args = "bx, by, bz, oldStateId, newStateId, reason", desc = "one client voxel state projection changed; observers update derived caches without engine-to-game calls" },

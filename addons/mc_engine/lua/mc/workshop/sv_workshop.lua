@@ -237,6 +237,7 @@ local function buildSaveBundle( ply, slotName )
 		chunks = meta.chunks or stats.chunks,
 		blocks = meta.blocks or manifestTable.blockCount or stats.blocks,
 		schemaHash = manifestTable.schemaHash,
+		registryHash = manifestTable.registryHash,
 		source = meta.source,
 		workshopId = meta.workshopId,
 		publisherSteamId64 = IsValid( ply ) and ply:SteamID64() or nil,
