@@ -44,11 +44,10 @@ local function registerExampleContent( context )
 		return
 	end
 
+	-- The tab slot is assigned by the registry; a definition never picks its own
+	-- page/row/column, so two addons shipped separately cannot collide.
 	local categoryOK, category = api.Creative.RegisterCategory( {
 		id = "example:building",
-		row = "top",
-		column = 6,
-		page = 1,
 		title = "Example Building",
 		titleZH = "示例建筑",
 		icon = "example:polished_basalt",

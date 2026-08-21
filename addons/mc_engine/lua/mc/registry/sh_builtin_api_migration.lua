@@ -97,11 +97,12 @@ local function registerBuiltinOakSlope()
 	if not api.Creative or not api.Creative.RegisterCategory or not api.Creative.RegisterBlock then
 		return migrationFailed( "creative category", "creative_api_unavailable" )
 	end
+	-- No row/column/page here: the slot is the registry's to assign, and this
+	-- built-in consumer is bound by the same rule as any third-party addon.
+	-- It registers during the engine include chain, so it lands on the first
+	-- allocated slot.
 	local categoryOK, category = api.Creative.RegisterCategory( {
 			id = CATEGORY_ID,
-			row = "top",
-			column = 0,
-			page = 1,
 			title = "Slopes",
 			titleZH = "斜坡",
 			icon = BLOCK_ID,

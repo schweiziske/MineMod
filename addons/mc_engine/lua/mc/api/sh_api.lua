@@ -120,6 +120,42 @@ local function creativeEntryCopy( entry )
 	return nil
 end
 
+-- CreativeModeTab slot geometry.  Page zero belongs to the fourteen generated
+-- vanilla tabs (top/0-6 plus bottom/0-6, exactly full) which never pass through
+-- this registry, so every public category is laid out from page one onward.
+local CREATIVE_COLUMNS = 7
+local CREATIVE_ROWS = { "top", "bottom" }
+local CREATIVE_SLOTS_PER_PAGE = CREATIVE_COLUMNS * #CREATIVE_ROWS
+local CREATIVE_FIRST_PAGE = 1
+local CREATIVE_LAST_PAGE = 31
+local CREATIVE_SLOT_LIMIT = ( CREATIVE_LAST_PAGE - CREATIVE_FIRST_PAGE + 1 ) * CREATIVE_SLOTS_PER_PAGE
+
+-- Slots are allocated, never requested.  Addons are mutually invisible, so a
+-- self-chosen page/row/column is a coordination problem between packages that
+-- ship separately, and it fails as a silently missing tab rather than as a
+-- visible error.  Registration order is the only conflict-free layout a
+-- registry can derive without seeing the installed addon set.
+local function creativeSlotForCursor( cursor )
+	if cursor < 0 or cursor >= CREATIVE_SLOT_LIMIT then return nil end
+	local within = cursor % CREATIVE_SLOTS_PER_PAGE
+	return CREATIVE_FIRST_PAGE + math.floor( cursor / CREATIVE_SLOTS_PER_PAGE ),
+		CREATIVE_ROWS[math.floor( within / CREATIVE_COLUMNS ) + 1],
+		within % CREATIVE_COLUMNS
+end
+
+-- A definition may still carry the pre-allocation row/column/page fields.
+-- Rejecting them would break addons that happen to have picked a free slot, so
+-- the request is dropped and reported once instead.
+local creativeSlotRequestReported = {}
+local function reportIgnoredCreativeSlot( id, definition )
+	if definition.row == nil and definition.column == nil and definition.page == nil then return end
+	if creativeSlotRequestReported[id] then return end
+	creativeSlotRequestReported[id] = true
+	local message = "[MC] creative category '" .. id .. "' requested an explicit row/column/page; "
+		.. "slots are assigned by the registry now and the request was ignored\n"
+	if ErrorNoHalt then ErrorNoHalt( message ) else print( message ) end
+end
+
 function Creative.RegisterCategory( definition )
 	if MC.BlockStateRegistryFrozen or MC.ModBlockRegistryFrozen or MC.API._freezeStarted
 		or MC.ModCreativeRegistryFrozen or ( MC.ModRegistry and MC.ModRegistry.creativeFrozen ) then
@@ -129,21 +165,6 @@ function Creative.RegisterCategory( definition )
 	local id = normalizeCreativeId( definition.id or definition.key or definition.name )
 	if not id then return false, "invalid_identifier" end
 	if creativeRegistry.creativeCategories[id] then return false, "duplicate_creative_category" end
-	local row = string.lower( tostring( definition.row or "top" ) )
-	if row ~= "top" and row ~= "bottom" then return false, "invalid_creative_row" end
-	local column = tonumber( definition.column )
-	if column == nil or column ~= math.floor( column ) or column < 0 or column > 6 then return false, "invalid_creative_column" end
-	-- Vanilla occupies all fourteen page-zero slots.  Extra addon categories
-	-- therefore live on explicit tab pages while retaining CreativeModeTab's
-	-- row/column shape inside each page.
-	local page = tonumber( definition.page )
-	if page == nil then page = 1 end
-	if page ~= math.floor( page ) or page < 1 or page > 31 then return false, "invalid_creative_page" end
-	for _, existing in pairs( creativeRegistry.creativeCategories ) do
-		if existing.page == page and existing.row == row and existing.column == column then
-			return false, "creative_slot_occupied"
-		end
-	end
 	local title = tostring( definition.title or id )
 	local titleZH = tostring( definition.titleZH or title )
 	local icon = definition.icon ~= nil
@@ -154,6 +175,11 @@ function Creative.RegisterCategory( definition )
 	if background ~= "items" and background ~= "item_search" and background ~= "inventory" then
 		return false, "invalid_creative_background"
 	end
+	-- Allocate last so a rejected definition never consumes a slot.
+	local cursor = math.floor( tonumber( creativeRegistry.creativeSlotCursor ) or 0 )
+	local page, row, column = creativeSlotForCursor( cursor )
+	if not page then return false, "creative_slots_exhausted" end
+	reportIgnoredCreativeSlot( id, definition )
 	local record = {
 		id = id, key = id, row = row, column = column, page = page, title = title, titleZH = titleZH,
 		titleKey = definition.titleKey, icon = icon,
@@ -163,6 +189,7 @@ function Creative.RegisterCategory( definition )
 	creativeRegistry.creativeCategories[id] = record
 	creativeRegistry.creativeEntries[id] = creativeRegistry.creativeEntries[id] or {}
 	creativeRegistry.creativeOrder[#creativeRegistry.creativeOrder + 1] = id
+	creativeRegistry.creativeSlotCursor = cursor + 1
 	return true, copyRegistrationValue( record )
 end
 

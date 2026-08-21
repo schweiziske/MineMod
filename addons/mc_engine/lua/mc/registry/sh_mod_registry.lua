@@ -104,6 +104,11 @@ Registry.creativeOrder = Registry.creativeOrder or {}
 Registry.creativeEntries = Registry.creativeEntries or {}
 Registry.creativeBlockCategories = Registry.creativeBlockCategories or {}
 Registry.creativeFrozen = Registry.creativeFrozen == true
+-- CreativeModeTab slots are part of the vanilla layout, not addon-supplied
+-- metadata: a public category never picks its own page/row/column.  Categories
+-- have no unregister entry point, so slots only ever grow and a monotonic
+-- cursor is an exact allocator.  See MC.API.Creative.RegisterCategory.
+Registry.creativeSlotCursor = math.floor( tonumber( Registry.creativeSlotCursor ) or 0 )
 
 MC.ModRegistryVersion = Registry.version
 MC.ModBlockRegistryFrozen = MC.ModBlockRegistryFrozen == true
