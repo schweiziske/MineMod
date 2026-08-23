@@ -939,12 +939,14 @@ end
 function SV.PlaceState( ply, bx, by, bz, stateId, options )
 	stateId = math.floor( tonumber( stateId ) or -1 )
 	if stateId <= 0 or not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return false end
-	local plan = MC.BuildPlacementStatePlan and MC.BuildPlacementStatePlan( bx, by, bz, stateId )
-	if not validatePlacementPlan( ply, plan ) then return false end
+	-- Options must be read BEFORE the plan is built: state providers run inside
+	-- BuildPlacementStatePlan, so secondaryUse has to be an input to it. Patching
+	-- plan.cells afterwards is too late -- the merge decision is already baked in.
 	options = normalizeWriteOptions( options )
+	local plan = MC.BuildPlacementStatePlan
+		and MC.BuildPlacementStatePlan( bx, by, bz, stateId, { secondaryUse = options.secondaryUse == true } )
+	if not validatePlacementPlan( ply, plan ) then return false end
 	if options.blockEntity ~= nil then plan.cells[1].blockEntity = options.blockEntity end
-	-- Sneak-placing must not auto-merge with a neighbouring chest.
-	if options.secondaryUse == true then plan.cells[1].secondaryUse = true end
 	local transactionOptions = {}
 	for key, value in pairs( options ) do transactionOptions[key] = value end
 	transactionOptions.actor = ply

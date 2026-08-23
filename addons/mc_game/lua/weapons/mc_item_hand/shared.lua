@@ -751,7 +751,10 @@ function SWEP:SecondaryAttack()
 		self.MCSecondaryMode = "place"
 		if not trace.Hit then return end
 		local bx, by, bz, stateId = placeTarget( ply, aim, trace, definition.blockId )
-		local plan = bx and MC.BuildPlacementStatePlan and MC.BuildPlacementStatePlan( bx, by, bz, stateId )
+		-- Same sneak context as the server write, so the predicted plan does not
+		-- briefly show a merged double chest that the server then rejects.
+		local plan = bx and MC.BuildPlacementStatePlan and MC.BuildPlacementStatePlan(
+			bx, by, bz, stateId, { secondaryUse = ply.KeyDown and ply:KeyDown( IN_SPEED ) == true } )
 		if plan and MC.CanPreviewPlacePlan and MC.CanPreviewPlacePlan( ply, plan ) and MC.PredictSetBlockState then
 			if MC.PredictSetBlockState( bx, by, bz, stateId ) then
 				self:StartCreativePlaceAnimation( bx, by, bz )
@@ -1007,6 +1010,9 @@ if CLIENT then
 	end
 
 	local ITEM_TP_SCALE = 7.5
+	-- Minecraft's thirdperson_righthand display scale for block models, which is
+	-- what the block-shaped entity models (chest) carry in their display table.
+	local BLOCK_DISPLAY_TP_SCALE = 0.375
 
 	local function heldItemPose( ply, firstPerson, hand, blockShaped )
 		local leftHand = hand == "offhand"
@@ -1037,16 +1043,23 @@ if CLIENT then
 			return pos, ang, MC_WEAPONS_FP.size
 		end
 		local HandWeapon = MC.API and MC.API.HandWeapon or nil
-		-- Third person puts item models and block models on the SAME anchor and
-		-- offsets, so their scales are directly comparable. Flat items are drawn
-		-- larger than blocks on purpose (Minecraft's display transforms do the
-		-- same). "special" plans are block-shaped entity models -- chests,
-		-- shulker boxes -- and must follow the BLOCK scale, or a held chest is
-		-- visibly bigger than every other block in the hand.
+		-- The two renderers use DIFFERENT scale conventions, so their numbers are
+		-- not directly comparable. The block path applies its scale straight to
+		-- the mesh. The item path treats the scale as a base size and multiplies
+		-- it by the model's Minecraft display transform, so the drawn size is
+		-- baseSize * display.scale (chest thirdperson_righthand = 0.375).
+		--
+		-- A block-shaped special model must therefore be handed the base size
+		-- that CANCELS its display scale and lands on the block scale:
+		--     baseSize * 0.375 == blockScale   ->   baseSize = blockScale / 0.375
+		-- Passing the block scale directly made a held chest roughly a third of
+		-- a normal held block. Flat items keep their own base size: their larger
+		-- display scale is vanilla behaviour, not a bug.
 		local scale = ITEM_TP_SCALE
 		if blockShaped and HandWeapon and HandWeapon.GetBlockThirdPersonPose then
 			local _, _, blockScale = HandWeapon.GetBlockThirdPersonPose( ply, leftHand )
-			scale = tonumber( blockScale ) or scale
+			blockScale = tonumber( blockScale )
+			if blockScale then scale = blockScale / BLOCK_DISPLAY_TP_SCALE end
 		end
 		if not firstPerson and HandWeapon and HandWeapon.GetItemThirdPersonAnchor then
 			local pos, ang = HandWeapon.GetItemThirdPersonAnchor( ply, leftHand )
