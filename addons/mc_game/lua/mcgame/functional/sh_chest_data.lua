@@ -184,6 +184,17 @@ end
 -- sneaking stays SINGLE next to an existing chest. The flag rides on the placed
 -- cell, and both sides are checked: the sneak-placed chest must not adopt a
 -- neighbour, and an existing chest must not adopt the sneak-placed one.
+-- Cells written by this transaction, as opposed to the neighbours pulled in as
+-- candidates. Only these may initiate a merge; see the pairing loop below.
+local function buildPlacedSet( changes, changeCount )
+	local placed = {}
+	for index = 1, changeCount do
+		local cell = changes[index]
+		if cell then placed[cellKey( cell.bx, cell.by, cell.bz )] = true end
+	end
+	return placed
+end
+
 local function buildNoConnectSet( changes, changeCount )
 	local noConnect = {}
 	for index = 1, changeCount do
@@ -217,6 +228,7 @@ function MC.BuildChestConnectionStateUpdates( changes, changeCount )
 
 	local updates, paired = {}, {}
 	local noConnect = buildNoConnectSet( changes, changeCount )
+	local placed = buildPlacedSet( changes, changeCount )
 	-- First detach halves whose partner disappeared or changed type/facing.
 	for _, candidate in ipairs( candidates ) do
 		local info = chestStateInfo( stateAt( changes, changeCount, candidate.bx, candidate.by, candidate.bz ) )
@@ -230,14 +242,21 @@ function MC.BuildChestConnectionStateUpdates( changes, changeCount )
 		end
 	end
 
-	-- Then form at most one pair for every single chest, clockwise first just
-	-- like ChestBlock#getChestType.  The paired set prevents a third chest from
+	-- Then form at most one pair, clockwise first just like
+	-- ChestBlock#getChestType.  The paired set prevents a third chest from
 	-- stealing an existing half during one transaction.
+	--
+	-- Only a cell that actually CHANGED may start a pair. In Minecraft the merge
+	-- is decided by getStateForPlacement for the block being placed; two chests
+	-- that already exist side by side never merge on their own. The candidate
+	-- list deliberately includes neighbours of the change (the detach pass above
+	-- needs them), so without this gate, dropping any unrelated block beside two
+	-- separate chests made one of those bystanders start a merge.
 	for _, candidate in ipairs( candidates ) do
 		local info = chestStateInfo( stateAt( changes, changeCount, candidate.bx, candidate.by, candidate.bz ) )
 		if info and info.type == "single" then
 			local key = cellKey( candidate.bx, candidate.by, candidate.bz )
-			if not paired[key] and not noConnect[key] then
+			if placed[key] and not paired[key] and not noConnect[key] then
 				local directions = { clockwise( info.facing ), counterClockwise( info.facing ) }
 				for _, direction in ipairs( directions ) do
 					local partner = candidatePartner( changes, changeCount, candidate, info, direction, paired, noConnect )

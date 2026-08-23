@@ -212,7 +212,12 @@ local function appendNeighbourStateUpdates( cells, seen, changeCount )
 	for index = 1, #updates do mergeStateUpdate( cells, seen, updates[index] ) end
 end
 
-function MC.BuildPlacementStatePlan( bx, by, bz, stateId )
+-- context carries placement intent that state providers need but cannot derive
+-- from the cells alone -- currently secondaryUse (sneaking), which suppresses
+-- the automatic double-chest merge. It MUST be stamped before the providers
+-- run below, which is why it is a plan input rather than something the caller
+-- patches onto plan.cells afterwards.
+function MC.BuildPlacementStatePlan( bx, by, bz, stateId, context )
 	stateId = math.floor( tonumber( stateId ) or -1 )
 	if stateId <= 0 or not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return nil end
 	if MC.ResolveRedstonePlacementState then
@@ -245,6 +250,9 @@ function MC.BuildPlacementStatePlan( bx, by, bz, stateId )
 		if not addStateCell( cells, seen, bx, by, bz, stateId ) then return nil end
 	end
 	local primaryChangeCount = #cells
+	if istable( context ) and context.secondaryUse == true then
+		for index = 1, primaryChangeCount do cells[index].secondaryUse = true end
+	end
 	appendRegisteredStateUpdates( cells, seen, primaryChangeCount )
 	appendBlockConnectionUpdates( cells, seen, primaryChangeCount )
 	appendRedstoneUpdates( cells, seen, primaryChangeCount )
