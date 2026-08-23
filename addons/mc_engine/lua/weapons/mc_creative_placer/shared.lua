@@ -21,6 +21,10 @@ SWEP.Purpose       = L( "weapon.mc_creative_placer.purpose", "放置 / 破坏 Mi
 SWEP.Instructions  = L( "weapon.mc_creative_placer.instructions", "左键破坏  右键放置  Reload 创造物品栏" )
 SWEP.Category      = "Minecraft"
 
+-- Right-click already tries MC.SV.Use before placing; see the fallback hook in
+-- sv_world.lua for why double-handling must be opted out of explicitly.
+SWEP.MCOwnsBlockInteraction = true
+
 SWEP.Spawnable     = true
 SWEP.AdminOnly     = false
 SWEP.Slot          = 1

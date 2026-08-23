@@ -21,6 +21,10 @@ SWEP.Purpose       = L( "weapon.mc_cluster_tool.purpose", "把选中的 Minecraf
 SWEP.Instructions  = L( "weapon.mc_cluster_tool.instructions", "左键 选择  右键 取消  R 切换模式  E 连通选择  G 转换/放回  X 清空" )
 SWEP.Category      = "Minecraft"
 
+-- Admin build tool: right-click is a deliberate cluster gesture, not "interact".
+-- Opt out of the weapon-agnostic block-use fallback in sv_world.lua.
+SWEP.MCOwnsBlockInteraction = true
+
 SWEP.Spawnable     = true
 SWEP.AdminOnly     = false
 SWEP.Slot          = 1

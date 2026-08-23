@@ -53,11 +53,26 @@ function UI.CloseFromWeapon( reason )
 	return false
 end
 
+-- Only the player's own inventory screen is tied to holding an inventory weapon.
+-- A block container (chest, crafting table, furnace, anvil...) is opened by
+-- interacting with the world, which right-click now allows from any weapon, so
+-- requiring the hand here would slam the screen shut on the very next Think --
+-- the chest visibly opened and closed again. Minecraft keeps container screens
+-- open regardless of what the player is holding; match that.
+local function sessionNeedsInventoryWeapon( session )
+	local kind = session and session.kind
+	return kind == nil or kind == "player"
+end
+
 local function closeIfInvalid( reason )
 	local state = MC.ClientInventory
 	if not state or not state.session then return end
 	local ply = LocalPlayer()
-	if not IsValid( ply ) or not ply:Alive() or not UI.ActiveInventoryWeapon() then
+	if not IsValid( ply ) or not ply:Alive() then
+		UI.CloseFromWeapon( reason )
+		return
+	end
+	if sessionNeedsInventoryWeapon( state.session ) and not UI.ActiveInventoryWeapon() then
 		UI.CloseFromWeapon( reason )
 	end
 end
