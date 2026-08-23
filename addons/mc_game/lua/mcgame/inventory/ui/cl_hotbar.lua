@@ -119,17 +119,13 @@ hook.Add( "PlayerBindPress", "mc_inventory_hotbar_input", function( ply, bind, p
 	end
 	if bind == "+use" then
 		local trace = ply:GetEyeTrace()
-		local aim = MC.PlayerBlockAim and MC.PlayerBlockAim( ply ) or nil
-		local usableBlock = aim and MC.Blocks and MC.Blocks[aim.Block]
-		usableBlock = usableBlock and usableBlock.handlers and usableBlock.handlers.OnUse ~= nil
 		-- Foreign entities retain Garry's Mod's normal +use path. MC collision
 		-- carriers are only implementation details and must not block the inventory key.
 		if traceHasForeignUseTarget( trace ) then return end
-		if usableBlock then
-			net.Start( "mc_block_use_request" )
-			net.SendToServer()
-			return true
-		end
+		-- E is the inventory key, full stop. It used to send mc_block_use_request
+		-- when the aimed block was usable, which made the inventory bind
+		-- unreachable while looking at a chest/crafting table. Block interaction
+		-- belongs to the weapon's own right-click gesture, not to +use.
 		if MC.RequestInventoryOpen then MC.RequestInventoryOpen() end
 		return true
 	end

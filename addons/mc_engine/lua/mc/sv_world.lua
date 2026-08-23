@@ -1094,16 +1094,24 @@ function SV.Use( ply, bx, by, bz, selectedBlockID )
 	if not b or not b.handlers or not b.handlers.OnUse then return false end
 	if not SV.Validate( ply, bx, by, bz, false ) then return false end
 	local used = b.handlers.OnUse( ply, bx, by, bz, MC.GetBlockOrient( bx, by, bz ), selectedBlockID ) == true
-	if used and MC.RunEvent then
-		MC.RunEvent( "MC.PlayerUsedBlock", ply, bx, by, bz, MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0 )
+	if used then
+		-- Stamped so the right-click fallback below can tell whether the held
+		-- weapon already interacted on this press and must not interact again.
+		if IsValid( ply ) then ply.MCBlockUseHandledAt = CurTime() end
+		if MC.RunEvent then
+			MC.RunEvent( "MC.PlayerUsedBlock", ply, bx, by, bz, MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0 )
+		end
 	end
 	return used
 end
 
--- +use (E) interaction: activate the aimed usable block without requiring the
--- placer SWEP. The engine +use still runs its own entity path, so skip when
--- the eye trace hits a foreign entity or the map closer than the block —
--- pressing E on a prop or button must not also toggle the block behind it.
+-- Aimed-block interaction helper. E (+use) NO LONGER reaches this: the key is
+-- reserved for the inventory bind, so the KeyPress hook and the client-side
+-- mc_block_use_request send were removed. What remains is the authoritative
+-- entry point for weapons/mods that decide on their own to interact with the
+-- aimed block (MC.API Player.UseAimedBlock, net mc_block_use_request).
+-- Callers still skip when the eye trace hits a foreign entity or the map
+-- closer than the block — interacting through a prop or button is wrong.
 -- Both distances are measured in engine space, which stays correct under a
 -- world adapter: those only translate, never scale.
 local USE_INTERACT_OWN_COLLISION = {
@@ -1123,9 +1131,9 @@ local function useInteractObstructed( ply, aim )
 	return tr.HitPos:Distance( ply:EyePos() ) < ( aim.Distance or math.huge )
 end
 
--- For ordinary weapons this hook only adds the block interaction and never
--- suppresses the engine's own +use. The inventory hand consumes its client bind
--- and uses mc_block_use_request so it can choose block interaction versus inventory.
+-- For ordinary weapons nothing binds this any more. The inventory hand keeps
+-- its +use bind entirely for opening the inventory; block interaction must go
+-- through a weapon's own gesture (right-click) instead of the use key.
 -- Upstream also registered a PlayerUse hook
 -- returning false to win the press outright, because FindUseEntity falls back
 -- to an ~80u radius/cone sweep and a chair or button near (but not under) the
@@ -1133,22 +1141,102 @@ end
 -- other addons' PlayerUse, so that half is intentionally not ported and the
 -- double-activation is accepted. See docs/main-sync-p0-baseline-2026-08-04.md.
 -- _tools/test_player_use_isolation.js enforces this repo-wide.
-function SV.TryUseAimedBlock( ply )
-	if C.UseInteract and not C.UseInteract:GetBool() then return end
-	if not IsValid( ply ) or not ply:Alive() or ply:InVehicle() then return end
-	local now = CurTime()
-	if now < ( ply.MCNextBlockUseInteract or 0 ) then return end
-	ply.MCNextBlockUseInteract = now + 0.05
-	local aim = MC.PlayerBlockAim and MC.PlayerBlockAim( ply )
-	if not aim then return end
-	if useInteractObstructed( ply, aim ) then return end
-	-- No selectedBlockID: this is a pure interaction, not a placement gesture.
-	return SV.Use( ply, aim.bx, aim.by, aim.bz )
+-- Console diagnostic for "right-click does nothing on this block". Every exit
+-- of the interaction path reports which gate stopped it, so a report of
+-- "doesn't work with weapon X" can be resolved without guessing.
+local DebugInteract = CreateConVar( "mc_debug_block_interact", "0", FCVAR_ARCHIVE,
+	"Log why right-click block interaction did or did not fire (server console)" )
+
+local function interactLog( fmt, ... )
+	if not DebugInteract:GetBool() then return end
+	MsgN( string.format( "[mc_block_interact] " .. fmt, ... ) )
 end
 
-hook.Add( "KeyPress", "mc_use_interact", function( ply, key )
-	if key ~= IN_USE then return end
-	SV.TryUseAimedBlock( ply )
+function SV.TryUseAimedBlock( ply )
+	if C.UseInteract and not C.UseInteract:GetBool() then
+		interactLog( "skip: mc_use_interact is 0" )
+		return
+	end
+	if not IsValid( ply ) or not ply:Alive() or ply:InVehicle() then
+		interactLog( "skip: player invalid/dead/in vehicle" )
+		return
+	end
+	local now = CurTime()
+	if now < ( ply.MCNextBlockUseInteract or 0 ) then
+		interactLog( "skip: rate limited (%.3fs left)", ( ply.MCNextBlockUseInteract or 0 ) - now )
+		return
+	end
+	ply.MCNextBlockUseInteract = now + 0.05
+	local aim = MC.PlayerBlockAim and MC.PlayerBlockAim( ply )
+	if not aim then
+		interactLog( "skip: no aimed block (out of reach or aiming at nothing)" )
+		return
+	end
+	if useInteractObstructed( ply, aim ) then
+		local tr = ply:GetEyeTrace()
+		interactLog( "skip: obstructed by %s in front of block %d,%d,%d",
+			IsValid( tr.Entity ) and tr.Entity:GetClass() or "world", aim.bx, aim.by, aim.bz )
+		return
+	end
+	-- No selectedBlockID: this is a pure interaction, not a placement gesture.
+	local used = SV.Use( ply, aim.bx, aim.by, aim.bz )
+	interactLog( "SV.Use(%d,%d,%d) block=%s -> %s", aim.bx, aim.by, aim.bz,
+		tostring( MC.GetBlock( aim.bx, aim.by, aim.bz ) ), tostring( used ) )
+	return used
+end
+
+-- The KeyPress/+use block-interaction hook was removed on purpose: E is the
+-- inventory key and must not double as a block-interaction key. Clean up the
+-- stale registration for servers hot-reloading from an older build.
+hook.Remove( "KeyPress", "mc_use_interact" )
+
+-- Right-click is the Minecraft gesture for "interact with the aimed block", so
+-- it replaces E as the weapon-agnostic entry point.
+--
+-- This is a genuine FALLBACK, not a parallel path. Weapons that run their own
+-- interaction order (mc_item_hand, the MCITEM proxies, mc_creative_placer)
+-- must keep owning the press, because they pass the held item's blockId into
+-- SV.Use and consult handlers.CanUse -- interacting a second time with no
+-- selection would toggle a door straight back shut and would use the wrong
+-- item context. So the fallback is deferred to the end of the frame, after
+-- SecondaryAttack has had its turn, and skips entirely if SV.Use already
+-- succeeded for this player on this press. Only when the held weapon did
+-- nothing does the aimed block get interacted with.
+--
+-- The explicit opt-out below is for weapons whose right-click is a deliberate
+-- build gesture rather than "interact", which must not gain interaction at all.
+local function weaponOwnsBlockInteraction( weapon )
+	if not IsValid( weapon ) then return false end
+	if weapon.MCOwnsBlockInteraction == true then return true end
+	-- Inventory proxies (weapon_mcitem_*) route IN_ATTACK2 through the hand
+	-- weapon's StartCommand preflight, which performs the same SV.Use call.
+	if weapon.MCHandWeaponBridgeProxy == true then return true end
+	return weapon.GetNW2Bool and weapon:GetNW2Bool( "MCITEM_InventoryProxy", false ) == true
+end
+
+hook.Add( "KeyPress", "mc_attack2_interact", function( ply, key )
+	if key ~= IN_ATTACK2 then return end
+	if not IsValid( ply ) then return end
+	local weapon = ply:GetActiveWeapon()
+	local weaponClass = IsValid( weapon ) and weapon:GetClass() or "none"
+	if weaponOwnsBlockInteraction( weapon ) then
+		interactLog( "skip: weapon %s owns block interaction (flag=%s bridgeProxy=%s nwProxy=%s)",
+			weaponClass, tostring( weapon.MCOwnsBlockInteraction ),
+			tostring( weapon.MCHandWeaponBridgeProxy ),
+			tostring( weapon.GetNW2Bool and weapon:GetNW2Bool( "MCITEM_InventoryProxy", false ) ) )
+		return
+	end
+	local pressedAt = CurTime()
+	interactLog( "press: weapon=%s at %.3f", weaponClass, pressedAt )
+	timer.Simple( 0, function()
+		if not IsValid( ply ) then return end
+		-- The held weapon already interacted on this press; nothing to add.
+		if ( ply.MCBlockUseHandledAt or -1 ) >= pressedAt then
+			interactLog( "skip: weapon %s already interacted on this press", weaponClass )
+			return
+		end
+		SV.TryUseAimedBlock( ply )
+	end )
 end )
 
 local function trimArg( s )

@@ -690,9 +690,9 @@ MC.ConfigConVars = {
 		category( "interaction", "gameplay", "Block interaction", "方块互动",
 			"How players activate doors, levers and other usable blocks.",
 			"玩家激活门、拉杆等可互动方块的方式。", {
-			item( "mc_use_interact", "Use key interacts with blocks", "按 E 与方块互动", "bool",
-				"Pressing the use key (E) on an aimed usable block interacts with it regardless of the held weapon; the placer's right-click keeps working.",
-				"对准可互动方块按使用键（E）即可互动，无需手持放置器；放置器右键互动不受影响。" ),
+			item( "mc_use_interact", "Right-click interacts with blocks", "右键与方块互动", "bool",
+				"Right-clicking an aimed usable block interacts with it regardless of the held weapon, including empty hands and non-Minecraft weapons. The E key is reserved for the inventory and never interacts with blocks.",
+				"对准可互动方块按右键即可互动，无论手持何种武器（空手、非 Minecraft 武器同样有效）。E 键已保留给背包，不再与方块互动。" ),
 		} ),
 
 		category( "block_updates", "gameplay", "Block updates", "方块更新",

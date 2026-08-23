@@ -230,11 +230,29 @@ local function blockHasUse( id, stack )
 	return true
 end
 
+-- The two base SWEPs are never proxies: they implement SecondaryAttack
+-- themselves. This matters because the client proxy preflight below strips
+-- IN_ATTACK2 out of the usercmd once it claims a press.
+local BASE_INTERACTION_WEAPONS = {
+	mc_item_hand = true,
+	mc_inventory = true,
+}
+
 local function inventoryProxyWeapon( weapon )
 	if not IsValid( weapon ) then return false end
 	if SERVER and weapon.MCHandWeaponBridgeProxy == true then return true end
 	if weapon.GetNW2Bool and weapon:GetNW2Bool( "MCITEM_InventoryProxy", false ) == true then return true end
 	if CLIENT and MC.IsInventoryHeldItemWeaponActive then
+		-- IsSelectedActive() answers "is the inventory driving the held weapon",
+		-- which is true for mc_item_hand itself. Treating the hand as a proxy
+		-- made the client preflight claim the press and RemoveKey( IN_ATTACK2 ),
+		-- so the key never reached the server: the hand's own SecondaryAttack
+		-- never ran, and the PROXY_INTERACT_NET request it sent instead was
+		-- rejected server-side, where the hand is correctly not a proxy. Result:
+		-- right-click did nothing at all with an empty hand. The client branch
+		-- exists only to catch predicted weapon_mcitem_* instances before the
+		-- server stamps MCITEM_InventoryProxy, so exclude the base weapons.
+		if BASE_INTERACTION_WEAPONS[weapon:GetClass()] then return false end
 		local owner = weapon:GetOwner()
 		return IsValid( owner ) and owner:GetActiveWeapon() == weapon
 			and MC.IsInventoryHeldItemWeaponActive( owner ) == true

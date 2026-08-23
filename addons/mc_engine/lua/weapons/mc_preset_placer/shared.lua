@@ -16,6 +16,10 @@ SWEP.Purpose       = L( "weapon.mc_preset_placer.purpose", "保存和放置 Mine
 SWEP.Instructions  = L( "weapon.mc_preset_placer.instructions", "R 打开预设界面  左键选择/放置  右键撤销  G 旋转" )
 SWEP.Category      = "Minecraft"
 
+-- Admin build tool: right-click is a deliberate preset gesture, not "interact".
+-- Opt out of the weapon-agnostic block-use fallback in sv_world.lua.
+SWEP.MCOwnsBlockInteraction = true
+
 SWEP.Spawnable     = true
 SWEP.AdminOnly     = false
 SWEP.Slot          = 1
