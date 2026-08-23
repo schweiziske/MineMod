@@ -267,12 +267,11 @@ end
 -- opener client-only, but explicitly bridge Reload across realms there.
 function SWEP:OpenCreativeInventoryClient()
 	if not CLIENT then return end
-	local inventoryUI = MC.API and MC.API.GetCapability
-		and MC.API.GetCapability( "mc.game.inventory_ui", 1 ) or nil
-	if inventoryUI and inventoryUI.ToggleFromWeapon
-	and inventoryUI.ToggleFromWeapon( self ) then
-		return
-	end
+	-- This weapon is the legacy standalone placer and always uses its own
+	-- creative block picker. It used to hand the press to the game layer's
+	-- inventory UI capability when mc_game was installed, which meant taking
+	-- out the placer could put the survival inventory screen on screen instead
+	-- of the block picker. The two UIs are separate by design; keep them so.
 	if IsValid( MC.CreativeFrame ) and MC.CreativeFrame:IsVisible() then return end
 	MC.OpenCreativeInventory( function( id, stateId )
 		if stateId ~= nil and MC.SetCreativeHotbarSlotStateID then

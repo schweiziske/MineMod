@@ -10,8 +10,11 @@ local HandWeapon = MC.API and MC.API.HandWeapon or {}
 
 function UI.IsInventoryWeapon( weapon )
 	if not IsValid( weapon ) then return false end
+	-- mc_creative_placer is deliberately NOT here. It is the legacy standalone
+	-- placer and owns its own creative block picker; claiming it as an
+	-- inventory weapon made Reload open the survival inventory screen instead,
+	-- and kept that screen alive while the placer was out.
 	local class = weapon:GetClass()
-	if class == "mc_creative_placer" then return true end
 	local owner = weapon:GetOwner()
 	if type( HandWeapon.IsInventoryActive ) == "function" and IsValid( owner ) then
 		return HandWeapon.IsInventoryActive( owner ) == true
