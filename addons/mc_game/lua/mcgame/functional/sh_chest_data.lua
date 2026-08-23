@@ -169,14 +169,30 @@ local function addCandidate( candidates, seen, bx, by, bz )
 	candidates[#candidates + 1] = { bx = bx, by = by, bz = bz }
 end
 
-local function candidatePartner( changes, changeCount, candidate, info, direction, paired )
+local function candidatePartner( changes, changeCount, candidate, info, direction, paired, noConnect )
 	local dx, dy = directionOffset( direction )
 	local bx, by, bz = candidate.bx + dx, candidate.by + dy, candidate.bz
 	local neighbour = chestStateInfo( stateAt( changes, changeCount, bx, by, bz ) )
 	if not neighbour or neighbour.type ~= "single" or not sameChest( info, neighbour ) then return nil end
 	local key = cellKey( bx, by, bz )
-	if paired[key] then return nil end
+	if paired[key] or noConnect[key] then return nil end
 	return { bx = bx, by = by, bz = bz, info = neighbour, key = key }
+end
+
+-- ChestBlock#getStateForPlacement only runs the automatic clockwise/counter-
+-- clockwise merge when isSecondaryUseActive() is false, so a chest placed while
+-- sneaking stays SINGLE next to an existing chest. The flag rides on the placed
+-- cell, and both sides are checked: the sneak-placed chest must not adopt a
+-- neighbour, and an existing chest must not adopt the sneak-placed one.
+local function buildNoConnectSet( changes, changeCount )
+	local noConnect = {}
+	for index = 1, changeCount do
+		local cell = changes[index]
+		if cell and cell.secondaryUse == true then
+			noConnect[cellKey( cell.bx, cell.by, cell.bz )] = true
+		end
+	end
+	return noConnect
 end
 
 local function addTypeUpdate( updates, changes, changeCount, bx, by, bz, info, chestType )
@@ -200,6 +216,7 @@ function MC.BuildChestConnectionStateUpdates( changes, changeCount )
 	end
 
 	local updates, paired = {}, {}
+	local noConnect = buildNoConnectSet( changes, changeCount )
 	-- First detach halves whose partner disappeared or changed type/facing.
 	for _, candidate in ipairs( candidates ) do
 		local info = chestStateInfo( stateAt( changes, changeCount, candidate.bx, candidate.by, candidate.bz ) )
@@ -220,10 +237,10 @@ function MC.BuildChestConnectionStateUpdates( changes, changeCount )
 		local info = chestStateInfo( stateAt( changes, changeCount, candidate.bx, candidate.by, candidate.bz ) )
 		if info and info.type == "single" then
 			local key = cellKey( candidate.bx, candidate.by, candidate.bz )
-			if not paired[key] then
+			if not paired[key] and not noConnect[key] then
 				local directions = { clockwise( info.facing ), counterClockwise( info.facing ) }
 				for _, direction in ipairs( directions ) do
-					local partner = candidatePartner( changes, changeCount, candidate, info, direction, paired )
+					local partner = candidatePartner( changes, changeCount, candidate, info, direction, paired, noConnect )
 					if partner then
 						local currentType = direction == clockwise( info.facing ) and "left" or "right"
 						local otherType = oppositeType( currentType )

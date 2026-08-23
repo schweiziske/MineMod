@@ -1543,6 +1543,13 @@ function MC.OpenCreativeInventory( onSelect, opts )
 	if IsValid( MC.CreativeFrame ) then MC.CreativeFrame:Remove() end
 	if IsValid( MC.CreativeStateFrame ) then MC.CreativeStateFrame:Remove() end
 	opts = opts or {}
+	-- Settle the category list BEFORE the tabs are built. rebuild() below calls
+	-- MC.BuildCreativeBlockGroups, which calls MC.RefreshCreativeCategories and
+	-- APPENDS any mod-registered categories. Since mod categories are allocated
+	-- lazily on the first ListCategories() call, that first rebuild grew the
+	-- list after the tab loop had already run, and rebuild then looked up a
+	-- layout for a category that never got a tab -> clearLayout( nil ).
+	if MC.RefreshCreativeCategories then MC.RefreshCreativeCategories() end
 	local cachedState = loadCreativeInventoryState()
 	local closeOnSelect = opts.closeOnSelect
 	if closeOnSelect == nil then closeOnSelect = true end
@@ -1681,17 +1688,24 @@ function MC.OpenCreativeInventory( onSelect, opts )
 
 	local function rebuild()
 		local groups = MC.BuildCreativeBlockGroups( search:GetValue() )
+		-- Correct the selection before ids/pages are derived from it.
+		if not IsValid( layouts[activeCategory] ) then activeCategory = "all" end
 		local ids = groups[activeCategory] or {}
 		local pages = math.max( 1, math.ceil( #ids / CREATIVE_PAGE_SIZE ) )
 		page = math.Clamp( page, 1, pages )
 
 		for _, cat in ipairs( MC.CreativeCategories ) do
+			-- A category registered after this frame was built has no tab here.
+			-- Skip it rather than crash; it appears next time the picker opens.
 			local layout = layouts[cat.id]
-			clearLayout( layout )
-			layout:InvalidateLayout( true )
+			if IsValid( layout ) then
+				clearLayout( layout )
+				layout:InvalidateLayout( true )
+			end
 		end
 
 		local layout = layouts[activeCategory]
+		if not IsValid( layout ) then return end
 		local first = ( page - 1 ) * CREATIVE_PAGE_SIZE + 1
 		local last = math.min( #ids, first + CREATIVE_PAGE_SIZE - 1 )
 		for i = first, last do

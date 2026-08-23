@@ -695,7 +695,11 @@ function SWEP:SecondaryAttack()
 		end
 		local consumedRecord, snapshot = consumeSelected( ply )
 		if not infiniteMaterials( ply ) and not consumedRecord then return end
-		if not MC.SV.PlaceState( ply, bx, by, bz, stateId, { blockEntity = blockEntity } ) then
+		-- isSecondaryUseActive(): sneaking suppresses the automatic double-chest
+		-- merge, so a shift-placed chest stays a separate single chest.
+		local secondaryUse = ply.KeyDown and ply:KeyDown( IN_SPEED ) == true
+		if not MC.SV.PlaceState( ply, bx, by, bz, stateId,
+			{ blockEntity = blockEntity, secondaryUse = secondaryUse } ) then
 			restoreConsumed( consumedRecord, snapshot )
 			if MC.SV.SyncPlacementStatePlan then
 				MC.SV.SyncPlacementStatePlan( ply, bx, by, bz, stateId )
@@ -1002,7 +1006,9 @@ if CLIENT then
 		return pos, ang, 0.45
 	end
 
-	local function heldItemPose( ply, firstPerson, hand )
+	local ITEM_TP_SCALE = 7.5
+
+	local function heldItemPose( ply, firstPerson, hand, blockShaped )
 		local leftHand = hand == "offhand"
 		if firstPerson then
 			local eyeAng = ply:EyeAngles()
@@ -1031,16 +1037,27 @@ if CLIENT then
 			return pos, ang, MC_WEAPONS_FP.size
 		end
 		local HandWeapon = MC.API and MC.API.HandWeapon or nil
+		-- Third person puts item models and block models on the SAME anchor and
+		-- offsets, so their scales are directly comparable. Flat items are drawn
+		-- larger than blocks on purpose (Minecraft's display transforms do the
+		-- same). "special" plans are block-shaped entity models -- chests,
+		-- shulker boxes -- and must follow the BLOCK scale, or a held chest is
+		-- visibly bigger than every other block in the hand.
+		local scale = ITEM_TP_SCALE
+		if blockShaped and HandWeapon and HandWeapon.GetBlockThirdPersonPose then
+			local _, _, blockScale = HandWeapon.GetBlockThirdPersonPose( ply, leftHand )
+			scale = tonumber( blockScale ) or scale
+		end
 		if not firstPerson and HandWeapon and HandWeapon.GetItemThirdPersonAnchor then
 			local pos, ang = HandWeapon.GetItemThirdPersonAnchor( ply, leftHand )
-			if pos then return pos, ang, 7.5 end
+			if pos then return pos, ang, scale end
 		end
 		local bone = ply:LookupBone( leftHand and "ValveBiped.Bip01_L_Hand" or "ValveBiped.Bip01_R_Hand" )
 		local pos, ang
 		if bone then pos, ang = ply:GetBonePosition( bone ) end
 		if not pos or not ang then pos, ang = ply:GetShootPos(), ply:EyeAngles() end
 		local side = leftHand and -1 or 1
-		return pos + ang:Forward() * 2.5 + ang:Right() * ( 2.2 * side ) - ang:Up() * 1.8, ang, 7.5
+		return pos + ang:Forward() * 2.5 + ang:Right() * ( 2.2 * side ) - ang:Up() * 1.8, ang, scale
 	end
 
 	local function setFirstPersonItemDepthState( enabled )
@@ -1170,7 +1187,7 @@ if CLIENT then
 
 		local function tryDrawItemModel()
 			if not renderer or not renderer.DrawHeldItem then return false end
-			local pos, ang, scale = heldItemPose( ply, firstPerson, hand )
+			local pos, ang, scale = heldItemPose( ply, firstPerson, hand, plan.kind == "special" )
 			local color = heldItemLightingColor( ply, pos, firstPerson, hand )
 			local drawn
 			if firstPerson then

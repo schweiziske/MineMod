@@ -172,6 +172,10 @@ local function placementProviderInput( cells )
 			bx = cell.bx, by = cell.by, bz = cell.bz,
 			stateId = cell.stateId, id = cell.id, orient = cell.orient,
 			updateExisting = cell.updateExisting == true,
+			-- Placed while sneaking. ChestBlock#getStateForPlacement suppresses
+			-- the automatic double-chest merge when isSecondaryUseActive(), so
+			-- connection providers need this context, not just the cells.
+			secondaryUse = cell.secondaryUse == true,
 		}
 	end
 	return copy
