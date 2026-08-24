@@ -118,12 +118,22 @@ function SV.PrimeTntBlock( bx, by, bz, source, options )
 	return true, ent, result, stateId
 end
 
-local function selectedTntTarget( ply )
+-- SV.Validate CONSUMES a world-write cooldown (ply.mcNextOp = now + 0.03), so a
+-- second call for the same press always fails. Reaching this through the block
+-- OnUse handler means SV.Use has already validated this exact cell for this
+-- exact player, and re-validating turned the whole interaction into
+-- "ignite_rejected": right-clicking TNT did nothing at all, while sneaking
+-- worked because that path skips SV.Use and validates only once.
+-- Same class of bug as the SV.ValidateBreakTarget note in sv_world.lua.
+local function selectedTntTarget( ply, alreadyValidated )
 	local aim = MC.PlayerBlockAim and MC.PlayerBlockAim( ply ) or nil
 	if not aim then return nil, "no_block_target" end
 	local bx, by, bz = math.floor( aim.bx or 0 ), math.floor( aim.by or 0 ), math.floor( aim.bz or 0 )
 	if not tntAt( bx, by, bz ) then return nil, "not_tnt" end
-	if not SV.Validate or not SV.Validate( ply, bx, by, bz, false ) then return nil, "ignite_rejected" end
+	if not alreadyValidated
+	and ( not SV.Validate or not SV.Validate( ply, bx, by, bz, false ) ) then
+		return nil, "ignite_rejected"
+	end
 	return { bx = bx, by = by, bz = bz }
 end
 
@@ -136,7 +146,7 @@ local function useTntWithSelectedItem( ply, itemName, context )
 		expectedStackHash = context.expectedStackHash,
 	} )
 	if not record then return false, matchError or "selected_item_unavailable" end
-	local target, targetError = selectedTntTarget( ply )
+	local target, targetError = selectedTntTarget( ply, context.alreadyValidated == true )
 	if not target then return false, targetError end
 	local selectedHash = MC.ItemStackHash and MC.ItemStackHash( selected ) or nil
 	local inventoryResult, broken, infinite
@@ -227,8 +237,20 @@ function SV.UseSelectedFireCharge( ply, context )
 	return true, fireResult
 end
 
-local tntBlock = MC.BlockByName and MC.BlockByName["minecraft:tnt"] or nil
-if tntBlock then
+-- TntBlock#useItemOn: flint and steel / fire charge prime the block instead of
+-- doing whatever the item normally does.
+--
+-- This used to read MC.BlockByName once at load time and silently do nothing if
+-- the block was not registered yet. When that happened the handlers were simply
+-- absent, so blockHasUse() said "no interaction here", the held flint and steel
+-- fell through to its own ignition, and right-clicking TNT placed fire next to
+-- it instead of priming it. Retry until the block exists, the way
+-- mc_item_hand installs its food preflight.
+local function installTntBlockHandlers()
+	local tntBlock = MC.BlockByName and MC.BlockByName["minecraft:tnt"] or nil
+	if not tntBlock then return false end
+	if tntBlock.MCTntUseHandlersInstalled == true then return true end
+
 	tntBlock.handlers = tntBlock.handlers or {}
 	local previousRemoved = tntBlock.handlers.OnRemoved
 	tntBlock.handlers.OnRemoved = function( context, stateId )
@@ -246,11 +268,24 @@ if tntBlock then
 	tntBlock.handlers.OnUse = function( ply )
 		local stack = SV.GetSelectedPlayerStack and SV.GetSelectedPlayerStack( ply ) or nil
 		if not stack then return false end
-		if stack.item == "minecraft:flint_and_steel" then return SV.UseTntWithFlintAndSteel( ply ) == true end
-		if stack.item == "minecraft:fire_charge" then return SV.UseTntWithFireCharge( ply ) == true end
+		-- SV.Use validated this cell for this player immediately before calling
+		-- us, and that validation consumed the world-write cooldown.
+		local context = { alreadyValidated = true, reason = "tnt_block_use" }
+		if stack.item == "minecraft:flint_and_steel" then return SV.UseTntWithFlintAndSteel( ply, context ) == true end
+		if stack.item == "minecraft:fire_charge" then return SV.UseTntWithFireCharge( ply, context ) == true end
 		return false
 	end
+
+	tntBlock.MCTntUseHandlersInstalled = true
+	return true
 end
+
+if not installTntBlockHandlers() and timer then
+	timer.Create( "mc_tnt_use_handlers", 0.5, 20, function()
+		if installTntBlockHandlers() then timer.Remove( "mc_tnt_use_handlers" ) end
+	end )
+end
+hook.Add( "OnReloaded", "mc_tnt_use_handlers", installTntBlockHandlers )
 
 MC.RegisterBlockUpdateHandler( "minecraft:tnt", {
 	OnNeighborUpdate = function( context )

@@ -76,6 +76,14 @@ function MC.API.HandWeapon.IsSelectedActive( ply )
 	return Bridge.IsClientSelectedWeaponActive( ply )
 end
 
+-- True while the server is mid-switch between managed weapons. Engine-internal
+-- networked state is deliberately not read directly by consumers; hotbar input
+-- needs this because a slot key pressed inside the switch window would
+-- otherwise fall through to Garry's Mod weapon selection.
+function MC.API.HandWeapon.IsManagedSwitchPending( ply )
+	return transitionTarget( ply ) ~= nil
+end
+
 -- Public presentation facade. Game-owned hand weapons consume these stable
 -- operations instead of reaching into the creative placer's pose, lighting,
 -- or held-block renderer implementation.
