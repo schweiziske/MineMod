@@ -562,6 +562,10 @@ local function runListener( callback, entry, stateId )
 			netMode = "bulk",
 			updateDepth = entry.depth + 1,
 			compareCollision = result.compareCollision == true,
+			-- Minecraft's Block.UPDATE_INVISIBLE (setBlock flag 4): a write that
+			-- is pure server-side bookkeeping and must not fan out neighbour
+			-- updates. Handlers opt in; the default stays the notifying write.
+			blockUpdates = result.blockUpdates ~= false,
 		} )
 		Stats.transactions = Stats.transactions + 1
 		if not transaction or transaction.ok ~= true then

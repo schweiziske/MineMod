@@ -143,6 +143,7 @@ if SERVER then
 	MC.Config.ServerCollisionLookaheadMax = GetConVar( "mc_server_collision_lookahead_max" ) or CreateConVar( "mc_server_collision_lookahead_max", tostring( MC.Config.ServerCollisionLookaheadMax ), F, "Maximum chunk radius reached by velocity lookahead collision interest" )
 	MC.Config.BulkCollisionChunksPerInterval = GetConVar( "mc_bulk_collision_chunks_per_interval" ) or CreateConVar( "mc_bulk_collision_chunks_per_interval", tostring( MC.Config.BulkCollisionChunksPerInterval ), F, "Server collision chunks rebuilt per interval for explosion/preset edits" )
 	MC.Config.BulkCollisionInterval = GetConVar( "mc_bulk_collision_interval" ) or CreateConVar( "mc_bulk_collision_interval", tostring( MC.Config.BulkCollisionInterval ), F, "Seconds between server collision rebuild batches for explosion/preset edits" )
+	MC.Config.FireTick = GetConVar( "mc_fire_tick" ) or CreateConVar( "mc_fire_tick", "1", F, "Fire ages and burns out on its own (Minecraft doFireTick); unsupported fire is removed either way" )
 	MC.Config.BlockUpdatesEnabled = GetConVar( "mc_block_updates_enabled" ) or CreateConVar( "mc_block_updates_enabled", "1", F, "Enable queued neighbor updates and scheduled block ticks" )
 	-- Hot-reloading from the pre-redstone build keeps the already-created ConVar's
 	-- old internal default of 0. Migrate only that legacy instance; a ConVar
