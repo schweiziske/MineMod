@@ -222,6 +222,18 @@ local function isUseCandidate( stack, definition )
 	return isfunction and isfunction( definition.useHandler ) and definition.useHandler ~= nil
 end
 
+-- Items whose block interaction is "apply this item to the block" rather than
+-- "operate the block". Minecraft swings the arm for the former; a fire charge
+-- lighting TNT should look the same as a fire charge lighting the ground.
+local IGNITER_ITEMS = {
+	["minecraft:flint_and_steel"] = true,
+	["minecraft:fire_charge"] = true,
+}
+
+local function igniterStack( stack )
+	return stack ~= nil and IGNITER_ITEMS[stack.item] == true
+end
+
 local function blockHasUse( id, stack )
 	local block = MC.Blocks and MC.Blocks[id]
 	local handlers = block and block.handlers
@@ -607,6 +619,18 @@ function SWEP:PrimaryAttack()
 	end
 end
 
+-- Lighting a block through its OnUse handler (TNT) has to look like lighting
+-- the ground does: MC.SV.Use itself is silent, so the swing is requested here.
+-- Only igniters swing; operating a chest or a door must not.
+function SWEP:SendIgniterSwing( ply, stack, bx, by, bz )
+	if not SERVER or not igniterStack( stack ) or bx == nil then return end
+	net.Start( "mc_creative_place_anim" )
+		net.WriteInt( bx, MC.Net.COORD_BITS )
+		net.WriteInt( by, MC.Net.COORD_BITS )
+		net.WriteInt( bz, MC.Net.COORD_BITS )
+	net.Send( ply )
+end
+
 function SWEP:SecondaryAttack()
 	local repeatingPlacement = self.MCSecondaryHeld and self.MCSecondaryMode == "place"
 	self:SetNextSecondaryFire( CurTime() + ATTACK_INTERVAL )
@@ -648,6 +672,7 @@ function SWEP:SecondaryAttack()
 		if parityOrder and not suppressBlockUse and aim and MC.SV and MC.SV.Use
 		and MC.SV.Use( ply, ux, uy, uz, definition and definition.blockId or 0 ) then
 			self.MCSecondaryMode = "block"
+			self:SendIgniterSwing( ply, stack, ux, uy, uz )
 			return
 		end
 		if stack and MC.Decoration and MC.Decoration.IsDecorationItem
@@ -666,15 +691,33 @@ function SWEP:SecondaryAttack()
 		if not parityOrder and not suppressBlockUse and aim and MC.SV and MC.SV.Use
 		and MC.SV.Use( ply, ux, uy, uz, definition and definition.blockId or 0 ) then
 			self.MCSecondaryMode = "block"
+			self:SendIgniterSwing( ply, stack, ux, uy, uz )
 			return
 		end
 		local useCandidate = isUseCandidate( stack, definition )
-		local used, useResult = MC.SV and MC.SV.BeginSelectedItemUse and MC.SV.BeginSelectedItemUse( ply, {
-			reason = "right_click",
-			target = aim and { bx = ux, by = uy, bz = uz } or nil,
-		} ) or false, "item_use_unavailable"
+		-- Written as one `a and b and f() or false, "..."` expression this only
+		-- ever bound useResult to the literal: a call's extra return values are
+		-- dropped unless the call is last in the list. The result is needed
+		-- below to tell an instant use from one that starts a held animation.
+		local used, useResult = false, "item_use_unavailable"
+		if MC.SV and MC.SV.BeginSelectedItemUse then
+			used, useResult = MC.SV.BeginSelectedItemUse( ply, {
+				reason = "right_click",
+				target = aim and { bx = ux, by = uy, bz = uz } or nil,
+			} )
+		end
 		if used or useCandidate then
 			self.MCSecondaryMode = used and "item" or "item_rejected"
+			-- Minecraft swings the arm when useOn/use resolves immediately
+			-- (fire charge, flint and steel). A held use -- food, bow, spyglass --
+			-- runs its own animation and must not also swing.
+			if used and aim and useResult ~= "started" and useResult ~= "already_using" then
+				net.Start( "mc_creative_place_anim" )
+					net.WriteInt( ux, MC.Net.COORD_BITS )
+					net.WriteInt( uy, MC.Net.COORD_BITS )
+					net.WriteInt( uz, MC.Net.COORD_BITS )
+				net.Send( ply )
+			end
 			return
 		end
 		if not definition or not definition.blockId or not MC.SV or not MC.SV.PlaceState then

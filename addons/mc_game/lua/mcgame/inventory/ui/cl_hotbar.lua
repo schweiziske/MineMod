@@ -8,6 +8,7 @@ local HandWeapon = MC.API and MC.API.HandWeapon or {}
 local HOTBAR = UI.GetGuiMaterial( "hud/hotbar" )
 local HOTBAR_SELECTION = UI.GetGuiMaterial( "hud/hotbar_selection" )
 local selectedNameUntil = 0
+local lastHandActiveAt = 0
 
 local function handActive()
 	local ply = LocalPlayer()
@@ -23,6 +24,36 @@ local function handActive()
 	end
 	local class = weapon:GetClass()
 	return class == "mc_item_hand" or class == "mc_inventory"
+end
+
+-- HUDPaint calls handActive() every frame while the hand is out, so wrapping it
+-- here keeps the switch-grace stamp current instead of only refreshing it on a
+-- key press.
+local function handActiveNow()
+	if not handActive() then return false end
+	lastHandActiveAt = RealTime()
+	return true
+end
+
+-- Switching hotbar slots makes the server swap the held SWEP, and a Garry's Mod
+-- weapon switch is not instant: for a frame or two the active weapon can be the
+-- outgoing proxy (already removed -> NULL) while the transition flag has been
+-- cleared again. handActive() is false in exactly those frames, so a slot key
+-- pressed there fell through to Garry's Mod weapon selection and yanked the
+-- player onto the physgun. Switching fast just makes hitting that frame likely.
+--
+-- Consume the press through the whole switch instead. A deliberately held
+-- foreign weapon is never NULL, so its slot keys keep working normally.
+local SWITCH_GRACE = 0.5
+
+local function hotbarInputActive()
+	if handActiveNow() then return true end
+	local ply = LocalPlayer()
+	if not IsValid( ply ) or not ply:Alive() then return false end
+	if type( HandWeapon.IsManagedSwitchPending ) == "function"
+	and HandWeapon.IsManagedSwitchPending( ply ) == true then return true end
+	return not IsValid( ply:GetActiveWeapon() )
+		and RealTime() - lastHandActiveAt < SWITCH_GRACE
 end
 
 local function inventoryScreenVisible()
@@ -65,7 +96,7 @@ hook.Add( "MC.InventoryChanged", "mc_inventory_hotbar_item_name", function( chan
 end )
 
 hook.Add( "HUDPaint", "mc_inventory_hotbar", function()
-	if not handActive() or inventoryScreenVisible() then return end
+	if not handActiveNow() or inventoryScreenVisible() then return end
 	local state = MC.ClientInventory or {}
 	local slots = type( state.slots ) == "table" and state.slots or {}
 	local scale = UI.HUDScale and UI.HUDScale() or UI.GuiScale()
@@ -94,8 +125,17 @@ hook.Add( "HUDPaint", "mc_inventory_hotbar", function()
 end )
 
 hook.Add( "PlayerBindPress", "mc_inventory_hotbar_input", function( ply, bind, pressed )
-	if not pressed or ply ~= LocalPlayer() or not handActive() then return end
+	if not pressed or ply ~= LocalPlayer() then return end
 	bind = string.lower( tostring( bind or "" ) )
+	-- Slot/scroll selection survives the switch window; opening the inventory
+	-- does not, so +use still requires the hand to actually be out.
+	local selectionBind = string.match( bind, "^slot([1-9])$" ) ~= nil
+		or bind == "invnext" or bind == "invprev"
+	if selectionBind then
+		if not hotbarInputActive() then return end
+	elseif not handActive() then
+		return
+	end
 	if inventoryScreenVisible() then
 		if bind == "+use" and not inventoryTextEntryFocused() then
 			UI.Screen:CloseInventory( true )
