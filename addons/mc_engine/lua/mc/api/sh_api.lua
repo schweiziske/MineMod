@@ -1602,8 +1602,10 @@ function Blocks.IsFlammable( block )
 	if stateId == 0 then return false end
 	local schema = MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( stateId ) or nil
 	local name = schema and schema.name or nil
-	return name ~= nil and MC.GeneratedBlockFlammability
-		and MC.GeneratedBlockFlammability[name] == true or false
+	-- The generated table is MC.GeneratedFireFlammableBlocks; the old name here
+	-- was never defined anywhere, so this always answered false.
+	return name ~= nil and MC.GeneratedFireFlammableBlocks
+		and MC.GeneratedFireFlammableBlocks[name] == true or false
 end
 
 ------------------------------------------------------------------ API.Banners

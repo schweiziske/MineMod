@@ -99,6 +99,7 @@ local SERVER_FILES = {
 	"mc/state/sv_block_transaction.lua",
 	"mc/state/sv_column_streaming.lua",
 	"mc/block_update/sv_scheduler.lua",
+	"mc/functional/sv_fire_block.lua",
 	"mc/farming/sv_growth.lua",
 	"mc/farming/sv_trampling.lua",
 	"mc/redstone/sv_inputs.lua",

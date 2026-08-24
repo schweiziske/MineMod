@@ -142,12 +142,18 @@ local function litState( stateId )
 	return MC.StateWith( stateId, "lit", true )
 end
 
+-- Ignition and the FireBlock tick must agree on what keeps fire alive, or a
+-- fire can be lit somewhere the very next tick deletes it. The engine owns
+-- these rules (mc/functional/sv_fire_block.lua); the local bodies below are
+-- only a fallback for an engine build that predates them.
 local function isFlammableAt( bx, by, bz )
+	if MC.FireIsFlammableAt then return MC.FireIsFlammableAt( bx, by, bz ) end
 	local mcid = blockMcidAt( bx, by, bz )
 	return mcid ~= nil and FLAMMABLE[mcid] == true
 end
 
 local function topFaceSturdyAt( bx, by, bz )
+	if MC.FireTopFaceSturdyAt then return MC.FireTopFaceSturdyAt( bx, by, bz ) end
 	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
 	if not stateId or stateId == 0 then return false end
 	local liquid = MC.Liquid
@@ -159,6 +165,7 @@ local function topFaceSturdyAt( bx, by, bz )
 end
 
 local function normalFireCanSurvive( bx, by, bz )
+	if MC.FireCanSurvive then return MC.FireCanSurvive( bx, by, bz ) end
 	if topFaceSturdyAt( bx, by, bz - 1 ) then return true end
 	for _, offset in ipairs( SURVIVAL_NEIGHBOURS ) do
 		if isFlammableAt( bx + offset[1], by + offset[2], bz + offset[3] ) then return true end
