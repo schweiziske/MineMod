@@ -669,7 +669,15 @@ function SWEP:SecondaryAttack()
 		local ux, uy, uz
 		if aim then ux, uy, uz = aim.bx, aim.by, aim.bz
 		elseif trace.Hit and MC.WorldToCell then ux, uy, uz = MC.WorldToCell( trace.HitPos - trace.HitNormal * 0.5 ) end
-		if parityOrder and not suppressBlockUse and aim and MC.SV and MC.SV.Use
+		-- Ask blockHasUse, exactly like the prediction branch below. SV.Use lives
+		-- in the engine and so cannot read the selected stack itself, which left
+		-- the two branches of this one function asking different questions: the
+		-- client honoured handlers.CanUse and predicted a placement, while the
+		-- server ran OnUse regardless. TntBlock and CampfireBlock only interact
+		-- with specific held items, so that mismatch showed up as a placement the
+		-- client drew and the server refused.
+		local blockUse = aim and blockHasUse( aim.Block, stack ) and MC.SV and MC.SV.Use ~= nil or false
+		if parityOrder and not suppressBlockUse and blockUse
 		and MC.SV.Use( ply, ux, uy, uz, definition and definition.blockId or 0 ) then
 			self.MCSecondaryMode = "block"
 			self:SendIgniterSwing( ply, stack, ux, uy, uz )
@@ -688,7 +696,7 @@ function SWEP:SecondaryAttack()
 		-- Functional blocks use the press edge, like the legacy creative placer.
 		-- Automatic secondary attacks must not toggle a gate/door every tick while
 		-- the player keeps the button held down.
-		if not parityOrder and not suppressBlockUse and aim and MC.SV and MC.SV.Use
+		if not parityOrder and not suppressBlockUse and blockUse
 		and MC.SV.Use( ply, ux, uy, uz, definition and definition.blockId or 0 ) then
 			self.MCSecondaryMode = "block"
 			self:SendIgniterSwing( ply, stack, ux, uy, uz )
