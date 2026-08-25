@@ -367,16 +367,21 @@ local function previewWouldTrapPlayer( bx, by, bz, id, orient, stateId )
 	return MC.PlacementOverlapsPlayerHull( bx, by, bz, id, orient, stateId )
 end
 
+local function previewCellIsFluid( bx, by, bz )
+	return MC.CellIsFluidBlock and MC.CellIsFluidBlock( bx, by, bz ) == true
+end
+
 function MC.CanPreviewBreak( ply, bx, by, bz )
 	if not IsValid( ply ) then return false end
 	return MC.GetBlock( bx, by, bz ) ~= 0
+		and not previewCellIsFluid( bx, by, bz )
 		and previewCanEdit( ply )
 		and MC.ReachAllowsEye( MC.EntityEyeWorldPos and MC.EntityEyeWorldPos( ply ) or ply:EyePos(), bx, by, bz, MC.CurrentReach() )
 end
 
 function MC.CanPreviewPlace( ply, bx, by, bz, id, orient, stateId )
 	if not IsValid( ply ) then return false end
-	return MC.GetBlock( bx, by, bz ) == 0
+	return ( MC.GetBlock( bx, by, bz ) == 0 or previewCellIsFluid( bx, by, bz ) )
 		and previewCanEdit( ply )
 		and previewWorldBoundsOK( bx, by, bz )
 		and not previewWouldTrapPlayer( bx, by, bz, id, orient, stateId )
@@ -478,13 +483,18 @@ local function traceBlockBoxes( startPos, dir, maxDist, bx, by, bz, id, orient, 
 	return { dist = bestDist, normal = bestNormal }
 end
 
-function MC.TraceBlockRay( startPos, dir, maxDist )
+-- ClipContext.Fluid.NONE. Pass as MC.TraceBlockRay's options to walk straight
+-- through fluid blocks, which is what Java's block picking does.
+MC.ClipFluidNone = { skipFluid = true }
+
+function MC.TraceBlockRay( startPos, dir, maxDist, options )
 	if not startPos or not dir then return nil end
 	dir = Vector( dir.x, dir.y, dir.z )
 	if dir:LengthSqr() <= TRACE_EPS then return nil end
 	dir:Normalize()
 	maxDist = tonumber( maxDist ) or MC.CurrentReach()
 	if maxDist <= 0 then maxDist = BS * 5 end
+	local skipFluid = istable( options ) and options.skipFluid == true
 
 	local bx, by, bz = MC.WorldToCell( startPos )
 	local sx, tx, dx = axisStep( startPos.x, dir.x, bx )
@@ -500,7 +510,12 @@ function MC.TraceBlockRay( startPos, dir, maxDist )
 		if id ~= 0 and not pendingPrediction and dist <= maxDist then
 			local orient = MC.GetBlockOrient( bx, by, bz )
 			local stateId = MC.GetBlockState( bx, by, bz )
-			local hit = traceBlockBoxes( startPos, dir, maxDist, bx, by, bz, id, orient, stateId, dist, normal )
+			-- Skipping the cell rather than the box test keeps the DDA walking, so
+			-- the ray reports whatever is behind the fluid at its true distance.
+			local clipped = skipFluid and MC.StateIsFluidBlock
+				and MC.StateIsFluidBlock( stateId ) == true
+			local hit = not clipped
+				and traceBlockBoxes( startPos, dir, maxDist, bx, by, bz, id, orient, stateId, dist, normal )
 			if hit then
 				return {
 					Hit = true,
@@ -548,7 +563,12 @@ function MC.PlayerBlockAim( ply, reach )
 	if not maxDist or maxDist <= 0 then
 		maxDist = MC.CurrentReach()
 	end
-	local hit = MC.TraceBlockRay( eye, ply:EyeAngles():Forward(), maxDist )
+	-- Entity#pick passes ClipContext.Fluid.NONE, so the crosshair looks straight
+	-- through water and lava at whatever is behind them. Every gesture that
+	-- resolves its target through this -- mining, placing, use, igniters, shears
+	-- -- inherits that, which is exactly why a fluid cannot be mined and why a
+	-- block placed at a clicked face lands *inside* the fluid.
+	local hit = MC.TraceBlockRay( eye, ply:EyeAngles():Forward(), maxDist, MC.ClipFluidNone )
 	if not hit then return nil end
 	return hit
 end

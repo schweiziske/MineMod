@@ -901,12 +901,17 @@ local function validatePlacementPlan( ply, plan )
 		if cell.updateExisting then
 			if existingId == 0 or existingId ~= cell.id then return false end
 		else
-			if existingId ~= 0 then return false end
+			-- BlockBehaviour.Properties#replaceable: a fluid cell is not "occupied"
+			-- for placement purposes, it is overwritten. It already counts towards
+			-- SV.BlockCount, so replacing one adds nothing to the block cap.
+			local replacingFluid = existingId ~= 0
+				and MC.CellIsFluidBlock and MC.CellIsFluidBlock( cell.bx, cell.by, cell.bz ) == true
+			if existingId ~= 0 and not replacingFluid then return false end
 			if wouldTrapPlayer( cell.bx, cell.by, cell.bz, cell.id, cell.orient, cell.stateId ) then
 				--notify( ply, "A player is in the way" )
 				return false
 			end
-			add = add + 1
+			if not replacingFluid then add = add + 1 end
 		end
 	end
 
@@ -1096,17 +1101,32 @@ function SV.Use( ply, bx, by, bz, selectedBlockID )
 	if id == 0 then return false end
 	local b = MC.Blocks[id]
 	if not b or not b.handlers or not b.handlers.OnUse then return false end
-	if not SV.Validate( ply, bx, by, bz, false ) then return false end
-	local used = b.handlers.OnUse( ply, bx, by, bz, MC.GetBlockOrient( bx, by, bz ), selectedBlockID ) == true
-	if used then
-		-- Stamped so the right-click fallback below can tell whether the held
-		-- weapon already interacted on this press and must not interact again.
-		if IsValid( ply ) then ply.MCBlockUseHandledAt = CurTime() end
-		if MC.RunEvent then
-			MC.RunEvent( "MC.PlayerUsedBlock", ply, bx, by, bz, MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0 )
-		end
+	-- SV.Validate consumes the shared world-write cooldown (ply.mcNextOp), and
+	-- every caller treats a false return as "nothing happened, try the next
+	-- gesture" -- for the hand SWEP that next gesture is block placement, in this
+	-- same press. So a use attempt that declines must hand the cooldown back, or
+	-- it silently kills the placement that follows.
+	--
+	-- This is what stopped "right-click TNT while holding a block" from placing:
+	-- TntBlock#useItemOn only reacts to flint and steel / fire charge, so OnUse
+	-- correctly declined -- but the cooldown was already gone, so PlaceState was
+	-- rejected. Sneaking still worked because that path skips SV.Use entirely.
+	-- The same trap as the SV.ValidateBreakTarget note above, one caller further on.
+	local restoreNextOp = IsValid( ply ) and ply.mcNextOp or nil
+	local function decline()
+		if IsValid( ply ) then ply.mcNextOp = restoreNextOp end
+		return false
 	end
-	return used
+	if not SV.Validate( ply, bx, by, bz, false ) then return decline() end
+	local used = b.handlers.OnUse( ply, bx, by, bz, MC.GetBlockOrient( bx, by, bz ), selectedBlockID ) == true
+	if not used then return decline() end
+	-- Stamped so the right-click fallback below can tell whether the held
+	-- weapon already interacted on this press and must not interact again.
+	if IsValid( ply ) then ply.MCBlockUseHandledAt = CurTime() end
+	if MC.RunEvent then
+		MC.RunEvent( "MC.PlayerUsedBlock", ply, bx, by, bz, MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0 )
+	end
+	return true
 end
 
 -- Aimed-block interaction helper. E (+use) NO LONGER reaches this: the key is

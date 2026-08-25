@@ -105,6 +105,26 @@ function MC.LiquidKindForState( stateId )
 	return kind
 end
 
+-- True only for a *pure* fluid block (water/lava/bubble_column), never for a
+-- waterlogged solid, which is an ordinary block that happens to contain water.
+--
+-- This is the single predicate behind three Java rules that must agree, or the
+-- player ends up able to mine a fluid but not fill it, or vice versa:
+--   * Entity#pick uses ClipContext.Fluid.NONE, and LiquidBlock#getShape is
+--     Shapes.empty(), so a fluid block has nothing to aim at -> cannot be mined.
+--   * BlockBehaviour.Properties#replaceable is set for LiquidBlock, so placing
+--     into a fluid cell overwrites it instead of being refused as occupied.
+--   * BucketItem is the only way to take a fluid out, via Fluid.SOURCE_ONLY.
+function MC.StateIsFluidBlock( stateId )
+	local kind, _, _, _, waterlogged = decodeState( stateId )
+	return kind ~= nil and waterlogged ~= true
+end
+
+function MC.CellIsFluidBlock( bx, by, bz )
+	if not MC.GetBlockState then return false end
+	return MC.StateIsFluidBlock( MC.GetBlockState( bx, by, bz ) or 0 )
+end
+
 function MC.LiquidOwnHeightForState( stateId )
 	local _, ownHeight = decodeState( stateId )
 	return ownHeight
