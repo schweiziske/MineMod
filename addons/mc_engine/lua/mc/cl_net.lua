@@ -483,18 +483,29 @@ local function predictCells( cells, priorityFn )
 	return true
 end
 
+-- Prediction-side mirror of validatePlacementPlan's occupancy rule. Fluids are
+-- replaceable, so a placement into water must be predicted like one into air --
+-- otherwise the block only appears when the server broadcast lands.
+local function predictedCellsArePlaceable( cells )
+	for _, cell in ipairs( cells ) do
+		local existingId = MC.GetBlock( cell.bx, cell.by, cell.bz )
+		if cell.updateExisting then
+			if existingId == 0 or existingId ~= cell.id then return false end
+		elseif existingId ~= 0
+		and not ( MC.CellIsFluidBlock and MC.CellIsFluidBlock( cell.bx, cell.by, cell.bz ) ) then
+			return false
+		end
+	end
+	return true
+end
+
 function MC.PredictSetBlockState( bx, by, bz, stateId )
 	if not MC.ClientEditPredictionEnabled() then return false end
 	stateId = math.floor( tonumber( stateId ) or -1 )
 	if stateId <= 0 or not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return false end
 	local plan = MC.BuildPlacementStatePlan and MC.BuildPlacementStatePlan( bx, by, bz, stateId )
 	if not plan then return false end
-	for _, cell in ipairs( plan.cells ) do
-		local existingId = MC.GetBlock( cell.bx, cell.by, cell.bz )
-		if cell.updateExisting then
-			if existingId == 0 or existingId ~= cell.id then return false end
-		elseif existingId ~= 0 then return false end
-	end
+	if not predictedCellsArePlaceable( plan.cells ) then return false end
 	return predictCells( plan.cells, function() return true end )
 end
 
@@ -503,12 +514,7 @@ function MC.PredictSetBlock( bx, by, bz, id, orient )
 	if not MC.IsValidBlock or not MC.IsValidBlock( id ) then return false end
 	local plan = MC.BuildPlacementPlan and MC.BuildPlacementPlan( bx, by, bz, id, orient )
 	if not plan then return false end
-	for _, cell in ipairs( plan.cells ) do
-		local existingId = MC.GetBlock( cell.bx, cell.by, cell.bz )
-		if cell.updateExisting then
-			if existingId == 0 or existingId ~= cell.id then return false end
-		elseif existingId ~= 0 then return false end
-	end
+	if not predictedCellsArePlaceable( plan.cells ) then return false end
 	return predictCells( plan.cells, function() return true end )
 end
 

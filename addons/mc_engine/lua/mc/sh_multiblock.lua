@@ -131,6 +131,21 @@ local function stateWith( stateId, property, value )
 	return nextState
 end
 
+-- SimpleWaterloggedBlock#getStateForPlacement: a block placed into source water
+-- takes the water inside itself instead of deleting it. Blocks with no
+-- waterlogged property just displace the fluid.
+--
+-- Java gates this on `fluidstate.getType() == Fluids.WATER`, which is only true
+-- for a *source* FluidState -- flowing water reports Fluids.FLOWING_WATER and is
+-- displaced. Lava is never absorbed.
+local function resolveWaterloggedPlacementState( bx, by, bz, stateId )
+	if not MC.StateWith or not MC.LiquidStateMetrics or not MC.GetBlockState then return stateId end
+	local kind, _, level, falling, waterlogged = MC.LiquidStateMetrics( MC.GetBlockState( bx, by, bz ) or 0 )
+	if kind ~= "water" or waterlogged == true then return stateId end
+	if math.floor( tonumber( level ) or -1 ) ~= 0 or falling == true then return stateId end
+	return MC.StateWith( stateId, "waterlogged", true ) or stateId
+end
+
 local function mergeStateUpdate( cells, seen, update )
 	local key = MC.CellKey( update.bx, update.by, update.bz )
 	local cell = seen[key]
@@ -223,6 +238,7 @@ function MC.BuildPlacementStatePlan( bx, by, bz, stateId, context )
 	if MC.ResolveRedstonePlacementState then
 		stateId = MC.ResolveRedstonePlacementState( stateId, bx, by, bz ) or stateId
 	end
+	stateId = resolveWaterloggedPlacementState( bx, by, bz, stateId )
 	local id = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or nil
 	if id == nil or not MC.IsValidBlock or not MC.IsValidBlock( id ) then return nil end
 	if MC.FaceAttachedCanSurvive and not MC.FaceAttachedCanSurvive( bx, by, bz, stateId ) then return nil end
@@ -289,6 +305,13 @@ end
 function MC.BuildBreakPlan( bx, by, bz )
 	local id = MC.GetBlock( bx, by, bz )
 	if id == 0 then return nil end
+	-- A fluid block has no break plan, for the same reason an empty cell has
+	-- none: LiquidBlock#getShape is Shapes.empty(), so there is nothing to break.
+	-- Sitting here rather than in the server validator covers every consumer at
+	-- once -- SV.Break, mining's preflight, and client break prediction -- and
+	-- never burns the write cooldown on an attempt that cannot succeed. A bucket
+	-- takes fluid out instead, through API.Liquid.
+	if MC.CellIsFluidBlock and MC.CellIsFluidBlock( bx, by, bz ) then return nil end
 	local orient = MC.GetBlockOrient( bx, by, bz )
 	local cells = {}
 	local seen = {}

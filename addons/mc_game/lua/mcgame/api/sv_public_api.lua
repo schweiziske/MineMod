@@ -113,12 +113,6 @@ function Shears.UseSelectedOnBlock( ply, context )
 	return true, deepCopy( resultOrError )
 end
 
-local BUCKET_OWN_COLLISION = {
-	mc_chunk = true,
-	mc_chunk_phys = true,
-	mc_collision_carrier = true,
-}
-
 ------------------------------------------------------------------- API.Mining
 -- Public, tool-agnostic survival mining. External SWEPs provide only an item
 -- id/stack and their active weapon entity; MCSWEP remains authoritative for

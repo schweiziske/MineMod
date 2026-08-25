@@ -485,6 +485,14 @@ function GameMode.Set( ply, mode, actor )
 	return sv.SetPlayerGameMode( ply, mode, actor )
 end
 
+-- The voxel world's own Source-side collision proxies. A bucket ray must pass
+-- through these or it would be blocked by the very blocks it is aiming at.
+local BUCKET_OWN_COLLISION = {
+	mc_chunk = true,
+	mc_chunk_phys = true,
+	mc_collision_carrier = true,
+}
+
 local function bucketWorldObstructionDistance( ply, eye, direction, reach )
 	if not util or not util.TraceLine then return nil end
 	local traceData = {
@@ -509,62 +517,13 @@ local function bucketWorldObstructionDistance( ply, eye, direction, reach )
 	return math.Clamp( tonumber( trace.Fraction ) or 1, 0, 1 ) * reach
 end
 
-local function rayDistancePastCell( origin, direction, bx, by, bz )
-	if not MC.CellWorldMin then return nil end
-	local base = MC.CellWorldMin( bx, by, bz )
-	if not isvector( base ) then return nil end
-	local blockSize = MC.BS or 36.5
-	local epsilon = 1e-8
-	local distance = math.huge
-	if direction.x > epsilon then
-		distance = math.min( distance, ( base.x + blockSize - origin.x ) / direction.x )
-	elseif direction.x < -epsilon then
-		distance = math.min( distance, ( base.x - origin.x ) / direction.x )
-	end
-	if direction.y > epsilon then
-		distance = math.min( distance, ( base.y + blockSize - origin.y ) / direction.y )
-	elseif direction.y < -epsilon then
-		distance = math.min( distance, ( base.y - origin.y ) / direction.y )
-	end
-	if direction.z > epsilon then
-		distance = math.min( distance, ( base.z + blockSize - origin.z ) / direction.z )
-	elseif direction.z < -epsilon then
-		distance = math.min( distance, ( base.z - origin.z ) / direction.z )
-	end
-	if distance == math.huge then return nil end
-	return math.max( 0, distance ) + math.max( blockSize / 4096, 0.01 )
-end
-
--- BucketItem clips block OUTLINE geometry in both modes. Pure liquid blocks
--- have an empty outline in Java, so skip them while retaining waterlogged
--- containers and every ordinary block selection shape.
+-- BucketItem clips block OUTLINE geometry in both modes. Pure liquid blocks have
+-- an empty outline in Java, so this is the same ClipContext.Fluid.NONE the
+-- crosshair uses: waterlogged containers and every ordinary block selection
+-- shape still stop the ray.
 local function bucketOutlineHit( eye, direction, reach )
-	if not MC.TraceBlockRay or not MC.LiquidStateMetrics then return nil end
-	local origin = eye
-	local travelled = 0
-	local blockSize = MC.BS or 36.5
-	local maxSteps = math.ceil( reach / blockSize ) * 3 + 8
-	for _ = 1, maxSteps do
-		local remaining = reach - travelled
-		if remaining <= 0 then break end
-		local hit = MC.TraceBlockRay( origin, direction, remaining )
-		if not hit then return nil end
-		local kind, _, _, _, waterlogged = MC.LiquidStateMetrics( hit.StateId or 0 )
-		if not kind or waterlogged == true then
-			local localDistance = tonumber( hit.Distance )
-				or isvector( hit.HitPos ) and hit.HitPos:Distance( origin ) or 0
-			hit.Distance = travelled + localDistance
-			hit.HitPos = eye + direction * hit.Distance
-			hit.Fraction = reach > 0 and hit.Distance / reach or 0
-			return hit
-		end
-
-		local advance = rayDistancePastCell( origin, direction, hit.bx, hit.by, hit.bz )
-		if not advance then return nil end
-		travelled = travelled + advance
-		origin = eye + direction * travelled
-	end
-	return nil
+	if not MC.TraceBlockRay then return nil end
+	return MC.TraceBlockRay( eye, direction, reach, MC.ClipFluidNone )
 end
 
 local function bucketAim( ply, sourceOnly )

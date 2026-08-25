@@ -97,6 +97,21 @@ local function lifecycleKind( oldStateId, stateId )
 	return "state_changed"
 end
 
+-- Which lifecycle kinds sound like BlockItem#place, which plays the NEW block's
+-- SoundType place sound and says nothing about what was there before.
+--
+-- "replaced" is a placement whose target happened to be occupied: overwriting a
+-- block, or -- now that fluids are replaceable -- placing into water or lava.
+-- Only "placed" was listed at the FX site below, so a block put down in water
+-- was silent while the same block on dry land was not.
+--
+-- The hydration transaction further down keeps its own looser test on purpose:
+-- it serves the cluster and preset tools, which commit whole structures and use
+-- fxPreferPlaced to pick a representative cell, so it is not a placement gesture.
+local function placementFxKind( kind )
+	return kind == "placed" or kind == "replaced"
+end
+
 local function collisionChanged( info )
 	if info.oldStateId == info.stateId then return false end
 	local oldShape = MC.ResolveBlockStateCollision
@@ -465,7 +480,7 @@ function SV.ApplyBlockTransaction( cells, options )
 		if fxLimit ~= nil then playFx = shouldFx and fxSent < fxLimit and info.kind == "removed" end
 		if playFx then
 			if info.kind == "removed" and info.old ~= 0 then Host.broadcastFx( 2, info.bx, info.by, info.bz, info.old, info.oldOrient, info.oldStateId )
-			elseif info.kind == "placed" and info.id ~= 0 then Host.broadcastFx( 1, info.bx, info.by, info.bz, info.id, info.orient, info.stateId ) end
+			elseif placementFxKind( info.kind ) and info.id ~= 0 then Host.broadcastFx( 1, info.bx, info.by, info.bz, info.id, info.orient, info.stateId ) end
 			fxSent = fxSent + 1
 		end
 		if options.handlers ~= false and info.kind ~= "block_entity_changed" then
