@@ -1068,7 +1068,10 @@ function T.EndSnapshot( generation, baseRevision, token, crc )
 
 	local json = util.Decompress( compressed )
 	local saveData = json and util.JSONToTable( json ) or nil
-	local ok, loadError = saveData and MC.LoadSnapshotSaveData and MC.LoadSnapshotSaveData( saveData )
+	local ok, loadError
+	if saveData and MC.LoadSnapshotSaveData then
+		ok, loadError = MC.LoadSnapshotSaveData( saveData )
+	end
 	if ok ~= true then
 		sendSnapshotAck( snapshot, false )
 		T.snapshot = nil

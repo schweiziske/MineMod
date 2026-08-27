@@ -2,8 +2,27 @@ include( "shared.lua" )
 
 ENT.RenderGroup = RENDERGROUP_TRANSLUCENT
 
+local FLAT_ITEM_GROUND_SCALE = 0.5
+local BLOCK_ITEM_GROUND_SCALE = 0.25
+
+local function blockSize()
+	local coords = MC.API and MC.API.Coords or nil
+	return math.max( 0.001, tonumber( coords and coords.BlockSize and coords.BlockSize() )
+		or tonumber( MC.BS ) or 36.5 )
+end
+
+local function groundScale( plan )
+	local ground = type( plan and plan.display ) == "table" and plan.display.ground or nil
+	local scale = type( ground ) == "table" and ground.scale or nil
+	local value = type( scale ) == "table" and math.abs( tonumber( scale[1] ) or 0 ) or 0
+	if value > 0 then return value end
+	return plan and ( plan.kind == "block" or plan.kind == "missing" )
+		and BLOCK_ITEM_GROUND_SCALE or FLAT_ITEM_GROUND_SCALE
+end
+
 function ENT:Initialize()
-	self:SetRenderBounds( Vector( -16, -16, -16 ), Vector( 16, 16, 24 ) )
+	local size = blockSize()
+	self:SetRenderBounds( Vector( -size, -size, -size ), Vector( size, size, size * 1.5 ) )
 end
 
 local function networkStack( ent )
@@ -48,6 +67,11 @@ function ENT:DrawTranslucent()
 	if not renderer then return end
 	local stack = networkStack( self )
 	if not stack or not renderer.CanDraw( stack ) then return end
+	-- Java renders ItemDisplayContext.GROUND from a one-block model basis. Flat
+	-- items normally scale to 0.5 while block.json scales to 0.25. Dropped block
+	-- meshes bypass DrawHeldItem's JSON transform, so apply that model-specific
+	-- ground scale explicitly on the direct mesh path.
+	local modelSize = blockSize()
 	local base = self:GetPos() + Vector( 0, 0, 7 + math.sin( CurTime() * 3 + self:EntIndex() ) * 1.5 )
 	local seed = self:EntIndex() * 37
 	local yaw = ( CurTime() * 90 + seed ) % 360
@@ -65,6 +89,7 @@ function ENT:DrawTranslucent()
 		local position = base + offset
 		local options = { displayContext = "ground" }
 		local plan = renderer.ModelPlan and renderer.ModelPlan( stack, options ) or nil
+		local droppedBlockSize = modelSize * groundScale( plan )
 		local prefersBlock = not plan or plan.kind == "block" or plan.kind == "missing"
 		-- Special entity models retain Minecraft's model-space Y-up axis in the
 		-- ground context. Flat generated sprites keep the addon's established
@@ -72,13 +97,14 @@ function ENT:DrawTranslucent()
 		local itemAngles = plan and plan.kind == "special" and blockAngles or flatAngles
 		local drawn = false
 		if not prefersBlock and renderer.DrawHeldItem then
-			drawn = renderer.DrawHeldItem( stack, position, itemAngles, 12, worldColor, options ) == true
+			drawn = renderer.DrawHeldItem( stack, position, itemAngles, modelSize, worldColor, options ) == true
 		end
 		if not drawn and renderer.DrawDroppedBlock then
-			drawn = renderer.DrawDroppedBlock( stack, position, blockAngles, 12, worldColor, options ) == true
+			drawn = renderer.DrawDroppedBlock(
+				stack, position, blockAngles, droppedBlockSize, worldColor, options ) == true
 		end
 		if not drawn and prefersBlock and renderer.DrawHeldItem then
-			renderer.DrawHeldItem( stack, position, itemAngles, 12, worldColor, options )
+			renderer.DrawHeldItem( stack, position, itemAngles, modelSize, worldColor, options )
 		end
 	end
 end

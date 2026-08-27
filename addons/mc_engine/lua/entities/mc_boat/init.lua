@@ -13,7 +13,9 @@ local BOAT_JAVA_HEIGHT = 0.5625
 local BOAT_JAVA_STEADY_IMMERSION = 0.65
 
 local function blockScale()
-	return math.max( 1, tonumber( MC and MC.BS ) or 36.5 )
+	local coords = MC and MC.API and MC.API.Coords
+	local size = coords and coords.BlockSize and coords.BlockSize() or 36.5
+	return math.max( 1, tonumber( size ) or 36.5 )
 end
 
 local function javaVelocity( value )
@@ -106,7 +108,7 @@ local function waterCell( bx, by, bz )
 	}
 end
 
-local function waterStatus( entity )
+local function minecraftWaterStatus( entity )
 	local mins, maxs = entityWorldBounds( entity )
 	local scale = blockScale()
 	local minBx, maxBx = math.floor( mins.x / scale ), math.ceil( maxs.x / scale ) - 1
@@ -139,6 +141,57 @@ local function waterStatus( entity )
 	end
 	if waterLevel > mins.z then return "in_water", waterLevel end
 	return nil, waterLevel
+end
+
+local function sourcePointInWater( position )
+	if not util or not util.PointContents or not CONTENTS_WATER or not isvector( position ) then return false end
+	local contents = util.PointContents( position )
+	if bit and bit.band then return bit.band( contents, CONTENTS_WATER ) ~= 0 end
+	return contents == CONTENTS_WATER
+end
+
+local function sourceWaterStatus( entity )
+	if not IsValid( entity ) or not entity.WorldSpaceAABB then return nil end
+	local engineMins, engineMaxs = entity:WorldSpaceAABB()
+	if not isvector( engineMins ) or not isvector( engineMaxs ) then return nil end
+	local worldMins, worldMaxs = entityWorldBounds( entity )
+	local epsilon = math.max( blockScale() / 4096, 0.01 )
+	local centerX = ( engineMins.x + engineMaxs.x ) * 0.5
+	local centerY = ( engineMins.y + engineMaxs.y ) * 0.5
+	local xs = { engineMins.x + epsilon, centerX, engineMaxs.x - epsilon }
+	local ys = { engineMins.y + epsilon, centerY, engineMaxs.y - epsilon }
+	local bottomZ = engineMins.z + epsilon
+	local topZ = engineMaxs.z + epsilon
+	local surfaceEngineZ = -math.huge
+	local bottomInWater = false
+
+	for _, x in ipairs( xs ) do
+		for _, y in ipairs( ys ) do
+			if sourcePointInWater( Vector( x, y, topZ ) ) then
+				return "under_water", worldMaxs.z, true
+			end
+			if sourcePointInWater( Vector( x, y, bottomZ ) ) then
+				bottomInWater = true
+				-- Source exposes contents, not FluidState height. Locate the surface
+				-- between the submerged hull bottom and its dry top.
+				local low, high = bottomZ, topZ
+				for _ = 1, 12 do
+					local middle = ( low + high ) * 0.5
+					if sourcePointInWater( Vector( x, y, middle ) ) then low = middle else high = middle end
+				end
+				surfaceEngineZ = math.max( surfaceEngineZ, high )
+			end
+		end
+	end
+	if not bottomInWater then return nil end
+	local worldOffsetZ = worldMins.z - engineMins.z
+	return "in_water", surfaceEngineZ + worldOffsetZ, true
+end
+
+local function waterStatus( entity )
+	local status, waterLevel = minecraftWaterStatus( entity )
+	if status then return status, waterLevel, false end
+	return sourceWaterStatus( entity )
 end
 
 local function waterLevelAbove( entity )
@@ -339,7 +392,9 @@ function ENT:Initialize()
 	local physics = self:GetPhysicsObject()
 	if IsValid( physics ) then
 		physics:SetMass( 40 )
-		physics:SetDamping( 0.05, 4 )
+		-- AbstractBoat#getAirDrag returns 1.0; floatBoat applies every horizontal
+		-- drag factor explicitly. Source linear damping would add a second drag.
+		physics:SetDamping( 0, 4 )
 		physics:EnableGravity( false )
 		if physics.EnableCollisions then physics:EnableCollisions( true ) end
 		physics:EnableMotion( true )
@@ -382,7 +437,8 @@ function ENT:TryEnterPlayer( activator )
 end
 
 function ENT:UpdateStatus()
-	local status, waterLevel = waterStatus( self )
+	local status, waterLevel, sourceWater = waterStatus( self )
+	self.MCSourceWater = sourceWater == true
 	if status then
 		self.MCWaterLevel = waterLevel
 	else
@@ -414,7 +470,8 @@ function ENT:FloatBoat( status, oldStatus )
 		self.MCWaterLevel = maxs.z
 		local height = maxs.z - mins.z
 		local scale = blockScale()
-		local javaTransitionTarget = waterLevelAbove( self ) - height + scale * 0.101
+		local levelAbove = self.MCSourceWater and ( self.MCWaterLevel or maxs.z ) or waterLevelAbove( self )
+		local javaTransitionTarget = levelAbove - height + scale * 0.101
 		-- AbstractBoat's raw transition target sits about 0.096 block below its
 		-- eventual 65%-immersed equilibrium. Apply only that steady-state
 		-- correction: the renderer already contains Java's +0.375 model transform,
@@ -453,6 +510,11 @@ function ENT:FloatBoat( status, oldStatus )
 	self.MCDeltaRotation = ( self.MCDeltaRotation or 0 ) * friction
 	if buoyancy > 0 then
 		velocity.z = ( velocity.z + javaVelocity( buoyancy * ( 0.04 / 0.65 ) ) ) * 0.75
+	end
+	if status == "on_land" and velocity.z < 0 then
+		-- Java clips this component against the supporting block. Keeping it in
+		-- VPhysics creates a normal impulse whose Source friction erases steering.
+		velocity.z = 0
 	end
 	self.MCVelocity = velocity
 	return status
@@ -615,7 +677,23 @@ end
 function ENT:PhysicsCollide( data )
 	if data and self:PushFromPlayer( data.HitEntity ) then return end
 	local physics = self:GetPhysicsObject()
-	if IsValid( physics ) then self.MCVelocity = physics:GetVelocity() end
+	if not IsValid( physics ) then return end
+	local physicalVelocity = physics:GetVelocity()
+	local normal = data and data.HitNormal or nil
+	if isvector( normal ) and math.abs( normal.z ) > 0.5 and ( self.MCVelocity.z or 0 ) <= 0 then
+		-- AbstractBoat already applies ON_LAND block friction in FloatBoat. Source
+		-- contact friction can zero both tangential axes when the hull rests on a
+		-- floor; accepting that result erased controlBoat's 0.04-block impulse on
+		-- every physics frame. A supporting collision only resolves vertical
+		-- motion in Minecraft, so retain the Java horizontal velocity here.
+		self.MCVelocity = Vector( self.MCVelocity.x, self.MCVelocity.y, physicalVelocity.z )
+		physics:SetVelocityInstantaneous( self.MCVelocity )
+		physics:Wake()
+		return
+	end
+	-- Side/ceiling impacts still consume Source's clipped velocity so the boat
+	-- cannot drive through ordinary props or map geometry.
+	self.MCVelocity = physicalVelocity
 end
 
 function ENT:ApplyMinecraftVehicleDamage( damageInfo )

@@ -453,7 +453,8 @@ function PANEL:Init()
 	self.AnvilEntry.OnChange = function( entry )
 		if not IsValid( self ) or self.ApplyingAnvilState or not self.Anvil then return end
 		local value = entry:GetValue() or ""
-		local filtered, errorCode = MC.AnvilValidateName and MC.AnvilValidateName( value ) or value
+		local filtered, errorCode = value
+		if MC.AnvilValidateName then filtered, errorCode = MC.AnvilValidateName( value ) end
 		if not filtered then
 			self.AnvilLocalError = errorCode or "invalid_name"
 			return
