@@ -746,7 +746,13 @@ if CLIENT then
 		local wep = ply:GetActiveWeapon()
 		if not IsValid( wep ) then return end
 		local class = wep:GetClass()
-		if class ~= "mc_creative_placer" and class ~= "mc_item_hand" then return end
+		if class ~= "mc_creative_placer" and class ~= "mc_item_hand" then
+			-- A weapon proxying for the hand (MCITEM's SWEPs) is the active one
+			-- while the swing request is in flight, so it has to be able to play
+			-- it too; it carries its own swing rather than this animation.
+			if isfunction( wep.MCSwing ) then wep:MCSwing( CurTime() ) end
+			return
+		end
 		wep:StartCreativePlaceAnimation( bx, by, bz )
 	end
 
