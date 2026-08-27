@@ -141,9 +141,11 @@ local function encodeStateChunk( chunk, cx, cy, cz, encoder, options )
 		return nil, nil, "chunk_count_mismatch:" .. tostring( chunk and chunk.key or MC.ChunkKey( cx, cy, cz ) )
 			.. ":" .. tostring( storedChunkCount ) .. ":" .. tostring( chunkBlockCount )
 	end
-	local blockEntities, blockEntityError = chunk and encodeBlockEntities( chunk, options ) or nil
+	local blockEntities, blockEntityError
+	if chunk then blockEntities, blockEntityError = encodeBlockEntities( chunk, options ) end
 	if blockEntityError then return nil, nil, "block_entity_encode_failed:" .. tostring( blockEntityError ) end
-	local opaqueBlockEntities, opaqueError = chunk and encodeOpaqueBlockEntities( chunk, options ) or nil
+	local opaqueBlockEntities, opaqueError
+	if chunk then opaqueBlockEntities, opaqueError = encodeOpaqueBlockEntities( chunk, options ) end
 	if opaqueError then return nil, nil, "opaque_block_entity_encode_failed:" .. tostring( opaqueError ) end
 	return { cx, cy, cz, packSparseCells( cells ), blockEntities, opaqueBlockEntities }, chunkBlockCount
 end

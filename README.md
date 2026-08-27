@@ -4,7 +4,7 @@ Garry's Mod 里的 Minecraft 风格方块系统。方块不按实体逐个生成
 
 ## 当前状态
 
-- 方块边长是 `36.5` Source units。
+- 方块边长默认是 `36.5` Source units；运行时代码必须读取 `MC.API.Coords.BlockSize()`，不得硬编码换算值。坐标换算和 GLua 多返回值规则见根目录 `AGENTS.md`，尤其禁止用 `and` / `or` 包裹需要接收多个返回值的函数调用。
 - chunk 水平尺寸固定为 `16x16`，垂直 section 高度是 `32`。
 - 客户端预测碰撞默认只在本地玩家附近 `4x4x4` 方块的小 AABB 内构建；`mc_client_collision 0` 仍可完全关闭客户端预测碰撞。
 - 服务端 full sync 不再对玩家发送全图 chunk；非 world / 非 `mc_chunk` 实体附近默认同步水平 `16x16`、垂直 `4` 个 chunk，由 `mc_stream_chunk_span_xy` / `mc_stream_chunk_span_z` 控制，离开范围会发送 `mc_unload_chunk` 让客户端释放数据。

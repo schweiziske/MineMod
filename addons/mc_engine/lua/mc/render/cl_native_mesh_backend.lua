@@ -1752,8 +1752,12 @@ local function tryStart()
 	end
 	local atlasPageCount = MC.AtlasPageCount and MC.AtlasPageCount() or 1
 	for page = 0, atlasPageCount - 1 do
-		local matPageOpaque, opaqueError = MC.AtlasPageMaterial and MC.AtlasPageMaterial( page, false ) or nil
-		local matPageTranslucent, translucentError = MC.AtlasPageMaterial and MC.AtlasPageMaterial( page, true ) or nil
+		local matPageOpaque, opaqueError
+		local matPageTranslucent, translucentError
+		if MC.AtlasPageMaterial then
+			matPageOpaque, opaqueError = MC.AtlasPageMaterial( page, false )
+			matPageTranslucent, translucentError = MC.AtlasPageMaterial( page, true )
+		end
 		if not ( matPageOpaque and matPageOpaque.GetName and not matPageOpaque:IsError()
 			and matPageTranslucent and matPageTranslucent.GetName and not matPageTranslucent:IsError() ) then
 			state.startupFailureReason = "atlas page material unavailable " .. page .. " ("

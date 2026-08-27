@@ -19,6 +19,14 @@ local function engineBlockSize()
 	return Coords and Coords.BlockSize and Coords.BlockSize() or 36.5
 end
 
+local function worldToEnginePosition( position, context )
+	if not isvector( position ) or not IsValid( context ) then return position end
+	local worldEye = Coords and Coords.EntityEyeWorldPos and Coords.EntityEyeWorldPos( context ) or nil
+	local engineEye = context.EyePos and context:EyePos() or nil
+	if not isvector( worldEye ) or not isvector( engineEye ) then return position end
+	return position + engineEye - worldEye
+end
+
 local VEHICLE_INTERACT_NET = "mc_minecraft_vehicle_interact"
 
 local BOAT_ITEMS = {
@@ -510,8 +518,40 @@ local function traceVehiclePlacement( ply, includeFluids )
 	direction:Normalize()
 	local blockHit = traceBlockOutline( start, direction, maxDistance )
 	local fluidHit = includeFluids and traceFluidRay( start, direction, maxDistance ) or nil
-	if fluidHit and ( not blockHit or fluidHit.Distance <= ( blockHit.Distance or math.huge ) ) then return fluidHit end
-	return blockHit
+	local voxelHit = fluidHit and ( not blockHit or fluidHit.Distance <= ( blockHit.Distance or math.huge ) )
+		and fluidHit or blockHit
+
+	-- World.TraceRay deliberately sees MC voxels only. Treat Source map brushes
+	-- and water as the level boundary too, otherwise BoatItem always returns MISS
+	-- on ordinary GMod terrain even though the entity itself supports it.
+	local sourceHit
+	if util and util.TraceLine then
+		local engineStart = ply:EyePos()
+		local mask = MASK_SOLID_BRUSHONLY or MASK_SOLID
+		if includeFluids and MASK_WATER and bit and bit.bor then mask = bit.bor( mask, MASK_WATER ) end
+		local traced = util.TraceLine( {
+			start = engineStart,
+			endpos = engineStart + direction * maxDistance,
+			filter = ply,
+			mask = mask,
+		} )
+		if traced and traced.Hit and isvector( traced.HitPos ) then
+			local distance = engineStart:Distance( traced.HitPos )
+			local worldHitPos = MC.EngineToWorldPos and MC.EngineToWorldPos( traced.HitPos, ply ) or traced.HitPos
+			sourceHit = {
+				Hit = true,
+				HitSourceWorld = true,
+				HitPos = worldHitPos,
+				HitNormal = traced.HitNormal,
+				Fraction = maxDistance > 0 and distance / maxDistance or 0,
+				Distance = distance,
+			}
+		end
+	end
+	if sourceHit and ( not voxelHit or sourceHit.Distance < ( voxelHit.Distance or math.huge ) ) then
+		return sourceHit
+	end
+	return voxelHit
 end
 
 MC.TraceVehiclePlacement = traceVehiclePlacement
@@ -522,8 +562,15 @@ local function playerStartsInsidePickableEntity( ply )
 	local blockSize = engineBlockSize()
 	local direction = ply:EyeAngles():Forward()
 	direction:Normalize()
-	local playerMin, playerMax = Coords and Coords.EntityWorldAABB and Coords.EntityWorldAABB( ply )
-	if not playerMin then playerMin, playerMax = ply:WorldSpaceAABB() end
+	local playerMin, playerMax
+	-- A function call behind an `and` expression contributes only one value in
+	-- Lua, which used to discard EntityWorldAABB's maximum vector here.
+	if Coords and Coords.EntityWorldAABB then
+		playerMin, playerMax = Coords.EntityWorldAABB( ply )
+	end
+	if not isvector( playerMin ) or not isvector( playerMax ) then
+		playerMin, playerMax = ply:WorldSpaceAABB()
+	end
 	local reach = direction * blockSize * 5
 	local queryMin = Vector( math.min( playerMin.x, playerMin.x + reach.x ),
 		math.min( playerMin.y, playerMin.y + reach.y ), math.min( playerMin.z, playerMin.z + reach.z ) )
@@ -538,10 +585,12 @@ local function playerStartsInsidePickableEntity( ply )
 	for _, entity in ipairs( candidates or {} ) do
 		if IsValid( entity ) and entity ~= ply and entity ~= ply:GetActiveWeapon() then
 			local class = entity:GetClass()
-			if class ~= "mc_chunk" and class ~= "mc_chunk_phys" and class ~= "mc_collision_carrier" then
+			local world = entity.IsWorld and entity:IsWorld() or class == "worldspawn"
+			if not world and not hiddenMinecraftVehicleSeat( entity )
+			and class ~= "mc_chunk" and class ~= "mc_chunk_phys" and class ~= "mc_collision_carrier" then
 				local mins, maxs = entity:WorldSpaceAABB()
 				if eye.x >= mins.x and eye.x <= maxs.x and eye.y >= mins.y and eye.y <= maxs.y
-				and eye.z >= mins.z and eye.z <= maxs.z then return true end
+				and eye.z >= mins.z and eye.z <= maxs.z then return true, entity end
 			end
 		end
 	end
@@ -576,7 +625,9 @@ local function voxelHullBlocked( className, position )
 						local boxMax = cellMin + Vector( box[4] * blockSize, box[5] * blockSize, box[6] * blockSize )
 						if worldMin.x < boxMax.x and worldMax.x > boxMin.x
 						and worldMin.y < boxMax.y and worldMax.y > boxMin.y
-						and worldMin.z < boxMax.z and worldMax.z > boxMin.z then return true end
+						and worldMin.z < boxMax.z and worldMax.z > boxMin.z then
+							return true, string.format( "cell=%d,%d,%d state=%d", bx, by, bz, stateId )
+						end
 					end
 				end
 			end
@@ -585,24 +636,33 @@ local function voxelHullBlocked( className, position )
 	return false
 end
 
-local function spawnBlocked( className, position )
-	if voxelHullBlocked( className, position ) then return true end
+local function spawnBlocked( className, position, ply )
+	local voxelBlocked, voxelDetail = voxelHullBlocked( className, position )
+	if voxelBlocked then return true, "mc_voxel " .. tostring( voxelDetail or "collision" ) end
 	local filter = function( entity )
 		local class = IsValid( entity ) and entity:GetClass() or ""
 		return class ~= "mc_chunk" and class ~= "mc_chunk_phys" and class ~= "mc_collision_carrier"
 	end
 	local blockSize = engineBlockSize()
+	local enginePosition = worldToEnginePosition( position, ply )
+	-- Java's noCollision permits an AABB that only touches the supporting
+	-- surface. A stationary Source hull trace can report that exact contact as
+	-- Hit, so test an imperceptible distance above the placement plane.
+	local collisionPosition = enginePosition + Vector( 0, 0, math.max( blockSize / 4096, 0.01 ) )
 	local halfWidth = className == "mc_boat" and 0.6875 or 0.49
 	local height = className == "mc_boat" and 0.5625 or 0.7
 	local trace = util.TraceHull( {
-		start = position,
-		endpos = position,
+		start = collisionPosition,
+		endpos = collisionPosition,
 		mins = Vector( -halfWidth * blockSize, -halfWidth * blockSize, 0 ),
 		maxs = Vector( halfWidth * blockSize, halfWidth * blockSize, height * blockSize ),
 		filter = filter,
 		mask = MASK_SOLID,
 	} )
-	return trace.Hit == true
+	if trace.Hit ~= true then return false end
+	local entity = IsValid( trace.Entity ) and trace.Entity:GetClass() or "none"
+	return true, string.format( "source_hull startSolid=%s hitWorld=%s entity=%s",
+		tostring( trace.StartSolid == true ), tostring( trace.HitWorld == true ), entity )
 end
 
 local function consumeSpawnedVehicle( ply, stack, entity, reason )
@@ -622,12 +682,13 @@ end
 local function spawnVehicle( ply, stack, spec, position, angles, setup )
 	-- BoatItem rejects a colliding boat. The non-experimental MinecartItem used
 	-- by OldMinecartBehavior does not run a noCollision check at placement time.
-	if spec.kind == "boat" and spawnBlocked( spec.class, position ) then
-		return false, "vehicle_spawn_blocked"
+	if spec.kind == "boat" then
+		local blocked, blockDetail = spawnBlocked( spec.class, position, ply )
+		if blocked then return false, "vehicle_spawn_blocked " .. tostring( blockDetail or "collision" ) end
 	end
 	local entity = ents.Create( spec.class )
 	if not IsValid( entity ) then return false, "vehicle_entity_unavailable" end
-	entity:SetPos( position )
+	entity:SetPos( worldToEnginePosition( position, ply ) )
 	entity:SetAngles( angles )
 	entity:SetOwner( ply )
 	if setup then setup( entity ) end
@@ -645,7 +706,11 @@ function SV.UseVehicleItem( ply, stack, context )
 	if spec.kind == "boat" then
 		local hit = traceVehiclePlacement( ply, true )
 		if not hit or not hit.Hit or not hit.HitPos then return false, "vehicle_miss" end
-		if playerStartsInsidePickableEntity( ply ) then return false, "vehicle_eye_obstructed" end
+		local eyeBlocked, obstruction = playerStartsInsidePickableEntity( ply )
+		if eyeBlocked then
+			local class = IsValid( obstruction ) and obstruction:GetClass() or "unknown"
+			return false, "vehicle_eye_obstructed entity=" .. tostring( class )
+		end
 		local yaw = ply:EyeAngles().y
 		return spawnVehicle( ply, stack, spec, hit.HitPos, Angle( 0, yaw, 0 ), function( entity )
 			entity:SetBoatType( spec.woodType )
