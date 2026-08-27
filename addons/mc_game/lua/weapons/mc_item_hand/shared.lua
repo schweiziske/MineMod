@@ -330,6 +330,22 @@ local function performProxyWorldInteraction( ply, stack, kind, target )
 	if kind == "entity" and IsValid( target.entity ) then
 		local result = runItemEntityInteractionHands(
 			ply, target.entity, stack, target.trace, false, "inventory_proxy" )
+		-- Same swing as the hand_secondary branch. This is the branch that runs
+		-- while an MCITEM SWEP proxies for the hand, which is most of the time
+		-- once the inventory holds a weapon or food, so leaving it out meant the
+		-- arm never moved for a trade opened that way.
+		if result ~= nil and MC.WorldToCell and MC.Net then
+			local origin = target.entity.WorldSpaceCenter
+				and target.entity:WorldSpaceCenter() or target.entity:GetPos()
+			local bx, by, bz = MC.WorldToCell( origin )
+			if bx ~= nil then
+				net.Start( "mc_creative_place_anim" )
+					net.WriteInt( bx, MC.Net.COORD_BITS )
+					net.WriteInt( by, MC.Net.COORD_BITS )
+					net.WriteInt( bz, MC.Net.COORD_BITS )
+				net.Send( ply )
+			end
+		end
 		return result ~= nil
 	end
 	if kind == "decoration" then
