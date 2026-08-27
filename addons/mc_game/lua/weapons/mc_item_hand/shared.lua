@@ -631,6 +631,25 @@ function SWEP:SendIgniterSwing( ply, stack, bx, by, bz )
 	net.Send( ply )
 end
 
+-- Minecraft swings the arm when a use-on-entity is accepted, the same way it
+-- does for mining or lighting a block. The existing swing path is keyed by block
+-- coordinates, so the entity's own cell is what gets sent: the animation only
+-- needs somewhere to swing toward. Unlike SendIgniterSwing this is not limited
+-- to a particular item -- an empty hand opening a trade swings too.
+function SWEP:SendEntityInteractSwing( ply, target )
+	if not SERVER or not IsValid( ply ) or not IsValid( target ) then return end
+	if not MC.WorldToCell or not MC.Net then return end
+	local origin = target.WorldSpaceCenter and target:WorldSpaceCenter() or target:GetPos()
+	if not origin then return end
+	local bx, by, bz = MC.WorldToCell( origin )
+	if bx == nil then return end
+	net.Start( "mc_creative_place_anim" )
+		net.WriteInt( bx, MC.Net.COORD_BITS )
+		net.WriteInt( by, MC.Net.COORD_BITS )
+		net.WriteInt( bz, MC.Net.COORD_BITS )
+	net.Send( ply )
+end
+
 function SWEP:SecondaryAttack()
 	local repeatingPlacement = self.MCSecondaryHeld and self.MCSecondaryMode == "place"
 	self:SetNextSecondaryFire( CurTime() + ATTACK_INTERVAL )
@@ -661,6 +680,7 @@ function SWEP:SecondaryAttack()
 				ply, entity, stack, eyeTrace, false, "hand_secondary" )
 			if entityResult ~= nil then
 				self.MCSecondaryMode = entityResult == true and "entity" or "entity_rejected"
+				if entityResult == true then self:SendEntityInteractSwing( ply, entity ) end
 				return
 			end
 		end
