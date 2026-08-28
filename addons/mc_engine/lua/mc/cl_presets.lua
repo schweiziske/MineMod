@@ -605,8 +605,16 @@ function MC.SavePresetSelection()
 	capturePresetCover( name, function( coverPath, data )
 		uploadPresetCover( name, coverPath, data, function( ok, confirmedCover, err )
 			if not ok then
-				MC.PresetSelectionStep = 3
-				chat( L( "preset.upload_failed", "截图上传失败，未保存预设: {err}", { err = tostring( err or "error" ) } ) )
+				-- 封面只是预览图，不是预设内容。上传失败（too_large / timeout /
+				-- 服务端拒绝）不该把整个预设一起丢掉——那会让玩家白选一遍范围和
+				-- 基准面。照常保存，只是没有封面。
+				--
+				-- 截图本身失败的情况本来就已经能保存：capturePresetCover 拿不到
+				-- 数据时传空串，uploadPresetCover 会直接 callback( true, "" )。
+				chat( L( "preset.upload_failed_saved",
+					"截图上传失败，预设仍已保存（无封面）: {err}",
+					{ err = tostring( err or "error" ) } ) )
+				sendPresetSave( name, selection, "" )
 				return
 			end
 			sendPresetSave( name, selection, confirmedCover or "" )
