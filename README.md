@@ -48,9 +48,10 @@ _build/build_block_properties.cjs            生成 hardness/explosionResistance
 _build/build_block_connections.cjs           生成连接/贴附类方块表
 _tools/mc_convert_8x8_save.py                老版本 Parkour Spiral 转存工具
 _tools/mc_import_world.py                    通用 Minecraft 存档导出工具
+docs/README.md                               全部文档索引(新增文档必须在此登记)
 docs/api.md                                  对外 API(外部插件唯一受支持入口)
+docs/fault-handling.md                       故障上报约定:不要写静默失败
 docs/maintenance-update-guide.md             维护更新指南
-docs/interface-usage.md                      接口使用介绍(已过期)
 ```
 
 资源也按 addon 归属：世界 atlas、字体、方块实体材质、引擎声音和 native 模块属于 `mc_engine`；物品图标、容器/HUD/配方界面、破坏阶段贴图及游戏音效属于 `mc_game`。相对挂载路径不能由两个 addon 重复提供。
@@ -163,9 +164,13 @@ git diff --check
 
 ## 文档入口
 
-- [对外 API(v1)](docs/api.md) — 外部插件唯一受支持入口
+**全部文档的索引在 [docs/README.md](docs/README.md)。新增文档必须在那一页登记一行。**
+
+写代码前先看这条：**[不要写静默失败](docs/fault-handling.md)** —— 凡是"这里可能失败、失败了就跳过"的地方，用 `MC.Fault` / `MC.Need` / `MC.Check` / `MC.Try` 上报，不要写 `if X then X() end` 然后什么都不说。`mc_strict 1` 让故障直接抛错，`mc_faults` 列出记录。
+
+- [对外 API(v2)](docs/api.md) — 外部插件唯一受支持入口
+- [维护更新指南](docs/maintenance-update-guide.md) — 后续维护者的第一站
 - [引擎层 / 游戏层分离](docs/engine-game-layer-split-2026-08-12.md)
-- [维护更新指南](docs/maintenance-update-guide.md)
-- [接口使用介绍](docs/interface-usage.md)(已过期,保留作内部符号参考)
+- [render 子系统报告](docs/render-system.md)
 - [mc_import_world.py 用法](docs/mc-import-world.md)
 - [Chunk 高度修改说明](docs/chunk-height.md)

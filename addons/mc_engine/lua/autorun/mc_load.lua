@@ -13,6 +13,10 @@ local loadPerfStart = SysTime and SysTime() or 0
 local loadPerfStartKB = collectgarbage and collectgarbage( "count" ) or 0
 
 local SHARED = {
+	-- First, and deliberately: every file after this one may report through
+	-- MC.Fault / MC.Check / MC.Need, so the reporter has to exist before any of
+	-- them run. It has no dependencies of its own.
+	"mc/sh_fault.lua",
 	"mc/state/sh_network_protocol.lua",
 	"mc/sh_config.lua",
 	"mc/sh_game_mode.lua",
@@ -150,7 +154,6 @@ local CLIENT_FILES = {
 	"mc/render/cl_mesh_global_lightmap.lua",
 	"mc/render/cl_mesh_light_samples.lua",
 	"mc/render/cl_mesh_upload.lua",
-	"mc/render/cl_mesh_source_lighting.lua",
 	"mc/render/cl_mesh_color.lua",
 	"mc/render/cl_mesh_geometry.lua",
 	"mc/render/cl_fluid_geometry.lua",

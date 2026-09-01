@@ -346,6 +346,11 @@ local function fluidMeshesForChunk( chunkKey, animations )
 		}
 	end
 	context.lightMeta = function() return nil end
+	-- Animated fluid quads take the CPU vertex-colour path deliberately. The GPU
+	-- payload styles encode light INTO COLOR0, and these vertices need COLOR0 to
+	-- hold a real colour, so they cannot use it. "vanilla" is no longer one of
+	-- several selectable pipelines - it is the name of this one emit mode, and
+	-- this is its only caller.
 	context.currentEmitLightStyle = function() return RM.MC_LIGHT_STYLE_VANILLA or "vanilla" end
 
 	for entryKey in pairs( EntriesByChunk[chunkKey] or {} ) do
