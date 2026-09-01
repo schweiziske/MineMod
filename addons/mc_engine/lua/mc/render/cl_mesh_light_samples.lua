@@ -25,13 +25,6 @@ local MC_LIGHT_AO_FACTORS = {
 	[3] = 0.55,
 }
 
-local MC_LIGHT_BEST_AO_FACTORS = {
-	[0] = 1.00,
-	[1] = 0.90,
-	[2] = 0.78,
-	[3] = 0.66,
-}
-
 local MC_LIGHT_SHADER_AO_FACTORS = {
 	[0] = 1.00,
 	[1] = 0.94,
@@ -581,7 +574,6 @@ local function minecraftSmoothCornerBrightness( bx, by, bz, faceIndex, cn, selfE
 end
 
 RM.MC_LIGHT_AO_FACTORS = MC_LIGHT_AO_FACTORS
-RM.MC_LIGHT_BEST_AO_FACTORS = MC_LIGHT_BEST_AO_FACTORS
 RM.MC_LIGHT_SHADER_AO_FACTORS = MC_LIGHT_SHADER_AO_FACTORS
 RM.faceSampleBaseCell = faceSampleBaseCell
 RM.offsetCell = offsetCell

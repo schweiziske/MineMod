@@ -122,9 +122,21 @@ MC.MeshBuildFrameMS = MC.MeshBuildFrameMS or ( CreateClientConVar and CreateClie
 MC.TexturePack = MC.TexturePack or ( CreateClientConVar and CreateClientConVar( "mc_texture_pack", "default", true, false,
 	"MC atlas texture pack: default or programmer_art" ) )
 
-local MC_LIGHT_STYLE_FAST = "fast"
+-- Emit styles. These are NOT a user-facing pipeline choice any more: the chunk
+-- pipeline is always the GPU one. What is left is which vertex payload an emit
+-- site asks for, and only two answers matter -
+--
+--   "vanilla"  CPU vertex colours. Requested by cl_block_animations.lua for
+--              flowing water and lava: the GPU payload encodes light INTO
+--              COLOR0, and an animated block needs COLOR0 to hold a real
+--              colour, so it cannot use it.
+--   "shader" / "gpu_shader" / "gpu_light_texture"
+--              the GPU payload variants, picked per material by
+--              effectiveLightStyleForMaterial below.
+--
+-- The old "fast" and "best" CPU styles are gone with the mc_light_profile
+-- convar that was the only thing able to select them.
 local MC_LIGHT_STYLE_VANILLA = "vanilla"
-local MC_LIGHT_STYLE_BEST = "best"
 local MC_LIGHT_STYLE_SHADER = "shader"
 local MC_LIGHT_STYLE_GPU_SHADER = "gpu_shader"
 local MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE = "gpu_light_texture"
@@ -158,29 +170,23 @@ function RM.GetLightProfile( style )
 	style = style or MC_LIGHT_STYLE_SHADER
 	local profile = LightProfiles[style]
 	if profile then return profile end
-	return LightProfiles[MC_LIGHT_STYLE_SHADER] or LightProfiles[MC_LIGHT_STYLE_VANILLA]
+	return LightProfiles[MC_LIGHT_STYLE_SHADER]
 end
 
-local function normalizeLightStyle( style )
-	style = stringLower( tostring( style or "" ) )
-	if style == MC_LIGHT_STYLE_FAST or style == "low" or style == "0" then return MC_LIGHT_STYLE_FAST end
-	if style == MC_LIGHT_STYLE_VANILLA or style == "default" or style == "normal" or style == "1" then return MC_LIGHT_STYLE_VANILLA end
-	if style == MC_LIGHT_STYLE_BEST or style == "fancy" or style == "high" or style == "2" then return MC_LIGHT_STYLE_BEST end
-	if style == MC_LIGHT_STYLE_SHADER or style == "shaders" or style == "cinematic" or style == "3" then return MC_LIGHT_STYLE_SHADER end
-	if LightProfiles[style] then return style end
+-- The chunk pipeline no longer has a selector. This used to normalize
+-- mc_light_profile ("fast"/"vanilla"/"best"/"shader" plus a pile of aliases and
+-- numeric leftovers) into one of four pipelines; with the three CPU ones gone
+-- there is exactly one answer, and the emit-site style is decided per material
+-- by effectiveLightStyleForMaterial instead of by a convar.
+local function currentLightStyle()
 	return MC_LIGHT_STYLE_SHADER
 end
 
-local function currentLightStyle()
-	local cv = MC.LightProfile
-	local style = normalizeLightStyle( cv and cv.GetString and cv:GetString() or MC_LIGHT_STYLE_SHADER )
-	return style
-end
-
--- GPU look selector (mc_light_style): which chunk pixel shader family draws
--- the world. Distinct from the legacy mc_light_profile pipeline selector
--- above. Unknown values — including archived leftovers from when this NAME
--- held the profile selector ("shader", "best", numbers) — fall back to fancy.
+-- GPU look selector (mc_light_style): which chunk pixel shader family draws the
+-- world. This is now the ONLY lighting convar that selects anything - the
+-- mc_light_profile pipeline selector it used to be distinguished from is gone.
+-- Unknown values still fall back to fancy, which also absorbs archived leftovers
+-- from when this NAME held the profile selector ("shader", "best", numbers).
 local function normalizeGpuLightStyle( style )
 	style = stringLower( tostring( style or "" ) )
 	if style == "fast" then return "fast" end
@@ -241,16 +247,8 @@ local function clampLightLevel( level )
 	return mathClamp( mathFloor( tonumber( level ) or 0 ), 0, 15 )
 end
 
-registerLightProfile( MC_LIGHT_STYLE_FAST, {
-	name = "Fast",
-	usesGpuPayload = false,
-} )
 registerLightProfile( MC_LIGHT_STYLE_VANILLA, {
 	name = "Vanilla",
-	usesGpuPayload = false,
-} )
-registerLightProfile( MC_LIGHT_STYLE_BEST, {
-	name = "Best",
 	usesGpuPayload = false,
 } )
 registerLightProfile( MC_LIGHT_STYLE_SHADER, {
@@ -269,14 +267,11 @@ registerLightProfile( MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE, {
 	usesGpuLightTexture = true,
 } )
 
-RM.MC_LIGHT_STYLE_FAST = MC_LIGHT_STYLE_FAST
 RM.MC_LIGHT_STYLE_VANILLA = MC_LIGHT_STYLE_VANILLA
-RM.MC_LIGHT_STYLE_BEST = MC_LIGHT_STYLE_BEST
 RM.MC_LIGHT_STYLE_SHADER = MC_LIGHT_STYLE_SHADER
 RM.MC_LIGHT_STYLE_GPU_SHADER = MC_LIGHT_STYLE_GPU_SHADER
 RM.MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE = MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE
 RM.currentLightStyle = currentLightStyle
-RM.normalizeLightStyle = normalizeLightStyle
 RM.effectiveLightStyleForMaterial = effectiveLightStyleForMaterial
 RM.meshDebugFullCubeOnly = meshDebugFullCubeOnly
 RM.clampLightLevel = clampLightLevel
