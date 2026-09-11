@@ -722,12 +722,12 @@ function MC.QueueAllGpuChunkLightTextureRefresh()
 	return batch.chunks
 end
 
-function MC.ProcessGpuChunkLightTextureRefresh( deadline )
+function MC.ProcessGpuChunkLightTextureRefresh( deadline, onChunkRefreshed )
 	statsLastRefreshMS, statsLastRefreshTiles = 0, 0
 	if nativeBackend() or ( MC.LightingBulkLoadDepth or 0 ) > 0
 	or not MC.UsingGpuLightTexture() or next( MC.GpuChunkLightDirtyChunks ) == nil then return 0 end
 	local started = SysTime()
-	local attempts = 0
+	local attempts, pairedMS = 0, 0
 	for key in pairs( MC.GpuChunkLightDirtyChunks ) do
 		if deadline and SysTime() >= deadline then break end
 		local owner = slotByKey[key]
@@ -735,12 +735,17 @@ function MC.ProcessGpuChunkLightTextureRefresh( deadline )
 			attempts = attempts + 1
 			if not refreshLuaOwners( { { key = key, owner = owner } } ) then break end
 			statsLastRefreshTiles = statsLastRefreshTiles + 1
+			if onChunkRefreshed then
+				local pairStarted = SysTime()
+				onChunkRefreshed( key )
+				pairedMS = pairedMS + ( SysTime() - pairStarted ) * 1000
+			end
 		else
 			MC.GpuChunkLightDirtyCells[key] = nil
 			MC.GpuChunkLightDirtyChunks[key] = nil
 		end
 	end
-	statsLastRefreshMS = ( SysTime() - started ) * 1000
+	statsLastRefreshMS = math.max( 0, ( SysTime() - started ) * 1000 - pairedMS )
 	statsRefreshMS = statsRefreshMS + statsLastRefreshMS
 	return attempts
 end

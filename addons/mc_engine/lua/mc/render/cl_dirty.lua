@@ -397,6 +397,19 @@ local function nativeMeshBackendActive()
 end
 
 local frameBudget = {}
+local pairedAnimationMS = 0
+local function admittedLightPair()
+	return true
+end
+
+local function refreshPairedFluidLighting( key )
+	if not MC.PrepareBlockAnimationLighting then return end
+	local started = SysTime()
+	-- Admission already happened at the atlas tile boundary. Finish its fluid
+	-- colours even if that indivisible tile used the remaining frame budget.
+	MC.PrepareBlockAnimationLighting( frameBudget, admittedLightPair, key )
+	pairedAnimationMS = pairedAnimationMS + ( SysTime() - started ) * 1000
+end
 
 local function canBuildMeshSection( budget, rateLimited )
 	-- A section upload cannot be preempted. Allow the first attempt even when
@@ -591,8 +604,19 @@ hook.Add( "Think", "mc_meshbuild", function()
 	budget.animationAttempts, budget.animationFailures = 0, 0
 	budget.frameYield, budget.rateYield = false, false
 	budget.lightTextureAttempts = 0
+	pairedAnimationMS = 0
 	if MC.ProcessGpuChunkLightTextureRefresh then
-		budget.lightTextureAttempts = MC.ProcessGpuChunkLightTextureRefresh( animationDeadline ) or 0
+		budget.lightTextureAttempts = MC.ProcessGpuChunkLightTextureRefresh( animationDeadline, refreshPairedFluidLighting ) or 0
+	end
+	local animationMS = pairedAnimationMS
+	local animationStarted = SysTime()
+	budget.deadline = animationDeadline
+	if MC.PrepareBlockAnimationLighting then MC.PrepareBlockAnimationLighting( budget, canBuildMeshSection ) end
+	animationMS = animationMS + ( SysTime() - animationStarted ) * 1000
+	if budget.native and not lazy then
+		budget.deadline = nil
+		-- Native terrain submissions are not stopped by a Lua-only light yield.
+		budget.frameYield = false
 	end
 	local foundEligible, selectionDeferred = false, false
 	local geometryDepth = 0
@@ -630,9 +654,9 @@ hook.Add( "Think", "mc_meshbuild", function()
 	-- Native submissions retain their existing policy, but animations always
 	-- run in Lua. Terrain sleep must not put animation scans/retries to sleep.
 	budget.deadline = animationDeadline
-	local animationStarted = SysTime()
+	animationStarted = SysTime()
 	if MC.PrepareBlockAnimations then MC.PrepareBlockAnimations( budget, canBuildMeshSection ) end
-	local animationMS = ( SysTime() - animationStarted ) * 1000
+	animationMS = animationMS + ( SysTime() - animationStarted ) * 1000
 	if MC.RenderPipeline and MC.RenderPipeline.NoteDirtyFrame then
 		MC.RenderPipeline.NoteDirtyFrame( budget.attempts, budget.failures, budget.rateAttempts,
 			budget.frameYield, budget.rateYield, geometryDepth, budget.selectionMS, ( SysTime() - frameStart ) * 1000,
