@@ -491,9 +491,14 @@ local function drawNativeChunks( translucent )
 	local frustum = not MC.MeshFrustumCull or MC.MeshFrustumCull:GetBool()
 	local adapter = MC.GetWorldAdapter and MC.GetWorldAdapter() or nil
 	local horizontalDistance = adapter and isfunction( adapter.ChunkDrawDistanceVisible ) or false
-	local nativeMaterial = MC.NativeChunkMaterial or MC.CurrentChunkMaterial
-	local material = nativeMaterial and nativeMaterial( translucent )
-		or ( translucent and MC.MaterialTranslucent or MC.Material )
+	local material
+	if MC.ResolveChunkMaterial then
+		material = MC.ResolveChunkMaterial( translucent, true )
+	else
+		local nativeMaterial = MC.NativeChunkMaterial or MC.CurrentChunkMaterial
+		material = nativeMaterial and nativeMaterial( translucent )
+			or ( translucent and MC.MaterialTranslucent or MC.Material )
+	end
 	local isGpuLightTexture = MC.IsGpuLightTextureMaterial and MC.IsGpuLightTextureMaterial( material )
 		or material == MC.MaterialGpuLightTexture
 
@@ -558,8 +563,13 @@ local function drawAllChunks( store, drawFn )
 		return
 	end
 	updateCullState()
-	local material = MC.CurrentChunkMaterial and MC.CurrentChunkMaterial( translucent )
-		or ( translucent and MC.MaterialTranslucent or MC.Material )
+	local material
+	if MC.ResolveChunkMaterial then
+		material = MC.ResolveChunkMaterial( translucent, false )
+	else
+		material = MC.CurrentChunkMaterial and MC.CurrentChunkMaterial( translucent )
+			or ( translucent and MC.MaterialTranslucent or MC.Material )
+	end
 	local isGpuLightTexture = MC.IsGpuLightTextureMaterial and MC.IsGpuLightTextureMaterial( material )
 		or material == MC.MaterialGpuLightTexture
 	local setCullMode = applyPassState( not translucent )

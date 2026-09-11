@@ -3,9 +3,9 @@
 -- Native active: the DLL owns the procedural texture, stable slots and upload
 -- barrier. Lua only asks for the slot encoded into diagnostics/fallback meshes.
 -- Native inactive or absent: this file owns an equivalent 4096x4096 RT. There
--- is no LRU, no indirection table and no per-frame bake budget. A Lua mesh build
--- calls PrepareGpuChunkLightTexture(), which finishes the complete tile before
--- the mesh is committed.
+-- is no LRU or indirection table. PrepareGpuChunkLightTexture() finishes the
+-- complete tile before a new mesh is committed. Full-world invalidations keep
+-- live slots and refresh their tiles under the shared Lua mesh frame budget.
 MC = MC or {}
 
 local ATLAS_NAME = "mc_gpu_chunk_light_atlas_lua_packed1"
@@ -24,6 +24,8 @@ MC.GpuChunkLightDirtyCells = MC.GpuChunkLightDirtyCells or {}
 MC.GpuChunkLightDirtyChunks = MC.GpuChunkLightDirtyChunks or {}
 
 local atlasRT
+local uploadMaterial
+local uploadToneScale
 local atlasInitialized = false
 local materialsBoundTo = nil
 local slotByKey = {}
@@ -39,6 +41,9 @@ local statsUploadRects = 0
 local statsUploadPixels = 0
 local statsFullTileBakes = 0
 local statsPartialTileBakes = 0
+local statsRefreshMS = 0
+local statsLastRefreshMS = 0
+local statsLastRefreshTiles = 0
 
 local function resetAllocator()
 	slotByKey = {}
@@ -62,8 +67,8 @@ function MC.UsingGpuLightTexture()
 		and MC.MeshGpuShader
 		and MC.MeshGpuShader.GetBool
 		and MC.MeshGpuShader:GetBool() == true
-		and MC.MaterialGpuLightTexture
-		and not MC.MaterialGpuLightTexture:IsError()
+		and MC.GpuLightTextureMaterialsReady ~= nil
+		and MC.GpuLightTextureMaterialsReady()
 end
 
 local function nativeBackend()
@@ -282,30 +287,88 @@ local function appendRect( rects, x, y, width, height, r, g, b, a )
 	rects[n + 5], rects[n + 6], rects[n + 7], rects[n + 8] = r, g, b, a
 end
 
--- A packed texel uses all four channels as data. The fast path therefore
--- forces ONE/ZERO blending: surface.DrawRect writes RGBA bytes instead of
--- treating the packed alpha byte as opacity. One RT bind per tile replaces
--- thousands of viewport PushRenderTarget calls. If OverrideBlend is missing,
--- the exact render.Clear path remains a fully functional (slower) fallback.
+local function dataUploadMaterial()
+	if uploadMaterial then return uploadMaterial end
+	if not CreateMaterial then return nil end
+	local material = CreateMaterial( "mc_gpu_light_data_upload_linear1", "UnlitGeneric", {
+		["$basetexture"] = "vgui/white",
+		["$vertexcolor"] = 1,
+		["$vertexalpha"] = 1,
+		["$ignorez"] = 1,
+		["$nofog"] = 1,
+		["$nocull"] = 1,
+		["$no_fullbright"] = 1,
+		["$gammacolorread"] = 1,
+		["$linearwrite"] = 1,
+	} )
+	if not material or material:IsError() then return nil end
+	uploadMaterial = material
+	return material
+end
+
+local function drawAtlasRects( rects, material )
+	-- DrawRect's default VGUI material converts vertex RGB with pow(2.2),
+	-- then applies hardware sRGB encoding. That round trip changes packed
+	-- bytes (but not alpha), corrupting both light nibbles at three z phases.
+	-- The linear material bypasses both conversions; exposure is neutralized
+	-- by the caller because UnlitGeneric still applies tone mapping.
+	surface.SetMaterial( material )
+	render.OverrideAlphaWriteEnable( true, true )
+	render.OverrideBlend( true,
+		BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD,
+		BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD )
+	local hasZeroAlpha = false
+	for i = 1, #rects, 8 do
+		local alpha = rects[i + 7]
+		if alpha == 0 then
+			hasZeroAlpha = true
+		else
+			surface.SetDrawColor( rects[i + 4], rects[i + 5], rects[i + 6], alpha )
+			surface.DrawTexturedRect( rects[i], rects[i + 1], rects[i + 2], rects[i + 3] )
+		end
+	end
+	if not hasZeroAlpha then return end
+
+	-- Surface discards alpha-zero draws before blending. Submit opaque RGB
+	-- instead and force the stored alpha to zero with ZERO/ZERO. The rectangles
+	-- do not overlap, so a second pass avoids per-rectangle blend changes.
+	render.OverrideBlend( true,
+		BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD,
+		BLEND_ZERO, BLEND_ZERO, BLENDFUNC_ADD )
+	for i = 1, #rects, 8 do
+		if rects[i + 7] == 0 then
+			surface.SetDrawColor( rects[i + 4], rects[i + 5], rects[i + 6], 255 )
+			surface.DrawTexturedRect( rects[i], rects[i + 1], rects[i + 2], rects[i + 3] )
+		end
+	end
+end
+
+-- All four channels are light data, including alpha. Keep one RT bind per
+-- tile, bypass color transfer/exposure, and replace all four byte channels.
+-- Without the required controls, render.Clear is the exact, slower fallback.
 local function uploadRects( rects )
 	if not rects or #rects == 0 then return true end
 	local fast = render and render.PushRenderTarget and render.OverrideBlend
+		and render.OverrideAlphaWriteEnable
+		and render.GetToneMappingScaleLinear and render.SetToneMappingScaleLinear and Vector
 		and cam and cam.Start2D and cam.End2D
-		and surface and surface.SetDrawColor and surface.DrawRect
+		and surface and surface.SetDrawColor and surface.SetMaterial and surface.DrawTexturedRect
 		and BLEND_ONE ~= nil and BLEND_ZERO ~= nil and BLENDFUNC_ADD ~= nil
+	local material = fast and dataUploadMaterial() or nil
+	fast = fast and material ~= nil
 	if fast then
+		local oldToneScale = render.GetToneMappingScaleLinear()
+		uploadToneScale = uploadToneScale or Vector( 1, 1, 1 )
 		render.PushRenderTarget( atlasRT )
 			cam.Start2D()
-				render.OverrideBlend( true,
-					BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD,
-					BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD )
-				for i = 1, #rects, 8 do
-					surface.SetDrawColor( rects[i + 4], rects[i + 5], rects[i + 6], rects[i + 7] )
-					surface.DrawRect( rects[i], rects[i + 1], rects[i + 2], rects[i + 3] )
-				end
+				render.SetToneMappingScaleLinear( uploadToneScale )
+				local ok, err = pcall( drawAtlasRects, rects, material )
 				render.OverrideBlend( false )
+				render.OverrideAlphaWriteEnable( false )
+				render.SetToneMappingScaleLinear( oldToneScale )
 			cam.End2D()
 		render.PopRenderTarget()
+		if not ok then error( err, 0 ) end
 	else
 		for i = 1, #rects, 8 do
 			clearAtlasRect(
@@ -460,7 +523,16 @@ function MC.GetGpuChunkLightSlot( key )
 end
 
 local function newDirtyBatch()
-	return { owners = {}, ownerSeen = {}, chunkSeen = {}, chunks = 0, pixels = 0, firstKey = nil }
+	return {
+		owners = {}, ownerSeen = {}, chunkSeen = {}, animationSeen = {},
+		chunks = 0, pixels = 0, firstKey = nil, native = nativeBackend() ~= nil,
+	}
+end
+
+local function notifyAnimationChunk( batch, key )
+	if batch.animationSeen[key] then return end
+	batch.animationSeen[key] = true
+	if MC.MarkBlockAnimationLightDirty then MC.MarkBlockAnimationLightDirty( key ) end
 end
 
 local function addOwnerToBatch( batch, key, owner )
@@ -478,6 +550,8 @@ end
 
 local function markWholeKeyIntoBatch( batch, key )
 	if not key then return false end
+	notifyAnimationChunk( batch, key )
+	if batch.native then return false end
 	local owner = slotByKey[key]
 	-- An unassigned chunk will receive a complete current-state bake when its
 	-- mesh is first built, so there is no stale tile to update yet.
@@ -525,10 +599,13 @@ local function markWorldCellIntoBatch( batch, bx, by, bz )
 		for dy = dy0, dy1 do
 			for dx = dx0, dx1 do
 				local key = MC.ChunkKey( cx + dx, cy + dy, cz + dz )
-				local owner = slotByKey[key]
-				local chunk = owner and chunkForKey( key ) or nil
-				if chunk and markPixelIntoBatch( batch, key, owner,
-					packedPixelForWorldCell( chunk, bx, by, bz ) ) then marked = marked + 1 end
+				notifyAnimationChunk( batch, key )
+				if not batch.native then
+					local owner = slotByKey[key]
+					local chunk = owner and chunkForKey( key ) or nil
+					if chunk and markPixelIntoBatch( batch, key, owner,
+						packedPixelForWorldCell( chunk, bx, by, bz ) ) then marked = marked + 1 end
+				end
 			end
 		end
 	end
@@ -579,38 +656,36 @@ local function flushDirtyBatch( batch )
 end
 
 local function refreshLuaKeySet( keys )
-	if nativeBackend() then return 0 end
 	local batch = newDirtyBatch()
 	for key in pairs( keys or {} ) do markWholeKeyIntoBatch( batch, key ) end
 	return flushDirtyBatch( batch )
 end
 
 function MC.MarkGpuChunkLightTextureDirty( key )
-	if nativeBackend() then return false end
 	local batch = newDirtyBatch()
 	markWholeKeyIntoBatch( batch, key )
 	return flushDirtyBatch( batch ) > 0
 end
 
 function MC.MarkGpuChunkLightTextureDirtyCell( bx, by, bz )
-	if nativeBackend() then return false end
 	local batch = newDirtyBatch()
 	local marked = markWorldCellIntoBatch( batch, bx, by, bz )
 	flushDirtyBatch( batch )
+	if batch.native then return false end
 	return marked > 0, batch.firstKey, marked
 end
 
 function MC.MarkGpuChunkLightTextureDirtyNative( cx, cy, cz, dirtyBits )
-	if nativeBackend() then return 0, 0 end
 	local batch = newDirtyBatch()
 	local markedCells = markNativeMaskIntoBatch( batch,
 		math.floor( tonumber( cx ) or 0 ), math.floor( tonumber( cy ) or 0 ), math.floor( tonumber( cz ) or 0 ), dirtyBits )
 	flushDirtyBatch( batch )
+	if batch.native then return 0, 0 end
 	return markedCells, batch.chunks
 end
 
 function MC.MarkGpuChunkLightTextureDirtyForChangedCells( changed )
-	if nativeBackend() or type( changed ) ~= "table" then return 0 end
+	if type( changed ) ~= "table" then return 0 end
 	local batch = newDirtyBatch()
 	local count = math.floor( tonumber( changed.count ) or 0 )
 	if count > 0 and type( changed.x ) == "table"
@@ -629,7 +704,7 @@ function MC.MarkGpuChunkLightTextureDirtyForChangedCells( changed )
 end
 
 function MC.MarkGpuChunkLightTextureDirtyChunkList( changed )
-	if nativeBackend() or type( changed ) ~= "table" then return 0 end
+	if type( changed ) ~= "table" then return 0 end
 	local batch = newDirtyBatch()
 	for i = 1, #changed, 4 do
 		local cx, cy, cz = tonumber( changed[i] ), tonumber( changed[i + 1] ), tonumber( changed[i + 2] )
@@ -641,18 +716,44 @@ function MC.MarkGpuChunkLightTextureDirtyChunkList( changed )
 end
 
 function MC.QueueAllGpuChunkLightTextureRefresh()
-	local keys = {}
-	for key in pairs( slotByKey ) do keys[key] = true end
-	return refreshLuaKeySet( keys )
+	if MC.MarkAllBlockAnimationLightDirty then MC.MarkAllBlockAnimationLightDirty() end
+	local batch = newDirtyBatch()
+	for key in pairs( slotByKey ) do markWholeKeyIntoBatch( batch, key ) end
+	return batch.chunks
+end
+
+function MC.ProcessGpuChunkLightTextureRefresh( deadline )
+	statsLastRefreshMS, statsLastRefreshTiles = 0, 0
+	if nativeBackend() or ( MC.LightingBulkLoadDepth or 0 ) > 0
+	or not MC.UsingGpuLightTexture() or next( MC.GpuChunkLightDirtyChunks ) == nil then return 0 end
+	local started = SysTime()
+	local attempts = 0
+	for key in pairs( MC.GpuChunkLightDirtyChunks ) do
+		if deadline and SysTime() >= deadline then break end
+		local owner = slotByKey[key]
+		if owner and chunkForKey( key ) then
+			attempts = attempts + 1
+			if not refreshLuaOwners( { { key = key, owner = owner } } ) then break end
+			statsLastRefreshTiles = statsLastRefreshTiles + 1
+		else
+			MC.GpuChunkLightDirtyCells[key] = nil
+			MC.GpuChunkLightDirtyChunks[key] = nil
+		end
+	end
+	statsLastRefreshMS = ( SysTime() - started ) * 1000
+	statsRefreshMS = statsRefreshMS + statsLastRefreshMS
+	return attempts
 end
 
 function MC.MarkGpuChunkLightTextureDirtyKeys( keys )
-	if nativeBackend() or type( keys ) ~= "table" then return 0 end
+	if type( keys ) ~= "table" then return 0 end
 	return refreshLuaKeySet( keys )
 end
 
 function MC.RequestGpuChunkLightTextureFullFlush()
-	return MC.QueueAllGpuChunkLightTextureRefresh()
+	local queued = MC.QueueAllGpuChunkLightTextureRefresh()
+	MC.ProcessGpuChunkLightTextureRefresh()
+	return queued
 end
 
 function MC.RefreshGpuChunkLightTexture( key )
@@ -702,9 +803,9 @@ function MC.ClearAllGpuChunkLightTextures()
 		resetAllocator()
 		atlasInitialized = false
 		materialsBoundTo = nil
+		MC.GpuChunkLightDirtyCells = {}
+		MC.GpuChunkLightDirtyChunks = {}
 	end
-	MC.GpuChunkLightDirtyCells = {}
-	MC.GpuChunkLightDirtyChunks = {}
 	return true
 end
 
@@ -712,6 +813,11 @@ local function nativeStats()
 	local backend = nativeBackend()
 	local stats = backend and backend.GetLightAtlasStats and backend.GetLightAtlasStats() or nil
 	return istable( stats ) and stats or nil
+end
+
+-- Lua counters only. Refresh time covers the deferred queue, not inline bakes.
+function MC.GpuLightAtlasWorkCounters()
+	return statsBakes, statsRefreshMS, statsUploadPixels
 end
 
 function MC.GpuLightAtlasStats()
@@ -728,6 +834,8 @@ function MC.GpuLightAtlasStats()
 	end
 	local used = 0
 	for _ in pairs( slotByKey ) do used = used + 1 end
+	local pending = 0
+	for _ in pairs( MC.GpuChunkLightDirtyChunks ) do pending = pending + 1 end
 	return {
 		atlasSize = ATLAS_SIZE,
 		tileWidth = TILE_WIDTH,
@@ -752,6 +860,10 @@ function MC.GpuLightAtlasStats()
 		uploadPixels = statsUploadPixels,
 		fullTileBakes = statsFullTileBakes,
 		partialTileBakes = statsPartialTileBakes,
+		pendingRefresh = pending,
+		refreshMS = statsRefreshMS,
+		lastRefreshMS = statsLastRefreshMS,
+		lastRefreshTiles = statsLastRefreshTiles,
 	}
 end
 
@@ -765,6 +877,7 @@ function MC.GpuLightAtlasDebug()
 		stableSlots = true,
 		indirection = false,
 		frameFlush = false,
+		budgetedRefresh = true,
 	}
 end
 

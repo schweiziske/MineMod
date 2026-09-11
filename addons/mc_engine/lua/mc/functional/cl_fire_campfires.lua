@@ -7,7 +7,8 @@
 
 MC = MC or {}
 
-local BS = MC.BS or 36.5
+local Coords = MC.API.Coords
+local BS = Coords.BlockSize()
 local TICK_SECONDS = 1 / 20
 local REFRESH_INTERVAL = 0.25
 local SAMPLE_COUNT_PER_RADIUS = 667
@@ -37,6 +38,8 @@ local EntriesByChunk = {}
 local ScannedChunkVersions = {}
 local SpriteMaterials = {}
 local DynamicParticles = {}
+local RenderPosition = Vector()
+local RenderColor = Color( 255, 255, 255, 255 )
 local LastRefresh = 0
 local LastParticleTick = 0
 local LastParticleStepAt = 0
@@ -133,11 +136,11 @@ local function spriteMaterial( name )
 end
 
 local function cellMin( bx, by, bz )
-	return MC.CellRenderMin and MC.CellRenderMin( bx, by, bz ) or MC.CellWorldMin( bx, by, bz )
+	return Coords.CellRenderMin( bx, by, bz )
 end
 
 local function cellCenter( bx, by, bz )
-	return MC.CellRenderCenter and MC.CellRenderCenter( bx, by, bz ) or MC.CellWorldCenter( bx, by, bz )
+	return Coords.CellRenderCenter( bx, by, bz )
 end
 
 -- Particle's six-argument constructor adds a normalized random velocity before
@@ -201,10 +204,18 @@ local function spawnLavaSpark( pos )
 	}
 end
 
+local function advanceParticle( particle )
+	local pos, vel = particle.pos, particle.vel
+	pos.x = pos.x + vel.x * TICK_SECONDS
+	pos.y = pos.y + vel.y * TICK_SECONDS
+	pos.z = pos.z + vel.z * TICK_SECONDS
+end
+
 local function tickDynamicParticles()
 	for index = #DynamicParticles, 1, -1 do
 		local particle = DynamicParticles[index]
-		particle.previousPos = Vector( particle.pos.x, particle.pos.y, particle.pos.z )
+		particle.previousPos = particle.previousPos or Vector()
+		particle.previousPos:Set( particle.pos )
 		particle.previousAge = particle.age
 		particle.previousAlpha = particle.alpha
 		particle.age = particle.age + 1
@@ -216,21 +227,21 @@ local function tickDynamicParticles()
 			particle.vel.y = particle.vel.y + BS * math.Rand( 0, 1 ) / 5000
 				* ( math.random( 2 ) == 1 and -1 or 1 ) * 20
 			particle.vel.z = particle.vel.z - BS * 3e-6 * 20 * 20 * TICK_SECONDS
-			particle.pos:Add( particle.vel * TICK_SECONDS )
+			advanceParticle( particle )
 			if particle.age >= particle.lifetime - 60 and particle.alpha > 0.01 then
 				particle.alpha = particle.alpha - 0.015
 			end
 		elseif particle.kind == "lava" then
 			particle.vel.z = particle.vel.z - BS * 0.03 * 20 * 20 * TICK_SECONDS
 			particle.vel:Mul( 0.999 )
-			particle.pos:Add( particle.vel * TICK_SECONDS )
+			advanceParticle( particle )
 			if math.Rand( 0, 1 ) > particle.age / particle.lifetime then
 				spawnSmallSmoke( particle.pos, particle.vel )
 			end
 		else
 			particle.vel.z = particle.vel.z + BS * 0.004 * 20 * 20 * TICK_SECONDS
 			particle.vel:Mul( 0.96 )
-			particle.pos:Add( particle.vel * TICK_SECONDS )
+			advanceParticle( particle )
 		end
 	end
 end
@@ -483,8 +494,12 @@ hook.Add( "PostDrawTranslucentRenderables", "mc_campfire_dynamic_particles", fun
 			colour = particle.colour or 0
 		end
 		render.SetMaterial( material )
-		local renderPos = particle.previousPos and LerpVector( partialTick, particle.previousPos, particle.pos ) or particle.pos
-		render.DrawSprite( renderPos, size, size, Color( colour, colour, colour, alpha ) )
+		local previous, pos = particle.previousPos or particle.pos, particle.pos
+		RenderPosition.x = previous.x + ( pos.x - previous.x ) * partialTick
+		RenderPosition.y = previous.y + ( pos.y - previous.y ) * partialTick
+		RenderPosition.z = previous.z + ( pos.z - previous.z ) * partialTick
+		RenderColor.r, RenderColor.g, RenderColor.b, RenderColor.a = colour, colour, colour, alpha
+		render.DrawSprite( RenderPosition, size, size, RenderColor )
 	end
 end )
 

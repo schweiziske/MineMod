@@ -1418,6 +1418,7 @@ local function adoptNativeChunkStorage( chunk )
 	chunk.chunkBackend = "native"
 	chunk.stateSections = nil
 	chunk.stateStorageMigrated = true
+	chunk.renderSectionIndexStorage = nil
 	chunk.renderSectionBlocks = nil
 	chunk.renderSectionBlocksReady = nil
 	chunk.renderSectionIndexVersion = nil

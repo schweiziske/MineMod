@@ -182,16 +182,14 @@ function MC.NoteSkyColumnBlockChange( bx, by, bz, oldOpacity, newOpacity )
 	end
 end
 
-local function markChunkColumnDirty( cx, cy, exceptCz, dirtyKeys )
+local function markChunkColumnDirty( cx, cy, dirtyKeys )
 	if not ( MC.MarkGpuChunkLightTextureDirty and MC.ChunkKey ) then return end
 	local list = chunkColumns and chunkColumns[chunkColKey( cx, cy )] or nil
 	if not list then return end
 	for cz in pairs( list ) do
-		if cz ~= exceptCz then
-			local key = MC.ChunkKey( cx, cy, cz )
-			if dirtyKeys then dirtyKeys[key] = true
-			else MC.MarkGpuChunkLightTextureDirty( key ) end
-		end
+		local key = MC.ChunkKey( cx, cy, cz )
+		if dirtyKeys then dirtyKeys[key] = true
+		else MC.MarkGpuChunkLightTextureDirty( key ) end
 	end
 end
 
@@ -208,7 +206,8 @@ local function invalidateChunkFootprint( cx, cy, cz )
 	local dirtyKeys = {}
 	for dcx = -1, 1 do
 		for dcy = -1, 1 do
-			markChunkColumnDirty( cx + dcx, cy + dcy, ( dcx == 0 and dcy == 0 ) and cz or nil, dirtyKeys )
+			-- A replacement can reuse this chunk's atlas slot too.
+			markChunkColumnDirty( cx + dcx, cy + dcy, dirtyKeys )
 		end
 	end
 	if next( dirtyKeys ) then

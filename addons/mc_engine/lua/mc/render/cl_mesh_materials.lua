@@ -5,6 +5,20 @@ local RM = MC.RenderMesh
 local MC_LIGHT_STYLE_SHADER = RM.MC_LIGHT_STYLE_SHADER
 local MC_LIGHT_STYLE_GPU_SHADER = RM.MC_LIGHT_STYLE_GPU_SHADER
 local MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE = RM.MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE
+local ShaderRegistry = MC.RenderShaderRegistry
+
+local function shaderName( profile, variant, field, fallback )
+	local activePass = variant == "translucent" and "translucent" or "opaque"
+	local active = ShaderRegistry and ShaderRegistry.ActiveVariant
+		and ShaderRegistry.ActiveVariant( activePass ) or nil
+	if active and active.profile == profile
+		and ( active.variant == variant or variant == "vanilla" ) then
+		return active[field] or fallback
+	end
+	local entry = ShaderRegistry and ShaderRegistry.Get
+		and ShaderRegistry.Get( profile, variant ) or nil
+	return entry and entry[field] or fallback
+end
 
 local function gpuLightMaterialParams( params )
 	-- The packed atlas stores arbitrary bytes, so sampler1 must bypass sRGB
@@ -449,8 +463,8 @@ do
 	local baseTex, baseName = atlasBaseTexture()
 	if baseTex and baseName and baseName ~= "" and CreateMaterial then
 		local mat = CreateMaterial( "mc_atlas_gpu_payload8_centroid_vface_opaque", "screenspace_general", {
-			["$pixshader"] = "mc_gpu_chunk_payload4_vface_ps30",
-			["$vertexshader"] = "mc_gpu_chunk_payload_vs30",
+				["$pixshader"] = shaderName( "mc_payload", "opaque", "pixel", "mc_gpu_chunk_payload4_vface_ps30" ),
+				["$vertexshader"] = shaderName( "mc_payload", "opaque", "vertex", "mc_gpu_chunk_payload_vs30" ),
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,
 			["$vertexcolor"] = 1,
@@ -471,8 +485,8 @@ do
 		-- the chunk-light atlas.  Keeping one immutable Native payload avoids a
 		-- whole-world mesh rebuild (and mixed old/new payloads) on every toggle.
 		local nativeSlotMat = CreateMaterial( "mc_atlas_native_slot_payload1_centroid_vface_opaque", "screenspace_general", {
-			["$pixshader"] = "mc_gpu_chunk_payload4_vface_ps30",
-			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
+				["$pixshader"] = shaderName( "mc_payload", "opaque", "pixel", "mc_gpu_chunk_payload4_vface_ps30" ),
+				["$vertexshader"] = shaderName( "mc_lighttex", "vanilla", "vertex", "mc_gpu_chunk_lighttex_vs30" ),
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,
 			["$vertexcolor"] = 1,
@@ -674,7 +688,7 @@ do
 			fastMat:SetTexture( "$basetexture", baseTex )
 			MC.MaterialGpuLightTextureFast = fastMat
 		end
-		-- Vanilla Minecraft variant ("mc_light_style vanilla"): one global
+		-- L1 vanilla base material: one global
 		-- lightmap lookup x directional face shade x vertex AO, the exact 26.2
 		-- terrain composition. The whole day/night look lives in the 16x16
 		-- lightmap texture (rebuilt per tick from the vanilla lightmap.fsh
@@ -683,9 +697,9 @@ do
 		-- never define (or receive via SetFloat/SetMatrix) any $c*_,
 		-- $viewprojmat, $invviewprojmat or $eyepos parameters 鈥?the engine
 		-- would upload those registers over compiler-placed literal constants.
-		local vanillaMat = CreateMaterial( "mc_atlas_gpu_lighttex_mcvanilla4_centroid_vface_opaque", "screenspace_general_8tex", gpuLightMaterialParams {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_mcvanilla4_vface_ps30",
-			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
+		local vanillaMat = CreateMaterial( "mc_atlas_gpu_lighttex_mcvanilla5_centroid_vface_opaque", "screenspace_general_8tex", gpuLightMaterialParams {
+			["$pixshader"] = shaderName( "mc_lighttex", "vanilla", "pixel", "mc_gpu_chunk_lighttex_mcvanilla5_vface_ps30" ),
+			["$vertexshader"] = shaderName( "mc_lighttex", "vanilla", "vertex", "mc_gpu_chunk_lighttex_vs30" ),
 			["$basetexture"] = baseName,
 			["$x360appchooser"] = 1,
 			["$vertexcolor"] = 1,
@@ -713,8 +727,8 @@ do
 		-- Both lighting samplers stay white, so mc_light_texture=0 performs no
 		-- per-chunk light lookup while retaining face shade and block tint.
 		local nativeSlotTransMat = CreateMaterial( "mc_atlas_native_slot_payload1_centroid_vface_translucent", "screenspace_general_8tex", gpuLightMaterialParams {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_mcvanilla_trans4_vface_ps30",
-			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
+				["$pixshader"] = shaderName( "mc_lighttex", "translucent", "pixel", "mc_gpu_chunk_lighttex_mcvanilla_trans5_vface_ps30" ),
+				["$vertexshader"] = shaderName( "mc_lighttex", "translucent", "vertex", "mc_gpu_chunk_lighttex_vs30" ),
 			["$basetexture"] = transTexName,
 			["$texture2"] = "vgui/white",
 			["$x360appchooser"] = 1,
@@ -787,12 +801,11 @@ do
 			MC.MaterialGpuLightTextureTranslucentPpFix = transPpFixMat
 		end
 		-- Vanilla translucent variant: same register-free vanilla shader over
-		-- the translucent atlas, real alpha blending. Selected instead of the
-		-- fancy translucent material while mc_light_style is "vanilla" so
-		-- glass/water follow the vanilla composition (no shadow sampling).
-		local vanillaTransMat = CreateMaterial( "mc_atlas_gpu_lighttex_mcvanilla_trans4_centroid_vface", "screenspace_general_8tex", gpuLightMaterialParams {
-			["$pixshader"] = "mc_gpu_chunk_lighttex_mcvanilla_trans4_vface_ps30",
-			["$vertexshader"] = "mc_gpu_chunk_lighttex_vs30",
+		-- the translucent atlas, real alpha blending. Both L1 passes use the
+		-- vanilla composition without shadow sampling.
+		local vanillaTransMat = CreateMaterial( "mc_atlas_gpu_lighttex_mcvanilla_trans5_centroid_vface", "screenspace_general_8tex", gpuLightMaterialParams {
+			["$pixshader"] = shaderName( "mc_lighttex", "translucent", "pixel", "mc_gpu_chunk_lighttex_mcvanilla_trans5_vface_ps30" ),
+			["$vertexshader"] = shaderName( "mc_lighttex", "translucent", "vertex", "mc_gpu_chunk_lighttex_vs30" ),
 			["$basetexture"] = transTexName,
 			["$x360appchooser"] = 1,
 			["$vertexcolor"] = 1,
@@ -828,65 +841,30 @@ function MC.IsGpuLightTextureMaterial( material )
 	return false
 end
 
--- Look/style predicate shared with the shadow map / heightfield passes:
--- while the vanilla material owns the look there is no shadow consumer, so
--- those passes skip their per-frame RT work entirely.
-local function lightStyleName()
-	if MC.LightStyleName then return MC.LightStyleName() end
-	return "fancy"
+function MC.GpuLightTextureMaterialsReady()
+	local opaque = MC.MaterialGpuLightTextureVanilla
+	local translucent = MC.MaterialGpuLightTextureVanillaTranslucent
+	return opaque ~= nil and not opaque:IsError()
+		and translucent ~= nil and not translucent:IsError()
 end
 
-local function vanillaLightActive()
-	if lightStyleName() ~= "vanilla" then return false end
-	return MC.MaterialGpuLightTextureVanilla ~= nil and not MC.MaterialGpuLightTextureVanilla:IsError()
-end
-
-local function shadowPpFixActive()
-	local cv = MC.MeshShadowFaceFix
-	return cv and cv.GetBool and cv:GetBool() == true
+local function shaderProfileUsesGpuLightTexture()
+	local cv = MC.MeshGpuLightTexture
+	if not ( cv and cv.GetBool and cv:GetBool() ) then return false end
+	if not ( MC.MeshGpuShader and MC.MeshGpuShader.GetBool and MC.MeshGpuShader:GetBool() ) then return false end
+	-- Atlas updates bypass CPU recoloring globally. Require both passes so a
+	-- missing translucent shader cannot leave CPU-colored glass unrefreshed.
+	return MC.GpuLightTextureMaterialsReady()
 end
 
 function MC.UsingVanillaLightMaterial()
-	return vanillaLightActive()
+	return shaderProfileUsesGpuLightTexture()
 end
 
 local function activeGpuLightTextureMaterial()
-	-- mc_light_style picks the look; the shadow-free looks (fast/vanilla)
-	-- also bypass the height material since it exists only to render shadows.
-	local style = lightStyleName()
-	if MC.MeshShadowMapMode and MC.MeshShadowMapMode() == "linear" then
-		if style == "fancy" and MC.MaterialGpuLightTextureFancyLinearDebug and not MC.MaterialGpuLightTextureFancyLinearDebug:IsError() then return MC.MaterialGpuLightTextureFancyLinearDebug end
-		if MC.MaterialGpuLightTextureLinearDebug and not MC.MaterialGpuLightTextureLinearDebug:IsError() then return MC.MaterialGpuLightTextureLinearDebug end
-	end
-	if style == "fast"
-		and MC.MaterialGpuLightTextureFast and not MC.MaterialGpuLightTextureFast:IsError() then
-		return MC.MaterialGpuLightTextureFast
-	end
-	if vanillaLightActive() then
+	if shaderProfileUsesGpuLightTexture() then
 		return MC.MaterialGpuLightTextureVanilla
 	end
-	-- Height shadow mode owns its own shader/material pair; it only makes
-	-- sense while the shadow system is enabled at all.
-	local shadowCv = MC.MeshShadowMap
-	if shadowCv and shadowCv.GetBool and shadowCv:GetBool()
-		and MC.MeshShadowMapMode and MC.MeshShadowMapMode() == "height"
-		and MC.MaterialGpuLightTextureHeight and not MC.MaterialGpuLightTextureHeight:IsError() then
-		return MC.MaterialGpuLightTextureHeight
-	end
-	if style == "fancy"
-		and shadowPpFixActive()
-		and MC.MaterialGpuLightTextureFancyPpFix and not MC.MaterialGpuLightTextureFancyPpFix:IsError() then
-		return MC.MaterialGpuLightTextureFancyPpFix
-	end
-	if style == "fancy"
-		and MC.MaterialGpuLightTextureFancy and not MC.MaterialGpuLightTextureFancy:IsError() then
-		return MC.MaterialGpuLightTextureFancy
-	end
-	if shadowPpFixActive()
-		and MC.MaterialGpuLightTexturePpFix and not MC.MaterialGpuLightTexturePpFix:IsError() then
-		return MC.MaterialGpuLightTexturePpFix
-	end
-	return MC.MaterialGpuLightTexture
 end
 
 local function gpuChunkShaderEnabled()
@@ -900,14 +878,6 @@ function MC.UsingGpuChunkShader()
 	return gpuChunkShaderEnabled() == true
 end
 
-local function shaderProfileUsesGpuLightTexture()
-	local cv = MC.MeshGpuLightTexture
-	if not ( cv and cv.GetBool and cv:GetBool() ) then return false end
-	if not ( MC.MaterialGpuLightTexture and not MC.MaterialGpuLightTexture:IsError() ) then return false end
-	if not ( MC.MeshGpuShader and MC.MeshGpuShader.GetBool and MC.MeshGpuShader:GetBool() ) then return false end
-	return true
-end
-
 function MC.CurrentChunkMaterial( translucent )
 	local profile = RM.CurrentLightProfile and RM.CurrentLightProfile() or nil
 	local chunkMaterial = profile and profile.chunkMaterial
@@ -919,6 +889,26 @@ function MC.CurrentChunkMaterial( translucent )
 	return MC.Material
 end
 
+-- Render ABI bridge used by pass-level draw code. It returns scalar metadata
+-- alongside the already-resolved material and never allocates a descriptor.
+function MC.ResolveChunkMaterial( translucent, native )
+	local material
+	if native and MC.NativeChunkMaterial then
+		material = MC.NativeChunkMaterial( translucent )
+	end
+	if not material then
+		material = MC.CurrentChunkMaterial( translucent )
+	end
+	local materialId, passId
+	local abi = MC.RenderMaterialABI
+	if abi and abi.Resolve then
+		materialId, passId = abi.Resolve( material, translucent == true, false )
+	else
+		materialId, passId = 0, translucent and 3 or 1
+	end
+	return material, materialId, passId
+end
+
 local function shaderProfileUsesGpuPayload()
 	local cv = MC.MeshGpuShader
 	if not ( cv and cv.GetBool and cv:GetBool() ) then return false end
@@ -928,24 +918,9 @@ local function shaderProfileUsesGpuPayload()
 end
 
 local function gpuTranslucentMaterial()
-	if not shaderProfileUsesGpuLightTexture() then return nil end
-	-- Vanilla mode carries its own translucent variant so glass/water keep
-	-- the register-free vanilla composition instead of the shadowed fancy one.
-	if vanillaLightActive() then
-		local vanillaTrans = MC.MaterialGpuLightTextureVanillaTranslucent
-		if vanillaTrans and not vanillaTrans:IsError() then return vanillaTrans end
+	if shaderProfileUsesGpuLightTexture() then
+		return MC.MaterialGpuLightTextureVanillaTranslucent
 	end
-	local mat = MC.MaterialGpuLightTextureTranslucent
-	if MC.MeshShadowMapMode and MC.MeshShadowMapMode() == "linear" then
-		local linear = MC.MaterialGpuLightTextureTranslucentLinearDebug
-		if linear and not linear:IsError() then return linear end
-	end
-	if shadowPpFixActive() then
-		local ppFixMat = MC.MaterialGpuLightTextureTranslucentPpFix
-		if ppFixMat and not ppFixMat:IsError() then return ppFixMat end
-	end
-	if mat and not mat:IsError() then return mat end
-	return nil
 end
 
 -- Native meshes use a different immutable vertex payload from Lua meshes.
@@ -984,9 +959,7 @@ end
 -- same vertex payload (face index + AO) as the opaque GPU materials.
 local function shaderProfileEffectiveStyleForMaterial( material, style )
 	if material ~= nil and shaderProfileUsesGpuLightTexture()
-		and ( material == MC.MaterialGpuLightTextureTranslucent
-			or material == MC.MaterialGpuLightTextureTranslucentPpFix
-			or material == MC.MaterialGpuLightTextureVanillaTranslucent ) then
+		and material == MC.MaterialGpuLightTextureVanillaTranslucent then
 		return shaderProfileGpuPayloadStyle()
 	end
 	return style
@@ -1015,9 +988,9 @@ if cvars and cvars.AddChangeCallback then
 	cvars.AddChangeCallback( "mc_light_shader", function()
 		if MC.MarkAllMeshesDirty then MC.MarkAllMeshesDirty( "gpu_shader_toggle" ) end
 	end, "mc_light_shader_rebuild" )
-	cvars.AddChangeCallback( "mc_shadow_facefix", function()
-		if MC.MarkAllMeshesDirty then MC.MarkAllMeshesDirty( "shadow_ppfix_toggle" ) end
-	end, "mc_shadow_facefix_rebuild" )
+	if cvars.RemoveChangeCallback then
+		cvars.RemoveChangeCallback( "mc_shadow_facefix", "mc_shadow_facefix_rebuild" )
+	end
 end
 
 -- Opaque variant of the atlas for inventory icons. Semi-transparent blocks

@@ -804,9 +804,8 @@ if CLIENT then
 		surface.DrawRect( sw * 0.5 - 1, sh * 0.5 - 1, 2, 2 )
 	end
 
-	hook.Add( "PostDrawTranslucentRenderables", "mc_creative_held_block", function( _, bSky, bSky3D )
-		-- bSky (DF_DRAWSKYBOX) is also true on the main pass on 2D-sky maps; skip only the 3D skybox pass
-		if bSky3D then return end
+	hook.Remove( "PostDrawTranslucentRenderables", "mc_creative_held_block" )
+	hook.Add( "PreDrawViewModels", "mc_creative_held_block", function()
 		local ply = LocalPlayer()
 		if not IsValid( ply ) or not ply:Alive() or ply:ShouldDrawLocalPlayer() then return end
 		local wep = ply:GetActiveWeapon()

@@ -208,6 +208,13 @@ local function gpuLightTexturePayloadColor( faceIndex, alpha, tintCode )
 	return colorFromRGBA( gpuLightTexturePayloadValues( faceIndex, alpha, tintCode ) )
 end
 
+local function gpuLightTextureFaceIndex( id, faceIndex )
+	local block = MC.Blocks[id]
+	-- Face zero selects unshaded, own-cell lighting for inset plant planes.
+	if block and block.shape == "cross" then return 0 end
+	return faceIndex
+end
+
 local function applyBlockTint( r, g, b, tintCode )
 	if not blockTintRGB or not tintCode or tintCode == 0 then return r, g, b end
 	local tr, tg, tb = blockTintRGB( tintCode )
@@ -218,7 +225,7 @@ local function litFaceColorValues( shade, bx, by, bz, id, faceIndex, cn, selfEmi
 	style = style or MC_LIGHT_STYLE_VANILLA
 	local shadeR, shadeG, shadeB, shadeA = shade.r or 255, shade.g or 255, shade.b or 255, shade.a or 255
 	if style == MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE then
-		return gpuLightTexturePayloadValues( faceIndex, shadeA, tintCode )
+		return gpuLightTexturePayloadValues( gpuLightTextureFaceIndex( id, faceIndex ), shadeA, tintCode )
 	end
 	shadeR, shadeG, shadeB = applyBlockTint( shadeR, shadeG, shadeB, tintCode )
 	if not MC.SampleLighting then return shadeR, shadeG, shadeB, shadeA end
@@ -253,7 +260,7 @@ local function litFaceColorMetaValues( meta, style )
 	local faceIndex = meta.faceIndex
 	local tintCode = meta.tintCode or 0
 	if style == MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE then
-		return gpuLightTexturePayloadValues( faceIndex, shadeA, tintCode )
+		return gpuLightTexturePayloadValues( gpuLightTextureFaceIndex( id, faceIndex ), shadeA, tintCode )
 	end
 	shadeR, shadeG, shadeB = applyBlockTint( shadeR, shadeG, shadeB, tintCode )
 	if not MC.SampleLighting then return shadeR, shadeG, shadeB, shadeA end

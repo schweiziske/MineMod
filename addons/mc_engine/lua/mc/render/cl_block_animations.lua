@@ -8,13 +8,14 @@
 -- FluidRenderer. Both paths remain independent of the Lua/native chunk backend.
 
 MC = MC or {}
+MC.BlockAnimationWorkVersion = 1
 
 local RM = MC.RenderMesh or {}
 local C = MC.RenderMeshConstants or {}
-local BS = MC.BS or 36.5
+local VertexBuffer = MC.RenderVertexBuffer
+local LightBuffer = MC.RenderLightBuffer
 local TICK_SECONDS = 1 / 20
 local REFRESH_INTERVAL = 0.25
-local MAX_RENDER_DISTANCE_SQR = ( BS * 96 ) ^ 2
 local TRI = { 1, 3, 2, 1, 4, 3 }
 local WATER_ANIMATIONS = {
 	water_still = true,
@@ -58,14 +59,87 @@ local FACE_NORMALS = {
 
 local Entries = {}
 local EntriesByChunk = {}
+local FluidEntryCounts = {}
 local ScannedChunkVersions = {}
 local MeshCache = {}
 local FluidMeshCache = {}
+local FluidMeshRetryAt = {}
 local MaterialCache = {}
 local FluidMeshesDirty = false
 local LastRefresh = 0
 local LastGeneration = tonumber( MC.StateWorldGeneration ) or 0
 local LastAnimationPack
+local AnimationStats = {
+	builds = 0, modelBuilds = 0, lightRefreshes = 0, uploads = 0, failures = 0,
+	attempts = 0, budgetYields = 0, workMS = 0, scanPasses = 0, scannedChunks = 0, scanMS = 0,
+}
+
+local function blockSize()
+	return MC.API.Coords.BlockSize()
+end
+
+local function destroyFluidRecord( record )
+	if type( record ) ~= "table" then return end
+	for _, batches in pairs( record.meshes ) do
+		for _, batch in ipairs( batches ) do batch.mesh:Destroy() end
+	end
+end
+
+local function releaseEmptyFluidChunk( key )
+	if ( FluidEntryCounts[key] or 0 ) > 0 then return end
+	destroyFluidRecord( FluidMeshCache[key] )
+	FluidMeshCache[key], FluidMeshRetryAt[key] = nil, nil
+end
+
+local function dirtyFluidChunk( key )
+	local record = FluidMeshCache[key]
+	if type( record ) == "table" then
+		record.geometryDirty = true
+	else
+		FluidMeshCache[key] = nil
+	end
+end
+
+local function dirtyFluidNeighbors( chunk )
+	for z = chunk.cz - 1, chunk.cz + 1 do
+		for y = chunk.cy - 1, chunk.cy + 1 do
+			for x = chunk.cx - 1, chunk.cx + 1 do dirtyFluidChunk( MC.ChunkKey( x, y, z ) ) end
+		end
+	end
+end
+
+function MC.MarkBlockAnimationLightDirty( key )
+	local record = FluidMeshCache[key]
+	if type( record ) ~= "table" then return end
+	record.lightDirty = true
+	record.nextLightAtByChannel = nil
+end
+
+function MC.MarkAllBlockAnimationLightDirty()
+	for _, entry in pairs( Entries ) do entry.nextLightAt = 0 end
+	for key in pairs( FluidMeshCache ) do MC.MarkBlockAnimationLightDirty( key ) end
+end
+
+local function uploadAnimationMesh( vertices, existing )
+	local meshObject = existing
+	if not meshObject then
+		local ok, created = MC.Try( "block_animation_mesh", Mesh )
+		if not ok or not created then
+			AnimationStats.failures = AnimationStats.failures + 1
+			if ok then MC.Fault( "block_animation_mesh", "Mesh() returned no object" ) end
+			return nil
+		end
+		meshObject = created
+	end
+	local ok = MC.Try( "block_animation_upload", RM.uploadMeshVertices, meshObject, vertices, nil, false, existing ~= nil )
+	if not ok then
+		AnimationStats.failures = AnimationStats.failures + 1
+		if not existing then meshObject:Destroy() end
+		return nil
+	end
+	AnimationStats.uploads = AnimationStats.uploads + 1
+	return meshObject
+end
 
 local function animationPacks()
 	return MC.GeneratedBlockAnimationsByPack or {}
@@ -105,6 +179,10 @@ local function removeEntry( key )
 	local entry = Entries[key]
 	if not entry then return end
 	Entries[key] = nil
+	if entry.fluidKind then
+		FluidEntryCounts[entry.chunkKey] = ( FluidEntryCounts[entry.chunkKey] or 1 ) - 1
+		releaseEmptyFluidChunk( entry.chunkKey )
+	end
 	local chunkEntries = EntriesByChunk[entry.chunkKey]
 	if chunkEntries then
 		chunkEntries[key] = nil
@@ -115,6 +193,7 @@ end
 local function removeChunkEntries( chunkKey )
 	for key in pairs( EntriesByChunk[chunkKey] or {} ) do Entries[key] = nil end
 	EntriesByChunk[chunkKey] = nil
+	FluidEntryCounts[chunkKey] = nil
 end
 
 local function stateAnimationSignature( stateId, bx, by, bz )
@@ -151,6 +230,8 @@ local function addEntry( bx, by, bz, stateId, hasStateAnimation, visualSignature
 		EntriesByChunk[chunkKey] = EntriesByChunk[chunkKey] or {}
 		EntriesByChunk[chunkKey][key] = true
 	end
+	if entry.fluidKind then FluidEntryCounts[chunkKey] = ( FluidEntryCounts[chunkKey] or 1 ) - 1 end
+	if fluidKind then FluidEntryCounts[chunkKey] = ( FluidEntryCounts[chunkKey] or 0 ) + 1 end
 	entry.stateId = stateId
 	entry.chunkKey = chunkKey
 	entry.hasStateAnimation = hasStateAnimation == true
@@ -160,8 +241,20 @@ local function addEntry( bx, by, bz, stateId, hasStateAnimation, visualSignature
 	return entry
 end
 
+local function updateCellEntry( bx, by, bz, stateId )
+	local hasStateAnimation, visualSignature = stateAnimationSignature( stateId, bx, by, bz )
+	local fluidKind = fluidAnimationKind( stateId )
+	if hasStateAnimation or fluidKind then
+		local entry = addEntry( bx, by, bz, stateId, hasStateAnimation, visualSignature, fluidKind )
+		releaseEmptyFluidChunk( entry.chunkKey )
+	else
+		removeEntry( cellKey( bx, by, bz ) )
+	end
+end
+
 local function scanChunk( key, chunk )
-	if ScannedChunkVersions[key] then FluidMeshesDirty = true end
+	AnimationStats.scannedChunks = AnimationStats.scannedChunks + 1
+	dirtyFluidNeighbors( chunk )
 	removeChunkEntries( key )
 	if MC.ForEachBlockState then
 		MC.ForEachBlockState( chunk, function( bx, by, bz, _, _, _, stateId )
@@ -172,12 +265,14 @@ local function scanChunk( key, chunk )
 			end
 		end )
 	end
+	releaseEmptyFluidChunk( key )
 	ScannedChunkVersions[key] = { chunk = chunk, version = chunk.collisionVersion or 0 }
 end
 
 local function clearEntries()
 	Entries = {}
 	EntriesByChunk = {}
+	FluidEntryCounts = {}
 	ScannedChunkVersions = {}
 end
 
@@ -199,7 +294,9 @@ local function refreshChunks()
 		if current ~= scanned.chunk then
 			removeChunkEntries( key )
 			ScannedChunkVersions[key] = nil
-			FluidMeshesDirty = true
+			dirtyFluidNeighbors( scanned.chunk )
+			destroyFluidRecord( FluidMeshCache[key] )
+			FluidMeshCache[key], FluidMeshRetryAt[key] = nil, nil
 		end
 	end
 	for key, chunk in pairs( MC.World or {} ) do
@@ -217,10 +314,14 @@ local function rotatedUVFlags( u, v, rotation )
 	return u, v
 end
 
-local function quadNormal( points, fallback )
-	local normal = ( points[2] - points[1] ):Cross( points[3] - points[1] )
-	if normal:LengthSqr() <= 0.000001 then return fallback end
-	normal:Normalize()
+local function quadNormal( points, fallback, normal )
+	local ax, ay, az = points[6] - points[1], points[7] - points[2], points[8] - points[3]
+	local bx, by, bz = points[11] - points[1], points[12] - points[2], points[13] - points[3]
+	local x, y, z = ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx
+	local lengthSqr = x * x + y * y + z * z
+	if lengthSqr <= 0.000001 then return fallback end
+	local length = math.sqrt( lengthSqr )
+	normal.x, normal.y, normal.z = x / length, y / length, z / length
 	return normal
 end
 
@@ -228,10 +329,11 @@ local function meshForStateAnimation( stateId, bx, by, bz, animationName, animat
 	local cacheKey = activePackName() .. ":" .. tostring( stateId ) .. ":"
 		.. tostring( visualSignature or 0 ) .. ":" .. tostring( animationName )
 	local cached = MeshCache[cacheKey]
-	if cached ~= nil then return cached ~= false and cached or nil end
+	if cached ~= nil then return cached end
 
-	local vertices = {}
-	MC.VisitStateVisualModels( stateId, bx, by, bz, function( modelId )
+	local vertices, points, normalScratch = VertexBuffer.New(), {}, {}
+	local BS = blockSize()
+	local ok = MC.Try( "block_animation_model", MC.VisitStateVisualModels, stateId, bx, by, bz, function( modelId )
 		local model = MC.StateVisualModelData( modelId )
 		for _, quad in ipairs( model and model.modelQuads or {} ) do
 			local tile = MC.BlockModelSurface( model, quad )
@@ -241,32 +343,34 @@ local function meshForStateAnimation( stateId, bx, by, bz, animationName, animat
 				local v0 = ( uv and tonumber( uv[2] ) or 0 ) / 16
 				local u1 = ( uv and tonumber( uv[3] ) or 16 ) / 16
 				local v1 = ( uv and tonumber( uv[4] ) or 16 ) / 16
-				local points, uvs = {}, {}
 				for index = 1, 4 do
 					local x, y, z, uf, vf = MC.ModelQuadVertex( quad, index )
 					uf, vf = rotatedUVFlags( uf, vf, quad.rot or 0 )
-					points[index] = Vector( x * BS, y * BS, z * BS )
-					uvs[index] = { u0 + ( u1 - u0 ) * uf, v0 + ( v1 - v0 ) * vf }
+					local offset = ( index - 1 ) * 5
+					points[offset + 1], points[offset + 2], points[offset + 3] = x * BS, y * BS, z * BS
+					points[offset + 4], points[offset + 5] = u0 + ( u1 - u0 ) * uf, v0 + ( v1 - v0 ) * vf
 				end
-				local normal = quadNormal( points, FACE_NORMALS[quad.face] or FACE_NORMALS[MC.Face.TOP] )
+				local normal = quadNormal( points, FACE_NORMALS[quad.face] or FACE_NORMALS[MC.Face.TOP], normalScratch )
 				for triangleIndex = 1, 6 do
-					local source = TRI[triangleIndex]
-					vertices[#vertices + 1] = {
-						pos = points[source], normal = normal,
-						u = uvs[source][1], v = uvs[source][2],
-						color = color_white,
-					}
+					local offset = ( TRI[triangleIndex] - 1 ) * 5
+					VertexBuffer.PushValues( vertices, points[offset + 1], points[offset + 2], points[offset + 3],
+						normal, points[offset + 4], points[offset + 5], color_white )
 				end
 			end
 		end
 	end )
-	if #vertices < 3 then
-		MeshCache[cacheKey] = false
+	if not ok then
+		AnimationStats.failures = AnimationStats.failures + 1
 		return nil
 	end
-	local meshObject = Mesh()
-	meshObject:BuildFromTriangles( vertices )
+	if vertices.count < 3 then
+		MeshCache[cacheKey] = false
+		return false
+	end
+	local meshObject = uploadAnimationMesh( vertices )
+	if not meshObject then return nil end
 	MeshCache[cacheKey] = meshObject
+	AnimationStats.modelBuilds = AnimationStats.modelBuilds + 1
 	return meshObject
 end
 
@@ -282,11 +386,10 @@ end
 
 local function fluidMeshesForChunk( chunkKey, animations )
 	local cached = FluidMeshCache[chunkKey]
-	if cached ~= nil then return cached ~= false and cached or nil end
-	if not RM.EmitLiquidBlock then
-		FluidMeshCache[chunkKey] = false
-		return nil
-	end
+	if ( FluidEntryCounts[chunkKey] or 0 ) == 0 then return nil end
+	if cached == false then return nil end
+	if CurTime() < ( FluidMeshRetryAt[chunkKey] or 0 ) then return cached end
+	if cached and ( not cached.geometryDirty or CurTime() < ( cached.retryAt or 0 ) ) then return cached end
 
 	local availableKinds = {}
 	local buckets = {}
@@ -294,12 +397,13 @@ local function fluidMeshesForChunk( chunkKey, animations )
 		local fluid = FLUID_ANIMATIONS[kind]
 		if fluidBlockId( kind ) and animations[fluid.still] and animations[fluid.flow] then
 			availableKinds[#availableKinds + 1] = kind
-			buckets[fluid.still] = { {} }
-			buckets[fluid.flow] = { {} }
+			buckets[fluid.still] = {}
+			buckets[fluid.flow] = {}
 		end
 	end
 	local chunk = MC.GetChunkByKey and MC.GetChunkByKey( chunkKey ) or MC.World and MC.World[chunkKey]
 	if #availableKinds == 0 or not chunk then
+		destroyFluidRecord( cached )
 		FluidMeshCache[chunkKey] = false
 		return nil
 	end
@@ -307,7 +411,14 @@ local function fluidMeshesForChunk( chunkKey, animations )
 	local originBX = ( chunk.cx or 0 ) * ( MC.CS or 16 )
 	local originBY = ( chunk.cy or 0 ) * ( MC.CS or 16 )
 	local originBZ = ( chunk.cz or 0 ) * ( MC.CH or 32 )
-	local vertexLimit = C.VERT_LIMIT or 64998
+	local BS = blockSize()
+	RM.resetMeshLightingSampleCaches()
+	RM.setMeshSampleCacheOrigin( originBX, originBY, originBZ )
+	local vertexLimit = math.max( 3, math.floor( ( C.VERT_LIMIT or 64998 ) / 3 ) * 3 )
+	local samples, copies = LightBuffer.New(), LightBuffer.NewCopyMap()
+	local factory = RM.newLightMetaFactory( function( bx, by, bz )
+		return bx - originBX + ( by - originBY ) * MC.CS + ( bz - originBZ ) * MC.CS * MC.CS
+	end, samples )
 	local context = { fluidCornerHeightCache = {} }
 	context.fluidAnimationResolver = function( _, faceIndex, u, v )
 		-- FluidRenderer uses the still sprite for a motionless top and the
@@ -329,23 +440,29 @@ local function fluidMeshesForChunk( chunkKey, animations )
 		return ( tonumber( u ) or 0 ) / logicalSize,
 			( tonumber( v ) or 0 ) / logicalSize, name
 	end
-	context.push = function( vertex )
-		local batches = buckets[vertex.fluidAnimation]
-		if not batches then return end
-		local vertices = batches[#batches]
-		if #vertices >= vertexLimit then
-			vertices = {}
-			batches[#batches + 1] = vertices
+	context.pushFluidValues = function( name, x, y, z, normal, u, v, color, light )
+		local batches = buckets[name]
+		if not batches then
+			context.failed = true
+			return
 		end
-		vertices[#vertices + 1] = {
-			pos = vertex.pos,
-			normal = vertex.normal,
-			u = vertex.u,
-			v = vertex.v,
-			color = vertex.color or color_white,
-		}
+		local batch = batches[#batches]
+		if not batch or batch.verts.count >= vertexLimit then
+			batch = { verts = VertexBuffer.New(), light = LightBuffer.New() }
+			batches[#batches + 1] = batch
+		end
+		local sample = LightBuffer.CopySample( batch.light, samples, light, copies )
+		if sample <= 0 then
+			context.failed = true
+			return
+		end
+		VertexBuffer.PushValues( batch.verts, x, y, z, normal, u, v, color )
+		batch.light[batch.verts.count] = sample
 	end
-	context.lightMeta = function() return nil end
+	context.push = function()
+		context.failed = true
+	end
+	context.lightMeta = factory.fromCorner
 	-- Animated fluid quads take the CPU vertex-colour path deliberately. The GPU
 	-- payload styles encode light INTO COLOR0, and these vertices need COLOR0 to
 	-- hold a real colour, so they cannot use it. "vanilla" is no longer one of
@@ -353,58 +470,102 @@ local function fluidMeshesForChunk( chunkKey, animations )
 	-- this is its only caller.
 	context.currentEmitLightStyle = function() return RM.MC_LIGHT_STYLE_VANILLA or "vanilla" end
 
-	for entryKey in pairs( EntriesByChunk[chunkKey] or {} ) do
-		local entry = Entries[entryKey]
-		local stateId = entry and MC.GetBlockState and MC.GetBlockState( entry.bx, entry.by, entry.bz ) or 0
-		local kind = entry and fluidAnimationKind( stateId )
-		local fluid = kind and FLUID_ANIMATIONS[kind] or nil
-		local id = kind and fluidBlockId( kind ) or nil
-		if entry and fluid and id and buckets[fluid.still] then
-			local flowX, flowY = 0, 0
-			if MC.LiquidFlowAtCell then
-				flowX, flowY = MC.LiquidFlowAtCell( entry.bx, entry.by, entry.bz, kind )
+	local ok, emitted = MC.Try( "block_animation_emit", function()
+		for entryKey in pairs( EntriesByChunk[chunkKey] or {} ) do
+			local entry = Entries[entryKey]
+			local stateId = entry and MC.GetBlockState and MC.GetBlockState( entry.bx, entry.by, entry.bz ) or 0
+			local kind = entry and fluidAnimationKind( stateId )
+			local fluid = kind and FLUID_ANIMATIONS[kind] or nil
+			local id = kind and fluidBlockId( kind ) or nil
+			if entry and fluid and id and buckets[fluid.still] then
+				local flowX, flowY = 0, 0
+				if MC.LiquidFlowAtCell then
+					flowX, flowY = MC.LiquidFlowAtCell( entry.bx, entry.by, entry.bz, kind )
+				end
+				flowX, flowY = tonumber( flowX ) or 0, tonumber( flowY ) or 0
+				context.currentFluidKind = kind
+				context.flowingTop = math.abs( flowX ) > 0.000001 or math.abs( flowY ) > 0.000001
+				context.currentStateId = stateId
+				LightBuffer.ResetScratch( samples )
+				LightBuffer.ResetCopyMap( copies )
+				local result = RM.EmitLiquidBlock(
+					context, id, 0, entry.bx, entry.by, entry.bz,
+					( entry.bx - originBX ) * BS,
+					( entry.by - originBY ) * BS,
+					( entry.bz - originBZ ) * BS,
+					context.push, context.lightMeta, context.currentEmitLightStyle
+				)
+				if result == false or context.failed then return false end
 			end
-			flowX, flowY = tonumber( flowX ) or 0, tonumber( flowY ) or 0
-			context.currentFluidKind = kind
-			context.flowingTop = math.abs( flowX ) > 0.000001 or math.abs( flowY ) > 0.000001
-			context.currentStateId = stateId
-			RM.EmitLiquidBlock(
-				context, id, 0, entry.bx, entry.by, entry.bz,
-				( entry.bx - originBX ) * BS,
-				( entry.by - originBY ) * BS,
-				( entry.bz - originBZ ) * BS,
-				context.push, context.lightMeta, context.currentEmitLightStyle
-			)
 		end
+		return true
+	end )
+	LightBuffer.ResetCopyMap( copies )
+	if not ok or emitted ~= true then
+		AnimationStats.failures = AnimationStats.failures + 1
+		FluidMeshRetryAt[chunkKey] = CurTime() + REFRESH_INTERVAL
+		if ok then MC.Fault( "block_animation_emit", "incomplete animated fluid geometry or light samples" ) end
+		return cached
 	end
 
-	local meshes = {}
+	local record = { meshes = {} }
 	for name, batches in pairs( buckets ) do
 		local meshList = {}
-		for _, vertices in ipairs( batches ) do
-			if #vertices >= 3 then
-				local meshObject = Mesh()
-				meshObject:BuildFromTriangles( vertices )
-				meshList[#meshList + 1] = meshObject
+		record.meshes[name] = meshList
+		for _, batch in ipairs( batches ) do
+			if batch.verts.count >= 3 then
+				batch.mesh = uploadAnimationMesh( batch.verts )
+				if not batch.mesh then
+					destroyFluidRecord( record )
+					FluidMeshRetryAt[chunkKey] = CurTime() + REFRESH_INTERVAL
+					return cached
+				end
+				batch.vertexCount = batch.verts.count
+				meshList[#meshList + 1] = batch
 			end
 		end
-		if #meshList > 0 then meshes[name] = meshList end
+		if #meshList == 0 then record.meshes[name] = nil end
 	end
-	if next( meshes ) == nil then
+	if next( record.meshes ) == nil then
+		destroyFluidRecord( cached )
 		FluidMeshCache[chunkKey] = false
 		return nil
 	end
-	local record = {
-		meshes = meshes,
-		fluidKinds = availableKinds,
-		matrix = Matrix(),
-		originBX = originBX,
-		originBY = originBY,
-		originBZ = originBZ,
-		nextLightAt = 0,
-	}
+	record.fluidKinds, record.matrix = availableKinds, Matrix()
+	record.center = Vector()
+	record.originBX, record.originBY, record.originBZ = originBX, originBY, originBZ
+	record.nextLightAt = 0
+	destroyFluidRecord( cached )
 	FluidMeshCache[chunkKey] = record
+	FluidMeshRetryAt[chunkKey] = nil
+	AnimationStats.builds = AnimationStats.builds + 1
 	return record
+end
+
+local function refreshFluidLight( record )
+	if not record.lightDirty or record.geometryDirty then return end
+	if CurTime() < ( record.retryAt or 0 ) then return end
+	RM.resetMeshLightingSampleCaches()
+	RM.setMeshSampleCacheOrigin( record.originBX, record.originBY, record.originBZ )
+	for _, batches in pairs( record.meshes ) do
+		for _, batch in ipairs( batches ) do
+			local ok, result = MC.Try( "block_animation_light", RM.recolorCachedBlockEmission,
+				batch, RM.MC_LIGHT_STYLE_VANILLA or "vanilla" )
+			if not ok or result ~= true then
+				record.geometryDirty = true
+				record.retryAt = CurTime() + REFRESH_INTERVAL
+				AnimationStats.failures = AnimationStats.failures + 1
+				if ok then MC.Fault( "block_animation_light", "invalid light samples in an animated fluid batch" ) end
+				return
+			end
+			if not uploadAnimationMesh( batch.verts, batch.mesh ) then
+				record.retryAt = CurTime() + REFRESH_INTERVAL
+				return
+			end
+		end
+	end
+	record.lightDirty = false
+	AnimationStats.lightRefreshes = AnimationStats.lightRefreshes + 1
 end
 
 local function materialForPath( path, translucent )
@@ -499,45 +660,85 @@ local function drawAnimationMesh( meshObject, name, animation, color, elapsedTic
 	end
 end
 
-local function drawEntry( entry, stateId, animations, elapsedTicks, visualSignature )
+local function entryNeedsMeshes( entry )
+	return entry.hasStateAnimation and ( not entry.animationMeshes or entry.meshStateId ~= entry.stateId
+		or entry.meshSignature ~= entry.visualSignature or entry.meshRetryAt ~= nil )
+end
+
+function MC.BlockAnimationChunkHasEntries( key )
+	return EntriesByChunk[key] ~= nil
+end
+
+function MC.BlockAnimationChunkPending( key )
+	local record = FluidMeshCache[key]
+	if type( record ) == "table" and ( record.geometryDirty or record.lightDirty ) then return true end
+	if ( FluidEntryCounts[key] or 0 ) > 0 and record == nil then return true end
+	for entryKey in pairs( EntriesByChunk[key] or {} ) do
+		local entry = Entries[entryKey]
+		if entry and entryNeedsMeshes( entry ) then return true end
+	end
+	return false
+end
+
+-- Fluid geometry depends on neighbours; shared model templates do not.
+function MC.MarkBlockAnimationFluidDirty( key )
+	if ( FluidEntryCounts[key] or 0 ) <= 0 then return false end
+	dirtyFluidChunk( key )
+	return true
+end
+
+local function prepareEntry( entry, animations )
+	local meshes = {}
+	entry.meshRetryAt = nil
+	for name, animation in pairs( animations ) do
+		if type( animation ) == "table" and animation.tile ~= nil then
+			local meshObject = meshForStateAnimation(
+				entry.stateId, entry.bx, entry.by, entry.bz, name, animation, entry.visualSignature
+			)
+			if meshObject then meshes[#meshes + 1] = { mesh = meshObject, name = name, animation = animation } end
+			if meshObject == nil then entry.meshRetryAt = CurTime() + REFRESH_INTERVAL end
+		end
+	end
+	if not entry.meshRetryAt then
+		entry.animationMeshes, entry.meshStateId, entry.meshSignature = meshes, entry.stateId, entry.visualSignature
+	end
+end
+
+local function drawEntry( entry, elapsedTicks )
+	if not entry.animationMeshes then return end
 	local base = MC.CellRenderMin and MC.CellRenderMin( entry.bx, entry.by, entry.bz )
 		or MC.CellWorldMin( entry.bx, entry.by, entry.bz )
 	local center = MC.CellRenderCenter and MC.CellRenderCenter( entry.bx, entry.by, entry.bz )
 		or MC.CellWorldCenter( entry.bx, entry.by, entry.bz )
 	local emission = MC.BlockLightEmissionForState and MC.BlockLightEmissionForState(
-		stateId, entry.bx, entry.by, entry.bz ) or 0
+		entry.stateId, entry.bx, entry.by, entry.bz ) or 0
 	local color = entryColor( entry, center, emission )
 	local matrix = entry.matrix or Matrix()
 	entry.matrix = matrix
 	matrix:SetTranslation( base )
 	cam.PushModelMatrix( matrix )
-	for name, animation in pairs( animations ) do
-		if type( animation ) == "table" and animation.tile ~= nil then
-			local meshObject = meshForStateAnimation(
-				stateId, entry.bx, entry.by, entry.bz, name, animation, visualSignature
-			)
-			drawAnimationMesh( meshObject, name, animation, color, elapsedTicks )
-		end
+	for _, item in ipairs( entry.animationMeshes ) do
+		drawAnimationMesh( item.mesh, item.name, item.animation, color, elapsedTicks )
 	end
 	cam.PopModelMatrix()
 end
 
-local function drawFluidChunk( chunkKey, animations, elapsedTicks, eye )
-	local chunk = MC.GetChunkByKey and MC.GetChunkByKey( chunkKey ) or MC.World and MC.World[chunkKey]
+local function fluidChunkTransform( chunk, eye )
 	if not chunk then return end
 	local originBX = ( chunk.cx or 0 ) * ( MC.CS or 16 )
 	local originBY = ( chunk.cy or 0 ) * ( MC.CS or 16 )
 	local originBZ = ( chunk.cz or 0 ) * ( MC.CH or 32 )
+	local BS = blockSize()
 	local base = MC.CellRenderMin and MC.CellRenderMin( originBX, originBY, originBZ )
 		or MC.CellWorldMin( originBX, originBY, originBZ )
 	local chunkW = MC.ChunkWorld or BS * ( MC.CS or 16 )
 	local chunkH = MC.ChunkWorldH or BS * ( MC.CH or 32 )
-	local center = base + Vector( chunkW * 0.5, chunkW * 0.5, chunkH * 0.5 )
+	local centerX, centerY, centerZ = base.x + chunkW * 0.5, base.y + chunkW * 0.5, base.z + chunkH * 0.5
 	local distance = MC.EffectiveMeshDrawDistance and MC.EffectiveMeshDrawDistance() or 0
 	if distance > 0 then
 		local radius = math.sqrt( chunkW * chunkW * 0.5 + chunkH * chunkH * 0.25 )
 		local maxDistance = distance + radius
-		local dx, dy, dz = center.x - eye.x, center.y - eye.y, center.z - eye.z
+		local dx, dy, dz = centerX - eye.x, centerY - eye.y, centerZ - eye.z
 		local visible
 		if MC.ChunkDrawDistanceVisible then
 			visible = MC.ChunkDrawDistanceVisible( dx, dy, dz, maxDistance * maxDistance )
@@ -546,9 +747,17 @@ local function drawFluidChunk( chunkKey, animations, elapsedTicks, eye )
 		end
 		if visible == false then return end
 	end
+	return base, centerX, centerY, centerZ
+end
 
-	local record = fluidMeshesForChunk( chunkKey, animations )
-	if not record then return end
+local function drawFluidChunk( chunkKey, animations, elapsedTicks, eye )
+	local record = FluidMeshCache[chunkKey]
+	if type( record ) ~= "table" then return end
+	local chunk = MC.GetChunkByKey and MC.GetChunkByKey( chunkKey ) or MC.World and MC.World[chunkKey]
+	local base, centerX, centerY, centerZ = fluidChunkTransform( chunk, eye )
+	if not base then return end
+	local center = record.center
+	center.x, center.y, center.z = centerX, centerY, centerZ
 	record.matrix:SetTranslation( base )
 	cam.PushModelMatrix( record.matrix )
 	for _, kind in ipairs( record.fluidKinds or FLUID_KIND_ORDER ) do
@@ -557,9 +766,13 @@ local function drawFluidChunk( chunkKey, animations, elapsedTicks, eye )
 		if fluid and blockId then
 			local emission = MC.BlockLightEmission and MC.BlockLightEmission( blockId ) or 0
 			local fluidColor = entryColor( record, center, emission, kind )
-			for _, name in ipairs( { fluid.still, fluid.flow } ) do
-				for _, meshObject in ipairs( record.meshes[name] or {} ) do
-					drawAnimationMesh( meshObject, name, animations[name], fluidColor, elapsedTicks )
+			for index = 1, 2 do
+				local name = index == 1 and fluid.still or fluid.flow
+				local batches = record.meshes[name]
+				if batches then
+					for _, batch in ipairs( batches ) do
+						drawAnimationMesh( batch.mesh, name, animations[name], fluidColor, elapsedTicks )
+					end
 				end
 			end
 		end
@@ -568,16 +781,9 @@ local function drawFluidChunk( chunkKey, animations, elapsedTicks, eye )
 end
 
 local function clearFluidMeshes()
-	for _, record in pairs( FluidMeshCache ) do
-		if type( record ) == "table" and type( record.meshes ) == "table" then
-			for _, meshList in pairs( record.meshes ) do
-				for _, meshObject in ipairs( meshList ) do
-					if meshObject and meshObject.Destroy then meshObject:Destroy() end
-				end
-			end
-		end
-	end
+	for _, record in pairs( FluidMeshCache ) do destroyFluidRecord( record ) end
 	FluidMeshCache = {}
+	FluidMeshRetryAt = {}
 	FluidMeshesDirty = false
 end
 
@@ -589,49 +795,88 @@ local function clearMeshes()
 	clearFluidMeshes()
 end
 
-hook.Add( "Think", "mc_block_animation_chunk_scan", function()
-	if CurTime() < LastRefresh then return end
-	LastRefresh = CurTime() + REFRESH_INTERVAL
-	refreshChunks()
-	if FluidMeshesDirty then clearFluidMeshes() end
-end )
+local function prepareAnimationWork( budget, canBuild, prepare, ... )
+	if not canBuild( budget, false ) then
+		AnimationStats.budgetYields = AnimationStats.budgetYields + 1
+		return false
+	end
+	budget.attempts = budget.attempts + 1
+	budget.animationAttempts = budget.animationAttempts + 1
+	AnimationStats.attempts = AnimationStats.attempts + 1
+	local started, failures = SysTime(), AnimationStats.failures
+	prepare( ... )
+	AnimationStats.workMS = AnimationStats.workMS + ( SysTime() - started ) * 1000
+	if AnimationStats.failures > failures then
+		budget.failures = budget.failures + 1
+		budget.animationFailures = budget.animationFailures + 1
+	end
+	return true
+end
+
+-- The scheduler owns the deadline. Each model instance or fluid chunk is an
+-- indivisible attempt; drawing only consumes the last published mesh buffers.
+function MC.PrepareBlockAnimations( budget, canBuild )
+	if MC.WorldFrameSettled and not MC.WorldFrameSettled() then return end
+	local now = CurTime()
+	if now >= LastRefresh then
+		if not canBuild( budget, false ) then
+			AnimationStats.budgetYields = AnimationStats.budgetYields + 1
+			return
+		end
+		LastRefresh = now + REFRESH_INTERVAL
+		local started = SysTime()
+		refreshChunks()
+		if FluidMeshesDirty then clearFluidMeshes() end
+		AnimationStats.scanPasses = AnimationStats.scanPasses + 1
+		AnimationStats.scanMS = AnimationStats.scanMS + ( SysTime() - started ) * 1000
+	end
+	local animations = activeAnimations()
+	if next( animations ) == nil then return end
+	local eye = EyePos()
+	local maxRenderDistanceSqr = ( blockSize() * 96 ) ^ 2
+	for _, entry in pairs( Entries ) do
+		if entryNeedsMeshes( entry ) and now >= ( entry.meshRetryAt or 0 ) then
+			local center = MC.CellRenderCenter and MC.CellRenderCenter( entry.bx, entry.by, entry.bz )
+				or MC.CellWorldCenter( entry.bx, entry.by, entry.bz )
+			if eye:DistToSqr( center ) <= maxRenderDistanceSqr
+				and not prepareAnimationWork( budget, canBuild, prepareEntry, entry, animations ) then return end
+		end
+	end
+	for key in pairs( FluidEntryCounts ) do
+		local record = FluidMeshCache[key]
+		local geometryDirty = record == nil or type( record ) == "table" and record.geometryDirty
+		local lightDirty = type( record ) == "table" and record.lightDirty
+		if ( geometryDirty or lightDirty ) and now >= ( FluidMeshRetryAt[key] or 0 )
+			and ( type( record ) ~= "table" or now >= ( record.retryAt or 0 ) ) then
+			local chunk = MC.GetChunkByKey and MC.GetChunkByKey( key ) or MC.World and MC.World[key]
+			if fluidChunkTransform( chunk, eye ) then
+				if geometryDirty then
+					if not prepareAnimationWork( budget, canBuild, fluidMeshesForChunk, key, animations ) then return end
+				elseif not prepareAnimationWork( budget, canBuild, refreshFluidLight, record ) then
+					return
+				end
+			end
+		end
+	end
+end
+
+hook.Remove( "Think", "mc_block_animation_chunk_scan" )
 
 hook.Add( "PostDrawTranslucentRenderables", "mc_block_animations", function( _, _, bSky3D )
 	if bSky3D or MC.WorldFrameSettled and not MC.WorldFrameSettled() then return end
 	local animations = activeAnimations()
 	if next( animations ) == nil then return end
 	local eye = EyePos()
+	local maxRenderDistanceSqr = ( blockSize() * 96 ) ^ 2
 	local elapsedTicks = ( RealTime and RealTime() or CurTime() ) / TICK_SECONDS
 	if render.PushFilterMin then render.PushFilterMin( TEXFILTER.POINT ) end
 	if render.PushFilterMag then render.PushFilterMag( TEXFILTER.POINT ) end
-	for key, entry in pairs( Entries ) do
+	for _, entry in pairs( Entries ) do
 		if entry.hasStateAnimation then
 			local center = MC.CellRenderCenter and MC.CellRenderCenter( entry.bx, entry.by, entry.bz )
 				or MC.CellWorldCenter( entry.bx, entry.by, entry.bz )
-			if eye:DistToSqr( center ) <= MAX_RENDER_DISTANCE_SQR then
-				local stateId = MC.GetBlockState and MC.GetBlockState( entry.bx, entry.by, entry.bz ) or 0
-				local hasStateAnimation, visualSignature = false, nil
-				if stateId == entry.stateId then
-					hasStateAnimation, visualSignature = entry.hasStateAnimation, entry.visualSignature
-				elseif stateId ~= 0 then
-					hasStateAnimation, visualSignature = stateAnimationSignature(
-						stateId, entry.bx, entry.by, entry.bz
-					)
-					entry.stateId = stateId
-					entry.hasStateAnimation = hasStateAnimation
-					entry.visualSignature = visualSignature
-					entry.fluidKind = fluidAnimationKind( stateId )
-				else
-					entry.stateId = stateId
-					entry.hasStateAnimation = false
-					entry.visualSignature = nil
-					entry.fluidKind = nil
-				end
-				if hasStateAnimation then
-					drawEntry( entry, stateId, animations, elapsedTicks, visualSignature )
-				elseif not entry.fluidKind then
-					removeEntry( key )
-				end
+			if eye:DistToSqr( center ) <= maxRenderDistanceSqr then
+				drawEntry( entry, elapsedTicks )
 			end
 		end
 	end
@@ -645,13 +890,61 @@ hook.Add( "PostDrawTranslucentRenderables", "mc_block_animations", function( _, 
 end )
 
 hook.Add( "MCWorldAdapterChanged", "mc_block_animation_world_frame", function()
-	for _, entry in pairs( Entries ) do entry.nextLightAt = 0 end
+	MC.MarkAllBlockAnimationLightDirty()
 end )
-hook.Add( "MC.ClientBlockStateChanged", "mc_block_animation_fluid_geometry", function()
+hook.Add( "MC.ClientBlockStateChanged", "mc_block_animation_fluid_geometry", function( bx, by, bz, _, stateId, reason )
+	local key = chunkKeyForCell( bx, by, bz )
+	updateCellEntry( bx, by, bz, stateId or MC.GetBlockState( bx, by, bz ) )
+	local chunk = MC.GetChunkByKey and MC.GetChunkByKey( key ) or MC.World and MC.World[key]
+	local scanned = ScannedChunkVersions[key]
+	-- Only a consecutive storage event can acknowledge a scan. A missed bulk
+	-- update or replaced chunk must still go through the full refresh path.
+	if reason == "storage_write" and scanned and scanned.chunk == chunk
+		and chunk.collisionVersion == scanned.version + 1 then
+		scanned.version = chunk.collisionVersion
+	end
 	-- FluidRenderer samples a 3x3 horizontal neighbourhood plus occluding
-	-- blocks above/beside it. Coalesce arbitrary cell edits into one cache clear.
-	FluidMeshesDirty = true
+	-- blocks above/beside it. Invalidate only chunks containing those cells.
+	local minX, minY, minZ = MC.CellToChunk( bx - 1, by - 1, bz - 1 )
+	local maxX, maxY, maxZ = MC.CellToChunk( bx + 1, by + 1, bz + 1 )
+	for z = minZ, maxZ do
+		for y = minY, maxY do
+			for x = minX, maxX do dirtyFluidChunk( MC.ChunkKey( x, y, z ) ) end
+		end
+	end
 end )
+
+function MC.BlockAnimationStats( validate )
+	local out = {
+		chunks = 0, batches = 0, vertices = 0, invalid = 0, geometryDirty = 0, lightDirty = 0,
+		modelEntries = 0, pendingModels = 0, unbuiltChunks = 0,
+	}
+	for key, value in pairs( AnimationStats ) do out[key] = value end
+	for _, entry in pairs( Entries ) do
+		if entry.hasStateAnimation then out.modelEntries = out.modelEntries + 1 end
+		if entryNeedsMeshes( entry ) then out.pendingModels = out.pendingModels + 1 end
+	end
+	for key in pairs( FluidEntryCounts ) do
+		if FluidMeshCache[key] == nil then out.unbuiltChunks = out.unbuiltChunks + 1 end
+	end
+	for _, record in pairs( FluidMeshCache ) do
+		if type( record ) == "table" then
+			out.chunks = out.chunks + 1
+			if record.geometryDirty then out.geometryDirty = out.geometryDirty + 1 end
+			if record.lightDirty then out.lightDirty = out.lightDirty + 1 end
+			for _, batches in pairs( record.meshes ) do
+				for _, batch in ipairs( batches ) do
+					out.batches = out.batches + 1
+					out.vertices = out.vertices + batch.vertexCount
+					if validate and ( not VertexBuffer.Validate( batch.verts ) or not LightBuffer.Validate( batch.light ) ) then
+						out.invalid = out.invalid + 1
+					end
+				end
+			end
+		end
+	end
+	return out
+end
 hook.Add( "MC.ClientWorldProjectionChanged", "mc_block_animation_world_projection", function()
 	clearEntries()
 	clearFluidMeshes()

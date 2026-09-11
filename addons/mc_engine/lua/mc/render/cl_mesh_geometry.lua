@@ -5,6 +5,8 @@ local RM = MC.RenderMesh
 
 
 local C = MC.RenderMeshConstants
+local GeometryStore = MC.RenderGeometryStore
+local geometrySections
 local CS = C.CS
 local CS2 = C.CS2
 local CH = C.CH
@@ -15,7 +17,7 @@ local RENDER_SECTIONS_Z = C.RENDER_SECTIONS_Z
 MC.Meshes      = MC.Meshes or {}      -- key -> { IMesh, ... } (opaque/cutout pass)
 MC.MeshesTrans = MC.MeshesTrans or {} -- key -> { IMesh, ... } (translucent pass)
 MC.MeshSections = MC.MeshSections or {} -- key -> sectionIndex -> { opaque = {}, translucent = {} }
-MC.MeshSectionGeometry = MC.MeshSectionGeometry or {} -- key -> sectionIndex -> cached vertex/light records
+geometrySections = GeometryStore.sections
 MC.MeshDirty = MC.MeshDirty or {}  -- key -> true
 MC.MeshLightDirty = MC.MeshLightDirty or {} -- key -> sectionIndex -> true for light-only colour updates
 MC.MeshDirtyRateLimited = MC.MeshDirtyRateLimited or {} -- key -> true for explosion-driven mesh rebuilds
@@ -107,11 +109,11 @@ local function rebuildFlatMeshLists( key )
 	if MC.MarkChunkDrawListDirty then MC.MarkChunkDrawListDirty() end
 end
 
-function MC.FreeChunkMesh( key )
+function MC.FreeChunkMesh( key, keepBlockEmitCache )
 	if MC.MarkChunkDrawListDirty then MC.MarkChunkDrawListDirty() end
 	if MC.MeshDirtyRateLimited then MC.MeshDirtyRateLimited[key] = nil end
 	if MC.MeshLightDirty then MC.MeshLightDirty[key] = nil end
-	clearChunkBlockEmitCache( key )
+	if not keepBlockEmitCache then clearChunkBlockEmitCache( key ) end
 	local sections = MC.MeshSections[key]
 	if sections then
 		for _, section in pairs( sections ) do
@@ -119,20 +121,20 @@ function MC.FreeChunkMesh( key )
 			destroySectionMeshList( section.translucent )
 		end
 		MC.MeshSections[key] = nil
-		if MC.ForgetChunkMeshSectionGeometryCache then
-			MC.ForgetChunkMeshSectionGeometryCache( key )
-		else
-			MC.MeshSectionGeometry[key] = nil
-		end
+				if MC.ForgetChunkMeshSectionGeometryCache then
+					MC.ForgetChunkMeshSectionGeometryCache( key )
+				else
+					geometrySections[key] = nil
+				end
 		MC.Meshes[key] = nil
 		MC.MeshesTrans[key] = nil
 		return
 	end
-	if MC.ForgetChunkMeshSectionGeometryCache then
-		MC.ForgetChunkMeshSectionGeometryCache( key )
-	else
-		MC.MeshSectionGeometry[key] = nil
-	end
+		if MC.ForgetChunkMeshSectionGeometryCache then
+			MC.ForgetChunkMeshSectionGeometryCache( key )
+		else
+			geometrySections[key] = nil
+		end
 	destroyMeshList( MC.Meshes, key )
 	destroyMeshList( MC.MeshesTrans, key )
 end
@@ -143,78 +145,6 @@ local function DecodeLocal( li )
 	local ly = math.floor( ( li - lz * CS2 ) / CS )
 	local lx = li - lz * CS2 - ly * CS
 	return lx, ly, lz
-end
-
-local EMPTY_RENDER_SECTION_BLOCKS = {}
-
-local function resetChunkRenderSectionIndex( chunk, version )
-	chunk.renderSectionBlocks = {}
-	chunk.renderSectionBlocksReady = {}
-	chunk.renderSectionIndexVersion = version
-	chunk.renderSectionIndexStoresStateId = true
-end
-
-local function ensureChunkRenderSectionBlockList( chunk, targetSectionIndex )
-	if not chunk then return nil end
-	local version = chunk.collisionVersion or 0
-	local storesStateId = chunk.renderSectionIndexStoresStateId == true
-	if not chunk.renderSectionBlocks
-	or chunk.renderSectionIndexVersion ~= version
-	or not storesStateId
-	or type( chunk.renderSectionBlocksReady ) ~= "table" then
-		resetChunkRenderSectionIndex( chunk, version )
-	end
-	if chunk.renderSectionBlocksReady[targetSectionIndex] then
-		return chunk.renderSectionBlocks[targetSectionIndex] or EMPTY_RENDER_SECTION_BLOCKS
-	end
-
-	local zeroIndex = targetSectionIndex - 1
-	local sectionX = zeroIndex % RENDER_SECTIONS_XY
-	local sectionY = math.floor( zeroIndex / RENDER_SECTIONS_XY ) % RENDER_SECTIONS_XY
-	local sectionZ = math.floor( zeroIndex / ( RENDER_SECTIONS_XY * RENDER_SECTIONS_XY ) )
-	local minX = sectionX * RENDER_SECTION_SIZE
-	local minY = sectionY * RENDER_SECTION_SIZE
-	local minZ = sectionZ * RENDER_SECTION_SIZE
-	local maxX = math.min( CS - 1, minX + RENDER_SECTION_SIZE - 1 )
-	local maxY = math.min( CS - 1, minY + RENDER_SECTION_SIZE - 1 )
-	local maxZ = math.min( CH - 1, minZ + RENDER_SECTION_SIZE - 1 )
-	local stateSections = chunk.stateSections
-	local StateSection = MC.StateSection
-	local list
-
-	local getStateFast = StateSection and ( StateSection.GetFast or StateSection.Get )
-	if stateSections and getStateFast then
-		for lz = minZ, maxZ do
-			local stateSectionIndex = math.floor( lz / 16 ) + 1
-			local stateSection = stateSections[stateSectionIndex]
-			if stateSection and ( stateSection.count or 0 ) > 0 then
-				local sectionZOffset = ( lz % 16 ) * CS2
-				for ly = minY, maxY do
-					local rowOffset = sectionZOffset + ly * CS
-					for lx = minX, maxX do
-						local stateId = getStateFast( stateSection, rowOffset + lx )
-						if stateId and stateId ~= 0 then
-							if not list then list = {} end
-							local li = lx + ly * CS + lz * CS2
-							list[li] = stateId
-						end
-					end
-				end
-			end
-		end
-	end
-
-	chunk.renderSectionBlocks[targetSectionIndex] = list
-	chunk.renderSectionBlocksReady[targetSectionIndex] = true
-	return list or EMPTY_RENDER_SECTION_BLOCKS
-end
-
-local function ensureChunkRenderSectionIndex( chunk )
-	if not chunk then return nil end
-	for sectionIndex = 1, RENDER_SECTIONS_XY * RENDER_SECTIONS_XY * RENDER_SECTIONS_Z do
-		ensureChunkRenderSectionBlockList( chunk, sectionIndex )
-	end
-	return chunk.renderSectionBlocks
 end
 
 local function rotatedUVFlags( uf, vf, rot, flipU, flipV )
@@ -554,9 +484,11 @@ local function coveredByBoxes( targetBox, face, boxes, ox, oy, oz )
 	local covers = nil
 	local coverValues = 0
 	ox, oy, oz = ox or 0, oy or 0, oz or 0
+	local sameBlock = ox == 0 and oy == 0 and oz == 0
 	for i = 1, #boxes do
 		local box = boxes[i]
-		if box ~= targetBox then
+		-- Adjacent blocks may share one box template; identity excludes only self.
+		if box ~= targetBox or not sameBlock then
 			local ca0, ca1, cb0, cb1 = coverRectForBox( box, face, plane, ox, oy, oz )
 			if ca0 and ca1 > a0 + EPS and ca0 < a1 - EPS and cb1 > b0 + EPS and cb0 < b1 - EPS then
 				local ra0, ra1 = math.max( a0, ca0 ), math.min( a1, ca1 )
@@ -580,8 +512,6 @@ RM.isLiquidBlock = isLiquidBlock
 RM.destroySectionMeshList = destroySectionMeshList
 RM.rebuildFlatMeshLists = rebuildFlatMeshLists
 RM.DecodeLocal = DecodeLocal
-RM.ensureChunkRenderSectionIndex = ensureChunkRenderSectionIndex
-RM.ensureChunkRenderSectionBlockList = ensureChunkRenderSectionBlockList
 RM.rotatedUVFlags = rotatedUVFlags
 RM.tileUVRect = tileUVRect
 RM.tileUVPointRaw = tileUVPointRaw

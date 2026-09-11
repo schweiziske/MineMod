@@ -20,6 +20,8 @@ MC.LightSkyFlood = MC.LightSkyFlood or CreateClientConVar( "mc_light_sky_flood",
 	"Minecraft-style voxel sky light flood: 15 above open sky, -1 per block into interiors (0 = uniform bright sky)" )
 MC.LightSkyFloodPerFrame = MC.LightSkyFloodPerFrame or CreateClientConVar( "mc_light_sky_flood_per_frame", "4", true, false,
 	"How many chunk sky-light refloods run per frame from the amortized queue" )
+MC.LightSkyFloodFrameMS = MC.LightSkyFloodFrameMS or CreateClientConVar( "mc_light_sky_flood_frame_ms", "2", true, false,
+	"Soft sky-light reflood time budget in milliseconds per frame (0 = unlimited)" )
 
 MC.LightSkyChunks = MC.LightSkyChunks or {}
 
@@ -420,6 +422,17 @@ end
 
 local pendingReflood = {}
 local pendingCount = 0
+local totalRefloods, totalRefloodMS, lastRefloods, lastRefloodMS = 0, 0, 0, 0
+
+function MC.SkyFloodStats()
+	return { pending = pendingCount, refloods = totalRefloods, workMS = totalRefloodMS,
+		lastRefloods = lastRefloods, lastMS = lastRefloodMS }
+end
+
+-- Scalar Lua counters for opt-in frame capture; no table allocation or scan.
+function MC.SkyFloodWorkCounters()
+	return totalRefloods, totalRefloodMS, pendingCount
+end
 
 function MC.QueueSkyFloodChunk( key )
 	if key == nil then return end
@@ -490,10 +503,11 @@ end
 
 hook.Remove( "Think", "mc_sky_flood_queue" )
 hook.Add( "Think", "mc_sky_flood_queue", function()
+	lastRefloods, lastRefloodMS = 0, 0
 	local perf = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
-	local started = perf and SysTime() or nil
+	local started = ( perf or pendingCount > 0 ) and SysTime() or nil
 	local processed = 0
-	if pendingCount <= 0 then
+	if pendingCount <= 0 or ( MC.LightingBulkLoadDepth or 0 ) > 0 then
 		if perf then MC.StreamPerformanceAddFrameStage( "lighting.sky_flood", ( SysTime() - started ) * 1000 ) end
 		return
 	end
@@ -504,7 +518,12 @@ hook.Add( "Think", "mc_sky_flood_queue", function()
 		return
 	end
 	local budget = refloodBudget()
+	local cv = MC.LightSkyFloodFrameMS
+	local frameMS = cv and cv.GetFloat and cv:GetFloat() or 2
+	local deadline = frameMS > 0 and started + frameMS / 1000 or nil
 	for key in pairs( pendingReflood ) do
+		-- A flood is atomic, but a slow one must not be followed by three more.
+		if processed > 0 and deadline and SysTime() >= deadline then break end
 		pendingReflood[key] = nil
 		pendingCount = pendingCount - 1
 		refloodChunkSky( key )
@@ -512,6 +531,8 @@ hook.Add( "Think", "mc_sky_flood_queue", function()
 		budget = budget - 1
 		if budget <= 0 then break end
 	end
+	lastRefloods, lastRefloodMS = processed, ( SysTime() - started ) * 1000
+	totalRefloods, totalRefloodMS = totalRefloods + processed, totalRefloodMS + lastRefloodMS
 	if perf then MC.StreamPerformanceAddFrameStage( "lighting.sky_flood", ( SysTime() - started ) * 1000, { skyFloodChunks = processed } ) end
 end )
 

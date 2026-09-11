@@ -1360,8 +1360,10 @@ if CLIENT then
 		drawHeldStack( ply, equipmentStack( ply, "offhand" ), firstPerson, "offhand", useState )
 	end
 
-	hook.Add( "PostDrawTranslucentRenderables", "mc_item_hand_first_person", function( _, sky3d )
-		if sky3d then return end
+	-- The world translucent hooks are unordered. The viewmodel stage follows
+	-- all of them, even when our SWEP suppresses the engine viewmodel itself.
+	hook.Remove( "PostDrawTranslucentRenderables", "mc_item_hand_first_person" )
+	hook.Add( "PreDrawViewModels", "mc_item_hand_first_person", function()
 		local ply = LocalPlayer()
 		if not IsValid( ply ) or ply:ShouldDrawLocalPlayer() then return end
 		drawHeld( ply, true )
