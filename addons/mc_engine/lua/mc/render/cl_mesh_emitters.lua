@@ -5,7 +5,7 @@ local RM = MC.RenderMesh
 
 
 local C = MC.RenderMeshConstants
-local bit_band, bit_bor, bit_lshift = bit.band, bit.bor, bit.lshift
+local bit_band, bit_lshift = bit.band, bit.lshift
 local meshDebugFullCubeOnly = RM.meshDebugFullCubeOnly
 local shouldStoreBlockEmissionCache = RM.shouldStoreBlockEmissionCache
 local meshPerfAdd = RM.meshPerfAdd
@@ -327,7 +327,6 @@ local function faceMetaValues( lightMetaFast, shadeIndex, bx, by, bz, id, faceIn
 	local meta2 = lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, c2x, c2y, c2z, emission, faceCubic, quadLightEmission, tintCode )
 	local meta3 = lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, c3x, c3y, c3z, emission, faceCubic, quadLightEmission, tintCode )
 	local meta4 = lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, c4x, c4y, c4z, emission, faceCubic, quadLightEmission, tintCode )
-	meta1.shared, meta2.shared, meta3.shared, meta4.shared = true, true, true, true
 	return meta1, meta2, meta3, meta4
 end
 
@@ -338,34 +337,24 @@ local function pushFaceQuad( push, normal,
 	x4, y4, z4, u4, v4, color4, meta4,
 	meshProbe, meshPerf )
 	local vertexStart = meshProbe and SysTime() or nil
-	local pos1 = Vector( x1, y1, z1 )
-	local pos2 = Vector( x2, y2, z2 )
-	local pos3 = Vector( x3, y3, z3 )
-	local pos4 = Vector( x4, y4, z4 )
 	if meshProbe then
-		local vert1 = { pos = pos1, normal = normal, u = u1, v = v1, color = color1 }
-		local vert2 = { pos = pos3, normal = normal, u = u3, v = v3, color = color3 }
-		local vert3 = { pos = pos2, normal = normal, u = u2, v = v2, color = color2 }
-		local vert4 = { pos = pos1, normal = normal, u = u1, v = v1, color = color1 }
-		local vert5 = { pos = pos4, normal = normal, u = u4, v = v4, color = color4 }
-		local vert6 = { pos = pos3, normal = normal, u = u3, v = v3, color = color3 }
 		meshPerfAdd( meshPerf, "fullVertexMS", vertexStart )
 		local pushStart = SysTime()
-		push( vert1, meta1 )
-		push( vert2, meta3 )
-		push( vert3, meta2 )
-		push( vert4, meta1 )
-		push( vert5, meta4 )
-		push( vert6, meta3 )
+		push( x1, y1, z1, normal, u1, v1, color1, meta1 )
+		push( x3, y3, z3, normal, u3, v3, color3, meta3 )
+		push( x2, y2, z2, normal, u2, v2, color2, meta2 )
+		push( x1, y1, z1, normal, u1, v1, color1, meta1 )
+		push( x4, y4, z4, normal, u4, v4, color4, meta4 )
+		push( x3, y3, z3, normal, u3, v3, color3, meta3 )
 		meshPerfAdd( meshPerf, "fullPushMS", pushStart )
 		return
 	end
-	push( { pos = pos1, normal = normal, u = u1, v = v1, color = color1 }, meta1 )
-	push( { pos = pos3, normal = normal, u = u3, v = v3, color = color3 }, meta3 )
-	push( { pos = pos2, normal = normal, u = u2, v = v2, color = color2 }, meta2 )
-	push( { pos = pos1, normal = normal, u = u1, v = v1, color = color1 }, meta1 )
-	push( { pos = pos4, normal = normal, u = u4, v = v4, color = color4 }, meta4 )
-	push( { pos = pos3, normal = normal, u = u3, v = v3, color = color3 }, meta3 )
+	push( x1, y1, z1, normal, u1, v1, color1, meta1 )
+	push( x3, y3, z3, normal, u3, v3, color3, meta3 )
+	push( x2, y2, z2, normal, u2, v2, color2, meta2 )
+	push( x1, y1, z1, normal, u1, v1, color1, meta1 )
+	push( x4, y4, z4, normal, u4, v4, color4, meta4 )
+	push( x3, y3, z3, normal, u3, v3, color3, meta3 )
 end
 
 local function pushTemplateFace( push, quad, wx, wy, wz, color1, color2, color3, color4, meta1, meta2, meta3, meta4 )
@@ -701,61 +690,62 @@ local function emitConnectionShapeBlock( ctx, kind, b, id, orient, bx, by, bz, w
 	return emitConnectionShapeBlockLegacy( ctx, kind, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, push, lightMetaFast, shapeFaceCoveredAt, currentEmitLightStyle )
 end
 
-local function emitQuad( ctx, cur, push, lightMeta, currentEmitLightStyle, corners, normal, color, tile, bx, by, bz, id, faceIndex )
+local CrossPlanes = {
+	{ { 0.08, 0.08, 0, 0, 16 }, { 0.92, 0.92, 0, 16, 16 }, { 0.92, 0.92, 1, 16, 0 }, { 0.08, 0.08, 1, 0, 0 } },
+	{ { 0.92, 0.08, 0, 0, 16 }, { 0.08, 0.92, 0, 16, 16 }, { 0.08, 0.92, 1, 16, 0 }, { 0.92, 0.08, 1, 0, 0 } },
+}
+for i = 1, 2 do
+	local plane = CrossPlanes[i]
+	CrossPlanes[i + 2] = { plane[4], plane[3], plane[2], plane[1] }
+end
+
+local function emitCrossQuad( ctx, push, lightMeta, currentEmitLightStyle, corners, normal, color, tile, bx, by, bz, id, faceIndex, wx, wy, wz )
 	local emission = stateEmission( ctx, id, bx, by, bz )
 	local emitLightStyle = currentEmitLightStyle()
 	local color1, color2, color3, color4 = quadCornerColors( color, bx, by, bz, id, faceIndex, corners, emission, emitLightStyle )
+	local meta1 = lightMeta( color, bx, by, bz, id, faceIndex, corners[1], emission, nil, nil, 0 )
+	local meta2 = lightMeta( color, bx, by, bz, id, faceIndex, corners[2], emission, nil, nil, 0 )
+	local meta3 = lightMeta( color, bx, by, bz, id, faceIndex, corners[3], emission, nil, nil, 0 )
+	local meta4 = lightMeta( color, bx, by, bz, id, faceIndex, corners[4], emission, nil, nil, 0 )
 	local tri = C.TRI
 	for t = 1, 6 do
 		local ci = tri[t]
 		local cn = corners[ci]
 		local u, v = tileUVPointRaw( tile, cn[4], cn[5] )
-		local vertColor
+		local vertColor, meta
 		if ci == 1 then
-			vertColor = color1
+			vertColor, meta = color1, meta1
 		elseif ci == 2 then
-			vertColor = color2
+			vertColor, meta = color2, meta2
 		elseif ci == 3 then
-			vertColor = color3
+			vertColor, meta = color3, meta3
 		else
-			vertColor = color4
+			vertColor, meta = color4, meta4
 		end
 		if ctx and ctx.fluidAnimationColorResolver then
 			vertColor = ctx.fluidAnimationColorResolver(
-				shade, faceIndex, lightCorners[ci], vertColor, bx, by, bz, id
+				color, faceIndex, cn, vertColor, bx, by, bz, id
 			) or vertColor
 		end
-		push( {
-			pos    = Vector( cn[1], cn[2], cn[3] ),
-			normal = normal,
-			u      = u,
-			v      = v,
-			color  = vertColor,
-		}, lightMeta( color, bx, by, bz, id, faceIndex, cn, emission, nil, nil, 0 ) )
+		if ctx and ctx.pushValues then
+			ctx.pushValues( wx + cn[1] * C.BS, wy + cn[2] * C.BS, wz + cn[3] * C.BS, normal, u, v, vertColor, meta )
+		else
+			push( {
+				pos = Vector( wx + cn[1] * C.BS, wy + cn[2] * C.BS, wz + cn[3] * C.BS ),
+				normal = normal, u = u, v = v, color = vertColor,
+			}, meta )
+		end
 	end
 end
 
 function RM.EmitCrossBlock( ctx, b, id, bx, by, bz, wx, wy, wz, push, lightMeta, currentEmitLightStyle )
 	b = b or MC.Blocks[id]
 	local tile = b and b.side or 0
-	local z0, z1 = wz, wz + C.BS
-	local a, c = 0.08 * C.BS, 0.92 * C.BS
-	local p1 = {
-		{ wx + a, wy + a, z0, 0, 16 },
-		{ wx + c, wy + c, z0, 16, 16 },
-		{ wx + c, wy + c, z1, 16, 0 },
-		{ wx + a, wy + a, z1, 0, 0 },
-	}
-	local p2 = {
-		{ wx + c, wy + a, z0, 0, 16 },
-		{ wx + a, wy + c, z0, 16, 16 },
-		{ wx + a, wy + c, z1, 16, 0 },
-		{ wx + c, wy + a, z1, 0, 0 },
-	}
-	emitQuad( ctx, nil, push, lightMeta, currentEmitLightStyle, p1, C.N_YP, C.SH_TOP, tile, bx, by, bz, id, MC.Face.YP )
-	emitQuad( ctx, nil, push, lightMeta, currentEmitLightStyle, { p1[4], p1[3], p1[2], p1[1] }, C.N_YN, C.SH_TOP, tile, bx, by, bz, id, MC.Face.YN )
-	emitQuad( ctx, nil, push, lightMeta, currentEmitLightStyle, p2, C.N_XP, C.SH_TOP, tile, bx, by, bz, id, MC.Face.XP )
-	emitQuad( ctx, nil, push, lightMeta, currentEmitLightStyle, { p2[4], p2[3], p2[2], p2[1] }, C.N_XN, C.SH_TOP, tile, bx, by, bz, id, MC.Face.XN )
+	-- Lighting consumes block ratios; only emitted positions use Source units.
+	emitCrossQuad( ctx, push, lightMeta, currentEmitLightStyle, CrossPlanes[1], C.N_YP, C.SH_TOP, tile, bx, by, bz, id, MC.Face.YP, wx, wy, wz )
+	emitCrossQuad( ctx, push, lightMeta, currentEmitLightStyle, CrossPlanes[3], C.N_YN, C.SH_TOP, tile, bx, by, bz, id, MC.Face.YN, wx, wy, wz )
+	emitCrossQuad( ctx, push, lightMeta, currentEmitLightStyle, CrossPlanes[2], C.N_XP, C.SH_TOP, tile, bx, by, bz, id, MC.Face.XP, wx, wy, wz )
+	emitCrossQuad( ctx, push, lightMeta, currentEmitLightStyle, CrossPlanes[4], C.N_XN, C.SH_TOP, tile, bx, by, bz, id, MC.Face.XN, wx, wy, wz )
 end
 
 function RM.EmitModelBlock( ctx, b, orient, bx, by, bz, wx, wy, wz, li, push, lightMeta, currentEmitLightStyle )
@@ -764,6 +754,35 @@ function RM.EmitModelBlock( ctx, b, orient, bx, by, bz, wx, wy, wz, li, push, li
 	local decode = RM.DecodeLocal or MC.DecodeLocal
 	local lx, ly, lz = decode( li )
 	return emitModelBlockTemplate( ctx, template, b.id, bx, by, bz, wx, wy, wz, lx, ly, lz, li, push, ctx.lightMetaFast, currentEmitLightStyle, false )
+end
+
+local function fluidQuadScratch( ctx )
+	local scratch = ctx and ctx.fluidQuadScratch
+	if not scratch then
+		scratch = { verts = { {}, {}, {}, {} }, light = { {}, {}, {}, {} }, uv = { {}, {}, {}, {} } }
+		if ctx then ctx.fluidQuadScratch = scratch end
+	end
+	return scratch
+end
+
+local function quadXYZ( corners, x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4 )
+	local a, b, c, d = corners[1], corners[2], corners[3], corners[4]
+	a[1], a[2], a[3] = x1, y1, z1
+	b[1], b[2], b[3] = x2, y2, z2
+	c[1], c[2], c[3] = x3, y3, z3
+	d[1], d[2], d[3] = x4, y4, z4
+	return corners
+end
+
+local function quadUV( corners, u1, v1, u2, v2, u3, v3, u4, v4 )
+	local a, b, c, d = corners[1], corners[2], corners[3], corners[4]
+	a[1], a[2], b[1], b[2] = u1, v1, u2, v2
+	c[1], c[2], d[1], d[2] = u3, v3, u4, v4
+	return corners
+end
+
+local function sideV( height )
+	return math.Clamp( ( 1 - height ) * 16, 0, 16 )
 end
 
 local function emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle, verts, normal, shade, tile, bx, by, bz, id, faceIndex, lightCorners, uvCorners, fluidEmission )
@@ -775,6 +794,10 @@ local function emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle, verts
 	local x4, y4, z4 = cornerXYZ( lightCorners[4] )
 	local faceCubic = quadFaceCubic( faceIndex, id, 0, x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4 )
 	local color1, color2, color3, color4 = quadCornerColors( shade, bx, by, bz, id, faceIndex, lightCorners, emission, emitLightStyle )
+	local meta1 = lightMeta( shade, bx, by, bz, id, faceIndex, lightCorners[1], emission, nil, faceCubic, 0 )
+	local meta2 = lightMeta( shade, bx, by, bz, id, faceIndex, lightCorners[2], emission, nil, faceCubic, 0 )
+	local meta3 = lightMeta( shade, bx, by, bz, id, faceIndex, lightCorners[3], emission, nil, faceCubic, 0 )
+	local meta4 = lightMeta( shade, bx, by, bz, id, faceIndex, lightCorners[4], emission, nil, faceCubic, 0 )
 	local tri = C.TRI
 	for t = 1, 6 do
 		local ci = tri[t]
@@ -786,24 +809,27 @@ local function emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle, verts
 			u, v, animationName = ctx.fluidAnimationResolver( tile, faceIndex, rawU, rawV, bx, by, bz, id )
 		end
 		if u == nil or v == nil then u, v = tileUVPointRaw( tile, rawU, rawV ) end
-		local vertColor
+		local vertColor, meta
 		if ci == 1 then
-			vertColor = color1
+			vertColor, meta = color1, meta1
 		elseif ci == 2 then
-			vertColor = color2
+			vertColor, meta = color2, meta2
 		elseif ci == 3 then
-			vertColor = color3
+			vertColor, meta = color3, meta3
 		else
-			vertColor = color4
+			vertColor, meta = color4, meta4
 		end
-		push( {
-			pos    = Vector( vert[1], vert[2], vert[3] ),
-			normal = normal,
-			u      = u,
-			v      = v,
-			color  = vertColor,
-			fluidAnimation = animationName,
-		}, lightMeta( shade, bx, by, bz, id, faceIndex, lightCorners[ci], emission, nil, faceCubic, 0 ) )
+		if animationName and ctx and ctx.pushFluidValues then
+			ctx.pushFluidValues( animationName, vert[1], vert[2], vert[3], normal, u, v, vertColor, meta )
+		elseif ctx and ctx.pushValues and not animationName then
+			ctx.pushValues( vert[1], vert[2], vert[3], normal, u, v, vertColor, meta )
+		else
+			push( {
+				pos = Vector( vert[1], vert[2], vert[3] ),
+				normal = normal, u = u, v = v, color = vertColor,
+				fluidAnimation = animationName,
+			}, meta )
+		end
 	end
 end
 
@@ -811,6 +837,7 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 	local kind = MC.LiquidKind and MC.LiquidKind( id )
 	if not kind then return false end
 	local fluidEmission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
+	local quad = fluidQuadScratch( ctx )
 
 	local x0, y0, z0 = wx, wy, wz
 	local x1, y1 = wx + C.BS, wy + C.BS
@@ -828,7 +855,7 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 
 	if renderUp then
 		tile = LiquidStillTiles[kind] or liquidFace( id, MC.Face.TOP, orient )
-		local topUV = { { 0, 16 }, { 16, 16 }, { 16, 0 }, { 0, 0 } }
+		local topUV = quadUV( quad.uv, 0, 16, 16, 16, 16, 0, 0, 0 )
 		local flowX, flowY = 0, 0
 		if liquidFlowAtCell then flowX, flowY = liquidFlowAtCell( bx, by, bz, kind ) end
 		-- Minecraft's flowing sprite is 32x32. The 0.25 rotation radius below
@@ -845,15 +872,12 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 			local u11, v11 = ( 0.5 + c - s ) * 16, ( 0.5 - c - s ) * 16
 			-- Keep FluidRenderer's V coordinates intact. Reversing V here makes
 			-- the animated sprite visibly travel against the computed flow.
-			topUV = {
-				{ u00, v00 }, { u11, v11 },
-				{ u10, v10 }, { u01, v01 },
-			}
+			topUV = quadUV( quad.uv, u00, v00, u11, v11, u10, v10, u01, v01 )
 		end
 		emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle,
-			{ { x0, y0, z00 }, { x1, y0, z10 }, { x1, y1, z11 }, { x0, y1, z01 } },
+			quadXYZ( quad.verts, x0, y0, z00, x1, y0, z10, x1, y1, z11, x0, y1, z01 ),
 			C.N_UP, C.SH_TOP, tile, bx, by, bz, id, MC.Face.TOP,
-			{ { 0, 0, rh00 }, { 1, 0, rh10 }, { 1, 1, rh11 }, { 0, 1, rh01 } },
+			quadXYZ( quad.light, 0, 0, rh00, 1, 0, rh10, 1, 1, rh11, 0, 1, rh01 ),
 			topUV, fluidEmission
 		)
 	end
@@ -862,10 +886,10 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 	if renderDown then
 		tile = LiquidStillTiles[kind] or liquidFace( id, MC.Face.BOTTOM, orient )
 		emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle,
-			{ { x0, y1, bottomZ }, { x1, y1, bottomZ }, { x1, y0, bottomZ }, { x0, y0, bottomZ } },
+			quadXYZ( quad.verts, x0, y1, bottomZ, x1, y1, bottomZ, x1, y0, bottomZ, x0, y0, bottomZ ),
 			C.N_DOWN, C.SH_BOTTOM, tile, bx, by, bz, id, MC.Face.BOTTOM,
-			{ { 0, 1, 0 }, { 1, 1, 0 }, { 1, 0, 0 }, { 0, 0, 0 } },
-			{ { 0, 16 }, { 16, 16 }, { 16, 0 }, { 0, 0 } }, fluidEmission
+			quadXYZ( quad.light, 0, 1, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0 ),
+			quadUV( quad.uv, 0, 16, 16, 16, 16, 0, 0, 0 ), fluidEmission
 		)
 	end
 
@@ -873,10 +897,6 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 	-- dedicated 32x32 flowing top sprite, it must use the whole tile or the
 	-- side either magnifies one quadrant or lands on an atlas-only slot that is
 	-- not part of the block-face material contract.
-	local function sideV( height )
-		return math.Clamp( ( 1 - height ) * 16, 0, 16 )
-	end
-
 	local sideBottomV = 16
 	local sideBottom = bottomZ
 	local sideInset = C.FLUID_FACE_OFFSET * C.BS
@@ -885,10 +905,10 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 		tile = liquidFace( id, MC.Face.XP, orient )
 		local sx = x1 - sideInset
 		emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle,
-			{ { sx, y0, sideBottom }, { sx, y1, sideBottom }, { sx, y1, z11 }, { sx, y0, z10 } },
+			quadXYZ( quad.verts, sx, y0, sideBottom, sx, y1, sideBottom, sx, y1, z11, sx, y0, z10 ),
 			C.N_XP, C.SH_X, tile, bx, by, bz, id, MC.Face.XP,
-			{ { 1, 0, 0 }, { 1, 1, 0 }, { 1, 1, rh11 }, { 1, 0, rh10 } },
-			{ { 0, sideBottomV }, { 16, sideBottomV }, { 16, sideV( rh11 ) }, { 0, sideV( rh10 ) } }, fluidEmission
+			quadXYZ( quad.light, 1, 0, 0, 1, 1, 0, 1, 1, rh11, 1, 0, rh10 ),
+			quadUV( quad.uv, 0, sideBottomV, 16, sideBottomV, 16, sideV( rh11 ), 0, sideV( rh10 ) ), fluidEmission
 		)
 	end
 
@@ -896,10 +916,10 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 		tile = liquidFace( id, MC.Face.XN, orient )
 		local sx = x0 + sideInset
 		emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle,
-			{ { sx, y1, sideBottom }, { sx, y0, sideBottom }, { sx, y0, z00 }, { sx, y1, z01 } },
+			quadXYZ( quad.verts, sx, y1, sideBottom, sx, y0, sideBottom, sx, y0, z00, sx, y1, z01 ),
 			C.N_XN, C.SH_X, tile, bx, by, bz, id, MC.Face.XN,
-			{ { 0, 1, 0 }, { 0, 0, 0 }, { 0, 0, rh00 }, { 0, 1, rh01 } },
-			{ { 0, sideBottomV }, { 16, sideBottomV }, { 16, sideV( rh00 ) }, { 0, sideV( rh01 ) } }, fluidEmission
+			quadXYZ( quad.light, 0, 1, 0, 0, 0, 0, 0, 0, rh00, 0, 1, rh01 ),
+			quadUV( quad.uv, 0, sideBottomV, 16, sideBottomV, 16, sideV( rh00 ), 0, sideV( rh01 ) ), fluidEmission
 		)
 	end
 
@@ -907,10 +927,10 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 		tile = liquidFace( id, MC.Face.YP, orient )
 		local sy = y1 - sideInset
 		emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle,
-			{ { x1, sy, sideBottom }, { x0, sy, sideBottom }, { x0, sy, z01 }, { x1, sy, z11 } },
+			quadXYZ( quad.verts, x1, sy, sideBottom, x0, sy, sideBottom, x0, sy, z01, x1, sy, z11 ),
 			C.N_YP, C.SH_Y, tile, bx, by, bz, id, MC.Face.YP,
-			{ { 1, 1, 0 }, { 0, 1, 0 }, { 0, 1, rh01 }, { 1, 1, rh11 } },
-			{ { 0, sideBottomV }, { 16, sideBottomV }, { 16, sideV( rh01 ) }, { 0, sideV( rh11 ) } }, fluidEmission
+			quadXYZ( quad.light, 1, 1, 0, 0, 1, 0, 0, 1, rh01, 1, 1, rh11 ),
+			quadUV( quad.uv, 0, sideBottomV, 16, sideBottomV, 16, sideV( rh01 ), 0, sideV( rh11 ) ), fluidEmission
 		)
 	end
 
@@ -918,10 +938,10 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 		tile = liquidFace( id, MC.Face.YN, orient )
 		local sy = y0 + sideInset
 		emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle,
-			{ { x0, sy, sideBottom }, { x1, sy, sideBottom }, { x1, sy, z10 }, { x0, sy, z00 } },
+			quadXYZ( quad.verts, x0, sy, sideBottom, x1, sy, sideBottom, x1, sy, z10, x0, sy, z00 ),
 			C.N_YN, C.SH_Y, tile, bx, by, bz, id, MC.Face.YN,
-			{ { 0, 0, 0 }, { 1, 0, 0 }, { 1, 0, rh10 }, { 0, 0, rh00 } },
-			{ { 0, sideBottomV }, { 16, sideBottomV }, { 16, sideV( rh10 ) }, { 0, sideV( rh00 ) } }, fluidEmission
+			quadXYZ( quad.light, 0, 0, 0, 1, 0, 0, 1, 0, rh10, 0, 0, rh00 ),
+			quadUV( quad.uv, 0, sideBottomV, 16, sideBottomV, 16, sideV( rh10 ), 0, sideV( rh00 ) ), fluidEmission
 		)
 	end
 
@@ -1113,23 +1133,14 @@ end
 emitFullCubeBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
 	local meshPerf = ctx.meshPerf
 	local meshProbe = ctx.meshProbe
-	local visibleAt = ctx.visibleAt
 	local lightMetaFast = ctx.lightMetaFast
 	local flush = ctx.flush
 	local push = ctx.push
 	local emission = stateEmission( ctx, id, bx, by, bz )
-	local visibleFaceCount = 0
-	local visibleFaceMask = 0
 	local fullVisibleStart = meshProbe and SysTime() or nil
-	for f = 1, 6 do
-		local face = C.FACES[f]
-		local o = face.off
-		if visibleAt( id, lx + o[1], ly + o[2], lz + o[3], bx + o[1], by + o[2], bz + o[3] ) then
-			visibleFaceCount = visibleFaceCount + 1
-			visibleFaceMask = bit_bor( visibleFaceMask, bit_lshift( 1, f - 1 ) )
-		end
-	end
+	local visibleFaceMask, visibleFaceCount = ctx.visibleFaceMask( id, lx, ly, lz, bx, by, bz )
 	if fullVisibleStart then meshPerfAdd( meshPerf, "fullVisibleMS", fullVisibleStart ) end
+	if visibleFaceMask == nil then return "fullCube", false, 0 end
 	meshPerf.fullVisibleFaces = meshPerf.fullVisibleFaces + visibleFaceCount
 	local directEmitVertexCount = visibleFaceCount * 6
 	local directEmitCheapFullCube = not shouldStoreBlockEmissionCache( "fullCube", directEmitVertexCount )
@@ -1171,7 +1182,6 @@ emitFullCubeBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, 
 			local meta2 = lightMetaFast( shadeIndex, bx, by, bz, id, f, li, c2[1], c2[2], c2[3], emission, true, quadLightEmission )
 			local meta3 = lightMetaFast( shadeIndex, bx, by, bz, id, f, li, c3[1], c3[2], c3[3], emission, true, quadLightEmission )
 			local meta4 = lightMetaFast( shadeIndex, bx, by, bz, id, f, li, c4[1], c4[2], c4[3], emission, true, quadLightEmission )
-			meta1.shared, meta2.shared, meta3.shared, meta4.shared = true, true, true, true
 			if metaStart then meshPerfAdd( meshPerf, "fullMetaMS", metaStart ) end
 			pushFullCubeFace( push, wx, wy, wz, nrm, corners, baked, tile, u0, v0, u1, v1, rot, flipU, flipV, color1, color2, color3, color4, meta1, meta2, meta3, meta4, meshProbe, meshPerf )
 		end
@@ -1221,11 +1231,13 @@ local function emitWaterloggedOverlay( ctx, stateId, bx, by, bz, wx, wy, wz, tar
 		}, targetBuffer, flush, meshPerf, C.VERT_LIMIT )
 	end
 	ctx.setCur( previous )
+	ctx.releaseScratch( overlay )
 	return vertexCount
 end
 
 
 function RM.EmitBlock( ctx, li, stateId )
+	ctx.beginBlockLight()
 	local key = ctx.key
 	local meshPerf = ctx.meshPerf
 	local meshProbe = ctx.meshProbe
@@ -1315,6 +1327,7 @@ function RM.EmitBlock( ctx, li, stateId )
 			li,
 			targetBuffer
 		)
+		if ctx.visibility.error then return false end
 		emitKind = emitKind or "shape"
 		directEmitCheapFullCube = directEmitCheapFullCube == true
 		directEmitVertexCount = directEmitVertexCount or 0
@@ -1330,15 +1343,22 @@ function RM.EmitBlock( ctx, li, stateId )
 				vertexCount = emittedVertices,
 				material = targetBuffer.material,
 				translucent = targetBuffer.translucent,
+				hasSecondaryUV = cur.hasSecondaryUV == true,
 				kind = emitKind,
 			} or nil
-			if shouldStoreBlockEmissionCache( emitKind, emittedVertices ) then
+			local retainBlock = shouldStoreBlockEmissionCache( emitKind, emittedVertices )
+			if retainBlock then
 				blockRecord = MC.StoreBlockEmissionCache( key, blockSectionIndex, li, id, orient, targetLightStyle, blockRecord, stateId )
 			else
 				MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
 				if MC.ClearBlockCacheDirtySlot then MC.ClearBlockCacheDirtySlot( key, blockSectionIndex, li ) end
 			end
 			MC.AppendCachedBlockEmission( blockRecord, targetBuffer, flush, meshPerf, C.VERT_LIMIT )
+			if not retainBlock then
+				ctx.releaseScratch( cur )
+				cur = nil
+				ctx.setCur( nil )
+			end
 		end
 		local overlayVertices = emitWaterloggedOverlay(
 			ctx, stateId, bx, by, bz, wx, wy, wz, buffers.translucent, flush, meshPerf

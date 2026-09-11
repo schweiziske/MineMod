@@ -72,7 +72,7 @@ local TORCH_WARM = { 1.0, 0.82, 0.58 }
 local NIGHT_BLUE = { 0.28, 0.42, 1.0 }
 local SUNSET_ORANGE = { 1.0, 0.62, 0.36 }
 
--- ==== Vanilla Minecraft lightmap (mc_light_style vanilla) ==================
+-- ==== Vanilla Minecraft base lightmap =====================================
 -- 1:1 port of Minecraft 26.2's lightmap pipeline (out/ decompile):
 -- assets/minecraft/shaders/core/lightmap.fsh fed by
 -- LightmapRenderStateExtractor.extract() with the overworld defaults from
@@ -103,7 +103,6 @@ local VANILLA_SKY_COLOR_KEYS = {
 }
 
 local function vanillaLightmapActive()
-	if not ( MC.LightStyleName and MC.LightStyleName() == "vanilla" ) then return false end
 	return lightmapEnabled()
 end
 
@@ -443,7 +442,10 @@ if cvars and cvars.AddChangeCallback then
 	cvars.AddChangeCallback( "mc_lightmap", function()
 		MC.RefreshGlobalLightmap()
 	end, "mc_global_lightmap_toggle" )
-	for _, name in ipairs( { "mc_lightmap_torch_warmth", "mc_lightmap_ambient", "mc_lightmap_sunset", "mc_lightmap_night_gamma", "mc_lightmap_sky_curve", "mc_lightmap_sky_min", "mc_lightmap_eye_dark", "mc_light_style", "mc_lightmap_vanilla_gamma", "mc_lightmap_vanilla_flicker" } ) do
+	if cvars.RemoveChangeCallback then
+		cvars.RemoveChangeCallback( "mc_light_style", "mc_global_lightmap_refresh_mc_light_style" )
+	end
+	for _, name in ipairs( { "mc_lightmap_torch_warmth", "mc_lightmap_ambient", "mc_lightmap_sunset", "mc_lightmap_night_gamma", "mc_lightmap_sky_curve", "mc_lightmap_sky_min", "mc_lightmap_eye_dark", "mc_lightmap_vanilla_gamma", "mc_lightmap_vanilla_flicker" } ) do
 		cvars.AddChangeCallback( name, function()
 			MC.RefreshGlobalLightmap()
 		end, "mc_global_lightmap_refresh_" .. name )

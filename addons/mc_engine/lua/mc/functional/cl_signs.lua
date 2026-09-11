@@ -2,10 +2,14 @@
 
 MC = MC or {}
 
-local MAX_RENDER_DISTANCE_SQR = ( ( MC.BS or 36.5 ) * 64 ) ^ 2
+local Coords = MC.API.Coords
 local TEXT_COLOR = Color( 25, 12, 4, 255 )
 local EDIT_TEXT_COLOR = Color( 55, 28, 10, 255 )
 local SIGN_GUI_MATERIALS = {}
+local signPosition, signRight, signNormal = Vector(), Vector(), Vector()
+local DOWN = Vector( 0, 0, -1 )
+-- mesh.Position copies each glyph corner before the next glyph reuses it.
+local topLeft, topRight, bottomLeft, bottomRight = Vector(), Vector(), Vector(), Vector()
 
 local function fontAtlasMaterial( path )
 	return Material( path .. ".png", "alphatest vertexcolor vertexalpha nocull" )
@@ -153,43 +157,47 @@ local function signYaw( stateId, name )
 	return ( tonumber( MC.GetStateProperty( stateId, "rotation" ) ) or 0 ) * 22.5
 end
 
-local function signTransform( bx, by, bz, stateId, name )
-	local bs = MC.BS or 36.5
+local function signTransform( bx, by, bz, stateId, name, bs )
 	local yaw = signYaw( stateId, name )
 	local radians = math.rad( yaw )
 	local nx, ny = -math.sin( radians ), math.cos( radians )
-	local base = MC.CellWorldMin( bx, by, bz )
+	local base = Coords.CellRenderMin( bx, by, bz )
 	local hanging = string.match( name, "_hanging_sign$" ) ~= nil
 	local wall = string.match( name, "_wall_sign$" ) ~= nil
-	local position = Vector(
-		base.x + bs * ( 0.5 + nx * ( hanging and 0.073 or wall and -0.390833333 or 0.046666667 ) ),
-		base.y + bs * ( 0.5 + ny * ( hanging and 0.073 or wall and -0.390833333 or 0.046666667 ) ),
-		base.z + bs * ( hanging and 0.305 or wall and 0.520833333 or 0.833333333 )
-	)
+	local offset = hanging and 0.073 or wall and -0.390833333 or 0.046666667
+	signPosition.x = base.x + bs * ( 0.5 + nx * offset )
+	signPosition.y = base.y + bs * ( 0.5 + ny * offset )
+	signPosition.z = base.z + bs * ( hanging and 0.305 or wall and 0.520833333 or 0.833333333 )
 	-- The generated sign model's front-face local X runs opposite the state yaw
 	-- basis used here. Negate it so glyph order and glyph UVs read left-to-right
 	-- from the visible side instead of appearing horizontally mirrored.
-	return position, Vector( -math.cos( radians ), -math.sin( radians ), 0 ),
-		Vector( 0, 0, -1 ), Vector( nx, ny, 0 ),
+	signRight.x, signRight.y, signRight.z = -math.cos( radians ), -math.sin( radians ), 0
+	signNormal.x, signNormal.y, signNormal.z = nx, ny, 0
+	return signPosition, signRight, DOWN, signNormal,
 		hanging and bs * 0.0140625 or bs / 96, hanging and 9 or 10
 end
 
 local function emitWorldGlyph( origin, right, down, normal, scale, x, y, glyph, color )
-	local zBias = normal * 0.02
-	local topLeft = origin + right * ( x * scale ) + down * ( y * scale ) + zBias
-	local topRight = topLeft + right * ( 8 * scale )
-	local bottomLeft = topLeft + down * ( 8 * scale )
-	local bottomRight = topRight + down * ( 8 * scale )
+	local sx, sy, size = x * scale, y * scale, 8 * scale
+	local tx = origin.x + right.x * sx + down.x * sy + normal.x * 0.02
+	local ty = origin.y + right.y * sx + down.y * sy + normal.y * 0.02
+	local tz = origin.z + right.z * sx + down.z * sy + normal.z * 0.02
+	topLeft.x, topLeft.y, topLeft.z = tx, ty, tz
+	topRight.x, topRight.y, topRight.z = tx + right.x * size, ty + right.y * size, tz + right.z * size
+	bottomLeft.x, bottomLeft.y, bottomLeft.z = tx + down.x * size, ty + down.y * size, tz + down.z * size
+	bottomRight.x = topRight.x + down.x * size
+	bottomRight.y = topRight.y + down.y * size
+	bottomRight.z = topRight.z + down.z * size
 	mesh.Position( topLeft ); mesh.Color( color.r, color.g, color.b, color.a ); mesh.TexCoord( 0, glyph.u0, glyph.v0 ); mesh.AdvanceVertex()
 	mesh.Position( topRight ); mesh.Color( color.r, color.g, color.b, color.a ); mesh.TexCoord( 0, glyph.u1, glyph.v0 ); mesh.AdvanceVertex()
 	mesh.Position( bottomRight ); mesh.Color( color.r, color.g, color.b, color.a ); mesh.TexCoord( 0, glyph.u1, glyph.v1 ); mesh.AdvanceVertex()
 	mesh.Position( bottomLeft ); mesh.Color( color.r, color.g, color.b, color.a ); mesh.TexCoord( 0, glyph.u0, glyph.v1 ); mesh.AdvanceVertex()
 end
 
-local function drawSignText( bx, by, bz, stateId, record )
+local function drawSignText( bx, by, bz, stateId, record, bs )
 	local schema = MC.BlockStateSchemaForState( stateId )
 	if not schema or not record.data or not record.data.lines then return end
-	local origin, right, down, normal, scale, lineHeight = signTransform( bx, by, bz, stateId, schema.name )
+	local origin, right, down, normal, scale, lineHeight = signTransform( bx, by, bz, stateId, schema.name, bs )
 	local lineMidpoint = 4 * lineHeight * 0.5
 	local lines = record.data.lines
 	for atlasIndex = 1, #FONT_ATLASES do
@@ -258,13 +266,15 @@ hook.Add( "PostDrawTranslucentRenderables", "mc_sign_block_entities", function( 
 		rebuildSignRenderEntries()
 	end
 	local eye = EyePos()
+	local bs = Coords.BlockSize()
+	local maxDistanceSqr = ( bs * 64 ) ^ 2
 	for index = 1, SignRenderCount do
 		local entry = SignRenderEntries[index]
-		local center = MC.CellWorldCenter( entry.bx, entry.by, entry.bz )
-		if eye:DistToSqr( center ) <= MAX_RENDER_DISTANCE_SQR then
+		local center = Coords.CellRenderCenter( entry.bx, entry.by, entry.bz )
+		if eye:DistToSqr( center ) <= maxDistanceSqr then
 			local stateId = MC.GetBlockState( entry.bx, entry.by, entry.bz )
 			if MC.IsEditableSignState( stateId ) then
-				drawSignText( entry.bx, entry.by, entry.bz, stateId, entry.record )
+				drawSignText( entry.bx, entry.by, entry.bz, stateId, entry.record, bs )
 			end
 		end
 	end

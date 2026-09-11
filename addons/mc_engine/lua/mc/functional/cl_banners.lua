@@ -2,10 +2,33 @@
 
 MC = MC or {}
 
-local MAX_RENDER_DISTANCE_SQR = ( ( MC.BS or 36.5 ) * 64 ) ^ 2
+local Coords = MC.API.Coords
 local MATERIAL_FLAGS = "alphatest vertexcolor vertexalpha noclamp nocull"
 local BANNER_BODY = Material( "mc/entity/banner/banner_base.png", MATERIAL_FLAGS )
 local BANNER_MATERIALS = {}
+local POLE_UV = { 44 / 64, 0, 52 / 64, 42 / 64 }
+local BAR_UV = { 0, 42 / 64, 44 / 64, 46 / 64 }
+local WHITE = { r = 255, g = 255, b = 255 }
+local LIT_COLOR = { r = 255, g = 255, b = 255, a = 255 }
+local EMPTY_PATTERNS = {}
+
+-- mesh.Position/Normal copy immediately; these never escape into retained meshes.
+local ppp, ppn, pnp, pnn = Vector(), Vector(), Vector(), Vector()
+local npp, npn, nnp, nnn = Vector(), Vector(), Vector(), Vector()
+local inverse = Vector()
+local basisTop, basisRight, basisNormal, basisDown = Vector(), Vector(), Vector(), Vector()
+local UP, bodyCenter = Vector( 0, 0, 1 ), Vector()
+
+local function setPoint( point, center, right, forward, up, x, y, z )
+	point.x = center.x + right.x * x + forward.x * y + up.x * z
+	point.y = center.y + right.y * x + forward.y * y + up.y * z
+	point.z = center.z + right.z * x + forward.z * y + up.z * z
+end
+
+local function inverseNormal( normal )
+	inverse.x, inverse.y, inverse.z = -normal.x, -normal.y, -normal.z
+	return inverse
+end
 
 for _, patternName in ipairs( MC.BannerPatternNames or {} ) do
 	local pattern = MC.BannerPatternAssets[patternName]
@@ -28,18 +51,21 @@ local function emitQuad( a, b, c, d, u0, v0, u1, v1, color, normal )
 end
 
 local function emitBox( center, right, forward, up, halfRight, halfForward, halfUp, uv, color )
-	local r, f, z = right * halfRight, forward * halfForward, up * halfUp
-	local ppp, ppn = center + r + f + z, center + r + f - z
-	local pnp, pnn = center + r - f + z, center + r - f - z
-	local npp, npn = center - r + f + z, center - r + f - z
-	local nnp, nnn = center - r - f + z, center - r - f - z
+	setPoint( ppp, center, right, forward, up, halfRight, halfForward, halfUp )
+	setPoint( ppn, center, right, forward, up, halfRight, halfForward, -halfUp )
+	setPoint( pnp, center, right, forward, up, halfRight, -halfForward, halfUp )
+	setPoint( pnn, center, right, forward, up, halfRight, -halfForward, -halfUp )
+	setPoint( npp, center, right, forward, up, -halfRight, halfForward, halfUp )
+	setPoint( npn, center, right, forward, up, -halfRight, halfForward, -halfUp )
+	setPoint( nnp, center, right, forward, up, -halfRight, -halfForward, halfUp )
+	setPoint( nnn, center, right, forward, up, -halfRight, -halfForward, -halfUp )
 	local u0, v0, u1, v1 = uv[1], uv[2], uv[3], uv[4]
 	emitQuad( npp, ppp, ppn, npn, u0, v0, u1, v1, color, forward )
-	emitQuad( pnp, nnp, nnn, pnn, u0, v0, u1, v1, color, -forward )
+	emitQuad( pnp, nnp, nnn, pnn, u0, v0, u1, v1, color, inverseNormal( forward ) )
 	emitQuad( ppp, pnp, pnn, ppn, u0, v0, u1, v1, color, right )
-	emitQuad( nnp, npp, npn, nnn, u0, v0, u1, v1, color, -right )
+	emitQuad( nnp, npp, npn, nnn, u0, v0, u1, v1, color, inverseNormal( right ) )
 	emitQuad( nnp, pnp, ppp, npp, u0, v0, u1, v1, color, up )
-	emitQuad( npn, ppn, pnn, nnn, u0, v0, u1, v1, color, -up )
+	emitQuad( npn, ppn, pnn, nnn, u0, v0, u1, v1, color, inverseNormal( up ) )
 end
 
 local function bannerYaw( stateId )
@@ -51,90 +77,94 @@ local function bannerYaw( stateId )
 end
 
 local function litColor( source, lightR, lightG, lightB )
-	return Color(
-		math.Clamp( math.floor( source.r * lightR + 0.5 ), 0, 255 ),
-		math.Clamp( math.floor( source.g * lightG + 0.5 ), 0, 255 ),
-		math.Clamp( math.floor( source.b * lightB + 0.5 ), 0, 255 ),
-		255
-	)
+	LIT_COLOR.r = math.Clamp( math.floor( source.r * lightR + 0.5 ), 0, 255 )
+	LIT_COLOR.g = math.Clamp( math.floor( source.g * lightG + 0.5 ), 0, 255 )
+	LIT_COLOR.b = math.Clamp( math.floor( source.b * lightB + 0.5 ), 0, 255 )
+	return LIT_COLOR
 end
 
-local function bannerBasis( bx, by, bz, stateId )
-	local bs = MC.BS or 36.5
+local function bannerBasis( bx, by, bz, stateId, bs, renderCenter )
 	local yaw = bannerYaw( stateId )
 	local radians = math.rad( yaw )
-	local right = Vector( math.cos( radians ), math.sin( radians ), 0 )
-	local normal = Vector( -math.sin( radians ), math.cos( radians ), 0 )
-	local up = Vector( 0, 0, 1 )
-	local base = MC.CellWorldMin( bx, by, bz )
+	local cosine, sine = math.cos( radians ), math.sin( radians )
+	basisRight.x, basisRight.y, basisRight.z = cosine, sine, 0
+	basisNormal.x, basisNormal.y, basisNormal.z = -sine, cosine, 0
 	local wall = MC.IsWallBannerState( stateId )
-	local centerXY = Vector( base.x + bs * 0.5, base.y + bs * 0.5, 0 )
-	if wall then centerXY = centerXY - normal * ( bs * 0.46 ) end
-	local topZ = base.z + bs * ( wall and 20.5 / 24 or 44 / 24 )
+	local wallOffset = wall and bs * 0.46 or 0
+	basisTop.x = renderCenter.x - basisNormal.x * wallOffset
+	basisTop.y = renderCenter.y - basisNormal.y * wallOffset
+	basisTop.z = renderCenter.z - bs * 0.5 + bs * ( wall and 20.5 / 24 or 44 / 24 )
 	local phase = ( ( bx * 7 + by * 9 + bz * 13 ) % 100 + CurTime() * 20 ) / 100
 	local angle = ( -0.0125 + 0.01 * math.cos( math.pi * 2 * phase ) ) * math.pi
-	local down = Vector( 0, 0, -math.cos( angle ) ) + normal * math.sin( angle )
-	return centerXY + Vector( 0, 0, topZ ), right, normal, up, down, wall
+	local sway = math.sin( angle )
+	basisDown.x, basisDown.y, basisDown.z = basisNormal.x * sway, basisNormal.y * sway, -math.cos( angle )
+	return basisTop, basisRight, basisNormal, UP, basisDown, wall
 end
 
-local function drawBody( topCenter, right, normal, up, wall, lightColor )
-	local bs = MC.BS or 36.5
+local function drawBody( topCenter, right, normal, up, wall, lightColor, bs )
 	render.SetMaterial( BANNER_BODY )
 	mesh.Begin( MATERIAL_QUADS, wall and 6 or 12 )
+	bodyCenter.x, bodyCenter.y = topCenter.x, topCenter.y
 	if not wall then
+		bodyCenter.z = topCenter.z - bs * 23 / 24
 		emitBox(
-			Vector( topCenter.x, topCenter.y, topCenter.z - bs * 23 / 24 ), right, normal, up,
+			bodyCenter, right, normal, up,
 			bs / 24, bs / 24, bs * 21 / 24,
-			{ 44 / 64, 0, 52 / 64, 42 / 64 }, lightColor
+			POLE_UV, lightColor
 		)
 	end
+	bodyCenter.z = topCenter.z - bs / 24
 	emitBox(
-		topCenter + Vector( 0, 0, -bs / 24 ), right, normal, up,
+		bodyCenter, right, normal, up,
 		bs * 10 / 24, bs / 24, bs / 24,
-		{ 0, 42 / 64, 44 / 64, 46 / 64 }, lightColor
+		BAR_UV, lightColor
 	)
 	mesh.End()
 end
 
-local function drawFlagLayer( material, topCenter, right, normal, down, color, order )
-	local bs = MC.BS or 36.5
+local function drawFlagLayer( material, topCenter, right, normal, down, color, order, bs )
 	local halfWidth = bs * 10 / 24
 	local height = bs * 40 / 24
 	local thickness = bs / 48
 	local bias = math.max( 0, tonumber( order ) or 0 ) * 0.01
-	local leftTop, rightTop = topCenter - right * halfWidth, topCenter + right * halfWidth
-	local leftBottom, rightBottom = leftTop + down * height, rightTop + down * height
-	local frontOffset = normal * ( thickness + bias )
-	local backOffset = -normal * ( thickness + bias )
+	local offset = thickness + bias
 	render.SetMaterial( material )
 	mesh.Begin( MATERIAL_QUADS, 2 )
-	emitQuad( leftTop + frontOffset, rightTop + frontOffset, rightBottom + frontOffset, leftBottom + frontOffset,
+	setPoint( ppp, topCenter, right, normal, down, -halfWidth, offset, 0 )
+	setPoint( ppn, topCenter, right, normal, down, halfWidth, offset, 0 )
+	setPoint( pnp, topCenter, right, normal, down, halfWidth, offset, height )
+	setPoint( pnn, topCenter, right, normal, down, -halfWidth, offset, height )
+	emitQuad( ppp, ppn, pnp, pnn,
 		1 / 64, 1 / 64, 21 / 64, 41 / 64, color, normal )
-	emitQuad( rightTop + backOffset, leftTop + backOffset, leftBottom + backOffset, rightBottom + backOffset,
-		22 / 64, 1 / 64, 42 / 64, 41 / 64, color, -normal )
+	setPoint( ppp, topCenter, right, normal, down, halfWidth, -offset, 0 )
+	setPoint( ppn, topCenter, right, normal, down, -halfWidth, -offset, 0 )
+	setPoint( pnp, topCenter, right, normal, down, -halfWidth, -offset, height )
+	setPoint( pnn, topCenter, right, normal, down, halfWidth, -offset, height )
+	emitQuad( ppp, ppn, pnp, pnn,
+		22 / 64, 1 / 64, 42 / 64, 41 / 64, color, inverseNormal( normal ) )
 	mesh.End()
 end
 
-local function drawBanner( bx, by, bz, stateId, record )
+local function drawBanner( bx, by, bz, stateId, record, bs, renderCenter )
 	local baseName = MC.BannerBaseColorForState( stateId )
 	local baseColor = baseName and MC.BannerColors[baseName]
 	if not baseColor or not record.data then return end
-	local center = MC.CellWorldCenter( bx, by, bz )
+	local center = Coords.CellCenter( bx, by, bz )
 	local lightR, lightG, lightB = 1, 1, 1
 	if MC.SampleDynamicLightingRGB then lightR, lightG, lightB = MC.SampleDynamicLightingRGB( center, 0 ) end
-	local white = litColor( { r = 255, g = 255, b = 255 }, lightR, lightG, lightB )
-	local topCenter, right, normal, up, down, wall = bannerBasis( bx, by, bz, stateId )
-	drawBody( topCenter, right, normal, up, wall, white )
-	drawFlagLayer( BANNER_BODY, topCenter, right, normal, down, white, 0 )
+	local white = litColor( WHITE, lightR, lightG, lightB )
+	local topCenter, right, normal, up, down, wall = bannerBasis( bx, by, bz, stateId, bs, renderCenter )
+	drawBody( topCenter, right, normal, up, wall, white, bs )
+	drawFlagLayer( BANNER_BODY, topCenter, right, normal, down, white, 0, bs )
 	drawFlagLayer( BANNER_MATERIALS["minecraft:base"], topCenter, right, normal, down,
-		litColor( baseColor, lightR, lightG, lightB ), 1 )
-	for index, layer in ipairs( record.data.patterns or {} ) do
+		litColor( baseColor, lightR, lightG, lightB ), 1, bs )
+	for index, layer in ipairs( record.data.patterns or EMPTY_PATTERNS ) do
 		if index > ( MC.BannerMaxStoredPatterns or 16 ) then break end
 		local material = BANNER_MATERIALS[layer.pattern]
 		local dye = MC.BannerColors[layer.color]
 		if material and dye then
 			drawFlagLayer( material, topCenter, right, normal, down,
-				litColor( dye, lightR, lightG, lightB ), index + 1 )
+				litColor( dye, lightR, lightG, lightB ), index + 1, bs )
 		end
 	end
 end
@@ -177,14 +207,16 @@ hook.Add( "PostDrawTranslucentRenderables", "mc_banner_block_entities", function
 		rebuildBannerRenderEntries()
 	end
 	local eye = EyePos()
+	local bs = Coords.BlockSize()
+	local maxDistanceSqr = ( bs * 64 ) ^ 2
 	if render.PushFilterMin then render.PushFilterMin( TEXFILTER.POINT ) end
 	if render.PushFilterMag then render.PushFilterMag( TEXFILTER.POINT ) end
 	for index = 1, BannerRenderCount do
 		local entry = BannerRenderEntries[index]
-		local center = MC.CellWorldCenter( entry.bx, entry.by, entry.bz )
-		if eye:DistToSqr( center ) <= MAX_RENDER_DISTANCE_SQR then
+		local center = Coords.CellRenderCenter( entry.bx, entry.by, entry.bz )
+		if eye:DistToSqr( center ) <= maxDistanceSqr then
 			local stateId = MC.GetBlockState( entry.bx, entry.by, entry.bz )
-			if MC.IsBannerState( stateId ) then drawBanner( entry.bx, entry.by, entry.bz, stateId, entry.record ) end
+			if MC.IsBannerState( stateId ) then drawBanner( entry.bx, entry.by, entry.bz, stateId, entry.record, bs, center ) end
 		end
 	end
 	if render.PopFilterMag then render.PopFilterMag() end

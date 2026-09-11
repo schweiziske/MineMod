@@ -29,14 +29,9 @@ MC.MeshShadowMapSoftness = MC.MeshShadowMapSoftness or ( CreateClientConVar and 
 	"Shadow PCF radius in shadow-map texels; normal bias stays at a fixed one-texel footprint" ) )
 MC.MeshShadowFaceFix = MC.MeshShadowFaceFix or ( CreateClientConVar and CreateClientConVar( "mc_shadow_facefix", "0", true, false,
 	"A/B test separated cast-shadow and back-face lighting; 0 keeps legacy composition, 1 uses the face-lighting fix" ) )
--- One look selector instead of the old three mutually exclusive booleans
--- (mc_mesh_gpu_shader_fancy / _light_fast / _light_vanilla). Legacy archived
--- values from the pre-rename mc_light_style profile convar ("shader", "best",
--- numbers) normalize to fancy.
--- Disabled for now: plain = smooth lighting without grading.
--- Disabled for now: vanilla = 1:1 Minecraft lightmap composition (no shadows).
-MC.LightStyle = MC.LightStyle or ( CreateClientConVar and CreateClientConVar( "mc_light_style", "fancy", true, false,
-	"MC chunk lighting look: fancy = PCF shadows + cool/warm grading (default), fast = low-sample legacy look" ) )
+-- Keep archived settings readable without letting them select the L1 pipeline.
+MC.LightStyle = MC.LightStyle or ( CreateClientConVar and CreateClientConVar( "mc_light_style", "vanilla", true, false,
+	"Deprecated look selector; the L1 renderer uses the vanilla base material" ) )
 MC.MeshShadowMapTint = MC.MeshShadowMapTint or ( CreateClientConVar and CreateClientConVar( "mc_shadow_tint", "0.6", true, false,
 	"Fancy look: how strongly shadows shift toward a cool sky tint (0 = plain darkening)" ) )
 MC.MeshShadowMapEdgeFade = MC.MeshShadowMapEdgeFade or ( CreateClientConVar and CreateClientConVar( "mc_shadow_edge_fade", "0.1", true, false,
@@ -118,7 +113,7 @@ MC.MeshLazyBuild = MC.MeshLazyBuild or ( CreateClientConVar and CreateClientConV
 MC.MeshLazyDistance = MC.MeshLazyDistance or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lazy_distance", "10000", true, false,
 	"Lazy chunk mesh build/draw distance used while mc_mesh_draw_distance is 0" ) )
 MC.MeshBuildFrameMS = MC.MeshBuildFrameMS or ( CreateClientConVar and CreateClientConVar( "mc_mesh_build_frame_ms", "3", true, false,
-	"Approximate client milliseconds spent building lazy chunk meshes per frame; 0 = unlimited" ) )
+	"Approximate milliseconds per frame for Lua geometry/light rebuilds (native: lazy builds only); 0 = unlimited" ) )
 MC.TexturePack = MC.TexturePack or ( CreateClientConVar and CreateClientConVar( "mc_texture_pack", "default", true, false,
 	"MC atlas texture pack: default or programmer_art" ) )
 
@@ -142,7 +137,6 @@ local MC_LIGHT_STYLE_GPU_SHADER = "gpu_shader"
 local MC_LIGHT_STYLE_GPU_LIGHT_TEXTURE = "gpu_light_texture"
 
 local mathClamp, mathFloor = math.Clamp, math.floor
-local stringLower = string.lower
 
 local LightProfiles = RM.LightProfiles or {}
 RM.LightProfiles = LightProfiles
@@ -182,39 +176,13 @@ local function currentLightStyle()
 	return MC_LIGHT_STYLE_SHADER
 end
 
--- GPU look selector (mc_light_style): which chunk pixel shader family draws the
--- world. This is now the ONLY lighting convar that selects anything - the
--- mc_light_profile pipeline selector it used to be distinguished from is gone.
--- Unknown values still fall back to fancy, which also absorbs archived leftovers
--- from when this NAME held the profile selector ("shader", "best", numbers).
-local function normalizeGpuLightStyle( style )
-	style = stringLower( tostring( style or "" ) )
-	if style == "fast" then return "fast" end
-	-- if style == "plain" then return "plain" end
-	-- if style == "vanilla" then return "vanilla" end
-	return "fancy"
-end
-
+-- The existing vanilla shader is the L1 base, not an L2 lighting acceptance.
 function MC.LightStyleName()
-	local cv = MC.LightStyle
-	return normalizeGpuLightStyle( cv and cv.GetString and cv:GetString() or "fancy" )
+	return "vanilla"
 end
 
-local function enforceGpuLightStyle( value )
-	local raw = stringLower( tostring( value or "" ) )
-	local normalized = normalizeGpuLightStyle( raw )
-	if raw == normalized or not RunConsoleCommand then return end
-	RunConsoleCommand( "mc_light_style", normalized )
-end
-
-if cvars and cvars.AddChangeCallback then
-	cvars.AddChangeCallback( "mc_light_style", function( _, _, value )
-		enforceGpuLightStyle( value )
-	end, "mc_light_style_supported_values" )
-end
-
-if MC.LightStyle and MC.LightStyle.GetString then
-	enforceGpuLightStyle( MC.LightStyle:GetString() )
+if cvars and cvars.RemoveChangeCallback then
+	cvars.RemoveChangeCallback( "mc_light_style", "mc_light_style_supported_values" )
 end
 
 function RM.CurrentLightProfile()

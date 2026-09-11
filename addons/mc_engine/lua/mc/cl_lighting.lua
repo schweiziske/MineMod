@@ -407,6 +407,7 @@ end )
 
 local function markLoadedMeshesDirty()
 	clearGpuLightTextures()
+	if MC.MarkAllBlockAnimationLightDirty then MC.MarkAllBlockAnimationLightDirty() end
 	for key, chunk in pairs( MC.World or {} ) do
 		if chunk and chunk.count and chunk.count > 0 and MC.MarkChunkDirty then
 			MC.MarkChunkDirty( key )
@@ -875,6 +876,7 @@ function MC.MarkLightSectionsDirtyForChangedCells( changed )
 	local world = MC.World
 	local meshDirty = MC.MeshDirty
 	local meshLightDirty = MC.MeshLightDirty
+	local markLightSectionDirty = MC.MarkLightSectionDirty
 	local meshBlockLightDirty = MC.MeshBlockLightDirty
 	local cs = MC.CS or 16
 	local ch = MC.CH or 32
@@ -917,17 +919,19 @@ function MC.MarkLightSectionsDirtyForChangedCells( changed )
 						lightDirtySections[sectionIndex] = lightDirtySection
 					end
 					lightDirtySection[li] = true
-					if not ( meshDirty and meshDirty[key] == true ) then
+					if markLightSectionDirty then
+						markLightSectionDirty( key, sectionIndex, MC.PartialLightingRateLimited == true )
+					elseif not ( meshDirty and meshDirty[key] == true ) then
 						local sections = meshLightDirty[key]
+						MC.MeshLightDirtyRateLimited = MC.MeshLightDirtyRateLimited or {}
 						if not sections then
 							sections = {}
 							meshLightDirty[key] = sections
+							MC.MeshLightDirtyRateLimited[key] = MC.PartialLightingRateLimited == true and true or nil
+						elseif not MC.PartialLightingRateLimited then
+							MC.MeshLightDirtyRateLimited[key] = nil
 						end
 						sections[sectionIndex] = true
-						if MC.PartialLightingRateLimited then
-							MC.MeshLightDirtyRateLimited = MC.MeshLightDirtyRateLimited or {}
-							MC.MeshLightDirtyRateLimited[key] = true
-						end
 					end
 					local dirtyKey = key * 32 + sectionIndex
 					if not dirty[dirtyKey] then
@@ -938,6 +942,7 @@ function MC.MarkLightSectionsDirtyForChangedCells( changed )
 			end
 		end
 	end
+	if not markLightSectionDirty and dirtyCount > 0 and MC.WakeLazyMeshBuilder then MC.WakeLazyMeshBuilder() end
 	return dirtyCount
 end
 
@@ -1014,8 +1019,14 @@ function MC.RebuildLightingCells()
 	local perfStart = SysTime()
 	ensureLightSourceIndex()
 	local native = nativeBlockLightBackend()
-	if MC.ClearSkyFlood then MC.ClearSkyFlood() end
-	if not native and MC.QueueAllSkyFlood then MC.QueueAllSkyFlood() end
+	-- Meshes can query sky columns while a snapshot is still hydrating. Rebuild
+	-- both the column index and tops against the final world, not just the flood.
+	if MC.ClearSkyColumnCache then
+		MC.ClearSkyColumnCache()
+	else
+		if MC.ClearSkyFlood then MC.ClearSkyFlood() end
+		if not native and MC.QueueAllSkyFlood then MC.QueueAllSkyFlood() end
+	end
 	local minX, minY, minZ, maxX, maxY, maxZ = loadedWorldBounds()
 	if native then
 		native.ScheduleBlockLightRebuild( 0 )
@@ -1024,6 +1035,9 @@ function MC.RebuildLightingCells()
 		rebuildBlockLightCells()
 	end
 	MC.LightCellsReady = true
+	-- Implicit sky values (including opaque cells becoming zero) have no stored
+	-- change notification. Refresh existing tiles too, under the mesh budget.
+	if MC.QueueAllGpuChunkLightTextureRefresh then MC.QueueAllGpuChunkLightTextureRefresh() end
 	local stats = MC.LightPerfStats or {}
 	MC.LightPerfStats = stats
 	stats.lastRebuildMS = perfMS( perfStart )
@@ -1302,8 +1316,6 @@ end
 concommand.Add( "mc_light_rebuild", function()
 	if not MC.RebuildLightingCells then return end
 	MC.RebuildLightingCells()
-	if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
-	if MC.ClearSkyColumnCache then MC.ClearSkyColumnCache() end
 	local stats = MC.LightPerfStats or {}
 	print( string.format( "[MC light] full rebuild: stored light wiped and re-flooded from sources (%.1fms). Use this to clean residue left by old bugs.",
 		tonumber( stats.lastRebuildMS ) or 0 ) )
@@ -1336,6 +1348,6 @@ cvars.AddChangeCallback( "mc_light_ambient_min", function()
 	markLoadedMeshesDirty()
 end, "mc" )
 
-cvars.AddChangeCallback( "mc_light_style", function()
-	markLoadedMeshesDirty()
-end, "mc" )
+if cvars.RemoveChangeCallback then
+	cvars.RemoveChangeCallback( "mc_light_style", "mc" )
+end

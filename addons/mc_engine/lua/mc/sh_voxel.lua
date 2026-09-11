@@ -692,44 +692,21 @@ end
 -- and clients that have not built it pay nothing here.  Updating it in place
 -- avoids rescanning every block in the chunk after each edit merely because
 -- collisionVersion also changed.
-local function updateCachedRenderSectionCell( chunk, li, stateId )
+local function updateCachedRenderSectionCell( chunk, li, stateId, previousVersion )
 	if not CLIENT or not chunk or not chunk.renderSectionBlocks then return end
-	if chunk.renderSectionIndexStoresStateId ~= true or type( chunk.renderSectionBlocksReady ) ~= "table" then
+	local snapshot = MC.RenderSnapshot
+	if not snapshot or not snapshot.UpdateCell then
+		-- The renderer owns this cache. Never continue with a stale cached cell
+		-- if its mutation handler disappeared during a partial Lua refresh.
 		chunk.renderSectionBlocks = nil
 		chunk.renderSectionBlocksReady = nil
 		chunk.renderSectionIndexVersion = nil
 		chunk.renderSectionIndexStoresStateId = nil
+		chunk.renderSectionIndexStorage = nil
+		MC.Fault( "render_snapshot_update_missing", "render snapshot cache exists without its mutation handler" )
 		return
 	end
-	if not MC.RenderSectionIndexForLocal then
-		chunk.renderSectionBlocks = nil
-		chunk.renderSectionBlocksReady = nil
-		chunk.renderSectionIndexVersion = nil
-		chunk.renderSectionIndexStoresStateId = nil
-		return
-	end
-
-	local lx, ly, lz = MC.DecodeLocal( li )
-	local sectionIndex = MC.RenderSectionIndexForLocal( lx, ly, lz )
-	if not chunk.renderSectionBlocksReady[sectionIndex] then
-		chunk.renderSectionIndexVersion = chunk.collisionVersion or 0
-		return
-	end
-	local section = chunk.renderSectionBlocks[sectionIndex]
-	if stateId == 0 then
-		if section then
-			section[li] = nil
-			if next( section ) == nil then chunk.renderSectionBlocks[sectionIndex] = nil end
-		end
-	else
-		if not section then
-			section = {}
-			chunk.renderSectionBlocks[sectionIndex] = section
-		end
-		section[li] = stateId
-	end
-	chunk.renderSectionIndexVersion = chunk.collisionVersion or 0
-	chunk.renderSectionIndexStoresStateId = true
+	snapshot.UpdateCell( chunk, li, stateId, previousVersion )
 end
 
 ------------------------------------------------------------------- block access
@@ -791,6 +768,7 @@ function MC.InvalidateChunkStateStorage( chunk )
 	chunk.stateSections = nil
 	chunk.stateStorageMigrated = nil
 	chunk.packedStateOnly = nil
+	chunk.renderSectionIndexStorage = nil
 	chunk.renderSectionBlocks = nil
 	chunk.renderSectionBlocksReady = nil
 	chunk.renderSectionIndexVersion = nil
@@ -819,6 +797,7 @@ function MC.ResetChunkStateStorage( chunk )
 	chunk.opaqueStates = nil
 	chunk.count = 0
 	chunk.nativeMeshEpoch = nil
+	chunk.renderSectionIndexStorage = nil
 	chunk.renderSectionBlocks = nil
 	chunk.renderSectionBlocksReady = nil
 	chunk.renderSectionIndexVersion = nil
@@ -919,6 +898,7 @@ function MC.FinalizeChunkStateStorage( chunk )
 	end
 	MC.TouchChunkCollisionVersion( chunk )
 	if CLIENT then
+		chunk.renderSectionIndexStorage = nil
 		chunk.renderSectionBlocks = nil
 		chunk.renderSectionBlocksReady = nil
 		chunk.renderSectionIndexVersion = nil
@@ -1039,12 +1019,13 @@ function MC._SetBlockStateStorageRaw( bx, by, bz, stateId, knownOldStateId )
 	end
 	if not changed then return c, false, false, false end
 	local emptied = ( c.count or 0 ) <= 0
+	local previousVersion = c.collisionVersion or 0
 	if stateId == 0 or id == nil then
 		MC.TouchChunkCollisionVersion( c )
-		updateCachedRenderSectionCell( c, li, 0 )
+		updateCachedRenderSectionCell( c, li, 0, previousVersion )
 	else
 		MC.TouchChunkCollisionVersion( c )
-		updateCachedRenderSectionCell( c, li, stateId )
+		updateCachedRenderSectionCell( c, li, stateId, previousVersion )
 	end
 	if emptied then MC.World[key] = nil end
 	if CLIENT and MC.RunEvent then

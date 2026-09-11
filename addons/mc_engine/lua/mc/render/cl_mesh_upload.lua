@@ -2,6 +2,7 @@
 MC = MC or {}
 MC.RenderMesh = MC.RenderMesh or {}
 local RM = MC.RenderMesh
+local VertexBuffer = MC.RenderVertexBuffer
 
 
 local meshBeginUploadEnabled = function()
@@ -51,6 +52,12 @@ local function newMeshPerfStats()
 		recolorMS = 0,
 		cacheAppendMS = 0,
 		fullVisibleMS = 0,
+		visibilitySections = 0,
+		visibilityQueries = 0,
+		visibilityCacheHits = 0,
+		visibilityStateReads = 0,
+		visibilitySnapshotReads = 0,
+		visibilityClassResolves = 0,
 		fullFaceMS = 0,
 		fullColorMS = 0,
 		fullVertexMS = 0,
@@ -79,6 +86,15 @@ local function meshPerfAdd( perf, field, startTime )
 end
 
 local function writeMeshVertex( vert, meshPosition, meshNormal, meshTexCoord, meshColor, meshAdvanceVertex, hasSecondaryUV )
+	if vert.x ~= nil then
+		meshPosition( vert.x, vert.y, vert.z )
+		if vert.nx ~= nil then meshNormal( vert.nx, vert.ny, vert.nz ) end
+		meshTexCoord( 0, vert.u or 0, vert.v or 0 )
+		if hasSecondaryUV then meshTexCoord( 1, vert.u1 or 0, vert.v1 or 0 ) end
+		meshColor( vert.r or 255, vert.g or 255, vert.b or 255, vert.a or 255 )
+		meshAdvanceVertex()
+		return
+	end
 	local pos = vert.pos
 	local normal = vert.normal
 	local color = vert.color
@@ -94,9 +110,45 @@ local function writeMeshVertex( vert, meshPosition, meshNormal, meshTexCoord, me
 	meshAdvanceVertex()
 end
 
+local function materializeTriangleVertices( verts )
+	local out = {}
+	if verts.vertexBufferVersion then
+		for i = 1, verts.count do
+			local o = ( i - 1 ) * VertexBuffer.STRIDE
+			local normal
+			if verts[o + 15] == 1 then normal = Vector( verts[o + 4], verts[o + 5], verts[o + 6] ) end
+			local vertex = {
+				pos = Vector( verts[o + 1], verts[o + 2], verts[o + 3] ),
+				normal = normal, u = verts[o + 7], v = verts[o + 8],
+				color = Color( verts[o + 11], verts[o + 12], verts[o + 13], verts[o + 14] ),
+			}
+			if verts[o + 16] == 1 then vertex.u1, vertex.v1 = verts[o + 9], verts[o + 10] end
+			out[i] = vertex
+		end
+		return out
+	end
+	for i = 1, #verts do
+		local vert = verts[i]
+		if vert and vert.x ~= nil then
+			out[i] = {
+				pos = Vector( vert.x, vert.y, vert.z ),
+				normal = vert.nx ~= nil and Vector( vert.nx, vert.ny, vert.nz ) or nil,
+				u = vert.u or 0,
+				v = vert.v or 0,
+				u1 = vert.u1,
+				v1 = vert.v1,
+				color = Color( vert.r or 255, vert.g or 255, vert.b or 255, vert.a or 255 ),
+			}
+		else
+			out[i] = vert
+		end
+	end
+	return out
+end
+
 local function uploadMeshVertices( meshObj, verts, perf, hasSecondaryUV, forceBuildFromTriangles )
 	if not forceBuildFromTriangles and meshBeginUploadEnabled() and mesh and mesh.Begin and meshObj then
-		local vertexCount = #verts
+		local vertexCount = VertexBuffer.Count( verts )
 		local triCount = math.floor( vertexCount / 3 )
 		local uploadStart = SysTime()
 		local meshBegin = mesh.Begin
@@ -107,8 +159,20 @@ local function uploadMeshVertices( meshObj, verts, perf, hasSecondaryUV, forceBu
 		local meshAdvanceVertex = mesh.AdvanceVertex
 		local meshEnd = mesh.End
 		meshBegin( meshObj, MATERIAL_TRIANGLES, triCount )
-		for i = 1, vertexCount do
-			writeMeshVertex( verts[i], meshPosition, meshNormal, meshTexCoord, meshColor, meshAdvanceVertex, hasSecondaryUV )
+		if verts.vertexBufferVersion then
+			for i = 1, vertexCount do
+				local o = ( i - 1 ) * VertexBuffer.STRIDE
+				meshPosition( verts[o + 1], verts[o + 2], verts[o + 3] )
+				if verts[o + 15] == 1 then meshNormal( verts[o + 4], verts[o + 5], verts[o + 6] ) end
+				meshTexCoord( 0, verts[o + 7], verts[o + 8] )
+				if hasSecondaryUV then meshTexCoord( 1, verts[o + 9], verts[o + 10] ) end
+				meshColor( verts[o + 11], verts[o + 12], verts[o + 13], verts[o + 14] )
+				meshAdvanceVertex()
+			end
+		else
+			for i = 1, vertexCount do
+				writeMeshVertex( verts[i], meshPosition, meshNormal, meshTexCoord, meshColor, meshAdvanceVertex, hasSecondaryUV )
+			end
 		end
 		meshEnd()
 		meshPerfAdd( perf, "buildTriMS", uploadStart )
@@ -117,7 +181,7 @@ local function uploadMeshVertices( meshObj, verts, perf, hasSecondaryUV, forceBu
 	end
 
 	local uploadStart = SysTime()
-	meshObj:BuildFromTriangles( verts )
+	meshObj:BuildFromTriangles( materializeTriangleVertices( verts ) )
 	meshPerfAdd( perf, "buildTriMS", uploadStart )
 	if perf then perf.buildTriangleUploads = ( perf.buildTriangleUploads or 0 ) + 1 end
 	return "triangles"
@@ -157,6 +221,15 @@ local function shouldStoreBlockEmissionCache( kind, vertexCount )
 	return true
 end
 
+local function meshUploadMode( perf )
+	local begin = ( perf.meshBeginUploads or 0 ) > 0
+	local triangles = ( perf.buildTriangleUploads or 0 ) > 0
+	if begin and triangles then return "mixed" end
+	if begin then return "begin" end
+	if triangles then return "triangles" end
+	return "none"
+end
+
 local function publishMeshPerfStats( perf )
 	local stats = MC.LightPerfStats
 	if not stats or not perf then return end
@@ -189,13 +262,19 @@ local function publishMeshPerfStats( perf )
 	stats.lastMeshBuildTrianglesMS = meshPerfRoundMS( perf.buildTriMS )
 	stats.lastMeshBeginUploads = perf.meshBeginUploads or 0
 	stats.lastMeshBuildTriangleUploads = perf.buildTriangleUploads or 0
-	stats.lastMeshUploadMode = ( perf.meshBeginUploads or 0 ) > 0 and "begin" or "triangles"
+	stats.lastMeshUploadMode = meshUploadMode( perf )
 	stats.lastMeshDestroyMS = meshPerfRoundMS( perf.destroyMS )
 	stats.lastMeshCommitMS = meshPerfRoundMS( perf.commitMS )
 	stats.lastMeshFlatMS = meshPerfRoundMS( perf.flatMS )
 	stats.lastMeshRecolorMS = meshPerfRoundMS( perf.recolorMS )
 	stats.lastMeshCacheAppendMS = meshPerfRoundMS( perf.cacheAppendMS )
 	stats.lastMeshFullVisibleMS = meshPerfRoundMS( perf.fullVisibleMS )
+	stats.lastMeshVisibilitySections = perf.visibilitySections or 0
+	stats.lastMeshVisibilityQueries = perf.visibilityQueries or 0
+	stats.lastMeshVisibilityCacheHits = perf.visibilityCacheHits or 0
+	stats.lastMeshVisibilityStateReads = perf.visibilityStateReads or 0
+	stats.lastMeshVisibilitySnapshotReads = perf.visibilitySnapshotReads or 0
+	stats.lastMeshVisibilityClassResolves = perf.visibilityClassResolves or 0
 	stats.lastMeshFullFaceMS = meshPerfRoundMS( perf.fullFaceMS )
 	stats.lastMeshFullColorMS = meshPerfRoundMS( perf.fullColorMS )
 	stats.lastMeshFullVertexMS = meshPerfRoundMS( perf.fullVertexMS )
@@ -226,6 +305,11 @@ local function printMeshEmitProbe( key, sectionIndex, meshMS, perf )
 	add( "fullFaces", perf.fullVisibleFaces or 0 )
 	add( "fullDirect", perf.fullDirectBlocks or 0 )
 	add( "fullVisibleMS", meshPerfRoundMS( perf.fullVisibleMS ) )
+	add( "visQueries", perf.visibilityQueries or 0 )
+	add( "visHits", perf.visibilityCacheHits or 0 )
+	add( "visReads", perf.visibilityStateReads or 0 )
+	add( "visSnapshot", perf.visibilitySnapshotReads or 0 )
+	add( "visClasses", perf.visibilityClassResolves or 0 )
 	add( "fullFaceMS", meshPerfRoundMS( perf.fullFaceMS ) )
 	add( "fullColorMS", meshPerfRoundMS( perf.fullColorMS ) )
 	add( "fullVertexMS", meshPerfRoundMS( perf.fullVertexMS ) )
@@ -235,7 +319,7 @@ local function printMeshEmitProbe( key, sectionIndex, meshMS, perf )
 	add( "modelMS", meshPerfRoundMS( perf.modelMS ) )
 	add( "flushMS", meshPerfRoundMS( perf.flushMS ) )
 	add( "buildTriMS", meshPerfRoundMS( perf.buildTriMS ) )
-	add( "upload", ( perf.meshBeginUploads or 0 ) > 0 and "begin" or "triangles" )
+	add( "upload", meshUploadMode( perf ) )
 	add( "beginUploads", perf.meshBeginUploads or 0 )
 	add( "triUploads", perf.buildTriangleUploads or 0 )
 	print( table.concat( parts, " " ) )

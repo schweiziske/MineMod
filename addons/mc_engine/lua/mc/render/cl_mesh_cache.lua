@@ -1,4 +1,8 @@
 MC = MC or {}
+local GeometryStore = MC.RenderGeometryStore
+local VertexBuffer = MC.RenderVertexBuffer
+local LightBuffer = MC.RenderLightBuffer
+local geometrySections
 
 local RENDER_SECTION_SIZE = MC.RENDER_SECTION_SIZE or 8
 local RENDER_SECTIONS_XY = math.ceil( MC.CS / RENDER_SECTION_SIZE )
@@ -8,7 +12,7 @@ local DEFAULT_BLOCK_EMIT_CACHE_SECTIONS = 1536
 MC.Meshes = MC.Meshes or {}
 MC.MeshesTrans = MC.MeshesTrans or {}
 MC.MeshSections = MC.MeshSections or {}
-MC.MeshSectionGeometry = MC.MeshSectionGeometry or {}
+geometrySections = GeometryStore.sections
 MC.MeshSectionGeometryLRU = MC.MeshSectionGeometryLRU or {}
 MC.MeshSectionGeometryLRUClock = MC.MeshSectionGeometryLRUClock or 0
 MC.MeshSectionGeometryLRUCount = MC.MeshSectionGeometryLRUCount or 0
@@ -72,19 +76,28 @@ end
 function MC.ForgetMeshSectionGeometryCacheSlot( key, sectionIndex )
 	if not key or not sectionIndex then return end
 	lruRemove( MC.MeshSectionGeometryLRU, "MeshSectionGeometryLRUCount", sectionSlotKey( key, sectionIndex ) )
-	local sections = MC.MeshSectionGeometry[key]
-	if sections then
-		sections[sectionIndex] = nil
-		if next( sections ) == nil then MC.MeshSectionGeometry[key] = nil end
+	if GeometryStore then
+		GeometryStore.ClearSection( key, sectionIndex )
+	else
+		local sections = geometrySections[key]
+		if sections then
+			sections[sectionIndex] = nil
+			if next( sections ) == nil then geometrySections[key] = nil end
+		end
 	end
 end
+if GeometryStore then GeometryStore.ForgetSection = MC.ForgetMeshSectionGeometryCacheSlot end
 
 function MC.ForgetChunkMeshSectionGeometryCache( key )
 	if not key then return end
 	for slot, entry in pairs( MC.MeshSectionGeometryLRU ) do
 		if entry and entry.key == key then lruRemove( MC.MeshSectionGeometryLRU, "MeshSectionGeometryLRUCount", slot ) end
 	end
-	MC.MeshSectionGeometry[key] = nil
+	if GeometryStore then
+		GeometryStore.ClearChunk( key )
+	else
+		geometrySections[key] = nil
+	end
 end
 
 function MC.ClearChunkMeshSectionGeometryLRU( key )
@@ -107,6 +120,7 @@ function MC.TouchMeshSectionGeometryCache( key, sectionIndex )
 		tick = MC.MeshSectionGeometryLRUClock,
 	}
 end
+if GeometryStore then GeometryStore.TouchSection = MC.TouchMeshSectionGeometryCache end
 
 function MC.PruneMeshSectionGeometryCache()
 	local limit = geometryCacheSectionLimit()
@@ -115,7 +129,12 @@ function MC.PruneMeshSectionGeometryCache()
 	while true do
 		local count, oldestSlot, oldestTick = 0, nil, nil
 		for slot, entry in pairs( lru ) do
-			local valid = entry and MC.MeshSectionGeometry[entry.key] and MC.MeshSectionGeometry[entry.key][entry.sectionIndex]
+			local valid
+			if GeometryStore then
+				valid = entry and GeometryStore.GetSection( entry.key, entry.sectionIndex )
+			else
+				valid = entry and geometrySections[entry.key] and geometrySections[entry.key][entry.sectionIndex]
+			end
 			if valid then
 				count = count + 1
 				if not oldestTick or entry.tick < oldestTick then
@@ -132,6 +151,7 @@ function MC.PruneMeshSectionGeometryCache()
 		if oldest then MC.ForgetMeshSectionGeometryCacheSlot( oldest.key, oldest.sectionIndex ) end
 	end
 end
+if GeometryStore then GeometryStore.Prune = MC.PruneMeshSectionGeometryCache end
 
 function MC.ForgetBlockEmitCacheSlot( key, sectionIndex )
 	if not key or not sectionIndex then return end
@@ -366,8 +386,9 @@ function MC.GetCachedBlockEmission( key, sectionIndex, li, id, orient, stateId )
 	if record.id ~= id or record.orient ~= ( orient or 0 ) then return nil end
 	if stateId ~= nil and record.stateId ~= stateId then return nil end
 	if not record.verts or not record.light then return nil end
-	local vertexCount = record.vertexCount or #record.verts
-	if vertexCount ~= #record.verts or vertexCount ~= #record.light then return nil end
+	if not LightBuffer.Validate( record.light ) then return nil end
+	local vertexCount = record.vertexCount or VertexBuffer.Count( record.verts )
+	if vertexCount ~= VertexBuffer.Count( record.verts ) or vertexCount ~= #record.light then return nil end
 	MC.TouchBlockEmitCacheSection( key, sectionIndex )
 	return record
 end
@@ -390,7 +411,7 @@ function MC.StoreBlockEmissionCache( key, sectionIndex, li, id, orient, lightSty
 	record.orient = orient or 0
 	record.stateId = stateId
 	record.lightStyle = lightStyle
-	record.vertexCount = record.vertexCount or #( record.verts or {} )
+	record.vertexCount = record.vertexCount or VertexBuffer.Count( record.verts )
 	record.hasSecondaryUV = record.hasSecondaryUV == true
 	if record.vertexCount <= 0 then
 		MC.DropBlockEmitCacheRecord( key, sectionIndex, li )
@@ -420,7 +441,7 @@ function MC.AppendCachedBlockEmission( record, buf, flushFn, meshPerf, vertexLim
 	if not record or not buf then return 0 end
 	local verts = record.verts or {}
 	local light = record.light or {}
-	local vertexCount = record.vertexCount or #verts
+	local vertexCount = record.vertexCount or VertexBuffer.Count( verts )
 	vertexLimit = vertexLimit or 64998
 	local outVerts = buf.verts
 	local outLight = buf.light
@@ -428,7 +449,29 @@ function MC.AppendCachedBlockEmission( record, buf, flushFn, meshPerf, vertexLim
 	local pushed = 0
 	local tableMove = table.move
 	if record.hasSecondaryUV then buf.hasSecondaryUV = true end
-	if tableMove then
+	if outVerts.vertexBufferVersion then
+		local offset = 1
+		while offset <= vertexCount do
+			if nv >= vertexLimit and flushFn then
+				buf.nv = nv
+				flushFn( buf )
+				outVerts, outLight, nv = buf.verts, buf.light, buf.nv
+			end
+			local count = vertexCount - offset + 1
+			if flushFn then count = math.min( count, vertexLimit - nv ) end
+			if count <= 0 then break end
+			-- flush resets this flag; reapply it for every split batch.
+			if record.hasSecondaryUV then buf.hasSecondaryUV = true end
+			VertexBuffer.AppendRange( outVerts, verts, offset, count )
+			LightBuffer.AppendRange( outLight, light, offset, count )
+			nv, offset, pushed = nv + count, offset + count, pushed + count
+			if nv >= vertexLimit and flushFn then
+				buf.nv = nv
+				flushFn( buf )
+				outVerts, outLight, nv = buf.verts, buf.light, buf.nv
+			end
+		end
+	elseif tableMove then
 		local offset = 1
 		while offset <= vertexCount do
 			if nv >= vertexLimit and flushFn then
@@ -449,7 +492,7 @@ function MC.AppendCachedBlockEmission( record, buf, flushFn, meshPerf, vertexLim
 			end
 			if chunkCount <= 0 then break end
 			tableMove( verts, offset, offset + chunkCount - 1, nv + 1, outVerts )
-			tableMove( light, offset, offset + chunkCount - 1, nv + 1, outLight )
+			LightBuffer.AppendRange( outLight, light, offset, chunkCount )
 			nv = nv + chunkCount
 			offset = offset + chunkCount
 			pushed = pushed + chunkCount
@@ -469,7 +512,7 @@ function MC.AppendCachedBlockEmission( record, buf, flushFn, meshPerf, vertexLim
 		for i = 1, vertexCount do
 			nv = nv + 1
 			outVerts[nv] = verts[i]
-			outLight[nv] = light[i]
+			LightBuffer.AppendRange( outLight, light, i, 1 )
 			pushed = pushed + 1
 			if nv >= vertexLimit and flushFn then
 				buf.nv = nv
@@ -506,27 +549,40 @@ function MC.CachedBlockLightMetaKey( meta )
 	return cachedBlockLightMetaKey( meta )
 end
 
+function MC.CachedBlockLightKey( light, index )
+	local RM = MC.RenderMesh
+	return LightBuffer.RecolorKey( light, index, RM and RM.meshRecolorKey )
+end
+
 function MC.RecolorCachedBlockEmission( record, lightStyle, recolorFn, meshPerf )
 	if not record or not recolorFn then return false end
 	local verts = record.verts or {}
 	local light = record.light or {}
-	local vertexCount = record.vertexCount or #verts
-	if vertexCount ~= #light then return false end
+	local vertexCount = record.vertexCount or VertexBuffer.Count( verts )
+	if not LightBuffer.IsCompatible( light )
+		or vertexCount ~= VertexBuffer.Count( verts ) or vertexCount ~= #light then return false end
 	local colorCache = {}
+	local metaScratch = {}
 	local style = lightStyle
 	local recolor = recolorFn
 	for i = 1, vertexCount do
-		local meta = light[i]
-		if not meta then return false end
-		local key = cachedBlockLightMetaKey( meta )
+		local key
+		if light.lightBufferVersion then
+			-- Indexed samples already encode identity without the legacy key's
+			-- 16-cell coordinate wrap (animation batches span a whole chunk).
+			key = light[i]
+		else
+			key = MC.CachedBlockLightKey( light, i )
+		end
 		if key == nil then return false end
-		if meta.shadeIndex == nil then return false end
 		local color = colorCache[key]
 		if color == nil then
+			local meta = LightBuffer.Read( light, i, metaScratch )
+			if not meta or meta.shadeIndex == nil then return false end
 			color = recolor( meta, style )
 			colorCache[key] = color
 		end
-		verts[i].color = color
+		VertexBuffer.SetColor( verts, i, color )
 	end
 	record.lightStyle = lightStyle
 	return true, vertexCount
@@ -534,16 +590,11 @@ end
 
 local function clearRecordRecolorKeys( record )
 	local light = record and record.light
-	if light then
-		for i = 1, #light do
-			local meta = light[i]
-			if meta then meta.recolorKey = nil end
-		end
-	end
+	if light then LightBuffer.ClearRecolorKeys( light ) end
 end
 
 function MC.ClearCachedBlockRecolorKeys()
-	for _, sections in pairs( MC.MeshSectionGeometry or {} ) do
+	for _, sections in pairs( geometrySections or {} ) do
 		for _, section in pairs( sections or {} ) do
 			for _, record in ipairs( section.opaque or {} ) do clearRecordRecolorKeys( record ) end
 			for _, record in ipairs( section.translucent or {} ) do clearRecordRecolorKeys( record ) end
@@ -562,7 +613,7 @@ function MC.PruneEmptyBlockEmissionCacheRecords()
 	for key, sections in pairs( MC.MeshBlockEmitCache or {} ) do
 		for sectionIndex, section in pairs( sections or {} ) do
 			for li, record in pairs( section or {} ) do
-				if not record or ( record.vertexCount or #( record.verts or {} ) ) <= 0 then
+				if not record or ( record.vertexCount or VertexBuffer.Count( record.verts ) ) <= 0 then
 					section[li] = nil
 				end
 			end

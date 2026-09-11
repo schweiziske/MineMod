@@ -9,11 +9,19 @@ local Light = API.Light or {}
 local Network = API.Network or {}
 local Render = API.Render or {}
 local World = API.World or {}
-local BS = Coords.BlockSize and Coords.BlockSize() or 36.5
 local COORD_BITS = Network.CoordinateBits and Network.CoordinateBits() or 20
-local SCALE = BS / 16
 local UP = Vector( 0, 0, 1 )
-local MAX_RENDER_DISTANCE_SQR = ( BS * 64 ) ^ 2
+local FACING_BASIS = {
+	north = { Vector( -1, 0, 0 ), Vector( 0, -1, 0 ) },
+	west = { Vector( 0, 1, 0 ), Vector( -1, 0, 0 ) },
+	east = { Vector( 0, -1, 0 ), Vector( 1, 0, 0 ) },
+	south = { Vector( 1, 0, 0 ), Vector( 0, 1, 0 ) },
+}
+local HIDE_WEST, HIDE_EAST = { west = true }, { east = true }
+-- Only immediate mesh calls consume these vectors; no entry owns scratch geometry.
+local t0, t1, t2, t3 = Vector(), Vector(), Vector(), Vector()
+local l0, l1, l2, l3 = Vector(), Vector(), Vector(), Vector()
+local inverse, origin, hinge, lidForward, lidUp = Vector(), Vector(), Vector(), Vector(), Vector()
 local MATERIAL_FLAGS = "alphatest vertexcolor vertexalpha nocull"
 local CHEST_BLOCK_NAMES = {
 	"chest", "trapped_chest", "copper_chest", "exposed_copper_chest",
@@ -92,12 +100,8 @@ hook.Add( "MC.ClientWorldProjectionChanged", "mcgame_chest_world_projection", fu
 end )
 
 local function facingBasis( facing )
-	local forward
-	if facing == "north" then forward = Vector( 0, -1, 0 )
-	elseif facing == "west" then forward = Vector( -1, 0, 0 )
-	elseif facing == "east" then forward = Vector( 1, 0, 0 )
-	else forward = Vector( 0, 1, 0 ) end
-	return Vector( forward.y, -forward.x, 0 ), forward
+	local basis = FACING_BASIS[facing] or FACING_BASIS.south
+	return basis[1], basis[2]
 end
 
 local function textureBase( name )
@@ -131,15 +135,29 @@ local function emitQuad( a, b, c, d, u0, v0, u1, v1, color, normal )
 	emitVertex( d, u1 / 64, v1 / 64, color, normal )
 end
 
-local function drawBox( origin, right, forward, up, x, y, z, width, height, depth, texU, texV, color, hidden )
-	local function point( px, py, pz )
-		return origin + right * ( px * SCALE ) + forward * ( pz * SCALE ) + up * ( py * SCALE )
-	end
-	local x0, x1 = x, x + width
-	local y0, y1 = y, y + height
-	local z0, z1 = z, z + depth
-	local t0, t1, t2, t3 = point( x0, y0, z0 ), point( x1, y0, z0 ), point( x1, y1, z0 ), point( x0, y1, z0 )
-	local l0, l1, l2, l3 = point( x0, y0, z1 ), point( x1, y0, z1 ), point( x1, y1, z1 ), point( x0, y1, z1 )
+local function setPoint( point, base, right, forward, up, x, y, z )
+	point.x = base.x + right.x * x + forward.x * z + up.x * y
+	point.y = base.y + right.y * x + forward.y * z + up.y * y
+	point.z = base.z + right.z * x + forward.z * z + up.z * y
+end
+
+local function inverseNormal( normal )
+	inverse.x, inverse.y, inverse.z = -normal.x, -normal.y, -normal.z
+	return inverse
+end
+
+local function drawBox( base, right, forward, up, scale, x, y, z, width, height, depth, texU, texV, color, hidden )
+	local x0, x1 = x * scale, ( x + width ) * scale
+	local y0, y1 = y * scale, ( y + height ) * scale
+	local z0, z1 = z * scale, ( z + depth ) * scale
+	setPoint( t0, base, right, forward, up, x0, y0, z0 )
+	setPoint( t1, base, right, forward, up, x1, y0, z0 )
+	setPoint( t2, base, right, forward, up, x1, y1, z0 )
+	setPoint( t3, base, right, forward, up, x0, y1, z0 )
+	setPoint( l0, base, right, forward, up, x0, y0, z1 )
+	setPoint( l1, base, right, forward, up, x1, y0, z1 )
+	setPoint( l2, base, right, forward, up, x1, y1, z1 )
+	setPoint( l3, base, right, forward, up, x0, y1, z1 )
 	local u0, u1 = texU, texU + depth
 	local u2 = u1 + width
 	local u22 = u2 + width
@@ -148,57 +166,59 @@ local function drawBox( origin, right, forward, up, x, y, z, width, height, dept
 	local v0, v1, v2 = texV, texV + depth, texV + depth + height
 	local faces = 6 - ( hidden and ( ( hidden.west and 1 or 0 ) + ( hidden.east and 1 or 0 ) ) or 0 )
 	mesh.Begin( MATERIAL_QUADS, faces )
-	emitQuad( l1, l0, t0, t1, u1, v0, u2, v1, color, -up )
+	emitQuad( l1, l0, t0, t1, u1, v0, u2, v1, color, inverseNormal( up ) )
 	emitQuad( t2, t3, l3, l2, u2, v1, u22, v0, color, up )
-	if not ( hidden and hidden.west ) then emitQuad( t0, l0, l3, t3, u0, v1, u1, v2, color, -right ) end
-	emitQuad( t1, t0, t3, t2, u1, v1, u2, v2, color, -forward )
+	if not ( hidden and hidden.west ) then emitQuad( t0, l0, l3, t3, u0, v1, u1, v2, color, inverseNormal( right ) ) end
+	emitQuad( t1, t0, t3, t2, u1, v1, u2, v2, color, inverseNormal( forward ) )
 	if not ( hidden and hidden.east ) then emitQuad( l1, t1, t2, l2, u2, v1, u3, v2, color, right ) end
 	emitQuad( l0, l1, l2, l3, u3, v1, u4, v2, color, forward )
 	mesh.End()
 end
 
-local function entryColor( entry, worldCenter )
+local function entryColor( entry )
 	local now = CurTime()
 	if not entry.lightColor or now >= entry.nextLightAt then
 		local r, g, b = 1, 1, 1
+		local worldCenter = Coords.CellCenter and Coords.CellCenter( entry.bx, entry.by, entry.bz ) or nil
 		if Light.SampleRGB and worldCenter then r, g, b = Light.SampleRGB( worldCenter, 0 ) end
-		entry.lightColor = Color(
-			math.Clamp( math.floor( r * 255 + 0.5 ), 0, 255 ),
-			math.Clamp( math.floor( g * 255 + 0.5 ), 0, 255 ),
-			math.Clamp( math.floor( b * 255 + 0.5 ), 0, 255 ), 255
-		)
+		local color = entry.lightColor
+		if not color then color = Color( 255, 255, 255, 255 ) entry.lightColor = color end
+		color.r = math.Clamp( math.floor( r * 255 + 0.5 ), 0, 255 )
+		color.g = math.Clamp( math.floor( g * 255 + 0.5 ), 0, 255 )
+		color.b = math.Clamp( math.floor( b * 255 + 0.5 ), 0, 255 )
 		local stagger = math.abs( entry.bx * 31 + entry.by * 17 + entry.bz * 13 ) % 17
 		entry.nextLightAt = now + 0.1 + stagger * 0.003
 	end
 	return entry.lightColor
 end
 
-local function drawChest( entry, stateId, openness, renderCenter )
+local function drawChest( entry, stateId, openness, renderCenter, bs )
 	local info = MC.ChestStateInfo and MC.ChestStateInfo( stateId ) or nil
 	if not info then return false end
 	local right, forward = facingBasis( info.facing )
 	renderCenter = renderCenter or ( Coords.CellRenderCenter
 		and Coords.CellRenderCenter( entry.bx, entry.by, entry.bz ) or nil )
 	if not renderCenter then return false end
-	local base = Vector( renderCenter.x, renderCenter.y, renderCenter.z - BS * 0.5 )
-	local origin = base - right * ( BS * 0.5 ) - forward * ( BS * 0.5 )
+	local half, scale = bs * 0.5, bs / 16
+	origin.x = renderCenter.x - right.x * half - forward.x * half
+	origin.y = renderCenter.y - right.y * half - forward.y * half
+	origin.z = renderCenter.z - half
 	local x, width, lockX, lockWidth, hidden = 1, 14, 7, 2, nil
-	if info.type == "right" then x, width, lockX, lockWidth, hidden = 1, 15, 15, 1, { east = true }
-	elseif info.type == "left" then x, width, lockX, lockWidth, hidden = 0, 15, 0, 1, { west = true } end
-	local worldCenter = Coords.CellCenter and Coords.CellCenter( entry.bx, entry.by, entry.bz ) or nil
-	local color = entryColor( entry, worldCenter )
+	if info.type == "right" then x, width, lockX, lockWidth, hidden = 1, 15, 15, 1, HIDE_EAST
+	elseif info.type == "left" then x, width, lockX, lockWidth, hidden = 0, 15, 0, 1, HIDE_WEST end
+	local color = entryColor( entry )
 	render.SetMaterial( materialFor( info ) )
-	drawBox( origin, right, forward, UP, x, 0, 1, width, 10, 14, 0, 19, color, hidden )
+	drawBox( origin, right, forward, UP, scale, x, 0, 1, width, 10, 14, 0, 19, color, hidden )
 
 	local closed = 1 - math.Clamp( openness or 0, 0, 1 )
 	local eased = 1 - closed * closed * closed
 	local angle = eased * math.pi * 0.5
 	local cosine, sine = math.cos( angle ), math.sin( angle )
-	local lidForward = forward * cosine + UP * sine
-	local lidUp = UP * cosine - forward * sine
-	local hinge = origin + forward * SCALE + UP * ( SCALE * 9 )
-	drawBox( hinge, right, lidForward, lidUp, x, 0, 0, width, 5, 14, 0, 0, color, hidden )
-	drawBox( hinge, right, lidForward, lidUp, lockX, -2, 14, lockWidth, 4, 1, 0, 0, color, hidden )
+	lidForward.x, lidForward.y, lidForward.z = forward.x * cosine, forward.y * cosine, sine
+	lidUp.x, lidUp.y, lidUp.z = -forward.x * sine, -forward.y * sine, cosine
+	hinge.x, hinge.y, hinge.z = origin.x + forward.x * scale, origin.y + forward.y * scale, origin.z + scale * 9
+	drawBox( hinge, right, lidForward, lidUp, scale, x, 0, 0, width, 5, 14, 0, 0, color, hidden )
+	drawBox( hinge, right, lidForward, lidUp, scale, lockX, -2, 14, lockWidth, 4, 1, 0, 0, color, hidden )
 	return true
 end
 
@@ -245,14 +265,16 @@ end
 hook.Add( "PostDrawTranslucentRenderables", "mc_chest_block_entities", function( _, _, bSky3D )
 	if bSky3D then return end
 	local eye = EyePos()
+	local bs = Coords.BlockSize()
+	local maxDistanceSqr = ( bs * 64 ) ^ 2
 	if render.PushFilterMin then render.PushFilterMin( TEXFILTER.POINT ) end
 	if render.PushFilterMag then render.PushFilterMag( TEXFILTER.POINT ) end
 	for key, entry in pairs( Entries ) do
 		local center = Coords.CellRenderCenter and Coords.CellRenderCenter( entry.bx, entry.by, entry.bz ) or nil
-		if center and eye:DistToSqr( center ) <= MAX_RENDER_DISTANCE_SQR then
+		if center and eye:DistToSqr( center ) <= maxDistanceSqr then
 			local stateId = World.GetBlockState and World.GetBlockState( entry.bx, entry.by, entry.bz ) or 0
 			if not MC.IsChestState( stateId ) then removeEntry( key )
-			else drawChest( entry, stateId, opennessFor( key ), center ) end
+			else drawChest( entry, stateId, opennessFor( key ), center, bs ) end
 		end
 	end
 	if render.PopFilterMag then render.PopFilterMag() end

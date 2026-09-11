@@ -173,14 +173,6 @@ MC.ConfigConVars = {
 			item( "mc_light_texture", "Per-chunk light texture", "逐区块光照纹理", "bool",
 				"Sample chunk light textures on the GPU instead of baking light into vertices.",
 				"在 GPU 上采样区块光照纹理，而不是把光照烘焙进顶点。" ),
-			item( "mc_light_style", "Lighting look", "光照风格", "choice",
-				"Choose the final GPU lighting composition.",
-				"选择最终的 GPU 光照合成风格。", { choices = {
-					choice( "fancy", "Fancy", "细腻" ),
-					-- choice( "plain", "Plain", "朴素" ),
-					choice( "fast", "Fast", "快速" ),
-					-- choice( "vanilla", "Vanilla Minecraft", "原版 Minecraft" ),
-				} } ),
 		} ),
 
 		category( "light_balance", "lighting", "Brightness and balance", "亮度与平衡",

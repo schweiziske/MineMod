@@ -2,10 +2,11 @@
 MC = MC or {}
 MC.RenderMesh = MC.RenderMesh or {}
 local RM = MC.RenderMesh
+local VertexBuffer = MC.RenderVertexBuffer
+local LightBuffer = MC.RenderLightBuffer
 
 
 local C = MC.RenderMeshConstants
-local mathFloor = math.floor
 local clampLightLevel = RM.clampLightLevel
 local sameLiquidKind = RM.sameLiquidKind
 local coveredByBoxes = RM.coveredByBoxes
@@ -17,37 +18,16 @@ local uploadMeshVertices = RM.uploadMeshVertices
 local meshPerfAdd = RM.meshPerfAdd
 local meshPerfMS = RM.meshPerfMS
 local setMeshSampleCacheOrigin = RM.setMeshSampleCacheOrigin
-local ensureChunkRenderSectionIndex = RM.ensureChunkRenderSectionIndex
-local ensureChunkRenderSectionBlockList = RM.ensureChunkRenderSectionBlockList
+local destroySectionMeshList = RM.destroySectionMeshList
 
-local function makeLightMeta( shade, shadeIndex, bx, by, bz, id, faceIndex, li, cx, cy, cz, selfEmission, faceCubic, quadLightEmission, tintCode )
-	return {
-		shade = shade,
-		shadeIndex = shadeIndex,
-		bx = bx,
-		by = by,
-		bz = bz,
-		id = id,
-		faceIndex = faceIndex,
-		li = li,
-		cx = cx,
-		cy = cy,
-		cz = cz,
-		selfEmission = selfEmission,
-		quadLightEmission = clampLightLevel( quadLightEmission ),
-		tintCode = tintCode or 0,
-		faceCubic = faceCubic ~= false,
-	}
-end
-
-local function newLightMetaFactory( localIndexForBlockCoords )
+local function newLightMetaFactory( localIndexForBlockCoords, samples )
 	local function fromCorner( shade, bx, by, bz, id, faceIndex, corner, selfEmission, unusedQuad, faceCubic, quadLightEmission, tintCode )
 		local cx, cy, cz = cornerXYZ( corner )
 		if faceCubic == nil then
 			faceCubic = not unusedQuad or unusedQuad.faceCubic ~= false
 		end
-		return makeLightMeta(
-			shade,
+		return LightBuffer.AddValues(
+			samples,
 			shadeRecolorIndex( shade ),
 			bx,
 			by,
@@ -60,7 +40,7 @@ local function newLightMetaFactory( localIndexForBlockCoords )
 			cz,
 			selfEmission,
 			faceCubic,
-			quadLightEmission,
+			clampLightLevel( quadLightEmission ),
 			tintCode
 		)
 	end
@@ -69,8 +49,8 @@ local function newLightMetaFactory( localIndexForBlockCoords )
 		if faceCubic == nil then
 			faceCubic = not unusedQuad or unusedQuad.faceCubic ~= false
 		end
-		return makeLightMeta(
-			shade,
+		return LightBuffer.AddValues(
+			samples,
 			shadeRecolorIndex( shade ),
 			bx,
 			by,
@@ -83,14 +63,14 @@ local function newLightMetaFactory( localIndexForBlockCoords )
 			cz,
 			selfEmission,
 			faceCubic,
-			quadLightEmission,
+			clampLightLevel( quadLightEmission ),
 			tintCode
 		)
 	end
 
 	local function fast( shadeIndex, bx, by, bz, id, faceIndex, li, cx, cy, cz, selfEmission, faceCubic, quadLightEmission, tintCode )
-		return makeLightMeta(
-			nil,
+		return LightBuffer.AddValues(
+			samples,
 			shadeIndex,
 			bx,
 			by,
@@ -103,7 +83,7 @@ local function newLightMetaFactory( localIndexForBlockCoords )
 			cz,
 			selfEmission,
 			faceCubic,
-			quadLightEmission,
+			clampLightLevel( quadLightEmission ),
 			tintCode
 		)
 	end
@@ -117,7 +97,7 @@ end
 
 RM.newLightMetaFactory = newLightMetaFactory
 
-function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, meshLightStyle, buildStart, meshLightProfile )
+function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, meshLightStyle, buildStart, meshLightProfile, blockSections )
 	meshLightProfile = meshLightProfile or RM.GetLightProfile and RM.GetLightProfile( meshLightStyle ) or nil
 	local meshGpuPayloadMaterial = meshLightProfile and meshLightProfile.gpuPayloadMaterial
 	if type( meshGpuPayloadMaterial ) == "function" then meshGpuPayloadMaterial = meshGpuPayloadMaterial( meshLightProfile ) end
@@ -133,22 +113,14 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	local byo = chunk.cy * C.CS
 	local bzo = chunk.cz * C.CH
 	setMeshSampleCacheOrigin( bxo, byo, bzo )
-	if not chunk.stateStorageMigrated and MC.MigrateChunkStateStorage then MC.MigrateChunkStateStorage( chunk ) end
-	local chunkStateSections = chunk.stateSections or {}
-	local StateSection = MC.StateSection
-	local getStateFast = StateSection and ( StateSection.GetFast or StateSection.Get )
 	local blocksById = MC.Blocks
 	local blockIsFullCube = MC.BlockIsFullCube
-	local getBlockState = MC.GetBlockState
-	local blockTypeForState = MC.BlockTypeForState
 	local resolveBlockStateVisual = MC.ResolveBlockStateVisual
-	local resolveBlockStateRenderClass = MC.ResolveBlockStateRenderClass
-	local blockVisualIsTranslucent = MC.BlockVisualIsTranslucent
-	local blockVisualIsFullCube = MC.BlockVisualIsFullCube
 	local blockVisualBoxes = MC.BlockVisualBoxes
 	local isPaneBlock = MC.IsPaneBlock
 	local blockBoxes = MC.BlockBoxes
-	local blockUsesSpecialVisualEmitter = MC.BlockUsesSpecialVisualEmitter
+	local visibility = MC.RenderVisibility.New( chunk, blockSections, meshPerf )
+	local stateAt = visibility.StateAt
 
 	local sectionBuffers = {}
 	local cur
@@ -177,20 +149,9 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		if lx < 0 or lx >= C.CS or ly < 0 or ly >= C.CS or lz < 0 or lz >= C.CH then return nil end
 		return localIndex( lx, ly, lz )
 	end
-	local lightMetaFactory = newLightMetaFactory( localIndexForBlockCoords )
-
-	local function inCurrentChunk( lx, ly, lz )
-		return lx >= 0 and lx < C.CS and ly >= 0 and ly < C.CS and lz >= 0 and lz < C.CH
-	end
-
-	local function stateAt( lx, ly, lz, bx, by, bz )
-		if inCurrentChunk( lx, ly, lz ) then
-			local li = localIndex( lx, ly, lz )
-			local stateSection = chunkStateSections[mathFloor( li / 4096 ) + 1]
-			return stateSection and getStateFast and getStateFast( stateSection, li % 4096 ) or 0
-		end
-		return getBlockState and getBlockState( bx, by, bz ) or 0
-	end
+	local lightSamples = LightBuffer.New()
+	local lightCopies = LightBuffer.NewCopyMap()
+	local lightMetaFactory = newLightMetaFactory( localIndexForBlockCoords, lightSamples )
 
 	local function orientAt( lx, ly, lz, bx, by, bz )
 		local stateId = stateAt( lx, ly, lz, bx, by, bz )
@@ -200,37 +161,6 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			if visual then return visual.renderOrient end
 		end
 		return 0
-	end
-
-	local function visibleAt( curId, lx, ly, lz, bx, by, bz )
-		local nbState = stateAt( lx, ly, lz, bx, by, bz )
-		if not nbState or nbState == 0 then return true end
-		local nb, fullCube, translucent
-		if resolveBlockStateRenderClass then
-			nb, fullCube, translucent = resolveBlockStateRenderClass( nbState, bx, by, bz )
-		end
-		local nbVisual
-		if not nb then
-			nbVisual = resolveBlockStateVisual and resolveBlockStateVisual( nbState, bx, by, bz ) or nil
-			nb = nbVisual and nbVisual.id or blockTypeForState and blockTypeForState( nbState ) or 0
-		end
-		if nb == 0 then return true end
-		if blockUsesSpecialVisualEmitter and blockUsesSpecialVisualEmitter( nb ) then return true end
-		if sameLiquidKind( curId, nb ) then return false end
-		local d = blocksById[nb]
-		if translucent == nil then
-			nbVisual = nbVisual or resolveBlockStateVisual and resolveBlockStateVisual( nbState, bx, by, bz ) or nil
-			translucent = nbVisual and blockVisualIsTranslucent and blockVisualIsTranslucent( nbVisual, bx, by, bz )
-		end
-		if translucent or d and d.transparent then return nb ~= curId end
-		if fullCube ~= nil then
-			if not fullCube then return true end
-		elseif nbVisual and blockVisualIsFullCube then
-			if not blockVisualIsFullCube( nbVisual, bx, by, bz ) then return true end
-		elseif blockIsFullCube and not blockIsFullCube( nb, orientAt( lx, ly, lz, bx, by, bz ) ) then
-			return true
-		end
-		return false
 	end
 
 	local function shapeFaceNeighborCoveredAt( curId, box, faceIndex, bx, by, bz, lx, ly, lz )
@@ -246,31 +176,13 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		end
 		local nlx, nly, nlz = lx + off[1], ly + off[2], lz + off[3]
 		local nbx, nby, nbz = bx + off[1], by + off[2], bz + off[3]
-		local nbState = stateAt( nlx, nly, nlz, nbx, nby, nbz )
-		if not nbState or nbState == 0 then return false end
-		local nb, fullCube, translucent
-		if resolveBlockStateRenderClass then
-			nb, fullCube, translucent = resolveBlockStateRenderClass( nbState, nbx, nby, nbz )
-		end
-		local nbVisual
-		if not nb then
-			nbVisual = resolveBlockStateVisual and resolveBlockStateVisual( nbState, nbx, nby, nbz ) or nil
-			nb = nbVisual and nbVisual.id or blockTypeForState and blockTypeForState( nbState ) or 0
-		end
-		if nb == 0 then return false end
-		if blockUsesSpecialVisualEmitter and blockUsesSpecialVisualEmitter( nb ) then return false end
+		local nb, fullCube, transparent, special, nbState = visibility.ClassAt( nlx, nly, nlz, nbx, nby, nbz )
+		if nb == nil or nb == 0 or special then return false end
 		if sameLiquidKind( curId, nb ) then return true end
-		local d = blocksById[nb]
-		if translucent == nil then
-			nbVisual = nbVisual or resolveBlockStateVisual and resolveBlockStateVisual( nbState, nbx, nby, nbz ) or nil
-			translucent = nbVisual and blockVisualIsTranslucent and blockVisualIsTranslucent( nbVisual, nbx, nby, nbz )
-		end
-		if ( translucent or d and d.transparent ) and not ( isPaneBlock and isPaneBlock( nb ) ) then return false end
+		if transparent and not ( isPaneBlock and isPaneBlock( nb ) ) then return false end
 		if fullCube == true then return true end
-		nbVisual = nbVisual or resolveBlockStateVisual and resolveBlockStateVisual( nbState, nbx, nby, nbz ) or nil
-		if fullCube == nil and nbVisual and blockVisualIsFullCube and blockVisualIsFullCube( nbVisual, nbx, nby, nbz ) then return true end
+		local nbVisual = resolveBlockStateVisual and resolveBlockStateVisual( nbState, nbx, nby, nbz ) or nil
 		local nbOrient = nbVisual and nbVisual.renderOrient or orientAt( nlx, nly, nlz, nbx, nby, nbz )
-		if not nbVisual and blockIsFullCube and blockIsFullCube( nb, nbOrient ) then return true end
 		local nbBoxes = nbVisual and blockVisualBoxes and blockVisualBoxes( nbVisual, nbx, nby, nbz )
 			or blockBoxes and blockBoxes( nb, nbOrient, nbx, nby, nbz ) or nil
 		return coveredByBoxes( box, faceIndex, nbBoxes, off[1], off[2], off[3] )
@@ -282,11 +194,32 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	end
 
 	local function newMeshBuffer( material, translucent )
-		return { list = {}, records = {}, verts = {}, light = {}, nv = 0, hasSecondaryUV = false, material = material, translucent = translucent == true }
+		local materialId, passId
+		local materialABI = MC.RenderMaterialABI
+		if materialABI and materialABI.Resolve then
+			materialId, passId = materialABI.Resolve( material, translucent == true, false )
+		end
+		return {
+			list = {}, records = {}, verts = VertexBuffer.New(), light = LightBuffer.New(), nv = 0,
+			hasSecondaryUV = false, material = material,
+			translucent = translucent == true, materialId = materialId or 0,
+			passId = passId or ( translucent and 3 or 1 ),
+		}
 	end
 
+	local spareBlockBuffer
 	local function newBlockCacheBuffer( targetBuffer )
-		return { verts = {}, light = {}, nv = 0, hasSecondaryUV = false, material = targetBuffer.material, translucent = targetBuffer.translucent == true, cacheOnly = true }
+		local buffer = spareBlockBuffer
+		spareBlockBuffer = nil
+		if not buffer then
+			buffer = { verts = VertexBuffer.New(), light = LightBuffer.New(), nv = 0,
+				hasSecondaryUV = false, cacheOnly = true }
+		end
+		buffer.material = targetBuffer.material
+		buffer.translucent = targetBuffer.translucent == true
+		buffer.materialId = targetBuffer.materialId or 0
+		buffer.passId = targetBuffer.passId or ( targetBuffer.translucent and 3 or 1 )
+		return buffer
 	end
 
 	local function prepareBlockCacheBuffer( targetBuffer )
@@ -297,8 +230,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	local function buildLightIndexByLi( light, vertexCount )
 		local byLi = {}
 		for i = 1, vertexCount do
-			local meta = light[i]
-			local li = meta and meta.li
+			local li = LightBuffer.LocalIndex( light, i )
 			if li ~= nil then
 				local list = byLi[li]
 				if not list then
@@ -344,6 +276,9 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			material = buf.material,
 			vertexCount = vertexCount,
 			hasSecondaryUV = buf.hasSecondaryUV == true,
+			translucent = buf.translucent == true,
+			materialId = buf.materialId or 0,
+			passId = buf.passId or ( buf.translucent and 3 or 1 ),
 		}
 		meshPerf.vertices = meshPerf.vertices + vertexCount
 		meshPerf.faces = meshPerf.faces + math.floor( vertexCount / 6 )
@@ -353,21 +288,38 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		else
 			meshPerf.opaqueVerts = meshPerf.opaqueVerts + vertexCount
 		end
-		buf.verts = {}
-		buf.light = {}
+		buf.verts = VertexBuffer.New()
+		buf.light = LightBuffer.New()
 		buf.nv = 0
 		buf.hasSecondaryUV = false
 	end
 
-	local function push( vert, light )
-		local nv = cur.nv + 1
+	local function finishPush( light )
+		local nv = cur.verts.count
 		cur.nv = nv
-		cur.verts[nv] = vert
-		cur.light[nv] = light
-		if vert and ( vert.u1 ~= nil or vert.v1 ~= nil ) then cur.hasSecondaryUV = true end
+		if type( light ) == "number" then
+			cur.light[nv] = LightBuffer.CopySample( cur.light, lightSamples, light, lightCopies )
+		else
+			cur.light[nv] = LightBuffer.AddLegacy( cur.light, light )
+		end
 		if not cur.cacheOnly then
 			meshPerf.pushedVertices = ( meshPerf.pushedVertices or 0 ) + 1
 			if nv >= C.VERT_LIMIT then flush( cur ) end
+		end
+	end
+
+	local function pushValues( x, y, z, normal, u, v, color, light )
+		VertexBuffer.PushValues( cur.verts, x, y, z, normal, u, v, color )
+		finishPush( light )
+	end
+
+	local function push( vert, light, z, normal, u, v, color, numericLight )
+		if type( vert ) == "number" then
+			pushValues( vert, light, z, normal, u, v, color, numericLight )
+		else
+			VertexBuffer.PushLegacy( cur.verts, vert )
+			if vert.u1 ~= nil or vert.v1 ~= nil then cur.hasSecondaryUV = true end
+			finishPush( light )
 		end
 	end
 
@@ -397,29 +349,6 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		return opaqueMeshes, translucentMeshes, opaqueRecords, translucentRecords
 	end
 
-	local blockIter
-	if sectionIndex then
-		local indexStart = SysTime()
-		blockIter = ensureChunkRenderSectionBlockList and ensureChunkRenderSectionBlockList( chunk, sectionIndex ) or nil
-		if not blockIter then
-			local bySection = ensureChunkRenderSectionIndex( chunk )
-			blockIter = bySection and bySection[sectionIndex] or {}
-		end
-		meshPerfAdd( meshPerf, "indexMS", indexStart )
-	else
-		blockIter = {}
-		for stateSectionIndex = 1, 2 do
-			local stateSection = chunk.stateSections and chunk.stateSections[stateSectionIndex]
-			if stateSection and MC.StateSection and MC.StateSection.ForEach then
-				MC.StateSection.ForEach( stateSection, function( sectionLocalIndex, stateId )
-					if stateId ~= 0 then
-						local li = ( stateSectionIndex - 1 ) * 4096 + sectionLocalIndex
-						blockIter[li] = stateId
-					end
-				end )
-			end
-		end
-	end
 	meshPerf.prepMS = meshPerfMS( buildStart )
 
 	local ctx = {
@@ -439,7 +368,8 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		blocksById = blocksById,
 		blockIsFullCube = blockIsFullCube,
 		blockBoxes = blockBoxes,
-		blockIter = blockIter,
+		blockSections = blockSections,
+		visibility = visibility,
 		sectionBuffers = sectionBuffers,
 		fluidCornerHeightCache = {},
 		C = C,
@@ -450,17 +380,44 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	ctx.localIndex = localIndex
 	ctx.stateAt = stateAt
 	ctx.orientAt = orientAt
-	ctx.visibleAt = visibleAt
+	ctx.beginSection = visibility.BeginSection
+	ctx.visibleAt = visibility.VisibleAt
+	ctx.visibleFaceMask = visibility.FaceMask
 	ctx.shapeFaceCoveredAt = shapeFaceCoveredAt
 	ctx.shapeFaceNeighborCoveredAt = shapeFaceNeighborCoveredAt
 	ctx.buffersForLocal = buffersForLocal
 	ctx.flush = flush
 	ctx.push = push
+	-- Numeric vertex entry point used by the production emitters. Keep it
+	-- explicit on the context so emitters do not need to infer capabilities
+	-- from the generic push function.
+	ctx.pushValues = pushValues
+	-- Caller may return only unpublished scratch, after its vertices were copied.
+	-- Retained block/section records never enter this bounded one-buffer cache.
+	function ctx.releaseScratch( buffer )
+		if not buffer or not buffer.cacheOnly then return end
+		VertexBuffer.Reset( buffer.verts )
+		LightBuffer.Reset( buffer.light )
+		LightBuffer.ResetCopyMap( lightCopies )
+		buffer.nv, buffer.hasSecondaryUV = 0, false
+		if not spareBlockBuffer then spareBlockBuffer = buffer end
+	end
 	ctx.lightMetaFactory = lightMetaFactory
 	ctx.lightMeta = lightMetaFactory.fromCorner
 	ctx.lightMetaValues = lightMetaFactory.fromValues
 	ctx.lightMetaFast = lightMetaFactory.fast
+	function ctx.beginBlockLight()
+		LightBuffer.ResetScratch( lightSamples )
+		LightBuffer.ResetCopyMap( lightCopies )
+	end
 	ctx.flushSectionBuffers = flushSectionBuffers
+	function ctx.discardSectionBuffers()
+		for index, buffers in pairs( sectionBuffers ) do
+			destroySectionMeshList( buffers.opaque.list )
+			destroySectionMeshList( buffers.translucent.list )
+			sectionBuffers[index] = nil
+		end
+	end
 	function ctx.prepareBlockCacheBuffer( targetBuffer )
 		local ok = prepareBlockCacheBuffer( targetBuffer )
 		ctx.cur = cur
