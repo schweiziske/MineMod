@@ -401,14 +401,15 @@ local needsInitialRefresh = true
 local nextTimedRefresh = 0
 hook.Remove( "Think", "mc_global_lightmap_refresh" )
 hook.Add( "Think", "mc_global_lightmap_refresh", function()
-	updateEyeFactor()
+	local vanilla = vanillaLightmapActive()
+	-- Camera grading is not an input to the vanilla lightmap.
+	if not vanilla then updateEyeFactor() end
 	if needsInitialRefresh then
-		needsInitialRefresh = false
 		vanillaFlickerLast = RealTime and RealTime() or 0
-		MC.RefreshGlobalLightmap()
+		needsInitialRefresh = not MC.RefreshGlobalLightmap()
 		return
 	end
-	if vanillaLightmapActive() then
+	if vanilla then
 		-- Vanilla redraws every Minecraft tick, exactly like the game: the
 		-- torch flicker walks each tick and the timeline moves with the clock.
 		-- With flicker off and the clock frozen the texture is static, so only
