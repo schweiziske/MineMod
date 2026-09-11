@@ -18,6 +18,52 @@ MC = MC or {}
 
 local LIGHTMAP_SIZE = 16
 local lightmapRT
+local lightmapColors, pendingColors = {}, {}
+local pendingChanged = false
+local lightmapRevision = MC.GlobalLightmapRevision or 0
+MC.GlobalLightmapRevision = 0
+
+-- Keep a CPU copy of the exact RGB bytes supplied to the RT. Animated fluids
+-- use ordinary vertex-colour materials, so they cannot sample $texture2.
+local function drawLightmapTexel( block, sky, r, g, b )
+	r = math.floor( math.Clamp( r, 0, 1 ) * 255 + 0.5 )
+	g = math.floor( math.Clamp( g, 0, 1 ) * 255 + 0.5 )
+	b = math.floor( math.Clamp( b, 0, 1 ) * 255 + 0.5 )
+	local index = ( sky * LIGHTMAP_SIZE + block ) * 3 + 1
+	if lightmapColors[index] ~= r or lightmapColors[index + 1] ~= g or lightmapColors[index + 2] ~= b then
+		pendingChanged = true
+	end
+	pendingColors[index], pendingColors[index + 1], pendingColors[index + 2] = r, g, b
+	surface.SetDrawColor( r, g, b, 255 )
+	surface.DrawRect( block, sky, 1, 1 )
+end
+
+local function publishLightmapColors()
+	lightmapColors, pendingColors = pendingColors, lightmapColors
+	if pendingChanged then lightmapRevision = lightmapRevision + 1 end
+	MC.GlobalLightmapRevision = lightmapRevision
+	pendingChanged = false
+end
+
+local function sampleLightmapChannel( i00, i10, i01, i11, fb, fs )
+	local c0 = lightmapColors[i00] * ( 1 - fb ) + lightmapColors[i10] * fb
+	local c1 = lightmapColors[i01] * ( 1 - fb ) + lightmapColors[i11] * fb
+	return ( c0 * ( 1 - fs ) + c1 * fs ) / 255
+end
+
+function MC.SampleGlobalLightmapRGB( block, sky )
+	if not MC.Check( MC.GlobalLightmapRevision > 0, "global_lightmap_cpu_unready",
+		"CPU lightmap sampled before its first successful refresh" ) then return 0, 0, 0 end
+	block, sky = math.Clamp( block, 0, 15 ), math.Clamp( sky, 0, 15 )
+	local b0, s0 = math.floor( block ), math.floor( sky )
+	local b1, s1 = math.min( b0 + 1, 15 ), math.min( s0 + 1, 15 )
+	local fb, fs = block - b0, sky - s0
+	local i00, i10 = ( s0 * 16 + b0 ) * 3 + 1, ( s0 * 16 + b1 ) * 3 + 1
+	local i01, i11 = ( s1 * 16 + b0 ) * 3 + 1, ( s1 * 16 + b1 ) * 3 + 1
+	return sampleLightmapChannel( i00, i10, i01, i11, fb, fs ),
+		sampleLightmapChannel( i00 + 1, i10 + 1, i01 + 1, i11 + 1, fb, fs ),
+		sampleLightmapChannel( i00 + 2, i10 + 2, i01 + 2, i11 + 2, fb, fs )
+end
 
 local function convarNumber( cv, fallback, minValue, maxValue )
 	local value = cv and cv.GetFloat and cv:GetFloat() or fallback
@@ -221,17 +267,12 @@ local function generateGlobalLightmapVanilla()
 					r = r + ( nr - r ) * brightnessFactor
 					g = g + ( ng - g ) * brightnessFactor
 					bl = bl + ( nb - bl ) * brightnessFactor
-					surface.SetDrawColor(
-						math.floor( math.Clamp( r, 0, 1 ) * 255 + 0.5 ),
-						math.floor( math.Clamp( g, 0, 1 ) * 255 + 0.5 ),
-						math.floor( math.Clamp( bl, 0, 1 ) * 255 + 0.5 ),
-						255
-					)
-					surface.DrawRect( b, s, 1, 1 )
+					drawLightmapTexel( b, s, r, g, bl )
 				end
 			end
 		cam.End2D()
 	render.PopRenderTarget()
+	publishLightmapColors()
 	return true
 end
 -- ==== end vanilla lightmap =================================================
@@ -346,17 +387,12 @@ local function generateGlobalLightmap()
 						local gray = math.max( unit, ( s / 15 ) * dayBrightness * sunMul, ambient )
 						r, g, bl = gray, gray, gray
 					end
-					surface.SetDrawColor(
-						math.floor( math.Clamp( r, 0, 1 ) * 255 + 0.5 ),
-						math.floor( math.Clamp( g, 0, 1 ) * 255 + 0.5 ),
-						math.floor( math.Clamp( bl, 0, 1 ) * 255 + 0.5 ),
-						255
-					)
-					surface.DrawRect( b, s, 1, 1 )
+					drawLightmapTexel( b, s, r, g, bl )
 				end
 			end
 		cam.End2D()
 	render.PopRenderTarget()
+	publishLightmapColors()
 	return true
 end
 

@@ -112,7 +112,7 @@ function MC.MarkBlockAnimationLightDirty( key )
 	local record = FluidMeshCache[key]
 	if type( record ) ~= "table" then return end
 	record.lightDirty = true
-	record.nextLightAtByChannel = nil
+	record.localLightDirty = true
 end
 
 function MC.MarkAllBlockAnimationLightDirty()
@@ -120,21 +120,18 @@ function MC.MarkAllBlockAnimationLightDirty()
 	for key in pairs( FluidMeshCache ) do MC.MarkBlockAnimationLightDirty( key ) end
 end
 
-local function uploadAnimationMesh( vertices, existing )
-	local meshObject = existing
-	if not meshObject then
-		local ok, created = MC.Try( "block_animation_mesh", Mesh )
-		if not ok or not created then
-			AnimationStats.failures = AnimationStats.failures + 1
-			if ok then MC.Fault( "block_animation_mesh", "Mesh() returned no object" ) end
-			return nil
-		end
-		meshObject = created
+local function uploadAnimationMesh( vertices )
+	local ok, meshObject = MC.Try( "block_animation_mesh", Mesh )
+	if not ok or not meshObject then
+		AnimationStats.failures = AnimationStats.failures + 1
+		if ok then MC.Fault( "block_animation_mesh", "Mesh() returned no object" ) end
+		return nil
 	end
-	local ok = MC.Try( "block_animation_upload", RM.uploadMeshVertices, meshObject, vertices, nil, false, existing ~= nil )
+	local ok, err = pcall( RM.uploadMeshVertices, meshObject, vertices, nil, false )
 	if not ok then
 		AnimationStats.failures = AnimationStats.failures + 1
-		if not existing then meshObject:Destroy() end
+		meshObject:Destroy()
+		MC.Fault( "block_animation_upload", "%s", tostring( err ) )
 		return nil
 	end
 	AnimationStats.uploads = AnimationStats.uploads + 1
@@ -295,8 +292,15 @@ local function refreshChunks()
 			removeChunkEntries( key )
 			ScannedChunkVersions[key] = nil
 			dirtyFluidNeighbors( scanned.chunk )
-			destroyFluidRecord( FluidMeshCache[key] )
-			FluidMeshCache[key], FluidMeshRetryAt[key] = nil, nil
+			if current then
+				-- A replacement can outlive this frame's build budget. Keep the
+				-- old publication until the replacement scan/build can commit.
+				dirtyFluidChunk( key )
+			else
+				destroyFluidRecord( FluidMeshCache[key] )
+				FluidMeshCache[key] = nil
+			end
+			FluidMeshRetryAt[key] = nil
 		end
 	end
 	for key, chunk in pairs( MC.World or {} ) do
@@ -532,9 +536,9 @@ local function fluidMeshesForChunk( chunkKey, animations )
 		return nil
 	end
 	record.fluidKinds, record.matrix = availableKinds, Matrix()
-	record.center = Vector()
 	record.originBX, record.originBY, record.originBZ = originBX, originBY, originBZ
-	record.nextLightAt = 0
+	record.lightmapRevision = MC.GlobalLightmapRevision
+	record.nextLightmapAt = CurTime() + 0.1
 	destroyFluidRecord( cached )
 	FluidMeshCache[chunkKey] = record
 	FluidMeshRetryAt[chunkKey] = nil
@@ -542,9 +546,7 @@ local function fluidMeshesForChunk( chunkKey, animations )
 	return record
 end
 
-local function refreshFluidLight( record )
-	if not record.lightDirty or record.geometryDirty then return end
-	if CurTime() < ( record.retryAt or 0 ) then return end
+local function stageFluidLight( record, staged )
 	RM.resetMeshLightingSampleCaches()
 	RM.setMeshSampleCacheOrigin( record.originBX, record.originBY, record.originBZ )
 	for _, batches in pairs( record.meshes ) do
@@ -553,18 +555,41 @@ local function refreshFluidLight( record )
 				batch, RM.MC_LIGHT_STYLE_VANILLA or "vanilla" )
 			if not ok or result ~= true then
 				record.geometryDirty = true
-				record.retryAt = CurTime() + REFRESH_INTERVAL
 				AnimationStats.failures = AnimationStats.failures + 1
 				if ok then MC.Fault( "block_animation_light", "invalid light samples in an animated fluid batch" ) end
-				return
+				return false
 			end
-			if not uploadAnimationMesh( batch.verts, batch.mesh ) then
-				record.retryAt = CurTime() + REFRESH_INTERVAL
-				return
-			end
+			local replacement = uploadAnimationMesh( batch.verts )
+			if not replacement then return false end
+			staged[#staged + 1] = { batch = batch, mesh = replacement }
 		end
 	end
+	return true
+end
+
+local function refreshFluidLight( record )
+	if not record.lightDirty or record.geometryDirty then return end
+	if CurTime() < ( record.retryAt or 0 ) then return end
+	-- Never rebuild a published IMesh in place. All sprite batches, including
+	-- still/flow, must finish before this chunk switches to the new colours.
+	local staged = {}
+	local ok, result = pcall( stageFluidLight, record, staged )
+	if not ok or result ~= true then
+		for _, item in ipairs( staged ) do item.mesh:Destroy() end
+		record.retryAt = CurTime() + REFRESH_INTERVAL
+		if not ok then error( result, 0 ) end -- MC.Try/Fault already reported it.
+		return
+	end
+	for _, item in ipairs( staged ) do
+		local previous = item.batch.mesh
+		item.batch.mesh = item.mesh
+		previous:Destroy()
+	end
+	record.retryAt = nil
 	record.lightDirty = false
+	record.localLightDirty = false
+	record.lightmapRevision = MC.GlobalLightmapRevision
+	record.nextLightmapAt = CurTime() + 0.1
 	AnimationStats.lightRefreshes = AnimationStats.lightRefreshes + 1
 end
 
@@ -601,27 +626,8 @@ local function animationFrame( animation, elapsedTicks )
 	return frames[1], frames[2] or frames[1], 0
 end
 
-local function entryColor( entry, center, emission, channel )
+local function entryColor( entry, center, emission )
 	local now = CurTime()
-	if channel then
-		entry.lightColors = entry.lightColors or {}
-		entry.lightEmissions = entry.lightEmissions or {}
-		entry.nextLightAtByChannel = entry.nextLightAtByChannel or {}
-		if not entry.lightColors[channel]
-		or now >= ( entry.nextLightAtByChannel[channel] or 0 )
-		or entry.lightEmissions[channel] ~= emission then
-			local r, g, b = 1, 1, 1
-			if MC.SampleDynamicLightingRGB then r, g, b = MC.SampleDynamicLightingRGB( center, emission ) end
-			entry.lightColors[channel] = Color(
-				math.Clamp( math.floor( r * 255 + 0.5 ), 0, 255 ),
-				math.Clamp( math.floor( g * 255 + 0.5 ), 0, 255 ),
-				math.Clamp( math.floor( b * 255 + 0.5 ), 0, 255 ), 255
-			)
-			entry.lightEmissions[channel] = emission
-			entry.nextLightAtByChannel[channel] = now + 0.1
-		end
-		return entry.lightColors[channel]
-	end
 	if not entry.lightColor or now >= ( entry.nextLightAt or 0 ) or entry.lightEmission ~= emission then
 		local r, g, b = 1, 1, 1
 		if MC.SampleDynamicLightingRGB then r, g, b = MC.SampleDynamicLightingRGB( center, emission ) end
@@ -665,13 +671,18 @@ local function entryNeedsMeshes( entry )
 		or entry.meshSignature ~= entry.visualSignature or entry.meshRetryAt ~= nil )
 end
 
+local function fluidLightmapChanged( record )
+	return record.lightmapRevision ~= MC.GlobalLightmapRevision
+		and CurTime() >= ( record.nextLightmapAt or 0 )
+end
+
 function MC.BlockAnimationChunkHasEntries( key )
 	return EntriesByChunk[key] ~= nil
 end
 
 function MC.BlockAnimationChunkPending( key )
 	local record = FluidMeshCache[key]
-	if type( record ) == "table" and ( record.geometryDirty or record.lightDirty ) then return true end
+	if type( record ) == "table" and ( record.geometryDirty or record.lightDirty or fluidLightmapChanged( record ) ) then return true end
 	if ( FluidEntryCounts[key] or 0 ) > 0 and record == nil then return true end
 	for entryKey in pairs( EntriesByChunk[key] or {} ) do
 		local entry = Entries[entryKey]
@@ -704,6 +715,8 @@ local function prepareEntry( entry, animations )
 	end
 end
 
+local animationMatrixPushed = false
+
 local function drawEntry( entry, elapsedTicks )
 	if not entry.animationMeshes then return end
 	local base = MC.CellRenderMin and MC.CellRenderMin( entry.bx, entry.by, entry.bz )
@@ -717,10 +730,12 @@ local function drawEntry( entry, elapsedTicks )
 	entry.matrix = matrix
 	matrix:SetTranslation( base )
 	cam.PushModelMatrix( matrix )
+	animationMatrixPushed = true
 	for _, item in ipairs( entry.animationMeshes ) do
 		drawAnimationMesh( item.mesh, item.name, item.animation, color, elapsedTicks )
 	end
 	cam.PopModelMatrix()
+	animationMatrixPushed = false
 end
 
 local function fluidChunkTransform( chunk, eye )
@@ -750,34 +765,33 @@ local function fluidChunkTransform( chunk, eye )
 	return base, centerX, centerY, centerZ
 end
 
+local FLUID_LIGHT_COLOR = Color( 255, 255, 255, 255 )
 local function drawFluidChunk( chunkKey, animations, elapsedTicks, eye )
 	local record = FluidMeshCache[chunkKey]
 	if type( record ) ~= "table" then return end
 	local chunk = MC.GetChunkByKey and MC.GetChunkByKey( chunkKey ) or MC.World and MC.World[chunkKey]
-	local base, centerX, centerY, centerZ = fluidChunkTransform( chunk, eye )
+	local base = fluidChunkTransform( chunk, eye )
 	if not base then return end
-	local center = record.center
-	center.x, center.y, center.z = centerX, centerY, centerZ
 	record.matrix:SetTranslation( base )
 	cam.PushModelMatrix( record.matrix )
+	animationMatrixPushed = true
 	for _, kind in ipairs( record.fluidKinds or FLUID_KIND_ORDER ) do
 		local fluid = FLUID_ANIMATIONS[kind]
 		local blockId = fluidBlockId( kind )
 		if fluid and blockId then
-			local emission = MC.BlockLightEmission and MC.BlockLightEmission( blockId ) or 0
-			local fluidColor = entryColor( record, center, emission, kind )
 			for index = 1, 2 do
 				local name = index == 1 and fluid.still or fluid.flow
 				local batches = record.meshes[name]
 				if batches then
 					for _, batch in ipairs( batches ) do
-						drawAnimationMesh( batch.mesh, name, animations[name], fluidColor, elapsedTicks )
+						drawAnimationMesh( batch.mesh, name, animations[name], FLUID_LIGHT_COLOR, elapsedTicks )
 					end
 				end
 			end
 		end
 	end
 	cam.PopModelMatrix()
+	animationMatrixPushed = false
 end
 
 local function clearFluidMeshes()
@@ -813,6 +827,40 @@ local function prepareAnimationWork( budget, canBuild, prepare, ... )
 	return true
 end
 
+-- Local light changes run beside the terrain atlas upload, before background
+-- scans/builds. A geometry-dirty fluid must publish current geometry as well.
+local function prepareLocalFluidLighting( key, record, budget, canBuild, animations, now, eye )
+	if type( record ) ~= "table" or not record.localLightDirty then return true end
+	if now < ( FluidMeshRetryAt[key] or 0 ) or now < ( record.retryAt or 0 ) then return true end
+	local chunk = MC.GetChunkByKey and MC.GetChunkByKey( key ) or MC.World and MC.World[key]
+	if not fluidChunkTransform( chunk, eye ) then return true end
+	if not MC.Check( type( MC.SampleGlobalLightmapRGB ) == "function",
+		"block_animation_lightmap_missing", "cl_mesh_global_lightmap.lua did not load" ) then return false end
+	if record.geometryDirty then
+		return prepareAnimationWork( budget, canBuild, fluidMeshesForChunk, key, animations )
+	end
+	return prepareAnimationWork( budget, canBuild, refreshFluidLight, record )
+end
+
+function MC.PrepareBlockAnimationLighting( budget, canBuild, chunkKey )
+	if next( FluidMeshCache ) == nil then return end
+	if chunkKey ~= nil then
+		local record = FluidMeshCache[chunkKey]
+		if type( record ) ~= "table" or not record.localLightDirty then return end
+	end
+	if MC.WorldFrameSettled and not MC.WorldFrameSettled() then return end
+	if MC.GlobalLightmapRevision == 0 then return end
+	local animations = activeAnimations()
+	if next( animations ) == nil then return end
+	local now, eye = CurTime(), EyePos()
+	if chunkKey ~= nil then
+		return prepareLocalFluidLighting( chunkKey, FluidMeshCache[chunkKey], budget, canBuild, animations, now, eye )
+	end
+	for key, record in pairs( FluidMeshCache ) do
+		if not prepareLocalFluidLighting( key, record, budget, canBuild, animations, now, eye ) then return end
+	end
+end
+
 -- The scheduler owns the deadline. Each model instance or fluid chunk is an
 -- indivisible attempt; drawing only consumes the last published mesh buffers.
 function MC.PrepareBlockAnimations( budget, canBuild )
@@ -842,8 +890,15 @@ function MC.PrepareBlockAnimations( budget, canBuild )
 				and not prepareAnimationWork( budget, canBuild, prepareEntry, entry, animations ) then return end
 		end
 	end
+	if next( FluidEntryCounts ) == nil then return end
+	if not MC.Check( type( MC.SampleGlobalLightmapRGB ) == "function",
+		"block_animation_lightmap_missing", "cl_mesh_global_lightmap.lua did not load" ) then return end
+	-- The RT is initialized in Think; do not publish unlit fluid colours if
+	-- the scheduler runs first. Later changes recolour under this same budget.
+	if MC.GlobalLightmapRevision == 0 then return end
 	for key in pairs( FluidEntryCounts ) do
 		local record = FluidMeshCache[key]
+		if type( record ) == "table" and fluidLightmapChanged( record ) then record.lightDirty = true end
 		local geometryDirty = record == nil or type( record ) == "table" and record.geometryDirty
 		local lightDirty = type( record ) == "table" and record.lightDirty
 		if ( geometryDirty or lightDirty ) and now >= ( FluidMeshRetryAt[key] or 0 )
@@ -862,15 +917,8 @@ end
 
 hook.Remove( "Think", "mc_block_animation_chunk_scan" )
 
-hook.Add( "PostDrawTranslucentRenderables", "mc_block_animations", function( _, _, bSky3D )
-	if bSky3D or MC.WorldFrameSettled and not MC.WorldFrameSettled() then return end
-	local animations = activeAnimations()
-	if next( animations ) == nil then return end
-	local eye = EyePos()
+local function drawPreparedAnimations( animations, eye, elapsedTicks )
 	local maxRenderDistanceSqr = ( blockSize() * 96 ) ^ 2
-	local elapsedTicks = ( RealTime and RealTime() or CurTime() ) / TICK_SECONDS
-	if render.PushFilterMin then render.PushFilterMin( TEXFILTER.POINT ) end
-	if render.PushFilterMag then render.PushFilterMag( TEXFILTER.POINT ) end
 	for _, entry in pairs( Entries ) do
 		if entry.hasStateAnimation then
 			local center = MC.CellRenderCenter and MC.CellRenderCenter( entry.bx, entry.by, entry.bz )
@@ -880,13 +928,42 @@ hook.Add( "PostDrawTranslucentRenderables", "mc_block_animations", function( _, 
 			end
 		end
 	end
+	-- Fluid colour passes test opaque depth but must never populate it. In
+	-- particular, interpolated frames draw the same surface more than once.
+	render.OverrideDepthEnable( true, false )
 	for chunkKey in pairs( EntriesByChunk ) do
 		drawFluidChunk( chunkKey, animations, elapsedTicks, eye )
 	end
+end
+
+hook.Add( "PostDrawTranslucentRenderables", "mc_block_animations", function( bDepth, _, bSky3D )
+	-- bSky can also be true in the main view on maps with a 2D skybox.
+	if bDepth or bSky3D or MC.WorldFrameSettled and not MC.WorldFrameSettled() then return end
+	local animations = activeAnimations()
+	if next( animations ) == nil then return end
+	if not MC.Check( type( render.OverrideDepthEnable ) == "function"
+		and type( render.OverrideColorWriteEnable ) == "function",
+		"block_animation_render_state", "depth/color-write override APIs are unavailable" ) then return end
+	local eye = EyePos()
+	local elapsedTicks = ( RealTime and RealTime() or CurTime() ) / TICK_SECONDS
+	render.OverrideDepthEnable( false, false )
+	render.OverrideColorWriteEnable( false, false )
+	if render.PushFilterMin then render.PushFilterMin( TEXFILTER.POINT ) end
+	if render.PushFilterMag then render.PushFilterMag( TEXFILTER.POINT ) end
+	local ok, err = pcall( drawPreparedAnimations, animations, eye, elapsedTicks )
+	-- Clean up before Fault: strict mode may throw, and a failed Draw must not
+	-- leave later hooks using our matrix, depth override or texture filters.
+	if animationMatrixPushed then
+		cam.PopModelMatrix()
+		animationMatrixPushed = false
+	end
+	render.OverrideDepthEnable( false, false )
+	render.OverrideColorWriteEnable( false, false )
 	render.SetBlend( 1 )
 	render.SetColorModulation( 1, 1, 1 )
 	if render.PopFilterMag then render.PopFilterMag() end
 	if render.PopFilterMin then render.PopFilterMin() end
+	if not ok then MC.Fault( "block_animation_draw", "%s", tostring( err ) ) end
 end )
 
 hook.Add( "MCWorldAdapterChanged", "mc_block_animation_world_frame", function()

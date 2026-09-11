@@ -16,6 +16,7 @@ local cachedMeshLightingSampleFast = RM.cachedMeshLightingSampleFast
 local cachedMeshAOSample = RM.cachedMeshAOSample
 local cachedMeshAOSampleFast = RM.cachedMeshAOSampleFast
 local minecraftSmoothCornerBrightnessValues = RM.minecraftSmoothCornerBrightnessValues
+local minecraftSmoothCornerLightRGBValues = RM.minecraftSmoothCornerLightRGBValues
 local minecraftSmoothCornerBrightnessPacketValues = RM.minecraftSmoothCornerBrightnessPacketValues
 local minecraftSmoothCornerShadeBrightnessValues = RM.minecraftSmoothCornerShadeBrightnessValues
 local MC_LIGHT_STYLE_VANILLA = RM.MC_LIGHT_STYLE_VANILLA
@@ -221,6 +222,11 @@ local function applyBlockTint( r, g, b, tintCode )
 	return mathFloor( r * tr / 255 + 0.5 ), mathFloor( g * tg / 255 + 0.5 ), mathFloor( b * tb / 255 + 0.5 )
 end
 
+local function fluidLightColorValues( r, g, b, a, bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
+	local lr, lg, lb = minecraftSmoothCornerLightRGBValues( bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
+	return mathFloor( r * lr + 0.5 ), mathFloor( g * lg + 0.5 ), mathFloor( b * lb + 0.5 ), a
+end
+
 local function litFaceColorValues( shade, bx, by, bz, id, faceIndex, cn, selfEmission, style, tintCode )
 	style = style or MC_LIGHT_STYLE_VANILLA
 	local shadeR, shadeG, shadeB, shadeA = shade.r or 255, shade.g or 255, shade.b or 255, shade.a or 255
@@ -228,6 +234,11 @@ local function litFaceColorValues( shade, bx, by, bz, id, faceIndex, cn, selfEmi
 		return gpuLightTexturePayloadValues( gpuLightTextureFaceIndex( id, faceIndex ), shadeA, tintCode )
 	end
 	shadeR, shadeG, shadeB = applyBlockTint( shadeR, shadeG, shadeB, tintCode )
+	if style == MC_LIGHT_STYLE_VANILLA and RM.isLiquidBlock( id ) then
+		local cx, cy, cz = cornerXYZ( cn )
+		return fluidLightColorValues( shadeR, shadeG, shadeB, shadeA,
+			bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
+	end
 	if not MC.SampleLighting then return shadeR, shadeG, shadeB, shadeA end
 	local brightness, ao
 	if style == MC_LIGHT_STYLE_SHADER or style == MC_LIGHT_STYLE_GPU_SHADER then
@@ -263,6 +274,10 @@ local function litFaceColorMetaValues( meta, style )
 		return gpuLightTexturePayloadValues( gpuLightTextureFaceIndex( id, faceIndex ), shadeA, tintCode )
 	end
 	shadeR, shadeG, shadeB = applyBlockTint( shadeR, shadeG, shadeB, tintCode )
+	if style == MC_LIGHT_STYLE_VANILLA and RM.isLiquidBlock( id ) then
+		return fluidLightColorValues( shadeR, shadeG, shadeB, shadeA,
+			bx, by, bz, faceIndex, meta.cx, meta.cy, meta.cz, meta.selfEmission )
+	end
 	if not MC.SampleLighting then return shadeR, shadeG, shadeB, shadeA end
 	local cx, cy, cz = meta.cx, meta.cy, meta.cz
 	local selfEmission = meta.selfEmission
