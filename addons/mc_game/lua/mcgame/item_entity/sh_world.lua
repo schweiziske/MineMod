@@ -28,8 +28,7 @@ end
 
 function R.BlockSize()
 	local coordinateAPI = coords()
-	local value = coordinateAPI and coordinateAPI.BlockSize and coordinateAPI.BlockSize() or 36.5
-	return math.max( 0.001, tonumber( value ) or 36.5 )
+	return math.max( 0.001, coordinateAPI.BlockSize() )
 end
 
 function R.WorldBounds( entity )
@@ -37,21 +36,31 @@ function R.WorldBounds( entity )
 	if not coordinateAPI or type( coordinateAPI.EntityWorldAABB ) ~= "function" then return nil, nil end
 	local minimum, maximum = coordinateAPI.EntityWorldAABB( entity )
 	if not isvector or not isvector( minimum ) or not isvector( maximum ) then return nil, nil end
-	return Vector( minimum.x, minimum.y, minimum.z ), Vector( maximum.x, maximum.y, maximum.z )
+	-- The public coordinate API already returns owned vectors.
+	return minimum, maximum
 end
 
-function R.FootWorldPosition( entity, minimum, maximum )
+function R.FootWorldPosition( entity, minimum, maximum, output )
 	minimum, maximum = minimum or nil, maximum or nil
 	if not minimum or not maximum then minimum, maximum = R.WorldBounds( entity ) end
 	if not minimum or not maximum then return nil end
-	return Vector( ( minimum.x + maximum.x ) * 0.5, ( minimum.y + maximum.y ) * 0.5, minimum.z )
+	output = output or Vector( 0, 0, 0 )
+	output.x, output.y, output.z = ( minimum.x + maximum.x ) * 0.5, ( minimum.y + maximum.y ) * 0.5, minimum.z
+	return output
 end
 
 function R.BlockNameAt( bx, by, bz )
 	local worldAPI = world()
 	if not worldAPI or type( worldAPI.GetBlockInfo ) ~= "function" then return "minecraft:air" end
-	local info = worldAPI.GetBlockInfo( bx, by, bz )
-	local name = type( info ) == "table" and ( info.mcid or info.name ) or nil
+	local blocks = api().Blocks
+	local name
+	if worldAPI.GetBlockState and blocks and blocks.Name then
+		local stateId = worldAPI.GetBlockState( bx, by, bz )
+		name = blocks.Name( stateId )
+	else
+		local info = worldAPI.GetBlockInfo( bx, by, bz )
+		name = type( info ) == "table" and ( info.mcid or info.name ) or nil
+	end
 	name = tostring( name or "" )
 	if name == "" then return "minecraft:air" end
 	return string.find( name, ":", 1, true ) and name or "minecraft:" .. name
@@ -66,12 +75,13 @@ function R.CellWorldBounds( bx, by, bz )
 	return minimum, minimum + Vector( size, size, size )
 end
 
-local function deflatedRange( minimum, maximum, amount )
+local function deflatedRange( minimum, maximum, amount, lo, hi )
 	local coordinateAPI = coords()
 	if not coordinateAPI or type( coordinateAPI.WorldToCell ) ~= "function" then return nil end
 	local inset = math.max( R.BlockSize() * amount, 0.000001 )
-	local lo = minimum + Vector( inset, inset, inset )
-	local hi = maximum - Vector( inset, inset, inset )
+	lo, hi = lo or Vector( 0, 0, 0 ), hi or Vector( 0, 0, 0 )
+	lo.x, lo.y, lo.z = minimum.x + inset, minimum.y + inset, minimum.z + inset
+	hi.x, hi.y, hi.z = maximum.x - inset, maximum.y - inset, maximum.z - inset
 	if hi.x < lo.x or hi.y < lo.y or hi.z < lo.z then return nil end
 	local x0, y0, z0 = coordinateAPI.WorldToCell( lo )
 	local x1, y1, z1 = coordinateAPI.WorldToCell( hi )
@@ -83,12 +93,19 @@ local function emptyTracker()
 	return { height = 0, flowX = 0, flowY = 0, flowZ = 0, count = 0 }
 end
 
-function R.FluidTrackersForBounds( minimum, maximum )
+local function clearTracker( tracker )
+	tracker.height, tracker.flowX, tracker.flowY, tracker.flowZ, tracker.count = 0, 0, 0, 0, 0
+end
+
+function R.FluidTrackersForBounds( minimum, maximum, output )
 	local liquidAPI, coordinateAPI = liquid(), coords()
-	local output = { water = emptyTracker(), lava = emptyTracker() }
+	output = output or { water = emptyTracker(), lava = emptyTracker(),
+		queryMin = Vector( 0, 0, 0 ), queryMax = Vector( 0, 0, 0 ) }
+	clearTracker( output.water )
+	clearTracker( output.lava )
 	if not liquidAPI or type( liquidAPI.GetAt ) ~= "function"
 	or type( liquidAPI.FlowAt ) ~= "function" or not coordinateAPI then return output end
-	local x0, y0, z0, x1, y1, z1 = deflatedRange( minimum, maximum, C.fluidBoundsDeflate )
+	local x0, y0, z0, x1, y1, z1 = deflatedRange( minimum, maximum, C.fluidBoundsDeflate, output.queryMin, output.queryMax )
 	if x0 == nil then return output end
 	local size = R.BlockSize()
 	-- Java loop order is x, vertical y, horizontal z. MCSWEP maps those axes to
@@ -126,72 +143,98 @@ function R.SampleEntityFluids( entity )
 	return R.FluidTrackersForBounds( minimum, maximum )
 end
 
-function R.InsideCellsForBounds( minimum, maximum )
-	local liquidAPI = liquid()
-	local x0, y0, z0, x1, y1, z1 = deflatedRange( minimum, maximum, C.insideBoundsDeflate )
-	if x0 == nil then return {} end
-	local cells = {}
+local function insideScratch( scratch )
+	scratch = scratch or {}
+	if not scratch.output then
+		scratch.output, scratch.pool = {}, {}
+		scratch.minimum, scratch.maximum = Vector( 0, 0, 0 ), Vector( 0, 0, 0 )
+		scratch.queryMin, scratch.queryMax = Vector( 0, 0, 0 ), Vector( 0, 0, 0 )
+	end
+	scratch.hasRange = false
+	return scratch
+end
+
+local function appendInsideCells( minimum, maximum, step, scratch, count )
+	local x0, y0, z0, x1, y1, z1 = deflatedRange( minimum, maximum, C.insideBoundsDeflate, scratch.queryMin, scratch.queryMax )
+	if x0 == nil then return count end
+	if scratch.hasRange and x0 == scratch.x0 and y0 == scratch.y0 and z0 == scratch.z0
+	and x1 == scratch.x1 and y1 == scratch.y1 and z1 == scratch.z1 then return count end
+	scratch.hasRange = true
+	scratch.x0, scratch.y0, scratch.z0, scratch.x1, scratch.y1, scratch.z1 = x0, y0, z0, x1, y1, z1
+	local output, pool, liquidAPI = scratch.output, scratch.pool, liquid()
 	for bx = x0, x1 do
 		for bz = z0, z1 do
 			for by = y0, y1 do
-				local name = R.BlockNameAt( bx, by, bz )
-				local fluid = liquidAPI and liquidAPI.GetAt and liquidAPI.GetAt( bx, by, bz ) or nil
-				if name ~= "minecraft:air" or fluid then
-					cells[#cells + 1] = { bx = bx, by = by, bz = bz, name = name, fluid = fluid }
+				-- Item AABBs cover only a handful of cells. Numeric comparisons
+				-- avoid a fresh visited hash and concatenated coordinate strings.
+				local seen = false
+				for i = 1, count do
+					local cell = output[i]
+					if cell.bx == bx and cell.by == by and cell.bz == bz then seen = true; break end
+				end
+				if not seen then
+					local name = R.BlockNameAt( bx, by, bz )
+					local fluid = liquidAPI and liquidAPI.GetAt and liquidAPI.GetAt( bx, by, bz ) or nil
+					if name ~= "minecraft:air" or fluid then
+						count = count + 1
+						local cell = pool[count]
+						if not cell then cell = {}; pool[count] = cell end
+						cell.bx, cell.by, cell.bz, cell.name, cell.fluid, cell.stepIndex = bx, by, bz, name, fluid, step
+						output[count] = cell
+					end
 				end
 			end
 		end
 	end
-	return cells
+	return count
 end
 
-local function cellKey( cell )
-	return tostring( cell.bx ) .. ":" .. tostring( cell.by ) .. ":" .. tostring( cell.bz )
+function R.InsideCellsForBounds( minimum, maximum )
+	local scratch = insideScratch()
+	appendInsideCells( minimum, maximum, 0, scratch, 0 )
+	return scratch.output
 end
 
-function R.InsideCellsAlongPath( startMinimum, startMaximum, endMinimum, endMaximum )
-	if not startMinimum or not startMaximum then return R.InsideCellsForBounds( endMinimum, endMaximum ) end
+function R.InsideCellsAlongPath( startMinimum, startMaximum, endMinimum, endMaximum, scratch )
+	startMinimum, startMaximum = startMinimum or endMinimum, startMaximum or endMaximum
+	scratch = insideScratch( scratch )
 	local size = R.BlockSize()
-	local startCenter = ( startMinimum + startMaximum ) * 0.5
-	local endCenter = ( endMinimum + endMaximum ) * 0.5
-	local delta = endCenter - startCenter
-	local distance = math.sqrt( delta.x * delta.x + delta.y * delta.y + delta.z * delta.z ) / size
+	local lx, ly, lz = endMinimum.x - startMinimum.x, endMinimum.y - startMinimum.y, endMinimum.z - startMinimum.z
+	local hx, hy, hz = endMaximum.x - startMaximum.x, endMaximum.y - startMaximum.y, endMaximum.z - startMaximum.z
+	local dx, dy, dz = ( lx + hx ) * 0.5, ( ly + hy ) * 0.5, ( lz + hz ) * 0.5
+	local distance = math.sqrt( dx * dx + dy * dy + dz * dz ) / size
 	local steps = math.max( 1, math.min( 16, math.ceil( distance ) ) )
-	local output, visited = {}, {}
+	local output, count = scratch.output, 0
+	local previous = #output
+	local minimum, maximum = scratch.minimum, scratch.maximum
 	for step = 0, steps do
 		local fraction = step / steps
-		local minimum = startMinimum + ( endMinimum - startMinimum ) * fraction
-		local maximum = startMaximum + ( endMaximum - startMaximum ) * fraction
-		for _, cell in ipairs( R.InsideCellsForBounds( minimum, maximum ) ) do
-			local key = cellKey( cell )
-			if not visited[key] then
-				visited[key] = true
-				cell.stepIndex = step
-				output[#output + 1] = cell
-			end
-		end
+		minimum.x, minimum.y, minimum.z = startMinimum.x + lx * fraction, startMinimum.y + ly * fraction, startMinimum.z + lz * fraction
+		maximum.x, maximum.y, maximum.z = startMaximum.x + hx * fraction, startMaximum.y + hy * fraction, startMaximum.z + hz * fraction
+		count = appendInsideCells( minimum, maximum, step, scratch, count )
 	end
+	for i = count + 1, previous do output[i] = nil end
 	return output
 end
 
-function R.MovementBlockSample( entity, minimum, maximum )
+function R.MovementBlockSample( entity, minimum, maximum, output )
+	output = output or {}
 	minimum, maximum = minimum or nil, maximum or nil
 	if not minimum or not maximum then minimum, maximum = R.WorldBounds( entity ) end
-	local foot = minimum and R.FootWorldPosition( entity, minimum, maximum ) or nil
+	local foot = minimum and R.FootWorldPosition( entity, minimum, maximum, output.foot ) or nil
 	local coordinateAPI = coords()
 	if not foot or not coordinateAPI or type( coordinateAPI.WorldToCell ) ~= "function" then
 		return { hereName = "minecraft:air", belowName = "minecraft:air", foot = foot }
 	end
 	local bx, by, bz = coordinateAPI.WorldToCell( foot )
-	local belowX, belowY, belowZ = coordinateAPI.WorldToCell(
-		foot - Vector( 0, 0, R.BlockSize() * 0.999999 )
-	)
-	return {
-		foot = foot,
-		blockX = bx, blockY = by, blockZ = bz,
-		hereName = bx and R.BlockNameAt( bx, by, bz ) or "minecraft:air",
-		belowName = belowX and R.BlockNameAt( belowX, belowY, belowZ ) or "minecraft:air",
-	}
+	local below = output.belowPosition or Vector( 0, 0, 0 )
+	below.x, below.y, below.z = foot.x, foot.y, foot.z - R.BlockSize() * 0.999999
+	output.belowPosition = below
+	local belowX, belowY, belowZ = coordinateAPI.WorldToCell( below )
+	output.foot, output.blockX, output.blockY, output.blockZ = foot, bx, by, bz
+	output.hereName = bx and R.BlockNameAt( bx, by, bz ) or "minecraft:air"
+	output.belowName = belowX and R.BlockNameAt( belowX, belowY, belowZ ) or "minecraft:air"
+	return output
 end
 
 function R.MovedAcrossCell( fromPosition, toPosition )

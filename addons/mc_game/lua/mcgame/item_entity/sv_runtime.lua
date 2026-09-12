@@ -40,20 +40,27 @@ local function sourceFromBlocks( x, y, z )
 		( tonumber( y ) or 0 ) * scale, ( tonumber( z ) or 0 ) * scale )
 end
 
-local function setPhysicsVelocity( entity, x, y, z )
-	local physics = physicsFor( entity )
+local function setPhysicsVelocity( entity, state, x, y, z )
+	local physics = state.physics
 	if not physics or not physics.SetVelocity then return false end
-	physics:SetVelocity( sourceFromBlocks( x, y, z ) )
-	if physics.Wake then physics:Wake() end
+	local asleep = physics.IsAsleep and physics:IsAsleep() == true
+	if asleep and x == 0 and y == 0 and z == 0 then return true end
+	local velocity = state.sourceVelocity
+	local scale = R.BlockSize() / C.tickSeconds
+	velocity.x, velocity.y, velocity.z = x * scale, y * scale, z * scale
+	physics:SetVelocity( velocity )
+	if asleep and ( x ~= 0 or y ~= 0 or z ~= 0 ) and physics.Wake then physics:Wake() end
 	return true
 end
 
 local function configurePhysics( entity, state )
 	local physics = physicsFor( entity )
-	if not physics then return end
+	if not physics then state.physics, state.physicsConfigured = nil, false; return end
+	if state.physicsConfigured and state.physics == physics then return end
+	state.groundTrace = nil
 	if not state.physicsConfigured then
 		local vx, vy, vz = blocksFromSource( physics.GetVelocity and physics:GetVelocity() or vector_origin )
-		if not state.initialVelocity then state.velocity = { x = vx, y = vy, z = vz } end
+		if not state.initialVelocity then state.velocity.x, state.velocity.y, state.velocity.z = vx, vy, vz end
 	end
 	if physics.EnableGravity then physics:EnableGravity( false ) end
 	if physics.EnableDrag then physics:EnableDrag( false ) end
@@ -61,6 +68,7 @@ local function configurePhysics( entity, state )
 	if physics.SetBuoyancyRatio then physics:SetBuoyancyRatio( 0 ) end
 	if entity.SetElasticity then entity:SetElasticity( 0 ) end
 	state.physicsConfigured = true
+	state.physics = physics
 end
 
 local function legacyAge( entity )
@@ -77,13 +85,29 @@ end
 
 function R.StateFor( entity, create )
 	local state = R.EntityStates[entity]
-	if state or create == false or not validDrop( entity ) then return state end
+	if state then
+		if not state.sourceVelocity then
+			-- Migrate an already running state during Lua auto-refresh.
+			state.sourceVelocity = Vector( 0, 0, 0 )
+			state.velocityBeforeMove = state.velocityBeforeMove or { x = 0, y = 0, z = 0 }
+			state.requestedMove = state.requestedMove or { x = 0, y = 0, z = 0 }
+			state.insideScratch, state.movementSample = {}, {}
+			state.physicsConfigured = false
+		end
+		return state
+	end
+	if create == false or not validDrop( entity ) then return nil end
 	state = {
 		started = false,
 		tickCount = math.max( 0, math.floor( tonumber( entity.MCItemTickCount ) or 0 ) ),
 		velocity = { x = 0, y = 0, z = 0 },
+		velocityBeforeMove = { x = 0, y = 0, z = 0 },
+		requestedMove = { x = 0, y = 0, z = 0 },
+		sourceVelocity = Vector( 0, 0, 0 ),
 		onGround = false,
-		collision = {},
+		collision = { x = false, y = false, z = false, below = false },
+		insideScratch = {},
+		movementSample = {},
 	}
 	R.EntityStates[entity] = state
 	entity.MCItemAgeTicks = legacyAge( entity )
@@ -94,7 +118,7 @@ function R.StateFor( entity, create )
 		entity.MCItemLifetimeTicks = R.SecondsToTicks( entity.MCLifetime )
 	end
 	configurePhysics( entity, state )
-	setPhysicsVelocity( entity, 0, 0, 0 )
+	setPhysicsVelocity( entity, state, 0, 0, 0 )
 	return state
 end
 
@@ -126,10 +150,10 @@ function R.SetInitialVelocity( entity, velocity )
 	if not state then return false end
 	configurePhysics( entity, state )
 	local x, y, z = blocksFromSource( velocity )
-	state.velocity = { x = x, y = y, z = z }
+	state.velocity.x, state.velocity.y, state.velocity.z = x, y, z
 	state.initialVelocity = true
 	state.started = false
-	setPhysicsVelocity( entity, 0, 0, 0 )
+	setPhysicsVelocity( entity, state, 0, 0, 0 )
 	return true
 end
 
@@ -205,8 +229,20 @@ local function effectiveMergeStack( stack )
 	return copy
 end
 
-local function stacksCanMerge( left, right )
-	return MC.ItemStacksCanMerge( effectiveMergeStack( left ), effectiveMergeStack( right ) )
+local function mergeComponentKey( entity, stack )
+	if entity.MCParityMergeStack ~= stack then
+		local effective = effectiveMergeStack( stack )
+		entity.MCParityMergeKey = MC.CanonicalItemComponents( effective and effective.components )
+		entity.MCParityMergeStack = stack
+	end
+	return entity.MCParityMergeKey
+end
+
+local function stacksCanMerge( leftEntity, left, rightEntity, right )
+	if left.item ~= right.item or ( left.damage or 0 ) ~= ( right.damage or 0 ) then return false end
+	if leftEntity.MCItemComponentKey ~= nil
+	and leftEntity.MCItemComponentKey == rightEntity.MCItemComponentKey then return true end
+	return mergeComponentKey( leftEntity, left ) == mergeComponentKey( rightEntity, right )
 end
 
 local function emitItemEvent( name, ... )
@@ -215,7 +251,7 @@ end
 
 function R.HurtItem( entity, damageType, damage, source )
 	if not validDrop( entity ) then return false end
-	local stack = entity.GetDropStack and entity:GetDropStack() or nil
+	local stack = entity.MCItemStack
 	if MC.IsEmptyItemStack( stack ) or not R.StackCanBeHurtBy( stack, damageType ) then return false end
 	local oldHealth = math.floor( tonumber( entity.MCItemHealth ) or C.defaultHealth )
 	local newHealth = R.HealthAfterDamage( oldHealth, damage )
@@ -229,26 +265,28 @@ function R.HurtItem( entity, damageType, damage, source )
 end
 
 function R.IgniteForTicks( entity, ticks )
-	local stack = entity.GetDropStack and entity:GetDropStack() or nil
+	local stack = entity.MCItemStack
 	if not R.StackCanBeHurtBy( stack, "minecraft:in_fire" ) then return false end
 	entity.MCItemFireTicks = math.max( math.floor( tonumber( entity.MCItemFireTicks ) or 0 ),
 		math.max( 0, math.floor( tonumber( ticks ) or 0 ) ) )
 	return true
 end
 
-local function supportingGround( entity, foot, velocity )
+local function supportingGround( entity, state, velocity )
 	if not util or not util.TraceHull or not entity.GetPos then return false end
+	if velocity.z > 0 then return false end
 	local distance = math.max( 1, R.BlockSize() * 0.02 )
 	local start = entity:GetPos()
-	local trace = util.TraceHull( {
-		start = start,
-		endpos = start - Vector( 0, 0, distance ),
-		mins = entity.OBBMins and entity:OBBMins() or Vector( -1, -1, -1 ),
-		maxs = entity.OBBMaxs and entity:OBBMaxs() or Vector( 1, 1, 1 ),
-		filter = entity,
-		mask = MASK_SOLID or nil,
-	} )
-	return trace and trace.Hit == true and ( tonumber( velocity and velocity.z ) or 0 ) <= 0
+	local query = state.groundTrace
+	if not query then
+		query = { endpos = Vector( 0, 0, 0 ), mins = entity:OBBMins(), maxs = entity:OBBMaxs(),
+			filter = entity, mask = MASK_SOLID, output = {} }
+		state.groundTrace = query
+	end
+	query.start = start
+	query.endpos.x, query.endpos.y, query.endpos.z = start.x, start.y, start.z - distance
+	local trace = util.TraceHull( query )
+	return trace and trace.Hit == true
 end
 
 local function finishPreviousMovement( entity, state )
@@ -256,8 +294,9 @@ local function finishPreviousMovement( entity, state )
 	if not minimum then return true end
 	local foot = R.FootWorldPosition( entity, minimum, maximum )
 	local actualZ = state.startFoot and ( foot.z - state.startFoot.z ) / R.BlockSize() or 0
-	local base = state.zeroAfterStuck and { x = 0, y = 0, z = 0 } or state.velocityBeforeMove
-	local velocity = { x = base.x, y = base.y, z = base.z }
+	local base, velocity = state.velocityBeforeMove, state.velocity
+	if state.zeroAfterStuck then velocity.x, velocity.y, velocity.z = 0, 0, 0
+	else velocity.x, velocity.y, velocity.z = base.x, base.y, base.z end
 	if state.pendingVelocityAdd then
 		velocity.x = velocity.x + state.pendingVelocityAdd.x
 		velocity.y = velocity.y + state.pendingVelocityAdd.y
@@ -277,13 +316,13 @@ local function finishPreviousMovement( entity, state )
 	local onGround = state.onGround == true
 	if not state.skipped then
 		onGround = collision.below == true
-		if not onGround and supportingGround( entity, foot, requested ) then onGround = true end
+		if not onGround and supportingGround( entity, state, requested ) then onGround = true end
 		if not onGround and state.onGround and requested.z <= 0
 		and math.abs( actualZ ) < 1.0e-5 then onGround = true end
 		if collision.x then velocity.x = 0 end
 		if collision.y then velocity.y = 0 end
 	end
-	local sample = R.MovementBlockSample( entity, minimum, maximum )
+	local sample = R.MovementBlockSample( entity, minimum, maximum, state.movementSample )
 	if not state.skipped and ( collision.z or collision.below ) then
 		local restitution = BlockPhysics and BlockPhysics.BounceRestitutionFor
 			and BlockPhysics.BounceRestitutionFor( sample.belowName, false ) or 0
@@ -308,9 +347,9 @@ local function finishPreviousMovement( entity, state )
 	local cells
 	if state.skipped and state.lastStartMinimum then
 		cells = R.InsideCellsAlongPath( state.lastStartMinimum, state.lastStartMaximum,
-			state.lastEndMinimum, state.lastEndMaximum )
+			state.lastEndMinimum, state.lastEndMaximum, state.insideScratch )
 	else
-		cells = R.InsideCellsAlongPath( state.startMinimum, state.startMaximum, minimum, maximum )
+		cells = R.InsideCellsAlongPath( state.startMinimum, state.startMaximum, minimum, maximum, state.insideScratch )
 		if not state.skipped then
 			state.lastStartMinimum, state.lastStartMaximum = state.startMinimum, state.startMaximum
 			state.lastEndMinimum, state.lastEndMaximum = minimum, maximum
@@ -332,7 +371,8 @@ local function finishPreviousMovement( entity, state )
 	if not IsValid( entity ) then return false end
 	local age = math.floor( tonumber( entity.MCItemAgeTicks ) or 0 )
 	if age ~= C.infiniteAge then entity.MCItemAgeTicks = age + 1 end
-	local secondFluids = R.FluidTrackersForBounds( minimum, maximum )
+	local secondFluids = R.FluidTrackersForBounds( minimum, maximum, state.fluids )
+	state.fluids = secondFluids
 	velocity.x, velocity.y, velocity.z = R.ApplyTrackedCurrents(
 		velocity.x, velocity.y, velocity.z, secondFluids )
 	state.velocity, state.onGround = velocity, onGround
@@ -342,15 +382,16 @@ local function finishPreviousMovement( entity, state )
 		entity:Remove()
 		return false
 	end
-	return true
+	return true, minimum, maximum, secondFluids
 end
 
-local function beginNextMovement( entity, state )
+local function beginNextMovement( entity, state, minimum, maximum, fluids )
 	state.tickCount = state.tickCount + 1
 	entity.MCItemTickCount = state.tickCount
-	local minimum, maximum = R.WorldBounds( entity )
+	if not minimum then minimum, maximum = R.WorldBounds( entity ) end
 	if not minimum then return false end
-	local fluids = R.FluidTrackersForBounds( minimum, maximum )
+	if not fluids then fluids = R.FluidTrackersForBounds( minimum, maximum, state.fluids ) end
+	state.fluids = fluids
 	local velocity = state.velocity
 	velocity.x, velocity.y, velocity.z = R.ApplyTrackedCurrents(
 		velocity.x, velocity.y, velocity.z, fluids )
@@ -362,22 +403,26 @@ local function beginNextMovement( entity, state )
 
 	state.startMinimum, state.startMaximum = minimum, maximum
 	state.startFoot = R.FootWorldPosition( entity, minimum, maximum )
-	state.velocityBeforeMove = { x = velocity.x, y = velocity.y, z = velocity.z }
+	local before = state.velocityBeforeMove
+	before.x, before.y, before.z = velocity.x, velocity.y, velocity.z
 	state.zeroAfterStuck = false
 	state.skipped = R.ShouldSkipMovement( state.onGround, velocity.x, velocity.y,
 		state.tickCount, entity.EntIndex and entity:EntIndex() or 0 )
 	local moveX, moveY, moveZ = velocity.x, velocity.y, velocity.z
 	if not state.skipped and state.pendingWeb then
-		local multiplierX, multiplierY, multiplierZ = BlockPhysics and BlockPhysics.WebMultiplier
-			and BlockPhysics.WebMultiplier( false ) or 0.25, 0.25, 0.05
+		local multiplierX, multiplierY, multiplierZ = 0.25, 0.25, 0.05
+		if BlockPhysics and BlockPhysics.WebMultiplier then
+			multiplierX, multiplierY, multiplierZ = BlockPhysics.WebMultiplier( false )
+		end
 		moveX, moveY, moveZ = moveX * multiplierX, moveY * multiplierY, moveZ * multiplierZ
 		state.pendingWeb = nil
 		state.zeroAfterStuck = true
 	end
-	state.requestedMove = { x = moveX, y = moveY, z = moveZ }
-	state.collision = {}
-	if state.skipped then setPhysicsVelocity( entity, 0, 0, 0 )
-	else setPhysicsVelocity( entity, moveX, moveY, moveZ ) end
+	local requested, collision = state.requestedMove, state.collision
+	requested.x, requested.y, requested.z = moveX, moveY, moveZ
+	collision.x, collision.y, collision.z, collision.below = false, false, false, false
+	if state.skipped then setPhysicsVelocity( entity, state, 0, 0, 0 )
+	else setPhysicsVelocity( entity, state, moveX, moveY, moveZ ) end
 	return true
 end
 
@@ -385,9 +430,14 @@ function R.ThinkEntity( entity )
 	local state = R.StateFor( entity, true )
 	if not state then return false end
 	configurePhysics( entity, state )
-	if state.started and not finishPreviousMovement( entity, state ) then return false end
+	local minimum, maximum, fluids
+	if state.started then
+		local finished
+		finished, minimum, maximum, fluids = finishPreviousMovement( entity, state )
+		if not finished then return false end
+	end
 	if not IsValid( entity ) then return false end
-	local began = beginNextMovement( entity, state )
+	local began = beginNextMovement( entity, state, minimum, maximum, fluids )
 	state.started = began == true
 	return began
 end
@@ -458,7 +508,7 @@ local function isMergable( entity )
 	if not validDrop( entity ) or entity.MCPickupDelayTicks == C.infinitePickupDelay
 	or entity.MCItemAgeTicks == C.infiniteAge
 	or ( tonumber( entity.MCItemAgeTicks ) or 0 ) >= C.lifetimeTicks then return false end
-	local stack = entity.GetDropStack and entity:GetDropStack() or nil
+	local stack = entity.MCItemStack
 	return not MC.IsEmptyItemStack( stack )
 		and stack.count < ( MC.ItemStackMaxCount and MC.ItemStackMaxCount( stack ) or 0 )
 end
@@ -469,7 +519,7 @@ local function candidateIntersects( expandedMin, expandedMax, candidate )
 end
 
 function R.TryMergeNeighbours( entity )
-	if not isMergable( entity ) or entity.MCDropMerging or not ents or not ents.FindByClass then return false end
+	if not isMergable( entity ) or entity.MCDropMerging then return false end
 	local minimum, maximum = R.WorldBounds( entity )
 	if not minimum then return false end
 	local inflate = R.BlockSize() * C.mergeHorizontalInflate
@@ -477,12 +527,16 @@ function R.TryMergeNeighbours( entity )
 	local expandedMax = maximum + Vector( inflate, inflate, 0 )
 	entity.MCDropMerging = true
 	local merged = false
-	for _, other in ipairs( ents.FindByClass( "mc_item_drop" ) or {} ) do
+	local nearby = MC.ItemDropQuery.InBox( expandedMin.x, expandedMin.y, expandedMin.z,
+		expandedMax.x, expandedMax.y, expandedMax.z, entity.MCMergeCandidates, entity.MCItemStack.item )
+	entity.MCMergeCandidates = nearby
+	for i = 1, #nearby do
+		local other = nearby[i]
 		if other ~= entity and isMergable( other ) and not other.MCDropMerging
 		and candidateIntersects( expandedMin, expandedMax, other ) and targetKeysEqual( entity, other ) then
-			local currentStack, otherStack = entity:GetDropStack(), other:GetDropStack()
+			local currentStack, otherStack = entity.MCItemStack, other.MCItemStack
 			local maximumCount = MC.ItemStackMaxCount( currentStack )
-			if stacksCanMerge( currentStack, otherStack )
+			if stacksCanMerge( entity, currentStack, other, otherStack )
 			and R.CountsCanMerge( currentStack.count, otherStack.count, maximumCount ) then
 				local target, source, targetStack, sourceStack
 				if R.MergeTarget( currentStack.count, otherStack.count ) == "current" then
@@ -498,21 +552,29 @@ function R.TryMergeNeighbours( entity )
 						tonumber( source.MCItemAgeTicks ) or 0 )
 					source:Remove()
 					merged = true
-					if source == entity then break end
+					if source == entity or not isMergable( entity ) then break end
 				end
 			end
 		end
 		if not IsValid( entity ) then break end
 	end
+	for i = #nearby, 1, -1 do nearby[i] = nil end
 	if IsValid( entity ) then entity.MCDropMerging = nil end
 	return merged
 end
 
 function R.TryPickupPlayers( entity )
-	if not R.PickupReady( entity ) or not player or not player.GetAll then return false end
-	for _, ply in ipairs( player.GetAll() or {} ) do
-		if IsValid( ply ) and ply.IsPlayer and ply:IsPlayer() and ply.Alive and ply:Alive()
-		and R.PlayerTouchesItem( ply, entity ) and entity.TryPickup and entity:TryPickup( ply ) then return true end
+	if not R.PickupReady( entity ) then return false end
+	local players = MC.ItemDropQuery.PickupPlayers()
+	if #players == 0 then return false end
+	local minimum, maximum = R.WorldBounds( entity )
+	if not minimum then return false end
+	for i = 1, #players do
+		local record = players[i]
+		if maximum.x > record.pickMinX and minimum.x < record.pickMaxX
+		and maximum.y > record.pickMinY and minimum.y < record.pickMaxY
+		and maximum.z > record.pickMinZ and minimum.z < record.pickMaxZ
+		and entity:TryPickup( record.entity ) then return true end
 		if not IsValid( entity ) then return true end
 	end
 	return false

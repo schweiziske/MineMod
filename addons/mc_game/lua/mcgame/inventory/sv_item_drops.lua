@@ -58,7 +58,12 @@ end
 local function mergeInto( target, sourceStack, sourceEntity )
 	if not IsValid( target ) or target == sourceEntity or not target.GetDropStack then return sourceStack, 0 end
 	if not samePickupTarget( target, sourceEntity ) then return sourceStack, 0 end
-	local merged, remaining, moved = SV.MergeItemStacks( target:GetDropStack(), sourceStack, 64 )
+	local targetStack = target.MCItemStack
+	if MC.IsEmptyItemStack( targetStack ) or targetStack.item ~= sourceStack.item
+	or targetStack.count >= math.min( 64, MC.ItemStackMaxCount( targetStack ) )
+	or ( targetStack.damage or 0 ) ~= ( sourceStack.damage or 0 ) then return sourceStack, 0 end
+	if sourceEntity and target.MCItemComponentKey ~= sourceEntity.MCItemComponentKey then return sourceStack, 0 end
+	local merged, remaining, moved = SV.MergeItemStacks( targetStack, sourceStack, 64 )
 	if moved <= 0 then return sourceStack, 0 end
 	local oldDelay = math.max( tonumber( target.MCPickupReadyAt ) or 0, tonumber( sourceEntity and sourceEntity.MCPickupReadyAt ) or 0 )
 	local oldCreated = math.min( tonumber( target.MCCreatedAt ) or CurTime(), tonumber( sourceEntity and sourceEntity.MCCreatedAt ) or CurTime() )
@@ -78,13 +83,21 @@ function SV.TryMergeItemDrop( ent )
 		return MC.ItemEntityParity.TryMergeNeighbours( ent )
 	end
 	if not IsValid( ent ) or ent.MCDropMerging or ent.MCPickupReadyAt == math.huge then return false end
-	if not ents or not ents.FindInSphere then return false end
 	ent.MCDropMerging = true
 	local merged = false
-	local sourceStack = ent.GetDropStack and ent:GetDropStack() or nil
+	local sourceStack = ent.MCItemStack
 	if not MC.IsEmptyItemStack( sourceStack ) then
-		for _, other in ipairs( ents.FindInSphere( ent:GetPos(), MERGE_RADIUS ) or {} ) do
-			if IsValid( other ) and other:GetClass() == "mc_item_drop" and other:EntIndex() < ent:EntIndex()
+		local position = MC.API.Coords.EntityWorldPos( ent )
+		if not MC.Check( isvector( position ), "item_drop_merge_position", "Cannot query merge position for %s", ent ) then
+			ent.MCDropMerging = nil
+			return false
+		end
+		local nearby = MC.ItemDropQuery.InSphere( position, MERGE_RADIUS, ent.MCMergeCandidates, sourceStack.item )
+		ent.MCMergeCandidates = nearby
+		local entityIndex = ent:EntIndex()
+		for i = 1, #nearby do
+			local other = nearby[i]
+			if IsValid( other ) and other:EntIndex() < entityIndex
 			and not other.MCDropMerging and other.GetDropStack then
 				local before = sourceStack.count
 				local remaining, moved = mergeInto( other, sourceStack, ent )
@@ -96,6 +109,7 @@ function SV.TryMergeItemDrop( ent )
 				end
 			end
 		end
+		for i = #nearby, 1, -1 do nearby[i] = nil end
 	end
 	ent.MCDropMerging = nil
 	return merged
@@ -111,12 +125,15 @@ local function mergeAtPosition( position, stack, actor, options )
 		local ownerOK = ( IsValid( requestedTarget ) and ent and ent.MCPickupTarget == requestedTarget )
 			or ( not IsValid( requestedTarget ) and not IsValid( ent and ent.MCPickupTarget ) )
 		if IsValid( ent ) and ent:GetClass() == "mc_item_drop" and ent.GetDropStack and ownerOK then
-			local candidate = ent:GetDropStack()
-			local merged, remaining, moved = SV.MergeItemStacks( candidate, stack, 64 )
-			if moved > 0 and ent:SetDropStack( merged ) then
-				local requestedDelay = math.max( 0, tonumber( options.pickupDelay ) or 0 )
-				ent.MCPickupReadyAt = math.max( tonumber( ent.MCPickupReadyAt ) or 0, CurTime() + requestedDelay )
-				return ent, remaining
+			local candidate = ent.MCItemStack
+			if not MC.IsEmptyItemStack( candidate ) and candidate.item == stack.item
+			and candidate.count < math.min( 64, MC.ItemStackMaxCount( candidate ) ) then
+				local merged, remaining, moved = SV.MergeItemStacks( candidate, stack, 64 )
+				if moved > 0 and ent:SetDropStack( merged ) then
+					local requestedDelay = math.max( 0, tonumber( options.pickupDelay ) or 0 )
+					ent.MCPickupReadyAt = math.max( tonumber( ent.MCPickupReadyAt ) or 0, CurTime() + requestedDelay )
+					return ent, remaining
+				end
 			end
 		end
 	end
@@ -132,7 +149,7 @@ local function randomVelocity()
 end
 
 local function minecraftVelocityScale()
-	return math.max( 1, tonumber( MC.BS ) or 36.5 ) * MINECRAFT_TICKS_PER_SECOND
+	return MC.API.Coords.BlockSize() * MINECRAFT_TICKS_PER_SECOND
 end
 
 -- LivingEntity#createItemStackToDrop(false, true): 0.3 block/tick along the
@@ -164,7 +181,7 @@ end
 function SV.PlayerItemDropPosition( ply )
 	if not IsValid( ply ) then return nil end
 	local eyePosition = ply.EyePos and ply:EyePos() or ply:GetPos()
-	return eyePosition - Vector( 0, 0, ( tonumber( MC.BS ) or 36.5 ) * 0.3 )
+	return eyePosition - Vector( 0, 0, MC.API.Coords.BlockSize() * 0.3 )
 end
 
 function SV.SpawnItemDrop( position, input, actor, options )

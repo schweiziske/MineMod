@@ -110,6 +110,7 @@
 | `mc_mesh_cull_mode` | `ccw` | MC chunk mesh 的剔除方向：`ccw` 或 `cw`。 |
 | `mc_mesh_frustum_cull` | `1` | 跳过视锥外的 MC chunk mesh 绘制。 |
 | `mc_mesh_draw_distance` | `0` | MC chunk mesh 最大绘制距离(Source 单位);`0` = 不限。 |
+| `mc_item_drop_draw_distance` | `96` | 掉落物最大绘制距离，单位为 Minecraft 方块；`0` 取消距离裁剪。16 格外最多画 2 个堆叠副本，32 格外最多画 1 个；物品数量和拾取不受影响。 |
 | `mc_mesh_depth_prepass` | `0` | GPU 着色前额外画一遍 CPU 材质 depth-only prepass;几何成本翻倍,通常保持关闭。 |
 | `mc_mesh_emit_probe` | `0` | 打印详细 mesh emit timings，用于诊断完整几何重建。 |
 | `mc_mesh_begin_upload` | `1` | 用 `mesh.Begin` 上传 IMesh 顶点，而不是 `IMesh:BuildFromTriangles`。 |

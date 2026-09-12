@@ -99,6 +99,7 @@ local SERVER_FILES = {
 	"mcgame/inventory/sv_equipment.lua",
 	"mcgame/inventory/sv_item_durability.lua",
 	"mcgame/inventory/sv_item_use.lua",
+	"mcgame/item_entity/sv_spatial.lua",
 	"mcgame/inventory/sv_item_drops.lua",
 	"mcgame/item_entity/sv_contacts.lua",
 	"mcgame/item_entity/sv_runtime.lua",
