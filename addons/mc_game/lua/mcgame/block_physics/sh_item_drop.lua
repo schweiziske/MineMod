@@ -3,6 +3,14 @@
 -- recurrence at its tick boundary and deliberately does not invent a second
 -- item-drop implementation.
 
+-- These bodies are server-authoritative, unlike predicted player movement.
+-- Also remove the old client hook when this shared file is auto-refreshed.
+if not SERVER then
+	hook.Remove( "Think", "mcgame_block_physics_item_drop" )
+	hook.Remove( "EntityRemoved", "mcgame_block_physics_item_drop_cleanup" )
+	return
+end
+
 MC = MC or {}
 MC.BlockPhysics = MC.BlockPhysics or {}
 
@@ -61,65 +69,62 @@ local function honeySlideVelocity( sample, velocity )
 	return velocity
 end
 
+local function tickItem( entity, state, physics, seconds )
+	local velocity = entityVelocity( entity )
+	local oldX, oldY, oldZ = velocity.x, velocity.y, velocity.z
+	local sample = P.SampleEntity( entity )
+	local blockName = sample and sample.belowName or "minecraft:air"
+	local onGround = entity.IsOnGround and entity:IsOnGround() == true or false
+	-- VPhysics already supplies ordinary gravity and floor damping.
+	if not IsValid( physics ) then
+		local vx, vy, vz = P.VelocityToBlocksPerTick( velocity )
+		vz = vz - C.defaultGravity * ( seconds / C.tickSeconds )
+		velocity = P.BlocksPerTickToVelocity( vx, vy, vz )
+	end
+	if state.hasPendingWeb then
+		velocity.x, velocity.y, velocity.z = P.ScaleVelocityPerTick( velocity.x, velocity.y, velocity.z,
+			state.webHorizontal, state.webHorizontal, state.webVertical, seconds )
+	end
+	state.hasPendingWeb = sample and sample.hasCobweb == true or false
+	if state.hasPendingWeb then
+		local horizontal, _, vertical = P.WebMultiplier( false )
+		state.webHorizontal, state.webVertical = horizontal, vertical
+	end
+	velocity = honeySlideVelocity( sample, velocity )
+	local movementName = sample and P.EffectiveMovementBlock( sample ) or "minecraft:air"
+	local speedFactor = P.SpeedFactorFor( movementName )
+	if speedFactor ~= C.defaultSpeedFactor then
+		local factor = P.PerTickFactor( speedFactor, seconds )
+		velocity.x, velocity.y = velocity.x * factor, velocity.y * factor
+	end
+	if onGround then
+		local friction = P.FrictionFor( blockName )
+		if friction ~= C.defaultFriction then
+			local relative = P.PerTickFactor( friction / C.defaultFriction, seconds )
+			velocity.x, velocity.y = velocity.x * relative, velocity.y * relative
+		end
+	end
+	-- Setting an unchanged velocity wakes resting physics bodies and causes
+	-- collision/network work even on ordinary blocks with no special effect.
+	if velocity.x ~= oldX or velocity.y ~= oldY or velocity.z ~= oldZ then
+		setEntityVelocity( entity, velocity )
+	end
+end
+
 hook.Add( "Think", "mcgame_block_physics_item_drop", function()
 	if not P.Enabled() then return end
 	local itemParity = MC.ItemEntityParity
 	if itemParity and itemParity.Enabled and itemParity.Enabled() then return end
-	for _, entity in ipairs( ents.FindByClass( "mc_item_drop" ) or {} ) do
+	local records = MC.ItemDropQuery.All()
+	local current = CurTime()
+	for i = 1, #records do
+		local entity = records[i].entity
 		if validEntity( entity ) then
 			local state = stateFor( entity )
-			local now = CurTime and CurTime() or 0
-			local seconds = math.max( 0.001, math.min( 0.1, now - ( state.lastThink or now ) ) )
-			state.lastThink = now
-			local velocity = entityVelocity( entity )
-			local sample = P.SampleEntity( entity )
-			local blockName = sample and sample.belowName or "minecraft:air"
-			local physics = entity.GetPhysicsObject and entity:GetPhysicsObject() or nil
-			local onGround = entity.IsOnGround and entity:IsOnGround() == true or false
-			if not onGround then
-				onGround = IsValid and IsValid( physics ) and physics.IsAsleep and physics:IsAsleep() or false
-			end
-
-			-- ItemEntity#getDefaultGravity is 0.04 blocks/tick² and its air drag is
-			-- inherited Entity#getAirDrag (0.98). Source's physics body already
-			-- applies gravity; only apply this explicit correction when no body is
-			-- available, keeping the default SENT behavior untouched otherwise.
-			if not IsValid or not IsValid( physics ) then
-				local velocityX, velocityY, velocityZ = P.VelocityToBlocksPerTick( velocity )
-				velocityZ = velocityZ - C.defaultGravity * ( seconds / C.tickSeconds )
-				velocity = P.BlocksPerTickToVelocity( velocityX, velocityY, velocityZ )
-			end
-
-			if state.pendingWeb then
-				local horizontal, vertical = state.pendingWeb.horizontal, state.pendingWeb.vertical
-				local vx, vy, vz = P.ScaleVelocityPerTick( velocity.x, velocity.y, velocity.z,
-					horizontal, horizontal, vertical, seconds )
-				velocity = Vector( vx, vy, vz )
-			end
-			state.pendingWeb = nil
-			if sample and sample.hasCobweb then
-				local horizontal, _, vertical = P.WebMultiplier( false )
-				state.pendingWeb = { horizontal = horizontal, vertical = vertical }
-			end
-			velocity = honeySlideVelocity( sample, velocity )
-			local movementName = sample and P.EffectiveMovementBlock( sample ) or "minecraft:air"
-			local speedFactor = P.SpeedFactorFor( movementName )
-			if speedFactor ~= C.defaultSpeedFactor then
-				local factor = P.PerTickFactor( speedFactor, seconds )
-				velocity.x, velocity.y = velocity.x * factor, velocity.y * factor
-			end
-
-			if onGround then
-				local friction = P.FrictionFor( blockName )
-				if friction ~= C.defaultFriction then
-					-- The VPhysics body already supplied the ordinary Source floor
-					-- damping. Apply only the Java special-block ratio here; checkpoint
-					-- 4 owns the complete ItemEntity gravity/drag replacement.
-					local relative = P.PerTickFactor( friction / C.defaultFriction, seconds )
-					velocity.x, velocity.y = velocity.x * relative, velocity.y * relative
-				end
-			end
-			setEntityVelocity( entity, velocity )
+			local seconds = math.max( 0.001, math.min( 0.1, current - state.lastThink ) )
+			state.lastThink = current
+			local physics = entity:GetPhysicsObject()
+			if not IsValid( physics ) or not physics:IsAsleep() then tickItem( entity, state, physics, seconds ) end
 		end
 	end
 end )

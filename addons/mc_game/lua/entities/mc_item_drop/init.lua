@@ -20,7 +20,7 @@ function ENT:Initialize()
 	self:SetModel( PHYSICS_MODEL )
 	self:SetModelScale( 0.45, 0 )
 	if itemParity() then
-		local size = MC.ItemEntityParity.BlockSize and MC.ItemEntityParity.BlockSize() or 36.5
+		local size = MC.API.Coords.BlockSize()
 		local half = math.max( 0.001, size * 0.125 )
 		self:PhysicsInitBox( Vector( -half, -half, -half ), Vector( half, half, half ) )
 	else
@@ -51,6 +51,7 @@ function ENT:Initialize()
 		physics:SetDamping( 0.1, 0.4 )
 		physics:Wake()
 	end
+	MC.ItemDropQuery.Update( self )
 end
 
 function ENT:UpdateTransmitState()
@@ -140,7 +141,10 @@ end
 function ENT:SetDropStack( input )
 	local stack, stackError = MC.NormalizeItemStack( input )
 	if not stack then return false, stackError or "invalid_stack" end
-	self.MCItemStack = MC.CopyItemStack( stack )
+	-- NormalizeItemStack already returns an owned deep copy. Queries can read
+	-- this immutable value; GetDropStack keeps its defensive-copy contract.
+	self.MCItemStack = stack
+	self.MCItemComponentKey = MC.CanonicalItemComponents( stack.components )
 	self:SetItemName( stack.item )
 	self:SetItemCount( stack.count )
 	self:SetItemDamage( stack.damage or 0 )
@@ -150,6 +154,7 @@ function ENT:SetDropStack( input )
 	-- use the definition/texture fallback on clients.
 	if type( components ) ~= "string" or #components > 480 then components = "" end
 	self:SetItemComponents( components )
+	MC.ItemDropQuery.StackChanged( self )
 	return true
 end
 
@@ -168,6 +173,15 @@ function ENT:TryPickup( ply )
 	elseif IsValid( self.MCPickupTarget ) and self.MCPickupTarget ~= ply then return false end
 	local stack = self.MCItemStack
 	if MC.IsEmptyItemStack( stack ) or not MC.SV or not MC.SV.InsertPlayerItem then return false end
+	local record = MC.SV.GetPlayerInventoryRecord( ply, false )
+	local container = record and record.container
+	local current = CurTime()
+	-- A full inventory previously copied all 36 slots for every overlapping
+	-- drop on every tick. Inventory commits invalidate this immediately; the
+	-- bounded retry also rechecks dynamic slot policies without a commit.
+	if container and self.MCFailedPickupPlayer == ply and self.MCFailedPickupContainer == container
+	and self.MCFailedPickupRevision == container.revision and self.MCFailedPickupSelected == record.selected
+	and self.MCFailedPickupStack == stack and current < self.MCFailedPickupRetryAt then return false end
 	local pickupPosition = self:GetPos()
 	self.MCPickingUp = true
 	local remaining, result = MC.SV.InsertPlayerItem( ply, stack, {
@@ -176,7 +190,15 @@ function ENT:TryPickup( ply )
 	} )
 	self.MCPickingUp = false
 	if not result or result.ok ~= true then return false end
-	if remaining and remaining.count >= stack.count then return false end
+	if remaining and remaining.count >= stack.count then
+		if container then
+			self.MCFailedPickupPlayer, self.MCFailedPickupContainer = ply, container
+			self.MCFailedPickupRevision, self.MCFailedPickupSelected = container.revision, record.selected
+			self.MCFailedPickupStack, self.MCFailedPickupRetryAt = stack, current + 0.5
+		end
+		return false
+	end
+	self.MCFailedPickupPlayer, self.MCFailedPickupContainer, self.MCFailedPickupStack = nil, nil, nil
 	local moved = math.max( 0, ( tonumber( stack.count ) or 0 ) - ( tonumber( remaining and remaining.count ) or 0 ) )
 	if moved > 0 and sound and sound.Play then
 		local pitch = math.Clamp( math.floor( ( ( math.Rand( 0, 1 ) - math.Rand( 0, 1 ) ) * 0.7 + 1 ) * 200 + 0.5 ), 1, 255 )
@@ -209,11 +231,18 @@ function ENT:TryPickupOverlaps()
 	if itemParity() then
 		return MC.ItemEntityParity.TryPickupPlayers and MC.ItemEntityParity.TryPickupPlayers( self ) or false
 	end
-	if CurTime() < ( self.MCPickupReadyAt or 0 ) or not ents or not ents.FindInBox then return false end
-	local position = self:GetPos()
-	local extent = Vector( PICKUP_SCAN_EXTENT, PICKUP_SCAN_EXTENT, PICKUP_SCAN_EXTENT )
-	for _, other in ipairs( ents.FindInBox( position - extent, position + extent ) or {} ) do
-		if self:TryPickup( other ) then return true end
+	if CurTime() < ( self.MCPickupReadyAt or 0 ) then return false end
+	local players = MC.ItemDropQuery.PickupPlayers()
+	if #players == 0 then return false end
+	local position = MC.API.Coords.EntityWorldPos( self )
+	if not MC.Check( isvector( position ), "item_drop_pickup_position", "Cannot query pickup position for %s", self ) then return false end
+	local extent = PICKUP_SCAN_EXTENT
+	for i = 1, #players do
+		local other = players[i]
+		if other.maxX >= position.x - extent and other.minX <= position.x + extent
+		and other.maxY >= position.y - extent and other.minY <= position.y + extent
+		and other.maxZ >= position.z - extent and other.minZ <= position.z + extent
+		and self:TryPickup( other.entity ) then return true end
 		if not IsValid( self ) then return true end
 	end
 	return false
@@ -231,6 +260,10 @@ function ENT:OnTakeDamage( damageInfo )
 end
 
 function ENT:Think()
+	if self.MCFailedPickupRetryAt and now() >= self.MCFailedPickupRetryAt then
+		self.MCFailedPickupPlayer, self.MCFailedPickupContainer, self.MCFailedPickupStack = nil, nil, nil
+		self.MCFailedPickupRetryAt = nil
+	end
 	if itemParity() then
 		if not MC.ItemEntityParity.ThinkEntity or not MC.ItemEntityParity.ThinkEntity( self ) then return end
 		if IsValid( self ) and MC.LogisticsParity and MC.LogisticsParity.EntityInsideItemDrop then

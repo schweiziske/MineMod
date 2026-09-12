@@ -431,10 +431,10 @@ local function rotatedUV( u, v, rotation )
 	return u, v
 end
 
-local function droppedBlockState( stack, options )
+local function droppedBlockState( stack, options, plan )
 	local definition = definitionFor( stack )
 	if not definition or definition.blockId == nil then return nil end
-	local plan = Renderer.ModelPlan( stack, options or { displayContext = "ground" } )
+	plan = plan or Renderer.ModelPlan( stack, options or { displayContext = "ground" } )
 	local modelId = tostring( plan and plan.modelId or "" )
 	if not string.find( modelId, ":block/", 1, true ) then return nil end
 	return blockStateFor( definition )
@@ -544,18 +544,26 @@ local function drawDynamicGlintTriangles( vertices,
 	return true
 end
 
-function Renderer.DrawDroppedBlock( stack, position, angles, size, worldColor, options )
-	local stateId, blockId = droppedBlockState( stack, options )
+local droppedBlockDrawMatrix = Matrix()
+local droppedBlockDrawScale = Vector( 1, 1, 1 )
+
+function Renderer.DrawDroppedBlock( stack, position, angles, size, worldColor, options, prepared )
+	if prepared and ( prepared.stack ~= stack or prepared.options ~= options ) then prepared = nil end
+	local stateId, blockId
+	if prepared then stateId, blockId = prepared.stateId, prepared.blockId
+	else stateId, blockId = droppedBlockState( stack, options ) end
 	if not stateId then return false end
 	local cached = droppedBlockMesh( stateId, blockId )
 	if not cached or not cached.mesh then return false end
 	local material = droppedBlockMaterial( cached.translucent )
 	if not material then return false end
-	local matrix = Matrix()
+	local matrix = droppedBlockDrawMatrix
+	matrix:Identity()
 	matrix:SetTranslation( position )
 	matrix:SetAngles( angles )
 	size = math.max( 0.01, tonumber( size ) or 12 )
-	matrix:SetScale( Vector( size, size, size ) )
+	droppedBlockDrawScale.x, droppedBlockDrawScale.y, droppedBlockDrawScale.z = size, size, size
+	matrix:SetScale( droppedBlockDrawScale )
 	worldColor = worldColor or color_white
 	render.SetColorModulation( ( worldColor.r or 255 ) / 255,
 		( worldColor.g or 255 ) / 255, ( worldColor.b or 255 ) / 255 )
@@ -577,7 +585,9 @@ function Renderer.DrawDroppedBlock( stack, position, angles, size, worldColor, o
 		render.PopFilterMin()
 		filtered = false
 	end
-	if hasFoil( stack ) and GLINT_MATERIAL and not ( GLINT_MATERIAL.IsError and GLINT_MATERIAL:IsError() ) then
+	local foil
+	if prepared then foil = prepared.foil else foil = hasFoil( stack ) end
+	if foil and GLINT_MATERIAL and not ( GLINT_MATERIAL.IsError and GLINT_MATERIAL:IsError() ) then
 		local blended = beginGlintBlend()
 		render.SetColorModulation( GLINT_STRENGTH, GLINT_STRENGTH, GLINT_STRENGTH )
 		render.SetBlend( 1 )
@@ -1049,21 +1059,36 @@ local function glintGeometryForLayer( layer )
 	return vertices
 end
 
+local spriteDrawPosition = Vector( 0, 0, 0 )
+local spriteDrawForward = Vector( 0, 0, 0 )
+local spriteDrawRight = Vector( 0, 0, 0 )
+local spriteDrawUp = Vector( 0, 0, 0 )
+
 local function drawExtrudedHeldLayer( layer, material, transform, layerOffset, color )
 	local spriteMesh = heldSpriteMesh( layer, material )
 	if not spriteMesh then return false end
 	local matrix = heldSpriteDrawMatrix
-	matrix:SetTranslation( transform.pos + transform.normal * layerOffset )
-	matrix:SetForward( transform.xAxis * transform.width )
+	local pos, x, y, n = transform.pos, transform.xAxis, transform.yAxis, transform.normal
+	spriteDrawPosition.x, spriteDrawPosition.y, spriteDrawPosition.z =
+		pos.x + n.x * layerOffset, pos.y + n.y * layerOffset, pos.z + n.z * layerOffset
+	spriteDrawForward.x, spriteDrawForward.y, spriteDrawForward.z =
+		x.x * transform.width, x.y * transform.width, x.z * transform.width
+	matrix:SetTranslation( spriteDrawPosition )
+	matrix:SetForward( spriteDrawForward )
 	-- Source matrices expose a world-space Right vector, but their local +Y
 	-- column is Left. Negate here so the sprite's local +Y remains Minecraft up.
-	matrix:SetRight( -transform.yAxis * transform.height )
-	matrix:SetUp( transform.normal * transform.depth )
+	spriteDrawRight.x, spriteDrawRight.y, spriteDrawRight.z =
+		-y.x * transform.height, -y.y * transform.height, -y.z * transform.height
+	spriteDrawUp.x, spriteDrawUp.y, spriteDrawUp.z =
+		n.x * transform.depth, n.y * transform.depth, n.z * transform.depth
+	matrix:SetRight( spriteDrawRight )
+	matrix:SetUp( spriteDrawUp )
 	render.SetColorModulation( ( color.r or 255 ) / 255, ( color.g or 255 ) / 255, ( color.b or 255 ) / 255 )
 	render.SetBlend( ( color.a or 255 ) / 255 )
 	render.SetMaterial( material )
 	if render.CullMode then
-		local determinant = transform.xAxis:Cross( transform.yAxis ):Dot( transform.normal )
+		local determinant = ( x.y * y.z - x.z * y.y ) * n.x
+			+ ( x.z * y.x - x.x * y.z ) * n.y + ( x.x * y.y - x.y * y.x ) * n.z
 		local mirrored = determinant < 0
 		local cullMode = droppedBlockCullMode()
 		if mirrored then
@@ -1092,15 +1117,82 @@ end
 hook.Add( "ShutDown", "mc_item_held_sprite_meshes", clearHeldSpriteMeshes )
 hook.Add( "OnReloaded", "mc_item_held_sprite_meshes", clearHeldSpriteMeshes )
 
-function Renderer.DrawHeldItem( stack, pos, orientation, size, color, options )
+local function drawHeldLayers( materials, stack, plan, transform, color )
+	for index = 1, #materials do
+		local material = materials[index]
+		local layer = plan.layers and plan.layers[index] or nil
+		local offset = ( index - 1 ) * 0.01 * transform.depthScale
+		local layerColor = Renderer.LayerColor( stack, plan, index, color )
+		if not drawExtrudedHeldLayer( layer, material, transform, offset, layerColor ) then
+			drawFlatHeldLayer( material, transform, offset, layerColor )
+		end
+	end
+end
+
+local groundOrientation = Angle( 0, 0, 0 )
+
+-- A drop owns this prepared context until its network stack or model changes.
+-- Resolve materials/JSON transforms once, rather than once per stack copy.
+function Renderer.PrepareDroppedItem( stack, options )
+	local materials, plan = Renderer.MaterialsForStack( stack, options )
+	local stateId, blockId = droppedBlockState( stack, options, plan )
+	local prepared = {
+		stack = stack, options = options, materials = materials, plan = plan,
+		stateId = stateId, blockId = blockId, foil = hasFoil( stack ),
+	}
+	if plan.kind ~= "special" and #materials > 0 then
+		prepared.unitTransform = Renderer.HeldTransform( plan, "ground", vector_origin, groundOrientation, 1 )
+		prepared.transform = {
+			pos = Vector( 0, 0, 0 ), xAxis = Vector( 0, 0, 0 ),
+			yAxis = Vector( 0, 0, 0 ), normal = Vector( 0, 0, 0 ),
+		}
+	end
+	prepared.drawLayers = function()
+		drawHeldLayers( materials, stack, plan, prepared.transform, prepared.color )
+	end
+	return prepared
+end
+
+local function rotateDropAxis( output, input, c, s )
+	output.x, output.y, output.z = input.x * c - input.y * s, input.x * s + input.y * c, input.z
+end
+
+local function droppedHeldTransform( prepared, pos, orientation, size )
+	local unit, transform = prepared.unitTransform, prepared.transform
+	if not unit or orientation.p ~= 0 or orientation.r ~= 0 then return nil end
+	if prepared.yaw ~= orientation.y then
+		prepared.yaw = orientation.y
+		local radians = orientation.y * math.pi / 180
+		prepared.cosYaw, prepared.sinYaw = math.cos( radians ), math.sin( radians )
+	end
+	local c, s = prepared.cosYaw, prepared.sinYaw
+	local offset = unit.pos
+	transform.pos.x, transform.pos.y, transform.pos.z =
+		pos.x + ( offset.x * c - offset.y * s ) * size,
+		pos.y + ( offset.x * s + offset.y * c ) * size, pos.z + offset.z * size
+	rotateDropAxis( transform.xAxis, unit.xAxis, c, s )
+	rotateDropAxis( transform.yAxis, unit.yAxis, c, s )
+	rotateDropAxis( transform.normal, unit.normal, c, s )
+	transform.width, transform.height, transform.depth = unit.width * size, unit.height * size, unit.depth * size
+	transform.depthScale = unit.depthScale
+	return transform
+end
+
+function Renderer.DrawHeldItem( stack, pos, orientation, size, color, options, prepared )
 	if not Renderer.CanDraw( stack ) or not pos or not orientation then return false end
 	options = options or {}
-	local modelOptions = {}
-	for key, value in pairs( options ) do modelOptions[key] = value end
-	modelOptions.displayContext = modelOptions.displayContext or "firstperson_righthand"
-	modelOptions.worldItem = true
-	local materials, plan = Renderer.MaterialsForStack( stack, modelOptions )
-	color = color or Color( 255, 255, 255, 255 )
+	if prepared and ( prepared.stack ~= stack or prepared.options ~= options ) then prepared = nil end
+	local modelOptions, materials, plan
+	if prepared then
+		modelOptions, materials, plan = options, prepared.materials, prepared.plan
+	else
+		modelOptions = {}
+		for key, value in pairs( options ) do modelOptions[key] = value end
+		modelOptions.displayContext = modelOptions.displayContext or "firstperson_righthand"
+		modelOptions.worldItem = true
+		materials, plan = Renderer.MaterialsForStack( stack, modelOptions )
+	end
+	color = color or color_white
 	if plan.kind == "special"
 	and drawSpecialWorld( stack, plan, pos, orientation, size, color, modelOptions ) then
 		return true
@@ -1150,29 +1242,28 @@ function Renderer.DrawHeldItem( stack, pos, orientation, size, color, options )
 	end
 	local baseAng
 	if isangle and isangle( orientation ) then
-		baseAng = Angle( orientation.p, orientation.y, orientation.r )
+		baseAng = orientation
 	end
 	if not baseAng then return false end
 	local transform
-	if type( modelOptions.mcWeaponsView ) == "table" then
+	if prepared then transform = droppedHeldTransform( prepared, pos, baseAng, size ) end
+	if not transform and type( modelOptions.mcWeaponsView ) == "table" then
 		transform = mcWeaponsFirstPersonTransform( plan, modelOptions.displayContext, pos, baseAng, size,
 			modelOptions.mcWeaponsView )
-	else
+	elseif not transform then
 		transform = Renderer.HeldTransform( plan, modelOptions.displayContext, pos, baseAng, size,
 			modelOptions.parentBasis )
 	end
 	if not transform then return false end
-	UI.WithPointFiltering( function()
-		for index, material in ipairs( materials ) do
-			local layer = plan.layers and plan.layers[index] or nil
-			local offset = ( index - 1 ) * 0.01 * transform.depthScale
-			local layerColor = Renderer.LayerColor( stack, plan, index, color )
-			if not drawExtrudedHeldLayer( layer, material, transform, offset, layerColor ) then
-				drawFlatHeldLayer( material, transform, offset, layerColor )
-			end
-		end
-	end )
-	if hasFoil( stack ) and GLINT_MATERIAL and not ( GLINT_MATERIAL.IsError and GLINT_MATERIAL:IsError() ) then
+	if prepared then
+		prepared.transform, prepared.color = transform, color
+		UI.WithPointFiltering( prepared.drawLayers )
+	else
+		UI.WithPointFiltering( function() drawHeldLayers( materials, stack, plan, transform, color ) end )
+	end
+	local foil
+	if prepared then foil = prepared.foil else foil = hasFoil( stack ) end
+	if foil and GLINT_MATERIAL and not ( GLINT_MATERIAL.IsError and GLINT_MATERIAL:IsError() ) then
 		local blended = beginGlintBlend()
 		if render.CullMode then render.CullMode( droppedBlockCullMode() ) end
 		render.SetColorModulation( GLINT_STRENGTH, GLINT_STRENGTH, GLINT_STRENGTH )

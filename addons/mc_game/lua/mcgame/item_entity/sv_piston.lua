@@ -71,7 +71,7 @@ function Adapter.ProcessTick( payload, previousProgress, progress )
 	if not R.Enabled() or type( payload ) ~= "table" then return end
 	local size = R.BlockSize()
 	local movedByEntity = setmetatable( {}, { __mode = "k" } )
-	local entities = ents and ents.FindByClass and ents.FindByClass( "mc_item_drop" ) or {}
+	local entities = {}
 	for _, movement in ipairs( payload.movements or {} ) do
 		local dx, dy, dz = tonumber( movement.dx ) or 0,
 			tonumber( movement.dy ) or 0, tonumber( movement.dz ) or 0
@@ -81,7 +81,10 @@ function Adapter.ProcessTick( payload, previousProgress, progress )
 			if startMin and startMax then
 				local _, _, slabMin, slabMax, broadMin, broadMax = Adapter.MovementSlab(
 					startMin, startMax, axis, sign, previousProgress, progress - previousProgress )
-				for _, entity in ipairs( entities ) do
+				MC.ItemDropQuery.InBox( broadMin.x, broadMin.y, broadMin.z,
+					broadMax.x, broadMax.y, broadMax.z, entities )
+				for i = 1, #entities do
+					local entity = entities[i]
 					if validDrop( entity ) then
 						local entityMin, entityMax = R.WorldBounds( entity )
 						if entityMin and R.AABBIntersects( broadMin, broadMax, entityMin, entityMax ) then
@@ -100,6 +103,7 @@ function Adapter.ProcessTick( payload, previousProgress, progress )
 								if pushed > 0 then
 									local delta = Vector( dx * pushed * size, dy * pushed * size, dz * pushed * size )
 									entity:SetPos( entity:GetPos() + delta )
+									MC.ItemDropQuery.Update( entity )
 									movedByEntity[entity] = used + pushed
 								end
 							end
@@ -120,7 +124,10 @@ function Adapter.ProcessTick( payload, previousProgress, progress )
 					-( movement.dz or 0 ) * size * ( 1 - previousProgress ) )
 				local stickyMin = startMin + shift + Vector( 0, 0, size * 15 / 16 )
 				local stickyMax = startMin + shift + Vector( size, size, size * 1.500001 )
-				for _, entity in ipairs( entities ) do
+				MC.ItemDropQuery.InBox( stickyMin.x, stickyMin.y, stickyMin.z,
+					stickyMax.x, stickyMax.y, stickyMax.z, entities )
+				for i = 1, #entities do
+					local entity = entities[i]
 					if validDrop( entity ) and ( not entity.IsOnGround or entity:IsOnGround() ) then
 						local entityMin, entityMax = R.WorldBounds( entity )
 						if entityMin and R.AABBIntersects( stickyMin, stickyMax, entityMin, entityMax ) then
@@ -132,6 +139,7 @@ function Adapter.ProcessTick( payload, previousProgress, progress )
 									( movement.dy or 0 ) * carried * size,
 									( movement.dz or 0 ) * carried * size )
 								entity:SetPos( entity:GetPos() + delta )
+								MC.ItemDropQuery.Update( entity )
 								movedByEntity[entity] = used + carried
 							end
 						end

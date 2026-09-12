@@ -14,7 +14,7 @@ local BlockPhysics = MC.BlockPhysics
 function R.FireBaseTick( entity, fluids, firstTick )
 	local fireTicks = math.max( 0, math.floor( tonumber( entity.MCItemFireTicks ) or 0 ) )
 	if fireTicks <= 0 then return true end
-	local stack = entity.GetDropStack and entity:GetDropStack() or nil
+	local stack = entity.MCItemStack
 	if not R.StackCanBeHurtBy( stack, "minecraft:in_fire" ) then
 		entity.MCItemFireTicks = 0
 		return true
@@ -45,7 +45,8 @@ local function applyHoneySlide( cell, sample, velocity, onGround )
 		width = C.width, onGround = onGround, velocityZ = velocity.z,
 	} ) then return velocity end
 	local x, y, z = BlockPhysics.HoneySlideVelocity( velocity.x, velocity.y, velocity.z )
-	return { x = x, y = y, z = z }
+	velocity.x, velocity.y, velocity.z = x, y, z
+	return velocity
 end
 
 local function newDeferredStep( stepIndex )
@@ -53,6 +54,7 @@ local function newDeferredStep( stepIndex )
 		stepIndex = stepIndex,
 		fireIgnite = false,
 		fireDamage = {},
+		fireDamageCount = 0,
 		lavaIgnite = false,
 		lavaDamageCount = 0,
 		extinguish = false,
@@ -65,13 +67,13 @@ local function applyDeferredStep( entity, queued )
 	-- runAfter callback follows its own type before the next enum value.
 	if queued.fireIgnite then
 		R.IgniteForTicks( entity, C.fireSeconds * C.fireTicksPerSecond )
-		for _, damage in ipairs( queued.fireDamage ) do
-			R.HurtItem( entity, "minecraft:in_fire", damage, nil )
+		for i = 1, queued.fireDamageCount do
+			R.HurtItem( entity, "minecraft:in_fire", queued.fireDamage[i], nil )
 			if not IsValid( entity ) then return false end
 		end
 	end
 	if queued.lavaIgnite then
-		local stack = entity.GetDropStack and entity:GetDropStack() or nil
+		local stack = entity.MCItemStack
 		-- Entity#lavaHurt guards both ignition and the lava DamageSource with
 		-- ItemEntity#fireImmune, which is defined against in_fire specifically.
 		if R.StackCanBeHurtBy( stack, "minecraft:in_fire" ) then
@@ -87,12 +89,19 @@ local function applyDeferredStep( entity, queued )
 end
 
 function R.ApplyInsideEffects( entity, state, cells, sample, velocity, onGround )
-	local pendingWeb, deferred, current = false, {}, nil
-	for _, cell in ipairs( cells or {} ) do
+	if not cells or #cells == 0 then return velocity, true end
+	local deferred = state.insideDeferred
+	if not deferred then deferred = {}; state.insideDeferred = deferred end
+	local pendingWeb, current, stepCount = false, nil, 0
+	for i = 1, #cells do
+		local cell = cells[i]
 		local stepIndex = math.floor( tonumber( cell.stepIndex ) or 0 )
 		if not current or current.stepIndex ~= stepIndex then
-			current = newDeferredStep( stepIndex )
-			deferred[#deferred + 1] = current
+			stepCount = stepCount + 1
+			current = deferred[stepCount]
+			if not current then current = newDeferredStep( stepIndex ); deferred[stepCount] = current end
+			current.stepIndex, current.fireDamageCount, current.lavaDamageCount = stepIndex, 0, 0
+			current.fireIgnite, current.lavaIgnite, current.extinguish = false, false, false
 		end
 		if cell.name == "minecraft:cobweb" then
 			pendingWeb = true
@@ -102,7 +111,8 @@ function R.ApplyInsideEffects( entity, state, cells, sample, velocity, onGround 
 			R.HurtItem( entity, "minecraft:cactus", C.cactusDamage, nil )
 		elseif cell.name == "minecraft:fire" or cell.name == "minecraft:soul_fire" then
 			current.fireIgnite = true
-			current.fireDamage[#current.fireDamage + 1] = cell.name == "minecraft:soul_fire"
+			current.fireDamageCount = current.fireDamageCount + 1
+			current.fireDamage[current.fireDamageCount] = cell.name == "minecraft:soul_fire"
 				and C.soulFireDamage or C.inFireDamage
 		end
 		if not IsValid( entity ) then return velocity, false end
@@ -114,8 +124,8 @@ function R.ApplyInsideEffects( entity, state, cells, sample, velocity, onGround 
 		end
 	end
 	if pendingWeb then state.pendingWeb = true end
-	for _, queued in ipairs( deferred ) do
-		if not applyDeferredStep( entity, queued ) then return velocity, false end
+	for i = 1, stepCount do
+		if not applyDeferredStep( entity, deferred[i] ) then return velocity, false end
 	end
 	return velocity, true
 end

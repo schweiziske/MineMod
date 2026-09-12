@@ -116,10 +116,18 @@ end
 
 local function itemEntitiesInSuction( bx, by, bz )
 	local output, bounds = {}, suctionBounds( bx, by, bz )
-	if not bounds or not ents or not ents.FindByClass then return output end
-	for _, entity in ipairs( ents.FindByClass( "mc_item_drop" ) or {} ) do
-		if entityValid( entity ) and entityIntersects( entity, bounds ) then output[#output + 1] = entity end
+	if not bounds then return output end
+	MC.ItemDropQuery.InBox( bounds.minX, bounds.minY, bounds.minZ,
+		bounds.maxX, bounds.maxY, bounds.maxZ, output )
+	local count, previous = 0, #output
+	for i = 1, previous do
+		local entity = output[i]
+		if entityValid( entity ) and entityIntersects( entity, bounds ) then
+			count = count + 1
+			output[count] = entity
+		end
 	end
+	for i = count + 1, previous do output[i] = nil end
 	return output
 end
 
@@ -236,16 +244,21 @@ function L.EntityInsideItemDrop( entity )
 		or not Coords.WorldToCell then return false end
 	local minimum, maximum = Coords.EntityWorldAABB( entity )
 	if not minimum or not maximum then return false end
-	local epsilon = math.max( ( tonumber( Coords.BlockSize and Coords.BlockSize() ) or 36.5 ) * 0.000001, 0.000001 )
+	local epsilon = math.max( Coords.BlockSize() * 0.000001, 0.000001 )
 	local x0, y0, z0 = Coords.WorldToCell( Vector( minimum.x + epsilon, minimum.y + epsilon, minimum.z + epsilon ) )
 	local x1, y1, z1 = Coords.WorldToCell( Vector( maximum.x - epsilon, maximum.y - epsilon, maximum.z - epsilon ) )
 	if x0 == nil or x1 == nil then return false end
 	for bx = x0, x1 do
 		for by = y0, y1 do
 			for bz = z0 - 2, z1 do
-				local ok, result = L.EntityInsideHopperAt( bx, by, bz, entity )
-				if ok and result and ( result.moved or result.entityTouched ) then return true end
-				if not entityValid( entity ) then return true end
+				-- Most occupied cells are air. Avoid allocating suction bounds and
+				-- re-reading the item's AABB for each non-hopper cell every tick.
+				local stateId = World.GetBlockState( bx, by, bz )
+				if stateName( stateId ) == HOPPER then
+					local ok, result = L.EntityInsideHopperAt( bx, by, bz, entity )
+					if ok and result and ( result.moved or result.entityTouched ) then return true end
+					if not entityValid( entity ) then return true end
+				end
 			end
 		end
 	end
