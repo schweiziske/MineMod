@@ -148,7 +148,8 @@ local function blockReceivesSmoothAO( id )
 	return true
 end
 local MeshColorObjectCache = {}
-local MeshColorObjectCacheCount = 0
+local MeshColorObjectCacheKeys = {}
+local MeshColorObjectCacheNext = 1
 local MESH_COLOR_OBJECT_CACHE_LIMIT = 4096
 
 local function resetMeshColorObjectCache()
@@ -165,10 +166,15 @@ local function colorFromRGBA( r, g, b, a )
 	local cached = MeshColorObjectCache[key]
 	if cached then return cached end
 	local color = Color( r, g, b, a )
-	if MeshColorObjectCacheCount < MESH_COLOR_OBJECT_CACHE_LIMIT then
-		MeshColorObjectCache[key] = color
-		MeshColorObjectCacheCount = MeshColorObjectCacheCount + 1
-	end
+	-- Payload colors include the chunk's light-atlas slot. Keep admitting new
+	-- colors after a large world fills the cache, without work on cache hits.
+	-- Eviction drops our reference; callers may still own the old Color.
+	local slot = MeshColorObjectCacheNext
+	local oldKey = MeshColorObjectCacheKeys[slot]
+	if oldKey ~= nil then MeshColorObjectCache[oldKey] = nil end
+	MeshColorObjectCache[key] = color
+	MeshColorObjectCacheKeys[slot] = key
+	MeshColorObjectCacheNext = slot < MESH_COLOR_OBJECT_CACHE_LIMIT and slot + 1 or 1
 	return color
 end
 

@@ -111,14 +111,17 @@ function MC.TouchMeshSectionGeometryCache( key, sectionIndex )
 	if not key or not sectionIndex then return end
 	MC.MeshSectionGeometryLRUClock = ( MC.MeshSectionGeometryLRUClock or 0 ) + 1
 	local slot = sectionSlotKey( key, sectionIndex )
-	if MC.MeshSectionGeometryLRU[slot] == nil then
+	local entry = MC.MeshSectionGeometryLRU[slot]
+	if entry then
+		entry.tick = MC.MeshSectionGeometryLRUClock
+	else
 		MC.MeshSectionGeometryLRUCount = ( MC.MeshSectionGeometryLRUCount or 0 ) + 1
+		MC.MeshSectionGeometryLRU[slot] = {
+			key = key,
+			sectionIndex = sectionIndex,
+			tick = MC.MeshSectionGeometryLRUClock,
+		}
 	end
-	MC.MeshSectionGeometryLRU[slot] = {
-		key = key,
-		sectionIndex = sectionIndex,
-		tick = MC.MeshSectionGeometryLRUClock,
-	}
 end
 if GeometryStore then GeometryStore.TouchSection = MC.TouchMeshSectionGeometryCache end
 
@@ -177,14 +180,17 @@ function MC.TouchBlockEmitCacheSection( key, sectionIndex )
 	if not key or not sectionIndex then return end
 	MC.MeshBlockEmitCacheLRUClock = ( MC.MeshBlockEmitCacheLRUClock or 0 ) + 1
 	local slot = sectionSlotKey( key, sectionIndex )
-	if MC.MeshBlockEmitCacheLRU[slot] == nil then
+	local entry = MC.MeshBlockEmitCacheLRU[slot]
+	if entry then
+		entry.tick = MC.MeshBlockEmitCacheLRUClock
+	else
 		MC.MeshBlockEmitCacheLRUCount = ( MC.MeshBlockEmitCacheLRUCount or 0 ) + 1
+		MC.MeshBlockEmitCacheLRU[slot] = {
+			key = key,
+			sectionIndex = sectionIndex,
+			tick = MC.MeshBlockEmitCacheLRUClock,
+		}
 	end
-	MC.MeshBlockEmitCacheLRU[slot] = {
-		key = key,
-		sectionIndex = sectionIndex,
-		tick = MC.MeshBlockEmitCacheLRUClock,
-	}
 end
 
 function MC.PruneBlockEmitCache()

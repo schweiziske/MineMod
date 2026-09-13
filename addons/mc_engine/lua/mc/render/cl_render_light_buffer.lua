@@ -85,15 +85,18 @@ local function copyIndexes( copies, target, source )
 	return copies.indexes
 end
 
-local function validSample( light, sample )
-	return type( light ) == "table" and light.lightBufferVersion == Buffer.VERSION
-		and validCount( light.sampleCount ) and type( light.data ) == "table" and finiteNumber( sample )
-		and sample >= 1 and sample <= light.sampleCount and sample == math.floor( sample )
+local function validSampleIndex( sample, count )
+	return finiteNumber( sample ) and sample >= 1 and sample <= count and sample == math.floor( sample )
 end
 
-local function sampleOffset( light, sample )
-	if not validSample( light, sample ) then return nil end
-	local offset, data = ( sample - 1 ) * STRIDE, light.data
+local function validSample( light, sample )
+	return type( light ) == "table" and light.lightBufferVersion == Buffer.VERSION
+		and validCount( light.sampleCount ) and type( light.data ) == "table"
+		and validSampleIndex( sample, light.sampleCount )
+end
+
+local function sampleDataOffset( data, sample )
+	local offset = ( sample - 1 ) * STRIDE
 	for i = 1, STRIDE do
 		if not finiteNumber( data[offset + i] ) then return nil end
 	end
@@ -103,12 +106,17 @@ local function sampleOffset( light, sample )
 	return offset
 end
 
+local function sampleOffset( light, sample )
+	if not validSample( light, sample ) then return nil end
+	return sampleDataOffset( light.data, sample )
+end
+
 function Buffer.CopySample( target, source, sample, copies )
 	if not validSample( source, sample ) then return 0 end
 	local indexes = copyIndexes( copies, target, source )
 	local copied = indexes[sample]
 	if copied then return copied end
-	local from = sampleOffset( source, sample )
+	local from = sampleDataOffset( source.data, sample )
 	if from == nil then return 0 end
 	copied = target.sampleCount + 1
 	local to = target.sampleCount * STRIDE
@@ -263,11 +271,14 @@ end
 function Buffer.Validate( light )
 	if not Buffer.IsCompatible( light ) then return false end
 	if light.lightBufferVersion == nil then return true end
-	for sample = 1, light.sampleCount do
-		if sampleOffset( light, sample ) == nil then return false end
+	-- IsCompatible already checked the shared layout and count. Validate every
+	-- sample and reference without repeating those table checks per vertex.
+	local count, data = light.sampleCount, light.data
+	for sample = 1, count do
+		if sampleDataOffset( data, sample ) == nil then return false end
 	end
 	for i = 1, #light do
-		if not validSample( light, light[i] ) then return false end
+		if not validSampleIndex( light[i], count ) then return false end
 	end
 	return true
 end
