@@ -65,24 +65,44 @@ local function isLiquidBlock( id )
 end
 
 ------------------------------------------------------------------ mesh lifecycle
-local function destroyMeshList( store, key )
-	local list = store[key]
-	if not list then return end
-	for i = 1, #list do
-		local entry = list[i]
-		local meshObj = type( entry ) == "table" and entry.mesh or entry
-		if meshObj and meshObj.Destroy then meshObj:Destroy() end
+local function destroyEntry( entry, report )
+	if type( entry ) == "table" and entry.l2 then
+		local resource = entry.resource
+		entry.resource, entry.mesh = nil, nil
+		if resource then MC.RenderPackGeometry.Release( resource, report ) end
+		return
 	end
-	store[key] = nil
+	local meshObj = type( entry ) == "table" and entry.mesh or entry
+	if meshObj and meshObj.Destroy then
+		local ok, err = pcall( meshObj.Destroy, meshObj )
+		if not ok then ( report or MC.Fault )( "render_mesh_destroy", tostring( err ) ) end
+	end
 end
 
-local function destroySectionMeshList( list )
+local function destroyMeshList( store, key, report )
+	local list = store[key]
 	if not list then return end
+	store[key] = nil
 	for i = 1, #list do
-		local entry = list[i]
-		local meshObj = type( entry ) == "table" and entry.mesh or entry
-		if meshObj and meshObj.Destroy then meshObj:Destroy() end
+		destroyEntry( list[i], report )
 	end
+end
+
+local function destroySectionMeshList( list, report )
+	if not list then return end
+	local faults = {}
+	local function collect( code, message )
+		faults[#faults + 1] = { code = code, message = message }
+	end
+	for i = 1, #list do
+		destroyEntry( list[i], report or collect )
+	end
+	local firstError
+	for _, fault in ipairs( faults ) do
+		local ok, err = pcall( MC.Fault, fault.code, "%s", fault.message )
+		if not ok and not firstError then firstError = err end
+	end
+	if firstError then error( firstError, 0 ) end
 end
 
 local clearChunkBlockEmitCache = MC.ClearChunkBlockEmitCache
@@ -114,29 +134,33 @@ function MC.FreeChunkMesh( key, keepBlockEmitCache )
 	if MC.MeshDirtyRateLimited then MC.MeshDirtyRateLimited[key] = nil end
 	if MC.MeshLightDirty then MC.MeshLightDirty[key] = nil end
 	if not keepBlockEmitCache then clearChunkBlockEmitCache( key ) end
-	local sections = MC.MeshSections[key]
-	if sections then
-		for _, section in pairs( sections ) do
-			destroySectionMeshList( section.opaque )
-			destroySectionMeshList( section.translucent )
-		end
-		MC.MeshSections[key] = nil
-				if MC.ForgetChunkMeshSectionGeometryCache then
-					MC.ForgetChunkMeshSectionGeometryCache( key )
-				else
-					geometrySections[key] = nil
-				end
-		MC.Meshes[key] = nil
-		MC.MeshesTrans[key] = nil
-		return
+	local faults = {}
+	local function collect( code, message )
+		faults[#faults + 1] = { code = code, message = message }
 	end
-		if MC.ForgetChunkMeshSectionGeometryCache then
-			MC.ForgetChunkMeshSectionGeometryCache( key )
-		else
-			geometrySections[key] = nil
+	local sections = MC.MeshSections[key]
+	MC.MeshSections[key] = nil
+	if MC.ForgetChunkMeshSectionGeometryCache then
+		MC.ForgetChunkMeshSectionGeometryCache( key )
+	else
+		GeometryStore.ClearChunk( key )
+	end
+	if sections then
+		MC.Meshes[key], MC.MeshesTrans[key] = nil, nil
+		for _, section in pairs( sections ) do
+			destroySectionMeshList( section.opaque, collect )
+			destroySectionMeshList( section.translucent, collect )
 		end
-	destroyMeshList( MC.Meshes, key )
-	destroyMeshList( MC.MeshesTrans, key )
+	else
+		destroyMeshList( MC.Meshes, key, collect )
+		destroyMeshList( MC.MeshesTrans, key, collect )
+	end
+	local firstError
+	for _, fault in ipairs( faults ) do
+		local ok, err = pcall( MC.Fault, fault.code, "%s", fault.message )
+		if not ok and not firstError then firstError = err end
+	end
+	if firstError then error( firstError, 0 ) end
 end
 
 local function DecodeLocal( li )
@@ -318,6 +342,16 @@ local function modelOrientSteps( b, orient )
 	return 0, 0
 end
 
+local function rotateModelPoint( x, y, z, xSteps, zSteps )
+	y, z = rotateModelXZ( y, z, xSteps )
+	x, y = rotateModelXY( x, y, zSteps )
+	return x, y, z
+end
+
+local function rotateModelFace( face, xSteps, zSteps )
+	return rotateModelFaceZ( rotateModelFaceX( face, xSteps ), zSteps )
+end
+
 local function rotatedModelQuads( b, orient )
 	local data = MC.BlockModelData and MC.BlockModelData( b, orient ) or b
 	if not data or not data.modelQuads then return nil end
@@ -331,15 +365,13 @@ local function rotatedModelQuads( b, orient )
 		local verts = {}
 		for vi = 1, 4 do
 			local vx, vy, vz, vu, vv = MC.ModelQuadVertex( quad, vi )
-			local y, z = rotateModelXZ( vy, vz, xSteps )
-			local x
-			x, y = rotateModelXY( vx, y, zSteps )
+			local x, y, z = rotateModelPoint( vx, vy, vz, xSteps, zSteps )
 			local offset = ( vi - 1 ) * 5
 			verts[offset + 1], verts[offset + 2], verts[offset + 3] = x, y, z
 			verts[offset + 4], verts[offset + 5] = vu, vv
 		end
 		out[qi] = {
-			face = rotateModelFaceZ( rotateModelFaceX( quad.face or MC.Face.TOP, xSteps ), zSteps ),
+			face = rotateModelFace( quad.face or MC.Face.TOP, xSteps, zSteps ),
 			tile = quad.tile,
 			surface = quad.surface,
 			uv = quad.uv,
@@ -520,6 +552,9 @@ RM.bakedFaceData = bakedFaceData
 RM.EPS = EPS
 RM.boxFaceCornerValues = boxFaceCornerValues
 RM.BOX_UV_FLAGS = BOX_UV_FLAGS
+RM.modelOrientSteps = modelOrientSteps
+RM.rotateModelPoint = rotateModelPoint
+RM.rotateModelFace = rotateModelFace
 RM.rotatedModelQuads = rotatedModelQuads
 RM.cornerUV16Raw = cornerUV16Raw
 RM.connectionShapeFaceValues = connectionShapeFaceValues

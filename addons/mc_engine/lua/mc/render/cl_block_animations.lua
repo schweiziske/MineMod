@@ -58,7 +58,9 @@ local FACE_NORMALS = {
 }
 
 local Entries = {}
+local ModelEntries = {}
 local EntriesByChunk = {}
+local ModelAnimationSignatures = {}
 local FluidEntryCounts = {}
 local ScannedChunkVersions = {}
 local MeshCache = {}
@@ -72,7 +74,16 @@ local LastAnimationPack
 local AnimationStats = {
 	builds = 0, modelBuilds = 0, lightRefreshes = 0, uploads = 0, failures = 0,
 	attempts = 0, budgetYields = 0, workMS = 0, scanPasses = 0, scannedChunks = 0, scanMS = 0,
+	classifiedStates = 0, candidateCells = 0,
+	fluidBuildMS = 0, fluidLightMS = 0, modelMS = 0, uploadMS = 0,
+	globalLightRefreshes = 0, localLightRefreshes = 0, skippedLightUploads = 0,
 }
+
+if not MC.Check( type( MC.StateVisualPlanRangeFast ) == "function"
+	and type( MC.StateVisualPlanModelAtFast ) == "function"
+	and type( MC.VisitStateVisualModelCandidates ) == "function" and type( MC.ForEachBlockState ) == "function"
+	and type( MC.StateVisualModelData ) == "function" and type( MC.BlockModelSurface ) == "function",
+	"block_animation_catalog_missing", "state visual catalog APIs are unavailable" ) then return end
 
 local function blockSize()
 	return MC.API.Coords.BlockSize()
@@ -87,6 +98,7 @@ end
 
 local function releaseEmptyFluidChunk( key )
 	if ( FluidEntryCounts[key] or 0 ) > 0 then return end
+	FluidEntryCounts[key] = nil
 	destroyFluidRecord( FluidMeshCache[key] )
 	FluidMeshCache[key], FluidMeshRetryAt[key] = nil, nil
 end
@@ -116,11 +128,12 @@ function MC.MarkBlockAnimationLightDirty( key )
 end
 
 function MC.MarkAllBlockAnimationLightDirty()
-	for _, entry in pairs( Entries ) do entry.nextLightAt = 0 end
+	for _, entry in pairs( ModelEntries ) do entry.nextLightAt = 0 end
 	for key in pairs( FluidMeshCache ) do MC.MarkBlockAnimationLightDirty( key ) end
 end
 
 local function uploadAnimationMesh( vertices )
+	local started = SysTime()
 	local ok, meshObject = MC.Try( "block_animation_mesh", Mesh )
 	if not ok or not meshObject then
 		AnimationStats.failures = AnimationStats.failures + 1
@@ -128,6 +141,7 @@ local function uploadAnimationMesh( vertices )
 		return nil
 	end
 	local ok, err = pcall( RM.uploadMeshVertices, meshObject, vertices, nil, false )
+	AnimationStats.uploadMS = AnimationStats.uploadMS + ( SysTime() - started ) * 1000
 	if not ok then
 		AnimationStats.failures = AnimationStats.failures + 1
 		meshObject:Destroy()
@@ -175,7 +189,7 @@ end
 local function removeEntry( key )
 	local entry = Entries[key]
 	if not entry then return end
-	Entries[key] = nil
+	Entries[key], ModelEntries[key] = nil, nil
 	if entry.fluidKind then
 		FluidEntryCounts[entry.chunkKey] = ( FluidEntryCounts[entry.chunkKey] or 1 ) - 1
 		releaseEmptyFluidChunk( entry.chunkKey )
@@ -188,33 +202,71 @@ local function removeEntry( key )
 end
 
 local function removeChunkEntries( chunkKey )
-	for key in pairs( EntriesByChunk[chunkKey] or {} ) do Entries[key] = nil end
+	for key in pairs( EntriesByChunk[chunkKey] or {} ) do Entries[key], ModelEntries[key] = nil, nil end
 	EntriesByChunk[chunkKey] = nil
 	FluidEntryCounts[chunkKey] = nil
 end
 
-local function stateAnimationSignature( stateId, bx, by, bz )
-	local found = false
-	local signatureParts = {}
-	local byTile = animationsByTile()
-	if not ( MC.VisitStateVisualModels and MC.StateVisualModelData and MC.BlockModelSurface ) then return false end
-	MC.VisitStateVisualModels( stateId, bx, by, bz, function( modelId )
-		local model = MC.StateVisualModelData( modelId )
-		for _, quad in ipairs( model and model.modelQuads or {} ) do
+local function modelAnimationSignature( modelId, byTile )
+	local model = MC.StateVisualModelData( modelId )
+	local cached = ModelAnimationSignatures[modelId]
+	if cached and cached.model == model and cached.byTile == byTile then return cached.signature end
+	local parts
+	if model then
+		for _, quad in ipairs( model.modelQuads ) do
 			local tile = MC.BlockModelSurface( model, quad )
 			if byTile[tile] then
-				found = true
-				signatureParts[#signatureParts + 1] = tostring( modelId ) .. "/" .. tostring( tile )
+				if not parts then parts = {} end
+				parts[#parts + 1] = modelId .. "/" .. tile
 			end
 		end
-	end )
-	return found, table.concat( signatureParts, "," )
+	end
+	local signature = parts and table.concat( parts, "," ) or false
+	ModelAnimationSignatures[modelId] = { model = model, byTile = byTile, signature = signature }
+	return signature
+end
+
+local function stateAnimationSignature( stateId, bx, by, bz )
+	local planId, groupOffset, groupCount = MC.StateVisualPlanRangeFast( stateId )
+	local byTile = animationsByTile()
+	local signature, parts
+	for groupIndex = 0, groupCount - 1 do
+		local modelId = MC.StateVisualPlanModelAtFast( planId, groupOffset, groupIndex, bx, by, bz )
+		if modelId then
+			local part = modelAnimationSignature( modelId, byTile )
+			if part then
+				if signature then
+					if not parts then parts = { signature } end
+					parts[#parts + 1] = part
+				else signature = part end
+			end
+		end
+	end
+	if parts then signature = table.concat( parts, "," ) end
+	return signature ~= nil, signature or ""
 end
 
 local function fluidAnimationKind( stateId )
 	if not MC.LiquidKindForState then return nil end
 	local kind = MC.LiquidKindForState( stateId )
 	return FLUID_ANIMATIONS[kind] and kind or nil
+end
+
+local function animationStateFilter()
+	local byTile, states = animationsByTile(), {}
+	return function( stateId )
+		local accepted = states[stateId]
+		if accepted ~= nil then return accepted end
+		AnimationStats.classifiedStates = AnimationStats.classifiedStates + 1
+		accepted = fluidAnimationKind( stateId ) ~= nil
+		if not accepted then
+			MC.VisitStateVisualModelCandidates( stateId, function( modelId )
+				if not accepted and modelAnimationSignature( modelId, byTile ) then accepted = true end
+			end )
+		end
+		states[stateId] = accepted
+		return accepted
+	end
 end
 
 local function addEntry( bx, by, bz, stateId, hasStateAnimation, visualSignature, fluidKind )
@@ -232,6 +284,7 @@ local function addEntry( bx, by, bz, stateId, hasStateAnimation, visualSignature
 	entry.stateId = stateId
 	entry.chunkKey = chunkKey
 	entry.hasStateAnimation = hasStateAnimation == true
+	ModelEntries[key] = entry.hasStateAnimation and entry or nil
 	entry.visualSignature = visualSignature
 	entry.fluidKind = fluidKind
 	entry.nextLightAt = 0
@@ -249,25 +302,25 @@ local function updateCellEntry( bx, by, bz, stateId )
 	end
 end
 
-local function scanChunk( key, chunk )
+local function scanChunk( key, chunk, stateFilter )
 	AnimationStats.scannedChunks = AnimationStats.scannedChunks + 1
 	dirtyFluidNeighbors( chunk )
 	removeChunkEntries( key )
-	if MC.ForEachBlockState then
-		MC.ForEachBlockState( chunk, function( bx, by, bz, _, _, _, stateId )
-			local hasStateAnimation, visualSignature = stateAnimationSignature( stateId, bx, by, bz )
-			local fluidKind = fluidAnimationKind( stateId )
-			if hasStateAnimation or fluidKind then
-				addEntry( bx, by, bz, stateId, hasStateAnimation, visualSignature, fluidKind )
-			end
-		end )
-	end
+	MC.ForEachBlockState( chunk, function( bx, by, bz, _, _, _, stateId )
+		AnimationStats.candidateCells = AnimationStats.candidateCells + 1
+		local hasStateAnimation, visualSignature = stateAnimationSignature( stateId, bx, by, bz )
+		local fluidKind = fluidAnimationKind( stateId )
+		if hasStateAnimation or fluidKind then
+			addEntry( bx, by, bz, stateId, hasStateAnimation, visualSignature, fluidKind )
+		end
+	end, stateFilter )
 	releaseEmptyFluidChunk( key )
 	ScannedChunkVersions[key] = { chunk = chunk, version = chunk.collisionVersion or 0 }
 end
 
 local function clearEntries()
 	Entries = {}
+	ModelEntries = {}
 	EntriesByChunk = {}
 	FluidEntryCounts = {}
 	ScannedChunkVersions = {}
@@ -303,10 +356,14 @@ local function refreshChunks()
 			FluidMeshRetryAt[key] = nil
 		end
 	end
+	local stateFilter
 	for key, chunk in pairs( MC.World or {} ) do
 		local scanned = ScannedChunkVersions[key]
 		local version = chunk.collisionVersion or 0
-		if not scanned or scanned.chunk ~= chunk or scanned.version ~= version then scanChunk( key, chunk ) end
+		if not scanned or scanned.chunk ~= chunk or scanned.version ~= version then
+			if not stateFilter then stateFilter = animationStateFilter() end
+			scanChunk( key, chunk, stateFilter )
+		end
 	end
 end
 
@@ -502,6 +559,12 @@ local function fluidMeshesForChunk( chunkKey, animations )
 				if result == false or context.failed then return false end
 			end
 		end
+		for _, batches in pairs( buckets ) do
+			for _, batch in ipairs( batches ) do
+				batch.fluidLight = RM.cacheFluidLightInputs( batch )
+				if not batch.fluidLight then return false end
+			end
+		end
 		return true
 	end )
 	LightBuffer.ResetCopyMap( copies )
@@ -547,21 +610,28 @@ local function fluidMeshesForChunk( chunkKey, animations )
 end
 
 local function stageFluidLight( record, staged )
-	RM.resetMeshLightingSampleCaches()
-	RM.setMeshSampleCacheOrigin( record.originBX, record.originBY, record.originBZ )
+	if record.localLightDirty then
+		RM.resetMeshLightingSampleCaches()
+		RM.setMeshSampleCacheOrigin( record.originBX, record.originBY, record.originBZ )
+	end
 	for _, batches in pairs( record.meshes ) do
 		for _, batch in ipairs( batches ) do
-			local ok, result = MC.Try( "block_animation_light", RM.recolorCachedBlockEmission,
-				batch, RM.MC_LIGHT_STYLE_VANILLA or "vanilla" )
-			if not ok or result ~= true then
+			local ok, result = MC.Try( "block_animation_light", RM.recolorFluidEmission,
+				batch, record.localLightDirty == true )
+			if not ok or not result then
 				record.geometryDirty = true
 				AnimationStats.failures = AnimationStats.failures + 1
 				if ok then MC.Fault( "block_animation_light", "invalid light samples in an animated fluid batch" ) end
 				return false
 			end
-			local replacement = uploadAnimationMesh( batch.verts )
-			if not replacement then return false end
-			staged[#staged + 1] = { batch = batch, mesh = replacement }
+			if result.changed then
+				result.mesh = uploadAnimationMesh( batch.verts )
+				if not result.mesh then return false end
+			else
+				AnimationStats.skippedLightUploads = AnimationStats.skippedLightUploads + 1
+			end
+			result.batch = batch
+			staged[#staged + 1] = result
 		end
 	end
 	return true
@@ -575,16 +645,24 @@ local function refreshFluidLight( record )
 	local staged = {}
 	local ok, result = pcall( stageFluidLight, record, staged )
 	if not ok or result ~= true then
-		for _, item in ipairs( staged ) do item.mesh:Destroy() end
+		for _, item in ipairs( staged ) do
+			if item.mesh then item.mesh:Destroy() end
+		end
 		record.retryAt = CurTime() + REFRESH_INTERVAL
 		if not ok then error( result, 0 ) end -- MC.Try/Fault already reported it.
 		return
 	end
 	for _, item in ipairs( staged ) do
-		local previous = item.batch.mesh
-		item.batch.mesh = item.mesh
-		previous:Destroy()
+		if item.mesh then
+			local previous = item.batch.mesh
+			item.batch.mesh = item.mesh
+			previous:Destroy()
+		end
+		item.palette.published = item.colors
+		item.batch.fluidLight = item.palette
 	end
+	local counter = record.localLightDirty and "localLightRefreshes" or "globalLightRefreshes"
+	AnimationStats[counter] = AnimationStats[counter] + 1
 	record.retryAt = nil
 	record.lightDirty = false
 	record.localLightDirty = false
@@ -819,7 +897,11 @@ local function prepareAnimationWork( budget, canBuild, prepare, ... )
 	AnimationStats.attempts = AnimationStats.attempts + 1
 	local started, failures = SysTime(), AnimationStats.failures
 	prepare( ... )
-	AnimationStats.workMS = AnimationStats.workMS + ( SysTime() - started ) * 1000
+	local elapsed = ( SysTime() - started ) * 1000
+	AnimationStats.workMS = AnimationStats.workMS + elapsed
+	local category = prepare == fluidMeshesForChunk and "fluidBuildMS"
+		or prepare == refreshFluidLight and "fluidLightMS" or "modelMS"
+	AnimationStats[category] = AnimationStats[category] + elapsed
 	if AnimationStats.failures > failures then
 		budget.failures = budget.failures + 1
 		budget.animationFailures = budget.animationFailures + 1
@@ -882,7 +964,7 @@ function MC.PrepareBlockAnimations( budget, canBuild )
 	if next( animations ) == nil then return end
 	local eye = EyePos()
 	local maxRenderDistanceSqr = ( blockSize() * 96 ) ^ 2
-	for _, entry in pairs( Entries ) do
+	for _, entry in pairs( ModelEntries ) do
 		if entryNeedsMeshes( entry ) and now >= ( entry.meshRetryAt or 0 ) then
 			local center = MC.CellRenderCenter and MC.CellRenderCenter( entry.bx, entry.by, entry.bz )
 				or MC.CellWorldCenter( entry.bx, entry.by, entry.bz )
@@ -919,19 +1001,17 @@ hook.Remove( "Think", "mc_block_animation_chunk_scan" )
 
 local function drawPreparedAnimations( animations, eye, elapsedTicks )
 	local maxRenderDistanceSqr = ( blockSize() * 96 ) ^ 2
-	for _, entry in pairs( Entries ) do
-		if entry.hasStateAnimation then
-			local center = MC.CellRenderCenter and MC.CellRenderCenter( entry.bx, entry.by, entry.bz )
-				or MC.CellWorldCenter( entry.bx, entry.by, entry.bz )
-			if eye:DistToSqr( center ) <= maxRenderDistanceSqr then
-				drawEntry( entry, elapsedTicks )
-			end
+	for _, entry in pairs( ModelEntries ) do
+		local center = MC.CellRenderCenter and MC.CellRenderCenter( entry.bx, entry.by, entry.bz )
+			or MC.CellWorldCenter( entry.bx, entry.by, entry.bz )
+		if eye:DistToSqr( center ) <= maxRenderDistanceSqr then
+			drawEntry( entry, elapsedTicks )
 		end
 	end
 	-- Fluid colour passes test opaque depth but must never populate it. In
 	-- particular, interpolated frames draw the same surface more than once.
 	render.OverrideDepthEnable( true, false )
-	for chunkKey in pairs( EntriesByChunk ) do
+	for chunkKey in pairs( FluidEntryCounts ) do
 		drawFluidChunk( chunkKey, animations, elapsedTicks, eye )
 	end
 end
@@ -997,8 +1077,8 @@ function MC.BlockAnimationStats( validate )
 		modelEntries = 0, pendingModels = 0, unbuiltChunks = 0,
 	}
 	for key, value in pairs( AnimationStats ) do out[key] = value end
-	for _, entry in pairs( Entries ) do
-		if entry.hasStateAnimation then out.modelEntries = out.modelEntries + 1 end
+	for _, entry in pairs( ModelEntries ) do
+		out.modelEntries = out.modelEntries + 1
 		if entryNeedsMeshes( entry ) then out.pendingModels = out.pendingModels + 1 end
 	end
 	for key in pairs( FluidEntryCounts ) do
@@ -1030,4 +1110,5 @@ hook.Add( "ShutDown", "mc_block_animation_cleanup", clearMeshes )
 hook.Add( "OnReloaded", "mc_block_animation_reload", function()
 	clearMeshes()
 	clearEntries()
+	ModelAnimationSignatures = {}
 end )

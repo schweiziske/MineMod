@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "kind": "pack",
+  "id": "mc:vanilla",
+  "definition": {
+    "schema": 1,
+    "name": "Vanilla",
+    "build": "4c3bce8358d0c288ecb3db1a51ca0ce9ec511b0ede8e6c23990253f4ae8d10a4",
+    "abi": 1,
+    "layout": "mc:quad_corners_v1",
+    "adapter": "mc:vanilla_quad_draft",
+    "programs": {
+      "opaque": {
+        "vertex": "mc_vanilla_vertex_4c3bce8358d0c288ecb3_vs30",
+        "vertexHash": "b8d86173030a87ee02dbc9293f5331702b0ad3308bef5de9a7c0f86b71ffe7da",
+        "pixel": "mc_vanilla_opaque_4c3bce8358d0c288ecb3_ps30",
+        "pixelHash": "90882125b1ba78a8a468adce26b0c04e4b35528c8fee15754fb1d16d5dae00be"
+      },
+      "cutout": {
+        "vertex": "mc_vanilla_vertex_4c3bce8358d0c288ecb3_vs30",
+        "vertexHash": "b8d86173030a87ee02dbc9293f5331702b0ad3308bef5de9a7c0f86b71ffe7da",
+        "pixel": "mc_vanilla_cutout_4c3bce8358d0c288ecb3_ps30",
+        "pixelHash": "d74eac00cf771a4fa5ce72f4761d2300c98e28332ca42b678cb359d98c81aaa0"
+      },
+      "translucent": {
+        "vertex": "mc_vanilla_vertex_4c3bce8358d0c288ecb3_vs30",
+        "vertexHash": "b8d86173030a87ee02dbc9293f5331702b0ad3308bef5de9a7c0f86b71ffe7da",
+        "pixel": "mc_vanilla_translucent_4c3bce8358d0c288ecb3_ps30",
+        "pixelHash": "975fc03497d77e3c6c3683d032483cae13859eb2b754aca9fc5519144117bd91"
+      }
+    },
+    "resources": {},
+    "passes": {
+      "terrain_opaque": {
+        "stage": "world_opaque",
+        "program": "opaque"
+      },
+      "terrain_cutout": {
+        "stage": "world_cutout",
+        "program": "cutout"
+      },
+      "terrain_translucent": {
+        "stage": "world_translucent",
+        "program": "translucent"
+      }
+    },
+    "implements": {
+      "mc:terrain": {
+        "contract": 1,
+        "passes": [
+          "terrain_opaque",
+          "terrain_cutout",
+          "terrain_translucent"
+        ]
+      }
+    }
+  }
+}

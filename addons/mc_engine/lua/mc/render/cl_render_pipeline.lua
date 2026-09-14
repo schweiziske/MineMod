@@ -29,6 +29,21 @@ for i = 1, #dirtyFrameFields do
 	local field = dirtyFrameFields[i]
 	Pipeline.stats[field] = Pipeline.stats[field] or 0
 end
+local buildStageFields = { "indexMS", "prepMS", "loopMS", "flushMS", "commitMS", "flatMS" }
+Pipeline.buildStages = Pipeline.buildStages or {}
+for i = 1, #buildStageFields do
+	local field = buildStageFields[i]
+	Pipeline.buildStages[field] = Pipeline.buildStages[field] or 0
+end
+
+-- Reuse the builder's boundary timers; no per-block or per-vertex clocks.
+function Pipeline.NoteBuildStages( perf )
+	local stages = Pipeline.buildStages
+	for i = 1, #buildStageFields do
+		local field = buildStageFields[i]
+		stages[field] = stages[field] + perf[field]
+	end
+end
 
 -- Stable section result contract: key, sectionIndex, mode, blocks, vertices,
 -- faces, opaqueMeshes, translucentMeshes, buildMS.
@@ -55,6 +70,7 @@ function Pipeline.ResetStats()
 	s.dirtyEnqueues, s.dirtyBuilds, s.dirtyQueuePeak = 0, 0, 0
 	for i = 1, #visibilityFields do s[visibilityFields[i]] = 0 end
 	for i = 1, #dirtyFrameFields do s[dirtyFrameFields[i]] = 0 end
+	for i = 1, #buildStageFields do Pipeline.buildStages[buildStageFields[i]] = 0 end
 end
 
 function Pipeline.GetStats() return Pipeline.stats end
@@ -123,5 +139,18 @@ if concommand and concommand.Add then
 		) )
 		print( string.format( "[MC animation scheduler] attempts=%d failures=%d prepareMS=%.3f",
 			s.animationAttempts, s.animationFailures, s.animationPrepareMS ) )
+		local animationStats = MC.Need( MC.BlockAnimationStats,
+			"render_pipeline_animation_stats_missing", "block animation statistics are unavailable" )
+		if animationStats then
+			local a = animationStats()
+			print( string.format( "[MC animation work] scans=%d chunks=%d states=%d candidates=%d scanMS=%.3f workMS=%.3f",
+				a.scanPasses, a.scannedChunks, a.classifiedStates, a.candidateCells, a.scanMS, a.workMS ) )
+			print( string.format( "[MC animation detail] fluidBuilds=%d modelBuilds=%d localRefreshes=%d globalRefreshes=%d uploads=%d skippedUploads=%d fluidBuildMS=%.3f fluidLightMS=%.3f modelMS=%.3f uploadMS=%.3f",
+				a.builds, a.modelBuilds, a.localLightRefreshes, a.globalLightRefreshes, a.uploads, a.skippedLightUploads,
+				a.fluidBuildMS, a.fluidLightMS, a.modelMS, a.uploadMS ) )
+		end
+		local stages = Pipeline.buildStages
+		print( string.format( "[MC terrain stages] indexMS=%.3f prepMS=%.3f loopMS=%.3f flushMS=%.3f commitMS=%.3f flatMS=%.3f",
+			stages.indexMS, stages.prepMS, stages.loopMS, stages.flushMS, stages.commitMS, stages.flatMS ) )
 	end )
 end

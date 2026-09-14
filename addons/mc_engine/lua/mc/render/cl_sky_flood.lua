@@ -39,11 +39,43 @@ end
 
 MC.SkyFloodEnabled = skyFloodEnabled
 
-local function chunkLoadedForCell( bx, by, bz )
+-- A light path reaches at most 14 cells, and L2 samples a two-cell mesh halo.
+-- Air-only chunks carry lighting without being inserted into MC.World.
+local xyHalo = math.ceil( 16 / MC.CS )
+local zHalo = math.ceil( 16 / MC.CH )
+local skyDomain = {}
+
+local function chunkKnown( cx, cy, cz, key )
+	if MC.World and MC.World[key] then return true end
+	if MC.IsChunkLoaded and MC.IsChunkLoaded( key ) then return true end
+	local transport = MC.StateNetworkTransport
+	if MC.HttpChunkSync ~= nil then return false end
+	if not transport or not transport.streaming then return true end
+	return cz < ( transport.streamMinCZ or -math.huge ) or cz > ( transport.streamMaxCZ or math.huge )
+end
+
+local function chunkKnownForCell( bx, by, bz )
 	local cx, cy, cz = MC.CellToChunk( bx, by, bz )
 	local key = MC.ChunkKey( cx, cy, cz )
-	if MC.IsChunkLoaded then return MC.IsChunkLoaded( key ) end
-	return MC.World and MC.World[key] ~= nil
+	return chunkKnown( cx, cy, cz, key )
+end
+
+local function inSkyDomain( cx, cy, cz, key )
+	local cached = skyDomain[key]
+	if cached ~= nil then return cached end
+	local world = MC.World
+	for dx = -xyHalo, xyHalo do
+		for dy = -xyHalo, xyHalo do
+			for dz = -zHalo, zHalo do
+				if world[MC.ChunkKey( cx + dx, cy + dy, cz + dz )] then
+					skyDomain[key] = true
+					return true
+				end
+			end
+		end
+	end
+	skyDomain[key] = false
+	return false
 end
 
 local function skyStoreForCell( bx, by, bz, create )
@@ -73,6 +105,7 @@ end
 -- Exposure = above the column's highest full-opacity block (cl_sky_column
 -- caches the tops). Exposed cells are implicit level 15.
 local function skyExposed( bx, by, bz )
+	if not chunkKnownForCell( bx, by, bz ) then return false end
 	if not MC.SkyExposedAt then return true end
 	return MC.SkyExposedAt( bx, by, bz ) == true
 end
@@ -90,6 +123,7 @@ function MC.SkyVoxelLight( bx, by, bz )
 	local native = nativeSkyBackend()
 	local nativeLevel = native and native.GetSkyLightAt( bx, by, bz ) or nil
 	if nativeLevel ~= nil then return nativeLevel end
+	if not chunkKnownForCell( bx, by, bz ) then return 0 end
 	return skyLevelAt( bx, by, bz )
 end
 
@@ -98,7 +132,9 @@ function MC.SkyVoxelLightUnit( bx, by, bz )
 end
 
 local function propagationCost( bx, by, bz )
-	if not chunkLoadedForCell( bx, by, bz ) then return 16 end
+	local cx, cy, cz = MC.CellToChunk( bx, by, bz )
+	local key = MC.ChunkKey( cx, cy, cz )
+	if not chunkKnown( cx, cy, cz, key ) or not inSkyDomain( cx, cy, cz, key ) then return 16 end
 	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
 	local opacity = MC.BlockLightOpacityForState and MC.BlockLightOpacityForState( stateId, bx, by, bz ) or 15
 	if opacity >= 15 then return 16 end
@@ -162,10 +198,8 @@ local function runSkyIncrease( q, changed )
 		local bx, by, bz, level = popQueue( q )
 		-- Same phantom re-seed guard as the block light wave: only spread from
 		-- cells whose current effective level still matches the queued level.
-		-- Exposed cells are valid sources even in unloaded chunks (their 15
-		-- comes from the sky, not from chunk data — void columns at the loaded
-		-- world's edge must still light the border cells).
-		if bx and ( chunkLoadedForCell( bx, by, bz ) or skyExposed( bx, by, bz ) )
+		-- Known sparse air is valid; unknown streamed chunks cannot seed sky.
+		if bx and chunkKnownForCell( bx, by, bz )
 		and skyLevelAt( bx, by, bz ) >= level then
 			processed = processed + 1
 			if level > 1 then
@@ -174,7 +208,6 @@ local function runSkyIncrease( q, changed )
 					local nx, ny, nz = bx + off[1], by + off[2], bz + off[3]
 					local nextLevel = level - propagationCost( nx, ny, nz )
 					if nextLevel > 0
-					and chunkLoadedForCell( nx, ny, nz )
 					and skyLevelAt( nx, ny, nz ) < nextLevel then
 						setSkyChanged( changed, nx, ny, nz, nextLevel )
 						pushQueue( q, nx, ny, nz, nextLevel )
@@ -235,6 +268,7 @@ function MC.UpdateSkyLightForBlockChange( bx, by, bz, oldOpacity, newOpacity )
 	-- notification reaches the legacy Lua flood hook.
 	if native then return end
 	bx, by, bz = math.floor( bx ), math.floor( by ), math.floor( bz )
+	skyDomain = {}
 
 	local changed = newChangedCells()
 	local removeQ = newQueue()
@@ -272,6 +306,7 @@ function MC.NoteSkyExposureSpanChanged( bx, by, zFrom, zTo )
 	local native = nativeSkyBackend()
 	if native then native.ScheduleBlockLightRebuild( 0.05 ); return end
 	bx, by = math.floor( bx ), math.floor( by )
+	skyDomain = {}
 	zFrom, zTo = math.floor( zFrom ), math.floor( zTo )
 	if zFrom > zTo then zFrom, zTo = zTo, zFrom end
 
@@ -395,25 +430,17 @@ local function seedChunkBorderSky( addQ, chunk )
 end
 
 local function refloodChunkSky( key )
-	local chunk = MC.World and MC.World[key] or nil
-	if not chunk then
-		-- Unloaded: just drop the stored values and chase what they fed out.
-		local changed = newChangedCells()
-		local removeQ = newQueue()
-		local addQ = newQueue()
-		clearChunkStoredSkyToQueue( key, changed, removeQ )
-		runSkyDecrease( removeQ, addQ, changed )
-		runSkyIncrease( addQ, changed )
-		markDirty( changed )
-		return
-	end
 	local changed = newChangedCells()
 	local removeQ = newQueue()
 	local addQ = newQueue()
 	clearChunkStoredSkyToQueue( key, changed, removeQ )
 	runSkyDecrease( removeQ, addQ, changed )
-	seedChunkExposureTransitions( addQ, chunk )
-	seedChunkBorderSky( addQ, chunk )
+	local cx, cy, cz = MC.ChunkKeyToCoords( key )
+	if cx and chunkKnown( cx, cy, cz, key ) and inSkyDomain( cx, cy, cz, key ) then
+		local chunk = { cx = cx, cy = cy, cz = cz }
+		seedChunkExposureTransitions( addQ, chunk )
+		seedChunkBorderSky( addQ, chunk )
+	end
 	runSkyIncrease( addQ, changed )
 	markDirty( changed )
 end
@@ -444,49 +471,55 @@ function MC.QueueSkyFloodChunk( key )
 	end
 end
 
--- Queue one column's chunks at ITS OWN known czs. The column index keeps czs
--- for edit-emptied chunks too (they never send an unload notification), so
--- refloods keep chasing their orphaned stores; refloodChunkSky treats a
--- missing chunk as "drop stored values and chase what they fed out".
-local function queueColumnLoadedChunks( cx, cy )
-	local czList = MC.SkyColumnChunkCzList and MC.SkyColumnChunkCzList( cx, cy ) or nil
-	if czList then
-		for cz in pairs( czList ) do
-			MC.QueueSkyFloodChunk( MC.ChunkKey( cx, cy, cz ) )
-		end
-		return
-	end
-	for key, chunk in pairs( MC.World or {} ) do
-		if chunk and chunk.cx == cx and chunk.cy == cy then
-			MC.QueueSkyFloodChunk( key )
+local function queueChunkHalo( cx, cy, cz, columnX, columnY )
+	for dx = -xyHalo, xyHalo do
+		for dy = -xyHalo, xyHalo do
+			local x, y = cx + dx, cy + dy
+			if columnX == nil or ( math.abs( x - columnX ) <= xyHalo and math.abs( y - columnY ) <= xyHalo ) then
+				for dz = -zHalo, zHalo do MC.QueueSkyFloodChunk( MC.ChunkKey( x, y, cz + dz ) ) end
+			end
 		end
 	end
 end
 
--- A chunk (un)load changes column tops for its whole footprint, which can
--- flip exposure arbitrarily deep in the same chunk column; lateral BFS light
--- reaches at most 14 blocks (< one chunk), so this column plus the 4 lateral
--- neighbor columns form the complete reflood set. Each column is queued at
--- its OWN czs: the old loop queued laterals only at the CHANGED column's czs,
--- so lateral chunks loaded at other depths kept stale border light forever
--- (their implicit-exposed feeders were never stored, leaving the decrease
--- wave nothing to chase, and the increase wave can only brighten).
-function MC.QueueSkyFloodColumn( cx, cy )
+local function queueColumnLoadedChunks( cx, cy, columnX, columnY )
+	if MC.SkyColumnChunkCzList then
+		local czList = MC.SkyColumnChunkCzList( cx, cy )
+		if not czList then return end
+		for cz in pairs( czList ) do
+			queueChunkHalo( cx, cy, cz, columnX, columnY )
+		end
+		return
+	end
+	for _, chunk in pairs( MC.World or {} ) do
+		if chunk and chunk.cx == cx and chunk.cy == cy then
+			queueChunkHalo( cx, cy, chunk.cz, columnX, columnY )
+		end
+	end
+end
+
+-- A top change affects the entire column and neighboring lighting halos,
+-- including air-only chunks at other heights. Owners can lie one halo farther.
+function MC.QueueSkyFloodColumn( cx, cy, changedCZ )
 	if not MC.ChunkKey then return end
 	local native = nativeSkyBackend()
 	if native then native.ScheduleBlockLightRebuild( 0.02 ); return end
-	queueColumnLoadedChunks( cx, cy )
-	queueColumnLoadedChunks( cx + 1, cy )
-	queueColumnLoadedChunks( cx - 1, cy )
-	queueColumnLoadedChunks( cx, cy + 1 )
-	queueColumnLoadedChunks( cx, cy - 1 )
+	skyDomain = {}
+	for dx = -xyHalo * 2, xyHalo * 2 do
+		for dy = -xyHalo * 2, xyHalo * 2 do
+			queueColumnLoadedChunks( cx + dx, cy + dy, cx, cy )
+		end
+	end
+	-- An unloaded owner no longer appears in the column index.
+	if changedCZ ~= nil then queueChunkHalo( cx, cy, changedCZ ) end
 end
 
 function MC.QueueAllSkyFlood()
 	local native = nativeSkyBackend()
 	if native then native.ScheduleBlockLightRebuild( 0 ); return end
-	for key in pairs( MC.World or {} ) do
-		MC.QueueSkyFloodChunk( key )
+	skyDomain = {}
+	for _, chunk in pairs( MC.World or {} ) do
+		queueChunkHalo( chunk.cx, chunk.cy, chunk.cz )
 	end
 	for key in pairs( MC.LightSkyChunks or {} ) do
 		MC.QueueSkyFloodChunk( key )
@@ -538,6 +571,7 @@ end )
 
 function MC.ClearSkyFlood()
 	MC.LightSkyChunks = {}
+	skyDomain = {}
 	pendingReflood = {}
 	pendingCount = 0
 end
@@ -552,5 +586,8 @@ if cvars and cvars.AddChangeCallback then
 		MC.ClearSkyFlood()
 		if skyFloodEnabled() then MC.QueueAllSkyFlood() end
 		if MC.ClearAllGpuChunkLightTextures then MC.ClearAllGpuChunkLightTextures() end
+		local markLight = MC.Need( MC.MarkAllMeshLightingDirty,
+			"sky_native_invalidation_missing", "native L2 section invalidation did not load" )
+		if markLight then markLight( true ) end
 	end, "mc_sky_flood_toggle" )
 end

@@ -171,6 +171,7 @@ local function buildModelTemplate( b, orient, cubicBlockId )
 			local c3x, c3y, c3z = modelQuadVertex( quad, 3 )
 			local c4x, c4y, c4z = modelQuadVertex( quad, 4 )
 			local rec = {
+				sourceQuad = qi,
 				faceIndex = faceIndex,
 				tintIndex = quad.tintIndex or -1,
 				normal = face.n,
@@ -322,11 +323,12 @@ local function getShapeTemplate( ctx, b, id, orient, blockBoxes )
 end
 
 local function faceMetaValues( lightMetaFast, shadeIndex, bx, by, bz, id, faceIndex, li, emission, faceCubic, quadLightEmission,
-	c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z, tintCode )
-	local meta1 = lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, c1x, c1y, c1z, emission, faceCubic, quadLightEmission, tintCode )
-	local meta2 = lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, c2x, c2y, c2z, emission, faceCubic, quadLightEmission, tintCode )
-	local meta3 = lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, c3x, c3y, c3z, emission, faceCubic, quadLightEmission, tintCode )
-	local meta4 = lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, c4x, c4y, c4z, emission, faceCubic, quadLightEmission, tintCode )
+	c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z, tintCode, lightingKind, modelId, sourceQuad )
+	lightingKind = lightingKind or MC.RenderLightBuffer.KIND.BOX
+	local meta1 = lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, c1x, c1y, c1z, emission, faceCubic, quadLightEmission, tintCode, lightingKind, modelId, sourceQuad, 1 )
+	local meta2 = lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, c2x, c2y, c2z, emission, faceCubic, quadLightEmission, tintCode, lightingKind, modelId, sourceQuad, 2 )
+	local meta3 = lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, c3x, c3y, c3z, emission, faceCubic, quadLightEmission, tintCode, lightingKind, modelId, sourceQuad, 3 )
+	local meta4 = lightMetaFast( shadeIndex, bx, by, bz, id, faceIndex, li, c4x, c4y, c4z, emission, faceCubic, quadLightEmission, tintCode, lightingKind, modelId, sourceQuad, 4 )
 	return meta1, meta2, meta3, meta4
 end
 
@@ -553,9 +555,50 @@ local function pushFullCubeFace( push, wx, wy, wz, nrm, corners, baked, tile, u0
 	)
 end
 
-local function emitModelBlockTemplate( ctx, template, id, bx, by, bz, wx, wy, wz, lx, ly, lz, li, push, lightMetaFast, currentEmitLightStyle, cullCubicFaces )
+local function nativeScratch( ctx )
+	local quad = ctx.nativeQuadScratch
+	if not quad then
+		quad = { l2Corners = { {}, {}, {}, {} }, l2UV = { {}, {}, {}, {} } }
+		ctx.nativeQuadScratch = quad
+	end
+	return quad
+end
+
+local function emitNativeValues( ctx, id, bx, by, bz, wx, wy, wz, face, normal, shade, emission, quadEmission, lighting,
+	c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z, u1, v1, u2, v2, u3, v3, u4, v4 )
+	local quad = nativeScratch( ctx )
+	local a, b, c, d = quad.l2Corners[1], quad.l2Corners[2], quad.l2Corners[3], quad.l2Corners[4]
+	a[1], a[2], a[3], b[1], b[2], b[3] = c1x, c1y, c1z, c2x, c2y, c2z
+	c[1], c[2], c[3], d[1], d[2], d[3] = c3x, c3y, c3z, c4x, c4y, c4z
+	a, b, c, d = quad.l2UV[1], quad.l2UV[2], quad.l2UV[3], quad.l2UV[4]
+	a[1], a[2], b[1], b[2], c[1], c[2], d[1], d[2] = u1, v1, u2, v2, u3, v3, u4, v4
+	quad.faceIndex, quad.normal, quad.shade = face, normal, shade
+	quad.quadLightEmission, quad.positions = quadEmission, nil
+	-- Scratch geometry changes per call; only fixed templates supply a cache.
+	quad.l2Lighting = lighting
+	ctx.emitL2( quad, id, bx, by, bz, wx, wy, wz, emission )
+end
+
+local function emitNativeArrays( ctx, id, bx, by, bz, wx, wy, wz, face, normal, shade, emission, kind,
+	corners, positions, tile, rawUV, faceCubic )
+	local quad = nativeScratch( ctx )
+	for i = 1, 4 do
+		local p, c, uv = corners[i], quad.l2Corners[i], quad.l2UV[i]
+		c[1], c[2], c[3] = p[1], p[2], p[3]
+		local raw = rawUV and rawUV[i] or p
+		local u, v
+		if rawUV then u, v = raw[1], raw[2] else u, v = raw[4], raw[5] end
+		uv[1], uv[2] = tileUVPointRaw( tile, u, v )
+	end
+	quad.faceIndex, quad.normal, quad.shade = face, normal, shade
+	quad.quadLightEmission, quad.positions, quad.faceCubic = 0, positions, faceCubic
+	ctx.emitL2( quad, id, bx, by, bz, wx, wy, wz, emission, 0, kind )
+end
+
+local function emitModelBlockTemplate( ctx, template, id, bx, by, bz, wx, wy, wz, lx, ly, lz, li, push, lightMetaFast, currentEmitLightStyle, cullCubicFaces, modelId )
 	local emission = stateEmission( ctx, id, bx, by, bz )
 	local emitLightStyle = currentEmitLightStyle()
+	local lightingKind = modelId and MC.RenderLightBuffer.KIND.GENERATED or MC.RenderLightBuffer.KIND.MODEL
 	for qi = 1, template.n do
 		local quad = template[qi]
 		local f = quad.faceIndex
@@ -567,15 +610,20 @@ local function emitModelBlockTemplate( ctx, template, id, bx, by, bz, wx, wy, wz
 		if visible then
 			local tintCode = quad.tintIndex and quad.tintIndex >= 0 and blockStateTintCode
 				and blockStateTintCode( ctx.currentStateId, id, quad.tintIndex ) or 0
-			local color1, color2, color3, color4 = quadCornerColorValues(
-				quad.shade, bx, by, bz, id, f, emission, emitLightStyle,
-				quad.c1x, quad.c1y, quad.c1z, quad.c2x, quad.c2y, quad.c2z, quad.c3x, quad.c3y, quad.c3z, quad.c4x, quad.c4y, quad.c4z, tintCode
-			)
-			local meta1, meta2, meta3, meta4 = faceMetaValues(
-				lightMetaFast, shadeIndexForFace( f ), bx, by, bz, id, f, li, emission, quad.faceCubic, quad.quadLightEmission,
-				quad.c1x, quad.c1y, quad.c1z, quad.c2x, quad.c2y, quad.c2z, quad.c3x, quad.c3y, quad.c3z, quad.c4x, quad.c4y, quad.c4z, tintCode
-			)
-			pushTemplateFace( push, quad, wx, wy, wz, color1, color2, color3, color4, meta1, meta2, meta3, meta4 )
+			if ctx.l2 then
+				ctx.emitL2( quad, id, bx, by, bz, wx, wy, wz, emission, tintCode, lightingKind, modelId )
+			else
+				local color1, color2, color3, color4 = quadCornerColorValues(
+					quad.shade, bx, by, bz, id, f, emission, emitLightStyle,
+					quad.c1x, quad.c1y, quad.c1z, quad.c2x, quad.c2y, quad.c2z, quad.c3x, quad.c3y, quad.c3z, quad.c4x, quad.c4y, quad.c4z, tintCode
+				)
+				local meta1, meta2, meta3, meta4 = faceMetaValues(
+					lightMetaFast, shadeIndexForFace( f ), bx, by, bz, id, f, li, emission, quad.faceCubic, quad.quadLightEmission,
+					quad.c1x, quad.c1y, quad.c1z, quad.c2x, quad.c2y, quad.c2z, quad.c3x, quad.c3y, quad.c3z, quad.c4x, quad.c4y, quad.c4z, tintCode,
+					lightingKind, modelId, quad.sourceQuad
+				)
+				pushTemplateFace( push, quad, wx, wy, wz, color1, color2, color3, color4, meta1, meta2, meta3, meta4 )
+			end
 		end
 	end
 	return true
@@ -594,15 +642,19 @@ local function emitShapeBlockTemplate( ctx, template, id, bx, by, bz, wx, wy, wz
 			quad.selfCovered = selfCovered
 		end
 		if not selfCovered and not shapeFaceNeighborCoveredAt( id, quad.box, f, bx, by, bz, lx, ly, lz ) then
-			local color1, color2, color3, color4 = quadCornerColorValues(
-				quad.shade, bx, by, bz, id, f, emission, emitLightStyle,
-				quad.c1x, quad.c1y, quad.c1z, quad.c2x, quad.c2y, quad.c2z, quad.c3x, quad.c3y, quad.c3z, quad.c4x, quad.c4y, quad.c4z
-			)
-			local meta1, meta2, meta3, meta4 = faceMetaValues(
-				lightMetaFast, shadeIndexForFace( f ), bx, by, bz, id, f, li, emission, quad.faceCubic, quad.quadLightEmission,
-				quad.c1x, quad.c1y, quad.c1z, quad.c2x, quad.c2y, quad.c2z, quad.c3x, quad.c3y, quad.c3z, quad.c4x, quad.c4y, quad.c4z
-			)
-			pushTemplateFace( push, quad, wx, wy, wz, color1, color2, color3, color4, meta1, meta2, meta3, meta4 )
+			if ctx.l2 then
+				ctx.emitL2( quad, id, bx, by, bz, wx, wy, wz, emission )
+			else
+				local color1, color2, color3, color4 = quadCornerColorValues(
+					quad.shade, bx, by, bz, id, f, emission, emitLightStyle,
+					quad.c1x, quad.c1y, quad.c1z, quad.c2x, quad.c2y, quad.c2z, quad.c3x, quad.c3y, quad.c3z, quad.c4x, quad.c4y, quad.c4z
+				)
+				local meta1, meta2, meta3, meta4 = faceMetaValues(
+					lightMetaFast, shadeIndexForFace( f ), bx, by, bz, id, f, li, emission, quad.faceCubic, quad.quadLightEmission,
+					quad.c1x, quad.c1y, quad.c1z, quad.c2x, quad.c2y, quad.c2z, quad.c3x, quad.c3y, quad.c3z, quad.c4x, quad.c4y, quad.c4z
+				)
+				pushTemplateFace( push, quad, wx, wy, wz, color1, color2, color3, color4, meta1, meta2, meta3, meta4 )
+			end
 		end
 	end
 	return true
@@ -626,6 +678,9 @@ local function emitConnectionShapeBlockTemplate( ctx, kind, b, id, orient, bx, b
 		local quad = template[qi]
 		local f = quad.faceIndex
 		if not quad.neighborCheck or not shapeFaceNeighborCoveredAt( id, quad.box, f, bx, by, bz, lx, ly, lz ) then
+			if ctx.l2 then
+				ctx.emitL2( quad, id, bx, by, bz, wx, wy, wz, emission )
+			else
 				local color1, color2, color3, color4 = quadCornerColorValues(
 					quad.shade, bx, by, bz, id, f, emission, emitLightStyle,
 					quad.c1x, quad.c1y, quad.c1z, quad.c2x, quad.c2y, quad.c2z, quad.c3x, quad.c3y, quad.c3z, quad.c4x, quad.c4y, quad.c4z
@@ -635,6 +690,7 @@ local function emitConnectionShapeBlockTemplate( ctx, kind, b, id, orient, bx, b
 					quad.c1x, quad.c1y, quad.c1z, quad.c2x, quad.c2y, quad.c2z, quad.c3x, quad.c3y, quad.c3z, quad.c4x, quad.c4y, quad.c4z
 				)
 				pushTemplateFace( push, quad, wx, wy, wz, color1, color2, color3, color4, meta1, meta2, meta3, meta4 )
+			end
 		end
 	end
 	return true
@@ -683,10 +739,11 @@ local function emitConnectionShapeBlockLegacy( ctx, kind, b, id, orient, bx, by,
 end
 
 local function emitConnectionShapeBlock( ctx, kind, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, push, lightMetaFast, shapeFaceCoveredAt, shapeFaceNeighborCoveredAt, currentEmitLightStyle )
-	if connectionVisibleTemplateEnabled()
+	if ( ctx.l2 or connectionVisibleTemplateEnabled() )
 		and emitConnectionShapeBlockTemplate( ctx, kind, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, push, lightMetaFast, shapeFaceNeighborCoveredAt, currentEmitLightStyle ) then
 		return true
 	end
+	if ctx.l2 then return false end -- The caller can emit native box quads.
 	return emitConnectionShapeBlockLegacy( ctx, kind, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, push, lightMetaFast, shapeFaceCoveredAt, currentEmitLightStyle )
 end
 
@@ -701,12 +758,17 @@ end
 
 local function emitCrossQuad( ctx, push, lightMeta, currentEmitLightStyle, corners, normal, color, tile, bx, by, bz, id, faceIndex, wx, wy, wz )
 	local emission = stateEmission( ctx, id, bx, by, bz )
+	if ctx.l2 then
+		return emitNativeArrays( ctx, id, bx, by, bz, wx, wy, wz, faceIndex, normal, color, emission,
+			MC.RenderLightBuffer.KIND.CROSS, corners, nil, tile )
+	end
 	local emitLightStyle = currentEmitLightStyle()
 	local color1, color2, color3, color4 = quadCornerColors( color, bx, by, bz, id, faceIndex, corners, emission, emitLightStyle )
-	local meta1 = lightMeta( color, bx, by, bz, id, faceIndex, corners[1], emission, nil, nil, 0 )
-	local meta2 = lightMeta( color, bx, by, bz, id, faceIndex, corners[2], emission, nil, nil, 0 )
-	local meta3 = lightMeta( color, bx, by, bz, id, faceIndex, corners[3], emission, nil, nil, 0 )
-	local meta4 = lightMeta( color, bx, by, bz, id, faceIndex, corners[4], emission, nil, nil, 0 )
+	local kind = MC.RenderLightBuffer.KIND.CROSS
+	local meta1 = lightMeta( color, bx, by, bz, id, faceIndex, corners[1], emission, nil, nil, 0, 0, kind, 0, 0, 1 )
+	local meta2 = lightMeta( color, bx, by, bz, id, faceIndex, corners[2], emission, nil, nil, 0, 0, kind, 0, 0, 2 )
+	local meta3 = lightMeta( color, bx, by, bz, id, faceIndex, corners[3], emission, nil, nil, 0, 0, kind, 0, 0, 3 )
+	local meta4 = lightMeta( color, bx, by, bz, id, faceIndex, corners[4], emission, nil, nil, 0, 0, kind, 0, 0, 4 )
 	local tri = C.TRI
 	for t = 1, 6 do
 		local ci = tri[t]
@@ -793,11 +855,16 @@ local function emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle, verts
 	local x3, y3, z3 = cornerXYZ( lightCorners[3] )
 	local x4, y4, z4 = cornerXYZ( lightCorners[4] )
 	local faceCubic = quadFaceCubic( faceIndex, id, 0, x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4 )
+	if ctx.l2 then
+		return emitNativeArrays( ctx, id, bx, by, bz, 0, 0, 0, faceIndex, normal, shade, emission,
+			MC.RenderLightBuffer.KIND.FLUID, lightCorners, verts, tile, uvCorners, faceCubic )
+	end
 	local color1, color2, color3, color4 = quadCornerColors( shade, bx, by, bz, id, faceIndex, lightCorners, emission, emitLightStyle )
-	local meta1 = lightMeta( shade, bx, by, bz, id, faceIndex, lightCorners[1], emission, nil, faceCubic, 0 )
-	local meta2 = lightMeta( shade, bx, by, bz, id, faceIndex, lightCorners[2], emission, nil, faceCubic, 0 )
-	local meta3 = lightMeta( shade, bx, by, bz, id, faceIndex, lightCorners[3], emission, nil, faceCubic, 0 )
-	local meta4 = lightMeta( shade, bx, by, bz, id, faceIndex, lightCorners[4], emission, nil, faceCubic, 0 )
+	local kind = MC.RenderLightBuffer.KIND.FLUID
+	local meta1 = lightMeta( shade, bx, by, bz, id, faceIndex, lightCorners[1], emission, nil, faceCubic, 0, 0, kind, 0, 0, 1 )
+	local meta2 = lightMeta( shade, bx, by, bz, id, faceIndex, lightCorners[2], emission, nil, faceCubic, 0, 0, kind, 0, 0, 2 )
+	local meta3 = lightMeta( shade, bx, by, bz, id, faceIndex, lightCorners[3], emission, nil, faceCubic, 0, 0, kind, 0, 0, 3 )
+	local meta4 = lightMeta( shade, bx, by, bz, id, faceIndex, lightCorners[4], emission, nil, faceCubic, 0, 0, kind, 0, 0, 4 )
 	local tri = C.TRI
 	for t = 1, 6 do
 		local ci = tri[t]
@@ -838,9 +905,10 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 	if not kind then return false end
 	local fluidEmission = MC.BlockLightEmission and MC.BlockLightEmission( id ) or 0
 	local quad = fluidQuadScratch( ctx )
+	local size = ctx.blockSize or MC.API.Coords.BlockSize()
 
 	local x0, y0, z0 = wx, wy, wz
-	local x1, y1 = wx + C.BS, wy + C.BS
+	local x1, y1 = wx + size, wy + size
 	local bottom = z0
 	if not fluidGeometryAt then return false end
 	local h00, h10, h11, h01, renderUp, renderDown, renderXP, renderXN, renderYP, renderYN =
@@ -850,7 +918,7 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 	local rh10 = math.max( h10 - topOffset, 0 )
 	local rh11 = math.max( h11 - topOffset, 0 )
 	local rh01 = math.max( h01 - topOffset, 0 )
-	local z00, z10, z11, z01 = z0 + rh00 * C.BS, z0 + rh10 * C.BS, z0 + rh11 * C.BS, z0 + rh01 * C.BS
+	local z00, z10, z11, z01 = z0 + rh00 * size, z0 + rh10 * size, z0 + rh11 * size, z0 + rh01 * size
 	local tile
 
 	if renderUp then
@@ -882,7 +950,7 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 		)
 	end
 
-	local bottomZ = bottom + ( renderDown and C.FLUID_FACE_OFFSET or 0 ) * C.BS
+	local bottomZ = bottom + ( renderDown and C.FLUID_FACE_OFFSET or 0 ) * size
 	if renderDown then
 		tile = LiquidStillTiles[kind] or liquidFace( id, MC.Face.BOTTOM, orient )
 		emitFluidQuad( ctx, push, lightMeta, currentEmitLightStyle,
@@ -899,7 +967,7 @@ function RM.EmitLiquidBlock( ctx, id, orient, bx, by, bz, wx, wy, wz, push, ligh
 	-- not part of the block-face material contract.
 	local sideBottomV = 16
 	local sideBottom = bottomZ
-	local sideInset = C.FLUID_FACE_OFFSET * C.BS
+	local sideInset = C.FLUID_FACE_OFFSET * size
 
 	if renderXP then
 		tile = liquidFace( id, MC.Face.XP, orient )
@@ -1041,6 +1109,13 @@ local function emitShapeBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz,
 				local c2x, c2y, c2z = boxFaceCornerValues( box, f, 2 )
 				local c3x, c3y, c3z = boxFaceCornerValues( box, f, 3 )
 				local c4x, c4y, c4z = boxFaceCornerValues( box, f, 4 )
+				if ctx.l2 then
+					emitNativeValues( ctx, id, bx, by, bz, wx, wy, wz, f, nrm, col, emission, quadLightEmission, nil,
+						c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z,
+						shapeFaceUVs( fd, nil, f, tile, u0, v0, u1, v1,
+							c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z ) )
+					break
+				end
 				local emitLightStyle = currentEmitLightStyle()
 				local faceCubic = quadFaceCubic( f, id, orient, c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z )
 				local color1, color2, color3, color4 = quadCornerColorValues(
@@ -1099,7 +1174,7 @@ local function emitStatePlanBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy,
 			emitModelBlockTemplate(
 				ctx, template, id, bx, by, bz, wx, wy, wz, lx, ly, lz, li,
 				ctx.push, ctx.lightMetaFast, ctx.currentEmitLightStyle,
-				not ( ctx.currentVisual and ctx.currentVisual.cullGeneratedFaces == false )
+				not ( ctx.currentVisual and ctx.currentVisual.cullGeneratedFaces == false ), modelId
 			)
 			rendered = true
 		end
@@ -1130,16 +1205,18 @@ emitLiquidBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx
 	return emitShapeBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
 end
 
-emitFullCubeBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
+emitFullCubeBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer, visibleFaceMask, visibleFaceCount )
 	local meshPerf = ctx.meshPerf
 	local meshProbe = ctx.meshProbe
 	local lightMetaFast = ctx.lightMetaFast
 	local flush = ctx.flush
 	local push = ctx.push
 	local emission = stateEmission( ctx, id, bx, by, bz )
-	local fullVisibleStart = meshProbe and SysTime() or nil
-	local visibleFaceMask, visibleFaceCount = ctx.visibleFaceMask( id, lx, ly, lz, bx, by, bz )
-	if fullVisibleStart then meshPerfAdd( meshPerf, "fullVisibleMS", fullVisibleStart ) end
+	if visibleFaceMask == nil then
+		local fullVisibleStart = meshProbe and SysTime() or nil
+		visibleFaceMask, visibleFaceCount = ctx.visibleFaceMask( id, lx, ly, lz, bx, by, bz )
+		if fullVisibleStart then meshPerfAdd( meshPerf, "fullVisibleMS", fullVisibleStart ) end
+	end
 	if visibleFaceMask == nil then return "fullCube", false, 0 end
 	meshPerf.fullVisibleFaces = meshPerf.fullVisibleFaces + visibleFaceCount
 	local directEmitVertexCount = visibleFaceCount * 6
@@ -1174,16 +1251,31 @@ emitFullCubeBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, 
 			local shadeIndex = shadeIndexForFace( f )
 			if faceStart then meshPerfAdd( meshPerf, "fullFaceMS", faceStart ) end
 			local colorStart = meshProbe and SysTime() or nil
-			local color1, color2, color3, color4 = fullCubeFaceCornerColors( shadeIndex, bx, by, bz, f, emission, emitLightStyle, receiveAO )
-			if colorStart then meshPerfAdd( meshPerf, "fullColorMS", colorStart ) end
-			local metaStart = meshProbe and SysTime() or nil
-			local c1, c2, c3, c4 = corners[1], corners[2], corners[3], corners[4]
-			local meta1 = lightMetaFast( shadeIndex, bx, by, bz, id, f, li, c1[1], c1[2], c1[3], emission, true, quadLightEmission )
-			local meta2 = lightMetaFast( shadeIndex, bx, by, bz, id, f, li, c2[1], c2[2], c2[3], emission, true, quadLightEmission )
-			local meta3 = lightMetaFast( shadeIndex, bx, by, bz, id, f, li, c3[1], c3[2], c3[3], emission, true, quadLightEmission )
-			local meta4 = lightMetaFast( shadeIndex, bx, by, bz, id, f, li, c4[1], c4[2], c4[3], emission, true, quadLightEmission )
-			if metaStart then meshPerfAdd( meshPerf, "fullMetaMS", metaStart ) end
-			pushFullCubeFace( push, wx, wy, wz, nrm, corners, baked, tile, u0, v0, u1, v1, rot, flipU, flipV, color1, color2, color3, color4, meta1, meta2, meta3, meta4, meshProbe, meshPerf )
+			if ctx.l2 then
+				local lightingCache = face.l2LightingByEmission
+				if not lightingCache then lightingCache = {} face.l2LightingByEmission = lightingCache end
+				local lighting = lightingCache[quadLightEmission]
+				if not lighting then
+					lighting = MC.RenderL2Lighting.BakeQuad( f, corners, { quadEmission = quadLightEmission } )
+					lightingCache[quadLightEmission] = lighting
+				end
+				local c1, c2, c3, c4 = corners[1], corners[2], corners[3], corners[4]
+				emitNativeValues( ctx, id, bx, by, bz, wx, wy, wz, f, nrm, face.sh, emission, quadLightEmission, lighting,
+					c1[1], c1[2], c1[3], c2[1], c2[2], c2[3], c3[1], c3[2], c3[3], c4[1], c4[2], c4[3],
+					fullCubeFaceUVs( corners, baked, tile, u0, v0, u1, v1, rot, flipU, flipV ) )
+			else
+				local color1, color2, color3, color4 = fullCubeFaceCornerColors( shadeIndex, bx, by, bz, f, emission, emitLightStyle, receiveAO )
+				if colorStart then meshPerfAdd( meshPerf, "fullColorMS", colorStart ) end
+				local metaStart = meshProbe and SysTime() or nil
+				local c1, c2, c3, c4 = corners[1], corners[2], corners[3], corners[4]
+				local kind = MC.RenderLightBuffer.KIND.BOX
+				local meta1 = lightMetaFast( shadeIndex, bx, by, bz, id, f, li, c1[1], c1[2], c1[3], emission, true, quadLightEmission, 0, kind, 0, 0, 1 )
+				local meta2 = lightMetaFast( shadeIndex, bx, by, bz, id, f, li, c2[1], c2[2], c2[3], emission, true, quadLightEmission, 0, kind, 0, 0, 2 )
+				local meta3 = lightMetaFast( shadeIndex, bx, by, bz, id, f, li, c3[1], c3[2], c3[3], emission, true, quadLightEmission, 0, kind, 0, 0, 3 )
+				local meta4 = lightMetaFast( shadeIndex, bx, by, bz, id, f, li, c4[1], c4[2], c4[3], emission, true, quadLightEmission, 0, kind, 0, 0, 4 )
+				if metaStart then meshPerfAdd( meshPerf, "fullMetaMS", metaStart ) end
+				pushFullCubeFace( push, wx, wy, wz, nrm, corners, baked, tile, u0, v0, u1, v1, rot, flipU, flipV, color1, color2, color3, color4, meta1, meta2, meta3, meta4, meshProbe, meshPerf )
+			end
 		end
 	end
 	return "fullCube", directEmitCheapFullCube, directEmitVertexCount
@@ -1197,9 +1289,9 @@ BlockEmitters.liquid = emitLiquidBlockRecord
 BlockEmitters.fullCube = emitFullCubeBlockRecord
 BlockEmitters.shape = emitShapeBlockRecord
 
-local function emitSelectedBlock( emitter, ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
+local function emitSelectedBlock( emitter, ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer, visibleFaceMask, visibleFaceCount )
 	emitter = emitter or BlockEmitters.shape
-	return emitter( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
+	return emitter( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer, visibleFaceMask, visibleFaceCount )
 end
 
 local WaterBlockId
@@ -1214,6 +1306,7 @@ local function emitWaterloggedOverlay( ctx, stateId, bx, by, bz, wx, wy, wz, tar
 	if not isWaterloggedState or not isWaterloggedState( stateId ) then return 0 end
 	local waterId = waterBlockId()
 	if not waterId then return 0 end
+	if ctx.l2 then targetBuffer = ctx.bufferForBlock( targetBuffer, waterId ) end
 	local previous = ctx.getCur()
 	ctx.prepareBlockCacheBuffer( targetBuffer )
 	local emitted = RM.EmitLiquidBlock(
@@ -1226,6 +1319,7 @@ local function emitWaterloggedOverlay( ctx, stateId, bx, by, bz, wx, wy, wz, tar
 		MC.AppendCachedBlockEmission( {
 			verts = overlay.verts,
 			light = overlay.light,
+			l2 = overlay.l2, pixels = overlay.pixels,
 			vertexCount = vertexCount,
 			hasSecondaryUV = overlay.hasSecondaryUV == true,
 		}, targetBuffer, flush, meshPerf, C.VERT_LIMIT )
@@ -1252,123 +1346,152 @@ function RM.EmitBlock( ctx, li, stateId )
 	local buffersForLocal = ctx.buffersForLocal
 	local styleForBuffer = ctx.styleForBuffer
 	local getCur = ctx.getCur
-		meshPerf.blocksVisited = meshPerf.blocksVisited + 1
-		local lx, ly, lz = DecodeLocal( li )
-		local buffers = buffersForLocal( lx, ly, lz )
-		if not buffers then return end
-		local bx, by, bz = bxo + lx, byo + ly, bzo + lz
-		local visual = stateId and MC.ResolveBlockStateVisual and MC.ResolveBlockStateVisual( stateId, bx, by, bz ) or nil
-		if not visual then
-			MC.DropBlockEmitCacheRecord( key, MC.RenderSectionIndexForLocal( lx, ly, lz ), li )
-			return
-		end
-		local id = visual.id
-		local orient = visual.renderOrient
-		ctx.currentStateId = stateId
-		ctx.currentVisual = visual
-		local wx, wy, wz = lx * C.BS, ly * C.BS, lz * C.BS
-		local blockSectionIndex = MC.RenderSectionIndexForLocal( lx, ly, lz )
+	meshPerf.blocksVisited = meshPerf.blocksVisited + 1
+	local lx, ly, lz = DecodeLocal( li )
+	local buffers = buffersForLocal( lx, ly, lz )
+	if not buffers then return end
+	local bx, by, bz = bxo + lx, byo + ly, bzo + lz
+	local visual = stateId and MC.ResolveBlockStateVisual and MC.ResolveBlockStateVisual( stateId, bx, by, bz ) or nil
+	if not visual then
+		MC.DropBlockEmitCacheRecord( key, MC.RenderSectionIndexForLocal( lx, ly, lz ), li )
+		error( { code = "render_l2_visual_missing",
+			message = string.format( "state %s has no visual at (%s,%s,%s)", tostring( stateId ), bx, by, bz ) }, 0 )
+	end
+	local id = visual.id
+	local orient = visual.renderOrient
+	ctx.currentStateId = stateId
+	ctx.currentVisual = visual
+	local size = ctx.blockSize or C.BS
+	local wx, wy, wz = lx * size, ly * size, lz * size
+	local blockSectionIndex = MC.RenderSectionIndexForLocal( lx, ly, lz )
 
-		if meshDebugFullCubeOnly() and not stateFullCube( ctx, id, orient, bx, by, bz ) then
-			MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
-			if MC.ClearBlockCacheDirtySlot then MC.ClearBlockCacheDirtySlot( key, blockSectionIndex, li ) end
-			return
-		end
+	if meshDebugFullCubeOnly() and not stateFullCube( ctx, id, orient, bx, by, bz ) then
+		MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
+		if MC.ClearBlockCacheDirtySlot then MC.ClearBlockCacheDirtySlot( key, blockSectionIndex, li ) end
+		return
+	end
 
-		local targetBuffer = stateTranslucent( ctx, id, bx, by, bz ) and buffers.translucent or buffers.opaque
-		local targetLightStyle = styleForBuffer( targetBuffer )
-		local cached = MC.GetCachedBlockEmission( key, blockSectionIndex, li, id, orient, stateId )
-		local blockNeedsRecolor = sectionNeedsFullRecolor or ( blockLightDirtySection and blockLightDirtySection[li] )
-		if cached and ( blockNeedsRecolor or cached.lightStyle ~= targetLightStyle ) then
-			local recolorStart = SysTime()
-			if recolorCachedBlockEmission( cached, targetLightStyle, meshPerf ) then
-				meshPerfAdd( meshPerf, "recolorMS", recolorStart )
-				meshPerf.blockCacheRecolors = meshPerf.blockCacheRecolors + 1
-			else
-				MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
-				cached = nil
-			end
-		end
-		if cached then
-			meshPerf.blockCacheHits = meshPerf.blockCacheHits + 1
-			local cacheAppendStart = meshProbe and SysTime() or nil
-			local appended = MC.AppendCachedBlockEmission( cached, targetBuffer, flush, meshPerf, C.VERT_LIMIT )
-			if cacheAppendStart then meshPerfAdd( meshPerf, "cacheAppendMS", cacheAppendStart ) end
-			local overlayVertices = emitWaterloggedOverlay(
-				ctx, stateId, bx, by, bz, wx, wy, wz, buffers.translucent, flush, meshPerf
-			)
-			if appended > 0 or overlayVertices > 0 then meshPerf.blocksRendered = meshPerf.blocksRendered + 1 end
-			local cachedKind = cached.kind or "shape"
-			meshPerfAddBlockKind( meshPerf, cachedKind )
-			return
-		end
-
-		meshPerf.blockCacheMisses = meshPerf.blockCacheMisses + 1
-		ctx.setCur( nil )
-
-		local emitStart = SysTime()
-		local b = visual and visual.block or blocksById[id]
-		local emitter = selectBlockEmitter( ctx, b, id, orient, blockIsFullCube, bx, by, bz )
-		local emitKind, directEmitCheapFullCube, directEmitVertexCount = emitSelectedBlock(
-			emitter,
-			ctx,
-			b,
-			id,
-			orient,
-			bx,
-			by,
-			bz,
-			wx,
-			wy,
-			wz,
-			lx,
-			ly,
-			lz,
-			li,
-			targetBuffer
-		)
-		if ctx.visibility.error then return false end
-		emitKind = emitKind or "shape"
-		directEmitCheapFullCube = directEmitCheapFullCube == true
-		directEmitVertexCount = directEmitVertexCount or 0
-		local cur = getCur()
-		local emittedVertices = directEmitCheapFullCube and directEmitVertexCount or ( cur and cur.nv or 0 )
-		if directEmitCheapFullCube then
-			MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
-			if MC.ClearBlockCacheDirtySlot then MC.ClearBlockCacheDirtySlot( key, blockSectionIndex, li ) end
-		else
-			local blockRecord = cur and {
-				verts = cur.verts,
-				light = cur.light,
-				vertexCount = emittedVertices,
-				material = targetBuffer.material,
-				translucent = targetBuffer.translucent,
-				hasSecondaryUV = cur.hasSecondaryUV == true,
-				kind = emitKind,
-			} or nil
-			local retainBlock = shouldStoreBlockEmissionCache( emitKind, emittedVertices )
-			if retainBlock then
-				blockRecord = MC.StoreBlockEmissionCache( key, blockSectionIndex, li, id, orient, targetLightStyle, blockRecord, stateId )
-			else
+	local cached = MC.GetCachedBlockEmission( key, blockSectionIndex, li, id, orient, stateId )
+	local blockNeedsRecolor = sectionNeedsFullRecolor or ( blockLightDirtySection and blockLightDirtySection[li] )
+	if cached and ctx.l2 and ( blockNeedsRecolor or not cached.l2 or cached.blockSize ~= size ) then
+		MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
+		cached = nil
+	end
+	local b = visual.block or blocksById[id]
+	local emitter, visibleFaceMask, visibleFaceCount
+	if not cached then
+		emitter = selectBlockEmitter( ctx, b, id, orient, blockIsFullCube, bx, by, bz )
+		if emitter == BlockEmitters.fullCube then
+			local fullVisibleStart = meshProbe and SysTime() or nil
+			visibleFaceMask, visibleFaceCount = ctx.visibleFaceMask( id, lx, ly, lz, bx, by, bz )
+			if fullVisibleStart then meshPerfAdd( meshPerf, "fullVisibleMS", fullVisibleStart ) end
+			if visibleFaceMask == nil then return false end
+			if visibleFaceMask == 0 and not ( isWaterloggedState and isWaterloggedState( stateId ) ) then
 				MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
 				if MC.ClearBlockCacheDirtySlot then MC.ClearBlockCacheDirtySlot( key, blockSectionIndex, li ) end
-			end
-			MC.AppendCachedBlockEmission( blockRecord, targetBuffer, flush, meshPerf, C.VERT_LIMIT )
-			if not retainBlock then
-				ctx.releaseScratch( cur )
-				cur = nil
-				ctx.setCur( nil )
+				meshPerfAddBlockKind( meshPerf, "fullCube" )
+				return
 			end
 		end
+	end
+	local targetBuffer = stateTranslucent( ctx, id, bx, by, bz ) and buffers.translucent or buffers.opaque
+	if ctx.l2 then targetBuffer = ctx.bufferForBlock( targetBuffer, id ) end
+	local targetLightStyle = styleForBuffer( targetBuffer )
+	if cached and not ctx.l2 and ( blockNeedsRecolor or cached.lightStyle ~= targetLightStyle ) then
+		local recolorStart = SysTime()
+		if recolorCachedBlockEmission( cached, targetLightStyle, meshPerf ) then
+			meshPerfAdd( meshPerf, "recolorMS", recolorStart )
+			meshPerf.blockCacheRecolors = meshPerf.blockCacheRecolors + 1
+		else
+			MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
+			cached = nil
+		end
+	end
+	if cached then
+		meshPerf.blockCacheHits = meshPerf.blockCacheHits + 1
+		local cacheAppendStart = meshProbe and SysTime() or nil
+		local appended = MC.AppendCachedBlockEmission( cached, targetBuffer, flush, meshPerf, C.VERT_LIMIT )
+		if cacheAppendStart then meshPerfAdd( meshPerf, "cacheAppendMS", cacheAppendStart ) end
 		local overlayVertices = emitWaterloggedOverlay(
 			ctx, stateId, bx, by, bz, wx, wy, wz, buffers.translucent, flush, meshPerf
 		)
-		if emittedVertices > 0 or overlayVertices > 0 then
-			meshPerf.blocksRendered = meshPerf.blocksRendered + 1
+		if appended > 0 or overlayVertices > 0 then meshPerf.blocksRendered = meshPerf.blocksRendered + 1 end
+		local cachedKind = cached.kind or "shape"
+		meshPerfAddBlockKind( meshPerf, cachedKind )
+		return
+	end
+
+	meshPerf.blockCacheMisses = meshPerf.blockCacheMisses + 1
+	ctx.setCur( nil )
+
+	local emitStart = meshProbe and SysTime() or nil
+	emitter = emitter or selectBlockEmitter( ctx, b, id, orient, blockIsFullCube, bx, by, bz )
+	local emitKind, directEmitCheapFullCube, directEmitVertexCount = emitSelectedBlock(
+		emitter,
+		ctx,
+		b,
+		id,
+		orient,
+		bx,
+		by,
+		bz,
+		wx,
+		wy,
+		wz,
+		lx,
+		ly,
+		lz,
+		li,
+		targetBuffer,
+		visibleFaceMask,
+		visibleFaceCount
+	)
+	if ctx.visibility.error then return false end
+	emitKind = emitKind or "shape"
+	directEmitCheapFullCube = directEmitCheapFullCube == true
+	directEmitVertexCount = directEmitVertexCount or 0
+	local cur = getCur()
+	local emittedVertices = directEmitCheapFullCube and directEmitVertexCount or ( cur and cur.nv or 0 )
+	if directEmitCheapFullCube then
+		MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
+		if MC.ClearBlockCacheDirtySlot then MC.ClearBlockCacheDirtySlot( key, blockSectionIndex, li ) end
+	else
+		local blockRecord = cur and {
+			verts = cur.verts,
+			light = cur.light,
+			l2 = cur.l2, pixels = cur.pixels,
+			blockSize = size,
+			vertexCount = emittedVertices,
+			material = targetBuffer.material,
+			translucent = targetBuffer.translucent,
+			hasSecondaryUV = cur.hasSecondaryUV == true,
+			kind = emitKind,
+		} or nil
+		local retainBlock = shouldStoreBlockEmissionCache( emitKind, emittedVertices )
+		if retainBlock then
+			blockRecord = MC.StoreBlockEmissionCache( key, blockSectionIndex, li, id, orient, targetLightStyle, blockRecord, stateId )
+		else
+			MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
+			if MC.ClearBlockCacheDirtySlot then MC.ClearBlockCacheDirtySlot( key, blockSectionIndex, li ) end
 		end
-		meshPerfAddBlockKind( meshPerf, emitKind )
+		MC.AppendCachedBlockEmission( blockRecord, targetBuffer, flush, meshPerf, C.VERT_LIMIT )
+		if not retainBlock then
+			ctx.releaseScratch( cur )
+			cur = nil
+			ctx.setCur( nil )
+		end
+	end
+	local overlayVertices = emitWaterloggedOverlay(
+		ctx, stateId, bx, by, bz, wx, wy, wz, buffers.translucent, flush, meshPerf
+	)
+	if emittedVertices > 0 or overlayVertices > 0 then
+		meshPerf.blocksRendered = meshPerf.blocksRendered + 1
+	end
+	meshPerfAddBlockKind( meshPerf, emitKind )
+	if emitStart then
 		local emitMS = meshPerfElapsedMS( emitStart )
 		meshPerf.emitMS = meshPerf.emitMS + emitMS
 		meshPerfAddKindDuration( meshPerf, emitKind, emitMS )
+	end
 	ctx.setCur( cur )
 end

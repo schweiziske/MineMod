@@ -67,6 +67,10 @@ local function markChunkSectionDirty( key, sectionIndex, rateLimited )
 	wakeMeshBuilder()
 end
 
+function MC.RequestRenderSectionGeometry( key, sectionIndex, rateLimited )
+	markChunkSectionDirty( key, sectionIndex, rateLimited ~= false )
+end
+
 local function markChunkSectionLightDirty( key, sectionIndex, rateLimited )
 	if not key or not sectionIndex then return end
 	if MC.MarkBlockAnimationLightDirty then MC.MarkBlockAnimationLightDirty( key ) end
@@ -89,6 +93,21 @@ end
 
 function MC.MarkLightSectionDirty( key, sectionIndex, rateLimited )
 	markChunkSectionLightDirty( key, sectionIndex, rateLimited )
+end
+
+function MC.MarkAllMeshLightingDirty( rateLimited )
+	local count = 0
+	for key, sections in pairs( MC.MeshSections ) do
+		if MC.World[key] then
+			for sectionIndex in pairs( sections ) do
+				-- Later partial light marks must not reuse corners from before this reset.
+				clearSectionBlockEmitCache( key, sectionIndex )
+				markChunkSectionLightDirty( key, sectionIndex, rateLimited )
+				count = count + 1
+			end
+		end
+	end
+	return count
 end
 
 function MC.MarkLightCellDirty( bx, by, bz )
@@ -229,11 +248,13 @@ local function lazyMeshBuildDistance()
 end
 
 local dirtyKeys, dirtyScores, dirtyPriorities = {}, {}, {}
+local dirtyPinnedOnly = {}
 
 local function clearDirtySelection()
 	for i = 1, #dirtyKeys do
 		local key = dirtyKeys[i]
 		dirtyKeys[i], dirtyScores[key], dirtyPriorities[key] = nil, nil, nil
+		dirtyPinnedOnly[key] = nil
 	end
 end
 
@@ -248,7 +269,7 @@ end
 
 -- The sparse maps remain authoritative for network/legacy writers. Only the
 -- sorted selection is scratch; it never retains section tables across builds.
-local function sortedDirtyKeys( dirty, rateLimited, buildDistance, pcx, pcy, pcz, blockSize )
+local function sortedDirtyKeys( dirty, rateLimited, buildDistance, pcx, pcy, pcz, blockSize, allowPinned )
 	clearDirtySelection()
 	local chunkW, chunkH
 	if pcx then
@@ -271,7 +292,7 @@ local function sortedDirtyKeys( dirty, rateLimited, buildDistance, pcx, pcy, pcz
 			if rateLimited then rateLimited[key] = nil end
 		else
 			depth = depth + 1
-			local score
+			local score, pinnedOnly
 			if pcx then
 				local cx, cy, cz = MC.ChunkKeyToCoords( key )
 				if cx then
@@ -285,7 +306,18 @@ local function sortedDirtyKeys( dirty, rateLimited, buildDistance, pcx, pcy, pcz
 							visible = distanceSq <= maxDistSq
 						end
 					end
-					if visible then score = distanceSq end
+					if visible then score = distanceSq
+					elseif allowPinned then
+						local pins = MC.RenderGeometryStore.GetPinnedSections( key )
+						if pins then
+							for index in pairs( pins ) do
+								if sections == true or sections[index] then
+									score, pinnedOnly = distanceSq, true
+									break
+								end
+							end
+						end
+					end
 				elseif not maxDistSq then
 					score = math.huge
 				end
@@ -295,7 +327,8 @@ local function sortedDirtyKeys( dirty, rateLimited, buildDistance, pcx, pcy, pcz
 			if score then
 				dirtyKeys[#dirtyKeys + 1] = key
 				dirtyScores[key] = score
-				dirtyPriorities[key] = rateLimited and rateLimited[key] == true and 2 or 1
+				dirtyPinnedOnly[key] = pinnedOnly
+				dirtyPriorities[key] = ( pinnedOnly or rateLimited and rateLimited[key] == true ) and 2 or 1
 			end
 		end
 	end
@@ -459,7 +492,7 @@ local function retireLightDirtySection( key, sectionIndex )
 	end
 end
 
-local function buildDirtyMeshKey( key, sections, rateLimited, budget )
+local function buildDirtyMeshKey( key, sections, rateLimited, budget, pinnedOnly )
 	if not sections then return 0 end
 	if sections == true then
 		sections = {}
@@ -488,7 +521,7 @@ local function buildDirtyMeshKey( key, sections, rateLimited, budget )
 
 	local built = 0
 	for sectionIndex = 1, RENDER_SECTION_COUNT do
-		if sections[sectionIndex] then
+		if sections[sectionIndex] and ( not pinnedOnly or MC.RenderGeometryStore.IsSectionPinned( key, sectionIndex ) ) then
 			if not tryBuildMeshSection( key, sectionIndex, false, rateLimited, budget ) then break end
 			if MC.RenderPipeline and MC.RenderPipeline.NoteDirtyBuild then MC.RenderPipeline.NoteDirtyBuild( 1 ) end
 			built = built + 1
@@ -505,7 +538,7 @@ local function buildDirtyMeshKey( key, sections, rateLimited, budget )
 	return built
 end
 
-local function buildLightDirtyMeshKey( key, sections, rateLimited, budget )
+local function buildLightDirtyMeshKey( key, sections, rateLimited, budget, pinnedOnly )
 	if not sections then return 0 end
 	if budget.native then
 		-- Native geometry carries stable GPU-light atlas slots; light dirties are
@@ -518,7 +551,8 @@ local function buildLightDirtyMeshKey( key, sections, rateLimited, budget )
 	for sectionIndex = 1, RENDER_SECTION_COUNT do
 		local geometryDirty = MC.MeshDirty[key]
 		if sections[sectionIndex] and geometryDirty ~= true
-		and not ( istable( geometryDirty ) and geometryDirty[sectionIndex] ) then
+		and not ( istable( geometryDirty ) and geometryDirty[sectionIndex] )
+		and ( not pinnedOnly or MC.RenderGeometryStore.IsSectionPinned( key, sectionIndex ) ) then
 			if not tryBuildMeshSection( key, sectionIndex, true, rateLimited, budget ) then break end
 			built = built + 1
 			if MC.MeshLightDirty[key] ~= sections then break end
@@ -534,7 +568,7 @@ end
 
 local function buildSelectedDirtyKeys( dirty, rateLimited, lightOnly, buildDistance, pcx, pcy, pcz, blockSize, budget )
 	local selectionStart = SysTime()
-	local keys, depth = sortedDirtyKeys( dirty, rateLimited, buildDistance, pcx, pcy, pcz, blockSize )
+	local keys, depth = sortedDirtyKeys( dirty, rateLimited, buildDistance, pcx, pcy, pcz, blockSize, not budget.native )
 	budget.selectionMS = budget.selectionMS + ( SysTime() - selectionStart ) * 1000
 	local keyCount, sectionCount = 0, 0
 	local eligible = #keys > 0
@@ -543,9 +577,9 @@ local function buildSelectedDirtyKeys( dirty, rateLimited, lightOnly, buildDista
 		local limited = dirtyPriorities[key] == 2
 		local built
 		if lightOnly then
-			built = buildLightDirtyMeshKey( key, MC.MeshLightDirty[key], limited, budget )
+			built = buildLightDirtyMeshKey( key, MC.MeshLightDirty[key], limited, budget, dirtyPinnedOnly[key] )
 		else
-			built = buildDirtyMeshKey( key, MC.MeshDirty[key], limited, budget )
+			built = buildDirtyMeshKey( key, MC.MeshDirty[key], limited, budget, dirtyPinnedOnly[key] )
 		end
 		if built > 0 then
 			keyCount, sectionCount = keyCount + 1, sectionCount + built
@@ -694,6 +728,8 @@ end
 
 -- free all meshes (used by mc_clear)
 function MC.FreeAllMeshes()
+	-- Empty sections have no flat draw-list entry but still own cache state.
+	for key in pairs( MC.MeshSections ) do MC.FreeChunkMesh( key ) end
 	for key in pairs( MC.Meshes ) do MC.FreeChunkMesh( key ) end
 	for key in pairs( MC.MeshesTrans ) do MC.FreeChunkMesh( key ) end
 	MC.MeshLightDirty = {}

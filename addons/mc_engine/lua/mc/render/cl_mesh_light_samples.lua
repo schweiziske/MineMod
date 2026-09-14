@@ -77,6 +77,7 @@ local MeshAOSampleHits, MeshAOSampleMisses = 0, 0
 local MeshSampleBaseX, MeshSampleBaseY, MeshSampleBaseZ = 0, 0, 0
 local MeshSampleLightingFn = nil
 local MeshSampleAOFn = nil
+local MeshSampleStateFn = nil
 local SAMPLE_CACHE_ORIGIN_PAD = 16
 local SAMPLE_CACHE_AXIS_BITS = 6
 local SAMPLE_CACHE_AXIS_SIZE = 64
@@ -231,8 +232,15 @@ end
 local function blockLightEmissionAt( sx, sy, sz )
 	if not MC.GetBlockState or not MC.BlockLightEmissionForState then return 0 end
 	local bx, by, bz = mathFloor( sx ), mathFloor( sy ), mathFloor( sz )
-	local stateId = MC.GetBlockState( bx, by, bz )
-	return MC.BlockLightEmissionForState( stateId, bx, by, bz ) or 0
+	local stateId
+	if MeshSampleStateFn then stateId = MeshSampleStateFn( bx, by, bz )
+	else stateId = MC.GetBlockState( bx, by, bz ) end
+	local emission = MC.BlockLightEmissionForState( stateId, bx, by, bz )
+	if MeshSampleStateFn and ( type( emission ) ~= "number" or emission ~= emission
+		or emission < 0 or emission > 15 or emission ~= mathFloor( emission ) ) then
+		error( "invalid raw light emission at " .. bx .. "," .. by .. "," .. bz, 0 )
+	end
+	return emission or 0
 end
 
 local function cachedMeshAOSample( sx, sy, sz )
@@ -326,7 +334,9 @@ local function minecraftShadeBrightnessSample( sx, sy, sz )
 		if cached ~= nil then return cached end
 	end
 	local bx, by, bz = mathFloor( sx ), mathFloor( sy ), mathFloor( sz )
-	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
+	local stateId
+	if MeshSampleStateFn then stateId = MeshSampleStateFn( bx, by, bz )
+	else stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0 end
 	local shadeBrightness = minecraftShadeBrightnessForState( stateId, bx, by, bz )
 	if key ~= nil then MeshShadeBrightnessCache[key] = shadeBrightness end
 	return shadeBrightness
@@ -347,7 +357,9 @@ local function translucentForSmoothLight( bx, by, bz )
 		local cached = MeshSmoothLightTranslucentCache[key]
 		if cached ~= nil then return cached end
 	end
-	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
+	local stateId
+	if MeshSampleStateFn then stateId = MeshSampleStateFn( bx, by, bz )
+	else stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0 end
 	local translucent = not solidRenderForSmoothLight( stateId, bx, by, bz )
 	if key ~= nil then MeshSmoothLightTranslucentCache[key] = translucent end
 	return translucent
@@ -412,7 +424,9 @@ local function smoothLightCenterPacked( bx, by, bz, faceIndex, selfEmission, fac
 	if not off then return packedSmoothLightAt( bx, by, bz, selfEmission ) end
 	local nbx, nby, nbz = bx + off[1], by + off[2], bz + off[3]
 	if faceCubic then return packedSmoothLightAt( nbx, nby, nbz, selfEmission ) end
-	local stateId = MC.GetBlockState and MC.GetBlockState( nbx, nby, nbz ) or 0
+	local stateId
+	if MeshSampleStateFn then stateId = MeshSampleStateFn( nbx, nby, nbz )
+	else stateId = MC.GetBlockState and MC.GetBlockState( nbx, nby, nbz ) or 0 end
 	if not solidRenderForSmoothLight( stateId, nbx, nby, nbz ) then
 		return packedSmoothLightAt( nbx, nby, nbz, selfEmission )
 	end
@@ -517,6 +531,72 @@ local function smoothSlotForFaceVertex( faceIndex, cx, cy, cz )
 	return faceVertexCornerIndex( faceIndex, cx, cy, cz )
 end
 
+local function checkedRawLighting( x, y, z, emission )
+	local brightness, level, block, sky = MC.SampleLighting( x, y, z, emission )
+	if type( block ) ~= "number" or block ~= block or block < 0 or block > 15 or block ~= mathFloor( block )
+		or type( sky ) ~= "number" or sky ~= sky or sky < 0 or sky > 15 or sky ~= mathFloor( sky ) then
+		error( "missing/invalid raw block or sky light at " .. x .. "," .. y .. "," .. z, 0 )
+	end
+	return brightness, level, block, sky
+end
+
+local function checkedRawState( x, y, z )
+	local state = MC.GetBlockState( x, y, z )
+	if type( state ) ~= "number" or state ~= state or state < 0 or state == math.huge or state ~= mathFloor( state ) then
+		error( "missing/invalid block state at " .. x .. "," .. y .. "," .. z, 0 )
+	end
+	if state ~= 0 then
+		local visual = resolveBlockStateVisual( state, x, y, z )
+		if not visual or not MC.Blocks[visual.id] then
+			error( "missing block visual for state " .. state, 0 )
+		end
+	end
+	return state
+end
+
+-- Native builds and diagnostic slices borrow raw-light caches synchronously.
+-- Restore them before the owner releases resources and reports any failure.
+function RM.withIsolatedRawLighting( bx, by, bz, fn, ... )
+	if not ( MC.SampleLighting and MC.GetBlockState and MC.BlockLightEmissionForState and MC.Blocks
+		and resolveBlockStateVisual and blockVisualIsTranslucent and blockVisualHasCollision and blockVisualIsFullCube ) then
+		error( "raw-light sampling dependencies are unavailable", 0 )
+	end
+	local levels, shades = MeshLightLevelCache, MeshShadeBrightnessCache
+	local translucent, corners = MeshSmoothLightTranslucentCache, MeshSmoothLightCornerStateCache
+	local hits, misses = MeshLightSampleHits, MeshLightSampleMisses
+	local ox, oy, oz = MeshSampleBaseX, MeshSampleBaseY, MeshSampleBaseZ
+	local lighting, state = MeshSampleLightingFn, MeshSampleStateFn
+	MeshLightLevelCache, MeshShadeBrightnessCache = {}, {}
+	MeshSmoothLightTranslucentCache, MeshSmoothLightCornerStateCache = {}, {}
+	MeshLightSampleHits, MeshLightSampleMisses = 0, 0
+	setMeshSampleCacheOrigin( bx, by, bz )
+	MeshSampleLightingFn, MeshSampleStateFn = checkedRawLighting, checkedRawState
+	local ok, result = pcall( fn, ... )
+	MeshLightLevelCache, MeshShadeBrightnessCache = levels, shades
+	MeshSmoothLightTranslucentCache, MeshSmoothLightCornerStateCache = translucent, corners
+	MeshLightSampleHits, MeshLightSampleMisses = hits, misses
+	MeshSampleBaseX, MeshSampleBaseY, MeshSampleBaseZ = ox, oy, oz
+	MeshSampleLightingFn, MeshSampleStateFn = lighting, state
+	if not ok then error( result, 0 ) end
+	return result
+end
+
+function RM.rawLightCellValues( bx, by, bz, emission )
+	if not MeshSampleStateFn then error( "raw light requires an isolated sampling slice", 0 ) end
+	local packed = packedSmoothLightAt( bx, by, bz, emission )
+	return smoothPackedBlock( packed ), smoothPackedSky( packed )
+end
+
+function RM.rawLightFaceVertexValues( meta, emission )
+	if not MeshSampleStateFn then error( "raw light requires an isolated sampling slice", 0 ) end
+	local l1, l2, l3, l4, s1, s2, s3, s4 = smoothLightCornerStateCached(
+		meta.bx, meta.by, meta.bz, meta.faceIndex, emission, meta.faceCubic )
+	local slot = smoothSlotForFaceVertex( meta.faceIndex, meta.cx, meta.cy, meta.cz )
+	local light = slot == 1 and l1 or slot == 2 and l2 or slot == 3 and l3 or l4
+	local shade = slot == 1 and s1 or slot == 2 and s2 or slot == 3 and s3 or s4
+	return smoothPackedBlock( light ), smoothPackedSky( light ), shade
+end
+
 local function renderedBrightnessFromSmoothPacked( packed, selfEmission )
 	local block = ( smoothPackedBlock( packed ) or 0 ) / 16
 	local sky = ( smoothPackedSky( packed ) or 0 ) / 16
@@ -535,13 +615,17 @@ local function smoothCornerBrightnessValues( bx, by, bz, faceIndex, cx, cy, cz, 
 	return renderedBrightnessFromSmoothPacked( l4, selfEmission )
 end
 
-local function minecraftSmoothCornerLightRGBValues( bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
+local function minecraftSmoothCornerLightLevelsValues( bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
 	local l1, l2, l3, l4 = smoothLightCornerStateCached( bx, by, bz, faceIndex, selfEmission, true )
 	local slot = smoothSlotForFaceVertex( faceIndex, cx, cy, cz )
 	local packed = slot == 1 and l1 or slot == 2 and l2 or slot == 3 and l3 or l4
-	return MC.SampleGlobalLightmapRGB(
-		math.max( smoothPackedBlock( packed ) / 16, clampLightLevel( selfEmission ) ),
-		smoothPackedSky( packed ) / 16 )
+	return math.max( smoothPackedBlock( packed ) / 16, clampLightLevel( selfEmission ) ),
+		smoothPackedSky( packed ) / 16
+end
+
+local function minecraftSmoothCornerLightRGBValues( bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
+	local block, sky = minecraftSmoothCornerLightLevelsValues( bx, by, bz, faceIndex, cx, cy, cz, selfEmission )
+	return MC.SampleGlobalLightmapRGB( block, sky )
 end
 
 local function smoothCornerBrightnessPacketValues( bx, by, bz, faceIndex, selfEmission, faceCubic )
@@ -608,6 +692,7 @@ RM.minecraftShadeBrightnessSample = minecraftShadeBrightnessSample
 RM.noteMeshLightingCacheStats = noteMeshLightingCacheStats
 RM.minecraftSmoothCornerBrightnessValues = minecraftSmoothCornerBrightnessValues
 RM.minecraftSmoothCornerLightRGBValues = minecraftSmoothCornerLightRGBValues
+RM.minecraftSmoothCornerLightLevelsValues = minecraftSmoothCornerLightLevelsValues
 RM.minecraftSmoothCornerBrightnessPacketValues = smoothCornerBrightnessPacketValues
 RM.minecraftSmoothCornerShadeBrightnessValues = minecraftSmoothCornerShadeBrightnessValues
 RM.minecraftSmoothCornerBrightness = minecraftSmoothCornerBrightness

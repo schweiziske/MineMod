@@ -122,10 +122,12 @@ local SUNSET_ORANGE = { 1.0, 0.62, 0.36 }
 -- 1:1 port of Minecraft 26.2's lightmap pipeline (out/ decompile):
 -- assets/minecraft/shaders/core/lightmap.fsh fed by
 -- LightmapRenderStateExtractor.extract() with the overworld defaults from
--- EnvironmentAttributes and the "day" timeline from Timelines.bootstrap().
+-- EnvironmentAttributes / DimensionTypes and the "day" timeline from Timelines.
 -- GMod has no night vision / darkness effect / boss overlay / weather, so
 -- those inputs sit at their vanilla no-effect values (0 / black).
 
+-- DimensionTypes overrides AMBIENT_LIGHT_COLOR with 0xFF0A0A0A in the overworld.
+local VANILLA_AMBIENT = 10 / 255
 -- EnvironmentAttributes.BLOCK_LIGHT_TINT default 0xFFD88C.
 local VANILLA_BLOCK_TINT = { 255 / 255, 216 / 255, 140 / 255 }
 -- Timelines.NIGHT_SKY_LIGHT_COLOR / NIGHT_SKY_LIGHT_FACTOR.
@@ -238,9 +240,8 @@ local function generateGlobalLightmapVanilla()
 	local skyFactor = sampleVanillaTrack( VANILLA_SKY_FACTOR_KEYS, ticks )
 	local skyColorR, skyColorG, skyColorB = sampleVanillaTrack( VANILLA_SKY_COLOR_KEYS, ticks )
 	local blockFactor = vanillaFlicker + 1.4
-	-- options.gamma, vanilla default 0.5; AMBIENT_LIGHT_COLOR is black in the
-	-- overworld and night vision / darkness / boss darkening have no GMod
-	-- counterpart, so color starts at the sky+block sum below.
+	-- options.gamma, vanilla default 0.5. Dimension ambient is added before
+	-- sky/block light and this brightness curve, matching lightmap.fsh.
 	local brightnessFactor = convarNumber( MC.MeshGpuLightmapVanillaGamma, 0.5, 0, 1 )
 
 	render.PushRenderTarget( target )
@@ -257,9 +258,9 @@ local function generateGlobalLightmapVanilla()
 					-- warm tint at mid levels, near white at 0 and 15.
 					local parabolic = ( 2 * blockLevel - 1 ) * ( 2 * blockLevel - 1 )
 					local whiteMix = 0.9 * parabolic
-					local r = skyR + ( VANILLA_BLOCK_TINT[1] + ( 1 - VANILLA_BLOCK_TINT[1] ) * whiteMix ) * blockBrightness
-					local g = skyG + ( VANILLA_BLOCK_TINT[2] + ( 1 - VANILLA_BLOCK_TINT[2] ) * whiteMix ) * blockBrightness
-					local bl = skyB + ( VANILLA_BLOCK_TINT[3] + ( 1 - VANILLA_BLOCK_TINT[3] ) * whiteMix ) * blockBrightness
+					local r = VANILLA_AMBIENT + skyR + ( VANILLA_BLOCK_TINT[1] + ( 1 - VANILLA_BLOCK_TINT[1] ) * whiteMix ) * blockBrightness
+					local g = VANILLA_AMBIENT + skyG + ( VANILLA_BLOCK_TINT[2] + ( 1 - VANILLA_BLOCK_TINT[2] ) * whiteMix ) * blockBrightness
+					local bl = VANILLA_AMBIENT + skyB + ( VANILLA_BLOCK_TINT[3] + ( 1 - VANILLA_BLOCK_TINT[3] ) * whiteMix ) * blockBrightness
 					r = math.Clamp( r, 0, 1 )
 					g = math.Clamp( g, 0, 1 )
 					bl = math.Clamp( bl, 0, 1 )

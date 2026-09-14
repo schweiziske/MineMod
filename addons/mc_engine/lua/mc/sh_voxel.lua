@@ -1050,13 +1050,30 @@ end
 
 --- Iterate authoritative non-air states in deterministic local-index order.
 -- cb( bx,by,bz, lx,ly,lz, stateId )
-function MC.ForEachBlockState( chunk, cb )
+-- Optional stateFilter is evaluated per palette state, before decoding cells.
+function MC.ForEachBlockState( chunk, cb, stateFilter )
 	if not chunk or not cb then return end
 	if chunk.nativeStateStorage then
 		local backend = CLIENT and MC.ChunkBackends and MC.ChunkBackends.native or nil
 		local cells = backend and backend.GetChunkCells and backend.GetChunkCells( chunk ) or nil
 		if not cells then return end
 		local ox, oy, oz = chunk.cx * CS, chunk.cy * CS, chunk.cz * CH
+		if stateFilter then
+			local selected = {}
+			for i = 1, #cells, 2 do
+				local li, stateId = cells[i], cells[i + 1]
+				local accepted = selected[stateId]
+				if accepted == nil then
+					accepted = not not stateFilter( stateId )
+					selected[stateId] = accepted
+				end
+				if accepted then
+					local lx, ly, lz = MC.DecodeLocal( li )
+					cb( ox + lx, oy + ly, oz + lz, lx, ly, lz, stateId )
+				end
+			end
+			return
+		end
 		for i = 1, #cells, 2 do
 			local li, stateId = cells[i], cells[i + 1]
 			local lx, ly, lz = MC.DecodeLocal( li )
@@ -1074,7 +1091,7 @@ function MC.ForEachBlockState( chunk, cb )
 				local li = ( sectionIndex - 1 ) * STATE_SECTION_CELLS + sectionLocalIndex
 				local lx, ly, lz = MC.DecodeLocal( li )
 				cb( ox + lx, oy + ly, oz + lz, lx, ly, lz, stateId )
-			end )
+			end, stateFilter )
 		end
 	end
 end
