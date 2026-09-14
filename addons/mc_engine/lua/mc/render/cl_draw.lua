@@ -3,8 +3,8 @@
 -- Hot-path notes (LuaJIT): the per-frame loops iterate flat arrays with
 -- numeric for (pairs() is NYI and aborts traces), allocate nothing per chunk
 -- (chunk matrices are cached by key, frustum planes live in reused number
--- slots), and error protection is one pcall on a named function per mesh
--- list instead of a fresh closure + xpcall per call.
+-- slots), and error protection is one pcall on a named function per pack
+-- pass. Material bindings are reused across adjacent chunks within a pass.
 ------------------------------------------------------------------------- drawing
 local math_abs = math.abs
 local math_tan = math.tan
@@ -20,8 +20,6 @@ MC.MeshFrustumCull = MC.MeshFrustumCull or ( CreateClientConVar and CreateClient
 	"Skip drawing MC chunk meshes outside the view frustum" ) )
 MC.MeshDrawDistance = MC.MeshDrawDistance or ( CreateClientConVar and CreateClientConVar( "mc_mesh_draw_distance", "0", true, false,
 	"Max distance in units at which MC chunk meshes are drawn; 0 = lazy distance while lazy building is enabled, otherwise unlimited" ) )
-MC.MeshGpuDepthPrepass = MC.MeshGpuDepthPrepass or ( CreateClientConVar and CreateClientConVar( "mc_mesh_depth_prepass", "0", true, false,
-	"Draw a CPU-material depth-only prepass before GPU chunk shading (doubles geometry cost; the main pass already force-writes depth)" ) )
 
 function MC.EffectiveMeshDrawDistance()
 	local distance = MC.MeshDrawDistance and MC.MeshDrawDistance.GetFloat and MC.MeshDrawDistance:GetFloat() or 0
@@ -81,27 +79,23 @@ local function forceDepthWrite()
 	return false
 end
 
-local function setDepthPrepassColorMask()
-	if render.OverrideColorWriteEnable then
-		render.OverrideColorWriteEnable( true, false )
-		return true
-	end
-	return false
-end
-
 local function restoreChunkMeshRenderState( setCullMode )
-	if setCullMode then pcall( restoreDefaultCullMode ) end
-	resetColorWriteOverride()
-	resetDepthOverride()
+	local cullOK, cullError = true, nil
+	if setCullMode then cullOK, cullError = pcall( restoreDefaultCullMode ) end
+	local colorOK, colorError = pcall( resetColorWriteOverride )
+	local depthOK, depthError = pcall( resetDepthOverride )
+	if not cullOK then MC.Fault( "render_l2_restore_cull", "%s", tostring( cullError ) ) end
+	if not colorOK then MC.Fault( "render_l2_restore_color", "%s", tostring( colorError ) ) end
+	if not depthOK then MC.Fault( "render_l2_restore_depth", "%s", tostring( depthError ) ) end
 end
 
--- Pass-scoped render state: depth/colorwrite/cull overrides are identical
--- for every chunk in a pass, so drawAllChunks applies them once and flags
--- the pass as active; drawMeshList then skips its per-chunk state dance
--- (5 render.Override*/CullMode calls per chunk per frame add up on
--- hundreds of visible chunks). External MC.DrawChunk callers outside a
--- pass keep the old self-contained behavior.
-local passActive = false
+-- Apply render overrides once per pack pass, with no per-chunk state writes.
+local passMatrixPushed = false
+
+local function reportL2Faults()
+	local runtime = MC.RenderPackRuntime
+	if runtime and #runtime.faults > 0 then runtime.ReportFaults() end
+end
 
 local function applyPassState( writeDepth )
 	resetDepthOverride()
@@ -110,66 +104,16 @@ local function applyPassState( writeDepth )
 	return setChunkMeshCullMode()
 end
 
-local function drawMeshListInner( list, material, forceMaterial )
-	local currentMaterial = material
-	render.SetMaterial( currentMaterial )
+local function drawMeshListInner( list, currentMaterial )
 	for i = 1, #list do
 		local entry = list[i]
-		local meshObj = entry
-		local entryMaterial = material
-		if type( entry ) == "table" then
-			meshObj = entry.mesh
-			if not forceMaterial then
-				entryMaterial = entry.material or material
-			end
-		end
-		if entryMaterial ~= currentMaterial then
-			currentMaterial = entryMaterial
+		if entry.material ~= currentMaterial then
+			currentMaterial = entry.material
 			render.SetMaterial( currentMaterial )
 		end
-		if meshObj and meshObj.Draw then meshObj:Draw() end
+		entry.mesh:Draw()
 	end
-end
-
-local function drawMeshList( list, material, writeDepth, writeColor, forceMaterial )
-	if not list then return end
-	local ownState = not passActive or writeColor == false
-	local setCullMode = false
-	if ownState then
-		resetDepthOverride()
-		resetColorWriteOverride()
-		if writeDepth == "test" then
-			-- Depth TEST without write: the GPU translucent chunk material
-			-- rides screenspace_general, which ignores the depth buffer unless
-			-- overridden — without this glass draws on top of everything.
-			if render.OverrideDepthEnable then render.OverrideDepthEnable( true, false ) end
-		elseif writeDepth then
-			forceDepthWrite()
-		end
-		if writeColor == false then setDepthPrepassColorMask() end
-		setCullMode = setChunkMeshCullMode()
-	end
-	local ok, err = pcall( drawMeshListInner, list, material, forceMaterial )
-	if ownState then
-		restoreChunkMeshRenderState( setCullMode )
-		-- A depth-prepass detour inside an active pass must hand the pass
-		-- state back (the opaque pass is the only caller of that detour).
-		if passActive then applyPassState( true ) end
-	end
-	if not ok then error( err ) end
-end
-
--- Optional early-Z helper, OFF by default: the main GPU pass already renders
--- with OverrideDepthEnable(true, true) and the custom vertex shader outputs
--- real clip-space depth, so this prepass is not needed for correctness. It
--- only saves pixel-shader work on self-overdraw within a chunk while paying
--- the whole vertex/draw-call cost a second time — a net loss on large worlds.
-local function drawGpuOpaqueDepthPrepass( list )
-	if not ( MC.MeshGpuDepthPrepass and MC.MeshGpuDepthPrepass.GetBool and MC.MeshGpuDepthPrepass:GetBool() ) then return end
-	if not ( MC.UsingGpuChunkShader and MC.UsingGpuChunkShader() ) then return end
-	local cpuMaterial = MC.MaterialOpaqueCPU or MC.Material
-	if not cpuMaterial then return end
-	drawMeshList( list, cpuMaterial, true, false, true )
+	return currentMaterial
 end
 
 ------------------------------------------------------------------- draw-list cache
@@ -246,8 +190,8 @@ function MC.ChunkDrawListVersion()
 end
 
 local function rebuildDrawList( store, entries )
-	local chunkW = MC.ChunkWorld
-	local chunkH = MC.ChunkWorldH
+	local size = MC.API.Coords.BlockSize()
+	local chunkW, chunkH = MC.CS * size, MC.CH * size
 	local halfW = chunkW * 0.5
 	local halfH = chunkH * 0.5
 	local n = 0
@@ -270,9 +214,11 @@ local function rebuildDrawList( store, entries )
 				}
 				chunkFrames[key] = frame
 			end
-			if frame.originX ~= ox or frame.originY ~= oy or frame.originZ ~= oz then
+			if frame.originX ~= ox or frame.originY ~= oy or frame.originZ ~= oz
+				or frame.chunkW ~= chunkW or frame.chunkH ~= chunkH then
 				frame.originX, frame.originY, frame.originZ = ox, oy, oz
 				frame.worldX, frame.worldY, frame.worldZ = ox + halfW, oy + halfW, oz + halfH
+				frame.chunkW, frame.chunkH = chunkW, chunkH
 				frame.centerRevision = -1
 				frame.matrixRevision = -1
 			end
@@ -287,9 +233,13 @@ local function rebuildDrawList( store, entries )
 	return n
 end
 
+local builtChunkW, builtChunkH
 local function ensureDrawLists()
-	if builtVersion == drawListVersion then return end
+	local size = MC.API.Coords.BlockSize()
+	local chunkW, chunkH = MC.CS * size, MC.CH * size
+	if builtVersion == drawListVersion and builtChunkW == chunkW and builtChunkH == chunkH then return end
 	builtVersion = drawListVersion
+	builtChunkW, builtChunkH = chunkW, chunkH
 	opaqueCount = rebuildDrawList( MC.Meshes, opaqueEntries )
 	transCount = rebuildDrawList( MC.MeshesTrans, transEntries )
 end
@@ -321,6 +271,7 @@ MC.DrawCullStats = MC.DrawCullStats or {
 	distanceCulled = 0,
 	frustumCulled = 0,
 	stale = 0,
+	meshes = 0,
 }
 
 local function addPlane( nx, ny, nz, hx, hz )
@@ -335,8 +286,8 @@ local function updateCullState()
 	local eye = EyePos()
 	cullEyeX, cullEyeY, cullEyeZ = eye.x, eye.y, eye.z
 
-	local hx = MC.ChunkWorld * 0.5
-	local hz = MC.ChunkWorldH * 0.5
+	local size = MC.API.Coords.BlockSize()
+	local hx, hz = MC.CS * size * 0.5, MC.CH * size * 0.5
 
 	local dist = MC.EffectiveMeshDrawDistance and MC.EffectiveMeshDrawDistance()
 		or ( MC.MeshDrawDistance and MC.MeshDrawDistance.GetFloat and MC.MeshDrawDistance:GetFloat() or 0 )
@@ -403,49 +354,42 @@ local function entryVisible( e )
 end
 
 ------------------------------------------------------------------- chunk drawing
--- material/isGpuLightTexture are resolved once per pass by the hooks below;
--- both stay optional so external callers keep the old key-only signature.
-function MC.DrawChunk( key, material, isGpuLightTexture )
-	local list = MC.Meshes[key]
-	if not list then return end
-	if material == nil then
-		material = MC.CurrentChunkMaterial and MC.CurrentChunkMaterial( false ) or MC.Material
-	end
-	if isGpuLightTexture == nil then
-		isGpuLightTexture = MC.IsGpuLightTextureMaterial and MC.IsGpuLightTextureMaterial( material )
-			or material == MC.MaterialGpuLightTexture
-	end
-	if isGpuLightTexture then
-		-- The Native mesh payload already names an immutable atlas slot. Drawing
-		-- performs no slot touch, allocation, upload or per-chunk material write.
-		if MC.BindMeshShadowMap then MC.BindMeshShadowMap( material ) end
-	end
-	if material == MC.MaterialGpuOpaque or isGpuLightTexture then
-		drawGpuOpaqueDepthPrepass( list )
-	end
-	local forceCurrentMaterial = material == MC.MaterialGpuOpaque or isGpuLightTexture
-	drawMeshList( list, material, true, nil, forceCurrentMaterial )
+local function drawPackChunk( key, translucent )
+	local runtime = MC.Need( MC.RenderPackRuntime, "render_l2_runtime_missing", "L2 runtime did not load" )
+	if not runtime or not runtime.ChunkCurrent( key ) then return end
+	local groups = runtime.GetStages( translucent )
+	local setCullMode = applyPassState( not translucent )
+	if translucent then render.OverrideDepthEnable( true, false ) end
+	local ok, err = pcall( function()
+		for _, passes in ipairs( groups ) do
+			for _, pass in ipairs( passes ) do
+				local list = pass.store[key]
+				if list then drawMeshListInner( list ) end
+			end
+		end
+	end )
+	restoreChunkMeshRenderState( setCullMode )
+	if not ok then runtime.DrawFault( "chunk=" .. tostring( key ) .. ": " .. tostring( err ) ) end
+	reportL2Faults()
 end
 
-function MC.DrawChunkTranslucent( key, material )
-	if material == nil then
-		material = MC.CurrentChunkMaterial and MC.CurrentChunkMaterial( true ) or MC.MaterialTranslucent
-	end
-	local isGpuLightTexture = MC.IsGpuLightTextureMaterial and MC.IsGpuLightTextureMaterial( material ) or false
-	if isGpuLightTexture then
-		-- Shared shadow constants only; chunk-light atlas state is immutable.
-		if MC.BindMeshShadowMap then MC.BindMeshShadowMap( material ) end
-	end
-	drawMeshList( MC.MeshesTrans[key], material, isGpuLightTexture and "test" or false, nil, isGpuLightTexture )
+function MC.DrawChunk( key )
+	drawPackChunk( key, false )
 end
 
-local function drawVisibleChunks( store, entries, count, drawFn, material, isGpuLightTexture )
+function MC.DrawChunkTranslucent( key )
+	drawPackChunk( key, true )
+end
+
+local function drawVisibleChunks( store, entries, count, chunks )
 	local pushMatrix = cam.PushModelMatrix
 	local popMatrix = cam.PopModelMatrix
+	local getChunk = MC.GetChunkByKey
+	local currentMaterial, meshes = nil, 0
 	local drawn, distanceCulled, frustumCulled, stale = 0, 0, 0, 0
 	for i = 1, count do
 		local e = entries[i]
-		if store[e.key] ~= e.list then
+		if store[e.key] ~= e.list or getChunk( e.key ) ~= chunks[e.key] then
 			stale = stale + 1
 		elseif not ( MC.StreamHiddenChunkKeys and MC.StreamHiddenChunkKeys[e.key] ) then
 			local visible, reason = entryVisible( e )
@@ -456,144 +400,63 @@ local function drawVisibleChunks( store, entries, count, drawFn, material, isGpu
 				drawn = drawn + 1
 				prepareChunkFrame( e.frame, true )
 				pushMatrix( e.matrix )
-				drawFn( e.key, material, isGpuLightTexture )
+				passMatrixPushed = true
+				currentMaterial = drawMeshListInner( e.list, currentMaterial )
+				meshes = meshes + #e.list
 				popMatrix()
+				passMatrixPushed = false
 			end
 		end
 	end
-	return drawn, distanceCulled, frustumCulled, stale
+	return drawn, distanceCulled, frustumCulled, stale, meshes
 end
 
-local function drawNativeChunks( translucent )
-	local backend = MC.NativeChunkBackend
-	if not ( backend and backend.IsActive and backend.IsActive() and backend.DrawVisible ) then return nil end
-	-- Keep the old path for the optional diagnostic prepass, which deliberately
-	-- draws the opaque geometry twice with two different materials.
-	if not translucent and MC.MeshGpuDepthPrepass and MC.MeshGpuDepthPrepass:GetBool() then return nil end
+local packDrawVersion, packEntries = -1, {}
 
-	local eye = EyePos()
-	local ang = EyeAngles()
-	local forward, right, up = ang:Forward(), ang:Right(), ang:Up()
-	local fovDeg, aspect = 100, ScrW() / ScrH()
-	if render.GetViewSetup then
-		local view = render.GetViewSetup()
-		if view then
-			fovDeg = view.fov or fovDeg
-			if view.width and view.height and view.height > 0 then aspect = view.width / view.height end
-		end
-	end
-	local tanY = math_tan( math_rad( fovDeg ) * 0.5 ) * 0.75 * 1.05
-	local tanX = tanY * aspect
-	local offsetX, offsetY, offsetZ = 0, 0, 0
-	if MC.ChunkRenderFrameOffset then offsetX, offsetY, offsetZ = MC.ChunkRenderFrameOffset() end
-	local distance = MC.EffectiveMeshDrawDistance and MC.EffectiveMeshDrawDistance()
-		or ( MC.MeshDrawDistance and MC.MeshDrawDistance:GetFloat() or 0 )
-	local frustum = not MC.MeshFrustumCull or MC.MeshFrustumCull:GetBool()
-	local adapter = MC.GetWorldAdapter and MC.GetWorldAdapter() or nil
-	local horizontalDistance = adapter and isfunction( adapter.ChunkDrawDistanceVisible ) or false
-	local material
-	if MC.ResolveChunkMaterial then
-		material = MC.ResolveChunkMaterial( translucent, true )
-	else
-		local nativeMaterial = MC.NativeChunkMaterial or MC.CurrentChunkMaterial
-		material = nativeMaterial and nativeMaterial( translucent )
-			or ( translucent and MC.MaterialTranslucent or MC.Material )
-	end
-	local isGpuLightTexture = MC.IsGpuLightTextureMaterial and MC.IsGpuLightTextureMaterial( material )
-		or material == MC.MaterialGpuLightTexture
-
-	local setCullMode = applyPassState( not translucent )
-	if translucent and isGpuLightTexture and render.OverrideDepthEnable then render.OverrideDepthEnable( true, false ) end
-	if material then render.SetMaterial( material ) end
-	if isGpuLightTexture and MC.BindMeshShadowMap then MC.BindMeshShadowMap( material ) end
-	local ok, result = pcall( backend.DrawVisible, translucent and 1 or 0,
-		eye, forward, right, up, tanX, tanY,
-		offsetX, offsetY, offsetZ, math.max( 0, distance ), frustum, horizontalDistance )
-	restoreChunkMeshRenderState( setCullMode )
-	if not ok then error( result ) end
-	return istable( result ) and result or nil
-end
-
-local function drawAllChunks( store, drawFn )
-	if MC.WorldFrameSettled and not MC.WorldFrameSettled() then return end
-	local translucent = store == MC.MeshesTrans
-	local nativeResult = drawNativeChunks( translucent )
-	if nativeResult then
-		if not translucent then
-			local stats = MC.DrawCullStats
-			stats.tested = tonumber( nativeResult.tested ) or 0
-			stats.visible = tonumber( nativeResult.visible ) or 0
-			stats.drawn = tonumber( nativeResult.drawn ) or 0
-			stats.distanceCulled = tonumber( nativeResult.distanceCulled ) or 0
-			stats.frustumCulled = tonumber( nativeResult.frustumCulled ) or 0
-			stats.stale = 0
-			stats.sectionsTested = tonumber( nativeResult.sectionsTested ) or 0
-			stats.sectionsVisible = tonumber( nativeResult.sectionsVisible ) or 0
-			stats.sectionsDrawn = tonumber( nativeResult.sectionsDrawn ) or 0
-			stats.meshesDrawn = tonumber( nativeResult.meshesDrawn ) or 0
-			stats.verticesCandidate = tonumber( nativeResult.verticesCandidate ) or 0
-			stats.verticesDrawn = tonumber( nativeResult.verticesDrawn ) or 0
-			stats.verticesLodCulled = tonumber( nativeResult.verticesLodCulled ) or 0
-			stats.verticesDirectionCulled = tonumber( nativeResult.verticesDirectionCulled ) or 0
-			stats.lodSectionsDrawn = tonumber( nativeResult.lodSectionsDrawn ) or 0
-			stats.lodMeshesDrawn = tonumber( nativeResult.lodMeshesDrawn ) or 0
-			stats.lod = nativeResult.lod == true
-			stats.lodApplied = nativeResult.lodApplied == true
-			stats.sectionsOcclusionTested = tonumber( nativeResult.sectionsOcclusionTested ) or 0
-			stats.sectionsOcclusionCulled = tonumber( nativeResult.sectionsOcclusionCulled ) or 0
-			stats.chunksOcclusionCulled = tonumber( nativeResult.chunksOcclusionCulled ) or 0
-			stats.trianglesDrawn = tonumber( nativeResult.trianglesDrawn ) or 0
-			stats.nativeUs = tonumber( nativeResult.nativeUs ) or 0
-		end
-		return
-	end
-	ensureDrawLists()
-	local entries, count
-	if translucent then
-		entries, count = transEntries, transCount
-	else
-		entries, count = opaqueEntries, opaqueCount
-	end
-	if count == 0 then
-		if not translucent then
-			local stats = MC.DrawCullStats
-			stats.tested, stats.drawn = 0, 0
-			stats.distanceCulled, stats.frustumCulled, stats.stale = 0, 0, 0
-		end
-		return
-	end
+local function drawPackStages( translucent )
+	local runtime = MC.RenderPackRuntime
+	local groups, version, chunks = runtime.GetStages( translucent )
+	if version ~= packDrawVersion then packDrawVersion, packEntries = version, {} end
 	updateCullState()
-	local material
-	if MC.ResolveChunkMaterial then
-		material = MC.ResolveChunkMaterial( translucent, false )
-	else
-		material = MC.CurrentChunkMaterial and MC.CurrentChunkMaterial( translucent )
-			or ( translucent and MC.MaterialTranslucent or MC.Material )
+	local totalTested, totalDrawn, totalDistance, totalFrustum, totalStale = 0, 0, 0, 0, 0
+	local totalMeshes = 0
+	for _, passes in ipairs( groups ) do
+		for _, pass in ipairs( passes ) do
+			local cached = packEntries[pass]
+			if not cached then
+				cached = { entries = {} }
+				cached.count = rebuildDrawList( pass.store, cached.entries )
+				packEntries[pass] = cached
+			end
+			local setCullMode = applyPassState( not translucent )
+			if translucent then render.OverrideDepthEnable( true, false ) end
+			local ok, drawn, distance, frustum, stale, meshes = pcall( drawVisibleChunks,
+				pass.store, cached.entries, cached.count, chunks )
+			if passMatrixPushed then cam.PopModelMatrix() passMatrixPushed = false end
+			restoreChunkMeshRenderState( setCullMode )
+			if not ok then
+				runtime.DrawFault( "stage=" .. pass.node.stage .. " pass=" .. pass.node.key .. ": " .. tostring( drawn ) )
+				reportL2Faults()
+				return
+			end
+			totalTested, totalDrawn = totalTested + cached.count, totalDrawn + drawn
+			totalDistance, totalFrustum, totalStale = totalDistance + distance, totalFrustum + frustum, totalStale + stale
+			totalMeshes = totalMeshes + meshes
+		end
 	end
-	local isGpuLightTexture = MC.IsGpuLightTextureMaterial and MC.IsGpuLightTextureMaterial( material )
-		or material == MC.MaterialGpuLightTexture
-	local setCullMode = applyPassState( not translucent )
-	if translucent and isGpuLightTexture and render.OverrideDepthEnable then
-		-- Pass-scoped depth TEST (no write): screenspace_general ignores the
-		-- depth buffer unless overridden, which made GPU-lit glass draw on
-		-- top of the world.
-		render.OverrideDepthEnable( true, false )
-	end
-	passActive = true
-	local ok, drawn, distanceCulled, frustumCulled, stale = pcall(
-		drawVisibleChunks, store, entries, count, drawFn, material, isGpuLightTexture
-	)
-	passActive = false
-	restoreChunkMeshRenderState( setCullMode )
-	if not ok then error( drawn ) end
 	if not translucent then
 		local stats = MC.DrawCullStats
-		stats.tested = count
-		stats.drawn = drawn
-		stats.distanceCulled = distanceCulled
-		stats.frustumCulled = frustumCulled
-		stats.stale = stale
+		stats.tested, stats.drawn = totalTested, totalDrawn
+		stats.distanceCulled, stats.frustumCulled, stats.stale = totalDistance, totalFrustum, totalStale
+		stats.meshes = totalMeshes
 	end
+	reportL2Faults()
+end
+
+local function drawAllChunks( translucent )
+	if MC.WorldFrameSettled and not MC.WorldFrameSettled() then return end
+	local runtime = MC.Need( MC.RenderPackRuntime, "render_l2_runtime_missing", "L2 runtime did not load" )
+	if runtime then drawPackStages( translucent ) end
 end
 
 MC.RefreshChunkRenderFrame()
@@ -611,11 +474,12 @@ hook.Remove( "PostDrawTranslucentRenderables", "mc_draw_chunks" )
 hook.Add( "PostDrawOpaqueRenderables", "mc_draw_chunks", function( bDepth, bSky, bSky3D )
 	local perf = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
 	local started = perf and SysTime() or nil
-	if not bSky3D and meshRenderingEnabled() then drawAllChunks( MC.Meshes, MC.DrawChunk ) end
+	if not bSky3D and meshRenderingEnabled() then drawAllChunks( false ) end
 	if perf then
 		MC.StreamPerformanceAddFrameStage( "render.opaque", ( SysTime() - started ) * 1000, {
 			renderOpaqueTested = MC.DrawCullStats and MC.DrawCullStats.tested or 0,
 			renderOpaqueDrawn = MC.DrawCullStats and MC.DrawCullStats.drawn or 0,
+			renderOpaqueMeshes = MC.DrawCullStats and MC.DrawCullStats.meshes or 0,
 		} )
 	end
 end )
@@ -623,6 +487,6 @@ end )
 hook.Add( "PostDrawTranslucentRenderables", "mc_draw_chunks", function( bDepth, bSky, bSky3D )
 	local perf = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
 	local started = perf and SysTime() or nil
-	if not bSky3D and meshRenderingEnabled() then drawAllChunks( MC.MeshesTrans, MC.DrawChunkTranslucent ) end
+	if not bSky3D and meshRenderingEnabled() then drawAllChunks( true ) end
 	if perf then MC.StreamPerformanceAddFrameStage( "render.translucent", ( SysTime() - started ) * 1000 ) end
 end )

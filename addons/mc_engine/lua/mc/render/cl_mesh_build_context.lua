@@ -21,7 +21,8 @@ local setMeshSampleCacheOrigin = RM.setMeshSampleCacheOrigin
 local destroySectionMeshList = RM.destroySectionMeshList
 
 local function newLightMetaFactory( localIndexForBlockCoords, samples )
-	local function fromCorner( shade, bx, by, bz, id, faceIndex, corner, selfEmission, unusedQuad, faceCubic, quadLightEmission, tintCode )
+	local function fromCorner( shade, bx, by, bz, id, faceIndex, corner, selfEmission, unusedQuad, faceCubic, quadLightEmission, tintCode,
+		lightingKind, modelId, sourceQuad, cornerIndex )
 		local cx, cy, cz = cornerXYZ( corner )
 		if faceCubic == nil then
 			faceCubic = not unusedQuad or unusedQuad.faceCubic ~= false
@@ -41,11 +42,12 @@ local function newLightMetaFactory( localIndexForBlockCoords, samples )
 			selfEmission,
 			faceCubic,
 			clampLightLevel( quadLightEmission ),
-			tintCode
+			tintCode, lightingKind, modelId, sourceQuad, cornerIndex
 		)
 	end
 
-	local function fromValues( shade, bx, by, bz, id, faceIndex, cx, cy, cz, selfEmission, unusedQuad, faceCubic, quadLightEmission, tintCode )
+	local function fromValues( shade, bx, by, bz, id, faceIndex, cx, cy, cz, selfEmission, unusedQuad, faceCubic, quadLightEmission, tintCode,
+		lightingKind, modelId, sourceQuad, cornerIndex )
 		if faceCubic == nil then
 			faceCubic = not unusedQuad or unusedQuad.faceCubic ~= false
 		end
@@ -64,11 +66,12 @@ local function newLightMetaFactory( localIndexForBlockCoords, samples )
 			selfEmission,
 			faceCubic,
 			clampLightLevel( quadLightEmission ),
-			tintCode
+			tintCode, lightingKind, modelId, sourceQuad, cornerIndex
 		)
 	end
 
-	local function fast( shadeIndex, bx, by, bz, id, faceIndex, li, cx, cy, cz, selfEmission, faceCubic, quadLightEmission, tintCode )
+	local function fast( shadeIndex, bx, by, bz, id, faceIndex, li, cx, cy, cz, selfEmission, faceCubic, quadLightEmission, tintCode,
+		lightingKind, modelId, sourceQuad, cornerIndex )
 		return LightBuffer.AddValues(
 			samples,
 			shadeIndex,
@@ -84,7 +87,7 @@ local function newLightMetaFactory( localIndexForBlockCoords, samples )
 			selfEmission,
 			faceCubic,
 			clampLightLevel( quadLightEmission ),
-			tintCode
+			tintCode, lightingKind, modelId, sourceQuad, cornerIndex
 		)
 	end
 
@@ -97,15 +100,10 @@ end
 
 RM.newLightMetaFactory = newLightMetaFactory
 
-function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, meshLightStyle, buildStart, meshLightProfile, blockSections )
-	meshLightProfile = meshLightProfile or RM.GetLightProfile and RM.GetLightProfile( meshLightStyle ) or nil
-	local meshGpuPayloadMaterial = meshLightProfile and meshLightProfile.gpuPayloadMaterial
-	if type( meshGpuPayloadMaterial ) == "function" then meshGpuPayloadMaterial = meshGpuPayloadMaterial( meshLightProfile ) end
-	local meshGpuPayloadMaterialTrans = meshLightProfile and meshLightProfile.gpuPayloadMaterialTranslucent
-	if type( meshGpuPayloadMaterialTrans ) == "function" then meshGpuPayloadMaterialTrans = meshGpuPayloadMaterialTrans( meshLightProfile ) end
-	local meshGpuPayloadStyle = meshLightProfile and meshLightProfile.gpuPayloadStyle
-	if type( meshGpuPayloadStyle ) == "function" then meshGpuPayloadStyle = meshGpuPayloadStyle( meshLightProfile, meshGpuPayloadMaterial ) end
-	local sectionNeedsRecolor = sectionIndex and MC.MeshLightDirty[key] and MC.MeshLightDirty[key][sectionIndex]
+function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, meshLightStyle, buildStart, meshLightProfile, blockSections, lightOnly )
+	local Q = MC.RenderL2Quad
+	local slice = Q.NewSlice( chunk, MC.API.Coords.BlockSize() )
+	local sectionNeedsRecolor = lightOnly or sectionIndex and MC.MeshLightDirty[key] and MC.MeshLightDirty[key][sectionIndex]
 	local blockLightDirtySection = sectionNeedsRecolor and MC.GetBlockLightDirtySection and MC.GetBlockLightDirtySection( key, sectionIndex ) or nil
 	local sectionNeedsFullRecolor = sectionNeedsRecolor and not blockLightDirtySection
 
@@ -125,15 +123,8 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	local sectionBuffers = {}
 	local cur
 
-	local function styleForBuffer( buf )
-		if meshGpuPayloadStyle and buf then
-			local m = buf.material
-			if ( meshGpuPayloadMaterial and m == meshGpuPayloadMaterial )
-			or ( meshGpuPayloadMaterialTrans and m == meshGpuPayloadMaterialTrans ) then
-				return meshGpuPayloadStyle
-			end
-		end
-		return meshLightStyle
+	local function styleForBuffer()
+		return "l2"
 	end
 
 	local function currentEmitLightStyle()
@@ -143,15 +134,6 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	local function localIndex( lx, ly, lz )
 		return lx + ly * C.CS + lz * C.CS2
 	end
-
-	local function localIndexForBlockCoords( bx, by, bz )
-		local lx, ly, lz = bx - bxo, by - byo, bz - bzo
-		if lx < 0 or lx >= C.CS or ly < 0 or ly >= C.CS or lz < 0 or lz >= C.CH then return nil end
-		return localIndex( lx, ly, lz )
-	end
-	local lightSamples = LightBuffer.New()
-	local lightCopies = LightBuffer.NewCopyMap()
-	local lightMetaFactory = newLightMetaFactory( localIndexForBlockCoords, lightSamples )
 
 	local function orientAt( lx, ly, lz, bx, by, bz )
 		local stateId = stateAt( lx, ly, lz, bx, by, bz )
@@ -194,17 +176,34 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	end
 
 	local function newMeshBuffer( material, translucent )
-		local materialId, passId
-		local materialABI = MC.RenderMaterialABI
-		if materialABI and materialABI.Resolve then
-			materialId, passId = materialABI.Resolve( material, translucent == true, false )
+		return { list = {}, records = {}, buckets = {}, material = material, translucent = translucent }
+	end
+
+	local function bufferForBlock( root, id )
+		root = root.owner or root
+		local blockBuffers = root.blockBuffers
+		if not blockBuffers then
+			blockBuffers = {}
+			root.blockBuffers = blockBuffers
 		end
-		return {
-			list = {}, records = {}, verts = VertexBuffer.New(), light = LightBuffer.New(), nv = 0,
-			hasSecondaryUV = false, material = material,
-			translucent = translucent == true, materialId = materialId or 0,
-			passId = passId or ( translucent and 3 or 1 ),
-		}
+		local cached = blockBuffers[id]
+		if cached then return cached end
+		local request = MC.RenderBlockBindings.Key( id )
+		local block = blocksById[id]
+		local stage = root.translucent and "world_translucent" or
+			( block.fullCube == true and block.transparent ~= true and "world_opaque" or "world_cutout" )
+		local bucketKey = request .. "/" .. stage
+		local buffer = root.buckets[bucketKey]
+		if not buffer then
+			buffer = Q.NewBuffer()
+			buffer.owner, buffer.list, buffer.records = root, root.list, root.records
+			buffer.material, buffer.translucent = root.material, root.translucent
+			buffer.request, buffer.stage, buffer.blockIds = request, stage, {}
+			root.buckets[bucketKey] = buffer
+		end
+		buffer.blockIds[id] = true
+		blockBuffers[id] = buffer
+		return buffer
 	end
 
 	local spareBlockBuffer
@@ -212,8 +211,8 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		local buffer = spareBlockBuffer
 		spareBlockBuffer = nil
 		if not buffer then
-			buffer = { verts = VertexBuffer.New(), light = LightBuffer.New(), nv = 0,
-				hasSecondaryUV = false, cacheOnly = true }
+			buffer = Q.NewBuffer()
+			buffer.cacheOnly = true
 		end
 		buffer.material = targetBuffer.material
 		buffer.translucent = targetBuffer.translucent == true
@@ -227,27 +226,9 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		return true
 	end
 
-	local function buildLightIndexByLi( light, vertexCount )
-		local byLi = {}
-		for i = 1, vertexCount do
-			local li = LightBuffer.LocalIndex( light, i )
-			if li ~= nil then
-				local list = byLi[li]
-				if not list then
-					list = { n = 0 }
-					byLi[li] = list
-				end
-				local n = list.n + 1
-				list.n = n
-				list[n] = i
-			end
-		end
-		return byLi
-	end
-
 	local function buffersForLocal( lx, ly, lz )
 		local index = MC.RenderSectionIndexForLocal( lx, ly, lz )
-		if sectionIndex and index ~= sectionIndex then return nil end
+		if sectionIndex and index ~= sectionIndex then return nil, index end
 		local buffers = sectionBuffers[index]
 		if not buffers then
 			local chunkMaterial = MC.CurrentChunkMaterial or function( translucent ) return translucent and MC.MaterialTranslucent or MC.Material end
@@ -257,28 +238,23 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			}
 			sectionBuffers[index] = buffers
 		end
-		return buffers
+		return buffers, index
 	end
 
 	local function flush( buf )
 		if buf.nv == 0 then return end
 		local vertexCount = buf.nv
-		local meshNewStart = SysTime()
-		local m = Mesh( buf.material )
-		meshPerfAdd( meshPerf, "meshNewMS", meshNewStart )
-		uploadMeshVertices( m, buf.verts, meshPerf, buf.hasSecondaryUV )
-		buf.list[#buf.list + 1] = { mesh = m, material = buf.material }
+		local entry = MC.RenderPackGeometry.Upload( buf, meshPerf )
+		buf.list[#buf.list + 1] = entry
 		buf.records[#buf.records + 1] = {
-			mesh = m,
+			l2 = true, mesh = entry.mesh,
 			verts = buf.verts,
-			light = buf.light,
-			lightByLi = buildLightIndexByLi( buf.light, vertexCount ),
+			pixels = buf.pixels,
 			material = buf.material,
 			vertexCount = vertexCount,
-			hasSecondaryUV = buf.hasSecondaryUV == true,
+			hasSecondaryUV = false,
 			translucent = buf.translucent == true,
-			materialId = buf.materialId or 0,
-			passId = buf.passId or ( buf.translucent and 3 or 1 ),
+			request = buf.request, stage = buf.stage,
 		}
 		meshPerf.vertices = meshPerf.vertices + vertexCount
 		meshPerf.faces = meshPerf.faces + math.floor( vertexCount / 6 )
@@ -289,38 +265,18 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			meshPerf.opaqueVerts = meshPerf.opaqueVerts + vertexCount
 		end
 		buf.verts = VertexBuffer.New()
-		buf.light = LightBuffer.New()
-		buf.nv = 0
+		buf.pixels = {}
+		buf.nv, buf.quadCount = 0, 0
 		buf.hasSecondaryUV = false
 	end
 
-	local function finishPush( light )
-		local nv = cur.verts.count
-		cur.nv = nv
-		if type( light ) == "number" then
-			cur.light[nv] = LightBuffer.CopySample( cur.light, lightSamples, light, lightCopies )
-		else
-			cur.light[nv] = LightBuffer.AddLegacy( cur.light, light )
-		end
-		if not cur.cacheOnly then
-			meshPerf.pushedVertices = ( meshPerf.pushedVertices or 0 ) + 1
-			if nv >= C.VERT_LIMIT then flush( cur ) end
-		end
+	local function rejectLegacy()
+		error( { code = "render_l2_emitter_required", message = "world emitters must submit complete L2 quads" }, 0 )
 	end
 
-	local function pushValues( x, y, z, normal, u, v, color, light )
-		VertexBuffer.PushValues( cur.verts, x, y, z, normal, u, v, color )
-		finishPush( light )
-	end
-
-	local function push( vert, light, z, normal, u, v, color, numericLight )
-		if type( vert ) == "number" then
-			pushValues( vert, light, z, normal, u, v, color, numericLight )
-		else
-			VertexBuffer.PushLegacy( cur.verts, vert )
-			if vert.u1 ~= nil or vert.v1 ~= nil then cur.hasSecondaryUV = true end
-			finishPush( light )
-		end
+	local function emitL2( quad, id, bx, by, bz, wx, wy, wz, emission, tint, kind, modelId )
+		if not cur.cacheOnly and cur.nv + 6 > C.VERT_LIMIT then flush( cur ) end
+		Q.EmitNative( slice, cur, quad, id, bx, by, bz, wx, wy, wz, emission, tint, kind, modelId )
 	end
 
 	local function appendMeshList( out, list )
@@ -338,8 +294,8 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		for i = 1, totalSections do
 			local buffers = sectionBuffers[i]
 			if buffers then
-				flush( buffers.opaque )
-				flush( buffers.translucent )
+				for _, buffer in pairs( buffers.opaque.buckets ) do flush( buffer ) end
+				for _, buffer in pairs( buffers.translucent.buckets ) do flush( buffer ) end
 				appendMeshList( opaqueMeshes, buffers.opaque.list )
 				appendMeshList( translucentMeshes, buffers.translucent.list )
 				appendMeshList( opaqueRecords, buffers.opaque.records )
@@ -373,6 +329,8 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		sectionBuffers = sectionBuffers,
 		fluidCornerHeightCache = {},
 		C = C,
+		l2 = true,
+		blockSize = slice.blockSize,
 	}
 
 	ctx.styleForBuffer = styleForBuffer
@@ -386,35 +344,26 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	ctx.shapeFaceCoveredAt = shapeFaceCoveredAt
 	ctx.shapeFaceNeighborCoveredAt = shapeFaceNeighborCoveredAt
 	ctx.buffersForLocal = buffersForLocal
+	ctx.bufferForBlock = bufferForBlock
 	ctx.flush = flush
-	ctx.push = push
-	-- Numeric vertex entry point used by the production emitters. Keep it
-	-- explicit on the context so emitters do not need to infer capabilities
-	-- from the generic push function.
-	ctx.pushValues = pushValues
+	ctx.emitL2 = emitL2
+	ctx.push, ctx.pushValues = rejectLegacy, rejectLegacy
 	-- Caller may return only unpublished scratch, after its vertices were copied.
 	-- Retained block/section records never enter this bounded one-buffer cache.
 	function ctx.releaseScratch( buffer )
 		if not buffer or not buffer.cacheOnly then return end
 		VertexBuffer.Reset( buffer.verts )
-		LightBuffer.Reset( buffer.light )
-		LightBuffer.ResetCopyMap( lightCopies )
-		buffer.nv, buffer.hasSecondaryUV = 0, false
+		for i = 1, #buffer.pixels do buffer.pixels[i] = nil end
+		buffer.nv, buffer.quadCount, buffer.hasSecondaryUV = 0, 0, false
 		if not spareBlockBuffer then spareBlockBuffer = buffer end
 	end
-	ctx.lightMetaFactory = lightMetaFactory
-	ctx.lightMeta = lightMetaFactory.fromCorner
-	ctx.lightMetaValues = lightMetaFactory.fromValues
-	ctx.lightMetaFast = lightMetaFactory.fast
-	function ctx.beginBlockLight()
-		LightBuffer.ResetScratch( lightSamples )
-		LightBuffer.ResetCopyMap( lightCopies )
-	end
+	ctx.lightMeta, ctx.lightMetaValues, ctx.lightMetaFast = rejectLegacy, rejectLegacy, rejectLegacy
+	function ctx.beginBlockLight() end
 	ctx.flushSectionBuffers = flushSectionBuffers
-	function ctx.discardSectionBuffers()
+	function ctx.discardSectionBuffers( report )
 		for index, buffers in pairs( sectionBuffers ) do
-			destroySectionMeshList( buffers.opaque.list )
-			destroySectionMeshList( buffers.translucent.list )
+			destroySectionMeshList( buffers.opaque.list, report )
+			destroySectionMeshList( buffers.translucent.list, report )
 			sectionBuffers[index] = nil
 		end
 	end

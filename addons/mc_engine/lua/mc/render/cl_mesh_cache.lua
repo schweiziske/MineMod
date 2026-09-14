@@ -140,7 +140,8 @@ function MC.PruneMeshSectionGeometryCache()
 			end
 			if valid then
 				count = count + 1
-				if not oldestTick or entry.tick < oldestTick then
+				if not GeometryStore.IsSectionPinned( entry.key, entry.sectionIndex )
+					and ( not oldestTick or entry.tick < oldestTick ) then
 					oldestTick = entry.tick
 					oldestSlot = slot
 				end
@@ -391,10 +392,17 @@ function MC.GetCachedBlockEmission( key, sectionIndex, li, id, orient, stateId )
 	if not record then return nil end
 	if record.id ~= id or record.orient ~= ( orient or 0 ) then return nil end
 	if stateId ~= nil and record.stateId ~= stateId then return nil end
-	if not record.verts or not record.light then return nil end
-	if not LightBuffer.Validate( record.light ) then return nil end
+	if not record.verts then return nil end
 	local vertexCount = record.vertexCount or VertexBuffer.Count( record.verts )
-	if vertexCount ~= VertexBuffer.Count( record.verts ) or vertexCount ~= #record.light then return nil end
+	if vertexCount ~= VertexBuffer.Count( record.verts ) then return nil end
+	if record.l2 then
+		if vertexCount % 6 ~= 0 or type( record.pixels ) ~= "table" or #record.pixels ~= vertexCount / 6 * 4 then
+			MC.Fault( "render_l2_cache_invalid", "invalid cached quad data at %s/%s/%s", key, sectionIndex, li )
+			return nil
+		end
+	else
+		if not LightBuffer.Validate( record.light ) or vertexCount ~= #record.light then return nil end
+	end
 	MC.TouchBlockEmitCacheSection( key, sectionIndex )
 	return record
 end
@@ -445,6 +453,22 @@ end
 
 function MC.AppendCachedBlockEmission( record, buf, flushFn, meshPerf, vertexLimit )
 	if not record or not buf then return 0 end
+	if buf.l2 then
+		local requireValue = MC.RenderL2Resources.Require
+		local count = VertexBuffer.Count( record.verts )
+		requireValue( record.l2 and count % 6 == 0, "render_l2_cache_layout", "cannot append L1 geometry to an L2 buffer" )
+		local limit = math.floor( ( vertexLimit or 64998 ) / 6 )
+		requireValue( limit > 0, "render_l2_vertex_limit", "mesh capacity is smaller than one quad" )
+		local first, total = 0, count / 6
+		while first < total do
+			if buf.nv / 6 == limit then flushFn( buf ) end
+			local quads = math.min( total - first, limit - buf.nv / 6 )
+			MC.RenderL2Quad.AppendNative( buf, record, first, quads )
+			first = first + quads
+		end
+		if meshPerf then meshPerf.pushedVertices = ( meshPerf.pushedVertices or 0 ) + count end
+		return count
+	end
 	local verts = record.verts or {}
 	local light = record.light or {}
 	local vertexCount = record.vertexCount or VertexBuffer.Count( verts )

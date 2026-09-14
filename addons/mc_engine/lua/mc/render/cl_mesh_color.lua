@@ -554,6 +554,70 @@ local function recolorCachedBlockEmission( record, lightStyle, meshPerf )
 	return MC.RecolorCachedBlockEmission( record, lightStyle, recolorLightMeta, meshPerf )
 end
 
+function RM.cacheFluidLightInputs( batch )
+	local light, verts = batch.light, batch.verts
+	local LB, VB = MC.RenderLightBuffer, MC.RenderVertexBuffer
+	-- CopySample validated the owned samples during emission. Only check layout
+	-- here; global refreshes consume the palette without decoding metadata.
+	if light.lightBufferVersion ~= LB.VERSION or not LB.IsCompatible( light )
+		or verts.count ~= #light then return nil end
+	local palette = { groups = {}, published = {}, applied = {} }
+	local groups, byKey, bySample = palette.groups, {}, {}
+	local data = light.data
+	for sample = 1, light.sampleCount do
+		local offset = ( sample - 1 ) * LB.STRIDE
+		local r, g, b = shadeRGBAByIndex( data[offset + 1] )
+		r, g, b = applyBlockTint( r, g, b, data[offset + 14] )
+		local block, sky = RM.minecraftSmoothCornerLightLevelsValues(
+			data[offset + 2], data[offset + 3], data[offset + 4], data[offset + 6],
+			data[offset + 8], data[offset + 9], data[offset + 10], data[offset + 11] )
+		-- RGB bytes and two sixteenth-level light bytes fit exactly in 40 bits.
+		local key = r + g * 256 + b * 65536 + block * 16 * 16777216 + sky * 16 * 4294967296
+		local index = byKey[key]
+		if not index then
+			index = #groups + 1
+			groups[index] = { r = r, g = g, b = b, block = block, sky = sky, offsets = {} }
+			byKey[key] = index
+		end
+		bySample[sample] = index
+	end
+	for vertex = 1, verts.count do
+		local index = bySample[light[vertex]]
+		local offsets = groups[index].offsets
+		offsets[#offsets + 1] = ( vertex - 1 ) * VB.STRIDE + 11
+	end
+	for index, group in ipairs( groups ) do
+		local offset = group.offsets[1]
+		local color = verts[offset] + verts[offset + 1] * 256 + verts[offset + 2] * 65536
+		palette.published[index], palette.applied[index] = color, color
+	end
+	return palette
+end
+
+function RM.recolorFluidEmission( batch, localLightChanged )
+	local palette = batch.fluidLight
+	if localLightChanged then palette = RM.cacheFluidLightInputs( batch ) end
+	if not palette then return nil end
+	local colors, changed = {}, localLightChanged == true
+	local verts = batch.verts
+	for index, group in ipairs( palette.groups ) do
+		local lr, lg, lb = MC.SampleGlobalLightmapRGB( group.block, group.sky )
+		local r, g, b = mathFloor( group.r * lr + 0.5 ), mathFloor( group.g * lg + 0.5 ), mathFloor( group.b * lb + 0.5 )
+		local color = r + g * 256 + b * 65536
+		colors[index] = color
+		if color ~= palette.published[index] then changed = true end
+		-- A failed upload can leave CPU colours ahead of the published mesh.
+		-- Restore them too when a later lightmap returns to the published colour.
+		if localLightChanged or color ~= palette.applied[index] then
+			for _, offset in ipairs( group.offsets ) do
+				verts[offset], verts[offset + 1], verts[offset + 2] = r, g, b
+			end
+		end
+		palette.applied[index] = color
+	end
+	return { palette = palette, colors = colors, changed = changed }
+end
+
 RM.minecraftSmoothCornerShadeBrightness = minecraftSmoothCornerShadeBrightness
 RM.fullCubeSmoothCornerBrightnessFast = fullCubeSmoothCornerBrightnessFast
 RM.fullCubeCornerAOWithFactorsFast = fullCubeCornerAOWithFactorsFast

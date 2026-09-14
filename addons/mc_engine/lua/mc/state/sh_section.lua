@@ -252,8 +252,23 @@ function Section.Set( section, cellIndex, stateId )
 	return true, oldStateId
 end
 
-function Section.ForEach( section, cb )
+function Section.ForEach( section, cb, stateFilter )
 	if not section or not cb or ( section.count or 0 ) <= 0 then return end
+	if stateFilter then
+		local selected, any = {}, false
+		for index = 1, section.paletteSize do
+			local stateId = section.palette[index]
+			if stateId ~= 0 and section.refCount[index - 1] > 0 and stateFilter( stateId ) then
+				selected[index - 1], any = stateId, true
+			end
+		end
+		if not any then return end
+		for cellIndex = 0, Section.CELL_COUNT - 1 do
+			local stateId = selected[packedGet( section.words, section.bitsPerEntry, cellIndex, section.entryMask )]
+			if stateId then cb( cellIndex, stateId ) end
+		end
+		return
+	end
 	for cellIndex = 0, Section.CELL_COUNT - 1 do
 		local stateId = Section.GetFast( section, cellIndex )
 		if stateId and stateId ~= 0 then cb( cellIndex, stateId ) end

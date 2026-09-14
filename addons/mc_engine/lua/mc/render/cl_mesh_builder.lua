@@ -1,452 +1,168 @@
--- Render mesh internals split from cl_mesh_core.lua.
+-- Native L2 section construction. Published geometry is immutable.
 MC = MC or {}
-MC.RenderMesh = MC.RenderMesh or {}
 local RM = MC.RenderMesh
-
-
-local C = MC.RenderMeshConstants
-local GeometryStore = MC.RenderGeometryStore
-local Snapshot = MC.RenderSnapshot
-local currentLightStyle = RM.currentLightStyle
-local currentLightProfile = RM.CurrentLightProfile
-local newMeshPerfStats = RM.newMeshPerfStats
-local meshEmitProbeEnabled = RM.meshEmitProbeEnabled
-local resetMeshLightingSampleCaches = RM.resetMeshLightingSampleCaches
-local resetMeshColorObjectCache = RM.resetMeshColorObjectCache
+local GeometryStore, Snapshot = MC.RenderGeometryStore, MC.RenderSnapshot
 local meshPerfAdd = RM.meshPerfAdd
-local meshPerfMS = RM.meshPerfMS
-local publishMeshPerfStats = RM.publishMeshPerfStats
-local noteMeshLightingCacheStats = RM.noteMeshLightingCacheStats
-local printMeshEmitProbe = RM.printMeshEmitProbe
 local destroySectionMeshList = RM.destroySectionMeshList
-local rebuildFlatMeshLists = RM.rebuildFlatMeshLists
-local recolorCachedBlockEmission = RM.recolorCachedBlockEmission
-local recolorLightMeta = RM.recolorLightMeta
-local effectiveLightStyleForMaterial = RM.effectiveLightStyleForMaterial
-local setMeshSampleCacheOrigin = RM.setMeshSampleCacheOrigin
-local uploadMeshVertices = RM.uploadMeshVertices
-local setGpuLightPayloadSlot = RM.SetGpuLightPayloadSlot
 
 local function noteVisibilityStats( perf, failed )
 	local pipeline = MC.RenderPipeline
 	if not pipeline or not pipeline.NoteVisibility then return end
 	pipeline.NoteVisibility( perf.visibilitySections or 0, perf.visibilityQueries or 0,
 		perf.visibilityCacheHits or 0, perf.visibilityStateReads or 0,
-		perf.visibilitySnapshotReads or 0, perf.visibilityClassResolves or 0,
-		failed and 1 or 0 )
+		perf.visibilitySnapshotReads or 0, perf.visibilityClassResolves or 0, failed and 1 or 0 )
 end
 
-local function prepareGpuLightPayload( key )
-	if setGpuLightPayloadSlot then setGpuLightPayloadSlot( 0 ) end
-	if not ( MC.UsingGpuLightTexture and MC.UsingGpuLightTexture() ) then return true end
-	if not MC.PrepareGpuChunkLightTexture then return true end
-	local slot, _, ready = MC.PrepareGpuChunkLightTexture( key )
-	-- Slot 0 is the permanent fullbright tile. If the selected backend cannot
-	-- finish a real tile synchronously, the mesh is still safe and never points
-	-- at uninitialized/foreign atlas memory.
-	if setGpuLightPayloadSlot then setGpuLightPayloadSlot( ready and slot or 0 ) end
-	return ready == true
-end
-
-function MC.BuildChunkMesh( key, sectionIndex )
-	local buildStart = SysTime()
-	local meshPerf = newMeshPerfStats()
-	local meshProbe = meshEmitProbeEnabled()
-	resetMeshLightingSampleCaches()
-	resetMeshColorObjectCache()
-	local meshLightStyle = currentLightStyle()
-	local meshLightProfile = currentLightProfile()
-	if MC.LightPerfStats then
-		MC.LightPerfStats.lastMeshLightStyle = meshLightStyle
-	end
-	if MC.LightPerfBeginMeshBuild then
-		MC.LightPerfBeginMeshBuild( key, sectionIndex )
-	end
+local function build( key, sectionIndex, lightOnly )
+	local started, perf = SysTime(), RM.newMeshPerfStats()
+	local probe = RM.meshEmitProbeEnabled()
+	RM.resetMeshLightingSampleCaches()
+	RM.resetMeshColorObjectCache()
+	if MC.LightPerfBeginMeshBuild then MC.LightPerfBeginMeshBuild( key, sectionIndex ) end
 	local chunk = MC.GetChunkByKey( key )
-	if not chunk or chunk.count == 0 then
-		if MC.ClearGpuChunkLightTexture then MC.ClearGpuChunkLightTexture( key ) end
-		if sectionIndex then
-			MC.ClearSectionBlockEmitCache( key, sectionIndex )
-			local commitStart = SysTime()
-			local sections = MC.MeshSections[key]
-			local old = sections and sections[sectionIndex]
-			if old then
-				local destroyStart = SysTime()
-				destroySectionMeshList( old.opaque )
-				destroySectionMeshList( old.translucent )
-				meshPerfAdd( meshPerf, "destroyMS", destroyStart )
-				sections[sectionIndex] = nil
-				if GeometryStore.ForgetSection then
-					GeometryStore.ForgetSection( key, sectionIndex )
-				else
-					GeometryStore.ClearSection( key, sectionIndex )
-				end
-				local flatStart = SysTime()
-				rebuildFlatMeshLists( key )
-				meshPerfAdd( meshPerf, "flatMS", flatStart )
-			end
-			meshPerfAdd( meshPerf, "commitMS", commitStart )
-		else
-			MC.FreeChunkMesh( key )
-		end
-		local meshMS = math.Round( ( SysTime() - buildStart ) * 1000, 3 )
-		MC.RenderStats.lastMeshBuildMS = meshMS
-		MC.RenderStats.lastMeshKey = key
-		MC.RenderStats.lastMeshSection = sectionIndex or "full"
-		MC.RenderStats.lastMeshBlocks = 0
-		MC.RenderStats.lastMeshVertices = 0
-		MC.RenderStats.lastMeshFaces = 0
-		MC.RenderStats.lastOpaqueMeshes = 0
-		MC.RenderStats.lastTranslucentMeshes = 0
-		if MC.LightPerfStats then
-			MC.LightPerfStats.lastMeshMode = "full"
-			MC.LightPerfStats.lastMeshRecords = nil
-			MC.LightPerfStats.lastMeshFallback = nil
-		end
-		meshPerf.prepMS = meshPerfMS( buildStart )
-		publishMeshPerfStats( meshPerf )
-		noteMeshLightingCacheStats()
-		printMeshEmitProbe( key, sectionIndex, meshMS, meshPerf )
-		if MC.LightPerfEndMeshBuild then
-			MC.LightPerfEndMeshBuild( key, sectionIndex, meshMS )
-		end
-		if MC.RenderPipeline and MC.RenderPipeline.RecordBuild then
-			MC.RenderPipeline.RecordBuild( key, sectionIndex, "geometry", 0, 0, 0, 0, 0, meshMS )
-		end
-		return
+	local ctx, opaque, translucent, opaqueRecords, translucentRecords
+	local faults = {}
+	local function queueFault( code, message )
+		faults[#faults + 1] = { code = code, message = tostring( message ) }
 	end
-	local indexStart = SysTime()
-	local blockSections, snapshotError = Snapshot.Prepare( chunk, sectionIndex )
-	meshPerfAdd( meshPerf, "indexMS", indexStart )
-	if not blockSections then
-		MC.Fault( "render_snapshot_prepare_failed", "chunk %s section %s: %s",
-			tostring( key ), tostring( sectionIndex ), tostring( snapshotError ) )
-		-- Keep the existing meshes and dirty token so transient storage failure
-		-- does not publish empty geometry or permanently drop this rebuild.
-		return false
+	local function reportFaults()
+		local firstError
+		for _, fault in ipairs( faults ) do
+			local ok, err = pcall( MC.Fault, fault.code, "%s", fault.message )
+			if not ok and not firstError then firstError = err end
+		end
+		if firstError then error( firstError, 0 ) end
 	end
-	if not sectionIndex then
-		MC.ClearChunkBlockEmitCache( key )
+	local function retire( section )
+		if not section then return end
+		destroySectionMeshList( section.opaque, queueFault )
+		destroySectionMeshList( section.translucent, queueFault )
 	end
-	prepareGpuLightPayload( key )
-	local ctx = RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, meshLightStyle, buildStart, meshLightProfile, blockSections )
 
-	local loopStart = SysTime()
-	local emitBlock = RM.EmitBlock
-	for index = sectionIndex or 1, sectionIndex or Snapshot.SECTION_COUNT do
-		local snapshot = blockSections[index]
-		local indices, states = snapshot.indices, snapshot.states
-		ctx.beginSection( index )
-		for i = 1, snapshot.count do
-			if emitBlock( ctx, indices[i], states[i] ) == false then
-				ctx.discardSectionBuffers()
-				noteVisibilityStats( meshPerf, true )
-				MC.Fault( "render_visibility_failed", "chunk %s section %s: %s",
-					tostring( key ), tostring( index ), tostring( ctx.visibility.error ) )
+	if chunk and chunk.count > 0 then
+		local indexStart = SysTime()
+		local snapshots, err = Snapshot.Prepare( chunk, sectionIndex )
+		meshPerfAdd( perf, "indexMS", indexStart )
+		if not snapshots then
+			MC.Fault( "render_snapshot_prepare_failed", "chunk %s section %s: %s",
+				tostring( key ), tostring( sectionIndex ), tostring( err ) )
+			return false
+		end
+		if not sectionIndex then MC.ClearChunkBlockEmitCache( key ) end
+		if not sectionIndex or snapshots[sectionIndex].count > 0 then
+			local ok
+			ok, err = pcall( function()
+				ctx = RM.NewBuildContext( key, sectionIndex, chunk, perf, probe, "l2", started, nil, snapshots, lightOnly )
+				local loopStart = SysTime()
+				RM.withIsolatedRawLighting( ctx.bxo, ctx.byo, ctx.bzo, function()
+					for index = sectionIndex or 1, sectionIndex or Snapshot.SECTION_COUNT do
+						local snapshot = snapshots[index]
+						if snapshot.count > 0 then
+							ctx.beginSection( index )
+							for i = 1, snapshot.count do
+								if RM.EmitBlock( ctx, snapshot.indices[i], snapshot.states[i] ) == false then
+									error( { code = "render_visibility_failed", message = ctx.visibility.error }, 0 )
+								end
+							end
+						end
+					end
+				end )
+				meshPerfAdd( perf, "loopMS", loopStart )
+				local flushStart = SysTime()
+				opaque, translucent, opaqueRecords, translucentRecords = ctx.flushSectionBuffers()
+				meshPerfAdd( perf, "flushMS", flushStart )
+			end )
+			noteVisibilityStats( perf, not ok )
+			if not ok then
+				-- Finish all resource cleanup before strict-mode fault reporting can throw.
+				if ctx then ctx.discardSectionBuffers( queueFault ) end
+				queueFault( type( err ) == "table" and err.code or "render_l2_build",
+					string.format( "chunk %s section %s: %s; previous L2 section retained",
+						tostring( key ), tostring( sectionIndex ),
+						tostring( type( err ) == "table" and err.message or err ) ) )
+				reportFaults()
 				return false
 			end
 		end
 	end
-	noteVisibilityStats( meshPerf, false )
-	meshPerfAdd( meshPerf, "loopMS", loopStart )
+	if not ctx then
+		opaque, translucent, opaqueRecords, translucentRecords = {}, {}, {}, {}
+	end
 
-	local flushStart = SysTime()
-	local opaqueMeshes, translucentMeshes, opaqueRecords, translucentRecords = ctx.flushSectionBuffers()
-	meshPerfAdd( meshPerf, "flushMS", flushStart )
+	local function publishSection( index, opaqueList, translucentList, opaqueCPU, translucentCPU )
+		if #opaqueList == 0 and #translucentList == 0 then
+			MC.MeshSections[key][index] = nil
+			MC.ClearSectionBlockEmitCache( key, index )
+			GeometryStore.ForgetSection( key, index )
+			return
+		end
+		local section = { l2 = true, chunk = chunk, blockSize = ctx.blockSize, worldGeneration = MC.StateWorldGeneration,
+			opaque = opaqueList, translucent = translucentList }
+		MC.MeshSections[key][index] = section
+		GeometryStore.SetSection( key, index, GeometryStore.MakeSection( opaqueCPU, translucentCPU ), section )
+		GeometryStore.TouchSection( key, index )
+	end
 
-		local commitStart = SysTime()
-		if sectionIndex then
-			MC.MeshSections[key] = MC.MeshSections[key] or {}
-			local old = MC.MeshSections[key][sectionIndex]
-		if old then
-			local destroyStart = SysTime()
-			destroySectionMeshList( old.opaque )
-			destroySectionMeshList( old.translucent )
-			meshPerfAdd( meshPerf, "destroyMS", destroyStart )
-		end
-			if #opaqueMeshes > 0 or #translucentMeshes > 0 then
-				MC.MeshSections[key][sectionIndex] = { opaque = opaqueMeshes, translucent = translucentMeshes }
-				GeometryStore.SetSection( key, sectionIndex,
-					GeometryStore.MakeSection( opaqueRecords, translucentRecords ) )
-				if GeometryStore.TouchSection then GeometryStore.TouchSection( key, sectionIndex ) end
-			else
-				MC.MeshSections[key][sectionIndex] = nil
-				MC.ClearSectionBlockEmitCache( key, sectionIndex )
-				if GeometryStore.ForgetSection then
-					GeometryStore.ForgetSection( key, sectionIndex )
-				else
-					GeometryStore.ClearSection( key, sectionIndex )
-				end
+	local commitStart = SysTime()
+	if sectionIndex then
+		local sections = MC.MeshSections[key]
+		if not sections then sections = {} MC.MeshSections[key] = sections end
+		local old = sections[sectionIndex]
+		publishSection( sectionIndex, opaque, translucent, opaqueRecords, translucentRecords )
+		retire( old )
+		MC.ClearSectionBlockEmitDirty( key, sectionIndex )
+		MC.ClearSectionBlockLightDirty( key, sectionIndex )
+		if MC.MeshLightDirty[key] then MC.MeshLightDirty[key][sectionIndex] = nil end
+	else
+		local old = MC.MeshSections[key]
+		MC.MeshSections[key] = {}
+		GeometryStore.ClearChunk( key )
+		MC.ClearChunkMeshSectionGeometryLRU( key )
+		if ctx then
+			for index, buffers in pairs( ctx.sectionBuffers ) do
+				publishSection( index, buffers.opaque.list, buffers.translucent.list,
+					buffers.opaque.records, buffers.translucent.records )
 			end
-			MC.ClearSectionBlockEmitDirty( key, sectionIndex )
-			MC.ClearSectionBlockLightDirty( key, sectionIndex )
-			if MC.MeshLightDirty[key] then MC.MeshLightDirty[key][sectionIndex] = nil end
-			local flatStart = SysTime()
-			rebuildFlatMeshLists( key )
-			meshPerfAdd( meshPerf, "flatMS", flatStart )
-		else
-			local destroyStart = SysTime()
-			-- Retire old geometry only after every section succeeded. The block
-			-- cache now contains this build's emissions and must survive retirement.
-			MC.FreeChunkMesh( key, true )
-			meshPerfAdd( meshPerf, "destroyMS", destroyStart )
-			MC.MeshSections[key] = {}
-			GeometryStore.ClearChunk( key )
-		if MC.ClearChunkMeshSectionGeometryLRU then MC.ClearChunkMeshSectionGeometryLRU( key ) end
-		local totalSections = C.RENDER_SECTIONS_XY * C.RENDER_SECTIONS_XY * C.RENDER_SECTIONS_Z
-		for i = 1, totalSections do
-			local buffers = ctx.sectionBuffers[i]
-			if buffers then
-				MC.MeshSections[key][i] = {
-					opaque = buffers.opaque.list,
-					translucent = buffers.translucent.list,
-				}
-				local records = GeometryStore.MakeSection(
-					buffers.opaque.records, buffers.translucent.records
-				)
-					GeometryStore.SetSection( key, i, records )
-				if GeometryStore.TouchSection then GeometryStore.TouchSection( key, i ) end
-			end
-		end
-			MC.MeshLightDirty[key] = nil
-			local flatStart = SysTime()
-			rebuildFlatMeshLists( key )
-			meshPerfAdd( meshPerf, "flatMS", flatStart )
-		end
-		if GeometryStore.Prune then GeometryStore.Prune() end
-	if MC.PruneBlockEmitCache then MC.PruneBlockEmitCache() end
-	meshPerfAdd( meshPerf, "commitMS", commitStart )
-	local meshMS = math.Round( ( SysTime() - buildStart ) * 1000, 3 )
-	MC.RenderStats.lastMeshBuildMS = meshMS
-	MC.RenderStats.lastMeshKey = key
-	MC.RenderStats.lastMeshSection = sectionIndex or "full"
-	MC.RenderStats.lastMeshBlocks = chunk.count or 0
-	MC.RenderStats.lastMeshVertices = meshPerf.vertices
-	MC.RenderStats.lastMeshFaces = meshPerf.faces
-	MC.RenderStats.lastOpaqueMeshes = #opaqueMeshes
-	MC.RenderStats.lastTranslucentMeshes = #translucentMeshes
+		else MC.ClearChunkBlockEmitCache( key ) end
+		for _, section in pairs( old or {} ) do retire( section ) end
+		MC.MeshLightDirty[key] = nil
+	end
+	local flatStart = SysTime()
+	RM.rebuildFlatMeshLists( key )
+	meshPerfAdd( perf, "flatMS", flatStart )
+	GeometryStore.Prune()
+	MC.PruneBlockEmitCache()
+	meshPerfAdd( perf, "commitMS", commitStart )
+
+	local elapsed = math.Round( ( SysTime() - started ) * 1000, 3 )
+	local stats = MC.RenderStats
+	stats.lastMeshBuildMS, stats.lastMeshKey, stats.lastMeshSection = elapsed, key, sectionIndex or "full"
+	stats.lastMeshBlocks, stats.lastMeshVertices, stats.lastMeshFaces = chunk and chunk.count or 0, perf.vertices, perf.faces
+	stats.lastOpaqueMeshes, stats.lastTranslucentMeshes = #opaque, #translucent
 	if MC.LightPerfStats then
-		MC.LightPerfStats.lastMeshMode = "full"
-		MC.LightPerfStats.lastMeshRecords = nil
-		MC.LightPerfStats.lastMeshFallback = nil
+		MC.LightPerfStats.lastMeshLightStyle = "l2"
+		MC.LightPerfStats.lastMeshMode = lightOnly and "l2_light" or "l2_geometry"
+		MC.LightPerfStats.lastMeshRecords, MC.LightPerfStats.lastMeshFallback = nil, nil
 	end
-	publishMeshPerfStats( meshPerf )
-	noteMeshLightingCacheStats()
-	printMeshEmitProbe( key, sectionIndex, meshMS, meshPerf )
-	if MC.LightPerfEndMeshBuild then
-		MC.LightPerfEndMeshBuild( key, sectionIndex, meshMS )
-	end
+	RM.publishMeshPerfStats( perf )
+	RM.noteMeshLightingCacheStats()
+	RM.printMeshEmitProbe( key, sectionIndex, elapsed, perf )
+	if MC.LightPerfEndMeshBuild then MC.LightPerfEndMeshBuild( key, sectionIndex, elapsed ) end
 	if MC.RenderPipeline and MC.RenderPipeline.RecordBuild then
-		MC.RenderPipeline.RecordBuild( key, sectionIndex, "geometry", chunk.count or 0, meshPerf.vertices, meshPerf.faces, #opaqueMeshes, #translucentMeshes, meshMS )
+		MC.RenderPipeline.RecordBuild( key, sectionIndex, lightOnly and "light" or "geometry",
+			stats.lastMeshBlocks, perf.vertices, perf.faces, #opaque, #translucent, elapsed )
+		MC.RenderPipeline.NoteBuildStages( perf )
 	end
+	reportFaults()
+	return true
 end
 
-------------------------------------------------------------------------- drawing
+function MC.BuildChunkMesh( key, sectionIndex )
+	return build( key, sectionIndex, false )
+end
 
 function MC.RebuildChunkMeshLighting( key, sectionIndex )
-	if not sectionIndex then return MC.BuildChunkMesh( key ) end
-	local buildStart = SysTime()
-	local meshPerf = newMeshPerfStats()
-	resetMeshLightingSampleCaches()
-	resetMeshColorObjectCache()
-	local meshLightStyle = currentLightStyle()
-	local meshLightProfile = currentLightProfile()
-	if MC.LightPerfStats then
-		MC.LightPerfStats.lastMeshLightStyle = meshLightStyle
-	end
-	if MC.LightPerfBeginMeshBuild then
-		MC.LightPerfBeginMeshBuild( key, sectionIndex )
-	end
-
-	local chunk = MC.GetChunkByKey( key )
-	local section = GeometryStore.GetSection( key, sectionIndex )
-	if not chunk or chunk.count == 0 or not section then
-		if MC.LightPerfStats then
-			MC.LightPerfStats.lastMeshMode = "fallback"
-			MC.LightPerfStats.lastMeshFallback = "missing_cache"
-		end
-		return MC.BuildChunkMesh( key, sectionIndex )
-	end
-	prepareGpuLightPayload( key )
-
-	setMeshSampleCacheOrigin( chunk.cx * C.CS, chunk.cy * C.CS, chunk.cz * C.CH )
-	meshPerf.prepMS = meshPerfMS( buildStart )
-
-	local scannedRecords, updatedRecords = 0, 0
-	local blockLightDirtySection = MC.GetBlockLightDirtySection and MC.GetBlockLightDirtySection( key, sectionIndex ) or nil
-	local blockEmitCacheSection = MC.MeshBlockEmitCache[key] and MC.MeshBlockEmitCache[key][sectionIndex] or nil
-	local chunkBaseX, chunkBaseY, chunkBaseZ = chunk.cx * C.CS, chunk.cy * C.CS, chunk.cz * C.CH
-	local LightBuffer = MC.RenderLightBuffer
-	local cachedBlockLightKey = MC.CachedBlockLightKey
-	local metaScratch = {}
-	local function metaLocalIndex( light, index )
-		local li = LightBuffer.LocalIndex( light, index )
-		if li ~= nil and li < C.CS2 * C.CH then return li end
-		local meta = LightBuffer.Read( light, index, metaScratch )
-		if not meta or type( meta.bx ) ~= "number" or type( meta.by ) ~= "number"
-			or type( meta.bz ) ~= "number" then return nil end
-		local lx, ly, lz = meta.bx - chunkBaseX, meta.by - chunkBaseY, meta.bz - chunkBaseZ
-		if lx < 0 or lx >= C.CS or ly < 0 or ly >= C.CS or lz < 0 or lz >= C.CH then return nil end
-		if lx ~= math.floor( lx ) or ly ~= math.floor( ly ) or lz ~= math.floor( lz ) then return nil end
-		li = lx + ly * C.CS + lz * C.CS2
-		if not LightBuffer.SetLocalIndex( light, index, li ) then return nil end
-		return li
-	end
-
-	local function ensureRecordLightIndexByLi( record, light, vertexCount )
-		local byLi = record.lightByLi
-		if byLi ~= nil then return byLi end
-		byLi = {}
-		for i = 1, vertexCount do
-			local li = metaLocalIndex( light, i )
-			if li == nil then return nil end
-			local list = byLi[li]
-			if not list then
-				list = { n = 0 }
-				byLi[li] = list
-			end
-			local n = list.n + 1
-			list.n = n
-			list[n] = i
-		end
-		record.lightByLi = byLi
-		return byLi
-	end
-
-	local function recolorDirtyRecordVertices( record )
-		if not blockLightDirtySection then return true, true end
-		if not cachedBlockLightKey or not recolorLightMeta then return false, false end
-		local verts = record and record.verts
-		local light = record and record.light
-		local vertexCount = MC.RenderVertexBuffer.Count( verts )
-		if not verts or not LightBuffer.IsCompatible( light ) or vertexCount ~= #light then return false, false end
-		local lightByLi = ensureRecordLightIndexByLi( record, light, vertexCount )
-		if not lightByLi then return false, false end
-		local colorCache = {}
-		local recolored = false
-		local style = effectiveLightStyleForMaterial( meshLightStyle, record.material, meshLightProfile )
-		for li in pairs( blockLightDirtySection ) do
-			local vertexIndexes = lightByLi[li]
-			if vertexIndexes then
-				for j = 1, vertexIndexes.n do
-					local i = vertexIndexes[j]
-					local recolorKey = cachedBlockLightKey( light, i )
-					if recolorKey == nil then return false, false end
-					local color = colorCache[recolorKey]
-					if color == nil then
-						local meta = LightBuffer.Read( light, i, metaScratch )
-						if not meta then return false, false end
-						color = recolorLightMeta( meta, style )
-						colorCache[recolorKey] = color
-					end
-					MC.RenderVertexBuffer.SetColor( verts, i, color )
-					recolored = true
-				end
-			end
-		end
-		return true, recolored
-	end
-
-	local function recolorBlockRecords()
-		if not blockEmitCacheSection then return true end
-		-- Section and block buffers own separate colors. A whole-section update
-		-- must refresh retained block caches as well as the displayed records.
-		for li in pairs( blockLightDirtySection or blockEmitCacheSection ) do
-			local blockRecord = blockEmitCacheSection[li]
-			if blockRecord then
-				local recolorStart = SysTime()
-				local recordStyle = effectiveLightStyleForMaterial( meshLightStyle, blockRecord.material, meshLightProfile )
-				local ok = recolorCachedBlockEmission( blockRecord, recordStyle, meshPerf )
-				meshPerfAdd( meshPerf, "recolorMS", recolorStart )
-				if not ok then return false end
-				meshPerf.blockCacheRecolors = meshPerf.blockCacheRecolors + 1
-			end
-		end
-		return true
-	end
-
-	local function updateRecord( record, translucent, recolorWholeRecord )
-		scannedRecords = scannedRecords + 1
-		if not record or not record.mesh or not record.verts or not record.light then return false end
-		local vertexCount = MC.RenderVertexBuffer.Count( record.verts )
-		if not LightBuffer.IsCompatible( record.light ) or vertexCount ~= #record.light then return false end
-		if recolorWholeRecord then
-			local recolorStart = SysTime()
-			local recordStyle = effectiveLightStyleForMaterial( meshLightStyle, record.material, meshLightProfile )
-			if not recolorCachedBlockEmission( record, recordStyle, meshPerf ) then return false end
-			meshPerfAdd( meshPerf, "recolorMS", recolorStart )
-		else
-			local recolorStart = SysTime()
-			local ok, changed = recolorDirtyRecordVertices( record )
-			if not ok then return false end
-			if not changed then return true, false end
-			meshPerfAdd( meshPerf, "recolorMS", recolorStart )
-		end
-		-- Direct mesh.Begin is safe for initial construction but corrupts GMod's
-		-- render state when it rewrites this already-owned IMesh. The engine's
-		-- BuildFromTriangles path safely updates the existing object and avoids
-		-- allocating and destroying an IMesh for every light-only recolor.
-		uploadMeshVertices( record.mesh, record.verts, meshPerf, record.hasSecondaryUV, true )
-		meshPerf.vertices = meshPerf.vertices + vertexCount
-		meshPerf.faces = meshPerf.faces + math.floor( vertexCount / 6 )
-		meshPerf.meshes = meshPerf.meshes + 1
-		if translucent then
-			meshPerf.translucentVerts = meshPerf.translucentVerts + vertexCount
-		else
-			meshPerf.opaqueVerts = meshPerf.opaqueVerts + vertexCount
-		end
-		updatedRecords = updatedRecords + 1
-		return true, true
-	end
-
-	local function updateList( list, translucent, recolorWholeRecord )
-		for i = 1, #( list or {} ) do
-			if not updateRecord( list[i], translucent, recolorWholeRecord ) then return false end
-		end
-		return true
-	end
-
-	local loopStart = SysTime()
-	local recolorWholeRecord = not blockLightDirtySection
-	local opaqueRecords = GeometryStore.GetPassRecords( key, sectionIndex, "opaque" )
-	local translucentRecords = GeometryStore.GetPassRecords( key, sectionIndex, "translucent" )
-	local updateOK = recolorBlockRecords()
-		and updateList( opaqueRecords, false, recolorWholeRecord )
-		and updateList( translucentRecords, true, recolorWholeRecord )
-	meshPerfAdd( meshPerf, "loopMS", loopStart )
-	if not updateOK then
-		if MC.LightPerfStats then
-			MC.LightPerfStats.lastMeshMode = "fallback"
-			MC.LightPerfStats.lastMeshFallback = "invalid_cache"
-			MC.LightPerfStats.lastMeshRecords = tostring( updatedRecords ) .. "/" .. tostring( scannedRecords )
-		end
-		MC.ClearSectionBlockEmitCache( key, sectionIndex )
-		return MC.BuildChunkMesh( key, sectionIndex )
-	end
-	MC.ClearSectionBlockLightDirty( key, sectionIndex )
-	if GeometryStore.TouchSection then GeometryStore.TouchSection( key, sectionIndex ) end
-	if GeometryStore.Prune then GeometryStore.Prune() end
-
-	local meshMS = math.Round( ( SysTime() - buildStart ) * 1000, 3 )
-	MC.RenderStats.lastMeshBuildMS = meshMS
-	MC.RenderStats.lastMeshKey = key
-	MC.RenderStats.lastMeshSection = sectionIndex
-	MC.RenderStats.lastMeshBlocks = chunk.count or 0
-	MC.RenderStats.lastMeshVertices = meshPerf.vertices
-	MC.RenderStats.lastMeshFaces = meshPerf.faces
-	MC.RenderStats.lastOpaqueMeshes = #( section.opaque or {} )
-	MC.RenderStats.lastTranslucentMeshes = #( section.translucent or {} )
-	if MC.LightPerfStats then
-		MC.LightPerfStats.lastMeshMode = "light"
-		MC.LightPerfStats.lastMeshRecords = tostring( updatedRecords ) .. "/" .. tostring( scannedRecords )
-		MC.LightPerfStats.lastMeshFallback = nil
-	end
-	publishMeshPerfStats( meshPerf )
-	noteMeshLightingCacheStats()
-	if MC.LightPerfEndMeshBuild then
-		MC.LightPerfEndMeshBuild( key, sectionIndex, meshMS )
-	end
-	if MC.RenderPipeline and MC.RenderPipeline.RecordBuild then
-		MC.RenderPipeline.RecordBuild( key, sectionIndex, "light", chunk.count or 0, meshPerf.vertices, meshPerf.faces, #( section.opaque or {} ), #( section.translucent or {} ), meshMS )
-	end
+	-- Reuse unchanged block emissions, regenerate dirty corners, then atomically
+	-- publish a local section. No L1 recoloring or world-wide pack preparation.
+	return build( key, sectionIndex, true )
 end

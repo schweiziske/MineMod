@@ -16,6 +16,7 @@ local FACE_BITS = { 1, 2, 4, 8, 16, 32 }
 function Visibility.New( chunk, blockSections, perf )
 	local view = {}
 	local states, classes, touched = {}, {}, {}
+	local visibilityByType = {}
 	local touchedCount = 0
 	local minX, minY, minZ, snapshot
 	local stateSections = chunk.stateSections
@@ -110,20 +111,20 @@ function Visibility.New( chunk, blockSections, perf )
 		return floor( packed / 8 ), flags % 2 == 1, flags % 4 >= 2, flags >= 4, state
 	end
 
-	function view.ClassAt( lx, ly, lz, bx, by, bz )
+	local function packedClassAt( lx, ly, lz, bx, by, bz )
 		if view.error then return nil end
 		perf.visibilityQueries = ( perf.visibilityQueries or 0 ) + 1
 		local slot = cacheSlot( lx, ly, lz )
 		local packed = slot and classes[slot]
 		if packed ~= nil then
 			perf.visibilityCacheHits = ( perf.visibilityCacheHits or 0 ) + 1
-			return unpackClass( packed, states[slot] )
+			return packed, states[slot]
 		end
 		local state = readState( lx, ly, lz, bx, by, bz, slot )
 		if state == nil then return nil end
 		if state == 0 then
 			if slot then classes[slot] = 0 end
-			return 0, false, false, false, 0
+			return 0, 0
 		end
 
 		perf.visibilityClassResolves = ( perf.visibilityClassResolves or 0 ) + 1
@@ -159,23 +160,50 @@ function Visibility.New( chunk, blockSections, perf )
 		local special = specialEmitter and specialEmitter( id )
 		packed = id * 8 + ( fullCube and 1 or 0 ) + ( transparent and 2 or 0 ) + ( special and 4 or 0 )
 		if slot then classes[slot] = packed end
+		return packed, state
+	end
+
+	function view.ClassAt( lx, ly, lz, bx, by, bz )
+		local packed, state = packedClassAt( lx, ly, lz, bx, by, bz )
+		if packed == nil then return nil end
 		return unpackClass( packed, state )
 	end
 
+	local function rulesFor( curId )
+		local rules = visibilityByType[curId]
+		if not rules then
+			rules = { [0] = true }
+			visibilityByType[curId] = rules
+		end
+		return rules
+	end
+
+	local function visibleWithRules( curId, rules, lx, ly, lz, bx, by, bz )
+		local packed = packedClassAt( lx, ly, lz, bx, by, bz )
+		if packed == nil then return false end -- The caller must discard the failed build.
+		local visible = rules[packed]
+		if visible ~= nil then return visible end
+		-- Classification remains coordinate-dependent. Only the pure relation
+		-- between the current type and an already resolved class is shared.
+		local id, fullCube, transparent, special = unpackClass( packed )
+		if id == 0 or special then visible = true
+		elseif sameLiquidKind( curId, id ) then visible = false
+		elseif transparent then visible = id ~= curId
+		else visible = not fullCube end
+		rules[packed] = visible
+		return visible
+	end
+
 	function view.VisibleAt( curId, lx, ly, lz, bx, by, bz )
-		local id, fullCube, transparent, special = view.ClassAt( lx, ly, lz, bx, by, bz )
-		if id == nil then return false end -- The caller must discard the failed build.
-		if id == 0 or special then return true end
-		if sameLiquidKind( curId, id ) then return false end
-		if transparent then return id ~= curId end
-		return not fullCube
+		return visibleWithRules( curId, rulesFor( curId ), lx, ly, lz, bx, by, bz )
 	end
 
 	function view.FaceMask( curId, lx, ly, lz, bx, by, bz )
 		local mask, count = 0, 0
+		local rules = rulesFor( curId )
 		for f = 1, 6 do
 			local off = C.FACES[f].off
-			if view.VisibleAt( curId, lx + off[1], ly + off[2], lz + off[3],
+			if visibleWithRules( curId, rules, lx + off[1], ly + off[2], lz + off[3],
 				bx + off[1], by + off[2], bz + off[3] ) then
 				mask, count = mask + FACE_BITS[f], count + 1
 			end

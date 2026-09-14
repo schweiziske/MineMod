@@ -95,6 +95,20 @@ function MC.VisitStateVisualModels( stateId, bx, by, bz, visitor )
 	return groupCount, planId
 end
 
+-- Discovery must inspect every weighted alternative, not one position's choice.
+function MC.VisitStateVisualModelCandidates( stateId, visitor )
+	local _, groupOffset, groupCount = MC.StateVisualPlanRangeFast( stateId )
+	for groupIndex = 0, groupCount - 1 do
+		local groupId = u16( Catalog.planData, ( groupOffset + groupIndex ) * 2 + 1 )
+		local indexOffset = ( groupId - 1 ) * 3 + 1
+		local alternativeOffset = u16( Catalog.groupIndex, indexOffset )
+		local alternativeCount = byte( Catalog.groupIndex, indexOffset + 2 )
+		for alternativeIndex = 0, alternativeCount - 1 do
+			visitor( u16( Catalog.groupData, ( alternativeOffset + alternativeIndex ) * 3 + 1 ) )
+		end
+	end
+end
+
 function MC.CollectStateVisualModels( stateId, bx, by, bz, out )
 	out = out or {}
 	local count = 0
@@ -222,6 +236,10 @@ function MC.StateVisualModelData( modelId )
 	local transformed = transform( cached, modelId ) or cached
 	TransformedModelDataCache[modelId] = transformed
 	return transformed
+end
+
+function MC.StateVisualModelHasTransform( modelId )
+	return ModelTransformById[modelId] ~= nil
 end
 
 function MC.RegisterStateVisualModelTransform( modelId, transform )

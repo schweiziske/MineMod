@@ -870,8 +870,8 @@ function MC.MarkLightSectionsDirtyForChangedCells( changed )
 		MC.LightPerfStats = stats
 		stats.lastGpuLightTextureDirtyChunks = dirtyChunks
 		stats.lastGpuLightTextureDirtyCells = count
-		return 0
 	end
+	-- The animation atlas and native L2 corner buffers are separate consumers.
 	local chunkKey = MC.ChunkKey
 	local world = MC.World
 	local meshDirty = MC.MeshDirty
@@ -1036,10 +1036,15 @@ function MC.RebuildLightingCells()
 	end
 	MC.LightCellsReady = true
 	-- Implicit sky values (including opaque cells becoming zero) have no stored
-	-- change notification. Refresh existing tiles too, under the mesh budget.
+	-- change notification. Refresh native corners and animation tiles as well.
 	if MC.QueueAllGpuChunkLightTextureRefresh then MC.QueueAllGpuChunkLightTextureRefresh() end
+	local markLight = MC.Need( MC.MarkAllMeshLightingDirty,
+		"light_native_invalidation_missing", "native L2 section invalidation did not load" )
+	local dirtySections = 0
+	if markLight then dirtySections = markLight( true ) end
 	local stats = MC.LightPerfStats or {}
 	MC.LightPerfStats = stats
+	stats.lastLightDirtySections = dirtySections
 	stats.lastRebuildMS = perfMS( perfStart )
 	stats.lastRebuildBounds = minX and perfBoundsText( minX, minY, minZ, maxX, maxY, maxZ ) or "empty"
 	MC.LightPerfTrace( "rebuild", {
@@ -1243,7 +1248,7 @@ function MC.MarkLightingDirtyForChange( bx, by, bz, oldId, oldOrient, newId, new
 	if oldEmission ~= newEmission or oldOpacity ~= newOpacity then
 		-- Both emission and opacity changes can alter the propagated field far
 		-- beyond the edited cell, so every actually changed light cell must
-		-- invalidate its CPU mesh section or GPU light-texture texel.
+		-- invalidate native L2 corners as well as the animation light texture.
 		MC.UpdateBlockLightForChange( bx, by, bz, oldEmission, newEmission, oldOpacity, newOpacity )
 	end
 	if oldId ~= 0 and newId == 0 and lightPerfPrintBreakEnabled() and timer and timer.Simple then

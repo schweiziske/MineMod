@@ -41,3 +41,14 @@ Single-result capability checks may still use `and`/`or`. If the number of
 returns is unknown, use the explicit branch form. Pay particular attention to
 coordinate APIs because bounds, cell coordinates, and mutation APIs commonly
 return two or more values.
+
+## Hot-path validation
+
+- Validate inputs, model metadata, and required dependencies at load,
+  registration, or build boundaries; revalidate when their revision changes.
+- Block, quad, and vertex loops consume validated data directly. Do not repeat
+  type/range/dependency checks, protected calls, or fallback defaults for
+  invariants already established by the caller.
+- Put exhaustive checks in tests or explicit debug validation passes. Genuine
+  boundary and resource failures still follow `docs/fault-handling.md`; do not
+  swallow errors or silently substitute defaults.

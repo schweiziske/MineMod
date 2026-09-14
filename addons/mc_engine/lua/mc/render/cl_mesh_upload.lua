@@ -110,17 +110,23 @@ local function writeMeshVertex( vert, meshPosition, meshNormal, meshTexCoord, me
 	meshAdvanceVertex()
 end
 
-local function materializeTriangleVertices( verts )
+local function materializeTriangleVertices( verts, l2FirstQuad )
 	local out = {}
+	local cornerOffset = l2FirstQuad and l2FirstQuad * 4
 	if verts.vertexBufferVersion then
 		for i = 1, verts.count do
 			local o = ( i - 1 ) * VertexBuffer.STRIDE
 			local normal
 			if verts[o + 15] == 1 then normal = Vector( verts[o + 4], verts[o + 5], verts[o + 6] ) end
+			local r, g, b = verts[o + 11], verts[o + 12], verts[o + 13]
+			if cornerOffset then
+				local address = r + g * 256 + b * 65536 + cornerOffset
+				r, g, b = address % 256, math.floor( address / 256 ) % 256, math.floor( address / 65536 )
+			end
 			local vertex = {
 				pos = Vector( verts[o + 1], verts[o + 2], verts[o + 3] ),
 				normal = normal, u = verts[o + 7], v = verts[o + 8],
-				color = Color( verts[o + 11], verts[o + 12], verts[o + 13], verts[o + 14] ),
+				color = Color( r, g, b, verts[o + 14] ),
 			}
 			if verts[o + 16] == 1 then vertex.u1, vertex.v1 = verts[o + 9], verts[o + 10] end
 			out[i] = vertex
@@ -146,8 +152,8 @@ local function materializeTriangleVertices( verts )
 	return out
 end
 
-local function uploadMeshVertices( meshObj, verts, perf, hasSecondaryUV, forceBuildFromTriangles )
-	if not forceBuildFromTriangles and meshBeginUploadEnabled() and mesh and mesh.Begin and meshObj then
+local function uploadMeshVertices( meshObj, verts, perf, hasSecondaryUV, forceBuildFromTriangles, l2FirstQuad )
+	if l2FirstQuad == nil and not forceBuildFromTriangles and meshBeginUploadEnabled() and mesh and mesh.Begin and meshObj then
 		local vertexCount = VertexBuffer.Count( verts )
 		local triCount = math.floor( vertexCount / 3 )
 		local uploadStart = SysTime()
@@ -181,7 +187,7 @@ local function uploadMeshVertices( meshObj, verts, perf, hasSecondaryUV, forceBu
 	end
 
 	local uploadStart = SysTime()
-	meshObj:BuildFromTriangles( materializeTriangleVertices( verts ) )
+	meshObj:BuildFromTriangles( materializeTriangleVertices( verts, l2FirstQuad ) )
 	meshPerfAdd( perf, "buildTriMS", uploadStart )
 	if perf then perf.buildTriangleUploads = ( perf.buildTriangleUploads or 0 ) + 1 end
 	return "triangles"

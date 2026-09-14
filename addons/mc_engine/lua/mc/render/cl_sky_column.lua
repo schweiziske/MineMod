@@ -85,16 +85,26 @@ local function computeColumnTop( bx, by )
 	return false
 end
 
-local function lowestLoadedZ( bx, by )
+local function lowestSkyDomainZ( bx, by, top )
 	local cs, ch = MC.CS or 16, MC.CH or 32
 	local cx, cy = math.floor( bx / cs ), math.floor( by / cs )
-	local list = ensureChunkColumns()[chunkColKey( cx, cy )]
-	if not list then return nil end
-	local minCz
-	for cz in pairs( list ) do
-		if minCz == nil or cz < minCz then minCz = cz end
+	local columns, world = ensureChunkColumns(), MC.World
+	local minCz = math.floor( top / ch )
+	-- Neighbor air halos can belong to much lower voxel chunks one halo farther.
+	local radius = math.ceil( 16 / cs ) * 2
+	for dx = -radius, radius do
+		for dy = -radius, radius do
+			local list = columns[chunkColKey( cx + dx, cy + dy )]
+			if list then
+				for cz in pairs( list ) do
+					if cz < minCz and world[MC.ChunkKey( cx + dx, cy + dy, cz )] then
+						minCz = cz
+					end
+				end
+			end
+		end
 	end
-	return minCz and minCz * ch or nil
+	return ( minCz - math.ceil( 16 / ch ) ) * ch
 end
 
 function MC.SkyColumnTop( bx, by )
@@ -144,8 +154,13 @@ function MC.NoteSkyColumnBlockChange( bx, by, bz, oldOpacity, newOpacity )
 	local cs, ch = MC.CS or 16, MC.CH or 32
 	if chunkColumns then
 		local cx, cy, cz = math.floor( bx / cs ), math.floor( by / cs ), math.floor( bz / ch )
-		local present = MC.World and MC.World[MC.ChunkKey( cx, cy, cz )] ~= nil
+		local list = chunkColumns[chunkColKey( cx, cy )]
+		local wasPresent = list ~= nil and list[cz] == true
+		local present = MC.World[MC.ChunkKey( cx, cy, cz )] ~= nil
 		noteChunkPresence( cx, cy, cz, present )
+		if wasPresent ~= present and MC.QueueSkyFloodColumn then
+			MC.QueueSkyFloodColumn( cx, cy, cz )
+		end
 	end
 
 	local wasBlocking = ( tonumber( oldOpacity ) or 0 ) >= 15
@@ -168,10 +183,9 @@ function MC.NoteSkyColumnBlockChange( bx, by, bz, oldOpacity, newOpacity )
 		zFrom, zTo = math.min( oldTop, newTop ) + 1, math.max( oldTop, newTop )
 	else
 		-- Column gained its first blocker or lost its last one: everything
-		-- below the blocker (down to the lowest loaded chunk) flips.
+		-- below the blocker, including the air-only lighting halo, flips.
 		local top = oldTop == false and newTop or oldTop
-		local bottom = lowestLoadedZ( bx, by ) or ( top - ch )
-		zFrom, zTo = bottom, top
+		zFrom, zTo = lowestSkyDomainZ( bx, by, top ), top
 	end
 	-- Exposed cells are implicit values, no stored change marks them: dirty
 	-- the flipped span for the light texture bake, then let the sky flood
@@ -227,7 +241,7 @@ function MC.NoteSkyColumnChunkLoaded( chunk )
 	-- light of the whole chunk column plus its lateral neighbors (BFS light
 	-- reaches at most 14 blocks, less than one chunk).
 	if MC.QueueSkyFloodColumn then
-		MC.QueueSkyFloodColumn( chunk.cx, chunk.cy )
+		MC.QueueSkyFloodColumn( chunk.cx, chunk.cy, chunk.cz )
 	end
 end
 
@@ -238,7 +252,7 @@ function MC.NoteSkyColumnChunkUnloaded( cx, cy, cz )
 		MC.QueueSkyFloodChunk( MC.ChunkKey( cx, cy, cz ) )
 	end
 	if MC.QueueSkyFloodColumn then
-		MC.QueueSkyFloodColumn( cx, cy )
+		MC.QueueSkyFloodColumn( cx, cy, cz )
 	end
 end
 

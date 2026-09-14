@@ -31,6 +31,7 @@ local SHARED = {
 	"mc/generated/sh_generated_blocks.lua",
 	"mc/generated/sh_generated_block_state_schemas.lua",
 	"mc/generated/sh_generated_state_visual_catalog.lua",
+	"mc/generated/sh_generated_model_lighting.lua",
 	"mc/generated/sh_generated_block_connections.lua",
 	"mc/generated/sh_generated_block_properties.lua",
 	"mc/generated/sh_generated_block_light.lua",
@@ -139,16 +140,21 @@ local SERVER_FILES = {
 }
 local CLIENT_FILES = {
 	"mc/cl_lighting.lua",
-		"mc/render/cl_mesh_constants.lua",
-			"mc/render/cl_render_pipeline.lua",
-				"mc/render/cl_render_snapshot.lua",
-				"mc/render/cl_render_vertex_buffer.lua",
-				"mc/render/cl_render_light_buffer.lua",
-			"mc/render/cl_render_geometry_store.lua",
-			"mc/render/cl_render_material_abi.lua",
-			"mc/render/cl_render_shader_registry.lua",
+	"mc/render/cl_mesh_constants.lua",
+	"mc/render/cl_render_pipeline.lua",
+	"mc/render/cl_render_snapshot.lua",
+	"mc/render/cl_render_vertex_buffer.lua",
+	"mc/render/cl_render_light_buffer.lua",
+	"mc/render/cl_render_geometry_store.lua",
+	"mc/render/cl_render_material_abi.lua",
+	"mc/render/cl_render_shader_registry.lua",
+	"mc/render/cl_render_pack_schema.lua",
+	"mc/render/cl_render_pack_registry.lua",
+	"mc/render/cl_render_pack_discovery.lua",
+	"mc/render/cl_render_block_bindings.lua",
 	"mc/render/cl_mesh_cache.lua",
-		"mc/render/cl_mesh_config.lua",
+	"mc/render/cl_native_mesh_config.lua",
+	"mc/render/cl_mesh_config.lua",
 	"mc/render/cl_sky_column.lua",
 	"mc/render/cl_sky_flood.lua",
 	"mc/render/cl_mesh_gpu_light_texture.lua",
@@ -159,8 +165,8 @@ local CLIENT_FILES = {
 	"mc/render/cl_atlas_profiles.lua",
 	"mc/render/cl_mesh_materials.lua",
 	"mc/render/cl_mesh_global_lightmap.lua",
-		"mc/render/cl_mesh_light_samples.lua",
-		"mc/render/cl_mesh_upload.lua",
+	"mc/render/cl_mesh_light_samples.lua",
+	"mc/render/cl_mesh_upload.lua",
 	"mc/render/cl_mesh_color.lua",
 	"mc/render/cl_mesh_geometry.lua",
 	"mc/render/cl_fluid_geometry.lua",
@@ -170,6 +176,17 @@ local CLIENT_FILES = {
 	"mc/render/cl_mesh_builder.lua",
 	"mc/render/cl_mesh_core.lua",
 	"mc/render/cl_collision.lua",
+	"mc/generated/sh_generated_state_lighting.lua",
+	"mc/state/sh_state_lighting.lua",
+	"mc/render/cl_render_l2_models.lua",
+	"mc/render/cl_render_l2_snapshot.lua",
+	"mc/render/cl_render_l2_lighting.lua",
+	"mc/render/cl_render_l2_quad.lua",
+	"mc/render/cl_render_l2_resources.lua",
+	"mc/render/cl_render_pack_resources.lua",
+	"mc/render/cl_render_pack_geometry.lua",
+	"mc/render/cl_render_pack_runtime.lua",
+	"mc/render/cl_render_atlas_audit.lua",
 	"mc/render/cl_draw.lua",
 	"mc/render/cl_mesh_bloom.lua",
 	"mc/render/cl_dirty.lua",
@@ -198,7 +215,7 @@ local CLIENT_FILES = {
 	"mc/cl_light_bench.lua",
 	"mc/cl_player.lua",
 	"mc/integration/cl_hand_weapon_bridge.lua",
-	"mc/render/cl_native_mesh_backend.lua",
+	-- The native renderer emits the retired L1 ABI. Do not start it for L2 worlds.
 	"mc/api/cl_api.lua",
 }
 
@@ -290,10 +307,8 @@ end
 
 for _, f in ipairs( SHARED ) do includeTracked( f ) end
 
--- Pick one render-section layout before any client render module caches its
--- derived section counts.  A native module that cannot actually be loaded is
--- treated the same as a missing DLL so the pure-Lua backend keeps its smaller
--- 8^3 update granularity.
+-- Pick the Lua L2 section layout before client modules cache its dimensions.
+-- The native module probe remains available for non-rendering subsystems.
 if CLIENT then
 	MC.JoinNoticeEnabled = MC.JoinNoticeEnabled or CreateClientConVar(
 		"mc_join_notice", "1", true, false,
@@ -406,12 +421,12 @@ if CLIENT then
 		return usable
 	end
 
-	local nativeUsable = MC.ProbeNativeMeshModule()
+	MC.ProbeNativeMeshModule()
 	local nativeMissing = MC.NativeMeshModuleMissing == true
 	local nativeOutdated = MC.NativeMeshModuleOutdated == true
-	MC.RENDER_SECTION_SIZE = nativeUsable and 16 or 8
+	MC.RENDER_SECTION_SIZE = 8
 	MsgN( "[MC] render section size = " .. MC.RENDER_SECTION_SIZE
-		.. ( nativeUsable and " (native module)" or " (Lua fallback)" ) )
+		.. " (Lua L2)" )
 
 	if ( nativeMissing or nativeOutdated ) and not MC.NativeMeshInstallNoticeScheduled then
 		MC.NativeMeshInstallNoticeScheduled = true
@@ -462,13 +477,13 @@ if SERVER then
 else
 	for _, f in ipairs( CLIENT_FILES ) do includeTracked( f ) end
 
-	-- Formal mesh backend dispatch.  Public MC mesh functions remain stable;
-	-- optional backends register implementations instead of monkey-patching the
-	-- mother addon at runtime.  The Lua implementation is always the fallback.
+	-- World geometry has one supported ABI. The installed native module can
+	-- still serve other subsystems, but its L1 renderer cannot own world meshes.
 	MC.MeshBackends = MC.MeshBackends or {}
 	MC.MeshBackends.lua = {
 		name = "lua",
 		native = false,
+		layout = "mc:quad_corners_v1",
 		IsActive = function() return true end,
 		BuildChunkMesh = MC.BuildChunkMesh,
 		RebuildChunkMeshLighting = MC.RebuildChunkMeshLighting,
@@ -481,8 +496,6 @@ else
 		return true
 	end
 	function MC.GetMeshBackend()
-		local native = MC.MeshBackends and MC.MeshBackends.native
-		if native and native.IsActive and native.IsActive() then return native end
 		return MC.MeshBackends.lua
 	end
 	function MC.BuildChunkMesh( ... )
