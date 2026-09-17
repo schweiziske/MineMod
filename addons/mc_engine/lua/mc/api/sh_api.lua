@@ -881,8 +881,7 @@ function Coords.EntityEyeWorldPos( ent )
 	return Vector( position.x, position.y, position.z )
 end
 
--- InfMap-safe world-space bounds. Both vectors are fresh copies.
-function Coords.EntityWorldAABB( ent )
+local function entityWorldBounds( ent )
 	if not IsValid( ent ) then return nil, nil, "invalid_entity" end
 	local minimum, maximum
 	if MC.EntityWorldAABB then minimum, maximum = MC.EntityWorldAABB( ent )
@@ -890,7 +889,29 @@ function Coords.EntityWorldAABB( ent )
 	if not isvector( minimum ) or not isvector( maximum ) then
 		return nil, nil, "world_bounds_unavailable"
 	end
+	return minimum, maximum
+end
+
+-- InfMap-safe world-space bounds. Both vectors are fresh copies.
+function Coords.EntityWorldAABB( ent )
+	local minimum, maximum, err = entityWorldBounds( ent )
+	if not minimum then return nil, nil, err end
 	return Vector( minimum.x, minimum.y, minimum.z ), Vector( maximum.x, maximum.y, maximum.z )
+end
+
+-- InfMap-safe integer minX/minY/minZ/maxX/maxY/maxZ, inset in Source units.
+-- Avoid the two public AABB copies and per-query arithmetic vectors. The
+-- underlying engine/adapter bounds query may still allocate its return values.
+local cellBoundsPoint = Vector()
+function Coords.EntityCellBounds( ent, inset )
+	local minimum, maximum = entityWorldBounds( ent )
+	if not minimum then return nil, nil, nil, nil, nil, nil end
+	inset = inset or 0
+	cellBoundsPoint.x, cellBoundsPoint.y, cellBoundsPoint.z = minimum.x + inset, minimum.y + inset, minimum.z + inset
+	local minX, minY, minZ = MC.WorldToCell( cellBoundsPoint )
+	cellBoundsPoint.x, cellBoundsPoint.y, cellBoundsPoint.z = maximum.x - inset, maximum.y - inset, maximum.z - inset
+	local maxX, maxY, maxZ = MC.WorldToCell( cellBoundsPoint )
+	return minX, minY, minZ, maxX, maxY, maxZ
 end
 
 -- Min corner / center of a cell in MC world units.
