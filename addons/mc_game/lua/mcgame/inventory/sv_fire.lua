@@ -425,15 +425,21 @@ hook.Add( "MC.ProjectileImpact", "mc_campfire_burning_projectile", function( pro
 	} )
 end )
 
+-- Shared immutable contact definitions, never allocated per cell or per tick.
+local NORMAL_FIRE_CONTACT = { damage = 1, ignite = true, damageTypeId = "minecraft:in_fire" }
+local SOUL_FIRE_CONTACT = { damage = 2, ignite = true, damageTypeId = "minecraft:in_fire" }
+local CAMPFIRE_CONTACT = { damage = 1, ignite = false, damageTypeId = "minecraft:campfire" }
+local SOUL_CAMPFIRE_CONTACT = { damage = 2, ignite = false, damageTypeId = "minecraft:campfire" }
 local function contactInfo( stateId )
+	if not stateId or stateId == 0 then return nil end
 	local id = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or nil
 	local block = id and MC.Blocks and MC.Blocks[id] or nil
 	local name = block and block.mcid or nil
-	if name == "minecraft:fire" then return 1, true, "minecraft:in_fire" end
-	if name == "minecraft:soul_fire" then return 2, true, "minecraft:in_fire" end
+	if name == "minecraft:fire" then return NORMAL_FIRE_CONTACT end
+	if name == "minecraft:soul_fire" then return SOUL_FIRE_CONTACT end
 	if name == "minecraft:campfire" or name == "minecraft:soul_campfire" then
 		if not MC.GetStateProperty or MC.GetStateProperty( stateId, "lit" ) ~= true then return nil end
-		return name == "minecraft:soul_campfire" and 2 or 1, false, "minecraft:campfire"
+		return name == "minecraft:soul_campfire" and SOUL_CAMPFIRE_CONTACT or CAMPFIRE_CONTACT
 	end
 	return nil
 end
@@ -443,16 +449,6 @@ local function damageableLivingEntity( entity )
 	if entity:IsPlayer() then return entity:Alive() and entity:GetMoveType() ~= MOVETYPE_NOCLIP end
 	if entity:IsNPC() or entity:IsNextBot() then return entity.Health and entity:Health() > 0 end
 	return false
-end
-
-local function entityContactCells( entity )
-	local minimum, maximum
-	if MC.EntityWorldAABB then minimum, maximum = MC.EntityWorldAABB( entity )
-	else minimum, maximum = entity:WorldSpaceAABB() end
-	local epsilon = math.max( ( MC.BS or 36.5 ) / 4096, 0.01 )
-	local minX, minY, minZ = MC.WorldToCell( minimum + Vector( epsilon, epsilon, epsilon ) )
-	local maxX, maxY, maxZ = MC.WorldToCell( maximum - Vector( epsilon, epsilon, epsilon ) )
-	return minX, minY, minZ, maxX, maxY, maxZ
 end
 
 local function applyFireContact( entity, damage, ignite, damageTypeId )
@@ -509,27 +505,190 @@ local function applyFireContact( entity, damage, ignite, damageTypeId )
 	if not ok then ErrorNoHalt( "[MC] fire contact damage failed: " .. tostring( err ) .. "\n" ) end
 end
 
-local function scanFireContacts()
-	if not MC.WorldToCell or not MC.GetBlockState then return end
-	for _, entity in ipairs( ents.GetAll() ) do
-		if damageableLivingEntity( entity ) then
-			local minX, minY, minZ, maxX, maxY, maxZ = entityContactCells( entity )
-			local bestDamage, shouldIgnite, bestDamageTypeId
-			for bx = minX, maxX do
-				for by = minY, maxY do
+-- Chunk membership is for cold-path loading/removal. Numeric x/y/z lookup
+-- skips empty columns without chunk-key strings or scanning nearby fires.
+-- Both indexes reference the four shared contact definitions above.
+local fireChunks, fireColumns = {}, {}
+local contactEntities, pendingContactEntities = {}, {}
+local CONTACT_TIMER = "mc_fire_campfire_entity_contact"
+
+local function setFireColumn( bx, by, bz, contact )
+	local column = fireColumns[bx]
+	local levels = column and column[by]
+	if contact then
+		if not column then column = {} fireColumns[bx] = column end
+		if not levels then levels = {} column[by] = levels end
+		levels[bz] = contact
+	elseif levels then
+		levels[bz] = nil
+		if next( levels ) == nil then column[by] = nil end
+		if next( column ) == nil then fireColumns[bx] = nil end
+	end
+end
+
+local function indexFireCell( bx, by, bz, stateId )
+	local contact = contactInfo( stateId )
+	local cx, cy, cz, localIndex = MC.API.Coords.CellToChunk( bx, by, bz )
+	local key = MC.ChunkKey( cx, cy, cz )
+	local cells = fireChunks[key]
+	if contact then
+		if not cells then cells = {} fireChunks[key] = cells end
+		cells[localIndex] = contact
+	elseif cells then
+		cells[localIndex] = nil
+		if next( cells ) == nil then fireChunks[key] = nil end
+	end
+	setFireColumn( bx, by, bz, contact )
+end
+
+local function strongestFireContact( entity, coords, inset )
+	local minX, minY, minZ, maxX, maxY, maxZ = coords.EntityCellBounds( entity, inset )
+	if minX == nil or maxX == nil then return end
+	local best
+	for bx = minX, maxX do
+		local column = fireColumns[bx]
+		if column then
+			for by = minY, maxY do
+				local levels = column[by]
+				if levels then
 					for bz = minZ, maxZ do
-						local damage, ignite, damageTypeId = contactInfo( MC.GetBlockState( bx, by, bz ) )
-						if damage and ( not bestDamage or damage > bestDamage ) then
-							bestDamage, shouldIgnite, bestDamageTypeId = damage, ignite, damageTypeId
+						local contact = levels[bz]
+						if contact then
+							-- Numeric iteration preserves the old x/y/z tie order.
+							if contact.damage == 2 then return contact end
+							if not best then best = contact end
 						end
 					end
 				end
 			end
-			if bestDamage then
-				applyFireContact( entity, bestDamage, shouldIgnite, bestDamageTypeId )
-			end
+		end
+	end
+	return best
+end
+
+local function scanFireContacts()
+	for entity in pairs( pendingContactEntities ) do
+		pendingContactEntities[entity] = nil
+		if IsValid( entity ) and ( entity:IsPlayer() or entity:IsNPC() or entity:IsNextBot() ) then
+			contactEntities[entity] = true
+		end
+	end
+	local coords = MC.API and MC.API.Coords
+	if not coords or not MC.WorldToCell or next( contactEntities ) == nil then return end
+	local current = CurTime()
+	local epsilon = math.max( coords.BlockSize() / 4096, 0.01 )
+	for entity in pairs( contactEntities ) do
+		-- BMB fire contact clears its generic damage clock before the cooldown
+		-- check, so it still needs contact detection while that clock is active.
+		if damageableLivingEntity( entity )
+			and ( entity.IsBMBMob == true or current >= ( entity.MCNextFireContactDamage or 0 ) ) then
+			local cell = strongestFireContact( entity, coords, epsilon )
+			if cell then applyFireContact( entity, cell.damage, cell.ignite, cell.damageTypeId ) end
 		end
 	end
 end
 
-timer.Create( "mc_fire_campfire_entity_contact", 0.1, 0, scanFireContacts )
+local function stopFireContacts()
+	timer.Remove( CONTACT_TIMER )
+	hook.Remove( "OnEntityCreated", "mc_fire_contact_track" )
+	hook.Remove( "EntityRemoved", "mc_fire_contact_untrack" )
+	table.Empty( contactEntities )
+	table.Empty( pendingContactEntities )
+end
+
+local function updateContactTimer()
+	if next( fireChunks ) == nil then stopFireContacts() return end
+	if timer.Exists( CONTACT_TIMER ) then return end
+	-- Track living candidates only while fire exists. Classify new entities on
+	-- the next contact tick, after initialization; retain dead ones for revival.
+	for _, entity in ents.Iterator() do pendingContactEntities[entity] = true end
+	hook.Add( "OnEntityCreated", "mc_fire_contact_track", function( entity )
+		pendingContactEntities[entity] = true
+	end )
+	hook.Add( "EntityRemoved", "mc_fire_contact_untrack", function( entity )
+		contactEntities[entity] = nil
+		pendingContactEntities[entity] = nil
+	end )
+	timer.Create( CONTACT_TIMER, 0.1, 0, scanFireContacts )
+end
+
+local function chunkMayHaveFire( chunk )
+	if not chunk.stateSections then return true end
+	-- The palette rejects ordinary chunks without visiting their cells.
+	for _, section in pairs( chunk.stateSections ) do
+		for index, stateId in ipairs( section.palette ) do
+			if ( section.refCount[index - 1] or 0 ) > 0 and contactInfo( stateId ) then return true end
+		end
+	end
+	return false
+end
+
+local function indexLoadedFireCell( bx, by, bz, _, _, _, stateId )
+	if contactInfo( stateId ) then indexFireCell( bx, by, bz, stateId ) end
+end
+
+local function indexFireChunk( key )
+	local chunk = MC.GetChunkByKey( key )
+	key = MC.CanonicalChunkKey( key )
+	local cells = fireChunks[key]
+	if cells then
+		local cx, cy, cz = MC.ChunkKeyToCoords( key )
+		local ox, oy, oz = cx * MC.CS, cy * MC.CS, cz * MC.CH
+		for localIndex in pairs( cells ) do
+			local lx, ly, lz = MC.DecodeLocal( localIndex )
+			setFireColumn( ox + lx, oy + ly, oz + lz, nil )
+		end
+	end
+	fireChunks[key] = nil
+	if not chunk or not chunkMayHaveFire( chunk ) then return end
+	MC.ForEachBlockState( chunk, indexLoadedFireCell )
+end
+
+local function rebuildFireIndex()
+	table.Empty( fireChunks )
+	table.Empty( fireColumns )
+	for key in pairs( MC.World or {} ) do indexFireChunk( key ) end
+	updateContactTimer()
+end
+
+hook.Add( "MC.BlocksChanged", "mc_fire_contact_changes", function( changes )
+	local changed = false
+	for _, change in ipairs( changes ) do
+		if contactInfo( change.oldStateId ) or contactInfo( change.stateId ) then
+			indexFireCell( change.bx, change.by, change.bz, change.stateId )
+			changed = true
+		end
+	end
+	if changed then updateContactTimer() end
+end )
+hook.Add( "MC.ChunkHydrated", "mc_fire_contact_chunk", function( key )
+	indexFireChunk( key )
+	updateContactTimer()
+end )
+hook.Add( "MC.WorldFilled", "mc_fire_contact_fill", function( fill )
+	local addsFire = contactInfo( fill.stateId ) ~= nil
+	if not addsFire and next( fireChunks ) == nil then return end
+	local coords = MC.API.Coords
+	local minCX, minCY, minCZ = coords.CellToChunk( fill.x1, fill.y1, fill.z1 )
+	local maxCX, maxCY, maxCZ = coords.CellToChunk( fill.x2, fill.y2, fill.z2 )
+	for cx = minCX, maxCX do
+		for cy = minCY, maxCY do
+			for cz = minCZ, maxCZ do
+				local key = MC.ChunkKey( cx, cy, cz )
+				if addsFire or fireChunks[key] then indexFireChunk( key ) end
+			end
+		end
+	end
+	updateContactTimer()
+end )
+hook.Add( "MC.WorldLoaded", "mc_fire_contact_world", rebuildFireIndex )
+hook.Add( "MC.WorldCleared", "mc_fire_contact_clear", function()
+	table.Empty( fireChunks )
+	table.Empty( fireColumns )
+	stopFireContacts()
+end )
+
+-- Remove the previous implementation on hot reload; no repeating timer or
+-- entity tracking hooks remain installed in a world without damaging fire.
+stopFireContacts()
+rebuildFireIndex()
