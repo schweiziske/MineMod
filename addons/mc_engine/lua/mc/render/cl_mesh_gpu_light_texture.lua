@@ -1,4 +1,6 @@
--- Stable packed GPU chunk-light atlas with two interchangeable owners.
+-- Legacy packed GPU chunk-light atlas helpers with two interchangeable owners.
+-- L2 keeps the animation notifications and global-lightmap refresh callbacks;
+-- this module no longer starts an atlas or reacts to the retired texture toggle.
 --
 -- Native active: the DLL owns the procedural texture, stable slots and upload
 -- barrier. Lua only asks for the slot encoded into diagnostics/fallback meshes.
@@ -889,26 +891,12 @@ end
 hook.Remove( "PreRender", "mc_gpu_light_texture_flush" )
 hook.Remove( "Think", "mc_gpu_light_texture_refresh_queue" )
 
-if timer and timer.Simple then
-	timer.Simple( 0, function()
-		if gpuLightTextureEnabled() then MC.EnsureGpuChunkLightTextureBinding() end
-	end )
+-- Remove the old registration as well when Lua autorefresh re-runs this file.
+if cvars and cvars.RemoveChangeCallback then
+	cvars.RemoveChangeCallback( "mc_light_texture", "mc_light_texture_rebuild" )
 end
 
 if cvars and cvars.AddChangeCallback then
-	cvars.AddChangeCallback( "mc_light_texture", function()
-		-- Native vertices keep one permanent slot payload.  Its dedicated
-		-- compatibility material handles the disabled state immediately, so a
-		-- whole-world Native mesh rebuild would only add a large hitch.  Lua
-		-- meshes still change payload formats and therefore must be rebuilt.
-		if nativeBackend() then
-			if gpuLightTextureEnabled() then MC.EnsureGpuChunkLightTextureBinding() end
-			if MC.MarkChunkDrawListDirty then MC.MarkChunkDrawListDirty() end
-			return
-		end
-		MC.ClearAllGpuChunkLightTextures()
-		if MC.MarkAllMeshesDirty then MC.MarkAllMeshesDirty( "gpu_light_texture_toggle" ) end
-	end, "mc_light_texture_rebuild" )
 	local function refreshGlobalOnly()
 		if MC.RefreshGlobalLightmap then MC.RefreshGlobalLightmap() end
 	end

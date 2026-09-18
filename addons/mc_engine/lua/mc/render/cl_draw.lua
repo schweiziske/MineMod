@@ -1,7 +1,7 @@
 -- Chunk mesh draw hooks.
 --
 -- Hot-path notes (LuaJIT): the per-frame loops iterate flat arrays with
--- numeric for (pairs() is NYI and aborts traces), allocate nothing per chunk
+-- numeric for, allocate nothing per chunk
 -- (chunk matrices are cached by key, frustum planes live in reused number
 -- slots), and error protection is one pcall on a named function per pack
 -- pass. Material bindings are reused across adjacent chunks within a pass.
@@ -175,11 +175,13 @@ end
 
 function MC.EvictChunkDrawMatrix( key )
 	chunkFrames[key] = nil
-	MC.MarkChunkDrawListDirty()
+	MC.MarkChunkDrawListDirty( key )
 end
 
-function MC.MarkChunkDrawListDirty()
+function MC.MarkChunkDrawListDirty( key )
 	drawListVersion = drawListVersion + 1
+	local runtime = MC.RenderPackRuntime
+	if runtime and runtime.MarkChunkDirty then runtime.MarkChunkDirty( key ) end
 end
 
 -- Monotonic mesh-change counter: bumps whenever chunk mesh lists are built,
@@ -189,12 +191,29 @@ function MC.ChunkDrawListVersion()
 	return drawListVersion
 end
 
-local function rebuildDrawList( store, entries )
+local function updateDrawEntry( e, key, list, c, chunkW, chunkH )
+	local ox, oy, oz = c.cx * chunkW, c.cy * chunkW, c.cz * chunkH
+	local frame = chunkFrames[key]
+	if not frame then
+		frame = { matrix = Matrix(), centerRevision = -1, matrixRevision = -1 }
+		chunkFrames[key] = frame
+	end
+	if frame.originX ~= ox or frame.originY ~= oy or frame.originZ ~= oz
+		or frame.chunkW ~= chunkW or frame.chunkH ~= chunkH then
+		frame.originX, frame.originY, frame.originZ = ox, oy, oz
+		frame.worldX, frame.worldY, frame.worldZ = ox + chunkW * 0.5, oy + chunkW * 0.5, oz + chunkH * 0.5
+		frame.chunkW, frame.chunkH = chunkW, chunkH
+		frame.centerRevision, frame.matrixRevision = -1, -1
+	end
+	prepareChunkFrame( frame, true )
+	e.key, e.list, e.frame, e.matrix = key, list, frame, frame.matrix
+end
+
+local function rebuildDrawList( store, entries, indices )
 	local size = MC.API.Coords.BlockSize()
 	local chunkW, chunkH = MC.CS * size, MC.CH * size
-	local halfW = chunkW * 0.5
-	local halfH = chunkH * 0.5
 	local n = 0
+	if indices then for key in pairs( indices ) do indices[key] = nil end end
 	for key, list in pairs( store ) do
 		local c = MC.GetChunkByKey( key )
 		if c and list then
@@ -204,29 +223,8 @@ local function rebuildDrawList( store, entries )
 				e = {}
 				entries[n] = e
 			end
-			local ox, oy, oz = c.cx * chunkW, c.cy * chunkW, c.cz * chunkH
-			local frame = chunkFrames[key]
-			if not frame then
-				frame = {
-					matrix = Matrix(),
-					centerRevision = -1,
-					matrixRevision = -1,
-				}
-				chunkFrames[key] = frame
-			end
-			if frame.originX ~= ox or frame.originY ~= oy or frame.originZ ~= oz
-				or frame.chunkW ~= chunkW or frame.chunkH ~= chunkH then
-				frame.originX, frame.originY, frame.originZ = ox, oy, oz
-				frame.worldX, frame.worldY, frame.worldZ = ox + halfW, oy + halfW, oz + halfH
-				frame.chunkW, frame.chunkH = chunkW, chunkH
-				frame.centerRevision = -1
-				frame.matrixRevision = -1
-			end
-			prepareChunkFrame( frame, true )
-			e.key = key
-			e.list = list
-			e.frame = frame
-			e.matrix = frame.matrix
+			updateDrawEntry( e, key, list, c, chunkW, chunkH )
+			if indices then indices[key] = n end
 		end
 	end
 	for i = #entries, n + 1, -1 do entries[i] = nil end
@@ -411,23 +409,58 @@ local function drawVisibleChunks( store, entries, count, chunks )
 	return drawn, distanceCulled, frustumCulled, stale, meshes
 end
 
-local packDrawVersion, packEntries = -1, {}
+-- One cache per pass, collected with its runtime. Edits patch only dirty keys;
+-- removing a chunk swaps the final entry into its slot instead of shifting or
+-- rebuilding the world's arrays. The draw loop still rejects stale identities.
+local packEntries = setmetatable( {}, { __mode = "k" } )
+
+local function ensurePackEntries( pass, version )
+	local cached = packEntries[pass]
+	if not cached then
+		cached = { entries = {}, indices = {} }
+		packEntries[pass] = cached
+	end
+	local dirty = pass.dirtyChunks
+	if cached.count == nil or not dirty and cached.version ~= version then
+		cached.count = rebuildDrawList( pass.store, cached.entries, cached.indices )
+		if dirty then for key in pairs( dirty ) do dirty[key] = nil end end
+	elseif dirty and next( dirty ) ~= nil then
+		local size = MC.API.Coords.BlockSize()
+		local chunkW, chunkH = MC.CS * size, MC.CH * size
+		local entries, indices, count = cached.entries, cached.indices, cached.count
+		for key in pairs( dirty ) do
+			local list, index = pass.store[key], indices[key]
+			local chunk = list and MC.GetChunkByKey( key )
+			if chunk then
+				if not index then
+					count = count + 1
+					index, indices[key], entries[count] = count, count, {}
+				end
+				updateDrawEntry( entries[index], key, list, chunk, chunkW, chunkH )
+			elseif index then
+				if index < count then
+					local last = entries[count]
+					entries[index], indices[last.key] = last, index
+				end
+				entries[count], indices[key], count = nil, nil, count - 1
+			end
+			dirty[key] = nil
+		end
+		cached.count = count
+	end
+	cached.version = version
+	return cached
+end
 
 local function drawPackStages( translucent )
 	local runtime = MC.RenderPackRuntime
 	local groups, version, chunks = runtime.GetStages( translucent )
-	if version ~= packDrawVersion then packDrawVersion, packEntries = version, {} end
 	updateCullState()
 	local totalTested, totalDrawn, totalDistance, totalFrustum, totalStale = 0, 0, 0, 0, 0
 	local totalMeshes = 0
 	for _, passes in ipairs( groups ) do
 		for _, pass in ipairs( passes ) do
-			local cached = packEntries[pass]
-			if not cached then
-				cached = { entries = {} }
-				cached.count = rebuildDrawList( pass.store, cached.entries )
-				packEntries[pass] = cached
-			end
+			local cached = ensurePackEntries( pass, version )
 			local setCullMode = applyPassState( not translucent )
 			if translucent then render.OverrideDepthEnable( true, false ) end
 			local ok, drawn, distance, frustum, stale, meshes = pcall( drawVisibleChunks,

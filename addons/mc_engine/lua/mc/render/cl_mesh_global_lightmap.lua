@@ -397,37 +397,9 @@ local function generateGlobalLightmap()
 	return true
 end
 
-local function bindToMaterials()
-	local target = ensureLightmapRT()
-	if not target then return end
-	local function bind( mat )
-		if mat and mat.SetTexture and not mat:IsError() then
-			mat:SetTexture( "$texture2", target )
-		end
-	end
-	local materials = MC.GetGpuChunkLightTextureMaterials and MC.GetGpuChunkLightTextureMaterials() or nil
-	if type( materials ) == "table" and #materials > 0 then
-		for _, material in ipairs( materials ) do bind( material ) end
-		return
-	end
-	bind( MC.MaterialGpuLightTexture )
-	bind( MC.MaterialGpuLightTextureLinearDebug )
-	bind( MC.MaterialGpuLightTexturePpFix )
-	bind( MC.MaterialGpuLightTextureFancy )
-	bind( MC.MaterialGpuLightTextureFancyLinearDebug )
-	bind( MC.MaterialGpuLightTextureFancyPpFix )
-	bind( MC.MaterialGpuLightTextureHeight )
-	bind( MC.MaterialGpuLightTextureVanilla )
-	bind( MC.MaterialGpuLightTextureVanillaTranslucent )
-	bind( MC.MaterialGpuLightTextureTranslucent )
-	bind( MC.MaterialGpuLightTextureTranslucentLinearDebug )
-	bind( MC.MaterialGpuLightTextureTranslucentPpFix )
-end
-
 function MC.RefreshGlobalLightmap()
-	local ok = generateGlobalLightmap()
-	bindToMaterials()
-	return ok
+	-- L2 owns its lightmap texture and consumes the published CPU samples.
+	return generateGlobalLightmap()
 end
 
 -- Initial generation is deferred to the first Think: the render context is

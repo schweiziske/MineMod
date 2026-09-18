@@ -14,6 +14,7 @@ end
 
 function L.ReportFaults()
 	local pending, firstError = L.faults, nil
+	if #pending == 0 then return end
 	L.faults = {}
 	for _, fault in ipairs( pending ) do
 		local ok, err = pcall( MC.Fault, fault.code, "%s", fault.message )
@@ -43,6 +44,21 @@ end
 local function advanceVersion( c )
 	L.version = L.version + 1
 	c.version = L.version
+end
+
+local function markChunkDirty( c, key )
+	if not c then return end
+	if key == nil then c.fullSync = true return end
+	if not c.dirtyChunks then c.dirtyChunks = {} end
+	c.dirtyChunks[key] = true
+end
+
+-- Each consumer keeps its own pending changes: an active pack may retry while
+-- a candidate waits for repartitioned geometry. A no-key notification still
+-- invalidates the complete world (including callers predating this API).
+function L.MarkChunkDirty( key )
+	markChunkDirty( L.active, key )
+	markChunkDirty( L.pending, key )
 end
 
 function L.Select( id )
@@ -84,7 +100,7 @@ local function beginBindings( c )
 		local passes = {}
 		c.stages[stage] = passes
 		for _, node in ipairs( c.bundle.nodes[stage] ) do
-			local pass = { node = node, store = {} }
+			local pass = { node = node, store = {}, dirtyChunks = {} }
 			passes[#passes + 1] = pass
 			c.passByKey[node.key] = pass
 		end
@@ -95,7 +111,8 @@ end
 
 local function partitionMatches( c, source, size )
 	if source.blockSize ~= size then return false end
-	for _, list in ipairs( { source.opaque, source.translucent } ) do
+	for pass = 1, 2 do
+		local list = pass == 1 and source.opaque or source.translucent
 		for _, part in ipairs( list ) do
 			requireValue( part.l2 and part.resource and part.mesh, "render_pack_native_geometry",
 				"world meshes must be emitted in L2 format; restart the client after upgrading" )
@@ -110,7 +127,8 @@ end
 local function bindSection( c, transaction, source, chunk, size )
 	local bound = { source = source, chunk = chunk, resources = {}, passes = {}, quads = 0, draws = 0 }
 	transaction.created[#transaction.created + 1] = bound
-	for _, list in ipairs( { source.opaque, source.translucent } ) do
+	for pass = 1, 2 do
+		local list = pass == 1 and source.opaque or source.translucent
 		for _, part in ipairs( list ) do
 			local data = part.resource
 			G.Retain( data )
@@ -154,121 +172,199 @@ local function copyMaterialNodes( nodes )
 	return copy
 end
 
+local emptySections = {}
+
+local function adjustMaterialUses( uses, bound, delta )
+	for pass = 1, 2 do
+		local list = pass == 1 and bound.source.opaque or bound.source.translucent
+		for _, part in ipairs( list ) do
+			uses[part.material] = ( uses[part.material] or 0 ) + delta
+		end
+	end
+end
+
+local function sourceChanged( c, transaction, material )
+	local changed = transaction.changedSources[material]
+	if changed == nil then
+		local previous = c.bundle.sources[material]
+		changed = not previous or not R.SameTexture( R.SourceTexture( material ), previous )
+		transaction.changedSources[material] = changed
+		if changed then
+			transaction.materials[material] = nil
+			-- A texture shared with untouched chunks changed in this same frame.
+			if previous and not transaction.full then transaction.fullRequired = true end
+		end
+	end
+	return changed
+end
+
+local function syncChunk( c, transaction, key, size, force )
+	local chunk = MC.GetChunkByKey( key )
+	local old, sections, rebuilds = c.sections[key] or emptySections, {}, nil
+	local previousRequests = c.rebuildRequests[key]
+	if not transaction.full then
+		for _ in pairs( previousRequests or emptySections ) do transaction.waiting = transaction.waiting - 1 end
+	end
+	for index, source in pairs( MC.MeshSections[key] or emptySections ) do
+		if chunk then
+			requireValue( type( source ) == "table" and source.l2 and source.chunk
+				and source.worldGeneration ~= nil, "render_pack_native_geometry",
+				"world section is not native L2; restart the client after upgrading" )
+		end
+		-- Streaming may detach a chunk before its mesh cleanup.
+		if chunk and source.chunk == chunk and source.worldGeneration == MC.StateWorldGeneration then
+			local bound = old[index]
+			local partitionCurrent = not force and bound and bound.source == source and bound.chunk == chunk
+			if not partitionCurrent and not partitionMatches( c, source, size ) then
+				transaction.waiting = transaction.waiting + 1
+				rebuilds = rebuilds or {}
+				rebuilds[index] = source
+				if c.bindingsGeneration == Bindings.generation and ( not previousRequests or previousRequests[index] ~= source ) then
+					requireValue( type( MC.RequestRenderSectionGeometry ) == "function",
+						"render_pack_rebuild_missing", "native section rebuild queue is unavailable" )
+					MC.RequestRenderSectionGeometry( key, index, false )
+				end
+				if not bound or bound.chunk ~= chunk or not sameWorld( c ) then bound = nil end
+			else
+				local rebind = force or not bound or bound.source ~= source or bound.chunk ~= chunk
+				for pass = 1, 2 do
+					local list = pass == 1 and source.opaque or source.translucent
+					for _, part in ipairs( list ) do
+						if sourceChanged( c, transaction, part.material ) then rebind = true end
+					end
+				end
+				if rebind then bound = bindSection( c, transaction, source, chunk, size ) end
+			end
+			sections[index] = bound
+		end
+	end
+	local changed = false
+	for index, bound in pairs( old ) do
+		if sections[index] ~= bound then
+			transaction.removed[#transaction.removed + 1] = bound
+			transaction.count = transaction.count - 1
+			transaction.quads, transaction.draws = transaction.quads - bound.quads, transaction.draws - bound.draws
+			adjustMaterialUses( transaction.materialUses, bound, -1 )
+			changed = true
+		end
+	end
+	for index, bound in pairs( sections ) do
+		if old[index] ~= bound then
+			transaction.count = transaction.count + 1
+			transaction.quads, transaction.draws = transaction.quads + bound.quads, transaction.draws + bound.draws
+			adjustMaterialUses( transaction.materialUses, bound, 1 )
+			changed = true
+		end
+	end
+	local update = { key = key, rebuilds = rebuilds }
+	if next( sections ) then update.sections, update.chunk = sections, chunk end
+	if changed then update.passes = flattenChunk( sections ) end
+	transaction.updates[#transaction.updates + 1] = update
+end
+
+local function prepareSync( c, transaction, keys, size, force )
+	transaction.bundle, transaction.materials, transaction.changedSources = P.Fork( c.bundle ), {}, {}
+	transaction.materialUses, transaction.removed, transaction.updates = {}, {}, {}
+	transaction.count, transaction.quads, transaction.draws = c.sectionCount, c.totalQuads, c.drawEntries
+	transaction.waiting = transaction.full and 0 or c.waitingSections
+	if c.materialUses then
+		for material, count in pairs( c.materialUses ) do transaction.materialUses[material] = count end
+	else
+		-- One-time adoption of a runtime retained across Lua autorefresh.
+		for _, sections in pairs( c.sections ) do
+			for _, bound in pairs( sections ) do adjustMaterialUses( transaction.materialUses, bound, 1 ) end
+		end
+	end
+	if not force then
+		for material, nodes in pairs( c.materials ) do transaction.materials[material] = copyMaterialNodes( nodes ) end
+		for material, texture in pairs( c.bundle.sources ) do transaction.bundle.sources[material] = texture end
+	end
+	if transaction.full then
+		for key in pairs( MC.MeshSections ) do syncChunk( c, transaction, key, size, force ) end
+		for key in pairs( c.sections ) do
+			if MC.MeshSections[key] == nil then syncChunk( c, transaction, key, size, force ) end
+		end
+	else
+		for key in pairs( keys ) do syncChunk( c, transaction, key, size, force ) end
+	end
+	requireValue( transaction.draws <= 65536, "render_pack_draw_budget", "execution plan exceeds 65536 mesh draws" )
+	for material, count in pairs( transaction.materialUses ) do
+		if count == 0 then
+			transaction.materialUses[material], transaction.materials[material], transaction.bundle.sources[material] = nil, nil, nil
+		elseif not transaction.materials[material] then
+			transaction.materials[material] = copyMaterialNodes( c.materials[material] )
+			transaction.bundle.sources[material] = c.bundle.sources[material]
+		end
+	end
+	-- Check only surviving materials: a removed material can already be invalid.
+	-- Changes shared with other chunks expand this transaction before publication.
+	if not transaction.full then
+		for material, texture in pairs( transaction.bundle.sources ) do
+			if transaction.changedSources[material] == nil and not R.SameTexture( R.SourceTexture( material ), texture ) then
+				transaction.fullRequired = true
+			end
+		end
+	end
+end
+
+local function discardSync( transaction )
+	for _, bound in ipairs( transaction.created ) do releaseSection( bound ) end
+end
+
+local function sameEntries( a, b )
+	if a == b then return true end
+	if not a or not b or #a ~= #b then return false end
+	for i = 1, #a do if a[i] ~= b[i] then return false end end
+	return true
+end
+
 local function syncSections( c, force )
-	local started, size = SysTime(), MC.API.Coords.BlockSize()
+	local started, size, generation = SysTime(), MC.API.Coords.BlockSize(), MC.ChunkDrawListVersion()
 	requireValue( type( size ) == "number" and size > 0 and size < math.huge,
 		"render_pack_block_size", "invalid runtime block size" )
 	force = force or c.blockSize ~= size
-	local transaction = { created = {}, bundle = P.Fork( c.bundle ), materials = {} }
-	if not force then
-		for material, nodes in pairs( c.materials ) do
-			transaction.materials[material] = copyMaterialNodes( nodes )
-		end
-		for material, texture in pairs( c.bundle.sources ) do transaction.bundle.sources[material] = texture end
+	local keys, fullSync = c.dirtyChunks, c.fullSync
+	local full = force or fullSync or not sameWorld( c ) or not keys or next( keys ) == nil
+	-- New notifications during preparation belong to the next transaction.
+	c.dirtyChunks, c.fullSync = nil, nil
+	local transaction = { created = {}, full = full }
+	local ok, err = pcall( prepareSync, c, transaction, keys, size, force )
+	if ok and transaction.fullRequired then
+		discardSync( transaction )
+		transaction = { created = {}, full = true }
+		ok, err = pcall( prepareSync, c, transaction, keys, size, force )
 	end
-	local sections, chunks, kept, touched, updates, rebuilds, usedMaterials = {}, {}, {}, {}, {}, {}, {}
-	local changedSources = {}
-	local count, quads, draws, waiting, changed = 0, 0, 0, 0, 0
-	local ok, err = pcall( function()
-		for key, sources in pairs( MC.MeshSections ) do
-			local chunk = MC.GetChunkByKey( key )
-			local old = c.sections[key] or {}
-			for index, source in pairs( sources ) do
-				if chunk then
-					requireValue( type( source ) == "table" and source.l2 and source.chunk
-						and source.worldGeneration ~= nil, "render_pack_native_geometry",
-						"world section is not native L2; restart the client after upgrading" )
-				end
-				-- Streaming may detach a chunk before its budgeted mesh cleanup.
-				if chunk and source.chunk == chunk and source.worldGeneration == MC.StateWorldGeneration then
-					local bound = old[index]
-					local partitionCurrent = not force and bound and bound.source == source and bound.chunk == chunk
-					if not partitionCurrent and not partitionMatches( c, source, size ) then
-						waiting = waiting + 1
-						local previousRequest = c.rebuildRequests[key] and c.rebuildRequests[key][index]
-						rebuilds[key] = rebuilds[key] or {}
-						rebuilds[key][index] = source
-						if c.bindingsGeneration == Bindings.generation and previousRequest ~= source then
-							requireValue( type( MC.RequestRenderSectionGeometry ) == "function",
-								"render_pack_rebuild_missing", "native section rebuild queue is unavailable" )
-							MC.RequestRenderSectionGeometry( key, index, false )
-						end
-						if not bound or bound.chunk ~= chunk or not sameWorld( c ) then bound = nil end
-					else
-						local rebind = force or not bound or bound.source ~= source
-						for _, list in ipairs( { source.opaque, source.translucent } ) do
-							for _, part in ipairs( list ) do
-								local material = part.material
-								if changedSources[material] == nil then
-									local previousTexture = c.bundle.sources[material]
-									local changedSource = not previousTexture or not R.SameTexture( R.SourceTexture( material ), previousTexture )
-									changedSources[material] = changedSource
-									if changedSource then transaction.materials[material] = nil end
-								end
-								if changedSources[material] then rebind = true end
-							end
-						end
-						if rebind then
-							bound = bindSection( c, transaction, source, chunk, size )
-							changed = changed + 1
-							touched[key] = true
-						end
-					end
-					if bound then
-						sections[key] = sections[key] or {}
-						sections[key][index], chunks[key], kept[bound] = bound, chunk, true
-						count, quads, draws = count + 1, quads + bound.quads, draws + bound.draws
-						for _, list in ipairs( { bound.source.opaque, bound.source.translucent } ) do
-							for _, part in ipairs( list ) do
-								usedMaterials[part.material] = true
-								if not transaction.materials[part.material] then
-									transaction.materials[part.material] = copyMaterialNodes( c.materials[part.material] )
-									transaction.bundle.sources[part.material] = c.bundle.sources[part.material]
-								end
-							end
-						end
-					end
-				end
-			end
-		end
-		requireValue( draws <= 65536, "render_pack_draw_budget", "execution plan exceeds 65536 mesh draws" )
-		for key, previous in pairs( c.sections ) do
-			for _, bound in pairs( previous ) do
-				if not kept[bound] then touched[key] = true changed = changed + 1 end
-			end
-		end
-		for key in pairs( touched ) do updates[key] = flattenChunk( sections[key] ) end
-		for material in pairs( transaction.materials ) do
-			if not usedMaterials[material] then transaction.materials[material] = nil end
-		end
-		for material in pairs( transaction.bundle.sources ) do
-			if not usedMaterials[material] then transaction.bundle.sources[material] = nil end
-		end
-	end )
 	if not ok then
-		for _, bound in ipairs( transaction.created ) do releaseSection( bound ) end
+		discardSync( transaction )
+		if not c.dirtyChunks then c.dirtyChunks = keys
+		else for key in pairs( keys or emptySections ) do c.dirtyChunks[key] = true end end
+		c.fullSync = c.fullSync or full
 		error( err, 0 )
 	end
-	-- The draw lists and their retained handles change at one frame boundary.
-	local previous = c.sections
-	for key, update in pairs( updates ) do
-		for nodeKey, pass in pairs( c.passByKey ) do pass.store[key] = update[nodeKey] end
+	-- Publish only affected chunks, then retire their old handles. Untouched
+	-- sections and pass lists keep their identities and need no reconstruction.
+	if transaction.full then c.rebuildRequests = {} end
+	for _, update in ipairs( transaction.updates ) do
+		local key = update.key
+		c.sections[key], c.chunks[key], c.rebuildRequests[key] = update.sections, update.chunk, update.rebuilds
+		for nodeKey, pass in pairs( c.passByKey ) do
+			if update.passes and not sameEntries( pass.store[key], update.passes[nodeKey] ) then
+				pass.store[key] = update.passes[nodeKey]
+			end
+			pass.dirtyChunks = pass.dirtyChunks or {}
+			pass.dirtyChunks[key] = true
+		end
 	end
-	c.sections, c.chunks, c.bundle, c.materials = sections, chunks, transaction.bundle, transaction.materials
-	c.rebuildRequests = rebuilds
-	c.sectionCount, c.totalQuads, c.drawEntries, c.waitingSections = count, quads, draws, waiting
+	c.bundle, c.materials, c.materialUses = transaction.bundle, transaction.materials, transaction.materialUses
+	c.sectionCount, c.totalQuads, c.drawEntries, c.waitingSections = transaction.count, transaction.quads, transaction.draws, transaction.waiting
 	c.world, c.worldGeneration, c.cs, c.ch = MC.World, MC.StateWorldGeneration, MC.CS, MC.CH
-	c.blockSize, c.drawGeneration = size, MC.ChunkDrawListVersion()
-	c.updateMS, c.updatedSections = ( SysTime() - started ) * 1000, #transaction.created
+	c.blockSize, c.drawGeneration = size, generation
+	c.updateMS, c.updatedSections, c.scannedChunks = ( SysTime() - started ) * 1000, #transaction.created, #transaction.updates
 	c.syncCount = ( c.syncCount or 0 ) + 1
 	c.syncTotalMS = ( c.syncTotalMS or 0 ) + c.updateMS
 	c.failedDrawGeneration = nil
-	if changed > 0 or not c.version then advanceVersion( c ) end
-	for _, list in pairs( previous ) do
-		for _, bound in pairs( list ) do
-			if not kept[bound] then releaseSection( bound ) end
-		end
-	end
+	if #transaction.created > 0 or #transaction.removed > 0 or not c.version then advanceVersion( c ) end
+	for _, bound in ipairs( transaction.removed ) do releaseSection( bound ) end
 end
 
 local function publish( c )
@@ -326,6 +422,19 @@ local function fail( c, err )
 	L.QueueFault( code, L.lastError .. ( L.active and "; previous L2 runtime retained" or "; no L2 runtime available" ) )
 end
 
+local function updateActive( c )
+	P.RefreshLightmap()
+	if not L.pending and c.bindingsGeneration ~= Bindings.generation then
+		local selected, selectionError = L.Select( c.pack )
+		requireValue( selected, "render_pack_reparse", tostring( selectionError ) )
+	end
+	if c.drawGeneration ~= MC.ChunkDrawListVersion() or not sameWorld( c ) then
+		syncSections( c )
+	elseif not P.SourcesCurrent( c.bundle ) then
+		syncSections( c, true )
+	end
+end
+
 function L.Step()
 	local frame = FrameNumber()
 	if L.lastFrame == frame then return end
@@ -347,18 +456,7 @@ function L.Step()
 			or c.failedBlockSize ~= MC.API.Coords.BlockSize()
 			or ( c.retryAt ~= nil and SysTime() >= c.retryAt )
 		if retry then
-			local ok, err = pcall( function()
-				P.RefreshLightmap()
-				if not L.pending and c.bindingsGeneration ~= Bindings.generation then
-					local selected, selectionError = L.Select( c.pack )
-					requireValue( selected, "render_pack_reparse", tostring( selectionError ) )
-				end
-				if c.drawGeneration ~= MC.ChunkDrawListVersion() or not sameWorld( c ) then
-					syncSections( c )
-				elseif not P.SourcesCurrent( c.bundle ) then
-					syncSections( c, true )
-				end
-			end )
+			local ok, err = pcall( updateActive, c )
 			if not ok then
 				fail( c, err )
 			else
@@ -414,6 +512,7 @@ function L.Status()
 		liveParts = G.liveParts, liveQuads = G.liveQuads, materials = P.materialCount,
 		prepareMS = active and active.prepareMS or 0,
 		updateMS = active and active.updateMS or 0, updatedSections = active and active.updatedSections or 0,
+		scannedChunks = active and active.scannedChunks or 0,
 		syncCount = active and active.syncCount or 0, syncTotalMS = active and active.syncTotalMS or 0,
 		lightmapUploads = P.shared.lightmapUploads or 0, lightmapSkippedUploads = P.shared.lightmapSkippedUploads or 0,
 		gpuVerified = false, lastError = L.lastError }
@@ -429,8 +528,8 @@ local function printStatus()
 		s.phase, s.selected, s.active or "-", s.sections, s.quads, s.liveParts, s.liveQuads, s.materials ) )
 	print( string.format( "[MC render pack] prepare=%.2fms update=%.2fms updated=%d waiting=%d converted=0",
 		s.prepareMS, s.updateMS, s.updatedSections, s.waitingSections ) )
-	print( string.format( "[MC render pack work] syncs=%d syncMS=%.2f lightmapUploads=%d skippedLightmapUploads=%d",
-		s.syncCount, s.syncTotalMS, s.lightmapUploads, s.lightmapSkippedUploads ) )
+	print( string.format( "[MC render pack work] syncs=%d syncMS=%.2f scannedChunks=%d lightmapUploads=%d skippedLightmapUploads=%d",
+		s.syncCount, s.syncTotalMS, s.scannedChunks, s.lightmapUploads, s.lightmapSkippedUploads ) )
 	if s.lastError then print( "[MC render pack] lastError=" .. s.lastError ) end
 end
 
