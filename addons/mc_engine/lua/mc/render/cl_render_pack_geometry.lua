@@ -80,13 +80,8 @@ function G.Upload( buffer, perf )
 		object = Mesh( declaration() )
 		if perf then MC.RenderMesh.meshPerfAdd( perf, "meshNewMS", started ) end
 		requireValue( object ~= nil, "render_pack_mesh_create", "could not create a native L2 mesh" )
-		started = perf and SysTime()
-		-- Materialize global addresses without mutating the local CPU/cache buffer.
-		MC.RenderMesh.uploadMeshVertices( object, buffer.verts, nil, false, true, first )
-		if perf then
-			MC.RenderMesh.meshPerfAdd( perf, "buildTriMS", started )
-			perf.buildTriangleUploads = ( perf.buildTriangleUploads or 0 ) + 1
-		end
+		-- Stream global addresses without materializing or mutating the CPU buffer.
+		MC.RenderMesh.uploadMeshVertices( object, buffer.verts, perf, false, false, first )
 		R.UploadPart( { firstQuad = first, quadCount = count, pixels = buffer.pixels }, P.shared )
 	end )
 	if not ok then
