@@ -292,10 +292,8 @@ function MC.AtlasPageMaterial( page, translucent )
 	local definition = MC.AtlasPageDefinition( page )
 	if not definition then return nil, "atlas_page_not_registered" end
 	if page == 0 then
-		local resolver = MC.NativeChunkMaterial or MC.CurrentChunkMaterial
-		local material = resolver and resolver( translucent == true )
-			or ( translucent and MC.MaterialTranslucent or MC.Material )
-		return material
+		if translucent then return MC.MaterialTranslucent end
+		return MC.Material
 	end
 	if definition.materialProvider then
 		local ok, material = pcall( definition.materialProvider, translucent == true, page,

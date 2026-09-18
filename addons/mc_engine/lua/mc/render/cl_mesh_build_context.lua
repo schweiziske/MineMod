@@ -231,10 +231,9 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		if sectionIndex and index ~= sectionIndex then return nil, index end
 		local buffers = sectionBuffers[index]
 		if not buffers then
-			local chunkMaterial = MC.CurrentChunkMaterial or function( translucent ) return translucent and MC.MaterialTranslucent or MC.Material end
 			buffers = {
-				opaque = newMeshBuffer( chunkMaterial( false ), false ),
-				translucent = newMeshBuffer( chunkMaterial( true ), true ),
+				opaque = newMeshBuffer( MC.Material, false ),
+				translucent = newMeshBuffer( MC.MaterialTranslucent, true ),
 			}
 			sectionBuffers[index] = buffers
 		end

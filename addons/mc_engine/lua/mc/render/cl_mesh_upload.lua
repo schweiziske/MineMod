@@ -152,6 +152,45 @@ local function materializeTriangleVertices( verts, l2FirstQuad )
 	return out
 end
 
+-- BuildFromTriangles consumes its input synchronously. Native L2 parts are
+-- bounded by the mesh vertex limit, so one staging pool replaces per-upload
+-- Vector/Color/table churn without retaining geometry for every world chunk.
+local l2TriangleVertices, l2TriangleNormals, l2TriangleOutput = {}, {}, {}
+local l2TriangleBusy = false
+local vectorMeta = FindMetaTable and FindMetaTable( "Vector" )
+local setVectorValues = vectorMeta and vectorMeta.SetUnpacked
+if not setVectorValues then
+	setVectorValues = function( v, x, y, z ) v.x, v.y, v.z = x, y, z end
+end
+local function uploadL2Triangles( meshObj, verts, firstQuad )
+	local out, count, cornerOffset = l2TriangleOutput, verts.count, firstQuad * 4
+	for i = 1, count do
+		local o = ( i - 1 ) * VertexBuffer.STRIDE
+		local vertex = l2TriangleVertices[i]
+		if not vertex then
+			vertex = { pos = Vector(), color = Color( 0, 0, 0, 0 ) }
+			l2TriangleVertices[i] = vertex
+		end
+		local pos, color = vertex.pos, vertex.color
+		setVectorValues( pos, verts[o + 1], verts[o + 2], verts[o + 3] )
+		local normal
+		if verts[o + 15] == 1 then
+			normal = l2TriangleNormals[i]
+			if not normal then normal = Vector() l2TriangleNormals[i] = normal end
+			setVectorValues( normal, verts[o + 4], verts[o + 5], verts[o + 6] )
+		end
+		vertex.normal, vertex.u, vertex.v = normal, verts[o + 7], verts[o + 8]
+		local address = verts[o + 11] + verts[o + 12] * 256 + verts[o + 13] * 65536 + cornerOffset
+		color.r, color.g, color.b, color.a = address % 256, math.floor( address / 256 ) % 256,
+			math.floor( address / 65536 ), verts[o + 14]
+		if verts[o + 16] == 1 then vertex.u1, vertex.v1 = verts[o + 9], verts[o + 10]
+		else vertex.u1, vertex.v1 = nil, nil end
+		out[i] = vertex
+	end
+	for i = #out, count + 1, -1 do out[i] = nil end
+	meshObj:BuildFromTriangles( out )
+end
+
 local function uploadMeshVertices( meshObj, verts, perf, hasSecondaryUV, forceBuildFromTriangles, l2FirstQuad )
 	if l2FirstQuad == nil and not forceBuildFromTriangles and meshBeginUploadEnabled() and mesh and mesh.Begin and meshObj then
 		local vertexCount = VertexBuffer.Count( verts )
@@ -187,7 +226,15 @@ local function uploadMeshVertices( meshObj, verts, perf, hasSecondaryUV, forceBu
 	end
 
 	local uploadStart = SysTime()
-	meshObj:BuildFromTriangles( materializeTriangleVertices( verts, l2FirstQuad ) )
+	if l2FirstQuad ~= nil and verts.vertexBufferVersion and not l2TriangleBusy then
+		l2TriangleBusy = true
+		local ok, err = pcall( uploadL2Triangles, meshObj, verts, l2FirstQuad )
+		l2TriangleBusy = false
+		if not ok then error( err, 0 ) end
+	else
+		-- Reentrant uploads must not overwrite data still consumed by an outer call.
+		meshObj:BuildFromTriangles( materializeTriangleVertices( verts, l2FirstQuad ) )
+	end
 	meshPerfAdd( perf, "buildTriMS", uploadStart )
 	if perf then perf.buildTriangleUploads = ( perf.buildTriangleUploads or 0 ) + 1 end
 	return "triangles"

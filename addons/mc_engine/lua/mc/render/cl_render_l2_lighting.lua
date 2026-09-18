@@ -26,6 +26,25 @@ local function sum4( a, b, c, d )
 	return float32( float32( float32( a + b ) + c ) + d )
 end
 
+-- Vanilla state lighting has only two shade values. Precompute all 16 ordered
+-- combinations with the same Java float rounding; a count of dark cells alone
+-- would lose addition-order differences. Other readers retain the general path.
+local shadeIndex, shadeAverage = { [0.2] = 0, [1] = 1 }, {}
+local darkShade = float32( 0.2 )
+for mask = 0, 15 do
+	local a = band( mask, 1 ) == 0 and darkShade or 1
+	local b = band( mask, 2 ) == 0 and darkShade or 1
+	local c = band( mask, 4 ) == 0 and darkShade or 1
+	local d = band( mask, 8 ) == 0 and darkShade or 1
+	shadeAverage[mask] = float32( sum4( a, b, c, d ) * 0.25 )
+end
+
+local function averageShade( a, b, c, d )
+	local ia, ib, ic, id = shadeIndex[a], shadeIndex[b], shadeIndex[c], shadeIndex[d]
+	if ia and ib and ic and id then return shadeAverage[ia + ib * 2 + ic * 4 + id * 8] end
+	return float32( sum4( float32( a ), float32( b ), float32( c ), float32( d ) ) * 0.25 )
+end
+
 local function int( value )
 	if value >= 2147483647 then return 2147483647 end
 	if value <= -2147483648 then return -2147483648 end
@@ -135,7 +154,7 @@ function Lighter:SampleFace( bx, by, bz, face, cubic )
 	local center = current
 	if cubic or not nextCell.solidRender then center = nextCell end
 	local centerLight = lightCoords( center )
-	local centerShade = float32( ( cubic and nextCell or current ).shade )
+	local centerShade = ( cubic and nextCell or current ).shade
 	for i = 1, 4 do
 		local a, b = PAIR_A[i], PAIR_B[i]
 		local diagonal = sides[1]
@@ -145,7 +164,7 @@ function Lighter:SampleFace( bx, by, bz, face, cubic )
 			if not diagonal then return false end
 		end
 		self.coords[i] = smoothBlend( lightCoords( sides[a] ), lightCoords( sides[b] ), lightCoords( diagonal ), centerLight )
-		self.ao[i] = float32( sum4( float32( sides[a].shade ), float32( sides[b].shade ), float32( diagonal.shade ), centerShade ) * 0.25 )
+		self.ao[i] = averageShade( sides[a].shade, sides[b].shade, diagonal.shade, centerShade )
 	end
 	return true
 end

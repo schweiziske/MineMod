@@ -145,31 +145,7 @@ function Registry.Validate()
 	return result
 end
 
--- Built-in profiles are namespaced independently from light-style selection.
-Registry.Register( "mc_payload", {
-	variant = "opaque",
-	vertex = "mc_gpu_chunk_payload_vs30",
-	pixel = "mc_gpu_chunk_payload4_vface_ps30",
-} )
-Registry.Register( "mc_lighttex", {
-	variant = "vanilla",
-	vertex = "mc_gpu_chunk_lighttex_vs30",
-	pixel = "mc_gpu_chunk_lighttex_mcvanilla5_vface_ps30",
-} )
-
-Registry.Register( "mc_lighttex", {
-	variant = "translucent",
-	vertex = "mc_gpu_chunk_lighttex_vs30",
-	pixel = "mc_gpu_chunk_lighttex_mcvanilla_trans5_vface_ps30",
-} )
-
-do
-	local runtime = Registry.BuildRuntime( {
-		opaque = { profile = "mc_lighttex", variant = "vanilla" },
-		translucent = { profile = "mc_lighttex", variant = "translucent" },
-	} )
-	if runtime then Registry.ActivateRuntime( runtime ) end
-end
+-- No built-in L1 programs. World shaders are owned by JSON render packs.
 
 if concommand and concommand.Add then
 	concommand.Add( "mc_render_shader_abi", function()
