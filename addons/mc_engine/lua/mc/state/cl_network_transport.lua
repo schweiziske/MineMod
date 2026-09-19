@@ -659,20 +659,20 @@ local function drainTransactions()
 		if skipTo then
 			T.pendingRevisionSkips[revision] = nil
 			publishAppliedRevision( skipTo )
-			continue
-		end
-		local ok, err
-		if patch then
-			if patch.nativeJobId and not patch.nativeReady then break end
-			T.pendingChunkPatches[revision] = nil
-			ok, err = applyChunkPatchNow( patch )
 		else
-			T.pendingTransactions[revision] = nil
-			ok, err = applyTransactionNow( transaction )
+			local ok, err
+			if patch then
+				if patch.nativeJobId and not patch.nativeReady then break end
+				T.pendingChunkPatches[revision] = nil
+				ok, err = applyChunkPatchNow( patch )
+			else
+				T.pendingTransactions[revision] = nil
+				ok, err = applyTransactionNow( transaction )
+			end
+			if not ok then T.RequestResync( err or ( patch and "chunk_patch_apply_failed" or "transaction_apply_failed" ) ) return end
+			publishAppliedRevision( revision )
+			T.pendingPatchAnnouncements[revision] = nil
 		end
-		if not ok then T.RequestResync( err or ( patch and "chunk_patch_apply_failed" or "transaction_apply_failed" ) ) return end
-		publishAppliedRevision( revision )
-		T.pendingPatchAnnouncements[revision] = nil
 	end
 
 	local lowest
@@ -746,8 +746,11 @@ function T.AcceptRevisionSkip( generation, fromRevision, toRevision )
 	if not validUInt32( fromRevision ) or not validUInt32( toRevision ) or toRevision < fromRevision then return false, "invalid_skip_range" end
 	if toRevision <= T.appliedRevision then return true, "stale" end
 	if fromRevision <= T.appliedRevision then fromRevision = T.appliedRevision + 1 end
-	for revision = fromRevision, toRevision do
-		if T.pendingTransactions[revision] or T.pendingChunkPatches[revision] then return false, "skip_payload_conflict" end
+	for revision in pairs( T.pendingTransactions ) do
+		if revision >= fromRevision and revision <= toRevision then return false, "skip_payload_conflict" end
+	end
+	for revision in pairs( T.pendingChunkPatches ) do
+		if revision >= fromRevision and revision <= toRevision then return false, "skip_payload_conflict" end
 	end
 	T.pendingRevisionSkips[fromRevision] = toRevision
 	drainTransactions()
@@ -879,6 +882,19 @@ local function finishSnapshotApplication( snapshot )
 	end
 	for revision in pairs( T.pendingChunkPatches ) do
 		if revision <= snapshot.baseRevision then T.pendingChunkPatches[revision] = nil end
+	end
+	-- Skips received before/during the snapshot may straddle its base. Drop
+	-- the covered prefix while preserving the suffix needed by later edits.
+	local skipSuffix
+	for first, last in pairs( T.pendingRevisionSkips ) do
+		if first <= snapshot.baseRevision then
+			T.pendingRevisionSkips[first] = nil
+			if last > snapshot.baseRevision then skipSuffix = math.max( skipSuffix or last, last ) end
+		end
+	end
+	if skipSuffix then
+		local first = snapshot.baseRevision + 1
+		T.pendingRevisionSkips[first] = math.max( T.pendingRevisionSkips[first] or skipSuffix, skipSuffix )
 	end
 	T.pendingCorrections = {}
 	drainTransactions()
