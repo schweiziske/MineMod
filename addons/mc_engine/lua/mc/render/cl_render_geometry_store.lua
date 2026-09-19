@@ -169,11 +169,16 @@ end
 local function validNativeCorners( record, count )
 	if count % 6 ~= 0 or not record.verts.vertexBufferVersion
 		or record.light ~= nil or record.hasSecondaryUV ~= false
-		or type( record.pixels ) ~= "table" or #record.pixels ~= count / 6 * 4 then return false end
+		or type( record.pixels ) ~= "table" or #record.pixels ~= count / 6 * 4
+		or type( record.occlusion ) ~= "table" or #record.occlusion ~= count / 6 then return false end
 	local floor = math.floor
 	local order = { 1, 3, 2, 1, 4, 3 }
 	for i = 1, count / 6 * 4 do
 		local pixel = record.pixels[i]
+		if type( pixel ) ~= "number" or pixel < 0 or pixel > 4294967295 or pixel ~= floor( pixel ) then return false end
+	end
+	for i = 1, count / 6 do
+		local pixel = record.occlusion[i]
 		if type( pixel ) ~= "number" or pixel < 0 or pixel > 4294967295 or pixel ~= floor( pixel ) then return false end
 	end
 	for i = 0, count - 1 do
@@ -192,7 +197,7 @@ function Store.Validate()
 	local result = {
 		chunks = 0, sections = 0, records = 0, validRecords = 0,
 		opaqueRecords = 0, translucentRecords = 0, invalidRecords = 0,
-		packedRecords = 0, legacyRecords = 0, l2Records = 0, cornerTexels = 0,
+		packedRecords = 0, legacyRecords = 0, l2Records = 0, cornerTexels = 0, occlusionTexels = 0,
 		packedLightRecords = 0, legacyLightRecords = 0, lightSamples = 0,
 		vertices = 0, faces = 0, errors = {},
 	}
@@ -268,6 +273,7 @@ function Store.Validate()
 									if record.l2 then
 										result.l2Records = result.l2Records + 1
 										result.cornerTexels = result.cornerTexels + #record.pixels
+										result.occlusionTexels = result.occlusionTexels + #record.occlusion
 									else
 										result.lightSamples = result.lightSamples + ( light.sampleCount or 0 )
 									end
@@ -298,11 +304,11 @@ if concommand and concommand.Add then
 	concommand.Add( "mc_render_geometry_validate", function()
 		local result = Store.Validate()
 		print( string.format(
-			"[MC geometry] chunks=%d sections=%d records=%d valid=%d invalid=%d opaque=%d translucent=%d vertices=%d faces=%d packed=%d legacy=%d packedLight=%d legacyLight=%d lightSamples=%d l2=%d cornerTexels=%d",
+			"[MC geometry] chunks=%d sections=%d records=%d valid=%d invalid=%d opaque=%d translucent=%d vertices=%d faces=%d packed=%d legacy=%d packedLight=%d legacyLight=%d lightSamples=%d l2=%d cornerTexels=%d occlusionTexels=%d",
 			result.chunks, result.sections, result.records, result.validRecords,
 			result.invalidRecords, result.opaqueRecords, result.translucentRecords,
 			result.vertices, result.faces, result.packedRecords, result.legacyRecords,
-			result.packedLightRecords, result.legacyLightRecords, result.lightSamples, result.l2Records, result.cornerTexels
+			result.packedLightRecords, result.legacyLightRecords, result.lightSamples, result.l2Records, result.cornerTexels, result.occlusionTexels
 		) )
 		for i = 1, #result.errors do
 			print( "[MC geometry] error " .. result.errors[i] )

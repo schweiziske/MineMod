@@ -246,7 +246,7 @@ function Lighter:PrepareBaked( bx, by, bz, baked, output )
 	local cubic = baked.cubic or baked.planar and state.fullCollision
 	local smooth = baked.smooth and state.emission == 0
 	local emission, directionShade = baked.emission, baked.directionShade
-	local resultLight, resultShade = self.resultLight, self.resultShade
+	local resultLight, resultShade, resultAO = self.resultLight, self.resultShade, self.resultAO
 	if not smooth then
 		local lightFace = baked.lightFace
 		if lightFace == nil and cubic then lightFace = face end
@@ -257,7 +257,7 @@ function Lighter:PrepareBaked( bx, by, bz, baked, output )
 			if not cell then return nil end
 		end
 		local light = quadEmission( lightCoords( cell, state ), emission )
-		for i = 1, 4 do resultLight[i], resultShade[i] = light, baked.flatShade end
+		for i = 1, 4 do resultLight[i], resultShade[i], resultAO[i] = light, baked.flatShade, 255 end
 	else
 		if not self:SampleFace( bx, by, bz, face, cubic ) then return nil end
 		for vertex = 1, 4 do
@@ -274,12 +274,13 @@ function Lighter:PrepareBaked( bx, by, bz, baked, output )
 			resultLight[vertex] = quadEmission( coords, emission )
 			local gray = floor( float32( ao * 255 ) )
 			resultShade[vertex] = int( float32( gray * directionShade ) )
+			resultAO[vertex] = gray
 		end
 	end
 	-- Publish only after all samples succeed.
-	output = output or { light = {}, shade = {} }
-	output.light, output.shade = output.light or {}, output.shade or {}
-	for i = 1, 4 do output.light[i], output.shade[i] = resultLight[i], resultShade[i] end
+	output = output or { light = {}, shade = {}, ao = {} }
+	output.light, output.shade, output.ao = output.light or {}, output.shade or {}, output.ao or {}
+	for i = 1, 4 do output.light[i], output.shade[i], output.ao[i] = resultLight[i], resultShade[i], resultAO[i] end
 	output.faceCubic, output.facePartial, output.smooth = cubic, baked.partial, smooth
 	return output
 end
@@ -294,7 +295,7 @@ end
 function V.New( readCell )
 	if not MC.Check( type( readCell ) == "function", "l2_sample_reader", "expected a neighbourhood reader" ) then return nil end
 	return setmetatable( { readCell = readCell, sides = {}, open = {}, coords = {}, ao = {},
-		resultLight = {}, resultShade = {} }, Lighter )
+		resultLight = {}, resultShade = {}, resultAO = {} }, Lighter )
 end
 
 V.Float32 = float32

@@ -396,7 +396,8 @@ function MC.GetCachedBlockEmission( key, sectionIndex, li, id, orient, stateId )
 	local vertexCount = record.vertexCount or VertexBuffer.Count( record.verts )
 	if vertexCount ~= VertexBuffer.Count( record.verts ) then return nil end
 	if record.l2 then
-		if vertexCount % 6 ~= 0 or type( record.pixels ) ~= "table" or #record.pixels ~= vertexCount / 6 * 4 then
+		if vertexCount % 6 ~= 0 or type( record.pixels ) ~= "table" or #record.pixels ~= vertexCount / 6 * 4
+			or type( record.occlusion ) ~= "table" or #record.occlusion ~= vertexCount / 6 then
 			MC.Fault( "render_l2_cache_invalid", "invalid cached quad data at %s/%s/%s", key, sectionIndex, li )
 			return nil
 		end

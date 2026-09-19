@@ -114,9 +114,9 @@ local function textureBase( name )
 	return "normal"
 end
 
-local function materialFor( info )
+local function materialFor( info, materials )
 	local suffix = info.type == "left" and "_left" or info.type == "right" and "_right" or ""
-	return MATERIALS[textureBase( info.name ) .. suffix] or MATERIALS.normal
+	return materials[textureBase( info.name ) .. suffix] or materials.normal
 end
 
 local function emitVertex( position, u, v, color, normal )
@@ -175,12 +175,19 @@ local function drawBox( base, right, forward, up, scale, x, y, z, width, height,
 	mesh.End()
 end
 
-local function entryColor( entry )
+local function entryColor( entry, pbr )
 	local now = CurTime()
-	if not entry.lightColor or now >= entry.nextLightAt then
+	if not entry.lightColor or entry.pbrLighting ~= pbr or now >= entry.nextLightAt then
 		local r, g, b = 1, 1, 1
-		local worldCenter = Coords.CellCenter and Coords.CellCenter( entry.bx, entry.by, entry.bz ) or nil
-		if Light.SampleRGB and worldCenter then r, g, b = Light.SampleRGB( worldCenter, 0 ) end
+		if pbr then
+			local _, _, blockLight, skyLight = Light.SampleCell( entry.bx, entry.by, entry.bz, 0 )
+			assert( blockLight and skyLight, "chest PBR requires raw cell lighting" )
+			r, g, b = blockLight * 16 / 255, skyLight * 16 / 255, 1
+		else
+			local worldCenter = Coords.CellCenter and Coords.CellCenter( entry.bx, entry.by, entry.bz ) or nil
+			if Light.SampleRGB and worldCenter then r, g, b = Light.SampleRGB( worldCenter, 0 ) end
+		end
+		entry.pbrLighting = pbr
 		local color = entry.lightColor
 		if not color then color = Color( 255, 255, 255, 255 ) entry.lightColor = color end
 		color.r = math.Clamp( math.floor( r * 255 + 0.5 ), 0, 255 )
@@ -192,7 +199,7 @@ local function entryColor( entry )
 	return entry.lightColor
 end
 
-local function drawChest( entry, stateId, openness, renderCenter, bs )
+local function drawChest( entry, stateId, openness, renderCenter, bs, pbrMaterials )
 	local info = MC.ChestStateInfo and MC.ChestStateInfo( stateId ) or nil
 	if not info then return false end
 	local right, forward = facingBasis( info.facing )
@@ -206,8 +213,10 @@ local function drawChest( entry, stateId, openness, renderCenter, bs )
 	local x, width, lockX, lockWidth, hidden = 1, 14, 7, 2, nil
 	if info.type == "right" then x, width, lockX, lockWidth, hidden = 1, 15, 15, 1, HIDE_EAST
 	elseif info.type == "left" then x, width, lockX, lockWidth, hidden = 0, 15, 0, 1, HIDE_WEST end
-	local color = entryColor( entry )
-	render.SetMaterial( materialFor( info ) )
+	local color = entryColor( entry, pbrMaterials ~= nil )
+	local material = materialFor( info, pbrMaterials or MATERIALS )
+	if pbrMaterials then MC.RenderPBR.Bind( material ) end
+	render.SetMaterial( material )
 	drawBox( origin, right, forward, UP, scale, x, 0, 1, width, 10, 14, 0, 19, color, hidden )
 
 	local closed = 1 - math.Clamp( openness or 0, 0, 1 )
@@ -262,21 +271,40 @@ if Render.RegisterSpecialBlockEmitter then
 	if Render.MarkAllDirty then Render.MarkAllDirty() end
 end
 
-hook.Add( "PostDrawTranslucentRenderables", "mc_chest_block_entities", function( _, _, bSky3D )
-	if bSky3D then return end
-	local eye = EyePos()
-	local bs = Coords.BlockSize()
-	local maxDistanceSqr = ( bs * 64 ) ^ 2
-	if render.PushFilterMin then render.PushFilterMin( TEXFILTER.POINT ) end
-	if render.PushFilterMag then render.PushFilterMag( TEXFILTER.POINT ) end
+local function drawChestEntries( eye, bs, maxDistanceSqr, pbrMaterials )
 	for key, entry in pairs( Entries ) do
 		local center = Coords.CellRenderCenter and Coords.CellRenderCenter( entry.bx, entry.by, entry.bz ) or nil
 		if center and eye:DistToSqr( center ) <= maxDistanceSqr then
 			local stateId = World.GetBlockState and World.GetBlockState( entry.bx, entry.by, entry.bz ) or 0
 			if not MC.IsChestState( stateId ) then removeEntry( key )
-			else drawChest( entry, stateId, opennessFor( key ), center, bs ) end
+			else drawChest( entry, stateId, opennessFor( key ), center, bs, pbrMaterials ) end
 		end
 	end
-	if render.PopFilterMag then render.PopFilterMag() end
-	if render.PopFilterMin then render.PopFilterMin() end
+end
+
+-- These are alpha-tested solids. Write their depth before water/glass, and
+-- remove the old callback on Lua refresh so they cannot be drawn twice.
+hook.Remove( "PostDrawTranslucentRenderables", "mc_chest_block_entities" )
+hook.Add( "PostDrawOpaqueRenderables", "mc_chest_block_entities", function( drawingDepth, _, bSky3D )
+	if bSky3D or drawingDepth then return end
+	if MC.WorldFrameSettled and not MC.WorldFrameSettled() then return end
+	if MC.RenderPBRShadows and MC.RenderPBRShadows.rendering then return end
+	if next( Entries ) == nil then return end
+	local eye = EyePos()
+	local bs = Coords.BlockSize()
+	local maxDistanceSqr = ( bs * 64 ) ^ 2
+	local pbrMaterials
+	if Render.BlockEntityMaterials then pbrMaterials = Render.BlockEntityMaterials( MATERIALS ) end
+	if pbrMaterials == false then return end
+	if pbrMaterials and not MC.RenderPBR.PrepareCurrentView( false ) then return end
+	if not pbrMaterials and render.PushFilterMin then render.PushFilterMin( TEXFILTER.POINT ) end
+	if not pbrMaterials and render.PushFilterMag then render.PushFilterMag( TEXFILTER.POINT ) end
+	-- screenspace_general's WRITEDEPTH flag forces an ALWAYS comparison.
+	-- PBR solids instead use this scoped write override, after shadow prep.
+	if pbrMaterials then render.OverrideDepthEnable( true, true ) end
+	local ok, err = pcall( drawChestEntries, eye, bs, maxDistanceSqr, pbrMaterials )
+	if pbrMaterials then render.OverrideDepthEnable( false, false ) end
+	if not pbrMaterials and render.PopFilterMag then render.PopFilterMag() end
+	if not pbrMaterials and render.PopFilterMin then render.PopFilterMin() end
+	if not ok then MC.Fault( "render_chest_draw", "%s", tostring( err ) ) end
 end )

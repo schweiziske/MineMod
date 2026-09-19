@@ -79,11 +79,14 @@ local function forceDepthWrite()
 	return false
 end
 
-local function restoreChunkMeshRenderState( setCullMode )
+local function restoreChunkMeshRenderState( setCullMode, matrixPushed )
+	local matrixOK, matrixError = true, nil
+	if matrixPushed then matrixOK, matrixError = pcall( cam.PopModelMatrix ) end
 	local cullOK, cullError = true, nil
 	if setCullMode then cullOK, cullError = pcall( restoreDefaultCullMode ) end
 	local colorOK, colorError = pcall( resetColorWriteOverride )
 	local depthOK, depthError = pcall( resetDepthOverride )
+	if not matrixOK then MC.Fault( "render_l2_restore_matrix", "%s", tostring( matrixError ) ) end
 	if not cullOK then MC.Fault( "render_l2_restore_cull", "%s", tostring( cullError ) ) end
 	if not colorOK then MC.Fault( "render_l2_restore_color", "%s", tostring( colorError ) ) end
 	if not depthOK then MC.Fault( "render_l2_restore_depth", "%s", tostring( depthError ) ) end
@@ -126,6 +129,7 @@ local drawListVersion = 0
 local builtVersion = -1
 local opaqueEntries, opaqueCount = {}, 0
 local transEntries, transCount = {}, 0
+local packEntries = setmetatable( {}, { __mode = "k" } )
 -- Mesh vertices stay chunk-local. Only cached model matrices follow the
 -- active logical-world frame, so a floating-origin transition never rebuilds
 -- or uploads native geometry again.
@@ -183,6 +187,8 @@ function MC.MarkChunkDrawListDirty( key )
 	drawListVersion = drawListVersion + 1
 	local runtime = MC.RenderPackRuntime
 	if runtime and runtime.MarkChunkDirty then runtime.MarkChunkDirty( key ) end
+	local shadows = MC.RenderPBRShadows
+	if shadows and shadows.GeometryChanged then shadows.GeometryChanged( key, drawListVersion ) end
 end
 
 -- Monotonic mesh-change counter: bumps whenever chunk mesh lists are built,
@@ -192,7 +198,7 @@ function MC.ChunkDrawListVersion()
 	return drawListVersion
 end
 
-local function updateDrawEntry( e, key, list, c, chunkW, chunkH )
+local function chunkDrawFrame( key, c, chunkW, chunkH )
 	local ox, oy, oz = c.cx * chunkW, c.cy * chunkW, c.cz * chunkH
 	local frame = chunkFrames[key]
 	if not frame then
@@ -206,8 +212,13 @@ local function updateDrawEntry( e, key, list, c, chunkW, chunkH )
 		frame.chunkW, frame.chunkH = chunkW, chunkH
 		frame.centerRevision, frame.matrixRevision = -1, -1
 	end
-	prepareChunkFrame( frame, true )
+	return prepareChunkFrame( frame, true )
+end
+
+local function updateDrawEntry( e, key, list, c, chunkW, chunkH )
+	local frame = chunkDrawFrame( key, c, chunkW, chunkH )
 	e.key, e.list, e.frame, e.matrix = key, list, frame, frame.matrix
+	e.cx, e.cy, e.cz = c.cx, c.cy, c.cz
 end
 
 local function rebuildDrawList( store, entries, indices )
@@ -285,12 +296,12 @@ local function addPlane( nx, ny, nz, hx, hz )
 	planeR[i] = hx * ( planeAX[i] + planeAY[i] ) + hz * planeAZ[i]
 end
 
-local function updateCullState()
-	planeCount = 0
-	local view = render.GetViewSetup and render.GetViewSetup()
+local function updateCullState( depthOnly )
+	local view = render.GetViewSetup and render.GetViewSetup( true )
 	local eye = view and view.origin or EyePos()
+	if not MC.RenderPBR.PrepareDraw( eye.x, eye.y, eye.z, view, depthOnly ) then return false end
+	planeCount = 0
 	cullEyeX, cullEyeY, cullEyeZ = eye.x, eye.y, eye.z
-	MC.RenderPBR.PrepareView( cullEyeX, cullEyeY, cullEyeZ )
 
 	local size = MC.API.Coords.BlockSize()
 	local hx, hz = MC.CS * size * 0.5, MC.CH * size * 0.5
@@ -318,7 +329,7 @@ local function updateCullState()
 	end
 
 	if not ( MC.MeshFrustumCull and MC.MeshFrustumCull.GetBool and MC.MeshFrustumCull:GetBool() )
-		or view and ( view.ortho or view.offcenter ) then return end
+		or view and ( view.ortho or view.offcenter ) then return true end
 
 	local ang = view and view.angles or EyeAngles()
 	local fwd = ang:Forward()
@@ -346,6 +357,7 @@ local function updateCullState()
 	addPlane( -rx + fx * tanX, -ry + fy * tanX, -rz + fz * tanX, hx, hz ) -- right edge
 	addPlane( ux + fx * tanY, uy + fy * tanY, uz + fz * tanY, hx, hz )    -- bottom edge
 	addPlane( -ux + fx * tanY, -uy + fy * tanY, -uz + fz * tanY, hx, hz ) -- top edge
+	return true
 end
 
 local function entryVisible( e )
@@ -391,11 +403,17 @@ end
 local function drawPackChunk( key, translucent )
 	local runtime = MC.Need( MC.RenderPackRuntime, "render_l2_runtime_missing", "L2 runtime did not load" )
 	if not runtime or not runtime.ChunkCurrent( key ) then return end
-	MC.RenderPBR.PrepareCurrentView()
+	if not MC.RenderPBR.PrepareCurrentView() then return end
 	local groups = runtime.GetStages( translucent )
+	local size = MC.API.Coords.BlockSize()
+	local frame = chunkDrawFrame( key, MC.GetChunkByKey( key ), MC.CS * size, MC.CH * size )
 	local setCullMode = applyPassState( not translucent )
 	if translucent then render.OverrideDepthEnable( true, false ) end
+	local matrixPushed = false
 	local ok, err = pcall( function()
+		-- Vertices are chunk-local in both entry points, including offscreen
+		-- direct draws and worlds whose render origin has moved.
+		cam.PushModelMatrix( frame.matrix ) matrixPushed = true
 		for _, passes in ipairs( groups ) do
 			for _, pass in ipairs( passes ) do
 				local list = pass.store[key]
@@ -403,7 +421,7 @@ local function drawPackChunk( key, translucent )
 			end
 		end
 	end )
-	restoreChunkMeshRenderState( setCullMode )
+	restoreChunkMeshRenderState( setCullMode, matrixPushed )
 	if not ok then runtime.DrawFault( "chunk=" .. tostring( key ) .. ": " .. tostring( err ) ) end
 	reportL2Faults()
 end
@@ -497,8 +515,6 @@ end
 -- One cache per pass, collected with its runtime. Edits patch only dirty keys;
 -- removing a chunk swaps the final entry into its slot instead of shifting or
 -- rebuilding the world's arrays. The draw loop still rejects stale identities.
-local packEntries = setmetatable( {}, { __mode = "k" } )
-
 local function ensurePackEntries( pass, version )
 	local cached = packEntries[pass]
 	if not cached then
@@ -590,6 +606,7 @@ function MC.DrawPBRShadowCasters( groups, version, chunks, view, shadow )
 							else stats.culledSections = stats.culledSections + 1 end
 						end
 						if chunkDrawn then
+							shadow.casterKeys[e.key] = true
 							cam.PopModelMatrix()
 							shadow.modelPushed = false
 						end
@@ -600,11 +617,11 @@ function MC.DrawPBRShadowCasters( groups, version, chunks, view, shadow )
 	end
 end
 
-local function drawPackStages( translucent )
+local function drawPackStages( translucent, depthOnly )
 	local started = SysTime()
 	local runtime = MC.RenderPackRuntime
 	local groups, version, chunks = runtime.GetStages( translucent )
-	updateCullState()
+	if not updateCullState( depthOnly ) then return end
 	local stats = translucent and MC.DrawTranslucentCullStats or MC.DrawCullStats
 	stats.sectionsTested, stats.sectionsDrawn, stats.sectionFrustumCulled, stats.sectionOcclusionCulled = 0, 0, 0, 0
 	stats.directionCulled, stats.vertices, stats.verticesCulled = 0, 0, 0
@@ -617,8 +634,9 @@ local function drawPackStages( translucent )
 			if translucent then render.OverrideDepthEnable( true, false ) end
 			local ok, drawn, distance, frustum, stale, meshes = pcall( drawVisibleChunks,
 				pass.store, cached.entries, cached.count, chunks, stats )
-			if passMatrixPushed then cam.PopModelMatrix() passMatrixPushed = false end
-			restoreChunkMeshRenderState( setCullMode )
+			local matrixPushed = passMatrixPushed
+			passMatrixPushed = false
+			restoreChunkMeshRenderState( setCullMode, matrixPushed )
 			if not ok then
 				runtime.DrawFault( "stage=" .. pass.node.stage .. " pass=" .. pass.node.key .. ": " .. tostring( drawn ) )
 				reportL2Faults()
@@ -656,10 +674,10 @@ concommand.Add( "mc_mesh_cull_stats", function()
 	end
 end )
 
-local function drawAllChunks( translucent )
+local function drawAllChunks( translucent, depthOnly )
 	if MC.WorldFrameSettled and not MC.WorldFrameSettled() then return end
 	local runtime = MC.Need( MC.RenderPackRuntime, "render_l2_runtime_missing", "L2 runtime did not load" )
-	if runtime then drawPackStages( translucent ) end
+	if runtime then drawPackStages( translucent, depthOnly ) end
 end
 
 MC.RefreshChunkRenderFrame()
@@ -677,7 +695,7 @@ hook.Remove( "PostDrawTranslucentRenderables", "mc_draw_chunks" )
 hook.Add( "PostDrawOpaqueRenderables", "mc_draw_chunks", function( bDepth, bSky, bSky3D )
 	local perf = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
 	local started = perf and SysTime() or nil
-	if not bSky3D and meshRenderingEnabled() then drawAllChunks( false ) end
+	if not bSky3D and meshRenderingEnabled() then drawAllChunks( false, bDepth ) end
 	if perf then
 		MC.StreamPerformanceAddFrameStage( "render.opaque", ( SysTime() - started ) * 1000, {
 			renderOpaqueTested = MC.DrawCullStats and MC.DrawCullStats.tested or 0,
@@ -690,6 +708,6 @@ end )
 hook.Add( "PostDrawTranslucentRenderables", "mc_draw_chunks", function( bDepth, bSky, bSky3D )
 	local perf = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
 	local started = perf and SysTime() or nil
-	if not bSky3D and meshRenderingEnabled() then drawAllChunks( true ) end
+	if not bSky3D and meshRenderingEnabled() then drawAllChunks( true, bDepth ) end
 	if perf then MC.StreamPerformanceAddFrameStage( "render.translucent", ( SysTime() - started ) * 1000 ) end
 end )

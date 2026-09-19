@@ -1321,7 +1321,7 @@ local function emitWaterloggedOverlay( ctx, stateId, bx, by, bz, wx, wy, wz, tar
 		MC.AppendCachedBlockEmission( {
 			verts = overlay.verts,
 			light = overlay.light,
-			l2 = overlay.l2, pixels = overlay.pixels,
+			l2 = overlay.l2, pixels = overlay.pixels, occlusion = overlay.occlusion,
 			vertexCount = vertexCount,
 			hasSecondaryUV = overlay.hasSecondaryUV == true,
 		}, targetBuffer, flush, meshPerf, C.VERT_LIMIT )
@@ -1467,7 +1467,7 @@ function RM.EmitBlock( ctx, li, stateId )
 		local blockRecord = cur and {
 			verts = cur.verts,
 			light = cur.light,
-			l2 = cur.l2, pixels = cur.pixels,
+			l2 = cur.l2, pixels = cur.pixels, occlusion = cur.occlusion,
 			blockSize = size,
 			vertexCount = emittedVertices,
 			material = targetBuffer.material,

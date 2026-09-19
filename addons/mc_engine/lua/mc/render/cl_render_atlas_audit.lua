@@ -57,17 +57,17 @@ end
 
 local function checkReadback( report )
 	if not A.control then
-		A.control = GetRenderTargetEx( "mc_render_atlas_audit_control_v1", 2048, 2048,
+		A.control = GetRenderTargetEx( "mc_render_atlas_audit_control_ao1", 2048, 2560,
 			RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE, bit.bor( 1, 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA8888 )
 	end
-	requireValue( A.control and not A.control:IsError() and A.control:Width() == 2048 and A.control:Height() == 2048,
+	requireValue( A.control and not A.control:IsError() and A.control:Width() == 2048 and A.control:Height() == 2560,
 		"render_atlas_audit_control", "could not create independent readback control target" )
 	report.control = newComparison()
 	-- Independent clears test RGBA and the area outside the game viewport.
 	for _, color in ipairs( { { 37, 109, 211, 173 }, { 211, 37, 109, 91 } } ) do
 		local packed = color[1] + color[2] * 256 + color[3] * 65536 + color[4] * 16777216
 		capture( A.control, function()
-			for _, xy in ipairs( { { 0, 0 }, { 2047, 0 }, { 0, 2047 }, { 2047, 2047 }, { 1023, 1023 } } ) do
+			for _, xy in ipairs( { { 0, 0 }, { 2047, 0 }, { 0, 2559 }, { 2047, 2559 }, { 1023, 1279 } } ) do
 				compare( report.control, xy[1], xy[2], packed, "clear control" )
 			end
 		end, color )
@@ -127,13 +127,19 @@ local function audit( report )
 			report.parts = report.parts + 1
 			report.quads = report.quads + data.quadCount
 			if pixels then
-				requireValue( #pixels == data.quadCount * 4, "render_atlas_audit_pixels", "captured part length changed" )
+				requireValue( #pixels == data.quadCount * 4 and type( pixels.occlusion ) == "table"
+					and #pixels.occlusion == data.quadCount, "render_atlas_audit_pixels", "captured corner/AO length changed" )
 				report.capturedParts = report.capturedParts + 1
 				local context = { chunk = part.chunk, section = part.section, firstQuad = data.firstQuad, quads = data.quadCount }
 				for i = 1, #pixels do
 					local offset = data.firstQuad * 4 + i - 1
 					if floor( pixels[i] / 65536 ) % 256 == 0 then report.atlas.zeroShade = report.atlas.zeroShade + 1 end
-					compare( report.atlas, offset % 2048, floor( offset / 2048 ), pixels[i], context )
+					local x, y = R.CornerTexel( offset )
+					compare( report.atlas, x, y, pixels[i], context )
+				end
+				for i = 1, #pixels.occlusion do
+					local x, y = R.OcclusionTexel( data.firstQuad + i - 1 )
+					compare( report.atlas, x, y, pixels.occlusion[i], context )
 				end
 			else report.missingQuads = report.missingQuads + data.quadCount end
 		end

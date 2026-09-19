@@ -140,7 +140,9 @@ local function validate( def )
 		end
 	end
 	if def.resources == nil then def.resources = {} end
-	map( def.resources, localID, 64, "resources" )
+	-- Atlas variants plus standalone albedo/normal/ORM sets can exceed 64
+	-- descriptors; loaded files and GPU texture versions keep separate budgets.
+	map( def.resources, localID, 128, "resources" )
 	for _, resource in pairs( def.resources ) do
 		fields( resource, { path = true, sha256 = true, colorSpace = true }, "texture" )
 		if not texturePath( resource.path ) or not hash( resource.sha256 )

@@ -271,6 +271,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			l2 = true, mesh = entry.mesh,
 			verts = buf.verts,
 			pixels = buf.pixels,
+			occlusion = buf.occlusion,
 			material = buf.material,
 			vertexCount = vertexCount,
 			hasSecondaryUV = false,
@@ -287,6 +288,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		end
 		buf.verts = VertexBuffer.New()
 		buf.pixels = {}
+		buf.occlusion = {}
 		buf.nv, buf.quadCount = 0, 0
 		buf.hasSecondaryUV = false
 	end
@@ -384,6 +386,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		if not buffer or not buffer.cacheOnly then return end
 		VertexBuffer.Reset( buffer.verts )
 		for i = 1, #buffer.pixels do buffer.pixels[i] = nil end
+		for i = 1, #buffer.occlusion do buffer.occlusion[i] = nil end
 		buffer.nv, buffer.quadCount, buffer.hasSecondaryUV = 0, 0, false
 		if not spareBlockBuffer then spareBlockBuffer = buffer end
 	end

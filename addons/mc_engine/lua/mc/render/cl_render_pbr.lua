@@ -95,11 +95,25 @@ function B.DisableShadow()
 	B.shadowRevision = shadowRevision
 end
 
-function B.PrepareCurrentView()
-	if B.materialCount == 0 then return end
-	local view = render.GetViewSetup and render.GetViewSetup()
+-- A secondary RenderView can replace the shared shadow atlas between render
+-- hooks. Prepare at the receiver draw boundary, before any mesh/pass state is
+-- pushed, so this view's camera and shadow coverage are restored together.
+function B.PrepareDraw( x, y, z, view, depthOnly )
+	if B.materialCount == 0 then return true end
+	local shadows = MC.RenderPBRShadows
+	if shadows and shadows.rendering then return false end
+	B.PrepareView( x, y, z )
+	-- The shadow pass is registered after the PBR material provider. Materials
+	-- also support use without that pass, with their shadow strength at zero.
+	if shadows and not depthOnly then shadows.Update( x, y, z, view ) end
+	return true
+end
+
+function B.PrepareCurrentView( depthOnly )
+	if B.materialCount == 0 then return true end
+	local view = render.GetViewSetup and render.GetViewSetup( true )
 	local eye = view and view.origin or EyePos()
-	B.PrepareView( eye.x, eye.y, eye.z )
+	return B.PrepareDraw( eye.x, eye.y, eye.z, view, depthOnly )
 end
 
 function B.Bind( material )

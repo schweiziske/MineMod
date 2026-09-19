@@ -229,7 +229,7 @@ local function step( c )
 		local replacements = c.replacements[source.mesh]
 		replacements[#replacements + 1] = { mesh = part.mesh, material = part.material }
 		c.uploaded = c.uploaded + part.quadCount
-			part.verts, part.pixels, part.scratch = nil, nil, nil
+			part.verts, part.pixels, part.occlusion, part.scratch = nil, nil, nil, nil
 			part.corners, part.lighting = nil, nil
 		c.part = nil
 		if c.sourceQuad == source.quads then c.sourceIndex, c.sourceQuad = c.sourceIndex + 1, 0 end

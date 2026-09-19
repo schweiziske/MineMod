@@ -199,8 +199,13 @@ local function rebuildBannerRenderEntries()
 	BannerRenderDirty = false
 end
 
-hook.Add( "PostDrawTranslucentRenderables", "mc_banner_block_entities", function( _, _, bSky3D )
-	if bSky3D then return end
+-- Cloth/patterns use alpha testing, not blending. Their solid pixels belong
+-- in the opaque depth buffer before transparent terrain and animated water.
+hook.Remove( "PostDrawTranslucentRenderables", "mc_banner_block_entities" )
+hook.Add( "PostDrawOpaqueRenderables", "mc_banner_block_entities", function( drawingDepth, _, bSky3D )
+	if bSky3D or drawingDepth then return end
+	if MC.WorldFrameSettled and not MC.WorldFrameSettled() then return end
+	if MC.RenderPBRShadows and MC.RenderPBRShadows.rendering then return end
 	local revision = tonumber( MC.AppliedStateRevision ) or 0
 	local generation = tonumber( MC.StateWorldGeneration ) or 0
 	if BannerRenderDirty or revision ~= BannerRenderRevision or generation ~= BannerRenderGeneration then

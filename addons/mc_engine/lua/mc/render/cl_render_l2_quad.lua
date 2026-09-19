@@ -99,7 +99,7 @@ function Q.NewSlice( chunk, blockSize )
 end
 
 function Q.NewBuffer()
-	return { l2 = true, verts = VB.New(), pixels = {}, nv = 0, quadCount = 0 }
+	return { l2 = true, verts = VB.New(), pixels = {}, occlusion = {}, nv = 0, quadCount = 0 }
 end
 
 function Q.Rebase( verts, firstVertex, count, firstQuad )
@@ -116,7 +116,8 @@ function Q.Rebase( verts, firstVertex, count, firstQuad )
 end
 
 function Q.AppendNative( target, source, firstQuad, count )
-	requireValue( target.l2 and source.l2 and #source.pixels == VB.Count( source.verts ) / 6 * 4,
+	requireValue( target.l2 and source.l2 and #source.pixels == VB.Count( source.verts ) / 6 * 4
+		and source.occlusion and #source.occlusion * 4 == #source.pixels,
 		"L2 append received an incompatible buffer" )
 	local firstVertex, baseQuad = target.verts.count + 1, target.verts.count / 6
 	VB.AppendRange( target.verts, source.verts, firstQuad * 6 + 1, count * 6 )
@@ -124,6 +125,7 @@ function Q.AppendNative( target, source, firstQuad, count )
 	for i = firstQuad * 4 + 1, ( firstQuad + count ) * 4 do
 		target.pixels[#target.pixels + 1] = source.pixels[i]
 	end
+	for i = firstQuad + 1, firstQuad + count do target.occlusion[#target.occlusion + 1] = source.occlusion[i] end
 	target.nv, target.quadCount = target.verts.count, baseQuad + count
 end
 
@@ -202,7 +204,7 @@ function Q.EmitNative( slice, buffer, quad, id, bx, by, bz, wx, wy, wz, emission
 		corners, positions, face = model.corners, model.corners, metadata.face
 		baked = model.l2Lighting
 	end
-	local pixels = buffer.pixels
+	local pixels, occlusion = buffer.pixels, 4294967295
 	if kind == KIND.FLUID then
 		local meta = slice.fluidMeta or {}
 		slice.fluidMeta = meta
@@ -226,16 +228,19 @@ function Q.EmitNative( slice, buffer, quad, id, bx, by, bz, wx, wy, wz, emission
 			requireValue( baked ~= nil, "quad lighting template preparation failed" )
 			quad.l2Lighting = baked
 		end
-		slice.lighting = slice.lighting or { light = {}, shade = {} }
+		slice.lighting = slice.lighting or { light = {}, shade = {}, ao = {} }
 		local result = slice.lighter:PrepareBaked( bx, by, bz, baked, slice.lighting )
 		requireValue( result ~= nil, "native quad lighting preparation failed" )
 		for i = 1, 4 do
 			local light = result.light[i]
 			pixels[#pixels + 1] = pixel( light % 256, floor( light / 65536 ) % 256, result.shade[i], tint )
 		end
+		local ao = result.ao
+		occlusion = ao[1] + ao[2] * 256 + ao[3] * 65536 + ao[4] * 16777216
 	end
 	local verts, normal = buffer.verts, quad.normal
 	local base = verts.count / 6
+	buffer.occlusion[base + 1] = occlusion
 	local address = base * 4
 	local size = slice.blockSize
 	if quad.positions then size, wx, wy, wz = 1, 0, 0, 0 end
@@ -317,6 +322,7 @@ local function prepareQuad( slice, part, offset )
 	end
 	if meta.lightingKind == KIND.FLUID then
 		for i = 1, 4 do part.pixels[#part.pixels + 1] = sampleFluid( part.scratch[CORNER_VERTICES[i]] ) end
+		part.occlusion[#part.occlusion + 1] = 4294967295
 		return
 	end
 	if meta.lightingKind == KIND.CROSS then
@@ -329,6 +335,7 @@ local function prepareQuad( slice, part, offset )
 		for i = 1, 4 do
 			part.pixels[#part.pixels + 1] = pixel( block * 16, sky * 16, 255, part.scratch[CORNER_VERTICES[i]].tintCode or 0 )
 		end
+		part.occlusion[#part.occlusion + 1] = 4294967295
 		return
 	end
 	local face, options = meta.faceIndex, { quadEmission = meta.quadLightEmission or 0 }
@@ -342,6 +349,7 @@ local function prepareQuad( slice, part, offset )
 				for axis = 1, 3 do part.verts[o + axis] = part.verts[offset + axis] end
 			end
 			for i = 1, 4 do part.pixels[#part.pixels + 1] = 0 end
+			part.occlusion[#part.occlusion + 1] = 4294967295
 			return
 		end
 		local metadata = model.metadata
@@ -363,12 +371,14 @@ local function prepareQuad( slice, part, offset )
 		part.pixels[#part.pixels + 1] = pixel( light % 256, floor( light / 65536 ) % 256,
 			result.shade[i], part.scratch[CORNER_VERTICES[i]].tintCode or 0 )
 	end
+	local ao = result.ao
+	part.occlusion[#part.occlusion + 1] = ao[1] + ao[2] * 256 + ao[3] * 65536 + ao[4] * 16777216
 end
 
 function Q.NewPart( sourceIndex, firstQuad )
 	return { sourceIndex = sourceIndex, firstQuad = firstQuad, quadCount = 0,
-		verts = VB.New(), pixels = {}, scratch = { {}, {}, {}, {}, {}, {} },
-		corners = { {}, {}, {}, {} }, lighting = { light = {}, shade = {} } }
+		verts = VB.New(), pixels = {}, occlusion = {}, scratch = { {}, {}, {}, {}, {}, {} },
+		corners = { {}, {}, {}, {} }, lighting = { light = {}, shade = {}, ao = {} } }
 end
 
 function Q.AppendQuad( part, record, sourceQuad, globalQuad, slice )
