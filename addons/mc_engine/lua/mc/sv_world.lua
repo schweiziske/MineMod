@@ -2317,7 +2317,8 @@ local function loadSaveChunks( data, cache, deferWorldEffects )
 			if not loadedOpaque then return false, opaqueError end
 		end
 		for key, c in pairs( touched ) do
-			MC.FinalizeChunkStateStorage( c )
+			local finalized, finalizeError = MC.FinalizeChunkStateStorage( c )
+			if not finalized then return false, finalizeError or "chunk_finalize_failed" end
 			if c.count > 0 then
 				if not deferWorldEffects then
 					SV.EnsureChunkEnt( c )

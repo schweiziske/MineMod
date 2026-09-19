@@ -401,12 +401,45 @@ local function runtimeKeysForManifest()
 	return keys
 end
 
-local function ensureChunkForKey( key )
-	local chunk = MC.GetChunkByKey( key )
+local HYDRATED_STORAGE_FIELDS = {
+	"blocks", "orients", "stateSections", "blockEntities", "opaqueBlockEntities", "opaqueStates",
+}
+
+-- Decode into detached storage. Only chunks reached by this hydration are
+-- copied; live collision entities and unrelated chunk caches keep their identity.
+local function stagedChunk( staged, cx, cy, cz )
+	local key = MC.ChunkKey( cx, cy, cz )
+	local chunk = staged[key]
 	if chunk then return chunk end
-	local cx, cy, cz = MC.ChunkKeyToCoords( key )
-	if not cx then return nil end
-	return MC.EnsureChunk( cx, cy, cz )
+	local existing = MC.GetChunkByKey( key )
+	if existing then
+		chunk = {}
+		for field, value in pairs( existing ) do chunk[field] = value end
+		for _, field in ipairs( HYDRATED_STORAGE_FIELDS ) do chunk[field] = copyValue( existing[field] ) end
+		chunk.key, chunk.cx, chunk.cy, chunk.cz = key, cx, cy, cz
+	else
+		chunk = { key = key, cx = cx, cy = cy, cz = cz,
+			blocks = {}, orients = {}, count = 0, chunkBackend = "lua" }
+	end
+	staged[key] = chunk
+	return chunk
+end
+
+local function publishStagedChunks( staged )
+	for key, chunk in pairs( staged ) do
+		local existing = MC.GetChunkByKey( key )
+		if existing then
+			if existing.key ~= key then MC.World[existing.key] = nil end
+			for field in pairs( existing ) do existing[field] = nil end
+			for field, value in pairs( chunk ) do existing[field] = value end
+			chunk = existing
+		end
+		if chunk.count > 0 then
+			MC.World[key] = chunk
+		else
+			MC.World[key] = nil
+		end
+	end
 end
 
 function Store.IsLazyWorld()
@@ -580,7 +613,8 @@ function Store.ApplyOverlayToChunk( chunk )
 				stateId = MC.StateFromLegacy( edit.id, edit.orient )
 			end
 			if stateId == nil or not MC.IsValidBlockState( stateId ) then return nil, "invalid_overlay_state" end
-			applyCellToChunk( chunk, localIndex, stateId )
+			local changed, writeError = applyCellToChunk( chunk, localIndex, stateId )
+			if changed == nil then return nil, writeError or "overlay_state_write_failed" end
 			local applied, entityError = applyOverlayBlockEntity( chunk, localIndex, stateId, edit )
 			if applied ~= true then return nil, entityError end
 		end
@@ -709,7 +743,7 @@ local function decodeMCB4Section( data, cursor, numeric, expectedSectionCount )
 	}, packedOffset + packedBytes, sectionY
 end
 
-local function loadFastChunkIntoWorld( key, entry, timing )
+local function loadFastChunkIntoWorld( key, entry, timing, staged )
 	if savedChunkSizeForManifest() ~= MC.CS or savedHeightForManifest() ~= MC.CH then
 		return nil, nil, "fast_geometry_mismatch"
 	end
@@ -739,10 +773,10 @@ local function loadFastChunkIntoWorld( key, entry, timing )
 	if decodedCount ~= totalCount or cursor ~= #fragment + 1 then return nil, nil, "fast_length_or_count_mismatch" end
 	if timing then timingAdd( timing, "fastDecodeMS", ( SysTime() - decodeStarted ) * 1000 ) end
 
-	local existing = MC.GetChunkByKey( key )
+	local existing = staged[MC.CanonicalChunkKey( key )] or MC.GetChunkByKey( key )
 	if existing and ( existing.count or 0 ) > 0 then return nil, nil, "fast_existing_chunk" end
 	local installStarted = timing and SysTime() or nil
-	local chunk = existing or MC.EnsureChunk( cx, cy, cz )
+	local chunk = stagedChunk( staged, cx, cy, cz )
 	chunk.stateSections = sections
 	chunk.stateStorageMigrated = true
 	chunk.packedStateOnly = true
@@ -753,17 +787,12 @@ local function loadFastChunkIntoWorld( key, entry, timing )
 	chunk.blockEntities = nil
 	chunk.opaqueBlockEntities = nil
 	chunk.opaqueStates = nil
-	local overlaid, overlayError = Store.ApplyOverlayToChunk( chunk )
-	if not overlaid then return nil, nil, overlayError or "overlay_apply_failed" end
-	MC.FinalizeChunkStateStorage( chunk )
-	if chunk.count <= 0 then MC.World[MC.ChunkKey( cx, cy, cz )] = nil end
 	if timing then
 		timingAdd( timing, "fastInstallMS", ( SysTime() - installStarted ) * 1000 )
 		timingAdd( timing, "fastHits", 1 )
 		timingAdd( timing, "records", 1 )
 		timingAdd( timing, "cellsVisited", decodedCount )
 		timingAdd( timing, "cellsWritten", decodedCount )
-		timingAdd( timing, "touchedChunks", 1 )
 	end
 	return chunk, { [MC.ChunkKey( cx, cy, cz )] = chunk }
 end
@@ -779,7 +808,7 @@ local function savedBlockEntityCell( record, localIndex )
 	return sourceCX * savedChunkSize + lx, sourceCY * savedChunkSize + ly, sourceCZ * savedHeight + lz
 end
 
-local function applySavedBlockEntities( record, touched )
+local function applySavedBlockEntities( record, touched, staged )
 	local envelopes = record[5]
 	if envelopes == nil then return true end
 	if not istable( envelopes ) or not MC.DecodeBlockEntityEnvelope then return false, "invalid_block_entities" end
@@ -792,8 +821,8 @@ local function applySavedBlockEntities( record, touched )
 		if bx == nil then return false, "invalid_block_entity_index" end
 		seen[sourceIndex] = true
 		local cx, cy, cz, localIndex = MC.CellToChunk( bx, by, bz )
-		local chunk = MC.GetChunk( cx, cy, cz ) or MC.EnsureChunk( cx, cy, cz )
-		local stateId = MC.GetBlockState( bx, by, bz )
+		local chunk = stagedChunk( staged, cx, cy, cz )
+		local stateId = MC.GetChunkBlockStateByLocalIndex( chunk, localIndex )
 		local blockEntity, decodeError = MC.DecodeBlockEntityEnvelope( stateId, envelope )
 		if not blockEntity then return false, decodeError or "invalid_block_entity" end
 		clearBlockEntityAt( chunk, localIndex )
@@ -804,7 +833,7 @@ local function applySavedBlockEntities( record, touched )
 	return true
 end
 
-local function applySavedOpaqueBlockEntities( record, touched )
+local function applySavedOpaqueBlockEntities( record, touched, staged )
 	local records = record[6]
 	if records == nil then return true end
 	if not istable( records ) then return false, "invalid_opaque_block_entities" end
@@ -831,8 +860,8 @@ local function applySavedOpaqueBlockEntities( record, touched )
 		if totalBytes > 8388608 then return false, "opaque_chunk_budget_exceeded" end
 
 		local cx, cy, cz, localIndex = MC.CellToChunk( bx, by, bz )
-		local chunk = MC.GetChunk( cx, cy, cz ) or MC.EnsureChunk( cx, cy, cz )
-		if MC.GetBlockState( bx, by, bz ) == 0 then return false, "opaque_block_entity_without_state" end
+		local chunk = stagedChunk( staged, cx, cy, cz )
+		if MC.GetChunkBlockStateByLocalIndex( chunk, localIndex ) == 0 then return false, "opaque_block_entity_without_state" end
 		if chunk.blockEntities and chunk.blockEntities[localIndex] then
 			return false, "opaque_block_entity_conflicts_active"
 		end
@@ -845,8 +874,8 @@ local function applySavedOpaqueBlockEntities( record, touched )
 	return true
 end
 
-local function loadBaseChunkIntoWorld( key, record, timing )
-	if not istable( record ) or #record < 4 then return nil end
+local function loadBaseChunkIntoWorld( key, record, timing, staged )
+	if not istable( record ) or #record < 4 then return nil, nil, "invalid_chunk_record" end
 	if timing then timingAdd( timing, "records", 1 ) end
 	local srcCX = math.floor( tonumber( record[1] ) or 0 )
 	local srcCY = math.floor( tonumber( record[2] ) or 0 )
@@ -857,8 +886,10 @@ local function loadBaseChunkIntoWorld( key, record, timing )
 	local cache = {}
 	local touched = {}
 	local cellsVisited, cellsWritten = 0, 0
+	local loadError
 
 	local function loadOneCell( li, paletteIndex )
+		if loadError then return end
 		if timing then cellsVisited = cellsVisited + 1 end
 		local lx, ly, lz = decodeLocalWithGeometry( li, savedChunkSize, savedHeight )
 		if not lx then return end
@@ -867,11 +898,13 @@ local function loadBaseChunkIntoWorld( key, record, timing )
 		local bz = srcCZ * savedHeight + lz
 		local cx, cy, cz, nli = MC.CellToChunk( bx, by, bz )
 		local targetKey = MC.ChunkKey( cx, cy, cz )
-		local chunk = MC.EnsureChunk( cx, cy, cz )
+		local chunk = stagedChunk( staged, cx, cy, cz )
 		local stateId = paletteState( cache, paletteIndex )
-		local existingState = MC.GetBlockState( bx, by, bz )
+		local existingState, readError = MC.GetChunkBlockStateByLocalIndex( chunk, nli )
+		if existingState == nil then loadError = readError or "state_read_failed" return end
 		if MC.LocalIndexInRange( nli ) and stateId and stateId ~= 0 and existingState == 0 then
-			local changed = MC.SetChunkLocalStateRaw( chunk, nli, stateId )
+			local changed, writeError = MC.SetChunkLocalStateRaw( chunk, nli, stateId )
+			if changed == nil then loadError = writeError or "state_write_failed" return end
 			if changed then
 				touched[targetKey] = chunk
 				if timing then cellsWritten = cellsWritten + 1 end
@@ -889,35 +922,78 @@ local function loadBaseChunkIntoWorld( key, record, timing )
 			loadOneCell( cells[i], cells[i + 1] )
 		end
 	end
+	if loadError then return nil, nil, loadError end
 	if timing then
 		timingAdd( timing, "cellsVisited", cellsVisited )
 		timingAdd( timing, "cellsWritten", cellsWritten )
 		timingAdd( timing, "stateApplyMS", ( SysTime() - applyStarted ) * 1000 )
 	end
-	local activeOK, activeError = applySavedBlockEntities( record, touched )
+	local activeOK, activeError = applySavedBlockEntities( record, touched, staged )
 	if activeOK ~= true then return nil, nil, activeError end
-	local opaqueOK, opaqueError = applySavedOpaqueBlockEntities( record, touched )
+	local opaqueOK, opaqueError = applySavedOpaqueBlockEntities( record, touched, staged )
 	if opaqueOK ~= true then return nil, nil, opaqueError end
 
-	local finalizeStarted = timing and SysTime() or nil
-	for touchedKey, chunk in pairs( touched ) do
-		if timing then timingAdd( timing, "touchedChunks", 1 ) end
-		local overlaid, overlayError = Store.ApplyOverlayToChunk( chunk )
-		if not overlaid then return nil, nil, overlayError or "overlay_apply_failed" end
-		MC.FinalizeChunkStateStorage( chunk )
-		if chunk.count <= 0 then
-			MC.World[touchedKey] = nil
+	return staged[MC.CanonicalChunkKey( key )], touched
+end
+
+local function prepareChunkHydration( key, sample )
+	local staged = {}
+	local entries = baseChunkEntriesForRuntimeKey( key )
+	if sample then sample.entries = #entries end
+	for _, item in ipairs( entries ) do
+		local entry = item.entry
+		local loadedChunk
+		if tonumber( entry.fastOffset ) ~= nil and tonumber( entry.fastBytes ) ~= nil then
+			if sample then timingAdd( sample, "fastAttempts", 1 ) end
+			local touched, fastError
+			loadedChunk, touched, fastError = loadFastChunkIntoWorld( item.key, entry, sample, staged )
+			if not loadedChunk and sample then
+				timingAdd( sample, "fastFallbacks", 1 )
+				sample.fastLastError = fastError
+			end
+		elseif sample then
+			timingAdd( sample, "fastFallbacks", 1 )
+			sample.fastLastError = "fast_metadata_unavailable"
+		end
+		if not loadedChunk then
+			local partData, err = loadPart( entry.part, sample )
+			if not partData then return nil, err end
+			local idx = math.floor( tonumber( entry.index ) or 0 )
+			local record = partData.chunks and partData.chunks[idx]
+			if not istable( record ) then return nil, "invalid_chunk_index" end
+			local _, _, loadError = loadBaseChunkIntoWorld( key, record, sample, staged )
+			if loadError then return nil, loadError end
 		end
 	end
-	if timing then timingAdd( timing, "overlayFinalizeMS", ( SysTime() - finalizeStarted ) * 1000 ) end
 
-	return MC.GetChunkByKey( key ), touched
+	local canonical = MC.CanonicalChunkKey( key )
+	local edits = Store.EditChunks
+	if not staged[canonical] and edits and
+		( edits[key] or edits[tostring( canonical )] or edits[MC.ChunkKeyString( key )] ) then
+		local cx, cy, cz = MC.ChunkKeyToCoords( key )
+		stagedChunk( staged, cx, cy, cz )
+	end
+	-- A saved record can cover several runtime chunks, or several records can
+	-- contribute to one chunk. Apply edits and finalize once, after every record
+	-- has decoded successfully, before exposing any of them to the live world.
+	local finalizeStarted = sample and SysTime() or nil
+	for _, chunk in pairs( staged ) do
+		if sample then timingAdd( sample, "touchedChunks", 1 ) end
+		local overlaid, overlayError = Store.ApplyOverlayToChunk( chunk )
+		if not overlaid then return nil, overlayError or "overlay_apply_failed" end
+		local finalized, finalizeError = MC.FinalizeChunkStateStorage( chunk )
+		if not finalized then return nil, finalizeError or "chunk_finalize_failed" end
+	end
+	if sample then timingAdd( sample, "overlayFinalizeMS", ( SysTime() - finalizeStarted ) * 1000 ) end
+	return staged
 end
 
 function Store.HydrateChunkNow( key, priority, deferWorldEffects )
 	if not Store.IsLazyWorld() then return MC.GetChunkByKey( key ) end
 	key = tostring( key or "" )
-	if key == "" then return nil, "invalid_chunk_key" end
+	local cx, cy, cz = MC.ChunkKeyToCoords( key )
+	if cx == nil then return nil, "invalid_chunk_key" end
+	local canonical = MC.ChunkKey( cx, cy, cz )
 	local profiling = SV.BinaryNetHydrationProfileEnabled and SV.BinaryNetHydrationProfileEnabled() == true
 	local sample = profiling and {
 		key = key, startedAt = SysTime(), priority = priority == true,
@@ -934,99 +1010,37 @@ function Store.HydrateChunkNow( key, priority, deferWorldEffects )
 		if SV.RecordChunkHydrationProfile then SV.RecordChunkHydrationProfile( sample ) end
 	end
 	local existing = MC.GetChunkByKey( key )
-	if Store.LoadedKeys[key] then
+	if Store.LoadedKeys[key] or Store.LoadedKeys[tostring( canonical )] then
 		finishProfile( true, nil, true )
 		return existing
 	end
 
-	local chunk = existing
-	-- A saved chunk whose geometry differs from runtime spills into neighboring
-	-- runtime chunks; every one of them counts as hydrated. Keys are
-	-- canonicalized on the way in because `key` is a string here while `touched`
-	-- can carry packed numeric keys - without that, the same chunk would be
-	-- announced twice under two spellings.
-	local hydratedKeys = {}
-	local function markHydrated( touchedKey )
-		local canonical = MC.CanonicalChunkKey and MC.CanonicalChunkKey( touchedKey ) or touchedKey
-		if canonical ~= nil then hydratedKeys[canonical] = true end
-	end
-	local entries = baseChunkEntriesForRuntimeKey( key )
-	if sample then sample.entries = #entries end
-	for _, item in ipairs( entries ) do
-		local entry = item.entry
-		local loadedChunk, touched, loadError
-		if tonumber( entry.fastOffset ) ~= nil and tonumber( entry.fastBytes ) ~= nil then
-			if sample then timingAdd( sample, "fastAttempts", 1 ) end
-			local fastError
-			loadedChunk, touched, fastError = loadFastChunkIntoWorld( item.key, entry, sample )
-			if not loadedChunk then
-				if sample then
-					timingAdd( sample, "fastFallbacks", 1 )
-					sample.fastLastError = fastError
-				end
-			end
-		elseif sample then
-			timingAdd( sample, "fastFallbacks", 1 )
-			sample.fastLastError = "fast_metadata_unavailable"
-		end
-		if not loadedChunk then
-			local partData, err = loadPart( entry.part, sample )
-			if not partData then
-				Store.LastError = err
-				Store.QueuedKeys[key] = nil
-				finishProfile( false, err, false )
-				return nil, err
-			end
-			local idx = math.floor( tonumber( entry.index ) or 0 )
-			local record = partData and partData.chunks and partData.chunks[idx]
-			if not istable( record ) then
-				Store.LastError = "invalid_chunk_index"
-				Store.QueuedKeys[key] = nil
-				finishProfile( false, Store.LastError, false )
-				return nil, Store.LastError
-			end
-			loadedChunk, touched, loadError = loadBaseChunkIntoWorld( key, record, sample )
-			if not loadedChunk and loadError then
-				Store.LastError = loadError
-				Store.QueuedKeys[key] = nil
-				finishProfile( false, loadError, false )
-				return nil, loadError
-			end
-		end
-		chunk = chunk or loadedChunk
-		for touchedKey in pairs( touched or {} ) do
-			Store.LoadedKeys[tostring( touchedKey )] = true
-			markHydrated( touchedKey )
-		end
+	local called, staged, loadError = pcall( prepareChunkHydration, key, sample )
+	if not called or not staged then
+		Store.LastError = called and loadError or "chunk_hydration_exception"
+		Store.QueuedKeys[key] = nil
+		finishProfile( false, Store.LastError, false )
+		if not called then MC.Fault( "chunk_hydration_exception", "%s: %s", key, tostring( staged ) ) end
+		return nil, Store.LastError
 	end
 
-	if not chunk and Store.EditChunks and Store.EditChunks[key] then
-		local finalizeStarted = sample and SysTime() or nil
-		chunk = ensureChunkForKey( key )
-		local overlaid, overlayError = Store.ApplyOverlayToChunk( chunk )
-		if not overlaid then
-			Store.LastError = overlayError or "overlay_apply_failed"
-			Store.QueuedKeys[key] = nil
-			finishProfile( false, Store.LastError, false )
-			return nil, Store.LastError
-		end
-		if chunk then MC.FinalizeChunkStateStorage( chunk ) end
-		if chunk and chunk.count <= 0 then
-			MC.World[MC.CanonicalChunkKey( key )] = nil
-			chunk = nil
-		end
-		if sample then timingAdd( sample, "overlayFinalizeMS", ( SysTime() - finalizeStarted ) * 1000 ) end
+	publishStagedChunks( staged )
+	local chunk = MC.GetChunkByKey( key )
+	local hydratedKeys = { [canonical] = true }
+	for touchedKey in pairs( staged ) do hydratedKeys[touchedKey] = true end
+	for hydratedKey in pairs( hydratedKeys ) do
+		Store.LoadedKeys[tostring( hydratedKey )] = true
+		MC.MarkChunkLoaded( hydratedKey )
 	end
-
 	Store.LoadedKeys[key] = true
 	Store.QueuedKeys[key] = nil
+	Store.LastError = nil
 	if not deferWorldEffects and chunk and chunk.count and chunk.count > 0 and priority then
 		local collisionStarted = sample and SysTime() or nil
 		SV.EnsureChunkEnt( chunk )
 		SV.MarkPhysDirty( key, true )
 		if sample then timingAdd( sample, "collisionQueueMS", ( SysTime() - collisionStarted ) * 1000 ) end
 	end
-	markHydrated( key )
 	if not deferWorldEffects then
 		for hydratedKey in pairs( hydratedKeys ) do
 			if SV.InvalidateLightingChunk then SV.InvalidateLightingChunk( hydratedKey ) end
