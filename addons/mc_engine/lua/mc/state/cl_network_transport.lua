@@ -243,12 +243,29 @@ local function cancelActiveBinarySnapshot()
 	binary.activeJobId = nil
 end
 
+local function cancelNativePatch( patch, backend )
+	local jobId = patch.nativeJobId
+	if not jobId then return end
+	backend = backend or MC.NativeChunkBackend
+	local cancel = backend and backend.CancelCompressedPatchDecode
+	if not cancel then
+		MC.Fault( "state_patch_cancel_unavailable", "native decode %s has no cancellation backend", tostring( jobId ) )
+		return
+	end
+	patch.nativeJobId = nil
+	cancel( jobId )
+end
+
 local function cancelPendingNativePatches()
 	cancelActiveBinarySnapshot()
-	local backend = MC.NativeChunkBackend
-	for _, patch in pairs( T.pendingChunkPatches or {} ) do
-		if patch.nativeJobId and backend and backend.CancelCompressedPatchDecode then
-			backend.CancelCompressedPatchDecode( patch.nativeJobId )
+	for _, patch in pairs( T.pendingChunkPatches ) do cancelNativePatch( patch ) end
+end
+
+local function discardSnapshotCoveredPatches( baseRevision )
+	for revision, patch in pairs( T.pendingChunkPatches ) do
+		if revision <= baseRevision then
+			cancelNativePatch( patch )
+			T.pendingChunkPatches[revision] = nil
 		end
 	end
 end
@@ -669,7 +686,11 @@ local function drainTransactions()
 				T.pendingTransactions[revision] = nil
 				ok, err = applyTransactionNow( transaction )
 			end
-			if not ok then T.RequestResync( err or ( patch and "chunk_patch_apply_failed" or "transaction_apply_failed" ) ) return end
+			if not ok then
+				if patch then cancelNativePatch( patch ) end
+				T.RequestResync( err or ( patch and "chunk_patch_apply_failed" or "transaction_apply_failed" ) )
+				return
+			end
 			publishAppliedRevision( revision )
 			T.pendingPatchAnnouncements[revision] = nil
 		end
@@ -806,9 +827,7 @@ function T.BeginSnapshot( metadata )
 	for revision in pairs( T.pendingTransactions ) do
 		if revision <= baseRevision then T.pendingTransactions[revision] = nil end
 	end
-	for revision in pairs( T.pendingChunkPatches ) do
-		if revision <= baseRevision then T.pendingChunkPatches[revision] = nil end
-	end
+	discardSnapshotCoveredPatches( baseRevision )
 	cancelActiveBinarySnapshot()
 	cancelBulkGroup()
 	T.pendingStreams = {}
@@ -880,9 +899,7 @@ local function finishSnapshotApplication( snapshot )
 	for revision in pairs( T.pendingTransactions ) do
 		if revision <= snapshot.baseRevision then T.pendingTransactions[revision] = nil end
 	end
-	for revision in pairs( T.pendingChunkPatches ) do
-		if revision <= snapshot.baseRevision then T.pendingChunkPatches[revision] = nil end
-	end
+	discardSnapshotCoveredPatches( snapshot.baseRevision )
 	-- Skips received before/during the snapshot may straddle its base. Drop
 	-- the covered prefix while preserving the suffix needed by later edits.
 	local skipSuffix
@@ -1537,7 +1554,7 @@ function T.PollNativeChunkPatches()
 			elseif status.status == "ready" then
 				if status.generation ~= T.generation or status.revision ~= revision
 				or status.backendEpoch ~= patch.nativeEpoch then
-					patchBackend.CancelCompressedPatchDecode( patch.nativeJobId )
+					cancelNativePatch( patch, patchBackend )
 					T.RequestResync( "native_patch_stale" )
 					return false
 				end
@@ -1546,7 +1563,7 @@ function T.PollNativeChunkPatches()
 					for index, spec in ipairs( status.palette or {} ) do
 						local stateId = isstring( spec ) and MC.ParseBlockState and MC.ParseBlockState( spec ) or nil
 						if not stateId or stateId == 0 then
-							patchBackend.CancelCompressedPatchDecode( patch.nativeJobId )
+							cancelNativePatch( patch, patchBackend )
 							T.RequestResync( "native_patch_palette_failed:" .. tostring( index ) )
 							return false
 						end
