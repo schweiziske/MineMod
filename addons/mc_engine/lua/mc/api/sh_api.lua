@@ -865,6 +865,23 @@ function Coords.EntityWorldPos( ent )
 	return Vector( position.x, position.y, position.z )
 end
 
+-- MoveData can use a different origin from the player's entity during
+-- prediction. Preserve the adapter's movement-specific conversion.
+function Coords.MoveOriginWorldPos( ply, pos )
+	if not IsValid( ply ) then return nil, "invalid_entity" end
+	if not isvector( pos ) then return nil, "invalid_position" end
+	local position
+	if MC.MoveOriginWorldPos then
+		position = MC.MoveOriginWorldPos( ply, pos )
+	elseif MC.EngineToWorldPos then
+		position = MC.EngineToWorldPos( pos, ply )
+	else
+		position = pos
+	end
+	if not isvector( position ) then return nil, "move_world_position_unavailable" end
+	return Vector( position.x, position.y, position.z )
+end
+
 -- Cell an entity is looking from (eyes). InfMap-safe.
 function Coords.EntityEyeCell( ent )
 	if not IsValid( ent ) then return nil, nil, nil end
