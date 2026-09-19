@@ -290,38 +290,86 @@ local function stageBinaryFile( path, data )
 	return true
 end
 
-local function commitStagedFiles( staged )
-	local committed = {}
-	for _, item in ipairs( staged ) do
-		if file.Exists( item.backup, "DATA" ) then file.Delete( item.backup ) end
-		if file.Exists( item.final, "DATA" ) then file.Rename( item.final, item.backup ) end
-		file.Rename( item.temp, item.final )
-		if not file.Exists( item.final, "DATA" ) then
-			for index = #committed, 1, -1 do
-				local old = committed[index]
-				if file.Exists( old.final, "DATA" ) then file.Delete( old.final ) end
-				if file.Exists( old.backup, "DATA" ) then file.Rename( old.backup, old.final ) end
-			end
-			if file.Exists( item.backup, "DATA" ) then file.Rename( item.backup, item.final ) end
-			return nil, "region_commit_failed:" .. item.final
-		end
-		committed[#committed + 1] = item
-	end
-	return committed
-end
-
 local function rollbackCommittedFiles( committed )
+	local failed = {}
 	for index = #( committed or {} ), 1, -1 do
 		local item = committed[index]
-		if file.Exists( item.final, "DATA" ) then file.Delete( item.final ) end
-		if file.Exists( item.backup, "DATA" ) then file.Rename( item.backup, item.final ) end
+		if item.hadOriginal and not file.Exists( item.backup, "DATA" ) then
+			failed[#failed + 1] = item.final
+		else
+			if file.Exists( item.final, "DATA" ) then file.Delete( item.final ) end
+			if not file.Exists( item.final, "DATA" ) and item.hadOriginal then
+				file.Rename( item.backup, item.final )
+			end
+			local restored = item.hadOriginal
+				and file.Exists( item.final, "DATA" ) and not file.Exists( item.backup, "DATA" )
+				or not item.hadOriginal and not file.Exists( item.final, "DATA" )
+			if not restored then failed[#failed + 1] = item.final end
+		end
 	end
+	if #failed > 0 then return false, table.concat( failed, "," ) end
+	return true
+end
+
+local function commitStagedFiles( staged )
+	local committed = {}
+	local function reject( item, code )
+		local restored, restoreError = rollbackCommittedFiles( committed )
+		local reason = ( item.kind or "region" ) .. "_" .. code .. ":" .. item.final
+		if not restored then reason = reason .. ":rollback_failed:" .. restoreError end
+		return nil, reason
+	end
+	for _, item in ipairs( staged ) do
+		if file.Exists( item.backup, "DATA" ) and not file.Exists( item.final, "DATA" ) then
+			return reject( item, "backup_recovery_required" )
+		end
+		if file.Exists( item.backup, "DATA" ) then file.Delete( item.backup ) end
+		if file.Exists( item.backup, "DATA" ) then return reject( item, "backup_cleanup_failed" ) end
+		item.hadOriginal = file.Exists( item.final, "DATA" )
+		if item.hadOriginal then
+			file.Rename( item.final, item.backup )
+			if file.Exists( item.final, "DATA" ) or not file.Exists( item.backup, "DATA" ) then
+				return reject( item, "backup_failed" )
+			end
+		end
+		-- The old file is safely in its backup (or no old file existed). Include
+		-- this item in rollback even if installing the replacement fails.
+		committed[#committed + 1] = item
+		file.Rename( item.temp, item.final )
+		if file.Exists( item.temp, "DATA" ) or not file.Exists( item.final, "DATA" ) then
+			return reject( item, "commit_failed" )
+		end
+	end
+	return committed
 end
 
 local function cleanStagedFiles( staged )
 	for _, item in ipairs( staged or {} ) do
 		if file.Exists( item.temp, "DATA" ) then file.Delete( item.temp ) end
 	end
+end
+
+-- Keep the prior edit overlay until its replacement has been written and read
+-- back exactly; file.Write alone cannot establish that a save succeeded.
+function SV.WriteStateSaveFile( path, data )
+	if not isstring( path ) or not isstring( data ) then return false, "invalid_save_file" end
+	path = string.gsub( path, "\\", "/" )
+	local stem, extension = string.match( path, "^(.*)(%.[^/%.]+)$" )
+	if not stem then return false, "invalid_save_file_path" end
+	file.CreateDir( string.GetPathFromFilename( path ) )
+	local item = { temp = stem .. ".new" .. extension, final = path,
+		backup = stem .. ".bak" .. extension, kind = "save_file" }
+	local staged = { item }
+	local written, writeError = stageBinaryFile( item.temp, data )
+	if not written then cleanStagedFiles( staged ) return false, writeError end
+	if file.Read( item.temp, "DATA" ) ~= data then
+		cleanStagedFiles( staged )
+		return false, "save_file_verify_failed:" .. path
+	end
+	local committed, commitError = commitStagedFiles( staged )
+	if not committed then cleanStagedFiles( staged ) return false, commitError end
+	if file.Exists( item.backup, "DATA" ) then file.Delete( item.backup ) end
+	return true
 end
 
 function SV.WriteStateRegionSave( manifestPath, slotName )
@@ -385,7 +433,11 @@ function SV.WriteStateRegionSave( manifestPath, slotName )
 			local sideJSON = util.TableToJSON( { v = 10, h = MC.CH, chunks = sideChunks } )
 			if not sideJSON then cleanStagedFiles( staged ) return nil, "side_json_failed" end
 			file.Write( sideTemp, sideJSON )
-			if not file.Exists( sideTemp, "DATA" ) then cleanStagedFiles( staged ) return nil, "side_write_failed" end
+			if file.Read( sideTemp, "DATA" ) ~= sideJSON then
+				file.Delete( sideTemp )
+				cleanStagedFiles( staged )
+				return nil, "side_write_failed"
+			end
 			staged[#staged + 1] = { temp = sideTemp, final = sideFinal, backup = sideBackup }
 			part.path = "regions/" .. baseName .. ".side.json"
 			part.chunks = #sideChunks
@@ -439,23 +491,16 @@ function SV.WriteStateRegionSave( manifestPath, slotName )
 	local manifestBackup = root .. "manifest.bak.json"
 	file.Write( manifestTemp, manifestJSON )
 	local verify = file.Read( manifestTemp, "DATA" )
-	if not verify or not util.JSONToTable( verify ) then
+	if verify ~= manifestJSON or not util.JSONToTable( verify ) then
 		cleanStagedFiles( staged )
 		file.Delete( manifestTemp )
 		return nil, "manifest_verify_failed"
 	end
 
+	staged[#staged + 1] = { temp = manifestTemp, final = manifestPath,
+		backup = manifestBackup, kind = "manifest" }
 	local committed, commitError = commitStagedFiles( staged )
-	if not committed then file.Delete( manifestTemp ) return nil, commitError end
-	if file.Exists( manifestBackup, "DATA" ) then file.Delete( manifestBackup ) end
-	if file.Exists( manifestPath, "DATA" ) then file.Rename( manifestPath, manifestBackup ) end
-	file.Rename( manifestTemp, manifestPath )
-	if not file.Exists( manifestPath, "DATA" ) then
-		if file.Exists( manifestBackup, "DATA" ) then file.Rename( manifestBackup, manifestPath ) end
-		rollbackCommittedFiles( committed )
-		return nil, "manifest_commit_failed"
-	end
-	if file.Exists( manifestBackup, "DATA" ) then file.Delete( manifestBackup ) end
+	if not committed then cleanStagedFiles( staged ) return nil, commitError end
 	for _, item in ipairs( committed ) do if file.Exists( item.backup, "DATA" ) then file.Delete( item.backup ) end end
 
 	local files = file.Find( regionDir .. "/*.json", "DATA" ) or {}
