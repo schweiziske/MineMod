@@ -387,18 +387,18 @@ function SV.FinishCrossbowUse( ply, record, stack, state, context )
 		ammo = ammo and MC.CopyItemStack( ammo, 1 ) or MC.NewItemStack( "minecraft:arrow", 1 )
 		if not ammo then return false, "default_arrow_missing" end
 		local snapshot = MC.ContainerSnapshot( record.container )
-		if not infinite and ( not ammoSlot or not consumeStackAt( record, ammoSlot, 1 ) ) then
-			MC.ContainerRestore( record.container, snapshot )
-			return false, "projectile_ammo_consume_failed"
-		end
-		local projectiles = buildChargedProjectiles( ammo, crossbowProjectileCount( stack ), infinite )
-		local selectedIndex = record.selected
-		local replacement = setChargedProjectiles( stack, projectiles )
-		local ok, setError = MC.ContainerSetStack( record.container, selectedIndex, replacement )
-		if not ok then
-			MC.ContainerRestore( record.container, snapshot )
-			return false, setError or "crossbow_charge_failed"
-		end
+		local projectiles
+		local prepared, preparationError = prepareProjectiles( record, snapshot, {}, nil, function()
+			if not infinite and ( not ammoSlot or not consumeStackAt( record, ammoSlot, 1 ) ) then
+				return nil, "projectile_ammo_consume_failed"
+			end
+			projectiles = buildChargedProjectiles( ammo, crossbowProjectileCount( stack ), infinite )
+			local replacement = setChargedProjectiles( stack, projectiles )
+			local ok, setError = MC.ContainerSetStack( record.container, record.selected, replacement )
+			if not ok then return nil, setError or "crossbow_charge_failed" end
+			return true
+		end )
+		if not prepared then return false, preparationError end
 		local result, commitError = commitOnly( record, snapshot, ply, {
 			player = ply, reason = context.reason or "crossbow_charge", actionId = context.actionId,
 		} )
@@ -602,19 +602,17 @@ function SV.LoadSelectedCrossbowProjectiles( ply, kind, projectileCount, context
 	local projectiles = buildChargedProjectiles( ammo, projectileCount, infinite )
 
 	local snapshot = MC.ContainerSnapshot( record.container )
-	if not infinite then
-		local consumed, consumeError = consumeStackAt( record, ammoSlot, 1 )
-		if consumed ~= true then
-			MC.ContainerRestore( record.container, snapshot )
-			return nil, false, false, nil, consumeError or "projectile_ammo_consume_failed"
+	local prepared, preparationError = prepareProjectiles( record, snapshot, {}, nil, function()
+		if not infinite then
+			local consumed, consumeError = consumeStackAt( record, ammoSlot, 1 )
+			if consumed ~= true then return nil, consumeError or "projectile_ammo_consume_failed" end
 		end
-	end
-	local replacement = setChargedProjectiles( weaponStack, projectiles )
-	local stored, storeError = MC.ContainerSetStack( record.container, selectedIndex, replacement )
-	if stored ~= true then
-		MC.ContainerRestore( record.container, snapshot )
-		return nil, infinite, generated, nil, storeError or "crossbow_charge_failed"
-	end
+		local replacement = setChargedProjectiles( weaponStack, projectiles )
+		local stored, storeError = MC.ContainerSetStack( record.container, selectedIndex, replacement )
+		if stored ~= true then return nil, storeError or "crossbow_charge_failed" end
+		return true
+	end )
+	if not prepared then return nil, infinite, generated, nil, preparationError end
 	local result, commitError = commitOnly( record, snapshot, ply, {
 		player = ply,
 		reason = context.reason or "external_crossbow_charge",
