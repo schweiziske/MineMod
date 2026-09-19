@@ -366,7 +366,11 @@ local function adoptMerchantSnapshot( record, menu, snapshot, context )
 	local before = MC.ContainerSnapshot( menu )
 	local refreshed, refreshError = setLatestSnapshot( menu, snapshot )
 	if not refreshed then
-		for key, value in pairs( previous ) do data[key] = value end
+		data.snapshot, data.selection = previous.snapshot, previous.selection
+		data.activeOffer, data.paymentSwapped = previous.activeOffer, previous.paymentSwapped
+		data.lastTradeUpdateSelection = previous.lastTradeUpdateSelection
+		data.lastTradeUpdatePaymentA, data.lastTradeUpdatePaymentB =
+			previous.lastTradeUpdatePaymentA, previous.lastTradeUpdatePaymentB
 		MC.ContainerRestore( menu, before )
 		return false, refreshError or "merchant_snapshot_refresh_failed"
 	end
@@ -837,8 +841,11 @@ timer.Create( "mcgame_external_merchant_refresh", 0.25, 0, function()
 			if latest and latest.revision ~= data.snapshot.revision and not data.pendingUse then
 				local adopted, adoptError = adoptMerchantSnapshot(
 					record, menu, latest, { merchantBackground = true } )
-				sendMerchantState( record, adopted and nil
-					or ( adoptError or "merchant_snapshot_refresh_failed" ) )
+				if adopted then
+					sendMerchantState( record )
+				else
+					sendMerchantState( record, adoptError or "merchant_snapshot_refresh_failed" )
+				end
 			end
 		end
 	end
