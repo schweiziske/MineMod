@@ -29,6 +29,70 @@ function MC.HorizontalDirectionOffset( facing )
 	return off[1], off[2], off[3]
 end
 
+-- Blocks.java Properties.replaceable(), excluding snow's state-specific rule.
+-- Collision/selection shape is deliberately not used as a replacement policy.
+local REPLACEABLE = {}
+for name in string.gmatch( "air water lava short_grass fern dead_bush bush short_dry_grass tall_dry_grass seagrass tall_seagrass fire soul_fire vine glow_lichen resin_clump light tall_grass large_fern structure_void void_air cave_air bubble_column warped_roots nether_sprouts crimson_roots leaf_litter hanging_roots", "%S+" ) do
+	REPLACEABLE["minecraft:" .. name] = true
+end
+
+function MC.PlacementCanReplaceState( existingState, placedState )
+	if existingState == 0 then return true end
+	local oldId, newId = MC.BlockTypeForState( existingState ), MC.BlockTypeForState( placedState )
+	local oldBlock, newBlock = MC.Blocks[oldId], MC.Blocks[newId]
+	if not oldBlock or not newBlock then return false end
+	if oldId == newId and oldBlock.orient == "slab" then
+		return MC.GetStateProperty( existingState, "type" ) ~= "double"
+			and MC.GetStateProperty( placedState, "type" ) == "double"
+	end
+	if oldBlock.mcid == "minecraft:snow" then
+		local layers = MC.GetStateProperty( existingState, "layers" )
+		if oldId == newId then return layers < 8 and MC.GetStateProperty( placedState, "layers" ) == layers + 1 end
+		return layers == 1
+	end
+	return oldId ~= newId and REPLACEABLE[oldBlock.mcid] == true
+end
+
+function MC.PlacementUsesClickedCell( existingState, placedId, hit, bz )
+	if existingState == 0 then return true end
+	local oldId = MC.BlockTypeForState( existingState )
+	local block = MC.Blocks[oldId]
+	if not block then return false end
+	if oldId == placedId and block.orient == "slab" then
+		local half = MC.GetStateProperty( existingState, "type" )
+		local normal = hit.HitNormal
+		local aboveHalf = hit.HitPos.z / MC.API.Coords.BlockSize() - bz > 0.5
+		return half == "bottom" and ( normal.z > 0 or normal.z == 0 and aboveHalf )
+			or half == "top" and ( normal.z < 0 or normal.z == 0 and not aboveHalf )
+	end
+	if block.mcid == "minecraft:snow" then
+		local layers = MC.GetStateProperty( existingState, "layers" )
+		if oldId == placedId then return layers < 8 and hit.HitNormal.z > 0 end
+		return layers == 1
+	end
+	return oldId ~= placedId and REPLACEABLE[block.mcid] == true
+end
+
+function MC.ResolveStackedPlacementState( bx, by, bz, stateId, hit )
+	local existingState = MC.GetBlockState( bx, by, bz )
+	local id = MC.BlockTypeForState( stateId )
+	local block = MC.Blocks[id]
+	if MC.BlockTypeForState( existingState ) == id then
+		if block.orient == "slab" and MC.GetStateProperty( existingState, "type" ) ~= "double" then
+			local combined = MC.StateWith( existingState, "type", "double" )
+			return MC.StateWith( combined, "waterlogged", false ) or combined
+		elseif block.mcid == "minecraft:snow" then
+			return MC.StateWith( existingState, "layers", math.min( 8, MC.GetStateProperty( existingState, "layers" ) + 1 ) )
+		end
+	elseif block.orient == "slab" then
+		local normal = hit.HitNormal
+		local aboveHalf = hit.HitPos.z / MC.API.Coords.BlockSize() - bz > 0.5
+		local half = normal.z < 0 or normal.z == 0 and aboveHalf
+		return MC.StateWith( stateId, "type", half and "top" or "bottom" )
+	end
+	return stateId
+end
+
 local function addCell( cells, seen, bx, by, bz, id, orient )
 	local key = MC.CellKey( bx, by, bz )
 	if seen[key] then return seen[key] end

@@ -15,6 +15,8 @@ local function copyQuickCraft( quickCraft )
 	}
 end
 
+MC.CopyInventoryQuickCraft = copyQuickCraft
+
 function MC.NewInventoryContainer( options )
 	options = options or {}
 	local container = {
@@ -180,6 +182,9 @@ function MC.ContainerSnapshot( container )
 	for _, slot in ipairs( container.slots ) do
 		snapshot.slots[slot.index] = MC.CopyItemStack( MC.InventorySlotGet( slot ) )
 	end
+	if container.swapRecord then
+		snapshot.offhand = MC.CopyItemStack( container.swapRecord.equipment.offhand )
+	end
 	return snapshot
 end
 
@@ -190,6 +195,9 @@ function MC.ContainerRestore( container, snapshot )
 	container.cursor = MC.CopyItemStack( snapshot.cursor )
 	container.quickCraft = copyQuickCraft( snapshot.quickCraft )
 	container.revision = snapshot.revision
+	if container.swapRecord then
+		container.swapRecord.equipment.offhand = MC.CopyItemStack( snapshot.offhand )
+	end
 end
 
 function MC.ContainerChangedSlots( container, snapshot )
@@ -273,6 +281,10 @@ function MC.ContainerQuickMove( container, sourceIndex, context )
 	local filtered = {}
 	for _, index in ipairs( targets ) do if index ~= sourceIndex then filtered[#filtered + 1] = index end end
 	local remaining, changed = MC.ContainerMoveStackTo( container, source, filtered, context )
+	if not changed and rule.fallback then
+		local fallback = MC.ContainerResolveTargets( container, rule.fallback, rule.reverse == true )
+		remaining, changed = MC.ContainerMoveStackTo( container, source, fallback, context )
+	end
 	if not changed then return true, false, nil end
 	local ok, err = MC.InventorySlotSet( sourceSlot, remaining )
 	if not ok then return false, err end

@@ -7,7 +7,7 @@
 MC = MC or {}
 
 local State = MC.ClientInventory
-local PROTOCOL_VERSION = 1
+local PROTOCOL_VERSION = MC.InventoryProtocolVersion
 local SNAPSHOT_PART_BYTES = 30000
 local SNAPSHOT_MAX_BYTES = 1024 * 1024
 local BACKGROUND_ACTION = 65535
@@ -103,13 +103,16 @@ net.Receive( "mc_inventory_sync_end", function()
 	if not json or #json ~= transfer.rawBytes then MC.RequestInventoryResync() return end
 	local data = util.JSONToTable( json )
 	local ok, err = MC.ApplyClientInventorySnapshot( data )
-	if not ok then State.lastError = err MC.RequestInventoryResync() return end
-	State.selected = transfer.selected
+	if not ok then
+		if err ~= "stale_inventory_snapshot" then State.lastError = err MC.RequestInventoryResync() end
+		return
+	end
 	emit( "MC.InventorySyncComplete", transfer.reason, State )
 end )
 
 local function playerMenuIndex( menu, playerIndex )
-	return menu.menuPlayerMap and menu.menuPlayerMap[playerIndex] or menu.playerOffset + playerIndex
+	if menu.menuPlayerMap then return menu.menuPlayerMap[playerIndex] end
+	return menu.playerOffset + playerIndex
 end
 
 local function predictionTransferRules( menu, creative )
@@ -125,31 +128,77 @@ local function predictionTransferRules( menu, creative )
 	end
 	if menu.kind == "chest" or menu.kind == "chest_double" then
 		return {
-			chest = { targets = { "main", "hotbar" } },
-			main = { targets = { "chest", "hotbar" } },
-			hotbar = { targets = { "chest", "main" } },
+			chest = { targets = { "hotbar", "main" }, reverse = true },
+			main = { targets = { "chest" } },
+			hotbar = { targets = { "chest" } },
+		}
+	end
+	if menu.kind == "crafting_table" then
+		return {
+			crafting = { targets = { "main", "hotbar" } },
+			main = { targets = { "crafting" }, fallback = { "hotbar" } },
+			hotbar = { targets = { "crafting" }, fallback = { "main" } },
+		}
+	end
+	if menu.kind == "anvil" then
+		return {
+			anvil_left = { targets = { "main", "hotbar" } },
+			anvil_right = { targets = { "main", "hotbar" } },
+			main = { targets = { "anvil_left", "anvil_right" } },
+			hotbar = { targets = { "anvil_left", "anvil_right" } },
+		}
+	end
+	if menu.kind == "merchant" then
+		return {
+			merchant_payment_a = { targets = { "main", "hotbar" } },
+			merchant_payment_b = { targets = { "main", "hotbar" } },
+			main = { targets = { "hotbar" } }, hotbar = { targets = { "main" } },
+		}
+	end
+	if menu.kind == "brewing_stand" then
+		local function targets( fallback )
+			return function( container, source )
+				if MC.BrewingIsFuel( source ) then
+					local slot = MC.ContainerGetSlot( container, 4 )
+					local existing = MC.InventorySlotGet( slot )
+					if MC.IsEmptyItemStack( existing ) or MC.ItemStacksCanMerge( existing, source )
+					and existing.count < MC.InventorySlotLimit( slot, source ) then return { "brewing_fuel" } end
+					return { "brewing_ingredient" }
+				end
+				if MC.BrewingIsIngredient( source ) then return { "brewing_ingredient" } end
+				if MC.BrewingIsBottle( source ) then return { "brewing_bottles" } end
+				return { fallback }
+			end
+		end
+		return {
+			brewing_bottles = { targets = { "hotbar", "main" }, reverse = true },
+			brewing_ingredient = { targets = { "hotbar", "main" }, reverse = true },
+			brewing_fuel = { targets = { "hotbar", "main" }, reverse = true },
+			main = { resolve = targets( "hotbar" ) }, hotbar = { resolve = targets( "main" ) },
 		}
 	end
 	if menu.kind == "hopper" or menu.kind == "dispenser" or menu.kind == "dropper" then
 		return {
-			logistics_container = { targets = { "main", "hotbar" }, reverse = true },
+			logistics_container = { targets = { "hotbar", "main" }, reverse = true },
 			main = { targets = { "logistics_container" } },
 			hotbar = { targets = { "logistics_container" } },
 		}
 	end
 	if menu.kind == "furnace" or menu.kind == "blast_furnace" then
 		local recipeType = menu.kind == "blast_furnace" and "minecraft:blasting" or "minecraft:smelting"
-		local function furnaceTargets( _, source )
-			if MC.FindCookingRecipe( source, recipeType ) then return { "furnace_input" } end
-			if MC.FurnaceFuelTime( source ) > 0 then return { "furnace_fuel" } end
-			return { "hotbar" }
+		local function furnaceTargets( fallback )
+			return function( _, source )
+				if MC.FindCookingRecipe( source, recipeType ) then return { "furnace_input" } end
+				if MC.FurnaceFuelTime( source ) > 0 then return { "furnace_fuel" } end
+				return { fallback }
+			end
 		end
 		return {
 			furnace_input = { targets = { "main", "hotbar" } },
 			furnace_fuel = { targets = { "main", "hotbar" } },
 			furnace_result = { targets = { "main", "hotbar" } },
-			main = { resolve = furnaceTargets },
-			hotbar = { resolve = furnaceTargets },
+			main = { resolve = furnaceTargets( "hotbar" ) },
+			hotbar = { resolve = furnaceTargets( "main" ) },
 		}
 	end
 	if menu.kind == "enchanting_table" then
@@ -163,8 +212,8 @@ local function predictionTransferRules( menu, creative )
 			return {}
 		end
 		return {
-			enchanting_item = { targets = { "main", "hotbar" }, reverse = true },
-			enchanting_lapis = { targets = { "main", "hotbar" }, reverse = true },
+			enchanting_item = { targets = { "hotbar", "main" }, reverse = true },
+			enchanting_lapis = { targets = { "hotbar", "main" }, reverse = true },
 			main = { resolve = enchantingTargets },
 			hotbar = { resolve = enchantingTargets },
 		}
@@ -172,31 +221,50 @@ local function predictionTransferRules( menu, creative )
 	local rules = {
 		main = { resolve = inventoryTargets( "hotbar" ) },
 		hotbar = { resolve = inventoryTargets( "main" ) },
-		armor_head = { targets = { "hotbar", "main" } },
-		armor_chest = { targets = { "hotbar", "main" } },
-		armor_legs = { targets = { "hotbar", "main" } },
-		armor_feet = { targets = { "hotbar", "main" } },
-		offhand = { targets = { "hotbar", "main" } },
+		armor_head = { targets = { "main", "hotbar" } },
+		armor_chest = { targets = { "main", "hotbar" } },
+		armor_legs = { targets = { "main", "hotbar" } },
+		armor_feet = { targets = { "main", "hotbar" } },
+		offhand = { targets = { "main", "hotbar" } },
 	}
-	if not creative then rules.crafting = { targets = { "hotbar", "main" } } end
+	if not creative then rules.crafting = { targets = { "main", "hotbar" } } end
 	return rules
 end
 
 local function buildPredictionContainer()
 	local menu, session = State.menu, State.session
-	if not menu or not session or not MC.NewInventoryContainer then return nil end
+	if not menu then return nil end
+	if not session then
+		session = { containerId = 1, creative = MC.PlayerIsCreative and MC.PlayerIsCreative( LocalPlayer() ) == true }
+	end
 	local definitions, playerTargets, inputSlots = {}, {}, {}
 	local crafting, creative = session.crafting == true, session.creative == true
 	local furnace = menu.kind == "furnace" or menu.kind == "blast_furnace"
 	local enchanting = menu.kind == "enchanting_table"
+	local brewing = menu.kind == "brewing_stand"
+	local anvil, merchant = menu.kind == "anvil", menu.kind == "merchant"
 	local logistics = menu.kind == "hopper" or menu.kind == "dispenser" or menu.kind == "dropper"
 	local recipeType = menu.kind == "blast_furnace" and "minecraft:blasting" or "minecraft:smelting"
 	local inputCount = crafting and math.max( 1, ( session.craftingWidth or 0 ) * ( session.craftingHeight or 0 ) ) or 0
 	for index = 0, menu.slotCount - 1 do
-		local playerIndex = menu.menuPlayerMap and menu.menuPlayerMap[index] or nil
+		local playerIndex
+		if menu.playerSlotMap then playerIndex = menu.playerSlotMap[index]
+		elseif index >= menu.playerOffset then playerIndex = index - menu.playerOffset end
 		local equipmentSlot = menu.equipmentSlotMap and menu.equipmentSlotMap[index] or nil
 		local group, meta, maxStack, mayPlace = "main", nil, nil, nil
-		if enchanting and index == 0 then
+		if ( anvil or merchant ) and index == 2 then
+			group, meta, mayPlace = "result", { role = "result" }, function() return false end
+		elseif anvil and index < 2 then
+			group, meta = index == 0 and "anvil_left" or "anvil_right", { role = "input" }
+		elseif merchant and index < 2 then
+			group, meta = index == 0 and "merchant_payment_a" or "merchant_payment_b", { role = "input" }
+		elseif brewing and index < 3 then
+			group, maxStack, mayPlace = "brewing_bottles", 1, function( _, stack ) return MC.BrewingIsBottle( stack ) end
+		elseif brewing and index == 3 then
+			group, mayPlace = "brewing_ingredient", function( _, stack ) return MC.BrewingIsIngredient( stack ) end
+		elseif brewing and index == 4 then
+			group, mayPlace = "brewing_fuel", function( _, stack ) return MC.BrewingIsFuel( stack ) end
+		elseif enchanting and index == 0 then
 			group, meta, maxStack = "enchanting_item", { role = "input" }, 1
 			mayPlace = function( _, stack )
 				return MC.EnchantingIsItemEnchantable and MC.EnchantingIsItemEnchantable( stack ) or false
@@ -245,7 +313,7 @@ local function buildPredictionContainer()
 		revision = State.authoritative and State.authoritative.revision or State.revision,
 		slots = definitions, hotbarSlots = hotbarSlots,
 		transferRules = predictionTransferRules( menu, creative ),
-		cursor = State.authoritative and State.authoritative.cursor or State.cursor,
+		cursor = State.cursor,
 		context = { creative = creative, crafting = crafting, clientPrediction = true },
 		getSwapStack = function( committed, button )
 			if button ~= 40 then return nil end
@@ -264,6 +332,10 @@ local function buildPredictionContainer()
 		end,
 	} )
 	if not container then State.lastError = err or "inventory_prediction_container_failed" return nil end
+	container.quickCraft = MC.CopyInventoryQuickCraft( State.authoritative.quickCraft )
+	container.canTakeItemForPickAll = function( _, _, slot )
+		return not ( ( crafting or anvil or merchant ) and slot.meta and slot.meta.role == "result" )
+	end
 	if MC.ConfigurePlayerSwap then
 		MC.ConfigurePlayerSwap( container, { equipment = State.equipment }, menu.menuEquipmentMap )
 	end
@@ -273,6 +345,7 @@ local function buildPredictionContainer()
 			height = math.max( 1, session.craftingHeight or 1 ),
 			resultSlot = session.resultSlot or 0, inputSlots = inputSlots,
 			playerOffset = session.playerOffset or 0, playerTargets = playerTargets,
+			resultTargets = MC.ContainerResolveTargets( container, { "hotbar", "main" }, true ),
 		}
 		container.beforeCommit = MC.CraftingRefreshResult
 		container.takeResult = MC.CraftingTakeResult
@@ -280,6 +353,7 @@ local function buildPredictionContainer()
 		container.furnace = {
 			inputSlot = 0, fuelSlot = 1, resultSlot = 2,
 			playerTargets = playerTargets, recipeType = recipeType,
+			resultTargets = MC.ContainerResolveTargets( container, { "hotbar", "main" }, true ),
 		}
 		container.takeResult = MC.FurnaceTakeResult
 	end
@@ -294,23 +368,28 @@ local function syncPredictionMirrors( container )
 		local menuIndex = playerMenuIndex( menu, playerIndex )
 		State.slots[playerIndex + 1] = menuIndex ~= nil and MC.CopyItemStack( menu.slots[menuIndex + 1] ) or nil
 	end
-	State.equipment = {}
 	for slot, menuIndex in pairs( menu.menuEquipmentMap or {} ) do
 		State.equipment[slot] = MC.CopyItemStack( menu.slots[menuIndex + 1] )
 	end
 	State.cursor = MC.CopyItemStack( container.cursor )
 	State.predictedRevision = container.revision
+	State.quickCraftPreview = MC.InventoryQuickCraftPreview( container )
 end
 
 local function predictAction( container, action )
 	local context = {
-		creative = State.session and State.session.creative == true,
+		creative = container.context.creative == true,
 		clientPrediction = true,
 		canDrop = true,
 		parityClicks = MC.GameplayParityInventoryClicksEnabled
 			and MC.GameplayParityInventoryClicksEnabled() or false,
 	}
 	if action.kind == "input" then
+		local slot = MC.ContainerGetSlot( container, action.slot )
+		if ( container.kind == "anvil" or container.kind == "merchant" ) and slot and slot.meta and slot.meta.role == "result"
+		and action.input ~= MC.ContainerInput.CLONE and action.input ~= MC.ContainerInput.QUICK_CRAFT then
+			return { ok = true, authoritativeOnly = true }
+		end
 		return MC.ExecuteContainerInput( container, {
 			revision = container.revision, actionId = action.actionId,
 			input = action.input, slot = action.slot, button = action.button,
@@ -329,13 +408,25 @@ local function predictAction( container, action )
 		-- Business buttons never predict authoritative stack, experience or seed
 		-- changes. Keeping the local container untouched lets the normal delta
 		-- reconcile the single server-computed result.
-		return { ok = true, changedSlots = {}, cursorChanged = false, cursor = MC.CopyItemStack( container.cursor ) }
+		return { ok = true, authoritativeOnly = true }
+	end
+	if action.kind == "world" then
+		if action.operation == 0 then
+			local ok, selected, err = MC.PickInventoryStack( container, action.selected, action.stack, context.creative )
+			if State.pendingSelection and State.pendingSelection.id == action.selectionId then
+				State.pendingSelection.selected = selected
+			end
+			State.selected = MC.ClientInventoryVisibleSelection( selected )
+			return { ok = ok, error = err }
+		end
+		return MC.ExecuteContainerInput( container, {
+			input = action.operation == 1 and MC.ContainerInput.THROW or MC.ContainerInput.SWAP,
+			slot = action.selected, button = action.operation == 1 and ( action.whole and 1 or 0 ) or 40,
+		}, context )
 	end
 	if action.kind == "creative_pick" then
 		local before = MC.ContainerSnapshot( container )
-		local ok, err
-		if action.targetSlot >= 0 then ok, err = MC.ContainerSetStack( container, action.targetSlot, action.stack )
-		else ok, err = MC.ContainerSetCursor( container, action.stack ) end
+		local ok, err = MC.MutateCreativeInventory( container, action.targetSlot, action.stack )
 		if not ok then return { ok = false, error = err or "creative_pick_failed" } end
 		local changed = MC.ContainerChangedSlots( container, before )
 		local cursorChanged = not MC.ItemStacksEqual( container.cursor, before.cursor )
@@ -347,20 +438,22 @@ end
 
 function MC.RebuildClientPrediction( silent )
 	local authoritative, menu = State.authoritative, State.menu
-	if not authoritative or not menu or not State.session then return false end
+	if not authoritative or not menu then return false end
 	for index = 1, menu.slotCount do menu.slots[index] = MC.CopyItemStack( authoritative.menuSlots[index] ) end
 	State.slots = {}
 	for index = 1, 36 do State.slots[index] = MC.CopyItemStack( authoritative.playerSlots[index] ) end
 	State.equipment = {}
 	for slot, stack in pairs( authoritative.equipment or {} ) do State.equipment[slot] = MC.CopyItemStack( stack ) end
-	State.revision, State.selected = authoritative.revision, authoritative.selected
+	State.revision, State.selected = authoritative.revision, MC.ClientInventoryVisibleSelection( authoritative.selected )
 	State.cursor = MC.CopyItemStack( authoritative.cursor )
 	local container = buildPredictionContainer()
 	if not container then return false end
+	State.predictionBarrier = false
 	for _, action in ipairs( State.actions or {} ) do
 		local result = predictAction( container, action )
 		action.predictionOK = result and result.ok == true
 		action.predictionError = result and result.error or nil
+		if result and result.authoritativeOnly then State.predictionBarrier = true break end
 	end
 	State.predictedContainer = container
 	syncPredictionMirrors( container )
@@ -374,16 +467,29 @@ function MC.RebuildClientPrediction( silent )
 end
 
 local function pumpActions()
-	if not State.session or #State.actions == 0 then return end
+	if #State.actions == 0 then return end
 	for _, action in ipairs( State.actions ) do
 		if not action.sent then
 			action.sent = true
 			action.revision = action.baseRevision or ( State.authoritative and State.authoritative.revision or State.revision )
-			local messageName = action.kind == "creative_pick" and "mc_inventory_creative_pick"
+			local messageName = action.kind == "world" and "mc_inventory_world_action"
+				or action.kind == "creative_pick" and "mc_inventory_creative_pick"
 				or action.kind == "recipe_place" and "mc_inventory_recipe_place"
 				or action.kind == "menu_button" and "mc_inventory_menu_button"
 				or "mc_inventory_action"
 			net.Start( messageName )
+			if action.kind == "world" then
+				net.WriteUInt( action.actionId, 16 )
+				net.WriteUInt( action.operation, 2 )
+				net.WriteUInt( action.selectionId, 32 )
+				net.WriteUInt( action.selected, 4 )
+				net.WriteBool( action.whole == true )
+				if action.operation == 0 then
+					net.WriteInt( action.bx, MC.Net.COORD_BITS )
+					net.WriteInt( action.by, MC.Net.COORD_BITS )
+					net.WriteInt( action.bz, MC.Net.COORD_BITS )
+				end
+			else
 				net.WriteUInt( State.session.containerId, 16 )
 				net.WriteString( State.session.token )
 				net.WriteUInt( action.revision, 32 )
@@ -401,6 +507,7 @@ local function pumpActions()
 					net.WriteInt( action.slot, 16 )
 					net.WriteInt( action.button, 8 )
 				end
+			end
 			net.SendToServer()
 		end
 	end
@@ -408,12 +515,24 @@ end
 
 local function enqueueAction( action )
 	if #State.actions >= 64 then return false, "inventory_action_queue_full" end
+	if not State.authoritative then return false, "inventory_sync_pending" end
 	local actionId = State.nextActionId % BACKGROUND_ACTION
 	State.nextActionId = ( actionId + 1 ) % BACKGROUND_ACTION
 	action.actionId = actionId
 	action.baseRevision = State.authoritative and State.authoritative.revision or State.revision
 	State.actions[#State.actions + 1] = action
-	MC.RebuildClientPrediction()
+	if State.predictedContainer and not State.predictionBarrier then
+		local result = predictAction( State.predictedContainer, action )
+		action.predictionOK, action.predictionError = result.ok == true, result.error
+		State.predictionBarrier = result.authoritativeOnly == true
+		syncPredictionMirrors( State.predictedContainer )
+		emit( "MC.InventoryMenuChanged", nil, State.revision, State )
+		emit( "MC.InventoryChanged", nil, State.revision, State )
+		emit( "MC.EquipmentChanged", nil, State.revision, State )
+		emit( "MC.InventoryCursorChanged", State.cursor, State )
+	else
+		MC.RebuildClientPrediction()
+	end
 	pumpActions()
 	return true, actionId
 end
@@ -462,7 +581,7 @@ function MC.QueueCreativeInventoryPick( item, count, targetSlot )
 	count = math.floor( tonumber( count ) or definition.maxStack or 1 )
 	count = math.Clamp( count, 1, definition.maxStack or 1 )
 	targetSlot = math.floor( tonumber( targetSlot ) or -1 )
-	if targetSlot < -1 or targetSlot > 8 then return false, "invalid_creative_target" end
+	if ( targetSlot < -1 or targetSlot > 8 ) and targetSlot ~= 40 and targetSlot ~= -3 then return false, "invalid_creative_target" end
 	local stack, stackError = MC.NormalizeItemStack( {
 		item = source.item,
 		count = count,
@@ -478,18 +597,15 @@ end
 function MC.QueueCreativeInventoryClear( targetSlot )
 	if not State.session or State.session.creative ~= true then return false, "creative_inventory_unavailable" end
 	targetSlot = math.floor( tonumber( targetSlot ) or -1 )
-	if targetSlot < -1 or targetSlot > 8 then return false, "invalid_creative_target" end
+	if ( targetSlot < -2 or targetSlot > 8 ) and targetSlot ~= 40 then return false, "invalid_creative_target" end
 	return enqueueAction( {
 		kind = "creative_pick", targetSlot = targetSlot, stack = nil,
 	} )
 end
 
 local function acknowledgeAction( actionId, accepted )
-	if actionId == BACKGROUND_ACTION then return end
-	for index, action in ipairs( State.actions ) do
-		if action.actionId == actionId then table.remove( State.actions, index ) break end
-	end
-	if accepted ~= true then State.actions = {} end
+	-- Rejection rolls back this action, not later clicks already in flight.
+	MC.AcknowledgeClientInventoryActions( actionId, false )
 end
 
 net.Receive( "mc_inventory_delta", function()
@@ -500,6 +616,7 @@ net.Receive( "mc_inventory_delta", function()
 	local actionId = net.ReadUInt( 16 )
 	local revision = net.ReadUInt( 32 )
 	local selected = net.ReadUInt( 4 )
+	local selectionId = net.ReadUInt( 32 )
 	local errorCode = net.ReadString()
 	local changedCount = net.ReadUInt( SLOT_BITS )
 	local changed, seen, decodeError = {}, {}, nil
@@ -513,6 +630,10 @@ net.Receive( "mc_inventory_delta", function()
 	end
 	local cursor, cursorError = MC.ReadItemStackNet()
 	decodeError = decodeError or cursorError
+	local slotCount = State.session and State.session.slotCount or 36
+	local quickCraft, quickError = MC.ReadInventoryQuickCraftNet( slotCount )
+	local offhand, offhandError = MC.ReadItemStackNet()
+	decodeError = decodeError or quickError or offhandError
 	local background = not State.session and containerId == 1 and token == ""
 	local validSession = background or State.session and State.session.containerId == containerId and State.session.token == token
 	local validSlotCount = not State.session or changedCount <= math.floor( tonumber( State.session.slotCount ) or 36 )
@@ -522,20 +643,17 @@ net.Receive( "mc_inventory_delta", function()
 		return
 	end
 	if background then
-		local slots = {}
-		for index = 0, 35 do slots[index + 1] = MC.CopyItemStack( State.slots[index + 1] ) end
-		State.menu = {
-			kind = "player", slotCount = 36, playerOffset = 0, chestSlots = 0,
-			crafting = false, slots = slots,
-		}
-		State.authoritative = nil
+		if not State.menu or State.menu.slotCount ~= 36 then
+			State.menu = { kind = "player", slotCount = 36, playerOffset = 0, chestSlots = 0, crafting = false, slots = {} }
+			State.authoritative = nil
+		end
 	end
 	acknowledgeAction( actionId, accepted )
 	if actionId ~= BACKGROUND_ACTION and not accepted then
 		State.lastError = errorCode ~= "" and errorCode or "inventory_action_rejected"
 	end
-	local cursorApplies = State.session and token == State.session.token or false
-	local applied, applyError = MC.ApplyClientInventoryDelta( revision, selected, changed, cursor, cursorApplies )
+	local applied, applyError = MC.ApplyClientInventoryDelta( revision, selected, changed, cursor, true,
+		quickCraft, selectionId, offhand or false )
 	if not applied then
 		State.lastError = applyError or "inventory_delta_rejected"
 		MC.RequestInventoryResync()
@@ -667,6 +785,7 @@ net.Receive( "mc_inventory_open", function()
 	State.actions = {}
 	State.authoritative = nil
 	State.predictedContainer = nil
+	State.quickCraftPreview = nil
 	emit( "MC.InventoryOpened", State.session, State )
 end )
 
@@ -680,6 +799,7 @@ net.Receive( "mc_inventory_close", function()
 		State.actions = {}
 		State.authoritative = nil
 		State.predictedContainer = nil
+		State.quickCraftPreview = nil
 		emit( "MC.InventoryClosed", reason, State )
 	end
 end )
@@ -705,13 +825,34 @@ end
 function MC.SelectInventoryHotbarSlot( selected )
 	selected = math.floor( tonumber( selected ) or -1 )
 	if selected < 0 or selected > 8 then return false end
+	if selected == State.selected then return true end
+	State.selectionId = ( State.selectionId + 1 ) % 4294967296
+	State.pendingSelection = { id = State.selectionId, selected = selected }
 	State.selected = selected
-	if State.authoritative then State.authoritative.selected = selected end
 	emit( "MC.InventorySelectionChanged", selected, State )
 	net.Start( "mc_inventory_select" )
 		net.WriteUInt( selected, 4 )
+		net.WriteUInt( State.selectionId, 32 )
 	net.SendToServer()
 	return true
+end
+
+function MC.RequestInventoryWorldAction( operation, whole )
+	if State.session or not State.ready or not State.authoritative then return false, "inventory_unavailable" end
+	if operation ~= 0 and operation ~= 1 and operation ~= 2 then return false, "invalid_world_action" end
+	if #State.actions >= 64 then return false, "inventory_action_queue_full" end
+	local action = { kind = "world", operation = operation, selected = State.selected, whole = whole == true }
+	if operation == 0 then
+		local aim = MC.PlayerBlockAim( LocalPlayer() )
+		if not aim or MC.EntityOccludesBlockAim( LocalPlayer(), aim ) then return false, "no_pick_target" end
+		action.bx, action.by, action.bz = aim.bx, aim.by, aim.bz
+		action.stack = MC.InventoryPickStackForState( MC.GetBlockState( aim.bx, aim.by, aim.bz ) )
+		if not action.stack then return false, "no_pick_item" end
+	end
+	State.selectionId = ( State.selectionId + 1 ) % 4294967296
+	State.pendingSelection = { id = State.selectionId, selected = State.selected }
+	action.selectionId = State.selectionId
+	return enqueueAction( action )
 end
 
 hook.Add( "Think", "mc_inventory_transfer_timeout", function()

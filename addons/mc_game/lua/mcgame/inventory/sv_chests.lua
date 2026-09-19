@@ -256,9 +256,9 @@ local function buildMenu( ply, record, positions )
 			return map
 		end)(),
 		transferRules = {
-			chest = { targets = { "main", "hotbar" } },
-			main = { targets = { "chest", "hotbar" } },
-			hotbar = { targets = { "chest", "main" } },
+			chest = { targets = { "hotbar", "main" }, reverse = true },
+			main = { targets = { "chest" } },
+			hotbar = { targets = { "chest" } },
 		},
 	} )
 	if not menu then return nil, err end

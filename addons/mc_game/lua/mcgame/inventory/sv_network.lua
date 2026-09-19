@@ -11,12 +11,14 @@ MC = MC or {}
 MC.SV = MC.SV or {}
 
 local SV = MC.SV
-local PROTOCOL_VERSION = 1
+local PROTOCOL_VERSION = MC.InventoryProtocolVersion
 local SNAPSHOT_PART_BYTES = 30000
 local SNAPSHOT_MAX_BYTES = 1024 * 1024
 local BACKGROUND_ACTION = 65535
 local SLOT_BITS = 7
 local MAX_MENU_SLOTS = 127
+
+util.AddNetworkString( "mc_inventory_world_action" )
 
 local function creativeAllowed( ply )
 	return SV.PlayerHasInfiniteMaterials and SV.PlayerHasInfiniteMaterials( ply ) == true
@@ -73,7 +75,15 @@ local function menuState( record )
 		equipmentItems = {},
 		playerSlotMap = {},
 		equipmentSlotMap = {},
+		containerId = container.id,
+		token = sessionToken( record ),
+		actionId = session and session.lastActionId or record.lastWorldActionId or BACKGROUND_ACTION,
+		selectionId = record.lastSelectionId or 0,
+		cursor = MC.InventoryDataStack( container.cursor ),
+		quickCraft = { status = container.quickCraft.status, type = container.quickCraft.type, slots = {} },
 	}
+	for index in pairs( container.quickCraft.slots ) do state.quickCraft.slots[#state.quickCraft.slots + 1] = index end
+	table.sort( state.quickCraft.slots )
 	if #container.slots > MAX_MENU_SLOTS then return nil, "inventory_menu_too_large" end
 	for _, slot in ipairs( container.slots ) do
 		local stack = MC.InventorySlotGet( slot )
@@ -178,6 +188,7 @@ local function sendDelta( record, result, accepted, actionId, errorCode )
 		net.WriteUInt( math.floor( tonumber( actionId ) or BACKGROUND_ACTION ) % 65536, 16 )
 		net.WriteUInt( container.revision, 32 )
 		net.WriteUInt( record.selected, 4 )
+		net.WriteUInt( record.lastSelectionId or 0, 32 )
 		net.WriteString( string.sub( tostring( errorCode or "" ), 1, 96 ) )
 		net.WriteUInt( #changedSlots, SLOT_BITS )
 		for _, index in ipairs( changedSlots ) do
@@ -185,6 +196,8 @@ local function sendDelta( record, result, accepted, actionId, errorCode )
 			MC.WriteItemStackNet( MC.ContainerGetStack( container, index ) )
 		end
 		MC.WriteItemStackNet( container.cursor )
+		MC.WriteInventoryQuickCraftNet( container.quickCraft )
+		MC.WriteItemStackNet( record.equipment and record.equipment.offhand )
 	net.Send( ply )
 	return true
 end
@@ -436,11 +449,30 @@ end
 
 local function actionSequenceAllowed( session, actionId )
 	if actionId == BACKGROUND_ACTION then return false end
-	if session.lastActionId == nil then session.lastActionId = actionId return true end
-	local distance = ( actionId - session.lastActionId ) % 65536
-	if distance == 0 or distance > 32768 then return false end
+	if not MC.InventoryActionIsNewer( actionId, session.lastActionId ) then return false end
 	session.lastActionId = actionId
 	return true
+end
+
+local function reserveActionDrops( context )
+	local reserved = {}
+	context.cancelDrops = function()
+		for _, entity in ipairs( reserved ) do if IsValid( entity ) then entity:Remove() end end
+		reserved = {}
+	end
+	context.prepareDrops = function( stacks )
+		local ply = context.player
+		local position = SV.PlayerItemDropPosition( ply )
+		local velocity = SV.PlayerThrownDropVelocity( ply )
+		for _, stack in ipairs( stacks ) do
+			local entity, err = SV.SpawnItemDrop( position, stack, ply, {
+				noMerge = true, pickupDelay = 2, velocity = velocity,
+			} )
+			if not entity then return false, err or "drop_spawn_failed" end
+			reserved[#reserved + 1] = entity
+		end
+		return true
+	end
 end
 
 local function sessionStillValid( session )
@@ -481,22 +513,16 @@ net.Receive( "mc_inventory_action", function( _, ply )
 	if MC.ConfigurePlayerSwap then
 		MC.ConfigurePlayerSwap( container, record, session.equipmentMenuMap )
 	end
+	reserveActionDrops( context )
 	local result = MC.ExecuteContainerInput( container, {
 		revision = revision, actionId = actionId, input = input, slot = slot, button = button,
 	}, context )
 	if not result.ok then sendRejected( record, actionId, result.error, result.error == "revision_mismatch" ) return end
-	if not context.inventoryDeltaPublished then sendDelta( record, result, true, actionId, "" ) end
-	if #result.drops > 0 and type( SV.SpawnItemDrop ) == "function" then
-		local position = SV.PlayerItemDropPosition and SV.PlayerItemDropPosition( ply ) or ply:GetShootPos()
-		for _, stack in ipairs( result.drops ) do
-			SV.SpawnItemDrop( position, stack, ply, {
-				noMerge = true,
-				pickupDelay = MC.ItemEntityParity and MC.ItemEntityParity.Enabled
-					and MC.ItemEntityParity.Enabled() and 2.0 or nil,
-				velocity = SV.PlayerThrownDropVelocity and SV.PlayerThrownDropVelocity( ply ) or nil,
-			} )
-		end
+	if result.offhandChanged and not ( session.equipmentMenuMap and session.equipmentMenuMap.offhand ) then
+		record.dirty = true
+		SV.UpdatePlayerEquipmentNetwork( record )
 	end
+	if not context.inventoryDeltaPublished then sendDelta( record, result, true, actionId, "" ) end
 end )
 
 -- Ordered business-menu button. Unlike a normal slot click, this carries only
@@ -660,7 +686,8 @@ net.Receive( "mc_inventory_creative_pick", function( _, ply )
 	if not actionSequenceAllowed( session, actionId ) then sendRejected( record, actionId, "stale_action", true ) return end
 	if revision > container.revision then sendRejected( record, actionId, "revision_mismatch", true ) return end
 	if not creativeAllowed( ply ) then sendRejected( record, actionId, "creative_only", false ) return end
-	if targetSlot < -1 or targetSlot > 8 then sendRejected( record, actionId, "invalid_creative_target", false ) return end
+	if ( targetSlot < -3 or targetSlot > 8 ) and targetSlot ~= 40
+		or targetSlot == -2 and requestedStack ~= nil then sendRejected( record, actionId, "invalid_creative_target", false ) return end
 	if stackError then sendRejected( record, actionId, stackError, false ) return end
 	local stack
 	if requestedStack then
@@ -668,14 +695,15 @@ net.Receive( "mc_inventory_creative_pick", function( _, ply )
 		if not definition or definition.name == "minecraft:air" then sendRejected( record, actionId, "unknown_item", false ) return end
 		stack, stackError = MC.NormalizeItemStack( requestedStack )
 		if not stack then sendRejected( record, actionId, stackError or "invalid_item", false ) return end
-		if not MC.CreativeCatalogContainsStack or not MC.CreativeCatalogContainsStack( stack ) then
+		local reducingCarried = targetSlot == -1 and MC.ItemStacksCanMerge( stack, container.cursor )
+			and stack.count <= container.cursor.count
+		if not reducingCarried and not MC.CreativeCatalogContainsStack( stack ) then
 			sendRejected( record, actionId, "creative_stack_not_catalogued", false )
 			return
 		end
 	end
 	local snapshot = MC.ContainerSnapshot( container )
-	local ok, err
-	if targetSlot >= 0 then ok, err = MC.ContainerSetStack( container, targetSlot, stack ) else ok, err = MC.ContainerSetCursor( container, stack ) end
+	local ok, err = MC.MutateCreativeInventory( container, targetSlot, stack )
 	if not ok then MC.ContainerRestore( container, snapshot ) sendRejected( record, actionId, err or "invalid_item", false ) return end
 	session.lastActivity = CurTime()
 	local context = { player = ply, actionId = actionId, creative = true, canDrop = type( SV.SpawnItemDrop ) == "function" }
@@ -686,6 +714,12 @@ net.Receive( "mc_inventory_creative_pick", function( _, ply )
 		return
 	end
 	if not context.inventoryDeltaPublished then sendDelta( record, result, true, actionId, "" ) end
+	if targetSlot == -3 and stack then
+		local entity, dropError = SV.SpawnItemDrop( SV.PlayerItemDropPosition( ply ), stack, ply, {
+			noMerge = true, pickupDelay = 2, velocity = SV.PlayerThrownDropVelocity( ply ),
+		} )
+		if not entity then MC.Fault( "inventory_catalog_drop_failed", "%s", tostring( dropError ) ) end
+	end
 end )
 
 net.Receive( "mc_inventory_close", function( _, ply )
@@ -704,9 +738,70 @@ end )
 
 net.Receive( "mc_inventory_select", function( _, ply )
 	local selected = net.ReadUInt( 4 )
+	local sequence = net.ReadUInt( 32 )
 	local record = SV.GetPlayerInventoryRecord( ply, false )
-	if not record or not actionRateAllowed( record ) then return end
-	SV.SetPlayerSelectedSlot( ply, selected, { reason = "selected" } )
+	if not record or selected > 8 then return end
+	if not MC.InventorySelectionIsNewer( sequence, record.lastSelectionId or 0 ) then return end
+	record.lastSelectionId = sequence
+	local old = record.selected
+	if actionRateAllowed( record ) then SV.SetPlayerSelectedSlot( ply, selected, { reason = "selected" } ) end
+	if old == record.selected then sendDelta( record, { changedSlots = {} }, true, BACKGROUND_ACTION, "" ) end
+end )
+
+net.Receive( "mc_inventory_world_action", function( _, ply )
+	local actionId, operation = net.ReadUInt( 16 ), net.ReadUInt( 2 )
+	local selectionId, selected = net.ReadUInt( 32 ), net.ReadUInt( 4 )
+	local whole = net.ReadBool()
+	local bx, by, bz
+	if operation == 0 then
+		bx, by, bz = net.ReadInt( MC.Net.COORD_BITS ), net.ReadInt( MC.Net.COORD_BITS ), net.ReadInt( MC.Net.COORD_BITS )
+	end
+	local record = SV.GetPlayerInventoryRecord( ply, false )
+	if not record or not IsValid( ply ) or not ply:Alive() then return end
+	if actionId == BACKGROUND_ACTION or not MC.InventoryActionIsNewer( actionId, record.lastWorldActionId ) then
+		sendRejected( record, actionId, "stale_action", false ) return
+	end
+	record.lastWorldActionId = actionId
+	if MC.InventorySelectionIsNewer( selectionId, record.lastSelectionId or 0 ) then record.lastSelectionId = selectionId end
+	local Hand = MC.API.HandWeapon
+	if record.session or not Hand.IsInventoryActive( ply ) or operation > 2 or selected > 8 then
+		sendRejected( record, actionId, "inventory_unavailable", false ) return
+	end
+	if not actionRateAllowed( record ) then sendRejected( record, actionId, "rate_limited", false ) return end
+	local container = record.container
+	MC.ConfigurePlayerSwap( container, record )
+	local context = { player = ply, actionId = actionId, creative = creativeAllowed( ply ),
+		canDrop = type( SV.SpawnItemDrop ) == "function", parityClicks = true, reason = "world_inventory_action" }
+	reserveActionDrops( context )
+	local result
+	if operation == 0 then
+		-- ServerGamePacketListenerImpl handles the clicked cell, not the later
+		-- camera direction. Resolve its item server-side after checking reach.
+		if not MC.ReachAllowsEye( MC.API.Coords.EntityEyeWorldPos( ply ), bx, by, bz, MC.CurrentReach() ) then
+			sendRejected( record, actionId, "pick_out_of_reach", false ) return
+		end
+		local target = MC.InventoryPickStackForState( MC.GetBlockState( bx, by, bz ) )
+		local snapshot = MC.ContainerSnapshot( container )
+		local ok, newSelected, err = MC.PickInventoryStack( container, selected, target, context.creative )
+		if not ok then MC.ContainerRestore( container, snapshot ) sendRejected( record, actionId, err, false ) return end
+		record.selected = newSelected
+		result = SV.CommitPlayerInventoryMutation( record, snapshot, context )
+	else
+		record.selected = selected
+		result = MC.ExecuteContainerInput( container, {
+			input = operation == 1 and MC.ContainerInput.THROW or MC.ContainerInput.SWAP,
+			slot = selected, button = operation == 1 and ( whole and 1 or 0 ) or 40,
+		}, context )
+	end
+	if not result or not result.ok then
+		sendRejected( record, actionId, result and result.error or "world_action_failed", true ) return
+	end
+	record.dirty = true
+	SV.CancelMining( ply, "inventory_changed" )
+	SV.CancelSelectedItemUse( ply, "inventory_changed" )
+	SV.UpdatePlayerHeldNetwork( record, context )
+	if result.offhandChanged then SV.UpdatePlayerEquipmentNetwork( record ) end
+	if not context.inventoryDeltaPublished then sendDelta( record, result, true, actionId, "" ) end
 end )
 
 hook.Add( "PlayerDeath", "mc_inventory_close_on_death", function( ply )

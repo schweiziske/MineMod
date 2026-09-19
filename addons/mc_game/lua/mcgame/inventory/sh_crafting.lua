@@ -91,7 +91,7 @@ local function takeOneResult( container, button, state, context, mode )
 	if MC.IsEmptyItemStack( result ) then return false, "no_crafting_result" end
 
 	if mode == "quick_move" then
-		local targets = data.playerTargets or {}
+		local targets = data.resultTargets or data.playerTargets or {}
 		local moveSnapshot = MC.ContainerSnapshot( container )
 		local remaining, moved = MC.ContainerMoveStackTo( container, result, targets, context )
 		if not moved or not MC.IsEmptyItemStack( remaining ) then
@@ -120,8 +120,9 @@ local function takeOneResult( container, button, state, context, mode )
 		end
 	else
 		if button ~= 0 and button ~= 1 then return false, "invalid_button" end
-		local amount = button == 1 and 1 or result.count
-		local ok, err = putIntoCursor( container, result, amount )
+		-- ResultContainer.removeItem takes the entire recipe batch, including
+		-- secondary click and Q. Consuming inputs for a single item loses output.
+		local ok, err = putIntoCursor( container, result, result.count )
 		if not ok then return false, err end
 	end
 

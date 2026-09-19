@@ -243,8 +243,8 @@ local function buildMenu( ply, record, bx, by, bz )
 			anvil_left = { targets = { "main", "hotbar" } },
 			anvil_right = { targets = { "main", "hotbar" } },
 			anvil_result = { targets = { "main", "hotbar" } },
-			main = { targets = { "anvil_left", "anvil_right", "hotbar" } },
-			hotbar = { targets = { "anvil_left", "anvil_right", "main" } },
+			main = { targets = { "anvil_left", "anvil_right" } },
+			hotbar = { targets = { "anvil_left", "anvil_right" } },
 		},
 		context = { player = ply, anvil = true },
 	} )
@@ -253,7 +253,8 @@ local function buildMenu( ply, record, bx, by, bz )
 	if record.nextContainerId == 0 or record.nextContainerId == 1 then record.nextContainerId = 2 end
 	menu.playerOffset, menu.playerMenuMap, menu.menuPlayerMap = playerOffset, playerMap, menuMap
 	menu.anvil = {
-		leftSlot = 0, rightSlot = 1, resultSlot = 2, playerTargets = targets,
+		leftSlot = 0, rightSlot = 1, resultSlot = 2,
+		playerTargets = MC.ContainerResolveTargets( menu, { "hotbar", "main" }, true ),
 		renameText = "", renameExplicit = false,
 		creative = SV.PlayerHasInfiniteMaterials and SV.PlayerHasInfiniteMaterials( ply ) == true,
 		record = record,

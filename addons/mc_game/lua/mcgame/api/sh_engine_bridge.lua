@@ -20,7 +20,7 @@ API.RegisterEvents( GAME_OWNER, {
 	["MC.CreativeStacksAPIReady"] = { realm = "shared", args = "creativeStacksAPI", desc = "the complete creative ItemStack catalog API is available" },
 	["MC.CreativeStackProvidersChanged"] = { realm = "shared", args = "providerId", desc = "a creative ItemStack provider changed" },
 	["MC.ItemsAPIReady"] = { realm = "shared", args = "itemsAPI", desc = "the public namespace-based item registry adapter is available" },
-	["MC.PlayerMiningModifiers"] = { realm = "server", args = "ply, stateId, stack, defaults", desc = "query: survival mining attribute/status overrides" },
+	["MC.PlayerMiningModifiers"] = { realm = "shared", args = "ply, stateId, stack, defaults", desc = "query: predicted and authoritative mining attribute/status overrides" },
 	["MC.HandSwingModifiers"] = { realm = "client", args = "ply, weapon, defaults", desc = "query: held-item mining swing modifiers" },
 	["MC.PlayerMiningStarted"] = { realm = "server", args = "ply, session", desc = "a survival mining session started" },
 	["MC.PlayerMiningCancelled"] = { realm = "server", args = "ply, session, reason", desc = "a survival mining session was cancelled" },

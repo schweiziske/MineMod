@@ -61,7 +61,7 @@ local function buildMenu( ply, playerRecord, container )
 			container.physical[1].record.revision or 0 ),
 		slots = slots, hotbarSlots = hotbar,
 		transferRules = {
-			logistics_container = { targets = { "main", "hotbar" }, reverse = true },
+			logistics_container = { targets = { "hotbar", "main" }, reverse = true },
 			main = { targets = { "logistics_container" } },
 			hotbar = { targets = { "logistics_container" } },
 		},

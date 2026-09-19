@@ -531,7 +531,6 @@ function PANEL:Init()
 	hook.Add( "MC.InventoryMenuChanged", self, function( panel, changed ) panel:RefreshMenuSlots( changed ) end )
 	hook.Add( "MC.InventorySnapshot", self, function( panel, state ) panel:ApplyLatestClientState( state ) end )
 	hook.Add( "MC.InventorySelectionChanged", self, function( panel ) panel:RefreshInventorySlots() end )
-	hook.Add( "MC.InventoryCursorChanged", self, function( panel ) panel:InvalidateLayout() end )
 	hook.Add( "MC.InventoryActionResult", self, function( panel, _, accepted, errorCode )
 		if accepted then return end
 		panel.ErrorText = tostring( errorCode ~= "" and errorCode or "inventory_action_rejected" )
@@ -1399,6 +1398,8 @@ function PANEL:PaintOver()
 	if UI.DrawActiveEffectsInventory then UI.DrawActiveEffectsInventory( self ) end
 	local mouseX, mouseY = gui.MousePos()
 	local carried = MC.ClientInventory and MC.ClientInventory.cursor or nil
+	local preview = MC.ClientInventory and MC.ClientInventory.quickCraftPreview
+	if preview then carried = preview.cursor end
 	if not MC.IsEmptyItemStack( carried ) then
 		UI.ItemRenderer.DrawStack( carried, mouseX - 8 * self.Scale, mouseY - 8 * self.Scale, 16 * self.Scale, { scale = self.Scale } )
 	elseif IsValid( self.HoveredSlot ) and not MC.IsEmptyItemStack( self.HoveredSlot:GetStack() ) then
@@ -1444,7 +1445,8 @@ end
 
 function PANEL:OnKeyCodePressed( code )
 	if code == KEY_ESCAPE then
-		if self.RecipeBookOpen then self:SetRecipeBookOpen( false ) else self:CloseInventory( true ) end
+		self.EscapeWasDown = true
+		self:CloseInventory( true )
 		return
 	end
 	if self.SearchEntry:IsVisible() and self.SearchEntry:HasFocus() then return end
@@ -1460,8 +1462,7 @@ function PANEL:OnKeyCodePressed( code )
 	-- AbstractContainerScreen.checkHotbarKeyPressed sends button 40 for the
 	-- offhand swap key (default Minecraft key F).  Keep Ctrl+F reserved for the
 	-- creative search shortcut below.
-	if code == KEY_F and MC.GameplayParityInventoryClicksEnabled
-	and MC.GameplayParityInventoryClicksEnabled() and not modifierDown( KEY_LCONTROL, KEY_RCONTROL )
+	if code == KEY_F and not modifierDown( KEY_LCONTROL, KEY_RCONTROL )
 	and IsValid( self.HoveredSlot ) then UI.Drag.HandleOffhandKey( self.HoveredSlot ) return end
 	if code == KEY_F and modifierDown( KEY_LCONTROL, KEY_RCONTROL ) and self.Creative then self:SelectCreativeTab( "search" ) end
 end
@@ -1502,7 +1503,7 @@ function PANEL:Think()
 	end
 	local escape = input.IsKeyDown( KEY_ESCAPE )
 	if escape and not self.EscapeWasDown then
-		if self.RecipeBookOpen then self:SetRecipeBookOpen( false ) else self:CloseInventory( true ) end
+		self:CloseInventory( true )
 		return
 	end
 	self.EscapeWasDown = escape

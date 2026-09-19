@@ -263,7 +263,7 @@ local function tableStillValid( ply, runtime )
 	if not name then return false end
 	local reach = MC.Config and MC.Config.Reach and MC.Config.Reach:GetFloat() or 0
 	return reach <= 0 or not MC.ReachAllowsEye
-		or MC.ReachAllowsEye( ply:EyePos(), runtime.bx, runtime.by, runtime.bz, reach )
+		or MC.ReachAllowsEye( MC.API.Coords.EntityEyeWorldPos( ply ), runtime.bx, runtime.by, runtime.bz, reach )
 end
 
 local function playerSlots( storage, offset )
@@ -311,7 +311,8 @@ local function buildMenu( ply, record, runtime )
 	local furnaceTargets = {}
 	for index = 0, 35 do furnaceTargets[#furnaceTargets + 1] = playerMap[index] end
 	menu.furnace = { inputSlot = 0, fuelSlot = 1, resultSlot = 2,
-		playerTargets = furnaceTargets, recipeType = runtime.recipeType }
+		playerTargets = furnaceTargets, recipeType = runtime.recipeType,
+		resultTargets = MC.ContainerResolveTargets( menu, { "hotbar", "main" }, true ) }
 	menu.takeResult = MC.FurnaceTakeResult
 	menu.onCommit = function( committed, result, context )
 		local furnaceChanged, playerChanged = false, false

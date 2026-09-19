@@ -53,6 +53,7 @@ local function canDragTo( container, slot, context )
 end
 
 local function canTakeItemForPickAll( container, carried, slot, context )
+	if slot.meta and slot.meta.role == "result" and ( container.crafting or container.anvil or container.merchant ) then return false end
 	if not MC.ContainerCanTakeItemForPickAll then return true end
 	return MC.ContainerCanTakeItemForPickAll( container, carried, slot, context )
 end
@@ -194,12 +195,19 @@ local function executeSwap( container, slotIndex, button, state, context )
 	local target = MC.ContainerGetSlot( container, slotIndex )
 	if not target then return false, "invalid_slot" end
 	if target and target.meta and target.meta.role == "result" then
-		-- Vanilla treats a number-key click on a result as taking the crafted
-		-- output into the selected hotbar slot.  The crafting menu may opt into
-		-- this path; otherwise reject it rather than exposing a normal storage
-		-- swap that could duplicate the output.
 		if type( container.takeResult ) ~= "function" then return false, "result_unavailable" end
-		return container.takeResult( container, slotIndex, button, state, context, "swap" )
+		local existing, _, sourceError = MC.ContainerGetSwapStack( container, button, context )
+		if sourceError then return false, sourceError end
+		-- Result slots reject placement, so SWAP can take only into an empty
+		-- hotbar/offhand endpoint. Use the result transaction for both endpoints.
+		if not MC.IsEmptyItemStack( existing ) then return true end
+		local carried = container.cursor
+		container.cursor = nil
+		local ok, err = container.takeResult( container, slotIndex, 0, state, context, "pickup" )
+		if not ok then return false, err end
+		ok, err = MC.ContainerSetSwapStack( container, button, container.cursor, context )
+		if not ok then return false, err end
+		return setCursor( container, carried )
 	end
 	local sourceStack, sourceSlot, sourceError = MC.ContainerGetSwapStack( container, button, context )
 	if sourceError then return false, sourceError end
@@ -271,9 +279,29 @@ local function executeClone( container, slotIndex, context )
 end
 
 local function executeThrow( container, slotIndex, button, state, context )
+	if button ~= 0 and button ~= 1 then return false, "invalid_button" end
 	if not MC.IsEmptyItemStack( container.cursor ) then return true end
 	local slot = MC.ContainerGetSlot( container, slotIndex )
 	if not slot then return false, "invalid_slot" end
+	if slot.meta and slot.meta.role == "result" then
+		if type( container.takeResult ) ~= "function" then return false, "result_unavailable" end
+		-- Taking a virtual result must run its recipe/payment transaction. Removing
+		-- the display stack directly would leave the ingredients untouched.
+		local initial = MC.InventorySlotGet( slot )
+		local limit = button == 1 and ( MC.ItemAbsoluteMaxStack or 99 ) + 1 or 1
+		for _ = 1, limit do
+			if MC.IsEmptyItemStack( initial ) or not sameItem( initial, MC.InventorySlotGet( slot ) ) then break end
+			local ok, err = container.takeResult( container, slotIndex, button, state, context, "throw" )
+			if not ok then return false, err end
+			local dropped = container.cursor
+			if MC.IsEmptyItemStack( dropped ) then break end
+			ok, err = queueDrop( container, state, dropped, context )
+			if not ok then return false, err end
+			ok, err = setCursor( container, nil )
+			if not ok then return false, err end
+		end
+		return true
+	end
 	local initial = MC.InventorySlotGet( slot )
 	if MC.IsEmptyItemStack( initial ) then return true end
 	local amount = button == 0 and 1 or initial.count
@@ -460,6 +488,7 @@ local handlers = {
 
 local function restoreFailedInput( container, snapshot, context, errorCode )
 	MC.ContainerRestore( container, snapshot )
+	if context and context.cancelDrops then context.cancelDrops() end
 	if type( container.onInputRollback ) == "function" then
 		pcall( container.onInputRollback, container, snapshot, context or container.context or {}, errorCode )
 	end
@@ -494,6 +523,18 @@ function MC.ExecuteContainerInput( container, request, context )
 			revision = container.revision,
 		}
 	end
+	-- Reserve drop entities before the menu commits recipe/payment side effects.
+	-- Entity exhaustion must roll the input back, including external offhand
+	-- storage, rather than consume an item that can never appear in the world.
+	if #state.drops > 0 and context and context.prepareDrops then
+		local prepared, prepareOK, prepareError = pcall( context.prepareDrops, state.drops )
+		if not prepared or prepareOK ~= true then
+			local errorCode = prepared and ( prepareError or "drop_spawn_failed" ) or "drop_reservation_error"
+			restoreFailedInput( container, snapshot, context, errorCode )
+			MC.Fault( "inventory_drop_reservation_failed", "%s", tostring( prepared and errorCode or prepareOK ) )
+			return { ok = false, error = errorCode, revision = container.revision }
+		end
+	end
 	if type( container.beforeCommit ) == "function" then
 		local refreshCalled, refreshOK, refreshError = pcall( container.beforeCommit, container, context or container.context or {} )
 		if not refreshCalled or refreshOK == false then
@@ -509,7 +550,9 @@ function MC.ExecuteContainerInput( container, request, context )
 
 	local changedSlots = MC.ContainerChangedSlots( container, snapshot )
 	local cursorChanged = not MC.ItemStacksEqual( container.cursor, snapshot.cursor )
-	if #changedSlots > 0 or cursorChanged then container.revision = container.revision + 1 end
+	local offhandChanged = container.swapRecord ~= nil
+		and not MC.ItemStacksEqual( container.swapRecord.equipment.offhand, snapshot.offhand )
+	if #changedSlots > 0 or cursorChanged or offhandChanged then container.revision = container.revision + 1 end
 	local changed = {}
 	for _, index in ipairs( changedSlots ) do changed[index] = MC.CopyItemStack( MC.ContainerGetStack( container, index ) ) end
 	local result = {
@@ -519,10 +562,11 @@ function MC.ExecuteContainerInput( container, request, context )
 		changedSlots = changedSlots,
 		changed = changed,
 		cursorChanged = cursorChanged,
+		offhandChanged = offhandChanged,
 		cursor = MC.CopyItemStack( container.cursor ),
 		drops = state.drops,
 	}
-	if type( container.onCommit ) == "function" and ( #changedSlots > 0 or cursorChanged or #state.drops > 0 ) then
+	if type( container.onCommit ) == "function" and ( #changedSlots > 0 or cursorChanged or offhandChanged or #state.drops > 0 ) then
 		pcall( container.onCommit, container, result, context or container.context or {} )
 	end
 	return result
