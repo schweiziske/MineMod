@@ -10,6 +10,7 @@ local clearChunkBlockEmitCache = MC.ClearChunkBlockEmitCache
 local clearSectionBlockEmitCache = MC.ClearSectionBlockEmitCache
 local markBlockEmitCacheDirty = MC.MarkBlockEmitCacheDirty
 local meshDirtyRevision = 0
+local Occlusion = MC.RenderOcclusion
 
 local function wakeMeshBuilder()
 	meshDirtyRevision = meshDirtyRevision + 1
@@ -18,6 +19,7 @@ end
 MC.WakeLazyMeshBuilder = wakeMeshBuilder
 
 function MC.MarkChunkDirty( key, rateLimited )
+	Occlusion.Invalidate( key )
 	local previous = MC.MeshDirty[key]
 	local limited = rateLimited == true and ( not previous
 		or MC.MeshDirtyRateLimited and MC.MeshDirtyRateLimited[key] == true )
@@ -43,6 +45,7 @@ end
 
 local function markChunkSectionDirty( key, sectionIndex, rateLimited )
 	if not key or not sectionIndex then return end
+	Occlusion.Invalidate( key, sectionIndex )
 	MC.MeshDirtyRateLimited = MC.MeshDirtyRateLimited or {}
 	if rateLimited ~= true and MC.MeshDirtyRateLimited[key] then
 		MC.MeshDirtyRateLimited[key] = nil
@@ -337,19 +340,19 @@ local function sortedDirtyKeys( dirty, rateLimited, buildDistance, pcx, pcy, pcz
 end
 
 MC.ExplosionMeshFrameMS = MC.ExplosionMeshFrameMS or ( CreateClientConVar and CreateClientConVar(
-	"mc_explosion_mesh_frame_ms", "4", true, false,
-	"Pure-Lua milliseconds per frame for explosion-driven mesh rebuilds", 0.5, 20 ) )
+	"mc_explosion_mesh_frame_ms", "8", true, false,
+	"Lua milliseconds per frame for rate-limited geometry work, including explosions and pack changes", 0.5, 20 ) )
 MC.ExplosionMeshSectionsPerFrame = MC.ExplosionMeshSectionsPerFrame or ( CreateClientConVar and CreateClientConVar(
-	"mc_explosion_mesh_sections_per_frame", "8", true, false,
-	"Pure-Lua render sections per frame for explosion-driven mesh rebuilds", 1, 128 ) )
+	"mc_explosion_mesh_sections_per_frame", "64", true, false,
+	"Render sections per frame for rate-limited geometry work", 1, 128 ) )
 
 local function rateLimitedMeshBuildBudget()
 	local frameMS = MC.ExplosionMeshFrameMS and MC.ExplosionMeshFrameMS.GetFloat
-		and MC.ExplosionMeshFrameMS:GetFloat() or 4
+		and MC.ExplosionMeshFrameMS:GetFloat() or 8
 	local sections = MC.ExplosionMeshSectionsPerFrame and MC.ExplosionMeshSectionsPerFrame.GetInt
-		and MC.ExplosionMeshSectionsPerFrame:GetInt() or 8
-	return math.max( 0.5, tonumber( frameMS ) or 4 ) / 1000,
-		math.max( 1, math.floor( tonumber( sections ) or 8 ) )
+		and MC.ExplosionMeshSectionsPerFrame:GetInt() or 64
+	return math.max( 0.5, tonumber( frameMS ) or 8 ) / 1000,
+		math.max( 1, math.floor( tonumber( sections ) or 64 ) )
 end
 
 local function bulkCollisionInterval()
@@ -628,7 +631,7 @@ hook.Add( "Think", "mc_meshbuild", function()
 	local budget = frameBudget
 	budget.native = nativeMeshBackendActive()
 	local budgetMS = MC.MeshBuildFrameMS and MC.MeshBuildFrameMS.GetFloat
-		and MC.MeshBuildFrameMS:GetFloat() or 3
+		and MC.MeshBuildFrameMS:GetFloat() or 8
 	budgetMS = math.max( 0, tonumber( budgetMS ) or 0 )
 	budget.deadline = budgetMS > 0 and frameStart + budgetMS / 1000 or nil
 	local animationDeadline = budget.deadline
@@ -728,6 +731,7 @@ end
 
 -- free all meshes (used by mc_clear)
 function MC.FreeAllMeshes()
+	Occlusion.Reset()
 	-- Empty sections have no flat draw-list entry but still own cache state.
 	for key in pairs( MC.MeshSections ) do MC.FreeChunkMesh( key ) end
 	for key in pairs( MC.Meshes ) do MC.FreeChunkMesh( key ) end

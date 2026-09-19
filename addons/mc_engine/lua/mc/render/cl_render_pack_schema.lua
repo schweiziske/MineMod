@@ -123,7 +123,7 @@ end
 local function validate( def )
 	fields( def, { schema = true, name = true, build = true, abi = true,
 		layout = true, adapter = true, programs = true, resources = true,
-		passes = true, implements = true }, "definition" )
+		passes = true, implements = true, materialMaps = true }, "definition" )
 	if def.schema ~= Schema.VERSION then reject( "unsupported_descriptor_schema" ) end
 	if type( def.name ) ~= "string" or #def.name == 0 or #def.name > 128 then reject( "invalid_name" ) end
 	if not hash( def.build ) then reject( "invalid_build_fingerprint" ) end
@@ -146,6 +146,15 @@ local function validate( def )
 		if not texturePath( resource.path ) or not hash( resource.sha256 )
 			or ( resource.colorSpace ~= "linear" and resource.colorSpace ~= "srgb" ) then
 			reject( "invalid_texture" )
+		end
+	end
+	if def.materialMaps == nil then def.materialMaps = {} end
+	map( def.materialMaps, localID, 64, "material_maps" )
+	for _, material in pairs( def.materialMaps ) do
+		fields( material, { albedo = true, normal = true, orm = true }, "material_map" )
+		for _, semantic in ipairs( { "albedo", "normal", "orm" } ) do
+			local resource = material[semantic]
+			if not localID( resource ) or not def.resources[resource] then reject( "missing_material_map_resource" ) end
 		end
 	end
 	if map( def.passes, localID, 64, "passes" ) == 0 then reject( "empty_passes" ) end

@@ -112,7 +112,7 @@ MC.MeshLazyBuild = MC.MeshLazyBuild or ( CreateClientConVar and CreateClientConV
 	"Keep full client world data resident but only build chunk meshes inside the current view distance" ) )
 MC.MeshLazyDistance = MC.MeshLazyDistance or ( CreateClientConVar and CreateClientConVar( "mc_mesh_lazy_distance", "10000", true, false,
 	"Lazy chunk mesh build/draw distance used while mc_mesh_draw_distance is 0" ) )
-MC.MeshBuildFrameMS = MC.MeshBuildFrameMS or ( CreateClientConVar and CreateClientConVar( "mc_mesh_build_frame_ms", "3", true, false,
+MC.MeshBuildFrameMS = MC.MeshBuildFrameMS or ( CreateClientConVar and CreateClientConVar( "mc_mesh_build_frame_ms", "8", true, false,
 	"Approximate milliseconds per frame for Lua geometry/light rebuilds (native: lazy builds only); 0 = unlimited" ) )
 MC.TexturePack = MC.TexturePack or ( CreateClientConVar and CreateClientConVar( "mc_texture_pack", "default", true, false,
 	"MC atlas texture pack: default or programmer_art" ) )

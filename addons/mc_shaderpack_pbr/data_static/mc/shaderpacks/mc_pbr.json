@@ -1,0 +1,185 @@
+{
+  "schema": 1,
+  "kind": "pack",
+  "id": "mc:pbr",
+  "definition": {
+    "schema": 1,
+    "name": "PBR",
+    "build": "7ff4bd067e467cbe2551e2162b092add5964fb1a30b358af180d68616b591fb4",
+    "abi": 1,
+    "layout": "mc:quad_corners_v1",
+    "adapter": "mc:pbr_quad_v2",
+    "programs": {
+      "opaque": {
+        "vertex": "mc_pbr_vertex_7ff4bd067e467cbe2551_vs30",
+        "vertexHash": "fd6073d634dc1b2bf640b894c72dd03fdc06cd7973f477710ed522af7eb24dc8",
+        "pixel": "mc_pbr_opaque_7ff4bd067e467cbe2551_ps30",
+        "pixelHash": "bebe73609c17444200a24286fb30668cc87d17ab14763b6d6e3013da5184a2d8"
+      },
+      "cutout": {
+        "vertex": "mc_pbr_vertex_7ff4bd067e467cbe2551_vs30",
+        "vertexHash": "fd6073d634dc1b2bf640b894c72dd03fdc06cd7973f477710ed522af7eb24dc8",
+        "pixel": "mc_pbr_cutout_7ff4bd067e467cbe2551_ps30",
+        "pixelHash": "d65130f11b7cffd27780b39b4022cc56fb09e3e87f2d63d717406d9e3c12825d"
+      },
+      "translucent": {
+        "vertex": "mc_pbr_vertex_7ff4bd067e467cbe2551_vs30",
+        "vertexHash": "fd6073d634dc1b2bf640b894c72dd03fdc06cd7973f477710ed522af7eb24dc8",
+        "pixel": "mc_pbr_translucent_7ff4bd067e467cbe2551_ps30",
+        "pixelHash": "f736a06b6344f5fbe9b1db4a12d986211b3525fbabcaa91fe52bffb56f639007"
+      },
+      "shadow": {
+        "vertex": "mc_pbr_shadow_vertex_7ff4bd067e467cbe2551_vs30",
+        "vertexHash": "b4213d8480f01332a0640a3cda61c618460ac8e933b5de17d3bd8b924a298671",
+        "pixel": "mc_pbr_shadow_7ff4bd067e467cbe2551_ps30",
+        "pixelHash": "b526d0a1af5b898360aac237e5690087bd5d8e9807eba73127b843b5aa279f2c"
+      }
+    },
+    "resources": {
+      "normal": {
+        "path": "materials/mc_pbr/normal_2d30711594b47fc161a9.png",
+        "sha256": "2d30711594b47fc161a96d61adacf85af3185fa768898403d617a45da823a0ec",
+        "colorSpace": "linear"
+      },
+      "orm": {
+        "path": "materials/mc_pbr/orm_5ab68064ea7b19faf44e.png",
+        "sha256": "5ab68064ea7b19faf44eff071d420d97f5e5bb3668221aa333e664a2b9cd26dc",
+        "colorSpace": "linear"
+      },
+      "environment": {
+        "path": "materials/mc_pbr/environment_712e2c9d2ca0726843ea.png",
+        "sha256": "712e2c9d2ca0726843eabd15d51dd0fbda4dce49944bbf702b11bcfa2802e27a",
+        "colorSpace": "linear"
+      },
+      "dfg": {
+        "path": "materials/mc_pbr/dfg_f8e09f2c178d779918e6.png",
+        "sha256": "f8e09f2c178d779918e6e00c16ce9832acb6be33556c6091ca7ae699e2b12af0",
+        "colorSpace": "linear"
+      },
+      "default_albedo": {
+        "path": "materials/mc/atlas_365.png",
+        "sha256": "46e8f0313353be4e6fb25aebab453cbde8ff74c53ecdc74f3290f0606c1cf84d",
+        "colorSpace": "srgb"
+      },
+      "default_normal": {
+        "path": "materials/mc_pbr/default_normal_bb463edd5adce354d49c.png",
+        "sha256": "bb463edd5adce354d49ce181e3135398f41632cc88fbc572732ce9cee6290a8d",
+        "colorSpace": "linear"
+      },
+      "default_orm": {
+        "path": "materials/mc_pbr/default_orm_b5afd9ad34598a524e87.png",
+        "sha256": "b5afd9ad34598a524e874c96290777c430fe30c7a3d179238d91262e95485710",
+        "colorSpace": "linear"
+      },
+      "default_translucent_albedo": {
+        "path": "materials/mc/atlas_365_translucent.png",
+        "sha256": "46e8f0313353be4e6fb25aebab453cbde8ff74c53ecdc74f3290f0606c1cf84d",
+        "colorSpace": "srgb"
+      },
+      "default_translucent_normal": {
+        "path": "materials/mc_pbr/default_normal_bb463edd5adce354d49c.png",
+        "sha256": "bb463edd5adce354d49ce181e3135398f41632cc88fbc572732ce9cee6290a8d",
+        "colorSpace": "linear"
+      },
+      "default_translucent_orm": {
+        "path": "materials/mc_pbr/default_orm_b5afd9ad34598a524e87.png",
+        "sha256": "b5afd9ad34598a524e874c96290777c430fe30c7a3d179238d91262e95485710",
+        "colorSpace": "linear"
+      },
+      "programmer_art_albedo": {
+        "path": "materials/mc/atlas_365_programmer_art.png",
+        "sha256": "011ad6b59c85ec494667edbd94cb98c46408bb1f48cb6a2967bc77a95d4deb91",
+        "colorSpace": "srgb"
+      },
+      "programmer_art_normal": {
+        "path": "materials/mc_pbr/programmer_art_normal_4d61b4889871720411e0.png",
+        "sha256": "4d61b4889871720411e0012d6f9b19f2b83d2ef2a91e0bf8c31a2d358ed06000",
+        "colorSpace": "linear"
+      },
+      "programmer_art_orm": {
+        "path": "materials/mc_pbr/programmer_art_orm_605e5dd0be3e6ccf7580.png",
+        "sha256": "605e5dd0be3e6ccf7580e841b8a2219169abd222c415e89448f086d8e5795beb",
+        "colorSpace": "linear"
+      },
+      "programmer_art_translucent_albedo": {
+        "path": "materials/mc/atlas_365_programmer_art_translucent.png",
+        "sha256": "011ad6b59c85ec494667edbd94cb98c46408bb1f48cb6a2967bc77a95d4deb91",
+        "colorSpace": "srgb"
+      },
+      "programmer_art_translucent_normal": {
+        "path": "materials/mc_pbr/programmer_art_normal_4d61b4889871720411e0.png",
+        "sha256": "4d61b4889871720411e0012d6f9b19f2b83d2ef2a91e0bf8c31a2d358ed06000",
+        "colorSpace": "linear"
+      },
+      "programmer_art_translucent_orm": {
+        "path": "materials/mc_pbr/programmer_art_orm_605e5dd0be3e6ccf7580.png",
+        "sha256": "605e5dd0be3e6ccf7580e841b8a2219169abd222c415e89448f086d8e5795beb",
+        "colorSpace": "linear"
+      }
+    },
+    "passes": {
+      "terrain_opaque": {
+        "stage": "world_opaque",
+        "program": "opaque",
+        "inputs": {
+          "normal": "normal",
+          "orm": "orm",
+          "environment": "environment",
+          "dfg": "dfg"
+        }
+      },
+      "terrain_cutout": {
+        "stage": "world_cutout",
+        "program": "cutout",
+        "inputs": {
+          "normal": "normal",
+          "orm": "orm",
+          "environment": "environment",
+          "dfg": "dfg"
+        }
+      },
+      "terrain_translucent": {
+        "stage": "world_translucent",
+        "program": "translucent",
+        "inputs": {
+          "normal": "normal",
+          "orm": "orm",
+          "environment": "environment",
+          "dfg": "dfg"
+        }
+      }
+    },
+    "materialMaps": {
+      "default": {
+        "albedo": "default_albedo",
+        "normal": "default_normal",
+        "orm": "default_orm"
+      },
+      "default_translucent": {
+        "albedo": "default_translucent_albedo",
+        "normal": "default_translucent_normal",
+        "orm": "default_translucent_orm"
+      },
+      "programmer_art": {
+        "albedo": "programmer_art_albedo",
+        "normal": "programmer_art_normal",
+        "orm": "programmer_art_orm"
+      },
+      "programmer_art_translucent": {
+        "albedo": "programmer_art_translucent_albedo",
+        "normal": "programmer_art_translucent_normal",
+        "orm": "programmer_art_translucent_orm"
+      }
+    },
+    "implements": {
+      "mc:terrain": {
+        "contract": 1,
+        "passes": [
+          "terrain_opaque",
+          "terrain_cutout",
+          "terrain_translucent"
+        ]
+      }
+    }
+  }
+}

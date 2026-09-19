@@ -2,6 +2,7 @@
 MC = MC or {}
 local RM = MC.RenderMesh
 local GeometryStore, Snapshot = MC.RenderGeometryStore, MC.RenderSnapshot
+local Occlusion, SectionCull = MC.RenderOcclusion, MC.RenderSectionCull
 local meshPerfAdd = RM.meshPerfAdd
 local destroySectionMeshList = RM.destroySectionMeshList
 
@@ -21,6 +22,7 @@ local function build( key, sectionIndex, lightOnly )
 	if MC.LightPerfBeginMeshBuild then MC.LightPerfBeginMeshBuild( key, sectionIndex ) end
 	local chunk = MC.GetChunkByKey( key )
 	local ctx, opaque, translucent, opaqueRecords, translucentRecords
+	local topology
 	local faults = {}
 	local function queueFault( code, message )
 		faults[#faults + 1] = { code = code, message = tostring( message ) }
@@ -47,6 +49,11 @@ local function build( key, sectionIndex, lightOnly )
 			MC.Fault( "render_snapshot_prepare_failed", "chunk %s section %s: %s",
 				tostring( key ), tostring( sectionIndex ), tostring( err ) )
 			return false
+		end
+		if sectionIndex then topology = Occlusion.BuildTopology( snapshots[sectionIndex] )
+		else
+			topology = {}
+			for index = 1, Snapshot.SECTION_COUNT do topology[index] = Occlusion.BuildTopology( snapshots[index] ) end
 		end
 		if not sectionIndex then MC.ClearChunkBlockEmitCache( key ) end
 		if not sectionIndex or snapshots[sectionIndex].count > 0 then
@@ -88,6 +95,13 @@ local function build( key, sectionIndex, lightOnly )
 	if not ctx then
 		opaque, translucent, opaqueRecords, translucentRecords = {}, {}, {}, {}
 	end
+	if chunk and not topology then
+		if sectionIndex then topology = Occlusion.OPEN
+		else
+			topology = {}
+			for index = 1, Snapshot.SECTION_COUNT do topology[index] = Occlusion.OPEN end
+		end
+	end
 
 	local function publishSection( index, opaqueList, translucentList, opaqueCPU, translucentCPU )
 		if #opaqueList == 0 and #translucentList == 0 then
@@ -97,7 +111,8 @@ local function build( key, sectionIndex, lightOnly )
 			return
 		end
 		local section = { l2 = true, chunk = chunk, blockSize = ctx.blockSize, worldGeneration = MC.StateWorldGeneration,
-			opaque = opaqueList, translucent = translucentList }
+			opaque = opaqueList, translucent = translucentList,
+			bounds = SectionCull.SectionBounds( index, ctx.blockSize, opaqueList, translucentList ) }
 		MC.MeshSections[key][index] = section
 		GeometryStore.SetSection( key, index, GeometryStore.MakeSection( opaqueCPU, translucentCPU ), section )
 		GeometryStore.TouchSection( key, index )
@@ -127,6 +142,7 @@ local function build( key, sectionIndex, lightOnly )
 		for _, section in pairs( old or {} ) do retire( section ) end
 		MC.MeshLightDirty[key] = nil
 	end
+	Occlusion.Commit( key, chunk, sectionIndex, topology )
 	local flatStart = SysTime()
 	RM.rebuildFlatMeshLists( key )
 	meshPerfAdd( perf, "flatMS", flatStart )

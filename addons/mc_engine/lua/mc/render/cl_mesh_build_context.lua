@@ -122,6 +122,8 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 
 	local sectionBuffers = {}
 	local cur
+	local directional = MC.MeshDirectionalCull and MC.MeshDirectionalCull:GetBool() or false
+	local directionalMin = MC.MeshDirectionalMinBlocks and MC.MeshDirectionalMinBlocks:GetInt() or 64
 
 	local function styleForBuffer()
 		return "l2"
@@ -175,8 +177,8 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		return shapeFaceNeighborCoveredAt( curId, box, faceIndex, bx, by, bz, lx, ly, lz )
 	end
 
-	local function newMeshBuffer( material, translucent )
-		return { list = {}, records = {}, buckets = {}, material = material, translucent = translucent }
+	local function newMeshBuffer( material, translucent, split )
+		return { list = {}, records = {}, buckets = {}, material = material, translucent = translucent, directional = split }
 	end
 
 	local function bufferForBlock( root, id )
@@ -199,10 +201,29 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			buffer.owner, buffer.list, buffer.records = root, root.list, root.records
 			buffer.material, buffer.translucent = root.material, root.translucent
 			buffer.request, buffer.stage, buffer.blockIds = request, stage, {}
+			buffer.directional = root.directional and stage == "world_opaque"
 			root.buckets[bucketKey] = buffer
 		end
 		buffer.blockIds[id] = true
 		blockBuffers[id] = buffer
+		return buffer
+	end
+
+	-- Called only by the direct full-cube emitter using the six fixed C.FACES
+	-- templates. Models, plants, fluids and cached special geometry stay whole.
+	local function fullCubeBuffer( target, face )
+		if not target.directional then return target end
+		local groups = target.directions
+		if not groups then groups = {} target.directions = groups end
+		local buffer = groups[face]
+		if not buffer then
+			buffer = Q.NewBuffer()
+			buffer.owner, buffer.list, buffer.records = target.owner, target.list, target.records
+			buffer.material, buffer.translucent = target.material, false
+			buffer.request, buffer.stage, buffer.blockIds = target.request, target.stage, target.blockIds
+			buffer.direction = face
+			groups[face] = buffer
+		end
 		return buffer
 	end
 
@@ -231,8 +252,9 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		if sectionIndex and index ~= sectionIndex then return nil, index end
 		local buffers = sectionBuffers[index]
 		if not buffers then
+			local split = directional and blockSections[index].count >= directionalMin
 			buffers = {
-				opaque = newMeshBuffer( MC.Material, false ),
+				opaque = newMeshBuffer( MC.Material, false, split ),
 				translucent = newMeshBuffer( MC.MaterialTranslucent, true ),
 			}
 			sectionBuffers[index] = buffers
@@ -293,7 +315,15 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		for i = 1, totalSections do
 			local buffers = sectionBuffers[i]
 			if buffers then
-				for _, buffer in pairs( buffers.opaque.buckets ) do flush( buffer ) end
+				for _, buffer in pairs( buffers.opaque.buckets ) do
+					flush( buffer )
+					if buffer.directions then
+						for face = 1, 6 do
+							local group = buffer.directions[face]
+							if group then flush( group ) end
+						end
+					end
+				end
 				for _, buffer in pairs( buffers.translucent.buckets ) do flush( buffer ) end
 				appendMeshList( opaqueMeshes, buffers.opaque.list )
 				appendMeshList( translucentMeshes, buffers.translucent.list )
@@ -344,6 +374,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	ctx.shapeFaceNeighborCoveredAt = shapeFaceNeighborCoveredAt
 	ctx.buffersForLocal = buffersForLocal
 	ctx.bufferForBlock = bufferForBlock
+	ctx.fullCubeBuffer = fullCubeBuffer
 	ctx.flush = flush
 	ctx.emitL2 = emitL2
 	ctx.push, ctx.pushValues = rejectLegacy, rejectLegacy

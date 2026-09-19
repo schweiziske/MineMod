@@ -17,7 +17,7 @@ end
 MC.MeshCullMode = MC.MeshCullMode or ( CreateClientConVar and CreateClientConVar( "mc_mesh_cull_mode", "ccw", true, false,
 	"MC chunk mesh cull mode: cw or ccw" ) )
 MC.MeshFrustumCull = MC.MeshFrustumCull or ( CreateClientConVar and CreateClientConVar( "mc_mesh_frustum_cull", "1", true, false,
-	"Skip drawing MC chunk meshes outside the view frustum" ) )
+	"Skip drawing 8x8x8 MC render sections outside the view frustum" ) )
 MC.MeshDrawDistance = MC.MeshDrawDistance or ( CreateClientConVar and CreateClientConVar( "mc_mesh_draw_distance", "0", true, false,
 	"Max distance in units at which MC chunk meshes are drawn; 0 = lazy distance while lazy building is enabled, otherwise unlimited" ) )
 
@@ -109,6 +109,7 @@ local function drawMeshListInner( list, currentMaterial )
 		local entry = list[i]
 		if entry.material ~= currentMaterial then
 			currentMaterial = entry.material
+			MC.RenderPBR.Bind( currentMaterial )
 			render.SetMaterial( currentMaterial )
 		end
 		entry.mesh:Draw()
@@ -259,9 +260,12 @@ end
 -- so the compare is scale-invariant. All slots are plain numbers reused every
 -- frame; the per-chunk test is pure scalar math.
 local planeNX, planeNY, planeNZ, planeR = {}, {}, {}, {}
+local planeAX, planeAY, planeAZ = {}, {}, {}
 local planeCount = 0
 local cullEyeX, cullEyeY, cullEyeZ = 0, 0, 0
 local maxDistSq = 0 -- 0 = unlimited
+local cullDistance, directionMargin, cullDirections = 0, 0, false
+local SectionCull, Occlusion = MC.RenderSectionCull, MC.RenderOcclusion
 
 MC.DrawCullStats = MC.DrawCullStats or {
 	tested = 0,
@@ -271,24 +275,39 @@ MC.DrawCullStats = MC.DrawCullStats or {
 	stale = 0,
 	meshes = 0,
 }
+MC.DrawTranslucentCullStats = MC.DrawTranslucentCullStats or {}
 
 local function addPlane( nx, ny, nz, hx, hz )
 	planeCount = planeCount + 1
 	local i = planeCount
 	planeNX[i], planeNY[i], planeNZ[i] = nx, ny, nz
-	planeR[i] = hx * ( math_abs( nx ) + math_abs( ny ) ) + hz * math_abs( nz )
+	planeAX[i], planeAY[i], planeAZ[i] = math_abs( nx ), math_abs( ny ), math_abs( nz )
+	planeR[i] = hx * ( planeAX[i] + planeAY[i] ) + hz * planeAZ[i]
 end
 
 local function updateCullState()
 	planeCount = 0
-	local eye = EyePos()
+	local view = render.GetViewSetup and render.GetViewSetup()
+	local eye = view and view.origin or EyePos()
 	cullEyeX, cullEyeY, cullEyeZ = eye.x, eye.y, eye.z
+	MC.RenderPBR.PrepareView( cullEyeX, cullEyeY, cullEyeZ )
 
 	local size = MC.API.Coords.BlockSize()
 	local hx, hz = MC.CS * size * 0.5, MC.CH * size * 0.5
+	directionMargin = size * 0.0001
+	cullDirections = MC.MeshDirectionalCull and MC.MeshDirectionalCull:GetBool()
+		and meshCullMode() == ( MATERIAL_CULLMODE_CCW or 0 ) and not ( view and view.ortho )
+	if Occlusion then
+		local bx, by, bz
+		if MC.MeshOcclusionCull:GetBool() and not ( view and view.ortho ) then
+			bx, by, bz = MC.API.Coords.EngineToCell( eye, LocalPlayer() )
+		end
+		Occlusion.PrepareView( bx, by, bz )
+	end
 
 	local dist = MC.EffectiveMeshDrawDistance and MC.EffectiveMeshDrawDistance()
 		or ( MC.MeshDrawDistance and MC.MeshDrawDistance.GetFloat and MC.MeshDrawDistance:GetFloat() or 0 )
+	cullDistance = dist
 	if dist > 0 then
 		-- Chunk bounding-sphere slack so a chunk whose center sits past the
 		-- limit but whose blocks reach inside it does not pop.
@@ -298,20 +317,18 @@ local function updateCullState()
 		maxDistSq = 0
 	end
 
-	if not ( MC.MeshFrustumCull and MC.MeshFrustumCull.GetBool and MC.MeshFrustumCull:GetBool() ) then return end
+	if not ( MC.MeshFrustumCull and MC.MeshFrustumCull.GetBool and MC.MeshFrustumCull:GetBool() )
+		or view and ( view.ortho or view.offcenter ) then return end
 
-	local ang = EyeAngles()
+	local ang = view and view.angles or EyeAngles()
 	local fwd = ang:Forward()
 	local right = ang:Right()
 	local up = ang:Up()
 
 	local fovDeg, aspect = 100, ScrW() / ScrH()
-	if render.GetViewSetup then
-		local vs = render.GetViewSetup()
-		if vs then
-			fovDeg = vs.fov or fovDeg
-			if vs.width and vs.height and vs.height > 0 then aspect = vs.width / vs.height end
-		end
+	if view then
+		fovDeg = view.fov or fovDeg
+		if view.width and view.height and view.height > 0 then aspect = view.width / view.height end
 	end
 	-- Source fov convention: ViewSetup fov is horizontal on a 4:3 basis and
 	-- the vertical fov is aspect-invariant. If the engine hands us an already
@@ -334,19 +351,38 @@ end
 local function entryVisible( e )
 	local frame = prepareChunkFrame( e.frame, false )
 	local dx, dy, dz = frame.x - cullEyeX, frame.y - cullEyeY, frame.z - cullEyeZ
+	local bounds, distanceSq = e.list.bounds, maxDistSq
+	if bounds then
+		dx = frame.originX + renderFrameX + bounds.x - cullEyeX
+		dy = frame.originY + renderFrameY + bounds.y - cullEyeY
+		dz = frame.originZ + renderFrameZ + bounds.z - cullEyeZ
+		if cullDistance > 0 then distanceSq = ( cullDistance + bounds.radius ) ^ 2 end
+	end
 	if maxDistSq > 0 then
 		local visible
 		if MC.ChunkDrawDistanceVisible then
-			visible = MC.ChunkDrawDistanceVisible( dx, dy, dz, maxDistSq )
+			visible = MC.ChunkDrawDistanceVisible( dx, dy, dz, distanceSq )
 		else
-			visible = dx * dx + dy * dy + dz * dz <= maxDistSq
+			visible = dx * dx + dy * dy + dz * dz <= distanceSq
 		end
 		if visible == false then return false, "distance" end
 	end
 	for i = 1, planeCount do
-		if planeNX[i] * dx + planeNY[i] * dy + planeNZ[i] * dz < -planeR[i] then
+		local radius = planeR[i]
+		if bounds then radius = planeAX[i] * bounds.hx + planeAY[i] * bounds.hy + planeAZ[i] * bounds.hz end
+		if planeNX[i] * dx + planeNY[i] * dy + planeNZ[i] * dz < -radius then
 			return false, "frustum"
 		end
+	end
+	return true
+end
+
+local function sectionInFrustum( bounds, x, y, z )
+	if not bounds then return true end -- Geometry retained from before Lua refresh.
+	local dx, dy, dz = bounds.x + x, bounds.y + y, bounds.z + z
+	for i = 1, planeCount do
+		local radius = planeAX[i] * bounds.hx + planeAY[i] * bounds.hy + planeAZ[i] * bounds.hz
+		if planeNX[i] * dx + planeNY[i] * dy + planeNZ[i] * dz < -radius then return false end
 	end
 	return true
 end
@@ -355,6 +391,7 @@ end
 local function drawPackChunk( key, translucent )
 	local runtime = MC.Need( MC.RenderPackRuntime, "render_l2_runtime_missing", "L2 runtime did not load" )
 	if not runtime or not runtime.ChunkCurrent( key ) then return end
+	MC.RenderPBR.PrepareCurrentView()
 	local groups = runtime.GetStages( translucent )
 	local setCullMode = applyPassState( not translucent )
 	if translucent then render.OverrideDepthEnable( true, false ) end
@@ -379,12 +416,14 @@ function MC.DrawChunkTranslucent( key )
 	drawPackChunk( key, true )
 end
 
-local function drawVisibleChunks( store, entries, count, chunks )
+local function drawVisibleChunks( store, entries, count, chunks, stats )
 	local pushMatrix = cam.PushModelMatrix
 	local popMatrix = cam.PopModelMatrix
 	local getChunk = MC.GetChunkByKey
 	local currentMaterial, meshes = nil, 0
 	local drawn, distanceCulled, frustumCulled, stale = 0, 0, 0, 0
+	local sectionsTested, sectionsDrawn, sectionFrustum, sectionOcclusion = 0, 0, 0, 0
+	local directionCulled, vertices, verticesCulled = 0, 0, 0
 	for i = 1, count do
 		local e = entries[i]
 		if store[e.key] ~= e.list or getChunk( e.key ) ~= chunks[e.key] then
@@ -392,20 +431,66 @@ local function drawVisibleChunks( store, entries, count, chunks )
 		elseif not ( MC.StreamHiddenChunkKeys and MC.StreamHiddenChunkKeys[e.key] ) then
 			local visible, reason = entryVisible( e )
 			if not visible then
+				verticesCulled = verticesCulled + ( e.list.vertexCount or 0 )
 				if reason == "distance" then distanceCulled = distanceCulled + 1
 				else frustumCulled = frustumCulled + 1 end
 			else
-				drawn = drawn + 1
-				prepareChunkFrame( e.frame, true )
-				pushMatrix( e.matrix )
-				passMatrixPushed = true
-				currentMaterial = drawMeshListInner( e.list, currentMaterial )
-				meshes = meshes + #e.list
-				popMatrix()
-				passMatrixPushed = false
+				local list, frame = e.list, e.frame
+				local sections = list.sections
+				local x, y, z = frame.originX + renderFrameX - cullEyeX,
+					frame.originY + renderFrameY - cullEyeY, frame.originZ + renderFrameZ - cullEyeZ
+				local record = Occlusion and Occlusion.ChunkRecord( e.key, chunks[e.key] )
+				local chunkDrawn = false
+				for s = 1, sections and #sections or 1 do
+					local section = sections and sections[s]
+					local first, last, bounds = 1, #list, nil
+					if section then first, last, bounds = section.first, section.last, section.bounds end
+					sectionsTested = sectionsTested + 1
+					if not sectionInFrustum( bounds, x, y, z ) then
+						sectionFrustum = sectionFrustum + 1
+						verticesCulled = verticesCulled + section.vertexCount
+					elseif bounds and not bounds.protrudes and record and not Occlusion.SectionVisible( record, section.index ) then
+						sectionOcclusion = sectionOcclusion + 1
+						verticesCulled = verticesCulled + section.vertexCount
+					else
+						local sectionDrawn = false
+						for j = first, last do
+							local entry = list[j]
+							if cullDirections and entry.direction
+								and not SectionCull.DirectionVisible( entry.direction, entry.bounds, -x, -y, -z, directionMargin ) then
+								directionCulled = directionCulled + 1
+								verticesCulled = verticesCulled + entry.vertexCount
+							else
+								if not chunkDrawn then
+									prepareChunkFrame( frame, true )
+									pushMatrix( e.matrix )
+									passMatrixPushed, chunkDrawn = true, true
+								end
+								if entry.material ~= currentMaterial then
+									currentMaterial = entry.material
+									MC.RenderPBR.Bind( currentMaterial )
+									render.SetMaterial( currentMaterial )
+								end
+								entry.mesh:Draw()
+								meshes, vertices = meshes + 1, vertices + ( entry.vertexCount or 0 )
+								sectionDrawn = true
+							end
+						end
+						if sectionDrawn then sectionsDrawn = sectionsDrawn + 1 end
+					end
+				end
+				if chunkDrawn then
+					drawn = drawn + 1
+					popMatrix()
+					passMatrixPushed = false
+				end
 			end
 		end
 	end
+	stats.sectionsTested, stats.sectionsDrawn = stats.sectionsTested + sectionsTested, stats.sectionsDrawn + sectionsDrawn
+	stats.sectionFrustumCulled, stats.sectionOcclusionCulled = stats.sectionFrustumCulled + sectionFrustum, stats.sectionOcclusionCulled + sectionOcclusion
+	stats.directionCulled = stats.directionCulled + directionCulled
+	stats.vertices, stats.verticesCulled = stats.vertices + vertices, stats.verticesCulled + verticesCulled
 	return drawn, distanceCulled, frustumCulled, stale, meshes
 end
 
@@ -452,10 +537,77 @@ local function ensurePackEntries( pass, version )
 	return cached
 end
 
+-- Light-space visibility is independent of the player's camera and portals.
+-- The caller owns the render transaction and restores a pushed matrix on error.
+function MC.DrawPBRShadowCasters( groups, version, chunks, view, shadow )
+	local intersects = MC.RenderShadowMath.Intersects
+	local stats, token = shadow.stats, shadow.tileToken
+	local currentSource, currentDepth, currentRecord, currentStage
+	for g = 1, #groups do
+		local passes = groups[g]
+		for p = 1, #passes do
+			local pass = passes[p]
+			local cached = ensurePackEntries( pass, version )
+			for i = 1, cached.count do
+				local e = cached.entries[i]
+				stats.testedChunks = stats.testedChunks + 1
+				if pass.store[e.key] == e.list and MC.GetChunkByKey( e.key ) == chunks[e.key]
+					and not ( MC.StreamHiddenChunkKeys and MC.StreamHiddenChunkKeys[e.key] ) then
+					local list, frame = e.list, e.frame
+					local x, y, z = frame.originX + renderFrameX, frame.originY + renderFrameY, frame.originZ + renderFrameZ
+					if intersects( list.bounds, x, y, z, view ) then
+						local sections, chunkDrawn = list.sections, false
+						for s = 1, sections and #sections or 1 do
+							local section = sections and sections[s]
+							local first, last, bounds = 1, #list, nil
+							if section then first, last, bounds = section.first, section.last, section.bounds end
+							stats.testedSections = stats.testedSections + 1
+							if intersects( bounds, x, y, z, view ) then
+								for j = first, last do
+									local entry = list[j]
+									if entry.material ~= currentSource or pass.node.stage ~= currentStage then
+										currentSource, currentStage = entry.material, pass.node.stage
+										currentRecord = shadow.CasterMaterial( currentSource, currentStage )
+									end
+									-- Identical silhouettes shared by several surface passes draw once.
+									-- Different albedo/cutout maps retain their distinct silhouettes.
+									if currentRecord.seen[entry.mesh] ~= token then
+										if not chunkDrawn then
+											prepareChunkFrame( frame, true )
+											cam.PushModelMatrix( e.matrix )
+											shadow.modelPushed, chunkDrawn = true, true
+										end
+										if currentRecord.material ~= currentDepth then
+											currentDepth = currentRecord.material
+											render.SetMaterial( currentDepth )
+										end
+										entry.mesh:Draw()
+										currentRecord.seen[entry.mesh] = token
+										stats.draws = stats.draws + 1
+										stats.vertices = stats.vertices + ( entry.vertexCount or 0 )
+									else stats.duplicates = stats.duplicates + 1 end
+								end
+							else stats.culledSections = stats.culledSections + 1 end
+						end
+						if chunkDrawn then
+							cam.PopModelMatrix()
+							shadow.modelPushed = false
+						end
+					else stats.culledChunks = stats.culledChunks + 1 end
+				end
+			end
+		end
+	end
+end
+
 local function drawPackStages( translucent )
+	local started = SysTime()
 	local runtime = MC.RenderPackRuntime
 	local groups, version, chunks = runtime.GetStages( translucent )
 	updateCullState()
+	local stats = translucent and MC.DrawTranslucentCullStats or MC.DrawCullStats
+	stats.sectionsTested, stats.sectionsDrawn, stats.sectionFrustumCulled, stats.sectionOcclusionCulled = 0, 0, 0, 0
+	stats.directionCulled, stats.vertices, stats.verticesCulled = 0, 0, 0
 	local totalTested, totalDrawn, totalDistance, totalFrustum, totalStale = 0, 0, 0, 0, 0
 	local totalMeshes = 0
 	for _, passes in ipairs( groups ) do
@@ -464,7 +616,7 @@ local function drawPackStages( translucent )
 			local setCullMode = applyPassState( not translucent )
 			if translucent then render.OverrideDepthEnable( true, false ) end
 			local ok, drawn, distance, frustum, stale, meshes = pcall( drawVisibleChunks,
-				pass.store, cached.entries, cached.count, chunks )
+				pass.store, cached.entries, cached.count, chunks, stats )
 			if passMatrixPushed then cam.PopModelMatrix() passMatrixPushed = false end
 			restoreChunkMeshRenderState( setCullMode )
 			if not ok then
@@ -477,14 +629,32 @@ local function drawPackStages( translucent )
 			totalMeshes = totalMeshes + meshes
 		end
 	end
+	stats.tested, stats.drawn = totalTested, totalDrawn
+	stats.distanceCulled, stats.frustumCulled, stats.stale = totalDistance, totalFrustum, totalStale
+	stats.meshes, stats.cpuMS = totalMeshes, ( SysTime() - started ) * 1000
 	if not translucent then
-		local stats = MC.DrawCullStats
-		stats.tested, stats.drawn = totalTested, totalDrawn
-		stats.distanceCulled, stats.frustumCulled, stats.stale = totalDistance, totalFrustum, totalStale
-		stats.meshes = totalMeshes
+		stats.totalMeshes, stats.totalVertices = stats.meshes, stats.vertices
+	else
+		MC.DrawCullStats.totalMeshes = ( MC.DrawCullStats.meshes or 0 ) + stats.meshes
+		MC.DrawCullStats.totalVertices = ( MC.DrawCullStats.vertices or 0 ) + stats.vertices
 	end
 	reportL2Faults()
 end
+
+concommand.Add( "mc_mesh_cull_stats", function()
+	for pass = 1, 2 do
+		local stats = pass == 1 and MC.DrawCullStats or MC.DrawTranslucentCullStats
+		print( string.format( "[MC cull] %s draws=%d vertices=%d rejectedVertices=%d sections=%d/%d frustum=%d occlusion=%d directions=%d CPU=%.3fms GPU=unmeasured",
+			pass == 1 and "opaque" or "translucent", stats.meshes or 0, stats.vertices or 0, stats.verticesCulled or 0,
+			stats.sectionsDrawn or 0, stats.sectionsTested or 0, stats.sectionFrustumCulled or 0,
+			stats.sectionOcclusionCulled or 0, stats.directionCulled or 0, stats.cpuMS or 0 ) )
+	end
+	if Occlusion then
+		local stats = Occlusion.stats
+		print( string.format( "[MC portals] nodes=%d visited=%d traversals=%d cacheHits=%d topologyBuilds=%d topologyHits=%d lastTraversal=%.3fms",
+			stats.nodes, stats.visited, stats.traversals, stats.cacheHits, stats.builds, stats.topologyHits, stats.lastMS ) )
+	end
+end )
 
 local function drawAllChunks( translucent )
 	if MC.WorldFrameSettled and not MC.WorldFrameSettled() then return end
