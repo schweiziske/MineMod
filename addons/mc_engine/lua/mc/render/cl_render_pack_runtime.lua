@@ -351,6 +351,11 @@ local function syncSections( c, force )
 	requireValue( type( size ) == "number" and size > 0 and size < math.huge,
 		"render_pack_block_size", "invalid runtime block size" )
 	force = force or c.blockSize ~= size
+	if force or not c.postProcessBound then
+		local definition = c.plan.owners["pack/" .. c.pack].definition
+		if definition.programs.post_ssao then c.postProcess = MC.RenderPBRPost.Register( definition, size ) end
+		c.postProcessBound = true
+	end
 	local keys, fullSync = c.dirtyChunks, c.fullSync
 	local full = force or fullSync or not sameWorld( c ) or not keys or next( keys ) == nil
 	-- New notifications during preparation belong to the next transaction.
