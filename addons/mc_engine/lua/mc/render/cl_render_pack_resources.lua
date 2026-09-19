@@ -87,6 +87,10 @@ function P.Validate( plan )
 		if def.programs.post_fog then
 			requireValue( def.programs.post_ssao, "render_fog_adapter", ownerKey .. ": fog requires the shared post-depth contract" )
 		end
+		if def.programs.post_bloom_prefilter then
+			requireValue( def.programs.post_ssao and def.programs.post_bloom_blur and def.programs.post_bloom_composite,
+				"render_bloom_adapter", ownerKey .. ": bloom requires the post contract and all three programs" )
+		end
 		local buildKey = ownerKey .. "/" .. def.build
 		if not P.builds[buildKey] then newBuilds[#newBuilds + 1] = buildKey end
 		for _, name in ipairs( sortedKeys( def.programs ) ) do

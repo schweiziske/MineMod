@@ -5,7 +5,8 @@ local P = MC.RenderPBRPost or { groups = {}, targets = {}, quads = {}, quadCount
 MC.RenderPBRPost = P
 P.VERSION = 1
 P.retryAt = 0
-P.stats = { ao = 0, fog = 0, failures = 0, status = "idle" }
+P.bloomRetryAt, P.viewSerial, P.bloomSerial = 0, 0, nil
+P.stats = { ao = 0, fog = 0, bloom = 0, failures = 0, status = "idle" }
 local requireValue = MC.RenderL2Resources.Require
 local S = MC.RenderPBRSSR
 local aoEnabled = CreateClientConVar( "mc_pbr_ssao", "1", true, false, "Screen-space contact occlusion on opaque surfaces", 0, 1 )
@@ -20,6 +21,12 @@ local fogHeightDensity = CreateClientConVar( "mc_pbr_fog_height_density", "0.006
 local fogBase = CreateClientConVar( "mc_pbr_fog_height", "64", true, false, "Height fog base in MC world blocks", -256, 512 )
 local fogScale = CreateClientConVar( "mc_pbr_fog_height_scale", "32", true, false, "Height change that halves the mist density in blocks", 4, 256 )
 local fogDistance = CreateClientConVar( "mc_pbr_fog_distance", "128", true, false, "Maximum atmosphere integration distance in blocks", 16, 256 )
+local bloomEnabled = CreateClientConVar( "mc_pbr_bloom", "1", true, false, "Soft highlight bloom", 0, 1 )
+local bloomStrength = CreateClientConVar( "mc_pbr_bloom_strength", "0.35", true, false, "Bloom contribution", 0, 2 )
+local bloomThreshold = CreateClientConVar( "mc_pbr_bloom_threshold", "0.65", true, false, "Linear scene highlight threshold after material tone mapping", 0, 1 )
+local bloomKnee = CreateClientConVar( "mc_pbr_bloom_knee", "0.20", true, false, "Soft threshold transition width", 0, 0.5 )
+local bloomRadius = CreateClientConVar( "mc_pbr_bloom_radius", "1", true, false, "Bloom blur radius multiplier", 0.25, 4 )
+local bloomDebug = CreateClientConVar( "mc_pbr_bloom_debug", "0", false, false, "Show extracted and blurred highlights", 0, 1 )
 local min, max, ceil = math.min, math.max, math.ceil
 local targetPushed, overrides = false, false
 
@@ -52,6 +59,19 @@ function P.Register( definition, blockSize )
             "render_atmosphere_api", "atmosphere requires world-space coordinates, voxel light and day-cycle sampling" )
         group.fog = CreateMaterial( prefix .. "_fog", "screenspace_general_8tex", parameters( programs.post_fog, source, true ) )
         requireValue( group.fog and not group.fog:IsError(), "render_fog_material", "fog material creation failed" )
+    end
+    if programs.post_bloom_prefilter then
+        requireValue( programs.post_bloom_blur and programs.post_bloom_composite,
+            "render_bloom_programs", "bloom requires prefilter, blur and composition programs" )
+        local prefilter = parameters( programs.post_bloom_prefilter, source, false )
+        prefilter["$linearread_basetexture"] = 0 -- sRGB scene -> linear floating-point target
+        group.bloom = {
+            prefilter = CreateMaterial( prefix .. "_bloom_prefilter", "screenspace_general_8tex", prefilter ),
+            blur = CreateMaterial( prefix .. "_bloom_blur", "screenspace_general_8tex", parameters( programs.post_bloom_blur, source, false ) ),
+            composite = CreateMaterial( prefix .. "_bloom_composite", "screenspace_general_8tex", parameters( programs.post_bloom_composite, source, true ) ) }
+        for _, material in pairs( group.bloom ) do
+            requireValue( material and not material:IsError(), "render_bloom_material", "bloom material creation failed" )
+        end
     end
     P.groups[key] = group
     return group
@@ -187,9 +207,14 @@ local function drawAO( c, group )
 end
 
 function P.BeforeTranslucent( depth, sky, sky3D )
-    if depth or sky3D or not P.NeedsDepth() or SysTime() < P.retryAt then return end
+    if depth or sky3D or not P.Active() then return end
     if render.GetRenderTarget() ~= nil then return end
     local view = render.GetViewSetup( true )
+    if view.viewid ~= 0 then return end
+    -- Track actual main-view draws, not just FrameNumber: two views in one
+    -- frame still need independent bloom, even when no depth effect is enabled.
+    P.viewSerial, P.viewFrame = P.viewSerial + 1, FrameNumber()
+    if not P.NeedsDepth() or SysTime() < P.retryAt then return end
     local c = S.CaptureDepth( view )
     if not c or not c.postGroup or not wantsAO() or c.aoComplete == c.serial then return end
     local ok, err = pcall( drawAO, c, P.Active() )
@@ -284,14 +309,82 @@ end
 function P.BeforeViewModels() finishWorld( true ) end
 function P.BeforeEffects() finishWorld( false ) end
 
+local function bloomTargets( width, height )
+    local scale = min( 0.25, 640 / width, 360 / height )
+    local w, h = max( 1, ceil( width * scale ) ), max( 1, ceil( height * scale ) )
+    local key = "bloom1_" .. w .. "x" .. h
+    local target = P.targets[key]
+    if target then return target end
+    local bytes = w * h * 16
+    S.ReserveTargetBytes( bytes ) P.targetBytes = P.targetBytes + bytes
+    local a = GetRenderTargetEx( "mc_" .. key .. "_a", w, h, RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE,
+        bit.bor( 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA16161616F )
+    local b = GetRenderTargetEx( "mc_" .. key .. "_b", w, h, RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE,
+        bit.bor( 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA16161616F )
+    requireValue( a and b and not a:IsError() and not b:IsError() and a:Width() == w and b:Width() == w
+        and a:Height() == h and b:Height() == h, "render_bloom_target", "bloom target allocation failed" )
+    target = { a = a, b = b, width = w, height = h, quad = S.CopyQuad( w, h ) }
+    P.targets[key] = target
+    return target
+end
+
+local function drawBloom( group, view )
+    local scene = render.GetScreenEffectTexture( 0 )
+    requireValue( scene and not scene:IsError(), "render_bloom_scene", "screen colour texture is unavailable" )
+    local width, height = scene:Width(), scene:Height()
+    if view.width ~= width or view.height ~= height then P.stats.status = "unsupported_viewport" return end
+    local target, materials = bloomTargets( width, height ), group.bloom
+    render.UpdateScreenEffectTexture( 0 )
+    local material = materials.prefilter
+    material:SetTexture( "$basetexture", scene )
+    material:SetFloat( "$c0_x", 1 / ( 3 * target.width ) ) material:SetFloat( "$c0_y", 1 / ( 3 * target.height ) )
+    material:SetFloat( "$c0_z", bloomThreshold:GetFloat() ) material:SetFloat( "$c0_w", bloomKnee:GetFloat() )
+    pass( material, target.quad, target.a )
+    material = materials.blur
+    material:SetTexture( "$basetexture", target.a )
+    material:SetFloat( "$c0_x", bloomRadius:GetFloat() / target.width ) material:SetFloat( "$c0_y", 0 )
+    pass( material, target.quad, target.b )
+    material:SetTexture( "$basetexture", target.b )
+    material:SetFloat( "$c0_x", 0 ) material:SetFloat( "$c0_y", bloomRadius:GetFloat() / target.height )
+    pass( material, target.quad, target.a )
+    material = materials.composite
+    material:SetTexture( "$basetexture", scene ) material:SetTexture( "$texture1", target.a )
+    material:SetFloat( "$c0_x", bloomStrength:GetFloat() ) material:SetFloat( "$c0_y", bloomDebug:GetBool() and 1 or 0 )
+    pass( material, P.ScreenQuad( width, height ) )
+    P.bloomSerial = P.viewSerial
+    P.stats.bloom, P.stats.status = P.stats.bloom + 1, "ready"
+end
+
+function P.AfterEffects()
+    local group = P.Active()
+    if not group or not group.bloom or not bloomEnabled:GetBool() or bloomStrength:GetFloat() == 0 and not bloomDebug:GetBool()
+        or SysTime() < P.bloomRetryAt or render.GetRenderTarget() ~= nil then return end
+    if P.viewFrame ~= FrameNumber() or P.bloomSerial == P.viewSerial then return end
+    local view = render.GetViewSetup( true )
+    if view.viewid ~= 0 or view.ortho or view.offcenter or view.x ~= 0 or view.y ~= 0 then return end
+    -- Hook iteration order is unspecified. Consume pending water reflections
+    -- here as well, so neither callback order can put SSR on top of bloom.
+    S.Resolve()
+    local ok, err = pcall( drawBloom, group, view )
+    local restoreError = clean()
+    if not ok or restoreError then
+        P.bloomRetryAt = SysTime() + 1
+        P.stats.failures, P.stats.status = P.stats.failures + 1, "fault"
+        local failure = not ok and err or restoreError
+        if type( failure ) == "table" then return MC.Fault( failure.code, "%s", failure.message ) end
+        return MC.Fault( "render_bloom_draw", "%s", tostring( failure ) )
+    end
+end
+
 hook.Add( "PreDrawTranslucentRenderables", "mc_pbr_post", P.BeforeTranslucent )
 hook.Add( "PreDrawViewModels", "mc_pbr_post", P.BeforeViewModels )
 -- Source can omit the viewmodel stage (e.g. cameras/r_drawviewmodel 0). This
 -- fallback is allowed only when that stage did not run in this captured view.
 hook.Add( "PreDrawEffects", "mc_pbr_post", P.BeforeEffects )
+hook.Add( "RenderScreenspaceEffects", "mc_pbr_post", P.AfterEffects )
 cvars.AddChangeCallback( "mc_pbr_ssao", S.Invalidate, "mc_pbr_post" )
 cvars.AddChangeCallback( "mc_pbr_fog", S.Invalidate, "mc_pbr_post" )
 concommand.Add( "mc_pbr_post_stats", function()
-    print( string.format( "[MC post] %s ao=%d fog=%d failures=%d postMiB=%.2f sharedSceneMiB=%.2f GPU=unmeasured",
-        P.stats.status, P.stats.ao, P.stats.fog, P.stats.failures, P.targetBytes / 1048576, S.targetBytes / 1048576 ) )
+    print( string.format( "[MC post] %s ao=%d fog=%d bloom=%d failures=%d postMiB=%.2f sharedSceneMiB=%.2f GPU=unmeasured",
+        P.stats.status, P.stats.ao, P.stats.fog, P.stats.bloom, P.stats.failures, P.targetBytes / 1048576, S.targetBytes / 1048576 ) )
 end )
