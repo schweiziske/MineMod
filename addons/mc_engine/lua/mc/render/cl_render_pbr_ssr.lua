@@ -198,14 +198,15 @@ local function sceneTargets( width, height, water )
     end
     if water and not t.trace then
         S.ReserveTargetBytes( w * h * 16 )
-        t.source = GetRenderTargetEx( "mc_" .. key .. "_source", w, h, RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE,
+        local source = GetRenderTargetEx( "mc_" .. key .. "_source", w, h, RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE,
             bit.bor( 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA8888 )
-        t.trace = GetRenderTargetEx( "mc_" .. key .. "_trace", w, h, RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_SEPARATE,
+        local trace = GetRenderTargetEx( "mc_" .. key .. "_trace", w, h, RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_SEPARATE,
             bit.bor( 1, 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA16161616F )
-        for _, texture in ipairs( { t.source, t.trace } ) do
+        for _, texture in ipairs( { source, trace } ) do
             requireValue( texture and not texture:IsError() and texture:Width() == w and texture:Height() == h,
                 "render_ssr_target", "water SSR target allocation or dimensions failed" )
         end
+        t.source, t.trace = source, trace
         t.quad = copyQuad( w, h )
     end
     return t
@@ -264,7 +265,7 @@ local function sameView( view, c )
 end
 S.SameView = sameView
 
-local function prepareDepth( view, records, scene, postGroup )
+local function prepareDepth( view, records, scene, postGroup, postRequired )
     local c = frame
     c.active, c.generation, c.revision = MC.RenderPackRuntime.active, MC.StateWorldGeneration, MC.AppliedStateRevision
     c.frameWidth, c.frameHeight = scene:Width(), scene:Height()
@@ -290,7 +291,7 @@ local function prepareDepth( view, records, scene, postGroup )
     local tanX, tanY = tangent * 1.05, tangent / c.aspect * 1.05
     local edgeX, edgeY = math.sqrt( 1 + tanX * tanX ), math.sqrt( 1 + tanY * tanY )
     local count, far = 0, min( c.far, 3980 )
-    c.group, c.postGroup = postGroup, postGroup
+    c.group, c.postGroup = postGroup, postRequired and postGroup or nil
     -- Conservative chunk spheres in render space: no vertex scan, and no
     -- extra full-scene depth draw when all nearby water is outside this view.
     for _, record in ipairs( records ) do
@@ -314,7 +315,7 @@ local function prepareDepth( view, records, scene, postGroup )
     end
     for i = count + 1, c.count or 0 do c.entries[i].record, c.entries[i].group = nil, nil end
     c.count = count
-    if count == 0 and not postGroup then S.stats.status = "no_visible_water" return false end
+    if count == 0 and not postRequired then S.stats.status = "no_visible_water" return false end
     if postGroup then c.target = sceneTargets( c.frameWidth, c.frameHeight, count > 0 )
     else c.target = targets( c.frameWidth, c.frameHeight ) end
     c.nativeDepth = render.GetResolvedFullFrameDepth()
@@ -376,6 +377,7 @@ local function requestDepth()
     S.request, S.pending, S.depthSerial, S.scene = nil, nil, nil, nil
     local postGroup
     if MC.RenderPBRPost then postGroup = MC.RenderPBRPost.DepthGroup( view ) end
+    local postRequired = postGroup ~= nil
     local records = emptyRecords
     if enabled:GetBool() and strength:GetFloat() > 0 then
         local material = MC.RenderPBRWater.CurrentMaterial()
@@ -385,11 +387,14 @@ local function requestDepth()
             records = MC.CollectWaterSSRRecords( view.origin ) or emptyRecords
         elseif not postGroup then return discard( "no_ssr_material" ) end
     end
+    -- Keep the precision/cache family stable when SSAO/fog are toggled or a
+    -- post pass is retrying. Visible water still uses the current pack's depth.
+    if not postGroup and #records > 0 and MC.RenderPBRPost then postGroup = MC.RenderPBRPost.DepthGroup( view, true ) end
     if #records == 0 and not postGroup then return discard( "no_visible_water" ) end
     local scene = render.GetScreenEffectTexture( 0 )
     requireValue( scene and not scene:IsError() and scene:Width() > 0 and scene:Height() > 0,
         "render_ssr_scene_texture", "water SSR requires the current full-frame scene texture" )
-    return prepareDepth( view, records, scene, postGroup )
+    return prepareDepth( view, records, scene, postGroup, postRequired )
 end
 
 function S.RequestDepth()
@@ -441,6 +446,44 @@ function S.CaptureDepth( view )
     local restoreError = clean()
     if not ok or restoreError then fault( "render_scene_depth_capture", not ok and err or restoreError ) return nil end
     return c
+end
+
+local function includeWaterDepth( c, records )
+    render.PushRenderTarget( c.depthTexture ) targetPushed = true
+    writeState( nil )
+    render.OverrideBlend( true, BLEND_ONE, BLEND_ONE, BLENDFUNC_MIN, BLEND_ONE, BLEND_ONE, BLENDFUNC_MIN )
+    cam.Start( c.depthCamera ) cameraStarted = true
+    S.renderingDepth = c
+    -- A zero cutoff accepts all water fragments; only its geometric surface
+    -- depth is needed. The colour copy material supplies an existing texture.
+    render.SetMaterial( S.DepthMaterial( c.group.copy, false ) )
+    for _, record in ipairs( records ) do
+        if record.hasWater then
+            record.matrix:SetTranslation( record.drawBase )
+            cam.PushModelMatrix( record.matrix ) modelPushed = true
+            for _, name in ipairs( waterNames ) do
+                local batches = record.meshes[name]
+                if batches then for _, batch in ipairs( batches ) do batch.mesh:Draw() end end
+            end
+            cam.PopModelMatrix() modelPushed = false
+        end
+    end
+    S.renderingDepth = nil
+    cam.End() cameraStarted = false
+    render.PopRenderTarget() targetPushed = false
+    c.waterDepthComplete = c.serial
+end
+
+-- Atmosphere runs after SSR has consumed opaque depth. Only then may water
+-- become a receiver in this texture; this never changes main-view hardware Z.
+function S.IncludeWaterDepth( c, records )
+    if c.waterDepthComplete == c.serial or not records or #records == 0 then return true end
+    requireValue( S.pending == nil and c == S.scene and S.depthSerial == c.serial,
+        "render_scene_water_order", "water depth must follow SSR and the completed scene snapshot" )
+    local ok, err = pcall( includeWaterDepth, c, records )
+    local restoreError = clean()
+    if not ok or restoreError then return fault( "render_scene_water_depth", not ok and err or restoreError ) end
+    return true
 end
 
 local function capture( c, scene, waterConstants )

@@ -5,7 +5,7 @@ local P = MC.RenderPBRPost or { groups = {}, targets = {}, quads = {}, quadCount
 MC.RenderPBRPost = P
 P.VERSION = 1
 P.retryAt = 0
-P.stats = { ao = 0, failures = 0, status = "idle" }
+P.stats = { ao = 0, fog = 0, failures = 0, status = "idle" }
 local requireValue = MC.RenderL2Resources.Require
 local S = MC.RenderPBRSSR
 local aoEnabled = CreateClientConVar( "mc_pbr_ssao", "1", true, false, "Screen-space contact occlusion on opaque surfaces", 0, 1 )
@@ -13,6 +13,13 @@ local aoStrength = CreateClientConVar( "mc_pbr_ssao_strength", "0.75", true, fal
 local aoRadius = CreateClientConVar( "mc_pbr_ssao_radius", "1.5", true, false, "Contact occlusion radius in blocks", 0.25, 4 )
 local aoDistance = CreateClientConVar( "mc_pbr_ssao_distance", "24", true, false, "Fade contact occlusion beyond this distance in blocks", 4, 64 )
 local aoDebug = CreateClientConVar( "mc_pbr_ssao_debug", "0", false, false, "Show the SSAO visibility buffer", 0, 1 )
+local fogEnabled = CreateClientConVar( "mc_pbr_fog", "1", true, false, "Distance and height atmosphere", 0, 1 )
+local fogDensity = CreateClientConVar( "mc_pbr_fog_density", "0.006", true, false, "Distance fog extinction per block", 0, 0.1 )
+local fogStart = CreateClientConVar( "mc_pbr_fog_start", "12", true, false, "Clear foreground distance in blocks", 0, 64 )
+local fogHeightDensity = CreateClientConVar( "mc_pbr_fog_height_density", "0.006", true, false, "Height fog extinction at the base height", 0, 0.1 )
+local fogBase = CreateClientConVar( "mc_pbr_fog_height", "64", true, false, "Height fog base in MC world blocks", -256, 512 )
+local fogScale = CreateClientConVar( "mc_pbr_fog_height_scale", "32", true, false, "Height change that halves the mist density in blocks", 4, 256 )
+local fogDistance = CreateClientConVar( "mc_pbr_fog_distance", "128", true, false, "Maximum atmosphere integration distance in blocks", 16, 256 )
 local min, max, ceil = math.min, math.max, math.ceil
 local targetPushed, overrides = false, false
 
@@ -39,6 +46,13 @@ function P.Register( definition, blockSize )
             parameters( programs.post_ssao_composite, source, true ) ) }
     requireValue( group.ao and not group.ao:IsError() and group.aoComposite and not group.aoComposite:IsError(),
         "render_post_material", "post lighting material creation failed" )
+    if programs.post_fog then
+        requireValue( MC.API.Coords.RenderToWorld and MC.API.Coords.WorldToCell and MC.API.Light and MC.API.Light.SampleCell
+            and MC.API.Liquid and MC.API.Liquid.AtPos and MC.DayCycleSkyBrightness and MC.DayCycleHorizonBlend,
+            "render_atmosphere_api", "atmosphere requires world-space coordinates, voxel light and day-cycle sampling" )
+        group.fog = CreateMaterial( prefix .. "_fog", "screenspace_general_8tex", parameters( programs.post_fog, source, true ) )
+        requireValue( group.fog and not group.fog:IsError(), "render_fog_material", "fog material creation failed" )
+    end
     P.groups[key] = group
     return group
 end
@@ -50,12 +64,22 @@ function P.Active()
     return active.postProcess
 end
 
-function P.NeedsDepth()
-    return P.Active() ~= nil and aoEnabled:GetBool() and ( aoStrength:GetFloat() > 0 or aoDebug:GetBool() )
+local function wantsAO()
+    return aoEnabled:GetBool() and ( aoStrength:GetFloat() > 0 or aoDebug:GetBool() )
 end
 
-function P.DepthGroup( view )
-    if not P.NeedsDepth() or SysTime() < P.retryAt then return nil end
+local function wantsFog( group )
+    return group and group.fog and fogEnabled:GetBool() and ( fogDensity:GetFloat() > 0 or fogHeightDensity:GetFloat() > 0 )
+end
+
+function P.NeedsDepth()
+    local group = P.Active()
+    return group ~= nil and ( wantsAO() or wantsFog( group ) )
+end
+
+function P.DepthGroup( view, waterOnly )
+    local group = P.Active()
+    if not group or not waterOnly and ( not P.NeedsDepth() or SysTime() < P.retryAt ) then return nil end
     -- A partial player viewport needs a separate compositor. Never let a portal
     -- or monitor acquire the main-view depth or draw over its outside region.
     local scene = render.GetScreenEffectTexture( 0 )
@@ -63,7 +87,7 @@ function P.DepthGroup( view )
         P.stats.status = "unsupported_viewport"
         return nil
     end
-    return P.Active().depth
+    return group.depth
 end
 
 local function clean()
@@ -167,7 +191,7 @@ function P.BeforeTranslucent( depth, sky, sky3D )
     if render.GetRenderTarget() ~= nil then return end
     local view = render.GetViewSetup( true )
     local c = S.CaptureDepth( view )
-    if not c or not c.postGroup or c.aoComplete == c.serial then return end
+    if not c or not c.postGroup or not wantsAO() or c.aoComplete == c.serial then return end
     local ok, err = pcall( drawAO, c, P.Active() )
     local restoreError = clean()
     if not ok or restoreError then
@@ -179,9 +203,95 @@ function P.BeforeTranslucent( depth, sky, sky3D )
     end
 end
 
+local function atmosphere( c, group )
+    local world, err = MC.API.Coords.RenderToWorld( c.camera.origin )
+    requireValue( world ~= nil, "render_fog_world_position", tostring( err ) )
+    local bx, by, bz = MC.API.Coords.WorldToCell( world )
+    requireValue( bx ~= nil and by ~= nil and bz ~= nil, "render_fog_world_cell", "camera has no MC world cell" )
+    local brightness, level, block, sky = MC.API.Light.SampleCell( bx, by, bz, 0 )
+    requireValue( type( block ) == "number" and type( sky ) == "number",
+        "render_fog_light", "camera voxel light sample failed: " .. tostring( level ) )
+    local liquid = MC.API.Liquid.AtPos( world )
+    if liquid and ( liquid.kind == "water" or liquid.kind == "lava" ) then return false end
+    local day = MC.DayCycleSkyBrightness()
+    local sunset = MC.DayCycleHorizonBlend() * day
+    local skyLight, blockLight = ( sky / 15 ) ^ 2, ( block / 15 ) ^ 3
+    local r = ( 0.30 + sunset * 0.16 ) * day * skyLight + 0.005 + blockLight * 0.025
+    local g = ( 0.43 - sunset * 0.12 ) * day * skyLight + 0.009 + blockLight * 0.015
+    local b = ( 0.57 - sunset * 0.29 ) * day * skyLight + 0.019 + blockLight * 0.006
+    c.fogR, c.fogG, c.fogB, c.fogHeight = r, g, b, world.z / group.blockSize
+    return true
+end
+P.PrepareAtmosphere = atmosphere
+
+function P.AtmosphereConstants( material, c, group )
+    material:SetFloat( "$c0_x", c.fogR ) material:SetFloat( "$c0_y", c.fogG ) material:SetFloat( "$c0_z", c.fogB )
+    material:SetFloat( "$c0_w", fogDensity:GetFloat() )
+    material:SetFloat( "$c1_x", fogStart:GetFloat() )
+    material:SetFloat( "$c1_y", fogHeightDensity:GetFloat() )
+    material:SetFloat( "$c1_z", fogBase:GetFloat() )
+    material:SetFloat( "$c1_w", 1 / fogScale:GetFloat() )
+    material:SetFloat( "$c2_x", c.fogHeight ) material:SetFloat( "$c2_y", 1 / group.blockSize )
+    material:SetFloat( "$c2_z", c.projection:GetField( 1, 4 ) )
+    material:SetFloat( "$c2_w", c.projection:GetField( 2, 4 ) )
+    material:SetFloat( "$c3_x", 1 / c.depthTexture:Width() )
+    material:SetFloat( "$c3_y", 1 / c.depthTexture:Height() )
+    material:SetFloat( "$c3_z", min( fogDistance:GetFloat(), c.far / group.blockSize ) )
+    material:SetFloat( "$c3_w", 0.90 )
+    material:SetMatrix( "$viewprojmat", c.projection )
+end
+
+local function drawFog( c, group )
+    if not atmosphere( c, group ) then P.stats.status = "submerged" c.fogComplete = c.serial return end
+    local records = MC.CollectWaterSSRRecords( c.camera.origin )
+    if not S.IncludeWaterDepth( c, records ) then return end
+    local material = group.fog
+    P.AtmosphereConstants( material, c, group )
+    render.UpdateScreenEffectTexture( 0 )
+    local scene = render.GetScreenEffectTexture( 0 )
+    requireValue( scene and not scene:IsError() and scene:Width() == c.frameWidth and scene:Height() == c.frameHeight,
+        "render_post_scene_resize", "scene changed during atmosphere composition" )
+    material:SetTexture( "$basetexture", scene )
+    material:SetTexture( "$texture1", c.depthTexture )
+    pass( material, P.ScreenQuad( c.frameWidth, c.frameHeight ) )
+    c.fogComplete = c.serial
+    P.stats.fog, P.stats.status = P.stats.fog + 1, "ready"
+end
+
+local function finishWorld( fromViewModels )
+    local group = P.Active()
+    if not wantsFog( group ) or SysTime() < P.retryAt or render.GetRenderTarget() ~= nil then return end
+    local view = render.GetViewSetup( true )
+    local c = S.scene
+    if not c or c.frame ~= FrameNumber() then return end
+    if fromViewModels then c.viewModelsStarted = c.serial
+    elseif c.viewModelsStarted == c.serial then return end
+    if view.viewid ~= 0 or not S.SameView( view, c ) or c.fogComplete == c.serial then return end
+    if not S.CaptureDepth( view ) then return end
+    -- Consume water reflections before atmosphere, and both before viewmodels.
+    S.Resolve()
+    if S.scene ~= c then return end
+    local ok, err = pcall( drawFog, c, group )
+    local restoreError = clean()
+    if not ok or restoreError then
+        P.retryAt = SysTime() + 1
+        P.stats.failures, P.stats.status = P.stats.failures + 1, "fault"
+        local failure = not ok and err or restoreError
+        if type( failure ) == "table" then return MC.Fault( failure.code, "%s", failure.message ) end
+        return MC.Fault( "render_fog_draw", "%s", tostring( failure ) )
+    end
+end
+function P.BeforeViewModels() finishWorld( true ) end
+function P.BeforeEffects() finishWorld( false ) end
+
 hook.Add( "PreDrawTranslucentRenderables", "mc_pbr_post", P.BeforeTranslucent )
+hook.Add( "PreDrawViewModels", "mc_pbr_post", P.BeforeViewModels )
+-- Source can omit the viewmodel stage (e.g. cameras/r_drawviewmodel 0). This
+-- fallback is allowed only when that stage did not run in this captured view.
+hook.Add( "PreDrawEffects", "mc_pbr_post", P.BeforeEffects )
 cvars.AddChangeCallback( "mc_pbr_ssao", S.Invalidate, "mc_pbr_post" )
+cvars.AddChangeCallback( "mc_pbr_fog", S.Invalidate, "mc_pbr_post" )
 concommand.Add( "mc_pbr_post_stats", function()
-    print( string.format( "[MC post] %s ao=%d failures=%d postMiB=%.2f sharedSceneMiB=%.2f GPU=unmeasured",
-        P.stats.status, P.stats.ao, P.stats.failures, P.targetBytes / 1048576, S.targetBytes / 1048576 ) )
+    print( string.format( "[MC post] %s ao=%d fog=%d failures=%d postMiB=%.2f sharedSceneMiB=%.2f GPU=unmeasured",
+        P.stats.status, P.stats.ao, P.stats.fog, P.stats.failures, P.targetBytes / 1048576, S.targetBytes / 1048576 ) )
 end )

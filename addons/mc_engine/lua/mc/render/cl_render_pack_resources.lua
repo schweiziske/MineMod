@@ -84,6 +84,9 @@ function P.Validate( plan )
 				and def.programs.post_depth_copy and def.programs.ssr_copy,
 				"render_post_adapter", ownerKey .. ": post lighting requires scene depth and the AO/resolve programs" )
 		end
+		if def.programs.post_fog then
+			requireValue( def.programs.post_ssao, "render_fog_adapter", ownerKey .. ": fog requires the shared post-depth contract" )
+		end
 		local buildKey = ownerKey .. "/" .. def.build
 		if not P.builds[buildKey] then newBuilds[#newBuilds + 1] = buildKey end
 		for _, name in ipairs( sortedKeys( def.programs ) ) do
