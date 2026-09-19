@@ -1469,8 +1469,9 @@ function Blocks.NameForRuntimeId( runtimeId )
 		local name = MC.ModBlockNameForRuntimeId( runtimeId )
 		if name then return name end
 	end
-	local resolved = Blocks.Resolve( tonumber( runtimeId ) )
-	return resolved and resolved.name or nil, resolved and nil or "unknown_block"
+	local resolved, err = Blocks.Resolve( tonumber( runtimeId ) )
+	if not resolved then return nil, err or "unknown_block" end
+	return resolved.name
 end
 
 function Blocks.StateName( stateId )

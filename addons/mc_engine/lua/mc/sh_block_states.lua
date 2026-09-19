@@ -458,7 +458,8 @@ function MC.StateFromLegacy( blockId, orient )
 	blockId = math.floor( tonumber( blockId ) or 0 )
 	if blockId == 0 then
 		local air = MC.DefaultBlockState( 0 )
-		return air, air ~= nil, air and nil or "missing_air_state"
+		if air == nil then return nil, false, "missing_air_state" end
+		return air, true
 	end
 	local schema = MC.BlockStateSchemas[blockId]
 	if not schema then return nil, false, "missing_block_schema" end
