@@ -6,6 +6,7 @@ local Catalog, Schema = MC.RenderPackRegistry, MC.RenderPackSchema
 local ROOT = "data_static/mc/shaderpacks/"
 local MAX_FILES, MAX_BYTES = 256, 262144
 local FIELDS = { schema = true, kind = true, id = true, definition = true }
+local BUILTINS = { ["mc:vanilla"] = "mc_vanilla.json", ["mc:pbr"] = "mc_pbr.json" }
 
 local function reject( code, path, message )
 	error( { code = code, message = path .. ": " .. message }, 0 )
@@ -49,7 +50,8 @@ local function loadDefinition( path )
 	local expectedBuild
 	if previous then expectedBuild = previous.build end
 	local ok, status
-	if kind == "pack" and id == "mc:vanilla" and path == ROOT .. "mc_vanilla.json" then
+	local builtin = BUILTINS[id]
+	if kind == "pack" and builtin and path == ROOT .. builtin then
 		ok, status = Catalog.RegisterBuiltin( kind, id, definition, expectedBuild, path )
 	else
 		ok, status = Catalog.Register( kind, id, definition, path, expectedBuild )

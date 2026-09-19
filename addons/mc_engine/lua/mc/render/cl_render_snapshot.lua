@@ -140,6 +140,7 @@ function Snapshot.UpdateCell( chunk, li, stateId, previousVersion )
 	local sectionIndex = sectionForLocalIndex( li )
 	local section = chunk.renderSectionBlocks[sectionIndex]
 	if chunk.renderSectionBlocksReady[sectionIndex] and section then
+		section.occlusion = nil
 		local indices, states, slots = section.indices, section.states, section.slots
 		local slotKey = sectionSlotKey( li )
 		local slot = slots[slotKey]

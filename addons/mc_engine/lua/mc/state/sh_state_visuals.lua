@@ -166,6 +166,7 @@ local function projectedVisualPlanId( stateId, schema, block, planId )
 end
 
 function MC.ClearBlockStateVisualCache( block )
+	MC.BlockStateVisualRevision = ( MC.BlockStateVisualRevision or 0 ) + 1
 	if block == nil then
 		clearCache( BlockStateVisualCache )
 		clearCache( BlockStateRenderClassCache )
@@ -182,6 +183,7 @@ function MC.ClearBlockStateVisualCache( block )
 end
 
 function MC.ClearBlockStateRenderClassCache( block )
+	MC.BlockStateVisualRevision = ( MC.BlockStateVisualRevision or 0 ) + 1
 	if block == nil then
 		clearCache( BlockStateRenderClassCache )
 		return

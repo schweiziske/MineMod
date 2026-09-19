@@ -1220,7 +1220,8 @@ emitFullCubeBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, 
 	if visibleFaceMask == nil then return "fullCube", false, 0 end
 	meshPerf.fullVisibleFaces = meshPerf.fullVisibleFaces + visibleFaceCount
 	local directEmitVertexCount = visibleFaceCount * 6
-	local directEmitCheapFullCube = not shouldStoreBlockEmissionCache( "fullCube", directEmitVertexCount )
+	local directionalEmit = ctx.l2 and targetBuffer.directional
+	local directEmitCheapFullCube = directionalEmit or not shouldStoreBlockEmissionCache( "fullCube", directEmitVertexCount )
 	if directEmitCheapFullCube then meshPerf.fullDirectBlocks = meshPerf.fullDirectBlocks + 1 end
 	if directEmitCheapFullCube then
 		if targetBuffer.nv + directEmitVertexCount >= C.VERT_LIMIT then flush( targetBuffer ) end
@@ -1252,6 +1253,7 @@ emitFullCubeBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, 
 			if faceStart then meshPerfAdd( meshPerf, "fullFaceMS", faceStart ) end
 			local colorStart = meshProbe and SysTime() or nil
 			if ctx.l2 then
+				if directionalEmit then ctx.setCur( ctx.fullCubeBuffer( targetBuffer, f ) ) end
 				local lightingCache = face.l2LightingByEmission
 				if not lightingCache then lightingCache = {} face.l2LightingByEmission = lightingCache end
 				local lighting = lightingCache[quadLightEmission]
@@ -1396,6 +1398,12 @@ function RM.EmitBlock( ctx, li, stateId )
 	end
 	local targetBuffer = stateTranslucent( ctx, id, bx, by, bz ) and buffers.translucent or buffers.opaque
 	if ctx.l2 then targetBuffer = ctx.bufferForBlock( targetBuffer, id ) end
+	if cached and ctx.l2 and targetBuffer.directional and cached.kind == "fullCube" then
+		-- Crossing the section threshold after an edit must also regroup cubes
+		-- whose previous unpartitioned block records were still cached.
+		MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
+		cached = nil
+	end
 	local targetLightStyle = styleForBuffer( targetBuffer )
 	if cached and not ctx.l2 and ( blockNeedsRecolor or cached.lightStyle ~= targetLightStyle ) then
 		local recolorStart = SysTime()

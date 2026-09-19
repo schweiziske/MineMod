@@ -125,7 +125,7 @@ local function partitionMatches( c, source, size )
 end
 
 local function bindSection( c, transaction, source, chunk, size )
-	local bound = { source = source, chunk = chunk, resources = {}, passes = {}, quads = 0, draws = 0 }
+	local bound = { source = source, chunk = chunk, bounds = source.bounds, resources = {}, passes = {}, quads = 0, draws = 0 }
 	transaction.created[#transaction.created + 1] = bound
 	for pass = 1, 2 do
 		local list = pass == 1 and source.opaque or source.translucent
@@ -144,7 +144,8 @@ local function bindSection( c, transaction, source, chunk, size )
 				end
 				local entries = bound.passes[node.key]
 				if not entries then entries = {} bound.passes[node.key] = entries end
-				entries[#entries + 1] = { mesh = data.mesh, material = material }
+				entries[#entries + 1] = { mesh = data.mesh, material = material,
+					vertexCount = data.quadCount * 6, bounds = part.bounds, direction = part.direction }
 				bound.draws = bound.draws + 1
 			end
 		end
@@ -157,12 +158,23 @@ local function flattenChunk( sections )
 	for index in pairs( sections or {} ) do indices[#indices + 1] = index end
 	table.sort( indices )
 	for _, index in ipairs( indices ) do
-		for key, entries in pairs( sections[index].passes ) do
+		local section = sections[index]
+		for key, entries in pairs( section.passes ) do
 			local list = result[key]
-			if not list then list = {} result[key] = list end
-			for _, entry in ipairs( entries ) do list[#list + 1] = entry end
+			if not list then list = { sections = {}, vertexCount = 0 } result[key] = list end
+			local first, vertices = #list + 1, 0
+			for _, entry in ipairs( entries ) do
+				list[#list + 1] = entry
+				vertices = vertices + entry.vertexCount
+			end
+			list.sections[#list.sections + 1] = { index = index, first = first, last = #list,
+				bounds = section.bounds, vertexCount = vertices }
+			list.vertexCount = list.vertexCount + vertices
+			if section.bounds then list.bounds = MC.RenderSectionCull.Extend( list.bounds, section.bounds )
+			else list.unbounded = true end
 		end
 	end
+	for _, list in pairs( result ) do if list.unbounded then list.bounds = nil end end
 	return result
 end
 

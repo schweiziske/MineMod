@@ -99,7 +99,7 @@ function R.Ensure( build, owner )
 		"l2_visual_upload_material", "could not create the exact-byte upload material" )
 end
 
-function R.BoundMaterial( owner, slot, source, stage, blockSize, program, colorSpace )
+function R.BoundMaterial( owner, slot, source, stage, blockSize, program, colorSpace, pbrMaps )
 	local material = owner.materials[slot]
 	if not material then
 		local params = {
@@ -118,6 +118,7 @@ function R.BoundMaterial( owner, slot, source, stage, blockSize, program, colorS
 		elseif stage == "world_cutout" then
 			params["$alphatest"], params["$alphatested"], params["$alphatestreference"] = 1, 1, "0.5"
 		end
+		if pbrMaps then MC.RenderPBR.Parameters( params, pbrMaps ) end
 		material = CreateMaterial( ( owner.prefix or "mc_l2_visual" ) .. "1_" .. slot, "screenspace_general_8tex", params )
 		owner.materials[slot] = material
 	end
@@ -125,7 +126,17 @@ function R.BoundMaterial( owner, slot, source, stage, blockSize, program, colorS
 	material:SetTexture( "$basetexture", source )
 	material:SetTexture( "$texture1", owner.atlas )
 	material:SetTexture( "$texture2", owner.lightmap )
-	material:SetFloat( "$c0_x", 1 / blockSize )
+	if pbrMaps then
+		material:SetTexture( "$texture3", pbrMaps.normal )
+		material:SetTexture( "$texture4", pbrMaps.orm )
+		if pbrMaps.environment then
+			material:SetTexture( "$texture6", pbrMaps.environment )
+			material:SetTexture( "$texture7", pbrMaps.dfg )
+		end
+		MC.RenderPBR.Register( material )
+	else
+		material:SetFloat( "$c0_x", 1 / blockSize )
+	end
 	return material
 end
 

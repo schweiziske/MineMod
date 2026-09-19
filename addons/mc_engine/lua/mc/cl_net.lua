@@ -1956,6 +1956,10 @@ MC.StreamDetachTokens = MC.StreamDetachTokens or {}
 
 function MC.SetStreamChunkHidden( key, hidden )
 	if not key then return end
+	if ( MC.StreamHiddenChunkKeys[key] == true ) ~= ( hidden == true ) then
+		MC.StreamVisibilityVersion = ( MC.StreamVisibilityVersion or 0 ) + 1
+	end
+	if hidden and MC.RenderOcclusion then MC.RenderOcclusion.Forget( key ) end
 	MC.StreamHiddenChunkKeys[key] = hidden and true or nil
 	local backend = MC.NativeChunkBackend
 	if backend and backend.SetChunkVisible then backend.SetChunkVisible( key, not hidden ) end

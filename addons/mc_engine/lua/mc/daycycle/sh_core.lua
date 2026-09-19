@@ -99,11 +99,16 @@ end
 -- +1 noon, 0 at the horizon, negative at night). Sun travels east (+x) to
 -- west (-x) through the zenith like MC. An external clock provider can opt
 -- into the opposite horizontal convention for Source sky systems.
-function MC.DayCycleSunVector()
+function MC.DayCycleSunComponents()
 	local angle = MC.DayCycleCelestialAngle() * math.pi * 2
 	local elevation = math.cos( angle )
 	local horizontalSign = GetGlobalBool( "mc_daycycle_external_reverse_sun", false ) and 1 or -1
-	return Vector( horizontalSign * math.sin( angle ), 0, elevation ), elevation
+	return horizontalSign * math.sin( angle ), 0, elevation, elevation
+end
+
+function MC.DayCycleSunVector()
+	local x, y, z, elevation = MC.DayCycleSunComponents()
+	return Vector( x, y, z ), elevation
 end
 
 if not SERVER then return end

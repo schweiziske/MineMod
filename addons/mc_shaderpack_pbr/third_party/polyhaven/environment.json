@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "asset": "kloofendal_48d_partly_cloudy",
+  "name": "Kloofendal 48d Partly Cloudy",
+  "author": "Greg Zaal / Poly Haven",
+  "license": "CC0-1.0",
+  "licenseURL": "https://polyhaven.com/license",
+  "sourceURL": "https://polyhaven.com/a/kloofendal_48d_partly_cloudy",
+  "downloadURL": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloofendal_48d_partly_cloudy_1k.hdr",
+  "md5": "ee096fe9e26ce29d8f110b5ba0579011",
+  "file": "kloofendal_48d_partly_cloudy_1k.hdr",
+  "tileSize": 128,
+  "padding": 2,
+  "levels": 8,
+  "samples": 1024,
+  "rgbmRange": 64,
+  "dfgSize": 128,
+  "dfgSamples": 16384
+}

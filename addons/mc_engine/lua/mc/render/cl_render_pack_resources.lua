@@ -21,7 +21,7 @@ end
 function P.Validate( plan )
 	requireValue( file and file.Read and util and util.SHA256,
 		"render_pack_verify_api", "mounted-file reads and SHA256 are required" )
-	local result = { plan = plan, nodes = {}, requests = {}, sources = {}, files = {}, textures = {} }
+	local result = { plan = plan, nodes = {}, requests = {}, sources = {}, files = {}, textures = {}, materialMaps = {} }
 	local bytesRead, fileCount = 0, 0
 	local function verify( path, hash )
 		if result.files[path] then
@@ -42,8 +42,10 @@ function P.Validate( plan )
 	for _, ownerKey in ipairs( sortedKeys( plan.owners ) ) do
 		local owner = plan.owners[ownerKey]
 		local def = owner.definition
-		requireValue( def.abi == 1 and def.layout == "mc:quad_corners_v1" and def.adapter == "mc:vanilla_quad_draft",
-			"render_pack_adapter", ownerKey .. ": runtime currently supports only quad-corners-v1 / vanilla-quad-draft" )
+		local ibl = def.adapter == "mc:pbr_quad_v2"
+		local pbr = ibl or def.adapter == "mc:pbr_quad_v1"
+		requireValue( def.abi == 1 and def.layout == "mc:quad_corners_v1" and ( pbr or def.adapter == "mc:vanilla_quad_draft" ),
+			"render_pack_adapter", ownerKey .. ": unsupported quad-corners-v1 adapter" )
 		local buildKey = ownerKey .. "/" .. def.build
 		if not P.builds[buildKey] then newBuilds[#newBuilds + 1] = buildKey end
 		for _, name in ipairs( sortedKeys( def.programs ) ) do
@@ -56,12 +58,34 @@ function P.Validate( plan )
 			verify( resource.path, resource.sha256 )
 			result.textures[ownerKey .. "/" .. name] = resource
 		end
+		requireValue( pbr or next( def.materialMaps ) == nil, "render_pack_material_maps",
+			ownerKey .. ": source material maps require the PBR adapter" )
+		for name, mapping in pairs( def.materialMaps ) do
+			requireValue( def.resources[mapping.normal].colorSpace == "linear"
+				and def.resources[mapping.orm].colorSpace == "linear", "render_pbr_map_color_space",
+				ownerKey .. "/" .. name .. ": material normal and ORM maps must be linear data" )
+		end
 		for name, pass in pairs( def.passes ) do
 			requireValue( pass.stage == "world_opaque" or pass.stage == "world_cutout" or pass.stage == "world_translucent",
 				"render_pack_stage", ownerKey .. "/" .. name .. ": unsupported processing stage " .. pass.stage )
 			for semantic in pairs( pass.inputs ) do
-				requireValue( semantic == "albedo", "render_pack_input",
+				requireValue( semantic == "albedo" or pbr and ( semantic == "normal" or semantic == "orm" )
+					or ibl and ( semantic == "environment" or semantic == "dfg" ), "render_pack_input",
 					ownerKey .. "/" .. name .. ": unsupported quad-v1 input " .. semantic )
+			end
+			if pbr then
+				requireValue( pass.inputs.normal and pass.inputs.orm, "render_pbr_maps",
+					ownerKey .. "/" .. name .. ": PBR requires normal and ORM maps (1x1 neutral maps are supported)" )
+				requireValue( def.resources[pass.inputs.normal].colorSpace == "linear"
+					and def.resources[pass.inputs.orm].colorSpace == "linear", "render_pbr_map_color_space",
+					ownerKey .. "/" .. name .. ": normal and ORM maps must use linear data reads" )
+			end
+			if ibl then
+				requireValue( pass.inputs.environment and pass.inputs.dfg, "render_pbr_ibl",
+					ownerKey .. "/" .. name .. ": PBR v2 requires prefiltered environment and DFG maps" )
+				requireValue( def.resources[pass.inputs.environment].colorSpace == "linear"
+					and def.resources[pass.inputs.dfg].colorSpace == "linear", "render_pbr_ibl_color_space",
+					ownerKey .. "/" .. name .. ": IBL and DFG maps must use linear data reads" )
 			end
 		end
 	end
@@ -80,10 +104,16 @@ function P.Validate( plan )
 			local pass, nodeKey = def.passes[name], request.owner .. "/" .. name
 			local node = nodes[nodeKey]
 			if not node then
-				node = { key = nodeKey, stage = pass.stage, program = def.programs[pass.program] }
+				node = { key = nodeKey, stage = pass.stage, program = def.programs[pass.program], adapter = def.adapter,
+					owner = request.owner, materialMaps = def.materialMaps,
+					shadowProgram = ( def.adapter == "mc:pbr_quad_v1" or def.adapter == "mc:pbr_quad_v2" ) and def.programs.shadow or nil }
 				if pass.inputs.albedo then
 					node.albedo = result.textures[request.owner .. "/" .. pass.inputs.albedo]
 				end
+				if pass.inputs.normal then node.normal = result.textures[request.owner .. "/" .. pass.inputs.normal] end
+				if pass.inputs.orm then node.orm = result.textures[request.owner .. "/" .. pass.inputs.orm] end
+				if pass.inputs.environment then node.environment = result.textures[request.owner .. "/" .. pass.inputs.environment] end
+				if pass.inputs.dfg then node.dfg = result.textures[request.owner .. "/" .. pass.inputs.dfg] end
 				nodes[nodeKey] = node
 				successors[nodeKey], predecessors[nodeKey] = {}, 0
 				local stageNodes = result.nodes[pass.stage]
@@ -122,7 +152,7 @@ end
 
 function P.Fork( bundle )
 	return { plan = bundle.plan, nodes = bundle.nodes, requests = bundle.requests,
-		files = bundle.files, textures = bundle.textures, sources = {}, newBuilds = {}, bytesRead = 0 }
+		files = bundle.files, textures = bundle.textures, sources = {}, newBuilds = {}, bytesRead = 0, materialMaps = {} }
 end
 
 function P.Ensure( bundle )
@@ -134,8 +164,8 @@ function P.Ensure( bundle )
 	end
 end
 
-local function textureFor( resource )
-	local key = resource.path .. "/" .. resource.sha256
+local function textureFor( resource, dataMap )
+	local key = resource.path .. "/" .. resource.sha256 .. ( dataMap and "/data" or "" )
 	local cached = P.textures[key]
 	if cached then return cached end
 	requireValue( P.textureCount < 128, "render_pack_texture_budget", "128 runtime texture versions reached" )
@@ -146,13 +176,48 @@ local function textureFor( resource )
 			{ ["$basetexture"] = path:sub( 1, -5 ) } )
 	else
 		requireValue( Material ~= nil, "render_pack_image_api", "Material() is required for image resources" )
-		material = Material( path )
+		material = Material( path, dataMap and "smooth mips" or nil )
 	end
 	local texture = R.SourceTexture( material )
 	requireValue( texture:Width() > 0 and texture:Width() <= 4096 and texture:Height() > 0 and texture:Height() <= 4096,
 		"render_pack_texture_size", resource.path .. ": dimensions exceed the 4096-square limit" )
 	P.textures[key], P.textureCount = texture, P.textureCount + 1
 	return texture
+end
+
+local function mappingFor( bundle, node, source )
+	if next( node.materialMaps ) == nil then return nil end
+	local mappings = bundle.materialMaps[node.owner]
+	if not mappings then
+		mappings = {}
+		for _, name in ipairs( sortedKeys( node.materialMaps ) ) do
+			local mapping = node.materialMaps[name]
+			local prefix = node.owner .. "/"
+			local albedoResource = bundle.textures[prefix .. mapping.albedo]
+			local normalResource, ormResource = bundle.textures[prefix .. mapping.normal], bundle.textures[prefix .. mapping.orm]
+			local albedo = textureFor( albedoResource )
+			local key = albedo:GetName()
+			local previous = mappings[key]
+			requireValue( not previous or previous.normalResource.sha256 == normalResource.sha256
+				and previous.ormResource.sha256 == ormResource.sha256, "render_pbr_map_conflict",
+				"conflicting PBR maps for source texture " .. key )
+			mappings[key] = { source = albedo, colorSpace = albedoResource.colorSpace,
+				normalResource = normalResource, ormResource = ormResource }
+		end
+		bundle.materialMaps[node.owner] = mappings
+	end
+	local mapping = mappings[source:GetName()]
+	if mapping then
+		requireValue( R.SameTexture( mapping.source, source ), "render_pbr_source_identity",
+			"mapped albedo texture dimensions changed: " .. source:GetName() )
+		if not mapping.normal then
+			local normal, orm = textureFor( mapping.normalResource, true ), textureFor( mapping.ormResource, true )
+			-- All maps use normalized source UVs. Their pixel aspect and
+			-- resolution may differ; textureFor validates hardware size limits.
+			mapping.normal, mapping.orm = normal, orm
+		end
+	end
+	return mapping
 end
 
 function P.Passes( bundle, request, stage )
@@ -166,20 +231,49 @@ end
 function P.Material( bundle, node, sourceMaterial, blockSize )
 	local source = R.SourceTexture( sourceMaterial )
 	bundle.sources[sourceMaterial] = source
-	local colorSpace = "linear"
+	local ibl = node.adapter == "mc:pbr_quad_v2"
+	local pbr = ibl or node.adapter == "mc:pbr_quad_v1"
+	local colorSpace = pbr and "srgb" or "linear"
 	if node.albedo then source, colorSpace = textureFor( node.albedo ), node.albedo.colorSpace end
+	local normal, orm
+	local normalResource, ormResource = node.normal, node.orm
+	if pbr then
+		local mapping = mappingFor( bundle, node, source )
+		if mapping then
+			normal, orm, colorSpace = mapping.normal, mapping.orm, mapping.colorSpace
+			normalResource, ormResource = mapping.normalResource, mapping.ormResource
+		else
+			normal, orm = textureFor( normalResource, true ), textureFor( ormResource, true )
+		end
+	end
+	local environment, dfg
+	if ibl then
+		environment, dfg = textureFor( node.environment, true ), textureFor( node.dfg, true )
+		requireValue( environment:Width() == 512 and environment:Height() == 256 and dfg:Width() == 128 and dfg:Height() == 128,
+			"render_pbr_ibl_dimensions", "PBR v2 requires a 512x256 radiance atlas and a 128x128 DFG map" )
+	end
 	local signature = Schema.Canonical( { vertex = node.program.vertex, pixel = node.program.pixel,
-		stage = node.stage, source = source:GetName(), colorSpace = colorSpace, blockSize = blockSize } )
+		stage = node.stage, source = source:GetName(), colorSpace = colorSpace, blockSize = blockSize,
+		adapter = node.adapter, normal = normal and ( normal:GetName() .. "/" .. normalResource.sha256 ),
+		orm = orm and ( orm:GetName() .. "/" .. ormResource.sha256 ),
+		environment = environment and ( environment:GetName() .. "/" .. node.environment.sha256 ),
+		dfg = dfg and ( dfg:GetName() .. "/" .. node.dfg.sha256 ) } )
 	local cached = P.materials[signature]
 	if cached then
 		requireValue( R.SameTexture( cached.source, source ), "render_pack_texture_identity",
 			"cached texture name or dimensions changed: " .. source:GetName() )
+		if pbr then
+			requireValue( R.SameTexture( cached.normal, normal ) and R.SameTexture( cached.orm, orm ),
+				"render_pbr_texture_identity", "cached PBR data-map dimensions changed" )
+		end
 		return cached.material
 	end
 	requireValue( P.materialCount < 2048, "render_pack_material_budget", "2048 immutable runtime materials reached" )
 	local slot = tostring( P.materialCount + 1 )
-	local material = R.BoundMaterial( P.shared, slot, source, node.stage, blockSize, node.program, colorSpace )
-	P.materials[signature] = { material = material, source = source }
+	local maps
+	if pbr then maps = { normal = normal, orm = orm, environment = environment, dfg = dfg } end
+	local material = R.BoundMaterial( P.shared, slot, source, node.stage, blockSize, node.program, colorSpace, maps )
+	P.materials[signature] = { material = material, source = source, normal = normal, orm = orm }
 	P.materialCount = P.materialCount + 1
 	return material
 end

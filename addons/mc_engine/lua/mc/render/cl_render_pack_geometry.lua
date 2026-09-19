@@ -72,6 +72,7 @@ function G.Upload( buffer, perf )
 	requireValue( buffer.l2 and count > 0 and count == math.floor( count ) and count <= G.PART_QUADS
 		and #buffer.pixels == count * 4, "render_l2_buffer", "world upload requires a bounded native L2 buffer" )
 	requireValue( G.liveParts < G.MAX_PARTS, "render_pack_part_budget", "native L2 mesh-part budget exceeded" )
+	local bounds = MC.RenderSectionCull.VertexBounds( buffer.verts )
 	R.Ensure( { build = "quad_corners_v1" }, P.shared )
 	local first = allocate( count )
 	local object
@@ -99,5 +100,6 @@ function G.Upload( buffer, perf )
 		G.auditPixels[data] = pixels
 	end
 	return { l2 = true, resource = data, mesh = object, material = buffer.material,
-		request = buffer.request, stage = buffer.stage, blockIds = buffer.blockIds }
+		request = buffer.request, stage = buffer.stage, blockIds = buffer.blockIds,
+		bounds = bounds, direction = buffer.direction }
 end
