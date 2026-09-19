@@ -80,6 +80,18 @@ function B.SunComponents()
 	return values[2], values[3], values[4], values[5]
 end
 
+function B.SunEnabled()
+	local _, _, _, elevation = MC.DayCycleSunComponents()
+	return strength:GetFloat() > 0 and elevation > 0
+end
+
+-- PrepareView refreshes these with the same exposure and solar colour used
+-- by surface materials. Return scalar radiance; do not allocate per view.
+function B.AtmosphereSun()
+	local radiance = values[5] * values[1]
+	return values[6] * radiance, values[7] * radiance, values[8] * radiance
+end
+
 -- A publication follows a complete map render. The reused Matrix may have
 -- changed in place, so its identity is deliberately not used as a revision.
 function B.PublishShadow( texture, matrix, bias, weight )
