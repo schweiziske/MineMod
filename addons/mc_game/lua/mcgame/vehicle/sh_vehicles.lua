@@ -16,7 +16,7 @@ local Coords = EngineAPI and EngineAPI.Coords
 local Liquid = EngineAPI and EngineAPI.Liquid
 
 local function engineBlockSize()
-	return Coords and Coords.BlockSize and Coords.BlockSize() or 36.5
+	return Coords.BlockSize()
 end
 
 local function worldToEnginePosition( position, context )
@@ -186,8 +186,8 @@ end
 
 function MC.TraceMinecraftVehicle( ply, reachBlocks, mask )
 	if not IsValid( ply ) or not ply:IsPlayer() or not util or not util.TraceLine then return nil, nil end
-	local start = Coords and Coords.EntityEyeWorldPos and Coords.EntityEyeWorldPos( ply )
-		or ply.GetShootPos and ply:GetShootPos() or ply:EyePos()
+	-- Engine traces, FindInBox and entity WorldToLocal all use the engine frame.
+	local start = ply.GetShootPos and ply:GetShootPos() or ply:EyePos()
 	local direction = ply.GetAimVector and ply:GetAimVector()
 		or ply.EyeAngles and ply:EyeAngles():Forward() or nil
 	if not start or not direction or direction:LengthSqr() <= 0 then return nil, nil end
