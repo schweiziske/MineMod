@@ -1,0 +1,3 @@
+# These source reports are verified byte-for-byte against their manifests.
+/generated/reports/blocks.json text eol=lf
+/out/version.json text eol=lf
