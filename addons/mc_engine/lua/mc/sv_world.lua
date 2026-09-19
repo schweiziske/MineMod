@@ -2077,75 +2077,61 @@ local function overlaySavePath( path )
 	return savePathSibling( path, "_edits.dat" )
 end
 
+local function saveLegacyToPath( path, slotName )
+	if SV.ChunkStore and SV.ChunkStore.IsLazyWorld and SV.ChunkStore.IsLazyWorld() and SV.ChunkStore.SaveOverlay then
+		local overlay = SV.ChunkStore.SaveOverlay()
+		local json = util.TableToJSON( overlay )
+		if not json then return false, "overlay_json_failed" end
+		ensureSaveDir()
+		local targetOverlayPath = overlaySavePath( path )
+		if normalizedSavePath( SV.ChunkStore.ManifestPath ) == normalizedSavePath( path ) and SV.ChunkStore.EditOverlayPath then
+			targetOverlayPath = SV.ChunkStore.EditOverlayPath
+		end
+		local written, writeError = SV.WriteStateSaveFile( targetOverlayPath, json )
+		if not written then return false, writeError or "overlay_write_failed" end
+		MsgN( "[MC] saved lazy edit overlay / " .. SV.BlockCount .. " blocks" ..
+			( slotName and ( " as \"" .. slotName .. "\" on map " .. game.GetMap() ) or "" ) )
+		return true, path, overlay, 0, SV.BlockCount
+	end
+
+	local data, chunks, buildError = buildSaveData( slotName )
+	if not data then return false, buildError or "save_encode_failed" end
+	local expectedBlocks, countError = reconcileBuiltBlockCount( data, "save" )
+	if not expectedBlocks then return false, countError or "save_count_failed" end
+	local json = util.TableToJSON( data )
+	if not json then return false, "save_json_failed" end
+	ensureSaveDir()
+	local compressed = util.Compress( json )
+	if not compressed then return false, "save_compress_failed" end
+	-- Validate the encoded payload before writing. WriteStateSaveFile then
+	-- requires exact byte-for-byte readback before replacing the prior file.
+	local verified, verifyError
+	if SV.VerifyStateSavePayload then
+		verified, verifyError = SV.VerifyStateSavePayload( compressed, json, expectedBlocks, #chunks )
+	end
+	if verified ~= true then
+		return false, verifyError or "save_verify_unavailable"
+	end
+	local written, writeError = SV.WriteStateSaveFile( path, compressed )
+	if not written then return false, writeError or "save_write_failed" end
+	MsgN( "[MC] saved " .. #chunks .. " chunks / " .. expectedBlocks .. " blocks" ..
+		( slotName and ( " as \"" .. slotName .. "\" on map " .. game.GetMap() ) or "" ) )
+	return true, path, data, #chunks, expectedBlocks
+end
+
 function SV.SaveToPath( path, slotName )
 	if SV.SaveInProgress then return false, "save_in_progress" end
 	SV.SaveInProgress = true
 	local saveIsDefault = isDefaultSavePath( path )
-	local function finishSave( ok, ... )
-		if ok and saveIsDefault then SV.Dirty = false end
-		SV.SaveInProgress = false
-		if ok and MC.RunEvent then MC.RunEvent( "MC.WorldSaved", path, slotName ) end
-		return ok, ...
+	local called, ok, writtenPath, data, chunks, blocks = pcall( saveLegacyToPath, path, slotName )
+	SV.SaveInProgress = false
+	if not called then
+		MC.Fault( "legacy_save_exception", "save %s raised: %s", tostring( path ), tostring( ok ) )
+		return false, "legacy_save_exception"
 	end
-
-	if SV.ChunkStore and SV.ChunkStore.IsLazyWorld and SV.ChunkStore.IsLazyWorld() and SV.ChunkStore.SaveOverlay then
-		local overlay = SV.ChunkStore.SaveOverlay()
-		local json = util.TableToJSON( overlay )
-		if not json then return finishSave( false, "overlay_json_failed" ) end
-		ensureSaveDir()
-		local targetOverlayPath = overlaySavePath( path )
-		local normalizedTarget = string.gsub( tostring( path or "" ), "\\\\", "/" )
-		if SV.ChunkStore.ManifestPath == normalizedTarget and SV.ChunkStore.EditOverlayPath then
-			targetOverlayPath = SV.ChunkStore.EditOverlayPath
-		end
-		file.Write( targetOverlayPath, json )
-		if not file.Exists( targetOverlayPath, "DATA" ) and not file.Exists( targetOverlayPath, "GAME" ) then
-			return finishSave( false, "overlay_write_failed" )
-		end
-		MsgN( "[MC] saved lazy edit overlay / " .. SV.BlockCount .. " blocks" ..
-			( slotName and ( " as \"" .. slotName .. "\" on map " .. game.GetMap() ) or "" ) )
-		return finishSave( true, path, overlay, 0, SV.BlockCount )
-	end
-
-	local data, chunks, buildError = buildSaveData( slotName )
-	if not data then return finishSave( false, buildError or "save_encode_failed" ) end
-	local expectedBlocks, countError = reconcileBuiltBlockCount( data, "save" )
-	if not expectedBlocks then return finishSave( false, countError or "save_count_failed" ) end
-	local json = util.TableToJSON( data )
-	if not json then return finishSave( false, "save_json_failed" ) end
-	ensureSaveDir()
-	local compressed = util.Compress( json )
-	if not compressed then return finishSave( false, "save_compress_failed" ) end
-	local tempPath = savePathSibling( path, "_tmp.txt" )
-	file.Write( tempPath, compressed )
-	local verifyRaw = file.Read( tempPath, "DATA" )
-	local verified, verifyError
-	if SV.VerifyStateSavePayload then
-		verified, verifyError = SV.VerifyStateSavePayload( verifyRaw, json, expectedBlocks, #chunks )
-	end
-	if verified ~= true then
-		file.Delete( tempPath )
-		return finishSave( false, verifyError or "save_verify_unavailable" )
-	end
-	local backupPath = savePathSibling( path, "_bak.txt" )
-	if file.Exists( backupPath, "DATA" ) then file.Delete( backupPath ) end
-	if file.Exists( path, "DATA" ) then
-		file.Rename( path, backupPath )
-		if not file.Exists( backupPath, "DATA" ) then
-			file.Delete( tempPath )
-			return finishSave( false, "save_backup_failed" )
-		end
-	end
-	file.Rename( tempPath, path )
-	if not file.Exists( path, "DATA" ) then
-		if file.Exists( backupPath, "DATA" ) then file.Rename( backupPath, path ) end
-		file.Delete( tempPath )
-		return finishSave( false, "save_commit_failed" )
-	end
-	if file.Exists( backupPath, "DATA" ) then file.Delete( backupPath ) end
-	MsgN( "[MC] saved " .. #chunks .. " chunks / " .. expectedBlocks .. " blocks" ..
-		( slotName and ( " as \"" .. slotName .. "\" on map " .. game.GetMap() ) or "" ) )
-	return finishSave( true, path, data, #chunks, expectedBlocks )
+	if ok and saveIsDefault then SV.Dirty = false end
+	if ok and MC.RunEvent then MC.RunEvent( "MC.WorldSaved", writtenPath or path, slotName ) end
+	return ok, writtenPath, data, chunks, blocks
 end
 
 function SV.Save( slotName )
