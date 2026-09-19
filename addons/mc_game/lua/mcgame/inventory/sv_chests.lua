@@ -301,7 +301,7 @@ local function chestMenuStillValid( ply, positions )
 	local first = positions[1]
 	local reach = MC.Config and MC.Config.Reach and MC.Config.Reach:GetFloat() or 0
 	return reach <= 0 or not MC.ReachAllowsEye
-		or MC.ReachAllowsEye( ply:EyePos(), first.bx, first.by, first.bz, reach )
+		or MC.ReachAllowsEye( MC.API.Coords.EntityEyeWorldPos( ply ), first.bx, first.by, first.bz, reach )
 end
 
 function SV.GetChestMenuPositions( bx, by, bz ) return chestPositions( bx, by, bz ) end

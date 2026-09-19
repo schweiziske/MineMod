@@ -266,7 +266,8 @@ function MC.CellWorldCenter( bx, by, bz )
 end
 
 function MC.ReachAllowsEye( eyePos, bx, by, bz, reach )
-	if reach <= 0 or not eyePos then return true end
+	if reach <= 0 then return true end
+	if not eyePos then return false end
 	local mn = MC.CellWorldMin( bx, by, bz )
 	local px = math.max( mn.x, math.min( eyePos.x, mn.x + BS ) )
 	local py = math.max( mn.y, math.min( eyePos.y, mn.y + BS ) )

@@ -315,8 +315,8 @@ if SERVER then
 
 	local function inRange( ply, bx, by, bz )
 		if not IsValid( ply ) or not ply:IsPlayer() then return false end
-		local reach = MC.CurrentReach and MC.CurrentReach() or ( ( MC.BS or 36.5 ) * 4 )
-		return MC.ReachAllowsEye and MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, reach ) == true
+		local reach = MC.CurrentReach and MC.CurrentReach() or ( MC.API.Coords.BlockSize() * 4 )
+		return MC.ReachAllowsEye and MC.ReachAllowsEye( MC.API.Coords.EntityEyeWorldPos( ply ), bx, by, bz, reach ) == true
 	end
 
 	local function bannerRecord( bx, by, bz )

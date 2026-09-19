@@ -122,7 +122,7 @@ local function tableStillValid( ply, bx, by, bz )
 	if blockNameAt( bx, by, bz ) ~= "minecraft:crafting_table" then return false end
 	local reach = MC.Config and MC.Config.Reach and MC.Config.Reach:GetFloat() or 0
 	return reach <= 0 or not MC.ReachAllowsEye
-		or MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, reach )
+		or MC.ReachAllowsEye( MC.API.Coords.EntityEyeWorldPos( ply ), bx, by, bz, reach )
 end
 
 local function buildMenu( ply, record, width, height, kind, tablePosition )
