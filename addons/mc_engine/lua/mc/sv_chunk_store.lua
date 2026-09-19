@@ -493,7 +493,74 @@ local function validateStoredRegistryMetadata( data )
 	return true
 end
 
+local function manifestInteger( value, minimum )
+	value = tonumber( value )
+	if not value or value < minimum or value == math.huge or value ~= math.floor( value ) then return nil end
+	return value
+end
+
+local function validateManifestIndex( manifest )
+	if not istable( manifest ) or not istable( manifest.parts ) or not istable( manifest.chunkIndex ) then
+		return false, "invalid_manifest_index"
+	end
+	local palette = manifest.p
+	if palette == nil then palette = manifest.palette end
+	if palette ~= nil and not istable( palette ) then return false, "invalid_manifest_palette" end
+	local parts, partCount, chunkCount = manifest.parts, 0, 0
+	for index, part in pairs( parts ) do
+		if type( index ) ~= "number" or not manifestInteger( index, 1 ) or index > #parts then
+			return false, "invalid_manifest_part_index"
+		end
+		local path = partEntryPath( part )
+		local fastPath = istable( part ) and part.fastPath or nil
+		if not ( isstring( path ) and path ~= "" ) and not ( isstring( fastPath ) and fastPath ~= "" ) then
+			return false, "invalid_manifest_part_path"
+		end
+		if istable( part ) and part.chunks ~= nil and not manifestInteger( part.chunks, 0 ) then
+			return false, "invalid_manifest_part_count"
+		end
+		partCount = partCount + 1
+	end
+	if partCount ~= #parts then return false, "invalid_manifest_part_index" end
+	for key, entry in pairs( manifest.chunkIndex ) do
+		local cx, cy, cz = MC.ChunkKeyToCoords( key )
+		if not isstring( key ) or cx == nil or key ~= MC.ChunkKeyString( cx, cy, cz ) or not istable( entry ) then
+			return false, "invalid_manifest_chunk_index"
+		end
+		local partNo = manifestInteger( entry.part, 1 )
+		local part = partNo and parts[partNo]
+		if not part then return false, "invalid_manifest_chunk_part" end
+		local hasFast = entry.fastOffset ~= nil or entry.fastBytes ~= nil
+		if hasFast and ( not manifestInteger( entry.fastOffset, 0 ) or not manifestInteger( entry.fastBytes, 16 )
+			or not istable( part ) or not isstring( part.fastPath ) or part.fastPath == "" ) then
+			return false, "invalid_manifest_fast_range"
+		end
+		if entry.index ~= nil then
+			local index = manifestInteger( entry.index, 1 )
+			local path = partEntryPath( part )
+			if not index or not isstring( path ) or path == ""
+				or istable( part ) and part.chunks ~= nil and index > tonumber( part.chunks ) then
+				return false, "invalid_manifest_chunk_record"
+			end
+		elseif not hasFast then
+			return false, "invalid_manifest_chunk_record"
+		end
+		chunkCount = chunkCount + 1
+	end
+	local stats = manifest.stats
+	if stats ~= nil then
+		if not istable( stats ) then return false, "invalid_manifest_stats" end
+		if stats.parts ~= nil and manifestInteger( stats.parts, 0 ) ~= partCount
+			or stats.chunks ~= nil and manifestInteger( stats.chunks, 0 ) ~= chunkCount then
+			return false, "manifest_index_count_mismatch"
+		end
+	end
+	return true
+end
+
 function Store.LoadLazyManifest( manifest, manifestPath, realm )
+	local validIndex, indexError = validateManifestIndex( manifest )
+	if not validIndex then return false, indexError end
 	resetTables()
 	Store.Active = true
 	Store.Realm = realm == "GAME" and "GAME" or "DATA"
