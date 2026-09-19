@@ -39,8 +39,8 @@ local function saveLazyOverlay( path, slotName, finish )
 	local json = util.TableToJSON( overlay )
 	if not json then return finish( false, "overlay_json_failed" ) end
 	local overlayPath = store.EditOverlayPath or ( string.GetPathFromFilename( path ) .. "edits.json" )
-	file.CreateDir( string.GetPathFromFilename( overlayPath ) )
-	file.Write( overlayPath, json )
+	local written, writeError = SV.WriteStateSaveFile( overlayPath, json )
+	if not written then return finish( false, writeError or "overlay_write_failed" ) end
 	MsgN( "[MC] saved lazy edit overlay / " .. SV.BlockCount .. " blocks" ..
 		( slotName and ( " as \"" .. slotName .. "\" on map " .. game.GetMap() ) or "" ) )
 	return finish( true, path, overlay, 0, SV.BlockCount )
