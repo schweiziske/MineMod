@@ -426,6 +426,7 @@ local function stagedChunk( staged, cx, cy, cz )
 end
 
 local function publishStagedChunks( staged )
+	local retiredEntities = {}
 	for key, chunk in pairs( staged ) do
 		local existing = MC.GetChunkByKey( key )
 		if existing then
@@ -437,9 +438,12 @@ local function publishStagedChunks( staged )
 		if chunk.count > 0 then
 			MC.World[key] = chunk
 		else
+			if IsValid( chunk.ent ) then retiredEntities[#retiredEntities + 1] = chunk.ent end
+			chunk.ent = nil
 			MC.World[key] = nil
 		end
 	end
+	return retiredEntities
 end
 
 function Store.IsLazyWorld()
@@ -1145,7 +1149,7 @@ function Store.HydrateChunkNow( key, priority, deferWorldEffects )
 		return nil, Store.LastError
 	end
 
-	publishStagedChunks( staged )
+	local retiredEntities = publishStagedChunks( staged )
 	local chunk = MC.GetChunkByKey( key )
 	local hydratedKeys = { [canonical] = true }
 	for touchedKey in pairs( staged ) do hydratedKeys[touchedKey] = true end
@@ -1156,6 +1160,11 @@ function Store.HydrateChunkNow( key, priority, deferWorldEffects )
 	Store.LoadedKeys[key] = true
 	Store.QueuedKeys[key] = nil
 	Store.LastError = nil
+	-- Entity removal can invoke callbacks. Run it after publishing every chunk
+	-- and loaded flag, while the old collision owner is still reachable here.
+	for _, ent in ipairs( retiredEntities ) do
+		if IsValid( ent ) then ent:Remove() end
+	end
 	if not deferWorldEffects and chunk and chunk.count and chunk.count > 0 and priority then
 		local collisionStarted = sample and SysTime() or nil
 		SV.EnsureChunkEnt( chunk )
