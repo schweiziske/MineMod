@@ -591,7 +591,9 @@ local function fluidMeshesForChunk( chunkKey, animations )
 		return cached
 	end
 
-	local record = { meshes = {} }
+	local halfXY, halfZ = MC.CS * BS * 0.5, MC.CH * BS * 0.5
+	local record = { meshes = {}, lightBounds = { x = halfXY, y = halfXY, z = halfZ,
+		radius = math.sqrt( halfXY * halfXY * 2 + halfZ * halfZ ) } }
 	for name, batches in pairs( buckets ) do
 		local meshList = {}
 		record.meshes[name] = meshList
@@ -734,41 +736,55 @@ end
 
 local function entryColor( entry, center, emission )
 	local now = CurTime()
-	if not entry.lightColor or now >= ( entry.nextLightAt or 0 ) or entry.lightEmission ~= emission then
+	local frame, moving = FrameNumber(), #MC.RenderDynamicLights.active > 0
+	if not entry.lightColor or now >= ( entry.nextLightAt or 0 ) or entry.lightEmission ~= emission
+		or moving ~= entry.hadMovingLight or moving and entry.lightFrame ~= frame then
 		local r, g, b = 1, 1, 1
-		if MC.SampleDynamicLightingRGB then r, g, b = MC.SampleDynamicLightingRGB( center, emission ) end
-		entry.lightColor = Color(
-			math.Clamp( math.floor( r * 255 + 0.5 ), 0, 255 ),
-			math.Clamp( math.floor( g * 255 + 0.5 ), 0, 255 ),
-			math.Clamp( math.floor( b * 255 + 0.5 ), 0, 255 ), 255
-		)
+		local worldCenter = MC.API.Coords.RenderToWorld( center )
+		if MC.SampleDynamicLightingRGB then r, g, b = MC.SampleDynamicLightingRGB( worldCenter, emission ) end
+		local color = entry.lightColor or Color( 255, 255, 255, 255 )
+		color.r = math.Clamp( math.floor( r * 255 + 0.5 ), 0, 255 )
+		color.g = math.Clamp( math.floor( g * 255 + 0.5 ), 0, 255 )
+		color.b = math.Clamp( math.floor( b * 255 + 0.5 ), 0, 255 )
+		entry.lightColor, entry.hadMovingLight, entry.lightFrame = color, moving, frame
 		entry.lightEmission = emission
 		entry.nextLightAt = now + 0.1
 	end
 	return entry.lightColor
 end
 
-local function drawFrame( meshObject, frame, color, alpha, translucent )
+local DEPTH_COLOR = Color( 255, 255, 255, 255 )
+local function drawFrame( meshObject, frame, color, alpha, translucent, drawingDepth, localLight )
 	if not frame or alpha <= 0 then return end
 	local material = materialForPath( frame.material, translucent == true )
 	if not material or material:IsError() then return end
+	if drawingDepth then material = MC.RenderPBRSSR.DepthMaterial( material, true ) end
 	render.SetMaterial( material )
 	render.SetColorModulation( color.r / 255, color.g / 255, color.b / 255 )
 	render.SetBlend( alpha )
 	meshObject:Draw()
+	if localLight and not drawingDepth then MC.RenderDynamicLights.Draw( material, meshObject, false, alpha ) end
 end
 
-local function drawAnimationMesh( meshObject, name, animation, color, elapsedTicks )
+local function drawAnimationMesh( meshObject, name, animation, color, elapsedTicks, drawingDepth, localLight )
 	if not meshObject or type( animation ) ~= "table" then return end
 	local frame, nextFrame, progress = animationFrame( animation, elapsedTicks )
 	if not frame then return end
 	local translucent = FLUID_ANIMATION_SET[name] == true
 	local interpolate = animation.interpolate or SMOOTH_FLAME_ANIMATIONS[name] == true
+	if drawingDepth then
+		if translucent then return end
+		-- Alpha-tested animation coverage uses the dominant frame. Fluids never
+		-- enter the opaque scene depth used to trace reflections.
+		if interpolate and nextFrame and progress >= 0.5 then frame = nextFrame end
+		drawFrame( meshObject, frame, DEPTH_COLOR, 1, false, true )
+		return
+	end
 	if interpolate and nextFrame and nextFrame.material ~= frame.material then
-		drawFrame( meshObject, frame, color, 1 - progress, translucent )
-		drawFrame( meshObject, nextFrame, color, progress, translucent )
+		drawFrame( meshObject, frame, color, 1 - progress, translucent, false, localLight )
+		drawFrame( meshObject, nextFrame, color, progress, translucent, false, localLight )
 	else
-		drawFrame( meshObject, frame, color, 1, translucent )
+		drawFrame( meshObject, frame, color, 1, translucent, false, localLight )
 	end
 end
 
@@ -837,7 +853,7 @@ local function animationPointFilter( enabled )
 	end
 end
 
-local function drawEntry( entry, elapsedTicks )
+local function drawEntry( entry, elapsedTicks, drawingDepth )
 	if not entry.animationMeshes then return end
 	local base = MC.CellRenderMin and MC.CellRenderMin( entry.bx, entry.by, entry.bz )
 		or MC.CellWorldMin( entry.bx, entry.by, entry.bz )
@@ -845,14 +861,14 @@ local function drawEntry( entry, elapsedTicks )
 		or MC.CellWorldCenter( entry.bx, entry.by, entry.bz )
 	local emission = MC.BlockLightEmissionForState and MC.BlockLightEmissionForState(
 		entry.stateId, entry.bx, entry.by, entry.bz ) or 0
-	local color = entryColor( entry, center, emission )
+	local color = drawingDepth and DEPTH_COLOR or entryColor( entry, center, emission )
 	local matrix = entry.matrix or Matrix()
 	entry.matrix = matrix
 	matrix:SetTranslation( base )
 	cam.PushModelMatrix( matrix )
 	animationMatrixPushed = true
 	for _, item in ipairs( entry.animationMeshes ) do
-		drawAnimationMesh( item.mesh, item.name, item.animation, color, elapsedTicks )
+		drawAnimationMesh( item.mesh, item.name, item.animation, color, elapsedTicks, drawingDepth )
 	end
 	cam.PopModelMatrix()
 	animationMatrixPushed = false
@@ -888,6 +904,9 @@ end
 local FLUID_LIGHT_COLOR = Color( 255, 255, 255, 255 )
 local function drawFluidChunk( record, animations, elapsedTicks )
 	local base = record.drawBase
+	local lights = MC.RenderDynamicLights
+	local localLight = lights.count > 0 and lights.AffectsBounds(
+		base.x - lights.eyeX, base.y - lights.eyeY, base.z - lights.eyeZ, record.lightBounds )
 	record.matrix:SetTranslation( base )
 	cam.PushModelMatrix( record.matrix )
 	animationMatrixPushed = true
@@ -910,8 +929,10 @@ local function drawFluidChunk( record, animations, elapsedTicks )
 						render.SetBlend( 1 )
 					end
 					for _, batch in ipairs( batches ) do
-						if waterMaterial then batch.mesh:Draw()
-						else drawAnimationMesh( batch.mesh, name, animations[name], FLUID_LIGHT_COLOR, elapsedTicks ) end
+						if waterMaterial then
+							batch.mesh:Draw()
+							if localLight then lights.Draw( waterMaterial, batch.mesh, false ) end
+						else drawAnimationMesh( batch.mesh, name, animations[name], FLUID_LIGHT_COLOR, elapsedTicks, false, localLight ) end
 					end
 				end
 			end
@@ -922,6 +943,29 @@ local function drawFluidChunk( record, animations, elapsedTicks )
 end
 
 local VisibleFluids = {}
+local FluidLightMaterialKinds = {}
+local function prepareFluidLightMaterials( animations, elapsedTicks )
+	-- Resolve only the current/next visible sprite frames, before entering any
+	-- render override. No eager loading of every animation frame or unused pack.
+	local needed = FluidLightMaterialKinds
+	for name in pairs( needed ) do needed[name] = nil end
+	for _, record in ipairs( VisibleFluids ) do
+		for name in pairs( record.meshes ) do
+			if not ( record.waterMaterial and WATER_ANIMATIONS[name] ) then needed[name] = true end
+		end
+	end
+	for name in pairs( needed ) do
+		local animation = animations[name]
+		if animation then
+			local frame, nextFrame = animationFrame( animation, elapsedTicks )
+			if frame then MC.RenderPackRuntime.PrepareSpriteLightMaterial( materialForPath( frame.material, true ), true ) end
+			if nextFrame and animation.interpolate then
+				MC.RenderPackRuntime.PrepareSpriteLightMaterial( materialForPath( nextFrame.material, true ), true )
+			end
+		end
+	end
+end
+
 local function farFluidFirst( a, b )
 	if a.drawDistance == b.drawDistance then return a.drawKey < b.drawKey end
 	return a.drawDistance > b.drawDistance
@@ -946,6 +990,15 @@ local function collectVisibleFluids( eye )
 	for index = #VisibleFluids, count + 1, -1 do VisibleFluids[index] = nil end
 	if count > 1 then table.sort( VisibleFluids, farFluidFirst ) end
 	return water
+end
+
+-- NeedsDepthPass runs before any colour hook. Gather from the current mesh
+-- cache and render-space coordinates, not last frame's VisibleFluids list.
+-- SSR immediately copies the selected records/bases before nested views can
+-- reuse this list; the ordinary water draw still gathers its own view below.
+function MC.CollectWaterSSRRecords( eye )
+	if MC.WorldFrameSettled and not MC.WorldFrameSettled() then return end
+	if collectVisibleFluids( eye ) then return VisibleFluids end
 end
 
 local function clearFluidMeshes()
@@ -1084,7 +1137,7 @@ end
 
 hook.Remove( "Think", "mc_block_animation_chunk_scan" )
 
-local function drawPreparedAnimations( animations, eye, elapsedTicks, water )
+local function drawPreparedAnimations( animations, eye, elapsedTicks, water, view )
 	local maxRenderDistanceSqr = ( blockSize() * 96 ) ^ 2
 	for _, entry in pairs( ModelEntries ) do
 		local center = MC.CellRenderCenter and MC.CellRenderCenter( entry.bx, entry.by, entry.bz )
@@ -1093,7 +1146,10 @@ local function drawPreparedAnimations( animations, eye, elapsedTicks, water )
 			drawEntry( entry, elapsedTicks )
 		end
 	end
-	if water then MC.RenderPBRWater.CaptureRefraction() end
+	if water then
+		animationPointFilter( false )
+		MC.RenderPBRWater.CaptureRefraction( view, VisibleFluids )
+	end
 	-- Fluid colour passes test opaque depth but must never populate it. In
 	-- particular, interpolated frames draw the same surface more than once.
 	render.OverrideDepthEnable( true, false )
@@ -1115,17 +1171,20 @@ hook.Add( "PostDrawTranslucentRenderables", "mc_block_animations", function( bDe
 	local view = render.GetViewSetup and render.GetViewSetup( true )
 	if view and view.origin then eye = view.origin end
 	local water = collectVisibleFluids( eye )
+	local elapsedTicks = ( RealTime and RealTime() or CurTime() ) / TICK_SECONDS
+	local prepared, prepareError = pcall( prepareFluidLightMaterials, animations, elapsedTicks )
+	if not prepared then MC.Fault( "fluid_dynamic_light_prepare", "%s", tostring( prepareError ) ) end
+	-- Vanilla fluids and CPU-lit animations need the same current-view sources.
+	if not MC.RenderPBR.PrepareDraw( eye.x, eye.y, eye.z, view, false ) then return end
 	if water then
 		-- Shadow/view preparation can render another view; do it before touching
 		-- any animation matrix, depth override, or texture filter.
-		if not MC.RenderPBR.PrepareDraw( eye.x, eye.y, eye.z, view, false ) then return end
 		MC.RenderPBRWater.PrepareView()
 	end
-	local elapsedTicks = ( RealTime and RealTime() or CurTime() ) / TICK_SECONDS
 	render.OverrideDepthEnable( false, false )
 	render.OverrideColorWriteEnable( false, false )
 	animationPointFilter( true )
-	local ok, err = pcall( drawPreparedAnimations, animations, eye, elapsedTicks, water )
+	local ok, err = pcall( drawPreparedAnimations, animations, eye, elapsedTicks, water, view )
 	-- Clean up before Fault: strict mode may throw, and a failed Draw must not
 	-- leave later hooks using our matrix, depth override or texture filters.
 	if animationMatrixPushed then
@@ -1138,6 +1197,32 @@ hook.Add( "PostDrawTranslucentRenderables", "mc_block_animations", function( bDe
 	render.SetColorModulation( 1, 1, 1 )
 	animationPointFilter( false )
 	if not ok then MC.Fault( "block_animation_draw", "%s", tostring( err ) ) end
+end )
+
+local function drawAnimationDepth( eye, elapsedTicks )
+	local maxDistanceSqr = ( blockSize() * 96 ) ^ 2
+	for _, entry in pairs( ModelEntries ) do
+		local center = MC.API.Coords.CellRenderCenter( entry.bx, entry.by, entry.bz )
+		if eye:DistToSqr( center ) <= maxDistanceSqr then drawEntry( entry, elapsedTicks, true ) end
+	end
+end
+
+hook.Remove( "PostDrawOpaqueRenderables", "mc_block_animation_depth" )
+MC.RenderPBRSSR.RegisterDepthRenderer( "animations", function( view )
+	if not MC.RenderPBRSSR.BeginDepth() then return end
+	if MC.WorldFrameSettled and not MC.WorldFrameSettled() then return end
+	animationPointFilter( true )
+	render.OverrideDepthEnable( false, false )
+	render.OverrideColorWriteEnable( true, true )
+	local ok, err = pcall( drawAnimationDepth, view.origin, RealTime() / TICK_SECONDS )
+	if animationMatrixPushed then cam.PopModelMatrix() animationMatrixPushed = false end
+	render.OverrideDepthEnable( false, false )
+	render.OverrideColorWriteEnable( false, false )
+	render.SetBlend( 1 ) render.SetColorModulation( 1, 1, 1 )
+	animationPointFilter( false )
+	if not ok then
+		error( { code = "block_animation_depth", message = tostring( err ) }, 0 )
+	end
 end )
 
 hook.Add( "MCWorldAdapterChanged", "mc_block_animation_world_frame", function()

@@ -174,6 +174,13 @@ function MC.SampleDynamicLightingRGB( pos, emission )
 	local r = math.max( math.min( blockUnit * torchR + sr, 1 ), ambient * skyR / hueMax )
 	local g = math.max( math.min( blockUnit * torchG + sg, 1 ), ambient * skyG / hueMax )
 	local b = math.max( math.min( blockUnit * torchB + sb, 1 ), ambient * skyB / hueMax )
+	local moving = MC.RenderDynamicLights
+	if moving and pos then
+		local dr, dg, db = moving.SampleRGB( pos )
+		r = r + math.min( dr, 1 ) * ( 1 - r )
+		g = g + math.min( dg, 1 ) * ( 1 - g )
+		b = b + math.min( db, 1 ) * ( 1 - b )
+	end
 	return math.Clamp( r, 0, 1 ), math.Clamp( g, 0, 1 ), math.Clamp( b, 0, 1 ), blockLevel, skyLevel
 end
 

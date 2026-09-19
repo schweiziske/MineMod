@@ -10,6 +10,7 @@ local POLE_UV = { 44 / 64, 0, 52 / 64, 42 / 64 }
 local BAR_UV = { 0, 42 / 64, 44 / 64, 46 / 64 }
 local WHITE = { r = 255, g = 255, b = 255 }
 local LIT_COLOR = { r = 255, g = 255, b = 255, a = 255 }
+local DEPTH_COLOR = { r = 255, g = 255, b = 255, a = 255 }
 local EMPTY_PATTERNS = {}
 
 -- mesh.Position/Normal copy immediately; these never escape into retained meshes.
@@ -101,8 +102,8 @@ local function bannerBasis( bx, by, bz, stateId, bs, renderCenter )
 	return basisTop, basisRight, basisNormal, UP, basisDown, wall
 end
 
-local function drawBody( topCenter, right, normal, up, wall, lightColor, bs )
-	render.SetMaterial( BANNER_BODY )
+local function drawBody( topCenter, right, normal, up, wall, lightColor, bs, depthMaterial )
+	render.SetMaterial( depthMaterial or BANNER_BODY )
 	mesh.Begin( MATERIAL_QUADS, wall and 6 or 12 )
 	bodyCenter.x, bodyCenter.y = topCenter.x, topCenter.y
 	if not wall then
@@ -199,11 +200,32 @@ local function rebuildBannerRenderEntries()
 	BannerRenderDirty = false
 end
 
+local function drawBannerEntries( eye, bs, maxDistanceSqr, drawingDepth )
+	local depthMaterial
+	if drawingDepth then depthMaterial = MC.RenderPBRSSR.DepthMaterial( BANNER_BODY, true ) end
+	for index = 1, BannerRenderCount do
+		local entry = BannerRenderEntries[index]
+		local center = Coords.CellRenderCenter( entry.bx, entry.by, entry.bz )
+		if eye:DistToSqr( center ) <= maxDistanceSqr then
+			local stateId = MC.GetBlockState( entry.bx, entry.by, entry.bz )
+			if MC.IsBannerState( stateId ) then
+				if drawingDepth then
+					local top, right, normal, up, down, wall = bannerBasis( entry.bx, entry.by, entry.bz, stateId, bs, center )
+					drawBody( top, right, normal, up, wall, DEPTH_COLOR, bs, depthMaterial )
+					-- Pattern layers share the cloth coverage; one base layer is
+					-- sufficient for depth and avoids repeating all decorations.
+					drawFlagLayer( depthMaterial, top, right, normal, down, DEPTH_COLOR, 0, bs )
+				else drawBanner( entry.bx, entry.by, entry.bz, stateId, entry.record, bs, center ) end
+			end
+		end
+	end
+end
+
 -- Cloth/patterns use alpha testing, not blending. Their solid pixels belong
 -- in the opaque depth buffer before transparent terrain and animated water.
 hook.Remove( "PostDrawTranslucentRenderables", "mc_banner_block_entities" )
-hook.Add( "PostDrawOpaqueRenderables", "mc_banner_block_entities", function( drawingDepth, _, bSky3D )
-	if bSky3D or drawingDepth then return end
+local function drawBanners( drawingDepth, eye )
+	if drawingDepth and ( not MC.RenderPBRSSR or not MC.RenderPBRSSR.BeginDepth() ) then return end
 	if MC.WorldFrameSettled and not MC.WorldFrameSettled() then return end
 	if MC.RenderPBRShadows and MC.RenderPBRShadows.rendering then return end
 	local revision = tonumber( MC.AppliedStateRevision ) or 0
@@ -211,19 +233,23 @@ hook.Add( "PostDrawOpaqueRenderables", "mc_banner_block_entities", function( dra
 	if BannerRenderDirty or revision ~= BannerRenderRevision or generation ~= BannerRenderGeneration then
 		rebuildBannerRenderEntries()
 	end
-	local eye = EyePos()
+	eye = eye or EyePos()
 	local bs = Coords.BlockSize()
 	local maxDistanceSqr = ( bs * 64 ) ^ 2
 	if render.PushFilterMin then render.PushFilterMin( TEXFILTER.POINT ) end
 	if render.PushFilterMag then render.PushFilterMag( TEXFILTER.POINT ) end
-	for index = 1, BannerRenderCount do
-		local entry = BannerRenderEntries[index]
-		local center = Coords.CellRenderCenter( entry.bx, entry.by, entry.bz )
-		if eye:DistToSqr( center ) <= maxDistanceSqr then
-			local stateId = MC.GetBlockState( entry.bx, entry.by, entry.bz )
-			if MC.IsBannerState( stateId ) then drawBanner( entry.bx, entry.by, entry.bz, stateId, entry.record, bs, center ) end
-		end
-	end
+	local ok, err = pcall( drawBannerEntries, eye, bs, maxDistanceSqr, drawingDepth )
 	if render.PopFilterMag then render.PopFilterMag() end
 	if render.PopFilterMin then render.PopFilterMin() end
+	if not ok then
+		if drawingDepth then error( { code = "render_banner_draw", message = tostring( err ) }, 0 ) end
+		MC.Fault( "render_banner_draw", "%s", tostring( err ) )
+	end
+end
+hook.Add( "PostDrawOpaqueRenderables", "mc_banner_block_entities", function( drawingDepth, _, bSky3D )
+	if drawingDepth or bSky3D then return end
+	drawBanners( false )
+end )
+MC.RenderPBRSSR.RegisterDepthRenderer( "banners", function( view )
+	drawBanners( true, view.origin )
 end )

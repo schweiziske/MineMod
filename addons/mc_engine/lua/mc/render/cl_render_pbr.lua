@@ -99,18 +99,22 @@ end
 -- hooks. Prepare at the receiver draw boundary, before any mesh/pass state is
 -- pushed, so this view's camera and shadow coverage are restored together.
 function B.PrepareDraw( x, y, z, view, depthOnly )
-	if B.materialCount == 0 then return true end
 	local shadows = MC.RenderPBRShadows
 	if shadows and shadows.rendering then return false end
 	B.PrepareView( x, y, z )
 	-- The shadow pass is registered after the PBR material provider. Materials
 	-- also support use without that pass, with their shadow strength at zero.
-	if shadows and not depthOnly then shadows.Update( x, y, z, view ) end
+	if B.materialCount > 0 and shadows and not depthOnly then shadows.Update( x, y, z, view ) end
+	-- The shadow render may have drawn a secondary view. Upload moving lights
+	-- afterwards, before any caller pushes draw/filter/depth state. Vanilla also
+	-- reaches this boundary even when there are no PBR materials.
+	-- A reported local-light upload failure disables only the extra draw. The
+	-- base world must remain visible; strict faults still propagate normally.
+	if not depthOnly then MC.RenderDynamicLights.Prepare( x, y, z ) end
 	return true
 end
 
 function B.PrepareCurrentView( depthOnly )
-	if B.materialCount == 0 then return true end
 	local view = render.GetViewSetup and render.GetViewSetup( true )
 	local eye = view and view.origin or EyePos()
 	return B.PrepareDraw( eye.x, eye.y, eye.z, view, depthOnly )
