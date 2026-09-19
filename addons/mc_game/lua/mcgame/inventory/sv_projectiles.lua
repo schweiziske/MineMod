@@ -200,10 +200,12 @@ local function eyeDirection( ply, pitchOffset )
 	return angles:Forward(), angles
 end
 
-local function spawnProjectile( ply, itemName, itemDamage, velocity, definition, options )
+local function spawnProjectile( ply, itemName, itemDamage, velocity, definition, options, projectiles )
 	if not ents or not ents.Create then return nil, "projectile_entity_unavailable" end
 	local ent = ents.Create( "mc_projectile" )
 	if not IsValid( ent ) then return nil, "projectile_entity_unavailable" end
+	-- Own the entity before any initialization callback can fail.
+	projectiles[#projectiles + 1] = ent
 	local origin = ply.GetShootPos and ply:GetShootPos() or ply:EyePos()
 	local direction = velocity:LengthSqr() > 0 and velocity:GetNormalized() or Vector( 0, 0, 1 )
 	ent:SetPos( origin + direction * 12 )
@@ -223,9 +225,9 @@ local function spawnProjectile( ply, itemName, itemDamage, velocity, definition,
 		launched, launchError = false, "projectile_launch_unavailable"
 	end
 	if launched ~= true then
-		ent:Remove()
 		return nil, launchError or "projectile_launch_failed"
 	end
+	if not IsValid( ent ) then return nil, "projectile_entity_removed" end
 	return ent
 end
 
@@ -233,6 +235,26 @@ local function removeProjectileEntities( projectiles )
 	for _, ent in ipairs( projectiles or {} ) do
 		if IsValid( ent ) then ent:Remove() end
 	end
+end
+
+local function prepareProjectiles( record, snapshot, projectiles, mutate, launch )
+	-- Publication remains outside this boundary: its callbacks may already have
+	-- sent/persisted the new inventory and must not trigger a speculative rollback.
+	local called, prepared, preparationError = pcall( function()
+		if mutate then
+			local changed, mutationError = mutate()
+			if changed ~= true then return nil, mutationError or "projectile_inventory_mutation_failed" end
+		end
+		return launch()
+	end )
+	if called and prepared then return prepared end
+	MC.ContainerRestore( record.container, snapshot )
+	removeProjectileEntities( projectiles )
+	if not called then
+		MC.Fault( "projectile_prepare_exception", "%s", tostring( prepared ) )
+		return nil, "projectile_prepare_exception"
+	end
+	return nil, preparationError or "projectile_spawn_failed"
 end
 
 local function commitMutation( record, snapshot, ply, context, projectiles )
@@ -248,24 +270,16 @@ end
 local function mutateAndLaunch( ply, record, sourceStack, itemName, itemDamage, velocity, definition, options, mutate )
 	if not projectileRateAllowed( record ) then return nil, "projectile_rate_limited" end
 	local snapshot = MC.ContainerSnapshot( record.container )
-	if mutate then
-		local changed, mutationError = mutate()
-		if changed ~= true then
-			MC.ContainerRestore( record.container, snapshot )
-			return nil, mutationError or "projectile_inventory_mutation_failed"
-		end
-	end
-	local launchOptions = {}
-	for key, value in pairs( options or {} ) do launchOptions[key] = value end
-	launchOptions.sourceStack = MC.CopyItemStack( sourceStack )
-	local ent, launchError = spawnProjectile( ply, itemName, itemDamage, velocity, definition, launchOptions )
-	if not ent then
-		MC.ContainerRestore( record.container, snapshot )
-		return nil, launchError or "projectile_spawn_failed"
-	end
+	local projectiles, launchOptions = {}, {}
+	local ent, launchError = prepareProjectiles( record, snapshot, projectiles, mutate, function()
+		for key, value in pairs( options or {} ) do launchOptions[key] = value end
+		launchOptions.sourceStack = MC.CopyItemStack( sourceStack )
+		return spawnProjectile( ply, itemName, itemDamage, velocity, definition, launchOptions, projectiles )
+	end )
+	if not ent then return nil, launchError end
 	local result, commitError = commitMutation( record, snapshot, ply, {
 		player = ply, reason = launchOptions.reason or "projectile", actionId = launchOptions.actionId,
-	}, { ent } )
+	}, projectiles )
 	if not result then return nil, commitError end
 	return ent, result
 end
@@ -276,34 +290,26 @@ local function mutateAndLaunchMany( ply, record, specifications, context, mutate
 	end
 	if not projectileRateAllowed( record, #specifications ) then return nil, "projectile_rate_limited" end
 	local snapshot = MC.ContainerSnapshot( record.container )
-	if mutate then
-		local changed, mutationError = mutate()
-		if changed ~= true then
-			MC.ContainerRestore( record.container, snapshot )
-			return nil, mutationError or "projectile_inventory_mutation_failed"
-		end
-	end
-
 	local projectiles = {}
-	for _, specification in ipairs( specifications ) do
-		local launchOptions = {}
-		for key, value in pairs( specification.options or {} ) do launchOptions[key] = value end
-		launchOptions.sourceStack = MC.CopyItemStack( specification.sourceStack )
-		local ent, launchError = spawnProjectile(
-			ply,
-			specification.itemName,
-			specification.itemDamage,
-			specification.velocity,
-			specification.definition,
-			launchOptions
-		)
-		if not ent then
-			MC.ContainerRestore( record.container, snapshot )
-			removeProjectileEntities( projectiles )
-			return nil, launchError or "projectile_spawn_failed"
+	local prepared, preparationError = prepareProjectiles( record, snapshot, projectiles, mutate, function()
+		for _, specification in ipairs( specifications ) do
+			local launchOptions = {}
+			for key, value in pairs( specification.options or {} ) do launchOptions[key] = value end
+			launchOptions.sourceStack = MC.CopyItemStack( specification.sourceStack )
+			local ent, launchError = spawnProjectile(
+				ply,
+				specification.itemName,
+				specification.itemDamage,
+				specification.velocity,
+				specification.definition,
+				launchOptions,
+				projectiles
+			)
+			if not ent then return nil, launchError end
 		end
-		projectiles[#projectiles + 1] = ent
-	end
+		return true
+	end )
+	if not prepared then return nil, preparationError end
 
 	local result, commitError = commitMutation( record, snapshot, ply, {
 		player = ply,
