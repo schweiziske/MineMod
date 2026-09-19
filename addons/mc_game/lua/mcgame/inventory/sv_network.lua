@@ -538,11 +538,15 @@ net.Receive( "mc_inventory_menu_button", function( _, ply )
 	local session, container = record and record.session, record and activeContainer( record )
 	if not record or not session or not container then return end
 	local function finishState( result, errorCode )
+		local called, stateError
 		if type( container.afterMenuButton ) == "function" then
-			pcall( container.afterMenuButton, container, result, errorCode )
+			called, stateError = pcall( container.afterMenuButton, container, result, errorCode )
 		elseif type( container.sendMenuState ) == "function" then
-			pcall( container.sendMenuState, container )
+			called, stateError = pcall( container.sendMenuState, container )
+		else
+			return
 		end
+		if not called then MC.Fault( "inventory_menu_state_failed", "%s", tostring( stateError ) ) end
 	end
 	if containerId ~= container.id or token ~= session.token then
 		sendRejected( record, actionId, "invalid_session", true )
@@ -592,9 +596,21 @@ net.Receive( "mc_inventory_menu_button", function( _, ply )
 	}
 	local called, result, errorCode = pcall( container.menuButton, container, button, context )
 	if not called or type( result ) ~= "table" or result.ok ~= true then
-		errorCode = called and ( errorCode or result and result.error or "menu_button_rejected" ) or "menu_button_error"
-		sendRejected( record, actionId, errorCode, errorCode == "revision_mismatch" or not called )
+		local invalidResult = called and result ~= nil and result ~= false and type( result ) ~= "table"
+		if not called or invalidResult then
+			errorCode = "menu_button_error"
+		else
+			errorCode = errorCode or type( result ) == "table" and result.error or "menu_button_rejected"
+		end
+		sendRejected( record, actionId, errorCode, errorCode == "revision_mismatch" or not called or invalidResult )
 		finishState( nil, errorCode )
+		-- Publish the rejection/resync before a strict-mode fault can unwind
+		-- this receiver, so a broken callback cannot strand the client queue.
+		if not called then
+			MC.Fault( "inventory_menu_button_failed", "%s", tostring( result ) )
+		elseif invalidResult then
+			MC.Fault( "inventory_menu_button_invalid_result", "menu button returned %s", type( result ) )
+		end
 		return
 	end
 	if not context.inventoryDeltaPublished then sendDelta( record, result, true, actionId, "" ) end
