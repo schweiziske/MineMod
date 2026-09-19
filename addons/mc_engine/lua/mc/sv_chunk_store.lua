@@ -607,27 +607,38 @@ local function applyOverlayBlockEntity( chunk, localIndex, stateId, edit )
 	return true
 end
 
+local function chunkEditsForKey( key )
+	if not Store.EditChunks then return nil end
+	local canonical = MC.CanonicalChunkKey( key )
+	local edits = Store.EditChunks[tostring( canonical )]
+	if edits == nil then edits = Store.EditChunks[canonical] end
+	if edits == nil then edits = Store.EditChunks[MC.ChunkKeyString( canonical )] end
+	return edits
+end
+
 function Store.ApplyOverlayToChunk( chunk )
 	if not chunk or not chunk.key then return chunk end
-	local editKey = tostring( chunk.key )
-	local edits = Store.EditChunks and ( Store.EditChunks[editKey] or Store.EditChunks[chunk.key] or Store.EditChunks[MC.ChunkKeyString( chunk.key )] )
-	if not istable( edits ) then return chunk end
+	local edits = chunkEditsForKey( chunk.key )
+	if edits == nil then return chunk end
+	if not istable( edits ) then return nil, "invalid_overlay_chunk" end
 	for li, edit in pairs( edits ) do
-		if istable( edit ) then
-			local localIndex = math.floor( tonumber( li ) or -1 )
-			if not MC.LocalIndexInRange( localIndex ) then return nil, "invalid_overlay_local_index" end
-			local stateId
-			if isstring( edit.state ) then
-				stateId = MC.ParseBlockState( edit.state )
-			else
-				stateId = MC.StateFromLegacy( edit.id, edit.orient )
-			end
-			if stateId == nil or not MC.IsValidBlockState( stateId ) then return nil, "invalid_overlay_state" end
-			local changed, writeError = applyCellToChunk( chunk, localIndex, stateId )
-			if changed == nil then return nil, writeError or "overlay_state_write_failed" end
-			local applied, entityError = applyOverlayBlockEntity( chunk, localIndex, stateId, edit )
-			if applied ~= true then return nil, entityError end
+		if not istable( edit ) then return nil, "invalid_overlay_edit" end
+		local localIndex = tonumber( li )
+		if not localIndex or localIndex ~= math.floor( localIndex ) or not MC.LocalIndexInRange( localIndex ) then
+			return nil, "invalid_overlay_local_index"
 		end
+		local stateId
+		if edit.state ~= nil then
+			if not isstring( edit.state ) then return nil, "invalid_overlay_state" end
+			stateId = MC.ParseBlockState( edit.state )
+		else
+			stateId = MC.StateFromLegacy( edit.id, edit.orient )
+		end
+		if stateId == nil or not MC.IsValidBlockState( stateId ) then return nil, "invalid_overlay_state" end
+		local changed, writeError = applyCellToChunk( chunk, localIndex, stateId )
+		if changed == nil then return nil, writeError or "overlay_state_write_failed" end
+		local applied, entityError = applyOverlayBlockEntity( chunk, localIndex, stateId, edit )
+		if applied ~= true then return nil, entityError end
 	end
 	return chunk
 end
@@ -887,6 +898,12 @@ end
 local function loadBaseChunkIntoWorld( key, record, timing, staged )
 	if not istable( record ) or #record < 4 then return nil, nil, "invalid_chunk_record" end
 	if timing then timingAdd( timing, "records", 1 ) end
+	local strict = Store.Manifest.v == 10
+	if strict then
+		local expectedCX, expectedCY, expectedCZ = MC.ChunkKeyToCoords( key )
+		if tonumber( record[1] ) ~= expectedCX or tonumber( record[2] ) ~= expectedCY
+		or tonumber( record[3] ) ~= expectedCZ then return nil, nil, "chunk_coordinate_mismatch" end
+	end
 	local srcCX = math.floor( tonumber( record[1] ) or 0 )
 	local srcCY = math.floor( tonumber( record[2] ) or 0 )
 	local srcCZ = math.floor( tonumber( record[3] ) or 0 )
@@ -897,19 +914,35 @@ local function loadBaseChunkIntoWorld( key, record, timing, staged )
 	local touched = {}
 	local cellsVisited, cellsWritten = 0, 0
 	local loadError
+	local seen = strict and {} or nil
 
 	local function loadOneCell( li, paletteIndex )
 		if loadError then return end
+		if strict then
+			li, paletteIndex = tonumber( li ), tonumber( paletteIndex )
+			if not li or li ~= math.floor( li ) then loadError = "invalid_local_index" return end
+			if not paletteIndex or paletteIndex < 0 or paletteIndex ~= math.floor( paletteIndex ) then
+				loadError = "invalid_palette_index" return
+			end
+			if seen[li] then loadError = "duplicate_cell" return end
+			seen[li] = true
+		end
 		if timing then cellsVisited = cellsVisited + 1 end
 		local lx, ly, lz = decodeLocalWithGeometry( li, savedChunkSize, savedHeight )
-		if not lx then return end
+		if not lx then
+			if strict then loadError = "invalid_local_index" end
+			return
+		end
+		local stateId = paletteState( cache, paletteIndex )
+		if strict and ( stateId == nil or stateId == 0 or not MC.IsValidBlockState( stateId ) ) then
+			loadError = "invalid_palette_state" return
+		end
 		local bx = srcCX * savedChunkSize + lx
 		local by = srcCY * savedChunkSize + ly
 		local bz = srcCZ * savedHeight + lz
 		local cx, cy, cz, nli = MC.CellToChunk( bx, by, bz )
 		local targetKey = MC.ChunkKey( cx, cy, cz )
 		local chunk = stagedChunk( staged, cx, cy, cz )
-		local stateId = paletteState( cache, paletteIndex )
 		local existingState, readError = MC.GetChunkBlockStateByLocalIndex( chunk, nli )
 		if existingState == nil then loadError = readError or "state_read_failed" return end
 		if MC.LocalIndexInRange( nli ) and stateId and stateId ~= 0 and existingState == 0 then
@@ -924,13 +957,26 @@ local function loadBaseChunkIntoWorld( key, record, timing, staged )
 
 	local applyStarted = timing and SysTime() or nil
 	if isstring( cells ) then
-		for liText, piText in string.gmatch( cells, "([^:;]+):([^:;]*):?[^;]*;?" ) do
-			loadOneCell( liText, piText )
+		if strict then
+			for entry in string.gmatch( cells, "[^;]+" ) do
+				local liText, piText = string.match( entry, "^(-?%d+):(-?%d+)$" )
+				if not liText then loadError = "invalid_cell_record" break end
+				loadOneCell( liText, piText )
+				if loadError then break end
+			end
+		else
+			for liText, piText in string.gmatch( cells, "([^:;]+):([^:;]*):?[^;]*;?" ) do
+				loadOneCell( liText, piText )
+			end
 		end
 	elseif istable( cells ) then
+		if strict and #cells % 2 ~= 0 then return nil, nil, "invalid_cells" end
 		for i = 1, #cells, 2 do
 			loadOneCell( cells[i], cells[i + 1] )
+			if loadError then break end
 		end
+	elseif strict then
+		return nil, nil, "invalid_cells"
 	end
 	if loadError then return nil, nil, loadError end
 	if timing then
@@ -971,15 +1017,13 @@ local function prepareChunkHydration( key, sample )
 			local idx = math.floor( tonumber( entry.index ) or 0 )
 			local record = partData.chunks and partData.chunks[idx]
 			if not istable( record ) then return nil, "invalid_chunk_index" end
-			local _, _, loadError = loadBaseChunkIntoWorld( key, record, sample, staged )
+			local _, _, loadError = loadBaseChunkIntoWorld( item.key, record, sample, staged )
 			if loadError then return nil, loadError end
 		end
 	end
 
 	local canonical = MC.CanonicalChunkKey( key )
-	local edits = Store.EditChunks
-	if not staged[canonical] and edits and
-		( edits[key] or edits[tostring( canonical )] or edits[MC.ChunkKeyString( key )] ) then
+	if not staged[canonical] and chunkEditsForKey( key ) ~= nil then
 		local cx, cy, cz = MC.ChunkKeyToCoords( key )
 		stagedChunk( staged, cx, cy, cz )
 	end
