@@ -70,7 +70,8 @@ local function dropOverflow( ply, stack, context )
 		velocity = SV.PlayerThrownDropVelocity and SV.PlayerThrownDropVelocity( ply ) or nil,
 		reason = context.reason or "selected_consume_overflow",
 	} )
-	return IsValid( entity ) and nil or stack, IsValid( entity )
+	if IsValid( entity ) then return nil, true end
+	return stack, false
 end
 
 function SV.ConsumeSelectedItem( ply, amount, replacement, context )
