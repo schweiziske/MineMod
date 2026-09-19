@@ -94,7 +94,8 @@ function Adapter.ProcessTick( payload, previousProgress, progress )
 								R.OverrideVelocityAxis( entity, dx, dy, dz )
 							end
 							if R.AABBIntersects( slabMin, slabMax, entityMin, entityMax ) then
-								local distance = movementDistance( slabMin, slabMax, entityMin, entityMax, axis, sign )
+								-- AABB overlap is in Source units; movement budgets are block ratios.
+								local distance = movementDistance( slabMin, slabMax, entityMin, entityMax, axis, sign ) / size
 								local cap = C.pistonTickMovement
 								local used = movedByEntity[entity] or 0
 								local remaining = math.max( 0, cap - used )
@@ -116,7 +117,7 @@ function Adapter.ProcessTick( payload, previousProgress, progress )
 	-- HoneyBlock carries grounded entities in the top-side AABB even when the
 	-- moving collision slab does not intersect their item box.
 	for _, movement in ipairs( payload.movements or {} ) do
-		if movement.blockName == "minecraft:honey_block" and ( tonumber( movement.dy ) or 0 ) == 0 then
+		if movement.blockName == "minecraft:honey_block" and ( tonumber( movement.dz ) or 0 ) == 0 then
 			local startMin, startMax = R.CellWorldBounds( movement.toX, movement.toY, movement.toZ )
 			if startMin and startMax then
 				local shift = Vector( -( movement.dx or 0 ) * size * ( 1 - previousProgress ),
