@@ -202,6 +202,7 @@ function SV.AdvanceWorldGeneration( resetRevision )
 	if SV.WorldGeneration == 0 then SV.WorldGeneration = 1 end
 	if resetRevision ~= false then SV.BlockRevision = 0 end
 	SV.StateNetClients = setmetatable( {}, { __mode = "k" } )
+	SV.StateHelloRevisions = setmetatable( {}, { __mode = "k" } )
 	return SV.WorldGeneration
 end
 
@@ -1436,6 +1437,8 @@ net.Receive( "mc_state_hello_ack", function( _, ply )
 	local generation = net.ReadUInt( N.GENERATION_BITS )
 	local clientSchemaHash = net.ReadString()
 	local clientBEHash = net.ReadString()
+	local helloRevision = SV.StateHelloRevisions[ply]
+	if helloRevision == nil then return end
 	local ok, err = SV.ValidateStateProtocol( version, capabilities, clientSchemaHash, clientBEHash )
 	SV.StateNetClients[ply] = {
 		ready = ok and generation == SV.WorldGeneration,
@@ -1444,11 +1447,13 @@ net.Receive( "mc_state_hello_ack", function( _, ply )
 		error = not ok and err or generation ~= SV.WorldGeneration and "generation_mismatch" or nil,
 	}
 	if SV.StateNetClients[ply].ready then
+		-- Consume the handshake before workshop setup, which temporarily marks
+		-- the client unready while downloading. Replayed acks must not reset it.
+		SV.StateHelloRevisions[ply] = nil
 		if MC.Workshop and MC.Workshop.HandleStateHelloAck
 		and MC.Workshop.HandleStateHelloAck( ply, SV.StateNetClients[ply] ) == true then
 			return
 		end
-		local helloRevision = math.floor( tonumber( SV.StateHelloRevisions[ply] ) or SV.BlockRevision )
 		if helloRevision < SV.BlockRevision then
 			SV.SendStateRevisionSkip( ply, helloRevision + 1, SV.BlockRevision )
 		end
