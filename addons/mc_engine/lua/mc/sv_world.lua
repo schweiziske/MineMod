@@ -1297,13 +1297,11 @@ local function clearWorldNoNet()
 	SV.ServerCollisionSignatures = {}
 	SV.ServerCollisionLastSeen = {}
 	SV.ServerCollisionLazyMode = false
-	-- The world was replaced wholesale, which no per-cell/per-chunk
-	-- invalidation reports. Every failure exit of SV.LoadFromPath routes
-	-- through here, so this one call covers all of them.
+	-- Explicit clears replace the world wholesale without per-cell reports.
 	if SV.FlushLightingCaches then SV.FlushLightingCaches() end
 end
 
-local function beginWorldLoadStage()
+local function captureWorldLoadStage()
 	local previous = {
 		world = MC.World,
 		loadedChunkKeys = MC.LoadedChunkKeys,
@@ -1316,7 +1314,22 @@ local function beginWorldLoadStage()
 		serverCollisionSignatures = SV.ServerCollisionSignatures,
 		serverCollisionLastSeen = SV.ServerCollisionLastSeen,
 		serverCollisionLazyMode = SV.ServerCollisionLazyMode,
+		dirty = SV.Dirty,
+		streamInterestDirty = SV.StreamInterestDirty,
+		chunkStore = SV.ChunkStore,
 	}
+	if previous.chunkStore then
+		-- Loading resets the store's tables, so retaining these references is
+		-- sufficient; copying every cached chunk would double the live world.
+		previous.chunkStoreState = {}
+		for key, value in pairs( previous.chunkStore ) do previous.chunkStoreState[key] = value end
+	end
+	return previous
+end
+
+local function beginWorldLoadStage()
+	local previous = captureWorldLoadStage()
+	if SV.ChunkStore and SV.ChunkStore.Reset then SV.ChunkStore.Reset() end
 	MC.World = {}
 	MC.LoadedChunkKeys = {}
 	SV.BlockCount = 0
@@ -1328,11 +1341,12 @@ local function beginWorldLoadStage()
 	SV.ServerCollisionSignatures = {}
 	SV.ServerCollisionLastSeen = {}
 	SV.ServerCollisionLazyMode = false
+	SV.StreamInterestDirty = false
 	if SV.FlushLightingCaches then SV.FlushLightingCaches() end
 	return previous
 end
 
-local function restoreWorldLoadStage( previous )
+local function selectWorldLoadStage( previous )
 	MC.World = previous.world
 	MC.LoadedChunkKeys = previous.loadedChunkKeys
 	SV.BlockCount = previous.blockCount
@@ -1344,14 +1358,28 @@ local function restoreWorldLoadStage( previous )
 	SV.ServerCollisionSignatures = previous.serverCollisionSignatures
 	SV.ServerCollisionLastSeen = previous.serverCollisionLastSeen
 	SV.ServerCollisionLazyMode = previous.serverCollisionLazyMode
-	-- Rolling back is another wholesale swap: anything cached against the
-	-- half-loaded staged world has to go, or it outlives the rollback.
+	SV.Dirty = previous.dirty
+	SV.StreamInterestDirty = previous.streamInterestDirty
+	SV.ChunkStore = previous.chunkStore
+	if previous.chunkStore then
+		for key in pairs( previous.chunkStore ) do previous.chunkStore[key] = nil end
+		for key, value in pairs( previous.chunkStoreState ) do previous.chunkStore[key] = value end
+	end
+	-- Cached queries must follow the selected world, including the temporary
+	-- return to the outgoing world for PreWorldLoad listeners.
 	if SV.FlushLightingCaches then SV.FlushLightingCaches() end
 end
 
-local function commitWorldLoadStage( previous )
+local function restoreWorldLoadStage( previous )
+	for key, chunk in pairs( MC.World ) do
+		if chunk ~= previous.world[key] and IsValid( chunk.ent ) then chunk.ent:Remove() end
+	end
+	selectWorldLoadStage( previous )
+end
+
+local function commitWorldLoadStage( previous, keepChunkStore )
 	if SV.ClearBlockUpdates then SV.ClearBlockUpdates() end
-	if SV.ChunkStore and SV.ChunkStore.Reset then SV.ChunkStore.Reset() end
+	if not keepChunkStore and SV.ChunkStore and SV.ChunkStore.Reset then SV.ChunkStore.Reset() end
 	for _, chunk in pairs( previous.world or {} ) do
 		if IsValid( chunk.ent ) then chunk.ent:Remove() end
 	end
@@ -2370,7 +2398,7 @@ function SV.LoadFromPath( path, resyncClients, requestedName, realm )
 
 	local data, err = readSaveJSON( path, realm )
 	if err then return false, err end
-	if not data or ( not data.chunks and not data.parts ) then return false, "invalid_save" end
+	if not istable( data ) or ( not istable( data.chunks ) and not istable( data.parts ) ) then return false, "invalid_save" end
 	if data.format == "mc_world_import" then
 		if not MC.Import or not MC.Import.ValidateSourceMetadata then return false, "import_format_unavailable" end
 		local metadataOK, metadataError = MC.Import.ValidateSourceMetadata( data )
@@ -2408,21 +2436,13 @@ function SV.LoadFromPath( path, resyncClients, requestedName, realm )
 		and MC.ChunkStreamingEnabled and MC.ChunkStreamingEnabled()
 		and SV.ChunkStore and SV.ChunkStore.LoadLazyManifest
 
-	-- Last chance for external code to read the OUTGOING world. This branch
-	-- has three load paths (lazy manifest, MCB4 eager, staged/parts) where
-	-- main had one, so the announce is idempotent and each path fires it
-	-- immediately before its own first destructive step - never before the
-	-- validation that could still reject the save.
-	local preWorldLoadFired = false
+	-- Validate in a temporary world first. Only a successful load announces a
+	-- replacement; listeners still see the outgoing world at that point.
 	local function announcePreWorldLoad()
-		if preWorldLoadFired then return end
-		preWorldLoadFired = true
 		if MC.RunEvent then MC.RunEvent( "MC.PreWorldLoad", path, requestedName ) end
 	end
 	local function announceWorldLoaded()
-		-- All three success exits land here. Each one repopulated the world
-		-- after clearWorldNoNet/beginWorldLoadStage flushed, so flush again
-		-- before listeners get a chance to sample lighting.
+		-- Flush after committing the staged world, before listeners sample it.
 		if SV.FlushLightingCaches then SV.FlushLightingCaches() end
 		-- Workshop ownership must be fixed before public WorldLoaded listeners
 		-- can mutate the freshly loaded world; those mutations then enter dirty
@@ -2433,74 +2453,42 @@ function SV.LoadFromPath( path, resyncClients, requestedName, realm )
 		if MC.RunEvent then MC.RunEvent( "MC.WorldLoaded", path, requestedName, SV.BlockCount ) end
 	end
 
-	if lazyStreaming then
-		announcePreWorldLoad()
-		clearWorldNoNet()
-		local loaded, loadError = SV.ChunkStore.LoadLazyManifest( data, path, realm )
-		if not loaded then
-			clearWorldNoNet()
-			return false, loadError or "lazy_manifest_load_failed"
-		end
-		if SV.RebuildRedstoneRuntime then SV.RebuildRedstoneRuntime() end
-		if SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
-		SV.Dirty = false
-		local indexedChunks = 0
-		for _ in pairs( data.chunkIndex ) do indexedChunks = indexedChunks + 1 end
-		MsgN( "[MC] loaded lazy manifest " .. indexedChunks .. " chunks / " .. SV.BlockCount .. " blocks" ..
-			( requestedName and ( " from \"" .. requestedName .. "\"" ) or "" ) )
-		announceWorldLoaded()
-		if resyncClients then resyncAllClients() end
-		return true
-	end
-	if data.v == 10 and hasMCB4SaveParts( data ) and SV.ChunkStore and SV.ChunkStore.LoadAllChunksEager then
-		announcePreWorldLoad()
-		clearWorldNoNet()
-		local indexedChunks = 0
-		for _ in pairs( data.chunkIndex or {} ) do indexedChunks = indexedChunks + 1 end
-		local staged, loadError = SV.ChunkStore.LoadLazyManifest( data, path, realm )
-		if not staged then
-			clearWorldNoNet()
-			return false, loadError or "mcb4_manifest_load_failed"
-		end
-		local loaded, eagerError = SV.ChunkStore.LoadAllChunksEager()
-		if not loaded then
-			clearWorldNoNet()
-			return false, eagerError or "mcb4_eager_load_failed"
-		end
-		if SV.RebuildRedstoneRuntime then SV.RebuildRedstoneRuntime() end
-		if SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
-		SV.Dirty = false
-		MsgN( "[MC] loaded full MCB4 manifest " .. indexedChunks .. " chunks" ..
-			( requestedName and ( " from \"" .. requestedName .. "\"" ) or "" ) )
-		announceWorldLoaded()
-		if resyncClients then resyncAllClients() end
-		return true
-	end
-	if istable( data.parts ) then
+	local eagerMCB4 = not lazyStreaming and data.v == 10 and hasMCB4SaveParts( data )
+		and SV.ChunkStore and SV.ChunkStore.LoadAllChunksEager
+	if not lazyStreaming and not eagerMCB4 and istable( data.parts ) then
 		local validParts, partError = validateSavePartFiles( data, path, realm )
 		if not validParts then return false, partError end
 	end
 
-	announcePreWorldLoad()
-	local stagedLoad = data.v == 9 or data.v == 10
-	local previousWorld = stagedLoad and beginWorldLoadStage() or nil
-	if not stagedLoad then clearWorldNoNet() end
-
-	local cache = {}
-	if isLazyPartManifest or istable( data.parts ) then
-		local ok, err = loadSaveParts( data, path, cache, stagedLoad, realm )
-		if not ok then
-			if stagedLoad then restoreWorldLoadStage( previousWorld ) else clearWorldNoNet() end
-			return false, err
+	local previousWorld = beginWorldLoadStage()
+	local function loadStagedWorld()
+		if lazyStreaming or eagerMCB4 then
+			local loaded, loadError = SV.ChunkStore.LoadLazyManifest( data, path, realm )
+			if not loaded then return false, loadError or "manifest_load_failed" end
+			if eagerMCB4 then return SV.ChunkStore.LoadAllChunksEager( true ) end
+			return true
 		end
-	else
-		local ok, err = loadSaveChunks( data, cache, stagedLoad )
-		if not ok then
-			if stagedLoad then restoreWorldLoadStage( previousWorld ) else clearWorldNoNet() end
-			return false, err
+		local cache = {}
+		if istable( data.parts ) then
+			return loadSaveParts( data, path, cache, true, realm )
 		end
+		return loadSaveChunks( data, cache, true )
 	end
-	if stagedLoad then commitWorldLoadStage( previousWorld ) end
+	local called, loaded, loadError = pcall( loadStagedWorld )
+	if not called or loaded ~= true then
+		restoreWorldLoadStage( previousWorld )
+		if not called then
+			MC.Fault( "world_load_exception", "load %s raised: %s", tostring( path ), tostring( loaded ) )
+			return false, "world_load_exception"
+		end
+		return false, loadError or "world_load_failed"
+	end
+
+	local loadedWorld = captureWorldLoadStage()
+	selectWorldLoadStage( previousWorld )
+	announcePreWorldLoad()
+	selectWorldLoadStage( loadedWorld )
+	commitWorldLoadStage( previousWorld, lazyStreaming or eagerMCB4 )
 	if SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
 
 	SV.Dirty = false
