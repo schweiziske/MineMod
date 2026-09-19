@@ -56,7 +56,8 @@ end
 function MC.InventorySlotGet( slot )
 	if type( slot ) ~= "table" or type( slot.storage ) ~= "table" then return nil end
 	local stack = slot.storage[slot.storageIndex]
-	return MC.IsEmptyItemStack( stack ) and nil or stack
+	if MC.IsEmptyItemStack( stack ) then return nil end
+	return stack
 end
 
 function MC.InventorySlotSet( slot, stack )
