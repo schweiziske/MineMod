@@ -78,6 +78,12 @@ function P.Validate( plan )
 				and def.programs.water_ssr_composite and MC.RenderPBRSSR and MC.RenderPBRSSR.VERSION == 1,
 				"render_ssr_adapter", ownerKey .. ": SSR requires the water SSR v1 engine and all four auxiliary programs" )
 		end
+		if def.programs.post_ssao then
+			requireValue( pbr and MC.RenderPBRPost and MC.RenderPBRPost.VERSION == 1
+				and def.programs.post_ssao_composite and def.programs.post_scene_depth
+				and def.programs.post_depth_copy and def.programs.ssr_copy,
+				"render_post_adapter", ownerKey .. ": post lighting requires scene depth and the AO/resolve programs" )
+		end
 		local buildKey = ownerKey .. "/" .. def.build
 		if not P.builds[buildKey] then newBuilds[#newBuilds + 1] = buildKey end
 		for _, name in ipairs( sortedKeys( def.programs ) ) do
