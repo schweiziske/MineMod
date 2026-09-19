@@ -84,9 +84,9 @@ local function timingAdd( timing, field, value )
 	if timing then timing[field] = ( timing[field] or 0 ) + ( tonumber( value ) or 0 ) end
 end
 
-local function readSaveJSON( path, timing )
+local function readSaveJSON( path, timing, realm )
 	local readStarted = timing and SysTime() or nil
-	local raw = file.Read( path, Store.Realm or "DATA" )
+	local raw = file.Read( path, realm or Store.Realm or "DATA" )
 	if timing then
 		timingAdd( timing, "fileReadMS", ( SysTime() - readStarted ) * 1000 )
 		timingAdd( timing, "storedBytes", raw and #raw or 0 )
@@ -517,23 +517,33 @@ function Store.LoadLazyManifest( manifest, manifestPath, realm )
 	-- advertised edits.json. Keep that spelling as a compatibility fallback.
 	local legacyOverlayPath = stripExtension( Store.ManifestPath ) .. "_edits.dat"
 	if legacyOverlayPath ~= Store.EditOverlayPath then overlayCandidates[#overlayCandidates + 1] = legacyOverlayPath end
-	for _, overlayPath in ipairs( overlayCandidates ) do
-		if file.Exists( overlayPath, Store.Realm ) then
-			local overlay, overlayError = readSaveJSON( overlayPath )
-			if not istable( overlay ) or not istable( overlay.edits ) then
-				resetTables()
-				return false, "invalid_edit_overlay:" .. tostring( overlayError or "invalid_overlay_data" )
+	-- Mounted bases remain in GAME, but every save writer stores player edits
+	-- in DATA. Prefer either local spelling before a bundled starting overlay.
+	local overlayRealms = Store.Realm == "GAME" and { "DATA", "GAME" } or { "DATA" }
+	local selectedOverlayPath, selectedOverlayRealm
+	for _, overlayRealm in ipairs( overlayRealms ) do
+		for _, overlayPath in ipairs( overlayCandidates ) do
+			if file.Exists( overlayPath, overlayRealm ) then
+				selectedOverlayPath, selectedOverlayRealm = overlayPath, overlayRealm
+				break
 			end
-			local registryOK, registryError = validateStoredRegistryMetadata( overlay )
-			if not registryOK then
-				resetTables()
-				return false, registryError or "invalid_overlay_registry_snapshot"
-			end
-			Store.EditChunks = overlay.edits
-			local editedCount = tonumber( overlay.blockCount )
-			if editedCount ~= nil then blockCount = math.max( 0, math.floor( editedCount ) ) end
-			break
 		end
+		if selectedOverlayPath then break end
+	end
+	if selectedOverlayPath then
+		local overlay, overlayError = readSaveJSON( selectedOverlayPath, nil, selectedOverlayRealm )
+		if not istable( overlay ) or not istable( overlay.edits ) then
+			resetTables()
+			return false, "invalid_edit_overlay:" .. tostring( overlayError or "invalid_overlay_data" )
+		end
+		local registryOK, registryError = validateStoredRegistryMetadata( overlay )
+		if not registryOK then
+			resetTables()
+			return false, registryError or "invalid_overlay_registry_snapshot"
+		end
+		Store.EditChunks = overlay.edits
+		local editedCount = tonumber( overlay.blockCount )
+		if editedCount ~= nil then blockCount = math.max( 0, math.floor( editedCount ) ) end
 	end
 
 	SV.BlockCount = blockCount
