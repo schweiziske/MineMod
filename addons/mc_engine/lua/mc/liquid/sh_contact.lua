@@ -14,7 +14,7 @@ local VERTICAL_PADDING = 1
 
 local function liquidAtPoint( x, y, z )
 	if not MC.GetBlockState then return nil end
-	local blockSize = MC.BS or 36.5
+	local blockSize = MC.API.Coords.BlockSize()
 	local bx, by, bz = floor( x / blockSize ), floor( y / blockSize ), floor( z / blockSize )
 	local stateId = MC.GetBlockState( bx, by, bz ) or 0
 	local kind, _, level, falling = decodeState( stateId )
@@ -38,12 +38,25 @@ end
 
 function MC.PlayerEyeLiquid( ply )
 	if not IsValid( ply ) or not ply.EyePos then return nil end
-	local eye = ply:EyePos()
+	local eye, err = MC.API.Coords.EntityEyeWorldPos( ply )
+	if not eye then
+		MC.Fault( "liquid_eye_world_position", "liquid eye query: %s", tostring( err ) )
+		return nil
+	end
 	return liquidAtPoint( eye.x, eye.y, eye.z )
 end
 
 local function playerMoveBounds( ply, mv )
-	local pos = mv and mv.GetOrigin and mv:GetOrigin() or ply:GetPos()
+	local pos, err
+	if mv and mv.GetOrigin then
+		pos, err = MC.API.Coords.MoveOriginWorldPos( ply, mv:GetOrigin() )
+	else
+		pos, err = MC.API.Coords.EntityWorldPos( ply )
+	end
+	if not pos then
+		MC.Fault( "liquid_move_world_position", "liquid body query: %s", tostring( err ) )
+		return nil
+	end
 	local mins = ply:OBBMins()
 	local maxs = ply:OBBMaxs()
 	local maxInset = max( 0, min( ( maxs.x - mins.x ) * 0.45, ( maxs.y - mins.y ) * 0.45 ) )
@@ -59,7 +72,8 @@ end
 function MC.PlayerLiquidContact( ply, mv )
 	if not IsValid( ply ) or not MC.GetBlockState then return nil end
 	local x0, y0, z0, x1, y1, z1 = playerMoveBounds( ply, mv )
-	local blockSize = MC.BS or 36.5
+	if x0 == nil then return nil end
+	local blockSize = MC.API.Coords.BlockSize()
 	local minBx, minBy, minBz = floor( x0 / blockSize ), floor( y0 / blockSize ), floor( z0 / blockSize )
 	local maxBx, maxBy, maxBz = floor( x1 / blockSize ), floor( y1 / blockSize ), floor( z1 / blockSize )
 	local bestWater, bestLava

@@ -56,7 +56,7 @@ local function tickFactor()
 end
 
 local function velocityScale()
-	return ( MC.BS or 36.5 ) * MC_TICKS_PER_SECOND
+	return MC.API.Coords.BlockSize() * MC_TICKS_PER_SECOND
 end
 
 local function toSourceVelocity( blocksPerTick )
@@ -162,7 +162,11 @@ end
 
 local function playJumpSwimSound( ply, move, contact )
 	if not SERVER or contact.kind ~= "water" or not move:KeyDown( IN_JUMP ) then return end
-	local origin = move:GetOrigin()
+	local origin, err = MC.API.Coords.MoveOriginWorldPos( ply, move:GetOrigin() )
+	if not origin then
+		MC.Fault( "liquid_waist_world_position", "liquid swim sound query: %s", tostring( err ) )
+		return
+	end
 	local mins, maxs = ply:OBBMins(), ply:OBBMaxs()
 	local waistZ = origin.z + ( mins.z + maxs.z ) * 0.5
 	local waistContact = MC.Liquid.PointContact( origin.x, origin.y, waistZ )
