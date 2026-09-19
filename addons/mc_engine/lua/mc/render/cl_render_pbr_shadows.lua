@@ -331,6 +331,27 @@ function S.Update( x, y, z, renderView )
 	return true
 end
 
+function S.VolumeEnabled()
+	return settings.enabled and settings.strength > 0 and B.SunEnabled()
+		and ( not MC.MeshRender or MC.MeshRender:GetBool() )
+end
+
+local volumeCamera = { enabled = false }
+-- Read the published atlas only. This consumer must not change update timing,
+-- render another map, or pair a pending projection with the current pixels.
+function S.VolumeSnapshot( x, y, z )
+	if not S.VolumeEnabled() or not S.valid or S.rendering or S.active ~= L.active
+		or S.publishedSettings ~= settingsRevision or S.publishedRevision ~= B.shadowRevision then return nil end
+	local active, current = L.active, S.current
+	if active.world ~= MC.World or active.worldGeneration ~= MC.StateWorldGeneration
+		or current.blockSize ~= MC.API.Coords.BlockSize() or MC.WorldFrameSettled and not MC.WorldFrameSettled() then return nil end
+	local fx, fy, fz = MC.ChunkRenderFrameOffset()
+	if current.frameX ~= fx or current.frameY ~= fy or current.frameZ ~= fz then return nil end
+	volumeCamera.x, volumeCamera.y, volumeCamera.z = x, y, z
+	if not M.CoversCamera( current.views[2], volumeCamera ) then return nil end
+	return current.target, matrix, settings.bias * current.blockSize / current.views[1].zfar, settings.strength
+end
+
 -- Draw preparation owns shadow updates. Remove the old early hook on Lua
 -- refresh too: nested views could overwrite its result before terrain draws.
 hook.Remove( "PreDrawOpaqueRenderables", "mc_l2_pbr_shadows" )
