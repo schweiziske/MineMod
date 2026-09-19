@@ -528,14 +528,16 @@ end
 
 local function bucketAim( ply, sourceOnly )
 	if not validLiquidPlayer( ply ) then return nil, "invalid_player" end
-	local eye = MC.EntityEyeWorldPos and MC.EntityEyeWorldPos( ply ) or ply:EyePos()
+	local eye, eyeError = API.Coords.EntityEyeWorldPos( ply )
+	if not eye then return nil, eyeError end
 	local direction = ply:EyeAngles():Forward()
 	if direction:LengthSqr() <= 0 then return nil, "invalid_ray" end
 	direction:Normalize()
-	local reach = MC.CurrentReach and MC.CurrentReach() or ( ( MC.BS or 36.5 ) * 5 )
+	local blockSize = API.Coords.BlockSize()
+	local reach = MC.CurrentReach and MC.CurrentReach() or ( blockSize * 5 )
 	local outlineHit = bucketOutlineHit( eye, direction, reach )
-	local worldObstruction = bucketWorldObstructionDistance( ply, eye, direction, reach )
-	local obstructionTolerance = math.max( ( MC.BS or 36.5 ) / 4096, 0.01 )
+	local worldObstruction = bucketWorldObstructionDistance( ply, ply:EyePos(), direction, reach )
+	local obstructionTolerance = math.max( blockSize / 4096, 0.01 )
 
 	if sourceOnly == true then
 		if not MC.LiquidStateMetrics or not MC.WorldToCell or not MC.GetBlockState
@@ -558,7 +560,6 @@ local function bucketAim( ply, sourceOnly )
 		-- shape. Sample the exact source-fluid height, while outlineHit blocks the
 		-- ray at ordinary MC geometry and the Source trace blocks it at map/prop
 		-- geometry. Flowing and pure-liquid block outlines are intentionally skipped.
-		local blockSize = MC.BS or 36.5
 		local step = math.max( blockSize / 128, 0.125 )
 		local lastKey, stateId, kind, source
 		for distance = 0, reach, step do
@@ -644,7 +645,7 @@ local function validatePlayerFluidPlacement( ply, bx, by, bz, addsBlock )
 
 	local config = MC.Config
 	local reach = config and config.Reach and config.Reach:GetFloat() or 0
-	if reach > 0 and not MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, reach ) then
+	if reach > 0 and not MC.ReachAllowsEye( API.Coords.EntityEyeWorldPos( ply ), bx, by, bz, reach ) then
 		return false, "out_of_reach"
 	end
 	if not sv.WorldBoundsOK( bx, by, bz ) then return false, "world_limit" end
