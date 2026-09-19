@@ -185,6 +185,7 @@ local CLIENT_FILES = {
 	"mc/render/cl_render_l2_resources.lua",
 	"mc/render/cl_render_shadow_math.lua",
 	"mc/render/cl_render_pbr.lua",
+	"mc/render/cl_render_pbr_water.lua",
 	"mc/render/cl_render_pack_resources.lua",
 	"mc/render/cl_render_pack_geometry.lua",
 	"mc/render/cl_render_pack_runtime.lua",

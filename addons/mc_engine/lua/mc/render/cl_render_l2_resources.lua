@@ -4,6 +4,36 @@ local R = MC.RenderL2Resources or { materials = {} }
 MC.RenderL2Resources = R
 local floor = math.floor
 local ATLAS_SIZE, LIGHTMAP_SIZE = 2048, 16
+local ATLAS_HEIGHT = 2560
+R.OCCLUSION_VERSION = 1
+local DEPTH_MATERIAL_VERSION = 2
+
+-- Lua refresh retains both the engine materials and live mesh references.
+-- Rebuild old snapshots once, outside drawing; changing CreateMaterial's
+-- parameters alone cannot update an already cached material.
+local function refreshMaterialDepth( owner )
+	if owner.depthMaterialVersion == DEPTH_MATERIAL_VERSION then return end
+	for _, material in pairs( owner.materials ) do
+		material:SetInt( "$depthtest", 1 )
+		material:SetInt( "$writedepth", 0 )
+		material:SetInt( "$ignorez", 0 )
+		material:Recompute()
+	end
+	owner.depthMaterialVersion = DEPTH_MATERIAL_VERSION
+end
+refreshMaterialDepth( R )
+if MC.RenderPackResources then refreshMaterialDepth( MC.RenderPackResources.shared ) end
+
+-- Four virtual corner rows occupy physical rows 0,1,3,4. Old point-sampling
+-- shaders still address their unchanged 2048-square virtual grid; row 2 holds
+-- one RGBA AO texel per quad. This keeps all 1,048,576 slots for 4 MiB extra.
+function R.CornerTexel( address )
+	return address % ATLAS_SIZE, floor( ( floor( address / ATLAS_SIZE ) + 0.5 ) * 1.25 )
+end
+
+function R.OcclusionTexel( quad )
+	return quad % ATLAS_SIZE, floor( quad / ATLAS_SIZE ) * 5 + 2
+end
 
 -- Internal helpers throw to the diagnostic owner, which reports after restoring
 -- its render state. MC.Fault can itself throw when mc_strict is enabled.
@@ -75,11 +105,11 @@ function R.Ensure( build, owner )
 	owner.build = build.build
 	local prefix = owner.prefix or "mc_l2_visual"
 	if not owner.atlas then
-		owner.atlas = GetRenderTargetEx( prefix .. "_quad1", ATLAS_SIZE, ATLAS_SIZE,
+		owner.atlas = GetRenderTargetEx( prefix .. "_quad_ao1", ATLAS_SIZE, ATLAS_HEIGHT,
 			RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE, bit.bor( 1, 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA8888 )
 	end
-	requireValue( owner.atlas and not owner.atlas:IsError() and owner.atlas:Width() == ATLAS_SIZE and owner.atlas:Height() == ATLAS_SIZE,
-		"l2_visual_atlas", "could not create the 2048x2048 point-filter corner atlas" )
+	requireValue( owner.atlas and not owner.atlas:IsError() and owner.atlas:Width() == ATLAS_SIZE and owner.atlas:Height() == ATLAS_HEIGHT,
+		"l2_visual_atlas", "2048x2560 point-filter corner/AO atlas required; restart clients retaining the old atlas" )
 	if not owner.lightmap then
 		-- No POINTSAMPLE bit: L2 performs its lightmap lookup at each quad corner.
 		owner.lightmap = GetRenderTargetEx( prefix .. "_lightmap1", LIGHTMAP_SIZE, LIGHTMAP_SIZE,
@@ -100,6 +130,7 @@ function R.Ensure( build, owner )
 end
 
 function R.BoundMaterial( owner, slot, source, stage, blockSize, program, colorSpace, pbrMaps )
+	refreshMaterialDepth( owner )
 	local material = owner.materials[slot]
 	if not material then
 		local params = {
@@ -107,7 +138,11 @@ function R.BoundMaterial( owner, slot, source, stage, blockSize, program, colorS
 			["$pixshader"] = program.pixel,
 			["$basetexture"] = source:GetName(),
 			["$texture1"] = owner.atlas:GetName(), ["$texture2"] = owner.lightmap:GetName(),
-			["$x360appchooser"] = 1, ["$vertexcolor"] = 1, ["$nocull"] = 0,
+			["$x360appchooser"] = 1, ["$vertexcolor"] = 1, ["$nocull"] = pbrMaps and pbrMaps.water and 1 or 0,
+			-- In screenspace_general, WRITEDEPTH=1 also selects DepthFunc(ALWAYS).
+			-- Keep the default comparison; solid draw passes enable writes with
+			-- render.OverrideDepthEnable(true, true). Water/glass only test depth.
+			["$depthtest"] = 1, ["$writedepth"] = 0, ["$ignorez"] = 0,
 			["$linearread_basetexture"] = colorSpace == "srgb" and 0 or 1, ["$linearread_texture1"] = 1,
 			["$linearread_texture2"] = 1, ["$linearwrite"] = 1,
 			["$c0_x"] = tostring( 1 / blockSize ), ["$c0_y"] = "0",
@@ -119,7 +154,8 @@ function R.BoundMaterial( owner, slot, source, stage, blockSize, program, colorS
 			params["$alphatest"], params["$alphatested"], params["$alphatestreference"] = 1, 1, "0.5"
 		end
 		if pbrMaps then MC.RenderPBR.Parameters( params, pbrMaps ) end
-		material = CreateMaterial( ( owner.prefix or "mc_l2_visual" ) .. "1_" .. slot, "screenspace_general_8tex", params )
+		material = CreateMaterial( ( owner.prefix or "mc_l2_visual" ) .. DEPTH_MATERIAL_VERSION .. "_" .. slot,
+			"screenspace_general_8tex", params )
 		owner.materials[slot] = material
 	end
 	requireValue( material and not material:IsError(), "l2_visual_material", "could not create candidate material " .. slot )
@@ -145,11 +181,11 @@ function R.Material( index, source, translucent, blockSize, build )
 	return R.BoundMaterial( R, pass .. index, source, "world_" .. pass, blockSize, build.programs[pass], "linear" )
 end
 
-local function drawPixelRuns( width, firstPixel, pixels, zeroAlpha )
+local function drawPixelRuns( width, firstPixel, pixels, zeroAlpha, rowScale, rowOffset )
 	local i, hasZeroAlpha = 1, false
 	while i <= #pixels do
 		local pixel, value = firstPixel + i - 1, pixels[i]
-		local x, y = pixel % width, floor( pixel / width )
+		local x, y = pixel % width, floor( floor( pixel / width ) * rowScale + rowOffset )
 		local length, limit = 1, math.min( #pixels - i + 1, width - x )
 		while length < limit and pixels[i + length] == value do length = length + 1 end
 		local alpha = floor( value / 16777216 )
@@ -164,7 +200,8 @@ local function drawPixelRuns( width, firstPixel, pixels, zeroAlpha )
 	return hasZeroAlpha
 end
 
-local function uploadPixels( texture, width, firstPixel, pixels )
+local function uploadPixels( texture, width, firstPixel, pixels, rowScale, rowOffset, firstOcclusion, occlusion )
+	rowScale, rowOffset = rowScale or 1, rowOffset or 0
 	local pushed, camera, blend, alpha, color, tone = false, false, false, false, false, false
 	local oldToneScale, oldClipping
 	local clipping = false
@@ -183,11 +220,15 @@ local function uploadPixels( texture, width, firstPixel, pixels )
 		render.OverrideBlend( true, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD ) blend = true
 		render.OverrideAlphaWriteEnable( true, true ) alpha = true
 		render.OverrideColorWriteEnable( true, true ) color = true
-		if drawPixelRuns( width, firstPixel, pixels, false ) then
+		local zeroPixels = drawPixelRuns( width, firstPixel, pixels, false, rowScale, rowOffset )
+		local zeroOcclusion = false
+		if occlusion then zeroOcclusion = drawPixelRuns( width, firstOcclusion, occlusion, false, 5, 2 ) end
+		if zeroPixels or zeroOcclusion then
 			-- Surface drops alpha-zero draws before blending. Non-overlapping
 			-- zero-alpha runs submit opaque RGB and store alpha via ZERO/ZERO.
 			render.OverrideBlend( true, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD, BLEND_ZERO, BLEND_ZERO, BLENDFUNC_ADD )
-			drawPixelRuns( width, firstPixel, pixels, true )
+			if zeroPixels then drawPixelRuns( width, firstPixel, pixels, true, rowScale, rowOffset ) end
+			if zeroOcclusion then drawPixelRuns( width, firstOcclusion, occlusion, true, 5, 2 ) end
 		end
 	end )
 	local errors = {}
@@ -211,9 +252,10 @@ function R.UploadPart( part, owner )
 	owner = owner or R
 	requireValue( part.quadCount > 0 and part.quadCount <= math.floor( MC.RenderMeshConstants.VERT_LIMIT / 6 )
 		and #part.pixels == part.quadCount * 4
+		and part.occlusion and #part.occlusion == part.quadCount
 		and part.firstQuad >= 0 and part.firstQuad + part.quadCount <= ( owner.capacity or 8192 ),
 		"l2_visual_atlas_range", "candidate atlas upload exceeds its bounded quad range" )
-	uploadPixels( owner.atlas, ATLAS_SIZE, part.firstQuad * 4, part.pixels )
+	uploadPixels( owner.atlas, ATLAS_SIZE, part.firstQuad * 4, part.pixels, 1.25, 0.625, part.firstQuad, part.occlusion )
 end
 
 function R.RefreshLightmap( owner )

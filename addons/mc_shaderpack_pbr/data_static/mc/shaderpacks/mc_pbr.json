@@ -5,34 +5,46 @@
   "definition": {
     "schema": 1,
     "name": "PBR",
-    "build": "7ff4bd067e467cbe2551e2162b092add5964fb1a30b358af180d68616b591fb4",
+    "build": "beb7e0278127281d34304880bae6349ab99112db251c348b768d9646e4da0a95",
     "abi": 1,
     "layout": "mc:quad_corners_v1",
-    "adapter": "mc:pbr_quad_v2",
+    "adapter": "mc:pbr_quad_v3",
     "programs": {
       "opaque": {
-        "vertex": "mc_pbr_vertex_7ff4bd067e467cbe2551_vs30",
+        "vertex": "mc_pbr_vertex_beb7e0278127281d3430_vs30",
         "vertexHash": "fd6073d634dc1b2bf640b894c72dd03fdc06cd7973f477710ed522af7eb24dc8",
-        "pixel": "mc_pbr_opaque_7ff4bd067e467cbe2551_ps30",
-        "pixelHash": "bebe73609c17444200a24286fb30668cc87d17ab14763b6d6e3013da5184a2d8"
+        "pixel": "mc_pbr_opaque_beb7e0278127281d3430_ps30",
+        "pixelHash": "f07a31daacbc1a4e530d2eb34b5e987c36026c0e713ad5af7a21433682946440"
       },
       "cutout": {
-        "vertex": "mc_pbr_vertex_7ff4bd067e467cbe2551_vs30",
+        "vertex": "mc_pbr_vertex_beb7e0278127281d3430_vs30",
         "vertexHash": "fd6073d634dc1b2bf640b894c72dd03fdc06cd7973f477710ed522af7eb24dc8",
-        "pixel": "mc_pbr_cutout_7ff4bd067e467cbe2551_ps30",
-        "pixelHash": "d65130f11b7cffd27780b39b4022cc56fb09e3e87f2d63d717406d9e3c12825d"
+        "pixel": "mc_pbr_cutout_beb7e0278127281d3430_ps30",
+        "pixelHash": "3586ef8ff12e01a1397e90e39e857d2922d44907f8700694c8dc2a8d03f1b300"
       },
       "translucent": {
-        "vertex": "mc_pbr_vertex_7ff4bd067e467cbe2551_vs30",
+        "vertex": "mc_pbr_vertex_beb7e0278127281d3430_vs30",
         "vertexHash": "fd6073d634dc1b2bf640b894c72dd03fdc06cd7973f477710ed522af7eb24dc8",
-        "pixel": "mc_pbr_translucent_7ff4bd067e467cbe2551_ps30",
-        "pixelHash": "f736a06b6344f5fbe9b1db4a12d986211b3525fbabcaa91fe52bffb56f639007"
+        "pixel": "mc_pbr_translucent_beb7e0278127281d3430_ps30",
+        "pixelHash": "70ba23dd432bdb3640bd13b7e5a916cf0feb04c9fbec55c1c83549b7c8458592"
       },
       "shadow": {
-        "vertex": "mc_pbr_shadow_vertex_7ff4bd067e467cbe2551_vs30",
+        "vertex": "mc_pbr_shadow_vertex_beb7e0278127281d3430_vs30",
         "vertexHash": "b4213d8480f01332a0640a3cda61c618460ac8e933b5de17d3bd8b924a298671",
-        "pixel": "mc_pbr_shadow_7ff4bd067e467cbe2551_ps30",
-        "pixelHash": "b526d0a1af5b898360aac237e5690087bd5d8e9807eba73127b843b5aa279f2c"
+        "pixel": "mc_pbr_shadow_beb7e0278127281d3430_ps30",
+        "pixelHash": "b569297ff660064ddcb887975d6e4dd30c245ecaa4cb98a46c66900d5ec9e115"
+      },
+      "block_entity": {
+        "vertex": "mc_pbr_block_entity_vertex_beb7e0278127281d3430_vs30",
+        "vertexHash": "78f7f06eaf763844a2342757ef22358434c5bdaf722316bdf9b8560aefaeef2b",
+        "pixel": "mc_pbr_block_entity_beb7e0278127281d3430_ps30",
+        "pixelHash": "66eb8b52a08f361e6feba22e2f8f5608132ecd27246e688af792a16d8838cd98"
+      },
+      "water": {
+        "vertex": "mc_pbr_water_vertex_beb7e0278127281d3430_vs30",
+        "vertexHash": "5e0520af546f60c5c27dde2185d99cb2ada37ddd2c2c8682eb4e38dd3aab0ff5",
+        "pixel": "mc_pbr_water_beb7e0278127281d3430_ps30",
+        "pixelHash": "dc3a8a306dcffdefcc375cb5a574be32ac51cad51bde66fb8e83c0fa1c99515c"
       }
     },
     "resources": {
@@ -42,8 +54,8 @@
         "colorSpace": "linear"
       },
       "orm": {
-        "path": "materials/mc_pbr/orm_5ab68064ea7b19faf44e.png",
-        "sha256": "5ab68064ea7b19faf44eff071d420d97f5e5bb3668221aa333e664a2b9cd26dc",
+        "path": "materials/mc_pbr/orm_88c53262e3c059085409.png",
+        "sha256": "88c53262e3c059085409a5091ae8c476353a2e82a53c2488a6b245e64df5a23b",
         "colorSpace": "linear"
       },
       "environment": {
@@ -56,19 +68,324 @@
         "sha256": "f8e09f2c178d779918e6e00c16ce9832acb6be33556c6091ca7ae699e2b12af0",
         "colorSpace": "linear"
       },
+      "water_normal": {
+        "path": "materials/mc_pbr/water_normal_repeat_28f9cb0c42f8af928b95.png",
+        "sha256": "28f9cb0c42f8af928b95d0adb2932d74e18c4ba58c81dbb9a1b8e278baf891f3",
+        "colorSpace": "linear"
+      },
+      "chest_christmas_albedo": {
+        "path": "materials/mc/entity/chest/christmas.png",
+        "sha256": "7afebf0264038ec11a6bc5dd5a07c297027e7128045097775cd8c8c6752bce57",
+        "colorSpace": "srgb"
+      },
+      "chest_christmas_normal": {
+        "path": "materials/mc_pbr/chest_christmas_normal_c980fc76caff80673879.png",
+        "sha256": "c980fc76caff806738790827d2fe8b9459bbfd95f897d5ff8c8b120a283e7cf0",
+        "colorSpace": "linear"
+      },
+      "chest_christmas_orm": {
+        "path": "materials/mc_pbr/chest_christmas_orm_e8bd22e9b2773baa8e83.png",
+        "sha256": "e8bd22e9b2773baa8e83d0d34ef2dd20496d6688e3bb24a87bb393442e77c5f6",
+        "colorSpace": "linear"
+      },
+      "chest_copper_albedo": {
+        "path": "materials/mc/entity/chest/copper.png",
+        "sha256": "132e05cf098c4455d2ae1aef703afe643147b058fc05074e5043bb9d61d5b3b9",
+        "colorSpace": "srgb"
+      },
+      "chest_copper_normal": {
+        "path": "materials/mc_pbr/chest_copper_normal_baa5d06bbd93cbd2d457.png",
+        "sha256": "baa5d06bbd93cbd2d457ee5cee6b12587ff23d382604594a724541f7c6aa1188",
+        "colorSpace": "linear"
+      },
+      "chest_copper_orm": {
+        "path": "materials/mc_pbr/chest_copper_orm_555e22a35ba0f8fd3da5.png",
+        "sha256": "555e22a35ba0f8fd3da56cd2e3adc4c0a6d96ace16c850eb9d4771c666052a70",
+        "colorSpace": "linear"
+      },
+      "chest_copper_exposed_albedo": {
+        "path": "materials/mc/entity/chest/copper_exposed.png",
+        "sha256": "34c01be2c0275e4bbc53498eff6f7715f15c35a6467778c001f898587b31d7ff",
+        "colorSpace": "srgb"
+      },
+      "chest_copper_exposed_normal": {
+        "path": "materials/mc_pbr/chest_copper_exposed_normal_1161a0c5ebd97e81f34a.png",
+        "sha256": "1161a0c5ebd97e81f34a5820863dae5ae3793662d9761936c84dd9f0e05dbd5b",
+        "colorSpace": "linear"
+      },
+      "chest_copper_exposed_orm": {
+        "path": "materials/mc_pbr/chest_copper_exposed_orm_e2db02340959ba852600.png",
+        "sha256": "e2db02340959ba85260065944123f6334b40c66a8fb9a5e79fd59f8523c9f622",
+        "colorSpace": "linear"
+      },
+      "chest_copper_exposed_left_albedo": {
+        "path": "materials/mc/entity/chest/copper_exposed_left.png",
+        "sha256": "b06085c3794e06baefd5cad7c1d1eb6e0862b2f328923694d8ed1a0dd2398fd0",
+        "colorSpace": "srgb"
+      },
+      "chest_copper_exposed_left_normal": {
+        "path": "materials/mc_pbr/chest_copper_exposed_left_normal_7d6725bf3f924f45864c.png",
+        "sha256": "7d6725bf3f924f45864c0d9eb0866c50f4d55c85b924f0c9398deda8f971c680",
+        "colorSpace": "linear"
+      },
+      "chest_copper_exposed_left_orm": {
+        "path": "materials/mc_pbr/chest_copper_exposed_left_orm_f31fe4af1bab7117a6a2.png",
+        "sha256": "f31fe4af1bab7117a6a2b32ee535058ccde807817cecebe6c96b95c8ce5f9a35",
+        "colorSpace": "linear"
+      },
+      "chest_copper_exposed_right_albedo": {
+        "path": "materials/mc/entity/chest/copper_exposed_right.png",
+        "sha256": "a2c28f94f787106c21a52f71c1b0fd43fc7cf6cc75a42e630a17ba9bee42050b",
+        "colorSpace": "srgb"
+      },
+      "chest_copper_exposed_right_normal": {
+        "path": "materials/mc_pbr/chest_copper_exposed_right_normal_8d8574a089a42bbaa0b1.png",
+        "sha256": "8d8574a089a42bbaa0b1d941321b631895fb72038acd8c061ad8040cdd80d8f0",
+        "colorSpace": "linear"
+      },
+      "chest_copper_exposed_right_orm": {
+        "path": "materials/mc_pbr/chest_copper_exposed_right_orm_4f3f2845c9aa15136ec8.png",
+        "sha256": "4f3f2845c9aa15136ec85495b0b0ecd5fa48704b17b9a7ceb0cb80b710a4e394",
+        "colorSpace": "linear"
+      },
+      "chest_copper_left_albedo": {
+        "path": "materials/mc/entity/chest/copper_left.png",
+        "sha256": "d26aafa60575165609a40508281e59d4e24ae97d14b8e16af3ce024bf7903f19",
+        "colorSpace": "srgb"
+      },
+      "chest_copper_left_normal": {
+        "path": "materials/mc_pbr/chest_copper_left_normal_c9e830756e21d5a8cdf3.png",
+        "sha256": "c9e830756e21d5a8cdf360565190bb54f7ed2fa121789d5661c03ce406a0a7cc",
+        "colorSpace": "linear"
+      },
+      "chest_copper_left_orm": {
+        "path": "materials/mc_pbr/chest_copper_left_orm_e2d1b60e28b0d24c73cf.png",
+        "sha256": "e2d1b60e28b0d24c73cf48301b40d69755250335bc68989bb09e0b3cc3968ef4",
+        "colorSpace": "linear"
+      },
+      "chest_copper_oxidized_albedo": {
+        "path": "materials/mc/entity/chest/copper_oxidized.png",
+        "sha256": "9e4e3456fb2ffc2ddc58760d56669150340c656e96cffa2452e6b2b795ec86b1",
+        "colorSpace": "srgb"
+      },
+      "chest_copper_oxidized_normal": {
+        "path": "materials/mc_pbr/chest_copper_oxidized_normal_c8bc453d52d3c4cbb79f.png",
+        "sha256": "c8bc453d52d3c4cbb79f2522af280cd3a943ac86a142e41686abe753970caf5f",
+        "colorSpace": "linear"
+      },
+      "chest_copper_oxidized_orm": {
+        "path": "materials/mc_pbr/chest_copper_oxidized_orm_a3af5897ca79bbbd3d70.png",
+        "sha256": "a3af5897ca79bbbd3d700f179c3e87b9245efd88cd33b0407eff5e291e362e71",
+        "colorSpace": "linear"
+      },
+      "chest_copper_oxidized_left_albedo": {
+        "path": "materials/mc/entity/chest/copper_oxidized_left.png",
+        "sha256": "e4cc19105f09774ffdaaf13f348762856be411b90f22f3284c865bdb24703ea2",
+        "colorSpace": "srgb"
+      },
+      "chest_copper_oxidized_left_normal": {
+        "path": "materials/mc_pbr/chest_copper_oxidized_left_normal_04b8b7eaa7121aef8f7c.png",
+        "sha256": "04b8b7eaa7121aef8f7c3aa1111153325f25b41078f9acdb2d7c895d9186ecde",
+        "colorSpace": "linear"
+      },
+      "chest_copper_oxidized_left_orm": {
+        "path": "materials/mc_pbr/chest_copper_oxidized_left_orm_4afbfdf4e063abe8874f.png",
+        "sha256": "4afbfdf4e063abe8874fe164c5929cf3215b772e5816c0bd74b783691d00b5dc",
+        "colorSpace": "linear"
+      },
+      "chest_copper_oxidized_right_albedo": {
+        "path": "materials/mc/entity/chest/copper_oxidized_right.png",
+        "sha256": "d92adbbfa3b266c6604e1d8cd141bbfef17a935e205f747f308eb5a113d53c0e",
+        "colorSpace": "srgb"
+      },
+      "chest_copper_oxidized_right_normal": {
+        "path": "materials/mc_pbr/chest_copper_oxidized_right_normal_2466b7ad2d4954802b48.png",
+        "sha256": "2466b7ad2d4954802b4804fd02da115f222e1c22300b6d41a0a6b2e8b55a7a53",
+        "colorSpace": "linear"
+      },
+      "chest_copper_oxidized_right_orm": {
+        "path": "materials/mc_pbr/chest_copper_oxidized_right_orm_542c00e143da854a2da1.png",
+        "sha256": "542c00e143da854a2da1a721a38f0eb231ea7583a088228781a7ac02b52d5e2b",
+        "colorSpace": "linear"
+      },
+      "chest_copper_right_albedo": {
+        "path": "materials/mc/entity/chest/copper_right.png",
+        "sha256": "5b465ea051836865fa12d53e436bc550895499014fad748ac8fc228220c95647",
+        "colorSpace": "srgb"
+      },
+      "chest_copper_right_normal": {
+        "path": "materials/mc_pbr/chest_copper_right_normal_16000cbdf9033847e7ce.png",
+        "sha256": "16000cbdf9033847e7ce054fc1384be76fc97079297ae5e257e0ba04551080d5",
+        "colorSpace": "linear"
+      },
+      "chest_copper_right_orm": {
+        "path": "materials/mc_pbr/chest_copper_right_orm_6bd94439ee506353f3e2.png",
+        "sha256": "6bd94439ee506353f3e2792492e6cfa8eed30e8978a2ce7a7a4cfb188abfce3a",
+        "colorSpace": "linear"
+      },
+      "chest_copper_weathered_albedo": {
+        "path": "materials/mc/entity/chest/copper_weathered.png",
+        "sha256": "f2b176b98fd683c66678a2afe86962dcdcd5af0a71878fde3af7ed8ca89dd8fa",
+        "colorSpace": "srgb"
+      },
+      "chest_copper_weathered_normal": {
+        "path": "materials/mc_pbr/chest_copper_weathered_normal_d3983d807f0e2da7a70f.png",
+        "sha256": "d3983d807f0e2da7a70f465164bb50dc8f1377044c86ebbf64efb6f6520a7b66",
+        "colorSpace": "linear"
+      },
+      "chest_copper_weathered_orm": {
+        "path": "materials/mc_pbr/chest_copper_weathered_orm_4fee911aa02c0f8b4227.png",
+        "sha256": "4fee911aa02c0f8b4227cd1f470f46e179d899a5b8c6245d57e661718c993eea",
+        "colorSpace": "linear"
+      },
+      "chest_copper_weathered_left_albedo": {
+        "path": "materials/mc/entity/chest/copper_weathered_left.png",
+        "sha256": "2ed23a6d56c3dfa0cd5af6368d340adcbcaa43c952fb442bf5bd43a4cfe3f12e",
+        "colorSpace": "srgb"
+      },
+      "chest_copper_weathered_left_normal": {
+        "path": "materials/mc_pbr/chest_copper_weathered_left_normal_d5e0c5c48421ccd6b76b.png",
+        "sha256": "d5e0c5c48421ccd6b76b49e5860d3f3615213c26fae0790b0e48bc247bb539ac",
+        "colorSpace": "linear"
+      },
+      "chest_copper_weathered_left_orm": {
+        "path": "materials/mc_pbr/chest_copper_weathered_left_orm_5c9045781ae40234d239.png",
+        "sha256": "5c9045781ae40234d2396c5830f18d2ee46ce9e3adb5e24294dacf1876d535c0",
+        "colorSpace": "linear"
+      },
+      "chest_copper_weathered_right_albedo": {
+        "path": "materials/mc/entity/chest/copper_weathered_right.png",
+        "sha256": "01066c76bcd3ef5d89b13db5c58a0caa3b78672515332c81612e48f56326d691",
+        "colorSpace": "srgb"
+      },
+      "chest_copper_weathered_right_normal": {
+        "path": "materials/mc_pbr/chest_copper_weathered_right_normal_ddfb3701a312c0b846fb.png",
+        "sha256": "ddfb3701a312c0b846fbe89ce539a6416eb780cfc69aa57a78a1e2ca72e395ce",
+        "colorSpace": "linear"
+      },
+      "chest_copper_weathered_right_orm": {
+        "path": "materials/mc_pbr/chest_copper_weathered_right_orm_bf008a6e763341512858.png",
+        "sha256": "bf008a6e76334151285897f3f33c4f25c23415bb9809444979aaf5ed0d37ea71",
+        "colorSpace": "linear"
+      },
+      "chest_ender_albedo": {
+        "path": "materials/mc/entity/chest/ender.png",
+        "sha256": "cfe7d0e271d1c728a7e4ab75f85a8c3b9cb8b2fc8cb61f08693d940f6f14b01c",
+        "colorSpace": "srgb"
+      },
+      "chest_ender_normal": {
+        "path": "materials/mc_pbr/chest_ender_normal_d06739533593bb7b93e7.png",
+        "sha256": "d06739533593bb7b93e7ff153a9999d1f864ead3431e33437352f9269cc3e51c",
+        "colorSpace": "linear"
+      },
+      "chest_ender_orm": {
+        "path": "materials/mc_pbr/chest_ender_orm_e735f45ed76de29881a5.png",
+        "sha256": "e735f45ed76de29881a55516436c15e99496458a53bde527b485b6838a650d9f",
+        "colorSpace": "linear"
+      },
+      "chest_normal_albedo": {
+        "path": "materials/mc/entity/chest/normal.png",
+        "sha256": "ab478534503430192b224ea4d5e1e87b6820198925bb7a7b4bd32f2a8a55c801",
+        "colorSpace": "srgb"
+      },
+      "chest_normal_normal": {
+        "path": "materials/mc_pbr/chest_normal_normal_84777583fdaf3d296345.png",
+        "sha256": "84777583fdaf3d2963456fa8ded84ca91387ae3c89dd97f46ee96561b0ae9bfe",
+        "colorSpace": "linear"
+      },
+      "chest_normal_orm": {
+        "path": "materials/mc_pbr/chest_normal_orm_f48ded46c1ec347ab5b9.png",
+        "sha256": "f48ded46c1ec347ab5b96fb82285db06df9e7c76948a9dbddfe6952ab026c9c1",
+        "colorSpace": "linear"
+      },
+      "chest_normal_left_albedo": {
+        "path": "materials/mc/entity/chest/normal_left.png",
+        "sha256": "960e43983efb31c1722c721f345705fe7e7c399ca4947567a98d499cab4ade55",
+        "colorSpace": "srgb"
+      },
+      "chest_normal_left_normal": {
+        "path": "materials/mc_pbr/chest_normal_left_normal_c7ba2f2e880a9d2373e5.png",
+        "sha256": "c7ba2f2e880a9d2373e5be7c6b703aa7883086caadab5edba67bbbd15106f5dd",
+        "colorSpace": "linear"
+      },
+      "chest_normal_left_orm": {
+        "path": "materials/mc_pbr/chest_normal_left_orm_c40ec0e4667b19d63b2e.png",
+        "sha256": "c40ec0e4667b19d63b2e9bc40cb535aa8929e2a2e5b223b68028bc8601e31cdb",
+        "colorSpace": "linear"
+      },
+      "chest_normal_right_albedo": {
+        "path": "materials/mc/entity/chest/normal_right.png",
+        "sha256": "d544bd2261941059eaabd9b002b5b6ca3208f78d75c40084ff5a4a7c673b8348",
+        "colorSpace": "srgb"
+      },
+      "chest_normal_right_normal": {
+        "path": "materials/mc_pbr/chest_normal_right_normal_d0e0d9eb83e3b39a53ec.png",
+        "sha256": "d0e0d9eb83e3b39a53ec9d5182d4ef8b7a53d3c2a2f9d0d3aaa18360749e05a9",
+        "colorSpace": "linear"
+      },
+      "chest_normal_right_orm": {
+        "path": "materials/mc_pbr/chest_normal_right_orm_4fd59d86f2dc5abb6b75.png",
+        "sha256": "4fd59d86f2dc5abb6b751f1079b4cedb6579e745cf71f7de162b392030e6c103",
+        "colorSpace": "linear"
+      },
+      "chest_trapped_albedo": {
+        "path": "materials/mc/entity/chest/trapped.png",
+        "sha256": "795716c8c9ce5a06c10776ec20ed20642282376ebecc39699a5b5ff409b2dc64",
+        "colorSpace": "srgb"
+      },
+      "chest_trapped_normal": {
+        "path": "materials/mc_pbr/chest_trapped_normal_6c9fa0ab3e7f37ea3d65.png",
+        "sha256": "6c9fa0ab3e7f37ea3d65f69c54f329035bfdb8c8a303b4bad69aa437d9ca4124",
+        "colorSpace": "linear"
+      },
+      "chest_trapped_orm": {
+        "path": "materials/mc_pbr/chest_trapped_orm_e5e0e06643932dc2344f.png",
+        "sha256": "e5e0e06643932dc2344fbcfd222ab9ab38c4a45ec1093725cca90ff2886a5f1a",
+        "colorSpace": "linear"
+      },
+      "chest_trapped_left_albedo": {
+        "path": "materials/mc/entity/chest/trapped_left.png",
+        "sha256": "a0608c4a780bda5fe64494dc2524a9f87b4dbae22769af38bf778de7bcc59ddc",
+        "colorSpace": "srgb"
+      },
+      "chest_trapped_left_normal": {
+        "path": "materials/mc_pbr/chest_trapped_left_normal_1735f8302f8135967e0d.png",
+        "sha256": "1735f8302f8135967e0d3d2fb8866cd2427b3a4bff5d94ef202fdc814c79b634",
+        "colorSpace": "linear"
+      },
+      "chest_trapped_left_orm": {
+        "path": "materials/mc_pbr/chest_trapped_left_orm_d4cd9565c95327a75076.png",
+        "sha256": "d4cd9565c95327a75076cf6d96c8932645eee51cf65caa5358d821c352ef6b1c",
+        "colorSpace": "linear"
+      },
+      "chest_trapped_right_albedo": {
+        "path": "materials/mc/entity/chest/trapped_right.png",
+        "sha256": "d1063a46cb97cb267a9fbf4090916fce4ac1e9de169c553bbb39146872eb32e0",
+        "colorSpace": "srgb"
+      },
+      "chest_trapped_right_normal": {
+        "path": "materials/mc_pbr/chest_trapped_right_normal_54cc6c9f059936b5a5a2.png",
+        "sha256": "54cc6c9f059936b5a5a24876c99f29a29f5a10535a037d9f5bd7e90e0ce97149",
+        "colorSpace": "linear"
+      },
+      "chest_trapped_right_orm": {
+        "path": "materials/mc_pbr/chest_trapped_right_orm_7a7a25ddafe4f653f6b1.png",
+        "sha256": "7a7a25ddafe4f653f6b15ef6a7dff21f3c1c361d72a3d438456faa041ecc6543",
+        "colorSpace": "linear"
+      },
       "default_albedo": {
         "path": "materials/mc/atlas_365.png",
         "sha256": "46e8f0313353be4e6fb25aebab453cbde8ff74c53ecdc74f3290f0606c1cf84d",
         "colorSpace": "srgb"
       },
       "default_normal": {
-        "path": "materials/mc_pbr/default_normal_bb463edd5adce354d49c.png",
-        "sha256": "bb463edd5adce354d49ce181e3135398f41632cc88fbc572732ce9cee6290a8d",
+        "path": "materials/mc_pbr/default_normal_1db1cc83f6febfca9115.png",
+        "sha256": "1db1cc83f6febfca911512e2acd3256849ebcfb7a4599c586a46c2d0fa9fb6c4",
         "colorSpace": "linear"
       },
       "default_orm": {
-        "path": "materials/mc_pbr/default_orm_b5afd9ad34598a524e87.png",
-        "sha256": "b5afd9ad34598a524e874c96290777c430fe30c7a3d179238d91262e95485710",
+        "path": "materials/mc_pbr/default_orm_e0f2c9907d8312619db4.png",
+        "sha256": "e0f2c9907d8312619db4621968a8c3fafe71aae4df6364db66c79446a41b184d",
         "colorSpace": "linear"
       },
       "default_translucent_albedo": {
@@ -77,13 +394,13 @@
         "colorSpace": "srgb"
       },
       "default_translucent_normal": {
-        "path": "materials/mc_pbr/default_normal_bb463edd5adce354d49c.png",
-        "sha256": "bb463edd5adce354d49ce181e3135398f41632cc88fbc572732ce9cee6290a8d",
+        "path": "materials/mc_pbr/default_normal_1db1cc83f6febfca9115.png",
+        "sha256": "1db1cc83f6febfca911512e2acd3256849ebcfb7a4599c586a46c2d0fa9fb6c4",
         "colorSpace": "linear"
       },
       "default_translucent_orm": {
-        "path": "materials/mc_pbr/default_orm_b5afd9ad34598a524e87.png",
-        "sha256": "b5afd9ad34598a524e874c96290777c430fe30c7a3d179238d91262e95485710",
+        "path": "materials/mc_pbr/default_orm_e0f2c9907d8312619db4.png",
+        "sha256": "e0f2c9907d8312619db4621968a8c3fafe71aae4df6364db66c79446a41b184d",
         "colorSpace": "linear"
       },
       "programmer_art_albedo": {
@@ -92,13 +409,13 @@
         "colorSpace": "srgb"
       },
       "programmer_art_normal": {
-        "path": "materials/mc_pbr/programmer_art_normal_4d61b4889871720411e0.png",
-        "sha256": "4d61b4889871720411e0012d6f9b19f2b83d2ef2a91e0bf8c31a2d358ed06000",
+        "path": "materials/mc_pbr/programmer_art_normal_ee898d9d55b39edf0407.png",
+        "sha256": "ee898d9d55b39edf0407cb179999ef3b290f33dccd5dc5e90e04bae1951bacc3",
         "colorSpace": "linear"
       },
       "programmer_art_orm": {
-        "path": "materials/mc_pbr/programmer_art_orm_605e5dd0be3e6ccf7580.png",
-        "sha256": "605e5dd0be3e6ccf7580e841b8a2219169abd222c415e89448f086d8e5795beb",
+        "path": "materials/mc_pbr/programmer_art_orm_e4d9916858f57fd0435b.png",
+        "sha256": "e4d9916858f57fd0435bf1df824c1ee6e788184f8292df3e9f75110dff11799e",
         "colorSpace": "linear"
       },
       "programmer_art_translucent_albedo": {
@@ -107,13 +424,13 @@
         "colorSpace": "srgb"
       },
       "programmer_art_translucent_normal": {
-        "path": "materials/mc_pbr/programmer_art_normal_4d61b4889871720411e0.png",
-        "sha256": "4d61b4889871720411e0012d6f9b19f2b83d2ef2a91e0bf8c31a2d358ed06000",
+        "path": "materials/mc_pbr/programmer_art_normal_ee898d9d55b39edf0407.png",
+        "sha256": "ee898d9d55b39edf0407cb179999ef3b290f33dccd5dc5e90e04bae1951bacc3",
         "colorSpace": "linear"
       },
       "programmer_art_translucent_orm": {
-        "path": "materials/mc_pbr/programmer_art_orm_605e5dd0be3e6ccf7580.png",
-        "sha256": "605e5dd0be3e6ccf7580e841b8a2219169abd222c415e89448f086d8e5795beb",
+        "path": "materials/mc_pbr/programmer_art_orm_e4d9916858f57fd0435b.png",
+        "sha256": "e4d9916858f57fd0435bf1df824c1ee6e788184f8292df3e9f75110dff11799e",
         "colorSpace": "linear"
       }
     },
@@ -150,6 +467,106 @@
       }
     },
     "materialMaps": {
+      "chest_christmas": {
+        "albedo": "chest_christmas_albedo",
+        "normal": "chest_christmas_normal",
+        "orm": "chest_christmas_orm"
+      },
+      "chest_copper": {
+        "albedo": "chest_copper_albedo",
+        "normal": "chest_copper_normal",
+        "orm": "chest_copper_orm"
+      },
+      "chest_copper_exposed": {
+        "albedo": "chest_copper_exposed_albedo",
+        "normal": "chest_copper_exposed_normal",
+        "orm": "chest_copper_exposed_orm"
+      },
+      "chest_copper_exposed_left": {
+        "albedo": "chest_copper_exposed_left_albedo",
+        "normal": "chest_copper_exposed_left_normal",
+        "orm": "chest_copper_exposed_left_orm"
+      },
+      "chest_copper_exposed_right": {
+        "albedo": "chest_copper_exposed_right_albedo",
+        "normal": "chest_copper_exposed_right_normal",
+        "orm": "chest_copper_exposed_right_orm"
+      },
+      "chest_copper_left": {
+        "albedo": "chest_copper_left_albedo",
+        "normal": "chest_copper_left_normal",
+        "orm": "chest_copper_left_orm"
+      },
+      "chest_copper_oxidized": {
+        "albedo": "chest_copper_oxidized_albedo",
+        "normal": "chest_copper_oxidized_normal",
+        "orm": "chest_copper_oxidized_orm"
+      },
+      "chest_copper_oxidized_left": {
+        "albedo": "chest_copper_oxidized_left_albedo",
+        "normal": "chest_copper_oxidized_left_normal",
+        "orm": "chest_copper_oxidized_left_orm"
+      },
+      "chest_copper_oxidized_right": {
+        "albedo": "chest_copper_oxidized_right_albedo",
+        "normal": "chest_copper_oxidized_right_normal",
+        "orm": "chest_copper_oxidized_right_orm"
+      },
+      "chest_copper_right": {
+        "albedo": "chest_copper_right_albedo",
+        "normal": "chest_copper_right_normal",
+        "orm": "chest_copper_right_orm"
+      },
+      "chest_copper_weathered": {
+        "albedo": "chest_copper_weathered_albedo",
+        "normal": "chest_copper_weathered_normal",
+        "orm": "chest_copper_weathered_orm"
+      },
+      "chest_copper_weathered_left": {
+        "albedo": "chest_copper_weathered_left_albedo",
+        "normal": "chest_copper_weathered_left_normal",
+        "orm": "chest_copper_weathered_left_orm"
+      },
+      "chest_copper_weathered_right": {
+        "albedo": "chest_copper_weathered_right_albedo",
+        "normal": "chest_copper_weathered_right_normal",
+        "orm": "chest_copper_weathered_right_orm"
+      },
+      "chest_ender": {
+        "albedo": "chest_ender_albedo",
+        "normal": "chest_ender_normal",
+        "orm": "chest_ender_orm"
+      },
+      "chest_normal": {
+        "albedo": "chest_normal_albedo",
+        "normal": "chest_normal_normal",
+        "orm": "chest_normal_orm"
+      },
+      "chest_normal_left": {
+        "albedo": "chest_normal_left_albedo",
+        "normal": "chest_normal_left_normal",
+        "orm": "chest_normal_left_orm"
+      },
+      "chest_normal_right": {
+        "albedo": "chest_normal_right_albedo",
+        "normal": "chest_normal_right_normal",
+        "orm": "chest_normal_right_orm"
+      },
+      "chest_trapped": {
+        "albedo": "chest_trapped_albedo",
+        "normal": "chest_trapped_normal",
+        "orm": "chest_trapped_orm"
+      },
+      "chest_trapped_left": {
+        "albedo": "chest_trapped_left_albedo",
+        "normal": "chest_trapped_left_normal",
+        "orm": "chest_trapped_left_orm"
+      },
+      "chest_trapped_right": {
+        "albedo": "chest_trapped_right_albedo",
+        "normal": "chest_trapped_right_normal",
+        "orm": "chest_trapped_right_orm"
+      },
       "default": {
         "albedo": "default_albedo",
         "normal": "default_normal",

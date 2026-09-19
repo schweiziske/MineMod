@@ -1954,10 +1954,16 @@ end
 MC.StreamHiddenChunkKeys = MC.StreamHiddenChunkKeys or {}
 MC.StreamDetachTokens = MC.StreamDetachTokens or {}
 
+local function streamVisibilityChanged( key )
+	MC.StreamVisibilityVersion = ( MC.StreamVisibilityVersion or 0 ) + 1
+	local shadows = MC.RenderPBRShadows
+	if shadows and shadows.VisibilityChanged then shadows.VisibilityChanged( key, MC.StreamVisibilityVersion ) end
+end
+
 function MC.SetStreamChunkHidden( key, hidden )
 	if not key then return end
 	if ( MC.StreamHiddenChunkKeys[key] == true ) ~= ( hidden == true ) then
-		MC.StreamVisibilityVersion = ( MC.StreamVisibilityVersion or 0 ) + 1
+		streamVisibilityChanged( key )
 	end
 	if hidden and MC.RenderOcclusion then MC.RenderOcclusion.Forget( key ) end
 	MC.StreamHiddenChunkKeys[key] = hidden and true or nil
@@ -2068,6 +2074,7 @@ function MC.ResetStreamCleanupState()
 	if backend and backend.SetChunkVisible then
 		for key in pairs( MC.StreamHiddenChunkKeys or {} ) do backend.SetChunkVisible( key, true ) end
 	end
+	if next( MC.StreamHiddenChunkKeys ) ~= nil then streamVisibilityChanged() end
 	MC.StreamHiddenChunkKeys, MC.StreamDetachTokens, MC.StreamCleanupQueue = {}, {}, {}
 	MC.StreamCleanupHead, MC.StreamCleanupTail, MC.StreamCleanupPending = 1, 0, 0
 	streamCleanupPendingByKey = {}

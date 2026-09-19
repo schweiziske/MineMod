@@ -89,6 +89,11 @@ local function blockSize()
 	return MC.API.Coords.BlockSize()
 end
 
+local function currentWaterMaterial()
+	if MC.RenderPBRWater then return MC.RenderPBRWater.CurrentMaterial() end
+	return nil
+end
+
 local function destroyFluidRecord( record )
 	if type( record ) ~= "table" then return end
 	for _, batches in pairs( record.meshes ) do
@@ -473,6 +478,14 @@ local function fluidMeshesForChunk( chunkKey, animations )
 	local originBY = ( chunk.cy or 0 ) * ( MC.CS or 16 )
 	local originBZ = ( chunk.cz or 0 ) * ( MC.CH or 32 )
 	local BS = blockSize()
+	local waterMaterial
+	if buckets.water_still then waterMaterial = currentWaterMaterial() end
+	if waterMaterial == false then
+		-- The resource owner reported the failure. Retain the complete old mesh
+		-- and matching material until the next bounded preparation attempt.
+		FluidMeshRetryAt[chunkKey] = CurTime() + REFRESH_INTERVAL
+		return cached
+	end
 	RM.resetMeshLightingSampleCaches()
 	RM.setMeshSampleCacheOrigin( originBX, originBY, originBZ )
 	local vertexLimit = math.max( 3, math.floor( ( C.VERT_LIMIT or 64998 ) / 3 ) * 3 )
@@ -480,7 +493,7 @@ local function fluidMeshesForChunk( chunkKey, animations )
 	local factory = RM.newLightMetaFactory( function( bx, by, bz )
 		return bx - originBX + ( by - originBY ) * MC.CS + ( bz - originBZ ) * MC.CS * MC.CS
 	end, samples )
-	local context = { fluidCornerHeightCache = {} }
+	local context = { fluidCornerHeightCache = {}, waterColumnCache = {} }
 	context.fluidAnimationResolver = function( _, faceIndex, u, v )
 		-- FluidRenderer uses the still sprite for a motionless top and the
 		-- bottom. Flowing tops rotate inside the central half of the 32x32
@@ -509,7 +522,8 @@ local function fluidMeshesForChunk( chunkKey, animations )
 		end
 		local batch = batches[#batches]
 		if not batch or batch.verts.count >= vertexLimit then
-			batch = { verts = VertexBuffer.New(), light = LightBuffer.New() }
+			batch = { verts = VertexBuffer.New(), light = LightBuffer.New(),
+				pbrWater = waterMaterial ~= nil and WATER_ANIMATIONS[name] == true }
 			batches[#batches + 1] = batch
 		end
 		local sample = LightBuffer.CopySample( batch.light, samples, light, copies )
@@ -524,11 +538,8 @@ local function fluidMeshesForChunk( chunkKey, animations )
 		context.failed = true
 	end
 	context.lightMeta = factory.fromCorner
-	-- Animated fluid quads take the CPU vertex-colour path deliberately. The GPU
-	-- payload styles encode light INTO COLOR0, and these vertices need COLOR0 to
-	-- hold a real colour, so they cannot use it. "vanilla" is no longer one of
-	-- several selectable pipelines - it is the name of this one emit mode, and
-	-- this is its only caller.
+	-- Emit the ordinary fluid geometry/light metadata. PBR water converts COLOR0
+	-- once after emission; the published mesh always keeps its matching shader.
 	context.currentEmitLightStyle = function() return RM.MC_LIGHT_STYLE_VANILLA or "vanilla" end
 
 	local ok, emitted = MC.Try( "block_animation_emit", function()
@@ -563,6 +574,11 @@ local function fluidMeshesForChunk( chunkKey, animations )
 			for _, batch in ipairs( batches ) do
 				batch.fluidLight = RM.cacheFluidLightInputs( batch )
 				if not batch.fluidLight then return false end
+				if batch.pbrWater then
+					MC.RenderPBRWater.BuildOptics( batch, context.waterColumnCache )
+					local encoded = MC.RenderPBRWater.Recolor( batch, false )
+					batch.fluidLight.published = encoded.colors
+				end
 			end
 		end
 		return true
@@ -598,8 +614,17 @@ local function fluidMeshesForChunk( chunkKey, animations )
 		FluidMeshCache[chunkKey] = false
 		return nil
 	end
+	-- Keep empty sprite kinds out of the draw loop, especially so water-only
+	-- chunks don't push/pop the legacy point filter for an absent lava pass.
+	for index = #availableKinds, 1, -1 do
+		local fluid = FLUID_ANIMATIONS[availableKinds[index]]
+		if not record.meshes[fluid.still] and not record.meshes[fluid.flow] then table.remove( availableKinds, index ) end
+	end
 	record.fluidKinds, record.matrix = availableKinds, Matrix()
 	record.originBX, record.originBY, record.originBZ = originBX, originBY, originBZ
+	record.blockSize, record.waterMaterial = BS, waterMaterial
+	record.hasWater = record.meshes.water_still ~= nil or record.meshes.water_flow ~= nil
+	record.cpuLight = not waterMaterial or record.meshes.lava_still ~= nil or record.meshes.lava_flow ~= nil
 	record.lightmapRevision = MC.GlobalLightmapRevision
 	record.nextLightmapAt = CurTime() + 0.1
 	destroyFluidRecord( cached )
@@ -616,22 +641,25 @@ local function stageFluidLight( record, staged )
 	end
 	for _, batches in pairs( record.meshes ) do
 		for _, batch in ipairs( batches ) do
-			local ok, result = MC.Try( "block_animation_light", RM.recolorFluidEmission,
-				batch, record.localLightDirty == true )
-			if not ok or not result then
-				record.geometryDirty = true
-				AnimationStats.failures = AnimationStats.failures + 1
-				if ok then MC.Fault( "block_animation_light", "invalid light samples in an animated fluid batch" ) end
-				return false
+			if not batch.pbrWater or record.localLightDirty then
+				local recolor = batch.pbrWater and MC.RenderPBRWater.Recolor or RM.recolorFluidEmission
+				local ok, result = MC.Try( "block_animation_light", recolor,
+					batch, record.localLightDirty == true )
+				if not ok or not result then
+					record.geometryDirty = true
+					AnimationStats.failures = AnimationStats.failures + 1
+					if ok then MC.Fault( "block_animation_light", "invalid light samples in an animated fluid batch" ) end
+					return false
+				end
+				if result.changed then
+					result.mesh = uploadAnimationMesh( batch.verts )
+					if not result.mesh then return false end
+				else
+					AnimationStats.skippedLightUploads = AnimationStats.skippedLightUploads + 1
+				end
+				result.batch = batch
+				staged[#staged + 1] = result
 			end
-			if result.changed then
-				result.mesh = uploadAnimationMesh( batch.verts )
-				if not result.mesh then return false end
-			else
-				AnimationStats.skippedLightUploads = AnimationStats.skippedLightUploads + 1
-			end
-			result.batch = batch
-			staged[#staged + 1] = result
 		end
 	end
 	return true
@@ -750,7 +778,7 @@ local function entryNeedsMeshes( entry )
 end
 
 local function fluidLightmapChanged( record )
-	return record.lightmapRevision ~= MC.GlobalLightmapRevision
+	return record.cpuLight ~= false and record.lightmapRevision ~= MC.GlobalLightmapRevision
 		and CurTime() >= ( record.nextLightmapAt or 0 )
 end
 
@@ -794,6 +822,20 @@ local function prepareEntry( entry, animations )
 end
 
 local animationMatrixPushed = false
+local animationFilterMin, animationFilterMag = false, false
+local function animationPointFilter( enabled )
+	if enabled then
+		if not animationFilterMin and render.PushFilterMin then
+			render.PushFilterMin( TEXFILTER.POINT ) animationFilterMin = true
+		end
+		if not animationFilterMag and render.PushFilterMag then
+			render.PushFilterMag( TEXFILTER.POINT ) animationFilterMag = true
+		end
+	else
+		if animationFilterMag then render.PopFilterMag() animationFilterMag = false end
+		if animationFilterMin then render.PopFilterMin() animationFilterMin = false end
+	end
+end
 
 local function drawEntry( entry, elapsedTicks )
 	if not entry.animationMeshes then return end
@@ -844,12 +886,8 @@ local function fluidChunkTransform( chunk, eye )
 end
 
 local FLUID_LIGHT_COLOR = Color( 255, 255, 255, 255 )
-local function drawFluidChunk( chunkKey, animations, elapsedTicks, eye )
-	local record = FluidMeshCache[chunkKey]
-	if type( record ) ~= "table" then return end
-	local chunk = MC.GetChunkByKey and MC.GetChunkByKey( chunkKey ) or MC.World and MC.World[chunkKey]
-	local base = fluidChunkTransform( chunk, eye )
-	if not base then return end
+local function drawFluidChunk( record, animations, elapsedTicks )
+	local base = record.drawBase
 	record.matrix:SetTranslation( base )
 	cam.PushModelMatrix( record.matrix )
 	animationMatrixPushed = true
@@ -857,12 +895,23 @@ local function drawFluidChunk( chunkKey, animations, elapsedTicks, eye )
 		local fluid = FLUID_ANIMATIONS[kind]
 		local blockId = fluidBlockId( kind )
 		if fluid and blockId then
+			local waterMaterial = kind == "water" and record.waterMaterial
+			-- Let each PBR texture choose its own filter: smooth normal/IBL and
+			-- POINT packed shadow depth. A global LINEAR override breaks shadows.
+			animationPointFilter( not waterMaterial )
 			for index = 1, 2 do
 				local name = index == 1 and fluid.still or fluid.flow
 				local batches = record.meshes[name]
 				if batches then
+					if waterMaterial then
+						MC.RenderPBRWater.Bind( waterMaterial, record, base )
+						render.SetMaterial( waterMaterial )
+						render.SetColorModulation( 1, 1, 1 )
+						render.SetBlend( 1 )
+					end
 					for _, batch in ipairs( batches ) do
-						drawAnimationMesh( batch.mesh, name, animations[name], FLUID_LIGHT_COLOR, elapsedTicks )
+						if waterMaterial then batch.mesh:Draw()
+						else drawAnimationMesh( batch.mesh, name, animations[name], FLUID_LIGHT_COLOR, elapsedTicks ) end
 					end
 				end
 			end
@@ -872,8 +921,36 @@ local function drawFluidChunk( chunkKey, animations, elapsedTicks, eye )
 	animationMatrixPushed = false
 end
 
+local VisibleFluids = {}
+local function farFluidFirst( a, b )
+	if a.drawDistance == b.drawDistance then return a.drawKey < b.drawKey end
+	return a.drawDistance > b.drawDistance
+end
+
+local function collectVisibleFluids( eye )
+	local count, water = 0, false
+	for key in pairs( FluidEntryCounts ) do
+		local record = FluidMeshCache[key]
+		if type( record ) == "table" then
+			local chunk = MC.GetChunkByKey and MC.GetChunkByKey( key ) or MC.World and MC.World[key]
+			local base, cx, cy, cz = fluidChunkTransform( chunk, eye )
+			if base then
+				count = count + 1
+				record.drawBase, record.drawKey = base, key
+				record.drawDistance = ( cx - eye.x ) ^ 2 + ( cy - eye.y ) ^ 2 + ( cz - eye.z ) ^ 2
+				VisibleFluids[count] = record
+				if record.hasWater and record.waterMaterial then water = true end
+			end
+		end
+	end
+	for index = #VisibleFluids, count + 1, -1 do VisibleFluids[index] = nil end
+	if count > 1 then table.sort( VisibleFluids, farFluidFirst ) end
+	return water
+end
+
 local function clearFluidMeshes()
 	for _, record in pairs( FluidMeshCache ) do destroyFluidRecord( record ) end
+	for index = #VisibleFluids, 1, -1 do VisibleFluids[index] = nil end
 	FluidMeshCache = {}
 	FluidMeshRetryAt = {}
 	FluidMeshesDirty = false
@@ -978,8 +1055,16 @@ function MC.PrepareBlockAnimations( budget, canBuild )
 	-- The RT is initialized in Think; do not publish unlit fluid colours if
 	-- the scheduler runs first. Later changes recolour under this same budget.
 	if MC.GlobalLightmapRevision == 0 then return end
+	local waterMaterial = currentWaterMaterial()
+	local size = blockSize()
 	for key in pairs( FluidEntryCounts ) do
 		local record = FluidMeshCache[key]
+		if type( record ) == "table" and waterMaterial ~= false then
+			if record.blockSize ~= size or record.hasWater
+				and ( record.waterMaterial ~= nil ) ~= ( waterMaterial ~= nil ) then
+				record.geometryDirty = true
+			elseif record.hasWater and waterMaterial then record.waterMaterial = waterMaterial end
+		end
 		if type( record ) == "table" and fluidLightmapChanged( record ) then record.lightDirty = true end
 		local geometryDirty = record == nil or type( record ) == "table" and record.geometryDirty
 		local lightDirty = type( record ) == "table" and record.lightDirty
@@ -999,7 +1084,7 @@ end
 
 hook.Remove( "Think", "mc_block_animation_chunk_scan" )
 
-local function drawPreparedAnimations( animations, eye, elapsedTicks )
+local function drawPreparedAnimations( animations, eye, elapsedTicks, water )
 	local maxRenderDistanceSqr = ( blockSize() * 96 ) ^ 2
 	for _, entry in pairs( ModelEntries ) do
 		local center = MC.CellRenderCenter and MC.CellRenderCenter( entry.bx, entry.by, entry.bz )
@@ -1008,29 +1093,39 @@ local function drawPreparedAnimations( animations, eye, elapsedTicks )
 			drawEntry( entry, elapsedTicks )
 		end
 	end
+	if water then MC.RenderPBRWater.CaptureRefraction() end
 	-- Fluid colour passes test opaque depth but must never populate it. In
 	-- particular, interpolated frames draw the same surface more than once.
 	render.OverrideDepthEnable( true, false )
-	for chunkKey in pairs( FluidEntryCounts ) do
-		drawFluidChunk( chunkKey, animations, elapsedTicks, eye )
+	for _, record in ipairs( VisibleFluids ) do
+		drawFluidChunk( record, animations, elapsedTicks )
 	end
 end
 
 hook.Add( "PostDrawTranslucentRenderables", "mc_block_animations", function( bDepth, _, bSky3D )
 	-- bSky can also be true in the main view on maps with a 2D skybox.
 	if bDepth or bSky3D or MC.WorldFrameSettled and not MC.WorldFrameSettled() then return end
+	if MC.RenderPBRShadows and MC.RenderPBRShadows.rendering then return end
 	local animations = activeAnimations()
 	if next( animations ) == nil then return end
 	if not MC.Check( type( render.OverrideDepthEnable ) == "function"
 		and type( render.OverrideColorWriteEnable ) == "function",
 		"block_animation_render_state", "depth/color-write override APIs are unavailable" ) then return end
 	local eye = EyePos()
+	local view = render.GetViewSetup and render.GetViewSetup( true )
+	if view and view.origin then eye = view.origin end
+	local water = collectVisibleFluids( eye )
+	if water then
+		-- Shadow/view preparation can render another view; do it before touching
+		-- any animation matrix, depth override, or texture filter.
+		if not MC.RenderPBR.PrepareDraw( eye.x, eye.y, eye.z, view, false ) then return end
+		MC.RenderPBRWater.PrepareView()
+	end
 	local elapsedTicks = ( RealTime and RealTime() or CurTime() ) / TICK_SECONDS
 	render.OverrideDepthEnable( false, false )
 	render.OverrideColorWriteEnable( false, false )
-	if render.PushFilterMin then render.PushFilterMin( TEXFILTER.POINT ) end
-	if render.PushFilterMag then render.PushFilterMag( TEXFILTER.POINT ) end
-	local ok, err = pcall( drawPreparedAnimations, animations, eye, elapsedTicks )
+	animationPointFilter( true )
+	local ok, err = pcall( drawPreparedAnimations, animations, eye, elapsedTicks, water )
 	-- Clean up before Fault: strict mode may throw, and a failed Draw must not
 	-- leave later hooks using our matrix, depth override or texture filters.
 	if animationMatrixPushed then
@@ -1041,8 +1136,7 @@ hook.Add( "PostDrawTranslucentRenderables", "mc_block_animations", function( bDe
 	render.OverrideColorWriteEnable( false, false )
 	render.SetBlend( 1 )
 	render.SetColorModulation( 1, 1, 1 )
-	if render.PopFilterMag then render.PopFilterMag() end
-	if render.PopFilterMin then render.PopFilterMin() end
+	animationPointFilter( false )
 	if not ok then MC.Fault( "block_animation_draw", "%s", tostring( err ) ) end
 end )
 
@@ -1067,6 +1161,19 @@ hook.Add( "MC.ClientBlockStateChanged", "mc_block_animation_fluid_geometry", fun
 	for z = minZ, maxZ do
 		for y = minY, maxY do
 			for x = minX, maxX do dirtyFluidChunk( MC.ChunkKey( x, y, z ) ) end
+		end
+	end
+	-- Optical depth also depends on the bed below the visible surface. Geometry
+	-- neighbours alone miss edits more than one cell below a chunk boundary.
+	if MC.RenderPBRWater then
+		local _, _, waterMaxZ = MC.CellToChunk( bx, by, bz + MC.RenderPBRWater.MAX_DEPTH )
+		for z = maxZ + 1, waterMaxZ do
+			for y = minY, maxY do
+				for x = minX, maxX do
+					local record = FluidMeshCache[MC.ChunkKey( x, y, z )]
+					if type( record ) == "table" and record.waterMaterial then record.geometryDirty = true end
+				end
+			end
 		end
 	end
 end )

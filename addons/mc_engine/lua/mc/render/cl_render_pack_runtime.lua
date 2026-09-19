@@ -41,9 +41,12 @@ local function sameWorld( c )
 		and MC.CS == c.cs and MC.CH == c.ch and MC.API.Coords.BlockSize() == c.blockSize
 end
 
-local function advanceVersion( c )
+local function advanceVersion( c, updates )
+	local previous = c.version
 	L.version = L.version + 1
 	c.version = L.version
+	local shadows = MC.RenderPBRShadows
+	if shadows and shadows.RuntimeChanged then shadows.RuntimeChanged( c, previous, updates ) end
 end
 
 local function markChunkDirty( c, key )
@@ -124,6 +127,12 @@ local function partitionMatches( c, source, size )
 	return true
 end
 
+local function copyMaterialNodes( nodes )
+	local copy = {}
+	if nodes then for key, value in pairs( nodes ) do copy[key] = value end end
+	return copy
+end
+
 local function bindSection( c, transaction, source, chunk, size )
 	local bound = { source = source, chunk = chunk, bounds = source.bounds, resources = {}, passes = {}, quads = 0, draws = 0 }
 	transaction.created[#transaction.created + 1] = bound
@@ -135,10 +144,18 @@ local function bindSection( c, transaction, source, chunk, size )
 			bound.resources[#bound.resources + 1] = data
 			bound.quads = bound.quads + data.quadCount
 			local materialCache = transaction.materials[part.material]
-			if not materialCache then materialCache = {} transaction.materials[part.material] = materialCache end
+			if not materialCache and not transaction.force and not transaction.changedSources[part.material] then
+				materialCache = c.materials[part.material]
+			end
 			for _, node in ipairs( P.Passes( transaction.bundle, part.request, part.stage ) ) do
-				local material = materialCache[node.key]
+				local material = materialCache and materialCache[node.key]
 				if not material then
+					-- Published node caches are read-only until commit. Copy only
+					-- when this source actually needs a new pass binding.
+					if not transaction.materials[part.material] then
+						materialCache = copyMaterialNodes( materialCache )
+						transaction.materials[part.material] = materialCache
+					end
 					material = P.Material( transaction.bundle, node, part.material, size )
 					materialCache[node.key] = material
 				end
@@ -178,19 +195,13 @@ local function flattenChunk( sections )
 	return result
 end
 
-local function copyMaterialNodes( nodes )
-	local copy = {}
-	for key, value in pairs( nodes or {} ) do copy[key] = value end
-	return copy
-end
-
 local emptySections = {}
 
-local function adjustMaterialUses( uses, bound, delta )
+local function adjustMaterialUses( uses, previous, bound, delta )
 	for pass = 1, 2 do
 		local list = pass == 1 and bound.source.opaque or bound.source.translucent
 		for _, part in ipairs( list ) do
-			uses[part.material] = ( uses[part.material] or 0 ) + delta
+			uses[part.material] = ( uses[part.material] or previous[part.material] or 0 ) + delta
 		end
 	end
 end
@@ -202,7 +213,6 @@ local function sourceChanged( c, transaction, material )
 		changed = not previous or not R.SameTexture( R.SourceTexture( material ), previous )
 		transaction.changedSources[material] = changed
 		if changed then
-			transaction.materials[material] = nil
 			-- A texture shared with untouched chunks changed in this same frame.
 			if previous and not transaction.full then transaction.fullRequired = true end
 		end
@@ -256,7 +266,7 @@ local function syncChunk( c, transaction, key, size, force )
 			transaction.removed[#transaction.removed + 1] = bound
 			transaction.count = transaction.count - 1
 			transaction.quads, transaction.draws = transaction.quads - bound.quads, transaction.draws - bound.draws
-			adjustMaterialUses( transaction.materialUses, bound, -1 )
+			adjustMaterialUses( transaction.materialUses, transaction.baseUses, bound, -1 )
 			changed = true
 		end
 	end
@@ -264,7 +274,7 @@ local function syncChunk( c, transaction, key, size, force )
 		if old[index] ~= bound then
 			transaction.count = transaction.count + 1
 			transaction.quads, transaction.draws = transaction.quads + bound.quads, transaction.draws + bound.draws
-			adjustMaterialUses( transaction.materialUses, bound, 1 )
+			adjustMaterialUses( transaction.materialUses, transaction.baseUses, bound, 1 )
 			changed = true
 		end
 	end
@@ -277,19 +287,14 @@ end
 local function prepareSync( c, transaction, keys, size, force )
 	transaction.bundle, transaction.materials, transaction.changedSources = P.Fork( c.bundle ), {}, {}
 	transaction.materialUses, transaction.removed, transaction.updates = {}, {}, {}
+	transaction.baseUses, transaction.force = c.materialUses or {}, force
 	transaction.count, transaction.quads, transaction.draws = c.sectionCount, c.totalQuads, c.drawEntries
 	transaction.waiting = transaction.full and 0 or c.waitingSections
-	if c.materialUses then
-		for material, count in pairs( c.materialUses ) do transaction.materialUses[material] = count end
-	else
+	if not c.materialUses then
 		-- One-time adoption of a runtime retained across Lua autorefresh.
 		for _, sections in pairs( c.sections ) do
-			for _, bound in pairs( sections ) do adjustMaterialUses( transaction.materialUses, bound, 1 ) end
+			for _, bound in pairs( sections ) do adjustMaterialUses( transaction.baseUses, emptySections, bound, 1 ) end
 		end
-	end
-	if not force then
-		for material, nodes in pairs( c.materials ) do transaction.materials[material] = copyMaterialNodes( nodes ) end
-		for material, texture in pairs( c.bundle.sources ) do transaction.bundle.sources[material] = texture end
 	end
 	if transaction.full then
 		for key in pairs( MC.MeshSections ) do syncChunk( c, transaction, key, size, force ) end
@@ -300,23 +305,34 @@ local function prepareSync( c, transaction, keys, size, force )
 		for key in pairs( keys ) do syncChunk( c, transaction, key, size, force ) end
 	end
 	requireValue( transaction.draws <= 65536, "render_pack_draw_budget", "execution plan exceeds 65536 mesh draws" )
-	for material, count in pairs( transaction.materialUses ) do
-		if count == 0 then
-			transaction.materialUses[material], transaction.materials[material], transaction.bundle.sources[material] = nil, nil, nil
-		elseif not transaction.materials[material] then
-			transaction.materials[material] = copyMaterialNodes( c.materials[material] )
-			transaction.bundle.sources[material] = c.bundle.sources[material]
-		end
-	end
 	-- Check only surviving materials: a removed material can already be invalid.
 	-- Changes shared with other chunks expand this transaction before publication.
 	if not transaction.full then
-		for material, texture in pairs( transaction.bundle.sources ) do
-			if transaction.changedSources[material] == nil and not R.SameTexture( R.SourceTexture( material ), texture ) then
+		for material, texture in pairs( c.bundle.sources ) do
+			local count = transaction.materialUses[material] or transaction.baseUses[material]
+			if count and count > 0 and transaction.changedSources[material] == nil
+				and not R.SameTexture( R.SourceTexture( material ), texture ) then
 				transaction.fullRequired = true
 			end
 		end
 	end
+end
+
+local function commitMaterials( c, transaction )
+	local materials, sources, uses = c.materials, c.bundle.sources, transaction.baseUses
+	-- The transaction contains only touched counts and newly written bindings.
+	-- Keep flat published maps; no overlay chains or copies of unrelated nodes.
+	for material, count in pairs( transaction.materialUses ) do
+		if count == 0 then
+			uses[material], materials[material], sources[material] = nil, nil, nil
+		else
+			uses[material] = count
+			if transaction.materials[material] then materials[material] = transaction.materials[material] end
+			if transaction.bundle.sources[material] then sources[material] = transaction.bundle.sources[material] end
+		end
+	end
+	transaction.bundle.sources = sources
+	c.bundle, c.materialUses = transaction.bundle, uses
 end
 
 local function discardSync( transaction )
@@ -367,7 +383,7 @@ local function syncSections( c, force )
 			pass.dirtyChunks[key] = true
 		end
 	end
-	c.bundle, c.materials, c.materialUses = transaction.bundle, transaction.materials, transaction.materialUses
+	commitMaterials( c, transaction )
 	c.sectionCount, c.totalQuads, c.drawEntries, c.waitingSections = transaction.count, transaction.quads, transaction.draws, transaction.waiting
 	c.world, c.worldGeneration, c.cs, c.ch = MC.World, MC.StateWorldGeneration, MC.CS, MC.CH
 	c.blockSize, c.drawGeneration = size, generation
@@ -375,7 +391,9 @@ local function syncSections( c, force )
 	c.syncCount = ( c.syncCount or 0 ) + 1
 	c.syncTotalMS = ( c.syncTotalMS or 0 ) + c.updateMS
 	c.failedDrawGeneration = nil
-	if #transaction.created > 0 or #transaction.removed > 0 or not c.version then advanceVersion( c ) end
+	if #transaction.created > 0 or #transaction.removed > 0 or not c.version then
+		advanceVersion( c, transaction.updates )
+	end
 	for _, bound in ipairs( transaction.removed ) do releaseSection( bound ) end
 end
 
@@ -421,10 +439,13 @@ local function fail( c, err )
 	local message = type( err ) == "table" and err.message or tostring( err )
 	local code = type( err ) == "table" and err.code or "render_pack_prepare"
 	L.lastError = ( c and ( c.pack .. " phase=" .. c.phase .. ": " ) or "" ) .. tostring( message )
-	if c == L.pending then
+	if c and c == L.pending then
 		release( c )
 		L.pending = nil
 		L.selected = L.active and L.active.pack or L.selected
+		-- MC.Fault deduplicates repeated codes. Every rejected selection still
+		-- needs a terminal message after "preparing", even for the same fault.
+		print( "[MC render pack] failed " .. L.lastError .. "; active=" .. ( L.active and L.active.pack or "none" ) )
 	elseif c then
 		c.failedDrawGeneration, c.failedBindings = MC.ChunkDrawListVersion(), Bindings.generation
 		c.failedWorld, c.failedWorldGeneration = MC.World, MC.StateWorldGeneration
@@ -492,6 +513,76 @@ function L.IsDrawing()
 	return L.active ~= nil
 end
 
+local function refreshBlockEntityMaterials( c, sources, binding )
+	if binding.materials and binding.blockSize == c.blockSize and P.SourcesCurrent( binding.bundle ) then return end
+	local owner = "pack/" .. c.pack
+	local def = c.plan.owners[owner].definition
+	local pass = def.passes.terrain_cutout
+	local node = { key = owner .. "/block_entity", owner = owner, stage = "world_cutout",
+		adapter = def.adapter, program = def.programs.block_entity, materialMaps = def.materialMaps }
+	for _, semantic in ipairs( { "normal", "orm", "environment", "dfg" } ) do
+		node[semantic] = c.bundle.textures[owner .. "/" .. pass.inputs[semantic]]
+	end
+	-- Entity sources have their own lifetime. Adding them to the terrain bundle
+	-- would make a changed chest texture trigger a full section sync every frame.
+	local bundle, materials = P.Fork( c.bundle ), {}
+	for name, source in pairs( sources ) do
+		materials[name] = P.Material( bundle, node, source, c.blockSize )
+	end
+	-- Publish the complete table only after all source/map bindings succeed.
+	binding.bundle, binding.materials, binding.blockSize = bundle, materials, c.blockSize
+end
+
+-- Immutable source tables, with texture identity checked once per frame.
+-- nil means the active pack has no entity path; false means a reported fault.
+function L.BlockEntityMaterials( sources )
+	if type( sources ) ~= "table" then return nil, "invalid_material_sources" end
+	local c = L.active
+	if not c or not sameWorld( c ) then return nil end
+	local def = c.plan.owners["pack/" .. c.pack].definition
+	if not def.programs.block_entity then return nil end
+	local bindings = c.entityBindings
+	if not bindings then bindings = {} c.entityBindings = bindings end
+	local binding = bindings[sources]
+	if not binding then binding = {} bindings[sources] = binding end
+	local frame = FrameNumber()
+	if binding.retryAt and SysTime() < binding.retryAt then return false, binding.error end
+	if binding.frame ~= frame or binding.blockSize ~= c.blockSize then
+		local ok, err = pcall( refreshBlockEntityMaterials, c, sources, binding )
+		binding.frame = frame
+		if not ok then
+			binding.error, binding.retryAt = err, SysTime() + 1
+			L.QueueFault( "render_block_entity_material", err )
+			return false, err
+		end
+		binding.error, binding.retryAt = nil, nil
+	end
+	return binding.materials
+end
+
+-- Like standalone entities, water has no terrain source entry or extra world
+-- pass. Its immutable program/resources are verified with the selected pack.
+function L.WaterMaterial()
+	local c = L.active
+	if not c or not sameWorld( c ) then return nil end
+	local owner = "pack/" .. c.pack
+	if not c.plan.owners[owner].definition.programs.water then return nil end
+	local binding = c.waterBinding
+	if not binding then binding = {} c.waterBinding = binding end
+	if binding.retryAt and SysTime() < binding.retryAt then return false, binding.error end
+	if not binding.material or binding.blockSize ~= c.blockSize then
+		local ok, material = pcall( P.WaterMaterial, c.bundle, owner, c.blockSize )
+		if not ok then
+			binding.error, binding.retryAt = material, SysTime() + 1
+			L.QueueFault( "render_water_material", material )
+			return false, material
+		end
+		binding.material, binding.blockSize = material, c.blockSize
+		binding.error, binding.retryAt = nil, nil
+	end
+	return binding.material
+end
+
 local emptyStages, emptyChunks = {}, {}
 function L.GetStages( translucent )
 	if not L.active or not sameWorld( L.active ) then return emptyStages, L.version, emptyChunks end
@@ -533,6 +624,8 @@ end
 MC.API.Render.SelectPack = L.Select
 MC.API.Render.DisablePack = L.Off
 MC.API.Render.GetRuntimeStatus = L.Status
+MC.API.Render.BlockEntityMaterials = L.BlockEntityMaterials
+MC.API.Render.WaterMaterial = L.WaterMaterial
 
 local function printStatus()
 	local s = L.Status()

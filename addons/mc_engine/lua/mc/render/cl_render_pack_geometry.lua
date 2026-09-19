@@ -18,7 +18,7 @@ local function allocate( count )
 		end
 	end
 	error( { code = "render_pack_atlas_budget",
-		message = "no contiguous quad range available within the shared 16 MiB corner atlas" }, 0 )
+		message = "no contiguous quad range available within the shared 20 MiB corner/AO atlas" }, 0 )
 end
 
 local function freeRange( first, count )
@@ -70,7 +70,8 @@ end
 function G.Upload( buffer, perf )
 	local count = buffer.nv / 6
 	requireValue( buffer.l2 and count > 0 and count == math.floor( count ) and count <= G.PART_QUADS
-		and #buffer.pixels == count * 4, "render_l2_buffer", "world upload requires a bounded native L2 buffer" )
+		and #buffer.pixels == count * 4 and buffer.occlusion and #buffer.occlusion == count,
+		"render_l2_buffer", "world upload requires a bounded native L2 buffer with independent AO" )
 	requireValue( G.liveParts < G.MAX_PARTS, "render_pack_part_budget", "native L2 mesh-part budget exceeded" )
 	local bounds = MC.RenderSectionCull.VertexBounds( buffer.verts )
 	R.Ensure( { build = "quad_corners_v1" }, P.shared )
@@ -83,7 +84,7 @@ function G.Upload( buffer, perf )
 		requireValue( object ~= nil, "render_pack_mesh_create", "could not create a native L2 mesh" )
 		-- Stream global addresses without materializing or mutating the CPU buffer.
 		MC.RenderMesh.uploadMeshVertices( object, buffer.verts, perf, false, false, first )
-		R.UploadPart( { firstQuad = first, quadCount = count, pixels = buffer.pixels }, P.shared )
+		R.UploadPart( { firstQuad = first, quadCount = count, pixels = buffer.pixels, occlusion = buffer.occlusion }, P.shared )
 	end )
 	if not ok then
 		local destroyOK, destroyError = true, nil
@@ -95,8 +96,10 @@ function G.Upload( buffer, perf )
 	G.liveParts = G.liveParts + 1
 	local data = { mesh = object, firstQuad = first, quadCount = count, references = 1 }
 	if G.auditPixels then
-		local pixels = {}
+		local pixels, occlusion = {}, {}
 		for i = 1, #buffer.pixels do pixels[i] = buffer.pixels[i] end
+		for i = 1, #buffer.occlusion do occlusion[i] = buffer.occlusion[i] end
+		pixels.occlusion = occlusion
 		G.auditPixels[data] = pixels
 	end
 	return { l2 = true, resource = data, mesh = object, material = buffer.material,

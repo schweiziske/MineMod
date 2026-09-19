@@ -42,10 +42,24 @@ function P.Validate( plan )
 	for _, ownerKey in ipairs( sortedKeys( plan.owners ) ) do
 		local owner = plan.owners[ownerKey]
 		local def = owner.definition
-		local ibl = def.adapter == "mc:pbr_quad_v2"
+		local independentAO = def.adapter == "mc:pbr_quad_v3"
+		local ibl = independentAO or def.adapter == "mc:pbr_quad_v2"
 		local pbr = ibl or def.adapter == "mc:pbr_quad_v1"
 		requireValue( def.abi == 1 and def.layout == "mc:quad_corners_v1" and ( pbr or def.adapter == "mc:vanilla_quad_draft" ),
 			"render_pack_adapter", ownerKey .. ": unsupported quad-corners-v1 adapter" )
+		requireValue( not independentAO or R.OCCLUSION_VERSION == 1, "render_pbr_occlusion_adapter",
+			ownerKey .. ": PBR v3 requires the independent corner AO atlas; update the engine and restart the client" )
+		if def.programs.block_entity then
+			local pass = def.passes.terrain_cutout
+			requireValue( independentAO and pass and pass.stage == "world_cutout",
+				"render_block_entity_adapter", ownerKey .. ": standalone PBR requires the v3 terrain_cutout resources" )
+		end
+		if def.programs.water then
+			local pass, normal = def.passes.terrain_translucent, def.resources.water_normal
+			requireValue( independentAO and MC.RenderPBRWater and MC.RenderPBRWater.VERSION == 1
+				and pass and pass.stage == "world_translucent" and normal and normal.colorSpace == "linear",
+				"render_water_adapter", ownerKey .. ": water requires v3 terrain_translucent, linear water_normal and water payload v1" )
+		end
 		local buildKey = ownerKey .. "/" .. def.build
 		if not P.builds[buildKey] then newBuilds[#newBuilds + 1] = buildKey end
 		for _, name in ipairs( sortedKeys( def.programs ) ) do
@@ -82,7 +96,7 @@ function P.Validate( plan )
 			end
 			if ibl then
 				requireValue( pass.inputs.environment and pass.inputs.dfg, "render_pbr_ibl",
-					ownerKey .. "/" .. name .. ": PBR v2 requires prefiltered environment and DFG maps" )
+					ownerKey .. "/" .. name .. ": PBR IBL requires prefiltered environment and DFG maps" )
 				requireValue( def.resources[pass.inputs.environment].colorSpace == "linear"
 					and def.resources[pass.inputs.dfg].colorSpace == "linear", "render_pbr_ibl_color_space",
 					ownerKey .. "/" .. name .. ": IBL and DFG maps must use linear data reads" )
@@ -106,7 +120,8 @@ function P.Validate( plan )
 			if not node then
 				node = { key = nodeKey, stage = pass.stage, program = def.programs[pass.program], adapter = def.adapter,
 					owner = request.owner, materialMaps = def.materialMaps,
-					shadowProgram = ( def.adapter == "mc:pbr_quad_v1" or def.adapter == "mc:pbr_quad_v2" ) and def.programs.shadow or nil }
+					shadowProgram = ( def.adapter == "mc:pbr_quad_v1" or def.adapter == "mc:pbr_quad_v2"
+						or def.adapter == "mc:pbr_quad_v3" ) and def.programs.shadow or nil }
 				if pass.inputs.albedo then
 					node.albedo = result.textures[request.owner .. "/" .. pass.inputs.albedo]
 				end
@@ -164,8 +179,9 @@ function P.Ensure( bundle )
 	end
 end
 
-local function textureFor( resource, dataMap )
+local function textureFor( resource, dataMap, repeatTexture )
 	local key = resource.path .. "/" .. resource.sha256 .. ( dataMap and "/data" or "" )
+		.. ( repeatTexture and "/repeat" or "" )
 	local cached = P.textures[key]
 	if cached then return cached end
 	requireValue( P.textureCount < 128, "render_pack_texture_budget", "128 runtime texture versions reached" )
@@ -176,7 +192,9 @@ local function textureFor( resource, dataMap )
 			{ ["$basetexture"] = path:sub( 1, -5 ) } )
 	else
 		requireValue( Material ~= nil, "render_pack_image_api", "Material() is required for image resources" )
-		material = Material( path, dataMap and "smooth mips" or nil )
+		-- Imported PNGs clamp by default. Water uses unbounded world/time UVs;
+		-- ordinary atlases and IBL data must retain their existing clamp policy.
+		material = Material( path, repeatTexture and "smooth mips noclamp" or dataMap and "smooth mips" or nil )
 	end
 	local texture = R.SourceTexture( material )
 	requireValue( texture:Width() > 0 and texture:Width() <= 4096 and texture:Height() > 0 and texture:Height() <= 4096,
@@ -231,7 +249,7 @@ end
 function P.Material( bundle, node, sourceMaterial, blockSize )
 	local source = R.SourceTexture( sourceMaterial )
 	bundle.sources[sourceMaterial] = source
-	local ibl = node.adapter == "mc:pbr_quad_v2"
+	local ibl = node.adapter == "mc:pbr_quad_v2" or node.adapter == "mc:pbr_quad_v3"
 	local pbr = ibl or node.adapter == "mc:pbr_quad_v1"
 	local colorSpace = pbr and "srgb" or "linear"
 	if node.albedo then source, colorSpace = textureFor( node.albedo ), node.albedo.colorSpace end
@@ -250,7 +268,7 @@ function P.Material( bundle, node, sourceMaterial, blockSize )
 	if ibl then
 		environment, dfg = textureFor( node.environment, true ), textureFor( node.dfg, true )
 		requireValue( environment:Width() == 512 and environment:Height() == 256 and dfg:Width() == 128 and dfg:Height() == 128,
-			"render_pbr_ibl_dimensions", "PBR v2 requires a 512x256 radiance atlas and a 128x128 DFG map" )
+			"render_pbr_ibl_dimensions", "PBR IBL requires a 512x256 radiance atlas and a 128x128 DFG map" )
 	end
 	local signature = Schema.Canonical( { vertex = node.program.vertex, pixel = node.program.pixel,
 		stage = node.stage, source = source:GetName(), colorSpace = colorSpace, blockSize = blockSize,
@@ -274,6 +292,29 @@ function P.Material( bundle, node, sourceMaterial, blockSize )
 	if pbr then maps = { normal = normal, orm = orm, environment = environment, dfg = dfg } end
 	local material = R.BoundMaterial( P.shared, slot, source, node.stage, blockSize, node.program, colorSpace, maps )
 	P.materials[signature] = { material = material, source = source, normal = normal, orm = orm }
+	P.materialCount = P.materialCount + 1
+	return material
+end
+
+function P.WaterMaterial( bundle, owner, blockSize )
+	local def = bundle.plan.owners[owner].definition
+	local inputs = def.passes.terrain_translucent.inputs
+	local normal = textureFor( def.resources.water_normal, true, true )
+	local orm = textureFor( def.resources[inputs.orm], true )
+	local environment = textureFor( def.resources[inputs.environment], true )
+	local dfg = textureFor( def.resources[inputs.dfg], true )
+	requireValue( normal:Width() == 256 and normal:Height() == 256
+		and environment:Width() == 512 and environment:Height() == 256 and dfg:Width() == 128 and dfg:Height() == 128,
+		"render_water_texture_size", "water requires 256x256 normal/foam, 512x256 IBL and 128x128 DFG textures" )
+	local signature = Schema.Canonical( { water = def.programs.water, normal = def.resources.water_normal.sha256,
+		environment = def.resources[inputs.environment].sha256, dfg = def.resources[inputs.dfg].sha256, blockSize = blockSize } )
+	local cached = P.materials[signature]
+	if cached then return cached.material end
+	requireValue( P.materialCount < 2048, "render_pack_material_budget", "2048 immutable runtime materials reached" )
+	local maps = { normal = normal, orm = orm, environment = environment, dfg = dfg, water = true }
+	local material = R.BoundMaterial( P.shared, tostring( P.materialCount + 1 ), normal,
+		"world_translucent", blockSize, def.programs.water, "srgb", maps )
+	P.materials[signature] = { material = material }
 	P.materialCount = P.materialCount + 1
 	return material
 end
