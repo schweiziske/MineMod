@@ -329,8 +329,8 @@ local function buildMenu( ply, record, bx, by, bz )
 		slots = slots,
 		hotbarSlots = hotbar,
 		transferRules = {
-			enchanting_item = { targets = { "main", "hotbar" }, reverse = true },
-			enchanting_lapis = { targets = { "main", "hotbar" }, reverse = true },
+			enchanting_item = { targets = { "hotbar", "main" }, reverse = true },
+			enchanting_lapis = { targets = { "hotbar", "main" }, reverse = true },
 			main = { resolve = playerQuickMoveTargets },
 			hotbar = { resolve = playerQuickMoveTargets },
 		},

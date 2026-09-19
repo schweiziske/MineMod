@@ -13,6 +13,7 @@ local CREATIVE_DESTROY_DELAY_TICKS = 5
 local CREATIVE_DESTROY_DELAY = CREATIVE_DESTROY_DELAY_TICKS * TICK_INTERVAL
 SV.MiningSessions = SV.MiningSessions or {}
 SV.CreativeDestroyStates = SV.CreativeDestroyStates or setmetatable( {}, { __mode = "k" } )
+SV.SurvivalDestroyStates = SV.SurvivalDestroyStates or setmetatable( {}, { __mode = "k" } )
 
 local function safeCall( callback, ... )
 	if not isfunction( callback ) then return end
@@ -64,7 +65,7 @@ local function publicSession( session )
 	}
 end
 
-local function sendStage( ply, session, stage )
+local function sendStage( ply, session, stage, completed )
 	if not session then return end
 	net.Start( "mc_mining_progress" )
 		net.WriteEntity( ply )
@@ -72,17 +73,16 @@ local function sendStage( ply, session, stage )
 		net.WriteInt( session.by, MC.Net.COORD_BITS )
 		net.WriteInt( session.bz, MC.Net.COORD_BITS )
 		net.WriteUInt( stage == nil and 0 or math.Clamp( stage + 1, 1, 10 ), 4 )
+		net.WriteBool( completed == true )
+		net.WriteUInt( session.commandNumber or 0, 32 )
 	net.Broadcast()
 end
 
 local function selectedFingerprint( ply )
 	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply, false ) or nil
 	if record and record.session then return nil, "inventory_open" end
-	local selected = record and math.Clamp( math.floor( tonumber( record.selected ) or 0 ), 0, 8 ) or 0
 	local stack = SV.GetSelectedPlayerStack and SV.GetSelectedPlayerStack( ply ) or nil
-	if not stack then return tostring( selected ) .. ":empty" end
-	local components = MC.CanonicalItemComponents and MC.CanonicalItemComponents( stack.components ) or ""
-	return table.concat( { tostring( selected ), stack.item, tostring( stack.damage or 0 ), components }, "\0" )
+	return MC.MiningStackFingerprint( stack )
 end
 
 local function normalizeExternalOptions( options )
@@ -111,6 +111,9 @@ function SV.CancelMining( ply, reason )
 	local session = SV.MiningSessions[ply]
 	if not session then return false end
 	SV.MiningSessions[ply] = nil
+	-- The local completion may already have removed the voxel. Explicitly
+	-- correct cancelled/rejected digs instead of leaving a ghost until timeout.
+	if IsValid( ply ) and SV.SyncBreakPlan then SV.SyncBreakPlan( ply, session.bx, session.by, session.bz ) end
 	sendStage( ply, session, nil )
 	local snapshot = publicSession( session )
 	safeCall( session.onCancel, ply, snapshot, reason or "cancelled" )
@@ -172,10 +175,9 @@ end
 
 local function damageMiningTool( ply, session, oldStateId )
 	local hardness = MC.BlockHardness and MC.BlockHardness( session.blockId ) or 1
-	if hardness == 0 then return 0 end
 	local mining = session.lastMining or ( MC.BlockMiningToolSpec and MC.BlockMiningToolSpec( oldStateId, session.toolStack ) )
-	local damage = mining and mining.held
-		and math.max( 0, math.floor( tonumber( mining.held.damagePerBlock ) or 0 ) ) or 0
+	if hardness == 0 and not ( mining and mining.shears ) then return 0 end
+	local damage = mining and mining.damagePerBlock or 0
 	if damage <= 0 then return 0 end
 	if session.source == "inventory" then
 		if SV.DamageSelectedItem then SV.DamageSelectedItem( ply, 1, { reason = "mine", useToolScale = true } ) end
@@ -209,7 +211,8 @@ local function completeMining( ply, session )
 		return false
 	end
 	SV.MiningSessions[ply] = nil
-	sendStage( ply, session, nil )
+	if not session.instant then SV.SurvivalDestroyStates[ply] = CurTime() + 5 * TICK_INTERVAL end
+	sendStage( ply, session, nil, true )
 	local drops = spawnBlockDrops( ply, session, stacks )
 	local durabilityDamage = damageMiningTool( ply, session, oldStateId )
 	local snapshot = publicSession( session )
@@ -256,7 +259,7 @@ local function completeMining( ply, session )
 	return true
 end
 
-function SV.BeginMining( ply, bx, by, bz, options )
+local function beginMining( ply, bx, by, bz, options )
 	if not IsValid( ply ) or not ply:IsPlayer() or not ply:Alive() then return false, "invalid_player" end
 	if SV.PlayerIsCreative and SV.PlayerIsCreative( ply ) then return false, "creative_mode" end
 	bx, by, bz = math.floor( tonumber( bx ) or 0 ), math.floor( tonumber( by ) or 0 ), math.floor( tonumber( bz ) or 0 )
@@ -271,12 +274,20 @@ function SV.BeginMining( ply, bx, by, bz, options )
 	end
 	local source = external and "external" or "inventory"
 	local sourceToken = external and external.sourceToken or "inventory"
+	local fingerprint, fingerprintError
+	if external then fingerprint = MC.MiningStackFingerprint( external.toolStack )
+	else fingerprint, fingerprintError = selectedFingerprint( ply ) end
+	if not fingerprint then return false, fingerprintError end
 	local existing = SV.MiningSessions[ply]
 	if existing and existing.bx == bx and existing.by == by and existing.bz == bz
-		and existing.stateId == stateId and existing.source == source and existing.sourceToken == sourceToken then
+		and existing.stateId == stateId and existing.source == source and existing.sourceToken == sourceToken
+		and existing.selectedFingerprint == fingerprint then
 		return true, publicSession( existing )
 	end
 	if existing then SV.CancelMining( ply, "target_changed" ) end
+	if not ( options and options.initialPress ) and CurTime() < ( SV.SurvivalDestroyStates[ply] or 0 ) then
+		return false, "survival_destroy_delay"
+	end
 
 	local blockId = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or MC.GetBlock( bx, by, bz )
 	local progressPerTick, progressError, mining
@@ -299,7 +310,6 @@ function SV.BeginMining( ply, bx, by, bz, options )
 	end
 	if not plan then return false, validationError end
 
-	local fingerprint
 	local toolStack
 	if external then
 		toolStack = external.toolStack
@@ -318,6 +328,9 @@ function SV.BeginMining( ply, bx, by, bz, options )
 		selectedFingerprint = fingerprint,
 		toolStack = toolStack,
 		startedAt = CurTime(),
+		nextTickAt = CurTime() + TICK_INTERVAL,
+		commandNumber = options and options.commandNumber or 0,
+		instant = progressPerTick >= 1,
 		source = source,
 		sourceId = external and external.sourceId or "mc_item_hand",
 		sourceToken = sourceToken,
@@ -342,13 +355,23 @@ function SV.BeginMining( ply, bx, by, bz, options )
 	return true, snapshot
 end
 
+function SV.BeginMining( ply, bx, by, bz, options )
+	local ok, result = beginMining( ply, bx, by, bz, options )
+	if not ok and IsValid( ply ) and result ~= "survival_destroy_delay" then
+		local cell = { bx = bx, by = by, bz = bz, commandNumber = options and options.commandNumber or 0 }
+		if SV.SyncBreakPlan then SV.SyncBreakPlan( ply, bx, by, bz ) end
+		sendStage( ply, cell, nil )
+	end
+	return ok, result
+end
+
 local function sessionStillValid( ply, session )
 	if not IsValid( ply ) or not ply:Alive() or ply:InVehicle() then return false, "player_invalid" end
 	if SV.PlayerIsCreative and SV.PlayerIsCreative( ply ) then return false, "creative_mode" end
 	if session.requireAttackHeld and not ply:KeyDown( IN_ATTACK ) then return false, "released" end
 	local weapon = ply:GetActiveWeapon()
 	if session.source == "inventory" then
-		if not IsValid( weapon ) or weapon:GetClass() ~= "mc_item_hand" then return false, "weapon_changed" end
+		if not IsValid( weapon ) or ( weapon:GetClass() ~= "mc_item_hand" and weapon:GetClass() ~= "mc_inventory" ) then return false, "weapon_changed" end
 		local fingerprint, fingerprintError = selectedFingerprint( ply )
 		if not fingerprint or fingerprint ~= session.selectedFingerprint then return false, fingerprintError or "held_item_changed" end
 	else
@@ -364,8 +387,8 @@ local function sessionStillValid( ply, session )
 		local aimAllowed, aimError = currentAimAllowsBlockAttack( ply, session.bx, session.by, session.bz )
 		if not aimAllowed then return false, aimError end
 	end
-	local reach = MC.CurrentReach and MC.CurrentReach() or ( MC.BS or 36.5 ) * 5
-	local eye = MC.EntityEyeWorldPos and MC.EntityEyeWorldPos( ply ) or ply:EyePos()
+	local reach = MC.CurrentReach()
+	local eye = MC.API.Coords.EntityEyeWorldPos( ply )
 	if reach > 0 and not MC.ReachAllowsEye( eye, session.bx, session.by, session.bz, reach ) then return false, "out_of_reach" end
 	return true
 end
@@ -375,14 +398,16 @@ timer.Create( "mc_survival_mining_tick", TICK_INTERVAL, 0, function()
 		local valid, reason = sessionStillValid( ply, session )
 		if not valid then
 			SV.CancelMining( ply, reason )
-		else
-			local progressPerTick, progressError, mining = MC.BlockMiningProgressPerTick
-				and MC.BlockMiningProgressPerTick( session.stateId, session.toolStack, ply, session.modifiers )
+		elseif CurTime() >= session.nextTickAt then
+			local progressPerTick, progressError, mining = MC.BlockMiningProgressPerTick(
+				session.stateId, session.toolStack, ply, session.modifiers )
 			if not progressPerTick then
 				SV.CancelMining( ply, progressError or "mining_rules_unavailable" )
 			else
 				session.lastMining = mining
-				session.progress = math.min( 1, session.progress + progressPerTick )
+				local steps = math.floor( ( CurTime() - session.nextTickAt ) / TICK_INTERVAL ) + 1
+				session.nextTickAt = session.nextTickAt + steps * TICK_INTERVAL
+				session.progress = math.min( 1, session.progress + progressPerTick * steps )
 				local stage = math.Clamp( math.floor( session.progress * 10 ), 0, 9 )
 				if stage ~= session.stage then
 					session.stage = stage
@@ -397,11 +422,14 @@ end )
 hook.Add( "PlayerDeath", "mc_cancel_mining_on_death", function( ply ) SV.CancelMining( ply, "death" ) end )
 hook.Add( "PlayerDeath", "mc_clear_creative_destroy_delay_on_death", function( ply )
 	SV.CreativeDestroyStates[ply] = nil
+	SV.SurvivalDestroyStates[ply] = nil
 end )
 hook.Add( "PlayerDisconnected", "mc_cancel_mining_on_disconnect", function( ply )
 	SV.CancelMining( ply, "disconnect" )
 	SV.CreativeDestroyStates[ply] = nil
+	SV.SurvivalDestroyStates[ply] = nil
 end )
 hook.Add( "MC.PlayerGameModeChanged", "mc_clear_creative_destroy_delay_on_mode_change", function( ply )
 	SV.CreativeDestroyStates[ply] = nil
+	SV.SurvivalDestroyStates[ply] = nil
 end )

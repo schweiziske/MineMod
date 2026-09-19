@@ -71,6 +71,8 @@ end
 function PANEL:RefreshInventoryStack()
 	if ( self.Kind ~= "inventory" and self.Kind ~= "menu" and self.Kind ~= "result" ) or self.MenuIndex == nil then return end
 	local state = MC.ClientInventory
+	local preview = state and state.quickCraftPreview
+	self.PreviewStack = preview and preview.slots[self.MenuIndex] or nil
 	if self.Kind == "inventory" and self.InventoryIndex ~= nil then
 		-- Player slots are mirrored independently from an open menu.  Reading the
 		-- authoritative 36-slot mirror prevents a late open snapshot from leaving
@@ -123,8 +125,9 @@ function PANEL:Paint( w, h )
 		surface.SetDrawColor( UI.Colors.valid )
 		surface.DrawRect( self.Scale, self.Scale, w - self.Scale * 2, h - self.Scale * 2 )
 	end
-	if not MC.IsEmptyItemStack( self.Stack ) then
-		UI.ItemRenderer.DrawStack( self.Stack, self.Scale, self.Scale, 16 * self.Scale, { scale = self.Scale } )
+	local displayed = self.PreviewStack or self.Stack
+	if not MC.IsEmptyItemStack( displayed ) then
+		UI.ItemRenderer.DrawStack( displayed, self.Scale, self.Scale, 16 * self.Scale, { scale = self.Scale } )
 	end
 	return true
 end

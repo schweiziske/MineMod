@@ -322,7 +322,7 @@ local function rollbackPredictionCell( pending )
 	local currentStateId = MC.GetBlockState( pending.bx, pending.by, pending.bz )
 	if currentStateId ~= pending.stateId then return end
 	MC.SetBlockStateRaw( pending.bx, pending.by, pending.bz, pending.oldStateId or 0 )
-	markPredictedCellDirty( pending.bx, pending.by, pending.bz, false,
+	markPredictedCellDirty( pending.bx, pending.by, pending.bz, true,
 		currentStateId, pending.oldStateId or 0 )
 end
 
@@ -491,22 +491,26 @@ local function predictedCellsArePlaceable( cells )
 		local existingId = MC.GetBlock( cell.bx, cell.by, cell.bz )
 		if cell.updateExisting then
 			if existingId == 0 or existingId ~= cell.id then return false end
-		elseif existingId ~= 0
-		and not ( MC.CellIsFluidBlock and MC.CellIsFluidBlock( cell.bx, cell.by, cell.bz ) ) then
+		elseif not MC.PlacementCanReplaceState( MC.GetBlockState( cell.bx, cell.by, cell.bz ),
+			cell.stateId or MC.StateFromLegacy( cell.id, cell.orient ) ) then
 			return false
 		end
 	end
 	return true
 end
 
-function MC.PredictSetBlockState( bx, by, bz, stateId )
+function MC.PredictPlacementPlan( plan )
+	if not MC.ClientEditPredictionEnabled() or not plan then return false end
+	if not predictedCellsArePlaceable( plan.cells ) then return false end
+	return predictCells( plan.cells, function() return true end )
+end
+
+function MC.PredictSetBlockState( bx, by, bz, stateId, context )
 	if not MC.ClientEditPredictionEnabled() then return false end
 	stateId = math.floor( tonumber( stateId ) or -1 )
 	if stateId <= 0 or not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return false end
-	local plan = MC.BuildPlacementStatePlan and MC.BuildPlacementStatePlan( bx, by, bz, stateId )
-	if not plan then return false end
-	if not predictedCellsArePlaceable( plan.cells ) then return false end
-	return predictCells( plan.cells, function() return true end )
+	local plan = MC.BuildPlacementStatePlan and MC.BuildPlacementStatePlan( bx, by, bz, stateId, context )
+	return MC.PredictPlacementPlan( plan )
 end
 
 function MC.PredictSetBlock( bx, by, bz, id, orient )
@@ -520,7 +524,7 @@ end
 
 function MC.PredictBreakBlock( bx, by, bz, ply )
 	if not MC.ClientEditPredictionEnabled() then return false end
-	if IsValid( ply ) and not MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, MC.CurrentReach() ) then return false end
+	if IsValid( ply ) and not MC.ReachAllowsEye( MC.API.Coords.EntityEyeWorldPos( ply ), bx, by, bz, MC.CurrentReach() ) then return false end
 	local oldId = MC.GetBlock( bx, by, bz )
 	if oldId == 0 then return false end
 	local oldOrient = MC.GetBlockOrient( bx, by, bz )

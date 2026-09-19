@@ -351,7 +351,7 @@ function T.AcceptHello( hello )
 	return true
 end
 
-local function markCellChanged( cell, oldStateId, rateLimited )
+local function markCellChanged( cell, oldStateId, rateLimited, correction )
 	if MC.MarkLightingDirtyForStateChange then
 		MC.MarkLightingDirtyForStateChange( cell.bx, cell.by, cell.bz,
 			oldStateId, cell.stateId, rateLimited )
@@ -363,7 +363,8 @@ local function markCellChanged( cell, oldStateId, rateLimited )
 		MC.MarkFluidGeometryDirtyForStateChange( cell.bx, cell.by, cell.bz, oldStateId, cell.stateId )
 	end
 	if MC.MarkCellPhysNeighbours then
-		MC.MarkCellPhysNeighbours( cell.bx, cell.by, cell.bz, false, rateLimited == true )
+		MC.MarkCellPhysNeighbours( cell.bx, cell.by, cell.bz, correction == true,
+			rateLimited == true and correction ~= true )
 	end
 end
 
@@ -510,7 +511,7 @@ local function applyTransactionNow( transaction )
 			end
 			if affectsBulk then noteBulkCell( bulkGroup, item.cell.bx, item.cell.by, item.cell.bz ) end
 		elseif item.changed then
-			markCellChanged( item.cell, item.oldStateId, rateLimited )
+			markCellChanged( item.cell, item.oldStateId, rateLimited, correction )
 		elseif item.cell.blockEntityOp ~= BE_NONE then
 			local oldDefinition = item.oldBlockEntityDefinition
 			local newDefinition = item.blockEntityDefinition
@@ -519,7 +520,8 @@ local function applyTransactionNow( transaction )
 			end
 			if ( oldDefinition and oldDefinition.affectsCollision ) or ( newDefinition and newDefinition.affectsCollision ) then
 				if MC.MarkCellPhysNeighbours then
-					MC.MarkCellPhysNeighbours( item.cell.bx, item.cell.by, item.cell.bz, false, rateLimited == true )
+					MC.MarkCellPhysNeighbours( item.cell.bx, item.cell.by, item.cell.bz, correction,
+						rateLimited == true and not correction )
 				end
 			end
 		end

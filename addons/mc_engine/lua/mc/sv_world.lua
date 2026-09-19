@@ -447,7 +447,7 @@ function SV.Validate( ply, bx, by, bz, placing )
 
 	local reach = C.Reach:GetFloat()
 	if reach > 0 and IsValid( ply ) then
-		if not MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, reach ) then
+		if not MC.ReachAllowsEye( MC.API.Coords.EntityEyeWorldPos( ply ), bx, by, bz, reach ) then
 			--notify( ply, "Too far (mc_reach)" )
 			return false
 		end
@@ -873,7 +873,7 @@ end
 local function validateReach( ply, bx, by, bz )
 	local reach = C.Reach:GetFloat()
 	if reach > 0 and IsValid( ply ) then
-		if not MC.ReachAllowsEye( ply:EyePos(), bx, by, bz, reach ) then
+		if not MC.ReachAllowsEye( MC.API.Coords.EntityEyeWorldPos( ply ), bx, by, bz, reach ) then
 			--notify( ply, "Too far (mc_reach)" )
 			return false
 		end
@@ -901,17 +901,13 @@ local function validatePlacementPlan( ply, plan )
 		if cell.updateExisting then
 			if existingId == 0 or existingId ~= cell.id then return false end
 		else
-			-- BlockBehaviour.Properties#replaceable: a fluid cell is not "occupied"
-			-- for placement purposes, it is overwritten. It already counts towards
-			-- SV.BlockCount, so replacing one adds nothing to the block cap.
-			local replacingFluid = existingId ~= 0
-				and MC.CellIsFluidBlock and MC.CellIsFluidBlock( cell.bx, cell.by, cell.bz ) == true
-			if existingId ~= 0 and not replacingFluid then return false end
+			local stateId = cell.stateId or MC.StateFromLegacy( cell.id, cell.orient )
+			if not MC.PlacementCanReplaceState( MC.GetBlockState( cell.bx, cell.by, cell.bz ), stateId ) then return false end
 			if wouldTrapPlayer( cell.bx, cell.by, cell.bz, cell.id, cell.orient, cell.stateId ) then
 				--notify( ply, "A player is in the way" )
 				return false
 			end
-			if not replacingFluid then add = add + 1 end
+			if existingId == 0 then add = add + 1 end
 		end
 	end
 
@@ -1035,8 +1031,8 @@ function SV.SetBlockState( bx, by, bz, stateId, options )
 	}, transactionOptions )
 end
 
-function SV.SyncPlacementStatePlan( ply, bx, by, bz, stateId )
-	local plan = MC.BuildPlacementStatePlan and MC.BuildPlacementStatePlan( bx, by, bz, stateId )
+function SV.SyncPlacementStatePlan( ply, bx, by, bz, stateId, context )
+	local plan = MC.BuildPlacementStatePlan and MC.BuildPlacementStatePlan( bx, by, bz, stateId, context )
 	if plan then
 		SV.SyncCells( ply, plan.cells )
 	else

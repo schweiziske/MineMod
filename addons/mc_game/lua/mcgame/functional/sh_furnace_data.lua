@@ -217,7 +217,7 @@ function MC.FurnaceTakeResult( container, slotIndex, button, _, context, mode )
 	context = context or container.context or {}
 
 	if mode == "quick_move" then
-		local remaining, moved = MC.ContainerMoveStackTo( container, output, data.playerTargets, context )
+		local remaining, moved = MC.ContainerMoveStackTo( container, output, data.resultTargets or data.playerTargets, context )
 		if not moved then return false, "furnace_inventory_full" end
 		return MC.InventorySlotSet( slot, remaining )
 	end
@@ -240,7 +240,12 @@ function MC.FurnaceTakeResult( container, slotIndex, button, _, context, mode )
 		return MC.InventorySlotSet( slot, nil )
 	end
 	if button ~= 0 and button ~= 1 then return false, "invalid_button" end
-	local amount = button == 1 and 1 or output.count
+	local amount = output.count
+	if mode == "throw" then
+		amount = button == 0 and 1 or output.count
+	elseif button == 1 and MC.IsEmptyItemStack( container.cursor ) then
+		amount = math.floor( ( output.count + 1 ) / 2 )
+	end
 	local ok, err = putFurnaceResultInCursor( container, output, amount )
 	if not ok then return false, err end
 	return MC.InventorySlotSet( slot,

@@ -1,5 +1,4 @@
--- Client crack-stage projection. It is presentation only; the server decides
--- progress, cancellation and completion.
+-- Crack projection for local prediction and authoritative remote miners.
 
 if not CLIENT then return end
 
@@ -62,17 +61,12 @@ local function freeCrackMesh( crack )
 	end
 end
 
-net.Receive( "mc_mining_progress", function()
-	local miner = net.ReadEntity()
-	local bx = net.ReadInt( MC.Net.COORD_BITS )
-	local by = net.ReadInt( MC.Net.COORD_BITS )
-	local bz = net.ReadInt( MC.Net.COORD_BITS )
-	local encodedStage = net.ReadUInt( 4 )
+function MC.SetClientMiningCrack( miner, bx, by, bz, stage )
 	if not IsValid( miner ) then return end
 
 	local key = miner:EntIndex()
 	local previous = MC.ClientMiningCracks[key]
-	if encodedStage == 0 then
+	if stage == nil then
 		freeCrackMesh( previous )
 		MC.ClientMiningCracks[key] = nil
 		return
@@ -81,7 +75,7 @@ net.Receive( "mc_mining_progress", function()
 	local crack = {
 		miner = miner,
 		bx = bx, by = by, bz = bz,
-		stage = math.Clamp( encodedStage - 1, 0, 9 ),
+		stage = math.Clamp( stage, 0, 9 ),
 	}
 	-- The ten progress stages share geometry. Preserve it while the miner keeps
 	-- working on the same cell and only switch the material at draw time.
@@ -95,6 +89,17 @@ net.Receive( "mc_mining_progress", function()
 		crack.nextHitSoundAt = CurTime()
 	end
 	MC.ClientMiningCracks[key] = crack
+end
+
+net.Receive( "mc_mining_progress", function()
+	local miner = net.ReadEntity()
+	local bx, by, bz = net.ReadInt( MC.Net.COORD_BITS ), net.ReadInt( MC.Net.COORD_BITS ), net.ReadInt( MC.Net.COORD_BITS )
+	local encodedStage, completed = net.ReadUInt( 4 ), net.ReadBool()
+	local commandNumber = net.ReadUInt( 32 )
+	local stage
+	if encodedStage > 0 then stage = encodedStage - 1 end
+	if MC.ReceiveClientMiningStage and MC.ReceiveClientMiningStage( miner, bx, by, bz, stage, completed, commandNumber ) then return end
+	MC.SetClientMiningCrack( miner, bx, by, bz, stage )
 end )
 
 local function rotatedUVFlags( uf, vf, rotation )
@@ -124,7 +129,7 @@ local function quadNormal( points, fallback )
 end
 
 local function addTriangleQuad( vertices, points, uvs, normal, order )
-	local bs = tonumber( MC.BS ) or 36.5
+	local bs = MC.API.Coords.BlockSize()
 	for index = 1, 6 do
 		local source = order[index]
 		vertices[#vertices + 1] = {

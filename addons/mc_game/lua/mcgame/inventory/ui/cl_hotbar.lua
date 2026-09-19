@@ -68,6 +68,40 @@ local function inventoryTextEntryFocused()
 	return class == "TextEntry" or class == "DTextEntry"
 end
 
+local worldKeysDown = {}
+local WORLD_KEYS = { [MOUSE_MIDDLE] = 0, [KEY_Q] = 1, [KEY_F] = 2 }
+
+local function worldInputAvailable()
+	return hotbarInputActive() and not inventoryScreenVisible()
+		and not gui.IsGameUIVisible() and not vgui.CursorVisible()
+		and not IsValid( vgui.GetKeyboardFocus() )
+end
+
+local function worldKeyPressed( button )
+	local operation = WORLD_KEYS[button]
+	if operation == nil or worldKeysDown[button] then return end
+	worldKeysDown[button] = true
+	if not worldInputAvailable() then return end
+	local whole = input.IsKeyDown( KEY_LCONTROL ) or input.IsKeyDown( KEY_RCONTROL )
+	MC.RequestInventoryWorldAction( operation, whole )
+end
+
+hook.Add( "PlayerButtonDown", "mc_inventory_world_shortcuts", function( ply, button )
+	if ply == LocalPlayer() then worldKeyPressed( button ) end
+end )
+hook.Add( "PlayerButtonUp", "mc_inventory_world_shortcuts", function( ply, button )
+	if ply == LocalPlayer() then worldKeysDown[button] = nil end
+end )
+-- Raw edges also cover an unbound middle button and single-player, where some
+-- predicted PlayerButtonDown hooks are not delivered on the client.
+hook.Add( "Think", "mc_inventory_world_shortcuts", function()
+	for button in pairs( WORLD_KEYS ) do
+		local down
+		if button == MOUSE_MIDDLE then down = input.IsMouseDown( button ) else down = input.IsKeyDown( button ) end
+		if down then worldKeyPressed( button ) else worldKeysDown[button] = nil end
+	end
+end )
+
 local function selectedStack()
 	local state = MC.ClientInventory
 	return state and state.slots and state.slots[( state.selected or 0 ) + 1] or nil
@@ -143,6 +177,7 @@ hook.Add( "PlayerBindPress", "mc_inventory_hotbar_input", function( ply, bind, p
 		end
 		return
 	end
+	if worldInputAvailable() and ( bind == "+menu" or bind == "impulse 100" or bind == "+attack3" ) then return true end
 	local number = string.match( bind, "^slot([1-9])$" )
 	if number then
 		MC.SelectInventoryHotbarSlot( tonumber( number ) - 1 )

@@ -14,7 +14,7 @@ local BLOCK_AIM_INFRASTRUCTURE = {
 }
 
 local function blockSize()
-	return tonumber( MC.BS or MC.Config and MC.Config.BlockSize ) or 36.5
+	return MC.API.Coords.BlockSize()
 end
 
 local function blockAimDistance( start, direction, blockHit )
@@ -27,14 +27,14 @@ end
 
 function MC.TraceEntityBeforeBlock( ply, blockHit )
 	if not IsValid( ply ) or not blockHit or not util or not util.TraceLine then return nil, nil end
-	local start = MC.EntityEyeWorldPos and MC.EntityEyeWorldPos( ply )
-		or ply.GetShootPos and ply:GetShootPos() or ply:EyePos()
+	local worldStart = MC.API.Coords.EntityEyeWorldPos( ply )
+	local start = ply.GetShootPos and ply:GetShootPos() or ply:EyePos()
 	local direction = ply.EyeAngles and ply:EyeAngles():Forward()
 		or ply.GetAimVector and ply:GetAimVector() or nil
 	if not start or not direction or direction:LengthSqr() <= 0.000001 then return nil, nil end
 	direction = Vector( direction.x, direction.y, direction.z )
 	direction:Normalize()
-	local blockDistance = blockAimDistance( start, direction, blockHit )
+	local blockDistance = blockAimDistance( worldStart, direction, blockHit )
 	if not blockDistance then return nil, nil end
 	local epsilon = math.max( blockSize() * 0.001, 0.01 )
 	local weapon = ply.GetActiveWeapon and ply:GetActiveWeapon() or nil

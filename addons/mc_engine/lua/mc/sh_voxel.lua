@@ -381,7 +381,8 @@ end
 
 function MC.CanPreviewPlace( ply, bx, by, bz, id, orient, stateId )
 	if not IsValid( ply ) then return false end
-	return ( MC.GetBlock( bx, by, bz ) == 0 or previewCellIsFluid( bx, by, bz ) )
+	stateId = stateId or MC.StateFromLegacy( id, orient )
+	return MC.PlacementCanReplaceState( MC.GetBlockState( bx, by, bz ), stateId )
 		and previewCanEdit( ply )
 		and previewWorldBoundsOK( bx, by, bz )
 		and not previewWouldTrapPlayer( bx, by, bz, id, orient, stateId )
@@ -506,8 +507,9 @@ function MC.TraceBlockRay( startPos, dir, maxDist, options )
 
 	for _ = 1, maxSteps do
 		local id = MC.GetBlock( bx, by, bz )
-		local pendingPrediction = CLIENT and MC.IsPendingPredictionCell and MC.IsPendingPredictionCell( bx, by, bz )
-		if id ~= 0 and not pendingPrediction and dist <= maxDist then
+		-- Predicted placements already exist locally and can support the next
+		-- click. Skipping all pending cells forced building to wait for a round trip.
+		if id ~= 0 and dist <= maxDist then
 			local orient = MC.GetBlockOrient( bx, by, bz )
 			local stateId = MC.GetBlockState( bx, by, bz )
 			-- Skipping the cell rather than the box test keeps the DDA walking, so

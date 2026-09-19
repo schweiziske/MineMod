@@ -162,20 +162,20 @@ local function buildMenu( ply, record, width, height, kind, tablePosition )
 	local transferRules
 	if kind == "player" then
 		transferRules = {
-			crafting = { targets = { "hotbar", "main" } },
+			crafting = { targets = { "main", "hotbar" } },
 			main = { resolve = inventoryQuickMoveTargets( "hotbar" ) },
 			hotbar = { resolve = inventoryQuickMoveTargets( "main" ) },
-			armor_head = { targets = { "hotbar", "main" } },
-			armor_chest = { targets = { "hotbar", "main" } },
-			armor_legs = { targets = { "hotbar", "main" } },
-			armor_feet = { targets = { "hotbar", "main" } },
-			offhand = { targets = { "hotbar", "main" } },
+			armor_head = { targets = { "main", "hotbar" } },
+			armor_chest = { targets = { "main", "hotbar" } },
+			armor_legs = { targets = { "main", "hotbar" } },
+			armor_feet = { targets = { "main", "hotbar" } },
+			offhand = { targets = { "main", "hotbar" } },
 		}
 	else
 		transferRules = {
-			crafting = { targets = { "hotbar", "main" } },
-			main = { targets = { "crafting" } },
-			hotbar = { targets = { "crafting" } },
+			crafting = { targets = { "main", "hotbar" } },
+			main = { targets = { "crafting" }, fallback = { "hotbar" } },
+			hotbar = { targets = { "crafting" }, fallback = { "main" } },
 		}
 	end
 
@@ -201,6 +201,7 @@ local function buildMenu( ply, record, width, height, kind, tablePosition )
 		inputSlots = inputSlots,
 		playerOffset = playerOffset,
 		playerTargets = craftingTargets,
+		resultTargets = MC.ContainerResolveTargets( menu, { "hotbar", "main" }, true ),
 		tablePosition = tablePosition,
 	}
 	menu.playerOffset = playerOffset
