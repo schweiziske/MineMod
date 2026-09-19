@@ -89,7 +89,7 @@ function ENT:SetExtendedLifetime()
 		MC.ItemEntityParity.SetAgeTicks( self, MC.ItemEntityParity.Constants.extendedAge )
 		return
 	end
-	self.MCCreatedAt = now() - 300
+	self.MCCreatedAt = now() + ITEM_LIFETIME
 end
 
 function ENT:MakeFakeItem()
@@ -276,6 +276,7 @@ function ENT:Think()
 		self:NextThink( now() + ( MC.ItemEntityParity.Constants.tickSeconds or 0.05 ) )
 		return true
 	end
+	MC.ItemEntityParity.RestoreLegacyEntity( self )
 	local current = CurTime()
 	local logistics = MC.LogisticsParity
 	local logisticsEnabled = logistics and logistics.Enabled and logistics.Enabled() == true or false

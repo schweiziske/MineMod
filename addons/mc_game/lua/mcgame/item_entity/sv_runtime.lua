@@ -74,7 +74,8 @@ end
 local function legacyAge( entity )
 	if entity.MCItemAgeTicks ~= nil then return math.floor( tonumber( entity.MCItemAgeTicks ) or 0 ) end
 	if entity.MCLifetime == nil and entity.MCCreatedAt == -math.huge then return C.infiniteAge end
-	return math.max( 0, math.floor( ( now() - ( tonumber( entity.MCCreatedAt ) or now() ) ) / C.tickSeconds ) )
+	-- A future creation time represents an extended (negative) item age.
+	return math.floor( ( now() - ( tonumber( entity.MCCreatedAt ) or now() ) ) / C.tickSeconds )
 end
 
 local function legacyPickupDelay( entity )
@@ -130,11 +131,18 @@ function R.RestoreLegacyEntity( entity )
 	local state = R.EntityStates[entity]
 	if not state then return false end
 	local age = math.floor( tonumber( entity.MCItemAgeTicks ) or 0 )
-	entity.MCCreatedAt = age == C.infiniteAge and -math.huge or now() - math.max( 0, age ) * C.tickSeconds
-	entity.MCLifetime = age == C.infiniteAge and nil or math.max( C.tickSeconds,
-		( tonumber( entity.MCItemLifetimeTicks ) or C.lifetimeTicks ) * C.tickSeconds )
+	if age == C.infiniteAge then
+		entity.MCCreatedAt, entity.MCLifetime = -math.huge, nil
+	else
+		entity.MCCreatedAt = now() - age * C.tickSeconds
+		entity.MCLifetime = math.max( C.tickSeconds,
+			( tonumber( entity.MCItemLifetimeTicks ) or C.lifetimeTicks ) * C.tickSeconds )
+	end
 	local delay = math.floor( tonumber( entity.MCPickupDelayTicks ) or 0 )
 	entity.MCPickupReadyAt = delay == C.infinitePickupDelay and math.huge or now() + math.max( 0, delay ) * C.tickSeconds
+	-- Legacy timestamps own these values until parity is enabled again.
+	-- Keeping old tick values would rewind age and pickup delay on re-entry.
+	entity.MCItemAgeTicks, entity.MCPickupDelayTicks, entity.MCItemLifetimeTicks = nil, nil, nil
 	local physics = physicsFor( entity )
 	if physics then
 		if physics.EnableGravity then physics:EnableGravity( true ) end
