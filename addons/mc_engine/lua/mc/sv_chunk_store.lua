@@ -42,6 +42,7 @@ local function resetTables()
 	Store.EditOverlayPath = nil
 	Store.MinRuntimeCZ = nil
 	Store.MaxRuntimeCZ = nil
+	Store.LastError = nil
 	Store.Active = false
 end
 
@@ -470,6 +471,7 @@ function Store.LoadLazyManifest( manifest, manifestPath, realm )
 	Store.ChunkIndex = manifest.chunkIndex or {}
 	Store.Parts = manifest.parts or {}
 	Store.EditOverlayPath = overlayPathForManifest( manifest, Store.ManifestPath )
+	local blockCount = tonumber( manifest.stats and manifest.stats.blocks ) or 0
 	local manifestRegistryOK, manifestRegistryError = validateStoredRegistryMetadata( manifest )
 	if not manifestRegistryOK then
 		resetTables()
@@ -484,27 +486,24 @@ function Store.LoadLazyManifest( manifest, manifestPath, realm )
 	if legacyOverlayPath ~= Store.EditOverlayPath then overlayCandidates[#overlayCandidates + 1] = legacyOverlayPath end
 	for _, overlayPath in ipairs( overlayCandidates ) do
 		if file.Exists( overlayPath, Store.Realm ) then
-			local overlay = readSaveJSON( overlayPath )
-			if istable( overlay ) then
-				local registryOK, registryError = validateStoredRegistryMetadata( overlay )
-				if not registryOK then
-					resetTables()
-					return false, registryError or "invalid_overlay_registry_snapshot"
-				end
+			local overlay, overlayError = readSaveJSON( overlayPath )
+			if not istable( overlay ) or not istable( overlay.edits ) then
+				resetTables()
+				return false, "invalid_edit_overlay:" .. tostring( overlayError or "invalid_overlay_data" )
 			end
-			if istable( overlay ) and istable( overlay.edits ) then
-				Store.EditChunks = overlay.edits
+			local registryOK, registryError = validateStoredRegistryMetadata( overlay )
+			if not registryOK then
+				resetTables()
+				return false, registryError or "invalid_overlay_registry_snapshot"
 			end
-			if istable( overlay ) and tonumber( overlay.blockCount ) then
-				SV.BlockCount = math.max( 0, math.floor( tonumber( overlay.blockCount ) or 0 ) )
-			end
+			Store.EditChunks = overlay.edits
+			local editedCount = tonumber( overlay.blockCount )
+			if editedCount ~= nil then blockCount = math.max( 0, math.floor( editedCount ) ) end
 			break
 		end
 	end
 
-	if not tonumber( SV.BlockCount ) or SV.BlockCount <= 0 then
-		SV.BlockCount = tonumber( manifest.stats and manifest.stats.blocks ) or 0
-	end
+	SV.BlockCount = blockCount
 	rebuildVerticalBounds()
 	SV.StreamInterestDirty = true
 	return true
@@ -520,12 +519,9 @@ function Store.LoadAllChunksEager()
 	for key in pairs( keys ) do ordered[#ordered + 1] = key end
 	table.sort( ordered )
 	for _, key in ipairs( ordered ) do
-		local hasBase = #baseChunkEntriesForRuntimeKey( key ) > 0
-		local hasEdit = Store.EditChunks and Store.EditChunks[key] ~= nil
-		local chunk = Store.HydrateChunkNow( key, true )
-		if ( hasBase or hasEdit ) and not chunk then
-			return false, Store.LastError or "eager_chunk_hydration_failed"
-		end
+		-- nil is a successful empty chunk when edits removed its last block.
+		local _, loadError = Store.HydrateChunkNow( key, true )
+		if loadError then return false, loadError end
 	end
 	Store.Reset()
 	return true
@@ -921,7 +917,7 @@ end
 function Store.HydrateChunkNow( key, priority )
 	if not Store.IsLazyWorld() then return MC.GetChunkByKey( key ) end
 	key = tostring( key or "" )
-	if key == "" then return nil end
+	if key == "" then return nil, "invalid_chunk_key" end
 	local profiling = SV.BinaryNetHydrationProfileEnabled and SV.BinaryNetHydrationProfileEnabled() == true
 	local sample = profiling and {
 		key = key, startedAt = SysTime(), priority = priority == true,
@@ -938,8 +934,7 @@ function Store.HydrateChunkNow( key, priority )
 		if SV.RecordChunkHydrationProfile then SV.RecordChunkHydrationProfile( sample ) end
 	end
 	local existing = MC.GetChunkByKey( key )
-	if existing and Store.LoadedKeys[key] then
-		Store.LoadedKeys[key] = true
+	if Store.LoadedKeys[key] then
 		finishProfile( true, nil, true )
 		return existing
 	end
@@ -980,7 +975,7 @@ function Store.HydrateChunkNow( key, priority )
 				Store.LastError = err
 				Store.QueuedKeys[key] = nil
 				finishProfile( false, err, false )
-				return nil
+				return nil, err
 			end
 			local idx = math.floor( tonumber( entry.index ) or 0 )
 			local record = partData and partData.chunks and partData.chunks[idx]
@@ -988,14 +983,14 @@ function Store.HydrateChunkNow( key, priority )
 				Store.LastError = "invalid_chunk_index"
 				Store.QueuedKeys[key] = nil
 				finishProfile( false, Store.LastError, false )
-				return nil
+				return nil, Store.LastError
 			end
 			loadedChunk, touched, loadError = loadBaseChunkIntoWorld( key, record, sample )
 			if not loadedChunk and loadError then
 				Store.LastError = loadError
 				Store.QueuedKeys[key] = nil
 				finishProfile( false, loadError, false )
-				return nil
+				return nil, loadError
 			end
 		end
 		chunk = chunk or loadedChunk
@@ -1013,7 +1008,7 @@ function Store.HydrateChunkNow( key, priority )
 			Store.LastError = overlayError or "overlay_apply_failed"
 			Store.QueuedKeys[key] = nil
 			finishProfile( false, Store.LastError, false )
-			return nil
+			return nil, Store.LastError
 		end
 		if chunk then MC.FinalizeChunkStateStorage( chunk ) end
 		if chunk and chunk.count <= 0 then
