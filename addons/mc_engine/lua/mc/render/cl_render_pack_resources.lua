@@ -42,11 +42,24 @@ function P.Validate( plan )
 	for _, ownerKey in ipairs( sortedKeys( plan.owners ) ) do
 		local owner = plan.owners[ownerKey]
 		local def = owner.definition
-		local independentAO = def.adapter == "mc:pbr_quad_v3"
+		local moving = def.adapter == "mc:pbr_quad_v4" or def.adapter == "mc:vanilla_quad_v2"
+		local independentAO = def.adapter == "mc:pbr_quad_v3" or def.adapter == "mc:pbr_quad_v4"
 		local ibl = independentAO or def.adapter == "mc:pbr_quad_v2"
 		local pbr = ibl or def.adapter == "mc:pbr_quad_v1"
-		requireValue( def.abi == 1 and def.layout == "mc:quad_corners_v1" and ( pbr or def.adapter == "mc:vanilla_quad_draft" ),
+		requireValue( def.abi == 1 and def.layout == "mc:quad_corners_v1"
+			and ( pbr or def.adapter == "mc:vanilla_quad_draft" or def.adapter == "mc:vanilla_quad_v2" ),
 			"render_pack_adapter", ownerKey .. ": unsupported quad-corners-v1 adapter" )
+		if moving then
+			requireValue( MC.RenderDynamicLights and MC.RenderDynamicLights.VERSION == 1,
+				"render_dynamic_light_adapter", ownerKey .. ": moving lights require engine light-data v1" )
+			for _, name in ipairs( { "opaque", "cutout", "translucent", "sprite" } ) do
+				requireValue( def.programs["dynamic_" .. name], "render_dynamic_light_program", ownerKey .. ": missing dynamic_" .. name )
+			end
+			for _, name in ipairs( { "water", "block_entity" } ) do
+				requireValue( not def.programs[name] or def.programs["dynamic_" .. name],
+					"render_dynamic_light_program", ownerKey .. ": missing dynamic_" .. name )
+			end
+		end
 		requireValue( not independentAO or R.OCCLUSION_VERSION == 1, "render_pbr_occlusion_adapter",
 			ownerKey .. ": PBR v3 requires the independent corner AO atlas; update the engine and restart the client" )
 		if def.programs.block_entity then
@@ -59,6 +72,11 @@ function P.Validate( plan )
 			requireValue( independentAO and MC.RenderPBRWater and MC.RenderPBRWater.VERSION == 1
 				and pass and pass.stage == "world_translucent" and normal and normal.colorSpace == "linear",
 				"render_water_adapter", ownerKey .. ": water requires v3 terrain_translucent, linear water_normal and water payload v1" )
+		end
+		if def.programs.water_ssr then
+			requireValue( def.programs.water and def.programs.scene_depth and def.programs.ssr_copy
+				and def.programs.water_ssr_composite and MC.RenderPBRSSR and MC.RenderPBRSSR.VERSION == 1,
+				"render_ssr_adapter", ownerKey .. ": SSR requires the water SSR v1 engine and all four auxiliary programs" )
 		end
 		local buildKey = ownerKey .. "/" .. def.build
 		if not P.builds[buildKey] then newBuilds[#newBuilds + 1] = buildKey end
@@ -82,6 +100,8 @@ function P.Validate( plan )
 		for name, pass in pairs( def.passes ) do
 			requireValue( pass.stage == "world_opaque" or pass.stage == "world_cutout" or pass.stage == "world_translucent",
 				"render_pack_stage", ownerKey .. "/" .. name .. ": unsupported processing stage " .. pass.stage )
+			requireValue( not moving or def.programs["dynamic_" .. pass.program],
+				"render_dynamic_light_program", ownerKey .. "/" .. name .. ": missing local-light companion program" )
 			for semantic in pairs( pass.inputs ) do
 				requireValue( semantic == "albedo" or pbr and ( semantic == "normal" or semantic == "orm" )
 					or ibl and ( semantic == "environment" or semantic == "dfg" ), "render_pack_input",
@@ -111,6 +131,7 @@ function P.Validate( plan )
 	for _, key in ipairs( sortedKeys( plan.requests ) ) do
 		local request = plan.requests[key]
 		local def = plan.owners[request.owner].definition
+		local moving = def.adapter == "mc:pbr_quad_v4" or def.adapter == "mc:vanilla_quad_v2"
 		local byStage = {}
 		for _, stage in ipairs( STAGES ) do byStage[stage] = {} end
 		result.requests[key] = byStage
@@ -119,9 +140,10 @@ function P.Validate( plan )
 			local node = nodes[nodeKey]
 			if not node then
 				node = { key = nodeKey, stage = pass.stage, program = def.programs[pass.program], adapter = def.adapter,
+					dynamicProgram = moving and def.programs["dynamic_" .. pass.program] or nil,
 					owner = request.owner, materialMaps = def.materialMaps,
 					shadowProgram = ( def.adapter == "mc:pbr_quad_v1" or def.adapter == "mc:pbr_quad_v2"
-						or def.adapter == "mc:pbr_quad_v3" ) and def.programs.shadow or nil }
+						or def.adapter == "mc:pbr_quad_v3" or def.adapter == "mc:pbr_quad_v4" ) and def.programs.shadow or nil }
 				if pass.inputs.albedo then
 					node.albedo = result.textures[request.owner .. "/" .. pass.inputs.albedo]
 				end
@@ -249,7 +271,7 @@ end
 function P.Material( bundle, node, sourceMaterial, blockSize )
 	local source = R.SourceTexture( sourceMaterial )
 	bundle.sources[sourceMaterial] = source
-	local ibl = node.adapter == "mc:pbr_quad_v2" or node.adapter == "mc:pbr_quad_v3"
+	local ibl = node.adapter == "mc:pbr_quad_v2" or node.adapter == "mc:pbr_quad_v3" or node.adapter == "mc:pbr_quad_v4"
 	local pbr = ibl or node.adapter == "mc:pbr_quad_v1"
 	local colorSpace = pbr and "srgb" or "linear"
 	if node.albedo then source, colorSpace = textureFor( node.albedo ), node.albedo.colorSpace end
@@ -289,8 +311,11 @@ function P.Material( bundle, node, sourceMaterial, blockSize )
 	requireValue( P.materialCount < 2048, "render_pack_material_budget", "2048 immutable runtime materials reached" )
 	local slot = tostring( P.materialCount + 1 )
 	local maps
-	if pbr then maps = { normal = normal, orm = orm, environment = environment, dfg = dfg } end
+	if pbr then maps = { normal = normal, orm = orm, environment = environment, dfg = dfg, colorSpace = colorSpace } end
 	local material = R.BoundMaterial( P.shared, slot, source, node.stage, blockSize, node.program, colorSpace, maps )
+	if node.dynamicProgram then
+		MC.RenderDynamicLights.RegisterMaterial( material, node.dynamicProgram, P.shared, source, node.stage, blockSize, maps )
+	end
 	P.materials[signature] = { material = material, source = source, normal = normal, orm = orm }
 	P.materialCount = P.materialCount + 1
 	return material
@@ -314,6 +339,11 @@ function P.WaterMaterial( bundle, owner, blockSize )
 	local maps = { normal = normal, orm = orm, environment = environment, dfg = dfg, water = true }
 	local material = R.BoundMaterial( P.shared, tostring( P.materialCount + 1 ), normal,
 		"world_translucent", blockSize, def.programs.water, "srgb", maps )
+	if def.adapter == "mc:pbr_quad_v4" and def.programs.dynamic_water then
+		MC.RenderDynamicLights.RegisterMaterial( material, def.programs.dynamic_water, P.shared, normal,
+			"world_translucent", blockSize, maps )
+	end
+	if def.programs.water_ssr then MC.RenderPBRSSR.Register( material, def, maps, blockSize ) end
 	P.materials[signature] = { material = material }
 	P.materialCount = P.materialCount + 1
 	return material

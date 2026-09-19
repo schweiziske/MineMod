@@ -74,12 +74,30 @@ function ENT:Impact( trace )
 	end
 end
 
+-- Java arrows clear fire on water contact. Keep the gameplay flag and its
+-- networked lighting state together, including water in a re-origining world.
+function ENT:ExtinguishInWater()
+	if not self.MCOnFire then return end
+	local wet = self:WaterLevel() > 0
+	if not wet then
+		local position, err = MC.API.Coords.EntityWorldPos( self )
+		if not position then return MC.Fault( "projectile_fire_position", "%s", tostring( err ) ) end
+		local fluid = MC.API.Liquid.AtPos( position )
+		wet = fluid ~= nil and fluid.kind == "water"
+	end
+	if wet then
+		self.MCOnFire = false
+		self:SetProjectileOnFire( false )
+	end
+end
+
 function ENT:Think()
 	local now = CurTime()
 	if now - ( self.MCCreatedAt or now ) >= ( self.MCLifetime or 10 ) then
 		self:Remove()
 		return
 	end
+	self:ExtinguishInWater()
 	local dt = math.Clamp( now - ( self.MCLastThink or now ), 0, 0.1 )
 	self.MCLastThink = now
 	if dt <= 0 then self:NextThink( now + 0.01 ) return true end

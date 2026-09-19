@@ -52,7 +52,8 @@ function R.ValidateBuild()
 		and not build.build:find( "[^0-9a-f]" ), "l2_visual_fingerprint", "invalid candidate fingerprint" )
 	requireValue( not R.build or R.build == build.build, "l2_visual_build_changed",
 		"candidate build changed; restart the client before using another fingerprint" )
-	requireValue( build.abi == 1 and build.layout == "mc:quad_corners_v1" and build.adapter == "mc:vanilla_quad_draft",
+	requireValue( build.abi == 1 and build.layout == "mc:quad_corners_v1"
+		and ( build.adapter == "mc:vanilla_quad_draft" or build.adapter == "mc:vanilla_quad_v2" ),
 		"l2_visual_binding", "unsupported quad binding contract" )
 	requireValue( file and file.Read and util and util.SHA256, "l2_visual_verify_api",
 		"candidate verification requires file.Read and util.SHA256" )
@@ -246,6 +247,24 @@ local function uploadPixels( texture, width, firstPixel, pixels, rowScale, rowOf
 	restore( pushed, render.PopRenderTarget )
 	requireValue( ok and #errors == 0, "l2_visual_upload",
 		"candidate pixel upload failed: " .. tostring( err ) .. " " .. table.concat( errors, "; " ) )
+end
+
+-- Local lights have a separate tiny data texture, consumed only by the
+-- additive programs. The original lightmap/base shaders remain byte-identical.
+function R.DynamicLightTexture()
+	if not R.dynamicLightTexture then
+		R.dynamicLightTexture = GetRenderTargetEx( "mc_dynamic_lights_rgba8_v1", 64, 1,
+			RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE, bit.bor( 1, 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA8888 )
+	end
+	local texture = R.dynamicLightTexture
+	requireValue( texture and not texture:IsError() and texture:Width() == 64 and texture:Height() == 1,
+		"dynamic_light_texture", "could not create the 64x1 point-filter light data texture" )
+	return texture
+end
+
+function R.UploadDynamicLights( pixels )
+	requireValue( #pixels == 40, "dynamic_light_upload_size", "eight five-texel light records required" )
+	uploadPixels( R.DynamicLightTexture(), 64, 0, pixels )
 end
 
 function R.UploadPart( part, owner )

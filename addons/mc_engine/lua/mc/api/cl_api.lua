@@ -253,6 +253,24 @@ end
 API.Render = API.Render or {}
 local Render = API.Render
 
+function Render.RegisterDynamicLightProvider( id, definition )
+	return MC.RenderDynamicLights.RegisterProvider( id, definition )
+end
+
+function Render.UnregisterDynamicLightProvider( id )
+	return MC.RenderDynamicLights.UnregisterProvider( id )
+end
+
+-- Custom opaque geometry that cannot participate in GMod's native SSAO pass.
+-- The callback runs inside the SSR private depth scope with a captured camera.
+function Render.RegisterSSRDepthRenderer( id, callback )
+	return MC.RenderPBRSSR.RegisterDepthRenderer( id, callback )
+end
+
+function Render.UnregisterSSRDepthRenderer( id )
+	return MC.RenderPBRSSR.UnregisterDepthRenderer( id )
+end
+
 -- Mark one cell dirty: geometry remesh + light SAMPLE refresh. Full light
 -- re-propagation is not triggered - world edits that need it should go
 -- through the server API, which syncs and relights properly.

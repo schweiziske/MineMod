@@ -881,6 +881,20 @@ function Coords.EntityEyeWorldPos( ent )
 	return Vector( position.x, position.y, position.z )
 end
 
+-- Current client render view <-> persistent MC world. Keep camera positions
+-- out of engine traces and provider positions out of render-relative math.
+function Coords.RenderToWorld( pos )
+	if not CLIENT then return nil, "client_only" end
+	if not isvector( pos ) then return nil, "invalid_position" end
+	return MC.RenderToWorldPos( pos )
+end
+
+function Coords.WorldToRender( pos )
+	if not CLIENT then return nil, "client_only" end
+	if not isvector( pos ) then return nil, "invalid_position" end
+	return MC.WorldToRenderPos( pos )
+end
+
 local function entityWorldBounds( ent )
 	if not IsValid( ent ) then return nil, nil, "invalid_entity" end
 	local minimum, maximum

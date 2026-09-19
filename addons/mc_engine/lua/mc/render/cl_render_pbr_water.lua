@@ -110,7 +110,7 @@ function W.PrepareView()
     constants:SetField( 4, 4, 1 )
 end
 
-function W.CaptureRefraction()
+function W.CaptureRefraction( view, records )
     if not captureValidated then
         requireValue( render.GetScreenEffectTexture and render.UpdateScreenEffectTexture,
             "render_water_refraction_api", "water refraction requires the engine scene-copy texture" )
@@ -123,20 +123,27 @@ function W.CaptureRefraction()
     -- Never cache by FrameNumber: portals/reflections can share a frame clock.
     render.UpdateScreenEffectTexture( 0 )
     refractionTexture = texture
+    if MC.RenderPBRSSR then MC.RenderPBRSSR.Capture( view, records, texture, constants ) end
 end
 
-function W.Bind( material, record, base )
+function W.SetOrigin( target, record, base )
     local inverse = 1 / record.blockSize
     -- Only the chunk origin is wrapped. Wrapping each vertex would interpolate
     -- backwards at a period boundary; using engine XY would jump on re-origin.
-    constants:SetField( 1, 1, record.originBX % 4096 - base.x * inverse )
-    constants:SetField( 1, 2, record.originBY % 4096 - base.y * inverse )
-    constants:SetField( 1, 3, record.originBZ % 4096 - base.z * inverse )
-    constants:SetField( 1, 4, inverse )
+    target:SetField( 1, 1, record.originBX % 4096 - base.x * inverse )
+    target:SetField( 1, 2, record.originBY % 4096 - base.y * inverse )
+    target:SetField( 1, 3, record.originBZ % 4096 - base.z * inverse )
+    target:SetField( 1, 4, inverse )
+end
+
+function W.Bind( material, record, base )
+    W.SetOrigin( constants, record, base )
     if boundRefractionMaterial ~= material then
         material:SetTexture( "$basetexture", refractionTexture )
         boundRefractionMaterial = material
     end
     MC.RenderPBR.Bind( material )
     material:SetMatrix( "$invviewprojmat", constants )
+    local localLight = MC.RenderDynamicLights.count > 0 and MC.RenderDynamicLights.Material( material )
+    if localLight then localLight:SetMatrix( "$invviewprojmat", constants ) end
 end

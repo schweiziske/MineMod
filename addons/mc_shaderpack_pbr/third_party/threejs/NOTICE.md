@@ -8,6 +8,7 @@ Pinned upstream commit: `7300402f96c23bfa2174ffc0da01fb4e277d33da`.
 
 - Water.js: https://github.com/mrdoob/three.js/blob/7300402f96c23bfa2174ffc0da01fb4e277d33da/examples/jsm/objects/Water.js
 - Water2.js: https://github.com/mrdoob/three.js/blob/7300402f96c23bfa2174ffc0da01fb4e277d33da/examples/jsm/objects/Water2.js
+- SSRShader.js: https://github.com/mrdoob/three.js/blob/7300402f96c23bfa2174ffc0da01fb4e277d33da/examples/jsm/shaders/SSRShader.js
 - Normal image: https://github.com/mrdoob/three.js/blob/7300402f96c23bfa2174ffc0da01fb4e277d33da/examples/textures/waternormals.jpg
 - Image SHA256: `add9912b158a4fe9c12421745babe68c44c8af75631ac4837236cb2a03bc373f`.
 
@@ -17,6 +18,9 @@ Adapted parts:
   velocities, their layered sum, and the 1.5 lateral normal scale.
 - Water2: two half-cycle flow phases, their triangular crossfade, and Schlick
   Fresnel mixing of reflected and refracted colour.
+- SSRShader: screen-space ray traversal with reciprocal-depth interpolation,
+  near-plane clipping and finite hit thickness informed the water-only SSR
+  implementation in `shadersrc/l2/pbr/ssr/trace.fxh`.
 - The normal image is reduced from 1024 square to 256 square and normalized
   by `_tools/build_pbr_water.py`; an independently generated alpha channel
   provides shoreline foam. The generated normal PNG is a derived asset.
@@ -43,7 +47,13 @@ Local adaptations:
   sun BRDF, shadow atlas and prefiltered sky environment remain in use.
 - Transmission uses per-channel water extinction and the current framebuffer.
   This port does not include the upstream Reflector/Refractor scene rerenders;
-  reflected buildings and entities are not supplied by the static sky atlas.
+  the optional water SSR path supplies screen-visible buildings/entities.
+- SSR uses GMod's linear colour-depth pass, a half-resolution receiver pass,
+  bounded deterministic traversal with five binary refinements, screen-edge
+  and distance fades, and four depth-aware reconstruction taps. It replaces
+  only the environmental reflection; missing hits retain the sky response.
+  No temporal history, SSRPass JavaScript or upstream scene-rendering classes
+  are included. GMod's additional scene depth rendering remains a real cost.
 
 The original JavaScript sources are research references, not runtime or build
 dependencies. The vendored JPEG is a build input; the addon includes the

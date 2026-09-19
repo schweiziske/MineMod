@@ -86,10 +86,10 @@ local function restoreChunkMeshRenderState( setCullMode, matrixPushed )
 	if setCullMode then cullOK, cullError = pcall( restoreDefaultCullMode ) end
 	local colorOK, colorError = pcall( resetColorWriteOverride )
 	local depthOK, depthError = pcall( resetDepthOverride )
-	if not matrixOK then MC.Fault( "render_l2_restore_matrix", "%s", tostring( matrixError ) ) end
-	if not cullOK then MC.Fault( "render_l2_restore_cull", "%s", tostring( cullError ) ) end
-	if not colorOK then MC.Fault( "render_l2_restore_color", "%s", tostring( colorError ) ) end
-	if not depthOK then MC.Fault( "render_l2_restore_depth", "%s", tostring( depthError ) ) end
+	if not matrixOK then return { code = "render_l2_restore_matrix", message = tostring( matrixError ) } end
+	if not cullOK then return { code = "render_l2_restore_cull", message = tostring( cullError ) } end
+	if not colorOK then return { code = "render_l2_restore_color", message = tostring( colorError ) } end
+	if not depthOK then return { code = "render_l2_restore_depth", message = tostring( depthError ) } end
 end
 
 -- Apply render overrides once per pack pass, with no per-chunk state writes.
@@ -116,6 +116,7 @@ local function drawMeshListInner( list, currentMaterial )
 			render.SetMaterial( currentMaterial )
 		end
 		entry.mesh:Draw()
+		MC.RenderDynamicLights.Draw( currentMaterial, entry.mesh )
 	end
 	return currentMaterial
 end
@@ -287,6 +288,7 @@ MC.DrawCullStats = MC.DrawCullStats or {
 	meshes = 0,
 }
 MC.DrawTranslucentCullStats = MC.DrawTranslucentCullStats or {}
+MC.DrawSSRDepthCullStats = MC.DrawSSRDepthCullStats or {}
 
 local function addPlane( nx, ny, nz, hx, hz )
 	planeCount = planeCount + 1
@@ -421,7 +423,8 @@ local function drawPackChunk( key, translucent )
 			end
 		end
 	end )
-	restoreChunkMeshRenderState( setCullMode, matrixPushed )
+	local restoreError = restoreChunkMeshRenderState( setCullMode, matrixPushed )
+	if restoreError then MC.Fault( restoreError.code, "%s", restoreError.message ) end
 	if not ok then runtime.DrawFault( "chunk=" .. tostring( key ) .. ": " .. tostring( err ) ) end
 	reportL2Faults()
 end
@@ -434,7 +437,7 @@ function MC.DrawChunkTranslucent( key )
 	drawPackChunk( key, true )
 end
 
-local function drawVisibleChunks( store, entries, count, chunks, stats )
+local function drawVisibleChunks( store, entries, count, chunks, stats, depthStage )
 	local pushMatrix = cam.PushModelMatrix
 	local popMatrix = cam.PopModelMatrix
 	local getChunk = MC.GetChunkByKey
@@ -457,6 +460,7 @@ local function drawVisibleChunks( store, entries, count, chunks, stats )
 				local sections = list.sections
 				local x, y, z = frame.originX + renderFrameX - cullEyeX,
 					frame.originY + renderFrameY - cullEyeY, frame.originZ + renderFrameZ - cullEyeZ
+				local dynamic = not depthStage and MC.RenderDynamicLights.AffectsBounds( x, y, z, list.bounds )
 				local record = Occlusion and Occlusion.ChunkRecord( e.key, chunks[e.key] )
 				local chunkDrawn = false
 				for s = 1, sections and #sections or 1 do
@@ -486,10 +490,15 @@ local function drawVisibleChunks( store, entries, count, chunks, stats )
 								end
 								if entry.material ~= currentMaterial then
 									currentMaterial = entry.material
-									MC.RenderPBR.Bind( currentMaterial )
-									render.SetMaterial( currentMaterial )
+									if depthStage then
+										render.SetMaterial( MC.RenderPBRSSR.DepthMaterial( currentMaterial, depthStage == "world_cutout" ) )
+									else
+										MC.RenderPBR.Bind( currentMaterial )
+										render.SetMaterial( currentMaterial )
+									end
 								end
 								entry.mesh:Draw()
+								if dynamic then MC.RenderDynamicLights.Draw( currentMaterial, entry.mesh ) end
 								meshes, vertices = meshes + 1, vertices + ( entry.vertexCount or 0 )
 								sectionDrawn = true
 							end
@@ -618,11 +627,14 @@ function MC.DrawPBRShadowCasters( groups, version, chunks, view, shadow )
 end
 
 local function drawPackStages( translucent, depthOnly )
+	-- The explicitly owned SSR merge uses clip-W materials and MIN blending.
+	-- Lit RGB and translucent water must never reach this private depth texture.
+	if depthOnly and ( translucent or not MC.RenderPBRSSR or not MC.RenderPBRSSR.BeginDepth() ) then return end
 	local started = SysTime()
 	local runtime = MC.RenderPackRuntime
 	local groups, version, chunks = runtime.GetStages( translucent )
 	if not updateCullState( depthOnly ) then return end
-	local stats = translucent and MC.DrawTranslucentCullStats or MC.DrawCullStats
+	local stats = depthOnly and MC.DrawSSRDepthCullStats or translucent and MC.DrawTranslucentCullStats or MC.DrawCullStats
 	stats.sectionsTested, stats.sectionsDrawn, stats.sectionFrustumCulled, stats.sectionOcclusionCulled = 0, 0, 0, 0
 	stats.directionCulled, stats.vertices, stats.verticesCulled = 0, 0, 0
 	local totalTested, totalDrawn, totalDistance, totalFrustum, totalStale = 0, 0, 0, 0, 0
@@ -630,14 +642,21 @@ local function drawPackStages( translucent, depthOnly )
 	for _, passes in ipairs( groups ) do
 		for _, pass in ipairs( passes ) do
 			local cached = ensurePackEntries( pass, version )
-			local setCullMode = applyPassState( not translucent )
+			local setCullMode = applyPassState( not translucent and not depthOnly )
 			if translucent then render.OverrideDepthEnable( true, false ) end
 			local ok, drawn, distance, frustum, stale, meshes = pcall( drawVisibleChunks,
-				pass.store, cached.entries, cached.count, chunks, stats )
+				pass.store, cached.entries, cached.count, chunks, stats, depthOnly and pass.node.stage or nil )
 			local matrixPushed = passMatrixPushed
 			passMatrixPushed = false
-			restoreChunkMeshRenderState( setCullMode, matrixPushed )
+			local restoreError = restoreChunkMeshRenderState( setCullMode, matrixPushed )
+			if restoreError then
+				if depthOnly then error( restoreError, 0 ) end
+				MC.Fault( restoreError.code, "%s", restoreError.message )
+			end
 			if not ok then
+				-- The SSR owner must restore its outer camera/RT before Fault,
+				-- including when strict mode is disabled.
+				if depthOnly then error( { code = "render_ssr_terrain_depth", message = tostring( drawn ) }, 0 ) end
 				runtime.DrawFault( "stage=" .. pass.node.stage .. " pass=" .. pass.node.key .. ": " .. tostring( drawn ) )
 				reportL2Faults()
 				return
@@ -656,14 +675,14 @@ local function drawPackStages( translucent, depthOnly )
 		MC.DrawCullStats.totalMeshes = ( MC.DrawCullStats.meshes or 0 ) + stats.meshes
 		MC.DrawCullStats.totalVertices = ( MC.DrawCullStats.vertices or 0 ) + stats.vertices
 	end
-	reportL2Faults()
+	if not depthOnly then reportL2Faults() end
 end
 
 concommand.Add( "mc_mesh_cull_stats", function()
-	for pass = 1, 2 do
-		local stats = pass == 1 and MC.DrawCullStats or MC.DrawTranslucentCullStats
+	for pass = 1, 3 do
+		local stats = pass == 1 and MC.DrawCullStats or pass == 2 and MC.DrawTranslucentCullStats or MC.DrawSSRDepthCullStats
 		print( string.format( "[MC cull] %s draws=%d vertices=%d rejectedVertices=%d sections=%d/%d frustum=%d occlusion=%d directions=%d CPU=%.3fms GPU=unmeasured",
-			pass == 1 and "opaque" or "translucent", stats.meshes or 0, stats.vertices or 0, stats.verticesCulled or 0,
+			pass == 1 and "opaque" or pass == 2 and "translucent" or "ssr_depth", stats.meshes or 0, stats.vertices or 0, stats.verticesCulled or 0,
 			stats.sectionsDrawn or 0, stats.sectionsTested or 0, stats.sectionFrustumCulled or 0,
 			stats.sectionOcclusionCulled or 0, stats.directionCulled or 0, stats.cpuMS or 0 ) )
 	end
@@ -680,6 +699,10 @@ local function drawAllChunks( translucent, depthOnly )
 	if runtime then drawPackStages( translucent, depthOnly ) end
 end
 
+MC.RenderPBRSSR.RegisterDepthRenderer( "terrain", function()
+	if meshRenderingEnabled() then drawAllChunks( false, true ) end
+end )
+
 MC.RefreshChunkRenderFrame()
 hook.Add( "MCWorldAdapterChanged", "mc_chunk_render_frame", function()
 	MC.RefreshChunkRenderFrame()
@@ -693,6 +716,7 @@ hook.Remove( "PostDrawTranslucentRenderables", "mc_draw_chunks" )
 -- Guarding on it blanks the whole world outdoors on 2D-sky maps, so only the
 -- real 3D-skybox pass (bSky3D) is skipped.
 hook.Add( "PostDrawOpaqueRenderables", "mc_draw_chunks", function( bDepth, bSky, bSky3D )
+	if bDepth then return end
 	local perf = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
 	local started = perf and SysTime() or nil
 	if not bSky3D and meshRenderingEnabled() then drawAllChunks( false, bDepth ) end
@@ -706,6 +730,7 @@ hook.Add( "PostDrawOpaqueRenderables", "mc_draw_chunks", function( bDepth, bSky,
 end )
 -- translucent blocks only; the bulk of the world stays in the opaque pass above
 hook.Add( "PostDrawTranslucentRenderables", "mc_draw_chunks", function( bDepth, bSky, bSky3D )
+	if bDepth then return end
 	local perf = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
 	local started = perf and SysTime() or nil
 	if not bSky3D and meshRenderingEnabled() then drawAllChunks( true, bDepth ) end

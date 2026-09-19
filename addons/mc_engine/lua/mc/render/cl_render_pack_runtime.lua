@@ -519,7 +519,8 @@ local function refreshBlockEntityMaterials( c, sources, binding )
 	local def = c.plan.owners[owner].definition
 	local pass = def.passes.terrain_cutout
 	local node = { key = owner .. "/block_entity", owner = owner, stage = "world_cutout",
-		adapter = def.adapter, program = def.programs.block_entity, materialMaps = def.materialMaps }
+		adapter = def.adapter, program = def.programs.block_entity, materialMaps = def.materialMaps,
+		dynamicProgram = def.adapter == "mc:pbr_quad_v4" and def.programs.dynamic_block_entity or nil }
 	for _, semantic in ipairs( { "normal", "orm", "environment", "dfg" } ) do
 		node[semantic] = c.bundle.textures[owner .. "/" .. pass.inputs[semantic]]
 	end
@@ -562,6 +563,18 @@ end
 
 -- Like standalone entities, water has no terrain source entry or extra world
 -- pass. Its immutable program/resources are verified with the selected pack.
+function L.PrepareSpriteLightMaterial( source, translucent )
+	local c = L.active
+	if not c or not sameWorld( c ) then return nil end
+	local def = c.plan.owners["pack/" .. c.pack].definition
+	if def.adapter ~= "mc:pbr_quad_v4" and def.adapter ~= "mc:vanilla_quad_v2" then return nil end
+	if not def.programs.dynamic_sprite then return nil end
+	local ok, material = pcall( MC.RenderDynamicLights.RegisterMaterial, source, def.programs.dynamic_sprite,
+		P.shared, R.SourceTexture( source ), translucent and "world_translucent" or "world_cutout", c.blockSize, nil, true )
+	if not ok then L.QueueFault( "render_sprite_light_material", material ) return false, material end
+	return material
+end
+
 function L.WaterMaterial()
 	local c = L.active
 	if not c or not sameWorld( c ) then return nil end
