@@ -512,7 +512,7 @@ end
 -- Normal GMod maps do not have an InfMap owner and must still be able to open
 -- a v10/MCB4 save. Hydrate every indexed runtime chunk once, then discard the
 -- manifest/cache so the rest of the server remains on the direct-world path.
-function Store.LoadAllChunksEager()
+function Store.LoadAllChunksEager( deferWorldEffects )
 	if not Store.IsLazyWorld() then return true end
 	local keys = runtimeKeysForManifest()
 	local ordered = {}
@@ -520,7 +520,7 @@ function Store.LoadAllChunksEager()
 	table.sort( ordered )
 	for _, key in ipairs( ordered ) do
 		-- nil is a successful empty chunk when edits removed its last block.
-		local _, loadError = Store.HydrateChunkNow( key, true )
+		local _, loadError = Store.HydrateChunkNow( key, deferWorldEffects ~= true, deferWorldEffects )
 		if loadError then return false, loadError end
 	end
 	Store.Reset()
@@ -914,7 +914,7 @@ local function loadBaseChunkIntoWorld( key, record, timing )
 	return MC.GetChunkByKey( key ), touched
 end
 
-function Store.HydrateChunkNow( key, priority )
+function Store.HydrateChunkNow( key, priority, deferWorldEffects )
 	if not Store.IsLazyWorld() then return MC.GetChunkByKey( key ) end
 	key = tostring( key or "" )
 	if key == "" then return nil, "invalid_chunk_key" end
@@ -1020,19 +1020,21 @@ function Store.HydrateChunkNow( key, priority )
 
 	Store.LoadedKeys[key] = true
 	Store.QueuedKeys[key] = nil
-	if chunk and chunk.count and chunk.count > 0 and priority then
+	if not deferWorldEffects and chunk and chunk.count and chunk.count > 0 and priority then
 		local collisionStarted = sample and SysTime() or nil
 		SV.EnsureChunkEnt( chunk )
 		SV.MarkPhysDirty( key, true )
 		if sample then timingAdd( sample, "collisionQueueMS", ( SysTime() - collisionStarted ) * 1000 ) end
 	end
 	markHydrated( key )
-	for hydratedKey in pairs( hydratedKeys ) do
-		if SV.InvalidateLightingChunk then SV.InvalidateLightingChunk( hydratedKey ) end
-		if MC.RunEvent then
-			local cx, cy, cz
-			if MC.ChunkKeyToCoords then cx, cy, cz = MC.ChunkKeyToCoords( hydratedKey ) end
-			MC.RunEvent( "MC.ChunkHydrated", hydratedKey, cx, cy, cz )
+	if not deferWorldEffects then
+		for hydratedKey in pairs( hydratedKeys ) do
+			if SV.InvalidateLightingChunk then SV.InvalidateLightingChunk( hydratedKey ) end
+			if MC.RunEvent then
+				local cx, cy, cz
+				if MC.ChunkKeyToCoords then cx, cy, cz = MC.ChunkKeyToCoords( hydratedKey ) end
+				MC.RunEvent( "MC.ChunkHydrated", hydratedKey, cx, cy, cz )
+			end
 		end
 	end
 	finishProfile( true, nil, false )
