@@ -1433,14 +1433,25 @@ local function importPaletteState( cache, palette, index )
 	return stateId, err
 end
 
+local function isSavedRecordList( records )
+	if not istable( records ) then return false end
+	local length, count = #records, 0
+	for index in pairs( records ) do
+		if type( index ) ~= "number" or index < 1 or index > length or index ~= math.floor( index ) then return false end
+		count = count + 1
+	end
+	return count == length
+end
+
 local function loadSavedBlockEntities( chunk, envelopes )
 	if envelopes == nil then return true end
-	if not chunk or not istable( envelopes ) then return false, "invalid_block_entities" end
+	if not chunk or not isSavedRecordList( envelopes ) then return false, "invalid_block_entities" end
 	local seen = {}
 	for _, envelope in ipairs( envelopes ) do
 		if not istable( envelope ) then return false, "invalid_block_entity_envelope" end
-		local localIndex = math.floor( tonumber( envelope.localIndex ) or -1 )
-		if not MC.LocalIndexInRange( localIndex ) or seen[localIndex] then return false, "invalid_block_entity_index" end
+		local localIndex = tonumber( envelope.localIndex )
+		if not localIndex or localIndex ~= math.floor( localIndex ) or not MC.LocalIndexInRange( localIndex )
+			or seen[localIndex] then return false, "invalid_block_entity_index" end
 		seen[localIndex] = true
 		local lx, ly, lz = MC.DecodeLocal( localIndex )
 		local stateId = MC.GetBlockState(
@@ -1458,12 +1469,13 @@ end
 
 local function loadSavedOpaqueBlockEntities( chunk, records )
 	if records == nil then return true end
-	if not chunk or not istable( records ) then return false, "invalid_opaque_block_entities" end
+	if not chunk or not isSavedRecordList( records ) then return false, "invalid_opaque_block_entities" end
 	local seen, totalBytes = {}, 0
 	for _, record in ipairs( records ) do
 		if not istable( record ) then return false, "invalid_opaque_block_entity" end
-		local localIndex = math.floor( tonumber( record.localIndex ) or -1 )
-		if not MC.LocalIndexInRange( localIndex ) or seen[localIndex] then return false, "invalid_opaque_block_entity_index" end
+		local localIndex = tonumber( record.localIndex )
+		if not localIndex or localIndex ~= math.floor( localIndex ) or not MC.LocalIndexInRange( localIndex )
+			or seen[localIndex] then return false, "invalid_opaque_block_entity_index" end
 		seen[localIndex] = true
 		if not isstring( record.sourceType ) or record.sourceType == ""
 		or record.encoding ~= "typed-nbt-json-v1" or not istable( record.data ) then
