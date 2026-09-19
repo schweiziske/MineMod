@@ -757,8 +757,15 @@ function SV.HandleProjectileImpact( ent, trace )
 				attacker = owner,
 			}
 			if SV.PushCombatDamageContext then SV.PushCombatDamageContext( hitEntity, damageInfo, metadata ) end
-			hitEntity:TakeDamageInfo( damageInfo )
+			local damageOK, damageError = pcall( hitEntity.TakeDamageInfo, hitEntity, damageInfo )
 			if SV.PopCombatDamageContext then SV.PopCombatDamageContext( hitEntity, damageInfo, metadata ) end
+			if not damageOK then
+				-- Damage may already have applied before a callback failed. Retire
+				-- this impact and restore the outer context before reporting it.
+				ent:Remove()
+				MC.Fault( "projectile_impact_damage_failed", "%s", tostring( damageError ) )
+				return false, "projectile_impact_damage_failed"
+			end
 		end
 		if ent.GetProjectileOnFire and ent:GetProjectileOnFire() then
 			local ignitionContext = {
