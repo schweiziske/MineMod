@@ -900,14 +900,25 @@ local function savedBlockEntityCell( record, localIndex )
 	return sourceCX * savedChunkSize + lx, sourceCY * savedChunkSize + ly, sourceCZ * savedHeight + lz
 end
 
+local function isSavedRecordList( records )
+	if not istable( records ) then return false end
+	local length, count = #records, 0
+	for index in pairs( records ) do
+		if type( index ) ~= "number" or index < 1 or index > length or index ~= math.floor( index ) then return false end
+		count = count + 1
+	end
+	return count == length
+end
+
 local function applySavedBlockEntities( record, touched, staged )
 	local envelopes = record[5]
 	if envelopes == nil then return true end
-	if not istable( envelopes ) or not MC.DecodeBlockEntityEnvelope then return false, "invalid_block_entities" end
+	if not isSavedRecordList( envelopes ) or not MC.DecodeBlockEntityEnvelope then return false, "invalid_block_entities" end
 	local seen = {}
 	for _, envelope in ipairs( envelopes ) do
 		if not istable( envelope ) then return false, "invalid_block_entity_envelope" end
-		local sourceIndex = math.floor( tonumber( envelope.localIndex ) or -1 )
+		local sourceIndex = tonumber( envelope.localIndex )
+		if not sourceIndex or sourceIndex ~= math.floor( sourceIndex ) then return false, "invalid_block_entity_index" end
 		if seen[sourceIndex] then return false, "duplicate_block_entity_index" end
 		local bx, by, bz = savedBlockEntityCell( record, sourceIndex )
 		if bx == nil then return false, "invalid_block_entity_index" end
@@ -928,11 +939,12 @@ end
 local function applySavedOpaqueBlockEntities( record, touched, staged )
 	local records = record[6]
 	if records == nil then return true end
-	if not istable( records ) then return false, "invalid_opaque_block_entities" end
+	if not isSavedRecordList( records ) then return false, "invalid_opaque_block_entities" end
 	local seen, totalBytes = {}, 0
 	for _, source in ipairs( records ) do
 		if not istable( source ) then return false, "invalid_opaque_block_entity" end
-		local sourceIndex = math.floor( tonumber( source.localIndex ) or -1 )
+		local sourceIndex = tonumber( source.localIndex )
+		if not sourceIndex or sourceIndex ~= math.floor( sourceIndex ) then return false, "invalid_opaque_block_entity_index" end
 		if seen[sourceIndex] then return false, "duplicate_opaque_block_entity_index" end
 		local bx, by, bz = savedBlockEntityCell( record, sourceIndex )
 		if bx == nil then return false, "invalid_opaque_block_entity_index" end
