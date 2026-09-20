@@ -429,7 +429,8 @@ end
 
 local function nativeMeshBackendActive()
 	local backend = MC.GetMeshBackend and MC.GetMeshBackend() or nil
-	return backend and backend.native == true and ( not backend.IsActive or backend.IsActive() == true )
+	return backend and backend.native == true and backend.async ~= false
+		and ( not backend.IsActive or backend.IsActive() == true )
 end
 
 local frameBudget = {}

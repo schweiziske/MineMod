@@ -384,7 +384,7 @@ function MC.GetBlockLightDirtySection( key, sectionIndex )
 	return MC.MeshBlockLightDirty[key] and MC.MeshBlockLightDirty[key][sectionIndex]
 end
 
-function MC.GetCachedBlockEmission( key, sectionIndex, li, id, orient, stateId )
+function MC.GetCachedBlockEmission( key, sectionIndex, li, id, orient, stateId, nativeL2 )
 	local dirtySection = MC.MeshBlockEmitDirty[key] and MC.MeshBlockEmitDirty[key][sectionIndex]
 	if dirtySection and dirtySection[li] then return nil end
 	local section = MC.MeshBlockEmitCache[key] and MC.MeshBlockEmitCache[key][sectionIndex]
@@ -392,6 +392,17 @@ function MC.GetCachedBlockEmission( key, sectionIndex, li, id, orient, stateId )
 	if not record then return nil end
 	if record.id ~= id or record.orient ~= ( orient or 0 ) then return nil end
 	if stateId ~= nil and record.stateId ~= stateId then return nil end
+	if ( record.nativeL2 == true ) ~= ( nativeL2 == true ) then return nil end
+	if record.nativeL2 then
+		local count = record.vertexCount
+		if type( count ) ~= "number" or count % 6 ~= 0 or type( record.nativeCommands ) ~= "table"
+			or #record.nativeCommands ~= count / 6 * MC.NativeL2.COMMAND_STRIDE then
+			MC.Fault( "native_l2_cache_invalid", "invalid Native command cache at %s/%s/%s", key, sectionIndex, li )
+			return nil
+		end
+		MC.TouchBlockEmitCacheSection( key, sectionIndex )
+		return record
+	end
 	if not record.verts then return nil end
 	local vertexCount = record.vertexCount or VertexBuffer.Count( record.verts )
 	if vertexCount ~= VertexBuffer.Count( record.verts ) then return nil end
@@ -456,7 +467,7 @@ function MC.AppendCachedBlockEmission( record, buf, flushFn, meshPerf, vertexLim
 	if not record or not buf then return 0 end
 	if buf.l2 then
 		local requireValue = MC.RenderL2Resources.Require
-		local count = VertexBuffer.Count( record.verts )
+		local count = record.vertexCount or VertexBuffer.Count( record.verts )
 		requireValue( record.l2 and count % 6 == 0, "render_l2_cache_layout", "cannot append L1 geometry to an L2 buffer" )
 		local limit = math.floor( ( vertexLimit or 64998 ) / 6 )
 		requireValue( limit > 0, "render_l2_vertex_limit", "mesh capacity is smaller than one quad" )

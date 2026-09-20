@@ -95,11 +95,14 @@ function Q.NewSlice( chunk, blockSize )
 	requireValue( snapshot ~= nil, "L2 lighting snapshot is unavailable" )
 	local lighter = MC.RenderL2Lighting.New( snapshot.reader )
 	requireValue( lighter ~= nil and finite( blockSize ) and blockSize > 0, "invalid L2 slice lighting/scale" )
-	return { snapshot = snapshot, lighter = lighter, blockSize = blockSize, selections = {}, models = {} }
+	return { snapshot = snapshot, lighter = lighter, blockSize = blockSize, selections = {}, models = {},
+		nativeL2 = MC.NativeL2 and MC.NativeL2.IsActive() or false }
 end
 
-function Q.NewBuffer()
-	return { l2 = true, verts = VB.New(), pixels = {}, occlusion = {}, nv = 0, quadCount = 0 }
+function Q.NewBuffer( slice )
+	local native = slice and slice.nativeL2 or false
+	return { l2 = true, verts = VB.New(), pixels = {}, occlusion = {}, nv = 0, quadCount = 0,
+		nativeL2 = native, nativeCommands = native and {} or nil, nativeSlice = native and slice or nil }
 end
 
 function Q.Rebase( verts, firstVertex, count, firstQuad )
@@ -116,6 +119,14 @@ function Q.Rebase( verts, firstVertex, count, firstQuad )
 end
 
 function Q.AppendNative( target, source, firstQuad, count )
+	if target.nativeL2 then
+		requireValue( source.nativeL2 == true, "cannot append Lua vertices to a Native command buffer" )
+		local stride = MC.NativeL2.COMMAND_STRIDE
+		local offset = target.quadCount * stride
+		for i = 1, count * stride do target.nativeCommands[offset + i] = source.nativeCommands[firstQuad * stride + i] end
+		target.nv, target.quadCount = target.nv + count * 6, target.quadCount + count
+		return
+	end
 	requireValue( target.l2 and source.l2 and #source.pixels == VB.Count( source.verts ) / 6 * 4
 		and source.occlusion and #source.occlusion * 4 == #source.pixels,
 		"L2 append received an incompatible buffer" )
@@ -204,7 +215,17 @@ function Q.EmitNative( slice, buffer, quad, id, bx, by, bz, wx, wy, wz, emission
 		corners, positions, face = model.corners, model.corners, metadata.face
 		baked = model.l2Lighting
 	end
-	local pixels, occlusion = buffer.pixels, 4294967295
+	if buffer.nativeL2 and kind ~= KIND.FLUID then
+		if kind ~= KIND.CROSS and not baked then
+			baked = MC.RenderL2Lighting.BakeQuad( face, corners, { quadEmission = quadEmission } )
+			requireValue( baked ~= nil, "quad lighting template preparation failed" )
+			quad.l2Lighting = baked
+		end
+		MC.NativeL2.Emit( slice, buffer, quad, positions, uv, baked, bx, by, bz, wx, wy, wz,
+			tint, kind == KIND.CROSS and 1 or 0, quadEmission )
+		return
+	end
+	local pixels, occlusion = buffer.nativeL2 and {} or buffer.pixels, 4294967295
 	if kind == KIND.FLUID then
 		local meta = slice.fluidMeta or {}
 		slice.fluidMeta = meta
@@ -237,6 +258,11 @@ function Q.EmitNative( slice, buffer, quad, id, bx, by, bz, wx, wy, wz, emission
 		end
 		local ao = result.ao
 		occlusion = ao[1] + ao[2] * 256 + ao[3] * 65536 + ao[4] * 16777216
+	end
+	if buffer.nativeL2 then
+		MC.NativeL2.Emit( slice, buffer, quad, positions, uv, nil, bx, by, bz, wx, wy, wz,
+			tint, 2, quadEmission, pixels )
+		return
 	end
 	local verts, normal = buffer.verts, quad.normal
 	local base = verts.count / 6

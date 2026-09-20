@@ -183,6 +183,7 @@ local CLIENT_FILES = {
 	"mc/render/cl_render_l2_lighting.lua",
 	"mc/render/cl_render_l2_quad.lua",
 	"mc/render/cl_render_l2_resources.lua",
+	"mc/render/cl_native_l2_backend.lua",
 	"mc/render/cl_render_dynamic_lights.lua",
 	"mc/render/cl_render_shadow_math.lua",
 	"mc/render/cl_render_pbr.lua",
@@ -221,7 +222,7 @@ local CLIENT_FILES = {
 	"mc/debug/cl_gallery.lua",
 	"mc/cl_player.lua",
 	"mc/integration/cl_hand_weapon_bridge.lua",
-	-- The native renderer emits the retired L1 ABI. Do not start it for L2 worlds.
+	-- The legacy L1 world backend remains unloaded; L2 uses cl_native_l2_backend.
 	"mc/api/cl_api.lua",
 }
 
@@ -314,7 +315,7 @@ end
 for _, f in ipairs( SHARED ) do includeTracked( f ) end
 
 -- Pick the Lua L2 section layout before client modules cache its dimensions.
--- The native module probe remains available for non-rendering subsystems.
+-- The native module supplies L2 construction and optional non-rendering APIs.
 if CLIENT then
 	MC.JoinNoticeEnabled = MC.JoinNoticeEnabled or CreateClientConVar(
 		"mc_join_notice", "1", true, false,
@@ -346,7 +347,7 @@ if CLIENT then
 		"DrawVisible", "SetChunkVisible", "SetSimpleGreedy", "SetDirectionalDraw", "SetOcclusionCull", "SetLod",
 	}
 	MC.NativeMeshABI = 8
-	local NATIVE_MODULE_URL = "https://github.com/schweiziske/mc_swep"
+	local NATIVE_MODULE_URL = "https://github.com/ABSD546316187/mcswep_native_mesh/releases"
 
 	local function expectedNativeModulePath()
 		if not ( system and system.IsWindows and system.IsWindows() ) then return nil end
@@ -483,14 +484,21 @@ if SERVER then
 else
 	for _, f in ipairs( CLIENT_FILES ) do includeTracked( f ) end
 
-	-- World geometry has one supported ABI. The installed native module can
-	-- still serve other subsystems, but its L1 renderer cannot own world meshes.
+	-- Both builders publish L2 records. Native retains the section scheduler and
+	-- Lua state store while accelerating corner lighting and indexed Source uploads.
 	MC.MeshBackends = MC.MeshBackends or {}
 	MC.MeshBackends.lua = {
 		name = "lua",
 		native = false,
 		layout = "mc:quad_corners_v1",
 		IsActive = function() return true end,
+		BuildChunkMesh = MC.BuildChunkMesh,
+		RebuildChunkMeshLighting = MC.RebuildChunkMeshLighting,
+		FreeChunkMesh = MC.FreeChunkMesh,
+	}
+	MC.MeshBackends.native_l2 = {
+		name = "native_l2", native = true, async = false, layout = "mc:quad_corners_v1",
+		IsActive = MC.NativeL2.IsActive,
 		BuildChunkMesh = MC.BuildChunkMesh,
 		RebuildChunkMeshLighting = MC.RebuildChunkMeshLighting,
 		FreeChunkMesh = MC.FreeChunkMesh,
@@ -502,6 +510,7 @@ else
 		return true
 	end
 	function MC.GetMeshBackend()
+		if MC.NativeL2.IsActive() then return MC.MeshBackends.native_l2 end
 		return MC.MeshBackends.lua
 	end
 	function MC.BuildChunkMesh( ... )
