@@ -149,6 +149,7 @@ if concommand then
 			.. " active=" .. tostring( N.active ) .. " available=" .. tostring( available )
 			.. " layout=mc:quad_corners_v1 scheduler=Lua-sections" )
 		if reason or N.failure then print( "[MC Native L2] " .. tostring( N.failure or reason ) ) end
+		if MC.NativeTakeover then PrintTable( MC.NativeTakeover.GetStatus() ) end
 		if available then PrintTable( N.module.GetL2Stats() ) end
 	end )
 	concommand.Add( "mc_native_toggle", function()
