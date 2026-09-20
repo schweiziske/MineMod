@@ -74,6 +74,32 @@ local function rememberAuthoritative()
 	end
 end
 
+function MC.UseClientPlayerInventoryView()
+	-- Background deltas use player indices and may only acknowledge a selection.
+	-- Seed both mirrors from acknowledged player storage before changing layouts;
+	-- an empty menu would erase the hotbar when prediction is rebuilt.
+	local authoritative = State.authoritative
+	local slots = authoritative and authoritative.playerSlots or State.slots
+	local equipment = authoritative and authoritative.equipment or State.equipment
+	if authoritative then
+		State.revision, State.selected = authoritative.revision, authoritative.selected
+	end
+	State.slots = copyArray( slots, 36 )
+	State.equipment = {}
+	for slot, stack in pairs( equipment ) do State.equipment[slot] = MC.CopyItemStack( stack ) end
+	State.menu = {
+		kind = "player", slotCount = 36, playerOffset = 0, chestSlots = 0, crafting = false,
+		recipeRegistryHash = tostring( MC.RecipeRegistryHash or "" ), slots = copyArray( slots, 36 ),
+	}
+	State.cursor = nil
+	State.predictedContainer = nil
+	State.predictedRevision = State.revision
+	State.quickCraftPreview = nil
+	State.predictionBarrier = false
+	rememberAuthoritative()
+	State.selected = MC.ClientInventoryVisibleSelection( State.selected )
+end
+
 local function updateAuthoritativeFromDelta( revision, selected, changed, cursor, cursorApplies )
 	local authoritative = State.authoritative
 	if not authoritative then

@@ -644,8 +644,7 @@ net.Receive( "mc_inventory_delta", function()
 	end
 	if background then
 		if not State.menu or State.menu.slotCount ~= 36 then
-			State.menu = { kind = "player", slotCount = 36, playerOffset = 0, chestSlots = 0, crafting = false, slots = {} }
-			State.authoritative = nil
+			MC.UseClientPlayerInventoryView()
 		end
 	end
 	acknowledgeAction( actionId, accepted )
@@ -795,11 +794,9 @@ net.Receive( "mc_inventory_close", function()
 	local reason = net.ReadString()
 	if State.session and State.session.containerId == containerId and State.session.token == token then
 		State.session = nil
-		State.cursor = nil
 		State.actions = {}
-		State.authoritative = nil
-		State.predictedContainer = nil
-		State.quickCraftPreview = nil
+		MC.UseClientPlayerInventoryView()
+		MC.RebuildClientPrediction( true )
 		emit( "MC.InventoryClosed", reason, State )
 	end
 end )
