@@ -429,12 +429,14 @@ local function seedChunkBorderSky( addQ, chunk )
 	end
 end
 
-local function refloodChunkSky( key )
+local function refloodChunkSky( key, seedOnly )
 	local changed = newChangedCells()
-	local removeQ = newQueue()
 	local addQ = newQueue()
-	clearChunkStoredSkyToQueue( key, changed, removeQ )
-	runSkyDecrease( removeQ, addQ, changed )
+	if not seedOnly then
+		local removeQ = newQueue()
+		clearChunkStoredSkyToQueue( key, changed, removeQ )
+		runSkyDecrease( removeQ, addQ, changed )
+	end
 	local cx, cy, cz = MC.ChunkKeyToCoords( key )
 	if cx and chunkKnown( cx, cy, cz, key ) and inSkyDomain( cx, cy, cz, key ) then
 		local chunk = { cx = cx, cy = cy, cz = cz }
@@ -447,9 +449,11 @@ end
 
 ------------------------------------------------------------------ reflood queue
 
+local SEED_ONLY, REPLACE = 1, 2
 local pendingReflood = {}
 local pendingCount = 0
 local totalRefloods, totalRefloodMS, lastRefloods, lastRefloodMS = 0, 0, 0, 0
+local lastRefloodFrame = -1
 
 function MC.SkyFloodStats()
 	return { pending = pendingCount, refloods = totalRefloods, workMS = totalRefloodMS,
@@ -461,22 +465,29 @@ function MC.SkyFloodWorkCounters()
 	return totalRefloods, totalRefloodMS, pendingCount
 end
 
+local function queueSkyFloodChunk( key, seedOnly )
+	if not pendingReflood[key] then
+		pendingReflood[key] = seedOnly and SEED_ONLY or REPLACE
+		pendingCount = pendingCount + 1
+	elseif not seedOnly then
+		-- An edit/load/unload must supersede a pending initial fill.
+		pendingReflood[key] = REPLACE
+	end
+end
+
 function MC.QueueSkyFloodChunk( key )
 	if key == nil then return end
 	local native = nativeSkyBackend()
 	if native then native.ScheduleBlockLightRebuild( 0.02 ); return end
-	if not pendingReflood[key] then
-		pendingReflood[key] = true
-		pendingCount = pendingCount + 1
-	end
+	queueSkyFloodChunk( key, false )
 end
 
-local function queueChunkHalo( cx, cy, cz, columnX, columnY )
+local function queueChunkHalo( cx, cy, cz, columnX, columnY, seedOnly )
 	for dx = -xyHalo, xyHalo do
 		for dy = -xyHalo, xyHalo do
 			local x, y = cx + dx, cy + dy
 			if columnX == nil or ( math.abs( x - columnX ) <= xyHalo and math.abs( y - columnY ) <= xyHalo ) then
-				for dz = -zHalo, zHalo do MC.QueueSkyFloodChunk( MC.ChunkKey( x, y, cz + dz ) ) end
+				for dz = -zHalo, zHalo do queueSkyFloodChunk( MC.ChunkKey( x, y, cz + dz ), seedOnly ) end
 			end
 		end
 	end
@@ -518,8 +529,11 @@ function MC.QueueAllSkyFlood()
 	local native = nativeSkyBackend()
 	if native then native.ScheduleBlockLightRebuild( 0 ); return end
 	skyDomain = {}
+	-- With an empty field there is no stale light to remove. Propagation from
+	-- earlier jobs is already valid for this world; later jobs only add sources.
+	local seedOnly = next( MC.LightSkyChunks ) == nil
 	for _, chunk in pairs( MC.World or {} ) do
-		queueChunkHalo( chunk.cx, chunk.cy, chunk.cz )
+		queueChunkHalo( chunk.cx, chunk.cy, chunk.cz, nil, nil, seedOnly )
 	end
 	for key in pairs( MC.LightSkyChunks or {} ) do
 		MC.QueueSkyFloodChunk( key )
@@ -534,9 +548,14 @@ local function refloodBudget()
 	return n
 end
 
-hook.Remove( "Think", "mc_sky_flood_queue" )
-hook.Add( "Think", "mc_sky_flood_queue", function()
-	lastRefloods, lastRefloodMS = 0, 0
+-- The unlimited mesh builder calls this before consuming sky values. Keep the
+-- standalone hook for budgeted work, and count both callers in the same frame.
+function MC.ProcessSkyFloodQueue()
+	local frame = FrameNumber()
+	if lastRefloodFrame ~= frame then
+		lastRefloodFrame = frame
+		lastRefloods, lastRefloodMS = 0, 0
+	end
 	local perf = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
 	local started = ( perf or pendingCount > 0 ) and SysTime() or nil
 	local processed = 0
@@ -550,24 +569,29 @@ hook.Add( "Think", "mc_sky_flood_queue", function()
 		if perf then MC.StreamPerformanceAddFrameStage( "lighting.sky_flood", ( SysTime() - started ) * 1000 ) end
 		return
 	end
-	local budget = refloodBudget()
+	local unlimited = MC.BuildUnlimited and MC.BuildUnlimited:GetBool() == true
+	local budget = unlimited and pendingCount or refloodBudget()
 	local cv = MC.LightSkyFloodFrameMS
 	local frameMS = cv and cv.GetFloat and cv:GetFloat() or 2
-	local deadline = frameMS > 0 and started + frameMS / 1000 or nil
-	for key in pairs( pendingReflood ) do
+	local deadline = not unlimited and frameMS > 0 and started + frameMS / 1000 or nil
+	for key, mode in pairs( pendingReflood ) do
 		-- A flood is atomic, but a slow one must not be followed by three more.
 		if processed > 0 and deadline and SysTime() >= deadline then break end
 		pendingReflood[key] = nil
 		pendingCount = pendingCount - 1
-		refloodChunkSky( key )
+		refloodChunkSky( key, mode == SEED_ONLY )
 		processed = processed + 1
 		budget = budget - 1
 		if budget <= 0 then break end
 	end
-	lastRefloods, lastRefloodMS = processed, ( SysTime() - started ) * 1000
-	totalRefloods, totalRefloodMS = totalRefloods + processed, totalRefloodMS + lastRefloodMS
-	if perf then MC.StreamPerformanceAddFrameStage( "lighting.sky_flood", ( SysTime() - started ) * 1000, { skyFloodChunks = processed } ) end
-end )
+	local elapsed = ( SysTime() - started ) * 1000
+	lastRefloods, lastRefloodMS = lastRefloods + processed, lastRefloodMS + elapsed
+	totalRefloods, totalRefloodMS = totalRefloods + processed, totalRefloodMS + elapsed
+	if perf then MC.StreamPerformanceAddFrameStage( "lighting.sky_flood", elapsed, { skyFloodChunks = processed } ) end
+end
+
+hook.Remove( "Think", "mc_sky_flood_queue" )
+hook.Add( "Think", "mc_sky_flood_queue", MC.ProcessSkyFloodQueue )
 
 function MC.ClearSkyFlood()
 	MC.LightSkyChunks = {}
