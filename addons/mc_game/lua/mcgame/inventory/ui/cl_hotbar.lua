@@ -70,6 +70,11 @@ end
 
 local worldKeysDown = {}
 local WORLD_KEYS = { [MOUSE_MIDDLE] = 0, [KEY_Q] = 1, [KEY_F] = 2 }
+local NUMBER_KEYS = {
+	[KEY_1] = 0, [KEY_2] = 1, [KEY_3] = 2,
+	[KEY_4] = 3, [KEY_5] = 4, [KEY_6] = 5,
+	[KEY_7] = 6, [KEY_8] = 7, [KEY_9] = 8,
+}
 
 local function worldInputAvailable()
 	return hotbarInputActive() and not inventoryScreenVisible()
@@ -79,9 +84,20 @@ end
 
 local function worldKeyPressed( button )
 	local operation = WORLD_KEYS[button]
-	if operation == nil or worldKeysDown[button] then return end
+	local hotbar = NUMBER_KEYS[button]
+	if ( operation == nil and hotbar == nil ) or worldKeysDown[button] then return end
 	worldKeysDown[button] = true
 	if not worldInputAvailable() then return end
+	if hotbar ~= nil then
+		local bind = input.LookupKeyBinding( button )
+		if bind and bind ~= "" then
+			local number = string.match( string.lower( bind ), "^slot([1-9])$" )
+			if not number then return end
+			hotbar = tonumber( number ) - 1
+		end
+		MC.SelectInventoryHotbarSlot( hotbar )
+		return
+	end
 	local whole = input.IsKeyDown( KEY_LCONTROL ) or input.IsKeyDown( KEY_RCONTROL )
 	MC.RequestInventoryWorldAction( operation, whole )
 end
@@ -92,13 +108,17 @@ end )
 hook.Add( "PlayerButtonUp", "mc_inventory_world_shortcuts", function( ply, button )
 	if ply == LocalPlayer() then worldKeysDown[button] = nil end
 end )
--- Raw edges also cover an unbound middle button and single-player, where some
--- predicted PlayerButtonDown hooks are not delivered on the client.
+-- Raw edges cover slot binds consumed before our PlayerBindPress hook, unbound
+-- keys and single-player, where predicted button hooks may not reach the client.
+-- The shared edge state prevents held keys from undoing a later scroll selection.
 hook.Add( "Think", "mc_inventory_world_shortcuts", function()
 	for button in pairs( WORLD_KEYS ) do
 		local down
 		if button == MOUSE_MIDDLE then down = input.IsMouseDown( button ) else down = input.IsKeyDown( button ) end
 		if down then worldKeyPressed( button ) else worldKeysDown[button] = nil end
+	end
+	for button in pairs( NUMBER_KEYS ) do
+		if input.IsKeyDown( button ) then worldKeyPressed( button ) else worldKeysDown[button] = nil end
 	end
 end )
 
@@ -158,7 +178,7 @@ hook.Add( "HUDPaint", "mc_inventory_hotbar", function()
 	end
 end )
 
-hook.Add( "PlayerBindPress", "mc_inventory_hotbar_input", function( ply, bind, pressed )
+hook.Add( "PlayerBindPress", "mc_inventory_hotbar_input", function( ply, bind, pressed, button )
 	if not pressed or ply ~= LocalPlayer() then return end
 	bind = string.lower( tostring( bind or "" ) )
 	-- Slot/scroll selection survives the switch window; opening the inventory
@@ -180,6 +200,12 @@ hook.Add( "PlayerBindPress", "mc_inventory_hotbar_input", function( ply, bind, p
 	if worldInputAvailable() and ( bind == "+menu" or bind == "impulse 100" or bind == "+attack3" ) then return true end
 	local number = string.match( bind, "^slot([1-9])$" )
 	if number then
+		-- Bind and raw button events can arrive in either order. Consume both,
+		-- but let only the first select, even if a wheel event intervenes.
+		if NUMBER_KEYS[button] ~= nil then
+			if worldKeysDown[button] then return true end
+			worldKeysDown[button] = true
+		end
 		MC.SelectInventoryHotbarSlot( tonumber( number ) - 1 )
 		return true
 	end
