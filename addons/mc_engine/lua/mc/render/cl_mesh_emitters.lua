@@ -558,7 +558,7 @@ end
 local function nativeScratch( ctx )
 	local quad = ctx.nativeQuadScratch
 	if not quad then
-		quad = { l2Corners = { {}, {}, {}, {} }, l2UV = { {}, {}, {}, {} } }
+		quad = { l2Corners = { {}, {}, {}, {} }, l2UV = { {}, {}, {}, {} }, nativeL2Mutable = true }
 		ctx.nativeQuadScratch = quad
 	end
 	return quad
@@ -576,6 +576,7 @@ local function emitNativeValues( ctx, id, bx, by, bz, wx, wy, wz, face, normal, 
 	quad.quadLightEmission, quad.positions = quadEmission, nil
 	-- Scratch geometry changes per call; only fixed templates supply a cache.
 	quad.l2Lighting = lighting
+	quad.nativeL2Owner = lighting
 	ctx.emitL2( quad, id, bx, by, bz, wx, wy, wz, emission )
 end
 
@@ -592,6 +593,8 @@ local function emitNativeArrays( ctx, id, bx, by, bz, wx, wy, wz, face, normal, 
 	end
 	quad.faceIndex, quad.normal, quad.shade = face, normal, shade
 	quad.quadLightEmission, quad.positions, quad.faceCubic = 0, positions, faceCubic
+	quad.l2Lighting = nil
+	quad.nativeL2Owner = kind ~= MC.RenderLightBuffer.KIND.FLUID and corners or nil
 	ctx.emitL2( quad, id, bx, by, bz, wx, wy, wz, emission, 0, kind )
 end
 
@@ -1373,7 +1376,7 @@ function RM.EmitBlock( ctx, li, stateId )
 		return
 	end
 
-	local cached = MC.GetCachedBlockEmission( key, blockSectionIndex, li, id, orient, stateId )
+	local cached = MC.GetCachedBlockEmission( key, blockSectionIndex, li, id, orient, stateId, ctx.nativeL2 )
 	local blockNeedsRecolor = sectionNeedsFullRecolor or ( blockLightDirtySection and blockLightDirtySection[li] )
 	if cached and ctx.l2 and ( blockNeedsRecolor or not cached.l2 or cached.blockSize ~= size ) then
 		MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
@@ -1468,6 +1471,7 @@ function RM.EmitBlock( ctx, li, stateId )
 			verts = cur.verts,
 			light = cur.light,
 			l2 = cur.l2, pixels = cur.pixels, occlusion = cur.occlusion,
+			nativeL2 = cur.nativeL2, nativeCommands = cur.nativeCommands,
 			blockSize = size,
 			vertexCount = emittedVertices,
 			material = targetBuffer.material,

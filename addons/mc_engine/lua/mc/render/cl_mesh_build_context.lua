@@ -197,7 +197,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		local bucketKey = request .. "/" .. stage
 		local buffer = root.buckets[bucketKey]
 		if not buffer then
-			buffer = Q.NewBuffer()
+			buffer = Q.NewBuffer( slice )
 			buffer.owner, buffer.list, buffer.records = root, root.list, root.records
 			buffer.material, buffer.translucent = root.material, root.translucent
 			buffer.request, buffer.stage, buffer.blockIds = request, stage, {}
@@ -217,7 +217,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		if not groups then groups = {} target.directions = groups end
 		local buffer = groups[face]
 		if not buffer then
-			buffer = Q.NewBuffer()
+			buffer = Q.NewBuffer( slice )
 			buffer.owner, buffer.list, buffer.records = target.owner, target.list, target.records
 			buffer.material, buffer.translucent = target.material, false
 			buffer.request, buffer.stage, buffer.blockIds = target.request, target.stage, target.blockIds
@@ -232,7 +232,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		local buffer = spareBlockBuffer
 		spareBlockBuffer = nil
 		if not buffer then
-			buffer = Q.NewBuffer()
+			buffer = Q.NewBuffer( slice )
 			buffer.cacheOnly = true
 		end
 		buffer.material = targetBuffer.material
@@ -269,6 +269,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		buf.list[#buf.list + 1] = entry
 		buf.records[#buf.records + 1] = {
 			l2 = true, mesh = entry.mesh,
+			nativeL2 = buf.nativeL2, uploadedVertices = entry.uploadedVertices,
 			verts = buf.verts,
 			pixels = buf.pixels,
 			occlusion = buf.occlusion,
@@ -289,6 +290,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		buf.verts = VertexBuffer.New()
 		buf.pixels = {}
 		buf.occlusion = {}
+		if buf.nativeL2 then buf.nativeCommands = {} end
 		buf.nv, buf.quadCount = 0, 0
 		buf.hasSecondaryUV = false
 	end
@@ -362,6 +364,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		C = C,
 		l2 = true,
 		blockSize = slice.blockSize,
+		nativeL2 = slice.nativeL2,
 	}
 
 	ctx.styleForBuffer = styleForBuffer
@@ -387,6 +390,9 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		VertexBuffer.Reset( buffer.verts )
 		for i = 1, #buffer.pixels do buffer.pixels[i] = nil end
 		for i = 1, #buffer.occlusion do buffer.occlusion[i] = nil end
+		if buffer.nativeCommands then
+			for i = 1, #buffer.nativeCommands do buffer.nativeCommands[i] = nil end
+		end
 		buffer.nv, buffer.quadCount, buffer.hasSecondaryUV = 0, 0, false
 		if not spareBlockBuffer then spareBlockBuffer = buffer end
 	end

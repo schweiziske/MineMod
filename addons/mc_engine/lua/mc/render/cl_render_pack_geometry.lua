@@ -69,27 +69,43 @@ end
 
 function G.Upload( buffer, perf )
 	local count = buffer.nv / 6
-	requireValue( buffer.l2 and count > 0 and count == math.floor( count ) and count <= G.PART_QUADS
-		and #buffer.pixels == count * 4 and buffer.occlusion and #buffer.occlusion == count,
+	requireValue( buffer.l2 and count > 0 and count == math.floor( count ) and count <= G.PART_QUADS,
 		"render_l2_buffer", "world upload requires a bounded native L2 buffer with independent AO" )
+	if buffer.nativeL2 then
+		requireValue( #buffer.nativeCommands == count * MC.NativeL2.COMMAND_STRIDE,
+			"render_l2_buffer", "Native L2 command count does not match its quads" )
+	else
+		requireValue( #buffer.pixels == count * 4 and buffer.occlusion and #buffer.occlusion == count,
+			"render_l2_buffer", "Lua L2 corner/AO count does not match its quads" )
+	end
 	requireValue( G.liveParts < G.MAX_PARTS, "render_pack_part_budget", "native L2 mesh-part budget exceeded" )
-	local bounds = MC.RenderSectionCull.VertexBounds( buffer.verts )
+	local bounds
+	if not buffer.nativeL2 then bounds = MC.RenderSectionCull.VertexBounds( buffer.verts ) end
 	R.Ensure( { build = "quad_corners_v1" }, P.shared )
 	local first = allocate( count )
-	local object
+	local object, uploadedVertices
 	local ok, err = pcall( function()
-		local started = perf and SysTime()
-		object = Mesh( declaration() )
-		if perf then MC.RenderMesh.meshPerfAdd( perf, "meshNewMS", started ) end
-		requireValue( object ~= nil, "render_pack_mesh_create", "could not create a native L2 mesh" )
-		-- Stream global addresses without materializing or mutating the CPU buffer.
-		MC.RenderMesh.uploadMeshVertices( object, buffer.verts, perf, false, false, first )
+		if buffer.nativeL2 then
+			local result = MC.NativeL2.Upload( buffer, first, declaration() )
+			object, uploadedVertices = result.mesh, result.vertices
+			buffer.pixels, buffer.occlusion = result.pixels, result.occlusion
+			local b = result.bounds
+			bounds = MC.RenderSectionCull.Bounds( b[1], b[2], b[3], b[4], b[5], b[6] )
+		else
+			local started = perf and SysTime()
+			object = Mesh( declaration() )
+			if perf then MC.RenderMesh.meshPerfAdd( perf, "meshNewMS", started ) end
+			requireValue( object ~= nil, "render_pack_mesh_create", "could not create a native L2 mesh" )
+			-- Stream global addresses without materializing or mutating the CPU buffer.
+			MC.RenderMesh.uploadMeshVertices( object, buffer.verts, perf, false, false, first )
+		end
 		R.UploadPart( { firstQuad = first, quadCount = count, pixels = buffer.pixels, occlusion = buffer.occlusion }, P.shared )
 	end )
 	if not ok then
 		local destroyOK, destroyError = true, nil
 		if object then destroyOK, destroyError = pcall( object.Destroy, object ) end
 		freeRange( first, count )
+		if buffer.nativeL2 then MC.NativeL2.DisableAfterFailure( type( err ) == "table" and err.message or err ) end
 		if not destroyOK then MC.Fault( "render_l2_failed_mesh_destroy", "%s", tostring( destroyError ) ) end
 		error( err, 0 )
 	end
@@ -103,6 +119,7 @@ function G.Upload( buffer, perf )
 		G.auditPixels[data] = pixels
 	end
 	return { l2 = true, resource = data, mesh = object, material = buffer.material,
+		nativeL2 = buffer.nativeL2, uploadedVertices = uploadedVertices,
 		request = buffer.request, stage = buffer.stage, blockIds = buffer.blockIds,
 		bounds = bounds, direction = buffer.direction }
 end
