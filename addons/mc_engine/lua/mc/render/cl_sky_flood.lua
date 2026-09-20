@@ -403,28 +403,30 @@ end
 
 -- Border ring: pull light in across chunk boundaries from stored values and
 -- exposed cells one cell outside the chunk (mirror of seedChunkBorderLight).
+-- Keep the helper outside the chunk scan: fresh closures abort its JIT trace.
+local function seedChunkBorderCell( addQ, bx, by, bz )
+	local level = skyLevelAt( bx, by, bz )
+	if level > 1 then pushQueue( addQ, bx, by, bz, level ) end
+end
+
 local function seedChunkBorderSky( addQ, chunk )
 	local cs, ch = MC.CS, MC.CH
 	local minX, minY, minZ = chunk.cx * cs, chunk.cy * cs, chunk.cz * ch
 	local maxX, maxY, maxZ = minX + cs - 1, minY + cs - 1, minZ + ch - 1
-	local function seed( bx, by, bz )
-		local level = skyLevelAt( bx, by, bz )
-		if level > 1 then pushQueue( addQ, bx, by, bz, level ) end
-	end
 	for y = minY, maxY do
 		for x = minX, maxX do
-			seed( x, y, minZ - 1 )
-			seed( x, y, maxZ + 1 )
+			seedChunkBorderCell( addQ, x, y, minZ - 1 )
+			seedChunkBorderCell( addQ, x, y, maxZ + 1 )
 		end
 	end
 	for z = minZ, maxZ do
 		for y = minY, maxY do
-			seed( minX - 1, y, z )
-			seed( maxX + 1, y, z )
+			seedChunkBorderCell( addQ, minX - 1, y, z )
+			seedChunkBorderCell( addQ, maxX + 1, y, z )
 		end
 		for x = minX, maxX do
-			seed( x, minY - 1, z )
-			seed( x, maxY + 1, z )
+			seedChunkBorderCell( addQ, x, minY - 1, z )
+			seedChunkBorderCell( addQ, x, maxY + 1, z )
 		end
 	end
 end

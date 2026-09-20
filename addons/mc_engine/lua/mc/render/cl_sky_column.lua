@@ -7,15 +7,16 @@
 -- pillar under roof openings that fought the shadow map's directional shadow.
 MC = MC or {}
 
--- Numeric column keys: |block coord| < 2^20 (net COORD_BITS), so bx * 2^21 +
--- by is exact in a double and unique. Avoids string concat garbage in the
--- per-cell exposure queries during light texture bakes.
+-- The bias keeps every column key above Lua's array-index range, so LuaJIT
+-- never sees a mixed sparse/dense table when exposure scans cross x=0.
+-- Signed 21-bit block coordinates still produce unique, exact double integers.
 local COL_KEY_STRIDE = 2097152
+local COL_KEY_BIAS = 4398046511104 -- 2^42
 local tops = {}          -- [colKey] -> topZ (number) | false (no blocker in column)
 local chunkColumns = nil -- ["cx:cy"] -> { [cz] = true } built lazily from MC.World
 
 local function colKey( bx, by )
-	return bx * COL_KEY_STRIDE + by
+	return bx * COL_KEY_STRIDE + by + COL_KEY_BIAS
 end
 
 local function chunkColKey( cx, cy )
@@ -61,6 +62,8 @@ local function blocksSky( stateId, bx, by, bz )
 	return opacity >= 15
 end
 
+local function descendingHeight( a, b ) return a > b end
+
 local function computeColumnTop( bx, by )
 	local cs, ch = MC.CS or 16, MC.CH or 32
 	local cx, cy = math.floor( bx / cs ), math.floor( by / cs )
@@ -68,7 +71,7 @@ local function computeColumnTop( bx, by )
 	if not list then return false end
 	local czs = {}
 	for cz in pairs( list ) do czs[#czs + 1] = cz end
-	table.sort( czs, function( a, b ) return a > b end )
+	table.sort( czs, descendingHeight )
 	local world = MC.World or {}
 	for i = 1, #czs do
 		local cz = czs[i]
