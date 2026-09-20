@@ -117,8 +117,11 @@ MC.ConfigConVars = {
 		} ),
 
 		category( "mesh_cache", "rendering", "Mesh performance", "网格性能",
-			"Memory caches and upload paths used while rebuilding chunks.",
-			"区块重建时使用的内存缓存与上传方式。", {
+			"Scheduling, memory caches and upload paths used while rebuilding chunks.",
+			"区块重建时使用的调度方式、内存缓存与上传方式。", {
+			item( "mc_build_unlimited", "Disable build time slicing", "取消构建分帧", "bool",
+				"Finish queued client mesh, lighting and collision work together. May cause one longer hitch; switching off restores the saved budgets.",
+				"集中完成已排队的客户端网格、光照与碰撞构建，可能出现一次较长卡顿；关闭后恢复原有预算。" ),
 			item( "mc_mesh_geometry_cache_sections", "Geometry cache sections", "几何缓存分区数", "number",
 				"Render sections retaining Lua vertex and light data; lower values save memory.",
 				"保留 Lua 顶点与光照数据的渲染分区数；调低可节省内存。" ),

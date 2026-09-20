@@ -367,16 +367,16 @@ local function bulkCollisionChunksPerInterval()
 	return math.max( 1, math.floor( tonumber( count ) or 1 ) )
 end
 
-local function flushBulkCollisionQueue()
+local function flushBulkCollisionQueue( unlimited )
 	local perfEnabled = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
 	local flushStarted = perfEnabled and SysTime() or nil
 	local now = CurTime()
-	if now < ( MC.NextBulkCollisionRebuildAt or 0 ) then return end
+	if not unlimited and now < ( MC.NextBulkCollisionRebuildAt or 0 ) then return end
 	local order = MC.PhysDirtyBulkOrder or {}
 	local head = MC.PhysDirtyBulkOrderHead or 1
 	local tail = #order
 	local bulk = MC.PhysDirtyBulk or {}
-	local limit = bulkCollisionChunksPerInterval()
+	local limit = unlimited and math.huge or bulkCollisionChunksPerInterval()
 	local built, attempted = 0, 0
 	local worstMS, worstKey = 0, nil
 
@@ -416,7 +416,7 @@ local function flushBulkCollisionQueue()
 	end
 
 	if built > 0 then
-		MC.NextBulkCollisionRebuildAt = now + bulkCollisionInterval()
+		MC.NextBulkCollisionRebuildAt = unlimited and now or now + bulkCollisionInterval()
 	end
 	if perfEnabled then
 		MC.StreamPerformanceAddStage( "collision.flush", ( SysTime() - flushStarted ) * 1000, { collisionAttempts = attempted } )
@@ -617,6 +617,16 @@ local lazyIdleRevision = -1
 local lazyIdlePCX, lazyIdlePCY, lazyIdlePCZ
 local lazyIdleGeometry, lazyIdleLight, lazyIdleDistance, lazyIdleBlockSize
 hook.Add( "Think", "mc_meshbuild", function()
+	local unlimited = MC.BuildUnlimited and MC.BuildUnlimited:GetBool() == true
+	if unlimited then
+		-- Think hook order is unspecified. Finish queued sky propagation before
+		-- building/uploading sections that would otherwise be invalidated again.
+		local processSky = MC.Need( MC.ProcessSkyFloodQueue,
+			"mesh_sky_queue_missing", "cl_sky_flood.lua did not load" )
+		if not processSky then return end
+		processSky()
+	end
+	-- Sky work reports its own stage; keep mesh timings disjoint from it.
 	local frameStart = SysTime()
 	local geometryKeys, geometrySections = 0, 0
 	local lightKeys, lightSections = 0, 0
@@ -634,10 +644,11 @@ hook.Add( "Think", "mc_meshbuild", function()
 	local budgetMS = MC.MeshBuildFrameMS and MC.MeshBuildFrameMS.GetFloat
 		and MC.MeshBuildFrameMS:GetFloat() or 8
 	budgetMS = math.max( 0, tonumber( budgetMS ) or 0 )
-	budget.deadline = budgetMS > 0 and frameStart + budgetMS / 1000 or nil
+	budget.deadline = not unlimited and budgetMS > 0 and frameStart + budgetMS / 1000 or nil
 	local animationDeadline = budget.deadline
 	if budget.native and not lazy then budget.deadline = nil end
 	budget.rateSeconds, budget.rateSections = rateLimitedMeshBuildBudget()
+	if unlimited then budget.rateSeconds, budget.rateSections = math.huge, math.huge end
 	budget.attempts, budget.failures, budget.rateAttempts, budget.selectionMS = 0, 0, 0, 0
 	budget.animationAttempts, budget.animationFailures = 0, 0
 	budget.frameYield, budget.rateYield = false, false
@@ -700,7 +711,7 @@ hook.Add( "Think", "mc_meshbuild", function()
 			budget.frameYield, budget.rateYield, geometryDepth, budget.selectionMS, ( SysTime() - frameStart ) * 1000,
 			budget.animationAttempts, budget.animationFailures, animationMS )
 	end
-	flushBulkCollisionQueue()
+	flushBulkCollisionQueue( unlimited )
 	if MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled() then
 		local frameMS = ( SysTime() - frameStart ) * 1000
 		MC.StreamPerformanceAddStage( "aftermath.frame", frameMS, {
@@ -724,7 +735,7 @@ hook.Add( "Think", "mc_meshbuild", function()
 end )
 
 if cvars and cvars.AddChangeCallback then
-	for _, name in ipairs( { "mc_mesh_lazy_build", "mc_mesh_lazy_distance", "mc_mesh_draw_distance", "mc_mesh_build_frame_ms",
+	for _, name in ipairs( { "mc_build_unlimited", "mc_mesh_lazy_build", "mc_mesh_lazy_distance", "mc_mesh_draw_distance", "mc_mesh_build_frame_ms",
 		"mc_explosion_mesh_frame_ms", "mc_explosion_mesh_sections_per_frame" } ) do
 		cvars.AddChangeCallback( name, wakeMeshBuilder, "mc_mesh_lazy_build_" .. name )
 	end
