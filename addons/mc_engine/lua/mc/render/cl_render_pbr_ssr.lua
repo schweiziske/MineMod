@@ -109,6 +109,15 @@ local function params( program, source, depth )
         ["$linearread_basetexture"] = 1, ["$linearwrite"] = 1 }
 end
 
+local function sourceCopy( prefix, programs, source )
+    if not programs.ssr_source then return nil end
+    local p = params( programs.ssr_source, source, false )
+    p["$texture1"], p["$linearread_texture1"] = source:GetName(), 1
+    local material = CreateMaterial( prefix .. "_sourcecopy", "screenspace_general_8tex", p )
+    requireValue( material and not material:IsError(), "render_ssr_source_material", "depth-aware source material failed to load" )
+    return material
+end
+
 -- Post effects register independently of water materials or visible fluids.
 function S.RegisterScene( definition, blockSize, source )
     local key = definition.build .. "/" .. blockSize
@@ -123,6 +132,7 @@ function S.RegisterScene( definition, blockSize, source )
             "screenspace_general_8tex", params( definition.programs.post_depth_copy, source, false ) ) }
     requireValue( group.copy and not group.copy:IsError() and group.depthCopy and not group.depthCopy:IsError(),
         "render_scene_copy_material", "scene copy material failed to load" )
+    group.sourceCopy = sourceCopy( "mc_scene_" .. definition.build:sub( 1, 20 ) .. "_" .. blockSize, definition.programs, source )
     S.sceneGroups[key] = group
     return group
 end
@@ -147,6 +157,7 @@ function S.Register( waterMaterial, definition, maps, blockSize )
         trace = CreateMaterial( prefix .. "_trace", "screenspace_general_8tex", trace ),
         composite = CreateMaterial( prefix .. "_composite", "screenspace_general_8tex", composite ),
         copy = CreateMaterial( prefix .. "_copy", "screenspace_general_8tex", params( programs.ssr_copy, maps.normal, false ) ) }
+    group.sourceCopy = sourceCopy( prefix, programs, maps.normal )
     group.halfXY, group.halfZ = MC.CS * blockSize * 0.5, MC.CH * blockSize * 0.5
     group.radius = math.sqrt( 2 * group.halfXY * group.halfXY + group.halfZ * group.halfZ )
     requireValue( group.trace and not group.trace:IsError() and group.composite and not group.composite:IsError()
@@ -344,6 +355,9 @@ local function prepareDepth( view, records, scene, postGroup, postRequired )
     c.composition:SetField( 1, 1, forward.x ) c.composition:SetField( 1, 2, forward.y ) c.composition:SetField( 1, 3, forward.z )
     c.composition:SetField( 2, 1, c.target.width ) c.composition:SetField( 2, 2, c.target.height )
     c.composition:SetField( 2, 3, 1 / c.target.width ) c.composition:SetField( 2, 4, 1 / c.target.height )
+    c.composition:SetField( 3, 1, 1 / c.depthTexture:Width() ) c.composition:SetField( 3, 2, 1 / c.depthTexture:Height() )
+    c.composition:SetField( 3, 3, c.group.precisionDepth and 1 or 0 )
+    c.composition:SetField( 3, 4, c.group.sourceCopy and 1 or 0 )
     S.serial = S.serial + 1
     c.serial, c.frame = S.serial, FrameNumber()
     S.request = c
@@ -493,10 +507,16 @@ local function capture( c, scene, waterConstants )
     local group = c.group
     -- Waves belong to the actual water colour draw, which happens after depth.
     for row = 2, 4 do for col = 1, 4 do c.wave:SetField( row, col, waterConstants:GetField( row, col ) ) end end
-    group.copy:SetTexture( "$basetexture", scene )
+    local copy = group.sourceCopy or group.copy
+    copy:SetTexture( "$basetexture", scene )
+    if group.sourceCopy then
+        copy:SetTexture( "$texture1", c.depthTexture )
+        copy:SetFloat( "$c0_x", 1 / c.frameWidth ) copy:SetFloat( "$c0_y", 1 / c.frameHeight )
+        copy:SetFloat( "$c0_z", 1 / c.depthTexture:Width() ) copy:SetFloat( "$c0_w", 1 / c.depthTexture:Height() )
+    end
     render.PushRenderTarget( c.target.source ) targetPushed = true
     writeState( nil )
-    render.SetMaterial( group.copy )
+    render.SetMaterial( copy )
     c.target.quad:Draw()
     render.PopRenderTarget() targetPushed = false
     S.request, S.pending = nil, c
@@ -557,10 +577,11 @@ local function setTraceConstants( material, c, group )
     local values = c.traceValues
     if not values then values = {} c.traceValues = values end
     values[1], values[2], values[3], values[4] = c.ox, c.oy, c.oz, 0
-    values[5], values[6], values[7], values[8] = distance:GetFloat() * bs, floor( steps:GetFloat() ), bs * 0.22 + 4000 / 255, bs * 0.03
+    local thickness = c.group.sourceCopy and bs * 0.08 or bs * 0.22 + 4000 / 255
+    values[5], values[6], values[7], values[8] = distance:GetFloat() * bs, floor( steps:GetFloat() ), thickness, bs * 0.03
     local dw, dh = c.depthTexture:Width(), c.depthTexture:Height()
     values[9], values[10], values[11], values[12] = dw, dh, 1 / dw, 1 / dh
-    values[13], values[14], values[15], values[16] = c.scaleX, c.scaleY, strength:GetFloat(), 0
+    values[13], values[14], values[15], values[16] = c.scaleX, c.scaleY, strength:GetFloat(), c.group.precisionDepth and 1 or 0
     for index, value in ipairs( values ) do material:SetFloat( slots[index], value ) end
     material:SetTexture( "$texture1", c.depthTexture )
     material:SetMatrix( "$viewprojmat", c.projection )
