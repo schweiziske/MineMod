@@ -537,6 +537,9 @@ function S.Capture( view, records, scene, waterConstants )
     if c.frame ~= FrameNumber() then return discard( "depth_frame_expired" ) end
     if not sameView( view, c ) then return discard( "depth_view_changed" ) end
     if not currentScene( c ) then return discard( "world_or_pack_changed" ) end
+    -- Post effects can request depth after all water has been culled. Keep that
+    -- request alive, but only capture SSR for its frozen water selection.
+    if c.count == 0 then return false end
     local ok, err = pcall( capture, c, scene, waterConstants )
     local restoreError = clean()
     if not ok or restoreError then return fault( "render_ssr_capture", not ok and err or restoreError ) end
