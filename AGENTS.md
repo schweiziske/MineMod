@@ -52,3 +52,19 @@ return two or more values.
 - Put exhaustive checks in tests or explicit debug validation passes. Genuine
   boundary and resource failures still follow `docs/fault-handling.md`; do not
   swallow errors or silently substitute defaults.
+
+## Documentation
+
+- Every new Markdown document in `docs/` must be registered in
+  `docs/README.md` in the same commit that adds it: add one row to the table
+  of its category, in the form
+  `| [name.md](name.md) | one sentence on the question it answers |`.
+  The table decides the category; do not add a category column. Files in a
+  subdirectory such as `docs/adr/` are covered by that subdirectory's entry;
+  keep its description current.
+- Choose the category by how the document should be read: `契约`, `参考`,
+  `踩坑`, `设计` or `过程`. Research into other projects' code goes under
+  `外部技术调研`. Definitions and the remaining writing rules are in
+  `docs/README.md`.
+- A missing entry is fixed by adding the entry, never by deleting the
+  document. Cleanup is manual.
