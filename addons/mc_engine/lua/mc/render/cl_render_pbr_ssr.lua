@@ -20,6 +20,12 @@ local distance = CreateClientConVar( "mc_pbr_water_ssr_distance", "48", true, fa
 local steps = CreateClientConVar( "mc_pbr_water_ssr_steps", "32", true, false, "Water reflection ray steps", 8, 48 )
 local strength = CreateClientConVar( "mc_pbr_water_ssr_strength", "1", true, false, "Water SSR contribution; misses retain the environment", 0, 1 )
 local floor, ceil, min, max = math.floor, math.ceil, math.min, math.max
+-- Full-resolution depth + trace + colour is about 48 MiB at 1080p. The cap
+-- bounds Source's non-freeable RT cache across a few resolution changes.
+local TARGET_BUDGET = 128 * 1048576
+-- Trace hit thickness in blocks. MC terrain is solid: a ray passing behind a
+-- block edge meets that block's hidden side, so it counts as a hit.
+local HIT_THICKNESS = 4
 local waterNames = { "water_still", "water_flow" }
 local slots = { "$c0_x", "$c0_y", "$c0_z", "$c0_w", "$c1_x", "$c1_y", "$c1_z", "$c1_w",
     "$c2_x", "$c2_y", "$c2_z", "$c2_w", "$c3_x", "$c3_y", "$c3_z", "$c3_w" }
@@ -184,17 +190,18 @@ end
 S.CopyQuad = copyQuad
 
 function S.ReserveTargetBytes( bytes )
-    requireValue( S.targetBytes + bytes <= 50331648, "render_ssr_target_budget",
-        "scene effect target cache reached 48 MiB after resolution changes; restart to release engine render targets" )
+    requireValue( S.targetBytes + bytes <= TARGET_BUDGET, "render_ssr_target_budget",
+        "scene effect target cache reached 128 MiB after resolution changes; restart to release engine render targets" )
     -- Source render targets cannot be freed; account even for a failed allocation.
     S.targetBytes = S.targetBytes + bytes
 end
 
 local function sceneTargets( width, height, water )
+    -- Depth, reflection trace and reflection colour share one size: the full
+    -- frame, capped at 1920x1080 with aspect preserved.
     local scale = min( 1, 1920 / width, 1080 / height )
     local dw, dh = max( 1, ceil( width * scale ) ), max( 1, ceil( height * scale ) )
-    local traceScale = min( 0.5, 1280 / width, 720 / height )
-    local w, h = max( 1, ceil( width * traceScale ) ), max( 1, ceil( height * traceScale ) )
+    local w, h = dw, dh
     local key = "scene3_" .. dw .. "x" .. dh .. "_" .. w .. "x" .. h
     local t = S.targets[key]
     if not t then
@@ -233,8 +240,8 @@ local function targets( width, height )
     if t then return t end
     -- RGBA8 colour + RGBA16F trace + trace D24S8, and full-size RGBA8 depth.
     local bytes = w * h * 16 + width * height * 4
-    requireValue( S.targetBytes + bytes <= 50331648, "render_ssr_target_budget",
-        "water SSR target cache reached 48 MiB after resolution changes; restart to release engine render targets" )
+    requireValue( S.targetBytes + bytes <= TARGET_BUDGET, "render_ssr_target_budget",
+        "water SSR target cache reached 128 MiB after resolution changes; restart to release engine render targets" )
     local prefix = "mc_water_ssr2_" .. key
     t = { width = w, height = h,
         source = GetRenderTargetEx( prefix .. "_source", w, h, RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE,
@@ -357,7 +364,6 @@ local function prepareDepth( view, records, scene, postGroup, postRequired )
     c.composition:SetField( 2, 3, 1 / c.target.width ) c.composition:SetField( 2, 4, 1 / c.target.height )
     c.composition:SetField( 3, 1, 1 / c.depthTexture:Width() ) c.composition:SetField( 3, 2, 1 / c.depthTexture:Height() )
     c.composition:SetField( 3, 3, c.group.precisionDepth and 1 or 0 )
-    c.composition:SetField( 3, 4, c.group.sourceCopy and 1 or 0 )
     S.serial = S.serial + 1
     c.serial, c.frame = S.serial, FrameNumber()
     S.request = c
@@ -507,9 +513,12 @@ local function capture( c, scene, waterConstants )
     local group = c.group
     -- Waves belong to the actual water colour draw, which happens after depth.
     for row = 2, 4 do for col = 1, 4 do c.wave:SetField( row, col, waterConstants:GetField( row, col ) ) end end
-    local copy = group.sourceCopy or group.copy
+    -- A same-size source is an exact copy. A reduced one (above 1080p) keeps
+    -- only each 2x2 block's front surface, so silhouettes do not blend.
+    local reduced = c.target.width ~= c.frameWidth or c.target.height ~= c.frameHeight
+    local copy = reduced and group.sourceCopy or group.copy
     copy:SetTexture( "$basetexture", scene )
-    if group.sourceCopy then
+    if copy == group.sourceCopy then
         copy:SetTexture( "$texture1", c.depthTexture )
         copy:SetFloat( "$c0_x", 1 / c.frameWidth ) copy:SetFloat( "$c0_y", 1 / c.frameHeight )
         copy:SetFloat( "$c0_z", 1 / c.depthTexture:Width() ) copy:SetFloat( "$c0_w", 1 / c.depthTexture:Height() )
@@ -552,7 +561,11 @@ end
 
 function S.BeginDepth()
     local c = S.renderingDepth
-    return c ~= nil and c == S.request and c.frame == FrameNumber() and render.GetRenderTarget() == c.depthTexture
+    if c == nil or c ~= S.request or c.frame ~= FrameNumber() then return false end
+    -- Each render.GetRenderTarget() call returns a new ITexture wrapper and
+    -- ITexture has no identity __eq, so compare render-target names instead.
+    local current = render.GetRenderTarget()
+    return current ~= nil and current:GetName() == c.depthTexture:GetName()
 end
 
 -- Depth draws use independent snapshots. Never change the colour material's
@@ -580,7 +593,7 @@ local function setTraceConstants( material, c, group )
     local values = c.traceValues
     if not values then values = {} c.traceValues = values end
     values[1], values[2], values[3], values[4] = c.ox, c.oy, c.oz, 0
-    local thickness = c.group.sourceCopy and bs * 0.08 or bs * 0.22 + 4000 / 255
+    local thickness = bs * HIT_THICKNESS
     values[5], values[6], values[7], values[8] = distance:GetFloat() * bs, floor( steps:GetFloat() ), thickness, bs * 0.03
     local dw, dh = c.depthTexture:Width(), c.depthTexture:Height()
     values[9], values[10], values[11], values[12] = dw, dh, 1 / dw, 1 / dh
@@ -648,6 +661,7 @@ local function resolve( c )
     drawWater( c, false, scene )
     cam.End() cameraStarted = false
     S.stats.resolves, S.stats.status = S.stats.resolves + 1, "ready"
+    S.debugTarget, S.debugDepth = c.target, c.depthTexture
 end
 
 function S.Resolve()
@@ -684,4 +698,31 @@ concommand.Add( "mc_pbr_water_ssr_stats", function()
     print( string.format( "[MC water SSR] %s requests=%d depthPasses=%d captures=%d resolves=%d traceDraws=%d compositeDraws=%d failures=%d targetMiB=%.2f GPU=unmeasured",
         stats.status, stats.requests, stats.depthPasses, stats.captures, stats.resolves, stats.traceDraws, stats.compositeDraws,
         stats.failures, S.targetBytes / 1048576 ) )
+end )
+
+-- Development view of the last resolved frame, drawn over the HUD in quadrants:
+-- live frame, trace (R/G hit UV; hits show coloured, misses black), private
+-- scene depth (R = clip W / 4000) and pre-water source colour.
+local debugView = CreateClientConVar( "mc_pbr_water_ssr_debug", "0", false, false, "Show water SSR intermediate targets", 0, 1 )
+local debugMaterials, debugNames = {}, { "live frame", "trace", "scene depth", "source colour" }
+for index = 1, 4 do
+    debugMaterials[index] = CreateMaterial( "mc_water_ssr_debug_view" .. index, "UnlitGeneric", { ["$basetexture"] = "color/white", ["$ignorez"] = 1 } )
+end
+hook.Add( "HUDPaint", "mc_water_ssr_debug", function()
+    if not debugView:GetBool() then return end
+    local t = S.debugTarget
+    render.UpdateScreenEffectTexture( 0 )
+    local textures = { render.GetScreenEffectTexture( 0 ), t and t.trace, t and S.debugDepth, t and t.source }
+    local hw, hh = floor( ScrW() / 2 ), floor( ScrH() / 2 )
+    for index = 1, 4 do
+        local x, y = ( index - 1 ) % 2 * hw, floor( ( index - 1 ) / 2 ) * hh
+        if textures[index] then
+            debugMaterials[index]:SetTexture( "$basetexture", textures[index] )
+            surface.SetMaterial( debugMaterials[index] )
+            surface.SetDrawColor( 255, 255, 255, 255 )
+            surface.DrawTexturedRect( x, y, hw, hh )
+        end
+        draw.SimpleTextOutlined( "[SSR debug] " .. debugNames[index] .. ( textures[index] and "" or ": no resolved frame" ),
+            "DermaDefaultBold", x + 8, y + 8, color_white, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, 1, color_black )
+    end
 end )
