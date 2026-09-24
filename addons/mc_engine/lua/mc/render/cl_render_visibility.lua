@@ -188,7 +188,10 @@ function Visibility.New( chunk, blockSections, perf )
 		local id, fullCube, transparent, special = unpackClass( packed )
 		if id == 0 or special then visible = true
 		elseif sameLiquidKind( curId, id ) then visible = false
-		elseif transparent then visible = id ~= curId
+		elseif transparent then
+			-- Unlike glass, leaves keep the faces between them (MC cutout leaves).
+			local block = blocks[id]
+			visible = id ~= curId or block ~= nil and string.match( block.name, "_leaves$" ) ~= nil
 		else visible = not fullCube end
 		rules[packed] = visible
 		return visible
