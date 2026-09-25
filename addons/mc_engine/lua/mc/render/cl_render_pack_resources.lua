@@ -219,9 +219,9 @@ function P.Ensure( bundle )
 	end
 end
 
-local function textureFor( resource, dataMap, repeatTexture )
+local function textureFor( resource, dataMap, repeatTexture, pixelated )
 	local key = resource.path .. "/" .. resource.sha256 .. ( dataMap and "/data" or "" )
-		.. ( repeatTexture and "/repeat" or "" )
+		.. ( repeatTexture and "/repeat" or "" ) .. ( pixelated and "/point" or "" )
 	local cached = P.textures[key]
 	if cached then return cached end
 	requireValue( P.textureCount < 128, "render_pack_texture_budget", "128 runtime texture versions reached" )
@@ -234,13 +234,21 @@ local function textureFor( resource, dataMap, repeatTexture )
 		requireValue( Material ~= nil, "render_pack_image_api", "Material() is required for image resources" )
 		-- Imported PNGs clamp by default. Water uses unbounded world/time UVs;
 		-- ordinary atlases and IBL data must retain their existing clamp policy.
-		material = Material( path, repeatTexture and "smooth mips noclamp" or dataMap and "smooth mips" or nil )
+		-- Block normal/specular texels stay square like the albedo: no "smooth".
+		material = Material( path, repeatTexture and "smooth mips noclamp" or pixelated and "mips"
+			or dataMap and "smooth mips" or nil )
 	end
 	local texture = R.SourceTexture( material )
 	requireValue( texture:Width() > 0 and texture:Width() <= 4096 and texture:Height() > 0 and texture:Height() <= 4096,
 		"render_pack_texture_size", resource.path .. ": dimensions exceed the 4096-square limit" )
 	P.textures[key], P.textureCount = texture, P.textureCount + 1
 	return texture
+end
+
+-- Material( "x.png", flags ) prefixes the texture name with seven flag digits;
+-- the same image loaded with different flags must still find its maps.
+local function sourceKey( texture )
+	return ( string.gsub( texture:GetName(), "^%d%d%d%d%d%d%d", "" ) )
 end
 
 local function mappingFor( bundle, node, source )
@@ -254,7 +262,7 @@ local function mappingFor( bundle, node, source )
 			local albedoResource = bundle.textures[prefix .. mapping.albedo]
 			local normalResource, ormResource = bundle.textures[prefix .. mapping.normal], bundle.textures[prefix .. mapping.orm]
 			local albedo = textureFor( albedoResource )
-			local key = albedo:GetName()
+			local key = sourceKey( albedo )
 			local previous = mappings[key]
 			requireValue( not previous or previous.normalResource.sha256 == normalResource.sha256
 				and previous.ormResource.sha256 == ormResource.sha256, "render_pbr_map_conflict",
@@ -264,12 +272,12 @@ local function mappingFor( bundle, node, source )
 		end
 		bundle.materialMaps[node.owner] = mappings
 	end
-	local mapping = mappings[source:GetName()]
+	local mapping = mappings[sourceKey( source )]
 	if mapping then
-		requireValue( R.SameTexture( mapping.source, source ), "render_pbr_source_identity",
-			"mapped albedo texture dimensions changed: " .. source:GetName() )
+		requireValue( source:Width() == mapping.source:Width() and source:Height() == mapping.source:Height(),
+			"render_pbr_source_identity", "mapped albedo texture dimensions changed: " .. source:GetName() )
 		if not mapping.normal then
-			local normal, orm = textureFor( mapping.normalResource, true ), textureFor( mapping.ormResource, true )
+			local normal, orm = textureFor( mapping.normalResource, true, false, true ), textureFor( mapping.ormResource, true, false, true )
 			-- All maps use normalized source UVs. Their pixel aspect and
 			-- resolution may differ; textureFor validates hardware size limits.
 			mapping.normal, mapping.orm = normal, orm

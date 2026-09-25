@@ -6,6 +6,9 @@ local Catalog, Bindings = MC.RenderPackRegistry, MC.RenderBlockBindings
 local G, P, R = MC.RenderPackGeometry, MC.RenderPackResources, MC.RenderL2Resources
 local requireValue = R.Require
 local DEFAULT_PACK = "mc:vanilla"
+-- Archived locally; the console command writes it, bootstrap reads it.
+local SavedPack = CreateClientConVar( "mc_render_pack_saved", DEFAULT_PACK, true, false,
+	"Render pack selected on join (set by mc_render_pack select/off)" )
 
 function L.QueueFault( code, message )
 	if type( message ) == "table" and message.code then code, message = message.code, message.message end
@@ -451,6 +454,8 @@ local function fail( c, err )
 		-- MC.Fault deduplicates repeated codes. Every rejected selection still
 		-- needs a terminal message after "preparing", even for the same fault.
 		print( "[MC render pack] failed " .. L.lastError .. "; active=" .. ( L.active and L.active.pack or "none" ) )
+		-- A saved pack that no longer prepares must not leave the world without L2.
+		if not L.active and c.pack ~= DEFAULT_PACK then L.Select( DEFAULT_PACK ) end
 	elseif c then
 		c.failedDrawGeneration, c.failedBindings = MC.ChunkDrawListVersion(), Bindings.generation
 		c.failedWorld, c.failedWorldGeneration = MC.World, MC.StateWorldGeneration
@@ -483,7 +488,8 @@ function L.Step()
 		local generation = Catalog.Status().generation
 		if L.bootAttemptGeneration ~= generation then
 			L.bootAttemptGeneration = generation
-			local ok, err = L.Select( DEFAULT_PACK )
+			local ok, err = L.Select( SavedPack:GetString() )
+			if not ok then ok, err = L.Select( DEFAULT_PACK ) end
 			if not ok then fail( nil, { code = "render_pack_default", message = err } ) end
 		end
 	end
@@ -667,9 +673,11 @@ concommand.Add( "mc_render_pack", function( _, _, args )
 		elseif not ok then print( "[MC render pack] scan rejected: " .. tostring( result ) ) end
 	elseif ( action == "off" and #args == 1 ) or ( action == "select" and #args == 2 and args[2] == "off" ) then
 		local ok, err = L.Off()
+		if ok then SavedPack:SetString( DEFAULT_PACK ) end
 		print( "[MC render pack] " .. ( ok and "preparing " .. DEFAULT_PACK .. " (L2 default)" or "rejected: " .. tostring( err ) ) )
 	elseif action == "select" and #args == 2 then
 		local ok, err = L.Select( args[2] )
+		if ok then SavedPack:SetString( args[2] ) end
 		print( "[MC render pack] " .. ( ok and "preparing " .. args[2] or "rejected: " .. tostring( err ) ) )
 	elseif action == "reload" and #args == 1 then
 		local ok, err = L.Reload()
