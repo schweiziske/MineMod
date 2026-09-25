@@ -120,10 +120,71 @@ local function texturePath( value )
 	return value:match( "%.png$" ) ~= nil or value:match( "%.vtf$" ) ~= nil
 end
 
+local function text( value, limit )
+	return value == nil or type( value ) == "string" and #value <= limit
+end
+
+local function number( value )
+	return type( value ) == "number" and value == value and value > -1e9 and value < 1e9
+end
+
+-- Player-adjustable effect settings. Values are stored per pack under DATA,
+-- never as convars; array order is the display order.
+local function validateSettings( def )
+	if def.settingGroups == nil then def.settingGroups = {} end
+	if def.settings == nil then def.settings = {} end
+	local groups = {}
+	array( def.settingGroups, 32, "setting_groups" )
+	for _, group in ipairs( def.settingGroups ) do
+		fields( group, { id = true, label = true, labelZH = true }, "setting_group" )
+		if not localID( group.id ) or groups[group.id] or not text( group.label, 128 ) or not text( group.labelZH, 128 ) then
+			reject( "invalid_setting_group" )
+		end
+		groups[group.id] = true
+	end
+	local keys = {}
+	array( def.settings, 128, "settings" )
+	for _, spec in ipairs( def.settings ) do
+		fields( spec, { key = true, group = true, type = true, default = true, min = true, max = true, integer = true,
+			choices = true, label = true, labelZH = true, help = true, helpZH = true }, "setting" )
+		if not localID( spec.key ) or keys[spec.key] then reject( "invalid_setting_key" ) end
+		keys[spec.key] = true
+		if spec.group ~= nil and not groups[spec.group] then reject( "unknown_setting_group:" .. spec.key ) end
+		if not text( spec.label, 128 ) or not text( spec.labelZH, 128 ) or not text( spec.help, 512 ) or not text( spec.helpZH, 512 ) then
+			reject( "invalid_setting_text:" .. spec.key )
+		end
+		if spec.type == "bool" then
+			if type( spec.default ) ~= "boolean" or spec.min ~= nil or spec.max ~= nil or spec.choices ~= nil or spec.integer ~= nil then
+				reject( "invalid_bool_setting:" .. spec.key )
+			end
+		elseif spec.type == "number" then
+			if not number( spec.min ) or not number( spec.max ) or spec.min >= spec.max or not number( spec.default )
+				or spec.default < spec.min or spec.default > spec.max or spec.choices ~= nil
+				or spec.integer ~= nil and type( spec.integer ) ~= "boolean" then
+				reject( "invalid_number_setting:" .. spec.key )
+			end
+		elseif spec.type == "choice" then
+			if spec.min ~= nil or spec.max ~= nil or spec.integer ~= nil then reject( "invalid_choice_setting:" .. spec.key ) end
+			local found = false
+			if array( spec.choices, 16, "setting_choices" ) == 0 then reject( "empty_setting_choices:" .. spec.key ) end
+			for _, choice in ipairs( spec.choices ) do
+				fields( choice, { value = true, label = true, labelZH = true }, "setting_choice" )
+				if not number( choice.value ) or not text( choice.label, 128 ) or not text( choice.labelZH, 128 ) then
+					reject( "invalid_setting_choice:" .. spec.key )
+				end
+				found = found or choice.value == spec.default
+			end
+			if not found then reject( "invalid_choice_default:" .. spec.key ) end
+		else
+			reject( "invalid_setting_type:" .. spec.key )
+		end
+	end
+end
+
 local function validate( def )
 	fields( def, { schema = true, name = true, build = true, abi = true,
 		layout = true, adapter = true, programs = true, resources = true,
-		passes = true, implements = true, materialMaps = true }, "definition" )
+		passes = true, implements = true, materialMaps = true, settings = true, settingGroups = true }, "definition" )
 	if def.schema ~= Schema.VERSION then reject( "unsupported_descriptor_schema" ) end
 	if type( def.name ) ~= "string" or #def.name == 0 or #def.name > 128 then reject( "invalid_name" ) end
 	if not hash( def.build ) then reject( "invalid_build_fingerprint" ) end
@@ -159,6 +220,7 @@ local function validate( def )
 			if not localID( resource ) or not def.resources[resource] then reject( "missing_material_map_resource" ) end
 		end
 	end
+	validateSettings( def )
 	if map( def.passes, localID, 64, "passes" ) == 0 then reject( "empty_passes" ) end
 	for _, pass in pairs( def.passes ) do
 		fields( pass, { stage = true, program = true, inputs = true }, "pass" )

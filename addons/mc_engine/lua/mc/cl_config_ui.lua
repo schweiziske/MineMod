@@ -107,6 +107,15 @@ local function getCVarValue( scope, name )
 	return cvar:GetString()
 end
 
+-- Items may carry get/set instead of naming a ConVar (e.g. shader pack settings).
+local function itemValue( scope, item )
+	if item.get then
+		local value = item.get()
+		return value == nil and "" or tostring( value )
+	end
+	return getCVarValue( scope, item.name )
+end
+
 local function isTruthyValue( value )
 	value = string.lower( tostring( value or "" ) )
 	return value == "1" or value == "true" or value == "yes" or value == "on"
@@ -120,6 +129,12 @@ end
 
 local function applyConfigValue( scope, item, value )
 	value = tostring( value or "" )
+	if item.set then
+		item.set( value )
+		-- Show the stored value, e.g. after clamping to the setting's range.
+		MC.RefreshConfigControlValue( item.name, itemValue( scope, item ) )
+		return
+	end
 	if scope == "client" then
 		RunConsoleCommand( item.name, value )
 		return
@@ -230,7 +245,7 @@ local function createBoolControl( parent, scope, item, editable )
 	local holder = vgui.Create( "DPanel", parent )
 	holder:Dock( FILL )
 	holder:DockMargin( 0, 27, 12, 27 )
-	holder.MCEnabled = isTruthyValue( getCVarValue( scope, item.name ) )
+	holder.MCEnabled = isTruthyValue( itemValue( scope, item ) )
 	holder.Paint = function() end
 
 	local function makeChoice( value, label )
@@ -326,7 +341,7 @@ local function createChoiceControl( parent, scope, item, editable )
 		combo:SetValue( value )
 	end
 
-	setDisplayedValue( getCVarValue( scope, item.name ) )
+	setDisplayedValue( itemValue( scope, item ) )
 	combo.OnSelect = function( _, _, _, data )
 		if not editable then return end
 		applyConfigValue( scope, item, tostring( data or "" ) )
@@ -364,7 +379,7 @@ local function createValueControl( parent, scope, item, editable )
 
 	local entry = vgui.Create( "DTextEntry", holder )
 	entry:Dock( FILL )
-	entry:SetText( getCVarValue( scope, item.name ) )
+	entry:SetText( itemValue( scope, item ) )
 	entry:SetEnabled( editable )
 	entry.MCOriginalValue = entry:GetValue()
 	styleTextEntry( entry )
@@ -665,14 +680,21 @@ function MC.OpenConfigMenu()
 		for _, entryCategory in ipairs( ( MC.ConfigConVars and MC.ConfigConVars[activeScope] ) or {} ) do
 			if configEntryVisible( entryCategory ) then
 				local items = {}
-				for _, entry in ipairs( entryCategory.items or {} ) do
+				local source = entryCategory.items or {}
+				local dynamic = entryCategory.dynamic and MC.ConfigDynamicItems and MC.ConfigDynamicItems[entryCategory.dynamic]
+				if dynamic then source = dynamic() end
+				for _, entry in ipairs( source ) do
 					if configEntryVisible( entry ) then items[#items + 1] = entry end
 				end
 
+				local settingCount = 0
+				for _, entry in ipairs( items ) do
+					if entry.kind ~= "heading" then settingCount = settingCount + 1 end
+				end
 				if #items > 0 then
 					local visibleCategory = {}
 					for key, value in pairs( entryCategory ) do visibleCategory[key] = value end
-					visibleCategory.items = items
+					visibleCategory.items, visibleCategory.settingCount = items, settingCount
 					visible[#visible + 1] = visibleCategory
 				end
 			end
@@ -723,7 +745,7 @@ function MC.OpenConfigMenu()
 			for _, entryCategory in ipairs( categoriesForScope() ) do
 				local matches = {}
 				for _, entry in ipairs( entryCategory.items or {} ) do
-					if itemMatches( entry, entryCategory, query ) then
+					if entry.kind ~= "heading" and itemMatches( entry, entryCategory, query ) then
 						table.insert( matches, entry )
 					end
 				end
@@ -744,9 +766,13 @@ function MC.OpenConfigMenu()
 			local entryCategory = activeCategoryData()
 			if entryCategory then
 				for _, entry in ipairs( entryCategory.items or {} ) do
-					rowIndex = rowIndex + 1
-					total = total + 1
-					createConfigRow( canvas, activeScope, entry, rowIndex )
+					if entry.kind == "heading" then
+						createResultHeading( canvas, { label = entry.label, zhLabel = entry.labelZH }, entry.count or "" )
+					else
+						rowIndex = rowIndex + 1
+						total = total + 1
+						createConfigRow( canvas, activeScope, entry, rowIndex )
+					end
 				end
 				contentTitle:SetText( categoryLabel( entryCategory ) )
 				contentDescription:SetText( categoryDescription( entryCategory ) )
@@ -809,7 +835,7 @@ function MC.OpenConfigMenu()
 						end
 						draw.SimpleText( categoryLabel( categoryEntry ), "mc_config_small", 13, h * 0.5,
 							selected and UI.accentText or UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER )
-						draw.SimpleText( tostring( #( categoryEntry.items or {} ) ), "mc_config_meta", w - 11, h * 0.5,
+						draw.SimpleText( tostring( categoryEntry.settingCount ), "mc_config_meta", w - 11, h * 0.5,
 							selected and UI.accentText or UI.textFaint, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER )
 					end
 					btn.DoClick = function()
@@ -907,6 +933,19 @@ net.Receive( "mc_config_values", function()
 			end
 		end
 	end
+end )
+
+-- Dynamic categories name a builder here; it runs each time rows are rebuilt.
+MC.ConfigDynamicItems = MC.ConfigDynamicItems or {}
+MC.ConfigDynamicItems.render_pack = function()
+	return MC.RenderPackSettings and MC.RenderPackSettings.ConfigItems() or {}
+end
+
+-- A pack switch completes a few frames after selection; show its settings then.
+hook.Add( "MCRenderPackSettingsChanged", "mc_config_ui", function()
+	timer.Simple( 0, function()
+		if IsValid( MC.ConfigFrame ) and MC.ConfigRefreshVisibility then MC.ConfigRefreshVisibility() end
+	end )
 end )
 
 concommand.Add( "mc_config", function()

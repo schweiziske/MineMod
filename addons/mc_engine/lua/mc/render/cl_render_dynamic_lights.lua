@@ -194,9 +194,8 @@ function D.Prepare( x, y, z )
 	local eye, why = Coords.RenderToWorld( viewPoint )
 	if not eye then D.Invalidate() return MC.Fault( "dynamic_light_view", "%s", tostring( why ) ) end
 	local count = selectLights( eye, blockSize )
-	local exposure = 1
-	local exposureConVar = GetConVar( "mc_pbr_exposure" )
-	if exposureConVar then exposure = exposureConVar:GetFloat() end
+	-- Packs without an exposure setting (e.g. vanilla) keep unit exposure.
+	local exposure = MC.RenderPackSettings.Get( "exposure" ) or 1
 	if x ~= D.eyeX or y ~= D.eyeY or z ~= D.eyeZ or count ~= D.count or blockSize ~= D.blockSize or exposure ~= D.exposure then
 		D.revision = D.revision + 1
 	end

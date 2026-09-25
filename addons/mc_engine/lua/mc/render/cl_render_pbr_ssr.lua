@@ -15,10 +15,20 @@ end
 S.depthRenderers = S.depthRenderers or {}
 S.sceneGroups = S.sceneGroups or {}
 local requireValue = MC.RenderL2Resources.Require
-local enabled = CreateClientConVar( "mc_pbr_water_ssr", "1", true, false, "Screen-space reflections on PBR water; requires an additional scene depth pass", 0, 1 )
-local distance = CreateClientConVar( "mc_pbr_water_ssr_distance", "48", true, false, "Maximum water reflection ray length in blocks", 4, 96 )
-local steps = CreateClientConVar( "mc_pbr_water_ssr_steps", "32", true, false, "Water reflection ray steps", 8, 48 )
-local strength = CreateClientConVar( "mc_pbr_water_ssr_strength", "1", true, false, "Water SSR contribution; misses retain the environment", 0, 1 )
+local enabled = MC.RenderPackSettings.Handle( "water_ssr" )
+local distance = MC.RenderPackSettings.Handle( "water_ssr_distance" )
+local steps = MC.RenderPackSettings.Handle( "water_ssr_steps" )
+local strength = MC.RenderPackSettings.Handle( "water_ssr_strength" )
+local blockEnabled = MC.RenderPackSettings.Handle( "block_ssr" )
+local blockStrength = MC.RenderPackSettings.Handle( "block_ssr_strength" )
+local blockRoughness = MC.RenderPackSettings.Handle( "block_ssr_roughness" )
+local blockDistance = MC.RenderPackSettings.Handle( "block_ssr_distance" )
+local blockSteps = MC.RenderPackSettings.Handle( "block_ssr_steps" )
+-- Mirrors facing the camera send rays back along the view direction, so any
+-- shell behind a near object is hit by a wide fan of rays and the object is
+-- smeared across the mirror. Refined true hits land within a sliver of the
+-- surface; rays passing behind a silhouette end with the full gap.
+local blockThickness = MC.RenderPackSettings.Handle( "block_ssr_thickness" )
 local floor, ceil, min, max = math.floor, math.ceil, math.min, math.max
 -- Full-resolution depth + trace + colour is about 48 MiB at 1080p. The cap
 -- bounds Source's non-freeable RT cache across a few resolution changes.
@@ -34,7 +44,8 @@ local emptyRecords = {}
 S.request, S.pending, S.depthSerial, S.serial, S.retryAt = nil, nil, nil, 0, 0
 S.scene = nil
 S.renderingDepth = nil
-S.stats = { requests = 0, captures = 0, resolves = 0, depthPasses = 0, failures = 0, status = "idle", traceDraws = 0, compositeDraws = 0 }
+S.stats = { requests = 0, captures = 0, resolves = 0, depthPasses = 0, failures = 0, status = "idle", traceDraws = 0, compositeDraws = 0, blockResolves = 0 }
+S.blockMaterials = S.blockMaterials or {}
 local apiValidated, targetPushed, cameraStarted, modelPushed, overrides = false, false, false, false, false
 
 local function validateAPI()
@@ -588,16 +599,16 @@ function S.DepthMaterial( surface, cutout )
     return material
 end
 
-local function setTraceConstants( material, c, group )
+local function setTraceConstants( material, c, group, rayLength, stepCount, amount, hitThickness )
     local bs = group.blockSize
     local values = c.traceValues
     if not values then values = {} c.traceValues = values end
     values[1], values[2], values[3], values[4] = c.ox, c.oy, c.oz, 0
-    local thickness = bs * HIT_THICKNESS
-    values[5], values[6], values[7], values[8] = distance:GetFloat() * bs, floor( steps:GetFloat() ), thickness, bs * 0.03
+    local thickness = bs * hitThickness
+    values[5], values[6], values[7], values[8] = rayLength * bs, floor( stepCount ), thickness, bs * 0.03
     local dw, dh = c.depthTexture:Width(), c.depthTexture:Height()
     values[9], values[10], values[11], values[12] = dw, dh, 1 / dw, 1 / dh
-    values[13], values[14], values[15], values[16] = c.scaleX, c.scaleY, strength:GetFloat(), c.group.precisionDepth and 1 or 0
+    values[13], values[14], values[15], values[16] = c.scaleX, c.scaleY, amount, c.group.precisionDepth and 1 or 0
     for index, value in ipairs( values ) do material:SetFloat( slots[index], value ) end
     material:SetTexture( "$texture1", c.depthTexture )
     material:SetMatrix( "$viewprojmat", c.projection )
@@ -610,7 +621,7 @@ local function drawWater( c, trace, scene )
         local group, record = entry.group, entry.record
         local material = trace and group.trace or group.composite
         if group ~= bound then
-            if trace then setTraceConstants( material, c, group )
+            if trace then setTraceConstants( material, c, group, distance:GetFloat(), steps:GetFloat(), strength:GetFloat(), HIT_THICKNESS )
             else
                 MC.RenderPBR.Bind( material )
                 c.composition:SetField( 1, 4, group.blockSize )
@@ -664,6 +675,78 @@ local function resolve( c )
     S.debugTarget, S.debugDepth = c.target, c.depthTexture
 end
 
+function S.BlockWanted( program )
+    return program ~= nil and blockEnabled:GetBool() and blockStrength:GetFloat() > 0
+end
+
+-- One cached material per terrain surface and cutout mode. Constants and the
+-- per-frame scene/depth textures are written once per resolve.
+local function blockMaterial( block, surface, cutout )
+    local byKind = S.blockMaterials[surface]
+    if not byKind then byKind = {} S.blockMaterials[surface] = byKind end
+    local kind = cutout and 2 or 1
+    local entry = byKind[kind]
+    if not entry or entry.program ~= block.program then
+        requireValue( S.depthCount < 2048, "render_block_ssr_budget", "2048 cached scene-effect materials reached" )
+        local p = params( block.program, MC.RenderL2Resources.SourceTexture( surface ), false )
+        for _, key in ipairs( { "$texture3", "$texture4", "$texture7" } ) do
+            local texture = surface:GetTexture( key )
+            requireValue( texture and not texture:IsError(), "render_block_ssr_maps", "block SSR surface lacks " .. key )
+            p[key], p["$linearread_" .. key:sub( 2 )] = texture:GetName(), 1
+        end
+        p["$texture1"], p["$texture2"] = p["$texture3"], p["$texture3"]
+        p["$linearread_texture1"], p["$linearread_texture2"], p["$linearwrite"] = 1, 0, 0
+        S.depthCount = S.depthCount + 1
+        entry = { program = block.program, extra = Matrix(), cutoff = cutout and 0.5 or 0,
+            material = CreateMaterial( "mc_block_ssr1_" .. S.depthCount, "screenspace_general_8tex", p ) }
+        requireValue( entry.material and not entry.material:IsError(), "render_block_ssr_material", "block SSR material failed to load" )
+        byKind[kind] = entry
+    end
+    if entry.serial ~= block.serial then
+        local material, extra, c = entry.material, entry.extra, block.c
+        setTraceConstants( material, c, c.group, blockDistance:GetFloat(), blockSteps:GetFloat(), blockStrength:GetFloat(), blockThickness:GetFloat() )
+        material:SetTexture( "$texture2", block.scene )
+        extra:SetField( 1, 1, 1 / c.frameWidth ) extra:SetField( 1, 2, 1 / c.frameHeight )
+        extra:SetField( 1, 3, entry.cutoff ) extra:SetField( 1, 4, blockRoughness:GetFloat() )
+        material:SetMatrix( "$invviewprojmat", extra )
+        entry.serial = block.serial
+    end
+    return entry.material
+end
+
+local blockFrame = { serial = 0 }
+blockFrame.resolve = function( surface, cutout ) return blockMaterial( blockFrame, surface, cutout ) end
+
+local function resolveBlocks( c, program )
+    requireValue( type( MC.DrawTerrainOverride ) == "function", "render_block_ssr_draw", "terrain override drawing is unavailable" )
+    render.UpdateScreenEffectTexture( 0 )
+    local scene = render.GetScreenEffectTexture( 0 )
+    requireValue( scene and not scene:IsError() and scene:Width() == c.frameWidth and scene:Height() == c.frameHeight,
+        "render_block_ssr_scene", "framebuffer changed between scene depth and block reflections" )
+    blockFrame.c, blockFrame.scene, blockFrame.program = c, scene, program
+    blockFrame.serial = blockFrame.serial + 1
+    -- The copy is both reflection source and background; every covered pixel
+    -- is rewritten from it, so no hardware depth or blending takes part.
+    writeState( nil )
+    cam.Start( c.camera ) cameraStarted = true
+    MC.DrawTerrainOverride( blockFrame.resolve )
+    cam.End() cameraStarted = false
+    S.stats.blockResolves = S.stats.blockResolves + 1
+    S.debugTarget, S.debugDepth = c.target, c.depthTexture
+end
+
+-- Called by the post chain after water SSR and water depth, before fog, so
+-- blocks reflect water and reflections are fogged with their receivers.
+function S.ResolveBlocks( c, program )
+    local ok, err = pcall( resolveBlocks, c, program )
+    blockFrame.c, blockFrame.scene = nil, nil
+    local restoreError = clean()
+    if ok and not restoreError then return end
+    local failure = not ok and err or restoreError
+    if type( failure ) == "table" then error( failure, 0 ) end
+    error( { code = "render_block_ssr", message = tostring( failure ) }, 0 )
+end
+
 function S.Resolve()
     local c = S.pending
     if not c then return end
@@ -690,14 +773,28 @@ hook.Add( "NeedsDepthPass", "mc_water_ssr", function()
     if S.RequestDepth() then return true end
 end )
 hook.Remove( "PreDrawOpaqueRenderables", "mc_water_ssr_depth" )
+-- Resolve before viewmodels so they are neither reflected nor overdrawn by
+-- the composite; the screenspace hook remains for views without that stage.
+-- Never return a value here: true from PreDrawViewModels hides viewmodels.
+hook.Add( "PreDrawViewModels", "mc_water_ssr", function() S.Resolve() end )
 hook.Add( "RenderScreenspaceEffects", "mc_water_ssr", S.Resolve )
+-- The engine depth pass also draws viewmodels into the native depth that seeds
+-- the private scene depth; the gun would occlude reflections. Skip them there.
+local function skipInNativeDepth()
+    local c = S.request
+    if not c or not c.nativeDepth then return end
+    local target = render.GetRenderTarget()
+    if target and target:GetName() == c.nativeDepth:GetName() then return true end
+end
+hook.Add( "PreDrawViewModel", "mc_water_ssr", skipInNativeDepth )
+hook.Add( "PreDrawPlayerHands", "mc_water_ssr", skipInNativeDepth )
 hook.Add( "MCWorldAdapterChanged", "mc_water_ssr", S.Invalidate )
-cvars.AddChangeCallback( "mc_pbr_water_ssr", S.Invalidate, "mc_water_ssr" )
+MC.RenderPackSettings.OnChange( "water_ssr", "mc_water_ssr", S.Invalidate )
 concommand.Add( "mc_pbr_water_ssr_stats", function()
     local stats = S.stats
-    print( string.format( "[MC water SSR] %s requests=%d depthPasses=%d captures=%d resolves=%d traceDraws=%d compositeDraws=%d failures=%d targetMiB=%.2f GPU=unmeasured",
+    print( string.format( "[MC water SSR] %s requests=%d depthPasses=%d captures=%d resolves=%d traceDraws=%d compositeDraws=%d blockResolves=%d failures=%d targetMiB=%.2f GPU=unmeasured",
         stats.status, stats.requests, stats.depthPasses, stats.captures, stats.resolves, stats.traceDraws, stats.compositeDraws,
-        stats.failures, S.targetBytes / 1048576 ) )
+        stats.blockResolves, stats.failures, S.targetBytes / 1048576 ) )
 end )
 
 -- Development view of the last resolved frame, drawn over the HUD in quadrants:

@@ -151,6 +151,7 @@ local CLIENT_FILES = {
 	"mc/render/cl_render_pack_schema.lua",
 	"mc/render/cl_render_pack_registry.lua",
 	"mc/render/cl_render_pack_discovery.lua",
+	"mc/render/cl_render_pack_settings.lua",
 	"mc/render/cl_render_block_bindings.lua",
 	"mc/render/cl_mesh_cache.lua",
 	"mc/render/cl_native_mesh_config.lua",

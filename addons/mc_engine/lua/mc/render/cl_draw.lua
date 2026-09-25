@@ -289,6 +289,9 @@ MC.DrawCullStats = MC.DrawCullStats or {
 }
 MC.DrawTranslucentCullStats = MC.DrawTranslucentCullStats or {}
 MC.DrawSSRDepthCullStats = MC.DrawSSRDepthCullStats or {}
+MC.DrawReflectionCullStats = MC.DrawReflectionCullStats or {}
+-- Set only inside MC.DrawTerrainOverride: surface material, cutout -> material.
+local overrideMaterial
 
 local function addPlane( nx, ny, nz, hx, hz )
 	planeCount = planeCount + 1
@@ -490,7 +493,9 @@ local function drawVisibleChunks( store, entries, count, chunks, stats, depthSta
 								end
 								if entry.material ~= currentMaterial then
 									currentMaterial = entry.material
-									if depthStage then
+									if overrideMaterial then
+										render.SetMaterial( overrideMaterial( currentMaterial, depthStage == "world_cutout" ) )
+									elseif depthStage then
 										render.SetMaterial( MC.RenderPBRSSR.DepthMaterial( currentMaterial, depthStage == "world_cutout" ) )
 									else
 										MC.RenderPBR.Bind( currentMaterial )
@@ -629,12 +634,13 @@ end
 local function drawPackStages( translucent, depthOnly )
 	-- The explicitly owned SSR merge uses clip-W materials and MIN blending.
 	-- Lit RGB and translucent water must never reach this private depth texture.
-	if depthOnly and ( translucent or not MC.RenderPBRSSR or not MC.RenderPBRSSR.BeginDepth() ) then return end
+	if depthOnly and ( translucent or not overrideMaterial
+		and ( not MC.RenderPBRSSR or not MC.RenderPBRSSR.BeginDepth() ) ) then return end
 	local started = SysTime()
 	local runtime = MC.RenderPackRuntime
 	local groups, version, chunks = runtime.GetStages( translucent )
 	if not updateCullState( depthOnly ) then return end
-	local stats = depthOnly and MC.DrawSSRDepthCullStats or translucent and MC.DrawTranslucentCullStats or MC.DrawCullStats
+	local stats = overrideMaterial and MC.DrawReflectionCullStats or depthOnly and MC.DrawSSRDepthCullStats or translucent and MC.DrawTranslucentCullStats or MC.DrawCullStats
 	stats.sectionsTested, stats.sectionsDrawn, stats.sectionFrustumCulled, stats.sectionOcclusionCulled = 0, 0, 0, 0
 	stats.directionCulled, stats.vertices, stats.verticesCulled = 0, 0, 0
 	local totalTested, totalDrawn, totalDistance, totalFrustum, totalStale = 0, 0, 0, 0, 0
@@ -679,10 +685,12 @@ local function drawPackStages( translucent, depthOnly )
 end
 
 concommand.Add( "mc_mesh_cull_stats", function()
-	for pass = 1, 3 do
-		local stats = pass == 1 and MC.DrawCullStats or pass == 2 and MC.DrawTranslucentCullStats or MC.DrawSSRDepthCullStats
+	local names = { "opaque", "translucent", "ssr_depth", "reflection" }
+	for pass = 1, 4 do
+		local stats = pass == 1 and MC.DrawCullStats or pass == 2 and MC.DrawTranslucentCullStats
+			or pass == 3 and MC.DrawSSRDepthCullStats or MC.DrawReflectionCullStats
 		print( string.format( "[MC cull] %s draws=%d vertices=%d rejectedVertices=%d sections=%d/%d frustum=%d occlusion=%d directions=%d CPU=%.3fms GPU=unmeasured",
-			pass == 1 and "opaque" or pass == 2 and "translucent" or "ssr_depth", stats.meshes or 0, stats.vertices or 0, stats.verticesCulled or 0,
+			names[pass], stats.meshes or 0, stats.vertices or 0, stats.verticesCulled or 0,
 			stats.sectionsDrawn or 0, stats.sectionsTested or 0, stats.sectionFrustumCulled or 0,
 			stats.sectionOcclusionCulled or 0, stats.directionCulled or 0, stats.cpuMS or 0 ) )
 	end
@@ -702,6 +710,17 @@ end
 MC.RenderPBRSSR.RegisterDepthRenderer( "terrain", function()
 	if meshRenderingEnabled() then drawAllChunks( false, true ) end
 end )
+
+-- Redraw opaque/cutout terrain with resolve( surfaceMaterial, cutout ) in place
+-- of each surface material, e.g. block reflections. Culling matches the depth
+-- pass; the caller owns camera/RT/blend state. Errors propagate.
+function MC.DrawTerrainOverride( resolve )
+	if not meshRenderingEnabled() then return end
+	overrideMaterial = resolve
+	local ok, err = pcall( drawAllChunks, false, true )
+	overrideMaterial = nil
+	if not ok then error( err, 0 ) end
+end
 
 MC.RefreshChunkRenderFrame()
 hook.Add( "MCWorldAdapterChanged", "mc_chunk_render_frame", function()
