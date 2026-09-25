@@ -4,11 +4,11 @@ MC = MC or {}
 local W = { VERSION = 1, MAX_DEPTH = 16 }
 MC.RenderPBRWater = W
 local requireValue = MC.RenderL2Resources.Require
-local enabled = CreateClientConVar( "mc_pbr_water", "1", true, false, "PBR water in packs that provide a water program", 0, 1 )
-local waves = CreateClientConVar( "mc_pbr_water_waves", "0.32", true, false, "Water ripple strength", 0, 1 )
-local refraction = CreateClientConVar( "mc_pbr_water_refraction", "1", true, false, "Screen-space water distortion strength; 0 keeps undistorted transmission", 0, 1 )
-local density = CreateClientConVar( "mc_pbr_water_density", "1", true, false, "Water absorption per block", 0.1, 4 )
-local foam = CreateClientConVar( "mc_pbr_water_foam", "0.32", true, false, "Subtle shoreline foam", 0, 1 )
+local enabled = MC.RenderPackSettings.Handle( "water" )
+local waves = MC.RenderPackSettings.Handle( "water_waves" )
+local refraction = MC.RenderPackSettings.Handle( "water_refraction" )
+local density = MC.RenderPackSettings.Handle( "water_density" )
+local foam = MC.RenderPackSettings.Handle( "water_foam" )
 local floor, min = math.floor, math.min
 
 function W.CurrentMaterial()

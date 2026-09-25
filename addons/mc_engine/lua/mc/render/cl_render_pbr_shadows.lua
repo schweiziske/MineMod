@@ -17,12 +17,12 @@ if S.depthMaterialVersion ~= DEPTH_MATERIAL_VERSION then
 	S.depthMaterialVersion = DEPTH_MATERIAL_VERSION
 end
 local floor, sqrt, atan2 = math.floor, math.sqrt, math.atan2
-local enabled = CreateClientConVar( "mc_pbr_shadows", "1", true, false, "Cached two-cascade sun shadows for PBR packs", 0, 1 )
-local resolution = CreateClientConVar( "mc_pbr_shadow_resolution", "512", true, false, "Per-cascade shadow size: 256, 512 or 1024", 256, 1024 )
-local distance = CreateClientConVar( "mc_pbr_shadow_range", "64", true, false, "Far shadow radius in Minecraft blocks; near radius is one quarter", 8, 128 )
-local interval = CreateClientConVar( "mc_pbr_shadow_interval", "0.05", true, false, "Minimum seconds between changed shadow renders; 0 = every frame", 0, 1 )
-local strength = CreateClientConVar( "mc_pbr_shadow_strength", "1", true, false, "Occlusion of direct sunlight only", 0, 1 )
-local bias = CreateClientConVar( "mc_pbr_shadow_bias", "0.03", true, false, "Base receiver depth bias in Minecraft blocks", 0, 0.5 )
+local enabled = MC.RenderPackSettings.Handle( "shadows" )
+local resolution = MC.RenderPackSettings.Handle( "shadow_resolution" )
+local distance = MC.RenderPackSettings.Handle( "shadow_range" )
+local interval = MC.RenderPackSettings.Handle( "shadow_interval" )
+local strength = MC.RenderPackSettings.Handle( "shadow_strength" )
+local bias = MC.RenderPackSettings.Handle( "shadow_bias" )
 local settingsRevision = 1
 local settings = {}
 local function readSettings()
@@ -32,9 +32,8 @@ local function readSettings()
 	settings.strength, settings.bias = strength:GetFloat(), bias:GetFloat()
 	settingsRevision = settingsRevision + 1
 end
-for _, name in ipairs( { "mc_pbr_shadows", "mc_pbr_shadow_resolution", "mc_pbr_shadow_range",
-	"mc_pbr_shadow_interval", "mc_pbr_shadow_strength", "mc_pbr_shadow_bias" } ) do
-	cvars.AddChangeCallback( name, readSettings, "mc_l2_pbr_shadows" )
+for _, key in ipairs( { "shadows", "shadow_resolution", "shadow_range", "shadow_interval", "shadow_strength", "shadow_bias" } ) do
+	MC.RenderPackSettings.OnChange( key, "mc_l2_pbr_shadows", readSettings )
 end
 readSettings()
 S.stats = { mode = "full", updates = 0, nearUpdates = 0, farUpdates = 0, cascades = 0, cached = 0, throttled = 0, failures = 0, draws = 0, vertices = 0,

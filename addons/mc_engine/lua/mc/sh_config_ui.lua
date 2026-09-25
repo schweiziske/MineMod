@@ -81,6 +81,10 @@ MC.ConfigConVars = {
 				} } ),
 		} ),
 
+		category( "shader_pack", "interface", "Shader pack", "光影",
+			"Choose the shader pack; the settings below are provided by the active pack and saved under data/mc/shaderpacks/config.",
+			"选择光影包；下面的设置由当前光影包提供，保存在 data/mc/shaderpacks/config。", {}, { dynamic = "render_pack" } ),
+
 		category( "language", "interface", "Language", "语言",
 			"Choose the language used by MC menus and prompts.",
 			"选择 MC 菜单与提示所使用的语言。", {

@@ -5,9 +5,9 @@ local B = MC.RenderPBR or { materials = {}, materialCount = 0,
 MC.RenderPBR = B
 local requireValue = MC.RenderL2Resources.Require
 local sqrt, min, max, abs = math.sqrt, math.min, math.max, math.abs
-local exposure = CreateClientConVar( "mc_pbr_exposure", "1", true, false, "PBR exposure before tone mapping", 0.05, 8 )
-local strength = CreateClientConVar( "mc_pbr_sun_strength", "2.5", true, false, "PBR direct solar radiance", 0, 8 )
-local environment = CreateClientConVar( "mc_pbr_environment", "1", true, false, "PBR specular IBL intensity", 0, 4 )
+local exposure = MC.RenderPackSettings.Handle( "exposure" )
+local strength = MC.RenderPackSettings.Handle( "sun_strength" )
+local environment = MC.RenderPackSettings.Handle( "environment" )
 local lightingKeys = { "$c1_w", "$c2_x", "$c2_y", "$c2_z", "$c2_w", "$c3_x", "$c3_y", "$c3_z", "$c3_w" }
 local values = { 1, 0, 0, 1, 2.5, 1, 1, 1, 1 }
 local eyeX, eyeY, eyeZ, lastFrame = 0, 0, 0, nil
@@ -20,9 +20,10 @@ B.stats.shadowWrites = B.stats.shadowWrites or 0
 local settingsDirty = true
 
 local function settingsChanged() settingsDirty = true end
-for _, name in ipairs( { "mc_pbr_exposure", "mc_pbr_sun_strength", "mc_pbr_environment", "mc_daycycle_sun_tilt" } ) do
-	cvars.AddChangeCallback( name, settingsChanged, "mc_l2_pbr" )
+for _, key in ipairs( { "exposure", "sun_strength", "environment" } ) do
+	MC.RenderPackSettings.OnChange( key, "mc_l2_pbr", settingsChanged )
 end
+cvars.AddChangeCallback( "mc_daycycle_sun_tilt", settingsChanged, "mc_l2_pbr" )
 
 function B.Parameters( params, maps )
 	params["$c0_x"], params["$c0_y"] = "0", "0"

@@ -10,28 +10,28 @@ P.bloomRetryAt, P.viewSerial, P.bloomSerial = 0, 0, nil
 P.stats = { ao = 0, fog = 0, bloom = 0, volumetric = 0, failures = 0, status = "idle" }
 local requireValue = MC.RenderL2Resources.Require
 local S = MC.RenderPBRSSR
-local aoEnabled = CreateClientConVar( "mc_pbr_ssao", "1", true, false, "Screen-space contact occlusion on opaque surfaces", 0, 1 )
-local aoStrength = CreateClientConVar( "mc_pbr_ssao_strength", "0.75", true, false, "Screen-space occlusion strength", 0, 1.5 )
-local aoRadius = CreateClientConVar( "mc_pbr_ssao_radius", "1.5", true, false, "Contact occlusion radius in blocks", 0.25, 4 )
-local aoDistance = CreateClientConVar( "mc_pbr_ssao_distance", "24", true, false, "Fade contact occlusion beyond this distance in blocks", 4, 64 )
+local aoEnabled = MC.RenderPackSettings.Handle( "ssao" )
+local aoStrength = MC.RenderPackSettings.Handle( "ssao_strength" )
+local aoRadius = MC.RenderPackSettings.Handle( "ssao_radius" )
+local aoDistance = MC.RenderPackSettings.Handle( "ssao_distance" )
 local aoDebug = CreateClientConVar( "mc_pbr_ssao_debug", "0", false, false, "Show the SSAO visibility buffer", 0, 1 )
-local fogEnabled = CreateClientConVar( "mc_pbr_fog", "1", true, false, "Distance and height atmosphere", 0, 1 )
-local fogDensity = CreateClientConVar( "mc_pbr_fog_density", "0.006", true, false, "Distance fog extinction per block", 0, 0.1 )
-local fogStart = CreateClientConVar( "mc_pbr_fog_start", "12", true, false, "Clear foreground distance in blocks", 0, 64 )
-local fogHeightDensity = CreateClientConVar( "mc_pbr_fog_height_density", "0.006", true, false, "Height fog extinction at the base height", 0, 0.1 )
-local fogBase = CreateClientConVar( "mc_pbr_fog_height", "64", true, false, "Height fog base in MC world blocks", -256, 512 )
-local fogScale = CreateClientConVar( "mc_pbr_fog_height_scale", "32", true, false, "Height change that halves the mist density in blocks", 4, 256 )
-local fogDistance = CreateClientConVar( "mc_pbr_fog_distance", "128", true, false, "Maximum atmosphere integration distance in blocks", 16, 256 )
-local bloomEnabled = CreateClientConVar( "mc_pbr_bloom", "1", true, false, "Soft highlight bloom", 0, 1 )
-local bloomStrength = CreateClientConVar( "mc_pbr_bloom_strength", "0.35", true, false, "Bloom contribution", 0, 2 )
-local bloomThreshold = CreateClientConVar( "mc_pbr_bloom_threshold", "0.65", true, false, "Linear scene highlight threshold after material tone mapping", 0, 1 )
-local bloomKnee = CreateClientConVar( "mc_pbr_bloom_knee", "0.20", true, false, "Soft threshold transition width", 0, 0.5 )
-local bloomRadius = CreateClientConVar( "mc_pbr_bloom_radius", "1", true, false, "Bloom blur radius multiplier", 0.25, 4 )
+local fogEnabled = MC.RenderPackSettings.Handle( "fog" )
+local fogDensity = MC.RenderPackSettings.Handle( "fog_density" )
+local fogStart = MC.RenderPackSettings.Handle( "fog_start" )
+local fogHeightDensity = MC.RenderPackSettings.Handle( "fog_height_density" )
+local fogBase = MC.RenderPackSettings.Handle( "fog_height" )
+local fogScale = MC.RenderPackSettings.Handle( "fog_height_scale" )
+local fogDistance = MC.RenderPackSettings.Handle( "fog_distance" )
+local bloomEnabled = MC.RenderPackSettings.Handle( "bloom" )
+local bloomStrength = MC.RenderPackSettings.Handle( "bloom_strength" )
+local bloomThreshold = MC.RenderPackSettings.Handle( "bloom_threshold" )
+local bloomKnee = MC.RenderPackSettings.Handle( "bloom_knee" )
+local bloomRadius = MC.RenderPackSettings.Handle( "bloom_radius" )
 local bloomDebug = CreateClientConVar( "mc_pbr_bloom_debug", "0", false, false, "Show extracted and blurred highlights", 0, 1 )
-local volumeEnabled = CreateClientConVar( "mc_pbr_volumetric", "1", true, false, "Shadowed single-scattering sunlight", 0, 1 )
-local volumeStrength = CreateClientConVar( "mc_pbr_volumetric_strength", "0.8", true, false, "Scattered sunlight contribution", 0, 3 )
-local volumeDistance = CreateClientConVar( "mc_pbr_volumetric_distance", "64", true, false, "Maximum light-shaft distance in blocks", 8, 128 )
-local volumeSteps = CreateClientConVar( "mc_pbr_volumetric_steps", "16", true, false, "Fixed ray integration steps", 8, 32 )
+local volumeEnabled = MC.RenderPackSettings.Handle( "volumetric" )
+local volumeStrength = MC.RenderPackSettings.Handle( "volumetric_strength" )
+local volumeDistance = MC.RenderPackSettings.Handle( "volumetric_distance" )
+local volumeSteps = MC.RenderPackSettings.Handle( "volumetric_steps" )
 local volumeDebug = CreateClientConVar( "mc_pbr_volumetric_debug", "0", false, false, "Show scattered sunlight alone", 0, 1 )
 local min, max, ceil = math.min, math.max, math.ceil
 local targetPushed, overrides = false, false
@@ -56,7 +56,8 @@ function P.Register( definition, blockSize )
     local group = { blockSize = blockSize, depth = S.RegisterScene( definition, blockSize, source ),
         ao = CreateMaterial( prefix .. "_ao", "screenspace_general_8tex", parameters( programs.post_ssao, source, false ) ),
         aoComposite = CreateMaterial( prefix .. "_ao_composite", "screenspace_general_8tex",
-            parameters( programs.post_ssao_composite, source, true ) ) }
+            parameters( programs.post_ssao_composite, source, true ) ),
+        blockSSR = programs.block_ssr }
     requireValue( group.ao and not group.ao:IsError() and group.aoComposite and not group.aoComposite:IsError(),
         "render_post_material", "post lighting material creation failed" )
     if programs.post_fog then
@@ -116,9 +117,13 @@ local function wantsVolume( group )
         and shadows and shadows.VolumeEnabled()
 end
 
+local function wantsReflections( group )
+    return group ~= nil and S.BlockWanted( group.blockSSR )
+end
+
 function P.NeedsDepth()
     local group = P.Active()
-    return group ~= nil and ( wantsAO() or wantsFog( group ) or wantsVolume( group ) )
+    return group ~= nil and ( wantsAO() or wantsFog( group ) or wantsVolume( group ) or wantsReflections( group ) )
 end
 
 function P.DepthGroup( view, waterOnly )
@@ -372,6 +377,9 @@ local function drawAtmosphere( c, group )
     end
     local records = MC.CollectWaterSSRRecords( c.camera.origin )
     if not S.IncludeWaterDepth( c, records ) then return end
+    -- Water is now an occluder in the depth, so blocks seen through it are
+    -- not treated as receivers; fog then applies to the reflections too.
+    if wantsReflections( group ) then S.ResolveBlocks( c, group.blockSSR ) end
     if wantsFog( group ) and c.fogComplete ~= c.serial then drawFog( c, group ) end
     if wantsVolume( group ) then
         local ok, err = pcall( drawVolume, c, group )
@@ -385,7 +393,7 @@ end
 
 local function finishWorld( fromViewModels )
     local group = P.Active()
-    if not ( wantsFog( group ) or wantsVolume( group ) ) or SysTime() < P.retryAt or render.GetRenderTarget() ~= nil then return end
+    if not ( wantsFog( group ) or wantsVolume( group ) or wantsReflections( group ) ) or SysTime() < P.retryAt or render.GetRenderTarget() ~= nil then return end
     local view = render.GetViewSetup( true )
     local c = S.scene
     if not c or c.frame ~= FrameNumber() then return end
@@ -482,9 +490,9 @@ hook.Add( "PreDrawViewModels", "mc_pbr_post", P.BeforeViewModels )
 -- fallback is allowed only when that stage did not run in this captured view.
 hook.Add( "PreDrawEffects", "mc_pbr_post", P.BeforeEffects )
 hook.Add( "RenderScreenspaceEffects", "mc_pbr_post", P.AfterEffects )
-cvars.AddChangeCallback( "mc_pbr_ssao", S.Invalidate, "mc_pbr_post" )
-cvars.AddChangeCallback( "mc_pbr_fog", S.Invalidate, "mc_pbr_post" )
-cvars.AddChangeCallback( "mc_pbr_volumetric", S.Invalidate, "mc_pbr_post" )
+for _, key in ipairs( { "ssao", "fog", "volumetric", "block_ssr" } ) do
+    MC.RenderPackSettings.OnChange( key, "mc_pbr_post", S.Invalidate )
+end
 concommand.Add( "mc_pbr_post_stats", function()
     print( string.format( "[MC post] %s ao=%d fog=%d bloom=%d volumetric=%d failures=%d postMiB=%.2f sharedSceneMiB=%.2f GPU=unmeasured",
         P.stats.status, P.stats.ao, P.stats.fog, P.stats.bloom, P.stats.volumetric, P.stats.failures, P.targetBytes / 1048576, S.targetBytes / 1048576 ) )

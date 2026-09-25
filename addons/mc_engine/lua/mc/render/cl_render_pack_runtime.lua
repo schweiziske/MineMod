@@ -85,6 +85,18 @@ function L.Off()
 	return L.Select( DEFAULT_PACK )
 end
 
+-- Select and remember a pack for the next join (console command and mc_config).
+function L.Choose( id )
+	local ok, err
+	if id == DEFAULT_PACK then ok, err = L.Off() else ok, err = L.Select( id ) end
+	if ok then SavedPack:SetString( id ) end
+	return ok, err
+end
+
+function L.Selected()
+	return L.selected or SavedPack:GetString()
+end
+
 function L.Reload()
 	local id = L.selected or DEFAULT_PACK
 	local requests, err = Bindings.Snapshot()
@@ -409,6 +421,8 @@ local function publish( c )
 	local previous = L.active
 	c.phase, c.prepareMS = "active", ( SysTime() - c.started ) * 1000
 	L.active, L.pending, L.lastError = c, nil, nil
+	-- Load the new pack's saved settings now; listeners such as shadows cache them.
+	MC.RenderPackSettings.Refresh()
 	advanceVersion( c )
 	release( previous )
 	print( string.format( "[MC render pack] active=%s build=%s sections=%d quads=%d native=L2 prepare=%.2fms GPU=unverified",
@@ -672,12 +686,10 @@ concommand.Add( "mc_render_pack", function( _, _, args )
 				result.files, result.changed, result.unchanged, result.failed ) )
 		elseif not ok then print( "[MC render pack] scan rejected: " .. tostring( result ) ) end
 	elseif ( action == "off" and #args == 1 ) or ( action == "select" and #args == 2 and args[2] == "off" ) then
-		local ok, err = L.Off()
-		if ok then SavedPack:SetString( DEFAULT_PACK ) end
+		local ok, err = L.Choose( DEFAULT_PACK )
 		print( "[MC render pack] " .. ( ok and "preparing " .. DEFAULT_PACK .. " (L2 default)" or "rejected: " .. tostring( err ) ) )
 	elseif action == "select" and #args == 2 then
-		local ok, err = L.Select( args[2] )
-		if ok then SavedPack:SetString( args[2] ) end
+		local ok, err = L.Choose( args[2] )
 		print( "[MC render pack] " .. ( ok and "preparing " .. args[2] or "rejected: " .. tostring( err ) ) )
 	elseif action == "reload" and #args == 1 then
 		local ok, err = L.Reload()

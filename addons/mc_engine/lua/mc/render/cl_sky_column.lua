@@ -1,6 +1,8 @@
 -- Client-side sky exposure for the GPU light texture path.
 -- A cell is sky-exposed iff it sits ABOVE the highest sky-blocking block of
--- its column (cheap per-column cache). This module only maintains the column
+-- its column (cheap per-column cache). Like Minecraft's sky heightmap, any
+-- block with opacity > 0 (water, leaves) ends exposure; the flood then
+-- attenuates light below it. This module only maintains the column
 -- tops; exposed cells are implicit sky level 15 and everything below them is
 -- flooded by cl_sky_flood (Minecraft-style BFS, -1 per lateral block). The
 -- old soft-exposure ring kernel is gone: it painted a hard vertical light
@@ -59,7 +61,7 @@ end
 local function blocksSky( stateId, bx, by, bz )
 	if not stateId or stateId == 0 then return false end
 	local opacity = MC.BlockLightOpacityForState and MC.BlockLightOpacityForState( stateId, bx, by, bz ) or 15
-	return opacity >= 15
+	return opacity > 0
 end
 
 local function descendingHeight( a, b ) return a > b end
@@ -166,8 +168,8 @@ function MC.NoteSkyColumnBlockChange( bx, by, bz, oldOpacity, newOpacity )
 		end
 	end
 
-	local wasBlocking = ( tonumber( oldOpacity ) or 0 ) >= 15
-	local nowBlocking = ( tonumber( newOpacity ) or 0 ) >= 15
+	local wasBlocking = ( tonumber( oldOpacity ) or 0 ) > 0
+	local nowBlocking = ( tonumber( newOpacity ) or 0 ) > 0
 	if wasBlocking == nowBlocking then return end
 
 	local key = colKey( bx, by )

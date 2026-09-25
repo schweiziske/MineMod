@@ -102,7 +102,7 @@ local function setStoredSky( bx, by, bz, level )
 	chunkStore[li] = level > 0 and level or nil
 end
 
--- Exposure = above the column's highest full-opacity block (cl_sky_column
+-- Exposure = above the column's highest opacity > 0 block (cl_sky_column
 -- caches the tops). Exposed cells are implicit level 15.
 local function skyExposed( bx, by, bz )
 	if not chunkKnownForCell( bx, by, bz ) then return false end
@@ -368,8 +368,8 @@ end
 -- Seed exposure transitions inside the chunk footprint: wherever a column is
 -- covered at height z but a lateral neighbor column is exposed at z, the
 -- exposed neighbor cell is a 15-level source feeding sideways into this
--- column. Sky light enters interiors ONLY through these lateral steps (the
--- cell straight under a column top is the opaque blocker itself).
+-- column. The exposed cell right above a column top also seeds downward, so
+-- light enters water and leaves from above and loses their opacity per block.
 local LATERALS = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
 
 local function seedChunkExposureTransitions( addQ, chunk )
@@ -382,6 +382,7 @@ local function seedChunkExposureTransitions( addQ, chunk )
 			local by = chunk.cy * cs + ly
 			local top = MC.SkyColumnTop and MC.SkyColumnTop( bx, by ) or false
 			if top ~= false then
+				if top >= minZ - 1 and top < maxZ then pushQueue( addQ, bx, by, top + 1, 15 ) end
 				for d = 1, 4 do
 					local nx = bx + LATERALS[d][1]
 					local ny = by + LATERALS[d][2]
