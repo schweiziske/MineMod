@@ -138,6 +138,9 @@ local function propagationCost( bx, by, bz )
 	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
 	local opacity = MC.BlockLightOpacityForState and MC.BlockLightOpacityForState( stateId, bx, by, bz ) or 15
 	if opacity >= 15 then return 16 end
+	-- Water's opacity (3) darkened shallow water too fast; sky light loses 2
+	-- per water block here. Block light keeps the opacity.
+	if opacity > 2 and MC.Liquid and MC.Liquid.DecodeState( stateId ) == "water" then return 2 end
 	return math.max( 1, opacity )
 end
 
