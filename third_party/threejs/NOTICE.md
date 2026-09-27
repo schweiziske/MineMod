@@ -56,5 +56,5 @@ Local adaptations:
   are included. GMod's additional scene depth rendering remains a real cost.
 
 The original JavaScript sources are research references, not runtime or build
-dependencies. The vendored JPEG is no longer a build input; the addon
-includes this notice and LICENSE.
+dependencies. The vendored JPEG was removed with the switch to procedural
+normals; the addon includes this notice and LICENSE.
