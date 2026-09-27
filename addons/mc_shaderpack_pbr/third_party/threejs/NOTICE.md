@@ -14,10 +14,10 @@ Pinned upstream commit: `7300402f96c23bfa2174ffc0da01fb4e277d33da`.
 
 Adapted parts:
 
-- Water.js `getNoise`: four normal samples at different spatial scales and
-  velocities, their layered sum, and the 1.5 lateral normal scale.
-- Water2: two half-cycle flow phases, their triangular crossfade, and Schlick
-  Fresnel mixing of reflected and refracted colour.
+- Since 2026-09-27 the wave normals no longer use Water.js `getNoise`, the
+  Water2 flow phases or the normal image: `_tools/build_pbr_water.py` bakes a
+  procedural directional field instead. The notes on them below are history.
+- Water2: Schlick Fresnel mixing of reflected and refracted colour.
 - SSRShader: screen-space ray traversal with reciprocal-depth interpolation,
   near-plane clipping and finite hit thickness informed the water-only SSR
   implementation in `shadersrc/l2/pbr/ssr/trace.fxh`.
@@ -56,5 +56,5 @@ Local adaptations:
   are included. GMod's additional scene depth rendering remains a real cost.
 
 The original JavaScript sources are research references, not runtime or build
-dependencies. The vendored JPEG is a build input; the addon includes the
-generated PNG, this notice, and LICENSE.
+dependencies. The vendored JPEG is no longer a build input; the addon
+includes this notice and LICENSE.
