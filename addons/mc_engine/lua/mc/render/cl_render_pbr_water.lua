@@ -91,18 +91,22 @@ function W.Recolor( batch, localLightChanged )
     return { palette = palette, colors = colors, changed = true }
 end
 
-local constants, refractionTexture, boundRefractionMaterial
-local captureValidated = false
+local constants, refractionTexture, sceneDepth, boundRefractionMaterial
+local captureValidated, underwater = false, false
 function W.PrepareView()
     if not constants then constants = Matrix() end
-    boundRefractionMaterial = nil
+    boundRefractionMaterial, sceneDepth = nil, nil
+    local ply = LocalPlayer()
+    local liquid = IsValid( ply ) and MC.PlayerEyeLiquid and MC.PlayerEyeLiquid( ply )
+    underwater = liquid ~= nil and liquid.kind == "water"
     constants:SetField( 2, 1, RealTime() % 4096 )
     constants:SetField( 2, 2, waves:GetFloat() )
     constants:SetField( 2, 3, density:GetFloat() )
     constants:SetField( 2, 4, refraction:GetFloat() )
-    constants:SetField( 3, 1, 0.015 )
-    constants:SetField( 3, 2, 0.10 )
-    constants:SetField( 3, 3, 0.12 )
+    -- Scattering follows chun v2's water fog hue (0.2, 0.75, 0.9), kept dark.
+    constants:SetField( 3, 1, 0.01 )
+    constants:SetField( 3, 2, 0.04 )
+    constants:SetField( 3, 3, 0.05 )
     constants:SetField( 3, 4, foam:GetFloat() )
     constants:SetField( 4, 1, 0.38 )
     constants:SetField( 4, 2, 0.105 )
@@ -123,7 +127,12 @@ function W.CaptureRefraction( view, records )
     -- Never cache by FrameNumber: portals/reflections can share a frame clock.
     render.UpdateScreenEffectTexture( 0 )
     refractionTexture = texture
-    if MC.RenderPBRSSR then MC.RenderPBRSSR.Capture( view, records, texture, constants ) end
+    if MC.RenderPBRSSR then
+        MC.RenderPBRSSR.Capture( view, records, texture, constants )
+        -- The same private opaque depth fogs the path behind each surface.
+        local scene = MC.RenderPBRSSR.CaptureDepth( view )
+        sceneDepth = scene and scene.depthTexture or nil
+    end
 end
 
 function W.SetOrigin( target, record, base )
@@ -133,13 +142,16 @@ function W.SetOrigin( target, record, base )
     target:SetField( 1, 1, record.originBX % 4096 - base.x * inverse )
     target:SetField( 1, 2, record.originBY % 4096 - base.y * inverse )
     target:SetField( 1, 3, record.originBZ % 4096 - base.z * inverse )
-    target:SetField( 1, 4, inverse )
+    -- Negative marks a camera inside water: the shaders then keep back faces.
+    target:SetField( 1, 4, underwater and -inverse or inverse )
 end
 
 function W.Bind( material, record, base )
     W.SetOrigin( constants, record, base )
     if boundRefractionMaterial ~= material then
         material:SetTexture( "$basetexture", refractionTexture )
+        if sceneDepth then material:SetTexture( "$texture1", sceneDepth ) end
+        material:SetFloat( "$c0_z", sceneDepth and 1 or 0 )
         boundRefractionMaterial = material
     end
     MC.RenderPBR.Bind( material )

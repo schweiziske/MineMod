@@ -654,7 +654,9 @@ local function resolve( c )
     MC.RenderPBR.PrepareView( c.ox, c.oy, c.oz )
     render.PushRenderTarget( c.target.trace ) targetPushed = true
     render.Clear( 0, 0, 0, 0, true, true )
-    writeState( true )
+    -- No depth write: like the colour pass, the last water layer drawn owns
+    -- each pixel, so the composite only corrects the layer left on screen.
+    writeState( false )
     cam.Start( c.traceCamera ) cameraStarted = true
     drawWater( c, true )
     cam.End() cameraStarted = false
