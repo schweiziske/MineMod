@@ -1,5 +1,5 @@
--- DX9 sun shadows: each update clears and redraws both complete light volumes.
--- The atlas and projection are published together; no partial tile reuse.
+-- DX9 sun shadows: opaque cascades update together and retain their projection.
+-- The lower water row animates independently in that same published projection.
 MC = MC or {}
 local S = MC.RenderPBRShadows or { targets = {}, depthMaterials = {}, materialCount = 0 }
 MC.RenderPBRShadows = S
@@ -26,6 +26,7 @@ local interval = MC.RenderPackSettings.Handle( "shadow_interval" )
 local strength = MC.RenderPackSettings.Handle( "shadow_strength" )
 local bias = MC.RenderPackSettings.Handle( "shadow_bias" )
 local waterEnabled = MC.RenderPackSettings.Handle( "water" )
+local waterWaves = MC.RenderPackSettings.Handle( "water_waves" )
 local settingsRevision = 1
 local settings = {}
 local function readSettings()
@@ -42,7 +43,7 @@ readSettings()
 S.stats = { mode = "full", updates = 0, nearUpdates = 0, farUpdates = 0, cascades = 0, cached = 0, throttled = 0, failures = 0, draws = 0, vertices = 0,
 	testedChunks = 0, testedSections = 0, culledChunks = 0, culledSections = 0, duplicates = 0,
 	testedRegions = 0, culledRegions = 0, regionChunks = 0, coverageUpdates = 0, fullCoverageFallbacks = 0,
-	materialWrites = 0, cpuMS = 0, status = "initializing" }
+	materialWrites = 0, cpuMS = 0, waterUpdates = 0, waterCPU = 0, status = "initializing" }
 S.surfaceMaterials = setmetatable( {}, { __mode = "k" } )
 S.renderRevision, S.tileToken = ( S.renderRevision or 0 ) + 1, ( S.tileToken or 0 ) + 1
 S.valid, S.modelPushed, S.current, S.pending = false, false, {}, {}
@@ -60,7 +61,7 @@ local setups = {
 }
 local stageNames = { "world_opaque", "world_cutout", "world_translucent" }
 local pushedRT, startedCam, stateActive, toneActive, oldTone = false, false, false, false, nil
-local clipActive, oldClip = false, false
+local clipActive, oldClip, scissorActive = false, false, false
 local apiValidated = false
 B.DisableShadow()
 
@@ -112,7 +113,7 @@ end
 
 function S.RegisterWater( surface, program, texture, blockSize )
 	requireValue( program and texture and not texture:IsError() and texture:Width() == 1024 and texture:Height() == 1024,
-		"render_caustics_resource", "water caustics require a program and a 1024x1024 linear frame atlas" )
+		"render_caustics_resource", "water caustics require a program and a 1024x1024 linear noise-slice atlas" )
 	local previous = S.waterMaterials[surface]
 	if previous and previous.program == program and previous.source == texture and previous.blockSize == blockSize then return end
 	requireValue( S.materialCount < 2048, "render_pbr_shadow_material_budget", "2048 immutable shadow materials reached" )
@@ -134,7 +135,7 @@ function S.CasterMaterial( surface, stage )
 		local record = S.waterMaterials[surface]
 		if not record then return nil end
 		if record.revision ~= S.renderRevision then
-			local view, material, pending = S.pending.views[1], record.material, S.pending
+			local view, material, pending = S.renderState.views[1], record.material, S.renderState
 			material:SetFloat( "$c0_x", view.fx )
 			material:SetFloat( "$c0_y", view.fy )
 			material:SetFloat( "$c0_z", view.fz )
@@ -142,13 +143,18 @@ function S.CasterMaterial( surface, stage )
 			material:SetFloat( "$c1_x", view.x )
 			material:SetFloat( "$c1_y", view.y )
 			material:SetFloat( "$c1_z", view.z )
-			material:SetFloat( "$c2_x", 1 / record.blockSize )
-			material:SetFloat( "$c2_y", ( -pending.frameX / record.blockSize ) % 12 )
-			material:SetFloat( "$c2_z", ( -pending.frameY / record.blockSize ) % 12 )
-			material:SetFloat( "$c3_x", ( pending.causticFrame % 8 ) / 8 )
-			material:SetFloat( "$c3_y", floor( pending.causticFrame / 8 ) / 8 )
+			local scale = 2 / ( record.blockSize * 4096 )
+			material:SetFloat( "$c2_x", 2 / record.blockSize )
+			material:SetFloat( "$c2_y", ( ( -111 * pending.frameX - 53 * pending.frameY ) * scale ) % 1 )
+			material:SetFloat( "$c2_z", ( -123 * pending.frameZ * scale ) % 1 )
+			material:SetFloat( "$c2_w", ( ( 212 * pending.frameX - 444 * pending.frameY ) * scale ) % 1 )
+			material:SetFloat( "$c3_x", S.phaseY )
+			material:SetFloat( "$c3_y", S.phaseZ )
+			local gain = waterWaves:GetFloat() * 10
+			material:SetFloat( "$c3_z", gain )
+			material:SetFloat( "$c3_w", math.max( gain - 1, 0 ) * ( 4 / 3 ) )
 			record.revision = S.renderRevision
-			S.stats.materialWrites = S.stats.materialWrites + 12
+			S.stats.materialWrites = S.stats.materialWrites + 15
 		end
 		return record
 	end
@@ -185,7 +191,7 @@ function S.CasterMaterial( surface, stage )
 	if record.revision ~= S.renderRevision then
 		-- Both cascades share one depth plane. Constant writes happen once per
 		-- material per update, including when adjacent chunks alternate materials.
-		local view, material = S.pending.views[1], record.material
+		local view, material = S.renderState.views[1], record.material
 		material:SetFloat( "$c0_x", view.fx )
 		material:SetFloat( "$c0_y", view.fy )
 		material:SetFloat( "$c0_z", view.fz )
@@ -199,8 +205,10 @@ function S.CasterMaterial( surface, stage )
 	return record
 end
 
-local function renderAtlas( groups, version, chunks )
-	local pending = S.pending
+local function renderAtlas( pending, water, waterOnly, groups, version, chunks )
+	S.renderState = pending
+	local time = ( RealTime() * 0.5 ) % 4096
+	S.phaseY, S.phaseZ = ( -time * 428 / 4096 ) % 1, ( -time * 535 / 4096 ) % 1
 	local target = ensureTarget( pending.resolution )
 	pending.target = target
 	local forward = pending.views[1]
@@ -214,7 +222,14 @@ local function renderAtlas( groups, version, chunks )
 		setup.znear, setup.zfar = view.znear, view.zfar
 		setup.x, setup.y, setup.w, setup.h = ( i - 1 ) * pending.resolution, 0, pending.resolution, pending.resolution
 	end
-	render.PushRenderTarget( target ) pushedRT = true
+	if waterOnly then
+		requireValue( render.ClearBuffersObeyStencil and render.SetScissorRect,
+			"render_caustics_clear_api", "water animation requires a bounded lower-row clear" )
+		render.PushRenderTarget( target, 0, pending.resolution, pending.resolution * 2, pending.resolution )
+	else
+		render.PushRenderTarget( target )
+	end
+	pushedRT = true
 	-- Water/portal views can leave a clip plane active. It belongs to the outer
 	-- camera and must not cut the light volume.
 	oldClip = render.EnableClipping( false ) clipActive = true
@@ -227,17 +242,26 @@ local function renderAtlas( groups, version, chunks )
 	render.OverrideAlphaWriteEnable( true, true )
 	render.OverrideColorWriteEnable( true, true )
 	render.OverrideDepthEnable( true, true )
-	render.Clear( 255, 255, 255, 255, true, true )
 	S.waterPass = false
-	for i = 1, 2 do
-		S.casterKeys = S.cascadeCasters[i]
-		for key in pairs( S.casterKeys ) do S.casterKeys[key] = nil end
-		S.tileToken = S.tileToken + 1
-		cam.Start( setups[i] ) startedCam = true
-		MC.DrawPBRShadowCasters( groups, version, chunks, pending.views[i], S )
-		cam.End() startedCam = false
+	if waterOnly then
+		-- Clear by drawing inside the lower row, never by clearing the whole RT.
+		-- The opaque RG depth above remains the receiver's cached shadow map.
+		scissorActive = true
+		render.SetScissorRect( 0, pending.resolution, pending.resolution * 2, pending.resolution * 2, true )
+		render.ClearBuffersObeyStencil( 255, 255, 255, 255, true )
+		render.SetScissorRect( 0, 0, 0, 0, false ) scissorActive = false
+	else
+		render.Clear( 255, 255, 255, 255, true, true )
+		for i = 1, 2 do
+			S.casterKeys = S.cascadeCasters[i]
+			for key in pairs( S.casterKeys ) do S.casterKeys[key] = nil end
+			S.tileToken = S.tileToken + 1
+			cam.Start( setups[i] ) startedCam = true
+			MC.DrawPBRShadowCasters( groups, version, chunks, pending.views[i], S )
+			cam.End() startedCam = false
+		end
 	end
-	if pending.causticFrame >= 0 then
+	if water then
 		requireValue( MC.DrawWaterShadowCasters, "render_caustics_draw_api", "water shadow caster draw API is unavailable" )
 		S.waterPass = true
 		for i = 1, 2 do
@@ -261,7 +285,8 @@ local function restore( fn, ... )
 end
 local function cleanup()
 	cleanupError = nil
-	S.waterPass = false
+	S.waterPass, S.renderState = false, nil
+	if scissorActive then restore( render.SetScissorRect, 0, 0, 0, 0, false ) scissorActive = false end
 	if S.modelPushed then restore( cam.PopModelMatrix ) S.modelPushed = false end
 	if startedCam then restore( cam.End ) startedCam = false end
 	if stateActive then
@@ -295,6 +320,43 @@ local function disable( status )
 	S.stats.status, S.publishedSettings = status, nil
 	B.DisableShadow()
 	return false
+end
+
+local function drawAtlas( state, water, waterOnly, groups, version, chunks, now )
+	S.renderRevision = S.renderRevision + 1
+	local stats = S.stats
+	stats.draws, stats.vertices, stats.duplicates = 0, 0, 0
+	stats.testedChunks, stats.testedSections, stats.culledChunks, stats.culledSections = 0, 0, 0, 0
+	stats.testedRegions, stats.culledRegions, stats.regionChunks = 0, 0, 0
+	S.rendering = true
+	local ok, err = pcall( renderAtlas, state, water, waterOnly, groups, version, chunks )
+	local restoreError = cleanup()
+	S.rendering = false
+	if not ok or restoreError then
+		S.valid, S.retryAt = false, now + 1
+		stats.failures = stats.failures + 1
+		disable( "failed" )
+		local code, message = "render_pbr_shadow_draw", tostring( err )
+		if type( err ) == "table" then code, message = err.code, err.message end
+		if restoreError then message = message .. "; cleanup: " .. restoreError end
+		stats.lastError = message
+		L.QueueFault( code, message )
+		L.ReportFaults()
+		return false
+	end
+	state.water, state.waterFrame, state.waterWaves = water, FrameNumber(), waterWaves:GetFloat()
+	if waterOnly or water then stats.waterUpdates = stats.waterUpdates + 1 end
+	if waterOnly then stats.waterCPU = ( SysTime() - now ) * 1000 end
+	return true
+end
+
+local function updateWater( water )
+	local current = S.current
+	if current.water == water and ( not water or current.waterFrame == FrameNumber()
+		and current.waterWaves == waterWaves:GetFloat() ) then return true end
+	-- Time and water toggles never invalidate the opaque row. Use the current
+	-- projection even when the camera/sun's pending projection is throttled.
+	return drawAtlas( current, water, true, nil, nil, nil, SysTime() )
 end
 
 function S.Update( x, y, z, renderView )
@@ -339,48 +401,31 @@ function S.Update( x, y, z, renderView )
 		and M.CoversCamera( current.views[2], camera ) )
 	local groups, version, chunks = L.GetStages( false )
 	local water = active.waterBinding and active.waterBinding.material
-	pending.causticFrame = waterEnabled:GetBool() and water and S.waterMaterials[water] and floor( RealTime() * 8 ) % 64 or -1
+	water = waterEnabled:GetBool() and waterWaves:GetFloat() > 0 and water and S.waterMaterials[water] and water or nil
 	pending.frameX, pending.frameY, pending.frameZ = frameX, frameY, frameZ
 	local geometry, visibility = MC.ChunkDrawListVersion(), MC.StreamVisibilityVersion or 0
 	if S.valid and not S.fullDirty and not coverageMiss and current.version == version
 		and current.geometry == geometry and current.visibility == visibility
-		and current.causticFrame == pending.causticFrame and M.Same( current, pending ) then
+		and M.Same( current, pending ) then
+		if not updateWater( water ) then return false end
 		ensurePublished()
 		S.stats.cached, S.stats.status = S.stats.cached + 1, "cached"
 		return true
 	end
 	local now = SysTime()
 	if now < S.retryAt then return disable( "retry_wait" ) end
-	-- Retain only a complete previous atlas during the configured interval.
+	-- Retain the opaque pixels/projection during the configured interval.
 	-- A remote view or changed world frame must still refresh immediately.
 	if S.valid and not coverageMiss and now < S.nextUpdate then
+		if not updateWater( water ) then return false end
 		ensurePublished()
 		S.stats.throttled, S.stats.status = S.stats.throttled + 1, "throttled"
 		return true
 	end
 	S.nextUpdate = now + settings.interval
 	S.fullDirty = false
-	S.renderRevision = S.renderRevision + 1
+	if not drawAtlas( pending, water, false, groups, version, chunks, now ) then return false end
 	local stats = S.stats
-	stats.draws, stats.vertices, stats.duplicates = 0, 0, 0
-	stats.testedChunks, stats.testedSections, stats.culledChunks, stats.culledSections = 0, 0, 0, 0
-	stats.testedRegions, stats.culledRegions, stats.regionChunks = 0, 0, 0
-	S.rendering = true
-	local ok, err = pcall( renderAtlas, groups, version, chunks )
-	local restoreError = cleanup()
-	S.rendering = false
-	if not ok or restoreError then
-		S.valid, S.retryAt = false, now + 1
-		stats.failures = stats.failures + 1
-		disable( "failed" )
-		local code, message = "render_pbr_shadow_draw", tostring( err )
-		if type( err ) == "table" then code, message = err.code, err.message end
-		if restoreError then message = message .. "; cleanup: " .. restoreError end
-		stats.lastError = message
-		L.QueueFault( code, message )
-		L.ReportFaults()
-		return false
-	end
 	pending.version, pending.geometry, pending.visibility, pending.blockSize = version, geometry, visibility, size
 	pending.frameX, pending.frameY, pending.frameZ = frameX, frameY, frameZ
 	S.current, S.pending, S.valid = pending, current, true
@@ -424,7 +469,9 @@ concommand.Add( "mc_pbr_shadow_stats", function()
 	print( string.format( "[MC PBR shadow] mode=full %s updates=%d near=%d far=%d cached=%d throttled=%d failures=%d size=%dx%d range=%.1f blocks updateCPU=%.3fms GPU=unmeasured",
 		stats.status, stats.updates, stats.nearUpdates, stats.farUpdates, stats.cached, stats.throttled, stats.failures,
 		settings.size * 2, settings.size * 2, settings.range, stats.cpuMS ) )
-	print( string.format( "[MC PBR shadow] lastUpdate draws=%d vertices=%d chunksTested=%d chunksCulled=%d sectionsTested=%d sectionsCulled=%d duplicates=%d materials=%d constantWrites=%d",
+	print( string.format( "[MC PBR shadow] waterUpdates=%d waterCPU=%.3fms (lower row only; opaque interval unchanged)",
+		stats.waterUpdates, stats.waterCPU ) )
+	print( string.format( "[MC PBR shadow] lastDraw draws=%d vertices=%d chunksTested=%d chunksCulled=%d sectionsTested=%d sectionsCulled=%d duplicates=%d materials=%d constantWrites=%d",
 		stats.draws, stats.vertices, stats.testedChunks, stats.culledChunks, stats.testedSections, stats.culledSections,
 		stats.duplicates, S.materialCount, stats.materialWrites ) )
 	local views = S.current.views
