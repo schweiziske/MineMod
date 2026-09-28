@@ -950,7 +950,7 @@ local waterShadowBase = Vector()
 -- Shadow rendering owns depth, material state and failure cleanup.
 function MC.DrawWaterShadowCasters( view, shadow )
 	if LastGeneration ~= MC.StateWorldGeneration then return end
-	local pending, stats = shadow.pending, shadow.stats
+	local pending, stats = shadow.renderState, shadow.stats
 	local blockSize = MC.API.Coords.BlockSize()
 	local active = MC.RenderPackRuntime.active
 	local waterMaterial = active and active.waterBinding and active.waterBinding.material

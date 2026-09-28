@@ -77,7 +77,7 @@ function P.Validate( plan )
 			requireValue( def.programs.water and def.resources.water_caustics
 				and def.resources.water_caustics.colorSpace == "linear"
 				and MC.RenderPBRShadows and MC.RenderPBRShadows.RegisterWater,
-				"render_caustics_adapter", ownerKey .. ": caustics require water, a linear frame atlas and the light-space renderer" )
+				"render_caustics_adapter", ownerKey .. ": caustics require water, a linear noise-slice atlas and the light-space renderer" )
 		end
 		if def.programs.water_ssr then
 			requireValue( def.programs.water and def.programs.scene_depth and def.programs.ssr_copy
