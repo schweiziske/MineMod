@@ -6,6 +6,8 @@ MC.RenderPBRShadows = S
 local B, M, R, L = MC.RenderPBR, MC.RenderShadowMath, MC.RenderL2Resources, MC.RenderPackRuntime
 local requireValue = R.Require
 local DEPTH_MATERIAL_VERSION = 2
+S.waterMaterials = S.waterMaterials or setmetatable( {}, { __mode = "k" } )
+if S.atlasVersion ~= 2 then S.targets, S.atlasVersion = {}, 2 end
 if S.depthMaterialVersion ~= DEPTH_MATERIAL_VERSION then
 	-- Retained caster snapshots must also lose the old ALWAYS comparison.
 	for _, record in pairs( S.depthMaterials ) do
@@ -23,6 +25,7 @@ local distance = MC.RenderPackSettings.Handle( "shadow_range" )
 local interval = MC.RenderPackSettings.Handle( "shadow_interval" )
 local strength = MC.RenderPackSettings.Handle( "shadow_strength" )
 local bias = MC.RenderPackSettings.Handle( "shadow_bias" )
+local waterEnabled = MC.RenderPackSettings.Handle( "water" )
 local settingsRevision = 1
 local settings = {}
 local function readSettings()
@@ -98,16 +101,58 @@ local function ensureTarget( size )
 	end
 	local target = S.targets[size]
 	if not target then
-		target = GetRenderTargetEx( "mc_l2_pbr_shadow_rgba8_1_" .. size, size * 2, size,
+		target = GetRenderTargetEx( "mc_l2_pbr_shadow_rgba8_2_" .. size, size * 2, size * 2,
 			RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_SEPARATE, bit.bor( 1, 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA8888 )
-		requireValue( target and not target:IsError() and target:Width() == size * 2 and target:Height() == size,
+		requireValue( target and not target:IsError() and target:Width() == size * 2 and target:Height() == size * 2,
 			"render_pbr_shadow_target", "could not create the bounded point-filter shadow atlas" )
 		S.targets[size] = target
 	end
 	return target
 end
 
+function S.RegisterWater( surface, program, texture, blockSize )
+	requireValue( program and texture and not texture:IsError() and texture:Width() == 1024 and texture:Height() == 1024,
+		"render_caustics_resource", "water caustics require a program and a 1024x1024 linear frame atlas" )
+	local previous = S.waterMaterials[surface]
+	if previous and previous.program == program and previous.source == texture and previous.blockSize == blockSize then return end
+	requireValue( S.materialCount < 2048, "render_pbr_shadow_material_budget", "2048 immutable shadow materials reached" )
+	local material = CreateMaterial( "mc_l2_pbr_caustics_" .. ( S.materialCount + 1 ), "screenspace_general_8tex", {
+		["$vertexshader"] = program.vertex, ["$pixshader"] = program.pixel,
+		["$basetexture"] = texture:GetName(), ["$x360appchooser"] = 1, ["$nocull"] = 1,
+		["$depthtest"] = 1, ["$writedepth"] = 0, ["$ignorez"] = 0,
+		["$linearread_basetexture"] = 1, ["$linearwrite"] = 1,
+	} )
+	requireValue( material and not material:IsError(), "render_caustics_material", "could not create water light-space material" )
+	material:SetTexture( "$basetexture", texture )
+	S.waterMaterials[surface] = { material = material, program = program, source = texture,
+		blockSize = blockSize, seen = setmetatable( {}, { __mode = "k" } ) }
+	S.materialCount, S.fullDirty = S.materialCount + 1, true
+end
+
 function S.CasterMaterial( surface, stage )
+	if S.waterPass then
+		local record = S.waterMaterials[surface]
+		if not record then return nil end
+		if record.revision ~= S.renderRevision then
+			local view, material, pending = S.pending.views[1], record.material, S.pending
+			material:SetFloat( "$c0_x", view.fx )
+			material:SetFloat( "$c0_y", view.fy )
+			material:SetFloat( "$c0_z", view.fz )
+			material:SetFloat( "$c0_w", 1 / view.zfar )
+			material:SetFloat( "$c1_x", view.x )
+			material:SetFloat( "$c1_y", view.y )
+			material:SetFloat( "$c1_z", view.z )
+			material:SetFloat( "$c2_x", 1 / record.blockSize )
+			material:SetFloat( "$c2_y", ( -pending.frameX / record.blockSize ) % 12 )
+			material:SetFloat( "$c2_z", ( -pending.frameY / record.blockSize ) % 12 )
+			material:SetFloat( "$c3_x", ( pending.causticFrame % 8 ) / 8 )
+			material:SetFloat( "$c3_y", floor( pending.causticFrame / 8 ) / 8 )
+			record.revision = S.renderRevision
+			S.stats.materialWrites = S.stats.materialWrites + 12
+		end
+		return record
+	end
+	if S.waterMaterials[surface] then return nil end
 	local binding = S.surfaceMaterials[surface]
 	local record
 	if binding and binding.program == S.program and binding.stage == stage then
@@ -167,7 +212,7 @@ local function renderAtlas( groups, version, chunks )
 		setup.ortho.left, setup.ortho.right = -view.radius, view.radius
 		setup.ortho.top, setup.ortho.bottom = -view.radius, view.radius
 		setup.znear, setup.zfar = view.znear, view.zfar
-		setup.x, setup.w, setup.h = ( i - 1 ) * pending.resolution, pending.resolution, pending.resolution
+		setup.x, setup.y, setup.w, setup.h = ( i - 1 ) * pending.resolution, 0, pending.resolution, pending.resolution
 	end
 	render.PushRenderTarget( target ) pushedRT = true
 	-- Water/portal views can leave a clip plane active. It belongs to the outer
@@ -183,6 +228,7 @@ local function renderAtlas( groups, version, chunks )
 	render.OverrideColorWriteEnable( true, true )
 	render.OverrideDepthEnable( true, true )
 	render.Clear( 255, 255, 255, 255, true, true )
+	S.waterPass = false
 	for i = 1, 2 do
 		S.casterKeys = S.cascadeCasters[i]
 		for key in pairs( S.casterKeys ) do S.casterKeys[key] = nil end
@@ -191,6 +237,19 @@ local function renderAtlas( groups, version, chunks )
 		MC.DrawPBRShadowCasters( groups, version, chunks, pending.views[i], S )
 		cam.End() startedCam = false
 	end
+	if pending.causticFrame >= 0 then
+		requireValue( MC.DrawWaterShadowCasters, "render_caustics_draw_api", "water shadow caster draw API is unavailable" )
+		S.waterPass = true
+		for i = 1, 2 do
+			S.casterKeys = S.cascadeCasters[i]
+			S.tileToken = S.tileToken + 1
+			setups[i].y = pending.resolution
+			cam.Start( setups[i] ) startedCam = true
+			MC.DrawWaterShadowCasters( pending.views[i], S )
+			cam.End() startedCam = false
+		end
+	end
+	S.waterPass = false
 end
 
 -- Cleanup always attempts every owned state before reporting. Strict faults
@@ -202,6 +261,7 @@ local function restore( fn, ... )
 end
 local function cleanup()
 	cleanupError = nil
+	S.waterPass = false
 	if S.modelPushed then restore( cam.PopModelMatrix ) S.modelPushed = false end
 	if startedCam then restore( cam.End ) startedCam = false end
 	if stateActive then
@@ -278,9 +338,13 @@ function S.Update( x, y, z, renderView )
 	local coverageMiss = S.valid and not ( M.CoversCamera( current.views[1], camera )
 		and M.CoversCamera( current.views[2], camera ) )
 	local groups, version, chunks = L.GetStages( false )
+	local water = active.waterBinding and active.waterBinding.material
+	pending.causticFrame = waterEnabled:GetBool() and water and S.waterMaterials[water] and floor( RealTime() * 8 ) % 64 or -1
+	pending.frameX, pending.frameY, pending.frameZ = frameX, frameY, frameZ
 	local geometry, visibility = MC.ChunkDrawListVersion(), MC.StreamVisibilityVersion or 0
 	if S.valid and not S.fullDirty and not coverageMiss and current.version == version
-		and current.geometry == geometry and current.visibility == visibility and M.Same( current, pending ) then
+		and current.geometry == geometry and current.visibility == visibility
+		and current.causticFrame == pending.causticFrame and M.Same( current, pending ) then
 		ensurePublished()
 		S.stats.cached, S.stats.status = S.stats.cached + 1, "cached"
 		return true
@@ -359,7 +423,7 @@ concommand.Add( "mc_pbr_shadow_stats", function()
 	local stats = S.stats
 	print( string.format( "[MC PBR shadow] mode=full %s updates=%d near=%d far=%d cached=%d throttled=%d failures=%d size=%dx%d range=%.1f blocks updateCPU=%.3fms GPU=unmeasured",
 		stats.status, stats.updates, stats.nearUpdates, stats.farUpdates, stats.cached, stats.throttled, stats.failures,
-		settings.size * 2, settings.size, settings.range, stats.cpuMS ) )
+		settings.size * 2, settings.size * 2, settings.range, stats.cpuMS ) )
 	print( string.format( "[MC PBR shadow] lastUpdate draws=%d vertices=%d chunksTested=%d chunksCulled=%d sectionsTested=%d sectionsCulled=%d duplicates=%d materials=%d constantWrites=%d",
 		stats.draws, stats.vertices, stats.testedChunks, stats.culledChunks, stats.testedSections, stats.culledSections,
 		stats.duplicates, S.materialCount, stats.materialWrites ) )

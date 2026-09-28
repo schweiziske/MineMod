@@ -73,6 +73,12 @@ function P.Validate( plan )
 				and pass and pass.stage == "world_translucent" and normal and normal.colorSpace == "linear",
 				"render_water_adapter", ownerKey .. ": water requires v3 terrain_translucent, linear water_normal and water payload v1" )
 		end
+		if def.programs.water_caustics then
+			requireValue( def.programs.water and def.resources.water_caustics
+				and def.resources.water_caustics.colorSpace == "linear"
+				and MC.RenderPBRShadows and MC.RenderPBRShadows.RegisterWater,
+				"render_caustics_adapter", ownerKey .. ": caustics require water, a linear frame atlas and the light-space renderer" )
+		end
 		if def.programs.water_ssr then
 			requireValue( def.programs.water and def.programs.scene_depth and def.programs.ssr_copy
 				and def.programs.water_ssr_composite and MC.RenderPBRSSR and MC.RenderPBRSSR.VERSION == 1,
@@ -351,6 +357,8 @@ function P.WaterMaterial( bundle, owner, blockSize )
 	local def = bundle.plan.owners[owner].definition
 	local inputs = def.passes.terrain_translucent.inputs
 	local normal = textureFor( def.resources.water_normal, true, true )
+	local caustics
+	if def.programs.water_caustics then caustics = textureFor( def.resources.water_caustics, true ) end
 	local orm = textureFor( def.resources[inputs.orm], true )
 	local environment = textureFor( def.resources[inputs.environment], true )
 	local dfg = textureFor( def.resources[inputs.dfg], true )
@@ -358,9 +366,13 @@ function P.WaterMaterial( bundle, owner, blockSize )
 		and environment:Width() == 512 and environment:Height() == 256 and dfg:Width() == 128 and dfg:Height() == 128,
 		"render_water_texture_size", "water requires 256x256 normal/foam, 512x256 IBL and 128x128 DFG textures" )
 	local signature = Schema.Canonical( { water = def.programs.water, normal = def.resources.water_normal.sha256,
+		caustics = def.programs.water_caustics, causticResource = def.resources.water_caustics,
 		environment = def.resources[inputs.environment].sha256, dfg = def.resources[inputs.dfg].sha256, blockSize = blockSize } )
 	local cached = P.materials[signature]
-	if cached then return cached.material end
+	if cached then
+		if caustics then MC.RenderPBRShadows.RegisterWater( cached.material, def.programs.water_caustics, caustics, blockSize ) end
+		return cached.material
+	end
 	requireValue( P.materialCount < 2048, "render_pack_material_budget", "2048 immutable runtime materials reached" )
 	local maps = { normal = normal, orm = orm, environment = environment, dfg = dfg, water = true }
 	local material = R.BoundMaterial( P.shared, tostring( P.materialCount + 1 ), normal,
@@ -370,6 +382,7 @@ function P.WaterMaterial( bundle, owner, blockSize )
 			"world_translucent", blockSize, maps )
 	end
 	if def.programs.water_ssr then MC.RenderPBRSSR.Register( material, def, maps, blockSize ) end
+	if caustics then MC.RenderPBRShadows.RegisterWater( material, def.programs.water_caustics, caustics, blockSize ) end
 	P.materials[signature] = { material = material }
 	P.materialCount = P.materialCount + 1
 	return material
