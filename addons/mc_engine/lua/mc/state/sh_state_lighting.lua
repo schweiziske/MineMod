@@ -57,7 +57,38 @@ function L.Contains( stateId )
 	return L.ready and integer( stateId, stateCount - 1 )
 end
 
+-- Explicit profiles for addon states. The pinned vanilla range/catalog stays
+-- unchanged; native development world sessions still reject custom catalogs.
+local customProfiles = {}
+function L.RegisterCustom( stateId, profile )
+	if not L.ready or not integer( stateId, 4294967295 ) or stateId < stateCount then
+		return false, "custom_lighting_state"
+	end
+	if not MC.BlockStateSchemaForState or not MC.BlockStateSchemaForState( stateId ) then
+		return false, "custom_lighting_unknown_state"
+	end
+	if type( profile ) ~= "table" or not integer( profile.emission, 15 )
+		or not integer( profile.dampening, 15 ) or type( profile.shade ) ~= "number"
+		or not ( profile.shade >= 0 and profile.shade <= 1 )
+		or profile.viewContext ~= "none" or profile.collisionContext ~= "none" then
+		return false, "custom_lighting_profile"
+	end
+	for _, field in ipairs( { "emissive", "viewBlocking", "solidRender", "fullCollision",
+		"skyPass", "shapeOcclusion", "dynamicShape" } ) do
+		if type( profile[field] ) ~= "boolean" then return false, "custom_lighting_" .. field end
+	end
+	if profile.dynamicShape then return false, "custom_lighting_dynamic_shape" end
+	local previous, copy = customProfiles[stateId], {}
+	for _, field in ipairs( fields ) do
+		if previous and previous[field] ~= profile[field] then return false, "custom_lighting_conflict" end
+		copy[field] = profile[field]
+	end
+	customProfiles[stateId] = copy
+	return true
+end
+
 function L.Get( stateId )
+	if customProfiles[stateId] then return customProfiles[stateId] end
 	if not MC.Check( L.Contains( stateId ), "vanilla_state_missing", "no pinned lighting properties for state %s", tostring( stateId ) ) then return nil end
 	return byCode[byte( stateMap, stateId + 1 )]
 end
