@@ -44,6 +44,7 @@ local function register( kind, id, input, source, expectedBuild, builtin )
 	if builtin and id:sub( 1, 3 ) ~= "mc:" then return false, "invalid_builtin_namespace" end
 	local def, canonical = Schema.Normalize( input )
 	if not def then return false, canonical end
+	if kind == "shader" and def.pipeline then return false, "processing_requires_pack_owner" end
 	source = type( source ) == "string" and source or "unknown"
 	local previous = state[kind][id]
 	if expectedBuild ~= nil then

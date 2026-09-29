@@ -185,18 +185,7 @@ function S.Register( waterMaterial, definition, maps, blockSize )
 end
 
 local function copyQuad( width, height )
-    local quad = Mesh()
-    mesh.Begin( quad, MATERIAL_QUADS, 1 )
-    -- D3D9 pixel centres are integers. The full-size depth copy must land on
-    -- individual source texels; colour reduction uses its own half-size quad.
-    local x0, x1, y0, y1 = -1 - 1 / width, 1 - 1 / width, 1 + 1 / height, -1 + 1 / height
-    for _, vertex in ipairs( { { x0, y0, 0, 0 }, { x1, y0, 1, 0 }, { x1, y1, 1, 1 }, { x0, y1, 0, 1 } } ) do
-        mesh.Position( Vector( vertex[1], vertex[2], 0 ) )
-        mesh.TexCoord( 0, vertex[3], vertex[4] )
-        mesh.AdvanceVertex()
-    end
-    mesh.End()
-    return quad
+    return MC.RenderPackProcessing.CopyQuad( width, height )
 end
 S.CopyQuad = copyQuad
 
