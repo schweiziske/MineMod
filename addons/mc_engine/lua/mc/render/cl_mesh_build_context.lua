@@ -122,6 +122,8 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 
 	local sectionBuffers = {}
 	local cur
+	local pagedAtlas = MC.AtlasPageCount and MC.AtlasPageCount() > 1 or false
+	local pagedTarget, pagedVertexCount
 	local directional = MC.MeshDirectionalCull and MC.MeshDirectionalCull:GetBool() or false
 	local directionalMin = MC.MeshDirectionalMinBlocks and MC.MeshDirectionalMinBlocks:GetInt() or 64
 
@@ -227,6 +229,26 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		return buffer
 	end
 
+	local function bufferForPage( target, page )
+		if page == 0 then return target end
+		local root = target.owner
+		local bucketKey = target.request .. "/" .. target.stage .. "/page/" .. page
+		local buffer = root.buckets[bucketKey]
+		if not buffer then
+			local material, err = MC.AtlasPageMaterial( page, target.translucent )
+			if not material then
+				error( { code = "render_atlas_page_material", message = tostring( err ), page = page }, 0 )
+			end
+			buffer = Q.NewBuffer( slice )
+			buffer.owner, buffer.list, buffer.records = root, root.list, root.records
+			buffer.material, buffer.translucent = material, target.translucent
+			buffer.request, buffer.stage, buffer.blockIds = target.request, target.stage, target.blockIds
+			buffer.directional = target.directional
+			root.buckets[bucketKey] = buffer
+		end
+		return buffer
+	end
+
 	local spareBlockBuffer
 	local function newBlockCacheBuffer( targetBuffer )
 		local buffer = spareBlockBuffer
@@ -300,8 +322,14 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	end
 
 	local function emitL2( quad, id, bx, by, bz, wx, wy, wz, emission, tint, kind, modelId )
-		if not cur.cacheOnly and cur.nv + 6 > C.VERT_LIMIT then flush( cur ) end
-		Q.EmitNative( slice, cur, quad, id, bx, by, bz, wx, wy, wz, emission, tint, kind, modelId )
+		local target = cur
+		if pagedTarget then
+			target = bufferForPage( pagedTarget, quad.atlasPage or 0 )
+			if cur.direction then target = fullCubeBuffer( target, cur.direction ) end
+			pagedVertexCount = pagedVertexCount + 6
+		end
+		if not target.cacheOnly and target.nv + 6 > C.VERT_LIMIT then flush( target ) end
+		Q.EmitNative( slice, target, quad, id, bx, by, bz, wx, wy, wz, emission, tint, kind, modelId )
 	end
 
 	local function appendMeshList( out, list )
@@ -365,7 +393,20 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		l2 = true,
 		blockSize = slice.blockSize,
 		nativeL2 = slice.nativeL2,
+		pagedAtlas = pagedAtlas,
 	}
+
+	-- A block may mix atlas pages on its faces. The single-material block cache
+	-- cannot retain that geometry; emit directly into section/page buckets while
+	-- keeping normal section caching and the default single-page fast path.
+	function ctx.beginPagedBlock( target )
+		pagedTarget, pagedVertexCount = target, 0
+	end
+	function ctx.endPagedBlock()
+		local count = pagedVertexCount
+		pagedTarget, pagedVertexCount = nil, nil
+		return count
+	end
 
 	ctx.styleForBuffer = styleForBuffer
 	ctx.currentEmitLightStyle = currentEmitLightStyle
