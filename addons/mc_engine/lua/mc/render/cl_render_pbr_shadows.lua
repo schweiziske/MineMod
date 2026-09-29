@@ -112,8 +112,8 @@ local function ensureTarget( size )
 end
 
 function S.RegisterWater( surface, program, texture, blockSize )
-	requireValue( program and texture and not texture:IsError() and texture:Width() == 1024 and texture:Height() == 1024,
-		"render_caustics_resource", "water caustics require a program and a 1024x1024 linear noise-slice atlas" )
+	requireValue( program and texture and not texture:IsError() and texture:Width() == 256 and texture:Height() == 256,
+		"render_caustics_resource", "water caustics require a program and a 256x256 linear wave-field texture" )
 	local previous = S.waterMaterials[surface]
 	if previous and previous.program == program and previous.source == texture and previous.blockSize == blockSize then return end
 	requireValue( S.materialCount < 2048, "render_pbr_shadow_material_budget", "2048 immutable shadow materials reached" )
@@ -143,18 +143,17 @@ function S.CasterMaterial( surface, stage )
 			material:SetFloat( "$c1_x", view.x )
 			material:SetFloat( "$c1_y", view.y )
 			material:SetFloat( "$c1_z", view.z )
-			local scale = 2 / ( record.blockSize * 4096 )
-			material:SetFloat( "$c2_x", 2 / record.blockSize )
-			material:SetFloat( "$c2_y", ( ( -111 * pending.frameX - 53 * pending.frameY ) * scale ) % 1 )
-			material:SetFloat( "$c2_z", ( -123 * pending.frameZ * scale ) % 1 )
-			material:SetFloat( "$c2_w", ( ( 212 * pending.frameX - 444 * pending.frameY ) * scale ) % 1 )
-			material:SetFloat( "$c3_x", S.phaseY )
-			material:SetFloat( "$c3_y", S.phaseZ )
+			material:SetFloat( "$c1_w", 1 / record.blockSize )
+			local scale = 1 / ( record.blockSize * 4096 )
+			material:SetFloat( "$c2_x", ( ( -262 * pending.frameX - 244 * pending.frameY ) * scale ) % 1 )
+			material:SetFloat( "$c2_y", ( ( 244 * pending.frameX - 262 * pending.frameY ) * scale + S.phaseA ) % 1 )
+			material:SetFloat( "$c2_z", ( ( -392 * pending.frameX - 121 * pending.frameY ) * scale ) % 1 )
+			material:SetFloat( "$c2_w", ( ( 121 * pending.frameX - 392 * pending.frameY ) * scale + S.phaseB ) % 1 )
 			local gain = waterWaves:GetFloat() * 10
 			material:SetFloat( "$c3_z", gain )
 			material:SetFloat( "$c3_w", math.max( gain - 1, 0 ) * ( 4 / 3 ) )
 			record.revision = S.renderRevision
-			S.stats.materialWrites = S.stats.materialWrites + 15
+			S.stats.materialWrites = S.stats.materialWrites + 14
 		end
 		return record
 	end
@@ -208,7 +207,7 @@ end
 local function renderAtlas( pending, water, waterOnly, groups, version, chunks )
 	S.renderState = pending
 	local time = ( RealTime() * 0.5 ) % 4096
-	S.phaseY, S.phaseZ = ( -time * 428 / 4096 ) % 1, ( -time * 535 / 4096 ) % 1
+	S.phaseA, S.phaseB = ( -time * 173 / 4096 ) % 1, ( -time * 202 / 4096 ) % 1
 	local target = ensureTarget( pending.resolution )
 	pending.target = target
 	local forward = pending.views[1]
