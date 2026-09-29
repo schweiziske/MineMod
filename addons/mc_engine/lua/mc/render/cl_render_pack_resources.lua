@@ -77,7 +77,7 @@ function P.Validate( plan )
 			requireValue( def.programs.water and def.resources.water_caustics
 				and def.resources.water_caustics.colorSpace == "linear"
 				and MC.RenderPBRShadows and MC.RenderPBRShadows.RegisterWater,
-				"render_caustics_adapter", ownerKey .. ": caustics require water, a linear noise-slice atlas and the light-space renderer" )
+				"render_caustics_adapter", ownerKey .. ": caustics require water, a linear wave-field texture and the light-space renderer" )
 		end
 		if def.programs.water_ssr then
 			requireValue( def.programs.water and def.programs.scene_depth and def.programs.ssr_copy
@@ -358,7 +358,7 @@ function P.WaterMaterial( bundle, owner, blockSize )
 	local inputs = def.passes.terrain_translucent.inputs
 	local normal = textureFor( def.resources.water_normal, true, true )
 	local caustics
-	if def.programs.water_caustics then caustics = textureFor( def.resources.water_caustics, true ) end
+	if def.programs.water_caustics then caustics = textureFor( def.resources.water_caustics, true, true ) end
 	local orm = textureFor( def.resources[inputs.orm], true )
 	local environment = textureFor( def.resources[inputs.environment], true )
 	local dfg = textureFor( def.resources[inputs.dfg], true )
