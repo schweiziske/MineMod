@@ -113,11 +113,14 @@ end
 -- pushed, so this view's camera and shadow coverage are restored together.
 function B.PrepareDraw( x, y, z, view, depthOnly )
 	local shadows = MC.RenderPBRShadows
-	if shadows and shadows.rendering then return false end
+	if shadows and shadows.rendering or MC.RenderPackProcessing.rendering then return false end
 	B.PrepareView( x, y, z )
+	local processingReady = true
+	if not depthOnly then processingReady = MC.RenderPackRuntime.BeginProcessing( x, y, z, view ) end
 	-- The shadow pass is registered after the PBR material provider. Materials
 	-- also support use without that pass, with their shadow strength at zero.
-	if B.materialCount > 0 and shadows and not depthOnly then shadows.Update( x, y, z, view ) end
+	if not processingReady then B.DisableShadow()
+	elseif B.materialCount > 0 and shadows and not depthOnly then shadows.Update( x, y, z, view ) end
 	-- The shadow render may have drawn a secondary view. Upload moving lights
 	-- afterwards, before any caller pushes draw/filter/depth state. Vanilla also
 	-- reaches this boundary even when there are no PBR materials.

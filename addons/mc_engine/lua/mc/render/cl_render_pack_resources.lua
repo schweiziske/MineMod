@@ -74,10 +74,21 @@ function P.Validate( plan )
 				"render_water_adapter", ownerKey .. ": water requires v3 terrain_translucent, linear water_normal and water payload v1" )
 		end
 		if def.programs.water_caustics then
-			requireValue( def.programs.water and def.resources.water_caustics
-				and def.resources.water_caustics.colorSpace == "linear"
-				and MC.RenderPBRShadows and MC.RenderPBRShadows.RegisterWater,
-				"render_caustics_adapter", ownerKey .. ": caustics require water, a linear wave-field texture and the light-space renderer" )
+			requireValue( def.programs.water_shadow and def.pipeline and def.pipeline.exports.shadow_atlas,
+				"render_processing_upgrade", ownerKey .. ": load the matching depth/pipeline pack and restart the client" )
+		end
+		if def.programs.water_shadow then
+			requireValue( def.programs.water and MC.RenderPBRShadows and MC.RenderPBRShadows.WATER_DEPTH_VERSION == 1,
+				"render_water_shadow_adapter", ownerKey .. ": water depth requires the light-space depth v1 renderer" )
+		end
+		if def.pipeline then
+			requireValue( owner.kind == "pack" and MC.RenderPackProcessing and MC.RenderPackProcessing.VERSION == 1,
+				"render_processing_adapter", ownerKey .. ": processing v1 requires a pack owner and the matching engine" )
+			for _, pass in ipairs( def.pipeline.passes ) do
+				requireValue( pass.stage ~= "shadowcomp" or pbr and def.programs.shadow,
+					"render_processing_shadow_adapter", ownerKey .. ": shadowcomp requires a PBR shadow geometry program" )
+			end
+			result.processing = def
 		end
 		if def.programs.water_ssr then
 			requireValue( def.programs.water and def.programs.scene_depth and def.programs.ssr_copy
@@ -212,7 +223,7 @@ function P.Validate( plan )
 end
 
 function P.Fork( bundle )
-	return { plan = bundle.plan, nodes = bundle.nodes, requests = bundle.requests,
+	return { plan = bundle.plan, nodes = bundle.nodes, requests = bundle.requests, processing = bundle.processing,
 		files = bundle.files, textures = bundle.textures, sources = {}, newBuilds = {}, bytesRead = 0, materialMaps = {} }
 end
 
@@ -241,13 +252,31 @@ local function textureFor( resource, dataMap, repeatTexture, pixelated )
 		-- Imported PNGs clamp by default. Water uses unbounded world/time UVs;
 		-- ordinary atlases and IBL data must retain their existing clamp policy.
 		-- Block normal/specular texels stay square like the albedo: no "smooth".
-		material = Material( path, repeatTexture and "smooth mips noclamp" or pixelated and "mips"
+		material = Material( path, repeatTexture and ( pixelated and "mips noclamp" or "smooth mips noclamp" ) or pixelated and "mips"
 			or dataMap and "smooth mips" or nil )
 	end
 	local texture = R.SourceTexture( material )
 	requireValue( texture:Width() > 0 and texture:Width() <= 4096 and texture:Height() > 0 and texture:Height() <= 4096,
 		"render_pack_texture_size", resource.path .. ": dimensions exceed the 4096-square limit" )
 	P.textures[key], P.textureCount = texture, P.textureCount + 1
+	return texture
+end
+
+function P.ProcessingTexture( resource, input )
+	local texture = textureFor( resource, true, input.repeatTexture, input.filter == "point" )
+	if resource.path:sub( -4 ) == ".vtf" then
+		-- VTF sampling flags are authored into the resource, unlike PNG imports.
+		-- Read the header rather than relying on an ITexture flag-query extension.
+		local bytes = file.Read( resource.path, "GAME" )
+		requireValue( type( bytes ) == "string" and #bytes >= 24 and bytes:sub( 1, 4 ) == "VTF\0",
+			"render_processing_vtf", resource.path .. ": invalid VTF header" )
+		local a, b, c, d = bytes:byte( 21, 24 )
+		local flags = a + b * 256 + c * 65536 + d * 16777216
+		requireValue( ( bit.band( flags, 1 ) ~= 0 ) == ( input.filter == "point" )
+			and ( bit.band( flags, 12 ) == 0 ) == ( input.repeatTexture == true )
+			and ( input.repeatTexture or bit.band( flags, 12 ) == 12 ),
+			"render_processing_sampler", resource.path .. ": authored VTF flags do not match the declared sampler" )
+	end
 	return texture
 end
 
@@ -357,8 +386,6 @@ function P.WaterMaterial( bundle, owner, blockSize )
 	local def = bundle.plan.owners[owner].definition
 	local inputs = def.passes.terrain_translucent.inputs
 	local normal = textureFor( def.resources.water_normal, true, true )
-	local caustics
-	if def.programs.water_caustics then caustics = textureFor( def.resources.water_caustics, true, true ) end
 	local orm = textureFor( def.resources[inputs.orm], true )
 	local environment = textureFor( def.resources[inputs.environment], true )
 	local dfg = textureFor( def.resources[inputs.dfg], true )
@@ -366,11 +393,11 @@ function P.WaterMaterial( bundle, owner, blockSize )
 		and environment:Width() == 512 and environment:Height() == 256 and dfg:Width() == 128 and dfg:Height() == 128,
 		"render_water_texture_size", "water requires 256x256 normal/foam, 512x256 IBL and 128x128 DFG textures" )
 	local signature = Schema.Canonical( { water = def.programs.water, normal = def.resources.water_normal.sha256,
-		caustics = def.programs.water_caustics, causticResource = def.resources.water_caustics,
+		waterShadow = def.programs.water_shadow,
 		environment = def.resources[inputs.environment].sha256, dfg = def.resources[inputs.dfg].sha256, blockSize = blockSize } )
 	local cached = P.materials[signature]
 	if cached then
-		if caustics then MC.RenderPBRShadows.RegisterWater( cached.material, def.programs.water_caustics, caustics, blockSize ) end
+		if def.programs.water_shadow then MC.RenderPBRShadows.RegisterWater( cached.material, def.programs.water_shadow, blockSize ) end
 		return cached.material
 	end
 	requireValue( P.materialCount < 2048, "render_pack_material_budget", "2048 immutable runtime materials reached" )
@@ -382,7 +409,7 @@ function P.WaterMaterial( bundle, owner, blockSize )
 			"world_translucent", blockSize, maps )
 	end
 	if def.programs.water_ssr then MC.RenderPBRSSR.Register( material, def, maps, blockSize ) end
-	if caustics then MC.RenderPBRShadows.RegisterWater( material, def.programs.water_caustics, caustics, blockSize ) end
+	if def.programs.water_shadow then MC.RenderPBRShadows.RegisterWater( material, def.programs.water_shadow, blockSize ) end
 	P.materials[signature] = { material = material }
 	P.materialCount = P.materialCount + 1
 	return material

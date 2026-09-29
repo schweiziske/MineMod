@@ -111,21 +111,21 @@ local function ensureTarget( size )
 	return target
 end
 
-function S.RegisterWater( surface, program, texture, blockSize )
-	requireValue( program and texture and not texture:IsError() and texture:Width() == 256 and texture:Height() == 256,
-		"render_caustics_resource", "water caustics require a program and a 256x256 linear wave-field texture" )
+S.WATER_DEPTH_VERSION = 1
+function S.RegisterWater( surface, program, blockSize )
+	requireValue( program and type( blockSize ) == "number" and blockSize > 0,
+		"render_water_shadow_resource", "water shadows require the depth v1 program and runtime block size" )
 	local previous = S.waterMaterials[surface]
-	if previous and previous.program == program and previous.source == texture and previous.blockSize == blockSize then return end
+	if previous and previous.program == program and previous.blockSize == blockSize then return end
 	requireValue( S.materialCount < 2048, "render_pbr_shadow_material_budget", "2048 immutable shadow materials reached" )
-	local material = CreateMaterial( "mc_l2_pbr_caustics_" .. ( S.materialCount + 1 ), "screenspace_general_8tex", {
+	local material = CreateMaterial( "mc_l2_pbr_water_depth1_" .. ( S.materialCount + 1 ), "screenspace_general_8tex", {
 		["$vertexshader"] = program.vertex, ["$pixshader"] = program.pixel,
-		["$basetexture"] = texture:GetName(), ["$x360appchooser"] = 1, ["$nocull"] = 1,
+		["$basetexture"] = "vgui/white", ["$x360appchooser"] = 1, ["$nocull"] = 1,
 		["$depthtest"] = 1, ["$writedepth"] = 0, ["$ignorez"] = 0,
 		["$linearread_basetexture"] = 1, ["$linearwrite"] = 1,
 	} )
-	requireValue( material and not material:IsError(), "render_caustics_material", "could not create water light-space material" )
-	material:SetTexture( "$basetexture", texture )
-	S.waterMaterials[surface] = { material = material, program = program, source = texture,
+	requireValue( material and not material:IsError(), "render_water_shadow_material", "could not create water depth material" )
+	S.waterMaterials[surface] = { material = material, program = program,
 		blockSize = blockSize, seen = setmetatable( {}, { __mode = "k" } ) }
 	S.materialCount, S.fullDirty = S.materialCount + 1, true
 end
@@ -135,7 +135,7 @@ function S.CasterMaterial( surface, stage )
 		local record = S.waterMaterials[surface]
 		if not record then return nil end
 		if record.revision ~= S.renderRevision then
-			local view, material, pending = S.renderState.views[1], record.material, S.renderState
+			local view, material = S.renderState.views[1], record.material
 			material:SetFloat( "$c0_x", view.fx )
 			material:SetFloat( "$c0_y", view.fy )
 			material:SetFloat( "$c0_z", view.fz )
@@ -143,17 +143,8 @@ function S.CasterMaterial( surface, stage )
 			material:SetFloat( "$c1_x", view.x )
 			material:SetFloat( "$c1_y", view.y )
 			material:SetFloat( "$c1_z", view.z )
-			material:SetFloat( "$c1_w", 1 / record.blockSize )
-			local scale = 1 / ( record.blockSize * 4096 )
-			material:SetFloat( "$c2_x", ( ( -262 * pending.frameX - 244 * pending.frameY ) * scale ) % 1 )
-			material:SetFloat( "$c2_y", ( ( 244 * pending.frameX - 262 * pending.frameY ) * scale + S.phaseA ) % 1 )
-			material:SetFloat( "$c2_z", ( ( -392 * pending.frameX - 121 * pending.frameY ) * scale ) % 1 )
-			material:SetFloat( "$c2_w", ( ( 121 * pending.frameX - 392 * pending.frameY ) * scale + S.phaseB ) % 1 )
-			local gain = waterWaves:GetFloat() * 10
-			material:SetFloat( "$c3_z", gain )
-			material:SetFloat( "$c3_w", math.max( gain - 1, 0 ) * ( 4 / 3 ) )
 			record.revision = S.renderRevision
-			S.stats.materialWrites = S.stats.materialWrites + 14
+			S.stats.materialWrites = S.stats.materialWrites + 7
 		end
 		return record
 	end
@@ -206,8 +197,6 @@ end
 
 local function renderAtlas( pending, water, waterOnly, groups, version, chunks )
 	S.renderState = pending
-	local time = ( RealTime() * 0.5 ) % 4096
-	S.phaseA, S.phaseB = ( -time * 173 / 4096 ) % 1, ( -time * 202 / 4096 ) % 1
 	local target = ensureTarget( pending.resolution )
 	pending.target = target
 	local forward = pending.views[1]
@@ -305,14 +294,31 @@ end
 
 local function publish()
 	local current = S.current
-	B.PublishShadow( current.target, matrix, settings.bias * current.blockSize / current.views[1].zfar, settings.strength )
+	B.PublishShadow( current.export, matrix, settings.bias * current.blockSize / current.views[1].zfar, settings.strength )
 	S.publishedSettings, S.publishedRevision = settingsRevision, B.shadowRevision
 end
 
-local function ensurePublished()
-	-- Refreshing only cl_render_pbr resets its material constants, but leaves
-	-- this module's rendered pixels intact. Rebind them without a GPU redraw.
+local function process( x, y, z, view )
+	local current = S.current
+	local ok, output = pcall( L.ProcessShadow, x, y, z, view, current )
+	if not ok then
+		current.export, S.valid, S.retryAt = nil, false, SysTime() + 1
+		S.stats.failures, S.stats.status = S.stats.failures + 1, "failed"
+		B.DisableShadow()
+		L.QueueFault( "render_processing_shadowcomp", output )
+		L.ReportFaults()
+		return false
+	end
+	if current.export ~= output then S.publishedSettings = nil end
+	current.export = output
+	return true
+end
+
+local function ensurePublished( x, y, z, view )
+	if not process( x, y, z, view ) then return false end
+	-- Rebind refreshed constants or a changed export without redrawing geometry.
 	if S.publishedSettings ~= settingsRevision or S.publishedRevision ~= B.shadowRevision then publish() end
+	return true
 end
 
 local function disable( status )
@@ -343,6 +349,7 @@ local function drawAtlas( state, water, waterOnly, groups, version, chunks, now 
 		L.ReportFaults()
 		return false
 	end
+	state.revision = S.renderRevision
 	state.water, state.waterFrame, state.waterWaves = water, FrameNumber(), waterWaves:GetFloat()
 	if waterOnly or water then stats.waterUpdates = stats.waterUpdates + 1 end
 	if waterOnly then stats.waterCPU = ( SysTime() - now ) * 1000 end
@@ -407,7 +414,7 @@ function S.Update( x, y, z, renderView )
 		and current.geometry == geometry and current.visibility == visibility
 		and M.Same( current, pending ) then
 		if not updateWater( water ) then return false end
-		ensurePublished()
+		if not ensurePublished( x, y, z, renderView ) then return false end
 		S.stats.cached, S.stats.status = S.stats.cached + 1, "cached"
 		return true
 	end
@@ -417,7 +424,7 @@ function S.Update( x, y, z, renderView )
 	-- A remote view or changed world frame must still refresh immediately.
 	if S.valid and not coverageMiss and now < S.nextUpdate then
 		if not updateWater( water ) then return false end
-		ensurePublished()
+		if not ensurePublished( x, y, z, renderView ) then return false end
 		S.stats.throttled, S.stats.status = S.stats.throttled + 1, "throttled"
 		return true
 	end
@@ -429,6 +436,7 @@ function S.Update( x, y, z, renderView )
 	pending.frameX, pending.frameY, pending.frameZ = frameX, frameY, frameZ
 	S.current, S.pending, S.valid = pending, current, true
 	for row = 1, 4 do for col = 1, 4 do matrix:SetField( row, col, pending.values[( row - 1 ) * 4 + col] ) end end
+	if not process( x, y, z, renderView ) then return false end
 	publish()
 	stats.updates, stats.status, stats.lastError = stats.updates + 1, "ready", nil
 	stats.nearUpdates, stats.farUpdates = stats.nearUpdates + 1, stats.farUpdates + 1
@@ -456,7 +464,7 @@ function S.VolumeSnapshot( x, y, z )
 	if current.frameX ~= fx or current.frameY ~= fy or current.frameZ ~= fz then return nil end
 	volumeCamera.x, volumeCamera.y, volumeCamera.z = x, y, z
 	if not M.CoversCamera( current.views[2], volumeCamera ) then return nil end
-	return current.target, matrix, settings.bias * current.blockSize / current.views[1].zfar, settings.strength
+	return current.export, matrix, settings.bias * current.blockSize / current.views[1].zfar, settings.strength
 end
 
 -- Draw preparation owns shadow updates. Remove the old early hook on Lua
