@@ -624,6 +624,8 @@ local function fluidMeshesForChunk( chunkKey, animations )
 	end
 	record.fluidKinds, record.matrix = availableKinds, Matrix()
 	record.originBX, record.originBY, record.originBZ = originBX, originBY, originBZ
+	record.chunk = chunk
+	record.shadowBounds = { x = halfXY, y = halfXY, z = halfZ, hx = halfXY, hy = halfXY, hz = halfZ }
 	record.blockSize, record.waterMaterial = BS, waterMaterial
 	record.hasWater = record.meshes.water_still ~= nil or record.meshes.water_flow ~= nil
 	record.cpuLight = not waterMaterial or record.meshes.lava_still ~= nil or record.meshes.lava_flow ~= nil
@@ -943,6 +945,47 @@ local function drawFluidChunk( record, animations, elapsedTicks )
 end
 
 local VisibleFluids = {}
+local waterShadowBase = Vector()
+-- Light-space visibility must not reuse the camera's VisibleFluids list.
+-- Shadow rendering owns depth, material state and failure cleanup.
+function MC.DrawWaterShadowCasters( view, shadow )
+	if LastGeneration ~= MC.StateWorldGeneration then return end
+	local pending, stats = shadow.renderState, shadow.stats
+	local blockSize = MC.API.Coords.BlockSize()
+	local active = MC.RenderPackRuntime.active
+	local waterMaterial = active and active.waterBinding and active.waterBinding.material
+	for key, record in pairs( FluidMeshCache ) do
+		if type( record ) == "table" and record.hasWater and record.waterMaterial
+			and record.waterMaterial == waterMaterial
+			and MC.GetChunkByKey( key ) == record.chunk and record.blockSize == blockSize
+			and not ( MC.StreamHiddenChunkKeys and MC.StreamHiddenChunkKeys[key] ) then
+			local x = record.originBX * record.blockSize + pending.frameX
+			local y = record.originBY * record.blockSize + pending.frameY
+			local z = record.originBZ * record.blockSize + pending.frameZ
+			if MC.RenderShadowMath.Intersects( record.shadowBounds, x, y, z, view ) then
+				local caster = shadow.CasterMaterial( record.waterMaterial, "world_translucent" )
+				if caster then
+					waterShadowBase.x, waterShadowBase.y, waterShadowBase.z = x, y, z
+					record.matrix:SetTranslation( waterShadowBase )
+					cam.PushModelMatrix( record.matrix )
+					shadow.modelPushed = true
+					render.SetMaterial( caster.material )
+					for name in pairs( WATER_ANIMATIONS ) do
+						local batches = record.meshes[name]
+						for i = 1, batches and #batches or 0 do
+							local batch = batches[i]
+							batch.mesh:Draw()
+							stats.draws, stats.vertices = stats.draws + 1, stats.vertices + batch.vertexCount
+						end
+					end
+					cam.PopModelMatrix()
+					shadow.modelPushed = false
+				end
+			end
+		end
+	end
+end
+
 local FluidLightMaterialKinds = {}
 local function prepareFluidLightMaterials( animations, elapsedTicks )
 	-- Resolve only the current/next visible sprite frames, before entering any

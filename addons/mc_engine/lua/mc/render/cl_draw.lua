@@ -601,7 +601,7 @@ function MC.DrawPBRShadowCasters( groups, version, chunks, view, shadow )
 									end
 									-- Identical silhouettes shared by several surface passes draw once.
 									-- Different albedo/cutout maps retain their distinct silhouettes.
-									if currentRecord.seen[entry.mesh] ~= token then
+									if currentRecord and currentRecord.seen[entry.mesh] ~= token then
 										if not chunkDrawn then
 											prepareChunkFrame( frame, true )
 											cam.PushModelMatrix( e.matrix )
@@ -615,7 +615,7 @@ function MC.DrawPBRShadowCasters( groups, version, chunks, view, shadow )
 										currentRecord.seen[entry.mesh] = token
 										stats.draws = stats.draws + 1
 										stats.vertices = stats.vertices + ( entry.vertexCount or 0 )
-									else stats.duplicates = stats.duplicates + 1 end
+									elseif currentRecord then stats.duplicates = stats.duplicates + 1 end
 								end
 							else stats.culledSections = stats.culledSections + 1 end
 						end

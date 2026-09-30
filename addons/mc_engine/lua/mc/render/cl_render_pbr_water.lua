@@ -97,9 +97,10 @@ function W.PrepareView()
     if not constants then constants = Matrix() end
     boundRefractionMaterial, sceneDepth = nil, nil
     local ply = LocalPlayer()
-    local liquid = IsValid( ply ) and MC.PlayerEyeLiquid and MC.PlayerEyeLiquid( ply )
+    local liquid
+    if IsValid( ply ) and MC.PlayerEyeLiquid then liquid = MC.PlayerEyeLiquid( ply ) end
     underwater = liquid ~= nil and liquid.kind == "water"
-    constants:SetField( 2, 1, RealTime() % 4096 )
+    constants:SetField( 2, 1, MC.RenderPackProcessing.FrameTime() % 4096 )
     constants:SetField( 2, 2, waves:GetFloat() )
     constants:SetField( 2, 3, density:GetFloat() )
     constants:SetField( 2, 4, refraction:GetFloat() )

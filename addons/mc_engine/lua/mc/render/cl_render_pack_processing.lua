@@ -1,0 +1,325 @@
+-- Pack-owned, ordered full-screen processing. No effect-specific bindings.
+MC = MC or {}
+local P = MC.RenderPackProcessing or { banks = {}, targetBytes = 0, targetCount = 0, materialCount = 0 }
+MC.RenderPackProcessing = P
+P.VERSION = 1
+local requireValue = MC.RenderL2Resources.Require
+local canonical = MC.RenderPackSchema.Canonical
+local unitTone = Vector( 1, 1, 1 )
+local components = { "x", "y", "z", "w" }
+local textureSlots = { s0 = "$basetexture", s1 = "$texture1", s2 = "$texture2", s3 = "$texture3",
+	s4 = "$texture4", s5 = "$texture5", s6 = "$texture6", s7 = "$texture7" }
+
+function P.CopyQuad( width, height )
+	local quad = Mesh()
+	mesh.Begin( quad, MATERIAL_QUADS, 1 )
+	-- D3D9 integer pixel centres; UVs still address source texel centres.
+	local x0, x1, y0, y1 = -1 - 1 / width, 1 - 1 / width, 1 + 1 / height, -1 + 1 / height
+	for _, vertex in ipairs( { { x0, y0, 0, 0 }, { x1, y0, 1, 0 }, { x1, y1, 1, 1 }, { x0, y1, 0, 1 } } ) do
+		mesh.Position( Vector( vertex[1], vertex[2], 0 ) )
+		mesh.TexCoord( 0, vertex[3], vertex[4] )
+		mesh.AdvanceVertex()
+	end
+	mesh.End()
+	return quad
+end
+
+local function validateAPI()
+	requireValue( GetRenderTargetEx and CreateMaterial and Mesh and Matrix and mesh.Begin and mesh.End
+		and render.PushRenderTarget and render.PopRenderTarget and render.Clear and render.SetMaterial
+		and render.OverrideBlend and render.OverrideDepthEnable and render.OverrideAlphaWriteEnable
+		and render.OverrideColorWriteEnable and render.EnableClipping and render.GetToneMappingScaleLinear
+		and render.SetToneMappingScaleLinear and render.GetBlend and render.GetColorModulation
+		and render.SetBlend and render.SetColorModulation and render.GetRenderTarget
+		and RT_SIZE_LITERAL and MATERIAL_RT_DEPTH_NONE and IMAGE_FORMAT_RGBA8888 and IMAGE_FORMAT_RGBA16161616F,
+		"render_processing_api", "processing v1 requires scoped render state and RGBA render targets" )
+end
+
+local function targetFor( instance, name, context, shadow )
+	local spec = instance.definition.pipeline.targets[name]
+	local size = spec.size
+	local w, h = size.width, size.height
+	if size.relative == "view" then w, h = context.view_width * size.scale, context.view_height * size.scale
+	elseif size.relative == "shadow" then
+		requireValue( shadow and shadow.target, "render_processing_shadow", "shadow-relative target requires a completed atlas" )
+		w, h = shadow.target:Width() * size.scale, shadow.target:Height() * size.scale
+	end
+	w, h = math.max( 1, math.ceil( w ) ), math.max( 1, math.ceil( h ) )
+	requireValue( w <= 4096 and h <= 4096, "render_processing_size", "processing target exceeds 4096 square" )
+	local bank = instance.bank
+	local key = name .. "/" .. w .. "x" .. h
+	local entry = bank.targets[key]
+	if not entry then
+		local bytes = w * h * ( spec.format == "rgba8" and 4 or 8 )
+		requireValue( P.targetCount < 128 and P.targetBytes + bytes <= 128 * 1048576,
+			"render_processing_target_budget", "processing reached 128 targets / 128 MiB; restart to release engine RTs" )
+		-- Charge before allocation: Source RTs cannot be freed, even after failure.
+		P.targetCount, P.targetBytes = P.targetCount + 1, P.targetBytes + bytes
+		local texture = GetRenderTargetEx( "mc_processing1_" .. P.targetCount, w, h,
+			RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE, bit.bor( spec.filter == "point" and 1 or 0, 4, 8, 256, 512 ),
+			0, spec.format == "rgba8" and IMAGE_FORMAT_RGBA8888 or IMAGE_FORMAT_RGBA16161616F )
+		requireValue( texture and not texture:IsError() and texture:Width() == w and texture:Height() == h,
+			"render_processing_target", "processing target allocation failed: " .. name )
+		entry = { texture = texture, width = w, height = h, clear = spec.clear }
+		bank.targets[key] = entry
+	end
+	if not entry.quad then entry.quad = P.CopyQuad( w, h ) end
+	return entry
+end
+
+function P.Create( definition, pack )
+	if not definition or not definition.pipeline then return nil end
+	validateAPI()
+	local signature = pack .. "/" .. canonical( definition )
+	local bank
+	for _, candidate in ipairs( P.banks ) do
+		if candidate.signature == signature and not candidate.owner then bank = candidate break end
+	end
+	if not bank then
+		requireValue( #P.banks < 128, "render_processing_bank_budget", "128 processing owner versions reached; restart the client" )
+		bank = { signature = signature, targets = {}, passes = {} }
+		P.banks[#P.banks + 1] = bank
+	end
+	local instance = { definition = definition, bank = bank, stages = { begin = {}, shadowcomp = {} },
+		stats = { begin = 0, shadowcomp = 0, reused = 0, draws = 0, failures = 0, cpuMS = 0 } }
+	for index, pass in ipairs( definition.pipeline.passes ) do
+		local record = bank.passes[index]
+		if not record then
+			local program = definition.programs[pass.program]
+			local params = { ["$vertexshader"] = program.vertex, ["$pixshader"] = program.pixel,
+				["$x360appchooser"] = 1, ["$vertexcolor"] = 1, ["$nocull"] = 1, ["$nofog"] = 1,
+				["$depthtest"] = 0, ["$writedepth"] = 0, ["$ignorez"] = 0, ["$linearwrite"] = 1 }
+			local textures = {}
+			for slot, input in pairs( pass.inputs ) do
+				local parameter = textureSlots[slot]
+				local resource = input.resource and definition.resources[input.resource]
+				params["$linearread_" .. parameter:sub( 2 )] = resource and resource.colorSpace == "srgb" and 0 or 1
+				params[parameter] = "vgui/white"
+				if resource then
+					textures[slot] = MC.RenderPackResources.ProcessingTexture( resource, input )
+					params[parameter] = textures[slot]:GetName()
+				end
+			end
+			requireValue( P.materialCount < 2048, "render_processing_material_budget", "2048 processing material versions reached" )
+			P.materialCount = P.materialCount + 1
+			local material = CreateMaterial( "mc_processing1_pass_" .. P.materialCount, "screenspace_general_8tex", params )
+			requireValue( material and not material:IsError(), "render_processing_material", "could not load pass " .. pass.id )
+			record = { spec = pass, material = material, textures = textures, matrices = {} }
+			for key in pairs( pass.matrices ) do record.matrices[key] = Matrix() end
+			bank.passes[index] = record
+		end
+		local stage = instance.stages[pass.stage]
+		stage[#stage + 1] = record
+	end
+	-- A candidate never borrows an active instance's writable targets/materials.
+	bank.owner = instance
+	return instance
+end
+
+function P.Invalidate( instance )
+	if not instance then return end
+	instance.key, instance.beginOutputs, instance.outputs, instance.shadowKey = nil, nil, nil, nil
+end
+
+function P.Release( instance )
+	if not instance then return end
+	P.Invalidate( instance )
+	instance.bank.owner, instance.retired = nil, true
+end
+
+-- One clock for package processing and geometry sampled later in the frame.
+function P.FrameTime()
+	local frame = FrameNumber()
+	if P.frame ~= frame then P.frame, P.time = frame, RealTime() % 8192 end
+	return P.time
+end
+
+function P.Context( instance, active, x, y, z, view )
+	view = view or render.GetViewSetup( true )
+	local w, h = view.width or view.w, view.height or view.h
+	requireValue( type( w ) == "number" and type( h ) == "number" and w > 0 and h > 0 and w <= 16384 and h <= 16384,
+		"render_processing_view", "processing requires finite viewport dimensions" )
+	local ox, oy, oz = MC.ChunkRenderFrameOffset()
+	local frame = FrameNumber()
+	local context = { time = P.FrameTime(), block_size = MC.API.Coords.BlockSize(),
+		view_x = x, view_y = y, view_z = z, view_width = w, view_height = h,
+		origin_x = ox, origin_y = oy, origin_z = oz, settings = {} }
+	for _, spec in ipairs( instance.definition.settings ) do context.settings[spec.key] = MC.RenderPackSettings.Get( spec.key ) end
+	local angle = view.angles
+	local rt = render.GetRenderTarget()
+	context.key = canonical( { frame = frame, version = active.version, generation = MC.StateWorldGeneration,
+		context = context, viewportX = view.x, viewportY = view.y, rt = rt and rt:GetName(),
+		pitch = angle and angle.p, yaw = angle and angle.y, roll = angle and angle.r,
+		fov = view.fov, aspect = view.aspectratio or view.aspect, znear = view.znear, zfar = view.zfar,
+		ortho = view.ortho, offcenter = view.offcenter } )
+	context.world = MC.World
+	return context
+end
+
+-- Maps tile UV + normalized linear depth to world blocks. Reducing only the
+-- translation by whole periods preserves periodic shaders across re-origining.
+function P.ShadowWorldMatrix( matrix, shadow, index, blockSize, period )
+	local view = shadow.views[index]
+	local axes = { { view.rx, view.ux, view.fx, view.x - shadow.frameX },
+		{ view.ry, view.uy, view.fy, view.y - shadow.frameY },
+		{ view.rz, view.uz, view.fz, view.z - shadow.frameZ } }
+	for row = 1, 3 do
+		local a = axes[row]
+		local translation = ( a[4] - a[1] * view.radius + a[2] * view.radius ) / blockSize
+		if period then translation = translation % period end
+		matrix:SetField( row, 1, a[1] * 2 * view.radius / blockSize )
+		matrix:SetField( row, 2, -a[2] * 2 * view.radius / blockSize )
+		matrix:SetField( row, 3, a[3] * view.zfar / blockSize )
+		matrix:SetField( row, 4, translation )
+	end
+	for col = 1, 4 do matrix:SetField( 4, col, col == 4 and 1 or 0 ) end
+end
+
+local function scalar( value, context, target, shadow )
+	if type( value ) == "number" then return value end
+	local key = value:match( "^setting:(.+)$" )
+	if key then
+		local setting = context.settings[key]
+		if type( setting ) == "boolean" then return setting and 1 or 0 end
+		return setting
+	end
+	if value == "target_width" then return target.width end
+	if value == "target_height" then return target.height end
+	if value == "target_texel_x" then return 1 / target.width end
+	if value == "target_texel_y" then return 1 / target.height end
+	if value == "shadow_resolution" then return shadow.resolution end
+	if value == "sun_x" then return shadow.sx end
+	if value == "sun_y" then return shadow.sy end
+	if value == "sun_z" then return shadow.sz end
+	return context[value]
+end
+
+local function draw( record, target )
+	local pushed, clipped, toned, overrides, oldClip, oldTone, oldBlend, r, g, b
+	local ok, err = pcall( function()
+		oldBlend = render.GetBlend()
+		r, g, b = render.GetColorModulation()
+		render.PushRenderTarget( target.texture ) pushed = true
+		oldClip = render.EnableClipping( false ) clipped = true
+		oldTone = render.GetToneMappingScaleLinear() toned = true
+		render.SetToneMappingScaleLinear( unitTone )
+		overrides = true
+		render.OverrideDepthEnable( false, false )
+		render.OverrideBlend( true, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD )
+		render.OverrideAlphaWriteEnable( true, true )
+		render.OverrideColorWriteEnable( true, true )
+		render.SetBlend( 1 ) render.SetColorModulation( 1, 1, 1 )
+		local clear = target.clear
+		render.Clear( clear[1] * 255, clear[2] * 255, clear[3] * 255, clear[4] * 255, false, false )
+		render.SetMaterial( record.material )
+		target.quad:Draw()
+	end )
+	local cleanupError
+	local function restore( fn, ... )
+		local restored, why = pcall( fn, ... )
+		if not restored and not cleanupError then cleanupError = tostring( why ) end
+	end
+	if overrides then
+		restore( render.OverrideDepthEnable, false, false )
+		restore( render.OverrideBlend, false )
+		restore( render.OverrideAlphaWriteEnable, false, false )
+		restore( render.OverrideColorWriteEnable, false, false )
+		restore( render.SetBlend, oldBlend ) restore( render.SetColorModulation, r, g, b )
+	end
+	if toned then restore( render.SetToneMappingScaleLinear, oldTone ) end
+	if pushed then restore( render.PopRenderTarget ) end
+	if clipped then restore( render.EnableClipping, oldClip ) end
+	if cleanupError then error( tostring( err ) .. "; cleanup: " .. cleanupError, 0 ) end
+	if not ok then error( err, 0 ) end
+end
+
+local function execute( instance, stage, context, shadow )
+	local outputs = {}
+	if stage == "shadowcomp" then for name, texture in pairs( instance.beginOutputs ) do outputs[name] = texture end end
+	for _, record in ipairs( instance.stages[stage] ) do
+		local pass, inputs, enabled = record.spec, {}, true
+		for _, key in ipairs( pass.enableSettings or {} ) do
+			local value = context.settings[key]
+			if value == false or value == 0 then enabled = false end
+		end
+		for slot, input in pairs( pass.inputs ) do
+			local texture = record.textures[slot]
+			if input.target then texture = outputs[input.target]
+			elseif input.builtin then texture = shadow.target end
+			requireValue( texture ~= nil, "render_processing_input", "unavailable input for " .. pass.id .. "/" .. slot )
+			inputs[slot] = texture
+		end
+		if not enabled then outputs[pass.output] = inputs[pass.disabledInput]
+		else
+			local target = targetFor( instance, pass.output, context, shadow )
+			for slot, texture in pairs( inputs ) do
+				requireValue( texture ~= target.texture and texture:GetName() ~= target.texture:GetName(),
+					"render_processing_alias", "physical read/write alias in " .. pass.id )
+				record.material:SetTexture( textureSlots[slot], texture )
+			end
+			for register, vector in pairs( pass.constants ) do
+				for index = 1, 4 do record.material:SetFloat( "$" .. register .. "_" .. components[index],
+					scalar( vector[index], context, target, shadow ) ) end
+			end
+			for key, semantic in pairs( pass.matrices ) do
+				local matrix = record.matrices[key]
+				P.ShadowWorldMatrix( matrix, shadow, semantic == "shadow_near_world" and 1 or 2, context.block_size, pass.worldPeriod )
+				record.material:SetMatrix( "$" .. key .. "mat", matrix )
+			end
+			draw( record, target )
+			instance.stats.draws = instance.stats.draws + 1
+			outputs[pass.output] = target.texture
+		end
+	end
+	return outputs
+end
+
+function P.Run( instance, stage, context, shadow )
+	if not instance then return true end
+	requireValue( not instance.retired and instance.bank.owner == instance and instance.stages[stage],
+		"render_processing_owner", "invalid processing instance or stage" )
+	if instance.key ~= context.key or instance.world ~= context.world then
+		P.Invalidate( instance ) instance.key, instance.world = context.key, context.world
+	end
+	if stage == "shadowcomp" and not instance.beginOutputs then
+		local ok, err = P.Run( instance, "begin", context )
+		if not ok then return false, err end
+	end
+	local key = stage == "shadowcomp" and shadow.revision or context.key
+	if stage == "begin" and instance.beginOutputs or stage == "shadowcomp" and instance.shadowKey == key then
+		instance.stats.reused = instance.stats.reused + 1
+		return true
+	end
+	-- No consumer may keep a partially overwritten stage or previous-frame output.
+	instance.outputs, instance.shadowKey = nil, nil
+	local start = SysTime()
+	P.rendering = true
+	local ok, result = pcall( execute, instance, stage, context, shadow )
+	P.rendering = false
+	instance.stats.cpuMS = ( SysTime() - start ) * 1000
+	if not ok then
+		P.Invalidate( instance )
+		instance.stats.failures = instance.stats.failures + 1
+		return false, result
+	end
+	instance.stats[stage] = instance.stats[stage] + 1
+	if stage == "begin" then instance.beginOutputs = result
+	else instance.shadowKey = key end
+	instance.outputs = result
+	return true
+end
+
+function P.Export( instance, name )
+	if not instance or not instance.outputs then return nil end
+	return instance.outputs[instance.definition.pipeline.exports[name]]
+end
+
+concommand.Add( "mc_render_processing_stats", function()
+	local active = MC.RenderPackRuntime.active
+	local instance = active and active.processing
+	local s = instance and instance.stats
+	print( string.format( "[MC processing] active=%s targets=%d bytes=%d materials=%d GPU=unmeasured",
+		tostring( instance ~= nil ), P.targetCount, P.targetBytes, P.materialCount ) )
+	if s then print( string.format( "[MC processing] begin=%d shadowcomp=%d reused=%d draws=%d failures=%d lastCPU=%.3fms",
+		s.begin, s.shadowcomp, s.reused, s.draws, s.failures, s.cpuMS ) ) end
+end )

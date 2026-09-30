@@ -37,6 +37,8 @@ local function release( runtime )
 		for _, section in pairs( sections ) do releaseSection( section ) end
 	end
 	runtime.sections = {}
+	MC.RenderPackProcessing.Release( runtime.processing )
+	runtime.processing = nil
 end
 
 local function sameWorld( c )
@@ -438,6 +440,7 @@ local function updateCandidate( c )
 	if c.phase == "validate" then
 		c.bundle = P.Validate( c.plan )
 		P.Ensure( c.bundle )
+		c.processing = MC.RenderPackProcessing.Create( c.bundle.processing, c.pack )
 		beginBindings( c )
 		c.phase = "binding"
 	end
@@ -532,6 +535,44 @@ function L.Step()
 		MC.StreamPerformanceAddFrameStage( "render.pack_update", ( SysTime() - started ) * 1000 )
 	end
 	L.ReportFaults()
+end
+
+local function processingContext( c, x, y, z, view )
+	return MC.RenderPackProcessing.Context( c.processing, c, x, y, z, view )
+end
+
+function L.BeginProcessing( x, y, z, view )
+	local c = L.active
+	if not c or not c.processing or not sameWorld( c ) then return true end
+	if c.processingRetryAt and SysTime() < c.processingRetryAt then return false end
+	local ok, result, err = pcall( function()
+		return MC.RenderPackProcessing.Run( c.processing, "begin", processingContext( c, x, y, z, view ) )
+	end )
+	if not ok or not result then
+		MC.RenderPackProcessing.Invalidate( c.processing )
+		c.processingRetryAt = SysTime() + 1
+		MC.RenderPBR.DisableShadow()
+		L.QueueFault( "render_processing_begin", ok and err or result )
+		L.ReportFaults()
+		return false
+	end
+	c.processingRetryAt = nil
+	return true
+end
+
+-- Called after shadow geometry has left its RT scope, including cache hits.
+-- Errors propagate to the shadow coordinator's disable/retry/fault path.
+function L.ProcessShadow( x, y, z, view, shadow )
+	local c = L.active
+	if not c or not c.processing then return shadow.target end
+	requireValue( sameWorld( c ) and not c.processingRetryAt, "render_processing_begin", "begin stage is unavailable" )
+	local context = processingContext( c, x, y, z, view )
+	local ok, err = MC.RenderPackProcessing.Run( c.processing, "shadowcomp", context, shadow )
+	if not ok then error( err, 0 ) end
+	if not c.processing.definition.pipeline.exports.shadow_atlas then return shadow.target end
+	local output = MC.RenderPackProcessing.Export( c.processing, "shadow_atlas" )
+	requireValue( output ~= nil, "render_processing_export", "shadow_atlas was not published" )
+	return output
 end
 
 function L.IsDrawing()
