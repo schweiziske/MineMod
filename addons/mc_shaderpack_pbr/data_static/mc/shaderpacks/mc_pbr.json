@@ -5,189 +5,189 @@
   "definition": {
     "schema": 1,
     "name": "PBR",
-    "build": "017d78e34e4703425d876e33b80dbfada642d3ba3ee3cd64ce413272946d4bf7",
+    "build": "5983fdb017d245ac40fc3da70c5c284ca4b1de00f151171067aea75167a3b9ff",
     "abi": 1,
     "layout": "mc:quad_corners_v1",
     "adapter": "mc:pbr_quad_v4",
     "programs": {
       "opaque": {
-        "vertex": "mc_pbr_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "fe408eb1a0f7eea024a8cd2ec03349a0076ce84a3f2b26a54de28ef84e2f0332",
-        "pixel": "mc_pbr_opaque_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_opaque_5983fdb017d245ac40fc_ps30",
         "pixelHash": "113639e8b37e50f13f1a59861f4db1701efe748c9c04c1ded4fcb10243bee72d"
       },
       "cutout": {
-        "vertex": "mc_pbr_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "fe408eb1a0f7eea024a8cd2ec03349a0076ce84a3f2b26a54de28ef84e2f0332",
-        "pixel": "mc_pbr_cutout_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_cutout_5983fdb017d245ac40fc_ps30",
         "pixelHash": "dae81e6e1e4b835ace800a5d22eaecbd41f1cb70f4dc9ae202feabb57e29ba62"
       },
       "translucent": {
-        "vertex": "mc_pbr_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "fe408eb1a0f7eea024a8cd2ec03349a0076ce84a3f2b26a54de28ef84e2f0332",
-        "pixel": "mc_pbr_translucent_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_translucent_5983fdb017d245ac40fc_ps30",
         "pixelHash": "12debce3cfd9ff73b4c7058d579dc436e1f8813e71326e23c13fb863e0420519"
       },
       "shadow": {
-        "vertex": "mc_pbr_shadow_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_shadow_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "b4213d8480f01332a0640a3cda61c618460ac8e933b5de17d3bd8b924a298671",
-        "pixel": "mc_pbr_shadow_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_shadow_5983fdb017d245ac40fc_ps30",
         "pixelHash": "3236628228df086f621bc6d3c6bd35c73f8d093d7f86fafcdcbd880e73c09219"
       },
       "block_entity": {
-        "vertex": "mc_pbr_block_entity_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_block_entity_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "18ed43618527f346b27347f8c723f869646109465aad2764695e71ac4b83ed6a",
-        "pixel": "mc_pbr_block_entity_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_block_entity_5983fdb017d245ac40fc_ps30",
         "pixelHash": "995bdff2f2fbdcf21152e457fb783491b253a9d923ae5ed0452cb4efe55bb34f"
       },
       "water": {
-        "vertex": "mc_pbr_water_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_water_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "d8734cb1c5ca2c6e15a9ab8f497438e522479e0f55bd215b61d2acca3436fd88",
-        "pixel": "mc_pbr_water_017d78e34e4703425d87_ps30",
-        "pixelHash": "3b1fdf859bd92f9fa9f14cba0d432f43746560345eb0c294115630a57217cc2f"
+        "pixel": "mc_pbr_water_5983fdb017d245ac40fc_ps30",
+        "pixelHash": "2d3fbc64048ee1ed567841d97c1b7c6f7992b5eee1a941cf17989ff5fb84d126"
       },
       "water_shadow": {
-        "vertex": "mc_pbr_shadow_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_shadow_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "b4213d8480f01332a0640a3cda61c618460ac8e933b5de17d3bd8b924a298671",
-        "pixel": "mc_pbr_water_shadow_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_water_shadow_5983fdb017d245ac40fc_ps30",
         "pixelHash": "0af519219c29e037fede99dc509228cfaf38e49973c36fe126550360fe2280d3"
       },
       "water_caustics": {
-        "vertex": "mc_pbr_ssr_copy_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_ssr_copy_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_water_caustics_017d78e34e4703425d87_ps30",
-        "pixelHash": "146337aba7e92fe2150a769c1e5b81e42edf81cef86225be9b2a9eb7ea3a9604"
+        "pixel": "mc_pbr_water_caustics_5983fdb017d245ac40fc_ps30",
+        "pixelHash": "88e9521a86248a2545f31855dd0b54722505aceec025606fa6f4d3ce63288631"
       },
       "scene_depth": {
-        "vertex": "mc_pbr_scene_depth_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_scene_depth_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "d0e55579fc04f07d8b131c3767e1fba1d05c408a5201fe936dbdbfa6546800ba",
-        "pixel": "mc_pbr_scene_depth_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_scene_depth_5983fdb017d245ac40fc_ps30",
         "pixelHash": "1cbbb507aa6e8414417218a634b3c689381dea933a2f0c42416748755406cb65"
       },
       "ssr_copy": {
-        "vertex": "mc_pbr_ssr_copy_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_ssr_copy_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_ssr_copy_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_ssr_copy_5983fdb017d245ac40fc_ps30",
         "pixelHash": "865e3c049a9b8970ecb43b22ea067e67fa337dcd9de8d8c0edda38606c9e07fa"
       },
       "ssr_source": {
-        "vertex": "mc_pbr_ssr_copy_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_ssr_copy_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_ssr_source_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_ssr_source_5983fdb017d245ac40fc_ps30",
         "pixelHash": "4416b5f74119c934a3c4d2af52f96af94696a0449f46b627d502b92db23b85df"
       },
       "water_ssr": {
-        "vertex": "mc_pbr_water_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_water_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "d8734cb1c5ca2c6e15a9ab8f497438e522479e0f55bd215b61d2acca3436fd88",
-        "pixel": "mc_pbr_water_ssr_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_water_ssr_5983fdb017d245ac40fc_ps30",
         "pixelHash": "bceaa66ab161152c83f105e02652ea23f287d0660e618aff38393907b689cde1"
       },
       "water_ssr_composite": {
-        "vertex": "mc_pbr_water_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_water_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "d8734cb1c5ca2c6e15a9ab8f497438e522479e0f55bd215b61d2acca3436fd88",
-        "pixel": "mc_pbr_water_ssr_composite_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_water_ssr_composite_5983fdb017d245ac40fc_ps30",
         "pixelHash": "8e3bed62114681229d15b0044a57146dd1beb4294376596c54c5351da61f67e5"
       },
       "block_ssr": {
-        "vertex": "mc_pbr_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "fe408eb1a0f7eea024a8cd2ec03349a0076ce84a3f2b26a54de28ef84e2f0332",
-        "pixel": "mc_pbr_block_ssr_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_block_ssr_5983fdb017d245ac40fc_ps30",
         "pixelHash": "ffcb79a1df3920e9f74aa5eae77982a12c58dcc848e9b2cfd7d2a216d4a49be6"
       },
       "dynamic_opaque": {
-        "vertex": "mc_pbr_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "fe408eb1a0f7eea024a8cd2ec03349a0076ce84a3f2b26a54de28ef84e2f0332",
-        "pixel": "mc_pbr_dynamic_opaque_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_dynamic_opaque_5983fdb017d245ac40fc_ps30",
         "pixelHash": "322a32b2e8b5c2b3d4ce41653fb60623a6283f22b51e89e774f592a7221c1792"
       },
       "dynamic_cutout": {
-        "vertex": "mc_pbr_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "fe408eb1a0f7eea024a8cd2ec03349a0076ce84a3f2b26a54de28ef84e2f0332",
-        "pixel": "mc_pbr_dynamic_cutout_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_dynamic_cutout_5983fdb017d245ac40fc_ps30",
         "pixelHash": "53aee38ab978cf046431906aeaa7ed3bbbe40854032fa7a20115d2f6a6fcf119"
       },
       "dynamic_translucent": {
-        "vertex": "mc_pbr_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "fe408eb1a0f7eea024a8cd2ec03349a0076ce84a3f2b26a54de28ef84e2f0332",
-        "pixel": "mc_pbr_dynamic_translucent_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_dynamic_translucent_5983fdb017d245ac40fc_ps30",
         "pixelHash": "c1cff7feff9882369f0b09840f384756b11fa82a3d8ede3fa28537353ae36b67"
       },
       "dynamic_block_entity": {
-        "vertex": "mc_pbr_block_entity_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_block_entity_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "18ed43618527f346b27347f8c723f869646109465aad2764695e71ac4b83ed6a",
-        "pixel": "mc_pbr_dynamic_block_entity_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_dynamic_block_entity_5983fdb017d245ac40fc_ps30",
         "pixelHash": "d8956f7a12ee8c408952b14cb96f96eba7d048af24063e414f0d725a9207675c"
       },
       "dynamic_water": {
-        "vertex": "mc_pbr_water_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_water_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "d8734cb1c5ca2c6e15a9ab8f497438e522479e0f55bd215b61d2acca3436fd88",
-        "pixel": "mc_pbr_dynamic_water_017d78e34e4703425d87_ps30",
-        "pixelHash": "997f48e38d0d9cdd6bc6d4ff06feb6f1dbacaa8199efa5f1b5ef93e8dba05529"
+        "pixel": "mc_pbr_dynamic_water_5983fdb017d245ac40fc_ps30",
+        "pixelHash": "f585481cf3224201095943a800bf12adf57c8da679af557403e75de27df3a825"
       },
       "dynamic_sprite": {
-        "vertex": "mc_pbr_dynamic_sprite_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_dynamic_sprite_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "49a7f8113c7b2c4ba34ffd8472454317fd73ded5d100ed6a76f991a66fe225a6",
-        "pixel": "mc_pbr_dynamic_sprite_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_dynamic_sprite_5983fdb017d245ac40fc_ps30",
         "pixelHash": "f62c519a6d93befa1661ace5e30bbeffdbf41fcbdd4b69436b4a8ea7e12bf2fa"
       },
       "post_ssao": {
-        "vertex": "mc_pbr_ssr_copy_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_ssr_copy_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_ssao_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_post_ssao_5983fdb017d245ac40fc_ps30",
         "pixelHash": "af29cf824d00beadbe10e4957cb3b9f2a340943981ba578a046318c13f486f3f"
       },
       "post_ssao_composite": {
-        "vertex": "mc_pbr_ssr_copy_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_ssr_copy_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_ssao_composite_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_post_ssao_composite_5983fdb017d245ac40fc_ps30",
         "pixelHash": "6a664ae9a05d1b1b12c1e7edeba35dd2080e52c9f80efd406995c2f73d55963e"
       },
       "post_scene_depth": {
-        "vertex": "mc_pbr_scene_depth_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_scene_depth_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "d0e55579fc04f07d8b131c3767e1fba1d05c408a5201fe936dbdbfa6546800ba",
-        "pixel": "mc_pbr_post_scene_depth_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_post_scene_depth_5983fdb017d245ac40fc_ps30",
         "pixelHash": "86a60318eaf125f4b3aa2f68570f595e9b48149108d10af373ec09f116be2376"
       },
       "post_depth_copy": {
-        "vertex": "mc_pbr_ssr_copy_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_ssr_copy_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_depth_copy_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_post_depth_copy_5983fdb017d245ac40fc_ps30",
         "pixelHash": "122bd62f9c81bda342a5883f748b06427adc954af31089672edf1f84ee76b540"
       },
       "post_fog": {
-        "vertex": "mc_pbr_ssr_copy_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_ssr_copy_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_fog_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_post_fog_5983fdb017d245ac40fc_ps30",
         "pixelHash": "a7137a1d65744b50f625f9676f7ff35f119ed3e9ad6b23a5a4df6b73627d2be0"
       },
       "post_bloom_prefilter": {
-        "vertex": "mc_pbr_ssr_copy_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_ssr_copy_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_bloom_prefilter_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_post_bloom_prefilter_5983fdb017d245ac40fc_ps30",
         "pixelHash": "f63c6f5b06b574fe426ceaf6bcd1c6ad148cd5d1a5dc70066a3dcdd3ba2e57d9"
       },
       "post_bloom_blur": {
-        "vertex": "mc_pbr_ssr_copy_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_ssr_copy_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_bloom_blur_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_post_bloom_blur_5983fdb017d245ac40fc_ps30",
         "pixelHash": "de3f07351f96e423077ce6ee6e81bbe08190d079e0031e5ff2a79a8015c01506"
       },
       "post_bloom_composite": {
-        "vertex": "mc_pbr_ssr_copy_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_ssr_copy_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_bloom_composite_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_post_bloom_composite_5983fdb017d245ac40fc_ps30",
         "pixelHash": "3c79ac433b4a0ab9b94c5892fd142fb21f700d5f2e87fcf2d9bffa21737dee06"
       },
       "post_volumetric": {
-        "vertex": "mc_pbr_ssr_copy_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_ssr_copy_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_volumetric_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_post_volumetric_5983fdb017d245ac40fc_ps30",
         "pixelHash": "475b3032a4e3c18f99d40c332044f43fd6d050219fcd9940ea94230ebb5af8d6"
       },
       "post_volumetric_composite": {
-        "vertex": "mc_pbr_ssr_copy_vertex_017d78e34e4703425d87_vs30",
+        "vertex": "mc_pbr_ssr_copy_vertex_5983fdb017d245ac40fc_vs30",
         "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_volumetric_composite_017d78e34e4703425d87_ps30",
+        "pixel": "mc_pbr_post_volumetric_composite_5983fdb017d245ac40fc_ps30",
         "pixelHash": "5dc2e69cc2ba733fc373e5886244dc68ebff3e01d1525a99356325737f5ff550"
       }
     },
@@ -575,11 +575,6 @@
       "programmer_art_translucent_orm": {
         "path": "materials/mc_pbr/programmer_art_orm_33bafcb8155e0339c8b4.png",
         "sha256": "33bafcb8155e0339c8b403d73317c5af79c3d82d1017e364927e5acde9ad032a",
-        "colorSpace": "linear"
-      },
-      "water_caustics": {
-        "path": "materials/mc_pbr/water_caustics_waves_aed3418057eab1a7a1ba.png",
-        "sha256": "aed3418057eab1a7a1bac02468b370005bd95d1891b9ea3fbcf0248d82843e06",
         "colorSpace": "linear"
       }
     },
@@ -1331,7 +1326,7 @@
               "builtin": "shadow_atlas"
             },
             "s1": {
-              "resource": "water_caustics",
+              "resource": "water_normal",
               "repeatTexture": true,
               "filter": "linear"
             }
@@ -1341,7 +1336,13 @@
             "c0": [
               "time",
               "setting:water_waves",
-              0,
+              "shadow_resolution",
+              256
+            ],
+            "c1": [
+              "sun_x",
+              "sun_y",
+              "sun_z",
               0
             ]
           },
