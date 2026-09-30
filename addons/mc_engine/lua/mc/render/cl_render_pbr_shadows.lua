@@ -1,11 +1,13 @@
--- DX9 sun shadows: each update clears and redraws both complete light volumes.
--- The atlas and projection are published together; no partial tile reuse.
+-- DX9 sun shadows: opaque cascades update together and retain their projection.
+-- The lower water row animates independently in that same published projection.
 MC = MC or {}
 local S = MC.RenderPBRShadows or { targets = {}, depthMaterials = {}, materialCount = 0 }
 MC.RenderPBRShadows = S
 local B, M, R, L = MC.RenderPBR, MC.RenderShadowMath, MC.RenderL2Resources, MC.RenderPackRuntime
 local requireValue = R.Require
 local DEPTH_MATERIAL_VERSION = 2
+S.waterMaterials = S.waterMaterials or setmetatable( {}, { __mode = "k" } )
+if S.atlasVersion ~= 2 then S.targets, S.atlasVersion = {}, 2 end
 if S.depthMaterialVersion ~= DEPTH_MATERIAL_VERSION then
 	-- Retained caster snapshots must also lose the old ALWAYS comparison.
 	for _, record in pairs( S.depthMaterials ) do
@@ -23,6 +25,8 @@ local distance = MC.RenderPackSettings.Handle( "shadow_range" )
 local interval = MC.RenderPackSettings.Handle( "shadow_interval" )
 local strength = MC.RenderPackSettings.Handle( "shadow_strength" )
 local bias = MC.RenderPackSettings.Handle( "shadow_bias" )
+local waterEnabled = MC.RenderPackSettings.Handle( "water" )
+local waterWaves = MC.RenderPackSettings.Handle( "water_waves" )
 local settingsRevision = 1
 local settings = {}
 local function readSettings()
@@ -39,7 +43,7 @@ readSettings()
 S.stats = { mode = "full", updates = 0, nearUpdates = 0, farUpdates = 0, cascades = 0, cached = 0, throttled = 0, failures = 0, draws = 0, vertices = 0,
 	testedChunks = 0, testedSections = 0, culledChunks = 0, culledSections = 0, duplicates = 0,
 	testedRegions = 0, culledRegions = 0, regionChunks = 0, coverageUpdates = 0, fullCoverageFallbacks = 0,
-	materialWrites = 0, cpuMS = 0, status = "initializing" }
+	materialWrites = 0, cpuMS = 0, waterUpdates = 0, waterCPU = 0, status = "initializing" }
 S.surfaceMaterials = setmetatable( {}, { __mode = "k" } )
 S.renderRevision, S.tileToken = ( S.renderRevision or 0 ) + 1, ( S.tileToken or 0 ) + 1
 S.valid, S.modelPushed, S.current, S.pending = false, false, {}, {}
@@ -57,7 +61,7 @@ local setups = {
 }
 local stageNames = { "world_opaque", "world_cutout", "world_translucent" }
 local pushedRT, startedCam, stateActive, toneActive, oldTone = false, false, false, false, nil
-local clipActive, oldClip = false, false
+local clipActive, oldClip, scissorActive = false, false, false
 local apiValidated = false
 B.DisableShadow()
 
@@ -98,16 +102,53 @@ local function ensureTarget( size )
 	end
 	local target = S.targets[size]
 	if not target then
-		target = GetRenderTargetEx( "mc_l2_pbr_shadow_rgba8_1_" .. size, size * 2, size,
+		target = GetRenderTargetEx( "mc_l2_pbr_shadow_rgba8_2_" .. size, size * 2, size * 2,
 			RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_SEPARATE, bit.bor( 1, 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA8888 )
-		requireValue( target and not target:IsError() and target:Width() == size * 2 and target:Height() == size,
+		requireValue( target and not target:IsError() and target:Width() == size * 2 and target:Height() == size * 2,
 			"render_pbr_shadow_target", "could not create the bounded point-filter shadow atlas" )
 		S.targets[size] = target
 	end
 	return target
 end
 
+S.WATER_DEPTH_VERSION = 1
+function S.RegisterWater( surface, program, blockSize )
+	requireValue( program and type( blockSize ) == "number" and blockSize > 0,
+		"render_water_shadow_resource", "water shadows require the depth v1 program and runtime block size" )
+	local previous = S.waterMaterials[surface]
+	if previous and previous.program == program and previous.blockSize == blockSize then return end
+	requireValue( S.materialCount < 2048, "render_pbr_shadow_material_budget", "2048 immutable shadow materials reached" )
+	local material = CreateMaterial( "mc_l2_pbr_water_depth1_" .. ( S.materialCount + 1 ), "screenspace_general_8tex", {
+		["$vertexshader"] = program.vertex, ["$pixshader"] = program.pixel,
+		["$basetexture"] = "vgui/white", ["$x360appchooser"] = 1, ["$nocull"] = 1,
+		["$depthtest"] = 1, ["$writedepth"] = 0, ["$ignorez"] = 0,
+		["$linearread_basetexture"] = 1, ["$linearwrite"] = 1,
+	} )
+	requireValue( material and not material:IsError(), "render_water_shadow_material", "could not create water depth material" )
+	S.waterMaterials[surface] = { material = material, program = program,
+		blockSize = blockSize, seen = setmetatable( {}, { __mode = "k" } ) }
+	S.materialCount, S.fullDirty = S.materialCount + 1, true
+end
+
 function S.CasterMaterial( surface, stage )
+	if S.waterPass then
+		local record = S.waterMaterials[surface]
+		if not record then return nil end
+		if record.revision ~= S.renderRevision then
+			local view, material = S.renderState.views[1], record.material
+			material:SetFloat( "$c0_x", view.fx )
+			material:SetFloat( "$c0_y", view.fy )
+			material:SetFloat( "$c0_z", view.fz )
+			material:SetFloat( "$c0_w", 1 / view.zfar )
+			material:SetFloat( "$c1_x", view.x )
+			material:SetFloat( "$c1_y", view.y )
+			material:SetFloat( "$c1_z", view.z )
+			record.revision = S.renderRevision
+			S.stats.materialWrites = S.stats.materialWrites + 7
+		end
+		return record
+	end
+	if S.waterMaterials[surface] then return nil end
 	local binding = S.surfaceMaterials[surface]
 	local record
 	if binding and binding.program == S.program and binding.stage == stage then
@@ -140,7 +181,7 @@ function S.CasterMaterial( surface, stage )
 	if record.revision ~= S.renderRevision then
 		-- Both cascades share one depth plane. Constant writes happen once per
 		-- material per update, including when adjacent chunks alternate materials.
-		local view, material = S.pending.views[1], record.material
+		local view, material = S.renderState.views[1], record.material
 		material:SetFloat( "$c0_x", view.fx )
 		material:SetFloat( "$c0_y", view.fy )
 		material:SetFloat( "$c0_z", view.fz )
@@ -154,8 +195,8 @@ function S.CasterMaterial( surface, stage )
 	return record
 end
 
-local function renderAtlas( groups, version, chunks )
-	local pending = S.pending
+local function renderAtlas( pending, water, waterOnly, groups, version, chunks )
+	S.renderState = pending
 	local target = ensureTarget( pending.resolution )
 	pending.target = target
 	local forward = pending.views[1]
@@ -167,9 +208,16 @@ local function renderAtlas( groups, version, chunks )
 		setup.ortho.left, setup.ortho.right = -view.radius, view.radius
 		setup.ortho.top, setup.ortho.bottom = -view.radius, view.radius
 		setup.znear, setup.zfar = view.znear, view.zfar
-		setup.x, setup.w, setup.h = ( i - 1 ) * pending.resolution, pending.resolution, pending.resolution
+		setup.x, setup.y, setup.w, setup.h = ( i - 1 ) * pending.resolution, 0, pending.resolution, pending.resolution
 	end
-	render.PushRenderTarget( target ) pushedRT = true
+	if waterOnly then
+		requireValue( render.ClearBuffersObeyStencil and render.SetScissorRect,
+			"render_caustics_clear_api", "water animation requires a bounded lower-row clear" )
+		render.PushRenderTarget( target, 0, pending.resolution, pending.resolution * 2, pending.resolution )
+	else
+		render.PushRenderTarget( target )
+	end
+	pushedRT = true
 	-- Water/portal views can leave a clip plane active. It belongs to the outer
 	-- camera and must not cut the light volume.
 	oldClip = render.EnableClipping( false ) clipActive = true
@@ -182,15 +230,38 @@ local function renderAtlas( groups, version, chunks )
 	render.OverrideAlphaWriteEnable( true, true )
 	render.OverrideColorWriteEnable( true, true )
 	render.OverrideDepthEnable( true, true )
-	render.Clear( 255, 255, 255, 255, true, true )
-	for i = 1, 2 do
-		S.casterKeys = S.cascadeCasters[i]
-		for key in pairs( S.casterKeys ) do S.casterKeys[key] = nil end
-		S.tileToken = S.tileToken + 1
-		cam.Start( setups[i] ) startedCam = true
-		MC.DrawPBRShadowCasters( groups, version, chunks, pending.views[i], S )
-		cam.End() startedCam = false
+	S.waterPass = false
+	if waterOnly then
+		-- Clear by drawing inside the lower row, never by clearing the whole RT.
+		-- The opaque RG depth above remains the receiver's cached shadow map.
+		scissorActive = true
+		render.SetScissorRect( 0, pending.resolution, pending.resolution * 2, pending.resolution * 2, true )
+		render.ClearBuffersObeyStencil( 255, 255, 255, 255, true )
+		render.SetScissorRect( 0, 0, 0, 0, false ) scissorActive = false
+	else
+		render.Clear( 255, 255, 255, 255, true, true )
+		for i = 1, 2 do
+			S.casterKeys = S.cascadeCasters[i]
+			for key in pairs( S.casterKeys ) do S.casterKeys[key] = nil end
+			S.tileToken = S.tileToken + 1
+			cam.Start( setups[i] ) startedCam = true
+			MC.DrawPBRShadowCasters( groups, version, chunks, pending.views[i], S )
+			cam.End() startedCam = false
+		end
 	end
+	if water then
+		requireValue( MC.DrawWaterShadowCasters, "render_caustics_draw_api", "water shadow caster draw API is unavailable" )
+		S.waterPass = true
+		for i = 1, 2 do
+			S.casterKeys = S.cascadeCasters[i]
+			S.tileToken = S.tileToken + 1
+			setups[i].y = pending.resolution
+			cam.Start( setups[i] ) startedCam = true
+			MC.DrawWaterShadowCasters( pending.views[i], S )
+			cam.End() startedCam = false
+		end
+	end
+	S.waterPass = false
 end
 
 -- Cleanup always attempts every owned state before reporting. Strict faults
@@ -202,6 +273,8 @@ local function restore( fn, ... )
 end
 local function cleanup()
 	cleanupError = nil
+	S.waterPass, S.renderState = false, nil
+	if scissorActive then restore( render.SetScissorRect, 0, 0, 0, 0, false ) scissorActive = false end
 	if S.modelPushed then restore( cam.PopModelMatrix ) S.modelPushed = false end
 	if startedCam then restore( cam.End ) startedCam = false end
 	if stateActive then
@@ -221,20 +294,75 @@ end
 
 local function publish()
 	local current = S.current
-	B.PublishShadow( current.target, matrix, settings.bias * current.blockSize / current.views[1].zfar, settings.strength )
+	B.PublishShadow( current.export, matrix, settings.bias * current.blockSize / current.views[1].zfar, settings.strength )
 	S.publishedSettings, S.publishedRevision = settingsRevision, B.shadowRevision
 end
 
-local function ensurePublished()
-	-- Refreshing only cl_render_pbr resets its material constants, but leaves
-	-- this module's rendered pixels intact. Rebind them without a GPU redraw.
+local function process( x, y, z, view )
+	local current = S.current
+	local ok, output = pcall( L.ProcessShadow, x, y, z, view, current )
+	if not ok then
+		current.export, S.valid, S.retryAt = nil, false, SysTime() + 1
+		S.stats.failures, S.stats.status = S.stats.failures + 1, "failed"
+		B.DisableShadow()
+		L.QueueFault( "render_processing_shadowcomp", output )
+		L.ReportFaults()
+		return false
+	end
+	if current.export ~= output then S.publishedSettings = nil end
+	current.export = output
+	return true
+end
+
+local function ensurePublished( x, y, z, view )
+	if not process( x, y, z, view ) then return false end
+	-- Rebind refreshed constants or a changed export without redrawing geometry.
 	if S.publishedSettings ~= settingsRevision or S.publishedRevision ~= B.shadowRevision then publish() end
+	return true
 end
 
 local function disable( status )
 	S.stats.status, S.publishedSettings = status, nil
 	B.DisableShadow()
 	return false
+end
+
+local function drawAtlas( state, water, waterOnly, groups, version, chunks, now )
+	S.renderRevision = S.renderRevision + 1
+	local stats = S.stats
+	stats.draws, stats.vertices, stats.duplicates = 0, 0, 0
+	stats.testedChunks, stats.testedSections, stats.culledChunks, stats.culledSections = 0, 0, 0, 0
+	stats.testedRegions, stats.culledRegions, stats.regionChunks = 0, 0, 0
+	S.rendering = true
+	local ok, err = pcall( renderAtlas, state, water, waterOnly, groups, version, chunks )
+	local restoreError = cleanup()
+	S.rendering = false
+	if not ok or restoreError then
+		S.valid, S.retryAt = false, now + 1
+		stats.failures = stats.failures + 1
+		disable( "failed" )
+		local code, message = "render_pbr_shadow_draw", tostring( err )
+		if type( err ) == "table" then code, message = err.code, err.message end
+		if restoreError then message = message .. "; cleanup: " .. restoreError end
+		stats.lastError = message
+		L.QueueFault( code, message )
+		L.ReportFaults()
+		return false
+	end
+	state.revision = S.renderRevision
+	state.water, state.waterFrame, state.waterWaves = water, FrameNumber(), waterWaves:GetFloat()
+	if waterOnly or water then stats.waterUpdates = stats.waterUpdates + 1 end
+	if waterOnly then stats.waterCPU = ( SysTime() - now ) * 1000 end
+	return true
+end
+
+local function updateWater( water )
+	local current = S.current
+	if current.water == water and ( not water or current.waterFrame == FrameNumber()
+		and current.waterWaves == waterWaves:GetFloat() ) then return true end
+	-- Time and water toggles never invalidate the opaque row. Use the current
+	-- projection even when the camera/sun's pending projection is throttled.
+	return drawAtlas( current, water, true, nil, nil, nil, SysTime() )
 end
 
 function S.Update( x, y, z, renderView )
@@ -278,49 +406,37 @@ function S.Update( x, y, z, renderView )
 	local coverageMiss = S.valid and not ( M.CoversCamera( current.views[1], camera )
 		and M.CoversCamera( current.views[2], camera ) )
 	local groups, version, chunks = L.GetStages( false )
+	local water = active.waterBinding and active.waterBinding.material
+	water = waterEnabled:GetBool() and waterWaves:GetFloat() > 0 and water and S.waterMaterials[water] and water or nil
+	pending.frameX, pending.frameY, pending.frameZ = frameX, frameY, frameZ
 	local geometry, visibility = MC.ChunkDrawListVersion(), MC.StreamVisibilityVersion or 0
 	if S.valid and not S.fullDirty and not coverageMiss and current.version == version
-		and current.geometry == geometry and current.visibility == visibility and M.Same( current, pending ) then
-		ensurePublished()
+		and current.geometry == geometry and current.visibility == visibility
+		and M.Same( current, pending ) then
+		if not updateWater( water ) then return false end
+		if not ensurePublished( x, y, z, renderView ) then return false end
 		S.stats.cached, S.stats.status = S.stats.cached + 1, "cached"
 		return true
 	end
 	local now = SysTime()
 	if now < S.retryAt then return disable( "retry_wait" ) end
-	-- Retain only a complete previous atlas during the configured interval.
+	-- Retain the opaque pixels/projection during the configured interval.
 	-- A remote view or changed world frame must still refresh immediately.
 	if S.valid and not coverageMiss and now < S.nextUpdate then
-		ensurePublished()
+		if not updateWater( water ) then return false end
+		if not ensurePublished( x, y, z, renderView ) then return false end
 		S.stats.throttled, S.stats.status = S.stats.throttled + 1, "throttled"
 		return true
 	end
 	S.nextUpdate = now + settings.interval
 	S.fullDirty = false
-	S.renderRevision = S.renderRevision + 1
+	if not drawAtlas( pending, water, false, groups, version, chunks, now ) then return false end
 	local stats = S.stats
-	stats.draws, stats.vertices, stats.duplicates = 0, 0, 0
-	stats.testedChunks, stats.testedSections, stats.culledChunks, stats.culledSections = 0, 0, 0, 0
-	stats.testedRegions, stats.culledRegions, stats.regionChunks = 0, 0, 0
-	S.rendering = true
-	local ok, err = pcall( renderAtlas, groups, version, chunks )
-	local restoreError = cleanup()
-	S.rendering = false
-	if not ok or restoreError then
-		S.valid, S.retryAt = false, now + 1
-		stats.failures = stats.failures + 1
-		disable( "failed" )
-		local code, message = "render_pbr_shadow_draw", tostring( err )
-		if type( err ) == "table" then code, message = err.code, err.message end
-		if restoreError then message = message .. "; cleanup: " .. restoreError end
-		stats.lastError = message
-		L.QueueFault( code, message )
-		L.ReportFaults()
-		return false
-	end
 	pending.version, pending.geometry, pending.visibility, pending.blockSize = version, geometry, visibility, size
 	pending.frameX, pending.frameY, pending.frameZ = frameX, frameY, frameZ
 	S.current, S.pending, S.valid = pending, current, true
 	for row = 1, 4 do for col = 1, 4 do matrix:SetField( row, col, pending.values[( row - 1 ) * 4 + col] ) end end
+	if not process( x, y, z, renderView ) then return false end
 	publish()
 	stats.updates, stats.status, stats.lastError = stats.updates + 1, "ready", nil
 	stats.nearUpdates, stats.farUpdates = stats.nearUpdates + 1, stats.farUpdates + 1
@@ -348,7 +464,7 @@ function S.VolumeSnapshot( x, y, z )
 	if current.frameX ~= fx or current.frameY ~= fy or current.frameZ ~= fz then return nil end
 	volumeCamera.x, volumeCamera.y, volumeCamera.z = x, y, z
 	if not M.CoversCamera( current.views[2], volumeCamera ) then return nil end
-	return current.target, matrix, settings.bias * current.blockSize / current.views[1].zfar, settings.strength
+	return current.export, matrix, settings.bias * current.blockSize / current.views[1].zfar, settings.strength
 end
 
 -- Draw preparation owns shadow updates. Remove the old early hook on Lua
@@ -359,8 +475,10 @@ concommand.Add( "mc_pbr_shadow_stats", function()
 	local stats = S.stats
 	print( string.format( "[MC PBR shadow] mode=full %s updates=%d near=%d far=%d cached=%d throttled=%d failures=%d size=%dx%d range=%.1f blocks updateCPU=%.3fms GPU=unmeasured",
 		stats.status, stats.updates, stats.nearUpdates, stats.farUpdates, stats.cached, stats.throttled, stats.failures,
-		settings.size * 2, settings.size, settings.range, stats.cpuMS ) )
-	print( string.format( "[MC PBR shadow] lastUpdate draws=%d vertices=%d chunksTested=%d chunksCulled=%d sectionsTested=%d sectionsCulled=%d duplicates=%d materials=%d constantWrites=%d",
+		settings.size * 2, settings.size * 2, settings.range, stats.cpuMS ) )
+	print( string.format( "[MC PBR shadow] waterUpdates=%d waterCPU=%.3fms (lower row only; opaque interval unchanged)",
+		stats.waterUpdates, stats.waterCPU ) )
+	print( string.format( "[MC PBR shadow] lastDraw draws=%d vertices=%d chunksTested=%d chunksCulled=%d sectionsTested=%d sectionsCulled=%d duplicates=%d materials=%d constantWrites=%d",
 		stats.draws, stats.vertices, stats.testedChunks, stats.culledChunks, stats.testedSections, stats.culledSections,
 		stats.duplicates, S.materialCount, stats.materialWrites ) )
 	local views = S.current.views

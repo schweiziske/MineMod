@@ -107,8 +107,7 @@ local function array( value, limit, label )
 	return count
 end
 
-local stages = { world_opaque = 1, world_cutout = 2, after_opaque = 3,
-	world_translucent = 4, after_translucent = 5 }
+local stages = { world_opaque = 1, world_cutout = 2, world_translucent = 3 }
 
 local function texturePath( value )
 	if type( value ) ~= "string" or #value > 240
@@ -181,9 +180,145 @@ local function validateSettings( def )
 	end
 end
 
+local processingStages = { begin = 1, shadowcomp = 2 }
+Schema.ProcessingScalars = { time = 1, block_size = 1, view_x = 1, view_y = 1, view_z = 1,
+	view_width = 1, view_height = 1, target_width = 1, target_height = 1,
+	target_texel_x = 1, target_texel_y = 1, origin_x = 1, origin_y = 1, origin_z = 1,
+	shadow_resolution = 2, sun_x = 2, sun_y = 2, sun_z = 2 }
+Schema.ProcessingMatrices = { shadow_near_world = 2, shadow_far_world = 2 }
+
+local function validatePipeline( def )
+	local pipeline = def.pipeline
+	if pipeline == nil then return end
+	fields( pipeline, { version = true, targets = true, passes = true, exports = true }, "pipeline" )
+	if pipeline.version ~= 1 then reject( "unsupported_pipeline_version" ) end
+	map( pipeline.targets, localID, 16, "processing_targets" )
+	for _, target in pairs( pipeline.targets ) do
+		fields( target, { size = true, format = true, filter = true, clear = true }, "processing_target" )
+		fields( target.size, { width = true, height = true, relative = true, scale = true }, "processing_size" )
+		local size = target.size
+		if size.relative then
+			if ( size.relative ~= "view" and size.relative ~= "shadow" ) or size.width or size.height
+				or not number( size.scale ) or size.scale <= 0 or size.scale > 1 then reject( "invalid_processing_size" ) end
+		elseif not positiveInteger( size.width ) or not positiveInteger( size.height )
+			or size.width > 4096 or size.height > 4096 or size.scale then reject( "invalid_processing_size" ) end
+		if target.format ~= "rgba8" and target.format ~= "rgba16f" then reject( "invalid_processing_format" ) end
+		if target.filter ~= "point" and target.filter ~= "linear" then reject( "invalid_processing_filter" ) end
+		if array( target.clear, 4, "processing_clear" ) ~= 4 then reject( "invalid_processing_clear" ) end
+		for _, value in ipairs( target.clear ) do
+			if not number( value ) or value < 0 or value > 1 then reject( "invalid_processing_clear" ) end
+		end
+	end
+	local specs = {}
+	for _, spec in ipairs( def.settings ) do specs[spec.key] = spec end
+	local written, writers, ids, previous = {}, {}, {}, 0
+	local function reference( input, stage )
+		fields( input, { resource = true, target = true, builtin = true, repeatTexture = true, filter = true }, "processing_input" )
+		local kinds = ( input.resource and 1 or 0 ) + ( input.target and 1 or 0 ) + ( input.builtin and 1 or 0 )
+		if kinds ~= 1 then reject( "invalid_processing_input" ) end
+		if input.resource then
+			if not localID( input.resource ) or not def.resources[input.resource]
+				or input.repeatTexture ~= nil and type( input.repeatTexture ) ~= "boolean"
+				or input.filter ~= "point" and input.filter ~= "linear" then reject( "invalid_processing_resource" ) end
+			return { ["resource:" .. input.resource] = true }
+		end
+		if input.repeatTexture ~= nil or input.filter ~= nil then reject( "processing_input_sampler_override" ) end
+		if input.target then
+			if not localID( input.target ) or not written[input.target] then reject( "processing_read_before_write" ) end
+			return written[input.target]
+		end
+		if input.builtin ~= "shadow_atlas" or stage < 2 then reject( "unavailable_processing_builtin" ) end
+		return { ["builtin:shadow_atlas"] = true }
+	end
+	if array( pipeline.passes, 32, "processing_passes" ) == 0 then reject( "empty_processing_passes" ) end
+	for _, pass in ipairs( pipeline.passes ) do
+		fields( pass, { id = true, stage = true, program = true, inputs = true, output = true,
+			constants = true, matrices = true, worldPeriod = true, enableSettings = true, disabledInput = true }, "processing_pass" )
+		local stage = processingStages[pass.stage]
+		if not localID( pass.id ) or ids[pass.id] then reject( "invalid_processing_pass_id" ) end
+		ids[pass.id] = true
+		if not stage or stage < previous then reject( "invalid_processing_stage" ) end
+		previous = stage
+		if not localID( pass.program ) or not def.programs[pass.program] then reject( "missing_processing_program" ) end
+		local target = pipeline.targets[pass.output]
+		if not localID( pass.output ) or not target then reject( "missing_processing_output" ) end
+		if target.size.relative == "shadow" and stage < 2 then reject( "unavailable_processing_size" ) end
+		map( pass.inputs, function( key ) return type( key ) == "string" and key:match( "^s[0-7]$" ) end, 8, "processing_inputs" )
+		local origins = {}
+		for slot, input in pairs( pass.inputs ) do
+			local sources = reference( input, stage )
+			if sources["target:" .. pass.output] then reject( "processing_read_write_alias" ) end
+			origins[slot] = sources
+		end
+		if pass.constants == nil then pass.constants = {} end
+		map( pass.constants, function( key ) return type( key ) == "string" and key:match( "^c[0-3]$" ) end, 4, "processing_constants" )
+		for _, vector in pairs( pass.constants ) do
+			if array( vector, 4, "processing_vector" ) ~= 4 then reject( "invalid_processing_vector" ) end
+			for _, value in ipairs( vector ) do
+				if type( value ) == "string" then
+					local setting = value:match( "^setting:([a-z0-9_%-]+)$" )
+					if setting then
+						if not specs[setting] then reject( "unknown_processing_setting" ) end
+					elseif not Schema.ProcessingScalars[value] or Schema.ProcessingScalars[value] > stage then
+						reject( "unavailable_processing_constant" )
+					end
+				elseif not number( value ) then reject( "invalid_processing_constant" ) end
+			end
+		end
+		if pass.matrices == nil then pass.matrices = {} end
+		fields( pass.matrices, { viewproj = true, invviewproj = true }, "processing_matrices" )
+		for _, semantic in pairs( pass.matrices ) do
+			if not Schema.ProcessingMatrices[semantic] or Schema.ProcessingMatrices[semantic] > stage then
+				reject( "unavailable_processing_matrix" )
+			end
+		end
+		if pass.worldPeriod ~= nil and ( not positiveInteger( pass.worldPeriod ) or next( pass.matrices ) == nil ) then
+			reject( "invalid_processing_world_period" )
+		end
+		local possible = { ["target:" .. pass.output] = true }
+		if pass.enableSettings ~= nil then
+			if array( pass.enableSettings, 8, "processing_enable" ) == 0 then reject( "empty_processing_enable" ) end
+			for _, key in ipairs( pass.enableSettings ) do
+				local spec = specs[key]
+				if not spec or spec.type ~= "bool" and ( spec.type ~= "number" or spec.min < 0 ) then
+					reject( "invalid_processing_enable_setting" )
+				end
+			end
+			local disabled = origins[pass.disabledInput]
+			if not disabled then reject( "missing_processing_disabled_input" ) end
+			for source in pairs( disabled ) do
+				local name = source:match( "^target:(.+)$" )
+				local other = name and pipeline.targets[name]
+				if other then
+					if Schema.Canonical( other.size ) ~= Schema.Canonical( target.size )
+						or other.format ~= target.format or other.filter ~= target.filter then
+						reject( "incompatible_processing_disabled_input" )
+					end
+				elseif source ~= "builtin:shadow_atlas" or target.size.relative ~= "shadow" or target.size.scale ~= 1
+					or target.format ~= "rgba8" or target.filter ~= "point" then
+					reject( "incompatible_processing_disabled_input" )
+				end
+				possible[source] = true
+			end
+		elseif pass.disabledInput ~= nil then reject( "unexpected_processing_disabled_input" ) end
+		if writers[pass.output] and writers[pass.output] ~= stage then reject( "processing_cross_stage_write" ) end
+		writers[pass.output] = stage
+		written[pass.output] = possible
+	end
+	if pipeline.exports == nil then pipeline.exports = {} end
+	fields( pipeline.exports, { shadow_atlas = true }, "processing_exports" )
+	for _, name in pairs( pipeline.exports ) do
+		local target = pipeline.targets[name]
+		if not localID( name ) or not written[name] or not target or target.size.relative ~= "shadow"
+			or target.size.scale ~= 1 or target.format ~= "rgba8" or target.filter ~= "point" then
+			reject( "invalid_processing_shadow_export" )
+		end
+	end
+end
+
 local function validate( def )
 	fields( def, { schema = true, name = true, build = true, abi = true,
-		layout = true, adapter = true, programs = true, resources = true,
+		layout = true, adapter = true, programs = true, resources = true, pipeline = true,
 		passes = true, implements = true, materialMaps = true, settings = true, settingGroups = true }, "definition" )
 	if def.schema ~= Schema.VERSION then reject( "unsupported_descriptor_schema" ) end
 	if type( def.name ) ~= "string" or #def.name == 0 or #def.name > 128 then reject( "invalid_name" ) end
@@ -221,6 +356,7 @@ local function validate( def )
 		end
 	end
 	validateSettings( def )
+	validatePipeline( def )
 	if map( def.passes, localID, 64, "passes" ) == 0 then reject( "empty_passes" ) end
 	for _, pass in pairs( def.passes ) do
 		fields( pass, { stage = true, program = true, inputs = true }, "pass" )
