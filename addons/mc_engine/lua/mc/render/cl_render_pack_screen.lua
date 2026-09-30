@@ -92,7 +92,7 @@ local function finishWorld( view )
             if wantsWorld and c and c.waterDepthReady == c.serial and c.atmosphereAllowed then post.ResolveBlocks( c ) end
         end
     end
-    if wantsWorld and c and c.waterDepthReady == c.serial and c.atmosphereAllowed then run( "world", c ) end
+    if wantsWorld and c and c.waterDepthReady == c.serial and c.worldEffectsAllowed then run( "world", c ) end
     P.worldDone = true
     P.stats.world = P.stats.world + 1
 end
@@ -141,7 +141,7 @@ hook.Add( "RenderScreenspaceEffects", "mc_pack_screen", P.AfterEffects )
 hook.Add( "PreDrawViewModel", "mc_pack_screen", S.SkipNativeViewModel )
 hook.Add( "PreDrawPlayerHands", "mc_pack_screen", S.SkipNativeViewModel )
 hook.Add( "MCWorldAdapterChanged", "mc_pack_screen", P.Invalidate )
-for _, key in ipairs( { "ssao", "fog", "volumetric", "block_ssr", "water_ssr" } ) do
+for _, key in ipairs( { "ssao", "fog", "volumetric", "block_ssr", "water_ssr", "underwater_fog", "underwater_volumetric" } ) do
     MC.RenderPackSettings.OnChange( key, "mc_pack_screen", P.Invalidate )
 end
 concommand.Add( "mc_pbr_post_stats", function()

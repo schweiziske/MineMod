@@ -28,6 +28,12 @@ local volumeEnabled = MC.RenderPackSettings.Handle( "volumetric" )
 local volumeStrength = MC.RenderPackSettings.Handle( "volumetric_strength" )
 local volumeDistance = MC.RenderPackSettings.Handle( "volumetric_distance" )
 local volumeSteps = MC.RenderPackSettings.Handle( "volumetric_steps" )
+local waterFog = MC.RenderPackSettings.Handle( "underwater_fog" )
+local waterDensity = MC.RenderPackSettings.Handle( "underwater_density" )
+local waterDistance = MC.RenderPackSettings.Handle( "underwater_distance" )
+local waterVolume = MC.RenderPackSettings.Handle( "underwater_volumetric" )
+local waterStrength = MC.RenderPackSettings.Handle( "underwater_strength" )
+local waterSteps = MC.RenderPackSettings.Handle( "underwater_steps" )
 local volumeDebug = CreateClientConVar( "mc_pbr_volumetric_debug", "0", false, false, "Show scattered sunlight alone", 0, 1 )
 local min, max, ceil = math.min, math.max, math.ceil
 
@@ -41,6 +47,9 @@ function P.Register( definition, blockSize, instance )
         if pass.binding then group.bindings[pass.binding] = true end
     end
     group.fog = group.bindings.fog
+    for _, spec in ipairs( definition.settings ) do
+        if spec.key == "underwater_fog" then group.waterMedium = true end
+    end
     group.bloom = group.bindings.bloom_prefilter
     if group.bindings.volumetric then group.volume = { camera = Matrix(), shadow = Matrix() } end
     if group.fog or group.volume then
@@ -73,13 +82,32 @@ local function wantsVolume( group )
         and shadows and shadows.VolumeEnabled()
 end
 
+local function wantsWaterFog( group )
+    return group and group.waterMedium and group.fog and waterFog:GetBool() and waterDensity:GetFloat() > 0
+end
+
+local function wantsWaterVolume( group )
+    local shadows = MC.RenderPBRShadows
+    return group and group.waterMedium and group.volume and waterVolume:GetBool() and waterStrength:GetFloat() > 0
+        and waterDensity:GetFloat() > 0 and shadows and shadows.VolumeEnabled()
+end
+
+local function waterView( group )
+    if not ( wantsWaterFog( group ) or wantsWaterVolume( group ) ) then return false end
+    local world, err = MC.API.Coords.RenderToWorld( render.GetViewSetup( true ).origin )
+    requireValue( world ~= nil, "render_fog_world_position", tostring( err ) )
+    local liquid = MC.API.Liquid.AtPos( world )
+    return liquid ~= nil and liquid.kind == "water"
+end
+
 local function wantsReflections( group )
     return group ~= nil and S.BlockWanted( group.blockSSR )
 end
 
 function P.NeedsDepth()
     local group = P.Active()
-    return group ~= nil and ( group.bindings.ssao and wantsAO() or wantsFog( group ) or wantsVolume( group ) or wantsReflections( group ) )
+    return group ~= nil and ( group.bindings.ssao and wantsAO() or wantsFog( group ) or wantsVolume( group )
+        or wantsReflections( group ) or waterView( group ) )
 end
 
 function P.DepthGroup( view, waterOnly )
@@ -117,7 +145,8 @@ local function atmosphere( c, group )
     requireValue( type( block ) == "number" and type( sky ) == "number",
         "render_fog_light", "camera voxel light sample failed: " .. tostring( level ) )
     local liquid = MC.API.Liquid.AtPos( world )
-    if liquid and ( liquid.kind == "water" or liquid.kind == "lava" ) then return false end
+    c.underwater = group.waterMedium and liquid ~= nil and liquid.kind == "water"
+    if liquid and liquid.kind == "lava" then return false end
     local day = MC.DayCycleSkyBrightness()
     local sunset = MC.DayCycleHorizonBlend() * day
     local skyLight, blockLight = ( sky / 15 ) ^ 2, ( block / 15 ) ^ 3
@@ -125,6 +154,13 @@ local function atmosphere( c, group )
     local g = ( 0.43 - sunset * 0.12 ) * day * skyLight + 0.009 + blockLight * 0.015
     local b = ( 0.57 - sunset * 0.29 ) * day * skyLight + 0.019 + blockLight * 0.006
     c.fogR, c.fogG, c.fogB, c.fogHeight = r, g, b, world.z / group.blockSize
+    if c.underwater then
+        local ambient = day * skyLight
+        c.fogR = 0.018 * ambient + 0.008 * blockLight
+        c.fogG = 0.085 * ambient + 0.006 * blockLight
+        c.fogB = 0.12 * ambient + 0.003 * blockLight
+    end
+    if liquid and liquid.kind == "water" then return false end
     return true
 end
 P.PrepareAtmosphere = atmosphere
@@ -143,6 +179,14 @@ function P.AtmosphereConstants( material, c, group )
     material:SetFloat( "$c3_y", 1 / c.depthTexture:Height() )
     material:SetFloat( "$c3_z", min( fogDistance:GetFloat(), c.far / group.blockSize ) )
     material:SetFloat( "$c3_w", 0.90 )
+    if c.underwater then
+        material:SetFloat( "$c0_w", waterDensity:GetFloat() )
+        material:SetFloat( "$c1_x", 0 )
+        material:SetFloat( "$c1_y", 0 )
+        material:SetFloat( "$c1_w", -1 ) -- Medium ABI: negative scale selects water.
+        material:SetFloat( "$c3_z", min( waterDistance:GetFloat(), c.far / group.blockSize ) )
+        material:SetFloat( "$c3_w", 1 )
+    end
     material:SetMatrix( "$viewprojmat", c.projection )
 end
 
@@ -161,7 +205,33 @@ binders.volumetric = function( material, c, target, inputs, group )
     local eye, volume = c.camera.origin, group.volume
     local shadow, bias, shadowWeight = c.volumeShadow, c.volumeBias, c.volumeWeight
     P.AtmosphereConstants( material, c, group )
-    material:SetFloat( "$c3_z", min( volumeDistance:GetFloat(), fogDistance:GetFloat(), c.far / group.blockSize ) )
+    if not c.underwater then
+        material:SetFloat( "$c3_z", min( volumeDistance:GetFloat(), fogDistance:GetFloat(), c.far / group.blockSize ) )
+    end
+    -- c11..14 come from viewproj; c15..18 from invviewproj. Preserve the
+    -- camera basis while replacing its unused fourth row with solar radiance.
+    for row = 1, 4 do for column = 1, 4 do
+        volume.camera:SetField( row, column, c.projection:GetField( row, column ) )
+    end end
+    local r, g, b = MC.RenderPBR.AtmosphereSun()
+    volume.camera:SetField( 4, 1, r ) volume.camera:SetField( 4, 2, g ) volume.camera:SetField( 4, 3, b )
+    volume.camera:SetField( 4, 4, c.underwater and waterStrength:GetFloat() or volumeStrength:GetFloat() )
+    for row = 1, 3 do
+        local factor = row < 3 and shadow:GetField( 4, 1 ) or 1
+        for column = 1, 3 do
+            volume.shadow:SetField( row, column, shadow:GetField( row, column ) * factor )
+        end
+        local offset = factor * ( shadow:GetField( row, 4 ) + eye.x * shadow:GetField( row, 1 )
+            + eye.y * shadow:GetField( row, 2 ) + eye.z * shadow:GetField( row, 3 ) )
+        if row < 3 then offset = offset + shadow:GetField( 4, row + 1 ) end
+        volume.shadow:SetField( row, 4, offset )
+    end
+    volume.shadow:SetField( 4, 1, bias )
+    volume.shadow:SetField( 4, 2, shadow:GetField( 4, 4 ) )
+    volume.shadow:SetField( 4, 3, c.underwater and waterSteps:GetFloat() or volumeSteps:GetFloat() )
+    volume.shadow:SetField( 4, 4, shadowWeight )
+    material:SetMatrix( "$viewprojmat", volume.camera )
+    material:SetMatrix( "$invviewprojmat", volume.shadow )
 end
 binders.volumetric_composite = function( material, c, target, inputs, group )
     material:SetFloat( "$c0_x", 1 / inputs.s1:Width() ) material:SetFloat( "$c0_y", 1 / inputs.s1:Height() )
@@ -219,9 +289,9 @@ function P.Run( stage, c, viewSerial )
         enabled.ssao = wantsAO()
         enabled.ssao_composite = enabled.ssao
     elseif stage == "world" then
-        if c.atmosphereAllowed then
-            enabled.fog = wantsFog( group ) and true or false
-            if wantsVolume( group ) then
+        if c.atmosphereAllowed or c.underwater then
+            enabled.fog = ( c.underwater and wantsWaterFog( group ) or not c.underwater and wantsFog( group ) ) and true or false
+            if c.underwater and wantsWaterVolume( group ) or not c.underwater and wantsVolume( group ) then
                 local eye = c.camera.origin
                 c.volumeTexture, c.volumeShadow, c.volumeBias, c.volumeWeight = MC.RenderPBRShadows.VolumeSnapshot( eye.x, eye.y, eye.z )
                 enabled.volumetric = c.volumeTexture ~= nil
@@ -240,12 +310,13 @@ end
 
 function P.PrepareWorld( c )
     c.atmosphereAllowed = atmosphere( c, P.Active() )
-    return c.atmosphereAllowed
+    c.worldEffectsAllowed = c.atmosphereAllowed or c.underwater
+    return c.worldEffectsAllowed
 end
 
 function P.WantsWorld()
     local group = P.Active()
-    return wantsFog( group ) or wantsVolume( group ) or wantsReflections( group )
+    return wantsFog( group ) or wantsVolume( group ) or wantsReflections( group ) or waterView( group )
 end
 function P.ResolveBlocks( c )
     local group = P.Active()
