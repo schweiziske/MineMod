@@ -123,7 +123,8 @@ end
 -- CreativeModeTab slot geometry.  Page zero belongs to the fourteen generated
 -- vanilla tabs (top/0-6 plus bottom/0-6, exactly full) which never pass through
 -- this registry, so every public category is laid out from page one onward.
-local CREATIVE_COLUMNS = 7
+-- Column six on both rows stays available for search and player inventory.
+local CREATIVE_COLUMNS = 6
 local CREATIVE_ROWS = { "top", "bottom" }
 local CREATIVE_SLOTS_PER_PAGE = CREATIVE_COLUMNS * #CREATIVE_ROWS
 local CREATIVE_FIRST_PAGE = 1
