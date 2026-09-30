@@ -1,15 +1,11 @@
--- Main-view post lighting. Scene depth is owned by the SSR coordinator, even
--- on dry land or with water disabled. No history buffer or frame-time noise.
+-- PBR data bindings for the pack-owned screen pipeline. No hooks, RTs or draws.
 MC = MC or {}
-local P = MC.RenderPBRPost or { groups = {}, targets = {}, quads = {}, quadCount = 0, targetBytes = 0 }
+local P = {}
 MC.RenderPBRPost = P
-P.VERSION = 1
-P.VOLUMETRIC_VERSION = 1
-P.retryAt = 0
-P.bloomRetryAt, P.viewSerial, P.bloomSerial = 0, 0, nil
-P.stats = { ao = 0, fog = 0, bloom = 0, volumetric = 0, failures = 0, status = "idle" }
+P.VERSION, P.VOLUMETRIC_VERSION = 1, 1
 local requireValue = MC.RenderL2Resources.Require
 local S = MC.RenderPBRSSR
+local processing = MC.RenderPackProcessing
 local aoEnabled = MC.RenderPackSettings.Handle( "ssao" )
 local aoStrength = MC.RenderPackSettings.Handle( "ssao_strength" )
 local aoRadius = MC.RenderPackSettings.Handle( "ssao_radius" )
@@ -34,64 +30,24 @@ local volumeDistance = MC.RenderPackSettings.Handle( "volumetric_distance" )
 local volumeSteps = MC.RenderPackSettings.Handle( "volumetric_steps" )
 local volumeDebug = CreateClientConVar( "mc_pbr_volumetric_debug", "0", false, false, "Show scattered sunlight alone", 0, 1 )
 local min, max, ceil = math.min, math.max, math.ceil
-local targetPushed, overrides = false, false
 
-local function parameters( program, source, colour )
-    return { ["$vertexshader"] = program.vertex, ["$pixshader"] = program.pixel,
-        ["$basetexture"] = source:GetName(), ["$texture1"] = source:GetName(), ["$texture2"] = source:GetName(),
-        ["$x360appchooser"] = 1, ["$vertexcolor"] = 1, ["$nocull"] = 1, ["$nofog"] = 1,
-        ["$depthtest"] = 0, ["$writedepth"] = 0, ["$ignorez"] = 0,
-        ["$linearread_basetexture"] = colour and 0 or 1,
-        ["$linearread_texture1"] = 1, ["$linearread_texture2"] = 1, ["$linearwrite"] = colour and 0 or 1 }
-end
-
-function P.Register( definition, blockSize )
-    local key = definition.build .. "/" .. blockSize
-    if P.groups[key] then return P.groups[key] end
+function P.Register( definition, blockSize, instance )
+    requireValue( definition.pipeline and definition.pipeline.version == 2,
+        "render_post_pipeline", "screen effects require pipeline version 2" )
     local source = MC.RenderPackResources.shared.lightmap
-    local programs = definition.programs
-    requireValue( programs.post_ssao and programs.post_ssao_composite and source,
-        "render_post_programs", "post lighting requires the AO/resolve programs and shared resources" )
-    local prefix = "mc_post1_" .. definition.build:sub( 1, 20 ) .. "_" .. blockSize
-    local group = { blockSize = blockSize, depth = S.RegisterScene( definition, blockSize, source ),
-        ao = CreateMaterial( prefix .. "_ao", "screenspace_general_8tex", parameters( programs.post_ssao, source, false ) ),
-        aoComposite = CreateMaterial( prefix .. "_ao_composite", "screenspace_general_8tex",
-            parameters( programs.post_ssao_composite, source, true ) ),
-        blockSSR = programs.block_ssr }
-    requireValue( group.ao and not group.ao:IsError() and group.aoComposite and not group.aoComposite:IsError(),
-        "render_post_material", "post lighting material creation failed" )
-    if programs.post_fog then
+    local group = { blockSize = blockSize, depth = S.RegisterScene( definition, blockSize, source, instance ),
+        blockSSR = definition.programs.block_ssr, bindings = {} }
+    for _, pass in ipairs( definition.pipeline.passes ) do
+        if pass.binding then group.bindings[pass.binding] = true end
+    end
+    group.fog = group.bindings.fog
+    group.bloom = group.bindings.bloom_prefilter
+    if group.bindings.volumetric then group.volume = { camera = Matrix(), shadow = Matrix() } end
+    if group.fog or group.volume then
         requireValue( MC.API.Coords.RenderToWorld and MC.API.Coords.WorldToCell and MC.API.Light and MC.API.Light.SampleCell
             and MC.API.Liquid and MC.API.Liquid.AtPos and MC.DayCycleSkyBrightness and MC.DayCycleHorizonBlend,
-            "render_atmosphere_api", "atmosphere requires world-space coordinates, voxel light and day-cycle sampling" )
-        group.fog = CreateMaterial( prefix .. "_fog", "screenspace_general_8tex", parameters( programs.post_fog, source, true ) )
-        requireValue( group.fog and not group.fog:IsError(), "render_fog_material", "fog material creation failed" )
+            "render_atmosphere_api", "atmosphere requires coordinates, voxel light and day-cycle sampling" )
     end
-    if programs.post_bloom_prefilter then
-        requireValue( programs.post_bloom_blur and programs.post_bloom_composite,
-            "render_bloom_programs", "bloom requires prefilter, blur and composition programs" )
-        local prefilter = parameters( programs.post_bloom_prefilter, source, false )
-        prefilter["$linearread_basetexture"] = 0 -- sRGB scene -> linear floating-point target
-        group.bloom = {
-            prefilter = CreateMaterial( prefix .. "_bloom_prefilter", "screenspace_general_8tex", prefilter ),
-            blur = CreateMaterial( prefix .. "_bloom_blur", "screenspace_general_8tex", parameters( programs.post_bloom_blur, source, false ) ),
-            composite = CreateMaterial( prefix .. "_bloom_composite", "screenspace_general_8tex", parameters( programs.post_bloom_composite, source, true ) ) }
-        for _, material in pairs( group.bloom ) do
-            requireValue( material and not material:IsError(), "render_bloom_material", "bloom material creation failed" )
-        end
-    end
-    if programs.post_volumetric then
-        requireValue( group.fog and programs.post_volumetric_composite and MC.RenderPBR.AtmosphereSun,
-            "render_volumetric_programs", "volumetric light requires the atmosphere, resolve and solar radiance providers" )
-        group.volume = {
-            trace = CreateMaterial( prefix .. "_volumetric", "screenspace_general_8tex", parameters( programs.post_volumetric, source, false ) ),
-            composite = CreateMaterial( prefix .. "_volumetric_composite", "screenspace_general_8tex",
-                parameters( programs.post_volumetric_composite, source, true ) ),
-            camera = Matrix(), shadow = Matrix() }
-        requireValue( group.volume.trace and not group.volume.trace:IsError()
-            and group.volume.composite and not group.volume.composite:IsError(), "render_volumetric_material", "volumetric materials unavailable" )
-    end
-    P.groups[key] = group
     return group
 end
 
@@ -123,82 +79,19 @@ end
 
 function P.NeedsDepth()
     local group = P.Active()
-    return group ~= nil and ( wantsAO() or wantsFog( group ) or wantsVolume( group ) or wantsReflections( group ) )
+    return group ~= nil and ( group.bindings.ssao and wantsAO() or wantsFog( group ) or wantsVolume( group ) or wantsReflections( group ) )
 end
 
 function P.DepthGroup( view, waterOnly )
     local group = P.Active()
-    if not group or not waterOnly and ( not P.NeedsDepth() or SysTime() < P.retryAt ) then return nil end
+    if not group or not waterOnly and ( not P.NeedsDepth() ) then return nil end
     -- A partial player viewport needs a separate compositor. Never let a portal
     -- or monitor acquire the main-view depth or draw over its outside region.
     local scene = render.GetScreenEffectTexture( 0 )
     if view.x ~= 0 or view.y ~= 0 or view.width ~= scene:Width() or view.height ~= scene:Height() then
-        P.stats.status = "unsupported_viewport"
         return nil
     end
     return group.depth
-end
-
-local function clean()
-    local first
-    local function restore( callback, ... )
-        local ok, err = pcall( callback, ... )
-        if not ok and not first then first = err end
-    end
-    if overrides then
-        restore( render.OverrideDepthEnable, false, false )
-        restore( render.OverrideAlphaWriteEnable, false, false )
-        restore( render.OverrideColorWriteEnable, false, false )
-        restore( render.OverrideBlend, false )
-        restore( render.SetBlend, 1 )
-        restore( render.SetColorModulation, 1, 1, 1 )
-        overrides = false
-    end
-    if targetPushed then restore( render.PopRenderTarget ) targetPushed = false end
-    return first
-end
-
-local function pass( material, quad, target )
-    if target then render.PushRenderTarget( target ) targetPushed = true end
-    overrides = true
-    render.OverrideDepthEnable( false, false )
-    render.OverrideBlend( true, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD )
-    render.OverrideAlphaWriteEnable( true, target ~= nil )
-    render.OverrideColorWriteEnable( true, true )
-    render.SetBlend( 1 ) render.SetColorModulation( 1, 1, 1 )
-    render.SetMaterial( material )
-    quad:Draw()
-    local err = clean()
-    if err then error( err, 0 ) end
-end
-P.Pass, P.Parameters = pass, parameters
-
-function P.ScreenQuad( width, height )
-    local key = width .. "x" .. height
-    local quad = P.quads[key]
-    if quad then return quad end
-    requireValue( P.quadCount < 32, "render_post_quad_budget", "32 post-process viewport sizes reached" )
-    quad = S.CopyQuad( width, height )
-    P.quads[key], P.quadCount = quad, P.quadCount + 1
-    return quad
-end
-
-local function aoTarget( width, height )
-    local scale = min( 0.5, 960 / width, 540 / height )
-    local w, h = max( 1, ceil( width * scale ) ), max( 1, ceil( height * scale ) )
-    local key = "ao1_" .. w .. "x" .. h
-    local target = P.targets[key]
-    if target then return target end
-    local bytes = w * h * 8
-    S.ReserveTargetBytes( bytes )
-    P.targetBytes = P.targetBytes + bytes
-    local texture = GetRenderTargetEx( "mc_" .. key, w, h, RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE,
-        bit.bor( 1, 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA16161616F )
-    requireValue( texture and not texture:IsError() and texture:Width() == w and texture:Height() == h,
-        "render_ssao_target", "SSAO target allocation failed" )
-    target = { texture = texture, width = w, height = h, quad = S.CopyQuad( w, h ) }
-    P.targets[key] = target
-    return target
 end
 
 local function aoConstants( material, c, target, group )
@@ -213,48 +106,6 @@ local function aoConstants( material, c, target, group )
     material:SetFloat( "$c2_x", aoDebug:GetBool() and 1 or 0 )
     material:SetFloat( "$c2_y", c.projection:GetField( 1, 4 ) )
     material:SetFloat( "$c2_z", c.projection:GetField( 2, 4 ) )
-end
-
-local function drawAO( c, group )
-    local target = aoTarget( c.frameWidth, c.frameHeight )
-    local material = group.ao
-    aoConstants( material, c, target, group )
-    material:SetTexture( "$basetexture", c.depthTexture )
-    pass( material, target.quad, target.texture )
-    render.UpdateScreenEffectTexture( 0 )
-    local scene = render.GetScreenEffectTexture( 0 )
-    requireValue( scene and not scene:IsError() and scene:Width() == c.frameWidth and scene:Height() == c.frameHeight,
-        "render_post_scene_resize", "scene changed during post lighting" )
-    material = group.aoComposite
-    aoConstants( material, c, target, group )
-    material:SetTexture( "$basetexture", scene )
-    material:SetTexture( "$texture1", target.texture )
-    material:SetTexture( "$texture2", c.depthTexture )
-    pass( material, P.ScreenQuad( c.frameWidth, c.frameHeight ) )
-    c.aoComplete = c.serial
-    P.stats.ao, P.stats.status = P.stats.ao + 1, "ready"
-end
-
-function P.BeforeTranslucent( depth, sky, sky3D )
-    if depth or sky3D or not P.Active() then return end
-    if render.GetRenderTarget() ~= nil then return end
-    local view = render.GetViewSetup( true )
-    if view.viewid ~= 0 then return end
-    -- Track actual main-view draws, not just FrameNumber: two views in one
-    -- frame still need independent bloom, even when no depth effect is enabled.
-    P.viewSerial, P.viewFrame = P.viewSerial + 1, FrameNumber()
-    if not P.NeedsDepth() or SysTime() < P.retryAt then return end
-    local c = S.CaptureDepth( view )
-    if not c or not c.postGroup or not wantsAO() or c.aoComplete == c.serial then return end
-    local ok, err = pcall( drawAO, c, P.Active() )
-    local restoreError = clean()
-    if not ok or restoreError then
-        P.retryAt = SysTime() + 1
-        P.stats.failures, P.stats.status = P.stats.failures + 1, "fault"
-        local failure = not ok and err or restoreError
-        if type( failure ) == "table" then return MC.Fault( failure.code, "%s", failure.message ) end
-        return MC.Fault( "render_ssao_draw", "%s", tostring( failure ) )
-    end
 end
 
 local function atmosphere( c, group )
@@ -295,205 +146,108 @@ function P.AtmosphereConstants( material, c, group )
     material:SetMatrix( "$viewprojmat", c.projection )
 end
 
-local function drawFog( c, group )
-    local material = group.fog
+
+local binders = {}
+binders.ssao = function( material, c, target, inputs, group )
+    aoConstants( material, c, target, group )
+end
+binders.ssao_composite = function( material, c, target, inputs, group )
+    aoConstants( material, c, { width = inputs.s1:Width(), height = inputs.s1:Height() }, group )
+end
+binders.fog = function( material, c, target, inputs, group )
     P.AtmosphereConstants( material, c, group )
-    render.UpdateScreenEffectTexture( 0 )
-    local scene = render.GetScreenEffectTexture( 0 )
-    requireValue( scene and not scene:IsError() and scene:Width() == c.frameWidth and scene:Height() == c.frameHeight,
-        "render_post_scene_resize", "scene changed during atmosphere composition" )
-    material:SetTexture( "$basetexture", scene )
-    material:SetTexture( "$texture1", c.depthTexture )
-    pass( material, P.ScreenQuad( c.frameWidth, c.frameHeight ) )
-    c.fogComplete = c.serial
-    P.stats.fog, P.stats.status = P.stats.fog + 1, "ready"
 end
-
-local function volumeTarget( width, height )
-    local scale = min( 0.25, 640 / width, 360 / height )
-    local w, h = max( 1, ceil( width * scale ) ), max( 1, ceil( height * scale ) )
-    local key = "volume1_" .. w .. "x" .. h
-    local target = P.targets[key]
-    if target then return target end
-    local bytes = w * h * 8
-    S.ReserveTargetBytes( bytes ) P.targetBytes = P.targetBytes + bytes
-    local texture = GetRenderTargetEx( "mc_" .. key, w, h, RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE,
-        bit.bor( 1, 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA16161616F )
-    requireValue( texture and not texture:IsError() and texture:Width() == w and texture:Height() == h,
-        "render_volumetric_target", "volumetric target allocation failed" )
-    target = { texture = texture, width = w, height = h, quad = S.CopyQuad( w, h ) }
-    P.targets[key] = target
-    return target
-end
-
-local function drawVolume( c, group )
-    local eye = c.camera.origin
-    local texture, shadow, bias, shadowWeight = MC.RenderPBRShadows.VolumeSnapshot( eye.x, eye.y, eye.z )
-    if not texture then P.stats.status = "no_volume_shadow" return end
-    local volume = group.volume
-    local target = volumeTarget( c.frameWidth, c.frameHeight )
-    local material = volume.trace
+binders.volumetric = function( material, c, target, inputs, group )
+    local eye, volume = c.camera.origin, group.volume
+    local shadow, bias, shadowWeight = c.volumeShadow, c.volumeBias, c.volumeWeight
     P.AtmosphereConstants( material, c, group )
     material:SetFloat( "$c3_z", min( volumeDistance:GetFloat(), fogDistance:GetFloat(), c.far / group.blockSize ) )
-    -- Convert the far tile into a camera-relative transform in Lua's doubles.
-    -- Shader arithmetic then never subtracts two large world-space positions.
-    local scale = shadow:GetField( 4, 1 )
-    for row = 1, 3 do
-        local factor = row < 3 and scale or 1
-        local x, y, z = shadow:GetField( row, 1 ) * factor, shadow:GetField( row, 2 ) * factor, shadow:GetField( row, 3 ) * factor
-        local offset = shadow:GetField( row, 4 ) * factor
-        if row < 3 then offset = offset + shadow:GetField( 4, row + 1 ) end
-        volume.shadow:SetField( row, 1, x ) volume.shadow:SetField( row, 2, y ) volume.shadow:SetField( row, 3, z )
-        volume.shadow:SetField( row, 4, x * eye.x + y * eye.y + z * eye.z + offset )
-        for column = 1, 4 do volume.camera:SetField( row, column, c.projection:GetField( row, column ) ) end
-    end
-    volume.shadow:SetField( 4, 1, bias ) volume.shadow:SetField( 4, 2, shadow:GetField( 4, 4 ) )
-    volume.shadow:SetField( 4, 3, math.floor( volumeSteps:GetFloat() ) ) volume.shadow:SetField( 4, 4, shadowWeight )
-    MC.RenderPBR.PrepareView( eye.x, eye.y, eye.z )
-    local r, g, b = MC.RenderPBR.AtmosphereSun()
-    volume.camera:SetField( 4, 1, r ) volume.camera:SetField( 4, 2, g ) volume.camera:SetField( 4, 3, b )
-    volume.camera:SetField( 4, 4, volumeStrength:GetFloat() )
-    material:SetMatrix( "$viewprojmat", volume.camera ) material:SetMatrix( "$invviewprojmat", volume.shadow )
-    material:SetTexture( "$basetexture", c.depthTexture ) material:SetTexture( "$texture1", texture )
-    pass( material, target.quad, target.texture )
-    render.UpdateScreenEffectTexture( 0 )
-    local scene = render.GetScreenEffectTexture( 0 )
-    requireValue( scene and not scene:IsError() and scene:Width() == c.frameWidth and scene:Height() == c.frameHeight,
-        "render_volumetric_scene", "scene changed during volumetric composition" )
-    material = volume.composite
-    material:SetTexture( "$basetexture", scene ) material:SetTexture( "$texture1", target.texture )
-    material:SetTexture( "$texture2", c.depthTexture )
-    material:SetFloat( "$c0_x", 1 / target.width ) material:SetFloat( "$c0_y", 1 / target.height )
+end
+binders.volumetric_composite = function( material, c, target, inputs, group )
+    material:SetFloat( "$c0_x", 1 / inputs.s1:Width() ) material:SetFloat( "$c0_y", 1 / inputs.s1:Height() )
     material:SetFloat( "$c0_z", group.blockSize ) material:SetFloat( "$c0_w", volumeDebug:GetBool() and 1 or 0 )
     material:SetFloat( "$c1_x", 1 / c.depthTexture:Width() ) material:SetFloat( "$c1_y", 1 / c.depthTexture:Height() )
-    pass( material, P.ScreenQuad( c.frameWidth, c.frameHeight ) )
-    P.stats.volumetric, P.stats.status = P.stats.volumetric + 1, "ready"
 end
-
-local function drawAtmosphere( c, group )
-    if not atmosphere( c, group ) then
-        P.stats.status, c.fogComplete, c.atmosphereComplete = "submerged", c.serial, c.serial
-        return
-    end
-    local records = MC.CollectWaterSSRRecords( c.camera.origin )
-    if not S.IncludeWaterDepth( c, records ) then return end
-    -- Water is now an occluder in the depth, so blocks seen through it are
-    -- not treated as receivers; fog then applies to the reflections too.
-    if wantsReflections( group ) then S.ResolveBlocks( c, group.blockSSR ) end
-    if wantsFog( group ) and c.fogComplete ~= c.serial then drawFog( c, group ) end
-    if wantsVolume( group ) then
-        local ok, err = pcall( drawVolume, c, group )
-        if not ok then
-            if type( err ) == "table" then error( err, 0 ) end
-            error( { code = "render_volumetric_draw", message = tostring( err ) }, 0 )
-        end
-    end
-    c.atmosphereComplete = c.serial
-end
-
-local function finishWorld( fromViewModels )
-    local group = P.Active()
-    if not ( wantsFog( group ) or wantsVolume( group ) or wantsReflections( group ) ) or SysTime() < P.retryAt or render.GetRenderTarget() ~= nil then return end
-    local view = render.GetViewSetup( true )
-    local c = S.scene
-    if not c or c.frame ~= FrameNumber() then return end
-    if fromViewModels then c.viewModelsStarted = c.serial
-    elseif c.viewModelsStarted == c.serial then return end
-    if view.viewid ~= 0 or not S.SameView( view, c ) or c.atmosphereComplete == c.serial then return end
-    if not S.CaptureDepth( view ) then return end
-    -- Consume water reflections before atmosphere, and both before viewmodels.
-    S.Resolve()
-    if S.scene ~= c then return end
-    local ok, err = pcall( drawAtmosphere, c, group )
-    local restoreError = clean()
-    if not ok or restoreError then
-        P.retryAt = SysTime() + 1
-        P.stats.failures, P.stats.status = P.stats.failures + 1, "fault"
-        local failure = not ok and err or restoreError
-        if type( failure ) == "table" then return MC.Fault( failure.code, "%s", failure.message ) end
-        return MC.Fault( "render_fog_draw", "%s", tostring( failure ) )
-    end
-end
-function P.BeforeViewModels() finishWorld( true ) end
-function P.BeforeEffects() finishWorld( false ) end
-
-local function bloomTargets( width, height )
-    local scale = min( 0.25, 640 / width, 360 / height )
-    local w, h = max( 1, ceil( width * scale ) ), max( 1, ceil( height * scale ) )
-    local key = "bloom1_" .. w .. "x" .. h
-    local target = P.targets[key]
-    if target then return target end
-    local bytes = w * h * 16
-    S.ReserveTargetBytes( bytes ) P.targetBytes = P.targetBytes + bytes
-    local a = GetRenderTargetEx( "mc_" .. key .. "_a", w, h, RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE,
-        bit.bor( 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA16161616F )
-    local b = GetRenderTargetEx( "mc_" .. key .. "_b", w, h, RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE,
-        bit.bor( 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA16161616F )
-    requireValue( a and b and not a:IsError() and not b:IsError() and a:Width() == w and b:Width() == w
-        and a:Height() == h and b:Height() == h, "render_bloom_target", "bloom target allocation failed" )
-    target = { a = a, b = b, width = w, height = h, quad = S.CopyQuad( w, h ) }
-    P.targets[key] = target
-    return target
-end
-
-local function drawBloom( group, view )
-    local scene = render.GetScreenEffectTexture( 0 )
-    requireValue( scene and not scene:IsError(), "render_bloom_scene", "screen colour texture is unavailable" )
-    local width, height = scene:Width(), scene:Height()
-    if view.width ~= width or view.height ~= height then P.stats.status = "unsupported_viewport" return end
-    local target, materials = bloomTargets( width, height ), group.bloom
-    render.UpdateScreenEffectTexture( 0 )
-    local material = materials.prefilter
-    material:SetTexture( "$basetexture", scene )
+binders.bloom_prefilter = function( material, c, target )
     material:SetFloat( "$c0_x", 1 / ( 3 * target.width ) ) material:SetFloat( "$c0_y", 1 / ( 3 * target.height ) )
     material:SetFloat( "$c0_z", bloomThreshold:GetFloat() ) material:SetFloat( "$c0_w", bloomKnee:GetFloat() )
-    pass( material, target.quad, target.a )
-    material = materials.blur
-    material:SetTexture( "$basetexture", target.a )
+end
+binders.bloom_horizontal = function( material, c, target )
     material:SetFloat( "$c0_x", bloomRadius:GetFloat() / target.width ) material:SetFloat( "$c0_y", 0 )
-    pass( material, target.quad, target.b )
-    material:SetTexture( "$basetexture", target.b )
+end
+binders.bloom_vertical = function( material, c, target )
     material:SetFloat( "$c0_x", 0 ) material:SetFloat( "$c0_y", bloomRadius:GetFloat() / target.height )
-    pass( material, target.quad, target.a )
-    material = materials.composite
-    material:SetTexture( "$basetexture", scene ) material:SetTexture( "$texture1", target.a )
+end
+binders.bloom_composite = function( material )
     material:SetFloat( "$c0_x", bloomStrength:GetFloat() ) material:SetFloat( "$c0_y", bloomDebug:GetBool() and 1 or 0 )
-    pass( material, P.ScreenQuad( width, height ) )
-    P.bloomSerial = P.viewSerial
-    P.stats.bloom, P.stats.status = P.stats.bloom + 1, "ready"
 end
 
-function P.AfterEffects()
-    local group = P.Active()
-    if not group or not group.bloom or not bloomEnabled:GetBool() or bloomStrength:GetFloat() == 0 and not bloomDebug:GetBool()
-        or SysTime() < P.bloomRetryAt or render.GetRenderTarget() ~= nil then return end
-    if P.viewFrame ~= FrameNumber() or P.bloomSerial == P.viewSerial then return end
-    local view = render.GetViewSetup( true )
-    if view.viewid ~= 0 or view.ortho or view.offcenter or view.x ~= 0 or view.y ~= 0 then return end
-    -- Hook iteration order is unspecified. Consume pending water reflections
-    -- here as well, so neither callback order can put SSR on top of bloom.
-    S.Resolve()
-    local ok, err = pcall( drawBloom, group, view )
-    local restoreError = clean()
-    if not ok or restoreError then
-        P.bloomRetryAt = SysTime() + 1
-        P.stats.failures, P.stats.status = P.stats.failures + 1, "fault"
-        local failure = not ok and err or restoreError
-        if type( failure ) == "table" then return MC.Fault( failure.code, "%s", failure.message ) end
-        return MC.Fault( "render_bloom_draw", "%s", tostring( failure ) )
+function P.Enabled( binding, context )
+    return context.enabled[binding] == true
+end
+
+function P.Input( semantic, context )
+    local c = context.scene
+    if semantic == "scene_color" then
+        render.UpdateScreenEffectTexture( 0 )
+        local texture = render.GetScreenEffectTexture( 0 )
+        requireValue( texture and not texture:IsError() and texture:Width() == context.view_width
+            and texture:Height() == context.view_height, "render_post_scene_resize", "scene changed during screen processing" )
+        return texture
     end
+    if semantic == "opaque_depth" then
+        requireValue( c.waterDepthComplete ~= c.serial, "render_processing_depth_revision", "opaque depth was already replaced by water depth" )
+        return c.depthTexture
+    end
+    if semantic == "scene_depth" then
+        requireValue( c.waterDepthReady == c.serial, "render_processing_depth_revision", "world depth is not ready" )
+        return c.depthTexture
+    end
+    if semantic == "volume_shadow" then return c.volumeTexture end
 end
 
-hook.Add( "PreDrawTranslucentRenderables", "mc_pbr_post", P.BeforeTranslucent )
-hook.Add( "PreDrawViewModels", "mc_pbr_post", P.BeforeViewModels )
--- Source can omit the viewmodel stage (e.g. cameras/r_drawviewmodel 0). This
--- fallback is allowed only when that stage did not run in this captured view.
-hook.Add( "PreDrawEffects", "mc_pbr_post", P.BeforeEffects )
-hook.Add( "RenderScreenspaceEffects", "mc_pbr_post", P.AfterEffects )
-for _, key in ipairs( { "ssao", "fog", "volumetric", "block_ssr" } ) do
-    MC.RenderPackSettings.OnChange( key, "mc_pbr_post", S.Invalidate )
+function P.Bind( binding, material, context, target, outputs, inputs )
+    binders[binding]( material, context.scene, target, inputs, context.group )
 end
-concommand.Add( "mc_pbr_post_stats", function()
-    print( string.format( "[MC post] %s ao=%d fog=%d bloom=%d volumetric=%d failures=%d postMiB=%.2f sharedSceneMiB=%.2f GPU=unmeasured",
-        P.stats.status, P.stats.ao, P.stats.fog, P.stats.bloom, P.stats.volumetric, P.stats.failures, P.targetBytes / 1048576, S.targetBytes / 1048576 ) )
-end )
+
+function P.Run( stage, c, viewSerial )
+    local group = P.Active()
+    if not group then return true end
+    local active = MC.RenderPackRuntime.active
+    local enabled = {}
+    if stage == "opaque" then
+        enabled.ssao = wantsAO()
+        enabled.ssao_composite = enabled.ssao
+    elseif stage == "world" then
+        if c.atmosphereAllowed then
+            enabled.fog = wantsFog( group ) and true or false
+            if wantsVolume( group ) then
+                local eye = c.camera.origin
+                c.volumeTexture, c.volumeShadow, c.volumeBias, c.volumeWeight = MC.RenderPBRShadows.VolumeSnapshot( eye.x, eye.y, eye.z )
+                enabled.volumetric = c.volumeTexture ~= nil
+                enabled.volumetric_composite = enabled.volumetric
+            end
+        end
+    elseif stage == "final" then
+        local bloom = group.bloom and bloomEnabled:GetBool() and ( bloomStrength:GetFloat() > 0 or bloomDebug:GetBool() )
+        for _, name in ipairs( { "bloom_prefilter", "bloom_horizontal", "bloom_vertical", "bloom_composite" } ) do enabled[name] = bloom and true or false end
+    end
+    local context = processing.Context( active.processing, active, c.ox or 0, c.oy or 0, c.oz or 0 )
+    context.key = context.key .. "/screen/" .. viewSerial
+    context.scene, context.group, context.enabled = c, group, enabled
+    return processing.RunScreen( active.processing, stage, context, P )
+end
+
+function P.PrepareWorld( c )
+    c.atmosphereAllowed = atmosphere( c, P.Active() )
+    return c.atmosphereAllowed
+end
+
+function P.WantsWorld()
+    local group = P.Active()
+    return wantsFog( group ) or wantsVolume( group ) or wantsReflections( group )
+end
+function P.ResolveBlocks( c )
+    local group = P.Active()
+    if wantsReflections( group ) then S.ResolveBlocks( c, group.blockSSR ) end
+end
