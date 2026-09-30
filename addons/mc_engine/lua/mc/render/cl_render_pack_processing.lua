@@ -127,6 +127,13 @@ function P.Release( instance )
 	instance.bank.owner, instance.retired = nil, true
 end
 
+-- One clock for package processing and geometry sampled later in the frame.
+function P.FrameTime()
+	local frame = FrameNumber()
+	if P.frame ~= frame then P.frame, P.time = frame, RealTime() % 8192 end
+	return P.time
+end
+
 function P.Context( instance, active, x, y, z, view )
 	view = view or render.GetViewSetup( true )
 	local w, h = view.width or view.w, view.height or view.h
@@ -134,8 +141,7 @@ function P.Context( instance, active, x, y, z, view )
 		"render_processing_view", "processing requires finite viewport dimensions" )
 	local ox, oy, oz = MC.ChunkRenderFrameOffset()
 	local frame = FrameNumber()
-	if instance.frame ~= frame then instance.frame, instance.time = frame, RealTime() % 8192 end
-	local context = { time = instance.time, block_size = MC.API.Coords.BlockSize(),
+	local context = { time = P.FrameTime(), block_size = MC.API.Coords.BlockSize(),
 		view_x = x, view_y = y, view_z = z, view_width = w, view_height = h,
 		origin_x = ox, origin_y = oy, origin_z = oz, settings = {} }
 	for _, spec in ipairs( instance.definition.settings ) do context.settings[spec.key] = MC.RenderPackSettings.Get( spec.key ) end
