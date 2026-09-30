@@ -282,6 +282,15 @@ function FRAME:Init()
 		return b
 	end
 	tool( self.Available.Tools, text( "Refresh", "刷新" ), function() self:Refresh() end )
+	self.Bake = tool( self.Available.Tools, text( "Bake vanilla", "烘焙原版" ), function()
+		if MC.AtlasBaker.IsBusy() then MC.AtlasBaker.Cancel() return end
+		local ok, err = MC.AtlasBaker.StartVanilla()
+		if not ok then
+			if err == "run_prepare_vanilla_atlas_bake_py" then
+				self:SetStatus( text( "Vanilla source textures have not been prepared.", "尚未准备原版源贴图。" ) )
+			else self:SetStatus( tostring( err ) ) end
+		end
+	end, 124 )
 	local function detail() self.Details:SetVisible( not self.Details:IsVisible() ) self:UpdateState() self:InvalidateLayout( true ) end
 	self.AvailableDetails = tool( self.Available.Tools, text( "Details", "详情" ), detail )
 	tool( self.Selected.Tools, text( "Use default", "恢复默认" ), function() self:Choose( "default" ) end, 124 )
@@ -295,6 +304,7 @@ function FRAME:Init()
 	end, true )
 	self.Previous:Dock( RIGHT ) self.Previous:SetWide( 32 )
 	for _, event in ipairs( EVENTS ) do hook.Add( event, self, function( panel ) panel:QueueRefresh() end ) end
+	hook.Add( "MC.AtlasBakeChanged", self, function( panel ) panel:UpdateState() end )
 	cvars.AddChangeCallback( "mc_texture_pack", function() if IsValid( self ) then self:QueueRefresh() end end, "mc_texture_pack_manager" )
 	hook.Add( "OnScreenSizeChanged", self, function( panel ) panel:FitScreen() end )
 	self:Refresh()
@@ -318,6 +328,11 @@ end
 
 function FRAME:UpdateState()
 	local s = self.Session
+	local bake = MC.AtlasBaker.Status()
+	local busy = MC.AtlasBaker.IsBusy()
+	self.Bake.Caption = busy and text( "Cancel bake", "取消烘焙" ) or text( "Bake vanilla", "烘焙原版" )
+	self.Bake:SetTooltip( self.Bake.Caption )
+	self.Bake:InvalidateLayout()
 	self.Apply:SetEnabled( s:CanApply() )
 	self.Undo:SetEnabled( s:IsDirty() )
 	local state = ""
@@ -326,6 +341,9 @@ function FRAME:UpdateState()
 	elseif not s.byName[s.draft] then state = text( "Selected pack was removed.", "所选材质包已被移除。" )
 	elseif s:IsDirty() then state = text( "Changes not applied", "更改尚未应用" )
 	elseif s.active ~= s.preference then state = text( "Currently active: ", "当前实际使用：" ) .. s.active end
+	if busy then
+		state = text( "Waiting to bake vanilla…", "等待烘焙原版…" )
+	elseif bake.state == "failed" then state = text( "Bake failed: ", "烘焙失败：" ) .. bake.error end
 	self:SetStatus( state )
 	local entry = s.byName[s.focus]
 	self.AvailableDetails:SetEnabled( entry ~= nil and s.focus ~= s.draft )
@@ -393,6 +411,7 @@ function FRAME:OnRemove()
 	cvars.RemoveChangeCallback( "mc_texture_pack", "mc_texture_pack_manager" )
 	for _, event in ipairs( EVENTS ) do hook.Remove( event, self ) end
 	hook.Remove( "OnScreenSizeChanged", self )
+	hook.Remove( "MC.AtlasBakeChanged", self )
 	if M.Frame == self then M.Frame = nil end
 end
 

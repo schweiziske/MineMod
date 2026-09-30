@@ -28,11 +28,14 @@ function Session:Refresh()
 		elseif name == "programmer_art" then
 			entry.title = "Programmer Art"
 			entry.description = M.Text( "The classic look of Minecraft.", "Minecraft 的经典外观。" )
+		elseif name == "vanilla_baked" and entry.owner == "mc.atlas_baker" then
+			entry.title = M.Text( "Vanilla (in-game bake)", "原版（游戏内烘焙）" )
+			entry.description = M.Text( "Vanilla textures assembled in game.", "在游戏内生成的原版材质。" )
 		else
 			if not entry.title or entry.title == "" then entry.title = name end
 			entry.description = entry.description or M.Text( "Provided by: ", "提供者：" ) .. entry.owner
 		end
-		entry.available = entry.inheritBase == true or name == self.active
+		entry.available = entry.runtime == true or entry.inheritBase == true or name == self.active
 		if not entry.available and entry.opaquePath then
 			local path = entry.opaquePath:gsub( "%.png$", "" )
 			entry.available = file.Exists( "materials/" .. path .. ".png", "GAME" )
