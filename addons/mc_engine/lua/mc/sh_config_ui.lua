@@ -71,14 +71,11 @@ MC.ConfigGroups = {
 MC.ConfigConVars = {
 	client = {
 		category( "texture_pack", "interface", "Texture pack", "材质包",
-			"Choose the block atlas used throughout the MC renderer.",
-			"选择 MC 渲染系统使用的方块材质图集。", {
-			item( "mc_texture_pack", "Active texture pack", "当前材质包", "choice",
-				"Switch chunk meshes, icons, particles and shadow cutouts immediately.",
-				"立即切换区块网格、图标、粒子和阴影镂空使用的材质。", { choices = {
-					choice( "default", "Default", "默认" ),
-					choice( "programmer_art", "Programmer Art", "Programmer Art" ),
-				} } ),
+			"Browse and select installed texture packs.",
+			"浏览并选择已安装的材质包。", {
+				item( "mc_texture_packs", "Texture pack manager", "材质包管理器", "action",
+					"Choose a registered texture pack and apply it when ready.",
+					"选择材质包，点击应用后生效。", { action = "texture_pack_manager" } ),
 		} ),
 
 		category( "shader_pack", "interface", "Shader pack", "光影",

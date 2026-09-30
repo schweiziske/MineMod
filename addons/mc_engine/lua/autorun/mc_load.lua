@@ -209,6 +209,8 @@ local CLIENT_FILES = {
 	"mc/render/cl_bitmap_font.lua",
 	"mc/functional/cl_signs.lua",
 	"mc/functional/cl_banners.lua",
+	"mc/cl_texture_pack_manager.lua",
+	"mc/cl_texture_pack_ui.lua",
 	"mc/cl_config_ui.lua",
 	"mc/cl_ui.lua",
 	"mc/cl_save_ui.lua",

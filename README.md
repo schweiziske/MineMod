@@ -72,9 +72,12 @@ node _build\build_block_properties.cjs
 powershell -ExecutionPolicy Bypass -File _build\bake_programmer_art_atlas.ps1
 ```
 
-烘焙完成后可在游戏内配置菜单的“世界显示 -> 材质包”中即时切换，也可使用控制台：
+烘焙完成后可在游戏内配置菜单的“界面 → 材质包 → 打开管理器”中选择并应用。
+管理器也会列出插件通过 `MC.API.Render.RegisterTexturePack` 注册的包，支持搜索、详情、撤销和模式接管提示。
+当前一次启用一个预烘焙包；多层资源覆盖及游戏内烘焙后续接入。控制台入口：
 
 ```text
+mc_texture_packs
 mc_texture_pack programmer_art
 mc_texture_pack default
 ```
