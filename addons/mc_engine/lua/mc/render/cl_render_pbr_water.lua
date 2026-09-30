@@ -128,10 +128,10 @@ function W.CaptureRefraction( view, records )
     -- Never cache by FrameNumber: portals/reflections can share a frame clock.
     render.UpdateScreenEffectTexture( 0 )
     refractionTexture = texture
-    if MC.RenderPBRSSR then
-        MC.RenderPBRSSR.Capture( view, records, texture, constants )
+    if MC.RenderPackScreen then
+        MC.RenderPackScreen.BeforeWater( view, records, texture, constants )
         -- The same private opaque depth fogs the path behind each surface.
-        local scene = MC.RenderPBRSSR.CaptureDepth( view )
+        local scene = MC.RenderScene.CaptureDepth( view )
         sceneDepth = scene and scene.depthTexture or nil
     end
 end

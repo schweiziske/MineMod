@@ -82,8 +82,8 @@ function P.Validate( plan )
 				"render_water_shadow_adapter", ownerKey .. ": water depth requires the light-space depth v1 renderer" )
 		end
 		if def.pipeline then
-			requireValue( owner.kind == "pack" and MC.RenderPackProcessing and MC.RenderPackProcessing.VERSION == 1,
-				"render_processing_adapter", ownerKey .. ": processing v1 requires a pack owner and the matching engine" )
+			requireValue( owner.kind == "pack" and MC.RenderPackProcessing and MC.RenderPackProcessing.VERSION >= def.pipeline.version,
+				"render_processing_adapter", ownerKey .. ": processing requires a pack owner and the matching engine" )
 			for _, pass in ipairs( def.pipeline.passes ) do
 				requireValue( pass.stage ~= "shadowcomp" or pbr and def.programs.shadow,
 					"render_processing_shadow_adapter", ownerKey .. ": shadowcomp requires a PBR shadow geometry program" )
@@ -91,12 +91,15 @@ function P.Validate( plan )
 			result.processing = def
 		end
 		if def.programs.water_ssr then
-			requireValue( def.programs.water and def.programs.scene_depth and def.programs.ssr_copy
+			requireValue( def.pipeline and def.pipeline.version == 2 and def.programs.post_ssao and MC.RenderPackScreen
+				and def.pipeline.geometry and def.pipeline.geometry[1] == "water_reflections"
+				and def.programs.water and def.programs.scene_depth and def.programs.ssr_copy
 				and def.programs.water_ssr_composite and MC.RenderPBRSSR and MC.RenderPBRSSR.VERSION == 1,
-				"render_ssr_adapter", ownerKey .. ": SSR requires the water SSR v1 engine and all four auxiliary programs" )
+				"render_ssr_adapter", ownerKey .. ": SSR requires screen pipeline v2, shared scene depth and the reflection programs" )
 		end
 		if def.programs.post_ssao then
 			requireValue( pbr and MC.RenderPBRPost and MC.RenderPBRPost.VERSION == 1
+				and def.pipeline and def.pipeline.version == 2 and MC.RenderPackScreen
 				and def.programs.post_ssao_composite and def.programs.post_scene_depth
 				and def.programs.post_depth_copy and def.programs.ssr_copy,
 				"render_post_adapter", ownerKey .. ": post lighting requires scene depth and the AO/resolve programs" )

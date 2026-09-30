@@ -180,7 +180,20 @@ local function validateSettings( def )
 	end
 end
 
-local processingStages = { begin = 1, shadowcomp = 2 }
+local processingStages = { begin = 1, shadowcomp = 2, opaque = 3, world = 4, final = 5 }
+-- Engine binding ABI: descriptors select data providers, never Lua callbacks.
+Schema.ScreenBindings = { ssao = "opaque", ssao_composite = "opaque", fog = "world",
+	volumetric = "world", volumetric_composite = "world", bloom_prefilter = "final",
+	bloom_horizontal = "final", bloom_vertical = "final", bloom_composite = "final" }
+Schema.ProcessingStages = processingStages
+local screenInputs = {
+	ssao = { "opaque_depth" }, ssao_composite = { "scene_color", "target", "opaque_depth" },
+	fog = { "scene_color", "scene_depth" }, volumetric = { "scene_depth", "volume_shadow" },
+	volumetric_composite = { "scene_color", "target", "scene_depth" }, bloom_prefilter = { "scene_color" },
+	bloom_horizontal = { "target" }, bloom_vertical = { "target" }, bloom_composite = { "scene_color", "target" }
+}
+local screenComposites = { ssao_composite = true, fog = true, volumetric_composite = true, bloom_composite = true }
+
 Schema.ProcessingScalars = { time = 1, block_size = 1, view_x = 1, view_y = 1, view_z = 1,
 	view_width = 1, view_height = 1, target_width = 1, target_height = 1,
 	target_texel_x = 1, target_texel_y = 1, origin_x = 1, origin_y = 1, origin_z = 1,
@@ -190,13 +203,34 @@ Schema.ProcessingMatrices = { shadow_near_world = 2, shadow_far_world = 2 }
 local function validatePipeline( def )
 	local pipeline = def.pipeline
 	if pipeline == nil then return end
-	fields( pipeline, { version = true, targets = true, passes = true, exports = true }, "pipeline" )
-	if pipeline.version ~= 1 then reject( "unsupported_pipeline_version" ) end
+	fields( pipeline, { version = true, targets = true, passes = true, exports = true, geometry = true }, "pipeline" )
+	if pipeline.version ~= 1 and pipeline.version ~= 2 then reject( "unsupported_pipeline_version" ) end
+	local geometry = {}
+	if pipeline.geometry then
+		if pipeline.version ~= 2 then reject( "unsupported_processing_geometry" ) end
+		array( pipeline.geometry, 3, "processing_geometry" )
+		local ranks = { water_reflections = 1, water_depth = 2, terrain_reflections = 3 }
+		local previous = 0
+		for _, name in ipairs( pipeline.geometry ) do
+			local rank = ranks[name]
+			if not rank or rank <= previous then reject( "invalid_processing_geometry_order" ) end
+			geometry[name], previous = true, rank
+		end
+		if geometry.water_depth and not geometry.water_reflections
+			or geometry.terrain_reflections and not geometry.water_depth then reject( "missing_processing_geometry_dependency" ) end
+	end
 	map( pipeline.targets, localID, 16, "processing_targets" )
+	if pipeline.version == 2 and pipeline.targets.screen then reject( "reserved_processing_target" ) end
 	for _, target in pairs( pipeline.targets ) do
 		fields( target, { size = true, format = true, filter = true, clear = true }, "processing_target" )
-		fields( target.size, { width = true, height = true, relative = true, scale = true }, "processing_size" )
+		fields( target.size, { width = true, height = true, relative = true, scale = true, maxWidth = true, maxHeight = true }, "processing_size" )
 		local size = target.size
+		if size.maxWidth or size.maxHeight then
+			if pipeline.version ~= 2 or size.relative ~= "view" or not positiveInteger( size.maxWidth )
+				or not positiveInteger( size.maxHeight ) or size.maxWidth > 4096 or size.maxHeight > 4096 then
+				reject( "invalid_processing_size_cap" )
+			end
+		end
 		if size.relative then
 			if ( size.relative ~= "view" and size.relative ~= "shadow" ) or size.width or size.height
 				or not number( size.scale ) or size.scale <= 0 or size.scale > 1 then reject( "invalid_processing_size" ) end
@@ -227,23 +261,49 @@ local function validatePipeline( def )
 			if not localID( input.target ) or not written[input.target] then reject( "processing_read_before_write" ) end
 			return written[input.target]
 		end
-		if input.builtin ~= "shadow_atlas" or stage < 2 then reject( "unavailable_processing_builtin" ) end
-		return { ["builtin:shadow_atlas"] = true }
+		local available = input.builtin == "shadow_atlas" and stage == 2
+			or pipeline.version == 2 and ( input.builtin == "scene_color" and stage >= 3
+				or input.builtin == "opaque_depth" and stage == 3
+				or input.builtin == "scene_depth" and stage == 4
+				or input.builtin == "volume_shadow" and stage == 4 )
+		if not available then reject( "unavailable_processing_builtin" ) end
+		return { ["builtin:" .. input.builtin] = true }
 	end
 	if array( pipeline.passes, 32, "processing_passes" ) == 0 then reject( "empty_processing_passes" ) end
 	for _, pass in ipairs( pipeline.passes ) do
 		fields( pass, { id = true, stage = true, program = true, inputs = true, output = true,
-			constants = true, matrices = true, worldPeriod = true, enableSettings = true, disabledInput = true }, "processing_pass" )
+			constants = true, matrices = true, worldPeriod = true, enableSettings = true, disabledInput = true, binding = true }, "processing_pass" )
 		local stage = processingStages[pass.stage]
 		if not localID( pass.id ) or ids[pass.id] then reject( "invalid_processing_pass_id" ) end
 		ids[pass.id] = true
-		if not stage or stage < previous then reject( "invalid_processing_stage" ) end
+		if not stage or stage < previous or pipeline.version == 1 and stage > 2 then reject( "invalid_processing_stage" ) end
+		if stage > 2 then
+			if pass.stage == "world" and not geometry.water_depth then reject( "missing_processing_geometry_dependency" ) end
+			if Schema.ScreenBindings[pass.binding] ~= pass.stage or pass.enableSettings or pass.disabledInput
+				or pass.worldPeriod then reject( "invalid_processing_screen_binding" ) end
+		elseif pass.binding then reject( "unexpected_processing_binding" ) end
 		previous = stage
 		if not localID( pass.program ) or not def.programs[pass.program] then reject( "missing_processing_program" ) end
-		local target = pipeline.targets[pass.output]
+		local screen = pass.output == "screen" and stage > 2
+		local target = screen and { size = { relative = "view", scale = 1 }, format = "rgba8", filter = "linear" }
+			or pipeline.targets[pass.output]
 		if not localID( pass.output ) or not target then reject( "missing_processing_output" ) end
-		if target.size.relative == "shadow" and stage < 2 then reject( "unavailable_processing_size" ) end
+		if target.size.relative == "shadow" and stage ~= 2 then reject( "unavailable_processing_size" ) end
 		map( pass.inputs, function( key ) return type( key ) == "string" and key:match( "^s[0-7]$" ) end, 8, "processing_inputs" )
+		if stage > 2 then
+			if ( screenComposites[pass.binding] == true ) ~= screen then reject( "invalid_processing_screen_output" ) end
+			if not screen and ( target.size.relative ~= "view" or target.format ~= "rgba16f"
+				or target.filter ~= ( pass.binding:find( "^bloom_" ) and "linear" or "point" ) ) then
+				reject( "invalid_processing_screen_target" )
+			end
+			for index, semantic in ipairs( screenInputs[pass.binding] ) do
+				local input = pass.inputs["s" .. ( index - 1 )]
+				if not input or ( semantic == "target" and not input.target )
+					or ( semantic ~= "target" and input.builtin ~= semantic ) then
+					reject( "invalid_processing_binding_input" )
+				end
+			end
+		end
 		local origins = {}
 		for slot, input in pairs( pass.inputs ) do
 			local sources = reference( input, stage )
@@ -259,7 +319,8 @@ local function validatePipeline( def )
 					local setting = value:match( "^setting:([a-z0-9_%-]+)$" )
 					if setting then
 						if not specs[setting] then reject( "unknown_processing_setting" ) end
-					elseif not Schema.ProcessingScalars[value] or Schema.ProcessingScalars[value] > stage then
+					elseif not Schema.ProcessingScalars[value] or Schema.ProcessingScalars[value] > stage
+						or stage > 2 and Schema.ProcessingScalars[value] == 2 then
 						reject( "unavailable_processing_constant" )
 					end
 				elseif not number( value ) then reject( "invalid_processing_constant" ) end
@@ -268,7 +329,7 @@ local function validatePipeline( def )
 		if pass.matrices == nil then pass.matrices = {} end
 		fields( pass.matrices, { viewproj = true, invviewproj = true }, "processing_matrices" )
 		for _, semantic in pairs( pass.matrices ) do
-			if not Schema.ProcessingMatrices[semantic] or Schema.ProcessingMatrices[semantic] > stage then
+			if not Schema.ProcessingMatrices[semantic] or Schema.ProcessingMatrices[semantic] > stage or stage > 2 then
 				reject( "unavailable_processing_matrix" )
 			end
 		end
@@ -301,9 +362,11 @@ local function validatePipeline( def )
 				possible[source] = true
 			end
 		elseif pass.disabledInput ~= nil then reject( "unexpected_processing_disabled_input" ) end
-		if writers[pass.output] and writers[pass.output] ~= stage then reject( "processing_cross_stage_write" ) end
-		writers[pass.output] = stage
-		written[pass.output] = possible
+		if not screen and writers[pass.output] and writers[pass.output] ~= stage then reject( "processing_cross_stage_write" ) end
+		if not screen then
+			writers[pass.output] = stage
+			written[pass.output] = possible
+		end
 	end
 	if pipeline.exports == nil then pipeline.exports = {} end
 	fields( pipeline.exports, { shadow_atlas = true }, "processing_exports" )
