@@ -210,6 +210,8 @@ local CLIENT_FILES = {
 	"mc/functional/cl_signs.lua",
 	"mc/functional/cl_banners.lua",
 	"mc/cl_texture_pack_manager.lua",
+	"mc/render/cl_atlas_bake_plan.lua",
+	"mc/render/cl_atlas_baker.lua",
 	"mc/cl_texture_pack_ui.lua",
 	"mc/cl_config_ui.lua",
 	"mc/cl_ui.lua",
