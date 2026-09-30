@@ -2,18 +2,6 @@
 
 MC = MC or {}
 
-local WaterColorModify = {
-	["$pp_colour_addr"] = 0,
-	["$pp_colour_addg"] = 0.015,
-	["$pp_colour_addb"] = 0.055,
-	["$pp_colour_brightness"] = -0.04,
-	["$pp_colour_contrast"] = 0.86,
-	["$pp_colour_colour"] = 0.72,
-	["$pp_colour_mulr"] = 0,
-	["$pp_colour_mulg"] = 0.08,
-	["$pp_colour_mulb"] = 0.18,
-}
-
 local LavaColorModify = {
 	["$pp_colour_addr"] = 0.08,
 	["$pp_colour_addg"] = 0.025,
@@ -52,20 +40,16 @@ end )
 
 hook.Add( "RenderScreenspaceEffects", "mc_liquid_underwater", function()
 	local liquid = EyeLiquid
-	if not liquid then return end
-	local lava = liquid.kind == "lava"
-	DrawColorModify( lava and LavaColorModify or WaterColorModify )
-	DrawMotionBlur( 0.025, lava and 0.45 or 0.32, 0.015 )
+	if not liquid or liquid.kind ~= "lava" then return end
+	-- Water presentation belongs to the pack's depth-aware world stage.
+	DrawColorModify( LavaColorModify )
+	DrawMotionBlur( 0.025, 0.45, 0.015 )
 end )
 
 hook.Add( "HUDPaint", "mc_liquid_underwater_overlay", function()
 	local liquid = EyeLiquid
-	if not liquid then return end
-	if liquid.kind == "lava" then
-		surface.SetDrawColor( 255, 92, 20, 58 )
-	else
-		surface.SetDrawColor( 34, 104, 190, 46 )
-	end
+	if not liquid or liquid.kind ~= "lava" then return end
+	surface.SetDrawColor( 255, 92, 20, 58 )
 	surface.DrawRect( 0, 0, ScrW(), ScrH() )
 end )
 
