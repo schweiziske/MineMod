@@ -345,6 +345,12 @@ function Render.GetTexturePack()
 	return MC.TexturePackName()
 end
 
+-- Save a player selection after a successful switch; mode leases take priority.
+function Render.SetTexturePackPreference( name )
+	if not MC.SetTexturePackPreference then return false, "texture_pack_api_unavailable" end
+	return MC.SetTexturePackPreference( name )
+end
+
 function Render.GetTexturePackLeaseOwner()
 	if not MC.TexturePackLeaseOwner then return nil end
 	return MC.TexturePackLeaseOwner()

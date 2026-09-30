@@ -185,6 +185,18 @@ function MC.RegisterTexturePack( name, definition, owner )
 		return false, "invalid_texture_pack_name"
 	end
 	if type( definition ) ~= "table" then return false, "invalid_texture_pack_definition" end
+	for field, limit in pairs( { title = 128, description = 1024 } ) do
+		local value = definition[field]
+		if value ~= nil and ( type( value ) ~= "string" or #value > limit or value:find( "%z" ) ) then
+			return false, "invalid_texture_pack_" .. field
+		end
+	end
+	local preview
+	if definition.preview ~= nil then
+		if type( definition.preview ) ~= "string" or #definition.preview > 256 then return false, "invalid_texture_pack_preview" end
+		preview = normalizeAtlasPath( definition.preview )
+		if not preview then return false, "invalid_texture_pack_preview" end
+	end
 	owner = normalizeTexturePackOwner( owner )
 	if not owner or owner == "mc" then return false, "invalid_texture_pack_owner" end
 	local existing = MC.TexturePackDefinitions[name]
@@ -206,6 +218,9 @@ function MC.RegisterTexturePack( name, definition, owner )
 	local stored = {
 		name = name,
 		owner = owner,
+		title = definition.title,
+		description = definition.description,
+		preview = preview,
 		inheritBase = inheritBase,
 		opaquePath = opaquePath,
 		translucentPath = translucentPath,
@@ -370,13 +385,18 @@ end
 
 function MC.ListTexturePacks()
 	local result = {
-		{ name = "default", owner = "mc", atlasProfile = "default", builtin = true },
-		{ name = "programmer_art", owner = "mc", atlasProfile = "default", builtin = true },
+		{ name = "default", owner = "mc", atlasProfile = "default", builtin = true,
+			opaquePath = MC.Atlas.MATERIAL or "mc/atlas_365", preview = "mc/resourcepacks/default" },
+		{ name = "programmer_art", owner = "mc", atlasProfile = "default", builtin = true,
+			opaquePath = MC.Atlas.MATERIAL_PROGRAMMER_ART or "mc/atlas_365_programmer_art" },
 	}
 	for name, definition in pairs( MC.TexturePackDefinitions ) do
 		result[#result + 1] = {
 			name = name,
 			owner = definition.owner,
+			title = definition.title,
+			description = definition.description,
+			preview = definition.preview,
 			opaquePath = definition.opaquePath,
 			translucentPath = definition.translucentPath,
 			iconPath = definition.iconPath,
@@ -596,11 +616,17 @@ function MC.SetTexturePack( value )
 	local opaqueTexture = source and source.opaqueTexture
 	local translucentTexture = source and source.translucentTexture or opaqueTexture
 	local iconTexture = source and source.iconTexture or opaqueTexture
-	if not validAtlasTexture( opaqueTexture ) then
+	if not source or not source.opaque or source.opaque:IsError() or not validAtlasTexture( opaqueTexture ) then
 		return false, "missing_atlas_" .. name
 	end
 	if not validAtlasTexture( translucentTexture ) then translucentTexture = opaqueTexture end
 	if not validAtlasTexture( iconTexture ) then iconTexture = opaqueTexture end
+	local profileName = source.atlasProfile or "default"
+	if MC.SetAtlasProfile then
+		local profileOK, profileResult = MC.SetAtlasProfile( profileName )
+		if not profileOK then return false, profileResult or "atlas_profile_switch_failed" end
+	end
+	local previous = MC.ActiveTexturePack
 
 	-- MC.Material/MC.MaterialTranslucent are stable proxy objects referenced by
 	-- existing mesh records. Updating their texture is enough to switch CPU
@@ -610,12 +636,6 @@ function MC.SetTexturePack( value )
 	setAtlasTexture( MC.MaterialIconOpaque, opaqueTexture )
 	setAtlasTexture( MC.MaterialCreativeIcon, iconTexture )
 	setAtlasTexture( MC.MaterialCreativeIconOpaque, iconTexture )
-	local profileName = source.atlasProfile or "default"
-	if MC.SetAtlasProfile then
-		local profileOK, profileResult = MC.SetAtlasProfile( profileName )
-		if not profileOK then return false, profileResult or "atlas_profile_switch_failed" end
-	end
-
 	MC.ActiveTexturePack = name
 	MC.Atlas.ACTIVE_MATERIAL = source.opaquePath
 		or ( name == "programmer_art"
@@ -627,7 +647,23 @@ function MC.SetTexturePack( value )
 			or ( MC.Atlas.MATERIAL_TRANSLUCENT or "mc/atlas_365_translucent" ) )
 
 	if MC.RefreshBlockParticleMaterials then MC.RefreshBlockParticleMaterials( opaqueTexture ) end
+	if hook and hook.Run then hook.Run( "MC.TexturePackChanged", name, previous ) end
 	return true, name, requested == name
+end
+
+-- The manager changes the archived player preference, never a mode's lease.
+-- Unlike the legacy low-level setter, unknown names cannot fall back silently.
+function MC.SetTexturePackPreference( name )
+	if type( name ) ~= "string" or normalizeTexturePackName( name ) ~= name then
+		return false, "invalid_texture_pack_name"
+	end
+	if not AtlasSources[name] then return false, "texture_pack_not_registered" end
+	if MC.TexturePackLeaseOwner() then return false, "texture_pack_controlled_by_mode" end
+	if not MC.TexturePack or not MC.TexturePack.SetString then return false, "texture_pack_convar_unavailable" end
+	local ok, result = MC.SetTexturePack( name )
+	if not ok then return false, result end
+	MC.TexturePack:SetString( name )
+	return true, result
 end
 
 local function configuredTexturePackName()
