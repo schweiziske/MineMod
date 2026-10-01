@@ -368,7 +368,7 @@ function MC.ResolveBlockStateRenderClass( stateId, bx, by, bz )
 		local flags = cached % RENDER_CLASS_SCALE
 		return floor( cached / RENDER_CLASS_SCALE ),
 			flags % 2 == RENDER_CLASS_FULL_CUBE,
-			flags >= RENDER_CLASS_TRANSLUCENT
+			flags >= RENDER_CLASS_TRANSLUCENT, nil, true
 	end
 
 	local visual = MC.ResolveBlockStateVisual( stateId, bx, by, bz )
@@ -387,7 +387,9 @@ function MC.ResolveBlockStateRenderClass( stateId, bx, by, bz )
 			+ ( translucent and RENDER_CLASS_TRANSLUCENT or 0 )
 		BlockStateRenderClassCache[stateId] = id * RENDER_CLASS_SCALE + flags
 	end
-	return id, fullCube, translucent, visual
+	-- The final result permits build-local consumers to reuse the resolved class
+	-- by state. Missing/false keeps custom coordinate-dependent readers uncached.
+	return id, fullCube, translucent, visual, not positionDependent
 end
 
 function MC.IsTranslucentBlockState( stateId, bx, by, bz )

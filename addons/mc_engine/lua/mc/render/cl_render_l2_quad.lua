@@ -95,7 +95,7 @@ function Q.NewSlice( chunk, blockSize )
 	requireValue( snapshot ~= nil, "L2 lighting snapshot is unavailable" )
 	local lighter = MC.RenderL2Lighting.New( snapshot.reader )
 	requireValue( lighter ~= nil and finite( blockSize ) and blockSize > 0, "invalid L2 slice lighting/scale" )
-	return { snapshot = snapshot, lighter = lighter, blockSize = blockSize, selections = {}, models = {},
+	return { snapshot = snapshot, lighter = lighter, blockSize = blockSize, selections = {}, singleSelections = {}, models = {},
 		nativeL2 = MC.NativeL2 and MC.NativeL2.IsActive() or false }
 end
 
@@ -157,7 +157,7 @@ local function nativeModel( slice, quad, id, bx, by, bz, modelId )
 	if not selected then
 		local cell = slice.snapshot:Read( bx, by, bz )
 		requireValue( cell and cell.loaded, "model source cell is unavailable" )
-		selected = MC.RenderL2Models.Selection( cell.stateId, bx, by, bz )
+		selected = MC.RenderL2Models.Selection( cell.stateId, bx, by, bz, slice.singleSelections )
 		requireValue( selected ~= nil, "model source plan is unavailable" )
 		slice.selections[index] = selected
 	end
@@ -291,7 +291,7 @@ local function selectedModels( slice, meta )
 	if not selected then
 		local cell = slice.snapshot:Read( meta.bx, meta.by, meta.bz )
 		requireValue( cell and cell.loaded, "source model is in an unloaded cell" )
-		selected = MC.RenderL2Models.Selection( cell.stateId, meta.bx, meta.by, meta.bz )
+		selected = MC.RenderL2Models.Selection( cell.stateId, meta.bx, meta.by, meta.bz, slice.singleSelections )
 		requireValue( selected ~= nil, "could not resolve the source model plan" )
 		slice.selections[index] = selected
 	end

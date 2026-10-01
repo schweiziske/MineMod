@@ -16,6 +16,7 @@ local FACE_BITS = { 1, 2, 4, 8, 16, 32 }
 function Visibility.New( chunk, blockSections, perf )
 	local view = {}
 	local states, classes, touched = {}, {}, {}
+	local staticClasses, classRevision = {}, MC.BlockStateVisualRevision
 	local visibilityByType = {}
 	local touchedCount = 0
 	local minX, minY, minZ, snapshot
@@ -43,6 +44,11 @@ function Visibility.New( chunk, blockSections, perf )
 	end
 
 	function view.BeginSection( index )
+		if classRevision ~= MC.BlockStateVisualRevision then
+			staticClasses = {}
+			visibilityByType = {}
+			classRevision = MC.BlockStateVisualRevision
+		end
 		for i = 1, touchedCount do
 			local slot = touched[i]
 			states[slot], classes[slot], touched[i] = nil, nil, nil
@@ -126,11 +132,17 @@ function Visibility.New( chunk, blockSections, perf )
 			if slot then classes[slot] = 0 end
 			return 0, 0
 		end
+		packed = staticClasses[state]
+		if packed ~= nil then
+			if slot then classes[slot] = packed end
+			return packed, state
+		end
 
 		perf.visibilityClassResolves = ( perf.visibilityClassResolves or 0 ) + 1
-		local id, fullCube, translucent, visual
-		if resolveClass then id, fullCube, translucent, visual = resolveClass( state, bx, by, bz ) end
+		local id, fullCube, translucent, visual, positionIndependent
+		if resolveClass then id, fullCube, translucent, visual, positionIndependent = resolveClass( state, bx, by, bz ) end
 		if id == nil or id == 0 or fullCube == nil or translucent == nil then
+			positionIndependent = false
 			if not visual and resolveVisual then visual = resolveVisual( state, bx, by, bz ) end
 			if id == nil then
 				if visual then id = visual.id or visual.blockId end
@@ -159,6 +171,7 @@ function Visibility.New( chunk, blockSections, perf )
 		local transparent = translucent or block and block.transparent
 		local special = specialEmitter and specialEmitter( id )
 		packed = id * 8 + ( fullCube and 1 or 0 ) + ( transparent and 2 or 0 ) + ( special and 4 or 0 )
+		if positionIndependent == true then staticClasses[state] = packed end
 		if slot then classes[slot] = packed end
 		return packed, state
 	end

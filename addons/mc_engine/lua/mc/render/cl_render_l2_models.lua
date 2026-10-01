@@ -188,9 +188,26 @@ function M.Profile( modelId )
 	return result
 end
 
-function M.Selection( stateId, bx, by, bz )
+function M.Selection( stateId, bx, by, bz, singleSelections )
 	if not MC.Check( initialize() and type( stateId ) == "number" and stateId >= 0 and stateId < catalog.stateCount
 		and stateId == floor( stateId ), "l2_model_state", "state %s is outside the paired catalog", tostring( stateId ) ) then return nil end
+	-- A synchronous slice can borrow one immutable selection per single model.
+	-- Resolve the positional choice first: two placements of the same state can
+	-- choose different weighted alternatives. Multipart order retains its path.
+	if singleSelections then
+		local planId, groupOffset, groupCount = MC.StateVisualPlanRangeFast( stateId )
+		if groupCount == 1 then
+			local modelId = MC.StateVisualPlanModelAtFast( planId, groupOffset, 0, bx, by, bz )
+			if not MC.Check( modelId ~= nil, "l2_model_plan", "state %s has no static model plan", stateId ) then return nil end
+			local selected = singleSelections[modelId]
+			if selected then return selected end
+			local profile = M.Profile( modelId )
+			if not profile then return nil end
+			selected = { modelId, n = 1, modelAO = profile.modelAO }
+			singleSelections[modelId] = selected
+			return selected
+		end
+	end
 	local selected = MC.CollectStateVisualModels( stateId, bx, by, bz )
 	if not MC.Check( selected and selected.n > 0, "l2_model_plan", "state %s has no static model plan", stateId ) then return nil end
 	local profile = M.Profile( selected[1] )
