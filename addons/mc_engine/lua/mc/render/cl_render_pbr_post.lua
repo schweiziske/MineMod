@@ -14,6 +14,7 @@ local aoDebug = CreateClientConVar( "mc_pbr_ssao_debug", "0", false, false, "Sho
 local fogEnabled = MC.RenderPackSettings.Handle( "fog" )
 local fogDensity = MC.RenderPackSettings.Handle( "fog_density" )
 local fogStart = MC.RenderPackSettings.Handle( "fog_start" )
+local fogEnd = MC.RenderPackSettings.Handle( "fog_end" )
 local fogHeightDensity = MC.RenderPackSettings.Handle( "fog_height_density" )
 local fogBase = MC.RenderPackSettings.Handle( "fog_height" )
 local fogScale = MC.RenderPackSettings.Handle( "fog_height_scale" )
@@ -47,15 +48,17 @@ function P.Register( definition, blockSize, instance )
         if pass.binding then group.bindings[pass.binding] = true end
     end
     group.fog = group.bindings.fog
+    if group.fog then group.fogCamera = Matrix() end
     for _, spec in ipairs( definition.settings ) do
         if spec.key == "underwater_fog" then group.waterMedium = true end
     end
     group.bloom = group.bindings.bloom_prefilter
     if group.bindings.volumetric then group.volume = { camera = Matrix(), shadow = Matrix() } end
     if group.fog or group.volume then
-        requireValue( MC.API.Coords.RenderToWorld and MC.API.Coords.WorldToCell and MC.API.Light and MC.API.Light.SampleCell
+        requireValue( MC.API.Coords.RenderToWorld and MC.API.Coords.WorldToCell and MC.API.Coords.CellToChunk
+            and MC.ChunkKey and render.GetLightColor and MC.API.Light and MC.API.Light.SampleCell
             and MC.API.Liquid and MC.API.Liquid.AtPos and MC.DayCycleSkyBrightness and MC.DayCycleHorizonBlend,
-            "render_atmosphere_api", "atmosphere requires coordinates, voxel light and day-cycle sampling" )
+            "render_atmosphere_api", "atmosphere requires coordinates, voxel/Source light and day-cycle sampling" )
     end
     return group
 end
@@ -72,7 +75,13 @@ local function wantsAO()
 end
 
 local function wantsFog( group )
-    return group and group.fog and fogEnabled:GetBool() and ( fogDensity:GetFloat() > 0 or fogHeightDensity:GetFloat() > 0 )
+    return group and group.fog and fogEnabled:GetBool()
+        and ( fogDensity:GetFloat() > 0 or fogHeightDensity:GetFloat() > 0 or fogEnd:GetFloat() > 0 )
+end
+
+local function fogEndDistance()
+    local distance = fogEnd:GetFloat()
+    return distance > 0 and max( distance, fogStart:GetFloat() + 1 ) or 0
 end
 
 local function wantsVolume( group )
@@ -136,6 +145,22 @@ local function aoConstants( material, c, target, group )
     material:SetFloat( "$c2_z", c.projection:GetField( 2, 4 ) )
 end
 
+local function airSkyLight( origin, bx, by, bz, skyLight )
+    if skyLight > 0 then return skyLight end
+    -- Unknown streamed cells are not evidence of empty Source-world space.
+    local transport = MC.StateNetworkTransport
+    if MC.HttpChunkSync ~= nil or transport and ( not transport.ready or transport.streaming ) then return skyLight end
+    local cx, cy, cz = MC.API.Coords.CellToChunk( bx, by, bz )
+    -- Match cl_sky_flood's 16-cell lighting halo, including air-only chunks.
+    local xyHalo, zHalo = math.ceil( 16 / MC.CS ), math.ceil( 16 / MC.CH )
+    for dx = -xyHalo, xyHalo do for dy = -xyHalo, xyHalo do for dz = -zHalo, zHalo do
+        if MC.World[MC.ChunkKey( cx + dx, cy + dy, cz + dz )] then return skyLight end
+    end end end
+    -- Outside the voxel field, its implicit zero is not a cave-light sample.
+    local ambient = render.GetLightColor( origin )
+    return min( 1, max( 0, ambient.x, ambient.y, ambient.z ) )
+end
+
 local function atmosphere( c, group )
     local world, err = MC.API.Coords.RenderToWorld( c.camera.origin )
     requireValue( world ~= nil, "render_fog_world_position", tostring( err ) )
@@ -150,6 +175,7 @@ local function atmosphere( c, group )
     local day = MC.DayCycleSkyBrightness()
     local sunset = MC.DayCycleHorizonBlend() * day
     local skyLight, blockLight = ( sky / 15 ) ^ 2, ( block / 15 ) ^ 3
+    if not liquid then skyLight = airSkyLight( c.camera.origin, bx, by, bz, skyLight ) end
     local r = ( 0.30 + sunset * 0.16 ) * day * skyLight + 0.005 + blockLight * 0.025
     local g = ( 0.43 - sunset * 0.12 ) * day * skyLight + 0.009 + blockLight * 0.015
     local b = ( 0.57 - sunset * 0.29 ) * day * skyLight + 0.019 + blockLight * 0.006
@@ -200,13 +226,24 @@ binders.ssao_composite = function( material, c, target, inputs, group )
 end
 binders.fog = function( material, c, target, inputs, group )
     P.AtmosphereConstants( material, c, group )
+    local camera = group.fogCamera
+    for row = 1, 4 do for column = 1, 4 do
+        camera:SetField( row, column, c.projection:GetField( row, column ) )
+    end end
+    -- c14 is unused by ray reconstruction; c4 cannot be set through $c4_x.
+    camera:SetField( 4, 1, c.underwater and 0 or fogEndDistance() )
+    material:SetMatrix( "$viewprojmat", camera )
 end
 binders.volumetric = function( material, c, target, inputs, group )
     local eye, volume = c.camera.origin, group.volume
     local shadow, bias, shadowWeight = c.volumeShadow, c.volumeBias, c.volumeWeight
     P.AtmosphereConstants( material, c, group )
     if not c.underwater then
-        material:SetFloat( "$c3_z", min( volumeDistance:GetFloat(), fogDistance:GetFloat(), c.far / group.blockSize ) )
+        local distance = min( volumeDistance:GetFloat(), fogDistance:GetFloat(), c.far / group.blockSize )
+        local finish = fogEndDistance()
+        -- Do not expose hidden receiver distances through the later shaft pass.
+        if fogEnabled:GetBool() and finish > 0 then distance = min( distance, finish ) end
+        material:SetFloat( "$c3_z", distance )
     end
     -- c11..14 come from viewproj; c15..18 from invviewproj. Preserve the
     -- camera basis while replacing its unused fourth row with solar radiance.
