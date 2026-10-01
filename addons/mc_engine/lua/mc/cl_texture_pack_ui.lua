@@ -1,12 +1,12 @@
 -- A Minecraft-style picker for registered atlases and prepared source packs.
 local M = MC.TexturePackManager
 local text = M.Text
-local Font = MC.BitmapFont
 local C = {
 	background = Color( 41, 41, 41 ), list = Color( 23, 23, 23 ), hover = Color( 38, 38, 38 ),
-	text = Color( 240, 240, 240 ), dim = Color( 164, 164, 164 ), line = Color( 69, 69, 69 ),
-	button = Color( 105, 105, 105 ), light = Color( 155, 155, 155 ), dark = Color( 51, 51, 51 ),
-	warning = Color( 226, 189, 112 ), disabled = Color( 95, 95, 95 ), white = Color( 255, 255, 255 ),
+	text = Color( 255, 250, 237 ), secondary = Color( 238, 224, 189 ), line = Color( 100, 91, 69 ),
+	button = Color( 91, 73, 39 ), light = Color( 177, 146, 82 ), dark = Color( 40, 33, 22 ),
+	warning = Color( 255, 210, 117 ), disabled = Color( 208, 193, 153 ), disabledButton = Color( 55, 53, 46 ),
+	focus = Color( 255, 222, 144 ), white = Color( 255, 255, 255 ),
 }
 local previews = {}
 local SEARCH_TIMER = "mc_texture_pack_manager_search"
@@ -14,22 +14,65 @@ local PAGE_SIZE = 32
 local EVENTS = { "MC.TexturePackChanged", "MC.TexturePackRegistered", "MC.TexturePackUnregistered",
 	"MC.TexturePackOwnerUnregistered", "MC.TexturePackLeaseChanged" }
 
-surface.CreateFont( "mc_texture_pack_input", { font = "Tahoma", size = 18, weight = 400, extended = true } )
+-- Rasterize CJK at its final screen size; never shrink or stretch the HUD glyph atlas.
+local fonts = { body = "mc_texture_pack_body_24", title = "mc_texture_pack_title_26", heading = "mc_texture_pack_heading_30" }
+local heights = {}
+for role, size in pairs( { body = 24, title = 26, heading = 30 } ) do
+	local name = fonts[role]
+	surface.CreateFont( name, { font = "Microsoft YaHei", size = size, weight = role == "body" and 500 or 600,
+		extended = true, antialias = true } )
+	surface.SetFont( name )
+	local _, height = surface.GetTextSize( "Ag国" )
+	heights[name] = height
+end
+
+local function measure( value, font )
+	surface.SetFont( font )
+	local width = surface.GetTextSize( value )
+	return width
+end
+
+local function drawText( value, font, x, y, color )
+	surface.SetFont( font )
+	surface.SetTextColor( color )
+	surface.SetTextPos( math.floor( x ), math.floor( y ) )
+	surface.DrawText( value )
+end
 
 local function rectangle( color, x, y, w, h )
 	surface.SetDrawColor( color )
 	surface.DrawRect( x, y, w, h )
 end
 
--- Trim only at the bitmap font's UTF-8 boundaries, and cache outside Paint.
-local function fit( value, width, scale )
-	return Font.TrimToWidth( value, math.max( 0, width ) / scale )
+-- Measure whole prefixes for kerning, and only cut at UTF-8 boundaries during layout.
+local function fit( value, width, font )
+	if width <= 0 then return "" end
+	if measure( value, font ) <= width then return value end
+	local ends = {}
+	for offset in utf8.codes( value ) do ends[#ends + 1] = offset - 1 end
+	ends[#ends + 1] = #value
+	local low, high = 1, #ends
+	while low < high do
+		local middle = math.ceil( ( low + high ) / 2 )
+		if measure( value:sub( 1, ends[middle] ), font ) <= width then low = middle
+		else high = middle - 1 end
+	end
+	return value:sub( 1, ends[low] )
 end
 
-local function label( parent, value, color, scale, lines, centered )
+local function elide( value, width, font )
+	if measure( value, font ) <= width then return value end
+	local suffix = "…"
+	local suffixWidth = measure( suffix, font )
+	if suffixWidth > width then return "" end
+	return fit( value, width - suffixWidth, font ) .. suffix
+end
+
+local function label( parent, value, color, font, lines, centered )
 	local panel = vgui.Create( "DPanel", parent )
 	panel.Caption, panel.Lines = value or "", {}
-	panel.Options = { color = color or C.text, scale = scale or 2, shadow = false }
+	panel.Options = { color = color or C.text, font = font or fonts.body }
+	panel.LineHeight = heights[panel.Options.font] + 2
 	panel:SetMouseInputEnabled( false )
 	function panel:SetCaption( caption )
 		caption = tostring( caption or "" )
@@ -44,20 +87,20 @@ local function label( parent, value, color, scale, lines, centered )
 			if remaining == "" then break end
 			local newline = remaining:find( "\n", 1, true )
 			local line = newline and remaining:sub( 1, newline - 1 ) or remaining
-			local part = fit( line, w, self.Options.scale )
+			local part = fit( line, w, self.Options.font )
 			if part == "" and line ~= "" then break end
 			remaining = remaining:sub( #part + 1 )
 			if remaining:sub( 1, 1 ) == "\n" then remaining = remaining:sub( 2 ) end
 			if index == ( lines or 1 ) and remaining ~= "" then
-				part = fit( part, w - Font.Measure( "..." ) * self.Options.scale, self.Options.scale ) .. "..."
+				part = elide( part .. "…", w, self.Options.font )
 			end
 			self.Lines[#self.Lines + 1] = { text = part,
-				x = centered and math.floor( ( w - Font.Measure( part ) * self.Options.scale ) / 2 ) or 0 }
+				x = centered and math.floor( ( w - measure( part, self.Options.font ) ) / 2 ) or 0 }
 		end
 	end
 	panel.Paint = function( s )
 		for index, line in ipairs( s.Lines ) do
-			Font.Draw( line.text, line.x, ( index - 1 ) * 20, s.Options )
+			drawText( line.text, s.Options.font, line.x, ( index - 1 ) * s.LineHeight, s.Options.color )
 		end
 	end
 	return panel
@@ -66,26 +109,27 @@ end
 local function button( parent, caption, callback, plain )
 	local b = vgui.Create( "DButton", parent )
 	b:SetText( "" )
-	b.Caption, b.Options = caption, { scale = 2, color = C.text, shadow = false }
+	b.Caption, b.Options = caption, { font = fonts.title, color = C.text }
 	b:SetTooltip( caption )
-	b.PerformLayout = function( s, w )
-		s.Fitted = fit( s.Caption, w - 10, 2 )
-		s.TextX = math.floor( ( w - Font.Measure( s.Fitted ) * 2 ) / 2 )
+	b.PerformLayout = function( s, w, h )
+		s.Fitted = elide( s.Caption, w - 10, s.Options.font )
+		s.TextX = math.floor( ( w - measure( s.Fitted, s.Options.font ) ) / 2 )
+		s.TextY = math.floor( ( h - heights[s.Options.font] ) / 2 )
 	end
 	b.Paint = function( s, w, h )
 		local enabled = s:IsEnabled()
 		local focus = enabled and ( s:IsHovered() or s:HasFocus() )
 		if not plain then
 			rectangle( C.dark, 0, 0, w, h )
-			rectangle( C.button, 2, 2, w - 4, h - 4 )
-			rectangle( s:IsDown() and C.dark or C.light, 2, 2, w - 4, 2 )
+			rectangle( enabled and C.button or C.disabledButton, 2, 2, w - 4, h - 4 )
+			if enabled then rectangle( s:IsDown() and C.dark or C.light, 2, 2, w - 4, 2 ) end
 		end
 		if focus then
-			surface.SetDrawColor( C.text )
+			surface.SetDrawColor( C.focus )
 			surface.DrawOutlinedRect( 0, 0, w, h, 1 )
 		end
 		s.Options.color = enabled and C.text or C.disabled
-		Font.Draw( s.Fitted or "", s.TextX or 0, math.floor( ( h - 18 ) / 2 ), s.Options )
+		drawText( s.Fitted or "", s.Options.font, s.TextX or 0, s.TextY or 0, s.Options.color )
 	end
 	b.DoClick = callback
 	return b
@@ -117,11 +161,11 @@ function ROW:Init()
 		self.Manager.Session.focus = self.Entry.name
 		self.Manager:UpdateState()
 	end
-	self.TitleOptions = { scale = 2, color = C.text, shadow = false }
-	self.DescriptionOptions = { scale = 2, color = C.dim, shadow = false }
+	self.TitleOptions = { font = fonts.title, color = C.text }
+	self.DescriptionOptions = { font = fonts.body, color = C.secondary }
 	self.Pick.PerformLayout = function( _, w )
-		self.FittedTitle = fit( self.Entry.title, w - 72, 2 )
-		self.FittedDescription = fit( self.Summary, w - 72, 2 )
+		self.FittedTitle = elide( self.Entry.title, w - 72, self.TitleOptions.font )
+		self.FittedDescription = elide( self.Summary, w - 72, self.DescriptionOptions.font )
 	end
 	self.Pick.Paint = function( s, w, h )
 		render.PushFilterMin( TEXFILTER.POINT )
@@ -131,8 +175,8 @@ function ROW:Init()
 		surface.DrawTexturedRect( 0, math.floor( ( h - 60 ) / 2 ), 60, 60 )
 		render.PopFilterMag()
 		render.PopFilterMin()
-		Font.Draw( self.FittedTitle or "", 72, 12, self.TitleOptions )
-		Font.Draw( self.FittedDescription or "", 72, 39, self.DescriptionOptions )
+		drawText( self.FittedTitle or "", self.TitleOptions.font, 72, 8, self.TitleOptions.color )
+		drawText( self.FittedDescription or "", self.DescriptionOptions.font, 72, 38, self.DescriptionOptions.color )
 	end
 end
 
@@ -141,7 +185,7 @@ function ROW:SetEntry( manager, entry, selected )
 	self.Preview = preview( entry.preview )
 	self.Summary = entry.description
 	if not entry.available then self.Summary = text( "Texture files missing", "贴图文件缺失" ) end
-	self.DescriptionOptions.color = entry.available and C.dim or C.warning
+	self.DescriptionOptions.color = entry.available and C.secondary or C.warning
 	self.Pick:SetTooltip( entry.title .. "\n" .. self.Summary )
 	self.Transfer:SetVisible( not selected )
 	self.Transfer:SetEnabled( entry.available == true )
@@ -153,7 +197,7 @@ end
 function ROW:Paint( w, h )
 	if self.Pick:IsHovered() then rectangle( C.hover, 0, 0, w, h ) end
 	if self.Manager.Session.focus == self.Entry.name or self.Pick:HasFocus() then
-		surface.SetDrawColor( C.text )
+		surface.SetDrawColor( C.focus )
 		surface.DrawOutlinedRect( 0, 0, w, h, 1 )
 	end
 end
@@ -162,7 +206,7 @@ vgui.Register( "MCTexturePackRow", ROW, "DPanel" )
 local function lane( parent, title )
 	local p = vgui.Create( "DPanel", parent )
 	p.Paint = function() end
-	p.Title = label( p, title )
+	p.Title = label( p, title, C.text, fonts.title )
 	p.Title:Dock( TOP )
 	p.Title:SetTall( 30 )
 	p.Tools = vgui.Create( "DPanel", p )
@@ -201,14 +245,14 @@ function FRAME:Init()
 	close:Dock( RIGHT )
 	close:SetWide( 40 )
 	close:SetTooltip( text( "Close", "关闭" ) )
-	local title = label( self.Header, text( "Texture packs", "材质包" ), C.text, 2, 1, true )
+	local title = label( self.Header, text( "Texture packs", "材质包" ), C.text, fonts.heading, 1, true )
 	title:Dock( FILL )
-	title:DockMargin( 40, 8, 0, 0 )
+	title:DockMargin( 40, 0, 0, 0 )
 	self.Search = vgui.Create( "DTextEntry", self )
 	self.Search:Dock( TOP )
 	self.Search:SetTall( 34 )
 	self.Search:DockMargin( 0, 0, 0, 18 )
-	self.Search:SetFont( "mc_texture_pack_input" )
+	self.Search:SetFont( fonts.body )
 	self.Search:SetPlaceholderText( text( "Search texture packs", "搜索材质包" ) )
 	self.Search:SetTextColor( C.text )
 	self.Search:SetCursorColor( C.text )
@@ -217,7 +261,7 @@ function FRAME:Init()
 		surface.SetDrawColor( s:HasFocus() and C.text or C.line )
 		surface.DrawOutlinedRect( 0, 0, w, h, 1 )
 		if s:GetValue() == "" and not s:HasFocus() then
-			draw.SimpleText( text( "Search texture packs", "搜索材质包" ), "mc_texture_pack_input", 8, h / 2, C.dim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER )
+			drawText( text( "Search texture packs", "搜索材质包" ), fonts.body, 8, ( h - heights[fonts.body] ) / 2, C.secondary )
 		end
 		s:DrawTextEntryText( C.text, C.button, C.text )
 	end
@@ -232,10 +276,10 @@ function FRAME:Init()
 	self.Search.OnKeyCodeTyped = function( _, code ) if code == KEY_ESCAPE then self:Close() end end
 	self.Footer = vgui.Create( "DPanel", self )
 	self.Footer:Dock( BOTTOM )
-	self.Footer:SetTall( 108 )
+	self.Footer:SetTall( ( heights[fonts.body] + 2 ) * 3 + 54 )
 	self.Footer.Paint = function() end
-	self.Hint = label( self.Footer, text( "One texture pack can be active at a time.", "一次启用一个材质包。" ), C.dim, 2, 1, true )
-	self.Status = label( self.Footer, "", C.warning, 2, 2, true )
+	self.Hint = label( self.Footer, text( "One texture pack can be active at a time.", "一次启用一个材质包。" ), C.secondary, fonts.body, 1, true )
+	self.Status = label( self.Footer, "", C.warning, fonts.body, 2, true )
 	self.Undo = button( self.Footer, text( "Undo changes", "撤销更改" ), function()
 		self.Session:Revert()
 		self:RefreshRows()
@@ -246,15 +290,16 @@ function FRAME:Init()
 		if not ok then self:SetStatus( text( "Could not apply: ", "应用失败：" ) .. tostring( err ) ) end
 	end )
 	self.Footer.PerformLayout = function( _, w )
-		self.Hint:SetPos( 0, 0 ) self.Hint:SetSize( w, 20 )
-		self.Status:SetPos( 0, 22 ) self.Status:SetSize( w, 40 )
+		local line = self.Hint.LineHeight
+		self.Hint:SetPos( 0, 0 ) self.Hint:SetSize( w, line )
+		self.Status:SetPos( 0, line + 2 ) self.Status:SetSize( w, line * 2 )
 		local bw = math.min( 200, ( w - 12 ) / 2 )
-		self.Undo:SetPos( math.floor( w / 2 - bw - 6 ), 68 ) self.Undo:SetSize( bw, 38 )
-		self.Apply:SetPos( math.floor( w / 2 + 6 ), 68 ) self.Apply:SetSize( bw, 38 )
+		self.Undo:SetPos( math.floor( w / 2 - bw - 6 ), line * 3 + 12 ) self.Undo:SetSize( bw, 38 )
+		self.Apply:SetPos( math.floor( w / 2 + 6 ), line * 3 + 12 ) self.Apply:SetSize( bw, 38 )
 	end
-	self.Details = label( self, "", C.dim, 2, 4 )
+	self.Details = label( self, "", C.secondary, fonts.body, 4 )
 	self.Details:Dock( BOTTOM )
-	self.Details:SetTall( 86 )
+	self.Details:SetTall( self.Details.LineHeight * 4 + 6 )
 	self.Details:SetVisible( false )
 	self.Board = vgui.Create( "DPanel", self )
 	self.Board:Dock( FILL )
@@ -277,7 +322,7 @@ function FRAME:Init()
 	end
 	local function tool( parent, caption, callback, width )
 		local b = button( parent, caption, callback, true )
-		b:Dock( LEFT ) b:SetWide( width or 76 )
+		b:Dock( LEFT ) b:SetWide( width or 94 )
 		return b
 	end
 	tool( self.Available.Tools, text( "Refresh", "刷新" ), function() self:Refresh() end )
@@ -295,10 +340,10 @@ function FRAME:Init()
 		menu:AddOption( text( "Vanilla", "原版" ), function() start( "vanilla" ) end )
 		menu:AddOption( "AVPBR", function() start( "avpbr" ) end )
 		menu:Open()
-	end, 124 )
+	end, 140 )
 	local function detail() self.Details:SetVisible( not self.Details:IsVisible() ) self:UpdateState() self:InvalidateLayout( true ) end
 	self.AvailableDetails = tool( self.Available.Tools, text( "Details", "详情" ), detail )
-	tool( self.Selected.Tools, text( "Use default", "恢复默认" ), function() self:Choose( "default" ) end, 124 )
+	tool( self.Selected.Tools, text( "Use default", "恢复默认" ), function() self:Choose( "default" ) end, 140 )
 	self.SelectedDetails = tool( self.Selected.Tools, text( "Details", "详情" ), detail )
 	self.Next = button( self.Available.Tools, ">", function()
 		self.Page = self.Page + 1 self:RefreshRows() self.Available.Scroll:GetVBar():SetScroll( 0 )
@@ -388,7 +433,7 @@ function FRAME:RefreshRows()
 		end
 		for i = count + 1, #column.Rows do column.Rows[i]:SetVisible( false ) end
 		if not IsValid( column.Empty ) then
-			column.Empty = label( column.Scroll:GetCanvas(), text( "No matching packs", "没有匹配的材质包" ), C.dim )
+			column.Empty = label( column.Scroll:GetCanvas(), text( "No matching packs", "没有匹配的材质包" ), C.secondary )
 			column.Empty:Dock( TOP ) column.Empty:SetTall( 40 )
 		end
 		column.Empty:SetVisible( count == 0 )
@@ -424,7 +469,7 @@ end
 if IsValid( M.Frame ) then M.Frame:Remove() end
 vgui.Register( "MCTexturePackManager", FRAME, "DFrame" )
 function MC.OpenTexturePackManager()
-	if not MC.Check( MC.TexturePack and MC.ListTexturePacks and MC.SetTexturePackPreference and Font,
+	if not MC.Check( MC.TexturePack and MC.ListTexturePacks and MC.SetTexturePackPreference,
 		"texture_pack_manager_dependencies", "Texture pack manager dependencies are unavailable" ) then return end
 	if not IsValid( M.Frame ) then M.Frame = vgui.Create( "MCTexturePackManager" ) end
 	M.Frame:Refresh()
