@@ -59,6 +59,8 @@ local ShapeModelTemplateCache = {
 	connection = {},
 }
 local GeneratedModelTemplateCache = {}
+local GeneratedCullPlans = {}
+local GeneratedCullVisualRevision, GeneratedCullAtlasRevision
 local FullCubeTemplateCache = {}
 local FullCubeVisualRevision, FullCubeAtlasRevision
 local SpecialBlockVisualEmitters = {}
@@ -135,6 +137,7 @@ function RM.resetShapeModelTemplateCache()
 		connection = {},
 	}
 	GeneratedModelTemplateCache = {}
+	GeneratedCullPlans = {}
 	FullCubeTemplateCache = {}
 end
 
@@ -168,7 +171,7 @@ local function buildModelTemplate( b, orient, cubicBlockId )
 
 	local mirrorU = b.orient == "door"
 	local tri = C.TRI
-	local out = { n = 0 }
+	local out = { n = 0, allFacesCubic = true }
 	for qi = 1, #quads do
 		local quad = quads[qi]
 		local verts = quad and quad.verts
@@ -203,6 +206,7 @@ local function buildModelTemplate( b, orient, cubicBlockId )
 				setTemplateTriVertex( rec, t, ci, vx, vy, vz, uf == 1 and u1 or u0, vf == 1 and v1 or v0 )
 			end
 			local n = out.n + 1
+			if not rec.faceCubic then out.allFacesCubic = false end
 			out.n = n
 			out[n] = rec
 		end
@@ -226,6 +230,35 @@ local function getGeneratedModelTemplate( modelData )
 	cached = buildModelTemplate( modelData, 0, nil )
 	GeneratedModelTemplateCache[modelData] = cached or false
 	return cached ~= false and cached or nil
+end
+
+-- Validate every weighted/multipart alternative once at the build boundary.
+-- A solid collision box alone cannot prove that a model has no interior quads.
+function RM.PrepareGeneratedPlanCulling( snapshots, sectionIndex )
+	if GeneratedCullVisualRevision ~= MC.BlockStateVisualRevision or GeneratedCullAtlasRevision ~= MC.AtlasProfileRevision then
+		GeneratedCullPlans = {}
+		GeneratedModelTemplateCache = {}
+		GeneratedCullVisualRevision, GeneratedCullAtlasRevision = MC.BlockStateVisualRevision, MC.AtlasProfileRevision
+	end
+	local visit = MC.VisitStateVisualModelCandidates
+	if not visit then return GeneratedCullPlans end -- No generated catalog in legacy-only clients.
+	for index = sectionIndex or 1, sectionIndex or #snapshots do
+		local snapshot = snapshots[index]
+		for i = 1, snapshot.count do
+			local stateId = snapshot.states[i]
+			if GeneratedCullPlans[stateId] == nil then
+				local allCubic, found = true, false
+				visit( stateId, function( modelId )
+					local model = stateVisualModelData( modelId )
+					local template = model and getGeneratedModelTemplate( model )
+					found = true
+					if not template or not template.allFacesCubic then allCubic = false end
+				end )
+				GeneratedCullPlans[stateId] = found and allCubic
+			end
+		end
+	end
+	return GeneratedCullPlans
 end
 
 local function shapeCornerValuesByIndex( ci, c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z )
@@ -633,7 +666,7 @@ local function emitNativeArrays( ctx, id, bx, by, bz, wx, wy, wz, face, normal, 
 	ctx.emitL2( quad, id, bx, by, bz, wx, wy, wz, emission, 0, kind )
 end
 
-local function emitModelBlockTemplate( ctx, template, id, bx, by, bz, wx, wy, wz, lx, ly, lz, li, push, lightMetaFast, currentEmitLightStyle, cullCubicFaces, modelId )
+local function emitModelBlockTemplate( ctx, template, id, bx, by, bz, wx, wy, wz, lx, ly, lz, li, push, lightMetaFast, currentEmitLightStyle, cullCubicFaces, modelId, visibleFaceMask )
 	local emission = stateEmission( ctx, id, bx, by, bz )
 	local emitLightStyle = currentEmitLightStyle()
 	local lightingKind = modelId and MC.RenderLightBuffer.KIND.GENERATED or MC.RenderLightBuffer.KIND.MODEL
@@ -642,8 +675,12 @@ local function emitModelBlockTemplate( ctx, template, id, bx, by, bz, wx, wy, wz
 		local f = quad.faceIndex
 		local visible = true
 		if cullCubicFaces and quad.faceCubic then
-			local off = C.FACES[f].off
-			visible = ctx.visibleAt( id, lx + off[1], ly + off[2], lz + off[3], bx + off[1], by + off[2], bz + off[3] )
+			if visibleFaceMask ~= nil then
+				visible = bit_band( visibleFaceMask, bit_lshift( 1, f - 1 ) ) ~= 0
+			else
+				local off = C.FACES[f].off
+				visible = ctx.visibleAt( id, lx + off[1], ly + off[2], lz + off[3], bx + off[1], by + off[2], bz + off[3] )
+			end
 		end
 		if visible then
 			local tintCode = quad.tintIndex and quad.tintIndex >= 0 and blockStateTintCode
@@ -1195,7 +1232,7 @@ local function emitModelBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz,
 	return emitShapeBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
 end
 
-local function emitStatePlanBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
+local function emitStatePlanBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer, visibleFaceMask )
 	if not stateVisualPlanRangeFast or not stateVisualPlanModelAtFast or not stateVisualModelData then
 		local fallback = selectBaseBlockEmitter( ctx, b, id, orient, ctx.blockIsFullCube, bx, by, bz )
 		return fallback( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
@@ -1212,7 +1249,7 @@ local function emitStatePlanBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy,
 			emitModelBlockTemplate(
 				ctx, template, id, bx, by, bz, wx, wy, wz, lx, ly, lz, li,
 				ctx.push, ctx.lightMetaFast, ctx.currentEmitLightStyle,
-				not ( ctx.currentVisual and ctx.currentVisual.cullGeneratedFaces == false ), modelId
+				not ( ctx.currentVisual and ctx.currentVisual.cullGeneratedFaces == false ), modelId, visibleFaceMask
 			)
 			rendered = true
 		end
@@ -1414,7 +1451,9 @@ function RM.EmitBlock( ctx, li, stateId )
 	local emitter, visibleFaceMask, visibleFaceCount
 	if not cached then
 		emitter = selectBlockEmitter( ctx, b, id, orient, blockIsFullCube, bx, by, bz )
-		if emitter == BlockEmitters.fullCube then
+		local generatedCull = emitter == BlockEmitters.statePlan and ctx.generatedCullPlans
+			and ctx.generatedCullPlans[stateId] and visual.cullGeneratedFaces ~= false
+		if emitter == BlockEmitters.fullCube or generatedCull then
 			local fullVisibleStart = meshProbe and SysTime() or nil
 			visibleFaceMask, visibleFaceCount = ctx.visibleFaceMask( id, lx, ly, lz, bx, by, bz )
 			if fullVisibleStart then meshPerfAdd( meshPerf, "fullVisibleMS", fullVisibleStart ) end
@@ -1422,7 +1461,7 @@ function RM.EmitBlock( ctx, li, stateId )
 			if visibleFaceMask == 0 and not ( isWaterloggedState and isWaterloggedState( stateId ) ) then
 				MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
 				if MC.ClearBlockCacheDirtySlot then MC.ClearBlockCacheDirtySlot( key, blockSectionIndex, li ) end
-				meshPerfAddBlockKind( meshPerf, "fullCube" )
+				meshPerfAddBlockKind( meshPerf, generatedCull and "statePlan" or "fullCube" )
 				return
 			end
 		end
