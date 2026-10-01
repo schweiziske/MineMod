@@ -42,12 +42,7 @@ local function usesClippedContainerRasterPhase( name )
 	-- These opaque-edged widgets make Source's one-pixel leading raster phase
 	-- immediately visible. Keep the same calibrated half-texel phase as the HUD,
 	-- then clip the material's out-of-bounds guard pixel at the call site.
-	return name == "sprites/container/anvil/text_field"
-		or name == "sprites/container/anvil/text_field_disabled"
-		or name == "sprites/container/enchanting_table/enchantment_slot"
-		or name == "sprites/container/enchanting_table/enchantment_slot_disabled"
-		or name == "sprites/container/enchanting_table/enchantment_slot_highlighted"
-		or name == "sprites/widget/button"
+	return name == "sprites/widget/button"
 		or name == "sprites/widget/button_disabled"
 		or name == "sprites/widget/button_highlighted"
 end
@@ -296,30 +291,9 @@ end
 function UI.DrawAnvilTextField( mat, x, y, scale )
 	scale = math.max( 1, math.floor( tonumber( scale ) or 1 ) )
 	x, y = math.floor( tonumber( x ) or 0 ), math.floor( tonumber( y ) or 0 )
-	-- The base anvil background intentionally stores a red 110x16 placeholder
-	-- at logical (59,20). Source's atlas raster phase exposes its top and left
-	-- edges by one framebuffer pixel before this widget is drawn. Restore the
-	-- exact surrounding background pixels from the Java PNG first.
-	surface.SetDrawColor( 198, 198, 198, 255 )
-	surface.DrawRect( x - 1, y - 1, 110 * scale + 1, 1 )
-	surface.DrawRect( x - 1, y, 1, 16 * scale )
+	-- The background and field both use full padded textures, so their authored
+	-- edges now coincide without painting over neighbouring framebuffer pixels.
 	return UI.DrawTexture( mat, x, y, 110 * scale, 16 * scale )
-end
-
-function UI.DrawEnchantingTopFrame( left, top, scale )
-	-- enchanting_table.png contains the outer 109x1 dark frame at logical
-	-- (59,13); the option sprite begins at (60,14). Source samples the atlas
-	-- transition one framebuffer pixel early, leaving the following bevel row
-	-- visible as a second line. Reconstruct that one authored row at its exact
-	-- Java coordinates so it remains a single Minecraft pixel at every GUI scale.
-	scale = math.max( 1, math.floor( tonumber( scale ) or 1 ) )
-	local x = math.floor( tonumber( left ) or 0 ) + 59 * scale
-	local y = math.floor( tonumber( top ) or 0 ) + 13 * scale
-	surface.SetDrawColor( 198, 198, 198, 255 )
-	surface.DrawRect( x - 1, y - 1, 109 * scale + 1, scale + 1 )
-	surface.SetDrawColor( 55, 55, 55, 255 )
-	surface.DrawRect( x, y, 109 * scale, scale )
-	return true
 end
 
 function UI.DrawGuiRegion( name, x, y, w, h, sourceW, sourceH )

@@ -195,8 +195,11 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		local request = MC.RenderBlockBindings.Key( id )
 		local block = blocksById[id]
 		-- Registered definitions do not store fullCube; query the shape contract.
+		-- Grass still occludes light/neighbours, but its model has alpha-cutout
+		-- side overlays. The opaque shader would draw their transparent RGB.
+		local cutoutOverlay = block.mcid == "minecraft:grass_block"
 		local stage = root.translucent and "world_translucent" or
-			( blockIsFullCube( id ) and block.transparent ~= true and "world_opaque" or "world_cutout" )
+			( not cutoutOverlay and blockIsFullCube( id ) and block.transparent ~= true and "world_opaque" or "world_cutout" )
 		local bucketKey = request .. "/" .. stage
 		local buffer = root.buckets[bucketKey]
 		if not buffer then

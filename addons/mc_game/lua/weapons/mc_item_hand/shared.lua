@@ -562,7 +562,7 @@ function SWEP:OpenInventoryClient()
 	if MC.RequestInventoryOpen then MC.RequestInventoryOpen() end
 end
 
-function SWEP:PrimaryAttack()
+local function primaryAttack( self )
 	self:SetNextPrimaryFire( CurTime() + ATTACK_INTERVAL )
 	-- Only engine-predicted fields may be written during command replay. Plain
 	-- Lua held-state, sounds, inventory and voxel mutations must run once.
@@ -645,10 +645,23 @@ function SWEP:PrimaryAttack()
 		end
 		if bx
 		and MC.CanPreviewBreak and MC.CanPreviewBreak( ply, bx, by, bz ) and MC.PredictBreakBlock then
-			if MC.PredictBreakBlock( bx, by, bz, ply ) then
+			if MC.PredictBreakBlock( bx, by, bz, ply, miningCommandNumber( ply ) ) then
 				self.MCCreativeBreakReadyAt = now + CREATIVE_DESTROY_DELAY
 				self:StartCreativePlaceAnimation( bx, by, bz )
 			end
+		end
+	end
+end
+
+function SWEP:PrimaryAttack()
+	primaryAttack( self )
+	if SERVER then
+		local ply = self:GetOwner()
+		local commandNumber = miningCommandNumber( ply )
+		local session = MC.SV.MiningSessions[ply]
+		-- Survival mining retains its start command until completion/cancel.
+		if not session or session.commandNumber ~= commandNumber then
+			MC.SV.AcknowledgeBlockPrediction( ply, 2, commandNumber )
 		end
 	end
 end
@@ -684,7 +697,7 @@ function SWEP:SendEntityInteractSwing( ply, target )
 	net.Send( ply )
 end
 
-function SWEP:SecondaryAttack()
+local function secondaryAttack( self )
 	self:SetNextSecondaryFire( CurTime() + RIGHT_CLICK_DELAY )
 	if CLIENT and not IsFirstTimePredicted() then return end
 	local ply = self:GetOwner()
@@ -851,10 +864,18 @@ function SWEP:SecondaryAttack()
 				{ secondaryUse = ply.KeyDown and ply:KeyDown( IN_SPEED ) == true } )
 		end
 		if plan and MC.CanPreviewPlacePlan and MC.CanPreviewPlacePlan( ply, plan ) and MC.PredictPlacementPlan then
-			if MC.PredictPlacementPlan( plan ) then
+			if MC.PredictPlacementPlan( plan, miningCommandNumber( ply ) ) then
 				self:StartCreativePlaceAnimation( bx, by, bz )
 			end
 		end
+	end
+end
+
+function SWEP:SecondaryAttack()
+	secondaryAttack( self )
+	if SERVER then
+		local ply = self:GetOwner()
+		MC.SV.AcknowledgeBlockPrediction( ply, 1, miningCommandNumber( ply ) )
 	end
 end
 

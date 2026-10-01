@@ -115,6 +115,7 @@ function SV.CancelMining( ply, reason )
 	-- correct cancelled/rejected digs instead of leaving a ghost until timeout.
 	if IsValid( ply ) and SV.SyncBreakPlan then SV.SyncBreakPlan( ply, session.bx, session.by, session.bz ) end
 	sendStage( ply, session, nil )
+	if session.source == "inventory" then SV.AcknowledgeBlockPrediction( ply, 2, session.commandNumber ) end
 	local snapshot = publicSession( session )
 	safeCall( session.onCancel, ply, snapshot, reason or "cancelled" )
 	if MC.RunEvent then MC.RunEvent( "MC.PlayerMiningCancelled", ply, snapshot, reason or "cancelled" ) end
@@ -213,6 +214,7 @@ local function completeMining( ply, session )
 	SV.MiningSessions[ply] = nil
 	if not session.instant then SV.SurvivalDestroyStates[ply] = CurTime() + 5 * TICK_INTERVAL end
 	sendStage( ply, session, nil, true )
+	if session.source == "inventory" then SV.AcknowledgeBlockPrediction( ply, 2, session.commandNumber ) end
 	local drops = spawnBlockDrops( ply, session, stacks )
 	local durabilityDamage = damageMiningTool( ply, session, oldStateId )
 	local snapshot = publicSession( session )
@@ -361,6 +363,7 @@ function SV.BeginMining( ply, bx, by, bz, options )
 		local cell = { bx = bx, by = by, bz = bz, commandNumber = options and options.commandNumber or 0 }
 		if SV.SyncBreakPlan then SV.SyncBreakPlan( ply, bx, by, bz ) end
 		sendStage( ply, cell, nil )
+		SV.AcknowledgeBlockPrediction( ply, 2, cell.commandNumber )
 	end
 	return ok, result
 end

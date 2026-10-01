@@ -210,6 +210,9 @@ if SERVER then
 		for _, resourceRoot in ipairs( {
 			"materials/mc/gui/container",
 			"materials/mc/gui/container/creative_inventory",
+			"materials/mc/gui/regions/container",
+			"materials/mc/gui/regions/container/creative_inventory",
+			"materials/mc/gui/regions/fabric",
 			"materials/mc/gui/hud",
 			"materials/mc/gui/sprites/container",
 			"materials/mc/gui/sprites/container/anvil",
