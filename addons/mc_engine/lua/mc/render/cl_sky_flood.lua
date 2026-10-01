@@ -191,7 +191,9 @@ local function popQueue( q )
 	if head > q.tail then return nil end
 	q.head = head + 1
 	local bx, by, bz, level = q.x[head], q.y[head], q.z[head], q.level[head]
-	q.x[head], q.y[head], q.z[head], q.level[head] = nil, nil, nil, nil
+	-- These arrays contain only numbers and die with the synchronous flood.
+	-- Keep the consumed prefix dense: clearing it while appending at the tail
+	-- repeatedly moves new queue entries into Lua's hash part and rehashes them.
 	return bx, by, bz, level
 end
 
@@ -471,6 +473,22 @@ function MC.SkyFloodWorkCounters()
 	return totalRefloods, totalRefloodMS, pendingCount
 end
 
+-- A reflood seeds one cell outside its chunk, spreads at most fourteen cells,
+-- and L2 reads a two-cell halo. Check only this bounded dependency region;
+-- distant streaming jobs must not hold up an already settled chunk.
+local meshHaloXY, meshHaloZ = math.ceil( 17 / MC.CS ), math.ceil( 17 / MC.CH )
+function MC.SkyFloodPendingForChunk( cx, cy, cz )
+	if pendingCount == 0 or not skyFloodEnabled() then return false end
+	for dx = -meshHaloXY, meshHaloXY do
+		for dy = -meshHaloXY, meshHaloXY do
+			for dz = -meshHaloZ, meshHaloZ do
+				if pendingReflood[MC.ChunkKey( cx + dx, cy + dy, cz + dz )] then return true end
+			end
+		end
+	end
+	return false
+end
+
 local function queueSkyFloodChunk( key, seedOnly )
 	if not pendingReflood[key] then
 		pendingReflood[key] = seedOnly and SEED_ONLY or REPLACE
@@ -554,9 +572,9 @@ local function refloodBudget()
 	return n
 end
 
--- The unlimited mesh builder calls this before consuming sky values. Keep the
--- standalone hook for budgeted work, and count both callers in the same frame.
-function MC.ProcessSkyFloodQueue()
+-- The mesh builder and standalone hook may run in either order. Both consume
+-- the same frame's count/time allowance, including a single atomic overrun.
+function MC.ProcessSkyFloodQueue( workDeadline )
 	local frame = FrameNumber()
 	if lastRefloodFrame ~= frame then
 		lastRefloodFrame = frame
@@ -576,13 +594,18 @@ function MC.ProcessSkyFloodQueue()
 		return
 	end
 	local unlimited = MC.BuildUnlimited and MC.BuildUnlimited:GetBool() == true
-	local budget = unlimited and pendingCount or refloodBudget()
+	-- When every selected mesh is waiting on sky, the scheduler can spend its
+	-- otherwise unused mesh allowance on that dependency. It passes the existing
+	-- deadline; this never creates an additional time budget or disables limits.
+	local borrowing = not unlimited and workDeadline ~= nil
+	local budget = ( unlimited or borrowing ) and pendingCount or refloodBudget() - lastRefloods
 	local cv = MC.LightSkyFloodFrameMS
 	local frameMS = cv and cv.GetFloat and cv:GetFloat() or 2
-	local deadline = not unlimited and frameMS > 0 and started + frameMS / 1000 or nil
+	if not unlimited and not borrowing and ( budget <= 0 or frameMS > 0 and lastRefloods > 0 and lastRefloodMS >= frameMS ) then return end
+	local deadline = borrowing and workDeadline or ( not unlimited and frameMS > 0 and started + ( frameMS - lastRefloodMS ) / 1000 or nil )
 	for key, mode in pairs( pendingReflood ) do
 		-- A flood is atomic, but a slow one must not be followed by three more.
-		if processed > 0 and deadline and SysTime() >= deadline then break end
+		if ( borrowing or processed > 0 ) and deadline and SysTime() >= deadline then break end
 		pendingReflood[key] = nil
 		pendingCount = pendingCount - 1
 		refloodChunkSky( key, mode == SEED_ONLY )
