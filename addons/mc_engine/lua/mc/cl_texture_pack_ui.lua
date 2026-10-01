@@ -282,14 +282,20 @@ function FRAME:Init()
 		return b
 	end
 	tool( self.Available.Tools, text( "Refresh", "刷新" ), function() self:Refresh() end )
-	self.Bake = tool( self.Available.Tools, text( "Bake vanilla", "烘焙原版" ), function()
+	self.Bake = tool( self.Available.Tools, text( "Bake atlas", "烘焙材质" ), function()
 		if MC.AtlasBaker.IsBusy() then MC.AtlasBaker.Cancel() return end
-		local ok, err = MC.AtlasBaker.StartVanilla()
-		if not ok then
-			if err == "run_prepare_vanilla_atlas_bake_py" then
-				self:SetStatus( text( "Vanilla source textures have not been prepared.", "尚未准备原版源贴图。" ) )
-			else self:SetStatus( tostring( err ) ) end
+		local function start( id )
+			local ok, err = MC.AtlasBaker.Start( id )
+			if not ok and IsValid( self ) then
+				if err == "run_prepare_" .. id .. "_atlas_bake_py" then
+					self:SetStatus( text( "Source textures have not been prepared: ", "尚未准备源贴图：" ) .. id )
+				else self:SetStatus( tostring( err ) ) end
+			end
 		end
+		local menu = DermaMenu()
+		menu:AddOption( text( "Vanilla", "原版" ), function() start( "vanilla" ) end )
+		menu:AddOption( "AVPBR", function() start( "avpbr" ) end )
+		menu:Open()
 	end, 124 )
 	local function detail() self.Details:SetVisible( not self.Details:IsVisible() ) self:UpdateState() self:InvalidateLayout( true ) end
 	self.AvailableDetails = tool( self.Available.Tools, text( "Details", "详情" ), detail )
@@ -330,7 +336,7 @@ function FRAME:UpdateState()
 	local s = self.Session
 	local bake = MC.AtlasBaker.Status()
 	local busy = MC.AtlasBaker.IsBusy()
-	self.Bake.Caption = busy and text( "Cancel bake", "取消烘焙" ) or text( "Bake vanilla", "烘焙原版" )
+	self.Bake.Caption = busy and text( "Cancel bake", "取消烘焙" ) or text( "Bake atlas", "烘焙材质" )
 	self.Bake:SetTooltip( self.Bake.Caption )
 	self.Bake:InvalidateLayout()
 	self.Apply:SetEnabled( s:CanApply() )
@@ -342,7 +348,7 @@ function FRAME:UpdateState()
 	elseif s:IsDirty() then state = text( "Changes not applied", "更改尚未应用" )
 	elseif s.active ~= s.preference then state = text( "Currently active: ", "当前实际使用：" ) .. s.active end
 	if busy then
-		state = text( "Waiting to bake vanilla…", "等待烘焙原版…" )
+		state = text( "Waiting to bake: ", "等待烘焙：" ) .. bake.pack
 	elseif bake.state == "failed" then state = text( "Bake failed: ", "烘焙失败：" ) .. bake.error end
 	self:SetStatus( state )
 	local entry = s.byName[s.focus]

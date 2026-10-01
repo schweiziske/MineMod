@@ -6,6 +6,8 @@ _build/*
 __pycache__/
 addons/mc_engine/materials/mc/atlas_sources/vanilla/
 addons/mc_engine/data_static/mc/atlas_bake/vanilla.json
+addons/mc_engine/materials/mc/atlas_sources/avpbr/
+addons/mc_engine/data_static/mc/atlas_bake/avpbr.json
 *.pyc
 _tools/equestria_mcb4_import_2.err
 _tools/equestria_mcb4_import_2.log
