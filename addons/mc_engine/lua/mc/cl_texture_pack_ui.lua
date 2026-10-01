@@ -12,7 +12,7 @@ local previews = {}
 local SEARCH_TIMER = "mc_texture_pack_manager_search"
 local PAGE_SIZE = 32
 local EVENTS = { "MC.TexturePackChanged", "MC.TexturePackRegistered", "MC.TexturePackUnregistered",
-	"MC.TexturePackOwnerUnregistered", "MC.TexturePackLeaseChanged" }
+	"MC.TexturePackOwnerUnregistered", "MC.TexturePackLeaseChanged", "MC.TexturePackSourcesChanged", "MC.ResourcePackApplyChanged" }
 
 -- Rasterize CJK at its final screen size; never shrink or stretch the HUD glyph atlas.
 local fonts = { body = "mc_texture_pack_body_24", title = "mc_texture_pack_title_26", heading = "mc_texture_pack_heading_30" }
@@ -337,8 +337,11 @@ function FRAME:Init()
 			end
 		end
 		local menu = DermaMenu()
-		menu:AddOption( text( "Vanilla", "原版" ), function() start( "vanilla" ) end )
-		menu:AddOption( "AVPBR", function() start( "avpbr" ) end )
+		for _, source in ipairs( MC.AtlasBaker.ListSourcePacks() ) do
+			local id = source.bakeID
+			local entry = self.Session.byName[source.name]
+			menu:AddOption( entry and entry.title or source.title or source.name, function() start( id ) end )
+		end
 		menu:Open()
 	end, 140 )
 	local function detail() self.Details:SetVisible( not self.Details:IsVisible() ) self:UpdateState() self:InvalidateLayout( true ) end
