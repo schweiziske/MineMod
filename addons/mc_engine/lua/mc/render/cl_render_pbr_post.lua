@@ -25,6 +25,13 @@ local bloomThreshold = MC.RenderPackSettings.Handle( "bloom_threshold" )
 local bloomKnee = MC.RenderPackSettings.Handle( "bloom_knee" )
 local bloomRadius = MC.RenderPackSettings.Handle( "bloom_radius" )
 local bloomDebug = CreateClientConVar( "mc_pbr_bloom_debug", "0", false, false, "Show extracted and blurred highlights", 0, 1 )
+local exposureEnabled = MC.RenderPackSettings.Handle( "auto_exposure" )
+local exposureKey = MC.RenderPackSettings.Handle( "auto_exposure_key" )
+local exposureStrength = MC.RenderPackSettings.Handle( "auto_exposure_strength" )
+local exposureRange = MC.RenderPackSettings.Handle( "auto_exposure_range" )
+local exposureTime = MC.RenderPackSettings.Handle( "auto_exposure_time" )
+local exposureBindings = { "exposure_meter", "exposure_reduce_16", "exposure_reduce_4",
+    "exposure_adapt", "exposure_composite", "exposure_store" }
 local volumeEnabled = MC.RenderPackSettings.Handle( "volumetric" )
 local volumeStrength = MC.RenderPackSettings.Handle( "volumetric_strength" )
 local volumeDistance = MC.RenderPackSettings.Handle( "volumetric_distance" )
@@ -46,6 +53,7 @@ function P.Register( definition, blockSize, instance )
         blockSSR = definition.programs.block_ssr, bindings = {} }
     for _, pass in ipairs( definition.pipeline.passes ) do
         if pass.binding then group.bindings[pass.binding] = true end
+        if pass.binding == "exposure_store" then group.exposure = { output = pass.output } end
     end
     group.fog = group.bindings.fog
     if group.fog then group.fogCamera = Matrix() end
@@ -288,6 +296,42 @@ end
 binders.bloom_composite = function( material )
     material:SetFloat( "$c0_x", bloomStrength:GetFloat() ) material:SetFloat( "$c0_y", bloomDebug:GetBool() and 1 or 0 )
 end
+binders.exposure_meter = function() end
+binders.exposure_reduce_16 = function( material, c, target, inputs )
+    material:SetFloat( "$c0_x", 1 / inputs.s0:Width() )
+    material:SetFloat( "$c0_y", 1 / inputs.s0:Height() )
+end
+binders.exposure_reduce_4 = binders.exposure_reduce_16
+binders.exposure_composite = function() end
+binders.exposure_store = function() end
+
+function P.ResetExposure()
+    local group = P.Active()
+    if group and group.exposure then group.exposure.previous = nil end
+end
+
+local function prepareExposure( context )
+    local history = context.group.exposure
+    local view = render.GetViewSetup( true )
+    local world, err = MC.API.Coords.RenderToWorld( view.origin )
+    requireValue( world ~= nil, "render_exposure_position", tostring( err ) )
+    local settings = { exposureKey:GetFloat(), exposureStrength:GetFloat(), exposureRange:GetFloat(), exposureTime:GetFloat() }
+    local signature = MC.RenderPackSchema.Canonical( { settings, context.settings.exposure } )
+    local now, frame, previous = RealTime(), FrameNumber(), history.previous
+    local valid = previous and previous.world == MC.World and previous.generation == MC.StateWorldGeneration
+        and previous.width == context.view_width and previous.height == context.view_height
+        and previous.signature == signature and now >= previous.time and now - previous.time <= 1
+        and math.abs( view.fov - previous.fov ) < 20
+    if valid then
+        local dx, dy, dz = world.x - previous.x, world.y - previous.y, world.z - previous.z
+        valid = dx * dx + dy * dy + dz * dz <= ( 32 * context.block_size ) ^ 2
+    end
+    context.exposure = { settings = settings, texture = valid and previous.texture or nil,
+        dt = valid and ( frame == previous.frame and 0 or min( now - previous.time, 0.25 ) ) or 1 / 60,
+        next = { world = MC.World, generation = MC.StateWorldGeneration, frame = frame, time = now,
+            width = context.view_width, height = context.view_height, signature = signature,
+            x = world.x, y = world.y, z = world.z, fov = view.fov } }
+end
 
 function P.Enabled( binding, context )
     return context.enabled[binding] == true
@@ -295,6 +339,10 @@ end
 
 function P.Input( semantic, context )
     local c = context.scene
+    if semantic == "exposure_history" then
+        -- The first frame ignores this valid, non-aliased fallback sampler.
+        return context.exposure.texture or render.GetScreenEffectTexture( 0 )
+    end
     if semantic == "scene_color" then
         render.UpdateScreenEffectTexture( 0 )
         local texture = render.GetScreenEffectTexture( 0 )
@@ -314,6 +362,15 @@ function P.Input( semantic, context )
 end
 
 function P.Bind( binding, material, context, target, outputs, inputs )
+    if binding == "exposure_adapt" then
+        local exposure = context.exposure
+        for i, component in ipairs( { "x", "y", "z", "w" } ) do
+            material:SetFloat( "$c0_" .. component, exposure.settings[i] )
+        end
+        material:SetFloat( "$c1_x", exposure.dt )
+        material:SetFloat( "$c1_y", exposure.texture and 1 or 0 )
+        return
+    end
     binders[binding]( material, context.scene, target, inputs, context.group )
 end
 
@@ -338,11 +395,22 @@ function P.Run( stage, c, viewSerial )
     elseif stage == "final" then
         local bloom = group.bloom and bloomEnabled:GetBool() and ( bloomStrength:GetFloat() > 0 or bloomDebug:GetBool() )
         for _, name in ipairs( { "bloom_prefilter", "bloom_horizontal", "bloom_vertical", "bloom_composite" } ) do enabled[name] = bloom and true or false end
+        local exposure = group.exposure and exposureEnabled:GetBool() and exposureStrength:GetFloat() > 0 and exposureRange:GetFloat() > 0
+        for _, name in ipairs( exposureBindings ) do enabled[name] = exposure and true or false end
+        if not exposure then P.ResetExposure() end
     end
     local context = processing.Context( active.processing, active, c.ox or 0, c.oy or 0, c.oz or 0 )
     context.key = context.key .. "/screen/" .. viewSerial
     context.scene, context.group, context.enabled = c, group, enabled
-    return processing.RunScreen( active.processing, stage, context, P )
+    if enabled.exposure_adapt then prepareExposure( context ) end
+    local ok, err = processing.RunScreen( active.processing, stage, context, P )
+    if not ok then P.ResetExposure()
+    elseif enabled.exposure_adapt then
+        local nextFrame = context.exposure.next
+        nextFrame.texture = active.processing.screenOutputs[group.exposure.output].texture
+        group.exposure.previous = nextFrame
+    end
+    return ok, err
 end
 
 function P.PrepareWorld( c )
