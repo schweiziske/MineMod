@@ -60,6 +60,7 @@ local function build( key, sectionIndex, lightOnly )
 			local ok
 			ok, err = pcall( function()
 				ctx = RM.NewBuildContext( key, sectionIndex, chunk, perf, probe, "l2", started, nil, snapshots, lightOnly )
+				ctx.generatedCullPlans = RM.PrepareGeneratedPlanCulling( snapshots, sectionIndex )
 				local loopStart = SysTime()
 				RM.withIsolatedRawLighting( ctx.bxo, ctx.byo, ctx.bzo, function()
 					for index = sectionIndex or 1, sectionIndex or Snapshot.SECTION_COUNT do
