@@ -579,11 +579,21 @@ local function buildSelectedDirtyKeys( dirty, rateLimited, lightOnly, buildDista
 	for i = 1, #keys do
 		local key = keys[i]
 		local limited = dirtyPriorities[key] == 2
-		local built
-		if lightOnly then
-			built = buildLightDirtyMeshKey( key, MC.MeshLightDirty[key], limited, budget, dirtyPinnedOnly[key] )
-		else
-			built = buildDirtyMeshKey( key, MC.MeshDirty[key], limited, budget, dirtyPinnedOnly[key] )
+		local skyPending = false
+		if not budget.native and MC.SkyFloodPendingForChunk then
+			local chunk = MC.GetChunkByKey( key )
+			if chunk then skyPending = MC.SkyFloodPendingForChunk( chunk.cx, chunk.cy, chunk.cz ) end
+		end
+		if skyPending then budget.skyWaiting = true end
+		local built = 0
+		-- Keep deferred keys dirty and eligible so lazy mode checks them again.
+		-- Existing geometry remains drawable while its lighting dependencies run.
+		if not skyPending then
+			if lightOnly then
+				built = buildLightDirtyMeshKey( key, MC.MeshLightDirty[key], limited, budget, dirtyPinnedOnly[key] )
+			else
+				built = buildDirtyMeshKey( key, MC.MeshDirty[key], limited, budget, dirtyPinnedOnly[key] )
+			end
 		end
 		if built > 0 then
 			keyCount, sectionCount = keyCount + 1, sectionCount + built
@@ -618,9 +628,9 @@ local lazyIdlePCX, lazyIdlePCY, lazyIdlePCZ
 local lazyIdleGeometry, lazyIdleLight, lazyIdleDistance, lazyIdleBlockSize
 hook.Add( "Think", "mc_meshbuild", function()
 	local unlimited = MC.BuildUnlimited and MC.BuildUnlimited:GetBool() == true
-	if unlimited then
-		-- Think hook order is unspecified. Finish queued sky propagation before
-		-- building/uploading sections that would otherwise be invalidated again.
+	if unlimited or MC.ProcessSkyFloodQueue then
+		-- Think hook order is unspecified. Consume this frame's sky allowance
+		-- before selecting meshes; unlimited mode completes the entire queue.
 		local processSky = MC.Need( MC.ProcessSkyFloodQueue,
 			"mesh_sky_queue_missing", "cl_sky_flood.lua did not load" )
 		if not processSky then return end
@@ -652,6 +662,7 @@ hook.Add( "Think", "mc_meshbuild", function()
 	budget.attempts, budget.failures, budget.rateAttempts, budget.selectionMS = 0, 0, 0, 0
 	budget.animationAttempts, budget.animationFailures = 0, 0
 	budget.frameYield, budget.rateYield = false, false
+	budget.skyWaiting = false
 	budget.lightTextureAttempts = 0
 	pairedAnimationMS = 0
 	if MC.ProcessGpuChunkLightTextureRefresh then
@@ -687,6 +698,10 @@ hook.Add( "Think", "mc_meshbuild", function()
 		else
 			selectionDeferred = true
 		end
+	end
+	if budget.skyWaiting and budget.attempts == 0 and budget.lightTextureAttempts == 0
+		and budget.deadline and SysTime() < budget.deadline then
+		MC.ProcessSkyFloodQueue( budget.deadline )
 	end
 	clearDirtySelection()
 	-- An unexamined queue may contain nearby work. Budget exhaustion is not idle.

@@ -59,6 +59,8 @@ local ShapeModelTemplateCache = {
 	connection = {},
 }
 local GeneratedModelTemplateCache = {}
+local FullCubeTemplateCache = {}
+local FullCubeVisualRevision, FullCubeAtlasRevision
 local SpecialBlockVisualEmitters = {}
 
 local function specialEmitterForBlock( block )
@@ -133,6 +135,7 @@ function RM.resetShapeModelTemplateCache()
 		connection = {},
 	}
 	GeneratedModelTemplateCache = {}
+	FullCubeTemplateCache = {}
 end
 
 local function templateBucket( store, id )
@@ -575,21 +578,40 @@ local function nativeScratch( ctx )
 	return quad
 end
 
-local function emitNativeValues( ctx, id, bx, by, bz, wx, wy, wz, face, normal, shade, emission, quadEmission, lighting, tile,
-	c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z, u1, v1, u2, v2, u3, v3, u4, v4 )
-	local quad = nativeScratch( ctx )
-	quad.atlasPage = atlasPageForTile( tile )
-	local a, b, c, d = quad.l2Corners[1], quad.l2Corners[2], quad.l2Corners[3], quad.l2Corners[4]
-	a[1], a[2], a[3], b[1], b[2], b[3] = c1x, c1y, c1z, c2x, c2y, c2z
-	c[1], c[2], c[3], d[1], d[2], d[3] = c3x, c3y, c3z, c4x, c4y, c4z
-	a, b, c, d = quad.l2UV[1], quad.l2UV[2], quad.l2UV[3], quad.l2UV[4]
-	a[1], a[2], b[1], b[2], c[1], c[2], d[1], d[2] = u1, v1, u2, v2, u3, v3, u4, v4
-	quad.faceIndex, quad.normal, quad.shade = face, normal, shade
-	quad.quadLightEmission, quad.positions = quadEmission, nil
-	-- Scratch geometry changes per call; only fixed templates supply a cache.
-	quad.l2Lighting = lighting
-	quad.nativeL2Owner = lighting
-	ctx.emitL2( quad, id, bx, by, bz, wx, wy, wz, emission )
+local function fullCubeTemplate( ctx, faceIndex, tile, baked, rot, flipU, flipV, quadEmission )
+	local templates = ctx.fullCubeTemplates
+	if not templates then
+		-- Bind once at this build's first cube. Reloaded definitions/layouts must
+		-- invalidate physical UVs even when an importer reused the same table.
+		if FullCubeVisualRevision ~= MC.BlockStateVisualRevision or FullCubeAtlasRevision ~= MC.AtlasProfileRevision then
+			FullCubeTemplateCache = {}
+			FullCubeVisualRevision, FullCubeAtlasRevision = MC.BlockStateVisualRevision, MC.AtlasProfileRevision
+		end
+		templates = FullCubeTemplateCache
+		ctx.fullCubeTemplates = templates
+	end
+	-- Resolve position-dependent faces before this lookup. Cache the resulting
+	-- surface, never a state ID: two placements may choose different tiles/UVs.
+	local surfaces = templateBucket( templateBucket( templateBucket( templates, faceIndex ), tile ), quadEmission )
+	local key = baked or ( ( rot or 0 ) % 4 * 4 + ( flipU and 1 or 0 ) + ( flipV and 2 or 0 ) )
+	local quad = surfaces[key]
+	if quad then return quad end
+	local face = C.FACES[faceIndex]
+	local u0, v0, u1, v1 = tileUVRect( tile, baked and baked.uv )
+	local au, av, bu, bv, cu, cv, du, dv = fullCubeFaceUVs( face.c, baked, tile, u0, v0, u1, v1, rot, flipU, flipV )
+	local lightingByEmission = face.l2LightingByEmission
+	if not lightingByEmission then lightingByEmission = {} face.l2LightingByEmission = lightingByEmission end
+	local lighting = lightingByEmission[quadEmission]
+	if not lighting then
+		lighting = MC.RenderL2Lighting.BakeQuad( faceIndex, face.c, { quadEmission = quadEmission } )
+		if not lighting then error( "full cube lighting template preparation failed", 0 ) end
+		lightingByEmission[quadEmission] = lighting
+	end
+	quad = { faceIndex = faceIndex, normal = face.n, shade = face.sh,
+		quadLightEmission = quadEmission, atlasPage = atlasPageForTile( tile ),
+		l2Corners = face.c, l2UV = { { au, av }, { bu, bv }, { cu, cv }, { du, dv } }, l2Lighting = lighting }
+	surfaces[key] = quad
+	return quad
 end
 
 local function emitNativeArrays( ctx, id, bx, by, bz, wx, wy, wz, face, normal, shade, emission, kind,
@@ -1258,10 +1280,8 @@ emitFullCubeBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, 
 			if baked then
 				tile, quadLightEmission = blockModelSurface( b, baked )
 				rot = baked.rot or 0
-				u0, v0, u1, v1 = tileUVRect( tile, baked.uv )
 			else
 				tile, rot, flipU, flipV = stateFace( ctx, id, f, orient, bx, by, bz )
-				u0, v0, u1, v1 = tileUVRect( tile )
 			end
 			local corners = face.c
 			local nrm = face.n
@@ -1270,18 +1290,10 @@ emitFullCubeBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, 
 			local colorStart = meshProbe and SysTime() or nil
 			if ctx.l2 then
 				if directionalEmit then ctx.setCur( ctx.fullCubeBuffer( targetBuffer, f ) ) end
-				local lightingCache = face.l2LightingByEmission
-				if not lightingCache then lightingCache = {} face.l2LightingByEmission = lightingCache end
-				local lighting = lightingCache[quadLightEmission]
-				if not lighting then
-					lighting = MC.RenderL2Lighting.BakeQuad( f, corners, { quadEmission = quadLightEmission } )
-					lightingCache[quadLightEmission] = lighting
-				end
-				local c1, c2, c3, c4 = corners[1], corners[2], corners[3], corners[4]
-				emitNativeValues( ctx, id, bx, by, bz, wx, wy, wz, f, nrm, face.sh, emission, quadLightEmission, lighting, tile,
-					c1[1], c1[2], c1[3], c2[1], c2[2], c2[3], c3[1], c3[2], c3[3], c4[1], c4[2], c4[3],
-					fullCubeFaceUVs( corners, baked, tile, u0, v0, u1, v1, rot, flipU, flipV ) )
+				local quad = fullCubeTemplate( ctx, f, tile, baked, rot, flipU, flipV, quadLightEmission )
+				ctx.emitL2( quad, id, bx, by, bz, wx, wy, wz, emission )
 			else
+				u0, v0, u1, v1 = tileUVRect( tile, baked and baked.uv )
 				local color1, color2, color3, color4 = fullCubeFaceCornerColors( shadeIndex, bx, by, bz, f, emission, emitLightStyle, receiveAO )
 				if colorStart then meshPerfAdd( meshPerf, "fullColorMS", colorStart ) end
 				local metaStart = meshProbe and SysTime() or nil

@@ -4,7 +4,6 @@ MC = MC or {}
 local S = {}
 MC.RenderL2Snapshot = S
 local floor = math.floor
-local FIELDS = { "emission", "dampening", "emissive", "shade", "viewBlocking", "solidRender", "fullCollision" }
 local Snapshot = {}
 Snapshot.__index = Snapshot
 
@@ -32,8 +31,12 @@ function Snapshot:Read( bx, by, bz )
 		or cz < self.minCZ or cz > self.maxCZ or self.isLoaded( key ) == true
 	if not loaded then
 		-- A streaming boundary is explicitly opaque/dark, not air with sky 15.
-		local cell = { block = 0, sky = 0, emission = 0, dampening = 15, emissive = false, shade = 0.2,
-			viewBlocking = true, solidRender = true, fullCollision = true, loaded = false, stateId = false }
+		local cell = self.unloadedCell
+		if not cell then
+			cell = { block = 0, sky = 0, emission = 0, dampening = 15, emissive = false, shade = 0.2,
+				viewBlocking = true, solidRender = true, fullCollision = true, loaded = false, stateId = false }
+			self.unloadedCell = cell
+		end
 		self.cells[index], self.unloaded = cell, self.unloaded + 1
 		return cell
 	end
@@ -62,9 +65,24 @@ function Snapshot:Read( bx, by, bz )
 	local brightness, level, block, sky = self.sampleLight( bx, by, bz, 0 )
 	if not MC.Check( integer( block, 0, 15 ) and integer( sky, 0, 15 ), "l2_snapshot_light",
 		"raw block/sky levels missing at %s,%s,%s", bx, by, bz ) then return nil end
-	local cell = { block = block, sky = sky, stateId = stateId, loaded = true }
-	for i = 1, #FIELDS do local field = FIELDS[i] cell[field] = properties[field] end
+	-- Cells are borrowed/read-only. Static profiles with the same state and raw
+	-- light can share one value inside this synchronous slice. Still sample every
+	-- position: sparse air, streaming and position-dependent profiles must retain
+	-- their own lighting/context. Never carry this interning table across builds.
+	local valueKey
+	if properties.dynamicShape ~= true and properties.collisionContext == "none" then
+		valueKey = stateId * 256 + block * 16 + sky
+		local cell = self.values[valueKey]
+		if cell then self.cells[index] = cell return cell end
+	end
+	-- Allocate the complete hash part once. Growing a four-field table in the
+	-- sample loop rehashes it twice and adds a nested trace for every new cell.
+	local cell = { block = block, sky = sky, stateId = stateId, loaded = true,
+		emission = properties.emission, dampening = properties.dampening, emissive = properties.emissive,
+		shade = properties.shade, viewBlocking = properties.viewBlocking,
+		solidRender = properties.solidRender, fullCollision = properties.fullCollision }
 	self.cells[index] = cell
+	if valueKey then self.values[valueKey] = cell end
 	return cell
 end
 
@@ -92,7 +110,7 @@ function S.New( chunk )
 	end
 	local snapshot = setmetatable( {
 		x = chunk.cx * cs - 2, y = chunk.cy * cs - 2, z = chunk.cz * ch - 2,
-		sx = cs + 4, sy = cs + 4, sz = ch + 4, cells = {}, hits = 0, misses = 0, unloaded = 0,
+		sx = cs + 4, sy = cs + 4, sz = ch + 4, cells = {}, values = {}, hits = 0, misses = 0, unloaded = 0,
 		cellToChunk = MC.CellToChunk, chunkKey = MC.ChunkKey, getChunk = MC.GetChunkByKey, isLoaded = MC.IsChunkLoaded,
 		streaming = streaming, minCZ = minCZ, maxCZ = maxCZ,
 		getState = MC.GetChunkBlockStateByLocalIndex, sampleLight = MC.SampleLighting,
