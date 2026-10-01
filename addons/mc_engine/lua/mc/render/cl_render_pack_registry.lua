@@ -15,7 +15,12 @@ local function copy( value )
 end
 
 local function compatible( left, right )
-	return left.abi == right.abi and left.layout == right.layout and left.adapter == right.adapter
+	if left.abi ~= right.abi or left.layout ~= right.layout then return false end
+	-- Sky consumes only positions from the shared quad layout, not pack lighting.
+	if right.adapter == "mc:sky_quad_v1" then
+		return right.abi == 1 and right.layout == "mc:quad_corners_v1"
+	end
+	return left.adapter == right.adapter
 end
 
 local function claimsFor( def )
