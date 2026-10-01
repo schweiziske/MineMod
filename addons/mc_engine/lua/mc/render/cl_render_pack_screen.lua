@@ -30,6 +30,7 @@ end
 
 function P.Invalidate()
     P.key, P.owner, P.worldDone, P.finalDone = nil, nil, nil, nil
+    post.ResetExposure()
     S.Invalidate()
 end
 
@@ -141,7 +142,7 @@ hook.Add( "RenderScreenspaceEffects", "mc_pack_screen", P.AfterEffects )
 hook.Add( "PreDrawViewModel", "mc_pack_screen", S.SkipNativeViewModel )
 hook.Add( "PreDrawPlayerHands", "mc_pack_screen", S.SkipNativeViewModel )
 hook.Add( "MCWorldAdapterChanged", "mc_pack_screen", P.Invalidate )
-for _, key in ipairs( { "ssao", "fog", "volumetric", "block_ssr", "water_ssr", "underwater_fog", "underwater_volumetric" } ) do
+for _, key in ipairs( { "ssao", "fog", "volumetric", "block_ssr", "water_ssr", "underwater_fog", "underwater_volumetric", "auto_exposure" } ) do
     MC.RenderPackSettings.OnChange( key, "mc_pack_screen", P.Invalidate )
 end
 concommand.Add( "mc_pbr_post_stats", function()
