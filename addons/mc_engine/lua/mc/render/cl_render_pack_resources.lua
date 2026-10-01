@@ -42,13 +42,19 @@ function P.Validate( plan )
 	for _, ownerKey in ipairs( sortedKeys( plan.owners ) ) do
 		local owner = plan.owners[ownerKey]
 		local def = owner.definition
+		local sky = def.adapter == "mc:sky_quad_v1"
 		local moving = def.adapter == "mc:pbr_quad_v4" or def.adapter == "mc:vanilla_quad_v2"
 		local independentAO = def.adapter == "mc:pbr_quad_v3" or def.adapter == "mc:pbr_quad_v4"
 		local ibl = independentAO or def.adapter == "mc:pbr_quad_v2"
 		local pbr = ibl or def.adapter == "mc:pbr_quad_v1"
 		requireValue( def.abi == 1 and def.layout == "mc:quad_corners_v1"
-			and ( pbr or def.adapter == "mc:vanilla_quad_draft" or def.adapter == "mc:vanilla_quad_v2" ),
+			and ( sky or pbr or def.adapter == "mc:vanilla_quad_draft" or def.adapter == "mc:vanilla_quad_v2" ),
 			"render_pack_adapter", ownerKey .. ": unsupported quad-corners-v1 adapter" )
+		if sky then
+			requireValue( owner.kind == "shader" and not def.pipeline and next( def.resources ) == nil
+				and next( def.materialMaps ) == nil and MC.RenderSky and MC.RenderSky.VERSION == 1,
+				"render_sky_adapter", ownerKey .. ": sky requires an independent shader and the engine sky-texture adapter" )
+		end
 		if moving then
 			requireValue( MC.RenderDynamicLights and MC.RenderDynamicLights.VERSION == 1,
 				"render_dynamic_light_adapter", ownerKey .. ": moving lights require engine light-data v1" )
@@ -136,6 +142,8 @@ function P.Validate( plan )
 				ownerKey .. "/" .. name .. ": material normal and ORM maps must be linear data" )
 		end
 		for name, pass in pairs( def.passes ) do
+			requireValue( not sky or pass.stage == "world_opaque" and next( pass.inputs ) == nil,
+				"render_sky_pass", ownerKey .. "/" .. name .. ": sky supports opaque geometry with the captured sky as its only input" )
 			requireValue( pass.stage == "world_opaque" or pass.stage == "world_cutout" or pass.stage == "world_translucent",
 				"render_pack_stage", ownerKey .. "/" .. name .. ": unsupported processing stage " .. pass.stage )
 			requireValue( not moving or def.programs["dynamic_" .. pass.program],
@@ -376,7 +384,12 @@ function P.Material( bundle, node, sourceMaterial, blockSize )
 	local slot = tostring( P.materialCount + 1 )
 	local maps
 	if pbr then maps = { normal = normal, orm = orm, environment = environment, dfg = dfg, colorSpace = colorSpace } end
-	local material = R.BoundMaterial( P.shared, slot, source, node.stage, blockSize, node.program, colorSpace, maps )
+	local material
+	if node.adapter == "mc:sky_quad_v1" then
+		material = MC.RenderSky.Material( slot, node.program )
+	else
+		material = R.BoundMaterial( P.shared, slot, source, node.stage, blockSize, node.program, colorSpace, maps )
+	end
 	if node.dynamicProgram then
 		MC.RenderDynamicLights.RegisterMaterial( material, node.dynamicProgram, P.shared, source, node.stage, blockSize, maps )
 	end

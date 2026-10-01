@@ -112,6 +112,7 @@ local function drawMeshListInner( list, currentMaterial )
 		local entry = list[i]
 		if entry.material ~= currentMaterial then
 			currentMaterial = entry.material
+			MC.RenderSky.Bind( currentMaterial )
 			MC.RenderPBR.Bind( currentMaterial )
 			render.SetMaterial( currentMaterial )
 		end
@@ -498,6 +499,7 @@ local function drawVisibleChunks( store, entries, count, chunks, stats, depthSta
 									elseif depthStage then
 										render.SetMaterial( MC.RenderPBRSSR.DepthMaterial( currentMaterial, depthStage == "world_cutout" ) )
 									else
+										MC.RenderSky.Bind( currentMaterial )
 										MC.RenderPBR.Bind( currentMaterial )
 										render.SetMaterial( currentMaterial )
 									end
@@ -647,29 +649,32 @@ local function drawPackStages( translucent, depthOnly )
 	local totalMeshes = 0
 	for _, passes in ipairs( groups ) do
 		for _, pass in ipairs( passes ) do
-			local cached = ensurePackEntries( pass, version )
-			local setCullMode = applyPassState( not translucent and not depthOnly )
-			if translucent then render.OverrideDepthEnable( true, false ) end
-			local ok, drawn, distance, frustum, stale, meshes = pcall( drawVisibleChunks,
-				pass.store, cached.entries, cached.count, chunks, stats, depthOnly and pass.node.stage or nil )
-			local matrixPushed = passMatrixPushed
-			passMatrixPushed = false
-			local restoreError = restoreChunkMeshRenderState( setCullMode, matrixPushed )
-			if restoreError then
-				if depthOnly then error( restoreError, 0 ) end
-				MC.Fault( restoreError.code, "%s", restoreError.message )
+			-- Pack reflection redraws require PBR maps; sky is never a receiver.
+			if not overrideMaterial or pass.node.adapter ~= "mc:sky_quad_v1" then
+				local cached = ensurePackEntries( pass, version )
+				local setCullMode = applyPassState( not translucent and not depthOnly )
+				if translucent then render.OverrideDepthEnable( true, false ) end
+				local ok, drawn, distance, frustum, stale, meshes = pcall( drawVisibleChunks,
+					pass.store, cached.entries, cached.count, chunks, stats, depthOnly and pass.node.stage or nil )
+				local matrixPushed = passMatrixPushed
+				passMatrixPushed = false
+				local restoreError = restoreChunkMeshRenderState( setCullMode, matrixPushed )
+				if restoreError then
+					if depthOnly then error( restoreError, 0 ) end
+					MC.Fault( restoreError.code, "%s", restoreError.message )
+				end
+				if not ok then
+					-- The SSR owner must restore its outer camera/RT before Fault,
+					-- including when strict mode is disabled.
+					if depthOnly then error( { code = "render_ssr_terrain_depth", message = tostring( drawn ) }, 0 ) end
+					runtime.DrawFault( "stage=" .. pass.node.stage .. " pass=" .. pass.node.key .. ": " .. tostring( drawn ) )
+					reportL2Faults()
+					return
+				end
+				totalTested, totalDrawn = totalTested + cached.count, totalDrawn + drawn
+				totalDistance, totalFrustum, totalStale = totalDistance + distance, totalFrustum + frustum, totalStale + stale
+				totalMeshes = totalMeshes + meshes
 			end
-			if not ok then
-				-- The SSR owner must restore its outer camera/RT before Fault,
-				-- including when strict mode is disabled.
-				if depthOnly then error( { code = "render_ssr_terrain_depth", message = tostring( drawn ) }, 0 ) end
-				runtime.DrawFault( "stage=" .. pass.node.stage .. " pass=" .. pass.node.key .. ": " .. tostring( drawn ) )
-				reportL2Faults()
-				return
-			end
-			totalTested, totalDrawn = totalTested + cached.count, totalDrawn + drawn
-			totalDistance, totalFrustum, totalStale = totalDistance + distance, totalFrustum + frustum, totalStale + stale
-			totalMeshes = totalMeshes + meshes
 		end
 	end
 	stats.tested, stats.drawn = totalTested, totalDrawn
