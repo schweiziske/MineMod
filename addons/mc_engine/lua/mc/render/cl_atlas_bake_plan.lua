@@ -2,7 +2,7 @@
 MC = MC or {}
 MC.AtlasBakePlan = {}
 local P = MC.AtlasBakePlan
-P.VERSION = 1
+P.VERSION = 4
 local floor = math.floor
 local FIELDS = { "COLS", "ROWS", "TILE", "PAD", "STRIDE", "W", "H" }
 local KINDS = { empty = 0, image = 1, overlay = 2, solid = 3, missing = 4 }
@@ -11,12 +11,16 @@ local function integer( value, low, high )
 	return type( value ) == "number" and value == floor( value ) and value >= low and value <= high
 end
 
-function P.New( recipe, layout, tiles )
+function P.New( recipe, layout, tiles, pack )
 	if type( recipe ) ~= "table" or recipe.version ~= 1 or type( recipe.layout ) ~= "table"
 		or type( recipe.sources ) ~= "table" or type( recipe.tiles ) ~= "table"
 		or type( recipe.revision ) ~= "string" or not recipe.revision:match( "^[a-f0-9]+$" ) or #recipe.revision ~= 64 then
 		return nil, "invalid_recipe"
 	end
+	pack = pack or "vanilla"
+	if ( pack ~= "vanilla" and pack ~= "avpbr" ) or ( recipe.pack or "vanilla" ) ~= pack
+		or ( recipe.pbr ~= nil and type( recipe.pbr ) ~= "boolean" ) then return nil, "invalid_recipe_pack" end
+	if ( pack == "avpbr" ) ~= ( recipe.pbr == true ) then return nil, "invalid_recipe_channels" end
 	for i = 1, #FIELDS do
 		local key = FIELDS[i]
 		if recipe.layout[key] ~= layout[key] then return nil, "layout_mismatch_" .. key end
@@ -35,12 +39,13 @@ function P.New( recipe, layout, tiles )
 		tile = layout.TILE, pad = layout.PAD, stride = layout.STRIDE,
 		paths = {}, hashes = {}, widths = {}, heights = {}, us = {}, vs = {},
 		u0 = {}, v0 = {}, u1 = {}, v1 = {}, left = {}, right = {}, top = {}, bottom = {},
-		x = {}, y = {}, kind = {}, source = {}, overlay = {}, red = {}, green = {}, blue = {} }
+		x = {}, y = {}, kind = {}, source = {}, overlay = {}, red = {}, green = {}, blue = {},
+		pbr = recipe.pbr == true, normal = {}, orm = {} }
 	local paths, pixels = {}, 0
 	for i = 1, sourceCount do
 		local s = recipe.sources[i]
 		if type( s ) ~= "table" or type( s[1] ) ~= "string" or #s[1] > 240
-			or not s[1]:match( "^mc/atlas_sources/vanilla/[a-z0-9_/]+%.png$" ) or paths[s[1]]
+			or not s[1]:match( "^mc/atlas_sources/" .. pack .. "/[a-z0-9_/]+%.png$" ) or paths[s[1]]
 			or not integer( s[2], 1, 4096 ) or not integer( s[3], 1, 4096 )
 			or type( s[4] ) ~= "string" or #s[4] ~= 64 or not s[4]:match( "^[a-f0-9]+$" ) then
 			return nil, "invalid_source_" .. i
@@ -65,6 +70,12 @@ function P.New( recipe, layout, tiles )
 		if x + layout.STRIDE > layout.W or y + layout.STRIDE > layout.H then return nil, "tile_outside_atlas" end
 		p.x[i], p.y[i], p.kind[i], p.source[i], p.overlay[i] = x, y, kind, row[4], row[8]
 		p.red[i], p.green[i], p.blue[i] = row[5], row[6], row[7]
+		if p.pbr then
+			if not integer( row[9], 0, sourceCount ) or not integer( row[10], 0, sourceCount ) then
+				return nil, "invalid_material_recipe_" .. i
+			end
+			p.normal[i], p.orm[i] = row[9], row[10]
+		end
 	end
 	return p
 end

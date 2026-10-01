@@ -1,11 +1,16 @@
--- Opt-in vanilla GPU baker. Fixed two-slot allocation; never write a published slot.
+-- Opt-in GPU baker. Two slots per pack; color and LabPBR maps publish together.
 -- Run the entire bake in one render callback, with no per-frame limits or yields.
-local B = MC.AtlasBaker or { targets = {}, textures = {}, sourceRevision = nil }
+local B = MC.AtlasBaker or {}
 MC.AtlasBaker = B
-B.sourceMaterials = B.sourceMaterials or {}
+B.caches = B.caches or {}
 B.copyMaterials = B.copyMaterials or {}
-local HOOK, PACK, OWNER = "mc_atlas_baker", "vanilla_baked", "mc.atlas_baker"
-local MANIFEST = "data_static/mc/atlas_bake/vanilla.json"
+local HOOK, OWNER = "mc_atlas_baker", "mc.atlas_baker"
+local PACKS = {
+	vanilla = { name = "vanilla_baked", title = "Vanilla (in-game bake)", preview = "mc/resourcepacks/default",
+		description = "Vanilla PNGs assembled in game. Session atlas, nearest filtering." },
+	avpbr = { name = "avpbr_baked", title = "AVPBR (in-game bake)", preview = "mc/atlas_sources/avpbr/preview",
+		description = "AVPBR by JoaquiX. Color + LabPBR normal/specular atlases; vanilla color fallback, neutral missing maps." },
+}
 local clock, drawUV, setColor = SysTime, surface.DrawTexturedRectUV, surface.SetDrawColor
 local function notify()
 	hook.Run( "MC.AtlasBakeChanged" )
@@ -18,9 +23,9 @@ function B.Status()
 		elapsedMS = ( ( job.finished or clock() ) - job.started ) * 1000,
 		workMS = job.workMS, heapDeltaKB = job.heapDeltaKB,
 		loadMS = job.loadMS, drawMS = job.drawMS,
-		error = job.error, revision = job.revision, frames = job.frames, pack = PACK,
-		-- Two RGBA8 targets, with no depth buffer or mip chain.
-		targetBytes = job.targetBytes, cachedSources = #B.textures }
+		error = job.error, revision = job.revision, frames = job.frames, pack = job.pack,
+		-- Two RGBA8 targets per channel, with no depth buffer or mip chain.
+		targetBytes = job.targetBytes, cachedSources = #job.cache.textures }
 end
 
 function B.IsBusy() return B.job ~= nil end
@@ -60,6 +65,9 @@ local function targetInUse( target )
 			local context = runtime[key]
 			if context and context.bundle then
 				for _, source in pairs( context.bundle.sources ) do if source:GetName() == name then return true end end
+				for _, maps in pairs( context.bundle.runtimePBR or {} ) do
+					if maps.normal:GetName() == name or maps.orm:GetName() == name then return true end
+				end
 			end
 		end
 	end
@@ -67,14 +75,27 @@ local function targetInUse( target )
 end
 
 local function allocate( job )
-	local p = job.plan
-	local rt = B.targets[job.slot]
+	local p, cache = job.plan, job.cache
+	local rt = cache.targets[job.slot]
 	if not rt then
-		rt = GetRenderTargetEx( "mc_vanilla_bake_v1_" .. job.slot, p.width, p.height,
+		rt = GetRenderTargetEx( "mc_" .. job.id .. "_bake_v1_" .. job.slot, p.width, p.height,
 			RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE, bit.bor( 1, 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA8888 )
-		B.targets[job.slot] = rt
+		cache.targets[job.slot] = rt
 	end
 	requireValue( rt and not rt:IsError() and rt:Width() == p.width and rt:Height() == p.height, "atlas_target_size_or_allocation" )
+	if p.pbr then
+		for _, channel in ipairs( { "normal", "orm" } ) do
+			local pool = cache[channel]
+			local target = pool[job.slot]
+			if not target then
+				target = GetRenderTargetEx( "mc_" .. job.id .. "_bake_v1_" .. channel .. "_" .. job.slot, p.width, p.height,
+					RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE, bit.bor( 1, 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA8888 )
+				pool[job.slot] = target
+			end
+			requireValue( target and not target:IsError() and target:Width() == p.width and target:Height() == p.height,
+				"atlas_material_target_size_or_allocation" )
+		end
+	end
 	if not B.upload then
 		B.white = GetRenderTargetEx( "mc_vanilla_bake_white_v1", 8, 8,
 			RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE, bit.bor( 1, 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA8888 )
@@ -94,9 +115,9 @@ local function allocate( job )
 end
 
 local function loadSources( job )
-	local p = job.plan
+	local p, cache = job.plan, job.cache
 	for i = job.loaded + 1, job.sourceCount do
-		if not B.textures[i] then
+		if not cache.textures[i] then
 			local bytes = file.Read( "materials/" .. p.paths[i], "GAME" )
 			requireValue( type( bytes ) == "string" and #bytes <= 4194304, "missing_or_oversized_source: " .. p.paths[i] )
 			requireValue( util.SHA256( bytes ) == p.hashes[i], "source_changed_rerun_prepare: " .. p.paths[i] )
@@ -106,10 +127,10 @@ local function loadSources( job )
 			requireValue( texture and not texture:IsError(), "source_texture: " .. p.paths[i] )
 			requireValue( texture:Width() == p.widths[i] and texture:Height() == p.heights[i],
 				"source_texture_dimensions: " .. p.paths[i] )
-			B.textures[i] = texture
+			cache.textures[i] = texture
 		end
-		if not B.sourceMaterials[i] then
-			local texture = B.textures[i]
+		if not cache.sourceMaterials[i] then
+			local texture = cache.textures[i]
 			-- VGUI derives UV correction from the material's ORIGINAL mapping size.
 			-- A white 1x1 seed collapses UVs even after SetTexture; share by dimensions.
 			local key = texture:Width() .. "x" .. texture:Height()
@@ -123,10 +144,10 @@ local function loadSources( job )
 				requireValue( material and not material:IsError(), "source_copy_material: " .. key )
 				B.copyMaterials[key] = material
 			end
-			B.sourceMaterials[i] = material
+			cache.sourceMaterials[i] = material
 		end
 		if not p.u0[i] then
-			local texture = B.textures[i]
+			local texture = cache.textures[i]
 			local du, dv = 0.5 / texture:Width(), 0.5 / texture:Height()
 			local su, sv = 1 - du * 2, 1 - dv * 2
 			if su == 0 then du, su = 0, 1 end
@@ -139,7 +160,7 @@ local function loadSources( job )
 		end
 		job.loaded = i
 	end
-	B.sourcesReady = true
+	cache.sourcesReady = true
 end
 
 local function replaceBlend()
@@ -148,12 +169,12 @@ end
 
 -- Nine quads include edge/corner extrusion; source UVs select the first square frame.
 -- No Color/Vector/table/string allocation and no validation in this drawing loop.
-local function imageTile( p, source, x, y )
+local function imageTile( cache, p, source, x, y )
 	local pad, tile = p.pad, p.tile
 	local u0, v0, u, v = p.u0[source], p.v0[source], p.u1[source], p.v1[source]
 	local left, top, right, bottom = p.left[source], p.top[source], p.right[source], p.bottom[source]
-	local material = B.sourceMaterials[source]
-	material:SetTexture( "$basetexture", B.textures[source] )
+	local material = cache.sourceMaterials[source]
+	material:SetTexture( "$basetexture", cache.textures[source] )
 	surface.SetMaterial( material )
 	drawUV( x + pad, y + pad, tile, tile, u0, v0, u, v )
 	drawUV( x + pad, y, tile, pad, u0, top, u, top )
@@ -172,19 +193,19 @@ local function solid( x, y, size, r, g, b )
 end
 
 local function drawTiles( job )
-	local p = job.plan
+	local p, cache = job.plan, job.cache
 	for i = 1, job.tileCount do
 		local kind, x, y = p.kind[i], p.x[i], p.y[i]
 		if kind == 1 then
 			setColor( p.red[i], p.green[i], p.blue[i], 255 )
-			imageTile( p, p.source[i], x, y )
+			imageTile( cache, p, p.source[i], x, y )
 		elseif kind == 2 then
 			setColor( 255, 255, 255, 255 )
-			imageTile( p, p.source[i], x, y )
+			imageTile( cache, p, p.source[i], x, y )
 			render.OverrideBlend( true, BLEND_SRC_ALPHA, BLEND_ONE_MINUS_SRC_ALPHA, BLENDFUNC_ADD,
 				BLEND_ONE, BLEND_ONE_MINUS_SRC_ALPHA, BLENDFUNC_ADD )
 			setColor( p.red[i], p.green[i], p.blue[i], 255 )
-			imageTile( p, p.overlay[i], x, y )
+			imageTile( cache, p, p.overlay[i], x, y )
 			replaceBlend()
 		elseif kind >= 3 then
 			B.upload:SetTexture( "$basetexture", B.white )
@@ -200,8 +221,10 @@ local function drawTiles( job )
 	end
 end
 
-local function drawAtlasBody( job )
-	render.PushRenderTarget( B.targets[job.slot] ) job.pushed = true
+local function drawAtlasBody( job, channel )
+	local cache, p = job.cache, job.plan
+	local pool = channel and cache[channel] or cache.targets
+	render.PushRenderTarget( pool[job.slot] ) job.pushed = true
 	cam.Start2D() job.camera = true
 	render.SetToneMappingScaleLinear( B.tone )
 	render.OverrideAlphaWriteEnable( true, true )
@@ -209,13 +232,24 @@ local function drawAtlasBody( job )
 	render.PushFilterMin( TEXFILTER.POINT ) job.minFilter = true
 	render.PushFilterMag( TEXFILTER.POINT ) job.magFilter = true
 	replaceBlend()
-	render.Clear( 0, 0, 0, 0, false, false )
-	drawTiles( job )
+	if channel then
+		if channel == "normal" then render.Clear( 128, 128, 255, 255, false, false )
+		else render.Clear( 0, 10, 0, 255, false, false ) end
+		setColor( 255, 255, 255, 255 )
+		local sources = p[channel]
+		for i = 1, job.tileCount do
+			local source = sources[i]
+			if source ~= 0 then imageTile( cache, p, source, p.x[i], p.y[i] ) end
+		end
+	else
+		render.Clear( 0, 0, 0, 0, false, false )
+		drawTiles( job )
+	end
 end
 
-local function drawAtlas( job )
+local function drawAtlas( job, channel )
 	local oldTone, oldClip = render.GetToneMappingScaleLinear(), DisableClipping( true )
-	local ok, err = pcall( drawAtlasBody, job )
+	local ok, err = pcall( drawAtlasBody, job, channel )
 	-- Restore before fault reporting (including mc_strict 1).
 	render.OverrideBlend( false )
 	render.OverrideAlphaWriteEnable( false )
@@ -231,12 +265,15 @@ local function drawAtlas( job )
 end
 
 local function publish( job )
-	local ok, err = MC.RegisterTexturePack( PACK, {
-		title = "Vanilla (in-game bake)", description = "Vanilla PNGs assembled in game. Session atlas, nearest filtering.",
-		preview = "mc/resourcepacks/default", runtimeTexture = B.targets[job.slot], atlasProfile = "default",
+	local cache, pack = job.cache, PACKS[job.id]
+	local maps
+	if job.plan.pbr then maps = { normal = cache.normal[job.slot], orm = cache.orm[job.slot] } end
+	local ok, err = MC.RegisterTexturePack( job.pack, {
+		title = pack.title, description = pack.description,
+		preview = pack.preview, runtimeTexture = cache.targets[job.slot], runtimePBR = maps, atlasProfile = "default",
 	}, OWNER )
 	requireValue( ok, err )
-	B.published = job.slot
+	cache.published = job.slot
 end
 
 local function bake( job )
@@ -249,6 +286,7 @@ local function bake( job )
 	job.state = "drawing"
 	started = clock()
 	drawAtlas( job )
+	if job.plan.pbr then drawAtlas( job, "normal" ) drawAtlas( job, "orm" ) end
 	job.drawMS = ( clock() - started ) * 1000
 	job.state = "publishing"
 	publish( job )
@@ -266,8 +304,10 @@ local function runBake()
 	finish( "ready" )
 end
 
-function B.StartVanilla()
+function B.Start( id )
 	if B.job then return false, "bake_already_running" end
+	local pack = PACKS[id]
+	if not pack then return false, "unknown_bake_pack" end
 	if not ( MC.RegisterTexturePack and MC.GeneratedAtlas and MC.GeneratedTiles and MC.Material
 		and GetRenderTargetEx and render.OverrideBlend and render.OverrideAlphaWriteEnable
 		and render.OverrideColorWriteEnable and render.GetToneMappingScaleLinear and DisableClipping
@@ -276,47 +316,66 @@ function B.StartVanilla()
 		return false, "missing_dependencies"
 	end
 	local started, heap = clock(), collectgarbage( "count" )
-	local bytes = file.Read( MANIFEST, "GAME" )
-	if not bytes then return false, "run_prepare_vanilla_atlas_bake_py" end
+	local bytes = file.Read( "data_static/mc/atlas_bake/" .. id .. ".json", "GAME" )
+	if not bytes then return false, "run_prepare_" .. id .. "_atlas_bake_py" end
 	if #bytes > 2097152 then return false, "manifest_too_large" end
+	local cache = B.caches[id]
+	if not cache then
+		cache = { targets = {}, normal = {}, orm = {}, textures = {}, sourceMaterials = {} }
+		B.caches[id] = cache
+	end
 	-- Material() caches by path for the engine session. Never pretend changed bytes reloaded.
-	if B.manifest and ( B.manifest ~= bytes or B.tileCatalog ~= MC.GeneratedTiles or B.layout ~= MC.GeneratedAtlas ) then
+	if cache.manifest and ( cache.manifest ~= bytes or cache.tileCatalog ~= MC.GeneratedTiles or cache.layout ~= MC.GeneratedAtlas ) then
 		return false, "sources_changed_restart_client"
 	end
-	local p, err = B.plan
+	local p, err = cache.plan
 	if not p then
-		p, err = MC.AtlasBakePlan.New( util.JSONToTable( bytes ), MC.GeneratedAtlas, MC.GeneratedTiles )
+		p, err = MC.AtlasBakePlan.New( util.JSONToTable( bytes ), MC.GeneratedAtlas, MC.GeneratedTiles, id )
 		if not p then return false, err end
 	end
-	if B.sourceRevision and B.sourceRevision ~= p.revision then return false, "sources_changed_restart_client" end
-	local slot = B.published == 1 and 2 or 1
-	if targetInUse( B.targets[slot] ) then return false, "previous_atlas_still_in_use" end
-	B.sourceRevision = p.revision
-	B.manifest, B.plan, B.tileCatalog, B.layout = bytes, p, MC.GeneratedTiles, MC.GeneratedAtlas
-	B.planVersion = MC.AtlasBakePlan.VERSION
-	B.job = { state = "queued", plan = p, slot = slot, started = started, heapStartKB = heap,
-		loaded = B.sourcesReady and p.sourceCount or 0, drawn = 0, sourceCount = p.sourceCount, tileCount = p.count, revision = p.revision,
+	if cache.sourceRevision and cache.sourceRevision ~= p.revision then return false, "sources_changed_restart_client" end
+	local slot = cache.published == 1 and 2 or 1
+	if targetInUse( cache.targets[slot] ) or targetInUse( cache.normal[slot] ) or targetInUse( cache.orm[slot] ) then
+		return false, "previous_atlas_still_in_use"
+	end
+	cache.sourceRevision = p.revision
+	cache.manifest, cache.plan, cache.tileCatalog, cache.layout = bytes, p, MC.GeneratedTiles, MC.GeneratedAtlas
+	cache.planVersion = MC.AtlasBakePlan.VERSION
+	B.job = { state = "queued", id = id, pack = pack.name, cache = cache, plan = p, slot = slot, started = started, heapStartKB = heap,
+		loaded = cache.sourcesReady and p.sourceCount or 0, drawn = 0, sourceCount = p.sourceCount, tileCount = p.count, revision = p.revision,
 		loadMS = 0, drawMS = 0,
-		workMS = ( clock() - started ) * 1000, frames = 0, targetBytes = p.width * p.height * 4 * 2 }
+		workMS = ( clock() - started ) * 1000, frames = 0, targetBytes = p.width * p.height * 4 * 2 * ( p.pbr and 3 or 1 ) }
 	hook.Add( "PostRender", HOOK, runBake )
 	notify()
 	return true
 end
 
+function B.StartVanilla() return B.Start( "vanilla" ) end
+function B.StartAVPBR() return B.Start( "avpbr" ) end
+
 -- Autorefresh cancels the old closure; fixed named GPU objects remain reusable.
 if B.job then B.Cancel() end
-if B.planVersion ~= MC.AtlasBakePlan.VERSION then
-	B.plan, B.manifest, B.sourcesReady = nil, nil, false
+for _, cache in pairs( B.caches ) do
+	if cache.planVersion ~= MC.AtlasBakePlan.VERSION then
+		cache.plan, cache.manifest, cache.sourcesReady = nil, nil, false
+	end
 end
 concommand.Add( "mc_atlas_bake_vanilla", function()
 	local ok, err = B.StartVanilla()
 	if not ok then print( "[MC atlas bake] " .. tostring( err ) ) end
 end )
+concommand.Add( "mc_atlas_bake_avpbr", function()
+	local ok, err = B.StartAVPBR()
+	if not ok then print( "[MC atlas bake] " .. tostring( err ) ) end
+end )
 concommand.Add( "mc_atlas_bake_cancel", function() B.Cancel() end )
 concommand.Add( "mc_atlas_bake_status", function() print( util.TableToJSON( B.Status(), true ) ) end )
 hook.Add( "InitPostEntity", HOOK, function()
-	if MC.TexturePack:GetString() == PACK then
-		local ok, err = B.StartVanilla()
-		if not ok then MC.Fault( "atlas_bake_restore", "%s", err ) end
+	for id, pack in pairs( PACKS ) do
+		if MC.TexturePack:GetString() == pack.name then
+			local ok, err = B.Start( id )
+			if not ok then MC.Fault( "atlas_bake_restore", "%s", err ) end
+			break
+		end
 	end
 end )

@@ -337,18 +337,24 @@ end
 
 local function commitMaterials( c, transaction )
 	local materials, sources, uses = c.materials, c.bundle.sources, transaction.baseUses
+	local runtimePBR = c.bundle.runtimePBR or {}
 	-- The transaction contains only touched counts and newly written bindings.
 	-- Keep flat published maps; no overlay chains or copies of unrelated nodes.
 	for material, count in pairs( transaction.materialUses ) do
 		if count == 0 then
 			uses[material], materials[material], sources[material] = nil, nil, nil
+			runtimePBR[material] = nil
 		else
 			uses[material] = count
 			if transaction.materials[material] then materials[material] = transaction.materials[material] end
-			if transaction.bundle.sources[material] then sources[material] = transaction.bundle.sources[material] end
+			if transaction.bundle.sources[material] then
+				sources[material] = transaction.bundle.sources[material]
+				runtimePBR[material] = transaction.bundle.runtimePBR[material]
+			end
 		end
 	end
 	transaction.bundle.sources = sources
+	transaction.bundle.runtimePBR = runtimePBR
 	c.bundle, c.materialUses = transaction.bundle, uses
 end
 

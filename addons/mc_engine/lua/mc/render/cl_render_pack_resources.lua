@@ -21,7 +21,7 @@ end
 function P.Validate( plan )
 	requireValue( file and file.Read and util and util.SHA256,
 		"render_pack_verify_api", "mounted-file reads and SHA256 are required" )
-	local result = { plan = plan, nodes = {}, requests = {}, sources = {}, files = {}, textures = {}, materialMaps = {} }
+	local result = { plan = plan, nodes = {}, requests = {}, sources = {}, files = {}, textures = {}, materialMaps = {}, runtimePBR = {} }
 	local bytesRead, fileCount = 0, 0
 	local function verify( path, hash )
 		if result.files[path] then
@@ -235,7 +235,7 @@ end
 
 function P.Fork( bundle )
 	return { plan = bundle.plan, nodes = bundle.nodes, requests = bundle.requests, processing = bundle.processing,
-		files = bundle.files, textures = bundle.textures, sources = {}, newBuilds = {}, bytesRead = 0, materialMaps = {} }
+		files = bundle.files, textures = bundle.textures, sources = {}, newBuilds = {}, bytesRead = 0, materialMaps = {}, runtimePBR = {} }
 end
 
 function P.Ensure( bundle )
@@ -298,6 +298,10 @@ local function sourceKey( texture )
 end
 
 local function mappingFor( bundle, node, source )
+	if node.adapter == "mc:pbr_quad_v4" and MC.RuntimeAtlasPBR then
+		local runtime = MC.RuntimeAtlasPBR( source )
+		if runtime then return runtime end
+	end
 	if next( node.materialMaps ) == nil then return nil end
 	local mappings = bundle.materialMaps[node.owner]
 	if not mappings then
@@ -354,6 +358,10 @@ function P.Material( bundle, node, sourceMaterial, blockSize )
 		if mapping then
 			normal, orm, colorSpace = mapping.normal, mapping.orm, mapping.colorSpace
 			normalResource, ormResource = mapping.normalResource, mapping.ormResource
+			if mapping.runtime then
+				-- Track both maps so the baker cannot overwrite a pending/active bundle.
+				bundle.runtimePBR[sourceMaterial] = mapping
+			end
 		else
 			normal, orm = textureFor( normalResource, true ), textureFor( ormResource, true )
 		end
@@ -366,8 +374,8 @@ function P.Material( bundle, node, sourceMaterial, blockSize )
 	end
 	local signature = Schema.Canonical( { vertex = node.program.vertex, pixel = node.program.pixel,
 		stage = node.stage, source = source:GetName(), colorSpace = colorSpace, blockSize = blockSize,
-		adapter = node.adapter, normal = normal and ( normal:GetName() .. "/" .. normalResource.sha256 ),
-		orm = orm and ( orm:GetName() .. "/" .. ormResource.sha256 ),
+		adapter = node.adapter, normal = normal and ( normal:GetName() .. "/" .. ( normalResource and normalResource.sha256 or "runtime" ) ),
+		orm = orm and ( orm:GetName() .. "/" .. ( ormResource and ormResource.sha256 or "runtime" ) ),
 		environment = environment and ( environment:GetName() .. "/" .. node.environment.sha256 ),
 		dfg = dfg and ( dfg:GetName() .. "/" .. node.dfg.sha256 ) } )
 	local cached = P.materials[signature]

@@ -227,6 +227,25 @@ function MC.RegisterTexturePack( name, definition, owner )
 		if inheritBase then return false, "runtime_texture_cannot_inherit" end
 	end
 	local opaquePath = normalizeAtlasPath( definition.opaque or definition.opaquePath or definition.material )
+	local runtimePBR
+	if definition.runtimePBR ~= nil then
+		local maps = definition.runtimePBR
+		if not runtimeTexture or type( maps ) ~= "table" then return false, "invalid_runtime_pbr" end
+		for _, channel in ipairs( { "normal", "orm" } ) do
+			local texture = maps[channel]
+			local kind = type( texture )
+			if ( kind ~= "ITexture" and kind ~= "userdata" and kind ~= "table" )
+				or type( texture.GetName ) ~= "function" or type( texture.IsError ) ~= "function"
+				or type( texture.Width ) ~= "function" or type( texture.Height ) ~= "function"
+				or texture:IsError() or texture:GetName() == ""
+				or texture:Width() ~= runtimeTexture:Width() or texture:Height() ~= runtimeTexture:Height() then
+				return false, "invalid_runtime_pbr_" .. channel
+			end
+		end
+		if maps.normal:GetName() == runtimeTexture:GetName() or maps.orm:GetName() == runtimeTexture:GetName()
+			or maps.normal:GetName() == maps.orm:GetName() then return false, "runtime_pbr_channels_alias" end
+		runtimePBR = { normal = maps.normal, orm = maps.orm, colorSpace = "srgb", runtime = true }
+	end
 	if not opaquePath and not inheritBase and not runtimeTexture then return false, "invalid_opaque_atlas_path" end
 	local translucentPath = normalizeAtlasPath( definition.translucent or definition.translucentPath ) or opaquePath
 	local iconPath = normalizeAtlasPath( definition.icon or definition.iconPath ) or translucentPath
@@ -247,6 +266,7 @@ function MC.RegisterTexturePack( name, definition, owner )
 		description = definition.description,
 		preview = preview,
 		runtimeTexture = runtimeTexture,
+		runtimePBR = runtimePBR,
 		inheritBase = inheritBase,
 		opaquePath = opaquePath,
 		translucentPath = translucentPath,
@@ -270,6 +290,15 @@ function MC.RegisterTexturePack( name, definition, owner )
 	end
 	if hook and hook.Run then hook.Run( "MC.TexturePackRegistered", name, owner ) end
 	return true, name
+end
+
+-- Called at material-build boundaries, never from a quad/vertex loop. Matching
+-- the actual source also supports inherited packs without using active UI state.
+function MC.RuntimeAtlasPBR( source )
+	local name = source:GetName()
+	for _, definition in pairs( MC.TexturePackDefinitions ) do
+		if definition.runtimePBR and definition.runtimeTexture:GetName() == name then return definition.runtimePBR end
+	end
 end
 
 function MC.UnregisterTexturePack( name, owner )
