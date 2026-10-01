@@ -1,4 +1,4 @@
--- Session state for the pre-baked texture pack manager. No VGUI dependencies.
+-- Selection and bake-on-apply state. Pending requests outlive the VGUI panel.
 MC = MC or {}
 MC.TexturePackManager = MC.TexturePackManager or {}
 local M = MC.TexturePackManager
@@ -20,7 +20,14 @@ function Session:Refresh()
 	self.active = MC.TexturePackName()
 	self.leaseOwner = MC.TexturePackLeaseOwner()
 	self.packs, self.byName = {}, {}
-	for _, entry in ipairs( MC.ListTexturePacks() ) do
+	local entries, registered = MC.ListTexturePacks(), {}
+	for _, entry in ipairs( entries ) do registered[entry.name] = true end
+	if MC.AtlasBaker and MC.AtlasBaker.ListPreparedPacks then
+		for _, entry in ipairs( MC.AtlasBaker.ListPreparedPacks() ) do
+			if not registered[entry.name] then entries[#entries + 1] = entry end
+		end
+	end
+	for _, entry in ipairs( entries ) do
 		local name = entry.name
 		if name == "default" then
 			entry.title = M.Text( "Default", "默认资源" )
@@ -39,7 +46,7 @@ function Session:Refresh()
 			if not entry.title or entry.title == "" then entry.title = name end
 			entry.description = entry.description or M.Text( "Provided by: ", "提供者：" ) .. entry.owner
 		end
-		entry.available = entry.runtime == true or entry.inheritBase == true or name == self.active
+		entry.available = entry.bakeID ~= nil or entry.runtime == true or entry.inheritBase == true or name == self.active
 		if not entry.available and entry.opaquePath then
 			local path = entry.opaquePath:gsub( "%.png$", "" )
 			entry.available = file.Exists( "materials/" .. path .. ".png", "GAME" )
@@ -55,30 +62,35 @@ function M.New()
 	return setmetatable( {}, Session ):Refresh()
 end
 
+function Session:ClearPending()
+	if not self.pending then return end
+	hook.Remove( "MC.AtlasBakeChanged", self.pending.hook )
+	self.pending = nil
+end
+
 function Session:Choose( name )
 	local entry = self.byName[name]
 	if not entry then return false, "texture_pack_not_registered" end
 	if not entry.available then return false, "missing_atlas_" .. name end
+	if name ~= self.draft then self:ClearPending() end
 	self.draft, self.focus, self.error = name, name, nil
 	return true
 end
 
 function Session:Revert()
+	self:ClearPending()
 	self:Refresh()
 	self.draft, self.focus, self.error = self.preference, self.preference, nil
 end
 
 function Session:CanApply()
 	local entry = self.byName[self.draft]
-	return ( self:IsDirty() or self.active ~= self.draft ) and self.leaseOwner == nil and entry ~= nil and entry.available == true
+	if self.pending or self.leaseOwner or not entry or not entry.available then return false end
+	if entry.bakeID and MC.AtlasBaker.IsBusy() and MC.AtlasBaker.Status().pack ~= self.draft then return false end
+	return self:IsDirty() or self.active ~= self.draft
 end
 
-function Session:Apply()
-	self:Refresh()
-	if self.leaseOwner then return false, "texture_pack_controlled_by_mode" end
-	local entry = self.byName[self.draft]
-	if not entry then return false, "texture_pack_not_registered" end
-	if not entry.available then return false, "missing_atlas_" .. self.draft end
+function Session:ApplyRegistered()
 	local ok, result = MC.SetTexturePackPreference( self.draft )
 	if not ok then
 		self.error = tostring( result )
@@ -88,6 +100,47 @@ function Session:Apply()
 	self.error = nil
 	self:Refresh()
 	return true, result
+end
+
+function Session:Apply()
+	self:Refresh()
+	if self.pending then return true, "baking" end
+	if self.leaseOwner then return false, "texture_pack_controlled_by_mode" end
+	local entry = self.byName[self.draft]
+	if not entry then return false, "texture_pack_not_registered" end
+	if not entry.available then return false, "missing_atlas_" .. self.draft end
+	if not entry.bakeID then return self:ApplyRegistered() end
+	local baker = MC.AtlasBaker
+	if baker.IsBusy() then
+		if baker.Status().pack ~= self.draft then return false, "bake_already_running" end
+	else
+		local ok, err = baker.Start( entry.bakeID )
+		if not ok then self.error = tostring( err ) return false, err end
+	end
+	M.applySerial = ( M.applySerial or 0 ) + 1
+	local pending = { name = self.draft, preference = self.preference, serial = baker.Status().serial,
+		hook = "mc_texture_pack_apply_" .. M.applySerial }
+	self.pending, self.error = pending, nil
+	hook.Add( "MC.AtlasBakeChanged", pending.hook, function( status )
+		if status.serial ~= pending.serial then return end
+		if status.state ~= "ready" and status.state ~= "failed" and status.state ~= "cancelled" then return end
+		self:ClearPending()
+		self:Refresh()
+		if status.state ~= "ready" then self.error = status.error or "atlas_bake_cancelled" return end
+		-- Recheck selection/ownership after the asynchronous boundary, before changing preference.
+		if self.draft ~= pending.name or self.preference ~= pending.preference then
+			self.error = "texture_pack_selection_changed" return
+		end
+		if self.leaseOwner then self.error = "texture_pack_controlled_by_mode" return end
+		local ready = self.byName[pending.name]
+		if not ready or not ready.runtime or ready.owner ~= "mc.atlas_baker" then
+			self.error = "atlas_bake_not_registered"
+			MC.Fault( "texture_pack_manager_bake_publish", "Completed atlas %s is not registered", pending.name )
+			return
+		end
+		self:ApplyRegistered()
+	end )
+	return true, "baking"
 end
 
 function Session:VisiblePacks( query )

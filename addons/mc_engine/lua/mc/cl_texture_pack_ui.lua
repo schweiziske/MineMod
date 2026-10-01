@@ -1,5 +1,4 @@
--- A deliberately small Minecraft-style picker for registered, pre-baked packs.
--- Resource-stack ordering and in-game atlas compilation are not exposed here.
+-- A Minecraft-style picker for registered atlases and prepared source packs.
 local M = MC.TexturePackManager
 local text = M.Text
 local Font = MC.BitmapFont
@@ -310,7 +309,7 @@ function FRAME:Init()
 	end, true )
 	self.Previous:Dock( RIGHT ) self.Previous:SetWide( 32 )
 	for _, event in ipairs( EVENTS ) do hook.Add( event, self, function( panel ) panel:QueueRefresh() end ) end
-	hook.Add( "MC.AtlasBakeChanged", self, function( panel ) panel:UpdateState() end )
+	hook.Add( "MC.AtlasBakeChanged", self, function( panel ) panel:QueueRefresh() end )
 	cvars.AddChangeCallback( "mc_texture_pack", function() if IsValid( self ) then self:QueueRefresh() end end, "mc_texture_pack_manager" )
 	hook.Add( "OnScreenSizeChanged", self, function( panel ) panel:FitScreen() end )
 	self:Refresh()
@@ -348,7 +347,8 @@ function FRAME:UpdateState()
 	elseif s:IsDirty() then state = text( "Changes not applied", "更改尚未应用" )
 	elseif s.active ~= s.preference then state = text( "Currently active: ", "当前实际使用：" ) .. s.active end
 	if busy then
-		state = text( "Waiting to bake: ", "等待烘焙：" ) .. bake.pack
+		if s.pending then state = text( "Preparing selected pack; it will apply automatically.", "正在准备所选材质包，完成后自动应用。" )
+		else state = text( "Waiting to bake: ", "等待烘焙：" ) .. bake.pack end
 	elseif bake.state == "failed" then state = text( "Bake failed: ", "烘焙失败：" ) .. bake.error end
 	self:SetStatus( state )
 	local entry = s.byName[s.focus]
