@@ -127,6 +127,22 @@ function MC.SkyVoxelLight( bx, by, bz )
 	return skyLevelAt( bx, by, bz )
 end
 
+local standardSkyVoxelLight = MC.SkyVoxelLight
+-- Borrow only during a synchronous mesh slice. Coordinates/key/local index
+-- have already been resolved by its snapshot. Backend/config changes require
+-- a new slice; custom/native queries retain the public sampling path.
+function MC.NewRawSkyLightSampler( query )
+	if query ~= standardSkyVoxelLight or nativeSkyBackend() then return nil end
+	if not skyFloodEnabled() then return function() return 15 end end
+	local stores, exposed = MC.LightSkyChunks, MC.SkyExposedAt
+	return function( bx, by, bz, cx, cy, cz, key, li )
+		if not chunkKnown( cx, cy, cz, key ) then return 0 end
+		if not exposed or exposed( bx, by, bz ) == true then return 15 end
+		local store = stores[key]
+		return store and ( store[li] or 0 ) or 0
+	end
+end
+
 function MC.SkyVoxelLightUnit( bx, by, bz )
 	return math.Clamp( MC.SkyVoxelLight( bx, by, bz ) / 15, 0, 1 )
 end

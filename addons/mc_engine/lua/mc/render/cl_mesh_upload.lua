@@ -44,6 +44,7 @@ local function newMeshPerfStats()
 		flushMS = 0,
 		meshNewMS = 0,
 		buildTriMS = 0,
+		cornerUploadMS = 0,
 		meshBeginUploads = 0,
 		buildTriangleUploads = 0,
 		destroyMS = 0,

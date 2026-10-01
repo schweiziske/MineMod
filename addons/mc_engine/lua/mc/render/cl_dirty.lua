@@ -11,6 +11,9 @@ local clearSectionBlockEmitCache = MC.ClearSectionBlockEmitCache
 local markBlockEmitCacheDirty = MC.MarkBlockEmitCacheDirty
 local meshDirtyRevision = 0
 local Occlusion = MC.RenderOcclusion
+-- Tie retries to the dirty-set lifetime, not a reusable numeric chunk key.
+-- Unloaded/replaced queues release these entries without an extra world scan.
+local buildRetries = setmetatable( {}, { __mode = "k" } )
 
 local function wakeMeshBuilder()
 	meshDirtyRevision = meshDirtyRevision + 1
@@ -53,6 +56,7 @@ local function markChunkSectionDirty( key, sectionIndex, rateLimited )
 	end
 	local sections = MC.MeshDirty[key]
 	if sections == true then return end
+	if sections then buildRetries[sections] = nil end
 	if not sections then
 		sections = {}
 		MC.MeshDirty[key] = sections
@@ -81,6 +85,7 @@ local function markChunkSectionLightDirty( key, sectionIndex, rateLimited )
 	if geometryDirty == true then return end
 	MC.MeshLightDirtyRateLimited = MC.MeshLightDirtyRateLimited or {}
 	local sections = MC.MeshLightDirty[key]
+	if sections then buildRetries[sections] = nil end
 	if not sections then
 		sections = {}
 		MC.MeshLightDirty[key] = sections
@@ -464,7 +469,9 @@ local function canBuildMeshSection( budget, rateLimited )
 	return true
 end
 
-local function tryBuildMeshSection( key, sectionIndex, lightOnly, rateLimited, budget )
+local function tryBuildMeshSection( key, sectionIndex, lightOnly, rateLimited, budget, sections )
+	local retry = sections and buildRetries[sections]
+	if retry and SysTime() < retry.at then return false end
 	if not canBuildMeshSection( budget, rateLimited ) then return nil end
 	local limited = rateLimited and not budget.native
 	local started = limited and SysTime() or nil
@@ -482,8 +489,13 @@ local function tryBuildMeshSection( key, sectionIndex, lightOnly, rateLimited, b
 	end
 	if result == false and not budget.native then
 		budget.failures = budget.failures + 1
+		-- The builder has already reported the fault and retained old geometry.
+		-- Unlimited mode must not retry the same broken chunk every frame.
+		local delay = retry and math.min( retry.delay * 2, 8 ) or 1
+		buildRetries[sections] = { delay = delay, at = SysTime() + delay }
 		return false
 	end
+	if sections then buildRetries[sections] = nil end
 	return true
 end
 
@@ -513,7 +525,7 @@ local function buildDirtyMeshKey( key, sections, rateLimited, budget, pinnedOnly
 		-- Native builds and uploads a complete storage chunk per submission; its
 		-- sectionIndex argument is compatibility-only. Submit once and retire the
 		-- whole Lua dirty set instead of calling the bridge 32 times.
-		if not tryBuildMeshSection( key, sectionIndex, false, rateLimited, budget ) then return 0 end
+		if not tryBuildMeshSection( key, sectionIndex, false, rateLimited, budget, sections ) then return 0 end
 		if MC.RenderPipeline and MC.RenderPipeline.NoteDirtyBuild then MC.RenderPipeline.NoteDirtyBuild( 1 ) end
 		if MC.MeshDirty[key] == sections then
 			retireLightDirtySection( key, true )
@@ -526,7 +538,7 @@ local function buildDirtyMeshKey( key, sections, rateLimited, budget, pinnedOnly
 	local built = 0
 	for sectionIndex = 1, RENDER_SECTION_COUNT do
 		if sections[sectionIndex] and ( not pinnedOnly or MC.RenderGeometryStore.IsSectionPinned( key, sectionIndex ) ) then
-			if not tryBuildMeshSection( key, sectionIndex, false, rateLimited, budget ) then break end
+			if not tryBuildMeshSection( key, sectionIndex, false, rateLimited, budget, sections ) then break end
 			if MC.RenderPipeline and MC.RenderPipeline.NoteDirtyBuild then MC.RenderPipeline.NoteDirtyBuild( 1 ) end
 			built = built + 1
 			if MC.MeshDirty[key] ~= sections then break end
@@ -557,7 +569,7 @@ local function buildLightDirtyMeshKey( key, sections, rateLimited, budget, pinne
 		if sections[sectionIndex] and geometryDirty ~= true
 		and not ( istable( geometryDirty ) and geometryDirty[sectionIndex] )
 		and ( not pinnedOnly or MC.RenderGeometryStore.IsSectionPinned( key, sectionIndex ) ) then
-			if not tryBuildMeshSection( key, sectionIndex, true, rateLimited, budget ) then break end
+			if not tryBuildMeshSection( key, sectionIndex, true, rateLimited, budget, sections ) then break end
 			built = built + 1
 			if MC.MeshLightDirty[key] ~= sections then break end
 			sections[sectionIndex] = nil
@@ -640,7 +652,7 @@ hook.Add( "Think", "mc_meshbuild", function()
 	local frameStart = SysTime()
 	local geometryKeys, geometrySections = 0, 0
 	local lightKeys, lightSections = 0, 0
-	local lazyDistance = lazyMeshBuildDistance()
+	local lazyDistance = unlimited and 0 or lazyMeshBuildDistance()
 	local lazy = lazyDistance > 0
 	local pcx, pcy, pcz = playerChunkCoords()
 	local coords = MC.API and MC.API.Coords

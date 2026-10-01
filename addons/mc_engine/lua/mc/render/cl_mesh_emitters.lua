@@ -165,6 +165,21 @@ end
 
 local setTemplateTriVertex
 
+local function isUnitCubeFace( quad, face )
+	local mask = 0
+	for vertex = 1, 4 do
+		local x, y, z = modelQuadVertex( quad, vertex )
+		for corner = 1, 4 do
+			local c = face.c[corner]
+			if x == c[1] and y == c[2] and z == c[3] then
+				mask = bit.bor( mask, bit_lshift( 1, corner - 1 ) )
+				break
+			end
+		end
+	end
+	return mask == 15
+end
+
 local function buildModelTemplate( b, orient, cubicBlockId )
 	local quads = rotatedModelQuads( b, orient )
 	if not quads then return false end
@@ -172,6 +187,7 @@ local function buildModelTemplate( b, orient, cubicBlockId )
 	local mirrorU = b.orient == "door"
 	local tri = C.TRI
 	local out = { n = 0, allFacesCubic = true }
+	local cubeFaceMask, unitCubeFaces = 0, true
 	for qi = 1, #quads do
 		local quad = quads[qi]
 		local verts = quad and quad.verts
@@ -207,10 +223,13 @@ local function buildModelTemplate( b, orient, cubicBlockId )
 			end
 			local n = out.n + 1
 			if not rec.faceCubic then out.allFacesCubic = false end
+			if not isUnitCubeFace( quad, face ) then unitCubeFaces = false end
+			cubeFaceMask = bit.bor( cubeFaceMask, bit_lshift( 1, faceIndex - 1 ) )
 			out.n = n
 			out[n] = rec
 		end
 	end
+	out.sixCubeFaces = out.n == 6 and unitCubeFaces and cubeFaceMask == 63
 	return out
 end
 
@@ -645,6 +664,22 @@ local function fullCubeTemplate( ctx, faceIndex, tile, baked, rot, flipU, flipV,
 		l2Corners = face.c, l2UV = { { au, av }, { bu, bv }, { cu, cv }, { du, dv } }, l2Lighting = lighting }
 	surfaces[key] = quad
 	return quad
+end
+
+local function emitNativeValues( ctx, id, bx, by, bz, wx, wy, wz, face, normal, shade, emission, quadEmission, lighting, tile,
+	c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z, u1, v1, u2, v2, u3, v3, u4, v4 )
+	local quad = nativeScratch( ctx )
+	quad.atlasPage = atlasPageForTile( tile )
+	local a, b, c, d = quad.l2Corners[1], quad.l2Corners[2], quad.l2Corners[3], quad.l2Corners[4]
+	a[1], a[2], a[3], b[1], b[2], b[3] = c1x, c1y, c1z, c2x, c2y, c2z
+	c[1], c[2], c[3], d[1], d[2], d[3] = c3x, c3y, c3z, c4x, c4y, c4z
+	a, b, c, d = quad.l2UV[1], quad.l2UV[2], quad.l2UV[3], quad.l2UV[4]
+	a[1], a[2], b[1], b[2], c[1], c[2], d[1], d[2] = u1, v1, u2, v2, u3, v3, u4, v4
+	quad.faceIndex, quad.normal, quad.shade = face, normal, shade
+	quad.quadLightEmission, quad.positions, quad.faceCubic = quadEmission, nil, nil
+	-- Runtime boxes change with neighbors; never reuse another shape's bake.
+	quad.l2Lighting, quad.nativeL2Owner = lighting, lighting
+	ctx.emitL2( quad, id, bx, by, bz, wx, wy, wz, emission )
 end
 
 local function emitNativeArrays( ctx, id, bx, by, bz, wx, wy, wz, face, normal, shade, emission, kind,
@@ -1232,14 +1267,31 @@ local function emitModelBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz,
 	return emitShapeBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
 end
 
-local function emitStatePlanBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer, visibleFaceMask )
+local function emitStatePlanBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer, visibleFaceMask, visibleFaceCount )
 	if not stateVisualPlanRangeFast or not stateVisualPlanModelAtFast or not stateVisualModelData then
 		local fallback = selectBaseBlockEmitter( ctx, b, id, orient, ctx.blockIsFullCube, bx, by, bz )
 		return fallback( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer )
 	end
-	ctx.prepareBlockCacheBuffer( targetBuffer )
 	local planId, groupOffset, groupCount = stateVisualPlanRangeFast( ctx.currentStateId )
 	if groupCount == 0 then return "statePlan", false, 0 end
+	-- Apply the existing one/two-face cube cache policy to generated cube
+	-- models too. Preserve their own geometry, UVs, tint and lighting metadata.
+	-- Complex/multipart models and paged-atlas routing keep the normal path.
+	if ctx.l2 and not ctx.nativeL2 and not ctx.pagedAtlas and groupCount == 1 and visibleFaceCount
+		and visibleFaceCount > 0 and not shouldStoreBlockEmissionCache( "fullCube", visibleFaceCount * 6 ) then
+		local modelId = stateVisualPlanModelAtFast( planId, groupOffset, 0, bx, by, bz )
+		local modelData = modelId and stateVisualModelData( modelId )
+		local template = modelData and getGeneratedModelTemplate( modelData )
+		if template and template.sixCubeFaces then
+			local vertexCount = visibleFaceCount * 6
+			-- emitL2 retains the ordinary per-quad capacity/flush boundary.
+			ctx.setCur( targetBuffer )
+			emitModelBlockTemplate( ctx, template, id, bx, by, bz, wx, wy, wz, lx, ly, lz, li,
+				ctx.push, ctx.lightMetaFast, ctx.currentEmitLightStyle, true, modelId, visibleFaceMask )
+			return "statePlan", true, vertexCount
+		end
+	end
+	ctx.prepareBlockCacheBuffer( targetBuffer )
 	local rendered = false
 	for groupIndex = 0, groupCount - 1 do
 		local modelId = stateVisualPlanModelAtFast( planId, groupOffset, groupIndex, bx, by, bz )

@@ -1305,6 +1305,30 @@ function MC.SampleLighting( bx, by, bz, selfEmission )
 	return brightness, level, block, sky
 end
 
+local standardSampleLighting = MC.SampleLighting
+-- Snapshot-only raw levels: reuse its validated chunk address and omit the
+-- brightness/ambient calculation that L2 never consumes. Select once at the
+-- synchronous build boundary; preserve custom samplers, native and debug paths.
+function MC.NewRawLightSampler( sample )
+	if sample ~= standardSampleLighting or lightPerfDebugEnabled() or nativeBlockLightBackend() then return nil end
+	if not lightEnabled() then return function() noteLightSample() return 15, 15 end end
+	local sky
+	if MC.NewRawSkyLightSampler then sky = MC.NewRawSkyLightSampler( MC.SkyVoxelLight ) end
+	if not sky then return nil end
+	ensureLightSourceIndex()
+	local stores = MC.LightBlockChunks
+	return function( bx, by, bz, cx, cy, cz, key, li )
+		local block = 0
+		if chunkKeyLoaded( key ) then
+			local store = stores[key]
+			if store then block = store[li] or 0 end
+		end
+		local skyLevel = sky( bx, by, bz, cx, cy, cz, key, li )
+		noteLightSample()
+		return block, skyLevel
+	end
+end
+
 function MC.SampleAmbientOcclusion( bx, by, bz )
 	local sampleStart = lightPerfDebugEnabled() and perfNow() or nil
 	if not lightEnabled() then
