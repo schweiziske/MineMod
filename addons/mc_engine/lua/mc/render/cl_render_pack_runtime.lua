@@ -370,7 +370,7 @@ local function syncSections( c, force )
 	force = force or c.blockSize ~= size
 	if force or not c.postProcessBound then
 		local definition = c.plan.owners["pack/" .. c.pack].definition
-		if definition.programs.post_ssao then c.postProcess = MC.RenderPBRPost.Register( definition, size ) end
+		if definition.programs.post_ssao then c.postProcess = MC.RenderPBRPost.Register( definition, size, c.processing ) end
 		c.postProcessBound = true
 	end
 	local keys, fullSync = c.dirtyChunks, c.fullSync

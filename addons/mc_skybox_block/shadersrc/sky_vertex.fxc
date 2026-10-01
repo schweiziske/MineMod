@@ -1,0 +1,11 @@
+float4x4 SkyModelViewProjection : register(c4);
+
+struct SkyVertex
+{
+    float4 position : POSITION;
+};
+
+float4 main(SkyVertex input) : POSITION
+{
+    return mul(input.position, SkyModelViewProjection);
+}

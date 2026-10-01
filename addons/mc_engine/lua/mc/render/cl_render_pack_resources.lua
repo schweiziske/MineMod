@@ -42,13 +42,19 @@ function P.Validate( plan )
 	for _, ownerKey in ipairs( sortedKeys( plan.owners ) ) do
 		local owner = plan.owners[ownerKey]
 		local def = owner.definition
+		local sky = def.adapter == "mc:sky_quad_v1"
 		local moving = def.adapter == "mc:pbr_quad_v4" or def.adapter == "mc:vanilla_quad_v2"
 		local independentAO = def.adapter == "mc:pbr_quad_v3" or def.adapter == "mc:pbr_quad_v4"
 		local ibl = independentAO or def.adapter == "mc:pbr_quad_v2"
 		local pbr = ibl or def.adapter == "mc:pbr_quad_v1"
 		requireValue( def.abi == 1 and def.layout == "mc:quad_corners_v1"
-			and ( pbr or def.adapter == "mc:vanilla_quad_draft" or def.adapter == "mc:vanilla_quad_v2" ),
+			and ( sky or pbr or def.adapter == "mc:vanilla_quad_draft" or def.adapter == "mc:vanilla_quad_v2" ),
 			"render_pack_adapter", ownerKey .. ": unsupported quad-corners-v1 adapter" )
+		if sky then
+			requireValue( owner.kind == "shader" and not def.pipeline and next( def.resources ) == nil
+				and next( def.materialMaps ) == nil and MC.RenderSky and MC.RenderSky.VERSION == 1,
+				"render_sky_adapter", ownerKey .. ": sky requires an independent shader and the engine sky-texture adapter" )
+		end
 		if moving then
 			requireValue( MC.RenderDynamicLights and MC.RenderDynamicLights.VERSION == 1,
 				"render_dynamic_light_adapter", ownerKey .. ": moving lights require engine light-data v1" )
@@ -82,8 +88,8 @@ function P.Validate( plan )
 				"render_water_shadow_adapter", ownerKey .. ": water depth requires the light-space depth v1 renderer" )
 		end
 		if def.pipeline then
-			requireValue( owner.kind == "pack" and MC.RenderPackProcessing and MC.RenderPackProcessing.VERSION == 1,
-				"render_processing_adapter", ownerKey .. ": processing v1 requires a pack owner and the matching engine" )
+			requireValue( owner.kind == "pack" and MC.RenderPackProcessing and MC.RenderPackProcessing.VERSION >= def.pipeline.version,
+				"render_processing_adapter", ownerKey .. ": processing requires a pack owner and the matching engine" )
 			for _, pass in ipairs( def.pipeline.passes ) do
 				requireValue( pass.stage ~= "shadowcomp" or pbr and def.programs.shadow,
 					"render_processing_shadow_adapter", ownerKey .. ": shadowcomp requires a PBR shadow geometry program" )
@@ -91,12 +97,15 @@ function P.Validate( plan )
 			result.processing = def
 		end
 		if def.programs.water_ssr then
-			requireValue( def.programs.water and def.programs.scene_depth and def.programs.ssr_copy
+			requireValue( def.pipeline and def.pipeline.version == 2 and def.programs.post_ssao and MC.RenderPackScreen
+				and def.pipeline.geometry and def.pipeline.geometry[1] == "water_reflections"
+				and def.programs.water and def.programs.scene_depth and def.programs.ssr_copy
 				and def.programs.water_ssr_composite and MC.RenderPBRSSR and MC.RenderPBRSSR.VERSION == 1,
-				"render_ssr_adapter", ownerKey .. ": SSR requires the water SSR v1 engine and all four auxiliary programs" )
+				"render_ssr_adapter", ownerKey .. ": SSR requires screen pipeline v2, shared scene depth and the reflection programs" )
 		end
 		if def.programs.post_ssao then
 			requireValue( pbr and MC.RenderPBRPost and MC.RenderPBRPost.VERSION == 1
+				and def.pipeline and def.pipeline.version == 2 and MC.RenderPackScreen
 				and def.programs.post_ssao_composite and def.programs.post_scene_depth
 				and def.programs.post_depth_copy and def.programs.ssr_copy,
 				"render_post_adapter", ownerKey .. ": post lighting requires scene depth and the AO/resolve programs" )
@@ -133,6 +142,8 @@ function P.Validate( plan )
 				ownerKey .. "/" .. name .. ": material normal and ORM maps must be linear data" )
 		end
 		for name, pass in pairs( def.passes ) do
+			requireValue( not sky or pass.stage == "world_opaque" and next( pass.inputs ) == nil,
+				"render_sky_pass", ownerKey .. "/" .. name .. ": sky supports opaque geometry with the captured sky as its only input" )
 			requireValue( pass.stage == "world_opaque" or pass.stage == "world_cutout" or pass.stage == "world_translucent",
 				"render_pack_stage", ownerKey .. "/" .. name .. ": unsupported processing stage " .. pass.stage )
 			requireValue( not moving or def.programs["dynamic_" .. pass.program],
@@ -373,7 +384,12 @@ function P.Material( bundle, node, sourceMaterial, blockSize )
 	local slot = tostring( P.materialCount + 1 )
 	local maps
 	if pbr then maps = { normal = normal, orm = orm, environment = environment, dfg = dfg, colorSpace = colorSpace } end
-	local material = R.BoundMaterial( P.shared, slot, source, node.stage, blockSize, node.program, colorSpace, maps )
+	local material
+	if node.adapter == "mc:sky_quad_v1" then
+		material = MC.RenderSky.Material( slot, node.program )
+	else
+		material = R.BoundMaterial( P.shared, slot, source, node.stage, blockSize, node.program, colorSpace, maps )
+	end
 	if node.dynamicProgram then
 		MC.RenderDynamicLights.RegisterMaterial( material, node.dynamicProgram, P.shared, source, node.stage, blockSize, maps )
 	end

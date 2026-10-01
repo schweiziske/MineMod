@@ -117,3 +117,59 @@ function L.Resolve( stateId, context, output )
 end
 
 initialize()
+
+-- L2 also samples addon states, including neighbours of ordinary vanilla faces.
+-- Keep the pinned catalog strict; custom profiles follow the registered visual
+-- and collision contracts instead of pretending to be a generated Java state.
+local Runtime = { ready = L.ready }
+MC.StateLighting = Runtime
+local customProfiles = {}
+local visualRevision, registry
+local customDynamicFields = { "fullCube", "hasCollision", "translucent", "lightEmission", "lightOpacity" }
+
+function Runtime.Prepare()
+	if registry ~= MC.BlockStateSchemaById or visualRevision ~= MC.BlockStateVisualRevision then
+		customProfiles = {}
+		registry = MC.BlockStateSchemaById
+		visualRevision = MC.BlockStateVisualRevision
+	end
+	return Runtime.ready
+end
+
+function Runtime.Get( stateId, bx, by, bz )
+	if L.Contains( stateId ) then return L.Get( stateId ) end
+	local cached = customProfiles[stateId]
+	if cached then return cached end
+	local schema = registry and registry[stateId]
+	if not MC.Check( schema and schema.generated ~= true and MC.Blocks[schema.blockId] ~= nil,
+		"state_lighting_missing", "no registered custom lighting source for state %s", tostring( stateId ) ) then return nil end
+	local visual, err = MC.ResolveBlockStateVisual( stateId, bx, by, bz )
+	if not MC.Check( visual ~= nil, "state_lighting_visual", "state %s: %s", stateId, tostring( err ) ) then return nil end
+	local full = MC.BlockVisualHasCollision( visual, bx, by, bz )
+		and MC.BlockVisualIsFullCube( visual, bx, by, bz )
+	local opaque = full and visual.block.transparent ~= true
+		and not MC.BlockVisualIsTranslucent( visual, bx, by, bz )
+	local emission = MC.BlockVisualLightEmission( visual, bx, by, bz )
+	local dampening = MC.BlockVisualLightOpacity( visual, bx, by, bz )
+	local visualResolver = MC.BlockStateVisualResolvers[schema.name]
+	local collisionResolver = MC.BlockStateCollisionResolvers and MC.BlockStateCollisionResolvers[schema.name]
+	local dynamic = visual.cacheable == false
+		or ( visualResolver ~= nil and visualResolver.positionDependent == true )
+		or ( collisionResolver ~= nil and collisionResolver.positionDependent == true )
+		or MC.BlockCollisionDependsOnNeighbours( visual.id )
+	-- Function-valued visual properties may depend on coordinates even if the
+	-- visual object itself is cached.
+	for i = 1, #customDynamicFields do
+		dynamic = dynamic or type( visual[customDynamicFields[i]] ) == "function"
+	end
+	local p = {
+		emission = emission, dampening = dampening, emissive = false,
+		shade = full and 0.2 or 1, viewBlocking = opaque, solidRender = opaque, fullCollision = full,
+		skyPass = dampening == 0, shapeOcclusion = not full, dynamicShape = dynamic,
+		viewContext = "none", collisionContext = "none",
+	}
+	if not dynamic then customProfiles[stateId] = p end
+	return p
+end
+
+Runtime.Resolve = L.Resolve
