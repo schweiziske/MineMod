@@ -1,0 +1,10 @@
+sampler2D SkyCapture : register(s0);
+float4 SkyState : register(c0);
+
+float4 main(float2 pixel : VPOS) : COLOR0
+{
+    // D3D9 VPOS is integer-centred; sample the matching captured texel.
+    float2 uv = (pixel + 0.5) * SkyState.yz;
+    float3 sky = tex2D(SkyCapture, uv).rgb;
+    return float4(lerp(float3(1, 0, 1), sky, SkyState.x), 1);
+}

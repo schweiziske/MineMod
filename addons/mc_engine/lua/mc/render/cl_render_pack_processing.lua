@@ -2,7 +2,7 @@
 MC = MC or {}
 local P = MC.RenderPackProcessing or { banks = {}, targetBytes = 0, targetCount = 0, materialCount = 0 }
 MC.RenderPackProcessing = P
-P.VERSION = 1
+P.VERSION = 2
 local requireValue = MC.RenderL2Resources.Require
 local canonical = MC.RenderPackSchema.Canonical
 local unitTone = Vector( 1, 1, 1 )
@@ -39,7 +39,10 @@ local function targetFor( instance, name, context, shadow )
 	local spec = instance.definition.pipeline.targets[name]
 	local size = spec.size
 	local w, h = size.width, size.height
-	if size.relative == "view" then w, h = context.view_width * size.scale, context.view_height * size.scale
+	if size.relative == "view" then
+		local scale = size.scale
+		if size.maxWidth then scale = math.min( scale, size.maxWidth / context.view_width, size.maxHeight / context.view_height ) end
+		w, h = context.view_width * scale, context.view_height * scale
 	elseif size.relative == "shadow" then
 		requireValue( shadow and shadow.target, "render_processing_shadow", "shadow-relative target requires a completed atlas" )
 		w, h = shadow.target:Width() * size.scale, shadow.target:Height() * size.scale
@@ -55,7 +58,7 @@ local function targetFor( instance, name, context, shadow )
 			"render_processing_target_budget", "processing reached 128 targets / 128 MiB; restart to release engine RTs" )
 		-- Charge before allocation: Source RTs cannot be freed, even after failure.
 		P.targetCount, P.targetBytes = P.targetCount + 1, P.targetBytes + bytes
-		local texture = GetRenderTargetEx( "mc_processing1_" .. P.targetCount, w, h,
+		local texture = GetRenderTargetEx( "mc_processing1_" .. P.targetCount .. "_" .. name, w, h,
 			RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE, bit.bor( spec.filter == "point" and 1 or 0, 4, 8, 256, 512 ),
 			0, spec.format == "rgba8" and IMAGE_FORMAT_RGBA8888 or IMAGE_FORMAT_RGBA16161616F )
 		requireValue( texture and not texture:IsError() and texture:Width() == w and texture:Height() == h,
@@ -77,23 +80,23 @@ function P.Create( definition, pack )
 	end
 	if not bank then
 		requireValue( #P.banks < 128, "render_processing_bank_budget", "128 processing owner versions reached; restart the client" )
-		bank = { signature = signature, targets = {}, passes = {} }
+		bank = { id = #P.banks + 1, signature = signature, targets = {}, passes = {} }
 		P.banks[#P.banks + 1] = bank
 	end
-	local instance = { definition = definition, bank = bank, stages = { begin = {}, shadowcomp = {} },
-		stats = { begin = 0, shadowcomp = 0, reused = 0, draws = 0, failures = 0, cpuMS = 0 } }
+	local instance = { definition = definition, bank = bank, stages = { begin = {}, shadowcomp = {}, opaque = {}, world = {}, final = {} },
+		stats = { begin = 0, shadowcomp = 0, opaque = 0, world = 0, final = 0, skipped = 0, reused = 0, draws = 0, failures = 0, cpuMS = 0 } }
 	for index, pass in ipairs( definition.pipeline.passes ) do
 		local record = bank.passes[index]
 		if not record then
 			local program = definition.programs[pass.program]
 			local params = { ["$vertexshader"] = program.vertex, ["$pixshader"] = program.pixel,
 				["$x360appchooser"] = 1, ["$vertexcolor"] = 1, ["$nocull"] = 1, ["$nofog"] = 1,
-				["$depthtest"] = 0, ["$writedepth"] = 0, ["$ignorez"] = 0, ["$linearwrite"] = 1 }
+				["$depthtest"] = 0, ["$writedepth"] = 0, ["$ignorez"] = 0, ["$linearwrite"] = pass.output == "screen" and 0 or 1 }
 			local textures = {}
 			for slot, input in pairs( pass.inputs ) do
 				local parameter = textureSlots[slot]
 				local resource = input.resource and definition.resources[input.resource]
-				params["$linearread_" .. parameter:sub( 2 )] = resource and resource.colorSpace == "srgb" and 0 or 1
+				params["$linearread_" .. parameter:sub( 2 )] = ( resource and resource.colorSpace == "srgb" or input.builtin == "scene_color" ) and 0 or 1
 				params[parameter] = "vgui/white"
 				if resource then
 					textures[slot] = MC.RenderPackResources.ProcessingTexture( resource, input )
@@ -119,6 +122,7 @@ end
 function P.Invalidate( instance )
 	if not instance then return end
 	instance.key, instance.beginOutputs, instance.outputs, instance.shadowKey = nil, nil, nil, nil
+	instance.screenKey, instance.screenDone, instance.screenOutputs = nil, nil, nil
 end
 
 function P.Release( instance )
@@ -194,23 +198,25 @@ local function scalar( value, context, target, shadow )
 	return context[value]
 end
 
-local function draw( record, target )
+local function draw( record, target, screenPass )
 	local pushed, clipped, toned, overrides, oldClip, oldTone, oldBlend, r, g, b
 	local ok, err = pcall( function()
 		oldBlend = render.GetBlend()
 		r, g, b = render.GetColorModulation()
-		render.PushRenderTarget( target.texture ) pushed = true
-		oldClip = render.EnableClipping( false ) clipped = true
-		oldTone = render.GetToneMappingScaleLinear() toned = true
-		render.SetToneMappingScaleLinear( unitTone )
+		if target.texture then render.PushRenderTarget( target.texture ) pushed = true end
+		if not screenPass then
+			oldClip = render.EnableClipping( false ) clipped = true
+			oldTone = render.GetToneMappingScaleLinear() toned = true
+			render.SetToneMappingScaleLinear( unitTone )
+		end
 		overrides = true
 		render.OverrideDepthEnable( false, false )
 		render.OverrideBlend( true, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD )
-		render.OverrideAlphaWriteEnable( true, true )
+		render.OverrideAlphaWriteEnable( true, target.texture ~= nil )
 		render.OverrideColorWriteEnable( true, true )
 		render.SetBlend( 1 ) render.SetColorModulation( 1, 1, 1 )
 		local clear = target.clear
-		render.Clear( clear[1] * 255, clear[2] * 255, clear[3] * 255, clear[4] * 255, false, false )
+		if clear then render.Clear( clear[1] * 255, clear[2] * 255, clear[3] * 255, clear[4] * 255, false, false ) end
 		render.SetMaterial( record.material )
 		target.quad:Draw()
 	end )
@@ -309,6 +315,95 @@ function P.Run( instance, stage, context, shadow )
 	return true
 end
 
+-- Geometry adapters use the same owner bank and cumulative allocation budget.
+function P.SceneTarget( instance, name, width, height, format, point, depth )
+	requireValue( instance and not instance.retired and instance.bank.owner == instance,
+		"render_processing_owner", "scene target requires an active processing owner" )
+	local key = "scene/" .. name .. "/" .. width .. "x" .. height .. "/" .. format .. "/" .. tostring( point ) .. "/" .. tostring( depth )
+	local entry = instance.bank.targets[key]
+	if entry then return entry end
+	local bytes = width * height * ( ( format == "rgba16f" and 8 or 4 ) + ( depth and 4 or 0 ) )
+	requireValue( width > 0 and height > 0 and width <= 4096 and height <= 4096
+		and P.targetCount < 128 and P.targetBytes + bytes <= 128 * 1048576,
+		"render_processing_target_budget", "scene processing reached target budget; restart the client" )
+	P.targetCount, P.targetBytes = P.targetCount + 1, P.targetBytes + bytes
+	local texture = GetRenderTargetEx( "mc_processing_scene_" .. P.targetCount .. "_" .. name, width, height, RT_SIZE_LITERAL,
+		depth and MATERIAL_RT_DEPTH_SEPARATE or MATERIAL_RT_DEPTH_NONE, bit.bor( point and 1 or 0, 4, 8, 256, 512 ),
+		0, format == "rgba16f" and IMAGE_FORMAT_RGBA16161616F or IMAGE_FORMAT_RGBA8888 )
+	requireValue( texture and not texture:IsError() and texture:Width() == width and texture:Height() == height,
+		"render_processing_target", "scene target allocation failed: " .. name )
+	entry = { texture = texture, width = width, height = height, quad = P.CopyQuad( width, height ) }
+	instance.bank.targets[key] = entry
+	return entry
+end
+
+-- Trusted bindings supply data and availability, not drawing or ordering.
+-- Camera-stage outputs never overwrite the light-space export cache.
+function P.RunScreen( instance, stage, context, adapter )
+	requireValue( instance and not instance.retired and instance.bank.owner == instance and instance.stages[stage],
+		"render_processing_owner", "screen stage has no processing owner" )
+	local key = context.key
+	if instance.screenKey ~= key then
+		instance.screenKey, instance.screenDone, instance.screenOutputs = key, {}, {}
+	end
+	if instance.screenDone[stage] then instance.stats.reused = instance.stats.reused + 1 return true end
+	local outputs, start = {}, SysTime()
+	for name, value in pairs( instance.screenOutputs ) do outputs[name] = value end
+	local ok, err = pcall( function()
+		for _, record in ipairs( instance.stages[stage] ) do
+			local spec = record.spec
+			if adapter.Enabled( spec.binding, context ) then
+				local target
+				if spec.output == "screen" then
+					local cache = instance.bank.screenQuads or {}
+					instance.bank.screenQuads = cache
+					local size = context.view_width .. "x" .. context.view_height
+					if not cache[size] then
+						local count = instance.bank.screenQuadCount or 0
+						requireValue( count < 32, "render_processing_quad_budget", "32 screen viewport sizes reached; restart the client" )
+						cache[size] = P.CopyQuad( context.view_width, context.view_height )
+						instance.bank.screenQuadCount = count + 1
+					end
+					target = { width = context.view_width, height = context.view_height, quad = cache[size] }
+				else target = targetFor( instance, spec.output, context ) end
+				local inputs = {}
+				for slot, input in pairs( spec.inputs ) do
+					local texture = record.textures[slot]
+					if input.target then texture = outputs[input.target] and outputs[input.target].texture
+					elseif input.builtin then texture = adapter.Input( input.builtin, context ) end
+					requireValue( texture and not texture:IsError(), "render_processing_input", "unavailable screen input: " .. spec.id .. "/" .. slot )
+					requireValue( not target.texture or texture:GetName() ~= target.texture:GetName(),
+						"render_processing_alias", "screen pass reads its output: " .. spec.id )
+					inputs[slot] = texture
+					record.material:SetTexture( textureSlots[slot], texture )
+				end
+				adapter.Bind( spec.binding, record.material, context, target, outputs, inputs )
+				for register, vector in pairs( spec.constants ) do
+					for index = 1, 4 do record.material:SetFloat( "$" .. register .. "_" .. components[index],
+						scalar( vector[index], context, target ) ) end
+				end
+				draw( record, target, true )
+				if target.texture then outputs[spec.output] = target end
+				instance.stats.draws = instance.stats.draws + 1
+				instance.stats.lastPass = spec.id
+			else
+				outputs[spec.output] = nil
+				instance.stats.skipped = instance.stats.skipped + 1
+			end
+		end
+	end )
+	instance.stats.cpuMS = ( SysTime() - start ) * 1000
+	if not ok then
+		instance.screenOutputs, instance.screenDone = {}, {}
+		instance.stats.failures = instance.stats.failures + 1
+		return false, err
+	end
+	instance.screenOutputs, instance.screenDone[stage] = outputs, true
+	instance.stats[stage] = instance.stats[stage] + 1
+	instance.stats.lastStage = stage
+	return true
+end
+
 function P.Export( instance, name )
 	if not instance or not instance.outputs then return nil end
 	return instance.outputs[instance.definition.pipeline.exports[name]]
@@ -322,4 +417,6 @@ concommand.Add( "mc_render_processing_stats", function()
 		tostring( instance ~= nil ), P.targetCount, P.targetBytes, P.materialCount ) )
 	if s then print( string.format( "[MC processing] begin=%d shadowcomp=%d reused=%d draws=%d failures=%d lastCPU=%.3fms",
 		s.begin, s.shadowcomp, s.reused, s.draws, s.failures, s.cpuMS ) ) end
+	if s then print( string.format( "[MC processing screen] opaque=%d world=%d final=%d skipped=%d last=%s/%s",
+		s.opaque, s.world, s.final, s.skipped, tostring( s.lastStage ), tostring( s.lastPass ) ) ) end
 end )

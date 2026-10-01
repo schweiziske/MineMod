@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "kind": "shader",
+  "id": "mc_skybox:captured",
+  "definition": {
+    "schema": 1,
+    "name": "Captured Source Sky",
+    "build": "cdb0a4c8b503e9f179794cc42e41ccb283c0834f7d01daa2ada206a444982972",
+    "abi": 1,
+    "layout": "mc:quad_corners_v1",
+    "adapter": "mc:sky_quad_v1",
+    "programs": {
+      "sky": {
+        "vertex": "mc_sky_vertex_cdb0a4c8b503e9f17979_vs30",
+        "pixel": "mc_sky_surface_cdb0a4c8b503e9f17979_ps30",
+        "vertexHash": "aeac42d63f90d771320d64a1f6dc9fb37a9a17e9826cbebc982e682f880ea1c8",
+        "pixelHash": "bfbafcc6c183f7b78a4df367f0703a692d5ec7d21e70744cb02facc88b7e9ebc"
+      }
+    },
+    "resources": {},
+    "passes": {
+      "sky": {
+        "stage": "world_opaque",
+        "program": "sky"
+      }
+    },
+    "implements": {
+      "mc_skybox:sky": {
+        "contract": 1,
+        "passes": [
+          "sky"
+        ]
+      }
+    }
+  }
+}

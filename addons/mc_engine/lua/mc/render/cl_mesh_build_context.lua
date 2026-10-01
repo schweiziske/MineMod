@@ -194,8 +194,9 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		if cached then return cached end
 		local request = MC.RenderBlockBindings.Key( id )
 		local block = blocksById[id]
+		-- Registered definitions do not store fullCube; query the shape contract.
 		local stage = root.translucent and "world_translucent" or
-			( block.fullCube == true and block.transparent ~= true and "world_opaque" or "world_cutout" )
+			( blockIsFullCube( id ) and block.transparent ~= true and "world_opaque" or "world_cutout" )
 		local bucketKey = request .. "/" .. stage
 		local buffer = root.buckets[bucketKey]
 		if not buffer then

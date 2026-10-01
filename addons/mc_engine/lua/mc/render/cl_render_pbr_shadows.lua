@@ -27,6 +27,10 @@ local strength = MC.RenderPackSettings.Handle( "shadow_strength" )
 local bias = MC.RenderPackSettings.Handle( "shadow_bias" )
 local waterEnabled = MC.RenderPackSettings.Handle( "water" )
 local waterWaves = MC.RenderPackSettings.Handle( "water_waves" )
+local waterCaustics = MC.RenderPackSettings.Handle( "water_caustics" )
+local underwaterVolume = MC.RenderPackSettings.Handle( "underwater_volumetric" )
+local underwaterStrength = MC.RenderPackSettings.Handle( "underwater_strength" )
+local underwaterDensity = MC.RenderPackSettings.Handle( "underwater_density" )
 local settingsRevision = 1
 local settings = {}
 local function readSettings()
@@ -407,7 +411,11 @@ function S.Update( x, y, z, renderView )
 		and M.CoversCamera( current.views[2], camera ) )
 	local groups, version, chunks = L.GetStages( false )
 	local water = active.waterBinding and active.waterBinding.material
-	water = waterEnabled:GetBool() and waterWaves:GetFloat() > 0 and water and S.waterMaterials[water] and water or nil
+	-- Volumetric sunlight still needs the interface when caustics or waves
+	-- are disabled; processing then bypasses to raw RG + neutral BA.
+	local needsInterface = waterCaustics:GetBool() and waterWaves:GetFloat() > 0 or underwaterVolume:GetBool()
+		and underwaterStrength:GetFloat() > 0 and underwaterDensity:GetFloat() > 0
+	water = waterEnabled:GetBool() and needsInterface and water and S.waterMaterials[water] and water or nil
 	pending.frameX, pending.frameY, pending.frameZ = frameX, frameY, frameZ
 	local geometry, visibility = MC.ChunkDrawListVersion(), MC.StreamVisibilityVersion or 0
 	if S.valid and not S.fullDirty and not coverageMiss and current.version == version

@@ -44,7 +44,7 @@ function Snapshot:Read( bx, by, bz )
 		if not MC.Check( integer( stateId, 0, 4294967295 ), "l2_snapshot_state",
 			"state read failed at %s,%s,%s: %s", bx, by, bz, tostring( err ) ) then return nil end
 	end
-	local properties = self.properties.Get( stateId )
+	local properties = self.properties.Get( stateId, bx, by, bz )
 	if not properties then return nil end
 	if properties.collisionContext ~= "none" then
 		local context = false
@@ -79,8 +79,9 @@ function S.New( chunk )
 		local key = accessors[i]
 		if not MC.Check( type( MC[key] ) == "function", "l2_snapshot_dependency", "missing %s", key ) then return nil end
 	end
-	local properties = MC.VanillaStateLighting
+	local properties = MC.StateLighting
 	if not MC.Check( properties and properties.ready, "l2_snapshot_catalog", "state lighting catalog is not ready" ) then return nil end
+	if properties.Prepare and not properties.Prepare() then return nil end
 	-- Full snapshots omit air-only chunks. Only partial/streamed worlds have
 	-- unknown chunks; mode 1 also declares the world's complete vertical extent.
 	local transport = MC.StateNetworkTransport
