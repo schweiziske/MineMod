@@ -13,13 +13,26 @@ local PACKS = {
 }
 local clock, drawUV, setColor = SysTime, surface.DrawTexturedRectUV, surface.SetDrawColor
 local function notify()
-	hook.Run( "MC.AtlasBakeChanged" )
+	hook.Run( "MC.AtlasBakeChanged", B.Status() )
+end
+
+-- Advertise source recipes separately; only complete GPU atlases enter the registry.
+function B.ListPreparedPacks()
+	local entries = {}
+	for _, id in ipairs( { "vanilla", "avpbr" } ) do
+		local pack = PACKS[id]
+		if file.Exists( "data_static/mc/atlas_bake/" .. id .. ".json", "GAME" ) then
+			entries[#entries + 1] = { name = pack.name, title = pack.title, description = pack.description,
+				preview = pack.preview, owner = OWNER, bakeID = id }
+		end
+	end
+	return entries
 end
 
 function B.Status()
 	local job = B.job or B.last
 	if not job then return { state = "idle" } end
-	return { state = job.state, loaded = job.loaded, sources = job.sourceCount, drawn = job.drawn, tiles = job.tileCount,
+	return { state = job.state, serial = job.serial, loaded = job.loaded, sources = job.sourceCount, drawn = job.drawn, tiles = job.tileCount,
 		elapsedMS = ( ( job.finished or clock() ) - job.started ) * 1000,
 		workMS = job.workMS, heapDeltaKB = job.heapDeltaKB,
 		loadMS = job.loadMS, drawMS = job.drawMS,
@@ -341,7 +354,8 @@ function B.Start( id )
 	cache.sourceRevision = p.revision
 	cache.manifest, cache.plan, cache.tileCatalog, cache.layout = bytes, p, MC.GeneratedTiles, MC.GeneratedAtlas
 	cache.planVersion = MC.AtlasBakePlan.VERSION
-	B.job = { state = "queued", id = id, pack = pack.name, cache = cache, plan = p, slot = slot, started = started, heapStartKB = heap,
+	B.serial = ( B.serial or 0 ) + 1
+	B.job = { state = "queued", serial = B.serial, id = id, pack = pack.name, cache = cache, plan = p, slot = slot, started = started, heapStartKB = heap,
 		loaded = cache.sourcesReady and p.sourceCount or 0, drawn = 0, sourceCount = p.sourceCount, tileCount = p.count, revision = p.revision,
 		loadMS = 0, drawMS = 0,
 		workMS = ( clock() - started ) * 1000, frames = 0, targetBytes = p.width * p.height * 4 * 2 * ( p.pbr and 3 or 1 ) }
