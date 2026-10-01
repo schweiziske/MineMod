@@ -2,7 +2,7 @@
 MC = MC or {}
 MC.AtlasBakePlan = {}
 local P = MC.AtlasBakePlan
-P.VERSION = 4
+P.VERSION = 5
 local floor = math.floor
 local FIELDS = { "COLS", "ROWS", "TILE", "PAD", "STRIDE", "W", "H" }
 local KINDS = { empty = 0, image = 1, overlay = 2, solid = 3, missing = 4 }
@@ -11,16 +11,17 @@ local function integer( value, low, high )
 	return type( value ) == "number" and value == floor( value ) and value >= low and value <= high
 end
 
-function P.New( recipe, layout, tiles, pack )
+function P.New( recipe, layout, tiles, pack, pbr )
 	if type( recipe ) ~= "table" or recipe.version ~= 1 or type( recipe.layout ) ~= "table"
 		or type( recipe.sources ) ~= "table" or type( recipe.tiles ) ~= "table"
 		or type( recipe.revision ) ~= "string" or not recipe.revision:match( "^[a-f0-9]+$" ) or #recipe.revision ~= 64 then
 		return nil, "invalid_recipe"
 	end
 	pack = pack or "vanilla"
-	if ( pack ~= "vanilla" and pack ~= "avpbr" ) or ( recipe.pack or "vanilla" ) ~= pack
+	if type( pack ) ~= "string" or #pack > 64 or not pack:match( "^[a-z0-9_%-]+$" ) or ( recipe.pack or "vanilla" ) ~= pack
 		or ( recipe.pbr ~= nil and type( recipe.pbr ) ~= "boolean" ) then return nil, "invalid_recipe_pack" end
-	if ( pack == "avpbr" ) ~= ( recipe.pbr == true ) then return nil, "invalid_recipe_channels" end
+	if pbr == nil then pbr = pack == "avpbr" end
+	if type( pbr ) ~= "boolean" or pbr ~= ( recipe.pbr == true ) then return nil, "invalid_recipe_channels" end
 	for i = 1, #FIELDS do
 		local key = FIELDS[i]
 		if recipe.layout[key] ~= layout[key] then return nil, "layout_mismatch_" .. key end
@@ -42,10 +43,11 @@ function P.New( recipe, layout, tiles, pack )
 		x = {}, y = {}, kind = {}, source = {}, overlay = {}, red = {}, green = {}, blue = {},
 		pbr = recipe.pbr == true, normal = {}, orm = {} }
 	local paths, pixels = {}, 0
+	local prefix = "mc/atlas_sources/" .. pack .. "/"
 	for i = 1, sourceCount do
 		local s = recipe.sources[i]
 		if type( s ) ~= "table" or type( s[1] ) ~= "string" or #s[1] > 240
-			or not s[1]:match( "^mc/atlas_sources/" .. pack .. "/[a-z0-9_/]+%.png$" ) or paths[s[1]]
+			or s[1]:sub( 1, #prefix ) ~= prefix or not s[1]:sub( #prefix + 1 ):match( "^[a-z0-9_/%-]+%.png$" ) or paths[s[1]]
 			or not integer( s[2], 1, 4096 ) or not integer( s[3], 1, 4096 )
 			or type( s[4] ) ~= "string" or #s[4] ~= 64 or not s[4]:match( "^[a-f0-9]+$" ) then
 			return nil, "invalid_source_" .. i

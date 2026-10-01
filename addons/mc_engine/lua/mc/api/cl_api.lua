@@ -366,6 +366,60 @@ function Render.ListTexturePackLeases()
 	return MC.ListTexturePackLeases()
 end
 
+-- Resource-pack entry points for mounted source manifests and completed atlases.
+-- This version selects one atlas pack; it does not implement Minecraft resource stacks.
+API.Resources = API.Resources or {}
+local Resources = API.Resources
+Resources.VERSION = "1.0"
+
+function Resources.RegisterAtlasPack( name, definition, owner )
+	return Render.RegisterTexturePack( name, definition, owner )
+end
+
+function Resources.UnregisterAtlasPack( name, owner )
+	return Render.UnregisterTexturePack( name, owner )
+end
+
+function Resources.RegisterSourcePack( name, definition, owner )
+	if not MC.AtlasBaker then return false, "resource_pack_api_unavailable" end
+	return MC.AtlasBaker.RegisterSourcePack( name, definition, owner )
+end
+
+function Resources.UnregisterSourcePack( name, owner )
+	if not MC.AtlasBaker then return false, "resource_pack_api_unavailable" end
+	return MC.AtlasBaker.UnregisterSourcePack( name, owner )
+end
+
+function Resources.ListPacks()
+	if not MC.ResourcePacks then return nil, "resource_pack_api_unavailable" end
+	return MC.ResourcePacks.ListPacks()
+end
+
+function Resources.GetSelection()
+	if not MC.ResourcePacks then return nil, "resource_pack_api_unavailable" end
+	return MC.ResourcePacks.GetSelection()
+end
+
+function Resources.ApplyPack( name )
+	if not MC.ResourcePacks then return false, "resource_pack_api_unavailable" end
+	return MC.ResourcePacks.ApplyPack( name )
+end
+
+function Resources.ReloadPack( name )
+	if not MC.ResourcePacks then return false, "resource_pack_api_unavailable" end
+	return MC.ResourcePacks.ReloadPack( name )
+end
+
+function Resources.GetApplyStatus( id )
+	if not MC.ResourcePacks then return nil, "resource_pack_api_unavailable" end
+	return MC.ResourcePacks.GetApplyStatus( id )
+end
+
+function Resources.CancelApply( id )
+	if not MC.ResourcePacks then return false, "resource_pack_api_unavailable" end
+	return MC.ResourcePacks.CancelApply( id )
+end
+
 function Render.RegisterAtlasProfile( name, definition, owner )
 	if not MC.RegisterAtlasProfile then return false, "atlas_profile_api_unavailable" end
 	return MC.RegisterAtlasProfile( name, definition, owner )

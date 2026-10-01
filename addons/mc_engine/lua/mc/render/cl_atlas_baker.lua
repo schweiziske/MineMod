@@ -5,28 +5,91 @@ MC.AtlasBaker = B
 B.caches = B.caches or {}
 B.copyMaterials = B.copyMaterials or {}
 local HOOK, OWNER = "mc_atlas_baker", "mc.atlas_baker"
-local PACKS = {
+local BUILTINS = {
 	vanilla = { name = "vanilla_baked", title = "Vanilla (in-game bake)", preview = "mc/resourcepacks/default",
 		description = "Vanilla PNGs assembled in game. Session atlas, nearest filtering." },
 	avpbr = { name = "avpbr_baked", title = "AVPBR (in-game bake)", preview = "mc/atlas_sources/avpbr/preview",
 		description = "AVPBR by JoaquiX. Color + LabPBR normal/specular atlases; vanilla color fallback, neutral missing maps." },
 }
+B.packs = B.packs or {}
+local PACKS = B.packs
+for id, definition in pairs( BUILTINS ) do
+	definition.owner, definition.pbr, definition.builtin = OWNER, id == "avpbr", true
+	PACKS[id] = definition
+end
 local clock, drawUV, setColor = SysTime, surface.DrawTexturedRectUV, surface.SetDrawColor
 local function notify()
 	hook.Run( "MC.AtlasBakeChanged", B.Status() )
 end
 
 -- Advertise source recipes separately; only complete GPU atlases enter the registry.
+function B.ListSourcePacks()
+	local entries = {}
+	for id, pack in pairs( PACKS ) do
+		entries[#entries + 1] = { name = pack.name, title = pack.title, description = pack.description,
+			preview = pack.preview, owner = pack.owner, bakeID = id, pbr = pack.pbr, builtinSource = pack.builtin == true,
+			prepared = file.Exists( "data_static/mc/atlas_bake/" .. id .. ".json", "GAME" ) }
+	end
+	table.sort( entries, function( a, b ) return a.name < b.name end )
+	return entries
+end
+
 function B.ListPreparedPacks()
 	local entries = {}
-	for _, id in ipairs( { "vanilla", "avpbr" } ) do
-		local pack = PACKS[id]
-		if file.Exists( "data_static/mc/atlas_bake/" .. id .. ".json", "GAME" ) then
-			entries[#entries + 1] = { name = pack.name, title = pack.title, description = pack.description,
-				preview = pack.preview, owner = OWNER, bakeID = id }
-		end
+	for _, entry in ipairs( B.ListSourcePacks() ) do
+		if entry.prepared then entries[#entries + 1] = entry end
 	end
 	return entries
+end
+
+function B.RegisterSourcePack( name, definition, owner )
+	if type( name ) ~= "string" or #name > 64 or not name:match( "^[a-z0-9_%-]+$" )
+		or name == "default" or name == "programmer_art" or name == "vanilla_baked" or name == "avpbr_baked" or BUILTINS[name] then
+		return false, "invalid_source_pack_name"
+	end
+	if type( owner ) ~= "string" or #owner > 96 or not owner:match( "^[a-z0-9_%.:%-]+$" ) or owner == "mc" or owner == OWNER then
+		return false, "invalid_source_pack_owner"
+	end
+	if type( definition ) ~= "table" then return false, "invalid_source_pack_definition" end
+	if definition.pbr ~= nil and type( definition.pbr ) ~= "boolean" then return false, "invalid_source_pack_pbr" end
+	for field, limit in pairs( { title = 128, description = 1024 } ) do
+		local value = definition[field]
+		if value ~= nil and ( type( value ) ~= "string" or #value > limit or value:find( "%z" ) ) then
+			return false, "invalid_source_pack_" .. field
+		end
+	end
+	local preview = definition.preview
+	if preview ~= nil and ( type( preview ) ~= "string" or #preview > 240 or not preview:match( "^[a-z0-9_/%-]+$" )
+		or preview:sub( 1, 1 ) == "/" ) then return false, "invalid_source_pack_preview" end
+	local previous = PACKS[name]
+	if previous and previous.owner ~= owner then return false, "owned_by_" .. previous.owner end
+	local registeredOwner = MC.TexturePackDefinitionOwner( name )
+	if registeredOwner and registeredOwner ~= owner then return false, "owned_by_" .. registeredOwner end
+	if B.job and B.job.id == name then return false, "bake_already_running" end
+	local cache = B.caches[name]
+	if cache and cache.plan and cache.plan.pbr ~= ( definition.pbr == true ) then return false, "sources_changed_restart_client" end
+	PACKS[name] = { name = name, owner = owner, pbr = definition.pbr == true,
+		title = definition.title, description = definition.description, preview = preview }
+	hook.Run( "MC.TexturePackSourcesChanged", name, owner )
+	B.RestorePreference()
+	return true, name
+end
+
+function B.UnregisterSourcePack( name, owner )
+	local pack = PACKS[name]
+	if not pack then return false, "source_pack_not_registered" end
+	if pack.builtin then return false, "builtin_source_pack" end
+	if pack.owner ~= owner then return false, "owned_by_" .. pack.owner end
+	if B.job and B.job.id == name then return false, "bake_already_running" end
+	local registeredOwner = MC.TexturePackDefinitionOwner( name )
+	if registeredOwner then
+		local ok, err = MC.UnregisterTexturePack( name, owner )
+		if not ok then return false, err end
+	end
+	PACKS[name] = nil
+	-- Engine RTs cannot be deleted here. Retain the fixed cache and in-use protection.
+	hook.Run( "MC.TexturePackSourcesChanged", name, owner )
+	return true, name
 end
 
 function B.Status()
@@ -53,6 +116,7 @@ local function finish( state, err )
 	job.plan = nil
 	B.job, B.last = nil, job
 	notify()
+	if job.pack ~= MC.TexturePack:GetString() then B.RestorePreference() end
 	if state == "failed" then MC.Fault( "atlas_bake_failed", "%s", err ) end
 end
 
@@ -284,7 +348,7 @@ local function publish( job )
 	local ok, err = MC.RegisterTexturePack( job.pack, {
 		title = pack.title, description = pack.description,
 		preview = pack.preview, runtimeTexture = cache.targets[job.slot], runtimePBR = maps, atlasProfile = "default",
-	}, OWNER )
+	}, pack.owner )
 	requireValue( ok, err )
 	cache.published = job.slot
 end
@@ -321,6 +385,8 @@ function B.Start( id )
 	if B.job then return false, "bake_already_running" end
 	local pack = PACKS[id]
 	if not pack then return false, "unknown_bake_pack" end
+	local registeredOwner = MC.TexturePackDefinitionOwner( pack.name )
+	if registeredOwner and registeredOwner ~= pack.owner then return false, "owned_by_" .. registeredOwner end
 	if not ( MC.RegisterTexturePack and MC.GeneratedAtlas and MC.GeneratedTiles and MC.Material
 		and GetRenderTargetEx and render.OverrideBlend and render.OverrideAlphaWriteEnable
 		and render.OverrideColorWriteEnable and render.GetToneMappingScaleLinear and DisableClipping
@@ -343,7 +409,7 @@ function B.Start( id )
 	end
 	local p, err = cache.plan
 	if not p then
-		p, err = MC.AtlasBakePlan.New( util.JSONToTable( bytes ), MC.GeneratedAtlas, MC.GeneratedTiles, id )
+		p, err = MC.AtlasBakePlan.New( util.JSONToTable( bytes ), MC.GeneratedAtlas, MC.GeneratedTiles, id, pack.pbr )
 		if not p then return false, err end
 	end
 	if cache.sourceRevision and cache.sourceRevision ~= p.revision then return false, "sources_changed_restart_client" end
@@ -367,6 +433,20 @@ end
 function B.StartVanilla() return B.Start( "vanilla" ) end
 function B.StartAVPBR() return B.Start( "avpbr" ) end
 
+-- Sources may register after InitPostEntity; a saved choice still restores once available.
+function B.RestorePreference()
+	if not B.restoreReady or B.job then return end
+	local name = MC.TexturePack:GetString()
+	for id, pack in pairs( PACKS ) do
+		if name == pack.name then
+			if MC.TexturePackDefinitionOwner( name ) == pack.owner then return end
+			local ok, err = B.Start( id )
+			if not ok then MC.Fault( "atlas_bake_restore", "%s", err ) end
+			return
+		end
+	end
+end
+
 -- Autorefresh cancels the old closure; fixed named GPU objects remain reusable.
 if B.job then B.Cancel() end
 for _, cache in pairs( B.caches ) do
@@ -385,11 +465,6 @@ end )
 concommand.Add( "mc_atlas_bake_cancel", function() B.Cancel() end )
 concommand.Add( "mc_atlas_bake_status", function() print( util.TableToJSON( B.Status(), true ) ) end )
 hook.Add( "InitPostEntity", HOOK, function()
-	for id, pack in pairs( PACKS ) do
-		if MC.TexturePack:GetString() == pack.name then
-			local ok, err = B.Start( id )
-			if not ok then MC.Fault( "atlas_bake_restore", "%s", err ) end
-			break
-		end
-	end
+	B.restoreReady = true
+	B.RestorePreference()
 end )
