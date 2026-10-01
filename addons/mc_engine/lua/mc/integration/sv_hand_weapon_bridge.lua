@@ -34,6 +34,16 @@ local function mayAutoSwitch( weapon, context )
 	return context and context.allowManualAdoption == true and Bridge.IsManagedClass( weapon )
 end
 
+-- Server inventory actions use the same authoritative ownership gate as
+-- reconciliation. A registered class alone does not make a standalone SWEP
+-- an inventory proxy, and client switch prediction cannot authorize a packet.
+function MC.API.HandWeapon.IsManagedActive( ply )
+	if not IsValid( ply ) or not ply:IsPlayer() or not ply:Alive() then return false end
+	return mayAutoSwitch( activeWeapon( ply ) ) == true
+end
+
+MC.API.HandWeapon.IsInventoryActive = MC.API.HandWeapon.IsManagedActive
+
 local function copyContext( context )
 	local result = {}
 	if istable( context ) then

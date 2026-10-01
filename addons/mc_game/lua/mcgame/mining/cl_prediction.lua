@@ -28,9 +28,12 @@ function MC.CancelClientMining()
 end
 
 local function complete( session )
+	-- Think can begin the crack before PrimaryAttack supplies the shared input
+	-- command. Do not create an unidentifiable edit in that short window.
+	if MC.ClientEditPredictionEnabled() and not session.commandNumber then return end
 	session.completed = true
 	if not session.instant then nextContinueAt = CurTime() + 5 * TICK end
-	MC.PredictBreakBlock( session.bx, session.by, session.bz, LocalPlayer() )
+	MC.PredictBreakBlock( session.bx, session.by, session.bz, LocalPlayer(), session.commandNumber )
 	MC.SetClientMiningCrack( LocalPlayer(), session.bx, session.by, session.bz, nil )
 end
 
@@ -46,7 +49,10 @@ function MC.BeginClientMining( weapon, bx, by, bz, initialPress, commandNumber )
 	and ( session.completed or session.stateId == MC.GetBlockState( bx, by, bz ) ) then
 		-- Think may show the crack before the next predicted weapon command.
 		-- Bind only that first command, which also starts the server session.
-		if session.commandNumber == nil then session.commandNumber = commandNumber end
+		if session.commandNumber == nil then
+			session.commandNumber = commandNumber
+			if not session.completed and ( session.instant or session.progress >= 1 ) then complete( session ) end
+		end
 		return true
 	end
 	MC.CancelClientMining()

@@ -15,16 +15,17 @@ local SURVIVAL_W, SURVIVAL_H = 176, 166
 local CREATIVE_W, CREATIVE_H = 195, 136
 local CREATIVE_COLS, CREATIVE_ROWS = 9, 5
 
-local SURVIVAL_BACKGROUND = UI.GetGuiMaterial( "container/inventory" )
-local CRAFTING_BACKGROUND = UI.GetGuiMaterial( "container/crafting_table" )
-local CHEST_BACKGROUND = UI.GetGuiMaterial( "container/generic_54" )
-local HOPPER_BACKGROUND = UI.GetGuiMaterial( "container/hopper" )
-local DISPENSER_BACKGROUND = UI.GetGuiMaterial( "container/dispenser" )
-local FURNACE_BACKGROUND = UI.GetGuiMaterial( "container/furnace" )
-local BLAST_FURNACE_BACKGROUND = UI.GetGuiMaterial( "container/blast_furnace" )
-local BREWING_BACKGROUND = UI.GetGuiMaterial( "container/brewing_stand" )
-local ANVIL_BACKGROUND = UI.GetGuiMaterial( "container/anvil" )
-local ENCHANTING_BACKGROUND = UI.GetGuiMaterial( "container/enchanting_table" )
+local SURVIVAL_BACKGROUND = UI.GetGuiMaterial( "regions/container/inventory" )
+local CRAFTING_BACKGROUND = UI.GetGuiMaterial( "regions/container/crafting_table" )
+local CHEST_BACKGROUNDS = {}
+for rows = 1, 6 do CHEST_BACKGROUNDS[rows] = UI.GetGuiMaterial( "regions/container/chest_" .. rows ) end
+local HOPPER_BACKGROUND = UI.GetGuiMaterial( "regions/container/hopper" )
+local DISPENSER_BACKGROUND = UI.GetGuiMaterial( "regions/container/dispenser" )
+local FURNACE_BACKGROUND = UI.GetGuiMaterial( "regions/container/furnace" )
+local BLAST_FURNACE_BACKGROUND = UI.GetGuiMaterial( "regions/container/blast_furnace" )
+local BREWING_BACKGROUND = UI.GetGuiMaterial( "regions/container/brewing_stand" )
+local ANVIL_BACKGROUND = UI.GetGuiMaterial( "regions/container/anvil" )
+local ENCHANTING_BACKGROUND = UI.GetGuiMaterial( "regions/container/enchanting_table" )
 local ANVIL_ERROR = UI.GetGuiMaterial( "sprites/container/anvil/error" )
 local ANVIL_TEXT_FIELD = UI.GetGuiMaterial( "sprites/container/anvil/text_field" )
 local ANVIL_TEXT_FIELD_DISABLED = UI.GetGuiMaterial( "sprites/container/anvil/text_field_disabled" )
@@ -49,13 +50,18 @@ local ENCHANTING_LEVEL_DISABLED = {
 	UI.GetGuiMaterial( "sprites/container/enchanting_table/level_2_disabled" ),
 	UI.GetGuiMaterial( "sprites/container/enchanting_table/level_3_disabled" ),
 }
-local CREATIVE_ITEMS_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_items" )
-local CREATIVE_SEARCH_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_item_search" )
-local CREATIVE_INVENTORY_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_inventory" )
+local CREATIVE_ITEMS_BACKGROUND = UI.GetGuiMaterial( "regions/container/creative_inventory/tab_items" )
+local CREATIVE_SEARCH_BACKGROUND = UI.GetGuiMaterial( "regions/container/creative_inventory/tab_item_search" )
+local CREATIVE_INVENTORY_BACKGROUND = UI.GetGuiMaterial( "regions/container/creative_inventory/tab_inventory" )
 local SCROLLER = UI.GetGuiMaterial( "sprites/container/creative_inventory/scroller" )
 local SCROLLER_DISABLED = UI.GetGuiMaterial( "sprites/container/creative_inventory/scroller_disabled" )
-local CREATIVE_PAGE_BUTTONS = UI.GetMaterial( "mc/gui/fabric/creative_buttons.png" )
-local CREATIVE_PAGE_BUTTON_ATLAS_SIZE = 256
+local CREATIVE_PAGE_BUTTONS = {}
+for _, direction in ipairs( { "left", "right" } ) do
+	CREATIVE_PAGE_BUTTONS[direction] = {}
+	for _, state in ipairs( { "normal", "highlighted", "disabled" } ) do
+		CREATIVE_PAGE_BUTTONS[direction][state] = UI.GetGuiMaterial( "regions/fabric/creative_" .. direction .. "_" .. state )
+	end
+end
 
 local function creativeTabShowsTitle( source )
 	if source.showTitle ~= nil then return source.showTitle ~= false end
@@ -221,13 +227,10 @@ function CREATIVE_PAGE_BUTTON:PageTooltipText()
 end
 
 function CREATIVE_PAGE_BUTTON:Paint( w, h )
-	local u = self.PageActive and self:IsHovered() and 20 or 0
-	if self.Direction > 0 then u = u + 10 end
-	local v = self.PageActive and 0 or 12
+	local direction = self.Direction > 0 and "right" or "left"
+	local state = not self.PageActive and "disabled" or self:IsHovered() and "highlighted" or "normal"
 	UI.WithPointFiltering( function()
-		UI.DrawTexture( CREATIVE_PAGE_BUTTONS, 0, 0, w, h,
-			u / CREATIVE_PAGE_BUTTON_ATLAS_SIZE, v / CREATIVE_PAGE_BUTTON_ATLAS_SIZE,
-			( u + 10 ) / CREATIVE_PAGE_BUTTON_ATLAS_SIZE, ( v + 12 ) / CREATIVE_PAGE_BUTTON_ATLAS_SIZE )
+		UI.DrawTexture( CREATIVE_PAGE_BUTTONS[direction][state], 0, 0, w, h )
 	end )
 	return true
 end
@@ -1214,7 +1217,7 @@ function PANEL:SetHoveredSlot( slot ) self.HoveredSlot = slot end
 function PANEL:ClearHoveredSlot( slot ) if self.HoveredSlot == slot then self.HoveredSlot = nil end end
 
 function PANEL:BackgroundMaterial()
-	if self.Chest then return CHEST_BACKGROUND end
+	if self.Chest then return CHEST_BACKGROUNDS[self.ChestRows] end
 	if self.Hopper then return HOPPER_BACKGROUND end
 	if self.Dispenser then return DISPENSER_BACKGROUND end
 	if self.Enchanting then return ENCHANTING_BACKGROUND end
@@ -1246,17 +1249,8 @@ function PANEL:PaintContent()
 	local mat = self:BackgroundMaterial()
 	local width, height = self.ContentW * self.Scale, self.ContentH * self.Scale
 	UI.WithPointFiltering( function()
-		if self.Chest then
-			local upperHeight = self.ChestRows * 18 + 17
-			UI.DrawTexture( mat, self.Left, self.Top, width, upperHeight * self.Scale,
-				0, 0, self.ContentW / 256, upperHeight / 256 )
-			UI.DrawTexture( mat, self.Left, self.Top + upperHeight * self.Scale, width, 96 * self.Scale,
-				0, 126 / 256, self.ContentW / 256, 222 / 256 )
-		else
-			UI.DrawTexture( mat, self.Left, self.Top, width, height, 0, 0, self.ContentW / 256, self.ContentH / 256 )
-		end
+		UI.DrawTexture( mat, self.Left, self.Top, width, height )
 	end )
-	if self.Enchanting then UI.DrawEnchantingTopFrame( self.Left, self.Top, self.Scale ) end
 	if self.Furnace then
 		local state = self.Session and self.Session.furnaceState or {}
 		local litTotal = math.max( 0, tonumber( state.litTotalTime ) or 0 )
