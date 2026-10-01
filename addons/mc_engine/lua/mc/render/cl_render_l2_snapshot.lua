@@ -62,7 +62,13 @@ function Snapshot:Read( bx, by, bz )
 		if not properties then return nil end
 	end
 	-- Sparse air and loaded-empty chunks both consult the actual light stores.
-	local brightness, level, block, sky = self.sampleLight( bx, by, bz, 0 )
+	local block, sky
+	if self.rawLight then
+		block, sky = self.rawLight( bx, by, bz, cx, cy, cz, key, li )
+	else
+		local brightness, level
+		brightness, level, block, sky = self.sampleLight( bx, by, bz, 0 )
+	end
 	if not MC.Check( integer( block, 0, 15 ) and integer( sky, 0, 15 ), "l2_snapshot_light",
 		"raw block/sky levels missing at %s,%s,%s", bx, by, bz ) then return nil end
 	-- Cells are borrowed/read-only. Static profiles with the same state and raw
@@ -108,12 +114,14 @@ function S.New( chunk )
 	if transport and transport.streaming and not MC.HttpChunkSync then
 		minCZ, maxCZ = transport.streamMinCZ or minCZ, transport.streamMaxCZ or maxCZ
 	end
+	local rawLight
+	if MC.NewRawLightSampler then rawLight = MC.NewRawLightSampler( MC.SampleLighting ) end
 	local snapshot = setmetatable( {
 		x = chunk.cx * cs - 2, y = chunk.cy * cs - 2, z = chunk.cz * ch - 2,
 		sx = cs + 4, sy = cs + 4, sz = ch + 4, cells = {}, values = {}, hits = 0, misses = 0, unloaded = 0,
 		cellToChunk = MC.CellToChunk, chunkKey = MC.ChunkKey, getChunk = MC.GetChunkByKey, isLoaded = MC.IsChunkLoaded,
 		streaming = streaming, minCZ = minCZ, maxCZ = maxCZ,
-		getState = MC.GetChunkBlockStateByLocalIndex, sampleLight = MC.SampleLighting,
+		getState = MC.GetChunkBlockStateByLocalIndex, sampleLight = MC.SampleLighting, rawLight = rawLight,
 		properties = properties, readContext = MC.ResolveVanillaLightingContext,
 	}, Snapshot )
 	snapshot.reader = function( bx, by, bz ) return snapshot:Read( bx, by, bz ) end

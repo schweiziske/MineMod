@@ -2256,10 +2256,12 @@ hook.Add( "Think", "mc_stream_detached_cleanup", function()
 	local perfEnabled = MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled()
 	local memoryBefore = perfEnabled and collectgarbage( "count" ) or nil
 	local started = SysTime()
+	local unlimited = MC.BuildUnlimited and MC.BuildUnlimited:GetBool() == true
 	local ms = MC.StreamUnloadFrameMS and MC.StreamUnloadFrameMS:GetFloat() or 3
 	local limit = MC.StreamUnloadChunksPerFrame and MC.StreamUnloadChunksPerFrame:GetInt() or 1
+	limit = unlimited and math.huge or math.Clamp( limit, 1, 2 )
 	local processed, lightOld = 0, {}
-	while head <= tail and processed < math.Clamp( limit, 1, 2 ) do
+	while head <= tail and processed < limit do
 		local item = queue[head]; queue[head] = nil; head = head + 1
 		if item and not item.done then
 			if item.chunk then lightOld[#lightOld + 1] = item.chunk end
@@ -2267,7 +2269,7 @@ hook.Add( "Think", "mc_stream_detached_cleanup", function()
 			noteCleanupConsumed( item, reason, false )
 		end
 		processed = processed + 1
-		if processed > 0 and SysTime() >= started + math.Clamp( ms, 2, 4 ) / 1000 then break end
+		if not unlimited and processed > 0 and SysTime() >= started + math.Clamp( ms, 2, 4 ) / 1000 then break end
 	end
 	if #lightOld > 0 and MC.BeginPartialLightingBatch and MC.EndPartialLightingBatch then
 		local lightingBatch = MC.BeginPartialLightingBatch( lightOld )

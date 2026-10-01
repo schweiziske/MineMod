@@ -115,7 +115,7 @@ MC.MeshLazyDistance = MC.MeshLazyDistance or ( CreateClientConVar and CreateClie
 MC.MeshBuildFrameMS = MC.MeshBuildFrameMS or ( CreateClientConVar and CreateClientConVar( "mc_mesh_build_frame_ms", "8", true, false,
 	"Approximate milliseconds per frame for Lua geometry/light rebuilds (native: lazy builds only); 0 = unlimited" ) )
 MC.BuildUnlimited = MC.BuildUnlimited or ( CreateClientConVar and CreateClientConVar( "mc_build_unlimited", "0", true, false,
-	"Disable client mesh, lighting and bulk collision scheduling budgets; finish queued work with one longer hitch", 0, 1 ) )
+	"Disable client build/cleanup budgets and lazy mesh deferral; drain received work without frame slicing", 0, 1 ) )
 MC.TexturePack = MC.TexturePack or ( CreateClientConVar and CreateClientConVar( "mc_texture_pack", "default", true, false,
 	"MC atlas texture pack: default or programmer_art" ) )
 

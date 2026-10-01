@@ -29,7 +29,8 @@ for i = 1, #dirtyFrameFields do
 	local field = dirtyFrameFields[i]
 	Pipeline.stats[field] = Pipeline.stats[field] or 0
 end
-local buildStageFields = { "indexMS", "prepMS", "loopMS", "flushMS", "commitMS", "flatMS" }
+local buildStageFields = { "indexMS", "prepMS", "loopMS", "flushMS", "commitMS", "flatMS",
+	"meshNewMS", "buildTriMS", "cornerUploadMS" }
 Pipeline.buildStages = Pipeline.buildStages or {}
 for i = 1, #buildStageFields do
 	local field = buildStageFields[i]
@@ -41,7 +42,7 @@ function Pipeline.NoteBuildStages( perf )
 	local stages = Pipeline.buildStages
 	for i = 1, #buildStageFields do
 		local field = buildStageFields[i]
-		stages[field] = stages[field] + perf[field]
+		stages[field] = stages[field] + ( perf[field] or 0 )
 	end
 end
 
@@ -152,5 +153,7 @@ if concommand and concommand.Add then
 		local stages = Pipeline.buildStages
 		print( string.format( "[MC terrain stages] indexMS=%.3f prepMS=%.3f loopMS=%.3f flushMS=%.3f commitMS=%.3f flatMS=%.3f",
 			stages.indexMS, stages.prepMS, stages.loopMS, stages.flushMS, stages.commitMS, stages.flatMS ) )
+		print( string.format( "[MC terrain uploads] meshNewMS=%.3f vertexUploadMS=%.3f cornerUploadMS=%.3f (included in build stages)",
+			stages.meshNewMS, stages.buildTriMS, stages.cornerUploadMS ) )
 	end )
 end

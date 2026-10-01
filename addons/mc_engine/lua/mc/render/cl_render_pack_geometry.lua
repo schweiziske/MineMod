@@ -99,7 +99,9 @@ function G.Upload( buffer, perf )
 			-- Stream global addresses without materializing or mutating the CPU buffer.
 			MC.RenderMesh.uploadMeshVertices( object, buffer.verts, perf, false, false, first )
 		end
+		local cornerStarted = perf and SysTime()
 		R.UploadPart( { firstQuad = first, quadCount = count, pixels = buffer.pixels, occlusion = buffer.occlusion }, P.shared )
+		if perf then MC.RenderMesh.meshPerfAdd( perf, "cornerUploadMS", cornerStarted ) end
 	end )
 	if not ok then
 		local destroyOK, destroyError = true, nil
