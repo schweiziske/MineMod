@@ -147,3 +147,88 @@ L2_EXPORT int L2EvaluateVoxels(const double* packets, const uint32_t* metadata, 
         return static_cast<int>(count);
     } catch (const std::exception& e) { lastError = e.what(); return -1; }
 }
+
+namespace {
+struct FluidGrid final : mcmesh::l2::FluidSource, mcmesh::l2::CellSource {
+    std::vector<mcmesh::l2::FluidState> profiles;
+    std::vector<unsigned> emission;
+    std::vector<bool> solid;
+    const uint32_t* states;
+    const uint32_t* words;
+    int origin[3];
+    size_t index(int x, int y, int z) const {
+        x -= origin[0]; y -= origin[1]; z -= origin[2];
+        mcmesh::l2::require(x >= 0 && x < 5 && y >= 0 && y < 5 && z >= 0 && z < 5, "fluid probe halo");
+        return x + 5 * (y + 5 * z);
+    }
+    const mcmesh::l2::FluidState& fluid(int x, int y, int z) const override {
+        return profiles.at(states[index(x,y,z)]);
+    }
+    mcmesh::l2::Cell read(int x, int y, int z) const override {
+        const auto i = index(x,y,z), state = size_t(states[i]);
+        return {words[i], 1, 0, uint8_t(emission.at(state)), solid.at(state)};
+    }
+    size_t bytes() const override { return sizeof(*this); }
+};
+}
+
+// Inputs are production Lua profile/recipe values; both geometry and lighting
+// execute the same implementations linked into the game DLL.
+L2_EXPORT int L2EvaluateFluid(const double* profiles, unsigned count, const double* boxes,
+    const uint32_t* states, const uint32_t* words, const double* recipe, const int* source,
+    const double* transform, uint32_t* pixels, float* vertices) {
+    using namespace mcmesh::l2;
+    try {
+        auto grid = std::make_shared<FluidGrid>();
+        grid->states = states; grid->words = words;
+        for (unsigned a=0; a<3; ++a) grid->origin[a] = source[a]-2;
+        for (unsigned i=0; i<count; ++i) {
+            const auto* p = profiles + i*12;
+            FluidState s;
+            s.kind=uint8_t(p[0]); s.height=p[1]; s.falling=p[2]!=0; s.solid=p[3]!=0;
+            s.blocksMotion=p[4]!=0; s.ice=p[5]!=0;
+            std::vector<FluidBox> collision;
+            for (unsigned b=unsigned(p[10]); b<unsigned(p[10]+p[11]); ++b) {
+                FluidBox box;
+                std::copy(boxes+b*6, boxes+b*6+6, box.begin());
+                collision.push_back(box);
+            }
+            compileFluidCoverage(s,p[6]!=0,p[7]!=0,collision);
+            grid->profiles.push_back(s); grid->solid.push_back(p[8]!=0);
+            grid->emission.push_back(unsigned(p[9]));
+        }
+        FluidRecipe r;
+        r.kind=uint8_t(recipe[0]); r.emission=unsigned(recipe[1]); r.opacity=unsigned(recipe[2]);
+        r.offset=recipe[3]; r.flow=recipe[4]!=0; r.full=recipe[5]!=0;
+        for (unsigned f=0; f<6; ++f) r.shade[f]=unsigned(recipe[6+f]);
+        for (unsigned t=0; t<7; ++t) for (unsigned a=0; a<2; ++a) {
+            r.tiles[t].origin[a]=recipe[12+t*6+a];
+            r.tiles[t].scale[a]=recipe[14+t*6+a];
+            r.tiles[t].inset[a]=recipe[16+t*6+a];
+        }
+        const auto geometry=fluidGeometry(r,*grid,source);
+        const int dims[3]={5,5,5};
+        Snapshot snapshot(grid->origin,dims,grid);
+        snapshot.freeze();
+        Command command;
+        std::copy(source,source+3,command.source);
+        std::copy(transform,transform+3,command.translation);
+        command.size=transform[3]; command.opacity=r.opacity;
+        unsigned first=0;
+        for (unsigned f=0; f<6; ++f) if (geometry.mask & (1u<<f)) {
+            const auto q=evaluate(geometry.faces[f],command,snapshot,first++);
+            std::copy(std::begin(q.pixels),std::end(q.pixels),pixels+f*5);
+            pixels[f*5+4]=q.occlusion;
+            for (unsigned c=0; c<4; ++c) {
+                const auto& v=q.vertices[c];
+                auto* out=vertices+f*48+c*12;
+                std::copy(std::begin(v.position),std::end(v.position),out);
+                std::copy(std::begin(v.normal),std::end(v.normal),out+3);
+                std::copy(std::begin(v.uv),std::end(v.uv),out+6);
+                std::copy(std::begin(v.color),std::end(v.color),out+8);
+            }
+        }
+        lastError.clear();
+        return int(geometry.mask);
+    } catch (const std::exception& e) { lastError=e.what(); return -1; }
+}

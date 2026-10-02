@@ -8,7 +8,7 @@ struct PumpResult {
     uint64_t job = 0;
     CommitResult commit;
     std::string error;
-    double computeMS = 0;
+    double computeMS = 0, diffMS = 0, commitMS = 0, snapshotMS = 0;
     uint64_t scannedCells = 0;
 };
 // Owned and pumped on the Lua thread, with no Lua/Source dependencies. Multiple
@@ -30,11 +30,14 @@ public:
     void requestLight();
     PumpResult pump();
     LightWorkerStats workerStats() const { return worker_.stats(); }
+    double commitMS() const { return commitMS_; }
+    double snapshotMS() const { return snapshotMS_; }
     bool pending() const { return dirty_ || worker_.stats().busy; }
 private:
     Store store_;
     LightWorker worker_;
     DecodeWorker decoder_;
     bool dirty_ = false, failed_ = false;
+    double commitMS_ = 0, snapshotMS_ = 0;
 };
 }

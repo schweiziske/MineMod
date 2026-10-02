@@ -21,6 +21,17 @@ bool visible(Input& input, const Voxel& voxel, unsigned face, uint32_t block, bo
 }
 template<class Emit>
 void visitVoxel(Input& input, const Voxel& voxel, Emit emit) {
+    if (voxel.fluid) {
+        const auto& recipe = input.fluids[voxel.cube];
+        const auto geometry = fluidGeometry(recipe, *input.fluidSource, voxel.source);
+        for (unsigned face = 0; face < 6; ++face) if (geometry.mask & (1u << face)) {
+            Work work;
+            work.geometry = geometry.faces[face];
+            work.command.opacity = recipe.opacity;
+            emit(work, recipe.group);
+        }
+        return;
+    }
     if (!voxel.model) {
         const auto& cube = input.cubes[voxel.cube];
         for (unsigned face = 0; face < 6; ++face)
@@ -110,17 +121,30 @@ void validateCube(const Cube& cube) {
 }
 size_t Input::reservation() const {
     size_t bytes = snapshot.bytes() + sizeof(Input) + parts.capacity() * sizeof(std::vector<Work>);
+    require(relight.size() <= WorkerPool::MaxParts, "L2 relight exceeds part budget");
+    require(relight.empty() || (parts.empty() && cubes.empty() && models.empty() && fluids.empty()
+        && voxels.empty() && !instances && !retainLighting), "mixed L2 geometry and relight input");
+    size_t relightCount = 0;
+    for (const auto& part : relight) {
+        require(part && !part->empty() && part->size() <= MaxQuads, "invalid L2 relight part");
+        relightCount += part->size();
+        require(relightCount <= WorkerPool::MaxSectionQuads, "L2 relight exceeds quad budget");
+        bytes += sizeof(Part) + part->capacity() * sizeof(LightWork) + part->size() * 5 * sizeof(uint32_t);
+    }
     for (const auto& part : parts)
-        bytes += part.capacity() * sizeof(Work) + sizeof(Part) + part.size() * (sizeof(Quad) + 5 * sizeof(uint32_t));
+        bytes += part.capacity() * sizeof(Work) + sizeof(Part) + part.size()
+            * (sizeof(Quad) + 5 * sizeof(uint32_t) + sizeof(unsigned) + sizeof(uint8_t)
+                + (retainLighting ? sizeof(LightWork) : 0));
     size_t expanded = instances ? instances->maxQuads() : 0;
     if (instances) bytes += instances->bytes();
     for (const auto& voxel : voxels) expanded += voxel.model ? models[voxel.cube].model->maxQuads : 6;
     require(expanded <= WorkerPool::MaxSectionQuads, "L2 instances exceed quad reservation");
     for (const auto& model : models) bytes += model.model->bytes;
     return bytes + cubes.capacity() * sizeof(Cube) + voxels.capacity() * sizeof(Voxel)
-        + models.capacity() * sizeof(ModelBinding)
+        + models.capacity() * sizeof(ModelBinding) + fluids.capacity() * sizeof(FluidRecipe)
         // Growing work vectors can reserve up to twice their live element count.
-        + expanded * (2 * sizeof(Work) + sizeof(Quad) + 5 * sizeof(uint32_t))
+        + expanded * (2 * sizeof(Work) + sizeof(Quad) + 5 * sizeof(uint32_t) + sizeof(unsigned) + sizeof(uint8_t)
+            + (retainLighting ? sizeof(LightWork) : 0))
         + WorkerPool::MaxParts * (sizeof(Part) + 2 * sizeof(std::vector<Work>) + 64);
 }
 void prefetchVoxels(Input& input) {
@@ -273,41 +297,70 @@ void WorkerPool::run() {
         }
         const double started = milliseconds();
         const bool compute = !job->cancelled;
+        const bool relight = compute && !job->input->relight.empty();
+        size_t relightQuads = 0;
         if (compute) {
             try {
                 job->queueMS = started - job->submittedAt;
                 auto& input = *job->input;
+                job->relight = relight;
                 std::vector<unsigned> groups;
-                if (input.instances) input.instances->populate(input, job->cancelled);
-                job->sectionVoxels = input.voxels.size();
-                job->topology = std::move(input.topology);
-                const size_t legacyParts = input.parts.size();
-                expandVoxels(input, groups, job->cancelled);
-                for (size_t p = legacyParts; p < input.parts.size(); ++p) job->sectionQuads += input.parts[p].size();
-                job->parts.resize(input.parts.size());
-                for (size_t p = 0; p < input.parts.size() && !job->cancelled; ++p) {
-                    auto& output = job->parts[p];
-                    output.group = groups[p];
-                    const auto& work = input.parts[p];
-                    output.quads.resize(work.size());
-                    output.pixels.resize(work.size() * 4);
-                    output.occlusion.resize(work.size());
-                    std::fill(output.bounds, output.bounds + 3, std::numeric_limits<float>::max());
-                    std::fill(output.bounds + 3, output.bounds + 6, -std::numeric_limits<float>::max());
-                    for (unsigned i = 0; i < work.size(); ++i) {
-                        if ((i & 63) == 0 && job->cancelled) break;
-                        auto& q = output.quads[i];
-                        q = evaluate(work[i].geometry, work[i].command, input.snapshot, i);
-                        std::copy(std::begin(q.pixels), std::end(q.pixels), output.pixels.begin() + i * 4);
-                        output.occlusion[i] = q.occlusion;
-                        for (const auto& v : q.vertices) for (unsigned a = 0; a < 3; ++a) {
-                            output.bounds[a] = std::min(output.bounds[a], v.position[a]);
-                            output.bounds[a + 3] = std::max(output.bounds[a + 3], v.position[a]);
+                if (relight) {
+                    job->parts.resize(input.relight.size());
+                    for (size_t p = 0; p < input.relight.size() && !job->cancelled; ++p) {
+                        const auto& work = *input.relight[p];
+                        auto& output = job->parts[p];
+                        output.pixels.resize(work.size() * 4);
+                        output.occlusion.resize(work.size());
+                        for (size_t i = 0; i < work.size(); ++i) {
+                            if ((i & 63) == 0 && job->cancelled) break;
+                            const auto q = evaluateLight(work[i].geometry, work[i].command, input.snapshot);
+                            std::copy(std::begin(q.pixels), std::end(q.pixels), output.pixels.begin() + i * 4);
+                            output.occlusion[i] = q.occlusion;
                         }
+                        relightQuads += work.size();
+                    }
+                } else {
+                    if (input.instances) input.instances->populate(input, job->cancelled);
+                    job->sectionVoxels = input.voxels.size();
+                    job->topology = std::move(input.topology);
+                    const size_t legacyParts = input.parts.size();
+                    expandVoxels(input, groups, job->cancelled);
+                    for (size_t p = legacyParts; p < input.parts.size(); ++p) job->sectionQuads += input.parts[p].size();
+                    job->parts.resize(input.parts.size());
+                    for (size_t p = 0; p < input.parts.size() && !job->cancelled; ++p) {
+                        auto& output = job->parts[p];
+                        output.group = groups[p];
+                        const auto& work = input.parts[p];
+                        output.quads.resize(work.size());
+                        output.pixels.resize(work.size() * 4);
+                        output.occlusion.resize(work.size());
+                        std::shared_ptr<std::vector<LightWork>> lighting;
+                        if (input.retainLighting) {
+                            lighting = std::make_shared<std::vector<LightWork>>(work.size());
+                            output.lighting = lighting;
+                        }
+                        std::fill(output.bounds, output.bounds + 3, std::numeric_limits<float>::max());
+                        std::fill(output.bounds + 3, output.bounds + 6, -std::numeric_limits<float>::max());
+                        for (unsigned i = 0; i < work.size(); ++i) {
+                            if ((i & 63) == 0 && job->cancelled) break;
+                            auto& q = output.quads[i];
+                            q = evaluate(work[i].geometry, work[i].command, input.snapshot, i);
+                            std::copy(std::begin(q.pixels), std::end(q.pixels), output.pixels.begin() + i * 4);
+                            output.occlusion[i] = q.occlusion;
+                            if (lighting) (*lighting)[i] = {work[i].geometry, work[i].command};
+                            for (const auto& v : q.vertices) for (unsigned a = 0; a < 3; ++a) {
+                                output.bounds[a] = std::min(output.bounds[a], v.position[a]);
+                                output.bounds[a + 3] = std::max(output.bounds[a + 3], v.position[a]);
+                            }
+                        }
+                        if (!job->cancelled) output.directions = directionOrder(output.quads);
                     }
                 }
                 job->reads = input.snapshot.reads;
                 job->hits = input.snapshot.hits;
+                job->faceSamples = input.snapshot.faceSamples;
+                job->faceHits = input.snapshot.faceHits;
             } catch (const std::exception& e) { job->error = e.what(); }
             catch (...) { job->error = "unknown L2 worker failure"; }
         }
@@ -326,6 +379,11 @@ void WorkerPool::run() {
                 stats_.queueMS += job->queueMS;
                 stats_.sectionVoxels += job->sectionVoxels;
                 stats_.sectionQuads += job->sectionQuads;
+                stats_.reads += job->reads;
+                stats_.hits += job->hits;
+                stats_.faceSamples += job->faceSamples;
+                stats_.faceHits += job->faceHits;
+                if (relight) { ++stats_.relightJobs; stats_.relightQuads += relightQuads; }
             }
         }
         // Cancelled input/results are destroyed here, never in a render callback.

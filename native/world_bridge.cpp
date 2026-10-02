@@ -175,6 +175,43 @@ world::Profile profile(ILuaBase* lua, int table) {
     result.l2Word = uint32_t(integer(lua, table, "l2Word", -1, 0, 1048575));
     result.renderClass = uint32_t(integer(lua, table, "renderClass", -1, 0, UINT32_MAX));
     result.shade = float(scalar(lua, table, "shade", -1));
+    lua->GetField(table, "fluid");
+    const int fluid = lua->Top();
+    require(lua->IsType(fluid, Type::Table), "native profile requires fluid properties");
+    auto& f = result.fluid;
+    f.kind = uint8_t(integer(lua, fluid, "kind", -1, 0, 2));
+    f.height = scalar(lua, fluid, "height", -1);
+    require(f.height >= 0 && f.height <= 1, "invalid fluid height");
+    const auto boolean = [&](const char* name) {
+        lua->GetField(fluid, name);
+        require(lua->IsType(-1, Type::Bool), "missing fluid boolean property");
+        const bool value = lua->GetBool(-1); lua->Pop(); return value;
+    };
+    f.solid = boolean("solid"); f.blocksMotion = boolean("blocksMotion");
+    f.falling = boolean("falling"); f.ice = boolean("ice");
+    result.fluidSolid = boolean("lightSolid");
+    const bool full = boolean("full"), empty = boolean("empty");
+    lua->GetField(fluid, "boxes");
+    const int boxes = lua->Top();
+    require(lua->IsType(boxes, Type::Table), "missing fluid collision boxes");
+    const int count = lua->ObjLen(boxes);
+    require(count >= 0 && count <= 4096, "fluid collision box limit");
+    std::vector<l2::FluidBox> values;
+    values.reserve(count);
+    for (int i = 1; i <= count; ++i) {
+        lua->PushNumber(i); lua->RawGet(boxes);
+        const int box = lua->Top();
+        require(lua->IsType(box, Type::Table) && lua->ObjLen(box) == 6, "invalid fluid collision box");
+        l2::FluidBox value;
+        for (unsigned a = 0; a < 6; ++a) {
+            lua->PushNumber(a+1); lua->RawGet(box);
+            require(lua->IsType(-1, Type::Number), "invalid fluid collision coordinate");
+            value[a] = lua->GetNumber(-1); lua->Pop();
+        }
+        values.push_back(value); lua->Pop();
+    }
+    l2::compileFluidCoverage(f, full, empty, values);
+    lua->Pop(2);
     result.validate();
     return result;
 }
@@ -488,10 +525,13 @@ LUA_FUNCTION(pump) {
         boolean(LUA, "completed", result.completed); boolean(LUA, "submitted", result.submitted);
         boolean(LUA, "pending", result.pending); boolean(LUA, "stale", result.commit.stale);
         field(LUA, "committed", result.commit.committed); field(LUA, "deferred", result.commit.deferred);
-        field(LUA, "computeMS", result.computeMS); field(LUA, "scannedCells", double(result.scannedCells));
+        field(LUA, "computeMS", result.computeMS); field(LUA, "diffMS", result.diffMS);
+        field(LUA, "commitMS", result.commitMS); field(LUA, "snapshotMS", result.snapshotMS);
+        field(LUA, "scannedCells", double(result.scannedCells));
         LUA->CreateTable();
         unsigned index = 1;
-        for (const auto& delta : result.commit.changed) {
+        for (const auto& pointer : result.commit.changed) {
+            const auto& delta = *pointer;
             LUA->PushNumber(index++); LUA->CreateTable();
             field(LUA, "cx", delta.chunk.x); field(LUA, "cy", delta.chunk.y); field(LUA, "cz", delta.chunk.z);
             LUA->PushString(reinterpret_cast<const char*>(delta.changedBits.data()), unsigned(delta.changedBits.size()));
@@ -499,7 +539,7 @@ LUA_FUNCTION(pump) {
             LUA->RawSet(-3);
         }
         LUA->SetField(-2, "changed");
-        const auto owners = world::affectedLightSections(session(LUA, 1).store().config(), result.commit.changed);
+        const auto& owners = result.commit.dirtySections;
         LUA->CreateTable();
         index = 1;
         for (const auto& entry : owners) {
@@ -543,7 +583,8 @@ LUA_FUNCTION(stats) {
         field(LUA, "lightChunks", double(value.store().lightChunkCount()));
         field(LUA, "submitted", double(worker.submitted)); field(LUA, "completed", double(worker.completed));
         field(LUA, "failed", double(worker.failed)); field(LUA, "cancelled", double(worker.cancelled));
-        field(LUA, "computeMS", worker.computeMS);
+        field(LUA, "computeMS", worker.computeMS); field(LUA, "diffMS", worker.diffMS);
+        field(LUA, "commitMS", value.commitMS()); field(LUA, "snapshotMS", value.snapshotMS());
         boolean(LUA, "busy", worker.busy); boolean(LUA, "running", worker.running); boolean(LUA, "pending", value.pending());
         return 1;
     });
@@ -585,6 +626,7 @@ int capabilities(ILuaBase* lua) {
     field(lua, "protocol", 2); text(lua, "versionEncoding", "hex64");
     field(lua, "worldSession", 1); field(lua, "stateCatalog", 1); field(lua, "worldLighting", 1);
     field(lua, "l2Snapshot", 1); field(lua, "binarySection", 1); field(lua, "terrainWorker", 1);
+    field(lua, "fluidWorker", 1);
     field(lua, "generalModelWorker", 1); field(lua, "sectionLightReadiness", 1);
     field(lua, "worldAdapter", 1);
     return 1;

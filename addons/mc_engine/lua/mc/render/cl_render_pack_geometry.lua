@@ -115,6 +115,7 @@ function G.Upload( buffer, perf )
 			local result = MC.NativeL2.Upload( buffer, first, declaration() )
 			object, uploadedVertices = result.mesh, result.vertices
 			buffer.pixels, buffer.occlusion = result.pixels, result.occlusion
+			buffer.nativeRelight = result.relight == true
 			local b = result.bounds
 			bounds = MC.RenderSectionCull.Bounds( b[1], b[2], b[3], b[4], b[5], b[6] )
 		else
@@ -137,6 +138,7 @@ function G.Upload( buffer, perf )
 	end
 	G.liveParts = G.liveParts + 1
 	local data = { mesh = object, firstQuad = first, quadCount = count, references = 1 }
+	if buffer.nativeRelight then data.pixels, data.occlusion = buffer.pixels, buffer.occlusion end
 	if G.auditPixels then
 		local pixels, occlusion = {}, {}
 		for i = 1, #buffer.pixels do pixels[i] = buffer.pixels[i] end
@@ -148,4 +150,43 @@ function G.Upload( buffer, perf )
 		nativeL2 = buffer.nativeL2, uploadedVertices = uploadedVertices,
 		request = buffer.request, stage = buffer.stage, blockIds = buffer.blockIds,
 		bounds = bounds, direction = buffer.direction }
+end
+
+-- Results are staged first. A live section is updated in one render-thread
+-- transaction, restoring even the partially written part if an upload fails.
+function G.ApplyLighting( updates )
+	for _, update in ipairs( updates ) do
+		local data = update.data
+		requireValue( data.references > 0 and data.pixels and #update.pixels == data.quadCount * 4
+			and #update.occlusion == data.quadCount, "native_relight_layout", "invalid retained lighting output" )
+		update.firstQuad, update.quadCount = data.firstQuad, data.quadCount
+	end
+	local attempted = 0
+	local ok, err = pcall( function()
+		for i, update in ipairs( updates ) do
+			attempted = i
+			R.UploadPart( update, P.shared )
+		end
+	end )
+	if not ok then
+		local restoreError
+		for i = 1, attempted do
+			local restored, reason = pcall( R.UploadPart, updates[i].data, P.shared )
+			if not restored then restoreError = reason end
+		end
+		requireValue( not restoreError, "native_relight_restore",
+			"atlas rollback failed; rebuild required: " .. tostring( restoreError ) )
+		error( err, 0 )
+	end
+	for _, update in ipairs( updates ) do
+		local data = update.data
+		data.pixels, data.occlusion = update.pixels, update.occlusion
+		if data.lightRecord then
+			data.lightRecord.pixels, data.lightRecord.occlusion = update.pixels, update.occlusion
+		end
+		if G.auditPixels then
+			update.pixels.occlusion = update.occlusion
+			G.auditPixels[data] = update.pixels
+		end
+	end
 end

@@ -1,4 +1,5 @@
 #include "world_session.h"
+#include <chrono>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -74,15 +75,25 @@ PumpResult Session::pump() {
                 result.error = std::move(completion->error);
                 failed_ = true;
             } else if (completion->result) {
+                const auto started = std::chrono::steady_clock::now();
                 result.commit = store_.commit(*completion->result);
+                result.commitMS = std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - started).count();
+                commitMS_ += result.commitMS;
                 result.computeMS = completion->result->computeMS;
+                result.diffMS = completion->result->diffMS;
                 result.scannedCells = completion->result->scannedCells;
                 if (!result.commit.stale && result.commit.deferred > 0) dirty_ = true;
             }
         }
     }
     if (dirty_ && !failed_ && !worker_.stats().busy) {
-        const auto id = worker_.submit(store_.snapshot());
+        const auto started = std::chrono::steady_clock::now();
+        auto snapshot = store_.snapshot();
+        result.snapshotMS = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - started).count();
+        snapshotMS_ += result.snapshotMS;
+        const auto id = worker_.submit(std::move(snapshot));
         if (id != 0) { dirty_ = false; result.submitted = true; result.job = id; }
     }
     result.pending = pending();

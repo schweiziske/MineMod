@@ -2,6 +2,7 @@
 #include "l2_bridge.h"
 #include "l2_core.h"
 #include "l2_worker.h"
+#include "l2_draw_bridge.h"
 #include "world_bridge.h"
 #include "world_mesh.h"
 #include "global.h"
@@ -16,7 +17,7 @@
 namespace mcmesh::l2bridge {
 using namespace GarrysMod::Lua;
 namespace {
-int templateType = -1, meshType = -1, cubeType = -1, modelType = -1;
+int templateType = -1, meshType = -1, cubeType = -1, modelType = -1, fluidType = -1;
 using ModelHandle = std::shared_ptr<const l2::Model>;
 uint64_t templates = 0, liveTemplates = 0, batches = 0, liveMeshes = 0;
 uint64_t vertices = 0, indices = 0, reads = 0, hits = 0, failures = 0;
@@ -24,16 +25,29 @@ bool building = false;
 l2::WorkerPool workers;
 std::unordered_map<uint64_t, std::shared_ptr<const world::MeshSnapshot>> worldTickets;
 double snapshotMS = 0, commandMS = 0, uploadMS = 0;
+constexpr size_t MaxRetainedLightBytes = 64 * 1024 * 1024;
+size_t retainedLightBytes = 0;
+uint64_t retainedLightMisses = 0;
 double clockMS() {
     return std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+struct RetainedLight {
+    std::shared_ptr<const std::vector<l2::LightWork>> work;
+    world::GeometryStamp geometry;
+    size_t bytes;
+    RetainedLight(const l2::Part& part, const world::MeshSnapshot& source)
+        : work(part.lighting), geometry(source),
+          bytes(sizeof(*this) + geometry.bytes() + work->capacity() * sizeof(l2::LightWork)) {}
+};
 struct MeshHandle {
     IMesh* mesh = nullptr;
     IMaterial* material = nullptr;
     MeshHandle* previous = nullptr;
     MeshHandle* next = nullptr;
+    RetainedLight* lighting = nullptr;
+    DrawResource draw;
 };
 MeshHandle* firstMesh = nullptr;
 
@@ -48,8 +62,14 @@ void destroy(MeshHandle* handle) {
     CMatRenderContextPtr context(g_matsys);
     context->DestroyStaticMesh(handle->mesh);
     handle->mesh = nullptr;
+    handle->draw.mesh = nullptr;
     handle->material->DecrementReferenceCount();
     handle->material = nullptr;
+    if (handle->lighting) {
+        retainedLightBytes -= handle->lighting->bytes;
+        delete handle->lighting;
+        handle->lighting = nullptr;
+    }
     unlink(handle);
     --liveMeshes;
 }
@@ -69,7 +89,7 @@ LUA_FUNCTION(meshDraw) {
         return 0;
     }
     // The Lua render stage has already bound its material and view transform.
-    handle->mesh->Draw();
+    handle->mesh->Draw(0, handle->draw.indices);
     return 0;
 }
 LUA_FUNCTION(templateGC) {
@@ -284,7 +304,17 @@ void readVoxels(ILuaBase* lua, l2::Input& input) {
 }
 }
 
+DrawResource* drawResource(ILuaBase* lua, int index) {
+    auto* handle = lua->GetUserType<MeshHandle>(index, meshType);
+    l2::require(handle && handle->mesh, "Native draw scene requires a live L2 mesh");
+    return &handle->draw;
+}
+
 void initialize(ILuaBase* lua) {
+    l2drawbridge::initialize(lua);
+    fluidType = lua->CreateMetaTable("MCSWEP_L2Fluid_v1");
+    lua->PushString("immutable Native L2 fluid"); lua->SetField(-2, "__metatable");
+    lua->Pop();
     modelType = lua->CreateMetaTable("MCSWEP_L2Model_v1");
     function(lua, "__gc", modelGC);
     lua->PushString("immutable Native L2 model"); lua->SetField(-2, "__metatable");
@@ -306,6 +336,7 @@ void initialize(ILuaBase* lua) {
     lua->Pop();
 }
 void shutdown() {
+    l2drawbridge::shutdown();
     workers.stop();
     worldTickets.clear();
     while (firstMesh) destroy(firstMesh);
@@ -323,6 +354,50 @@ int compileCube(ILuaBase* lua) {
         std::copy(work.begin(), work.end(), cube.faces.begin());
         l2::validateCube(cube);
         lua->PushUserType_Value(cube, cubeType);
+        return 1;
+    } catch (const std::exception& e) { return failure(lua, top, e.what()); }
+}
+int compileFluid(ILuaBase* lua) {
+    const int top = lua->Top();
+    try {
+        l2::require(lua->IsType(1, Type::Table), "fluid recipe must be a table");
+        const auto field = [&](const char* name) {
+            lua->GetField(1, name); const double v = number(lua, -1); lua->Pop(); return v;
+        };
+        l2::FluidRecipe recipe;
+        recipe.kind = uint8_t(l2::integer(field("kind"), 1, 2, "invalid fluid kind"));
+        recipe.emission = l2::integer(field("emission"), 0, 15, "invalid fluid emission");
+        recipe.opacity = l2::integer(field("opacity"), 0, 255, "invalid fluid opacity");
+        recipe.full = l2::integer(field("full"), 0, 1, "invalid fluid full flag") != 0;
+        recipe.flow = l2::integer(field("flow"), 0, 1, "invalid fluid flow flag") != 0;
+        recipe.offset = field("offset");
+        l2::require(std::isfinite(recipe.offset) && recipe.offset >= 0 && recipe.offset < .5, "invalid fluid offset");
+        lua->GetField(1, "shade");
+        const int shades = lua->Top();
+        l2::require(lua->IsType(shades, Type::Table) && lua->ObjLen(shades) == 6, "invalid fluid shades");
+        for (unsigned f=0; f<6; ++f) recipe.shade[f] = l2::integer(item(lua, shades, f+1), 0, 255, "invalid fluid shade");
+        lua->Pop();
+        lua->GetField(1, "tiles");
+        const int tiles = lua->Top();
+        l2::require(lua->IsType(tiles, Type::Table) && lua->ObjLen(tiles) == 7, "invalid fluid tiles");
+        for (unsigned f=0; f<7; ++f) {
+            lua->PushNumber(f+1); lua->RawGet(tiles);
+            const int tile = lua->Top();
+            l2::require(lua->IsType(tile, Type::Table) && lua->ObjLen(tile) == 6, "invalid fluid UV transform");
+            auto& out = recipe.tiles[f];
+            for (unsigned a=0; a<2; ++a) {
+                out.origin[a] = item(lua, tile, a+1);
+                out.scale[a] = item(lua, tile, a+3);
+                out.inset[a] = item(lua, tile, a+5);
+                l2::require(std::isfinite(out.origin[a]) && std::abs(out.origin[a]) <= 32768
+                    && std::isfinite(out.scale[a]) && out.scale[a] > 0 && out.scale[a] <= 1
+                    && std::isfinite(out.inset[a]) && out.inset[a] >= 0 && out.inset[a] <= out.scale[a],
+                    "invalid fluid atlas transform");
+            }
+            lua->Pop();
+        }
+        lua->Pop();
+        lua->PushUserType_Value(recipe, fluidType);
         return 1;
     } catch (const std::exception& e) { return failure(lua, top, e.what()); }
 }
@@ -413,12 +488,14 @@ int compileTemplate(ILuaBase* lua) {
     } catch (const std::exception& e) { return failure(lua, top, e.what()); }
 }
 
-static int upload(ILuaBase* lua, const l2::Part& part, unsigned first, const std::string& materialName) {
+static int upload(ILuaBase* lua, const l2::Part& part, unsigned first, const std::string& materialName,
+    const world::MeshSnapshot* source = nullptr) {
     const int top = lua->Top();
     MeshHandle* handle = nullptr;
     try {
         const double started = clockMS();
         const unsigned count = static_cast<unsigned>(part.quads.size());
+        l2::require(count > 0, "L2 upload requires geometry");
         l2::require(!materialName.empty() && materialName.front() == '!', "L2 requires a runtime declaration material");
         l2::require(g_matsys != nullptr, "L2 material system unavailable");
         IMaterial* material = g_matsys->FindMaterial(materialName.c_str(), TEXTURE_GROUP_OTHER, false);
@@ -449,8 +526,17 @@ static int upload(ILuaBase* lua, const l2::Part& part, unsigned first, const std
         handle->next = firstMesh;
         if (firstMesh) firstMesh->previous = handle;
         firstMesh = handle; ++liveMeshes;
+        handle->draw.mesh = handle->mesh;
+        handle->draw.indices = count * 6;
+        std::copy(part.bounds, part.bounds + 6, handle->draw.bounds);
+        // Keep the original stream for water/translucency and append a second
+        // index order for directional draws. Vertex/atlas/relight order is fixed.
+        const auto computed = part.directions.quads.empty() ? l2::directionOrder(part.quads) : l2::DirectionOrder{};
+        const auto& ordered = part.directions.quads.empty() ? computed : part.directions;
+        handle->draw.directions = ordered.ranges;
+        for (auto& range : handle->draw.directions) range.first += count * 6;
         CMeshBuilder builder;
-        builder.Begin(handle->mesh, MATERIAL_TRIANGLES, count * 4, count * 6);
+        builder.Begin(handle->mesh, MATERIAL_TRIANGLES, count * 4, count * 12);
         unsigned address = first * 4;
         for (const auto& quad : part.quads) for (const auto& v : quad.vertices) {
             builder.Position3f(v.position[0], v.position[1], v.position[2]);
@@ -466,10 +552,22 @@ static int upload(ILuaBase* lua, const l2::Part& part, unsigned first, const std
             builder.Index(static_cast<unsigned short>(i * 4 + corner));
             builder.AdvanceIndex();
         }
+        for (unsigned i : ordered.quads) for (unsigned corner : l2::Triangle) {
+            builder.Index(static_cast<unsigned short>(i * 4 + corner));
+            builder.AdvanceIndex();
+        }
         builder.End();
+        if (source && part.lighting) {
+            auto retained = std::make_unique<RetainedLight>(part, *source);
+            if (retained->bytes <= MaxRetainedLightBytes - retainedLightBytes) {
+                retainedLightBytes += retained->bytes;
+                handle->lighting = retained.release();
+            } else ++retainedLightMisses;
+        }
         const int meshIndex = lua->Top();
         lua->CreateTable();
         lua->Push(meshIndex); lua->SetField(-2, "mesh");
+        lua->PushBool(handle->lighting != nullptr); lua->SetField(-2, "relight");
         numberField(lua, "vertices", count * 4); numberField(lua, "indices", count * 6);
         array(lua, part.pixels.data(), part.pixels.size()); lua->SetField(-2, "pixels");
         array(lua, part.occlusion.data(), part.occlusion.size()); lua->SetField(-2, "occlusion");
@@ -571,10 +669,13 @@ int submitWorldSection(ILuaBase* lua) {
         workers.start();
         if (!workers.canSubmit()) { lua->PushBool(false); return 1; }
         const auto started = clockMS();
-        auto source = std::make_shared<const world::MeshSnapshot>(store.meshSnapshot(chunk, section));
+        // Only geometry submissions opt in. Relights still require settled light.
+        const bool deferredLight = lua->IsType(10, Type::Bool) && lua->GetBool(10);
+        auto source = std::make_shared<const world::MeshSnapshot>(store.meshSnapshot(chunk, section, deferredLight));
         const int origin[3] = {source->origin.x, source->origin.y, source->origin.z};
         const int dims[3] = {source->dimensions.x, source->dimensions.y, source->dimensions.z};
         auto input = std::make_unique<l2::Input>(l2::Snapshot(origin, dims, source));
+        input->fluidSource = source;
         input->blockSize = store.config().blockSize;
         input->maxQuads = l2::integer(number(lua, 8), 1, l2::MaxQuads, "invalid world part limit");
         std::unordered_map<uint32_t, world::MeshRecipe> recipes;
@@ -594,14 +695,33 @@ int submitWorldSection(ILuaBase* lua) {
                     value.groups[f] = l2::integer(item(lua, table, f + 2), 1, l2::WorkerPool::MaxParts, "invalid cube group");
                 recipe.index = unsigned(input->cubes.size()); recipe.maxQuads = 6;
                 input->cubes.push_back(std::move(value));
-            } else {
-                l2::require(model && *model, "invalid world compiled model");
+            } else if (model && *model) {
                 l2::ModelBinding value{*model, 0};
                 lua->Pop();
                 value.group = l2::integer(item(lua, table, 2), 1, l2::WorkerPool::MaxParts, "invalid model group");
                 recipe.index = unsigned(input->models.size()); recipe.model = true; recipe.maxQuads = value.model->maxQuads;
                 input->models.push_back(std::move(value));
+            } else {
+                l2::require(lua->IsType(-1, Type::Bool) && !lua->GetBool(-1), "invalid world compiled recipe");
+                recipe.fluidOnly = true;
+                lua->Pop();
             }
+            lua->GetField(table, "fluid");
+            if (!lua->IsType(-1, Type::Nil)) {
+                const auto* fluid = lua->GetUserType<l2::FluidRecipe>(-1, fluidType);
+                l2::require(fluid != nullptr && source->world->catalog->states[state].fluid.ready
+                    && source->world->catalog->states[state].fluid.kind == fluid->kind,
+                    "missing compiled fluid recipe/profile");
+                auto value = *fluid;
+                lua->Pop();
+                lua->GetField(table, "fluidGroup");
+                value.group = l2::integer(number(lua, -1), 1, l2::WorkerPool::MaxParts, "invalid fluid group");
+                recipe.fluidIndex = int(input->fluids.size());
+                recipe.maxQuads += 6;
+                input->fluids.push_back(value);
+            }
+            lua->Pop();
+            l2::require(!recipe.fluidOnly || recipe.fluidIndex >= 0, "missing fluid-only recipe");
             lua->GetField(table, "blocking");
             l2::require(lua->IsType(-1, Type::Bool), "missing topology classification");
             recipe.blocking = lua->GetBool(-1);
@@ -613,6 +733,7 @@ int submitWorldSection(ILuaBase* lua) {
         input->instances = std::make_shared<world::MeshInstances>(source, chunk, section, std::move(recipes), lua->GetBool(9));
         const int count = lua->ObjLen(1);
         l2::require(count >= 0 && count <= l2::WorkerPool::MaxParts, "world section part limit");
+        input->retainLighting = lua->GetBool(9) && count == 0;
         size_t quads = 0;
         for (int i = 1; i <= count; ++i) {
             lua->PushNumber(i); lua->RawGet(1);
@@ -640,6 +761,78 @@ int worldSectionCurrent(ILuaBase* lua) {
         const auto id = uint64_t(l2::integer(number(lua, 1), 1, INT32_MAX, "invalid world L2 job"));
         const auto found = worldTickets.find(id);
         lua->PushBool(found != worldTickets.end() && worldbridge::session(lua, 2).store().current(*found->second));
+        return 1;
+    } catch (const std::exception& e) { return failure(lua, top, e.what()); }
+}
+int worldSectionGeometryCurrent(ILuaBase* lua) {
+    const int top = lua->Top();
+    try {
+        const auto id = uint64_t(l2::integer(number(lua, 1), 1, INT32_MAX, "invalid world L2 job"));
+        const auto found = worldTickets.find(id);
+        lua->PushBool(found != worldTickets.end()
+            && worldbridge::session(lua, 2).store().geometryCurrent(*found->second));
+        return 1;
+    } catch (const std::exception& e) { return failure(lua, top, e.what()); }
+}
+int submitWorldRelight(ILuaBase* lua) {
+    const int top = lua->Top();
+    uint64_t submitted = 0;
+    try {
+        BuildGuard guard;
+        auto& store = worldbridge::session(lua, 2).store();
+        const world::Coord chunk{
+            l2::integer(number(lua, 3), INT32_MIN, INT32_MAX, "invalid relight chunk x"),
+            l2::integer(number(lua, 4), INT32_MIN, INT32_MAX, "invalid relight chunk y"),
+            l2::integer(number(lua, 5), INT32_MIN, INT32_MAX, "invalid relight chunk z")};
+        store.config().validateChunk(chunk);
+        const unsigned section = l2::integer(number(lua, 6), 1, store.config().sectionCount(),
+            "invalid relight section") - 1;
+        l2::require(lua->IsType(1, Type::Table), "invalid relight meshes");
+        const int count = lua->ObjLen(1);
+        l2::require(count > 0 && count <= l2::WorkerPool::MaxParts, "invalid relight part count");
+        workers.start();
+        if (!workers.canSubmit()) { lua->PushBool(false); return 1; }
+        const auto started = clockMS();
+        auto source = std::make_shared<const world::MeshSnapshot>(store.meshSnapshot(chunk, section));
+        const int origin[3] = {source->origin.x, source->origin.y, source->origin.z};
+        const int dims[3] = {source->dimensions.x, source->dimensions.y, source->dimensions.z};
+        auto input = std::make_unique<l2::Input>(l2::Snapshot(origin, dims, source));
+        for (int i = 1; i <= count; ++i) {
+            lua->PushNumber(i); lua->RawGet(1);
+            const auto* mesh = lua->GetUserType<MeshHandle>(-1, meshType);
+            l2::require(mesh && mesh->mesh, "relight mesh was destroyed");
+            const auto* retained = mesh->lighting;
+            lua->Pop();
+            if (!retained || !(retained->geometry.origin == source->origin)
+                || !(retained->geometry.dimensions == source->dimensions) || !store.current(retained->geometry)) {
+                lua->PushBool(false); lua->PushString("geometry_changed_or_not_retained"); return 2;
+            }
+            input->relight.push_back(retained->work);
+        }
+        commandMS += clockMS() - started;
+        submitted = workers.submit(std::move(input));
+        if (submitted) {
+            worldTickets.emplace(submitted, std::move(source));
+            lua->PushNumber(double(submitted));
+        } else lua->PushBool(false);
+        return 1;
+    } catch (const std::exception& e) {
+        if (submitted) workers.cancel(submitted);
+        return failure(lua, top, e.what());
+    }
+}
+int lightPart(ILuaBase* lua) {
+    const int top = lua->Top();
+    try {
+        const auto id = uint64_t(l2::integer(number(lua, 1), 1, INT32_MAX, "invalid relight job"));
+        const auto job = workers.ready(id);
+        l2::require(job->error.empty(), job->error.c_str());
+        l2::require(job->relight, "L2 job is not light-only");
+        const auto index = l2::integer(number(lua, 2), 1, int(job->parts.size()), "invalid relight part") - 1;
+        const auto& part = job->parts[index];
+        lua->CreateTable();
+        array(lua, part.pixels.data(), part.pixels.size()); lua->SetField(-2, "pixels");
+        array(lua, part.occlusion.data(), part.occlusion.size()); lua->SetField(-2, "occlusion");
         return 1;
     } catch (const std::exception& e) { return failure(lua, top, e.what()); }
 }
@@ -706,7 +899,9 @@ int uploadPart(ILuaBase* lua) {
         const unsigned first = l2::integer(number(lua, 3), 0, l2::AtlasQuads - static_cast<int>(part.quads.size()),
             "L2 batch exceeds corner atlas");
         l2::require(lua->IsType(4, Type::String), "invalid L2 material");
-        return upload(lua, part, first, lua->GetString(4));
+        const auto source = worldTickets.find(id);
+        return upload(lua, part, first, lua->GetString(4),
+            source == worldTickets.end() ? nullptr : source->second.get());
     } catch (const std::exception& e) { return failure(lua, top, e.what()); }
 }
 int cancelSection(ILuaBase* lua) {
@@ -744,6 +939,14 @@ int statistics(ILuaBase* lua) {
     numberField(lua, "uploadMS", uploadMS);
     numberField(lua, "sectionVoxels", static_cast<double>(s.sectionVoxels));
     numberField(lua, "sectionQuads", static_cast<double>(s.sectionQuads));
+    numberField(lua, "workerSampleReads", static_cast<double>(s.reads));
+    numberField(lua, "workerSampleCacheHits", static_cast<double>(s.hits));
+    numberField(lua, "faceSamples", static_cast<double>(s.faceSamples));
+    numberField(lua, "faceCacheHits", static_cast<double>(s.faceHits));
+    numberField(lua, "relightJobs", static_cast<double>(s.relightJobs));
+    numberField(lua, "relightQuads", static_cast<double>(s.relightQuads));
+    numberField(lua, "retainedLightBytes", static_cast<double>(retainedLightBytes));
+    numberField(lua, "retainedLightMisses", static_cast<double>(retainedLightMisses));
     return 1;
 }
 }

@@ -46,12 +46,6 @@ const T* find(const Grid<std::shared_ptr<const T>>& map, Coord coord) {
     const auto found = map.find(coord);
     return found == map.end() ? nullptr : found->second.get();
 }
-bool lightDepends(Coord target, Coord changed, const Config& config) {
-    // Sky column changes affect arbitrary Z, but can only spread 14 cells sideways.
-    const int radius = (16 + config.chunkSize - 1) / config.chunkSize;
-    return std::abs(int64_t(target.x) - changed.x) <= radius
-        && std::abs(int64_t(target.y) - changed.y) <= radius;
-}
 std::shared_ptr<const Chunk> editChunk(const Config& cfg, const Catalog& catalog,
     const Chunk* previous, const Mutation& mutation, uint64_t revision) {
     auto chunk = previous && mutation.kind == Mutation::Kind::Patch
@@ -399,6 +393,40 @@ std::unique_ptr<LightResult> rebuildLight(std::shared_ptr<const Snapshot> source
         value->values = std::move(chunk.values);
         result->chunks.emplace(chunk.coord, std::move(value));
     }
+    const auto diffStarted = Clock::now();
+    const size_t deltaBytes = sizeof(LightDelta) + (cfg.cellCount() + 7) / 8;
+    // Reserve a conservative bound for halo masks, hash nodes and vector growth
+    // before allocating them. Worker result metadata shares the lighting budget.
+    const size_t xyOwners = 1 + 2 * ((2 + cfg.chunkSize - 1) / cfg.chunkSize);
+    const size_t zOwners = 1 + 2 * ((2 + cfg.chunkHeight - 1) / cfg.chunkHeight);
+    const size_t ownerBytes = xyOwners * xyOwners * zOwners
+        * (160 + size_t(cfg.sectionCount()) * (1 + 2 * sizeof(unsigned)));
+    size_t diffBytes = fixedBytes;
+    for (const auto& target : result->targets) {
+        if (cancelled.load(std::memory_order_relaxed)) return nullptr;
+        require(deltaBytes <= cfg.maxLightBytes - diffBytes,
+            "native lighting delta exceeds its memory budget");
+        const auto* old = find(source->light, target.first);
+        const auto* value = find(result->chunks, target.first);
+        auto delta = std::make_shared<LightDelta>();
+        delta->chunk = target.first;
+        delta->changedBits.resize((cfg.cellCount() + 7) / 8);
+        bool changed = false;
+        for (unsigned li = 0; li < cfg.cellCount(); ++li) {
+            if (!old || !value || old->values[li] != value->values[li]) {
+                delta->changedBits[li / 8] |= uint8_t(1u << (li % 8));
+                changed = true;
+            }
+        }
+        if (changed) {
+            require(ownerBytes <= cfg.maxLightBytes - diffBytes - deltaBytes,
+                "native lighting section masks exceed their memory budget");
+            diffBytes += deltaBytes + ownerBytes;
+            delta->sections = affectedLightSections(cfg, {delta});
+            result->deltas.emplace(target.first, std::move(delta));
+        }
+    }
+    result->diffMS = std::chrono::duration<double, std::milli>(Clock::now() - diffStarted).count();
     result->computeMS = std::chrono::duration<double, std::milli>(Clock::now() - started).count();
     return result;
 }
@@ -420,6 +448,7 @@ void Store::reset(Config config, std::shared_ptr<const Catalog> catalog) {
     chunks_.clear();
     columns_.clear();
     light_.clear();
+    lightColumns_.clear();
     invalidLight_.clear();
     ++epoch_;
     revision_ = 0;
@@ -432,6 +461,7 @@ void Store::reconfigure(Config config) {
     require(chunks_.size() <= config.maxChunks, "new world chunk limit is too small");
     config_ = config;
     light_.clear();
+    lightColumns_.clear();
     invalidLight_.clear();
     ++epoch_;
 }
@@ -515,10 +545,15 @@ bool Store::publish(Grid<std::shared_ptr<const Chunk>> pending) {
     for (auto& entry : columns) sealedColumns.emplace(entry.first, std::move(entry.second));
     // Prepare invalidation too, so allocation failure cannot publish half a batch.
     auto invalid = invalidLight_;
+    const int radius = (16 + config_.chunkSize - 1) / config_.chunkSize;
     for (const auto& entry : pending) {
         invalid[entry.first] = true;
-        for (const auto& light : light_) {
-            if (lightDepends(light.first, entry.first, config_)) invalid[light.first] = true;
+        for (int y = -radius; y <= radius; ++y)
+        for (int x = -radius; x <= radius; ++x) {
+            const Coord key{entry.first.x + x, entry.first.y + y, 0};
+            const auto column = lightColumns_.find(key);
+            if (column == lightColumns_.end()) continue;
+            for (int z : *column->second) invalid[{key.x, key.y, z}] = true;
         }
     }
     // All allocations precede publication. Transfer preallocated nodes instead
@@ -551,50 +586,91 @@ CommitResult Store::commit(const LightResult& result) {
     CommitResult out;
     require(result.source != nullptr, "light result has no source");
     if (result.source->epoch != epoch_ || result.source->catalog != catalog_) { out.stale = true; return out; }
-    std::vector<Coord> conflicts;
-    for (const auto& entry : result.source->chunks) {
-        if (find(chunks_, entry.first) != entry.second.get()) conflicts.push_back(entry.first);
-    }
-    for (const auto& entry : chunks_) {
-        if (result.source->chunks.find(entry.first) == result.source->chunks.end()) conflicts.push_back(entry.first);
+    Grid<bool> conflicts;
+    const int radius = (16 + config_.chunkSize - 1) / config_.chunkSize;
+    auto changed = [&](Coord coord) {
+        for (int y = -radius; y <= radius; ++y)
+        for (int x = -radius; x <= radius; ++x) conflicts[{coord.x + x, coord.y + y, 0}] = true;
+    };
+    if (result.source->revision != revision_) {
+        for (const auto& entry : result.source->chunks)
+            if (find(chunks_, entry.first) != entry.second.get()) changed(entry.first);
+        for (const auto& entry : chunks_)
+            if (result.source->chunks.find(entry.first) == result.source->chunks.end()) changed(entry.first);
     }
     auto conflict = [&](Coord coord) {
-        for (Coord changed : conflicts) if (lightDepends(coord, changed, config_)) return true;
-        return false;
+        return conflicts.find({coord.x, coord.y, 0}) != conflicts.end();
     };
-    auto next = light_;
-    auto invalid = invalidLight_;
+    Grid<std::shared_ptr<const LightChunk>> pending;
+    Grid<std::set<int>> columns;
+    Grid<std::vector<uint8_t>> owners;
+    std::vector<Coord> accepted;
+    Grid<bool> deferred;
+    size_t additions = 0;
     for (const auto& target : result.targets) {
         const auto coord = target.first;
-        if (conflict(coord)) { ++out.deferred; continue; }
-        const auto found = result.chunks.find(coord);
-        const auto* old = find(light_, coord);
-        const auto* value = found == result.chunks.end() ? nullptr : found->second.get();
-        LightDelta delta;
-        delta.chunk = coord;
-        delta.changedBits.resize((config_.cellCount() + 7) / 8);
-        bool changed = false;
-        for (unsigned li = 0; li < config_.cellCount(); ++li) {
-            if (!old || !value || old->values[li] != value->values[li]) {
-                delta.changedBits[li / 8] |= uint8_t(1u << (li % 8));
-                changed = true;
+        // Worker deltas are relative to their exact light baseline, not merely
+        // terrain revisions. Reject a late result after another light commit.
+        if (conflict(coord) || find(light_, coord) != find(result.source->light, coord)) {
+            deferred[coord] = true;
+            ++out.deferred;
+            continue;
+        }
+        const auto delta = result.deltas.find(coord);
+        if (delta != result.deltas.end()) {
+            out.changed.push_back(delta->second);
+            for (const auto& owner : delta->second->sections) {
+                auto& bits = owners[owner.first];
+                if (bits.empty()) bits.resize(config_.sectionCount());
+                for (unsigned section : owner.second) bits[section] = 1;
+            }
+            const auto found = result.chunks.find(coord);
+            const bool exists = light_.find(coord) != light_.end(), present = found != result.chunks.end();
+            pending.emplace(coord, present ? found->second : nullptr);
+            if (exists != present) {
+                const Coord key{coord.x, coord.y, 0};
+                auto inserted = columns.try_emplace(key);
+                if (inserted.second) {
+                    const auto old = lightColumns_.find(key);
+                    if (old != lightColumns_.end()) inserted.first->second = *old->second;
+                }
+                if (present) { inserted.first->second.insert(coord.z); ++additions; }
+                else inserted.first->second.erase(coord.z);
             }
         }
-        if (changed) {
-            out.changed.push_back(std::move(delta));
-            if (value) next[coord] = found->second;
-            else next.erase(coord);
-        }
-        invalid.erase(coord);
+        accepted.push_back(coord);
         ++out.committed;
     }
+    for (const auto& owner : owners) {
+        auto& sections = out.dirtySections[owner.first];
+        for (unsigned i = 0; i < owner.second.size(); ++i) if (owner.second[i]) sections.push_back(i);
+    }
+    Grid<std::shared_ptr<const std::set<int>>> sealed;
+    for (auto& column : columns) sealed.emplace(column.first, std::make_shared<const std::set<int>>(std::move(column.second)));
+    // Preallocate every insertion before publishing; unchanged light roots and
+    // delta byte buffers are no longer copied on the owning thread.
+    light_.reserve(light_.size() + additions);
+    lightColumns_.reserve(lightColumns_.size() + sealed.size());
+    while (!pending.empty()) {
+        auto node = pending.extract(pending.begin());
+        const auto old = light_.find(node.key());
+        if (!node.mapped()) { if (old != light_.end()) light_.erase(old); }
+        else if (old != light_.end()) old->second = std::move(node.mapped());
+        else light_.insert(std::move(node));
+    }
+    while (!sealed.empty()) {
+        auto node = sealed.extract(sealed.begin());
+        const auto old = lightColumns_.find(node.key());
+        if (node.mapped()->empty()) { if (old != lightColumns_.end()) lightColumns_.erase(old); }
+        else if (old != lightColumns_.end()) old->second = std::move(node.mapped());
+        else lightColumns_.insert(std::move(node));
+    }
+    for (Coord coord : accepted) invalidLight_.erase(coord);
     // Unloaded/known-empty records can sit outside both light domains. Their
     // invalidation is consumed too, unless this result predates a conflicting edit.
     for (const auto& entry : result.source->invalidLight) {
-        if (!conflict(entry.first)) invalid.erase(entry.first);
+        if (!conflict(entry.first) && deferred.find(entry.first) == deferred.end()) invalidLight_.erase(entry.first);
     }
-    light_.swap(next);
-    invalidLight_.swap(invalid);
     return out;
 }
 bool Store::lightReady(Coord coord) const {
@@ -606,10 +682,11 @@ std::shared_ptr<const Chunk> Store::chunk(Coord coord) const {
     const auto found = chunks_.find(coord);
     return found == chunks_.end() ? nullptr : found->second;
 }
-Grid<std::vector<unsigned>> affectedLightSections(const Config& cfg, const std::vector<LightDelta>& changed) {
+Grid<std::vector<unsigned>> affectedLightSections(const Config& cfg, const LightChanges& changed) {
     Grid<std::vector<uint8_t>> owners;
     const int ss = cfg.sectionSize, xy = cfg.chunkSize / ss, height = cfg.chunkHeight / ss;
-    for (const auto& delta : changed) {
+    for (const auto& pointer : changed) {
+        const auto& delta = *pointer;
         require(delta.changedBits.size() == (cfg.cellCount() + 7) / 8, "invalid light delta");
         for (unsigned li = 0; li < cfg.cellCount(); ++li) {
             if (!(delta.changedBits[li / 8] & (1u << (li % 8)))) continue;
@@ -649,10 +726,11 @@ bool Store::meshReady(Coord chunk, unsigned section) const {
         if (known({x,y,z}) && !lightReady({x,y,z})) return false;
     return true;
 }
-MeshSnapshot Store::meshSnapshot(Coord chunk, unsigned section) const {
+MeshSnapshot Store::meshSnapshot(Coord chunk, unsigned section, bool allowPendingLight) const {
+    config_.validateChunk(chunk);
     require(section < config_.sectionCount(), "invalid native render section");
     require(chunks_.find(chunk) != chunks_.end(), "native mesh source chunk is absent");
-    require(meshReady(chunk, section), "native mesh light halo is pending");
+    require(allowPendingLight || meshReady(chunk, section), "native mesh light halo is pending");
     const int ss = config_.sectionSize, xy = config_.chunkSize / ss;
     MeshSnapshot result;
     result.origin = {chunk.x * config_.chunkSize + int(section % xy) * ss - 2,
@@ -683,6 +761,39 @@ MeshSnapshot Store::meshSnapshot(Coord chunk, unsigned section) const {
     }
     result.world = std::move(source);
     return result;
+}
+GeometryStamp::GeometryStamp(const MeshSnapshot& source)
+    : epoch(source.world->epoch), catalog(source.world->catalog),
+      origin(source.origin), dimensions(source.dimensions) {
+    for (const auto& entry : source.world->chunks) chunks.emplace(entry.first, entry.second);
+}
+bool Store::current(const GeometryStamp& candidate) const {
+    if (candidate.epoch != epoch_ || candidate.catalog.lock() != catalog_) return false;
+    const auto lo = config_.chunkAt(candidate.origin);
+    const auto hi = config_.chunkAt({candidate.origin.x + candidate.dimensions.x - 1,
+        candidate.origin.y + candidate.dimensions.y - 1, candidate.origin.z + candidate.dimensions.z - 1});
+    for (int z = lo.z; z <= hi.z; ++z)
+    for (int y = lo.y; y <= hi.y; ++y)
+    for (int x = lo.x; x <= hi.x; ++x) {
+        const Coord key{x,y,z};
+        const auto before = candidate.chunks.find(key);
+        const auto now = chunks_.find(key);
+        if (before == candidate.chunks.end()) {
+            if (now != chunks_.end()) return false;
+        } else if (now == chunks_.end() || before->second.lock() != now->second) return false;
+    }
+    return true;
+}
+bool Store::geometryCurrent(const MeshSnapshot& candidate) const {
+    if (!candidate.world || candidate.world->epoch != epoch_ || candidate.world->catalog != catalog_) return false;
+    const auto lo = config_.chunkAt(candidate.origin);
+    const auto hi = config_.chunkAt({candidate.origin.x + candidate.dimensions.x - 1,
+        candidate.origin.y + candidate.dimensions.y - 1, candidate.origin.z + candidate.dimensions.z - 1});
+    for (int z = lo.z; z <= hi.z; ++z)
+    for (int y = lo.y; y <= hi.y; ++y)
+    for (int x = lo.x; x <= hi.x; ++x)
+        if (find(candidate.world->chunks, {x,y,z}) != find(chunks_, {x,y,z})) return false;
+    return true;
 }
 bool Store::current(const MeshSnapshot& candidate) const {
     if (!candidate.world || candidate.world->epoch != epoch_ || candidate.world->catalog != catalog_) return false;
@@ -743,7 +854,7 @@ l2::Cell MeshSnapshot::read(Coord cell) const {
         }
     }
     const auto& p = world->profile(cell);
-    return {p.l2Word | 1048576u | value, p.shade, p.renderClass};
+    return {p.l2Word | 1048576u | value, p.shade, p.renderClass, p.emission, p.fluidSolid};
 }
 size_t MeshSnapshot::bytes() const {
     size_t total = sizeof(*this) + sizeof(Snapshot);

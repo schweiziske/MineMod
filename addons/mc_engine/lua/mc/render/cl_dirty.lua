@@ -78,7 +78,7 @@ end
 
 local function markChunkSectionLightDirty( key, sectionIndex, rateLimited )
 	if not key or not sectionIndex then return end
-	if MC.NativeL2 then MC.NativeL2.Invalidate( key, sectionIndex ) end
+	if MC.NativeL2 then MC.NativeL2.InvalidateLighting( key, sectionIndex ) end
 	if MC.MarkBlockAnimationLightDirty then MC.MarkBlockAnimationLightDirty( key ) end
 	local geometryDirty = MC.MeshDirty[key]
 	if geometryDirty == true then return end
@@ -496,6 +496,9 @@ local function tryBuildMeshSection( key, sectionIndex, lightOnly, rateLimited, b
 	else
 		result = MC.BuildChunkMesh( key, sectionIndex )
 	end
+	-- A local light dependency is not global worker backpressure. Leave the
+	-- token queued and try other sections without spending the bulk quota.
+	if result == "blocked" then return result end
 	if limited then
 		budget.rateSections = budget.rateSections - 1
 		budget.rateSeconds = budget.rateSeconds - ( SysTime() - started )
@@ -536,7 +539,8 @@ local function buildDirtyMeshKey( key, sections, rateLimited, budget, pinnedOnly
 		-- Native builds and uploads a complete storage chunk per submission; its
 		-- sectionIndex argument is compatibility-only. Submit once and retire the
 		-- whole Lua dirty set instead of calling the bridge 32 times.
-		if not tryBuildMeshSection( key, sectionIndex, false, rateLimited, budget ) then return 0 end
+		local result = tryBuildMeshSection( key, sectionIndex, false, rateLimited, budget )
+		if not result or result == "blocked" then return 0 end
 		if MC.RenderPipeline and MC.RenderPipeline.NoteDirtyBuild then MC.RenderPipeline.NoteDirtyBuild( 1 ) end
 		if MC.MeshDirty[key] == sections then
 			retireLightDirtySection( key, true )
@@ -551,7 +555,7 @@ local function buildDirtyMeshKey( key, sections, rateLimited, budget, pinnedOnly
 		if sections[sectionIndex] and ( not pinnedOnly or MC.RenderGeometryStore.IsSectionPinned( key, sectionIndex ) ) then
 			local result = tryBuildMeshSection( key, sectionIndex, false, rateLimited, budget )
 			if not result then break end
-			if result ~= "pending" then
+			if result ~= "pending" and result ~= "blocked" then
 				if MC.RenderPipeline and MC.RenderPipeline.NoteDirtyBuild then MC.RenderPipeline.NoteDirtyBuild( 1 ) end
 				built = built + 1
 				if MC.MeshDirty[key] ~= sections then break end
@@ -585,7 +589,7 @@ local function buildLightDirtyMeshKey( key, sections, rateLimited, budget, pinne
 		and ( not pinnedOnly or MC.RenderGeometryStore.IsSectionPinned( key, sectionIndex ) ) then
 			local result = tryBuildMeshSection( key, sectionIndex, true, rateLimited, budget )
 			if not result then break end
-			if result ~= "pending" then
+			if result ~= "pending" and result ~= "blocked" then
 				built = built + 1
 				if MC.MeshLightDirty[key] ~= sections then break end
 				sections[sectionIndex] = nil
@@ -620,6 +624,18 @@ local function buildSelectedDirtyKeys( dirty, rateLimited, lightOnly, buildDista
 		if budget.frameYield or limited and budget.rateYield then break end
 	end
 	return keyCount, sectionCount, eligible, depth
+end
+
+local function prepareLighting( budget, deadline )
+	budget.deadline = deadline
+	if not deadline or SysTime() < deadline or budget.attempts == 0 then
+		if MC.ProcessGpuChunkLightTextureRefresh then
+			budget.lightTextureAttempts = MC.ProcessGpuChunkLightTextureRefresh( deadline, refreshPairedFluidLighting ) or 0
+		end
+	end
+	local started = SysTime()
+	if MC.PrepareBlockAnimationLighting then MC.PrepareBlockAnimationLighting( budget, canBuildMeshSection ) end
+	return pairedAnimationMS + ( SysTime() - started ) * 1000
 end
 
 local function meshBuildPerfPrintEnabled()
@@ -686,14 +702,11 @@ hook.Add( "Think", "mc_meshbuild", function()
 	if MC.RenderPackGeometry then MC.RenderPackGeometry.PumpRetired( budget ) end
 	if MC.NativeL2 then MC.NativeL2.Pump( budget ) end
 	idle = idle and lazyIdleRevision == meshDirtyRevision
-	if MC.ProcessGpuChunkLightTextureRefresh then
-		budget.lightTextureAttempts = MC.ProcessGpuChunkLightTextureRefresh( animationDeadline, refreshPairedFluidLighting ) or 0
-	end
-	local animationMS = pairedAnimationMS
-	local animationStarted = SysTime()
-	budget.deadline = animationDeadline
-	if MC.PrepareBlockAnimationLighting then MC.PrepareBlockAnimationLighting( budget, canBuildMeshSection ) end
-	animationMS = animationMS + ( SysTime() - animationStarted ) * 1000
+	-- Native L2 owns section-local atlases. Submit edits before unrelated
+	-- fluid/light work so workers can run while Lua prepares the latter.
+	local geometryFirst = MC.NativeL2 and MC.NativeL2.IsActive()
+	local animationMS = 0
+	if not geometryFirst then animationMS = prepareLighting( budget, animationDeadline ) end
 	if budget.native and not lazy then
 		budget.deadline = nil
 		-- Native terrain submissions are not stopped by a Lua-only light yield.
@@ -710,6 +723,7 @@ hook.Add( "Think", "mc_meshbuild", function()
 			selectionDeferred = true
 		end
 	end
+	if geometryFirst then animationMS = prepareLighting( budget, animationDeadline ) end
 	if not idle and next( MC.MeshLightDirty ) then
 		if canBuildMeshSection( budget, false ) then
 			local lightEligible
@@ -735,7 +749,7 @@ hook.Add( "Think", "mc_meshbuild", function()
 	-- Native submissions retain their existing policy, but animations always
 	-- run in Lua. Terrain sleep must not put animation scans/retries to sleep.
 	budget.deadline = animationDeadline
-	animationStarted = SysTime()
+	local animationStarted = SysTime()
 	if MC.PrepareBlockAnimations then MC.PrepareBlockAnimations( budget, canBuildMeshSection ) end
 	animationMS = animationMS + ( SysTime() - animationStarted ) * 1000
 	if MC.RenderPipeline and MC.RenderPipeline.NoteDirtyFrame then

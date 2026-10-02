@@ -21,7 +21,7 @@ local function checkNativeRequest()
 	if reported then return end
 	reported = true
 	MC.Fault( "native_mesh_l2_unavailable",
-		"mc_native_mesh requests Native, but L2 is unavailable: %s; Lua L2 remains active; update the DLL or use mc_native_mesh 0",
+		"mc_native_mesh requests Native, but L2 is unavailable: %s; ownership unchanged; update the DLL or use mc_native_mesh 0",
 		reason or "Native L2 adapter did not load" )
 end
 

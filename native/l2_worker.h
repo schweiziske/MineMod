@@ -1,5 +1,6 @@
 #pragma once
 #include "l2_core.h"
+#include "l2_fluid.h"
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -50,12 +51,15 @@ struct Voxel {
     double translation[3]{};
     unsigned cube = 0;
     bool model = false;
+    bool fluid = false;
 };
 struct Part {
     std::vector<Quad> quads;
+    DirectionOrder directions;
     std::vector<uint32_t> pixels, occlusion;
     float bounds[6]{};
     unsigned group = 0;
+    std::shared_ptr<const std::vector<LightWork>> lighting;
 };
 struct Topology {
     std::array<uint8_t, 6> faces{};
@@ -75,11 +79,15 @@ struct Input {
     std::vector<std::vector<Work>> parts;
     std::vector<Cube> cubes;
     std::vector<ModelBinding> models;
+    std::vector<FluidRecipe> fluids;
+    std::shared_ptr<const FluidSource> fluidSource;
     std::vector<Voxel> voxels;
     double blockSize = 1;
     unsigned maxQuads = MaxQuads;
     std::shared_ptr<const InstanceSource> instances;
     Topology topology;
+    bool retainLighting = false;
+    std::vector<std::shared_ptr<const std::vector<LightWork>>> relight;
     explicit Input(Snapshot&& value) : snapshot(std::move(value)) {}
     size_t reservation() const;
 };
@@ -94,8 +102,10 @@ struct Job {
     std::string error;
     double queueMS = 0, computeMS = 0, submittedAt = 0;
     uint64_t reads = 0, hits = 0;
+    uint64_t faceSamples = 0, faceHits = 0;
     uint64_t sectionVoxels = 0, sectionQuads = 0;
     Topology topology;
+    bool relight = false;
 };
 struct WorkerStats {
     unsigned workers = 0, queued = 0, running = 0, ready = 0, peakRunning = 0;
@@ -103,6 +113,8 @@ struct WorkerStats {
     uint64_t submitted = 0, completed = 0, cancelled = 0;
     double computeMS = 0, queueMS = 0;
     uint64_t sectionVoxels = 0, sectionQuads = 0;
+    uint64_t reads = 0, hits = 0, faceSamples = 0, faceHits = 0;
+    uint64_t relightJobs = 0, relightQuads = 0;
 };
 void expandVoxels(Input& input, std::vector<unsigned>& groups, const std::atomic<bool>& cancelled);
 void prefetchVoxels(Input& input);

@@ -19,7 +19,7 @@ MeshInstances::MeshInstances(std::shared_ptr<const MeshSnapshot> snapshot, Coord
 size_t MeshInstances::bytes() const {
     const auto size = snapshot_->world->config.sectionSize;
     return sizeof(*this) + recipes_.size() * (sizeof(MeshRecipe) + 64)
-        + size_t(size * size * size) * (sizeof(l2::Voxel) + 8);
+        + size_t(size * size * size) * (2 * sizeof(l2::Voxel) + 8);
 }
 void MeshInstances::populate(l2::Input& input, const std::atomic<bool>& cancelled) const {
     const auto& cfg = snapshot_->world->config;
@@ -27,7 +27,7 @@ void MeshInstances::populate(l2::Input& input, const std::atomic<bool>& cancelle
     std::vector<uint8_t> cells;
     if (topology_) cells.resize(ss * ss * ss);
     if (section_) {
-        input.voxels.reserve(section_->count);
+        input.voxels.reserve(section_->count * 2);
         for (unsigned i = 0; i < section_->states.size(); ++i) {
             if ((i & 63) == 0 && cancelled) return;
             const auto state = section_->states[i];
@@ -45,7 +45,12 @@ void MeshInstances::populate(l2::Input& input, const std::atomic<bool>& cancelle
                 voxel.source[a] = origin[a] + local[a];
                 voxel.translation[a] = local[a] * cfg.blockSize;
             }
-            input.voxels.push_back(voxel);
+            if (!recipe.fluidOnly) input.voxels.push_back(voxel);
+            if (recipe.fluidIndex >= 0) {
+                voxel.cube = unsigned(recipe.fluidIndex);
+                voxel.model = false; voxel.fluid = true;
+                input.voxels.push_back(voxel);
+            }
         }
     }
     if (topology_ && !cancelled) input.topology = meshTopology(std::move(cells), ss);

@@ -39,7 +39,21 @@ std::unique_ptr<LightResult> rebuild(Store& store) {
     std::atomic<bool> cancel{false};
     auto result = rebuildLight(store.snapshot(), cancel);
     check(result != nullptr, "uncancelled light job vanished");
-    check(!store.commit(*result).stale, "fresh light result was stale");
+    for (const auto& target : result->targets) {
+        const auto old = result->source->light.find(target.first);
+        const auto value = result->chunks.find(target.first);
+        const auto delta = result->deltas.find(target.first);
+        for (unsigned i = 0; i < store.config().cellCount(); ++i) {
+            const bool expected = old == result->source->light.end() || value == result->chunks.end()
+                || old->second->values[i] != value->second->values[i];
+            const bool actual = delta != result->deltas.end() && (delta->second->changedBits[i / 8] & (1u << (i % 8)));
+            check(expected == actual, "worker delta differs from independent cell diff");
+        }
+    }
+    const auto committed = store.commit(*result);
+    check(!committed.stale, "fresh light result was stale");
+    check(committed.dirtySections == affectedLightSections(store.config(), committed.changed),
+        "committed section union differs from delta halo");
     return result;
 }
 void compareFull(Store& store) {
@@ -172,17 +186,24 @@ void versions() {
     store.apply(store.revision(), {cell(cfg, {0,0,0}, 1)});
     const auto partial = store.commit(*original);
     check(partial.deferred > 0 && partial.committed > 0, "independent columns could not commit partially");
+    check(partial.dirtySections == affectedLightSections(cfg, partial.changed), "partial commit returned rejected masks");
+    for (const auto& delta : partial.changed) check(delta->chunk.x > 4, "conflicting column delta committed");
     check(!store.lightReady({0,0,0}) && store.lightReady({25,0,0}), "partial publication readiness");
     rebuild(store);
     compareFull(store);
     const auto mesh = store.meshSnapshot({25,0,0}, 0);
+    const GeometryStamp geometry(mesh);
+    check(store.current(geometry), "new geometry stamp is stale");
     store.apply(store.revision(), {cell(cfg, {0,0,0}, 4)});
     check(store.current(mesh), "distant edit invalidated unrelated mesh");
+    check(store.current(geometry), "distant edit invalidated geometry stamp");
     store.apply(store.revision(), {cell(cfg, {100,0,0}, 1)});
     check(!store.current(mesh), "local edit failed to invalidate mesh");
+    check(!store.current(geometry), "local edit failed to invalidate retained geometry");
     auto previous = rebuildLight(store.snapshot(), cancel);
     store.reset(cfg, catalog());
     check(store.commit(*previous).stale && !store.current(mesh), "old world survived reset");
+    check(!store.current(geometry), "geometry stamp survived world reset");
     cancel = true;
     store.apply(0, {cell(cfg, {0,0,0}, 2)});
     check(!rebuildLight(store.snapshot(), cancel), "cancelled propagation completed");
@@ -192,6 +213,56 @@ void versions() {
     limited.apply(0, {cell(cfg, {0,0,0}, 2)});
     cancel = false;
     rejects([&] { rebuildLight(limited.snapshot(), cancel); }, "lighting ignored memory budget");
+    auto metadataBudget = small(true);
+    metadataBudget.maxLightBytes = 1024;
+    Store maskLimited(metadataBudget, catalog());
+    maskLimited.apply(0, {cell(metadataBudget, {0,0,0}, 1)});
+    rejects([&] { rebuildLight(maskLimited.snapshot(), cancel); }, "light metadata ignored memory budget");
+}
+void lightBaselinesAndColumns() {
+    const auto cfg = small();
+    Store store(cfg, catalog());
+    store.apply(0, {cell(cfg, {0,0,0}, 2), cell(cfg, {0,0,400}, 1), cell(cfg, {100,0,0}, 2)});
+    std::atomic<bool> cancel{false};
+    auto first = rebuildLight(store.snapshot(), cancel);
+    auto late = rebuildLight(store.snapshot(), cancel);
+    store.commit(*first);
+    const auto rejected = store.commit(*late);
+    check(rejected.committed == 0 && rejected.deferred == late->targets.size()
+        && rejected.changed.empty() && rejected.dirtySections.empty(), "out-of-order light baseline was published");
+    for (Coord pos : {Coord{0,0,0}, Coord{100,0,0}, Coord{0,0,400}}) {
+        const auto before = store.snapshot();
+        auto mutation = cell(cfg, pos, 1);
+        if (pos.z) { mutation.kind = Mutation::Kind::Unload; mutation.cells.clear(); }
+        store.apply(store.revision(), {mutation});
+        const auto after = store.snapshot();
+        const int radius = (16 + cfg.chunkSize - 1) / cfg.chunkSize;
+        for (const auto& entry : before->light) {
+            const bool expected = std::abs(entry.first.x - mutation.chunk.x) <= radius
+                && std::abs(entry.first.y - mutation.chunk.y) <= radius;
+            check((after->invalidLight.count(entry.first) != 0) == expected, "column index invalidation differs from scan");
+        }
+        rebuild(store);
+        compareFull(store);
+    }
+}
+void retainedGeometry() {
+    const auto cfg = small();
+    Store store(cfg, catalog());
+    store.apply(0, {cell(cfg, {0,0,0}, 4), cell(cfg, {5,0,0}, 2)});
+    rebuild(store);
+    auto mesh = store.meshSnapshot({0,0,0}, 0);
+    const GeometryStamp geometry(mesh);
+    const auto before = store.light({0,0,0}, false);
+    store.apply(store.revision(), {cell(cfg, {5,0,0}, 0)});
+    rebuild(store);
+    check(store.light({0,0,0}, false) != before, "relight fixture did not change light");
+    check(store.current(geometry) && !store.current(mesh), "light-only change invalidated geometry stamp");
+    mesh = {};
+    std::weak_ptr<const Chunk> previous = store.chunk({0,0,0});
+    store.apply(store.revision(), {cell(cfg, {0,0,0}, 1)});
+    check(previous.expired(), "retained geometry kept obsolete terrain alive");
+    check(!store.current(geometry), "expired geometry root remained valid");
 }
 void configuration() {
     auto cfg = small();
@@ -214,12 +285,12 @@ void configuration() {
     check(store.light({-1,0,0}, false) == 15 && store.light({-1,0,0}, true) == 15, "config light rebuild failed");
 
     cfg = small();
-    LightDelta delta;
-    delta.chunk = {-1,0,0};
-    delta.changedBits.resize((cfg.cellCount() + 7) / 8);
+    auto delta = std::make_shared<LightDelta>();
+    delta->chunk = {-1,0,0};
+    delta->changedBits.resize((cfg.cellCount() + 7) / 8);
     const Coord changed{-1,0,0};
     const auto li = cfg.localIndex(changed);
-    delta.changedBits[li / 8] |= uint8_t(1u << (li % 8));
+    delta->changedBits[li / 8] |= uint8_t(1u << (li % 8));
     const auto owners = affectedLightSections(cfg, {delta, delta});
     size_t count = 0;
     for (int z = -2; z <= 1; ++z)
@@ -261,7 +332,8 @@ void incremental() {
 }
 int main() {
     try {
-        storage(); lighting(); streaming(); versions(); configuration(); incremental();
+        storage(); lighting(); streaming(); versions(); lightBaselinesAndColumns(); retainedGeometry();
+        configuration(); incremental();
         std::cout << "Persistent world: atomic batches, snapshots, streaming, water, incremental light, stale jobs and budgets passed\n";
         return 0;
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

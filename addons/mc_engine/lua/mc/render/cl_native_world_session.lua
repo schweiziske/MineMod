@@ -28,11 +28,11 @@ function T.GetStatus()
 		worldLightBackend = active and "native_worker" or "lua",
 		meshExecution = terrain and "native_world_workers_lua_sections"
 			or ( mesh and "native_workers_lua_sections" or "lua_sync" ),
-		terrainBackend = terrain and "native_models_lua_specials" or "lua",
+		terrainBackend = terrain and "native_models_fluids_lua_specials" or "lua",
 		atlasUploader = "lua", capabilities = caps, reason = reason,
 	}
 	if caps then
-		status.reason = terrain and "Native world/model workers; special emitters, scheduling and GPU publication remain Lua"
+		status.reason = terrain and "Native world/model/fluid workers; other special emitters, scheduling and GPU publication remain Lua"
 			or ( active and "Native world active; direct terrain worker inactive" or "persistent Native world inactive" )
 	end
 	if T.active then status.world = T.active.handle:GetStats() end
@@ -64,6 +64,39 @@ local function renderClass( stateId, visual, bx, by, bz )
 end
 
 -- Resolve at registration/mutation boundaries, never inside vertex loops.
+local function fluidProfile( stateId, visual, bx, by, bz )
+	local fluid = { kind = 0, height = 0, falling = false, solid = false, blocksMotion = false,
+		ice = false, full = false, empty = true, lightSolid = false, boxes = {} }
+	if stateId == 0 then return fluid end
+	local kind, height, _, falling = MC.Liquid.DecodeState( stateId )
+	fluid.kind = kind == "water" and 1 or kind == "lava" and 2 or 0
+	fluid.height, fluid.falling = height or 0, falling == true
+	fluid.full = MC.BlockIsFullCubeForState( stateId, bx, by, bz ) == true
+	fluid.solid = MC.Liquid.StateSolid( stateId, bx, by, bz ) == true
+	fluid.blocksMotion = MC.Liquid.StateBlocksMotion( stateId, bx, by, bz ) == true
+	local translucent = MC.BlockVisualIsTranslucent( visual, bx, by, bz )
+	fluid.empty = translucent == true or MC.Blocks[visual.id].transparent == true
+	fluid.lightSolid = not translucent and MC.BlockVisualHasCollision( visual, bx, by, bz )
+		and MC.BlockVisualIsFullCube( visual, bx, by, bz ) == true
+	local name = MC.Blocks[visual.id].name
+	fluid.ice = name == "ice" or name == "frosted_ice" or name == "packed_ice" or name == "blue_ice"
+	if not fluid.full then
+		fluid.boxes = MC.GetBlockCollisionBoxesForState( stateId, bx, by, bz ) or {}
+	end
+	return fluid
+end
+
+local function fluidProfileKey( f )
+	local parts = { f.kind, string.format( "%.17g", f.height ) }
+	for _, field in ipairs( { "falling", "solid", "blocksMotion", "ice", "full", "empty", "lightSolid" } ) do
+		parts[#parts + 1] = f[field] and 1 or 0
+	end
+	for _, box in ipairs( f.boxes ) do
+		for a = 1, 6 do parts[#parts + 1] = string.format( "%.17g", box[a] ) end
+	end
+	return concat( parts, ":" )
+end
+
 function T.ResolveProfile( stateId, bx, by, bz, envelope, baseOnly )
 	local p = MC.StateLighting.Get( stateId, bx, by, bz )
 	if not p then return nil, "missing lighting properties for state " .. stateId end
@@ -102,13 +135,18 @@ function T.ResolveProfile( stateId, bx, by, bz, envelope, baseOnly )
 		+ ( p.emissive and 65536 or 0 ) + ( p.viewBlocking and 131072 or 0 )
 		+ ( p.solidRender and 262144 or 0 ) + ( p.fullCollision and 524288 or 0 )
 	return { propagationEmission = emission, propagationOpacity = opacity, skyCost = cost,
-		l2Word = word, renderClass = class, shade = p.shade }, nil, p, visual
+		l2Word = word, renderClass = class, shade = p.shade,
+		fluid = fluidProfile( stateId, visual, bx, by, bz ) }, nil, p, visual
 end
 
 function T.BuildCatalog( revision )
 	if not ( MC.StateLighting and MC.StateLighting.Prepare() and MC.ResolveBlockStateVisual
 		and MC.BlockLightEmissionForState and MC.BlockLightOpacityForState ) then
 		return nil, "state lighting registry is not ready"
+	end
+	if not ( MC.Liquid and MC.Liquid.DecodeState and MC.Liquid.StateSolid and MC.Liquid.StateBlocksMotion
+		and MC.GetBlockCollisionBoxesForState and MC.BlockIsFullCubeForState ) then
+		return nil, "fluid profile registry is not ready"
 	end
 	if not integer( MC.BlockStateCount, 1048576 ) or MC.BlockStateCount == 0 then return nil, "invalid state count" end
 	local profiles, mapping, contextual, cache = {}, {}, {}, {}
@@ -132,7 +170,7 @@ function T.BuildCatalog( revision )
 		end
 		contextual[stateId + 1] = char( stateId ~= 0 and ( dynamic or p.collisionContext ~= "none" ) and 1 or 0 )
 		local key = concat( { row.propagationEmission, row.propagationOpacity, row.skyCost,
-			row.l2Word, row.renderClass, string.format( "%.17g", row.shade ) }, ":" )
+			row.l2Word, row.renderClass, string.format( "%.17g", row.shade ), fluidProfileKey( row.fluid ) }, ":" )
 		local index = cache[key]
 		if index == nil then
 			index = #profiles

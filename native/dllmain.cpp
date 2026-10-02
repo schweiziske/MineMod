@@ -7,6 +7,7 @@
 #include "patchdecode.h"
 #include "lightatlas.h"
 #include "l2_bridge.h"
+#include "l2_draw_bridge.h"
 #include "world_bridge.h"
 
 using namespace GarrysMod::Lua;
@@ -75,14 +76,23 @@ GMOD_MODULE_OPEN()
 	fa.AddFunction("Handshake", GTLUAF(mcmesh::handshake::Handshake));
 	fa.AddFunction("SetAtlasPageMaterial", GTLUAF(mcmesh::handshake::SetAtlasPageMaterial));
 	fa.AddFunction("L2Version", GTLUAF(mcmesh::l2bridge::version));
+		fa.AddFunction("L2DrawVersion", GTLUAF(mcmesh::l2drawbridge::version));
+		fa.AddFunction("CreateL2DrawScene", GTLUAF(mcmesh::l2drawbridge::create));
+		fa.AddFunction("PatchL2DrawScene", GTLUAF(mcmesh::l2drawbridge::patch));
+		fa.AddFunction("SetL2DrawGraph", GTLUAF(mcmesh::l2drawbridge::graph));
+		fa.AddFunction("DrawL2Scene", GTLUAF(mcmesh::l2drawbridge::draw));
 	fa.AddFunction("CompileL2Template", GTLUAF(mcmesh::l2bridge::compileTemplate));
 	fa.AddFunction("CompileL2Cube", GTLUAF(mcmesh::l2bridge::compileCube));
 	fa.AddFunction("CompileL2Model", GTLUAF(mcmesh::l2bridge::compileModel));
+	fa.AddFunction("CompileL2Fluid", GTLUAF(mcmesh::l2bridge::compileFluid));
 	fa.AddFunction("GetL2SectionParts", GTLUAF(mcmesh::l2bridge::sectionParts));
 	fa.AddFunction("BuildL2Mesh", GTLUAF(mcmesh::l2bridge::buildMesh));
 	fa.AddFunction("SubmitL2Section", GTLUAF(mcmesh::l2bridge::submitSection));
 	fa.AddFunction("SubmitWorldL2Section", GTLUAF(mcmesh::l2bridge::submitWorldSection));
+	fa.AddFunction("SubmitWorldL2Relight", GTLUAF(mcmesh::l2bridge::submitWorldRelight));
+	fa.AddFunction("GetL2LightPart", GTLUAF(mcmesh::l2bridge::lightPart));
 	fa.AddFunction("IsWorldL2Current", GTLUAF(mcmesh::l2bridge::worldSectionCurrent));
+	fa.AddFunction("IsWorldL2GeometryCurrent", GTLUAF(mcmesh::l2bridge::worldSectionGeometryCurrent));
 	fa.AddFunction("GetWorldL2Topology", GTLUAF(mcmesh::l2bridge::sectionTopology));
 	fa.AddFunction("PollL2Section", GTLUAF(mcmesh::l2bridge::pollSection));
 	fa.AddFunction("UploadL2Part", GTLUAF(mcmesh::l2bridge::uploadPart));

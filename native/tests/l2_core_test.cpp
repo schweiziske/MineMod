@@ -38,6 +38,50 @@ struct Reader {
         return self.cell;
     }
 };
+struct VariedReader {
+    static Cell read(void*, int x, int y, int z) {
+        const unsigned v = unsigned(x * 31 + y * 17 + z * 11);
+        return {1048576u | (v % 16) | ((v / 3 % 16) << 4)
+            | (v % 3 == 0 ? 131072u | 262144u | 0xf000u : 0u), float(v % 11) / 10};
+    }
+};
+void faceCache() {
+    const int origin[3]{}, dims[3] = {7,7,7};
+    Snapshot cached(origin, dims, VariedReader::read, nullptr);
+    Command c;
+    std::fill(std::begin(c.source), std::end(c.source), 3);
+    auto t = compile(packet().data());
+    for (unsigned cell = 0; cell < 3; ++cell) {
+        c.source[0] = cell == 1 ? 4 : 3;
+        for (unsigned face = 0; face < 6; ++face)
+        for (unsigned cubic = 0; cubic < 2; ++cubic)
+        for (unsigned variation = 0; variation < 8; ++variation) {
+            t.face = int(face);
+            t.flags = 8 | int(cubic) | (variation % 2 ? 4 : 0);
+            t.directionShade = variation % 3 ? 0.6f : 1;
+            t.emission = variation % 4;
+            c.tint = variation;
+            for (unsigned i = 0; i < 4; ++i) {
+                t.indices[i] = (i + variation) % 4;
+                for (unsigned j = 0; j < 4; ++j) t.weights[i][j] = float((i + j) % 4 + 1) / 10;
+            }
+            Snapshot fresh(origin, dims, VariedReader::read, nullptr);
+            const auto expected = evaluate(t, c, fresh, 77);
+            const auto actual = evaluate(t, c, cached, 77);
+            check(actual.occlusion == expected.occlusion
+                && std::equal(std::begin(actual.pixels), std::end(actual.pixels), expected.pixels),
+                "face cache mixed directions, partial weights, emission or tint");
+        }
+    }
+    check(cached.faceSamples == 36 && cached.faceHits == 252, "12-slot face cache/reset accounting");
+    Reader reader;
+    Snapshot failed(origin, dims, Reader::read, &reader);
+    reader.fail = true;
+    rejects([&] { failed.sampleFace(3,3,3,0,true); }, "injected");
+    reader.fail = false;
+    failed.sampleFace(3,3,3,0,true);
+    check(failed.faceSamples == 1 && failed.faceHits == 0, "failed face sample poisoned cache");
+}
 void run() {
     const int origin[3]{}, dims[3] = {5,5,5};
     Reader reader;
@@ -121,6 +165,6 @@ void run() {
 }
 }
 int main() {
-    try { run(); std::cout << "L2 core: " << checks << " checks passed\n"; return 0; }
+    try { run(); faceCache(); std::cout << "L2 core: " << checks << " checks passed\n"; return 0; }
     catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }
