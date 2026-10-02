@@ -166,6 +166,40 @@ world::Config config(ILuaBase* lua, int table) {
     cfg.validate();
     return cfg;
 }
+std::shared_ptr<const l2::Shape> renderShape(ILuaBase* lua, int table) {
+    require(lua->IsType(table, Type::Table), "native profile requires render shape");
+    auto result = std::make_shared<l2::Shape>();
+    result->selector = unsigned(integer(lua, table, "selector", -1, 0, 3));
+    result->stair = int(integer(lua, table, "stair", -2, -1, 7));
+    result->connections = unsigned(integer(lua, table, "connections", -1, 0, 7));
+    result->pane = flag(lua, table, "pane", false);
+    lua->GetField(table, "variants");
+    const int variants = lua->Top();
+    require(lua->IsType(variants, Type::Table) && lua->ObjLen(variants) <= 64, "invalid render shape variants");
+    result->variants.clear();
+    for (int i = 1; i <= lua->ObjLen(variants); ++i) {
+        lua->PushNumber(i); lua->RawGet(variants);
+        const int boxes = lua->Top();
+        require(lua->IsType(boxes, Type::Table) && lua->ObjLen(boxes) <= 4096, "invalid render shape boxes");
+        std::vector<l2::ShapeBox> values;
+        for (int j = 1; j <= lua->ObjLen(boxes); ++j) {
+            lua->PushNumber(j); lua->RawGet(boxes);
+            const int box = lua->Top();
+            require(lua->IsType(box, Type::Table) && lua->ObjLen(box) == 6, "invalid render shape box");
+            l2::ShapeBox value;
+            for (unsigned a = 0; a < 6; ++a) {
+                lua->PushNumber(a+1); lua->RawGet(box);
+                require(lua->IsType(-1, Type::Number), "invalid render shape coordinate");
+                value[a] = lua->GetNumber(-1); lua->Pop();
+            }
+            values.push_back(value); lua->Pop();
+        }
+        result->variants.push_back(std::move(values)); lua->Pop();
+    }
+    lua->Pop();
+    result->validate();
+    return result;
+}
 world::Profile profile(ILuaBase* lua, int table) {
     require(lua->IsType(table, Type::Table), "native state profile must be a table");
     world::Profile result;
@@ -175,6 +209,9 @@ world::Profile profile(ILuaBase* lua, int table) {
     result.l2Word = uint32_t(integer(lua, table, "l2Word", -1, 0, 1048575));
     result.renderClass = uint32_t(integer(lua, table, "renderClass", -1, 0, UINT32_MAX));
     result.shade = float(scalar(lua, table, "shade", -1));
+    lua->GetField(table, "shape");
+    result.shape = renderShape(lua, lua->Top());
+    lua->Pop();
     lua->GetField(table, "fluid");
     const int fluid = lua->Top();
     require(lua->IsType(fluid, Type::Table), "native profile requires fluid properties");
@@ -233,6 +270,7 @@ std::shared_ptr<const world::Catalog> catalog(ILuaBase* lua, int table) {
     for (int i = 1; i <= size; ++i) {
         lua->PushNumber(i); lua->RawGet(profilesTable);
         profiles.push_back(profile(lua, lua->Top()));
+        value->shapeBytes += profiles.back().shape->bytes();
         lua->Pop();
     }
     lua->Pop();
@@ -627,6 +665,7 @@ int capabilities(ILuaBase* lua) {
     field(lua, "worldSession", 1); field(lua, "stateCatalog", 1); field(lua, "worldLighting", 1);
     field(lua, "l2Snapshot", 1); field(lua, "binarySection", 1); field(lua, "terrainWorker", 1);
     field(lua, "fluidWorker", 1);
+    field(lua, "shapeWorker", 1);
     field(lua, "generalModelWorker", 1); field(lua, "sectionLightReadiness", 1);
     field(lua, "worldAdapter", 1);
     return 1;

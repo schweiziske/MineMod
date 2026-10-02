@@ -24,6 +24,7 @@ target_link_libraries(mc_native_world_worker_test PRIVATE mc_native_world_decode
 target_link_libraries(mc_native_world_decode_test PRIVATE mc_native_world_decode Threads::Threads)
 target_link_libraries(mc_native_world_mesh_test PRIVATE Threads::Threads)
 foreach(target mc_native_l2_probe mc_native_l2_core_test mc_native_l2_draw_test mc_native_l2_worker_test mc_native_world_core_test mc_native_world_worker_test mc_native_world_decode_test mc_native_world_mesh_test)
+    target_sources(${target} PRIVATE ../l2_shapes.cpp)
     target_compile_features(${target} PRIVATE cxx_std_17)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /fp:strict /utf-8)

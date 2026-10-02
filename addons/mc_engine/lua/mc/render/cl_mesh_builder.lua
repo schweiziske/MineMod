@@ -64,8 +64,9 @@ local function build( key, sectionIndex, lightOnly )
 		elseif not snapshots then snapshots, err = Snapshot.Prepare( chunk, sectionIndex ) end
 		meshPerfAdd( perf, "indexMS", indexStart )
 		if not snapshots then
-			MC.Fault( "render_snapshot_prepare_failed", "chunk %s section %s: %s",
-				tostring( key ), tostring( sectionIndex ), tostring( err ) )
+			MC.Fault( type( err ) == "table" and err.code or "render_snapshot_prepare_failed",
+				"chunk %s section %s: %s; previous L2 section retained",
+				tostring( key ), tostring( sectionIndex ), tostring( type( err ) == "table" and err.message or err ) )
 			return false
 		end
 		if sectionIndex then

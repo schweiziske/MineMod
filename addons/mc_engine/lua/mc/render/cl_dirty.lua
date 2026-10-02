@@ -484,9 +484,20 @@ local function canBuildMeshSection( budget, rateLimited )
 	return true
 end
 
-local function tryBuildMeshSection( key, sectionIndex, lightOnly, rateLimited, budget )
+local function tryBuildMeshSection( key, sectionIndex, lightOnly, rateLimited, budget, retried )
 	if MC.NativeL2 and MC.NativeL2.IsPending( key, sectionIndex ) then return "pending" end
 	if not canBuildMeshSection( budget, rateLimited ) then return nil end
+	local native = MC.NativeL2
+	if native and native.IsActive() and not native.CanBuild() then
+		local dirty = lightOnly and MC.MeshLightDirty or MC.MeshDirty
+		local token = dirty[key]
+		-- Ready results own admission slots until publication. Recycle them once
+		-- at backpressure, without waiting/spinning for workers that are still busy.
+		native.Pump( budget )
+		if dirty[key] ~= token or native.IsPending( key, sectionIndex ) then return "pending" end
+		if not canBuildMeshSection( budget, rateLimited ) then return nil end
+		if not native.CanBuild() then budget.frameYield = true return nil end
+	end
 	local limited = rateLimited and not budget.native
 	local started = limited and SysTime() or nil
 	local result
@@ -505,7 +516,22 @@ local function tryBuildMeshSection( key, sectionIndex, lightOnly, rateLimited, b
 		budget.rateAttempts = budget.rateAttempts + 1
 	end
 	if result == "pending" then return result end
-	if result == "deferred" then budget.frameYield = true return nil end
+	if result == "deferred" then
+		if not retried and native and native.IsActive() then
+			local dirty = lightOnly and MC.MeshLightDirty or MC.MeshDirty
+			local token = dirty[key]
+			-- CanBuild is a capacity hint, not a reservation for this section.
+			-- Publication can change the selected world data, so retry from its build boundary.
+			local released = native.Pump( budget )
+			if dirty[key] ~= token or native.IsPending( key, sectionIndex ) then return "pending" end
+			if not canBuildMeshSection( budget, rateLimited ) then return nil end
+			if released > 0 and native.IsActive() and native.CanBuild() then
+				return tryBuildMeshSection( key, sectionIndex, lightOnly, rateLimited, budget, true )
+			end
+		end
+		budget.frameYield = true
+		return nil
+	end
 	if result == false and not budget.native then
 		budget.failures = budget.failures + 1
 		return false
@@ -562,6 +588,7 @@ local function buildDirtyMeshKey( key, sections, rateLimited, budget, pinnedOnly
 				sections[sectionIndex] = nil
 				retireLightDirtySection( key, sectionIndex )
 			end
+			if MC.MeshDirty[key] ~= sections then break end
 		end
 	end
 
@@ -594,6 +621,7 @@ local function buildLightDirtyMeshKey( key, sections, rateLimited, budget, pinne
 				if MC.MeshLightDirty[key] ~= sections then break end
 				sections[sectionIndex] = nil
 			end
+			if MC.MeshLightDirty[key] ~= sections then break end
 		end
 	end
 
@@ -734,6 +762,9 @@ hook.Add( "Think", "mc_meshbuild", function()
 			selectionDeferred = true
 		end
 	end
+	-- Include jobs completed during submission/lighting, including the final
+	-- partial wave that never filled the admission window.
+	if geometryFirst then MC.NativeL2.Pump( budget ) end
 	clearDirtySelection()
 	-- An unexamined queue may contain nearby work. Budget exhaustion is not idle.
 	if lazy and not foundEligible and not selectionDeferred then

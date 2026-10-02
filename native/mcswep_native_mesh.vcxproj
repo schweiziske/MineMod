@@ -313,6 +313,10 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <FloatingPointModel>Strict</FloatingPointModel>
     </ClCompile>
+    <ClCompile Include="l2_shapes.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <FloatingPointModel>Strict</FloatingPointModel>
+    </ClCompile>
     <ClCompile Include="meshbuild.cpp" />
     <ClCompile Include="meshworker.cpp" />
     <ClCompile Include="patchdecode.cpp" />

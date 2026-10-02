@@ -1,6 +1,7 @@
 #include "l2_core.h"
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <stdexcept>
 
@@ -134,6 +135,30 @@ Template compile(const double* p) {
     return t;
 }
 
+void MemoryUsage::share(std::shared_ptr<const void> owner, size_t bytes) {
+    shared.push_back({std::move(owner), bytes + 64});
+}
+void MemoryUsage::normalize() {
+    const std::less<const void*> less;
+    std::sort(shared.begin(), shared.end(), [&](const auto& a, const auto& b) {
+        return less(a.owner.get(), b.owner.get());
+    });
+    size_t count = 0;
+    for (size_t i = 0; i < shared.size(); ++i) {
+        if (count && shared[count - 1].owner.get() == shared[i].owner.get()) {
+            require(shared[count - 1].bytes == shared[i].bytes, "inconsistent shared allocation size");
+        } else {
+            if (count != i) shared[count] = std::move(shared[i]);
+            ++count;
+        }
+    }
+    shared.resize(count);
+}
+size_t MemoryUsage::total() const {
+    size_t result = owned;
+    for (const auto& allocation : shared) result += allocation.bytes;
+    return result;
+}
 Snapshot::Snapshot(const int origin[3], const int dimensions[3], ReadCell reader, void* context)
     : reader_(reader), context_(context) {
     require(reader != nullptr, "missing L2 snapshot reader");

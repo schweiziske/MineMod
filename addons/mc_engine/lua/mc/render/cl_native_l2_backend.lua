@@ -58,6 +58,11 @@ function N.Probe()
 		N.available, N.reason = false, "Native fluid worker is required; update the DLL"
 		return false, N.reason
 	end
+	local caps = MC.NativeTakeover and MC.NativeTakeover.Probe()
+	if not ( caps and caps.shapeWorker == 1 ) then
+		N.available, N.reason = false, "Native base-shape worker is required; update the DLL"
+		return false, N.reason
+	end
 	return true
 end
 
@@ -215,6 +220,7 @@ local function syncRecipes()
 		schema = MC.BlockStateSchemaById or false, bindings = MC.RenderBlockBindings.generation,
 		emitters = MC.RenderMesh.NativeCubeRecipe, modelEmitter = MC.RenderMesh.NativeModelRecipe,
 		fluidEmitter = MC.RenderMesh.NativeFluidRecipe,
+		shapeEmitter = MC.RenderMesh.NativeShapeRecipe,
 		models = MC.RenderL2Models, blocks = MC.Blocks, material = MC.Material,
 		atlas = MC.Atlas, catalog = MC.StateVisualCatalog or false,
 		fullCubeDebug = MC.RenderMesh.meshDebugFullCubeOnly(),
@@ -233,6 +239,7 @@ local function recipeFor( state )
 		recipe = MC.RenderMesh.NativeFluidRecipe( state )
 		if not recipe then recipe = MC.RenderMesh.NativeCubeRecipe( state ) end
 		if not recipe and N.modelAvailable then recipe = MC.RenderMesh.NativeModelRecipe( state ) end
+		if not recipe then recipe = MC.RenderMesh.NativeShapeRecipe( state ) end
 		recipe = recipe or false
 		N.cubeRecipes[state] = recipe
 		N.recipeMS, N.recipeMisses = N.recipeMS + ( SysTime() - started ) * 1000, N.recipeMisses + 1
@@ -506,12 +513,14 @@ function N.TryRelight( key, index )
 end
 
 function N.Pump( budget )
+	local released = 0
 	local faults = {}
 	local function report( code, message ) faults[#faults + 1] = { code, message } end
 	for _, sections in pairs( N.pending ) do
 		for _, tx in pairs( sections ) do
 			if not current( tx ) then
 				remove( tx )
+				released = released + 1
 				tx.discard( report )
 				N.stale = N.stale + 1
 				-- Keep dirty work queued. Unloaded chunks must not be recreated.
@@ -531,6 +540,7 @@ function N.Pump( budget )
 					local ready, reason = tx.module.PollL2Section( tx.id )
 					MC.RenderL2Resources.Require( ready ~= nil, "native_l2_worker", tostring( reason ) )
 					if not ready then return end
+					if budget.attempts > 0 and budget.deadline and SysTime() >= budget.deadline then return end
 					if tx.ctx.nativeTopology and not tx.ctx.nativeTopologyValue then
 						local value, problem = tx.module.GetWorldL2Topology( tx.id )
 						MC.RenderL2Resources.Require( value ~= nil, "native_l2_topology", tostring( problem ) )
@@ -548,7 +558,7 @@ function N.Pump( budget )
 							local part = {}
 							for field, value in pairs( source ) do part[field] = value end
 							part.nv, part.quadCount = info.quads * 6, info.quads
-								part.nativeVoxelPart, part.nativeCommands = true, nil
+							part.nativeVoxelPart, part.nativeCommands = true, nil
 							part.nativeJob, part.nativePart = tx.id, i
 							parts[i] = part
 						end
@@ -591,9 +601,11 @@ function N.Pump( budget )
 					if not MC.MeshDirty[tx.key] and MC.MeshDirtyRateLimited then MC.MeshDirtyRateLimited[tx.key] = nil end
 					if relightAfter then MC.InvalidateNativeLightSection( tx.key, tx.index ) end
 					remove( tx )
+					released = released + 1
 				end )
 				if not ok then
 					remove( tx )
+					released = released + 1
 					tx.discard( report )
 					N.DisableAfterFailure( type( err ) == "table" and err.message or err )
 					report( type( err ) == "table" and err.code or "native_l2_publish",
@@ -606,6 +618,7 @@ function N.Pump( budget )
 		end
 	end
 	for _, fault in ipairs( faults ) do MC.Fault( fault[1], "%s", fault[2] ) end
+	return released
 end
 
 if N.active and not N.Probe() then N.DisableAfterFailure( N.reason ) end

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
 // No GLua or Source dependencies: the probe and game module use this same core.
@@ -42,12 +43,24 @@ struct Cell {
 };
 
 using ReadCell = Cell (*)(void*, int, int, int);
+struct SharedAllocation {
+    std::shared_ptr<const void> owner;
+    size_t bytes;
+};
+struct MemoryUsage {
+    size_t owned = 0;
+    std::vector<SharedAllocation> shared;
+    void share(std::shared_ptr<const void> owner, size_t bytes);
+    void normalize();
+    size_t total() const;
+};
 // Only immutable CPU data may implement this interface. Live Lua readers use
 // the callback constructor and are always detached before worker submission.
 struct CellSource {
     virtual ~CellSource() = default;
     virtual Cell read(int x, int y, int z) const = 0;
     virtual size_t bytes() const = 0;
+    virtual void memoryUsage(MemoryUsage& usage) const { usage.owned += bytes(); }
 };
 struct FaceLight {
     uint32_t coords[4]{};
@@ -62,6 +75,15 @@ public:
     void validateSource(const int source[3]) const;
     void freeze() { reader_ = nullptr; context_ = nullptr; }
     size_t bytes() const { return cells_.capacity() * sizeof(Cell) + ready_.capacity() + (source_ ? source_->bytes() : 0); }
+    void memoryUsage(MemoryUsage& usage) const {
+        usage.owned += cells_.capacity() * sizeof(Cell) + ready_.capacity();
+        if (source_) {
+            MemoryUsage source;
+            source_->memoryUsage(source);
+            usage.share(source_, source.owned);
+            for (auto& allocation : source.shared) usage.shared.push_back(std::move(allocation));
+        }
+    }
     uint64_t reads = 0, hits = 0;
     uint64_t faceSamples = 0, faceHits = 0;
 private:

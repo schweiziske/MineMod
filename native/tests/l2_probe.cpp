@@ -27,6 +27,76 @@ mcmesh::l2::Cell read(void* context, int x, int y, int z) {
 }
 
 L2_EXPORT const char* L2LastError() { return lastError.c_str(); }
+namespace {
+struct ShapeGrid final : mcmesh::l2::ShapeSource, mcmesh::l2::CellSource {
+    std::vector<mcmesh::l2::Shape> profiles;
+    std::vector<uint32_t> classes;
+    const uint32_t* cells = nullptr;
+    unsigned state(int x, int y, int z) const {
+        mcmesh::l2::require(x >= -2 && x <= 2 && y >= -2 && y <= 2 && z >= -2 && z <= 2,
+            "shape probe halo");
+        return cells[x+2 + 5*(y+2 + 5*(z+2))];
+    }
+    const mcmesh::l2::Shape& shape(int x, int y, int z) const override {
+        return profiles.at(state(x,y,z));
+    }
+    mcmesh::l2::Cell read(int x, int y, int z) const override {
+        return {0,1,classes.at(state(x,y,z))};
+    }
+    size_t bytes() const override { return sizeof(*this); }
+};
+}
+// Return original quad indices after production model expansion. Lua compares
+// the selected commands with its ordinary emitter, independently of lighting.
+L2_EXPORT int L2SelectShape(const double* profiles, unsigned count, const uint32_t* cells,
+    const double* recipe, uint32_t* selected) {
+    using namespace mcmesh::l2;
+    try {
+        auto grid = std::make_shared<ShapeGrid>();
+        grid->cells = cells;
+        for (unsigned i=0; i<count; ++i) {
+            Shape shape;
+            shape.selector=unsigned(*profiles++); shape.stair=int(*profiles++);
+            shape.connections=unsigned(*profiles++); shape.pane=*profiles++ != 0;
+            grid->classes.push_back(uint32_t(*profiles++));
+            shape.variants.resize(unsigned(*profiles++));
+            for (auto& boxes : shape.variants) {
+                boxes.resize(unsigned(*profiles++));
+                for (auto& box : boxes) for (auto& v : box) v=*profiles++;
+            }
+            shape.validate();
+            grid->profiles.push_back(std::move(shape));
+        }
+        auto model = std::make_shared<Model>();
+        model->shapeSelector=unsigned(*recipe++); model->block=unsigned(*recipe++);
+        model->keepInternalFaces=*recipe++ != 0;
+        model->groups.resize(1);
+        model->groups[0].alternatives.resize(unsigned(*recipe++));
+        unsigned index=0;
+        for (auto& alternative : model->groups[0].alternatives) {
+            alternative.quads.resize(unsigned(*recipe++));
+            for (auto& quad : alternative.quads) {
+                quad.cullFace=unsigned(*recipe++); quad.shapeCull=*recipe++ != 0;
+                for (auto& v : quad.box) v=*recipe++;
+                quad.work.command.tint=++index;
+            }
+        }
+        validateModel(*model);
+        const int origin[]={-2,-2,-2}, dims[]={5,5,5};
+        Input input(Snapshot(origin,dims,grid));
+        input.shapeSource=grid; input.models.push_back({model,1});
+        Voxel voxel; voxel.model=true;
+        input.voxels.push_back(voxel);
+        input.snapshot.freeze();
+        std::vector<unsigned> groups;
+        std::atomic<bool> cancelled{false};
+        expandVoxels(input,groups,cancelled);
+        unsigned n=0;
+        for (const auto& part : input.parts) for (const auto& work : part) selected[n++]=work.command.tint;
+        lastError.clear();
+        return int(n);
+    } catch (const std::exception& e) { lastError=e.what(); return -1; }
+}
 L2_EXPORT unsigned L2ModelChoice(int x, int y, int z, unsigned salt) {
     mcmesh::l2::ModelGroup group;
     group.salt = salt;

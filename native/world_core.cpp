@@ -175,6 +175,8 @@ Coord Config::cellAt(Coord chunk, unsigned li) const {
         chunk.z * chunkHeight + int(li / (chunkSize * chunkSize))};
 }
 void Profile::validate() const {
+    require(shape != nullptr, "missing render shape");
+    require(shape != nullptr, "missing render shape");
     require(emission <= 15 && opacity <= 15 && skyCost >= 1 && skyCost <= 16,
         "invalid propagation profile");
     require(skyCost == (opacity >= 15 ? 16 : std::max(1, int(opacity)))
@@ -857,21 +859,35 @@ l2::Cell MeshSnapshot::read(Coord cell) const {
     return {p.l2Word | 1048576u | value, p.shade, p.renderClass, p.emission, p.fluidSolid};
 }
 size_t MeshSnapshot::bytes() const {
-    size_t total = sizeof(*this) + sizeof(Snapshot);
-    total += world->catalog->states.capacity() * sizeof(Profile) + world->catalog->contextual.capacity();
-    const auto chunkBytes = [](const Chunk& chunk) {
-        size_t bytes = sizeof(Chunk) + chunk.sections.capacity() * sizeof(std::shared_ptr<const Section>)
-            + chunk.columnTops.capacity() * sizeof(int16_t);
-        for (const auto& section : chunk.sections) if (section)
-            bytes += sizeof(Section) + section->states.capacity() * sizeof(uint32_t) + section->counts.size() * 64
-                + section->contexts.size() * (sizeof(Profile) + 64);
-        return bytes;
+    l2::MemoryUsage usage;
+    memoryUsage(usage);
+    usage.normalize();
+    return usage.total();
+}
+void MeshSnapshot::memoryUsage(l2::MemoryUsage& usage) const {
+    usage.owned += sizeof(*this) + sizeof(Snapshot)
+        + (world->chunks.size() + light.size() + columns.size()) * 64;
+    const auto& catalog = world->catalog;
+    usage.share(catalog, sizeof(Catalog) + catalog->states.capacity() * sizeof(Profile)
+        + catalog->contextual.capacity() + catalog->shapeBytes);
+    const auto addChunk = [&](const std::shared_ptr<const Chunk>& chunk) {
+        usage.share(chunk, sizeof(Chunk) + chunk->sections.capacity() * sizeof(std::shared_ptr<const Section>)
+            + chunk->columnTops.capacity() * sizeof(int16_t));
+        for (const auto& section : chunk->sections) if (section) {
+            usage.share(section, sizeof(Section) + section->states.capacity() * sizeof(uint32_t)
+                + section->counts.size() * 64 + section->counts.bucket_count() * sizeof(void*)
+                + section->contexts.size() * (sizeof(Profile) + 64)
+                + section->contexts.bucket_count() * sizeof(void*));
+            for (const auto& context : section->contexts)
+                usage.share(context.second.shape, context.second.shape->bytes());
+        }
     };
-    for (const auto& entry : world->chunks) total += chunkBytes(*entry.second) + 64;
-    for (const auto& entry : light) total += sizeof(LightChunk) + entry.second->values.capacity() + 64;
-    for (const auto& column : columns) for (const auto& entry : *column.second)
-        total += chunkBytes(*entry.second) + 64;
-    return total;
+    for (const auto& entry : world->chunks) addChunk(entry.second);
+    for (const auto& entry : light) usage.share(entry.second, sizeof(LightChunk) + entry.second->values.capacity());
+    for (const auto& column : columns) {
+        usage.share(column.second, sizeof(Column) + column.second->size() * 64);
+        for (const auto& entry : *column.second) addChunk(entry.second);
+    }
 }
 l2::Cell MeshSnapshot::readCell(void* data, int x, int y, int z) {
     return static_cast<MeshSnapshot*>(data)->read({x,y,z});

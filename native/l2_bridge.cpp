@@ -411,6 +411,9 @@ int compileModel(ILuaBase* lua) {
         model->block = l2::integer(number(lua, 2), 1, 536870911, "invalid model block ID");
         l2::require(lua->IsType(3, Type::Bool), "model requires internal-face policy");
         model->keepInternalFaces = lua->GetBool(3);
+        // An omitted argument is outside the Lua stack, not a nil stack value.
+        if (top >= 4 && !lua->IsType(4, Type::Nil))
+            model->shapeSelector = l2::integer(number(lua, 4), 0, 3, "invalid shape selector");
         const int origin[3] = {-2,-2,-2}, dims[3] = {5,5,5};
         l2::Snapshot snapshot(origin, dims, readCell, lua);
         size_t total = 0;
@@ -457,7 +460,15 @@ int compileModel(ILuaBase* lua) {
                     l2::ModelQuad quad;
                     quad.work = first;
                     quad.withoutAO = second.geometry;
-                    quad.cullFace = l2::integer(item(lua, culls, static_cast<int>(q + 1)), 0, 6, "invalid model cull");
+                    lua->PushNumber(static_cast<double>(q + 1)); lua->RawGet(culls);
+                    if (lua->IsType(-1, Type::Table)) {
+                        const int cull = lua->Top();
+                        l2::require(lua->ObjLen(cull) == 7, "invalid shape cull record");
+                        quad.shapeCull = true;
+                        quad.cullFace = l2::integer(item(lua, cull, 1), 1, 6, "invalid shape cull face");
+                        for (unsigned a = 0; a < 6; ++a) quad.box[a] = item(lua, cull, a+2);
+                    } else quad.cullFace = l2::integer(number(lua, -1), 0, 6, "invalid model cull");
+                    lua->Pop();
                     value.quads.push_back(std::move(quad));
                 }
                 lua->Pop();
@@ -637,6 +648,8 @@ int submitSection(ILuaBase* lua) {
             l2::require(quads <= l2::WorkerPool::MaxSectionQuads, "L2 section exceeds quad budget");
         }
         readVoxels(lua, *input);
+        for (const auto& model : input->models)
+            l2::require(!model.model->needsShapes, "shape recipe requires Native world snapshot");
         commandMS += clockMS() - started;
         const double frozenAt = clockMS();
         l2::prefetchVoxels(*input);
@@ -676,6 +689,7 @@ int submitWorldSection(ILuaBase* lua) {
         const int dims[3] = {source->dimensions.x, source->dimensions.y, source->dimensions.z};
         auto input = std::make_unique<l2::Input>(l2::Snapshot(origin, dims, source));
         input->fluidSource = source;
+        input->shapeSource = source;
         input->blockSize = store.config().blockSize;
         input->maxQuads = l2::integer(number(lua, 8), 1, l2::MaxQuads, "invalid world part limit");
         std::unordered_map<uint32_t, world::MeshRecipe> recipes;
@@ -700,6 +714,7 @@ int submitWorldSection(ILuaBase* lua) {
                 lua->Pop();
                 value.group = l2::integer(item(lua, table, 2), 1, l2::WorkerPool::MaxParts, "invalid model group");
                 recipe.index = unsigned(input->models.size()); recipe.model = true; recipe.maxQuads = value.model->maxQuads;
+                recipe.shapeSelector = value.model->shapeSelector;
                 input->models.push_back(std::move(value));
             } else {
                 l2::require(lua->IsType(-1, Type::Bool) && !lua->GetBool(-1), "invalid world compiled recipe");

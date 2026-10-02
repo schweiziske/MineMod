@@ -19,6 +19,18 @@ bool visible(Input& input, const Voxel& voxel, unsigned face, uint32_t block, bo
     const auto id = packed >> 3, flags = packed & 7;
     return !id || (flags & 4) || ((flags & 2) ? id != block || keepInternal : !(flags & 1));
 }
+bool shapeVisible(Input& input, const Voxel& voxel, const ModelQuad& quad) {
+    const auto face = quad.cullFace - 1;
+    const auto& off = Offsets[face];
+    const int p[] = {voxel.source[0]+off[0], voxel.source[1]+off[1], voxel.source[2]+off[2]};
+    const auto packed = input.snapshot.read(p[0], p[1], p[2]).renderClass;
+    if (!(packed >> 3) || (packed & 4)) return true;
+    const auto& shape = input.shapeSource->shape(p[0], p[1], p[2]);
+    if ((packed & 2) && !shape.pane) return true;
+    if (packed & 1) return false;
+    const auto choice = shapeChoice(*input.shapeSource, p, shape);
+    return !shapeCovered(quad.box, face, shape.variants[choice], off);
+}
 template<class Emit>
 void visitVoxel(Input& input, const Voxel& voxel, Emit emit) {
     if (voxel.fluid) {
@@ -40,13 +52,19 @@ void visitVoxel(Input& input, const Voxel& voxel, Emit emit) {
     }
     const auto& binding = input.models[voxel.cube];
     const auto& model = *binding.model;
+    unsigned variant = 0;
+    if (model.shapeSelector) {
+        const auto& shape = input.shapeSource->shape(voxel.source[0], voxel.source[1], voxel.source[2]);
+        variant = shapeChoice(*input.shapeSource, voxel.source, shape);
+    }
     bool ao = true;
     for (size_t i = 0; i < model.groups.size(); ++i) {
         const auto& group = model.groups[i];
-        const auto& selected = group.alternatives[modelChoice(group, voxel.source)];
+        const auto& selected = group.alternatives[model.shapeSelector ? variant : modelChoice(group, voxel.source)];
         if (i == 0) ao = selected.modelAO;
         for (const auto& quad : selected.quads) {
-            if (quad.cullFace && !visible(input, voxel, quad.cullFace - 1, model.block, model.keepInternalFaces)) continue;
+            if (quad.cullFace && !(quad.shapeCull ? shapeVisible(input, voxel, quad)
+                : visible(input, voxel, quad.cullFace - 1, model.block, model.keepInternalFaces))) continue;
             Work work = quad.work;
             if (!ao) work.geometry = quad.withoutAO;
             emit(work, binding.group);
@@ -76,11 +94,16 @@ unsigned modelChoice(const ModelGroup& group, const int source[3]) {
 void validateModel(Model& model) {
     require(model.block > 0 && model.block <= (UINT32_MAX >> 3), "invalid model block ID");
     require(!model.groups.empty() && model.groups.size() <= 255, "invalid model group count");
+    require(model.shapeSelector <= 3 && (!model.shapeSelector || model.groups.size() == 1), "invalid shape selector");
+    const unsigned variantCounts[] = {0,5,16,64};
+    model.needsShapes = model.shapeSelector != 0;
     model.maxQuads = 0;
     model.bytes = sizeof(Model) + model.groups.capacity() * sizeof(ModelGroup);
     size_t totalQuads = 0;
     for (auto& group : model.groups) {
         require(!group.alternatives.empty() && group.alternatives.size() <= 255, "invalid model alternatives");
+        require(!model.shapeSelector || group.alternatives.size() == variantCounts[model.shapeSelector],
+            "shape alternative count mismatch");
         require(group.salt <= 65535u * 132u, "invalid model choice salt");
         group.totalWeight = 0;
         size_t maximum = 0;
@@ -94,7 +117,15 @@ void validateModel(Model& model) {
             model.bytes += alternative.quads.capacity() * sizeof(ModelQuad);
             for (const auto& quad : alternative.quads) {
                 require(quad.cullFace <= 6, "invalid model cull face");
-                require(quad.work.geometry.mode == 0 && quad.withoutAO.mode == 0, "model requires standard L2 lighting");
+                if (quad.shapeCull) {
+                    require(quad.cullFace != 0, "shape cull requires a face");
+                    for (unsigned a = 0; a < 3; ++a)
+                        require(std::isfinite(quad.box[a]) && std::isfinite(quad.box[a+3])
+                            && quad.box[a] <= quad.box[a+3], "invalid shape cull bounds");
+                    model.needsShapes = true;
+                }
+                require(quad.work.geometry.mode >= 0 && quad.work.geometry.mode <= 1
+                    && quad.withoutAO.mode == quad.work.geometry.mode, "model requires standard or cross L2 lighting");
                 require(quad.work.command.size == 1, "model recipe requires unit scale");
                 for (unsigned axis = 0; axis < 3; ++axis)
                     require(quad.work.command.source[axis] == 0 && quad.work.command.translation[axis] == 0,
@@ -120,7 +151,12 @@ void validateCube(const Cube& cube) {
     }
 }
 size_t Input::reservation() const {
-    size_t bytes = snapshot.bytes() + sizeof(Input) + parts.capacity() * sizeof(std::vector<Work>);
+    return memoryUsage().total();
+}
+MemoryUsage Input::memoryUsage() const {
+    MemoryUsage usage;
+    snapshot.memoryUsage(usage);
+    size_t bytes = sizeof(Input) + sizeof(Job) + 64 + parts.capacity() * sizeof(std::vector<Work>);
     require(relight.size() <= WorkerPool::MaxParts, "L2 relight exceeds part budget");
     require(relight.empty() || (parts.empty() && cubes.empty() && models.empty() && fluids.empty()
         && voxels.empty() && !instances && !retainLighting), "mixed L2 geometry and relight input");
@@ -129,7 +165,8 @@ size_t Input::reservation() const {
         require(part && !part->empty() && part->size() <= MaxQuads, "invalid L2 relight part");
         relightCount += part->size();
         require(relightCount <= WorkerPool::MaxSectionQuads, "L2 relight exceeds quad budget");
-        bytes += sizeof(Part) + part->capacity() * sizeof(LightWork) + part->size() * 5 * sizeof(uint32_t);
+        usage.share(part, sizeof(*part) + part->capacity() * sizeof(LightWork));
+        bytes += sizeof(Part) + part->size() * 5 * sizeof(uint32_t);
     }
     for (const auto& part : parts)
         bytes += part.capacity() * sizeof(Work) + sizeof(Part) + part.size()
@@ -139,13 +176,31 @@ size_t Input::reservation() const {
     if (instances) bytes += instances->bytes();
     for (const auto& voxel : voxels) expanded += voxel.model ? models[voxel.cube].model->maxQuads : 6;
     require(expanded <= WorkerPool::MaxSectionQuads, "L2 instances exceed quad reservation");
-    for (const auto& model : models) bytes += model.model->bytes;
-    return bytes + cubes.capacity() * sizeof(Cube) + voxels.capacity() * sizeof(Voxel)
+    for (const auto& model : models) {
+        require(!model.model->needsShapes || shapeSource != nullptr, "shape recipe requires Native world snapshot");
+        usage.share(model.model, model.model->bytes);
+    }
+    usage.owned += bytes + cubes.capacity() * sizeof(Cube) + voxels.capacity() * sizeof(Voxel)
         + models.capacity() * sizeof(ModelBinding) + fluids.capacity() * sizeof(FluidRecipe)
+        + relight.capacity() * sizeof(std::shared_ptr<const std::vector<LightWork>>)
+        + topology.cells.capacity()
         // Growing work vectors can reserve up to twice their live element count.
         + expanded * (2 * sizeof(Work) + sizeof(Quad) + 5 * sizeof(uint32_t) + sizeof(unsigned) + sizeof(uint8_t)
             + (retainLighting ? sizeof(LightWork) : 0))
         + WorkerPool::MaxParts * (sizeof(Part) + 2 * sizeof(std::vector<Work>) + 64);
+    usage.normalize();
+    usage.owned += usage.shared.capacity() * sizeof(SharedAllocation);
+    return usage;
+}
+size_t Job::resultBytes() const {
+    size_t result = sizeof(Job) + 64 + shared.capacity() * sizeof(SharedAllocation)
+        + parts.capacity() * sizeof(Part) + topology.cells.capacity() + error.capacity();
+    for (const auto& part : parts) {
+        result += part.quads.capacity() * sizeof(Quad) + part.directions.quads.capacity() * sizeof(unsigned)
+            + (part.pixels.capacity() + part.occlusion.capacity()) * sizeof(uint32_t);
+        if (part.lighting) result += sizeof(*part.lighting) + part.lighting->capacity() * sizeof(LightWork);
+    }
+    return result;
 }
 void prefetchVoxels(Input& input) {
     // Freeze only reachable samples, including visibility neighbours. No Lua
@@ -217,25 +272,53 @@ bool WorkerPool::canSubmit() const {
     return !stopping_ && jobs_.size() < MaxJobs && stats_.bytes < MaxBytes;
 }
 uint64_t WorkerPool::submit(std::unique_ptr<Input> input) {
-    const size_t bytes = input->reservation();
-    require(bytes <= MaxBytes, "L2 section exceeds worker memory budget");
+    auto usage = input->memoryUsage();
+    require(usage.total() <= MaxBytes, "L2 section exceeds worker memory budget");
     input->snapshot.freeze();
     auto job = std::make_shared<Job>();
-    job->bytes = bytes;
+    job->bytes = usage.owned;
+    job->shared = std::move(usage.shared);
     job->input = std::move(input);
     job->submittedAt = milliseconds();
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (stopping_ || jobs_.size() >= MaxJobs || bytes > MaxBytes - stats_.bytes) return 0;
+        size_t additional = job->bytes;
+        for (const auto& allocation : job->shared) {
+            const auto found = shared_.find(allocation.owner.get());
+            if (found == shared_.end()) additional += allocation.bytes;
+            else require(found->second.bytes == allocation.bytes, "shared allocation changed while in flight");
+        }
+        if (stopping_ || jobs_.size() >= MaxJobs || additional > MaxBytes - stats_.bytes) return 0;
         job->id = next_++;
-        jobs_.emplace(job->id, job);
-        try { queue_.push_back(job); }
-        catch (...) { jobs_.erase(job->id); throw; }
-        stats_.bytes += bytes;
+        size_t acquired = 0;
+        try {
+            for (const auto& allocation : job->shared) {
+                auto result = shared_.try_emplace(allocation.owner.get(), SharedUsage{allocation.bytes, 0});
+                if (result.second) stats_.bytes += allocation.bytes;
+                ++result.first->second.references;
+                ++acquired;
+            }
+            jobs_.emplace(job->id, job);
+            queue_.push_back(job);
+        } catch (...) {
+            jobs_.erase(job->id);
+            releaseShared(*job, acquired);
+            throw;
+        }
+        stats_.bytes += job->bytes;
         ++stats_.submitted;
     }
     wake_.notify_one();
     return job->id;
+}
+void WorkerPool::releaseShared(const Job& job, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        const auto it = shared_.find(job.shared[i].owner.get());
+        if (--it->second.references == 0) {
+            stats_.bytes -= it->second.bytes;
+            shared_.erase(it);
+        }
+    }
 }
 JobState WorkerPool::state(uint64_t id) const {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -365,14 +448,24 @@ void WorkerPool::run() {
             catch (...) { job->error = "unknown L2 worker failure"; }
         }
         job->input.reset();
+        size_t resultBytes = job->resultBytes();
+        if (resultBytes > job->bytes) {
+            job->error = "L2 result exceeds reserved memory";
+            std::vector<Part>().swap(job->parts);
+            std::vector<uint8_t>().swap(job->topology.cells);
+            resultBytes = job->resultBytes();
+        }
         job->computeMS = milliseconds() - started;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (wasRunning) --stats_.running;
             if (job->cancelled) {
                 stats_.bytes -= job->bytes;
+                releaseShared(*job, job->shared.size());
                 jobs_.erase(job->id);
             } else {
+                stats_.bytes -= job->bytes - resultBytes;
+                job->bytes = resultBytes;
                 job->state = job->error.empty() ? JobState::Ready : JobState::Failed;
                 ++stats_.completed;
                 stats_.computeMS += job->computeMS;
