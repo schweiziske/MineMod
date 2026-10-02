@@ -325,6 +325,25 @@ function T.RequestResync( reason )
 	return true
 end
 
+function T.NativeOwnershipChanged()
+	local binary = T.snapshot and T.snapshot.binary
+	local pending = binary and binary.activeJobId ~= nil
+	for _, patch in pairs( T.pendingChunkPatches ) do
+		if patch.nativeJobId then pending = true break end
+	end
+	if not pending then return false end
+	-- Do not turn a cancelled native revision into a gap or an empty patch.
+	cancelPendingNativePatches()
+	T.snapshot = nil
+	return T.RequestResync( "native_world_ownership_changed" )
+end
+
+local function syncNativeConfig( config )
+	local backend = MC.NativeChunkBackend
+	if backend and backend.SyncConfig and backend.IsActive() then return backend.SyncConfig( config ) end
+	return true
+end
+
 function T.AcceptHello( hello )
 	if not istable( hello ) then return false, "invalid_hello" end
 	local version = math.floor( tonumber( hello.protocolVersion ) or -1 )
@@ -349,6 +368,9 @@ function T.AcceptHello( hello )
 	if T.activeBulkGroup then cancelBulkGroup() end
 	cancelPendingNativePatches()
 	T.streaming = math.floor( tonumber( hello.streamMode ) or 0 ) == 1
+	T.streamMinCZ, T.streamMaxCZ = nil, nil
+	local configured, configError = syncNativeConfig()
+	if not configured then return false, configError end
 	T.subscribedColumns = {}
 	T.pendingRevisionSkips = {}
 	T.pendingPatchAnnouncements = {}
@@ -788,6 +810,8 @@ function T.ApplyStreamColumns( generation, minCZ, maxCZ, subscriptions, unsubscr
 	if not T.streaming or generation ~= T.generation then return false, "generation_mismatch" end
 	local span = maxCZ - minCZ + 1
 	if span < 1 or span > ( Net.MAX_STREAM_VERTICAL_CHUNKS or 1024 ) then return false, "invalid_vertical_span" end
+	local configured, configError = syncNativeConfig( { minChunkZ = minCZ, maxChunkZ = maxCZ } )
+	if not configured then return false, configError end
 	T.streamMinCZ, T.streamMaxCZ = minCZ, maxCZ
 	local unload = {}
 	for _, column in ipairs( unsubscriptions ) do

@@ -101,6 +101,11 @@ local function blockingState( state )
 	return true
 end
 
+function O.NativeBlockingState( state )
+	syncContext()
+	return blockingState( state )
+end
+
 function O.BuildTopology( snapshot )
 	syncContext()
 	if not snapshot then return OPEN end

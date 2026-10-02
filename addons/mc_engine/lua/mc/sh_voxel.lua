@@ -111,6 +111,8 @@ end
 function MC.MarkChunkLoaded( keyOrCX, cy, cz )
 	local key = chunkKeyFromArgs( keyOrCX, cy, cz )
 	if key == nil then return nil end
+	local backend = CLIENT and MC.GetChunkBackend and MC.GetChunkBackend() or nil
+	if backend and backend.native and backend.MarkLoaded then backend.MarkLoaded( key ) end
 	MC.LoadedChunkKeys = MC.LoadedChunkKeys or {}
 	MC.LoadedChunkKeys[key] = true
 	return key
@@ -119,6 +121,8 @@ end
 function MC.MarkChunkUnloaded( keyOrCX, cy, cz )
 	local key = chunkKeyFromArgs( keyOrCX, cy, cz )
 	if key == nil then return nil end
+	local backend = CLIENT and MC.GetChunkBackend and MC.GetChunkBackend() or nil
+	if backend and backend.native and backend.MarkUnloaded then backend.MarkUnloaded( key ) end
 	if MC.LoadedChunkKeys then MC.LoadedChunkKeys[key] = nil end
 	return key
 end
@@ -799,7 +803,7 @@ function MC.ResetChunkStateStorage( chunk )
 	chunk.opaqueBlockEntities = nil
 	chunk.opaqueStates = nil
 	chunk.count = 0
-	chunk.nativeMeshEpoch = nil
+	if not nativeStorage then chunk.nativeMeshEpoch = nil end
 	chunk.renderSectionIndexStorage = nil
 	chunk.renderSectionBlocks = nil
 	chunk.renderSectionBlocksReady = nil
@@ -833,6 +837,14 @@ function MC.SetChunkLocalStateRaw( chunk, li, stateId, knownOldStateId )
 				if reconciled == nil then return nil, reconcileError end
 			end
 			return false, oldStateId
+		end
+		if not MC.NativeChunkBulkLoading then
+			if not backend or not backend.Epoch or chunk.nativeMeshEpoch ~= backend.Epoch() then
+				return nil, "native_state_owner_mismatch"
+			end
+			local finalCount = chunk.count + ( oldStateId == 0 and 1 or 0 ) - ( stateId == 0 and 1 or 0 )
+			local accepted, err = backend.SetCell( chunk, li, stateId, finalCount )
+			if not accepted then return nil, err or "native_state_mutation_failed" end
 		end
 	else
 		local migrated, migrationError = MC.MigrateChunkStateStorage( chunk )
@@ -884,11 +896,6 @@ function MC.SetChunkLocalStateRaw( chunk, li, stateId, knownOldStateId )
 			ErrorNoHalt( "[MC] Block Entity default reconciliation failed: "
 				.. tostring( reconcileError or "unknown" ) .. "\n" )
 		end
-	end
-	local chunkBackend = CLIENT and MC.GetChunkBackend and MC.GetChunkBackend() or nil
-	if chunkBackend and chunkBackend.native and not MC.NativeChunkBulkLoading and chunk.nativeMeshEpoch ~= nil
-	and chunkBackend.Epoch and chunk.nativeMeshEpoch == chunkBackend.Epoch() then
-		chunkBackend.SetCell( chunk, li, stateId )
 	end
 	return true, oldStateId, id, orient or 0
 end
