@@ -248,12 +248,13 @@ function setTemplateTriVertex( rec, t, ci, x, y, z, u, v )
 	end
 end
 
-local function buildShapeTemplate( ctx, b, id, orient, blockBoxes )
+local function buildShapeTemplate( ctx, b, id, orient, blockBoxes, resolvedBoxes )
 	if not blockBoxes and not MC.BlockBoxesForState then return false end
-	local boxes = stateBoxes( ctx, id, orient )
+	local boxes = resolvedBoxes or stateBoxes( ctx, id, orient )
 	if not boxes then return false end
 
 	local modelFaces = b and b.boxFaces
+	if resolvedBoxes and b.shape == "stairs" then modelFaces = nil end
 	local tri = C.TRI
 	local out = { boxes = boxes, n = 0 }
 	for boxIndex = 1, #boxes do
@@ -1421,9 +1422,86 @@ function RM.NativeModelRecipe( stateId, includeWaterlogged )
 			packet[i] = { group.salt, alternatives }
 		end
 	end
-	local recipe, err = MC.NativeL2.module.CompileL2Model( packet, id, string.match( b.name, "_leaves$" ) ~= nil )
-	MC.RenderL2Resources.Require( recipe ~= nil, "native_l2_model", tostring( err ) )
+	local recipe, err = MC.NativeL2.module.CompileL2Model( packet, id, string.match( b.name, "_leaves$" ) ~= nil, 0 )
+	MC.RenderL2Resources.Require( recipe ~= nil, "native_l2_model", "state " .. stateId .. ": " .. tostring( err ) )
 	return { value = recipe, id = id, model = true, translucent = stateTranslucent( ctx, id, 0, 0, 0 ) }
+end
+
+-- Compile finite base-emitter variants once. Neighbour selection and partial
+-- box coverage run against the immutable world snapshot on the worker.
+function RM.NativeShapeRecipe( stateId )
+	if meshDebugFullCubeOnly() then return false end
+	local visual = MC.ResolveBlockStateVisual( stateId, 0, 0, 0 )
+	if not visual then return false end
+	local b, id, orient = visual.block, visual.id, visual.renderOrient
+	local name = visual.schema and visual.schema.name
+	if visual.cacheable == false or visual.generatedVisualOverride or b ~= MC.Blocks[id]
+		or name and MC.BlockStateVisualResolvers and MC.BlockStateVisualResolvers[name]
+		or specialEmitterForBlock( b ) or isLiquidBlock( id )
+		or isWaterloggedState( stateId ) then return false end
+	for _, field in ipairs( { "faces", "boxes", "fullCube", "translucent", "lightEmission" } ) do
+		if type( visual[field] ) == "function" then return false end
+	end
+	local ctx = { l2 = true, nativeRecipe = true, currentVisual = visual, currentStateId = stateId,
+		meshPerf = RM.newMeshPerfStats(), meshProbe = false }
+	local emitter = selectBlockEmitter( ctx, b, id, orient, MC.BlockIsFullCube, 0, 0, 0 )
+	if emitter ~= BlockEmitters.fullCube and emitter ~= BlockEmitters.cross and emitter ~= BlockEmitters.shape then return false end
+	local kind = emitter == BlockEmitters.shape and connectionKindForBlock( b, id )
+	local stairs = emitter == BlockEmitters.shape and b.shape == "stairs"
+	local selector = stairs and 1 or kind and ( kind == "pipe6" and 3 or 2 ) or 0
+	MC.RenderL2Resources.Require( selector == 0 or visual.boxes == nil,
+		"native_l2_shape", "dynamic base shape overrides its boxes: " .. stateId )
+	local variants, alternatives = selector == 1 and 5 or selector == 2 and 16 or selector == 3 and 64 or 1, {}
+	local stairShapes = { "straight", "inner_left", "inner_right", "outer_left", "outer_right" }
+	for variant = 1, variants do
+		local slice = { blockSize = 1, nativeL2 = true }
+		local buffer = MC.RenderL2Quad.NewBuffer( slice )
+		local culls = {}
+		local function emit( quad, lightingKind, cull )
+			local previous = buffer.quadCount
+			MC.RenderL2Quad.EmitNative( slice, buffer, quad, id, 0, 0, 0, 0, 0, 0, 0, 0, lightingKind )
+			if buffer.quadCount > previous then culls[#culls + 1] = cull or 0 end
+		end
+		ctx.emitL2 = function( quad, _, bx, by, bz, wx, wy, wz, emission, tint, lightingKind )
+			emit( quad, lightingKind, emitter == BlockEmitters.fullCube and quad.faceIndex or 0 )
+		end
+		ctx.setCur = function() end
+		ctx.prepareBlockCacheBuffer = function() return true end
+		ctx.fullCubeBuffer = function() return buffer end
+		ctx.currentEmitLightStyle = function() return "l2" end
+		ctx.flush = function() error( "shape recipe exceeded one batch", 0 ) end
+		if emitter == BlockEmitters.fullCube then
+			emitFullCubeBlockRecord( ctx, b, id, orient, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, buffer, 63, 6 )
+		elseif emitter == BlockEmitters.cross then
+			RM.EmitCrossBlock( ctx, b, id, 0, 0, 0, 0, 0, 0 )
+		else
+			local boxes, template
+			if kind then
+				boxes = MC.ConnectionBlockBoxes( kind, variant - 1 )
+				template = buildConnectionShapeTemplate( ctx, kind, id, orient, b, variant - 1, boxes )
+			else
+				if stairs then boxes = MC.StairBoxes( id, orient, nil, nil, nil, stairShapes[variant] ) end
+				template = buildShapeTemplate( ctx, b, id, orient, MC.BlockBoxes, boxes )
+			end
+			MC.RenderL2Resources.Require( template ~= false, "native_l2_shape", "missing base shape: " .. stateId )
+			for i = 1, template.n do
+				local quad = template[i]
+				if kind or not coveredByBoxes( quad.box, quad.faceIndex, template.boxes, 0, 0, 0 ) then
+					local cull = 0
+					if connectionBoundaryBit( quad.box, quad.faceIndex ) ~= 0 and ( not kind or quad.neighborCheck ) then
+						local box = quad.box
+						cull = { quad.faceIndex, box[1], box[2], box[3], box[4], box[5], box[6] }
+					end
+					emit( quad, nil, cull )
+				end
+			end
+		end
+		alternatives[variant] = { 1, true, buffer.nativeCommands, buffer.nativeCommands, culls }
+	end
+	local value, err = MC.NativeL2.module.CompileL2Model( { { 0, alternatives } }, id,
+		string.match( b.name, "_leaves$" ) ~= nil, selector )
+	MC.RenderL2Resources.Require( value ~= nil, "native_l2_shape", "state " .. stateId .. ": " .. tostring( err ) )
+	return { value = value, id = id, model = true, translucent = stateTranslucent( ctx, id, 0, 0, 0 ) }
 end
 
 local function emitSelectedBlock( emitter, ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer, visibleFaceMask, visibleFaceCount )

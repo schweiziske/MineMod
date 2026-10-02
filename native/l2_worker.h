@@ -1,6 +1,7 @@
 #pragma once
 #include "l2_core.h"
 #include "l2_fluid.h"
+#include "l2_shapes.h"
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -25,6 +26,8 @@ struct ModelQuad {
     Template withoutAO;
     // Zero is unconditional; otherwise the Lua model emitter's one-based face.
     unsigned cullFace = 0;
+    bool shapeCull = false;
+    ShapeBox box{};
 };
 struct ModelAlternative {
     std::vector<ModelQuad> quads;
@@ -41,6 +44,8 @@ struct Model {
     uint32_t block = 0;
     size_t maxQuads = 0, bytes = 0;
     bool keepInternalFaces = false;
+    unsigned shapeSelector = 0;
+    bool needsShapes = false;
 };
 // Registration computes validated budgets once, outside instance/quad loops.
 void validateModel(Model& model);
@@ -81,6 +86,7 @@ struct Input {
     std::vector<ModelBinding> models;
     std::vector<FluidRecipe> fluids;
     std::shared_ptr<const FluidSource> fluidSource;
+    std::shared_ptr<const ShapeSource> shapeSource;
     std::vector<Voxel> voxels;
     double blockSize = 1;
     unsigned maxQuads = MaxQuads;
@@ -90,11 +96,13 @@ struct Input {
     std::vector<std::shared_ptr<const std::vector<LightWork>>> relight;
     explicit Input(Snapshot&& value) : snapshot(std::move(value)) {}
     size_t reservation() const;
+    MemoryUsage memoryUsage() const;
 };
 enum class JobState { Queued, Running, Ready, Failed };
 struct Job {
     uint64_t id = 0;
     size_t bytes = 0;
+    std::vector<SharedAllocation> shared;
     std::atomic<bool> cancelled{false};
     JobState state = JobState::Queued; // Protected by the pool mutex.
     std::unique_ptr<Input> input;
@@ -106,6 +114,7 @@ struct Job {
     uint64_t sectionVoxels = 0, sectionQuads = 0;
     Topology topology;
     bool relight = false;
+    size_t resultBytes() const;
 };
 struct WorkerStats {
     unsigned workers = 0, queued = 0, running = 0, ready = 0, peakRunning = 0;
@@ -125,7 +134,7 @@ public:
     ~WorkerPool();
     void start(unsigned count = 0);
     void stop();
-    bool canSubmit() const;
+    bool canSubmit() const; // Capacity hint; submit checks the actual task footprint.
     uint64_t submit(std::unique_ptr<Input> input); // Zero means backpressure.
     std::shared_ptr<const Job> ready(uint64_t id) const;
     JobState state(uint64_t id) const;
@@ -133,11 +142,14 @@ public:
     WorkerStats stats() const;
 private:
     void run();
+    void releaseShared(const Job& job, size_t count);
     mutable std::mutex mutex_;
     std::condition_variable wake_;
     std::vector<std::thread> threads_;
     std::deque<std::shared_ptr<Job>> queue_;
     std::unordered_map<uint64_t, std::shared_ptr<Job>> jobs_;
+    struct SharedUsage { size_t bytes = 0, references = 0; };
+    std::unordered_map<const void*, SharedUsage> shared_;
     WorkerStats stats_;
     uint64_t next_ = 1;
     bool stopping_ = false;

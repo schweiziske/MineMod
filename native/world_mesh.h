@@ -9,6 +9,7 @@ struct MeshRecipe {
     size_t maxQuads = 0;
     int fluidIndex = -1;
     bool fluidOnly = false;
+    unsigned shapeSelector = 0;
 };
 // Contains CPU values only. Lua material groups are numeric publication IDs.
 class MeshInstances final : public l2::InstanceSource {

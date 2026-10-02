@@ -1,5 +1,6 @@
 #pragma once
 #include "l2_fluid.h"
+#include "l2_shapes.h"
 #include <atomic>
 #include <limits>
 #include <memory>
@@ -45,10 +46,12 @@ struct Profile {
     float shade = 1;
     l2::FluidState fluid;
     bool fluidSolid = false;
+    std::shared_ptr<const l2::Shape> shape = l2::emptyShape();
     void validate() const;
 };
 struct Catalog {
     uint64_t revision = 1;
+    size_t shapeBytes = 0;
     std::vector<Profile> states;
     // Optional state-indexed flags for sparse Lua-resolved live contexts.
     std::vector<uint8_t> contextual;
@@ -134,7 +137,7 @@ Grid<std::vector<unsigned>> affectedLightSections(const Config& config, const Li
 std::unique_ptr<LightResult> rebuildLight(std::shared_ptr<const Snapshot> source,
     const std::atomic<bool>& cancelled);
 
-struct MeshSnapshot : l2::CellSource, l2::FluidSource {
+struct MeshSnapshot : l2::CellSource, l2::FluidSource, l2::ShapeSource {
     std::shared_ptr<const Snapshot> world;
     Grid<std::shared_ptr<const LightChunk>> light;
     Grid<std::shared_ptr<const Column>> columns;
@@ -142,7 +145,9 @@ struct MeshSnapshot : l2::CellSource, l2::FluidSource {
     l2::Cell read(Coord cell) const;
     l2::Cell read(int x, int y, int z) const override { return read({x,y,z}); }
     const l2::FluidState& fluid(int x, int y, int z) const override { return world->profile({x,y,z}).fluid; }
+    const l2::Shape& shape(int x, int y, int z) const override { return *world->profile({x,y,z}).shape; }
     size_t bytes() const override;
+    void memoryUsage(l2::MemoryUsage& usage) const override;
     static l2::Cell readCell(void* data, int x, int y, int z);
 };
 

@@ -28,11 +28,11 @@ function T.GetStatus()
 		worldLightBackend = active and "native_worker" or "lua",
 		meshExecution = terrain and "native_world_workers_lua_sections"
 			or ( mesh and "native_workers_lua_sections" or "lua_sync" ),
-		terrainBackend = terrain and "native_models_fluids_lua_specials" or "lua",
+		terrainBackend = terrain and "native_models_shapes_fluids_lua_specials" or "lua",
 		atlasUploader = "lua", capabilities = caps, reason = reason,
 	}
 	if caps then
-		status.reason = terrain and "Native world/model/fluid workers; other special emitters, scheduling and GPU publication remain Lua"
+		status.reason = terrain and "Native world/model/shape/fluid workers; special emitters, scheduling and GPU publication remain Lua"
 			or ( active and "Native world active; direct terrain worker inactive" or "persistent Native world inactive" )
 	end
 	if T.active then status.world = T.active.handle:GetStats() end
@@ -97,6 +97,57 @@ local function fluidProfileKey( f )
 	return concat( parts, ":" )
 end
 
+local ShapeVariants = {}
+local StairShapes = { "straight", "inner_left", "inner_right", "outer_left", "outer_right" }
+local function shapeProfile( stateId, visual, bx, by, bz )
+	local shape = { selector = 0, stair = -1, connections = 0, pane = false, variants = { {} } }
+	if stateId == 0 then return shape end
+	local b, id, orient = visual.block, visual.id, visual.renderOrient
+	local connection = b.connection
+	shape.pane = connection == "pane" or connection == "bars"
+	if connection == "fence" or connection == "fence_gate" or connection == "wall" or shape.pane
+		or b.solid ~= false and ( MC.BlockIsFullCube( id, orient ) or not b.shape ) then
+		shape.connections = 1
+	end
+	if connection == "pipe6" or b.name == "chorus_flower" then shape.connections = shape.connections + 2 end
+	if b.name == "end_stone" then shape.connections = shape.connections + 4 end
+	if b.shape == "stairs" then shape.stair = MC.NormalizeOrient( id, orient ) end
+	if visual.boxes == nil then
+		if b.shape == "stairs" then shape.selector = 1
+		elseif connection == "fence" or connection == "wall" or shape.pane then shape.selector = 2
+		elseif connection == "pipe6" then shape.selector = 3 end
+	end
+	if shape.selector == 0 then
+		shape.variants[1] = MC.BlockVisualBoxes( visual, bx, by, bz ) or {}
+	else
+		local kind = shape.pane and "pane" or connection
+		local key = shape.selector == 1 and "stairs:" .. shape.stair or kind
+		local variants = ShapeVariants[key]
+		if not variants then
+			variants = {}
+			if shape.selector == 1 then
+				for i, name in ipairs( StairShapes ) do variants[i] = MC.StairBoxes( id, orient, nil, nil, nil, name ) end
+			else
+				for mask = 0, shape.selector == 3 and 63 or 15 do
+					variants[mask + 1] = MC.ConnectionBlockBoxes( kind, mask )
+				end
+			end
+			ShapeVariants[key] = variants
+		end
+		shape.variants = variants
+	end
+	return shape
+end
+
+local function shapeProfileKey( shape )
+	local parts = { shape.selector, shape.stair, shape.connections, shape.pane and 1 or 0 }
+	-- Connection families share a selector but have different box dimensions.
+	for _, box in ipairs( shape.variants[1] ) do
+		for a = 1, 6 do parts[#parts + 1] = string.format( "%.17g", box[a] ) end
+	end
+	return concat( parts, ":" )
+end
+
 function T.ResolveProfile( stateId, bx, by, bz, envelope, baseOnly )
 	local p = MC.StateLighting.Get( stateId, bx, by, bz )
 	if not p then return nil, "missing lighting properties for state " .. stateId end
@@ -136,7 +187,8 @@ function T.ResolveProfile( stateId, bx, by, bz, envelope, baseOnly )
 		+ ( p.solidRender and 262144 or 0 ) + ( p.fullCollision and 524288 or 0 )
 	return { propagationEmission = emission, propagationOpacity = opacity, skyCost = cost,
 		l2Word = word, renderClass = class, shade = p.shade,
-		fluid = fluidProfile( stateId, visual, bx, by, bz ) }, nil, p, visual
+		fluid = fluidProfile( stateId, visual, bx, by, bz ),
+		shape = shapeProfile( stateId, visual, bx, by, bz ) }, nil, p, visual
 end
 
 function T.BuildCatalog( revision )
@@ -148,9 +200,13 @@ function T.BuildCatalog( revision )
 		and MC.GetBlockCollisionBoxesForState and MC.BlockIsFullCubeForState ) then
 		return nil, "fluid profile registry is not ready"
 	end
+	if not ( MC.BlockVisualBoxes and MC.BlockIsFullCube and MC.NormalizeOrient
+		and MC.StairBoxes and MC.ConnectionBlockBoxes ) then
+		return nil, "render shape registry is not ready"
+	end
 	if not integer( MC.BlockStateCount, 1048576 ) or MC.BlockStateCount == 0 then return nil, "invalid state count" end
 	local profiles, mapping, contextual, cache = {}, {}, {}, {}
-	local dynamicFields = { "fullCube", "hasCollision", "translucent", "lightEmission", "lightOpacity" }
+	local dynamicFields = { "fullCube", "hasCollision", "translucent", "lightEmission", "lightOpacity", "boxes" }
 	for stateId = 0, MC.BlockStateCount - 1 do
 		local row, err, p, visual = T.ResolveProfile( stateId, 0, 0, 0, nil, true )
 		if not row then return nil, err end
@@ -170,7 +226,8 @@ function T.BuildCatalog( revision )
 		end
 		contextual[stateId + 1] = char( stateId ~= 0 and ( dynamic or p.collisionContext ~= "none" ) and 1 or 0 )
 		local key = concat( { row.propagationEmission, row.propagationOpacity, row.skyCost,
-			row.l2Word, row.renderClass, string.format( "%.17g", row.shade ), fluidProfileKey( row.fluid ) }, ":" )
+			row.l2Word, row.renderClass, string.format( "%.17g", row.shade ), fluidProfileKey( row.fluid ),
+			shapeProfileKey( row.shape ) }, ":" )
 		local index = cache[key]
 		if index == nil then
 			index = #profiles

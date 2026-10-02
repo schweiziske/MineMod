@@ -224,6 +224,61 @@ void relighting() {
     check(rejected, "null relight part accepted");
     std::cout << "L2 relight: exact pixels/AO, unchanged geometry, split parts, lifetime and cancellation passed\n";
 }
+struct SizedSource : CellSource {
+    Cell read(int, int, int) const override { return {1048576u + 255, 1}; }
+    size_t bytes() const override { return 68u * 1024u * 1024u; }
+};
+void memoryAccounting() {
+    WorkerPool pool;
+    auto source = std::make_shared<SizedSource>();
+    const auto make = [&](std::shared_ptr<const CellSource> value) {
+        auto in = input(1);
+        int origin[3]{}, dims[3] = {5,5,5};
+        in->snapshot = Snapshot(origin, dims, std::move(value));
+        return in;
+    };
+    auto first = make(source);
+    auto reservation = first->memoryUsage();
+    const auto sharedBytes = reservation.total() - reservation.owned;
+    check(sharedBytes > 64 * 1024 * 1024 && reservation.shared.size() == 1, "source not recorded as shared");
+    // Submit before starting workers to make admission and byte checks deterministic.
+    for (unsigned i = 0; i < 4; ++i) {
+        check(pool.submit(make(source)) != 0, "shared source charged again for each job");
+        check(pool.stats().bytes == sharedBytes + (i + 1) * reservation.owned, "shared ledger total");
+    }
+    const auto before = pool.stats().bytes;
+    check(pool.canSubmit(), "capacity hint unexpectedly full");
+    check(pool.submit(make(std::make_shared<SizedSource>())) == 0, "new source revision bypassed memory limit");
+    check(pool.stats().bytes == before, "rejected submission changed accounting");
+    pool.start(2);
+    pool.stop();
+    check(pool.stats().bytes == 0, "shared cancellation leaked references");
+    reservation.shared.clear();
+
+    // Ready results relinquish worst-case private workspace, but retain shared tickets.
+    auto in = make(source);
+    in->parts[0].reserve(20000);
+    in->retainLighting = true;
+    const auto large = in->reservation();
+    const auto id = pool.submit(std::move(in));
+    std::weak_ptr<const CellSource> alive = source;
+    source.reset();
+    first.reset();
+    pool.start(1);
+    wait(pool, id);
+    auto result = pool.ready(id);
+    check(result->error.empty(), result->error.c_str());
+    check(result->parts[0].lighting && result->parts[0].lighting->size() == 1, "result footprint lost retained light");
+    check(pool.stats().bytes == sharedBytes + result->resultBytes(), "ready result still holds workspace reservation");
+    check(pool.stats().bytes + 1000000 < large, "completion did not reclaim workspace");
+    check(!alive.expired(), "shared source died before result release");
+    // The external result reference is intentionally scoped through stop, as in uploads.
+    pool.stop();
+    check(pool.stats().bytes == 0, "ready shared result leaked accounting");
+    result.reset();
+    check(alive.expired(), "released result retained shared source");
+    std::cout << "L2 memory: shared identity, exact admission, completion shrink and cancellation passed\n";
+}
 void run() {
     WorkerPool pool;
     pool.start(4);
@@ -281,6 +336,6 @@ void run() {
 }
 }
 int main() {
-    try { run(); voxels(); relighting(); return 0; }
+    try { run(); voxels(); relighting(); memoryAccounting(); return 0; }
     catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

@@ -1,6 +1,7 @@
 #include "../world_mesh.h"
 #include <chrono>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
 using namespace mcmesh;
@@ -39,6 +40,39 @@ void wait(l2::WorkerPool& pool, uint64_t id) {
         check(std::chrono::steady_clock::now() < deadline, "mesh worker timed out");
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+}
+void snapshotMemory() {
+    world::Config cfg;
+    cfg.chunkSize = cfg.chunkHeight = 8; cfg.sectionSize = 4;
+    auto catalog = std::make_shared<world::Catalog>();
+    catalog->states.resize(2);
+    world::Store store(cfg, catalog);
+    auto mutation = edit(cfg, {1,1,1}, 1);
+    mutation.cells.push_back({cfg.localIndex({1,1,5}), 1});
+    store.apply(0, {mutation});
+    auto first = store.meshSnapshot({0,0,0}, 0, true);
+    l2::MemoryUsage a;
+    first.memoryUsage(a);
+    const auto rawCount = a.shared.size();
+    a.normalize();
+    check(a.shared.size() < rawCount, "chunk/column aliases were not deduplicated");
+    const auto contains = [](const l2::MemoryUsage& usage, const void* owner) {
+        for (const auto& entry : usage.shared) if (entry.owner.get() == owner) return true;
+        return false;
+    };
+    check(contains(a, first.world->catalog.get()), "sealed catalog omitted from shared footprint");
+    const auto oldChunk = first.world->chunks.at({0,0,0});
+    store.apply(store.revision(), {edit(cfg, {2,1,1}, 1)});
+    auto second = store.meshSnapshot({0,0,0}, 0, true);
+    const auto newChunk = second.world->chunks.at({0,0,0});
+    l2::MemoryUsage b;
+    second.memoryUsage(b);
+    b.normalize();
+    check(oldChunk != newChunk && contains(a, oldChunk.get()) && contains(b, newChunk.get()),
+        "different chunk revisions shared an accounting identity");
+    check(oldChunk->sections[4] == newChunk->sections[4]
+        && contains(a, oldChunk->sections[4].get()) && contains(b, oldChunk->sections[4].get()),
+        "unchanged section not shared across chunk revisions");
 }
 void topology() {
     auto open = world::meshTopology(std::vector<uint8_t>(64), 4);
@@ -177,6 +211,125 @@ void models() {
     check(build(false, 11) == 0 && build(true, 11) == 2, "leaf internal face policy");
     check(build(true, 9) == 0, "leaf faces through opaque neighbours");
 }
+std::shared_ptr<l2::Model> stairModel() {
+    auto model = std::make_shared<l2::Model>();
+    model->block = 1; model->shapeSelector = 1;
+    l2::ModelGroup group;
+    for (unsigned variant = 0; variant < 5; ++variant) {
+        l2::ModelAlternative alternative;
+        l2::ModelQuad quad;
+        quad.work = cube().faces[0]; quad.work.command.tint = variant;
+        quad.withoutAO = quad.work.geometry;
+        alternative.quads.push_back(quad);
+        group.alternatives.push_back(alternative);
+    }
+    model->groups.push_back(group);
+    l2::validateModel(*model);
+    return model;
+}
+void shapeValidation() {
+    const auto rejected = [](auto fn) {
+        try { fn(); } catch (const std::exception&) { return true; }
+        return false;
+    };
+    l2::Shape shape;
+    shape.validate();
+    shape.selector = 1;
+    check(rejected([&] { shape.validate(); }), "missing stair variants accepted");
+    shape.stair = 0; shape.variants.resize(5);
+    shape.validate();
+    shape.variants[0].push_back({0,0,0,1,1,std::numeric_limits<double>::infinity()});
+    check(rejected([&] { shape.validate(); }), "nonfinite render box accepted");
+    auto model = stairModel();
+    model->groups[0].alternatives.pop_back();
+    check(rejected([&] { l2::validateModel(*model); }), "shape variant count mismatch accepted");
+    model = stairModel();
+    auto& quad = model->groups[0].alternatives[0].quads[0];
+    quad.shapeCull = true; quad.box = {0,0,0,1,1,1};
+    check(rejected([&] { l2::validateModel(*model); }), "shape cull without face accepted");
+    quad.cullFace = 1; quad.box[3] = -1;
+    check(rejected([&] { l2::validateModel(*model); }), "inverted shape cull accepted");
+    quad.box[3] = 1;
+    l2::validateModel(*model);
+    const int origin[] = {-2,-2,-2}, dims[] = {5,5,5};
+    l2::Input input(l2::Snapshot(origin, dims, std::make_shared<Air>()));
+    input.models.push_back({model, 1});
+    check(rejected([&] { input.reservation(); }), "missing world shape source accepted");
+    const l2::ShapeBox full{0,0,0,1,1,1};
+    constexpr int offsets[6][3] = {{0,0,1},{0,0,-1},{1,0,0},{-1,0,0},{0,1,0},{0,-1,0}};
+    for (unsigned face = 0; face < 6; ++face) {
+        const unsigned split = face / 2 == 1 ? 1 : 0;
+        auto first = full, second = full;
+        first[split+3] = second[split] = 0.5;
+        check(l2::shapeCovered(full, face, {first,second}, offsets[face]), "split face union not covered");
+        first[split+3] = 0.4;
+        check(!l2::shapeCovered(full, face, {first,second}, offsets[face]), "gap in face union ignored");
+        const int wrongOffset[] = {0,0,0};
+        check(!l2::shapeCovered(full, face, {full}, wrongOffset), "wrong neighbour offset covered face");
+    }
+}
+void shapes() {
+    world::Config cfg;
+    cfg.chunkSize = cfg.chunkHeight = 8; cfg.sectionSize = 4; cfg.blockSize = 47.25;
+    cfg.skyEnabled = false;
+    auto catalog = std::make_shared<world::Catalog>();
+    catalog->states.resize(3);
+    for (unsigned state : {1u, 2u}) {
+        auto shape = std::make_shared<l2::Shape>();
+        shape->selector = 1; shape->stair = state == 1 ? 0 : 2;
+        shape->variants.resize(5); shape->validate();
+        catalog->states[state].shape = shape;
+        catalog->states[state].renderClass = state * 8;
+    }
+    world::Store store(cfg, catalog);
+    store.apply(0, {edit(cfg, {-4,0,1}, 1), edit(cfg, {-4,-1,1}, 2)});
+    light(store);
+    auto model = stairModel();
+    const auto make = [&](std::shared_ptr<const world::MeshSnapshot> snapshot) {
+        const int origin[] = {snapshot->origin.x,snapshot->origin.y,snapshot->origin.z};
+        const int dims[] = {snapshot->dimensions.x,snapshot->dimensions.y,snapshot->dimensions.z};
+        auto input = std::make_unique<l2::Input>(l2::Snapshot(origin, dims, snapshot));
+        input->shapeSource = snapshot; input->blockSize = cfg.blockSize; input->retainLighting = true;
+        input->models.push_back({model, 7});
+        input->instances = std::make_shared<world::MeshInstances>(snapshot, world::Coord{-1,0,0}, 1,
+            std::unordered_map<uint32_t, world::MeshRecipe>{{1, {0, true, false, 1, -1, false, 1}}}, true);
+        return input;
+    };
+    auto snapshot = std::make_shared<world::MeshSnapshot>(store.meshSnapshot({-1,0,0}, 1));
+    l2::WorkerPool pool;
+    pool.start(2);
+    const auto oldId = pool.submit(make(snapshot));
+    store.apply(store.revision(), {edit(cfg, {-4,-1,1}, 0)});
+    check(!store.geometryCurrent(*snapshot) && snapshot->shape(-4,-1,1).stair == 2,
+        "shape halo edit mutated queued snapshot");
+    light(store);
+    auto updated = std::make_shared<world::MeshSnapshot>(store.meshSnapshot({-1,0,0}, 1));
+    const auto newId = pool.submit(make(updated));
+    snapshot.reset(); updated.reset();
+    for (const auto id : {oldId, newId}) {
+        wait(pool, id);
+        const auto result = pool.ready(id);
+        check(result->error.empty(), result->error.c_str());
+        check(result->sectionVoxels == 1 && result->sectionQuads == 1 && result->parts.size() == 1,
+            "shape worker emitted wrong section");
+        const auto& part = result->parts[0];
+        check(part.group == 7 && part.lighting && part.lighting->size() == 1, "shape lighting/material missing");
+        check(part.lighting->at(0).command.tint == (id == oldId ? 3u : 0u), "immutable stair variant selection");
+        check(part.bounds[0] >= float(4 * cfg.blockSize) && part.bounds[3] <= float(5 * cfg.blockSize),
+            "shape geometry not chunk-local");
+    }
+    pool.stop();
+    check(pool.stats().bytes == 0, "shape worker disposal leaked");
+    auto mutation = edit(cfg, {-4,0,1}, 1);
+    auto profile = catalog->states[1];
+    profile.shape = l2::emptyShape();
+    mutation.contexts.push_back({cfg.localIndex({-4,0,1}), false, profile});
+    store.apply(store.revision(), {mutation}); light(store);
+    bool rejected = false;
+    try { make(std::make_shared<world::MeshSnapshot>(store.meshSnapshot({-1,0,0}, 1))); }
+    catch (const std::exception& e) { rejected = std::string(e.what()) == "model/context shape selector mismatch"; }
+    check(rejected, "context shape selector mismatch reached worker");
+}
 void fluids() {
     world::Config cfg;
     cfg.chunkSize = cfg.chunkHeight = 8; cfg.sectionSize = 4; cfg.blockSize = 47.25;
@@ -294,8 +447,8 @@ void fluids() {
 }
 int main() {
     try {
-        topology(); worldMesh(); models(); fluids();
-        std::cout << "World mesh: owned snapshots, histogram, transforms, sky invalidation, topology, models and fluids/relight passed\n";
+        snapshotMemory(); topology(); worldMesh(); models(); shapeValidation(); shapes(); fluids();
+        std::cout << "World mesh: owned snapshots, histogram, transforms, sky invalidation, topology, models, shapes and fluids/relight passed\n";
         return 0;
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }
