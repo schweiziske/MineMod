@@ -89,6 +89,7 @@ void LightWorker::run() {
             else if (completion->result) {
                 ++stats_.completed;
                 stats_.computeMS += completion->result->computeMS;
+                stats_.diffMS += completion->result->diffMS;
             }
             ready_ = std::move(completion);
             stats_.running = false;

@@ -281,6 +281,11 @@
     <ClCompile Include="imesh_index.cpp" />
     <ClCompile Include="lightatlas.cpp" />
     <ClCompile Include="l2_bridge.cpp" />
+    <ClCompile Include="l2_draw_bridge.cpp" />
+    <ClCompile Include="l2_draw.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <FloatingPointModel>Strict</FloatingPointModel>
+    </ClCompile>
     <ClCompile Include="world_bridge.cpp" />
     <ClCompile Include="world_core.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
@@ -297,6 +302,10 @@
       <FloatingPointModel>Strict</FloatingPointModel>
     </ClCompile>
     <ClCompile Include="l2_core.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <FloatingPointModel>Strict</FloatingPointModel>
+    </ClCompile>
+    <ClCompile Include="l2_fluid.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <FloatingPointModel>Strict</FloatingPointModel>
     </ClCompile>
@@ -338,6 +347,9 @@
     <ClInclude Include="world_mesh.h" />
     <ClInclude Include="world_decode.h" />
     <ClInclude Include="l2_core.h" />
+    <ClInclude Include="l2_draw.h" />
+    <ClInclude Include="l2_draw_bridge.h" />
+    <ClInclude Include="l2_fluid.h" />
     <ClInclude Include="l2_worker.h" />
     <ClInclude Include="patchdecode.h" />
     <ClInclude Include="pch.h" />

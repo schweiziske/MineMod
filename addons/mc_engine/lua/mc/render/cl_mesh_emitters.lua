@@ -1330,7 +1330,7 @@ function RM.NativeCubeRecipe( stateId )
 	return { value = recipe, id = id }
 end
 
-function RM.NativeModelRecipe( stateId )
+function RM.NativeModelRecipe( stateId, includeWaterlogged )
 	if meshDebugFullCubeOnly() then return false end
 	local visual = MC.ResolveBlockStateVisual( stateId, 0, 0, 0 )
 	if not visual or not MC.StateVisualPlanGroups or not MC.RenderL2Models then return false end
@@ -1339,15 +1339,27 @@ function RM.NativeModelRecipe( stateId )
 	if visual.cacheable == false or b ~= MC.Blocks[id]
 		or ( name and MC.BlockStateVisualResolvers and MC.BlockStateVisualResolvers[name] )
 		or specialEmitterForBlock( b ) or isLiquidBlock( id )
-		or ( isWaterloggedState and isWaterloggedState( stateId ) ) then return false end
+		or ( isWaterloggedState and isWaterloggedState( stateId ) and not includeWaterlogged ) then return false end
 	for _, field in ipairs( { "faces", "fullCube", "translucent", "lightEmission" } ) do
 		if type( visual[field] ) == "function" then return false end
 	end
 	local ctx = { currentVisual = visual, currentStateId = stateId }
-	local emitter = selectBlockEmitter( ctx, b, id, visual.renderOrient, MC.BlockIsFullCube, 0, 0, 0 )
+	local emitter
+	-- Base Lua shapes (stairs, slabs, connections) still have catalog models.
+	-- Compile the host's complete state plan before attaching its water layer.
+	local waterloggedHost = includeWaterlogged and isWaterloggedState( stateId ) and visual.forceBaseRenderer ~= true
+	if waterloggedHost then
+		emitter = BlockEmitters.statePlan
+	else
+		emitter = selectBlockEmitter( ctx, b, id, visual.renderOrient, MC.BlockIsFullCube, 0, 0, 0 )
+	end
 	if emitter ~= BlockEmitters.statePlan and emitter ~= BlockEmitters.model then return false end
 	local groups = MC.StateVisualPlanGroups( stateId )
-	if #groups == 0 then return false end
+	if #groups == 0 then
+		if not waterloggedHost then return false end
+		local planId, _, count = MC.StateVisualPlanRangeFast( stateId )
+		if planId < 1 or planId > MC.StateVisualCatalog.visualPlanCount or count ~= 0 then return false end
+	end
 	local models = MC.RenderL2Models
 	for _, group in ipairs( groups ) do
 		for _, alternative in ipairs( group.alternatives ) do
@@ -1388,7 +1400,10 @@ function RM.NativeModelRecipe( stateId )
 		return buffer.nativeCommands, culls
 	end
 	local packet = {}
-	if legacy then
+	if #groups == 0 then
+		-- A registered empty multipart plan is one no-op choice in the DLL ABI.
+		packet[1] = { 0, { { 1, true, {}, {}, {} } } }
+	elseif legacy then
 		local shaded, culls = capture( legacy, nil, true )
 		local flat = capture( legacy, nil, false )
 		packet[1] = { 0, { { 1, selected.modelAO, shaded, flat, culls } } }
@@ -1422,6 +1437,50 @@ local function waterBlockId()
 	local schema = MC.BlockStateSchemaByName and MC.BlockStateSchemaByName["minecraft:water"] or nil
 	WaterBlockId = schema and schema.blockId or false
 	return WaterBlockId or nil
+end
+
+function RM.NativeFluidRecipe( stateId )
+	local kind = MC.Liquid.DecodeState( stateId )
+	if not kind then return nil end
+	local visual = MC.ResolveBlockStateVisual( stateId, 0, 0, 0 )
+	MC.RenderL2Resources.Require( visual ~= nil, "native_l2_fluid", "missing fluid visual" )
+	local overlay = isWaterloggedState( stateId )
+	local id = overlay and waterBlockId() or visual.id
+	MC.RenderL2Resources.Require( id ~= nil and MC.LiquidKind( id ) == kind,
+		"native_l2_fluid", "missing fluid block/material for state " .. stateId )
+	local recipe
+	if overlay then
+		recipe = RM.NativeModelRecipe( stateId, true )
+		MC.RenderL2Resources.Require( recipe ~= false, "native_l2_fluid",
+			"waterlogged host has no Native model recipe: " .. stateId )
+	else
+		recipe = { value = false, id = id, fluidOnly = true,
+			translucent = MC.BlockVisualIsTranslucent( visual, 0, 0, 0 ) }
+	end
+	local orient = overlay and 0 or visual.renderOrient
+	local tiles, shades = {}, {}
+	for face = 1, 7 do
+		local tile
+		if face == 7 then tile = LiquidFlowTiles[kind]
+		elseif face <= 2 then tile = LiquidStillTiles[kind] or liquidFace( id, face, orient )
+		else tile = liquidFace( id, face, orient ) end
+		MC.RenderL2Resources.Require( tile ~= nil, "native_l2_fluid", "missing fluid atlas tile" )
+		local u1, v1 = tileUVPointRaw( tile, 1, 1 )
+		local u2, v2 = tileUVPointRaw( tile, 2, 2 )
+		local u0, v0 = tileUVPointRaw( tile, 0, 0 )
+		local su, sv = u2 - u1, v2 - v1
+		local ou, ov = u1 - su, v1 - sv
+		tiles[face] = { ou, ov, su, sv, u0 - ou, v0 - ov }
+		if face <= 6 then shades[face] = RM.shadeRGBAByIndex( shadeIndexForFace( face ) ) end
+	end
+	local value, err = MC.NativeL2.module.CompileL2Fluid( {
+		kind = kind == "water" and 1 or 2, tiles = tiles, shade = shades,
+		emission = MC.BlockLightEmission( id ), opacity = C.SH_TOP.a,
+		offset = C.FLUID_FACE_OFFSET, flow = 1, full = MC.BlockIsFullCube( id, 0 ) and 1 or 0,
+	} )
+	MC.RenderL2Resources.Require( value ~= nil, "native_l2_fluid", tostring( err ) )
+	recipe.fluid, recipe.fluidId = value, id
+	return recipe
 end
 
 local function emitWaterloggedOverlay( ctx, stateId, bx, by, bz, wx, wy, wz, targetBuffer, flush, meshPerf )

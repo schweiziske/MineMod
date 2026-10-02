@@ -123,6 +123,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	local sectionBuffers = {}
 	local cur
 	local directional = MC.MeshDirectionalCull and MC.MeshDirectionalCull:GetBool() or false
+	if MC.NativeL2 and MC.NativeL2.IsActive() then directional = false end
 	local directionalMin = MC.MeshDirectionalMinBlocks and MC.MeshDirectionalMinBlocks:GetInt() or 64
 
 	local function styleForBuffer()
@@ -283,6 +284,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			translucent = buf.translucent == true,
 			request = buf.request, stage = buf.stage,
 		}
+		if entry.resource.pixels then entry.resource.lightRecord = buf.records[#buf.records] end
 		meshPerf.vertices = meshPerf.vertices + vertexCount
 		meshPerf.faces = meshPerf.faces + math.floor( vertexCount / 6 )
 		meshPerf.meshes = meshPerf.meshes + 1

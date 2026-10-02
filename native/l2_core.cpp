@@ -5,6 +5,43 @@
 #include <stdexcept>
 
 namespace mcmesh::l2 {
+DirectionOrder directionOrder(const std::vector<Quad>& quads) {
+    DirectionOrder out;
+    std::vector<uint8_t> groups(quads.size(), 6);
+    for (size_t i = 0; i < quads.size(); ++i) {
+        const auto& v = quads[i].vertices;
+        // Only exact axis-planar, consistently wound triangles are assigned.
+        // Smooth normals, slopes and degenerate geometry stay unconditional.
+        for (unsigned a = 0; a < 3; ++a) {
+            if (v[0].position[a] != v[1].position[a] || v[0].position[a] != v[2].position[a] ||
+                v[0].position[a] != v[3].position[a]) continue;
+            const unsigned b = (a+1)%3, c = (a+2)%3;
+            auto cross = [&](unsigned j, unsigned k) {
+                return double(v[j].position[b]-v[0].position[b]) * (v[k].position[c]-v[0].position[c]) -
+                    double(v[j].position[c]-v[0].position[c]) * (v[k].position[b]-v[0].position[b]);
+            };
+            const double one = cross(1,2), two = cross(2,3);
+            if (one * two <= 0) continue;
+            const float normal = one > 0 ? 1.0f : -1.0f;
+            bool agrees = true;
+            for (const auto& vertex : v)
+                agrees = agrees && vertex.normal[a] == normal && vertex.normal[b] == 0 && vertex.normal[c] == 0;
+            if (agrees) groups[i] = uint8_t((a == 2 ? 0 : a == 0 ? 2 : 4) + (one < 0 ? 1 : 0));
+            break;
+        }
+        ++out.ranges[groups[i]].count;
+    }
+    unsigned first = 0;
+    std::array<unsigned, 7> next{};
+    for (unsigned g = 0; g < 7; ++g) {
+        auto& range = out.ranges[g];
+        next[g] = first; range.first = first * 6;
+        first += range.count; range.count *= 6;
+    }
+    out.quads.resize(quads.size());
+    for (unsigned i = 0; i < quads.size(); ++i) out.quads[next[groups[i]]++] = i;
+    return out;
+}
 namespace {
 constexpr int Normals[6][3] = {{0,0,1},{0,0,-1},{1,0,0},{-1,0,0},{0,1,0},{0,-1,0}};
 constexpr int Adjacent[6][4][3] = {
@@ -181,14 +218,85 @@ void prefetch(const Template& t, const Command& c, Snapshot& snapshot) {
     }
 }
 
-Quad evaluate(const Template& t, const Command& c, Snapshot& snapshot, unsigned globalQuad) {
-    Quad out;
+const FaceLight& Snapshot::sampleFace(int x, int y, int z, unsigned face, bool cubic) {
+    if (faceSource_[0] != x || faceSource_[1] != y || faceSource_[2] != z) {
+        faceSource_[0] = x; faceSource_[1] = y; faceSource_[2] = z;
+        faceMask_ = 0;
+    }
+    const unsigned slot = face + (cubic ? 6u : 0u);
+    if (faceMask_ & (1u << slot)) { ++faceHits; return faces_[slot]; }
+    const auto& n = Normals[face];
+    const auto& adjacent = Adjacent[face];
+    const int bx = x + (cubic ? n[0] : 0), by = y + (cubic ? n[1] : 0), bz = z + (cubic ? n[2] : 0);
+    const Cell* sides[4];
+    bool open[4];
+    for (unsigned i = 0; i < 4; ++i) {
+        const auto& a = adjacent[i];
+        sides[i] = &read(bx + a[0], by + a[1], bz + a[2]);
+        const Cell& test = read(bx + a[0] + n[0], by + a[1] + n[1], bz + a[2] + n[2]);
+        open[i] = !test.viewBlocking() || test.dampening() == 0;
+    }
+    const Cell& state = read(x, y, z);
+    const Cell& next = read(x + n[0], y + n[1], z + n[2]);
+    const auto center = light(cubic || !next.solidRender() ? next : state);
+    const float centerShade = cubic ? next.shade : state.shade;
+    auto& sampled = faces_[slot];
+    for (unsigned i = 0; i < 4; ++i) {
+        const unsigned a = PairA[i], b = PairB[i];
+        const Cell* diagonal = sides[0];
+        if (open[a] || open[b])
+            diagonal = &read(bx + adjacent[a][0] + adjacent[b][0],
+                by + adjacent[a][1] + adjacent[b][1], bz + adjacent[a][2] + adjacent[b][2]);
+        sampled.coords[i] = blend(light(*sides[a]), light(*sides[b]), light(*diagonal), center);
+        sampled.blocks[i] = static_cast<float>(sampled.coords[i] & 255);
+        sampled.skies[i] = static_cast<float>((sampled.coords[i] >> 16) & 255);
+        sampled.ao[i] = sum4(sides[a]->shade, sides[b]->shade, diagonal->shade, centerShade) * 0.25f;
+    }
+    faceMask_ |= 1u << slot;
+    ++faceSamples;
+    return sampled;
+}
+
+LightQuad evaluateLight(const LightTemplate& t, const LightCommand& c, Snapshot& snapshot) {
+    LightQuad out;
     if (t.mode == 2) {
         std::copy(std::begin(c.prepared), std::end(c.prepared), out.pixels);
     } else {
         const int x = c.source[0], y = c.source[1], z = c.source[2];
         const Cell& state = snapshot.read(x, y, z);
-        if (t.mode == 1) {
+        if (t.mode == 3) {
+            // FluidRenderer uses legacy smooth block/sky light, not model AO or
+            // pinned L2 emissive sky. Preserve this descriptor for relighting.
+            constexpr int corners[6][4][3] = {
+                {{0,0,1},{1,0,1},{1,1,1},{0,1,1}}, {{0,1,0},{1,1,0},{1,0,0},{0,0,0}},
+                {{1,0,0},{1,1,0},{1,1,1},{1,0,1}}, {{0,1,0},{0,0,0},{0,0,1},{0,1,1}},
+                {{1,1,0},{0,1,0},{0,1,1},{1,1,1}}, {{0,0,0},{1,0,0},{1,0,1},{0,0,1}}
+            };
+            const auto sample = [&](const Cell& cell) {
+                return pack(std::max({cell.block(), unsigned(cell.fluidEmission), unsigned(t.emission)}), cell.sky());
+            };
+            const auto& n = Normals[t.face];
+            const bool cubic = (t.flags & 1) != 0;
+            const int base[3] = {x + (cubic ? n[0] : 0), y + (cubic ? n[1] : 0), z + (cubic ? n[2] : 0)};
+            const auto& next = snapshot.read(x+n[0], y+n[1], z+n[2]);
+            const auto center = sample(cubic || !next.fluidSolid ? next : state);
+            uint32_t values[4];
+            for (unsigned i = 0; i < 4; ++i) {
+                const auto& corner = corners[t.face][i];
+                const unsigned a = t.face < 2 || t.face >= 4 ? 0 : 1, b = t.face < 2 ? 1 : 2;
+                int pa[3] = {base[0],base[1],base[2]}, pb[3] = {base[0],base[1],base[2]}, pd[3] = {base[0],base[1],base[2]};
+                pa[a] += corner[a] <= 0 ? -1 : 1;
+                pb[b] += corner[b] <= 0 ? -1 : 1;
+                pd[a] = pa[a]; pd[b] = pb[b];
+                const auto la = sample(snapshot.read(pa[0],pa[1],pa[2]));
+                const auto lb = sample(snapshot.read(pb[0],pb[1],pb[2]));
+                const bool blocked = snapshot.read(pa[0]+n[0],pa[1]+n[1],pa[2]+n[2]).fluidSolid
+                    && snapshot.read(pb[0]+n[0],pb[1]+n[1],pb[2]+n[2]).fluidSolid;
+                const auto ld = blocked ? la : sample(snapshot.read(pd[0],pd[1],pd[2]));
+                values[i] = pixel(blend(la,lb,ld,center), t.flatShade, c.tint);
+            }
+            for (unsigned i = 0; i < 4; ++i) out.pixels[i] = values[t.indices[i]];
+        } else if (t.mode == 1) {
             require(state.loaded(), "cross source cell is unavailable");
             const unsigned block = state.emissive() ? 15 : std::max({state.block(), state.emission(), unsigned(t.emission)});
             const unsigned sky = state.emissive() ? 15 : std::max(state.sky(), unsigned(t.emission));
@@ -206,43 +314,17 @@ Quad evaluate(const Template& t, const Command& c, Snapshot& snapshot, unsigned 
                 const auto value = pixel(emit(light(*cell, state), t.emission), t.flatShade, c.tint);
                 std::fill(std::begin(out.pixels), std::end(out.pixels), value);
             } else {
-                const auto& n = Normals[t.face];
-                const auto& adjacent = Adjacent[t.face];
-                const int bx = x + (cubic ? n[0] : 0), by = y + (cubic ? n[1] : 0), bz = z + (cubic ? n[2] : 0);
-                const Cell* sides[4];
-                bool open[4];
-                for (unsigned i = 0; i < 4; ++i) {
-                    const auto& a = adjacent[i];
-                    sides[i] = &snapshot.read(bx + a[0], by + a[1], bz + a[2]);
-                    const Cell& test = snapshot.read(bx + a[0] + n[0], by + a[1] + n[1], bz + a[2] + n[2]);
-                    open[i] = !test.viewBlocking() || test.dampening() == 0;
-                }
-                const Cell& next = snapshot.read(x + n[0], y + n[1], z + n[2]);
-                const auto center = light(cubic || !next.solidRender() ? next : state);
-                const float centerShade = cubic ? next.shade : state.shade;
-                uint32_t coords[4];
-                float ao[4], blocks[4], skies[4];
-                for (unsigned i = 0; i < 4; ++i) {
-                    const unsigned a = PairA[i], b = PairB[i];
-                    const Cell* diagonal = sides[0];
-                    if (open[a] || open[b])
-                        diagonal = &snapshot.read(bx + adjacent[a][0] + adjacent[b][0],
-                            by + adjacent[a][1] + adjacent[b][1], bz + adjacent[a][2] + adjacent[b][2]);
-                    coords[i] = blend(light(*sides[a]), light(*sides[b]), light(*diagonal), center);
-                    blocks[i] = static_cast<float>(coords[i] & 255);
-                    skies[i] = static_cast<float>((coords[i] >> 16) & 255);
-                    ao[i] = sum4(sides[a]->shade, sides[b]->shade, diagonal->shade, centerShade) * 0.25f;
-                }
+                const auto& sampled = snapshot.sampleFace(x, y, z, t.face, cubic);
                 out.occlusion = 0;
                 for (unsigned i = 0; i < 4; ++i) {
                     uint32_t value;
                     float ambient;
                     if (t.flags & 4) {
-                        value = (javaInt(weighted(blocks, t.weights[i])) & 255) |
-                            ((javaInt(weighted(skies, t.weights[i])) & 255) << 16);
-                        ambient = std::clamp(weighted(ao, t.weights[i]), 0.0f, 1.0f);
+                        value = (javaInt(weighted(sampled.blocks, t.weights[i])) & 255) |
+                            ((javaInt(weighted(sampled.skies, t.weights[i])) & 255) << 16);
+                        ambient = std::clamp(weighted(sampled.ao, t.weights[i]), 0.0f, 1.0f);
                     } else {
-                        value = coords[t.indices[i]]; ambient = ao[t.indices[i]];
+                        value = sampled.coords[t.indices[i]]; ambient = sampled.ao[t.indices[i]];
                     }
                     const auto gray = static_cast<unsigned>(ambient * 255.0f);
                     out.occlusion |= gray << (i * 8);
@@ -252,6 +334,14 @@ Quad evaluate(const Template& t, const Command& c, Snapshot& snapshot, unsigned 
             }
         }
     }
+    return out;
+}
+
+Quad evaluate(const Template& t, const Command& c, Snapshot& snapshot, unsigned globalQuad) {
+    Quad out;
+    const auto light = evaluateLight(t, c, snapshot);
+    std::copy(std::begin(light.pixels), std::end(light.pixels), out.pixels);
+    out.occlusion = light.occlusion;
     for (unsigned i = 0; i < 4; ++i) {
         Vertex& v = out.vertices[i];
         for (unsigned a = 0; a < 3; ++a) {

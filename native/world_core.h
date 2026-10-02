@@ -1,9 +1,10 @@
 #pragma once
-#include "l2_core.h"
+#include "l2_fluid.h"
 #include <atomic>
 #include <limits>
 #include <memory>
 #include <map>
+#include <set>
 #include <unordered_map>
 
 // Persistent voxel ownership. Source resources and Lua values never enter this API.
@@ -42,6 +43,8 @@ struct Profile {
     // Raw light levels and loaded are supplied by the world, not the catalog.
     uint32_t l2Word = 0, renderClass = 0;
     float shade = 1;
+    l2::FluidState fluid;
+    bool fluidSolid = false;
     void validate() const;
 };
 struct Catalog {
@@ -101,40 +104,56 @@ struct PreparedBatch {
 PreparedBatch prepareReplacements(const Config& config, std::shared_ptr<const Catalog> catalog,
     uint64_t epoch, const std::vector<Mutation>& batch);
 
+struct LightDelta {
+    Coord chunk;
+    std::vector<uint8_t> changedBits;
+    Grid<std::vector<unsigned>> sections;
+};
+using LightChanges = std::vector<std::shared_ptr<const LightDelta>>;
 struct LightResult {
     std::shared_ptr<const Snapshot> source;
     Grid<std::shared_ptr<const LightChunk>> chunks;
     Grid<bool> targets;
+    Grid<std::shared_ptr<const LightDelta>> deltas;
     uint64_t sources = 0, visits = 0;
     uint64_t scannedCells = 0;
     double computeMS = 0;
-};
-struct LightDelta {
-    Coord chunk;
-    std::vector<uint8_t> changedBits;
+    double diffMS = 0;
 };
 struct CommitResult {
     unsigned committed = 0, deferred = 0;
     bool stale = false;
-    std::vector<LightDelta> changed;
+    LightChanges changed;
+    Grid<std::vector<unsigned>> dirtySections;
 };
 // Owners whose two-cell L2 sampling halo contains a changed light cell.
-Grid<std::vector<unsigned>> affectedLightSections(const Config& config, const std::vector<LightDelta>& changed);
+Grid<std::vector<unsigned>> affectedLightSections(const Config& config, const LightChanges& changed);
 
 // Called only by a CPU worker. Matches the current Lua sparse-air domain and
 // opacity>0 column exposure, not the old L1 opacity>=15 sky approximation.
 std::unique_ptr<LightResult> rebuildLight(std::shared_ptr<const Snapshot> source,
     const std::atomic<bool>& cancelled);
 
-struct MeshSnapshot : l2::CellSource {
+struct MeshSnapshot : l2::CellSource, l2::FluidSource {
     std::shared_ptr<const Snapshot> world;
     Grid<std::shared_ptr<const LightChunk>> light;
     Grid<std::shared_ptr<const Column>> columns;
     Coord origin, dimensions;
     l2::Cell read(Coord cell) const;
     l2::Cell read(int x, int y, int z) const override { return read({x,y,z}); }
+    const l2::FluidState& fluid(int x, int y, int z) const override { return world->profile({x,y,z}).fluid; }
     size_t bytes() const override;
     static l2::Cell readCell(void* data, int x, int y, int z);
+};
+
+// Weak roots validate geometry without retaining obsolete terrain or light volumes.
+struct GeometryStamp {
+    uint64_t epoch;
+    std::weak_ptr<const Catalog> catalog;
+    Grid<std::weak_ptr<const Chunk>> chunks;
+    Coord origin, dimensions;
+    explicit GeometryStamp(const MeshSnapshot& source);
+    size_t bytes() const { return sizeof(*this) + chunks.size() * 96; }
 };
 
 class Store {
@@ -162,8 +181,10 @@ public:
     CommitResult commit(const LightResult& result);
     bool lightReady(Coord chunk) const;
     bool meshReady(Coord chunk, unsigned section) const;
-    MeshSnapshot meshSnapshot(Coord chunk, unsigned section) const;
+    MeshSnapshot meshSnapshot(Coord chunk, unsigned section, bool allowPendingLight = false) const;
+    bool geometryCurrent(const MeshSnapshot& snapshot) const;
     bool current(const MeshSnapshot& snapshot) const;
+    bool current(const GeometryStamp& stamp) const;
     unsigned light(Coord cell, bool sky) const;
 private:
     bool publish(Grid<std::shared_ptr<const Chunk>> pending);
@@ -172,6 +193,7 @@ private:
     Grid<std::shared_ptr<const Chunk>> chunks_;
     Grid<std::shared_ptr<const Column>> columns_;
     Grid<std::shared_ptr<const LightChunk>> light_;
+    Grid<std::shared_ptr<const std::set<int>>> lightColumns_;
     Grid<bool> invalidLight_;
     uint64_t epoch_ = 1, revision_ = 0;
 };

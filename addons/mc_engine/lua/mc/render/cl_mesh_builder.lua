@@ -16,11 +16,18 @@ end
 
 local function build( key, sectionIndex, lightOnly )
 	local world = MC.NativeChunkBackend
-	if world and world.IsActive() and not world.IsLightReady( key, sectionIndex ) then return "deferred" end
 	local native = MC.NativeL2
+	local deferLighting = not lightOnly and sectionIndex ~= nil and MC.MeshSections[key] ~= nil
+		and world and world.IsActive() and native and native.IsActive() and native.deferredLightingAvailable
+	local lightPending = world and world.IsActive() and not world.IsLightReady( key, sectionIndex )
+	if lightPending and not deferLighting then return "blocked" end
 	if native and native.IsActive() then
 		if native.IsPending( key, sectionIndex ) then return "pending" end
 		if not native.CanBuild() then return "deferred" end
+		if lightOnly and native.TryRelight then
+			local result = native.TryRelight( key, sectionIndex )
+			if result ~= nil then return result end
+		end
 	end
 	local started, perf = SysTime(), RM.newMeshPerfStats()
 	local probe = RM.meshEmitProbeEnabled()
@@ -72,6 +79,7 @@ local function build( key, sectionIndex, lightOnly )
 			local ok
 			ok, err = pcall( function()
 				ctx = RM.NewBuildContext( key, sectionIndex, chunk, perf, probe, "l2", started, nil, snapshots, lightOnly )
+				ctx.nativeDeferLighting, ctx.nativeLightPending = deferLighting == true, lightPending == true
 				local loopStart = SysTime()
 				RM.withIsolatedRawLighting( ctx.bxo, ctx.byo, ctx.bzo, function()
 					for index = sectionIndex or 1, sectionIndex or Snapshot.SECTION_COUNT do
@@ -136,6 +144,9 @@ local function build( key, sectionIndex, lightOnly )
 			local section = { l2 = true, chunk = chunk, blockSize = ctx.blockSize, worldGeneration = MC.StateWorldGeneration,
 				opaque = opaqueList, translucent = translucentList,
 				bounds = SectionCull.SectionBounds( index, ctx.blockSize, opaqueList, translucentList ) }
+			if ctx.nativeTopology then
+				section.nativeRecipes, section.nativeWorldHandle = native.cubeRevision, ctx.nativeWorldHandle
+			end
 			MC.MeshSections[key][index] = section
 			-- Ownership transfers before any retirement/diagnostic call can throw.
 			ctx.sectionBuffers[index].published = true

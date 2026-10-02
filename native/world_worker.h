@@ -16,7 +16,7 @@ struct LightCompletion {
 struct LightWorkerStats {
     uint64_t submitted = 0, completed = 0, failed = 0, cancelled = 0;
     bool busy = false, running = false, ready = false;
-    double computeMS = 0;
+    double computeMS = 0, diffMS = 0;
 };
 // One bounded light job per world. Edits are coalesced by the owning session;
 // workers never inspect live Store state or schedule Lua/engine work.

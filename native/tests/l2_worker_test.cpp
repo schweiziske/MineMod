@@ -155,6 +155,75 @@ void voxels() {
     check(cancelled->parts.empty(), "cancelled voxel expansion touched snapshot");
     std::cout << "L2 voxels: visibility, sparse freeze, adjacent cubes, mixed groups, splitting, transforms and empty results passed\n";
 }
+void relighting() {
+    WorkerPool pool;
+    pool.start(2);
+    auto in = input(5);
+    auto second = in->parts[0][0];
+    second.geometry.face = 2;
+    second.command.tint = 3;
+    in->parts.emplace_back(3, second);
+    prefetch(second.geometry, second.command, in->snapshot);
+    in->retainLighting = true;
+    const auto id = pool.submit(std::move(in));
+    wait(pool, id);
+    auto result = pool.ready(id);
+    check(result->error.empty() && !result->relight, "retained geometry failed");
+    int origin[3]{}, dims[3] = {5,5,5};
+    const auto changed = [](void*, int, int, int) -> Cell {
+        check(std::this_thread::get_id() == mainThread, "relight called live reader");
+        return {1048576u + 0xb7u, 0.6f};
+    };
+    auto light = std::make_unique<Input>(Snapshot(origin, dims, changed, nullptr));
+    std::vector<LightQuad> expected;
+    for (const auto& part : result->parts) {
+        check(part.lighting && part.lighting->size() == part.quads.size(), "lost lighting recipe");
+        light->relight.push_back(part.lighting);
+        for (const auto& work : *part.lighting) {
+            Template geometry;
+            Command command;
+            static_cast<LightTemplate&>(geometry) = work.geometry;
+            static_cast<LightCommand&>(command) = work.command;
+            prefetch(geometry, command, light->snapshot);
+            const auto full = evaluate(geometry, command, light->snapshot, 0);
+            expected.push_back({{full.pixels[0], full.pixels[1], full.pixels[2], full.pixels[3]}, full.occlusion});
+        }
+    }
+    // Retained recipes must outlive the source job and its geometry buffers.
+    pool.cancel(id);
+    result.reset();
+    pool.stop();
+    pool.start(2);
+    const auto lightId = pool.submit(std::move(light));
+    wait(pool, lightId);
+    result = pool.ready(lightId);
+    check(result->error.empty() && result->relight && result->parts.size() == 2, "relight failed");
+    size_t q = 0;
+    for (const auto& part : result->parts) {
+        check(part.quads.empty() && !part.lighting, "relight regenerated/retained geometry");
+        for (size_t i = 0; i < part.occlusion.size(); ++i, ++q) {
+            check(part.occlusion[i] == expected[q].occlusion, "relight AO mismatch");
+            for (unsigned c = 0; c < 4; ++c)
+                check(part.pixels[i * 4 + c] == expected[q].pixels[c], "relight pixel mismatch");
+        }
+    }
+    check(q == 8 && result->sectionVoxels == 0 && result->sectionQuads == 0, "relight expanded instances");
+    check(pool.stats().relightJobs == 1 && pool.stats().relightQuads == 8, "relight statistics");
+    pool.cancel(lightId);
+    result.reset();
+    pool.stop();
+    check(pool.stats().bytes == 0, "completed relight disposal leaked");
+    auto bad = input(1);
+    bad->relight.push_back(nullptr);
+    bool rejected = false;
+    try { bad->reservation(); } catch (const std::exception&) { rejected = true; }
+    check(rejected, "mixed relight input accepted");
+    bad->parts.clear();
+    rejected = false;
+    try { bad->reservation(); } catch (const std::exception&) { rejected = true; }
+    check(rejected, "null relight part accepted");
+    std::cout << "L2 relight: exact pixels/AO, unchanged geometry, split parts, lifetime and cancellation passed\n";
+}
 void run() {
     WorkerPool pool;
     pool.start(4);
@@ -212,6 +281,6 @@ void run() {
 }
 }
 int main() {
-    try { run(); voxels(); return 0; }
+    try { run(); voxels(); relighting(); return 0; }
     catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }
