@@ -266,8 +266,8 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		return buffers, index
 	end
 
-	local function flush( buf )
-		if buf.nv == 0 then return end
+	local nativeParts = {}
+	local function uploadPart( buf )
 		local vertexCount = buf.nv
 		local entry = MC.RenderPackGeometry.Upload( buf, meshPerf )
 		buf.list[#buf.list + 1] = entry
@@ -290,6 +290,17 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			meshPerf.translucentVerts = meshPerf.translucentVerts + vertexCount
 		else
 			meshPerf.opaqueVerts = meshPerf.opaqueVerts + vertexCount
+		end
+	end
+
+	local function flush( buf )
+		if buf.nv == 0 then return end
+		if buf.nativeL2 then
+			local part = {}
+			for field, value in pairs( buf ) do part[field] = value end
+			nativeParts[#nativeParts + 1] = part
+		else
+			uploadPart( buf )
 		end
 		buf.verts = VertexBuffer.New()
 		buf.pixels = {}
@@ -369,6 +380,9 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		l2 = true,
 		blockSize = slice.blockSize,
 		nativeL2 = slice.nativeL2,
+		nativeSlice = slice,
+		nativeParts = nativeParts,
+		uploadNativePart = uploadPart,
 	}
 
 	ctx.styleForBuffer = styleForBuffer
@@ -405,8 +419,10 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	ctx.flushSectionBuffers = flushSectionBuffers
 	function ctx.discardSectionBuffers( report )
 		for index, buffers in pairs( sectionBuffers ) do
-			destroySectionMeshList( buffers.opaque.list, report )
-			destroySectionMeshList( buffers.translucent.list, report )
+			if not buffers.published then
+				destroySectionMeshList( buffers.opaque.list, report )
+				destroySectionMeshList( buffers.translucent.list, report )
+			end
 			sectionBuffers[index] = nil
 		end
 	end

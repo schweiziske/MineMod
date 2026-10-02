@@ -9,6 +9,10 @@ local reported = false
 local function checkNativeRequest()
 	local active, reason
 	if MC.NativeL2 then active, reason = MC.NativeL2.SetEnabled( enabled:GetBool() ) end
+	if active == nil and reason then
+		MC.Fault( "native_mesh_switch_failed", "%s; previous world ownership retained", reason )
+		return
+	end
 	if not enabled:GetBool() then
 		reported = false
 		return

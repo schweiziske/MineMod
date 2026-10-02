@@ -75,7 +75,7 @@ function Visibility.New( chunk, blockSections, perf )
 			local denseSlot = snapshot.slots[key]
 			if denseSlot then state = snapshot.states[denseSlot] else state = 0 end
 			perf.visibilitySnapshotReads = ( perf.visibilitySnapshotReads or 0 ) + 1
-		elseif lx >= 0 and lx < C.CS and ly >= 0 and ly < C.CS and lz >= 0 and lz < C.CH then
+		elseif not chunk.nativeStateStorage and lx >= 0 and lx < C.CS and ly >= 0 and ly < C.CS and lz >= 0 and lz < C.CH then
 			if not stateSections or not getState then
 				return fail( "state_storage_unavailable", bx, by, bz )
 			end

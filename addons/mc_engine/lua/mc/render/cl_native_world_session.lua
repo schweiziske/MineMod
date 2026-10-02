@@ -1,11 +1,9 @@
--- Takeover protocol 1. P0/P1 sessions are explicit development copies; they
--- never register an active chunk/terrain backend or disable Lua lighting.
+-- Persistent world protocol. Render packs still own materials and stages.
 MC = MC or {}
-local T = { PROTOCOL = 1 }
+local T = MC.NativeTakeover or {}
+T.PROTOCOL = 2
 MC.NativeTakeover = T
-local floor, char, concat = math.floor, string.char, table.concat
-local FIELDS = { "emission", "dampening", "emissive", "shade", "viewBlocking", "solidRender", "fullCollision",
-	"skyPass", "shapeOcclusion", "dynamicShape", "viewContext", "collisionContext" }
+local floor, char, byte, concat = math.floor, string.char, string.byte, table.concat
 
 function T.Probe()
 	local module = mcmesh
@@ -20,13 +18,24 @@ end
 
 function T.GetStatus()
 	local caps, reason = T.Probe()
-	local sync = MC.NativeL2 and MC.NativeL2.IsActive() == true
+	local mesh = MC.NativeL2 and MC.NativeL2.IsActive() == true
+	local active = T.active ~= nil
+	local terrain = active and mesh and MC.NativeL2.worldAvailable == true
+		and caps ~= nil and caps.terrainWorker == 1
 	local status = {
-		mode = sync and "native_l2_sync" or "lua_l2", fullTakeover = false,
-		worldBackend = "lua", worldLightBackend = "lua", meshExecution = sync and "native_sync_lua_scheduler" or "lua_sync",
+		mode = active and "native_world_l2" or ( mesh and "native_l2_async" or "lua_l2" ),
+		fullTakeover = false, worldBackend = active and "native" or "lua",
+		worldLightBackend = active and "native_worker" or "lua",
+		meshExecution = terrain and "native_world_workers_lua_sections"
+			or ( mesh and "native_workers_lua_sections" or "lua_sync" ),
+		terrainBackend = terrain and "native_models_lua_specials" or "lua",
 		atlasUploader = "lua", capabilities = caps, reason = reason,
 	}
-	if caps then status.reason = "P0/P1 development sessions; async terrain, native atlas, relight and multiview are pending" end
+	if caps then
+		status.reason = terrain and "Native world/model workers; special emitters, scheduling and GPU publication remain Lua"
+			or ( active and "Native world active; direct terrain worker inactive" or "persistent Native world inactive" )
+	end
+	if T.active then status.world = T.active.handle:GetStats() end
 	if T.development then status.development = T.development.handle:GetStats() end
 	return status
 end
@@ -34,61 +43,169 @@ end
 local function u32( value )
 	return char( value % 256, floor( value / 256 ) % 256, floor( value / 65536 ) % 256, floor( value / 16777216 ) % 256 )
 end
+local function integer( value, maximum )
+	return type( value ) == "number" and value >= 0 and value <= maximum and value == floor( value )
+end
+
+local function renderClass( stateId, visual, bx, by, bz )
+	if stateId == 0 then return 0 end
+	local id, full, translucent
+	if MC.ResolveBlockStateRenderClass then
+		id, full, translucent = MC.ResolveBlockStateRenderClass( stateId, bx, by, bz )
+	end
+	if id == nil then id = visual.id or visual.blockId end
+	if full == nil then full = MC.BlockVisualIsFullCube( visual, bx, by, bz ) end
+	if translucent == nil then translucent = MC.BlockVisualIsTranslucent( visual, bx, by, bz ) end
+	if not integer( id, 536870911 ) or full == nil or translucent == nil then return nil, "invalid render class" end
+	local block = MC.Blocks[id]
+	local transparent = translucent or block and block.transparent
+	local special = MC.BlockUsesSpecialVisualEmitter and MC.BlockUsesSpecialVisualEmitter( id )
+	return id * 8 + ( full and 1 or 0 ) + ( transparent and 2 or 0 ) + ( special and 4 or 0 )
+end
+
+-- Resolve at registration/mutation boundaries, never inside vertex loops.
+function T.ResolveProfile( stateId, bx, by, bz, envelope, baseOnly )
+	local p = MC.StateLighting.Get( stateId, bx, by, bz )
+	if not p then return nil, "missing lighting properties for state " .. stateId end
+	if not baseOnly and p.collisionContext ~= "none" then
+		local context = false
+		if MC.ResolveVanillaLightingContext then
+			context = MC.ResolveVanillaLightingContext( stateId, bx, by, bz, p.collisionContext, envelope )
+		elseif envelope then return nil, "live entity has no lighting-context resolver" end
+		if context == nil then return nil, "unknown lighting context" end
+		p = MC.StateLighting.Resolve( stateId, context )
+		if not p then return nil, "invalid lighting context" end
+	end
+	-- Air has pinned lighting, but no drawable block or visual descriptor.
+	local visual, err
+	local emission, opacity, class = 0, 0, 0
+	if stateId ~= 0 then
+		visual, err = MC.ResolveBlockStateVisual( stateId, bx, by, bz )
+		if not visual then return nil, "state visual " .. stateId .. ": " .. tostring( err ) end
+		emission = MC.BlockLightEmissionForState( stateId, bx, by, bz )
+		opacity = MC.BlockLightOpacityForState( stateId, bx, by, bz )
+		class, err = renderClass( stateId, visual, bx, by, bz )
+		if class == nil then return nil, err end
+	end
+	if not integer( emission, 15 ) or not integer( opacity, 15 )
+		or not integer( p.emission, 15 ) or not integer( p.dampening, 15 )
+		or type( p.shade ) ~= "number" or not ( p.shade >= 0 and p.shade <= 1 ) then
+		return nil, "invalid lighting scalars for state " .. stateId
+	end
+	local cost = math.max( 1, opacity )
+	if opacity >= 15 then cost = 16
+	elseif opacity > 2 and MC.Liquid then
+		local kind = MC.Liquid.DecodeState( stateId )
+		if kind == "water" then cost = 2 end
+	end
+	local word = p.emission * 256 + p.dampening * 4096
+		+ ( p.emissive and 65536 or 0 ) + ( p.viewBlocking and 131072 or 0 )
+		+ ( p.solidRender and 262144 or 0 ) + ( p.fullCollision and 524288 or 0 )
+	return { propagationEmission = emission, propagationOpacity = opacity, skyCost = cost,
+		l2Word = word, renderClass = class, shade = p.shade }, nil, p, visual
+end
 
 function T.BuildCatalog( revision )
-	local lighting = MC.VanillaStateLighting
-	if not ( lighting and lighting.ready and MC.BlockLightEmissionForState and MC.BlockLightOpacityForState
-		and MC.ResolveBlockStateVisual ) then return nil, "state lighting registry is not ready" end
-	if MC.BlockStateCount ~= lighting.stateCount then return nil, "custom states need a typed lighting catalog" end
-	local profiles, mapping, cache = {}, {}, {}
-	for stateId = 0, lighting.stateCount - 1 do
-		local profile = lighting.Get( stateId )
-		local visual, err = MC.ResolveBlockStateVisual( stateId, 0, 0, 0 )
-		if not visual then return nil, "state visual " .. stateId .. ": " .. tostring( err ) end
-		local resolver = visual.schema and MC.BlockStateVisualResolvers[visual.schema.name]
-		if ( resolver and resolver.positionDependent ) or visual.cacheable == false
-			or type( visual.lightEmission ) == "function" or type( visual.lightOpacity ) == "function" then
-			return nil, "state " .. stateId .. " requires typed position-dependent propagation inputs"
+	if not ( MC.StateLighting and MC.StateLighting.Prepare() and MC.ResolveBlockStateVisual
+		and MC.BlockLightEmissionForState and MC.BlockLightOpacityForState ) then
+		return nil, "state lighting registry is not ready"
+	end
+	if not integer( MC.BlockStateCount, 1048576 ) or MC.BlockStateCount == 0 then return nil, "invalid state count" end
+	local profiles, mapping, contextual, cache = {}, {}, {}, {}
+	local dynamicFields = { "fullCube", "hasCollision", "translucent", "lightEmission", "lightOpacity" }
+	for stateId = 0, MC.BlockStateCount - 1 do
+		local row, err, p, visual = T.ResolveProfile( stateId, 0, 0, 0, nil, true )
+		if not row then return nil, err end
+		local dynamic = false
+		if stateId ~= 0 then
+			local schema = visual.schema
+			local resolver = schema and MC.BlockStateVisualResolvers and MC.BlockStateVisualResolvers[schema.name]
+			local collision = schema and MC.BlockStateCollisionResolvers and MC.BlockStateCollisionResolvers[schema.name]
+			dynamic = visual.cacheable == false or resolver and resolver.positionDependent
+				or collision and collision.positionDependent
+			for i = 1, #dynamicFields do dynamic = dynamic or type( visual[dynamicFields[i]] ) == "function" end
+			-- Do not resolve a packet's neighbor-dependent properties against the old world.
+			if not MC.VanillaStateLighting.Contains( stateId )
+				and MC.BlockCollisionDependsOnNeighbours( visual.id ) then
+				return nil, "state " .. stateId .. " needs staged neighbor-dependent lighting"
+			end
 		end
-		local emission = MC.BlockLightEmissionForState( stateId, 0, 0, 0 )
-		local opacity = MC.BlockLightOpacityForState( stateId, 0, 0, 0 )
-		if type( emission ) ~= "number" or emission < 0 or emission > 15 or emission ~= floor( emission )
-			or type( opacity ) ~= "number" or opacity < 0 or opacity > 15 or opacity ~= floor( opacity ) then
-			return nil, "invalid propagation scalars for state " .. stateId
-		end
-		local variants = cache[profile]
-		if not variants then variants = {} cache[profile] = variants end
-		local key = emission * 16 + opacity
-		local index = variants[key]
+		contextual[stateId + 1] = char( stateId ~= 0 and ( dynamic or p.collisionContext ~= "none" ) and 1 or 0 )
+		local key = concat( { row.propagationEmission, row.propagationOpacity, row.skyCost,
+			row.l2Word, row.renderClass, string.format( "%.17g", row.shade ) }, ":" )
+		local index = cache[key]
 		if index == nil then
-			local row = { propagationEmission = emission, propagationOpacity = opacity }
-			for i = 1, #FIELDS do local field = FIELDS[i] row[field] = profile[field] end
 			index = #profiles
-			profiles[index + 1], variants[key] = row, index
+			profiles[index + 1], cache[key] = row, index
 		end
 		mapping[stateId + 1] = u32( index )
 	end
-	return { formatVersion = 1, revision = revision or 1, schemaHash = lighting.schemaHash,
-		stateCount = lighting.stateCount, profiles = profiles, stateProfiles = concat( mapping ) }
+	return { formatVersion = 2, revision = revision or 1, stateCount = MC.BlockStateCount,
+		profiles = profiles, stateProfiles = concat( mapping ), contextual = concat( contextual ) }
 end
 
 local Session = {}
 Session.__index = Session
-function Session:Version( revision )
-	local version, err = self.handle:Version()
-	if not version then return nil, err end
-	if revision ~= nil then version.revision = revision end
-	return version
+function Session:Version()
+	return self.handle:Version()
 end
-function Session:ApplyBatch( batch, revision )
-	local version, err = self:Version( revision )
+function Session:ApplyBatch( batch )
+	local version, err = self:Version()
 	if not version then return nil, err end
 	return self.handle:ApplyBatch( version, batch )
 end
-function Session:StartBinarySection( payload, metadata, revision )
-	local version, err = self:Version( revision )
+function Session:StartBinarySection( payload, metadata )
+	local version, err = self:Version()
 	if not version then return nil, err end
 	return self.handle:StartBinaryDecode( version, payload, metadata )
+end
+function Session:ContextEdits( chunk, cells, entities )
+	local contexts = {}
+	for i = 1, #cells, 2 do
+		local li, stateId = cells[i], cells[i + 1]
+		if byte( self.catalog.contextual, stateId + 1 ) == 1 then
+			local lx, ly, lz = li % MC.CS, floor( li / MC.CS ) % MC.CS, floor( li / ( MC.CS * MC.CS ) )
+			local value, err = T.ResolveProfile( stateId, chunk.cx * MC.CS + lx, chunk.cy * MC.CS + ly,
+				chunk.cz * MC.CH + lz, entities and entities[li] )
+			if not value then return nil, err end
+			value.index = li
+			contexts[#contexts + 1] = value
+		end
+	end
+	return contexts
+end
+function Session:CommitBinarySection( id, include, ready )
+	if not ready then
+		local err
+		ready, err = self.handle:PollBinaryDecode( id )
+		if not ready then return nil, err end
+	end
+	if ready.status ~= "ready" then return nil, "binary decode is not ready" end
+	local contexts = {}
+	for _, index in ipairs( include ) do
+		local chunk = ready.chunks[index]
+		if not chunk then return nil, "invalid binary chunk selection" end
+		if #chunk.contextCells > 0 then
+			local entities = {}
+			if chunk.blockEntitiesJSON ~= "" then
+				local decoded = util.JSONToTable( chunk.blockEntitiesJSON )
+				if not decoded then return nil, "invalid block entity JSON" end
+				for _, entity in ipairs( decoded ) do
+					local li = entity.localIndex
+					if not integer( li, MC.CS * MC.CS * MC.CH - 1 ) or entities[li] then
+						return nil, "invalid block entity localIndex"
+					end
+					entities[li] = entity
+				end
+			end
+			local edits, err = self:ContextEdits( chunk, chunk.contextCells, entities )
+			if not edits then return nil, err end
+			contexts[#contexts + 1] = { op = "patch", cx = chunk.cx, cy = chunk.cy, cz = chunk.cz, contexts = edits }
+		end
+	end
+	local version, err = self:Version()
+	if not version then return nil, err end
+	return self.handle:CommitBinaryDecode( version, id, include, contexts )
 end
 function Session:Close()
 	local ok, err = self.handle:Close()
@@ -96,8 +213,7 @@ function Session:Close()
 	return ok, err
 end
 
--- One explicit import, through the public iterator. This is never called on
--- each terrain build, and never substitutes __index-only blocks/orients proxies.
+-- One import at ownership transfer, not on every terrain build.
 function Session:ImportWorld()
 	local batch, seen, imported = {}, {}, 0
 	local function flush()
@@ -108,41 +224,24 @@ function Session:ImportWorld()
 		return true
 	end
 	for key, chunk in pairs( MC.World ) do
-		local row = { op = "replace", cx = chunk.cx, cy = chunk.cy, cz = chunk.cz, cells = {}, contexts = {}, blockEntityCells = {} }
-		row.terrainPresent = chunk.count == 0
-		local invalid
+		local row = { op = "replace", cx = chunk.cx, cy = chunk.cy, cz = chunk.cz, cells = {},
+			terrainPresent = chunk.count > 0 }
 		MC.ForEachBlockState( chunk, function( bx, by, bz, lx, ly, lz, stateId )
 			local li = lx + MC.CS * ( ly + MC.CS * lz )
 			row.cells[#row.cells + 1], row.cells[#row.cells + 2] = li, stateId
-			local profile = MC.VanillaStateLighting.Get( stateId )
-			if profile.collisionContext ~= "none" then
-				local context = false
-				if MC.ResolveVanillaLightingContext then
-					context = MC.ResolveVanillaLightingContext( stateId, bx, by, bz, profile.collisionContext )
-				elseif chunk.blockEntities and chunk.blockEntities[li] then invalid = "live entity has no lighting-context resolver" end
-				if context == nil then invalid = "unknown lighting context at " .. bx .. "," .. by .. "," .. bz
-				elseif context ~= false then
-					row.contexts[#row.contexts + 1] = { index = li, kind = profile.collisionContext,
-						closed = context.closed, progress = context.progress, fullCollision = context.fullCollision }
-				end
-			end
 		end )
-		if invalid then return nil, invalid end
 		if #row.cells / 2 ~= chunk.count then return nil, "world iterator did not return the declared chunk contents" end
-		local entities = {}
-		for li, envelope in pairs( chunk.blockEntities or {} ) do
-			row.blockEntityCells[#row.blockEntityCells + 1] = li
-			entities[#entities + 1] = envelope
-		end
-		if #entities > 0 then row.blockEntitiesJSON = util.TableToJSON( entities ) end
+		local err
+		row.contexts, err = self:ContextEdits( chunk, row.cells, chunk.blockEntities )
+		if not row.contexts then return nil, err end
 		batch[#batch + 1], seen[key] = row, true
-		if #batch == 64 then local ok, err = flush() if not ok then return nil, err end end
+		if #batch == 64 then local ok, problem = flush() if not ok then return nil, problem end end
 	end
 	for key, loaded in pairs( MC.LoadedChunkKeys or {} ) do
 		if loaded and not seen[key] then
 			local cx, cy, cz = MC.ChunkKeyToCoords( key )
 			if cx == nil then return nil, "invalid loaded chunk key" end
-			batch[#batch + 1] = { op = "replace", cx = cx, cy = cy, cz = cz }
+			batch[#batch + 1] = { op = "replace", cx = cx, cy = cy, cz = cz, terrainPresent = false }
 			if #batch == 64 then local ok, err = flush() if not ok then return nil, err end end
 		end
 	end
@@ -151,53 +250,77 @@ function Session:ImportWorld()
 	return imported
 end
 
-function T.CreateDevelopmentSession( options, catalog )
-	local caps, reason = T.Probe()
-	if not caps then return nil, reason end
-	for _, key in ipairs( { "worldSession", "stateCatalog", "binarySection", "worldLighting", "l2Snapshot" } ) do
-		if caps[key] ~= 1 then return nil, "missing development capability: " .. key end
-	end
-	if not catalog then
-		catalog, reason = T.BuildCatalog( 1 )
-		if not catalog then return nil, reason end
-	end
+function T.WorldConfig( options )
 	options = options or {}
 	local transport = MC.StateNetworkTransport
-	local config = { protocol = 1, chunkSize = MC.CS, chunkHeight = MC.CH, sectionSize = MC.RENDER_SECTION_SIZE,
-		coordinateSpace = "mc:block", blockSize = MC.API.Coords.BlockSize(), worldGeneration = options.worldGeneration or 0,
+	local config = { protocol = 2, chunkSize = MC.CS, chunkHeight = MC.CH, sectionSize = MC.RENDER_SECTION_SIZE,
+		coordinateSpace = "mc:block", blockSize = MC.API.Coords.BlockSize(),
 		streaming = MC.HttpChunkSync ~= nil or ( transport ~= nil and transport.streaming == true ),
-		maxChunks = options.maxChunks, maxLightChunks = options.maxLightChunks }
+		skyEnabled = not MC.SkyFloodEnabled or MC.SkyFloodEnabled(),
+		maxChunks = options.maxChunks, maxLightChunks = options.maxLightChunks, maxLightBytes = options.maxLightBytes }
 	if transport and transport.streaming and not MC.HttpChunkSync then
 		config.minChunkZ, config.maxChunkZ = transport.streamMinCZ, transport.streamMaxCZ
 	end
-	if options.streaming ~= nil then config.streaming = options.streaming end
-	if options.minChunkZ ~= nil then config.minChunkZ = options.minChunkZ end
-	if options.maxChunkZ ~= nil then config.maxChunkZ = options.maxChunkZ end
+	for _, key in ipairs( { "streaming", "minChunkZ", "maxChunkZ", "skyEnabled" } ) do
+		if options[key] ~= nil then config[key] = options[key] end
+	end
+	return config
+end
+function T.CreateSession( options, catalog )
+	local caps, reason = T.Probe()
+	if not caps then return nil, reason end
+	for _, key in ipairs( { "worldSession", "stateCatalog", "binarySection", "worldLighting", "l2Snapshot" } ) do
+		if caps[key] ~= 1 then return nil, "missing world capability: " .. key end
+	end
+	if not catalog then
+		catalog, reason = T.BuildCatalog()
+		if not catalog then return nil, reason end
+	end
+	local config = T.WorldConfig( options )
 	local handle, err = mcmesh.CreateWorldSession( config, catalog )
 	if not handle then return nil, err end
-	return setmetatable( { handle = handle }, Session )
+	return setmetatable( { handle = handle, catalog = catalog, config = config }, Session )
 end
+T.CreateDevelopmentSession = T.CreateSession
+-- Existing userdata stays owned across Lua auto-refresh; replace only its methods.
+if T.development then setmetatable( T.development, Session ) end
+if T.active then setmetatable( T.active, Session ) end
 
-if hook then hook.Add( "ShutDown", "mc_native_world_sessions", function()
+if hook then
+hook.Add( "Think", "mc_native_development_light", function()
+	local session = T.development
+	if not session or not session.lightPending then return end
+	local result, err = session.handle:Pump()
+	if not result then
+		session.lightPending = nil
+		MC.Fault( "native_session_light", "%s", tostring( err ) )
+		return
+	end
+	session.lightPending = result.pending
+	session.lightResult = result
+end )
+hook.Add( "ShutDown", "mc_native_world_sessions", function()
 	if T.development then T.development:Close() end
-end ) end
+	if T.active then T.active:Close() T.active = nil end
+end )
+end
 
 if concommand then
 	concommand.Add( "mc_native_session_begin", function()
 		if T.development then T.development:Close() end
-		local session, err = T.CreateDevelopmentSession()
+		local session, err = T.CreateSession()
 		if not session then MC.Fault( "native_session_init", "%s", tostring( err ) ) return end
 		local imported
 		imported, err = session:ImportWorld()
 		if not imported then session:Close() MC.Fault( "native_session_import", "%s", tostring( err ) ) return end
 		T.development = session
-		print( "[MC Native] imported " .. imported .. " chunks into an independent development session; active world/lighting/terrain ownership is unchanged" )
+		print( "[MC Native] imported " .. imported .. " chunks into an independent development session; active ownership is unchanged" )
 	end )
 	concommand.Add( "mc_native_session_light", function()
 		if not T.development then print( "[MC Native] run mc_native_session_begin first" ) return end
-		local result, err = T.development.handle:RebuildLighting()
+		local result, err = T.development.handle:RequestLighting()
 		if not result then MC.Fault( "native_session_light", "%s", tostring( err ) ) return end
-		PrintTable( result )
+		T.development.lightPending = true
 	end )
 	concommand.Add( "mc_native_session_close", function() if T.development then T.development:Close() end end )
 end

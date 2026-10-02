@@ -1227,7 +1227,7 @@ emitFullCubeBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, 
 	local directEmitCheapFullCube = directionalEmit or not shouldStoreBlockEmissionCache( "fullCube", directEmitVertexCount )
 	if directEmitCheapFullCube then meshPerf.fullDirectBlocks = meshPerf.fullDirectBlocks + 1 end
 	if directEmitCheapFullCube then
-		if targetBuffer.nv + directEmitVertexCount >= C.VERT_LIMIT then flush( targetBuffer ) end
+		if not ctx.nativeRecipe and targetBuffer.nv + directEmitVertexCount >= C.VERT_LIMIT then flush( targetBuffer ) end
 		ctx.setCur( targetBuffer )
 	else
 		ctx.prepareBlockCacheBuffer( targetBuffer )
@@ -1293,6 +1293,123 @@ BlockEmitters.statePlan = emitStatePlanBlockRecord
 BlockEmitters.liquid = emitLiquidBlockRecord
 BlockEmitters.fullCube = emitFullCubeBlockRecord
 BlockEmitters.shape = emitShapeBlockRecord
+
+-- Compile only state-invariant, opaque direct cubes. Other emitters retain
+-- their existing Lua semantics until their worker recipes are implemented.
+function RM.NativeCubeRecipe( stateId )
+	local visual = MC.ResolveBlockStateVisual( stateId, 0, 0, 0 )
+	if not visual then return false end
+	local b, id = visual.block, visual.id
+	local name = visual.schema and visual.schema.name
+	if visual.cacheable == false or visual.generatedVisualOverride
+		or ( name and MC.BlockStateVisualResolvers and MC.BlockStateVisualResolvers[name] )
+		or ( name and MC.BlockStateCollisionResolvers and MC.BlockStateCollisionResolvers[name] )
+		or b ~= MC.Blocks[id] or b.transparent or b.shape == "model" or b.shape == "cross"
+		or specialEmitterForBlock( b ) or isLiquidBlock( id )
+		or ( isWaterloggedState and isWaterloggedState( stateId ) )
+		or not MC.BlockVisualIsFullCube( visual, 0, 0, 0 )
+		or MC.BlockVisualIsTranslucent( visual, 0, 0, 0 ) then return false end
+	for _, field in ipairs( { "faces", "fullCube", "translucent", "lightEmission" } ) do
+		if type( visual[field] ) == "function" then return false end
+	end
+	local slice = { blockSize = 1, nativeL2 = true }
+	local buffer = MC.RenderL2Quad.NewBuffer( slice )
+	buffer.directional = true
+	local ctx = { l2 = true, nativeRecipe = true, currentVisual = visual, currentStateId = stateId,
+		meshPerf = RM.newMeshPerfStats(), meshProbe = false }
+	ctx.setCur = function() end
+	ctx.fullCubeBuffer = function() return buffer end
+	ctx.currentEmitLightStyle = function() return "l2" end
+	ctx.flush = function() error( "cube recipe exceeded one batch", 0 ) end
+	ctx.emitL2 = function( quad, block, bx, by, bz, wx, wy, wz, emission )
+		MC.RenderL2Quad.EmitNative( slice, buffer, quad, block, bx, by, bz, wx, wy, wz, emission )
+	end
+	emitFullCubeBlockRecord( ctx, b, id, visual.renderOrient, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, buffer, 63, 6 )
+	local recipe, err = MC.NativeL2.module.CompileL2Cube( buffer.nativeCommands, id )
+	MC.RenderL2Resources.Require( recipe ~= nil, "native_l2_cube", tostring( err ) )
+	return { value = recipe, id = id }
+end
+
+function RM.NativeModelRecipe( stateId )
+	if meshDebugFullCubeOnly() then return false end
+	local visual = MC.ResolveBlockStateVisual( stateId, 0, 0, 0 )
+	if not visual or not MC.StateVisualPlanGroups or not MC.RenderL2Models then return false end
+	local b, id = visual.block, visual.id
+	local name = visual.schema and visual.schema.name
+	if visual.cacheable == false or b ~= MC.Blocks[id]
+		or ( name and MC.BlockStateVisualResolvers and MC.BlockStateVisualResolvers[name] )
+		or specialEmitterForBlock( b ) or isLiquidBlock( id )
+		or ( isWaterloggedState and isWaterloggedState( stateId ) ) then return false end
+	for _, field in ipairs( { "faces", "fullCube", "translucent", "lightEmission" } ) do
+		if type( visual[field] ) == "function" then return false end
+	end
+	local ctx = { currentVisual = visual, currentStateId = stateId }
+	local emitter = selectBlockEmitter( ctx, b, id, visual.renderOrient, MC.BlockIsFullCube, 0, 0, 0 )
+	if emitter ~= BlockEmitters.statePlan and emitter ~= BlockEmitters.model then return false end
+	local groups = MC.StateVisualPlanGroups( stateId )
+	if #groups == 0 then return false end
+	local models = MC.RenderL2Models
+	for _, group in ipairs( groups ) do
+		for _, alternative in ipairs( group.alternatives ) do
+			if not models.Has( alternative.model ) then return false end
+		end
+	end
+	local legacy, selected
+	if emitter == BlockEmitters.model then
+		local planId = MC.StateVisualPlanIdFast( stateId )
+		if MC.StateVisualPlanHasRandomChoice( planId ) then return false end
+		legacy = getModelTemplate( b, visual.renderOrient, stateId )
+		if not legacy then return false end
+		selected = models.Selection( stateId, 0, 0, 0 )
+		if not selected then return false end
+	end
+	local function capture( template, modelId, ao )
+		local selection = { n = 1, modelAO = ao }
+		if modelId then selection[1] = modelId
+		else
+			selection.n = selected.n
+			for i = 1, selected.n do selection[i] = selected[i] end
+		end
+		local slice = { blockSize = 1, nativeL2 = true, selections = { selection },
+			snapshot = { Index = function() return 1 end, Read = function() return { stateId = stateId, loaded = true } end } }
+		local buffer = MC.RenderL2Quad.NewBuffer( slice )
+		local culls = {}
+		for i = 1, template.n do
+			local quad = template[i]
+			local tint = quad.tintIndex and quad.tintIndex >= 0 and blockStateTintCode
+				and blockStateTintCode( stateId, id, quad.tintIndex ) or 0
+			local previous = buffer.quadCount
+			MC.RenderL2Quad.EmitNative( slice, buffer, quad, id, 0, 0, 0, 0, 0, 0, 0, tint,
+				modelId and MC.RenderLightBuffer.KIND.GENERATED or MC.RenderLightBuffer.KIND.MODEL, modelId )
+			if buffer.quadCount > previous then
+				culls[#culls + 1] = modelId and visual.cullGeneratedFaces ~= false and quad.faceCubic and quad.faceIndex or 0
+			end
+		end
+		return buffer.nativeCommands, culls
+	end
+	local packet = {}
+	if legacy then
+		local shaded, culls = capture( legacy, nil, true )
+		local flat = capture( legacy, nil, false )
+		packet[1] = { 0, { { 1, selected.modelAO, shaded, flat, culls } } }
+	else
+		for i, group in ipairs( groups ) do
+			local alternatives = {}
+			for j, alternative in ipairs( group.alternatives ) do
+				local modelId = alternative.model
+				local template = getGeneratedModelTemplate( stateVisualModelData( modelId ) )
+				if not template then return false end
+				local shaded, culls = capture( template, modelId, true )
+				local flat = capture( template, modelId, false )
+				alternatives[j] = { alternative.weight, models.Profile( modelId ).modelAO, shaded, flat, culls }
+			end
+			packet[i] = { group.salt, alternatives }
+		end
+	end
+	local recipe, err = MC.NativeL2.module.CompileL2Model( packet, id, string.match( b.name, "_leaves$" ) ~= nil )
+	MC.RenderL2Resources.Require( recipe ~= nil, "native_l2_model", tostring( err ) )
+	return { value = recipe, id = id, model = true, translucent = stateTranslucent( ctx, id, 0, 0, 0 ) }
+end
 
 local function emitSelectedBlock( emitter, ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer, visibleFaceMask, visibleFaceCount )
 	emitter = emitter or BlockEmitters.shape

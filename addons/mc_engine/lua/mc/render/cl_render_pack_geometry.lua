@@ -6,6 +6,7 @@ local R, P = MC.RenderL2Resources, MC.RenderPackResources
 local requireValue = R.Require
 G.PART_QUADS = math.floor( MC.RenderMeshConstants.VERT_LIMIT / 6 )
 G.MAX_PARTS, G.liveParts = 16384, G.liveParts or 0
+G.retired, G.retiredHead = G.retired or {}, G.retiredHead or 1
 
 local function allocate( count )
 	for i, range in ipairs( G.free ) do
@@ -42,10 +43,7 @@ function G.Retain( data )
 	return data
 end
 
-function G.Release( data, report )
-	requireValue( data.references > 0, "render_pack_geometry_refs", "releasing unowned geometry" )
-	data.references = data.references - 1
-	if data.references ~= 0 then return end
+local function destroy( data, report )
 	local ok, err = pcall( data.mesh.Destroy, data.mesh )
 	freeRange( data.firstQuad, data.quadCount )
 	G.liveParts = G.liveParts - 1
@@ -54,6 +52,29 @@ function G.Release( data, report )
 		local reportFault = report or MC.Fault
 		reportFault( "render_pack_mesh_destroy", tostring( err ) )
 	end
+end
+
+function G.Release( data, report )
+	requireValue( data.references > 0, "render_pack_geometry_refs", "releasing unowned geometry" )
+	data.deferRetirement = data.deferRetirement or G.deferRetirement
+	data.references = data.references - 1
+	if data.references ~= 0 then return end
+	if data.deferRetirement then G.retired[#G.retired + 1] = data
+	else destroy( data, report ) end
+end
+
+function G.PumpRetired( budget )
+	local faults = {}
+	local function report( code, message ) faults[#faults + 1] = { code, message } end
+	while G.retiredHead <= #G.retired do
+		if budget.attempts > 0 and budget.deadline and SysTime() >= budget.deadline then break end
+		local data = G.retired[G.retiredHead]
+		G.retired[G.retiredHead], G.retiredHead = false, G.retiredHead + 1
+		budget.attempts = budget.attempts + 1
+		destroy( data, report )
+	end
+	if G.retiredHead > #G.retired then G.retired, G.retiredHead = {}, 1 end
+	for _, fault in ipairs( faults ) do MC.Fault( fault[1], "%s", fault[2] ) end
 end
 
 local function declaration()
@@ -72,8 +93,13 @@ function G.Upload( buffer, perf )
 	requireValue( buffer.l2 and count > 0 and count == math.floor( count ) and count <= G.PART_QUADS,
 		"render_l2_buffer", "world upload requires a bounded native L2 buffer with independent AO" )
 	if buffer.nativeL2 then
-		requireValue( #buffer.nativeCommands == count * MC.NativeL2.COMMAND_STRIDE,
-			"render_l2_buffer", "Native L2 command count does not match its quads" )
+		if buffer.nativeVoxelPart then
+			requireValue( buffer.nativeJob ~= nil and buffer.nativePart ~= nil and buffer.quadCount == count,
+				"render_l2_buffer", "Native L2 worker part is missing its validated layout" )
+		else
+			requireValue( #buffer.nativeCommands == count * MC.NativeL2.COMMAND_STRIDE,
+				"render_l2_buffer", "Native L2 command count does not match its quads" )
+		end
 	else
 		requireValue( #buffer.pixels == count * 4 and buffer.occlusion and #buffer.occlusion == count,
 			"render_l2_buffer", "Lua L2 corner/AO count does not match its quads" )

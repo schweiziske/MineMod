@@ -25,9 +25,5 @@ addon.json
 maps/mc_void.bsp
 maps/mc_void.vmf
 .codex_sound_objects_26_2/
-_research/AVPBR
-_research/BSL
-_research/chun v2
-_research/iterationT
-_research/MinecraftFoundFootage-master
+_research
 testworld
