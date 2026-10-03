@@ -15,6 +15,8 @@ local manifest = {
 		local api = context.api
 		local block = requireResult( "block", api.Blocks.RegisterNamespaced( {
 			id = "mc_skybox:sky", disp = "天空方块", solid = true, transparent = false,
+			castsAmbientOcclusion = false,
+			castsShadow = false,
 			textures = { top = "light_blue_stained_glass", side = "light_blue_stained_glass", bottom = "light_blue_stained_glass" },
 			boxes = { { 0, 0, 0, 1, 1, 1 } }, hardness = 1.5,
 		} ) )

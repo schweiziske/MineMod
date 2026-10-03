@@ -138,6 +138,7 @@ local function partitionMatches( c, source, size )
 				"world meshes must be emitted in L2 format; restart the client after upgrading" )
 			for id in pairs( part.blockIds ) do
 				if part.request ~= ( c.bindingKeys[id] or "terrain" ) then return false end
+				if ( part.castsShadow ~= false ) ~= ( MC.Blocks[id].castsShadow ~= false ) then return false end
 			end
 		end
 	end
@@ -179,7 +180,8 @@ local function bindSection( c, transaction, source, chunk, size )
 				local entries = bound.passes[node.key]
 				if not entries then entries = {} bound.passes[node.key] = entries end
 				entries[#entries + 1] = { mesh = data.mesh, material = material,
-					vertexCount = data.quadCount * 6, bounds = part.bounds, direction = part.direction }
+					vertexCount = data.quadCount * 6, bounds = part.bounds, direction = part.direction,
+					castsShadow = part.castsShadow ~= false }
 				bound.draws = bound.draws + 1
 			end
 		end

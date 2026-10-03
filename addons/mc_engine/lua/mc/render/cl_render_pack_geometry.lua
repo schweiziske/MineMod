@@ -149,7 +149,7 @@ function G.Upload( buffer, perf )
 	return { l2 = true, resource = data, mesh = object, material = buffer.material,
 		nativeL2 = buffer.nativeL2, uploadedVertices = uploadedVertices,
 		request = buffer.request, stage = buffer.stage, blockIds = buffer.blockIds,
-		bounds = bounds, direction = buffer.direction }
+		bounds = bounds, direction = buffer.direction, castsShadow = buffer.castsShadow }
 end
 
 -- Results are staged first. A live section is updated in one render-thread
