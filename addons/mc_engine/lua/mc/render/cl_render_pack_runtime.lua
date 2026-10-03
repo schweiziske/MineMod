@@ -537,17 +537,11 @@ function L.Step()
 	L.ReportFaults()
 end
 
-local function processingContext( c, x, y, z, view )
-	return MC.RenderPackProcessing.Context( c.processing, c, x, y, z, view )
-end
-
 function L.BeginProcessing( x, y, z, view )
 	local c = L.active
 	if not c or not c.processing or not sameWorld( c ) then return true end
 	if c.processingRetryAt and SysTime() < c.processingRetryAt then return false end
-	local ok, result, err = pcall( function()
-		return MC.RenderPackProcessing.Run( c.processing, "begin", processingContext( c, x, y, z, view ) )
-	end )
+	local ok, result, err = pcall( MC.RenderPackProcessing.RunView, c.processing, "begin", c, x, y, z, view )
 	if not ok or not result then
 		MC.RenderPackProcessing.Invalidate( c.processing )
 		c.processingRetryAt = SysTime() + 1
@@ -566,8 +560,7 @@ function L.ProcessShadow( x, y, z, view, shadow )
 	local c = L.active
 	if not c or not c.processing then return shadow.target end
 	requireValue( sameWorld( c ) and not c.processingRetryAt, "render_processing_begin", "begin stage is unavailable" )
-	local context = processingContext( c, x, y, z, view )
-	local ok, err = MC.RenderPackProcessing.Run( c.processing, "shadowcomp", context, shadow )
+	local ok, err = MC.RenderPackProcessing.RunView( c.processing, "shadowcomp", c, x, y, z, view, shadow )
 	if not ok then error( err, 0 ) end
 	if not c.processing.definition.pipeline.exports.shadow_atlas then return shadow.target end
 	local output = MC.RenderPackProcessing.Export( c.processing, "shadow_atlas" )

@@ -302,9 +302,22 @@ std::unique_ptr<LightResult> rebuildLight(std::shared_ptr<const Snapshot> source
         if (cancelled.load(std::memory_order_relaxed)) return nullptr;
         auto& chunk = chunks[ci];
         const auto cc = chunk.coord;
+        std::array<bool, 6> knownNeighbors;
         for (int f = 0; f < 6; ++f) {
-            const auto found = byKey.find({cc.x + Offsets[f][0], cc.y + Offsets[f][1], cc.z + Offsets[f][2]});
+            const Coord key{cc.x + Offsets[f][0], cc.y + Offsets[f][1], cc.z + Offsets[f][2]};
+            const auto found = byKey.find(key);
             chunk.neighbors[f] = found == byKey.end() ? Missing : found->second;
+            knownNeighbors[f] = source->known(key);
+        }
+        // Exposure is a column threshold. Resolve the horizontal halo once, not
+        // through world/hash lookups for every cell and each of its six faces.
+        const unsigned stride = unsigned(cfg.chunkSize + 2);
+        std::array<int, 66 * 66> columnTops;
+        for (int y = -1; y <= cfg.chunkSize; ++y)
+        for (int x = -1; x <= cfg.chunkSize; ++x) {
+            const auto top = tops.find({cc.x * cfg.chunkSize + x, cc.y * cfg.chunkSize + y, 0});
+            columnTops[unsigned(x + 1) + stride * unsigned(y + 1)] =
+                top == tops.end() ? std::numeric_limits<int>::min() : top->second;
         }
         const Chunk* states = find(source->chunks, cc);
         for (unsigned li = 0; li < cfg.cellCount(); ++li) {
@@ -315,26 +328,30 @@ std::unique_ptr<LightResult> rebuildLight(std::shared_ptr<const Snapshot> source
             chunk.skyCost[li] = p.skyCost;
             if (p.emission) { enqueue(blockQueue, {ci, li, p.emission}); ++result->sources; }
             const auto pos = cfg.cellAt(cc, li);
-            if (!cfg.skyEnabled || exposed(pos)) {
+            const unsigned x = li % cfg.chunkSize, y = li / cfg.chunkSize % cfg.chunkSize;
+            const unsigned z = li / (cfg.chunkSize * cfg.chunkSize);
+            const unsigned column = x + 1 + stride * (y + 1);
+            const int top = columnTops[column];
+            if (!cfg.skyEnabled || pos.z > top) {
                 chunk.values[li] |= 0xf0;
-            } else {
+            } else if (p.skyCost < 15) {
                 // Seed from all exposed neighbors, including the cell just above a
                 // water/leaf column top and known sparse air outside this domain.
-                for (const auto& offset : Offsets) {
-                    if (exposed({pos.x + offset[0], pos.y + offset[1], pos.z + offset[2]}) && p.skyCost < 15) {
-                        const auto level = uint8_t(15 - p.skyCost);
-                        chunk.values[li] |= uint8_t(level << 4);
-                        enqueue(skyQueue, {ci, li, level});
-                        ++result->sources;
-                        break;
-                    }
+                if (((x + 1 < unsigned(cfg.chunkSize) || knownNeighbors[0]) && pos.z > columnTops[column + 1])
+                    || ((x > 0 || knownNeighbors[1]) && pos.z > columnTops[column - 1])
+                    || ((y + 1 < unsigned(cfg.chunkSize) || knownNeighbors[2]) && pos.z > columnTops[column + stride])
+                    || ((y > 0 || knownNeighbors[3]) && pos.z > columnTops[column - stride])
+                    || ((z + 1 < unsigned(cfg.chunkHeight) || knownNeighbors[4]) && pos.z + 1 > top)
+                    || ((z > 0 || knownNeighbors[5]) && pos.z - 1 > top)) {
+                    const auto level = uint8_t(15 - p.skyCost);
+                    chunk.values[li] |= uint8_t(level << 4);
+                    enqueue(skyQueue, {ci, li, level});
+                    ++result->sources;
                 }
             }
             // Unchanged chunks supply boundary light for incremental reflood.
             // Invalid chunks always belong to this build, so their old light
             // cannot seed a removed emitter or an opened/closed sky column.
-            const unsigned x = li % cfg.chunkSize, y = li / cfg.chunkSize % cfg.chunkSize;
-            const unsigned z = li / (cfg.chunkSize * cfg.chunkSize);
             if (x == 0 || y == 0 || z == 0 || x + 1 == unsigned(cfg.chunkSize)
                 || y + 1 == unsigned(cfg.chunkSize) || z + 1 == unsigned(cfg.chunkHeight)) {
                 unsigned block = chunk.values[li] & 15, sky = chunk.values[li] >> 4;
@@ -548,14 +565,25 @@ bool Store::publish(Grid<std::shared_ptr<const Chunk>> pending) {
     // Prepare invalidation too, so allocation failure cannot publish half a batch.
     auto invalid = invalidLight_;
     const int radius = (16 + config_.chunkSize - 1) / config_.chunkSize;
+    const int zRadius = (16 + config_.chunkHeight - 1) / config_.chunkHeight;
     for (const auto& entry : pending) {
+        const auto* before = find(chunks_, entry.first);
+        const auto* after = entry.second.get();
+        // Only exposure/domain changes can propagate down an entire column.
+        // Ordinary emission/attenuation edits have a bounded 15-level flood.
+        const bool wholeColumn = !before || !after
+            || before->terrainPresent != after->terrainPresent
+            || before->columnTops != after->columnTops;
         invalid[entry.first] = true;
         for (int y = -radius; y <= radius; ++y)
         for (int x = -radius; x <= radius; ++x) {
             const Coord key{entry.first.x + x, entry.first.y + y, 0};
             const auto column = lightColumns_.find(key);
             if (column == lightColumns_.end()) continue;
-            for (int z : *column->second) invalid[{key.x, key.y, z}] = true;
+            const auto& levels = *column->second;
+            auto begin = wholeColumn ? levels.begin() : levels.lower_bound(entry.first.z - zRadius);
+            const auto end = wholeColumn ? levels.end() : levels.upper_bound(entry.first.z + zRadius);
+            for (; begin != end; ++begin) invalid[{key.x, key.y, *begin}] = true;
         }
     }
     // All allocations precede publication. Transfer preallocated nodes instead

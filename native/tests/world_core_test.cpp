@@ -1,4 +1,5 @@
 #include "../world_core.h"
+#include <deque>
 #include <iostream>
 #include <random>
 #include <stdexcept>
@@ -68,6 +69,87 @@ void compareFull(Store& store) {
         const auto found = current->light.find(entry.first);
         check(found != current->light.end() && found->second->values == entry.second->values,
             "incremental propagation differs from full rebuild");
+    }
+}
+void compareScalarLight(Store& store) {
+    // Deliberately coordinate-based oracle: no cached exposure halo, chunk
+    // adjacency or incremental boundary seeds from the production worker.
+    const auto source = store.snapshot();
+    const auto& cfg = source->config;
+    const Coord offsets[] = {{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
+    Grid<int> tops;
+    Grid<uint8_t> values;
+    const int xy = (16 + cfg.chunkSize - 1) / cfg.chunkSize;
+    const int height = (16 + cfg.chunkHeight - 1) / cfg.chunkHeight;
+    Grid<bool> domain;
+    for (const auto& entry : source->chunks) {
+        for (unsigned li = 0; li < cfg.cellCount(); ++li) {
+            const auto cell = cfg.cellAt(entry.first, li);
+            if (!source->profile(cell).opacity) continue;
+            const Coord key{cell.x,cell.y,0};
+            const auto found = tops.find(key);
+            if (found == tops.end()) tops.emplace(key, cell.z);
+            else found->second = std::max(found->second, cell.z);
+        }
+        if (!entry.second->terrainPresent) continue;
+        for (int z = -height; z <= height; ++z)
+        for (int y = -xy; y <= xy; ++y)
+        for (int x = -xy; x <= xy; ++x) {
+            const Coord key{entry.first.x + x,entry.first.y + y,entry.first.z + z};
+            if (source->known(key)) domain[key] = true;
+        }
+    }
+    auto exposed = [&](Coord cell) {
+        if (!source->known(cfg.chunkAt(cell))) return false;
+        const auto top = tops.find({cell.x,cell.y,0});
+        return top == tops.end() || cell.z > top->second;
+    };
+    std::deque<Coord> blockQueue, skyQueue;
+    for (const auto& entry : domain) {
+        for (unsigned li = 0; li < cfg.cellCount(); ++li) {
+            const auto cell = cfg.cellAt(entry.first, li);
+            const auto& profile = source->profile(cell);
+            unsigned sky = 0;
+            if (!cfg.skyEnabled || exposed(cell)) sky = 15;
+            else if (profile.skyCost < 15) {
+                for (Coord offset : offsets) {
+                    if (exposed({cell.x + offset.x,cell.y + offset.y,cell.z + offset.z})) {
+                        sky = 15 - profile.skyCost;
+                        break;
+                    }
+                }
+            }
+            values[cell] = uint8_t(profile.emission | (sky << 4));
+            if (profile.emission) blockQueue.push_back(cell);
+            if (sky) skyQueue.push_back(cell);
+        }
+    }
+    auto flood = [&](std::deque<Coord>& queue, bool sky) {
+        while (!queue.empty()) {
+            const auto cell = queue.front();
+            queue.pop_front();
+            const unsigned current = sky ? values.at(cell) >> 4 : values.at(cell) & 15;
+            for (Coord offset : offsets) {
+                const Coord neighbor{cell.x + offset.x,cell.y + offset.y,cell.z + offset.z};
+                const auto found = values.find(neighbor);
+                if (found == values.end()) continue;
+                const auto& profile = source->profile(neighbor);
+                const int cost = sky ? profile.skyCost : profile.opacity >= 15 ? 16 : std::max(1, int(profile.opacity));
+                const int next = int(current) - cost;
+                const unsigned previous = sky ? found->second >> 4 : found->second & 15;
+                if (next <= int(previous)) continue;
+                found->second = sky ? uint8_t((found->second & 15) | (next << 4))
+                    : uint8_t((found->second & 0xf0) | next);
+                queue.push_back(neighbor);
+            }
+        }
+    };
+    flood(blockQueue, false);
+    flood(skyQueue, true);
+    check(source->light.size() == domain.size(), "scalar light domain mismatch");
+    for (const auto& entry : source->light) {
+        for (unsigned li = 0; li < cfg.cellCount(); ++li)
+            check(entry.second->values[li] == values.at(cfg.cellAt(entry.first, li)), "scalar light value mismatch");
     }
 }
 void storage() {
@@ -329,11 +411,109 @@ void incremental() {
         compareFull(store);
     }
 }
+void boundedInvalidation() {
+    auto cfg = small(true);
+    cfg.minChunkZ = -1000; cfg.maxChunkZ = 1000;
+    Store store(cfg, catalog());
+    std::vector<Mutation> rows;
+    for (int z : {-100, -1, 0, 1, 100}) {
+        auto row = cell(cfg, {0,0,z * cfg.chunkHeight + cfg.chunkHeight - 1}, 1);
+        rows.push_back(row);
+    }
+    store.apply(0, rows);
+    rebuild(store);
+    const auto farLight = store.snapshot()->light.at({0,0,100});
+    for (uint32_t state : {2u, 0u, 3u, 4u, 0u}) {
+        store.apply(store.revision(), {cell(cfg, {0,0,0}, state)});
+        const auto pending = store.snapshot();
+        check(!pending->invalidLight.count({0,0,100}) && !pending->invalidLight.count({0,0,-100}),
+            "bounded edit invalidated distant vertical light");
+        const auto result = rebuild(store);
+        check(result->scannedCells == 3 * cfg.cellCount(), "bounded edit scanned unrelated vertical chunks");
+        check(store.snapshot()->light.at({0,0,100}) == farLight, "bounded edit replaced distant immutable light");
+        compareFull(store);
+    }
+    // A later local edit must not be cleared by an in-flight local result.
+    std::atomic<bool> cancel{false};
+    store.apply(store.revision(), {cell(cfg, {0,0,0}, 2)});
+    auto pendingLight = rebuildLight(store.snapshot(), cancel);
+    store.apply(store.revision(), {cell(cfg, {0,0,0}, 0)});
+    const auto rejected = store.commit(*pendingLight);
+    check(rejected.committed == 0 && rejected.deferred == pendingLight->targets.size(),
+        "in-flight bounded light accepted an obsolete emitter");
+    check(!store.lightReady({0,0,0}), "in-flight result cleared a later bounded edit");
+    rebuild(store);
+    compareFull(store);
+    // A context can change attenuation without changing the column top.
+    auto context = cell(cfg, {0,0,0}, 2);
+    store.apply(store.revision(), {context});
+    rebuild(store);
+    context.cells.clear();
+    context.contexts = {{0, false, catalog()->states[1]}};
+    store.apply(store.revision(), {context});
+    check(!store.snapshot()->invalidLight.count({0,0,-100}), "bounded context edit invalidated distant column");
+    rebuild(store);
+    compareFull(store);
+    // Removing the actual roof must still invalidate the complete sky column.
+    store.apply(store.revision(), {cell(cfg, {0,0,403}, 0)});
+    check(store.snapshot()->invalidLight.count({0,0,-100}) != 0, "roof edit did not invalidate lower sky");
+    pendingLight = rebuildLight(store.snapshot(), cancel);
+    store.apply(store.revision(), {cell(cfg, {0,0,0}, 0)});
+    const auto roofRejected = store.commit(*pendingLight);
+    check(roofRejected.committed == 0 && roofRejected.deferred == pendingLight->targets.size(),
+        "local edit weakened in-flight column conflict checks");
+    check(!store.lightReady({0,0,-100}), "local edit lost pending distant roof invalidation");
+    rebuild(store);
+    compareFull(store);
+    Mutation unload; unload.kind = Mutation::Kind::Unload;
+    store.apply(store.revision(), {unload});
+    check(store.snapshot()->invalidLight.count({0,0,-100}) != 0, "streaming change used bounded invalidation");
+    rebuild(store);
+    compareFull(store);
+}
+void exposureOracle() {
+    for (int size : {1, 4, 16}) {
+        auto cfg = small(true);
+        cfg.chunkSize = cfg.sectionSize = size;
+        cfg.chunkHeight = size * 2;
+        cfg.minChunkZ = -10; cfg.maxChunkZ = 10;
+        Store store(cfg, catalog());
+        std::mt19937 random(123 + size);
+        std::vector<Mutation> rows;
+        for (Coord coord : {Coord{0,0,0}, Coord{-1,0,0}, Coord{0,1,0}, Coord{0,0,-1}, Coord{1,0,0}, Coord{0,0,1}}) {
+            Mutation row;
+            row.chunk = coord;
+            row.terrainPresent = coord.x != 1 && coord.z != 1;
+            if (row.terrainPresent) {
+                for (unsigned li = 0; li < cfg.cellCount(); ++li) {
+                    const auto state = random() % 8;
+                    if (state < 4) row.cells.push_back({li, uint32_t(state + 1)});
+                }
+            }
+            rows.push_back(std::move(row));
+        }
+        store.apply(0, rows);
+        rebuild(store);
+        compareScalarLight(store);
+        // Chunks outside stream height are implicit known air, even without a
+        // sparse record. The cached halo must retain that exposure boundary.
+        if (size <= 4) {
+            cfg.minChunkZ = cfg.maxChunkZ = 0;
+            store.reconfigure(cfg);
+            rebuild(store);
+            compareScalarLight(store);
+        }
+        cfg.skyEnabled = false;
+        store.reconfigure(cfg);
+        rebuild(store);
+        compareScalarLight(store);
+    }
+}
 }
 int main() {
     try {
         storage(); lighting(); streaming(); versions(); lightBaselinesAndColumns(); retainedGeometry();
-        configuration(); incremental();
+        configuration(); incremental(); boundedInvalidation(); exposureOracle();
         std::cout << "Persistent world: atomic batches, snapshots, streaming, water, incremental light, stale jobs and budgets passed\n";
         return 0;
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
