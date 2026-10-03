@@ -9,7 +9,7 @@ MC.RenderSnapshot = Snapshot
 Snapshot.VERSION = 1
 -- Bumped when the reverse slot map changed from chunk-local cell keys to
 -- section-local compact keys. Existing caches must be rebuilt after reload.
-Snapshot.INDEX_FORMAT = 3
+Snapshot.INDEX_FORMAT = 4
 local floor = math.floor
 local CS, CH = MC.CS, MC.CH
 local CS2 = CS * CS
@@ -43,6 +43,7 @@ local function resetIndex( chunk )
 	chunk.renderSectionIndexStoresStateId = true
 	chunk.renderSectionIndexFormat = Snapshot.INDEX_FORMAT
 	chunk.renderSectionIndexStorage = chunk.stateSections
+	chunk.renderSectionIndexEpoch = chunk.nativeStateStorage and chunk.nativeMeshEpoch or nil
 end
 
 local function indexCurrent( chunk )
@@ -50,6 +51,7 @@ local function indexCurrent( chunk )
 		and chunk.renderSectionBlocksReady ~= nil
 		and chunk.renderSectionIndexFormat == Snapshot.INDEX_FORMAT
 		and chunk.renderSectionIndexStorage == chunk.stateSections
+		and chunk.renderSectionIndexEpoch == ( chunk.nativeStateStorage and chunk.nativeMeshEpoch or nil )
 		and chunk.renderSectionIndexVersion == ( chunk.collisionVersion or 0 )
 end
 
@@ -63,6 +65,21 @@ function Snapshot.EnsureSection( chunk, sectionIndex )
 	if not indexCurrent( chunk ) then resetIndex( chunk ) end
 	if chunk.renderSectionBlocksReady[sectionIndex] then
 		return chunk.renderSectionBlocks[sectionIndex]
+	end
+	if chunk.nativeStateStorage then
+		local backend = MC.GetChunkBackend()
+		if not backend.native or not backend.GetSectionCells or backend.Epoch() ~= chunk.nativeMeshEpoch then
+			return nil, "native_section_storage_unavailable"
+		end
+		local cells, err = backend.GetSectionCells( chunk, sectionIndex )
+		if not cells then return nil, err end
+		local section = { indices = {}, states = {}, slots = {}, count = #cells / 2 }
+		for i = 1, #cells, 2 do
+			local li, slot = cells[i], ( i + 1 ) / 2
+			section.indices[slot], section.states[slot], section.slots[sectionSlotKey( li )] = li, cells[i + 1], slot
+		end
+		chunk.renderSectionBlocks[sectionIndex], chunk.renderSectionBlocksReady[sectionIndex] = section, true
+		return section
 	end
 	local stateSections = chunk.stateSections
 	local stateAPI = MC.StateSection
@@ -113,7 +130,7 @@ end
 
 function Snapshot.Prepare( chunk, sectionIndex )
 	if not chunk then return nil, "missing_chunk" end
-	if not chunk.stateStorageMigrated or chunk.nativeStateStorage then
+	if not chunk.stateStorageMigrated and not chunk.nativeStateStorage then
 		if not MC.MigrateChunkStateStorage then return nil, "state_migration_unavailable" end
 		local ok, err = MC.MigrateChunkStateStorage( chunk )
 		if not ok then return nil, err or "state_migration_failed" end
@@ -133,6 +150,7 @@ function Snapshot.UpdateCell( chunk, li, stateId, previousVersion )
 	if not chunk or not chunk.renderSectionBlocks then return end
 	if chunk.renderSectionIndexFormat ~= Snapshot.INDEX_FORMAT
 		or chunk.renderSectionIndexStorage ~= chunk.stateSections
+		or chunk.renderSectionIndexEpoch ~= ( chunk.nativeStateStorage and chunk.nativeMeshEpoch or nil )
 		or chunk.renderSectionIndexVersion ~= previousVersion then
 		resetIndex( chunk )
 		return

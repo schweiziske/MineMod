@@ -125,6 +125,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	local pagedAtlas = MC.AtlasPageCount and MC.AtlasPageCount() > 1 or false
 	local pagedTarget, pagedVertexCount
 	local directional = MC.MeshDirectionalCull and MC.MeshDirectionalCull:GetBool() or false
+	if MC.NativeL2 and MC.NativeL2.IsActive() then directional = false end
 	local directionalMin = MC.MeshDirectionalMinBlocks and MC.MeshDirectionalMinBlocks:GetInt() or 64
 
 	local function styleForBuffer()
@@ -194,19 +195,22 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		if cached then return cached end
 		local request = MC.RenderBlockBindings.Key( id )
 		local block = blocksById[id]
+		-- Grass remains a solid occluder, but its coplanar side overlay has
+		-- transparent texels. Collision/full-cube status is not alpha coverage.
+		local cutout = block.transparent == true or block.mcid == "minecraft:grass_block"
 		-- Registered definitions do not store fullCube; query the shape contract.
-		-- Grass still occludes light/neighbours, but its model has alpha-cutout
-		-- side overlays. The opaque shader would draw their transparent RGB.
-		local cutoutOverlay = block.mcid == "minecraft:grass_block"
 		local stage = root.translucent and "world_translucent" or
-			( not cutoutOverlay and blockIsFullCube( id ) and block.transparent ~= true and "world_opaque" or "world_cutout" )
-		local bucketKey = request .. "/" .. stage
+			( blockIsFullCube( id ) and not cutout and "world_opaque" or "world_cutout" )
+		local castsShadow = block.castsShadow ~= false
+		-- Shared materials may serve blocks with different shadow policies.
+		local bucketKey = request .. "/" .. stage .. ( castsShadow and "/shadow" or "/no_shadow" )
 		local buffer = root.buckets[bucketKey]
 		if not buffer then
 			buffer = Q.NewBuffer( slice )
 			buffer.owner, buffer.list, buffer.records = root, root.list, root.records
 			buffer.material, buffer.translucent = root.material, root.translucent
 			buffer.request, buffer.stage, buffer.blockIds = request, stage, {}
+			buffer.castsShadow = castsShadow
 			buffer.directional = root.directional and stage == "world_opaque"
 			root.buckets[bucketKey] = buffer
 		end
@@ -227,6 +231,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			buffer.owner, buffer.list, buffer.records = target.owner, target.list, target.records
 			buffer.material, buffer.translucent = target.material, false
 			buffer.request, buffer.stage, buffer.blockIds = target.request, target.stage, target.blockIds
+			buffer.castsShadow = target.castsShadow
 			buffer.direction = face
 			groups[face] = buffer
 		end
@@ -236,7 +241,8 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	local function bufferForPage( target, page )
 		if page == 0 then return target end
 		local root = target.owner
-		local bucketKey = target.request .. "/" .. target.stage .. "/page/" .. page
+		local bucketKey = target.request .. "/" .. target.stage
+			.. ( target.castsShadow and "/shadow" or "/no_shadow" ) .. "/page/" .. page
 		local buffer = root.buckets[bucketKey]
 		if not buffer then
 			local material, err = MC.AtlasPageMaterial( page, target.translucent )
@@ -247,6 +253,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			buffer.owner, buffer.list, buffer.records = root, root.list, root.records
 			buffer.material, buffer.translucent = material, target.translucent
 			buffer.request, buffer.stage, buffer.blockIds = target.request, target.stage, target.blockIds
+			buffer.castsShadow = target.castsShadow
 			buffer.directional = target.directional
 			root.buckets[bucketKey] = buffer
 		end
@@ -288,8 +295,8 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		return buffers, index
 	end
 
-	local function flush( buf )
-		if buf.nv == 0 then return end
+	local nativeParts = {}
+	local function uploadPart( buf )
 		local vertexCount = buf.nv
 		local entry = MC.RenderPackGeometry.Upload( buf, meshPerf )
 		buf.list[#buf.list + 1] = entry
@@ -305,6 +312,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			translucent = buf.translucent == true,
 			request = buf.request, stage = buf.stage,
 		}
+		if entry.resource.pixels then entry.resource.lightRecord = buf.records[#buf.records] end
 		meshPerf.vertices = meshPerf.vertices + vertexCount
 		meshPerf.faces = meshPerf.faces + math.floor( vertexCount / 6 )
 		meshPerf.meshes = meshPerf.meshes + 1
@@ -312,6 +320,17 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			meshPerf.translucentVerts = meshPerf.translucentVerts + vertexCount
 		else
 			meshPerf.opaqueVerts = meshPerf.opaqueVerts + vertexCount
+		end
+	end
+
+	local function flush( buf )
+		if buf.nv == 0 then return end
+		if buf.nativeL2 then
+			local part = {}
+			for field, value in pairs( buf ) do part[field] = value end
+			nativeParts[#nativeParts + 1] = part
+		else
+			uploadPart( buf )
 		end
 		buf.verts = VertexBuffer.New()
 		buf.pixels = {}
@@ -397,6 +416,9 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		l2 = true,
 		blockSize = slice.blockSize,
 		nativeL2 = slice.nativeL2,
+		nativeSlice = slice,
+		nativeParts = nativeParts,
+		uploadNativePart = uploadPart,
 		pagedAtlas = pagedAtlas,
 	}
 
@@ -446,8 +468,10 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	ctx.flushSectionBuffers = flushSectionBuffers
 	function ctx.discardSectionBuffers( report )
 		for index, buffers in pairs( sectionBuffers ) do
-			destroySectionMeshList( buffers.opaque.list, report )
-			destroySectionMeshList( buffers.translucent.list, report )
+			if not buffers.published then
+				destroySectionMeshList( buffers.opaque.list, report )
+				destroySectionMeshList( buffers.translucent.list, report )
+			end
 			sectionBuffers[index] = nil
 		end
 	end

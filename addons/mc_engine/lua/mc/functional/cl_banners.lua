@@ -13,12 +13,16 @@ local LIT_COLOR = { r = 255, g = 255, b = 255, a = 255 }
 local DEPTH_COLOR = { r = 255, g = 255, b = 255, a = 255 }
 local EMPTY_PATTERNS = {}
 
--- mesh.Position/Normal copy immediately; these never escape into retained meshes.
+-- Scratch vectors are copied by mesh.Position/Normal during template upload.
 local ppp, ppn, pnp, pnn = Vector(), Vector(), Vector(), Vector()
 local npp, npn, nnp, nnn = Vector(), Vector(), Vector(), Vector()
 local inverse = Vector()
 local basisTop, basisRight, basisNormal, basisDown = Vector(), Vector(), Vector(), Vector()
 local UP, bodyCenter = Vector( 0, 0, 1 ), Vector()
+local modelMatrix = Matrix()
+local matrixPushed = false
+local materialTint = Vector()
+local colourMaterials = {}
 
 local function setPoint( point, center, right, forward, up, x, y, z )
 	point.x = center.x + right.x * x + forward.x * y + up.x * z
@@ -31,9 +35,21 @@ local function inverseNormal( normal )
 	return inverse
 end
 
+local function colourMaterial( source, name )
+	-- IMesh:Draw ignores render.SetColorModulation. Keep tint on private
+	-- materials so PNG materials shared with other renderers stay untouched.
+	-- PNG imports have no VERTEXALPHA flag; adding it disables opaque Z writes.
+	colourMaterials[source] = CreateMaterial( "mc_banner_retained2_" .. name, "UnlitGeneric", {
+		["$basetexture"] = source:GetTexture( "$basetexture" ):GetName(),
+		["$alphatest"] = 1, ["$vertexcolor"] = 1, ["$nocull"] = 1,
+	} )
+end
+colourMaterial( BANNER_BODY, "body" )
 for _, patternName in ipairs( MC.BannerPatternNames or {} ) do
 	local pattern = MC.BannerPatternAssets[patternName]
-	BANNER_MATERIALS[patternName] = Material( "mc/entity/banner/" .. pattern.asset .. ".png", MATERIAL_FLAGS )
+	local material = Material( "mc/entity/banner/" .. pattern.asset .. ".png", MATERIAL_FLAGS )
+	BANNER_MATERIALS[patternName] = material
+	colourMaterial( material, pattern.asset )
 end
 
 local function emitVertex( position, u, v, color, normal )
@@ -102,48 +118,107 @@ local function bannerBasis( bx, by, bz, stateId, bs, renderCenter )
 	return basisTop, basisRight, basisNormal, UP, basisDown, wall
 end
 
-local function drawBody( topCenter, right, normal, up, wall, lightColor, bs, depthMaterial )
-	render.SetMaterial( depthMaterial or BANNER_BODY )
-	mesh.Begin( MATERIAL_QUADS, wall and 6 or 12 )
-	bodyCenter.x, bodyCenter.y = topCenter.x, topCenter.y
+local function buildBody( object, wall )
+	local right, normal = Vector( 1, 0, 0 ), Vector( 0, 1, 0 )
+	mesh.Begin( object, MATERIAL_QUADS, wall and 6 or 12 )
 	if not wall then
-		bodyCenter.z = topCenter.z - bs * 23 / 24
+		bodyCenter.z = -23 / 24
 		emitBox(
-			bodyCenter, right, normal, up,
-			bs / 24, bs / 24, bs * 21 / 24,
-			POLE_UV, lightColor
+			bodyCenter, right, normal, UP,
+			1 / 24, 1 / 24, 21 / 24,
+			POLE_UV, DEPTH_COLOR
 		)
 	end
-	bodyCenter.z = topCenter.z - bs / 24
+	bodyCenter.z = -1 / 24
 	emitBox(
-		bodyCenter, right, normal, up,
-		bs * 10 / 24, bs / 24, bs / 24,
-		BAR_UV, lightColor
+		bodyCenter, right, normal, UP,
+		10 / 24, 1 / 24, 1 / 24,
+		BAR_UV, DEPTH_COLOR
 	)
 	mesh.End()
 end
 
-local function drawFlagLayer( material, topCenter, right, normal, down, color, order, bs )
-	local halfWidth = bs * 10 / 24
-	local height = bs * 40 / 24
-	local thickness = bs / 48
-	local bias = math.max( 0, tonumber( order ) or 0 ) * 0.01
-	local offset = thickness + bias
-	render.SetMaterial( material )
-	mesh.Begin( MATERIAL_QUADS, 2 )
-	setPoint( ppp, topCenter, right, normal, down, -halfWidth, offset, 0 )
-	setPoint( ppn, topCenter, right, normal, down, halfWidth, offset, 0 )
-	setPoint( pnp, topCenter, right, normal, down, halfWidth, offset, height )
-	setPoint( pnn, topCenter, right, normal, down, -halfWidth, offset, height )
+local function buildFlag( object )
+	local top, right, normal, down = Vector(), Vector( 1, 0, 0 ), Vector( 0, 1, 0 ), UP
+	local halfWidth, height = 10 / 24, 40 / 24
+	mesh.Begin( object, MATERIAL_QUADS, 2 )
+	setPoint( ppp, top, right, normal, down, -halfWidth, 1, 0 )
+	setPoint( ppn, top, right, normal, down, halfWidth, 1, 0 )
+	setPoint( pnp, top, right, normal, down, halfWidth, 1, height )
+	setPoint( pnn, top, right, normal, down, -halfWidth, 1, height )
 	emitQuad( ppp, ppn, pnp, pnn,
-		1 / 64, 1 / 64, 21 / 64, 41 / 64, color, normal )
-	setPoint( ppp, topCenter, right, normal, down, halfWidth, -offset, 0 )
-	setPoint( ppn, topCenter, right, normal, down, -halfWidth, -offset, 0 )
-	setPoint( pnp, topCenter, right, normal, down, -halfWidth, -offset, height )
-	setPoint( pnn, topCenter, right, normal, down, halfWidth, -offset, height )
+		1 / 64, 1 / 64, 21 / 64, 41 / 64, DEPTH_COLOR, normal )
+	setPoint( ppp, top, right, normal, down, halfWidth, -1, 0 )
+	setPoint( ppn, top, right, normal, down, -halfWidth, -1, 0 )
+	setPoint( pnp, top, right, normal, down, -halfWidth, -1, height )
+	setPoint( pnn, top, right, normal, down, halfWidth, -1, height )
 	emitQuad( ppp, ppn, pnp, pnn,
-		22 / 64, 1 / 64, 42 / 64, 41 / 64, color, inverseNormal( normal ) )
+		22 / 64, 1 / 64, 42 / 64, 41 / 64, DEPTH_COLOR, inverseNormal( normal ) )
 	mesh.End()
+end
+
+local function releaseMeshes()
+	for _, object in pairs( MC.BannerRenderMeshes or {} ) do object:Destroy() end
+	MC.BannerRenderMeshes = nil
+end
+releaseMeshes()
+hook.Add( "ShutDown", "mc_banner_meshes", releaseMeshes )
+
+local bannerMeshes
+local function buildMeshes( objects )
+	buildBody( objects.standing, false )
+	buildBody( objects.wall, true )
+	buildFlag( objects.flag )
+end
+
+local function ensureMeshes()
+	if bannerMeshes then return end
+	local objects = { standing = Mesh( BANNER_BODY ), wall = Mesh( BANNER_BODY ), flag = Mesh( BANNER_BODY ) }
+	MC.BannerRenderMeshes = objects
+	local ok, err = pcall( buildMeshes, objects )
+	if not ok then releaseMeshes() error( err, 0 ) end
+	bannerMeshes = objects
+end
+
+local function setBasis( top, right, normal, up, bs, thickness )
+	modelMatrix:SetField( 1, 1, right.x * bs )
+	modelMatrix:SetField( 2, 1, right.y * bs )
+	modelMatrix:SetField( 3, 1, right.z * bs )
+	modelMatrix:SetField( 1, 2, normal.x * thickness )
+	modelMatrix:SetField( 2, 2, normal.y * thickness )
+	modelMatrix:SetField( 3, 2, normal.z * thickness )
+	modelMatrix:SetField( 1, 3, up.x * bs )
+	modelMatrix:SetField( 2, 3, up.y * bs )
+	modelMatrix:SetField( 3, 3, up.z * bs )
+	modelMatrix:SetTranslation( top )
+end
+
+local function drawMesh( object, material, color )
+	local tinted = colourMaterials[material]
+	if tinted then
+		materialTint.x, materialTint.y, materialTint.z = color.r / 255, color.g / 255, color.b / 255
+		tinted:SetVector( "$color", materialTint )
+		render.SetMaterial( tinted )
+	else
+		render.SetMaterial( material )
+	end
+	cam.PushModelMatrix( modelMatrix )
+	matrixPushed = true
+	object:Draw()
+	cam.PopModelMatrix()
+	matrixPushed = false
+end
+
+local function drawBody( topCenter, right, normal, up, wall, lightColor, bs, depthMaterial )
+	setBasis( topCenter, right, normal, up, bs, bs )
+	drawMesh( wall and bannerMeshes.wall or bannerMeshes.standing, depthMaterial or BANNER_BODY, lightColor )
+end
+
+local function drawFlagLayer( material, topCenter, right, normal, down, color, order, bs )
+	-- Keep the original Source-unit layer separation while scaling the cloth
+	-- in block units. Sway and re-origining only change this draw's matrix.
+	setBasis( topCenter, right, normal, down, bs, bs / 48 + order * 0.01 )
+	drawMesh( bannerMeshes.flag, material, color )
 end
 
 local function drawBanner( bx, by, bz, stateId, record, bs, renderCenter )
@@ -201,6 +276,7 @@ local function rebuildBannerRenderEntries()
 end
 
 local function drawBannerEntries( eye, bs, maxDistanceSqr, drawingDepth )
+	ensureMeshes()
 	local depthMaterial
 	if drawingDepth then depthMaterial = MC.RenderPBRSSR.DepthMaterial( BANNER_BODY, true ) end
 	for index = 1, BannerRenderCount do
@@ -239,6 +315,7 @@ local function drawBanners( drawingDepth, eye )
 	if render.PushFilterMin then render.PushFilterMin( TEXFILTER.POINT ) end
 	if render.PushFilterMag then render.PushFilterMag( TEXFILTER.POINT ) end
 	local ok, err = pcall( drawBannerEntries, eye, bs, maxDistanceSqr, drawingDepth )
+	if matrixPushed then cam.PopModelMatrix() matrixPushed = false end
 	if render.PopFilterMag then render.PopFilterMag() end
 	if render.PopFilterMin then render.PopFilterMin() end
 	if not ok then

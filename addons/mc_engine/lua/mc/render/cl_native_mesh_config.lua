@@ -9,6 +9,10 @@ local reported = false
 local function checkNativeRequest()
 	local active, reason
 	if MC.NativeL2 then active, reason = MC.NativeL2.SetEnabled( enabled:GetBool() ) end
+	if active == nil and reason then
+		MC.Fault( "native_mesh_switch_failed", "%s; previous world ownership retained", reason )
+		return
+	end
 	if not enabled:GetBool() then
 		reported = false
 		return
@@ -17,7 +21,7 @@ local function checkNativeRequest()
 	if reported then return end
 	reported = true
 	MC.Fault( "native_mesh_l2_unavailable",
-		"mc_native_mesh requests Native, but L2 is unavailable: %s; Lua L2 remains active; update the DLL or use mc_native_mesh 0",
+		"mc_native_mesh requests Native, but L2 is unavailable: %s; ownership unchanged; update the DLL or use mc_native_mesh 0",
 		reason or "Native L2 adapter did not load" )
 end
 

@@ -162,6 +162,7 @@ local CLIENT_FILES = {
 	"mc/render/cl_sun_shadow_sample.lua",
 	"mc/render/cl_entity_lighting.lua",
 	"mc/render/cl_atlas_profiles.lua",
+	"mc/render/cl_texture_pack_discovery.lua",
 	"mc/render/cl_mesh_materials.lua",
 	"mc/render/cl_mesh_global_lightmap.lua",
 	"mc/render/cl_mesh_light_samples.lua",
@@ -187,6 +188,7 @@ local CLIENT_FILES = {
 	"mc/render/cl_render_sky.lua",
 	"mc/render/cl_native_l2_backend.lua",
 	"mc/render/cl_native_world_session.lua",
+	"mc/render/cl_native_world_backend.lua",
 	"mc/render/cl_render_dynamic_lights.lua",
 	"mc/render/cl_render_shadow_math.lua",
 	"mc/render/cl_render_pbr.lua",
@@ -272,8 +274,9 @@ if SERVER then
 	for _, f in ipairs( SHARED ) do AddCSLuaFile( f ) end
 	for _, f in ipairs( CLIENT_FILES ) do AddCSLuaFile( f ) end
 	if resource and resource.AddFile then
-		-- Engine assets only: anything the world still needs when no game layer
-		-- is installed. Item icons, container GUI, HUD, mining cracks and their
+		-- Mounted assets the world needs without a game layer.
+		-- Pack JSON must also be installed on clients, as with shaderpacks.
+		-- Item icons, container GUI, HUD, mining cracks and their
 		-- sounds ship with mcgame_load.lua instead. sound/mc/random stays here
 		-- because it mixes block-break and engine-UI clips; the game layer may
 		-- reference engine assets, never the other way round.
@@ -287,7 +290,7 @@ if SERVER then
 			"materials/mc/atlas_365_programmer_art_translucent.png",
 			"materials/mc/atlas_365_programmer_art_translucent.vmt",
 		} ) do
-			resource.AddFile( fileName )
+			if file.Exists( fileName, "GAME" ) then resource.AddFile( fileName ) end
 		end
 		for _, fileName in ipairs( file.Find( "materials/mc/font/*.png", "GAME" ) or {} ) do
 			resource.AddFile( "materials/mc/font/" .. fileName )
@@ -508,7 +511,7 @@ else
 		FreeChunkMesh = MC.FreeChunkMesh,
 	}
 	MC.MeshBackends.native_l2 = {
-		name = "native_l2", native = true, async = false, layout = "mc:quad_corners_v1",
+		name = "native_l2", native = true, async = true, sectionAsync = true, layout = "mc:quad_corners_v1",
 		IsActive = MC.NativeL2.IsActive,
 		BuildChunkMesh = MC.BuildChunkMesh,
 		RebuildChunkMeshLighting = MC.RebuildChunkMeshLighting,

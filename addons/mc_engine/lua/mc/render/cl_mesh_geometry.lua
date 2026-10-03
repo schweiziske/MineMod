@@ -130,6 +130,7 @@ local function rebuildFlatMeshLists( key )
 end
 
 function MC.FreeChunkMesh( key, keepBlockEmitCache )
+	if MC.NativeL2 then MC.NativeL2.Invalidate( key ) end
 	if MC.RenderOcclusion then MC.RenderOcclusion.Forget( key ) end
 	if MC.MarkChunkDrawListDirty then MC.MarkChunkDrawListDirty( key ) end
 	if MC.MeshDirtyRateLimited then MC.MeshDirtyRateLimited[key] = nil end

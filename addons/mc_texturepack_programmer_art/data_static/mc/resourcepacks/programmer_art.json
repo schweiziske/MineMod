@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "kind": "atlas",
+  "id": "programmer_art",
+  "definition": {
+    "title": "Programmer Art",
+    "description": "Prebaked Programmer Art atlas and animations.",
+    "opaque": "mc/atlas_365_programmer_art",
+    "translucent": "mc/atlas_365_programmer_art_translucent",
+    "icon": "mc/atlas_365_programmer_art_translucent"
+  }
+}

@@ -96,9 +96,17 @@ local function blockingState( state )
 	if not block or block.transparent == true or block.translucent == true then return false end
 	local full = visual.fullCube
 	if full == nil then full = block.fullCube end
-	if full ~= true then return false end
+	if full ~= nil then
+		if full ~= true then return false end
+	-- Ordinary cubes omit fullCube; the state query resolves their geometry.
+	elseif not MC.BlockVisualIsFullCube( visual ) then return false end
 	classes[state] = true
 	return true
+end
+
+function O.NativeBlockingState( state )
+	syncContext()
+	return blockingState( state )
 end
 
 function O.BuildTopology( snapshot )
@@ -292,10 +300,10 @@ local function visitExterior()
 	end
 end
 
-function O.PrepareView( bx, by, bz )
+local function viewRoot( bx, by, bz )
 	syncContext()
 	O.active = false
-	if bx == nil or by == nil or bz == nil or stats.nodes == 0 or not MC.MeshOcclusionCull:GetBool() then return end
+	if bx == nil or by == nil or bz == nil or stats.nodes == 0 or not MC.MeshOcclusionCull:GetBool() then return false, 0, 63 end
 	local cx, cy, cz = floor( bx / CS ), floor( by / CS ), floor( bz / CH )
 	local record = byKey[MC.ChunkKey( cx, cy, cz )]
 	local root, seed = 0, 63
@@ -306,12 +314,29 @@ function O.PrepareView( bx, by, bz )
 		local source = topology[root]
 		seed = source.uniform
 		if seed == nil then seed = byte( source.cells, x % SIZE + ( y % SIZE ) * SIZE + ( z % SIZE ) * SIZE * SIZE + 1 ) end
-		if seed == 64 then return end -- noclip/ambiguous camera inside a wall.
+		if seed == 64 then return false, 0, 63 end -- noclip/ambiguous camera inside a wall.
 	end
 	if restricted == 0 and seed ~= 0 then
 		stats.openBypasses, stats.lastMS, stats.visited = stats.openBypasses + 1, 0, 0
-		return -- No graph edge can block anything; even the traversal is unnecessary.
+		return false, 0, 63 -- No graph edge can block anything.
 	end
+	return true, root, seed
+end
+
+local nativeGraphRevision, nativeGraphModule
+function O.PrepareNativeView( bx, by, bz, module )
+	local active, root, seed = viewRoot( bx, by, bz )
+	if active and ( nativeGraphRevision ~= revision or nativeGraphModule ~= module ) then
+		local ok, err = module.SetL2DrawGraph( revision, nextBase, topology, neighbors, byKey, TOTAL )
+		if not ok then error( "Native visibility graph: " .. tostring( err ), 0 ) end
+		nativeGraphRevision, nativeGraphModule = revision, module
+	end
+	return active, root, seed
+end
+
+function O.PrepareView( bx, by, bz )
+	local active, root, seed = viewRoot( bx, by, bz )
+	if not active then return end
 	O.active = true
 	-- Moving inside the already reached component needs no new flood, even
 	-- across a section boundary. Facing changes never invalidate connectivity.
