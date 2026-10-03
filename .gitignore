@@ -4,10 +4,8 @@ _build/*
 !_build/generate_item_sprite_masks.py
 !_build/test_texture_pack_leases.lua
 __pycache__/
-addons/mc_engine/materials/mc/atlas_sources/vanilla/
-addons/mc_engine/data_static/mc/atlas_bake/vanilla.json
-addons/mc_engine/materials/mc/atlas_sources/avpbr/
-addons/mc_engine/data_static/mc/atlas_bake/avpbr.json
+addons/mc_texturepack_*/materials/mc/resourcepacks/*/
+addons/mc_texturepack_*/data_static/mc/atlas_bake/
 *.pyc
 _tools/equestria_mcb4_import_2.err
 _tools/equestria_mcb4_import_2.log
@@ -22,10 +20,12 @@ _tools/equestria_region_import.log
 _tools/hlsl_shader_lab/dx9_smoke_test.log
 _tools/hlsl_shader_lab/mcbr_preview.png
 _tools/hlsl_shader_lab/mcbr_preview_base_only.png
+_tools/texture_size_test
 test_lightatlas_sampling.obj
 addon.json
 !addons/mc_engine/addon.json
 !addons/mc_game/addon.json
+!addons/mc_texturepack_*/addon.json
 maps/mc_void.bsp
 maps/mc_void.vmf
 .codex_sound_objects_26_2/

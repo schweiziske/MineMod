@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "resources": {
+    "normal": {
+      "path": "materials/mc/render/normal_2d30711594b47fc161a9.png",
+      "sha256": "2d30711594b47fc161a96d61adacf85af3185fa768898403d617a45da823a0ec",
+      "colorSpace": "linear"
+    },
+    "orm": {
+      "path": "materials/mc/render/orm_3dd263e29e393665b72c.png",
+      "sha256": "3dd263e29e393665b72c9bfff8d115c0ac1c87da344717f26c2680bec83a51f0",
+      "colorSpace": "linear"
+    }
+  }
+}

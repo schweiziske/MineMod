@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "kind": "atlas",
+  "id": "default",
+  "definition": {
+    "title": "Default",
+    "description": "Prebaked vanilla atlas and shared vanilla entity, particle and animation textures.",
+    "preview": "mc/resourcepacks/default",
+    "opaque": "mc/atlas_365",
+    "translucent": "mc/atlas_365",
+    "icon": "mc/atlas_365_translucent"
+  }
+}

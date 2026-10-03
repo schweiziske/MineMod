@@ -21,7 +21,8 @@ end
 function P.Validate( plan )
 	requireValue( file and file.Read and util and util.SHA256,
 		"render_pack_verify_api", "mounted-file reads and SHA256 are required" )
-	local result = { plan = plan, nodes = {}, requests = {}, sources = {}, files = {}, textures = {}, materialMaps = {}, runtimePBR = {} }
+	local result = { plan = plan, nodes = {}, requests = {}, sources = {}, files = {}, textures = {}, materialMaps = {}, runtimePBR = {},
+		texturePackRevision = MC.TexturePackRevision or 0 }
 	local bytesRead, fileCount = 0, 0
 	local function verify( path, hash )
 		if result.files[path] then
@@ -235,7 +236,8 @@ end
 
 function P.Fork( bundle )
 	return { plan = bundle.plan, nodes = bundle.nodes, requests = bundle.requests, processing = bundle.processing,
-		files = bundle.files, textures = bundle.textures, sources = {}, newBuilds = {}, bytesRead = 0, materialMaps = {}, runtimePBR = {} }
+		files = bundle.files, textures = bundle.textures, sources = {}, newBuilds = {}, bytesRead = 0, materialMaps = {}, runtimePBR = {},
+		texturePackRevision = MC.TexturePackRevision or 0 }
 end
 
 function P.Ensure( bundle )
@@ -298,9 +300,9 @@ local function sourceKey( texture )
 end
 
 local function mappingFor( bundle, node, source )
-	if node.adapter == "mc:pbr_quad_v4" and MC.RuntimeAtlasPBR then
-		local runtime = MC.RuntimeAtlasPBR( source )
-		if runtime then return runtime end
+	if node.adapter == "mc:pbr_quad_v4" and MC.TexturePackPBR then
+		local maps = MC.TexturePackPBR( source )
+		if maps then return maps end
 	end
 	if next( node.materialMaps ) == nil then return nil end
 	local mappings = bundle.materialMaps[node.owner]
@@ -440,6 +442,7 @@ function P.WaterMaterial( bundle, owner, blockSize )
 end
 
 function P.SourcesCurrent( bundle )
+	if ( bundle.texturePackRevision or 0 ) ~= ( MC.TexturePackRevision or 0 ) then return false end
 	for material, texture in pairs( bundle.sources ) do
 		if not R.SameTexture( R.SourceTexture( material ), texture ) then return false end
 	end

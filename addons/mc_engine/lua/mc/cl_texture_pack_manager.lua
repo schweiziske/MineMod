@@ -22,23 +22,8 @@ function Session:Refresh()
 	self.packs, self.byName = {}, {}
 	for _, entry in ipairs( MC.ResourcePacks.ListPacks() ) do
 		local name = entry.name
-		if name == "default" then
-			entry.title = M.Text( "Default", "默认资源" )
-			entry.description = M.Text( "The default Minecraft textures.", "Minecraft 的默认贴图。" )
-		elseif name == "programmer_art" then
-			entry.title = "Programmer Art"
-			entry.description = M.Text( "The classic look of Minecraft.", "Minecraft 的经典外观。" )
-		elseif name == "vanilla_baked" and entry.owner == "mc.atlas_baker" then
-			entry.title = M.Text( "Vanilla (in-game bake)", "原版（游戏内烘焙）" )
-			entry.description = M.Text( "Vanilla textures assembled in game.", "在游戏内生成的原版材质。" )
-		elseif name == "avpbr_baked" and entry.owner == "mc.atlas_baker" then
-			entry.title = M.Text( "AVPBR (in-game bake)", "AVPBR（游戏内烘焙）" )
-			entry.description = M.Text( "JoaquiX · Color, LabPBR normals and specular. Missing colors use vanilla; missing maps are neutral.",
-				"JoaquiX · 颜色、LabPBR 法线与材质；缺失颜色由原版补齐，缺失材质使用中性值。" )
-		else
-			if not entry.title or entry.title == "" then entry.title = name end
-			entry.description = entry.description or M.Text( "Provided by: ", "提供者：" ) .. entry.owner
-		end
+		if not entry.title or entry.title == "" then entry.title = name end
+		entry.description = entry.description or M.Text( "Provided by: ", "提供者：" ) .. entry.owner
 		self.packs[#self.packs + 1], self.byName[name] = entry, entry
 	end
 	if not dirty then self.draft = self.preference end

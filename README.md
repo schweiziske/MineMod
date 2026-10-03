@@ -28,7 +28,7 @@ Garry's Mod 里的 Minecraft 风格方块系统。方块不按实体逐个生成
 
 ## 主要文件
 
-仓库现在发布为两个独立 addon。`addons/mc_engine` 可以单独运行；`addons/mc_game` 通过 `MC.API` 消费引擎。GMod 自动加载的实体和武器也只在一个 addon 中提供，归属记录在 `addons/ownership.json`。
+仓库按引擎、游戏层、渲染包和材质包拆为独立 addon。`addons/mc_engine` 不依赖游戏层，但客户端需要同时挂载默认材质包 `mc_texturepack_default` 和所用 shaderpack；`addons/mc_game` 通过 `MC.API` 消费引擎。GMod 自动加载的实体和武器也只在一个 addon 中提供，归属记录在 `addons/ownership.json`。
 
 ```text
 addons/mc_engine/addon.json                 独立引擎 addon 清单
@@ -37,6 +37,10 @@ addons/mc_engine/lua/mc/                    方块世界、状态、网络、渲
 addons/mc_engine/lua/entities/              引擎实体
 addons/mc_engine/lua/weapons/               引擎武器和工具
 addons/mc_engine/lua/bin/                   可选 native mesh 模块
+addons/mc_texturepack_default/             必需：默认 atlas、动画、实体和粒子纹理
+addons/mc_texturepack_programmer_art/      可选：Programmer Art atlas 与动画
+addons/mc_texturepack_vanilla/             可选：原版游戏内烘焙源包
+addons/mc_texturepack_avpbr/               可选：AVPBR 三通道游戏内烘焙源包
 addons/mc_game/addon.json                   生存游戏 addon 清单
 addons/mc_game/lua/autorun/mcgame_load.lua  游戏层入口(register 阶段启动)
 addons/mc_game/lua/mcgame/                  物品、物品栏、配方、挖掘、掉落物和容器
@@ -54,7 +58,9 @@ docs/fault-handling.md                       故障上报约定:不要写静默�
 docs/maintenance-update-guide.md             维护更新指南
 ```
 
-资源也按 addon 归属：世界 atlas、字体、方块实体材质、引擎声音和 native 模块属于 `mc_engine`；物品图标、容器/HUD/配方界面、破坏阶段贴图及游戏音效属于 `mc_game`。相对挂载路径不能由两个 addon 重复提供。
+资源也按 addon 归属：世界 atlas、方块实体材质和动画属于上述材质包；字体、中性渲染数据图、引擎声音和 native 模块留在 `mc_engine`；物品图标、容器/HUD/配方界面、破坏阶段贴图及游戏音效属于 `mc_game`。相对挂载路径不能由两个 addon 重复提供。
+
+材质包用 `data_static/mc/resourcepacks/<id>.json` 自动登记，不需要 Lua。四个随附包采用同一协议；默认包是启动及缺失选择的回退资源，不能禁用。将各目录分别安装或链接到 GMod 的 `garrysmod/addons/`，新增挂载后完整重启游戏。源包的准备文件仍是 Git 忽略的可再生输出，新克隆需运行准备工具；发布源包 addon 时应包含生成的 PNG 和烘焙 manifest。
 
 ## 常用命令
 
@@ -73,7 +79,7 @@ powershell -ExecutionPolicy Bypass -File _build\bake_programmer_art_atlas.ps1
 ```
 
 烘焙完成后可在游戏内配置菜单的“界面 → 材质包 → 打开管理器”中选择并应用。
-管理器也会列出插件通过 `MC.API.Render.RegisterTexturePack` 注册的包，支持搜索、详情、撤销和模式接管提示。
+管理器自动列出 JSON 声明的包，也兼容通过 Lua API 动态注册的包，支持搜索、详情、撤销和模式接管提示。
 当前一次启用一个材质包。先按 [游戏内烘焙说明](docs/runtime-atlas-baking.md) 准备源图，之后在管理器选择原版或 AVPBR 并点「应用」，会自动烘焙并切换；同一局内复用已生成的 atlas，下次进地图自动恢复。AVPBR 同时生成颜色、法线与 LabPBR 材质 atlas。「烘焙材质」仅供手动重烘。通用多层资源覆盖后续接入。控制台入口：
 
 ```text

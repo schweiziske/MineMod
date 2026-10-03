@@ -370,7 +370,12 @@ end
 -- This version selects one atlas pack; it does not implement Minecraft resource stacks.
 API.Resources = API.Resources or {}
 local Resources = API.Resources
-Resources.VERSION = "1.0"
+Resources.VERSION = "1.1"
+
+function Resources.ResolveTexturePath( pack, resource )
+	if not MC.AtlasBakePlan then return nil, "resource_pack_api_unavailable" end
+	return MC.AtlasBakePlan.ResolveTexturePath( pack, resource )
+end
 
 function Resources.RegisterAtlasPack( name, definition, owner )
 	return Render.RegisterTexturePack( name, definition, owner )

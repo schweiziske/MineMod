@@ -331,7 +331,7 @@ function FRAME:Init()
 		local function start( id )
 			local ok, err = MC.AtlasBaker.Start( id )
 			if not ok and IsValid( self ) then
-				if err == "run_prepare_" .. id .. "_atlas_bake_py" then
+				if err == "source_manifest_missing:" .. id then
 					self:SetStatus( text( "Source textures have not been prepared: ", "尚未准备源贴图：" ) .. id )
 				else self:SetStatus( tostring( err ) ) end
 			end

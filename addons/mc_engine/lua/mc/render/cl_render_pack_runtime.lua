@@ -375,7 +375,9 @@ local function syncSections( c, force )
 	local started, size, generation = SysTime(), MC.API.Coords.BlockSize(), MC.ChunkDrawListVersion()
 	requireValue( type( size ) == "number" and size > 0 and size < math.huge,
 		"render_pack_block_size", "invalid runtime block size" )
+	-- A map-only pack update can arrive alongside a sparse geometry update.
 	force = force or c.blockSize ~= size
+		or ( c.bundle.texturePackRevision or 0 ) ~= ( MC.TexturePackRevision or 0 )
 	if force or not c.postProcessBound then
 		local definition = c.plan.owners["pack/" .. c.pack].definition
 		if definition.programs.post_ssao then c.postProcess = MC.RenderPBRPost.Register( definition, size, c.processing ) end
