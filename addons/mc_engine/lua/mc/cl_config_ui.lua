@@ -445,7 +445,13 @@ local function createConfigRow( parent, scope, item, rowIndex )
 	controls:SetWide( 350 )
 	controls.Paint = function() end
 
-	if item.kind == "bool" then
+	if item.kind == "action" and item.action == "texture_pack_manager" then
+		local open = vgui.Create( "DButton", controls )
+		open:Dock( FILL )
+		open:DockMargin( 0, 27, 12, 27 )
+		styleFlatButton( open, { label = configText( "Open manager", "打开管理器" ) } )
+		open.DoClick = function() MC.OpenTexturePackManager() end
+	elseif item.kind == "bool" then
 		createBoolControl( controls, scope, item, editable )
 	elseif item.kind == "choice" or item.choices then
 		createChoiceControl( controls, scope, item, editable )

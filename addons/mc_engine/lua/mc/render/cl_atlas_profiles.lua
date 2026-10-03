@@ -324,6 +324,12 @@ local function markLuaMeshesDirty()
 end
 
 local function refreshRenderer( reason )
+	local mesh = MC.RenderMesh
+	if mesh and mesh.resetShapeModelTemplateCache then mesh.resetShapeModelTemplateCache() end
+	-- Cached vertices contain physical UVs from the previous atlas layout.
+	if MC.ClearChunkBlockEmitCache then
+		for key in pairs( MC.World or {} ) do MC.ClearChunkBlockEmitCache( key ) end
+	end
 	local native = MC.NativeChunkBackend
 	if native and native.ReconfigureDefinitions then
 		local ok, result = native.ReconfigureDefinitions( reason )

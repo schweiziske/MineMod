@@ -88,6 +88,14 @@ local function stateFace( ctx, id, face, orient, bx, by, bz )
 	return MC.BlockFace( id, face, orient )
 end
 
+local function atlasPageForTile( tile )
+	if MC.ResolveAtlasSurface then
+		local page = MC.ResolveAtlasSurface( tile )
+		return page
+	end
+	return 0
+end
+
 local function liquidFace( id, face, orient )
 	-- Waterlogged overlays keep the host state in ctx, so resolving through
 	-- stateFace would accidentally put fence/slab textures on the water mesh.
@@ -172,6 +180,7 @@ local function buildModelTemplate( b, orient, cubicBlockId )
 			local c4x, c4y, c4z = modelQuadVertex( quad, 4 )
 			local rec = {
 				sourceQuad = qi,
+				atlasPage = atlasPageForTile( tile ),
 				faceIndex = faceIndex,
 				tintIndex = quad.tintIndex or -1,
 				normal = face.n,
@@ -280,6 +289,7 @@ local function buildShapeTemplate( ctx, b, id, orient, blockBoxes, resolvedBoxes
 				local c4x, c4y, c4z = boxFaceCornerValues( box, f, 4 )
 				local rec = {
 					box = box,
+					atlasPage = atlasPageForTile( tile ),
 					faceIndex = f,
 					normal = face.n,
 					shade = face.sh,
@@ -486,6 +496,7 @@ local function buildConnectionShapeTemplate( ctx, kind, id, orient, b, mask, box
 					out.n = n
 					local rec = {
 						box = box,
+						atlasPage = atlasPageForTile( tile ),
 						faceIndex = f,
 						normal = face.n,
 						shade = face.sh,
@@ -565,9 +576,10 @@ local function nativeScratch( ctx )
 	return quad
 end
 
-local function emitNativeValues( ctx, id, bx, by, bz, wx, wy, wz, face, normal, shade, emission, quadEmission, lighting,
+local function emitNativeValues( ctx, id, bx, by, bz, wx, wy, wz, face, normal, shade, emission, quadEmission, lighting, tile,
 	c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z, u1, v1, u2, v2, u3, v3, u4, v4 )
 	local quad = nativeScratch( ctx )
+	quad.atlasPage = atlasPageForTile( tile )
 	local a, b, c, d = quad.l2Corners[1], quad.l2Corners[2], quad.l2Corners[3], quad.l2Corners[4]
 	a[1], a[2], a[3], b[1], b[2], b[3] = c1x, c1y, c1z, c2x, c2y, c2z
 	c[1], c[2], c[3], d[1], d[2], d[3] = c3x, c3y, c3z, c4x, c4y, c4z
@@ -584,6 +596,7 @@ end
 local function emitNativeArrays( ctx, id, bx, by, bz, wx, wy, wz, face, normal, shade, emission, kind,
 	corners, positions, tile, rawUV, faceCubic )
 	local quad = nativeScratch( ctx )
+	quad.atlasPage = atlasPageForTile( tile )
 	for i = 1, 4 do
 		local p, c, uv = corners[i], quad.l2Corners[i], quad.l2UV[i]
 		c[1], c[2], c[3] = p[1], p[2], p[3]
@@ -1114,7 +1127,7 @@ local function emitShapeBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy, wz,
 				local c3x, c3y, c3z = boxFaceCornerValues( box, f, 3 )
 				local c4x, c4y, c4z = boxFaceCornerValues( box, f, 4 )
 				if ctx.l2 then
-					emitNativeValues( ctx, id, bx, by, bz, wx, wy, wz, f, nrm, col, emission, quadLightEmission, nil,
+					emitNativeValues( ctx, id, bx, by, bz, wx, wy, wz, f, nrm, col, emission, quadLightEmission, nil, tile,
 						c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z,
 						shapeFaceUVs( fd, nil, f, tile, u0, v0, u1, v1,
 							c1x, c1y, c1z, c2x, c2y, c2z, c3x, c3y, c3z, c4x, c4y, c4z ) )
@@ -1249,7 +1262,7 @@ emitFullCubeBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, 
 				u0, v0, u1, v1 = tileUVRect( tile, baked.uv )
 			else
 				tile, rot, flipU, flipV = stateFace( ctx, id, f, orient, bx, by, bz )
-				u0, v0, u1, v1 = MC.TileUV( tile )
+				u0, v0, u1, v1 = tileUVRect( tile )
 			end
 			local corners = face.c
 			local nrm = face.n
@@ -1266,7 +1279,7 @@ emitFullCubeBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, 
 					lightingCache[quadLightEmission] = lighting
 				end
 				local c1, c2, c3, c4 = corners[1], corners[2], corners[3], corners[4]
-				emitNativeValues( ctx, id, bx, by, bz, wx, wy, wz, f, nrm, face.sh, emission, quadLightEmission, lighting,
+				emitNativeValues( ctx, id, bx, by, bz, wx, wy, wz, f, nrm, face.sh, emission, quadLightEmission, lighting, tile,
 					c1[1], c1[2], c1[3], c2[1], c2[2], c2[3], c3[1], c3[2], c3[3], c4[1], c4[2], c4[3],
 					fullCubeFaceUVs( corners, baked, tile, u0, v0, u1, v1, rot, flipU, flipV ) )
 			else
@@ -1567,6 +1580,7 @@ local function emitWaterloggedOverlay( ctx, stateId, bx, by, bz, wx, wy, wz, tar
 	if not waterId then return 0 end
 	if ctx.l2 then targetBuffer = ctx.bufferForBlock( targetBuffer, waterId ) end
 	local previous = ctx.getCur()
+	if ctx.pagedAtlas then ctx.beginPagedBlock( targetBuffer ) end
 	ctx.prepareBlockCacheBuffer( targetBuffer )
 	local emitted = RM.EmitLiquidBlock(
 		ctx, waterId, 0, bx, by, bz, wx, wy, wz,
@@ -1574,7 +1588,9 @@ local function emitWaterloggedOverlay( ctx, stateId, bx, by, bz, wx, wy, wz, tar
 	)
 	local overlay = ctx.getCur()
 	local vertexCount = emitted and overlay and overlay.nv or 0
-	if vertexCount > 0 then
+	if ctx.pagedAtlas then
+		vertexCount = ctx.endPagedBlock()
+	elseif vertexCount > 0 then
 		MC.AppendCachedBlockEmission( {
 			verts = overlay.verts,
 			light = overlay.light,
@@ -1632,7 +1648,7 @@ function RM.EmitBlock( ctx, li, stateId )
 
 	local cached = MC.GetCachedBlockEmission( key, blockSectionIndex, li, id, orient, stateId, ctx.nativeL2 )
 	local blockNeedsRecolor = sectionNeedsFullRecolor or ( blockLightDirtySection and blockLightDirtySection[li] )
-	if cached and ctx.l2 and ( blockNeedsRecolor or not cached.l2 or cached.blockSize ~= size ) then
+	if cached and ctx.l2 and ( ctx.pagedAtlas or blockNeedsRecolor or not cached.l2 or cached.blockSize ~= size ) then
 		MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
 		cached = nil
 	end
@@ -1691,6 +1707,7 @@ function RM.EmitBlock( ctx, li, stateId )
 
 	local emitStart = meshProbe and SysTime() or nil
 	emitter = emitter or selectBlockEmitter( ctx, b, id, orient, blockIsFullCube, bx, by, bz )
+	if ctx.pagedAtlas then ctx.beginPagedBlock( targetBuffer ) end
 	local emitKind, directEmitCheapFullCube, directEmitVertexCount = emitSelectedBlock(
 		emitter,
 		ctx,
@@ -1711,6 +1728,12 @@ function RM.EmitBlock( ctx, li, stateId )
 		visibleFaceMask,
 		visibleFaceCount
 	)
+	if ctx.pagedAtlas then
+		directEmitVertexCount = ctx.endPagedBlock()
+		directEmitCheapFullCube = true
+		ctx.releaseScratch( getCur() )
+		ctx.setCur( nil )
+	end
 	if ctx.visibility.error then return false end
 	emitKind = emitKind or "shape"
 	directEmitCheapFullCube = directEmitCheapFullCube == true

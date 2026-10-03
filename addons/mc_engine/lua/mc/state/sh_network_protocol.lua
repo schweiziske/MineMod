@@ -127,6 +127,7 @@ Net.MessageNames = {
 	"mc_state_snapshot_begin", "mc_state_snapshot_part", "mc_state_snapshot_end",
 	"mc_state_snapshot_ack",
 	"mc_state_resync_request",
+	"mc_block_prediction_ack",
 }
 
 if SERVER then

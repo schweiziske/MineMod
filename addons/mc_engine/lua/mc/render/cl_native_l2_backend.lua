@@ -222,7 +222,8 @@ local function syncRecipes()
 		fluidEmitter = MC.RenderMesh.NativeFluidRecipe,
 		shapeEmitter = MC.RenderMesh.NativeShapeRecipe,
 		models = MC.RenderL2Models, blocks = MC.Blocks, material = MC.Material,
-		atlas = MC.Atlas, catalog = MC.StateVisualCatalog or false,
+		atlas = MC.Atlas, atlasPages = MC.AtlasPageCount and MC.AtlasPageCount() or 1,
+		catalog = MC.StateVisualCatalog or false,
 		fullCubeDebug = MC.RenderMesh.meshDebugFullCubeOnly(),
 		collisionResolvers = MC.BlockStateCollisionResolvers or false,
 		visualResolvers = MC.BlockStateVisualResolvers or false }
@@ -254,6 +255,9 @@ end
 function N.WorldSnapshot( chunk, index )
 	local backend = MC.NativeChunkBackend
 	if not index or not N.active or not N.worldAvailable or not backend or not backend.IsActive() then return nil end
+	-- Worker recipes bind one material per model. Paged geometry still uses
+	-- native quad jobs, but needs Lua's per-face material routing and snapshot.
+	if MC.AtlasPageCount and MC.AtlasPageCount() > 1 then return nil end
 	if ( MC.RENDER_SECTION_SIZE or 8 ) ~= 8 then return nil end
 	syncRecipes()
 	local snapshot, err = backend.GetSectionInfo( chunk, index )
@@ -268,7 +272,7 @@ function N.WorldSnapshot( chunk, index )
 end
 
 function N.PrepareVoxels( ctx, index, snapshot )
-	if not N.voxelAvailable then return nil end
+	if not N.voxelAvailable or ctx.pagedAtlas then return nil end
 	syncRecipes()
 	local recipes, seen = {}, {}
 	local size = MC.RENDER_SECTION_SIZE or 8

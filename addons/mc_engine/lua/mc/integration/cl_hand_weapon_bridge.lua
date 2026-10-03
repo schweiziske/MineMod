@@ -6,6 +6,7 @@ MC = MC or {}
 MC.HandWeaponBridge = MC.HandWeaponBridge or {}
 
 local Bridge = MC.HandWeaponBridge
+local activeManagedWeapons = setmetatable( {}, { __mode = "k" } )
 
 local function selectedPayload( ply )
 	return Bridge.GetSelected and Bridge.GetSelected( ply ) or nil
@@ -36,31 +37,34 @@ local function selectedResolvesTo( ply, className )
 	return resolved == className
 end
 
+local function managedWeaponActive( ply, selectedOnly )
+	if not IsValid( ply ) or not ply:Alive() then
+		if ply ~= nil then activeManagedWeapons[ply] = nil end
+		return false
+	end
+	local weapon = activeWeapon( ply )
+	local targetClass = transitionTarget( ply )
+	if not weapon then return targetClass ~= nil end
+	local className = weapon:GetClass()
+	local managed = className == Bridge.HandClass or className == Bridge.InventoryClass
+		or targetClass == className or isInventoryProxy( weapon )
+		or activeManagedWeapons[ply] == weapon or selectedResolvesTo( ply, className )
+	-- A local pick/slot change updates the selected payload before the outgoing
+	-- SWEP's proxy flag or replacement arrives. Retain the identity we already
+	-- observed; class membership alone must never capture a foreign weapon.
+	activeManagedWeapons[ply] = managed and weapon or nil
+	return managed and ( not selectedOnly or className ~= Bridge.InventoryClass )
+end
+
 -- Engine-side presentation state is deliberately expressed in generic terms.
 -- The game addon may expose compatibility names for its own inventory/HUD
 -- consumers, but the standalone engine must not define survival concepts.
 function Bridge.IsClientManagedWeaponActive( ply )
-	local weapon = activeWeapon( ply )
-	local targetClass = transitionTarget( ply )
-	if not weapon then return targetClass ~= nil end
-	local className = weapon:GetClass()
-	if className == Bridge.HandClass or className == Bridge.InventoryClass then return true end
-	if targetClass == className then return true end
-	-- A managed class from the spawn menu is not an inventory weapon merely
-	-- because a resolver knows its name. It enters the lifecycle only when the
-	-- selected stack really resolves to it (prediction window) or the server has
-	-- promoted that exact instance to an authoritative inventory proxy.
-	return isInventoryProxy( weapon ) or selectedResolvesTo( ply, className )
+	return managedWeaponActive( ply, false )
 end
 
 function Bridge.IsClientSelectedWeaponActive( ply )
-	local weapon = activeWeapon( ply )
-	local targetClass = transitionTarget( ply )
-	if not weapon then return targetClass ~= nil end
-	local className = weapon:GetClass()
-	if className == Bridge.HandClass then return true end
-	if targetClass == className then return true end
-	return isInventoryProxy( weapon ) or selectedResolvesTo( ply, className )
+	return managedWeaponActive( ply, true )
 end
 
 -- Public client queries. Game addons must not reach into HandWeaponBridge;

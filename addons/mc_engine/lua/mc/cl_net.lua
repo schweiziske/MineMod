@@ -273,6 +273,7 @@ function MC.ApplyStateNetCell( bx, by, bz, stateId, revision, meshRateLimited )
 	if MC.ReconcileStatePredictionCells then
 		MC.ReconcileStatePredictionCells( { { bx = bx, by = by, bz = bz } }, revision, false )
 	end
+	stateId = MC.StateUnderPrediction( bx, by, bz, stateId, revision )
 	local oldStateId = MC.GetBlockState( bx, by, bz ) or 0
 	local _, _, _, changed, setError = MC.SetBlockStateRaw( bx, by, bz, stateId )
 	if not changed then return changed == false, setError end
@@ -290,6 +291,7 @@ function MC.ApplyStateNetCellsBulk( cells, revision, meshRateLimited )
 	for _, cell in ipairs( cells or {} ) do
 		local stateId = math.floor( tonumber( cell.stateId ) or -1 )
 		if MC.IsValidBlockState and MC.IsValidBlockState( stateId ) then
+			stateId = MC.StateUnderPrediction( cell.bx, cell.by, cell.bz, stateId, revision )
 			local oldStateId = MC.GetBlockState( cell.bx, cell.by, cell.bz ) or 0
 			local _, _, _, changed = MC.SetBlockStateRaw( cell.bx, cell.by, cell.bz, stateId )
 			if changed then
@@ -321,10 +323,72 @@ local function rollbackPredictionCell( pending )
 	if not pending then return end
 	local currentStateId = MC.GetBlockState( pending.bx, pending.by, pending.bz )
 	if currentStateId ~= pending.stateId then return end
-	MC.SetBlockStateRaw( pending.bx, pending.by, pending.bz, pending.oldStateId or 0 )
+	local restored = pending.authoritativeStateId or pending.oldStateId or 0
+	MC.SetBlockStateRaw( pending.bx, pending.by, pending.bz, restored )
 	markPredictedCellDirty( pending.bx, pending.by, pending.bz, true,
-		currentStateId, pending.oldStateId or 0 )
+		currentStateId, restored )
 end
+
+-- Keep authoritative updates under the local command layers. Only the reply
+-- for that input command may retire its prediction; a global world revision
+-- (possibly another player's edit) is not an acknowledgement of local input.
+function MC.StateUnderPrediction( bx, by, bz, stateId, revision, readOnly )
+	local pending = MC.PendingPredictions[predictionKey( bx, by, bz )]
+	if not pending or not pending.commandLayers then return stateId end
+	if not readOnly and revision >= pending.authoritativeRevisionAtPrediction then
+		pending.authoritativeStateId = stateId
+		pending.authoritativeRevisionAtPrediction = revision
+	end
+	return pending.stateId
+end
+
+local function finishCommandPrediction( groupId, group )
+	for _, key in ipairs( group.keys ) do
+		local pending = MC.PendingPredictions[key]
+		if pending and pending.commandLayers then
+			for index = #pending.commandLayers, 1, -1 do
+				if pending.commandLayers[index].groupId == groupId then
+					-- A later reply supersedes the older edits to this same cell.
+					-- Retaining those layers would resurrect them after this one ends.
+					for retired = index, 1, -1 do table.remove( pending.commandLayers, retired ) end
+					break
+				end
+			end
+			local latest = pending.commandLayers[#pending.commandLayers]
+			local restored = latest and latest.stateId or pending.authoritativeStateId
+			local old = MC.GetBlockState( pending.bx, pending.by, pending.bz )
+			if latest then pending.stateId = restored else MC.PendingPredictions[key] = nil end
+			if old ~= restored then
+				MC.SetBlockStateRaw( pending.bx, pending.by, pending.bz, restored )
+				markPredictedCellDirty( pending.bx, pending.by, pending.bz, true, old, restored )
+			end
+		end
+	end
+	MC.PendingPredictionGroups[groupId] = nil
+end
+
+local function drainPredictionAcknowledgements()
+	local transport = MC.StateNetworkTransport
+	if not transport then return end
+	for groupId, group in pairs( MC.PendingPredictionGroups ) do
+		if group.ackRevision and group.generation == transport.generation
+		and group.ackRevision <= transport.appliedRevision then finishCommandPrediction( groupId, group ) end
+	end
+end
+
+function MC.AcknowledgeBlockPrediction( action, commandNumber, generation, revision )
+	local group = MC.PendingPredictionGroups[action .. ":" .. commandNumber]
+	if not group or group.generation ~= generation then return end
+	group.ackRevision = revision
+	drainPredictionAcknowledgements()
+end
+
+net.Receive( "mc_block_prediction_ack", function()
+	local action, commandNumber = net.ReadUInt( 2 ), net.ReadUInt( 32 )
+	local generation, revision = net.ReadUInt( 32 ), net.ReadUInt( 32 )
+	MC.AcknowledgeBlockPrediction( action, commandNumber, generation, revision )
+end )
+hook.Add( "MC.StateRevisionApplied", "mc_block_prediction_ack", drainPredictionAcknowledgements )
 
 -- Reconcile a whole predicted placement/break plan against one authoritative
 -- transaction. State-rich blocks can make the client and server plans differ;
@@ -338,7 +402,7 @@ function MC.ReconcileStatePredictionCells( cells, revision, correction )
 		local key = predictionKey( cell.bx, cell.by, cell.bz )
 		authoritative[key] = true
 		local pending = MC.PendingPredictions[key]
-		if pending then
+		if pending and not pending.commandLayers then
 			local baseline = pending.authoritativeRevisionAtPrediction or 0
 			local eligible = correction == true and revision >= baseline
 				or correction ~= true and revision > baseline
@@ -380,7 +444,11 @@ function MC.DiscardPredictionsForChunkKeys( chunkKeys )
 	local groups = {}
 	for key, pending in pairs( MC.PendingPredictions or {} ) do
 		local cx, cy, cz = MC.CellToChunk( pending.bx, pending.by, pending.bz )
-		if chunkKeys[MC.ChunkKey( cx, cy, cz )] then groups[pending.groupId or key] = true end
+		if chunkKeys[MC.ChunkKey( cx, cy, cz )] then
+			if pending.commandLayers then
+				for _, layer in ipairs( pending.commandLayers ) do groups[layer.groupId] = true end
+			else groups[pending.groupId or key] = true end
+		end
 	end
 	local cleared = 0
 	for groupId in pairs( groups ) do
@@ -421,10 +489,14 @@ markPredictedCellDirty = function( bx, by, bz, priority, oldStateId, newStateId 
 	MC.MarkCellPhysNeighbours( bx, by, bz, priority == true )
 end
 
-local function predictCells( cells, priorityFn )
+local function predictCells( cells, priorityFn, commandNumber, action )
 	if not istable( cells ) or #cells == 0 then return false end
+	local commandPrediction = isnumber( commandNumber ) and commandNumber > 0
+	local commandGroupId = commandPrediction and ( action .. ":" .. commandNumber ) or nil
+	if commandGroupId and MC.PendingPredictionGroups[commandGroupId] then return false end
 	for _, cell in ipairs( cells ) do
-		if MC.PendingPredictions[predictionKey( cell.bx, cell.by, cell.bz )] then return false end
+		local pending = MC.PendingPredictions[predictionKey( cell.bx, cell.by, cell.bz )]
+		if pending and ( not commandPrediction or not pending.commandLayers ) then return false end
 	end
 
 	local oldStates = {}
@@ -450,8 +522,9 @@ local function predictCells( cells, priorityFn )
 	end
 
 	MC.NextPredictionGroupId = MC.NextPredictionGroupId + 1
-	local groupId = MC.NextPredictionGroupId
-	local group = { keys = {} }
+	local groupId = commandGroupId or MC.NextPredictionGroupId
+	local group = { keys = {}, commandNumber = commandPrediction and commandNumber or nil,
+		generation = MC.StateNetworkTransport and MC.StateNetworkTransport.generation or 0 }
 	MC.PendingPredictionGroups[groupId] = group
 	for i, cell in ipairs( cells ) do
 		local resolved = resolvedStates[i]
@@ -459,20 +532,29 @@ local function predictCells( cells, priorityFn )
 		local _, _, _, changed = MC.SetBlockStateRaw( cell.bx, cell.by, cell.bz, stateId )
 		if changed then
 			local key = predictionKey( cell.bx, cell.by, cell.bz )
-			MC.PendingPredictions[key] = {
-				bx = cell.bx,
-				by = cell.by,
-				bz = cell.bz,
-				id = id,
-				orient = orient,
-				stateId = stateId,
-				oldId = oldStates[i].id,
-				oldOrient = oldStates[i].orient,
-				oldStateId = oldStates[i].stateId,
-				authoritativeRevisionAtPrediction = MC.AppliedStateRevision or 0,
-				groupId = groupId,
-				expire = CurTime() + 2.5,
-			}
+			local pending = MC.PendingPredictions[key]
+			if commandPrediction and pending then
+				pending.stateId = stateId
+				pending.expire = CurTime() + 2.5
+				pending.commandLayers[#pending.commandLayers + 1] = { groupId = groupId, stateId = stateId }
+			else
+				MC.PendingPredictions[key] = {
+					bx = cell.bx,
+					by = cell.by,
+					bz = cell.bz,
+					id = id,
+					orient = orient,
+					stateId = stateId,
+					oldId = oldStates[i].id,
+					oldOrient = oldStates[i].orient,
+					oldStateId = oldStates[i].stateId,
+					authoritativeRevisionAtPrediction = MC.AppliedStateRevision or 0,
+					groupId = groupId,
+					expire = CurTime() + 2.5,
+					authoritativeStateId = commandPrediction and oldStates[i].stateId or nil,
+					commandLayers = commandPrediction and { { groupId = groupId, stateId = stateId } } or nil,
+				}
+			end
 			group.keys[#group.keys + 1] = key
 			markPredictedCellDirty( cell.bx, cell.by, cell.bz, priorityFn and priorityFn( cell ) or false,
 				oldStates[i].stateId or 0, stateId )
@@ -499,10 +581,10 @@ local function predictedCellsArePlaceable( cells )
 	return true
 end
 
-function MC.PredictPlacementPlan( plan )
+function MC.PredictPlacementPlan( plan, commandNumber )
 	if not MC.ClientEditPredictionEnabled() or not plan then return false end
 	if not predictedCellsArePlaceable( plan.cells ) then return false end
-	return predictCells( plan.cells, function() return true end )
+	return predictCells( plan.cells, function() return true end, commandNumber, 1 )
 end
 
 function MC.PredictSetBlockState( bx, by, bz, stateId, context )
@@ -522,7 +604,7 @@ function MC.PredictSetBlock( bx, by, bz, id, orient )
 	return predictCells( plan.cells, function() return true end )
 end
 
-function MC.PredictBreakBlock( bx, by, bz, ply )
+function MC.PredictBreakBlock( bx, by, bz, ply, commandNumber )
 	if not MC.ClientEditPredictionEnabled() then return false end
 	if IsValid( ply ) and not MC.ReachAllowsEye( MC.API.Coords.EntityEyeWorldPos( ply ), bx, by, bz, MC.CurrentReach() ) then return false end
 	local oldId = MC.GetBlock( bx, by, bz )
@@ -531,7 +613,7 @@ function MC.PredictBreakBlock( bx, by, bz, ply )
 	local oldStateId = MC.GetBlockState( bx, by, bz )
 	local plan = MC.BuildBreakPlan and MC.BuildBreakPlan( bx, by, bz )
 	if not plan then return false end
-	if not predictCells( plan.cells, function() return true end ) then return false end
+	if not predictCells( plan.cells, function() return true end, commandNumber, 2 ) then return false end
 	if MC.PlayBlockFx then
 		MC.PlayBlockFx( 2, oldId, oldOrient, bx, by, bz, true, oldStateId )
 	end
