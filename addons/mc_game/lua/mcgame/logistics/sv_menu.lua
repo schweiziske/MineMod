@@ -72,11 +72,17 @@ local function buildMenu( ply, playerRecord, container )
 	if playerRecord.nextContainerId == 0 or playerRecord.nextContainerId == 1 then playerRecord.nextContainerId = 2 end
 	menu.logisticsPosition = { bx = container.bx, by = container.by, bz = container.bz }
 	menu.logisticsStorage, menu.logisticsSlots = storage, container.size
+	menu.logisticsPersistedRevision = container.physical[1].record.revision
 	menu.playerOffset, menu.playerMenuMap, menu.menuPlayerMap = container.size, playerMap, menuMap
 	menu.beforeCommit = function()
 		local authoritative, containerError = L.ContainerAt( container.bx, container.by, container.bz, nil, { create = false } )
 		if not authoritative or authoritative.kind ~= container.kind then
 			return false, containerError or "container_unavailable"
+		end
+		-- A failed post-commit mirror must not let an old menu overwrite a
+		-- newer persisted inventory on its next click.
+		if authoritative.physical[1].record.revision ~= menu.logisticsPersistedRevision then
+			return false, "stale_container"
 		end
 		local changed = changedLogisticsSlots( authoritative, storage, container.size )
 		if #changed == 0 then return true end
@@ -85,7 +91,8 @@ local function buildMenu( ply, playerRecord, container )
 			authoritative.changed, authoritative.changedSlotSet[slot] = true, true
 		end
 		local committed, commitError = L.CommitContainers( { authoritative }, "logistics_menu" )
-		return committed == true, committed and nil or commitError
+		if not committed then return false, commitError end
+		return true
 	end
 	menu.onCommit = function( committed, result, context )
 		local playerChanged = false
@@ -109,10 +116,10 @@ local function menuStillValid( ply, position, kind )
 	if not L.Enabled() or not IsValid( ply ) or not ply:Alive() then return false end
 	local definition = currentDefinition( position.bx, position.by, position.bz )
 	if not definition or definition.kind ~= kind then return false end
-	if not Coords.CellMin or not Coords.BlockSize or not ply.EyePos then return false end
+	if not Coords.CellMin or not Coords.BlockSize or not Coords.EntityEyeWorldPos then return false end
 	local minimum = Coords.CellMin( position.bx, position.by, position.bz )
 	local size = tonumber( Coords.BlockSize() ) or 0
-	local eye = ply:EyePos()
+	local eye = Coords.EntityEyeWorldPos( ply )
 	if not minimum or size <= 0 or not eye then return false end
 	local px = math.max( minimum.x, math.min( eye.x, minimum.x + size ) )
 	local py = math.max( minimum.y, math.min( eye.y, minimum.y + size ) )
@@ -162,6 +169,7 @@ function SV.LogisticsCommitBlockContainer( container, record )
 					changed[#changed + 1] = slot - 1
 				end
 			end
+			menu.logisticsPersistedRevision = record.revision
 			if #changed > 0 and SV.PublishActiveInventoryCommit then
 				menu.revision = math.max( menu.revision + 1, tonumber( record and record.revision ) or 0 )
 				SV.PublishActiveInventoryCommit( playerRecord, { changedSlots = changed, revision = menu.revision }, {} )

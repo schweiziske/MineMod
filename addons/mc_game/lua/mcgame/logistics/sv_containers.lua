@@ -294,7 +294,8 @@ local function buildContainerCells( container )
 				stateId = entry.stateId, blockEntity = records[index] }
 		end
 	elseif container.adapter == "furnace" then
-		if container.changedSlotSet[0] then
+		if container.changedSlotSet[0]
+		and not MC.ItemStacksEqual( container.raw.storage[1], container.storage[1], true ) then
 			local recipe = MC.FindCookingRecipe and MC.FindCookingRecipe( container.storage[1], container.raw.recipeType ) or nil
 			container.state.cookingTimeSpent = 0
 			container.state.cookingTotalTime = recipe and recipe.cookingTime or 0
@@ -373,6 +374,18 @@ local function notifyAnalogChange( container, reason )
 	container.analogBefore = output
 end
 
+local function postCommitFault( result, container, phase, detail )
+	local message = string.format( "%s at %s,%s,%s after world commit: %s",
+		phase, tostring( container.bx ), tostring( container.by ), tostring( container.bz ), tostring( detail ) )
+	result.postCommitErrors = result.postCommitErrors or {}
+	result.postCommitErrors[#result.postCommitErrors + 1] = message
+	-- Even strict faults must wait until the caller has finalized ownership of
+	-- item entities / player stacks. A committed write cannot be rejected here.
+	timer.Simple( 0, function()
+		MC.Fault( "logistics_post_commit_" .. phase, "%s", message )
+	end )
+end
+
 function L.CommitContainers( containers, reason )
 	if not L.Enabled() then return false, "feature_disabled" end
 	local active, activeSet, cells, cellOwners, recordsByContainer = {}, {}, {}, {}, {}
@@ -403,21 +416,32 @@ function L.CommitContainers( containers, reason )
 		reason = reason or "logistics_transfer", fx = false, blockUpdates = false, compareCollision = false,
 	} )
 	if not changed or changed <= 0 then return false, writeError or "container_commit_failed" end
+	local result = { changedContainers = #active, changedCells = changed }
 	-- SetBlocks validates, copies, and stamps the records with the authoritative
 	-- world revision.  Runtime/menu mirrors must receive those persisted copies,
 	-- not the pre-transaction envelopes built above.
 	for _, container in ipairs( active ) do
-		local persisted, persistedError = readCommittedRecords( container )
-		if not persisted then return false, persistedError end
-		recordsByContainer[container] = persisted
-	end
-	for _, container in ipairs( active ) do
-		if not applyCommitted( container, recordsByContainer[container] ) then
-			return false, "container_apply_failed"
+		local called, persisted, persistedError = pcall( readCommittedRecords, container )
+		if called and persisted then
+			recordsByContainer[container] = persisted
+		else
+			recordsByContainer[container] = nil
+			postCommitFault( result, container, "read", called and persistedError or persisted )
 		end
 	end
-	for _, container in ipairs( active ) do notifyAnalogChange( container, reason ) end
-	return true, { changedContainers = #active, changedCells = changed }
+	for _, container in ipairs( active ) do
+		if recordsByContainer[container] then
+			local called, applied = pcall( applyCommitted, container, recordsByContainer[container] )
+			if not called or not applied then
+				postCommitFault( result, container, "apply", called and "container_apply_failed" or applied )
+			end
+		end
+	end
+	for _, container in ipairs( active ) do
+		local called, err = pcall( notifyAnalogChange, container, reason )
+		if not called then postCommitFault( result, container, "analog", err ) end
+	end
+	return true, result
 end
 
 function L.BlockAnalogOutputAt( bx, by, bz )

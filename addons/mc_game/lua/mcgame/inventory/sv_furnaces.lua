@@ -232,6 +232,7 @@ end
 function SV.LogisticsCommitFurnaceRuntime( runtime, changedSlots, options )
 	if type( runtime ) ~= "table" or type( changedSlots ) ~= "table" then return false, "invalid_furnace_commit" end
 	options = type( options ) == "table" and options or {}
+	local previousInput = runtime.storage[1]
 	if type( options.storage ) == "table" then
 		for slot = 1, FURNACE_SLOTS do runtime.storage[slot] = MC.CopyItemStack( options.storage[slot] ) end
 	end
@@ -245,7 +246,7 @@ function SV.LogisticsCommitFurnaceRuntime( runtime, changedSlots, options )
 	if type( options.record ) == "table" then rememberPersistedRecord( runtime, options.record ) end
 	local inputChanged = false
 	for _, slot in ipairs( changedSlots ) do if slot == 0 then inputChanged = true break end end
-	if inputChanged then
+	if inputChanged and not MC.ItemStacksEqual( previousInput, runtime.storage[1], true ) then
 		local recipe = MC.FindCookingRecipe and MC.FindCookingRecipe( stackAt( runtime, 0 ), runtime.recipeType ) or nil
 		runtime.cookingTimeSpent = 0
 		runtime.cookingTotalTime = recipe and recipe.cookingTime or 0
@@ -326,7 +327,8 @@ local function buildMenu( ply, record, runtime )
 			end
 			local input = stackAt( runtime, 0 )
 			local recipe = MC.FindCookingRecipe( input, runtime.recipeType )
-			if inputChanged then
+			local previousInput = MC.FurnaceStorageFromRecord( runtime.record )[1]
+			if inputChanged and not MC.ItemStacksEqual( previousInput, input, true ) then
 				runtime.cookingTimeSpent, runtime.cookingTotalTime = 0, recipe and recipe.cookingTime or 0
 			end
 			syncRecord( runtime, true )
