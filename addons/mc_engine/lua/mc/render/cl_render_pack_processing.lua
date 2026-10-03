@@ -128,6 +128,7 @@ end
 function P.Release( instance )
 	if not instance then return end
 	P.Invalidate( instance )
+	instance.contextIdentities, instance.contextScratch = nil, nil
 	instance.bank.owner, instance.retired = nil, true
 end
 
@@ -138,26 +139,69 @@ function P.FrameTime()
 	return P.time
 end
 
-function P.Context( instance, active, x, y, z, view )
+local function sameValues( a, b )
+	if not b then return false end
+	for key, value in pairs( a ) do if b[key] ~= value then return false end end
+	for key, value in pairs( b ) do if a[key] ~= value then return false end end
+	return true
+end
+
+local function contextIdentity( instance, active, x, y, z, view )
 	view = view or render.GetViewSetup( true )
 	local w, h = view.width or view.w, view.height or view.h
 	requireValue( type( w ) == "number" and type( h ) == "number" and w > 0 and h > 0 and w <= 16384 and h <= 16384,
 		"render_processing_view", "processing requires finite viewport dimensions" )
 	local ox, oy, oz = MC.ChunkRenderFrameOffset()
 	local frame = FrameNumber()
-	local context = { time = P.FrameTime(), block_size = MC.API.Coords.BlockSize(),
-		view_x = x, view_y = y, view_z = z, view_width = w, view_height = h,
-		origin_x = ox, origin_y = oy, origin_z = oz, settings = {} }
-	for _, spec in ipairs( instance.definition.settings ) do context.settings[spec.key] = MC.RenderPackSettings.Get( spec.key ) end
 	local angle = view.angles
 	local rt = render.GetRenderTarget()
-	context.key = canonical( { frame = frame, version = active.version, generation = MC.StateWorldGeneration,
-		context = context, viewportX = view.x, viewportY = view.y, rt = rt and rt:GetName(),
-		pitch = angle and angle.p, yaw = angle and angle.y, roll = angle and angle.r,
-		fov = view.fov, aspect = view.aspectratio or view.aspect, znear = view.znear, zfar = view.zfar,
-		ortho = view.ortho, offcenter = view.offcenter } )
-	context.world = MC.World
+	local identity = instance.contextScratch or {}
+	identity.frame, identity.version, identity.generation = frame, active.version, MC.StateWorldGeneration
+	identity.viewportX, identity.viewportY, identity.rt = view.x, view.y, rt and rt:GetName()
+	identity.pitch, identity.yaw, identity.roll = angle and angle.p, angle and angle.y, angle and angle.r
+	identity.fov, identity.aspect = view.fov, view.aspectratio or view.aspect
+	identity.znear, identity.zfar = view.znear, view.zfar
+	identity.ortho = view.ortho ~= nil and canonical( view.ortho ) or nil
+	identity.offcenter = view.offcenter ~= nil and canonical( view.offcenter ) or nil
+	identity.time, identity.block_size, identity.world = P.FrameTime(), MC.API.Coords.BlockSize(), MC.World
+	identity.view_x, identity.view_y, identity.view_z = x, y, z
+	identity.view_width, identity.view_height = w, h
+	identity.origin_x, identity.origin_y, identity.origin_z = ox, oy, oz
+	-- Validated spec objects are unique keys, separate from camera fields.
+	-- Keep a private scalar snapshot: callers can extend/mutate their context.
+	for _, spec in ipairs( instance.definition.settings ) do identity[spec] = MC.RenderPackSettings.Get( spec.key ) end
+	if instance.contextFrame ~= frame or not instance.contextIdentities then
+		instance.contextFrame, instance.contextIdentities = frame, {}
+	end
+	-- Screen and light-space consumers interleave. A round trip must recover
+	-- the same key without retaining identities beyond this engine frame.
+	local identities = instance.contextIdentities
+	for _, entry in ipairs( identities ) do
+		if sameValues( identity, entry.identity ) then
+			instance.contextScratch = identity
+			return entry
+		end
+	end
+	instance.contextSerial = ( instance.contextSerial or 0 ) + 1
+	local entry = { identity = identity, key = "context/" .. instance.contextSerial }
+	identities[#identities + 1] = entry
+	instance.contextScratch = nil
+	return entry
+end
+
+local function copyContext( instance, entry )
+	local identity = entry.identity
+	local context = { key = entry.key, world = identity.world, time = identity.time, block_size = identity.block_size,
+		view_x = identity.view_x, view_y = identity.view_y, view_z = identity.view_z,
+		view_width = identity.view_width, view_height = identity.view_height,
+		origin_x = identity.origin_x, origin_y = identity.origin_y, origin_z = identity.origin_z, settings = {} }
+	for _, spec in ipairs( instance.definition.settings ) do context.settings[spec.key] = identity[spec] end
 	return context
+end
+
+-- Public callers (including screen adapters) may extend or retain their copy.
+function P.Context( instance, active, x, y, z, view )
+	return copyContext( instance, contextIdentity( instance, active, x, y, z, view ) )
 end
 
 -- Maps tile UV + normalized linear depth to world blocks. Reducing only the
@@ -313,6 +357,14 @@ function P.Run( instance, stage, context, shadow )
 	else instance.shadowKey = key end
 	instance.outputs = result
 	return true
+end
+
+-- Only the generic executor consumes this private snapshot; adapters never see
+-- it. Run still checks the currently resident outputs after an A-B-A view trip.
+function P.RunView( instance, stage, active, x, y, z, view, shadow )
+	local entry = contextIdentity( instance, active, x, y, z, view )
+	if not entry.context then entry.context = copyContext( instance, entry ) end
+	return P.Run( instance, stage, entry.context, shadow )
 end
 
 -- Geometry adapters use the same owner bank and cumulative allocation budget.

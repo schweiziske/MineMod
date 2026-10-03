@@ -184,15 +184,25 @@ local processingStages = { begin = 1, shadowcomp = 2, opaque = 3, world = 4, fin
 -- Engine binding ABI: descriptors select data providers, never Lua callbacks.
 Schema.ScreenBindings = { ssao = "opaque", ssao_composite = "opaque", fog = "world",
 	volumetric = "world", volumetric_composite = "world", bloom_prefilter = "final",
-	bloom_horizontal = "final", bloom_vertical = "final", bloom_composite = "final" }
+	bloom_horizontal = "final", bloom_vertical = "final", bloom_composite = "final",
+	exposure_meter = "final", exposure_reduce_16 = "final", exposure_reduce_4 = "final",
+	exposure_adapt = "final", exposure_composite = "final", exposure_store = "final" }
 Schema.ProcessingStages = processingStages
 local screenInputs = {
 	ssao = { "opaque_depth" }, ssao_composite = { "scene_color", "target", "opaque_depth" },
 	fog = { "scene_color", "scene_depth" }, volumetric = { "scene_depth", "volume_shadow" },
 	volumetric_composite = { "scene_color", "target", "scene_depth" }, bloom_prefilter = { "scene_color" },
-	bloom_horizontal = { "target" }, bloom_vertical = { "target" }, bloom_composite = { "scene_color", "target" }
+	bloom_horizontal = { "target" }, bloom_vertical = { "target" }, bloom_composite = { "scene_color", "target" },
+	exposure_meter = { "scene_color" }, exposure_reduce_16 = { "target" }, exposure_reduce_4 = { "target" },
+	exposure_adapt = { "target", "exposure_history" }, exposure_composite = { "scene_color", "target" },
+	exposure_store = { "target" }
 }
-local screenComposites = { ssao_composite = true, fog = true, volumetric_composite = true, bloom_composite = true }
+local screenComposites = { ssao_composite = true, fog = true, volumetric_composite = true, bloom_composite = true,
+	exposure_composite = true }
+local exposureOrder = { "exposure_meter", "exposure_reduce_16", "exposure_reduce_4",
+	"exposure_adapt", "exposure_composite", "exposure_store" }
+local exposureSizes = { exposure_meter = 64, exposure_reduce_16 = 16, exposure_reduce_4 = 4,
+	exposure_adapt = 1, exposure_store = 1 }
 
 Schema.ProcessingScalars = { time = 1, block_size = 1, view_x = 1, view_y = 1, view_z = 1,
 	view_width = 1, view_height = 1, target_width = 1, target_height = 1,
@@ -246,6 +256,7 @@ local function validatePipeline( def )
 	local specs = {}
 	for _, spec in ipairs( def.settings ) do specs[spec.key] = spec end
 	local written, writers, ids, previous = {}, {}, {}, 0
+	local exposure, exposureCount, outputCounts = {}, 0, {}
 	local function reference( input, stage )
 		fields( input, { resource = true, target = true, builtin = true, repeatTexture = true, filter = true }, "processing_input" )
 		local kinds = ( input.resource and 1 or 0 ) + ( input.target and 1 or 0 ) + ( input.builtin and 1 or 0 )
@@ -265,7 +276,8 @@ local function validatePipeline( def )
 			or pipeline.version == 2 and ( input.builtin == "scene_color" and stage >= 3
 				or input.builtin == "opaque_depth" and stage == 3
 				or input.builtin == "scene_depth" and stage == 4
-				or input.builtin == "volume_shadow" and stage == 4 )
+				or input.builtin == "volume_shadow" and stage == 4
+				or input.builtin == "exposure_history" and stage == 5 )
 		if not available then reject( "unavailable_processing_builtin" ) end
 		return { ["builtin:" .. input.builtin] = true }
 	end
@@ -281,6 +293,14 @@ local function validatePipeline( def )
 			if pass.stage == "world" and not geometry.water_depth then reject( "missing_processing_geometry_dependency" ) end
 			if Schema.ScreenBindings[pass.binding] ~= pass.stage or pass.enableSettings or pass.disabledInput
 				or pass.worldPeriod then reject( "invalid_processing_screen_binding" ) end
+			if pass.binding:find( "^exposure_" ) then
+				exposureCount = exposureCount + 1
+				if exposureOrder[exposureCount] ~= pass.binding
+					or pass.constants and next( pass.constants ) or pass.matrices and next( pass.matrices ) then
+					reject( "invalid_processing_exposure_chain" )
+				end
+				exposure[pass.binding] = pass
+			end
 		elseif pass.binding then reject( "unexpected_processing_binding" ) end
 		previous = stage
 		if not localID( pass.program ) or not def.programs[pass.program] then reject( "missing_processing_program" ) end
@@ -292,7 +312,13 @@ local function validatePipeline( def )
 		map( pass.inputs, function( key ) return type( key ) == "string" and key:match( "^s[0-7]$" ) end, 8, "processing_inputs" )
 		if stage > 2 then
 			if ( screenComposites[pass.binding] == true ) ~= screen then reject( "invalid_processing_screen_output" ) end
-			if not screen and ( target.size.relative ~= "view" or target.format ~= "rgba16f"
+			local fixed = exposureSizes[pass.binding]
+			if fixed then
+				if target.size.relative or target.size.width ~= fixed or target.size.height ~= fixed
+					or target.format ~= "rgba16f" or target.filter ~= "point" then
+					reject( "invalid_processing_exposure_target" )
+				end
+			elseif not screen and ( target.size.relative ~= "view" or target.format ~= "rgba16f"
 				or target.filter ~= ( pass.binding:find( "^bloom_" ) and "linear" or "point" ) ) then
 				reject( "invalid_processing_screen_target" )
 			end
@@ -303,9 +329,17 @@ local function validatePipeline( def )
 					reject( "invalid_processing_binding_input" )
 				end
 			end
+			if exposure[pass.binding] then
+				local count = 0
+				for _ in pairs( pass.inputs ) do count = count + 1 end
+				if count ~= #screenInputs[pass.binding] then reject( "invalid_processing_binding_input" ) end
+			end
 		end
 		local origins = {}
 		for slot, input in pairs( pass.inputs ) do
+			if input.builtin == "exposure_history" and ( pass.binding ~= "exposure_adapt" or slot ~= "s1" ) then
+				reject( "unavailable_processing_builtin" )
+			end
 			local sources = reference( input, stage )
 			if sources["target:" .. pass.output] then reject( "processing_read_write_alias" ) end
 			origins[slot] = sources
@@ -364,8 +398,34 @@ local function validatePipeline( def )
 		elseif pass.disabledInput ~= nil then reject( "unexpected_processing_disabled_input" ) end
 		if not screen and writers[pass.output] and writers[pass.output] ~= stage then reject( "processing_cross_stage_write" ) end
 		if not screen then
+			outputCounts[pass.output] = ( outputCounts[pass.output] or 0 ) + 1
 			writers[pass.output] = stage
 			written[pass.output] = possible
+		end
+	end
+	if exposureCount > 0 then
+		if exposureCount ~= #exposureOrder or pipeline.passes[#pipeline.passes].binding ~= "exposure_store" then
+			reject( "invalid_processing_exposure_chain" )
+		end
+		for i = 2, 5 do
+			local pass = exposure[exposureOrder[i]]
+			local input = i == 5 and pass.inputs.s1 or pass.inputs.s0
+			if input.target ~= exposure[exposureOrder[i - 1]].output then reject( "invalid_processing_exposure_chain" ) end
+		end
+		if exposure.exposure_store.inputs.s0.target ~= exposure.exposure_adapt.output then
+			reject( "invalid_processing_exposure_chain" )
+		end
+		for binding in pairs( exposureSizes ) do
+			if outputCounts[exposure[binding].output] ~= 1 then reject( "invalid_processing_exposure_chain" ) end
+		end
+		local limits = { auto_exposure_key = { 0.01, 1 }, auto_exposure_strength = { 0, 1 },
+			auto_exposure_range = { 0, 3 }, auto_exposure_time = { 0.1, 10 } }
+		if not specs.auto_exposure or specs.auto_exposure.type ~= "bool" then reject( "invalid_processing_exposure_setting" ) end
+		for key, bounds in pairs( limits ) do
+			local spec = specs[key]
+			if not spec or spec.type ~= "number" or spec.min < bounds[1] or spec.max > bounds[2] then
+				reject( "invalid_processing_exposure_setting" )
+			end
 		end
 	end
 	if pipeline.exports == nil then pipeline.exports = {} end

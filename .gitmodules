@@ -1,12 +1,7 @@
-[submodule "_native/binary/mcswep_native_mesh/include/garrysmod_common"]
-	path = _native/binary/mcswep_native_mesh/include/garrysmod_common
-	url = https://github.com/danielga/garrysmod_common.git
-	branch = x86-64-support-sourcesdk
-[submodule "_native/binary/mcswep_native_mesh/include/sourcesdk-minimal"]
-	path = _native/binary/mcswep_native_mesh/include/sourcesdk-minimal
-	url = https://github.com/danielga/sourcesdk-minimal.git
-	branch = master
-[submodule "_native/binary/mcswep_native_mesh/include/sourcesdk-minimal-x86-64-branch"]
-	path = _native/binary/mcswep_native_mesh/include/sourcesdk-minimal-x86-64-branch
+[submodule "native/include/sourcesdk-minimal-x86-64-branch"]
+	path = native/include/sourcesdk-minimal-x86-64-branch
 	url = https://github.com/danielga/sourcesdk-minimal.git
 	branch = x86-64-branch
+[submodule "native/include/rapidjson-master"]
+	path = native/include/rapidjson-master
+	url = https://github.com/Tencent/rapidjson.git

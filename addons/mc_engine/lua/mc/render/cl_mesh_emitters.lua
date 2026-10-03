@@ -263,7 +263,8 @@ function RM.PrepareGeneratedPlanCulling( snapshots, sectionIndex )
 	if not visit then return GeneratedCullPlans end -- No generated catalog in legacy-only clients.
 	for index = sectionIndex or 1, sectionIndex or #snapshots do
 		local snapshot = snapshots[index]
-		for i = 1, snapshot.count do
+		-- Native-only sections keep their voxel arrays in the worker world.
+		for i = 1, snapshot.nativeOnly and 0 or snapshot.count do
 			local stateId = snapshot.states[i]
 			if GeneratedCullPlans[stateId] == nil then
 				local allCubic, found = true, false
@@ -312,12 +313,13 @@ function setTemplateTriVertex( rec, t, ci, x, y, z, u, v )
 	end
 end
 
-local function buildShapeTemplate( ctx, b, id, orient, blockBoxes )
+local function buildShapeTemplate( ctx, b, id, orient, blockBoxes, resolvedBoxes )
 	if not blockBoxes and not MC.BlockBoxesForState then return false end
-	local boxes = stateBoxes( ctx, id, orient )
+	local boxes = resolvedBoxes or stateBoxes( ctx, id, orient )
 	if not boxes then return false end
 
 	local modelFaces = b and b.boxFaces
+	if resolvedBoxes and b.shape == "stairs" then modelFaces = nil end
 	local tri = C.TRI
 	local out = { boxes = boxes, n = 0 }
 	for boxIndex = 1, #boxes do
@@ -1351,7 +1353,7 @@ emitFullCubeBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, 
 	local directEmitCheapFullCube = directionalEmit or not shouldStoreBlockEmissionCache( "fullCube", directEmitVertexCount )
 	if directEmitCheapFullCube then meshPerf.fullDirectBlocks = meshPerf.fullDirectBlocks + 1 end
 	if directEmitCheapFullCube then
-		if targetBuffer.nv + directEmitVertexCount >= C.VERT_LIMIT then flush( targetBuffer ) end
+		if not ctx.nativeRecipe and targetBuffer.nv + directEmitVertexCount >= C.VERT_LIMIT then flush( targetBuffer ) end
 		ctx.setCur( targetBuffer )
 	else
 		ctx.prepareBlockCacheBuffer( targetBuffer )
@@ -1408,6 +1410,215 @@ BlockEmitters.liquid = emitLiquidBlockRecord
 BlockEmitters.fullCube = emitFullCubeBlockRecord
 BlockEmitters.shape = emitShapeBlockRecord
 
+-- Compile only state-invariant, opaque direct cubes. Other emitters retain
+-- their existing Lua semantics until their worker recipes are implemented.
+function RM.NativeCubeRecipe( stateId )
+	local visual = MC.ResolveBlockStateVisual( stateId, 0, 0, 0 )
+	if not visual then return false end
+	local b, id = visual.block, visual.id
+	local name = visual.schema and visual.schema.name
+	if visual.cacheable == false or visual.generatedVisualOverride
+		or ( name and MC.BlockStateVisualResolvers and MC.BlockStateVisualResolvers[name] )
+		or ( name and MC.BlockStateCollisionResolvers and MC.BlockStateCollisionResolvers[name] )
+		or b ~= MC.Blocks[id] or b.transparent or b.shape == "model" or b.shape == "cross"
+		or specialEmitterForBlock( b ) or isLiquidBlock( id )
+		or ( isWaterloggedState and isWaterloggedState( stateId ) )
+		or not MC.BlockVisualIsFullCube( visual, 0, 0, 0 )
+		or MC.BlockVisualIsTranslucent( visual, 0, 0, 0 ) then return false end
+	for _, field in ipairs( { "faces", "fullCube", "translucent", "lightEmission" } ) do
+		if type( visual[field] ) == "function" then return false end
+	end
+	local slice = { blockSize = 1, nativeL2 = true }
+	local buffer = MC.RenderL2Quad.NewBuffer( slice )
+	buffer.directional = true
+	local ctx = { l2 = true, nativeRecipe = true, currentVisual = visual, currentStateId = stateId,
+		meshPerf = RM.newMeshPerfStats(), meshProbe = false }
+	ctx.setCur = function() end
+	ctx.fullCubeBuffer = function() return buffer end
+	ctx.currentEmitLightStyle = function() return "l2" end
+	ctx.flush = function() error( "cube recipe exceeded one batch", 0 ) end
+	ctx.emitL2 = function( quad, block, bx, by, bz, wx, wy, wz, emission )
+		MC.RenderL2Quad.EmitNative( slice, buffer, quad, block, bx, by, bz, wx, wy, wz, emission )
+	end
+	emitFullCubeBlockRecord( ctx, b, id, visual.renderOrient, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, buffer, 63, 6 )
+	local recipe, err = MC.NativeL2.module.CompileL2Cube( buffer.nativeCommands, id )
+	MC.RenderL2Resources.Require( recipe ~= nil, "native_l2_cube", tostring( err ) )
+	return { value = recipe, id = id }
+end
+
+function RM.NativeModelRecipe( stateId, includeWaterlogged )
+	if meshDebugFullCubeOnly() then return false end
+	local visual = MC.ResolveBlockStateVisual( stateId, 0, 0, 0 )
+	if not visual or not MC.StateVisualPlanGroups or not MC.RenderL2Models then return false end
+	local b, id = visual.block, visual.id
+	local name = visual.schema and visual.schema.name
+	if visual.cacheable == false or b ~= MC.Blocks[id]
+		or ( name and MC.BlockStateVisualResolvers and MC.BlockStateVisualResolvers[name] )
+		or specialEmitterForBlock( b ) or isLiquidBlock( id )
+		or ( isWaterloggedState and isWaterloggedState( stateId ) and not includeWaterlogged ) then return false end
+	for _, field in ipairs( { "faces", "fullCube", "translucent", "lightEmission" } ) do
+		if type( visual[field] ) == "function" then return false end
+	end
+	local ctx = { currentVisual = visual, currentStateId = stateId }
+	local emitter
+	-- Base Lua shapes (stairs, slabs, connections) still have catalog models.
+	-- Compile the host's complete state plan before attaching its water layer.
+	local waterloggedHost = includeWaterlogged and isWaterloggedState( stateId ) and visual.forceBaseRenderer ~= true
+	if waterloggedHost then
+		emitter = BlockEmitters.statePlan
+	else
+		emitter = selectBlockEmitter( ctx, b, id, visual.renderOrient, MC.BlockIsFullCube, 0, 0, 0 )
+	end
+	if emitter ~= BlockEmitters.statePlan and emitter ~= BlockEmitters.model then return false end
+	local groups = MC.StateVisualPlanGroups( stateId )
+	if #groups == 0 then
+		if not waterloggedHost then return false end
+		local planId, _, count = MC.StateVisualPlanRangeFast( stateId )
+		if planId < 1 or planId > MC.StateVisualCatalog.visualPlanCount or count ~= 0 then return false end
+	end
+	local models = MC.RenderL2Models
+	for _, group in ipairs( groups ) do
+		for _, alternative in ipairs( group.alternatives ) do
+			if not models.Has( alternative.model ) then return false end
+		end
+	end
+	local legacy, selected
+	if emitter == BlockEmitters.model then
+		local planId = MC.StateVisualPlanIdFast( stateId )
+		if MC.StateVisualPlanHasRandomChoice( planId ) then return false end
+		legacy = getModelTemplate( b, visual.renderOrient, stateId )
+		if not legacy then return false end
+		selected = models.Selection( stateId, 0, 0, 0 )
+		if not selected then return false end
+	end
+	local function capture( template, modelId, ao )
+		local selection = { n = 1, modelAO = ao }
+		if modelId then selection[1] = modelId
+		else
+			selection.n = selected.n
+			for i = 1, selected.n do selection[i] = selected[i] end
+		end
+		local slice = { blockSize = 1, nativeL2 = true, selections = { selection },
+			snapshot = { Index = function() return 1 end, Read = function() return { stateId = stateId, loaded = true } end } }
+		local buffer = MC.RenderL2Quad.NewBuffer( slice )
+		local culls = {}
+		for i = 1, template.n do
+			local quad = template[i]
+			local tint = quad.tintIndex and quad.tintIndex >= 0 and blockStateTintCode
+				and blockStateTintCode( stateId, id, quad.tintIndex ) or 0
+			local previous = buffer.quadCount
+			MC.RenderL2Quad.EmitNative( slice, buffer, quad, id, 0, 0, 0, 0, 0, 0, 0, tint,
+				modelId and MC.RenderLightBuffer.KIND.GENERATED or MC.RenderLightBuffer.KIND.MODEL, modelId )
+			if buffer.quadCount > previous then
+				culls[#culls + 1] = modelId and visual.cullGeneratedFaces ~= false and quad.faceCubic and quad.faceIndex or 0
+			end
+		end
+		return buffer.nativeCommands, culls
+	end
+	local packet = {}
+	if #groups == 0 then
+		-- A registered empty multipart plan is one no-op choice in the DLL ABI.
+		packet[1] = { 0, { { 1, true, {}, {}, {} } } }
+	elseif legacy then
+		local shaded, culls = capture( legacy, nil, true )
+		local flat = capture( legacy, nil, false )
+		packet[1] = { 0, { { 1, selected.modelAO, shaded, flat, culls } } }
+	else
+		for i, group in ipairs( groups ) do
+			local alternatives = {}
+			for j, alternative in ipairs( group.alternatives ) do
+				local modelId = alternative.model
+				local template = getGeneratedModelTemplate( stateVisualModelData( modelId ) )
+				if not template then return false end
+				local shaded, culls = capture( template, modelId, true )
+				local flat = capture( template, modelId, false )
+				alternatives[j] = { alternative.weight, models.Profile( modelId ).modelAO, shaded, flat, culls }
+			end
+			packet[i] = { group.salt, alternatives }
+		end
+	end
+	local recipe, err = MC.NativeL2.module.CompileL2Model( packet, id, string.match( b.name, "_leaves$" ) ~= nil, 0 )
+	MC.RenderL2Resources.Require( recipe ~= nil, "native_l2_model", "state " .. stateId .. ": " .. tostring( err ) )
+	return { value = recipe, id = id, model = true, translucent = stateTranslucent( ctx, id, 0, 0, 0 ) }
+end
+
+-- Compile finite base-emitter variants once. Neighbour selection and partial
+-- box coverage run against the immutable world snapshot on the worker.
+function RM.NativeShapeRecipe( stateId )
+	if meshDebugFullCubeOnly() then return false end
+	local visual = MC.ResolveBlockStateVisual( stateId, 0, 0, 0 )
+	if not visual then return false end
+	local b, id, orient = visual.block, visual.id, visual.renderOrient
+	local name = visual.schema and visual.schema.name
+	if visual.cacheable == false or visual.generatedVisualOverride or b ~= MC.Blocks[id]
+		or name and MC.BlockStateVisualResolvers and MC.BlockStateVisualResolvers[name]
+		or specialEmitterForBlock( b ) or isLiquidBlock( id )
+		or isWaterloggedState( stateId ) then return false end
+	for _, field in ipairs( { "faces", "boxes", "fullCube", "translucent", "lightEmission" } ) do
+		if type( visual[field] ) == "function" then return false end
+	end
+	local ctx = { l2 = true, nativeRecipe = true, currentVisual = visual, currentStateId = stateId,
+		meshPerf = RM.newMeshPerfStats(), meshProbe = false }
+	local emitter = selectBlockEmitter( ctx, b, id, orient, MC.BlockIsFullCube, 0, 0, 0 )
+	if emitter ~= BlockEmitters.fullCube and emitter ~= BlockEmitters.cross and emitter ~= BlockEmitters.shape then return false end
+	local kind = emitter == BlockEmitters.shape and connectionKindForBlock( b, id )
+	local stairs = emitter == BlockEmitters.shape and b.shape == "stairs"
+	local selector = stairs and 1 or kind and ( kind == "pipe6" and 3 or 2 ) or 0
+	MC.RenderL2Resources.Require( selector == 0 or visual.boxes == nil,
+		"native_l2_shape", "dynamic base shape overrides its boxes: " .. stateId )
+	local variants, alternatives = selector == 1 and 5 or selector == 2 and 16 or selector == 3 and 64 or 1, {}
+	local stairShapes = { "straight", "inner_left", "inner_right", "outer_left", "outer_right" }
+	for variant = 1, variants do
+		local slice = { blockSize = 1, nativeL2 = true }
+		local buffer = MC.RenderL2Quad.NewBuffer( slice )
+		local culls = {}
+		local function emit( quad, lightingKind, cull )
+			local previous = buffer.quadCount
+			MC.RenderL2Quad.EmitNative( slice, buffer, quad, id, 0, 0, 0, 0, 0, 0, 0, 0, lightingKind )
+			if buffer.quadCount > previous then culls[#culls + 1] = cull or 0 end
+		end
+		ctx.emitL2 = function( quad, _, bx, by, bz, wx, wy, wz, emission, tint, lightingKind )
+			emit( quad, lightingKind, emitter == BlockEmitters.fullCube and quad.faceIndex or 0 )
+		end
+		ctx.setCur = function() end
+		ctx.prepareBlockCacheBuffer = function() return true end
+		ctx.fullCubeBuffer = function() return buffer end
+		ctx.currentEmitLightStyle = function() return "l2" end
+		ctx.flush = function() error( "shape recipe exceeded one batch", 0 ) end
+		if emitter == BlockEmitters.fullCube then
+			emitFullCubeBlockRecord( ctx, b, id, orient, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, buffer, 63, 6 )
+		elseif emitter == BlockEmitters.cross then
+			RM.EmitCrossBlock( ctx, b, id, 0, 0, 0, 0, 0, 0 )
+		else
+			local boxes, template
+			if kind then
+				boxes = MC.ConnectionBlockBoxes( kind, variant - 1 )
+				template = buildConnectionShapeTemplate( ctx, kind, id, orient, b, variant - 1, boxes )
+			else
+				if stairs then boxes = MC.StairBoxes( id, orient, nil, nil, nil, stairShapes[variant] ) end
+				template = buildShapeTemplate( ctx, b, id, orient, MC.BlockBoxes, boxes )
+			end
+			MC.RenderL2Resources.Require( template ~= false, "native_l2_shape", "missing base shape: " .. stateId )
+			for i = 1, template.n do
+				local quad = template[i]
+				if kind or not coveredByBoxes( quad.box, quad.faceIndex, template.boxes, 0, 0, 0 ) then
+					local cull = 0
+					if connectionBoundaryBit( quad.box, quad.faceIndex ) ~= 0 and ( not kind or quad.neighborCheck ) then
+						local box = quad.box
+						cull = { quad.faceIndex, box[1], box[2], box[3], box[4], box[5], box[6] }
+					end
+					emit( quad, nil, cull )
+				end
+			end
+		end
+		alternatives[variant] = { 1, true, buffer.nativeCommands, buffer.nativeCommands, culls }
+	end
+	local value, err = MC.NativeL2.module.CompileL2Model( { { 0, alternatives } }, id,
+		string.match( b.name, "_leaves$" ) ~= nil, selector )
+	MC.RenderL2Resources.Require( value ~= nil, "native_l2_shape", "state " .. stateId .. ": " .. tostring( err ) )
+	return { value = value, id = id, model = true, translucent = stateTranslucent( ctx, id, 0, 0, 0 ) }
+end
+
 local function emitSelectedBlock( emitter, ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer, visibleFaceMask, visibleFaceCount )
 	emitter = emitter or BlockEmitters.shape
 	return emitter( ctx, b, id, orient, bx, by, bz, wx, wy, wz, lx, ly, lz, li, targetBuffer, visibleFaceMask, visibleFaceCount )
@@ -1419,6 +1630,50 @@ local function waterBlockId()
 	local schema = MC.BlockStateSchemaByName and MC.BlockStateSchemaByName["minecraft:water"] or nil
 	WaterBlockId = schema and schema.blockId or false
 	return WaterBlockId or nil
+end
+
+function RM.NativeFluidRecipe( stateId )
+	local kind = MC.Liquid.DecodeState( stateId )
+	if not kind then return nil end
+	local visual = MC.ResolveBlockStateVisual( stateId, 0, 0, 0 )
+	MC.RenderL2Resources.Require( visual ~= nil, "native_l2_fluid", "missing fluid visual" )
+	local overlay = isWaterloggedState( stateId )
+	local id = overlay and waterBlockId() or visual.id
+	MC.RenderL2Resources.Require( id ~= nil and MC.LiquidKind( id ) == kind,
+		"native_l2_fluid", "missing fluid block/material for state " .. stateId )
+	local recipe
+	if overlay then
+		recipe = RM.NativeModelRecipe( stateId, true )
+		MC.RenderL2Resources.Require( recipe ~= false, "native_l2_fluid",
+			"waterlogged host has no Native model recipe: " .. stateId )
+	else
+		recipe = { value = false, id = id, fluidOnly = true,
+			translucent = MC.BlockVisualIsTranslucent( visual, 0, 0, 0 ) }
+	end
+	local orient = overlay and 0 or visual.renderOrient
+	local tiles, shades = {}, {}
+	for face = 1, 7 do
+		local tile
+		if face == 7 then tile = LiquidFlowTiles[kind]
+		elseif face <= 2 then tile = LiquidStillTiles[kind] or liquidFace( id, face, orient )
+		else tile = liquidFace( id, face, orient ) end
+		MC.RenderL2Resources.Require( tile ~= nil, "native_l2_fluid", "missing fluid atlas tile" )
+		local u1, v1 = tileUVPointRaw( tile, 1, 1 )
+		local u2, v2 = tileUVPointRaw( tile, 2, 2 )
+		local u0, v0 = tileUVPointRaw( tile, 0, 0 )
+		local su, sv = u2 - u1, v2 - v1
+		local ou, ov = u1 - su, v1 - sv
+		tiles[face] = { ou, ov, su, sv, u0 - ou, v0 - ov }
+		if face <= 6 then shades[face] = RM.shadeRGBAByIndex( shadeIndexForFace( face ) ) end
+	end
+	local value, err = MC.NativeL2.module.CompileL2Fluid( {
+		kind = kind == "water" and 1 or 2, tiles = tiles, shade = shades,
+		emission = MC.BlockLightEmission( id ), opacity = C.SH_TOP.a,
+		offset = C.FLUID_FACE_OFFSET, flow = 1, full = MC.BlockIsFullCube( id, 0 ) and 1 or 0,
+	} )
+	MC.RenderL2Resources.Require( value ~= nil, "native_l2_fluid", tostring( err ) )
+	recipe.fluid, recipe.fluidId = value, id
+	return recipe
 end
 
 local function emitWaterloggedOverlay( ctx, stateId, bx, by, bz, wx, wy, wz, targetBuffer, flush, meshPerf )

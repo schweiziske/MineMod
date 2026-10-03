@@ -109,6 +109,24 @@ function MC.VisitStateVisualModelCandidates( stateId, visitor )
 	end
 end
 
+-- Registration-only export. Runtime model selection remains allocation-free.
+function MC.StateVisualPlanGroups( stateId )
+	local planId, groupOffset, groupCount = MC.StateVisualPlanRangeFast( stateId )
+	local result = {}
+	for groupIndex = 0, groupCount - 1 do
+		local groupId = u16( Catalog.planData, ( groupOffset + groupIndex ) * 2 + 1 )
+		local at = ( groupId - 1 ) * 3 + 1
+		local first, count = u16( Catalog.groupIndex, at ), byte( Catalog.groupIndex, at + 2 )
+		local alternatives = {}
+		for i = 0, count - 1 do
+			local offset = ( first + i ) * 3 + 1
+			alternatives[i + 1] = { model = u16( Catalog.groupData, offset ), weight = byte( Catalog.groupData, offset + 2 ) }
+		end
+		result[groupIndex + 1] = { salt = groupId + planId * 131, alternatives = alternatives }
+	end
+	return result
+end
+
 function MC.CollectStateVisualModels( stateId, bx, by, bz, out )
 	out = out or {}
 	local count = 0

@@ -138,6 +138,7 @@ local function partitionMatches( c, source, size )
 				"world meshes must be emitted in L2 format; restart the client after upgrading" )
 			for id in pairs( part.blockIds ) do
 				if part.request ~= ( c.bindingKeys[id] or "terrain" ) then return false end
+				if ( part.castsShadow ~= false ) ~= ( MC.Blocks[id].castsShadow ~= false ) then return false end
 			end
 		end
 	end
@@ -179,7 +180,8 @@ local function bindSection( c, transaction, source, chunk, size )
 				local entries = bound.passes[node.key]
 				if not entries then entries = {} bound.passes[node.key] = entries end
 				entries[#entries + 1] = { mesh = data.mesh, material = material,
-					vertexCount = data.quadCount * 6, bounds = part.bounds, direction = part.direction }
+					vertexCount = data.quadCount * 6, bounds = part.bounds, direction = part.direction,
+					castsShadow = part.castsShadow ~= false }
 				bound.draws = bound.draws + 1
 			end
 		end
@@ -373,7 +375,9 @@ local function syncSections( c, force )
 	local started, size, generation = SysTime(), MC.API.Coords.BlockSize(), MC.ChunkDrawListVersion()
 	requireValue( type( size ) == "number" and size > 0 and size < math.huge,
 		"render_pack_block_size", "invalid runtime block size" )
+	-- A map-only pack update can arrive alongside a sparse geometry update.
 	force = force or c.blockSize ~= size
+		or ( c.bundle.texturePackRevision or 0 ) ~= ( MC.TexturePackRevision or 0 )
 	if force or not c.postProcessBound then
 		local definition = c.plan.owners["pack/" .. c.pack].definition
 		if definition.programs.post_ssao then c.postProcess = MC.RenderPBRPost.Register( definition, size, c.processing ) end
@@ -543,17 +547,11 @@ function L.Step()
 	L.ReportFaults()
 end
 
-local function processingContext( c, x, y, z, view )
-	return MC.RenderPackProcessing.Context( c.processing, c, x, y, z, view )
-end
-
 function L.BeginProcessing( x, y, z, view )
 	local c = L.active
 	if not c or not c.processing or not sameWorld( c ) then return true end
 	if c.processingRetryAt and SysTime() < c.processingRetryAt then return false end
-	local ok, result, err = pcall( function()
-		return MC.RenderPackProcessing.Run( c.processing, "begin", processingContext( c, x, y, z, view ) )
-	end )
+	local ok, result, err = pcall( MC.RenderPackProcessing.RunView, c.processing, "begin", c, x, y, z, view )
 	if not ok or not result then
 		MC.RenderPackProcessing.Invalidate( c.processing )
 		c.processingRetryAt = SysTime() + 1
@@ -572,8 +570,7 @@ function L.ProcessShadow( x, y, z, view, shadow )
 	local c = L.active
 	if not c or not c.processing then return shadow.target end
 	requireValue( sameWorld( c ) and not c.processingRetryAt, "render_processing_begin", "begin stage is unavailable" )
-	local context = processingContext( c, x, y, z, view )
-	local ok, err = MC.RenderPackProcessing.Run( c.processing, "shadowcomp", context, shadow )
+	local ok, err = MC.RenderPackProcessing.RunView( c.processing, "shadowcomp", c, x, y, z, view, shadow )
 	if not ok then error( err, 0 ) end
 	if not c.processing.definition.pipeline.exports.shadow_atlas then return shadow.target end
 	local output = MC.RenderPackProcessing.Export( c.processing, "shadow_atlas" )

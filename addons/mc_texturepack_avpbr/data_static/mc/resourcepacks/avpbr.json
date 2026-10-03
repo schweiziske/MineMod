@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "kind": "source",
+  "id": "avpbr",
+  "definition": {
+    "output": "avpbr_baked",
+    "title": "AVPBR (in-game bake)",
+    "description": "AVPBR by JoaquiX. Color + LabPBR normal/specular atlases; vanilla color fallback, neutral missing maps.",
+    "preview": "mc/resourcepacks/avpbr/pack",
+    "pbr": true
+  }
+}

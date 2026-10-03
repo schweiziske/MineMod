@@ -20,6 +20,16 @@ MC.MeshFrustumCull = MC.MeshFrustumCull or ( CreateClientConVar and CreateClient
 	"Skip drawing 8x8x8 MC render sections outside the view frustum" ) )
 MC.MeshDrawDistance = MC.MeshDrawDistance or ( CreateClientConVar and CreateClientConVar( "mc_mesh_draw_distance", "0", true, false,
 	"Max distance in units at which MC chunk meshes are drawn; 0 = lazy distance while lazy building is enabled, otherwise unlimited" ) )
+MC.NativeDraw = MC.NativeDraw or CreateClientConVar( "mc_native_draw", "1", true, false,
+	"Use Native L2 batch drawing; 0 is an explicit Lua draw-loop comparison" )
+MC.NativeDrawWorker = MC.NativeDrawWorker or CreateClientConVar( "mc_native_draw_worker", "1", true, false,
+	"Compute conservative L2 visibility on a background worker" )
+MC.NativeDrawDirections = MC.NativeDrawDirections or CreateClientConVar( "mc_native_draw_directions", "1", true, false,
+	"Skip back-facing index ranges without splitting L2 meshes" )
+
+local function useNativeDraw()
+	return MC.NativeL2 and MC.NativeL2.IsActive() and MC.NativeDraw:GetBool()
+end
 
 function MC.EffectiveMeshDrawDistance()
 	local distance = MC.MeshDrawDistance and MC.MeshDrawDistance.GetFloat and MC.MeshDrawDistance:GetFloat() or 0
@@ -278,6 +288,7 @@ local planeCount = 0
 local cullEyeX, cullEyeY, cullEyeZ = 0, 0, 0
 local maxDistSq = 0 -- 0 = unlimited
 local cullDistance, directionMargin, cullDirections = 0, 0, false
+local nativePortals, nativeRoot, nativeSeed, nativeDirections = false, 0, 63, false
 local SectionCull, Occlusion = MC.RenderSectionCull, MC.RenderOcclusion
 
 MC.DrawCullStats = MC.DrawCullStats or {
@@ -314,12 +325,19 @@ local function updateCullState( depthOnly )
 	directionMargin = size * 0.0001
 	cullDirections = MC.MeshDirectionalCull and MC.MeshDirectionalCull:GetBool()
 		and meshCullMode() == ( MATERIAL_CULLMODE_CCW or 0 ) and not ( view and view.ortho )
+	nativeDirections = MC.NativeDrawDirections:GetBool()
+		and meshCullMode() == ( MATERIAL_CULLMODE_CCW or 0 ) and not ( view and ( view.ortho or view.offcenter ) )
+	nativePortals, nativeRoot, nativeSeed = false, 0, 63
 	if Occlusion then
 		local bx, by, bz
 		if MC.MeshOcclusionCull:GetBool() and not ( view and view.ortho ) then
 			bx, by, bz = MC.API.Coords.EngineToCell( eye, LocalPlayer() )
 		end
-		Occlusion.PrepareView( bx, by, bz )
+		if useNativeDraw() then
+			nativePortals, nativeRoot, nativeSeed = Occlusion.PrepareNativeView( bx, by, bz, MC.NativeL2.module )
+		else
+			Occlusion.PrepareView( bx, by, bz )
+		end
 	end
 
 	local dist = MC.EffectiveMeshDrawDistance and MC.EffectiveMeshDrawDistance()
@@ -441,7 +459,112 @@ function MC.DrawChunkTranslucent( key )
 	drawPackChunk( key, true )
 end
 
-local function drawVisibleChunks( store, entries, count, chunks, stats, depthStage )
+local nativeView = { planes = {} }
+local nativeContext = {}
+local nativeStatNames = { "sectionsTested", "sectionsDrawn", "sectionFrustumCulled", "sectionOcclusionCulled",
+	"directionCulled", "vertices", "verticesCulled", "nativeBinds", "nativeRanges", "nativeAsyncHits",
+	"nativeSyncCulls", "nativeCullMS" }
+
+local function nativeChunk( key, list, x, y, z )
+	if nativeContext.store[key] ~= list or MC.GetChunkByKey( key ) ~= nativeContext.chunks[key] then return 0, false end
+	if MC.StreamHiddenChunkKeys and MC.StreamHiddenChunkKeys[key] then return 1, false end
+	-- World adapters may define a non-spherical distance policy. Preserve it at
+	-- the chunk boundary; no Lua vertex/section loop is involved.
+	if cullDistance > 0 and MC.ChunkDrawDistanceVisible then
+		local b = list.bounds
+		local dx, dy, dz, distanceSq = x, y, z, maxDistSq
+		if b then dx, dy, dz, distanceSq = x + b.x, y + b.y, z + b.z, ( cullDistance + b.radius ) ^ 2
+		else
+			local size = MC.API.Coords.BlockSize()
+			dx, dy, dz = x + MC.CS * size * 0.5, y + MC.CS * size * 0.5, z + MC.CH * size * 0.5
+		end
+		if MC.ChunkDrawDistanceVisible( dx, dy, dz, distanceSq ) == false then return 2, false end
+	end
+	return 3, not nativeContext.depthStage and MC.RenderDynamicLights.AffectsBounds( x, y, z, list.bounds )
+end
+
+local function nativeBind( material )
+	local selected = material
+	if overrideMaterial then
+		selected = overrideMaterial( material, nativeContext.depthStage == "world_cutout" )
+	elseif nativeContext.depthStage then
+		selected = MC.RenderPBRSSR.DepthMaterial( material, nativeContext.depthStage == "world_cutout" )
+	else
+		MC.RenderSky.Bind( material )
+		MC.RenderPBR.Bind( material )
+	end
+	nativeContext.bound = selected
+	render.SetMaterial( selected )
+end
+
+local function nativeOverlay( begin, base )
+	local dynamic = MC.RenderDynamicLights
+	local state = dynamic.materials[base]
+	if begin then
+		if not state then return false end -- Sky/custom materials deliberately have no local-light overlay.
+		dynamic.Bind( state, 1 )
+		nativeContext.overlay = true
+		render.OverrideDepthEnable( true, false )
+		render.OverrideBlend( true, BLEND_ONE_MINUS_DST_COLOR, BLEND_ONE, BLENDFUNC_ADD, BLEND_ZERO, BLEND_ONE, BLENDFUNC_ADD )
+		render.SetMaterial( state.material )
+		return true
+	end
+	render.OverrideBlend( false )
+	render.OverrideDepthEnable( true, state.stage ~= "world_translucent" )
+	render.SetMaterial( nativeContext.bound )
+	nativeContext.overlay = false
+	dynamic.stats.draws = dynamic.stats.draws + 1
+end
+
+local function drawNativeChunks( cached, store, chunks, stats, depthStage, translucent )
+	local module = MC.NativeL2.module
+	if cached.nativeModule ~= module or not cached.nativeScene then
+		local scene, err = module.CreateL2DrawScene()
+		if not scene then error( "Native draw scene: " .. tostring( err ), 0 ) end
+		cached.nativeScene, cached.nativeModule, cached.nativeReset = scene, module, true
+	end
+	if cached.nativeReset or cached.nativeDirty then
+		local updates = cached.nativeReset and cached.entries or cached.nativeDirty
+		for index in pairs( updates ) do if index > cached.count then updates[index] = nil end end
+		local ok, err = module.PatchL2DrawScene( cached.nativeScene, updates, cached.count )
+		if not ok then error( "Native draw scene update: " .. tostring( err ), 0 ) end
+		cached.nativeReset, cached.nativeDirty = false, nil
+	end
+	local view, planes = nativeView, nativeView.planes
+	for i = 1, planeCount do
+		local offset = ( i - 1 ) * 3
+		planes[offset + 1], planes[offset + 2], planes[offset + 3] = planeNX[i], planeNY[i], planeNZ[i]
+	end
+	for i = #planes, planeCount * 3 + 1, -1 do planes[i] = nil end
+	view.eyeX, view.eyeY, view.eyeZ = cullEyeX - renderFrameX, cullEyeY - renderFrameY, cullEyeZ - renderFrameZ
+	view.offsetX, view.offsetY, view.offsetZ = renderFrameX, renderFrameY, renderFrameZ
+	view.distance = MC.ChunkDrawDistanceVisible and 0 or cullDistance
+	view.moveBudget, view.directionMargin = MC.API.Coords.BlockSize() * 2, directionMargin
+	view.portals, view.root, view.seed = nativePortals, nativeRoot, nativeSeed
+	view.background = MC.NativeDrawWorker:GetBool()
+	-- Depth/override materials can be double-sided independently of the surface.
+	view.directional = nativeDirections and not translucent and not depthStage and not overrideMaterial
+	view.lane = overrideMaterial and 3 or depthStage and 2 or 1
+	nativeContext.store, nativeContext.chunks, nativeContext.depthStage = store, chunks, depthStage
+	nativeContext.overlay, nativeContext.bound = false, nil
+	local result, err = module.DrawL2Scene( cached.nativeScene, view, nativeChunk, nativeBind, nativeOverlay )
+	nativeContext.store, nativeContext.chunks = nil, nil
+	if nativeContext.overlay then
+		-- A callback may have failed between blend setup and the matching end.
+		local ok, restoreError = pcall( render.OverrideBlend, false )
+		nativeContext.overlay = false
+		if not ok then error( "Native draw blend restore: " .. tostring( restoreError ), 0 ) end
+	end
+	if not result then error( "Native draw: " .. tostring( err ), 0 ) end
+	for i = 1, #nativeStatNames do
+		local name = nativeStatNames[i]
+		stats[name] = ( stats[name] or 0 ) + result[name]
+	end
+	return result.drawn, result.distanceCulled, result.frustumCulled, result.stale, result.meshes
+end
+
+local function drawVisibleChunks( store, entries, count, chunks, stats, depthStage, cached, translucent )
+	if useNativeDraw() then return drawNativeChunks( cached, store, chunks, stats, depthStage, translucent ) end
 	local pushMatrix = cam.PushModelMatrix
 	local popMatrix = cam.PopModelMatrix
 	local getChunk = MC.GetChunkByKey
@@ -540,6 +663,7 @@ local function ensurePackEntries( pass, version )
 	local dirty = pass.dirtyChunks
 	if cached.count == nil or not dirty and cached.version ~= version then
 		cached.count = rebuildDrawList( pass.store, cached.entries, cached.indices )
+		cached.nativeReset = true
 		if dirty then for key in pairs( dirty ) do dirty[key] = nil end end
 	elseif dirty and next( dirty ) ~= nil then
 		local size = MC.API.Coords.BlockSize()
@@ -554,11 +678,20 @@ local function ensurePackEntries( pass, version )
 					index, indices[key], entries[count] = count, count, {}
 				end
 				updateDrawEntry( entries[index], key, list, chunk, chunkW, chunkH )
+				if cached.nativeScene then
+					cached.nativeDirty = cached.nativeDirty or {}
+					cached.nativeDirty[index] = entries[index]
+				end
 			elseif index then
 				if index < count then
 					local last = entries[count]
 					entries[index], indices[last.key] = last, index
+					if cached.nativeScene then
+						cached.nativeDirty = cached.nativeDirty or {}
+						cached.nativeDirty[index] = last
+					end
 				end
+				if cached.nativeScene then cached.nativeDirty = cached.nativeDirty or {} end
 				entries[count], indices[key], count = nil, nil, count - 1
 			end
 			dirty[key] = nil
@@ -597,27 +730,29 @@ function MC.DrawPBRShadowCasters( groups, version, chunks, view, shadow )
 							if intersects( bounds, x, y, z, view ) then
 								for j = first, last do
 									local entry = list[j]
-									if entry.material ~= currentSource or pass.node.stage ~= currentStage then
-										currentSource, currentStage = entry.material, pass.node.stage
-										currentRecord = shadow.CasterMaterial( currentSource, currentStage )
+									if entry.castsShadow ~= false then
+										if entry.material ~= currentSource or pass.node.stage ~= currentStage then
+											currentSource, currentStage = entry.material, pass.node.stage
+											currentRecord = shadow.CasterMaterial( currentSource, currentStage )
+										end
+										-- Identical silhouettes shared by several surface passes draw once.
+										-- Different albedo/cutout maps retain their distinct silhouettes.
+										if currentRecord and currentRecord.seen[entry.mesh] ~= token then
+											if not chunkDrawn then
+												prepareChunkFrame( frame, true )
+												cam.PushModelMatrix( e.matrix )
+												shadow.modelPushed, chunkDrawn = true, true
+											end
+											if currentRecord.material ~= currentDepth then
+												currentDepth = currentRecord.material
+												render.SetMaterial( currentDepth )
+											end
+											entry.mesh:Draw()
+											currentRecord.seen[entry.mesh] = token
+											stats.draws = stats.draws + 1
+											stats.vertices = stats.vertices + ( entry.vertexCount or 0 )
+										elseif currentRecord then stats.duplicates = stats.duplicates + 1 end
 									end
-									-- Identical silhouettes shared by several surface passes draw once.
-									-- Different albedo/cutout maps retain their distinct silhouettes.
-									if currentRecord and currentRecord.seen[entry.mesh] ~= token then
-										if not chunkDrawn then
-											prepareChunkFrame( frame, true )
-											cam.PushModelMatrix( e.matrix )
-											shadow.modelPushed, chunkDrawn = true, true
-										end
-										if currentRecord.material ~= currentDepth then
-											currentDepth = currentRecord.material
-											render.SetMaterial( currentDepth )
-										end
-										entry.mesh:Draw()
-										currentRecord.seen[entry.mesh] = token
-										stats.draws = stats.draws + 1
-										stats.vertices = stats.vertices + ( entry.vertexCount or 0 )
-									elseif currentRecord then stats.duplicates = stats.duplicates + 1 end
 								end
 							else stats.culledSections = stats.culledSections + 1 end
 						end
@@ -645,6 +780,7 @@ local function drawPackStages( translucent, depthOnly )
 	local stats = overrideMaterial and MC.DrawReflectionCullStats or depthOnly and MC.DrawSSRDepthCullStats or translucent and MC.DrawTranslucentCullStats or MC.DrawCullStats
 	stats.sectionsTested, stats.sectionsDrawn, stats.sectionFrustumCulled, stats.sectionOcclusionCulled = 0, 0, 0, 0
 	stats.directionCulled, stats.vertices, stats.verticesCulled = 0, 0, 0
+	stats.nativeBinds, stats.nativeRanges, stats.nativeAsyncHits, stats.nativeSyncCulls, stats.nativeCullMS = 0, 0, 0, 0, 0
 	local totalTested, totalDrawn, totalDistance, totalFrustum, totalStale = 0, 0, 0, 0, 0
 	local totalMeshes = 0
 	for _, passes in ipairs( groups ) do
@@ -655,7 +791,7 @@ local function drawPackStages( translucent, depthOnly )
 				local setCullMode = applyPassState( not translucent and not depthOnly )
 				if translucent then render.OverrideDepthEnable( true, false ) end
 				local ok, drawn, distance, frustum, stale, meshes = pcall( drawVisibleChunks,
-					pass.store, cached.entries, cached.count, chunks, stats, depthOnly and pass.node.stage or nil )
+					pass.store, cached.entries, cached.count, chunks, stats, depthOnly and pass.node.stage or nil, cached, translucent )
 				local matrixPushed = passMatrixPushed
 				passMatrixPushed = false
 				local restoreError = restoreChunkMeshRenderState( setCullMode, matrixPushed )
@@ -698,6 +834,11 @@ concommand.Add( "mc_mesh_cull_stats", function()
 			names[pass], stats.meshes or 0, stats.vertices or 0, stats.verticesCulled or 0,
 			stats.sectionsDrawn or 0, stats.sectionsTested or 0, stats.sectionFrustumCulled or 0,
 			stats.sectionOcclusionCulled or 0, stats.directionCulled or 0, stats.cpuMS or 0 ) )
+		if useNativeDraw() then
+			print( string.format( "[MC native draw] %s binds=%d ranges=%d asyncHits=%d syncCulls=%d resultCull=%.3fms",
+				names[pass], stats.nativeBinds or 0, stats.nativeRanges or 0, stats.nativeAsyncHits or 0,
+				stats.nativeSyncCulls or 0, stats.nativeCullMS or 0 ) )
+		end
 	end
 	if Occlusion then
 		local stats = Occlusion.stats

@@ -2,7 +2,7 @@
 MC = MC or {}
 MC.AtlasBakePlan = {}
 local P = MC.AtlasBakePlan
-P.VERSION = 5
+P.VERSION = 6
 local floor = math.floor
 local FIELDS = { "COLS", "ROWS", "TILE", "PAD", "STRIDE", "W", "H" }
 local KINDS = { empty = 0, image = 1, overlay = 2, solid = 3, missing = 4 }
@@ -11,8 +11,27 @@ local function integer( value, low, high )
 	return type( value ) == "number" and value == floor( value ) and value >= low and value <= high
 end
 
+-- Resource locations are pack-independent; only the engine supplies mount paths.
+function P.ResolveTexturePath( pack, resource )
+	if type( pack ) ~= "string" or #pack > 64 or not pack:match( "^[a-z0-9_%-]+$" ) then
+		return nil, "invalid_resource_pack"
+	end
+	if type( resource ) ~= "string" or #resource > 240 then return nil, "invalid_texture_resource" end
+	local namespace, path = resource:match( "^([a-z0-9_.%-]+):([a-z0-9_./%-]+)$" )
+	if not namespace and not resource:find( ":", 1, true ) then namespace, path = "minecraft", resource end
+	if not namespace or namespace == "." or namespace == ".." or not path:match( "^[a-z0-9_./%-]+$" )
+		or path:sub( 1, 1 ) == "/" or path:sub( -1 ) == "/" or path:find( "//", 1, true )
+		or path:sub( -4 ) == ".png" then return nil, "invalid_texture_resource" end
+	for segment in path:gmatch( "[^/]+" ) do
+		if segment == "." or segment == ".." then return nil, "invalid_texture_resource" end
+	end
+	local resolved = "mc/resourcepacks/" .. pack .. "/" .. namespace .. "/textures/" .. path .. ".png"
+	if #resolved > 240 then return nil, "texture_path_too_long" end
+	return resolved
+end
+
 function P.New( recipe, layout, tiles, pack, pbr )
-	if type( recipe ) ~= "table" or recipe.version ~= 1 or type( recipe.layout ) ~= "table"
+	if type( recipe ) ~= "table" or recipe.version ~= 2 or type( recipe.layout ) ~= "table"
 		or type( recipe.sources ) ~= "table" or type( recipe.tiles ) ~= "table"
 		or type( recipe.revision ) ~= "string" or not recipe.revision:match( "^[a-f0-9]+$" ) or #recipe.revision ~= 64 then
 		return nil, "invalid_recipe"
@@ -43,19 +62,19 @@ function P.New( recipe, layout, tiles, pack, pbr )
 		x = {}, y = {}, kind = {}, source = {}, overlay = {}, red = {}, green = {}, blue = {},
 		pbr = recipe.pbr == true, normal = {}, orm = {} }
 	local paths, pixels = {}, 0
-	local prefix = "mc/atlas_sources/" .. pack .. "/"
 	for i = 1, sourceCount do
 		local s = recipe.sources[i]
-		if type( s ) ~= "table" or type( s[1] ) ~= "string" or #s[1] > 240
-			or s[1]:sub( 1, #prefix ) ~= prefix or not s[1]:sub( #prefix + 1 ):match( "^[a-z0-9_/%-]+%.png$" ) or paths[s[1]]
+		if type( s ) ~= "table"
 			or not integer( s[2], 1, 4096 ) or not integer( s[3], 1, 4096 )
 			or type( s[4] ) ~= "string" or #s[4] ~= 64 or not s[4]:match( "^[a-f0-9]+$" ) then
 			return nil, "invalid_source_" .. i
 		end
+		local path = P.ResolveTexturePath( pack, s[1] )
+		if not path or paths[path] then return nil, "invalid_source_" .. i end
 		pixels = pixels + s[2] * s[3]
 		if pixels > 16777216 then return nil, "source_pixel_budget" end
-		paths[s[1]] = true
-		p.paths[i], p.hashes[i], p.widths[i], p.heights[i] = s[1], s[4], s[2], s[3]
+		paths[path] = true
+		p.paths[i], p.hashes[i], p.widths[i], p.heights[i] = path, s[4], s[2], s[3]
 		local side = math.min( s[2], s[3] )
 		p.us[i], p.vs[i] = side / s[2], side / s[3]
 	end

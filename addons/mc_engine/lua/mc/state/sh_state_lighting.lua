@@ -57,9 +57,9 @@ function L.Contains( stateId )
 	return L.ready and integer( stateId, stateCount - 1 )
 end
 
--- Explicit profiles for addon states. The pinned vanilla range/catalog stays
--- unchanged; native development world sessions still reject custom catalogs.
-local customProfiles = {}
+-- Register before world creation so Lua snapshots and native catalogs agree.
+-- The pinned vanilla range/catalog stays unchanged.
+local registeredProfiles = {}
 function L.RegisterCustom( stateId, profile )
 	if not L.ready or not integer( stateId, 4294967295 ) or stateId < stateCount then
 		return false, "custom_lighting_state"
@@ -78,17 +78,22 @@ function L.RegisterCustom( stateId, profile )
 		if type( profile[field] ) ~= "boolean" then return false, "custom_lighting_" .. field end
 	end
 	if profile.dynamicShape then return false, "custom_lighting_dynamic_shape" end
-	local previous, copy = customProfiles[stateId], {}
+	local previous, copy = registeredProfiles[stateId], {}
 	for _, field in ipairs( fields ) do
 		if previous and previous[field] ~= profile[field] then return false, "custom_lighting_conflict" end
 		copy[field] = profile[field]
 	end
-	customProfiles[stateId] = copy
+	if previous then return true end
+	local native = MC.NativeTakeover
+	if MC.World and next( MC.World ) ~= nil or native and ( native.active or native.development ) then
+		return false, "custom_lighting_world_active"
+	end
+	registeredProfiles[stateId] = copy
 	return true
 end
 
 function L.Get( stateId )
-	if customProfiles[stateId] then return customProfiles[stateId] end
+	if registeredProfiles[stateId] then return registeredProfiles[stateId] end
 	if not MC.Check( L.Contains( stateId ), "vanilla_state_missing", "no pinned lighting properties for state %s", tostring( stateId ) ) then return nil end
 	return byCode[byte( stateMap, stateId + 1 )]
 end
@@ -138,6 +143,7 @@ end
 
 function Runtime.Get( stateId, bx, by, bz )
 	if L.Contains( stateId ) then return L.Get( stateId ) end
+	if registeredProfiles[stateId] then return registeredProfiles[stateId] end
 	local cached = customProfiles[stateId]
 	if cached then return cached end
 	local schema = registry and registry[stateId]
@@ -164,7 +170,9 @@ function Runtime.Get( stateId, bx, by, bz )
 	end
 	local p = {
 		emission = emission, dampening = dampening, emissive = false,
-		shade = full and 0.2 or 1, viewBlocking = opaque, solidRender = opaque, fullCollision = full,
+		-- AO contribution is independent of collision, culling and light opacity.
+		shade = full and visual.block.castsAmbientOcclusion ~= false and 0.2 or 1,
+		viewBlocking = opaque, solidRender = opaque, fullCollision = full,
 		skyPass = dampening == 0, shapeOcclusion = not full, dynamicShape = dynamic,
 		viewContext = "none", collisionContext = "none",
 	}
