@@ -20,7 +20,7 @@ function R.ListPacks()
 			entry.bakeID, entry.sourceOwner, entry.prepared, entry.pbr = source.bakeID, source.owner, source.prepared, source.pbr
 			entry.title, entry.description, entry.preview = source.title, source.description, source.preview
 			entry.available = entry.available or source.prepared
-		elseif not entry and ( source.prepared or not source.builtinSource ) then
+		elseif not entry then
 			source.available, source.sourceOwner = source.prepared, source.owner
 			entries[#entries + 1], byName[source.name] = source, source
 		end

@@ -1,0 +1,6 @@
+{
+  "title": "MC Texture Pack - Vanilla Runtime Bake",
+  "type": "servercontent",
+  "tags": ["build", "fun"],
+  "ignore": ["*.md"]
+}
