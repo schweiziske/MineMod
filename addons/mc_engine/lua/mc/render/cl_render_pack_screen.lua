@@ -16,20 +16,30 @@ local function mainView()
     return view
 end
 
-local function identity( view )
+local identity = {}
+local function rememberView( view )
     local x, y, z = MC.ChunkRenderFrameOffset()
-    return MC.RenderPackSchema.Canonical( { frame = FrameNumber(), x = view.origin.x, y = view.origin.y, z = view.origin.z,
-        p = view.angles.p, yaw = view.angles.y, r = view.angles.r, fov = view.fov, aspect = view.aspect or 0,
-        width = view.width, height = view.height, near = view.znear, far = view.zfar,
-        originX = x, originY = y, originZ = z, blockSize = MC.API.Coords.BlockSize(), generation = MC.StateWorldGeneration } )
+    identity.frame, identity.x, identity.y, identity.z = FrameNumber(), view.origin.x, view.origin.y, view.origin.z
+    identity.p, identity.yaw, identity.r = view.angles.p, view.angles.y, view.angles.r
+    identity.fov, identity.aspect = view.fov, view.aspect or 0
+    identity.width, identity.height, identity.near, identity.far = view.width, view.height, view.znear, view.zfar
+    identity.originX, identity.originY, identity.originZ = x, y, z
+    identity.blockSize, identity.generation = MC.API.Coords.BlockSize(), MC.StateWorldGeneration
 end
 
 local function current( view )
-    return view and P.owner == MC.RenderPackRuntime.active and P.key == identity( view )
+    if not view or not P.owner or P.owner ~= MC.RenderPackRuntime.active or identity.frame ~= FrameNumber() then return false end
+    local x, y, z = MC.ChunkRenderFrameOffset()
+    return identity.x == view.origin.x and identity.y == view.origin.y and identity.z == view.origin.z
+        and identity.p == view.angles.p and identity.yaw == view.angles.y and identity.r == view.angles.r
+        and identity.fov == view.fov and identity.aspect == ( view.aspect or 0 )
+        and identity.width == view.width and identity.height == view.height and identity.near == view.znear and identity.far == view.zfar
+        and identity.originX == x and identity.originY == y and identity.originZ == z
+        and identity.blockSize == MC.API.Coords.BlockSize() and identity.generation == MC.StateWorldGeneration
 end
 
 function P.Invalidate()
-    P.key, P.owner, P.worldDone, P.finalDone = nil, nil, nil, nil
+    P.owner, P.worldDone, P.finalDone = nil, nil, nil
     post.ResetExposure()
     S.Invalidate()
 end
@@ -52,7 +62,8 @@ local function run( stage, scene )
 end
 
 local function opaque( view )
-    P.serial, P.key, P.owner = P.serial + 1, identity( view ), MC.RenderPackRuntime.active
+    rememberView( view )
+    P.serial, P.owner = P.serial + 1, MC.RenderPackRuntime.active
     P.worldDone, P.finalDone = nil, nil
     P.stats.views = P.stats.views + 1
     if not post.NeedsDepth() then return end
