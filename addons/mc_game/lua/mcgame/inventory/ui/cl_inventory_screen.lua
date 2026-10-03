@@ -15,16 +15,17 @@ local SURVIVAL_W, SURVIVAL_H = 176, 166
 local CREATIVE_W, CREATIVE_H = 195, 136
 local CREATIVE_COLS, CREATIVE_ROWS = 9, 5
 
-local SURVIVAL_BACKGROUND = UI.GetGuiMaterial( "container/inventory" )
-local CRAFTING_BACKGROUND = UI.GetGuiMaterial( "container/crafting_table" )
-local CHEST_BACKGROUND = UI.GetGuiMaterial( "container/generic_54" )
-local HOPPER_BACKGROUND = UI.GetGuiMaterial( "container/hopper" )
-local DISPENSER_BACKGROUND = UI.GetGuiMaterial( "container/dispenser" )
-local FURNACE_BACKGROUND = UI.GetGuiMaterial( "container/furnace" )
-local BLAST_FURNACE_BACKGROUND = UI.GetGuiMaterial( "container/blast_furnace" )
-local BREWING_BACKGROUND = UI.GetGuiMaterial( "container/brewing_stand" )
-local ANVIL_BACKGROUND = UI.GetGuiMaterial( "container/anvil" )
-local ENCHANTING_BACKGROUND = UI.GetGuiMaterial( "container/enchanting_table" )
+local SURVIVAL_BACKGROUND = UI.GetGuiMaterial( "regions/container/inventory" )
+local CRAFTING_BACKGROUND = UI.GetGuiMaterial( "regions/container/crafting_table" )
+local CHEST_BACKGROUNDS = {}
+for rows = 1, 6 do CHEST_BACKGROUNDS[rows] = UI.GetGuiMaterial( "regions/container/chest_" .. rows ) end
+local HOPPER_BACKGROUND = UI.GetGuiMaterial( "regions/container/hopper" )
+local DISPENSER_BACKGROUND = UI.GetGuiMaterial( "regions/container/dispenser" )
+local FURNACE_BACKGROUND = UI.GetGuiMaterial( "regions/container/furnace" )
+local BLAST_FURNACE_BACKGROUND = UI.GetGuiMaterial( "regions/container/blast_furnace" )
+local BREWING_BACKGROUND = UI.GetGuiMaterial( "regions/container/brewing_stand" )
+local ANVIL_BACKGROUND = UI.GetGuiMaterial( "regions/container/anvil" )
+local ENCHANTING_BACKGROUND = UI.GetGuiMaterial( "regions/container/enchanting_table" )
 local ANVIL_ERROR = UI.GetGuiMaterial( "sprites/container/anvil/error" )
 local ANVIL_TEXT_FIELD = UI.GetGuiMaterial( "sprites/container/anvil/text_field" )
 local ANVIL_TEXT_FIELD_DISABLED = UI.GetGuiMaterial( "sprites/container/anvil/text_field_disabled" )
@@ -49,13 +50,18 @@ local ENCHANTING_LEVEL_DISABLED = {
 	UI.GetGuiMaterial( "sprites/container/enchanting_table/level_2_disabled" ),
 	UI.GetGuiMaterial( "sprites/container/enchanting_table/level_3_disabled" ),
 }
-local CREATIVE_ITEMS_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_items" )
-local CREATIVE_SEARCH_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_item_search" )
-local CREATIVE_INVENTORY_BACKGROUND = UI.GetGuiMaterial( "container/creative_inventory/tab_inventory" )
+local CREATIVE_ITEMS_BACKGROUND = UI.GetGuiMaterial( "regions/container/creative_inventory/tab_items" )
+local CREATIVE_SEARCH_BACKGROUND = UI.GetGuiMaterial( "regions/container/creative_inventory/tab_item_search" )
+local CREATIVE_INVENTORY_BACKGROUND = UI.GetGuiMaterial( "regions/container/creative_inventory/tab_inventory" )
 local SCROLLER = UI.GetGuiMaterial( "sprites/container/creative_inventory/scroller" )
 local SCROLLER_DISABLED = UI.GetGuiMaterial( "sprites/container/creative_inventory/scroller_disabled" )
-local CREATIVE_PAGE_BUTTONS = UI.GetMaterial( "mc/gui/fabric/creative_buttons.png" )
-local CREATIVE_PAGE_BUTTON_ATLAS_SIZE = 256
+local CREATIVE_PAGE_BUTTONS = {}
+for _, direction in ipairs( { "left", "right" } ) do
+	CREATIVE_PAGE_BUTTONS[direction] = {}
+	for _, state in ipairs( { "normal", "highlighted", "disabled" } ) do
+		CREATIVE_PAGE_BUTTONS[direction][state] = UI.GetGuiMaterial( "regions/fabric/creative_" .. direction .. "_" .. state )
+	end
+end
 
 local function creativeTabShowsTitle( source )
 	if source.showTitle ~= nil then return source.showTitle ~= false end
@@ -82,6 +88,7 @@ local function tabRows()
 				row = source.row == "bottom" and "bottom" or "top",
 				column = math.Clamp( math.floor( tonumber( source.column ) or 0 ), 0, 6 ),
 				page = math.max( 0, math.floor( tonumber( source.page ) or 0 ) ),
+				pinned = source.key == "search" or source.key == "inventory",
 				title = tostring( source.title or source.key ),
 				titleZH = tostring( source.titleZH or source.title or source.key ),
 				titleKey = source.titleKey,
@@ -103,21 +110,20 @@ local function tabTitle( tab )
 	return tab.title
 end
 
-UI.CreativeTabs = tabRows()
-UI.CreativeTabsByKey = {}
-for _, tab in ipairs( UI.CreativeTabs ) do UI.CreativeTabsByKey[tab.key] = tab end
-
 function UI.RefreshCreativeTabs()
 	UI.CreativeTabs = tabRows()
 	UI.CreativeTabsByKey = {}
-	for _, tab in ipairs( UI.CreativeTabs ) do UI.CreativeTabsByKey[tab.key] = tab end
+	UI.CreativeMaximumPage = 0
+	for _, tab in ipairs( UI.CreativeTabs ) do
+		UI.CreativeTabsByKey[tab.key] = tab
+		UI.CreativeMaximumPage = math.max( UI.CreativeMaximumPage, tab.page )
+	end
 	return UI.CreativeTabs
 end
+UI.RefreshCreativeTabs()
 
 local function maxCreativeTabPage()
-	local maximum = 0
-	for _, tab in ipairs( UI.CreativeTabs or {} ) do maximum = math.max( maximum, tonumber( tab.page ) or 0 ) end
-	return maximum
+	return UI.CreativeMaximumPage
 end
 
 local function firstCreativeTabOnPage( page )
@@ -145,7 +151,15 @@ function TAB:Init()
 end
 
 function TAB:Configure( screen, tab, scale )
+	if self.Tab ~= tab then
+		local prefix = "sprites/container/creative_inventory/tab_" .. tab.row
+		self.SelectedSprite = UI.GetGuiMaterial( prefix .. "_selected_" .. tostring( tab.column + 1 ) )
+		self.UnselectedSprite = UI.GetGuiMaterial( prefix .. "_unselected_" .. tostring( tab.column + 1 ) )
+		self.IconStack = tab.icon and MC.NewItemStack( tab.icon, 1 ) or false
+	end
 	self.Screen, self.Tab, self.Scale = screen, tab, scale
+	self.IconOptions = self.IconOptions or { drawCount = false }
+	self.IconOptions.scale = scale
 	self:SetSize( 26 * scale, 32 * scale )
 end
 
@@ -153,18 +167,16 @@ function TAB:Paint( w, h )
 	if not self.Tab or not IsValid( self.Screen ) then return true end
 	local selected = self.Screen.SelectedTabKey == self.Tab.key
 	local row = self.Tab.row == "top" and "top" or "bottom"
-	local state = selected and "selected" or "unselected"
-	local index = self.Tab.column + 1
-	local sprite = UI.GetGuiMaterial( "sprites/container/creative_inventory/tab_" .. row .. "_" .. state .. "_" .. tostring( index ) )
-	UI.WithPointFiltering( function() UI.DrawTexture( sprite, 0, 0, w, h ) end )
+	local sprite = selected and self.SelectedSprite or self.UnselectedSprite
+	render.PushFilterMin( TEXFILTER.POINT )
+	render.PushFilterMag( TEXFILTER.POINT )
+	UI.DrawTexture( sprite, 0, 0, w, h )
+	render.PopFilterMag()
+	render.PopFilterMin()
 	local stack = self.IconStack
-	if stack == nil and self.Tab.icon then
-		stack = MC.NewItemStack( self.Tab.icon, 1 )
-		self.IconStack = stack or false
-	end
 	if stack and stack ~= false then
 		local iconY = ( row == "top" and 9 or 7 ) * self.Scale
-		UI.ItemRenderer.DrawStack( stack, 5 * self.Scale, iconY, 16 * self.Scale, { scale = self.Scale, drawCount = false } )
+		UI.ItemRenderer.DrawStack( stack, 5 * self.Scale, iconY, 16 * self.Scale, self.IconOptions )
 	end
 	return true
 end
@@ -215,13 +227,10 @@ function CREATIVE_PAGE_BUTTON:PageTooltipText()
 end
 
 function CREATIVE_PAGE_BUTTON:Paint( w, h )
-	local u = self.PageActive and self:IsHovered() and 20 or 0
-	if self.Direction > 0 then u = u + 10 end
-	local v = self.PageActive and 0 or 12
+	local direction = self.Direction > 0 and "right" or "left"
+	local state = not self.PageActive and "disabled" or self:IsHovered() and "highlighted" or "normal"
 	UI.WithPointFiltering( function()
-		UI.DrawTexture( CREATIVE_PAGE_BUTTONS, 0, 0, w, h,
-			u / CREATIVE_PAGE_BUTTON_ATLAS_SIZE, v / CREATIVE_PAGE_BUTTON_ATLAS_SIZE,
-			( u + 10 ) / CREATIVE_PAGE_BUTTON_ATLAS_SIZE, ( v + 12 ) / CREATIVE_PAGE_BUTTON_ATLAS_SIZE )
+		UI.DrawTexture( CREATIVE_PAGE_BUTTONS[direction][state], 0, 0, w, h )
 	end )
 	return true
 end
@@ -572,6 +581,7 @@ function PANEL:Configure( session, state )
 	if self.Creative and not UI.CreativeTabsByKey[self.SelectedTabKey] then self.SelectedTabKey = "building_blocks" end
 	local selectedTab = self.Creative and UI.CreativeTabsByKey[self.SelectedTabKey] or nil
 	self.CreativeTabPage = selectedTab and selectedTab.page or 0
+	if selectedTab and selectedTab.pinned then self.CreativeTabPage = UI.LastCreativePage or 0 end
 	self.ScrollRow = 0
 	self:RefreshCreativeItems()
 	self:Reflow()
@@ -699,10 +709,11 @@ end
 function PANEL:LayoutTabs()
 	local activePage = math.Clamp( math.floor( tonumber( self.CreativeTabPage ) or 0 ), 0, maxCreativeTabPage() )
 	self.CreativeTabPage = activePage
+	if self.Creative then UI.LastCreativePage = activePage end
 	for index, button in ipairs( self.TabButtons ) do
 		local tab = UI.CreativeTabs[index]
 		button:Configure( self, tab, self.Scale )
-		button:SetVisible( self.Creative and tab.page == activePage )
+		button:SetVisible( self.Creative and ( tab.pinned or tab.page == activePage ) )
 		button:SetZPos( tab.key == self.SelectedTabKey and 15 or 0 )
 		if self.Creative then
 			-- CreativeModeInventoryScreen.getTabX: right-aligned tabs use the
@@ -722,6 +733,7 @@ function PANEL:LayoutTabs()
 		end
 	end
 	if showPaging then
+		self.CreativePageLabel = tostring( activePage + 1 ) .. " / " .. tostring( maximumPage + 1 )
 		self.CreativePagePrevious:SetPageActive( activePage > 0 )
 		self.CreativePageNext:SetPageActive( activePage < maximumPage )
 		-- FabricCreativeGuiComponents places its 10x12 buttons at creative left+171/181, top+4.
@@ -1114,7 +1126,17 @@ function PANEL:RefreshCreativeItems()
 			if stack then source[#source + 1] = MC.CopyItemStack( stack, 1 ) end
 		end
 	end
-	local stacks = MC.BuildCreativeTabStacks and MC.BuildCreativeTabStacks( tab.key, source ) or {}
+	local revision = MC.CreativeStackProviderRevision or 0
+	if self.CreativeStackCacheRevision ~= revision or self.CreativeStackCacheCatalog ~= UI.CreativeTabs then
+		self.CreativeStackCache = {}
+		self.CreativeStackCacheRevision = revision
+		self.CreativeStackCacheCatalog = UI.CreativeTabs
+	end
+	local stacks = self.CreativeStackCache[tab.key]
+	if not stacks or tab.key == "hotbar" then
+		stacks = MC.BuildCreativeTabStacks and MC.BuildCreativeTabStacks( tab.key, source ) or {}
+		if tab.key ~= "hotbar" then self.CreativeStackCache[tab.key] = stacks end
+	end
 	local query = tab.key == "search" and string.lower( self.SearchEntry:GetValue() or "" ) or ""
 	for _, stack in ipairs( stacks ) do
 		local definition = MC.GetItem and MC.GetItem( stack.item ) or nil
@@ -1156,7 +1178,7 @@ function PANEL:SetCreativeTabPage( page )
 	if page == self.CreativeTabPage then return end
 	self.CreativeTabPage = page
 	local selected = UI.CreativeTabsByKey[self.SelectedTabKey]
-	if not selected or selected.page ~= page then
+	if not selected or ( not selected.pinned and selected.page ~= page ) then
 		local replacement = firstCreativeTabOnPage( page )
 		if replacement then
 			self.SelectedTabKey = replacement.key
@@ -1181,7 +1203,7 @@ end
 function PANEL:SelectCreativeTab( key )
 	if not self.Creative or not UI.CreativeTabsByKey[key] or key == self.SelectedTabKey then return end
 	self.SelectedTabKey = key
-	self.CreativeTabPage = UI.CreativeTabsByKey[key].page or 0
+	if not UI.CreativeTabsByKey[key].pinned then self.CreativeTabPage = UI.CreativeTabsByKey[key].page end
 	UI.LastCreativeTab = key
 	self.ScrollRow = 0
 	self.HoveredSlot = nil
@@ -1195,7 +1217,7 @@ function PANEL:SetHoveredSlot( slot ) self.HoveredSlot = slot end
 function PANEL:ClearHoveredSlot( slot ) if self.HoveredSlot == slot then self.HoveredSlot = nil end end
 
 function PANEL:BackgroundMaterial()
-	if self.Chest then return CHEST_BACKGROUND end
+	if self.Chest then return CHEST_BACKGROUNDS[self.ChestRows] end
 	if self.Hopper then return HOPPER_BACKGROUND end
 	if self.Dispenser then return DISPENSER_BACKGROUND end
 	if self.Enchanting then return ENCHANTING_BACKGROUND end
@@ -1227,17 +1249,8 @@ function PANEL:PaintContent()
 	local mat = self:BackgroundMaterial()
 	local width, height = self.ContentW * self.Scale, self.ContentH * self.Scale
 	UI.WithPointFiltering( function()
-		if self.Chest then
-			local upperHeight = self.ChestRows * 18 + 17
-			UI.DrawTexture( mat, self.Left, self.Top, width, upperHeight * self.Scale,
-				0, 0, self.ContentW / 256, upperHeight / 256 )
-			UI.DrawTexture( mat, self.Left, self.Top + upperHeight * self.Scale, width, 96 * self.Scale,
-				0, 126 / 256, self.ContentW / 256, 222 / 256 )
-		else
-			UI.DrawTexture( mat, self.Left, self.Top, width, height, 0, 0, self.ContentW / 256, self.ContentH / 256 )
-		end
+		UI.DrawTexture( mat, self.Left, self.Top, width, height )
 	end )
-	if self.Enchanting then UI.DrawEnchantingTopFrame( self.Left, self.Top, self.Scale ) end
 	if self.Furnace then
 		local state = self.Session and self.Session.furnaceState or {}
 		local litTotal = math.max( 0, tonumber( state.litTotalTime ) or 0 )
@@ -1385,6 +1398,10 @@ function PANEL:PaintContent()
 		UI.DrawText( "Inventory", self.Left + 8 * self.Scale, self.Top + 72 * self.Scale,
 			self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
 	elseif self.Creative then
+		if maxCreativeTabPage() > 0 then
+			UI.DrawText( self.CreativePageLabel, self.Left + CREATIVE_W * self.Scale * 0.5,
+				self.Top - 40 * self.Scale, self.Scale, color_white, TEXT_ALIGN_CENTER, true )
+		end
 		local tab = UI.CreativeTabsByKey[self.SelectedTabKey]
 		if tab and tab.showTitle ~= false then
 			UI.DrawText( tabTitle( tab ), self.Left + 8 * self.Scale, self.Top + 6 * self.Scale,

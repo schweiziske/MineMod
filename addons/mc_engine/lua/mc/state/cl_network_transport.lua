@@ -489,8 +489,13 @@ local function applyTransactionNow( transaction )
 	local previousNativeBulkLoading = MC.NativeChunkBulkLoading
 	if nativeBackend then MC.NativeChunkBulkLoading = true end
 	for index, item in ipairs( prepared ) do
+		local visibleState = item.cell.stateId
+		if MC.StateUnderPrediction then
+			visibleState = MC.StateUnderPrediction( item.cell.bx, item.cell.by, item.cell.bz,
+				visibleState, transaction.revision, true )
+		end
 		local chunk, _, _, changed, writeError = MC.SetBlockStateRaw(
-			item.cell.bx, item.cell.by, item.cell.bz, item.cell.stateId,
+			item.cell.bx, item.cell.by, item.cell.bz, visibleState,
 			nativeBackend and item.oldStateId or nil )
 		if writeError ~= nil then
 			MC.NativeChunkBulkLoading = previousNativeBulkLoading
@@ -508,7 +513,7 @@ local function applyTransactionNow( transaction )
 			if not batch then batch = { chunk = chunk, cells = {} }; nativeBatches[chunk.key] = batch end
 			local _, _, _, li = MC.CellToChunk( item.cell.bx, item.cell.by, item.cell.bz )
 			batch.cells[#batch.cells + 1] = li
-			batch.cells[#batch.cells + 1] = item.cell.stateId
+			batch.cells[#batch.cells + 1] = visibleState
 		end
 		written = index
 	end
@@ -540,6 +545,9 @@ local function applyTransactionNow( transaction )
 
 	local rateLimited = bit.band( transaction.flags or 0, FLAG_MESH_RATE_LIMITED ) ~= 0
 	for _, item in ipairs( prepared ) do
+		if MC.StateUnderPrediction then
+			MC.StateUnderPrediction( item.cell.bx, item.cell.by, item.cell.bz, item.cell.stateId, transaction.revision )
+		end
 		if coalesced then
 			local affectsBulk = item.changed
 			if not affectsBulk and item.cell.blockEntityOp ~= BE_NONE then

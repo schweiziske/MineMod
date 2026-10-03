@@ -57,7 +57,43 @@ function L.Contains( stateId )
 	return L.ready and integer( stateId, stateCount - 1 )
 end
 
+-- Register before world creation so Lua snapshots and native catalogs agree.
+-- The pinned vanilla range/catalog stays unchanged.
+local registeredProfiles = {}
+function L.RegisterCustom( stateId, profile )
+	if not L.ready or not integer( stateId, 4294967295 ) or stateId < stateCount then
+		return false, "custom_lighting_state"
+	end
+	if not MC.BlockStateSchemaForState or not MC.BlockStateSchemaForState( stateId ) then
+		return false, "custom_lighting_unknown_state"
+	end
+	if type( profile ) ~= "table" or not integer( profile.emission, 15 )
+		or not integer( profile.dampening, 15 ) or type( profile.shade ) ~= "number"
+		or not ( profile.shade >= 0 and profile.shade <= 1 )
+		or profile.viewContext ~= "none" or profile.collisionContext ~= "none" then
+		return false, "custom_lighting_profile"
+	end
+	for _, field in ipairs( { "emissive", "viewBlocking", "solidRender", "fullCollision",
+		"skyPass", "shapeOcclusion", "dynamicShape" } ) do
+		if type( profile[field] ) ~= "boolean" then return false, "custom_lighting_" .. field end
+	end
+	if profile.dynamicShape then return false, "custom_lighting_dynamic_shape" end
+	local previous, copy = registeredProfiles[stateId], {}
+	for _, field in ipairs( fields ) do
+		if previous and previous[field] ~= profile[field] then return false, "custom_lighting_conflict" end
+		copy[field] = profile[field]
+	end
+	if previous then return true end
+	local native = MC.NativeTakeover
+	if MC.World and next( MC.World ) ~= nil or native and ( native.active or native.development ) then
+		return false, "custom_lighting_world_active"
+	end
+	registeredProfiles[stateId] = copy
+	return true
+end
+
 function L.Get( stateId )
+	if registeredProfiles[stateId] then return registeredProfiles[stateId] end
 	if not MC.Check( L.Contains( stateId ), "vanilla_state_missing", "no pinned lighting properties for state %s", tostring( stateId ) ) then return nil end
 	return byCode[byte( stateMap, stateId + 1 )]
 end
@@ -107,6 +143,7 @@ end
 
 function Runtime.Get( stateId, bx, by, bz )
 	if L.Contains( stateId ) then return L.Get( stateId ) end
+	if registeredProfiles[stateId] then return registeredProfiles[stateId] end
 	local cached = customProfiles[stateId]
 	if cached then return cached end
 	local schema = registry and registry[stateId]

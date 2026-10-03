@@ -676,6 +676,18 @@ end
 -- a player-predicted edit got rejected: push the authoritative cell state back
 -- to that player right away instead of waiting for the client's prediction
 -- rollback timer (the client's mc_set receiver overwrites the misprediction)
+-- Input command identity is separate from the global world revision. The
+-- client waits for this revision before retiring only that command's edits.
+function SV.AcknowledgeBlockPrediction( ply, action, commandNumber )
+	if not IsValid( ply ) or not commandNumber or commandNumber <= 0 then return end
+	net.Start( "mc_block_prediction_ack" )
+		net.WriteUInt( action, 2 )
+		net.WriteUInt( commandNumber, 32 )
+		net.WriteUInt( SV.WorldGeneration or 0, 32 )
+		net.WriteUInt( SV.BlockRevision, 32 )
+	net.Send( ply )
+end
+
 function SV.SyncCell( ply, bx, by, bz )
 	if not IsValid( ply ) then return end
 	if SV.SendStateCorrection then

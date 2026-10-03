@@ -152,13 +152,78 @@ function MC.UnregisterCreativeStackProvider( id )
 end
 
 local function orderedProviders()
+	local cached = MC.CreativeOrderedProviders
+	if cached and cached.revision == MC.CreativeStackProviderRevision then return cached.entries end
 	local providers = {}
 	for _, record in pairs( MC.CreativeStackProviders or {} ) do providers[#providers + 1] = record end
 	table.sort( providers, function( left, right )
 		if left.priority ~= right.priority then return left.priority < right.priority end
 		return left.id < right.id
 	end )
+	MC.CreativeOrderedProviders = { revision = MC.CreativeStackProviderRevision, entries = providers }
 	return providers
+end
+
+-- Compiled at registration, consumed only when a catalog is rebuilt. Unlike a
+-- general provider, contributions cannot mutate another mod's input stacks.
+MC.CreativeEntryContributions = MC.CreativeEntryContributions or {}
+MC.CreativeEntryContributionOrder = MC.CreativeEntryContributionOrder or {}
+local contributions = MC.CreativeEntryContributions
+local contributionOrder = MC.CreativeEntryContributionOrder
+
+local function contributionChanged( id )
+	table.sort( contributionOrder, function( a, b )
+		if a.priority ~= b.priority then return a.priority < b.priority end
+		return a.id < b.id
+	end )
+	MC.CreativeStackProviderRevision = MC.CreativeStackProviderRevision + 1
+	MC.CreativeStackAllowCache = nil
+	if MC.RunEvent then MC.RunEvent( "MC.CreativeStackProvidersChanged", id ) end
+end
+
+local function applyContributions( key, stacks )
+	if #contributionOrder == 0 then return stacks end
+	local search = key == "search"
+	local available
+	if search then
+		available = {}
+		for _, tab in ipairs( MC.GetCreativeTabCatalog() ) do available[tab.key] = true end
+	end
+	for _, record in ipairs( contributionOrder ) do
+		if record.tab == key or ( search and available[record.tab] ) then
+			for _, operation in ipairs( record.operations ) do
+				if ( search and operation.visibility ~= "tab" ) or ( not search and operation.visibility ~= "search" ) then
+					local position = #stacks + 1
+					if operation.action == "prepend" then position = 1
+					elseif operation.anchor then
+						-- Fabric: before the first match, after the last; absent anchors append.
+						for index = 1, #stacks do
+							if stacks[index].item == operation.anchor then
+								position = index
+								if operation.action == "before" then break end
+								position = index + 1
+							end
+						end
+					end
+					local additions = operation.stacks
+					for index = #stacks, position, -1 do stacks[index + #additions] = stacks[index] end
+					for index = 1, #additions do stacks[position + index - 1] = MC.CopyItemStack( additions[index], 1 ) end
+				end
+			end
+		end
+	end
+	-- Stack identity includes components: two potion variants remain distinct.
+	local seen, count = {}, 0
+	for index = 1, #stacks do
+		local stack = stacks[index]
+		local identity = normalizedStackKey( stack )
+		if not seen[identity] then
+			seen[identity], count = true, count + 1
+			stacks[count] = stack
+		end
+	end
+	for index = #stacks, count + 1, -1 do stacks[index] = nil end
+	return stacks
 end
 
 function MC.BuildCreativeTabStacks( tabKey, entries )
@@ -178,14 +243,12 @@ function MC.BuildCreativeTabStacks( tabKey, entries )
 	for _, record in ipairs( orderedProviders() ) do
 		local ok, replacement = pcall( record.provider, key, normalizeList( stacks, isSearch ) )
 		if not ok then
-			if ErrorNoHalt then
-				ErrorNoHalt( "[MCGame] creative stack provider '" .. record.id .. "' failed: " .. tostring( replacement ) .. "\n" )
-			end
+			MC.Fault( "creative_stack_provider_failed", "provider %s: %s", record.id, tostring( replacement ) )
 		elseif replacement ~= nil then
 			stacks = normalizeList( replacement, isSearch )
 		end
 	end
-	return stacks
+	return applyContributions( key, stacks )
 end
 
 local function stackKey( stack )
@@ -226,12 +289,91 @@ end
 MC.API = MC.API or {}
 MC.API.CreativeStacks = MC.API.CreativeStacks or {}
 
+local function nonemptyArray( value )
+	if type( value ) ~= "table" or #value == 0 then return false end
+	local count = 0
+	for key in pairs( value ) do
+		if type( key ) ~= "number" or key < 1 or key > #value or key ~= math.floor( key ) then return false end
+		count = count + 1
+	end
+	return count == #value
+end
+
+-- Declarative counterpart to Fabric's modifyEntriesEvent + FabricItemGroupEntries.
+-- Install after item registry readiness, on BOTH realms; same id replaces atomically.
+function MC.API.CreativeStacks.RegisterEntries( tab, id, operations, priority )
+	if type( tab ) ~= "string" or tab == "search" or tab == "inventory" or tab == "hotbar" then
+		return false, "invalid_creative_target"
+	end
+	local validTarget = false
+	for _, row in ipairs( MC.GeneratedCreativeTabs or {} ) do if row.key == tab then validTarget = true; break end end
+	if not validTarget and not MC.ValidateModContentIdentifier( tab ) then return false, "invalid_creative_target" end
+	local canonical = MC.ValidateModContentIdentifier( id )
+	if not canonical then return false, "invalid_identifier" end
+	priority = priority == nil and 0 or priority
+	if type( priority ) ~= "number" or priority ~= priority or math.abs( priority ) == math.huge or priority ~= math.floor( priority ) then
+		return false, "invalid_priority"
+	end
+	if not nonemptyArray( operations ) then return false, "invalid_creative_operations" end
+	local compiled = {}
+	for _, operation in ipairs( operations ) do
+		if type( operation ) ~= "table" then return false, "invalid_creative_operation" end
+		local action = operation.action
+		if action == nil then action = "append" end
+		if action ~= "append" and action ~= "prepend" and action ~= "before" and action ~= "after" then return false, "invalid_creative_action" end
+		local visibility = operation.visibility
+		if visibility == nil then visibility = "both" end
+		if visibility ~= "both" and visibility ~= "tab" and visibility ~= "search" then return false, "invalid_creative_visibility" end
+		local anchor
+		if action == "before" or action == "after" then
+			anchor = MC.ValidateModContentIdentifier( operation.anchor )
+			if not anchor then return false, "invalid_creative_anchor" end
+		end
+		if not nonemptyArray( operation.items ) then return false, "invalid_creative_items" end
+		local stacks = {}
+		for _, value in ipairs( operation.items ) do
+			if type( value ) == "table" and value.count ~= nil and value.count ~= 1 then return false, "invalid_creative_count" end
+			local stack = normalizeStack( value )
+			if not stack then return false, "invalid_creative_stack" end
+			stacks[#stacks + 1] = stack
+		end
+		compiled[#compiled + 1] = { action = action, anchor = anchor, visibility = visibility, stacks = stacks }
+	end
+	local record = { id = canonical, tab = tab, operations = compiled, priority = priority }
+	local old = contributions[canonical]
+	if old then
+		for index = 1, #contributionOrder do if contributionOrder[index] == old then contributionOrder[index] = record; break end end
+	else contributionOrder[#contributionOrder + 1] = record end
+	contributions[canonical] = record
+	contributionChanged( canonical )
+	return true
+end
+
+function MC.API.CreativeStacks.UnregisterEntries( id )
+	local canonical = MC.ValidateModContentIdentifier( id )
+	local old = canonical and contributions[canonical]
+	if not old then return false end
+	contributions[canonical] = nil
+	for index = 1, #contributionOrder do if contributionOrder[index] == old then table.remove( contributionOrder, index ); break end end
+	contributionChanged( canonical )
+	return true
+end
+
 function MC.API.CreativeStacks.RegisterProvider( id, provider, priority )
 	return MC.RegisterCreativeStackProvider( id, provider, priority )
 end
 
 function MC.API.CreativeStacks.UnregisterProvider( id )
 	return MC.UnregisterCreativeStackProvider( id )
+end
+
+-- Providers depending on external state must explicitly invalidate after that
+-- state changes, on both realms. No polling and no changes to global GC/JIT.
+function MC.API.CreativeStacks.Invalidate()
+	MC.CreativeStackProviderRevision = MC.CreativeStackProviderRevision + 1
+	MC.CreativeStackAllowCache = nil
+	if MC.RunEvent then MC.RunEvent( "MC.CreativeStackProvidersChanged" ) end
+	return true
 end
 
 function MC.API.CreativeStacks.Contains( stack )

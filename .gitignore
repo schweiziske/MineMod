@@ -4,6 +4,10 @@ _build/*
 !_build/generate_item_sprite_masks.py
 !_build/test_texture_pack_leases.lua
 __pycache__/
+addons/mc_engine/materials/mc/atlas_sources/vanilla/
+addons/mc_engine/data_static/mc/atlas_bake/vanilla.json
+addons/mc_engine/materials/mc/atlas_sources/avpbr/
+addons/mc_engine/data_static/mc/atlas_bake/avpbr.json
 *.pyc
 _tools/equestria_mcb4_import_2.err
 _tools/equestria_mcb4_import_2.log
