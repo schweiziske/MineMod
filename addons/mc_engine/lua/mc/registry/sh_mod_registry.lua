@@ -442,6 +442,12 @@ function MC.ValidateModBlockDefinition( definition )
 		local light = finiteInteger( definition.lightEmission, 0 )
 		if light == nil or light > 15 then return nil, "invalid_light_emission" end
 	end
+	if definition.castsAmbientOcclusion ~= nil and type( definition.castsAmbientOcclusion ) ~= "boolean" then
+		return nil, "invalid_casts_ambient_occlusion"
+	end
+		if definition.castsShadow ~= nil and type( definition.castsShadow ) ~= "boolean" then
+			return nil, "invalid_casts_shadow"
+		end
 	if definition.handlers ~= nil then
 		if type( definition.handlers ) ~= "table" then return nil, "invalid_handlers" end
 		local allowedHandlers = {

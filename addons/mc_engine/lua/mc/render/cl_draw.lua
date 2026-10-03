@@ -730,27 +730,29 @@ function MC.DrawPBRShadowCasters( groups, version, chunks, view, shadow )
 							if intersects( bounds, x, y, z, view ) then
 								for j = first, last do
 									local entry = list[j]
-									if entry.material ~= currentSource or pass.node.stage ~= currentStage then
-										currentSource, currentStage = entry.material, pass.node.stage
-										currentRecord = shadow.CasterMaterial( currentSource, currentStage )
+									if entry.castsShadow ~= false then
+										if entry.material ~= currentSource or pass.node.stage ~= currentStage then
+											currentSource, currentStage = entry.material, pass.node.stage
+											currentRecord = shadow.CasterMaterial( currentSource, currentStage )
+										end
+										-- Identical silhouettes shared by several surface passes draw once.
+										-- Different albedo/cutout maps retain their distinct silhouettes.
+										if currentRecord and currentRecord.seen[entry.mesh] ~= token then
+											if not chunkDrawn then
+												prepareChunkFrame( frame, true )
+												cam.PushModelMatrix( e.matrix )
+												shadow.modelPushed, chunkDrawn = true, true
+											end
+											if currentRecord.material ~= currentDepth then
+												currentDepth = currentRecord.material
+												render.SetMaterial( currentDepth )
+											end
+											entry.mesh:Draw()
+											currentRecord.seen[entry.mesh] = token
+											stats.draws = stats.draws + 1
+											stats.vertices = stats.vertices + ( entry.vertexCount or 0 )
+										elseif currentRecord then stats.duplicates = stats.duplicates + 1 end
 									end
-									-- Identical silhouettes shared by several surface passes draw once.
-									-- Different albedo/cutout maps retain their distinct silhouettes.
-									if currentRecord and currentRecord.seen[entry.mesh] ~= token then
-										if not chunkDrawn then
-											prepareChunkFrame( frame, true )
-											cam.PushModelMatrix( e.matrix )
-											shadow.modelPushed, chunkDrawn = true, true
-										end
-										if currentRecord.material ~= currentDepth then
-											currentDepth = currentRecord.material
-											render.SetMaterial( currentDepth )
-										end
-										entry.mesh:Draw()
-										currentRecord.seen[entry.mesh] = token
-										stats.draws = stats.draws + 1
-										stats.vertices = stats.vertices + ( entry.vertexCount or 0 )
-									elseif currentRecord then stats.duplicates = stats.duplicates + 1 end
 								end
 							else stats.culledSections = stats.culledSections + 1 end
 						end

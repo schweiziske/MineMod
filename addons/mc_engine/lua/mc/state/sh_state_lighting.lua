@@ -133,7 +133,9 @@ function Runtime.Get( stateId, bx, by, bz )
 	end
 	local p = {
 		emission = emission, dampening = dampening, emissive = false,
-		shade = full and 0.2 or 1, viewBlocking = opaque, solidRender = opaque, fullCollision = full,
+		-- AO contribution is independent of collision, culling and light opacity.
+		shade = full and visual.block.castsAmbientOcclusion ~= false and 0.2 or 1,
+		viewBlocking = opaque, solidRender = opaque, fullCollision = full,
 		skyPass = dampening == 0, shapeOcclusion = not full, dynamicShape = dynamic,
 		viewContext = "none", collisionContext = "none",
 	}

@@ -8,11 +8,11 @@ MC.RenderScene = S
 -- Existing depth-renderer clients retain their API; there is only one owner.
 MC.RenderPBRSSR = S
 S.VERSION = 1 -- Shader/pack ABI is unchanged by the Lua depth-snapshot fix.
-if S.DEPTH_VERSION ~= 2 then
+if S.DEPTH_VERSION ~= 3 then
     -- CreateMaterial retains snapshots across Lua refresh. Retire old materials
-    -- which tested hardware Z; the new private merge has no depth attachment.
+    -- with older depth semantics, including those without sky classification.
     for _, group in pairs( S.groups ) do group.depth = {} end
-    S.DEPTH_VERSION = 2
+    S.DEPTH_VERSION = 3
 end
 S.depthRenderers = S.depthRenderers or {}
 S.sceneGroups = S.sceneGroups or {}
@@ -447,8 +447,9 @@ function S.DepthMaterial( surface, cutout )
     local source = MC.RenderL2Resources.SourceTexture( surface )
     local p = params( group.precisionDepth and group.programs.post_scene_depth or group.programs.scene_depth, source, false )
     p["$c0_w"] = cutout and "0.5" or "0"
+    p["$c0_x"] = MC.RenderSky and MC.RenderSky.materials[surface] and "1" or "0"
     S.depthCount = S.depthCount + 1
-    local material = CreateMaterial( "mc_scene_depth2_" .. S.depthCount, "screenspace_general_8tex", p )
+    local material = CreateMaterial( "mc_scene_depth3_" .. S.depthCount, "screenspace_general_8tex", p )
     requireValue( material and not material:IsError(), "render_ssr_depth_material", "scene-depth material failed to load" )
     byKind[kind] = material
     return material

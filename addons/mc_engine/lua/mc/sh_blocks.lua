@@ -9,6 +9,13 @@
 
 MC = MC or {}
 
+-- Startup consumes the generated catalog. Replaying this file alone would
+-- replace live definitions while state, visual and native caches still use them.
+if MC.GeneratedBlockRegistrationTablesReleased then
+	return MC.Fault( "block_registry_reload",
+		"sh_blocks.lua cannot reload a live registry; existing definitions retained, reconnect the client or restart the server to apply changes" )
+end
+
 local bit_band, bit_rshift, bit_lshift = bit.band, bit.rshift, bit.lshift
 local MODEL_SURFACE_TILE_MASK = 4095
 local MODEL_SURFACE_TILE_SHIFT = 12
@@ -389,6 +396,8 @@ function MC.RegisterBlock( def )
 		-- Chests have collision, but their block-entity model neither blocks
 		-- neighbouring faces nor seals voxel light like a full cube.
 		transparent = def.transparent == true or doesNotOcclude,
+		castsAmbientOcclusion = def.castsAmbientOcclusion ~= false,
+		castsShadow = def.castsShadow ~= false,
 		shape = def.shape,
 		custom = def.custom == true,
 		creativeCategory = def.creativeCategory,

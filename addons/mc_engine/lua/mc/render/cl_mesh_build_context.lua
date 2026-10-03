@@ -199,13 +199,16 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		-- Registered definitions do not store fullCube; query the shape contract.
 		local stage = root.translucent and "world_translucent" or
 			( blockIsFullCube( id ) and not cutout and "world_opaque" or "world_cutout" )
-		local bucketKey = request .. "/" .. stage
+		local castsShadow = block.castsShadow ~= false
+		-- Shared materials may serve blocks with different shadow policies.
+		local bucketKey = request .. "/" .. stage .. ( castsShadow and "/shadow" or "/no_shadow" )
 		local buffer = root.buckets[bucketKey]
 		if not buffer then
 			buffer = Q.NewBuffer( slice )
 			buffer.owner, buffer.list, buffer.records = root, root.list, root.records
 			buffer.material, buffer.translucent = root.material, root.translucent
 			buffer.request, buffer.stage, buffer.blockIds = request, stage, {}
+			buffer.castsShadow = castsShadow
 			buffer.directional = root.directional and stage == "world_opaque"
 			root.buckets[bucketKey] = buffer
 		end
@@ -226,6 +229,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			buffer.owner, buffer.list, buffer.records = target.owner, target.list, target.records
 			buffer.material, buffer.translucent = target.material, false
 			buffer.request, buffer.stage, buffer.blockIds = target.request, target.stage, target.blockIds
+			buffer.castsShadow = target.castsShadow
 			buffer.direction = face
 			groups[face] = buffer
 		end
