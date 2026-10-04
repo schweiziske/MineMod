@@ -455,11 +455,7 @@ if CLIENT then
 
 		local translucent = stateId and MC.IsTranslucentBlockState and MC.IsTranslucentBlockState( stateId )
 			or MC.IsTranslucentBlock and MC.IsTranslucentBlock( id )
-		if translucent and MC.MaterialTranslucent then
-			render.SetMaterial( MC.MaterialTranslucent )
-		else
-			render.SetMaterial( MC.Material )
-		end
+		local material = translucent and MC.MaterialTranslucent or MC.Material
 
 		scale = scale or 8
 		local lightR, lightG, lightB
@@ -492,7 +488,15 @@ if CLIENT then
 		mat:Scale( Vector( scale, scale, scale ) )
 
 		cam.PushModelMatrix( mat )
+		-- Keep the source texels crisp in both hands, independent of the world's
+		-- trilinear/aniso settings. Restore the sampler even if mesh emission fails.
+		render.PushFilterMin( TEXFILTER.POINT )
+		render.PushFilterMag( TEXFILTER.POINT )
+		local building = false
+		local ok, err = pcall( function()
+			render.SetMaterial( material )
 			mesh.Begin( MATERIAL_TRIANGLES, #boxes * 12 )
+			building = true
 			for _, box in ipairs( boxes ) do
 				for face = 1, 6 do
 					local tile, rot, flipU, flipV
@@ -520,8 +524,19 @@ if CLIENT then
 					end
 				end
 			end
+			building = false
 			mesh.End()
+		end )
+		if building then
+			-- Finish the abandoned immediate mesh before restoring render state.
+			-- Preserve the original emission error if ending it also fails.
+			local ended, endError = pcall( mesh.End )
+			if not ended then err = tostring( err ) .. "; mesh.End: " .. tostring( endError ) end
+		end
+		render.PopFilterMag()
+		render.PopFilterMin()
 		cam.PopModelMatrix()
+		if not ok then error( err, 0 ) end
 
 		return true
 	end
