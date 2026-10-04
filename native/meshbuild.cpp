@@ -62,16 +62,14 @@ namespace {
 
     inline void TileUV(int tile, double& u0, double& v0, double& u1, double& v1) {
         const auto& A = blockdefs::g_atlas;
-        const int col = tile % A.cols;
-        const int row = tile / A.cols;
-        const int stride = A.stride ? A.stride : A.tile;
-        const double px0 = double(col) * stride + A.pad;
-        const double py0 = double(row) * stride + A.pad;
+        const auto region = blockdefs::RegionForTile(A, uint16_t(tile));
+        const double px0 = region.x;
+        const double py0 = region.y;
         const double inset = A.inset;
         u0 = (px0 + inset) / A.w;
         v0 = (py0 + inset) / A.h;
-        u1 = (px0 + A.tile - inset) / A.w;
-        v1 = (py0 + A.tile - inset) / A.h;
+        u1 = (px0 + region.w - inset) / A.w;
+        v1 = (py0 + region.h - inset) / A.h;
     }
 
     inline bool FaceVisible(uint16_t curId, uint16_t nbId, uint8_t nbOrient) {

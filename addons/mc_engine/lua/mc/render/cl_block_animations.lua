@@ -71,6 +71,7 @@ local FluidMeshesDirty = false
 local LastRefresh = 0
 local LastGeneration = tonumber( MC.StateWorldGeneration ) or 0
 local LastAnimationPack
+local LastWaterStyle
 local AnimationStats = {
 	builds = 0, modelBuilds = 0, lightRefreshes = 0, uploads = 0, failures = 0,
 	attempts = 0, budgetYields = 0, workMS = 0, scanPasses = 0, scannedChunks = 0, scanMS = 0,
@@ -165,7 +166,23 @@ local function activePackName()
 	return MC.TexturePackName and MC.TexturePackName() or MC.ActiveTexturePack or "default"
 end
 
+local generationAnimations = {water_still={}, water_flow={}}
+local emptyAnimations = {}
+local function generationOwnsAnimation()
+	local packs = MC.ResourcePacks
+	local generation = packs and packs.activeGeneration
+	return generation and generation.pack == activePackName()
+end
+
 local function activeAnimations()
+	-- Raw packs animate the atlas used by the ordinary world geometry. The
+	-- old standalone PNG layer only fills transparent slots in legacy atlases.
+	if generationOwnsAnimation() then
+		-- Pixel animation belongs to the atlas. The dedicated PBR water
+		-- geometry still owns waves/optics/reflections and uses no PNG frames.
+		if currentWaterMaterial() then return generationAnimations end
+		return emptyAnimations
+	end
 	local packs = animationPacks()
 	return packs[activePackName()] or packs.default or {}
 end
@@ -254,6 +271,7 @@ end
 local function fluidAnimationKind( stateId )
 	if not MC.LiquidKindForState then return nil end
 	local kind = MC.LiquidKindForState( stateId )
+	if generationOwnsAnimation() and kind ~= "water" then return nil end
 	return FLUID_ANIMATIONS[kind] and kind or nil
 end
 
@@ -949,6 +967,7 @@ local waterShadowBase = Vector()
 -- Light-space visibility must not reuse the camera's VisibleFluids list.
 -- Shadow rendering owns depth, material state and failure cleanup.
 function MC.DrawWaterShadowCasters( view, shadow )
+	if MC.RenderPackRuntime.atlasTransition then return end
 	if LastGeneration ~= MC.StateWorldGeneration then return end
 	local pending, stats = shadow.renderState, shadow.stats
 	local blockSize = MC.API.Coords.BlockSize()
@@ -1040,6 +1059,7 @@ end
 -- SSR immediately copies the selected records/bases before nested views can
 -- reuse this list; the ordinary water draw still gathers its own view below.
 function MC.CollectWaterSSRRecords( eye )
+	if MC.RenderPackRuntime.atlasTransition then return end
 	if MC.WorldFrameSettled and not MC.WorldFrameSettled() then return end
 	if collectVisibleFluids( eye ) then return VisibleFluids end
 end
@@ -1058,6 +1078,22 @@ local function clearMeshes()
 	end
 	MeshCache = {}
 	clearFluidMeshes()
+end
+
+-- Called once at the resource commit boundary, after the terrain runtime has
+-- bound its candidate. This also handles same-name reloads without waiting
+-- for the ordinary animation scan interval.
+function MC.PrepareResourcePackAnimations()
+	clearEntries()
+	clearMeshes()
+	refreshChunks()
+	local animations = activeAnimations()
+	if not generationOwnsAnimation() or not animations.water_still then return true end
+	for key in pairs(FluidEntryCounts) do
+		fluidMeshesForChunk(key, animations)
+		if FluidMeshRetryAt[key] then return false, "resource_pack_water_mesh" end
+	end
+	return true
 end
 
 local function prepareAnimationWork( budget, canBuild, prepare, ... )
@@ -1120,6 +1156,14 @@ end
 -- indivisible attempt; drawing only consumes the last published mesh buffers.
 function MC.PrepareBlockAnimations( budget, canBuild )
 	if MC.WorldFrameSettled and not MC.WorldFrameSettled() then return end
+	local waterStyle = currentWaterMaterial()
+	if waterStyle ~= false and (waterStyle ~= nil) ~= LastWaterStyle then
+		LastWaterStyle = waterStyle ~= nil
+		for key,record in pairs(FluidMeshCache) do
+			if record == false then FluidMeshCache[key]=nil
+			elseif record.hasWater then record.geometryDirty=true end
+		end
+	end
 	local now = CurTime()
 	if now >= LastRefresh then
 		if not canBuild( budget, false ) then
@@ -1202,6 +1246,7 @@ local function drawPreparedAnimations( animations, eye, elapsedTicks, water, vie
 end
 
 hook.Add( "PostDrawTranslucentRenderables", "mc_block_animations", function( bDepth, _, bSky3D )
+	if MC.RenderPackRuntime.atlasTransition then return end
 	-- bSky can also be true in the main view on maps with a 2D skybox.
 	if bDepth or bSky3D or MC.WorldFrameSettled and not MC.WorldFrameSettled() then return end
 	if MC.RenderPBRShadows and MC.RenderPBRShadows.rendering then return end
@@ -1243,6 +1288,7 @@ hook.Add( "PostDrawTranslucentRenderables", "mc_block_animations", function( bDe
 end )
 
 local function drawAnimationDepth( eye, elapsedTicks )
+	if generationOwnsAnimation() then return end
 	local maxDistanceSqr = ( blockSize() * 96 ) ^ 2
 	for _, entry in pairs( ModelEntries ) do
 		local center = MC.API.Coords.CellRenderCenter( entry.bx, entry.by, entry.bz )

@@ -234,7 +234,16 @@ end
 
 -- Registration/build boundary; no textures or materials are created in Draw.
 function D.RegisterMaterial( base, program, owner, source, stage, blockSize, maps, sprite )
-	if D.materials[base] then return D.materials[base].material end
+	if D.materials[base] then
+		local material = D.materials[base].material
+		material:SetTexture("$basetexture", source)
+		if maps and not sprite then
+			material:SetTexture("$texture3", maps.normal)
+			material:SetTexture("$texture4", maps.orm)
+		end
+		if MC.ResourceGeneration then MC.ResourceGeneration.BindSampling(material,source) end
+		return material
+	end
 	R.Require( D.materialCount < 4096, "dynamic_light_material_budget", "4096 local-light materials reached; restart the client" )
 	R.Require( BLEND_ONE_MINUS_DST_COLOR ~= nil, "dynamic_light_blend_api", "destination-colour blend factor is unavailable" )
 	local data = R.DynamicLightTexture()
@@ -255,6 +264,7 @@ function D.RegisterMaterial( base, program, owner, source, stage, blockSize, map
 	end
 	local material = CreateMaterial( "mc_dynamic_light1_" .. D.materialCount, "screenspace_general_8tex", params )
 	R.Require( material and not material:IsError(), "dynamic_light_material", "could not create local-light material" )
+	if MC.ResourceGeneration then MC.ResourceGeneration.BindSampling(material,source) end
 	D.materials[base] = { material = material, revision = -1, sprite = sprite == true, pbr = pbr, stage = stage }
 	D.materialCount = D.materialCount + 1
 	return material

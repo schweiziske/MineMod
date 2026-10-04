@@ -216,11 +216,15 @@ local function blockMaterial( block, surface, cutout )
     end
     if entry.serial ~= block.serial then
         local material, extra, c = entry.material, entry.extra, block.c
+        material:SetTexture("$basetexture",MC.RenderL2Resources.SourceTexture(surface))
+        for _, key in ipairs({"$texture3", "$texture4", "$texture7"}) do material:SetTexture(key,surface:GetTexture(key)) end
         setTraceConstants( material, c, c.group, blockDistance:GetFloat(), blockSteps:GetFloat(), blockStrength:GetFloat(), blockThickness:GetFloat() )
         material:SetTexture( "$texture2", block.scene )
         extra:SetField( 1, 1, 1 / c.frameWidth ) extra:SetField( 1, 2, 1 / c.frameHeight )
         extra:SetField( 1, 3, entry.cutoff ) extra:SetField( 1, 4, blockRoughness:GetFloat() )
-        material:SetMatrix( "$invviewprojmat", extra )
+        if MC.ResourceGeneration then
+            MC.ResourceGeneration.BindSampling(material,MC.RenderL2Resources.SourceTexture(surface),extra)
+        else material:SetMatrix( "$invviewprojmat", extra ) end
         entry.serial = block.serial
     end
     return entry.material

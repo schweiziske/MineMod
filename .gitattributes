@@ -1,3 +1,7 @@
 # These source reports are verified byte-for-byte against their manifests.
 /generated/reports/blocks.json text eol=lf
 /out/version.json text eol=lf
+# Raw resource bytes are covered by the shipped per-file and bundle SHA256.
+/addons/mc_texturepack_default/data_static/mc/raw_default/** -text
+# Preserve the original metadata's CRLF and trailing newline exactly as hashed.
+/addons/mc_texturepack_default/data_static/mc/raw_default/**/*.mcmeta whitespace=cr-at-eol,-blank-at-eof

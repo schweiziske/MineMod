@@ -32,6 +32,7 @@ function Session:Refresh()
 end
 
 function M.New()
+	if MC.ResourceRepository and not MC.ResourcePacks.IsApplying() then MC.ResourceRepository.Refresh() end
 	return setmetatable( {}, Session ):Refresh()
 end
 
@@ -66,10 +67,12 @@ function Session:CanApply()
 	return self:IsDirty() or self.active ~= self.draft
 end
 
-function Session:Apply()
+function Session:Apply(confirmed)
 	self:Refresh()
 	if self.pending then return true, "baking" end
-	local ok, id = MC.ResourcePacks.ApplyPack( self.draft )
+	local options
+	if confirmed then options = {confirmed=confirmed} end
+	local ok, id = MC.ResourcePacks.ApplyPack( self.draft, options )
 	if not ok then self.error = tostring( id ) return false, id end
 	local status = MC.ResourcePacks.GetApplyStatus( id )
 	if status.state ~= "baking" then

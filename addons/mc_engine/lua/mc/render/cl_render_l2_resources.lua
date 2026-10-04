@@ -95,6 +95,7 @@ end
 
 function R.Ensure( build, owner )
 	owner = owner or R
+	R.drawPixels = mcmesh and mcmesh.DrawL2AtlasPixels or nil
 	requireValue( GetRenderTargetEx and CreateMaterial and render and render.PushRenderTarget
 		and render.PopRenderTarget and render.OverrideBlend and render.OverrideAlphaWriteEnable
 		and render.OverrideColorWriteEnable and render.OverrideDepthEnable and cam and cam.Start2D
@@ -174,6 +175,7 @@ function R.BoundMaterial( owner, slot, source, stage, blockSize, program, colorS
 	else
 		material:SetFloat( "$c0_x", 1 / blockSize )
 	end
+	if MC.ResourceGeneration then MC.ResourceGeneration.BindSampling(material,source) end
 	return material
 end
 
@@ -221,6 +223,11 @@ local function uploadPixels( texture, width, firstPixel, pixels, rowScale, rowOf
 		render.OverrideBlend( true, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD ) blend = true
 		render.OverrideAlphaWriteEnable( true, true ) alpha = true
 		render.OverrideColorWriteEnable( true, true ) color = true
+		if R.drawPixels then
+			local uploaded,reason=R.drawPixels(width,firstPixel,pixels,rowScale,rowOffset,"!"..R.uploadMaterial:GetName(),firstOcclusion,occlusion)
+			requireValue(uploaded==true,"l2_native_pixel_upload",tostring(reason))
+			return
+		end
 		local zeroPixels = drawPixelRuns( width, firstPixel, pixels, false, rowScale, rowOffset )
 		local zeroOcclusion = false
 		if occlusion then zeroOcclusion = drawPixelRuns( width, firstOcclusion, occlusion, false, 5, 2 ) end

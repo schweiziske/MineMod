@@ -6,7 +6,7 @@
 
 MC = MC or {}
 
-local LAYOUT_FIELDS = { "COLS", "ROWS", "TILE", "PAD", "STRIDE", "W", "H", "INSET" }
+local LAYOUT_FIELDS = { "COLS", "ROWS", "TILE", "PAD", "STRIDE", "W", "H", "INSET", "REGIONS", "MIP" }
 local MAX_ATLAS_PAGES = 64
 
 local function normalizeName( value )
@@ -43,6 +43,8 @@ local function copyLayout( source )
 		W = source.W,
 		H = source.H,
 		INSET = source.INSET,
+		REGIONS = source.REGIONS,
+		MIP = source.MIP,
 	}
 end
 
@@ -65,6 +67,30 @@ MC.ActiveAtlasProfile = MC.ActiveAtlasProfile or "default"
 
 local function normalizeLayout( source )
 	if type( source ) ~= "table" then return nil, "invalid_atlas_profile_layout" end
+	if source.REGIONS ~= nil then
+		local width, height = integral(source.W, 1, 16384), integral(source.H, 1, 16384)
+		local mip = integral(source.MIP or 0, 0, 14)
+		local inset = tonumber(source.INSET or 0)
+		if not width or not height or not mip or not inset or inset ~= inset or inset < 0
+			or type(source.REGIONS) ~= "table" then return nil, "invalid_atlas_regions" end
+		local regions, count = {}, 0
+		for raw, r in pairs(source.REGIONS) do
+			local index = integral(raw, 0, 4095)
+			if not index or type(r) ~= "table" then return nil, "invalid_atlas_region_index" end
+			local x, y = integral(r[1], 0, width - 1), integral(r[2], 0, height - 1)
+			local w, h = integral(r[3], 1, width), integral(r[4], 1, height)
+			if not x or not y or not w or not h or x + w > width or y + h > height
+				or inset * 2 >= math.min(w,h) or regions[index] then return nil, "invalid_atlas_region_rect" end
+			regions[index], count = {x,y,w,h}, count + 1
+		end
+		if count == 0 then return nil, "empty_atlas_regions" end
+		for i=0,count-1 do if not regions[i] then return nil, "sparse_atlas_regions" end end
+		-- Grid fields remain a valid legacy envelope for diagnostics. Consumers
+		-- use REGIONS whenever present; no tile size is inferred from this envelope.
+		local tile = math.min(regions[0][3],regions[0][4])
+		return {COLS=1, ROWS=1, TILE=tile, PAD=0, STRIDE=tile, W=width, H=height,
+			INSET=inset, REGIONS=regions, MIP=mip}, count - 1
+	end
 	local cols = integral( source.COLS or source.cols, 1, 65535 )
 	local rows = integral( source.ROWS or source.rows, 1, 65535 )
 	local tile = integral( source.TILE or source.tile, 1, 65535 )
@@ -179,7 +205,7 @@ local function normalizeDefinition( name, definition, owner )
 		and select( 1, normalizeSurface( rawFallback, pages, "invalid_atlas_profile_fallback" ) ) or nil
 	if rawFallback ~= nil and fallbackSurface == nil then return nil, "invalid_atlas_profile_fallback" end
 
-	local keyParts = { name, "pages=" .. tostring( pageCount ) }
+	local keyParts = { "pages=" .. tostring( pageCount ) }
 	for page = 0, pageCount - 1 do
 		local p, layout = pages[page], pages[page].layout
 		keyParts[#keyParts + 1] = table.concat( {
@@ -188,6 +214,12 @@ local function normalizeDefinition( name, definition, owner )
 			tostring( layout.W ), tostring( layout.H ), tostring( layout.INSET ),
 			p.materialKey,
 		}, "," )
+		if layout.REGIONS then
+			keyParts[#keyParts+1] = "mip=" .. layout.MIP
+			for index=0,p.mappedTileMaximum do
+				keyParts[#keyParts+1] = index .. "=" .. table.concat(layout.REGIONS[index], ",")
+			end
+		end
 	end
 	keyParts[#keyParts + 1] = fallbackSurface == nil and "identity"
 		or ( "fallback=" .. fallbackSurface.page .. ">" .. fallbackSurface.tile )
@@ -331,6 +363,13 @@ local function refreshRenderer( reason )
 		for key in pairs( MC.World or {} ) do MC.ClearChunkBlockEmitCache( key ) end
 	end
 	local native = MC.NativeChunkBackend
+	-- L2 workers consume immutable Lua UV recipes. Changing the atlas does not
+	-- change voxel/collision definitions and must not restart the world session.
+	if MC.NativeL2 and MC.NativeL2.IsActive() then
+		MC.NativeL2.CancelAll()
+		if native and native.InvalidateDefinitions then native.InvalidateDefinitions() end
+		return true, "l2_meshes_queued_" .. tostring(markLuaMeshesDirty())
+	end
 	if native and native.ReconfigureDefinitions then
 		local ok, result = native.ReconfigureDefinitions( reason )
 		if ok then return true, result end
@@ -342,19 +381,28 @@ local function refreshRenderer( reason )
 	return true, "lua_meshes_queued_" .. tostring( markLuaMeshesDirty() )
 end
 
-function MC.SetAtlasProfile( value )
+function MC.SetAtlasProfile( value, previousProfile )
 	local name = normalizeName( value ) or "default"
 	local profile = MC.AtlasProfiles[name]
 	if not profile then return false, "atlas_profile_not_registered" end
-	if MC.ActiveAtlasProfile == name and MC.ActiveAtlasProfileKey == profile.cacheKey then
+	if MC.ActiveAtlasProfileKey == profile.cacheKey then
 		applyLayout( profile )
 		return true, name, true
 	end
 
 	local previous = MC.ActiveAtlasProfile or "default"
+	previousProfile = previousProfile or MC.AtlasProfiles[previous] or defaultProfile
 	applyLayout( profile )
 	MC.AtlasProfileRevision = MC.AtlasProfileRevision + 1
 	local nativeOK, nativeResult = refreshRenderer( "atlas profile " .. previous .. " -> " .. name )
+	if not nativeOK then
+		MC.AtlasProfiles[previous] = previousProfile
+		applyLayout(previousProfile)
+		MC.AtlasProfileRevision = MC.AtlasProfileRevision + 1
+		local restored, reason = refreshRenderer("atlas profile rollback")
+		if not restored then MC.Fault("atlas_profile_rollback", "%s", tostring(reason)) end
+		return false, nativeResult
+	end
 	if hook and hook.Run then hook.Run( "MC.AtlasProfileChanged", name, previous, nativeOK, nativeResult ) end
 	return true, name, nativeOK, nativeResult
 end
@@ -370,7 +418,13 @@ function MC.RegisterAtlasProfile( name, definition, owner )
 	if not stored then return false, err end
 	MC.AtlasProfiles[name] = stored
 	MC.AtlasProfileRevision = MC.AtlasProfileRevision + 1
-	if MC.ActiveAtlasProfile == name then MC.SetAtlasProfile( name ) end
+	if MC.ActiveAtlasProfile == name then
+		local ok, reason = MC.SetAtlasProfile( name, existing )
+		if not ok then
+			MC.AtlasProfiles[name] = existing
+			return false, reason
+		end
+	end
 	if hook and hook.Run then hook.Run( "MC.AtlasProfileRegistered", name, owner ) end
 	return true, name
 end
@@ -382,7 +436,10 @@ function MC.UnregisterAtlasProfile( name, owner )
 	local existing = MC.AtlasProfiles[name]
 	if not existing then return false, "not_registered" end
 	if existing.owner ~= owner then return false, "owner_mismatch" end
-	if MC.ActiveAtlasProfile == name then MC.SetAtlasProfile( "default" ) end
+	if MC.ActiveAtlasProfile == name then
+		local ok, reason = MC.SetAtlasProfile( "default" )
+		if not ok then return false, reason end
+	end
 	MC.AtlasProfiles[name] = nil
 	MC.AtlasProfileRevision = MC.AtlasProfileRevision + 1
 	if hook and hook.Run then hook.Run( "MC.AtlasProfileUnregistered", name, owner ) end

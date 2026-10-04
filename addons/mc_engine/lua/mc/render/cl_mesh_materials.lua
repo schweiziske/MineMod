@@ -149,13 +149,7 @@ end
 local function atlasSourceFromDefinition( definition )
 	if definition.runtimeTexture then
 		local texture = definition.runtimeTexture
-		local material = CreateMaterial( "mc_runtime_atlas_source_" .. texture:GetName(), "UnlitGeneric", {
-			["$basetexture"] = texture:GetName(), ["$vertexcolor"] = 1, ["$vertexalpha"] = 1,
-		} )
-		if not material or material:IsError() then return nil, "runtime_source_material_failed" end
-		material:SetTexture( "$basetexture", texture )
-		return { opaque = material, translucent = material, icon = material,
-			opaqueTexture = texture, translucentTexture = texture, iconTexture = texture,
+		return { opaqueTexture = texture, translucentTexture = texture, iconTexture = texture,
 			runtime = true, owner = definition.owner, atlasProfile = definition.atlasProfile }
 	end
 	if definition.inheritBase == true then
@@ -224,7 +218,7 @@ for name, definition in pairs( MC.TexturePackDefinitions ) do
 	end
 end
 
-function MC.RegisterTexturePack( name, definition, owner )
+function MC.RegisterTexturePack( name, definition, owner, deferSelection )
 	name = normalizeTexturePackName( name )
 	if not name or name == "default" and owner ~= "texturepack.default" then
 		return false, "invalid_texture_pack_name"
@@ -252,6 +246,8 @@ function MC.RegisterTexturePack( name, definition, owner )
 		end
 	end
 	local inheritBase = definition.inheritBase == true
+	local atlasProfile = normalizeAtlasProfile( definition.atlasProfile or definition.profile )
+	if not atlasProfile then return false, "atlas_profile_not_registered" end
 	local runtimeTexture = definition.runtimeTexture
 	if runtimeTexture ~= nil then
 		local kind = type( runtimeTexture )
@@ -259,7 +255,9 @@ function MC.RegisterTexturePack( name, definition, owner )
 			or type( runtimeTexture.GetName ) ~= "function" or type( runtimeTexture.IsError ) ~= "function"
 			or type( runtimeTexture.Width ) ~= "function" or type( runtimeTexture.Height ) ~= "function"
 			or runtimeTexture:IsError() or runtimeTexture:GetName() == "" then return false, "invalid_runtime_texture" end
-		local layout = MC.DefaultAtlasProfileLayout or MC.GeneratedAtlas or MC.Atlas
+		local layout
+		if atlasProfile == "default" then layout = MC.DefaultAtlasProfileLayout or MC.GeneratedAtlas or MC.Atlas
+		else layout = MC.AtlasProfiles[atlasProfile].layout end
 		if runtimeTexture:Width() ~= layout.W or runtimeTexture:Height() ~= layout.H then return false, "runtime_texture_layout_mismatch" end
 		if inheritBase then return false, "runtime_texture_cannot_inherit" end
 	end
@@ -299,9 +297,6 @@ function MC.RegisterTexturePack( name, definition, owner )
 		if normal == orm or normal == opaquePath:lower() or normal == translucentPath:lower()
 			or orm == opaquePath:lower() or orm == translucentPath:lower() then return false, "pbr_channels_alias" end
 	end
-	local atlasProfile = normalizeAtlasProfile( definition.atlasProfile or definition.profile )
-	if not atlasProfile then return false, "atlas_profile_not_registered" end
-	if runtimeTexture and atlasProfile ~= "default" then return false, "runtime_texture_requires_default_layout" end
 	local profileOwner = MC.AtlasProfileDefinitionOwner and MC.AtlasProfileDefinitionOwner( atlasProfile ) or "mc"
 	if profileOwner ~= "mc" and profileOwner ~= owner then
 		return false, "atlas_profile_owned_by_" .. tostring( profileOwner )
@@ -345,7 +340,7 @@ function MC.RegisterTexturePack( name, definition, owner )
 	MC.TexturePackDefinitions[name] = stored
 	AtlasSources[name] = source
 	MC.TexturePackRevision = MC.TexturePackRevision + 1
-	if refreshTexturePackSelection then
+	if refreshTexturePackSelection and not deferSelection then
 		local ok, err = refreshTexturePackSelection( true )
 		if not ok then
 			MC.TexturePackDefinitions[name] = previousDefinition
@@ -744,7 +739,7 @@ function MC.SetTexturePack( value )
 	local opaqueTexture = source and source.opaqueTexture
 	local translucentTexture = source and source.translucentTexture or opaqueTexture
 	local iconTexture = source and source.iconTexture or opaqueTexture
-	if not source or not source.opaque or source.opaque:IsError() or not validAtlasTexture( opaqueTexture ) then
+	if not source or not source.runtime and (not source.opaque or source.opaque:IsError()) or not validAtlasTexture( opaqueTexture ) then
 		return false, "missing_atlas_" .. name
 	end
 	if not validAtlasTexture( translucentTexture ) then translucentTexture = opaqueTexture end
@@ -769,6 +764,11 @@ function MC.SetTexturePack( value )
 	MC.Atlas.ACTIVE_MATERIAL_TRANSLUCENT = source.translucentPath or translucentTexture:GetName()
 
 	if MC.RefreshBlockParticleMaterials then MC.RefreshBlockParticleMaterials( opaqueTexture ) end
+	if MC.ResourceGeneration then
+		for _, material in ipairs({MC.Material, MC.MaterialTranslucent, MC.MaterialIconOpaque, MC.MaterialCreativeIcon, MC.MaterialCreativeIconOpaque}) do
+			MC.ResourceGeneration.TrackMaterial(material)
+		end
+	end
 	if hook and hook.Run then hook.Run( "MC.TexturePackChanged", name, previous ) end
 	return true, name, requested == name
 end
@@ -807,6 +807,13 @@ local function winningTexturePackLease()
 end
 
 refreshTexturePackSelection = function( force )
+	-- A staged raw definition must not be replaced by the startup reconciler
+	-- before its geometry has committed. Leases still win immediately.
+	if MC.ResourcePacks and MC.ResourcePacks.job and MC.ResourcePacks.job.raw
+		and MC.ResourcePacks.job.state == "applying" and not MC.TexturePackLeaseOwner()
+		and MC.TexturePack:GetString() == MC.ResourcePacks.job.preference then
+		return true, MC.TexturePackName(), true
+	end
 	local lease = winningTexturePackLease()
 	local selected = lease and lease.name or configuredTexturePackName()
 	if not force and MC.ActiveTexturePack == selected then return true, selected, true end
@@ -840,7 +847,8 @@ if cvars and cvars.AddChangeCallback then
 		if MC.RefreshConfigControlValue then MC.RefreshConfigControlValue( "mc_texture_pack", value ) end
 		if not ok then
 			MsgN( "[MC] texture pack unavailable: " .. tostring( value ) )
-		elseif normalized ~= string.lower( tostring( value or "default" ) ) and RunConsoleCommand then
+		elseif normalized ~= string.lower( tostring( value or "default" ) ) and RunConsoleCommand
+			and not normalizeTexturePackName(value) then
 			RunConsoleCommand( "mc_texture_pack", normalized )
 		end
 	end, "mc_texture_pack_refresh" )

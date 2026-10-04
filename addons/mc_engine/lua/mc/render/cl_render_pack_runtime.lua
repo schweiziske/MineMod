@@ -6,6 +6,8 @@ local Catalog, Bindings = MC.RenderPackRegistry, MC.RenderBlockBindings
 local G, P, R = MC.RenderPackGeometry, MC.RenderPackResources, MC.RenderL2Resources
 local requireValue = R.Require
 local DEFAULT_PACK = "mc:vanilla"
+local WaterEnabled = MC.RenderPackSettings.Handle("water")
+local noPasses = {}
 -- Archived locally; the console command writes it, bootstrap reads it.
 local SavedPack = CreateClientConVar( "mc_render_pack_saved", DEFAULT_PACK, true, false,
 	"Render pack selected on join (set by mc_render_pack select/off)" )
@@ -43,6 +45,7 @@ end
 
 local function sameWorld( c )
 	return MC.World == c.world and MC.StateWorldGeneration == c.worldGeneration
+		and c.atlasKey == MC.ActiveAtlasProfileKey
 		and MC.CS == c.cs and MC.CH == c.ch and MC.API.Coords.BlockSize() == c.blockSize
 end
 
@@ -78,13 +81,45 @@ function L.Select( id )
 	L.pending = { pack = id, plan = plan, bindingKeys = keys, bindingsGeneration = generation,
 		phase = "validate", sections = {}, chunks = {}, materials = {}, rebuildRequests = {},
 		started = SysTime(), sectionCount = 0, totalQuads = 0, drawEntries = 0, waitingSections = 0 }
-	L.selected, L.bootstrapped = id, true
+	L.selected, L.bootstrapped, L.lastError = id, true, nil
 	return true, "preparing"
 end
 
 function L.Off()
 	-- "Off" disables a custom pack, not the required world vertex format.
 	return L.Select( DEFAULT_PACK )
+end
+
+-- Resource generations own their texture lifetimes. Drop bundles before the
+-- coordinator retires their textures; cached engine materials are rebound by
+-- the next bundle. Section UV generations are checked separately.
+function L.ResetAtlasBindings()
+	local selected = L.selected or DEFAULT_PACK
+	release(L.pending)
+	release(L.active)
+	L.pending, L.active = nil, nil
+	L.version = L.version + 1
+	return L.Select(selected)
+end
+
+-- Keep old runtime ownership until the replacement is bound. Texture loading
+-- and baking finish synchronously; only geometry uses its existing scheduler
+-- during this explicit loading transition.
+function L.BeginAtlasTransition()
+	L.atlasTransition = true
+	local ok, err = L.Select(L.selected or DEFAULT_PACK)
+	if not ok then L.atlasTransition = nil return false, err end
+	return true
+end
+
+function L.AtlasTransitionStatus()
+	if L.lastError and not L.pending then return false, L.lastError end
+	if L.pending or not L.active or not sameWorld(L.active) then return nil end
+	return true
+end
+
+function L.EndAtlasTransition()
+	L.atlasTransition = nil
 end
 
 -- Select and remember a pack for the next join (console command and mc_config).
@@ -165,7 +200,11 @@ local function bindSection( c, transaction, source, chunk, size )
 			if not materialCache and not transaction.force and not transaction.changedSources[part.material] then
 				materialCache = c.materials[part.material]
 			end
-			for _, node in ipairs( P.Passes( transaction.bundle, part.request, part.stage ) ) do
+			local passes = P.Passes(transaction.bundle, part.request, part.stage)
+			-- The dedicated water renderer owns optics, SSR, refraction and
+			-- caustics. Never draw a second atlas surface underneath it.
+			if part.water and c.waterEnabled then passes = noPasses end
+			for _, node in ipairs( passes ) do
 				local material = materialCache and materialCache[node.key]
 				if not material then
 					-- Published node caches are read-only until commit. Copy only
@@ -255,8 +294,9 @@ local function syncChunk( c, transaction, key, size, force )
 		-- Streaming may detach a chunk before its mesh cleanup.
 		if chunk and source.chunk == chunk and source.worldGeneration == MC.StateWorldGeneration then
 			local bound = old[index]
-			local partitionCurrent = not force and bound and bound.source == source and bound.chunk == chunk
-			if not partitionCurrent and not partitionMatches( c, source, size ) then
+			local layoutCurrent = source.atlasKey == MC.ActiveAtlasProfileKey
+			local partitionCurrent = layoutCurrent and not force and bound and bound.source == source and bound.chunk == chunk
+			if not layoutCurrent or not partitionCurrent and not partitionMatches( c, source, size ) then
 				transaction.waiting = transaction.waiting + 1
 				rebuilds = rebuilds or {}
 				rebuilds[index] = source
@@ -265,7 +305,7 @@ local function syncChunk( c, transaction, key, size, force )
 						"render_pack_rebuild_missing", "native section rebuild queue is unavailable" )
 					MC.RequestRenderSectionGeometry( key, index, false )
 				end
-				if not bound or bound.chunk ~= chunk or not sameWorld( c ) then bound = nil end
+				if not layoutCurrent or not bound or bound.chunk ~= chunk or not sameWorld( c ) then bound = nil end
 			else
 				local rebind = force or not bound or bound.source ~= source or bound.chunk ~= chunk
 				for pass = 1, 2 do
@@ -373,6 +413,9 @@ end
 
 local function syncSections( c, force )
 	local started, size, generation = SysTime(), MC.API.Coords.BlockSize(), MC.ChunkDrawListVersion()
+	local water = WaterEnabled:GetBool() and c.plan.owners["pack/" .. c.pack].definition.programs.water ~= nil
+	force = force or c.waterEnabled ~= water
+	c.waterEnabled = water
 	requireValue( type( size ) == "number" and size > 0 and size < math.huge,
 		"render_pack_block_size", "invalid runtime block size" )
 	-- A map-only pack update can arrive alongside a sparse geometry update.
@@ -418,6 +461,7 @@ local function syncSections( c, force )
 	commitMaterials( c, transaction )
 	c.sectionCount, c.totalQuads, c.drawEntries, c.waitingSections = transaction.count, transaction.quads, transaction.draws, transaction.waiting
 	c.world, c.worldGeneration, c.cs, c.ch = MC.World, MC.StateWorldGeneration, MC.CS, MC.CH
+	c.atlasKey = MC.ActiveAtlasProfileKey
 	c.blockSize, c.drawGeneration = size, generation
 	c.updateMS, c.updatedSections, c.scannedChunks = ( SysTime() - started ) * 1000, #transaction.created, #transaction.updates
 	c.syncCount = ( c.syncCount or 0 ) + 1
@@ -482,7 +526,7 @@ local function fail( c, err )
 		-- needs a terminal message after "preparing", even for the same fault.
 		print( "[MC render pack] failed " .. L.lastError .. "; active=" .. ( L.active and L.active.pack or "none" ) )
 		-- A saved pack that no longer prepares must not leave the world without L2.
-		if not L.active and c.pack ~= DEFAULT_PACK then L.Select( DEFAULT_PACK ) end
+		if not L.active and not L.atlasTransition and c.pack ~= DEFAULT_PACK then L.Select( DEFAULT_PACK ) end
 	elseif c then
 		c.failedDrawGeneration, c.failedBindings = MC.ChunkDrawListVersion(), Bindings.generation
 		c.failedWorld, c.failedWorldGeneration = MC.World, MC.StateWorldGeneration
@@ -498,7 +542,9 @@ local function updateActive( c )
 		local selected, selectionError = L.Select( c.pack )
 		requireValue( selected, "render_pack_reparse", tostring( selectionError ) )
 	end
-	if c.drawGeneration ~= MC.ChunkDrawListVersion() or not sameWorld( c ) then
+	local water = WaterEnabled:GetBool() and c.plan.owners["pack/" .. c.pack].definition.programs.water ~= nil
+	if c.waterEnabled ~= water then syncSections(c, true)
+	elseif c.drawGeneration ~= MC.ChunkDrawListVersion() or not sameWorld( c ) then
 		syncSections( c )
 	elseif not P.SourcesCurrent( c.bundle ) then
 		syncSections( c, true )
@@ -521,7 +567,7 @@ function L.Step()
 		end
 	end
 	local c = L.active
-	if c then
+	if c and not L.atlasTransition then
 		local retry = c.failedDrawGeneration ~= MC.ChunkDrawListVersion() or c.failedBindings ~= Bindings.generation
 			or c.failedWorld ~= MC.World or c.failedWorldGeneration ~= MC.StateWorldGeneration
 			or c.failedBlockSize ~= MC.API.Coords.BlockSize()
@@ -548,6 +594,7 @@ function L.Step()
 end
 
 function L.BeginProcessing( x, y, z, view )
+	if L.atlasTransition then return true end
 	local c = L.active
 	if not c or not c.processing or not sameWorld( c ) then return true end
 	if c.processingRetryAt and SysTime() < c.processingRetryAt then return false end
@@ -667,7 +714,7 @@ end
 
 local emptyStages, emptyChunks = {}, {}
 function L.GetStages( translucent )
-	if not L.active or not sameWorld( L.active ) then return emptyStages, L.version, emptyChunks end
+	if L.atlasTransition or not L.active or not sameWorld( L.active ) then return emptyStages, L.version, emptyChunks end
 	-- The synchronous draw pass checks world invariants once here, then only
 	-- checks individual chunk identities against this published snapshot.
 	if translucent then return L.active.translucentStages, L.active.version, L.active.chunks end

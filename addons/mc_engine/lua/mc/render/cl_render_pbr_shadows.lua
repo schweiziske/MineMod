@@ -155,11 +155,13 @@ function S.CasterMaterial( surface, stage )
 	if S.waterMaterials[surface] then return nil end
 	local binding = S.surfaceMaterials[surface]
 	local record
-	if binding and binding.program == S.program and binding.stage == stage then
+	if binding and binding.program == S.program and binding.stage == stage and binding.textureRevision == MC.TexturePackRevision then
 		record = binding.record
 	else
 		local source = R.SourceTexture( surface )
-		local signature = S.program.vertex .. "/" .. S.program.pixel .. "/" .. stage .. "/" .. source:GetName()
+		local resources = MC.ResourceGeneration
+		local identity = resources and resources.Identity(source) or source:GetName()
+		local signature = S.program.vertex .. "/" .. S.program.pixel .. "/" .. stage .. "/" .. identity
 		record = S.depthMaterials[signature]
 		if not record then
 			requireValue( S.materialCount < 2048, "render_pbr_shadow_material_budget", "2048 immutable shadow materials reached" )
@@ -175,12 +177,16 @@ function S.CasterMaterial( surface, stage )
 			} )
 			requireValue( material and not material:IsError(), "render_pbr_shadow_material", "could not create depth material" )
 			material:SetTexture( "$basetexture", source )
+			if MC.ResourceGeneration then MC.ResourceGeneration.BindSampling(material,source) end
 			record = { material = material, source = source, seen = setmetatable( {}, { __mode = "k" } ) }
 			S.depthMaterials[signature], S.materialCount = record, S.materialCount + 1
-		else
+		elseif not (resources and resources.textures[source:GetName()]) then
 			requireValue( R.SameTexture( source, record.source ), "render_pbr_shadow_texture_identity", "shadow albedo dimensions changed" )
 		end
-		S.surfaceMaterials[surface] = { program = S.program, stage = stage, record = record }
+		record.material:SetTexture("$basetexture", source)
+		if resources then resources.BindSampling(record.material,source) end
+		record.source = source
+		S.surfaceMaterials[surface] = { program = S.program, stage = stage, record = record, textureRevision = MC.TexturePackRevision }
 	end
 	if record.revision ~= S.renderRevision then
 		-- Both cascades share one depth plane. Constant writes happen once per

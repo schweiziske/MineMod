@@ -150,16 +150,12 @@ local function particleMaterialForTile( tileName, col, row )
 	local atlas = MC.Atlas
 	local atlasTexture, atlasTextureName = particleAtlasTexture()
 	if not atlas or not atlasTexture or not atlasTextureName then return ParticleFallbackMaterial end
-	local resolvedTile = MC.ResolveAtlasTile and MC.ResolveAtlasTile( tile ) or tile
-	local stride = atlas.STRIDE or atlas.TILE
-	local pad = atlas.PAD or 0
-	local atlasColumn = resolvedTile % atlas.COLS
-	local atlasRow = math.floor( resolvedTile / atlas.COLS )
+	local x, y, width, height, layout = MC.AtlasRegion(tile)
 	local sampleOffset = 0.75 / ( ParticleUvSteps - 1 )
-	local scaleX = atlas.TILE * 0.25 / atlas.W
-	local scaleY = atlas.TILE * 0.25 / atlas.H
-	local translateX = ( atlasColumn * stride + pad + col * sampleOffset * atlas.TILE ) / atlas.W
-	local translateY = ( atlasRow * stride + pad + row * sampleOffset * atlas.TILE ) / atlas.H
+	local scaleX = width * 0.25 / layout.W
+	local scaleY = height * 0.25 / layout.H
+	local translateX = (x + col * sampleOffset * width) / layout.W
+	local translateY = (y + row * sampleOffset * height) / layout.H
 	local matName = "mc_particle_atlas_v2_" .. tile .. "_" .. col .. "_" .. row
 	local transform = string.format(
 		"center 0 0 scale %.9f %.9f rotate 0 translate %.9f %.9f",

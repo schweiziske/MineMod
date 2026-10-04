@@ -14,7 +14,13 @@ namespace mcmesh::blockdefs {
 	constexpr uint8_t CAP_FENCE = 1u, CAP_PANE = 2u, CAP_WALL = 4u, CAP_PIPE6 = 8u, CAP_END_STONE_DOWN = 16u, CAP_KNOWN_MASK = 31u;
 	constexpr uint8_t STATE_LEGACY_EXACT = 1u, STATE_STAIRS = 2u, STATE_FULL_CUBE = 4u,
 		STATE_CULL_GENERATED_FACES = 8u, STATE_USE_GENERATED_VISUAL = 16u, STATE_KNOWN_MASK = 31u;
-	struct AtlasParams { uint16_t cols = 0, rows = 0, tile = 0, pad = 0, stride = 0, w = 0, h = 0; float inset = 0; bool valid = false; };
+	struct AtlasRegion { uint16_t x = 0, y = 0, w = 0, h = 0; };
+	struct AtlasParams { uint16_t cols = 0, rows = 0, tile = 0, pad = 0, stride = 0, w = 0, h = 0; float inset = 0; bool valid = false; std::vector<AtlasRegion> regions; };
+	inline AtlasRegion RegionForTile(const AtlasParams& atlas, uint16_t tile) {
+		if (!atlas.regions.empty()) return atlas.regions[tile];
+		return {uint16_t((tile % atlas.cols) * atlas.stride + atlas.pad),
+			uint16_t((tile / atlas.cols) * atlas.stride + atlas.pad), atlas.tile, atlas.tile};
+	}
 	struct FaceTexture { uint16_t tile = 0; uint8_t page = 0; std::array<float, 8>uv{}; };
 	struct Box { float v[6]{}; };
 	struct Quad { uint8_t face = 0, flags = 0, page = 0; uint16_t boxIndex = 0xffff, tile = 0; std::array<float, 12>pos{}; std::array<float, 8>uv{}; };

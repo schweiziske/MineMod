@@ -25,6 +25,17 @@ function R.ListPacks()
 			entries[#entries + 1], byName[source.name] = source, source
 		end
 	end
+	if MC.ResourceRepository then
+		local repository = MC.ResourceRepository
+		if repository.revision == 0 then repository.Refresh() end
+		for _, source in ipairs(repository.GetCatalog().entries) do
+			local entry = byName[source.id]
+			if entry then
+				for key, value in pairs(source) do entry[key] = value end
+			else entry = source entries[#entries+1] = entry end
+			entry.available = not entry.error and MC.ResourceGeneration.Available()
+		end
+	end
 	return entries
 end
 
@@ -45,7 +56,9 @@ function R.GetApplyStatus( id )
 	local job = R.jobs[id]
 	if not job then return nil, "apply_job_not_found" end
 	local status = { id = job.id, name = job.name, state = job.state, error = job.error, rebuilt = job.rebuilt,
-		started = job.started, finished = job.finished, bakeSerial = job.bakeSerial }
+		started = job.started, finished = job.finished, bakeSerial = job.bakeSerial,
+		phase = job.phase, prepareMS = job.prepareMS, buildMS = job.buildMS, cacheError = job.cacheError,
+		completed=job.completed,total=job.total,yields=job.yields,raw=job.raw }
 	if job.state == "baking" then
 		local bake = MC.AtlasBaker.Status()
 		if bake.serial == job.bakeSerial then
@@ -95,17 +108,183 @@ local function commit( job )
 	finish( job, "ready" )
 end
 
-local function apply( name, force )
+local RAW_OWNER = "mc.resourcepacks.runtime"
+R.rawGenerations = R.rawGenerations or {}
+local function retireRaw(generation)
+	if MC.TexturePackName() == generation.pack then return false end
+	if MC.TexturePackDefinitionOwner(generation.pack) == RAW_OWNER then
+		local ok, err = MC.UnregisterTexturePack(generation.pack, RAW_OWNER)
+		if not ok then return false, err end
+	end
+	local ok, err = MC.UnregisterAtlasProfile(generation.profile, RAW_OWNER)
+	if not ok then return false, err end
+	ok, err = MC.ResourceGeneration.Release(generation)
+	if not ok then return false, err end
+	R.rawGenerations[generation] = nil
+	return true
+end
+
+local function beginRaw(name, entry, options, force)
+	local repository = MC.ResourceRepository
+	if options ~= nil and type(options) ~= "table" then return false, "resource_compile_arguments" end
+	options = table.Copy(options or {})
+	local selection, err = repository.ValidateSelection({name}, repository.revision, options.confirmed)
+	if not selection then return false, err end
+	R.serial = R.serial + 1
+	local job = {id=R.serial, name=name, preference=MC.TexturePack:GetString(), previousPack=MC.TexturePackName(), state="baking", raw=true, force=force,
+		started=SysTime(), sourceOwner=RAW_OWNER, catalogRevision=repository.revision, selection=selection, options=options,
+		previousGeneration=R.activeGeneration}
+	R.jobs[job.id], R.job, R.lastId = job, job, job.id
+	R.jobs[job.id-32] = nil
+	changed(job)
+	return true, job.id
+end
+
+local function applyRaw(job)
+	if MC.TexturePackLeaseOwner() then return nil, "texture_pack_controlled_by_mode" end
+	if MC.TexturePack:GetString() ~= job.preference then return nil, "texture_pack_selection_changed" end
+	local before = SysTime()
+	local nextPresentation=before+5
+	local function checkpoint(phase,completed,total)
+		if completed then job.phase,job.completed,job.total=phase,completed,total end
+		if SysTime()<nextPresentation then return end
+		job.yields=(job.yields or 0)+1
+		changed(job)
+		coroutine.yield()
+		-- No GPU state is held at these boundaries. Revalidate the request on
+		-- resume, before touching or publishing any candidate textures.
+		if job.cancelRequested or MC.TexturePackLeaseOwner() or MC.TexturePack:GetString()~=job.preference
+			or MC.ResourceRepository.revision~=job.catalogRevision then error("resource_apply_cancelled",0) end
+		nextPresentation=SysTime()+5
+	end
+	local plan, reason = MC.ResourceCompiler.PrepareTiles(job.selection, job.catalogRevision, job.options, checkpoint)
+	if not plan then return nil, reason end
+	job.prepareMS = (SysTime()-before)*1000
+	local generation
+	before = SysTime()
+	generation, reason = MC.ResourceGeneration.Build(plan, checkpoint)
+	if not generation then return nil, reason end
+	job.buildMS = (SysTime()-before)*1000
+	job.candidate = generation
+	generation.pack, generation.profile = job.name, "mc_resource_layout_" .. generation.slot
+	local color
+	color, reason = MC.ResourceGeneration.Texture(generation)
+	if not color then return nil, reason end
+	local maps
+	if plan.pbr then
+		maps = {colorSpace="srgb"}
+		for _, channel in ipairs({"normal", "orm"}) do
+			maps[channel], reason = MC.ResourceGeneration.Texture(generation, channel)
+			if not maps[channel] then return nil, reason end
+		end
+	end
+	local regions = {} for i, region in ipairs(plan.layout.regions) do regions[i-1] = region end
+	local ok
+	ok, reason = MC.RegisterAtlasProfile(generation.profile, {W=plan.layout.width, H=plan.layout.height,
+		MIP=plan.layout.mip, INSET=0, REGIONS=regions, tiles=plan.byTile, fallback=plan.byTile[MC.Tiles.missing or 0] or 0}, RAW_OWNER)
+	if not ok then return nil, reason end
+	job.profileRegistered = true
+	job.previousDefinition = MC.TexturePackDefinitions[job.name]
+	if job.previousDefinition and job.previousDefinition.owner ~= RAW_OWNER then return nil, "resource_pack_name_owned" end
+	ok, reason = MC.RegisterTexturePack(job.name, {title=job.name, runtimeTexture=color, runtimePBR=maps,
+		atlasProfile=generation.profile}, RAW_OWNER, true)
+	if not ok then return nil, reason end
+	job.packRegistered = true
+	local runtime = MC.RenderPackRuntime
+	if not runtime or not runtime.BeginAtlasTransition then return nil, "resource_pack_runtime_unavailable" end
+	ok, reason = runtime.BeginAtlasTransition()
+	if not ok then return nil, reason end
+	job.transition = true
+	job.switchAttempted = true
+	ok, reason = MC.SetTexturePack(job.name)
+	if not ok then return nil, reason end
+	generation.startedAt, generation.byTile = CurTime(), plan.byTile
+	R.activeGeneration = generation
+	job.state, job.phase, job.bindingStarted = "applying", "waiting_meshes", SysTime()
+	changed(job)
+	return true
+end
+
+local function publishRaw(job)
+	local generation = job.candidate
+	if MC.PrepareResourcePackAnimations then
+		local prepared, err = MC.PrepareResourcePackAnimations()
+		if not prepared then return nil, err end
+	end
+	local ok, reason = MC.SetTexturePackPreference(job.name)
+	if not ok then return nil, reason end
+	R.rawGenerations[generation] = true
+	job.candidate, job.rebuilt, job.phase = nil, true, nil
+	MC.RenderPackRuntime.EndAtlasTransition()
+	if generation.cache then
+		local cached, err = generation.cache:Commit()
+		job.cacheError = not cached and err or nil
+		generation.cache:Close()
+		generation.cache = nil
+	end
+	file.CreateDir("mc/resourcepacks")
+	file.Write("mc/resourcepacks/selection.json", util.TableToJSON({name=job.name, options=job.options}))
+	for previous in pairs(R.rawGenerations) do
+		if previous ~= generation then
+			-- Same-name replacement has already installed the new definition.
+			if previous.pack == generation.pack then
+				local removed, err = MC.UnregisterAtlasProfile(previous.profile, RAW_OWNER)
+				if not removed then error("resource_profile_retire:" .. tostring(err), 0) end
+				MC.ResourceGeneration.Release(previous)
+				R.rawGenerations[previous] = nil
+			else
+				local retired, err = retireRaw(previous)
+				if not retired then error("resource_generation_retire:" .. tostring(err), 0) end
+			end
+		end
+	end
+	return true
+end
+
+local function discardRaw(job)
+	if not job.candidate then return end
+	-- A strict fault in one restore operation must not prevent the remaining
+	-- ownership cleanup. Report only after the candidate is detached/released.
+	local failures = {}
+	local function restore(fn, ...)
+		local called, ok, err = pcall(fn, ...)
+		if not called or not ok then failures[#failures+1] = tostring(called and err or ok) end
+	end
+	if job.packRegistered then
+		if job.previousDefinition then
+			restore(MC.RegisterTexturePack, job.name, job.previousDefinition, RAW_OWNER, true)
+		end
+	end
+	R.activeGeneration = job.previousGeneration
+	if job.switchAttempted then
+		-- Respect a mode/user takeover while a mesh candidate was pending.
+		local target = job.previousPack
+		if MC.TexturePackLeaseOwner() or MC.TexturePack:GetString() ~= job.preference then target = MC.TexturePackName() end
+		restore(MC.SetTexturePack, target)
+	end
+	if job.packRegistered and not job.previousDefinition then restore(MC.UnregisterTexturePack, job.name, RAW_OWNER) end
+	if job.transition then
+		restore(MC.RenderPackRuntime.ResetAtlasBindings)
+		R.recovering = true
+	end
+	if job.profileRegistered then restore(MC.UnregisterAtlasProfile, job.candidate.profile, RAW_OWNER) end
+	restore(MC.ResourceGeneration.Release, job.candidate)
+	job.candidate = nil
+	return #failures == 0, table.concat(failures, "; ")
+end
+
+local function apply( name, force, options )
 	if type( name ) ~= "string" then return false, "invalid_texture_pack_name" end
 	local entry = findPack( name )
 	if not entry then return false, "texture_pack_not_registered" end
 	if not entry.available then return false, "missing_atlas_" .. name end
 	if MC.TexturePackLeaseOwner() then return false, "texture_pack_controlled_by_mode" end
-	if force and not entry.bakeID then return false, "pack_has_no_bake_source" end
+	if force and not entry.bakeID and not entry.resourceSource then return false, "pack_has_no_bake_source" end
 	if R.job then
 		if R.job.name == name and R.job.force == force then return true, R.job.id end
 		return false, "resource_pack_apply_running"
 	end
+	if entry.resourceSource then return beginRaw(name, entry, options, force) end
 	local rebuild = entry.bakeID ~= nil and ( force or not entry.runtime )
 	local preference = MC.TexturePack:GetString()
 	local baker, ownsBake = MC.AtlasBaker, false
@@ -128,17 +307,43 @@ local function apply( name, force )
 	return true, job.id
 end
 
-function R.ApplyPack( name ) return apply( name, false ) end
-function R.ReloadPack( name ) return apply( name, true ) end
+function R.ApplyPack( name, options ) return apply( name, false, options ) end
+function R.ReloadPack( name, options ) return apply( name, true, options ) end
 
 function R.CancelApply( id )
 	local job = R.job
 	if not job or job.id ~= id then return false, "apply_job_not_pending" end
+	if job.raw and job.state=="building" then job.cancelRequested=true return true end
 	if job.state ~= "baking" then return false, "apply_job_not_cancellable" end
+	if job.raw then finish(job, "cancelled", "resource_apply_cancelled") return true end
 	local baker = MC.AtlasBaker
 	finish( job, "cancelled", "atlas_bake_cancelled" )
 	if job.ownsBake and baker.IsBusy() and baker.Status().serial == job.bakeSerial then baker.Cancel() end
 	return true
+end
+
+-- Archived ConVars can arrive after Lua startup. Attempt each preference once
+-- per explicit catalog revision. Missing/broken packs keep the default usable
+-- without erasing the saved name or retrying a failed bake every frame.
+function R.RestorePreference()
+	if R.job or R.recovering or MC.TexturePackLeaseOwner() or not MC.ResourceRepository then return end
+	local name = MC.TexturePack:GetString()
+	if MC.TexturePackDefinitions[name] then return end
+	local repository = MC.ResourceRepository
+	if repository.revision == 0 then repository.Refresh() end
+	local attempt = name .. ":" .. repository.revision
+	if R.restoreAttempt == attempt then return end
+	R.restoreAttempt = attempt
+	local entry = repository.byID[name]
+	if not entry then return end
+	local options
+	local bytes = file.Read("mc/resourcepacks/selection.json", "DATA")
+	if bytes and #bytes <= 65536 then
+		local saved = MC.ResourcePackRules.DecodeJSON(bytes)
+		if saved and saved.name == name and type(saved.options) == "table" then options = saved.options end
+	end
+	local ok, err = R.ApplyPack(name, options)
+	if not ok then R.restoreError = tostring(err) end
 end
 
 -- Autorefresh must not leave a request dependent on an obsolete completion closure.
@@ -150,3 +355,64 @@ hook.Add( "MC.AtlasBakeChanged", HOOK, function( status )
 	elseif status.state == "failed" then finish( job, "failed", status.error )
 	elseif status.state == "cancelled" then finish( job, "cancelled", "atlas_bake_cancelled" ) end
 end )
+
+-- Run continuously, allowing one presentation frame only after five seconds
+-- of work. Geometry retains its own scheduler and commit boundary.
+hook.Add("PostRender", HOOK, function()
+	local job = R.job
+	if job and job.raw then
+		local ok, applied, err
+		if job.state == "baking" or job.state=="building" then
+			job.state = "building"
+			if not job.worker then job.worker=coroutine.create(function() return applyRaw(job) end) end
+			ok,applied,err=coroutine.resume(job.worker)
+			if ok and coroutine.status(job.worker)~="dead" then applied=true
+			else job.worker=nil end
+		else
+			ok = true
+			if MC.TexturePackLeaseOwner() then applied, err = false, "texture_pack_controlled_by_mode"
+			elseif MC.TexturePack:GetString() ~= job.preference then applied, err = false, "texture_pack_selection_changed"
+			elseif SysTime()-job.bindingStarted > 60 then applied, err = false, "resource_pack_mesh_timeout"
+			else
+				applied, err = MC.RenderPackRuntime.AtlasTransitionStatus()
+				if applied then
+					ok, applied, err = pcall(publishRaw, job)
+					if ok and applied then finish(job, "ready") end
+				elseif applied == nil then applied = true end
+			end
+		end
+		if not ok or not applied then
+			local restored, restoreError = discardRaw(job)
+			local reason = ok and err or applied
+			if type(reason) == "table" then reason = reason.message or reason.code end
+			finish(job, reason=="resource_apply_cancelled" and "cancelled" or "failed", tostring(reason))
+			if restored == false then MC.Fault("resource_pack_restore", "%s", restoreError) end
+			if not ok and reason~="resource_apply_cancelled" then MC.Fault("resource_pack_apply_internal", "%s", tostring(reason)) end
+		end
+	end
+	if R.recovering then
+		local ready, err = MC.RenderPackRuntime.AtlasTransitionStatus()
+		if ready ~= nil then
+			R.recovering = nil
+			MC.RenderPackRuntime.EndAtlasTransition()
+			if not ready then MC.Fault("resource_pack_render_restore", "%s", tostring(err)) end
+		end
+	end
+	local active = R.activeGeneration
+	if active and MC.TexturePackName() == active.pack then
+		local ok, err = MC.ResourceGeneration.Update(active, (CurTime()-active.startedAt)*20)
+		if not ok then MC.Fault("resource_pack_animation", "%s", tostring(err)) end
+	elseif active then
+		if MC.RenderPackRuntime and MC.RenderPackRuntime.ResetAtlasBindings then MC.RenderPackRuntime.ResetAtlasBindings() end
+		R.activeGeneration = nil
+		local retired, err = retireRaw(active)
+		if not retired then MC.Fault("resource_pack_retire", "%s", tostring(err)) end
+	end
+	R.RestorePreference()
+end)
+
+hook.Add("HUDPaint", "mc_resource_pack_loading", function()
+	if not (MC.RenderPackRuntime and MC.RenderPackRuntime.atlasTransition) then return end
+	draw.SimpleText("正在准备材质包网格…", "DermaDefaultBold", ScrW()/2, ScrH()/2,
+		color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+end)

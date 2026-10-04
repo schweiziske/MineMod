@@ -12,7 +12,28 @@ local previews = {}
 local SEARCH_TIMER = "mc_texture_pack_manager_search"
 local PAGE_SIZE = 32
 local EVENTS = { "MC.TexturePackChanged", "MC.TexturePackRegistered", "MC.TexturePackUnregistered",
-	"MC.TexturePackOwnerUnregistered", "MC.TexturePackLeaseChanged", "MC.TexturePackSourcesChanged", "MC.ResourcePackApplyChanged" }
+	"MC.TexturePackOwnerUnregistered", "MC.TexturePackLeaseChanged", "MC.TexturePackSourcesChanged", "MC.ResourcePackApplyChanged", "MC.ResourcePackCatalogChanged" }
+
+-- One immutable presentation snapshot per five-second bake checkpoint. Paint
+-- only draws it; it never advances work, invents progress or polls the compiler.
+local bakeProgress
+hook.Add("MC.ResourcePackApplyChanged","mc_texture_pack_progress",function(status)
+	if status.raw and (status.state=="baking" or status.state=="building") then
+		local caption=text("Preparing textures", "正在准备贴图")
+		if status.phase=="bake" then caption=text("Baking textures", "正在烘焙贴图") end
+		local count,total=status.completed or 0,status.total or 0
+		if total>0 then caption=caption.."  "..count.." / "..total end
+		bakeProgress={caption=caption,fraction=total>0 and count/total or 0}
+	else bakeProgress=nil end
+end)
+hook.Add("PostRenderVGUI","mc_texture_pack_progress",function()
+	if not bakeProgress then return end
+	local sw,sh=ScrW(),ScrH();local width=math.min(540,sw-32);local x,y=math.floor((sw-width)/2),math.floor(sh/2-44)
+	surface.SetDrawColor(C.background);surface.DrawRect(x,y,width,88)
+	draw.SimpleText(bakeProgress.caption,"mc_texture_pack_body_24",sw/2,y+20,C.text,TEXT_ALIGN_CENTER,TEXT_ALIGN_CENTER)
+	surface.SetDrawColor(C.line);surface.DrawRect(x+16,y+52,width-32,16)
+	surface.SetDrawColor(C.light);surface.DrawRect(x+18,y+54,math.floor((width-36)*bakeProgress.fraction),12)
+end)
 
 -- Rasterize CJK at its final screen size; never shrink or stretch the HUD glyph atlas.
 local fonts = { body = "mc_texture_pack_body_24", title = "mc_texture_pack_title_26", heading = "mc_texture_pack_heading_30" }
@@ -285,9 +306,21 @@ function FRAME:Init()
 		self:RefreshRows()
 	end )
 	self.Apply = button( self.Footer, text( "Apply", "应用" ), function()
-		local ok, err = self.Session:Apply()
-		self:RefreshRows()
-		if not ok then self:SetStatus( text( "Could not apply: ", "应用失败：" ) .. tostring( err ) ) end
+		local function apply(confirmed)
+			if not IsValid(self) then return end
+			local ok, err = self.Session:Apply(confirmed)
+			self:RefreshRows()
+			if not ok then self:SetStatus(text("Could not apply: ", "应用失败：") .. tostring(err)) end
+		end
+		local entry = self.Session.byName[self.Session.draft]
+		if entry and entry.resourceSource and not entry.formatMatches then
+			local name, revision = entry.name, entry.revision
+			Derma_Query(text("This pack targets a different Minecraft resource format. Apply its supported textures?",
+				"此包的 Minecraft 资源格式与当前版本不匹配，仍要应用其中支持的贴图吗？"),
+				text("Resource format mismatch", "资源格式不匹配"), text("Apply", "应用"), function()
+					if IsValid(self) and self.Session.draft == name then apply({[name]=revision}) end
+				end, text("Cancel", "取消"))
+		else apply() end
 	end )
 	self.Footer.PerformLayout = function( _, w )
 		local line = self.Hint.LineHeight
@@ -325,7 +358,10 @@ function FRAME:Init()
 		b:Dock( LEFT ) b:SetWide( width or 94 )
 		return b
 	end
-	tool( self.Available.Tools, text( "Refresh", "刷新" ), function() self:Refresh() end )
+	tool( self.Available.Tools, text( "Refresh", "刷新" ), function()
+		if MC.ResourceRepository and not MC.ResourcePacks.IsApplying() then MC.ResourceRepository.Refresh() end
+		self:Refresh()
+	end )
 	self.Bake = tool( self.Available.Tools, text( "Bake atlas", "烘焙材质" ), function()
 		if MC.AtlasBaker.IsBusy() then MC.AtlasBaker.Cancel() return end
 		local function start( id )
@@ -403,9 +439,14 @@ function FRAME:UpdateState()
 	self.AvailableDetails:SetEnabled( entry ~= nil and s.focus ~= s.draft )
 	self.SelectedDetails:SetEnabled( entry ~= nil and s.focus == s.draft )
 	if entry then
+		local support = entry.name
+		if entry.resourceSource then
+			support = entry.error or text("Java textures; models and other pack content are not applied.", "Java 贴图；包内模型等其他内容暂不应用。")
+			if entry.unsupported and #entry.unsupported > 0 then support = support .. " " .. table.concat(entry.unsupported, ", ") end
+		end
 		self.Details:SetCaption( entry.title .. "\n" .. entry.description .. "\n"
-			.. text( "Provider: ", "提供者：" ) .. entry.owner .. "\n" .. entry.name )
-		self.Details:SetTooltip( entry.description )
+			.. text( "Provider: ", "提供者：" ) .. entry.owner .. "\n" .. support )
+		self.Details:SetTooltip( entry.description .. "\n" .. support )
 	else self.Details:SetCaption( text( "This pack is no longer registered.", "这个材质包已不再注册。" ) ) end
 end
 

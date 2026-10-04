@@ -5,52 +5,58 @@
   "definition": {
     "schema": 1,
     "name": "Vanilla",
-    "build": "61bf056c263345727b118af15d8faa7ce7d76f16d0889a714b5b83b64cfb338c",
+    "build": "5fff75369a14fe4b11a1d383afeee107286eb44cb63f8d81eb3d4413d6a3a737",
     "abi": 1,
     "layout": "mc:quad_corners_v1",
     "adapter": "mc:vanilla_quad_v2",
     "programs": {
+      "sampling": {
+        "vertex": "mc_vanilla_sampling_vertex_5fff75369a14fe4b11a1_vs30",
+        "vertexHash": "f47acf26168b6f663c00acf35a40087d9ccbd3b1ad51b6768a820d7fdf0fc845",
+        "pixel": "mc_vanilla_sampling_5fff75369a14fe4b11a1_ps30",
+        "pixelHash": "b7f3500f0f4d0df62fdcb6c84f5040fa97795f61f09156d81134e854281e2180"
+      },
       "opaque": {
-        "vertex": "mc_vanilla_vertex_61bf056c263345727b11_vs30",
-        "vertexHash": "b8d86173030a87ee02dbc9293f5331702b0ad3308bef5de9a7c0f86b71ffe7da",
-        "pixel": "mc_vanilla_opaque_61bf056c263345727b11_ps30",
-        "pixelHash": "9cccb54e080e11374c972e1fced15c68c724298bbec996b8b1dfb722956469a8"
+        "vertex": "mc_vanilla_vertex_5fff75369a14fe4b11a1_vs30",
+        "vertexHash": "70f7c71e4ccce3cefe07d8053d29f5f725406fb90c07403b7a49e15499eaf486",
+        "pixel": "mc_vanilla_opaque_5fff75369a14fe4b11a1_ps30",
+        "pixelHash": "743b9e912c4ee65356dc005a2f391e55f7e5704dcb06d681829027775413e55c"
       },
       "cutout": {
-        "vertex": "mc_vanilla_vertex_61bf056c263345727b11_vs30",
-        "vertexHash": "b8d86173030a87ee02dbc9293f5331702b0ad3308bef5de9a7c0f86b71ffe7da",
-        "pixel": "mc_vanilla_cutout_61bf056c263345727b11_ps30",
-        "pixelHash": "63a1696797a7cd6d92eec1f89745e709d0809f3fa5ce4f04a819230f15741114"
+        "vertex": "mc_vanilla_vertex_5fff75369a14fe4b11a1_vs30",
+        "vertexHash": "70f7c71e4ccce3cefe07d8053d29f5f725406fb90c07403b7a49e15499eaf486",
+        "pixel": "mc_vanilla_cutout_5fff75369a14fe4b11a1_ps30",
+        "pixelHash": "e641666508d9c1eba53f78d6481c28af4dc83946f6814926e7b61b9a455c26f6"
       },
       "translucent": {
-        "vertex": "mc_vanilla_vertex_61bf056c263345727b11_vs30",
-        "vertexHash": "b8d86173030a87ee02dbc9293f5331702b0ad3308bef5de9a7c0f86b71ffe7da",
-        "pixel": "mc_vanilla_translucent_61bf056c263345727b11_ps30",
-        "pixelHash": "52c5be4251e00ac50c40b6f5af16bafd77b90f413dced7359f0bb208bf6f70a5"
+        "vertex": "mc_vanilla_vertex_5fff75369a14fe4b11a1_vs30",
+        "vertexHash": "70f7c71e4ccce3cefe07d8053d29f5f725406fb90c07403b7a49e15499eaf486",
+        "pixel": "mc_vanilla_translucent_5fff75369a14fe4b11a1_ps30",
+        "pixelHash": "5827082f71e11ae8c9dfd78dd6c07bf3da017d47c38ef9cf38b5a55da7a5a757"
       },
       "dynamic_opaque": {
-        "vertex": "mc_vanilla_dynamic_vertex_61bf056c263345727b11_vs30",
-        "vertexHash": "473b1270d2910fc9f72af7ff51c641ec3fc3e0c06a799887d554d18f7175be5d",
-        "pixel": "mc_vanilla_dynamic_opaque_61bf056c263345727b11_ps30",
-        "pixelHash": "86fb5665e8c41fd51563ebb92f2011e18ea5abb6e70aaaf620856a459489ca3b"
+        "vertex": "mc_vanilla_dynamic_vertex_5fff75369a14fe4b11a1_vs30",
+        "vertexHash": "9a88163c8c2889ba564ac8a1fe7d41ab9778a07130f0371d9391dd2781547f46",
+        "pixel": "mc_vanilla_dynamic_opaque_5fff75369a14fe4b11a1_ps30",
+        "pixelHash": "a8efd2f98bc4cf9030d6a792c7481521671600f37c3ead163c334fed22f20583"
       },
       "dynamic_cutout": {
-        "vertex": "mc_vanilla_dynamic_vertex_61bf056c263345727b11_vs30",
-        "vertexHash": "473b1270d2910fc9f72af7ff51c641ec3fc3e0c06a799887d554d18f7175be5d",
-        "pixel": "mc_vanilla_dynamic_cutout_61bf056c263345727b11_ps30",
-        "pixelHash": "058d4e47d1e4fa6a9c9940ae56e7735a9cbb791628e9b0b5903d2270c86c4115"
+        "vertex": "mc_vanilla_dynamic_vertex_5fff75369a14fe4b11a1_vs30",
+        "vertexHash": "9a88163c8c2889ba564ac8a1fe7d41ab9778a07130f0371d9391dd2781547f46",
+        "pixel": "mc_vanilla_dynamic_cutout_5fff75369a14fe4b11a1_ps30",
+        "pixelHash": "df81d154faae8afbb2cbe9d5446740c753db03cbb2241924992412d26045b35e"
       },
       "dynamic_translucent": {
-        "vertex": "mc_vanilla_dynamic_vertex_61bf056c263345727b11_vs30",
-        "vertexHash": "473b1270d2910fc9f72af7ff51c641ec3fc3e0c06a799887d554d18f7175be5d",
-        "pixel": "mc_vanilla_dynamic_translucent_61bf056c263345727b11_ps30",
-        "pixelHash": "ac51d5d1179c419c19c4349bd7779f43e2fb5b85aa522a1cbb5dc1006300132f"
+        "vertex": "mc_vanilla_dynamic_vertex_5fff75369a14fe4b11a1_vs30",
+        "vertexHash": "9a88163c8c2889ba564ac8a1fe7d41ab9778a07130f0371d9391dd2781547f46",
+        "pixel": "mc_vanilla_dynamic_translucent_5fff75369a14fe4b11a1_ps30",
+        "pixelHash": "7f05aa9e6fe0e7c69eb95f9a3f569418ae151f5fcc05766513f71c0ffe6364b5"
       },
       "dynamic_sprite": {
-        "vertex": "mc_vanilla_dynamic_sprite_vertex_61bf056c263345727b11_vs30",
-        "vertexHash": "49a7f8113c7b2c4ba34ffd8472454317fd73ded5d100ed6a76f991a66fe225a6",
-        "pixel": "mc_vanilla_dynamic_sprite_61bf056c263345727b11_ps30",
-        "pixelHash": "f62c519a6d93befa1661ace5e30bbeffdbf41fcbdd4b69436b4a8ea7e12bf2fa"
+        "vertex": "mc_vanilla_dynamic_sprite_vertex_5fff75369a14fe4b11a1_vs30",
+        "vertexHash": "5775d965c34094a7218f04b7d0b4ac703d070c205979ffb08fc98ee9692b7cf6",
+        "pixel": "mc_vanilla_dynamic_sprite_5fff75369a14fe4b11a1_ps30",
+        "pixelHash": "0961197d14e70fe9e6f4d206b66d981f181fbda383065731f1c962223973d4d1"
       }
     },
     "resources": {},
