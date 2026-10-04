@@ -5,7 +5,7 @@ MC.ResourceSpriteRules = MC.ResourceSpriteRules or {}
 local S = MC.ResourceSpriteRules
 local function integer(v, low, high) return type(v) == "number" and v == math.floor(v) and v >= low and v <= high end
 local STRATEGIES = {auto = true, mean = true, cutout = true, strict_cutout = true, dark_cutout = true}
-function S.Parse(width, height, metadata)
+function S.Parse(width, height, metadata, pbrClock)
 	if not integer(width, 1, 16384) or not integer(height, 1, 16384) then return nil, "sprite_dimensions" end
 	if metadata ~= nil and type(metadata) ~= "table" then return nil, "sprite_metadata_object" end
 	metadata = metadata or {}
@@ -32,8 +32,13 @@ function S.Parse(width, height, metadata)
 	end
 	if a == nil then return result end
 	if type(a) ~= "table" then return nil, "sprite_animation_object" end
+	local function frameTime(v)
+		-- Shader companion metadata can use fractional ticks (AVPBR uses 1.5).
+		-- The color codec remains strict; companions share the 20 Hz time base.
+		return integer(v, 1, 2147483647) or pbrClock == true and type(v) == "number" and v >= 1 and v <= 2147483647
+	end
 	for _, key in ipairs({"width", "height", "frametime"}) do
-		if a[key] ~= nil and not integer(a[key], 1, 2147483647) then return nil, "sprite_animation_" .. key end
+		if a[key] ~= nil and not (key == "frametime" and frameTime(a[key]) or integer(a[key], 1, 2147483647)) then return nil, "sprite_animation_" .. key end
 	end
 	if a.interpolate ~= nil and type(a.interpolate) ~= "boolean" then return nil, "sprite_animation_interpolate" end
 	if a.width ~= nil then result.width, result.height = a.width, a.height or height
@@ -54,7 +59,7 @@ function S.Parse(width, height, metadata)
 			else index = raw end
 			if time == nil then time = defaultTime end
 			-- AnimationFrame's codec accepts nonnegative indices and positive times.
-			if not integer(index, 0, 2147483647) or not integer(time, 1, 2147483647) then return nil, "sprite_animation_frame_" .. pos end
+			if not integer(index, 0, 2147483647) or not frameTime(time) then return nil, "sprite_animation_frame_" .. pos end
 			if index >= count then
 				result.diagnostics[#result.diagnostics + 1] = {code = "invalid_frame_index", frame = pos - 1, index = index}
 			else frames[#frames + 1], used[index] = {index = index, time = time}, true end

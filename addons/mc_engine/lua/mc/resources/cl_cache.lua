@@ -27,7 +27,7 @@ local function decode(cache, bytes)
 		local index, channel, sizes = header:match("^(%d+):([a-z]+):([%d,]+)$")
 		index = tonumber(index)
 		local sprite = index and cache.plan.sprites[index]
-		if not sprite or sprite.animated or channel ~= "color" and
+		if not sprite or sprite.cacheAnimated or sprite.animated or channel ~= "color" and
 			(not cache.plan.pbr or channel ~= "normal" and channel ~= "orm") then return false end
 		local id = index .. ":" .. channel
 		if records[id] then return false end

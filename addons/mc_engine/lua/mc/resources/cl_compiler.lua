@@ -3,8 +3,15 @@
 MC = MC or {}
 MC.ResourceCompiler = MC.ResourceCompiler or {}
 local C = MC.ResourceCompiler
-C.VERSION = 3
+C.VERSION = 4
 local prepareResources
+local function sameClock(a,b)
+	if a.width~=b.width or a.height~=b.height or a.duration~=b.duration or a.interpolate~=b.interpolate or #a.frames~=#b.frames then return false end
+	for i,frame in ipairs(a.frames) do
+		if frame.index~=b.frames[i].index or frame.time~=b.frames[i].time then return false end
+	end
+	return true
+end
 local function uint32(bytes, offset)
 	local a, b, c, d = bytes:byte(offset, offset + 3)
 	return ((a * 256 + b) * 256 + c) * 256 + d
@@ -31,6 +38,15 @@ function C.PrepareTiles(ids, revision, options, checkpoint)
 		sprite.id, sprite.resource, sprite.tint = "mc:compiled/tile_" .. tile.tile, tile.resource, tile.tint
 		sprite.item = tile.resource:find(":textures/item/",1,true) ~= nil
 		if overlay then
+			-- Alpha-composited variants still require aligned material sheets.
+			for _,layer in ipairs({base,overlay}) do
+				for _,channel in ipairs({"normalSprite","specularSprite"}) do
+					local companion=layer[channel]
+					if companion and (companion.imageWidth~=layer.imageWidth or companion.imageHeight~=layer.imageHeight or not sameClock(companion,layer)) then
+						return nil,"resource_pbr_overlay_animation:"..tile.name
+					end
+				end
+			end
 			if base.animated and overlay.animated then
 				if base.duration ~= overlay.duration or base.interpolate ~= overlay.interpolate or #base.frames ~= #overlay.frames then
 					return nil, "resource_overlay_animation_mismatch:" .. tile.name
@@ -98,33 +114,29 @@ prepareResources = function(ids, revision, refs, options, skipLayout, checkpoint
 			if not sprite then return nil, id .. ":" .. parseError end
 			sprite.id, sprite.png, sprite.origin, sprite.imageWidth, sprite.imageHeight = id, png, origin, w, h
 			if options.pbr ~= false then
-				for _, channel in ipairs({{"_n", "normalPNG"}, {"_s", "specularPNG"}}) do
+				for _, channel in ipairs({{"_n", "normalPNG", "normalSprite"}, {"_s", "specularPNG", "specularSprite"}}) do
 					local data, meta = source:ReadCompanion(origin, channel[1])
 					if data == nil then return nil, id .. ":" .. tostring(meta) end
 					if data then
 						pbr = true
 						local dw, dh = size(data)
-						if dw ~= w or dh ~= h then return nil, "resource_pbr_dimensions:" .. id .. channel[1] end
-						-- Missing companion animation metadata inherits the color clock.
-						if meta and meta.animation then
-							local parsed, reason = MC.ResourceSpriteRules.Parse(dw, dh, meta)
-							if not parsed then return nil, id .. channel[1] .. ":" .. reason end
-							if parsed.width ~= sprite.width or parsed.height ~= sprite.height or parsed.duration ~= sprite.duration
-								or parsed.interpolate ~= sprite.interpolate or #parsed.frames ~= #sprite.frames then
-								return nil, "resource_pbr_animation:" .. id .. channel[1]
-							end
-							for i, frame in ipairs(parsed.frames) do
-								if frame.index ~= sprite.frames[i].index or frame.time ~= sprite.frames[i].time then
-									return nil, "resource_pbr_animation:" .. id .. channel[1]
-								end
-							end
-						end
+						if not dw then return nil,id..channel[1]..":"..dh end
+						-- A matching unannotated sheet follows color. A single-frame map
+						-- stays static; explicit companion metadata owns its own clock.
+						local companionMeta=meta
+						if not (meta and meta.animation) and dw==w and dh==h then companionMeta=metadata end
+						local parsed, reason = MC.ResourceSpriteRules.Parse(dw, dh, companionMeta, true)
+						if not parsed then return nil,id..channel[1]..":"..reason end
+						if parsed.width*sprite.height~=parsed.height*sprite.width then return nil,"resource_pbr_dimensions:"..id..channel[1] end
+						parsed.png,parsed.imageWidth,parsed.imageHeight=data,dw,dh
 						bytes, pixels = bytes + #data, pixels + dw * dh
 						if bytes > 268435456 or pixels > 67108864 then return nil, "resource_compile_input_budget:" .. id end
 						sprite[channel[2]] = data
+						sprite[channel[3]] = parsed
 					end
 				end
 			end
+			sprite.cacheAnimated = sprite.animated or sprite.normalSprite and sprite.normalSprite.animated or sprite.specularSprite and sprite.specularSprite.animated or false
 			sprites[#sprites + 1], byID[id] = sprite, sprite
 			if checkpoint then checkpoint("prepare",#sprites,#refs) end
 		end

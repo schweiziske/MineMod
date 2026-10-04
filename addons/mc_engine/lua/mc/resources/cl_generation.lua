@@ -34,7 +34,7 @@ local function release(generation)
 	end
 	generation.bindings = {}
 	for handle in pairs(generation.handles) do
-		local ok, err = backend.ReleaseAtlasSprite(handle)
+		local ok, err = handle.backend.ReleaseAtlasSprite(handle.id)
 		if not ok then errors[#errors + 1] = tostring(err) end
 		generation.handles[handle] = nil
 	end
@@ -56,7 +56,7 @@ function G.Release(generation)
 	return ok, err
 end
 local function upload(generation, animation, current, nextFrame, fraction, defer)
-	if not defer and generation.updateTexture then
+	if not defer and generation.updateTexture and animation.backend == generation.backend then
 		local r,pad=animation.region,generation.layout.padding
 		local ok,err=generation.updateTexture(animation.handle,animation.texture.id,r[1]-pad,r[2]-pad,current,nextFrame,fraction)
 		if not ok then return nil,err end
@@ -65,9 +65,9 @@ local function upload(generation, animation, current, nextFrame, fraction, defer
 		return true
 	end
 	local levels, err = animation.levels
-	if not levels then levels, err = generation.backend.SampleAtlasSprite(animation.handle, current, nextFrame, fraction) end
+	if not levels then levels, err = animation.backend.SampleAtlasSprite(animation.handle, current, nextFrame, fraction) end
 	if not levels then return nil, err end
-	if generation.cache and not animation.sprite.animated then
+	if generation.cache and animation.cacheable then
 		generation.cache:Put(animation.index,animation.channel,levels)
 	end
 	local r, pad = animation.region, generation.layout.padding
@@ -113,41 +113,56 @@ function G.Build(plan, checkpoint)
 		end
 		generation.texture = generation.channels.color
 		for index, sprite in ipairs(plan.sprites) do
-			local frames = {}
-			for i, frame in ipairs(sprite.frames) do frames[i] = frame.index end
 			for _, channel in ipairs(channels) do
+			local sampled=sprite
+			if not sprite.overlayPNG then
+				if channel=="normal" then sampled=sprite.normalSprite or sprite
+				elseif channel=="orm" then sampled=sprite.specularSprite or sprite end
+			end
+			local frames = {}
+			for i, frame in ipairs(sampled.frames) do frames[i] = frame.index end
+			local spriteBackend=backend
+			if sampled~=sprite and (sampled.width~=sprite.width or sampled.height~=sprite.height) then
+				-- Existing native DLLs require identical material sheet dimensions.
+				-- Resample exceptional companions in Lua and upload through the
+				-- selected texture backend; ordinary channels stay accelerated.
+				spriteBackend=MC.ResourceLuaBackend
+				if not spriteBackend then return nil,"resource_companion_resampler_unavailable" end
+			end
+			local cacheable=not (sprite.cacheAnimated or sprite.animated)
 			local before = SysTime()
 			local cached
-			if generation.cache and not sprite.animated then cached=generation.cache:Get(index,channel) end
+			if generation.cache and cacheable then cached=generation.cache:Get(index,channel) end
 			local native, decodeError
 			if not cached then
 			local strategy, data, overlayData = strategies[sprite.strategy]
 			if channel == "normal" then strategy, data, overlayData = 5, sprite.normalPNG, sprite.overlayNormalPNG
 			elseif channel == "orm" then strategy, data, overlayData = 6, sprite.specularPNG, sprite.overlaySpecularPNG end
-			native, decodeError = backend.CreateAtlasSprite(sprite.png, {width = sprite.width, height = sprite.height,
+			native, decodeError = spriteBackend.CreateAtlasSprite(sampled.png, {width = sprite.width, height = sprite.height,
 				mip = layout.mip, padding = layout.padding, strategy = strategy, dataPNG = data, overlayDataPNG = overlayData,
 				alphaBias = sprite.alphaBias, item = sprite.item == true or sprite.id:find(":textures/item/", 1, true) ~= nil, frames = frames,
-				tint = sprite.tint, overlayPNG = sprite.overlayPNG, baseWidth = sprite.baseWidth, baseHeight = sprite.baseHeight,
+				tint = sprite.tint, overlayPNG = sprite.overlayPNG, baseWidth = sprite.baseWidth or sampled.width, baseHeight = sprite.baseHeight or sampled.height,
 				overlayWidth = sprite.overlayWidth, overlayHeight = sprite.overlayHeight})
 			if not native then return nil, sprite.id .. ":" .. tostring(decodeError) end
-			generation.handles[native.id] = true
-			if native.imageWidth ~= sprite.imageWidth or native.imageHeight ~= sprite.imageHeight then
+			native.backend=spriteBackend
+			generation.handles[native] = true
+			if native.imageWidth ~= sampled.imageWidth or native.imageHeight ~= sampled.imageHeight then
 				return nil, "resource_generation_decoded_size:" .. sprite.id
 			end
 			end
 			generation.metrics.decodeMipMS = generation.metrics.decodeMipMS + (SysTime() - before) * 1000
 			local animation = {handle = native and native.id, levels=cached, index=index, channel=channel,
-				sprite = sprite, region = layout.regions[index], texture = generation.channels[channel]}
-			local current, nextFrame, fraction = MC.ResourceSpriteRules.Sample(sprite, 0)
+				backend=spriteBackend, cacheable=cacheable, sprite = sampled, region = layout.regions[index], texture = generation.channels[channel]}
+			local current, nextFrame, fraction = MC.ResourceSpriteRules.Sample(sampled, 0)
 			before = SysTime()
 			local ok, uploadError = upload(generation, animation, current, nextFrame, fraction, true)
 			if not ok then return nil, sprite.id .. ":" .. tostring(uploadError) end
 			generation.metrics.copyMS = generation.metrics.copyMS + (SysTime() - before) * 1000
-			if sprite.animated and not (native and native.constant) then generation.animations[#generation.animations + 1] = animation
+			if sampled.animated and not (native and native.constant) then generation.animations[#generation.animations + 1] = animation
 			elseif native then
-				local freed, freeError = backend.ReleaseAtlasSprite(native.id)
+				local freed, freeError = spriteBackend.ReleaseAtlasSprite(native.id)
 				if not freed then return nil, freeError end
-				generation.handles[native.id] = nil
+				generation.handles[native] = nil
 			end
 			end
 			if checkpoint then checkpoint("bake",index,#plan.sprites) end

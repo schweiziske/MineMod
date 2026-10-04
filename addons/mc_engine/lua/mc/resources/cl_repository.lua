@@ -105,7 +105,7 @@ end
 -- Mounted adapters map pack-relative files to validated GAME/DATA locators.
 -- Descriptors and byte locations are copied at registration; no caller callbacks.
 function D.Register(id, definition, owner)
-	if type(id) ~= "string" or #id > 64 or not id:match("^[a-z0-9_%-]+$") or id:match("^local_") then return false, "resource_pack_invalid_id" end
+	if type(id) ~= "string" or #id > 64 or not id:match("^[a-z0-9_%-]+$") or id:match("^local_") or id:match("^mounted_") then return false, "resource_pack_invalid_id" end
 	if type(owner) ~= "string" or #owner > 96 or not owner:match("^[a-z0-9_%.:%-]+$") then return false, "resource_pack_invalid_owner" end
 	if type(definition) ~= "table" or type(definition.files) ~= "table" or type(definition.metadata) ~= "table" then return false, "resource_pack_definition" end
 	if definition.pathID ~= "GAME" and definition.pathID ~= "DATA" then return false, "resource_pack_path_id" end
@@ -195,19 +195,28 @@ function D.Refresh()
 		catalog[#catalog + 1], byID[id] = entry, entry
 	end
 	D.error = nil
-	if nativeAvailable() or MC.ResourceDirectory then
-		file.CreateDir(ROOT)
+	local adapters = {}
+	if nativeAvailable() then
+		adapters[#adapters+1] = {prefix="local_", pathID="DATA", list=mcmesh.ListResourcePackSources, open=mcmesh.OpenResourcePackSource}
+	elseif MC.ResourceDirectory then
+		adapters[#adapters+1] = {prefix="local_", pathID="DATA", list=MC.ResourceDirectory.List, open=MC.ResourceDirectory.Open}
+	end
+	-- Addons ship the same extracted tree as the DATA inbox. Always use Lua for
+	-- GAME locators, even when native I/O is installed (it only owns the inbox).
+	if MC.ResourceDirectory then
+		adapters[#adapters+1] = {prefix="mounted_", pathID="GAME", list=MC.ResourceDirectory.List, open=MC.ResourceDirectory.Open}
+	end
+	for _, adapter in ipairs(adapters) do
+		if adapter.pathID == "DATA" then file.CreateDir(ROOT) end
 		local names, err
-		if nativeAvailable() then names,err=mcmesh.ListResourcePackSources()
-		else names,err=MC.ResourceDirectory.List() end
+		names,err=adapter.list(adapter.pathID)
 		if not names then D.error = err
 		else
 			table.sort(names)
 			for _, name in ipairs(names) do
-				local id = "local_" .. util.SHA256(name):sub(1, 24)
+				local id = adapter.prefix .. util.SHA256(name):sub(1, 24)
 				local source, openError
-				if nativeAvailable() then source,openError=mcmesh.OpenResourcePackSource(name)
-				else source,openError=MC.ResourceDirectory.Open(name) end
+				source,openError=adapter.open(name,adapter.pathID)
 				local entry
 				if source then
 					source.id, source.title, source.owner = id, name, "mc.resourcepacks"
@@ -226,6 +235,7 @@ function D.Refresh()
 				end
 				if not entry then entry = {id = id, name = id, title = name, owner = "mc.resourcepacks", resourceSource = true, error = openError} end
 				entry.locator = name
+				entry.pathID = adapter.pathID
 				catalog[#catalog + 1], byID[id] = entry, entry
 			end
 		end
@@ -350,7 +360,8 @@ function D.OpenSelection(ids, revision, confirmed)
 	for _, id in ipairs(selection) do
 		local entry, source = D.byID[id], D.registered[id]
 		if not source then
-			if nativeAvailable() then source,err=mcmesh.OpenResourcePackSource(entry.locator)
+			if entry.pathID == "GAME" then source,err=MC.ResourceDirectory.Open(entry.locator,"GAME")
+			elseif nativeAvailable() then source,err=mcmesh.OpenResourcePackSource(entry.locator)
 			elseif MC.ResourceDirectory then source,err=MC.ResourceDirectory.Open(entry.locator)
 			else snapshot:Close() return nil,"resource_source_unavailable" end
 			if source then

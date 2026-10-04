@@ -5,3 +5,5 @@
 /addons/mc_texturepack_default/data_static/mc/raw_default/** -text
 # Preserve the original metadata's CRLF and trailing newline exactly as hashed.
 /addons/mc_texturepack_default/data_static/mc/raw_default/**/*.mcmeta whitespace=cr-at-eol,-blank-at-eof
+# Preserve extracted third-party resource packs byte-for-byte.
+/addons/mc_texturepack_avpbr/data_static/mc/raw_resourcepacks/** -text -whitespace
