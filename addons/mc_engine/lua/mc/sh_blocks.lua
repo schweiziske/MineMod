@@ -2481,18 +2481,40 @@ function MC.BlockIsFullCube( id, orient )
 		and boxes[1][4] == 1 and boxes[1][5] == 1 and boxes[1][6] == 1
 end
 
-function MC.TileUV( tile )
+-- All consumers use sprite rectangles. Model UVs remain dimensionless 0..16
+-- coordinates; each axis scales by its own source frame extent.
+function MC.AtlasRegion( tile )
 	local A = MC.Atlas
-	tile = MC.ResolveAtlasTile and MC.ResolveAtlasTile( tile ) or tile
+	local page = 0
+	if MC.ResolveAtlasSurface then page, tile, A = MC.ResolveAtlasSurface(tile) end
+	if A.REGIONS then
+		local r = A.REGIONS[tile]
+		return r[1], r[2], r[3], r[4], A, page
+	end
 	local col = tile % A.COLS
 	local row = math.floor( tile / A.COLS )
 	local stride = A.STRIDE or A.TILE
 	local pad = A.PAD or 0
 	local px0 = col * stride + pad
 	local py0 = row * stride + pad
+	return px0, py0, A.TILE, A.TILE, A, page
+end
+
+function MC.TileUV( tile, uv )
+	local x, y, w, h, A = MC.AtlasRegion(tile)
 	local inset = A.INSET or 0.5
-	return ( px0 + inset ) / A.W,
-	       ( py0 + inset ) / A.H,
-	       ( px0 + A.TILE - inset ) / A.W,
-	       ( py0 + A.TILE - inset ) / A.H
+	return (x + (uv and tonumber(uv[1]) or 0) / 16 * w + inset) / A.W,
+		(y + (uv and tonumber(uv[2]) or 0) / 16 * h + inset) / A.H,
+		(x + (uv and tonumber(uv[3]) or 16) / 16 * w - inset) / A.W,
+		(y + (uv and tonumber(uv[4]) or 16) / 16 * h - inset) / A.H
+end
+
+function MC.TileUVPoint( tile, u, v )
+	local x, y, w, h, A = MC.AtlasRegion(tile)
+	local inset = A.INSET or 0.5
+	u, v = tonumber(u) or 0, tonumber(v) or 0
+	x, y = x + u / 16 * w, y + v / 16 * h
+	if u <= 0 then x = x + inset elseif u >= 16 then x = x - inset end
+	if v <= 0 then y = y + inset elseif v >= 16 then y = y - inset end
+	return x / A.W, y / A.H
 end

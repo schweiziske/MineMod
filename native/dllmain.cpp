@@ -6,6 +6,10 @@
 #include "meshbuild.h"
 #include "patchdecode.h"
 #include "lightatlas.h"
+#include "atlas_texture.h"
+#include "pixel_upload.h"
+#include "atlas_sprite_bridge.h"
+#include "resource_io.h"
 #include "l2_bridge.h"
 #include "l2_draw_bridge.h"
 #include "world_bridge.h"
@@ -73,6 +77,7 @@ GMOD_MODULE_OPEN()
 
 	// ---- 握手 / 生命周期 ----
 	fa.AddFunction("AbiVersion", GTLUAF(mcmesh::handshake::AbiVersion));
+	fa.AddConstant("AtlasRegionVersion", 1);
 	fa.AddFunction("Handshake", GTLUAF(mcmesh::handshake::Handshake));
 	fa.AddFunction("SetAtlasPageMaterial", GTLUAF(mcmesh::handshake::SetAtlasPageMaterial));
 	fa.AddFunction("L2Version", GTLUAF(mcmesh::l2bridge::version));
@@ -121,6 +126,26 @@ GMOD_MODULE_OPEN()
 	fa.AddFunction("BindLightAtlasMaterial", GTLUAF(mcmesh::lightatlas::BindLightAtlasMaterial));
 	fa.AddFunction("GetLightAtlasStats", GTLUAF(mcmesh::lightatlas::GetLightAtlasStats));
 	fa.AddFunction("GetLightAtlasSlot", GTLUAF(mcmesh::lightatlas::GetLightAtlasSlot));
+	fa.AddFunction("CreateAtlasTexture", GTLUAF(mcmesh::atlastexture::Create));
+	fa.AddFunction("DrawL2AtlasPixels", GTLUAF(mcmesh::pixelupload::Draw));
+	fa.AddFunction("CreateAtlasSprite", GTLUAF(mcmesh::atlassprite::Create));
+	fa.AddFunction("SampleAtlasSprite", GTLUAF(mcmesh::atlassprite::Sample));
+	fa.AddFunction("UpdateAtlasSpriteTexture", GTLUAF(mcmesh::atlassprite::UpdateTexture));
+	fa.AddFunction("ReleaseAtlasSprite", GTLUAF(mcmesh::atlassprite::Release));
+	fa.AddFunction("GetAtlasSpriteStats", GTLUAF(mcmesh::atlassprite::Stats));
+	fa.AddFunction("UploadAtlasTextureRect", GTLUAF(mcmesh::atlastexture::Upload));
+	fa.AddFunction("FlushAtlasTexture", GTLUAF(mcmesh::atlastexture::Flush));
+	fa.AddFunction("FlushAtlasTextureUpdates", GTLUAF(mcmesh::atlastexture::FlushUpdates));
+	fa.AddFunction("BindAtlasTexture", GTLUAF(mcmesh::atlastexture::Bind));
+	fa.AddFunction("ReleaseAtlasTexture", GTLUAF(mcmesh::atlastexture::Release));
+	fa.AddFunction("GetAtlasTextureStats", GTLUAF(mcmesh::atlastexture::Stats));
+	fa.AddFunction("DebugFillAtlasTextureMips", GTLUAF(mcmesh::atlastexture::DebugFill));
+	fa.AddFunction("ListResourcePackSources", GTLUAF(mcmesh::resourceio::List));
+	fa.AddFunction("HashResourceBytes", GTLUAF(mcmesh::resourceio::HashBytes));
+	fa.AddFunction("OpenResourcePackSource", GTLUAF(mcmesh::resourceio::Open));
+	fa.AddFunction("ReadResourcePackSource", GTLUAF(mcmesh::resourceio::Read));
+	fa.AddFunction("ResourcePackSourceUnchanged", GTLUAF(mcmesh::resourceio::Unchanged));
+	fa.AddFunction("CloseResourcePackSource", GTLUAF(mcmesh::resourceio::Close));
 	fa.AddFunction("StartCompressedPatchDecode", GTLUAF(mcmesh::patchdecode::StartCompressedPatchDecode));
 	fa.AddFunction("PollCompressedPatchDecode", GTLUAF(mcmesh::patchdecode::PollCompressedPatchDecode));
 	fa.AddFunction("CommitCompressedPatch", GTLUAF(mcmesh::patchdecode::CommitCompressedPatch));
@@ -177,5 +202,8 @@ GMOD_MODULE_CLOSE()
 	mcmesh::l2bridge::shutdown();
 	mcmesh::meshbuild::DestroyAllMeshes();
 	mcmesh::lightatlas::Shutdown();
+	mcmesh::atlastexture::Shutdown();
+	mcmesh::atlassprite::Shutdown();
+	mcmesh::resourceio::Shutdown();
 	return 0;
 }

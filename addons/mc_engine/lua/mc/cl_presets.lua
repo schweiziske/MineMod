@@ -337,21 +337,7 @@ local function isFullBlockBox( box )
 end
 
 local function projectionTileUVRect( tile, uv )
-	if not uv then return MC.TileUV( tile ) end
-	local atlas = MC.Atlas
-	tile = MC.ResolveAtlasTile and MC.ResolveAtlasTile( tile ) or tile
-	local col = tile % atlas.COLS
-	local row = math.floor( tile / atlas.COLS )
-	local stride = atlas.STRIDE or atlas.TILE
-	local pad = atlas.PAD or 0
-	local inset = atlas.INSET or 0.5
-	local baseX = col * stride + pad
-	local baseY = row * stride + pad
-	local u0 = baseX + ( tonumber( uv[1] ) or 0 ) / 16 * atlas.TILE + inset
-	local v0 = baseY + ( tonumber( uv[2] ) or 0 ) / 16 * atlas.TILE + inset
-	local u1 = baseX + ( tonumber( uv[3] ) or 16 ) / 16 * atlas.TILE - inset
-	local v1 = baseY + ( tonumber( uv[4] ) or 16 ) / 16 * atlas.TILE - inset
-	return u0 / atlas.W, v0 / atlas.H, u1 / atlas.W, v1 / atlas.H
+	return MC.TileUV( tile, uv )
 end
 
 local function projectionStateModels( stateId, dx, dy, dz )

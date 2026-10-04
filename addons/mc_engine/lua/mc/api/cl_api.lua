@@ -367,10 +367,51 @@ function Render.ListTexturePackLeases()
 end
 
 -- Resource-pack entry points for mounted source manifests and completed atlases.
--- This version selects one atlas pack; it does not implement Minecraft resource stacks.
+-- ApplyPack selects one atlas; resource-stack preparation is a separate API.
 API.Resources = API.Resources or {}
 local Resources = API.Resources
-Resources.VERSION = "1.1"
+Resources.VERSION = "1.2"
+
+-- CPU resource-stack preparation is synchronous and separate from the legacy
+-- single-atlas ApplyPack API. A planned snapshot is not a published GPU atlas.
+function Resources.GetCatalog()
+	if not MC.ResourceRepository then return nil, "resource_pack_api_unavailable" end
+	return MC.ResourceRepository.GetCatalog()
+end
+
+function Resources.Refresh()
+	if not MC.ResourceRepository then return nil, "resource_pack_api_unavailable" end
+	return MC.ResourceRepository.Refresh()
+end
+
+function Resources.RegisterResourcePack(id, definition, owner)
+	if not MC.ResourceRepository then return false, "resource_pack_api_unavailable" end
+	return MC.ResourceRepository.Register(id, definition, owner)
+end
+
+function Resources.UnregisterResourcePack(id, owner)
+	if not MC.ResourceRepository then return false, "resource_pack_api_unavailable" end
+	return MC.ResourceRepository.Unregister(id, owner)
+end
+
+function Resources.ValidateSelection(ids, revision, confirmed)
+	if not MC.ResourceRepository then return nil, "resource_pack_api_unavailable" end
+	return MC.ResourceRepository.ValidateSelection(ids, revision, confirmed)
+end
+
+function Resources.PrepareSelection(ids, revision, resources, options)
+	if not MC.ResourceCompiler then return nil, "resource_pack_api_unavailable" end
+	return MC.ResourceCompiler.Prepare(ids, revision, resources, options)
+end
+
+function Resources.GetResourceSource(ids, revision, resource, confirmed)
+	if not MC.ResourceRepository then return nil, "resource_pack_api_unavailable" end
+	local snapshot, err = MC.ResourceRepository.OpenSelection(ids, revision, confirmed)
+	if not snapshot then return nil, err end
+	local result, resolveError = snapshot:Resolve(resource)
+	snapshot:Close()
+	return result, resolveError
+end
 
 function Resources.ResolveTexturePath( pack, resource )
 	if not MC.AtlasBakePlan then return nil, "resource_pack_api_unavailable" end
@@ -405,14 +446,14 @@ function Resources.GetSelection()
 	return MC.ResourcePacks.GetSelection()
 end
 
-function Resources.ApplyPack( name )
+function Resources.ApplyPack( name, options )
 	if not MC.ResourcePacks then return false, "resource_pack_api_unavailable" end
-	return MC.ResourcePacks.ApplyPack( name )
+	return MC.ResourcePacks.ApplyPack( name, options )
 end
 
-function Resources.ReloadPack( name )
+function Resources.ReloadPack( name, options )
 	if not MC.ResourcePacks then return false, "resource_pack_api_unavailable" end
-	return MC.ResourcePacks.ReloadPack( name )
+	return MC.ResourcePacks.ReloadPack( name, options )
 end
 
 function Resources.GetApplyStatus( id )

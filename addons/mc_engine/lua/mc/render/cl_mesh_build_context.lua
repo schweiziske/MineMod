@@ -202,8 +202,9 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		local stage = root.translucent and "world_translucent" or
 			( blockIsFullCube( id ) and not cutout and "world_opaque" or "world_cutout" )
 		local castsShadow = block.castsShadow ~= false
+		local water = block.mcid == "minecraft:water"
 		-- Shared materials may serve blocks with different shadow policies.
-		local bucketKey = request .. "/" .. stage .. ( castsShadow and "/shadow" or "/no_shadow" )
+		local bucketKey = request .. "/" .. stage .. ( castsShadow and "/shadow" or "/no_shadow" ) .. (water and "/water" or "")
 		local buffer = root.buckets[bucketKey]
 		if not buffer then
 			buffer = Q.NewBuffer( slice )
@@ -211,6 +212,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			buffer.material, buffer.translucent = root.material, root.translucent
 			buffer.request, buffer.stage, buffer.blockIds = request, stage, {}
 			buffer.castsShadow = castsShadow
+			buffer.water = water
 			buffer.directional = root.directional and stage == "world_opaque"
 			root.buckets[bucketKey] = buffer
 		end
@@ -242,7 +244,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		if page == 0 then return target end
 		local root = target.owner
 		local bucketKey = target.request .. "/" .. target.stage
-			.. ( target.castsShadow and "/shadow" or "/no_shadow" ) .. "/page/" .. page
+			.. ( target.castsShadow and "/shadow" or "/no_shadow" ) .. (target.water and "/water" or "") .. "/page/" .. page
 		local buffer = root.buckets[bucketKey]
 		if not buffer then
 			local material, err = MC.AtlasPageMaterial( page, target.translucent )
@@ -255,6 +257,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			buffer.request, buffer.stage, buffer.blockIds = target.request, target.stage, target.blockIds
 			buffer.castsShadow = target.castsShadow
 			buffer.directional = target.directional
+			buffer.water = target.water
 			root.buckets[bucketKey] = buffer
 		end
 		return buffer

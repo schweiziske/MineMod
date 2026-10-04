@@ -442,7 +442,20 @@ function S.DepthMaterial( surface, cutout )
     local byKind = group.depth[surface]
     if not byKind then byKind = {} group.depth[surface] = byKind end
     local cached = byKind[kind]
-    if cached then return cached end
+    if cached then
+        if byKind.textureRevision ~= MC.TexturePackRevision then
+            local source = MC.RenderL2Resources.SourceTexture(surface)
+            for index = 1, 2 do
+                local material = byKind[index]
+                if material then
+                    material:SetTexture("$basetexture",source)
+                    if MC.ResourceGeneration then MC.ResourceGeneration.BindSampling(material,source) end
+                end
+            end
+            byKind.textureRevision = MC.TexturePackRevision
+        end
+        return cached
+    end
     requireValue( S.depthCount < 2048, "render_ssr_depth_budget", "2048 cached scene-depth materials reached" )
     local source = MC.RenderL2Resources.SourceTexture( surface )
     local p = params( group.precisionDepth and group.programs.post_scene_depth or group.programs.scene_depth, source, false )
@@ -451,7 +464,9 @@ function S.DepthMaterial( surface, cutout )
     S.depthCount = S.depthCount + 1
     local material = CreateMaterial( "mc_scene_depth3_" .. S.depthCount, "screenspace_general_8tex", p )
     requireValue( material and not material:IsError(), "render_ssr_depth_material", "scene-depth material failed to load" )
+    if MC.ResourceGeneration then MC.ResourceGeneration.BindSampling(material,source) end
     byKind[kind] = material
+    byKind.textureRevision = MC.TexturePackRevision
     return material
 end
 

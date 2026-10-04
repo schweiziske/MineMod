@@ -5,3 +5,6 @@
 [submodule "native/include/rapidjson-master"]
 	path = native/include/rapidjson-master
 	url = https://github.com/Tencent/rapidjson.git
+[submodule "native/include/miniz"]
+	path = native/include/miniz
+	url = https://github.com/richgel999/miniz.git

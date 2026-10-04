@@ -9,7 +9,7 @@
 using namespace GarrysMod::Lua; using namespace mcmesh;
 namespace {
     constexpr char MAGIC[4] = { 'M','C','B','D' };
-    constexpr uint32_t VERSION = 5, MAX_BYTES = 512u * 1024u * 1024u, MAX_BLOCKS = 65535,
+    constexpr uint32_t VERSION = 6, MAX_BYTES = 512u * 1024u * 1024u, MAX_BLOCKS = 65535,
         MAX_STATES = 1048576, MAX_ORIENTS = 4194240, MAX_BOXES = 1000000,
         MAX_QUADS = 4000000, MAX_TEMPLATES = 1000000, MAX_ATLAS_PAGES = 64;
     bool fr(float v, float a, float b) { return std::isfinite(v) && v >= a && v <= b; }
@@ -34,7 +34,9 @@ namespace mcmesh::blockdefs {
             && (atlas.valid = validAtlas(atlas));
     }
     static bool validSurface(uint8_t page, uint16_t tile, const std::vector<AtlasParams>& pages) {
-        return page < pages.size() && uint64_t(tile) < uint64_t(pages[page].cols) * pages[page].rows;
+        if (page >= pages.size()) return false;
+        const auto& atlas = pages[page];
+        return tile < (atlas.regions.empty() ? uint64_t(atlas.cols) * atlas.rows : atlas.regions.size());
     }
     static bool readQuad(BlobReader& r, Quad& q, uint32_t bc, const std::vector<AtlasParams>& pages) {
         uint8_t reserved = 0;
@@ -192,7 +194,7 @@ namespace mcmesh::blockdefs {
         if (!data || len < sizeof(Header) || len > MAX_BYTES) return false;
         BlobReader r(data, len);
         Header h{};
-        if (!r.Read(h) || memcmp(h.magic, MAGIC, 4) || h.version != VERSION || h.totalBytes != len
+        if (!r.Read(h) || memcmp(h.magic, MAGIC, 4) || (h.version != VERSION && h.version != 5) || h.totalBytes != len
             || h.r0 == 0 || h.r0 > MAX_ATLAS_PAGES || h.blocks > MAX_BLOCKS || h.states > MAX_STATES
             || h.orients > MAX_ORIENTS || h.boxes > MAX_BOXES || h.quads > MAX_QUADS
             || h.templates > MAX_TEMPLATES
@@ -204,6 +206,17 @@ namespace mcmesh::blockdefs {
         if (!validAtlas(atlasPages[0])) return false;
         for (size_t page = 1; page < atlasPages.size(); ++page)
             if (!readAtlasPage(r, atlasPages[page])) return false;
+        if (h.version >= 6) for (auto& atlas : atlasPages) {
+            uint16_t count = 0;
+            if (!r.Read(count) || count > 4096 || size_t(count) * 8 > r.Remaining()) return false;
+            atlas.regions.resize(count);
+            for (auto& region : atlas.regions) {
+                if (!r.Read(region.x) || !r.Read(region.y) || !r.Read(region.w) || !r.Read(region.h)
+                    || !region.w || !region.h || uint32_t(region.x) + region.w > atlas.w
+                    || uint32_t(region.y) + region.h > atlas.h
+                    || atlas.inset * 2 >= std::min(region.w, region.h)) return false;
+            }
+        }
         if (g_promise.AtlasMaterials.size() < atlasPages.size()) return false;
         for (size_t page = 0; page < atlasPages.size(); ++page) {
             const auto& materials = g_promise.AtlasMaterials[page];

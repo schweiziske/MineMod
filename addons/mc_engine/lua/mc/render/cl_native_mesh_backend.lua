@@ -1163,7 +1163,7 @@ end
 local function atlasPagesPayload()
 	local pageCount = checkedInt( MC.AtlasPageCount and MC.AtlasPageCount() or 1,
 		1, 64, "atlas page count" )
-	local layouts, extra = {}, {}
+	local layouts, extra, regions, dynamic = {}, {}, {}, false
 	for page = 0, pageCount - 1 do
 		local A = MC.AtlasPageLayout and MC.AtlasPageLayout( page ) or ( page == 0 and MC.Atlas )
 		if type( A ) ~= "table" then error( "atlas page " .. page .. " layout unavailable", 0 ) end
@@ -1178,13 +1178,28 @@ local function atlasPagesPayload()
 			INSET = checkedNumber( A.INSET or .5, 0, 65535, "atlas inset" ),
 		}
 		layouts[page] = layout
+		local count = 0
+		if A.REGIONS then
+			dynamic = true
+			for _ in pairs(A.REGIONS) do count = count + 1 end
+		end
+		regions[#regions+1] = u16le(checkedInt(count, 0, 4096, "atlas region count"))
+		for index=0,count-1 do
+			local rect = A.REGIONS[index]
+			if not rect then error("sparse atlas regions", 0) end
+			regions[#regions+1] = u16le(rect[1]) .. u16le(rect[2]) .. u16le(rect[3]) .. u16le(rect[4])
+		end
 		if page > 0 then
 			extra[#extra + 1] = u16le( layout.COLS ) .. u16le( layout.ROWS )
 				.. u16le( layout.TILE ) .. u16le( layout.PAD ) .. u16le( layout.STRIDE )
 				.. u16le( layout.W ) .. u16le( layout.H ) .. f32le( layout.INSET )
 		end
 	end
-	return layouts[0], pageCount, table.concat( extra )
+	if dynamic then
+		if not mcmesh or mcmesh.AtlasRegionVersion ~= 1 then error("native atlas regions unavailable", 0) end
+		return layouts[0], pageCount, table.concat(extra) .. table.concat(regions), 6
+	end
+	return layouts[0], pageCount, table.concat( extra ), 5
 end
 
 local function packBlockDefsUnsafe()
@@ -1252,14 +1267,14 @@ local function packBlockDefsUnsafe()
 	end
 	if counts.orient>MAX_BLOCKS*MAX_ORIENTS or counts.box>MAX_BOXES or counts.quad>MAX_QUADS or counts.template>MAX_TEMPLATES then error("definition aggregate limit exceeded",0) end
 	local blockPayload=table.concat(body)
-	local A, atlasPageCount, atlasPagePayload = atlasPagesPayload()
+	local A, atlasPageCount, atlasPagePayload, atlasVersion = atlasPagesPayload()
 	local states, stateCount = stateMapPayload()
 	local visualPayload, visualBytes = visualCatalogPayload( stateCount )
 	local metadata = MC.BlockStateRegistryMetadata or {}
 	local catalog = MC.StateVisualCatalog or {}
 	local schemaHash = hexHashBytes( metadata.schemaHash, "schema hash" )
 	local visualHash = hexHashBytes( catalog.visualPlanSha256 or catalog.blockstateSha256, "visual hash" )
-	local header="MCBD"..u32le(5)..u32le(128+#atlasPagePayload+#blockPayload+#states+visualBytes)
+	local header="MCBD"..u32le(atlasVersion)..u32le(128+#atlasPagePayload+#blockPayload+#states+visualBytes)
 		..u16le(checkedInt(A.COLS or 1,1,65535,"atlas cols"))..u16le(checkedInt(A.ROWS or 1,1,65535,"atlas rows"))
 		..u16le(checkedInt(A.TILE or 64,1,65535,"atlas tile"))..u16le(checkedInt(A.PAD or 0,0,65535,"atlas pad"))
 		..u16le(checkedInt(A.STRIDE or A.TILE or 64,1,65535,"atlas stride"))..u16le(checkedInt(A.W or 4096,1,65535,"atlas width"))

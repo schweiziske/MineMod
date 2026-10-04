@@ -374,13 +374,26 @@ function P.Material( bundle, node, sourceMaterial, blockSize )
 		requireValue( environment:Width() == 512 and environment:Height() == 256 and dfg:Width() == 128 and dfg:Height() == 128,
 			"render_pbr_ibl_dimensions", "PBR IBL requires a 512x256 radiance atlas and a 128x128 DFG map" )
 	end
+	local resources = MC.ResourceGeneration
+	local function identity(texture) return resources and resources.Identity(texture) or texture:GetName() end
+	local generation = resources and resources.textures[source:GetName()]
 	local signature = Schema.Canonical( { vertex = node.program.vertex, pixel = node.program.pixel,
-		stage = node.stage, source = source:GetName(), colorSpace = colorSpace, blockSize = blockSize,
-		adapter = node.adapter, normal = normal and ( normal:GetName() .. "/" .. ( normalResource and normalResource.sha256 or "runtime" ) ),
-		orm = orm and ( orm:GetName() .. "/" .. ( ormResource and ormResource.sha256 or "runtime" ) ),
+		stage = node.stage, source = identity(source), colorSpace = colorSpace, blockSize = blockSize,
+		adapter = node.adapter, normal = normal and ( identity(normal) .. "/" .. ( normalResource and normalResource.sha256 or "runtime" ) ),
+		orm = orm and ( identity(orm) .. "/" .. ( ormResource and ormResource.sha256 or "runtime" ) ),
 		environment = environment and ( environment:GetName() .. "/" .. node.environment.sha256 ),
 		dfg = dfg and ( dfg:GetName() .. "/" .. node.dfg.sha256 ) } )
 	local cached = P.materials[signature]
+	if cached and generation then
+		local maps
+		if pbr then maps = {normal=normal, orm=orm, environment=environment, dfg=dfg, colorSpace=colorSpace} end
+		R.BoundMaterial(P.shared, cached.slot, source, node.stage, blockSize, node.program, colorSpace, maps)
+		if node.dynamicProgram then
+			MC.RenderDynamicLights.RegisterMaterial(cached.material, node.dynamicProgram, P.shared, source, node.stage, blockSize, maps)
+		end
+		cached.source, cached.normal, cached.orm = source, normal, orm
+		return cached.material
+	end
 	if cached then
 		requireValue( R.SameTexture( cached.source, source ), "render_pack_texture_identity",
 			"cached texture name or dimensions changed: " .. source:GetName() )
@@ -403,7 +416,7 @@ function P.Material( bundle, node, sourceMaterial, blockSize )
 	if node.dynamicProgram then
 		MC.RenderDynamicLights.RegisterMaterial( material, node.dynamicProgram, P.shared, source, node.stage, blockSize, maps )
 	end
-	P.materials[signature] = { material = material, source = source, normal = normal, orm = orm }
+	P.materials[signature] = { material = material, source = source, normal = normal, orm = orm, slot = slot }
 	P.materialCount = P.materialCount + 1
 	return material
 end

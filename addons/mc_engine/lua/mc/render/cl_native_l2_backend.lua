@@ -144,7 +144,7 @@ local function compile( quad, positions, uv, baked, mode, emission )
 		key = baked or quad
 	end
 	local previous = cache and cache[key]
-	if previous and previous.module == N.module then return previous.value end
+	if previous and previous.module == N.module and previous.atlasKey == MC.ActiveAtlasProfileKey then return previous.value end
 	local flags = 0
 	if baked then
 		flags = ( baked.cubic and 1 or 0 ) + ( baked.planar and 2 or 0 )
@@ -173,7 +173,7 @@ local function compile( quad, positions, uv, baked, mode, emission )
 		N.DisableAfterFailure( err )
 		MC.RenderL2Resources.Require( false, "native_l2_template", "Native L2 template failed: " .. tostring( err ) )
 	end
-	if cache then cache[key] = { module = N.module, value = value } end
+	if cache then cache[key] = { module = N.module, value = value, atlasKey = MC.ActiveAtlasProfileKey } end
 	return value
 end
 
@@ -223,6 +223,7 @@ local function syncRecipes()
 		shapeEmitter = MC.RenderMesh.NativeShapeRecipe,
 		models = MC.RenderL2Models, blocks = MC.Blocks, material = MC.Material,
 		atlas = MC.Atlas, atlasPages = MC.AtlasPageCount and MC.AtlasPageCount() or 1,
+		atlasKey = MC.ActiveAtlasProfileKey or false,
 		catalog = MC.StateVisualCatalog or false,
 		fullCubeDebug = MC.RenderMesh.meshDebugFullCubeOnly(),
 		collisionResolvers = MC.BlockStateCollisionResolvers or false,

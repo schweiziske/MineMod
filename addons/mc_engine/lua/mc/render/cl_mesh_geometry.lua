@@ -184,48 +184,11 @@ local function rotatedUVFlags( uf, vf, rot, flipU, flipV )
 end
 
 local function tileUVRect( tile, uv )
-	local A = MC.Atlas
-	if MC.ResolveAtlasSurface then
-		local page
-		page, tile, A = MC.ResolveAtlasSurface( tile )
-	else
-		if not uv then return MC.TileUV( tile ) end
-		tile = MC.ResolveAtlasTile and MC.ResolveAtlasTile( tile ) or tile
-	end
-	local col = tile % A.COLS
-	local row = math.floor( tile / A.COLS )
-	local stride = A.STRIDE or A.TILE
-	local pad = A.PAD or 0
-	local inset = A.INSET or 0.5
-	local baseX = col * stride + pad
-	local baseY = row * stride + pad
-	local u0 = baseX + ( uv and tonumber( uv[1] ) or 0 ) / 16 * A.TILE + inset
-	local v0 = baseY + ( uv and tonumber( uv[2] ) or 0 ) / 16 * A.TILE + inset
-	local u1 = baseX + ( uv and tonumber( uv[3] ) or 16 ) / 16 * A.TILE - inset
-	local v1 = baseY + ( uv and tonumber( uv[4] ) or 16 ) / 16 * A.TILE - inset
-	return u0 / A.W, v0 / A.H, u1 / A.W, v1 / A.H
+	return MC.TileUV( tile, uv )
 end
 
 local function tileUVPointRaw( tile, u, v )
-	local A = MC.Atlas
-	if MC.ResolveAtlasSurface then
-		local page
-		page, tile, A = MC.ResolveAtlasSurface( tile )
-	else
-		tile = MC.ResolveAtlasTile and MC.ResolveAtlasTile( tile ) or tile
-	end
-	local col = tile % A.COLS
-	local row = math.floor( tile / A.COLS )
-	local stride = A.STRIDE or A.TILE
-	local pad = A.PAD or 0
-	local inset = A.INSET or 0.5
-	u = tonumber( u ) or 0
-	v = tonumber( v ) or 0
-	local px = col * stride + pad + u / 16 * A.TILE
-	local py = row * stride + pad + v / 16 * A.TILE
-	if u <= 0 then px = px + inset elseif u >= 16 then px = px - inset end
-	if v <= 0 then py = py + inset elseif v >= 16 then py = py - inset end
-	return px / A.W, py / A.H
+	return MC.TileUVPoint( tile, u, v )
 end
 
 local function quadFaceCubic( faceIndex, id, orient, x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4 )

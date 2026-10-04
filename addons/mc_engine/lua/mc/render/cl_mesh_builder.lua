@@ -35,6 +35,7 @@ local function build( key, sectionIndex, lightOnly )
 	RM.resetMeshColorObjectCache()
 	if MC.LightPerfBeginMeshBuild then MC.LightPerfBeginMeshBuild( key, sectionIndex ) end
 	local chunk = MC.GetChunkByKey( key )
+	local atlasKey = MC.ActiveAtlasProfileKey
 	local ctx, opaque, translucent, opaqueRecords, translucentRecords
 	local topology
 	local faults = {}
@@ -144,6 +145,7 @@ local function build( key, sectionIndex, lightOnly )
 				return
 			end
 			local section = { l2 = true, chunk = chunk, blockSize = ctx.blockSize, worldGeneration = MC.StateWorldGeneration,
+				atlasKey = atlasKey,
 				opaque = opaqueList, translucent = translucentList,
 				bounds = SectionCull.SectionBounds( index, ctx.blockSize, opaqueList, translucentList ) }
 			if ctx.nativeTopology then

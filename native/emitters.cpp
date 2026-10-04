@@ -45,8 +45,9 @@ namespace {
             return true;
         }
 		void atlas(uint8_t page, uint16_t tile, float u16, float v16, float& u, float& v)const {
-			const auto& A = bd::g_atlasPages[page]; float px = float(tile % A.cols) * A.stride + A.pad + u16 / 16 * A.tile;
-			float py = float(tile / A.cols) * A.stride + A.pad + v16 / 16 * A.tile; if (u16 <= 0)px += A.inset; else if (u16 >= 16)px -= A.inset; if (v16 <= 0)py += A.inset; else if (v16 >= 16)py -= A.inset; u = px / A.w; v = py / A.h;
+			const auto& A = bd::g_atlasPages[page]; const auto r = bd::RegionForTile(A, tile);
+			float px = r.x + u16 / 16 * r.w;
+			float py = r.y + v16 / 16 * r.h; if (u16 <= 0)px += A.inset; else if (u16 >= 16)px -= A.inset; if (v16 <= 0)py += A.inset; else if (v16 >= 16)py -= A.inset; u = px / A.w; v = py / A.h;
         }
 		bool writeQuad(mb::PassVerts& p, int face, const float pos[4][3], const float uv[4][2], uint8_t page, uint16_t tile, int lx, int ly, int lz, uint8_t tintCode) {
 			if (!ensure(p, page))return false; auto& pageData = p.pages[page]; auto& b = pageData.batches.back(); const bool directional = &p == &o.opaque || &p == &o.lodOpaque; const int group = directional && face >= 0 && face < 6 ? face : mb::kUnassignedDirectionalGroup; auto& verts = b.groups[group]; for (int i : TRI) { mb::Vert v{}; for (int a = 0; a < 3; ++a) { v.pos[a] = float((a == 0 ? lx : a == 1 ? ly : lz) + pos[i][a]) * float(BS); v.normal[a] = N[face][a]; }atlas(page, tile, uv[i][0], uv[i][1], v.u, v.v); const uint16_t slot = s.lightSlot; v.rgba[0] = uint8_t(slot & 255); v.rgba[1] = uint8_t(((face + 1) & 7) | ((slot >> 8) << 3)); v.rgba[2] = tintCode; v.rgba[3] = 255; verts.push_back(v); }++b.faces; b.vertices += 6; ++pageData.faces; pageData.vertices += 6; ++p.faces; p.vertices += 6; return true;
