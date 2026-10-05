@@ -234,12 +234,16 @@ end
 
 -- Registration/build boundary; no textures or materials are created in Draw.
 function D.RegisterMaterial( base, program, owner, source, stage, blockSize, maps, sprite )
+	if maps and not sprite and not maps.water then
+		R.Require( maps.dfg ~= nil, "dynamic_light_dfg", "PBR local lights require the base material DFG texture" )
+	end
 	if D.materials[base] then
 		local material = D.materials[base].material
 		material:SetTexture("$basetexture", source)
 		if maps and not sprite then
 			material:SetTexture("$texture3", maps.normal)
 			material:SetTexture("$texture4", maps.orm)
+			if not maps.water then material:SetTexture("$texture7", maps.dfg) end
 		end
 		if MC.ResourceGeneration then MC.ResourceGeneration.BindSampling(material,source) end
 		return material
@@ -251,7 +255,8 @@ function D.RegisterMaterial( base, program, owner, source, stage, blockSize, map
 	local params = {
 		["$vertexshader"] = program.vertex, ["$pixshader"] = program.pixel,
 		["$basetexture"] = source:GetName(), ["$texture1"] = owner.atlas:GetName(), ["$texture2"] = data:GetName(),
-		["$x360appchooser"] = 1, ["$vertexcolor"] = 1, ["$nocull"] = ( sprite or maps and maps.water ) and 1 or 0,
+		["$x360appchooser"] = 1, ["$vertexcolor"] = 1,
+		["$nocull"] = ( sprite or maps and maps.water or not maps and stage == "world_translucent" ) and 1 or 0,
 		["$depthtest"] = 1, ["$writedepth"] = 0, ["$ignorez"] = 0,
 		["$linearread_basetexture"] = pbr and maps.colorSpace ~= "linear"
 			and not MC.ResourceGeneration.textures[source:GetName()] and 0 or 1, ["$linearread_texture1"] = 1,
@@ -262,11 +267,17 @@ function D.RegisterMaterial( base, program, owner, source, stage, blockSize, map
 	if pbr then
 		params["$texture3"], params["$texture4"] = maps.normal:GetName(), maps.orm:GetName()
 		params["$linearread_texture3"], params["$linearread_texture4"] = 1, 1
+		if not maps.water then
+			params["$texture7"] = maps.dfg:GetName()
+			params["$linearread_texture7"] = 1
+		end
 	end
-	local material = CreateMaterial( "mc_dynamic_light1_" .. D.materialCount, "screenspace_general_8tex", params )
+	local material = CreateMaterial( "mc_dynamic_light2_" .. D.materialCount, "screenspace_general_8tex", params )
 	R.Require( material and not material:IsError(), "dynamic_light_material", "could not create local-light material" )
+	if pbr and not maps.water then material:SetTexture("$texture7", maps.dfg) end
 	if MC.ResourceGeneration then MC.ResourceGeneration.BindSampling(material,source) end
 	D.materials[base] = { material = material, revision = -1, sprite = sprite == true, pbr = pbr, stage = stage }
+	if not pbr then MC.RenderVanillaWater.Register( material ) end
 	D.materialCount = D.materialCount + 1
 	return material
 end
@@ -278,6 +289,7 @@ end
 
 function D.Bind( state, alpha )
 	local material = state.material
+	if not state.pbr then MC.RenderVanillaWater.Bind( material ) end
 	if state.revision ~= D.revision then
 		material:SetFloat( "$c0_x", 1 / D.blockSize )
 		material:SetFloat( "$c0_w", D.count )

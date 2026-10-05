@@ -124,6 +124,7 @@ local function drawMeshListInner( list, currentMaterial )
 			currentMaterial = entry.material
 			MC.RenderSky.Bind( currentMaterial )
 			MC.RenderPBR.Bind( currentMaterial )
+			MC.RenderVanillaWater.Bind( currentMaterial )
 			render.SetMaterial( currentMaterial )
 		end
 		entry.mesh:Draw()
@@ -492,6 +493,7 @@ local function nativeBind( material )
 	else
 		MC.RenderSky.Bind( material )
 		MC.RenderPBR.Bind( material )
+		MC.RenderVanillaWater.Bind( material )
 	end
 	nativeContext.bound = selected
 	render.SetMaterial( selected )
@@ -624,6 +626,7 @@ local function drawVisibleChunks( store, entries, count, chunks, stats, depthSta
 									else
 										MC.RenderSky.Bind( currentMaterial )
 										MC.RenderPBR.Bind( currentMaterial )
+										MC.RenderVanillaWater.Bind( currentMaterial )
 										render.SetMaterial( currentMaterial )
 									end
 								end

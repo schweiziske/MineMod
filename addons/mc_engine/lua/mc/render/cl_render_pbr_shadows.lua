@@ -18,7 +18,6 @@ if S.depthMaterialVersion ~= DEPTH_MATERIAL_VERSION then
 	end
 	S.depthMaterialVersion = DEPTH_MATERIAL_VERSION
 end
-local sqrt, atan2 = math.sqrt, math.atan2
 local enabled = MC.RenderPackSettings.Handle( "shadows" )
 local resolution = MC.RenderPackSettings.Handle( "shadow_resolution" )
 local distance = MC.RenderPackSettings.Handle( "shadow_range" )
@@ -99,7 +98,7 @@ local function ensureTarget( size )
 			and render.OverrideBlend and render.OverrideAlphaWriteEnable and render.OverrideColorWriteEnable
 			and render.OverrideDepthEnable and render.EnableClipping and render.GetToneMappingScaleLinear
 			and render.SetToneMappingScaleLinear and cam.Start and cam.End and cam.PushModelMatrix and cam.PopModelMatrix
-			and matrix.SetField and MC.DrawPBRShadowCasters and M and M.Configure and M.Same and M.CoversCamera and atan2
+			and matrix.SetField and MC.DrawPBRShadowCasters and M and M.Configure and M.Same and M.CoversCamera and M.WriteAngles and math.atan2
 			and MATERIAL_RT_DEPTH_SEPARATE ~= nil and RT_SIZE_LITERAL ~= nil and IMAGE_FORMAT_RGBA8888 ~= nil
 			and BLEND_ONE ~= nil and BLEND_ZERO ~= nil and BLENDFUNC_ADD ~= nil,
 			"render_pbr_shadow_api", "PBR shadows require orthographic views, a separate depth buffer and exact RGBA8 writes" )
@@ -210,9 +209,7 @@ local function renderAtlas( pending, water, waterOnly, groups, version, chunks )
 	S.renderState = pending
 	local target = ensureTarget( pending.resolution )
 	pending.target = target
-	local forward = pending.views[1]
-	angles.p = atan2( -forward.fz, sqrt( forward.fx * forward.fx + forward.fy * forward.fy ) ) * ( 180 / math.pi )
-	angles.y, angles.r = atan2( forward.fy, forward.fx ) * ( 180 / math.pi ), 0
+	M.WriteAngles( pending.views[1], angles )
 	for i = 1, 2 do
 		local view, setup = pending.views[i], setups[i]
 		setup.origin.x, setup.origin.y, setup.origin.z = view.x, view.y, view.z
@@ -382,7 +379,6 @@ function S.Update( x, y, z, renderView )
 	local active = L.active
 	if active ~= S.active then
 		S.active, S.program, S.valid = active, shadowProgram( active ), false
-		S.gridOrigin = nil
 		S.retryAt, S.nextUpdate = 0, 0
 		B.DisableShadow()
 	end
@@ -407,14 +403,9 @@ function S.Update( x, y, z, renderView )
 		S.valid = false
 		B.DisableShadow()
 	end
-	-- Rotate the texel lattice around a persistent nearby point, not the world
-	-- origin. Re-centering every frame would undo fixed-sun translation snapping.
-	local grid = S.gridOrigin
-	if not grid or grid.frameX ~= frameX or grid.frameY ~= frameY or grid.frameZ ~= frameZ then
-		grid = { x = x, y = y, z = z, frameX = frameX, frameY = frameY, frameZ = frameZ }
-		S.gridOrigin = grid
-	end
-	M.Configure( pending, x, y, z, sx, sy, sz, size, settings.size, settings.range, grid )
+	-- Derive the Iris grid from the current view's logical-world position;
+	-- render re-origining must not change its world-space phase.
+	M.Configure( pending, x, y, z, sx, sy, sz, size, settings.size, settings.range, frameX, frameY, frameZ )
 	-- Full light-space coverage is independent of view direction/FOV. Never
 	-- carry a camera-derived caster cone from an older cached projection.
 	pending.views[1].cull, pending.views[2].cull = nil, nil

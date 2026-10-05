@@ -1,28 +1,48 @@
--- Scalar light-space bounds and two texel-snapped orthographic windows.
+-- Scalar light-space bounds and camera-relative, Iris-grid orthographic windows.
 MC = MC or {}
 local M = {}
 MC.RenderShadowMath = M
-local floor, sqrt, abs = math.floor, math.sqrt, math.abs
+local sqrt, abs, fmod = math.sqrt, math.abs, math.fmod
 local sin, cos, tan, max, min = math.sin, math.cos, math.tan, math.max, math.min
-local function snap( value, step ) return floor( value / step + 0.5 ) * step end
+function M.GridCenter( value, frameOffset, interval )
+	-- Iris uses Java's signed remainder, not Lua's floor-based % operator.
+	return value - fmod( value - frameOffset, interval ) + interval * 0.5
+end
 
-function M.Configure( out, x, y, z, sx, sy, sz, blockSize, resolution, rangeBlocks, gridOrigin )
-	local gx, gy, gz = 0, 0, 0
-	if gridOrigin then gx, gy, gz = gridOrigin.x, gridOrigin.y, gridOrigin.z end
-	x, y, z = x - gx, y - gy, z - gz
+-- Preserve the entire light frame when converting to Source camera angles.
+function M.WriteAngles( view, angles )
+	local fx, fy, fz = view.fx, view.fy, view.fz
+	local horizontal = sqrt( fx * fx + fy * fy )
+	local rx, ry = 0, -1
+	if horizontal > 0 then rx, ry = fy / horizontal, -fx / horizontal end
+	local ux, uy, uz = ry * fz, -rx * fz, horizontal
+	local degrees = 180 / math.pi
+	angles.p = math.atan2( -fz, horizontal ) * degrees
+	angles.y = horizontal > 0 and math.atan2( fy, fx ) * degrees or 0
+	angles.r = math.atan2( -( view.rx * ux + view.ry * uy + view.rz * uz ),
+		view.rx * rx + view.ry * ry ) * degrees
+end
+
+function M.Configure( out, x, y, z, sx, sy, sz, blockSize, resolution, rangeBlocks, frameX, frameY, frameZ )
+	local interval = 2 * blockSize
+	local gx = M.GridCenter( x, frameX or 0, interval )
+	local gy = M.GridCenter( y, frameY or 0, interval )
+	local gz = M.GridCenter( z, frameZ or 0, interval )
 	local farRadius = blockSize * rangeBlocks
 	local nearRadius, farDepth = farRadius * 0.25, farRadius * 4
 	local fx, fy, fz = -sx, -sy, -sz
-	local horizontal = sqrt( fx * fx + fy * fy )
-	local rx, ry = 0, -1
-	if horizontal > 0.000001 then rx, ry = fy / horizontal, -fx / horizontal end
-	local ux, uy, uz = ry * fz, -rx * fz, rx * fy - ry * fx
-	local r, u = x * rx + y * ry, x * ux + y * uy + z * uz
-	local gridR, gridU, gridF = gx * rx + gy * ry, gx * ux + gy * uy + gz * uz, gx * fx + gy * fy + gz * fz
-	local farStep, nearStep = 2 * farRadius / resolution, 2 * nearRadius / resolution
-	local depth = snap( x * fx + y * fy + z * fz, farStep ) - farRadius * 2 + gridF
-	local nearR, nearU = snap( r, nearStep ) + gridR, snap( u, nearStep ) + gridU
-	local farR, farU = snap( r, farStep ) + gridR, snap( u, farStep ) + gridU
+	-- Project the solar orbit's -Y axis onto the light plane. Unlike a
+	-- world-horizontal right vector, this frame does not spin near noon.
+	-- The actual day-cycle never reaches the Y pole; define it for other lights.
+	local planar = sqrt( fx * fx + fz * fz )
+	local rx, ry, rz = 1, 0, 0
+	if planar > 0 then rx, ry, rz = fy * fx / planar, -planar, fy * fz / planar end
+	local ux, uy, uz = ry * fz - rz * fy, rz * fx - rx * fz, rx * fy - ry * fx
+	local gridR, gridU, gridF = gx * rx + gy * ry + gz * rz, gx * ux + gy * uy + gz * uz, gx * fx + gy * fy + gz * fz
+	-- R * ((position - camera) + remainder - halfInterval) == R * (position - gridCenter).
+	-- Do not add light-space texel snapping on top of Iris's world-space grid.
+	local depth = gridF - farRadius * 2
+	local nearR, nearU, farR, farU = gridR, gridU, gridR, gridU
 	out.sx, out.sy, out.sz, out.resolution, out.radius = sx, sy, sz, resolution, farRadius
 	out.gridX, out.gridY, out.gridZ = gx, gy, gz
 	out.nearR, out.nearU, out.farR, out.farU, out.depth = nearR, nearU, farR, farU, depth
@@ -32,19 +52,19 @@ function M.Configure( out, x, y, z, sx, sy, sz, blockSize, resolution, rangeBloc
 		local view = views[index]
 		local radius, centerR, centerU = nearRadius, nearR, nearU
 		if index == 2 then radius, centerR, centerU = farRadius, farR, farU end
-		view.rx, view.ry, view.rz, view.ux, view.uy, view.uz = rx, ry, 0, ux, uy, uz
+		view.rx, view.ry, view.rz, view.ux, view.uy, view.uz = rx, ry, rz, ux, uy, uz
 		view.fx, view.fy, view.fz = fx, fy, fz
-		view.arx, view.ary, view.arz = abs( rx ), abs( ry ), 0
+		view.arx, view.ary, view.arz = abs( rx ), abs( ry ), abs( rz )
 		view.aux, view.auy, view.auz = abs( ux ), abs( uy ), abs( uz )
 		view.afx, view.afy, view.afz = abs( fx ), abs( fy ), abs( fz )
 		view.x, view.y, view.z = rx * centerR + ux * centerU + fx * depth,
-			ry * centerR + uy * centerU + fy * depth, uz * centerU + fz * depth
+			ry * centerR + uy * centerU + fy * depth, rz * centerR + uz * centerU + fz * depth
 		view.radius, view.znear, view.zfar = radius, 0.5, farDepth
 	end
 	local values = out.values
 	if not values then values = {} out.values = values end
 	local inverse = 1 / ( 2 * nearRadius )
-	values[1], values[2], values[3], values[4] = rx * inverse, ry * inverse, 0, 0.5 - nearR * inverse
+	values[1], values[2], values[3], values[4] = rx * inverse, ry * inverse, rz * inverse, 0.5 - nearR * inverse
 	values[5], values[6], values[7], values[8] = -ux * inverse, -uy * inverse, -uz * inverse, 0.5 + nearU * inverse
 	values[9], values[10], values[11], values[12] = fx / farDepth, fy / farDepth, fz / farDepth, -depth / farDepth
 	values[13], values[14], values[15], values[16] = 0.25,
