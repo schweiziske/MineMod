@@ -185,6 +185,7 @@ local CLIENT_FILES = {
 	"mc/render/cl_render_l2_lighting.lua",
 	"mc/render/cl_render_l2_quad.lua",
 	"mc/render/cl_render_l2_resources.lua",
+	"mc/render/cl_render_vanilla_water.lua",
 	"mc/render/cl_render_sky.lua",
 	"mc/render/cl_native_l2_backend.lua",
 	"mc/render/cl_native_world_session.lua",

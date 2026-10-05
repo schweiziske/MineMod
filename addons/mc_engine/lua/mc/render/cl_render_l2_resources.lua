@@ -140,7 +140,9 @@ function R.BoundMaterial( owner, slot, source, stage, blockSize, program, colorS
 			["$pixshader"] = program.pixel,
 			["$basetexture"] = source:GetName(),
 			["$texture1"] = owner.atlas:GetName(), ["$texture2"] = owner.lightmap:GetName(),
-			["$x360appchooser"] = 1, ["$vertexcolor"] = 1, ["$nocull"] = pbrMaps and pbrMaps.water and 1 or 0,
+			["$x360appchooser"] = 1, ["$vertexcolor"] = 1,
+			-- Vanilla fluids share the translucent atlas and have no reverse-face mesh.
+			["$nocull"] = ( pbrMaps and pbrMaps.water or not pbrMaps and stage == "world_translucent" ) and 1 or 0,
 			-- In screenspace_general, WRITEDEPTH=1 also selects DepthFunc(ALWAYS).
 			-- Keep the default comparison; solid draw passes enable writes with
 			-- render.OverrideDepthEnable(true, true). Water/glass only test depth.
@@ -175,6 +177,7 @@ function R.BoundMaterial( owner, slot, source, stage, blockSize, program, colorS
 		MC.RenderPBR.Register( material )
 	else
 		material:SetFloat( "$c0_x", 1 / blockSize )
+		MC.RenderVanillaWater.Register( material )
 	end
 	if MC.ResourceGeneration then MC.ResourceGeneration.BindSampling(material,source) end
 	return material
