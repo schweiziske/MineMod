@@ -253,7 +253,8 @@ function D.RegisterMaterial( base, program, owner, source, stage, blockSize, map
 		["$basetexture"] = source:GetName(), ["$texture1"] = owner.atlas:GetName(), ["$texture2"] = data:GetName(),
 		["$x360appchooser"] = 1, ["$vertexcolor"] = 1, ["$nocull"] = ( sprite or maps and maps.water ) and 1 or 0,
 		["$depthtest"] = 1, ["$writedepth"] = 0, ["$ignorez"] = 0,
-		["$linearread_basetexture"] = pbr and maps.colorSpace ~= "linear" and 0 or 1, ["$linearread_texture1"] = 1,
+		["$linearread_basetexture"] = pbr and maps.colorSpace ~= "linear"
+			and not MC.ResourceGeneration.textures[source:GetName()] and 0 or 1, ["$linearread_texture1"] = 1,
 		["$linearread_texture2"] = 1, ["$linearwrite"] = pbr and 0 or 1,
 		["$c0_x"] = tostring( 1 / blockSize ), ["$c0_y"] = "0", ["$c0_z"] = pbr and tostring( 1 / 2048 ) or "1", ["$c0_w"] = "0",
 		["$c1_x"] = "0", ["$c1_y"] = "0", ["$c1_z"] = "0", ["$c1_w"] = "1",

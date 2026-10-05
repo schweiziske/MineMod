@@ -219,7 +219,11 @@ bool SampleSprite(const Sprite& sprite, int current, int next, float fraction,
         const int pad = sprite.padding >> level;
         Image image{first.width + pad * 2, first.height + pad * 2, {}};
         image.pixels.resize(size_t(image.width) * image.height);
-        for (int y = 0; y < first.height; ++y) for (int x = 0; x < first.width; ++x) {
+        if (current==next || fraction==0) {
+            for (int y=0;y<first.height;++y)
+                std::memcpy(image.pixels.data()+size_t(y+pad)*image.width+pad,
+                    first.pixels.data()+size_t(y)*first.width,size_t(first.width)*sizeof(Pixel));
+        } else for (int y = 0; y < first.height; ++y) for (int x = 0; x < first.width; ++x) {
             const auto p = first.pixels[size_t(y) * first.width + x], q = second.pixels[size_t(y) * first.width + x];
             auto blend = [fraction](uint8_t v, uint8_t w) { return uint8_t(std::floor(v + (int(w) - v) * fraction + 0.5f)); };
             Pixel value=p;

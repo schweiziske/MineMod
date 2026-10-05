@@ -223,6 +223,7 @@ local CLIENT_FILES = {
 	"mc/resources/cl_directory.lua",
 	"mc/resources/cl_repository.lua",
 	"mc/resources/cl_defaults.lua",
+	"mc/resources/cl_gpu_animation.lua",
 	"mc/resources/cl_compiler.lua",
 	"mc/resources/cl_cache.lua",
 	"mc/resources/cl_lua_pixels.lua",

@@ -6,7 +6,10 @@ local floor, sqrt, abs = math.floor, math.sqrt, math.abs
 local sin, cos, tan, max, min = math.sin, math.cos, math.tan, math.max, math.min
 local function snap( value, step ) return floor( value / step + 0.5 ) * step end
 
-function M.Configure( out, x, y, z, sx, sy, sz, blockSize, resolution, rangeBlocks )
+function M.Configure( out, x, y, z, sx, sy, sz, blockSize, resolution, rangeBlocks, gridOrigin )
+	local gx, gy, gz = 0, 0, 0
+	if gridOrigin then gx, gy, gz = gridOrigin.x, gridOrigin.y, gridOrigin.z end
+	x, y, z = x - gx, y - gy, z - gz
 	local farRadius = blockSize * rangeBlocks
 	local nearRadius, farDepth = farRadius * 0.25, farRadius * 4
 	local fx, fy, fz = -sx, -sy, -sz
@@ -15,11 +18,13 @@ function M.Configure( out, x, y, z, sx, sy, sz, blockSize, resolution, rangeBloc
 	if horizontal > 0.000001 then rx, ry = fy / horizontal, -fx / horizontal end
 	local ux, uy, uz = ry * fz, -rx * fz, rx * fy - ry * fx
 	local r, u = x * rx + y * ry, x * ux + y * uy + z * uz
+	local gridR, gridU, gridF = gx * rx + gy * ry, gx * ux + gy * uy + gz * uz, gx * fx + gy * fy + gz * fz
 	local farStep, nearStep = 2 * farRadius / resolution, 2 * nearRadius / resolution
-	local depth = snap( x * fx + y * fy + z * fz, farStep ) - farRadius * 2
-	local nearR, nearU = snap( r, nearStep ), snap( u, nearStep )
-	local farR, farU = snap( r, farStep ), snap( u, farStep )
+	local depth = snap( x * fx + y * fy + z * fz, farStep ) - farRadius * 2 + gridF
+	local nearR, nearU = snap( r, nearStep ) + gridR, snap( u, nearStep ) + gridU
+	local farR, farU = snap( r, farStep ) + gridR, snap( u, farStep ) + gridU
 	out.sx, out.sy, out.sz, out.resolution, out.radius = sx, sy, sz, resolution, farRadius
+	out.gridX, out.gridY, out.gridZ = gx, gy, gz
 	out.nearR, out.nearU, out.farR, out.farU, out.depth = nearR, nearU, farR, farU, depth
 	local views = out.views
 	if not views then views = { {}, {} } out.views = views end
@@ -49,6 +54,7 @@ end
 
 function M.SameCascade( a, b, index )
 	if not a or not b or a.sx ~= b.sx or a.sy ~= b.sy or a.sz ~= b.sz
+		or a.gridX ~= b.gridX or a.gridY ~= b.gridY or a.gridZ ~= b.gridZ
 		or a.resolution ~= b.resolution or a.radius ~= b.radius or a.depth ~= b.depth then return false end
 	if index == 1 then return a.nearR == b.nearR and a.nearU == b.nearU end
 	return a.farR == b.farR and a.farU == b.farU

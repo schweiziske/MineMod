@@ -145,7 +145,8 @@ function R.BoundMaterial( owner, slot, source, stage, blockSize, program, colorS
 			-- Keep the default comparison; solid draw passes enable writes with
 			-- render.OverrideDepthEnable(true, true). Water/glass only test depth.
 			["$depthtest"] = 1, ["$writedepth"] = 0, ["$ignorez"] = 0,
-			["$linearread_basetexture"] = colorSpace == "srgb" and 0 or 1, ["$linearread_texture1"] = 1,
+			["$linearread_basetexture"] = colorSpace == "srgb"
+				and not MC.ResourceGeneration.textures[source:GetName()] and 0 or 1, ["$linearread_texture1"] = 1,
 			["$linearread_texture2"] = 1, ["$linearwrite"] = 1,
 			["$c0_x"] = tostring( 1 / blockSize ), ["$c0_y"] = "0",
 			["$c0_z"] = tostring( 1 / ATLAS_SIZE ), ["$c0_w"] = "0.5",

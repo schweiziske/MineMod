@@ -127,6 +127,7 @@ GMOD_MODULE_OPEN()
 	fa.AddFunction("GetLightAtlasStats", GTLUAF(mcmesh::lightatlas::GetLightAtlasStats));
 	fa.AddFunction("GetLightAtlasSlot", GTLUAF(mcmesh::lightatlas::GetLightAtlasSlot));
 	fa.AddFunction("CreateAtlasTexture", GTLUAF(mcmesh::atlastexture::Create));
+	fa.AddFunction("DebugAtlasRenderTarget", GTLUAF(mcmesh::atlastexture::DebugRenderTarget));
 	fa.AddFunction("DrawL2AtlasPixels", GTLUAF(mcmesh::pixelupload::Draw));
 	fa.AddFunction("CreateAtlasSprite", GTLUAF(mcmesh::atlassprite::Create));
 	fa.AddFunction("SampleAtlasSprite", GTLUAF(mcmesh::atlassprite::Sample));

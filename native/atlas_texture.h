@@ -13,5 +13,6 @@ namespace mcmesh::atlastexture {
     int Release(GarrysMod::Lua::ILuaBase* lua);
     int Stats(GarrysMod::Lua::ILuaBase* lua);
     int DebugFill(GarrysMod::Lua::ILuaBase* lua);
+    int DebugRenderTarget(GarrysMod::Lua::ILuaBase* lua);
     void Shutdown();
 }

@@ -30,5 +30,12 @@ int main() {
     std::vector<UploadRegion> nearby{{0,0,48,48},{48,0,48,48},{96,0,48,48},{1904,1904,48,48}};
     MergeUploadRegions(nearby);
     if(nearby.size()!=2) throw std::runtime_error("merge separated or adjacent regions incorrectly");
+    std::vector<UploadRegion> island;
+    for(int y=0;y<1024;y+=256) for(int x=0;x<2048;x+=256)
+        island.push_back({x,y,48,48});
+    MergeUploadRegions(island,int64_t(8192)*4096/8);
+    if(island.size()!=1 || island[0].x!=0 || island[0].y!=0
+        || island[0].width!=1840 || island[0].height!=816)
+        throw std::runtime_error("large atlas animation island did not coalesce");
     std::cout<<"atlas upload regions: 200 coverage/alignment cases passed\n";
 }
