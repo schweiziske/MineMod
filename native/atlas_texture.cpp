@@ -90,6 +90,8 @@ struct Texture final : ITextureRegenerator {
     }
 };
 std::array<std::unique_ptr<Texture>, kSlots> textures;
+// Fixed-size opt-in probes, separate from production atlas ownership.
+std::array<ITexture*, 2> renderTargetProbes{};
 uint64_t sequence = 0, creations = 0, releases = 0;
 size_t resident = 0, peak = 0;
 int Fail(ILuaBase* lua, const char* reason) { lua->PushNil(); lua->PushString(reason); return 2; }
@@ -263,7 +265,11 @@ bool QueueImages(uint64_t id, int x, int y, const std::vector<atlas::Image>& lev
 int FlushUpdates(ILuaBase* lua) {
     Texture* item=Find(lua);
     if(!item) return Fail(lua,"atlas_texture_stale_handle");
-    atlas::MergeUploadRegions(item->dirty);
+    // Source Download has texture-sized staging costs even for small rectangles.
+    // Large atlases must trade more backing copies for fewer driver callbacks.
+    // The compiler packs animated sprites together, keeping those unions small.
+    const int64_t overheadPixels=std::max<int64_t>(65536,int64_t(item->width)*item->height/8);
+    atlas::MergeUploadRegions(item->dirty,overheadPixels);
     for(const auto& region:item->dirty) {
         Rect_t rect{region.x,region.y,region.width,region.height};item->error=nullptr;
         item->texture->Download(&rect);
@@ -327,5 +333,43 @@ int Stats(ILuaBase* lua) {
     if (g_matsys) Number(lua, "engineSkipMipLevels", g_matsys->GetCurrentConfigForVideoCard().skipMipLevels);
     return 1;
 }
-void Shutdown() { for (auto& texture : textures) texture.reset(); resident = 0; }
+int DebugRenderTarget(ILuaBase* lua) {
+    int mode;
+    if (!Integer(lua, 1, 0, 1, mode)) return Fail(lua, "atlas_gpu_probe_mode");
+    if (!g_matsys) return Fail(lua, "atlas_texture_materialsystem_unavailable");
+    ITexture*& texture = renderTargetProbes[mode];
+    if (!texture) {
+        const char* name = mode ? "mc_native_gpu_probe_bool_v1" : "mc_native_gpu_probe_flags_v1";
+        if (mode) {
+            texture = g_matsys->CreateNamedRenderTargetTexture(name, 256, 256,
+                RT_SIZE_LITERAL, IMAGE_FORMAT_RGBA8888, MATERIAL_RT_DEPTH_NONE, true, true);
+        } else {
+            texture = g_matsys->CreateNamedRenderTargetTextureEx(name, 256, 256,
+                RT_SIZE_LITERAL, IMAGE_FORMAT_RGBA8888, MATERIAL_RT_DEPTH_NONE,
+                TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_NOLOD
+                    | TEXTUREFLAGS_ALL_MIPS | TEXTUREFLAGS_EIGHTBITALPHA,
+                CREATERENDERTARGETFLAGS_AUTOMIPMAP);
+        }
+    }
+    if (!texture || texture->IsError()) return Fail(lua, "atlas_gpu_probe_creation_failed");
+    lua->CreateTable();
+    lua->PushString(texture->GetName()); lua->SetField(-2, "name");
+    Number(lua, "width", texture->GetActualWidth()); Number(lua, "height", texture->GetActualHeight());
+    Number(lua, "flags", texture->GetFlags());
+    Number(lua, "engineBytes", texture->GetApproximateVidMemBytes());
+    lua->PushBool(texture->IsMipmapped()); lua->SetField(-2, "mipmapped");
+    lua->PushBool(texture->IsRenderTarget()); lua->SetField(-2, "renderTarget");
+    return 1;
+}
+void Shutdown() {
+    for (auto& texture : textures) texture.reset();
+    for (auto*& texture : renderTargetProbes) {
+        if (texture) {
+            texture->Release();
+            texture->DeleteIfUnreferenced();
+            texture = nullptr;
+        }
+    }
+    resident = 0;
+}
 }

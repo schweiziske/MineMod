@@ -3,7 +3,7 @@
 MC = MC or {}
 MC.AtlasLayout = MC.AtlasLayout or {}
 local L = MC.AtlasLayout
-L.VERSION = 1
+L.VERSION = 2
 local min, max, floor = math.min, math.max, math.floor
 local function integer(v, low, high) return type(v) == "number" and v == floor(v) and v >= low and v <= high end
 local function power(v) local p = 1 if v == 0 then return 0 end while p < v do p = p * 2 end return p end
@@ -88,4 +88,39 @@ function L.Stitch(sprites, maxWidth, maxHeight, requestedMip, anisotropyBit)
 	result.bytes = 0
 	for level = 0, mip do result.bytes = result.bytes + max(1, floor(result.width / 2 ^ level)) * max(1, floor(result.height / 2 ^ level)) * 4 end
 	return result
+end
+
+-- Keep frequent uploads spatially local without changing the reference Stitcher.
+-- The island is an ordinary packed rectangle; logical tile indices stay stable.
+function L.StitchAnimated(sprites, maxWidth, maxHeight, requestedMip, anisotropyBit)
+	local original, err, id = L.Stitch(sprites, maxWidth, maxHeight, requestedMip, anisotropyBit)
+	if not original then return nil, err, id end
+	local animated, indices, static, staticIndices = {}, {}, {}, {}
+	for index, sprite in ipairs(sprites) do
+		if sprite.cacheAnimated or sprite.animated then
+			animated[#animated + 1], indices[#indices + 1] = sprite, index
+		else
+			static[#static + 1], staticIndices[#staticIndices + 1] = sprite, index
+		end
+	end
+	if #animated == 0 or #static == 0 then return original end
+	local island = L.Stitch(animated, maxWidth, maxHeight, original.mip, anisotropyBit)
+	if not island then return original end
+	local islandID = "mc:internal/animation_island"
+	local used = {}
+	for _, sprite in ipairs(sprites) do used[sprite.id] = true end
+	while used[islandID] do islandID = islandID .. "_" end
+	static[#static + 1] = {id = islandID, width = island.width, height = island.height}
+	local packed = L.Stitch(static, maxWidth, maxHeight, original.mip, anisotropyBit)
+	-- Locality must not require a larger GPU allocation or reject a pack that fits.
+	if not packed or packed.bytes > original.bytes then return original end
+	local regions, origin = {}, packed.regions[#static]
+	for i, index in ipairs(staticIndices) do regions[index] = packed.regions[i] end
+	for i, index in ipairs(indices) do
+		local r = island.regions[i]
+		regions[index] = {origin[1] + r[1], origin[2] + r[2], r[3], r[4]}
+	end
+	packed.regions = regions
+	packed.animationRegion = {origin[1], origin[2], island.width, island.height}
+	return packed
 end

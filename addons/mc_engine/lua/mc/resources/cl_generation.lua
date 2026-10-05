@@ -6,6 +6,15 @@ local G = MC.ResourceGeneration
 G.live = G.live or {}
 G.textures = G.textures or {}
 G.slots = G.slots or {}
+-- Auto-refresh can retain a pre-residency generation. Freeze its last uploaded
+-- frame until the pack is rebuilt; never resume the old CPU upload loop.
+for generation in pairs(G.live) do
+	if not generation.animationMaterials then
+		generation.animationMaterials = {}
+		generation.needsRebuild = true
+		print("[mc_engine] GPU animation pipeline changed; reload the resource pack to rebuild resident frames.")
+	end
+end
 local strategies = {auto = 0, mean = 1, cutout = 2, strict_cutout = 3, dark_cutout = 4}
 local function nativeAvailable()
 	if not mcmesh then return false end
@@ -33,6 +42,7 @@ local function release(generation)
 		end
 	end
 	generation.bindings = {}
+	generation.animationMaterials = {}
 	for handle in pairs(generation.handles) do
 		local ok, err = handle.backend.ReleaseAtlasSprite(handle.id)
 		if not ok then errors[#errors + 1] = tostring(err) end
@@ -55,34 +65,13 @@ function G.Release(generation)
 	if not ok then MC.Fault("resource_generation_release", "%s", err) end
 	return ok, err
 end
-local function upload(generation, animation, current, nextFrame, fraction, defer)
-	if not defer and generation.updateTexture and animation.backend == generation.backend then
-		local r,pad=animation.region,generation.layout.padding
-		local ok,err=generation.updateTexture(animation.handle,animation.texture.id,r[1]-pad,r[2]-pad,current,nextFrame,fraction)
-		if not ok then return nil,err end
-		generation.dirtyChannels[animation.channel]=true
-		animation.current,animation.nextFrame,animation.fraction=current,nextFrame,fraction
-		return true
-	end
-	local levels, err = animation.levels
-	if not levels then levels, err = animation.backend.SampleAtlasSprite(animation.handle, current, nextFrame, fraction) end
-	if not levels then return nil, err end
-	if generation.cache and animation.cacheable then
-		generation.cache:Put(animation.index,animation.channel,levels)
-	end
-	local r, pad = animation.region, generation.layout.padding
-	local ok, uploadError = generation.backend.UploadAtlasTextureRect(animation.texture.id,
-		r[1] - pad, r[2] - pad, r[3] + pad * 2, r[4] + pad * 2, levels, defer)
-	if not ok then return nil, uploadError end
-	animation.current, animation.nextFrame, animation.fraction = current, nextFrame, fraction
-	return true
-end
 function G.Build(plan, checkpoint)
 	if G.building then return nil,"resource_generation_build_running" end
 	local backend=G.Backend()
 	if not backend then return nil, "resource_generation_backend_unavailable" end
 	if type(plan) ~= "table" or plan.state ~= "planned" or type(plan.layout) ~= "table"
-		or type(plan.sprites) ~= "table" then return nil, "resource_generation_plan" end
+		or type(plan.sprites) ~= "table" or not plan.layout.gpu
+		or not plan.layout.gpu.records then return nil, "resource_generation_plan" end
 	local started = SysTime()
 	local sampling, samplingError
 	if plan.layout.mip>0 then
@@ -92,13 +81,13 @@ function G.Build(plan, checkpoint)
 	local slot
 	for i = 1, 3 do if not G.slots[i] then slot = i break end end
 	if not slot then return nil, "resource_generation_slot_budget" end
-	local generation = {state = "building", backend=backend, layout = plan.layout, key = plan.key,
-		slot = slot, samplingOffset = sampling.offset, samplingPBROffset = sampling.pbrOffset, bindings = {}, handles = {}, channels = {}, animations = {}, metrics = {decodeMipMS = 0, copyMS = 0}, ticks = 0}
-	-- Optional native fast path, selected once at the generation boundary.
-	if type(backend.UpdateAtlasSpriteTexture)=="function" and type(backend.FlushAtlasTextureUpdates)=="function" then
-		generation.updateTexture,generation.flushUpdates=backend.UpdateAtlasSpriteTexture,backend.FlushAtlasTextureUpdates
-		generation.dirtyChannels={}
-	end
+	local residentLayout = {}
+	for key,value in pairs(plan.layout) do residentLayout[key]=value end
+	residentLayout.gpu={region=plan.layout.gpu.region,cell=plan.layout.gpu.cell}
+	local generation = {state = "building", backend=backend, layout = residentLayout, key = plan.key,
+		slot = slot, samplingOffset = sampling.offset, samplingPBROffset = sampling.pbrOffset, bindings = {},
+		animationMaterials = {}, handles = {}, channels = {}, animations = {},
+		metrics = {decodeMipMS = 0, copyMS = 0, residentFrames = 0}, ticks = 0}
 	G.live[generation] = true
 	G.slots[slot] = generation
 	local function build()
@@ -107,20 +96,16 @@ function G.Build(plan, checkpoint)
 		if MC.ResourceCache then generation.cache=MC.ResourceCache.Open(plan,backend.kind) end
 		local channels = plan.pbr and {"color", "normal", "orm"} or {"color"}
 		for _, channel in ipairs(channels) do
-			local texture, err = backend.CreateAtlasTexture(layout.width, layout.height, layout.mip)
+			local texture, err = backend.CreateAtlasTexture(layout.width, layout.height, channel=="color" and layout.mip or 0)
 			if not texture then return nil, err end
 			generation.channels[channel] = texture
 		end
 		generation.texture = generation.channels.color
 		for index, sprite in ipairs(plan.sprites) do
 			for _, channel in ipairs(channels) do
-			local sampled=sprite
-			if not sprite.overlayPNG then
-				if channel=="normal" then sampled=sprite.normalSprite or sprite
-				elseif channel=="orm" then sampled=sprite.specularSprite or sprite end
-			end
-			local frames = {}
-			for i, frame in ipairs(sampled.frames) do frames[i] = frame.index end
+			local info = layout.gpu.records[index][channel]
+			local sampled, frames = info.sprite, info.frames
+			local channelMip = channel=="color" and layout.mip or 0
 			local spriteBackend=backend
 			if sampled~=sprite and (sampled.width~=sprite.width or sampled.height~=sprite.height) then
 				-- Existing native DLLs require identical material sheet dimensions.
@@ -139,7 +124,7 @@ function G.Build(plan, checkpoint)
 			if channel == "normal" then strategy, data, overlayData = 5, sprite.normalPNG, sprite.overlayNormalPNG
 			elseif channel == "orm" then strategy, data, overlayData = 6, sprite.specularPNG, sprite.overlaySpecularPNG end
 			native, decodeError = spriteBackend.CreateAtlasSprite(sampled.png, {width = sprite.width, height = sprite.height,
-				mip = layout.mip, padding = layout.padding, strategy = strategy, dataPNG = data, overlayDataPNG = overlayData,
+				mip = channelMip, padding = layout.padding, strategy = strategy, dataPNG = data, overlayDataPNG = overlayData,
 				alphaBias = sprite.alphaBias, item = sprite.item == true or sprite.id:find(":textures/item/", 1, true) ~= nil, frames = frames,
 				tint = sprite.tint, overlayPNG = sprite.overlayPNG, baseWidth = sprite.baseWidth or sampled.width, baseHeight = sprite.baseHeight or sampled.height,
 				overlayWidth = sprite.overlayWidth, overlayHeight = sprite.overlayHeight})
@@ -151,15 +136,23 @@ function G.Build(plan, checkpoint)
 			end
 			end
 			generation.metrics.decodeMipMS = generation.metrics.decodeMipMS + (SysTime() - before) * 1000
-			local animation = {handle = native and native.id, levels=cached, index=index, channel=channel,
-				backend=spriteBackend, cacheable=cacheable, sprite = sampled, region = layout.regions[index], texture = generation.channels[channel]}
-			local current, nextFrame, fraction = MC.ResourceSpriteRules.Sample(sampled, 0)
 			before = SysTime()
-			local ok, uploadError = upload(generation, animation, current, nextFrame, fraction, true)
-			if not ok then return nil, sprite.id .. ":" .. tostring(uploadError) end
+			for ordinal, frame in ipairs(frames) do
+				local levels, sampleError = cached
+				if not levels then levels,sampleError=spriteBackend.SampleAtlasSprite(native.id,frame,frame,0) end
+				if not levels then return nil,sprite.id..":"..tostring(sampleError) end
+				if generation.cache and cacheable then generation.cache:Put(index,channel,levels) end
+				local r,pad = layout.gpu.records[index].regions[ordinal],layout.padding
+				local ok,uploadError=backend.UploadAtlasTextureRect(generation.channels[channel].id,
+					r[1]-pad,r[2]-pad,r[3]+pad*2,r[4]+pad*2,levels,true)
+				if not ok then return nil,sprite.id..":"..tostring(uploadError) end
+				generation.metrics.residentFrames=generation.metrics.residentFrames+1
+			end
 			generation.metrics.copyMS = generation.metrics.copyMS + (SysTime() - before) * 1000
-			if sampled.animated and not (native and native.constant) then generation.animations[#generation.animations + 1] = animation
-			elseif native then
+			if sampled.animated then
+				generation.animations[#generation.animations+1]={index=index,channel=channel,frames=#frames}
+			end
+			if native then
 				local freed, freeError = spriteBackend.ReleaseAtlasSprite(native.id)
 				if not freed then return nil, freeError end
 				generation.handles[native] = nil
@@ -169,6 +162,10 @@ function G.Build(plan, checkpoint)
 		end
 		local before = SysTime()
 		for _, channel in ipairs(channels) do
+			local r=layout.gpu.region
+			local copied,copyError=backend.UploadAtlasTextureRect(generation.channels[channel].id,
+				r[1],r[2],r[3],r[4],MC.ResourceGPUAnimation.Table(layout,channel),true)
+			if not copied then return nil,copyError end
 			local ok, err = backend.FlushAtlasTexture(generation.channels[channel].id)
 			if not ok then return nil, err end
 		end
@@ -242,17 +239,24 @@ function G.BindSampling(material, texture, constants)
 	matrix:SetField(3,1,width*scale)
 	matrix:SetField(3,2,height*scale)
 	matrix:SetField(3,3,scale*scale)
-	matrix:SetField(3,4,(generation and generation.samplingPBROffset or 0)-offset)
+	matrix:SetField(3,4,generation and not generation.channels.normal and -100
+		or (generation and generation.samplingPBROffset or 0)-offset)
 	matrix:SetField(4,1,width)
 	matrix:SetField(4,2,height)
 	matrix:SetField(4,3,(generation and generation.layout.mip or 0)+offset)
 	matrix:SetField(4,4,1/(width*height))
+	local gpu=generation and generation.layout.gpu
+	matrix:SetField(2,1,gpu and gpu.region[1] or 0)
+	matrix:SetField(2,2,gpu and gpu.region[2] or 0)
+	matrix:SetField(2,3,gpu and gpu.region[3] or 0)
+	matrix:SetField(2,4,generation and generation.ticks or 0)
 	material:SetMatrix("$invviewprojmat",matrix)
+	if generation then generation.animationMaterials[material]=matrix end
 	G.TrackMaterial(material)
 end
 
--- Called once per game tick by the active generation's renderer, never by
--- reflection/shadow passes. This updates already compiled frames, not baking.
+-- Only time constants change during playback. No sprite sampling, pixel copies,
+-- texture Download, or native update/flush calls are allowed here.
 function G.Update(generation, elapsedTicks)
 	if not G.live[generation] or generation.state ~= "candidate" then return false, "resource_generation_not_ready" end
 	if type(elapsedTicks) ~= "number" or elapsedTicks ~= elapsedTicks or math.abs(elapsedTicks) == math.huge then
@@ -260,19 +264,9 @@ function G.Update(generation, elapsedTicks)
 	end
 	local tick = math.max(0, math.floor(elapsedTicks))
 	if generation.ticks == tick then return true end
-	for _, animation in ipairs(generation.animations) do
-		local a, b, fraction = MC.ResourceSpriteRules.Sample(animation.sprite, tick)
-		if a ~= animation.current or b ~= animation.nextFrame or fraction ~= animation.fraction then
-			local ok, err = upload(generation, animation, a, b, fraction, false)
-			if not ok then return false, err end
-		end
-	end
-	if generation.dirtyChannels then
-		for channel in pairs(generation.dirtyChannels) do
-			local ok,err=generation.flushUpdates(generation.channels[channel].id)
-			if not ok then return false,err end
-			generation.dirtyChannels[channel]=nil
-		end
+	for material,matrix in pairs(generation.animationMaterials) do
+		matrix:SetField(2,4,tick)
+		material:SetMatrix("$invviewprojmat",matrix)
 	end
 	generation.ticks = tick
 	return true

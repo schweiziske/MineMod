@@ -18,7 +18,7 @@ if S.depthMaterialVersion ~= DEPTH_MATERIAL_VERSION then
 	end
 	S.depthMaterialVersion = DEPTH_MATERIAL_VERSION
 end
-local floor, sqrt, atan2 = math.floor, math.sqrt, math.atan2
+local sqrt, atan2 = math.sqrt, math.atan2
 local enabled = MC.RenderPackSettings.Handle( "shadows" )
 local resolution = MC.RenderPackSettings.Handle( "shadow_resolution" )
 local distance = MC.RenderPackSettings.Handle( "shadow_range" )
@@ -53,6 +53,7 @@ S.renderRevision, S.tileToken = ( S.renderRevision or 0 ) + 1, ( S.tileToken or 
 S.valid, S.modelPushed, S.current, S.pending = false, false, {}, {}
 S.rendering = false
 S.nextUpdate, S.retryAt, S.camera = 0, 0, { enabled = false }
+S.gridOrigin = nil
 S.fullDirty, S.cascadeCasters = false, { {}, {} }
 -- Discard metadata retained from the retired partial-update path on refresh.
 S.dirtyChunks, S.dirtyCount, S.nearDirty, S.farDirty = nil, nil, nil, nil
@@ -381,6 +382,7 @@ function S.Update( x, y, z, renderView )
 	local active = L.active
 	if active ~= S.active then
 		S.active, S.program, S.valid = active, shadowProgram( active ), false
+		S.gridOrigin = nil
 		S.retryAt, S.nextUpdate = 0, 0
 		B.DisableShadow()
 	end
@@ -394,11 +396,9 @@ function S.Update( x, y, z, renderView )
 	B.PrepareView( x, y, z )
 	local sx, sy, sz, radiance = B.SunComponents()
 	if radiance <= 0 then return disable( "night" ) end
-	-- Quantize the sun direction, not the receiver/camera position. Small solar
-	-- changes then share a map; each cascade still snaps to its own texel grid.
-	sx, sy, sz = floor( sx * 2048 + 0.5 ), floor( sy * 2048 + 0.5 ), floor( sz * 2048 + 0.5 )
-	local inverse = 1 / sqrt( sx * sx + sy * sy + sz * sz )
-	sx, sy, sz = sx * inverse, sy * inverse, sz * inverse
+	-- SunComponents already supplies a unit vector. Rounding its components
+	-- independently then normalizing makes even a constant component oscillate.
+	-- Throttle complete atlas/projection pairs below, not the solar trajectory.
 	-- The world adapter refreshes this cache at the re-origin boundary.
 	-- Polling WorldToRenderPos here would allocate an engine Vector each frame.
 	local frameX, frameY, frameZ = MC.ChunkRenderFrameOffset()
@@ -407,7 +407,14 @@ function S.Update( x, y, z, renderView )
 		S.valid = false
 		B.DisableShadow()
 	end
-	M.Configure( pending, x, y, z, sx, sy, sz, size, settings.size, settings.range )
+	-- Rotate the texel lattice around a persistent nearby point, not the world
+	-- origin. Re-centering every frame would undo fixed-sun translation snapping.
+	local grid = S.gridOrigin
+	if not grid or grid.frameX ~= frameX or grid.frameY ~= frameY or grid.frameZ ~= frameZ then
+		grid = { x = x, y = y, z = z, frameX = frameX, frameY = frameY, frameZ = frameZ }
+		S.gridOrigin = grid
+	end
+	M.Configure( pending, x, y, z, sx, sy, sz, size, settings.size, settings.range, grid )
 	-- Full light-space coverage is independent of view direction/FOV. Never
 	-- carry a camera-derived caster cone from an older cached projection.
 	pending.views[1].cull, pending.views[2].cull = nil, nil

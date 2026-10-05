@@ -594,9 +594,12 @@ function L.Step()
 end
 
 function L.BeginProcessing( x, y, z, view )
-	if L.atlasTransition then return true end
+	-- The retained runtime is not ready for shadow composition while its atlas
+	-- or world snapshot is being replaced. PrepareDraw disables shadows on false.
+	if L.atlasTransition then return false end
 	local c = L.active
-	if not c or not c.processing or not sameWorld( c ) then return true end
+	if c and not sameWorld( c ) then return false end
+	if not c or not c.processing then return true end
 	if c.processingRetryAt and SysTime() < c.processingRetryAt then return false end
 	local ok, result, err = pcall( MC.RenderPackProcessing.RunView, c.processing, "begin", c, x, y, z, view )
 	if not ok or not result then

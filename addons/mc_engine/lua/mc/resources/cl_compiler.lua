@@ -3,7 +3,7 @@
 MC = MC or {}
 MC.ResourceCompiler = MC.ResourceCompiler or {}
 local C = MC.ResourceCompiler
-C.VERSION = 4
+C.VERSION = 5
 local prepareResources
 local function sameClock(a,b)
 	if a.width~=b.width or a.height~=b.height or a.duration~=b.duration or a.interpolate~=b.interpolate or #a.frames~=#b.frames then return false end
@@ -69,7 +69,7 @@ function C.PrepareTiles(ids, revision, options, checkpoint)
 		key[#key+1] = table.concat({tile.tile,tile.resource,tile.overlay or "",table.concat(tile.tint,",")},":")
 	end
 	options = options or {}
-	local layout, reason, id = MC.AtlasLayout.Stitch(sprites, options.maxWidth or 16384,
+	local layout, reason, id = MC.ResourceGPUAnimation.Layout(sprites, options.maxWidth or 16384,
 		options.maxHeight or 16384, options.mip or 4, options.anisotropy or 0)
 	if not layout then return nil, reason .. (id and ":" .. id or "") end
 	sourcePlan.sprites, sourcePlan.byID, sourcePlan.byTile, sourcePlan.layout = sprites, nil, byTile, layout
@@ -143,7 +143,7 @@ prepareResources = function(ids, revision, refs, options, skipLayout, checkpoint
 		local layout
 		if not skipLayout then
 			local layoutError,spriteID
-			layout,layoutError,spriteID=MC.AtlasLayout.Stitch(sprites,width,height,mip,aniso)
+			layout,layoutError,spriteID=MC.ResourceGPUAnimation.Layout(sprites,width,height,mip,aniso)
 			if not layout then return nil,layoutError..(spriteID and ":"..spriteID or "") end
 		end
 		local valid, changed = source:Validate()

@@ -3,7 +3,7 @@
 MC = MC or {}
 MC.ResourcePackRules = MC.ResourcePackRules or {}
 local R = MC.ResourcePackRules
-R.VERSION = 1
+R.VERSION = 2
 function R.Hash(bytes)
 	if mcmesh and mcmesh.HashResourceBytes then
 		local digest,err=mcmesh.HashResourceBytes(bytes)
@@ -308,10 +308,22 @@ function R.Resolve(packs, id)
 	local ns, path = R.Identifier(id)
 	if not ns then return nil, path end
 	local asset, result = "assets/" .. ns .. "/" .. path
+	-- Java 1.20.3 renamed grass to short_grass (resource format 22).
+	-- Resolve within each pack so a legacy override still beats the default.
+	local legacy = id == "minecraft:textures/block/short_grass.png"
+		and "assets/minecraft/textures/block/grass.png"
+	local metadataAsset = asset
 	for i, pack in ipairs(packs) do
 		local location = find(pack, asset)
+		local selectedAsset = asset
+		if not location and legacy and pack.rules.formats.maximum[1] < 22 then
+			location = find(pack, legacy)
+			selectedAsset = legacy
+		end
 		if location then
-			if not result then result = { id = id, provider = pack.id, index = i, path = location, overridden = {} }
+			if not result then
+				result = { id = id, provider = pack.id, index = i, path = location, overridden = {} }
+				metadataAsset = selectedAsset
 			else result.overridden[#result.overridden + 1] = { provider = pack.id, path = location } end
 		end
 		if filtered(pack, ns, path) then break end
@@ -320,9 +332,9 @@ function R.Resolve(packs, id)
 	-- Lower metadata must never attach to a replacement supplied above it.
 	for i = 1, result.index do
 		local pack = packs[i]
-		local location = find(pack, asset .. ".mcmeta")
+		local location = find(pack, metadataAsset .. ".mcmeta")
 		if location then result.metadataProvider, result.metadataIndex, result.metadataPath = pack.id, i, location break end
-		if filtered(pack, ns, path .. ".mcmeta") then break end
+		if filtered(pack, ns, metadataAsset:sub(#ns + 9) .. ".mcmeta") then break end
 	end
 	return result
 end

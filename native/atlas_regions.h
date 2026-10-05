@@ -11,8 +11,7 @@ inline UploadRegion Union(const UploadRegion& a, const UploadRegion& b) {
 }
 // Keep all changed pixels; the union's unchanged pixels come from atlas backing.
 // A bounded amount of extra copying is cheaper than another Source Download.
-inline void MergeUploadRegions(std::vector<UploadRegion>& regions) {
-    constexpr int64_t overheadPixels=65536;
+inline void MergeUploadRegions(std::vector<UploadRegion>& regions, int64_t overheadPixels=65536) {
     for (size_t i=0;i<regions.size();++i) {
         for (size_t j=i+1;j<regions.size();) {
             const auto joined=Union(regions[i],regions[j]);
