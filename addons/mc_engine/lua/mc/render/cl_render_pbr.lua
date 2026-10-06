@@ -8,6 +8,9 @@ local sqrt, min, max, abs = math.sqrt, math.min, math.max, math.abs
 local exposure = MC.RenderPackSettings.Handle( "exposure" )
 local strength = MC.RenderPackSettings.Handle( "sun_strength" )
 local environment = MC.RenderPackSettings.Handle( "environment" )
+local colorInterpolation = MC.RenderPackSettings.Handle( "color_interpolation" )
+local pbrInterpolation = MC.RenderPackSettings.Handle( "pbr_interpolation" )
+B.samplingMaterials = B.samplingMaterials or {}
 local lightingKeys = { "$c1_w", "$c2_x", "$c2_y", "$c2_z", "$c2_w", "$c3_x", "$c3_y", "$c3_z", "$c3_w" }
 local values = { 1, 0, 0, 1, 2.5, 1, 1, 1, 1 }
 local eyeX, eyeY, eyeZ, lastFrame = 0, 0, 0, nil
@@ -24,6 +27,27 @@ for _, key in ipairs( { "exposure", "sun_strength", "environment" } ) do
 	MC.RenderPackSettings.OnChange( key, "mc_l2_pbr", settingsChanged )
 end
 cvars.AddChangeCallback( "mc_daycycle_sun_tilt", settingsChanged, "mc_l2_pbr" )
+
+local function interpolationChanged()
+	local colorSign = colorInterpolation:GetBool() and -1 or 1
+	local pbrSign = pbrInterpolation:GetBool() and -1 or 1
+	for material, matrix in pairs( B.samplingMaterials ) do
+		local x, y = abs( matrix:GetField( 3, 1 ) ) * colorSign, abs( matrix:GetField( 3, 2 ) ) * pbrSign
+		if matrix:GetField( 3, 1 ) ~= x or matrix:GetField( 3, 2 ) ~= y then
+			matrix:SetField( 3, 1, x )
+			matrix:SetField( 3, 2, y )
+			material:SetMatrix( "$invviewprojmat", matrix )
+		end
+	end
+end
+for _, key in ipairs( { "color_interpolation", "pbr_interpolation" } ) do
+	MC.RenderPackSettings.OnChange( key, "mc_l2_pbr_sampling", interpolationChanged )
+end
+
+function B.BindSampling( material, source, constants )
+	local flags = ( colorInterpolation:GetBool() and 1 or 0 ) + ( pbrInterpolation:GetBool() and 2 or 0 )
+	B.samplingMaterials[material] = MC.ResourceGeneration.BindSampling( material, source, constants, flags )
+end
 
 function B.Parameters( params, maps )
 	params["$c0_x"], params["$c0_y"] = "0", "0"

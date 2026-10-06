@@ -74,6 +74,7 @@ B.DisableShadow()
 function S.GeometryChanged()
 	S.fullDirty = true
 end
+MC.RenderPackSettings.OnChange( "color_interpolation", "mc_l2_pbr_shadow_alpha", S.GeometryChanged )
 
 function S.VisibilityChanged()
 	S.fullDirty = true
@@ -177,14 +178,14 @@ function S.CasterMaterial( surface, stage )
 			} )
 			requireValue( material and not material:IsError(), "render_pbr_shadow_material", "could not create depth material" )
 			material:SetTexture( "$basetexture", source )
-			if MC.ResourceGeneration then MC.ResourceGeneration.BindSampling(material,source) end
+			if MC.ResourceGeneration then MC.RenderPBR.BindSampling(material,source) end
 			record = { material = material, source = source, seen = setmetatable( {}, { __mode = "k" } ) }
 			S.depthMaterials[signature], S.materialCount = record, S.materialCount + 1
 		elseif not (resources and resources.textures[source:GetName()]) then
 			requireValue( R.SameTexture( source, record.source ), "render_pbr_shadow_texture_identity", "shadow albedo dimensions changed" )
 		end
 		record.material:SetTexture("$basetexture", source)
-		if resources then resources.BindSampling(record.material,source) end
+		if resources then MC.RenderPBR.BindSampling(record.material,source) end
 		record.source = source
 		S.surfaceMaterials[surface] = { program = S.program, stage = stage, record = record, textureRevision = MC.TexturePackRevision }
 	end

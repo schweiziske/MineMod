@@ -3,7 +3,7 @@
 MC.ResourceCache = MC.ResourceCache or {}
 local C = MC.ResourceCache
 local ROOT, LIMIT = "mc/resourcepacks/cache", 134217728
-local VERSION = "MCRC3" -- Color mips; normal/specular store only mip0.
+local VERSION = "MCRC4" -- Per-frame color and semantic normal/specular mip chains.
 local Cache = {} Cache.__index = Cache
 
 local function dimensions(sprite, layout, level)
@@ -32,7 +32,7 @@ local function decode(cache, bytes)
 		local id = index .. ":" .. channel
 		if records[id] then return false end
 		local levels = {} cursor=ending+1
-		local mip = cache.plan.layout.gpu and channel~="color" and 0 or cache.plan.layout.mip
+		local mip = cache.plan.layout.mip
 		for size in sizes:gmatch("%d+") do
 			local count = tonumber(size)
 			if #levels > mip or count ~= dimensions(sprite,cache.plan.layout,#levels)

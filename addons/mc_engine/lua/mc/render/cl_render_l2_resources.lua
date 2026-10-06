@@ -179,7 +179,10 @@ function R.BoundMaterial( owner, slot, source, stage, blockSize, program, colorS
 		material:SetFloat( "$c0_x", 1 / blockSize )
 		MC.RenderVanillaWater.Register( material )
 	end
-	if MC.ResourceGeneration then MC.ResourceGeneration.BindSampling(material,source) end
+	if MC.ResourceGeneration then
+		if pbrMaps then MC.RenderPBR.BindSampling(material,source)
+		else MC.ResourceGeneration.BindSampling(material,source) end
+	end
 	return material
 end
 

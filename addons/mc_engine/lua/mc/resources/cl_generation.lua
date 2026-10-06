@@ -96,7 +96,7 @@ function G.Build(plan, checkpoint)
 		if MC.ResourceCache then generation.cache=MC.ResourceCache.Open(plan,backend.kind) end
 		local channels = plan.pbr and {"color", "normal", "orm"} or {"color"}
 		for _, channel in ipairs(channels) do
-			local texture, err = backend.CreateAtlasTexture(layout.width, layout.height, channel=="color" and layout.mip or 0)
+			local texture, err = backend.CreateAtlasTexture(layout.width, layout.height, layout.mip)
 			if not texture then return nil, err end
 			generation.channels[channel] = texture
 		end
@@ -105,7 +105,6 @@ function G.Build(plan, checkpoint)
 			for _, channel in ipairs(channels) do
 			local info = layout.gpu.records[index][channel]
 			local sampled, frames = info.sprite, info.frames
-			local channelMip = channel=="color" and layout.mip or 0
 			local spriteBackend=backend
 			if sampled~=sprite and (sampled.width~=sprite.width or sampled.height~=sprite.height) then
 				-- Existing native DLLs require identical material sheet dimensions.
@@ -124,7 +123,7 @@ function G.Build(plan, checkpoint)
 			if channel == "normal" then strategy, data, overlayData = 5, sprite.normalPNG, sprite.overlayNormalPNG
 			elseif channel == "orm" then strategy, data, overlayData = 6, sprite.specularPNG, sprite.overlaySpecularPNG end
 			native, decodeError = spriteBackend.CreateAtlasSprite(sampled.png, {width = sprite.width, height = sprite.height,
-				mip = channelMip, padding = layout.padding, strategy = strategy, dataPNG = data, overlayDataPNG = overlayData,
+				mip = layout.mip, padding = layout.padding, strategy = strategy, dataPNG = data, overlayDataPNG = overlayData,
 				alphaBias = sprite.alphaBias, item = sprite.item == true or sprite.id:find(":textures/item/", 1, true) ~= nil, frames = frames,
 				tint = sprite.tint, overlayPNG = sprite.overlayPNG, baseWidth = sprite.baseWidth or sampled.width, baseHeight = sprite.baseHeight or sampled.height,
 				overlayWidth = sprite.overlayWidth, overlayHeight = sprite.overlayHeight})
@@ -229,15 +228,17 @@ function G.TrackMaterial(material)
 	end
 end
 
-function G.BindSampling(material, texture, constants)
+function G.BindSampling(material, texture, constants, interpolation)
 	local generation = G.textures[texture:GetName()]
 	local matrix = constants or Matrix()
 	local offset = generation and generation.samplingOffset or 0
 	local scale = 2^offset
 	local width,height=texture:Width(),texture:Height()
 	if generation then width,height=generation.layout.width or width,generation.layout.height or height end
-	matrix:SetField(3,1,width*scale)
-	matrix:SetField(3,2,height*scale)
+	-- PBR uses the signs as independent spatial-filter flags. Squared gradient
+	-- lengths (including legacy shaders) retain exactly the same LOD.
+	matrix:SetField(3,1,width*scale*(interpolation and interpolation%2==1 and -1 or 1))
+	matrix:SetField(3,2,height*scale*(interpolation and interpolation>=2 and -1 or 1))
 	matrix:SetField(3,3,scale*scale)
 	matrix:SetField(3,4,generation and not generation.channels.normal and -100
 		or (generation and generation.samplingPBROffset or 0)-offset)
@@ -253,6 +254,7 @@ function G.BindSampling(material, texture, constants)
 	material:SetMatrix("$invviewprojmat",matrix)
 	if generation then generation.animationMaterials[material]=matrix end
 	G.TrackMaterial(material)
+	return matrix
 end
 
 -- Only time constants change during playback. No sprite sampling, pixel copies,

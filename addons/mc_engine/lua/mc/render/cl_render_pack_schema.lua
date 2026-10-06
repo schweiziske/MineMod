@@ -186,7 +186,8 @@ Schema.ScreenBindings = { ssao = "opaque", ssao_composite = "opaque", fog = "wor
 	volumetric = "world", volumetric_composite = "world", bloom_prefilter = "final",
 	bloom_horizontal = "final", bloom_vertical = "final", bloom_composite = "final",
 	exposure_meter = "final", exposure_reduce_16 = "final", exposure_reduce_4 = "final",
-	exposure_adapt = "final", exposure_composite = "final", exposure_store = "final" }
+	exposure_adapt = "final", exposure_composite = "final", exposure_store = "final",
+	taa_resolve = "world", taa_composite = "world", taa_store = "world" }
 Schema.ProcessingStages = processingStages
 local screenInputs = {
 	ssao = { "opaque_depth" }, ssao_composite = { "scene_color", "target", "opaque_depth" },
@@ -195,10 +196,12 @@ local screenInputs = {
 	bloom_horizontal = { "target" }, bloom_vertical = { "target" }, bloom_composite = { "scene_color", "target" },
 	exposure_meter = { "scene_color" }, exposure_reduce_16 = { "target" }, exposure_reduce_4 = { "target" },
 	exposure_adapt = { "target", "exposure_history" }, exposure_composite = { "scene_color", "target" },
-	exposure_store = { "target" }
+	exposure_store = { "target" }, taa_resolve = { "scene_color", "scene_depth", "taa_history" },
+	taa_composite = { "target" }, taa_store = { "target" }
 }
 local screenComposites = { ssao_composite = true, fog = true, volumetric_composite = true, bloom_composite = true,
-	exposure_composite = true }
+	exposure_composite = true, taa_composite = true }
+local taaOrder = { "taa_resolve", "taa_composite", "taa_store" }
 local exposureOrder = { "exposure_meter", "exposure_reduce_16", "exposure_reduce_4",
 	"exposure_adapt", "exposure_composite", "exposure_store" }
 local exposureSizes = { exposure_meter = 64, exposure_reduce_16 = 16, exposure_reduce_4 = 4,
@@ -257,6 +260,7 @@ local function validatePipeline( def )
 	for _, spec in ipairs( def.settings ) do specs[spec.key] = spec end
 	local written, writers, ids, previous = {}, {}, {}, 0
 	local exposure, exposureCount, outputCounts = {}, 0, {}
+	local taa, taaCount = {}, 0
 	local function reference( input, stage )
 		fields( input, { resource = true, target = true, builtin = true, repeatTexture = true, filter = true }, "processing_input" )
 		local kinds = ( input.resource and 1 or 0 ) + ( input.target and 1 or 0 ) + ( input.builtin and 1 or 0 )
@@ -277,6 +281,7 @@ local function validatePipeline( def )
 				or input.builtin == "opaque_depth" and stage == 3
 				or input.builtin == "scene_depth" and stage == 4
 				or input.builtin == "volume_shadow" and stage == 4
+				or input.builtin == "taa_history" and stage == 4
 				or input.builtin == "exposure_history" and stage == 5 )
 		if not available then reject( "unavailable_processing_builtin" ) end
 		return { ["builtin:" .. input.builtin] = true }
@@ -290,6 +295,17 @@ local function validatePipeline( def )
 		ids[pass.id] = true
 		if not stage or stage < previous or pipeline.version == 1 and stage > 2 then reject( "invalid_processing_stage" ) end
 		if stage > 2 then
+			if stage == 4 and taaCount > 0 and pass.binding ~= taaOrder[taaCount + 1] then
+				reject( "invalid_processing_taa_order" )
+			end
+			if pass.binding and pass.binding:find( "^taa_" ) then
+				taaCount = taaCount + 1
+				if taaOrder[taaCount] ~= pass.binding
+					or pass.constants and next( pass.constants ) or pass.matrices and next( pass.matrices ) then
+					reject( "invalid_processing_taa_chain" )
+				end
+				taa[pass.binding] = pass
+			end
 			if pass.stage == "world" and not geometry.water_depth then reject( "missing_processing_geometry_dependency" ) end
 			if Schema.ScreenBindings[pass.binding] ~= pass.stage or pass.enableSettings or pass.disabledInput
 				or pass.worldPeriod then reject( "invalid_processing_screen_binding" ) end
@@ -319,7 +335,7 @@ local function validatePipeline( def )
 					reject( "invalid_processing_exposure_target" )
 				end
 			elseif not screen and ( target.size.relative ~= "view" or target.format ~= "rgba16f"
-				or target.filter ~= ( pass.binding:find( "^bloom_" ) and "linear" or "point" ) ) then
+				or target.filter ~= ( ( pass.binding:find( "^bloom_" ) or pass.binding == "taa_store" ) and "linear" or "point" ) ) then
 				reject( "invalid_processing_screen_target" )
 			end
 			for index, semantic in ipairs( screenInputs[pass.binding] ) do
@@ -329,7 +345,7 @@ local function validatePipeline( def )
 					reject( "invalid_processing_binding_input" )
 				end
 			end
-			if exposure[pass.binding] then
+			if exposure[pass.binding] or taa[pass.binding] then
 				local count = 0
 				for _ in pairs( pass.inputs ) do count = count + 1 end
 				if count ~= #screenInputs[pass.binding] then reject( "invalid_processing_binding_input" ) end
@@ -337,6 +353,9 @@ local function validatePipeline( def )
 		end
 		local origins = {}
 		for slot, input in pairs( pass.inputs ) do
+			if input.builtin == "taa_history" and ( pass.binding ~= "taa_resolve" or slot ~= "s2" ) then
+				reject( "unavailable_processing_builtin" )
+			end
 			if input.builtin == "exposure_history" and ( pass.binding ~= "exposure_adapt" or slot ~= "s1" ) then
 				reject( "unavailable_processing_builtin" )
 			end
@@ -401,6 +420,19 @@ local function validatePipeline( def )
 			outputCounts[pass.output] = ( outputCounts[pass.output] or 0 ) + 1
 			writers[pass.output] = stage
 			written[pass.output] = possible
+		end
+	end
+	if taaCount > 0 then
+		if taaCount ~= #taaOrder or not specs.taa or specs.taa.type ~= "bool" then reject( "invalid_processing_taa_chain" ) end
+		local resolve, store = taa.taa_resolve, taa.taa_store
+		if taa.taa_composite.inputs.s0.target ~= resolve.output or store.inputs.s0.target ~= resolve.output then
+			reject( "invalid_processing_taa_chain" )
+		end
+		for _, pass in ipairs( { resolve, store } ) do
+			local size = pipeline.targets[pass.output].size
+			if outputCounts[pass.output] ~= 1 or size.relative ~= "view" or size.scale ~= 1 or size.maxWidth or size.maxHeight then
+				reject( "invalid_processing_taa_target" )
+			end
 		end
 	end
 	if exposureCount > 0 then

@@ -197,6 +197,7 @@ local CLIENT_FILES = {
 	"mc/render/cl_render_pack_processing.lua",
 	"mc/render/cl_render_scene.lua",
 	"mc/render/cl_render_pbr_ssr.lua",
+	"mc/render/cl_render_taa.lua",
 	"mc/render/cl_render_pbr_post.lua",
 	"mc/render/cl_render_pack_screen.lua",
 	"mc/render/cl_render_pack_resources.lua",

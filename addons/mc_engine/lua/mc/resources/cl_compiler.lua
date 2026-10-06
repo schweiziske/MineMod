@@ -3,7 +3,7 @@
 MC = MC or {}
 MC.ResourceCompiler = MC.ResourceCompiler or {}
 local C = MC.ResourceCompiler
-C.VERSION = 5
+C.VERSION = 6
 local prepareResources
 local function sameClock(a,b)
 	if a.width~=b.width or a.height~=b.height or a.duration~=b.duration or a.interpolate~=b.interpolate or #a.frames~=#b.frames then return false end

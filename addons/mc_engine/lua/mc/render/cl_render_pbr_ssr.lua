@@ -223,7 +223,7 @@ local function blockMaterial( block, surface, cutout )
         extra:SetField( 1, 1, 1 / c.frameWidth ) extra:SetField( 1, 2, 1 / c.frameHeight )
         extra:SetField( 1, 3, entry.cutoff ) extra:SetField( 1, 4, blockRoughness:GetFloat() )
         if MC.ResourceGeneration then
-            MC.ResourceGeneration.BindSampling(material,MC.RenderL2Resources.SourceTexture(surface),extra)
+            MC.RenderPBR.BindSampling(material,MC.RenderL2Resources.SourceTexture(surface),extra)
         else material:SetMatrix( "$invviewprojmat", extra ) end
         entry.serial = block.serial
     end
