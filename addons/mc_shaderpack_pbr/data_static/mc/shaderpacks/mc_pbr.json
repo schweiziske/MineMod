@@ -349,7 +349,7 @@
         "key": "taa",
         "group": "textures",
         "type": "bool",
-        "default": true,
+        "default": false,
         "label": "Temporal anti-aliasing (TAA)",
         "labelZH": "时域抗锯齿（TAA）"
       },
