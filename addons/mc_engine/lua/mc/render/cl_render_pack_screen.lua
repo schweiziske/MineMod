@@ -41,6 +41,7 @@ end
 function P.Invalidate()
     P.owner, P.worldDone, P.finalDone = nil, nil, nil
     post.ResetExposure()
+    MC.RenderTAA.Reset()
     S.Invalidate()
 end
 
@@ -117,6 +118,8 @@ function P.BeforeViewModels()
     end
 end
 function P.BeforeEffects()
+    -- A cancelled PreDrawViewModel/PreDrawPlayerHands has no matching post hook.
+    MC.RenderTAA.EndViewModel()
     local view = mainView()
     if current( view ) and P.viewModelsStarted ~= P.serial then protected( finishWorld, view ) end
 end
@@ -143,6 +146,11 @@ for _, event in ipairs( { "NeedsDepthPass", "PreDrawTranslucentRenderables", "Pr
 end
 hook.Remove( "PreDrawOpaqueRenderables", "mc_water_ssr_depth" )
 
+hook.Add( "RenderScene", "mc_pack_screen", function( origin, angles, fov )
+    if SysTime() < P.retryAt then return end
+    local result
+    if protected( function() result = MC.RenderTAA.BeginView( origin, angles, fov ) end ) then return result end
+end )
 hook.Add( "NeedsDepthPass", "mc_pack_screen", function()
     if SysTime() >= P.retryAt and S.RequestDepth() then return true end
 end )
@@ -150,10 +158,16 @@ hook.Add( "PreDrawTranslucentRenderables", "mc_pack_screen", P.BeforeTranslucent
 hook.Add( "PreDrawViewModels", "mc_pack_screen", P.BeforeViewModels )
 hook.Add( "PreDrawEffects", "mc_pack_screen", P.BeforeEffects )
 hook.Add( "RenderScreenspaceEffects", "mc_pack_screen", P.AfterEffects )
-hook.Add( "PreDrawViewModel", "mc_pack_screen", S.SkipNativeViewModel )
-hook.Add( "PreDrawPlayerHands", "mc_pack_screen", S.SkipNativeViewModel )
+local function beforeNativeViewModel()
+    if S.SkipNativeViewModel() then return true end
+    MC.RenderTAA.BeginViewModel()
+end
+hook.Add( "PreDrawViewModel", "mc_pack_screen", beforeNativeViewModel )
+hook.Add( "PreDrawPlayerHands", "mc_pack_screen", beforeNativeViewModel )
+hook.Add( "PostDrawViewModel", "mc_pack_screen", function() MC.RenderTAA.EndViewModel() end )
+hook.Add( "PostDrawPlayerHands", "mc_pack_screen", function() MC.RenderTAA.EndViewModel() end )
 hook.Add( "MCWorldAdapterChanged", "mc_pack_screen", P.Invalidate )
-for _, key in ipairs( { "ssao", "fog", "volumetric", "block_ssr", "water_ssr", "underwater_fog", "underwater_volumetric", "auto_exposure" } ) do
+for _, key in ipairs( { "ssao", "fog", "volumetric", "block_ssr", "water_ssr", "underwater_fog", "underwater_volumetric", "auto_exposure", "taa" } ) do
     MC.RenderPackSettings.OnChange( key, "mc_pack_screen", P.Invalidate )
 end
 concommand.Add( "mc_pbr_post_stats", function()

@@ -316,6 +316,7 @@ end
 
 local function updateCullState( depthOnly )
 	local view = render.GetViewSetup and render.GetViewSetup( true )
+	local foreignOffcenter = view and view.offcenter and not MC.RenderTAA.IsView( view )
 	local eye = view and view.origin or EyePos()
 	if not MC.RenderPBR.PrepareDraw( eye.x, eye.y, eye.z, view, depthOnly ) then return false end
 	planeCount = 0
@@ -327,7 +328,7 @@ local function updateCullState( depthOnly )
 	cullDirections = MC.MeshDirectionalCull and MC.MeshDirectionalCull:GetBool()
 		and meshCullMode() == ( MATERIAL_CULLMODE_CCW or 0 ) and not ( view and view.ortho )
 	nativeDirections = MC.NativeDrawDirections:GetBool()
-		and meshCullMode() == ( MATERIAL_CULLMODE_CCW or 0 ) and not ( view and ( view.ortho or view.offcenter ) )
+		and meshCullMode() == ( MATERIAL_CULLMODE_CCW or 0 ) and not ( view and ( view.ortho or foreignOffcenter ) )
 	nativePortals, nativeRoot, nativeSeed = false, 0, 63
 	if Occlusion then
 		local bx, by, bz
@@ -354,7 +355,7 @@ local function updateCullState( depthOnly )
 	end
 
 	if not ( MC.MeshFrustumCull and MC.MeshFrustumCull.GetBool and MC.MeshFrustumCull:GetBool() )
-		or view and ( view.ortho or view.offcenter ) then return true end
+		or view and ( view.ortho or foreignOffcenter ) then return true end
 
 	local ang = view and view.angles or EyeAngles()
 	local fwd = ang:Forward()

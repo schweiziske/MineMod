@@ -154,6 +154,7 @@ local function sceneTargets( width, height, water, legacy )
     local w, h = max( 1, ceil( width * scale ) ), max( 1, ceil( height * scale ) )
     local dw, dh = w, h
     if legacy then dw, dh = width, height end
+    if not legacy and MC.RenderTAA.Wanted( MC.RenderPBRPost.Active() ) then dw, dh = width, height end
     local depth = processing.SceneTarget( owner, "depth", dw, dh, legacy and "rgba8" or "rgba16f", true, false )
     local t = { width = w, height = h, depthWidth = dw, depthHeight = dh, depth = depth.texture, depthQuad = depth.quad }
     if water then
@@ -166,7 +167,7 @@ local function sceneTargets( width, height, water, legacy )
 end
 
 local function validView( view )
-    return view and not view.ortho and not view.offcenter and view.width and view.width > 0
+    return view and not view.ortho and ( not view.offcenter or MC.RenderTAA.IsView( view ) ) and view.width and view.width > 0
         and view.height and view.height > 0 and view.origin and view.angles
         and ( view.aspect == nil or view.aspect >= 0 )
         and view.fov and view.fov > 0 and view.fov < 179 and view.znear and view.znear > 0 and view.zfar and view.zfar > view.znear
@@ -181,7 +182,9 @@ end
 local function sameView( view, c )
     if not validView( view ) then return false end
     local o, a = view.origin, view.angles
+    local jx, jy = MC.RenderTAA.Jitter( view )
     return o.x == c.ox and o.y == c.oy and o.z == c.oz and a.p == c.ap and a.y == c.ay and a.r == c.ar
+        and jx == c.jitterX and jy == c.jitterY
         and view.fov == c.fov and viewAspect( view ) == c.aspect and view.znear == c.near and view.zfar == c.far
         and view.x == c.x and view.y == c.y and view.width == c.width and view.height == c.height
 end
@@ -197,6 +200,7 @@ local function prepareDepth( view, records, scene, postGroup, postRequired )
     c.ap, c.ay, c.ar = view.angles.p, view.angles.y, view.angles.r
     c.x, c.y, c.width, c.height = view.x, view.y, view.width, view.height
     c.fov, c.aspect, c.near, c.far = view.fov, viewAspect( view ), view.znear, view.zfar
+    c.jitterX, c.jitterY = MC.RenderTAA.Jitter( view )
     c.wave = c.wave or Matrix()
     c.projection = c.projection or Matrix()
     c.composition = c.composition or Matrix()
@@ -210,6 +214,8 @@ local function prepareDepth( view, records, scene, postGroup, postRequired )
     -- Push3DView. Match the captured, already-adjusted horizontal FOV exactly;
     -- its default player view need not match a CalcView override of this view.
     camera.fov = c.fov
+    camera.offcenter = view.offcenter and { left = -c.jitterX * c.width, right = ( 1 - c.jitterX ) * c.width,
+        top = c.jitterY * c.height, bottom = ( 1 + c.jitterY ) * c.height } or nil
     local right, up, forward = camera.angles:Right(), camera.angles:Up(), camera.angles:Forward()
     local tangent = math.tan( math.rad( c.fov ) * 0.5 )
     local tanX, tanY = tangent * 1.05, tangent / c.aspect * 1.05
@@ -246,15 +252,25 @@ local function prepareDepth( view, records, scene, postGroup, postRequired )
     requireValue( c.nativeDepth and not c.nativeDepth:IsError() and c.nativeDepth:Width() == c.frameWidth
         and c.nativeDepth:Height() == c.frameHeight, "render_ssr_depth_texture", "SSAO colour depth must match the current full frame" )
     c.depthTexture = c.target.depth
+    c.depthCamera.offcenter = nil
     for key, value in pairs( camera ) do c.depthCamera[key] = value end
     local depthSX, depthSY = c.depthTexture:Width() / c.frameWidth, c.depthTexture:Height() / c.frameHeight
     c.depthCamera.x, c.depthCamera.y = floor( c.x * depthSX ), floor( c.y * depthSY )
     c.depthCamera.w, c.depthCamera.h = max( 1, floor( c.width * depthSX ) ), max( 1, floor( c.height * depthSY ) )
+    if camera.offcenter then
+        c.depthCamera.offcenter = { left = -c.jitterX * c.depthCamera.w, right = ( 1 - c.jitterX ) * c.depthCamera.w,
+            top = c.jitterY * c.depthCamera.h, bottom = ( 1 + c.jitterY ) * c.depthCamera.h }
+    end
     local trace = c.traceCamera
+    trace.offcenter = nil
     for key, value in pairs( camera ) do trace[key] = value end
     local sx, sy = c.target.width / c.frameWidth, c.target.height / c.frameHeight
     trace.x, trace.y = floor( c.x * sx ), floor( c.y * sy )
     trace.w, trace.h = max( 1, floor( c.width * sx ) ), max( 1, floor( c.height * sy ) )
+    if camera.offcenter then
+        trace.offcenter = { left = -c.jitterX * trace.w, right = ( 1 - c.jitterX ) * trace.w,
+            top = c.jitterY * trace.h, bottom = ( 1 + c.jitterY ) * trace.h }
+    end
     c.scaleX, c.scaleY = trace.w / c.width, trace.h / c.height
     local horizontal = 0.5 / tangent
     local projection = c.projection
@@ -263,7 +279,8 @@ local function prepareDepth( view, records, scene, postGroup, postRequired )
     end
     projection:SetField( 1, 4, horizontal ) projection:SetField( 2, 4, horizontal * c.aspect )
     projection:SetField( 3, 4, c.near * 1.01 )
-    projection:SetField( 4, 1, c.x / c.frameWidth ) projection:SetField( 4, 2, c.y / c.frameHeight )
+    projection:SetField( 4, 1, ( c.x + c.jitterX * c.width ) / c.frameWidth )
+    projection:SetField( 4, 2, ( c.y + c.jitterY * c.height ) / c.frameHeight )
     projection:SetField( 4, 3, c.width / c.frameWidth ) projection:SetField( 4, 4, c.height / c.frameHeight )
     c.composition:SetField( 1, 1, forward.x ) c.composition:SetField( 1, 2, forward.y ) c.composition:SetField( 1, 3, forward.z )
     c.composition:SetField( 2, 1, c.target.width ) c.composition:SetField( 2, 2, c.target.height )
@@ -449,7 +466,7 @@ function S.DepthMaterial( surface, cutout )
                 local material = byKind[index]
                 if material then
                     material:SetTexture("$basetexture",source)
-                    if MC.ResourceGeneration then MC.ResourceGeneration.BindSampling(material,source) end
+                    if MC.ResourceGeneration then MC.RenderPBR.BindSampling(material,source) end
                 end
             end
             byKind.textureRevision = MC.TexturePackRevision
@@ -464,7 +481,7 @@ function S.DepthMaterial( surface, cutout )
     S.depthCount = S.depthCount + 1
     local material = CreateMaterial( "mc_scene_depth3_" .. S.depthCount, "screenspace_general_8tex", p )
     requireValue( material and not material:IsError(), "render_ssr_depth_material", "scene-depth material failed to load" )
-    if MC.ResourceGeneration then MC.ResourceGeneration.BindSampling(material,source) end
+    if MC.ResourceGeneration then MC.RenderPBR.BindSampling(material,source) end
     byKind[kind] = material
     byKind.textureRevision = MC.TexturePackRevision
     return material

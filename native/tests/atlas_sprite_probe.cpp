@@ -2,6 +2,7 @@
 #include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -10,13 +11,13 @@ int main() {
     while (std::getline(std::cin, line)) {
         rapidjson::Document d; d.Parse(line.c_str());
         if (d.HasParseError() || !d.IsObject()) return 2;
-        std::ifstream file(d["path"].GetString(), std::ios::binary);
+        std::ifstream file(std::filesystem::u8path(d["path"].GetString()), std::ios::binary);
         std::string png((std::istreambuf_iterator<char>(file)), {}), error;
         mcmesh::atlas::Image image; mcmesh::atlas::Sprite sprite;
         bool ok = mcmesh::atlas::DecodePNG(png, image, error);
         if (ok && d.HasMember("compose")) {
             const auto& c=d["compose"];
-            std::ifstream other(c["path"].GetString(),std::ios::binary);
+            std::ifstream other(std::filesystem::u8path(c["path"].GetString()),std::ios::binary);
             std::string bytes((std::istreambuf_iterator<char>(other)),{});
             mcmesh::atlas::Image overlay;
             ok=mcmesh::atlas::DecodePNG(bytes,overlay,error);

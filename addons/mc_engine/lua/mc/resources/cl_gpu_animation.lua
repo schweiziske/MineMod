@@ -110,7 +110,7 @@ function A.Table(layout, channel)
 	assert(cursor<=r[3]*r[4],"resource_gpu_table_overflow")
 	for i=1,r[3]*r[4] do if not data[i] then data[i]="\0\0\0\0" end end
 	local levels = {table.concat(data)}
-	for mip=1,channel=="color" and layout.mip or 0 do
+	for mip=1,layout.mip do
 		levels[mip+1]=string.rep("\0",r[3]*r[4]*4/4^mip)
 	end
 	return levels

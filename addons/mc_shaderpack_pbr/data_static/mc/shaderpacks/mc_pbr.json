@@ -5,214 +5,220 @@
   "definition": {
     "schema": 1,
     "name": "PBR",
-    "build": "6519f0d389790b2dbd5d83a661f26d65a39dc7d54d6729291fe72bea6b3d7d4a",
+    "build": "6444f50d445b3378007ecc4d8af3bab1bd7d7080df78a6a212b3c4f6f19ed93e",
     "abi": 1,
     "layout": "mc:quad_corners_v1",
     "adapter": "mc:pbr_quad_v4",
     "programs": {
       "opaque": {
-        "vertex": "mc_pbr_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "fe408eb1a0f7eea024a8cd2ec03349a0076ce84a3f2b26a54de28ef84e2f0332",
-        "pixel": "mc_pbr_opaque_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "45142266b9c1f2443310b8d13e63a97ac339c8a925f5c001734b158103e3d834"
+        "vertex": "mc_pbr_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "da82cfae7a05e79b25dfd46a758f7771286a3d69bf20f900a00e50ae9fde10ea",
+        "pixel": "mc_pbr_opaque_6444f50d445b3378007e_ps30",
+        "pixelHash": "6a0038f6caf8d7ab70b6730437f4e2041fac83086410f88e3118cac45060af1b"
       },
       "cutout": {
-        "vertex": "mc_pbr_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "fe408eb1a0f7eea024a8cd2ec03349a0076ce84a3f2b26a54de28ef84e2f0332",
-        "pixel": "mc_pbr_cutout_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "681a3171e98acf761252f41171205728846b55d7588a19b827f5b2b91b118097"
+        "vertex": "mc_pbr_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "da82cfae7a05e79b25dfd46a758f7771286a3d69bf20f900a00e50ae9fde10ea",
+        "pixel": "mc_pbr_cutout_6444f50d445b3378007e_ps30",
+        "pixelHash": "ec38e3f6e88b669f5ea7900ffd52cb527f2157557e7182da6a86bb3a4ea0a663"
       },
       "translucent": {
-        "vertex": "mc_pbr_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "fe408eb1a0f7eea024a8cd2ec03349a0076ce84a3f2b26a54de28ef84e2f0332",
-        "pixel": "mc_pbr_translucent_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "4328ad00f39f32156855b7ad5b5d0e625be26cade9b09143a2c95817e84e6111"
+        "vertex": "mc_pbr_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "da82cfae7a05e79b25dfd46a758f7771286a3d69bf20f900a00e50ae9fde10ea",
+        "pixel": "mc_pbr_translucent_6444f50d445b3378007e_ps30",
+        "pixelHash": "1747bf48b3bd71b57909f43ca9939a27cc47071bb7095fef7e02b2c28878d77e"
       },
       "shadow": {
-        "vertex": "mc_pbr_shadow_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "b4213d8480f01332a0640a3cda61c618460ac8e933b5de17d3bd8b924a298671",
-        "pixel": "mc_pbr_shadow_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "9ee11a8369956234af047f13a17eadd257562d2a5b477988b4477e4e3bf55a3f"
+        "vertex": "mc_pbr_shadow_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "30b7d38d9147039ae54949a828988017d8bc34ef4044a4f1358020854ffb2734",
+        "pixel": "mc_pbr_shadow_6444f50d445b3378007e_ps30",
+        "pixelHash": "a1f52ff1ae99c7f98dc054e11d8b4a674a44d142364719c9695bf3b3dba30dfb"
       },
       "block_entity": {
-        "vertex": "mc_pbr_block_entity_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "18ed43618527f346b27347f8c723f869646109465aad2764695e71ac4b83ed6a",
-        "pixel": "mc_pbr_block_entity_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "dc2a9d851b857e5b4deb3dad7178b117baf18eb370a393af51f583246ab63131"
+        "vertex": "mc_pbr_block_entity_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "52d8b7df051540cf2cbceefce219564901b7924fb9aee40afd3f443b6d399f41",
+        "pixel": "mc_pbr_block_entity_6444f50d445b3378007e_ps30",
+        "pixelHash": "413a0ad7cf3af9e27fb09aaf64e43f99457ae3b5a1c0f37b09f8d53e732e4459"
       },
       "water": {
-        "vertex": "mc_pbr_water_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "d8734cb1c5ca2c6e15a9ab8f497438e522479e0f55bd215b61d2acca3436fd88",
-        "pixel": "mc_pbr_water_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "ed6fbe77b8ac274558f4af69fbfaa928929d2df3f8782c2786b30e3982295528"
+        "vertex": "mc_pbr_water_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "951d511c41b14afd8a48bb25426ac90fccacb605683089c9e6558cb5fe2b26d3",
+        "pixel": "mc_pbr_water_6444f50d445b3378007e_ps30",
+        "pixelHash": "ab9f18161162e55df0c7c04d700d96ad3e5fc1a6ddfc2b33ea9fa119963d06f1"
       },
       "water_shadow": {
-        "vertex": "mc_pbr_shadow_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "b4213d8480f01332a0640a3cda61c618460ac8e933b5de17d3bd8b924a298671",
-        "pixel": "mc_pbr_water_shadow_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "0af519219c29e037fede99dc509228cfaf38e49973c36fe126550360fe2280d3"
+        "vertex": "mc_pbr_shadow_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "30b7d38d9147039ae54949a828988017d8bc34ef4044a4f1358020854ffb2734",
+        "pixel": "mc_pbr_water_shadow_6444f50d445b3378007e_ps30",
+        "pixelHash": "d9a81d535d4182522d6e1add306a2b9015a67dbf8bb86d34ee64988a297eb4c2"
       },
       "water_caustics": {
-        "vertex": "mc_pbr_ssr_copy_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_water_caustics_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "49d90b4ec7f3340ff90fcbe15771acf5e4f3121c7b4e62fcde70591a14225ef0"
+        "vertex": "mc_pbr_ssr_copy_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "02f773dcc9f4d54e02fbd5d1620c9777bc3347b99c4140cada37e38f0914bd8b",
+        "pixel": "mc_pbr_water_caustics_6444f50d445b3378007e_ps30",
+        "pixelHash": "db342d8508b826762616e0559082150302a988392c077b9faf7d692bffe55a46"
       },
       "scene_depth": {
-        "vertex": "mc_pbr_scene_depth_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "d0e55579fc04f07d8b131c3767e1fba1d05c408a5201fe936dbdbfa6546800ba",
-        "pixel": "mc_pbr_scene_depth_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "9ad7e0601f1e2e2cb118136ce2a5e447d4a780881ea7b2544d1b968b28d4c11a"
+        "vertex": "mc_pbr_scene_depth_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "5870dbbdcaf3e54f97865d971655c94b552e0c5a4495a241106f002d06cb8fec",
+        "pixel": "mc_pbr_scene_depth_6444f50d445b3378007e_ps30",
+        "pixelHash": "ad792a1cf50cc01c61a6a198f060c012e1f96b69bfd2bddc7785fa495de201d8"
       },
       "ssr_copy": {
-        "vertex": "mc_pbr_ssr_copy_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_ssr_copy_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "865e3c049a9b8970ecb43b22ea067e67fa337dcd9de8d8c0edda38606c9e07fa"
+        "vertex": "mc_pbr_ssr_copy_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "02f773dcc9f4d54e02fbd5d1620c9777bc3347b99c4140cada37e38f0914bd8b",
+        "pixel": "mc_pbr_ssr_copy_6444f50d445b3378007e_ps30",
+        "pixelHash": "157b37174dc7a793fe7ff9e051a3904711dac79ddf277c96092ba5affc3bb135"
       },
       "ssr_source": {
-        "vertex": "mc_pbr_ssr_copy_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_ssr_source_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "4416b5f74119c934a3c4d2af52f96af94696a0449f46b627d502b92db23b85df"
+        "vertex": "mc_pbr_ssr_copy_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "02f773dcc9f4d54e02fbd5d1620c9777bc3347b99c4140cada37e38f0914bd8b",
+        "pixel": "mc_pbr_ssr_source_6444f50d445b3378007e_ps30",
+        "pixelHash": "22adfc7d12d658913ece0a399696f4bcfd40bd1a803a06330faa38b5a0f63858"
       },
       "water_ssr": {
-        "vertex": "mc_pbr_water_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "d8734cb1c5ca2c6e15a9ab8f497438e522479e0f55bd215b61d2acca3436fd88",
-        "pixel": "mc_pbr_water_ssr_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "81bfc0dc8814e55d816df950e30947b9843685418f049ec254a98f3b241937ca"
+        "vertex": "mc_pbr_water_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "951d511c41b14afd8a48bb25426ac90fccacb605683089c9e6558cb5fe2b26d3",
+        "pixel": "mc_pbr_water_ssr_6444f50d445b3378007e_ps30",
+        "pixelHash": "330759adf0ad0f73614d0b01cbd0c7e4e96f391acd63a00f705369effa992e2f"
       },
       "water_ssr_composite": {
-        "vertex": "mc_pbr_water_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "d8734cb1c5ca2c6e15a9ab8f497438e522479e0f55bd215b61d2acca3436fd88",
-        "pixel": "mc_pbr_water_ssr_composite_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "396798c06ecfcd26f5993b09b99118ab2f506a3a46bf08377b3d33e5b84ff127"
+        "vertex": "mc_pbr_water_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "951d511c41b14afd8a48bb25426ac90fccacb605683089c9e6558cb5fe2b26d3",
+        "pixel": "mc_pbr_water_ssr_composite_6444f50d445b3378007e_ps30",
+        "pixelHash": "bb4025e40d18cc3fe2e2b958a87959c332023bf3fa5768b5e083b4d1825d038e"
       },
       "block_ssr": {
-        "vertex": "mc_pbr_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "fe408eb1a0f7eea024a8cd2ec03349a0076ce84a3f2b26a54de28ef84e2f0332",
-        "pixel": "mc_pbr_block_ssr_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "681dc5c593d829b0e89ec3d466674559ab6b0e4aec22d6be5f64230d76e86e7d"
+        "vertex": "mc_pbr_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "da82cfae7a05e79b25dfd46a758f7771286a3d69bf20f900a00e50ae9fde10ea",
+        "pixel": "mc_pbr_block_ssr_6444f50d445b3378007e_ps30",
+        "pixelHash": "10f91aa0966133ee76cb69a3c4d4dbabf3108978c73f68814fafad65355fabb6"
       },
       "dynamic_opaque": {
-        "vertex": "mc_pbr_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "fe408eb1a0f7eea024a8cd2ec03349a0076ce84a3f2b26a54de28ef84e2f0332",
-        "pixel": "mc_pbr_dynamic_opaque_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "3d05e4e56b00d07dcdfd8280a172421d541e17d38f075ee4dc753a19f633933b"
+        "vertex": "mc_pbr_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "da82cfae7a05e79b25dfd46a758f7771286a3d69bf20f900a00e50ae9fde10ea",
+        "pixel": "mc_pbr_dynamic_opaque_6444f50d445b3378007e_ps30",
+        "pixelHash": "79ed9c43bcc057b16fd02a4fbb8c9e846bc51cac86c00de93d7e87ff042ef999"
       },
       "dynamic_cutout": {
-        "vertex": "mc_pbr_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "fe408eb1a0f7eea024a8cd2ec03349a0076ce84a3f2b26a54de28ef84e2f0332",
-        "pixel": "mc_pbr_dynamic_cutout_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "a183a1ca62700448f1e492171a8f4051569a2990bac539fbe5a0b4643378eaae"
+        "vertex": "mc_pbr_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "da82cfae7a05e79b25dfd46a758f7771286a3d69bf20f900a00e50ae9fde10ea",
+        "pixel": "mc_pbr_dynamic_cutout_6444f50d445b3378007e_ps30",
+        "pixelHash": "6bbe48940e27f5c62bc1e9a14c8f64a8e0d2dbddea9bf1811302175ec9005789"
       },
       "dynamic_translucent": {
-        "vertex": "mc_pbr_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "fe408eb1a0f7eea024a8cd2ec03349a0076ce84a3f2b26a54de28ef84e2f0332",
-        "pixel": "mc_pbr_dynamic_translucent_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "66d9f34709a56e07630e8a579bbab0a09e1a4de587812438e942177c4049371c"
+        "vertex": "mc_pbr_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "da82cfae7a05e79b25dfd46a758f7771286a3d69bf20f900a00e50ae9fde10ea",
+        "pixel": "mc_pbr_dynamic_translucent_6444f50d445b3378007e_ps30",
+        "pixelHash": "5137ac00d0f957e9e5b5b586b13e1c66343d137bbf97d67c3fc9dd82ae1b328b"
       },
       "dynamic_block_entity": {
-        "vertex": "mc_pbr_block_entity_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "18ed43618527f346b27347f8c723f869646109465aad2764695e71ac4b83ed6a",
-        "pixel": "mc_pbr_dynamic_block_entity_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "350a8c9a339742533fbc3ee41eec88b027b49cda5dbc7386026384b387a4a879"
+        "vertex": "mc_pbr_block_entity_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "52d8b7df051540cf2cbceefce219564901b7924fb9aee40afd3f443b6d399f41",
+        "pixel": "mc_pbr_dynamic_block_entity_6444f50d445b3378007e_ps30",
+        "pixelHash": "dee346390cbeee00b31889a3623232bf9401d147fbb7a5073ab267f0dd5e565c"
       },
       "dynamic_water": {
-        "vertex": "mc_pbr_water_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "d8734cb1c5ca2c6e15a9ab8f497438e522479e0f55bd215b61d2acca3436fd88",
-        "pixel": "mc_pbr_dynamic_water_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "f497fe6d6edac0c1b570a48ad17d919784431f68fcc128452f68249371b041ed"
+        "vertex": "mc_pbr_water_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "951d511c41b14afd8a48bb25426ac90fccacb605683089c9e6558cb5fe2b26d3",
+        "pixel": "mc_pbr_dynamic_water_6444f50d445b3378007e_ps30",
+        "pixelHash": "dea3e03ea40d18e6af094db8833a0de932e49207572204b96ee87a44ea35e807"
       },
       "dynamic_sprite": {
-        "vertex": "mc_pbr_dynamic_sprite_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "49a7f8113c7b2c4ba34ffd8472454317fd73ded5d100ed6a76f991a66fe225a6",
-        "pixel": "mc_pbr_dynamic_sprite_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "3f8b3212cfb701debf64954753bd1d561c94dd34e33b0c2a3e4d7a51eb3ab235"
+        "vertex": "mc_pbr_dynamic_sprite_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "306f3233825cd5007bb772b216cc9f441a6a74dd70ec446accf2464e230bf655",
+        "pixel": "mc_pbr_dynamic_sprite_6444f50d445b3378007e_ps30",
+        "pixelHash": "8c8681d645e2576f93a1a39b405093cfabf0d4cedb465a3f18313ab38c9b790e"
       },
       "post_ssao": {
-        "vertex": "mc_pbr_ssr_copy_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_ssao_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "d519e07c259559ef2464a3ffed2703c30aa1aec9ff35c9fee470cb15345de1c2"
+        "vertex": "mc_pbr_ssr_copy_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "02f773dcc9f4d54e02fbd5d1620c9777bc3347b99c4140cada37e38f0914bd8b",
+        "pixel": "mc_pbr_post_ssao_6444f50d445b3378007e_ps30",
+        "pixelHash": "2a858c5e84e0304fa8f3d1d0e5b8e47b95f85c98dd75ef770c1b5db5b49c33d8"
       },
       "post_ssao_composite": {
-        "vertex": "mc_pbr_ssr_copy_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_ssao_composite_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "4fac64069dd00fc370172aee4b61a1fb4b7cb279c41a16cf8dd9c7826634e3b6"
+        "vertex": "mc_pbr_ssr_copy_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "02f773dcc9f4d54e02fbd5d1620c9777bc3347b99c4140cada37e38f0914bd8b",
+        "pixel": "mc_pbr_post_ssao_composite_6444f50d445b3378007e_ps30",
+        "pixelHash": "88080a3160b1277bd0068d04e66bd4abb10ad99e4436b2a6331027d054048fb6"
       },
       "post_scene_depth": {
-        "vertex": "mc_pbr_scene_depth_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "d0e55579fc04f07d8b131c3767e1fba1d05c408a5201fe936dbdbfa6546800ba",
-        "pixel": "mc_pbr_post_scene_depth_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "5452a691b617760d2450eff52b0d9f13dd17df08d6eee4f8a5d059545a576318"
+        "vertex": "mc_pbr_scene_depth_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "5870dbbdcaf3e54f97865d971655c94b552e0c5a4495a241106f002d06cb8fec",
+        "pixel": "mc_pbr_post_scene_depth_6444f50d445b3378007e_ps30",
+        "pixelHash": "a82f77a70f96295012a4f3a2631d8a6ad6fc758067070c4ccb9dcddb4922243a"
       },
       "post_depth_copy": {
-        "vertex": "mc_pbr_ssr_copy_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_depth_copy_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "b7f00714793a8ac983c3d834bc51d388f336bdaff527f9bfa53ad3cb13afc374"
+        "vertex": "mc_pbr_ssr_copy_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "02f773dcc9f4d54e02fbd5d1620c9777bc3347b99c4140cada37e38f0914bd8b",
+        "pixel": "mc_pbr_post_depth_copy_6444f50d445b3378007e_ps30",
+        "pixelHash": "91b144eeb99cee277c6ab166f310059b0345ad9a947ace96f662e4d46f9a8f83"
       },
       "post_fog": {
-        "vertex": "mc_pbr_ssr_copy_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_fog_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "e858236b82acf412113a67c72bb3e18149b1d9dabcf79c5b6bb959aad5b42ebf"
+        "vertex": "mc_pbr_ssr_copy_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "02f773dcc9f4d54e02fbd5d1620c9777bc3347b99c4140cada37e38f0914bd8b",
+        "pixel": "mc_pbr_post_fog_6444f50d445b3378007e_ps30",
+        "pixelHash": "bc0d9ab6e767c1e2decdd9c4e186125afec16743d8698dd90f4f0945d5542f7c"
       },
       "post_bloom_prefilter": {
-        "vertex": "mc_pbr_ssr_copy_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_bloom_prefilter_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "f63c6f5b06b574fe426ceaf6bcd1c6ad148cd5d1a5dc70066a3dcdd3ba2e57d9"
+        "vertex": "mc_pbr_ssr_copy_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "02f773dcc9f4d54e02fbd5d1620c9777bc3347b99c4140cada37e38f0914bd8b",
+        "pixel": "mc_pbr_post_bloom_prefilter_6444f50d445b3378007e_ps30",
+        "pixelHash": "3953a70885d042a6e8d93710993fdbf46116d7fffdc36b1c0118e6281bc06429"
       },
       "post_bloom_blur": {
-        "vertex": "mc_pbr_ssr_copy_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_bloom_blur_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "de3f07351f96e423077ce6ee6e81bbe08190d079e0031e5ff2a79a8015c01506"
+        "vertex": "mc_pbr_ssr_copy_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "02f773dcc9f4d54e02fbd5d1620c9777bc3347b99c4140cada37e38f0914bd8b",
+        "pixel": "mc_pbr_post_bloom_blur_6444f50d445b3378007e_ps30",
+        "pixelHash": "8f6498d333dc889883ac22ace2cd71176041b62f247bf69760ce12ab09891a69"
       },
       "post_bloom_composite": {
-        "vertex": "mc_pbr_ssr_copy_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_bloom_composite_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "3c79ac433b4a0ab9b94c5892fd142fb21f700d5f2e87fcf2d9bffa21737dee06"
+        "vertex": "mc_pbr_ssr_copy_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "02f773dcc9f4d54e02fbd5d1620c9777bc3347b99c4140cada37e38f0914bd8b",
+        "pixel": "mc_pbr_post_bloom_composite_6444f50d445b3378007e_ps30",
+        "pixelHash": "1c40213a05533e4f3340a3066dfe88af336e47505d87245239f97927c892de6d"
       },
       "post_volumetric": {
-        "vertex": "mc_pbr_ssr_copy_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_volumetric_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "26d5e782f5c94378548b631b3056392457dfac3e5d97550d5eff336b16262f95"
+        "vertex": "mc_pbr_ssr_copy_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "02f773dcc9f4d54e02fbd5d1620c9777bc3347b99c4140cada37e38f0914bd8b",
+        "pixel": "mc_pbr_post_volumetric_6444f50d445b3378007e_ps30",
+        "pixelHash": "816c05f73703ceaf3de410c2a21bd4ff727859a08c50a68ef32bcc16c90d69e5"
       },
       "post_volumetric_composite": {
-        "vertex": "mc_pbr_ssr_copy_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_volumetric_composite_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "5dc2e69cc2ba733fc373e5886244dc68ebff3e01d1525a99356325737f5ff550"
+        "vertex": "mc_pbr_ssr_copy_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "02f773dcc9f4d54e02fbd5d1620c9777bc3347b99c4140cada37e38f0914bd8b",
+        "pixel": "mc_pbr_post_volumetric_composite_6444f50d445b3378007e_ps30",
+        "pixelHash": "d25171e633dfa8f6f14ad526f4c35fe5af311f24115d97c6d03c5fa31acf94cb"
       },
       "post_exposure_meter": {
-        "vertex": "mc_pbr_ssr_copy_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_exposure_meter_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "1ae7d8923218492983d36136fa3ea12020b9acac358162285930aca01d649b2f"
+        "vertex": "mc_pbr_ssr_copy_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "02f773dcc9f4d54e02fbd5d1620c9777bc3347b99c4140cada37e38f0914bd8b",
+        "pixel": "mc_pbr_post_exposure_meter_6444f50d445b3378007e_ps30",
+        "pixelHash": "1843650bcc23da7010cd5506ca370987570f30df3df03a0607f9b41792162b58"
       },
       "post_exposure_reduce": {
-        "vertex": "mc_pbr_ssr_copy_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_exposure_reduce_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "bd1d5459545fff16b388537c2d0257dd2f457bf834092f2f1f79c688df858102"
+        "vertex": "mc_pbr_ssr_copy_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "02f773dcc9f4d54e02fbd5d1620c9777bc3347b99c4140cada37e38f0914bd8b",
+        "pixel": "mc_pbr_post_exposure_reduce_6444f50d445b3378007e_ps30",
+        "pixelHash": "d6c8349216fecb2df139dac15c71a5f3e84799c388f56172dd932a5a60709121"
       },
       "post_exposure_adapt": {
-        "vertex": "mc_pbr_ssr_copy_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_exposure_adapt_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "78c8ff50cf321041086945deee41c37013e3f63b8c84ea7d68666777b00a852b"
+        "vertex": "mc_pbr_ssr_copy_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "02f773dcc9f4d54e02fbd5d1620c9777bc3347b99c4140cada37e38f0914bd8b",
+        "pixel": "mc_pbr_post_exposure_adapt_6444f50d445b3378007e_ps30",
+        "pixelHash": "0792c3e184ca4283c08b20a98dfae9bbb6ad051d6b9d773ae846d1a66608a254"
       },
       "post_exposure_composite": {
-        "vertex": "mc_pbr_ssr_copy_vertex_6519f0d389790b2dbd5d_vs30",
-        "vertexHash": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
-        "pixel": "mc_pbr_post_exposure_composite_6519f0d389790b2dbd5d_ps30",
-        "pixelHash": "2d191531768bfc7ca567025012eb6106af5937db6c55e9d9300850602eebe8be"
+        "vertex": "mc_pbr_ssr_copy_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "02f773dcc9f4d54e02fbd5d1620c9777bc3347b99c4140cada37e38f0914bd8b",
+        "pixel": "mc_pbr_post_exposure_composite_6444f50d445b3378007e_ps30",
+        "pixelHash": "71b792ef1095ec13a0bbff43345e1042b688a21eb4896d344ec22b37c8ff9d5f"
+      },
+      "post_taa": {
+        "vertex": "mc_pbr_ssr_copy_vertex_6444f50d445b3378007e_vs30",
+        "vertexHash": "02f773dcc9f4d54e02fbd5d1620c9777bc3347b99c4140cada37e38f0914bd8b",
+        "pixel": "mc_pbr_post_taa_6444f50d445b3378007e_ps30",
+        "pixelHash": "f69d3b8946d83cfb8b8622a7881518646765c82a8c52b7709b59d0aca418db49"
       }
     },
     "resources": {
@@ -277,6 +283,11 @@
     "materialMaps": {},
     "settingGroups": [
       {
+        "id": "textures",
+        "label": "Textures",
+        "labelZH": "贴图"
+      },
+      {
         "id": "lighting",
         "label": "Lighting",
         "labelZH": "光照"
@@ -318,6 +329,30 @@
       }
     ],
     "settings": [
+      {
+        "key": "color_interpolation",
+        "group": "textures",
+        "type": "bool",
+        "default": false,
+        "label": "Color texture interpolation",
+        "labelZH": "颜色贴图插值"
+      },
+      {
+        "key": "pbr_interpolation",
+        "group": "textures",
+        "type": "bool",
+        "default": false,
+        "label": "PBR texture interpolation",
+        "labelZH": "PBR 贴图插值"
+      },
+      {
+        "key": "taa",
+        "group": "textures",
+        "type": "bool",
+        "default": true,
+        "label": "Temporal anti-aliasing (TAA)",
+        "labelZH": "时域抗锯齿（TAA）"
+      },
       {
         "key": "exposure",
         "group": "lighting",
@@ -1064,6 +1099,34 @@
             0
           ]
         },
+        "taa_current": {
+          "size": {
+            "relative": "view",
+            "scale": 1
+          },
+          "format": "rgba16f",
+          "filter": "point",
+          "clear": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "taa_history": {
+          "size": {
+            "relative": "view",
+            "scale": 1
+          },
+          "format": "rgba16f",
+          "filter": "linear",
+          "clear": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
         "exposure_tiles": {
           "size": {
             "width": 64,
@@ -1254,6 +1317,48 @@
           },
           "output": "screen",
           "binding": "volumetric_composite"
+        },
+        {
+          "id": "taa_resolve",
+          "stage": "world",
+          "program": "post_taa",
+          "inputs": {
+            "s0": {
+              "builtin": "scene_color"
+            },
+            "s1": {
+              "builtin": "scene_depth"
+            },
+            "s2": {
+              "builtin": "taa_history"
+            }
+          },
+          "output": "taa_current",
+          "binding": "taa_resolve"
+        },
+        {
+          "id": "taa_composite",
+          "stage": "world",
+          "program": "ssr_copy",
+          "inputs": {
+            "s0": {
+              "target": "taa_current"
+            }
+          },
+          "output": "screen",
+          "binding": "taa_composite"
+        },
+        {
+          "id": "taa_store",
+          "stage": "world",
+          "program": "ssr_copy",
+          "inputs": {
+            "s0": {
+              "target": "taa_current"
+            }
+          },
+          "output": "taa_history",
+          "binding": "taa_store"
         },
         {
           "id": "exposure_meter",

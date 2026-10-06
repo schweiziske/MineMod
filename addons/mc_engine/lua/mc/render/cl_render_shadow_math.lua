@@ -93,7 +93,7 @@ end
 -- trigonometry stay here; the caster loops only consume scalar planes.
 function M.ReadCamera( out, x, y, z, view )
 	out.x, out.y, out.z, out.enabled = x, y, z, false
-	if not view or view.ortho or view.offcenter then return end
+	if not view or view.ortho or view.offcenter and not MC.RenderTAA.IsView( view ) then return end
 	local angle, fov = view.angles, view.fov
 	if not angle or not finite( angle.p ) or not finite( angle.y ) or not finite( angle.r )
 		or not finite( fov ) or fov <= 0 or fov >= 179 then return end

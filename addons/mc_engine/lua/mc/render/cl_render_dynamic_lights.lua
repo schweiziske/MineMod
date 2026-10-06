@@ -245,7 +245,10 @@ function D.RegisterMaterial( base, program, owner, source, stage, blockSize, map
 			material:SetTexture("$texture4", maps.orm)
 			if not maps.water then material:SetTexture("$texture7", maps.dfg) end
 		end
-		if MC.ResourceGeneration then MC.ResourceGeneration.BindSampling(material,source) end
+		if MC.ResourceGeneration then
+			if maps and not sprite then MC.RenderPBR.BindSampling(material,source)
+			else MC.ResourceGeneration.BindSampling(material,source) end
+		end
 		return material
 	end
 	R.Require( D.materialCount < 4096, "dynamic_light_material_budget", "4096 local-light materials reached; restart the client" )
@@ -275,7 +278,10 @@ function D.RegisterMaterial( base, program, owner, source, stage, blockSize, map
 	local material = CreateMaterial( "mc_dynamic_light2_" .. D.materialCount, "screenspace_general_8tex", params )
 	R.Require( material and not material:IsError(), "dynamic_light_material", "could not create local-light material" )
 	if pbr and not maps.water then material:SetTexture("$texture7", maps.dfg) end
-	if MC.ResourceGeneration then MC.ResourceGeneration.BindSampling(material,source) end
+	if MC.ResourceGeneration then
+		if pbr then MC.RenderPBR.BindSampling(material,source)
+		else MC.ResourceGeneration.BindSampling(material,source) end
+	end
 	D.materials[base] = { material = material, revision = -1, sprite = sprite == true, pbr = pbr, stage = stage }
 	if not pbr then MC.RenderVanillaWater.Register( material ) end
 	D.materialCount = D.materialCount + 1

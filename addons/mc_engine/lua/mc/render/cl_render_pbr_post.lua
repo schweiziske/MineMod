@@ -6,6 +6,7 @@ P.VERSION, P.VOLUMETRIC_VERSION = 1, 1
 local requireValue = MC.RenderL2Resources.Require
 local S = MC.RenderPBRSSR
 local processing = MC.RenderPackProcessing
+local taa = MC.RenderTAA
 local aoEnabled = MC.RenderPackSettings.Handle( "ssao" )
 local aoStrength = MC.RenderPackSettings.Handle( "ssao_strength" )
 local aoRadius = MC.RenderPackSettings.Handle( "ssao_radius" )
@@ -54,6 +55,7 @@ function P.Register( definition, blockSize, instance )
     for _, pass in ipairs( definition.pipeline.passes ) do
         if pass.binding then group.bindings[pass.binding] = true end
         if pass.binding == "exposure_store" then group.exposure = { output = pass.output } end
+        if pass.binding == "taa_store" then group.taa = { output = pass.output, camera = Matrix(), previousCamera = Matrix() } end
     end
     group.fog = group.bindings.fog
     if group.fog then group.fogCamera = Matrix() end
@@ -124,7 +126,7 @@ end
 function P.NeedsDepth()
     local group = P.Active()
     return group ~= nil and ( group.bindings.ssao and wantsAO() or wantsFog( group ) or wantsVolume( group )
-        or wantsReflections( group ) or waterView( group ) )
+        or wantsReflections( group ) or waterView( group ) or taa.Wanted( group ) )
 end
 
 function P.DepthGroup( view, waterOnly )
@@ -151,6 +153,7 @@ local function aoConstants( material, c, target, group )
     material:SetFloat( "$c2_x", aoDebug:GetBool() and 1 or 0 )
     material:SetFloat( "$c2_y", c.projection:GetField( 1, 4 ) )
     material:SetFloat( "$c2_z", c.projection:GetField( 2, 4 ) )
+    material:SetFloat( "$c3_x", c.jitterX ) material:SetFloat( "$c3_y", c.jitterY )
 end
 
 local function airSkyLight( origin, bx, by, bz, skyLight )
@@ -240,6 +243,7 @@ binders.fog = function( material, c, target, inputs, group )
     end end
     -- c14 is unused by ray reconstruction; c4 cannot be set through $c4_x.
     camera:SetField( 4, 1, c.underwater and 0 or fogEndDistance() )
+    camera:SetField( 1, 4, c.jitterX ) camera:SetField( 2, 4, c.jitterY )
     material:SetMatrix( "$viewprojmat", camera )
 end
 binders.volumetric = function( material, c, target, inputs, group )
@@ -258,6 +262,7 @@ binders.volumetric = function( material, c, target, inputs, group )
     for row = 1, 4 do for column = 1, 4 do
         volume.camera:SetField( row, column, c.projection:GetField( row, column ) )
     end end
+    volume.camera:SetField( 1, 4, c.jitterX ) volume.camera:SetField( 2, 4, c.jitterY )
     local r, g, b = MC.RenderPBR.AtmosphereSun()
     volume.camera:SetField( 4, 1, r ) volume.camera:SetField( 4, 2, g ) volume.camera:SetField( 4, 3, b )
     volume.camera:SetField( 4, 4, c.underwater and waterStrength:GetFloat() or volumeStrength:GetFloat() )
@@ -304,6 +309,8 @@ end
 binders.exposure_reduce_4 = binders.exposure_reduce_16
 binders.exposure_composite = function() end
 binders.exposure_store = function() end
+binders.taa_composite = function() end
+binders.taa_store = function() end
 
 function P.ResetExposure()
     local group = P.Active()
@@ -339,6 +346,7 @@ end
 
 function P.Input( semantic, context )
     local c = context.scene
+    if semantic == "taa_history" then return context.taa.texture or render.GetScreenEffectTexture( 0 ) end
     if semantic == "exposure_history" then
         -- The first frame ignores this valid, non-aliased fallback sampler.
         return context.exposure.texture or render.GetScreenEffectTexture( 0 )
@@ -362,6 +370,7 @@ function P.Input( semantic, context )
 end
 
 function P.Bind( binding, material, context, target, outputs, inputs )
+    if binding == "taa_resolve" then taa.Bind( material, context ) return end
     if binding == "exposure_adapt" then
         local exposure = context.exposure
         for i, component in ipairs( { "x", "y", "z", "w" } ) do
@@ -383,6 +392,8 @@ function P.Run( stage, c, viewSerial )
         enabled.ssao = wantsAO()
         enabled.ssao_composite = enabled.ssao
     elseif stage == "world" then
+        enabled.taa_resolve = taa.Wanted( group ) and taa.IsView( render.GetViewSetup( true ) )
+        enabled.taa_composite, enabled.taa_store = enabled.taa_resolve, enabled.taa_resolve
         if c.atmosphereAllowed or c.underwater then
             enabled.fog = ( c.underwater and wantsWaterFog( group ) or not c.underwater and wantsFog( group ) ) and true or false
             if c.underwater and wantsWaterVolume( group ) or not c.underwater and wantsVolume( group ) then
@@ -403,25 +414,27 @@ function P.Run( stage, c, viewSerial )
     context.key = context.key .. "/screen/" .. viewSerial
     context.scene, context.group, context.enabled = c, group, enabled
     if enabled.exposure_adapt then prepareExposure( context ) end
+    if enabled.taa_resolve then taa.Prepare( context ) end
     local ok, err = processing.RunScreen( active.processing, stage, context, P )
-    if not ok then P.ResetExposure()
+    if not ok then P.ResetExposure() taa.Reset()
     elseif enabled.exposure_adapt then
         local nextFrame = context.exposure.next
         nextFrame.texture = active.processing.screenOutputs[group.exposure.output].texture
         group.exposure.previous = nextFrame
     end
+    if ok and enabled.taa_resolve then taa.Commit( context, active.processing ) end
     return ok, err
 end
 
 function P.PrepareWorld( c )
     c.atmosphereAllowed = atmosphere( c, P.Active() )
-    c.worldEffectsAllowed = c.atmosphereAllowed or c.underwater
+    c.worldEffectsAllowed = c.atmosphereAllowed or c.underwater or taa.Wanted( P.Active() )
     return c.worldEffectsAllowed
 end
 
 function P.WantsWorld()
     local group = P.Active()
-    return wantsFog( group ) or wantsVolume( group ) or wantsReflections( group ) or waterView( group )
+    return wantsFog( group ) or wantsVolume( group ) or wantsReflections( group ) or waterView( group ) or taa.Wanted( group )
 end
 function P.ResolveBlocks( c )
     local group = P.Active()
