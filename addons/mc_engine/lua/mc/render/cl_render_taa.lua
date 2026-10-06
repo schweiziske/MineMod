@@ -6,6 +6,7 @@ local T = MC.RenderTAA or { sequence = 0, stats = { resolved = 0, resets = 0 } }
 MC.RenderTAA = T
 local enabled = MC.RenderPackSettings.Handle( "taa" )
 local requireValue = MC.RenderL2Resources.Require
+local VIEWMODEL_DEPTH_MAX = 0.1
 local samples = {
     { 0, -1 / 6 }, { -1 / 4, 1 / 6 }, { 1 / 4, -7 / 18 }, { -3 / 8, -1 / 18 },
     { 1 / 8, 5 / 18 }, { -1 / 8, -5 / 18 }, { 3 / 8, 1 / 18 }, { -7 / 16, 7 / 18 }
@@ -68,12 +69,16 @@ function T.BeginViewModel()
         x = view.x, y = view.y, w = view.width, h = view.height,
         znear = view.znearviewmodel, zfar = view.zfarviewmodel,
         offcenter = { left = 0, right = view.width, top = 0, bottom = view.height } } )
+    -- cam.Start rebuilds the projection but does not retain Source's
+    -- foreground depth range for native viewmodels.
+    render.DepthRange( 0, VIEWMODEL_DEPTH_MAX )
     T.viewModelCamera = true
 end
 
 function T.EndViewModel()
     if not T.viewModelCamera then return end
     if render.GetRenderTarget() ~= nil or not T.IsView( render.GetViewSetup( true ) ) then return end
+    render.DepthRange( 0, 1 )
     cam.End3D()
     T.viewModelCamera = nil
 end
