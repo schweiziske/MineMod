@@ -127,6 +127,48 @@ local function number( value )
 	return type( value ) == "number" and value == value and value > -1e9 and value < 1e9
 end
 
+local function settingValue( spec, value )
+	if spec.type == "bool" then return type( value ) == "boolean" end
+	if not number( value ) then return false end
+	if spec.type == "choice" then
+		for _, choice in ipairs( spec.choices ) do
+			if choice.value == value then return true end
+		end
+		return false
+	end
+	return value >= spec.min and value <= spec.max and ( not spec.integer or value == math.floor( value ) )
+end
+
+local function presetValues( values, specs, allowUnknown )
+	map( values, localID, 128, "preset_values" )
+	for key, value in pairs( values ) do
+		local spec = specs[key]
+		if spec then
+			if not settingValue( spec, value ) then reject( "invalid_preset_value:" .. key ) end
+		elseif not allowUnknown then
+			reject( "unknown_preset_setting:" .. key )
+		elseif type( value ) ~= "boolean" and not number( value ) then
+			reject( "invalid_preset_value:" .. key )
+		end
+	end
+	return values
+end
+
+-- File presets are data only. Unknown scalar keys survive pack revisions.
+function Schema.Preset( input, specs )
+	local document, err = Schema.Copy( input )
+	if not document then return nil, err end
+	local ok, result = pcall( function()
+		fields( document, { version = true, name = true, values = true }, "preset" )
+		if document.version ~= 1 or type( document.name ) ~= "string" or #document.name == 0
+			or #document.name > 128 or document.name:find( "%c" ) then reject( "invalid_preset" ) end
+		presetValues( document.values, specs, true )
+		return document
+	end )
+	if not ok then return nil, result end
+	return result
+end
+
 -- Player-adjustable effect settings. Values are stored per pack under DATA,
 -- never as convars; array order is the display order.
 local function validateSettings( def )
@@ -147,7 +189,7 @@ local function validateSettings( def )
 		fields( spec, { key = true, group = true, type = true, default = true, min = true, max = true, integer = true,
 			choices = true, label = true, labelZH = true, help = true, helpZH = true }, "setting" )
 		if not localID( spec.key ) or keys[spec.key] then reject( "invalid_setting_key" ) end
-		keys[spec.key] = true
+		keys[spec.key] = spec
 		if spec.group ~= nil and not groups[spec.group] then reject( "unknown_setting_group:" .. spec.key ) end
 		if not text( spec.label, 128 ) or not text( spec.labelZH, 128 ) or not text( spec.help, 512 ) or not text( spec.helpZH, 512 ) then
 			reject( "invalid_setting_text:" .. spec.key )
@@ -177,6 +219,21 @@ local function validateSettings( def )
 		else
 			reject( "invalid_setting_type:" .. spec.key )
 		end
+	end
+	if def.presets == nil then def.presets = {} end
+	local presets = {}
+	array( def.presets, 32, "presets" )
+	for _, preset in ipairs( def.presets ) do
+		fields( preset, { id = true, label = true, labelZH = true, values = true }, "preset" )
+		if not localID( preset.id ) or presets[preset.id]
+			or not text( preset.label, 128 ) or not text( preset.labelZH, 128 ) then reject( "invalid_preset_id_or_label" ) end
+		presets[preset.id] = true
+		presetValues( preset.values, keys, false )
+	end
+	if #def.presets > 0 then
+		if not localID( def.defaultPreset ) or not presets[def.defaultPreset] then reject( "invalid_default_preset" ) end
+	elseif def.defaultPreset ~= nil then
+		reject( "invalid_default_preset" )
 	end
 end
 
@@ -474,7 +531,8 @@ end
 local function validate( def )
 	fields( def, { schema = true, name = true, build = true, abi = true,
 		layout = true, adapter = true, programs = true, resources = true, pipeline = true,
-		passes = true, implements = true, materialMaps = true, settings = true, settingGroups = true }, "definition" )
+		passes = true, implements = true, materialMaps = true, settings = true, settingGroups = true,
+		presets = true, defaultPreset = true }, "definition" )
 	if def.schema ~= Schema.VERSION then reject( "unsupported_descriptor_schema" ) end
 	if type( def.name ) ~= "string" or #def.name == 0 or #def.name > 128 then reject( "invalid_name" ) end
 	if not hash( def.build ) then reject( "invalid_build_fingerprint" ) end

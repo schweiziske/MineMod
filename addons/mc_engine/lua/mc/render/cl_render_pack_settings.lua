@@ -1,15 +1,102 @@
--- Per-pack effect settings. A pack declares them in definition.settings; the
--- player's changes persist in data/mc/shaderpacks/config/<pack>.json. They are
+-- Per-pack effect settings and sparse presets live in config/<pack>/. They are
 -- never convars, so switching or removing packs leaves no client.vdf entries.
 -- An undeclared key reads as off/0: the pack decides which effects exist.
 MC = MC or {}
 local Settings = MC.RenderPackSettings or { callbacks = {} }
 MC.RenderPackSettings = Settings
 local CONFIG_DIR = "mc/shaderpacks/config"
-local loadedFor, specs, order, values, stored = false, {}, {}, {}, {}
+local loadedFor, specs, order, values = false, {}, {}, {}
+local builtins, builtinOrder, defaultPreset = {}, {}, nil
+local selected, origin, storedValues = nil, nil, {}
+
+local function configDir( pack )
+	return CONFIG_DIR .. "/" .. pack:gsub( "[^%w_%-]", "_" )
+end
 
 local function configPath( pack )
-	return CONFIG_DIR .. "/" .. pack:gsub( "[^%w_%-]", "_" ) .. ".json"
+	return configDir( pack ) .. "/state.json"
+end
+
+local function validPresetName( name )
+	if #name == 0 or #name > 128 or name ~= string.Trim( name )
+		or name:find( '[%c/\\:*?"<>|]' ) or name:sub( -1 ) == "." then return false end
+	local stem = name:match( "^([^%.]+)" )
+	stem = stem and string.lower( string.Trim( stem ) )
+	return string.lower( name ) ~= "state" and stem ~= "con" and stem ~= "prn" and stem ~= "aux"
+		and stem ~= "nul" and not ( stem and ( stem:match( "^com[1-9]$" ) or stem:match( "^lpt[1-9]$" ) ) )
+end
+
+local function userReference( reference )
+	if type( reference ) ~= "string" then return end
+	local filename = reference:match( "^user:(.+)$" )
+	if not filename then return end
+	local name = filename:match( "^(.*)%.json$" )
+	if name then
+		if not validPresetName( name ) then return end
+	else
+		-- Old references omitted the prefix and extension of the hashed filename.
+		if #filename > 64 or not filename:match( "^[a-z0-9_%-]+$" ) then return end
+		filename = "preset_" .. filename .. ".json"
+	end
+	return "user:" .. string.lower( filename )
+end
+
+local function userPath( reference )
+	local canonical = userReference( reference )
+	if not canonical then return end
+	return configDir( Settings.pack ) .. "/" .. canonical:sub( 6 )
+end
+
+local function copy( source )
+	local result = {}
+	for key, value in pairs( source ) do result[key] = value end
+	return result
+end
+
+local function readJSON( path )
+	local bytes = file.Read( path, "DATA" )
+	if not bytes then return nil, "missing_file" end
+	if #bytes > 65536 then return nil, "file_too_large" end
+	local ok, document = pcall( util.JSONToTable, bytes, false, true )
+	if not ok or type( document ) ~= "table" then return nil, "invalid_json" end
+	return document
+end
+
+local function writeJSON( path, document )
+	local bytes = util.TableToJSON( document, true )
+	if not bytes then return false, "json_encode_failed" end
+	file.CreateDir( configDir( Settings.pack ) )
+	file.Write( path, bytes )
+	if file.Read( path, "DATA" ) ~= bytes then
+		MC.Fault( "render_pack_settings_write", "could not save %s", path )
+		return false, "write_failed"
+	end
+	return true
+end
+
+local function saveState( reference, overrides, source )
+	local state = { version = 1, preset = reference }
+	if reference == "custom" then state.values, state.origin = overrides, source end
+	return writeJSON( configPath( Settings.pack ), state )
+end
+
+local function resolve( overrides )
+	local result = {}
+	for key, spec in pairs( specs ) do
+		local value = overrides[key]
+		if value == nil then value = spec.default end
+		result[key] = value
+	end
+	return result
+end
+
+local function readPreset( reference )
+	if builtins[reference] then return builtins[reference] end
+	local path = userPath( reference )
+	if not path then return nil, "unknown_preset" end
+	local document, err = readJSON( path )
+	if not document then return nil, err end
+	return MC.RenderPackSchema.Preset( document, specs )
 end
 
 -- Returns a valid value for the spec, or nil. Strings come from commands.
@@ -20,7 +107,7 @@ local function coerce( spec, value )
 		return nil
 	end
 	local number = tonumber( value )
-	if not number or number ~= number then return nil end
+	if not number or number ~= number or number == math.huge or number == -math.huge then return nil end
 	if spec.type == "choice" then
 		for _, choice in ipairs( spec.choices ) do
 			if choice.value == number then return number end
@@ -40,12 +127,25 @@ local function notify( key )
 	end
 end
 
+local function publish( nextValues, reference, source, overrides )
+	local previous = values
+	values, selected, origin, storedValues = nextValues, reference, source, overrides or {}
+	-- All consumers see the final combination, including inside their callbacks.
+	for _, key in ipairs( order ) do
+		if previous[key] ~= values[key] then notify( key ) end
+	end
+	hook.Run( "MCRenderPackPresetChanged", Settings.pack, true )
+end
+
 local function refresh()
 	local runtime = MC.RenderPackRuntime
 	local active = runtime and runtime.active or nil
 	if active == loadedFor then return end
-	loadedFor, specs, order, values, stored = active, {}, {}, {}, {}
+	loadedFor, specs, order, values = active, {}, {}, {}
+	builtins, builtinOrder, defaultPreset = {}, {}, nil
+	selected, origin, storedValues = nil, nil, {}
 	Settings.pack, Settings.groups = nil, {}
+	local loadError
 	if active then
 		local owner = active.plan and active.plan.owners["pack/" .. active.pack]
 		local definition = owner and owner.definition
@@ -53,23 +153,47 @@ local function refresh()
 		for index, spec in ipairs( definition and definition.settings or {} ) do
 			specs[spec.key], order[index] = spec, spec.key
 		end
-		local path = configPath( active.pack )
-		local content = file.Read( path, "DATA" )
-		if content then
-			local decoded = util.JSONToTable( content )
-			if type( decoded ) == "table" then stored = decoded
-			else MC.Fault( "render_pack_settings_file", "%s is not a JSON object; defaults are used", path ) end
+		for _, preset in ipairs( definition and definition.presets or {} ) do
+			local reference = "builtin:" .. preset.id
+			builtins[reference], builtinOrder[#builtinOrder + 1] = preset, reference
 		end
-	end
-	for key, spec in pairs( specs ) do
-		local value = stored[key]
-		if value ~= nil then value = coerce( spec, value ) end
-		if value == nil then value = spec.default end
-		values[key] = value
+		if #builtinOrder == 0 then
+			builtins["builtin:default"] = { label = "Default", labelZH = "默认", values = {} }
+			builtinOrder[1], defaultPreset = "builtin:default", "builtin:default"
+		else
+			defaultPreset = "builtin:" .. definition.defaultPreset
+		end
+		selected, storedValues = defaultPreset, builtins[defaultPreset].values
+		values = resolve( storedValues )
+		local state, err = readJSON( configPath( active.pack ) )
+		if state then
+			if state.version ~= 1 or type( state.preset ) ~= "string" then
+				loadError = "invalid_state"
+			elseif state.preset == "custom" then
+				local document
+				document, err = MC.RenderPackSchema.Preset( { version = 1, name = "Custom", values = state.values }, specs )
+				if document then
+					storedValues, selected = document.values, "custom"
+					if builtins[state.origin] then origin = state.origin
+					else origin = userReference( state.origin ) end
+					values = resolve( storedValues )
+				else loadError = err end
+			else
+				local preset
+				preset, err = readPreset( state.preset )
+				if preset then
+					selected = userReference( state.preset ) or state.preset
+					storedValues, values = preset.values, resolve( preset.values )
+				else loadError = err end
+			end
+		elseif err ~= "missing_file" then loadError = err end
 	end
 	-- A pack switch changes every value at once; listeners re-read them.
 	for key in pairs( Settings.callbacks ) do notify( key ) end
 	hook.Run( "MCRenderPackSettingsChanged", Settings.pack )
+	if loadError then
+		MC.Fault( "render_pack_settings_file", "%s: %s; using default preset", configPath( Settings.pack ), loadError )
+	end
 end
 
 Settings.Refresh = refresh
@@ -90,9 +214,51 @@ function Settings.Keys()
 	return order
 end
 
-local function save()
-	file.CreateDir( CONFIG_DIR )
-	file.Write( configPath( Settings.pack ), util.TableToJSON( stored, true ) )
+function Settings.CurrentPreset()
+	refresh()
+	return selected, origin
+end
+
+function Settings.DefaultPreset()
+	refresh()
+	return defaultPreset
+end
+
+function Settings.Presets()
+	refresh()
+	local result = {}
+	if not Settings.pack then return result end
+	for _, reference in ipairs( builtinOrder ) do
+		local preset = builtins[reference]
+		result[#result + 1] = { value = reference, label = preset.label or preset.id, labelZH = preset.labelZH, builtin = true }
+	end
+	local names = file.Find( configDir( Settings.pack ) .. "/*.json", "DATA", "nameasc" )
+	for _, name in ipairs( names ) do
+		local reference = userReference( "user:" .. name )
+		if reference then
+			local preset, err = readPreset( reference )
+			if preset then
+				result[#result + 1] = { value = reference, label = preset.name, builtin = false }
+			else
+				MC.Fault( "render_pack_preset_file", "%s: %s", name, tostring( err ) )
+			end
+		end
+	end
+	return result
+end
+
+function Settings.ApplyPreset( reference )
+	refresh()
+	if not Settings.pack then return false, "no_active_pack" end
+	reference = userReference( reference ) or reference
+	local preset, err = readPreset( reference )
+	if not preset then return false, err end
+	local nextValues = resolve( preset.values )
+	local ok
+	ok, err = saveState( reference )
+	if not ok then return false, err end
+	publish( nextValues, reference, nil, preset.values )
+	return true
 end
 
 function Settings.Set( key, raw )
@@ -101,26 +267,85 @@ function Settings.Set( key, raw )
 	if not spec then return false, "unknown_setting" end
 	local value = coerce( spec, raw )
 	if value == nil then return false, "invalid_value" end
-	-- Unknown keys in the file are kept: another build of the pack may use them.
-	stored[key], values[key] = value, value
-	save()
+	if values[key] == value then return true, value end
+	local overrides = copy( storedValues )
+	for name, current in pairs( values ) do overrides[name] = current end
+	overrides[key] = value
+	local source = origin
+	if selected ~= "custom" then source = selected end
+	local document, err = MC.RenderPackSchema.Preset( { version = 1, name = "Custom", values = overrides }, specs )
+	if not document then return false, err end
+	local ok
+	ok, err = saveState( "custom", overrides, source )
+	if not ok then return false, err end
+	storedValues, selected, origin, values[key] = overrides, "custom", source, value
 	notify( key )
+	hook.Run( "MCRenderPackSettingChanged", Settings.pack, key, value )
+	hook.Run( "MCRenderPackPresetChanged", Settings.pack, false )
 	return true, value
 end
 
 function Settings.Reset( key )
 	refresh()
+	if key ~= nil then return false, "single_setting_reset_removed" end
 	if not Settings.pack then return false, "no_active_pack" end
-	for name, spec in pairs( specs ) do
-		if key == nil or name == key then
-			stored[name], values[name] = nil, spec.default
+	return Settings.ApplyPreset( defaultPreset )
+end
+
+function Settings.SavePreset( name, overwrite )
+	refresh()
+	if not Settings.pack then return false, "no_active_pack" end
+	if type( name ) ~= "string" then return false, "invalid_name" end
+	name = string.Trim( name )
+	if not validPresetName( name ) then return false, "invalid_name" end
+	local reference = "user:" .. string.lower( name ) .. ".json"
+	local previous
+	for _, entry in ipairs( Settings.Presets() ) do
+		if not entry.builtin and entry.value ~= reference and string.lower( entry.label ) == string.lower( name ) then
+			previous = entry.value
+			break
 		end
 	end
-	if key ~= nil and not specs[key] then return false, "unknown_setting" end
-	save()
-	for name in pairs( specs ) do
-		if key == nil or name == key then notify( name ) end
+	local path = userPath( reference )
+	if ( previous or file.Exists( path, "DATA" ) ) and overwrite ~= true then return false, "preset_exists" end
+	-- A saved preset need only override declared defaults, regardless of type.
+	local overrides = {}
+	for key, value in pairs( storedValues ) do
+		if not specs[key] then overrides[key] = value end
 	end
+	for key, value in pairs( values ) do
+		if value ~= specs[key].default then overrides[key] = value end
+	end
+	local document, err = MC.RenderPackSchema.Preset( { version = 1, name = name, values = overrides }, specs )
+	if not document then return false, err end
+	local ok
+	ok, err = writeJSON( path, document )
+	if not ok then return false, err end
+	ok, err = Settings.ApplyPreset( reference )
+	if not ok then return false, err end
+	-- Remove the old filename only after both the new file and selection are saved.
+	if previous and previous ~= reference then return Settings.DeletePreset( previous, true ) end
+	return true
+end
+
+function Settings.DeletePreset( reference, confirmed )
+	refresh()
+	if not Settings.pack then return false, "no_active_pack" end
+	reference = userReference( reference ) or reference
+	local path = userPath( reference )
+	if not path then return false, "read_only_preset" end
+	if confirmed ~= true then return false, "confirmation_required" end
+	if not file.Exists( path, "DATA" ) then return false, "unknown_preset" end
+	if selected == reference then
+		local ok, err = Settings.Reset()
+		if not ok then return false, err end
+	end
+	file.Delete( path )
+	if file.Exists( path, "DATA" ) then
+		MC.Fault( "render_pack_preset_delete", "could not delete %s", path )
+		return false, "delete_failed"
+	end
+	hook.Run( "MCRenderPackPresetChanged", Settings.pack, false )
 	return true
 end
 
@@ -174,6 +399,10 @@ function Settings.ConfigItems()
 			if not ok then MC.Fault( "render_pack_select", "%s: %s", tostring( value ), tostring( err ) ) end
 		end,
 	} }
+	if Settings.pack then
+		items[#items + 1] = { name = "mc_render_pack_preset", kind = "preset",
+			label = "Preset", labelZH = "预设", get = Settings.CurrentPreset }
+	end
 	local groupNames, counts, previous = {}, {}, nil
 	for _, group in ipairs( Settings.groups ) do groupNames[group.id] = group end
 	for _, key in ipairs( order ) do
@@ -200,7 +429,7 @@ function Settings.ConfigItems()
 			label = spec.label or key, labelZH = spec.labelZH,
 			help = ( spec.help or "" ) .. range, helpZH = ( spec.helpZH or spec.help or "" ) .. range,
 			get = function() return values[key] end,
-			set = function( value ) Settings.Set( key, value ) end }
+			set = function( value ) return Settings.Set( key, value ) end }
 		if spec.type == "choice" then
 			item.choices = {}
 			for index, choice in ipairs( spec.choices ) do
@@ -238,6 +467,7 @@ concommand.Add( "mc_render_pack_settings", function()
 	refresh()
 	if not Settings.pack then print( "[MC render pack] no active pack" ) return end
 	print( "[MC render pack] " .. Settings.pack .. " settings (" .. configPath( Settings.pack ) .. ")" )
+	print( "  preset: " .. tostring( selected ) )
 	for _, key in ipairs( order ) do print( "  " .. describe( key ) ) end
 end )
 
@@ -253,5 +483,19 @@ end, completeKeys )
 
 concommand.Add( "mc_render_pack_reset", function( _, _, args )
 	local ok, err = Settings.Reset( args[1] )
-	print( ok and "[MC render pack] reset " .. ( args[1] or "all settings" ) or "[MC render pack] " .. tostring( err ) )
-end, completeKeys )
+	print( ok and "[MC render pack] restored " .. defaultPreset or "[MC render pack] " .. tostring( err ) )
+end )
+
+concommand.Add( "mc_render_pack_preset", function( _, _, args )
+	local action, argument, ok, err = args[1], args[2]
+	if action == "apply" then ok, err = Settings.ApplyPreset( argument )
+	elseif action == "save" then ok, err = Settings.SavePreset( argument, args[3] == "confirm" )
+	elseif action == "delete" then ok, err = Settings.DeletePreset( argument, args[3] == "confirm" )
+	elseif action == nil or action == "list" then
+		local current = Settings.CurrentPreset()
+		print( "[MC render pack] preset: " .. tostring( current ) )
+		for _, preset in ipairs( Settings.Presets() ) do print( "  " .. preset.value .. "  " .. preset.label ) end
+		return
+	else print( 'usage: mc_render_pack_preset list | apply <id> | save "<name>" [confirm] | delete <id> confirm' ) return end
+	print( ok and "[MC render pack] preset saved/applied" or "[MC render pack] " .. tostring( err ) )
+end )
