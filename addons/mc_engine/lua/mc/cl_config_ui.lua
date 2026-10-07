@@ -130,10 +130,15 @@ end
 local function applyConfigValue( scope, item, value )
 	value = tostring( value or "" )
 	if item.set then
-		item.set( value )
+		local ok, err = item.set( value )
+		if ok == false then
+			MC.RefreshConfigControlValue( item.name, itemValue( scope, item ) )
+			Derma_Message( tostring( err ), configText( "Setting failed", "设置失败" ), "OK" )
+			return false
+		end
 		-- Show the stored value, e.g. after clamping to the setting's range.
 		MC.RefreshConfigControlValue( item.name, itemValue( scope, item ) )
-		return
+		return true
 	end
 	if scope == "client" then
 		RunConsoleCommand( item.name, value )
@@ -235,9 +240,9 @@ local function registerControl( name, control )
 	table.insert( MC.ConfigControlRows[name], control )
 end
 
-function MC.RefreshConfigControlValue( name, value )
+function MC.RefreshConfigControlValue( name, value, force )
 	for _, control in ipairs( MC.ConfigControlRows and MC.ConfigControlRows[name] or {} ) do
-		if IsValid( control ) and control.MCSetValue then control:MCSetValue( value ) end
+		if IsValid( control ) and control.MCSetValue then control:MCSetValue( value, force ) end
 	end
 end
 
@@ -403,7 +408,9 @@ local function createValueControl( parent, scope, item, editable )
 	local function markSaved()
 		if not editable then return end
 		local value = entry:GetValue()
-		applyConfigValue( scope, item, value )
+		if applyConfigValue( scope, item, value ) == false then return end
+		if item.set then value = itemValue( scope, item ) end
+		entry:SetText( value )
 		entry.MCOriginalValue = value
 		apply.MCDirty = false
 		apply.MCSavedUntil = CurTime() + 1.1
@@ -415,14 +422,124 @@ local function createValueControl( parent, scope, item, editable )
 	entry.OnEnter = markSaved
 	apply.DoClick = markSaved
 
-	holder.MCSetValue = function( _, value )
+	holder.MCSetValue = function( _, value, force )
 		value = tostring( value or "" )
 		entry.MCOriginalValue = value
-		if not entry:HasFocus() and not apply.MCDirty then
+		if force or not entry:HasFocus() and not apply.MCDirty then
 			entry:SetText( value )
+			apply.MCDirty, apply.MCSavedUntil = false, nil
 		end
 	end
 	registerControl( item.name, holder )
+	return holder
+end
+
+local function createPresetControl( parent )
+	local settings = MC.RenderPackSettings
+	local pack = settings.pack
+	local holder = vgui.Create( "DPanel", parent )
+	holder:Dock( FILL )
+	holder:DockMargin( 0, 8, 12, 8 )
+	holder.Paint = function() end
+	local tools = vgui.Create( "DPanel", holder )
+	tools:Dock( BOTTOM )
+	tools:SetTall( 32 )
+	tools:DockMargin( 0, 6, 0, 0 )
+	tools.Paint = function() end
+	local item = { name = "mc_render_pack_preset_choice", choices = {},
+		get = settings.CurrentPreset, set = settings.ApplyPreset }
+	local choice = createChoiceControl( holder, "client", item, true )
+	choice:DockMargin( 0, 0, 0, 0 )
+	local combo = choice:GetChildren()[1]
+	local sourceName, sourceReference
+	local function report( ok, err )
+		if ok then return end
+		Derma_Message( tostring( err ), configText( "Preset failed", "预设操作失败" ), "OK" )
+	end
+	local function samePack()
+		settings.Refresh()
+		if settings.pack == pack then return true end
+		report( false, configText( "The shader pack has changed.", "光影包已切换。" ) )
+		return false
+	end
+	local function confirm( title, name, action )
+		Derma_Query( name, title, configText( "Confirm", "确认" ), function()
+			if samePack() then action() end
+		end, configText( "Cancel", "取消" ) )
+	end
+	local function saveAs()
+		Derma_StringRequest( configText( "Save preset as", "预设另存为" ), configText( "Name", "名称" ), "",
+			function( name )
+				if not samePack() then return end
+				local ok, err = settings.SavePreset( name )
+				if not ok and err == "preset_exists" then
+					confirm( configText( "Overwrite preset?", "覆盖预设？" ), name,
+						function()
+							local saved, reason = settings.SavePreset( name, true )
+							report( saved, reason )
+						end )
+				else report( ok, err ) end
+			end, nil, configText( "Save", "保存" ), configText( "Cancel", "取消" ) )
+	end
+	local function button( icon, tooltip, action )
+		local control = vgui.Create( "DImageButton", tools )
+		control:Dock( LEFT )
+		control:DockMargin( 0, 0, 6, 0 )
+		control:SetWide( 32 )
+		control:SetImage( "icon16/" .. icon .. ".png" )
+		control:SetStretchToFit( false )
+		control:SetTooltip( tooltip )
+		control:SetName( tooltip )
+		control.Paint = function( s, w, h )
+			surface.SetDrawColor( s:IsHovered() and UI.rowHover or UI.field )
+			surface.DrawRect( 0, 0, w, h )
+			surface.SetDrawColor( UI.line )
+			surface.DrawOutlinedRect( 0, 0, w, h, 1 )
+		end
+		control.DoClick = function() if samePack() then action() end end
+		return control
+	end
+	button( "page_copy", configText( "Save preset as", "预设另存为" ), saveAs )
+	local overwrite = button( "disk", configText( "Overwrite user preset", "覆盖用户预设" ), function()
+		local name = sourceName
+		confirm( configText( "Overwrite preset?", "覆盖预设？" ), name,
+			function()
+				local ok, err = settings.SavePreset( name, true )
+				report( ok, err )
+			end )
+	end )
+	local delete = button( "delete", configText( "Delete user preset", "删除用户预设" ), function()
+		local reference = sourceReference
+		confirm( configText( "Delete preset?", "删除预设？" ), sourceName,
+			function()
+				local ok, err = settings.DeletePreset( reference, true )
+				report( ok, err )
+			end )
+	end )
+	button( "arrow_undo", configText( "Restore default preset", "恢复默认预设" ),
+		function()
+			local ok, err = settings.Reset()
+			report( ok, err )
+		end )
+	holder.MCSetValue = function()
+		local current, origin = settings.CurrentPreset()
+		local source = current == "custom" and origin or current
+		item.choices = settings.Presets()
+		combo:Clear()
+		sourceName, sourceReference = nil, nil
+		for _, preset in ipairs( item.choices ) do
+			combo:AddChoice( choiceLabel( preset ), preset.value )
+			if preset.value == source and not preset.builtin then
+				sourceName, sourceReference = preset.label, preset.value
+			end
+		end
+		choice:MCSetValue( current )
+		if current == "custom" then combo:SetValue( configText( "Custom", "自定义" ) ) end
+		overwrite:SetEnabled( sourceName ~= nil )
+		delete:SetEnabled( sourceName ~= nil )
+	end
+	holder:MCSetValue()
+	registerControl( "mc_render_pack_preset", holder )
 	return holder
 end
 
@@ -451,6 +568,8 @@ local function createConfigRow( parent, scope, item, rowIndex )
 		open:DockMargin( 0, 27, 12, 27 )
 		styleFlatButton( open, { label = configText( "Open manager", "打开管理器" ) } )
 		open.DoClick = function() MC.OpenTexturePackManager() end
+	elseif item.kind == "preset" then
+		createPresetControl( controls )
 	elseif item.kind == "bool" then
 		createBoolControl( controls, scope, item, editable )
 	elseif item.kind == "choice" or item.choices then
@@ -677,6 +796,51 @@ function MC.OpenConfigMenu()
 	contentCount:SetTextColor( UI.textDim )
 	contentCount:SetContentAlignment( 6 )
 
+	local restoreButton
+	local function visibilityButton( parent, tooltip )
+		local button = vgui.Create( "DImageButton", parent )
+		button:SetSize( 32, 32 )
+		button:SetImage( "icon16/eye.png" )
+		button:SetStretchToFit( false )
+		button:SetTooltip( tooltip )
+		button:SetName( tooltip )
+		button.Paint = function( s, w, h )
+			surface.SetDrawColor( s:IsHovered() and UI.rowHover or UI.field )
+			surface.DrawRect( 0, 0, w, h )
+			surface.SetDrawColor( UI.line )
+			surface.DrawOutlinedRect( 0, 0, w, h, 1 )
+		end
+		return button
+	end
+
+	local hideButton = visibilityButton( contentHeader, configText( "Hide settings UI", "隐藏设置界面" ) )
+	hideButton:Dock( RIGHT )
+	hideButton:DockMargin( 0, 25, 8, 25 )
+	hideButton:SetVisible( false )
+	hideButton.DoClick = function()
+		if IsValid( restoreButton ) then return end
+		local x, y = hideButton:LocalToScreen( 0, 0 )
+		restoreButton = visibilityButton( nil, configText( "Show settings UI", "显示设置界面" ) )
+		restoreButton:SetPos( math.Clamp( x, 0, ScrW() - 32 ), math.Clamp( y, 0, ScrH() - 32 ) )
+		restoreButton.DoClick = function()
+			restoreButton:Remove()
+			restoreButton = nil
+			fr:SetVisible( true )
+			fr:MakePopup()
+			fr:MoveToFront()
+		end
+		fr:SetVisible( false )
+		restoreButton:MakePopup()
+		restoreButton:SetKeyboardInputEnabled( false )
+	end
+
+	contentHeader.PerformLayout = function( _, w )
+		local reserved = contentCount:GetWide() + 18
+		if hideButton:IsVisible() then reserved = reserved + 40 end
+		contentTitle:SetWide( math.max( 0, w - reserved - 28 ) )
+		contentDescription:SetWide( math.max( 0, w - reserved - 29 ) )
+	end
+
 	local settingsScroll = vgui.Create( "DScrollPanel", contentArea )
 	settingsScroll:Dock( FILL )
 	styleScrollPanel( settingsScroll )
@@ -747,6 +911,8 @@ function MC.OpenConfigMenu()
 		local rowIndex = 0
 		local total = 0
 		local query = string.Trim( searchQuery or "" )
+		hideButton:SetVisible( activeScope == "client" and activeCategory == "shader_pack" and query == "" )
+		contentHeader:InvalidateLayout()
 		if query ~= "" then
 			for _, entryCategory in ipairs( categoriesForScope() ) do
 				local matches = {}
@@ -915,6 +1081,7 @@ function MC.OpenConfigMenu()
 		if IsValid( fr ) then rebuildCategories() end
 	end
 	fr.OnRemove = function()
+		if IsValid( restoreButton ) then restoreButton:Remove() end
 		if MC.ConfigFrame == fr then MC.ConfigFrame = nil end
 		MC.ConfigRefreshVisibility = nil
 	end
@@ -952,6 +1119,19 @@ hook.Add( "MCRenderPackSettingsChanged", "mc_config_ui", function()
 	timer.Simple( 0, function()
 		if IsValid( MC.ConfigFrame ) and MC.ConfigRefreshVisibility then MC.ConfigRefreshVisibility() end
 	end )
+end )
+
+hook.Add( "MCRenderPackSettingChanged", "mc_config_ui", function( _, key, value )
+	MC.RefreshConfigControlValue( "mc_render_pack_set " .. key, value )
+end )
+
+hook.Add( "MCRenderPackPresetChanged", "mc_config_ui", function( _, bulk )
+	if bulk then
+		for _, key in ipairs( MC.RenderPackSettings.Keys() ) do
+			MC.RefreshConfigControlValue( "mc_render_pack_set " .. key, MC.RenderPackSettings.Get( key ), true )
+		end
+	end
+	MC.RefreshConfigControlValue( "mc_render_pack_preset" )
 end )
 
 concommand.Add( "mc_config", function()
