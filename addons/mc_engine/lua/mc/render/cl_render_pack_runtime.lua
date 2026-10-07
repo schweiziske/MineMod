@@ -423,6 +423,7 @@ local function syncSections( c, force )
 		or ( c.bundle.texturePackRevision or 0 ) ~= ( MC.TexturePackRevision or 0 )
 	if force or not c.postProcessBound then
 		local definition = c.plan.owners["pack/" .. c.pack].definition
+		if definition.programs.shadow_no_sky and c.processing then MC.RenderPBR.RegisterShadowPipeline( c.processing ) end
 		if definition.programs.post_ssao then c.postProcess = MC.RenderPBRPost.Register( definition, size, c.processing ) end
 		c.postProcessBound = true
 	end
@@ -639,7 +640,8 @@ local function refreshBlockEntityMaterials( c, sources, binding )
 	local pass = def.passes.terrain_cutout
 	local node = { key = owner .. "/block_entity", owner = owner, stage = "world_cutout",
 		adapter = def.adapter, program = def.programs.block_entity, materialMaps = def.materialMaps,
-		dynamicProgram = def.adapter == "mc:pbr_quad_v4" and def.programs.dynamic_block_entity or nil }
+		ordinaryProgram = def.programs.block_entity_no_sky,
+		dynamicProgram = ( def.adapter == "mc:pbr_quad_v4" or def.adapter == "mc:pbr_quad_v5" ) and def.programs.dynamic_block_entity or nil }
 	for _, semantic in ipairs( { "normal", "orm", "environment", "dfg" } ) do
 		node[semantic] = c.bundle.textures[owner .. "/" .. pass.inputs[semantic]]
 	end
@@ -686,7 +688,7 @@ function L.PrepareSpriteLightMaterial( source, translucent )
 	local c = L.active
 	if not c or not sameWorld( c ) then return nil end
 	local def = c.plan.owners["pack/" .. c.pack].definition
-	if def.adapter ~= "mc:pbr_quad_v4" and def.adapter ~= "mc:vanilla_quad_v2" then return nil end
+	if def.adapter ~= "mc:pbr_quad_v4" and def.adapter ~= "mc:pbr_quad_v5" and def.adapter ~= "mc:vanilla_quad_v2" then return nil end
 	if not def.programs.dynamic_sprite then return nil end
 	local ok, material = pcall( MC.RenderDynamicLights.RegisterMaterial, source, def.programs.dynamic_sprite,
 		P.shared, R.SourceTexture( source ), translucent and "world_translucent" or "world_cutout", c.blockSize, nil, true )

@@ -40,14 +40,51 @@ function P.Validate( plan )
 		result.files[path] = hash
 	end
 	local newBuilds = {}
+	local shadowLayout
 	for _, ownerKey in ipairs( sortedKeys( plan.owners ) ) do
 		local owner = plan.owners[ownerKey]
 		local def = owner.definition
 		local sky = def.adapter == "mc:sky_quad_v1"
-		local moving = def.adapter == "mc:pbr_quad_v4" or def.adapter == "mc:vanilla_quad_v2"
-		local independentAO = def.adapter == "mc:pbr_quad_v3" or def.adapter == "mc:pbr_quad_v4"
+		local moving = def.adapter == "mc:pbr_quad_v4" or def.adapter == "mc:pbr_quad_v5" or def.adapter == "mc:vanilla_quad_v2"
+		local independentAO = def.adapter == "mc:pbr_quad_v3" or def.adapter == "mc:pbr_quad_v4" or def.adapter == "mc:pbr_quad_v5"
 		local ibl = independentAO or def.adapter == "mc:pbr_quad_v2"
 		local pbr = ibl or def.adapter == "mc:pbr_quad_v1"
+		local ordinaryShadows = false
+		for name, program in pairs( def.programs ) do
+			if name:sub( -7 ) == "_no_sky" then
+				local base = def.programs[name:sub( 1, -8 )]
+				requireValue( def.adapter == "mc:pbr_quad_v5" and base and program.vertex == base.vertex
+					and program.vertexHash == base.vertexHash, "render_sky_shadow_variant",
+					ownerKey .. ": ordinary shadow companions require PBR v5 and the same vertex program" )
+				ordinaryShadows = true
+			end
+		end
+		if ordinaryShadows then
+			requireValue( MC.RenderPBR and MC.RenderPBR.SHADOW_VARIANT_VERSION == 1
+				and MC.RenderPBRShadows and MC.RenderPBRShadows.ORDINARY_SHADOW_VERSION == 1,
+				"render_sky_shadow_variant", ownerKey .. ": ordinary shadow companions require the matching engine" )
+			for _, name in ipairs( { "shadow", "opaque", "cutout", "translucent", "block_entity", "water",
+				"water_caustics", "post_volumetric" } ) do
+				requireValue( not def.programs[name] or def.programs[name .. "_no_sky"],
+					"render_sky_shadow_variant", ownerKey .. ": missing " .. name .. "_no_sky" )
+			end
+			for _, pass in pairs( def.passes ) do
+				requireValue( def.programs[pass.program .. "_no_sky"], "render_sky_shadow_variant",
+					ownerKey .. ": missing ordinary shadow companion for " .. pass.program )
+			end
+		end
+		if pbr then
+			local layout = ordinaryShadows and "switchable" or ( def.adapter == "mc:pbr_quad_v5" and "four_rows" or "two_rows" )
+			requireValue( not shadowLayout or shadowLayout == layout, "render_sky_shadow_layout",
+				ownerKey .. ": PBR owners sharing one shadow atlas must support the same row layouts" )
+			shadowLayout = layout
+		end
+		if def.adapter == "mc:pbr_quad_v5" then
+			requireValue( MC.RenderPBRShadows and MC.RenderPBRShadows.SKY_BOUNDARY_VERSION == 1 and def.programs.shadow,
+				"render_sky_shadow_adapter", ownerKey .. ": PBR v5 requires the sky-boundary shadow renderer; update the engine and restart" )
+			requireValue( def.programs.ssr_copy and MC.RenderPackProcessing and MC.RenderPackProcessing.CopyQuad,
+				"render_sky_shadow_copy", ownerKey .. ": PBR v5 requires the linear ssr_copy program and clip-space copy quad" )
+		end
 		requireValue( def.abi == 1 and def.layout == "mc:quad_corners_v1"
 			and ( sky or pbr or def.adapter == "mc:vanilla_quad_draft" or def.adapter == "mc:vanilla_quad_v2" ),
 			"render_pack_adapter", ownerKey .. ": unsupported quad-corners-v1 adapter" )
@@ -178,7 +215,7 @@ function P.Validate( plan )
 	for _, key in ipairs( sortedKeys( plan.requests ) ) do
 		local request = plan.requests[key]
 		local def = plan.owners[request.owner].definition
-		local moving = def.adapter == "mc:pbr_quad_v4" or def.adapter == "mc:vanilla_quad_v2"
+		local moving = def.adapter == "mc:pbr_quad_v4" or def.adapter == "mc:pbr_quad_v5" or def.adapter == "mc:vanilla_quad_v2"
 		local byStage = {}
 		for _, stage in ipairs( STAGES ) do byStage[stage] = {} end
 		result.requests[key] = byStage
@@ -188,9 +225,13 @@ function P.Validate( plan )
 			if not node then
 				node = { key = nodeKey, stage = pass.stage, program = def.programs[pass.program], adapter = def.adapter,
 					dynamicProgram = moving and def.programs["dynamic_" .. pass.program] or nil,
+					ordinaryProgram = def.adapter == "mc:pbr_quad_v5" and def.programs[pass.program .. "_no_sky"] or nil,
+					shadowSkyBoundary = def.adapter == "mc:pbr_quad_v5",
+					shadowCopyProgram = def.adapter == "mc:pbr_quad_v5" and def.programs.ssr_copy or nil,
+					shadowOrdinaryProgram = def.adapter == "mc:pbr_quad_v5" and def.programs.shadow_no_sky or nil,
 					owner = request.owner, materialMaps = def.materialMaps,
 					shadowProgram = ( def.adapter == "mc:pbr_quad_v1" or def.adapter == "mc:pbr_quad_v2"
-						or def.adapter == "mc:pbr_quad_v3" or def.adapter == "mc:pbr_quad_v4" ) and def.programs.shadow or nil }
+						or def.adapter == "mc:pbr_quad_v3" or def.adapter == "mc:pbr_quad_v4" or def.adapter == "mc:pbr_quad_v5" ) and def.programs.shadow or nil }
 				if pass.inputs.albedo then
 					node.albedo = result.textures[request.owner .. "/" .. pass.inputs.albedo]
 				end
@@ -300,7 +341,7 @@ local function sourceKey( texture )
 end
 
 local function mappingFor( bundle, node, source )
-	if node.adapter == "mc:pbr_quad_v4" and MC.TexturePackPBR then
+	if ( node.adapter == "mc:pbr_quad_v4" or node.adapter == "mc:pbr_quad_v5" ) and MC.TexturePackPBR then
 		local maps = MC.TexturePackPBR( source )
 		if maps then return maps end
 	end
@@ -349,7 +390,7 @@ end
 function P.Material( bundle, node, sourceMaterial, blockSize )
 	local source = R.SourceTexture( sourceMaterial )
 	bundle.sources[sourceMaterial] = source
-	local ibl = node.adapter == "mc:pbr_quad_v2" or node.adapter == "mc:pbr_quad_v3" or node.adapter == "mc:pbr_quad_v4"
+	local ibl = node.adapter == "mc:pbr_quad_v2" or node.adapter == "mc:pbr_quad_v3" or node.adapter == "mc:pbr_quad_v4" or node.adapter == "mc:pbr_quad_v5"
 	local pbr = ibl or node.adapter == "mc:pbr_quad_v1"
 	local colorSpace = pbr and "srgb" or "linear"
 	if node.albedo then source, colorSpace = textureFor( node.albedo ), node.albedo.colorSpace end
@@ -378,6 +419,7 @@ function P.Material( bundle, node, sourceMaterial, blockSize )
 	local function identity(texture) return resources and resources.Identity(texture) or texture:GetName() end
 	local generation = resources and resources.textures[source:GetName()]
 	local signature = Schema.Canonical( { vertex = node.program.vertex, pixel = node.program.pixel,
+		ordinary = node.ordinaryProgram,
 		stage = node.stage, source = identity(source), colorSpace = colorSpace, blockSize = blockSize,
 		adapter = node.adapter, normal = normal and ( identity(normal) .. "/" .. ( normalResource and normalResource.sha256 or "runtime" ) ),
 		orm = orm and ( identity(orm) .. "/" .. ( ormResource and ormResource.sha256 or "runtime" ) ),
@@ -413,6 +455,7 @@ function P.Material( bundle, node, sourceMaterial, blockSize )
 	else
 		material = R.BoundMaterial( P.shared, slot, source, node.stage, blockSize, node.program, colorSpace, maps )
 	end
+	if node.ordinaryProgram then MC.RenderPBR.RegisterShadowVariant( material, node.program, node.ordinaryProgram ) end
 	if node.dynamicProgram then
 		MC.RenderDynamicLights.RegisterMaterial( material, node.dynamicProgram, P.shared, source, node.stage, blockSize, maps )
 	end
@@ -432,6 +475,7 @@ function P.WaterMaterial( bundle, owner, blockSize )
 		and environment:Width() == 512 and environment:Height() == 256 and dfg:Width() == 128 and dfg:Height() == 128,
 		"render_water_texture_size", "water requires 256x256 normal/foam, 512x256 IBL and 128x128 DFG textures" )
 	local signature = Schema.Canonical( { water = def.programs.water, normal = def.resources.water_normal.sha256,
+		ordinary = def.programs.water_no_sky,
 		waterShadow = def.programs.water_shadow,
 		environment = def.resources[inputs.environment].sha256, dfg = def.resources[inputs.dfg].sha256, blockSize = blockSize } )
 	local cached = P.materials[signature]
@@ -443,7 +487,8 @@ function P.WaterMaterial( bundle, owner, blockSize )
 	local maps = { normal = normal, orm = orm, environment = environment, dfg = dfg, water = true }
 	local material = R.BoundMaterial( P.shared, tostring( P.materialCount + 1 ), normal,
 		"world_translucent", blockSize, def.programs.water, "srgb", maps )
-	if def.adapter == "mc:pbr_quad_v4" and def.programs.dynamic_water then
+	if def.programs.water_no_sky then MC.RenderPBR.RegisterShadowVariant( material, def.programs.water, def.programs.water_no_sky ) end
+	if ( def.adapter == "mc:pbr_quad_v4" or def.adapter == "mc:pbr_quad_v5" ) and def.programs.dynamic_water then
 		MC.RenderDynamicLights.RegisterMaterial( material, def.programs.dynamic_water, P.shared, normal,
 			"world_translucent", blockSize, maps )
 	end

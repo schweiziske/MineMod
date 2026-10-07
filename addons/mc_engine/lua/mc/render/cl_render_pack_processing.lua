@@ -5,6 +5,7 @@ MC.RenderPackProcessing = P
 P.VERSION = 2
 local requireValue = MC.RenderL2Resources.Require
 local canonical = MC.RenderPackSchema.Canonical
+local maxTargetBytes = 512 * 1048576
 local unitTone = Vector( 1, 1, 1 )
 local components = { "x", "y", "z", "w" }
 local textureSlots = { s0 = "$basetexture", s1 = "$texture1", s2 = "$texture2", s3 = "$texture3",
@@ -54,8 +55,8 @@ local function targetFor( instance, name, context, shadow )
 	local entry = bank.targets[key]
 	if not entry then
 		local bytes = w * h * ( spec.format == "rgba8" and 4 or 8 )
-		requireValue( P.targetCount < 128 and P.targetBytes + bytes <= 128 * 1048576,
-			"render_processing_target_budget", "processing reached 128 targets / 128 MiB; restart to release engine RTs" )
+		requireValue( P.targetCount < 128 and P.targetBytes + bytes <= maxTargetBytes,
+			"render_processing_target_budget", "processing reached 128 targets / 512 MiB; restart to release engine RTs" )
 		-- Charge before allocation: Source RTs cannot be freed, even after failure.
 		P.targetCount, P.targetBytes = P.targetCount + 1, P.targetBytes + bytes
 		local texture = GetRenderTargetEx( "mc_processing1_" .. P.targetCount .. "_" .. name, w, h,
@@ -376,8 +377,8 @@ function P.SceneTarget( instance, name, width, height, format, point, depth )
 	if entry then return entry end
 	local bytes = width * height * ( ( format == "rgba16f" and 8 or 4 ) + ( depth and 4 or 0 ) )
 	requireValue( width > 0 and height > 0 and width <= 4096 and height <= 4096
-		and P.targetCount < 128 and P.targetBytes + bytes <= 128 * 1048576,
-		"render_processing_target_budget", "scene processing reached target budget; restart the client" )
+		and P.targetCount < 128 and P.targetBytes + bytes <= maxTargetBytes,
+		"render_processing_target_budget", "scene processing reached 128 targets / 512 MiB; restart the client" )
 	P.targetCount, P.targetBytes = P.targetCount + 1, P.targetBytes + bytes
 	local texture = GetRenderTargetEx( "mc_processing_scene_" .. P.targetCount .. "_" .. name, width, height, RT_SIZE_LITERAL,
 		depth and MATERIAL_RT_DEPTH_SEPARATE or MATERIAL_RT_DEPTH_NONE, bit.bor( point and 1 or 0, 4, 8, 256, 512 ),
