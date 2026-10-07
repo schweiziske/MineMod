@@ -15,6 +15,15 @@ local KindsByName = {
 	["minecraft:lava"] = "lava",
 }
 
+-- These LiquidBlockContainer implementations always return WATER.getSource(false)
+-- without a waterlogged property. Keep their plant model and attach a water layer.
+local InherentWaterByName = {
+	["minecraft:seagrass"] = true,
+	["minecraft:tall_seagrass"] = true,
+	["minecraft:kelp"] = true,
+	["minecraft:kelp_plant"] = true,
+}
+
 local KindByState = {}
 local OwnHeightByState = {}
 local LevelByState = {}
@@ -57,7 +66,8 @@ local function decodeState( stateId )
 	local id = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or nil
 	local kind = id and liquidKindForBlock( id ) or nil
 	local schema = MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( stateId ) or nil
-	local waterlogged = not kind and statePropertyValue( schema, stateId, "waterlogged" ) == true
+	local waterlogged = not kind and ( schema and InherentWaterByName[schema.name] == true
+		or statePropertyValue( schema, stateId, "waterlogged" ) == true )
 	if waterlogged then kind = "water" end
 	if not kind then
 		KindByState[stateId] = false
@@ -106,7 +116,7 @@ function MC.LiquidKindForState( stateId )
 end
 
 -- True only for a *pure* fluid block (water/lava/bubble_column), never for a
--- waterlogged solid, which is an ordinary block that happens to contain water.
+-- water-containing host (including aquatic plants), which keeps its block model.
 --
 -- This is the single predicate behind three Java rules that must agree, or the
 -- player ends up able to mine a fluid but not fill it, or vice versa:
@@ -131,6 +141,7 @@ function MC.LiquidOwnHeightForState( stateId )
 end
 
 function MC.IsWaterloggedState( stateId )
+	-- Means a block plus water, not necessarily a literal waterlogged property.
 	local _, _, _, _, waterlogged = decodeState( stateId )
 	return waterlogged == true
 end
