@@ -10,6 +10,9 @@ local strength = MC.RenderPackSettings.Handle( "sun_strength" )
 local environment = MC.RenderPackSettings.Handle( "environment" )
 local colorInterpolation = MC.RenderPackSettings.Handle( "color_interpolation" )
 local pbrInterpolation = MC.RenderPackSettings.Handle( "pbr_interpolation" )
+local skyBoundary = MC.RenderPackSettings.Handle( "shadow_sky_boundary" )
+B.SHADOW_VARIANT_VERSION = 1
+B.shadowVariants = B.shadowVariants or {}
 B.samplingMaterials = B.samplingMaterials or {}
 local lightingKeys = { "$c1_w", "$c2_x", "$c2_y", "$c2_z", "$c2_w", "$c3_x", "$c3_y", "$c3_z", "$c3_w" }
 local values = { 1, 0, 0, 1, 2.5, 1, 1, 1, 1 }
@@ -131,6 +134,42 @@ function B.DisableShadow()
 	shadowRevision = shadowRevision + 1
 	B.shadowRevision = shadowRevision
 end
+
+local function bindShadowVariant( material, variant, useSky )
+	local pixel = useSky and variant.sky.pixel or variant.ordinary.pixel
+	if variant.pixel == pixel then return end
+	-- Shader names are snapshot state. Recompute only at a mode boundary;
+	-- preserve material identity, textures, uniforms and native mesh bindings.
+	material:SetString( "$pixshader", pixel )
+	material:Recompute()
+	variant.pixel = pixel
+	local state = B.materials[material]
+	if state then state.eyeRevision, state.lightRevision, state.shadowRevision = -1, -1, -1 end
+end
+
+function B.RegisterShadowVariant( material, sky, ordinary )
+	local variant = B.shadowVariants[material]
+	if not variant then
+		variant = { sky = sky, ordinary = ordinary, pixel = sky.pixel }
+		B.shadowVariants[material] = variant
+	end
+	bindShadowVariant( material, variant, skyBoundary:GetBool() )
+end
+
+function B.RegisterShadowPipeline( instance )
+	local programs = instance.definition.programs
+	for _, record in ipairs( instance.bank.passes ) do
+		local key = record.spec.program
+		local ordinary = programs[key .. "_no_sky"]
+		if ordinary then B.RegisterShadowVariant( record.material, programs[key], ordinary ) end
+	end
+end
+
+MC.RenderPackSettings.OnChange( "shadow_sky_boundary", "mc_l2_pbr_variants", function()
+	B.DisableShadow()
+	local useSky = skyBoundary:GetBool()
+	for material, variant in pairs( B.shadowVariants ) do bindShadowVariant( material, variant, useSky ) end
+end )
 
 -- A secondary RenderView can replace the shared shadow atlas between render
 -- hooks. Prepare at the receiver draw boundary, before any mesh/pass state is

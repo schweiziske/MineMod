@@ -716,56 +716,59 @@ function MC.DrawPBRShadowCasters( groups, version, chunks, view, shadow )
 		local passes = groups[g]
 		for p = 1, #passes do
 			local pass = passes[p]
-			local cached = ensurePackEntries( pass, version )
-			for i = 1, cached.count do
-				local e = cached.entries[i]
-				stats.testedChunks = stats.testedChunks + 1
-				if pass.store[e.key] == e.list and MC.GetChunkByKey( e.key ) == chunks[e.key]
-					and not ( MC.StreamHiddenChunkKeys and MC.StreamHiddenChunkKeys[e.key] ) then
-					local list, frame = e.list, e.frame
-					local x, y, z = frame.originX + renderFrameX, frame.originY + renderFrameY, frame.originZ + renderFrameZ
-					if intersects( list.bounds, x, y, z, view ) then
-						local sections, chunkDrawn = list.sections, false
-						for s = 1, sections and #sections or 1 do
-							local section = sections and sections[s]
-							local first, last, bounds = 1, #list, nil
-							if section then first, last, bounds = section.first, section.last, section.bounds end
-							stats.testedSections = stats.testedSections + 1
-							if intersects( bounds, x, y, z, view ) then
-								for j = first, last do
-									local entry = list[j]
-									if entry.castsShadow ~= false then
-										if entry.material ~= currentSource or pass.node.stage ~= currentStage then
-											currentSource, currentStage = entry.material, pass.node.stage
-											currentRecord = shadow.CasterMaterial( currentSource, currentStage )
+			-- Reject terrain before touching its chunk cache in the sky prepass.
+			if not shadow.skyPass or pass.node.adapter == "mc:sky_quad_v1" then
+				local cached = ensurePackEntries( pass, version )
+				for i = 1, cached.count do
+					local e = cached.entries[i]
+					stats.testedChunks = stats.testedChunks + 1
+					if pass.store[e.key] == e.list and MC.GetChunkByKey( e.key ) == chunks[e.key]
+						and not ( MC.StreamHiddenChunkKeys and MC.StreamHiddenChunkKeys[e.key] ) then
+						local list, frame = e.list, e.frame
+						local x, y, z = frame.originX + renderFrameX, frame.originY + renderFrameY, frame.originZ + renderFrameZ
+						if intersects( list.bounds, x, y, z, view ) then
+							local sections, chunkDrawn = list.sections, false
+							for s = 1, sections and #sections or 1 do
+								local section = sections and sections[s]
+								local first, last, bounds = 1, #list, nil
+								if section then first, last, bounds = section.first, section.last, section.bounds end
+								stats.testedSections = stats.testedSections + 1
+								if intersects( bounds, x, y, z, view ) then
+									for j = first, last do
+										local entry = list[j]
+										if shadow.skyPass or entry.castsShadow ~= false then
+											if entry.material ~= currentSource or pass.node.stage ~= currentStage then
+												currentSource, currentStage = entry.material, pass.node.stage
+												currentRecord = shadow.CasterMaterial( currentSource, currentStage )
+											end
+											-- Identical silhouettes shared by several surface passes draw once.
+											-- Different albedo/cutout maps retain their distinct silhouettes.
+											if currentRecord and currentRecord.seen[entry.mesh] ~= token then
+												if not chunkDrawn then
+													prepareChunkFrame( frame, true )
+													cam.PushModelMatrix( e.matrix )
+													shadow.modelPushed, chunkDrawn = true, true
+												end
+												if currentRecord.material ~= currentDepth then
+													currentDepth = currentRecord.material
+													render.SetMaterial( currentDepth )
+												end
+												entry.mesh:Draw()
+												currentRecord.seen[entry.mesh] = token
+												stats.draws = stats.draws + 1
+												stats.vertices = stats.vertices + ( entry.vertexCount or 0 )
+											elseif currentRecord then stats.duplicates = stats.duplicates + 1 end
 										end
-										-- Identical silhouettes shared by several surface passes draw once.
-										-- Different albedo/cutout maps retain their distinct silhouettes.
-										if currentRecord and currentRecord.seen[entry.mesh] ~= token then
-											if not chunkDrawn then
-												prepareChunkFrame( frame, true )
-												cam.PushModelMatrix( e.matrix )
-												shadow.modelPushed, chunkDrawn = true, true
-											end
-											if currentRecord.material ~= currentDepth then
-												currentDepth = currentRecord.material
-												render.SetMaterial( currentDepth )
-											end
-											entry.mesh:Draw()
-											currentRecord.seen[entry.mesh] = token
-											stats.draws = stats.draws + 1
-											stats.vertices = stats.vertices + ( entry.vertexCount or 0 )
-										elseif currentRecord then stats.duplicates = stats.duplicates + 1 end
 									end
-								end
-							else stats.culledSections = stats.culledSections + 1 end
-						end
-						if chunkDrawn then
-							shadow.casterKeys[e.key] = true
-							cam.PopModelMatrix()
-							shadow.modelPushed = false
-						end
-					else stats.culledChunks = stats.culledChunks + 1 end
+								else stats.culledSections = stats.culledSections + 1 end
+							end
+							if chunkDrawn then
+								shadow.casterKeys[e.key] = true
+								cam.PopModelMatrix()
+								shadow.modelPushed = false
+							end
+						else stats.culledChunks = stats.culledChunks + 1 end
+					end
 				end
 			end
 		end
