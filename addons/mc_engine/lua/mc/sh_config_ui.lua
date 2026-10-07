@@ -120,6 +120,9 @@ MC.ConfigConVars = {
 		category( "mesh_cache", "rendering", "Mesh performance", "网格性能",
 			"Scheduling, memory caches and upload paths used while rebuilding chunks.",
 			"区块重建时使用的调度方式、内存缓存与上传方式。", {
+			item( "mc_gc_smoothing", "GC smoothing", "GC 分帧程度", "number",
+				"0 restores previous GC settings; 1-16 uses smaller per-frame steps at higher values. Try 4 for recording. Affects all client Lua; may increase memory use and cannot split atomic GC pauses.",
+				"0 恢复原 GC 设置；1-16 越大，每帧主动回收步长越小，录制可先试 4。影响全部客户端 Lua，可能增加内存占用，无法拆分 GC 原子阶段的卡顿。" ),
 			item( "mc_build_unlimited", "Disable build time slicing", "取消构建分帧", "bool",
 				"Drain received client mesh, lighting, collision and unload cleanup work, including distant lazy meshes. Switching off restores saved budgets and lazy settings.",
 				"集中完成已收到的网格、光照、碰撞和卸载清理，包括远处延迟构建的区块；可能出现较长卡顿，关闭后恢复原有预算与延迟构建设置。" ),

@@ -139,6 +139,7 @@ local SERVER_FILES = {
 	"mc/integration/sv_hand_weapon_bridge.lua",
 }
 local CLIENT_FILES = {
+	"mc/cl_gc.lua",
 	"mc/cl_lighting.lua",
 	"mc/render/cl_mesh_constants.lua",
 	"mc/render/cl_render_pipeline.lua",
