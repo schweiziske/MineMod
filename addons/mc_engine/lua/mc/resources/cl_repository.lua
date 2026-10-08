@@ -73,11 +73,14 @@ local function describe(source, metadata)
 	return {id = source.id, name = source.id, title = source.title, owner = source.owner,
 		description = rules.description, revision = source.revision, formats = rules.formats,
 		formatMatches = rules.formatMatches, unsupported = rules.unsupported, resourceSource = true,
-		required = source.required == true, fixed = source.fixed == true, preview = "mc/resourcepacks/unknown"}
+		required = source.required == true, fixed = source.fixed == true, metadataOnly = source.metadataOnly,
+		preview = "mc/resourcepacks/unknown"}
 end
 
 local function cover(source, entry)
 	if not source.entries["pack.png"] then return end
+	local size = source.entries["pack.png"]
+	if type(size) == "number" and size > 4194304 then entry.previewError = "resource_pack_cover_png_budget" return end
 	local bytes, err = read(source, "pack.png")
 	if not bytes then entry.previewError = err return end
 	if #bytes > 4194304 or #bytes < 33 or bytes:sub(1,8) ~= "\137PNG\13\10\26\10" then
@@ -216,7 +219,15 @@ function D.Refresh()
 			for _, name in ipairs(names) do
 				local id = adapter.prefix .. util.SHA256(name):sub(1, 24)
 				local source, openError
-				source,openError=adapter.open(name,adapter.pathID)
+				if MC.ResourceDirectory and (adapter.pathID == "GAME" or file.IsDir(ROOT .. "/" .. name,"DATA")) then
+					source,openError=MC.ResourceDirectory.Inspect(name,adapter.pathID)
+					-- The native adapter also accepts one wrapping directory. Keep
+					-- that legacy layout available when no root envelope exists.
+					if not source and adapter.pathID == "DATA" and nativeAvailable()
+						and openError == "resource_source_missing:pack.mcmeta" then
+						source,openError=adapter.open(name,adapter.pathID)
+					end
+				else source,openError=adapter.open(name,adapter.pathID) end
 				local entry
 				if source then
 					source.id, source.title, source.owner = id, name, "mc.resourcepacks"
@@ -360,18 +371,27 @@ function D.OpenSelection(ids, revision, confirmed)
 	for _, id in ipairs(selection) do
 		local entry, source = D.byID[id], D.registered[id]
 		if not source then
-			if entry.pathID == "GAME" then source,err=MC.ResourceDirectory.Open(entry.locator,"GAME")
+			-- Native directory opens hash every file, even unused models/sounds.
+			-- Directory snapshots instead validate the index plus consumed bytes;
+			-- native ZIP I/O and pixel/hash acceleration remain independent.
+			if entry.metadataOnly then source,err=MC.ResourceDirectory.Open(entry.locator,entry.pathID)
+			elseif entry.pathID == "GAME" then source,err=MC.ResourceDirectory.Open(entry.locator,"GAME")
 			elseif nativeAvailable() then source,err=mcmesh.OpenResourcePackSource(entry.locator)
 			elseif MC.ResourceDirectory then source,err=MC.ResourceDirectory.Open(entry.locator)
 			else snapshot:Close() return nil,"resource_source_unavailable" end
 			if source then
 				source.id, source.owner, source.title = id, entry.owner, entry.title
 				snapshot.packs[#snapshot.packs + 1] = source
-				if source.revision ~= entry.revision then err = "resource_source_changed:" .. id
+				if not entry.metadataOnly and source.revision ~= entry.revision then err = "resource_source_changed:" .. id
 				else
-					local metadata
-					metadata, err = json(source, "pack.mcmeta")
-					if metadata then source.rules, err = Rules.Descriptor(metadata, source.entries, TARGET) end
+					local metadata, hash
+					metadata, err, hash = json(source, "pack.mcmeta")
+					if metadata then
+						-- A catalog confirms metadata/format, not a previously scanned
+						-- texture tree. The selected source is fully indexed here.
+						if entry.metadataOnly and "metadata:" .. hash ~= entry.revision then err = "resource_source_changed:" .. id
+						else source.rules, err = Rules.Descriptor(metadata, source.entries, TARGET) end
+					end
 				end
 			end
 		else

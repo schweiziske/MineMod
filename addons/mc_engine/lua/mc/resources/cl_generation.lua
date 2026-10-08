@@ -125,6 +125,7 @@ function G.Build(plan, checkpoint)
 			native, decodeError = spriteBackend.CreateAtlasSprite(sampled.png, {width = sprite.width, height = sprite.height,
 				mip = layout.mip, padding = layout.padding, strategy = strategy, dataPNG = data, overlayDataPNG = overlayData,
 				alphaBias = sprite.alphaBias, item = sprite.item == true or sprite.id:find(":textures/item/", 1, true) ~= nil, frames = frames,
+				detectConstant = false,
 				tint = sprite.tint, overlayPNG = sprite.overlayPNG, baseWidth = sprite.baseWidth or sampled.width, baseHeight = sprite.baseHeight or sampled.height,
 				overlayWidth = sprite.overlayWidth, overlayHeight = sprite.overlayHeight})
 			if not native then return nil, sprite.id .. ":" .. tostring(decodeError) end
@@ -172,6 +173,7 @@ function G.Build(plan, checkpoint)
 		generation.metrics.totalMS = (SysTime() - started) * 1000
 		if generation.cache then
 			generation.metrics.cacheState,generation.metrics.cacheHits=generation.cache.state,generation.cache.hits
+			generation.metrics.cacheLimited=generation.cache.limited == true
 		end
 		generation.state, generation.pixelsValidated = "candidate", true
 		for _, texture in pairs(generation.channels) do
