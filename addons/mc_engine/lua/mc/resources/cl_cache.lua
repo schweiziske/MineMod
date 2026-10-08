@@ -43,7 +43,7 @@ local function decode(cache, bytes)
 		if #levels ~= mip+1 then return false end
 		records[id] = levels
 	end
-	cache.records = records
+	cache.records, cache.bytes = records, #data
 	return true
 end
 
@@ -69,18 +69,21 @@ function Cache:Get(index,channel)
 end
 
 function Cache:Put(index,channel,levels)
-	if self.state == "oversize" then return end
 	local id = index .. ":" .. channel
 	if self.records[id] then return end
-	for _, bytes in ipairs(levels) do self.bytes=self.bytes+#bytes end
-	if self.bytes > LIMIT-1048576 then self.records={} self.state="oversize" return end
+	-- Count the encoded header as well as pixels. Keep fitting records even
+	-- when the full pack exceeds the budget; a partial hit still avoids baking.
+	local size = #id + 1
+	for _, bytes in ipairs(levels) do size=size+#bytes+#tostring(#bytes)+1 end
+	if self.bytes + size > LIMIT-(#VERSION+131) then self.limited=true return end
+	self.bytes, self.dirty = self.bytes + size, true
 	self.records[id]=levels
 end
 
 function Cache:Commit()
-	if self.state == "oversize" then return true end
+	if self.limited and next(self.records) == nil then return true end
 	file.CreateDir(ROOT)
-	if self.state ~= "hit" then
+	if self.state ~= "hit" and self.state ~= "committed" or self.dirty then
 		local parts = {}
 		for id,levels in pairs(self.records) do
 			local sizes={} for i,bytes in ipairs(levels) do sizes[i]=#bytes end
@@ -108,7 +111,7 @@ function Cache:Commit()
 		if key and #key==64 and key~=self.key and key~=previous then file.Delete(ROOT .. "/" .. name) end
 		if name:match("^[a-f0-9]+%.pending%.dat$") then file.Delete(ROOT .. "/" .. name) end
 	end
-	self.state="committed"
+	self.state,self.dirty="committed",nil
 	return true
 end
 

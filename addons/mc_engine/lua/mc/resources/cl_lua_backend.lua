@@ -44,13 +44,18 @@ function B.CreateAtlasSprite(png,options)
 	for _,index in ipairs(options.frames) do if not unique[index] then unique[index]=true;count=count+1 end end
 	if state.used+frameBytes*count>805306368 then return nil,"atlas_sprite_memory_budget" end
 	local first,constant,bytes=nil,true,0
+	-- Resident GPU frames do not consume this legacy CPU-animation analysis.
+	-- Omit the result when not requested; direct callers retain its old meaning.
+	if options.detectConstant==false then constant=nil end
 	for _,index in ipairs(options.frames) do
 		if not sprite.frames[index] then
 			local image=P.Compose(base,data,overlay,overlayData,options,index,B.checkpoint)
 			local levels=P.Mips(image,options.mip,options.strategy,options.alphaBias,options.item,B.checkpoint)
 			for _,level in ipairs(levels) do bytes=bytes+#level.pixels*8 end
-			if not first then first=image.pixels
-			else for i,p in ipairs(image.pixels) do if p~=first[i] then constant=false break end end end
+			if constant then
+				if not first then first=image.pixels
+				else for i,p in ipairs(image.pixels) do if p~=first[i] then constant=false break end end end
+			end
 			sprite.frames[index]=levels
 			if B.checkpoint then B.checkpoint("mips") end
 		end

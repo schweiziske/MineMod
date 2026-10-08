@@ -5,6 +5,11 @@ local PNG=MC.ResourcePNG
 local floor,ceil,min=math.floor,math.ceil,math.min
 local function be32(s,i) local a,b,c,d=s:byte(i,i+3);return ((a*256+b)*256+c)*256+d end
 local function be16(s,i) local a,b=s:byte(i,i+1);return a*256+b end
+local function sample(row,i,depth)
+	if depth==8 then return row[i+1] end
+	if depth==16 then return row[i*2+1]*256+row[i*2+2] end
+	local offset=i*depth;return floor(row[floor(offset/8)+1]/2^(8-depth-offset%8))%2^depth
+end
 local channels={[0]=1,[2]=3,[3]=1,[4]=2,[6]=4}
 local depths={[0]={[1]=true,[2]=true,[4]=true,[8]=true,[16]=true},[2]={[8]=true,[16]=true},
 	[3]={[1]=true,[2]=true,[4]=true,[8]=true},[4]={[8]=true,[16]=true},[6]={[8]=true,[16]=true}}
@@ -81,26 +86,21 @@ function PNG.Decode(bytes,checkpoint)
 				end
 				row[i]=value%256
 			end
-			local function sample(i)
-				if depth==8 then return row[i+1] end
-				if depth==16 then return row[i*2+1]*256+row[i*2+2] end
-				local offset=i*depth;return floor(row[floor(offset/8)+1]/2^(8-depth-offset%8))%2^depth
-			end
 			for x=0,pw-1 do
 				local index=x*count;local r,g,b,a=0,0,0,255
 				if kind==3 then
-					local i=sample(index);local p=palette[i];if not p then error("atlas_png_palette_index",0) end
+					local i=sample(row,index,depth);local p=palette[i];if not p then error("atlas_png_palette_index",0) end
 					r,g,b=p[1],p[2],p[3];if alpha and i<#alpha then a=alpha:byte(i+1) end
 				else
-					local first=sample(index)
+					local first=sample(row,index,depth)
 					if kind==0 or kind==4 then
 						r=floor(first*255/maximumSample+0.5);g,b=r,r
-						if kind==4 then a=floor(sample(index+1)*255/maximumSample+0.5)
+						if kind==4 then a=floor(sample(row,index+1,depth)*255/maximumSample+0.5)
 						elseif transparent and first==transparent[1] then a=0 end
 					else
-						local green,blue=sample(index+1),sample(index+2)
+						local green,blue=sample(row,index+1,depth),sample(row,index+2,depth)
 						r,g,b=floor(first*255/maximumSample+0.5),floor(green*255/maximumSample+0.5),floor(blue*255/maximumSample+0.5)
-						if kind==6 then a=floor(sample(index+3)*255/maximumSample+0.5)
+						if kind==6 then a=floor(sample(row,index+3,depth)*255/maximumSample+0.5)
 						elseif transparent and first==transparent[1] and green==transparent[2] and blue==transparent[3] then a=0 end
 					end
 				end

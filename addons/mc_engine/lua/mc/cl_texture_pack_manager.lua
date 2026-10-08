@@ -32,7 +32,6 @@ function Session:Refresh()
 end
 
 function M.New()
-	if MC.ResourceRepository and not MC.ResourcePacks.IsApplying() then MC.ResourceRepository.Refresh() end
 	return setmetatable( {}, Session ):Refresh()
 end
 

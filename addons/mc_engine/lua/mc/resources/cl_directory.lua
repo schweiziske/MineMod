@@ -19,6 +19,31 @@ function D.List(pathID)
 	end
 	return names
 end
+
+-- Catalog discovery needs only the pack envelope. Indexing every texture here
+-- makes opening/refreshing the manager as expensive as preparing every pack.
+function D.Inspect(name, pathID)
+	pathID = pathID or "DATA"
+	local root = ROOTS[pathID]
+	if not root then return nil,"resource_pack_path_id" end
+	if not validName(name) then return nil,"resource_directory_missing" end
+	local base = root .. "/" .. name
+	if not file.IsDir(base,pathID) then return nil,"resource_directory_missing" end
+	base = base .. "/"
+	local metadataSize = file.Size(base .. "pack.mcmeta",pathID)
+	if not metadataSize or metadataSize < 0 then return nil,"resource_source_missing:pack.mcmeta" end
+	if metadataSize > 1048576 then return nil,"resource_pack_metadata_budget" end
+	local metadata = file.Read(base .. "pack.mcmeta",pathID)
+	if not metadata or #metadata ~= metadataSize then return nil,"resource_source_read:pack.mcmeta" end
+	local entries, locations = {["pack.mcmeta"]=metadataSize}, {["pack.mcmeta"]=base .. "pack.mcmeta"}
+	local coverSize = file.Size(base .. "pack.png",pathID)
+	if coverSize and coverSize >= 0 then
+		entries["pack.png"], locations["pack.png"] = coverSize, base .. "pack.png"
+	end
+	return {directory=name,entries=entries,locations=locations,pathID=pathID,metadataOnly=true,
+		revision="metadata:" .. MC.ResourcePackRules.Hash(metadata)}
+end
+
 function D.Open(name, pathID)
 	pathID = pathID or "DATA"
 	local root = ROOTS[pathID]
@@ -39,7 +64,7 @@ function D.Open(name, pathID)
 			count,total=count+1,total+size
 			if count>65536 or total>1073741824 then return nil,"resource_source_directory_budget" end
 			entries[path],locations[path]=size,base..leaf
-			stamps[#stamps+1]=path..":"..size..":"..tostring(file.Time(base..leaf,pathID))
+			stamps[#stamps+1]=path..":"..size
 		end
 		for _, leaf in ipairs(dirs) do
 			if not validName(leaf) then return nil,"resource_pack_file_path" end
@@ -50,8 +75,9 @@ function D.Open(name, pathID)
 	end
 	local ok,err=walk("",0)
 	if not ok then return nil,err end
-	-- Metadata affects overlays/filtering even if timestamps have only second
-	-- precision. Consumed resources get independent content hashes in Snapshot.
+	-- The index tracks names and sizes. Snapshot validates the actual bytes of
+	-- every consumed resource, so modification-time queries add no protection.
+	-- Metadata also affects overlays/filtering before any textures are resolved.
 	if entries["pack.mcmeta"] then
 		if entries["pack.mcmeta"]>1048576 then return nil,"resource_pack_metadata_budget" end
 		local metadata=file.Read(locations["pack.mcmeta"],pathID)

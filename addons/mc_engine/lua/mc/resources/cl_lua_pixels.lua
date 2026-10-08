@@ -10,6 +10,10 @@ P.Pack, P.RGBA = pack, rgba
 local linear, srgb = {}, {}
 for i=0,255 do local x=i/255; linear[i]=floor((x>=0.04045 and ((x+0.055)/1.055)^2.4 or x/12.92)*1023+0.5) end
 for i=0,1023 do local x=i/1023; srgb[i]=byte((x>=0.0031308 and 1.055*x^(1/2.4)-0.055 or 12.92*x)*255) end
+-- A fixed 16-bit lookup avoids allocating/interning a four-byte string for
+-- every pixel. Its size is independent of the pack's resolution/color count.
+local bytePairs={}
+for i=0,65535 do bytePairs[i+1]=string.char(i%256,floor(i/256)) end
 
 function P.Filter(pixels, weights, strategy)
 	if strategy==5 then
@@ -168,22 +172,23 @@ function P.Compose(base,data,overlay,overlayData,options,frame,checkpoint)
 end
 function P.Sample(sprite,current,nextFrame,fraction)
 	local output={}
+	local interpolate=current~=nextFrame and fraction>0
 	for level,a in ipairs(sprite.frames[current]) do
-		local b=sprite.frames[nextFrame][level];local pad=sprite.padding/2^(level-1);local rows={}
+		local b=sprite.frames[nextFrame][level];local pad=sprite.padding/2^(level-1);local rows,row={},{}
 		for y=0,a.height-1 do
-			local row={}
 			for x=0,a.width-1 do
 				local i=y*a.width+x+1;local value=a.pixels[i]
-				if current~=nextFrame and fraction>0 then
+				if interpolate then
 					if sprite.strategy>=5 then value=P.Filter({value,b.pixels[i]},{1-fraction,fraction},sprite.strategy)
 					else
 						local r,g,blue,alpha=rgba(value);local qr,qg,qb,qa=rgba(b.pixels[i])
 						value=pack(byte(r+(qr-r)*fraction),byte(g+(qg-g)*fraction),byte(blue+(qb-blue)*fraction),byte(alpha+(qa-alpha)*fraction))
 					end
 				end
-				row[#row+1]=string.char(rgba(value))
+				row[x*2+1]=bytePairs[band(value,65535)+1]
+				row[x*2+2]=bytePairs[rshift(value,16)+1]
 			end
-			rows[#rows+1]=string.rep(row[1],pad)..table.concat(row)..string.rep(row[#row],pad)
+			rows[#rows+1]=string.rep(row[1]..row[2],pad)..table.concat(row)..string.rep(row[#row-1]..row[#row],pad)
 		end
 		output[level]=string.rep(rows[1],pad)..table.concat(rows)..string.rep(rows[#rows],pad)
 	end
