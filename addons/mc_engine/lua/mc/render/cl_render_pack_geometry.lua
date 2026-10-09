@@ -5,7 +5,7 @@ MC.RenderPackGeometry = G
 local R, P = MC.RenderL2Resources, MC.RenderPackResources
 local requireValue = R.Require
 G.PART_QUADS = math.floor( MC.RenderMeshConstants.VERT_LIMIT / 6 )
-G.MAX_PARTS, G.liveParts = 16384, G.liveParts or 0
+G.liveParts = G.liveParts or 0
 G.retired, G.retiredHead = G.retired or {}, G.retiredHead or 1
 
 local function allocate( count )
@@ -113,7 +113,6 @@ function G.Upload( buffer, perf )
 		requireValue( #buffer.pixels == count * 4 and buffer.occlusion and #buffer.occlusion == count,
 			"render_l2_buffer", "Lua L2 corner/AO count does not match its quads" )
 	end
-	requireValue( G.liveParts < G.MAX_PARTS, "render_pack_part_budget", "native L2 mesh-part budget exceeded" )
 	local bounds
 	if not buffer.nativeL2 then bounds = MC.RenderSectionCull.VertexBounds( buffer.verts ) end
 	R.Ensure( { build = "quad_corners_v1" }, P.shared )
