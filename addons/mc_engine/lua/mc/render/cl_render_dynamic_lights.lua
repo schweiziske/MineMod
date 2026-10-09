@@ -233,7 +233,7 @@ function D.Prepare( x, y, z )
 end
 
 -- Registration/build boundary; no textures or materials are created in Draw.
-function D.RegisterMaterial( base, program, owner, source, stage, blockSize, maps, sprite )
+function D.RegisterMaterial( base, program, owner, source, stage, blockSize, maps, sprite, atlasBank )
 	if maps and not sprite and not maps.water then
 		R.Require( maps.dfg ~= nil, "dynamic_light_dfg", "PBR local lights require the base material DFG texture" )
 	end
@@ -264,7 +264,7 @@ function D.RegisterMaterial( base, program, owner, source, stage, blockSize, map
 		["$linearread_basetexture"] = pbr and maps.colorSpace ~= "linear"
 			and not MC.ResourceGeneration.textures[source:GetName()] and 0 or 1, ["$linearread_texture1"] = 1,
 		["$linearread_texture2"] = 1, ["$linearwrite"] = pbr and 0 or 1,
-		["$c0_x"] = tostring( 1 / blockSize ), ["$c0_y"] = "0", ["$c0_z"] = pbr and tostring( 1 / 2048 ) or "1", ["$c0_w"] = "0",
+		["$c0_x"] = tostring( 1 / blockSize ), ["$c0_y"] = pbr and "0" or tostring( atlasBank or 0 ), ["$c0_z"] = pbr and tostring( atlasBank or 0 ) or "1", ["$c0_w"] = "0",
 		["$c1_x"] = "0", ["$c1_y"] = "0", ["$c1_z"] = "0", ["$c1_w"] = "1",
 	}
 	if pbr then

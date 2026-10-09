@@ -3,8 +3,13 @@ MC = MC or {}
 local R = MC.RenderL2Resources or { materials = {} }
 MC.RenderL2Resources = R
 local floor = math.floor
-local ATLAS_SIZE, LIGHTMAP_SIZE = 2048, 16
-local ATLAS_HEIGHT = 2560
+local ATLAS_SIZE, LIGHTMAP_SIZE = 16384, 16
+local ATLAS_HEIGHT = 16384
+R.ATLAS_SIZE, R.ATLAS_HEIGHT = ATLAS_SIZE, ATLAS_HEIGHT
+R.CAPACITY = ATLAS_SIZE * math.floor( ATLAS_HEIGHT / 5 )
+-- Native meshes retain their existing 24-bit corner payload within each bank.
+-- The material supplies the bank, avoiding a per-vertex ABI/DLL change.
+R.BANK_QUADS = 1048576
 R.OCCLUSION_VERSION = 1
 local DEPTH_MATERIAL_VERSION = 2
 
@@ -24,9 +29,8 @@ end
 refreshMaterialDepth( R )
 if MC.RenderPackResources then refreshMaterialDepth( MC.RenderPackResources.shared ) end
 
--- Four virtual corner rows occupy physical rows 0,1,3,4. Old point-sampling
--- shaders still address their unchanged 2048-square virtual grid; row 2 holds
--- one RGBA AO texel per quad. This keeps all 1,048,576 slots for 4 MiB extra.
+-- Four corner rows occupy physical rows 0,1,3,4; row 2 holds one RGBA AO
+-- texel per quad. Only complete five-row groups are allocated.
 function R.CornerTexel( address )
 	return address % ATLAS_SIZE, floor( ( floor( address / ATLAS_SIZE ) + 0.5 ) * 1.25 )
 end
@@ -107,11 +111,11 @@ function R.Ensure( build, owner )
 	owner.build = build.build
 	local prefix = owner.prefix or "mc_l2_visual"
 	if not owner.atlas then
-		owner.atlas = GetRenderTargetEx( prefix .. "_quad_ao1", ATLAS_SIZE, ATLAS_HEIGHT,
+		owner.atlas = GetRenderTargetEx( prefix .. "_quad_ao16k_v1", ATLAS_SIZE, ATLAS_HEIGHT,
 			RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE, bit.bor( 1, 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA8888 )
 	end
 	requireValue( owner.atlas and not owner.atlas:IsError() and owner.atlas:Width() == ATLAS_SIZE and owner.atlas:Height() == ATLAS_HEIGHT,
-		"l2_visual_atlas", "2048x2560 point-filter corner/AO atlas required; restart clients retaining the old atlas" )
+		"l2_visual_atlas", "16384x16384 point-filter corner/AO atlas required; restart clients retaining the old atlas" )
 	if not owner.lightmap then
 		-- No POINTSAMPLE bit: L2 performs its lightmap lookup at each quad corner.
 		owner.lightmap = GetRenderTargetEx( prefix .. "_lightmap1", LIGHTMAP_SIZE, LIGHTMAP_SIZE,
@@ -131,7 +135,7 @@ function R.Ensure( build, owner )
 		"l2_visual_upload_material", "could not create the exact-byte upload material" )
 end
 
-function R.BoundMaterial( owner, slot, source, stage, blockSize, program, colorSpace, pbrMaps )
+function R.BoundMaterial( owner, slot, source, stage, blockSize, program, colorSpace, pbrMaps, atlasBank )
 	refreshMaterialDepth( owner )
 	local material = owner.materials[slot]
 	if not material then
@@ -151,7 +155,7 @@ function R.BoundMaterial( owner, slot, source, stage, blockSize, program, colorS
 				and not MC.ResourceGeneration.textures[source:GetName()] and 0 or 1, ["$linearread_texture1"] = 1,
 			["$linearread_texture2"] = 1, ["$linearwrite"] = 1,
 			["$c0_x"] = tostring( 1 / blockSize ), ["$c0_y"] = "0",
-			["$c0_z"] = tostring( 1 / ATLAS_SIZE ), ["$c0_w"] = "0.5",
+			["$c0_z"] = tostring( atlasBank or 0 ), ["$c0_w"] = "0.5",
 		}
 		if stage == "world_translucent" then
 			params["$alphablend"], params["$translucent"] = 1, 1

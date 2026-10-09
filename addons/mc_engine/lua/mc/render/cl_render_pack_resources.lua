@@ -3,7 +3,7 @@ MC = MC or {}
 local P = MC.RenderPackResources or {
 	materials = {}, textures = {}, materialCount = 0, textureCount = 0,
 	builds = {}, buildCount = 0,
-	shared = { prefix = "mc_l2_runtime", capacity = 1048576, materials = {} },
+	shared = { prefix = "mc_l2_runtime", capacity = MC.RenderL2Resources.CAPACITY, materials = {} },
 }
 MC.RenderPackResources = P
 local R, Schema = MC.RenderL2Resources, MC.RenderPackSchema
@@ -387,7 +387,8 @@ function P.Passes( bundle, request, stage )
 	return nodes
 end
 
-function P.Material( bundle, node, sourceMaterial, blockSize )
+function P.Material( bundle, node, sourceMaterial, blockSize, atlasBank )
+	atlasBank = atlasBank or 0
 	local source = R.SourceTexture( sourceMaterial )
 	bundle.sources[sourceMaterial] = source
 	local ibl = node.adapter == "mc:pbr_quad_v2" or node.adapter == "mc:pbr_quad_v3" or node.adapter == "mc:pbr_quad_v4" or node.adapter == "mc:pbr_quad_v5"
@@ -421,7 +422,7 @@ function P.Material( bundle, node, sourceMaterial, blockSize )
 	local signature = Schema.Canonical( { vertex = node.program.vertex, pixel = node.program.pixel,
 		ordinary = node.ordinaryProgram,
 		stage = node.stage, source = identity(source), colorSpace = colorSpace, blockSize = blockSize,
-		adapter = node.adapter, normal = normal and ( identity(normal) .. "/" .. ( normalResource and normalResource.sha256 or "runtime" ) ),
+		adapter = node.adapter, atlasBank = atlasBank, normal = normal and ( identity(normal) .. "/" .. ( normalResource and normalResource.sha256 or "runtime" ) ),
 		orm = orm and ( identity(orm) .. "/" .. ( ormResource and ormResource.sha256 or "runtime" ) ),
 		environment = environment and ( environment:GetName() .. "/" .. node.environment.sha256 ),
 		dfg = dfg and ( dfg:GetName() .. "/" .. node.dfg.sha256 ) } )
@@ -429,9 +430,9 @@ function P.Material( bundle, node, sourceMaterial, blockSize )
 	if cached and generation then
 		local maps
 		if pbr then maps = {normal=normal, orm=orm, environment=environment, dfg=dfg, colorSpace=colorSpace} end
-		R.BoundMaterial(P.shared, cached.slot, source, node.stage, blockSize, node.program, colorSpace, maps)
+		R.BoundMaterial(P.shared, cached.slot, source, node.stage, blockSize, node.program, colorSpace, maps, atlasBank)
 		if node.dynamicProgram then
-			MC.RenderDynamicLights.RegisterMaterial(cached.material, node.dynamicProgram, P.shared, source, node.stage, blockSize, maps)
+			MC.RenderDynamicLights.RegisterMaterial(cached.material, node.dynamicProgram, P.shared, source, node.stage, blockSize, maps, false, atlasBank)
 		end
 		cached.source, cached.normal, cached.orm = source, normal, orm
 		return cached.material
@@ -453,11 +454,11 @@ function P.Material( bundle, node, sourceMaterial, blockSize )
 	if node.adapter == "mc:sky_quad_v1" then
 		material = MC.RenderSky.Material( slot, node.program )
 	else
-		material = R.BoundMaterial( P.shared, slot, source, node.stage, blockSize, node.program, colorSpace, maps )
+		material = R.BoundMaterial( P.shared, slot, source, node.stage, blockSize, node.program, colorSpace, maps, atlasBank )
 	end
 	if node.ordinaryProgram then MC.RenderPBR.RegisterShadowVariant( material, node.program, node.ordinaryProgram ) end
 	if node.dynamicProgram then
-		MC.RenderDynamicLights.RegisterMaterial( material, node.dynamicProgram, P.shared, source, node.stage, blockSize, maps )
+		MC.RenderDynamicLights.RegisterMaterial( material, node.dynamicProgram, P.shared, source, node.stage, blockSize, maps, false, atlasBank )
 	end
 	P.materials[signature] = { material = material, source = source, normal = normal, orm = orm, slot = slot }
 	P.materialCount = P.materialCount + 1
