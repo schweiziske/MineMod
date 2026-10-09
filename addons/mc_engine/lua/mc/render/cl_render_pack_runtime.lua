@@ -204,8 +204,10 @@ local function bindSection( c, transaction, source, chunk, size )
 			-- The dedicated water renderer owns optics, SSR, refraction and
 			-- caustics. Never draw a second atlas surface underneath it.
 			if part.water and c.waterEnabled then passes = noPasses end
+			local atlasBank = math.floor( data.firstQuad / R.BANK_QUADS )
 			for _, node in ipairs( passes ) do
-				local material = materialCache and materialCache[node.key]
+				local materialKey = atlasBank == 0 and node.key or node.key .. ":" .. atlasBank
+				local material = materialCache and materialCache[materialKey]
 				if not material then
 					-- Published node caches are read-only until commit. Copy only
 					-- when this source actually needs a new pass binding.
@@ -213,8 +215,8 @@ local function bindSection( c, transaction, source, chunk, size )
 						materialCache = copyMaterialNodes( materialCache )
 						transaction.materials[part.material] = materialCache
 					end
-					material = P.Material( transaction.bundle, node, part.material, size )
-					materialCache[node.key] = material
+					material = P.Material( transaction.bundle, node, part.material, size, atlasBank )
+					materialCache[materialKey] = material
 				end
 				local entries = bound.passes[node.key]
 				if not entries then entries = {} bound.passes[node.key] = entries end

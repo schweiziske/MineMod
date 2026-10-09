@@ -1,6 +1,6 @@
 -- Section-owned native L2 meshes and copy-on-write corner-atlas allocations.
 MC = MC or {}
-local G = MC.RenderPackGeometry or { free = { { first = 0, count = 1048576 } }, liveQuads = 0 }
+local G = MC.RenderPackGeometry or { free = { { first = 0, count = MC.RenderL2Resources.CAPACITY } }, liveQuads = 0 }
 MC.RenderPackGeometry = G
 local R, P = MC.RenderL2Resources, MC.RenderPackResources
 local requireValue = R.Require
@@ -10,16 +10,25 @@ G.retired, G.retiredHead = G.retired or {}, G.retiredHead or 1
 
 local function allocate( count )
 	for i, range in ipairs( G.free ) do
-		if range.count >= count then
-			local first = range.first
-			range.first, range.count = range.first + count, range.count - count
-			if range.count == 0 then table.remove( G.free, i ) end
+		local first = range.first
+		local bankEnd = ( math.floor( first / R.BANK_QUADS ) + 1 ) * R.BANK_QUADS
+		if first + count > bankEnd then first = bankEnd end
+		local prefix = first - range.first
+		if range.count >= prefix + count then
+			local tail = range.count - prefix - count
+			if prefix > 0 then
+				range.count = prefix
+				if tail > 0 then table.insert( G.free, i + 1, { first = first + count, count = tail } ) end
+			else
+				range.first, range.count = first + count, tail
+				if tail == 0 then table.remove( G.free, i ) end
+			end
 			G.liveQuads = G.liveQuads + count
 			return first
 		end
 	end
 	error( { code = "render_pack_atlas_budget",
-		message = "no contiguous quad range available within the shared 20 MiB corner/AO atlas" }, 0 )
+		message = "no contiguous quad range available within the shared 16384x16384 corner/AO atlas" }, 0 )
 end
 
 local function freeRange( first, count )
@@ -112,7 +121,7 @@ function G.Upload( buffer, perf )
 	local object, uploadedVertices
 	local ok, err = pcall( function()
 		if buffer.nativeL2 then
-			local result = MC.NativeL2.Upload( buffer, first, declaration() )
+			local result = MC.NativeL2.Upload( buffer, first % R.BANK_QUADS, declaration() )
 			object, uploadedVertices = result.mesh, result.vertices
 			buffer.pixels, buffer.occlusion = result.pixels, result.occlusion
 			buffer.nativeRelight = result.relight == true
@@ -123,8 +132,8 @@ function G.Upload( buffer, perf )
 			object = Mesh( declaration() )
 			if perf then MC.RenderMesh.meshPerfAdd( perf, "meshNewMS", started ) end
 			requireValue( object ~= nil, "render_pack_mesh_create", "could not create a native L2 mesh" )
-			-- Stream global addresses without materializing or mutating the CPU buffer.
-			MC.RenderMesh.uploadMeshVertices( object, buffer.verts, perf, false, false, first )
+			-- Stream bank-local addresses without mutating the retained CPU buffer.
+			MC.RenderMesh.uploadMeshVertices( object, buffer.verts, perf, false, false, first % R.BANK_QUADS )
 		end
 		local cornerStarted = perf and SysTime()
 		R.UploadPart( { firstQuad = first, quadCount = count, pixels = buffer.pixels, occlusion = buffer.occlusion }, P.shared )
