@@ -765,8 +765,8 @@ MC.API.Render.WaterMaterial = L.WaterMaterial
 
 local function printStatus()
 	local s = L.Status()
-	print( string.format( "[MC render pack] phase=%s selected=%s active=%s native=L2 sections=%d quads=%d parts=%d/16384 atlas=%d/1048576 materials=%d GPU=unverified",
-		s.phase, s.selected, s.active or "-", s.sections, s.quads, s.liveParts, s.liveQuads, s.materials ) )
+	print( string.format( "[MC render pack] phase=%s selected=%s active=%s native=L2 sections=%d quads=%d parts=%d atlas=%d/%d materials=%d GPU=unverified",
+		s.phase, s.selected, s.active or "-", s.sections, s.quads, s.liveParts, s.liveQuads, MC.RenderL2Resources.CAPACITY, s.materials ) )
 	print( string.format( "[MC render pack] prepare=%.2fms update=%.2fms updated=%d waiting=%d converted=0",
 		s.prepareMS, s.updateMS, s.updatedSections, s.waitingSections ) )
 	print( string.format( "[MC render pack work] syncs=%d syncMS=%.2f scannedChunks=%d lightmapUploads=%d skippedLightmapUploads=%d",
