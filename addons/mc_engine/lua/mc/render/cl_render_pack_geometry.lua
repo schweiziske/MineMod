@@ -134,7 +134,6 @@ function G.Upload( buffer, perf )
 		local destroyOK, destroyError = true, nil
 		if object then destroyOK, destroyError = pcall( object.Destroy, object ) end
 		freeRange( first, count )
-		if buffer.nativeL2 then MC.NativeL2.DisableAfterFailure( type( err ) == "table" and err.message or err ) end
 		if not destroyOK then MC.Fault( "render_l2_failed_mesh_destroy", "%s", tostring( destroyError ) ) end
 		error( err, 0 )
 	end

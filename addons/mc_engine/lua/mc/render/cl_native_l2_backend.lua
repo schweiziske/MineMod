@@ -103,20 +103,7 @@ function N.SetEnabled( enabled )
 	return active, reason
 end
 
-function N.DisableAfterFailure( reason )
-	local wasActive = N.active
-	N.failure, N.active = tostring( reason ), false
-	if wasActive then
-		print( "[MC Native L2] Native mesh build failed; switching mesh execution to Lua L2; world ownership unchanged. Reason: " .. N.failure )
-	end
-	-- Let the failed builder finish unwinding its section buffers first.
-	if N.rebuildQueued then return end
-	N.rebuildQueued = true
-	timer.Simple( 0, function()
-		N.rebuildQueued = nil
-		queueWorld()
-	end )
-end
+N.DisableAfterFailure = nil
 
 local function compile( quad, positions, uv, baked, mode, emission )
 	local cache, key
@@ -170,7 +157,6 @@ local function compile( quad, positions, uv, baked, mode, emission )
 	end
 	local value, err = N.module.CompileL2Template( data )
 	if value == nil then
-		N.DisableAfterFailure( err )
 		MC.RenderL2Resources.Require( false, "native_l2_template", "Native L2 template failed: " .. tostring( err ) )
 	end
 	if cache then cache[key] = { module = N.module, value = value, atlasKey = MC.ActiveAtlasProfileKey } end
@@ -449,7 +435,6 @@ function N.Submit( ctx, commit, discard )
 	N.submitMS = N.submitMS + ( SysTime() - started ) * 1000
 	if id == false then return false end
 	if not id then
-		N.DisableAfterFailure( err )
 		MC.RenderL2Resources.Require( false, "native_l2_submit", "Native L2 submission failed: " .. tostring( err ) )
 	end
 	enqueue( ctx, id, commit, discard )
@@ -489,7 +474,6 @@ function N.TryRelight( key, index )
 		return "deferred"
 	end
 	if not id then
-		N.DisableAfterFailure( err )
 		MC.Fault( "native_relight_submit", "%s", tostring( err ) )
 		return false
 	end
@@ -612,7 +596,6 @@ function N.Pump( budget )
 					remove( tx )
 					released = released + 1
 					tx.discard( report )
-					N.DisableAfterFailure( type( err ) == "table" and err.message or err )
 					report( type( err ) == "table" and err.code or "native_l2_publish",
 						"chunk " .. tostring( tx.key ) .. " section " .. tostring( tx.index ) .. ": "
 							.. tostring( type( err ) == "table" and err.message or err )
@@ -626,7 +609,6 @@ function N.Pump( budget )
 	return released
 end
 
-if N.active and not N.Probe() then N.DisableAfterFailure( N.reason ) end
 
 if concommand then
 	concommand.Add( "mc_native_fallbacks", function()
