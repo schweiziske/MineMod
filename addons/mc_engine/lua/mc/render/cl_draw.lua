@@ -286,6 +286,7 @@ end
 local planeNX, planeNY, planeNZ, planeR = {}, {}, {}, {}
 local planeAX, planeAY, planeAZ = {}, {}, {}
 local planeCount = 0
+local frustumMode = "unprepared"
 local cullEyeX, cullEyeY, cullEyeZ = 0, 0, 0
 local maxDistSq = 0 -- 0 = unlimited
 local cullDistance, directionMargin, cullDirections = 0, 0, false
@@ -354,8 +355,17 @@ local function updateCullState( depthOnly )
 		maxDistSq = 0
 	end
 
-	if not ( MC.MeshFrustumCull and MC.MeshFrustumCull.GetBool and MC.MeshFrustumCull:GetBool() )
-		or view and ( view.ortho or foreignOffcenter ) then return true end
+	if not ( MC.MeshFrustumCull and MC.MeshFrustumCull.GetBool and MC.MeshFrustumCull:GetBool() ) then
+		frustumMode = "disabled"
+		return true
+	elseif view and view.ortho then
+		frustumMode = "orthographic"
+		return true
+	elseif foreignOffcenter then
+		frustumMode = "foreign_offcenter"
+		return true
+	end
+	frustumMode = "perspective"
 
 	local ang = view and view.angles or EyeAngles()
 	local fwd = ang:Forward()
@@ -785,6 +795,8 @@ local function drawPackStages( translucent, depthOnly )
 	local groups, version, chunks = runtime.GetStages( translucent )
 	if not updateCullState( depthOnly ) then return end
 	local stats = overrideMaterial and MC.DrawReflectionCullStats or depthOnly and MC.DrawSSRDepthCullStats or translucent and MC.DrawTranslucentCullStats or MC.DrawCullStats
+	stats.frustumMode, stats.frustumPlanes, stats.cullDistance = frustumMode, planeCount, cullDistance
+	stats.nativePortals, stats.nativePortalRoot, stats.nativePortalSeed = nativePortals, nativeRoot, nativeSeed
 	stats.sectionsTested, stats.sectionsDrawn, stats.sectionFrustumCulled, stats.sectionOcclusionCulled = 0, 0, 0, 0
 	stats.directionCulled, stats.vertices, stats.verticesCulled = 0, 0, 0
 	stats.nativeBinds, stats.nativeRanges, stats.nativeAsyncHits, stats.nativeSyncCulls, stats.nativeCullMS = 0, 0, 0, 0, 0
@@ -841,10 +853,15 @@ concommand.Add( "mc_mesh_cull_stats", function()
 			names[pass], stats.meshes or 0, stats.vertices or 0, stats.verticesCulled or 0,
 			stats.sectionsDrawn or 0, stats.sectionsTested or 0, stats.sectionFrustumCulled or 0,
 			stats.sectionOcclusionCulled or 0, stats.directionCulled or 0, stats.cpuMS or 0 ) )
+		print( string.format( "[MC cull view] %s frustum=%s planes=%d chunkFrustum=%d chunkDistance=%d distance=%.1f",
+			names[pass], stats.frustumMode or "unprepared", stats.frustumPlanes or 0,
+			stats.frustumCulled or 0, stats.distanceCulled or 0, stats.cullDistance or 0 ) )
 		if useNativeDraw() then
 			print( string.format( "[MC native draw] %s binds=%d ranges=%d asyncHits=%d syncCulls=%d resultCull=%.3fms",
 				names[pass], stats.nativeBinds or 0, stats.nativeRanges or 0, stats.nativeAsyncHits or 0,
 				stats.nativeSyncCulls or 0, stats.nativeCullMS or 0 ) )
+			print( string.format( "[MC native view] %s portals=%s root=%d seed=%d",
+				names[pass], tostring( stats.nativePortals == true ), stats.nativePortalRoot or 0, stats.nativePortalSeed or 63 ) )
 		end
 	end
 	if Occlusion then
