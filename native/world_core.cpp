@@ -127,7 +127,7 @@ void validateMutation(const Config& cfg, const Catalog& catalog, const Mutation&
 PreparedBatch prepareReplacements(const Config& config, std::shared_ptr<const Catalog> catalog,
     uint64_t epoch, const std::vector<Mutation>& batch) {
     require(catalog != nullptr, "replacement batch requires a catalog");
-    require(batch.size() <= config.maxChunks, "replacement batch exceeds its chunk limit");
+    require(!config.maxChunks || batch.size() <= config.maxChunks, "replacement batch exceeds its chunk limit");
     PreparedBatch result{epoch, std::move(catalog), {}};
     for (const auto& mutation : batch) {
         require(mutation.kind == Mutation::Kind::Replace, "prepared batch must contain replacements");
@@ -154,10 +154,6 @@ void Config::validate() const {
         "invalid world grid dimensions");
     require(std::isfinite(blockSize) && blockSize > 0 && minChunkZ <= maxChunkZ,
         "invalid world scale or vertical bounds");
-    require(maxChunks > 0 && maxChunks <= 1048576 && maxLightChunks > 0 && maxLightChunks <= 1048576,
-        "invalid world resource limits");
-    require(maxLightBytes >= 1024 && maxLightBytes <= size_t(4) * 1024 * 1024 * 1024,
-        "invalid native lighting memory budget");
 }
 Coord Config::chunkAt(Coord cell) const {
     return {floorDiv(cell.x, chunkSize), floorDiv(cell.y, chunkSize), floorDiv(cell.z, chunkHeight)};
@@ -241,7 +237,7 @@ std::unique_ptr<LightResult> rebuildLight(std::shared_ptr<const Snapshot> source
         for (int dx = -xyHalo; dx <= xyHalo; ++dx) {
             Coord key{cc.x + dx, cc.y + dy, cc.z + dz};
             if (source->known(key)) domain.insert(key);
-            require(domain.size() <= cfg.maxLightChunks, "native light domain exceeds its chunk limit");
+            require(!cfg.maxLightChunks || domain.size() <= cfg.maxLightChunks, "native light domain exceeds its chunk limit");
         }
     }
     auto exposed = [&](Coord cell) {
@@ -255,13 +251,13 @@ std::unique_ptr<LightResult> rebuildLight(std::shared_ptr<const Snapshot> source
         std::array<size_t, 6> neighbors;
     };
     std::vector<WorkChunk> chunks;
-    require(domain.size() <= cfg.maxLightBytes / cfg.cellCount(),
+    require(!cfg.maxLightBytes || domain.size() <= cfg.maxLightBytes / cfg.cellCount(),
         "native persistent lighting exceeds its memory budget");
     Grid<size_t> byKey;
     for (const auto& coord : domain) {
         if (source->light.find(coord) != source->light.end()
             && source->invalidLight.find(coord) == source->invalidLight.end()) continue;
-        require((source->light.size() + (chunks.size() + 1) * 3) <= cfg.maxLightBytes / cfg.cellCount(),
+        require(!cfg.maxLightBytes || (source->light.size() + (chunks.size() + 1) * 3) <= cfg.maxLightBytes / cfg.cellCount(),
             "native lighting work exceeds its memory budget");
         result->targets.emplace(coord, true);
         byKey.emplace(coord, chunks.size());
@@ -277,13 +273,14 @@ std::unique_ptr<LightResult> rebuildLight(std::shared_ptr<const Snapshot> source
     }
     // Includes existing immutable values and worker arrays. Queue capacity is
     // checked separately as propagation discovers work.
-    const size_t fixedBytes = (source->light.size() + chunks.size() * 3) * cfg.cellCount();
-    require(fixedBytes <= cfg.maxLightBytes, "native lighting work exceeds its memory budget");
+    const size_t fixedBytes = l2::checkedMultiply(l2::checkedAdd(source->light.size(),
+        l2::checkedMultiply(chunks.size(), 3)), cfg.cellCount());
+    require(!cfg.maxLightBytes || fixedBytes <= cfg.maxLightBytes, "native lighting work exceeds its memory budget");
     constexpr size_t Missing = std::numeric_limits<size_t>::max();
     struct Node { size_t chunk; unsigned cell; uint8_t level; };
     std::deque<Node> blockQueue, skyQueue;
     auto enqueue = [&](std::deque<Node>& queue, Node node) {
-        require((blockQueue.size() + skyQueue.size() + 1) <= (cfg.maxLightBytes - fixedBytes) / sizeof(Node),
+        require(!cfg.maxLightBytes || (blockQueue.size() + skyQueue.size() + 1) <= (cfg.maxLightBytes - fixedBytes) / sizeof(Node),
             "native lighting queue exceeds its memory budget");
         queue.push_back(node);
     };
@@ -423,7 +420,7 @@ std::unique_ptr<LightResult> rebuildLight(std::shared_ptr<const Snapshot> source
     size_t diffBytes = fixedBytes;
     for (const auto& target : result->targets) {
         if (cancelled.load(std::memory_order_relaxed)) return nullptr;
-        require(deltaBytes <= cfg.maxLightBytes - diffBytes,
+        require(!cfg.maxLightBytes || deltaBytes <= cfg.maxLightBytes - diffBytes,
             "native lighting delta exceeds its memory budget");
         const auto* old = find(source->light, target.first);
         const auto* value = find(result->chunks, target.first);
@@ -438,9 +435,9 @@ std::unique_ptr<LightResult> rebuildLight(std::shared_ptr<const Snapshot> source
             }
         }
         if (changed) {
-            require(ownerBytes <= cfg.maxLightBytes - diffBytes - deltaBytes,
+            require(!cfg.maxLightBytes || ownerBytes <= cfg.maxLightBytes - diffBytes - deltaBytes,
                 "native lighting section masks exceed their memory budget");
-            diffBytes += deltaBytes + ownerBytes;
+            diffBytes = l2::checkedAdd(diffBytes, deltaBytes + ownerBytes);
             delta->sections = affectedLightSections(cfg, {delta});
             result->deltas.emplace(target.first, std::move(delta));
         }
@@ -477,7 +474,7 @@ void Store::reconfigure(Config config) {
     require(config.chunkSize == config_.chunkSize && config.chunkHeight == config_.chunkHeight
         && config.sectionSize == config_.sectionSize && config.blockSize == config_.blockSize,
         "world geometry configuration requires an ownership transfer");
-    require(chunks_.size() <= config.maxChunks, "new world chunk limit is too small");
+    require(!config.maxChunks || chunks_.size() <= config.maxChunks, "new world chunk limit is too small");
     config_ = config;
     light_.clear();
     lightColumns_.clear();
@@ -507,7 +504,8 @@ bool Store::apply(uint64_t expectedRevision, const std::vector<Mutation>& batch)
     if (expectedRevision != revision_) return false;
     // A replacement transaction can unload a full world and insert another one.
     // publish() checks the final population; this bounds the staging work only.
-    require(batch.size() <= config_.maxChunks * 2, "world batch exceeds its chunk limit");
+    require(!config_.maxChunks || batch.size() / 2 + batch.size() % 2 <= config_.maxChunks,
+        "world batch exceeds its chunk limit");
     Grid<std::shared_ptr<const Chunk>> pending;
     for (const auto& mutation : batch) {
         validateMutation(config_, *catalog_, mutation);
@@ -545,7 +543,7 @@ bool Store::publish(Grid<std::shared_ptr<const Chunk>> pending) {
         if (entry.second && !exists) { ++finalSize; ++additions; }
         else if (!entry.second && exists) --finalSize;
     }
-    require(finalSize <= config_.maxChunks, "native world exceeds its chunk limit");
+    require(!config_.maxChunks || finalSize <= config_.maxChunks, "native world exceeds its chunk limit");
     if (pending.empty()) return true;
     Grid<std::shared_ptr<Column>> columns;
     for (const auto& entry : pending) {

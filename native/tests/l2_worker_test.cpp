@@ -201,10 +201,10 @@ void relighting() {
     size_t q = 0;
     for (const auto& part : result->parts) {
         check(part.quads.empty() && !part.lighting, "relight regenerated/retained geometry");
-        for (size_t i = 0; i < part.occlusion.size(); ++i, ++q) {
-            check(part.occlusion[i] == expected[q].occlusion, "relight AO mismatch");
+        for (size_t i = 0; i < part.pixels->occlusion.size(); ++i, ++q) {
+            check(part.pixels->occlusion[i] == expected[q].occlusion, "relight AO mismatch");
             for (unsigned c = 0; c < 4; ++c)
-                check(part.pixels[i * 4 + c] == expected[q].pixels[c], "relight pixel mismatch");
+                check(part.pixels->corners[i * 4 + c] == expected[q].pixels[c], "relight pixel mismatch");
         }
     }
     check(q == 8 && result->sectionVoxels == 0 && result->sectionQuads == 0, "relight expanded instances");
@@ -225,9 +225,33 @@ void relighting() {
     std::cout << "L2 relight: exact pixels/AO, unchanged geometry, split parts, lifetime and cancellation passed\n";
 }
 struct SizedSource : CellSource {
+    size_t footprint = 68u * 1024u * 1024u;
     Cell read(int, int, int) const override { return {1048576u + 255, 1}; }
-    size_t bytes() const override { return 68u * 1024u * 1024u; }
+    size_t bytes() const override { return footprint; }
 };
+void deferredWorkerCache() {
+    struct Source : SizedSource {
+        mutable unsigned calls = 0;
+        Cell read(int, int, int) const override {
+            check(std::this_thread::get_id() != mainThread, "owned source sampled during submission");
+            ++calls;
+            return {1048576u + 255, 1};
+        }
+    };
+    auto source = std::make_shared<Source>();
+    auto in = input(1);
+    int origin[3]{}, dims[3] = {5,5,5};
+    in->snapshot = Snapshot(origin, dims, source);
+    auto* queued = in.get();
+    WorkerPool pool;
+    const auto id = pool.submit(std::move(in));
+    check(id && !queued->snapshot.prepared() && source->calls == 0, "submission allocated owned scratch");
+    pool.start(1);
+    wait(pool, id);
+    check(pool.ready(id)->error.empty() && source->calls > 0, "worker did not prepare/sample owned scratch");
+    pool.stop();
+    check(pool.stats().bytes == 0, "deferred scratch retained on shutdown");
+}
 void memoryAccounting() {
     WorkerPool pool;
     auto source = std::make_shared<SizedSource>();
@@ -279,6 +303,48 @@ void memoryAccounting() {
     check(alive.expired(), "released result retained shared source");
     std::cout << "L2 memory: shared identity, exact admission, completion shrink and cancellation passed\n";
 }
+void contentSize() {
+    WorkerPool pool;
+    auto many = input(1);
+    const auto work = many->parts[0][0];
+    many->parts.resize(300, std::vector<Work>{work});
+    many->retainLighting = true;
+    const auto id = pool.submit(std::move(many));
+    pool.start(1);
+    wait(pool, id);
+    auto result = pool.ready(id);
+    check(result->error.empty() && result->parts.size() == 300, "300-part section was truncated or rejected");
+    auto relight = input(1);
+    relight->parts.clear();
+    for (const auto& part : result->parts) relight->relight.push_back(part.lighting);
+    pool.stop();
+    const auto relightId = pool.submit(std::move(relight));
+    pool.start(1);
+    wait(pool, relightId);
+    check(pool.ready(relightId)->error.empty() && pool.ready(relightId)->parts.size() == 300,
+        "300-part relight was truncated or rejected");
+    result.reset();
+    pool.stop();
+
+    auto dense = input(8192);
+    dense->parts.resize(17, dense->parts[0]); // 139264 quads, each mesh remains legal.
+    const auto denseId = pool.submit(std::move(dense));
+    check(denseId != 0, "dense section was rejected by a content ceiling");
+    pool.start(1);
+    wait(pool, denseId);
+    result = pool.ready(denseId);
+    check(result->error.empty() && result->parts.size() == 17, "dense section failed or lost parts");
+    size_t quads = 0;
+    for (const auto& part : result->parts) quads += part.quads.size();
+    check(quads == 139264, "dense section lost geometry");
+    pool.stop();
+    check(pool.stats().bytes == 0, "large content leaked accounting");
+    bool overflow = false;
+    try { checkedMultiply(std::numeric_limits<size_t>::max(), 2); }
+    catch (const std::exception&) { overflow = true; }
+    check(overflow, "allocation arithmetic overflow was accepted");
+    std::cout << "L2 content: 300-part geometry/relight and 139264-quad section without content ceilings passed\n";
+}
 void run() {
     WorkerPool pool;
     pool.start(4);
@@ -297,8 +363,8 @@ void run() {
         const auto& w = reference->parts[0][0];
         const auto expected = evaluate(w.geometry, w.command, reference->snapshot, 123);
         check(std::memcmp(&result->parts[0].quads[123], &expected, sizeof(Quad)) == 0, "worker differs from core");
-        check(result->parts[0].occlusion[123] == expected.occlusion, "worker AO packing");
-        check(result->parts[0].pixels[123 * 4] == expected.pixels[0], "worker corner packing");
+        check(result->parts[0].pixels->occlusion[123] == expected.occlusion, "worker AO packing");
+        check(result->parts[0].pixels->corners[123 * 4] == expected.pixels[0], "worker corner packing");
         check(!result->input, "worker retained input after computing");
     }
     const auto stats = pool.stats();
@@ -317,14 +383,21 @@ void run() {
     pool.cancel(running);
     pool.stop();
     check(pool.stats().bytes == 0, "running cancellation leaked");
-    pool.start(1);
     auto large = input(1);
-    large->parts[0].reserve(WorkerPool::MaxBytes / sizeof(Work) + 1);
-    bool rejected = false;
-    try { pool.submit(std::move(large)); }
-    catch (const std::exception&) { rejected = true; }
-    check(rejected && pool.stats().bytes == 0, "oversized section bypassed memory budget");
+    auto largeSource = std::make_shared<SizedSource>();
+    largeSource->footprint = WorkerPool::TargetBytes * 2;
+    const int origin[3] = {0,0,0}, dimensions[3] = {5,5,5};
+    large->snapshot = Snapshot(origin, dimensions, largeSource);
+    const auto largeJob = pool.submit(std::move(large));
+    check(largeJob != 0 && pool.stats().bytes > WorkerPool::TargetBytes,
+        "a single large section was rejected by a scheduling target");
+    check(!pool.canSubmit() && pool.submit(input(1)) == 0,
+        "large section did not apply temporary backpressure");
+    pool.start(1);
+    wait(pool, largeJob);
+    check(pool.ready(largeJob)->error.empty(), "large section did not complete");
     pool.stop();
+    check(pool.stats().bytes == 0 && pool.canSubmit(), "large section did not release admission");
     // Rapid start/stop exercises queued, executing and completed disposal.
     for (unsigned i = 0; i < 12; ++i) {
         pool.start(2);
@@ -336,6 +409,6 @@ void run() {
 }
 }
 int main() {
-    try { run(); voxels(); relighting(); memoryAccounting(); return 0; }
+    try { run(); voxels(); relighting(); deferredWorkerCache(); memoryAccounting(); contentSize(); return 0; }
     catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

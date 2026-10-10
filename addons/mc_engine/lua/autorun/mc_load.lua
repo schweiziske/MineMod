@@ -464,9 +464,9 @@ if CLIENT then
 	MC.ProbeNativeMeshModule()
 	local nativeMissing = MC.NativeMeshModuleMissing == true
 	local nativeOutdated = MC.NativeMeshModuleOutdated == true
-	MC.RENDER_SECTION_SIZE = 8
+	MC.RENDER_SECTION_SIZE = 16
 	MsgN( "[MC] render section size = " .. MC.RENDER_SECTION_SIZE
-		.. " (Lua L2)" )
+		.. " (Lua/Native L2)" )
 
 	if ( nativeMissing or nativeOutdated ) and not MC.NativeMeshInstallNoticeScheduled then
 		MC.NativeMeshInstallNoticeScheduled = true
@@ -581,7 +581,7 @@ function MC.GeneratedRuntimeDiagnostics()
 		blockStagingReleased = MC.GeneratedBlockRegistrationTablesReleased == true,
 		schemaStagingReleased = MC.GeneratedBlockStateSchemasReleased == true,
 		pendingSchemasReleased = MC.PendingBlockStateSchemasReleased == true,
-		renderSectionSize = MC.RENDER_SECTION_SIZE or 8,
+		renderSectionSize = MC.RENDER_SECTION_SIZE or 16,
 		nativeModuleAvailable = MC.NativeMeshModuleAvailable == true,
 		chunkBackend = chunkBackend and chunkBackend.name or "lua",
 		meshBackend = meshBackend and meshBackend.name or "lua",

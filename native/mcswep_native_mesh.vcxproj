@@ -392,6 +392,8 @@
     <ClInclude Include="l2_draw_bridge.h" />
     <ClInclude Include="l2_fluid.h" />
     <ClInclude Include="l2_worker.h" />
+    <ClInclude Include="l2_pixels.h" />
+    <ClInclude Include="pixel_texture_data.h" />
     <ClInclude Include="patchdecode.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="test.h" />

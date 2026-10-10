@@ -5,6 +5,7 @@
 #include "l2_draw_bridge.h"
 #include "world_bridge.h"
 #include "world_mesh.h"
+#include "pixel_upload.h"
 #include "global.h"
 #include <algorithm>
 #include <cmath>
@@ -13,11 +14,12 @@
 #include <stdexcept>
 #include <string>
 #include <chrono>
+#include <unordered_set>
 
 namespace mcmesh::l2bridge {
 using namespace GarrysMod::Lua;
 namespace {
-int templateType = -1, meshType = -1, cubeType = -1, modelType = -1, fluidType = -1;
+int templateType = -1, meshType = -1, cubeType = -1, modelType = -1, fluidType = -1, pixelTransactionType = -1;
 using ModelHandle = std::shared_ptr<const l2::Model>;
 uint64_t templates = 0, liveTemplates = 0, batches = 0, liveMeshes = 0;
 uint64_t vertices = 0, indices = 0, reads = 0, hits = 0, failures = 0;
@@ -25,9 +27,11 @@ bool building = false;
 l2::WorkerPool workers;
 std::unordered_map<uint64_t, std::shared_ptr<const world::MeshSnapshot>> worldTickets;
 double snapshotMS = 0, commandMS = 0, uploadMS = 0;
-constexpr size_t MaxRetainedLightBytes = 64 * 1024 * 1024;
 size_t retainedLightBytes = 0;
-uint64_t retainedLightMisses = 0;
+int64_t meshPixelBytes = 0;
+uint64_t nativePixelTexels = 0, luaPixelValues = 0, relightBatches = 0;
+std::unordered_set<l2::PixelTransaction*> pixelTransactions;
+std::unordered_map<uint64_t, std::vector<std::weak_ptr<l2::PixelSlot>>> relightTargets;
 double clockMS() {
     return std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -47,6 +51,7 @@ struct MeshHandle {
     MeshHandle* previous = nullptr;
     MeshHandle* next = nullptr;
     RetainedLight* lighting = nullptr;
+    std::shared_ptr<l2::PixelSlot> pixels;
     DrawResource draw;
 };
 MeshHandle* firstMesh = nullptr;
@@ -65,6 +70,12 @@ void destroy(MeshHandle* handle) {
     handle->draw.mesh = nullptr;
     handle->material->DecrementReferenceCount();
     handle->material = nullptr;
+    if (handle->pixels) {
+        meshPixelBytes -= int64_t(handle->pixels->pixels->bytes());
+        handle->pixels->live = false;
+        handle->pixels->pixels.reset();
+        handle->pixels.reset();
+    }
     if (handle->lighting) {
         retainedLightBytes -= handle->lighting->bytes;
         delete handle->lighting;
@@ -75,6 +86,20 @@ void destroy(MeshHandle* handle) {
 }
 LUA_FUNCTION(meshDestroy) {
     destroy(LUA->GetUserType<MeshHandle>(1, meshType));
+    return 0;
+}
+LUA_FUNCTION(meshGC) {
+    auto* handle = LUA->GetUserType<MeshHandle>(1, meshType);
+    destroy(handle);
+    delete handle;
+    LUA->SetUserType(1, nullptr);
+    return 0;
+}
+LUA_FUNCTION(pixelTransactionGC) {
+    auto* transaction = LUA->GetUserType<l2::PixelTransaction>(1, pixelTransactionType);
+    pixelTransactions.erase(transaction);
+    delete transaction;
+    LUA->SetUserType(1, nullptr);
     return 0;
 }
 LUA_FUNCTION(meshValid) {
@@ -88,6 +113,10 @@ LUA_FUNCTION(meshDraw) {
         LUA->ThrowError("Native L2: drawing a destroyed mesh");
         return 0;
     }
+    char error[512]{};
+    try { pixelupload::Flush(); }
+    catch (const std::exception& e) { snprintf(error, sizeof(error), "%s", e.what()); }
+    if (*error) { LUA->ThrowError(error); return 0; }
     // The Lua render stage has already bound its material and view transform.
     handle->mesh->Draw(0, handle->draw.indices);
     return 0;
@@ -171,10 +200,11 @@ void array(ILuaBase* lua, const uint32_t* values, size_t count) {
         lua->PushNumber(values[i]); lua->RawSet(table);
     }
 }
-std::vector<l2::Work> readWork(ILuaBase* lua, int table, l2::Snapshot& snapshot, bool allowEmpty = false) {
+std::vector<l2::Work> readWork(ILuaBase* lua, int table, l2::Snapshot& snapshot, bool recipe = false) {
     l2::require(lua->IsType(table, Type::Table), "invalid L2 commands table");
     const int length = lua->ObjLen(table);
-    l2::require((length > 0 || allowEmpty) && length % 11 == 0 && length / 11 <= l2::MaxQuads, "invalid L2 command count");
+    l2::require(length >= 0 && (length > 0 || recipe) && length % 11 == 0
+        && (recipe || length / 11 <= l2::MaxQuads), "invalid L2 command count");
     std::vector<l2::Work> work(length / 11);
     for (unsigned i = 0; i < work.size(); ++i) {
         const unsigned offset = i * 11;
@@ -192,7 +222,7 @@ std::vector<l2::Work> readWork(ILuaBase* lua, int table, l2::Snapshot& snapshot,
         c.size = item(lua, table, offset + 8);
         c.tint = l2::integer(item(lua, table, offset + 9), 0, 31, "invalid L2 tint");
         c.opacity = l2::integer(item(lua, table, offset + 10), 0, 255, "invalid L2 opacity");
-        l2::validateCommand(w.geometry, c, snapshot, i);
+        l2::validateCommand(w.geometry, c, snapshot, recipe ? 0 : i);
         lua->PushNumber(offset + 11); lua->RawGet(table);
         if (w.geometry.mode == 2) {
             l2::require(lua->IsType(-1, Type::Table) && lua->ObjLen(-1) == 4, "prepared L2 quad requires four pixels");
@@ -228,7 +258,9 @@ void readVoxels(ILuaBase* lua, l2::Input& input) {
         origin[a] = l2::integer(item(lua, 4, a + 4), INT32_MIN + 64, INT32_MAX - 128, "invalid voxel origin");
     lua->PushNumber(7); lua->RawGet(4);
     const int sections = lua->Top();
-    l2::require(lua->IsType(sections, Type::Table) && lua->ObjLen(sections) <= 512, "invalid voxel sections");
+    const int chunkCells = cs * cs * ch;
+    l2::require(lua->IsType(sections, Type::Table) && lua->ObjLen(sections) <= chunkCells, "invalid voxel sections");
+    std::vector<uint8_t> seen(chunkCells);
     for (int s = 1; s <= lua->ObjLen(sections); ++s) {
         lua->PushNumber(s); lua->RawGet(sections);
         const int section = lua->Top();
@@ -242,13 +274,15 @@ void readVoxels(ILuaBase* lua, l2::Input& input) {
         l2::require(lua->IsType(indicesTable, Type::Table) && lua->IsType(statesTable, Type::Table)
             && lua->IsType(recipes, Type::Table), "invalid voxel index/recipe arrays");
         const int count = lua->ObjLen(indicesTable);
-        l2::require(count <= 512 && lua->ObjLen(statesTable) == count, "invalid voxel section length");
         int low[3], high[3];
+        int volume = 1;
         for (int a = 0; a < 3; ++a) {
             low[a] = l2::integer(item(lua, section, a + 4), 0, (a == 2 ? ch : cs) - 1, "invalid voxel minimum");
-            high[a] = l2::integer(item(lua, section, a + 7), low[a], std::min(low[a] + 7, (a == 2 ? ch : cs) - 1),
+            high[a] = l2::integer(item(lua, section, a + 7), low[a], (a == 2 ? ch : cs) - 1,
                 "invalid voxel maximum");
+            volume *= high[a] - low[a] + 1;
         }
+        l2::require(count >= 0 && count <= volume && lua->ObjLen(statesTable) == count, "invalid voxel section length");
         std::unordered_map<uint32_t, std::pair<unsigned, bool>> mapped;
         lua->PushNil();
         while (lua->Next(recipes)) {
@@ -260,19 +294,18 @@ void readVoxels(ILuaBase* lua, l2::Input& input) {
             const auto* cube = lua->GetUserType<l2::Cube>(-1, cubeType);
             const auto* model = lua->GetUserType<ModelHandle>(-1, modelType);
             l2::require(cube != nullptr || (model && *model), "invalid compiled voxel recipe");
-            l2::require(mapped.size() < 512 && input.cubes.size() + input.models.size() < l2::WorkerPool::MaxSectionQuads / 6,
-                "voxel recipe count exceeds budget");
+            l2::require(mapped.size() < size_t(volume), "more voxel recipes than section cells");
             if (cube) {
                 auto value = *cube;
                 lua->Pop();
                 for (unsigned f = 0; f < 6; ++f)
-                    value.groups[f] = l2::integer(item(lua, recipe, f + 2), 1, l2::WorkerPool::MaxParts, "invalid voxel group");
+                    value.groups[f] = l2::integer(item(lua, recipe, f + 2), 1, INT32_MAX, "invalid voxel group");
                 mapped.emplace(static_cast<uint32_t>(state), std::make_pair(static_cast<unsigned>(input.cubes.size()), false));
                 input.cubes.push_back(value);
             } else {
                 l2::ModelBinding value{*model, 0};
                 lua->Pop();
-                value.group = l2::integer(item(lua, recipe, 2), 1, l2::WorkerPool::MaxParts, "invalid model group");
+                value.group = l2::integer(item(lua, recipe, 2), 1, INT32_MAX, "invalid model group");
                 mapped.emplace(static_cast<uint32_t>(state), std::make_pair(static_cast<unsigned>(input.models.size()), true));
                 input.models.push_back(std::move(value));
             }
@@ -286,8 +319,9 @@ void readVoxels(ILuaBase* lua, l2::Input& input) {
             const int local[3] = {li % cs, li / cs % cs, li / (cs * cs)};
             for (int a = 0; a < 3; ++a)
                 l2::require(local[a] >= low[a] && local[a] <= high[a], "voxel index outside its section");
+            l2::require(!seen[li], "duplicate voxel index");
+            seen[li] = 1;
             if (found == mapped.end()) continue;
-            l2::require(input.voxels.size() < l2::WorkerPool::MaxSectionQuads / 6, "voxel section exceeds cell budget");
             l2::Voxel voxel;
             voxel.cube = found->second.first;
             voxel.model = found->second.second;
@@ -330,18 +364,26 @@ void initialize(ILuaBase* lua) {
     function(lua, "Draw", meshDraw);
     function(lua, "Destroy", meshDestroy);
     function(lua, "IsValid", meshValid);
-    function(lua, "__gc", meshDestroy);
+    function(lua, "__gc", meshGC);
     lua->Push(-1); lua->SetField(-2, "__index");
     lua->PushString("Native L2 mesh"); lua->SetField(-2, "__metatable");
     lua->Pop();
+    pixelTransactionType = lua->CreateMetaTable("MCSWEP_L2LightingTransaction_v1");
+    function(lua, "__gc", pixelTransactionGC);
+    lua->PushString("Native L2 lighting transaction"); lua->SetField(-2, "__metatable");
+    lua->Pop();
 }
 void shutdown() {
+    pixelupload::Shutdown();
     l2drawbridge::shutdown();
     workers.stop();
     worldTickets.clear();
+    relightTargets.clear();
     while (firstMesh) destroy(firstMesh);
+    for (auto* transaction : pixelTransactions) transaction->shutdown();
 }
 int version(ILuaBase* lua) { lua->PushNumber(2); return 1; }
+int lightingVersion(ILuaBase* lua) { lua->PushNumber(2); return 1; }
 int compileCube(ILuaBase* lua) {
     const int top = lua->Top();
     try {
@@ -416,7 +458,6 @@ int compileModel(ILuaBase* lua) {
             model->shapeSelector = l2::integer(number(lua, 4), 0, 3, "invalid shape selector");
         const int origin[3] = {-2,-2,-2}, dims[3] = {5,5,5};
         l2::Snapshot snapshot(origin, dims, readCell, lua);
-        size_t total = 0;
         for (int i = 1; i <= count; ++i) {
             lua->PushNumber(i); lua->RawGet(1);
             const int groupTable = lua->Top();
@@ -447,8 +488,6 @@ int compileModel(ILuaBase* lua) {
                 const int culls = lua->Top();
                 l2::require(shaded.size() == flat.size() && lua->IsType(culls, Type::Table)
                     && lua->ObjLen(culls) == shaded.size(), "model AO/cull array count mismatch");
-                total += shaded.size();
-                l2::require(total <= l2::WorkerPool::MaxSectionQuads, "model plan exceeds quad budget");
                 for (size_t q = 0; q < shaded.size(); ++q) {
                     const auto& first = shaded[q];
                     const auto& second = flat[q];
@@ -500,13 +539,15 @@ int compileTemplate(ILuaBase* lua) {
 }
 
 static int upload(ILuaBase* lua, const l2::Part& part, unsigned first, const std::string& materialName,
-    const world::MeshSnapshot* source = nullptr) {
+    const world::MeshSnapshot* source = nullptr, bool nativePixels = false) {
     const int top = lua->Top();
     MeshHandle* handle = nullptr;
     try {
         const double started = clockMS();
         const unsigned count = static_cast<unsigned>(part.quads.size());
         l2::require(count > 0, "L2 upload requires geometry");
+        l2::require(part.pixels != nullptr, "L2 upload is missing its pixels");
+        part.pixels->validate(count);
         l2::require(!materialName.empty() && materialName.front() == '!', "L2 requires a runtime declaration material");
         l2::require(g_matsys != nullptr, "L2 material system unavailable");
         IMaterial* material = g_matsys->FindMaterial(materialName.c_str(), TEXTURE_GROUP_OTHER, false);
@@ -528,8 +569,9 @@ static int upload(ILuaBase* lua, const l2::Part& part, unsigned first, const std
         CMatRenderContextPtr context(g_matsys);
         l2::require(!!context, "L2 render context unavailable");
         // GC owns the handle before acquiring a Source resource.
-        lua->PushUserType_Value(MeshHandle{}, meshType);
-        handle = lua->GetUserType<MeshHandle>(-1, meshType);
+        auto owned = std::make_unique<MeshHandle>();
+        lua->PushUserType(owned.get(), meshType);
+        handle = owned.release();
         handle->mesh = context->CreateStaticMesh(format, TEXTURE_GROUP_STATIC_VERTEX_BUFFER_OTHER, material);
         l2::require(handle->mesh != nullptr, "L2 CreateStaticMesh failed");
         handle->material = material;
@@ -570,18 +612,24 @@ static int upload(ILuaBase* lua, const l2::Part& part, unsigned first, const std
         builder.End();
         if (source && part.lighting) {
             auto retained = std::make_unique<RetainedLight>(part, *source);
-            if (retained->bytes <= MaxRetainedLightBytes - retainedLightBytes) {
-                retainedLightBytes += retained->bytes;
-                handle->lighting = retained.release();
-            } else ++retainedLightMisses;
+            retainedLightBytes += retained->bytes;
+            handle->lighting = retained.release();
+        }
+        if (nativePixels) {
+            handle->pixels = std::make_shared<l2::PixelSlot>();
+            handle->pixels->pixels = part.pixels;
+            meshPixelBytes += int64_t(part.pixels->bytes());
         }
         const int meshIndex = lua->Top();
         lua->CreateTable();
         lua->Push(meshIndex); lua->SetField(-2, "mesh");
         lua->PushBool(handle->lighting != nullptr); lua->SetField(-2, "relight");
         numberField(lua, "vertices", count * 4); numberField(lua, "indices", count * 6);
-        array(lua, part.pixels.data(), part.pixels.size()); lua->SetField(-2, "pixels");
-        array(lua, part.occlusion.data(), part.occlusion.size()); lua->SetField(-2, "occlusion");
+        if (!nativePixels) {
+            array(lua, part.pixels->corners.data(), part.pixels->corners.size()); lua->SetField(-2, "pixels");
+            array(lua, part.pixels->occlusion.data(), part.pixels->occlusion.size()); lua->SetField(-2, "occlusion");
+            luaPixelValues += part.pixels->corners.size() + part.pixels->occlusion.size();
+        }
         lua->CreateTable();
         for (unsigned i = 0; i < 6; ++i) {
             lua->PushNumber(i + 1); lua->PushNumber(part.bounds[i]); lua->RawSet(-3);
@@ -608,14 +656,16 @@ int buildMesh(ILuaBase* lua) {
             "L2 batch exceeds corner atlas");
         const std::string material = lua->GetString(5);
         l2::Part part;
-        part.quads.resize(work.size()); part.pixels.resize(work.size() * 4); part.occlusion.resize(work.size());
+        part.quads.resize(work.size());
+        auto pixels = std::make_shared<l2::LightPixels>(work.size());
+        part.pixels = pixels;
         std::fill(part.bounds, part.bounds + 3, FLT_MAX);
         std::fill(part.bounds + 3, part.bounds + 6, -FLT_MAX);
         for (unsigned i = 0; i < work.size(); ++i) {
             auto& q = part.quads[i];
             q = l2::evaluate(work[i].geometry, work[i].command, snapshot, i);
-            std::copy(std::begin(q.pixels), std::end(q.pixels), part.pixels.begin() + i * 4);
-            part.occlusion[i] = q.occlusion;
+            std::copy(std::begin(q.pixels), std::end(q.pixels), pixels->corners.begin() + i * 4);
+            pixels->occlusion[i] = q.occlusion;
             for (const auto& v : q.vertices) for (unsigned a = 0; a < 3; ++a) {
                 part.bounds[a] = std::min(part.bounds[a], v.position[a]);
                 part.bounds[a + 3] = std::max(part.bounds[a + 3], v.position[a]);
@@ -635,17 +685,13 @@ int submitSection(ILuaBase* lua) {
         if (!workers.canSubmit()) { lua->PushBool(false); return 1; }
         const double started = clockMS();
         const int count = lua->ObjLen(1);
-        l2::require(count >= 0 && count <= l2::WorkerPool::MaxParts
-            && (count > 0 || lua->IsType(4, Type::Table)), "L2 section exceeds part budget");
+        l2::require(count >= 0 && (count > 0 || lua->IsType(4, Type::Table)), "missing L2 section input");
         auto input = std::make_unique<l2::Input>(readSnapshot(lua));
         input->parts.reserve(count);
-        size_t quads = 0;
         for (int i = 1; i <= count; ++i) {
             lua->PushNumber(i); lua->RawGet(1);
             input->parts.push_back(readWork(lua, lua->Top(), input->snapshot));
             lua->Pop();
-            quads += input->parts.back().size();
-            l2::require(quads <= l2::WorkerPool::MaxSectionQuads, "L2 section exceeds quad budget");
         }
         readVoxels(lua, *input);
         for (const auto& model : input->models)
@@ -706,13 +752,13 @@ int submitWorldSection(ILuaBase* lua) {
                 auto value = *cube;
                 lua->Pop();
                 for (unsigned f = 0; f < 6; ++f)
-                    value.groups[f] = l2::integer(item(lua, table, f + 2), 1, l2::WorkerPool::MaxParts, "invalid cube group");
+                    value.groups[f] = l2::integer(item(lua, table, f + 2), 1, INT32_MAX, "invalid cube group");
                 recipe.index = unsigned(input->cubes.size()); recipe.maxQuads = 6;
                 input->cubes.push_back(std::move(value));
             } else if (model && *model) {
                 l2::ModelBinding value{*model, 0};
                 lua->Pop();
-                value.group = l2::integer(item(lua, table, 2), 1, l2::WorkerPool::MaxParts, "invalid model group");
+                value.group = l2::integer(item(lua, table, 2), 1, INT32_MAX, "invalid model group");
                 recipe.index = unsigned(input->models.size()); recipe.model = true; recipe.maxQuads = value.model->maxQuads;
                 recipe.shapeSelector = value.model->shapeSelector;
                 input->models.push_back(std::move(value));
@@ -730,7 +776,7 @@ int submitWorldSection(ILuaBase* lua) {
                 auto value = *fluid;
                 lua->Pop();
                 lua->GetField(table, "fluidGroup");
-                value.group = l2::integer(number(lua, -1), 1, l2::WorkerPool::MaxParts, "invalid fluid group");
+                value.group = l2::integer(number(lua, -1), 1, INT32_MAX, "invalid fluid group");
                 recipe.fluidIndex = int(input->fluids.size());
                 recipe.maxQuads += 6;
                 input->fluids.push_back(value);
@@ -742,20 +788,16 @@ int submitWorldSection(ILuaBase* lua) {
             recipe.blocking = lua->GetBool(-1);
             lua->Pop();
             recipes.emplace(uint32_t(state), recipe);
-            l2::require(recipes.size() <= 512, "world section recipe limit");
             lua->Pop();
         }
         input->instances = std::make_shared<world::MeshInstances>(source, chunk, section, std::move(recipes), lua->GetBool(9));
         const int count = lua->ObjLen(1);
-        l2::require(count >= 0 && count <= l2::WorkerPool::MaxParts, "world section part limit");
+        l2::require(count >= 0, "invalid world section part count");
         input->retainLighting = lua->GetBool(9) && count == 0;
-        size_t quads = 0;
         for (int i = 1; i <= count; ++i) {
             lua->PushNumber(i); lua->RawGet(1);
             input->parts.push_back(readWork(lua, lua->Top(), input->snapshot));
             lua->Pop();
-            quads += input->parts.back().size();
-            l2::require(quads <= l2::WorkerPool::MaxSectionQuads, "world fallback quad limit");
         }
         commandMS += clockMS() - started;
         // The owned CPU reader is sampled only by the worker. No Lua prefetch.
@@ -766,7 +808,7 @@ int submitWorldSection(ILuaBase* lua) {
         } else lua->PushBool(false);
         return 1;
     } catch (const std::exception& e) {
-        if (submitted) workers.cancel(submitted);
+        if (submitted) { workers.cancel(submitted); worldTickets.erase(submitted); relightTargets.erase(submitted); }
         return failure(lua, top, e.what());
     }
 }
@@ -804,7 +846,7 @@ int submitWorldRelight(ILuaBase* lua) {
             "invalid relight section") - 1;
         l2::require(lua->IsType(1, Type::Table), "invalid relight meshes");
         const int count = lua->ObjLen(1);
-        l2::require(count > 0 && count <= l2::WorkerPool::MaxParts, "invalid relight part count");
+        l2::require(count > 0, "invalid relight part count");
         workers.start();
         if (!workers.canSubmit()) { lua->PushBool(false); return 1; }
         const auto started = clockMS();
@@ -812,6 +854,7 @@ int submitWorldRelight(ILuaBase* lua) {
         const int origin[3] = {source->origin.x, source->origin.y, source->origin.z};
         const int dims[3] = {source->dimensions.x, source->dimensions.y, source->dimensions.z};
         auto input = std::make_unique<l2::Input>(l2::Snapshot(origin, dims, source));
+        std::vector<std::weak_ptr<l2::PixelSlot>> targets;
         for (int i = 1; i <= count; ++i) {
             lua->PushNumber(i); lua->RawGet(1);
             const auto* mesh = lua->GetUserType<MeshHandle>(-1, meshType);
@@ -823,16 +866,18 @@ int submitWorldRelight(ILuaBase* lua) {
                 lua->PushBool(false); lua->PushString("geometry_changed_or_not_retained"); return 2;
             }
             input->relight.push_back(retained->work);
+            targets.push_back(mesh->pixels);
         }
         commandMS += clockMS() - started;
         submitted = workers.submit(std::move(input));
         if (submitted) {
             worldTickets.emplace(submitted, std::move(source));
+            relightTargets.emplace(submitted, std::move(targets));
             lua->PushNumber(double(submitted));
         } else lua->PushBool(false);
         return 1;
     } catch (const std::exception& e) {
-        if (submitted) workers.cancel(submitted);
+        if (submitted) { workers.cancel(submitted); worldTickets.erase(submitted); relightTargets.erase(submitted); }
         return failure(lua, top, e.what());
     }
 }
@@ -846,8 +891,9 @@ int lightPart(ILuaBase* lua) {
         const auto index = l2::integer(number(lua, 2), 1, int(job->parts.size()), "invalid relight part") - 1;
         const auto& part = job->parts[index];
         lua->CreateTable();
-        array(lua, part.pixels.data(), part.pixels.size()); lua->SetField(-2, "pixels");
-        array(lua, part.occlusion.data(), part.occlusion.size()); lua->SetField(-2, "occlusion");
+        array(lua, part.pixels->corners.data(), part.pixels->corners.size()); lua->SetField(-2, "pixels");
+        array(lua, part.pixels->occlusion.data(), part.pixels->occlusion.size()); lua->SetField(-2, "occlusion");
+        luaPixelValues += part.pixels->corners.size() + part.pixels->occlusion.size();
         return 1;
     } catch (const std::exception& e) { return failure(lua, top, e.what()); }
 }
@@ -902,7 +948,7 @@ int sectionParts(ILuaBase* lua) {
         return 1;
     } catch (const std::exception& e) { return failure(lua, top, e.what()); }
 }
-int uploadPart(ILuaBase* lua) {
+static int uploadJobPart(ILuaBase* lua, bool nativePixels) {
     const int top = lua->Top();
     try {
         BuildGuard guard;
@@ -916,7 +962,110 @@ int uploadPart(ILuaBase* lua) {
         l2::require(lua->IsType(4, Type::String), "invalid L2 material");
         const auto source = worldTickets.find(id);
         return upload(lua, part, first, lua->GetString(4),
-            source == worldTickets.end() ? nullptr : source->second.get());
+            source == worldTickets.end() ? nullptr : source->second.get(), nativePixels);
+    } catch (const std::exception& e) { return failure(lua, top, e.what()); }
+}
+int uploadPart(ILuaBase* lua) { return uploadJobPart(lua, false); }
+int uploadNativePart(ILuaBase* lua) { return uploadJobPart(lua, true); }
+namespace {
+MeshHandle& pixelMesh(ILuaBase* lua, int at) {
+    auto* mesh = lua->GetUserType<MeshHandle>(at, meshType);
+    l2::require(mesh && mesh->mesh && mesh->pixels && mesh->pixels->pixels,
+        "Native L2 mesh has no retained pixels");
+    return *mesh;
+}
+l2::PixelTransaction& pixelTransaction(ILuaBase* lua) {
+    auto* transaction = lua->GetUserType<l2::PixelTransaction>(1, pixelTransactionType);
+    l2::require(transaction != nullptr, "Native L2 lighting transaction was released");
+    return *transaction;
+}
+}
+int uploadMeshPixels(ILuaBase* lua) {
+    const int top = lua->Top();
+    try {
+        const auto& mesh = pixelMesh(lua, 1);
+        const double texture = number(lua, 2);
+        const unsigned first = l2::integer(number(lua, 3), 0, INT32_MAX, "invalid Native L2 atlas address");
+        pixelupload::UploadNative(*mesh.pixels->pixels, texture, first);
+        nativePixelTexels += mesh.pixels->pixels->occlusion.size() * 5;
+        lua->PushBool(true); return 1;
+    } catch (const std::exception& e) { return failure(lua, top, e.what()); }
+}
+int readMeshPixels(ILuaBase* lua) {
+    const int top = lua->Top();
+    try {
+        const auto& pixels = *pixelMesh(lua, 1).pixels->pixels;
+        lua->CreateTable();
+        array(lua, pixels.corners.data(), pixels.corners.size()); lua->SetField(-2, "pixels");
+        array(lua, pixels.occlusion.data(), pixels.occlusion.size()); lua->SetField(-2, "occlusion");
+        luaPixelValues += pixels.corners.size() + pixels.occlusion.size();
+        return 1;
+    } catch (const std::exception& e) { return failure(lua, top, e.what()); }
+}
+int stageRelight(ILuaBase* lua) {
+    const int top = lua->Top();
+    try {
+        const auto id = uint64_t(l2::integer(number(lua, 1), 1, INT32_MAX, "invalid relight job"));
+        const auto job = workers.ready(id);
+        l2::require(job->error.empty(), job->error.c_str());
+        l2::require(job->relight && lua->IsType(2, Type::Table)
+            && size_t(lua->ObjLen(2)) == job->parts.size(), "invalid Native L2 relight layout");
+        const auto targets = relightTargets.find(id);
+        l2::require(targets != relightTargets.end() && targets->second.size() == job->parts.size(),
+            "Native L2 relight targets are unavailable");
+        std::vector<l2::PixelUpdate> updates;
+        updates.reserve(job->parts.size());
+        for (size_t i = 0; i < job->parts.size(); ++i) {
+            lua->PushNumber(double(i + 1)); lua->RawGet(2);
+            l2::require(lua->IsType(-1, Type::Table), "invalid Native L2 relight part");
+            const int row = lua->Top();
+            lua->GetField(row, "mesh");
+            auto slot = pixelMesh(lua, -1).pixels;
+            lua->Pop();
+            l2::require(slot == targets->second[i].lock(), "Native L2 relight mesh order changed");
+            lua->GetField(row, "firstQuad");
+            const unsigned first = l2::integer(number(lua, -1), 0, INT32_MAX, "invalid relight atlas address");
+            lua->Pop();
+            lua->GetField(row, "quadCount");
+            const unsigned count = l2::integer(number(lua, -1), 1, l2::MaxQuads, "invalid relight quad count");
+            lua->Pop();
+            job->parts[i].pixels->validate(count);
+            updates.push_back({slot, slot->pixels, job->parts[i].pixels, first});
+            lua->Pop();
+        }
+        auto transaction = std::make_unique<l2::PixelTransaction>(std::move(updates));
+        lua->PushUserType(transaction.get(), pixelTransactionType);
+        auto* owned = transaction.release();
+        pixelTransactions.insert(owned);
+        return 1;
+    } catch (const std::exception& e) { return failure(lua, top, e.what()); }
+}
+int uploadRelight(ILuaBase* lua) {
+    const int top = lua->Top();
+    try {
+        auto& transaction = pixelTransaction(lua);
+        const double texture = number(lua, 2);
+        l2::require(lua->IsType(3, Type::Bool), "invalid Native L2 relight upload");
+        const bool restore = lua->GetBool(3);
+        pixelupload::UploadNative(transaction, texture, restore);
+        if (!restore) {
+            ++relightBatches;
+            for (const auto& update : transaction.updates()) nativePixelTexels += update.next->occlusion.size() * 5;
+        }
+        lua->PushBool(true); return 1;
+    } catch (const std::exception& e) { return failure(lua, top, e.what()); }
+}
+int finishRelight(ILuaBase* lua) {
+    const int top = lua->Top();
+    try {
+        auto& transaction = pixelTransaction(lua);
+        l2::require(lua->IsType(2, Type::Bool), "invalid Native L2 lighting publication");
+        if (lua->GetBool(2)) meshPixelBytes += transaction.commit();
+        else transaction.discard();
+        pixelTransactions.erase(&transaction);
+        delete &transaction;
+        lua->SetUserType(1, nullptr);
+        lua->PushBool(true); return 1;
     } catch (const std::exception& e) { return failure(lua, top, e.what()); }
 }
 int cancelSection(ILuaBase* lua) {
@@ -924,8 +1073,8 @@ int cancelSection(ILuaBase* lua) {
     try {
         const auto id = static_cast<uint64_t>(l2::integer(number(lua, 1), 0, INT32_MAX, "invalid L2 job"));
         workers.cancel(id);
-        if (id) worldTickets.erase(id);
-        else worldTickets.clear();
+        if (id) { worldTickets.erase(id); relightTargets.erase(id); }
+        else { worldTickets.clear(); relightTargets.clear(); }
         lua->PushBool(true);
         return 1;
     } catch (const std::exception& e) { return failure(lua, top, e.what()); }
@@ -961,7 +1110,12 @@ int statistics(ILuaBase* lua) {
     numberField(lua, "relightJobs", static_cast<double>(s.relightJobs));
     numberField(lua, "relightQuads", static_cast<double>(s.relightQuads));
     numberField(lua, "retainedLightBytes", static_cast<double>(retainedLightBytes));
-    numberField(lua, "retainedLightMisses", static_cast<double>(retainedLightMisses));
+    numberField(lua, "retainedLightMisses", 0);
+    numberField(lua, "meshPixelBytes", static_cast<double>(meshPixelBytes));
+    numberField(lua, "nativePixelTexels", static_cast<double>(nativePixelTexels));
+    numberField(lua, "luaPixelValues", static_cast<double>(luaPixelValues));
+    numberField(lua, "relightBatches", static_cast<double>(relightBatches));
+    numberField(lua, "livePixelTransactions", static_cast<double>(pixelTransactions.size()));
     return 1;
 }
 }

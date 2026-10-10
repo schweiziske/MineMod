@@ -187,7 +187,7 @@ function B.IsLightReady( key, sectionIndex )
 	if not key or not session.handle.IsMeshReady then return not session.lightPending end
 	local chunk = MC.World[key]
 	if not chunk or chunk.count == 0 then return true end
-	local size = MC.RENDER_SECTION_SIZE or 8
+	local size = MC.RENDER_SECTION_SIZE or 16
 	for index = sectionIndex or 1, sectionIndex or ( MC.CS / size ) ^ 2 * ( MC.CH / size ) do
 		local ready, err = session.handle:IsMeshReady( chunk.cx, chunk.cy, chunk.cz, index )
 		if ready == nil then error( "Native mesh readiness: " .. tostring( err ), 0 ) end
@@ -198,7 +198,7 @@ end
 function B.Pump()
 	local session = T.active
 	if not session or session.fault or not session.lightPending then return end
-	local result, err = session.handle:Pump()
+	local result, err = session.handle:Pump( false ) -- Only section invalidation is consumed here.
 	if not result then
 		session.fault = tostring( err )
 		MC.Fault( "native_world_light", "%s; Native world retained", session.fault )

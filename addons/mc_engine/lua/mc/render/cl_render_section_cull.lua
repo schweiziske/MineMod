@@ -3,11 +3,11 @@ MC = MC or {}
 local S = {}
 MC.RenderSectionCull = S
 local floor, min, max = math.floor, math.min, math.max
-local SIZE = MC.RENDER_SECTION_SIZE or 8
+local SIZE = MC.RENDER_SECTION_SIZE or 16
 local XY = math.ceil( MC.CS / SIZE )
 
 MC.MeshOcclusionCull = MC.MeshOcclusionCull or CreateClientConVar( "mc_mesh_occlusion_cull", "1", true, false,
-	"Conservative 8x8x8 section connectivity culling; unknown/transparent space stays open" )
+	"Conservative render-section connectivity culling; unknown/transparent space stays open" )
 MC.MeshDirectionalCull = MC.MeshDirectionalCull or CreateClientConVar( "mc_mesh_directional_cull", "0", true, false,
 	"Experimental six-direction opaque cube meshes; may increase DX9 draw calls; changing this rebuilds meshes" )
 MC.MeshDirectionalMinBlocks = MC.MeshDirectionalMinBlocks or CreateClientConVar( "mc_mesh_directional_min_blocks", "64", true, false,
@@ -55,8 +55,12 @@ function S.SectionBounds( index, size, opaque, translucent )
 	end
 	-- Protruding models are frustum-tested with expanded bounds but must not be
 	-- hidden just because their owning grid section is behind a closed portal.
-	bounds.protrudes = bounds.minX < x or bounds.minY < y or bounds.minZ < z
-		or bounds.maxX > x + edge or bounds.maxY > y + edge or bounds.maxZ > z + edge
+	-- Source vertices use float32. Include that exact rounding of the grid
+	-- boundary, without a world-size-dependent epsilon that hides real models.
+	local engineMin, engineMax = Vector( x, y, z ), Vector( x + edge, y + edge, z + edge )
+	bounds.protrudes = bounds.minX < min( x, engineMin.x ) or bounds.minY < min( y, engineMin.y )
+		or bounds.minZ < min( z, engineMin.z ) or bounds.maxX > max( x + edge, engineMax.x )
+		or bounds.maxY > max( y + edge, engineMax.y ) or bounds.maxZ > max( z + edge, engineMax.z )
 	return bounds
 end
 

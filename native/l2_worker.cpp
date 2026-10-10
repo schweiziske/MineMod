@@ -4,6 +4,7 @@
 #include <limits>
 #include <cmath>
 #include <cstring>
+#include <unordered_set>
 
 namespace mcmesh::l2 {
 namespace {
@@ -99,7 +100,6 @@ void validateModel(Model& model) {
     model.needsShapes = model.shapeSelector != 0;
     model.maxQuads = 0;
     model.bytes = sizeof(Model) + model.groups.capacity() * sizeof(ModelGroup);
-    size_t totalQuads = 0;
     for (auto& group : model.groups) {
         require(!group.alternatives.empty() && group.alternatives.size() <= 255, "invalid model alternatives");
         require(!model.shapeSelector || group.alternatives.size() == variantCounts[model.shapeSelector],
@@ -112,9 +112,7 @@ void validateModel(Model& model) {
             require(alternative.weight > 0 && alternative.weight <= 255, "invalid model weight");
             group.totalWeight += alternative.weight;
             maximum = std::max(maximum, alternative.quads.size());
-            totalQuads += alternative.quads.size();
-            require(totalQuads <= WorkerPool::MaxSectionQuads, "model recipe exceeds quad budget");
-            model.bytes += alternative.quads.capacity() * sizeof(ModelQuad);
+            model.bytes = checkedAdd(model.bytes, checkedMultiply(alternative.quads.capacity(), sizeof(ModelQuad)));
             for (const auto& quad : alternative.quads) {
                 require(quad.cullFace <= 6, "invalid model cull face");
                 if (quad.shapeCull) {
@@ -132,7 +130,7 @@ void validateModel(Model& model) {
                         "model recipe requires zero source and translation");
             }
         }
-        model.maxQuads += maximum;
+        model.maxQuads = checkedAdd(model.maxQuads, maximum);
     }
 }
 void validateCube(const Cube& cube) {
@@ -156,48 +154,61 @@ size_t Input::reservation() const {
 MemoryUsage Input::memoryUsage() const {
     MemoryUsage usage;
     snapshot.memoryUsage(usage);
-    size_t bytes = sizeof(Input) + sizeof(Job) + 64 + parts.capacity() * sizeof(std::vector<Work>);
-    require(relight.size() <= WorkerPool::MaxParts, "L2 relight exceeds part budget");
+    const auto add = [&](size_t count, size_t stride = 1) {
+        usage.owned = checkedAdd(usage.owned, checkedMultiply(count, stride));
+    };
+    add(sizeof(Input) + sizeof(Job) + 64);
+    add(parts.capacity(), sizeof(std::vector<Work>));
+    require(maxQuads > 0 && maxQuads <= MaxQuads, "invalid L2 mesh part size");
     require(relight.empty() || (parts.empty() && cubes.empty() && models.empty() && fluids.empty()
         && voxels.empty() && !instances && !retainLighting), "mixed L2 geometry and relight input");
-    size_t relightCount = 0;
     for (const auto& part : relight) {
         require(part && !part->empty() && part->size() <= MaxQuads, "invalid L2 relight part");
-        relightCount += part->size();
-        require(relightCount <= WorkerPool::MaxSectionQuads, "L2 relight exceeds quad budget");
         usage.share(part, sizeof(*part) + part->capacity() * sizeof(LightWork));
-        bytes += sizeof(Part) + part->size() * 5 * sizeof(uint32_t);
+        add(sizeof(Part) + sizeof(LightPixels) + 64);
+        add(part->size(), 5 * sizeof(uint32_t));
     }
-    for (const auto& part : parts)
-        bytes += part.capacity() * sizeof(Work) + sizeof(Part) + part.size()
-            * (sizeof(Quad) + 5 * sizeof(uint32_t) + sizeof(unsigned) + sizeof(uint8_t)
-                + (retainLighting ? sizeof(LightWork) : 0));
+    const size_t resultStride = sizeof(Quad) + 5 * sizeof(uint32_t) + sizeof(unsigned) + sizeof(uint8_t)
+        + (retainLighting ? sizeof(LightWork) : 0);
+    for (const auto& part : parts) {
+        require(!part.empty() && part.size() <= MaxQuads, "invalid L2 mesh part");
+        add(part.capacity(), sizeof(Work));
+        add(sizeof(Part) + sizeof(LightPixels) + 64);
+        add(part.size(), resultStride);
+    }
     size_t expanded = instances ? instances->maxQuads() : 0;
-    if (instances) bytes += instances->bytes();
-    for (const auto& voxel : voxels) expanded += voxel.model ? models[voxel.cube].model->maxQuads : 6;
-    require(expanded <= WorkerPool::MaxSectionQuads, "L2 instances exceed quad reservation");
+    if (instances) add(instances->bytes());
+    for (const auto& voxel : voxels)
+        expanded = checkedAdd(expanded, voxel.model ? models[voxel.cube].model->maxQuads : 6);
+    std::unordered_set<unsigned> groups;
+    for (const auto& cube : cubes) groups.insert(cube.groups.begin(), cube.groups.end());
+    for (const auto& fluid : fluids) groups.insert(fluid.group);
     for (const auto& model : models) {
         require(!model.model->needsShapes || shapeSource != nullptr, "shape recipe requires Native world snapshot");
         usage.share(model.model, model.model->bytes);
+        groups.insert(model.group);
     }
-    usage.owned += bytes + cubes.capacity() * sizeof(Cube) + voxels.capacity() * sizeof(Voxel)
-        + models.capacity() * sizeof(ModelBinding) + fluids.capacity() * sizeof(FluidRecipe)
-        + relight.capacity() * sizeof(std::shared_ptr<const std::vector<LightWork>>)
-        + topology.cells.capacity()
-        // Growing work vectors can reserve up to twice their live element count.
-        + expanded * (2 * sizeof(Work) + sizeof(Quad) + 5 * sizeof(uint32_t) + sizeof(unsigned) + sizeof(uint8_t)
-            + (retainLighting ? sizeof(LightWork) : 0))
-        + WorkerPool::MaxParts * (sizeof(Part) + 2 * sizeof(std::vector<Work>) + 64);
+    add(cubes.capacity(), sizeof(Cube));
+    add(voxels.capacity(), sizeof(Voxel));
+    add(models.capacity(), sizeof(ModelBinding));
+    add(fluids.capacity(), sizeof(FluidRecipe));
+    add(relight.capacity(), sizeof(std::shared_ptr<const std::vector<LightWork>>));
+    add(topology.cells.capacity());
+    // One incomplete mesh per material group, plus full split meshes. Growing
+    // work vectors can reserve up to twice their live element count.
+    const size_t expandedParts = std::min(expanded, checkedAdd(groups.size(), expanded / maxQuads));
+    add(expanded, 2 * sizeof(Work) + resultStride);
+    add(expandedParts, sizeof(Part) + sizeof(LightPixels) + 2 * sizeof(std::vector<Work>) + 128);
     usage.normalize();
-    usage.owned += usage.shared.capacity() * sizeof(SharedAllocation);
+    add(usage.shared.capacity(), sizeof(SharedAllocation));
     return usage;
 }
 size_t Job::resultBytes() const {
     size_t result = sizeof(Job) + 64 + shared.capacity() * sizeof(SharedAllocation)
         + parts.capacity() * sizeof(Part) + topology.cells.capacity() + error.capacity();
     for (const auto& part : parts) {
-        result += part.quads.capacity() * sizeof(Quad) + part.directions.quads.capacity() * sizeof(unsigned)
-            + (part.pixels.capacity() + part.occlusion.capacity()) * sizeof(uint32_t);
+        result += part.quads.capacity() * sizeof(Quad) + part.directions.quads.capacity() * sizeof(unsigned);
+        if (part.pixels) result += part.pixels->bytes() + 64;
         if (part.lighting) result += sizeof(*part.lighting) + part.lighting->capacity() * sizeof(LightWork);
     }
     return result;
@@ -216,15 +227,11 @@ void prefetchVoxels(Input& input) {
 void expandVoxels(Input& input, std::vector<unsigned>& groups, const std::atomic<bool>& cancelled) {
     std::unordered_map<unsigned, size_t> buckets;
     groups.resize(input.parts.size(), 0);
-    size_t count = 0;
-    for (const auto& part : input.parts) count += part.size();
     for (const auto& voxel : input.voxels) {
         if (cancelled) return;
         visitVoxel(input, voxel, [&](const Work& source, unsigned group) {
-            require(++count <= WorkerPool::MaxSectionQuads, "L2 voxel section exceeds quad budget");
             auto found = buckets.find(group);
             if (found == buckets.end() || input.parts[found->second].size() == input.maxQuads) {
-                require(input.parts.size() < WorkerPool::MaxParts, "L2 voxel section exceeds part budget");
                 const auto slot = input.parts.size();
                 buckets[group] = slot;
                 input.parts.emplace_back();
@@ -269,11 +276,11 @@ void WorkerPool::stop() {
 }
 bool WorkerPool::canSubmit() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return !stopping_ && jobs_.size() < MaxJobs && stats_.bytes < MaxBytes;
+    return !stopping_ && jobs_.size() < MaxJobs && stats_.bytes < TargetBytes;
 }
 uint64_t WorkerPool::submit(std::unique_ptr<Input> input) {
     auto usage = input->memoryUsage();
-    require(usage.total() <= MaxBytes, "L2 section exceeds worker memory budget");
+    usage.total(); // Check representability before freezing or charging the job.
     input->snapshot.freeze();
     auto job = std::make_shared<Job>();
     job->bytes = usage.owned;
@@ -285,10 +292,11 @@ uint64_t WorkerPool::submit(std::unique_ptr<Input> input) {
         size_t additional = job->bytes;
         for (const auto& allocation : job->shared) {
             const auto found = shared_.find(allocation.owner.get());
-            if (found == shared_.end()) additional += allocation.bytes;
+            if (found == shared_.end()) additional = checkedAdd(additional, allocation.bytes);
             else require(found->second.bytes == allocation.bytes, "shared allocation changed while in flight");
         }
-        if (stopping_ || jobs_.size() >= MaxJobs || additional > MaxBytes - stats_.bytes) return 0;
+        if (stopping_ || jobs_.size() >= MaxJobs || (stats_.bytes != 0
+            && (stats_.bytes >= TargetBytes || additional > TargetBytes - stats_.bytes))) return 0;
         job->id = next_++;
         size_t acquired = 0;
         try {
@@ -386,6 +394,7 @@ void WorkerPool::run() {
             try {
                 job->queueMS = started - job->submittedAt;
                 auto& input = *job->input;
+                input.snapshot.prepare();
                 job->relight = relight;
                 std::vector<unsigned> groups;
                 if (relight) {
@@ -393,13 +402,13 @@ void WorkerPool::run() {
                     for (size_t p = 0; p < input.relight.size() && !job->cancelled; ++p) {
                         const auto& work = *input.relight[p];
                         auto& output = job->parts[p];
-                        output.pixels.resize(work.size() * 4);
-                        output.occlusion.resize(work.size());
+                        auto pixels = std::make_shared<LightPixels>(work.size());
+                        output.pixels = pixels;
                         for (size_t i = 0; i < work.size(); ++i) {
                             if ((i & 63) == 0 && job->cancelled) break;
                             const auto q = evaluateLight(work[i].geometry, work[i].command, input.snapshot);
-                            std::copy(std::begin(q.pixels), std::end(q.pixels), output.pixels.begin() + i * 4);
-                            output.occlusion[i] = q.occlusion;
+                            std::copy(std::begin(q.pixels), std::end(q.pixels), pixels->corners.begin() + i * 4);
+                            pixels->occlusion[i] = q.occlusion;
                         }
                         relightQuads += work.size();
                     }
@@ -416,8 +425,8 @@ void WorkerPool::run() {
                         output.group = groups[p];
                         const auto& work = input.parts[p];
                         output.quads.resize(work.size());
-                        output.pixels.resize(work.size() * 4);
-                        output.occlusion.resize(work.size());
+                        auto pixels = std::make_shared<LightPixels>(work.size());
+                        output.pixels = pixels;
                         std::shared_ptr<std::vector<LightWork>> lighting;
                         if (input.retainLighting) {
                             lighting = std::make_shared<std::vector<LightWork>>(work.size());
@@ -429,8 +438,8 @@ void WorkerPool::run() {
                             if ((i & 63) == 0 && job->cancelled) break;
                             auto& q = output.quads[i];
                             q = evaluate(work[i].geometry, work[i].command, input.snapshot, i);
-                            std::copy(std::begin(q.pixels), std::end(q.pixels), output.pixels.begin() + i * 4);
-                            output.occlusion[i] = q.occlusion;
+                            std::copy(std::begin(q.pixels), std::end(q.pixels), pixels->corners.begin() + i * 4);
+                            pixels->occlusion[i] = q.occlusion;
                             if (lighting) (*lighting)[i] = {work[i].geometry, work[i].command};
                             for (const auto& v : q.vertices) for (unsigned a = 0; a < 3; ++a) {
                                 output.bounds[a] = std::min(output.bounds[a], v.position[a]);
@@ -448,13 +457,7 @@ void WorkerPool::run() {
             catch (...) { job->error = "unknown L2 worker failure"; }
         }
         job->input.reset();
-        size_t resultBytes = job->resultBytes();
-        if (resultBytes > job->bytes) {
-            job->error = "L2 result exceeds reserved memory";
-            std::vector<Part>().swap(job->parts);
-            std::vector<uint8_t>().swap(job->topology.cells);
-            resultBytes = job->resultBytes();
-        }
+        const size_t resultBytes = job->resultBytes();
         job->computeMS = milliseconds() - started;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -464,7 +467,9 @@ void WorkerPool::run() {
                 releaseShared(*job, job->shared.size());
                 jobs_.erase(job->id);
             } else {
-                stats_.bytes -= job->bytes - resultBytes;
+                // Reservation guides admission; an estimate never discards valid geometry.
+                stats_.bytes -= job->bytes;
+                stats_.bytes += resultBytes;
                 job->bytes = resultBytes;
                 job->state = job->error.empty() ? JobState::Ready : JobState::Failed;
                 ++stats_.completed;

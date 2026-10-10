@@ -31,7 +31,11 @@ function N.Probe()
 	N.reason = MC.NativeMeshModuleFailureReason or "installed DLL has no L2 interface; update mcswep_native_mesh"
 	if type( module ) ~= "table" then return false, N.reason end
 	for _, name in ipairs( { "L2Version", "CompileL2Template", "SubmitL2Section", "PollL2Section",
-		"UploadL2Part", "CancelL2Section", "CanSubmitL2", "GetL2Stats",
+		"UploadL2PartNative", "CancelL2Section", "CanSubmitL2", "GetL2Stats",
+		"L2LightingVersion", "UploadL2MeshPixels", "ReadL2MeshPixels",
+		"StageL2Relight", "UploadL2Relight", "FinishL2Relight",
+		"L2PixelTextureVersion", "CreateL2PixelTexture", "UploadL2PixelTexture",
+		"FlushL2PixelTextures", "BindL2PixelTexture", "ReleaseL2PixelTexture",
 		"L2DrawVersion", "CreateL2DrawScene", "PatchL2DrawScene", "SetL2DrawGraph", "DrawL2Scene" } ) do
 		if type( module[name] ) ~= "function" then return false, N.reason end
 	end
@@ -45,13 +49,22 @@ function N.Probe()
 		N.reason = "Native L2 draw interface v1 is required; update the DLL"
 		return false, N.reason
 	end
+	local lightingOK, lightingVersion = pcall( module.L2LightingVersion )
+	if not lightingOK or lightingVersion ~= 2 then
+		N.reason = "Native L2 lighting ownership v2 is required; update the DLL"
+		return false, N.reason
+	end
+	local pixelsOK, pixelsVersion = pcall( module.L2PixelTextureVersion )
+	if not pixelsOK or pixelsVersion ~= 2 then
+		N.reason = "Native Source pixel texture v2 is required; update the DLL"
+		return false, N.reason
+	end
 	N.available, N.reason = true, nil
 	N.voxelAvailable = type( module.CompileL2Cube ) == "function" and type( module.GetL2SectionParts ) == "function"
 	N.modelAvailable = N.voxelAvailable and type( module.CompileL2Model ) == "function"
 	N.worldAvailable = N.modelAvailable and type( module.SubmitWorldL2Section ) == "function"
 		and type( module.IsWorldL2Current ) == "function" and type( module.GetWorldL2Topology ) == "function"
 	N.relightAvailable = N.worldAvailable and type( module.SubmitWorldL2Relight ) == "function"
-		and type( module.GetL2LightPart ) == "function"
 	N.deferredLightingAvailable = N.worldAvailable and type( module.IsWorldL2GeometryCurrent ) == "function"
 	N.fluidAvailable = N.worldAvailable and type( module.CompileL2Fluid ) == "function"
 	if not N.fluidAvailable then
@@ -245,7 +258,6 @@ function N.WorldSnapshot( chunk, index )
 	-- Worker recipes bind one material per model. Paged geometry still uses
 	-- native quad jobs, but needs Lua's per-face material routing and snapshot.
 	if MC.AtlasPageCount and MC.AtlasPageCount() > 1 then return nil end
-	if ( MC.RENDER_SECTION_SIZE or 8 ) ~= 8 then return nil end
 	syncRecipes()
 	local snapshot, err = backend.GetSectionInfo( chunk, index )
 	MC.RenderL2Resources.Require( snapshot ~= nil, "native_section_info", tostring( err ) )
@@ -262,10 +274,9 @@ function N.PrepareVoxels( ctx, index, snapshot )
 	if not N.voxelAvailable or ctx.pagedAtlas then return nil end
 	syncRecipes()
 	local recipes, seen = {}, {}
-	local size = MC.RENDER_SECTION_SIZE or 8
+	local size = MC.RENDER_SECTION_SIZE or 16
 	local xy, zero = MC.RenderMeshConstants.RENDER_SECTIONS_XY, index - 1
 	local x, y, z = zero % xy * size, math.floor( zero / xy ) % xy * size, math.floor( zero / ( xy * xy ) ) * size
-	if size ~= 8 then return nil end
 	local groups = ctx.nativeGroups
 	if not groups then groups = {} ctx.nativeGroups = groups end
 	local used = 0
@@ -329,7 +340,7 @@ function N.PrepareVoxels( ctx, index, snapshot )
 end
 
 function N.Upload( buffer, firstQuad, material )
-	local result, err = N.module.UploadL2Part( buffer.nativeJob, buffer.nativePart, firstQuad, "!" .. material:GetName() )
+	local result, err = N.module.UploadL2PartNative( buffer.nativeJob, buffer.nativePart, firstQuad, "!" .. material:GetName() )
 	MC.RenderL2Resources.Require( result ~= nil, "native_l2_build", "Native L2 batch failed: " .. tostring( err ) )
 	return result
 end
@@ -459,7 +470,7 @@ function N.TryRelight( key, index )
 	for _, list in ipairs( { section.opaque, section.translucent } ) do
 		for _, entry in ipairs( list ) do
 			local data = entry.resource
-			if not data.pixels then N.relightFallbacks = N.relightFallbacks + 1 return nil end
+			if not data.nativeRelight then N.relightFallbacks = N.relightFallbacks + 1 return nil end
 			resources[#resources + 1], meshes[#meshes + 1] = data, data.mesh
 		end
 	end
@@ -482,7 +493,7 @@ function N.TryRelight( key, index )
 	local tx
 	tx = enqueue( ctx, id, function()
 		local uploadStart = SysTime()
-		MC.RenderPackGeometry.ApplyLighting( tx.updates )
+		MC.RenderPackGeometry.ApplyNativeLighting( tx.id, resources, tx.module )
 		N.relightUploadMS = N.relightUploadMS + ( SysTime() - uploadStart ) * 1000
 		N.relightSections = N.relightSections + 1
 		local cpu = MC.RenderGeometryStore.GetSection( key, index )
@@ -497,7 +508,7 @@ function N.TryRelight( key, index )
 			end
 		end
 	end, function() end )
-	tx.relight, tx.section, tx.updates = resources, section, {}
+	tx.relight, tx.section = resources, section
 	return "pending"
 end
 
@@ -553,19 +564,14 @@ function N.Pump( budget )
 						end
 						tx.partsResolved = true
 					end
-					while tx.nextPart <= #parts do
+					while not tx.relight and tx.nextPart <= #parts do
 						if budget.attempts > 0 and budget.deadline and SysTime() >= budget.deadline then return end
 						budget.attempts = budget.attempts + 1
 						local started = SysTime()
-						if tx.relight then
-							local result, problem = tx.module.GetL2LightPart( tx.id, tx.nextPart )
-							MC.RenderL2Resources.Require( result ~= nil, "native_relight_result", tostring( problem ) )
-							result.data = parts[tx.nextPart]
-							tx.updates[tx.nextPart] = result
-						else tx.ctx.uploadNativePart( parts[tx.nextPart] ) end
+						tx.ctx.uploadNativePart( parts[tx.nextPart] )
 						local elapsed = ( SysTime() - started ) * 1000
 						tx.ctx.nativeUploadMS = ( tx.ctx.nativeUploadMS or 0 ) + elapsed
-						if not tx.relight then tx.ctx.meshPerf.flushMS = tx.ctx.meshPerf.flushMS + elapsed end
+						tx.ctx.meshPerf.flushMS = tx.ctx.meshPerf.flushMS + elapsed
 						tx.nextPart = tx.nextPart + 1
 					end
 					if tx.relight then

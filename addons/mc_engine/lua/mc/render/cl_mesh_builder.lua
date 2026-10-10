@@ -14,6 +14,93 @@ local function noteVisibilityStats( perf, failed )
 		perf.visibilitySnapshotReads or 0, perf.visibilityClassResolves or 0, failed and 1 or 0 )
 end
 
+local function tryLuaRelight( key, index )
+	if not index then return nil end
+	local section = MC.MeshSections[key] and MC.MeshSections[key][index]
+	local dirty = MC.MeshDirty[key]
+	if not section or dirty == true or type( dirty ) == "table" and dirty[index]
+		or section.chunk ~= MC.GetChunkByKey( key ) or section.blockSize ~= MC.API.Coords.BlockSize()
+		or section.worldGeneration ~= MC.StateWorldGeneration or section.atlasKey ~= MC.ActiveAtlasProfileKey
+		or section.luaRelightVisual ~= MC.BlockStateVisualRevision or section.luaRelightSchema ~= MC.BlockStateSchemaById then
+		return nil
+	end
+	local Q = MC.RenderL2Quad
+	local cpu = GeometryStore.GetSection( key, index )
+	local resources, records = {}, {}
+	for _, pass in ipairs( { "opaque", "translucent" } ) do
+		for i, entry in ipairs( section[pass] ) do
+			local data = entry.resource
+			if not data.luaRelight or data.luaRelightVersion ~= Q.LUA_RELIGHT_VERSION then return nil end
+			resources[#resources + 1] = data
+			if cpu then records[data] = cpu[pass][i] end
+		end
+	end
+	if #resources == 0 then return nil end
+	local started, perf = SysTime(), RM.newMeshPerfStats()
+	local dirtyCells = MC.GetBlockLightDirtySection( key, index )
+	local updates = {}
+	perf.relightQuads = 0
+	RM.resetMeshLightingSampleCaches()
+	RM.resetMeshColorObjectCache()
+	if MC.LightPerfBeginMeshBuild then MC.LightPerfBeginMeshBuild( key, index ) end
+	local chunk = section.chunk
+	local ok, err = pcall( function()
+		local slice = Q.NewSlice( chunk, section.blockSize )
+		RM.withIsolatedRawLighting( slice.baseX, slice.baseY, slice.baseZ, function()
+			for _, data in ipairs( resources ) do
+				local pixels, occlusion, changed, processed = Q.Relight( slice, data, dirtyCells )
+				perf.relightQuads = perf.relightQuads + processed
+				if changed then updates[#updates + 1] = { data = data, pixels = pixels, occlusion = occlusion } end
+			end
+		end )
+		meshPerfAdd( perf, "recolorMS", started )
+		if #updates > 0 then
+			local uploadStarted = SysTime()
+			MC.RenderPackGeometry.ApplyLighting( updates )
+			meshPerfAdd( perf, "cornerUploadMS", uploadStarted )
+		end
+	end )
+	if not ok then
+		MC.Fault( "lua_l2_relight", "chunk %s section %s: %s; retained geometry and dirty request preserved",
+			tostring( key ), tostring( index ), tostring( type( err ) == "table" and err.message or err ) )
+		return false
+	end
+	if #updates > 0 then
+		for _, update in ipairs( updates ) do
+			local record = records[update.data]
+			if record then record.pixels, record.occlusion = update.pixels, update.occlusion end
+		end
+		if cpu then GeometryStore.TouchLighting( cpu )
+		elseif section.lightingToken then section.lightingToken.revision = section.lightingToken.revision + 1 end
+		-- A later geometry edit must not append the old cached corner colors.
+		local cached = MC.MeshBlockEmitCache[key] and MC.MeshBlockEmitCache[key][index]
+		if cached and dirtyCells then
+			for li in pairs( cached ) do if dirtyCells[li] then MC.DropBlockEmitCacheRecord( key, index, li ) end end
+		elseif cached then MC.ClearSectionBlockEmitCache( key, index ) end
+	end
+	MC.ClearSectionBlockLightDirty( key, index )
+	if MC.MeshLightDirty[key] then MC.MeshLightDirty[key][index] = nil end
+	local elapsed = ( SysTime() - started ) * 1000
+	local stats = MC.RenderStats
+	stats.lastMeshBuildMS, stats.lastMeshLatencyMS = elapsed, elapsed
+	stats.lastMeshKey, stats.lastMeshSection = key, index
+	stats.lastMeshBlocks, stats.lastMeshVertices, stats.lastMeshFaces = chunk.count, 0, 0
+	stats.lastOpaqueMeshes, stats.lastTranslucentMeshes = #section.opaque, #section.translucent
+	if MC.LightPerfStats then
+		MC.LightPerfStats.lastMeshLightStyle, MC.LightPerfStats.lastMeshMode = "l2", "l2_light"
+		MC.LightPerfStats.lastMeshRecords, MC.LightPerfStats.lastMeshFallback = nil, nil
+	end
+	RM.publishMeshPerfStats( perf )
+	RM.noteMeshLightingCacheStats()
+	RM.printMeshEmitProbe( key, index, elapsed, perf )
+	if MC.LightPerfEndMeshBuild then MC.LightPerfEndMeshBuild( key, index, elapsed ) end
+	if MC.RenderPipeline and MC.RenderPipeline.RecordBuild then
+		MC.RenderPipeline.RecordBuild( key, index, "light", chunk.count, 0, 0, #section.opaque, #section.translucent, elapsed )
+		MC.RenderPipeline.NoteBuildStages( perf )
+	end
+	return true
+end
+
 local function build( key, sectionIndex, lightOnly )
 	local world = MC.NativeChunkBackend
 	local native = MC.NativeL2
@@ -28,6 +115,9 @@ local function build( key, sectionIndex, lightOnly )
 			local result = native.TryRelight( key, sectionIndex )
 			if result ~= nil then return result end
 		end
+	elseif lightOnly then
+		local result = tryLuaRelight( key, sectionIndex )
+		if result ~= nil then return result end
 	end
 	local started, perf = SysTime(), RM.newMeshPerfStats()
 	local probe = RM.meshEmitProbeEnabled()
@@ -146,6 +236,7 @@ local function build( key, sectionIndex, lightOnly )
 			end
 			local section = { l2 = true, chunk = chunk, blockSize = ctx.blockSize, worldGeneration = MC.StateWorldGeneration,
 				atlasKey = atlasKey,
+				luaRelightVisual = MC.BlockStateVisualRevision, luaRelightSchema = MC.BlockStateSchemaById,
 				opaque = opaqueList, translucent = translucentList,
 				bounds = SectionCull.SectionBounds( index, ctx.blockSize, opaqueList, translucentList ) }
 			if ctx.nativeTopology then
@@ -239,7 +330,7 @@ function MC.BuildChunkMesh( key, sectionIndex )
 end
 
 function MC.RebuildChunkMeshLighting( key, sectionIndex )
-	-- Reuse unchanged block emissions, regenerate dirty corners, then atomically
-	-- publish a local section. No L1 recoloring or world-wide pack preparation.
+	-- Retain current geometry and regenerate only dirty corners. Missing/stale
+	-- recipes fall back to a section build, including sections from a Lua reload.
 	return build( key, sectionIndex, true )
 end

@@ -796,4 +796,9 @@ concommand.Add( "mc_render_pack", function( _, _, args )
 	L.ReportFaults()
 end )
 
-hook.Add( "PreRender", "mc_render_pack_runtime", L.Step )
+hook.Add( "PreRender", "mc_render_pack_runtime", function()
+	L.Step()
+	-- Publish staged terrain/lightmap bytes before Source queues this view's
+	-- opaque draws. First-use guards still cover later edits and secondary views.
+	R.FlushUploads()
+end )

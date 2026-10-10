@@ -7,5 +7,7 @@ int version(GarrysMod::Lua::ILuaBase* lua);
 int create(GarrysMod::Lua::ILuaBase* lua);
 int patch(GarrysMod::Lua::ILuaBase* lua);
 int graph(GarrysMod::Lua::ILuaBase* lua);
+int spatialGraph(GarrysMod::Lua::ILuaBase* lua);
 int draw(GarrysMod::Lua::ILuaBase* lua);
+int stats(GarrysMod::Lua::ILuaBase* lua);
 }

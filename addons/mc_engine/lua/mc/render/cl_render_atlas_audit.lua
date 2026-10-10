@@ -35,8 +35,8 @@ local function newComparison()
 	return { checked = 0, mismatches = 0, channels = { 0, 0, 0, 0 }, examples = {}, zeroShade = 0 }
 end
 
-local function compare( result, x, y, expected, context )
-	local r, g, b, a = render.ReadPixel( x, y )
+local function compare( result, x, y, expected, context, sourceY )
+	local r, g, b, a = render.ReadPixel( x, y - ( sourceY or 0 ) )
 	local actual, wanted = { r, g, b, a }, rgba( expected )
 	local mismatch = false
 	result.checked = result.checked + 1
@@ -53,6 +53,24 @@ local function compare( result, x, y, expected, context )
 				actual = { r or -1, g or -1, b or -1, a or -1 }, context = context }
 		end
 	end
+end
+
+-- Read back a five-row group at a time. This covers every captured texel
+-- without allocating a second 1 GiB target for the 16K procedural atlas.
+local function captureSource( texture, height, sourceY, inspect )
+	A.readbacks = A.readbacks or {}
+	local width = texture:Width()
+	local key = width .. "x" .. height
+	local target = A.readbacks[key]
+	if not target then
+		target = GetRenderTargetEx( "mc_render_atlas_audit_strip_" .. key, width, height,
+			RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE, bit.bor( 1, 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA8888 )
+		requireValue( target and not target:IsError() and target:Width() == width and target:Height() == height,
+			"render_atlas_audit_target", "could not create readback strip" )
+		A.readbacks[key] = target
+	end
+	R.CopyPixelTexture( texture, target, 0, sourceY )
+	capture( target, inspect )
 end
 
 local function checkReadback( report )
@@ -120,33 +138,44 @@ local function audit( report )
 			atlas = textureInfo( atlas ), lightmap = textureInfo( lightmap ) }
 		if not valid then report.bindingMismatches = report.bindingMismatches + 1 end
 	end
-	capture( P.shared.atlas, function()
-		for _, part in ipairs( parts ) do
-			local data = part.data
-			local pixels = G.auditPixels[data]
-			report.parts = report.parts + 1
-			report.quads = report.quads + data.quadCount
-			if pixels then
-				requireValue( #pixels == data.quadCount * 4 and type( pixels.occlusion ) == "table"
-					and #pixels.occlusion == data.quadCount, "render_atlas_audit_pixels", "captured corner/AO length changed" )
-				report.capturedParts = report.capturedParts + 1
+	local groups = {}
+	for _, part in ipairs( parts ) do
+		local data, pixels = part.data, G.auditPixels[part.data]
+		report.parts = report.parts + 1
+		report.quads = report.quads + data.quadCount
+		if pixels then
+			requireValue( #pixels == data.quadCount * 4 and type( pixels.occlusion ) == "table"
+				and #pixels.occlusion == data.quadCount, "render_atlas_audit_pixels", "captured corner/AO length changed" )
+			report.capturedParts = report.capturedParts + 1
+			for group = floor( data.firstQuad / R.ATLAS_SIZE ), floor( ( data.firstQuad + data.quadCount - 1 ) / R.ATLAS_SIZE ) do
+				groups[group] = groups[group] or {}
+				groups[group][#groups[group] + 1] = part
+			end
+		else report.missingQuads = report.missingQuads + data.quadCount end
+	end
+	for group, members in pairs( groups ) do
+		local sourceY, firstQuad = group * 5, group * R.ATLAS_SIZE
+		captureSource( P.shared.atlas, 5, sourceY, function()
+			for _, part in ipairs( members ) do
+				local data, pixels = part.data, G.auditPixels[part.data]
 				local context = { chunk = part.chunk, section = part.section, firstQuad = data.firstQuad, quads = data.quadCount }
-				for i = 1, #pixels do
-					local offset = data.firstQuad * 4 + i - 1
-					if floor( pixels[i] / 65536 ) % 256 == 0 then report.atlas.zeroShade = report.atlas.zeroShade + 1 end
-					local x, y = R.CornerTexel( offset )
-					compare( report.atlas, x, y, pixels[i], context )
+				for quad = math.max( firstQuad, data.firstQuad ), math.min( firstQuad + R.ATLAS_SIZE, data.firstQuad + data.quadCount ) - 1 do
+					local index = quad - data.firstQuad
+					for corner = 1, 4 do
+						local pixel = pixels[index * 4 + corner]
+						if floor( pixel / 65536 ) % 256 == 0 then report.atlas.zeroShade = report.atlas.zeroShade + 1 end
+						local x, y = R.CornerTexel( quad * 4 + corner - 1 )
+						compare( report.atlas, x, y, pixel, context, sourceY )
+					end
+					local x, y = R.OcclusionTexel( quad )
+					compare( report.atlas, x, y, pixels.occlusion[index + 1], context, sourceY )
 				end
-				for i = 1, #pixels.occlusion do
-					local x, y = R.OcclusionTexel( data.firstQuad + i - 1 )
-					compare( report.atlas, x, y, pixels.occlusion[i], context )
-				end
-			else report.missingQuads = report.missingQuads + data.quadCount end
-		end
-	end )
+			end
+		end )
+	end
 	requireValue( P.shared.lightmapPixels and not P.shared.lightmapUploadPending,
 		"render_atlas_audit_lightmap", "no successfully published lightmap bytes" )
-	capture( P.shared.lightmap, function()
+	captureSource( P.shared.lightmap, 16, 0, function()
 		for i = 1, 256 do compare( report.lightmap, ( i - 1 ) % 16, floor( ( i - 1 ) / 16 ),
 			P.shared.lightmapPixels[i], "global lightmap" ) end
 	end )

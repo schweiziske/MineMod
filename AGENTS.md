@@ -1,5 +1,18 @@
 # MCSWEP Engineering Rules
 
+## Native C++ code organization and style
+
+- Before adding or reorganizing project-owned Native C++ code, read and follow
+  [docs/native-cpp-standard.md](docs/native-cpp-standard.md).
+- Use `native/.clang-format`, `native/.clang-tidy`, and `native/.editorconfig`.
+  Exclude vendored dependencies and generated output from formatting and checks.
+- Assign new code to its responsibility directory. Keep CPU algorithms, task
+  scheduling, Source resources, and Lua bindings distinct, with explicit
+  ownership and thread contracts. Preserve published Lua names and ABI.
+- Follow naming and formatting rules when writing new code or restructuring a
+  function. Do not mix repository-wide formatting or automatic tidy fixes with
+  functional changes. Run source checks and tests only as arranged by the user.
+
 ## Units, coordinate spaces, and Lua return values
 
 - One Minecraft block is `MC.API.Coords.BlockSize()` Source units. Its current

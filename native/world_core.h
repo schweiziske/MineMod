@@ -21,12 +21,12 @@ template<class T> using Grid = std::unordered_map<Coord, T, CoordHash>;
 int floorDiv(int value, int divisor);
 
 struct Config {
-    int chunkSize = 16, chunkHeight = 32, sectionSize = 8;
+    int chunkSize = 16, chunkHeight = 32, sectionSize = 16;
     double blockSize = 1;
     bool streaming = false, skyEnabled = true;
     int minChunkZ = (std::numeric_limits<int>::min)(), maxChunkZ = (std::numeric_limits<int>::max)();
-    size_t maxChunks = 65536, maxLightChunks = 131072;
-    size_t maxLightBytes = 256 * 1024 * 1024;
+    // Zero leaves content unconstrained. Callers may opt into explicit budgets.
+    size_t maxChunks = 0, maxLightChunks = 0, maxLightBytes = 0;
     void validate() const;
     void validateChunk(Coord chunk) const;
     unsigned cellCount() const { return unsigned(chunkSize * chunkSize * chunkHeight); }

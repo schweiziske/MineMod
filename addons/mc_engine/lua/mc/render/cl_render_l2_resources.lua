@@ -97,9 +97,113 @@ function R.SameTexture( a, b )
 	return a:GetName() == b:GetName() and a:Width() == b:Width() and a:Height() == b:Height()
 end
 
+R.pixelTextures = R.pixelTextures or {}
+function R.CreatePixelTexture( width, height, point )
+	requireValue( mcmesh and mcmesh.L2PixelTextureVersion and mcmesh.L2PixelTextureVersion() == 2 and mcmesh.CreateL2PixelTexture and mcmesh.UploadL2PixelTexture
+		and mcmesh.FlushL2PixelTextures and mcmesh.BindL2PixelTexture and mcmesh.ReleaseL2PixelTexture,
+		"l2_pixel_texture_api", "install the current native module and restart: Source pixel texture upload is required" )
+	local descriptor, why = mcmesh.CreateL2PixelTexture( width, height, point )
+	requireValue( descriptor, "l2_pixel_texture_create", tostring( why ) )
+	local texture
+	local ok, reason = pcall( function()
+		local material = CreateMaterial( descriptor.name .. "_handle", "UnlitGeneric", { ["$basetexture"] = "vgui/white" } )
+		requireValue( material and not material:IsError(), "l2_pixel_texture_material", "pixel texture material creation failed" )
+		local bound, err = mcmesh.BindL2PixelTexture( descriptor.id, "!" .. material:GetName(), "$basetexture" )
+		requireValue( bound, "l2_pixel_texture_bind", tostring( err ) )
+		texture = material:GetTexture( "$basetexture" )
+		requireValue( texture and not texture:IsError() and texture:Width() == width and texture:Height() == height,
+			"l2_pixel_texture_dimensions", "Source pixel texture dimensions differ" )
+	end )
+	if not ok then
+		local released, releaseError = mcmesh.ReleaseL2PixelTexture( descriptor.id )
+		requireValue( released, "l2_pixel_texture_cleanup", tostring( releaseError ) )
+		error( reason, 0 )
+	end
+	R.pixelTextures[texture:GetName()] = descriptor.id
+	return texture
+end
+
+-- UploadPart only stages bytes. Every consumer enters here before sampling;
+-- native drains older queued draws before publishing all pending rows together.
+function R.FlushUploads()
+	if not next( R.pixelTextures ) then return true end
+	local ok, why = mcmesh.FlushL2PixelTextures()
+	return MC.Check( ok, "l2_pixel_texture_flush", "%s", tostring( why ) )
+end
+
+-- Opt-in diagnostics only. Procedural textures cannot be pushed as an RT.
+-- One image quad copies them into a caller-owned readback target.
+function R.CopyPixelTexture( texture, target, sourceX, sourceY )
+	requireValue( R.FlushUploads(), "l2_pixel_readback_flush", "pixel upload failed before readback" )
+	sourceX, sourceY = sourceX or 0, sourceY or 0
+	local w, h, tw, th = target:Width(), target:Height(), texture:Width(), texture:Height()
+	requireValue( sourceX >= 0 and sourceY >= 0 and sourceX + w <= tw and sourceY + h <= th,
+		"l2_pixel_readback_size", "readback region must preserve texel dimensions" )
+	local material = CreateMaterial( texture:GetName() .. "_readback2", "UnlitGeneric", {
+		["$basetexture"] = "vgui/white", ["$translucent"] = 1,
+		["$ignorez"] = 1, ["$nofog"] = 1, ["$nocull"] = 1, ["$no_fullbright"] = 1,
+		["$gammacolorread"] = 1, ["$linearwrite"] = 1,
+	} )
+	local id = R.pixelTextures[texture:GetName()]
+	if id then
+		-- Track this reference so releasing a diagnostic texture also unbinds
+		-- its cached readback material instead of retaining a 1 GiB GPU image.
+		local bound, why = mcmesh.BindL2PixelTexture( id, "!" .. material:GetName(), "$basetexture" )
+		requireValue( bound, "l2_pixel_readback_bind", tostring( why ) )
+	else material:SetTexture( "$basetexture", texture ) end
+	R.pixelReadbackQuads = R.pixelReadbackQuads or {}
+	local key = table.concat( { w, h, tw, th, sourceX, sourceY }, ":" )
+	local quad = R.pixelReadbackQuads[key]
+	if not quad then
+		local u0, v0, u1, v1 = sourceX / tw, sourceY / th, ( sourceX + w ) / tw, ( sourceY + h ) / th
+		quad = Mesh( material )
+		quad:BuildFromTriangles( {
+			{ pos = Vector( 0, 0, 0 ), u = u0, v = v0 }, { pos = Vector( w, 0, 0 ), u = u1, v = v0 },
+			{ pos = Vector( w, h, 0 ), u = u1, v = v1 }, { pos = Vector( 0, 0, 0 ), u = u0, v = v0 },
+			{ pos = Vector( w, h, 0 ), u = u1, v = v1 }, { pos = Vector( 0, h, 0 ), u = u0, v = v1 },
+		} )
+		R.pixelReadbackQuads[key] = quad
+	end
+	local pushed, camera, clipping, tone
+	local ok, why = pcall( function()
+		tone = render.GetToneMappingScaleLinear()
+		render.SetToneMappingScaleLinear( Vector( 1, 1, 1 ) )
+		render.PushRenderTarget( target ) pushed = true
+		cam.Start2D() camera = true
+		clipping = DisableClipping( true )
+		render.OverrideBlend( true, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD )
+		render.OverrideAlphaWriteEnable( true, true )
+		render.OverrideColorWriteEnable( true, true )
+		render.SetMaterial( material ) quad:Draw()
+	end )
+	local errors = {}
+	local function restore( active, fn, ... )
+		if not active then return end
+		local restored, reason = pcall( fn, ... )
+		if not restored then errors[#errors + 1] = tostring( reason ) end
+	end
+	restore( pushed, render.OverrideColorWriteEnable, false )
+	restore( pushed, render.OverrideAlphaWriteEnable, false )
+	restore( pushed, render.OverrideBlend, false )
+	restore( clipping ~= nil, DisableClipping, clipping )
+	restore( camera, cam.End2D )
+	restore( pushed, render.PopRenderTarget )
+	restore( tone ~= nil, render.SetToneMappingScaleLinear, tone )
+	requireValue( #errors == 0, "l2_pixel_readback_restore", table.concat( errors, "; " ) )
+	if not ok then error( why, 0 ) end
+end
+
 function R.Ensure( build, owner )
 	owner = owner or R
-	R.drawPixels = mcmesh and mcmesh.DrawL2AtlasPixels or nil
+	R.drawPixels = nil
+	if mcmesh and mcmesh.L2PixelTextureVersion then
+		owner.build = build.build
+		requireValue( not owner.atlas or R.pixelTextures[owner.atlas:GetName()],
+			"l2_pixel_texture_restart", "restart to replace the old render-target light atlas" )
+		if not owner.atlas then owner.atlas = R.CreatePixelTexture( ATLAS_SIZE, ATLAS_HEIGHT, true ) end
+		if not owner.lightmap then owner.lightmap = R.CreatePixelTexture( LIGHTMAP_SIZE, LIGHTMAP_SIZE, false ) end
+		return
+	end
 	requireValue( GetRenderTargetEx and CreateMaterial and render and render.PushRenderTarget
 		and render.PopRenderTarget and render.OverrideBlend and render.OverrideAlphaWriteEnable
 		and render.OverrideColorWriteEnable and render.OverrideDepthEnable and cam and cam.Start2D
@@ -215,6 +319,12 @@ local function drawPixelRuns( width, firstPixel, pixels, zeroAlpha, rowScale, ro
 end
 
 local function uploadPixels( texture, width, firstPixel, pixels, rowScale, rowOffset, firstOcclusion, occlusion )
+	local id = R.pixelTextures[texture:GetName()]
+	if id then
+		local ok, why = mcmesh.UploadL2PixelTexture( id, firstPixel, pixels, rowScale or 1, rowOffset or 0, firstOcclusion, occlusion )
+		requireValue( ok == true, "l2_pixel_texture_upload", tostring( why ) )
+		return
+	end
 	rowScale, rowOffset = rowScale or 1, rowOffset or 0
 	local pushed, camera, blend, alpha, color, tone = false, false, false, false, false, false
 	local oldToneScale, oldClipping
@@ -234,11 +344,6 @@ local function uploadPixels( texture, width, firstPixel, pixels, rowScale, rowOf
 		render.OverrideBlend( true, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD ) blend = true
 		render.OverrideAlphaWriteEnable( true, true ) alpha = true
 		render.OverrideColorWriteEnable( true, true ) color = true
-		if R.drawPixels then
-			local uploaded,reason=R.drawPixels(width,firstPixel,pixels,rowScale,rowOffset,"!"..R.uploadMaterial:GetName(),firstOcclusion,occlusion)
-			requireValue(uploaded==true,"l2_native_pixel_upload",tostring(reason))
-			return
-		end
 		local zeroPixels = drawPixelRuns( width, firstPixel, pixels, false, rowScale, rowOffset )
 		local zeroOcclusion = false
 		if occlusion then zeroOcclusion = drawPixelRuns( width, firstOcclusion, occlusion, false, 5, 2 ) end
@@ -270,7 +375,9 @@ end
 -- Local lights have a separate tiny data texture, consumed only by the
 -- additive programs. The original lightmap/base shaders remain byte-identical.
 function R.DynamicLightTexture()
-	if not R.dynamicLightTexture then
+	if not R.dynamicLightTexture and mcmesh and mcmesh.L2PixelTextureVersion then
+		R.dynamicLightTexture = R.CreatePixelTexture( 64, 1, true )
+	elseif not R.dynamicLightTexture then
 		R.dynamicLightTexture = GetRenderTargetEx( "mc_dynamic_lights_rgba8_v1", 64, 1,
 			RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE, bit.bor( 1, 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA8888 )
 	end
@@ -283,16 +390,34 @@ end
 function R.UploadDynamicLights( pixels )
 	requireValue( #pixels == 40, "dynamic_light_upload_size", "eight five-texel light records required" )
 	uploadPixels( R.DynamicLightTexture(), 64, 0, pixels )
+	requireValue( R.FlushUploads(), "dynamic_light_texture_flush", "could not publish this view's lights" )
 end
 
 function R.UploadPart( part, owner )
 	owner = owner or R
 	requireValue( part.quadCount > 0 and part.quadCount <= math.floor( MC.RenderMeshConstants.VERT_LIMIT / 6 )
-		and #part.pixels == part.quadCount * 4
-		and part.occlusion and #part.occlusion == part.quadCount
+		and ( part.nativeL2 or part.pixels and #part.pixels == part.quadCount * 4
+			and part.occlusion and #part.occlusion == part.quadCount )
 		and part.firstQuad >= 0 and part.firstQuad + part.quadCount <= ( owner.capacity or 8192 ),
 		"l2_visual_atlas_range", "candidate atlas upload exceeds its bounded quad range" )
+	if part.nativeL2 then
+		local module = MC.NativeL2.module
+		local id = R.pixelTextures[owner.atlas:GetName()]
+		requireValue( id, "l2_pixel_texture_handle", "Native mesh requires an owned pixel texture" )
+		local ok, why = module.UploadL2MeshPixels( part.mesh, id, part.firstQuad )
+		requireValue( ok == true, "l2_native_pixel_upload", tostring( why ) )
+		return
+	end
 	uploadPixels( owner.atlas, ATLAS_SIZE, part.firstQuad * 4, part.pixels, 1.25, 0.625, part.firstQuad, part.occlusion )
+end
+
+-- C++ stages the whole section and flushes it before CPU publication. Both
+-- versions remain Native-owned, including rollback after a failed submission.
+function R.UploadNativeLighting( transaction, owner, module, restore )
+	local id = R.pixelTextures[owner.atlas:GetName()]
+	requireValue( id, "l2_pixel_texture_handle", "Native lighting requires an owned pixel texture" )
+	local ok, why = module.UploadL2Relight( transaction, id, restore == true )
+	requireValue( ok == true, "l2_native_pixel_upload", tostring( why ) )
 end
 
 function R.RefreshLightmap( owner )

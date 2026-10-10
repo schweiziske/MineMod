@@ -163,8 +163,12 @@ function MC.NoteSkyColumnBlockChange( bx, by, bz, oldOpacity, newOpacity )
 		local wasPresent = list ~= nil and list[cz] == true
 		local present = MC.World[MC.ChunkKey( cx, cy, cz )] ~= nil
 		noteChunkPresence( cx, cy, cz, present )
-		if wasPresent ~= present and MC.QueueSkyFloodColumn then
-			MC.QueueSkyFloodColumn( cx, cy, cz )
+		if wasPresent ~= present then
+			if MC.QueueSkyFloodForChunkPresenceChange then
+				MC.QueueSkyFloodForChunkPresenceChange( cx, cy, cz, present )
+			elseif MC.QueueSkyFloodColumn then
+				MC.QueueSkyFloodColumn( cx, cy, cz )
+			end
 		end
 	end
 

@@ -347,6 +347,12 @@ void retainedGeometry() {
     check(!store.current(geometry), "expired geometry root remained valid");
 }
 void configuration() {
+    Config unconstrained;
+    check(unconstrained.maxChunks == 0 && unconstrained.maxLightChunks == 0 && unconstrained.maxLightBytes == 0,
+        "default world configuration imposed content ceilings");
+    unconstrained.maxChunks = unconstrained.maxLightChunks = 1048577;
+    unconstrained.maxLightBytes = size_t(5) * 1024 * 1024 * 1024;
+    unconstrained.validate(); // Explicit caller budgets have no hidden secondary ceiling.
     auto cfg = small();
     Store store(cfg, catalog());
     store.apply(0, {cell(cfg, {-1,0,0}, 2)});

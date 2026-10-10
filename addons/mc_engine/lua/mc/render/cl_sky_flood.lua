@@ -45,13 +45,17 @@ local xyHalo = math.ceil( 16 / MC.CS )
 local zHalo = math.ceil( 16 / MC.CH )
 local skyDomain = {}
 
-local function chunkKnown( cx, cy, cz, key )
-	if MC.World and MC.World[key] then return true end
-	if MC.IsChunkLoaded and MC.IsChunkLoaded( key ) then return true end
+local function implicitAirKnown( cz )
 	local transport = MC.StateNetworkTransport
 	if MC.HttpChunkSync ~= nil then return false end
 	if not transport or not transport.streaming then return true end
 	return cz < ( transport.streamMinCZ or -math.huge ) or cz > ( transport.streamMaxCZ or math.huge )
+end
+
+local function chunkKnown( cx, cy, cz, key )
+	if MC.World and MC.World[key] then return true end
+	if MC.IsChunkLoaded and MC.IsChunkLoaded( key ) then return true end
+	return implicitAirKnown( cz )
 end
 
 local function chunkKnownForCell( bx, by, bz )
@@ -151,7 +155,10 @@ local function propagationCost( bx, by, bz )
 	local cx, cy, cz = MC.CellToChunk( bx, by, bz )
 	local key = MC.ChunkKey( cx, cy, cz )
 	if not chunkKnown( cx, cy, cz, key ) or not inSkyDomain( cx, cy, cz, key ) then return 16 end
-	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
+	-- Known sparse air has no voxel store. Avoid converting the same cell back
+	-- to this absent chunk through the general world accessor on every edge.
+	local stateId = 0
+	if MC.World[key] then stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0 end
 	local opacity = MC.BlockLightOpacityForState and MC.BlockLightOpacityForState( stateId, bx, by, bz ) or 15
 	if opacity >= 15 then return 16 end
 	-- Water's opacity (3) darkened shallow water too fast; sky light loses 2
@@ -426,9 +433,14 @@ end
 -- Border ring: pull light in across chunk boundaries from stored values and
 -- exposed cells one cell outside the chunk (mirror of seedChunkBorderLight).
 -- Keep the helper outside the chunk scan: fresh closures abort its JIT trace.
-local function seedChunkBorderCell( addQ, bx, by, bz )
+local function seedChunkBorderCell( addQ, bx, by, bz, tx, ty, tz )
 	local level = skyLevelAt( bx, by, bz )
-	if level > 1 then pushQueue( addQ, bx, by, bz, level ) end
+	-- Every propagation step loses at least one level. A border source cannot
+	-- enter through an already-brighter cell; exposed air is implicitly 15.
+	-- The removal wave separately reseeds any affected cells outside the chunk.
+	if level > 1 and skyLevelAt( tx, ty, tz ) < level - 1 then
+		pushQueue( addQ, bx, by, bz, level )
+	end
 end
 
 local function seedChunkBorderSky( addQ, chunk )
@@ -437,18 +449,18 @@ local function seedChunkBorderSky( addQ, chunk )
 	local maxX, maxY, maxZ = minX + cs - 1, minY + cs - 1, minZ + ch - 1
 	for y = minY, maxY do
 		for x = minX, maxX do
-			seedChunkBorderCell( addQ, x, y, minZ - 1 )
-			seedChunkBorderCell( addQ, x, y, maxZ + 1 )
+			seedChunkBorderCell( addQ, x, y, minZ - 1, x, y, minZ )
+			seedChunkBorderCell( addQ, x, y, maxZ + 1, x, y, maxZ )
 		end
 	end
 	for z = minZ, maxZ do
 		for y = minY, maxY do
-			seedChunkBorderCell( addQ, minX - 1, y, z )
-			seedChunkBorderCell( addQ, maxX + 1, y, z )
+			seedChunkBorderCell( addQ, minX - 1, y, z, minX, y, z )
+			seedChunkBorderCell( addQ, maxX + 1, y, z, maxX, y, z )
 		end
 		for x = minX, maxX do
-			seedChunkBorderCell( addQ, x, minY - 1, z )
-			seedChunkBorderCell( addQ, x, maxY + 1, z )
+			seedChunkBorderCell( addQ, x, minY - 1, z, x, minY, z )
+			seedChunkBorderCell( addQ, x, maxY + 1, z, x, maxY, z )
 		end
 	end
 end
@@ -563,6 +575,44 @@ function MC.QueueSkyFloodColumn( cx, cy, changedCZ )
 	end
 	-- An unloaded owner no longer appears in the column index.
 	if changedCZ ~= nil then queueChunkHalo( cx, cy, changedCZ ) end
+end
+
+local function hasOtherSkyOwner( cx, cy, cz, ownerKey )
+	for dx = -xyHalo, xyHalo do
+		for dy = -xyHalo, xyHalo do
+			for dz = -zHalo, zHalo do
+				local key = MC.ChunkKey( cx + dx, cy + dy, cz + dz )
+				if key ~= ownerKey and MC.World[key] then return true end
+			end
+		end
+	end
+	return false
+end
+
+-- A single-cell edit already updates its column exposure and light propagation.
+-- Chunk creation/removal additionally changes which air halos retain sky data;
+-- only initialize/retire that difference, preserving every shared settled halo.
+function MC.QueueSkyFloodForChunkPresenceChange( cx, cy, cz, present )
+	-- In a streamed unknown region, presence can expose/hide an entire chunk of
+	-- air. A cell notification cannot account for those additional sources.
+	if nativeSkyBackend() or not implicitAirKnown( cz ) then
+		MC.QueueSkyFloodColumn( cx, cy, cz )
+		return
+	end
+	skyDomain = {}
+	local ownerKey = MC.ChunkKey( cx, cy, cz )
+	for dx = -xyHalo, xyHalo do
+		for dy = -xyHalo, xyHalo do
+			for dz = -zHalo, zHalo do
+				local x, y, z = cx + dx, cy + dy, cz + dz
+				local key = MC.ChunkKey( x, y, z )
+				if not hasOtherSkyOwner( x, y, z, ownerKey )
+				and ( present or MC.LightSkyChunks[key] ) then
+					queueSkyFloodChunk( key, present )
+				end
+			end
+		end
+	end
 end
 
 function MC.QueueAllSkyFlood()

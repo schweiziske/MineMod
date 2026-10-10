@@ -106,6 +106,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 	local sectionNeedsRecolor = lightOnly or sectionIndex and MC.MeshLightDirty[key] and MC.MeshLightDirty[key][sectionIndex]
 	local blockLightDirtySection = sectionNeedsRecolor and MC.GetBlockLightDirtySection and MC.GetBlockLightDirtySection( key, sectionIndex ) or nil
 	local sectionNeedsFullRecolor = sectionNeedsRecolor and not blockLightDirtySection
+	local blockEmitDirtySection = sectionIndex and MC.MeshBlockEmitDirty[key] and MC.MeshBlockEmitDirty[key][sectionIndex]
 
 	local bxo = chunk.cx * C.CS
 	local byo = chunk.cy * C.CS
@@ -315,7 +316,8 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 			translucent = buf.translucent == true,
 			request = buf.request, stage = buf.stage,
 		}
-		if entry.resource.pixels then entry.resource.lightRecord = buf.records[#buf.records] end
+		-- Native geometry and lighting remain mesh-owned; CPU diagnostics keep
+		-- only counts and the mesh handle, so eviction cannot affect relighting.
 		meshPerf.vertices = meshPerf.vertices + vertexCount
 		meshPerf.faces = meshPerf.faces + math.floor( vertexCount / 6 )
 		meshPerf.meshes = meshPerf.meshes + 1
@@ -338,6 +340,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		buf.verts = VertexBuffer.New()
 		buf.pixels = {}
 		buf.occlusion = {}
+		if not buf.nativeL2 then buf.luaRelight = {} end
 		if buf.nativeL2 then buf.nativeCommands = {} end
 		buf.nv, buf.quadCount = 0, 0
 		buf.hasSecondaryUV = false
@@ -405,6 +408,7 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		sectionNeedsRecolor = sectionNeedsRecolor,
 		blockLightDirtySection = blockLightDirtySection,
 		sectionNeedsFullRecolor = sectionNeedsFullRecolor,
+		retainSmallBlockCache = not slice.nativeL2 and blockEmitDirtySection ~= nil,
 		bxo = bxo,
 		byo = byo,
 		bzo = bzo,
@@ -460,6 +464,9 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		VertexBuffer.Reset( buffer.verts )
 		for i = 1, #buffer.pixels do buffer.pixels[i] = nil end
 		for i = 1, #buffer.occlusion do buffer.occlusion[i] = nil end
+		if buffer.luaRelight then
+			for i = 1, #buffer.luaRelight do buffer.luaRelight[i] = nil end
+		end
 		if buffer.nativeCommands then
 			for i = 1, #buffer.nativeCommands do buffer.nativeCommands[i] = nil end
 		end

@@ -4,7 +4,7 @@ local VertexBuffer = MC.RenderVertexBuffer
 local LightBuffer = MC.RenderLightBuffer
 local geometrySections
 
-local RENDER_SECTION_SIZE = MC.RENDER_SECTION_SIZE or 8
+local RENDER_SECTION_SIZE = MC.RENDER_SECTION_SIZE or 16
 local RENDER_SECTIONS_XY = math.ceil( MC.CS / RENDER_SECTION_SIZE )
 local DEFAULT_GEOMETRY_CACHE_SECTIONS = 384
 local DEFAULT_BLOCK_EMIT_CACHE_SECTIONS = 1536

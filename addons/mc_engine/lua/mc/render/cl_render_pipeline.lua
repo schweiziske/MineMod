@@ -3,7 +3,7 @@ MC = MC or {}
 local Pipeline = MC.RenderPipeline or {}
 MC.RenderPipeline = Pipeline
 Pipeline.VERSION = 1
-Pipeline.SECTION_SIZE = Pipeline.SECTION_SIZE or 8
+Pipeline.SECTION_SIZE = MC.RENDER_SECTION_SIZE or 16
 Pipeline.stats = Pipeline.stats or {
 	builds = 0, lightBuilds = 0, fallbackBuilds = 0,
 	blocks = 0, vertices = 0, faces = 0,
