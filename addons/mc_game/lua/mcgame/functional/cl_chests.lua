@@ -19,7 +19,7 @@ local FACING_BASIS = {
 	south = { Vector( 1, 0, 0 ), Vector( 0, 1, 0 ) },
 }
 local HIDE_WEST, HIDE_EAST = { west = true }, { east = true }
--- Only immediate mesh calls consume these vectors; no entry owns scratch geometry.
+-- Upload/immediate calls copy these vectors; entries retain only engine meshes.
 local t0, t1, t2, t3 = Vector(), Vector(), Vector(), Vector()
 local l0, l1, l2, l3 = Vector(), Vector(), Vector(), Vector()
 local inverse, origin, hinge, lidForward, lidUp = Vector(), Vector(), Vector(), Vector(), Vector()
@@ -46,6 +46,24 @@ local Entries = {}
 local OpenStates = {}
 local LastChunkRefresh = 0
 local EntriesDirty = true
+local retainedMeshes = MC.ChestRenderMeshes or {}
+MC.ChestRenderMeshes = retainedMeshes
+
+local function releaseMesh( object )
+	retainedMeshes[object] = nil
+	object:Destroy()
+end
+
+local function releaseMeshes()
+	local failure
+	for object in pairs( retainedMeshes ) do
+		local ok, err = pcall( releaseMesh, object )
+		if not ok and not failure then failure = err end
+	end
+	if failure then MC.Fault( "render_chest_release", "%s", tostring( failure ) ) end
+end
+releaseMeshes() -- Lua refresh retires meshes owned by the previous renderer.
+hook.Add( "ShutDown", "mc_chest_meshes", releaseMeshes )
 
 local function cellKey( bx, by, bz )
 	return tostring( math.floor( tonumber( bx ) or 0 ) ) .. ":"
@@ -54,7 +72,12 @@ local function cellKey( bx, by, bz )
 end
 
 local function removeEntry( key )
+	local entry = Entries[key]
 	Entries[key] = nil
+	if entry then
+		if entry.colourMesh then releaseMesh( entry.colourMesh.mesh ) end
+		if entry.depthMesh then releaseMesh( entry.depthMesh.mesh ) end
+	end
 end
 
 local function addEntry( bx, by, bz )
@@ -70,6 +93,7 @@ local function addEntry( bx, by, bz )
 end
 
 function MC.MarkChestRenderEntriesDirty()
+	releaseMeshes()
 	Entries = {}
 	EntriesDirty = true
 end
@@ -84,6 +108,7 @@ end
 
 local function refreshChunks()
 	if not EntriesDirty or not World.ForEachLoadedBlock then return end
+	releaseMeshes()
 	Entries = {}
 	World.ForEachLoadedBlock( function( bx, by, bz, stateId )
 		if MC.IsChestState and MC.IsChestState( stateId ) then addEntry( bx, by, bz ) end
@@ -122,7 +147,7 @@ end
 
 local function emitVertex( position, u, v, color, normal )
 	mesh.Position( position )
-	if mesh.Normal then mesh.Normal( normal ) end
+	mesh.Normal( normal )
 	mesh.Color( color.r, color.g, color.b, color.a )
 	mesh.TexCoord( 0, u, v )
 	mesh.AdvanceVertex()
@@ -147,7 +172,7 @@ local function inverseNormal( normal )
 	return inverse
 end
 
-local function drawBox( base, right, forward, up, scale, x, y, z, width, height, depth, texU, texV, color, hidden )
+local function drawBox( base, right, forward, up, scale, x, y, z, width, height, depth, texU, texV, color, hidden, retained )
 	local x0, x1 = x * scale, ( x + width ) * scale
 	local y0, y1 = y * scale, ( y + height ) * scale
 	local z0, z1 = z * scale, ( z + depth ) * scale
@@ -166,14 +191,14 @@ local function drawBox( base, right, forward, up, scale, x, y, z, width, height,
 	local u4 = u3 + width
 	local v0, v1, v2 = texV, texV + depth, texV + depth + height
 	local faces = 6 - ( hidden and ( ( hidden.west and 1 or 0 ) + ( hidden.east and 1 or 0 ) ) or 0 )
-	mesh.Begin( MATERIAL_QUADS, faces )
+	if not retained then mesh.Begin( MATERIAL_QUADS, faces ) end
 	emitQuad( l1, l0, t0, t1, u1, v0, u2, v1, color, inverseNormal( up ) )
 	emitQuad( t2, t3, l3, l2, u2, v1, u22, v0, color, up )
 	if not ( hidden and hidden.west ) then emitQuad( t0, l0, l3, t3, u0, v1, u1, v2, color, inverseNormal( right ) ) end
 	emitQuad( t1, t0, t3, t2, u1, v1, u2, v2, color, inverseNormal( forward ) )
 	if not ( hidden and hidden.east ) then emitQuad( l1, t1, t2, l2, u2, v1, u3, v2, color, right ) end
 	emitQuad( l0, l1, l2, l3, u3, v1, u4, v2, color, forward )
-	mesh.End()
+	if not retained then mesh.End() end
 end
 
 local function entryColor( entry, pbr )
@@ -203,10 +228,22 @@ local function entryColor( entry, pbr )
 	return entry.lightColor
 end
 
-local function drawChestGeometry( right, forward, scale, x, width, lockX, lockWidth, color, hidden )
-	drawBox( origin, right, forward, UP, scale, x, 0, 1, width, 10, 14, 0, 19, color, hidden )
-	drawBox( hinge, right, lidForward, lidUp, scale, x, 0, 0, width, 5, 14, 0, 0, color, hidden )
-	drawBox( hinge, right, lidForward, lidUp, scale, lockX, -2, 14, lockWidth, 4, 1, 0, 0, color, hidden )
+local function drawChestGeometry( right, forward, scale, x, width, lockX, lockWidth, color, hidden, object )
+	if object then mesh.Begin( object, MATERIAL_QUADS, hidden and 15 or 18 ) end
+	drawBox( origin, right, forward, UP, scale, x, 0, 1, width, 10, 14, 0, 19, color, hidden, object )
+	drawBox( hinge, right, lidForward, lidUp, scale, x, 0, 0, width, 5, 14, 0, 0, color, hidden, object )
+	drawBox( hinge, right, lidForward, lidUp, scale, lockX, -2, 14, lockWidth, 4, 1, 0, 0, color, hidden, object )
+	if object then mesh.End() end
+end
+
+local function cacheCurrent( cache, material, stateId, openness, center, bs, color )
+	return cache and cache.material == material and cache.stateId == stateId and cache.openness == openness
+		and cache.x == center.x and cache.y == center.y and cache.z == center.z and cache.bs == bs
+		and cache.r == color.r and cache.g == color.g and cache.b == color.b and cache.a == color.a
+end
+
+local function drawRetainedChest( object )
+	object:Draw()
 end
 
 local chestLightBounds = { x = 0, y = 0, z = 0, radius = 0 }
@@ -230,21 +267,47 @@ local function drawChest( entry, stateId, openness, renderCenter, bs, pbrMateria
 	elseif pbrMaterials then MC.RenderPBR.Bind( material ) end
 	render.SetMaterial( material )
 
-	local closed = 1 - math.Clamp( openness or 0, 0, 1 )
+	openness = math.Clamp( openness or 0, 0, 1 )
+	local closed = 1 - openness
 	local eased = 1 - closed * closed * closed
 	local angle = eased * math.pi * 0.5
 	local cosine, sine = math.cos( angle ), math.sin( angle )
 	lidForward.x, lidForward.y, lidForward.z = forward.x * cosine, forward.y * cosine, sine
 	lidUp.x, lidUp.y, lidUp.z = -forward.x * sine, -forward.y * sine, cosine
 	hinge.x, hinge.y, hinge.z = origin.x + forward.x * scale, origin.y + forward.y * scale, origin.z + scale * 9
-	drawChestGeometry( right, forward, scale, x, width, lockX, lockWidth, color, hidden )
+	local object
+	-- Most chests stay fully closed/open. Preserve their exact render-space
+	-- vertices and encoded light across passes/frames. Moving lids keep the
+	-- immediate path, avoiding static GPU allocation on every animation frame.
+	if openness == 0 or openness == 1 then
+		local slot = drawingDepth and "depthMesh" or "colourMesh"
+		local cached = entry[slot]
+		if cacheCurrent( cached, material, stateId, openness, renderCenter, bs, color ) then
+			object = cached.mesh
+		elseif drawingDepth or pbrMaterials or not entry.hadMovingLight then
+			-- Vanilla bakes moving-light RGB into vertices. Keep a matching cache
+			-- hit, but do not allocate a new static mesh for every changing colour.
+			object = Mesh( material )
+			assert( object, "chest mesh allocation failed" )
+			retainedMeshes[object] = true
+			local ok, err = pcall( drawChestGeometry, right, forward, scale, x, width, lockX, lockWidth, color, hidden, object )
+			if not ok then releaseMesh( object ) error( err, 0 ) end
+			entry[slot] = { mesh = object, material = material, stateId = stateId, openness = openness,
+				x = renderCenter.x, y = renderCenter.y, z = renderCenter.z, bs = bs,
+				r = color.r, g = color.g, b = color.b, a = color.a }
+			if cached then releaseMesh( cached.mesh ) end
+		end
+	end
+	if object then drawRetainedChest( object )
+	else drawChestGeometry( right, forward, scale, x, width, lockX, lockWidth, color, hidden ) end
 	if pbrMaterials and not drawingDepth then
 		local lights = MC.RenderDynamicLights
 		chestLightBounds.radius = bs * 1.5 -- includes the fully open lid
 		if lights.count > 0 and lights.AffectsBounds( renderCenter.x - lights.eyeX,
 			renderCenter.y - lights.eyeY, renderCenter.z - lights.eyeZ, chestLightBounds ) then
-			lights.DrawFunction( material, drawChestGeometry, true, 1,
-				right, forward, scale, x, width, lockX, lockWidth, color, hidden )
+			if object then lights.DrawFunction( material, drawRetainedChest, true, 1, object )
+			else lights.DrawFunction( material, drawChestGeometry, true, 1,
+				right, forward, scale, x, width, lockX, lockWidth, color, hidden ) end
 		end
 	end
 	return true
