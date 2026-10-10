@@ -168,9 +168,12 @@ function Store.GetPinnedSections( key )
 end
 
 local function validNativeCorners( record, count )
-	if count % 6 ~= 0 or not record.nativeL2 and not record.verts.vertexBufferVersion
-		or record.light ~= nil or record.hasSecondaryUV ~= false
-		or type( record.pixels ) ~= "table" or #record.pixels ~= count / 6 * 4
+	if count % 6 ~= 0 or record.light ~= nil or record.hasSecondaryUV ~= false then return false end
+	if record.nativeL2 then
+		return record.pixels == nil and record.occlusion == nil
+			and record.uploadedVertices == count / 6 * 4 and record.mesh.IsValid ~= nil and record.mesh:IsValid()
+	end
+	if not record.verts.vertexBufferVersion or type( record.pixels ) ~= "table" or #record.pixels ~= count / 6 * 4
 		or type( record.occlusion ) ~= "table" or #record.occlusion ~= count / 6 then return false end
 	local floor = math.floor
 	local order = { 1, 3, 2, 1, 4, 3 }
@@ -181,9 +184,6 @@ local function validNativeCorners( record, count )
 	for i = 1, count / 6 do
 		local pixel = record.occlusion[i]
 		if type( pixel ) ~= "number" or pixel < 0 or pixel > 4294967295 or pixel ~= floor( pixel ) then return false end
-	end
-	if record.nativeL2 then
-		return record.uploadedVertices == count / 6 * 4 and record.mesh.IsValid ~= nil and record.mesh:IsValid()
 	end
 	for i = 0, count - 1 do
 		local offset, verts = i * MC.RenderVertexBuffer.STRIDE, record.verts
@@ -276,8 +276,8 @@ function Store.Validate()
 								result.faces = result.faces + math.floor( vertexCount / 6 )
 									if record.l2 then
 										result.l2Records = result.l2Records + 1
-										result.cornerTexels = result.cornerTexels + #record.pixels
-										result.occlusionTexels = result.occlusionTexels + #record.occlusion
+										result.cornerTexels = result.cornerTexels + vertexCount / 6 * 4
+										result.occlusionTexels = result.occlusionTexels + vertexCount / 6
 									else
 										result.lightSamples = result.lightSamples + ( light.sampleCount or 0 )
 									end

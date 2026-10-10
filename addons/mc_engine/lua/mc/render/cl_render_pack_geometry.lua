@@ -113,16 +113,20 @@ function G.Upload( buffer, perf )
 		requireValue( #buffer.pixels == count * 4 and buffer.occlusion and #buffer.occlusion == count,
 			"render_l2_buffer", "Lua L2 corner/AO count does not match its quads" )
 	end
+	if buffer.luaRelight then
+		requireValue( type( buffer.luaRelight ) == "table" and #buffer.luaRelight == count * 4,
+			"lua_relight_layout", "Lua lighting recipes do not match the uploaded quads" )
+	end
 	local bounds
 	if not buffer.nativeL2 then bounds = MC.RenderSectionCull.VertexBounds( buffer.verts ) end
 	R.Ensure( { build = "quad_corners_v1" }, P.shared )
 	local first = allocate( count )
-	local object, uploadedVertices
+	local object, uploadedVertices, auditPixels
 	local ok, err = pcall( function()
 		if buffer.nativeL2 then
 			local result = MC.NativeL2.Upload( buffer, first % R.BANK_QUADS, declaration() )
 			object, uploadedVertices = result.mesh, result.vertices
-			buffer.pixels, buffer.occlusion = result.pixels, result.occlusion
+			buffer.pixels, buffer.occlusion = nil, nil
 			buffer.nativeRelight = result.relight == true
 			local b = result.bounds
 			bounds = MC.RenderSectionCull.Bounds( b[1], b[2], b[3], b[4], b[5], b[6] )
@@ -135,8 +139,22 @@ function G.Upload( buffer, perf )
 			MC.RenderMesh.uploadMeshVertices( object, buffer.verts, perf, false, false, first % R.BANK_QUADS )
 		end
 		local cornerStarted = perf and SysTime()
-		R.UploadPart( { firstQuad = first, quadCount = count, pixels = buffer.pixels, occlusion = buffer.occlusion }, P.shared )
+		R.UploadPart( { firstQuad = first, quadCount = count, pixels = buffer.pixels, occlusion = buffer.occlusion,
+			nativeL2 = buffer.nativeL2, mesh = object }, P.shared )
 		if perf then MC.RenderMesh.meshPerfAdd( perf, "cornerUploadMS", cornerStarted ) end
+		if G.auditPixels then
+			local pixels, occlusion
+			if buffer.nativeL2 then
+				local result, reason = MC.NativeL2.module.ReadL2MeshPixels( object )
+				requireValue( result ~= nil, "native_pixel_audit", tostring( reason ) )
+				pixels, occlusion = result.pixels, result.occlusion
+			else
+				pixels, occlusion = {}, {}
+				for i = 1, #buffer.pixels do pixels[i] = buffer.pixels[i] end
+				for i = 1, #buffer.occlusion do occlusion[i] = buffer.occlusion[i] end
+			end
+			pixels.occlusion, auditPixels = occlusion, pixels
+		end
 	end )
 	if not ok then
 		local destroyOK, destroyError = true, nil
@@ -146,19 +164,47 @@ function G.Upload( buffer, perf )
 		error( err, 0 )
 	end
 	G.liveParts = G.liveParts + 1
-	local data = { mesh = object, firstQuad = first, quadCount = count, references = 1 }
-	if buffer.nativeRelight then data.pixels, data.occlusion = buffer.pixels, buffer.occlusion end
-	if G.auditPixels then
-		local pixels, occlusion = {}, {}
-		for i = 1, #buffer.pixels do pixels[i] = buffer.pixels[i] end
-		for i = 1, #buffer.occlusion do occlusion[i] = buffer.occlusion[i] end
-		pixels.occlusion = occlusion
-		G.auditPixels[data] = pixels
+	local data = { mesh = object, firstQuad = first, quadCount = count, references = 1,
+		nativeL2 = buffer.nativeL2, nativeRelight = buffer.nativeRelight }
+	if buffer.luaRelight then
+		data.luaRelight, data.luaRelightVersion = buffer.luaRelight, MC.RenderL2Quad.LUA_RELIGHT_VERSION
+		data.pixels, data.occlusion = buffer.pixels, buffer.occlusion
 	end
+	if G.auditPixels then G.auditPixels[data] = auditPixels end
 	return { l2 = true, resource = data, mesh = object, material = buffer.material,
 		nativeL2 = buffer.nativeL2, uploadedVertices = uploadedVertices,
 		request = buffer.request, stage = buffer.stage, blockIds = buffer.blockIds,
 		bounds = bounds, direction = buffer.direction, castsShadow = buffer.castsShadow, water = buffer.water }
+end
+
+function G.ApplyNativeLighting( job, resources, module )
+	for _, data in ipairs( resources ) do
+		requireValue( data.references > 0 and data.nativeRelight,
+			"native_relight_layout", "Native relight requires live retained meshes" )
+	end
+	local transaction, reason = module.StageL2Relight( job, resources )
+	requireValue( transaction ~= nil, "native_relight_result", tostring( reason ) )
+	local ok, err = pcall( function()
+		R.UploadNativeLighting( transaction, P.shared, module, false )
+		-- Native has completed the texture upload before publishing CPU pixels.
+		local committed, problem = module.FinishL2Relight( transaction, true )
+		requireValue( committed == true, "native_relight_commit", tostring( problem ) )
+	end )
+	if not ok then
+		local restored, restoreError = pcall( R.UploadNativeLighting, transaction, P.shared, module, true )
+		local released, releaseError = module.FinishL2Relight( transaction, false )
+		requireValue( restored and released == true, "native_relight_restore",
+			"atlas rollback failed; rebuild required: " .. tostring( restoreError ) .. " " .. tostring( releaseError ) )
+		error( err, 0 )
+	end
+	if G.auditPixels then
+		for _, data in ipairs( resources ) do
+			local result, problem = module.ReadL2MeshPixels( data.mesh )
+			requireValue( result ~= nil, "native_pixel_audit", tostring( problem ) )
+			result.pixels.occlusion = result.occlusion
+			G.auditPixels[data] = result.pixels
+		end
+	end
 end
 
 -- Results are staged first. A live section is updated in one render-thread
@@ -176,6 +222,7 @@ function G.ApplyLighting( updates )
 			attempted = i
 			R.UploadPart( update, P.shared )
 		end
+		requireValue( R.FlushUploads(), "l2_pixel_texture_flush", "lighting upload did not complete" )
 	end )
 	if not ok then
 		local restoreError
@@ -183,8 +230,9 @@ function G.ApplyLighting( updates )
 			local restored, reason = pcall( R.UploadPart, updates[i].data, P.shared )
 			if not restored then restoreError = reason end
 		end
-		requireValue( not restoreError, "native_relight_restore",
-			"atlas rollback failed; rebuild required: " .. tostring( restoreError ) )
+		local flushed, flushError = pcall( R.FlushUploads )
+		requireValue( not restoreError and flushed and flushError == true, "native_relight_restore",
+			"atlas rollback failed; rebuild required: " .. tostring( restoreError ) .. " " .. tostring( flushError ) )
 		error( err, 0 )
 	end
 	for _, update in ipairs( updates ) do

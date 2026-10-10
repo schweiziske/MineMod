@@ -17,7 +17,7 @@ MeshInstances::MeshInstances(std::shared_ptr<const MeshSnapshot> snapshot, Coord
             l2::require(!recipe.shapeSelector
                 || recipe.shapeSelector == snapshot_->world->catalog->states[state.first].shape->selector,
                 "model/world shape selector mismatch");
-            quads_ += recipe.maxQuads * state.second;
+            quads_ = l2::checkedAdd(quads_, l2::checkedMultiply(recipe.maxQuads, state.second));
         }
     }
     if (section_) for (const auto& context : section_->contexts) {
@@ -26,7 +26,6 @@ MeshInstances::MeshInstances(std::shared_ptr<const MeshSnapshot> snapshot, Coord
         l2::require(!found->second.shapeSelector || found->second.shapeSelector == context.second.shape->selector,
             "model/context shape selector mismatch");
     }
-    l2::require(quads_ <= l2::WorkerPool::MaxSectionQuads, "native world section exceeds quad budget");
 }
 size_t MeshInstances::bytes() const {
     const auto size = snapshot_->world->config.sectionSize;

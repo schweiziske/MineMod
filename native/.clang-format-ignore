@@ -1,0 +1,3 @@
+# Vendored dependencies and generated output are not project formatting targets.
+include/**
+build/**

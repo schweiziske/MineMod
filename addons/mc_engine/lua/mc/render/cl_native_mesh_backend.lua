@@ -1758,7 +1758,7 @@ local function tryStart()
 	-- FindMaterial 瑁稿悕浼氬幓纾佺洏鎵?.vmt 鑰屾嬁鍒?error material(瀹炴祴鏃犵敾闈?,
 	-- "!" 寮哄埗鏌ヨ繍琛屾椂鏉愯川琛?鈥斺€?spike 閲?test.cpp 纭紪鐮佺殑鍚嶅瓧鍚屾鍓嶇紑銆?
 	local shook = mcmesh.Handshake and mcmesh.Handshake(
-		MC.CS or 16, MC.CH or 32, MC.RENDER_SECTION_SIZE or 8, MC.BS or 36.5,
+		MC.CS or 16, MC.CH or 32, MC.RENDER_SECTION_SIZE or 16, MC.API.Coords.BlockSize(),
 		"!" .. matOpaque:GetName(), "!" .. matTranslucent:GetName() )
 	if shook ~= true then
 		state.startupFailureReason = "handshake rejected"

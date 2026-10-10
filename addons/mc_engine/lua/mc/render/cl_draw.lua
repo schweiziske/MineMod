@@ -291,6 +291,7 @@ local cullEyeX, cullEyeY, cullEyeZ = 0, 0, 0
 local maxDistSq = 0 -- 0 = unlimited
 local cullDistance, directionMargin, cullDirections = 0, 0, false
 local nativePortals, nativeRoot, nativeSeed, nativeDirections = false, 0, 63, false
+local nativePortalX, nativePortalY, nativePortalZ = 0, 0, 0
 local SectionCull, Occlusion = MC.RenderSectionCull, MC.RenderOcclusion
 
 MC.DrawCullStats = MC.DrawCullStats or {
@@ -337,7 +338,8 @@ local function updateCullState( depthOnly )
 			bx, by, bz = MC.API.Coords.EngineToCell( eye, LocalPlayer() )
 		end
 		if useNativeDraw() then
-			nativePortals, nativeRoot, nativeSeed = Occlusion.PrepareNativeView( bx, by, bz, MC.NativeL2.module )
+			nativePortals, nativeRoot, nativeSeed, nativePortalX, nativePortalY, nativePortalZ =
+				Occlusion.PrepareNativeView( bx, by, bz, MC.NativeL2.module )
 		else
 			Occlusion.PrepareView( bx, by, bz )
 		end
@@ -554,6 +556,7 @@ local function drawNativeChunks( cached, store, chunks, stats, depthStage, trans
 	view.distance = MC.ChunkDrawDistanceVisible and 0 or cullDistance
 	view.moveBudget, view.directionMargin = MC.API.Coords.BlockSize() * 2, directionMargin
 	view.portals, view.root, view.seed = nativePortals, nativeRoot, nativeSeed
+	view.portalX, view.portalY, view.portalZ = nativePortalX, nativePortalY, nativePortalZ
 	view.background = MC.NativeDrawWorker:GetBool()
 	-- Depth/override materials can be double-sided independently of the surface.
 	view.directional = nativeDirections and not translucent and not depthStage and not overrideMaterial
@@ -569,6 +572,8 @@ local function drawNativeChunks( cached, store, chunks, stats, depthStage, trans
 		if not ok then error( "Native draw blend restore: " .. tostring( restoreError ), 0 ) end
 	end
 	if not result then error( "Native draw: " .. tostring( err ), 0 ) end
+	stats.nativePortalMode = result.portalMode or ( nativePortals and "connectivity_legacy" or "disabled" )
+	stats.nativePortalGridCells, stats.nativePortalVisited = result.portalGridCells or 0, result.portalVisited or 0
 	for i = 1, #nativeStatNames do
 		local name = nativeStatNames[i]
 		stats[name] = ( stats[name] or 0 ) + result[name]
@@ -797,6 +802,8 @@ local function drawPackStages( translucent, depthOnly )
 	local stats = overrideMaterial and MC.DrawReflectionCullStats or depthOnly and MC.DrawSSRDepthCullStats or translucent and MC.DrawTranslucentCullStats or MC.DrawCullStats
 	stats.frustumMode, stats.frustumPlanes, stats.cullDistance = frustumMode, planeCount, cullDistance
 	stats.nativePortals, stats.nativePortalRoot, stats.nativePortalSeed = nativePortals, nativeRoot, nativeSeed
+	stats.nativePortalX, stats.nativePortalY, stats.nativePortalZ = nativePortalX, nativePortalY, nativePortalZ
+	stats.nativePortalMode, stats.nativePortalGridCells, stats.nativePortalVisited = "unprepared", 0, 0
 	stats.sectionsTested, stats.sectionsDrawn, stats.sectionFrustumCulled, stats.sectionOcclusionCulled = 0, 0, 0, 0
 	stats.directionCulled, stats.vertices, stats.verticesCulled = 0, 0, 0
 	stats.nativeBinds, stats.nativeRanges, stats.nativeAsyncHits, stats.nativeSyncCulls, stats.nativeCullMS = 0, 0, 0, 0, 0
@@ -860,14 +867,23 @@ concommand.Add( "mc_mesh_cull_stats", function()
 			print( string.format( "[MC native draw] %s binds=%d ranges=%d asyncHits=%d syncCulls=%d resultCull=%.3fms",
 				names[pass], stats.nativeBinds or 0, stats.nativeRanges or 0, stats.nativeAsyncHits or 0,
 				stats.nativeSyncCulls or 0, stats.nativeCullMS or 0 ) )
-			print( string.format( "[MC native view] %s portals=%s root=%d seed=%d",
-				names[pass], tostring( stats.nativePortals == true ), stats.nativePortalRoot or 0, stats.nativePortalSeed or 63 ) )
+			print( string.format( "[MC native view] %s portals=%s root=%d seed=%d mode=%s cell=%d,%d,%d grid=%d visited=%d",
+				names[pass], tostring( stats.nativePortals == true ), stats.nativePortalRoot or 0, stats.nativePortalSeed or 63,
+				stats.nativePortalMode or "unprepared", stats.nativePortalX or 0, stats.nativePortalY or 0, stats.nativePortalZ or 0,
+				stats.nativePortalGridCells or 0, stats.nativePortalVisited or 0 ) )
 		end
 	end
 	if Occlusion then
 		local stats = Occlusion.stats
 		print( string.format( "[MC portals] nodes=%d visited=%d traversals=%d cacheHits=%d topologyBuilds=%d topologyHits=%d lastTraversal=%.3fms",
 			stats.nodes, stats.visited, stats.traversals, stats.cacheHits, stats.builds, stats.topologyHits, stats.lastMS ) )
+	end
+	local module = MC.NativeL2 and MC.NativeL2.module
+	if useNativeDraw() and module.L2DrawStats then
+		local stats = module.L2DrawStats()
+		print( string.format( "[MC native cull work] requests=%d cacheHits=%d coalesced=%d queued=%d completed=%d running=%d sync=%d portalFloods=%d portalCacheHits=%d compute=%.3fms",
+			stats.requests, stats.cacheHits, stats.coalesced, stats.scheduled, stats.completed, stats.running,
+			stats.synchronous, stats.portalTraversals, stats.portalCacheHits, stats.computeMS ) )
 	end
 end )
 

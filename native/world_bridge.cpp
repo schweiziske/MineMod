@@ -160,9 +160,11 @@ world::Config config(ILuaBase* lua, int table) {
     cfg.skyEnabled = flag(lua, table, "skyEnabled", true);
     cfg.minChunkZ = int(integer(lua, table, "minChunkZ", INT32_MIN, INT32_MIN, INT32_MAX));
     cfg.maxChunkZ = int(integer(lua, table, "maxChunkZ", INT32_MAX, INT32_MIN, INT32_MAX));
-    cfg.maxChunks = size_t(integer(lua, table, "maxChunks", double(cfg.maxChunks), 1, 1048576));
-    cfg.maxLightChunks = size_t(integer(lua, table, "maxLightChunks", double(cfg.maxLightChunks), 1, 1048576));
-    cfg.maxLightBytes = size_t(integer(lua, table, "maxLightBytes", double(cfg.maxLightBytes), 1024, 4294967296.0));
+    // Largest exactly represented Lua integer that also fits size_t.
+    constexpr double maxSize = sizeof(size_t) == 8 ? 9007199254740991.0 : double(SIZE_MAX);
+    cfg.maxChunks = size_t(integer(lua, table, "maxChunks", double(cfg.maxChunks), 0, maxSize));
+    cfg.maxLightChunks = size_t(integer(lua, table, "maxLightChunks", double(cfg.maxLightChunks), 0, maxSize));
+    cfg.maxLightBytes = size_t(integer(lua, table, "maxLightBytes", double(cfg.maxLightBytes), 0, maxSize));
     cfg.validate();
     return cfg;
 }
@@ -557,6 +559,9 @@ LUA_FUNCTION(getSectionInfo) {
 }
 LUA_FUNCTION(pump) {
     return boundary(LUA, [&] {
+        const bool specified = LUA->Top() >= 2 && !LUA->IsType(2, Type::Nil);
+        require(!specified || LUA->IsType(2, Type::Bool), "invalid light change export option");
+        const bool includeChanged = !specified || LUA->GetBool(2);
         const auto result = session(LUA, 1).pump();
         if (!result.error.empty()) throw std::runtime_error(result.error);
         LUA->CreateTable();
@@ -566,17 +571,21 @@ LUA_FUNCTION(pump) {
         field(LUA, "computeMS", result.computeMS); field(LUA, "diffMS", result.diffMS);
         field(LUA, "commitMS", result.commitMS); field(LUA, "snapshotMS", result.snapshotMS);
         field(LUA, "scannedCells", double(result.scannedCells));
-        LUA->CreateTable();
         unsigned index = 1;
-        for (const auto& pointer : result.commit.changed) {
-            const auto& delta = *pointer;
-            LUA->PushNumber(index++); LUA->CreateTable();
-            field(LUA, "cx", delta.chunk.x); field(LUA, "cy", delta.chunk.y); field(LUA, "cz", delta.chunk.z);
-            LUA->PushString(reinterpret_cast<const char*>(delta.changedBits.data()), unsigned(delta.changedBits.size()));
-            LUA->SetField(-2, "changedBits");
-            LUA->RawSet(-3);
+        // The renderer consumes worker-computed dirtySections. Detailed cell
+        // deltas remain available to diagnostic/legacy callers on request.
+        if (includeChanged) {
+            LUA->CreateTable();
+            for (const auto& pointer : result.commit.changed) {
+                const auto& delta = *pointer;
+                LUA->PushNumber(index++); LUA->CreateTable();
+                field(LUA, "cx", delta.chunk.x); field(LUA, "cy", delta.chunk.y); field(LUA, "cz", delta.chunk.z);
+                LUA->PushString(reinterpret_cast<const char*>(delta.changedBits.data()), unsigned(delta.changedBits.size()));
+                LUA->SetField(-2, "changedBits");
+                LUA->RawSet(-3);
+            }
+            LUA->SetField(-2, "changed");
         }
-        LUA->SetField(-2, "changed");
         const auto& owners = result.commit.dirtySections;
         LUA->CreateTable();
         index = 1;

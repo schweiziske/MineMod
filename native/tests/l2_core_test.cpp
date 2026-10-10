@@ -45,6 +45,35 @@ struct VariedReader {
             | (v % 3 == 0 ? 131072u | 262144u | 0xf000u : 0u), float(v % 11) / 10};
     }
 };
+void deferredCache() {
+    struct Source : CellSource {
+        mutable unsigned calls = 0;
+        Cell read(int x, int y, int z) const override { ++calls; return VariedReader::read(nullptr, x, y, z); }
+        size_t bytes() const override { return sizeof(*this); }
+    };
+    const int origin[3]{}, dims[3] = {20,20,20};
+    auto source = std::make_shared<Source>();
+    Snapshot deferred(origin, dims, source);
+    check(!deferred.prepared() && source->calls == 0, "owned snapshot allocated/read before consumption");
+    const size_t reserved = deferred.bytes();
+    MemoryUsage pending;
+    deferred.memoryUsage(pending);
+    check(pending.owned >= 8000 * (sizeof(Cell) + 1), "deferred scratch bypassed admission budget");
+    deferred.prepare();
+    check(deferred.prepared() && deferred.bytes() == reserved, "cache allocation changed reservation");
+    const auto value = deferred.read(2,2,2);
+    deferred.prepare();
+    check(deferred.read(2,2,2).word == value.word && source->calls == 1, "preparation lost cached cells");
+    Snapshot callback(origin, dims, VariedReader::read, nullptr);
+    check(callback.prepared(), "callback source cannot prefetch immediately");
+    for (int z = 0; z < 20; ++z) for (int y = 0; y < 20; ++y) for (int x = 0; x < 20; ++x) {
+        const auto a = deferred.read(x,y,z), b = callback.read(x,y,z);
+        check(a.word == b.word && a.shade == b.shade, "deferred cache changed source values");
+    }
+    const int invalid[3] = {4096,4096,4096};
+    rejects([&] { Snapshot bad(origin, invalid, source); }, "budget");
+    rejects([&] { Snapshot bad(origin, dims, std::shared_ptr<const CellSource>{}); }, "snapshot");
+}
 void faceCache() {
     const int origin[3]{}, dims[3] = {7,7,7};
     Snapshot cached(origin, dims, VariedReader::read, nullptr);
@@ -165,6 +194,6 @@ void run() {
 }
 }
 int main() {
-    try { run(); faceCache(); std::cout << "L2 core: " << checks << " checks passed\n"; return 0; }
+    try { run(); faceCache(); deferredCache(); std::cout << "L2 core: " << checks << " checks passed\n"; return 0; }
     catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

@@ -858,9 +858,6 @@ function MC.EndPartialLightingBatch( batch, newChunks, rateLimited )
 end
 
 function MC.MarkLightSectionsDirtyForChangedCells( changed )
-	local dirty = {}
-	local dirtyCells = {}
-	local dirtyCount = 0
 	local count = changed and changed.count or 0
 	local xs, ys, zs = changed and changed.x or {}, changed and changed.y or {}, changed and changed.z or {}
 	if MC.UsingGpuLightTexture and MC.UsingGpuLightTexture()
@@ -868,78 +865,91 @@ function MC.MarkLightSectionsDirtyForChangedCells( changed )
 		local dirtyChunks = MC.MarkGpuChunkLightTextureDirtyForChangedCells( changed )
 		local stats = MC.LightPerfStats or {}
 		MC.LightPerfStats = stats
-		stats.lastGpuLightTextureDirtyChunks = dirtyChunks
-		stats.lastGpuLightTextureDirtyCells = count
+		stats.lastGpuLightTextureDirtyChunks, stats.lastGpuLightTextureDirtyCells = dirtyChunks, count
 	end
-	-- The animation atlas and native L2 corner buffers are separate consumers.
-	local chunkKey = MC.ChunkKey
-	local world = MC.World
-	local meshDirty = MC.MeshDirty
-	local meshLightDirty = MC.MeshLightDirty
-	local markLightSectionDirty = MC.MarkLightSectionDirty
+	local chunkKey, world = MC.ChunkKey, MC.World
+	local meshDirty, meshLightDirty = MC.MeshDirty, MC.MeshLightDirty
 	local meshBlockLightDirty = MC.MeshBlockLightDirty
-	local cs = MC.CS or 16
-	local ch = MC.CH or 32
-	local cs2 = cs * cs
-	local chunkVolume = cs2 * ch
-	local renderSectionSize = 8
-	local renderSectionsXY = math.ceil( cs / renderSectionSize )
-	local mathFloor = math.floor
-	if not chunkKey or not meshLightDirty or not meshBlockLightDirty then return 0 end
+	local markLightSectionDirty = MC.MarkLightSectionDirty
+	if not chunkKey or not world or not meshLightDirty or not meshBlockLightDirty then return 0 end
+	local cs, ch = MC.CS, MC.CH
+	local cs2, sectionSize = cs * cs, MC.RENDER_SECTION_SIZE or 16
+	local sectionXY = math.ceil( cs / sectionSize )
+	local floor = math.floor
+	-- A synchronous batch sees one world. Resolve its chunk neighbours once,
+	-- then deduplicate compact local cells before notifying each section. The
+	-- same 27 lighting dependencies are retained across all chunk boundaries.
+	local sources, targets = {}, {}
 	for c = 1, count do
 		local bx, by, bz = xs[c], ys[c], zs[c]
-		for i = 1, LIGHT_DIRTY_MESH_NEIGHBOR_COUNT do
-			local dbx = bx + LIGHT_DIRTY_MESH_NEIGHBOR_X[i]
-			local dby = by + LIGHT_DIRTY_MESH_NEIGHBOR_Y[i]
-			local dbz = bz + LIGHT_DIRTY_MESH_NEIGHBOR_Z[i]
-			local cx = mathFloor( dbx / cs )
-			local cy = mathFloor( dby / cs )
-			local cz = mathFloor( dbz / ch )
-			local lx = dbx - cx * cs
-			local ly = dby - cy * cs
-			local lz = dbz - cz * ch
-			local li = lx + ly * cs + lz * cs2
-			local key = chunkKey( cx, cy, cz )
-			if world and world[key] then
-				local cellKey = key * chunkVolume + li
-				if not dirtyCells[cellKey] then
-					dirtyCells[cellKey] = true
-					local sx = mathFloor( lx / renderSectionSize )
-					local sy = mathFloor( ly / renderSectionSize )
-					local sz = mathFloor( lz / renderSectionSize )
-					local sectionIndex = sx + sy * renderSectionsXY + sz * renderSectionsXY * renderSectionsXY + 1
-					local lightDirtySections = meshBlockLightDirty[key]
-					if not lightDirtySections then
-						lightDirtySections = {}
-						meshBlockLightDirty[key] = lightDirtySections
+		local cx, cy, cz = floor( bx / cs ), floor( by / cs ), floor( bz / ch )
+		local lx, ly, lz = bx - cx * cs, by - cy * cs, bz - cz * ch
+		local sourceKey = chunkKey( cx, cy, cz )
+		local neighbors = sources[sourceKey]
+		if neighbors == nil then
+			neighbors = {}
+			local any = false
+			for dz = -1, 1 do for dy = -1, 1 do for dx = -1, 1 do
+				local key = chunkKey( cx + dx, cy + dy, cz + dz )
+				if world[key] then
+					local target = targets[key]
+					if not target then
+						target = { cells = {}, sections = {}, key = key }
+						targets[key] = target
 					end
-					local lightDirtySection = lightDirtySections[sectionIndex]
-					if not lightDirtySection then
-						lightDirtySection = {}
-						lightDirtySections[sectionIndex] = lightDirtySection
-					end
-					lightDirtySection[li] = true
-					if markLightSectionDirty then
-						markLightSectionDirty( key, sectionIndex, MC.PartialLightingRateLimited == true )
-					elseif not ( meshDirty and meshDirty[key] == true ) then
-						local sections = meshLightDirty[key]
-						MC.MeshLightDirtyRateLimited = MC.MeshLightDirtyRateLimited or {}
-						if not sections then
-							sections = {}
-							meshLightDirty[key] = sections
-							MC.MeshLightDirtyRateLimited[key] = MC.PartialLightingRateLimited == true and true or nil
-						elseif not MC.PartialLightingRateLimited then
-							MC.MeshLightDirtyRateLimited[key] = nil
+					neighbors[dx + 2 + ( dy + 1 ) * 3 + ( dz + 1 ) * 9] = target
+					any = true
+				end
+			end end end
+			if not any then neighbors = false end
+			sources[sourceKey] = neighbors
+		end
+		if neighbors then
+			for i = 1, LIGHT_DIRTY_MESH_NEIGHBOR_COUNT do
+				local x = lx + LIGHT_DIRTY_MESH_NEIGHBOR_X[i]
+				local y = ly + LIGHT_DIRTY_MESH_NEIGHBOR_Y[i]
+				local z = lz + LIGHT_DIRTY_MESH_NEIGHBOR_Z[i]
+				local dx, dy, dz = 0, 0, 0
+				if x < 0 then dx, x = -1, x + cs elseif x >= cs then dx, x = 1, x - cs end
+				if y < 0 then dy, y = -1, y + cs elseif y >= cs then dy, y = 1, y - cs end
+				if z < 0 then dz, z = -1, z + ch elseif z >= ch then dz, z = 1, z - ch end
+				local target = neighbors[dx + 2 + ( dy + 1 ) * 3 + ( dz + 1 ) * 9]
+				if target then
+					local li = x + y * cs + z * cs2
+					if not target.cells[li] then
+						target.cells[li] = true
+						local index = floor( x / sectionSize ) + floor( y / sectionSize ) * sectionXY
+							+ floor( z / sectionSize ) * sectionXY * sectionXY + 1
+						local cells = target.sections[index]
+						if not cells then
+							local sections = meshBlockLightDirty[target.key]
+							if not sections then sections = {} meshBlockLightDirty[target.key] = sections end
+							cells = sections[index]
+							if not cells then cells = {} sections[index] = cells end
+							target.sections[index] = cells
 						end
-						sections[sectionIndex] = true
-					end
-					local dirtyKey = key * 32 + sectionIndex
-					if not dirty[dirtyKey] then
-						dirty[dirtyKey] = true
-						dirtyCount = dirtyCount + 1
+						cells[li] = true
 					end
 				end
 			end
+		end
+	end
+	local dirtyCount = 0
+	for key, target in pairs( targets ) do
+		for index in pairs( target.sections ) do
+			if markLightSectionDirty then
+				markLightSectionDirty( key, index, MC.PartialLightingRateLimited == true )
+			elseif not ( meshDirty and meshDirty[key] == true ) then
+				local sections = meshLightDirty[key]
+				MC.MeshLightDirtyRateLimited = MC.MeshLightDirtyRateLimited or {}
+				if not sections then
+					sections = {}
+					meshLightDirty[key] = sections
+					MC.MeshLightDirtyRateLimited[key] = MC.PartialLightingRateLimited == true and true or nil
+				elseif not MC.PartialLightingRateLimited then MC.MeshLightDirtyRateLimited[key] = nil end
+				sections[index] = true
+			end
+			dirtyCount = dirtyCount + 1
 		end
 	end
 	if not markLightSectionDirty and dirtyCount > 0 and MC.WakeLazyMeshBuilder then MC.WakeLazyMeshBuilder() end

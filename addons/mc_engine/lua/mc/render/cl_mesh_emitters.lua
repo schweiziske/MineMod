@@ -1276,17 +1276,16 @@ local function emitStatePlanBlockRecord( ctx, b, id, orient, bx, by, bz, wx, wy,
 	end
 	local planId, groupOffset, groupCount = stateVisualPlanRangeFast( ctx.currentStateId )
 	if groupCount == 0 then return "statePlan", false, 0 end
-	-- Apply the existing one/two-face cube cache policy to generated cube
-	-- models too. Preserve their own geometry, UVs, tint and lighting metadata.
-	-- Complex/multipart models and paged-atlas routing keep the normal path.
-	if ctx.l2 and not ctx.nativeL2 and not ctx.pagedAtlas and groupCount == 1 and visibleFaceCount
-		and visibleFaceCount > 0 and not shouldStoreBlockEmissionCache( "fullCube", visibleFaceCount * 6 ) then
+	-- Preserve the direct cold-load path. Per-cell edits opt into caching even
+	-- small generated cubes, whose neighbourhood lighting is expensive to repeat.
+	if ctx.l2 and not ctx.nativeL2 and not ctx.pagedAtlas and not ctx.retainSmallBlockCache
+		and groupCount == 1 and visibleFaceCount and visibleFaceCount > 0
+		and not shouldStoreBlockEmissionCache( "fullCube", visibleFaceCount * 6 ) then
 		local modelId = stateVisualPlanModelAtFast( planId, groupOffset, 0, bx, by, bz )
 		local modelData = modelId and stateVisualModelData( modelId )
 		local template = modelData and getGeneratedModelTemplate( modelData )
 		if template and template.sixCubeFaces then
 			local vertexCount = visibleFaceCount * 6
-			-- emitL2 retains the ordinary per-quad capacity/flush boundary.
 			ctx.setCur( targetBuffer )
 			emitModelBlockTemplate( ctx, template, id, bx, by, bz, wx, wy, wz, lx, ly, lz, li,
 				ctx.push, ctx.lightMetaFast, ctx.currentEmitLightStyle, true, modelId, visibleFaceMask )
@@ -1350,7 +1349,8 @@ emitFullCubeBlockRecord = function( ctx, b, id, orient, bx, by, bz, wx, wy, wz, 
 	meshPerf.fullVisibleFaces = meshPerf.fullVisibleFaces + visibleFaceCount
 	local directEmitVertexCount = visibleFaceCount * 6
 	local directionalEmit = ctx.l2 and targetBuffer.directional
-	local directEmitCheapFullCube = directionalEmit or not shouldStoreBlockEmissionCache( "fullCube", directEmitVertexCount )
+	local directEmitCheapFullCube = directionalEmit
+		or not shouldStoreBlockEmissionCache( "fullCube", directEmitVertexCount, ctx.retainSmallBlockCache )
 	if directEmitCheapFullCube then meshPerf.fullDirectBlocks = meshPerf.fullDirectBlocks + 1 end
 	if directEmitCheapFullCube then
 		if not ctx.nativeRecipe and targetBuffer.nv + directEmitVertexCount >= C.VERT_LIMIT then flush( targetBuffer ) end
@@ -1696,7 +1696,7 @@ local function emitWaterloggedOverlay( ctx, stateId, bx, by, bz, wx, wy, wz, tar
 		MC.AppendCachedBlockEmission( {
 			verts = overlay.verts,
 			light = overlay.light,
-			l2 = overlay.l2, pixels = overlay.pixels, occlusion = overlay.occlusion,
+			l2 = overlay.l2, pixels = overlay.pixels, occlusion = overlay.occlusion, luaRelight = overlay.luaRelight,
 			vertexCount = vertexCount,
 			hasSecondaryUV = overlay.hasSecondaryUV == true,
 		}, targetBuffer, flush, meshPerf, C.VERT_LIMIT )
@@ -1750,7 +1750,8 @@ function RM.EmitBlock( ctx, li, stateId )
 
 	local cached = MC.GetCachedBlockEmission( key, blockSectionIndex, li, id, orient, stateId, ctx.nativeL2 )
 	local blockNeedsRecolor = sectionNeedsFullRecolor or ( blockLightDirtySection and blockLightDirtySection[li] )
-	if cached and ctx.l2 and ( ctx.pagedAtlas or blockNeedsRecolor or not cached.l2 or cached.blockSize ~= size ) then
+	if cached and ctx.l2 and ( ctx.pagedAtlas or ctx.nativeL2 and blockNeedsRecolor or not cached.l2 or cached.blockSize ~= size
+		or not ctx.nativeL2 and ( not cached.luaRelight or cached.luaRelightVersion ~= MC.RenderL2Quad.LUA_RELIGHT_VERSION ) ) then
 		MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
 		cached = nil
 	end
@@ -1791,6 +1792,16 @@ function RM.EmitBlock( ctx, li, stateId )
 			MC.DropBlockEmitCacheRecord( key, blockSectionIndex, li )
 			cached = nil
 		end
+	end
+	if cached and ctx.l2 and not ctx.nativeL2 and blockNeedsRecolor then
+		-- A light change does not invalidate this block's geometry. Use the
+		-- retained quad recipes; geometry dependencies already dropped their
+		-- records in MarkBlockEmitCacheDirty before this build started.
+		local recolorStart = meshProbe and SysTime() or nil
+		local pixels, occlusion = MC.RenderL2Quad.Relight( ctx.nativeSlice, cached )
+		cached.pixels, cached.occlusion = pixels, occlusion
+		if recolorStart then meshPerfAdd( meshPerf, "recolorMS", recolorStart ) end
+		meshPerf.blockCacheRecolors = meshPerf.blockCacheRecolors + 1
 	end
 	if cached then
 		meshPerf.blockCacheHits = meshPerf.blockCacheHits + 1
@@ -1851,7 +1862,9 @@ function RM.EmitBlock( ctx, li, stateId )
 		local blockRecord = cur and {
 			verts = cur.verts,
 			light = cur.light,
-			l2 = cur.l2, pixels = cur.pixels, occlusion = cur.occlusion,
+			l2 = cur.l2, pixels = cur.pixels, occlusion = cur.occlusion, luaRelight = cur.luaRelight,
+			luaRelightVersion = cur.luaRelight and MC.RenderL2Quad.LUA_RELIGHT_VERSION or nil,
+			quadCount = cur.quadCount,
 			nativeL2 = cur.nativeL2, nativeCommands = cur.nativeCommands,
 			blockSize = size,
 			vertexCount = emittedVertices,
@@ -1860,7 +1873,7 @@ function RM.EmitBlock( ctx, li, stateId )
 			hasSecondaryUV = cur.hasSecondaryUV == true,
 			kind = emitKind,
 		} or nil
-		local retainBlock = shouldStoreBlockEmissionCache( emitKind, emittedVertices )
+		local retainBlock = shouldStoreBlockEmissionCache( emitKind, emittedVertices, ctx.retainSmallBlockCache )
 		if retainBlock then
 			blockRecord = MC.StoreBlockEmissionCache( key, blockSectionIndex, li, id, orient, targetLightStyle, blockRecord, stateId )
 		else

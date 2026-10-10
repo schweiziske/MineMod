@@ -7,7 +7,7 @@ Visibility.VERSION = 1
 
 local C = MC.RenderMeshConstants
 local floor = math.floor
-local SIZE = MC.RENDER_SECTION_SIZE or 8
+local SIZE = MC.RENDER_SECTION_SIZE or 16
 local WIDTH = SIZE + 2
 local WIDTH2 = WIDTH * WIDTH
 local STATE_CELLS = C.CS2 * 16

@@ -135,8 +135,16 @@ Template compile(const double* p) {
     return t;
 }
 
+size_t checkedAdd(size_t a, size_t b) {
+    require(b <= std::numeric_limits<size_t>::max() - a, "L2 allocation size overflow");
+    return a + b;
+}
+size_t checkedMultiply(size_t a, size_t b) {
+    require(!b || a <= std::numeric_limits<size_t>::max() / b, "L2 allocation size overflow");
+    return a * b;
+}
 void MemoryUsage::share(std::shared_ptr<const void> owner, size_t bytes) {
-    shared.push_back({std::move(owner), bytes + 64});
+    shared.push_back({std::move(owner), checkedAdd(bytes, 64)});
 }
 void MemoryUsage::normalize() {
     const std::less<const void*> less;
@@ -156,29 +164,37 @@ void MemoryUsage::normalize() {
 }
 size_t MemoryUsage::total() const {
     size_t result = owned;
-    for (const auto& allocation : shared) result += allocation.bytes;
+    for (const auto& allocation : shared) result = checkedAdd(result, allocation.bytes);
     return result;
 }
-Snapshot::Snapshot(const int origin[3], const int dimensions[3], ReadCell reader, void* context)
-    : reader_(reader), context_(context) {
-    require(reader != nullptr, "missing L2 snapshot reader");
-    size_t count = 1;
+Snapshot::Snapshot(const int origin[3], const int dimensions[3]) {
     for (unsigned a = 0; a < 3; ++a) {
         require(dimensions[a] >= 5 && dimensions[a] <= 4096, "invalid L2 snapshot dimensions");
         require(int64_t(origin[a]) + dimensions[a] <= INT32_MAX, "L2 snapshot coordinate overflow");
         origin_[a] = origin[a]; dimensions_[a] = dimensions[a];
-        require(count <= (4 * 1024 * 1024) / size_t(dimensions[a]), "L2 snapshot exceeds cell budget");
-        count *= dimensions[a];
+        require(cellCount_ <= (4 * 1024 * 1024) / size_t(dimensions[a]), "L2 snapshot exceeds cell budget");
+        cellCount_ *= dimensions[a];
     }
-    cells_.resize(count); ready_.resize(count);
+}
+Snapshot::Snapshot(const int origin[3], const int dimensions[3], ReadCell reader, void* context)
+    : Snapshot(origin, dimensions) {
+    require(reader != nullptr, "missing L2 snapshot reader");
+    reader_ = reader; context_ = context;
+    prepare(); // Lua callbacks still prefetch on their owning thread.
 }
 Snapshot::Snapshot(const int origin[3], const int dimensions[3], std::shared_ptr<const CellSource> source)
-    : Snapshot(origin, dimensions, [](void*, int, int, int) -> Cell {
-        throw std::runtime_error("missing owned L2 cell source");
-    }, nullptr) {
+    : Snapshot(origin, dimensions) {
     require(source != nullptr, "missing owned L2 snapshot");
     source_ = std::move(source);
-    freeze();
+}
+void Snapshot::prepare() {
+    if (prepared()) return; // Preserve the callback path's prefetched cells.
+    std::vector<Cell> cells(cellCount_);
+    std::vector<uint8_t> ready(cellCount_);
+    cells_.swap(cells); ready_.swap(ready);
+}
+size_t Snapshot::cacheBytes() const {
+    return std::max(cellCount_, cells_.capacity()) * sizeof(Cell) + std::max(cellCount_, ready_.capacity());
 }
 void Snapshot::validateSource(const int source[3]) const {
     for (unsigned a = 0; a < 3; ++a) {

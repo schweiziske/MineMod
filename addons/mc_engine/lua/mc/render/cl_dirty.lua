@@ -1,6 +1,6 @@
 -- Mesh dirty tracking, rebuild queues, and mesh cleanup.
 ------------------------------------------------------------------- dirty tracking
-local RENDER_SECTION_SIZE = MC.RENDER_SECTION_SIZE or 8
+local RENDER_SECTION_SIZE = MC.RENDER_SECTION_SIZE or 16
 local RENDER_SECTIONS_XY = math.ceil( MC.CS / RENDER_SECTION_SIZE )
 local RENDER_SECTIONS_Z = math.ceil( MC.CH / RENDER_SECTION_SIZE )
 local RENDER_SECTION_COUNT = RENDER_SECTIONS_XY * RENDER_SECTIONS_XY * RENDER_SECTIONS_Z

@@ -88,6 +88,55 @@ void topology() {
     cells[42] = 0;
     auto closed = world::meshTopology(cells, 4);
     check(closed.cells[42] == 0 && closed.cells[41] == 64, "sealed pocket topology");
+    std::vector<uint8_t> large(16 * 16 * 16, 64);
+    for (unsigned x = 0; x < 16; ++x) large[x + 16 * (8 + 16 * 8)] = 0;
+    const auto tunnel16 = world::meshTopology(std::move(large), 16);
+    check(tunnel16.cells.size() == 4096 && tunnel16.faces[2] == 12 && tunnel16.faces[3] == 12
+        && tunnel16.faces[0] == 0, "16-cube topology lost boundary connectivity");
+}
+void section16() {
+    world::Config cfg;
+    cfg.blockSize = 37.1;
+    check(cfg.sectionSize == 16 && cfg.sectionCount() == 2, "default render section is not 16 cubed");
+    auto catalog = std::make_shared<world::Catalog>();
+    catalog->states.resize(2);
+    catalog->states[1] = {0, 15, 16, 0xef000, 9, 0.2f};
+    world::Store store(cfg, catalog);
+    world::Mutation full, neighbor;
+    full.chunk = {-1,-2,3}; neighbor.chunk = {0,-2,3};
+    for (unsigned li = 0; li < cfg.cellCount(); ++li) {
+        full.cells.push_back({li, 1});
+        if (li >= 4096) neighbor.cells.push_back({li, 1});
+    }
+    store.apply(0, {full, neighbor});
+    auto snapshot = std::make_shared<world::MeshSnapshot>(store.meshSnapshot(full.chunk, 1, true));
+    const int origin[3] = {snapshot->origin.x, snapshot->origin.y, snapshot->origin.z};
+    const int dims[3] = {snapshot->dimensions.x, snapshot->dimensions.y, snapshot->dimensions.z};
+    auto input = std::make_unique<l2::Input>(l2::Snapshot(origin, dims, snapshot));
+    input->blockSize = cfg.blockSize;
+    input->maxQuads = 113;
+    input->cubes.push_back(cube());
+    input->instances = std::make_shared<world::MeshInstances>(snapshot, full.chunk, 1,
+        std::unordered_map<uint32_t, world::MeshRecipe>{{1, {0, false, true, 6}}}, true);
+    check(input->instances->maxQuads() == 4096 * 6, "16-cube histogram reservation lost cells");
+    l2::WorkerPool pool;
+    pool.start(1);
+    const auto id = pool.submit(std::move(input));
+    wait(pool, id);
+    const auto result = pool.ready(id);
+    check(result->error.empty(), result->error.c_str());
+    check(result->sectionVoxels == 4096 && result->sectionQuads == 4 * 256,
+        "16-cube meshing kept faces across adjacent section/chunk boundaries");
+    check(result->topology.uniform == 64 && !result->topology.graphOpen,
+        "solid 16-cube topology was not published to culling");
+    for (const auto& part : result->parts) {
+        check(part.quads.size() <= 113, "16-cube mesh ignored engine part splitting");
+        check(part.bounds[0] >= 0 && part.bounds[3] <= float(16 * cfg.blockSize)
+            && part.bounds[2] >= float(16 * cfg.blockSize) && part.bounds[5] <= float(32 * cfg.blockSize),
+            "16-cube mesh lost local coordinates or applied block scale twice");
+    }
+    pool.stop();
+    std::cout << "16-cube section: 4096 cells, 1024 exposed quads, cross-section/chunk face culling and topology passed\n";
 }
 void worldMesh() {
     world::Config cfg;
@@ -196,6 +245,7 @@ void models() {
     const auto build = [&](bool leaves, uint32_t neighbour) {
         model->keepInternalFaces = leaves; air->neighbour = neighbour;
         l2::Input in(l2::Snapshot(origin, dims, air));
+        in.snapshot.prepare();
         in.models.push_back({model, 7});
         l2::Voxel voxel; voxel.model = true; in.voxels.push_back(voxel);
         in.snapshot.freeze();
@@ -423,7 +473,7 @@ void fluids() {
     relight->retainLighting = false;
     for (const auto& part : result->parts) relight->relight.push_back(part.lighting);
     std::vector<std::vector<uint32_t>> before;
-    for (const auto& part : result->parts) before.push_back(part.pixels);
+    for (const auto& part : result->parts) before.push_back(part.pixels->corners);
     pool.cancel(id); result.reset();
     const auto relightId = pool.submit(std::move(relight)), fullId = pool.submit(std::move(full));
     wait(pool, relightId); wait(pool, fullId);
@@ -437,8 +487,8 @@ void fluids() {
         const auto& a = relit->parts[i];
         const auto& b = rebuilt->parts[i];
         check(a.quads.empty() && !a.lighting, "fluid relight retained/generated geometry");
-        check(a.pixels == b.pixels && a.occlusion == b.occlusion, "fluid relight differs from full rebuild");
-        if (b.group == 21 && a.pixels != before[i]) changed = true;
+        check(a.pixels->corners == b.pixels->corners && a.pixels->occlusion == b.pixels->occlusion, "fluid relight differs from full rebuild");
+        if (b.group == 21 && a.pixels->corners != before[i]) changed = true;
     }
     check(changed, "fluid relight did not exercise changed illumination");
     pool.stop();
@@ -447,7 +497,7 @@ void fluids() {
 }
 int main() {
     try {
-        snapshotMemory(); topology(); worldMesh(); models(); shapeValidation(); shapes(); fluids();
+        snapshotMemory(); topology(); section16(); worldMesh(); models(); shapeValidation(); shapes(); fluids();
         std::cout << "World mesh: owned snapshots, histogram, transforms, sky invalidation, topology, models, shapes and fluids/relight passed\n";
         return 0;
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

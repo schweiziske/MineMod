@@ -3,6 +3,7 @@
 MC = MC or {}
 local Q = {}
 MC.RenderL2Quad = Q
+Q.LUA_RELIGHT_VERSION = 1
 local VB, LB, RM = MC.RenderVertexBuffer, MC.RenderLightBuffer, MC.RenderMesh
 local VERT_LIMIT = MC.RenderMeshConstants.VERT_LIMIT
 local floor = math.floor
@@ -96,12 +97,14 @@ function Q.NewSlice( chunk, blockSize )
 	local lighter = MC.RenderL2Lighting.New( snapshot.reader )
 	requireValue( lighter ~= nil and finite( blockSize ) and blockSize > 0, "invalid L2 slice lighting/scale" )
 	return { snapshot = snapshot, lighter = lighter, blockSize = blockSize, selections = {}, singleSelections = {}, models = {},
+		baseX = chunk.cx * MC.CS, baseY = chunk.cy * MC.CS, baseZ = chunk.cz * MC.CH,
 		nativeL2 = MC.NativeL2 and MC.NativeL2.IsActive() or false }
 end
 
 function Q.NewBuffer( slice )
 	local native = slice and slice.nativeL2 or false
 	return { l2 = true, verts = VB.New(), pixels = {}, occlusion = {}, nv = 0, quadCount = 0,
+		luaRelight = not native and {} or nil,
 		nativeL2 = native, nativeCommands = native and {} or nil, nativeSlice = native and slice or nil }
 end
 
@@ -137,6 +140,15 @@ function Q.AppendNative( target, source, firstQuad, count )
 		target.pixels[#target.pixels + 1] = source.pixels[i]
 	end
 	for i = firstQuad + 1, firstQuad + count do target.occlusion[#target.occlusion + 1] = source.occlusion[i] end
+	if target.luaRelight then
+		if source.luaRelight then
+			for i = 1, count * 4 do target.luaRelight[baseQuad * 4 + i] = source.luaRelight[firstQuad * 4 + i] end
+		else
+			-- Pre-reload/diagnostic buffers can still draw, but cannot be relit
+			-- without rebuilding their missing lighting recipes once.
+			target.luaRelight = false
+		end
+	end
 	target.nv, target.quadCount = target.verts.count, baseQuad + count
 end
 
@@ -203,6 +215,77 @@ local function nativeModel( slice, quad, id, bx, by, bz, modelId )
 	return result
 end
 
+local function writeFluidLighting( slice, pixels, offset, bx, by, bz, id, face, corners, emission, quadEmission, faceCubic, tint )
+	local meta = slice.fluidMeta or {}
+	slice.fluidMeta = meta
+	meta.bx, meta.by, meta.bz, meta.id, meta.faceIndex = bx, by, bz, id, face
+	meta.selfEmission, meta.quadLightEmission, meta.tintCode = emission, quadEmission, tint
+	meta.faceCubic, meta.shadeIndex = faceCubic, RM.shadeIndexForFace( face )
+	for i = 1, 4 do
+		meta.cx, meta.cy, meta.cz = corners[i][1], corners[i][2], corners[i][3]
+		pixels[offset + i] = sampleFluid( meta )
+	end
+end
+
+local function writeCrossLighting( slice, pixels, offset, bx, by, bz, quadEmission, tint )
+	local cell = slice.lighter:Cell( bx, by, bz )
+	requireValue( cell and cell.loaded, "cross source cell is unavailable" )
+	local block, sky = math.max( cell.block, cell.emission, quadEmission ), math.max( cell.sky, quadEmission )
+	if cell.emissive then block, sky = 15, 15 end
+	local value = pixel( block * 16, sky * 16, 255, tint )
+	for i = 1, 4 do pixels[offset + i] = value end
+end
+
+local function writeBakedLighting( slice, pixels, offset, bx, by, bz, baked, tint )
+	slice.lighting = slice.lighting or { light = {}, shade = {}, ao = {} }
+	local result = slice.lighter:PrepareBaked( bx, by, bz, baked, slice.lighting )
+	requireValue( result ~= nil, "native quad lighting preparation failed" )
+	for i = 1, 4 do
+		local light = result.light[i]
+		pixels[offset + i] = pixel( light % 256, floor( light / 65536 ) % 256, result.shade[i], tint )
+	end
+	local ao = result.ao
+	return ao[1] + ao[2] * 256 + ao[3] * 65536 + ao[4] * 16777216
+end
+
+-- Retained recipes contain four entries per emitted quad: source local index,
+-- immutable lighting template, tint, and kind (baked / cross / fluid). They do
+-- not retain vertex buffers or depend on the evictable CPU geometry cache.
+function Q.Relight( slice, data, dirtyCells )
+	local recipes, previous, previousAO = data.luaRelight, data.pixels, data.occlusion
+	local pixels, occlusion
+	local changed, processed = false, 0
+	local cs, cs2 = MC.CS, MC.CS * MC.CS
+	for quad = 1, data.quadCount do
+		local offset = ( quad - 1 ) * 4
+		local li = recipes[offset + 1]
+		if not dirtyCells or dirtyCells[li] then
+			if not pixels then
+				pixels, occlusion = {}, {}
+				for i = 1, #previous do pixels[i] = previous[i] end
+				for i = 1, #previousAO do occlusion[i] = previousAO[i] end
+			end
+			local bx, by, bz = slice.baseX + li % cs,
+				slice.baseY + floor( li / cs ) % cs, slice.baseZ + floor( li / cs2 )
+			local template, tint, kind = recipes[offset + 2], recipes[offset + 3], recipes[offset + 4]
+			local ao = 4294967295
+			if kind == 0 then
+				ao = writeBakedLighting( slice, pixels, offset, bx, by, bz, template, tint )
+			elseif kind == 1 then
+				writeCrossLighting( slice, pixels, offset, bx, by, bz, template, tint )
+			else
+				writeFluidLighting( slice, pixels, offset, bx, by, bz, template.id, template.face, template.corners,
+					template.emission, template.quadEmission, template.faceCubic, tint )
+			end
+			occlusion[quad] = ao
+			if ao ~= previousAO[quad] then changed = true end
+			for i = 1, 4 do if pixels[offset + i] ~= previous[offset + i] then changed = true end end
+			processed = processed + 1
+		end
+	end
+	return pixels, occlusion, changed, processed
+end
+
 function Q.EmitNative( slice, buffer, quad, id, bx, by, bz, wx, wy, wz, emission, tint, kind, modelId )
 	local corners, uv = templateCorners( quad )
 	local positions, face = quad.positions or corners, quad.faceIndex
@@ -226,38 +309,32 @@ function Q.EmitNative( slice, buffer, quad, id, bx, by, bz, wx, wy, wz, emission
 		return
 	end
 	local pixels, occlusion = buffer.nativeL2 and {} or buffer.pixels, 4294967295
+	local relightTemplate, relightKind = baked, 0
+	local pixelOffset = #pixels
 	if kind == KIND.FLUID then
-		local meta = slice.fluidMeta or {}
-		slice.fluidMeta = meta
-		meta.bx, meta.by, meta.bz, meta.id, meta.faceIndex = bx, by, bz, id, face
-		meta.selfEmission, meta.quadLightEmission, meta.tintCode = emission, quadEmission, tint
-		meta.faceCubic, meta.shadeIndex = quad.faceCubic, RM.shadeIndexForFace( face )
-		for i = 1, 4 do
-			meta.cx, meta.cy, meta.cz = corners[i][1], corners[i][2], corners[i][3]
-			pixels[#pixels + 1] = sampleFluid( meta )
+		writeFluidLighting( slice, pixels, pixelOffset, bx, by, bz, id, face, corners, emission, quadEmission, quad.faceCubic, tint )
+		if buffer.luaRelight then
+			-- Fluid faces borrow the emitter's mutable scratch for this call only.
+			local retainedCorners = {}
+			for i = 1, 4 do
+				local c = corners[i]
+				retainedCorners[i] = { c[1], c[2], c[3] }
+			end
+			relightTemplate = { id = id, face = face, corners = retainedCorners, emission = emission,
+				quadEmission = quadEmission, faceCubic = quad.faceCubic }
+			relightKind = 2
 		end
 	elseif kind == KIND.CROSS then
-		local cell = slice.lighter:Cell( bx, by, bz )
-		requireValue( cell and cell.loaded, "cross source cell is unavailable" )
-		local block, sky = math.max( cell.block, cell.emission, quadEmission ), math.max( cell.sky, quadEmission )
-		if cell.emissive then block, sky = 15, 15 end
-		local value = pixel( block * 16, sky * 16, 255, tint )
-		for i = 1, 4 do pixels[#pixels + 1] = value end
+		writeCrossLighting( slice, pixels, pixelOffset, bx, by, bz, quadEmission, tint )
+		relightTemplate, relightKind = quadEmission, 1
 	else
 		if not baked then
 			baked = MC.RenderL2Lighting.BakeQuad( face, corners, { quadEmission = quadEmission } )
 			requireValue( baked ~= nil, "quad lighting template preparation failed" )
 			quad.l2Lighting = baked
 		end
-		slice.lighting = slice.lighting or { light = {}, shade = {}, ao = {} }
-		local result = slice.lighter:PrepareBaked( bx, by, bz, baked, slice.lighting )
-		requireValue( result ~= nil, "native quad lighting preparation failed" )
-		for i = 1, 4 do
-			local light = result.light[i]
-			pixels[#pixels + 1] = pixel( light % 256, floor( light / 65536 ) % 256, result.shade[i], tint )
-		end
-		local ao = result.ao
-		occlusion = ao[1] + ao[2] * 256 + ao[3] * 65536 + ao[4] * 16777216
+		occlusion = writeBakedLighting( slice, pixels, pixelOffset, bx, by, bz, baked, tint )
+		relightTemplate = baked
 	end
 	if buffer.nativeL2 then
 		MC.NativeL2.Emit( slice, buffer, quad, positions, uv, nil, bx, by, bz, wx, wy, wz,
@@ -268,6 +345,11 @@ function Q.EmitNative( slice, buffer, quad, id, bx, by, bz, wx, wy, wz, emission
 	local base = verts.count / 6
 	buffer.occlusion[base + 1] = occlusion
 	local address = base * 4
+	if buffer.luaRelight then
+		local recipes = buffer.luaRelight
+		recipes[address + 1] = bx - slice.baseX + ( by - slice.baseY ) * MC.CS + ( bz - slice.baseZ ) * MC.CS * MC.CS
+		recipes[address + 2], recipes[address + 3], recipes[address + 4] = relightTemplate, tint, relightKind
+	end
 	local size = slice.blockSize
 	if quad.positions then size, wx, wy, wz = 1, 0, 0, 0 end
 	slice.color = slice.color or {}

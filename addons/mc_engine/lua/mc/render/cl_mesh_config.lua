@@ -116,8 +116,8 @@ MC.MeshBuildFrameMS = MC.MeshBuildFrameMS or ( CreateClientConVar and CreateClie
 	"Approximate milliseconds per frame for Lua geometry/light rebuilds (native: lazy builds only); 0 = unlimited" ) )
 MC.BuildUnlimited = MC.BuildUnlimited or ( CreateClientConVar and CreateClientConVar( "mc_build_unlimited", "0", true, false,
 	"Disable client build/cleanup budgets and lazy mesh deferral; drain received work without frame slicing", 0, 1 ) )
-MC.TexturePack = MC.TexturePack or ( CreateClientConVar and CreateClientConVar( "mc_texture_pack", "default", true, false,
-	"MC atlas texture pack: default or programmer_art" ) )
+MC.TexturePack = MC.TexturePack or ( CreateClientConVar and CreateClientConVar( "mc_texture_pack", "mc_default_raw", true, false,
+	"MC resource pack (default: Minecraft base sources)" ) )
 
 -- Emit styles. These are NOT a user-facing pipeline choice any more: the chunk
 -- pipeline is always the GPU one. What is left is which vertex payload an emit

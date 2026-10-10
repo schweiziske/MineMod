@@ -261,9 +261,11 @@ local function meshPerfAddKindDuration( perf, kind, durationMS )
 	end
 end
 
-local function shouldStoreBlockEmissionCache( kind, vertexCount )
+local function shouldStoreBlockEmissionCache( kind, vertexCount, retainSmall )
 	if vertexCount <= 0 then return false end
-	if kind == "fullCube" and vertexCount <= 12 then return false end
+	-- Cold loads stream small cubes directly. Edited sections retain even one
+	-- exposed face so the next edit does not repeat its L2 neighbourhood samples.
+	if kind == "fullCube" and vertexCount <= 12 and not retainSmall then return false end
 	return true
 end
 

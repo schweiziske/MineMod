@@ -2,6 +2,7 @@
 #include "l2_core.h"
 #include "l2_fluid.h"
 #include "l2_shapes.h"
+#include "l2_pixels.h"
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -61,7 +62,7 @@ struct Voxel {
 struct Part {
     std::vector<Quad> quads;
     DirectionOrder directions;
-    std::vector<uint32_t> pixels, occlusion;
+    std::shared_ptr<const LightPixels> pixels;
     float bounds[6]{};
     unsigned group = 0;
     std::shared_ptr<const std::vector<LightWork>> lighting;
@@ -129,8 +130,9 @@ void expandVoxels(Input& input, std::vector<unsigned>& groups, const std::atomic
 void prefetchVoxels(Input& input);
 class WorkerPool {
 public:
-    static constexpr size_t MaxBytes = 128 * 1024 * 1024;
-    static constexpr unsigned MaxJobs = 16, MaxParts = 256, MaxSectionQuads = 131072;
+    // Scheduling targets, not content limits. One larger task runs exclusively.
+    static constexpr size_t TargetBytes = 128 * 1024 * 1024;
+    static constexpr unsigned MaxJobs = 16;
     ~WorkerPool();
     void start(unsigned count = 0);
     void stop();

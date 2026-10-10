@@ -6,7 +6,7 @@ local O = {}
 MC.RenderOcclusion = O
 local floor, band, bor = math.floor, bit.band, bit.bor
 local byte, char, concat = string.byte, string.char, table.concat
-local SIZE = MC.RENDER_SECTION_SIZE or 8
+local SIZE = MC.RENDER_SECTION_SIZE or 16
 local CS, CH = MC.CS, MC.CH
 local XY, Z = CS / SIZE, CH / SIZE
 local TOTAL, CELLS = XY * XY * Z, SIZE ^ 3
@@ -76,6 +76,40 @@ local function syncContext()
 	end
 end
 
+local function generatedCube( state )
+	-- Some ordinary cubes use generated plans (including weighted stone).
+	-- Prove all alternatives enclose the unit cube; collision alone is insufficient.
+	local visit = MC.VisitStateVisualModelCandidates
+	if not visit then return false end -- Legacy/custom catalogs have no geometric proof.
+	local found, complete = false, true
+	visit( state, function( modelId )
+		found = true
+		if MC.StateVisualModelHasTransform( modelId ) then complete = false return end
+		local model = MC.StateVisualModelData( modelId )
+		if not model or not model.generatedStateVisual or #model.modelQuads ~= 6 then complete = false return end
+		local faces = 0
+		for _, quad in ipairs( model.modelQuads ) do
+			local face = MC.RenderMeshConstants.FACES[quad.face]
+			if not face then complete = false return end
+			local corners = 0
+			for vertex = 1, 4 do
+				local x, y, z = MC.ModelQuadVertex( quad, vertex )
+				for corner = 1, 4 do
+					local c = face.c[corner]
+					if x == c[1] and y == c[2] and z == c[3] then
+						corners = bor( corners, 2 ^ ( corner - 1 ) )
+						break
+					end
+				end
+			end
+			if corners ~= 15 then complete = false return end
+			faces = bor( faces, bits[quad.face] )
+		end
+		if faces ~= 63 then complete = false end
+	end )
+	return found and complete
+end
+
 local function blockingState( state )
 	local cached = classes[state]
 	if cached ~= nil then return cached end
@@ -90,10 +124,14 @@ local function blockingState( state )
 	local schema = MC.BlockStateSchemaForState and MC.BlockStateSchemaForState( state )
 	if schema and MC.BlockStateVisualResolvers and MC.BlockStateVisualResolvers[schema.name] then return false end
 	local visual = MC.ResolveBlockStateVisual( state )
-	if not visual or visual.cacheable == false or visual.generatedVisualOverride == true
+	if not visual or visual.cacheable == false
 		or visual.translucent and visual.translucent ~= false then return false end
 	local block = visual.block or MC.Blocks[visual.id]
 	if not block or block.transparent == true or block.translucent == true then return false end
+	if visual.generatedVisualOverride == true then
+		classes[state] = generatedCube( state )
+		return classes[state]
+	end
 	local full = visual.fullCube
 	if full == nil then full = block.fullCube end
 	if full ~= nil then
@@ -159,7 +197,7 @@ function O.BuildTopology( snapshot )
 			local value = cells[i]
 			characters[i] = codes[value >= 128 and value - 128 or value]
 		end
-		result.cells = concat( characters ) -- 512 bytes, no retained per-cell tables.
+		result.cells = concat( characters ) -- One byte per cell, no retained per-cell tables.
 		result.graphOpen = result[1] == 63 and result[2] == 63 and result[3] == 63
 			and result[4] == 63 and result[5] == 63 and result[6] == 63
 	end
@@ -327,11 +365,18 @@ local nativeGraphRevision, nativeGraphModule
 function O.PrepareNativeView( bx, by, bz, module )
 	local active, root, seed = viewRoot( bx, by, bz )
 	if active and ( nativeGraphRevision ~= revision or nativeGraphModule ~= module ) then
-		local ok, err = module.SetL2DrawGraph( revision, nextBase, topology, neighbors, byKey, TOTAL )
+		local ok, err
+		if module.SetL2DrawSpatialGraph then
+			ok, err = module.SetL2DrawSpatialGraph( revision, nextBase, topology, neighbors, byKey, TOTAL, XY, Z, SIZE )
+		else
+			-- Older loaded DLLs keep their existing ABI until the next client restart.
+			ok, err = module.SetL2DrawGraph( revision, nextBase, topology, neighbors, byKey, TOTAL )
+		end
 		if not ok then error( "Native visibility graph: " .. tostring( err ), 0 ) end
 		nativeGraphRevision, nativeGraphModule = revision, module
 	end
-	return active, root, seed
+	if not active then return false, root, seed, 0, 0, 0 end
+	return active, root, seed, floor( bx / SIZE ), floor( by / SIZE ), floor( bz / SIZE )
 end
 
 function O.PrepareView( bx, by, bz )

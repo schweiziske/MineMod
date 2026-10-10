@@ -84,6 +84,7 @@ L2_EXPORT int L2SelectShape(const double* profiles, unsigned count, const uint32
         validateModel(*model);
         const int origin[]={-2,-2,-2}, dims[]={5,5,5};
         Input input(Snapshot(origin,dims,grid));
+        input.snapshot.prepare();
         input.shapeSource=grid; input.models.push_back({model,1});
         Voxel voxel; voxel.model=true;
         input.voxels.push_back(voxel);
@@ -279,6 +280,7 @@ L2_EXPORT int L2EvaluateFluid(const double* profiles, unsigned count, const doub
         const auto geometry=fluidGeometry(r,*grid,source);
         const int dims[3]={5,5,5};
         Snapshot snapshot(grid->origin,dims,grid);
+        snapshot.prepare();
         snapshot.freeze();
         Command command;
         std::copy(source,source+3,command.source);

@@ -177,6 +177,9 @@ end )
 function B.PrepareDraw( x, y, z, view, depthOnly )
 	local shadows = MC.RenderPBRShadows
 	if shadows and shadows.rendering or MC.RenderPackProcessing.rendering then return false end
+	-- Vanilla, depth and secondary views share this boundary. Publish before
+	-- any processing/shadow pass pushes its render state or samples the atlas.
+	if not MC.RenderL2Resources.FlushUploads() then return false end
 	B.PrepareView( x, y, z )
 	local processingReady = true
 	if not depthOnly then processingReady = MC.RenderPackRuntime.BeginProcessing( x, y, z, view ) end

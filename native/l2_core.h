@@ -43,6 +43,9 @@ struct Cell {
 };
 
 using ReadCell = Cell (*)(void*, int, int, int);
+// Size arithmetic at registration/admission boundaries, before allocation.
+size_t checkedAdd(size_t a, size_t b);
+size_t checkedMultiply(size_t a, size_t b);
 struct SharedAllocation {
     std::shared_ptr<const void> owner;
     size_t bytes;
@@ -69,14 +72,18 @@ struct FaceLight {
 class Snapshot {
 public:
     Snapshot(const int origin[3], const int dimensions[3], ReadCell reader, void* context);
+    // Owned sources reserve their scratch at admission, but allocate it on the
+    // consuming worker. Direct CPU callers must prepare before sampling.
     Snapshot(const int origin[3], const int dimensions[3], std::shared_ptr<const CellSource> source);
+    void prepare();
+    bool prepared() const { return !ready_.empty(); }
     const Cell& read(int x, int y, int z);
     const FaceLight& sampleFace(int x, int y, int z, unsigned face, bool cubic);
     void validateSource(const int source[3]) const;
     void freeze() { reader_ = nullptr; context_ = nullptr; }
-    size_t bytes() const { return cells_.capacity() * sizeof(Cell) + ready_.capacity() + (source_ ? source_->bytes() : 0); }
+    size_t bytes() const { return cacheBytes() + (source_ ? source_->bytes() : 0); }
     void memoryUsage(MemoryUsage& usage) const {
-        usage.owned += cells_.capacity() * sizeof(Cell) + ready_.capacity();
+        usage.owned += cacheBytes();
         if (source_) {
             MemoryUsage source;
             source_->memoryUsage(source);
@@ -87,9 +94,12 @@ public:
     uint64_t reads = 0, hits = 0;
     uint64_t faceSamples = 0, faceHits = 0;
 private:
+    Snapshot(const int origin[3], const int dimensions[3]);
+    size_t cacheBytes() const;
     int origin_[3], dimensions_[3];
-    ReadCell reader_;
-    void* context_;
+    size_t cellCount_ = 1;
+    ReadCell reader_ = nullptr;
+    void* context_ = nullptr;
     std::shared_ptr<const CellSource> source_;
     std::vector<Cell> cells_;
     std::vector<uint8_t> ready_;
