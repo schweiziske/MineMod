@@ -1,96 +1,351 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <Filter Include="源文件">
-      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
-      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    <Filter Include="Bindings">
+      <UniqueIdentifier>{0822F34D-22E8-5C5A-9809-C14187E92A55}</UniqueIdentifier>
     </Filter>
-    <Filter Include="头文件">
-      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
-      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    <Filter Include="Legacy">
+      <UniqueIdentifier>{C7D4ED5E-FE18-5129-A424-FC6BC5A3F7F2}</UniqueIdentifier>
     </Filter>
-    <Filter Include="资源文件">
-      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
-      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    <Filter Include="Mesh">
+      <UniqueIdentifier>{48339747-92BA-5943-8172-08DD80B2EAE0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Module">
+      <UniqueIdentifier>{22CD51BE-C893-5512-A77C-15854224F475}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Render">
+      <UniqueIdentifier>{821E58CF-BFBF-5A51-82F4-4EDC752BD662}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Render\Source">
+      <UniqueIdentifier>{E64F0C7C-471B-584D-8F44-DD4AE65B8FE4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Render\Visibility">
+      <UniqueIdentifier>{BF5FFC30-4AE4-5205-B844-9853AC981B4F}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Resources">
+      <UniqueIdentifier>{806FE596-7535-592D-BAAC-F0F870E5F3C3}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Resources\Atlas">
+      <UniqueIdentifier>{F8AA39FE-3C1A-5D1E-A6B0-E88C9F2B6684}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Resources\Source">
+      <UniqueIdentifier>{9E28E1B0-BF1F-5F6B-9675-85A96AAB0976}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ThirdParty">
+      <UniqueIdentifier>{BA344730-8358-57CC-AC7A-824047FD77DD}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="World">
+      <UniqueIdentifier>{14947D33-0C03-57E9-A69A-FD92D35EB2B5}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="pch.cpp">
-      <Filter>源文件</Filter>
+    <ClCompile Include="Module\Pch.cpp">
+      <Filter>Module</Filter>
     </ClCompile>
-    <ClCompile Include="dllmain.cpp">
-      <Filter>源文件</Filter>
+    <ClCompile Include="Legacy\BlockDefinitions.cpp">
+      <Filter>Legacy</Filter>
     </ClCompile>
-    <ClCompile Include="test.cpp">
-      <Filter>源文件</Filter>
+    <ClCompile Include="Module\Module.cpp">
+      <Filter>Module</Filter>
     </ClCompile>
-    <ClCompile Include="imesh_index.cpp">
-      <Filter>源文件</Filter>
+    <ClCompile Include="Legacy\BlockEmitters.cpp">
+      <Filter>Legacy</Filter>
     </ClCompile>
-    <ClCompile Include="emitters.cpp">
-      <Filter>源文件</Filter>
+    <ClCompile Include="Module\Handshake.cpp">
+      <Filter>Module</Filter>
     </ClCompile>
-    <ClCompile Include="handshake.cpp">
-      <Filter>源文件</Filter>
+    <ClCompile Include="Render\Source\MeshIndex.cpp">
+      <Filter>Render\Source</Filter>
     </ClCompile>
-    <ClCompile Include="worldstate.cpp">
-      <Filter>源文件</Filter>
+    <ClCompile Include="Legacy\LightAtlas.cpp">
+      <Filter>Legacy</Filter>
     </ClCompile>
-    <ClCompile Include="blockdefs.cpp">
-      <Filter>源文件</Filter>
+    <ClCompile Include="Resources\Source\AtlasTexture.cpp">
+      <Filter>Resources\Source</Filter>
     </ClCompile>
-    <ClCompile Include="meshbuild.cpp">
-      <Filter>源文件</Filter>
+    <ClCompile Include="Resources\Source\PixelTexture.cpp">
+      <Filter>Resources\Source</Filter>
     </ClCompile>
-    <ClCompile Include="meshworker.cpp">
-      <Filter>源文件</Filter>
+    <ClCompile Include="Resources\Source\PixelTextureStore.cpp">
+      <Filter>Resources\Source</Filter>
     </ClCompile>
-    <ClCompile Include="patchdecode.cpp">
-      <Filter>源文件</Filter>
+    <ClCompile Include="Bindings\PixelTextureBindings.cpp">
+      <Filter>Bindings</Filter>
     </ClCompile>
-    <ClCompile Include="lightatlas.cpp">
-      <Filter>源文件</Filter>
+    <ClCompile Include="Bindings\ResourceBindings.cpp">
+      <Filter>Bindings</Filter>
+    </ClCompile>
+    <ClCompile Include="Resources\ResourceSource.cpp">
+      <Filter>Resources</Filter>
+    </ClCompile>
+    <ClCompile Include="include\miniz\miniz.c">
+      <Filter>ThirdParty</Filter>
+    </ClCompile>
+    <ClCompile Include="include\miniz\miniz_tinfl.c">
+      <Filter>ThirdParty</Filter>
+    </ClCompile>
+    <ClCompile Include="include\miniz\miniz_zip.c">
+      <Filter>ThirdParty</Filter>
+    </ClCompile>
+    <ClCompile Include="Resources\Atlas\AtlasPixels.cpp">
+      <Filter>Resources\Atlas</Filter>
+    </ClCompile>
+    <ClCompile Include="Resources\Atlas\AtlasSprite.cpp">
+      <Filter>Resources\Atlas</Filter>
+    </ClCompile>
+    <ClCompile Include="Bindings\AtlasSpriteBindings.cpp">
+      <Filter>Bindings</Filter>
+    </ClCompile>
+    <ClCompile Include="Bindings\MeshBindingContext.cpp">
+      <Filter>Bindings</Filter>
+    </ClCompile>
+    <ClCompile Include="Bindings\MeshInputBindings.cpp">
+      <Filter>Bindings</Filter>
+    </ClCompile>
+    <ClCompile Include="Bindings\LegacyMeshDrawBindings.cpp">
+      <Filter>Bindings</Filter>
+    </ClCompile>
+    <ClCompile Include="Mesh\SectionTasks.cpp">
+      <Filter>Mesh</Filter>
+    </ClCompile>
+    <ClCompile Include="Render\Source\PublishedMesh.cpp">
+      <Filter>Render\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Render\Visibility\ChunkVisibilityQuery.cpp">
+      <Filter>Render\Visibility</Filter>
+    </ClCompile>
+    <ClCompile Include="Legacy\ChunkMeshDraw.cpp">
+      <Filter>Legacy</Filter>
+    </ClCompile>
+    <ClCompile Include="Bindings\MeshBindings.cpp">
+      <Filter>Bindings</Filter>
+    </ClCompile>
+    <ClCompile Include="Bindings\DrawBindings.cpp">
+      <Filter>Bindings</Filter>
+    </ClCompile>
+    <ClCompile Include="Render\Visibility\VisibilityGraph.cpp">
+      <Filter>Render\Visibility</Filter>
+    </ClCompile>
+    <ClCompile Include="Render\Visibility\VisibilityWorker.cpp">
+      <Filter>Render\Visibility</Filter>
+    </ClCompile>
+    <ClCompile Include="Render\Source\EngineContext.cpp">
+      <Filter>Render\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Render\Source\MeshResource.cpp">
+      <Filter>Render\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Render\Visibility\VisibilityQuery.cpp">
+      <Filter>Render\Visibility</Filter>
+    </ClCompile>
+    <ClCompile Include="Bindings\WorldBindings.cpp">
+      <Filter>Bindings</Filter>
+    </ClCompile>
+    <ClCompile Include="World\WorldStore.cpp">
+      <Filter>World</Filter>
+    </ClCompile>
+    <ClCompile Include="World\LightWorker.cpp">
+      <Filter>World</Filter>
+    </ClCompile>
+    <ClCompile Include="World\WorldSession.cpp">
+      <Filter>World</Filter>
+    </ClCompile>
+    <ClCompile Include="Mesh\WorldMeshInput.cpp">
+      <Filter>Mesh</Filter>
+    </ClCompile>
+    <ClCompile Include="Mesh\SectionGeometry.cpp">
+      <Filter>Mesh</Filter>
+    </ClCompile>
+    <ClCompile Include="Mesh\FluidGeometry.cpp">
+      <Filter>Mesh</Filter>
+    </ClCompile>
+    <ClCompile Include="Mesh\SectionWorker.cpp">
+      <Filter>Mesh</Filter>
+    </ClCompile>
+    <ClCompile Include="Mesh\ModelShapes.cpp">
+      <Filter>Mesh</Filter>
+    </ClCompile>
+    <ClCompile Include="Legacy\ChunkMeshBuilder.cpp">
+      <Filter>Legacy</Filter>
+    </ClCompile>
+    <ClCompile Include="Legacy\ChunkMeshWorker.cpp">
+      <Filter>Legacy</Filter>
+    </ClCompile>
+    <ClCompile Include="Legacy\PatchDecoder.cpp">
+      <Filter>Legacy</Filter>
+    </ClCompile>
+    <ClCompile Include="World\WorldDecoder.cpp">
+      <Filter>World</Filter>
+    </ClCompile>
+    <ClCompile Include="include\sourcesdk-minimal\utils\lzma\C\LzmaDec.c">
+      <Filter>ThirdParty</Filter>
     </ClCompile>
     <ClCompile Include="include\sourcesdk-minimal-x86-64-branch\utils\lzma\C\LzmaDec.c">
-      <Filter>源文件</Filter>
+      <Filter>ThirdParty</Filter>
+    </ClCompile>
+    <ClCompile Include="Legacy\DebugMesh.cpp">
+      <Filter>Legacy</Filter>
+    </ClCompile>
+    <ClCompile Include="Legacy\WorldMirror.cpp">
+      <Filter>Legacy</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="test.h">
-      <Filter>头文件</Filter>
+    <ClInclude Include="Legacy\BlobFormat.h">
+      <Filter>Legacy</Filter>
     </ClInclude>
-    <ClInclude Include="pch.h">
-      <Filter>头文件</Filter>
+    <ClInclude Include="Legacy\BlockDefinitions.h">
+      <Filter>Legacy</Filter>
     </ClInclude>
-    <ClInclude Include="blob_format.h">
-      <Filter>头文件</Filter>
+    <ClInclude Include="Legacy\BlockEmitters.h">
+      <Filter>Legacy</Filter>
     </ClInclude>
-    <ClInclude Include="handshake.h">
-      <Filter>头文件</Filter>
+    <ClInclude Include="Legacy\LegacyContext.h">
+      <Filter>Legacy</Filter>
     </ClInclude>
-    <ClInclude Include="emitters.h">
-      <Filter>头文件</Filter>
+    <ClInclude Include="Module\Handshake.h">
+      <Filter>Module</Filter>
     </ClInclude>
-    <ClInclude Include="global.h">
-      <Filter>头文件</Filter>
+    <ClInclude Include="Legacy\ChunkMeshBuilder.h">
+      <Filter>Legacy</Filter>
     </ClInclude>
-    <ClInclude Include="worldstate.h">
-      <Filter>头文件</Filter>
+    <ClInclude Include="Legacy\ChunkMeshWorker.h">
+      <Filter>Legacy</Filter>
     </ClInclude>
-    <ClInclude Include="blockdefs.h">
-      <Filter>头文件</Filter>
+    <ClInclude Include="Legacy\LightAtlas.h">
+      <Filter>Legacy</Filter>
     </ClInclude>
-    <ClInclude Include="meshbuild.h">
-      <Filter>头文件</Filter>
+    <ClInclude Include="Resources\Source\AtlasTexture.h">
+      <Filter>Resources\Source</Filter>
     </ClInclude>
-    <ClInclude Include="meshworker.h">
-      <Filter>头文件</Filter>
+    <ClInclude Include="Bindings\ResourceBindings.h">
+      <Filter>Bindings</Filter>
     </ClInclude>
-    <ClInclude Include="patchdecode.h">
-      <Filter>头文件</Filter>
+    <ClInclude Include="Resources\ResourceSource.h">
+      <Filter>Resources</Filter>
     </ClInclude>
-    <ClInclude Include="lightatlas.h">
-      <Filter>头文件</Filter>
+    <ClInclude Include="Resources\Atlas\AtlasPixels.h">
+      <Filter>Resources\Atlas</Filter>
+    </ClInclude>
+    <ClInclude Include="Bindings\MeshBindingContext.h">
+      <Filter>Bindings</Filter>
+    </ClInclude>
+    <ClInclude Include="Bindings\MeshInputBindings.h">
+      <Filter>Bindings</Filter>
+    </ClInclude>
+    <ClInclude Include="Mesh\SectionTasks.h">
+      <Filter>Mesh</Filter>
+    </ClInclude>
+    <ClInclude Include="Render\Source\PublishedMesh.h">
+      <Filter>Render\Source</Filter>
+    </ClInclude>
+    <ClInclude Include="Render\Visibility\ChunkVisibilityQuery.h">
+      <Filter>Render\Visibility</Filter>
+    </ClInclude>
+    <ClInclude Include="Render\Visibility\ChunkVisibilityTypes.h">
+      <Filter>Render\Visibility</Filter>
+    </ClInclude>
+    <ClInclude Include="Legacy\ChunkMeshDraw.h">
+      <Filter>Legacy</Filter>
+    </ClInclude>
+    <ClInclude Include="World\ChunkKey.h">
+      <Filter>World</Filter>
+    </ClInclude>
+    <ClInclude Include="Bindings\MeshBindings.h">
+      <Filter>Bindings</Filter>
+    </ClInclude>
+    <ClInclude Include="Bindings\WorldBindings.h">
+      <Filter>Bindings</Filter>
+    </ClInclude>
+    <ClInclude Include="World\WorldStore.h">
+      <Filter>World</Filter>
+    </ClInclude>
+    <ClInclude Include="World\LightWorker.h">
+      <Filter>World</Filter>
+    </ClInclude>
+    <ClInclude Include="World\WorldSession.h">
+      <Filter>World</Filter>
+    </ClInclude>
+    <ClInclude Include="Mesh\WorldMeshInput.h">
+      <Filter>Mesh</Filter>
+    </ClInclude>
+    <ClInclude Include="World\WorldDecoder.h">
+      <Filter>World</Filter>
+    </ClInclude>
+    <ClInclude Include="Mesh\SectionGeometry.h">
+      <Filter>Mesh</Filter>
+    </ClInclude>
+    <ClInclude Include="Render\Visibility\VisibilityQuery.h">
+      <Filter>Render\Visibility</Filter>
+    </ClInclude>
+    <ClInclude Include="Bindings\DrawBindings.h">
+      <Filter>Bindings</Filter>
+    </ClInclude>
+    <ClInclude Include="Mesh\FluidGeometry.h">
+      <Filter>Mesh</Filter>
+    </ClInclude>
+    <ClInclude Include="Mesh\SectionWorker.h">
+      <Filter>Mesh</Filter>
+    </ClInclude>
+    <ClInclude Include="Mesh\LightPixels.h">
+      <Filter>Mesh</Filter>
+    </ClInclude>
+    <ClInclude Include="Resources\PixelImage.h">
+      <Filter>Resources</Filter>
+    </ClInclude>
+    <ClInclude Include="Legacy\PatchDecoder.h">
+      <Filter>Legacy</Filter>
+    </ClInclude>
+    <ClInclude Include="Bindings\AtlasSpriteBindings.h">
+      <Filter>Bindings</Filter>
+    </ClInclude>
+    <ClInclude Include="Mesh\ModelShapes.h">
+      <Filter>Mesh</Filter>
+    </ClInclude>
+    <ClInclude Include="Render\Source\EngineContext.h">
+      <Filter>Render\Source</Filter>
+    </ClInclude>
+    <ClInclude Include="Render\Source\MeshResource.h">
+      <Filter>Render\Source</Filter>
+    </ClInclude>
+    <ClInclude Include="Render\Visibility\VisibilityGraph.h">
+      <Filter>Render\Visibility</Filter>
+    </ClInclude>
+    <ClInclude Include="Render\Visibility\VisibilityMath.h">
+      <Filter>Render\Visibility</Filter>
+    </ClInclude>
+    <ClInclude Include="Render\Visibility\VisibilityTypes.h">
+      <Filter>Render\Visibility</Filter>
+    </ClInclude>
+    <ClInclude Include="Render\Visibility\VisibilityWorker.h">
+      <Filter>Render\Visibility</Filter>
+    </ClInclude>
+    <ClInclude Include="Resources\Atlas\AtlasRegions.h">
+      <Filter>Resources\Atlas</Filter>
+    </ClInclude>
+    <ClInclude Include="Resources\Atlas\AtlasSprite.h">
+      <Filter>Resources\Atlas</Filter>
+    </ClInclude>
+    <ClInclude Include="Resources\Source\PixelTexture.h">
+      <Filter>Resources\Source</Filter>
+    </ClInclude>
+    <ClInclude Include="Resources\Source\PixelTextureTypes.h">
+      <Filter>Resources\Source</Filter>
+    </ClInclude>
+    <ClInclude Include="Resources\Source\PixelTextureStore.h">
+      <Filter>Resources\Source</Filter>
+    </ClInclude>
+    <ClInclude Include="Bindings\PixelTextureBindings.h">
+      <Filter>Bindings</Filter>
+    </ClInclude>
+    <ClInclude Include="Module\Pch.h">
+      <Filter>Module</Filter>
+    </ClInclude>
+    <ClInclude Include="Legacy\DebugMesh.h">
+      <Filter>Legacy</Filter>
+    </ClInclude>
+    <ClInclude Include="Legacy\WorldMirror.h">
+      <Filter>Legacy</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

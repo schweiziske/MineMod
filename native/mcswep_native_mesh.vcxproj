@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -132,8 +132,8 @@
       <PreprocessorDefinitions>WIN32;_DEBUG;MCSWEPNATIVEMESH_EXPORTS;_WINDOWS;_USRDLL;COMPILER_MSVC;COMPILER_MSVC32;RAD_TELEMETRY_DISABLED;_CRT_SECURE_NO_WARNINGS;GMOD_USE_SOURCESDK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeader>Use</PrecompiledHeader>
-      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>$(ProjectDir)include\rapidjson-master\include;$(ProjectDir)include\sourcesdk-minimal\public\tier0;$(ProjectDir)include\sourcesdk-minimal\public;$(ProjectDir)include\sourcesdk-minimal;$(ProjectDir)include</AdditionalIncludeDirectories>
+      <PrecompiledHeaderFile>Module/Pch.h</PrecompiledHeaderFile>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include\rapidjson-master\include;$(ProjectDir)include\sourcesdk-minimal\public\tier0;$(ProjectDir)include\sourcesdk-minimal\public;$(ProjectDir)include\sourcesdk-minimal;$(ProjectDir)include</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
@@ -154,10 +154,10 @@
       <PreprocessorDefinitions>WIN32;NDEBUG;MCSWEPNATIVEMESH_EXPORTS;_WINDOWS;_USRDLL;COMPILER_MSVC;COMPILER_MSVC32;RAD_TELEMETRY_DISABLED;_CRT_SECURE_NO_WARNINGS;GMOD_USE_SOURCESDK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeader>Use</PrecompiledHeader>
-      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderFile>Module/Pch.h</PrecompiledHeaderFile>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(ProjectDir)include\rapidjson-master\include;$(ProjectDir)include\sourcesdk-minimal\public\tier0;$(ProjectDir)include\sourcesdk-minimal\public;$(ProjectDir)include\sourcesdk-minimal;$(ProjectDir)include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include\rapidjson-master\include;$(ProjectDir)include\sourcesdk-minimal\public\tier0;$(ProjectDir)include\sourcesdk-minimal\public;$(ProjectDir)include\sourcesdk-minimal;$(ProjectDir)include</AdditionalIncludeDirectories>
       <Optimization>Disabled</Optimization>
       <WholeProgramOptimization>false</WholeProgramOptimization>
     </ClCompile>
@@ -180,10 +180,10 @@
       <PreprocessorDefinitions>WIN32;NDEBUG;MCSWEPNATIVEMESH_EXPORTS;_WINDOWS;_USRDLL;COMPILER_MSVC;COMPILER_MSVC32;RAD_TELEMETRY_DISABLED;_CRT_SECURE_NO_WARNINGS;GMOD_USE_SOURCESDK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeader>Use</PrecompiledHeader>
-      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderFile>Module/Pch.h</PrecompiledHeaderFile>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(ProjectDir)include\rapidjson-master\include;$(ProjectDir)include\sourcesdk-minimal\public\tier0;$(ProjectDir)include\sourcesdk-minimal\public;$(ProjectDir)include\sourcesdk-minimal;$(ProjectDir)include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include\rapidjson-master\include;$(ProjectDir)include\sourcesdk-minimal\public\tier0;$(ProjectDir)include\sourcesdk-minimal\public;$(ProjectDir)include\sourcesdk-minimal;$(ProjectDir)include</AdditionalIncludeDirectories>
       <WholeProgramOptimization>true</WholeProgramOptimization>
     </ClCompile>
     <Link>
@@ -203,8 +203,8 @@
       <PreprocessorDefinitions>_DEBUG;MCSWEPNATIVEMESH_EXPORTS;_WINDOWS;_USRDLL;COMPILER_MSVC;COMPILER_MSVC64;RAD_TELEMETRY_DISABLED;_CRT_SECURE_NO_WARNINGS;GMOD_USE_SOURCESDK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeader>Use</PrecompiledHeader>
-      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>$(ProjectDir)include\rapidjson-master\include;$(ProjectDir)include\sourcesdk-minimal-x86-64-branch\public\tier0;$(ProjectDir)include\sourcesdk-minimal-x86-64-branch\public;$(ProjectDir)include\sourcesdk-minimal-x86-64-branch;$(ProjectDir)include</AdditionalIncludeDirectories>
+      <PrecompiledHeaderFile>Module/Pch.h</PrecompiledHeaderFile>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include\rapidjson-master\include;$(ProjectDir)include\sourcesdk-minimal-x86-64-branch\public\tier0;$(ProjectDir)include\sourcesdk-minimal-x86-64-branch\public;$(ProjectDir)include\sourcesdk-minimal-x86-64-branch;$(ProjectDir)include</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
@@ -225,10 +225,10 @@
       <PreprocessorDefinitions>NDEBUG;MCSWEPNATIVEMESH_EXPORTS;_WINDOWS;_USRDLL;COMPILER_MSVC;COMPILER_MSVC64;RAD_TELEMETRY_DISABLED;_CRT_SECURE_NO_WARNINGS;GMOD_USE_SOURCESDK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeader>Use</PrecompiledHeader>
-      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderFile>Module/Pch.h</PrecompiledHeaderFile>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(ProjectDir)include\rapidjson-master\include;$(ProjectDir)include\sourcesdk-minimal-x86-64-branch\public\tier0;$(ProjectDir)include\sourcesdk-minimal-x86-64-branch\public;$(ProjectDir)include\sourcesdk-minimal-x86-64-branch;$(ProjectDir)include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include\rapidjson-master\include;$(ProjectDir)include\sourcesdk-minimal-x86-64-branch\public\tier0;$(ProjectDir)include\sourcesdk-minimal-x86-64-branch\public;$(ProjectDir)include\sourcesdk-minimal-x86-64-branch;$(ProjectDir)include</AdditionalIncludeDirectories>
       <Optimization>Disabled</Optimization>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <WholeProgramOptimization>false</WholeProgramOptimization>
@@ -252,10 +252,10 @@
       <PreprocessorDefinitions>NDEBUG;MCSWEPNATIVEMESH_EXPORTS;_WINDOWS;_USRDLL;COMPILER_MSVC;COMPILER_MSVC64;RAD_TELEMETRY_DISABLED;_CRT_SECURE_NO_WARNINGS;GMOD_USE_SOURCESDK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeader>Use</PrecompiledHeader>
-      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderFile>Module/Pch.h</PrecompiledHeaderFile>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(ProjectDir)include\rapidjson-master\include;$(ProjectDir)include\sourcesdk-minimal-x86-64-branch\public\tier0;$(ProjectDir)include\sourcesdk-minimal-x86-64-branch\public;$(ProjectDir)include\sourcesdk-minimal-x86-64-branch;$(ProjectDir)include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include\rapidjson-master\include;$(ProjectDir)include\sourcesdk-minimal-x86-64-branch\public\tier0;$(ProjectDir)include\sourcesdk-minimal-x86-64-branch\public;$(ProjectDir)include\sourcesdk-minimal-x86-64-branch;$(ProjectDir)include</AdditionalIncludeDirectories>
       <Optimization>MaxSpeed</Optimization>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <WholeProgramOptimization>true</WholeProgramOptimization>
@@ -271,21 +271,23 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="pch.cpp">
+    <ClCompile Include="Module\Pch.cpp">
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="blockdefs.cpp" />
-    <ClCompile Include="dllmain.cpp" />
-    <ClCompile Include="emitters.cpp" />
-    <ClCompile Include="handshake.cpp" />
-    <ClCompile Include="imesh_index.cpp" />
-    <ClCompile Include="lightatlas.cpp" />
-    <ClCompile Include="atlas_texture.cpp" />
-    <ClCompile Include="pixel_upload.cpp" />
-    <ClCompile Include="resource_io.cpp">
+    <ClCompile Include="Legacy\BlockDefinitions.cpp" />
+    <ClCompile Include="Module\Module.cpp" />
+    <ClCompile Include="Legacy\BlockEmitters.cpp" />
+    <ClCompile Include="Module\Handshake.cpp" />
+    <ClCompile Include="Render\Source\MeshIndex.cpp" />
+    <ClCompile Include="Legacy\LightAtlas.cpp" />
+    <ClCompile Include="Resources\Source\AtlasTexture.cpp" />
+    <ClCompile Include="Resources\Source\PixelTexture.cpp" />
+    <ClCompile Include="Resources\Source\PixelTextureStore.cpp" />
+    <ClCompile Include="Bindings\PixelTextureBindings.cpp" />
+    <ClCompile Include="Bindings\ResourceBindings.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="resource_source.cpp">
+    <ClCompile Include="Resources\ResourceSource.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions>MINIZ_NO_STDIO;MINIZ_NO_DEFLATE_APIS;MINIZ_NO_ZLIB_COMPATIBLE_NAMES;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
@@ -301,59 +303,82 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions>MINIZ_NO_STDIO;MINIZ_NO_DEFLATE_APIS;MINIZ_NO_ZLIB_COMPATIBLE_NAMES;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
-    <ClCompile Include="atlas_pixels.cpp">
+    <ClCompile Include="Resources\Atlas\AtlasPixels.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <FloatingPointModel>Strict</FloatingPointModel>
     </ClCompile>
-    <ClCompile Include="atlas_sprite.cpp">
+    <ClCompile Include="Resources\Atlas\AtlasSprite.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions>MINIZ_NO_STDIO;MINIZ_NO_DEFLATE_APIS;MINIZ_NO_ZLIB_COMPATIBLE_NAMES;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <FloatingPointModel>Strict</FloatingPointModel>
     </ClCompile>
-    <ClCompile Include="atlas_sprite_bridge.cpp">
+    <ClCompile Include="Bindings\AtlasSpriteBindings.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="l2_bridge.cpp" />
-    <ClCompile Include="l2_draw_bridge.cpp" />
-    <ClCompile Include="l2_draw.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-      <FloatingPointModel>Strict</FloatingPointModel>
-    </ClCompile>
-    <ClCompile Include="world_bridge.cpp" />
-    <ClCompile Include="world_core.cpp">
+    <ClCompile Include="Bindings\MeshBindingContext.cpp" />
+    <ClCompile Include="Bindings\MeshInputBindings.cpp" />
+    <ClCompile Include="Bindings\LegacyMeshDrawBindings.cpp" />
+    <ClCompile Include="Mesh\SectionTasks.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <FloatingPointModel>Strict</FloatingPointModel>
     </ClCompile>
-    <ClCompile Include="world_worker.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="world_session.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="world_mesh.cpp">
+    <ClCompile Include="Render\Source\PublishedMesh.cpp" />
+    <ClCompile Include="Render\Visibility\ChunkVisibilityQuery.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <FloatingPointModel>Strict</FloatingPointModel>
     </ClCompile>
-    <ClCompile Include="l2_core.cpp">
+    <ClCompile Include="Legacy\ChunkMeshDraw.cpp" />
+    <ClCompile Include="Bindings\MeshBindings.cpp" />
+    <ClCompile Include="Bindings\DrawBindings.cpp" />
+    <ClCompile Include="Render\Visibility\VisibilityGraph.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <FloatingPointModel>Strict</FloatingPointModel>
     </ClCompile>
-    <ClCompile Include="l2_fluid.cpp">
+    <ClCompile Include="Render\Visibility\VisibilityWorker.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <FloatingPointModel>Strict</FloatingPointModel>
     </ClCompile>
-    <ClCompile Include="l2_worker.cpp">
+    <ClCompile Include="Render\Source\EngineContext.cpp" />
+    <ClCompile Include="Render\Source\MeshResource.cpp" />
+    <ClCompile Include="Render\Visibility\VisibilityQuery.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <FloatingPointModel>Strict</FloatingPointModel>
     </ClCompile>
-    <ClCompile Include="l2_shapes.cpp">
+    <ClCompile Include="Bindings\WorldBindings.cpp" />
+    <ClCompile Include="World\WorldStore.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <FloatingPointModel>Strict</FloatingPointModel>
     </ClCompile>
-    <ClCompile Include="meshbuild.cpp" />
-    <ClCompile Include="meshworker.cpp" />
-    <ClCompile Include="patchdecode.cpp" />
-    <ClCompile Include="world_decode.cpp">
+    <ClCompile Include="World\LightWorker.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="World\WorldSession.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="Mesh\WorldMeshInput.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <FloatingPointModel>Strict</FloatingPointModel>
+    </ClCompile>
+    <ClCompile Include="Mesh\SectionGeometry.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <FloatingPointModel>Strict</FloatingPointModel>
+    </ClCompile>
+    <ClCompile Include="Mesh\FluidGeometry.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <FloatingPointModel>Strict</FloatingPointModel>
+    </ClCompile>
+    <ClCompile Include="Mesh\SectionWorker.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <FloatingPointModel>Strict</FloatingPointModel>
+    </ClCompile>
+    <ClCompile Include="Mesh\ModelShapes.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <FloatingPointModel>Strict</FloatingPointModel>
+    </ClCompile>
+    <ClCompile Include="Legacy\ChunkMeshBuilder.cpp" />
+    <ClCompile Include="Legacy\ChunkMeshWorker.cpp" />
+    <ClCompile Include="Legacy\PatchDecoder.cpp" />
+    <ClCompile Include="World\WorldDecoder.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="include\sourcesdk-minimal\utils\lzma\C\LzmaDec.c" Condition="'$(Platform)'=='Win32'">
@@ -364,40 +389,62 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <CompileAs>CompileAsC</CompileAs>
     </ClCompile>
-    <ClCompile Include="test.cpp" />
-    <ClCompile Include="worldstate.cpp" />
+    <ClCompile Include="Legacy\DebugMesh.cpp" />
+    <ClCompile Include="Legacy\WorldMirror.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="blob_format.h" />
-    <ClInclude Include="blockdefs.h" />
-    <ClInclude Include="emitters.h" />
-    <ClInclude Include="global.h" />
-    <ClInclude Include="handshake.h" />
-    <ClInclude Include="meshbuild.h" />
-    <ClInclude Include="meshworker.h" />
-    <ClInclude Include="lightatlas.h" />
-    <ClInclude Include="atlas_texture.h" />
-    <ClInclude Include="resource_io.h" />
-    <ClInclude Include="resource_source.h" />
-    <ClInclude Include="atlas_pixels.h" />
-    <ClInclude Include="l2_bridge.h" />
-    <ClInclude Include="world_bridge.h" />
-    <ClInclude Include="world_core.h" />
-    <ClInclude Include="world_worker.h" />
-    <ClInclude Include="world_session.h" />
-    <ClInclude Include="world_mesh.h" />
-    <ClInclude Include="world_decode.h" />
-    <ClInclude Include="l2_core.h" />
-    <ClInclude Include="l2_draw.h" />
-    <ClInclude Include="l2_draw_bridge.h" />
-    <ClInclude Include="l2_fluid.h" />
-    <ClInclude Include="l2_worker.h" />
-    <ClInclude Include="l2_pixels.h" />
-    <ClInclude Include="pixel_texture_data.h" />
-    <ClInclude Include="patchdecode.h" />
-    <ClInclude Include="pch.h" />
-    <ClInclude Include="test.h" />
-    <ClInclude Include="worldstate.h" />
+    <ClInclude Include="Legacy\BlobFormat.h" />
+    <ClInclude Include="Legacy\BlockDefinitions.h" />
+    <ClInclude Include="Legacy\BlockEmitters.h" />
+    <ClInclude Include="Legacy\LegacyContext.h" />
+    <ClInclude Include="Module\Handshake.h" />
+    <ClInclude Include="Legacy\ChunkMeshBuilder.h" />
+    <ClInclude Include="Legacy\ChunkMeshWorker.h" />
+    <ClInclude Include="Legacy\LightAtlas.h" />
+    <ClInclude Include="Resources\Source\AtlasTexture.h" />
+    <ClInclude Include="Bindings\ResourceBindings.h" />
+    <ClInclude Include="Resources\ResourceSource.h" />
+    <ClInclude Include="Resources\Atlas\AtlasPixels.h" />
+    <ClInclude Include="Bindings\MeshBindingContext.h" />
+    <ClInclude Include="Bindings\MeshInputBindings.h" />
+    <ClInclude Include="Mesh\SectionTasks.h" />
+    <ClInclude Include="Render\Source\PublishedMesh.h" />
+    <ClInclude Include="Render\Visibility\ChunkVisibilityQuery.h" />
+    <ClInclude Include="Render\Visibility\ChunkVisibilityTypes.h" />
+    <ClInclude Include="Legacy\ChunkMeshDraw.h" />
+    <ClInclude Include="World\ChunkKey.h" />
+    <ClInclude Include="Bindings\MeshBindings.h" />
+    <ClInclude Include="Bindings\WorldBindings.h" />
+    <ClInclude Include="World\WorldStore.h" />
+    <ClInclude Include="World\LightWorker.h" />
+    <ClInclude Include="World\WorldSession.h" />
+    <ClInclude Include="Mesh\WorldMeshInput.h" />
+    <ClInclude Include="World\WorldDecoder.h" />
+    <ClInclude Include="Mesh\SectionGeometry.h" />
+    <ClInclude Include="Render\Visibility\VisibilityQuery.h" />
+    <ClInclude Include="Bindings\DrawBindings.h" />
+    <ClInclude Include="Mesh\FluidGeometry.h" />
+    <ClInclude Include="Mesh\SectionWorker.h" />
+    <ClInclude Include="Mesh\LightPixels.h" />
+    <ClInclude Include="Resources\PixelImage.h" />
+    <ClInclude Include="Legacy\PatchDecoder.h" />
+    <ClInclude Include="Bindings\AtlasSpriteBindings.h" />
+    <ClInclude Include="Mesh\ModelShapes.h" />
+    <ClInclude Include="Render\Source\EngineContext.h" />
+    <ClInclude Include="Render\Source\MeshResource.h" />
+    <ClInclude Include="Render\Visibility\VisibilityGraph.h" />
+    <ClInclude Include="Render\Visibility\VisibilityMath.h" />
+    <ClInclude Include="Render\Visibility\VisibilityTypes.h" />
+    <ClInclude Include="Render\Visibility\VisibilityWorker.h" />
+    <ClInclude Include="Resources\Atlas\AtlasRegions.h" />
+    <ClInclude Include="Resources\Atlas\AtlasSprite.h" />
+    <ClInclude Include="Resources\Source\PixelTexture.h" />
+    <ClInclude Include="Resources\Source\PixelTextureTypes.h" />
+    <ClInclude Include="Resources\Source\PixelTextureStore.h" />
+    <ClInclude Include="Bindings\PixelTextureBindings.h" />
+    <ClInclude Include="Module\Pch.h" />
+    <ClInclude Include="Legacy\DebugMesh.h" />
+    <ClInclude Include="Legacy\WorldMirror.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

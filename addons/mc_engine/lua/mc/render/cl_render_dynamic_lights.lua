@@ -218,7 +218,8 @@ function D.Prepare( x, y, z )
 			pixels[offset + 5] = pixel( word( p.inner * 65535 ), word( p.outer * 65535 ) )
 		end
 	end
-	local changed = not D.uploadValid
+	local deviceRevision = R.LightTextureRevision()
+	local changed = not D.uploadValid or D.textureDeviceRevision ~= deviceRevision
 	for i = 1, 40 do if pixels[i] ~= D.previousPixels[i] then changed = true break end end
 	if changed then
 		D.uploadValid = false
@@ -226,6 +227,7 @@ function D.Prepare( x, y, z )
 		if not ok then return MC.Fault( "dynamic_light_upload", "%s", type( err ) == "table" and err.message or tostring( err ) ) end
 		for i = 1, 40 do D.previousPixels[i] = pixels[i] end
 		D.uploadValid = true
+		D.textureDeviceRevision = deviceRevision
 		D.stats.uploads = D.stats.uploads + 1
 	end
 	D.ready = true
