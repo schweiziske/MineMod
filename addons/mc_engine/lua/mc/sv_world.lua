@@ -2429,7 +2429,8 @@ function SV.LoadFromPath( path, resyncClients, requestedName, realm )
 		local metadataOK, metadataError = MC.Import.ValidateSourceMetadata( data )
 		if metadataOK ~= true then return false, metadataError or "invalid_import_metadata" end
 		local loss = data.lossReport
-		if not istable( loss ) or loss.archiveRoundTripLossless ~= true or loss.substitutedOrDropped == true then
+		if not istable( loss ) or ( not MC.Import.HasOnlySkippedBlockEntityNBT( data )
+			and ( loss.archiveRoundTripLossless ~= true or loss.substitutedOrDropped == true ) ) then
 			return false, "import_save_contains_loss"
 		end
 	end

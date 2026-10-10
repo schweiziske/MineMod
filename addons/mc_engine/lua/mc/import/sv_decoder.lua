@@ -56,15 +56,16 @@ function Import.Preflight( source, options )
 	local loss = bundle.lossReport
 	if not istable( loss ) then return nil, "missing_loss_report" end
 	local unknownPolicy = tostring( options.unknownPolicy or Import.UNKNOWN_POLICY_REJECT )
-	if loss.archiveRoundTripLossless ~= true or loss.substitutedOrDropped == true then
+	local skippedNBT = Import.HasOnlySkippedBlockEntityNBT( bundle )
+	if not skippedNBT and ( loss.archiveRoundTripLossless ~= true or loss.substitutedOrDropped == true ) then
 		return nil, "import_contains_actual_loss"
 	end
-	if unknownPolicy == Import.UNKNOWN_POLICY_REJECT then
+	if not skippedNBT and unknownPolicy == Import.UNKNOWN_POLICY_REJECT then
 		if loss.runtimeComplete ~= true or loss.substitutedOrDropped == true
 		or ( tonumber( loss.eventCount ) or 0 ) > 0 then
 			return nil, "import_loss_report_not_clean"
 		end
-	elseif unknownPolicy == Import.UNKNOWN_POLICY_PRESERVE then
+	elseif not skippedNBT and unknownPolicy == Import.UNKNOWN_POLICY_PRESERVE then
 		for _, event in ipairs( loss.events or {} ) do
 			if not istable( event ) or event.action ~= "preserve_opaque" then
 				return nil, "unsupported_preserve_event"
@@ -117,6 +118,7 @@ function Import.Preflight( source, options )
 	end
 
 	if plan.opaqueStateCount > 0 then return nil, "opaque_states_not_supported" end
+	if skippedNBT and plan.opaqueBlockEntityCount > 0 then return nil, "skipped_nbt_contains_payload" end
 	if unknownPolicy == Import.UNKNOWN_POLICY_REJECT and plan.opaqueBlockEntityCount > 0 then
 		return nil, "opaque_import_data_rejected"
 	end

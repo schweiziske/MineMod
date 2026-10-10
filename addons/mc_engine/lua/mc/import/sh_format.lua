@@ -153,6 +153,27 @@ function Import.ValidateChunkRecord( record, paletteCount )
 	}
 end
 
+-- Explicit block-entity NBT omission is supported for scenery exports. Keep
+-- rejecting every other kind of loss, including a truncated block selection.
+function Import.HasOnlySkippedBlockEntityNBT( bundle )
+	local source, loss, stats = bundle.source, bundle.lossReport, bundle.stats
+	if not istable( source ) or source.blockEntityNBT ~= "skip"
+	or not istable( loss ) or not istable( stats ) or not istable( loss.events ) then return false end
+	local skipped = integer( stats.skippedBlockEntityNBT )
+	if not skipped or skipped < 1 or integer( stats.opaqueBlockEntities ) ~= 0
+	or stats.clippedByMaxBlocks == true then return false end
+	if loss.archiveRoundTripLossless ~= false or loss.substitutedOrDropped ~= true
+	or integer( loss.lossCount ) ~= skipped or integer( loss.eventCount ) ~= skipped
+	or integer( loss.skippedBlockEntityNBT ) ~= skipped
+	or integer( loss.opaqueBlockEntities ) ~= 0 or integer( loss.opaqueCount ) ~= 0
+	or #loss.events ~= skipped then return false end
+	for _, event in ipairs( loss.events ) do
+		if not istable( event ) or event.code ~= "block_entity_nbt_skipped"
+		or event.action ~= "skip_block_entity_nbt" or event.loss ~= true then return false end
+	end
+	return true
+end
+
 function Import.LossSummary( bundle )
 	local report = istable( bundle ) and bundle.lossReport or nil
 	if not istable( report ) then return "lossReport=missing" end
@@ -161,5 +182,6 @@ function Import.LossSummary( bundle )
 		"archiveRoundTripLossless=" .. tostring( report.archiveRoundTripLossless == true ),
 		"events=" .. tostring( integer( report.eventCount ) or 0 ),
 		"opaqueBlockEntities=" .. tostring( integer( report.opaqueBlockEntities ) or 0 ),
+		"skippedBlockEntityNBT=" .. tostring( integer( report.skippedBlockEntityNBT ) or 0 ),
 	}, " " )
 end
