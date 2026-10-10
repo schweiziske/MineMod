@@ -98,6 +98,65 @@ function R.SameTexture( a, b )
 end
 
 R.pixelTextures = R.pixelTextures or {}
+R.queuedLightTextures = R.queuedLightTextures or {}
+local uploadQueuedLightPixels
+
+function R.LightTextureRevision()
+	local reader = R.lightTextureRevisionReader
+	if reader then return reader() end
+	return 0
+end
+
+local function ensureUploadMaterial()
+	if not R.uploadMaterial then
+		R.uploadMaterial = CreateMaterial( "mc_l2_data_upload_linear1", "UnlitGeneric", {
+			["$basetexture"] = "vgui/white", ["$vertexcolor"] = 1, ["$vertexalpha"] = 1,
+			["$ignorez"] = 1, ["$nofog"] = 1, ["$nocull"] = 1, ["$no_fullbright"] = 1,
+			["$gammacolorread"] = 1, ["$linearwrite"] = 1,
+		} )
+	end
+	requireValue( R.uploadMaterial and not R.uploadMaterial:IsError(),
+		"l2_visual_upload_material", "could not create the exact-byte upload material" )
+end
+
+-- Only the tiny, frequently rewritten light tables use queued RT writes. The
+-- 16K corner/AO atlas stays procedural and never enters the queue vertex pool.
+local function createQueuedLightTexture( name, width, height, point )
+	requireValue( width * height <= 256 and GetRenderTargetEx and mesh and mesh.Begin
+		and mesh.Color and mesh.Position and mesh.TexCoord and mesh.AdvanceVertex and mesh.End
+		and render and render.SetMaterial and render.PushRenderTarget and render.PopRenderTarget
+		and render.OverrideBlend and render.OverrideAlphaWriteEnable and render.OverrideColorWriteEnable
+		and render.GetToneMappingScaleLinear and render.SetToneMappingScaleLinear
+		and cam and cam.Start2D and cam.End2D and CreateMaterial and Vector and bit and bit.bor
+		and MATERIAL_QUADS ~= nil and RT_SIZE_LITERAL ~= nil and MATERIAL_RT_DEPTH_NONE ~= nil
+		and IMAGE_FORMAT_RGBA8888 ~= nil and BLEND_ONE ~= nil and BLEND_ZERO ~= nil and BLENDFUNC_ADD ~= nil,
+		"l2_light_texture_api", "bounded queued light upload requires render targets and mesh drawing" )
+	if mcmesh and mcmesh.L2PixelTextureVersion then
+		requireValue( mcmesh.L2LightTextureRevision, "l2_light_texture_revision_api",
+			"install the updated native module and restart to support queued light texture restoration" )
+		R.lightTextureRevisionReader = mcmesh.L2LightTextureRevision
+	end
+	ensureUploadMaterial()
+	local flags = bit.bor( 4, 8, 256, 512 )
+	if point then flags = bit.bor( flags, 1 ) end
+	local texture = GetRenderTargetEx( name, width, height, RT_SIZE_LITERAL,
+		MATERIAL_RT_DEPTH_NONE, flags, 0, IMAGE_FORMAT_RGBA8888 )
+	requireValue( texture and not texture:IsError() and texture:Width() == width and texture:Height() == height,
+		"l2_light_texture_create", "could not create the bounded RGBA8 light texture" )
+	local vertices = {}
+	for i = 0, width * height - 1 do
+		local x, y = i % width, floor( i / width )
+		vertices[i + 1] = { Vector( x, y, 0 ), Vector( x + 1, y, 0 ),
+			Vector( x + 1, y + 1, 0 ), Vector( x, y + 1, 0 ) }
+	end
+	local layout = { width = width, height = height, vertices = vertices, deviceRevision = R.LightTextureRevision() }
+	R.queuedLightTextures[texture:GetName()] = layout
+	local zeros = {}
+	for i = 1, width * height do zeros[i] = 0 end
+	uploadQueuedLightPixels( texture, layout, 0, zeros )
+	return texture
+end
+
 function R.CreatePixelTexture( width, height, point )
 	requireValue( mcmesh and mcmesh.L2PixelTextureVersion and mcmesh.L2PixelTextureVersion() == 2 and mcmesh.CreateL2PixelTexture and mcmesh.UploadL2PixelTexture
 		and mcmesh.FlushL2PixelTextures and mcmesh.BindL2PixelTexture and mcmesh.ReleaseL2PixelTexture,
@@ -201,7 +260,12 @@ function R.Ensure( build, owner )
 		requireValue( not owner.atlas or R.pixelTextures[owner.atlas:GetName()],
 			"l2_pixel_texture_restart", "restart to replace the old render-target light atlas" )
 		if not owner.atlas then owner.atlas = R.CreatePixelTexture( ATLAS_SIZE, ATLAS_HEIGHT, true ) end
-		if not owner.lightmap then owner.lightmap = R.CreatePixelTexture( LIGHTMAP_SIZE, LIGHTMAP_SIZE, false ) end
+		requireValue( not owner.lightmap or R.queuedLightTextures[owner.lightmap:GetName()],
+			"l2_light_texture_restart", "restart to replace the synchronous global lightmap" )
+		if not owner.lightmap then
+			owner.lightmap = createQueuedLightTexture( ( owner.prefix or "mc_l2_visual" ) .. "_lightmap_queued_v2",
+				LIGHTMAP_SIZE, LIGHTMAP_SIZE, false )
+		end
 		return
 	end
 	requireValue( GetRenderTargetEx and CreateMaterial and render and render.PushRenderTarget
@@ -228,15 +292,7 @@ function R.Ensure( build, owner )
 	requireValue( owner.lightmap and not owner.lightmap:IsError()
 		and owner.lightmap:Width() == LIGHTMAP_SIZE and owner.lightmap:Height() == LIGHTMAP_SIZE,
 		"l2_visual_lightmap", "could not create the separate 16x16 linear-filter lightmap" )
-	if not R.uploadMaterial then
-		R.uploadMaterial = CreateMaterial( "mc_l2_data_upload_linear1", "UnlitGeneric", {
-			["$basetexture"] = "vgui/white", ["$vertexcolor"] = 1, ["$vertexalpha"] = 1,
-			["$ignorez"] = 1, ["$nofog"] = 1, ["$nocull"] = 1, ["$no_fullbright"] = 1,
-			["$gammacolorread"] = 1, ["$linearwrite"] = 1,
-		} )
-	end
-	requireValue( R.uploadMaterial and not R.uploadMaterial:IsError(),
-		"l2_visual_upload_material", "could not create the exact-byte upload material" )
+	ensureUploadMaterial()
 end
 
 function R.BoundMaterial( owner, slot, source, stage, blockSize, program, colorSpace, pbrMaps, atlasBank )
@@ -318,7 +374,72 @@ local function drawPixelRuns( width, firstPixel, pixels, zeroAlpha, rowScale, ro
 	return hasZeroAlpha
 end
 
+uploadQueuedLightPixels = function( texture, layout, firstPixel, pixels )
+	-- Validate before entering mesh.Begin. Every queued vertex owns its RGBA,
+	-- so a later CPU update cannot change an earlier view's light table.
+	requireValue( type( firstPixel ) == "number" and firstPixel == floor( firstPixel ) and firstPixel >= 0
+		and #pixels > 0 and firstPixel + #pixels <= layout.width * layout.height,
+		"l2_light_upload_range", "light upload exceeds its bounded target" )
+	for i = 1, #pixels do
+		local value = pixels[i]
+		requireValue( type( value ) == "number" and value >= 0 and value <= 4294967295 and value == floor( value ),
+			"l2_light_upload_pixel", "light upload requires packed RGBA8 values" )
+	end
+	local pushed, camera, tone, blend, alpha, color = false, false, false, false, false, false
+	local building = false
+	local previousTone
+	local ok, why = pcall( function()
+		previousTone = render.GetToneMappingScaleLinear()
+		tone = true
+		render.SetToneMappingScaleLinear( Vector( 1, 1, 1 ) )
+		render.PushRenderTarget( texture ) pushed = true
+		cam.Start2D() camera = true
+		render.SetMaterial( R.uploadMaterial )
+		render.OverrideBlend( true, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD ) blend = true
+		render.OverrideAlphaWriteEnable( true, true ) alpha = true
+		render.OverrideColorWriteEnable( true, true ) color = true
+		mesh.Begin( MATERIAL_QUADS, #pixels )
+		building = true
+		for i = 1, #pixels do
+			local value = pixels[i]
+			local r, g, b, a = value % 256, floor( value / 256 ) % 256,
+				floor( value / 65536 ) % 256, floor( value / 16777216 )
+			local corners = layout.vertices[firstPixel + i]
+			for corner = 1, 4 do
+				mesh.Position( corners[corner] )
+				mesh.TexCoord( 0, 0.5, 0.5 )
+				mesh.Color( r, g, b, a )
+				mesh.AdvanceVertex()
+			end
+		end
+		mesh.End()
+		building = false
+	end )
+	local errors = {}
+	local function restore( active, fn, ... )
+		if not active then return end
+		local restored, reason = pcall( fn, ... )
+		if not restored then errors[#errors + 1] = tostring( reason ) end
+	end
+	restore( building, mesh.End )
+	restore( color, render.OverrideColorWriteEnable, false )
+	restore( alpha, render.OverrideAlphaWriteEnable, false )
+	restore( blend, render.OverrideBlend, false )
+	restore( camera, cam.End2D )
+	restore( pushed, render.PopRenderTarget )
+	restore( tone, render.SetToneMappingScaleLinear, previousTone )
+	requireValue( #errors == 0, "l2_light_upload_restore", table.concat( errors, "; " ) )
+	if not ok then error( why, 0 ) end
+end
+
 local function uploadPixels( texture, width, firstPixel, pixels, rowScale, rowOffset, firstOcclusion, occlusion )
+	local queued = R.queuedLightTextures[texture:GetName()]
+	if queued then
+		requireValue( width == queued.width and not rowScale and not rowOffset and not occlusion,
+			"l2_light_upload_layout", "queued light textures do not support atlas addressing" )
+		uploadQueuedLightPixels( texture, queued, firstPixel, pixels )
+		return
+	end
 	local id = R.pixelTextures[texture:GetName()]
 	if id then
 		local ok, why = mcmesh.UploadL2PixelTexture( id, firstPixel, pixels, rowScale or 1, rowOffset or 0, firstOcclusion, occlusion )
@@ -375,11 +496,10 @@ end
 -- Local lights have a separate tiny data texture, consumed only by the
 -- additive programs. The original lightmap/base shaders remain byte-identical.
 function R.DynamicLightTexture()
-	if not R.dynamicLightTexture and mcmesh and mcmesh.L2PixelTextureVersion then
-		R.dynamicLightTexture = R.CreatePixelTexture( 64, 1, true )
-	elseif not R.dynamicLightTexture then
-		R.dynamicLightTexture = GetRenderTargetEx( "mc_dynamic_lights_rgba8_v1", 64, 1,
-			RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE, bit.bor( 1, 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA8888 )
+	requireValue( not R.dynamicLightTexture or R.queuedLightTextures[R.dynamicLightTexture:GetName()],
+		"l2_light_texture_restart", "restart to replace the synchronous dynamic light texture" )
+	if not R.dynamicLightTexture then
+		R.dynamicLightTexture = createQueuedLightTexture( "mc_dynamic_lights_rgba8_queued_v2", 64, 1, true )
 	end
 	local texture = R.dynamicLightTexture
 	requireValue( texture and not texture:IsError() and texture:Width() == 64 and texture:Height() == 1,
@@ -389,8 +509,20 @@ end
 
 function R.UploadDynamicLights( pixels )
 	requireValue( #pixels == 40, "dynamic_light_upload_size", "eight five-texel light records required" )
-	uploadPixels( R.DynamicLightTexture(), 64, 0, pixels )
-	requireValue( R.FlushUploads(), "dynamic_light_texture_flush", "could not publish this view's lights" )
+	local texture = R.DynamicLightTexture()
+	local layout = R.queuedLightTextures[texture:GetName()]
+	local deviceRevision = R.LightTextureRevision()
+	if layout.deviceRevision ~= deviceRevision then
+		local restored = {}
+		for i = 1, 40 do restored[i] = pixels[i] end
+		for i = 41, 64 do restored[i] = 0 end
+		uploadPixels( texture, 64, 0, restored )
+		layout.deviceRevision = deviceRevision
+	else
+		uploadPixels( texture, 64, 0, pixels )
+	end
+	-- The RT write precedes this view's sampling in Source's own queue. Flushing
+	-- procedural atlas work here would introduce an unrelated per-view wait.
 end
 
 function R.UploadPart( part, owner )
@@ -425,11 +557,12 @@ function R.RefreshLightmap( owner )
 	local revision = MC.GlobalLightmapRevision
 	requireValue( type( revision ) == "number" and revision > 0 and MC.SampleGlobalLightmapRGB,
 		"l2_visual_lightmap_unready", "wait for the first successful global lightmap refresh" )
-	if owner.lightmapRevision == revision then return end
+	local deviceRevision = R.LightTextureRevision()
+	if owner.lightmapRevision == revision and owner.lightmapDeviceRevision == deviceRevision then return end
 	local previous = owner.lightmapPixels
 	local pixels = owner.lightmapPendingPixels or {}
 	owner.lightmapPendingPixels = pixels
-	local changed = not previous or owner.lightmapUploadPending
+	local changed = not previous or owner.lightmapUploadPending or owner.lightmapDeviceRevision ~= deviceRevision
 	for sky = 0, 15 do
 		for block = 0, 15 do
 			local r, g, b = MC.SampleGlobalLightmapRGB( block, sky )
@@ -456,4 +589,5 @@ function R.RefreshLightmap( owner )
 		owner.lightmapSkippedUploads = ( owner.lightmapSkippedUploads or 0 ) + 1
 	end
 	owner.lightmapRevision = revision
+	owner.lightmapDeviceRevision = deviceRevision
 end
