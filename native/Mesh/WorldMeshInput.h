@@ -17,8 +17,9 @@ struct MeshRecipe
 class MeshInstances final : public l2::InstanceSource
 {
 public:
-	MeshInstances(std::shared_ptr<const MeshSnapshot> snapshot, Coord chunk, unsigned section,
-				  std::unordered_map<uint32_t, MeshRecipe> recipes, bool topology);
+	MeshInstances(std::shared_ptr<const MeshSnapshot> inSnapshot, Coord inChunk, unsigned inSection,
+				  std::unordered_map<uint32_t, MeshRecipe> inRecipes, bool inTopology,
+				  std::unordered_map<uint32_t, bool> inBlockingStates = {});
 	void   populate(l2::Input &input, const std::atomic<bool> &cancelled) const override;
 	size_t maxQuads() const override { return quads_; }
 	size_t bytes() const override;
@@ -27,6 +28,9 @@ private:
 	std::shared_ptr<const MeshSnapshot>		 snapshot_;
 	std::shared_ptr<const Section>			 section_;
 	std::unordered_map<uint32_t, MeshRecipe> recipes_;
+	// Complete visual classification for mixed Native/Lua geometry. Validated
+	// against the immutable section histogram before the worker owns this input.
+	std::unordered_map<uint32_t, bool> mBlockingStates;
 	Coord									 chunk_, base_;
 	size_t									 quads_ = 0;
 	bool									 topology_ = false;

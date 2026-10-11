@@ -1,6 +1,6 @@
 -- Vanilla water medium: Java WaterFogEnvironment and ScreenEffectRenderer.
 MC = MC or {}
-local V = { materials = setmetatable( {}, { __mode = "k" } ), ticks = 0, serial = 0 }
+local V = MC.RenderVanillaWater or { materials = setmetatable( {}, { __mode = "k" } ), ticks = 0, serial = 0 }
 MC.RenderVanillaWater = V
 local requireValue = MC.RenderL2Resources.Require
 local min, max = math.min, math.max
@@ -45,10 +45,11 @@ function V.Register( material )
 	V.materials[material] = -1
 end
 
-function V.Bind( material )
+-- Draw entries prepare after any nested view has finished. Material loops
+-- consume that view without allocating another GetViewSetup table per bind.
+function V.BindPrepared( material )
 	local serial = V.materials[material]
 	if serial == nil then return end
-	V.Prepare()
 	if serial == V.serial then return end
 	material:SetFloat( "$c2_x", 5 / 255 )
 	material:SetFloat( "$c2_y", 5 / 255 )
@@ -59,6 +60,13 @@ function V.Bind( material )
 	material:SetFloat( "$c3_z", V.z )
 	material:SetFloat( "$c3_w", V.start )
 	V.materials[material] = V.serial
+end
+
+-- Standalone callers do not own a prepared terrain draw boundary.
+function V.Bind( material )
+	if V.materials[material] == nil then return end
+	V.Prepare()
+	V.BindPrepared( material )
 end
 
 local function fog( scale )

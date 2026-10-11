@@ -16,6 +16,8 @@ struct Handle
 	world::Session *value = nullptr;
 	Handle		   *previous = nullptr;
 	Handle		   *next = nullptr;
+	// Lua-thread counter; publish only after a batch/decoded commit succeeds.
+	uint64_t		mContextShapeReferences = 0;
 };
 Handle *first = nullptr;
 void	require(bool ok, const char *message)
@@ -260,32 +262,49 @@ std::shared_ptr<const l2::Shape> renderShape(ILuaBase *lua, int table)
 	result->validate();
 	return result;
 }
-world::Profile profile(ILuaBase *lua, int table)
+world::Profile ParseProfile(ILuaBase *inLua, int inTable, const world::Catalog *inCatalog = nullptr,
+						   uint64_t *outShapeReferences = nullptr)
 {
-	require(lua->IsType(table, Type::Table), "native state profile must be a table");
+	require(inLua->IsType(inTable, Type::Table), "native state profile must be a table");
 	world::Profile result;
-	result.emission = uint8_t(integer(lua, table, "propagationEmission", -1, 0, 15));
-	result.opacity = uint8_t(integer(lua, table, "propagationOpacity", -1, 0, 15));
-	result.skyCost = uint8_t(integer(lua, table, "skyCost", -1, 1, 16));
-	result.l2Word = uint32_t(integer(lua, table, "l2Word", -1, 0, 1048575));
-	result.renderClass = uint32_t(integer(lua, table, "renderClass", -1, 0, UINT32_MAX));
-	result.shade = float(scalar(lua, table, "shade", -1));
-	lua->GetField(table, "shape");
-	result.shape = renderShape(lua, lua->Top());
-	lua->Pop();
-	lua->GetField(table, "fluid");
-	const int fluid = lua->Top();
-	require(lua->IsType(fluid, Type::Table), "native profile requires fluid properties");
-	auto &f = result.fluid;
-	f.kind = uint8_t(integer(lua, fluid, "kind", -1, 0, 2));
-	f.height = scalar(lua, fluid, "height", -1);
-	require(f.height >= 0 && f.height <= 1, "invalid fluid height");
-	const auto boolean = [&](const char *name)
+	result.emission = uint8_t(integer(inLua, inTable, "propagationEmission", -1, 0, 15));
+	result.opacity = uint8_t(integer(inLua, inTable, "propagationOpacity", -1, 0, 15));
+	result.skyCost = uint8_t(integer(inLua, inTable, "skyCost", -1, 1, 16));
+	result.l2Word = uint32_t(integer(inLua, inTable, "l2Word", -1, 0, 1048575));
+	result.renderClass = uint32_t(integer(inLua, inTable, "renderClass", -1, 0, UINT32_MAX));
+	result.shade = float(scalar(inLua, inTable, "shade", -1));
+	inLua->GetField(inTable, "shapeState");
+	if (inLua->IsType(-1, Type::Nil))
 	{
-		lua->GetField(fluid, name);
-		require(lua->IsType(-1, Type::Bool), "missing fluid boolean property");
-		const bool value = lua->GetBool(-1);
-		lua->Pop();
+		inLua->Pop();
+		inLua->GetField(inTable, "shape");
+		result.shape = renderShape(inLua, inLua->Top());
+		inLua->Pop();
+	}
+	else
+	{
+		// The session owns an immutable, validated catalog for this version.
+		// Catalog construction itself cannot reference a not-yet-built state.
+		require(inCatalog != nullptr, "native catalog profiles cannot reference catalog shapes");
+		const auto state = size_t(number(inLua, -1, 0, double(inCatalog->states.size() - 1)));
+		result.shape = inCatalog->states[state].shape;
+		inLua->Pop();
+		if (outShapeReferences)
+			++*outShapeReferences;
+	}
+	inLua->GetField(inTable, "fluid");
+	const int fluid = inLua->Top();
+	require(inLua->IsType(fluid, Type::Table), "native profile requires fluid properties");
+	auto &f = result.fluid;
+	f.kind = uint8_t(integer(inLua, fluid, "kind", -1, 0, 2));
+	f.height = scalar(inLua, fluid, "height", -1);
+	require(f.height >= 0 && f.height <= 1, "invalid fluid height");
+	const auto boolean = [&](const char *inName)
+	{
+		inLua->GetField(fluid, inName);
+		require(inLua->IsType(-1, Type::Bool), "missing fluid boolean property");
+		const bool value = inLua->GetBool(-1);
+		inLua->Pop();
 		return value;
 	};
 	f.solid = boolean("solid");
@@ -294,33 +313,33 @@ world::Profile profile(ILuaBase *lua, int table)
 	f.ice = boolean("ice");
 	result.fluidSolid = boolean("lightSolid");
 	const bool full = boolean("full"), empty = boolean("empty");
-	lua->GetField(fluid, "boxes");
-	const int boxes = lua->Top();
-	require(lua->IsType(boxes, Type::Table), "missing fluid collision boxes");
-	const int count = lua->ObjLen(boxes);
+	inLua->GetField(fluid, "boxes");
+	const int boxes = inLua->Top();
+	require(inLua->IsType(boxes, Type::Table), "missing fluid collision boxes");
+	const int count = inLua->ObjLen(boxes);
 	require(count >= 0 && count <= 4096, "fluid collision box limit");
 	std::vector<l2::FluidBox> values;
 	values.reserve(count);
 	for (int i = 1; i <= count; ++i)
 	{
-		lua->PushNumber(i);
-		lua->RawGet(boxes);
-		const int box = lua->Top();
-		require(lua->IsType(box, Type::Table) && lua->ObjLen(box) == 6, "invalid fluid collision box");
+		inLua->PushNumber(i);
+		inLua->RawGet(boxes);
+		const int box = inLua->Top();
+		require(inLua->IsType(box, Type::Table) && inLua->ObjLen(box) == 6, "invalid fluid collision box");
 		l2::FluidBox value;
 		for (unsigned a = 0; a < 6; ++a)
 		{
-			lua->PushNumber(a + 1);
-			lua->RawGet(box);
-			require(lua->IsType(-1, Type::Number), "invalid fluid collision coordinate");
-			value[a] = lua->GetNumber(-1);
-			lua->Pop();
+			inLua->PushNumber(a + 1);
+			inLua->RawGet(box);
+			require(inLua->IsType(-1, Type::Number), "invalid fluid collision coordinate");
+			value[a] = inLua->GetNumber(-1);
+			inLua->Pop();
 		}
 		values.push_back(value);
-		lua->Pop();
+		inLua->Pop();
 	}
 	l2::compileFluidCoverage(f, full, empty, values);
-	lua->Pop(2);
+	inLua->Pop(2);
 	result.validate();
 	return result;
 }
@@ -344,7 +363,7 @@ std::shared_ptr<const world::Catalog> catalog(ILuaBase *lua, int table)
 	{
 		lua->PushNumber(i);
 		lua->RawGet(profilesTable);
-		profiles.push_back(profile(lua, lua->Top()));
+		profiles.push_back(ParseProfile(lua, lua->Top()));
 		value->shapeBytes += profiles.back().shape->bytes();
 		lua->Pop();
 	}
@@ -367,25 +386,37 @@ std::shared_ptr<const world::Catalog> catalog(ILuaBase *lua, int table)
 		value->contextual.assign(data, data + length);
 	}
 	lua->Pop();
+	lua->GetField(table, "blockEntityStates");
+	if (!lua->IsType(-1, Type::Nil))
+	{
+		require(lua->IsType(-1, Type::String), "native block entity flags must be a binary string");
+		unsigned length = 0;
+		const auto *data = reinterpret_cast<const uint8_t *>(lua->GetString(-1, &length));
+		require(length == count, "native block entity flags have wrong length");
+		value->mBlockEntityStates.assign(data, data + length);
+	}
+	lua->Pop();
 	value->validate();
 	return value;
 }
-std::vector<world::Mutation> batch(ILuaBase *lua, int table, const world::Store &store)
+std::vector<world::Mutation> ParseBatch(ILuaBase *inLua, int inTable, const world::Store &inStore,
+								 uint64_t &outShapeReferences)
 {
-	require(lua->IsType(table, Type::Table), "native world batch must be an array");
-	const int size = lua->ObjLen(table);
+	const auto state_catalog = inStore.catalog();
+	require(inLua->IsType(inTable, Type::Table), "native world batch must be an array");
+	const int size = inLua->ObjLen(inTable);
 	require(size >= 0 && size <= 64, "native world batch exceeds 64 chunks");
 	std::vector<world::Mutation> result;
 	result.reserve(size);
 	for (int i = 1; i <= size; ++i)
 	{
-		lua->PushNumber(i);
-		lua->RawGet(table);
-		const int row = lua->Top();
-		require(lua->IsType(row, Type::Table), "native mutation must be a table");
+		inLua->PushNumber(i);
+		inLua->RawGet(inTable);
+		const int row = inLua->Top();
+		require(inLua->IsType(row, Type::Table), "native mutation must be a table");
 		world::Mutation mutation;
-		mutation.chunk = coord(lua, row);
-		const auto op = string(lua, row, "op");
+		mutation.chunk = coord(inLua, row);
+		const auto op = string(inLua, row, "op");
 		if (op == "replace")
 			mutation.kind = world::Mutation::Kind::Replace;
 		else if (op == "patch")
@@ -394,56 +425,56 @@ std::vector<world::Mutation> batch(ILuaBase *lua, int table, const world::Store 
 			mutation.kind = world::Mutation::Kind::Unload;
 		else
 			throw std::runtime_error("unknown native world mutation");
-		mutation.terrainPresent = flag(lua, row, "terrainPresent", true);
-		lua->GetField(row, "cells");
-		if (!lua->IsType(-1, Type::Nil))
+		mutation.terrainPresent = flag(inLua, row, "terrainPresent", true);
+		inLua->GetField(row, "cells");
+		if (!inLua->IsType(-1, Type::Nil))
 		{
-			const int cells = lua->Top();
-			require(lua->IsType(cells, Type::Table), "native cells must be a flat index/state array");
-			const int count = lua->ObjLen(cells);
-			require(count >= 0 && count % 2 == 0 && unsigned(count / 2) <= store.config().cellCount(),
+			const int cells = inLua->Top();
+			require(inLua->IsType(cells, Type::Table), "native cells must be a flat index/state array");
+			const int count = inLua->ObjLen(cells);
+			require(count >= 0 && count % 2 == 0 && unsigned(count / 2) <= inStore.config().cellCount(),
 					"native mutation cell count is invalid");
 			mutation.cells.reserve(count / 2);
 			for (int c = 1; c <= count; c += 2)
 			{
-				lua->PushNumber(c);
-				lua->RawGet(cells);
-				const auto li = unsigned(number(lua, -1, 0, store.config().cellCount() - 1));
-				lua->Pop();
-				lua->PushNumber(c + 1);
-				lua->RawGet(cells);
-				const auto state = uint32_t(number(lua, -1, 0, 1048575));
-				lua->Pop();
+				inLua->PushNumber(c);
+				inLua->RawGet(cells);
+				const auto li = unsigned(number(inLua, -1, 0, inStore.config().cellCount() - 1));
+				inLua->Pop();
+				inLua->PushNumber(c + 1);
+				inLua->RawGet(cells);
+				const auto state = uint32_t(number(inLua, -1, 0, 1048575));
+				inLua->Pop();
 				mutation.cells.push_back({li, state});
 			}
 		}
-		lua->Pop();
-		lua->GetField(row, "contexts");
-		if (!lua->IsType(-1, Type::Nil))
+		inLua->Pop();
+		inLua->GetField(row, "contexts");
+		if (!inLua->IsType(-1, Type::Nil))
 		{
-			const int contexts = lua->Top();
-			require(lua->IsType(contexts, Type::Table), "native contexts must be an array");
-			const int count = lua->ObjLen(contexts);
-			require(count >= 0 && unsigned(count) <= store.config().cellCount(), "native context count is invalid");
+			const int contexts = inLua->Top();
+			require(inLua->IsType(contexts, Type::Table), "native contexts must be an array");
+			const int count = inLua->ObjLen(contexts);
+			require(count >= 0 && unsigned(count) <= inStore.config().cellCount(), "native context count is invalid");
 			mutation.contexts.reserve(count);
 			for (int c = 1; c <= count; ++c)
 			{
-				lua->PushNumber(c);
-				lua->RawGet(contexts);
-				const int entry = lua->Top();
-				require(lua->IsType(entry, Type::Table), "native context must be a typed profile");
+				inLua->PushNumber(c);
+				inLua->RawGet(contexts);
+				const int entry = inLua->Top();
+				require(inLua->IsType(entry, Type::Table), "native context must be a typed profile");
 				world::ContextEdit context;
-				context.index = unsigned(integer(lua, entry, "index", -1, 0, store.config().cellCount() - 1));
-				context.clear = flag(lua, entry, "clear", false);
+				context.index = unsigned(integer(inLua, entry, "index", -1, 0, inStore.config().cellCount() - 1));
+				context.clear = flag(inLua, entry, "clear", false);
 				if (!context.clear)
-					context.value = profile(lua, entry);
+					context.value = ParseProfile(inLua, entry, state_catalog.get(), &outShapeReferences);
 				mutation.contexts.push_back(context);
-				lua->Pop();
+				inLua->Pop();
 			}
 		}
-		lua->Pop();
+		inLua->Pop();
 		result.push_back(std::move(mutation));
-		lua->Pop();
+		inLua->Pop();
 	}
 	return result;
 }
@@ -455,45 +486,68 @@ LUA_FUNCTION(getVersion)
 LUA_FUNCTION(applyBatch)
 {
 	return boundary(LUA, [&]
-					{
-        auto& value = session(LUA, 1);
-        const auto revision = checkVersion(LUA, 2, value.store());
-        require(value.apply(revision, batch(LUA, 3, value.store())), "native mutation version changed");
-        version(LUA, value.store());
-        return 1; });
-}
-void decodedChunks(ILuaBase *lua, const world::DecodedResult &result, const std::vector<unsigned> &indices)
-{
-	lua->CreateTable();
-	unsigned out = 1, blocks = 0;
-	for (auto index : indices)
 	{
-		const auto &chunk = result.chunks.at(index);
+		auto &value = session(LUA, 1);
+		const auto revision = checkVersion(LUA, 2, value.store());
+		uint64_t shape_references = 0;
+		auto mutations = ParseBatch(LUA, 3, value.store(), shape_references);
+		require(value.apply(revision, mutations), "native mutation version changed");
+		LUA->GetUserType<Handle>(1, worldType)->mContextShapeReferences += shape_references;
+		version(LUA, value.store());
+		return 1;
+	});
+}
+void PushDecodedChunks(ILuaBase *inLua, const world::DecodedResult &inResult, const std::vector<unsigned> &inIndices,
+					   bool inIncludeContexts, bool inIncludeBlockEntityCells)
+{
+	inLua->CreateTable();
+	unsigned output_index = 1, blocks = 0;
+	for (auto index : inIndices)
+	{
+		const auto &chunk = inResult.chunks.at(index);
 		blocks += chunk.count;
-		lua->PushNumber(out++);
-		lua->CreateTable();
-		field(lua, "cx", chunk.coord.x);
-		field(lua, "cy", chunk.coord.y);
-		field(lua, "cz", chunk.coord.z);
-		field(lua, "count", chunk.count);
-		lua->PushString(chunk.blockEntitiesJSON.data(), unsigned(chunk.blockEntitiesJSON.size()));
-		lua->SetField(-2, "blockEntitiesJSON");
-		lua->CreateTable();
-		unsigned cell = 1;
-		for (const auto &entry : chunk.contextCells)
+		inLua->PushNumber(output_index++);
+		inLua->CreateTable();
+		field(inLua, "cx", chunk.coord.x);
+		field(inLua, "cy", chunk.coord.y);
+		field(inLua, "cz", chunk.coord.z);
+		field(inLua, "count", chunk.count);
+		inLua->PushString(chunk.blockEntitiesJSON.data(), unsigned(chunk.blockEntitiesJSON.size()));
+		inLua->SetField(-2, "blockEntitiesJSON");
+		inLua->CreateTable();
+		if (inIncludeContexts)
 		{
-			lua->PushNumber(cell++);
-			lua->PushNumber(entry.index);
-			lua->RawSet(-3);
-			lua->PushNumber(cell++);
-			lua->PushNumber(entry.state);
-			lua->RawSet(-3);
+			unsigned cell_index = 1;
+			for (const auto &entry : chunk.contextCells)
+			{
+				inLua->PushNumber(cell_index++);
+				inLua->PushNumber(entry.index);
+				inLua->RawSet(-3);
+				inLua->PushNumber(cell_index++);
+				inLua->PushNumber(entry.state);
+				inLua->RawSet(-3);
+			}
 		}
-		lua->SetField(-2, "contextCells");
-		lua->RawSet(-3);
+		inLua->SetField(-2, "contextCells");
+		if (inIncludeBlockEntityCells && inResult.mBlockEntityCellsComplete)
+		{
+			inLua->CreateTable();
+			unsigned cell_index = 1;
+			for (const auto &entry : chunk.mBlockEntityCells)
+			{
+				inLua->PushNumber(cell_index++);
+				inLua->PushNumber(entry.index);
+				inLua->RawSet(-3);
+				inLua->PushNumber(cell_index++);
+				inLua->PushNumber(entry.state);
+				inLua->RawSet(-3);
+			}
+			inLua->SetField(-2, "blockEntityCells");
+		}
+		inLua->RawSet(-3);
 	}
-	lua->SetField(-2, "chunks");
-	field(lua, "blocks", blocks);
+	inLua->SetField(-2, "chunks");
+	field(inLua, "blocks", blocks);
 }
 LUA_FUNCTION(startDecode)
 {
@@ -516,6 +570,180 @@ LUA_FUNCTION(startDecode)
         pushToken(LUA, value.startDecode(meta, std::vector<uint8_t>(data, data + size)));
         return 1; });
 }
+void PushTransportStatus(ILuaBase *inLua, const world::TransportStatus &inStatus)
+{
+	const char *names[] = {"receiving", "queued", "running", "ready", "failed"};
+	inLua->CreateTable();
+	text(inLua, "status", names[unsigned(inStatus.mState)]);
+	if (!inStatus.mError.empty())
+		text(inLua, "error", inStatus.mError.c_str());
+	field(inLua, "receivedParts", inStatus.mReceivedParts);
+	field(inLua, "receivedBytes", double(inStatus.mReceivedBytes));
+	if (inStatus.mState != world::ETransportState::Ready)
+		return;
+	boolean(inLua, "binary", inStatus.mBinary);
+	field(inLua, "chunkCount", inStatus.mChunks);
+	field(inLua, "cellCount", inStatus.mCells);
+	field(inLua, "validateMS", inStatus.mValidateMS);
+	inLua->CreateTable();
+	unsigned index = 0;
+	for (const auto &batch : inStatus.mBatches)
+	{
+		inLua->PushNumber(++index);
+		inLua->CreateTable();
+		field(inLua, "compression", batch.compression);
+		field(inLua, "rawBytes", batch.rawBytes);
+		field(inLua, "chunkCount", batch.chunks);
+		field(inLua, "cellCount", batch.cells);
+		inLua->RawSet(-3);
+	}
+	inLua->SetField(-2, "batches");
+}
+
+LUA_FUNCTION(BeginTransport)
+{
+	return boundary(LUA, [&]
+	{
+		auto &value = session(LUA, 1);
+		checkVersion(LUA, 2, value.store());
+		require(LUA->IsType(3, Type::Table), "native transport requires metadata");
+		world::TransportInput input;
+		input.mSnapshot = flag(LUA, 3, "snapshot", false);
+		input.mGeneration = uint32_t(integer(LUA, 3, "generation", -1, 0, UINT32_MAX));
+		input.mRevision = uint32_t(integer(LUA, 3, "revision", -1, 0, UINT32_MAX));
+		input.mPartCount = unsigned(integer(LUA, 3, "partCount", -1, 1, 65535));
+		input.mPartBytes = unsigned(integer(LUA, 3, "partBytes", -1, 1, 65535));
+		input.mTotalBytes = size_t(integer(LUA, 3, "totalBytes", -1, 4, 64 * 1024 * 1024));
+		input.mChunkSize = value.store().config().chunkSize;
+		input.mChunkHeight = value.store().config().chunkHeight;
+		input.mSectionCount = value.store().config().sectionCount();
+		if (!input.mSnapshot)
+		{
+			input.mPatch.generation = input.mGeneration;
+			input.mPatch.revision = input.mRevision;
+			input.mPatch.compression = uint8_t(integer(LUA, 3, "compression", -1, 0, 1));
+			input.mPatch.rawBytes = uint32_t(integer(LUA, 3, "rawBytes", -1, 14, 16 * 1024 * 1024));
+			input.mPatch.chunks = uint32_t(integer(LUA, 3, "chunkCount", -1, 1, 64));
+			input.mPatch.cells = uint32_t(integer(LUA, 3, "cellCount", -1, 0, 131072));
+		}
+		pushToken(LUA, value.GetTransport().Begin(input));
+		return 1;
+	});
+}
+
+LUA_FUNCTION(ReadTransportPart)
+{
+	return boundary(LUA, [&]
+	{
+		// GMod exposes net.ReadData, not its active bf_read. Use a protected call
+		// and immediately copy into the Native owner; never return the string to
+		// the Lua receive callback or retain a registry reference to it.
+		const auto id = token(LUA, 2);
+		const auto part = unsigned(number(LUA, 3, 0, 65534));
+		const auto length = unsigned(number(LUA, 4, 1, 65535));
+		LUA->GetField(INDEX_GLOBAL, "net");
+		require(LUA->IsType(-1, Type::Table), "native transport requires net library");
+		LUA->GetField(-1, "ReadData");
+		require(LUA->IsType(-1, Type::Function), "native transport requires net.ReadData");
+		LUA->Remove(-2);
+		LUA->PushNumber(length);
+		if (LUA->PCall(1, 1, 0) != 0)
+		{
+			const auto *error = LUA->IsType(-1, Type::String) ? LUA->GetString(-1) : nullptr;
+			throw std::runtime_error(error ? error : "native transport net.ReadData failed");
+		}
+		require(LUA->IsType(-1, Type::String), "native transport net.ReadData returned no bytes");
+		unsigned size = 0;
+		const auto *bytes = reinterpret_cast<const uint8_t *>(LUA->GetString(-1, &size));
+		require(size == length, "native transport net.ReadData length mismatch");
+		const auto status = session(LUA, 1).GetTransport().Accept(id, part, bytes, size);
+		LUA->Pop();
+		PushTransportStatus(LUA, status);
+		return 1;
+	});
+}
+
+LUA_FUNCTION(AcceptTransportPart)
+{
+	return boundary(LUA, [&]
+	{
+		require(LUA->IsType(4, Type::String), "native transport part requires bytes");
+		unsigned size = 0;
+		const auto *bytes = reinterpret_cast<const uint8_t *>(LUA->GetString(4, &size));
+		const auto status = session(LUA, 1).GetTransport().Accept(token(LUA, 2),
+			unsigned(number(LUA, 3, 0, 65534)), bytes, size);
+		PushTransportStatus(LUA, status);
+		return 1;
+	});
+}
+
+LUA_FUNCTION(SealTransport)
+{
+	return boundary(LUA, [&]
+	{
+		require(LUA->IsType(3, Type::String), "native transport requires CRC string");
+		unsigned size = 0;
+		const auto *crc = LUA->GetString(3, &size);
+		session(LUA, 1).GetTransport().Seal(token(LUA, 2), std::string(crc, size));
+		LUA->PushBool(true);
+		return 1;
+	});
+}
+
+LUA_FUNCTION(PollTransport)
+{
+	return boundary(LUA, [&]
+	{
+		PushTransportStatus(LUA, session(LUA, 1).GetTransport().Poll(token(LUA, 2)));
+		return 1;
+	});
+}
+
+LUA_FUNCTION(StartTransportDecode)
+{
+	return boundary(LUA, [&]
+	{
+		auto &value = session(LUA, 1);
+		checkVersion(LUA, 2, value.store());
+		pushToken(LUA, value.StartTransportDecode(token(LUA, 3), unsigned(number(LUA, 4, 1, 65535)) - 1));
+		return 1;
+	});
+}
+
+LUA_FUNCTION(TakeLegacyTransport)
+{
+	return boundary(LUA, [&]
+	{
+		const auto bytes = session(LUA, 1).GetTransport().TakeLegacy(token(LUA, 2));
+		LUA->PushString(reinterpret_cast<const char *>(bytes.data()), unsigned(bytes.size()));
+		return 1;
+	});
+}
+
+LUA_FUNCTION(CancelTransport)
+{
+	return boundary(LUA, [&]
+	{
+		session(LUA, 1).GetTransport().Release(token(LUA, 2));
+		LUA->PushBool(true);
+		return 1;
+	});
+}
+
+LUA_FUNCTION(GetTransportStats)
+{
+	return boundary(LUA, [&]
+	{
+		const auto stats = session(LUA, 1).GetTransport().GetStats();
+		LUA->CreateTable();
+		field(LUA, "jobs", double(stats.mJobs));
+		field(LUA, "running", double(stats.mRunning));
+		field(LUA, "retainedBytes", double(stats.mRetainedBytes));
+		field(LUA, "reservedBytes", double(stats.mReservedBytes));
+		return 1;
+	});
+}
+
 LUA_FUNCTION(pollDecode)
 {
 	return boundary(LUA, [&]
@@ -532,35 +760,43 @@ LUA_FUNCTION(pollDecode)
             field(LUA, "decompressMS", result.decompressMS); field(LUA, "parseMS", result.parseMS);
             std::vector<unsigned> indices;
             for (unsigned i = 0; i < result.chunks.size(); ++i) indices.push_back(i);
-            decodedChunks(LUA, result, indices);
+            PushDecodedChunks(LUA, result, indices, true, false);
         }
         return 1; });
 }
 LUA_FUNCTION(commitDecode)
 {
 	return boundary(LUA, [&]
-					{
-        auto& value = session(LUA, 1);
-        const auto revision = checkVersion(LUA, 2, value.store());
-        const auto id = token(LUA, 3);
-        const auto decoded = value.pollDecode(id).result;
-        require(decoded != nullptr, "native binary decode is not ready");
-        require(LUA->IsType(4, Type::Table), "native binary include must be an array");
-        const auto count = LUA->ObjLen(4);
-        require(count >= 0 && size_t(count) <= decoded->chunks.size(), "invalid native binary include length");
-        std::vector<unsigned> include;
-        for (int i = 1; i <= count; ++i) {
-            LUA->PushNumber(i); LUA->RawGet(4);
-            include.push_back(unsigned(number(LUA, -1, 1, double(decoded->chunks.size()))) - 1);
-            LUA->Pop();
-        }
-        std::vector<world::Mutation> contexts;
-        if (!LUA->IsType(5, Type::Nil)) contexts = batch(LUA, 5, value.store());
-        // Prepare all Lua result allocations before changing native world ownership.
-        LUA->CreateTable();
-        decodedChunks(LUA, *decoded, include);
-        require(value.commitDecode(revision, id, include, contexts), "stale native binary decode");
-        return 1; });
+	{
+		auto &value = session(LUA, 1);
+		const auto revision = checkVersion(LUA, 2, value.store());
+		const auto id = token(LUA, 3);
+		const auto decoded = value.pollDecode(id).result;
+		require(decoded != nullptr, "native binary decode is not ready");
+		require(LUA->IsType(4, Type::Table), "native binary include must be an array");
+		const auto count = LUA->ObjLen(4);
+		require(count >= 0 && size_t(count) <= decoded->chunks.size(), "invalid native binary include length");
+		std::vector<unsigned> include;
+		for (int i = 1; i <= count; ++i)
+		{
+			LUA->PushNumber(i);
+			LUA->RawGet(4);
+			include.push_back(unsigned(number(LUA, -1, 1, double(decoded->chunks.size()))) - 1);
+			LUA->Pop();
+		}
+		std::vector<world::Mutation> contexts;
+		uint64_t shape_references = 0;
+		if (!LUA->IsType(5, Type::Nil))
+			contexts = ParseBatch(LUA, 5, value.store(), shape_references);
+		require(LUA->IsType(6, Type::Nil) || LUA->IsType(6, Type::Bool), "invalid native binary context result flag");
+		const bool include_contexts = LUA->IsType(6, Type::Nil) || LUA->GetBool(6);
+		// Prepare all Lua result allocations before changing native world ownership.
+		LUA->CreateTable();
+		PushDecodedChunks(LUA, *decoded, include, include_contexts, true);
+		require(value.commitDecode(revision, id, include, contexts), "stale native binary decode");
+		LUA->GetUserType<Handle>(1, worldType)->mContextShapeReferences += shape_references;
+		return 1;
+	});
 }
 LUA_FUNCTION(cancelDecode)
 {
@@ -640,26 +876,60 @@ LUA_FUNCTION(getCells)
 LUA_FUNCTION(getSectionCells)
 {
 	return boundary(LUA, [&]
-					{
-        const auto& store = session(LUA, 1).store();
-        const auto chunk = cellCoord(LUA, 2);
-        const auto& cfg = store.config();
-        cfg.validateChunk(chunk);
-        const auto section = unsigned(number(LUA, 5, 1, cfg.sectionCount())) - 1;
-        const unsigned size = unsigned(cfg.sectionSize), xy = unsigned(cfg.chunkSize) / size;
-        const unsigned x0 = section % xy * size, y0 = section / xy % xy * size, z0 = section / (xy * xy) * size;
-        LUA->CreateTable();
-        unsigned at = 1;
-        for (unsigned z = z0; z < z0 + size; ++z)
-            for (unsigned y = y0; y < y0 + size; ++y)
-                for (unsigned x = x0; x < x0 + size; ++x) {
-                    const auto li = x + unsigned(cfg.chunkSize) * (y + unsigned(cfg.chunkSize) * z);
-                    const auto state = store.state(cfg.cellAt(chunk, li));
-                    if (!state) continue;
-                    LUA->PushNumber(at++); LUA->PushNumber(li); LUA->RawSet(-3);
-                    LUA->PushNumber(at++); LUA->PushNumber(state); LUA->RawSet(-3);
-                }
-        return 1; });
+	{
+		const auto &store = session(LUA, 1).store();
+		const auto chunk_coord = cellCoord(LUA, 2);
+		const auto section_index = unsigned(number(LUA, 5, 1, store.config().sectionCount())) - 1;
+		const auto cells = store.ReadSectionCells(chunk_coord, section_index);
+		LUA->CreateTable();
+		unsigned at = 1;
+		for (const auto &cell : cells)
+		{
+			LUA->PushNumber(at++);
+			LUA->PushNumber(cell.index);
+			LUA->RawSet(-3);
+			LUA->PushNumber(at++);
+			LUA->PushNumber(cell.state);
+			LUA->RawSet(-3);
+		}
+		return 1;
+	});
+}
+LUA_FUNCTION(GetSectionCellsFiltered)
+{
+	return boundary(LUA, [&]
+	{
+		const auto &store = session(LUA, 1).store();
+		const auto chunk_coord = cellCoord(LUA, 2);
+		const auto section_index = unsigned(number(LUA, 5, 1, store.config().sectionCount())) - 1;
+		require(LUA->IsType(6, Type::Table), "native section state filter must be an array");
+		const int count = LUA->ObjLen(6);
+		const int size = store.config().sectionSize;
+		require(count >= 0 && count <= size * size * size, "native section state filter is too large");
+		std::unordered_set<uint32_t> states;
+		states.reserve(size_t(count));
+		for (int i = 1; i <= count; ++i)
+		{
+			LUA->PushNumber(i);
+			LUA->RawGet(6);
+			const auto state = uint32_t(number(LUA, -1, 1, double(store.catalog()->states.size()) - 1));
+			LUA->Pop();
+			require(states.emplace(state).second, "duplicate native section filter state");
+		}
+		const auto cells = store.ReadSectionCells(chunk_coord, section_index, &states);
+		LUA->CreateTable();
+		unsigned at = 1;
+		for (const auto &cell : cells)
+		{
+			LUA->PushNumber(at++);
+			LUA->PushNumber(cell.index);
+			LUA->RawSet(-3);
+			LUA->PushNumber(at++);
+			LUA->PushNumber(cell.state);
+			LUA->RawSet(-3);
+		}
+		return 1;
+	});
 }
 LUA_FUNCTION(getSectionInfo)
 {
@@ -737,10 +1007,13 @@ LUA_FUNCTION(requestLight)
 LUA_FUNCTION(reset)
 {
 	return boundary(LUA, [&]
-					{
-        session(LUA, 1).reset(config(LUA, 2), catalog(LUA, 3));
-        version(LUA, session(LUA, 1).store());
-        return 1; });
+	{
+		auto &value = session(LUA, 1);
+		value.reset(config(LUA, 2), catalog(LUA, 3));
+		LUA->GetUserType<Handle>(1, worldType)->mContextShapeReferences = 0;
+		version(LUA, value.store());
+		return 1;
+	});
 }
 LUA_FUNCTION(reconfigure)
 {
@@ -753,18 +1026,26 @@ LUA_FUNCTION(reconfigure)
 LUA_FUNCTION(stats)
 {
 	return boundary(LUA, [&]
-					{
-        const auto& value = session(LUA, 1);
-        const auto worker = value.workerStats();
-        version(LUA, value.store());
-        field(LUA, "chunks", double(value.store().chunkCount()));
-        field(LUA, "lightChunks", double(value.store().lightChunkCount()));
-        field(LUA, "submitted", double(worker.submitted)); field(LUA, "completed", double(worker.completed));
-        field(LUA, "failed", double(worker.failed)); field(LUA, "cancelled", double(worker.cancelled));
-        field(LUA, "computeMS", worker.computeMS); field(LUA, "diffMS", worker.diffMS);
-        field(LUA, "commitMS", value.commitMS()); field(LUA, "snapshotMS", value.snapshotMS());
-        boolean(LUA, "busy", worker.busy); boolean(LUA, "running", worker.running); boolean(LUA, "pending", value.pending());
-        return 1; });
+	{
+		const auto &value = session(LUA, 1);
+		const auto worker = value.workerStats();
+		version(LUA, value.store());
+		field(LUA, "chunks", double(value.store().chunkCount()));
+		field(LUA, "lightChunks", double(value.store().lightChunkCount()));
+		field(LUA, "submitted", double(worker.submitted));
+		field(LUA, "completed", double(worker.completed));
+		field(LUA, "failed", double(worker.failed));
+		field(LUA, "cancelled", double(worker.cancelled));
+		field(LUA, "computeMS", worker.computeMS);
+		field(LUA, "diffMS", worker.diffMS);
+		field(LUA, "commitMS", value.commitMS());
+		field(LUA, "snapshotMS", value.snapshotMS());
+		field(LUA, "contextShapeReferences", double(LUA->GetUserType<Handle>(1, worldType)->mContextShapeReferences));
+		boolean(LUA, "busy", worker.busy);
+		boolean(LUA, "running", worker.running);
+		boolean(LUA, "pending", value.pending());
+		return 1;
+	});
 }
 LUA_FUNCTION(closeWorld)
 {
@@ -793,6 +1074,15 @@ void initialize(ILuaBase *lua)
 	function(lua, "Version", getVersion);
 	function(lua, "ApplyBatch", applyBatch);
 	function(lua, "StartBinaryDecode", startDecode);
+	function(lua, "BeginTransport", BeginTransport);
+	function(lua, "ReadTransportPart", ReadTransportPart);
+	function(lua, "AcceptTransportPart", AcceptTransportPart);
+	function(lua, "SealTransport", SealTransport);
+	function(lua, "PollTransport", PollTransport);
+	function(lua, "StartTransportDecode", StartTransportDecode);
+	function(lua, "TakeLegacyTransport", TakeLegacyTransport);
+	function(lua, "CancelTransport", CancelTransport);
+	function(lua, "GetTransportStats", GetTransportStats);
 	function(lua, "PollBinaryDecode", pollDecode);
 	function(lua, "CommitBinaryDecode", commitDecode);
 	function(lua, "CancelBinaryDecode", cancelDecode);
@@ -801,6 +1091,7 @@ void initialize(ILuaBase *lua)
 	function(lua, "IsKnown", isKnown);
 	function(lua, "GetChunkCells", getCells);
 	function(lua, "GetSectionCells", getSectionCells);
+	function(lua, "GetSectionCellsFiltered", GetSectionCellsFiltered);
 	function(lua, "GetSectionInfo", getSectionInfo);
 	function(lua, "GetChunkInfo", getChunkInfo);
 	function(lua, "GetLight", getLight);
@@ -829,9 +1120,13 @@ int capabilities(ILuaBase *lua)
 	field(lua, "worldLighting", 1);
 	field(lua, "l2Snapshot", 1);
 	field(lua, "binarySection", 1);
+	field(lua, "nativeTransport", 1);
 	field(lua, "terrainWorker", 1);
 	field(lua, "fluidWorker", 1);
 	field(lua, "shapeWorker", 1);
+	field(lua, "sectionCellFilter", 1);
+	field(lua, "mixedWorldTopology", 1);
+	field(lua, "catalogShapeReferences", 1);
 	field(lua, "generalModelWorker", 1);
 	field(lua, "sectionLightReadiness", 1);
 	field(lua, "worldAdapter", 1);

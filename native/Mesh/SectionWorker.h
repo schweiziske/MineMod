@@ -3,6 +3,7 @@
 #include "Mesh/FluidGeometry.h"
 #include "Mesh/ModelShapes.h"
 #include "Mesh/LightPixels.h"
+#include "Core/CpuWorkGate.h"
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -145,6 +146,8 @@ struct Job
 };
 struct WorkerStats
 {
+	// running/peakRunning include workers waiting for the shared CPU gate.
+	// GetL2Stats cpuActive/cpuPeakActive report admitted background tasks.
 	unsigned workers = 0, queued = 0, running = 0, ready = 0, peakRunning = 0;
 	size_t	 bytes = 0;
 	uint64_t submitted = 0, completed = 0, cancelled = 0;
@@ -172,6 +175,7 @@ public:
 	WorkerStats				   stats() const;
 
 private:
+	std::shared_ptr<core::CpuWorkGate> mCpuWorkGate = core::GetCpuWorkGate();
 	void											   run();
 	void											   releaseShared(const Job &job, size_t count);
 	mutable std::mutex								   mutex_;

@@ -239,9 +239,11 @@ function D.RegisterMaterial( base, program, owner, source, stage, blockSize, map
 	if maps and not sprite and not maps.water then
 		R.Require( maps.dfg ~= nil, "dynamic_light_dfg", "PBR local lights require the base material DFG texture" )
 	end
+	local data = R.DynamicLightTexture()
 	if D.materials[base] then
 		local material = D.materials[base].material
 		material:SetTexture("$basetexture", source)
+		material:SetTexture( "$texture2", data )
 		if maps and not sprite then
 			material:SetTexture("$texture3", maps.normal)
 			material:SetTexture("$texture4", maps.orm)
@@ -255,7 +257,6 @@ function D.RegisterMaterial( base, program, owner, source, stage, blockSize, map
 	end
 	R.Require( D.materialCount < 4096, "dynamic_light_material_budget", "4096 local-light materials reached; restart the client" )
 	R.Require( BLEND_ONE_MINUS_DST_COLOR ~= nil, "dynamic_light_blend_api", "destination-colour blend factor is unavailable" )
-	local data = R.DynamicLightTexture()
 	local pbr = maps ~= nil and not sprite
 	local params = {
 		["$vertexshader"] = program.vertex, ["$pixshader"] = program.pixel,
@@ -279,6 +280,7 @@ function D.RegisterMaterial( base, program, owner, source, stage, blockSize, map
 	end
 	local material = CreateMaterial( "mc_dynamic_light2_" .. D.materialCount, "screenspace_general_8tex", params )
 	R.Require( material and not material:IsError(), "dynamic_light_material", "could not create local-light material" )
+	material:SetTexture( "$texture2", data )
 	if pbr and not maps.water then material:SetTexture("$texture7", maps.dfg) end
 	if MC.ResourceGeneration then
 		if pbr then MC.RenderPBR.BindSampling(material,source)

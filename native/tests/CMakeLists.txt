@@ -2,6 +2,13 @@ cmake_minimum_required(VERSION 3.20)
 project(mc_native_l2_tests LANGUAGES C CXX)
 
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/..")
+find_package(Threads REQUIRED)
+add_library(mc_native_cpu_work STATIC ../Core/CpuWorkGate.cpp)
+set_target_properties(mc_native_cpu_work PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_features(mc_native_cpu_work PUBLIC cxx_std_17)
+target_link_libraries(mc_native_cpu_work PUBLIC Threads::Threads)
+add_executable(mc_native_cpu_work_test cpu_work_gate_test.cpp)
+target_link_libraries(mc_native_cpu_work_test PRIVATE mc_native_cpu_work)
 
 add_library(mc_miniz STATIC ../include/miniz/miniz.c ../include/miniz/miniz_tinfl.c ../include/miniz/miniz_zip.c)
 target_include_directories(mc_miniz PRIVATE ../include)
@@ -27,11 +34,12 @@ else()
     target_compile_options(mc_native_atlas_pixels_probe PRIVATE -ffp-contract=off)
 endif()
 
-add_library(mc_native_world_decode STATIC ../World/WorldDecoder.cpp
+add_library(mc_native_world_decode STATIC ../World/WorldDecoder.cpp ../World/WorldTransport.cpp
     ../include/sourcesdk-minimal-x86-64-branch/utils/lzma/C/LzmaDec.c)
 target_include_directories(mc_native_world_decode PRIVATE
     ../include/rapidjson-master/include ../include/sourcesdk-minimal-x86-64-branch)
 target_compile_features(mc_native_world_decode PRIVATE cxx_std_17)
+target_link_libraries(mc_native_world_decode PUBLIC mc_native_cpu_work)
 
 add_library(mc_native_l2_probe SHARED l2_probe.cpp ../Mesh/SectionGeometry.cpp ../Mesh/SectionWorker.cpp ../Mesh/FluidGeometry.cpp)
 add_executable(mc_native_l2_core_test l2_core_test.cpp ../Mesh/SectionGeometry.cpp)
@@ -50,7 +58,9 @@ add_executable(mc_native_world_light_bench world_light_bench.cpp ../World/WorldS
 add_executable(mc_native_world_worker_test world_worker_test.cpp ../World/WorldSession.cpp ../World/LightWorker.cpp ../World/WorldStore.cpp ../Mesh/SectionGeometry.cpp)
 add_executable(mc_native_world_decode_test world_decode_test.cpp ../World/WorldSession.cpp ../World/LightWorker.cpp ../World/WorldStore.cpp ../Mesh/SectionGeometry.cpp)
 add_executable(mc_native_world_mesh_test world_mesh_test.cpp ../Mesh/WorldMeshInput.cpp ../World/WorldStore.cpp ../Mesh/SectionGeometry.cpp ../Mesh/SectionWorker.cpp ../Mesh/FluidGeometry.cpp)
-find_package(Threads REQUIRED)
+foreach(target mc_native_l2_probe mc_native_l2_draw_test mc_native_l2_worker_test mc_native_world_worker_test mc_native_world_decode_test mc_native_world_mesh_test)
+	target_link_libraries(${target} PRIVATE mc_native_cpu_work)
+endforeach()
 target_link_libraries(mc_native_l2_draw_test PRIVATE Threads::Threads)
 target_link_libraries(mc_native_l2_worker_test PRIVATE Threads::Threads)
 target_link_libraries(mc_native_l2_probe PRIVATE Threads::Threads)
@@ -68,6 +78,8 @@ foreach(target mc_native_l2_probe mc_native_l2_core_test mc_native_l2_draw_test 
     endif()
 endforeach()
 enable_testing()
+add_test(NAME cpu_work COMMAND mc_native_cpu_work_test)
+set_tests_properties(cpu_work PROPERTIES TIMEOUT 30)
 add_executable(mc_atlas_regions_test atlas_regions_test.cpp)
 target_compile_features(mc_atlas_regions_test PRIVATE cxx_std_17)
 add_test(NAME atlas_regions COMMAND mc_atlas_regions_test)

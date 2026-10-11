@@ -161,7 +161,9 @@ local function build( key, sectionIndex, lightOnly )
 			return false
 		end
 		if sectionIndex then
-			if not snapshots[sectionIndex].nativeOnly then topology = Occlusion.BuildTopology( snapshots[sectionIndex] ) end
+			if not snapshots[sectionIndex].nativeTopology and not snapshots[sectionIndex].nativeOnly then
+				topology = Occlusion.BuildTopology( snapshots[sectionIndex] )
+			end
 		else
 			topology = {}
 			for index = 1, Snapshot.SECTION_COUNT do topology[index] = Occlusion.BuildTopology( snapshots[index] ) end
@@ -181,7 +183,7 @@ local function build( key, sectionIndex, lightOnly )
 							ctx.beginSection( index )
 								local recipes
 								if ctx.nativeL2 then recipes = native.PrepareVoxels( ctx, index, snapshot ) end
-							for i = 1, snapshot.nativeOnly and 0 or snapshot.count do
+							for i = 1, snapshot.luaCount or ( snapshot.nativeOnly and 0 or snapshot.count ) do
 									if ( not recipes or not recipes[snapshot.states[i]] )
 										and RM.EmitBlock( ctx, snapshot.indices[i], snapshot.states[i] ) == false then
 									error( { code = "render_visibility_failed", message = ctx.visibility.error }, 0 )

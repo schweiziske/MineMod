@@ -1,5 +1,6 @@
 #include "Module/Pch.h"
 #include "Bindings/MeshBindings.h"
+#include "Core/CpuWorkGate.h"
 #include "Mesh/SectionGeometry.h"
 #include "Mesh/SectionWorker.h"
 #include "Bindings/DrawBindings.h"
@@ -394,7 +395,26 @@ int SubmitWorldSection(ILuaBase *inLua)
 			recipes.emplace(uint32_t(state), recipe);
 			inLua->Pop();
 		}
-		input->instances = std::make_shared<world::MeshInstances>(source, chunk, section, std::move(recipes), inLua->GetBool(9));
+		// Optional complete visual classification for mixed Native/Lua sections.
+		// Copy booleans at submission; no worker invokes the Lua classifier.
+		std::unordered_map<uint32_t, bool> blocking_states;
+		if (inLua->Top() >= 11 && !inLua->IsType(11, Type::Nil))
+		{
+			l2::require(inLua->IsType(11, Type::Table) && inLua->GetBool(9), "invalid mixed topology classification");
+			const auto size = store.config().sectionSize;
+			const size_t classification_limit = size_t(size) * size * size;
+			inLua->PushNil();
+			while (inLua->Next(11))
+			{
+				const auto state = l2::integer(ReadNumber(inLua, -2), 1, int(store.catalog()->states.size()) - 1, "invalid topology state");
+				l2::require(inLua->IsType(-1, Type::Bool), "invalid topology blocking flag");
+				blocking_states.emplace(uint32_t(state), inLua->GetBool(-1));
+				l2::require(blocking_states.size() <= classification_limit, "mixed topology classification is too large");
+				inLua->Pop();
+			}
+		}
+		input->instances = std::make_shared<world::MeshInstances>(source, chunk, section, std::move(recipes),
+			inLua->GetBool(9), std::move(blocking_states));
 		const int count = inLua->ObjLen(1);
 		l2::require(count >= 0, "invalid world section part count");
 		input->retainLighting = inLua->GetBool(9) && count == 0;
@@ -843,6 +863,21 @@ int Statistics(ILuaBase *inLua)
 	SetNumber(inLua, "snapshotMS", GetBindingState().mSnapshotMS);
 	SetNumber(inLua, "computeMS", s.computeMS);
 	SetNumber(inLua, "queueMS", s.queueMS);
+	const auto cpu = core::GetCpuWorkGate()->GetStats();
+	SetNumber(inLua, "cpuLimit", cpu.mLimit);
+	SetNumber(inLua, "cpuActive", cpu.mActive);
+	SetNumber(inLua, "cpuPeakActive", cpu.mPeakActive);
+	SetNumber(inLua, "cpuQueued", cpu.mQueued);
+	SetNumber(inLua, "cpuAdmitted", static_cast<double>(cpu.mAdmitted));
+	SetNumber(inLua, "cpuCancelled", static_cast<double>(cpu.mCancelled));
+	SetNumber(inLua, "cpuWaitMS", cpu.mWaitMS);
+	constexpr const char *active_names[] = {"cpuVisibilityActive", "cpuDecodeActive", "cpuLightingActive", "cpuMeshActive"};
+	constexpr const char *queued_names[] = {"cpuVisibilityQueued", "cpuDecodeQueued", "cpuLightingQueued", "cpuMeshQueued"};
+	for (size_t i = 0; i < core::cCpuWorkClassCount; ++i)
+	{
+		SetNumber(inLua, active_names[i], cpu.mActiveByClass[i]);
+		SetNumber(inLua, queued_names[i], cpu.mQueuedByClass[i]);
+	}
 	SetNumber(inLua, "uploadMS", GetBindingState().mUploadMS);
 	SetNumber(inLua, "sectionVoxels", static_cast<double>(s.sectionVoxels));
 	SetNumber(inLua, "sectionQuads", static_cast<double>(s.sectionQuads));

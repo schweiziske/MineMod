@@ -55,6 +55,7 @@ void VisibilityWorker::ScheduleLocked(const std::shared_ptr<Slot> &inSlot, std::
 	if (!mThread.joinable())
 	{
 		mStopping = false;
+		mCancelled.store(false, std::memory_order_relaxed);
 		mThread = std::thread(&VisibilityWorker::Run, this);
 	}
 	auto request = MakeRequestLocked(std::move(inScene), std::move(inGraph), inView);
@@ -136,9 +137,11 @@ void VisibilityWorker::Stop()
 	{
 		std::lock_guard<std::mutex> lock(mMutex);
 		mStopping = true;
+		mCancelled.store(true, std::memory_order_relaxed);
 		mQueue.clear();
 		mWake.notify_all();
 	}
+	mCpuWorkGate->NotifyCancellation();
 	if (mThread.joinable())
 		mThread.join();
 	std::lock_guard<std::mutex> lock(mMutex);
@@ -172,27 +175,32 @@ void VisibilityWorker::Run()
 		}
 		if (!request)
 			continue;
-		auto result = std::make_shared<VisibilityFrame>();
+		std::shared_ptr<VisibilityFrame> result;
 		try
 		{
-			*result = mEvaluator(request->mScene, request->mGraph, request->mView, request->mPortals);
+			auto permit = mCpuWorkGate->Acquire(core::ECpuWorkClass::Visibility, mCancelled);
+			if (permit)
+				result = std::make_shared<VisibilityFrame>(mEvaluator(request->mScene, request->mGraph, request->mView, request->mPortals));
 		}
 		catch (const std::exception &e)
 		{
-			*result = *request;
+			result = std::make_shared<VisibilityFrame>(*request);
 			result->mError = e.what();
 		}
 		catch (...)
 		{
-			*result = *request;
+			result = std::make_shared<VisibilityFrame>(*request);
 			result->mError = "unknown Native visibility worker failure";
 		}
 		{
 			std::lock_guard<std::mutex> lock(mMutex);
 			slot->mRunning.reset();
-			PublishLocked(*slot, request, std::move(result));
 			--mStats.mRunning;
-			++mStats.mCompleted;
+			if (result && !mStopping)
+			{
+				PublishLocked(*slot, request, std::move(result));
+				++mStats.mCompleted;
+			}
 		}
 	}
 }

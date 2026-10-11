@@ -13,6 +13,7 @@ N.probed = false
 N.cubeRecipes = {}
 N.voxelBlocks, N.fallbackBlocks = 0, 0
 N.worldBlocks, N.worldSections = 0, 0
+N.filteredSections, N.filteredLuaCells, N.filteredWorldCells = 0, 0, 0
 N.relightSections, N.relightFallbacks, N.relightUploadMS = 0, 0, 0
 N.recipeMS, N.recipeMisses, N.recipeHits = 0, 0, 0
 N.recipeCubeStates, N.recipeModelStates, N.recipeFallbackStates = 0, 0, 0
@@ -27,6 +28,7 @@ function N.Probe()
 	N.probed, N.module, N.available, N.voxelAvailable = true, module, false, false
 	N.modelAvailable, N.worldAvailable, N.relightAvailable = false, false, false
 	N.deferredLightingAvailable = false
+	N.mixedTopologyAvailable = false
 	N.fluidAvailable = false
 	N.reason = MC.NativeMeshModuleFailureReason or "installed DLL has no L2 interface; update mcswep_native_mesh"
 	if type( module ) ~= "table" then return false, N.reason end
@@ -76,6 +78,7 @@ function N.Probe()
 		N.available, N.reason = false, "Native base-shape worker is required; update the DLL"
 		return false, N.reason
 	end
+	N.mixedTopologyAvailable = caps.mixedWorldTopology == 1
 	return true
 end
 
@@ -255,24 +258,65 @@ end
 function N.WorldSnapshot( chunk, index )
 	local backend = MC.NativeChunkBackend
 	if not index or not N.active or not N.worldAvailable or not backend or not backend.IsActive() then return nil end
+	if not chunk.nativeStateStorage or chunk.nativeMeshEpoch ~= backend.Epoch() then return nil end
+	MC.RenderSnapshot.ReleaseNativeCache( chunk )
 	-- Worker recipes bind one material per model. Paged geometry still uses
 	-- native quad jobs, but needs Lua's per-face material routing and snapshot.
 	if MC.AtlasPageCount and MC.AtlasPageCount() > 1 then return nil end
 	syncRecipes()
 	local snapshot, err = backend.GetSectionInfo( chunk, index )
 	MC.RenderL2Resources.Require( snapshot ~= nil, "native_section_info", tostring( err ) )
-	local states = {}
+	local states, unsupported = {}, {}
+	local supportedCount, luaCount = 0, 0
 	for state in pairs( snapshot.counts ) do
-		if not recipeFor( state ) then return nil end
 		states[#states + 1] = state
+		if recipeFor( state ) then supportedCount = supportedCount + snapshot.counts[state]
+		else
+			unsupported[#unsupported + 1] = state
+			luaCount = luaCount + snapshot.counts[state]
+		end
 	end
-	snapshot.stateList, snapshot.nativeOnly = states, true
+	snapshot.stateList, snapshot.recipeRevision = states, N.cubeRevision
+	if #unsupported == 0 then
+		snapshot.nativeOnly, snapshot.nativeTopology, snapshot.luaCount = true, true, 0
+		return { [index] = snapshot }
+	end
+	-- Older DLLs and entirely custom sections use a temporary complete snapshot.
+	-- Mixed sections export only Lua emitter cells; the worker still owns the
+	-- complete section for supported geometry, lighting and portal topology.
+	if supportedCount == 0 or not N.mixedTopologyAvailable or not backend.SupportsSectionCellFilter() then return nil end
+	local cells
+	cells, err = backend.GetSectionCellsFiltered( chunk, index, unsupported )
+	MC.RenderL2Resources.Require( cells ~= nil, "native_section_filter", tostring( err ) )
+	MC.RenderL2Resources.Require( #cells == luaCount * 2, "native_section_filter_count", "section changed during filtered export" )
+	local indices, values, blocking = {}, {}, {}
+	for i = 1, #cells, 2 do
+		local slot = ( i + 1 ) / 2
+		indices[slot], values[slot] = cells[i], cells[i + 1]
+	end
+	for i = 1, #states do blocking[states[i]] = MC.RenderOcclusion.NativeBlockingState( states[i] ) end
+	snapshot.indices, snapshot.states = indices, values
+	snapshot.luaCount, snapshot.partial, snapshot.nativeTopology = luaCount, true, true
+	snapshot.blockingStates = blocking
+	N.filteredSections = N.filteredSections + 1
+	N.filteredLuaCells, N.filteredWorldCells = N.filteredLuaCells + luaCount, N.filteredWorldCells + snapshot.count
 	return { [index] = snapshot }
 end
 
 function N.PrepareVoxels( ctx, index, snapshot )
-	if not N.voxelAvailable or ctx.pagedAtlas then return nil end
+	if not N.voxelAvailable or ctx.pagedAtlas then
+		MC.RenderL2Resources.Require( not snapshot.nativeTopology,
+			"native_section_input_changed", "Native section input lost its worker or atlas route" )
+		return nil
+	end
 	syncRecipes()
+	if snapshot.nativeTopology then
+		local backend = MC.NativeChunkBackend
+		MC.RenderL2Resources.Require( N.worldAvailable
+			and ctx.sectionIndex == index and backend and backend.IsActive()
+			and ctx.chunk.nativeMeshEpoch == backend.Epoch() and snapshot.recipeRevision == N.cubeRevision,
+			"native_section_input_changed", "Native section input changed after snapshot preparation" )
+	end
 	local recipes, seen = {}, {}
 	local size = MC.RENDER_SECTION_SIZE or 16
 	local xy, zero = MC.RenderMeshConstants.RENDER_SECTIONS_XY, index - 1
@@ -290,7 +334,8 @@ function N.PrepareVoxels( ctx, index, snapshot )
 				local buffers = ctx.buffersForLocal( x, y, z )
 				local target = ctx.bufferForBlock( recipe.translucent and buffers.translucent or buffers.opaque, recipe.id )
 				local packet = { recipe.value }
-				packet.blocking = MC.RenderOcclusion.NativeBlockingState( state )
+				if snapshot.blockingStates then packet.blocking = snapshot.blockingStates[state]
+				else packet.blocking = MC.RenderOcclusion.NativeBlockingState( state ) end
 				for face = 1, recipe.fluidOnly and 0 or recipe.model and 1 or 6 do
 					local group = recipe.model and target or ctx.fullCubeBuffer( target, face )
 					if not group.nativeGroup then
@@ -319,6 +364,10 @@ function N.PrepareVoxels( ctx, index, snapshot )
 		else N.fallbackStates[state] = ( N.fallbackStates[state] or 0 ) + count end
 	end
 	N.voxelBlocks, N.fallbackBlocks = N.voxelBlocks + used, N.fallbackBlocks + snapshot.count - used
+	if snapshot.nativeTopology then
+		MC.RenderL2Resources.Require( used == snapshot.count - snapshot.luaCount,
+			"native_section_recipe_partition", "Native recipe coverage changed after filtered export" )
+	end
 	if used == 0 then return nil end
 	if not ctx.nativeVoxels then
 		ctx.nativeVoxels = { ctx.blockSize, MC.CS, MC.CH, ctx.bxo, ctx.byo, ctx.bzo, {},
@@ -333,7 +382,8 @@ function N.PrepareVoxels( ctx, index, snapshot )
 	local backend = MC.NativeChunkBackend
 	if N.worldAvailable and ctx.sectionIndex and backend and backend.IsActive() then
 		ctx.nativeWorldHandle, ctx.nativeWorldRecipes = backend.GetHandle(), recipes
-		ctx.nativeTopology = snapshot.nativeOnly == true
+		ctx.nativeTopology = snapshot.nativeTopology == true or snapshot.nativeOnly == true
+		ctx.nativeBlockingStates = snapshot.blockingStates
 		N.worldBlocks, N.worldSections = N.worldBlocks + used, N.worldSections + 1
 	end
 	return recipes
@@ -439,7 +489,7 @@ function N.Submit( ctx, commit, discard )
 	if ctx.nativeWorldHandle then
 		id, err = N.module.SubmitWorldL2Section( commands, ctx.nativeWorldHandle,
 			ctx.chunk.cx, ctx.chunk.cy, ctx.chunk.cz, ctx.sectionIndex, ctx.nativeWorldRecipes,
-			ctx.nativeVoxels[8], ctx.nativeTopology, ctx.nativeDeferLighting == true )
+			ctx.nativeVoxels[8], ctx.nativeTopology, ctx.nativeDeferLighting == true, ctx.nativeBlockingStates )
 	else
 		id, err = N.module.SubmitL2Section( commands, readerFor( ctx.nativeSlice ), ctx.nativeSlice.snapshot, ctx.nativeVoxels )
 	end
@@ -450,6 +500,7 @@ function N.Submit( ctx, commit, discard )
 	end
 	enqueue( ctx, id, commit, discard )
 	for i, part in ipairs( ctx.nativeParts ) do part.nativeJob, part.nativePart = id, i end
+	ctx.releaseBuildInput()
 	return true
 end
 
@@ -639,7 +690,9 @@ if concommand then
 				sectionWorkerAvailable = N.voxelAvailable, sectionWorkerBlocks = N.voxelBlocks, luaEmitterBlocks = N.fallbackBlocks,
 				modelWorkerAvailable = N.modelAvailable, worldSectionAvailable = N.worldAvailable,
 					deferredLightingAvailable = N.deferredLightingAvailable,
-				worldWorkerBlocks = N.worldBlocks, worldWorkerSections = N.worldSections } )
+				worldWorkerBlocks = N.worldBlocks, worldWorkerSections = N.worldSections,
+				mixedTopologyAvailable = N.mixedTopologyAvailable, filteredSections = N.filteredSections,
+				filteredLuaCells = N.filteredLuaCells, filteredWorldCells = N.filteredWorldCells } )
 		PrintTable( { relightAvailable = N.relightAvailable, relightSections = N.relightSections,
 			relightFallbacks = N.relightFallbacks, relightUploadMS = N.relightUploadMS,
 			recipeMS = N.recipeMS, recipeHits = N.recipeHits, recipeMisses = N.recipeMisses,

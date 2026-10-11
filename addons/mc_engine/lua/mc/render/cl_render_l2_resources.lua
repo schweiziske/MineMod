@@ -99,7 +99,11 @@ end
 
 R.pixelTextures = R.pixelTextures or {}
 R.queuedLightTextures = R.queuedLightTextures or {}
+R.LIGHT_TEXTURE_VERSION = 2
+R.lightTextureMigrations = R.lightTextureMigrations or 0
+R.lightTextureMigrationPending = true
 local uploadQueuedLightPixels
+local ensureQueuedLightmap
 
 function R.LightTextureRevision()
 	local reader = R.lightTextureRevisionReader
@@ -121,7 +125,7 @@ end
 
 -- Only the tiny, frequently rewritten light tables use queued RT writes. The
 -- 16K corner/AO atlas stays procedural and never enters the queue vertex pool.
-local function createQueuedLightTexture( name, width, height, point )
+local function createQueuedLightTexture( name, width, height, point, initialPixels )
 	requireValue( width * height <= 256 and GetRenderTargetEx and mesh and mesh.Begin
 		and mesh.Color and mesh.Position and mesh.TexCoord and mesh.AdvanceVertex and mesh.End
 		and render and render.SetMaterial and render.PushRenderTarget and render.PopRenderTarget
@@ -150,11 +154,92 @@ local function createQueuedLightTexture( name, width, height, point )
 			Vector( x + 1, y + 1, 0 ), Vector( x, y + 1, 0 ) }
 	end
 	local layout = { width = width, height = height, vertices = vertices, deviceRevision = R.LightTextureRevision() }
+	local pixels = initialPixels
+	if not pixels then
+		pixels = {}
+		for i = 1, width * height do pixels[i] = 0 end
+	end
+	requireValue( #pixels == width * height, "l2_light_texture_initial_pixels",
+		"initial light table must cover the complete target" )
+	uploadQueuedLightPixels( texture, layout, 0, pixels )
 	R.queuedLightTextures[texture:GetName()] = layout
-	local zeros = {}
-	for i = 1, width * height do zeros[i] = 0 end
-	uploadQueuedLightPixels( texture, layout, 0, zeros )
 	return texture
+end
+
+-- Migration runs before a draw transaction. Populate the new table and change
+-- all retained samplers before retiring the old procedural resource. Release
+-- drains its older queued consumers once; steady-state writes stay queued.
+local function replaceLightTexture( previous, name, width, height, point, pixels, materials )
+	local bindings = {}
+	if previous then
+		for material in pairs( materials ) do
+			requireValue( material and not material:IsError(), "l2_light_texture_migration_material",
+				"retained light sampler material is unavailable" )
+			local texture = material:GetTexture( "$texture2" )
+			requireValue( texture and not texture:IsError(), "l2_light_texture_migration_sampler",
+				"retained material has no valid light table sampler" )
+			if R.SameTexture( texture, previous ) then
+				bindings[#bindings + 1] = { material = material, previous = texture }
+			end
+		end
+	end
+	local candidate = createQueuedLightTexture( name, width, height, point, pixels )
+	local previousName, previousId
+	if previous then
+		previousName = previous:GetName()
+		previousId = R.pixelTextures[previousName]
+	end
+	local changed = 0
+	local ok, why = pcall( function()
+		for i = 1, #bindings do
+			changed = i
+			bindings[i].material:SetTexture( "$texture2", candidate )
+		end
+		if previousId then
+			local released, releaseError = mcmesh.ReleaseL2PixelTexture( previousId )
+			requireValue( released, "l2_light_texture_migration_release", tostring( releaseError ) )
+		end
+	end )
+	if not ok then
+		local errors = {}
+		for i = changed, 1, -1 do
+			local binding = bindings[i]
+			local restored, restoreError = pcall( binding.material.SetTexture,
+				binding.material, "$texture2", binding.previous )
+			if not restored then errors[#errors + 1] = tostring( restoreError ) end
+		end
+		if #errors > 0 then
+			local message = tostring( why )
+			if type( why ) == "table" and why.message then message = tostring( why.message ) end
+			requireValue( false, "l2_light_texture_migration_rollback",
+				message .. "; rollback: " .. table.concat( errors, "; " ) )
+		end
+		error( why, 0 )
+	end
+	if previousId then R.pixelTextures[previousName] = nil end
+	if previous then R.lightTextureMigrations = R.lightTextureMigrations + 1 end
+	return candidate
+end
+
+local function migrateRetainedLightTextures()
+	if R.lightmap then ensureQueuedLightmap( R ) end
+	local packs = MC.RenderPackResources
+	if packs and packs.shared.lightmap then ensureQueuedLightmap( packs.shared ) end
+	if R.dynamicLightTexture then R.DynamicLightTexture() end
+end
+
+local function lightTextureMode( texture )
+	if not texture then return "uninitialized" end
+	local name = texture:GetName()
+	if R.queuedLightTextures[name] then return "queued_rt" end
+	if R.pixelTextures[name] then return "native_sync" end
+	return "legacy_rt"
+end
+
+function R.LightTextureStatus( owner )
+	owner = owner or R
+	return { version = R.LIGHT_TEXTURE_VERSION, lightmap = lightTextureMode( owner.lightmap ),
+		dynamic = lightTextureMode( R.dynamicLightTexture ), migrations = R.lightTextureMigrations }
 end
 
 function R.CreatePixelTexture( width, height, point )
@@ -185,6 +270,14 @@ end
 -- UploadPart only stages bytes. Every consumer enters here before sampling;
 -- native drains older queued draws before publishing all pending rows together.
 function R.FlushUploads()
+	if R.lightTextureMigrationPending then
+		local ok, why = pcall( migrateRetainedLightTextures )
+		if not ok then
+			return MC.Fault( "l2_light_texture_migration", "%s",
+				type( why ) == "table" and why.message or tostring( why ) )
+		end
+		R.lightTextureMigrationPending = false
+	end
 	if not next( R.pixelTextures ) then return true end
 	local ok, why = mcmesh.FlushL2PixelTextures()
 	return MC.Check( ok, "l2_pixel_texture_flush", "%s", tostring( why ) )
@@ -252,6 +345,27 @@ function R.CopyPixelTexture( texture, target, sourceX, sourceY )
 	if not ok then error( why, 0 ) end
 end
 
+ensureQueuedLightmap = function( owner )
+	local previous = owner.lightmap
+	if previous and owner.lightmapTextureVersion == R.LIGHT_TEXTURE_VERSION
+		and owner.queuedLightmapTexture == previous then return end
+	if previous and R.queuedLightTextures[previous:GetName()] then
+		owner.lightmapTextureVersion, owner.queuedLightmapTexture = R.LIGHT_TEXTURE_VERSION, previous
+		return
+	end
+	local materials = {}
+	for _, material in pairs( owner.materials ) do materials[material] = true end
+	local packs, scene = MC.RenderPackResources, MC.RenderScene
+	if packs and owner == packs.shared and scene then
+		for _, group in pairs( scene.groups ) do materials[group.composite] = true end
+	end
+	owner.lightmap = replaceLightTexture( previous, ( owner.prefix or "mc_l2_visual" ) .. "_lightmap_queued_v2",
+		LIGHTMAP_SIZE, LIGHTMAP_SIZE, false, owner.lightmapPixels, materials )
+	owner.lightmapTextureVersion, owner.queuedLightmapTexture = R.LIGHT_TEXTURE_VERSION, owner.lightmap
+	owner.lightmapRevision, owner.lightmapDeviceRevision = nil, nil
+	owner.lightmapUploadPending = true
+end
+
 function R.Ensure( build, owner )
 	owner = owner or R
 	R.drawPixels = nil
@@ -260,12 +374,7 @@ function R.Ensure( build, owner )
 		requireValue( not owner.atlas or R.pixelTextures[owner.atlas:GetName()],
 			"l2_pixel_texture_restart", "restart to replace the old render-target light atlas" )
 		if not owner.atlas then owner.atlas = R.CreatePixelTexture( ATLAS_SIZE, ATLAS_HEIGHT, true ) end
-		requireValue( not owner.lightmap or R.queuedLightTextures[owner.lightmap:GetName()],
-			"l2_light_texture_restart", "restart to replace the synchronous global lightmap" )
-		if not owner.lightmap then
-			owner.lightmap = createQueuedLightTexture( ( owner.prefix or "mc_l2_visual" ) .. "_lightmap_queued_v2",
-				LIGHTMAP_SIZE, LIGHTMAP_SIZE, false )
-		end
+		ensureQueuedLightmap( owner )
 		return
 	end
 	requireValue( GetRenderTargetEx and CreateMaterial and render and render.PushRenderTarget
@@ -284,15 +393,7 @@ function R.Ensure( build, owner )
 	end
 	requireValue( owner.atlas and not owner.atlas:IsError() and owner.atlas:Width() == ATLAS_SIZE and owner.atlas:Height() == ATLAS_HEIGHT,
 		"l2_visual_atlas", "16384x16384 point-filter corner/AO atlas required; restart clients retaining the old atlas" )
-	if not owner.lightmap then
-		-- No POINTSAMPLE bit: L2 performs its lightmap lookup at each quad corner.
-		owner.lightmap = GetRenderTargetEx( prefix .. "_lightmap1", LIGHTMAP_SIZE, LIGHTMAP_SIZE,
-			RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE, bit.bor( 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA8888 )
-	end
-	requireValue( owner.lightmap and not owner.lightmap:IsError()
-		and owner.lightmap:Width() == LIGHTMAP_SIZE and owner.lightmap:Height() == LIGHTMAP_SIZE,
-		"l2_visual_lightmap", "could not create the separate 16x16 linear-filter lightmap" )
-	ensureUploadMaterial()
+	ensureQueuedLightmap( owner )
 end
 
 function R.BoundMaterial( owner, slot, source, stage, blockSize, program, colorSpace, pbrMaps, atlasBank )
@@ -496,14 +597,28 @@ end
 -- Local lights have a separate tiny data texture, consumed only by the
 -- additive programs. The original lightmap/base shaders remain byte-identical.
 function R.DynamicLightTexture()
-	requireValue( not R.dynamicLightTexture or R.queuedLightTextures[R.dynamicLightTexture:GetName()],
-		"l2_light_texture_restart", "restart to replace the synchronous dynamic light texture" )
-	if not R.dynamicLightTexture then
-		R.dynamicLightTexture = createQueuedLightTexture( "mc_dynamic_lights_rgba8_queued_v2", 64, 1, true )
+	local previous = R.dynamicLightTexture
+	if previous and R.dynamicLightTextureVersion == R.LIGHT_TEXTURE_VERSION
+		and R.queuedDynamicLightTexture == previous then return previous end
+	if not previous or not R.queuedLightTextures[previous:GetName()] then
+		local materials, pixels = {}, nil
+		local dynamic = MC.RenderDynamicLights
+		if dynamic then
+			for _, state in pairs( dynamic.materials ) do materials[state.material] = true end
+			if dynamic.uploadValid then
+				pixels = {}
+				for i = 1, 40 do pixels[i] = dynamic.previousPixels[i] end
+				for i = 41, 64 do pixels[i] = 0 end
+			end
+		end
+		R.dynamicLightTexture = replaceLightTexture( previous, "mc_dynamic_lights_rgba8_queued_v2",
+			64, 1, true, pixels, materials )
+		if dynamic then dynamic.uploadValid = false end
 	end
 	local texture = R.dynamicLightTexture
 	requireValue( texture and not texture:IsError() and texture:Width() == 64 and texture:Height() == 1,
 		"dynamic_light_texture", "could not create the 64x1 point-filter light data texture" )
+	R.dynamicLightTextureVersion, R.queuedDynamicLightTexture = R.LIGHT_TEXTURE_VERSION, texture
 	return texture
 end
 
@@ -557,6 +672,9 @@ function R.RefreshLightmap( owner )
 	local revision = MC.GlobalLightmapRevision
 	requireValue( type( revision ) == "number" and revision > 0 and MC.SampleGlobalLightmapRGB,
 		"l2_visual_lightmap_unready", "wait for the first successful global lightmap refresh" )
+	-- Active owners skip Ensure after Lua refresh. Migrate before the revision
+	-- shortcut and before staging bytes, even when the lighting itself is fixed.
+	ensureQueuedLightmap( owner )
 	local deviceRevision = R.LightTextureRevision()
 	if owner.lightmapRevision == revision and owner.lightmapDeviceRevision == deviceRevision then return end
 	local previous = owner.lightmapPixels

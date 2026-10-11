@@ -205,7 +205,10 @@ function T.BuildCatalog( revision )
 		return nil, "render shape registry is not ready"
 	end
 	if not integer( MC.BlockStateCount, 1048576 ) or MC.BlockStateCount == 0 then return nil, "invalid state count" end
-	local profiles, mapping, contextual, cache = {}, {}, {}, {}
+	if not MC.BlockEntityRegistryFrozen or not MC.BlockEntityTypeForState then
+		return nil, "block entity registry is not ready"
+	end
+	local profiles, mapping, contextual, blockEntityStates, cache, shapeTemplates = {}, {}, {}, {}, {}, {}
 	local dynamicFields = { "fullCube", "hasCollision", "translucent", "lightEmission", "lightOpacity", "boxes" }
 	for stateId = 0, MC.BlockStateCount - 1 do
 		local row, err, p, visual = T.ResolveProfile( stateId, 0, 0, 0, nil, true )
@@ -224,7 +227,11 @@ function T.BuildCatalog( revision )
 				return nil, "state " .. stateId .. " needs staged neighbor-dependent lighting"
 			end
 		end
-		contextual[stateId + 1] = char( stateId ~= 0 and ( dynamic or p.collisionContext ~= "none" ) and 1 or 0 )
+		local needsContext = stateId ~= 0 and ( dynamic or p.collisionContext ~= "none" )
+		contextual[stateId + 1] = char( needsContext and 1 or 0 )
+		-- Retain only contextual selector templates, not raw shapes for every state.
+		if needsContext and row.shape.selector ~= 0 then shapeTemplates[stateId] = row.shape end
+		blockEntityStates[stateId + 1] = char( MC.BlockEntityTypeForState( stateId ) ~= nil and 1 or 0 )
 		local key = concat( { row.propagationEmission, row.propagationOpacity, row.skyCost,
 			row.l2Word, row.renderClass, string.format( "%.17g", row.shade ), fluidProfileKey( row.fluid ),
 			shapeProfileKey( row.shape ) }, ":" )
@@ -236,7 +243,8 @@ function T.BuildCatalog( revision )
 		mapping[stateId + 1] = u32( index )
 	end
 	return { formatVersion = 2, revision = revision or 1, stateCount = MC.BlockStateCount,
-		profiles = profiles, stateProfiles = concat( mapping ), contextual = concat( contextual ) }
+		profiles = profiles, stateProfiles = concat( mapping ), contextual = concat( contextual ),
+		blockEntityStates = concat( blockEntityStates ), shapeTemplates = shapeTemplates }
 end
 
 local Session = {}
@@ -254,6 +262,16 @@ function Session:StartBinarySection( payload, metadata )
 	if not version then return nil, err end
 	return self.handle:StartBinaryDecode( version, payload, metadata )
 end
+function Session:BeginTransport( metadata )
+	local version, err = self:Version()
+	if not version then return nil, err end
+	return self.handle:BeginTransport( version, metadata )
+end
+function Session:StartTransportDecode( id, batch )
+	local version, err = self:Version()
+	if not version then return nil, err end
+	return self.handle:StartTransportDecode( version, id, batch )
+end
 function Session:ContextEdits( chunk, cells, entities )
 	local contexts = {}
 	for i = 1, #cells, 2 do
@@ -263,6 +281,16 @@ function Session:ContextEdits( chunk, cells, entities )
 			local value, err = T.ResolveProfile( stateId, chunk.cx * MC.CS + lx, chunk.cy * MC.CS + ly,
 				chunk.cz * MC.CH + lz, entities and entities[li] )
 			if not value then return nil, err end
+			local template = self.nativeShapeReferences and self.catalog.shapeTemplates
+				and self.catalog.shapeTemplates[stateId]
+			local shape = value.shape
+			-- Selector variants are immutable registered tables. Position-dependent
+			-- shapes and differing selector inputs retain the full parsing path.
+			if template and shape.selector == template.selector and shape.stair == template.stair
+				and shape.connections == template.connections and shape.pane == template.pane
+				and rawequal( shape.variants, template.variants ) then
+				value.shapeState = stateId
+			end
 			value.index = li
 			contexts[#contexts + 1] = value
 		end
@@ -300,7 +328,9 @@ function Session:CommitBinarySection( id, include, ready )
 	end
 	local version, err = self:Version()
 	if not version then return nil, err end
-	return self.handle:CommitBinaryDecode( version, id, include, contexts )
+	-- The poll result already supplied contextCells for resolution. Installation
+	-- consumes chunk metadata and sparse Block Entity cells, not a second copy.
+	return self.handle:CommitBinaryDecode( version, id, include, contexts, false )
 end
 function Session:Close()
 	local ok, err = self.handle:Close()
@@ -374,7 +404,10 @@ function T.CreateSession( options, catalog )
 	local config = T.WorldConfig( options )
 	local handle, err = mcmesh.CreateWorldSession( config, catalog )
 	if not handle then return nil, err end
-	return setmetatable( { handle = handle, catalog = catalog, config = config }, Session )
+	return setmetatable( { handle = handle, catalog = catalog, config = config,
+		nativeTransport = caps.nativeTransport == 1,
+		sectionCellFilter = caps.sectionCellFilter == 1,
+		nativeShapeReferences = caps.catalogShapeReferences == 1 }, Session )
 end
 T.CreateDevelopmentSession = T.CreateSession
 -- Existing userdata stays owned across Lua auto-refresh; replace only its methods.

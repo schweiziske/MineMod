@@ -754,6 +754,7 @@ function L.Status()
 		scannedChunks = active and active.scannedChunks or 0,
 		syncCount = active and active.syncCount or 0, syncTotalMS = active and active.syncTotalMS or 0,
 		lightmapUploads = P.shared.lightmapUploads or 0, lightmapSkippedUploads = P.shared.lightmapSkippedUploads or 0,
+		lightTextures = R.LightTextureStatus( P.shared ),
 		gpuVerified = false, lastError = L.lastError }
 end
 
@@ -771,6 +772,9 @@ local function printStatus()
 		s.prepareMS, s.updateMS, s.updatedSections, s.waitingSections ) )
 	print( string.format( "[MC render pack work] syncs=%d syncMS=%.2f scannedChunks=%d lightmapUploads=%d skippedLightmapUploads=%d",
 		s.syncCount, s.syncTotalMS, s.scannedChunks, s.lightmapUploads, s.lightmapSkippedUploads ) )
+	local light = s.lightTextures
+	print( string.format( "[MC light textures] version=%d lightmap=%s dynamic=%s migrations=%d",
+		light.version, light.lightmap, light.dynamic, light.migrations ) )
 	if s.lastError then print( "[MC render pack] lastError=" .. s.lastError ) end
 end
 

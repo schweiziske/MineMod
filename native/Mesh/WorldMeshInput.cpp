@@ -3,19 +3,27 @@
 
 namespace mcmesh::world
 {
-MeshInstances::MeshInstances(std::shared_ptr<const MeshSnapshot> snapshot, Coord chunk, unsigned section,
-							 std::unordered_map<uint32_t, MeshRecipe> recipes, bool topology)
-	: snapshot_(std::move(snapshot)), recipes_(std::move(recipes)), chunk_(chunk), topology_(topology)
+MeshInstances::MeshInstances(std::shared_ptr<const MeshSnapshot> inSnapshot, Coord inChunk, unsigned inSection,
+							 std::unordered_map<uint32_t, MeshRecipe> inRecipes, bool inTopology,
+							 std::unordered_map<uint32_t, bool> inBlockingStates)
+	: snapshot_(std::move(inSnapshot)), recipes_(std::move(inRecipes)), mBlockingStates(std::move(inBlockingStates)),
+	  chunk_(inChunk), topology_(inTopology)
 {
 	const auto &cfg = snapshot_->world->config;
-	section_ = snapshot_->world->chunks.at(chunk)->sections.at(section);
+	section_ = snapshot_->world->chunks.at(inChunk)->sections.at(inSection);
 	const int ss = cfg.sectionSize, xy = cfg.chunkSize / ss;
-	base_ = {int(section % xy) * ss, int(section / xy % xy) * ss, int(section / (xy * xy)) * ss};
+	base_ = {int(inSection % xy) * ss, int(inSection / xy % xy) * ss, int(inSection / (xy * xy)) * ss};
 	if (section_)
 		for (const auto &state : section_->counts)
 		{
 			const auto found = recipes_.find(state.first);
-			l2::require(found != recipes_.end() || !topology_, "native-only section has an unsupported state");
+			if (topology_)
+			{
+				if (mBlockingStates.empty())
+					l2::require(found != recipes_.end(), "native-only section has an unsupported state");
+				else
+					l2::require(mBlockingStates.find(state.first) != mBlockingStates.end(), "mixed section is missing topology classification");
+			}
 			if (found != recipes_.end())
 			{
 				const auto &recipe = found->second;
@@ -24,25 +32,30 @@ MeshInstances::MeshInstances(std::shared_ptr<const MeshSnapshot> snapshot, Coord
 				quads_ = l2::checkedAdd(quads_, l2::checkedMultiply(recipe.maxQuads, state.second));
 			}
 		}
-	if (section_)
-		for (const auto &context : section_->contexts)
-		{
-			const auto found = recipes_.find(section_->states[context.first]);
-			if (found == recipes_.end())
-				continue;
-			l2::require(!found->second.shapeSelector || found->second.shapeSelector == context.second.shape->selector,
-						"model/context shape selector mismatch");
-		}
 }
 size_t MeshInstances::bytes() const
 {
 	const auto size = snapshot_->world->config.sectionSize;
-	return sizeof(*this) + recipes_.size() * (sizeof(MeshRecipe) + 64) + size_t(size * size * size) * (2 * sizeof(l2::Voxel) + 8);
+	return sizeof(*this) + recipes_.size() * (sizeof(MeshRecipe) + 64) + mBlockingStates.size() * 64
+		+ size_t(size * size * size) * (2 * sizeof(l2::Voxel) + 8);
 }
 void MeshInstances::populate(l2::Input &input, const std::atomic<bool> &cancelled) const
 {
+	// Validate immutable per-cell overrides once on the worker, before emission.
+	if (section_)
+		for (const auto &context : section_->contexts)
+		{
+			if (cancelled.load(std::memory_order_relaxed))
+				return;
+			const auto found = recipes_.find(section_->states[context.first]);
+			if (found == recipes_.end())
+				continue;
+			l2::require(!found->second.shapeSelector || found->second.shapeSelector == context.second.shape->selector,
+				"model/context shape selector mismatch");
+		}
 	const auto			&cfg = snapshot_->world->config;
 	const unsigned		 ss = cfg.sectionSize;
+	const bool mixed_topology = topology_ && !mBlockingStates.empty();
 	std::vector<uint8_t> cells;
 	if (topology_)
 		cells.resize(ss * ss * ss);
@@ -57,10 +70,14 @@ void MeshInstances::populate(l2::Input &input, const std::atomic<bool> &cancelle
 			if (!state)
 				continue;
 			const auto found = recipes_.find(state);
+			// Unsupported geometry is emitted by Lua, but its visual blocking bit
+			// still participates in the complete section's portal topology.
+			if (mixed_topology)
+				cells[i] = mBlockingStates.find(state)->second ? 64 : 0;
 			if (found == recipes_.end())
 				continue;
 			const auto &recipe = found->second;
-			if (topology_)
+			if (topology_ && !mixed_topology)
 				cells[i] = recipe.blocking ? 64 : 0;
 			const int local[3] = {base_.x + int(i % ss), base_.y + int(i / ss % ss),
 								  base_.z + int(i / (ss * ss))};

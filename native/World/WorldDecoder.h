@@ -24,6 +24,7 @@ struct DecodedChunk
 	unsigned			  count = 0;
 	std::string			  blockEntitiesJSON;
 	std::vector<CellEdit> contextCells;
+	std::vector<CellEdit> mBlockEntityCells;
 };
 struct DecodedResult
 {
@@ -31,6 +32,8 @@ struct DecodedResult
 	PreparedBatch			  prepared;
 	std::vector<DecodedChunk> chunks;
 	double					  decompressMS = 0, parseMS = 0;
+	// False for catalogs from older Lua callers; an empty list then is unknown.
+	bool mBlockEntityCellsComplete = false;
 };
 // MCB9 transport parsing, decompression and section construction are CPU-only.
 std::shared_ptr<const DecodedResult> decodeBinary(const DecodeInput &input, const std::atomic<bool> &cancelled);

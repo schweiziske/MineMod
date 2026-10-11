@@ -84,6 +84,8 @@ std::shared_ptr<Catalog> catalog()
 		result->states[i] = {0, 15, 16, 0xef000, 9, 0.2f};
 	result->contextual.resize(result->states.size());
 	result->contextual[3] = 1;
+	result->mBlockEntityStates.resize(result->states.size());
+	result->mBlockEntityStates[3] = 1;
 	return result;
 }
 DecodeInput input(Bytes bytes, unsigned chunks, unsigned cells, std::shared_ptr<const Catalog> profiles)
@@ -132,6 +134,12 @@ void run()
 	auto in = input(bytes, 2, 4096, store.catalog());
 	auto decoded = decodeBinary(in, cancelled);
 	check(decoded->chunks.size() == 2 && decoded->chunks[0].count == 4096, "uniform decode failed");
+	check(decoded->mBlockEntityCellsComplete && decoded->chunks[0].mBlockEntityCells.empty(),
+		  "ordinary terrain must have a complete empty attachment list");
+	auto legacy_catalog = catalog();
+	legacy_catalog->mBlockEntityStates.clear();
+	const auto legacy_decoded = decodeBinary(input(bytes, 2, 4096, legacy_catalog), cancelled);
+	check(!legacy_decoded->mBlockEntityCellsComplete, "legacy catalog was mistaken for an empty attachment list");
 	check(store.applyPrepared(0, decoded->prepared), "prepared decode did not publish");
 	check(store.state({-1, 15, 47}) == 1 && store.state({-1, 15, 48}) == 0 && store.known({2, 0, 1}),
 		  "decoded chunk addressing or known-empty semantics changed");
@@ -210,6 +218,19 @@ void run()
 	cancelled = true;
 	check(!decodeBinary(in, cancelled), "cancelled decoder produced a replacement");
 	cancelled = false;
+	// A no-NBT snapshot still needs defaults for attachment-capable states.
+	// Detect them during the real binary decode, without relying on wire records.
+	auto no_nbt_bytes = header(1, 2);
+	chunkHeader(no_nbt_bytes, 0);
+	std::vector<unsigned> no_nbt_indices(4096);
+	no_nbt_indices[5] = 1;
+	no_nbt_indices[65] = 2;
+	packed(no_nbt_bytes, 2, {0, 1, 3}, no_nbt_indices);
+	no_nbt_bytes.push_back(0);
+	const auto no_nbt = decodeBinary(input(no_nbt_bytes, 1, 2, store.catalog()), cancelled);
+	check(no_nbt->mBlockEntityCellsComplete && no_nbt->chunks[0].mBlockEntityCells.size() == 1
+			  && no_nbt->chunks[0].mBlockEntityCells[0].index == 65 && no_nbt->chunks[0].mBlockEntityCells[0].state == 3,
+		  "no-NBT snapshot lost its default attachment candidate or exported ordinary terrain");
 
 	bytes = header(1, 1);
 	chunkHeader(bytes, 0, 0, 1);

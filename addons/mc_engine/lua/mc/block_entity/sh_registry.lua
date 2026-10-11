@@ -291,14 +291,19 @@ end
 -- Bulk loaders may install native/packed state storage without visiting the
 -- per-cell Lua setter. Finalization calls this once per touched chunk to add
 -- missing defaults and discard stale/incompatible attachments.
-function MC.ReconcileChunkBlockEntities( chunk )
+-- blockEntityCells is an optional, complete list of local-index/state pairs
+-- validated at native snapshot installation. Nil retains the generic iterator.
+function MC.ReconcileChunkBlockEntities( chunk, blockEntityCells )
 	if type( chunk ) ~= "table" then return nil, "missing_chunk" end
 	if not MC.GetChunkBlockStateByLocalIndex or not MC.ForEachBlockState then
 		return nil, "state_storage_unavailable"
 	end
 	local changed = 0
-	local existing = {}
-	for localIndex in pairs( chunk.blockEntities or {} ) do existing[#existing + 1] = localIndex end
+	local existing, visited = {}, {}
+	for localIndex in pairs( chunk.blockEntities or {} ) do
+		existing[#existing + 1] = localIndex
+		visited[localIndex] = true
+	end
 	for _, localIndex in ipairs( existing ) do
 		local stateId = MC.GetChunkBlockStateByLocalIndex( chunk, localIndex ) or 0
 		local reconciled, err = MC.ReconcileChunkLocalBlockEntity( chunk, localIndex, stateId )
@@ -306,13 +311,22 @@ function MC.ReconcileChunkBlockEntities( chunk )
 		if reconciled then changed = changed + 1 end
 	end
 	local reconcileError
-	MC.ForEachBlockState( chunk, function( bx, by, bz, _, _, _, stateId )
-		if reconcileError then return end
-		local _, _, _, localIndex = MC.CellToChunk( bx, by, bz )
+	local function reconcile( localIndex, stateId )
+		if reconcileError or visited[localIndex] then return end
 		local reconciled, err = MC.ReconcileChunkLocalBlockEntity( chunk, localIndex, stateId )
 		if reconciled == nil then reconcileError = err return end
 		if reconciled then changed = changed + 1 end
-	end )
+	end
+	if blockEntityCells then
+		for i = 1, #blockEntityCells, 2 do
+			reconcile( blockEntityCells[i], blockEntityCells[i + 1] )
+		end
+	else
+		-- Palette filtering avoids visiting ordinary states on the Lua backend.
+		MC.ForEachBlockState( chunk, function( _, _, _, lx, ly, lz, stateId )
+			reconcile( lx + MC.CS * ( ly + MC.CS * lz ), stateId )
+		end, function( stateId ) return MC.BlockEntityTypeForState( stateId ) ~= nil end )
+	end
 	if reconcileError then return nil, reconcileError end
 	return true, changed
 end

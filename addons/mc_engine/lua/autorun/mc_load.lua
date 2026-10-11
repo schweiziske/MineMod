@@ -252,6 +252,8 @@ local CLIENT_FILES = {
 	"mc/cl_commands.lua",
 	"mc/cl_debug.lua",
 	"mc/debug/cl_gallery.lua",
+	"mc/debug/cl_performance_capture.lua",
+	"mc/debug/cl_world_memory.lua",
 	"mc/cl_player.lua",
 	"mc/integration/cl_hand_weapon_bridge.lua",
 	-- The legacy L1 world backend remains unloaded; L2 uses cl_native_l2_backend.

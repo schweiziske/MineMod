@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Render/Visibility/VisibilityQuery.h"
+#include "Core/CpuWorkGate.h"
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -13,6 +15,7 @@ struct VisibilityWorkerStats
 	uint64_t mRequests = 0, mCacheHits = 0, mCoalesced = 0, mScheduled = 0, mCompleted = 0;
 	uint64_t mSynchronous = 0, mPortalTraversals = 0, mPortalCacheHits = 0;
 	double	 mComputeMS = 0;
+	// Includes background CPU admission wait; synchronous Resolve is excluded.
 	unsigned mRunning = 0;
 };
 
@@ -36,6 +39,8 @@ public:
 	VisibilityWorkerStats				   GetStats() const;
 
 private:
+	std::shared_ptr<core::CpuWorkGate> mCpuWorkGate = core::GetCpuWorkGate();
+	std::atomic<bool> mCancelled{false};
 	struct Slot
 	{
 		std::shared_ptr<const VisibilityFrame> mPending, mRunning, mReady, mLatest;

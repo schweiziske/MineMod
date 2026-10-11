@@ -7,6 +7,7 @@
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 
 // Persistent voxel ownership. Source resources and Lua values never enter this API.
 namespace mcmesh::world
@@ -66,6 +67,8 @@ struct Catalog
 	std::vector<Profile> states;
 	// Optional state-indexed flags for sparse Lua-resolved live contexts.
 	std::vector<uint8_t> contextual;
+	// Optional immutable state flags; decoded chunks export only attachment cells.
+	std::vector<uint8_t> mBlockEntityStates;
 	void				 validate() const;
 };
 
@@ -85,6 +88,10 @@ struct Chunk
 	bool										terrainPresent = false;
 	uint64_t									revision = 0;
 	explicit Chunk(const Config &config);
+	/// Sealed allocation inventory. Contains sections/shapes, never this Chunk.
+	/// Rebuild after mutation, before exposing shared_ptr<const Chunk> to workers.
+	l2::MemoryUsage mMemoryUsage;
+	void SealMemoryUsage();
 };
 struct LightChunk
 {
@@ -215,6 +222,10 @@ public:
 	uint32_t						state(Coord cell) const;
 	bool							known(Coord chunk) const;
 	std::shared_ptr<const Chunk>	chunk(Coord coord) const;
+	/// Owning-thread export from immutable section storage. A null filter selects
+	/// all non-air cells; an empty filter selects none. Indices are chunk-local.
+	std::vector<CellEdit> ReadSectionCells(Coord inChunk, unsigned inSection,
+		const std::unordered_set<uint32_t> *inStates = nullptr) const;
 	// Validate the complete batch before publishing any chunk.
 	bool apply(uint64_t expectedRevision, const std::vector<Mutation> &batch);
 	bool applyPrepared(uint64_t expectedRevision, const PreparedBatch &batch,

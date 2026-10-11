@@ -122,6 +122,24 @@ public:
 		for (const auto &input : inputs)
 			stagePrepared(input);
 	}
+	/// Compare a prevalidated span with the published image, including implicit
+	/// zero rows. Pending writes are deliberately excluded from this comparison.
+	bool MatchesPublished(const Span &inSpan) const
+	{
+		bool matches = true;
+		segments(inSpan, [&](int x, int y, size_t first, size_t count)
+		{
+			if (!matches)
+				return;
+			const auto &published = rows_[y];
+			const auto *pixels = inSpan.pixels + first;
+			if (published.empty())
+				matches = std::all_of(pixels, pixels + count, [](uint32_t inPixel) { return inPixel == 0; });
+			else
+				matches = std::memcmp(published.data() + x, pixels, count * sizeof(uint32_t)) == 0;
+		});
+		return matches;
+	}
 	std::vector<Rect> rectangles() const
 	{
 		std::vector<Rect> rects;

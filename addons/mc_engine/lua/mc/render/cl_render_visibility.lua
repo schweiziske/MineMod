@@ -75,7 +75,7 @@ function Visibility.New( chunk, blockSections, perf )
 		if view.error then return nil end
 		if slot and states[slot] ~= nil then return states[slot] end
 		local state, err
-		if snapshot and lx >= minX and lx < minX + SIZE
+		if snapshot and not snapshot.partial and snapshot.slots and lx >= minX and lx < minX + SIZE
 			and ly >= minY and ly < minY + SIZE and lz >= minZ and lz < minZ + SIZE then
 			local key = lx - minX + ( ly - minY ) * SIZE + ( lz - minZ ) * SIZE * SIZE + 1
 			local denseSlot = snapshot.slots[key]
@@ -226,6 +226,15 @@ function Visibility.New( chunk, blockSections, perf )
 			if view.error then return nil end
 		end
 		return mask, count
+	end
+
+	-- Called after Native submission has frozen all geometry and neighbor reads.
+	-- Pending upload/publication keeps the view object, but no input arrays.
+	function view.ReleaseInput()
+		blockSections, snapshot, stateSections = nil, nil, nil
+		states, classes, touched = {}, {}, {}
+		staticClasses, visibilityByType = {}, {}
+		touchedCount, minX, minY, minZ = 0, nil, nil, nil
 	end
 
 	return view

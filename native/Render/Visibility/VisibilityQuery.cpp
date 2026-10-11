@@ -116,4 +116,34 @@ bool IsDirectionVisible(unsigned inGroup, const float inBounds[6], const Vec &in
 	return inGroup & 1 ? inEye[axis] <= inBounds[axis + 3] + inMargin : inEye[axis] >= inBounds[axis] - inMargin;
 }
 
+DirectionDrawRanges SelectDirectionRanges(const std::array<l2::DirectionRange, 7> &inRanges,
+										 const float inBounds[6], const Vec &inEye, double inMargin)
+{
+	DirectionDrawRanges selected;
+	for (unsigned group = 0; group < inRanges.size(); ++group)
+	{
+		const auto &range = inRanges[group];
+		if (!range.count)
+			continue;
+		if (!IsDirectionVisible(group, inBounds, inEye, inMargin))
+		{
+			++selected.mRejectedDirections;
+			continue;
+		}
+		selected.mIndices += range.count;
+		if (selected.mRangeCount)
+		{
+			auto &previous = selected.mRanges[selected.mRangeCount - 1];
+			if (previous.first + previous.count == range.first)
+			{
+				previous.count += range.count;
+				++selected.mMergedRanges;
+				continue;
+			}
+		}
+		selected.mRanges[selected.mRangeCount++] = range;
+	}
+	return selected;
+}
+
 } // namespace mcmesh::l2draw

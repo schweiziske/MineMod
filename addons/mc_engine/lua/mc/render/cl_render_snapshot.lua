@@ -1,7 +1,7 @@
 -- Dense, section-scoped block input for the synchronous Lua mesh builder.
 -- No lighting profile, material, vertex object or world-space conversion lives
--- here. Arrays are borrowed read-only by a build; do not retain them across a
--- yield or a world mutation.
+-- here. Lua-owned chunks cache the index; Native-owned chunks export temporary
+-- build input only. Do not retain borrowed arrays across a world mutation.
 MC = MC or {}
 local Snapshot = MC.RenderSnapshot or {}
 MC.RenderSnapshot = Snapshot
@@ -55,6 +55,19 @@ local function indexCurrent( chunk )
 		and chunk.renderSectionIndexVersion == ( chunk.collisionVersion or 0 )
 end
 
+-- Drop ownership, not the contents: an already running synchronous build may
+-- still borrow the old arrays during a Lua refresh.
+function Snapshot.ReleaseNativeCache( chunk )
+	if not chunk or not chunk.nativeStateStorage then return end
+	chunk.renderSectionBlocks = nil
+	chunk.renderSectionBlocksReady = nil
+	chunk.renderSectionIndexVersion = nil
+	chunk.renderSectionIndexStoresStateId = nil
+	chunk.renderSectionIndexFormat = nil
+	chunk.renderSectionIndexStorage = nil
+	chunk.renderSectionIndexEpoch = nil
+end
+
 -- Fail without publishing a ready flag. Missing state data is not an air block.
 function Snapshot.EnsureSection( chunk, sectionIndex )
 	if not chunk then return nil, "missing_chunk" end
@@ -62,11 +75,8 @@ function Snapshot.EnsureSection( chunk, sectionIndex )
 		or sectionIndex < 1 or sectionIndex > TOTAL then
 		return nil, "invalid_section_index"
 	end
-	if not indexCurrent( chunk ) then resetIndex( chunk ) end
-	if chunk.renderSectionBlocksReady[sectionIndex] then
-		return chunk.renderSectionBlocks[sectionIndex]
-	end
 	if chunk.nativeStateStorage then
+		Snapshot.ReleaseNativeCache( chunk )
 		local backend = MC.GetChunkBackend()
 		if not backend.native or not backend.GetSectionCells or backend.Epoch() ~= chunk.nativeMeshEpoch then
 			return nil, "native_section_storage_unavailable"
@@ -78,8 +88,11 @@ function Snapshot.EnsureSection( chunk, sectionIndex )
 			local li, slot = cells[i], ( i + 1 ) / 2
 			section.indices[slot], section.states[slot], section.slots[sectionSlotKey( li )] = li, cells[i + 1], slot
 		end
-		chunk.renderSectionBlocks[sectionIndex], chunk.renderSectionBlocksReady[sectionIndex] = section, true
 		return section
+	end
+	if not indexCurrent( chunk ) then resetIndex( chunk ) end
+	if chunk.renderSectionBlocksReady[sectionIndex] then
+		return chunk.renderSectionBlocks[sectionIndex]
 	end
 	local stateSections = chunk.stateSections
 	local stateAPI = MC.StateSection
@@ -121,10 +134,14 @@ function Snapshot.EnsureSection( chunk, sectionIndex )
 end
 
 function Snapshot.EnsureChunk( chunk )
+	if not chunk then return nil, "missing_chunk" end
+	local sections = chunk.nativeStateStorage and {} or nil
 	for i = 1, TOTAL do
 		local section, err = Snapshot.EnsureSection( chunk, i )
 		if not section then return nil, err end
+		if sections then sections[i] = section end
 	end
+	if sections then return sections end
 	return chunk.renderSectionBlocks
 end
 
@@ -138,6 +155,7 @@ function Snapshot.Prepare( chunk, sectionIndex )
 	if sectionIndex then
 		local section, err = Snapshot.EnsureSection( chunk, sectionIndex )
 		if not section then return nil, err end
+		if chunk.nativeStateStorage then return { [sectionIndex] = section } end
 		return chunk.renderSectionBlocks
 	end
 	return Snapshot.EnsureChunk( chunk )
@@ -147,6 +165,10 @@ end
 -- previous-version check prevents one edit from blessing unrelated stale data.
 -- Dense removal swaps the tail into the gap: no shifting, sorting or allocation.
 function Snapshot.UpdateCell( chunk, li, stateId, previousVersion )
+	if chunk and chunk.nativeStateStorage then
+		Snapshot.ReleaseNativeCache( chunk )
+		return
+	end
 	if not chunk or not chunk.renderSectionBlocks then return end
 	if chunk.renderSectionIndexFormat ~= Snapshot.INDEX_FORMAT
 		or chunk.renderSectionIndexStorage ~= chunk.stateSections
@@ -181,3 +203,7 @@ function Snapshot.UpdateCell( chunk, li, stateId, previousVersion )
 	end
 	chunk.renderSectionIndexVersion = chunk.collisionVersion or 0
 end
+
+-- Clear pre-existing Native copies once when this module is loaded/refreshed.
+-- No world scan or cache maintenance is installed on the frame loop.
+for _, chunk in pairs( MC.World or {} ) do Snapshot.ReleaseNativeCache( chunk ) end

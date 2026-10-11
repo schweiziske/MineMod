@@ -519,7 +519,7 @@ int draw(ILuaBase *lua)
 		l2::require(frame->mError.empty(), frame->mError.c_str());
 		uint64_t			 drawn = 0, distance = 0, frustum = 0, stale = 0, meshes = 0, testedSections = 0,
 							 drawnSections = 0, sectionFrustum = 0, sectionPortal = 0, rejectedDirections = 0,
-							 vertices = 0, rejectedVertices = 0, binds = 0, rangesDrawn = 0;
+							 vertices = 0, rejectedVertices = 0, binds = 0, rangesDrawn = 0, mergedRanges = 0;
 		CMatRenderContextPtr context(source::GetMaterialSystem());
 		l2::require(!!context, "Native draw render context unavailable");
 		context->MatrixMode(MATERIAL_MODEL);
@@ -598,19 +598,15 @@ int draw(ILuaBase *lua)
 					const bool useRanges = directional && mesh.cullable;
 					if (useRanges)
 					{
-						selected = 0;
-						for (unsigned g = 0; g < 7; ++g)
+						const auto selection = l2draw::SelectDirectionRanges(resource.mDirections, resource.mBounds, localEye, margin);
+						selected = selection.mIndices;
+						rangeCount = selection.mRangeCount;
+						rejectedDirections += selection.mRejectedDirections;
+						mergedRanges += selection.mMergedRanges;
+						for (unsigned range_index = 0; range_index < rangeCount; ++range_index)
 						{
-							const auto &range = resource.mDirections[g];
-							if (!range.count)
-								continue;
-							if (l2draw::IsDirectionVisible(g, resource.mBounds, localEye, margin))
-							{
-								ranges[rangeCount++] = CPrimList(range.first, range.count);
-								selected += range.count;
-							}
-							else
-								++rejectedDirections;
+							const auto &range = selection.mRanges[range_index];
+							ranges[range_index] = CPrimList(range.first, range.count);
 						}
 						rejectedVertices += (resource.mIndices - selected) / 6 * 4;
 						if (!selected)
@@ -686,6 +682,7 @@ int draw(ILuaBase *lua)
 		number(lua, "verticesCulled", rejectedVertices);
 		number(lua, "nativeBinds", binds);
 		number(lua, "nativeRanges", rangesDrawn);
+		number(lua, "nativeRangeMerges", mergedRanges);
 		number(lua, "nativeAsyncHits", asyncHit ? 1 : 0);
 		number(lua, "nativeSyncCulls", asyncHit ? 0 : 1);
 		number(lua, "nativeCullMS", frame->mMilliseconds);

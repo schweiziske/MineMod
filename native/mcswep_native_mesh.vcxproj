@@ -274,6 +274,9 @@
     <ClCompile Include="Module\Pch.cpp">
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="Core\CpuWorkGate.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="Legacy\BlockDefinitions.cpp" />
     <ClCompile Include="Module\Module.cpp" />
     <ClCompile Include="Legacy\BlockEmitters.cpp" />
@@ -381,6 +384,9 @@
     <ClCompile Include="World\WorldDecoder.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="World\WorldTransport.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="include\sourcesdk-minimal\utils\lzma\C\LzmaDec.c" Condition="'$(Platform)'=='Win32'">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <CompileAs>CompileAsC</CompileAs>
@@ -413,6 +419,7 @@
     <ClInclude Include="Render\Visibility\ChunkVisibilityTypes.h" />
     <ClInclude Include="Legacy\ChunkMeshDraw.h" />
     <ClInclude Include="World\ChunkKey.h" />
+    <ClInclude Include="Core\CpuWorkGate.h" />
     <ClInclude Include="Bindings\MeshBindings.h" />
     <ClInclude Include="Bindings\WorldBindings.h" />
     <ClInclude Include="World\WorldStore.h" />
@@ -420,6 +427,7 @@
     <ClInclude Include="World\WorldSession.h" />
     <ClInclude Include="Mesh\WorldMeshInput.h" />
     <ClInclude Include="World\WorldDecoder.h" />
+    <ClInclude Include="World\WorldTransport.h" />
     <ClInclude Include="Mesh\SectionGeometry.h" />
     <ClInclude Include="Render\Visibility\VisibilityQuery.h" />
     <ClInclude Include="Bindings\DrawBindings.h" />

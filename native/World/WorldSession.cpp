@@ -18,6 +18,11 @@ uint64_t Session::startDecode(DecodeMetadata metadata, std::vector<uint8_t> payl
 {
 	return decoder_.submit({store_.config(), store_.catalog(), store_.epoch(), metadata, std::move(payload)});
 }
+uint64_t Session::StartTransportDecode(uint64_t inTransport, unsigned inBatch)
+{
+	auto batch = mTransport.TakeBatch(inTransport, inBatch);
+	return startDecode(batch.mMetadata, std::move(batch.mPayload));
+}
 bool Session::commitDecode(uint64_t revision, uint64_t id, const std::vector<unsigned> &include,
 						   const std::vector<Mutation> &contexts)
 {
@@ -75,6 +80,8 @@ void Session::requestLight()
 }
 void Session::reset(Config config, std::shared_ptr<const Catalog> catalog)
 {
+	// Ingress holds wire bytes, not old-world references. The transport owner
+	// cancels obsolete streams; the accepted snapshot survives this reset.
 	// Validation/sealing can fail. Do that before cancelling the old session.
 	store_.reset(config, std::move(catalog));
 	worker_.cancel();

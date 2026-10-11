@@ -48,16 +48,19 @@ std::unique_ptr<LightCompletion> LightWorker::take()
 }
 void LightWorker::cancel()
 {
-	std::lock_guard<std::mutex> lock(mutex_);
-	if (!stats_.busy)
-		return;
-	cancelled_.store(true, std::memory_order_relaxed);
-	if (ready_ && !ready_->cancelled)
 	{
-		ready_->cancelled = true;
-		ready_->result.reset();
-		++stats_.cancelled;
+		std::lock_guard<std::mutex> lock(mutex_);
+		if (!stats_.busy)
+			return;
+		cancelled_.store(true, std::memory_order_relaxed);
+		if (ready_ && !ready_->cancelled)
+		{
+			ready_->cancelled = true;
+			ready_->result.reset();
+			++stats_.cancelled;
+		}
 	}
+	mCpuWorkGate->NotifyCancellation();
 }
 void LightWorker::stop()
 {
@@ -67,6 +70,7 @@ void LightWorker::stop()
 		cancelled_.store(true, std::memory_order_relaxed);
 		wake_.notify_one();
 	}
+	mCpuWorkGate->NotifyCancellation();
 	if (thread_.joinable())
 		thread_.join();
 	std::lock_guard<std::mutex> lock(mutex_);
@@ -87,6 +91,7 @@ void LightWorker::run()
 	{
 		std::shared_ptr<const Snapshot>	 source;
 		std::unique_ptr<LightCompletion> completion;
+		double submitted_at = 0;
 		{
 			std::unique_lock<std::mutex> lock(mutex_);
 			wake_.wait(lock, [&]
@@ -96,12 +101,15 @@ void LightWorker::run()
 			source = std::move(pending_);
 			completion = std::move(pendingCompletion_);
 			completion->id = id_;
-			completion->queueMS = now() - submittedAt_;
+			submitted_at = submittedAt_;
 			stats_.running = true;
 		}
 		try
 		{
-			completion->result = rebuildLight(std::move(source), cancelled_);
+			auto permit = mCpuWorkGate->Acquire(core::ECpuWorkClass::Lighting, cancelled_);
+			completion->queueMS = now() - submitted_at;
+			if (permit)
+				completion->result = rebuildLight(std::move(source), cancelled_);
 		}
 		catch (const std::exception &e)
 		{

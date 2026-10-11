@@ -233,7 +233,24 @@ local function activeNativeBinarySectionPatchBackend()
 	return backend
 end
 
+local function activeNativeTransportBackend()
+	local backend = activeNativeBinarySectionPatchBackend()
+	if backend and backend.SupportsNativeTransport and backend.SupportsNativeTransport() then return backend end
+	return nil
+end
+
+local function cancelNativeTransport( owner )
+	local id = owner and owner.nativeTransportId
+	if not id then return end
+	local backend = MC.NativeChunkBackend
+	local ok, err
+	if backend and backend.CancelNativeTransport then ok, err = backend.CancelNativeTransport( id ) end
+	owner.nativeTransportId = nil
+	MC.Check( ok == true, "state_transport_cancel", "native ingress %s: %s", tostring( id ), tostring( err ) )
+end
+
 local function cancelActiveBinarySnapshot()
+	cancelNativeTransport( T.snapshot )
 	local binary = T.snapshot and T.snapshot.binary
 	if not binary or not binary.activeJobId then return end
 	local backend = activeNativeBinarySectionPatchBackend() or MC.NativeChunkBackend
@@ -244,6 +261,7 @@ local function cancelActiveBinarySnapshot()
 end
 
 local function cancelNativePatch( patch, backend )
+	cancelNativeTransport( patch )
 	local jobId = patch.nativeJobId
 	if not jobId then return end
 	backend = backend or MC.NativeChunkBackend
@@ -258,6 +276,7 @@ end
 
 local function cancelPendingNativePatches()
 	cancelActiveBinarySnapshot()
+	cancelNativeTransport( T.chunkPatch )
 	for _, patch in pairs( T.pendingChunkPatches ) do cancelNativePatch( patch ) end
 end
 
@@ -327,9 +346,11 @@ end
 
 function T.NativeOwnershipChanged()
 	local binary = T.snapshot and T.snapshot.binary
-	local pending = binary and binary.activeJobId ~= nil
+	local pending = T.snapshot and T.snapshot.nativeTransportId ~= nil
+		or T.chunkPatch and T.chunkPatch.nativeTransportId ~= nil
+		or binary and binary.activeJobId ~= nil
 	for _, patch in pairs( T.pendingChunkPatches ) do
-		if patch.nativeJobId then pending = true break end
+		if patch.nativeJobId or patch.nativeTransportId then pending = true break end
 	end
 	if not pending then return false end
 	-- Do not turn a cancelled native revision into a gap or an empty patch.
@@ -709,7 +730,7 @@ local function drainTransactions()
 		else
 			local ok, err
 			if patch then
-				if patch.nativeJobId and not patch.nativeReady then break end
+				if patch.nativeTransportId or patch.nativeJobId and not patch.nativeReady then break end
 				T.pendingChunkPatches[revision] = nil
 				ok, err = applyChunkPatchNow( patch )
 			else
@@ -752,6 +773,7 @@ function T.AcceptExternalBase( generation, baseRevision )
 	if not validUInt32( baseRevision ) or baseRevision ~= T.appliedRevision then
 		return false, "base_revision_mismatch"
 	end
+	cancelActiveBinarySnapshot()
 	T.snapshot = nil
 	T.awaitingSnapshot = false
 	T.resyncRequested = false
@@ -863,6 +885,7 @@ function T.BeginSnapshot( metadata )
 	cancelActiveBinarySnapshot()
 	cancelBulkGroup()
 	T.pendingStreams = {}
+	cancelNativeTransport( T.chunkPatch )
 	T.chunkPatch = nil
 	T.snapshot = {
 		generation = T.generation,
@@ -876,6 +899,19 @@ function T.BeginSnapshot( metadata )
 		ended = false,
 		crc = nil,
 	}
+	local nativeBackend = activeNativeTransportBackend()
+	if nativeBackend then
+		local id, err = nativeBackend.BeginNativeTransport( {
+			snapshot = true, generation = T.generation, revision = baseRevision,
+			totalBytes = totalBytes, partCount = partCount, partBytes = SNAPSHOT_PART_MAX,
+		} )
+		if not id then
+			T.snapshot = nil
+			MC.Fault( "state_snapshot_ingress_begin", "%s", tostring( err ) )
+			return false, "native_snapshot_ingress_begin_failed:" .. tostring( err )
+		end
+		T.snapshot.nativeTransportId, T.snapshot.parts = id, nil
+	end
 	MC.SyncProgress = {
 		expected = totalBytes,
 		received = 0,
@@ -892,25 +928,49 @@ function T.BeginSnapshot( metadata )
 	return true
 end
 
+local function noteSnapshotReceive( snapshot, receivedParts, receivedBytes )
+	snapshot.receivedParts, snapshot.receivedBytes = receivedParts, receivedBytes
+	local progress = MC.SyncProgress
+	if progress and progress.bytes == true then
+		progress.expected = snapshot.totalBytes
+		progress.received = receivedBytes
+		progress.chunks = snapshot.partCount
+		progress.doneChunks = receivedParts
+		progress.lastUpdate = CurTime()
+	end
+end
+
+local function receiveNativePart( owner, partIndex, value, readNetwork )
+	local backend = activeNativeTransportBackend()
+	if not backend then return nil, "native_transport_backend_unavailable" end
+	local result, err
+	if readNetwork then result, err = backend.ReadNativeTransportPart( owner.nativeTransportId, partIndex, value )
+	else result, err = backend.AcceptNativeTransportPart( owner.nativeTransportId, partIndex, value ) end
+	if not result then
+		MC.Fault( "state_transport_receive", "%s", tostring( err ) )
+		return nil, "native_transport_receive_failed:" .. tostring( err )
+	end
+	return result
+end
+
 function T.AcceptSnapshotPart( generation, token, partIndex, data )
 	local snapshot = T.snapshot
 	if not snapshot or generation ~= snapshot.generation or token ~= snapshot.token then return false, "snapshot_identity_mismatch" end
 	partIndex = math.floor( tonumber( partIndex ) or -1 )
 	if partIndex < 0 or partIndex >= snapshot.partCount or not isstring( data )
 	or #data < 1 or #data > SNAPSHOT_PART_MAX then return false, "invalid_snapshot_part" end
+	if snapshot.nativeTransportId then
+		local result, err = receiveNativePart( snapshot, partIndex, data, false )
+		if not result then return false, err end
+		noteSnapshotReceive( snapshot, result.receivedParts, result.receivedBytes )
+		return true
+	end
 	if snapshot.parts[partIndex + 1] then return true, "duplicate" end
 	snapshot.parts[partIndex + 1] = data
 	snapshot.receivedParts = snapshot.receivedParts + 1
 	snapshot.receivedBytes = snapshot.receivedBytes + #data
 	if snapshot.receivedBytes > snapshot.totalBytes then return false, "snapshot_too_large" end
-	local progress = MC.SyncProgress
-	if progress and progress.bytes == true then
-		progress.expected = snapshot.totalBytes
-		progress.received = snapshot.receivedBytes
-		progress.chunks = snapshot.partCount
-		progress.doneChunks = snapshot.receivedParts
-		progress.lastUpdate = CurTime()
-	end
+	noteSnapshotReceive( snapshot, snapshot.receivedParts, snapshot.receivedBytes )
 	return true
 end
 
@@ -925,6 +985,7 @@ local function sendSnapshotAck( snapshot, success )
 end
 
 local function finishSnapshotApplication( snapshot )
+	cancelNativeTransport( snapshot )
 	T.snapshot = nil
 	T.awaitingSnapshot = false
 	publishAppliedRevision( snapshot.baseRevision )
@@ -952,6 +1013,7 @@ local function finishSnapshotApplication( snapshot )
 end
 
 local function rejectBinarySnapshot( snapshot, reason )
+	local nativeIngress = snapshot.nativeTransportId ~= nil
 	cancelActiveBinarySnapshot()
 	cancelBulkGroup()
 	sendSnapshotAck( snapshot, false )
@@ -959,6 +1021,7 @@ local function rejectBinarySnapshot( snapshot, reason )
 	resetClientWorld()
 	T.awaitingSnapshot = true
 	T.RequestResync( reason or "binary_snapshot_failed" )
+	if nativeIngress then MC.Fault( "state_snapshot_ingress_failed", "%s", tostring( reason ) ) end
 	return false, reason or "binary_snapshot_failed"
 end
 
@@ -980,6 +1043,8 @@ end
 
 local function noteBinarySnapshotBatch( snapshot, result, keys )
 	local binary = snapshot.binary
+	-- Compatibility decoders also release the committed payload immediately.
+	binary.batches[binary.nextBatch].payload = nil
 	for key in pairs( keys ) do binary.seenChunks[key] = true end
 	for _, chunk in ipairs( result.chunks or {} ) do
 		noteBulkChunk( binary.bulkGroup, chunk.cx, chunk.cy, chunk.cz, true )
@@ -997,6 +1062,40 @@ local function noteBinarySnapshotBatch( snapshot, result, keys )
 		progress.lastUpdate = CurTime()
 		progress.bytes = false
 	end
+end
+
+local function initializeBinarySnapshot( snapshot, decoded )
+	local bulkGroup, groupError = beginBulkGroup( snapshot.token, true, false )
+	if not bulkGroup then return rejectBinarySnapshot( snapshot, groupError or "binary_snapshot_group_failed" ) end
+	if MC.ResetClientWorldForStateSync then
+		MC.ResetClientWorldForStateSync( decoded.chunkCount, decoded.cellCount )
+	else
+		return rejectBinarySnapshot( snapshot, "binary_snapshot_reset_unavailable" )
+	end
+	snapshot.binary = {
+		batches = decoded.batches, chunkCount = decoded.chunkCount, cellCount = decoded.cellCount,
+		nextBatch = 1, committedChunks = 0, committedCells = 0, seenChunks = {}, bulkGroup = bulkGroup,
+	}
+	MC.SyncProgress = {
+		expected = decoded.cellCount, received = 0, chunks = decoded.chunkCount, doneChunks = 0,
+		active = true, lastUpdate = CurTime(), snapshot = true, bytes = false,
+	}
+	return true
+end
+
+local function loadLegacySnapshot( snapshot, compressed )
+	local json = util.Decompress( compressed )
+	local saveData = json and util.JSONToTable( json ) or nil
+	local ok, loadError
+	if saveData and MC.LoadSnapshotSaveData then ok, loadError = MC.LoadSnapshotSaveData( saveData ) end
+	if ok ~= true then
+		sendSnapshotAck( snapshot, false )
+		cancelNativeTransport( snapshot )
+		T.snapshot = nil
+		T.RequestResync( loadError or "snapshot_decode_failed" )
+		return false, loadError or "snapshot_decode_failed"
+	end
+	return finishSnapshotApplication( snapshot )
 end
 
 local function finishBinarySnapshot( snapshot )
@@ -1022,21 +1121,45 @@ end
 
 function T.PollBinarySnapshot()
 	local snapshot = T.snapshot
+	if snapshot and snapshot.nativeTransportId and snapshot.ended and not snapshot.binary then
+		local backend = activeNativeTransportBackend()
+		if not backend then return rejectBinarySnapshot( snapshot, "native_transport_backend_unavailable" ) end
+		local status, err = backend.PollNativeTransport( snapshot.nativeTransportId )
+		if not status then return rejectBinarySnapshot( snapshot, "native_transport_poll_failed:" .. tostring( err ) ) end
+		if status.status == "failed" then
+			return rejectBinarySnapshot( snapshot, status.error )
+		end
+		if status.status ~= "ready" then return false end
+		if not status.binary then
+			local payload, legacyError = backend.TakeLegacyNativeTransport( snapshot.nativeTransportId )
+			if not payload then return rejectBinarySnapshot( snapshot, legacyError ) end
+			cancelNativeTransport( snapshot )
+			return loadLegacySnapshot( snapshot, payload )
+		end
+		local ok, initError = initializeBinarySnapshot( snapshot, status )
+		if not ok then return false, initError end
+	end
 	local binary = snapshot and snapshot.binary
 	if not binary or T.desynced then return false end
 	if binary.nextBatch > #binary.batches then return finishBinarySnapshot( snapshot ) end
 
 	local batch = binary.batches[binary.nextBatch]
 	local nativeBackend = activeNativeBinarySectionPatchBackend()
-	if binary.activeJobId and not nativeBackend then
+	if ( binary.activeJobId or snapshot.nativeTransportId ) and not nativeBackend then
 		return rejectBinarySnapshot( snapshot, "native_binary_snapshot_backend_unavailable" )
 	end
 	if nativeBackend then
 		if not binary.activeJobId then
-			local jobId, epoch = nativeBackend.StartBinarySectionPatchDecode(
-				batch.payload, batch.compression, batch.rawBytes,
-				snapshot.generation, snapshot.baseRevision, batch.chunkCount, batch.cellCount )
-			if not jobId then return rejectBinarySnapshot( snapshot, "native_binary_snapshot_submit_failed" ) end
+			local jobId, epoch
+			if snapshot.nativeTransportId then
+				jobId, epoch = nativeBackend.StartNativeTransportDecode( snapshot.nativeTransportId, binary.nextBatch )
+			else
+				jobId, epoch = nativeBackend.StartBinarySectionPatchDecode(
+					batch.payload, batch.compression, batch.rawBytes,
+					snapshot.generation, snapshot.baseRevision, batch.chunkCount, batch.cellCount )
+			end
+			if not jobId then return rejectBinarySnapshot( snapshot, "native_binary_snapshot_submit_failed:" .. tostring( epoch ) ) end
+			batch.payload = nil
 			binary.activeJobId, binary.activeEpoch = jobId, epoch
 			return true
 		end
@@ -1055,8 +1178,8 @@ function T.PollBinarySnapshot()
 		local include = {}
 		for index = 1, batch.chunkCount do include[index] = index end
 		local committed = nativeBackend.CommitBinarySectionPatch( binary.activeJobId, include )
-		binary.activeJobId = nil
 		if not committed then return rejectBinarySnapshot( snapshot, "native_binary_snapshot_commit_failed" ) end
+		binary.activeJobId = nil
 		local ok, result = MC.FinalizeNativeStateChunkPatch( committed, binary.activeEpoch, { fullSnapshot = true } )
 		if ok ~= true or not istable( result ) then
 			return rejectBinarySnapshot( snapshot, result or "native_binary_snapshot_finalize_failed" )
@@ -1086,8 +1209,17 @@ function T.EndSnapshot( generation, baseRevision, token, crc )
 	local snapshot = T.snapshot
 	if not snapshot or generation ~= snapshot.generation or token ~= snapshot.token
 	or baseRevision ~= snapshot.baseRevision then return false, "snapshot_identity_mismatch" end
+	if snapshot.ended then return true end
 	if snapshot.receivedParts ~= snapshot.partCount or snapshot.receivedBytes ~= snapshot.totalBytes then
 		return false, "snapshot_incomplete"
+	end
+	if snapshot.nativeTransportId then
+		local backend = activeNativeTransportBackend()
+		if not backend then return rejectBinarySnapshot( snapshot, "native_transport_backend_unavailable" ) end
+		local ok, err = backend.SealNativeTransport( snapshot.nativeTransportId, tostring( crc or "" ) )
+		if not ok then return rejectBinarySnapshot( snapshot, "native_transport_seal_failed:" .. tostring( err ) ) end
+		snapshot.ended = true
+		return true
 	end
 	local compressed = table.concat( snapshot.parts )
 	if tostring( crc or "" ) ~= "" and util.CRC( compressed ) ~= tostring( crc ) then
@@ -1103,50 +1235,13 @@ function T.EndSnapshot( generation, baseRevision, token, crc )
 	and MC.BinarySectionPatch.IsSnapshotPayload( compressed ) then
 		local decoded, decodeError = MC.BinarySectionPatch.DecodeSnapshotPayload( compressed )
 		if not decoded then return rejectBinarySnapshot( snapshot, decodeError or "binary_snapshot_decode_failed" ) end
-		local bulkGroup, groupError = beginBulkGroup( snapshot.token, true, false )
-		if not bulkGroup then return rejectBinarySnapshot( snapshot, groupError or "binary_snapshot_group_failed" ) end
-		if MC.ResetClientWorldForStateSync then
-			MC.ResetClientWorldForStateSync( decoded.chunkCount, decoded.cellCount )
-		else
-			resetClientWorld()
-		end
-		snapshot.binary = {
-			batches = decoded.batches,
-			chunkCount = decoded.chunkCount,
-			cellCount = decoded.cellCount,
-			nextBatch = 1,
-			committedChunks = 0,
-			committedCells = 0,
-			seenChunks = {},
-			bulkGroup = bulkGroup,
-		}
-		MC.SyncProgress = {
-			expected = decoded.cellCount,
-			received = 0,
-			chunks = decoded.chunkCount,
-			doneChunks = 0,
-			active = true,
-			lastUpdate = CurTime(),
-			snapshot = true,
-			bytes = false,
-		}
+		local ok, initError = initializeBinarySnapshot( snapshot, decoded )
+		if not ok then return false, initError end
+		snapshot.ended = true
 		return T.PollBinarySnapshot()
 	end
 
-	local json = util.Decompress( compressed )
-	local saveData = json and util.JSONToTable( json ) or nil
-	local ok, loadError
-	if saveData and MC.LoadSnapshotSaveData then
-		ok, loadError = MC.LoadSnapshotSaveData( saveData )
-	end
-	if ok ~= true then
-		sendSnapshotAck( snapshot, false )
-		T.snapshot = nil
-		T.RequestResync( loadError or "snapshot_decode_failed" )
-		return false, loadError or "snapshot_decode_failed"
-	end
-
-	return finishSnapshotApplication( snapshot )
+	return loadLegacySnapshot( snapshot, compressed )
 end
 
 function T.CheckRevisionGap( now )
@@ -1332,6 +1427,20 @@ function T.BeginChunkPatch( metadata )
 		receivedParts = 0,
 		receivedBytes = 0,
 	}
+	local nativeBackend = binary and activeNativeTransportBackend() or nil
+	if nativeBackend then
+		local id, err = nativeBackend.BeginNativeTransport( {
+			generation = metadata.generation, revision = revision, totalBytes = totalBytes,
+			partCount = partCount, partBytes = CHUNK_PATCH_PART_MAX, compression = compression,
+			rawBytes = rawBytes, chunkCount = chunkCount, cellCount = cellCount,
+		} )
+		if not id then
+			T.chunkPatch = nil
+			MC.Fault( "state_patch_ingress_begin", "%s", tostring( err ) )
+			return false, "native_patch_ingress_begin_failed:" .. tostring( err )
+		end
+		T.chunkPatch.nativeTransportId, T.chunkPatch.parts = id, nil
+	end
 	if MC.StreamPerformanceEnabled and MC.StreamPerformanceEnabled() and MC.StreamPerformancePatchBegin then
 		MC.StreamPerformancePatchBegin( T.chunkPatch )
 	end
@@ -1347,6 +1456,12 @@ function T.AcceptChunkPatchPart( generation, token, partIndex, data )
 	partIndex = math.floor( tonumber( partIndex ) or -1 )
 	if partIndex < 0 or partIndex >= patch.partCount or not isstring( data )
 	or #data < 1 or #data > CHUNK_PATCH_PART_MAX then return false, "invalid_chunk_patch_part" end
+	if patch.nativeTransportId then
+		local result, err = receiveNativePart( patch, partIndex, data, false )
+		if not result then return false, err end
+		patch.receivedParts, patch.receivedBytes = result.receivedParts, result.receivedBytes
+		return true
+	end
 	local slot = partIndex + 1
 	if patch.parts[slot] then return true, "duplicate" end
 	patch.parts[slot] = data
@@ -1485,11 +1600,32 @@ function T.EndBinaryChunkPatch( generation, revision, groupId, token, crc )
 		return false, "binary_patch_incomplete"
 	end
 	local function fail( reason )
+		if patch.nativeTransportId then
+			cancelNativeTransport( patch )
+			MC.Fault( "state_patch_ingress_seal", "%s", tostring( reason ) )
+		end
 		if perfEnabled then
 			MC.StreamPerformancePatchFailure( revision, reason )
 			MC.StreamPerformanceSetStage( nil )
 		end
 		return false, reason
+	end
+	if patch.nativeTransportId then
+		local backend = activeNativeTransportBackend()
+		if not backend then return fail( "native_transport_backend_unavailable" ) end
+		local ok, err = backend.SealNativeTransport( patch.nativeTransportId, tostring( crc or "" ) )
+		if not ok then return fail( "native_transport_seal_failed:" .. tostring( err ) ) end
+		T.pendingPatchAnnouncements[revision] = nil
+		T.chunkPatch = nil
+		T.pendingChunkPatches[revision] = {
+			generation = generation, revision = revision, groupId = groupId,
+			nativeTransportId = patch.nativeTransportId, nativeBinary = true,
+		}
+		if perfEnabled then
+			MC.StreamPerformancePatchStage( revision, "native_ingress_seal", ( SysTime() - totalStarted ) * 1000 )
+			MC.StreamPerformanceSetStage( nil )
+		end
+		return true
 	end
 	if perfEnabled and MC.StreamPerformanceSetStage then MC.StreamPerformanceSetStage( "patch.concat" ) end
 	local started = perfEnabled and SysTime() or nil
@@ -1563,14 +1699,34 @@ function T.EndBinaryChunkPatch( generation, revision, groupId, token, crc )
 end
 
 function T.PollNativeChunkPatches()
-	if T.desynced then return false end
+	-- Snapshot installation resets the destination epoch. Keep newer ingress
+	-- bytes Native-owned until that reset/application finishes, then decode them.
+	if T.desynced or T.snapshot then return false end
 	local hasNativeJobs = false
 	for _, patch in pairs( T.pendingChunkPatches ) do
-		if patch.nativeJobId then hasNativeJobs = true break end
+		if patch.nativeJobId or patch.nativeTransportId then hasNativeJobs = true break end
 	end
 	if not hasNativeJobs then return false end
 	local progressed = false
 	for revision, patch in pairs( T.pendingChunkPatches ) do
+		if patch.nativeTransportId then
+			local backend = activeNativeTransportBackend()
+			if not backend then T.RequestResync( "native_transport_backend_unavailable" ) return false end
+			local status, err = backend.PollNativeTransport( patch.nativeTransportId )
+			if not status then T.RequestResync( "native_transport_poll_failed:" .. tostring( err ) ) return false end
+			if status.status == "failed" then
+				T.RequestResync( status.error or "native_transport_validate_failed" )
+				MC.Fault( "state_patch_ingress_validate", "%s", tostring( status.error ) )
+				return false
+			end
+			if status.status == "ready" then
+				local jobId, epoch = backend.StartNativeTransportDecode( patch.nativeTransportId, 1 )
+				if not jobId then T.RequestResync( "native_transport_decode_submit_failed:" .. tostring( epoch ) ) return false end
+				cancelNativeTransport( patch )
+				patch.nativeJobId, patch.nativeEpoch = jobId, epoch
+				progressed = true
+			end
+		end
 		if patch.nativeJobId and not patch.nativeReady then
 			local patchBackend
 			if patch.nativeBinary then patchBackend = activeNativeBinarySectionPatchBackend()
@@ -1825,14 +1981,24 @@ if net and net.Receive then
 			T.RequestResync( "invalid_binary_patch_part_length" )
 			return
 		end
-		local data = net.ReadData( length )
-		if not isstring( data ) or #data ~= length then
-			T.RequestResync( "invalid_binary_patch_part_data" )
-			return
+		local patch = T.chunkPatch
+		local ok, err
+		if patch and patch.nativeTransportId and generation == patch.generation and token == patch.token then
+			local result
+			result, err = receiveNativePart( patch, partIndex, length, true )
+			if not result then T.RequestResync( err ) return end
+			patch.receivedParts, patch.receivedBytes = result.receivedParts, result.receivedBytes
+			ok = true
+		else
+			local data = net.ReadData( length )
+			if not isstring( data ) or #data ~= length then
+				T.RequestResync( "invalid_binary_patch_part_data" )
+				return
+			end
+			ok, err = T.AcceptChunkPatchPart( generation, token, partIndex, data )
 		end
 		local ackBytes = math.Clamp( net.ReadUInt( 32 ), 0, CHUNK_PATCH_PART_MAX + 4096 )
 		if MC.QueueReliableAck then MC.QueueReliableAck( ackBytes ) end
-		local ok, err = T.AcceptChunkPatchPart( generation, token, partIndex, data )
 		if not ok and not T.resyncRequested then T.RequestResync( err or "binary_patch_part_rejected" ) end
 	end )
 
@@ -1865,10 +2031,21 @@ if net and net.Receive then
 		local token = net.ReadUInt( 32 )
 		local partIndex = net.ReadUInt( 16 )
 		local length = net.ReadUInt( 16 )
-		local data = length > 0 and length <= SNAPSHOT_PART_MAX and net.ReadData( length ) or nil
+		if length < 1 or length > SNAPSHOT_PART_MAX then T.RequestResync( "invalid_snapshot_part_length" ) return end
+		local snapshot = T.snapshot
+		local ok, err
+		if snapshot and snapshot.nativeTransportId and generation == snapshot.generation and token == snapshot.token then
+			local result
+			result, err = receiveNativePart( snapshot, partIndex, length, true )
+			if not result then T.RequestResync( err ) return end
+			noteSnapshotReceive( snapshot, result.receivedParts, result.receivedBytes )
+			ok = true
+		else
+			local data = net.ReadData( length )
+			ok, err = T.AcceptSnapshotPart( generation, token, partIndex, data )
+		end
 		local ackBytes = math.Clamp( net.ReadUInt( 32 ), 0, SNAPSHOT_PART_MAX + 4096 )
 		if MC.QueueReliableAck then MC.QueueReliableAck( ackBytes ) end
-		local ok, err = T.AcceptSnapshotPart( generation, token, partIndex, data )
 		if not ok then T.RequestResync( err or "snapshot_part_rejected" ) end
 	end )
 

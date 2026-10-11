@@ -56,6 +56,9 @@ private:
 	void					  Stage(const std::vector<Span> &inSpans);
 	void					  StageNative(const l2::LightPixels &inPixels, unsigned inFirst);
 	void					  PrepareTransaction(const l2::PixelTransaction &inTransaction);
+	/// Validate ranges, then compare with successfully published pixels. Pending
+	/// writes or a regenerator error disable this fast path, including rollback.
+	bool MatchesPublished(const l2::PixelTransaction &inTransaction) const;
 	// Transaction ranges are prevalidated; rollback may need new pending rows
 	// after a prior Flush. This allocates ranges but does not revalidate pixels.
 	void StageTransactionPixels(const l2::LightPixels &inPixels, unsigned inFirst);

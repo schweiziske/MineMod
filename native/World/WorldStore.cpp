@@ -136,6 +136,7 @@ std::shared_ptr<const Chunk> editChunk(const Config &cfg, const Catalog &catalog
 		}
 	}
 	require(chunk->terrainPresent || chunk->count == 0, "known-empty record contains terrain");
+	chunk->SealMemoryUsage();
 	return chunk;
 }
 void validateMutation(const Config &cfg, const Catalog &catalog, const Mutation &mutation)
@@ -230,13 +231,44 @@ void Catalog::validate() const
 	for (auto flag : contextual)
 		require(flag <= 1, "invalid context state flag");
 	require(contextual.empty() || contextual[0] == 0, "air cannot require a lighting context");
+	require(mBlockEntityStates.empty() || mBlockEntityStates.size() == states.size(), "invalid block entity state map");
+	for (auto flag : mBlockEntityStates)
+		require(flag <= 1, "invalid block entity state flag");
+	require(mBlockEntityStates.empty() || mBlockEntityStates[0] == 0, "air cannot own a block entity");
 	for (const auto &profile : states)
 		profile.validate();
 	const auto &air = states[0];
 	require(air.emission == 0 && air.opacity == 0 && air.skyCost == 1, "state zero must be non-emitting air");
 }
 Chunk::Chunk(const Config &config)
-	: sections(config.sectionCount()), columnTops(config.chunkSize * config.chunkSize, -1) {}
+	: sections(config.sectionCount()), columnTops(config.chunkSize * config.chunkSize, -1)
+{
+	SealMemoryUsage();
+}
+void Chunk::SealMemoryUsage()
+{
+	l2::MemoryUsage usage;
+	std::unordered_set<const l2::Shape *> shapes;
+	for (const auto &section : sections)
+	{
+		if (!section)
+			continue;
+		usage.share(section, sizeof(Section) + section->states.capacity() * sizeof(uint32_t) +
+			section->counts.size() * 64 + section->counts.bucket_count() * sizeof(void *) +
+			section->contexts.size() * (sizeof(Profile) + 64) + section->contexts.bucket_count() * sizeof(void *));
+		for (const auto &context : section->contexts)
+		{
+			const auto &shape = context.second.shape;
+			if (shapes.insert(shape.get()).second)
+				usage.share(shape, shape->bytes());
+		}
+	}
+	usage.normalize();
+	usage.owned = sizeof(Chunk) + sections.capacity() * sizeof(std::shared_ptr<const Section>) +
+		columnTops.capacity() * sizeof(int16_t) + usage.shared.capacity() * sizeof(l2::SharedAllocation);
+	usage.total(); // Keep admission arithmetic checked at the sealing boundary.
+	mMemoryUsage = std::move(usage);
+}
 bool Snapshot::known(Coord chunk) const
 {
 	return chunks.find(chunk) != chunks.end() || !config.streaming || chunk.z < config.minChunkZ || chunk.z > config.maxChunkZ;
@@ -907,6 +939,46 @@ std::shared_ptr<const Chunk> Store::chunk(Coord coord) const
 	const auto found = chunks_.find(coord);
 	return found == chunks_.end() ? nullptr : found->second;
 }
+std::vector<CellEdit> Store::ReadSectionCells(Coord inChunk, unsigned inSection,
+	const std::unordered_set<uint32_t> *inStates) const
+{
+	config_.validateChunk(inChunk);
+	require(inSection < config_.sectionCount(), "invalid native section index");
+	const auto source = chunk(inChunk);
+	require(source != nullptr, "native section source is absent");
+	const auto &section = source->sections[inSection];
+	std::vector<CellEdit> cells;
+	if (!section || (inStates && inStates->empty()))
+		return cells;
+	size_t count = section->count;
+	if (inStates)
+	{
+		count = 0;
+		for (uint32_t state : *inStates)
+		{
+			const auto found = section->counts.find(state);
+			if (found != section->counts.end())
+				count += found->second;
+		}
+	}
+	cells.reserve(count);
+	const unsigned size = unsigned(config_.sectionSize);
+	const unsigned width = unsigned(config_.chunkSize), xy = width / size;
+	const unsigned base_x = inSection % xy * size;
+	const unsigned base_y = inSection / xy % xy * size;
+	const unsigned base_z = inSection / (xy * xy) * size;
+	for (unsigned i = 0; i < section->states.size(); ++i)
+	{
+		const uint32_t state = section->states[i];
+		if (!state || (inStates && inStates->find(state) == inStates->end()))
+			continue;
+		const unsigned x = base_x + i % size;
+		const unsigned y = base_y + i / size % size;
+		const unsigned z = base_z + i / (size * size);
+		cells.push_back({x + width * (y + width * z), state});
+	}
+	return cells;
+}
 Grid<std::vector<unsigned>> affectedLightSections(const Config &cfg, const LightChanges &changed)
 {
 	Grid<std::vector<uint8_t>> owners;
@@ -1141,17 +1213,13 @@ void MeshSnapshot::memoryUsage(l2::MemoryUsage &usage) const
 {
 	usage.owned += sizeof(*this) + sizeof(Snapshot) + (world->chunks.size() + light.size() + columns.size()) * 64;
 	const auto &catalog = world->catalog;
-	usage.share(catalog, sizeof(Catalog) + catalog->states.capacity() * sizeof(Profile) + catalog->contextual.capacity() + catalog->shapeBytes);
+	usage.share(catalog, sizeof(Catalog) + catalog->states.capacity() * sizeof(Profile) + catalog->contextual.capacity() + catalog->mBlockEntityStates.capacity() + catalog->shapeBytes);
 	const auto addChunk = [&](const std::shared_ptr<const Chunk> &chunk)
 	{
-		usage.share(chunk, sizeof(Chunk) + chunk->sections.capacity() * sizeof(std::shared_ptr<const Section>) + chunk->columnTops.capacity() * sizeof(int16_t));
-		for (const auto &section : chunk->sections)
-			if (section)
-			{
-				usage.share(section, sizeof(Section) + section->states.capacity() * sizeof(uint32_t) + section->counts.size() * 64 + section->counts.bucket_count() * sizeof(void *) + section->contexts.size() * (sizeof(Profile) + 64) + section->contexts.bucket_count() * sizeof(void *));
-				for (const auto &context : section->contexts)
-					usage.share(context.second.shape, context.second.shape->bytes());
-			}
+		usage.share(chunk, chunk->mMemoryUsage.owned);
+		const auto &shared = chunk->mMemoryUsage.shared;
+		// Entries already include MemoryUsage's ownership overhead.
+		usage.shared.insert(usage.shared.end(), shared.begin(), shared.end());
 	};
 	for (const auto &entry : world->chunks)
 		addChunk(entry.second);

@@ -1,6 +1,7 @@
 #pragma once
 #include "World/LightWorker.h"
 #include "World/WorldDecoder.h"
+#include "World/WorldTransport.h"
 
 namespace mcmesh::world
 {
@@ -23,6 +24,11 @@ public:
 	const Store		&store() const { return store_; }
 	bool			 apply(uint64_t revision, const std::vector<Mutation> &batch);
 	uint64_t		 startDecode(DecodeMetadata metadata, std::vector<uint8_t> payload);
+	/// Owner-thread transfer into the decoder using the current world/catalog.
+	/// The transport batch is consumed; a submission failure must cancel ingress.
+	uint64_t		 StartTransportDecode(uint64_t inTransport, unsigned inBatch);
+	WorldTransport &GetTransport() { return mTransport; }
+	const WorldTransport &GetTransport() const { return mTransport; }
 	DecodeStatus	 pollDecode(uint64_t id) const { return decoder_.poll(id); }
 	void			 cancelDecode(uint64_t id) { decoder_.release(id); }
 	void			 cancelAllDecodes() { decoder_.cancelAll(); }
@@ -41,6 +47,7 @@ private:
 	Store		 store_;
 	LightWorker	 worker_;
 	DecodeWorker decoder_;
+	WorldTransport mTransport;
 	bool		 dirty_ = false, failed_ = false;
 	double		 commitMS_ = 0, snapshotMS_ = 0;
 };

@@ -248,6 +248,20 @@ void PixelTexture::PrepareTransaction(const l2::PixelTransaction &inTransaction)
 		PrepareNativeLocked(*update.next, update.first);
 }
 
+bool PixelTexture::MatchesPublished(const l2::PixelTransaction &inTransaction) const
+{
+	for (const auto &update : inTransaction.updates())
+		l2::validatePixelRange(*update.next, mWidth, mHeight, update.first);
+	std::lock_guard<std::mutex> lock(mMutex);
+	if (!mImage.pending.empty() || mError)
+		return false;
+	for (const auto &update : inTransaction.updates())
+		for (const auto &span : NativeSpans(*update.next, update.first))
+			if (!mImage.MatchesPublished(span))
+				return false;
+	return true;
+}
+
 void PixelTexture::StageTransactionPixels(const l2::LightPixels &inPixels, unsigned inFirst)
 {
 	std::lock_guard<std::mutex> lock(mMutex);

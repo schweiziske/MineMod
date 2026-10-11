@@ -263,8 +263,9 @@ function RM.PrepareGeneratedPlanCulling( snapshots, sectionIndex )
 	if not visit then return GeneratedCullPlans end -- No generated catalog in legacy-only clients.
 	for index = sectionIndex or 1, sectionIndex or #snapshots do
 		local snapshot = snapshots[index]
-		-- Native-only sections keep their voxel arrays in the worker world.
-		for i = 1, snapshot.nativeOnly and 0 or snapshot.count do
+		-- Only Lua-emitted cells need generated-plan preparation. Total section
+		-- occupancy may be larger than the filtered emitter arrays.
+		for i = 1, snapshot.luaCount or ( snapshot.nativeOnly and 0 or snapshot.count ) do
 			local stateId = snapshot.states[i]
 			if GeneratedCullPlans[stateId] == nil then
 				local allCubic, found = true, false

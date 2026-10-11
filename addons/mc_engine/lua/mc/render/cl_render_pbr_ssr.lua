@@ -34,7 +34,10 @@ local slots = { "$c0_x", "$c0_y", "$c0_z", "$c0_w", "$c1_x", "$c1_y", "$c1_z", "
 function S.Register( waterMaterial, definition, maps, blockSize )
     if not definition.programs.water_ssr then return end
     local old = S.groups[waterMaterial]
-    if old then return old end
+    if old then
+        old.composite:SetTexture( "$texture2", MC.RenderPackResources.shared.lightmap )
+        return old
+    end
     local programs = definition.programs
     requireValue( programs.scene_depth and programs.ssr_copy and programs.water_ssr_composite,
         "render_ssr_programs", "water SSR requires scene depth, source copy, trace and composite programs" )
@@ -55,6 +58,7 @@ function S.Register( waterMaterial, definition, maps, blockSize )
     group.radius = math.sqrt( 2 * group.halfXY * group.halfXY + group.halfZ * group.halfZ )
     requireValue( group.trace and not group.trace:IsError() and group.composite and not group.composite:IsError()
         and group.copy and not group.copy:IsError(), "render_ssr_materials", "water SSR materials failed to load" )
+    group.composite:SetTexture( "$texture2", MC.RenderPackResources.shared.lightmap )
     MC.RenderPBR.Register( group.composite )
     S.groups[waterMaterial] = group
     return group

@@ -383,6 +383,27 @@ static void directionTests()
 	check(!IsDirectionVisible(0, box, {0, 0, -1}, 0), "back face was retained");
 	check(IsDirectionVisible(1, box, {0, 0, -1}, 0), "front face was discarded");
 	check(IsDirectionVisible(6, box, {0, 0, -100}, 0), "unassigned geometry was discarded");
+	const auto inside = SelectDirectionRanges(order.ranges, box, {0.5, 0.5, 0.5}, 0);
+	check(inside.mRangeCount == 1 && inside.mMergedRanges == 6 && inside.mIndices == 54,
+		  "consecutive visible directional ranges were not merged");
+	for (const Vec eye : {Vec{-1, -1, -1}, Vec{2, 2, 2}, Vec{0, 0.5, 1}, Vec{-1, 0.5, 2}})
+	{
+		std::vector<unsigned> original_indices, submitted_indices;
+		for (unsigned group = 0; group < order.ranges.size(); ++group)
+			if (IsDirectionVisible(group, box, eye, 0))
+				for (unsigned i = 0; i < order.ranges[group].count; ++i)
+					original_indices.push_back(order.ranges[group].first + i);
+		const auto selected = SelectDirectionRanges(order.ranges, box, eye, 0);
+		for (unsigned range = 0; range < selected.mRangeCount; ++range)
+			for (unsigned i = 0; i < selected.mRanges[range].count; ++i)
+				submitted_indices.push_back(selected.mRanges[range].first + i);
+		check(submitted_indices == original_indices && selected.mIndices == original_indices.size(),
+			  "range merging changed the submitted index stream or face order");
+	}
+	auto separated = order.ranges;
+	separated[6].first += 6;
+	const auto gap = SelectDirectionRanges(separated, box, {0.5, 0.5, 0.5}, 0);
+	check(gap.mRangeCount == 2 && gap.mIndices == 54, "range merging crossed an unselected index gap");
 }
 static void workerTests()
 {

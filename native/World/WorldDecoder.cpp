@@ -1,4 +1,5 @@
 #include "World/WorldDecoder.h"
+#include "Core/CpuWorkGate.h"
 #include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
@@ -215,6 +216,7 @@ std::shared_ptr<const DecodedResult> decodeBinary(const DecodeInput &input, cons
 	require(count == input.metadata.chunks && total == input.metadata.cells, "binary_patch_metadata_mismatch");
 	auto output = std::make_shared<DecodedResult>();
 	output->metadata = input.metadata;
+	output->mBlockEntityCellsComplete = !input.catalog->mBlockEntityStates.empty();
 	std::vector<Mutation> mutations;
 	mutations.reserve(count);
 	output->chunks.reserve(count);
@@ -253,6 +255,8 @@ std::shared_ptr<const DecodedResult> decodeBinary(const DecodeInput &input, cons
 			mutation.cells.push_back({li, state});
 			if (!input.catalog->contextual.empty() && input.catalog->contextual[state])
 				chunk.contextCells.push_back({li, state});
+			if (output->mBlockEntityCellsComplete && input.catalog->mBlockEntityStates[state])
+				chunk.mBlockEntityCells.push_back({li, state});
 		}
 		actual += chunk.count;
 		require(actual <= total, "binary_patch_total_count_mismatch");
@@ -271,6 +275,7 @@ std::shared_ptr<const DecodedResult> decodeBinary(const DecodeInput &input, cons
 }
 struct DecodeWorker::Impl
 {
+	std::shared_ptr<core::CpuWorkGate> mCpuWorkGate = core::GetCpuWorkGate();
 	struct Job
 	{
 		uint64_t		  id = 0;
@@ -303,9 +308,12 @@ struct DecodeWorker::Impl
 				job->status.state = DecodeState::Running;
 			}
 			DecodeStatus result;
+			core::CpuWorkPermit permit;
 			try
 			{
-				result.result = decodeBinary(job->input, job->cancelled);
+				permit = mCpuWorkGate->Acquire(core::ECpuWorkClass::Decode, job->cancelled);
+				if (permit)
+					result.result = decodeBinary(job->input, job->cancelled);
 				result.state = result.result ? DecodeState::Ready : DecodeState::Cancelled;
 			}
 			catch (const std::exception &e)
@@ -313,7 +321,13 @@ struct DecodeWorker::Impl
 				result.state = DecodeState::Failed;
 				result.error = e.what();
 			}
+			catch (...)
+			{
+				result.state = DecodeState::Failed;
+				result.error = "unknown Native decode worker failure";
+			}
 			job->input = {};
+			permit.Reset(); // Input disposal belongs to worker CPU work, not publication.
 			{
 				std::lock_guard<std::mutex> lock(mutex);
 				if (job->cancelled.load())
@@ -341,6 +355,16 @@ uint64_t DecodeWorker::submit(DecodeInput input)
 	// Admission budget covers compressed input, decompressed/JSON temporaries
 	// and decoded/rearranged section arrays, not unrelated process allocations.
 	job->reservation = input.payload.size() + size_t(input.metadata.rawBytes) * 3 + size_t(input.metadata.chunks) * input.config.cellCount() * sizeof(uint32_t) * 4;
+	// Vector capacity can grow beyond the sparse count. Account for the new list
+	// before admitting the job, even when every transmitted cell is an attachment.
+	if (!input.catalog->mBlockEntityStates.empty())
+		job->reservation += size_t(input.metadata.cells) * sizeof(CellEdit) * 2;
+	// Decoder replacements have no per-cell contexts yet. Reserve their cached
+	// section inventory, including vector growth and the new inventory object.
+	const auto inventory_bytes = l2::checkedAdd(sizeof(l2::MemoryUsage),
+		l2::checkedMultiply(size_t(input.config.sectionCount()) * 2, sizeof(l2::SharedAllocation)));
+	job->reservation = l2::checkedAdd(job->reservation,
+		l2::checkedMultiply(input.metadata.chunks, inventory_bytes));
 	job->input = std::move(input);
 	auto					   &impl = *impl_;
 	std::lock_guard<std::mutex> lock(impl.mutex);
@@ -377,33 +401,39 @@ DecodeStatus DecodeWorker::poll(uint64_t id) const
 }
 void DecodeWorker::release(uint64_t id)
 {
-	auto					   &impl = *impl_;
-	std::lock_guard<std::mutex> lock(impl.mutex);
-	const auto					found = impl.jobs.find(id);
-	if (found == impl.jobs.end())
-		return;
-	const auto &job = found->second;
-	job->cancelled = true;
-	if (job->status.state != DecodeState::Running)
+	auto &impl = *impl_;
 	{
-		if (job->status.state == DecodeState::Queued)
-			impl.queue.erase(std::remove(impl.queue.begin(), impl.queue.end(), job), impl.queue.end());
-		impl.reserved -= job->reservation;
+		std::lock_guard<std::mutex> lock(impl.mutex);
+		const auto found = impl.jobs.find(id);
+		if (found == impl.jobs.end())
+			return;
+		const auto &job = found->second;
+		job->cancelled = true;
+		if (job->status.state != DecodeState::Running)
+		{
+			if (job->status.state == DecodeState::Queued)
+				impl.queue.erase(std::remove(impl.queue.begin(), impl.queue.end(), job), impl.queue.end());
+			impl.reserved -= job->reservation;
+		}
+		impl.jobs.erase(found);
 	}
-	impl.jobs.erase(found);
+	impl.mCpuWorkGate->NotifyCancellation();
 }
 void DecodeWorker::cancelAll()
 {
-	auto					   &impl = *impl_;
-	std::lock_guard<std::mutex> lock(impl.mutex);
-	for (auto &entry : impl.jobs)
+	auto &impl = *impl_;
 	{
-		entry.second->cancelled = true;
-		if (entry.second->status.state != DecodeState::Running)
-			impl.reserved -= entry.second->reservation;
+		std::lock_guard<std::mutex> lock(impl.mutex);
+		for (auto &entry : impl.jobs)
+		{
+			entry.second->cancelled = true;
+			if (entry.second->status.state != DecodeState::Running)
+				impl.reserved -= entry.second->reservation;
+		}
+		impl.jobs.clear();
+		impl.queue.clear();
 	}
-	impl.jobs.clear();
-	impl.queue.clear();
+	impl.mCpuWorkGate->NotifyCancellation();
 }
 void DecodeWorker::stop()
 {
@@ -415,6 +445,7 @@ void DecodeWorker::stop()
 			entry.second->cancelled = true;
 		impl.wake.notify_all();
 	}
+	impl.mCpuWorkGate->NotifyCancellation();
 	if (impl.thread.joinable())
 		impl.thread.join();
 	std::lock_guard<std::mutex> lock(impl.mutex);

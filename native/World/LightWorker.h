@@ -1,5 +1,7 @@
 #pragma once
 #include "World/WorldStore.h"
+#include "Core/CpuWorkGate.h"
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 #include <string>
@@ -18,6 +20,7 @@ struct LightCompletion
 struct LightWorkerStats
 {
 	uint64_t submitted = 0, completed = 0, failed = 0, cancelled = 0;
+	// running includes background CPU admission wait.
 	bool	 busy = false, running = false, ready = false;
 	double	 computeMS = 0, diffMS = 0;
 };
@@ -34,6 +37,7 @@ public:
 	LightWorkerStats				 stats() const;
 
 private:
+	std::shared_ptr<core::CpuWorkGate> mCpuWorkGate = core::GetCpuWorkGate();
 	void							 run();
 	mutable std::mutex				 mutex_;
 	std::condition_variable			 wake_;

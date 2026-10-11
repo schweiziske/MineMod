@@ -114,6 +114,40 @@ void randomizedDenseOracle()
 		check(image.pendingBytes() == 0, "cleared transaction retained pending pixel bytes");
 	}
 }
+void publishedComparison()
+{
+	Image image(11, 30);
+	const uint32_t zeroes[]{0, 0, 0};
+	const Span zero_span{10, zeroes, 3};
+	image.validate(zero_span);
+	check(image.MatchesPublished(zero_span) && image.backingBytes() == 0,
+		  "matching implicit zero rows allocated image storage");
+	std::vector<uint32_t> pixels(19);
+	for (unsigned i = 0; i < pixels.size(); ++i)
+		pixels[i] = 0x01020300u + i;
+	const Span span{10, pixels.data(), pixels.size(), 1.25, 0.625};
+	image.validate(span);
+	check(!image.MatchesPublished(span), "nonzero input matched an empty atlas");
+	image.stage({span});
+	check(!image.MatchesPublished(span), "pending bytes were mistaken for published pixels");
+	image.publish();
+	image.pending.clear();
+	check(image.MatchesPublished(span), "row-boundary/scale mapping changed during comparison");
+	auto replacement = pixels;
+	replacement.back() ^= 0x80000000u;
+	const Span changed{10, replacement.data(), replacement.size(), 1.25, 0.625};
+	image.stage({changed});
+	check(image.MatchesPublished(span) && !image.MatchesPublished(changed),
+		  "pending replacement leaked into published comparison");
+	image.publish(); // Failed Download may leave pending alive; restoration must still see these bytes.
+	check(!image.MatchesPublished(span) && image.MatchesPublished(changed),
+		  "comparison lost the published version after a partial upload");
+	image.stage({span});
+	image.publish();
+	image.pending.clear();
+	check(image.MatchesPublished(span), "restored pixel image no longer matches the old transaction");
+}
+
 int main()
 {
 	try
@@ -159,6 +193,7 @@ int main()
 		check(image.row(16383).empty(), "unused tail rows acquired backing storage");
 		rangeGrowthAndRetry();
 		randomizedDenseOracle();
+		publishedComparison();
 		std::cout << "PASS: compact pending ranges, 2000 dense-oracle batches, retry/rollback, 16K boundaries and immutable publication\n";
 	}
 	catch (const std::exception &e)

@@ -51,6 +51,12 @@ end
 function B.GetSectionCells( chunk, index )
 	return active().handle:GetSectionCells( chunk.cx, chunk.cy, chunk.cz, index )
 end
+function B.GetSectionCellsFiltered( chunk, index, states )
+	return active().handle:GetSectionCellsFiltered( chunk.cx, chunk.cy, chunk.cz, index, states )
+end
+function B.SupportsSectionCellFilter()
+	return B.IsActive() and T.active.sectionCellFilter == true
+end
 function B.MarkLoaded( key )
 	local cx, cy, cz = MC.ChunkKeyToCoords( key )
 	local info = requireResult( active().handle:GetChunkInfo( cx, cy, cz ) )
@@ -115,6 +121,51 @@ function B.MaterializeLuaStorage()
 end
 
 function B.SupportsBinarySectionPatches() return B.IsActive() end
+function B.SupportsNativeTransport()
+	return B.IsActive() and T.active.nativeTransport == true
+end
+function B.BeginNativeTransport( metadata )
+	local session = active()
+	local id, err = session:BeginTransport( metadata )
+	if not id then return nil, err end
+	session.transportJobs = session.transportJobs or {}
+	session.transportJobs[id] = true
+	return id
+end
+function B.ReadNativeTransportPart( id, part, length )
+	return active().handle:ReadTransportPart( id, part, length )
+end
+function B.AcceptNativeTransportPart( id, part, data )
+	return active().handle:AcceptTransportPart( id, part, data )
+end
+function B.SealNativeTransport( id, crc )
+	return active().handle:SealTransport( id, crc )
+end
+function B.PollNativeTransport( id )
+	return active().handle:PollTransport( id )
+end
+function B.StartNativeTransportDecode( id, batch )
+	local session = active()
+	local job, err = session:StartTransportDecode( id, batch )
+	if not job then return nil, err end
+	session.decodeJobs = session.decodeJobs or {}
+	session.decodeJobs[job] = true
+	return job, session.backendEpoch
+end
+function B.TakeLegacyNativeTransport( id )
+	return active().handle:TakeLegacyTransport( id )
+end
+function B.CancelNativeTransport( id )
+	local session = T.active
+	if not session or not session.transportJobs or not session.transportJobs[id] then return true end
+	local ok, err = session.handle:CancelTransport( id )
+	if not ok then return nil, err end
+	session.transportJobs[id] = nil
+	return true
+end
+function B.GetNativeTransportStats()
+	return active().handle:GetTransportStats()
+end
 function B.StartBinarySectionPatchDecode( payload, compression, rawBytes, generation, revision, chunks, cells )
 	local session = active()
 	local id, err = session:StartBinarySection( payload, { compression = compression, rawBytes = rawBytes,

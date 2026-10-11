@@ -91,6 +91,64 @@ void snapshotMemory()
 	check(oldChunk->sections[4] == newChunk->sections[4] && contains(a, oldChunk->sections[4].get()) && contains(b, oldChunk->sections[4].get()),
 		  "unchanged section not shared across chunk revisions");
 }
+void CachedContextMemory()
+{
+	world::Config cfg;
+	cfg.chunkSize = cfg.chunkHeight = 8;
+	cfg.sectionSize = 4;
+	auto catalog = std::make_shared<world::Catalog>();
+	catalog->states.resize(2);
+	auto shape = std::make_shared<l2::Shape>();
+	shape->variants[0].push_back({0, 0, 0, 1, 1, 1});
+	shape->validate();
+	world::Store store(cfg, catalog);
+	auto mutation = edit(cfg, {1, 1, 1}, 1);
+	mutation.cells.push_back({cfg.localIndex({2, 1, 1}), 1});
+	mutation.cells.push_back({cfg.localIndex({1, 1, 5}), 1});
+	world::Profile profile;
+	profile.shape = shape;
+	for (const auto &cell : mutation.cells)
+		mutation.contexts.push_back({cell.index, false, profile});
+	store.apply(0, {mutation});
+	auto previous = store.chunk({0, 0, 0});
+	const auto contains = [](const l2::MemoryUsage &usage, const void *owner)
+	{
+		unsigned count = 0;
+		for (const auto &allocation : usage.shared)
+			if (allocation.owner.get() == owner)
+				++count;
+		return count;
+	};
+	check(contains(previous->mMemoryUsage, shape.get()) == 1, "context template was not deduplicated at chunk sealing");
+	const auto expected_root = sizeof(world::Chunk) + previous->sections.capacity() * sizeof(std::shared_ptr<const world::Section>) +
+		previous->columnTops.capacity() * sizeof(int16_t) + previous->mMemoryUsage.shared.capacity() * sizeof(l2::SharedAllocation);
+	check(previous->mMemoryUsage.owned == expected_root, "cached inventory storage omitted from admission");
+	auto replacement = std::make_shared<l2::Shape>(*shape);
+	replacement->variants[0].push_back({0, 0, 0, 0.5, 0.5, 0.5});
+	replacement->validate();
+	profile.shape = replacement;
+	world::Mutation overlay;
+	overlay.contexts.push_back({cfg.localIndex({1, 1, 1}), false, profile});
+	store.apply(store.revision(), {overlay});
+	auto updated = store.chunk({0, 0, 0});
+	check(contains(previous->mMemoryUsage, replacement.get()) == 0 && contains(updated->mMemoryUsage, replacement.get()) == 1,
+		"context patch reused a stale allocation inventory or mutated the old snapshot");
+	check(previous->sections[4] == updated->sections[4], "memory inventory broke unchanged section sharing");
+	l2::MemoryUsage usage;
+	store.meshSnapshot({0, 0, 0}, 0, true).memoryUsage(usage);
+	usage.normalize();
+	check(contains(usage, shape.get()) == 1 && contains(usage, replacement.get()) == 1,
+		"cached submission omitted context ownership");
+	for (const auto &allocation : usage.shared)
+	{
+		if (allocation.owner.get() == replacement.get())
+			check(allocation.bytes == replacement->bytes() + 64, "cached ownership overhead was charged twice");
+	}
+	usage = {};
+	std::weak_ptr<const world::Chunk> retired = previous;
+	previous.reset();
+	check(retired.expired(), "chunk allocation inventory retained its own chunk");
+}
 void topology()
 {
 	auto open = world::meshTopology(std::vector<uint8_t>(64), 4);
@@ -391,6 +449,58 @@ void shapeValidation()
 		check(!l2::shapeCovered(full, face, {full}, wrongOffset), "wrong neighbour offset covered face");
 	}
 }
+void ContextValidationOnWorker()
+{
+	world::Config cfg;
+	cfg.chunkSize = cfg.chunkHeight = 8;
+	cfg.sectionSize = 4;
+	cfg.skyEnabled = false;
+	auto catalog = std::make_shared<world::Catalog>();
+	catalog->states.resize(2);
+	auto shape = std::make_shared<l2::Shape>();
+	shape->selector = 1;
+	shape->stair = 0;
+	shape->variants.resize(5);
+	shape->validate();
+	catalog->states[1].shape = shape;
+	world::Store store(cfg, catalog);
+	auto mutation = edit(cfg, {1, 1, 1}, 1);
+	mutation.contexts.push_back({cfg.localIndex({1, 1, 1}), false, world::Profile{}});
+	store.apply(0, {mutation});
+	const auto model = stairModel();
+	const auto make_input = [&](std::shared_ptr<const world::MeshSnapshot> snapshot)
+	{
+		const int origin[] = {snapshot->origin.x, snapshot->origin.y, snapshot->origin.z};
+		const int dimensions[] = {snapshot->dimensions.x, snapshot->dimensions.y, snapshot->dimensions.z};
+		auto input = std::make_unique<l2::Input>(l2::Snapshot(origin, dimensions, snapshot));
+		input->shapeSource = snapshot;
+		input->models.push_back({model, 1});
+		input->instances = std::make_shared<world::MeshInstances>(snapshot, world::Coord{}, 0,
+			std::unordered_map<uint32_t, world::MeshRecipe>{{1, {0, true, false, 1, -1, false, 1}}}, true);
+		return input;
+	};
+	auto snapshot = std::make_shared<world::MeshSnapshot>(store.meshSnapshot({0, 0, 0}, 0, true));
+	auto invalid = make_input(snapshot); // Submission preparation no longer scans contexts.
+	world::Mutation clear;
+	clear.contexts.push_back({cfg.localIndex({1, 1, 1}), true, {}});
+	store.apply(store.revision(), {clear});
+	check(snapshot->shape(1, 1, 1).selector == 0, "context removal mutated the queued snapshot");
+	l2::WorkerPool pool;
+	pool.start(1);
+	const auto invalid_id = pool.submit(std::move(invalid));
+	wait(pool, invalid_id);
+	const auto failed = pool.ready(invalid_id);
+	check(pool.state(invalid_id) == l2::JobState::Failed && failed->error == "model/context shape selector mismatch" && failed->parts.empty(),
+		"context mismatch was not reported at the worker build boundary");
+	pool.cancel(invalid_id);
+	auto valid_snapshot = std::make_shared<world::MeshSnapshot>(store.meshSnapshot({0, 0, 0}, 0, true));
+	const auto valid_id = pool.submit(make_input(valid_snapshot));
+	wait(pool, valid_id);
+	check(pool.ready(valid_id)->error.empty() && pool.ready(valid_id)->sectionQuads == 1,
+		"failed context validation poisoned the next mesh job");
+	pool.stop();
+	check(pool.stats().bytes == 0, "context failure disposal leaked its reservation");
+}
 void shapes()
 {
 	world::Config cfg;
@@ -463,13 +573,15 @@ void shapes()
 	bool rejected = false;
 	try
 	{
-		make(std::make_shared<world::MeshSnapshot>(store.meshSnapshot({-1, 0, 0}, 1)));
+		auto invalid = make(std::make_shared<world::MeshSnapshot>(store.meshSnapshot({-1, 0, 0}, 1)));
+		std::atomic<bool> cancelled{false};
+		invalid->instances->populate(*invalid, cancelled);
 	}
 	catch (const std::exception &e)
 	{
 		rejected = std::string(e.what()) == "model/context shape selector mismatch";
 	}
-	check(rejected, "context shape selector mismatch reached worker");
+	check(rejected, "context shape selector mismatch was not rejected at the worker boundary");
 }
 void fluids()
 {
@@ -613,17 +725,101 @@ void fluids()
 	pool.stop();
 	check(pool.stats().bytes == 0, "fluid worker disposal leaked");
 }
+void FilteredSectionCells()
+{
+	world::Config config;
+	config.chunkSize = config.chunkHeight = 8;
+	config.sectionSize = 4;
+	auto catalog = std::make_shared<world::Catalog>();
+	catalog->states.resize(3);
+	world::Store store(config, catalog);
+	const world::Coord coord{-1, 2, -1};
+	world::Mutation mutation;
+	mutation.chunk = coord;
+	mutation.cells = {{0, 2}, {4 + 8 * (4 + 8 * 4), 1}, {7 + 8 * (6 + 8 * 5), 2}};
+	check(store.apply(0, {mutation}), "filtered section fixture failed");
+	const auto full = store.ReadSectionCells(coord, 7);
+	const std::unordered_set<uint32_t> selected{2}, empty;
+	const auto filtered = store.ReadSectionCells(coord, 7, &selected);
+	check(full.size() == 2 && filtered.size() == 1, "section filter exported unrelated cells");
+	check(filtered[0].index == mutation.cells[2].index && filtered[0].state == 2,
+		"filtered section index was not chunk-local");
+	check(store.ReadSectionCells(coord, 7, &empty).empty(), "empty filter exported the full section");
+	check(store.ReadSectionCells(coord, 0, &selected).size() == 1, "section selection crossed a boundary");
+	mutation.kind = world::Mutation::Kind::Patch;
+	mutation.cells = {{filtered[0].index, 1}};
+	check(store.apply(store.revision(), {mutation}), "filtered section mutation failed");
+	check(store.ReadSectionCells(coord, 7, &selected).empty() && filtered[0].state == 2,
+		"filtered export retained mutable store data");
+}
+void MixedWorldTopology()
+{
+	world::Config config;
+	config.chunkSize = config.chunkHeight = config.sectionSize = 4;
+	auto catalog = std::make_shared<world::Catalog>();
+	catalog->states.resize(3);
+	world::Store store(config, catalog);
+	world::Mutation mutation;
+	mutation.chunk = {0, 0, 0};
+	mutation.cells.push_back({0, 1});
+	for (unsigned z = 0; z < 4; ++z)
+		for (unsigned y = 0; y < 4; ++y)
+			mutation.cells.push_back({1 + 4 * (y + 4 * z), 2});
+	check(store.apply(0, {mutation}), "mixed topology fixture failed");
+	auto source = std::make_shared<const world::MeshSnapshot>(store.meshSnapshot(mutation.chunk, 0, true));
+	world::MeshRecipe recipe;
+	recipe.maxQuads = 6;
+	const std::unordered_map<uint32_t, world::MeshRecipe> recipes{{1, recipe}};
+	const std::unordered_map<uint32_t, bool> blocking{{1, false}, {2, true}};
+	world::MeshInstances instances(source, mutation.chunk, 0, recipes, true, blocking);
+	check(instances.maxQuads() == 6, "Lua geometry was counted as Native recipe geometry");
+	const int origin[3] = {source->origin.x, source->origin.y, source->origin.z};
+	const int dimensions[3] = {source->dimensions.x, source->dimensions.y, source->dimensions.z};
+	std::atomic<bool> cancelled{false};
+	l2::Input input(l2::Snapshot(origin, dimensions, source));
+	instances.populate(input, cancelled);
+	check(input.voxels.size() == 1, "unsupported cells became Native geometry");
+	check(input.topology.cells.size() == 64 && input.topology.cells[1] == 64,
+		"unsupported wall was omitted from Native topology");
+	check((input.topology.faces[2] & 8) == 0 && (input.topology.faces[3] & 4) == 0,
+		"mixed topology connected through the Lua-emitted wall");
+	bool rejected = false;
+	try
+	{
+		world::MeshInstances incomplete(source, mutation.chunk, 0, recipes, true, {{1, false}});
+	}
+	catch (const std::exception &)
+	{
+		rejected = true;
+	}
+	check(rejected, "mixed topology accepted an incomplete classification");
+	mutation.cells.clear();
+	mutation.kind = world::Mutation::Kind::Replace;
+	check(store.apply(store.revision(), {mutation}), "mixed topology replacement failed");
+	check(store.ReadSectionCells(mutation.chunk, 0).empty(), "mixed topology fixture did not replace the live world");
+	l2::Input frozen(l2::Snapshot(origin, dimensions, source));
+	instances.populate(frozen, cancelled);
+	check(frozen.topology.cells == input.topology.cells, "mixed worker read the mutable live world");
+	world::MeshInstances open(source, {0, 0, 0}, 0, recipes, true, {{1, false}, {2, false}});
+	l2::Input open_input(l2::Snapshot(origin, dimensions, source));
+	open.populate(open_input, cancelled);
+	check(open_input.topology.uniform == 63, "false visual classification was replaced by a blocking default");
+}
 } // namespace
 int main()
 {
 	try
 	{
 		snapshotMemory();
+		CachedContextMemory();
+		FilteredSectionCells();
+		MixedWorldTopology();
 		topology();
 		section16();
 		worldMesh();
 		models();
 		shapeValidation();
+		ContextValidationOnWorker();
 		shapes();
 		fluids();
 		std::cout << "World mesh: owned snapshots, histogram, transforms, sky invalidation, topology, models, shapes and fluids/relight passed\n";

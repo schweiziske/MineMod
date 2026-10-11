@@ -900,10 +900,10 @@ function MC.SetChunkLocalStateRaw( chunk, li, stateId, knownOldStateId )
 	return true, oldStateId, id, orient or 0
 end
 
-function MC.FinalizeChunkStateStorage( chunk )
+function MC.FinalizeChunkStateStorage( chunk, blockEntityCells )
 	if not chunk then return nil, "missing_chunk" end
 	if MC.ReconcileChunkBlockEntities then
-		local reconciled, reconcileError = MC.ReconcileChunkBlockEntities( chunk )
+		local reconciled, reconcileError = MC.ReconcileChunkBlockEntities( chunk, blockEntityCells )
 		if reconciled == nil then return nil, reconcileError end
 	end
 	MC.TouchChunkCollisionVersion( chunk )

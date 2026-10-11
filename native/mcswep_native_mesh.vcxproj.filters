@@ -1,6 +1,9 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
+    <Filter Include="Core">
+      <UniqueIdentifier>{35891A48-73B3-4D12-9955-8E875C99DEBA}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Bindings">
       <UniqueIdentifier>{0822F34D-22E8-5C5A-9809-C14187E92A55}</UniqueIdentifier>
     </Filter>
@@ -41,6 +44,9 @@
   <ItemGroup>
     <ClCompile Include="Module\Pch.cpp">
       <Filter>Module</Filter>
+    </ClCompile>
+    <ClCompile Include="Core\CpuWorkGate.cpp">
+      <Filter>Core</Filter>
     </ClCompile>
     <ClCompile Include="Legacy\BlockDefinitions.cpp">
       <Filter>Legacy</Filter>
@@ -177,6 +183,9 @@
     <ClCompile Include="World\WorldDecoder.cpp">
       <Filter>World</Filter>
     </ClCompile>
+    <ClCompile Include="World\WorldTransport.cpp">
+      <Filter>World</Filter>
+    </ClCompile>
     <ClCompile Include="include\sourcesdk-minimal\utils\lzma\C\LzmaDec.c">
       <Filter>ThirdParty</Filter>
     </ClCompile>
@@ -251,6 +260,9 @@
     <ClInclude Include="World\ChunkKey.h">
       <Filter>World</Filter>
     </ClInclude>
+    <ClInclude Include="Core\CpuWorkGate.h">
+      <Filter>Core</Filter>
+    </ClInclude>
     <ClInclude Include="Bindings\MeshBindings.h">
       <Filter>Bindings</Filter>
     </ClInclude>
@@ -270,6 +282,9 @@
       <Filter>Mesh</Filter>
     </ClInclude>
     <ClInclude Include="World\WorldDecoder.h">
+      <Filter>World</Filter>
+    </ClInclude>
+    <ClInclude Include="World\WorldTransport.h">
       <Filter>World</Filter>
     </ClInclude>
     <ClInclude Include="Mesh\SectionGeometry.h">

@@ -946,6 +946,23 @@ end
 -- Finalize a patch whose state cells were already committed atomically by the
 -- native decoder. Lua retains only chunk shells, Block Entities, and the
 -- lighting/collision bookkeeping consumed by the rest of the addon.
+local function validateNativeBlockEntityCells( cells, count )
+	if cells == nil then return true end -- Older DLLs omit the complete sparse list.
+	if not istable( cells ) or #cells % 2 ~= 0 or #cells > count * 2 then return false end
+	local previous = -1
+	for i = 1, #cells, 2 do
+		local localIndex, stateId = cells[i], cells[i + 1]
+		if not isnumber( localIndex ) or localIndex ~= math.floor( localIndex )
+			or localIndex <= previous or localIndex >= MC.CS * MC.CS * MC.CH
+			or not isnumber( stateId ) or stateId ~= math.floor( stateId ) or stateId <= 0
+			or not MC.IsValidBlockState( stateId ) or not MC.BlockEntityTypeForState( stateId ) then
+			return false
+		end
+		previous = localIndex
+	end
+	return true
+end
+
 function MC.FinalizeNativeStateChunkPatch( committed, backendEpoch, options )
 	if not istable( committed ) or not istable( committed.chunks ) then return false, "invalid_native_patch_result" end
 	local backend = activeNativeChunkBackend()
@@ -966,7 +983,11 @@ function MC.FinalizeNativeStateChunkPatch( committed, backendEpoch, options )
 			envelopes = util.JSONToTable( item.blockEntitiesJSON )
 			if not istable( envelopes ) then return false, "invalid_native_patch_block_entities:" .. tostring( index ) end
 		end
-		prepared[index] = { cx = cx, cy = cy, cz = cz, key = key, count = count, blockEntities = envelopes }
+		if not validateNativeBlockEntityCells( item.blockEntityCells, count ) then
+			return false, "invalid_native_patch_block_entity_cells:" .. tostring( index )
+		end
+		prepared[index] = { cx = cx, cy = cy, cz = cz, key = key, count = count,
+			blockEntities = envelopes, blockEntityCells = item.blockEntityCells }
 		blocks = blocks + count
 	end
 	if math.floor( tonumber( committed.blocks ) or -1 ) ~= blocks then return false, "native_patch_block_count_mismatch" end
@@ -987,7 +1008,11 @@ function MC.FinalizeNativeStateChunkPatch( committed, backendEpoch, options )
 			if MC.CancelPartialLightingBatch then MC.CancelPartialLightingBatch( lightingBatch ) end
 			return false, "invalid_native_patch_block_entities"
 		end
-		if MC.FinalizeChunkStateStorage then MC.FinalizeChunkStateStorage( c ) end
+		local finalized, finalizeError = MC.FinalizeChunkStateStorage( c, item.blockEntityCells )
+		if not finalized then
+			if MC.CancelPartialLightingBatch then MC.CancelPartialLightingBatch( lightingBatch ) end
+			return false, "native_patch_storage_finalize:" .. tostring( finalizeError )
+		end
 		if MC.IndexChunkLightSources then MC.IndexChunkLightSources( c ) end
 		touched[#touched + 1] = { cx = item.cx, cy = item.cy, cz = item.cz, key = item.key, count = item.count }
 		if item.count <= 0 then

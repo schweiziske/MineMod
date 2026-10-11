@@ -429,6 +429,18 @@ function RM.NewBuildContext( key, sectionIndex, chunk, meshPerf, meshProbe, mesh
 		pagedAtlas = pagedAtlas,
 	}
 
+	-- Native submission synchronously freezes every borrowed input. Upload and
+	-- publication need buffers/material groups and topology results, not cells.
+	function ctx.releaseBuildInput()
+		blockSections, ctx.blockSections = nil, nil
+		visibility.ReleaseInput()
+		if ctx.nativeVoxels then ctx.nativeVoxels[7] = nil end
+		ctx.nativeBlockingStates = nil
+		slice.nativeReader, slice.nativeVisibility, slice.nativeOrigin = nil, nil, nil
+		slice.snapshot, slice.lighter = nil, nil
+		slice.selections, slice.singleSelections, slice.models = nil, nil, nil
+	end
+
 	-- A block may mix atlas pages on its faces. The single-material block cache
 	-- cannot retain that geometry; emit directly into section/page buckets while
 	-- keeping normal section caching and the default single-page fast path.

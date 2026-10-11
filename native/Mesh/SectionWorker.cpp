@@ -302,10 +302,7 @@ void WorkerPool::start(unsigned count)
 	if (!threads_.empty())
 		return;
 	if (!count)
-	{
-		const auto hardware = std::thread::hardware_concurrency();
-		count = std::clamp(hardware > 2 ? hardware - 2 : 1u, 1u, 8u);
-	}
+		count = mCpuWorkGate->GetLimit();
 	stopping_ = false;
 	try
 	{
@@ -436,6 +433,7 @@ void WorkerPool::cancel(uint64_t id)
 			}
 		}
 	}
+	mCpuWorkGate->NotifyCancellation();
 	wake_.notify_all();
 }
 WorkerStats WorkerPool::stats() const
@@ -481,7 +479,8 @@ void WorkerPool::run()
 				stats_.peakRunning = std::max(stats_.peakRunning, stats_.running);
 			}
 		}
-		const double started = milliseconds();
+		double started = 0;
+		core::CpuWorkPermit permit;
 		const bool	 compute = !job->cancelled;
 		const bool	 relight = compute && !job->input->relight.empty();
 		size_t		 relightQuads = 0;
@@ -489,83 +488,88 @@ void WorkerPool::run()
 		{
 			try
 			{
-				job->queueMS = started - job->submittedAt;
-				auto &input = *job->input;
-				input.snapshot.prepare();
-				job->relight = relight;
-				std::vector<unsigned> groups;
-				if (relight)
+				permit = mCpuWorkGate->Acquire(core::ECpuWorkClass::Mesh, job->cancelled);
+				if (permit)
 				{
-					job->parts.resize(input.relight.size());
-					for (size_t p = 0; p < input.relight.size() && !job->cancelled; ++p)
+					started = milliseconds();
+					job->queueMS = started - job->submittedAt;
+					auto &input = *job->input;
+					input.snapshot.prepare();
+					job->relight = relight;
+					std::vector<unsigned> groups;
+					if (relight)
 					{
-						const auto &work = *input.relight[p];
-						auto	   &output = job->parts[p];
-						auto		pixels = std::make_shared<LightPixels>(work.size());
-						output.pixels = pixels;
-						for (size_t i = 0; i < work.size(); ++i)
+						job->parts.resize(input.relight.size());
+						for (size_t p = 0; p < input.relight.size() && !job->cancelled; ++p)
 						{
-							if ((i & 63) == 0 && job->cancelled)
-								break;
-							const auto q = evaluateLight(work[i].geometry, work[i].command, input.snapshot);
-							std::copy(std::begin(q.pixels), std::end(q.pixels), pixels->corners.begin() + i * 4);
-							pixels->occlusion[i] = q.occlusion;
+							const auto &work = *input.relight[p];
+							auto	   &output = job->parts[p];
+							auto		pixels = std::make_shared<LightPixels>(work.size());
+							output.pixels = pixels;
+							for (size_t i = 0; i < work.size(); ++i)
+							{
+								if ((i & 63) == 0 && job->cancelled)
+									break;
+								const auto q = evaluateLight(work[i].geometry, work[i].command, input.snapshot);
+								std::copy(std::begin(q.pixels), std::end(q.pixels), pixels->corners.begin() + i * 4);
+								pixels->occlusion[i] = q.occlusion;
+							}
+							relightQuads += work.size();
 						}
-						relightQuads += work.size();
 					}
-				}
-				else
-				{
-					if (input.instances)
-						input.instances->populate(input, job->cancelled);
-					job->sectionVoxels = input.voxels.size();
-					job->topology = std::move(input.topology);
-					const size_t legacyParts = input.parts.size();
-					expandVoxels(input, groups, job->cancelled);
-					for (size_t p = legacyParts; p < input.parts.size(); ++p)
-						job->sectionQuads += input.parts[p].size();
-					job->parts.resize(input.parts.size());
-					for (size_t p = 0; p < input.parts.size() && !job->cancelled; ++p)
+					else
 					{
-						auto &output = job->parts[p];
-						output.group = groups[p];
-						const auto &work = input.parts[p];
-						output.quads.resize(work.size());
-						auto pixels = std::make_shared<LightPixels>(work.size());
-						output.pixels = pixels;
-						std::shared_ptr<std::vector<LightWork>> lighting;
-						if (input.retainLighting)
+						if (input.instances)
+							input.instances->populate(input, job->cancelled);
+						job->sectionVoxels = input.voxels.size();
+						job->topology = std::move(input.topology);
+						const size_t legacyParts = input.parts.size();
+						expandVoxels(input, groups, job->cancelled);
+						for (size_t p = legacyParts; p < input.parts.size(); ++p)
+							job->sectionQuads += input.parts[p].size();
+						job->parts.resize(input.parts.size());
+						for (size_t p = 0; p < input.parts.size() && !job->cancelled; ++p)
 						{
-							lighting = std::make_shared<std::vector<LightWork>>(work.size());
-							output.lighting = lighting;
+							auto &output = job->parts[p];
+							output.group = groups[p];
+							const auto &work = input.parts[p];
+							output.quads.resize(work.size());
+							auto pixels = std::make_shared<LightPixels>(work.size());
+							output.pixels = pixels;
+							std::shared_ptr<std::vector<LightWork>> lighting;
+							if (input.retainLighting)
+							{
+								lighting = std::make_shared<std::vector<LightWork>>(work.size());
+								output.lighting = lighting;
+							}
+							std::fill(output.bounds, output.bounds + 3, std::numeric_limits<float>::max());
+							std::fill(output.bounds + 3, output.bounds + 6, -std::numeric_limits<float>::max());
+							for (unsigned i = 0; i < work.size(); ++i)
+							{
+								if ((i & 63) == 0 && job->cancelled)
+									break;
+								auto &q = output.quads[i];
+								q = evaluate(work[i].geometry, work[i].command, input.snapshot, i);
+								std::copy(std::begin(q.pixels), std::end(q.pixels), pixels->corners.begin() + i * 4);
+								pixels->occlusion[i] = q.occlusion;
+								if (lighting)
+									(*lighting)[i] = {work[i].geometry, work[i].command};
+								for (const auto &v : q.vertices)
+									for (unsigned a = 0; a < 3; ++a)
+									{
+										output.bounds[a] = std::min(output.bounds[a], v.position[a]);
+										output.bounds[a + 3] = std::max(output.bounds[a + 3], v.position[a]);
+									}
+							}
+							if (!job->cancelled)
+								output.directions = directionOrder(output.quads);
 						}
-						std::fill(output.bounds, output.bounds + 3, std::numeric_limits<float>::max());
-						std::fill(output.bounds + 3, output.bounds + 6, -std::numeric_limits<float>::max());
-						for (unsigned i = 0; i < work.size(); ++i)
-						{
-							if ((i & 63) == 0 && job->cancelled)
-								break;
-							auto &q = output.quads[i];
-							q = evaluate(work[i].geometry, work[i].command, input.snapshot, i);
-							std::copy(std::begin(q.pixels), std::end(q.pixels), pixels->corners.begin() + i * 4);
-							pixels->occlusion[i] = q.occlusion;
-							if (lighting)
-								(*lighting)[i] = {work[i].geometry, work[i].command};
-							for (const auto &v : q.vertices)
-								for (unsigned a = 0; a < 3; ++a)
-								{
-									output.bounds[a] = std::min(output.bounds[a], v.position[a]);
-									output.bounds[a + 3] = std::max(output.bounds[a + 3], v.position[a]);
-								}
-						}
-						if (!job->cancelled)
-							output.directions = directionOrder(output.quads);
 					}
+					job->reads = input.snapshot.reads;
+					job->hits = input.snapshot.hits;
+					job->faceSamples = input.snapshot.faceSamples;
+					job->faceHits = input.snapshot.faceHits;
 				}
-				job->reads = input.snapshot.reads;
-				job->hits = input.snapshot.hits;
-				job->faceSamples = input.snapshot.faceSamples;
-				job->faceHits = input.snapshot.faceHits;
 			}
 			catch (const std::exception &e)
 			{
@@ -578,7 +582,8 @@ void WorkerPool::run()
 		}
 		job->input.reset();
 		const size_t resultBytes = job->resultBytes();
-		job->computeMS = milliseconds() - started;
+		job->computeMS = started ? milliseconds() - started : 0;
+		permit.Reset(); // Release the global slot before taking the pool mutex.
 		{
 			std::lock_guard<std::mutex> lock(mutex_);
 			if (wasRunning)

@@ -48,6 +48,8 @@ private:
 	PixelTextureId											mSequence = 0;
 	uint64_t												mBarriers = 0;
 	double													mQueueDrainMS = 0, mMaterialLockMS = 0;
+	uint64_t												mUnchangedRelights = 0, mUnchangedRelightTexels = 0;
+	double													mRelightCompareMS = 0;
 };
 
 /// One module-owned store. Explicit Shutdown handles engine resource retirement.

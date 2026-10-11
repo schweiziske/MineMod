@@ -124,7 +124,7 @@ local function drawMeshListInner( list, currentMaterial )
 			currentMaterial = entry.material
 			MC.RenderSky.Bind( currentMaterial )
 			MC.RenderPBR.Bind( currentMaterial )
-			MC.RenderVanillaWater.Bind( currentMaterial )
+			MC.RenderVanillaWater.BindPrepared( currentMaterial )
 			render.SetMaterial( currentMaterial )
 		end
 		entry.mesh:Draw()
@@ -449,6 +449,7 @@ local function drawPackChunk( key, translucent )
 	if translucent then render.OverrideDepthEnable( true, false ) end
 	local matrixPushed = false
 	local ok, err = pcall( function()
+		MC.RenderVanillaWater.Prepare()
 		-- Vertices are chunk-local in both entry points, including offscreen
 		-- direct draws and worlds whose render origin has moved.
 		cam.PushModelMatrix( frame.matrix ) matrixPushed = true
@@ -506,7 +507,7 @@ local function nativeBind( material )
 	else
 		MC.RenderSky.Bind( material )
 		MC.RenderPBR.Bind( material )
-		MC.RenderVanillaWater.Bind( material )
+		MC.RenderVanillaWater.BindPrepared( material )
 	end
 	nativeContext.bound = selected
 	render.SetMaterial( selected )
@@ -578,10 +579,15 @@ local function drawNativeChunks( cached, store, chunks, stats, depthStage, trans
 		local name = nativeStatNames[i]
 		stats[name] = ( stats[name] or 0 ) + result[name]
 	end
+	-- Older DLLs do not report range merges; all original fields remain required.
+	stats.nativeRangeMerges = ( stats.nativeRangeMerges or 0 ) + ( result.nativeRangeMerges or 0 )
 	return result.drawn, result.distanceCulled, result.frustumCulled, result.stale, result.meshes
 end
 
 local function drawVisibleChunks( store, entries, count, chunks, stats, depthStage, cached, translucent )
+	-- Processing/shadow views have returned before this boundary. Prepare for
+	-- this actual draw, including secondary views within the same engine frame.
+	if not depthStage and not overrideMaterial then MC.RenderVanillaWater.Prepare() end
 	if useNativeDraw() then return drawNativeChunks( cached, store, chunks, stats, depthStage, translucent ) end
 	local pushMatrix = cam.PushModelMatrix
 	local popMatrix = cam.PopModelMatrix
@@ -642,7 +648,7 @@ local function drawVisibleChunks( store, entries, count, chunks, stats, depthSta
 									else
 										MC.RenderSky.Bind( currentMaterial )
 										MC.RenderPBR.Bind( currentMaterial )
-										MC.RenderVanillaWater.Bind( currentMaterial )
+										MC.RenderVanillaWater.BindPrepared( currentMaterial )
 										render.SetMaterial( currentMaterial )
 									end
 								end
@@ -807,6 +813,7 @@ local function drawPackStages( translucent, depthOnly )
 	stats.sectionsTested, stats.sectionsDrawn, stats.sectionFrustumCulled, stats.sectionOcclusionCulled = 0, 0, 0, 0
 	stats.directionCulled, stats.vertices, stats.verticesCulled = 0, 0, 0
 	stats.nativeBinds, stats.nativeRanges, stats.nativeAsyncHits, stats.nativeSyncCulls, stats.nativeCullMS = 0, 0, 0, 0, 0
+	stats.nativeRangeMerges = 0
 	local totalTested, totalDrawn, totalDistance, totalFrustum, totalStale = 0, 0, 0, 0, 0
 	local totalMeshes = 0
 	for _, passes in ipairs( groups ) do
@@ -864,8 +871,8 @@ concommand.Add( "mc_mesh_cull_stats", function()
 			names[pass], stats.frustumMode or "unprepared", stats.frustumPlanes or 0,
 			stats.frustumCulled or 0, stats.distanceCulled or 0, stats.cullDistance or 0 ) )
 		if useNativeDraw() then
-			print( string.format( "[MC native draw] %s binds=%d ranges=%d asyncHits=%d syncCulls=%d resultCull=%.3fms",
-				names[pass], stats.nativeBinds or 0, stats.nativeRanges or 0, stats.nativeAsyncHits or 0,
+			print( string.format( "[MC native draw] %s binds=%d ranges=%d merged=%d asyncHits=%d syncCulls=%d resultCull=%.3fms",
+				names[pass], stats.nativeBinds or 0, stats.nativeRanges or 0, stats.nativeRangeMerges or 0, stats.nativeAsyncHits or 0,
 				stats.nativeSyncCulls or 0, stats.nativeCullMS or 0 ) )
 			print( string.format( "[MC native view] %s portals=%s root=%d seed=%d mode=%s cell=%d,%d,%d grid=%d visited=%d",
 				names[pass], tostring( stats.nativePortals == true ), stats.nativePortalRoot or 0, stats.nativePortalSeed or 63,

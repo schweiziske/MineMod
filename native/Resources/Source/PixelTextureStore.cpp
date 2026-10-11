@@ -105,6 +105,9 @@ PixelTextureStoreStats PixelTextureStore::GetStats() const
 	stats.mBarriers = mBarriers;
 	stats.mQueueDrainMS = mQueueDrainMS;
 	stats.mMaterialLockMS = mMaterialLockMS;
+	stats.mUnchangedRelights = mUnchangedRelights;
+	stats.mUnchangedRelightTexels = mUnchangedRelightTexels;
+	stats.mRelightCompareMS = mRelightCompareMS;
 	stats.mTextures = mTextures.size();
 	for (const auto &[id, texture] : mTextures)
 	{
@@ -179,6 +182,22 @@ void PixelTextureStore::UploadNative(l2::PixelTransaction &ioTransaction, PixelT
 {
 	auto &texture = Find(inId);
 	ioTransaction.validate();
+	if (!inRestore)
+	{
+		const auto compare_started = std::chrono::steady_clock::now();
+		const bool unchanged = texture.MatchesPublished(ioTransaction);
+		mRelightCompareMS += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - compare_started).count();
+		if (unchanged)
+		{
+			// The target already contains the complete result. Retain transaction
+			// validation/publication semantics without staging or a queue barrier.
+			ioTransaction.draw([](const std::shared_ptr<const l2::LightPixels> &, unsigned) {});
+			++mUnchangedRelights;
+			for (const auto &update : ioTransaction.updates())
+				mUnchangedRelightTexels += update.next->occlusion.size() * 5;
+			return;
+		}
+	}
 	texture.PrepareTransaction(ioTransaction);
 	auto stage = [&](const std::shared_ptr<const l2::LightPixels> &inPixels, unsigned inFirst)
 	{

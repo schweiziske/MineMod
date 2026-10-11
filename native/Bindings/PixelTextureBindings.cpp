@@ -171,6 +171,9 @@ int PushStats(ILuaBase *inLua)
 	SetNumber(inLua, "barriers", double(stats.mBarriers));
 	SetNumber(inLua, "queueDrainMS", stats.mQueueDrainMS);
 	SetNumber(inLua, "materialLockMS", stats.mMaterialLockMS);
+	SetNumber(inLua, "unchangedRelights", double(stats.mUnchangedRelights));
+	SetNumber(inLua, "unchangedRelightTexels", double(stats.mUnchangedRelightTexels));
+	SetNumber(inLua, "relightCompareMS", stats.mRelightCompareMS);
 	SetNumber(inLua, "pixelVertices", 0);
 	SetNumber(inLua, "residentBytes", double(stats.mResidentBytes));
 	SetNumber(inLua, "pendingBytes", double(stats.mPendingBytes));

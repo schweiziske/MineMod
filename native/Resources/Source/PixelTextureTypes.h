@@ -29,6 +29,8 @@ struct PixelTextureStoreStats
 	uint64_t mBarriers = 0;
 	size_t	 mResidentBytes = 0, mPendingBytes = 0, mTextures = 0;
 	// Cumulative main-thread wall time, including waits; never GPU timings.
-	double mQueueDrainMS = 0, mMaterialLockMS = 0;
+	double	 mQueueDrainMS = 0, mMaterialLockMS = 0;
+	uint64_t mUnchangedRelights = 0, mUnchangedRelightTexels = 0;
+	double	 mRelightCompareMS = 0;
 };
 } // namespace mcmesh::pixelupload
