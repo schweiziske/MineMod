@@ -320,6 +320,9 @@
     <ClInclude Include="Render\Source\EngineContext.h">
       <Filter>Render\Source</Filter>
     </ClInclude>
+    <ClInclude Include="Render\Source\DrawProfile.h">
+      <Filter>Render\Source</Filter>
+    </ClInclude>
     <ClInclude Include="Render\Source\MeshResource.h">
       <Filter>Render\Source</Filter>
     </ClInclude>

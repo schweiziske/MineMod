@@ -498,7 +498,7 @@ local function nativeChunk( key, list, x, y, z )
 	return 3, not nativeContext.depthStage and MC.RenderDynamicLights.AffectsBounds( x, y, z, list.bounds )
 end
 
-local function nativeBind( material )
+local function nativeMaterial( material )
 	local selected = material
 	if overrideMaterial then
 		selected = overrideMaterial( material, nativeContext.depthStage == "world_cutout" )
@@ -509,6 +509,11 @@ local function nativeBind( material )
 		MC.RenderPBR.Bind( material )
 		MC.RenderVanillaWater.BindPrepared( material )
 	end
+	return selected
+end
+
+local function nativeBind( material )
+	local selected = nativeMaterial( material )
 	nativeContext.bound = selected
 	render.SetMaterial( selected )
 end
@@ -527,9 +532,30 @@ local function nativeOverlay( begin, base )
 	end
 	render.OverrideBlend( false )
 	render.OverrideDepthEnable( true, state.stage ~= "world_translucent" )
-	render.SetMaterial( nativeContext.bound )
+	local selected = nativeContext.materials and nativeContext.materials[base] or nativeContext.bound
+	render.SetMaterial( selected )
 	nativeContext.overlay = false
 	dynamic.stats.draws = dynamic.stats.draws + 1
+end
+
+-- One byte per chunk replaces thousands of protected C++ -> Lua calls. Checks
+-- remain current on every draw, including stream hiding and adapter policies.
+-- These are transient draw flags, not another copy of world/block state.
+local nativeStatusBytes = { [0] = string.char( 0 ), string.char( 1 ), string.char( 2 ), string.char( 3 ) }
+local nativeDynamicByte = string.char( 7 )
+local function prepareNativeBatch( cached, view )
+	local states, entries = cached.nativeStates, cached.entries
+	for i = 1, cached.count do
+		local entry = entries[i]
+		local frame = entry.frame
+		local status, dynamic = nativeChunk( entry.key, entry.list,
+			frame.originX - view.eyeX, frame.originY - view.eyeY, frame.originZ - view.eyeZ )
+		states[i] = dynamic and nativeDynamicByte or nativeStatusBytes[status]
+	end
+	for i = #states, cached.count + 1, -1 do states[i] = nil end
+	local materials = cached.nativeMaterials
+	for source in pairs( materials ) do materials[source] = nativeMaterial( source ) end
+	return table.concat( states ), materials
 end
 
 local function drawNativeChunks( cached, store, chunks, stats, depthStage, translucent )
@@ -538,12 +564,20 @@ local function drawNativeChunks( cached, store, chunks, stats, depthStage, trans
 		local scene, err = module.CreateL2DrawScene()
 		if not scene then error( "Native draw scene: " .. tostring( err ), 0 ) end
 		cached.nativeScene, cached.nativeModule, cached.nativeReset = scene, module, true
+		cached.nativeStates = {}
 	end
 	if cached.nativeReset or cached.nativeDirty then
 		local updates = cached.nativeReset and cached.entries or cached.nativeDirty
 		for index in pairs( updates ) do if index > cached.count then updates[index] = nil end end
 		local ok, err = module.PatchL2DrawScene( cached.nativeScene, updates, cached.count )
 		if not ok then error( "Native draw scene update: " .. tostring( err ), 0 ) end
+		-- Registration/retirement owns this set; the draw loop visits only unique
+		-- materials, without walking meshes or rebuilding a table every frame.
+		local materials = {}
+		for i = 1, cached.count do
+			for _, mesh in ipairs( cached.entries[i].list ) do materials[mesh.material] = mesh.material end
+		end
+		cached.nativeMaterials = materials
 		cached.nativeReset, cached.nativeDirty = false, nil
 	end
 	local view, planes = nativeView, nativeView.planes
@@ -564,7 +598,19 @@ local function drawNativeChunks( cached, store, chunks, stats, depthStage, trans
 	view.lane = overrideMaterial and 3 or depthStage and 2 or 1
 	nativeContext.store, nativeContext.chunks, nativeContext.depthStage = store, chunks, depthStage
 	nativeContext.overlay, nativeContext.bound = false, nil
-	local result, err = module.DrawL2Scene( cached.nativeScene, view, nativeChunk, nativeBind, nativeOverlay )
+	local result, err
+	-- Depth/override callers keep their lazy material-resolution contract.
+	if module.DrawL2SceneBatched and not depthStage and not overrideMaterial then
+		local started = SysTime()
+		local states, materials = prepareNativeBatch( cached, view )
+		stats.nativePrepareMS = ( stats.nativePrepareMS or 0 ) + ( SysTime() - started ) * 1000
+		nativeContext.materials = materials
+		result, err = module.DrawL2SceneBatched( cached.nativeScene, view, states, materials, nativeOverlay )
+	else
+		nativeContext.materials = nil
+		result, err = module.DrawL2Scene( cached.nativeScene, view, nativeChunk, nativeBind, nativeOverlay )
+	end
+	nativeContext.materials = nil
 	nativeContext.store, nativeContext.chunks = nil, nil
 	if nativeContext.overlay then
 		-- A callback may have failed between blend setup and the matching end.
@@ -581,6 +627,9 @@ local function drawNativeChunks( cached, store, chunks, stats, depthStage, trans
 	end
 	-- Older DLLs do not report range merges; all original fields remain required.
 	stats.nativeRangeMerges = ( stats.nativeRangeMerges or 0 ) + ( result.nativeRangeMerges or 0 )
+	stats.nativeChunkCallbacks = ( stats.nativeChunkCallbacks or 0 ) + ( result.nativeChunkCallbacks or 0 )
+	stats.nativeMaterialCallbacks = ( stats.nativeMaterialCallbacks or 0 ) + ( result.nativeMaterialCallbacks or 0 )
+	stats.nativePreparedMaterials = ( stats.nativePreparedMaterials or 0 ) + ( result.nativePreparedMaterials or 0 )
 	return result.drawn, result.distanceCulled, result.frustumCulled, result.stale, result.meshes
 end
 
@@ -814,6 +863,8 @@ local function drawPackStages( translucent, depthOnly )
 	stats.directionCulled, stats.vertices, stats.verticesCulled = 0, 0, 0
 	stats.nativeBinds, stats.nativeRanges, stats.nativeAsyncHits, stats.nativeSyncCulls, stats.nativeCullMS = 0, 0, 0, 0, 0
 	stats.nativeRangeMerges = 0
+	stats.nativeChunkCallbacks, stats.nativeMaterialCallbacks, stats.nativePreparedMaterials = 0, 0, 0
+	stats.nativePrepareMS = 0
 	local totalTested, totalDrawn, totalDistance, totalFrustum, totalStale = 0, 0, 0, 0, 0
 	local totalMeshes = 0
 	for _, passes in ipairs( groups ) do
@@ -874,6 +925,9 @@ concommand.Add( "mc_mesh_cull_stats", function()
 			print( string.format( "[MC native draw] %s binds=%d ranges=%d merged=%d asyncHits=%d syncCulls=%d resultCull=%.3fms",
 				names[pass], stats.nativeBinds or 0, stats.nativeRanges or 0, stats.nativeRangeMerges or 0, stats.nativeAsyncHits or 0,
 				stats.nativeSyncCulls or 0, stats.nativeCullMS or 0 ) )
+			print( string.format( "[MC native callbacks] %s chunks=%d materials=%d prepared=%d prepare=%.3fms",
+				names[pass], stats.nativeChunkCallbacks or 0, stats.nativeMaterialCallbacks or 0, stats.nativePreparedMaterials or 0,
+				stats.nativePrepareMS or 0 ) )
 			print( string.format( "[MC native view] %s portals=%s root=%d seed=%d mode=%s cell=%d,%d,%d grid=%d visited=%d",
 				names[pass], tostring( stats.nativePortals == true ), stats.nativePortalRoot or 0, stats.nativePortalSeed or 63,
 				stats.nativePortalMode or "unprepared", stats.nativePortalX or 0, stats.nativePortalY or 0, stats.nativePortalZ or 0,

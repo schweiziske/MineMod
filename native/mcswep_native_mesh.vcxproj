@@ -439,6 +439,7 @@
     <ClInclude Include="Bindings\AtlasSpriteBindings.h" />
     <ClInclude Include="Mesh\ModelShapes.h" />
     <ClInclude Include="Render\Source\EngineContext.h" />
+    <ClInclude Include="Render\Source\DrawProfile.h" />
     <ClInclude Include="Render\Source\MeshResource.h" />
     <ClInclude Include="Render\Visibility\VisibilityGraph.h" />
     <ClInclude Include="Render\Visibility\VisibilityMath.h" />

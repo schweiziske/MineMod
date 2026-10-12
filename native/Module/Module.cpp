@@ -93,6 +93,7 @@ GMOD_MODULE_OPEN()
 	fa.AddFunction("SetL2DrawGraph", GTLUAF(mcmesh::l2drawbridge::graph));
 	fa.AddFunction("SetL2DrawSpatialGraph", GTLUAF(mcmesh::l2drawbridge::spatialGraph));
 	fa.AddFunction("DrawL2Scene", GTLUAF(mcmesh::l2drawbridge::draw));
+	fa.AddFunction("DrawL2SceneBatched", GTLUAF(mcmesh::l2drawbridge::DrawBatched));
 	fa.AddFunction("CompileL2Template", GTLUAF(mcmesh::l2bridge::CompileTemplate));
 	fa.AddFunction("CompileL2Cube", GTLUAF(mcmesh::l2bridge::CompileCube));
 	fa.AddFunction("CompileL2Model", GTLUAF(mcmesh::l2bridge::CompileModel));

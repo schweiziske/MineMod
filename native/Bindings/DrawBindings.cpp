@@ -5,6 +5,7 @@
 #include "Bindings/MeshBindings.h"
 #include "Render/Source/MeshResource.h"
 #include "Render/Source/EngineContext.h"
+#include "Render/Source/DrawProfile.h"
 #include "Resources/Source/PixelTextureStore.h"
 #include <algorithm>
 #include <cmath>
@@ -451,12 +452,16 @@ int spatialGraph(ILuaBase *lua)
 {
 	return readGraph(lua, true);
 }
-int draw(ILuaBase *lua)
+static int DrawScene(ILuaBase *lua, bool inBatched)
 {
 	const int top = lua->Top();
 	try
 	{
+		source::DrawProfile profile(lua->IsType(2, Type::Table) && boolean(lua, 2, "profile"));
+		using source::EDrawPhase;
+		const auto flush_started = profile.Start();
 		pixelupload::GetPixelTextureStore().Flush();
+		profile.Add(EDrawPhase::PixelFlush, flush_started);
 		auto &value = scene(lua);
 		l2::require(!value.drawing, "recursive Native scene draw");
 		struct DrawScope
@@ -465,9 +470,21 @@ int draw(ILuaBase *lua)
 			explicit DrawScope(bool &f) : flag(f) { flag = true; }
 			~DrawScope() { flag = false; }
 		} drawing(value.drawing);
-		l2::require(value.cpu && lua->IsType(2, Type::Table) && lua->IsType(3, Type::Function) &&
-						lua->IsType(4, Type::Function) && lua->IsType(5, Type::Function),
+		l2::require(value.cpu && lua->IsType(2, Type::Table) && lua->IsType(3, inBatched ? Type::String : Type::Function) &&
+						lua->IsType(4, inBatched ? Type::Table : Type::Function) && lua->IsType(5, Type::Function),
 					"invalid Native draw arguments");
+		const unsigned char *chunk_states = nullptr;
+		if (inBatched)
+		{
+			unsigned length = 0;
+			chunk_states = reinterpret_cast<const unsigned char *>(lua->GetString(3, &length));
+			l2::require(length == value.chunks.size(), "Native draw status count disagrees with scene");
+			for (unsigned i = 0; i < length; ++i)
+				l2::require(chunk_states[i] <= 3 || chunk_states[i] == 7, "invalid Native draw chunk status");
+		}
+		// The table at argument 4 retains the selected Lua materials throughout this draw.
+		// Resolve each distinct source once; binding below stays on the Source main thread.
+		std::unordered_map<IMaterial *, IMaterial *> selected_materials;
 		l2draw::VisibilityView view;
 		view.mEye = {field(lua, 2, "eyeX"), field(lua, 2, "eyeY"), field(lua, 2, "eyeZ")};
 		view.mDistance = field(lua, 2, "distance");
@@ -508,6 +525,7 @@ int draw(ILuaBase *lua)
 		std::shared_ptr<const l2draw::VisibilityFrame> frame;
 		const bool									   background = boolean(lua, 2, "background");
 		bool										   asyncHit = false;
+		const auto visibility_started = profile.Start();
 		if (background)
 			frame = worker.Resolve(value.lanes[lane], value.cpu, graph, view, asyncHit);
 		if (!frame)
@@ -517,9 +535,11 @@ int draw(ILuaBase *lua)
 			frame = std::make_shared<l2draw::VisibilityFrame>(l2draw::Compute(value.cpu, graph, exact));
 		}
 		l2::require(frame->mError.empty(), frame->mError.c_str());
+		profile.Add(EDrawPhase::Visibility, visibility_started);
 		uint64_t			 drawn = 0, distance = 0, frustum = 0, stale = 0, meshes = 0, testedSections = 0,
 							 drawnSections = 0, sectionFrustum = 0, sectionPortal = 0, rejectedDirections = 0,
-							 vertices = 0, rejectedVertices = 0, binds = 0, rangesDrawn = 0, mergedRanges = 0;
+							 vertices = 0, rejectedVertices = 0, binds = 0, rangesDrawn = 0, mergedRanges = 0,
+							 chunk_callbacks = 0;
 		CMatRenderContextPtr context(source::GetMaterialSystem());
 		l2::require(!!context, "Native draw render context unavailable");
 		context->MatrixMode(MATERIAL_MODEL);
@@ -551,15 +571,28 @@ int draw(ILuaBase *lua)
 					++frustum;
 				continue;
 			}
-			lua->Push(3);
-			lua->PushNumber(cpu.mKey);
-			lua->ReferencePush(chunk.list->id);
-			for (unsigned a = 0; a < 3; ++a)
-				lua->PushNumber(cpu.mOrigin[a] - view.mEye[a]);
-			call(lua, 5, 2);
-			const int  status = l2::integer(numeric(lua, -2), 0, 3, "invalid Native chunk callback result");
-			const bool dynamic = lua->GetBool(-1);
-			lua->Pop(2);
+			int status;
+			bool dynamic;
+			if (inBatched)
+			{
+				status = chunk_states[i] & 3;
+				dynamic = (chunk_states[i] & 4) != 0;
+			}
+			else
+			{
+				const auto callback_started = profile.Start();
+				lua->Push(3);
+				lua->PushNumber(cpu.mKey);
+				lua->ReferencePush(chunk.list->id);
+				for (unsigned a = 0; a < 3; ++a)
+					lua->PushNumber(cpu.mOrigin[a] - view.mEye[a]);
+				call(lua, 5, 2);
+				++chunk_callbacks;
+				status = l2::integer(numeric(lua, -2), 0, 3, "invalid Native chunk callback result");
+				dynamic = lua->GetBool(-1);
+				lua->Pop(2);
+				profile.Add(EDrawPhase::ChunkCallback, callback_started);
+			}
 			if (status != 3)
 			{
 				if (status == 0)
@@ -625,35 +658,60 @@ int draw(ILuaBase *lua)
 					auto *source = mesh.identity;
 					if (source != bound)
 					{
-						lua->Push(4);
-						lua->ReferencePush(mesh.material->id);
-						call(lua, 1, 0);
+						const auto bind_started = profile.Start();
+						if (inBatched)
+						{
+							auto found = selected_materials.find(source);
+							if (found == selected_materials.end())
+							{
+								lua->ReferencePush(mesh.material->id);
+								lua->RawGet(4);
+								auto *selected_material = lua->GetUserType<IMaterial>(-1, Type::Material);
+								l2::require(selected_material != nullptr, "missing Native prepared material");
+								found = selected_materials.emplace(source, selected_material).first;
+								lua->Pop();
+							}
+							context->Bind(found->second);
+						}
+						else
+						{
+							lua->Push(4);
+							lua->ReferencePush(mesh.material->id);
+							call(lua, 1, 0);
+						}
 						bound = source;
 						++binds;
+						profile.Add(EDrawPhase::MaterialBind, bind_started);
 					}
 					auto drawMesh = [&]
 					{
+						const auto draw_started = profile.Start();
 						if (useRanges)
 							resource.mMesh->Draw(ranges, rangeCount);
 						else
 							resource.mMesh->Draw(0, resource.mIndices);
+						profile.Add(EDrawPhase::MeshDraw, draw_started);
 					};
 					drawMesh();
 					if (dynamic)
 					{
+						const auto overlay_started = profile.Start();
 						lua->Push(5);
 						lua->PushBool(true);
 						lua->ReferencePush(mesh.material->id);
 						call(lua, 2, 1);
 						const bool overlay = lua->GetBool(-1);
 						lua->Pop();
+						profile.Add(EDrawPhase::Overlay, overlay_started);
 						if (overlay)
 						{
 							drawMesh();
+							const auto restore_started = profile.Start();
 							lua->Push(5);
 							lua->PushBool(false);
 							lua->ReferencePush(mesh.material->id);
 							call(lua, 2, 0);
+							profile.Add(EDrawPhase::Overlay, restore_started);
 						}
 					}
 					++meshes;
@@ -668,6 +726,16 @@ int draw(ILuaBase *lua)
 				++drawn;
 		}
 		lua->CreateTable();
+		if (profile.IsEnabled())
+		{
+			number(lua, "profileTotalMS", profile.GetTotalMS());
+			number(lua, "profilePixelFlushMS", profile.Get(EDrawPhase::PixelFlush));
+			number(lua, "profileVisibilityMS", profile.Get(EDrawPhase::Visibility));
+			number(lua, "profileChunkCallbackMS", profile.Get(EDrawPhase::ChunkCallback));
+			number(lua, "profileMaterialBindMS", profile.Get(EDrawPhase::MaterialBind));
+			number(lua, "profileMeshDrawMS", profile.Get(EDrawPhase::MeshDraw));
+			number(lua, "profileOverlayMS", profile.Get(EDrawPhase::Overlay));
+		}
 		number(lua, "drawn", drawn);
 		number(lua, "distanceCulled", distance);
 		number(lua, "frustumCulled", frustum);
@@ -681,6 +749,9 @@ int draw(ILuaBase *lua)
 		number(lua, "vertices", vertices);
 		number(lua, "verticesCulled", rejectedVertices);
 		number(lua, "nativeBinds", binds);
+		number(lua, "nativeChunkCallbacks", chunk_callbacks);
+		number(lua, "nativeMaterialCallbacks", inBatched ? 0 : binds);
+		number(lua, "nativePreparedMaterials", selected_materials.size());
 		number(lua, "nativeRanges", rangesDrawn);
 		number(lua, "nativeRangeMerges", mergedRanges);
 		number(lua, "nativeAsyncHits", asyncHit ? 1 : 0);
@@ -698,6 +769,14 @@ int draw(ILuaBase *lua)
 	{
 		return failure(lua, top, e.what());
 	}
+}
+int draw(ILuaBase *lua)
+{
+	return DrawScene(lua, false);
+}
+int DrawBatched(ILuaBase *inLua)
+{
+	return DrawScene(inLua, true);
 }
 int stats(ILuaBase *lua)
 {
