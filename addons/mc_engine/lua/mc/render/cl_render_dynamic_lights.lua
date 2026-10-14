@@ -12,7 +12,7 @@ local R, Coords = MC.RenderL2Resources, MC.API.Coords
 local floor, min, max, sqrt, abs = math.floor, math.min, math.max, math.sqrt, math.abs
 local enabled = CreateClientConVar( "mc_dynamic_lights", "1", true, false, "Moving lights in vanilla and shader packs", 0, 1 )
 local limit = CreateClientConVar( "mc_dynamic_lights_max", "8", true, false, "Maximum visible moving lights", 0, 8 )
-local flashlight = CreateClientConVar( "mc_dynamic_flashlight", "1", true, false, "Receive the F flashlight on Minecraft surfaces", 0, 1 )
+local flashlight = CreateClientConVar( "mc_dynamic_flashlight", "1", true, false, "Receive MC and Source flashlight beams on Minecraft surfaces", 0, 1 )
 local viewPoint = Vector()
 D.count, D.ready, D.lastFrame = 0, false, nil
 D.cpuSelected, D.cpuSelectionValid = {}, false
@@ -415,7 +415,10 @@ local registered, registrationError = D.RegisterProvider( "mc:flashlight", {
 	class = "player", kind = "spot", radius = 40, color = { 6, 5.85, 5.55 },
 	innerCos = math.cos( math.rad( 13 ) ), outerCos = math.cos( math.rad( 24 ) ),
 	sample = function( player, state )
-		if not flashlight:GetBool() or not player:Alive() or not player:FlashlightIsOn() then return false end
+		if not flashlight:GetBool() or not player:Alive() then return false end
+		-- Both controls feed the same terrain light record, so enabling both
+		-- cannot double the brightness or consume two GPU light slots.
+		if not player:GetNW2Bool( "MCWorldFlashlight", false ) and not player:FlashlightIsOn() then return false end
 		local position, err = Coords.EntityEyeWorldPos( player )
 		if not position then error( err, 0 ) end
 		local forward = player:EyeAngles():Forward()

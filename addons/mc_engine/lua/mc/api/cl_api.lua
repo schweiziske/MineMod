@@ -228,10 +228,25 @@ end
 -- Minecraft items/particles sample the containing cell, then use the same
 -- lightmap as terrain. Input is persistent MC world space, never a hand pose
 -- or a render-relative particle position. No eight-cell interpolation, Source
--- ambient lighting, exposure gain or custom directional shadow is applied.
+-- ambient lighting, exposure gain or custom directional shadow is applied to
+-- the base lightmap. Moving lights are added separately at the exact position.
 local presentationFrame, presentationX, presentationY, presentationZ
 local presentationEmission, presentationR, presentationG, presentationB
 local presentationRevision, presentationGeneration, presentationStateRevision
+
+local function presentationWithMovingLights( pos, r, g, b )
+	-- The dynamic-light module loads after the API; until registration completes
+	-- there are no moving sources. It owns enable/limit and once-per-frame updates.
+	local moving = MC.RenderDynamicLights
+	if moving then
+		local dr, dg, db = moving.SampleRGB( pos )
+		r = r + math.min( dr, 1 ) * ( 1 - r )
+		g = g + math.min( dg, 1 ) * ( 1 - g )
+		b = b + math.min( db, 1 ) * ( 1 - b )
+	end
+	return r, g, b
+end
+
 function Light.SamplePresentationRGB( pos, emission )
 	if not isvector( pos ) then return nil, "invalid_position" end
 	if not MC.SampleLighting or not MC.SampleGlobalLightmapRGB then return nil, "lighting_unavailable" end
@@ -245,7 +260,7 @@ function Light.SamplePresentationRGB( pos, emission )
 	and presentationRevision == MC.GlobalLightmapRevision
 	and presentationGeneration == MC.StateWorldGeneration
 	and presentationStateRevision == MC.AppliedStateRevision then
-		return presentationR, presentationG, presentationB
+		return presentationWithMovingLights( pos, presentationR, presentationG, presentationB )
 	end
 	local _, _, block, sky = MC.SampleLighting( bx, by, bz, 0 )
 	local r, g, b = MC.SampleGlobalLightmapRGB( math.max( block, emission ), sky )
@@ -253,7 +268,9 @@ function Light.SamplePresentationRGB( pos, emission )
 	presentationEmission, presentationR, presentationG, presentationB = emission, r, g, b
 	presentationRevision, presentationGeneration, presentationStateRevision =
 		MC.GlobalLightmapRevision, MC.StateWorldGeneration, MC.AppliedStateRevision
-	return r, g, b
+	-- Cache only the cell lightmap. A moving cone can cut through the middle of
+	-- a cell: different particle/drop positions must not reuse its first result.
+	return presentationWithMovingLights( pos, r, g, b )
 end
 
 -- Raw cell sample: brightness 0..1, level, blockLight, skyLight (0..15).

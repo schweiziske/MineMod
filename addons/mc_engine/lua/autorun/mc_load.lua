@@ -137,6 +137,7 @@ local SERVER_FILES = {
 	"mc/sv_player.lua",
 	"mc/api/sv_api.lua",
 	"mc/integration/sv_hand_weapon_bridge.lua",
+	"mc/integration/sv_flashlight.lua",
 }
 local CLIENT_FILES = {
 	"mc/cl_gc.lua",

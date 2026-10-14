@@ -82,6 +82,15 @@ local function worldInputAvailable()
 		and not IsValid( vgui.GetKeyboardFocus() )
 end
 
+local function toggleFlashlight()
+	if not worldInputAvailable() then return end
+	-- Toggle the MC terrain spotlight, not Source's projected BSP flashlight.
+	RunConsoleCommand( "mc_world_flashlight" )
+end
+concommand.Add( "mc_flashlight", toggleFlashlight )
+
+local flashlightKeyDown = false
+
 local function worldKeyPressed( button )
 	local operation = WORLD_KEYS[button]
 	local hotbar = NUMBER_KEYS[button]
@@ -112,6 +121,14 @@ end )
 -- keys and single-player, where predicted button hooks may not reach the client.
 -- The shared edge state prevents held keys from undoing a later scroll selection.
 hook.Add( "Think", "mc_inventory_world_shortcuts", function()
+	local down = input.IsKeyDown( KEY_G )
+	if down and not flashlightKeyDown then
+		-- Unbound G is the default MC shortcut. Respect existing user binds,
+		-- including mc_flashlight/impulse 100, which dispatch their own command.
+		local bind = input.LookupKeyBinding( KEY_G )
+		if not bind or bind == "" then toggleFlashlight() end
+	end
+	flashlightKeyDown = down
 	for button in pairs( WORLD_KEYS ) do
 		local down
 		if button == MOUSE_MIDDLE then down = input.IsMouseDown( button ) else down = input.IsKeyDown( button ) end
@@ -191,13 +208,17 @@ hook.Add( "PlayerBindPress", "mc_inventory_hotbar_input", function( ply, bind, p
 		return
 	end
 	if inventoryScreenVisible() then
+		if bind == "impulse 100" then return true end
 		if bind == "+use" and not inventoryTextEntryFocused() then
 			UI.Screen:CloseInventory( true )
 			return true
 		end
 		return
 	end
-	if worldInputAvailable() and ( bind == "+menu" or bind == "impulse 100" or bind == "+attack3" ) then return true end
+	-- F remains the vanilla swap-hands shortcut. A flashlight impulse rebound
+	-- to another key can pass through without also swapping the held stacks.
+	if worldInputAvailable() and bind == "impulse 100" and button == KEY_F then return true end
+	if worldInputAvailable() and ( bind == "+menu" or bind == "+attack3" ) then return true end
 	local number = string.match( bind, "^slot([1-9])$" )
 	if number then
 		-- Bind and raw button events can arrive in either order. Consume both,
