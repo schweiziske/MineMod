@@ -225,6 +225,37 @@ function Light.SampleRGB( pos, emission )
 	return r, g, b
 end
 
+-- Minecraft items/particles sample the containing cell, then use the same
+-- lightmap as terrain. Input is persistent MC world space, never a hand pose
+-- or a render-relative particle position. No eight-cell interpolation, Source
+-- ambient lighting, exposure gain or custom directional shadow is applied.
+local presentationFrame, presentationX, presentationY, presentationZ
+local presentationEmission, presentationR, presentationG, presentationB
+local presentationRevision, presentationGeneration, presentationStateRevision
+function Light.SamplePresentationRGB( pos, emission )
+	if not isvector( pos ) then return nil, "invalid_position" end
+	if not MC.SampleLighting or not MC.SampleGlobalLightmapRGB then return nil, "lighting_unavailable" end
+	local bx, by, bz = API.Coords.WorldToCell( pos )
+	emission = math.Clamp( tonumber( emission ) or 0, 0, 15 )
+	local frame = FrameNumber()
+	-- Bursts visit one cell repeatedly. Retain only the last sample: bounded
+	-- scalar storage, no string keys, per-frame tables or unbounded world cache.
+	if frame == presentationFrame and bx == presentationX and by == presentationY
+	and bz == presentationZ and emission == presentationEmission
+	and presentationRevision == MC.GlobalLightmapRevision
+	and presentationGeneration == MC.StateWorldGeneration
+	and presentationStateRevision == MC.AppliedStateRevision then
+		return presentationR, presentationG, presentationB
+	end
+	local _, _, block, sky = MC.SampleLighting( bx, by, bz, 0 )
+	local r, g, b = MC.SampleGlobalLightmapRGB( math.max( block, emission ), sky )
+	presentationFrame, presentationX, presentationY, presentationZ = frame, bx, by, bz
+	presentationEmission, presentationR, presentationG, presentationB = emission, r, g, b
+	presentationRevision, presentationGeneration, presentationStateRevision =
+		MC.GlobalLightmapRevision, MC.StateWorldGeneration, MC.AppliedStateRevision
+	return r, g, b
+end
+
 -- Raw cell sample: brightness 0..1, level, blockLight, skyLight (0..15).
 -- skyLight is time-independent; apply the day cycle yourself if needed.
 -- (mc_light_enabled 0 makes the underlying sampler report full bright.)

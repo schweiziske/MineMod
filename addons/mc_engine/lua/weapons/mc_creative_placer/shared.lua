@@ -300,10 +300,6 @@ if CLIENT then
 		[5] = Color( 215, 215, 215, 255 ),
 		[6] = Color( 215, 215, 215, 255 ),
 	}
-	-- Unlit atlas geometry at RGB 255 reads substantially hotter than the chunk
-	-- shader under GMod's HDR/bloom pass. Keep the sampled hue and contrast, but
-	-- leave headroom so the held block does not clip to glowing white outdoors.
-	local HELD_LIGHT_GAIN = 0.48
 
 	local HELD_FACE_NORMALS = {
 		[1] = Vector( 0, 0, 1 ),
@@ -385,25 +381,13 @@ if CLIENT then
 		return cvarBool( HELD_ANIM_CVAR, true )
 	end
 
+	-- pos is persistent MC world space. Vanilla uses the entity light probe,
+	-- not the animated hand anchor; both hands share its containing-cell light.
 	local function heldBlockLightingAt( pos, state )
-		local r, g, b = 1, 1, 1
-		if MC.SampleDynamicLightingRGB then
-			r, g, b = MC.SampleDynamicLightingRGB( pos, 0 )
-		elseif MC.WorldToCell and MC.SampleLighting then
-			local bx, by, bz = MC.WorldToCell( pos )
-			if bx ~= nil then
-				local brightness = MC.SampleLighting( bx, by, bz, 0 )
-				r = math.Clamp( tonumber( brightness ) or 1, 0, 1 )
-				g, b = r, r
-			end
-		end
-
+		local r, g, b = MC.API.Light.SamplePresentationRGB( pos, 0 )
+		if not MC.Check( r ~= nil, "held_light_sample", "Cannot sample held item lighting: %s", g ) then return nil end
 		state = state or {}
-		local dt = RealFrameTime and RealFrameTime() or FrameTime and FrameTime() or 0.016
-		local blend = 1 - math.exp( -math.Clamp( dt, 0, 0.1 ) * 12 )
-		state.r = state.r and Lerp( blend, state.r, r ) or r
-		state.g = state.g and Lerp( blend, state.g, g ) or g
-		state.b = state.b and Lerp( blend, state.b, b ) or b
+		state.r, state.g, state.b = r, g, b
 		return state
 	end
 
@@ -461,22 +445,10 @@ if CLIENT then
 		scale = scale or 8
 		local lightR, lightG, lightB
 		if type( brightness ) == "table" then
-			local rawR = math.Clamp( tonumber( brightness.r ) or 1, 0, 1 )
-			local rawG = math.Clamp( tonumber( brightness.g ) or rawR, 0, 1 )
-			local rawB = math.Clamp( tonumber( brightness.b ) or rawR, 0, 1 )
-			if MC.ScaleDynamicLightingRGB then
-				lightR, lightG, lightB = MC.ScaleDynamicLightingRGB( rawR, rawG, rawB, HELD_LIGHT_GAIN )
-			else
-				lightR, lightG, lightB = rawR * HELD_LIGHT_GAIN, rawG * HELD_LIGHT_GAIN, rawB * HELD_LIGHT_GAIN
-			end
+			lightR, lightG, lightB = brightness.r, brightness.g, brightness.b
 		else
-			local raw = math.Clamp( tonumber( brightness ) or 1, 0, 1 )
-			if MC.ScaleDynamicLightingRGB then
-				lightR, lightG, lightB = MC.ScaleDynamicLightingRGB( raw, raw, raw, HELD_LIGHT_GAIN )
-			else
-				lightR = raw * HELD_LIGHT_GAIN
-				lightG, lightB = lightR, lightR
-			end
+			lightR = math.Clamp( tonumber( brightness ) or 1, 0, 1 )
+			lightG, lightB = lightR, lightR
 		end
 		local tintR, tintG, tintB = 255, 255, 255
 		if stateId and MC.BlockStateTintCode and MC.BlockTintRGB then
@@ -671,8 +643,9 @@ if CLIENT then
 		local pos, ang, scale = firstPersonHeldPose( wep )
 		-- Eye-space sampling is more stable than the animated hand position and
 		-- matches the light environment the first-person camera actually sees.
-		wep.MCHeldLight = heldBlockLightingAt( EyePos(), wep.MCHeldLight )
+		wep.MCHeldLight = heldBlockLightingAt( MC.API.Coords.EntityEyeWorldPos( ply ), wep.MCHeldLight )
 		local brightness = wep.MCHeldLight
+		if not brightness then return end
 
 		render.OverrideDepthEnable( true, false )
 			local stateId = selectedStateId( ply, id )
@@ -728,8 +701,9 @@ if CLIENT then
 		if not MC.IsValidBlock( id ) then return end
 
 		local pos, ang, scale = thirdPersonHeldPose( ply )
-		ply.MCHeldLight = heldBlockLightingAt( pos, ply.MCHeldLight )
+		ply.MCHeldLight = heldBlockLightingAt( MC.API.Coords.EntityEyeWorldPos( ply ), ply.MCHeldLight )
 		local brightness = ply.MCHeldLight
+		if not brightness then return end
 		local stateId = selectedStateId( ply, id )
 		if not stateId or not MC.DrawCreativeHeldBlockState( stateId, pos, ang, scale, brightness ) then
 			MC.DrawCreativeHeldBlock( id, selectedOrient( ply, id ) or creativeHeldOrient( id ), pos, ang, scale, brightness )

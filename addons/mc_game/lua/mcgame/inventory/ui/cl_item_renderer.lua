@@ -374,7 +374,7 @@ local function droppedBlockMaterial( translucent )
 			["$basetexture"] = textureName,
 			["$vertexcolor"] = "1",
 			["$nocull"] = "0",
-			["$hdrcolorscale"] = tostring( UI.WorldItemHDRColorScale or 0.25 ),
+			["$hdrcolorscale"] = tostring( UI.WorldItemHDRColorScale or 1 ),
 		}
 		if translucent then
 			params["$translucent"] = "1"
@@ -387,7 +387,7 @@ local function droppedBlockMaterial( translucent )
 		droppedBlockMaterials[key] = material
 	end
 	material:SetTexture( "$basetexture", texture )
-	if material.SetFloat then material:SetFloat( "$hdrcolorscale", UI.WorldItemHDRColorScale or 0.25 ) end
+	if material.SetFloat then material:SetFloat( "$hdrcolorscale", UI.WorldItemHDRColorScale or 1 ) end
 	return material
 end
 

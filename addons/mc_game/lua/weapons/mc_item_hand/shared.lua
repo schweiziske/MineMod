@@ -982,7 +982,6 @@ end
 if CLIENT then
 	local ITEM_PLACE_ANIM_DURATION = 0.30
 	local ITEM_HAND_HEIGHT_RECOVERY = 8
-	local HELD_ITEM_LIGHT_GAIN = 0.48
 	-- ItemInHandRenderer.applyItemArmTransform from Java 26.2. The dimensionless
 	-- parent translation is (side * 0.56, -0.52, -0.72); size only converts the
 	-- vanilla camera-space pose into Source world units. Minecraft's hand HUD uses
@@ -1272,42 +1271,32 @@ if CLIENT then
 		return drawn
 	end
 
-	local function heldItemLightingColor( ply, pos, firstPerson, hand )
-		local owner = firstPerson and ply:GetActiveWeapon() or ply
-		local lightField = hand == "offhand" and "MCItemHandOffhandLight" or "MCItemHandMainhandLight"
-		local colorField = hand == "offhand" and "MCItemHandOffhandColor" or "MCItemHandMainhandColor"
-		local lighting
-		local HandWeapon = MC.API and MC.API.HandWeapon or nil
-		if HandWeapon and HandWeapon.SamplePresentationLighting and IsValid( owner ) then
-			local sampled = HandWeapon.SamplePresentationLighting(
-				firstPerson and EyePos() or pos, owner[lightField] )
-			if type( sampled ) == "table" then owner[lightField] = sampled end
-			lighting = owner[lightField]
+	local function heldLighting( ply )
+		local frame = FrameNumber()
+		if ply.MCItemLightFrame ~= frame then
+			local position = MC.API.Coords.EntityEyeWorldPos( ply )
+			local sampled, err = MC.API.HandWeapon.SamplePresentationLighting( position, ply.MCItemLight )
+			if not MC.Check( sampled ~= nil, "item_hand_light", "Cannot sample held item lighting: %s", err ) then return nil end
+			ply.MCItemLight, ply.MCItemLightFrame = sampled, frame
 		end
+		return ply.MCItemLight
+	end
 
-		local r, g, b = 1, 1, 1
-		if type( lighting ) == "table" then
-			r = math.Clamp( tonumber( lighting.r ) or 1, 0, 1 )
-			g = math.Clamp( tonumber( lighting.g ) or r, 0, 1 )
-			b = math.Clamp( tonumber( lighting.b ) or r, 0, 1 )
-		end
-		local Light = MC.API and MC.API.Light
-		if Light and Light.ScaleRGB then
-			r, g, b = Light.ScaleRGB( r, g, b, HELD_ITEM_LIGHT_GAIN )
-		else
-			r = math.Clamp( r * HELD_ITEM_LIGHT_GAIN, 0, HELD_ITEM_LIGHT_GAIN )
-			g = math.Clamp( g * HELD_ITEM_LIGHT_GAIN, 0, HELD_ITEM_LIGHT_GAIN )
-			b = math.Clamp( b * HELD_ITEM_LIGHT_GAIN, 0, HELD_ITEM_LIGHT_GAIN )
-		end
+	local function heldItemLightingColor( ply, hand )
+		local lighting = heldLighting( ply )
+		if not lighting then return nil end
+		local owner = ply
+		local colorField = hand == "offhand" and "MCItemHandOffhandColor" or "MCItemHandMainhandColor"
+		local r, g, b = lighting.r, lighting.g, lighting.b
 
 		local color = IsValid( owner ) and owner[colorField] or nil
 		if not color then
 			color = Color( 255, 255, 255, 255 )
 			if IsValid( owner ) then owner[colorField] = color end
 		end
-		color.r = math.floor( math.min( r, HELD_ITEM_LIGHT_GAIN ) * 255 + 0.5 )
-		color.g = math.floor( math.min( g, HELD_ITEM_LIGHT_GAIN ) * 255 + 0.5 )
-		color.b = math.floor( math.min( b, HELD_ITEM_LIGHT_GAIN ) * 255 + 0.5 )
+		color.r = math.floor( r * 255 + 0.5 )
+		color.g = math.floor( g * 255 + 0.5 )
+		color.b = math.floor( b * 255 + 0.5 )
 		color.a = 255
 		return color
 	end
@@ -1343,7 +1332,8 @@ if CLIENT then
 		local function tryDrawItemModel()
 			if not renderer or not renderer.DrawHeldItem then return false end
 			local pos, ang, scale = heldItemPose( ply, firstPerson, hand, plan.kind == "special" )
-			local color = heldItemLightingColor( ply, pos, firstPerson, hand )
+			local color = heldItemLightingColor( ply, hand )
+			if not color then return false end
 			local drawn
 			if firstPerson then
 				drawn = drawFirstPersonItemModel(
@@ -1364,17 +1354,8 @@ if CLIENT then
 		local stateId = selectedState( ply, stack )
 		local HandWeapon = MC.API and MC.API.HandWeapon or nil
 		if definition.blockId and stateId and HandWeapon and HandWeapon.DrawBlockState then
-			local brightness = 0.8
-			if HandWeapon.SamplePresentationLighting then
-				local owner = firstPerson and ply:GetActiveWeapon() or ply
-				local field = hand == "offhand" and "MCItemHandOffhandLight" or "MCItemHandMainhandLight"
-				if IsValid( owner ) then
-					local sampled = HandWeapon.SamplePresentationLighting(
-						firstPerson and EyePos() or pos, owner[field] )
-					if type( sampled ) == "table" then owner[field] = sampled end
-					brightness = owner[field] or brightness
-				end
-			end
+			local brightness = heldLighting( ply )
+			if not brightness then return end
 			render.OverrideDepthEnable( firstPerson, false )
 			HandWeapon.DrawBlockState( stateId, pos, ang, scale, brightness )
 			render.OverrideDepthEnable( false, false )

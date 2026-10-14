@@ -212,21 +212,33 @@ function MC.GetBlockParticleMaterial( id, col, row )
 	return particleMaterialForTile( tileName, col, row ), tileName, tile
 end
 
-local function particleLightingAt( pos )
-	if MC.SampleDynamicLightingRGB then
-		-- Exactly the same world-light sampler used by the held block. Particles
-		-- are not light sources and do not apply a separate surface-probe policy.
-		return MC.SampleDynamicLightingRGB( pos, 0 )
+-- One callback per distinct base tint, shared by every matching fragment.
+-- No per-particle Lua tables/closures or weak userdata lifetime assumptions.
+local terrainLightCallbacks = {}
+local function terrainLightCallback( tintCode )
+	local tr, tg, tb = 255, 255, 255
+	if tintCode and tintCode ~= 0 and MC.BlockTintRGB then
+		tr, tg, tb = MC.BlockTintRGB( tintCode )
 	end
-	if not ( MC.WorldToCell and MC.SampleLighting ) then return 1, 1, 1 end
-	local bx, by, bz = MC.WorldToCell( pos )
-	if bx == nil then return 1, 1, 1 end
-	local brightness = MC.SampleLighting( bx, by, bz, 0 )
-	brightness = math.Clamp( tonumber( brightness ) or 1, 0, 1 )
-	return brightness, brightness, brightness
+	local key = tr * 65536 + tg * 256 + tb
+	local callback = terrainLightCallbacks[key]
+	if callback then return callback end
+	-- TerrainParticle.java uses 0.6 base colour before the lightmap multiplier.
+	tr, tg, tb = tr * 0.6, tg * 0.6, tb * 0.6
+	callback = function( particle )
+		local world = MC.API.Coords.RenderToWorld( particle:GetPos() )
+		local r, g, b = MC.API.Light.SamplePresentationRGB( world, 0 )
+		if MC.Check( r ~= nil, "terrain_particle_light", "Cannot sample terrain particle lighting: %s", g ) then
+			particle:SetColor( math.floor( r * tr + 0.5 ),
+				math.floor( g * tg + 0.5 ), math.floor( b * tb + 0.5 ) )
+		end
+		particle:SetNextThink( CurTime() + 0.05 )
+	end
+	terrainLightCallbacks[key] = callback
+	return callback
 end
 
-local function addTerrainParticle( emitter, tileName, pos, relX, relY, relZ, bs, tintCode, lightR, lightG, lightB )
+local function addTerrainParticle( emitter, tileName, pos, relX, relY, relZ, bs, updateLighting )
 	local p = emitter:Add( particleMaterialForTile( tileName ), pos )
 	if not p then return end
 
@@ -254,25 +266,8 @@ local function addTerrainParticle( emitter, tileName, pos, relX, relY, relZ, bs,
 	p:SetCollide( true )
 	p:SetBounce( 0 )
 	p:SetLighting( false )
-	-- Keep particles slightly brighter than held blocks while leaving enough
-	-- HDR headroom to avoid clipped, glowing fragments outdoors.
-	if MC.ScaleDynamicLightingRGB then
-		lightR, lightG, lightB = MC.ScaleDynamicLightingRGB( lightR, lightG, lightB, 0.60 )
-	else
-		local rawR = math.Clamp( tonumber( lightR ) or 1, 0, 1 )
-		local rawG = math.Clamp( tonumber( lightG ) or rawR, 0, 1 )
-		local rawB = math.Clamp( tonumber( lightB ) or rawR, 0, 1 )
-		lightR, lightG, lightB = rawR * 0.60, rawG * 0.60, rawB * 0.60
-	end
-	local shadeR = math.Clamp( math.floor( 255 * lightR + 0.5 ), 0, 255 )
-	local shadeG = math.Clamp( math.floor( 255 * lightG + 0.5 ), 0, 255 )
-	local shadeB = math.Clamp( math.floor( 255 * lightB + 0.5 ), 0, 255 )
-	if tintCode and tintCode ~= 0 and MC.BlockTintRGB then
-		local tr, tg, tb = MC.BlockTintRGB( tintCode )
-		p:SetColor( math.floor( shadeR * tr / 255 + 0.5 ), math.floor( shadeG * tg / 255 + 0.5 ), math.floor( shadeB * tb / 255 + 0.5 ) )
-	else
-		p:SetColor( shadeR, shadeG, shadeB )
-	end
+	updateLighting( p )
+	p:SetThinkFunction( updateLighting )
 end
 
 local function addDestroyParticleSample( samples, base, box, bs, xx, yy, zz, countX, countY, countZ )
@@ -357,13 +352,7 @@ local function spawnBreakParticlesNow( id, orient, bx, by, bz, options )
 	if not emitter then return 0 end
 
 	local tileName = options.tileName or tileNameForBlock( id )
-	local tintCode = options.tintCode or 0
-	-- A held block samples once and applies that one RGB value to the whole
-	-- object. Do the same for a particle burst. Sampling every fragment inside
-	-- the old block volume blends against zero-light neighbouring solid cells
-	-- and makes otherwise illuminated break particles look black.
-	local lightPos = options.lightPos or base + Vector( bs * 0.5, bs * 0.5, bs * 0.5 )
-	local lightR, lightG, lightB = particleLightingAt( lightPos )
+	local updateLighting = terrainLightCallback( options.tintCode or 0 )
 	local samples = {}
 	for _, box in ipairs( boxes ) do
 		local widthX = math.min( 1, box[4] - box[1] )
@@ -395,7 +384,7 @@ local function spawnBreakParticlesNow( id, orient, bx, by, bz, options )
 	for i = 1, count do
 		local sampleIndex = math.min( total, math.floor( offset + ( i - 1 ) * step ) + 1 )
 		local sample = samples[sampleIndex]
-		addTerrainParticle( emitter, tileName, sample.pos, sample.relX, sample.relY, sample.relZ, bs, tintCode, lightR, lightG, lightB )
+		addTerrainParticle( emitter, tileName, sample.pos, sample.relX, sample.relY, sample.relZ, bs, updateLighting )
 	end
 
 	emitter:Finish()

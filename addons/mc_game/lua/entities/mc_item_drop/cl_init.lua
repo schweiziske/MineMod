@@ -75,26 +75,26 @@ local function networkStack( ent, cached )
 	return cached.stack
 end
 
-local function worldLightingColor( ent, offsetZ, now )
-	if not ent.MCNextLightSample or now >= ent.MCNextLightSample then
-		ent.MCNextLightSample = now + 0.1 + ent:EntIndex() % 5 * 0.01
+local function worldLightingColor( ent )
+	local frame = FrameNumber()
+	if ent.MCLightFrame ~= frame then
 		local Light = MC.API and MC.API.Light or nil
-		local sampleRGB = MC.Need( Light and Light.SampleRGB, "item_drop_light_api", "Missing MC.API.Light.SampleRGB" )
-		local r, g, b = 1, 1, 1
+		local sampleRGB = MC.Need( Light and Light.SamplePresentationRGB, "item_drop_light_api", "Missing MC.API.Light.SamplePresentationRGB" )
+		if not sampleRGB then return nil end
+		-- The physics origin is the box centre. Java probes ItemEntity's eye
+		-- height above its feet, independently of the cosmetic bobbing model.
 		local worldPosition = MC.API.Coords.EntityWorldPos( ent )
-		if MC.Check( isvector( worldPosition ), "item_drop_light_position", "Cannot sample item world lighting for %s", ent ) then
-			worldPosition.z = worldPosition.z + offsetZ
-			if sampleRGB then r, g, b = sampleRGB( worldPosition, 0 ) end
-		end
-		if Light and Light.ScaleRGB then
-			r, g, b = Light.ScaleRGB( r, g, b, 0.48 )
-		else
-			r, g, b = r * 0.48, g * 0.48, b * 0.48
-		end
+		if not MC.Check( isvector( worldPosition ), "item_drop_light_position", "Cannot sample item world lighting for %s", ent ) then return nil end
+		local constants = MC.ItemEntityParity.Constants
+		worldPosition.z = worldPosition.z + ( constants.eyeHeight - constants.height * 0.5 ) * blockSize()
+		local r, g, b = sampleRGB( worldPosition, ent:IsOnFire() and 15 or 0 )
+		if not MC.Check( r ~= nil, "item_drop_light_sample", "Cannot sample item lighting: %s", g ) then return nil end
+
 		ent.MCWorldLightColor = ent.MCWorldLightColor or Color( 255, 255, 255, 255 )
 		ent.MCWorldLightColor.r = math.floor( math.Clamp( r, 0, 1 ) * 255 + 0.5 )
 		ent.MCWorldLightColor.g = math.floor( math.Clamp( g, 0, 1 ) * 255 + 0.5 )
 		ent.MCWorldLightColor.b = math.floor( math.Clamp( b, 0, 1 ) * 255 + 0.5 )
+		ent.MCLightFrame = frame
 	end
 	return ent.MCWorldLightColor or color_white
 end
@@ -131,7 +131,8 @@ function ENT:DrawTranslucent()
 	local position, angles = cached.position, cached.angles
 	position.x, position.y, position.z = origin.x, origin.y, baseZ
 	angles.y = ( current * 90 + id * 37 ) % 360
-	local worldColor = worldLightingColor( self, baseZ - origin.z, current )
+	local worldColor = worldLightingColor( self )
+	if not worldColor then return end
 	local count = stack.count
 	local copies = count >= 16 and 4 or count >= 8 and 3 or count >= 2 and 2 or 1
 	if distanceSquared > 32 * 32 then copies = 1

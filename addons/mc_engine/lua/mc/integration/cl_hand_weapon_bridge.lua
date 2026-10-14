@@ -108,6 +108,7 @@ function MC.API.HandWeapon.GetItemThirdPersonAnchor( ply, leftHand )
 	return MC.CreativeHeldThirdPersonAnchor( ply, leftHand == true )
 end
 
+-- pos is MC world space; callers must convert engine/render anchors first.
 function MC.API.HandWeapon.SamplePresentationLighting( pos, state )
 	if not isvector( pos ) then return nil, "invalid_position" end
 	if state ~= nil and not istable( state ) then return nil, "invalid_lighting_state" end

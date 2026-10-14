@@ -74,7 +74,8 @@ UI.Colors = UI.Colors or {
 UI.Materials = UI.Materials or {}
 UI.PixelMaterials = UI.PixelMaterials or {}
 UI.GuiSpriteMappings = UI.GuiSpriteMappings or {}
-UI.WorldItemHDRColorScale = 0.1
+-- Lightmap RGB already supplies Minecraft brightness; do not dim it again.
+UI.WorldItemHDRColorScale = 1
 
 local function sourceMaterial( path, flags )
 	local key = tostring( path ) .. "|" .. tostring( flags or "" )
