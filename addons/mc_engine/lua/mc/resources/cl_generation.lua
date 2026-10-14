@@ -53,6 +53,13 @@ local function release(generation)
 		local ok, err = backend.ReleaseAtlasTexture(texture.id)
 		if not ok then errors[#errors + 1] = tostring(err) end
 	end
+	if generation.itemTexture then
+		local texture = generation.itemTexture
+		if texture.name then G.textures[texture.name] = nil end
+		local ok, err = generation.itemBackend.ReleaseAtlasTexture(texture.id)
+		if not ok then errors[#errors + 1] = tostring(err) end
+		generation.itemTexture = nil
+	end
 	generation.texture, generation.channels = nil, {}
 	generation.state, generation.animations = "released", {}
 	G.live[generation] = nil
@@ -101,6 +108,13 @@ function G.Build(plan, checkpoint)
 			generation.channels[channel] = texture
 		end
 		generation.texture = generation.channels.color
+		-- Reuse the decoded base pixels in a separate, genuinely single-level
+		-- runtime allocation. World color keeps its complete mip chain.
+		generation.itemBackend = MC.ResourceLuaBackend
+		if not generation.itemBackend then return nil,"resource_item_backend_missing" end
+		local itemTexture, itemError = generation.itemBackend.CreateAtlasTexture(layout.width, layout.height, 0, true)
+		if not itemTexture then return nil,itemError end
+		generation.itemTexture = itemTexture
 		for index, sprite in ipairs(plan.sprites) do
 			for _, channel in ipairs(channels) do
 			local info = layout.gpu.records[index][channel]
@@ -146,6 +160,11 @@ function G.Build(plan, checkpoint)
 				local ok,uploadError=backend.UploadAtlasTextureRect(generation.channels[channel].id,
 					r[1]-pad,r[2]-pad,r[3]+pad*2,r[4]+pad*2,levels,true)
 				if not ok then return nil,sprite.id..":"..tostring(uploadError) end
+				if channel == "color" then
+					local copied, copyError = generation.itemBackend.UploadAtlasTextureRect(itemTexture.id,
+						r[1]-pad,r[2]-pad,r[3]+pad*2,r[4]+pad*2,{levels[1]},true)
+					if not copied then return nil,sprite.id..":"..tostring(copyError) end
+				end
 				generation.metrics.residentFrames=generation.metrics.residentFrames+1
 			end
 			generation.metrics.copyMS = generation.metrics.copyMS + (SysTime() - before) * 1000
@@ -169,6 +188,9 @@ function G.Build(plan, checkpoint)
 			local ok, err = backend.FlushAtlasTexture(generation.channels[channel].id)
 			if not ok then return nil, err end
 		end
+		local itemOK, itemFlushError = generation.itemBackend.FlushAtlasTexture(itemTexture.id)
+		if not itemOK then return nil,itemFlushError end
+		G.textures[itemTexture.name] = generation
 		generation.metrics.uploadMS = (SysTime() - before) * 1000
 		generation.metrics.totalMS = (SysTime() - started) * 1000
 		if generation.cache then
@@ -199,6 +221,9 @@ function G.Identity(texture)
 	local name = texture:GetName()
 	local generation = G.textures[name]
 	if generation then
+		if generation.itemTexture and generation.itemTexture.name == name then
+			return "mc_resource_slot_" .. generation.slot .. "/item"
+		end
 		for channel, item in pairs(generation.channels) do
 			if item.name == name then return "mc_resource_slot_" .. generation.slot .. "/" .. channel end
 		end
@@ -208,11 +233,13 @@ end
 
 function G.Texture(generation, channel)
 	local texture = generation.channels[channel or "color"]
+	local backend = generation.backend
+	if channel == "item" then texture, backend = generation.itemTexture, generation.itemBackend end
 	if not texture then return nil, "resource_generation_channel_missing" end
 	local name = "mc_resource_texture_" .. generation.slot .. "_" .. (channel or "color")
 	local material = CreateMaterial(name, "UnlitGeneric", {["$basetexture"]="vgui/white"})
 	if not material or material:IsError() then return nil, "resource_generation_material" end
-	local ok, err = generation.backend.BindAtlasTexture(texture.id, "!" .. material:GetName(), "$basetexture")
+	local ok, err = backend.BindAtlasTexture(texture.id, "!" .. material:GetName(), "$basetexture")
 	if not ok then return nil, err end
 	G.TrackMaterial(material)
 	return material:GetTexture("$basetexture")

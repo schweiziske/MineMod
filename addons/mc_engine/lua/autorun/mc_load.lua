@@ -301,18 +301,6 @@ if SERVER then
 		-- sounds ship with mcgame_load.lua instead. sound/mc/random stays here
 		-- because it mixes block-break and engine-UI clips; the game layer may
 		-- reference engine assets, never the other way round.
-		for _, fileName in ipairs( {
-			"materials/mc/atlas_365.png",
-			"materials/mc/atlas_365.vmt",
-			"materials/mc/atlas_365_translucent.png",
-			"materials/mc/atlas_365_translucent.vmt",
-			"materials/mc/atlas_365_programmer_art.png",
-			"materials/mc/atlas_365_programmer_art.vmt",
-			"materials/mc/atlas_365_programmer_art_translucent.png",
-			"materials/mc/atlas_365_programmer_art_translucent.vmt",
-		} ) do
-			if file.Exists( fileName, "GAME" ) then resource.AddFile( fileName ) end
-		end
 		for _, fileName in ipairs( file.Find( "materials/mc/font/*.png", "GAME" ) or {} ) do
 			resource.AddFile( "materials/mc/font/" .. fileName )
 		end
@@ -323,7 +311,6 @@ if SERVER then
 			"materials/mc/entity/minecart",
 			"materials/mc/particle",
 			"materials/mc/animated/default",
-			"materials/mc/animated/programmer_art",
 		} ) do
 			for _, fileName in ipairs( file.Find( resourceRoot .. "/*.png", "GAME" ) or {} ) do
 				resource.AddFile( resourceRoot .. "/" .. fileName )

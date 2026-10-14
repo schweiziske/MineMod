@@ -973,9 +973,8 @@ function PANEL:LayoutVisibleSlots()
 			local first = self.ScrollRow * CREATIVE_COLS + 1
 			for visible = 0, CREATIVE_COLS * CREATIVE_ROWS - 1 do
 				local item = self.CurrentItems[first + visible]
-				if item then
-					ordinal = self:PlaceCreativeSlot( ordinal, item, 9 + visible % CREATIVE_COLS * 18, 18 + math.floor( visible / CREATIVE_COLS ) * 18 )
-				end
+				-- Empty catalog cells still accept a carried stack for deletion.
+				ordinal = self:PlaceCreativeSlot( ordinal, item, 9 + visible % CREATIVE_COLS * 18, 18 + math.floor( visible / CREATIVE_COLS ) * 18 )
 			end
 			for index = 0, 8 do ordinal = self:PlaceInventorySlot( ordinal, index, 9 + index * 18, 112 ) end
 		end

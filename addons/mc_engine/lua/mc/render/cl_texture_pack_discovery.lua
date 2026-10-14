@@ -1,7 +1,8 @@
--- Mounted data-only addons. The default atlas is a required bootstrap resource.
+-- Mounted data-only addons. Default PNG sources are baked after renderer startup.
 MC = MC or {}
 local D = MC.TexturePackDiscovery or { files = {}, outputs = {} }
 MC.TexturePackDiscovery = D
+D.directories = D.directories or {}
 local ROOT = "data_static/mc/resourcepacks/"
 local envelope = { schema = true, kind = true, id = true, definition = true }
 local common = { title = true, description = true, preview = true, pbr = true }
@@ -58,9 +59,8 @@ local function read( path )
 	end
 	local output = def.output or document.id
 	if output == "default" then
-		requireValue( document.kind == "atlas" and document.id == "default" and path == ROOT .. "default.json",
+		requireValue( document.kind == "source" and document.id == "default" and path == ROOT .. "default.json",
 			"default is reserved for default.json" )
-		requireValue( def.atlasProfile == nil or def.atlasProfile == "default", "default must use the engine layout" )
 	end
 	return document, bytes, output
 end
@@ -68,7 +68,8 @@ end
 function D.Default()
 	local ok, document = pcall( read, ROOT .. "default.json" )
 	requireValue( ok, "Required mc_texturepack_default addon unavailable: " .. tostring( document ) )
-	requireValue( document.id == "default" and document.kind == "atlas", "default.json must declare the default atlas" )
+	requireValue( document.id == "default" and document.kind == "source", "default.json must declare the default PNG source" )
+	requireValue( document.definition.output == nil or document.definition.output == "default", "default source output is reserved" )
 	return document.definition
 end
 
@@ -87,16 +88,39 @@ local function load( path, kind )
 		requireValue( otherPath == path or entry.id ~= document.id, "duplicate id: " .. document.id )
 	end
 	local owner = "texturepack." .. document.id
+	local directory
+	if kind == "source" and output ~= "default"
+		and (file.Exists(ROOT .. document.id .. "/pack.mcmeta", "GAME") or previous and previous.directory) then
+		requireValue( output == document.id and not document.id:match("^local_") and not document.id:match("^mounted_"),
+			"directory source requires a stable unreserved id matching output" )
+		directory = document.id
+	end
 	local registered
-	if kind == "atlas" then
+	if directory then
+		local existing = D.directories[directory]
+		requireValue( not previous or previous.directory == directory, "registered source layout cannot change before restart" )
+		registered = existing ~= nil
+	elseif output == "default" then
+		-- The raw-default repository owns decoding/layout; the legacy RT baker
+		-- only handles descriptors with precomputed tile plans.
+		registered = true
+	elseif kind == "atlas" then
 		registered = MC.TexturePackDefinitionOwner( output ) == owner
 	else
 		local pack = MC.AtlasBaker.packs[document.id]
 		registered = pack and pack.owner == owner
 	end
+	if directory then
+		requireValue( file.Exists(ROOT .. directory .. "/pack.mcmeta", "GAME"), "missing resource pack: " .. directory )
+	end
 	if previous and previous.bytes == bytes and registered then return "unchanged" end
 	local ok, err
-	if kind == "atlas" then
+	if directory then
+		D.directories[directory] = {id=document.id, title=document.definition.title or document.id}
+		ok = true
+	elseif output == "default" then
+		ok = true
+	elseif kind == "atlas" then
 		-- Reject missing files before the registry can replace a usable definition.
 		for _, key in ipairs( { "opaque", "translucent", "icon" } ) do
 			local value = document.definition[key]
@@ -107,7 +131,7 @@ local function load( path, kind )
 		ok, err = MC.AtlasBaker.RegisterSourcePack( document.id, document.definition, owner )
 	end
 	requireValue( ok, tostring( err ) )
-	D.files[path] = { id = document.id, kind = kind, output = output, bytes = bytes }
+	D.files[path] = { id = document.id, kind = kind, output = output, bytes = bytes, directory = directory }
 	D.outputs[output] = path
 	return "changed"
 end

@@ -316,7 +316,7 @@ end
 
 function MC.DrawTile( tile, x, y, w, h, mat, tintCode, worldColor )
 	local u0, v0, u1, v1 = MC.TileUV( tile )
-	surface.SetMaterial( mat or MC.Material )
+	surface.SetMaterial( mat or MC.MaterialCreativeIcon or MC.Material )
 	local r, g, b = 255, 255, 255
 	if tintCode and tintCode ~= 0 and MC.BlockTintRGB then
 		r, g, b = MC.BlockTintRGB( tintCode )
@@ -337,7 +337,7 @@ local function iconMaterialFor( id )
 	if MC.MaterialIconOpaque and MC.IsTranslucentBlock and MC.IsTranslucentBlock( id ) then
 		return MC.MaterialIconOpaque
 	end
-	return MC.Material
+	return MC.MaterialCreativeIcon or MC.Material
 end
 
 function MC.DrawBlockIcon( id, x, y, w, h, stateId, materialOverride, worldColor )
@@ -369,7 +369,7 @@ local function drawIconQuad( tile, verts, shade, rot, flipU, flipV, mat, tintCod
 		local ru, rv = iconRotatedUV( c.uf, c.vf, rot, flipU, flipV )
 		poly[i] = { x = c.px, y = c.py, u = u0 + ru * ( u1 - u0 ), v = v0 + rv * ( v1 - v0 ) }
 	end
-	surface.SetMaterial( mat or MC.Material )
+	surface.SetMaterial( mat or MC.MaterialCreativeIcon or MC.Material )
 	local r, g, b = shade, shade, shade
 	if tintCode and tintCode ~= 0 and MC.BlockTintRGB then
 		local tr, tg, tb = MC.BlockTintRGB( tintCode )

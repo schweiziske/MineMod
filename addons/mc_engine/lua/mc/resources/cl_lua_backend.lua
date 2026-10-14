@@ -8,8 +8,9 @@ local state=B.state
 local textures,sprites,slots=state.textures,state.sprites,state.slots
 local function u16(n) return string.char(n%256,math.floor(n/256)%256) end
 local function u32(n) return u16(n%65536)..u16(math.floor(n/65536)) end
-local function header(w,h,count)
-	return "VTF\0"..u32(7)..u32(2)..u32(80)..u16(w)..u16(h)..u32(4+8+512+1024+8192)..u16(1)..u16(0)
+local function header(w,h,count,noMip)
+	local flags = 4+8+512+1024+8192 + (noMip and 1+256 or 0)
+	return "VTF\0"..u32(7)..u32(2)..u32(80)..u16(w)..u16(h)..u32(flags)..u16(1)..u16(0)
 		..string.rep("\0",20)..u32(1065353216)..u32(0)..string.char(count)..u32(4294967295).."\0\0"..u16(1)..string.rep("\0",15)
 end
 function B.BeginBuild(checkpoint) B.decoded={};B.checkpoint=checkpoint end
@@ -77,33 +78,35 @@ function B.ReleaseAtlasSprite(id)
 	local sprite=sprites[id];if not sprite then return nil,"atlas_sprite_handle" end
 	state.used=state.used-sprite.bytes;sprites[id]=nil;return true
 end
-function B.CreateAtlasTexture(w,h,mip)
+function B.CreateAtlasTexture(w,h,mip,noMip)
 	if type(w)~="number" or type(h)~="number" or type(mip)~="number" or w~=math.floor(w) or h~=math.floor(h)
 		or mip~=math.floor(mip) or w<1 or h<1 or w>16384 or h>16384 or mip<0 or mip>14
 		or bit.band(w,w-1)~=0 or bit.band(h,h-1)~=0 or math.min(w,h)<2^mip then return nil,"atlas_texture_dimensions" end
+	if noMip and mip~=0 then return nil,"atlas_texture_nomip_levels" end
 	local slot
 	for i=1,10 do if not slots[i] then slot=i break end end
 	if not slot then return nil,"atlas_lua_slot_budget" end
 	-- File textures stop at 32 texels in Source. Replicate very small atlases;
 	-- logical dimensions still drive UV snapping and LOD in BindSampling.
 	local scale=1
-	while math.min(w,h)*scale/2^mip<32 do scale=scale*2 end
+	while not noMip and math.min(w,h)*scale/2^mip<32 do scale=scale*2 end
 	local width,height=w*scale,h*scale
 	if width>16384 or height>16384 or width*height*16/3>1500000000 then return nil,"atlas_texture_budget" end
 	local levels={};local tw,th=width,height
 	while true do
 		levels[#levels+1]={width=tw,height=th}
-		if tw==1 and th==1 then break end
+		if noMip or tw==1 and th==1 then break end
 		tw,th=math.max(1,tw/2),math.max(1,th/2)
 	end
 	local count=80
 	for i=#levels,1,-1 do levels[i].offset=count;count=count+levels[i].width*levels[i].height*4 end
 	if state.resident+count>1500000000 then return nil,"atlas_texture_resident_budget" end
 	file.CreateDir(ROOT)
-	local path=ROOT.."/atlas_"..slot..".vtf"
+	local suffix=noMip and "_nomip" or ""
+	local path=ROOT.."/atlas_"..slot..suffix..".vtf"
 	local f=file.Open(path,"wb","DATA");if not f then return nil,"atlas_texture_file_open" end
 	local ok,err=pcall(function()
-		f:Write(header(width,height,#levels))
+		f:Write(header(width,height,#levels,noMip))
 		local zero=string.rep("\0",65536)
 		local remaining=count-80
 		while remaining>0 do local n=math.min(remaining,#zero);f:Write(zero:sub(1,n));remaining=remaining-n end
@@ -112,7 +115,8 @@ function B.CreateAtlasTexture(w,h,mip)
 	end)
 	if not ok then f:Close();return nil,tostring(err) end
 	state.serial=state.serial+1
-	local texture={id=state.serial,slot=slot,path=path,file=f,width=w,height=h,scale=scale,mip=mip,levels=levels,size=count}
+	local texture={id=state.serial,slot=slot,path=path,file=f,width=w,height=h,scale=scale,mip=mip,levels=levels,size=count,
+		noMip=noMip==true,suffix=suffix}
 	textures[state.serial],slots[slot]=texture,true
 	state.resident=state.resident+count
 	return texture
@@ -146,7 +150,7 @@ function B.FlushAtlasTexture(id)
 	t.file:Flush()
 	if file.Size(t.path,"DATA")~=t.size then return nil,"atlas_texture_file_changed" end
 	if not t.texture then
-		local material=CreateMaterial("mc_resource_lua_proxy_"..t.slot,"UnlitGeneric",{["$basetexture"]="../data/"..t.path})
+		local material=CreateMaterial("mc_resource_lua_proxy_"..t.slot..(t.suffix or ""),"UnlitGeneric",{["$basetexture"]="../data/"..t.path})
 		t.texture=material:GetTexture("$basetexture")
 	end
 	if not t.texture or t.texture:IsError() then return nil,"atlas_texture_import" end
@@ -171,7 +175,7 @@ function B.ReleaseAtlasTexture(id)
 	local t=textures[id];if not t then return nil,"atlas_texture_handle" end
 	t.file:Close()
 	-- Reuse a bounded set of Source texture names, shrinking retired GPU storage.
-	file.Write(t.path,header(1,1,1).."\0\0\0\0")
+	file.Write(t.path,header(1,1,1,t.noMip).."\0\0\0\0")
 	if t.texture then t.texture:Download() end
 	state.resident=state.resident-t.size
 	textures[id],slots[t.slot]=nil,nil;return true

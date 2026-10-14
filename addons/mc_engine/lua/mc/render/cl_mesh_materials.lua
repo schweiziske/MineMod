@@ -4,7 +4,6 @@ MC.RenderMesh = MC.RenderMesh or {}
 -- Core materials provide atlas textures and CPU vertex colours only.
 
 local function atlasPngPath( path )
-	path = path or "mc/atlas_365"
 	path = path:gsub( "%.vmt$", "" )
 	if path:sub( -4 ) == ".png" then return path end
 	return path .. ".png"
@@ -36,10 +35,7 @@ local function loadAtlasSource( path )
 end
 
 local function loadAtlasIconSource( path )
-	-- Generated PNG materials are cached by path, including whether their
-	-- ITexture was created with mipmaps. The translucent atlas is a byte-for-byte
-	-- copy, so reserve that cache key for crisp UI icons while the opaque path
-	-- keeps the mip chain used by world rendering.
+	-- PNG imports use a separate source from the world's mipmapped atlas.
 	return Material( atlasPngPath( path ), "noclamp alphatest vertexcolor" )
 end
 
@@ -67,18 +63,15 @@ end
 -- materials whose textures can be changed repeatedly without corrupting the
 -- saved default source during Lua refreshes.
 local defaultDefinition = MC.TexturePackDiscovery.Default()
-local defaultOpaqueSource = loadAtlasSource( defaultDefinition.opaque )
+-- Only seed stable proxy objects here. The required default is baked from raw
+-- PNG bytes in PostRender, once resource decoding and GPU uploads are available.
+local defaultOpaqueSource = Material( "vgui/white" )
 local defaultOpaqueTexture = atlasMaterialTexture( defaultOpaqueSource )
 if not defaultOpaqueTexture or defaultOpaqueSource:IsError() then
-	error( "Required mc_texturepack_default addon has no usable default atlas", 0 )
+	error( "Cannot initialize atlas proxy materials", 0 )
 end
 
-local defaultTranslucentSource = loadAtlasSource( defaultDefinition.translucent or defaultDefinition.opaque )
-local defaultTranslucentTexture = atlasMaterialTexture( defaultTranslucentSource )
-local defaultIconSource = loadAtlasIconSource(
-	defaultDefinition.icon or defaultDefinition.translucent or defaultDefinition.opaque
-)
-local defaultIconTexture = atlasMaterialTexture( defaultIconSource ) or defaultOpaqueTexture
+local defaultTranslucentTexture, defaultIconTexture = defaultOpaqueTexture, defaultOpaqueTexture
 
 MC.Material = createCpuAtlasProxy( "mc_atlas_cpu_opaque_proxy1", defaultOpaqueTexture, false ) or defaultOpaqueSource
 MC.MaterialOpaqueCPU = MC.Material
@@ -90,21 +83,15 @@ MC.MaterialTranslucent = createCpuAtlasProxy( "mc_atlas_cpu_translucent_proxy1",
 -- newly-created proxies already use that pack.
 MC.ActiveTexturePack = nil
 
-local AtlasSources = {
-	default = {
-		opaque = defaultOpaqueSource,
-		translucent = defaultTranslucentSource,
-		icon = defaultIconSource,
-		opaqueTexture = defaultOpaqueTexture,
-		translucentTexture = defaultTranslucentTexture,
-		iconTexture = defaultIconTexture,
-		opaquePath = defaultDefinition.opaque,
-		translucentPath = defaultDefinition.translucent or defaultDefinition.opaque,
-		atlasProfile = "default",
-	},
-}
+local AtlasSources = {}
 
 MC.TexturePackDefinitions = MC.TexturePackDefinitions or {}
+if not ( MC.TexturePackDefinitions.default and MC.TexturePackDefinitions.default.runtimeIconTexture ) then
+	MC.TexturePackDefinitions.default = {
+		name = "default", owner = "texturepack.default", pending = true, atlasProfile = "default",
+		title = defaultDefinition.title, description = defaultDefinition.description, preview = defaultDefinition.preview,
+	}
+end
 MC.TexturePackLeases = MC.TexturePackLeases or {}
 MC.TexturePackLeaseSerial = MC.TexturePackLeaseSerial or 0
 MC.TexturePackRevision = MC.TexturePackRevision or 0
@@ -129,6 +116,15 @@ local function normalizeAtlasPath( value )
 	return value
 end
 
+local function normalizeTexturePackPreview( value )
+	if type( value ) ~= "string" or #value > 256 or value:find( "%z" ) then return nil end
+	-- Repository cover images are copied to DATA and exposed through the
+	-- engine's relative ../data material path. Keep this narrow: arbitrary
+	-- traversal must never become a material lookup.
+	if value:match( "^%.%./data/mc/resourcepacks/previews/[a-f0-9]+$" ) then return value end
+	return normalizeAtlasPath( value )
+end
+
 local function normalizeTexturePackOwner( value )
 	value = string.lower( tostring( value or "" ) )
 	value = string.match( value, "^%s*(.-)%s*$" ) or ""
@@ -147,9 +143,14 @@ local function normalizeAtlasProfile( value )
 end
 
 local function atlasSourceFromDefinition( definition )
+	if definition.pending then
+		return { opaqueTexture = defaultOpaqueTexture, translucentTexture = defaultOpaqueTexture,
+			iconTexture = defaultOpaqueTexture, runtime = true, pending = true, atlasProfile = "default" }
+	end
 	if definition.runtimeTexture then
 		local texture = definition.runtimeTexture
-		return { opaqueTexture = texture, translucentTexture = texture, iconTexture = texture,
+		if not definition.runtimeIconTexture then return nil, "missing_runtime_item_texture" end
+		return { opaqueTexture = texture, translucentTexture = texture, iconTexture = definition.runtimeIconTexture,
 			runtime = true, owner = definition.owner, atlasProfile = definition.atlasProfile }
 	end
 	if definition.inheritBase == true then
@@ -200,7 +201,7 @@ for name, definition in pairs( MC.TexturePackDefinitions ) do
 		local iconPath = normalizeAtlasPath( definition.iconPath ) or translucentPath
 		local owner = normalizeTexturePackOwner( definition.owner )
 		local atlasProfile = normalizeAtlasProfile( definition.atlasProfile )
-		if ( opaquePath or inheritBase or definition.runtimeTexture ) and owner and atlasProfile then
+		if ( opaquePath or inheritBase or definition.runtimeTexture or definition.pending ) and owner and atlasProfile then
 			definition.inheritBase = inheritBase
 			definition.opaquePath = opaquePath
 			definition.translucentPath = translucentPath
@@ -232,8 +233,7 @@ function MC.RegisterTexturePack( name, definition, owner, deferSelection )
 	end
 	local preview
 	if definition.preview ~= nil then
-		if type( definition.preview ) ~= "string" or #definition.preview > 256 then return false, "invalid_texture_pack_preview" end
-		preview = normalizeAtlasPath( definition.preview )
+		preview = normalizeTexturePackPreview( definition.preview )
 		if not preview then return false, "invalid_texture_pack_preview" end
 	end
 	owner = normalizeTexturePackOwner( owner )
@@ -246,9 +246,14 @@ function MC.RegisterTexturePack( name, definition, owner, deferSelection )
 		end
 	end
 	local inheritBase = definition.inheritBase == true
+	local pending = definition.pending == true
+	if pending and ( name ~= "default" or definition.runtimeTexture or inheritBase ) then
+		return false, "invalid_pending_texture_pack"
+	end
 	local atlasProfile = normalizeAtlasProfile( definition.atlasProfile or definition.profile )
 	if not atlasProfile then return false, "atlas_profile_not_registered" end
 	local runtimeTexture = definition.runtimeTexture
+	local runtimeIconTexture = definition.runtimeIconTexture
 	if runtimeTexture ~= nil then
 		local kind = type( runtimeTexture )
 		if ( kind ~= "ITexture" and kind ~= "userdata" and kind ~= "table" )
@@ -260,6 +265,14 @@ function MC.RegisterTexturePack( name, definition, owner, deferSelection )
 		else layout = MC.AtlasProfiles[atlasProfile].layout end
 		if runtimeTexture:Width() ~= layout.W or runtimeTexture:Height() ~= layout.H then return false, "runtime_texture_layout_mismatch" end
 		if inheritBase then return false, "runtime_texture_cannot_inherit" end
+		local iconKind = type( runtimeIconTexture )
+		if ( iconKind ~= "ITexture" and iconKind ~= "userdata" and iconKind ~= "table" )
+			or type( runtimeIconTexture.GetName ) ~= "function" or type( runtimeIconTexture.IsError ) ~= "function"
+			or type( runtimeIconTexture.Width ) ~= "function" or type( runtimeIconTexture.Height ) ~= "function"
+			or runtimeIconTexture:IsError() or runtimeIconTexture:GetName() == ""
+			or runtimeIconTexture:Width() ~= layout.W or runtimeIconTexture:Height() ~= layout.H then
+			return false, "invalid_runtime_item_texture"
+		end
 	end
 	local opaquePath = normalizeAtlasPath( definition.opaque or definition.opaquePath or definition.material )
 	local runtimePBR
@@ -281,7 +294,7 @@ function MC.RegisterTexturePack( name, definition, owner, deferSelection )
 			or maps.normal:GetName() == maps.orm:GetName() then return false, "runtime_pbr_channels_alias" end
 		runtimePBR = { normal = maps.normal, orm = maps.orm, colorSpace = "srgb", runtime = true }
 	end
-	if not opaquePath and not inheritBase and not runtimeTexture then return false, "invalid_opaque_atlas_path" end
+	if not opaquePath and not inheritBase and not runtimeTexture and not pending then return false, "invalid_opaque_atlas_path" end
 	local translucentPath = normalizeAtlasPath( definition.translucent or definition.translucentPath ) or opaquePath
 	local iconPath = normalizeAtlasPath( definition.icon or definition.iconPath ) or translucentPath
 	local pbr
@@ -311,6 +324,8 @@ function MC.RegisterTexturePack( name, definition, owner, deferSelection )
 		description = definition.description,
 		preview = preview,
 		runtimeTexture = runtimeTexture,
+		runtimeIconTexture = runtimeIconTexture,
+		pending = pending,
 		runtimePBR = runtimePBR,
 		pbr = pbr,
 		inheritBase = inheritBase,
@@ -519,6 +534,7 @@ function MC.ListTexturePacks()
 			description = definition.description,
 			preview = definition.preview,
 			runtime = definition.runtimeTexture ~= nil,
+			pending = definition.pending == true,
 			pbr = definition.runtimePBR ~= nil or definition.pbr ~= nil,
 			opaquePath = definition.opaquePath,
 			translucentPath = definition.translucentPath,
@@ -548,16 +564,6 @@ function MC.ListTexturePackLeases()
 		return left.owner < right.owner
 	end )
 	return result
-end
-
-local function materialBaseTexture( material )
-	local baseTex = material and material.GetTexture and material:GetTexture( "$basetexture" )
-	local baseName = baseTex and not baseTex:IsError() and baseTex.GetName and baseTex:GetName() or nil
-	return baseTex, baseName
-end
-
-local function atlasBaseTexture()
-	return materialBaseTexture( MC.Material )
 end
 
 MC.MaterialGpuOpaque = nil
@@ -606,39 +612,16 @@ end
 -- cutout material's alpha test discards, so their icons would render blank. This
 -- is the cutout atlas minus $alphatest, so low-alpha texels are kept and the icon
 -- shows the solid texture colour.
---
--- The atlas ships only as a PNG (no .vtf), so neither way of seeding $basetexture
--- works on its own: leaving it empty at creation renders a solid white square, and
--- a path string like "mc/atlas_365" is not the texture's cache key so it falls back
--- to a disk .vtf lookup that misses and draws the pink/black error checkerboard.
--- Point $basetexture at the registered name of the texture MC.Material already
--- loaded; the material system then resolves it from the texture cache (same texture,
--- no second copy) and the surface library binds it for 2D icon draws.
-MC.MaterialIconOpaque = nil
-do
-	local baseTex, baseName = atlasBaseTexture()
-	if baseName and baseName ~= "" then
-		local mat = CreateMaterial( "mc_atlas_icon_opaque", "UnlitGeneric", {
-			["$basetexture"] = baseName,
-			["$vertexcolor"] = "1",
-			["$nocull"] = "1",
-			["$vertexalpha"] = "1",
-		} )
-		if mat and not mat:IsError() then
-			mat:SetTexture( "$basetexture", baseTex )
-			MC.MaterialIconOpaque = mat
-		end
-	end
-end
-if not MC.MaterialIconOpaque then
-	-- atlas texture unavailable: fall back to the cutout material rather than
-	-- drawing white/error icons (semi-transparent blocks just look blank)
-	MC.MaterialIconOpaque = MC.Material
-end
-
+local iconMaterials = {}
 local function createCreativeIconMaterial( name, texture, alphaTest )
 	local textureName = texture and texture.GetName and texture:GetName() or nil
 	if not ( CreateMaterial and textureName and textureName ~= "" ) then return nil end
+	-- VGUI caches the mapping dimensions at material creation. SetTexture does
+	-- not update them: a 1x1 bootstrap collapses rectangular icon UVs to a point.
+	-- Reuse materials only for equal dimensions, including across pack switches.
+	name = name .. "_mapping_v2_" .. texture:Width() .. "x" .. texture:Height()
+	local cached = iconMaterials[name]
+	if cached then return cached end
 	local params = {
 		["$basetexture"] = textureName,
 		["$vertexcolor"] = "1",
@@ -655,17 +638,36 @@ local function createCreativeIconMaterial( name, texture, alphaTest )
 	local material = CreateMaterial( name, "UnlitGeneric", params )
 	if not material or material:IsError() then return nil end
 	material:SetTexture( "$basetexture", texture )
+	iconMaterials[name] = material
 	return material
 end
 
--- Creative inventory only: these materials use the separately cached no-mip
--- atlas texture. World meshes continue using MC.Material and its mip chain.
-MC.MaterialCreativeIcon = createCreativeIconMaterial(
-	"mc_atlas_creative_icon_cutout_v1", defaultIconTexture, true
-) or MC.Material
-MC.MaterialCreativeIconOpaque = createCreativeIconMaterial(
-	"mc_atlas_creative_icon_opaque_v1", defaultIconTexture, false
-) or MC.MaterialIconOpaque
+local function iconMaterialsFor( texture )
+	local cutout = createCreativeIconMaterial( "mc_atlas_creative_icon_cutout", texture, true )
+	local opaque = createCreativeIconMaterial( "mc_atlas_creative_icon_opaque", texture, false )
+	if not cutout or not opaque then return nil, "atlas_icon_material_creation" end
+	return {cutout=cutout, opaque=opaque}
+end
+
+local function applyIconMaterials( materials, texture )
+	materials.cutout:SetTexture( "$basetexture", texture )
+	materials.opaque:SetTexture( "$basetexture", texture )
+	MC.MaterialCreativeIcon = materials.cutout
+	MC.MaterialCreativeIconOpaque = materials.opaque
+	MC.MaterialIconOpaque = materials.opaque
+end
+
+local initialIcons, initialIconError = iconMaterialsFor( defaultIconTexture )
+if not initialIcons then error( initialIconError, 0 ) end
+applyIconMaterials( initialIcons, defaultIconTexture )
+
+-- POINT filtering does not disable mip selection. Held blocks use the icon
+-- texture's base level, with their own cutout/translucent material semantics.
+MC.MaterialHeldBlock = createCpuAtlasProxy( "mc_atlas_held_cutout_v1", defaultIconTexture, false )
+MC.MaterialHeldBlockTranslucent = createCpuAtlasProxy( "mc_atlas_held_translucent_v1", defaultIconTexture, true )
+if not MC.MaterialHeldBlock or not MC.MaterialHeldBlockTranslucent then
+	error( "Cannot create held block atlas materials", 0 )
+end
 
 local function validAtlasTexture( texture )
 	if not texture then return false end
@@ -692,12 +694,17 @@ local function resolveAtlasSource( name )
 		local configured = MC.TexturePack and MC.TexturePack.GetString
 			and normalizeTexturePackName( MC.TexturePack:GetString() ) or "default"
 		local base = AtlasSources[configured]
-		if not base or base.inheritBase == true or ( base.atlasProfile or "default" ) ~= "default" then
+		if not base or base.inheritBase == true then
 			configured, base = "default", AtlasSources.default
 		end
 		base = resolveAtlasSource( configured ) or AtlasSources.default
 		if not base then return nil end
+		if base.atlasProfile ~= "default" and source.atlasProfile ~= "default" and source.atlasProfile ~= base.atlasProfile then
+			return nil, "inherited_atlas_profile_mismatch"
+		end
 		return {
+			runtime = base.runtime,
+			pending = base.pending,
 			opaque = base.opaque,
 			translucent = base.translucent,
 			icon = base.icon,
@@ -707,7 +714,7 @@ local function resolveAtlasSource( name )
 			opaquePath = base.opaquePath,
 			translucentPath = base.translucentPath,
 			iconPath = base.iconPath,
-			atlasProfile = source.atlasProfile or "default",
+			atlasProfile = source.atlasProfile == "default" and base.atlasProfile or source.atlasProfile,
 			inheritedTexturePack = configured,
 		}
 	end
@@ -723,7 +730,7 @@ local function resolveAtlasSource( name )
 		end
 		source.opaqueTexture = atlasMaterialTexture( source.opaque ) or source.opaqueTexture
 		source.translucentTexture = atlasMaterialTexture( source.translucent ) or source.opaqueTexture
-		source.iconTexture = atlasMaterialTexture( source.icon ) or source.iconTexture or source.opaqueTexture
+		source.iconTexture = atlasMaterialTexture( source.icon )
 	end
 	return source
 end
@@ -735,15 +742,18 @@ end
 function MC.SetTexturePack( value )
 	local requested = normalizeTexturePackName( value ) or "default"
 	local name = normalizeTexturePack( requested )
-	local source = resolveAtlasSource( name ) or AtlasSources.default
+	local source, sourceError = resolveAtlasSource( name )
+	if not source then return false, sourceError or "missing_atlas_" .. name end
 	local opaqueTexture = source and source.opaqueTexture
 	local translucentTexture = source and source.translucentTexture or opaqueTexture
-	local iconTexture = source and source.iconTexture or opaqueTexture
+	local iconTexture = source and source.iconTexture
 	if not source or not source.runtime and (not source.opaque or source.opaque:IsError()) or not validAtlasTexture( opaqueTexture ) then
 		return false, "missing_atlas_" .. name
 	end
 	if not validAtlasTexture( translucentTexture ) then translucentTexture = opaqueTexture end
-	if not validAtlasTexture( iconTexture ) then iconTexture = opaqueTexture end
+	if not validAtlasTexture( iconTexture ) then return false, "missing_item_atlas_" .. name end
+	local icons, iconError = iconMaterialsFor( iconTexture )
+	if not icons then return false, iconError end
 	local profileName = source.atlasProfile or "default"
 	if MC.SetAtlasProfile then
 		local profileOK, profileResult = MC.SetAtlasProfile( profileName )
@@ -752,20 +762,25 @@ function MC.SetTexturePack( value )
 	local previous = MC.ActiveTexturePack
 
 	-- MC.Material/MC.MaterialTranslucent are stable proxy objects referenced by
-	-- existing mesh records. Updating their texture is enough to switch CPU
-	-- meshes, icon panels and translucent draws without a full world rebuild.
+	-- existing mesh records. UI materials additionally require matching mapping
+	-- dimensions; geometry rebuilds for changed layouts are handled above.
 	setAtlasTexture( MC.Material, opaqueTexture )
 	setAtlasTexture( MC.MaterialTranslucent, translucentTexture )
-	setAtlasTexture( MC.MaterialIconOpaque, opaqueTexture )
-	setAtlasTexture( MC.MaterialCreativeIcon, iconTexture )
-	setAtlasTexture( MC.MaterialCreativeIconOpaque, iconTexture )
+	applyIconMaterials( icons, iconTexture )
+	setAtlasTexture( MC.MaterialHeldBlock, iconTexture )
+	setAtlasTexture( MC.MaterialHeldBlockTranslucent, iconTexture )
 	MC.ActiveTexturePack = name
+	MC.TexturePackPending = source.pending == true
 	MC.Atlas.ACTIVE_MATERIAL = source.opaquePath or opaqueTexture:GetName()
 	MC.Atlas.ACTIVE_MATERIAL_TRANSLUCENT = source.translucentPath or translucentTexture:GetName()
 
 	if MC.RefreshBlockParticleMaterials then MC.RefreshBlockParticleMaterials( opaqueTexture ) end
 	if MC.ResourceGeneration then
-		for _, material in ipairs({MC.Material, MC.MaterialTranslucent, MC.MaterialIconOpaque, MC.MaterialCreativeIcon, MC.MaterialCreativeIconOpaque}) do
+		if MC.ResourcePacks then
+			MC.ResourcePacks.activeGeneration = MC.ResourceGeneration.textures[opaqueTexture:GetName()]
+		end
+		for _, material in ipairs({MC.Material, MC.MaterialTranslucent, MC.MaterialIconOpaque, MC.MaterialCreativeIcon, MC.MaterialCreativeIconOpaque,
+			MC.MaterialHeldBlock, MC.MaterialHeldBlockTranslucent}) do
 			MC.ResourceGeneration.TrackMaterial(material)
 		end
 	end
@@ -857,7 +872,7 @@ end
 -- Archived client ConVars may be restored after this file's first read. Keep a
 -- short reconciliation window even when applying the temporary default succeeds.
 MC.TexturePackDiscovery.Scan( "atlas" )
-if not MC.TexturePackDefinitions.default then error( "Required default atlas registration failed", 0 ) end
+if not MC.TexturePackDefinitions.default then error( "Required default source registration failed", 0 ) end
 syncTexturePackFromConVar( true )
 startTexturePackStartupSync()
 

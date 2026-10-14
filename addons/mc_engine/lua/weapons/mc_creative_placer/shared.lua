@@ -455,7 +455,8 @@ if CLIENT then
 
 		local translucent = stateId and MC.IsTranslucentBlockState and MC.IsTranslucentBlockState( stateId )
 			or MC.IsTranslucentBlock and MC.IsTranslucentBlock( id )
-		local material = translucent and MC.MaterialTranslucent or MC.Material
+		local material = translucent and MC.MaterialHeldBlockTranslucent or MC.MaterialHeldBlock
+		if not MC.Need( material, "held_block_material", "Missing held block atlas material" ) then return false end
 
 		scale = scale or 8
 		local lightR, lightG, lightB

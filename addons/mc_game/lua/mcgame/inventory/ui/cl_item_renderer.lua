@@ -358,7 +358,9 @@ local DROP_TRIANGLES = { 1, 3, 2, 1, 4, 3 }
 local droppedBlockMaterials = {}
 
 local function droppedBlockMaterial( translucent )
-	local source = translucent and ( MC.MaterialTranslucent or MC.Material ) or MC.Material
+	-- Use the same single-level atlas as held blocks; POINT alone still allows
+	-- a mipmapped world texture to choose a lower-resolution level.
+	local source = translucent and MC.MaterialHeldBlockTranslucent or MC.MaterialHeldBlock
 	if not source or source.IsError and source:IsError() then return nil end
 	if not ( CreateMaterial and source.GetTexture ) then return source end
 	local texture = source:GetTexture( "$basetexture" )
@@ -399,28 +401,9 @@ local function droppedBlockCullMode()
 end
 
 local function droppedTileUVRect( tile, uv )
-	if not uv then return MC.TileUV( tile ) end
-	local atlas = MC.Atlas
-	if not atlas or not atlas.COLS or not atlas.W or not atlas.H then return MC.TileUV( tile ) end
-	tile = MC.ResolveAtlasTile and MC.ResolveAtlasTile( tile ) or tile
-	local col = tile % atlas.COLS
-	local row = math.floor( tile / atlas.COLS )
-	local stride = atlas.STRIDE or atlas.TILE
-	local padding = atlas.PAD or 0
-	local inset = atlas.INSET or 0.5
-	local baseX = col * stride + padding
-	local baseY = row * stride + padding
-	local tileSize = atlas.TILE
-	local u0 = baseX + ( tonumber( uv[1] ) or 0 ) / 16 * tileSize
-	local v0 = baseY + ( tonumber( uv[2] ) or 0 ) / 16 * tileSize
-	local u1 = baseX + ( tonumber( uv[3] ) or 16 ) / 16 * tileSize
-	local v1 = baseY + ( tonumber( uv[4] ) or 16 ) / 16 * tileSize
-	local uDirection = u1 >= u0 and 1 or -1
-	local vDirection = v1 >= v0 and 1 or -1
-	return ( u0 + inset * uDirection ) / atlas.W,
-		( v0 + inset * vDirection ) / atlas.H,
-		( u1 - inset * uDirection ) / atlas.W,
-		( v1 - inset * vDirection ) / atlas.H
+	-- Resource packs can use packed sprite regions rather than a uniform grid.
+	-- Share the world's atlas addressing instead of sampling an unrelated slot.
+	return MC.TileUV( tile, uv )
 end
 
 local function rotatedUV( u, v, rotation )
@@ -436,15 +419,18 @@ local function droppedBlockState( stack, options, plan )
 	if not definition or definition.blockId == nil then return nil end
 	plan = plan or Renderer.ModelPlan( stack, options or { displayContext = "ground" } )
 	local modelId = tostring( plan and plan.modelId or "" )
-	if not string.find( modelId, ":block/", 1, true ) then return nil end
+	-- Block-shaped item models also live under item/ (fences and panes).
+	-- Keep flat sprites and special entity renderers on their own paths.
+	if plan.kind ~= "block" and not string.find( modelId, ":block/", 1, true ) then return nil end
 	return blockStateFor( definition )
 end
 
 local function droppedBlockMesh( stateId, blockId )
 	local cached = droppedBlockMeshes[stateId]
 	if cached ~= nil then return cached ~= false and cached or nil end
-	if not ( Mesh and MC.VisitStateVisualModels and MC.StateVisualModelData
-		and MC.BlockModelSurface and MC.ModelQuadVertex and MC.TileUV ) then
+	if not MC.Check( Mesh and MC.VisitStateVisualModels and MC.StateVisualModelData
+		and MC.BlockModelSurface and MC.ModelQuadVertex and MC.TileUV,
+		"item_drop_mesh_dependencies", "Missing dropped block mesh dependency (state %s)", stateId ) then
 		return nil
 	end
 
@@ -455,6 +441,7 @@ local function droppedBlockMesh( stateId, blockId )
 		visitedModel = true
 		local model = MC.StateVisualModelData( modelId )
 		if not model then
+			MC.Fault( "item_drop_model_missing", "Missing dropped block model %s for state %s", modelId, stateId )
 			missingModel = true
 			return
 		end
@@ -508,6 +495,8 @@ local function droppedBlockMesh( stateId, blockId )
 		end
 	end )
 	if #vertices == 0 then
+		MC.Fault( "item_drop_mesh_empty", "No dropped block vertices for state %s (block %s, visited %s)",
+			stateId, blockId, tostring( visitedModel ) )
 		-- A drop can render before generated model data finishes loading. Only
 		-- cache a genuine empty model; transient misses must retry next frame.
 		if visitedModel and not missingModel then droppedBlockMeshes[stateId] = false end
@@ -614,6 +603,37 @@ end
 hook.Add( "ShutDown", "mc_item_drop_block_meshes", clearDroppedBlockMeshes )
 hook.Add( "OnReloaded", "mc_item_drop_block_meshes", clearDroppedBlockMeshes )
 hook.Add( "MC.AtlasProfileChanged", "mc_item_drop_block_meshes", clearDroppedBlockMeshes )
+
+-- Explicit diagnostic pass: inspect the nearest block drop without adding
+-- metadata checks or logging to every drawn copy/vertex.
+concommand.Add( "mc_item_drop_debug", function()
+	local nearest, distance
+	local eye = EyePos()
+	for _, ent in ipairs( ents.FindByClass( "mc_item_drop" ) ) do
+		local definition = MC.GetItem( ent:GetItemName() )
+		if definition and definition.blockId then
+			local candidate = ent:GetPos():DistToSqr( eye )
+			if not distance or candidate < distance then nearest, distance = ent, candidate end
+		end
+	end
+	if not nearest then print( "[MC item drop] No networked block drop found" ) return end
+	MC.Try( "item_drop_debug", function()
+		local cached = nearest.MCDropVisual
+		local stack = cached and cached.stack or { item = nearest:GetItemName(), count = nearest:GetItemCount() }
+		local options = { displayContext = "ground", worldItem = true }
+		local plan = Renderer.ModelPlan( stack, options )
+		local stateId, blockId = droppedBlockState( stack, options, plan )
+		print( "[MC item drop]", nearest, stack.item, "kind", plan.kind, "model", plan.modelId,
+			"state", stateId, "block", blockId, "draw reached", cached ~= nil, "position", nearest:GetPos() )
+		if not stateId then return end
+		local record = droppedBlockMesh( stateId, blockId )
+		local material = record and droppedBlockMaterial( record.translucent )
+		local texture = material and material:GetTexture( "$basetexture" )
+		print( "[MC item drop] mesh", record and record.mesh, "vertices",
+			#( droppedBlockGlintGeometry[stateId] or {} ), "material", material,
+			"texture", texture, "cull", droppedBlockCullMode(), "atlas", MC.AtlasProfileName() )
+	end )
+end )
 
 function Renderer.CanDraw( stack )
 	return not MC.IsEmptyItemStack( stack ) and definitionFor( stack ) ~= nil

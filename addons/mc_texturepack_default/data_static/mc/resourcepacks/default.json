@@ -1,13 +1,10 @@
 {
   "schema": 1,
-  "kind": "atlas",
+  "kind": "source",
   "id": "default",
   "definition": {
     "title": "Default",
-    "description": "Prebaked vanilla atlas and shared vanilla entity, particle and animation textures.",
-    "preview": "mc/resourcepacks/default",
-    "opaque": "mc/atlas_365",
-    "translucent": "mc/atlas_365",
-    "icon": "mc/atlas_365_translucent"
+    "description": "Original vanilla PNG sources, baked into runtime atlases on the client.",
+    "preview": "mc/resourcepacks/default"
   }
 }

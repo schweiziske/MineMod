@@ -185,6 +185,9 @@ function D.GetCatalog()
 	return {revision = D.revision, entries = clone(D.catalog), capabilities = D.Capabilities(), error = D.error, baseError = D.baseError}
 end
 function D.Refresh()
+	-- Source descriptors give adjacent mounted directories stable public pack IDs.
+	-- They do not register an atlas before the runtime bake has completed.
+	if MC.TexturePackDiscovery then MC.TexturePackDiscovery.Scan("source") end
 	D.baseError = nil
 	if MC.ResourceDefaults then
 		local ok, err = MC.ResourceDefaults.Ensure()
@@ -218,6 +221,13 @@ function D.Refresh()
 			table.sort(names)
 			for _, name in ipairs(names) do
 				local id = adapter.prefix .. util.SHA256(name):sub(1, 24)
+				local descriptor
+				if adapter.pathID == "GAME" and MC.TexturePackDiscovery then
+					descriptor = MC.TexturePackDiscovery.directories[name]
+				end
+				if descriptor then id = descriptor.id end
+				if byID[id] then return nil, "resource_catalog_duplicate:" .. id end
+				local title = descriptor and descriptor.title or name
 				local source, openError
 				if MC.ResourceDirectory and (adapter.pathID == "GAME" or file.IsDir(ROOT .. "/" .. name,"DATA")) then
 					source,openError=MC.ResourceDirectory.Inspect(name,adapter.pathID)
@@ -230,7 +240,7 @@ function D.Refresh()
 				else source,openError=adapter.open(name,adapter.pathID) end
 				local entry
 				if source then
-					source.id, source.title, source.owner = id, name, "mc.resourcepacks"
+					source.id, source.title, source.owner = id, title, "mc.resourcepacks"
 					local ok, result, parseError = pcall(function()
 						local metadata, reason = json(source, "pack.mcmeta")
 						if not metadata then return nil, reason end
@@ -244,7 +254,7 @@ function D.Refresh()
 						openError = tostring(result)
 					else entry, openError = result, parseError end
 				end
-				if not entry then entry = {id = id, name = id, title = name, owner = "mc.resourcepacks", resourceSource = true, error = openError} end
+				if not entry then entry = {id = id, name = id, title = title, owner = "mc.resourcepacks", resourceSource = true, error = openError} end
 				entry.locator = name
 				entry.pathID = adapter.pathID
 				catalog[#catalog + 1], byID[id] = entry, entry

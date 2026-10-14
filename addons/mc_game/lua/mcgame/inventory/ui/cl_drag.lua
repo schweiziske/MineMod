@@ -39,6 +39,12 @@ end
 
 local function catalogClick( slot, mouseCode )
 	local carried, clicked = cursorStack(), slot:GetStack()
+	if MC.IsEmptyItemStack( clicked ) then
+		if creative() and not MC.IsEmptyItemStack( carried ) and (mouseCode == MOUSE_LEFT or mouseCode == MOUSE_RIGHT) then
+			return MC.QueueCreativeInventoryClear( -1 )
+		end
+		return false
+	end
 	if mouseCode == MOUSE_MIDDLE then
 		if MC.IsEmptyItemStack( carried ) then return creativePick( slot, nil, -1 ) end
 		return false
@@ -127,7 +133,15 @@ local function finishActive( accept )
 		return
 	end
 	local target = slotAtCursor( active )
-	if active.doubleClick and target == active.slot and target:IsInventorySlot() and target.Kind ~= "result" then
+	if target and target.Kind == "creative" and MC.IsEmptyItemStack( target:GetStack() )
+		and creative() and not MC.IsEmptyItemStack( cursorStack() )
+		and (active.mouseCode == MOUSE_LEFT or active.mouseCode == MOUSE_RIGHT) then
+		-- Deletion wins over a distribution preview and also handles pickups
+		-- already performed on press. Never place the preview before clearing.
+		if active.started then MC.QueueInventoryInput( MC.ContainerInput.QUICK_CRAFT, -999, active.craftType * 4 + 3 ) end
+		MC.QueueCreativeInventoryClear( -1 )
+		Drag.LastClick = nil
+	elseif active.doubleClick and target == active.slot and target:IsInventorySlot() and target.Kind ~= "result" then
 		if active.started then MC.QueueInventoryInput( MC.ContainerInput.QUICK_CRAFT, -999, active.craftType * 4 + 3 ) end
 		if shiftDown() then shiftDoubleClick( active, target )
 		else MC.QueueInventoryInput( MC.ContainerInput.PICKUP_ALL, target:GetActionIndex(), 0 ) end

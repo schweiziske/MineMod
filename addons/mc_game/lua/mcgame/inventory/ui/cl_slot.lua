@@ -52,6 +52,7 @@ end
 function PANEL:SetCreativeItem( item )
 	local stack = MC.NormalizeItemStack and MC.NormalizeItemStack( item ) or nil
 	self.Kind = "creative"
+	self.PreviewStack = nil
 	self.CreativeItem = MC.CopyItemStack( stack, 1 )
 	self.InventoryIndex = nil
 	self.MenuIndex = nil

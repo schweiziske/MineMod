@@ -1,7 +1,14 @@
 -- The DLL-free source adapter deliberately accepts extracted directories only.
 MC.ResourceDirectory = {}
 local D = MC.ResourceDirectory
-local ROOTS = {DATA = "mc/resourcepacks/inbox", GAME = "data_static/mc/raw_resourcepacks"}
+local ROOTS = {DATA = "mc/resourcepacks/inbox", GAME = "data_static/mc/resourcepacks"}
+local LEGACY_ROOT = "data_static/mc/raw_resourcepacks"
+local function directoryRoot(name, pathID)
+	local root = ROOTS[pathID]
+	-- Existing extracted addons (including AVPBR) retain their old location.
+	if pathID == "GAME" and not file.IsDir(root .. "/" .. name, pathID) then return LEGACY_ROOT end
+	return root
+end
 local function validName(name)
 	return type(name)=="string" and #name>0 and #name<=240 and name~="." and name~=".."
 		and not name:find('[/\\:<>"|?*%z%c]') and not name:find("[. ]$")
@@ -11,11 +18,16 @@ function D.List(pathID)
 	local root = ROOTS[pathID]
 	if not root then return nil,"resource_pack_path_id" end
 	if pathID == "DATA" then file.CreateDir(root) end
-	local _, directories = file.Find(root.."/*", pathID)
-	if not directories then return nil,"resource_directory_list" end
-	local names = {}
-	for _, name in ipairs(directories) do
-		if validName(name) then names[#names+1]=name end
+	local roots = pathID == "GAME" and {root, LEGACY_ROOT} or {root}
+	local names, seen = {}, {}
+	for _, base in ipairs(roots) do
+		local _, directories = file.Find(base.."/*", pathID)
+		if not directories then return nil,"resource_directory_list" end
+		for _, name in ipairs(directories) do
+			if validName(name) and not seen[name] then
+				names[#names+1], seen[name] = name, true
+			end
+		end
 	end
 	return names
 end
@@ -27,6 +39,7 @@ function D.Inspect(name, pathID)
 	local root = ROOTS[pathID]
 	if not root then return nil,"resource_pack_path_id" end
 	if not validName(name) then return nil,"resource_directory_missing" end
+	root = directoryRoot(name, pathID)
 	local base = root .. "/" .. name
 	if not file.IsDir(base,pathID) then return nil,"resource_directory_missing" end
 	base = base .. "/"
@@ -48,7 +61,9 @@ function D.Open(name, pathID)
 	pathID = pathID or "DATA"
 	local root = ROOTS[pathID]
 	if not root then return nil,"resource_pack_path_id" end
-	if not validName(name) or not file.IsDir(root.."/"..name,pathID) then return nil,"resource_directory_missing" end
+	if not validName(name) then return nil,"resource_directory_missing" end
+	root = directoryRoot(name, pathID)
+	if not file.IsDir(root.."/"..name,pathID) then return nil,"resource_directory_missing" end
 	local entries, locations, stamps, count, total = {}, {}, {}, 0, 0
 	local function walk(relative, depth)
 		if depth>32 then return nil,"resource_directory_depth" end

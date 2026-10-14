@@ -345,6 +345,8 @@ local function publish( job )
 	local ok, err = MC.RegisterTexturePack( job.pack, {
 		title = pack.title, description = pack.description,
 		preview = pack.preview, runtimeTexture = cache.targets[job.slot], runtimePBR = maps, atlasProfile = "default",
+		-- Legacy RT atlases are allocated with NOMIP already.
+		runtimeIconTexture = cache.targets[job.slot],
 	}, pack.owner )
 	requireValue( ok, err )
 	cache.published = job.slot

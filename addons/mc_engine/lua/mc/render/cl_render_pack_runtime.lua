@@ -555,6 +555,7 @@ local function updateActive( c )
 end
 
 function L.Step()
+	if MC.TexturePackPending then return end
 	local frame = FrameNumber()
 	if L.lastFrame == frame then return end
 	L.lastFrame = frame
@@ -599,7 +600,7 @@ end
 function L.BeginProcessing( x, y, z, view )
 	-- The retained runtime is not ready for shadow composition while its atlas
 	-- or world snapshot is being replaced. PrepareDraw disables shadows on false.
-	if L.atlasTransition then return false end
+	if MC.TexturePackPending or L.atlasTransition then return false end
 	local c = L.active
 	if c and not sameWorld( c ) then return false end
 	if not c or not c.processing then return true end
@@ -721,7 +722,7 @@ end
 
 local emptyStages, emptyChunks = {}, {}
 function L.GetStages( translucent )
-	if L.atlasTransition or not L.active or not sameWorld( L.active ) then return emptyStages, L.version, emptyChunks end
+	if MC.TexturePackPending or L.atlasTransition or not L.active or not sameWorld( L.active ) then return emptyStages, L.version, emptyChunks end
 	-- The synchronous draw pass checks world invariants once here, then only
 	-- checks individual chunk identities against this published snapshot.
 	if translucent then return L.active.translucentStages, L.active.version, L.active.chunks end
