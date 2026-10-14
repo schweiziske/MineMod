@@ -425,193 +425,85 @@ local function visitWireNeighbours( bx, by, bz, readState, visit )
 	end
 end
 
-local WireSettledRevision = {}
 local WireStats = {
-	settlements = 0,
-	wiresScanned = 0,
-	wiresChanged = 0,
-	revisionSkips = 0,
-	oversizedFallbacks = 0,
+	settlements = 0, wiresScanned = 0, wiresChanged = 0,
+	-- Retained diagnostic keys for existing tools; whole-network settlement
+	-- and revision suppression are no longer part of vanilla wire updates.
+	revisionSkips = 0, oversizedFallbacks = 0,
 }
 
-local function wireBatchCellLimit()
-	local cv = GetConVar and GetConVar( "mc_block_update_max_cells_per_tick" ) or nil
-	local limit = cv and tonumber( cv:GetInt() ) or 16384
-	limit = math.floor( limit or 16384 )
-	return limit > 0 and limit or 16384
+function MC.ClearRedstoneWireRuntime()
+	for key in pairs(WireStats) do WireStats[key] = 0 end
+	if MC.ClearRedstoneLogicRuntime then MC.ClearRedstoneLogicRuntime() end
 end
 
-local function appendWireFanout( updates, bx, by, bz )
-	local count = 0
-	for index = 1, 4 do
-		local direction = WireDirections[index]
-		local nx, ny = bx + direction[1], by + direction[2]
-		count = count + 1
-		updates[count] = { bx = nx, by = ny, bz = bz }
-		count = count + 1
-		updates[count] = { bx = nx, by = ny, bz = bz - 1 }
-		count = count + 1
-		updates[count] = { bx = nx, by = ny, bz = bz + 1 }
+-- Build the two-ring notification stencil once. The old implementation
+-- rebuilt a coordinate set and nested closures for every dust callback.
+local WireFanoutOffsets = {}
+do
+	local seen = {}
+	local function add(dx, dy, dz)
+		local key = dx .. "," .. dy .. "," .. dz
+		if seen[key] then return end
+		seen[key] = true
+		WireFanoutOffsets[#WireFanoutOffsets + 1] = { dx, dy, dz }
+	end
+	for i = 1, 6 do
+		local d = NeighborDirections[i]
+		add(d[1], d[2], d[3])
+		for j = 1, 6 do
+			local n = NeighborDirections[j]
+			add(d[1] + n[1], d[2] + n[2], d[3] + n[3])
+		end
+	end
+end
+
+local function wireFanout(bx, by, bz)
+	-- The stencil is immutable, so this hot path only allocates the result
+	-- required by the scheduler.
+	local updates = {}
+	for index = 1, #WireFanoutOffsets do
+		local offset = WireFanoutOffsets[index]
+		updates[index] = { bx = bx + offset[1], by = by + offset[2], bz = bz + offset[3] }
 	end
 	return updates
 end
 
-local function updateSingleWire( context, readState )
+local function updateWire(context)
 	local bx, by, bz = context.bx, context.by, context.bz
-	local power = strongestDirectSource( bx, by, bz, readState )
-	local neighbourPower = 0
-	visitWireNeighbours( bx, by, bz, readState, function( _, _, _, stateId )
-		local value = wirePower( stateId )
-		if value > neighbourPower then neighbourPower = value end
-	end )
-	neighbourPower = neighbourPower - 1
-	if neighbourPower > power then power = neighbourPower end
-	if power < 0 then power = 0 end
-	local stateId = readState( bx, by, bz )
-	if wirePower( stateId ) == power then return nil end
-	local nextState = StateWith( stateId, "power", power ) or stateId
-	if nextState == stateId then return nil end
-	return {
-		cells = { { bx = bx, by = by, bz = bz, stateId = nextState } },
-		updates = appendWireFanout( {}, bx, by, bz ),
-		compareCollision = true,
-	}
-end
-
-local function markWireNetworkCommitted( keys, transaction )
-	if type( transaction ) ~= "table" or transaction.ok ~= true then return end
-	local revision = tonumber( transaction.revision )
-	if not revision then return end
-	for index = 1, #keys do WireSettledRevision[keys[index]] = revision end
-end
-
-function MC.ClearRedstoneWireRuntime()
-	WireSettledRevision = {}
-end
-
-local function updateWire( context )
-	local startX, startY, startZ = context.bx, context.by, context.bz
-	local startKey = CellKey( startX, startY, startZ )
-	local inputRevision = tonumber( context.revision )
-	if inputRevision and ( WireSettledRevision[startKey] or -1 ) >= inputRevision then
-		WireStats.revisionSkips = WireStats.revisionSkips + 1
-		return nil
-	end
-
-	-- One settlement owns a small, revision-local state cache. Conductors around
-	-- a long line otherwise make strongestDirectSource repeat the same chunk and
-	-- neighbour lookups dozens of times per wire.
+	-- Match the ordinary Java evaluator: one local relaxation, then neighbour
+	-- notifications. A connected network is never enumerated by one callback.
 	local stateCache = {}
-	local function readState( bx, by, bz )
-		local key = CellKey( bx, by, bz )
-		local stateId = stateCache[key]
-		if stateId == nil then
-			stateId = GetBlockState( bx, by, bz )
-			stateCache[key] = stateId
+	local function readState(x, y, z)
+		local key = CellKey(x, y, z)
+		local state = stateCache[key]
+		if state == nil then
+			state = GetBlockState(x, y, z)
+			stateCache[key] = state
 		end
-		return stateId
+		return state
 	end
-
-	local startState = readState( startX, startY, startZ )
-	if not IsRedstoneWireState( startState ) then return nil end
-
-	-- Parallel numeric arrays keep the LuaJIT hot path monomorphic. Edges contain
-	-- integer wire indices rather than per-neighbour tables or coordinate strings.
-	local xs, ys, zs, states, keys = {}, {}, {}, {}, {}
-	local byKey, edgeStarts, edgeEnds, edges = {}, {}, {}, {}
-	local function addWire( bx, by, bz, stateId )
-		local key = CellKey( bx, by, bz )
-		local wireIndex = byKey[key]
-		if wireIndex then return wireIndex end
-		wireIndex = #xs + 1
-		byKey[key] = wireIndex
-		xs[wireIndex], ys[wireIndex], zs[wireIndex] = bx, by, bz
-		states[wireIndex], keys[wireIndex] = stateId, key
-		return wireIndex
+	local power = strongestDirectSource(bx, by, bz, readState)
+	if power < 15 then
+		local incoming = 0
+		visitWireNeighbours(bx, by, bz, readState, function(_, _, _, state)
+			incoming = math.max(incoming, wirePower(state))
+		end)
+		power = math.max(power, incoming - 1)
 	end
-
-	addWire( startX, startY, startZ, startState )
-	local batchLimit = wireBatchCellLimit()
-	local function collectNeighbour( bx, by, bz, stateId )
-		edges[#edges + 1] = addWire( bx, by, bz, stateId )
-	end
-	local scanIndex = 1
-	while scanIndex <= #xs do
-		edgeStarts[scanIndex] = #edges + 1
-		visitWireNeighbours( xs[scanIndex], ys[scanIndex], zs[scanIndex], readState, collectNeighbour )
-		edgeEnds[scanIndex] = #edges
-		if #xs > batchLimit then
-			-- Preserve bounded scheduler behavior for pathological networks. The
-			-- legacy one-cell relaxation remains a correctness fallback instead of
-			-- submitting an oversized transaction that the scheduler would reject.
-			WireStats.oversizedFallbacks = WireStats.oversizedFallbacks + 1
-			return updateSingleWire( context, readState )
-		end
-		scanIndex = scanIndex + 1
-	end
-
-	-- A 16-level descending bucket queue is a bounded multi-source shortest-path
-	-- solve. Each external source seeds its local wire, then every graph edge
-	-- attenuates by exactly one; stale lower bucket entries are ignored.
-	local powers, buckets = {}, {}
-	for power = 1, 15 do buckets[power] = {} end
-	for wireIndex = 1, #xs do
-		local power = strongestDirectSource( xs[wireIndex], ys[wireIndex], zs[wireIndex], readState )
-		powers[wireIndex] = power
-		if power > 0 then
-			local bucket = buckets[power]
-			bucket[#bucket + 1] = wireIndex
-		end
-	end
-	for power = 15, 2, -1 do
-		local bucket = buckets[power]
-		local nextPower = power - 1
-		for bucketIndex = 1, #bucket do
-			local wireIndex = bucket[bucketIndex]
-			if powers[wireIndex] == power then
-				for edgeIndex = edgeStarts[wireIndex], edgeEnds[wireIndex] do
-					local neighbourIndex = edges[edgeIndex]
-					if powers[neighbourIndex] < nextPower then
-						powers[neighbourIndex] = nextPower
-						local nextBucket = buckets[nextPower]
-						nextBucket[#nextBucket + 1] = neighbourIndex
-					end
-				end
-			end
-		end
-	end
-
-	local cells = {}
-	for wireIndex = 1, #xs do
-		local stateId = states[wireIndex]
-		local power = powers[wireIndex]
-		if wirePower( stateId ) ~= power then
-			local nextState = StateWith( stateId, "power", power ) or stateId
-			if nextState ~= stateId then
-				cells[#cells + 1] = {
-					bx = xs[wireIndex], by = ys[wireIndex], bz = zs[wireIndex], stateId = nextState,
-				}
-			end
-		end
-	end
-
 	WireStats.settlements = WireStats.settlements + 1
-	WireStats.wiresScanned = WireStats.wiresScanned + #xs
-	WireStats.wiresChanged = WireStats.wiresChanged + #cells
-	if #cells == 0 then
-		if inputRevision then
-			for wireIndex = 1, #keys do WireSettledRevision[keys[wireIndex]] = inputRevision end
-		end
-		return nil
-	end
+	WireStats.wiresScanned = WireStats.wiresScanned + 1
+	if wirePower(context.stateId) == power then return nil end
+	WireStats.wiresChanged = WireStats.wiresChanged + 1
 	return {
-		cells = cells,
-		compareCollision = true,
-		afterTransaction = markWireNetworkCommitted,
-		afterTransactionData = keys,
+		cells = {{bx=bx, by=by, bz=bz, stateId=StateWith(context.stateId, "power", power)}},
+		updates = wireFanout(bx, by, bz),
+		blockUpdates = false, compareCollision = true,
+		-- Iterative dust decay is bounded by callback/cell budgets. It must not
+		-- lose the remainder of an electrical update at the cascade-depth cap.
+		continuePropagation = true,
 	}
 end
-
 if MC.RegisterBlockUpdateHandler then
 	MC.RegisterBlockUpdateHandler( "minecraft:redstone_wire", {
 		OnNeighborUpdate = updateWire,
@@ -680,7 +572,7 @@ local function installButton( shortName )
 		if stateName( stateId ) ~= name or GetStateProperty( stateId, "powered" ) == true then return false end
 		local nextState = StateWith( stateId, "powered", true ) or stateId
 		if not setPoweredState( bx, by, bz, stateId, true, ply ) then return false end
-		MC.SV.ScheduleBlockTick( bx, by, bz, buttonDelay( name ), MC.BlockUpdateKind.SCHEDULED, nextState )
+		MC.SV.ScheduleBlockTick( bx, by, bz, buttonDelay( name ), MC.BlockUpdateKind.SCHEDULED, nextState, {matchBlock=true} )
 		return true
 	end
 	if MC.RegisterBlockUpdateHandler then
@@ -729,7 +621,7 @@ end
 local function torchNeighborUpdate( context )
 	local shouldLight = torchShouldBeLit( context.stateId, context.bx, context.by, context.bz )
 	if shouldLight == ( GetStateProperty( context.stateId, "lit" ) == true ) then return nil end
-	return { schedule = { { delayTicks = 2, expectedStateId = context.stateId } } }
+	return { schedule = { { delayTicks = 2, expectedStateId = context.stateId, matchBlock = true } } }
 end
 
 local TorchToggleHistory = {}
@@ -767,14 +659,14 @@ local function torchScheduledTick( context )
 	local key = MC.CellKey( context.bx, context.by, context.bz )
 	if shouldLight and not lit then
 		local remaining = torchBurnoutRemaining( key, context.logicTick )
-		if remaining > 0 then return { schedule = { { delayTicks = remaining, expectedStateId = context.stateId } } } end
+		if remaining > 0 then return { schedule = { { delayTicks = remaining, expectedStateId = context.stateId, matchBlock = true } } } end
 	elseif not shouldLight and lit then
 		local burnedOut = recordTorchOffToggle( key, context.logicTick )
 		local nextState = StateWith( context.stateId, "lit", false ) or context.stateId
 		local result = { cells = { {
 			bx = context.bx, by = context.by, bz = context.bz, stateId = nextState,
 		} } }
-		if burnedOut then result.schedule = { { delayTicks = 160, expectedStateId = nextState } } end
+		if burnedOut then result.schedule = { { delayTicks = 160, expectedStateId = nextState, matchBlock = true } } end
 		return result
 	end
 	if shouldLight == lit then return nil end
@@ -818,7 +710,7 @@ if MC.RegisterBlockUpdateHandler then
 			local powered = MC.RedstoneBestNeighborSignal( context.bx, context.by, context.bz ) > 0
 			local lit = GetStateProperty( context.stateId, "lit" ) == true
 			if powered == lit then return nil end
-			if not powered then return { schedule = { { delayTicks = 4, expectedStateId = context.stateId } } } end
+			if not powered then return { schedule = { { delayTicks = 4, expectedStateId = context.stateId, matchBlock = true } } } end
 			return { cells = { {
 				bx = context.bx, by = context.by, bz = context.bz,
 				stateId = StateWith( context.stateId, "lit", true ) or context.stateId,

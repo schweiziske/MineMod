@@ -6,6 +6,7 @@ local GetBlockState = MC.GetBlockState
 local GetStateProperty = MC.GetStateProperty
 local StateWith = MC.StateWith
 local BlockIsFullCubeForState = MC.BlockIsFullCubeForState
+local Priority = MC.BlockTickPriority
 local Offset = {
 	north = { 0, -1, 0 }, south = { 0, 1, 0 },
 	west = { -1, 0, 0 }, east = { 1, 0, 0 },
@@ -41,7 +42,25 @@ local function directionalOutput( stateId, towardX, towardY, towardZ, power )
 end
 
 local function inputSignal( stateId, bx, by, bz )
-	return signalAtOffset( bx, by, bz, facingOffset( stateId ) )
+	local facing = facingOffset(stateId)
+	local signal = signalAtOffset(bx, by, bz, facing)
+	if signal >= 15 then return signal end
+	local rear = GetBlockState(bx + facing[1], by + facing[2], bz + facing[3])
+	-- Diodes read the dust's POWER even when its connection shape does not
+	-- emit toward them (DiodeBlock.getInputSignal).
+	if MC.IsRedstoneWireState(rear) then
+		return math.max(signal, GetStateProperty(rear, "power"))
+	end
+	return signal
+end
+
+local Opposite = {north="south", south="north", west="east", east="west"}
+local function shouldPrioritize(stateId, bx, by, bz)
+	local facing = facingOffset(stateId)
+	local front = GetBlockState(bx - facing[1], by - facing[2], bz - facing[3])
+	local name = stateName(front)
+	return (name == "minecraft:repeater" or name == "minecraft:comparator")
+		and GetStateProperty(front, "facing") ~= Opposite[GetStateProperty(stateId, "facing")]
 end
 
 local function comparatorInputConductor( stateId, bx, by, bz )
@@ -82,7 +101,7 @@ end
 -- it look one more cell forward for the unique direction-matching ItemFrame.
 local function comparatorInputSignal( stateId, bx, by, bz )
 	local facing = facingOffset( stateId )
-	local input = signalAtOffset( bx, by, bz, facing )
+	local input = inputSignal( stateId, bx, by, bz )
 	local conductorX, conductorY, conductorZ = bx + facing[1], by + facing[2], bz + facing[3]
 	local blockInput = blockAnalogInput( conductorX, conductorY, conductorZ )
 	if blockInput ~= nil then return blockInput end
@@ -96,17 +115,24 @@ local function comparatorInputSignal( stateId, bx, by, bz )
 	return targetBlockInput ~= nil and targetBlockInput or entityInput ~= nil and entityInput or input
 end
 
+local function sideSignalAt( bx, by, bz, offset, diodesOnly )
+	local sx, sy, sz = bx + offset[1], by + offset[2], bz + offset[3]
+	local neighbor = GetBlockState( sx, sy, sz )
+	if diodesOnly then
+		local name = stateName( neighbor )
+		if name ~= "minecraft:repeater" and name ~= "minecraft:comparator" then return 0 end
+	end
+	-- SignalGetter.getControlInputSignal does not re-radiate a conductor's
+	-- weak power. Dust strength and redstone blocks are special cases.
+	if MC.IsRedstoneWireState( neighbor ) then return GetStateProperty( neighbor, "power" ) end
+	if stateName( neighbor ) == "minecraft:redstone_block" then return 15 end
+	return MC.RedstoneDirectSignalFromState( neighbor, sx, sy, sz, -offset[1], -offset[2], -offset[3] )
+end
+
 local function sideSignal( stateId, bx, by, bz, diodesOnly )
 	local left, right = sideOffsets( facingOffset( stateId ) )
-	local function sample( offset )
-		local sx, sy, sz = bx + offset[1], by + offset[2], bz + offset[3]
-		if diodesOnly then
-			local name = stateName( GetBlockState( sx, sy, sz ) )
-			if name ~= "minecraft:repeater" and name ~= "minecraft:comparator" then return 0 end
-		end
-		return MC.RedstoneSignalAt( sx, sy, sz, -offset[1], -offset[2], -offset[3] )
-	end
-	local a, b = sample( left ), sample( right )
+	local a = sideSignalAt( bx, by, bz, left, diodesOnly )
+	local b = sideSignalAt( bx, by, bz, right, diodesOnly )
 	return a > b and a or b
 end
 
@@ -142,6 +168,9 @@ local function repeaterNeighbour( context )
 			result.schedule = { {
 				delayTicks = ( tonumber( GetStateProperty( nextState, "delay" ) ) or 1 ) * 2,
 				expectedStateId = nextState,
+				matchBlock = true,
+				priority = shouldPrioritize(nextState, context.bx, context.by, context.bz) and Priority.EXTREMELY_HIGH
+					or GetStateProperty(nextState, "powered") == true and Priority.VERY_HIGH or Priority.HIGH,
 			} }
 		end
 	end
@@ -169,6 +198,7 @@ local function repeaterTick( context )
 		result.schedule = { {
 			delayTicks = ( tonumber( GetStateProperty( context.stateId, "delay" ) ) or 1 ) * 2,
 			expectedStateId = onState,
+			matchBlock = true, priority = Priority.VERY_HIGH,
 		} }
 	end
 	return result
@@ -205,6 +235,10 @@ end
 -- cache so emitter queries stay cheap and analog changes reach the wire ahead.
 local ComparatorOutput = {}
 
+function MC.ClearRedstoneLogicRuntime()
+	for key in pairs( ComparatorOutput ) do ComparatorOutput[key] = nil end
+end
+
 local NeighborOffsets = {
 	{ 1, 0, 0 }, { -1, 0, 0 },
 	{ 0, 1, 0 }, { 0, -1, 0 },
@@ -234,7 +268,8 @@ MC.RegisterBlockUpdateHandler( "minecraft:comparator", {
 		local live = comparatorOutput( context.stateId, context.bx, context.by, context.bz )
 		if live == publishedComparatorOutput( context.stateId, context.bx, context.by, context.bz )
 		and ( live > 0 ) == ( GetStateProperty( context.stateId, "powered" ) == true ) then return nil end
-		return { schedule = { { delayTicks = 2, expectedStateId = context.stateId } } }
+		return { schedule = { { delayTicks = 2, expectedStateId = context.stateId, matchBlock = true,
+			priority = shouldPrioritize(context.stateId, context.bx, context.by, context.bz) and Priority.HIGH or Priority.NORMAL } } }
 	end,
 	OnScheduledTick = function( context )
 		local output = comparatorOutput( context.stateId, context.bx, context.by, context.bz )
@@ -330,7 +365,12 @@ if comparatorBlock then
 		local stateId = GetBlockState( bx, by, bz )
 		if stateName( stateId ) ~= "minecraft:comparator" then return false end
 		local mode = GetStateProperty( stateId, "mode" ) == "subtract" and "compare" or "subtract"
-		return transactionState( bx, by, bz, StateWith( stateId, "mode", mode ) or stateId, ply )
+		local nextState = StateWith( stateId, "mode", mode ) or stateId
+		local output = comparatorOutput( nextState, bx, by, bz )
+		local poweredState = StateWith( nextState, "powered", output > 0 ) or nextState
+		local changed = transactionState( bx, by, bz, poweredState, ply )
+		if changed then ComparatorOutput[MC.CellKey( bx, by, bz )] = output end
+		return changed
 	end
 end
 
@@ -371,7 +411,7 @@ end )
 local function reserveObserverOffTick( context, poweredState )
 	if not SERVER or not MC.SV or not MC.SV.ScheduleBlockTick then return true end
 	local scheduled, reason = MC.SV.ScheduleBlockTick(
-		context.bx, context.by, context.bz, 2, MC.BlockUpdateKind.SCHEDULED, poweredState
+		context.bx, context.by, context.bz, 2, MC.BlockUpdateKind.SCHEDULED, poweredState, {matchBlock=true}
 	)
 	return scheduled == true or reason == "scheduled_tick_exists"
 end
@@ -394,7 +434,7 @@ if observerBlock then
 			MC.SV.CancelBlockTick( context.bx, context.by, context.bz, MC.BlockUpdateKind.SCHEDULED )
 		end
 		MC.SV.ScheduleBlockTick(
-			context.bx, context.by, context.bz, 2, MC.BlockUpdateKind.SCHEDULED, stateId
+			context.bx, context.by, context.bz, 2, MC.BlockUpdateKind.SCHEDULED, stateId, {matchBlock=true}
 		)
 	end
 end
@@ -423,7 +463,7 @@ MC.RegisterBlockUpdateHandler( "minecraft:observer", {
 			end
 		end
 		if not watched then return nil end
-		return { schedule = { { delayTicks = 2, expectedStateId = context.stateId } } }
+		return { schedule = { { delayTicks = 2, expectedStateId = context.stateId, matchBlock = true } } }
 	end,
 	OnScheduledTick = function( context )
 		local powered = GetStateProperty( context.stateId, "powered" ) == true

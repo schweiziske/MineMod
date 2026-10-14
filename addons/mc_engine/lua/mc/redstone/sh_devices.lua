@@ -233,7 +233,7 @@ local function legacyTriggeredNeighbor( context )
 		local nextState = withBoolean( context.stateId, "triggered", true )
 		return {
 			cells = { { bx = context.bx, by = context.by, bz = context.bz, stateId = nextState } },
-			schedule = { { delayTicks = 4, expectedStateId = nextState } },
+			schedule = { { delayTicks = 4, expectedStateId = nextState, matchBlock = true } },
 		}
 	end
 	return nil
@@ -247,9 +247,9 @@ local function parityTriggeredNeighbor( context )
 		local nextState = withBoolean( context.stateId, "triggered", true )
 		return {
 			cells = { { bx = context.bx, by = context.by, bz = context.bz, stateId = nextState } },
-			-- Java schedules by block, not by the exact triggered state.  Omitting
-			-- expectedStateId preserves a four-tick pulse that falls before firing.
-			schedule = { { delayTicks = 4 } },
+			-- Retain the pulse across property changes, but never deliver it to
+			-- a different block that replaced this dispenser/dropper.
+			schedule = { { delayTicks = 4, expectedStateId = nextState, matchBlock = true } },
 		}
 	elseif not powered and triggered then
 		return singleCell( context, withBoolean( context.stateId, "triggered", false ) )

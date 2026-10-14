@@ -88,10 +88,14 @@ local function plateSignal( entry, stateId, name )
 		minimum + Vector( BS - inset, BS - inset, BS * 0.25 )
 	)
 	local count = 0
+	local weighted = GetStateProperty(stateId, "power") ~= nil
 	for index = 1, #entities do
-		if entityTriggersPlate( entities[index], name ) then count = count + 1 end
+		if entityTriggersPlate( entities[index], name ) then
+			if not weighted then return 15 end
+			count = count + 1
+		end
 	end
-	if GetStateProperty( stateId, "power" ) ~= nil then
+	if weighted then
 		local divisor = name == "minecraft:heavy_weighted_pressure_plate" and 10 or 1
 		return math.min( 15, math.ceil( count / divisor ) )
 	end
@@ -194,6 +198,11 @@ local function updateEntry( entry )
 		end
 		return true
 	end
+	-- BasePressurePlateBlock checks occupied plates only on their scheduled
+	-- 10/20-tick interval. Do not run FindInBox every polling pass and only
+	-- afterwards decide to hold the old signal.
+	local nextCheck = PlateNextCheckAt[entry.key]
+	if pressurePlateSignalForState(stateId) > 0 and nextCheck and CurTime() < nextCheck then return true end
 	local signal, oldSignal = heldPlateSignal( entry, stateId, plateSignal( entry, stateId, name ) )
 	local nextState
 	if GetStateProperty( stateId, "power" ) ~= nil then
@@ -320,7 +329,7 @@ function SV.PulseRedstoneTarget( bx, by, bz, power, durationTicks )
 		{ bx = bx, by = by, bz = bz, stateId = nextState },
 	}, { actor = nil, fx = false, netMode = "bulk", compareCollision = false } )
 	if not result or result.ok ~= true then return false, result and result.error or "transaction_failed" end
-	SV.ScheduleBlockTick( bx, by, bz, durationTicks or 20, MC.BlockUpdateKind.SCHEDULED, nextState )
+	SV.ScheduleBlockTick( bx, by, bz, durationTicks or 20, MC.BlockUpdateKind.SCHEDULED, nextState, {matchBlock=true} )
 	return true, power
 end
 
@@ -342,7 +351,7 @@ function SV.PulseLightningRod( bx, by, bz, durationTicks )
 		{ bx = bx, by = by, bz = bz, stateId = nextState },
 	}, { actor = nil, fx = false, netMode = "bulk", compareCollision = false } )
 	if not result or result.ok ~= true then return false, result and result.error or "transaction_failed" end
-	SV.ScheduleBlockTick( bx, by, bz, durationTicks or 8, MC.BlockUpdateKind.SCHEDULED, nextState )
+	SV.ScheduleBlockTick( bx, by, bz, durationTicks or 8, MC.BlockUpdateKind.SCHEDULED, nextState, {matchBlock=true} )
 	return true
 end
 
@@ -424,7 +433,7 @@ local function sensorScheduledTick( context )
 		nextState = StateWith( nextState, "sculk_sensor_phase", "cooldown" ) or nextState
 		return {
 			cells = { { bx = context.bx, by = context.by, bz = context.bz, stateId = nextState } },
-			schedule = { { delayTicks = 10, expectedStateId = nextState } },
+			schedule = { { delayTicks = 10, expectedStateId = nextState, matchBlock = true } },
 		}
 	end
 	if phase == "cooldown" then
@@ -494,7 +503,7 @@ hook.Add( "EntityEmitSound", "mc_redstone_sculk_sensor", function( soundData )
 									{ bx = record.bx, by = record.by, bz = record.bz, stateId = nextState },
 								}, { actor = nil, fx = false, netMode = "bulk", compareCollision = false } )
 								if result and result.ok == true then
-									SV.ScheduleBlockTick( record.bx, record.by, record.bz, 40, MC.BlockUpdateKind.SCHEDULED, nextState )
+									SV.ScheduleBlockTick( record.bx, record.by, record.bz, 40, MC.BlockUpdateKind.SCHEDULED, nextState, {matchBlock=true} )
 								end
 							end
 						end

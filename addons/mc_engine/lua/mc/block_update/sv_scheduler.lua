@@ -57,7 +57,10 @@ local ReadyByKind = {}
 
 local ScheduledHeap = {}
 local ScheduledByKind = {}
+local ScheduledByCell = {}
 local ScheduledCount = 0
+local BlockEvents, BlockEventKeys = {}, {}
+local EventHead, EventTail, EventCount = 1, 0, 0
 local Sequence = 0
 local LogicTick = 0
 local Running = false
@@ -131,7 +134,7 @@ local function pendingMap( root, kind )
 end
 
 local function combinedQueueCount()
-	return ReadyCount + ScheduledCount
+	return ReadyCount + ScheduledCount + EventCount
 end
 
 local function enqueueReady( bx, by, bz, kind, depth, revision, expectedStateId, knownKey, sourceX, sourceY, sourceZ )
@@ -217,6 +220,7 @@ end
 
 local function scheduledLess( left, right )
 	if left.dueTick ~= right.dueTick then return left.dueTick < right.dueTick end
+	if left.priority ~= right.priority then return left.priority < right.priority end
 	return left.sequence < right.sequence
 end
 
@@ -280,17 +284,19 @@ local function removeScheduledMapping( entry )
 	if byCell and byCell[entry.key] == entry then
 		byCell[entry.key] = nil
 		ScheduledCount = ScheduledCount - 1
+		local cells = ScheduledByCell[entry.kind]
+		local entries = cells[entry.cellKey]
+		entries[entry.key] = nil
+		if not next(entries) then cells[entry.cellKey] = nil end
 	end
 end
 
-local function promoteDueScheduled()
-	while true do
-		local entry = ScheduledHeap[1]
-		if not entry or entry.dueTick > LogicTick then return end
-		heapRemoveAt( 1 )
-		removeScheduledMapping( entry )
-		enqueueReady( entry.bx, entry.by, entry.bz, entry.kind, 0, entry.revision, entry.expectedStateId )
-	end
+local function popDueScheduled()
+	local entry = ScheduledHeap[1]
+	if not entry or entry.dueTick > LogicTick then return nil end
+	heapRemoveAt( 1 )
+	removeScheduledMapping( entry )
+	return entry
 end
 
 function SV.EnqueueBlockUpdate( bx, by, bz, kind, depth, revision, sourceX, sourceY, sourceZ )
@@ -336,13 +342,22 @@ function SV.EnqueueTransactionNeighbours( changes, revision, depth )
 	return added
 end
 
-function SV.ScheduleBlockTick( bx, by, bz, delayTicks, kind, expectedStateId )
+function SV.ScheduleBlockTick( bx, by, bz, delayTicks, kind, expectedStateId, options )
 	if not updatesEnabled() then return false, "block_updates_disabled" end
 	bx = math.floor( tonumber( bx ) or 0 )
 	by = math.floor( tonumber( by ) or 0 )
 	bz = math.floor( tonumber( bz ) or 0 )
 	kind = math.floor( tonumber( kind ) or Kind.SCHEDULED )
 	if not MC.IsBlockUpdateKind or not MC.IsBlockUpdateKind( kind ) then return false, "invalid_update_kind" end
+	if options ~= nil and type(options) ~= "table" then return false, "invalid_tick_options" end
+	local priority = 0
+	if options and options.priority ~= nil then priority = options.priority end
+	if type(priority) ~= "number" or priority ~= math.floor(priority) or priority < -3 or priority > 3 then
+		return false, "invalid_tick_priority"
+	end
+	if options and options.matchBlock ~= nil and type(options.matchBlock) ~= "boolean" then
+		return false, "invalid_tick_match_block"
+	end
 	delayTicks = math.max( 1, math.floor( tonumber( delayTicks ) or 1 ) )
 	if expectedStateId ~= nil then
 		expectedStateId = math.floor( tonumber( expectedStateId ) or -1 )
@@ -351,17 +366,28 @@ function SV.ScheduleBlockTick( bx, by, bz, delayTicks, kind, expectedStateId )
 		end
 	end
 
-	local key = MC.CellKey( bx, by, bz )
+	local expectedBlock
+	if options and options.matchBlock then
+		local schema = MC.BlockStateSchemaForState(expectedStateId or MC.GetBlockState(bx, by, bz))
+		if not schema then return false, "invalid_tick_block" end
+		expectedBlock = schema.name
+		expectedStateId = nil
+	end
+	local cellKey = MC.CellKey( bx, by, bz )
+	local key = expectedBlock and tostring(cellKey) .. "/" .. expectedBlock or cellKey
 	local byCell = pendingMap( ScheduledByKind, kind )
 	local dueTick = LogicTick + delayTicks
 	local existing = byCell[key]
 	if existing then
-		if dueTick >= existing.dueTick then
+		-- LevelChunkTicks keeps the first tick for (position, block type), even
+		-- when a later request has a shorter delay or a different priority.
+		if expectedBlock or dueTick >= existing.dueTick then
 			Stats.deduplicated = Stats.deduplicated + 1
 			return false, "scheduled_tick_exists"
 		end
 		existing.dueTick = dueTick
 		existing.expectedStateId = expectedStateId
+		existing.priority = priority
 		heapUp( existing.heapIndex )
 		Stats.rescheduledEarlier = Stats.rescheduledEarlier + 1
 		return true
@@ -375,12 +401,19 @@ function SV.ScheduleBlockTick( bx, by, bz, delayTicks, kind, expectedStateId )
 	local entry = {
 		bx = bx, by = by, bz = bz,
 		key = key,
+		cellKey = cellKey,
 		kind = kind,
+		depth = 0,
 		dueTick = dueTick,
+		priority = priority,
 		sequence = Sequence,
 		expectedStateId = expectedStateId,
+		expectedBlock = expectedBlock,
 	}
 	byCell[key] = entry
+	local cells = pendingMap(ScheduledByCell, kind)
+	local entries = cells[cellKey] or {}
+	cells[cellKey], entries[key] = entries, entry
 	ScheduledCount = ScheduledCount + 1
 	heapPush( entry )
 	Stats.scheduled = Stats.scheduled + 1
@@ -389,19 +422,52 @@ end
 
 function SV.CancelBlockTick( bx, by, bz, kind )
 	kind = math.floor( tonumber( kind ) or Kind.SCHEDULED )
-	local byCell = ScheduledByKind[kind]
+	local byCell = ScheduledByCell[kind]
 	if not byCell then return false end
 	local key = MC.CellKey(
 		math.floor( tonumber( bx ) or 0 ),
 		math.floor( tonumber( by ) or 0 ),
 		math.floor( tonumber( bz ) or 0 )
 	)
-	local entry = byCell[key]
-	if not entry then return false end
-	heapRemoveAt( entry.heapIndex )
-	removeScheduledMapping( entry )
-	Stats.cancelled = Stats.cancelled + 1
+	local entries = byCell[key]
+	if not entries then return false end
+	for _, entry in pairs(entries) do
+		heapRemoveAt( entry.heapIndex )
+		removeScheduledMapping( entry )
+		Stats.cancelled = Stats.cancelled + 1
+	end
 	return true
+end
+
+-- ServerLevel.blockEvent: ordered, deduplicated by position/block/event/data.
+-- Events run after scheduled/random ticks, without an artificial one-tick delay.
+function SV.EnqueueBlockEvent(bx, by, bz, stateId, eventID, eventParam)
+	if not updatesEnabled() then return false, "block_updates_disabled" end
+	local numericX, numericY, numericZ = tonumber(bx), tonumber(by), tonumber(bz)
+	if numericX == nil or numericY == nil or numericZ == nil then return false, "invalid_event_position" end
+	local schema = MC.BlockStateSchemaForState(stateId)
+	if not schema then return false, "invalid_event_block" end
+	if type(eventID) ~= "number" or eventID ~= math.floor(eventID)
+		or type(eventParam) ~= "string" then return false, "invalid_block_event" end
+	bx, by, bz = math.floor(numericX), math.floor(numericY), math.floor(numericZ)
+	local key = tostring(MC.CellKey(bx, by, bz)) .. "/" .. schema.name .. "/" .. eventID .. "/" .. eventParam
+	if BlockEventKeys[key] then return false, "block_event_exists" end
+	if combinedQueueCount() >= queueLimit() then return false, "update_queue_limit" end
+	local entry = {bx=bx, by=by, bz=bz, key=key, kind=Kind.BLOCK_EVENT, depth=0,
+		expectedBlock=schema.name, eventID=eventID, eventParam=eventParam}
+	EventTail = EventTail + 1
+	BlockEvents[EventTail], BlockEventKeys[key] = entry, true
+	EventCount = EventCount + 1
+	return true
+end
+
+local function popBlockEvent()
+	if EventCount == 0 then return nil end
+	local entry = BlockEvents[EventHead]
+	BlockEvents[EventHead], BlockEventKeys[entry.key] = nil, nil
+	EventHead, EventCount = EventHead + 1, EventCount - 1
+	if EventCount == 0 then EventHead, EventTail = 1, 0 end
+	return entry
 end
 
 local function reportHandlerError( message )
@@ -489,12 +555,26 @@ local function applyReturnedSchedules( result, entry )
 	for index = 1, #result.schedule do
 		local request = result.schedule[index]
 		if type( request ) == "table" then
-			SV.ScheduleBlockTick(
+			local ok, reason = SV.ScheduleBlockTick(
 				request.bx ~= nil and request.bx or entry.bx,
 				request.by ~= nil and request.by or entry.by,
 				request.bz ~= nil and request.bz or entry.bz,
-				request.delayTicks, request.kind, request.expectedStateId
+				request.delayTicks, request.kind, request.expectedStateId, request
 			)
+			if not ok and reason ~= "scheduled_tick_exists" then
+				reportHandlerError("scheduled tick: " .. tostring(reason))
+			end
+		end
+	end
+end
+
+local function applyReturnedBlockEvents(result, entry)
+	if type(result) ~= "table" or type(result.blockEvents) ~= "table" then return end
+	for _, request in ipairs(result.blockEvents) do
+		local ok, reason = SV.EnqueueBlockEvent(entry.bx, entry.by, entry.bz,
+			request.stateId, request.eventID, request.eventParam)
+		if not ok and reason ~= "block_event_exists" then
+			reportHandlerError("block event: " .. tostring(reason))
 		end
 	end
 end
@@ -509,7 +589,7 @@ local function applyReturnedUpdates( result, entry )
 				request.by ~= nil and request.by or entry.by,
 				request.bz ~= nil and request.bz or entry.bz,
 				request.kind or Kind.NEIGHBOR,
-				entry.depth + 1,
+				result.continuePropagation == true and 0 or entry.depth + 1,
 				entry.revision,
 				entry.bx, entry.by, entry.bz
 			)
@@ -537,6 +617,7 @@ local function runListener( callback, entry, stateId )
 		depth = entry.depth,
 		revision = entry.revision,
 		logicTick = LogicTick,
+		eventID = entry.eventID, eventParam = entry.eventParam,
 		sourceX = entry.sourceX, sourceY = entry.sourceY, sourceZ = entry.sourceZ,
 		sources = entry.sources,
 		GetBlockState = MC.GetBlockState,
@@ -578,11 +659,19 @@ local function runListener( callback, entry, stateId )
 	applyAfterTransaction( result, transaction )
 	applyReturnedUpdates( result, entry )
 	applyReturnedSchedules( result, entry )
+	applyReturnedBlockEvents( result, entry )
 	return cellCount
 end
 
 local function processEntry( entry )
 	local stateId = MC.GetBlockState( entry.bx, entry.by, entry.bz )
+	if entry.expectedBlock then
+		local schema = MC.BlockStateSchemaForState(stateId)
+		if not schema or schema.name ~= entry.expectedBlock then
+			Stats.stale = Stats.stale + 1
+			return 0
+		end
+	end
 	if entry.expectedStateId ~= nil and stateId ~= entry.expectedStateId then
 		Stats.stale = Stats.stale + 1
 		return 0
@@ -760,6 +849,9 @@ end
 local function processReadyUntil( processed, submittedCells, updateLimit, cellLimit )
 	while processed < updateLimit and submittedCells < cellLimit do
 		local entry = popReady()
+		-- Finish neighbour consequences of one scheduled callback before the
+		-- next scheduled tick observes the world (ServerLevel.tickBlock).
+		if not entry then entry = popDueScheduled() end
 		if not entry then break end
 		processed = processed + 1
 		submittedCells = submittedCells + processEntry( entry )
@@ -769,7 +861,6 @@ end
 
 local function runLogicTick()
 	LogicTick = LogicTick + 1
-	promoteDueScheduled()
 
 	local maxUpdates = positiveConVar( cvMaxUpdates, DEFAULT_MAX_UPDATES )
 	local maxCells = positiveConVar( cvMaxCells, DEFAULT_MAX_CELLS )
@@ -785,6 +876,13 @@ local function runLogicTick()
 	processed = processed + randomProcessed
 	submittedCells = submittedCells + randomCells
 	processed, submittedCells = processReadyUntil( processed, submittedCells, maxUpdates, maxCells )
+	while processed < maxUpdates and submittedCells < maxCells do
+		local entry = popBlockEvent()
+		if not entry then break end
+		processed = processed + 1
+		submittedCells = submittedCells + processEntry(entry)
+		processed, submittedCells = processReadyUntil(processed, submittedCells, maxUpdates, maxCells)
+	end
 	Stats.processed = Stats.processed + processed
 	return processed, submittedCells
 end
@@ -810,7 +908,10 @@ function SV.ClearBlockUpdates( resetStats )
 	ReadyByKind = {}
 	ScheduledHeap = {}
 	ScheduledByKind = {}
+	ScheduledByCell = {}
 	ScheduledCount = 0
+	BlockEvents, BlockEventKeys = {}, {}
+	EventHead, EventTail, EventCount = 1, 0, 0
 	RandomChunkCursor = nil
 	RandomSectionCursor = RANDOM_SECTION_COUNT
 	resetLastRandom()
@@ -829,6 +930,7 @@ function SV.BlockUpdateDiagnostics()
 		ticksPerSecond = TICKS_PER_SECOND,
 		ready = ReadyCount,
 		scheduledPending = ScheduledCount,
+		blockEventsPending = EventCount,
 		heapSize = #ScheduledHeap,
 		running = Running,
 		randomTickSpeed = nonNegativeConVar( cvRandomTickSpeed, DEFAULT_RANDOM_TICK_SPEED ),

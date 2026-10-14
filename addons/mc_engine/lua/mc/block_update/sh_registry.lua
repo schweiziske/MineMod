@@ -13,10 +13,17 @@ local Kind = MC.BlockUpdateKind
 Kind.NEIGHBOR = 1
 Kind.SCHEDULED = 2
 Kind.RANDOM = Kind.RANDOM or 3
+Kind.BLOCK_EVENT = 4
+-- net.minecraft.world.ticks.TickPriority; lower values run first.
+MC.BlockTickPriority = {
+	EXTREMELY_HIGH = -3, VERY_HIGH = -2, HIGH = -1, NORMAL = 0,
+	LOW = 1, VERY_LOW = 2, EXTREMELY_LOW = 3,
+}
 local CallbackByKind = {
 	[Kind.NEIGHBOR] = "OnNeighborUpdate",
 	[Kind.SCHEDULED] = "OnScheduledTick",
 	[Kind.RANDOM] = "OnRandomTick",
+	[Kind.BLOCK_EVENT] = "OnBlockEvent",
 }
 
 local HandlerByName = {}
@@ -27,6 +34,7 @@ local HandlerCountByKind = {
 	[Kind.NEIGHBOR] = 0,
 	[Kind.SCHEDULED] = 0,
 	[Kind.RANDOM] = 0,
+	[Kind.BLOCK_EVENT] = 0,
 }
 local ListenerByKindState = {}
 
@@ -47,15 +55,18 @@ local function normalizeDefinition( name, definition )
 	local neighbor = definition.OnNeighborUpdate
 	local scheduled = definition.OnScheduledTick
 	local random = definition.OnRandomTick
+	local blockEvent = definition.OnBlockEvent
 	if neighbor ~= nil and type( neighbor ) ~= "function" then return nil, "invalid_neighbor_handler" end
 	if scheduled ~= nil and type( scheduled ) ~= "function" then return nil, "invalid_scheduled_handler" end
 	if random ~= nil and type( random ) ~= "function" then return nil, "invalid_random_handler" end
-	if neighbor == nil and scheduled == nil and random == nil then return nil, "empty_handler" end
+	if blockEvent ~= nil and type(blockEvent) ~= "function" then return nil, "invalid_block_event_handler" end
+	if neighbor == nil and scheduled == nil and random == nil and blockEvent == nil then return nil, "empty_handler" end
 	return {
 		name = name,
 		OnNeighborUpdate = neighbor,
 		OnScheduledTick = scheduled,
 		OnRandomTick = random,
+		OnBlockEvent = blockEvent,
 	}
 end
 
@@ -64,12 +75,14 @@ local function removeHandlerCount( handler )
 	if handler.OnNeighborUpdate then HandlerCountByKind[Kind.NEIGHBOR] = HandlerCountByKind[Kind.NEIGHBOR] - 1 end
 	if handler.OnScheduledTick then HandlerCountByKind[Kind.SCHEDULED] = HandlerCountByKind[Kind.SCHEDULED] - 1 end
 	if handler.OnRandomTick then HandlerCountByKind[Kind.RANDOM] = HandlerCountByKind[Kind.RANDOM] - 1 end
+	if handler.OnBlockEvent then HandlerCountByKind[Kind.BLOCK_EVENT] = HandlerCountByKind[Kind.BLOCK_EVENT] - 1 end
 end
 
 local function addHandlerCount( handler )
 	if handler.OnNeighborUpdate then HandlerCountByKind[Kind.NEIGHBOR] = HandlerCountByKind[Kind.NEIGHBOR] + 1 end
 	if handler.OnScheduledTick then HandlerCountByKind[Kind.SCHEDULED] = HandlerCountByKind[Kind.SCHEDULED] + 1 end
 	if handler.OnRandomTick then HandlerCountByKind[Kind.RANDOM] = HandlerCountByKind[Kind.RANDOM] + 1 end
+	if handler.OnBlockEvent then HandlerCountByKind[Kind.BLOCK_EVENT] = HandlerCountByKind[Kind.BLOCK_EVENT] + 1 end
 end
 
 function MC.IsBlockUpdateKind( kind )
@@ -168,6 +181,7 @@ local ObserverCountByKind = {
 	[Kind.NEIGHBOR] = 0,
 	[Kind.SCHEDULED] = 0,
 	[Kind.RANDOM] = 0,
+	[Kind.BLOCK_EVENT] = 0,
 }
 
 local function removeObserverCount( observer )
@@ -175,12 +189,14 @@ local function removeObserverCount( observer )
 	if observer.OnNeighborUpdate then ObserverCountByKind[Kind.NEIGHBOR] = ObserverCountByKind[Kind.NEIGHBOR] - 1 end
 	if observer.OnScheduledTick then ObserverCountByKind[Kind.SCHEDULED] = ObserverCountByKind[Kind.SCHEDULED] - 1 end
 	if observer.OnRandomTick then ObserverCountByKind[Kind.RANDOM] = ObserverCountByKind[Kind.RANDOM] - 1 end
+	if observer.OnBlockEvent then ObserverCountByKind[Kind.BLOCK_EVENT] = ObserverCountByKind[Kind.BLOCK_EVENT] - 1 end
 end
 
 local function addObserverCount( observer )
 	if observer.OnNeighborUpdate then ObserverCountByKind[Kind.NEIGHBOR] = ObserverCountByKind[Kind.NEIGHBOR] + 1 end
 	if observer.OnScheduledTick then ObserverCountByKind[Kind.SCHEDULED] = ObserverCountByKind[Kind.SCHEDULED] + 1 end
 	if observer.OnRandomTick then ObserverCountByKind[Kind.RANDOM] = ObserverCountByKind[Kind.RANDOM] + 1 end
+	if observer.OnBlockEvent then ObserverCountByKind[Kind.BLOCK_EVENT] = ObserverCountByKind[Kind.BLOCK_EVENT] + 1 end
 end
 
 -- match is either a block name ("minecraft:wheat") or a

@@ -661,12 +661,25 @@ local pistonHandler = {
 		local powered = pistonPowered( context )
 		local extended = GetStateProperty( context.stateId, "extended" ) == true
 		if powered == extended then return nil end
-		return { schedule = { { delayTicks = 1, expectedStateId = context.stateId } } }
+		-- PistonBaseBlock.checkIfExtend uses a block event in this game tick,
+		-- rather than a scheduled block tick one tick later.
+		if powered then
+			local protected = {[movementKey(context.bx, context.by, context.bz)] = true}
+			local blocks = collectMovement(context.bx + offset[1], context.by + offset[2],
+				context.bz + offset[3], offset, protected, nil, true)
+			if not blocks then return nil end
+		end
+		return {blockEvents={{stateId=context.stateId, eventID=powered and 0 or 1,
+			eventParam=GetStateProperty(context.stateId, "facing")}}}
 	end,
-	OnScheduledTick = function( context )
+	OnBlockEvent = function( context )
+		if GetStateProperty(context.stateId, "facing") ~= context.eventParam then return nil end
 		local powered = pistonPowered( context )
 		local extended = GetStateProperty( context.stateId, "extended" ) == true
 		if powered == extended then return nil end
+		-- Recheck the event's original edge. A queued extension must not turn
+		-- into a retraction merely because power changed before dispatch.
+		if (context.eventID == 0) ~= powered then return nil end
 		local cells = powered and extendCells( context ) or retractCells( context )
 		return cells and {
 			cells = cells,

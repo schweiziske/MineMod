@@ -1059,12 +1059,12 @@ API.Schedule = API.Schedule or {}
 local Schedule = API.Schedule
 
 -- Run the cell's OnScheduledTick handler after delayTicks (20 TPS ticks).
-function Schedule.BlockTick( bx, by, bz, delayTicks, expectedStateId )
+function Schedule.BlockTick( bx, by, bz, delayTicks, expectedStateId, options )
 	local sv = SV()
 	if not sv or not sv.ScheduleBlockTick then return false, "scheduler_unavailable" end
 	local x, y, z = cellCoords( bx, by, bz )
 	if not x then return false, "invalid_cell" end
-	return sv.ScheduleBlockTick( x, y, z, delayTicks, nil, expectedStateId )
+	return sv.ScheduleBlockTick( x, y, z, delayTicks, nil, expectedStateId, options )
 end
 
 -- Enqueue an immediate neighbor-update for the cell's handler.
@@ -1076,8 +1076,8 @@ function Schedule.BlockUpdate( bx, by, bz )
 	return sv.EnqueueBlockUpdate( x, y, z )
 end
 
--- Cancel the pending scheduled tick at a cell. The scheduler keeps ONE tick
--- slot per cell per update kind with no ownership, so this cancels whoever's
+-- Cancel all pending scheduled block types at a cell, including the legacy
+-- exact-state slot. There is no ownership, so this cancels whoever's
 -- tick is there - minecraft:observer blocks rely on exactly that. It is NOT a
 -- way to detach a Schedule.Observe listener; use Schedule.Unobserve for that.
 -- Returns false when nothing was pending.
