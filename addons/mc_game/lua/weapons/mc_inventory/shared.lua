@@ -58,7 +58,24 @@ function SWEP:Reload()
 end
 
 function SWEP:PrimaryAttack()
-	self:SetNextPrimaryFire( CurTime() + 0.2 )
+	if MC.MinecraftHandPrimaryAttack then
+		MC.MinecraftHandPrimaryAttack( self )
+	else
+		self:SetNextPrimaryFire( CurTime() + 0.2 )
+	end
+end
+
+function SWEP:KeyRelease( ply, key )
+	if ply ~= self:GetOwner() then return end
+	if CLIENT and not IsFirstTimePredicted() then return end
+	if key ~= IN_ATTACK then return end
+	self.MCCreativeAttackHeld = false
+	self:SetNextPrimaryFire( CurTime() )
+	if SERVER and MC.SV and MC.SV.CancelMining then
+		MC.SV.CancelMining( ply, "released" )
+	elseif CLIENT and MC.CancelClientMining then
+		MC.CancelClientMining()
+	end
 end
 
 function SWEP:SecondaryAttack()

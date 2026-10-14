@@ -654,12 +654,22 @@ local function primaryAttack( self )
 end
 
 function SWEP:PrimaryAttack()
+	if MC.MinecraftHandPrimaryAttack then
+		MC.MinecraftHandPrimaryAttack( self )
+		return
+	end
 	primaryAttack( self )
+end
+
+-- mc_inventory shares the client mining predictor with this hand weapon. Keep
+-- one authoritative implementation so selecting the inventory entry point
+-- cannot leave a client-only predicted break behind on the server.
+MC.MinecraftHandPrimaryAttack = function( weapon )
+	primaryAttack( weapon )
 	if SERVER then
-		local ply = self:GetOwner()
+		local ply = weapon:GetOwner()
 		local commandNumber = miningCommandNumber( ply )
 		local session = MC.SV.MiningSessions[ply]
-		-- Survival mining retains its start command until completion/cancel.
 		if not session or session.commandNumber ~= commandNumber then
 			MC.SV.AcknowledgeBlockPrediction( ply, 2, commandNumber )
 		end
