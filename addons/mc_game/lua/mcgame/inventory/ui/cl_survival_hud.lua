@@ -46,7 +46,7 @@ local function inventoryHandActive( ply )
 		return HandWeapon.IsInventoryActive( ply ) == true
 	end
 	local class = weapon:GetClass()
-	return class == "mc_item_hand" or class == "mc_inventory"
+	return class == "mc_item_hand"
 end
 
 function UI.SurvivalHUDBaseActive()

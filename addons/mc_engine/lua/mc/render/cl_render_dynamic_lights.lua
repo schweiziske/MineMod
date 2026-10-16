@@ -17,6 +17,14 @@ local viewPoint = Vector()
 D.count, D.ready, D.lastFrame = 0, false, nil
 D.cpuSelected, D.cpuSelectionValid = {}, false
 
+for _, state in pairs( D.materials ) do
+	if state.blendVersion == 1 then
+		state.material:SetInt( "$flags", bit.band( state.material:GetInt( "$flags" ), bit.bnot( 128 ) ) )
+		state.material:Recompute()
+		state.blendVersion = nil
+	end
+end
+
 local function finite( x ) return type( x ) == "number" and x == x and abs( x ) < math.huge end
 
 local function forget( record )
@@ -429,7 +437,59 @@ local registered, registrationError = D.RegisterProvider( "mc:flashlight", {
 } )
 R.Require( registered, "dynamic_flashlight_registration", tostring( registrationError ) )
 
-concommand.Add( "mc_dynamic_lights_stats", function()
+local function readLightPixels()
+	hook.Remove( "PostRender", "mc_dynamic_lights_readback" )
+	local texture = R.dynamicLightTexture
+	if not texture or not D.uploadValid then
+		print( "[MC light probe] No uploaded light texture" )
+		return
+	end
+	local pushed = false
+	local ok, err = pcall( function()
+		render.PushRenderTarget( texture )
+		pushed = true
+		render.CapturePixels()
+		for i = 1, 5 do
+			local expected = D.previousPixels[i]
+			local r, g, b, a = render.ReadPixel( i - 1, 0 )
+			print( string.format( "[MC light probe] texel=%d CPU RGBA=%d,%d,%d,%d GPU RGBA=%d,%d,%d,%s",
+				i - 1, expected % 256, floor( expected / 256 ) % 256, floor( expected / 65536 ) % 256,
+				floor( expected / 16777216 ), r, g, b, tostring( a ) ) )
+		end
+	end )
+	if pushed then render.PopRenderTarget() end
+	if not ok then MC.Fault( "dynamic_light_readback", "%s", tostring( err ) ) end
+end
+
+concommand.Add( "mc_dynamic_lights_stats", function( _, _, args )
 	print( string.format( "[MC dynamic lights] tracked=%d active=%d selected=%d/%d materials=%d uploads=%d draws=%d culled=%d; GPU timing unmeasured",
 		#D.records, #D.active, D.count, limit:GetInt(), D.materialCount, D.stats.uploads, D.stats.draws, D.stats.culled ) )
+	if args[1] ~= "gpu" then return end
+	local player = LocalPlayer()
+	if IsValid( player ) then
+		print( string.format( "[MC light probe] MC switch=%s Source switch=%s alive=%s dormant=%s",
+			tostring( player:GetNW2Bool( "MCWorldFlashlight", false ) ), tostring( player:FlashlightIsOn() ),
+			tostring( player:Alive() ), tostring( player:IsDormant() ) ) )
+	end
+	print( string.format( "[MC light probe] ready=%s enabled=%s flashlight=%s blockSize=%s eye=%s,%s,%s",
+		tostring( D.ready ), tostring( enabled:GetBool() ), tostring( flashlight:GetBool() ),
+		tostring( D.blockSize ), tostring( D.eyeX ), tostring( D.eyeY ), tostring( D.eyeZ ) ) )
+	local light = D.selected[1]
+	if light then
+		print( string.format( "[MC light probe] source=%s relative=%.3f,%.3f,%.3f direction=%.3f,%.3f,%.3f",
+			light.key, light.rx, light.ry, light.rz, light.dx, light.dy, light.dz ) )
+	end
+	for base, state in pairs( D.materials ) do
+		local material = state.material
+		local texture = material:GetTexture( "$texture2" )
+		print( string.format( "[MC light probe] base=%s shader=%s count=%s scale=%s texture=%s",
+			base:GetName(), material:GetString( "$pixshader" ), tostring( material:GetFloat( "$c0_w" ) ),
+			tostring( material:GetFloat( "$c0_x" ) ), texture and texture:GetName() or "missing" ) )
+		print( string.format( "[MC light probe] additive=%s opacity=%s eye=%s,%s,%s fogInverse=%s",
+			tostring( bit.band( material:GetInt( "$flags" ), 128 ) ~= 0 ), tostring( material:GetFloat( "$c0_z" ) ),
+			tostring( material:GetFloat( "$c1_x" ) ), tostring( material:GetFloat( "$c1_y" ) ),
+			tostring( material:GetFloat( "$c1_z" ) ), tostring( material:GetFloat( "$c2_w" ) ) ) )
+		break
+	end
+	hook.Add( "PostRender", "mc_dynamic_lights_readback", readLightPixels )
 end )

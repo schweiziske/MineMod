@@ -12,7 +12,7 @@ if SERVER then AddCSLuaFile() end
 
 MC = MC or {}
 
-SWEP.PrintName = "Minecraft Hand"
+SWEP.PrintName = "MC"
 SWEP.Author = "schweiziske"
 SWEP.Purpose = "Minecraft inventory item interaction"
 SWEP.Instructions = "左键破坏  右键使用/放置  Reload 或 E 打开物品栏"
@@ -31,6 +31,19 @@ SWEP.DrawViewModel = false
 SWEP.DrawWorldModel = false
 SWEP.Primary = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "none" }
 SWEP.Secondary = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "none" }
+
+if CLIENT then
+	SWEP.WepSelectIcon = surface.GetTextureID( "vgui/entities/mc_item_hand" )
+	SWEP.BounceWeaponIcon = false
+	SWEP.DrawWeaponInfoBox = false
+
+	function SWEP:DrawWeaponSelection( x, y, width, height, alpha )
+		local size = math.min( width, height ) * 0.70
+		surface.SetDrawColor( 255, 255, 255, alpha or 255 )
+		surface.SetTexture( self.WepSelectIcon )
+		surface.DrawTexturedRect( x + ( width - size ) * 0.5, y + ( height - size ) * 0.5, size, size )
+	end
+end
 
 local ATTACK_INTERVAL = 1 / 20
 local RIGHT_CLICK_DELAY = 4 / 20
@@ -59,6 +72,10 @@ local function miningCommandNumber( ply )
 	if game.SinglePlayer() then return 0 end
 	local command = ply:GetCurrentCommand()
 	return command and command:CommandNumber() or 0
+end
+
+local function usesCreativeRequest( weapon, ply )
+	return weapon:GetClass() == "mc_item_hand" and not game.SinglePlayer() and not ply:IsBot()
 end
 
 local function traceCombatTarget( ply, trace )
@@ -263,7 +280,6 @@ end
 -- IN_ATTACK2 out of the usercmd once it claims a press.
 local BASE_INTERACTION_WEAPONS = {
 	mc_item_hand = true,
-	mc_inventory = true,
 }
 
 local function inventoryProxyWeapon( weapon )
@@ -587,6 +603,9 @@ local function primaryAttack( self )
 			if initialPress and MC.SV.AttackSelectedItem then MC.SV.AttackSelectedItem( ply, target, { reason = "primary_attack" } ) end
 			return
 		end
+		-- Multiplayer creative block edits arrive with their original target in
+		-- mc_hand_creative_break. Do not independently break/ACK this command.
+		if creative and usesCreativeRequest( self, ply ) then return end
 		if aim and MC.EntityOccludesBlockAim and MC.EntityOccludesBlockAim( ply, aim ) then
 			if MC.SV and MC.SV.CancelMining then MC.SV.CancelMining( ply, "entity_occluded" ) end
 			return
@@ -643,9 +662,14 @@ local function primaryAttack( self )
 		if bx and not initialPress and now < ( self.MCCreativeBreakReadyAt or 0 ) then
 			return
 		end
-		if bx
-		and MC.CanPreviewBreak and MC.CanPreviewBreak( ply, bx, by, bz ) and MC.PredictBreakBlock then
-			if MC.PredictBreakBlock( bx, by, bz, ply, miningCommandNumber( ply ) ) then
+		if bx and MC.CanPreviewBreak( ply, bx, by, bz ) then
+			local requested
+			if usesCreativeRequest( self, ply ) then
+				requested = MC.RequestCreativeHandBreak( self, aim, initialPress, miningCommandNumber( ply ) )
+			else
+				requested = MC.PredictBreakBlock( bx, by, bz, ply, miningCommandNumber( ply ) )
+			end
+			if requested then
 				self.MCCreativeBreakReadyAt = now + CREATIVE_DESTROY_DELAY
 				self:StartCreativePlaceAnimation( bx, by, bz )
 			end
@@ -661,13 +685,13 @@ function SWEP:PrimaryAttack()
 	primaryAttack( self )
 end
 
--- mc_inventory shares the client mining predictor with this hand weapon. Keep
--- one authoritative implementation so selecting the inventory entry point
--- cannot leave a client-only predicted break behind on the server.
+-- Retain the shared entry point for integrations using the hand attack path.
 MC.MinecraftHandPrimaryAttack = function( weapon )
 	primaryAttack( weapon )
 	if SERVER then
 		local ply = weapon:GetOwner()
+		if not IsValid( ply ) then return end
+		if creativeMode( ply ) and usesCreativeRequest( weapon, ply ) then return end
 		local commandNumber = miningCommandNumber( ply )
 		local session = MC.SV.MiningSessions[ply]
 		if not session or session.commandNumber ~= commandNumber then

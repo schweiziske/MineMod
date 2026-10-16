@@ -6,6 +6,44 @@ MC = MC or {}
 local TICK = 1 / 20
 local nextContinueAt, wasHeld, blocked = 0, false, nil
 
+function MC.RequestCreativeHandBreak( weapon, aim, initialPress, commandNumber )
+	local transport = MC.StateNetworkTransport
+	if not aim or not commandNumber or commandNumber <= 0 or not transport
+		or not transport.ready or transport.awaitingSnapshot or transport.desynced then return false end
+	local ply = LocalPlayer()
+	if not IsValid( weapon ) or weapon:GetClass() ~= "mc_item_hand"
+		or weapon:GetOwner() ~= ply or not MC.PlayerIsCreative( ply ) then return false end
+	local stateId = MC.GetBlockState( aim.bx, aim.by, aim.bz )
+	local offset = ( aim.HitPos - MC.API.Coords.CellMin( aim.bx, aim.by, aim.bz ) ) * ( 1 / MC.API.Coords.BlockSize() )
+	-- Capture the target before prediction turns it into air. The request is
+	-- sent even on listen hosts, where voxel prediction is intentionally off.
+	if MC.ClientEditPredictionEnabled()
+		and not MC.PredictBreakBlock( aim.bx, aim.by, aim.bz, ply, commandNumber ) then return false end
+	net.Start( "mc_hand_creative_break" )
+		net.WriteUInt( transport.generation, 32 )
+		net.WriteUInt( commandNumber, 32 )
+		net.WriteInt( aim.bx, MC.Net.COORD_BITS )
+		net.WriteInt( aim.by, MC.Net.COORD_BITS )
+		net.WriteInt( aim.bz, MC.Net.COORD_BITS )
+		net.WriteUInt( stateId, 32 )
+		-- WriteVector quantizes small offsets; preserve thin model hit points.
+		net.WriteFloat( offset.x )
+		net.WriteFloat( offset.y )
+		net.WriteFloat( offset.z )
+		net.WriteBool( initialPress == true )
+	net.SendToServer()
+	return true
+end
+
+local nextCreativeRejectNotice = 0
+net.Receive( "mc_hand_creative_break", function()
+	local reason = net.ReadString()
+	local bx, by, bz = net.ReadInt( MC.Net.COORD_BITS ), net.ReadInt( MC.Net.COORD_BITS ), net.ReadInt( MC.Net.COORD_BITS )
+	if RealTime() < nextCreativeRejectNotice then return end
+	nextCreativeRejectNotice = RealTime() + 1
+	print( string.format( "[MC creative break] rejected (%d,%d,%d): %s", bx, by, bz, reason ) )
+end )
+
 local function sameCell( session, bx, by, bz )
 	return session and session.bx == bx and session.by == by and session.bz == bz
 end
@@ -13,7 +51,7 @@ end
 local function inventoryHand( weapon )
 	if not IsValid( weapon ) then return false end
 	local class = weapon:GetClass()
-	return class == "mc_item_hand" or class == "mc_inventory"
+	return class == "mc_item_hand"
 end
 
 local function heldStack()

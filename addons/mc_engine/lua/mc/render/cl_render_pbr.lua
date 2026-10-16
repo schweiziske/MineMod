@@ -87,8 +87,9 @@ function B.PrepareView( x, y, z )
 	if frame == lastFrame and not settingsDirty then return end
 	lastFrame, settingsDirty = frame, false
 	local sx, sy, sz, elevation = MC.DayCycleSunComponents()
-	local tilt = MC.DayCycleSunTilt:GetFloat()
-	sy = sy - tilt
+	if MC.DayCycleEnabled() then
+		sy = sy - MC.DayCycleSunTilt:GetFloat()
+	end
 	local inverseLength = 1 / sqrt( sx * sx + sy * sy + sz * sz )
 	sx, sy, sz = sx * inverseLength, sy * inverseLength, sz * inverseLength
 	local horizon = max( 0, 1 - abs( elevation ) / 0.35 )

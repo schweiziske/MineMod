@@ -108,7 +108,7 @@ MC.LanguageData = MC.LanguageData or {
 		["weapon.mc_placer.instructions"] = "左键破坏  右键放置  Reload 选择方块",
 		["weapon.mc_placer.hud"] = "左键破坏   右键放置   Reload 选择方块",
 
-		["weapon.mc_creative_placer.name"] = "MC 创造方块放置器",
+		["weapon.mc_creative_placer.name"] = "MC DEBUG TOOL",
 		["weapon.mc_creative_placer.purpose"] = "放置 / 破坏 Minecraft 方块，并从创造物品栏选择方块",
 		["weapon.mc_creative_placer.instructions"] = "左键破坏  右键放置  Reload 创造物品栏",
 		["weapon.mc_creative_placer.hud"] = "左键破坏    右键放置    中键取块(自动)    Shift+中键取数据    Reload 创造栏    Tab 切出",
@@ -470,7 +470,7 @@ MC.LanguageData = MC.LanguageData or {
 		["weapon.mc_placer.instructions"] = "Left click breaks  Right click places  Reload selects a block",
 		["weapon.mc_placer.hud"] = "Left click breaks   Right click places   Reload selects a block",
 
-		["weapon.mc_creative_placer.name"] = "MC Creative Block Placer",
+		["weapon.mc_creative_placer.name"] = "MC DEBUG TOOL",
 		["weapon.mc_creative_placer.purpose"] = "Place and break Minecraft blocks, with a creative inventory picker",
 		["weapon.mc_creative_placer.instructions"] = "Left click breaks  Right click places  Reload opens creative inventory",
 		["weapon.mc_creative_placer.hud"] = "Left breaks    Right places    Middle picks (auto)    Shift+Middle copies state    Reload opens inventory    Tab switches weapon",

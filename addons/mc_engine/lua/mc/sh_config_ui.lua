@@ -70,6 +70,17 @@ MC.ConfigGroups = {
 
 MC.ConfigConVars = {
 	client = {
+		category( "home", "interface", "Home", "首页",
+			"Open world saves and texture packs from here.",
+			"在这里打开存档管理器和材质包管理器。", {
+				item( "mc_save_manager", "Save manager", "存档管理器", "action",
+					"Browse and manage world saves.",
+					"浏览与管理世界存档。", { action = "save_manager" } ),
+				item( "mc_texture_packs", "Texture pack manager", "材质包管理器", "action",
+					"Choose a registered texture pack and apply it when ready.",
+					"选择材质包，点击应用后生效。", { action = "texture_pack_manager" } ),
+		} ),
+
 		category( "texture_pack", "interface", "Texture pack", "材质包",
 			"Browse and select installed texture packs.",
 			"浏览并选择已安装的材质包。", {
@@ -499,8 +510,8 @@ MC.ConfigConVars = {
 			"Server-owned world time and the duration of a full day.",
 			"服务器控制的世界时间与完整一天时长。", {
 			item( "mc_daycycle", "Day and night cycle", "昼夜循环", "bool",
-				"Enable the server-side Minecraft day and night cycle.",
-				"启用服务器端 Minecraft 昼夜循环。" ),
+				"Enable the server-side Minecraft day and night cycle (off by default). When off, lighting follows the map sun direction.",
+				"启用服务器端 Minecraft 昼夜循环（默认关闭）；关闭时光照方向跟随地图太阳。" ),
 			item( "mc_daycycle_paused", "Pause world time", "暂停世界时间", "bool",
 				"Freeze the day and night clock at its current time without disabling lighting.",
 				"冻结当前昼夜时间，但保持对应时间的天空光与阴影。" ),

@@ -212,33 +212,22 @@ function MC.GetBlockParticleMaterial( id, col, row )
 	return particleMaterialForTile( tileName, col, row ), tileName, tile
 end
 
--- One callback per distinct base tint, shared by every matching fragment.
--- No per-particle Lua tables/closures or weak userdata lifetime assumptions.
-local terrainLightCallbacks = {}
-local function terrainLightCallback( tintCode )
+-- Capture one colour per destruction event, including queued material warmup.
+-- Fragments retain this colour for their entire lifetime.
+local function terrainParticleColor( bx, by, bz, tintCode )
 	local tr, tg, tb = 255, 255, 255
 	if tintCode and tintCode ~= 0 and MC.BlockTintRGB then
 		tr, tg, tb = MC.BlockTintRGB( tintCode )
 	end
-	local key = tr * 65536 + tg * 256 + tb
-	local callback = terrainLightCallbacks[key]
-	if callback then return callback end
 	-- TerrainParticle.java uses 0.6 base colour before the lightmap multiplier.
 	tr, tg, tb = tr * 0.6, tg * 0.6, tb * 0.6
-	callback = function( particle )
-		local world = MC.API.Coords.RenderToWorld( particle:GetPos() )
-		local r, g, b = MC.API.Light.SamplePresentationRGB( world, 0 )
-		if MC.Check( r ~= nil, "terrain_particle_light", "Cannot sample terrain particle lighting: %s", g ) then
-			particle:SetColor( math.floor( r * tr + 0.5 ),
-				math.floor( g * tg + 0.5 ), math.floor( b * tb + 0.5 ) )
-		end
-		particle:SetNextThink( CurTime() + 0.05 )
-	end
-	terrainLightCallbacks[key] = callback
-	return callback
+	local world = MC.API.Coords.CellCenter( bx, by, bz )
+	local r, g, b = MC.API.Light.SamplePresentationRGB( world, 0 )
+	if not MC.Check( r ~= nil, "terrain_particle_light", "Cannot sample terrain particle lighting: %s", g ) then return nil end
+	return Color( math.floor( r * tr + 0.5 ), math.floor( g * tg + 0.5 ), math.floor( b * tb + 0.5 ) )
 end
 
-local function addTerrainParticle( emitter, tileName, pos, relX, relY, relZ, bs, updateLighting )
+local function addTerrainParticle( emitter, tileName, pos, relX, relY, relZ, bs, color )
 	local p = emitter:Add( particleMaterialForTile( tileName ), pos )
 	if not p then return end
 
@@ -266,8 +255,7 @@ local function addTerrainParticle( emitter, tileName, pos, relX, relY, relZ, bs,
 	p:SetCollide( true )
 	p:SetBounce( 0 )
 	p:SetLighting( false )
-	updateLighting( p )
-	p:SetThinkFunction( updateLighting )
+	p:SetColor( color.r, color.g, color.b )
 end
 
 local function addDestroyParticleSample( samples, base, box, bs, xx, yy, zz, countX, countY, countZ )
@@ -352,7 +340,7 @@ local function spawnBreakParticlesNow( id, orient, bx, by, bz, options )
 	if not emitter then return 0 end
 
 	local tileName = options.tileName or tileNameForBlock( id )
-	local updateLighting = terrainLightCallback( options.tintCode or 0 )
+	local color = options.particleColor
 	local samples = {}
 	for _, box in ipairs( boxes ) do
 		local widthX = math.min( 1, box[4] - box[1] )
@@ -384,7 +372,7 @@ local function spawnBreakParticlesNow( id, orient, bx, by, bz, options )
 	for i = 1, count do
 		local sampleIndex = math.min( total, math.floor( offset + ( i - 1 ) * step ) + 1 )
 		local sample = samples[sampleIndex]
-		addTerrainParticle( emitter, tileName, sample.pos, sample.relX, sample.relY, sample.relZ, bs, updateLighting )
+		addTerrainParticle( emitter, tileName, sample.pos, sample.relX, sample.relY, sample.relZ, bs, color )
 	end
 
 	emitter:Finish()
@@ -440,6 +428,8 @@ local function spawnBreakParticles( id, orient, bx, by, bz, options )
 	local tileName = options.tileName or tileNameForBlock( id )
 	local queuedOptions = copyParticleOptions( options )
 	queuedOptions.tileName = tileName
+	queuedOptions.particleColor = terrainParticleColor( bx, by, bz, options.tintCode or 0 )
+	if not queuedOptions.particleColor then return 0 end
 	local request = {
 		id = id, orient = orient,
 		bx = bx, by = by, bz = bz,
@@ -447,7 +437,7 @@ local function spawnBreakParticles( id, orient, bx, by, bz, options )
 		expires = CurTime() + 3,
 	}
 	if queueParticleTileWarm( tileName, request ) then return 0 end
-	return spawnBreakParticlesNow( id, orient, bx, by, bz, options )
+	return spawnBreakParticlesNow( id, orient, bx, by, bz, queuedOptions )
 end
 
 hook.Remove( "Think", "mc_particle_material_prewarm" )

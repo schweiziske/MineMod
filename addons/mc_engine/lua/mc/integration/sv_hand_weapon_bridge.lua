@@ -235,9 +235,7 @@ hook.Add( "MC.HandWeaponResolversChanged", "mc_hand_weapon_bridge_refresh_resolv
 hook.Add( "PlayerSwitchWeapon", "mc_hand_weapon_bridge_enter_inventory_hand", function( ply, _, newWeapon )
 	if not IsValid( newWeapon ) then return end
 	local className = newWeapon:GetClass()
-	-- mc_inventory is a real, independently selectable entry point. Reconciling it
-	-- on the next tick used to replace it before Reload/+use could establish the
-	-- server session, which made the inventory SWEP impossible to hold.
+	-- Integrations may still register a separate inventory-only entry point.
 	if className == Bridge.InventoryClass then return end
 	if className ~= Bridge.HandClass and not Bridge.IsManagedClass( className ) then return end
 	timer.Simple( 0, function()

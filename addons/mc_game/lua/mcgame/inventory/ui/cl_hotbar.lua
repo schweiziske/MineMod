@@ -23,7 +23,7 @@ local function handActive()
 		return HandWeapon.IsInventoryActive( ply ) == true
 	end
 	local class = weapon:GetClass()
-	return class == "mc_item_hand" or class == "mc_inventory"
+	return class == "mc_item_hand"
 end
 
 -- HUDPaint calls handActive() every frame while the hand is out, so wrapping it
@@ -82,15 +82,6 @@ local function worldInputAvailable()
 		and not IsValid( vgui.GetKeyboardFocus() )
 end
 
-local function toggleFlashlight()
-	if not worldInputAvailable() then return end
-	-- Toggle the MC terrain spotlight, not Source's projected BSP flashlight.
-	RunConsoleCommand( "mc_world_flashlight" )
-end
-concommand.Add( "mc_flashlight", toggleFlashlight )
-
-local flashlightKeyDown = false
-
 local function worldKeyPressed( button )
 	local operation = WORLD_KEYS[button]
 	local hotbar = NUMBER_KEYS[button]
@@ -121,14 +112,6 @@ end )
 -- keys and single-player, where predicted button hooks may not reach the client.
 -- The shared edge state prevents held keys from undoing a later scroll selection.
 hook.Add( "Think", "mc_inventory_world_shortcuts", function()
-	local down = input.IsKeyDown( KEY_G )
-	if down and not flashlightKeyDown then
-		-- Unbound G is the default MC shortcut. Respect existing user binds,
-		-- including mc_flashlight/impulse 100, which dispatch their own command.
-		local bind = input.LookupKeyBinding( KEY_G )
-		if not bind or bind == "" then toggleFlashlight() end
-	end
-	flashlightKeyDown = down
 	for button in pairs( WORLD_KEYS ) do
 		local down
 		if button == MOUSE_MIDDLE then down = input.IsMouseDown( button ) else down = input.IsKeyDown( button ) end

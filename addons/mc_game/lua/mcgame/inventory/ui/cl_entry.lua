@@ -1,4 +1,4 @@
--- Minecraft inventory entry/lifecycle bridge shared by both inventory SWEPs.
+-- Minecraft inventory entry/lifecycle bridge for the hand and selected proxies.
 
 if not CLIENT then return end
 
@@ -19,7 +19,7 @@ function UI.IsInventoryWeapon( weapon )
 	if type( HandWeapon.IsInventoryActive ) == "function" and IsValid( owner ) then
 		return HandWeapon.IsInventoryActive( owner ) == true
 	end
-	return class == "mc_inventory" or class == "mc_item_hand"
+	return class == "mc_item_hand"
 end
 
 function UI.ActiveInventoryWeapon()

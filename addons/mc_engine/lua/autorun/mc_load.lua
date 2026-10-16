@@ -141,6 +141,7 @@ local SERVER_FILES = {
 }
 local CLIENT_FILES = {
 	"mc/cl_gc.lua",
+	"mc/integration/cl_flashlight.lua",
 	"mc/cl_lighting.lua",
 	"mc/render/cl_mesh_constants.lua",
 	"mc/render/cl_render_pipeline.lua",
@@ -306,6 +307,7 @@ if SERVER then
 			resource.AddFile( "materials/mc/font/" .. fileName )
 		end
 		for _, resourceRoot in ipairs( {
+			"materials/mc/ui",
 			"materials/mc/entity/chest",
 			"materials/mc/entity/banner",
 			"materials/mc/entity/boat",

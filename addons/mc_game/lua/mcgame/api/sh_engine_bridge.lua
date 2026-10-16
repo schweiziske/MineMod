@@ -93,7 +93,7 @@ API.Network.Register( GAME_OWNER, {
 } )
 
 if API.HandWeapon then
-	API.HandWeapon.ConfigureBaseClasses( GAME_OWNER, "mc_item_hand", "mc_inventory" )
+	API.HandWeapon.ConfigureBaseClasses( GAME_OWNER, "mc_item_hand" )
 end
 
 local BANNER_COLORS = {

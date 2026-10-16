@@ -535,6 +535,20 @@ end
 
 local droppedBlockDrawMatrix = Matrix()
 local droppedBlockDrawScale = Vector( 1, 1, 1 )
+local itemMeshLightColor = Vector( 1, 1, 1 )
+
+-- IMesh draws consume the material modulation directly. Model-renderer
+-- colour modulation alone does not reliably reach these cached meshes.
+local function bindItemMeshColor( material, color )
+	local previous = material:GetVector( "$color2" )
+	itemMeshLightColor.x, itemMeshLightColor.y, itemMeshLightColor.z =
+		color.r / 255, color.g / 255, color.b / 255
+	material:SetVector( "$color2", itemMeshLightColor )
+	render.SetColorModulation( 1, 1, 1 )
+	return previous
+end
+
+local itemMeshWhite = Vector( 1, 1, 1 )
 
 function Renderer.DrawDroppedBlock( stack, position, angles, size, worldColor, options, prepared )
 	if prepared and ( prepared.stack ~= stack or prepared.options ~= options ) then prepared = nil end
@@ -554,8 +568,7 @@ function Renderer.DrawDroppedBlock( stack, position, angles, size, worldColor, o
 	droppedBlockDrawScale.x, droppedBlockDrawScale.y, droppedBlockDrawScale.z = size, size, size
 	matrix:SetScale( droppedBlockDrawScale )
 	worldColor = worldColor or color_white
-	render.SetColorModulation( ( worldColor.r or 255 ) / 255,
-		( worldColor.g or 255 ) / 255, ( worldColor.b or 255 ) / 255 )
+	local previousColor = bindItemMeshColor( material, worldColor )
 	render.SetBlend( ( worldColor.a or 255 ) / 255 )
 	local filtered = render.PushFilterMin and render.PushFilterMag and TEXFILTER and TEXFILTER.POINT
 	if filtered then
@@ -567,6 +580,7 @@ function Renderer.DrawDroppedBlock( stack, position, angles, size, worldColor, o
 	cam.PushModelMatrix( matrix, true )
 		cached.mesh:Draw()
 	cam.PopModelMatrix()
+	material:SetVector( "$color2", previousColor or itemMeshWhite )
 	-- The base atlas is intentionally nearest-filtered.  Vanilla's glint texture
 	-- carries blur:true, so its pass must happen after the POINT filter is gone.
 	if filtered then
@@ -1103,7 +1117,7 @@ local function drawExtrudedHeldLayer( layer, material, transform, layerOffset, c
 		n.x * transform.depth, n.y * transform.depth, n.z * transform.depth
 	matrix:SetRight( spriteDrawRight )
 	matrix:SetUp( spriteDrawUp )
-	render.SetColorModulation( ( color.r or 255 ) / 255, ( color.g or 255 ) / 255, ( color.b or 255 ) / 255 )
+	local previousColor = bindItemMeshColor( material, color )
 	render.SetBlend( ( color.a or 255 ) / 255 )
 	render.SetMaterial( material )
 	if render.CullMode then
@@ -1120,6 +1134,7 @@ local function drawExtrudedHeldLayer( layer, material, transform, layerOffset, c
 	cam.PushModelMatrix( matrix, true )
 		spriteMesh:Draw()
 	cam.PopModelMatrix()
+	material:SetVector( "$color2", previousColor or itemMeshWhite )
 	if render.CullMode then render.CullMode( MATERIAL_CULLMODE_CCW or 0 ) end
 	render.SetBlend( 1 )
 	render.SetColorModulation( 1, 1, 1 )

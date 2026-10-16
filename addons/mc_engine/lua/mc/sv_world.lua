@@ -932,11 +932,14 @@ local function validatePlacementPlan( ply, plan )
 end
 
 local function validateBreakPlan( ply, plan, consumeCooldown )
-	if not plan or not plan.cells or #plan.cells == 0 then return false end
-	if consumeCooldown ~= false and not cooldownOK( ply ) then return false end
-	if not canEdit( ply ) then return false end
-	if MC.RunEvent and MC.RunEvent( "MC.CanPlayerEditCell", ply, plan.bx, plan.by, plan.bz, false ) == false then return false end
-	return validateReach( ply, plan.bx, plan.by, plan.bz )
+	if not plan or not plan.cells or #plan.cells == 0 then return false, "no_break_plan" end
+	if consumeCooldown ~= false and not cooldownOK( ply ) then return false, "edit_cooldown" end
+	if not canEdit( ply ) then return false, "edit_denied" end
+	if MC.RunEvent and MC.RunEvent( "MC.CanPlayerEditCell", ply, plan.bx, plan.by, plan.bz, false ) == false then
+		return false, "cell_edit_denied"
+	end
+	if not validateReach( ply, plan.bx, plan.by, plan.bz ) then return false, "out_of_reach" end
+	return true
 end
 
 function SV.ValidateBreakTarget( ply, bx, by, bz )
@@ -994,7 +997,8 @@ end
 function SV.Break( ply, bx, by, bz, options )
 	options = istable( options ) and options or {}
 	local plan = MC.BuildBreakPlan and MC.BuildBreakPlan( bx, by, bz )
-	if not validateBreakPlan( ply, plan, true ) then return false end
+	local allowed, reason = validateBreakPlan( ply, plan, true )
+	if not allowed then return false, { ok = false, changed = 0, error = reason } end
 	local result = SV.ApplyBlockTransaction( plan.cells, {
 		actor = ply,
 		priorityPhys = true,

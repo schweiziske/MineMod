@@ -234,12 +234,8 @@ local function mcShadowSourceEnabled()
 end
 
 local function normalizedSunDirection()
-	local info = util and util.GetSunInfo and util.GetSunInfo() or nil
-	local dir = info and info.direction or nil
-	if not dir or dir:IsZero() then
-		dir = Vector( -0.35, -0.45, -0.82 )
-	end
-	return dir:GetNormalized()
+	local x, y, z = MC.DayCycleSunComponents()
+	return Vector( x, y, z )
 end
 
 -- Direction toward the active light body (sun by day, moon at night) plus a

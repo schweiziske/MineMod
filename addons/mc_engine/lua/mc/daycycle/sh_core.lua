@@ -9,7 +9,7 @@ MC.DAYCYCLE_TICKS_PER_DAY = TICKS_PER_DAY
 MC.DayCycle = MC.DayCycle or {}
 
 function MC.DayCycleEnabled()
-	return GetGlobalBool( "mc_daycycle_on", true ) == true
+	return GetGlobalBool( "mc_daycycle_on", false ) == true
 end
 
 function MC.DayCyclePaused()
@@ -95,11 +95,32 @@ function MC.DayCycleHorizonBlend()
 	return math.Clamp( 1 - math.abs( elevation ) / 0.35, 0, 1 )
 end
 
+-- Map sun directions already use the render axes. Cache the engine query once
+-- per frame so lighting and shadow consumers share it without extra allocations.
+local mapSunFrame, mapSunX, mapSunY, mapSunZ
+local function mapSunComponents()
+	local frame = FrameNumber()
+	if mapSunFrame ~= frame then
+		mapSunFrame = frame
+		mapSunX, mapSunY, mapSunZ = 0, 0, 1
+		local info = util.GetSunInfo()
+		local direction = info and info.direction
+		if direction and not direction:IsZero() then
+			local inverseLength = 1 / direction:Length()
+			mapSunX = direction.x * inverseLength
+			mapSunY = direction.y * inverseLength
+			mapSunZ = direction.z * inverseLength
+		end
+	end
+	return mapSunX, mapSunY, mapSunZ, mapSunZ
+end
+
 -- Untilted direction toward the sun plus its elevation (cos of the sun angle:
 -- +1 noon, 0 at the horizon, negative at night). Sun travels east (+x) to
 -- west (-x) through the zenith like MC. An external clock provider can opt
 -- into the opposite horizontal convention for Source sky systems.
 function MC.DayCycleSunComponents()
+	if CLIENT and not MC.DayCycleEnabled() then return mapSunComponents() end
 	local angle = MC.DayCycleCelestialAngle() * math.pi * 2
 	local elevation = math.cos( angle )
 	local horizontalSign = GetGlobalBool( "mc_daycycle_external_reverse_sun", false ) and 1 or -1
@@ -116,8 +137,8 @@ if not SERVER then return end
 local DayCycle = MC.DayCycle
 DayCycle.TicksPerDay = TICKS_PER_DAY
 
-local cvEnabled = CreateConVar( "mc_daycycle", "1", { FCVAR_ARCHIVE, FCVAR_NOTIFY },
-	"Enable the MC day/night cycle" )
+local cvEnabled = CreateConVar( "mc_daycycle", "0", { FCVAR_ARCHIVE, FCVAR_NOTIFY },
+	"Enable the MC day/night cycle; when disabled, use the map sun direction" )
 local cvPaused = CreateConVar( "mc_daycycle_paused", "0", { FCVAR_ARCHIVE, FCVAR_NOTIFY },
 	"Pause the MC day/night clock at its current time" )
 local cvLength = CreateConVar( "mc_daycycle_length", "1200", { FCVAR_ARCHIVE },

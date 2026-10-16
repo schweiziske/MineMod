@@ -189,6 +189,9 @@ if SERVER then
 		-- without any of them.
 		for _, fileName in ipairs( {
 			"materials/mc/gui/recipe_book.png",
+			"materials/entities/mc_item_hand.png",
+			"materials/vgui/entities/mc_item_hand.vmt",
+			"materials/vgui/entities/mc_item_hand.vtf",
 			"materials/mc/misc/enchanted_glint_armor.png",
 			"materials/mc/misc/enchanted_glint_item.png",
 		} ) do

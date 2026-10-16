@@ -15,7 +15,7 @@ local function blockDisplayText( blockOrID )
 	return MC.BlockDisplayName and MC.BlockDisplayName( b, b.dispZH or b.disp ) or b.disp
 end
 
-SWEP.PrintName     = L( "weapon.mc_creative_placer.name", "MC 创造方块放置器" )
+SWEP.PrintName     = L( "weapon.mc_creative_placer.name", "MC DEBUG TOOL" )
 SWEP.Author        = "schweiziske"
 SWEP.Purpose       = L( "weapon.mc_creative_placer.purpose", "放置 / 破坏 Minecraft 方块，并从创造物品栏选择方块" )
 SWEP.Instructions  = L( "weapon.mc_creative_placer.instructions", "左键破坏  右键放置  Reload 创造物品栏" )
@@ -25,7 +25,7 @@ SWEP.Category      = "Minecraft"
 -- sv_world.lua for why double-handling must be opted out of explicitly.
 SWEP.MCOwnsBlockInteraction = true
 
-SWEP.Spawnable     = true
+SWEP.Spawnable     = false
 SWEP.AdminOnly     = false
 SWEP.Slot          = 1
 SWEP.SlotPos       = 6
@@ -43,18 +43,11 @@ SWEP.Primary   = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "no
 SWEP.Secondary = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "none" }
 
 if CLIENT then
-	-- The weapon selector uses the dedicated translucent icon; the spawn menu
-	-- content panel uses materials/entities/mc_creative_placer.png.
-	SWEP.WepSelectIcon = surface.GetTextureID( "vgui/entities/mc_creative_placer" )
+	SWEP.WepSelectIcon = 0
 	SWEP.BounceWeaponIcon = false
 	SWEP.DrawWeaponInfoBox = false
 
-	function SWEP:DrawWeaponSelection( x, y, width, height, alpha )
-		local size = math.min( width, height ) * 0.70
-		surface.SetDrawColor( 255, 255, 255, alpha or 255 )
-		surface.SetTexture( self.WepSelectIcon )
-		surface.DrawTexturedRect( x + ( width - size ) * 0.5, y + ( height - size ) * 0.5, size, size )
-	end
+	function SWEP:DrawWeaponSelection() end
 end
 
 local STEP = 0.13
@@ -724,7 +717,7 @@ if CLIENT then
 	function SWEP:DrawWorldModelTranslucent() end
 
 	function SWEP:GetPrintName()
-		return L( "weapon.mc_creative_placer.name", self.PrintName or "MC 创造方块放置器" )
+		return L( "weapon.mc_creative_placer.name", self.PrintName or "MC DEBUG TOOL" )
 	end
 
 	local function receiveCreativeHeldBlockAnim()

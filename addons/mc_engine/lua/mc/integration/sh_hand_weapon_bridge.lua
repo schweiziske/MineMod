@@ -166,7 +166,7 @@ end
 
 function Bridge.ConfigureBaseClasses( owner, handClass, inventoryClass )
 	if not validIdentifier( owner, 64 ) then return false, "invalid_owner" end
-	if not validClassName( handClass ) or not validClassName( inventoryClass ) then
+	if not validClassName( handClass ) or ( inventoryClass ~= nil and not validClassName( inventoryClass ) ) then
 		return false, "invalid_weapon_class"
 	end
 	if Bridge.BaseClassOwner and Bridge.BaseClassOwner ~= owner then return false, "base_classes_owned" end
@@ -207,7 +207,7 @@ end
 
 function Bridge.IsInventoryControlledClass( value )
 	local className = classNameFor( value )
-	return className == Bridge.HandClass or className == Bridge.InventoryClass or Bridge.IsManagedClass( className )
+	return className ~= nil and ( className == Bridge.HandClass or className == Bridge.InventoryClass or Bridge.IsManagedClass( className ) )
 end
 
 -- External resolver SWEPs may own a native first-person presentation path

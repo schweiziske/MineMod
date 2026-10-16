@@ -562,12 +562,15 @@ local function createConfigRow( parent, scope, item, rowIndex )
 	controls:SetWide( 350 )
 	controls.Paint = function() end
 
-	if item.kind == "action" and item.action == "texture_pack_manager" then
+	if item.kind == "action" and ( item.action == "texture_pack_manager" or item.action == "save_manager" ) then
 		local open = vgui.Create( "DButton", controls )
 		open:Dock( FILL )
 		open:DockMargin( 0, 27, 12, 27 )
 		styleFlatButton( open, { label = configText( "Open manager", "打开管理器" ) } )
-		open.DoClick = function() MC.OpenTexturePackManager() end
+		open.DoClick = function()
+			if item.action == "save_manager" then MC.OpenSaveManager()
+			else MC.OpenTexturePackManager() end
+		end
 	elseif item.kind == "preset" then
 		createPresetControl( controls )
 	elseif item.kind == "bool" then
@@ -1137,6 +1140,18 @@ end )
 concommand.Add( "mc_config", function()
 	MC.OpenConfigMenu()
 end )
+
+list.Set( "DesktopWindows", "mc_config", {
+	title = "MC Config",
+	icon = "mc/ui/config_grass.png",
+	width = 1,
+	height = 1,
+	init = function( _, window )
+		-- The configuration UI owns its frame; discard the sandbox placeholder.
+		window:Remove()
+		MC.OpenConfigMenu()
+	end,
+} )
 
 if MC.RegisterLanguageChanged then
 	MC.RegisterLanguageChanged( "mc_config_ui", function()

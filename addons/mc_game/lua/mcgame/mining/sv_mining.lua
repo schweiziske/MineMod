@@ -130,7 +130,7 @@ end
 -- A fresh attack press still breaks immediately; only continueDestroyBlock is
 -- throttled.  Keeping this state on the player makes mc_item_hand and external
 -- MCITEM proxy SWEPs obey the same cadence even when the selected SWEP changes.
-function SV.TryCreativeBreak( ply, bx, by, bz, options )
+local function tryCreativeBreak( ply, bx, by, bz, options, validatedAim )
 	if not IsValid( ply ) or not ply:IsPlayer() or not ply:Alive() then return false, "invalid_player" end
 	if not ( SV.PlayerIsCreative and SV.PlayerIsCreative( ply ) ) then return false, "not_creative" end
 	bx, by, bz = math.floor( tonumber( bx ) or 0 ), math.floor( tonumber( by ) or 0 ), math.floor( tonumber( bz ) or 0 )
@@ -140,7 +140,8 @@ function SV.TryCreativeBreak( ply, bx, by, bz, options )
 		if SV.CancelMining then SV.CancelMining( ply, "creative_item_cannot_destroy" ) end
 		return false, "creative_item_cannot_destroy"
 	end
-	local aimAllowed, aimError = currentAimAllowsBlockAttack( ply, bx, by, bz )
+	local aimAllowed, aimError = true, nil
+	if not validatedAim then aimAllowed, aimError = currentAimAllowsBlockAttack( ply, bx, by, bz ) end
 	if not aimAllowed then
 		if SV.CancelMining then SV.CancelMining( ply, aimError ) end
 		return false, aimError
@@ -152,15 +153,104 @@ function SV.TryCreativeBreak( ply, bx, by, bz, options )
 		state = { nextContinueAt = 0 }
 		SV.CreativeDestroyStates[ply] = state
 	end
-	if options.initialPress ~= true and now < ( state.nextContinueAt or 0 ) then
+	local coolingDown = now < ( state.nextContinueAt or 0 )
+	-- Requests can arrive together after network jitter. Their CUserCmd spacing
+	-- carries the input cadence; receive-time spacing does not.
+	if validatedAim and state.nextContinueCommand then
+		coolingDown = options.commandNumber < state.nextContinueCommand
+	end
+	if options.initialPress ~= true and coolingDown then
 		return false, "creative_destroy_delay", state.nextContinueAt
 	end
 
-	state.nextContinueAt = now + CREATIVE_DESTROY_DELAY
 	if SV.CancelMining then SV.CancelMining( ply, "creative_break" ) end
 	if not SV.Break then return false, "break_api_unavailable" end
-	return SV.Break( ply, bx, by, bz, { damageTool = false } )
+	local broke, result = SV.Break( ply, bx, by, bz, { damageTool = false } )
+	if broke then
+		state.nextContinueAt = now + CREATIVE_DESTROY_DELAY
+		state.nextContinueCommand = validatedAim and ( options.commandNumber
+			+ math.ceil( CREATIVE_DESTROY_DELAY / engine.TickInterval() ) ) or nil
+	end
+	return broke, result
 end
+
+function SV.TryCreativeBreak( ply, bx, by, bz, options )
+	return tryCreativeBreak( ply, bx, by, bz, options )
+end
+
+-- Multiplayer hand attacks submit the cell selected BEFORE local prediction.
+-- Re-picking from a later EyeAngles/CUserCmd can target another cell, and a
+-- separate SWEP acknowledgement can arrive before this request is processed.
+util.AddNetworkString( "mc_hand_creative_break" )
+local creativeRequests = setmetatable( {}, { __mode = "k" } )
+
+local function validHitComponent( value )
+	return value == value and value >= -1 and value <= 2
+end
+
+local function requestedCreativeBreak( ply, bx, by, bz, stateId, offset, commandNumber, initialPress )
+	if not ply:Alive() or ply:InVehicle() then return false, "player_invalid" end
+	local weapon = ply:GetActiveWeapon()
+	if not IsValid( weapon ) or weapon:GetClass() ~= "mc_item_hand" then return false, "weapon_changed" end
+	local record = SV.GetPlayerInventoryRecord( ply, false )
+	if not record or record.session then return false, "inventory_unavailable" end
+	if not SV.PlayerIsCreative( ply ) then return false, "not_creative" end
+	if MC.GetBlockState( bx, by, bz ) ~= stateId then return false, "block_changed" end
+	if not validHitComponent( offset.x ) or not validHitComponent( offset.y )
+		or not validHitComponent( offset.z ) then return false, "invalid_hit_position" end
+	local eye, eyeError = MC.API.Coords.EntityEyeWorldPos( ply )
+	if not eye then return false, eyeError end
+	local size, reach = MC.API.Coords.BlockSize(), MC.CurrentReach()
+	if reach <= 0 then reach = size * 5 end
+	if not MC.ReachAllowsEye( eye, bx, by, bz, reach ) then return false, "out_of_reach" end
+	local hit = MC.API.Coords.CellMin( bx, by, bz ) + offset * size
+	local direction = hit - eye
+	local distance = direction:Length()
+	if distance <= 0.000001 or distance > reach + size * 2 then return false, "invalid_hit_distance" end
+	direction:Normalize()
+	-- Use the submitted surface point, not a later view direction. The server
+	-- still traces its own world and rejects walls, other cells and entities.
+	local aim = MC.TraceBlockRay( eye, direction, distance + size * 0.001, MC.ClipFluidNone )
+	if not aim or aim.bx ~= bx or aim.by ~= by or aim.bz ~= bz then return false, "target_occluded" end
+	local entity = MC.TraceEntityBeforeBlock( ply, aim, direction )
+	if IsValid( entity ) then return false, "entity_occluded" end
+	if SV.CancelSelectedItemUse then SV.CancelSelectedItemUse( ply, "primary_attack" ) end
+	return tryCreativeBreak( ply, bx, by, bz,
+		{ initialPress = initialPress, commandNumber = commandNumber }, true )
+end
+
+net.Receive( "mc_hand_creative_break", function( _, ply )
+	local generation, commandNumber = net.ReadUInt( 32 ), net.ReadUInt( 32 )
+	local bx, by, bz = net.ReadInt( MC.Net.COORD_BITS ), net.ReadInt( MC.Net.COORD_BITS ), net.ReadInt( MC.Net.COORD_BITS )
+	local stateId = net.ReadUInt( 32 )
+	local offset = Vector( net.ReadFloat(), net.ReadFloat(), net.ReadFloat() )
+	local initialPress = net.ReadBool()
+	if generation ~= SV.WorldGeneration or commandNumber == 0 then return end
+	local previous = creativeRequests[ply]
+	if previous and previous.generation == generation and commandNumber <= previous.commandNumber then return end
+	if not previous then previous = {}; creativeRequests[ply] = previous end
+	previous.generation, previous.commandNumber = generation, commandNumber
+	local broke, result = requestedCreativeBreak( ply, bx, by, bz, stateId, offset, commandNumber, initialPress )
+	if not broke then SV.SyncBreakPlan( ply, bx, by, bz ) end
+	-- This is the ONLY acknowledgement of this creative input. It follows the
+	-- transaction/correction, so the client retires the matching prediction.
+	SV.AcknowledgeBlockPrediction( ply, 2, commandNumber )
+	if broke then
+		net.Start( "mc_creative_break_anim" )
+			net.WriteInt( bx, MC.Net.COORD_BITS )
+			net.WriteInt( by, MC.Net.COORD_BITS )
+			net.WriteInt( bz, MC.Net.COORD_BITS )
+		net.Send( ply )
+	else
+		local reason = type( result ) == "table" and result.error or result
+		net.Start( "mc_hand_creative_break" )
+			net.WriteString( tostring( reason or "break_rejected" ) )
+			net.WriteInt( bx, MC.Net.COORD_BITS )
+			net.WriteInt( by, MC.Net.COORD_BITS )
+			net.WriteInt( bz, MC.Net.COORD_BITS )
+		net.Send( ply )
+	end
+end )
 
 local function spawnBlockDrops( ply, session, stacks )
 	if not SV.SpawnItemDrop then return {} end
@@ -374,7 +464,7 @@ local function sessionStillValid( ply, session )
 	if session.requireAttackHeld and not ply:KeyDown( IN_ATTACK ) then return false, "released" end
 	local weapon = ply:GetActiveWeapon()
 	if session.source == "inventory" then
-		if not IsValid( weapon ) or ( weapon:GetClass() ~= "mc_item_hand" and weapon:GetClass() ~= "mc_inventory" ) then return false, "weapon_changed" end
+		if not IsValid( weapon ) or weapon:GetClass() ~= "mc_item_hand" then return false, "weapon_changed" end
 		local fingerprint, fingerprintError = selectedFingerprint( ply )
 		if not fingerprint or fingerprint ~= session.selectedFingerprint then return false, fingerprintError or "held_item_changed" end
 	else
