@@ -355,6 +355,8 @@ UI.UIOffsetXConVar = UI.UIOffsetXConVar or createClientSetting( "mc_inventory_ui
 	"Minecraft inventory screen horizontal offset in screen pixels", -4096, 4096 )
 UI.UIOffsetYConVar = UI.UIOffsetYConVar or createClientSetting( "mc_inventory_ui_offset_y", 0,
 	"Minecraft inventory screen vertical offset in screen pixels", -4096, 4096 )
+UI.ReturnButtonConVar = UI.ReturnButtonConVar or createClientSetting( "mc_inventory_return_button", 1,
+	"Show the Return to GMod button below the Minecraft player inventory", 0, 1 )
 
 -- mc_config is engine-owned, so the optional game layer contributes its row
 -- through the public metadata API instead of making mc_engine hard-code a
@@ -376,6 +378,13 @@ if configAPI and configAPI.RegisterCategory then
 			help = "Maximum GUI scale; 0 uses the largest integer scale allowed by the current resolution.",
 			helpZH = "最大界面缩放；0 表示根据当前分辨率自动使用可用的最大整数缩放。",
 			unit = "scale",
+		}, {
+			name = "mc_inventory_return_button",
+			label = "Return to GMod button",
+			labelZH = "显示返回 GMod 按钮",
+			kind = "bool",
+			help = "Show the button below the player inventory. Changes apply immediately.",
+			helpZH = "显示玩家物品栏下方的返回按钮，修改后立即生效。",
 		} },
 	} )
 	if configOK == false then UI.ConfigRegistrationError = tostring( configError or "config_registration_failed" ) end
@@ -534,7 +543,8 @@ function UI.ConfigureBitmapTextEntry( entry, options )
 end
 
 if cvars and cvars.AddChangeCallback then
-	for _, name in ipairs( { "mc_inventory_ui_scale", "mc_inventory_ui_offset_x", "mc_inventory_ui_offset_y" } ) do
+	for _, name in ipairs( { "mc_inventory_ui_scale", "mc_inventory_ui_offset_x", "mc_inventory_ui_offset_y",
+		"mc_inventory_return_button" } ) do
 		cvars.AddChangeCallback( name, function()
 			if IsValid( UI.Screen ) and UI.Screen.Reflow then UI.Screen:Reflow() end
 		end, "mc_inventory_ui_layout" )

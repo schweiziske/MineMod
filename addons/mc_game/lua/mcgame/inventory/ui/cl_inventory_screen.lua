@@ -11,6 +11,34 @@ MC = MC or {}
 MC.InventoryUI = MC.InventoryUI or {}
 
 local UI = MC.InventoryUI
+local escapeConsumedFrame
+
+local function closeWithEscape( screen )
+	-- The engine's pause-menu event can arrive after VGUI removed the screen.
+	-- Keep ownership of this key press until release, independent of the panel.
+	escapeConsumedFrame = FrameNumber()
+	gui.HideGameUI()
+	screen:CloseInventory( true )
+end
+
+hook.Add( "OnPauseMenuShow", "mc_inventory_consume_escape", function()
+	if IsValid( UI.Screen ) and UI.Screen:IsVisible() then
+		closeWithEscape( UI.Screen )
+		return false
+	end
+	if escapeConsumedFrame then return false end
+end )
+
+hook.Add( "Think", "mc_inventory_escape_release", function()
+	if not escapeConsumedFrame then return end
+	-- Also cover engine/VGUI event orderings where the game UI became visible
+	-- before the inventory received ESC. Do not retain a removed panel here.
+	if gui.IsGameUIVisible() then gui.HideGameUI() end
+	if FrameNumber() > escapeConsumedFrame and not input.IsKeyDown( KEY_ESCAPE ) then
+		escapeConsumedFrame = nil
+	end
+end )
+
 local SURVIVAL_W, SURVIVAL_H = 176, 166
 local CREATIVE_W, CREATIVE_H = 195, 136
 local CREATIVE_COLS, CREATIVE_ROWS = 9, 5
@@ -739,7 +767,7 @@ function PANEL:Reflow()
 	self.SearchEntry.MCBitmapScale = self.Scale
 	self.AnvilEntry.MCBitmapScale = self.Scale
 	self.ContentLayer:SetSize( ScrW(), ScrH() )
-	self.ReturnButton:SetVisible( self.MenuKind == "player" )
+	self.ReturnButton:SetVisible( self.MenuKind == "player" and UI.ReturnButtonConVar:GetBool() )
 	self.ReturnButton:SetSize( 110 * self.Scale, 20 * self.Scale )
 	-- Bottom creative tabs extend 28 GUI pixels past the inventory background.
 	-- Keep the return button below that entire row, with a 10-pixel gap.
@@ -1512,7 +1540,7 @@ end
 function PANEL:OnKeyCodePressed( code )
 	if code == KEY_ESCAPE then
 		self.EscapeWasDown = true
-		self:CloseInventory( true )
+		closeWithEscape( self )
 		return
 	end
 	if self.SearchEntry:IsVisible() and self.SearchEntry:HasFocus() then return end
@@ -1569,7 +1597,7 @@ function PANEL:Think()
 	end
 	local escape = input.IsKeyDown( KEY_ESCAPE )
 	if escape and not self.EscapeWasDown then
-		self:CloseInventory( true )
+		closeWithEscape( self )
 		return
 	end
 	self.EscapeWasDown = escape
