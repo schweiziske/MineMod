@@ -1,4 +1,4 @@
--- Server-authoritative per-player game modes and the mc_gamemode command.
+-- Server-authoritative per-player modes, client ConVar requests and admin command.
 
 if not SERVER then return end
 
@@ -8,9 +8,17 @@ MC.SV = MC.SV or {}
 local SV = MC.SV
 SV.PlayerGameModes = SV.PlayerGameModes or {}
 local PDATA_KEY = "mc_gamemode"
+util.AddNetworkString( "mc_player_gamemode" )
+
+local function sendMode( ply, mode )
+	if not IsValid( ply ) or ply:IsBot() then return end
+	net.Start( "mc_player_gamemode" )
+		net.WriteBool( mode == "creative" )
+	net.Send( ply )
+end
 
 local function validMode( value )
-	return MC.NormalizeGameMode( value ) or "survival"
+	return MC.NormalizeGameMode( value ) or "creative"
 end
 
 local function notify( ply, message )
@@ -34,7 +42,7 @@ function SV.GetPlayerGameMode( ply )
 	if not mode then
 		mode = persistentMode( ply )
 		if not mode then
-			local configured = MC.Config.DefaultGameMode and MC.Config.DefaultGameMode:GetString() or "survival"
+			local configured = MC.Config.DefaultGameMode and MC.Config.DefaultGameMode:GetString() or "creative"
 			mode = validMode( configured )
 		end
 		SV.PlayerGameModes[ply] = mode
@@ -57,8 +65,30 @@ function SV.SetPlayerGameMode( ply, value, actor )
 	if not ply:IsBot() then ply:SetPData( PDATA_KEY, mode ) end
 
 	if MC.RunEvent and oldMode ~= mode then MC.RunEvent( "MC.PlayerGameModeChanged", ply, oldMode, mode, actor ) end
+	sendMode( ply, mode )
 	return true, oldMode, mode
 end
+
+local function maySwitchOwnMode( ply )
+	return ply:IsAdmin() or MC.Config.AllowGameModeSwitch:GetBool()
+end
+
+local nextModeRequest = setmetatable( {}, { __mode = "k" } )
+net.Receive( "mc_player_gamemode", function( _, ply )
+	local change = net.ReadBool()
+	local mode
+	if change then mode = net.ReadBool() and "creative" or "survival" end
+	local now = CurTime()
+	if change and now >= ( nextModeRequest[ply] or 0 ) then
+		nextModeRequest[ply] = now + 0.2
+		if maySwitchOwnMode( ply ) then
+			SV.SetPlayerGameMode( ply, mode, ply )
+			return
+		end
+		notify( ply, "服务器已关闭自由切换 Minecraft 游戏模式" )
+	end
+	sendMode( ply, SV.GetPlayerGameMode( ply ) )
+end )
 
 local function findTargets( query )
 	query = string.Trim( tostring( query or "" ) )
@@ -80,16 +110,16 @@ local function findTargets( query )
 end
 
 local function command( ply, _, args )
-	if IsValid( ply ) and not ply:IsAdmin() then
-		notify( ply, "只有管理员可以修改 Minecraft 游戏模式" )
+	local query = table.concat( args, " ", 2 )
+	if IsValid( ply ) and not ply:IsAdmin() and ( query ~= "" or not maySwitchOwnMode( ply ) ) then
+		notify( ply, "没有权限修改该玩家的 Minecraft 游戏模式" )
 		return
 	end
 	local mode = MC.NormalizeGameMode( args[1] )
 	if not mode then
-		notify( ply, "用法: mc_gamemode <creative|survival> [玩家]" )
+		notify( ply, "用法: mc_set_gamemode <creative|survival> [玩家]" )
 		return
 	end
-	local query = table.concat( args, " ", 2 )
 	local targets
 	if query == "" and IsValid( ply ) then
 		targets = { ply }
@@ -105,7 +135,9 @@ local function command( ply, _, args )
 	if target ~= ply then notify( target, string.format( "管理员将你的游戏模式设置为 %s", mode ) ) end
 end
 
-concommand.Add( "mc_gamemode", command, nil, "Set a player's Minecraft mode: mc_gamemode <creative|survival> [player]" )
+-- Release the old command name so it can be used by the client ConVar.
+concommand.Remove( "mc_gamemode" )
+concommand.Add( "mc_set_gamemode", command, nil, "Set a player's Minecraft mode: mc_set_gamemode <creative|survival> [player]" )
 
 hook.Add( "PlayerInitialSpawn", "mc_initialize_player_game_mode", function( ply )
 	timer.Simple( 0, function()

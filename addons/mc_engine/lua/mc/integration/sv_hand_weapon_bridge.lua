@@ -237,7 +237,14 @@ hook.Add( "PlayerSwitchWeapon", "mc_hand_weapon_bridge_enter_inventory_hand", fu
 	local className = newWeapon:GetClass()
 	-- Integrations may still register a separate inventory-only entry point.
 	if className == Bridge.InventoryClass then return end
-	if className ~= Bridge.HandClass and not Bridge.IsManagedClass( className ) then return end
+	if className ~= Bridge.HandClass and not Bridge.IsManagedClass( className ) then
+		-- Closing an inventory queues held-item reconciliation. A deliberate
+		-- return to a GMod weapon must cancel that work before it can switch back.
+		nextSwitchGeneration( ply )
+		Bridge.PendingReconciles[ply] = nil
+		setTransition( ply, nil )
+		return
+	end
 	timer.Simple( 0, function()
 		if not IsValid( ply ) or activeWeapon( ply ) ~= newWeapon then return end
 		if className ~= Bridge.HandClass then

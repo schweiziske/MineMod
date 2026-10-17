@@ -79,6 +79,12 @@ MC.ConfigConVars = {
 				item( "mc_texture_packs", "Texture pack manager", "材质包管理器", "action",
 					"Choose a registered texture pack and apply it when ready.",
 					"选择材质包，点击应用后生效。", { action = "texture_pack_manager" } ),
+				item( "mc_gamemode", "Minecraft game mode", "Minecraft 游戏模式", "choice",
+					"Switch your own mode; the server controls whether switching is allowed.",
+					"切换自己的创造／生存模式；是否允许切换由服务器控制。", { choices = {
+						choice( "creative", "Creative", "创造" ),
+						choice( "survival", "Survival", "生存" ),
+					} } ),
 		} ),
 
 		category( "texture_pack", "interface", "Texture pack", "材质包",
@@ -749,6 +755,19 @@ MC.ConfigConVars = {
 			item( "mc_keep_inventory", "Keep inventory on death", "死亡不掉落", "bool",
 				"Keep all Minecraft inventory and equipment after death.",
 				"玩家死亡后保留全部 Minecraft 背包与装备。" ),
+		} ),
+		category( "player_game_mode", "gameplay", "Player game mode", "玩家游戏模式",
+			"Default mode and permission to switch between creative and survival.",
+			"默认模式以及自由切换创造／生存的权限。", {
+			item( "mc_default_gamemode", "Default game mode", "默认游戏模式", "choice",
+				"Mode for players without a saved mode; defaults to creative.",
+				"未保存过模式的玩家使用的默认模式，默认为创造。", { choices = {
+					choice( "creative", "Creative", "创造" ),
+					choice( "survival", "Survival", "生存" ),
+				} } ),
+			item( "mc_allow_gamemode_switch", "Allow mode switching", "允许自由切换模式", "bool",
+				"Allow ordinary players to switch their own mode; enabled by default. Administrators may always switch.",
+				"允许普通玩家切换自己的创造／生存模式，默认开启；管理员始终可切换。" ),
 		} ),
 	},
 }

@@ -810,6 +810,24 @@ function MC.RequestInventoryOpen()
 	return true
 end
 
+function MC.RequestInventoryExitHand()
+	if not State.session or State.session.kind ~= "player" then return false end
+	local now = RealTime()
+	if State.lastExitHandRequest and now - State.lastExitHandRequest < 0.25 then return false end
+	State.lastExitHandRequest = now
+	net.Start( "mc_inventory_exit_hand" )
+		net.WriteString( State.session.token )
+	net.SendToServer()
+	return true
+end
+
+net.Receive( "mc_inventory_exit_hand", function()
+	local screen = MC.InventoryUI and MC.InventoryUI.Screen
+	if not IsValid( screen ) then return end
+	screen.ErrorText = MC.Language() == "zh_cn" and "没有可切换的 GMod 武器" or "No GMod weapon available"
+	screen.ErrorUntil = RealTime() + 2.5
+end )
+
 function MC.CloseInventorySession()
 	if not State.session then return false end
 	net.Start( "mc_inventory_close" )

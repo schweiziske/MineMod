@@ -386,6 +386,43 @@ end
 
 vgui.Register( "MCEnchantingOption", ENCHANTING_BUTTON, "DButton" )
 
+local RETURN_BUTTON = {}
+local RETURN_BACKGROUND = Color( 112, 112, 112 )
+local RETURN_HOVER = Color( 136, 136, 156 )
+local RETURN_LIGHT = Color( 190, 190, 190 )
+local RETURN_DARK = Color( 55, 55, 55 )
+
+function RETURN_BUTTON:Init()
+	self:SetText( "" )
+	self:SetCursor( "hand" )
+end
+
+function RETURN_BUTTON:Paint( w, h )
+	local scale = self:GetParent().Scale
+	local pressed = self:IsDown()
+	surface.SetDrawColor( color_black )
+	surface.DrawRect( 0, 0, w, h )
+	surface.SetDrawColor( self:IsHovered() and RETURN_HOVER or RETURN_BACKGROUND )
+	surface.DrawRect( scale, scale, w - 2 * scale, h - 2 * scale )
+	surface.SetDrawColor( pressed and RETURN_DARK or RETURN_LIGHT )
+	surface.DrawRect( scale, scale, w - 2 * scale, scale )
+	surface.DrawRect( scale, scale, scale, h - 2 * scale )
+	surface.SetDrawColor( pressed and RETURN_LIGHT or RETURN_DARK )
+	surface.DrawRect( scale, h - 2 * scale, w - 2 * scale, scale )
+	surface.DrawRect( w - 2 * scale, scale, scale, h - 2 * scale )
+	local label = MC.Language() == "zh_cn" and "返回 GMod" or "Return to GMod"
+	local offset = pressed and scale or 0
+	UI.DrawText( label, w * 0.5 + offset, h * 0.5 + offset, scale,
+		color_white, TEXT_ALIGN_CENTER, true, TEXT_ALIGN_CENTER )
+	return true
+end
+
+function RETURN_BUTTON:DoClick()
+	if MC.RequestInventoryExitHand() then UI.PlayButtonSound() end
+end
+
+vgui.Register( "MCInventoryReturnButton", RETURN_BUTTON, "DButton" )
+
 local PANEL = {}
 
 function PANEL:Init()
@@ -411,6 +448,8 @@ function PANEL:Init()
 	self.CurrentItems = {}
 	self.SelectedTabKey = UI.LastCreativeTab or "building_blocks"
 	self.RecipeBookOpen = false
+	self.ReturnButton = vgui.Create( "MCInventoryReturnButton", self )
+	self.ReturnButton:SetZPos( 40 )
 	self.RecipeBookToggle = vgui.Create( "MCRecipeBookToggle", self )
 	self.RecipeBookToggle:Configure( self, self.Scale )
 	-- AbstractRecipeBookScreen adds this as a renderable widget above the
@@ -700,6 +739,12 @@ function PANEL:Reflow()
 	self.SearchEntry.MCBitmapScale = self.Scale
 	self.AnvilEntry.MCBitmapScale = self.Scale
 	self.ContentLayer:SetSize( ScrW(), ScrH() )
+	self.ReturnButton:SetVisible( self.MenuKind == "player" )
+	self.ReturnButton:SetSize( 110 * self.Scale, 20 * self.Scale )
+	-- Bottom creative tabs extend 28 GUI pixels past the inventory background.
+	-- Keep the return button below that entire row, with a 10-pixel gap.
+	self.ReturnButton:SetPos( math.floor( self.Left + ( self.ContentW - 110 ) * self.Scale * 0.5 ),
+		self.Top + ( self.ContentH + ( self.Creative and 38 or 10 ) ) * self.Scale )
 	self:LayoutTabs()
 	self:LayoutVisibleSlots()
 	self:LayoutSpecialControls()
@@ -1435,12 +1480,17 @@ function PANEL:PaintOver()
 		if lines then UI.Tooltip.DrawLines( lines, mouseX, mouseY, self.Scale ) end
 	end
 	if self.ErrorUntil and RealTime() < self.ErrorUntil then
-		UI.DrawText( self.ErrorText, ScrW() * 0.5, self.Top - 44 * self.Scale, self.Scale, Color( 255, 85, 85, 255 ), TEXT_ALIGN_CENTER, true )
+		UI.DrawText( self.ErrorText, ScrW() * 0.5, self.Top - 72 * self.Scale, self.Scale, Color( 255, 85, 85, 255 ), TEXT_ALIGN_CENTER, true )
 	end
 end
 
 function PANEL:PointInsideContent( x, y )
 	if not self.Left then return false end
+	if self.ReturnButton:IsVisible() then
+		local buttonX, buttonY = self.ReturnButton:GetPos()
+		if x >= buttonX and y >= buttonY and x < buttonX + self.ReturnButton:GetWide()
+		and y < buttonY + self.ReturnButton:GetTall() then return true end
+	end
 	local top = self.Top
 	local bottom = self.Top + self.ContentH * self.Scale
 	if self.Creative then top = top - 32 * self.Scale bottom = bottom + 32 * self.Scale end

@@ -18,6 +18,22 @@ local BACKGROUND_ACTION = 65535
 local SLOT_BITS = 7
 local MAX_MENU_SLOTS = 127
 
+SV.InventoryReturnWeapons = SV.InventoryReturnWeapons or setmetatable( {}, { __mode = "k" } )
+
+local function isOrdinaryWeapon( weapon, ply )
+	return IsValid( weapon ) and weapon:GetOwner() == ply
+		and weapon:GetClass() ~= "mc_item_hand"
+		and weapon.MCHandWeaponBridgeProxy ~= true
+		and not weapon:GetNW2Bool( "MCITEM_InventoryProxy", false )
+end
+
+hook.Add( "PlayerSwitchWeapon", "mc_inventory_remember_return_weapon", function( ply, oldWeapon, newWeapon )
+	if isOrdinaryWeapon( oldWeapon, ply ) and IsValid( newWeapon )
+	and not isOrdinaryWeapon( newWeapon, ply ) then
+		SV.InventoryReturnWeapons[ply] = oldWeapon
+	end
+end )
+
 util.AddNetworkString( "mc_inventory_world_action" )
 
 local function creativeAllowed( ply )
@@ -482,6 +498,32 @@ local function sessionStillValid( session )
 end
 
 net.Receive( "mc_inventory_open_request", function( _, ply ) SV.OpenPlayerInventory( ply, "request" ) end )
+
+net.Receive( "mc_inventory_exit_hand", function( _, ply )
+	local token = net.ReadString()
+	if not IsValid( ply ) or not ply:Alive() then return end
+	local record = SV.GetPlayerInventoryRecord( ply, false )
+	local session = record and record.session
+	if not session or session.kind ~= "player" or session.token ~= token then return end
+	if not actionRateAllowed( record ) or not MC.API.HandWeapon.IsInventoryActive( ply ) then return end
+	local target = SV.InventoryReturnWeapons[ply]
+	if not isOrdinaryWeapon( target, ply ) then
+		target = ply:GetWeapon( "weapon_physgun" )
+		if not isOrdinaryWeapon( target, ply ) then
+			for _, weapon in ipairs( ply:GetWeapons() ) do
+				if isOrdinaryWeapon( weapon, ply ) then target = weapon break end
+			end
+		end
+	end
+	if not isOrdinaryWeapon( target, ply ) then
+		net.Start( "mc_inventory_exit_hand" )
+		net.Send( ply )
+		return
+	end
+	-- Close normally so cursor/crafting stacks are returned before switching.
+	if not SV.ClosePlayerInventory( ply, "return_to_gmod", token ) then return end
+	ply:SelectWeapon( target:GetClass() )
+end )
 
 net.Receive( "mc_inventory_action", function( _, ply )
 	local containerId = net.ReadUInt( 16 )

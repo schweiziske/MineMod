@@ -91,6 +91,7 @@ local SHARED = {
 	"mc/api/sh_api.lua",
 	"mc/api/sh_manifest.lua",
 	"mc/registry/sh_builtin_api_migration.lua",
+	"mc/registry/sh_builtin_color_items.lua",
 	"mc/integration/sh_hand_weapon_bridge.lua",
 }
 local SERVER_FILES = {
