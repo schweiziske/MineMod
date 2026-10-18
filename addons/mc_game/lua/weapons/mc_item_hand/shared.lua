@@ -49,7 +49,9 @@ local ATTACK_INTERVAL = 1 / 20
 local RIGHT_CLICK_DELAY = 4 / 20
 local USE_TICK_INTERVAL = 0.05
 local CREATIVE_DESTROY_DELAY = 5 / 20
+local OFFHAND_SWING_NET = "mc_inventory_offhand_swing"
 local PROXY_INTERACT_NET = "mc_inventory_proxy_world_interact"
+if SERVER then util.AddNetworkString( OFFHAND_SWING_NET ) end
 if SERVER then util.AddNetworkString( PROXY_INTERACT_NET ) end
 local COMBAT_INFRASTRUCTURE = {
 	mc_block_cluster = true, mc_chunk = true, mc_chunk_phys = true,
@@ -160,17 +162,6 @@ local function offhandStackForRealm( ply )
 	return state and state.equipment and state.equipment.offhand or nil
 end
 
--- Minecraft's client attempts MAIN_HAND first and only sends OFF_HAND when the
--- first interaction returns PASS. nil is this bridge's PASS; false is FAIL and
--- therefore stops the second hand.
-local function runItemEntityInteractionHands( ply, target, mainStack, trace, preview, source )
-	local result = runItemEntityInteraction(
-		ply, target, mainStack, trace, preview, source, "mainhand" )
-	if result ~= nil then return result, "mainhand" end
-	return runItemEntityInteraction(
-		ply, target, offhandStackForRealm( ply ), trace, preview, source, "offhand" ), "offhand"
-end
-
 local function breakTarget( ply, aim, trace )
 	if aim then return aim.bx, aim.by, aim.bz end
 	if not trace or not trace.Hit then return nil end
@@ -250,6 +241,7 @@ end
 
 local function isUseCandidate( stack, definition )
 	if not stack or not definition then return false end
+	if stack.item == "minecraft:flint_and_steel" or stack.item == "minecraft:fire_charge" then return true end
 	if MC.ItemBehavior and MC.ItemBehavior( stack ) then return true end
 	if MC.ItemIsConsumable and MC.ItemIsConsumable( stack ) then return true end
 	return isfunction and isfunction( definition.useHandler ) and definition.useHandler ~= nil
@@ -325,11 +317,21 @@ local function logisticsSecondaryUseSuppressesBlock( ply, stack )
 end
 
 local function proxyWorldInteractionCandidate( ply, stack )
+	-- Using either hand locks the complete startUseItem loop, including the
+	-- block/entity preflight, until the held use is released or completed.
+	if SERVER then
+		local record = MC.SV.GetPlayerInventoryRecord( ply, false )
+		if record and ( record.itemUse or record.session ) then return nil, nil end
+	elseif ply:GetNWBool( "mc_item_using", false ) then return nil, nil end
+	local weapon = ply:GetActiveWeapon()
+	if IsValid( weapon ) and weapon.IsMCUsingItem and weapon:IsMCUsingItem() then return nil, nil end
+	-- Spawn-menu weapons retain their own scope/secondary fire behavior.
+	if MC.SpawnmenuWeapons and MC.SpawnmenuWeapons.Class( stack ) then return nil, nil end
 	local vehicle = MC.TraceMinecraftVehicle and select( 1, MC.TraceMinecraftVehicle( ply, 3, MASK_SOLID ) ) or nil
 	if IsValid( vehicle ) then return "vehicle", vehicle end
 	local entity, trace = traceItemEntityTarget( ply )
 	if IsValid( entity ) then
-		local preview = runItemEntityInteractionHands( ply, entity, stack, trace, true, "inventory_proxy_preview" )
+		local preview = runItemEntityInteraction( ply, entity, stack, trace, true, "inventory_proxy_preview", "mainhand" )
 		if preview ~= nil then return "entity", { entity = entity, trace = trace } end
 	end
 	local aim = aimedBlock( ply )
@@ -355,8 +357,8 @@ local function performProxyWorldInteraction( ply, stack, kind, target )
 		return MC.SV.UseMinecraftVehicle( ply, target ) == true
 	end
 	if kind == "entity" and IsValid( target.entity ) then
-		local result = runItemEntityInteractionHands(
-			ply, target.entity, stack, target.trace, false, "inventory_proxy" )
+		local result = runItemEntityInteraction(
+			ply, target.entity, stack, target.trace, false, "inventory_proxy", "mainhand" )
 		-- Same swing as the hand_secondary branch. This is the branch that runs
 		-- while an MCITEM SWEP proxies for the hand, which is most of the time
 		-- once the inventory holds a weapon or food, so leaving it out meant the
@@ -494,10 +496,19 @@ end
 scheduleFoodWorldUsePreflight()
 hook.Add( "OnReloaded", "mc_inventory_food_world_use_preflight", scheduleFoodWorldUsePreflight )
 
-local function consumeSelected( ply )
+local function consumeSelected( ply, hand )
 	local record, stack, definition = selectedRecord( ply )
+	if hand == "offhand" and record then
+		stack = offhandStackForRealm( ply )
+		definition = stack and MC.GetItem( stack.item ) or nil
+	end
 	if not record or not stack or not definition then return nil end
 	if infiniteMaterials( ply ) then return record, nil end
+	if hand == "offhand" then
+		local snapshot = { equipment = MC.SV.EquipmentSnapshot( record ) }
+		record.equipment.offhand = stack.count > 1 and MC.CopyItemStack( stack, stack.count - 1 ) or nil
+		return record, snapshot
+	end
 	local snapshot = MC.ContainerSnapshot( record.container )
 	local slot = MC.ContainerGetSlot( record.container, record.selected )
 	local extracted = slot and MC.InventorySlotTake( slot, 1, { player = ply, reason = "place" } ) or nil
@@ -507,11 +518,19 @@ end
 
 local function commitConsumed( record, snapshot, ply )
 	if not snapshot then return true end
+	if snapshot.equipment then
+		local result = MC.SV.CommitEquipmentMutation( record, snapshot.equipment, { player = ply, reason = "place" } )
+		return result ~= nil
+	end
 	local result = MC.SV.CommitPlayerInventoryMutation( record, snapshot, { player = ply, reason = "place" } )
 	return result ~= nil
 end
 
 local function restoreConsumed( record, snapshot )
+	if record and snapshot and snapshot.equipment then
+		record.equipment.offhand = MC.CopyItemStack( snapshot.equipment.offhand )
+		return
+	end
 	if record and snapshot then MC.ContainerRestore( record.container, snapshot ) end
 end
 
@@ -731,18 +750,38 @@ function SWEP:SendEntityInteractSwing( ply, target )
 	net.Send( ply )
 end
 
-local function secondaryAttack( self )
+local function sendHandSwing( weapon, hand, bx, by, bz )
+	if SERVER then
+		net.Start( hand == "offhand" and OFFHAND_SWING_NET or "mc_creative_place_anim" )
+			net.WriteInt( bx, MC.Net.COORD_BITS )
+			net.WriteInt( by, MC.Net.COORD_BITS )
+			net.WriteInt( bz, MC.Net.COORD_BITS )
+		net.Send( weapon:GetOwner() )
+	elseif hand == "offhand" then
+		MC.StartInventoryOffhandSwing( weapon, bx, by, bz )
+	elseif weapon.StartCreativePlaceAnimation then
+		weapon:StartCreativePlaceAnimation( bx, by, bz )
+	elseif weapon.MCSwing then
+		weapon:MCSwing( CurTime() )
+	end
+end
+
+local function secondaryAttack( self, hand )
+	hand = hand or "mainhand"
 	self:SetNextSecondaryFire( CurTime() + RIGHT_CLICK_DELAY )
 	if CLIENT and not IsFirstTimePredicted() then return end
 	local ply = self:GetOwner()
-	if not IsValid( ply ) then return end
+	if not IsValid( ply ) or not ply:Alive() then return end
 	-- Minecraft.startUseItem does not interrupt an active survival dig.
 	if SERVER and MC.SV and MC.SV.MiningSessions and MC.SV.MiningSessions[ply] then return end
 	if CLIENT and MC.ClientMiningPrediction and not MC.ClientMiningPrediction.completed then return end
 	if SERVER and MC.SV and MC.SV.GetPlayerInventoryRecord then
 		local record = MC.SV.GetPlayerInventoryRecord( ply, false )
-		if record and record.session then return end
-	elseif CLIENT and MC.ClientInventory and MC.ClientInventory.session then return end
+		if record and ( record.session or record.itemUse ) then return end
+	elseif CLIENT then
+		if MC.ClientInventory and MC.ClientInventory.session then return end
+		if ply:GetNWBool( "mc_item_using", false ) then return end
+	end
 	if not self.MCSecondaryHeld then
 		self.MCSecondaryHeld = true
 		self.MCSecondaryStartedAt = CurTime()
@@ -760,13 +799,17 @@ local function secondaryAttack( self )
 	if not trace then self.MCSecondaryHeld = false return end
 	if SERVER then
 		local record, stack, definition = selectedRecord( ply )
+		if hand == "offhand" then
+			stack = offhandStackForRealm( ply )
+			definition = stack and MC.GetItem( stack.item ) or nil
+		end
 		local entity = traceItemEntityTarget( ply )
 		if IsValid( entity ) then
-			local entityResult = runItemEntityInteractionHands(
-				ply, entity, stack, eyeTrace, false, "hand_secondary" )
+			local entityResult = runItemEntityInteraction(
+				ply, entity, stack, eyeTrace, false, "hand_secondary", hand )
 			if entityResult ~= nil then
 				self.MCSecondaryMode = entityResult == true and "entity" or "entity_rejected"
-				if entityResult == true then self:SendEntityInteractSwing( ply, entity ) end
+				if entityResult == true then sendHandSwing( self, hand, aim and aim.bx or 0, aim and aim.by or 0, aim and aim.bz or 0 ) end
 				return
 			end
 		end
@@ -783,22 +826,21 @@ local function secondaryAttack( self )
 		-- client drew and the server refused.
 		local blockUse = aim and blockHasUse( aim.Block, stack ) and MC.SV and MC.SV.Use ~= nil or false
 		if not suppressBlockUse and blockUse
-		and MC.SV.Use( ply, ux, uy, uz, definition and definition.blockId or 0 ) then
+		and MC.SV.Use( ply, ux, uy, uz, definition and definition.blockId or 0, { hand = hand } ) then
 			self.MCSecondaryMode = "block"
-			self:SendIgniterSwing( ply, stack, ux, uy, uz )
+			if igniterStack( stack ) then sendHandSwing( self, hand, ux, uy, uz ) end
 			return
 		end
 		if stack and MC.Decoration and MC.Decoration.IsDecorationItem
 		and MC.Decoration.IsDecorationItem( stack ) and MC.Decoration.Enabled
 		and MC.Decoration.Enabled() then
 			local decorationResult = hook.Run( "MC.TryPlaceDecoration", ply,
-				copiedInteractionStack( stack ), trace, { source = "hand_secondary" } )
+				copiedInteractionStack( stack ), trace, { source = "hand_secondary", hand = hand } )
 			if decorationResult ~= nil then
 				self.MCSecondaryMode = decorationResult == true and "decoration" or "decoration_rejected"
 				return
 			end
 		end
-		local useCandidate = isUseCandidate( stack, definition )
 		-- Written as one `a and b and f() or false, "..."` expression this only
 		-- ever bound useResult to the literal: a call's extra return values are
 		-- dropped unless the call is last in the list. The result is needed
@@ -807,31 +849,35 @@ local function secondaryAttack( self )
 		if MC.SV and MC.SV.BeginSelectedItemUse then
 			used, useResult = MC.SV.BeginSelectedItemUse( ply, {
 				reason = "right_click",
+				hand = hand,
+				allowAnyWeapon = self:GetClass() ~= "mc_item_hand",
+				expectedClass = self:GetClass() ~= "mc_item_hand" and self:GetClass() or nil,
+				inventoryProxyOffhand = hand == "offhand" and self:GetClass() ~= "mc_item_hand",
 				target = aim and { bx = ux, by = uy, bz = uz } or nil,
 			} )
 		end
-		if used or useCandidate then
-			self.MCSecondaryMode = used and "item" or "item_rejected"
+		if used then
+			self.MCSecondaryMode = "item"
 			-- Minecraft swings the arm when useOn/use resolves immediately
 			-- (fire charge, flint and steel). A held use -- food, bow, spyglass --
 			-- runs its own animation and must not also swing.
 			if used and aim and useResult ~= "started" and useResult ~= "already_using" then
-				net.Start( "mc_creative_place_anim" )
-					net.WriteInt( ux, MC.Net.COORD_BITS )
-					net.WriteInt( uy, MC.Net.COORD_BITS )
-					net.WriteInt( uz, MC.Net.COORD_BITS )
-				net.Send( ply )
+				sendHandSwing( self, hand, ux, uy, uz )
 			end
 			return
 		end
 		if not definition or not definition.blockId or not MC.SV or not MC.SV.PlaceState then
-			self:MCReleaseSecondary( "not_placeable" )
+			if hand == "mainhand" then return secondaryAttack( self, "offhand" ) end
+			self.MCSecondaryMode = nil
 			return
 		end
 		-- Block placement is the automatic right-click mode. Keeping this mode
 		-- armed lets weapon_base invoke SecondaryAttack again while the key stays down.
 		self.MCSecondaryMode = "place"
-		if not trace.Hit then return end
+		if not trace.Hit then
+			if hand == "mainhand" then return secondaryAttack( self, "offhand" ) end
+			return
+		end
 		local bx, by, bz, stateId = placeTarget( ply, aim, trace, definition.blockId )
 		if not bx then return end
 		if not infiniteMaterials( ply ) and not stack then return end
@@ -840,7 +886,7 @@ local function secondaryAttack( self )
 			blockEntity = MC.BannerRecordFromItemStack( stack )
 			if not blockEntity then return end
 		end
-		local consumedRecord, snapshot = consumeSelected( ply )
+		local consumedRecord, snapshot = consumeSelected( ply, hand )
 		if not infiniteMaterials( ply ) and not consumedRecord then return end
 		-- isSecondaryUseActive(): sneaking suppresses the automatic double-chest
 		-- merge, so a shift-placed chest stays a separate single chest.
@@ -856,18 +902,15 @@ local function secondaryAttack( self )
 			return
 		end
 		if not commitConsumed( consumedRecord, snapshot, ply ) then restoreConsumed( consumedRecord, snapshot ) end
-		net.Start( "mc_creative_place_anim" )
-			net.WriteInt( bx, MC.Net.COORD_BITS )
-			net.WriteInt( by, MC.Net.COORD_BITS )
-			net.WriteInt( bz, MC.Net.COORD_BITS )
-		net.Send( ply )
+		sendHandSwing( self, hand, bx, by, bz )
 	elseif ply == LocalPlayer() then
 		local state = MC.ClientInventory
 		local stack = state and state.slots[( state.selected or 0 ) + 1] or nil
+		if hand == "offhand" then stack = offhandStackForRealm( ply ) end
 		local entity = traceItemEntityTarget( ply )
 		if IsValid( entity ) then
-			local entityResult = runItemEntityInteractionHands(
-				ply, entity, stack, eyeTrace, true, "hand_preview" )
+			local entityResult = runItemEntityInteraction(
+				ply, entity, stack, eyeTrace, true, "hand_preview", hand )
 			if entityResult ~= nil then
 				self.MCSecondaryMode = entityResult == true and "entity" or "entity_rejected"
 				return
@@ -886,9 +929,35 @@ local function secondaryAttack( self )
 			end
 		end
 		local definition = stack and MC.GetItem( stack.item ) or nil
-		if not definition or not definition.blockId then return end
+		if not definition or not definition.blockId then
+			local candidate = isUseCandidate( stack, definition )
+			local food = stack and MC.ItemFoodData( stack )
+			if food and not food.alwaysEdible and not creativeMode( ply ) and ply:GetNWInt( "mc_food_level", 20 ) >= 20 then candidate = false end
+			local kind = stack and MC.ItemBehavior( stack )
+			if kind == "shield" and ply:GetNWFloat( "mc_shield_disabled_until", 0 ) > CurTime() then candidate = false end
+			if ( kind == "bow" or kind == "crossbow" ) and not MC.ItemCrossbowCharged( stack ) and not creativeMode( ply ) then
+				local function supported( ammo, held )
+					return ammo and ( ammo.item == "minecraft:arrow" or ammo.item == "minecraft:spectral_arrow"
+						or held and kind == "crossbow" and ammo.item == "minecraft:firework_rocket" )
+				end
+				local hasAmmo = supported( offhandStackForRealm( ply ), true ) or supported( selectedStackForRealm( ply ), true )
+				if not hasAmmo then
+					for _, ammo in pairs( state and state.slots or {} ) do
+						if supported( ammo, false ) then hasAmmo = true break end
+					end
+				end
+				if not hasAmmo then candidate = false end
+			end
+			if kind == "trident" and ( stack.damage or 0 ) + 1 >= MC.ItemMaxDamage( stack ) then candidate = false end
+			self.MCSecondaryMode = candidate and "item" or nil
+			if not candidate and hand == "mainhand" then return secondaryAttack( self, "offhand" ) end
+			return
+		end
 		self.MCSecondaryMode = "place"
-		if not trace.Hit then return end
+		if not trace.Hit then
+			if hand == "mainhand" then return secondaryAttack( self, "offhand" ) end
+			return
+		end
 		local bx, by, bz, stateId = placeTarget( ply, aim, trace, definition.blockId )
 		-- Same sneak context as the server write, so the predicted plan does not
 		-- briefly show a merged double chest that the server then rejects.
@@ -899,7 +968,7 @@ local function secondaryAttack( self )
 		end
 		if plan and MC.CanPreviewPlacePlan and MC.CanPreviewPlacePlan( ply, plan ) and MC.PredictPlacementPlan then
 			if MC.PredictPlacementPlan( plan, miningCommandNumber( ply ) ) then
-				self:StartCreativePlaceAnimation( bx, by, bz )
+				sendHandSwing( self, hand, bx, by, bz )
 			end
 		end
 	end
@@ -911,6 +980,53 @@ function SWEP:SecondaryAttack()
 		local ply = self:GetOwner()
 		MC.SV.AcknowledgeBlockPrediction( ply, 1, miningCommandNumber( ply ) )
 	end
+end
+
+-- Called only after an inventory-owned MCITEM weapon's mainhand action passes.
+-- No temporary slot swap: every mutation and held-use state keeps its hand.
+function MC.TryInventoryOffhandInteraction( weapon )
+	if not inventoryProxyWeapon( weapon ) then return false end
+	local ply = weapon:GetOwner()
+	if not IsValid( ply ) or not ply:Alive() or ply:GetActiveWeapon() ~= weapon then return false end
+	if MC.SpawnmenuWeapons and MC.SpawnmenuWeapons.Class( selectedStackForRealm( ply ) ) then return false end
+	secondaryAttack( weapon, "offhand" )
+	if SERVER then MC.SV.AcknowledgeBlockPrediction( ply, 1, miningCommandNumber( ply ) ) end
+	return weapon.MCSecondaryMode ~= nil
+end
+
+function MC.InventoryOffhandUseActive( weapon )
+	if not inventoryProxyWeapon( weapon ) then return false end
+	local ply = weapon:GetOwner()
+	if not IsValid( ply ) or ply:GetActiveWeapon() ~= weapon then return false end
+	if SERVER then
+		local record = MC.SV.GetPlayerInventoryRecord( ply, false )
+		return record ~= nil and record.itemUse ~= nil and record.itemUse.hand == "offhand"
+	end
+	return ply:GetNWBool( "mc_item_using", false ) and ply:GetNWString( "mc_item_using_hand", "" ) == "offhand"
+end
+
+if SERVER then
+	local nextProxyUseTick = 0
+	hook.Add( "Think", "mc_inventory_offhand_proxy_use", function()
+		local now = CurTime()
+		if now < nextProxyUseTick then return end
+		nextProxyUseTick = now + USE_TICK_INTERVAL
+		for ply, record in pairs( MC.SV.PlayerInventories or {} ) do
+			local state = record.itemUse
+			if state and state.context.inventoryProxyOffhand then
+				local context = state.context
+				local weapon = IsValid( ply ) and ply:GetActiveWeapon() or nil
+				if not IsValid( ply ) or not ply:Alive() or record.session
+					or not inventoryProxyWeapon( weapon ) or weapon:GetClass() ~= context.expectedClass then
+					MC.SV.CancelSelectedItemUse( ply, "offhand_proxy_changed" )
+				elseif not ply:KeyDown( IN_ATTACK2 ) then
+					MC.SV.ReleaseSelectedItemUse( ply, context )
+				else
+					MC.SV.TickSelectedItemUse( ply, context )
+				end
+			end
+		end
+	end )
 end
 
 function SWEP:KeyRelease( ply, key )
@@ -1026,6 +1142,30 @@ if CLIENT then
 		return MC.CellKey( bx, by, bz )
 	end
 
+	function MC.StartInventoryOffhandSwing( weapon, bx, by, bz )
+		if not IsValid( weapon ) or not itemHeldAnimationEnabled() then return end
+		local now, key = CurTime(), placeAnimKey( bx, by, bz )
+		if weapon.MCOffhandSwingKey == key and now - ( weapon.MCOffhandSwingStart or -1 ) < 0.15 then return end
+		weapon.MCOffhandSwingStart, weapon.MCOffhandSwingKey = now, key
+	end
+
+	-- Same Java swing/equip motion as the main hand, with independent clocks.
+	function MC.InventoryOffhandAnimation( weapon, methodName )
+		if not itemHeldAnimationEnabled() or not weapon.MCOffhandSwingStart then return 0 end
+		local elapsed = CurTime() - weapon.MCOffhandSwingStart
+		if methodName == "CreativeMainHandInverseHeight" then
+			return math.max( 0, 1 - elapsed * ITEM_HAND_HEIGHT_RECOVERY )
+		end
+		local progress = elapsed / ITEM_PLACE_ANIM_DURATION
+		return progress > 0 and progress < 1 and progress or 0
+	end
+
+	net.Receive( OFFHAND_SWING_NET, function()
+		local bx, by, bz = net.ReadInt( MC.Net.COORD_BITS ), net.ReadInt( MC.Net.COORD_BITS ), net.ReadInt( MC.Net.COORD_BITS )
+		local ply = LocalPlayer()
+		if IsValid( ply ) then MC.StartInventoryOffhandSwing( ply:GetActiveWeapon(), bx, by, bz ) end
+	end )
+
 	-- Kept on the hand SWEP so the legacy creative pose can drive exactly the
 	-- same swing and equip-height animation for inventory-selected blocks.
 	function SWEP:StartCreativePlaceAnimation( bx, by, bz )
@@ -1119,9 +1259,10 @@ if CLIENT then
 	-- performed the interaction.  The offhand still renders its item, but it
 	-- must not borrow the active weapon's main-hand animation state.
 	local function animationWeaponFor( ply, leftHand )
-		if leftHand or not IsValid( ply ) then return nil end
+		if not IsValid( ply ) then return nil end
 		local weapon = ply:GetActiveWeapon()
 		if not IsValid( weapon ) then return nil end
+		if leftHand then return weapon end
 		-- The engine presentation bridge calls both callbacks as part of its
 		-- vanilla first-person hand pose.  They are optional capabilities, not
 		-- part of the SWEP base contract: MCITEM resolver weapons (for example
@@ -1139,8 +1280,9 @@ if CLIENT then
 	-- CreativePlaceAnim/CreativeMainHandInverseHeight are optional helpers owned
 	-- by mc_item_hand and mc_creative_placer.  Unknown weapons keep rendering
 	-- with the neutral vanilla pose instead of receiving an unconditional call.
-	local function optionalWeaponAnimation( weapon, methodName )
+	local function optionalWeaponAnimation( weapon, methodName, leftHand )
 		if not IsValid( weapon ) then return 0 end
+		if leftHand then return MC.InventoryOffhandAnimation( weapon, methodName ) end
 		local callback = weapon[methodName]
 		if type( callback ) ~= "function" then return 0 end
 		return tonumber( callback( weapon ) ) or 0
@@ -1184,8 +1326,8 @@ if CLIENT then
 			local eyeAng = ply:EyeAngles()
 			local side = leftHand and -1 or 1
 			local weapon = animationWeaponFor( ply, leftHand )
-			local swing = optionalWeaponAnimation( weapon, "CreativePlaceAnim" )
-			local equip = optionalWeaponAnimation( weapon, "CreativeMainHandInverseHeight" )
+			local swing = optionalWeaponAnimation( weapon, "CreativePlaceAnim", leftHand )
+			local equip = optionalWeaponAnimation( weapon, "CreativeMainHandInverseHeight", leftHand )
 			local swingRoot = math.sqrt( math.max( swing, 0 ) )
 			local swingSin = math.sin( swingRoot * math.pi )
 			local swingSin2 = math.sin( swingRoot * math.pi * 2 )

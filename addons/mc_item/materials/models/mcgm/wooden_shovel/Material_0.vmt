@@ -1,0 +1,7 @@
+"VertexLitGeneric"
+{
+	"$basetexture" "models/mcgm/wooden_shovel/wooden_shovel"
+	"$alphatest" "1"
+	"$alphatestreference" "0.5"
+	"$nocull" "1"
+}

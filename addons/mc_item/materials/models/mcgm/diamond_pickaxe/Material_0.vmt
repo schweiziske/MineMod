@@ -1,0 +1,7 @@
+"VertexLitGeneric"
+{
+	"$basetexture" "models/mcgm/diamond_pickaxe/diamond_pickaxe"
+	"$alphatest" "1"
+	"$alphatestreference" "0.5"
+	"$nocull" "1"
+}

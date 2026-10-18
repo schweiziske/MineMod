@@ -142,6 +142,7 @@ local function useTntWithSelectedItem( ply, itemName, context )
 	if not SV.SelectedStackMatches then return false, "selected_item_unavailable" end
 	local record, _, selected, matchError = SV.SelectedStackMatches( ply, {
 		expectedItem = itemName,
+		hand = context.hand,
 		expectedClass = context.expectedClass,
 		expectedStackHash = context.expectedStackHash,
 	} )
@@ -154,6 +155,7 @@ local function useTntWithSelectedItem( ply, itemName, context )
 		if itemName == "minecraft:flint_and_steel" then
 			local result, didBreak, err = SV.DamageSelectedItem( ply, 1, {
 				expectedItem = itemName,
+				hand = context.hand,
 				expectedClass = context.expectedClass,
 				expectedStackHash = selectedHash,
 				reason = context.reason or "tnt_flint_and_steel",
@@ -165,6 +167,7 @@ local function useTntWithSelectedItem( ply, itemName, context )
 		end
 		local result, _, _, isInfinite, err = SV.ConsumeSelectedItem( ply, 1, nil, {
 			expectedItem = itemName,
+			hand = context.hand,
 			expectedClass = context.expectedClass,
 			expectedStackHash = selectedHash,
 			reason = context.reason or "tnt_fire_charge",
@@ -197,7 +200,8 @@ local oldFlint = SV.UseSelectedFlintAndSteel
 SV.UseSelectedFlintAndSteel = function( ply, context )
 	local used, result = SV.UseTntWithFlintAndSteel( ply, context )
 	if used or result ~= "not_tnt" then return used, result end
-	return oldFlint and oldFlint( ply, context ) or false, "fire_api_unavailable"
+	if oldFlint then return oldFlint( ply, context ) end
+	return false, "fire_api_unavailable"
 end
 
 function SV.UseSelectedFireCharge( ply, context )
@@ -208,6 +212,7 @@ function SV.UseSelectedFireCharge( ply, context )
 	context = istable( context ) and context or {}
 	local record, _, selected, matchError = SV.SelectedStackMatches( ply, {
 		expectedItem = "minecraft:fire_charge",
+		hand = context.hand,
 		expectedClass = context.expectedClass,
 		expectedStackHash = context.expectedStackHash,
 	} )
@@ -219,6 +224,7 @@ function SV.UseSelectedFireCharge( ply, context )
 	local function consume()
 		local result, _, _, isInfinite, err = SV.ConsumeSelectedItem( ply, 1, nil, {
 			expectedItem = "minecraft:fire_charge",
+			hand = context.hand,
 			expectedClass = context.expectedClass,
 			expectedStackHash = selectedHash,
 			reason = context.reason or "fire_charge_use",
@@ -265,12 +271,12 @@ local function installTntBlockHandlers()
 	tntBlock.handlers.CanUse = function( stack )
 		return stack and ( stack.item == "minecraft:flint_and_steel" or stack.item == "minecraft:fire_charge" ) or false
 	end
-	tntBlock.handlers.OnUse = function( ply )
-		local stack = SV.GetSelectedPlayerStack and SV.GetSelectedPlayerStack( ply ) or nil
+	tntBlock.handlers.OnUse = function( ply, bx, by, bz, orient, blockId, useContext )
+		local stack = SV.GetPlayerHandStack( ply, useContext and useContext.hand )
 		if not stack then return false end
 		-- SV.Use validated this cell for this player immediately before calling
 		-- us, and that validation consumed the world-write cooldown.
-		local context = { alreadyValidated = true, reason = "tnt_block_use" }
+		local context = { alreadyValidated = true, reason = "tnt_block_use", hand = useContext and useContext.hand }
 		if stack.item == "minecraft:flint_and_steel" then return SV.UseTntWithFlintAndSteel( ply, context ) == true end
 		if stack.item == "minecraft:fire_charge" then return SV.UseTntWithFireCharge( ply, context ) == true end
 		return false

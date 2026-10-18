@@ -1,0 +1,7 @@
+"VertexLitGeneric"
+{
+	"$basetexture" "models/mcgm/lingering_potion_long_fire_resistance/lingering_potion_long_fire_resistance"
+	"$alphatest" "1"
+	"$alphatestreference" "0.5"
+	"$nocull" "1"
+}

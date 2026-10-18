@@ -1,0 +1,7 @@
+"VertexLitGeneric"
+{
+	"$basetexture" "models/mcgm/rotten_flesh/rotten_flesh"
+	"$alphatest" "1"
+	"$alphatestreference" "0.5"
+	"$nocull" "1"
+}

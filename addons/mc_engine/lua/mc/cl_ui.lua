@@ -1791,6 +1791,8 @@ local function drawCrossOutline( base, color )
 	}, color )
 end
 
+local slopeOutlinePoints = { Vector(), Vector(), Vector(), Vector(), Vector(), Vector() }
+
 function MC.DrawBlockOutline( id, orient, bx, by, bz, color, stateId )
 	local base = MC.CellWorldMin( bx, by, bz )
 	color = color or Color( 0, 0, 0, 235 )
@@ -1801,6 +1803,19 @@ function MC.DrawBlockOutline( id, orient, bx, by, bz, color, stateId )
 	end
 
 	if stateId == nil and MC.GetBlockState then stateId = MC.GetBlockState( bx, by, bz ) end
+	local hull = MC.BlockSlopeHull( id, orient )
+	if hull then
+		local size = MC.API.Coords.BlockSize()
+		for i = 1, #hull.points do
+			local point, world = hull.points[i], slopeOutlinePoints[i]
+			world.x, world.y, world.z = base.x + point[1] * size, base.y + point[2] * size, base.z + point[3] * size
+		end
+		for i = 1, #hull.edges do
+			local edge = hull.edges[i]
+			render.DrawLine( slopeOutlinePoints[edge[1]], slopeOutlinePoints[edge[2]], color, true )
+		end
+		return
+	end
 	local boxes = stateId ~= nil and MC.BlockSelectionBoxesForState
 		and MC.BlockSelectionBoxesForState( stateId, bx, by, bz ) or nil
 	if boxes == nil then boxes = MC.BlockBoxes and MC.BlockBoxes( id, orient, bx, by, bz ) or nil end

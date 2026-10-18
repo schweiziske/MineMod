@@ -583,8 +583,16 @@ if CLIENT then
 		local eyeAng = EyeAngles()
 		local side = leftHand and -1 or 1
 		local bob = math.sin( CurTime() * 1.8 ) * HELD_FP_DEFAULTS.bob
-		local placeAnim = IsValid( wep ) and wep:CreativePlaceAnim() or 0
-		local inverseArmHeight = IsValid( wep ) and wep:CreativeMainHandInverseHeight() or 0
+		local placeAnim, inverseArmHeight = 0, 0
+		if IsValid( wep ) then
+			if leftHand and MC.InventoryOffhandAnimation then
+				placeAnim = MC.InventoryOffhandAnimation( wep, "CreativePlaceAnim" )
+				inverseArmHeight = MC.InventoryOffhandAnimation( wep, "CreativeMainHandInverseHeight" )
+			else
+				placeAnim = wep:CreativePlaceAnim()
+				inverseArmHeight = wep:CreativeMainHandInverseHeight()
+			end
+		end
 		local swingRoot = placeAnim > 0 and math.sin( math.sqrt( placeAnim ) * math.pi ) or 0
 		local swingLinear = placeAnim > 0 and math.sin( placeAnim * math.pi ) or 0
 		local swingDouble = placeAnim > 0 and math.sin( math.sqrt( placeAnim ) * math.pi * 2 ) or 0

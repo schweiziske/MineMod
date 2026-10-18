@@ -7,11 +7,6 @@ MC.SV = MC.SV or {}
 
 local SV = MC.SV
 
-local function selectedSlot( record )
-	local index = math.Clamp( math.floor( tonumber( record and record.selected ) or 0 ), 0, 8 )
-	return index, record and MC.ContainerGetSlot( record.container, index ) or nil
-end
-
 local function expectedItemName( value )
 	if value == nil then return nil end
 	local definition = MC.GetItem and MC.GetItem( value ) or nil
@@ -23,8 +18,11 @@ function SV.SelectedStackMatches( ply, context )
 	if not IsValid( ply ) or not ply:IsPlayer() then return nil, nil, nil, "invalid_player" end
 	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply, false ) or nil
 	if not record or not record.container then return nil, nil, nil, "inventory_not_loaded" end
-	local slotIndex, slot = selectedSlot( record )
-	local stack = slot and MC.InventorySlotGet( slot ) or nil
+	if context.hand ~= nil and context.hand ~= "mainhand" and context.hand ~= "offhand" then
+		return nil, nil, nil, "invalid_hand"
+	end
+	local slotIndex = context.hand == "offhand" and 40 or record.selected
+	local stack = SV.InteractionStack( record, slotIndex )
 	if not stack then return nil, nil, nil, "selected_item_missing" end
 
 	if context.expectedItem ~= nil then
@@ -36,7 +34,12 @@ function SV.SelectedStackMatches( ply, context )
 		local hash = MC.ItemStackHash and MC.ItemStackHash( stack ) or nil
 		if hash ~= tostring( context.expectedStackHash ) then return nil, nil, nil, "selected_stack_changed" end
 	end
-	if context.expectedClass ~= nil then
+	if context.expectedClass ~= nil and context.hand == "offhand" then
+		local active = ply:GetActiveWeapon()
+		if not IsValid( active ) or active:GetClass() ~= context.expectedClass then
+			return nil, nil, nil, "selected_weapon_mismatch"
+		end
+	elseif context.expectedClass ~= nil then
 		local bridge = MC.HandWeaponBridge
 		if not bridge or not bridge.Resolve then return nil, nil, nil, "hand_weapon_bridge_unavailable" end
 		local resolved = bridge.Resolve( stack, ply )
@@ -91,13 +94,13 @@ function SV.ConsumeSelectedItem( ply, amount, replacement, context )
 		return { ok = true, infinite = true, changedSlots = {} }, amount, nil, true
 	end
 
-	local snapshot = MC.ContainerSnapshot( record.container )
+	local snapshot = SV.InteractionSnapshot( record, slotIndex == 40 )
 	local remainingCount = stack.count - amount
 	local remaining = remainingCount > 0 and MC.CopyItemStack( stack, remainingCount ) or nil
 	local selectedReplacement = remaining or converted
-	local ok, setError = MC.ContainerSetStack( record.container, slotIndex, selectedReplacement )
+	local ok, setError = SV.SetInteractionStack( record, slotIndex, selectedReplacement )
 	if not ok then
-		MC.ContainerRestore( record.container, snapshot )
+		SV.RestoreInteractionSnapshot( record, snapshot )
 		return nil, 0, nil, false, setError or "selected_consume_failed"
 	end
 
@@ -111,7 +114,7 @@ function SV.ConsumeSelectedItem( ply, amount, replacement, context )
 		actionId = context.actionId,
 	} )
 	if not result then
-		MC.ContainerRestore( record.container, snapshot )
+		SV.RestoreInteractionSnapshot( record, snapshot )
 		return nil, 0, nil, false, commitError or "selected_consume_commit_failed"
 	end
 
@@ -196,12 +199,12 @@ function SV.ConsumeHeldItem( ply, amount, context )
 	and SV.PlayerHasInfiniteMaterials( ply ) then
 		return { ok = true, infinite = true, changedSlots = {} }, amount, MC.CopyItemStack( stack )
 	end
-	local snapshot = MC.ContainerSnapshot( record.container )
+	local snapshot = SV.InteractionSnapshot( record, slotIndex == 40 )
 	local remainingCount = stack.count - amount
 	local remaining = remainingCount > 0 and MC.CopyItemStack( stack, remainingCount ) or nil
-	local ok, setError = MC.ContainerSetStack( record.container, slotIndex, remaining )
+	local ok, setError = SV.SetInteractionStack( record, slotIndex, remaining )
 	if not ok then
-		MC.ContainerRestore( record.container, snapshot )
+		SV.RestoreInteractionSnapshot( record, snapshot )
 		return nil, 0, nil, setError or "held_item_consume_failed"
 	end
 	local result, commitError = SV.CommitPlayerInventoryMutation( record, snapshot, {
@@ -210,7 +213,7 @@ function SV.ConsumeHeldItem( ply, amount, context )
 		actionId = context.actionId,
 	} )
 	if not result then
-		MC.ContainerRestore( record.container, snapshot )
+		SV.RestoreInteractionSnapshot( record, snapshot )
 		return nil, 0, nil, commitError or "held_item_consume_commit_failed"
 	end
 	if MC.RunEvent then
@@ -239,10 +242,10 @@ function SV.ReplaceSelectedItem( ply, input, context )
 		return { ok = true, infinite = true, changedSlots = {} }, MC.CopyItemStack( stack )
 	end
 
-	local snapshot = MC.ContainerSnapshot( record.container )
-	local ok, setError = MC.ContainerSetStack( record.container, slotIndex, replacement )
+	local snapshot = SV.InteractionSnapshot( record, slotIndex == 40 )
+	local ok, setError = SV.SetInteractionStack( record, slotIndex, replacement )
 	if not ok then
-		MC.ContainerRestore( record.container, snapshot )
+		SV.RestoreInteractionSnapshot( record, snapshot )
 		return nil, nil, setError or "selected_replace_failed"
 	end
 	local result, commitError = SV.CommitPlayerInventoryMutation( record, snapshot, {
@@ -251,7 +254,7 @@ function SV.ReplaceSelectedItem( ply, input, context )
 		actionId = context.actionId,
 	} )
 	if not result then
-		MC.ContainerRestore( record.container, snapshot )
+		SV.RestoreInteractionSnapshot( record, snapshot )
 		return nil, nil, commitError or "selected_replace_commit_failed"
 	end
 	if MC.RunEvent then
@@ -340,15 +343,15 @@ function SV.TakeSelectedItemWithDurability( ply, durabilityAmount, context )
 		return extracted, true, result
 	end
 
-	local snapshot = MC.ContainerSnapshot( record.container )
+	local snapshot = SV.InteractionSnapshot( record, slotIndex == 40 )
 	local remaining = stack.count > 1 and MC.CopyItemStack( stack, stack.count - 1 ) or nil
 	-- ItemStack is damaged before consumeAndReturn copies/splits it.  Damageable
 	-- stacks are non-stackable in valid Minecraft data, but preserving this order
 	-- also makes the helper deterministic for externally supplied definitions.
 	if remaining then remaining.damage = nextDamage > 0 and nextDamage or nil end
-	local ok, setError = MC.ContainerSetStack( record.container, slotIndex, remaining )
+	local ok, setError = SV.SetInteractionStack( record, slotIndex, remaining )
 	if not ok then
-		MC.ContainerRestore( record.container, snapshot )
+		SV.RestoreInteractionSnapshot( record, snapshot )
 		return nil, false, nil, setError or "selected_take_failed"
 	end
 
@@ -358,7 +361,7 @@ function SV.TakeSelectedItemWithDurability( ply, durabilityAmount, context )
 		actionId = context.actionId,
 	} )
 	if not result then
-		MC.ContainerRestore( record.container, snapshot )
+		SV.RestoreInteractionSnapshot( record, snapshot )
 		return nil, false, nil, commitError or "selected_take_commit_failed"
 	end
 

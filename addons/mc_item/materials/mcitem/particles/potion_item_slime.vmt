@@ -1,0 +1,9 @@
+"UnlitGeneric"
+{
+    "$basetexture" "mcitem/particles/potion_item_slime"
+    "$translucent" "1"
+    "$vertexcolor" "1"
+    "$vertexalpha" "1"
+    "$nocull" "1"
+    "$pointsample" "1"
+}

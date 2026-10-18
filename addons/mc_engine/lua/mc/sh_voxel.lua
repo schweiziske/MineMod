@@ -446,7 +446,31 @@ local function rayIntersectBox( startPos, dir, minX, minY, minZ, maxX, maxY, max
 	return math.max( 0, tMin ), normal
 end
 
+local function traceSlopeHull( hull, startPos, dir, maxDist, bx, by, bz, fallbackNormal )
+	local base = MC.CellWorldMin( bx, by, bz )
+	local size = MC.API.Coords.BlockSize()
+	local px, py, pz = startPos.x - base.x, startPos.y - base.y, startPos.z - base.z
+	local near, far, normal = 0, maxDist, fallbackNormal
+	for i = 1, #hull.planes do
+		local plane = hull.planes[i]
+		local distance = plane[4] * size - plane[1] * px - plane[2] * py - plane[3] * pz
+		local speed = plane[1] * dir.x + plane[2] * dir.y + plane[3] * dir.z
+		if math.abs( speed ) <= TRACE_EPS then
+			if distance < -TRACE_EPS then return nil end
+		else
+			local hit = distance / speed
+			if speed < 0 then
+				if hit > near then near, normal = hit, plane[5] end
+			elseif hit < far then far = hit end
+			if near - far > TRACE_EPS then return nil end
+		end
+	end
+	return { dist = near, normal = normal }
+end
+
 local function traceBlockBoxes( startPos, dir, maxDist, bx, by, bz, id, orient, stateId, fallbackDist, fallbackNormal )
+	local hull = MC.BlockSlopeHull( id, orient )
+	if hull then return traceSlopeHull( hull, startPos, dir, maxDist, bx, by, bz, fallbackNormal ) end
 	local boxes = stateId ~= nil and MC.BlockSelectionBoxesForState
 		and MC.BlockSelectionBoxesForState( stateId, bx, by, bz ) or nil
 	if boxes == nil and stateId ~= nil and MC.BlockBoxesForState then

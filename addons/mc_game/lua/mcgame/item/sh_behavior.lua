@@ -15,7 +15,9 @@ local KINDS = {
 	spyglass = { duration = 72000, animation = "spyglass" },
 	brush = { duration = 200, animation = "brush" },
 	food = { duration = 32, animation = "eat" },
+	drink = { duration = 32, animation = "drink" },
 	projectile = { duration = 0, animation = "none" },
+	bucket = { duration = 0, animation = "none" },
 }
 
 local PROJECTILES = {
@@ -38,6 +40,8 @@ function MC.ItemBehavior( stackOrDefinition )
 	if not definition then return nil end
 	if definition.useKind and KINDS[definition.useKind] then return definition.useKind end
 	local name = definition.name
+	if name == "minecraft:milk_bucket" or name == "minecraft:potion" then return "drink" end
+	if name == "minecraft:bucket" or name == "minecraft:water_bucket" or name == "minecraft:lava_bucket" then return "bucket" end
 	if name == "minecraft:bow" then return "bow" end
 	if name == "minecraft:crossbow" then return "crossbow" end
 	if name == "minecraft:trident" then return "trident" end
@@ -57,12 +61,14 @@ function MC.ItemBehaviorSpec( stackOrDefinition )
 		spec = { duration = definition.useDuration, animation = definition.useAnimation or "none" }
 	end
 	if not spec then return nil end
-	local configuredDuration = tonumber( definition and definition.useDuration ) or 0
+	local configuredDuration = MC.ItemUseDuration( stackOrDefinition )
+	local food = MCITEM and MCITEM.Food and MCITEM.Food.Get( definition and definition.name )
+	if configuredDuration <= 0 and food then configuredDuration = food.consumeTicks end
 	if configuredDuration <= 0 then configuredDuration = spec.duration or 0 end
 	return {
 		kind = kind,
 		duration = math.floor( configuredDuration ),
-		animation = definition and definition.useAnimation or spec.animation,
+		animation = food and food.animation or ( definition and definition.useAnimation ~= "none" and definition.useAnimation ) or spec.animation,
 	}
 end
 

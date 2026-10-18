@@ -1,0 +1,7 @@
+"UnlitGeneric"
+{
+	"$basetexture" "models/mcgm/shulker_bullet/shulker_bullet"
+	"$translucent" "1"
+	"$additive" "1"
+	"$nocull" "1"
+}

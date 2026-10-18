@@ -279,7 +279,11 @@ end
 
 function Renderer.MaterialForLayer( layer, worldItem )
 	if type( layer ) ~= "string" or layer == "" then return nil end
-	if not string.match( layer, "%.png$" ) then layer = layer .. ".png" end
+	-- Explicit Source materials (such as the 128px GMod logo) already name a
+	-- complete resource; only bare item texture paths need the PNG extension.
+	if not string.match( layer, "%.png$" ) and not string.match( layer, "%.vmt$" ) then
+		layer = layer .. ".png"
+	end
 	if worldItem == true and UI.GetWorldItemMaterial then return UI.GetWorldItemMaterial( layer ) end
 	return UI.GetMaterial( layer )
 end
@@ -291,6 +295,20 @@ function Renderer.MaterialForDefinition( definition )
 end
 
 function Renderer.ModelPlan( stack, options )
+	local weapon = MC.SpawnmenuWeapons and MC.SpawnmenuWeapons.Record( stack )
+	if weapon then
+		if not weapon.plan then
+			local path = weapon.icon
+			local material = Material( path, "smooth" )
+			if material:IsError() then
+				path = "icon16/gun.png"
+				material = Material( path, "smooth" )
+			end
+			weapon.plan = { layers = { path }, kind = "flat" }
+			weapon.materials = { material }
+		end
+		return weapon.plan
+	end
 	if MC.ResolveItemModel then
 		return MC.ResolveItemModel( stack, options or {} )
 	end
@@ -303,6 +321,8 @@ end
 
 function Renderer.MaterialsForStack( stack, options )
 	local plan = Renderer.ModelPlan( stack, options )
+	local weapon = MC.SpawnmenuWeapons and MC.SpawnmenuWeapons.Record( stack )
+	if weapon then return weapon.materials, plan end
 	local materials = {}
 	for _, layer in ipairs( plan.layers or {} ) do
 		local material = Renderer.MaterialForLayer( layer, options and options.worldItem == true )
@@ -767,6 +787,8 @@ function Renderer.DisplayName( stack )
 	local customName, hasCustomName
 	if MC.GetItemCustomName then customName, hasCustomName = MC.GetItemCustomName( stack ) end
 	if hasCustomName then return customName end
+	local weapon = MC.SpawnmenuWeapons and MC.SpawnmenuWeapons.Record( stack )
+	if weapon then return language.GetPhrase( weapon.title ) end
 	local enchantedBookName = MCITEM and MCITEM.EnchantedBookDisplayName
 		and MCITEM.EnchantedBookDisplayName( stack ) or nil
 	if enchantedBookName and enchantedBookName ~= "" then return enchantedBookName end

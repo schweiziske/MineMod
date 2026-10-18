@@ -12,11 +12,13 @@ local function selectedStack( ply )
 	return MC.SV and MC.SV.GetSelectedPlayerStack and MC.SV.GetSelectedPlayerStack( ply ) or nil
 end
 
-local function consumeSelected( ply, stack, reason )
-	if not MC.SV or not MC.SV.ConsumeSelectedItem then return false, "inventory_api_unavailable" end
-	local result, amount, _, _, err = MC.SV.ConsumeSelectedItem( ply, 1, nil, {
+local function consumeSelected( ply, stack, reason, context )
+	if not MC.SV or not MC.SV.ConsumeHeldItem then return false, "inventory_api_unavailable" end
+	local result, amount, _, err = MC.SV.ConsumeHeldItem( ply, 1, {
+		hand = context and context.hand or "mainhand",
+		respectInfiniteMaterials = true,
 		expectedItem = stack and stack.item,
-		expectedStackHash = MC.ItemStackHash and MC.ItemStackHash( stack ) or nil,
+		expectedHash = MC.ItemStackHash and MC.ItemStackHash( stack ) or nil,
 		reason = reason,
 	} )
 	if not result or result.ok ~= true then return false, err or "selected_item_changed" end
@@ -113,7 +115,7 @@ function D.PlaceDecoration( ply, stack, hit, context )
 			worldPosition = D.WorldFromEntity and D.WorldFromEntity( entity ) or position,
 		} )
 	end
-	local consumed, consumeError = consumeSelected( ply, stack, "place_" .. kind )
+	local consumed, consumeError = consumeSelected( ply, stack, "place_" .. kind, context )
 	if not consumed then entity:Remove() return false, consumeError end
 	if MC.RunEvent then MC.RunEvent( "MC.DecorationPlaced", ply, entity, stack, context or {} ) end
 	return true, entity

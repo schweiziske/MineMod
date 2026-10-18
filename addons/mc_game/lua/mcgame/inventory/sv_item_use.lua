@@ -88,41 +88,20 @@ local function recordStackForHand( ply, hand )
 	return record, stack, definition, hand
 end
 
-local function selectedRecordStack( ply ) return recordStackForHand( ply, "mainhand" ) end
-
 local function consumeOne( record, stack, ply, context )
-	if SV.PlayerHasInfiniteMaterials and SV.PlayerHasInfiniteMaterials( ply ) then return nil, true end
-	if context.hand == "offhand" then
-		if not SV.EquipmentSnapshot or not SV.CommitEquipmentMutation then return nil, false, "equipment_unavailable" end
-		local snapshot = SV.EquipmentSnapshot( record )
-		local replacement
-		if stack.count > 1 then replacement = MC.CopyItemStack( stack, stack.count - 1 ) end
-		record.equipment.offhand = replacement
-		local result, commitError = SV.CommitEquipmentMutation( record, snapshot, {
-			player = ply, reason = context.reason or "item_use", actionId = context.actionId,
-		} )
-		if not result then
-			for _, slot in ipairs( MC.EquipmentSlotOrder or {} ) do record.equipment[slot] = MC.CopyItemStack( snapshot[slot] ) end
-			return nil, false, commitError or "item_consume_commit_failed"
-		end
-		return result, false
-	end
-	local snapshot = MC.ContainerSnapshot( record.container )
-	local replacement
-	if stack.count > 1 then replacement = MC.CopyItemStack( stack, stack.count - 1 ) end
-	local selected = math.Clamp( math.floor( tonumber( record.selected ) or 0 ), 0, 8 )
-	local ok, err = MC.ContainerSetStack( record.container, selected, replacement )
-	if not ok then MC.ContainerRestore( record.container, snapshot ) return nil, false, err or "item_consume_failed" end
-	local result, commitError = SV.CommitPlayerInventoryMutation( record, snapshot, {
-		player = ply,
+	local remainder
+	local food = MCITEM and MCITEM.Food and MCITEM.Food.Get( stack.item )
+	if food and food.remainder then remainder = "minecraft:" .. food.remainder end
+	if stack.item == "minecraft:potion" then remainder = "minecraft:glass_bottle" end
+	local result, _, _, infinite, err = SV.ConsumeSelectedItem( ply, 1, remainder, {
+		hand = context.hand,
+		expectedItem = stack.item,
+		expectedStackHash = MC.ItemStackHash( stack ),
 		reason = context.reason or "item_use",
 		actionId = context.actionId,
 	} )
-	if not result then
-		MC.ContainerRestore( record.container, snapshot )
-		return nil, false, commitError or "item_consume_commit_failed"
-	end
-	return result, false
+	if not result then return nil, false, err or "item_consume_commit_failed" end
+	return result, infinite
 end
 
 local function useDetails( stack, definition )
@@ -162,6 +141,7 @@ local function mergedContext( state, context )
 	local result = {}
 	for key, value in pairs( state and state.context or {} ) do result[key] = value end
 	for key, value in pairs( context or {} ) do result[key] = value end
+	result.hand = state.hand
 	return result
 end
 
@@ -195,7 +175,38 @@ end
 
 local function dispatchFinishedUse( ply, record, stack, definition, state, context )
 	local kind = state.kind
+	if kind == "bucket" then
+		local buckets = MCITEM and MCITEM.Buckets
+		local bucket = buckets and buckets.Get and buckets.Get( stack.item )
+		if not bucket or not buckets.UseLiquidBucket then return false, "bucket_api_unavailable" end
+		local allowed, err = buckets.TryBeginPlayerUse( ply )
+		if not allowed then return false, err end
+		if bucket.pickup then
+			local target = buckets.FindMilkTarget( ply )
+			if IsValid( target ) then
+				local milked = buckets.TryMilkEntity( ply, target, context )
+				if milked then return true end
+			end
+		end
+		return buckets.UseLiquidBucket( ply:GetActiveWeapon(), bucket, context )
+	end
 	if kind == "food" then return finishFood( ply, record, stack, context ) end
+	if kind == "drink" then
+		if stack.item == "minecraft:potion" then
+			local potions = MCITEM and MCITEM.Potions
+			local resolver = MCITEM and MCITEM.MCSWEP
+			local id = resolver and resolver.BasePotionID( stack )
+			local potion = id and potions and potions.Get( id )
+			if not potion or not potions.ApplyPotion then return false, "potion_contents_unsupported" end
+			local result, infinite, err = consumeOne( record, stack, ply, context )
+			if err then return false, err end
+			potions.ApplyPotion( ply, potion, ply, { bottleType = "drinkable", delivery = "drink", hand = context.hand } )
+			if potions.PlayDrinkSound then potions.PlayDrinkSound( ply ) end
+			if MC.RunEvent then MC.RunEvent( "MC.ItemConsumed", ply, stack, nil, infinite ) end
+			return true, result
+		end
+		return finishGeneric( ply, record, stack, context )
+	end
 	if kind == "bow" and SV.FireBow then return SV.FireBow( ply, record, stack, state, context ) end
 	if kind == "crossbow" and SV.FinishCrossbowUse then return SV.FinishCrossbowUse( ply, record, stack, state, context ) end
 	if kind == "trident" and SV.ThrowTrident then return SV.ThrowTrident( ply, record, stack, state, context ) end
@@ -224,13 +235,11 @@ end
 function SV.BeginSelectedItemUse( ply, context )
 	context = context or {}
 	if not IsValid( ply ) or not ply:Alive() or not activeMinecraftHand( ply, context ) then return false, "invalid_item_use" end
-	local record, stack, definition, hand = selectedRecordStack( ply )
+	if context.hand ~= nil and context.hand ~= "mainhand" and context.hand ~= "offhand" then return false, "invalid_hand" end
+	local record, stack, definition, hand = recordStackForHand( ply, context.hand )
 	if not record then return false, "inventory_not_loaded" end
-	-- Resolver-driven SWEPs are selected from the mainhand stack. Pinning the
-	-- expected item before the ordinary offhand-shield fallback prevents a stale
-	-- resolver weapon from starting some other selected stack (or an offhand
-	-- shield) after the hotbar selection changes between weapon resolution and
-	-- the server-authoritative Begin call.
+	-- An explicit hand pins expectedItem to that hand. Legacy callers without
+	-- a hand still validate the mainhand before the shield fallback.
 	local expectedItem = tostring( context.expectedItem or "" )
 	if expectedItem ~= "" and ( not stack or stack.item ~= expectedItem ) then
 		return false, "selected_item_mismatch"
@@ -239,7 +248,7 @@ function SV.BeginSelectedItemUse( ply, context )
 	local now = CurTime()
 	if record.lastItemUse and now - record.lastItemUse < 0.08 then return false, "item_use_cooldown" end
 	local kind, spec, usable = useDetails( stack, definition )
-	if not usable and ( not definition or not definition.blockId ) then
+	if context.hand == nil and not usable and ( not definition or not definition.blockId ) then
 		local offRecord, offStack, offDefinition = recordStackForHand( ply, "offhand" )
 		local offKind, offSpec, offUsable = useDetails( offStack, offDefinition )
 		if offRecord and offUsable and offKind == "shield" then
@@ -311,10 +320,19 @@ function SV.TickSelectedItemUse( ply, context )
 	local progress = MC.ItemUseProgress and MC.ItemUseProgress( state.startedAt, state.duration, CurTime() )
 		or math.Clamp( ( CurTime() - state.startedAt ) * 20 / state.duration, 0, 1 )
 	if ply.SetNWFloat then ply:SetNWFloat( USE_NET_PREFIX .. "progress", progress ) end
-	if ( state.kind == "food" or state.kind == "crossbow" ) and progress >= 1 then
+	if state.charged then return true, "charged" end
+	if ( state.kind == "food" or state.kind == "drink" or state.kind == "crossbow" ) and progress >= 1 then
 		state.progress = progress
 		local ok, resultOrError = dispatchFinishedUse( ply, record, stack, definition, state, mergedContext( state, context ) )
 		if ok then record.lastItemUse = CurTime() end
+		if ok and state.kind == "crossbow" and resultOrError == "charged" then
+			-- CrossbowItem.onUseTick keeps using until release. Holding right click
+			-- must not turn a completed load into an automatic shot.
+			state.charged = true
+			local _, chargedStack = recordStackForHand( ply, state.hand )
+			state.stackHash = MC.ItemStackHash( chargedStack )
+			return true, "charged"
+		end
 		clearUse( ply, record, ok and "finished" or resultOrError, ok )
 		return ok, resultOrError
 	end
@@ -341,7 +359,11 @@ function SV.ReleaseSelectedItemUse( ply, context )
 		return false, "selected_item_changed"
 	end
 	local progress = MC.ItemUseProgress and MC.ItemUseProgress( state.startedAt, state.duration, CurTime() ) or 0
-	if state.kind == "food" and progress < 1 then
+	if state.charged then
+		clearUse( ply, record, "charged", true )
+		return true, "charged"
+	end
+	if ( state.kind == "food" or state.kind == "drink" ) and progress < 1 then
 		clearUse( ply, record, "released_early" )
 		return false, "released_early"
 	end

@@ -1,0 +1,9 @@
+"VertexLitGeneric"
+{
+	"$basetexture" "models/mcgm/trident_3d/trident_3d"
+	"$alphatest" "1"
+	"$alphatestreference" "0.5"
+	// 和项目里同样双面绘制的 arrow.vmt 保持一致；正常引擎模型光下避免背光面硬归零。
+	"$halflambert" "1"
+	"$nocull" "1"
+}

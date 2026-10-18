@@ -23,6 +23,7 @@ local SLOPE_COLLISION_CONVEXES = {
 -- arrays so hundreds of generated slopes do not allocate vertex hash tables.
 local SLOPE_GEOMETRY = {
 	compact = true,
+	-- Broad bounds only. Physics, picking and outlines use the wedge convex.
 	boxes = { { 0, 0, 0, 1, 1, 1 } },
 	modelQuads = {
 		{ face = 1, surface = 1, uv = { 0, 0, 16, 16 }, verts = {
@@ -114,7 +115,7 @@ for index = 1, #sourceIds do
 			solid = true,
 			transparent = false,
 			creativeCategory = "slopes",
-			stateRule = "horizontal_facing",
+			stateRule = "stairs",
 			placeRule = "look",
 			iconSource = source.mcid or source.name,
 			shape = "model",

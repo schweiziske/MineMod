@@ -84,6 +84,7 @@ API.Network.Register( GAME_OWNER, {
 	"mc_inventory_action", "mc_inventory_menu_button", "mc_inventory_creative_pick",
 	"mc_inventory_close", "mc_inventory_resync", "mc_inventory_select",
 	"mc_inventory_exit_hand",
+	"mc_spawnmenu_weapons",
 	"mc_inventory_recipe_place", "mc_equipment_delta", "mc_block_use_request",
 	"mc_enchanting_state", "mc_anvil_state", "mc_anvil_rename",
 	"mc_merchant_state", "mc_merchant_select",

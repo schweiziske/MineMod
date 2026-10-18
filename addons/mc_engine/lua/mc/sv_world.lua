@@ -1108,7 +1108,7 @@ function SV.RemoveBlocksBulk( cells, options )
 	return result.changed
 end
 
-function SV.Use( ply, bx, by, bz, selectedBlockID )
+function SV.Use( ply, bx, by, bz, selectedBlockID, context )
 	local id = MC.GetBlock( bx, by, bz )
 	if id == 0 then return false end
 	local b = MC.Blocks[id]
@@ -1130,7 +1130,7 @@ function SV.Use( ply, bx, by, bz, selectedBlockID )
 		return false
 	end
 	if not SV.Validate( ply, bx, by, bz, false ) then return decline() end
-	local used = b.handlers.OnUse( ply, bx, by, bz, MC.GetBlockOrient( bx, by, bz ), selectedBlockID ) == true
+	local used = b.handlers.OnUse( ply, bx, by, bz, MC.GetBlockOrient( bx, by, bz ), selectedBlockID, context ) == true
 	if not used then return decline() end
 	-- Stamped so the right-click fallback below can tell whether the held
 	-- weapon already interacted on this press and must not interact again.

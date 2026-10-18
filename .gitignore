@@ -25,6 +25,7 @@ test_lightatlas_sampling.obj
 addon.json
 !addons/mc_engine/addon.json
 !addons/mc_game/addon.json
+!addons/mc_item/addon.json
 !addons/mc_texturepack_*/addon.json
 maps/mc_void.bsp
 maps/mc_void.vmf

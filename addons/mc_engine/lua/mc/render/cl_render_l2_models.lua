@@ -8,6 +8,8 @@ local RM, FACES = MC.RenderMesh, MC.RenderMeshConstants.FACES
 local byte, floor = string.byte, math.floor
 local band, rshift = bit.band, bit.rshift
 local profiles, positions = {}, {}
+local projectSelections = {}
+local projectMatches = {}
 local initialized = false
 
 local function u16( bytes, at )
@@ -189,6 +191,20 @@ function M.Profile( modelId )
 end
 
 function M.Selection( stateId, bx, by, bz, singleSelections )
+	local project = projectSelections[stateId]
+	if project then return project end
+	local schema = MC.BlockStateSchemaForState( stateId )
+	if schema and schema.project then
+		local block = MC.Blocks[schema.blockId]
+		if not MC.Check( block and block.shape == "model" and block.modelQuads and #block.modelQuads > 0,
+			"l2_project_model", "project state %s has no authored model", stateId ) then return nil end
+		-- Project models have no Mojang lighting overlay. Their authored vertices
+		-- are the geometry contract; flat face lighting also supports triangular
+		-- wedge sides without inventing a four-corner vanilla AO permutation.
+		project = { n = 0, modelAO = false, l2Key = "project:" .. stateId }
+		projectSelections[stateId] = project
+		return project
+	end
 	if not MC.Check( initialize() and type( stateId ) == "number" and stateId >= 0 and stateId < catalog.stateCount
 		and stateId == floor( stateId ), "l2_model_state", "state %s is outside the paired catalog", tostring( stateId ) ) then return nil end
 	-- A synchronous slice can borrow one immutable selection per single model.
@@ -379,6 +395,27 @@ local function legacyContext( visual, sourceQuad, selected )
 end
 
 function M.MatchLegacy( visual, sourceQuad, selected )
+	if visual and visual.schema and visual.schema.project then
+		if not MC.Check( visual.block == MC.Blocks[visual.id] and not visual.generatedVisualOverride
+			and visual.modelData == nil and visual.faces == nil,
+			"l2_project_visual", "project model overrides its authored geometry" ) then return nil end
+		local quads = RM.rotatedModelQuads( visual.block, visual.renderOrient )
+		local blockMatches = projectMatches[visual.block]
+		local matches = blockMatches and quads and blockMatches[quads]
+		if matches and matches[sourceQuad] then return matches[sourceQuad] end
+		local quad = quads and quads[sourceQuad]
+		if not MC.Check( quad ~= nil, "l2_project_quad", "missing project source quad %s", sourceQuad ) then return nil end
+		local source = vertices( quad )
+		local _, emission = MC.BlockModelSurface( visual.block, quad )
+		local result = {
+			source = source, corners = source, modelAO = false, degenerate = false,
+			metadata = { face = quad.face, shade = true, quadEmission = emission },
+		}
+		if not blockMatches then blockMatches = {} projectMatches[visual.block] = blockMatches end
+		if not matches then matches = {} blockMatches[quads] = matches end
+		matches[sourceQuad] = result
+		return result
+	end
 	if not MC.Check( visual and visual.block == MC.Blocks[visual.id] and not visual.forceBaseRenderer
 		and not visual.generatedVisualOverride and visual.schema and visual.schema.blockId == visual.id
 		and visual.faces == nil and visual.boxes == nil and visual.modelData == nil

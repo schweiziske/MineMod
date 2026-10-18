@@ -97,6 +97,9 @@ end
 
 -- Discovery must inspect every weighted alternative, not one position's choice.
 function MC.VisitStateVisualModelCandidates( stateId, visitor )
+	-- Project states are appended after the pinned vanilla catalog. They have
+	-- authored runtime models and must not index its packed plan bytes.
+	if stateId < 0 or stateId >= Catalog.stateCount then return end
 	local _, groupOffset, groupCount = MC.StateVisualPlanRangeFast( stateId )
 	for groupIndex = 0, groupCount - 1 do
 		local groupId = u16( Catalog.planData, ( groupOffset + groupIndex ) * 2 + 1 )
@@ -111,6 +114,7 @@ end
 
 -- Registration-only export. Runtime model selection remains allocation-free.
 function MC.StateVisualPlanGroups( stateId )
+	if stateId < 0 or stateId >= Catalog.stateCount then return {} end
 	local planId, groupOffset, groupCount = MC.StateVisualPlanRangeFast( stateId )
 	local result = {}
 	for groupIndex = 0, groupCount - 1 do

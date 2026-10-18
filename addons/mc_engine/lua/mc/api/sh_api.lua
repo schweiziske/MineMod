@@ -1445,6 +1445,8 @@ function Blocks.Kind( stateId )
 	if not block then return nil, "unknown_block" end
 	if MC.IsLiquidBlock and MC.IsLiquidBlock( id ) then return "liquid" end
 	if block.connection and NARROW_CONNECTIONS[block.connection] then return "narrow" end
+	-- Wedges share the facing/half state rule with stairs, not their shape.
+	if block.shape == "model" and block.collisionConvexes then return "slope" end
 	local ruleKind = block.stateRule and RULE_KINDS[block.stateRule]
 	if ruleKind then return ruleKind end
 	if block.collisionConvexes then return "slope" end

@@ -903,6 +903,9 @@ function MC.OrientToState( id, orient )
 	if b.orient == "slab" then
 		return SlabTypeName[MC.NormalizeOrient( id, orient )] or "bottom"
 	end
+	if b.orient == "stairs" then
+		return MC.BlockStateText( id, orient )
+	end
 	if b.orient == "door" then
 		orient = MC.NormalizeOrient( id, orient )
 		return "facing=" .. ( DirectionName[MC.DoorOrientFacing( orient )] or "north" ) ..
@@ -1673,6 +1676,11 @@ local function modelBoxes( b, orient )
 	local xSteps, zSteps = 0, 0
 	if b.orient == "axis" then
 		xSteps, zSteps = pillarRotForAxis( MC.NormalizeOrient( b.id, orient ) )
+	elseif b.orient == "stairs" then
+		orient = MC.NormalizeOrient( b.id, orient )
+		zSteps = horizontalOrientSteps( MC.StairOrientFacing( orient ) )
+		-- Rotate the wedge about Y to invert it while retaining its high edge.
+		if MC.StairOrientHalf( orient ) == "top" then xSteps, zSteps = 2, ( zSteps + 2 ) % 4 end
 	elseif b.orient == "horizontal_facing" or b.orient == "facing" or b.orient == "door" or b.orient == "trapdoor" or b.orient == "bed" then
 		orient = MC.NormalizeOrient( b.id, orient )
 		if b.orient == "facing" and orient == MC.Direction.DOWN then
@@ -1701,6 +1709,10 @@ local function modelConvexRotationSteps( b, orient )
 	local xSteps, zSteps = 0, 0
 	if b.orient == "axis" then
 		xSteps, zSteps = pillarRotForAxis( MC.NormalizeOrient( b.id, orient ) )
+	elseif b.orient == "stairs" then
+		orient = MC.NormalizeOrient( b.id, orient )
+		zSteps = horizontalOrientSteps( MC.StairOrientFacing( orient ) )
+		if MC.StairOrientHalf( orient ) == "top" then xSteps, zSteps = 2, ( zSteps + 2 ) % 4 end
 	elseif b.orient == "horizontal_facing" or b.orient == "facing" or b.orient == "door" or b.orient == "trapdoor" or b.orient == "bed" then
 		orient = MC.NormalizeOrient( b.id, orient )
 		if b.orient == "facing" and orient == MC.Direction.DOWN then
@@ -1745,6 +1757,46 @@ function MC.BlockCollisionConvexes( id, orient, bx, by, bz )
 	end
 	b._rotatedCollisionConvexes[cacheKey] = out
 	return out
+end
+
+-- Topology shared by the built-in six-vertex wedges. Derive planes from the
+-- actual rotated physics convex once so picking/outlines cannot become steps.
+local SlopeHullCache = {}
+local SlopeFaces = { { 5, 6, 4 }, { 3, 4, 2 }, { 1, 2, 6 }, { 3, 1, 5 }, { 2, 4, 6 } }
+local SlopeEdges = { { 1, 2 }, { 2, 4 }, { 4, 3 }, { 3, 1 }, { 1, 5 },
+	{ 2, 6 }, { 5, 6 }, { 5, 3 }, { 6, 4 } }
+
+function MC.BlockSlopeHull( id, orient )
+	local block = MC.Blocks[id]
+	if not block or not block.collisionConvexes or not string.match( block.mcid or "", "^mcswep:.*_slope$" ) then return nil end
+	local convexes = MC.BlockCollisionConvexes( id, orient )
+	local cached = SlopeHullCache[convexes]
+	if cached then return cached end
+	if not MC.Check( #convexes == 1 and #convexes[1] == 6, "slope_hull_topology",
+		"slope %s must have one six-vertex wedge convex", block.mcid ) then return nil end
+	local points, planes = convexes[1], {}
+	for i = 1, #SlopeFaces do
+		local face = SlopeFaces[i]
+		local a, b, c = points[face[1]], points[face[2]], points[face[3]]
+		local ux, uy, uz = b[1] - a[1], b[2] - a[2], b[3] - a[3]
+		local vx, vy, vz = c[1] - a[1], c[2] - a[2], c[3] - a[3]
+		local nx, ny, nz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
+		local length = math.sqrt( nx * nx + ny * ny + nz * nz )
+		if not MC.Check( length > 0, "slope_hull_plane", "slope %s has a degenerate face", block.mcid ) then return nil end
+		nx, ny, nz = nx / length, ny / length, nz / length
+		-- Placement is cell-adjacent: a sloping face selects one axis, never a
+		-- diagonal cell. Its geometric plane still determines the exact hit.
+		local normal
+		if math.abs( nz ) >= math.max( math.abs( nx ), math.abs( ny ) ) then
+			normal = Vector( 0, 0, nz > 0 and 1 or -1 )
+		elseif math.abs( nx ) >= math.abs( ny ) then
+			normal = Vector( nx > 0 and 1 or -1, 0, 0 )
+		else normal = Vector( 0, ny > 0 and 1 or -1, 0 ) end
+		planes[i] = { nx, ny, nz, nx * a[1] + ny * a[2] + nz * a[3], normal }
+	end
+	cached = { points = points, planes = planes, edges = SlopeEdges }
+	SlopeHullCache[convexes] = cached
+	return cached
 end
 
 local function isPaneKind( kind )

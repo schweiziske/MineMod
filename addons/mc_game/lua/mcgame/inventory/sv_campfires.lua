@@ -47,10 +47,11 @@ function SV.WakeCampfire( bx, by, bz )
 	return active
 end
 
-function SV.UseCampfire( ply, bx, by, bz )
+function SV.UseCampfire( ply, bx, by, bz, context )
+	context = context or {}
 	local info, stateId = stillCampfire( bx, by, bz )
 	if not info or not IsValid( ply ) or not ply:IsPlayer() then return false, "campfire_unavailable" end
-	local held = SV.GetSelectedPlayerStack and SV.GetSelectedPlayerStack( ply ) or nil
+	local held = SV.GetPlayerHandStack( ply, context.hand )
 	local recipe = held and MC.FindCookingRecipe and MC.FindCookingRecipe( held, "minecraft:campfire_cooking" ) or nil
 	-- TRY_WITH_EMPTY_HAND: non-campfire inputs continue to their normal item or
 	-- block placement path. Valid campfire inputs always consume the interaction,
@@ -68,9 +69,10 @@ function SV.UseCampfire( ply, bx, by, bz )
 	local infinite = SV.PlayerHasInfiniteMaterials and SV.PlayerHasInfiniteMaterials( ply ) == true
 	local snapshot
 	if not infinite then
-		snapshot = MC.ContainerSnapshot( inventoryRecord.container )
-		local selected = MC.ContainerGetSlot( inventoryRecord.container, inventoryRecord.selected )
-		local extracted = selected and MC.InventorySlotTake( selected, 1, { player = ply, reason = "campfire_place_food" } ) or nil
+		snapshot = SV.InteractionSnapshot( inventoryRecord )
+		local slotIndex = context.hand == "offhand" and 40 or inventoryRecord.selected
+		local remaining = held.count > 1 and MC.CopyItemStack( held, held.count - 1 ) or nil
+		local extracted = SV.SetInteractionStack( inventoryRecord, slotIndex, remaining )
 		if not extracted then return true, "selected_take_failed" end
 	end
 
@@ -92,7 +94,7 @@ function SV.UseCampfire( ply, bx, by, bz )
 		beforePublish = snapshot and commitInventory or nil,
 	} ) or nil
 	if not result or result.ok ~= true or result.changed <= 0 then
-		if snapshot then MC.ContainerRestore( inventoryRecord.container, snapshot ) end
+		if snapshot then SV.RestoreInteractionSnapshot( inventoryRecord, snapshot ) end
 		return true, result and result.error or "campfire_update_failed"
 	end
 	if SV.ScheduleBlockTick then SV.ScheduleBlockTick( bx, by, bz, 1, nil, stateId ) end
@@ -132,7 +134,8 @@ function SV.HandleCampfireStateTransition( context, oldStateId, newStateId )
 	return true
 end
 
-function SV.DowseCampfireWithSelectedShovel( ply, bx, by, bz )
+function SV.DowseCampfireWithSelectedShovel( ply, bx, by, bz, context )
+	context = context or {}
 	local info, stateId = stillCampfire( bx, by, bz )
 	if not info or info.lit ~= true then return false, "campfire_not_lit" end
 	if not IsValid( ply ) or not ply:IsPlayer() or not ply:Alive() then return false, "invalid_player" end
@@ -140,14 +143,17 @@ function SV.DowseCampfireWithSelectedShovel( ply, bx, by, bz )
 	if not aim or aim.bx ~= bx or aim.by ~= by or aim.bz ~= bz then return false, "campfire_target_changed" end
 	local normal = aim.HitNormal or aim.Normal
 	if normal and ( normal.z or 0 ) < -0.5 then return false, "campfire_bottom_face" end
-	if not SV.Validate or not SV.Validate( ply, bx, by, bz, false ) then return false, "campfire_dowse_rejected" end
-	local selected = SV.GetSelectedPlayerStack and SV.GetSelectedPlayerStack( ply ) or nil
+	if not context.alreadyValidated and ( not SV.Validate or not SV.Validate( ply, bx, by, bz, false ) ) then
+		return false, "campfire_dowse_rejected"
+	end
+	local selected = SV.GetPlayerHandStack( ply, context.hand )
 	local tool = selected and MC.ItemToolSpec and MC.ItemToolSpec( selected ) or nil
 	if not tool or tool.type ~= "shovel" then return false, "selected_item_mismatch" end
 	local selectedHash = MC.ItemStackHash and MC.ItemStackHash( selected ) or nil
 	local durabilityResult, broken, infinite
 	local function commitDurability()
 		local result, didBreak, err = SV.DamageSelectedItem( ply, 1, {
+			hand = context.hand,
 			expectedItem = selected.item,
 			expectedStackHash = selectedHash,
 			reason = "campfire_dowse",

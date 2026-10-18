@@ -20,7 +20,8 @@ local function infiniteMaterials( ply )
 	return SV.PlayerHasInfiniteMaterials and SV.PlayerHasInfiniteMaterials( ply ) == true
 end
 
-local function selected( record )
+local function selected( record, hand )
+	if hand == "offhand" then return 40, MC.CopyItemStack( record.equipment.offhand ) end
 	local index = math.Clamp( math.floor( tonumber( record and record.selected ) or 0 ), 0, 8 )
 	return index, record and MC.ContainerGetStack( record.container, index ) or nil
 end
@@ -38,28 +39,30 @@ local function projectileRateAllowed( record, amount )
 	return true
 end
 
-local function allowedAmmo( kind )
-	if kind == "bow" then
-		return { ["minecraft:arrow"] = true, ["minecraft:spectral_arrow"] = true }
-	end
-	return { ["minecraft:arrow"] = true, ["minecraft:spectral_arrow"] = true,
-		["minecraft:firework_rocket"] = true }
-end
+local ARROW_AMMO = { ["minecraft:arrow"] = true, ["minecraft:spectral_arrow"] = true }
+local CROSSBOW_HELD_AMMO = { ["minecraft:arrow"] = true, ["minecraft:spectral_arrow"] = true,
+	["minecraft:firework_rocket"] = true }
 
 local function findAmmo( record, kind )
-	local allowed = allowedAmmo( kind )
+	-- Player.getProjectile / ProjectileWeaponItem.getHeldProjectile: offhand,
+	-- mainhand, then inventory. Fireworks are supported only while held.
+	local allowed = kind == "crossbow" and CROSSBOW_HELD_AMMO or ARROW_AMMO
+	local offhand = record and record.equipment and record.equipment.offhand
+	if offhand and allowed[offhand.item] then return 40, offhand end
+	local mainIndex, main = selected( record )
+	if main and allowed[main.item] then return mainIndex, main end
 	for _, slot in ipairs( record and record.container and record.container.slots or {} ) do
 		local stack = MC.InventorySlotGet( slot )
-		if stack and allowed[stack.item] then return slot.index, stack end
+		if stack and ARROW_AMMO[stack.item] then return slot.index, stack end
 	end
 	return nil, nil
 end
 
 local function consumeStackAt( record, slotIndex, amount )
-	local stack = MC.ContainerGetStack( record.container, slotIndex )
+	local stack = SV.InteractionStack( record, slotIndex )
 	if not stack or stack.count < amount then return false, "projectile_stack_missing" end
 	local replacement = stack.count > amount and MC.CopyItemStack( stack, stack.count - amount ) or nil
-	return MC.ContainerSetStack( record.container, slotIndex, replacement )
+	return SV.SetInteractionStack( record, slotIndex, replacement )
 end
 
 local function damageStack( stack, amount )
@@ -248,7 +251,7 @@ local function prepareProjectiles( record, snapshot, projectiles, mutate, launch
 		return launch()
 	end )
 	if called and prepared then return prepared end
-	MC.ContainerRestore( record.container, snapshot )
+	SV.RestoreInteractionSnapshot( record, snapshot )
 	removeProjectileEntities( projectiles )
 	if not called then
 		MC.Fault( "projectile_prepare_exception", "%s", tostring( prepared ) )
@@ -260,7 +263,7 @@ end
 local function commitMutation( record, snapshot, ply, context, projectiles )
 	local result, commitError = SV.CommitPlayerInventoryMutation( record, snapshot, context or {} )
 	if not result then
-		MC.ContainerRestore( record.container, snapshot )
+		SV.RestoreInteractionSnapshot( record, snapshot )
 		removeProjectileEntities( projectiles )
 		return nil, commitError or "projectile_inventory_commit_failed"
 	end
@@ -269,7 +272,7 @@ end
 
 local function mutateAndLaunch( ply, record, sourceStack, itemName, itemDamage, velocity, definition, options, mutate )
 	if not projectileRateAllowed( record ) then return nil, "projectile_rate_limited" end
-	local snapshot = MC.ContainerSnapshot( record.container )
+	local snapshot = SV.InteractionSnapshot( record )
 	local projectiles, launchOptions = {}, {}
 	local ent, launchError = prepareProjectiles( record, snapshot, projectiles, mutate, function()
 		for key, value in pairs( options or {} ) do launchOptions[key] = value end
@@ -289,7 +292,7 @@ local function mutateAndLaunchMany( ply, record, specifications, context, mutate
 		return nil, "projectile_specifications_missing"
 	end
 	if not projectileRateAllowed( record, #specifications ) then return nil, "projectile_rate_limited" end
-	local snapshot = MC.ContainerSnapshot( record.container )
+	local snapshot = SV.InteractionSnapshot( record )
 	local projectiles = {}
 	local prepared, preparationError = prepareProjectiles( record, snapshot, projectiles, mutate, function()
 		for _, specification in ipairs( specifications ) do
@@ -349,7 +352,7 @@ function SV.FireBow( ply, record, stack, state, context )
 	ammo = ammo and MC.CopyItemStack( ammo, 1 ) or MC.NewItemStack( "minecraft:arrow", 1 )
 	if not ammo then return false, "default_arrow_missing" end
 	local definition = MC.GetProjectileDefinition( ammo.item ) or MC.GetProjectileDefinition( "minecraft:arrow" )
-	local _, weaponStack = selected( record )
+	local _, weaponStack = selected( record, context.hand )
 	local replacement, broken = damageStack( weaponStack, 1 )
 	local direction = eyeDirection( ply )
 	local speed = MC.ProjectileSpeed( definition, power * 1 )
@@ -364,8 +367,8 @@ function SV.FireBow( ply, record, stack, state, context )
 		if not infinite and ( not ammoSlot or not consumeStackAt( record, ammoSlot, 1 ) ) then
 			return false, "projectile_ammo_consume_failed"
 		end
-		local selectedIndex = record.selected
-		local ok, err = MC.ContainerSetStack( record.container, selectedIndex, infinite and weaponStack or replacement )
+		local selectedIndex = context.hand == "offhand" and 40 or record.selected
+		local ok, err = SV.SetInteractionStack( record, selectedIndex, infinite and weaponStack or replacement )
 		if not ok then return false, err or "bow_durability_failed" end
 		return true
 	end )
@@ -386,7 +389,7 @@ function SV.FinishCrossbowUse( ply, record, stack, state, context )
 		if not ammo and not infinite then return false, "projectile_ammo_missing" end
 		ammo = ammo and MC.CopyItemStack( ammo, 1 ) or MC.NewItemStack( "minecraft:arrow", 1 )
 		if not ammo then return false, "default_arrow_missing" end
-		local snapshot = MC.ContainerSnapshot( record.container )
+		local snapshot = SV.InteractionSnapshot( record )
 		local projectiles
 		local prepared, preparationError = prepareProjectiles( record, snapshot, {}, nil, function()
 			if not infinite and ( not ammoSlot or not consumeStackAt( record, ammoSlot, 1 ) ) then
@@ -394,7 +397,7 @@ function SV.FinishCrossbowUse( ply, record, stack, state, context )
 			end
 			projectiles = buildChargedProjectiles( ammo, crossbowProjectileCount( stack ), infinite )
 			local replacement = setChargedProjectiles( stack, projectiles )
-			local ok, setError = MC.ContainerSetStack( record.container, record.selected, replacement )
+			local ok, setError = SV.SetInteractionStack( record, context.hand == "offhand" and 40 or record.selected, replacement )
 			if not ok then return nil, setError or "crossbow_charge_failed" end
 			return true
 		end )
@@ -413,7 +416,7 @@ function SV.FinishCrossbowUse( ply, record, stack, state, context )
 	local clearedStack = setChargedProjectiles( stack, nil )
 	local durabilityAmount = chargedProjectilesDurabilityUse( charged )
 	local replacement, broken = damageStack( clearedStack, durabilityAmount )
-	local selectedIndex = record.selected
+	local selectedIndex = context.hand == "offhand" and 40 or record.selected
 	local direction, eyeAngles = eyeDirection( ply )
 	local shotAngles = crossbowShotAngles( #charged, crossbowProjectileSpread( stack ) )
 	local specifications, eventPower = {}, nil
@@ -448,7 +451,7 @@ function SV.FinishCrossbowUse( ply, record, stack, state, context )
 		actionId = context.actionId,
 	}, function()
 		local nextStack = infinite and clearedStack or replacement
-		local ok, err = MC.ContainerSetStack( record.container, selectedIndex, nextStack )
+		local ok, err = SV.SetInteractionStack( record, selectedIndex, nextStack )
 		return ok, err or "crossbow_durability_failed"
 	end )
 	if not entities then return false, result end
@@ -478,7 +481,7 @@ function SV.ThrowTrident( ply, record, stack, state, context )
 		reason = context.reason or "trident", actionId = context.actionId,
 	}, function()
 		if infinite then return true end
-		return MC.ContainerSetStack( record.container, record.selected, nil )
+		return SV.SetInteractionStack( record, context.hand == "offhand" and 40 or record.selected, nil )
 	end )
 	if not ent then return false, result end
 	if MC.RunEvent then MC.RunEvent( "MC.TridentThrown", ply, ent ) end
@@ -497,7 +500,7 @@ function SV.ThrowItemProjectile( ply, record, stack, context )
 		pickup = false, infinite = infinite, reason = context.reason or "projectile", actionId = context.actionId,
 	}, function()
 		if infinite then return true end
-		return MC.ContainerSetStack( record.container, record.selected,
+		return SV.SetInteractionStack( record, context.hand == "offhand" and 40 or record.selected,
 			stack.count > 1 and MC.CopyItemStack( stack, stack.count - 1 ) or nil )
 	end )
 	if not ent then return false, result end
@@ -555,10 +558,10 @@ function SV.TakeProjectileAmmo( ply, kind, amount, context )
 	local selectedStack = MC.CopyItemStack( stack, take )
 	if infinite then return selectedStack, take, true, false, nil end
 
-	local snapshot = MC.ContainerSnapshot( record.container )
+	local snapshot = SV.InteractionSnapshot( record )
 	local ok, consumeError = consumeStackAt( record, slot, take )
 	if not ok then
-		MC.ContainerRestore( record.container, snapshot )
+		SV.RestoreInteractionSnapshot( record, snapshot )
 		return nil, 0, false, false, consumeError or "projectile_ammo_consume_failed"
 	end
 	local result, commitError = commitOnly( record, snapshot, ply, {
@@ -601,14 +604,14 @@ function SV.LoadSelectedCrossbowProjectiles( ply, kind, projectileCount, context
 	ammo = MC.CopyItemStack( ammo, 1 )
 	local projectiles = buildChargedProjectiles( ammo, projectileCount, infinite )
 
-	local snapshot = MC.ContainerSnapshot( record.container )
+	local snapshot = SV.InteractionSnapshot( record )
 	local prepared, preparationError = prepareProjectiles( record, snapshot, {}, nil, function()
 		if not infinite then
 			local consumed, consumeError = consumeStackAt( record, ammoSlot, 1 )
 			if consumed ~= true then return nil, consumeError or "projectile_ammo_consume_failed" end
 		end
 		local replacement = setChargedProjectiles( weaponStack, projectiles )
-		local stored, storeError = MC.ContainerSetStack( record.container, selectedIndex, replacement )
+		local stored, storeError = SV.SetInteractionStack( record, selectedIndex, replacement )
 		if stored ~= true then return nil, storeError or "crossbow_charge_failed" end
 		return true
 	end )
@@ -668,10 +671,10 @@ local function commitSelectedCrossbowProjectiles( ply, durabilityAmount, context
 		newDamage = math.max( 0, math.floor( tonumber( weaponStack.damage ) or 0 ) )
 	end
 
-	local snapshot = MC.ContainerSnapshot( record.container )
-	local changed, changeError = MC.ContainerSetStack( record.container, selectedIndex, replacement )
+	local snapshot = SV.InteractionSnapshot( record )
+	local changed, changeError = SV.SetInteractionStack( record, selectedIndex, replacement )
 	if changed ~= true then
-		MC.ContainerRestore( record.container, snapshot )
+		SV.RestoreInteractionSnapshot( record, snapshot )
 		return nil, false, nil, infinite, changeError or "crossbow_shot_mutation_failed"
 	end
 	local result, commitError = commitOnly( record, snapshot, ply, {

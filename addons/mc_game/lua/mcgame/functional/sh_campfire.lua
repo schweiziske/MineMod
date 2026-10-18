@@ -20,16 +20,17 @@ local HANDLERS = {
 		return isShovel( stack ) or stack ~= nil and MC.FindCookingRecipe ~= nil
 			and MC.FindCookingRecipe( stack, "minecraft:campfire_cooking" ) ~= nil
 	end,
-	OnUse = function( ply, bx, by, bz )
+	OnUse = function( ply, bx, by, bz, orient, blockId, context )
 		if CLIENT then return true end
 		if not MC.SV then return false end
-		local stack = MC.SV.GetSelectedPlayerStack and MC.SV.GetSelectedPlayerStack( ply ) or nil
+		local stack = MC.SV.GetPlayerHandStack( ply, context and context.hand )
 		if isShovel( stack ) then
 			return MC.SV.DowseCampfireWithSelectedShovel
-				and MC.SV.DowseCampfireWithSelectedShovel( ply, bx, by, bz ) == true or false
+				and MC.SV.DowseCampfireWithSelectedShovel( ply, bx, by, bz,
+					{ hand = context and context.hand, alreadyValidated = true } ) == true or false
 		end
 		if not MC.SV.UseCampfire then return false end
-		return MC.SV.UseCampfire( ply, bx, by, bz ) == true
+		return MC.SV.UseCampfire( ply, bx, by, bz, context ) == true
 	end,
 	OnPlaced = function( context )
 		if SERVER and MC.SV and MC.SV.WakeCampfire then

@@ -759,6 +759,11 @@ net.Receive( "mc_inventory_creative_pick", function( _, ply )
 			sendRejected( record, actionId, "creative_stack_not_catalogued", false )
 			return
 		end
+		local weaponClass = MC.SpawnmenuWeapons.Class( stack )
+		if weaponClass and not reducingCarried then
+			local allowed, reason = MC.SpawnmenuWeapons.CanEquip( ply, weaponClass )
+			if not allowed then sendRejected( record, actionId, reason, false ) return end
+		end
 	end
 	local snapshot = MC.ContainerSnapshot( container )
 	local ok, err = MC.MutateCreativeInventory( container, targetSlot, stack )

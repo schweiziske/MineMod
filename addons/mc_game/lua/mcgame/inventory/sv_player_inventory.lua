@@ -393,12 +393,56 @@ function SV.SetPlayerSelectedSlot( ply, selected, context )
 	return true
 end
 
+-- Interaction slot 40 is Java Inventory.SLOT_OFFHAND, not a container/menu
+-- index. Keep the equipment storage separate while committing both stores at
+-- one revision (e.g. an offhand bow consuming an arrow from the hotbar).
+function SV.InteractionStack( record, slotIndex )
+	if slotIndex == 40 then return MC.CopyItemStack( record.equipment.offhand ) end
+	return MC.ContainerGetStack( record.container, slotIndex )
+end
+
+function SV.GetPlayerHandStack( ply, hand )
+	if hand == "offhand" then return SV.GetPlayerEquipmentStack( ply, "offhand" ) end
+	return SV.GetSelectedPlayerStack( ply )
+end
+
+function SV.SetInteractionStack( record, slotIndex, stack )
+	if slotIndex ~= 40 then return MC.ContainerSetStack( record.container, slotIndex, stack ) end
+	local normalized, err = MC.NormalizeItemStack( stack )
+	if stack ~= nil and not normalized then return false, err end
+	record.equipment.offhand = normalized
+	return true
+end
+
+function SV.InteractionSnapshot( record, includeOffhand )
+	local snapshot = MC.ContainerSnapshot( record.container )
+	if includeOffhand ~= false then
+		snapshot.interactionOffhand = true
+		if not record.container.swapRecord then
+			snapshot.offhand = MC.CopyItemStack( record.equipment.offhand )
+		end
+	end
+	return snapshot
+end
+
+function SV.RestoreInteractionSnapshot( record, snapshot )
+	MC.ContainerRestore( record.container, snapshot )
+	if snapshot.interactionOffhand then
+		record.equipment.offhand = MC.CopyItemStack( snapshot.offhand )
+	end
+end
+
 function SV.CommitPlayerInventoryMutation( record, snapshot, context )
 	local container = record and record.container
 	if not container or not snapshot then return nil, "invalid_inventory_mutation" end
 	local changedSlots = MC.ContainerChangedSlots( container, snapshot )
 	local cursorChanged = not MC.ItemStacksEqual( container.cursor, snapshot.cursor )
-	if #changedSlots == 0 and not cursorChanged then
+	local equipmentResult
+	if snapshot.interactionOffhand and not MC.ItemStacksEqual( record.equipment.offhand, snapshot.offhand ) then
+		equipmentResult = { ok = true, changedSlots = { "offhand" },
+			changed = { offhand = MC.CopyItemStack( record.equipment.offhand ) } }
+	end
+	if #changedSlots == 0 and not cursorChanged and not equipmentResult then
 		return { ok = true, revision = container.revision, changedSlots = {}, changed = {}, cursor = MC.CopyItemStack( container.cursor ), drops = {} }
 	end
 	container.revision = container.revision + 1
@@ -411,7 +455,17 @@ function SV.CommitPlayerInventoryMutation( record, snapshot, context )
 		cursor = MC.CopyItemStack( container.cursor ),
 		drops = {},
 	}
+	if equipmentResult then
+		equipmentResult.revision = container.revision
+		SV.UpdatePlayerEquipmentNetwork( record )
+	end
 	onContainerCommit( record, container, result, context or {} )
+	if equipmentResult then
+		-- The inventory delta already carries offhand, at the same revision as
+		-- the ammunition/selected-stack changes. Do not send a second delta.
+		if MC.RunEvent then MC.RunEvent( "MC.EquipmentChanged", record.owner,
+			equipmentResult.changedSlots, equipmentResult, context or {} ) end
+	end
 	return result
 end
 

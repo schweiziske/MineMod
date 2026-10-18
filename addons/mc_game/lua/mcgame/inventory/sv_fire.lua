@@ -301,6 +301,7 @@ function SV.UseSelectedFlintAndSteel( ply, context )
 	context = istable( context ) and context or {}
 	local matchContext = {
 		expectedItem = "minecraft:flint_and_steel",
+		hand = context.hand,
 		expectedClass = context.expectedClass,
 		expectedStackHash = context.expectedStackHash,
 	}
@@ -316,6 +317,7 @@ function SV.UseSelectedFlintAndSteel( ply, context )
 	local function commitDurability()
 		local result, didBreak, err = SV.DamageSelectedItem( ply, 1, {
 			expectedItem = matchContext.expectedItem,
+			hand = context.hand,
 			expectedClass = matchContext.expectedClass,
 			expectedStackHash = matchContext.expectedStackHash,
 			reason = context.reason or "flint_and_steel_use",

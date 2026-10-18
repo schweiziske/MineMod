@@ -83,6 +83,7 @@ local SHARED = {
 	"mcgame/inventory/sh_crafting.lua",
 	"mcgame/inventory/sh_anvil.lua",
 	"mcgame/item/sh_public_api.lua",
+	"mcgame/item/sh_spawnmenu_weapons.lua",
 	"mcgame/inventory/sh_enchanting.lua",
 	"mcgame/inventory/sh_merchant.lua",
 	"mcgame/functional/sh_furnace_data.lua",

@@ -16,6 +16,7 @@ local Bridge = MC.HandWeaponBridge
 Bridge.Resolvers = Bridge.Resolvers or {}
 Bridge.ResolverOrder = Bridge.ResolverOrder or {}
 Bridge.ManagedClasses = Bridge.ManagedClasses or {}
+Bridge.WeaponAdapters = Bridge.WeaponAdapters or {}
 Bridge.ResolverErrors = Bridge.ResolverErrors or {}
 Bridge.SelectionProviders = Bridge.SelectionProviders or {}
 Bridge.SelectionProviderOrder = Bridge.SelectionProviderOrder or {}
@@ -210,6 +211,20 @@ function Bridge.IsInventoryControlledClass( value )
 	return className ~= nil and ( className == Bridge.HandClass or className == Bridge.InventoryClass or Bridge.IsManagedClass( className ) )
 end
 
+-- Optional acquisition for engine-native weapons or integrations which own
+-- their weapon lifetime. Existing resolver integrations retain SWEP semantics.
+function Bridge.RegisterWeaponAdapter( className, adapter )
+	if not validClassName( className ) or type( adapter ) ~= "table"
+	or not isfunction( adapter.acquire ) or not isfunction( adapter.matches ) then return false, "invalid_weapon_adapter" end
+	Bridge.WeaponAdapters[className] = {
+		acquire = adapter.acquire,
+		matches = adapter.matches,
+		retain = adapter.retain == true,
+		ownsFirstPerson = adapter.ownsFirstPerson == true,
+	}
+	return Bridge.RegisterManagedClass( className )
+end
+
 -- External resolver SWEPs may own a native first-person presentation path
 -- (animation plus model) that must not be duplicated by the inventory hand
 -- renderer. The capability is declared on the shared SWEP definition and read
@@ -217,6 +232,12 @@ end
 function Bridge.OwnsFirstPersonPresentation( value )
 	if IsValid( value ) and value.MCHandWeaponOwnsFirstPerson == true then return true end
 	local className = classNameFor( value )
+	local adapter = className and Bridge.WeaponAdapters[className]
+	if adapter and adapter.ownsFirstPerson and IsValid( value ) then
+		local owner = value:GetOwner()
+		local stack = IsValid( owner ) and Bridge.GetSelected( owner ) or nil
+		if stack and adapter.matches( stack ) then return true end
+	end
 	local stored = className and weapons and weapons.GetStored and weapons.GetStored( className ) or nil
 	return stored ~= nil and stored.MCHandWeaponOwnsFirstPerson == true
 end
@@ -249,6 +270,10 @@ end
 
 API.HandWeapon = API.HandWeapon or {}
 local HandWeapon = API.HandWeapon
+
+function HandWeapon.RegisterWeaponAdapter( className, adapter )
+	return Bridge.RegisterWeaponAdapter( className, adapter )
+end
 
 function HandWeapon.ConfigureBaseClasses( owner, handClass, inventoryClass )
 	return Bridge.ConfigureBaseClasses( owner, handClass, inventoryClass )

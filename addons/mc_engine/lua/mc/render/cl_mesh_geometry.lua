@@ -302,6 +302,13 @@ local function modelOrientSteps( b, orient )
 		if orient == MC.Axis.Z then return 1, 0 end
 		return 0, 0
 	end
+	if b.orient == "stairs" then
+		local facing = MC.StairOrientFacing( orient )
+		local zSteps = facing == MC.Direction.EAST and 1 or facing == MC.Direction.SOUTH and 2
+			or facing == MC.Direction.WEST and 3 or 0
+		if MC.StairOrientHalf( orient ) == "top" then return 2, ( zSteps + 2 ) % 4 end
+		return 0, zSteps
+	end
 	if b.orient ~= "horizontal_facing" and b.orient ~= "facing" and b.orient ~= "door" and b.orient ~= "trapdoor" and b.orient ~= "bed" then return 0, 0 end
 	if b.orient == "facing" then
 		-- down/up model variants are baked vertical already (see MC.BlockModelData)

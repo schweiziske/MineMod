@@ -1471,8 +1471,9 @@ function RM.NativeModelRecipe( stateId, includeWaterlogged )
 		emitter = selectBlockEmitter( ctx, b, id, visual.renderOrient, MC.BlockIsFullCube, 0, 0, 0 )
 	end
 	if emitter ~= BlockEmitters.statePlan and emitter ~= BlockEmitters.model then return false end
-	local groups = MC.StateVisualPlanGroups( stateId )
-	if #groups == 0 then
+	local projectModel = emitter == BlockEmitters.model and visual.schema.project == true
+	local groups = projectModel and {} or MC.StateVisualPlanGroups( stateId )
+	if #groups == 0 and not projectModel then
 		if not waterloggedHost then return false end
 		local planId, _, count = MC.StateVisualPlanRangeFast( stateId )
 		if planId < 1 or planId > MC.StateVisualCatalog.visualPlanCount or count ~= 0 then return false end
@@ -1485,8 +1486,10 @@ function RM.NativeModelRecipe( stateId, includeWaterlogged )
 	end
 	local legacy, selected
 	if emitter == BlockEmitters.model then
-		local planId = MC.StateVisualPlanIdFast( stateId )
-		if MC.StateVisualPlanHasRandomChoice( planId ) then return false end
+		if not projectModel then
+			local planId = MC.StateVisualPlanIdFast( stateId )
+			if MC.StateVisualPlanHasRandomChoice( planId ) then return false end
+		end
 		legacy = getModelTemplate( b, visual.renderOrient, stateId )
 		if not legacy then return false end
 		selected = models.Selection( stateId, 0, 0, 0 )
@@ -1517,13 +1520,13 @@ function RM.NativeModelRecipe( stateId, includeWaterlogged )
 		return buffer.nativeCommands, culls
 	end
 	local packet = {}
-	if #groups == 0 then
-		-- A registered empty multipart plan is one no-op choice in the DLL ABI.
-		packet[1] = { 0, { { 1, true, {}, {}, {} } } }
-	elseif legacy then
+	if legacy then
 		local shaded, culls = capture( legacy, nil, true )
 		local flat = capture( legacy, nil, false )
 		packet[1] = { 0, { { 1, selected.modelAO, shaded, flat, culls } } }
+	elseif #groups == 0 then
+		-- A registered empty multipart plan is one no-op choice in the DLL ABI.
+		packet[1] = { 0, { { 1, true, {}, {}, {} } } }
 	else
 		for i, group in ipairs( groups ) do
 			local alternatives = {}
