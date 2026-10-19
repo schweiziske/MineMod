@@ -61,20 +61,30 @@ end
 
 function ENT:FinishEnderEye()
     local position = self:GetPos()
-    Throwables.PlayEnderEyeDeath(self)
     if self:GetMCEyeSurvives() then
-        Throwables.ReturnEnderEye(position, self:GetOwner(), { projectile = self })
+        if not Throwables.ReturnEnderEye(position, self:GetOwner(), { projectile = self }) then
+            self.MCEyeVelocityValue = vector_origin
+            return false
+        end
     else
         Throwables.BroadcastFX(
             Throwables.FX.ENDER_EYE_DEATH,
-            Throwables.LevelEventPosition(position)
+            Throwables.LevelEventPosition(position, self)
         )
     end
+    Throwables.PlayEnderEyeDeath(self)
     hook.Run("MCITEM.EnderEyeFinished", self:GetOwner(), self, self:GetMCEyeSurvives(), position)
     self:Remove()
 end
 
 function ENT:EnderEyeStep()
+    if self.MCEyeLife > Throwables.EnderEyeLifetimeTicks then
+        if CurTime() >= (self.MCNextReturnAttempt or 0) then
+            self.MCNextReturnAttempt = CurTime() + 1
+            self:FinishEnderEye()
+        end
+        return
+    end
     local oldPosition = self:GetPos()
     local current = self.MCEyeVelocityValue or vector_origin
     local nextPosition = oldPosition + current * MCITEM.BlockSize()
@@ -82,7 +92,7 @@ function ENT:EnderEyeStep()
         and updatedVelocity(current, nextPosition, self.MCEyeTarget) or current
     self.MCEyeVelocityValue = nextVelocity
     self:SetMCEyeVelocity(nextVelocity)
-    self:SetMCEyeInWater(Throwables.FluidKindAt(oldPosition) == "water")
+    self:SetMCEyeInWater(Throwables.FluidKindAt(oldPosition, self) == "water")
     self.MCEyeLife = self.MCEyeLife + 1
     self:SetMCEyeTick(self.MCEyeLife)
     self:SetPos(nextPosition)

@@ -103,7 +103,8 @@ function ENT:IsMCShulkerDirectionClear(direction)
     return not MCITEM.Throwables.HullCollidesAt(
         self:GetPos() + direction * MCITEM.BlockSize(),
         -extent,
-        extent
+        extent,
+        self
     )
 end
 
@@ -162,7 +163,6 @@ end
 
 function ENT:ApplyMCShulkerDamage(target)
     if not targetIsAlive(target) then return false end
-    local before = target.Health and target:Health() or nil
     local scale
     if target.IsBMBMob == true and isfunction(target.GetMCMinecraftHealthScale) then
         scale = target:GetMCMinecraftHealthScale()
@@ -177,10 +177,12 @@ function ENT:ApplyMCShulkerDamage(target)
     damage:SetInflictor(self)
     damage:SetDamagePosition(self:GetPos())
     damage:SetDamageForce(vector_origin)
-    target:TakeDamageInfo(damage)
-
-    local accepted = before == nil or not target.Health or target:Health() < before
-    if accepted then
+    local accepted = MCITEM.TakeDamage(target, damage)
+    if accepted and IsValid(target) then
+        MCITEM.Potions.ApplyEffect(target, {
+            id = "levitation", durationTicks = 200, amplifier = 0,
+            ambient = false, visible = true, showIcon = true,
+        }, self:GetOwner(), { delivery = "shulker_bullet", projectile = self })
         hook.Run("MCITEM.ShulkerBulletDamagedEntity", self, target, self:GetOwner(), damage)
     end
     return accepted

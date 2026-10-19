@@ -590,6 +590,8 @@ local function applyEquipmentCombatDamage( target, damageInfo )
 	-- an addon hook from depending on EntityTakeDamage registration order.
 	damageInfo:SetDamage( math.max( 0, damage ) )
 	hook.Run( "MCITEM.DamageAfterEquipmentMitigation", target, damageInfo, metadata )
+	-- All protection listeners must finish before absorption consumes health.
+	hook.Run( "MCITEM.DamageAfterProtectionMitigation", target, damageInfo, metadata )
 	damage = math.max( 0, tonumber( damageInfo:GetDamage() ) or 0 )
 	tryDeathProtection( target, record, damageInfo, metadata, damage )
 	damage = math.max( 0, tonumber( damageInfo:GetDamage() ) or 0 )

@@ -6,8 +6,8 @@ MCITEM = MCITEM or {}
 MCITEM.Fishing = MCITEM.Fishing or {}
 
 local Fishing = MCITEM.Fishing
-if (tonumber(Fishing.LootVersion) or 0) >= 1 then return Fishing end
-Fishing.LootVersion = 1
+if (tonumber(Fishing.LootVersion) or 0) >= 2 then return Fishing end
+Fishing.LootVersion = 2
 
 local Generated = Fishing.Generated or include("mcitem/fishing/sh_generated_data.lua")
 
@@ -155,7 +155,7 @@ function Fishing.GenerateLoot(luck, openWater, position, hookEntity)
     -- Preserve provider luck fractions until each weighted entry is scored.
     -- The vanilla table rounds `weight + quality * luck` per entry, rather
     -- than rounding the aggregate luck attribute at the call boundary.
-    luck = math.max(0, tonumber(luck) or 0)
+    luck = tonumber(luck) or 0
     local category = weightedChoice(Generated.main, function(entry)
         if entry.requiresOpenWater and openWater ~= true then return 0 end
         return math.max(math.floor(entry.weight + entry.quality * luck), 0)

@@ -6,7 +6,8 @@ MCITEM = MCITEM or {}
 MCITEM.Throwables = MCITEM.Throwables or {}
 
 local Throwables = MCITEM.Throwables
-if Throwables.ThrowAdapterLoaded then return end
+if (Throwables.ThrowAdapterVersion or 0) >= 3 then return end
+Throwables.ThrowAdapterVersion = 3
 Throwables.ThrowAdapterLoaded = true
 
 local function enderEyeOrigin(owner)
@@ -65,19 +66,18 @@ local function spawnEnderEye(owner, weapon, definition)
     return projectile
 end
 
-function Throwables.Use(weapon)
+function Throwables.Use(weapon, useContext)
     if not IsValid(weapon) then return nil end
     local owner = weapon:GetOwner()
-    local definition = Throwables.DefinitionForWeapon(weapon)
+    local definition = useContext and useContext.definition or Throwables.DefinitionForWeapon(weapon)
     if not Throwables.CanUse(weapon, owner, definition) then return nil end
+    local useStack = useContext and useContext.useStack or hook.Run("MCITEM.CaptureUseStack", owner, weapon)
 
     local projectile
     if definition.id == "ender_eye" then
         projectile = spawnEnderEye(owner, weapon, definition)
-        if IsValid(projectile) then Throwables.PlayEnderEyeLaunch(owner) end
     else
         projectile = spawnGeneric(owner, definition)
-        if IsValid(projectile) then Throwables.PlayStandardThrow(owner, definition.soundEvent) end
     end
     if not IsValid(projectile) then return nil end
 
@@ -85,11 +85,19 @@ function Throwables.Use(weapon)
         definition = definition,
         projectile = projectile,
         weapon = weapon,
+        useStack = useStack,
+        hand = useContext and useContext.hand,
     }
-    if isfunction(weapon.OnMCThrowableUsed) then
+    if not Throwables.Consume(owner, weapon, definition, context) then
+        projectile:Remove()
+        return nil
+    end
+    Throwables.StartCooldown(owner, definition)
+    if definition.id == "ender_eye" then Throwables.PlayEnderEyeLaunch(owner)
+    else Throwables.PlayStandardThrow(owner, definition.soundEvent) end
+    if IsValid(weapon) and isfunction(weapon.OnMCThrowableUsed) then
         weapon:OnMCThrowableUsed(owner, projectile, definition, context)
     end
     hook.Run("MCITEM.ThrowableUsed", owner, weapon, projectile, definition, context)
-    Throwables.Consume(owner, weapon, definition, context)
     return projectile
 end

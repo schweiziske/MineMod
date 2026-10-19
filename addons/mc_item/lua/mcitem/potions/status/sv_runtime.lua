@@ -19,6 +19,7 @@ local STATUS_REVISION_WRAP = 2147483000
 local MAX_CATCHUP_TICKS = 8
 
 Potions.Tracked = Potions.Tracked or {}
+Potions.StatusTick = Potions.StatusTick or math.floor(CurTime() / (1 / 20))
 -- Expose the wire constants so another MCITEM-aware UI can consume the same
 -- snapshot without duplicating magic key names or limits.
 Potions.StatusSnapshotProtocol = Potions.StatusSnapshotProtocol or {
@@ -134,7 +135,8 @@ local function mergeInstance(existing, incoming)
             existing.context = incoming.context
             changed = true
         end
-    elseif incoming.durationTicks > existing.durationTicks then
+    elseif not isInfinite(existing)
+        and (isInfinite(incoming) or incoming.durationTicks > existing.durationTicks) then
         if existing.hidden then
             changed = mergeInstance(existing.hidden, incoming) or changed
         else
@@ -226,6 +228,8 @@ local function syncTarget(target)
     for effectId, effect in pairs(effectsFor(target, false) or {}) do
         local definition = Potions.EffectDefinition(effectId) or {}
         local duration = tonumber(effect.durationTicks) or 0
+        local expiresAt
+        if duration ~= -1 then expiresAt = CurTime() + math.max(0, duration) * Potions.TickSeconds end
         serialized[#serialized + 1] = {
             id = effectId,
             amplifier = effect.amplifier,
@@ -233,8 +237,7 @@ local function syncTarget(target)
             -- Clients render a local countdown from this absolute server
             -- clock value.  The status list is therefore networked only
             -- when the effect changes, not once per tick.
-            expiresAt = duration == -1 and nil
-                or CurTime() + math.max(0, duration) * Potions.TickSeconds,
+            expiresAt = expiresAt,
             ambient = effect.ambient == true,
             visible = effect.visible ~= false,
             showIcon = effect.showIcon ~= false,
@@ -351,12 +354,17 @@ end
 
 local function applyPeriodicEffect(target, effect)
     local amplifier = effect.amplifier or 0
+    local tick = effect.durationTicks
+    if isInfinite(effect) then
+        tick = Potions.StatusTick
+    end
     if effect.id == "poison" then
         local interval = math.max(bit.rshift(25, amplifier), 1)
-        if effect.durationTicks % interval == 0 then
+        if tick % interval == 0 then
             local health = tonumber(target:Health()) or 0
-            if health > 1 then
-                Potions.DamageMagic(target, math.min(1, health - 1), effect.source, {
+            local scale = Potions.GetMinecraftHealthScale(target, effect.context)
+            if health > scale then
+                Potions.DamageMagic(target, math.min(1, health / scale - 1), effect.source, {
                     delivery = "status_tick",
                     effect = effect,
                     nonlethal = true,
@@ -368,7 +376,7 @@ local function applyPeriodicEffect(target, effect)
         -- max(40 >> amplifier, 1) ticks.  Unlike poison there is no
         -- one-health floor.
         local interval = math.max(bit.rshift(40, amplifier), 1)
-        if effect.durationTicks % interval == 0 then
+        if tick % interval == 0 then
             Potions.DamageMagic(target, 1, effect.source, {
                 delivery = "status_tick",
                 effect = effect,
@@ -377,7 +385,7 @@ local function applyPeriodicEffect(target, effect)
         end
     elseif effect.id == "regeneration" then
         local interval = math.max(bit.rshift(50, amplifier), 1)
-        if effect.durationTicks % interval == 0 then
+        if tick % interval == 0 then
             Potions.Heal(target, 1, { delivery = "status_tick", effect = effect })
         end
     elseif effect.id == "hunger" then
@@ -453,6 +461,7 @@ hook.Add("Think", "MCITEM.Potions.StatusTick", function()
     local now = CurTime()
     local steps = 0
     while now >= nextStatusTick and steps < MAX_CATCHUP_TICKS do
+        Potions.StatusTick = Potions.StatusTick + 1
         for target in pairs(Potions.Tracked) do tickTarget(target) end
         nextStatusTick = nextStatusTick + Potions.TickSeconds
         steps = steps + 1

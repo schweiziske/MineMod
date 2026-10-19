@@ -49,6 +49,7 @@ function Potions.StartDrink(weapon, now)
     state.startedAt = tonumber(now) or CurTime()
     state.processedTicks = 0
     state.generation = (state.generation or 0) + 1
+    if SERVER then state.useStack = hook.Run("MCITEM.CaptureUseStack", owner, weapon) end
     return true
 end
 

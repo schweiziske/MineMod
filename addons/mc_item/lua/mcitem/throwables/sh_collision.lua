@@ -6,12 +6,18 @@ MCITEM = MCITEM or {}
 MCITEM.Throwables = MCITEM.Throwables or {}
 
 local Throwables = MCITEM.Throwables
-local COLLISION_VERSION = 3
+local COLLISION_VERSION = 4
 if (tonumber(Throwables.CollisionVersion) or 0) >= COLLISION_VERSION then return end
 Throwables.CollisionVersion = COLLISION_VERSION
 Throwables.CollisionLoaded = true
 
 local EPSILON = 1e-7
+
+local function worldPosition(position, context)
+    local coords = MC and MC.API and MC.API.Coords
+    if coords then return coords.EngineToWorld(position, context or (CLIENT and LocalPlayer() or nil)) end
+    return position
+end
 
 -- MCSWEP exposes its Minecraft world collision through large Source entities
 -- (`mc_chunk`, `mc_chunk_phys` and the client prediction carrier).  Those
@@ -69,7 +75,6 @@ function Throwables.RayAABB(startPosition, direction, maximumDistance, minimum, 
             local firstNormal = axisNormal(axis, delta > 0 and -1 or 1)
             if first > second then
                 first, second = second, first
-                firstNormal = -firstNormal
             end
             if first > nearDistance then
                 nearDistance = first
@@ -112,15 +117,17 @@ local function sourceWorldTrace(startPosition, destination)
     return trace
 end
 
-local function minecraftBlockTrace(startPosition, direction, maximumDistance)
+local function minecraftBlockTrace(startPosition, direction, maximumDistance, context)
     local world = MC and MC.API and MC.API.World
+    local worldStart = worldPosition(startPosition, context)
     local trace
     if world and isfunction(world.TraceRay) then
-        trace = world.TraceRay(startPosition, direction, maximumDistance)
+        trace = world.TraceRay(worldStart, direction, maximumDistance)
     elseif MC and isfunction(MC.TraceBlockRay) then
-        trace = MC.TraceBlockRay(startPosition, direction, maximumDistance)
+        trace = MC.TraceBlockRay(worldStart, direction, maximumDistance)
     end
     if not trace or trace.Hit ~= true then return nil end
+    trace.HitPos = trace.HitPos - (worldStart - startPosition)
     trace.HitWorld = true
     trace.Entity = game.GetWorld()
     return trace
@@ -273,7 +280,7 @@ function Throwables.TraceProjectile(projectile, startPosition, destination)
     local direction = displacement / maximumDistance
     local best
     best = closestTrace(best, sourceWorldTrace(startPosition, destination), startPosition, maximumDistance)
-    best = closestTrace(best, minecraftBlockTrace(startPosition, direction, maximumDistance), startPosition, maximumDistance)
+    best = closestTrace(best, minecraftBlockTrace(startPosition, direction, maximumDistance, projectile), startPosition, maximumDistance)
     best = closestTrace(best, sourceEntityTrace(projectile, startPosition, destination), startPosition, maximumDistance)
     best = closestTrace(best, entityTrace(projectile, startPosition, direction, maximumDistance, destination), startPosition, maximumDistance)
     if best then return best end
@@ -305,8 +312,12 @@ local function cellCollisionBoxes(bx, by, bz)
     return nil
 end
 
-local function minecraftHullTrace(startPosition, destination, minimumHull, maximumHull)
+local function minecraftHullTrace(startPosition, destination, minimumHull, maximumHull, context)
     if not MC or not isfunction(MC.WorldToCell) or not isfunction(MC.CellWorldMin) then return nil end
+    local sourceStart = startPosition
+    local worldStart = worldPosition(startPosition, context)
+    local offset = worldStart - startPosition
+    startPosition, destination = worldStart, destination + offset
     local displacement = destination - startPosition
     local maximumDistance = displacement:Length()
     if maximumDistance <= EPSILON then return nil end
@@ -355,7 +366,7 @@ local function minecraftHullTrace(startPosition, destination, minimumHull, maxim
                                 bz = bz,
                                 StateId = MC.GetBlockState(bx, by, bz),
                                 Entity = game.GetWorld(),
-                                HitPos = startPosition + direction * distance,
+                                HitPos = sourceStart + direction * distance,
                                 HitNormal = normal,
                                 Distance = distance,
                                 Fraction = distance / maximumDistance,
@@ -369,7 +380,7 @@ local function minecraftHullTrace(startPosition, destination, minimumHull, maxim
     return best
 end
 
-function Throwables.TraceMovementHull(startPosition, destination, minimumHull, maximumHull, filter)
+function Throwables.TraceMovementHull(startPosition, destination, minimumHull, maximumHull, filter, context)
     local displacement = destination - startPosition
     local maximumDistance = displacement:Length()
     if maximumDistance <= EPSILON then return { Hit = false, HitPos = destination } end
@@ -415,14 +426,14 @@ function Throwables.TraceMovementHull(startPosition, destination, minimumHull, m
     best = closestTrace(best, source.Hit and source or nil, startPosition, maximumDistance)
     best = closestTrace(
         best,
-        minecraftHullTrace(startPosition, destination, minimumHull, maximumHull),
+        minecraftHullTrace(startPosition, destination, minimumHull, maximumHull, context or (IsValid(filter) and filter or nil)),
         startPosition,
         maximumDistance
     )
     return best or { Hit = false, HitPos = destination, Fraction = 1, Distance = maximumDistance }
 end
 
-function Throwables.HullCollidesAt(position, minimumHull, maximumHull)
+function Throwables.HullCollidesAt(position, minimumHull, maximumHull, context)
     local source = util.TraceHull({
         start = position,
         endpos = position,
@@ -437,7 +448,8 @@ function Throwables.HullCollidesAt(position, minimumHull, maximumHull)
     if source.StartSolid or source.AllSolid then return true end
     if not MC or not isfunction(MC.WorldToCell) or not isfunction(MC.CellWorldMin) then return false end
 
-    local hullMinimum, hullMaximum = position + minimumHull, position + maximumHull
+    local world = worldPosition(position, context)
+    local hullMinimum, hullMaximum = world + minimumHull, world + maximumHull
     local minX, minY, minZ = MC.WorldToCell(hullMinimum)
     local maxX, maxY, maxZ = MC.WorldToCell(hullMaximum)
     if minX == nil or maxX == nil then return false end
@@ -460,12 +472,12 @@ function Throwables.HullCollidesAt(position, minimumHull, maximumHull)
     return false
 end
 
-function Throwables.FluidKindAt(position)
+function Throwables.FluidKindAt(position, context)
     if not isvector(position) then return nil end
     if MC and isfunction(MC.WorldToCell) and isfunction(MC.GetBlockState)
         and isfunction(MC.LiquidStateMetrics)
     then
-        local bx, by, bz = MC.WorldToCell(position)
+        local bx, by, bz = MC.WorldToCell(worldPosition(position, context))
         if bx ~= nil then
             local stateId = MC.GetBlockState(bx, by, bz) or 0
             local kind = MC.LiquidStateMetrics(stateId)
@@ -481,12 +493,13 @@ function Throwables.FluidKindAt(position)
     return nil
 end
 
-function Throwables.LevelEventPosition(position)
+function Throwables.LevelEventPosition(position, context)
     if not isvector(position) then return position end
     if MC and isfunction(MC.WorldToCell) and isfunction(MC.CellWorldMin) then
-        local bx, by, bz = MC.WorldToCell(position)
+        local world = worldPosition(position, context)
+        local bx, by, bz = MC.WorldToCell(world)
         if bx ~= nil then
-            return MC.CellWorldMin(bx, by, bz) + Vector(0.5, 0.5, 0) * MCITEM.BlockSize()
+            return MC.CellWorldMin(bx, by, bz) + Vector(0.5, 0.5, 0) * MCITEM.BlockSize() - (world - position)
         end
     end
     local blockSize = MCITEM.BlockSize()

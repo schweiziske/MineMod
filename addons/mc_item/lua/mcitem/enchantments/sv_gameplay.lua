@@ -138,9 +138,11 @@ local function triggerThorns(victim, attacker)
                 and MCITEM.ScaleDamage(math.random(1, 5)) or math.random(1, 5))
             damageInfo:SetDamageType(DMG_SLASH)
             damageInfo:SetDamagePosition(attacker:WorldSpaceCenter())
+            local previousGuard = Runtime.ThornsGuard[attacker]
             Runtime.ThornsGuard[attacker] = true
-            attacker:TakeDamageInfo(damageInfo)
-            Runtime.ThornsGuard[attacker] = nil
+            local ok, err = pcall(attacker.TakeDamageInfo, attacker, damageInfo)
+            Runtime.ThornsGuard[attacker] = previousGuard
+            if not ok then error(err, 0) end
             damageEquipment(victim, entry.slot, 2, {
                 reason = "thorns",
                 attacker = attacker,
@@ -163,13 +165,16 @@ end
 
 hook.Remove("MCITEM.DamageBeforeEquipmentMitigation", "MCITEM.Enchantments.FrostWalkerImmunity")
 hook.Add("MCITEM.DamageBeforeEquipmentMitigation", "MCITEM.Enchantments.FrostWalkerImmunity",
-    applyFrostWalkerSteppingImmunity)
+    function(target, damageInfo, metadata)
+        -- hook.Run stops on false too. Non-applicable immunity must let the
+        -- other before-armor listeners (including Strength/Weakness) run.
+        if applyFrostWalkerSteppingImmunity(target, damageInfo, metadata) then return true end
+    end)
 
 hook.Remove("MCITEM.DamageAfterEquipmentMitigation", "MCITEM.Enchantments.PassiveProtection")
 hook.Add("MCITEM.DamageAfterEquipmentMitigation", "MCITEM.Enchantments.PassiveProtection",
     function(target, damageInfo, metadata)
         if not IsValid(target) or not target:IsPlayer() or not damageInfo then return end
-        if Runtime.ThornsGuard[target] then return end
         -- Compatibility fallback for older mc_game builds without the early
         -- mitigation hook.  Current builds stop this damage before armor wear.
         if applyFrostWalkerSteppingImmunity(target, damageInfo, metadata) then return end
@@ -185,7 +190,7 @@ hook.Add("MCITEM.DamageAfterEquipmentMitigation", "MCITEM.Enchantments.PassivePr
 
         if damageInfo:GetDamage() <= 0 then return end
         local attacker = damageInfo.GetAttacker and damageInfo:GetAttacker() or nil
-        if living(attacker) and attacker ~= target then
+        if living(attacker) and attacker ~= target and not Runtime.ThornsGuard[target] then
             timer.Simple(0, function()
                 if IsValid(target) and IsValid(attacker) then triggerThorns(target, attacker) end
             end)
@@ -534,38 +539,20 @@ local function updateLocationEffects(playerEntity, now)
     return state
 end
 
-hook.Remove("SetupMove", "MCITEM.Enchantments.Movement")
-hook.Add("SetupMove", "MCITEM.Enchantments.Movement", function(playerEntity, moveData)
-    if not IsValid(playerEntity) or not playerEntity:Alive() then return end
-    local maximum = math.max(0, tonumber(moveData:GetMaxSpeed()) or 0)
-    local clientMaximum = math.max(0, tonumber(moveData:GetMaxClientSpeed()) or maximum)
-    local desired = maximum
-
+hook.Add("MCITEM.EnchantmentMovementParameters", "MCITEM.Enchantments.Movement", function(playerEntity)
     local depth = Runtime.GetEquipmentLevel(playerEntity, "feet", "depth_strider")
-    if depth > 0 and playerInWater(playerEntity) then
-        local efficiency = math.min(depth / 3, 1)
-        local landSpeed = playerEntity:KeyDown(IN_SPEED)
-            and playerEntity:GetRunSpeed() or playerEntity:GetWalkSpeed()
-        desired = Lerp(efficiency, desired, math.max(desired, landSpeed))
-    end
-
     local swift = Runtime.GetEquipmentLevel(playerEntity, "legs", "swift_sneak")
-    if swift > 0 and (playerEntity:Crouching() or moveData:KeyDown(IN_DUCK)) then
-        local sneakingRatio = math.min(1, 0.3 + 0.15 * swift)
-        desired = math.max(desired, playerEntity:GetWalkSpeed() * sneakingRatio)
-    end
-
     local location = updateLocationEffects(playerEntity, CurTime())
     local soul = Runtime.GetEquipmentLevel(playerEntity, "feet", "soul_speed")
-    if soul > 0 and location.soulSpeedActive and not playerEntity:InVehicle()
-        and not (isfunction(Runtime.IsFallFlying) and Runtime.IsFallFlying(playerEntity) == true) then
-        desired = desired * (1 + (0.0405 + 0.0105 * (soul - 1)) / 0.1)
+    if not location.soulSpeedActive or playerEntity:InVehicle()
+        or (isfunction(Runtime.IsFallFlying) and Runtime.IsFallFlying(playerEntity)) then soul = 0 end
+    local values = location.movementParameters
+    if not values then values = Vector() location.movementParameters = values end
+    if values.x ~= depth or values.y ~= swift or values.z ~= soul then
+        values.x, values.y, values.z = depth, swift, soul
+        playerEntity:SetNW2Vector("MCITEMMovementEnchantments", values)
     end
-
-    if desired ~= maximum then
-        moveData:SetMaxSpeed(desired)
-        moveData:SetMaxClientSpeed(math.max(clientMaximum, desired))
-    end
+    return values
 end)
 
 local function clearRiptide(owner)

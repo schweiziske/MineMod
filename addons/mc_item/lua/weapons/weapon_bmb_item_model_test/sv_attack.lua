@@ -57,13 +57,12 @@ local function takeDamageInfoForAttack(self, owner, target, damageInfo, attackCo
     local transaction = runtime and isfunction(runtime.BindMaceDamageTransaction)
         and runtime.BindMaceDamageTransaction(owner, self, target, damageInfo, attackContext)
         or nil
-    local ok, err = pcall(function()
-        target:TakeDamageInfo(damageInfo)
-    end)
+    local ok, accepted, actualDamage = pcall(MCITEM.TakeDamage, target, damageInfo)
     if transaction and runtime and isfunction(runtime.UnbindMaceDamageTransaction) then
         runtime.UnbindMaceDamageTransaction(transaction)
     end
-    if not ok then error(err, 0) end
+    if not ok then error(accepted, 0) end
+    return accepted, actualDamage
 end
 
 -- sounds.json 的每个事件都有多条原版变体；共享模块让两端注册同一组 sound script。
@@ -280,22 +279,18 @@ function SWEP:MCDoSweepAttack(owner, mainTarget, attackStrengthScale, directDama
                 and runtime.GetSweepDamage(
                     enchantmentStack, entity, directDamage, attackStrengthScale)
                 or SWEEP_BASE_DAMAGE * attackStrengthScale
-            local oldHealth = tonumber(entity:Health()) or 0
-            takeDamageInfoForAttack(self, owner, entity, self:MCBuildDamageInfo(
+            local accepted, actualDamage = takeDamageInfoForAttack(self, owner, entity, self:MCBuildDamageInfo(
                 owner, sweepDamage, entity:WorldSpaceCenter(), sweepDirection,
                 KNOCKBACK_BASE, entity
             ), nil)
-            local newHealth = tonumber(entity:Health()) or oldHealth
-            local actualDamage = math.max(oldHealth - newHealth, 0)
             -- Java only calls LivingEntity.knockback and post_attack effects
             -- when hurtServer returned true.  TakeDamageInfo has no boolean
-            -- result in Source, so an actual health delta is the authoritative
-            -- acceptance signal for this MCITEM path.
-            if actualDamage > 0 then
+            -- result in Source; the shared adapter also observes absorption.
+            if accepted then
                 self:MCApplyMinecraftKnockback(entity, sweepDirection, KNOCKBACK_BASE)
                 if runtime and isfunction(runtime.ApplyDirectPostAttack) then
                     runtime.ApplyDirectPostAttack(
-                        enchantmentStack, owner, entity, self, actualDamage)
+                        enchantmentStack, owner, entity, self, actualDamage, accepted)
                 end
             end
         end
@@ -307,6 +302,7 @@ end
 function SWEP:MCPerformAttack(now, target, trace)
     local owner = self:GetOwner()
     if not IsValid(owner) or not IsValid(target) then return end
+    local livingTarget = isLivingTarget(target)
 
     -- 蓄力必须在清零 ticker **之前**取（shared.lua 保证了调用顺序）。
     local charge = self:GetMCAttackStrengthScale(now, 0.5)
@@ -366,36 +362,31 @@ function SWEP:MCPerformAttack(now, target, trace)
 
     local hitPosition = (trace and trace.HitPos) or target:WorldSpaceCenter()
 
-    local oldHealth = tonumber(target:Health()) or 0
-    takeDamageInfoForAttack(self, owner, target, self:MCBuildDamageInfo(
+    local accepted, actualDamage = takeDamageInfoForAttack(self, owner, target, self:MCBuildDamageInfo(
         owner, damage, hitPosition, direction, knockback, target), attackContext)
-    local newHealth = tonumber(target:Health()) or oldHealth
-    local actualDamage = math.max(oldHealth - newHealth, 0)
-    if actualDamage > 0 then
+    if accepted then
         self:MCApplyMinecraftKnockback(target, direction, knockback)
     end
 
-    if sweep and actualDamage > 0 then
+    if sweep and accepted then
         self:MCDoSweepAttack(owner, target, charge, directDamage, enchantmentStack)
     end
 
     if runtime and isfunction(runtime.ApplyDirectPostAttack) then
         runtime.ApplyDirectPostAttack(
-            enchantmentStack, owner, target, self, actualDamage)
+            enchantmentStack, owner, target, self, actualDamage, accepted)
     end
 
-    -- Player.attackVisualEffects：暴击音效优先，其余只有既非暴击也非横扫时才响。
-    -- （MC 还有 PLAYER_ATTACK_NODAMAGE 那一支，但 GMod 的 TakeDamageInfo 不回报
-    --   伤害有没有被无敌帧吃掉，判不出来，所以这里不实现。）
-    if crit then
+    -- Damage acceptance includes absorption; health delta is only a statistic.
+    if accepted and crit then
         playAttackSound(owner, "crit")
-        sendCritParticles(target)
-    elseif not sweep then
+        if IsValid(target) then sendCritParticles(target) end
+    elseif accepted and not sweep then
         playAttackSound(owner, strong and "strong" or "weak")
     end
 
-    if self.MCPostAttack then
-        self:MCPostAttack(owner, target, attackContext, actualDamage)
+    if accepted and self.MCPostAttack then
+        self:MCPostAttack(owner, target, attackContext, actualDamage, accepted)
     end
 
     -- Player.damageStatsAndHearts runs after attackVisualEffects. Source 实际扣血已经乘过
@@ -406,7 +397,7 @@ function SWEP:MCPerformAttack(now, target, trace)
     -- 接受、目标是 LivingEntity 且物品带 WEAPON 组件时，才按 itemDamagePerAttack
     -- 消耗耐久。横扫的旁目标不额外扣；挥空/无敌帧吃掉的 0 实伤也不扣。
     local durability = math.max(0, math.floor(tonumber(self.MCWeaponDamagePerAttack) or 0))
-    if actualDamage > 0 and durability > 0 and isLivingTarget(target) then
+    if accepted and durability > 0 and livingTarget then
         self:ApplyMCAttackDurabilityDamage(durability, {
             reason = "attack",
             target = target,

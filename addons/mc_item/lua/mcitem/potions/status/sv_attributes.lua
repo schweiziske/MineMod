@@ -53,17 +53,38 @@ end
 local function hasMCSWEPCombatPipeline(target)
     if not IsValid(target) or not target:IsPlayer() then return false end
     local sv = MC and MC.SV
-    return sv and isfunction(sv.GetPlayerInventoryRecord)
-        and sv.GetPlayerInventoryRecord(target, false) ~= nil
+    return sv and isfunction(sv.GetCombatDamageContext)
 end
+
+local function applyGenericMeleeBonus(target, damageInfo)
+    local attacker, inflictor = damageInfo:GetAttacker(), damageInfo:GetInflictor()
+    if not IsValid(attacker) or bit.band(damageInfo:GetDamageType(), MELEE_MASK) == 0
+        or not IsValid(inflictor) or not inflictor:IsWeapon() or isMCItemWeapon(inflictor) then return end
+    local bonus = Potions.GetAttackDamageBonus(attacker)
+    if bonus ~= 0 then
+        damageInfo:SetDamage(math.max(0, damageInfo:GetDamage()
+            + bonus * Potions.GetMinecraftHealthScale(target, damageInfo)))
+    end
+end
+
+hook.Add("MCITEM.DamageBeforeEquipmentMitigation", "MCITEM.Potions.MeleeAttributes", function(target, damageInfo)
+    -- Preserve an earlier immunity listener's zero-damage result.
+    if damageInfo:GetDamage() > 0 then applyGenericMeleeBonus(target, damageInfo) end
+end)
 
 local function applyPostMitigation(target, damageInfo)
     if not IsValid(target) or not damageInfo then return end
     -- CTakeDamageInfo is engine userdata; arbitrary Lua fields are not a stable
-    -- contract.  A weak-key table gives the same one-pass guarantee without
-    -- retaining finished damage events.
-    if mitigatedDamage[damageInfo] then return end
-    mitigatedDamage[damageInfo] = true
+    -- contract. Track each target separately: area damage may reuse one info
+    -- object across entities. Neither removed targets nor finished events are
+    -- retained, and duplicate adapters for the same hit still apply only once.
+    local targetDamage = mitigatedDamage[target]
+    if not targetDamage then
+        targetDamage = setmetatable({}, { __mode = "k" })
+        mitigatedDamage[target] = targetDamage
+    end
+    if targetDamage[damageInfo] then return end
+    targetDamage[damageInfo] = true
 
     local damageType = damageInfo:GetDamageType()
     if Potions.HasEffect(target, "fire_resistance") and bit.band(damageType, FIRE_MASK) ~= 0 then
@@ -98,50 +119,13 @@ local function applyPostMitigation(target, damageInfo)
 end
 
 hook.Remove("MCITEM.DamageAfterEquipmentMitigation", "MCITEM.Potions.PostMitigation")
-hook.Add("MCITEM.DamageAfterEquipmentMitigation", "MCITEM.Potions.PostMitigation", function(target, damageInfo)
+hook.Add("MCITEM.DamageAfterProtectionMitigation", "MCITEM.Potions.PostMitigation", function(target, damageInfo)
     return applyPostMitigation(target, damageInfo)
-end)
-
-hook.Remove("SetupMove", "MCITEM.Potions.PlayerAttributes")
-hook.Add("SetupMove", "MCITEM.Potions.PlayerAttributes", function(player, move)
-    if not IsValid(player) then return end
-    local multiplier = Potions.GetMovementMultiplier(player)
-    if multiplier ~= 1 then
-        move:SetForwardSpeed(move:GetForwardSpeed() * multiplier)
-        move:SetSideSpeed(move:GetSideSpeed() * multiplier)
-        move:SetMaxSpeed(move:GetMaxSpeed() * multiplier)
-        move:SetMaxClientSpeed(move:GetMaxClientSpeed() * multiplier)
-    end
-
-    local velocity = move:GetVelocity()
-    if Potions.HasEffect(player, "slow_falling") and velocity.z < 0 then
-        -- LivingEntity.getEffectiveGravity while falling: min(normal, 0.01)
-        -- block/tick^2. Convert the target acceleration into Source units/s^2.
-        local sourceGravity = GetConVar("sv_gravity") and GetConVar("sv_gravity"):GetFloat() or 600
-        local targetGravity = 0.01 * MCITEM.BlockSize() / (Potions.TickSeconds * Potions.TickSeconds)
-        velocity.z = velocity.z + math.max(0, sourceGravity - targetGravity) * engine.TickInterval()
-        move:SetVelocity(velocity)
-    end
-
-    if player:IsOnGround() and move:KeyPressed(IN_JUMP) then
-        player.MCITEMPotionJumpPending = Potions.GetJumpBoostPower(player)
-    end
-end)
-
-hook.Remove("FinishMove", "MCITEM.Potions.PlayerJumpBoost")
-hook.Add("FinishMove", "MCITEM.Potions.PlayerJumpBoost", function(player, move)
-    local boost = tonumber(player.MCITEMPotionJumpPending) or 0
-    player.MCITEMPotionJumpPending = nil
-    if boost <= 0 then return end
-    local velocity = move:GetVelocity()
-    if velocity.z <= 0 then return end
-    velocity.z = velocity.z + boost * MCITEM.BlockSize() / Potions.TickSeconds
-    move:SetVelocity(velocity)
 end)
 
 hook.Remove("GetFallDamage", "MCITEM.Potions.SlowFallingDamage")
 hook.Add("GetFallDamage", "MCITEM.Potions.SlowFallingDamage", function(player)
-    if Potions.HasEffect(player, "slow_falling") then return 0 end
+    if Potions.HasEffect(player, "slow_falling") or Potions.HasEffect(player, "levitation") then return 0 end
 end)
 
 hook.Remove("EntityTakeDamage", "MCITEM.Potions.DamageAttributes")
@@ -151,23 +135,8 @@ hook.Add("EntityTakeDamage", "MCITEM.Potions.DamageAttributes", function(target,
     -- Skip the early path for those players so absorption is not consumed
     -- before armor mitigation.
     if hasMCSWEPCombatPipeline(target) then
-        local attacker = damageInfo:GetAttacker()
-        local inflictor = damageInfo:GetInflictor()
-        if IsValid(attacker) and bit.band(damageInfo:GetDamageType(), MELEE_MASK) ~= 0 and not isMCItemWeapon(inflictor) then
-            local bonus = Potions.GetAttackDamageBonus(attacker)
-            if bonus ~= 0 then damageInfo:SetDamage(math.max(0, damageInfo:GetDamage() + bonus)) end
-        end
         return
     end
-
-    local damageType = damageInfo:GetDamageType()
-
-    applyPostMitigation(target, damageInfo)
-
-    local attacker = damageInfo:GetAttacker()
-    local inflictor = damageInfo:GetInflictor()
-    if IsValid(attacker) and bit.band(damageType, MELEE_MASK) ~= 0 and not isMCItemWeapon(inflictor) then
-        local bonus = Potions.GetAttackDamageBonus(attacker)
-        if bonus ~= 0 then damageInfo:SetDamage(math.max(0, damageInfo:GetDamage() + bonus)) end
-    end
+    applyGenericMeleeBonus(target, damageInfo)
+    return applyPostMitigation(target, damageInfo)
 end)

@@ -55,19 +55,11 @@ local HITBOX_MARGIN_BLOCKS = 0.125
 -- KineticWeapon(10, ...) 的第一个参数就是 contactCooldownTicks。
 local CONTACT_COOLDOWN_TICKS = 10
 
--- ⚠ GMod 的移动速度是 MC 的两倍多，直接喂给 KineticWeapon 的速度门会离谱超标。
---   MC 走 4.317 格/秒、冲刺 5.612 格/秒；GMod 走 200u/s = 5.48 格/秒、跑 400u/s = 10.96 格/秒。
---   长矛的判定门是 dismount 9~14、knockback 5.1、damage 4.6 格/秒，伤害是
---   `1 + floor(relativeSpeed * damageMultiplier)` —— 用 GMod 的 10.96 去算，等于永远
---   满足全部条件，钻石矛每次接触 1 + floor(11.8) = 12 点，是 MC 冲刺档 7 点的近两倍。
---   和 STATE_MCITEM 3.4 里 bobView 步频封顶是同一类问题、同一种解法：把喂给 MC 公式的
---   速度封顶在 MC 冲刺速度上。走路几乎不受影响，冲刺回到原版档位。
-local MC_SPRINT_BLOCKS_PER_SECOND = 5.612
-
 local function mcSpeedAlong(entity, direction)
     if not IsValid(entity) then return 0 end
-    local blocksPerSecond = entity:GetVelocity():Dot(direction) / MCITEM.BlockSize()
-    return math.min(blocksPerSecond, MC_SPRINT_BLOCKS_PER_SECOND)
+    -- Physical velocity in Source units/s, converted once to blocks/s. Fast
+    -- falls, mounts and external impulses must remain above the action gates.
+    return entity:GetVelocity():Dot(direction) / MCITEM.BlockSize()
 end
 
 local SPEAR_DISPLAY = {
@@ -304,13 +296,20 @@ end
 
 function SWEP:MCPerformSpearPiercingAttack(owner)
     local hits = self:MCFindSpearTargets(owner)
+    local breakRevision = self.MCInventoryBreakRevision
     local hitSomething = false
+    local damage = self.MCAttackDamage or MCITEM.PlayerBaseAttackDamage
+    if MCITEM.Potions then
+        damage = math.max(0, damage + MCITEM.Potions.GetAttackDamageBonus(owner))
+    end
 
     for _, hit in ipairs(hits) do
+        if not IsValid(self) or owner:GetActiveWeapon() ~= self
+            or self.MCInventoryBreakRevision ~= breakRevision then break end
         if self:MCApplySpearHit(
             owner,
             hit.entity,
-            self.MCAttackDamage or MCITEM.PlayerBaseAttackDamage,
+            damage,
             true,
             true,
             false,
@@ -320,8 +319,10 @@ function SWEP:MCPerformSpearPiercingAttack(owner)
         end
     end
 
+    if not IsValid(self) then return end
     if hitSomething then self:MCPlaySpearSound(owner, "hit") end
     self:MCPlaySpearSound(owner, "attack")
+    if self.MCInventoryBreakRevision ~= breakRevision or owner:GetActiveWeapon() ~= self then return end
 
     local runtime = MCITEM.EnchantmentRuntime
     if runtime and isfunction(runtime.StackForWeapon)
@@ -340,7 +341,7 @@ function SWEP:MCApplySpearHit(owner, target, damage, dealsDamage, dealsKnockback
     if direction:LengthSqr() <= 1e-8 then direction = owner:GetForward() end
     direction:Normalize()
 
-    local oldHealth = tonumber(target:Health()) or 0
+    local accepted, actualDamage = false, 0
     local runtime = MCITEM.EnchantmentRuntime
     local enchantmentStack = runtime and isfunction(runtime.StackForWeapon)
         and runtime.StackForWeapon(self, owner) or nil
@@ -349,7 +350,7 @@ function SWEP:MCApplySpearHit(owner, target, damage, dealsDamage, dealsKnockback
             damage = math.max(0, tonumber(damage) or 0)
                 + runtime.GetMeleeDamageBonus(enchantmentStack, target)
         end
-        target:TakeDamageInfo(self:MCBuildDamageInfo(
+        accepted, actualDamage = MCITEM.TakeDamage(target, self:MCBuildDamageInfo(
             owner,
             damage,
             hitPosition or target:WorldSpaceCenter(),
@@ -359,33 +360,34 @@ function SWEP:MCApplySpearHit(owner, target, damage, dealsDamage, dealsKnockback
         ))
     end
 
-    local newHealth = tonumber(target:Health()) or oldHealth
-    local actualDamage = math.max(oldHealth - newHealth, 0)
-
-    -- Java's hurtServer gate controls the ordinary hit knockback.  The
-    -- kinetic spear path may explicitly request knockback without damage,
-    -- so retain that separate contract while preventing rejected damage hits
-    -- from receiving a free push.
-    if dealsKnockback and (not dealsDamage or actualDamage > 0) then
+    -- Player.stabAttack applies its requested knockback independently of
+    -- wasHurt; post-attack enchantments still require accepted damage.
+    if IsValid(target) and dealsKnockback then
         self:MCApplyMinecraftKnockback(target, direction, 0.4)
     end
 
     local dismounted = false
-    if dismounts and target:IsPlayer() and target.InVehicle and target:InVehicle() then
+    if IsValid(target) and dismounts and target:IsPlayer() and target.InVehicle and target:InVehicle() then
         target:ExitVehicle()
         dismounted = true
     end
 
-    if actualDamage > 0 and MCITEM.SendDamageParticles then
+    if actualDamage > 0 and IsValid(target) and MCITEM.SendDamageParticles then
         MCITEM.SendDamageParticles(target, actualDamage)
     end
 
     if dealsDamage and runtime and isfunction(runtime.ApplyDirectPostAttack) then
         runtime.ApplyDirectPostAttack(
-            enchantmentStack, owner, target, self, actualDamage)
+            enchantmentStack, owner, target, self, actualDamage, accepted)
     end
 
-    return dealsKnockback or actualDamage > 0 or dismounted, actualDamage
+    local interacted = dealsKnockback or accepted or dismounted
+    if interacted then
+        self:ApplyMCAttackDurabilityDamage(self.MCWeaponDamagePerAttack or 1, {
+            reason = "attack", target = target, actualDamage = actualDamage,
+        })
+    end
+    return interacted, actualDamage
 end
 
 function SWEP:MCSignalSpearHitFeedback(useTick, owner)
@@ -403,6 +405,7 @@ function SWEP:MCSignalSpearHitFeedback(useTick, owner)
 end
 
 function SWEP:MCProcessSpearKineticTick(owner, useTick)
+    local breakRevision = self.MCInventoryBreakRevision
     local delayTicks = self.MCSpearDelayTicks or 0
     if useTick < delayTicks then return end
 
@@ -411,7 +414,7 @@ function SWEP:MCProcessSpearKineticTick(owner, useTick)
     if direction:LengthSqr() <= 1e-8 then return end
     direction:Normalize()
 
-    -- KineticWeapon.getMotion = getKnownSpeed() * 20（格/秒）。封顶见文件顶部注释。
+    -- KineticWeapon.getMotion = getKnownSpeed() * 20（格/秒）。
     local attackerSpeed = mcSpeedAlong(owner, direction)
     local hitSomething = false
 
@@ -423,6 +426,8 @@ function SWEP:MCProcessSpearKineticTick(owner, useTick)
     local cooldownSeconds = CONTACT_COOLDOWN_TICKS * MCITEM.TickSeconds
 
     for _, hit in ipairs(self:MCFindSpearTargets(owner)) do
+        if not IsValid(self) or owner:GetActiveWeapon() ~= self
+            or self.MCInventoryBreakRevision ~= breakRevision then break end
         local target = hit.entity
         local lastContact = self.MCSpearContacts[target]
         if lastContact == nil or now - lastContact >= cooldownSeconds then
@@ -459,7 +464,8 @@ function SWEP:MCProcessSpearKineticTick(owner, useTick)
         end
     end
 
-    if hitSomething then self:MCSignalSpearHitFeedback(useTick, owner) end
+    if hitSomething and IsValid(self) then self:MCSignalSpearHitFeedback(useTick, owner) end
+    if IsValid(self) and self.MCInventoryBreakRevision ~= breakRevision then self:MCEndSpearUse() end
 end
 
 function SWEP:Think()
@@ -478,6 +484,7 @@ function SWEP:Think()
         local lastTick = self.MCSpearLastUseTick or -1
         for useTick = lastTick + 1, currentTick do
             self:MCProcessSpearKineticTick(owner, useTick)
+            if not IsValid(self) or owner:GetActiveWeapon() ~= self or not self.MCSpearUsing then return end
         end
         self.MCSpearLastUseTick = currentTick
     end

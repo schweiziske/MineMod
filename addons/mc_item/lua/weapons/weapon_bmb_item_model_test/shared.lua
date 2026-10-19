@@ -918,6 +918,17 @@ function SWEP:PlayMCThirdPersonSwing(now, owner, requestedGesture)
 end
 
 function SWEP:Think()
+    if CLIENT and self:GetNW2Bool("MCITEM_InventoryProxy", false) then
+        local revision = self:GetNW2Int("MCITEM_StackBindingRevision", 0)
+        if self.MCClientStackBindingRevision ~= revision then
+            self.MCClientStackBindingRevision = revision
+            if MCITEM.Food and MCITEM.Food.CancelUse then MCITEM.Food.CancelUse(self, "selected_slot_changed") end
+            if MCITEM.Potions and MCITEM.Potions.CancelDrink then MCITEM.Potions.CancelDrink(self, "selected_slot_changed") end
+            if self.FinishMCCrossbowUse then self:FinishMCCrossbowUse() end
+            if self.MCEndSpearUse then self:MCEndSpearUse() end
+            self.MCUsing, self.MCUseStartedAt, self.MCPredictedCharged = false, nil, nil
+        end
+    end
     -- 服务端只有一个时钟，从这里推。客户端**不能**在这里推：Think 跑在预测上下文，
     -- 会把 tickAt 顶到渲染时钟前面，partialTick 恒 0 = 动画退化成 20Hz 阶梯。
     if SERVER then self:AdvanceMCItem(CurTime()) end

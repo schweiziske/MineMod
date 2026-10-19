@@ -20,12 +20,20 @@ local LIGHTMAP_SIZE = 16
 local lightmapRT
 local lightmapColors, pendingColors = {}, {}
 local pendingChanged = false
+local nightVision = 0
 local lightmapRevision = MC.GlobalLightmapRevision or 0
 MC.GlobalLightmapRevision = 0
 
 -- Keep a CPU copy of the exact RGB bytes supplied to the RT. Animated fluids
 -- use ordinary vertex-colour materials, so they cannot sample $texture2.
 local function drawLightmapTexel( block, sky, r, g, b )
+	if nightVision > 0 then
+		local maximum = math.max( r, g, b )
+		if maximum > 0 and maximum < 1 then
+			local scale = 1 + ( 1 / maximum - 1 ) * nightVision
+			r, g, b = r * scale, g * scale, b * scale
+		end
+	end
 	r = math.floor( math.Clamp( r, 0, 1 ) * 255 + 0.5 )
 	g = math.floor( math.Clamp( g, 0, 1 ) * 255 + 0.5 )
 	b = math.floor( math.Clamp( b, 0, 1 ) * 255 + 0.5 )
@@ -398,6 +406,7 @@ local function generateGlobalLightmap()
 end
 
 function MC.RefreshGlobalLightmap()
+	nightVision = math.Clamp( tonumber( hook.Run( "MC.NightVisionFactor" ) ) or 0, 0, 1 )
 	-- L2 owns its lightmap texture and consumes the published CPU samples.
 	return generateGlobalLightmap()
 end
@@ -410,6 +419,11 @@ local needsInitialRefresh = true
 local nextTimedRefresh = 0
 hook.Remove( "Think", "mc_global_lightmap_refresh" )
 hook.Add( "Think", "mc_global_lightmap_refresh", function()
+	local nextVision = math.Clamp( tonumber( hook.Run( "MC.NightVisionFactor" ) ) or 0, 0, 1 )
+	if math.abs( nextVision - nightVision ) > 0.005 then
+		nightVision = nextVision
+		MC.RefreshGlobalLightmap()
+	end
 	local vanilla = vanillaLightmapActive()
 	-- Camera grading is not an input to the vanilla lightmap.
 	if not vanilla then updateEyeFactor() end

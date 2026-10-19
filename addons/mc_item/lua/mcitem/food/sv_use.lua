@@ -35,13 +35,8 @@ function Food.CompleteUse(weapon, definition)
     local owner = weapon:GetOwner()
     if not IsValid(owner) then return end
 
-    -- Consumable.onConsume first emits the normal event with 16 item particles.
-    Food.EmitUseEffects(weapon, definition, Food.FinishParticleCount)
-    -- Only items with FoodProperties receive its second sound + burp listener.
-    -- Milk is a bare Consumable, so its last generic drink sound above is all.
-    if definition.isFood ~= false then Food.PlayFoodCompletionSounds(owner, definition) end
-
     local context = {
+        useStack = weapon.MCFoodUseState and weapon.MCFoodUseState.useStack,
         itemId = definition.id,
         nutrition = definition.nutrition,
         saturation = definition.saturation,
@@ -52,10 +47,6 @@ function Food.CompleteUse(weapon, definition)
         consumeTicks = definition.consumeTicks,
         isFood = definition.isFood ~= false,
     }
-
-    if isfunction(weapon.OnMCFoodConsumed) then
-        weapon:OnMCFoodConsumed(owner, definition, context)
-    end
 
     -- Separate inventory/stack bridge.  A backpack implementation may remove one
     -- item and grant the bowl/bottle remainder; the standalone test SWEP stays.
@@ -68,6 +59,13 @@ function Food.CompleteUse(weapon, definition)
         definition.remainder,
         context
     )
+    if consumed == false then return false end
+    Food.BroadcastParticles(owner, definition, Food.FinishParticleCount)
+    Food.PlayUseSound(owner, definition)
+    if definition.isFood ~= false then Food.PlayFoodCompletionSounds(owner, definition) end
+    if IsValid(weapon) and isfunction(weapon.OnMCFoodConsumed) then
+        weapon:OnMCFoodConsumed(owner, definition, context)
+    end
 
     -- Vanilla applies Consumable.onConsume after the stack transaction.  Keep
     -- nutrition as an extension point, but make the status effects authoritative
@@ -76,6 +74,7 @@ function Food.CompleteUse(weapon, definition)
         Food.ApplyConsumableEffects(owner, definition, context)
     end
     hook.Run("MCITEM.FoodConsumed", owner, weapon, definition, context)
+    return true
 end
 
 function Food.ServerTick(weapon, now)

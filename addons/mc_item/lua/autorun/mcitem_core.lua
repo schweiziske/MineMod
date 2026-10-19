@@ -8,6 +8,7 @@ local sharedModules = {
     "mcitem/sh_tuning.lua",
     "mcitem/sh_holdtypes.lua",
     "mcitem/sh_ammo.lua",
+    "mcitem/sh_ranged.lua",
     "mcitem/sh_enchantments.lua",
     "mcitem/utility/sh_use.lua",
     "mcitem/fishing/sh_generated_data.lua",

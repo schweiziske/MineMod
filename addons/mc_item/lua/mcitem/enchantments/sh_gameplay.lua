@@ -435,8 +435,9 @@ function Runtime.ApplyPunch(target, projectile, punchLevel)
     return Runtime.ApplyProjectilePush(target, impulse, context)
 end
 
-function Runtime.ApplyDirectPostAttack(stack, attacker, target, weapon, actualDamage)
-    if not SERVER or not IsValid(target) or (tonumber(actualDamage) or 0) <= 0 then return end
+function Runtime.ApplyDirectPostAttack(stack, attacker, target, weapon, actualDamage, accepted)
+    if not SERVER or not IsValid(target)
+        or (accepted ~= true and (tonumber(actualDamage) or 0) <= 0) then return end
     local fireAspect = level(stack, "fire_aspect")
     if fireAspect > 0 and isfunction(Runtime.IgniteEntity) then
         Runtime.IgniteEntity(target, 4 * fireAspect, "fire_aspect")

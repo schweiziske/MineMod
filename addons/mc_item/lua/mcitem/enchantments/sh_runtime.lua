@@ -973,9 +973,9 @@ local function installArrow()
             local flameActive = flameUntil > CurTime()
                 or (flameUntil <= 0 and (self.MCFlameArrow
                     or (self.GetNW2Bool and self:GetNW2Bool("MCITEM_FlameArrow", false))))
-            local oldHealth = IsValid(target) and tonumber(target:Health()) or nil
+            self.MCLastHitAccepted = false
             local results = { Runtime.Originals[token](self, target, ...) }
-            local accepted = oldHealth == nil or not IsValid(target) or tonumber(target:Health()) < oldHealth
+            local accepted = self.MCLastHitAccepted == true
             -- Java saves and restores the exact remaining fire ticks when hurt
             -- rejects the hit. Source exposes no remaining-fire timer, so the
             -- transaction-safe adaptation is to ignite only after acceptance.
@@ -989,9 +989,9 @@ local function installTrident()
     local trident = storedEntity("mcitem_trident")
     local hitEntity = installTableFunction(trident, "HitEntity", "mcitem_trident.HitEntity", function(token)
         return function(self, target, trace, ...)
-            local oldHealth = IsValid(target) and tonumber(target:Health()) or nil
+            self.MCLastHitAccepted = false
             local results = { Runtime.Originals[token](self, target, trace, ...) }
-            if oldHealth == nil or not IsValid(target) or tonumber(target:Health()) < oldHealth then
+            if self.MCLastHitAccepted == true then
                 tryChannelEntity(self, target, trace)
             end
             return unpack(results)
@@ -1064,7 +1064,7 @@ local function installMace()
         end
     end)
     local postInstalled = installTableFunction(mace, "MCPostAttack", "weapon_mcitem_mace.MCPostAttack", function(token)
-        return function(self, owner, target, context, actualDamage, ...)
+        return function(self, owner, target, context, actualDamage, accepted, ...)
             local active
             if SERVER then
                 local explicit = istable(context) and context[MACE_CONTEXT_KEY] or nil
@@ -1092,10 +1092,10 @@ local function installMace()
                 end
                 if contexts and #contexts == 0 then Runtime.ActiveMaceContexts[target] = nil end
             end
-            local results = { Runtime.Originals[token](self, owner, target, context, actualDamage, ...) }
+            local results = { Runtime.Originals[token](self, owner, target, context, actualDamage, accepted, ...) }
             if active and active.weapon == self and active.smash and not active.flying
                 and active.windBurst > 0
-                and (tonumber(actualDamage) or 0) > 0 and IsValid(owner) then
+                and (accepted == true or (tonumber(actualDamage) or 0) > 0) and IsValid(owner) then
                 windBurst(owner:GetPos(), owner, target, active.windBurst)
             end
             if active and active.damageTransaction then

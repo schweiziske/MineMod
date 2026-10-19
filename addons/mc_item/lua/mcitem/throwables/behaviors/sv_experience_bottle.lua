@@ -11,7 +11,7 @@ Throwables.RegisterBehavior("experience_bottle", {
         -- compatibility addon cannot accidentally turn the bottle into a
         -- zero-damage attack.
 
-        local position = Throwables.LevelEventPosition(trace.HitPos or projectile:GetPos())
+        local position = Throwables.LevelEventPosition(trace.HitPos or projectile:GetPos(), projectile)
         local direction
         if Throwables.IsProjectileTarget(target) then
             direction = -(projectile.MCProjectileVelocity or vector_origin)

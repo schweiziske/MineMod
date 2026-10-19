@@ -12,6 +12,18 @@ local STATUS_CHUNK_KEY_PREFIX = STATUS_KEY .. "Chunk"
 local STATUS_MAX_CHUNKS = 64
 
 Potions.ClientEffectCache = Potions.ClientEffectCache or setmetatable({}, { __mode = "k" })
+Potions.StatusEntities = Potions.StatusEntities or setmetatable({}, { __mode = "k" })
+local statusEntities = Potions.StatusEntities
+-- Reconcile once at load (including Lua refresh); creation/removal keeps the
+-- registry current without allocating ents.GetAll() every status tick.
+for _, entity in ipairs(ents.GetAll()) do statusEntities[entity] = true end
+hook.Add("OnEntityCreated", "MCITEM.Potions.TrackStatusEntity", function(entity)
+    statusEntities[entity] = true
+end)
+hook.Add("EntityRemoved", "MCITEM.Potions.TrackStatusEntity", function(entity)
+    statusEntities[entity] = nil
+    Potions.ClientEffectCache[entity] = nil
+end)
 -- 每 tick 刷新一次的"当前带效果的实体"列表，由下面的状态粒子 tick 产出，
 -- 供 cl_visuals.lua 的发光/隐身复用，避免它们各自每帧全量扫实体。
 Potions.AffectedEntities = Potions.AffectedEntities or {}
@@ -76,6 +88,10 @@ end
 function Potions.ClientEffects(entity)
     if not IsValid(entity) then return {} end
     local cached = Potions.ClientEffectCache[entity]
+    local currentRevision = entity:GetNW2Int(STATUS_REVISION_KEY, 0)
+    if cached and currentRevision > 0 and cached.revision == currentRevision then
+        return cached.effects
+    end
     local raw, revision, chunked = chunkedSnapshot(entity)
     if chunked then
         if not raw then return cached and cached.effects or {} end
@@ -148,27 +164,28 @@ hook.Add("Think", "MCITEM.Potions.EntityStatusParticles", function()
     local affected = Potions.AffectedEntities
     for index = #affected, 1, -1 do affected[index] = nil end
 
-    for _, entity in ipairs(ents.GetAll()) do
+    for entity in pairs(statusEntities) do
         local effects = Potions.ClientEffects(entity)
         -- 没有效果的实体直接跳过：之前每个实体每 tick 都要分配一张 visibleEffects
         -- 空表，世界里绝大多数实体都走这条路。
         if #effects > 0 then
             affected[#affected + 1] = entity
-            local visibleEffects = {}
+            local visibleCount, chosen, allAmbient = 0, nil, true
             for _, effect in ipairs(effects) do
-                if effect.visible ~= false then visibleEffects[#visibleEffects + 1] = effect end
-            end
-            if #visibleEffects > 0 then
-                local allAmbient = true
-                for _, effect in ipairs(visibleEffects) do
-                    if effect.ambient ~= true then allAmbient = false break end
+                if effect.visible ~= false
+                    and (effect.infinite or not effect.expiresAt or effect.expiresAt > now) then
+                    visibleCount = visibleCount + 1
+                    if math.random(visibleCount) == 1 then chosen = effect end
+                    if effect.ambient ~= true then allAmbient = false end
                 end
+            end
+            if chosen then
                 local invisible = entity:GetNW2Bool("MCITEMPotionInvisible", false)
                 local divisor
                 if invisible then divisor = allAmbient and 75 or 15
                 else divisor = allAmbient and 20 or 4 end
                 if math.random(1, divisor) == 1 then
-                    spawnForEffect(entity, visibleEffects[math.random(1, #visibleEffects)])
+                    spawnForEffect(entity, chosen)
                 end
             end
         end

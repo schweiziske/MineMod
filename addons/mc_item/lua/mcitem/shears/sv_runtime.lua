@@ -28,9 +28,7 @@ local function apiParts()
 end
 
 local function interactionReach(owner, api, inventory)
-    local blockSize = api and api.Coords and isfunction(api.Coords.BlockSize)
-        and tonumber(api.Coords.BlockSize()) or 36.5
-    blockSize = math.max(blockSize or 36.5, 1)
+    local blockSize = MCITEM.BlockSize()
     local infinite = inventory and isfunction(inventory.HasInfiniteMaterials)
         and inventory.HasInfiniteMaterials(owner) == true
     return blockSize * (SURVIVAL_REACH_BLOCKS + (infinite and CREATIVE_REACH_BONUS_BLOCKS or 0))
@@ -69,9 +67,8 @@ function Shears.TraceEntityTarget(owner, weapon, api, inventory)
     return target, nil, true
 end
 
-local function selectedDurabilityCommit(owner, weapon, inventory, stackApi)
-    if not MCITEM.Utility or not MCITEM.Utility.IsInventoryProxy
-        or not MCITEM.Utility.IsInventoryProxy(weapon) then
+local function selectedDurabilityCommit(owner, weapon, inventory, stackApi, context)
+    if not context and not MCITEM.Utility.IsInventoryProxy(weapon) then
         return true, false, false
     end
     if not isfunction(inventory.GetSelected) or not isfunction(inventory.DamageSelected)
@@ -79,16 +76,18 @@ local function selectedDurabilityCommit(owner, weapon, inventory, stackApi)
         return false, false, false, "shears_inventory_api_unavailable"
     end
 
-    local stack = inventory.GetSelected(owner)
+    local stack = context and context.useStack.stack or inventory.GetSelected(owner)
     if not istable(stack) or stack.item ~= "minecraft:shears" then
         return false, false, false, "selected_shears_missing"
     end
     local stackHash, hashError = stackApi.Hash(stack)
     if not stackHash then return false, false, false, hashError or "shears_hash_failed" end
     local result, broken, err = inventory.DamageSelected(owner, 1, {
+        hand = context and context.hand,
         expectedItem = "minecraft:shears",
-        expectedClass = weapon:GetClass(),
+        expectedClass = context and context.hand == "offhand" and weapon:GetClass() or nil,
         expectedStackHash = stackHash,
+        expectedSlot = context and context.useStack.expectedSlot,
         reason = "mcitem_shears_entity",
     })
     if result then return true, broken == true, false, nil, stack end
@@ -139,7 +138,7 @@ local function spawnDrops(api, inventory, owner, target, drops)
     end
 end
 
-function Shears.UseEntity(owner, weapon, target)
+function Shears.UseEntity(owner, weapon, target, context)
     if not Shears.IsShearableTarget(target) then return false, "target_not_ready" end
     if not isfunction(target.RollBMBShearingDrops)
         or not isfunction(target.SetBMBSheared)
@@ -159,7 +158,8 @@ function Shears.UseEntity(owner, weapon, target)
         owner,
         weapon,
         inventory,
-        stackApi
+        stackApi,
+        context
     )
     if not committed then return false, durabilityError end
 
@@ -179,14 +179,17 @@ function Shears.UseEntity(owner, weapon, target)
     }
 end
 
-function Shears.UseBlock(owner, weapon, api)
+function Shears.UseBlock(owner, weapon, api, context)
     local shearsApi = api and api.Shears
     if not shearsApi then return false, "shears_block_api_unavailable" end
     local proxy = MCITEM.Utility and MCITEM.Utility.IsInventoryProxy
         and MCITEM.Utility.IsInventoryProxy(weapon)
-    if proxy and isfunction(shearsApi.UseSelectedOnBlock) then
+    if (proxy or context) and isfunction(shearsApi.UseSelectedOnBlock) then
         return shearsApi.UseSelectedOnBlock(owner, {
-            expectedClass = weapon:GetClass(),
+            hand = context and context.hand,
+            expectedClass = context and context.hand == "offhand" and weapon:GetClass() or nil,
+            expectedStackHash = context and context.useStack.expectedStackHash,
+            expectedSlot = context and context.useStack.expectedSlot,
             reason = "mcitem_shears_growing_plant",
         })
     end
@@ -196,7 +199,7 @@ function Shears.UseBlock(owner, weapon, api)
     return false, "shears_block_api_unavailable"
 end
 
-function Shears.Use(owner, weapon)
+function Shears.Use(owner, weapon, context)
     if not IsValid(owner) or not owner:IsPlayer() or not owner:Alive() then
         return false, "invalid_owner"
     end
@@ -207,9 +210,9 @@ function Shears.Use(owner, weapon)
     local api, inventory = apiParts()
     if not api then return false, "mcswep_api_unavailable" end
     local target, targetError, entityHit = Shears.TraceEntityTarget(owner, weapon, api, inventory)
-    if target then return Shears.UseEntity(owner, weapon, target) end
+    if target then return Shears.UseEntity(owner, weapon, target, context) end
     if entityHit then return false, targetError end
-    return Shears.UseBlock(owner, weapon, api)
+    return Shears.UseBlock(owner, weapon, api, context)
 end
 
 return Shears

@@ -276,48 +276,64 @@ function Blocks.ResolveToolUse(action, name, downFace, airAbove)
     return nil
 end
 
+function Blocks.ResolveAimedToolUse(ply, action)
+    local api = mcApi()
+    if not api then return nil end
+    local hit = Blocks.AimBlock(ply)
+    if not hit then return nil end
+    local bx, by, bz = hit.bx, hit.by, hit.bz
+    local expectedState = api.World.GetBlockState(bx, by, bz)
+    local info = blockInfo(api, bx, by, bz)
+    local target, soundKey, carry = Blocks.ResolveToolUse(
+        action, Blocks.LookupKey(info), clickedDownFace(hit), isAirAbove(api, bx, by, bz)
+    )
+    if not target then return nil end
+    if carry == ALL_PROPERTIES then
+        target = stateWithProperties(api, target, info and info.spec or nil, nil)
+    elseif carry then
+        target = stateWithProperties(api, target, info and info.spec or nil, carry)
+    end
+    return { bx = bx, by = by, bz = bz, expectedState = expectedState, target = target, soundKey = soundKey }
+end
+
 if SERVER then
     -- 返回 true = InteractionResult.SUCCESS（吃掉这次右键）。
-    function Blocks.UseToolOnBlock(ply, weapon, action)
+    function Blocks.UseToolOnBlock(ply, weapon, action, useContext)
         if not action or not IsValid(ply) then return false end
 
         local api = mcApi()
         if not api then return false end
-
-        local hit = Blocks.AimBlock(ply)
-        if not hit then return false end
-
-        local bx, by, bz = hit.bx, hit.by, hit.bz
-        local info = blockInfo(api, bx, by, bz)
-        local target, soundKey, carry = Blocks.ResolveToolUse(
-            action, Blocks.LookupKey(info), clickedDownFace(hit), isAirAbove(api, bx, by, bz)
-        )
-        if not target then return false end
-
-        if carry == ALL_PROPERTIES then
-            target = stateWithProperties(api, target, info and info.spec or nil, nil)
-        elseif carry then
-            target = stateWithProperties(api, target, info and info.spec or nil, carry)
+        if not useContext then
+            local captured = hook.Run("MCITEM.CaptureUseStack", ply, weapon)
+            if captured then useContext = { hand = "mainhand", useStack = captured } end
         end
 
-        -- 写入走 v1 的 World.SetBlock（受信服务端路径：跳过玩家 reach/冷却校验，但仍走
-        -- 完整副作用管线）。`unchanged` 是正常竞态，按成功处理、不重试。
-        local ok, err = api.World.SetBlock(bx, by, bz, target, { actor = ply })
-        if not ok and err ~= "unchanged" then return false end
-
-        -- HoeItem/ShovelItem/AxeItem each call hurtAndBreak(1) after a
-        -- successful useOn transaction. Route it through the existing selected
-        -- stack durability bridge instead of mutating a second local counter.
-        if IsValid(weapon) and isfunction(weapon.ApplyMCDurabilityDamage) then
-            weapon:ApplyMCDurabilityDamage(1, {
-                reason = "tool_use",
-                action = action,
-                bx = bx, by = by, bz = bz,
+        local plan, err
+        if useContext then
+            if not api.Tools or not api.Tools.UseHeld then return false, "tool_api_unavailable" end
+            local ok
+            ok, plan = api.Tools.UseHeld(ply, action, {
+                hand = useContext.hand, expectedItem = useContext.useStack.stack.item,
+                expectedStackHash = useContext.useStack.expectedStackHash,
+                expectedSlot = useContext.useStack.expectedSlot,
+                expectedClass = useContext.hand == "offhand" and weapon:GetClass() or nil,
             })
+            if not ok then return false, plan end
+        else
+            plan = Blocks.ResolveAimedToolUse(ply, action)
+            if not plan then return false end
+            local ok
+            ok, err = api.Player.TransformBlock(ply, plan.bx, plan.by, plan.bz, plan.target, plan.expectedState)
+            if not ok then return false, err end
+            if IsValid(weapon) and isfunction(weapon.ApplyMCDurabilityDamage) then
+                weapon:ApplyMCDurabilityDamage(1, { reason = "tool_use", action = action,
+                    bx = plan.bx, by = plan.by, bz = plan.bz })
+            end
         end
-
-        local center = istable(api.Coords) and isfunction(api.Coords.CellCenter)
-            and api.Coords.CellCenter(bx, by, bz) or nil
+        local bx, by, bz = plan.bx, plan.by, plan.bz
+        local target, soundKey = plan.target, plan.soundKey
+        local center = api.Coords.CellCenter(bx, by, bz)
+        center = api.Coords.WorldToEngine(center, ply)
         MCITEM.PlayToolSound(ply, soundKey, center)
 
         -- AxeItem.spawnSoundAndParticle 的 levelEvent(3005/3004) 是刮痕 / 去蜡的方块碎屑
@@ -354,7 +370,7 @@ local nextEntityInteract = setmetatable({}, { __mode = "k" })
 
 local function javaEntityReach(ply)
     -- Player.DEFAULT_ENTITY_INTERACTION_RANGE = 3，创造 +2；和 mc_item_hand 一致。
-    local blockSize = tonumber(MC and MC.BS) or 36.5
+    local blockSize = MCITEM.BlockSize()
     local blocks = 3
     local creative = MC and MC.SV and MC.SV.PlayerIsCreative
     if isfunction(creative) and creative(ply) == true then blocks = blocks + 2 end

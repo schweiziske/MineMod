@@ -126,7 +126,6 @@ function ENT:HitEntity(target, trace, speed)
     end
 
     local incomingVelocity = self:GetMCVelocity()
-    local oldHealth = IsValid(target) and tonumber(target:Health()) or nil
     local damageInfo = DamageInfo()
     damageInfo:SetAttacker(IsValid(owner) and owner or self)
 	-- DamageSource.getDirectEntity is the arrow, not the firing weapon. Keeping
@@ -139,9 +138,8 @@ function ENT:HitEntity(target, trace, speed)
     damageInfo:SetDamageType(DMG_SLASH)
     damageInfo:SetDamagePosition(trace.HitPos)
     damageInfo:SetDamageForce(incomingVelocity:GetNormalized() * speed * MCITEM.BlockSize() * 20)
-    target:TakeDamageInfo(damageInfo)
-    local accepted = oldHealth == nil or not IsValid(target)
-        or tonumber(target:Health()) < oldHealth
+    local accepted = MCITEM.TakeDamage(target, damageInfo)
+    self.MCLastHitAccepted = accepted
 
     local position = trace.HitPos
     self:SetPos(position)
@@ -162,7 +160,11 @@ function ENT:HitEntity(target, trace, speed)
                 and isfunction(MCITEM.SpawnItemDrop) then
                 local pickup = istable(self.MCPickupStack)
                     and self.MCPickupStack or (self.MCPickupItemID or "minecraft:arrow")
-                MCITEM.SpawnItemDrop(position, pickup, 1, owner)
+                if not MCITEM.SpawnItemDrop(position, pickup, 1, owner) then
+                    self:SetMCVelocity(vector_origin)
+                    self:SetInGround(true)
+                    return true, "deflected"
+                end
             end
             self:Remove()
             return false, "rejected_stop"
@@ -264,7 +266,9 @@ function ENT:MCGivePickupItem(ply)
     if not itemId then return true end
 
     local stack = istable(self.MCPickupStack) and self.MCPickupStack or itemId
-    if MCITEM.GiveItemToPlayer(ply, stack, 1, self:GetPos()) then return true end
+    local given, remainder = MCITEM.GiveItemToPlayer(ply, stack, 1, self:GetPos())
+    if given then return true end
+    if istable(remainder) then self.MCPickupStack = remainder end
     if MCITEM.HasInventorySystem(ply) then return false end
 
     local className = self.MCPickupWeaponClass

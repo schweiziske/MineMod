@@ -29,7 +29,7 @@ function Potions.Heal(target, amount, context)
     local health = tonumber(target:Health()) or 0
     local maximum = tonumber(target:GetMaxHealth()) or health
     if maximum <= 0 or health >= maximum then return false end
-    target:SetHealth(math.min(maximum, health + amount))
+    target:SetHealth(math.min(maximum, health + amount * Potions.GetMinecraftHealthScale(target, context)))
     return true
 end
 
@@ -45,7 +45,7 @@ function Potions.DamageMagic(target, amount, source, context)
 
     local attacker = IsValid(source) and source or game.GetWorld()
     local damage = DamageInfo()
-    damage:SetDamage(amount)
+    damage:SetDamage(amount * Potions.GetMinecraftHealthScale(target, context))
     damage:SetDamageType(bit.bor(DMG_POISON or DMG_GENERIC, DMG_PREVENT_PHYSICS_FORCE or 0))
     damage:SetAttacker(attacker)
     damage:SetInflictor(attacker)
@@ -59,6 +59,9 @@ function Potions.ApplyInstantEffect(target, effect, source, potency, context)
     if not Potions.CanReceiveEffect(target, effect.id, source, context) then return false end
     potency = math.max(0, tonumber(potency) or 1)
     local amplifier = math.max(0, math.floor(tonumber(effect.amplifier) or 0))
+    if effect.id == "saturation" and target:IsPlayer() then
+        return MCITEM.Food.ApplySaturation(target, amplifier + 1, context)
+    end
     local inverted = Potions.HasEntityTag(
         target,
         Potions.EntityTags.INVERTED_HEALING_AND_HARM,
@@ -227,6 +230,11 @@ function Potions.CompleteDrink(weapon, definition)
     local owner = weapon:GetOwner()
     if not IsValid(owner) then return false end
 
+    local context = { potion = definition, bottleType = "drinkable", remainder = "glass_bottle",
+        useStack = weapon.MCPotionDrinkState and weapon.MCPotionDrinkState.useStack }
+    if hook.Run("MCITEM.ConsumePotionItem", owner, weapon, "drinkable", definition.id,
+        1, "glass_bottle", context) == false then return false end
+
     -- Consumable.onConsume emits the normal consume event with count=16.  The
     -- default drink has no item particles, but it still plays this final sound.
     Potions.PlayDrinkSound(owner)
@@ -236,12 +244,10 @@ function Potions.CompleteDrink(weapon, definition)
         weapon = weapon,
     })
 
-    local context = { potion = definition, bottleType = "drinkable", remainder = "glass_bottle" }
-    if isfunction(weapon.OnMCPotionConsumed) then
+    if IsValid(weapon) and isfunction(weapon.OnMCPotionConsumed) then
         weapon:OnMCPotionConsumed(owner, definition, context)
     end
     hook.Run("MCITEM.PotionConsumed", owner, weapon, definition, context)
-    hook.Run("MCITEM.ConsumePotionItem", owner, weapon, "drinkable", definition.id, 1, "glass_bottle", context)
     return true
 end
 

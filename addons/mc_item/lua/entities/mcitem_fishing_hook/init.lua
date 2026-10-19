@@ -96,7 +96,7 @@ function ENT:Launch(owner, weapon, rodStack)
     end
     self.MCRodStack = istable(rodStack) and table.Copy(rodStack)
         or { item = "minecraft:fishing_rod", count = 1 }
-    self.MCLuck = Fishing.Luck(self.MCRodStack, owner)
+    self.MCLuck = Fishing.EnchantmentLevel(self.MCRodStack, "minecraft:luck_of_the_sea")
     self.MCLureSpeed = Fishing.LureSpeed(self.MCRodStack)
     local velocity = Fishing.LaunchVelocity(owner)
     self:SetMCVelocity(velocity)
@@ -407,7 +407,7 @@ function ENT:MovementStep()
 
     if state == Fishing.State.BOBBING then
         if inWater then
-            local surfaceZ = Fishing.FluidSurfaceZ(self:GetPos(), fluid, bx, by, bz)
+            local surfaceZ = Fishing.FluidSurfaceZ(self:GetPos(), fluid, bx, by, bz, self)
             local force = velocity.z
             if isnumber(surfaceZ) then
                 force = force + (self:GetPos().z - surfaceZ) / Fishing.BlockSize()
@@ -489,6 +489,14 @@ end
 
 function ENT:Think()
     local now = CurTime()
+    if self.MCPendingLoot then
+        if self:SpawnFishingLoot(self.MCPendingLoot) then
+            self:Remove()
+            return false
+        end
+        self:NextThink(now + 1)
+        return true
+    end
     local steps = 0
     while now >= (self.MCNextTick or now) and steps < 8 do
         if not self:MovementStep() or not IsValid(self) then return false end
@@ -657,33 +665,54 @@ end
 function ENT:SpawnFishingLoot(stacks)
     local owner = self:GetOwner()
     local inventory = Fishing.InventoryAPI()
-    if not IsValid(owner) or not inventory or not isfunction(inventory.SpawnDropStack) then return false end
-    local velocity = self:LootVelocity(owner)
-    local spawned = false
-    for _, stack in ipairs(stacks or {}) do
-        local entity = inventory.SpawnDropStack(self:GetPos(), stack, owner, {
-            velocity = velocity,
-            pickupDelay = 0,
-            positionJitter = false,
-        })
-        if IsValid(entity) then
-            spawned = true
+    if not inventory or not isfunction(inventory.SpawnDropStack) then
+        if MC and MC.Fault then MC.Fault("mcitem_fishing_drop_api", "Fishing loot delivery API unavailable") end
+        return false
+    end
+    local actor = IsValid(owner) and owner or nil
+    local velocity = actor and self:LootVelocity(actor) or vector_origin
+    self.MCLootDelivery = self.MCLootDelivery or {}
+    local complete = true
+    for index, stack in ipairs(stacks or {}) do
+        local delivery = self.MCLootDelivery[index]
+        if not delivery then
+            delivery = { experience = math.random(1, 6) }
+            self.MCLootDelivery[index] = delivery
+        end
+        if not delivery.spawned then
+            local entity, spawnError = inventory.SpawnDropStack(self:GetPos(), stack, actor, {
+                velocity = velocity, pickupDelay = 0, positionJitter = false,
+            })
+            if IsValid(entity) then
+                delivery.spawned = true
+                hook.Run("MCITEM.FishCaught", owner, stack, self)
+            elseif MC and MC.Fault then
+                MC.Fault("mcitem_fishing_loot_spawn", "%s", tostring(spawnError or "spawn_failed"))
+            end
+        end
+        if delivery.spawned and not delivery.experienceSpawned then
             local throwables = MCITEM.Throwables
             if throwables and isfunction(throwables.SpawnExperienceOrb) then
-                throwables.SpawnExperienceOrb(
-                    owner:GetPos() + Vector(0, 0.5, 0.5) * Fishing.BlockSize(),
+                local position = actor and actor:GetPos() or self:GetPos()
+                local orb = throwables.SpawnExperienceOrb(
+                    position + Vector(0, 0.5, 0.5) * Fishing.BlockSize(),
                     vector_origin,
-                    math.random(1, 6),
+                    delivery.experience,
                     { reason = "fishing", owner = owner, hook = self, stack = table.Copy(stack) }
                 )
+                delivery.experienceSpawned = IsValid(orb)
             end
-            hook.Run("MCITEM.FishCaught", owner, stack, self)
+            if not delivery.experienceSpawned and MC and MC.Fault then
+                MC.Fault("mcitem_fishing_xp_spawn", "Could not deliver fishing experience; retaining catch for retry")
+            end
         end
+        if not delivery.spawned or not delivery.experienceSpawned then complete = false end
     end
-    return spawned
+    return complete
 end
 
 function ENT:Retrieve()
+    if self.MCPendingLoot then return true, 0 end
     local owner = self:GetOwner()
     if not IsValid(owner) or self:ShouldStopFishing(owner) then return false, 0 end
 
@@ -693,7 +722,8 @@ function ENT:Retrieve()
     if IsValid(hooked) then
         damage = Fishing.IsItemEntity(hooked) and 3 or 5
     elseif self.MCNibble > 0 then
-        loot = Fishing.GenerateLoot(self.MCLuck or 0, self:GetOpenWater(), self:GetPos(), self)
+        local luck = (self.MCLuck or 0) + Fishing.PlayerLuck(owner, self.MCRodStack)
+        loot = Fishing.GenerateLoot(luck, self:GetOpenWater(), self:GetPos(), self)
         damage = 1
     end
     if self:GetMCOnGround() then damage = 2 end
@@ -711,7 +741,17 @@ function ENT:Retrieve()
         self:PullEntity(hooked)
         hook.Run("MCITEM.FishingEntityHooked", owner, hooked, self)
     elseif loot and #loot > 0 then
-        self:SpawnFishingLoot(loot)
+        self.MCPendingLoot = loot
+        if not self:SpawnFishingLoot(loot) then
+            self:SetNoDraw(true)
+            self:SetMCVelocity(vector_origin)
+            local weapon = self:GetRodWeapon()
+            if IsValid(weapon) and weapon:GetNW2Entity("MCITEM_FishingHook") == self then
+                weapon:SetMCFishingHook(nil)
+            end
+            self:NextThink(CurTime() + 1)
+            return true, damage
+        end
     end
 
     self:Remove()

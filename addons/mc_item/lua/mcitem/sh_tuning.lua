@@ -143,7 +143,9 @@ function MCITEM.ReserveParticles(incoming)
         if not biggest or biggestCount <= 0 then break end
 
         local remove = math.min(overflow, biggestCount)
-        for _ = 1, remove do table.remove(biggest, 1) end
+        local remaining = biggestCount - remove
+        for index = 1, remaining do biggest[index] = biggest[index + remove] end
+        for index = remaining + 1, biggestCount do biggest[index] = nil end
         overflow = overflow - remove
     end
 

@@ -299,7 +299,7 @@ local function pitcherRandomTick( context )
 	return cells and { cells = cells, compareCollision = true } or nil
 end
 
-local function applyBonemealCells( actor, cells )
+local function applyBonemealCells( actor, cells, beforePublish )
 	local result = SV.ApplyBlockTransaction( cells, {
 		actor = actor,
 		fx = false,
@@ -307,6 +307,7 @@ local function applyBonemealCells( actor, cells )
 		priorityPhys = true,
 		immediatePhys = true,
 		compareCollision = true,
+		beforePublish = beforePublish,
 	} )
 	if not result or result.ok ~= true then return false, result and result.error or "write_failed" end
 	return true, result
@@ -322,7 +323,7 @@ local function resolvePitcherLower( bx, by, bz, stateId )
 	return nil
 end
 
-function Farming.ApplyBonemeal( actor, bx, by, bz )
+function Farming.ApplyBonemeal( actor, bx, by, bz, options )
 	if not IsValid( actor ) or not actor.IsPlayer or not actor:IsPlayer() then return false, "invalid_player" end
 	bx, by, bz = math.floor( bx ), math.floor( by ), math.floor( bz )
 	if not SV.Validate or SV.Validate( actor, bx, by, bz, false ) ~= true then return false, "edit_rejected" end
@@ -370,10 +371,10 @@ function Farming.ApplyBonemeal( actor, bx, by, bz )
 	end
 
 	if not cells then return false, "growth_blocked" end
-	return applyBonemealCells( actor, cells )
+	return applyBonemealCells( actor, cells, options and options.beforePublish )
 end
 
-function Farming.Plant( actor, bx, by, bz, stateId )
+function Farming.Plant( actor, bx, by, bz, stateId, options )
 	if not IsValid( actor ) or not actor.IsPlayer or not actor:IsPlayer() then return false, "invalid_player" end
 	bx, by, bz = math.floor( bx ), math.floor( by ), math.floor( bz )
 	if stateAt( bx, by, bz ) ~= AIR then return false, "target_occupied" end
@@ -383,6 +384,7 @@ function Farming.Plant( actor, bx, by, bz, stateId )
 	local planted, result = SV.PlaceState( actor, bx, by, bz, initial, {
 		compareCollision = true,
 		fx = true,
+		beforePublish = options and options.beforePublish,
 	} )
 	if not planted then
 		return false, istable( result ) and result.error or "placement_rejected"

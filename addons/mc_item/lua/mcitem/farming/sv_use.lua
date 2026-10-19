@@ -89,17 +89,41 @@ local function confirmUseSwing(owner)
     net.Send(owner)
 end
 
-function Farming.TryUse(weapon, definition)
+function Farming.TryUse(weapon, definition, useContext)
     if not IsValid(weapon) or not istable(definition) then return false, "invalid_item" end
     local owner = weapon:GetOwner()
     if not IsValid(owner) or not owner:IsPlayer() then return false, "invalid_owner" end
     local context = Farming.ResolveUseContext(owner, definition)
     if not context then return false, "not_applicable" end
+    if useContext then
+        context.hand, context.useStack = useContext.hand, useContext.useStack
+    else
+        context.useStack = hook.Run("MCITEM.CaptureUseStack", owner, weapon)
+    end
     if not canConsumeItem(owner, weapon, definition, context) then return false, "item_unavailable" end
 
     local api = MC and MC.API or nil
     local farmingApi = api and api.Farming or nil
     local ok, result
+    if context.useStack then
+        if not farmingApi or not farmingApi.UseHeld then return false, "farming_inventory_api_unavailable" end
+        ok, result = farmingApi.UseHeld(owner, context.bx, context.by, context.bz, {
+            hand = context.hand,
+            expectedClass = context.hand == "offhand" and weapon:GetClass() or nil,
+            expectedItem = context.useStack.stack.item,
+            expectedStackHash = context.useStack.expectedStackHash,
+            expectedSlot = context.useStack.expectedSlot,
+        })
+        if not ok then return false, result end
+        context.result = result
+        if context.action == "bonemeal" then
+            Farming.BroadcastGrowthParticles(context.bx, context.by, context.bz, Farming.GrowthParticleCount)
+        end
+        confirmUseSwing(owner)
+        hook.Run(context.action == "plant" and "MCITEM.CropPlanted" or "MCITEM.CropBonemealed",
+            owner, weapon, definition, context)
+        return true, result
+    end
     if context.action == "plant" then
         if not farmingApi or not isfunction(farmingApi.Plant) then return false, "farming_api_unavailable" end
         ok, result = farmingApi.Plant(owner, context.bx, context.by, context.bz, context.crop, {

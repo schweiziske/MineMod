@@ -93,7 +93,7 @@ function ENT:MCProjectileStep()
     local velocity = self.MCProjectileVelocity or vector_origin
     -- ThrowableProjectile.tick: gravity, inertia, then Projectile movement/collision.
     velocity.z = velocity.z - self:GetMCGravity()
-    local inWater = MCITEM.Throwables.FluidKindAt(self.MCTickStartPosition) == "water"
+    local inWater = MCITEM.Throwables.FluidKindAt(self.MCTickStartPosition, self) == "water"
     self:SetMCInWater(inWater)
     self:SetMCProjectileTick(self.MCProjectileAge)
     if inWater then

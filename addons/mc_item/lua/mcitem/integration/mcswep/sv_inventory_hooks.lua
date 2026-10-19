@@ -7,6 +7,26 @@ MCITEM.MCSWEP = MCITEM.MCSWEP or {}
 
 local Integration = MCITEM.MCSWEP
 
+hook.Add("MC.HandWeaponStackBound", "MCITEM.MCSWEP.StackLifecycle", function(owner, weapon, stack)
+    local record = MC.SV.GetPlayerInventoryRecord(owner, false)
+    if not record then return end
+    local slot, hash = record.selected, MC.ItemStackHash(stack)
+    if weapon.MCInventoryBoundSlot == slot and weapon.MCInventoryBoundHash == hash then return end
+    local changedSlot = weapon.MCInventoryBoundSlot ~= slot
+    weapon.MCInventoryBoundSlot, weapon.MCInventoryBoundHash = slot, hash
+    if changedSlot then
+        weapon:SetNW2Int("MCITEM_StackBindingRevision", weapon:GetNW2Int("MCITEM_StackBindingRevision", 0) + 1)
+        if MCITEM.Food then MCITEM.Food.CancelUse(weapon, "selected_slot_changed") end
+        if MCITEM.Potions then MCITEM.Potions.CancelDrink(weapon, "selected_slot_changed") end
+        if weapon.FinishMCCrossbowUse then weapon:FinishMCCrossbowUse() end
+        if weapon.MCEndSpearUse then weapon:MCEndSpearUse() end
+        if weapon.SetMCThirdPersonUseState then weapon:SetMCThirdPersonUseState(false) end
+        weapon.MCUsing = false
+        weapon.MCUseStartedAt = nil
+    end
+    if weapon.RefreshMCChargedProjectile then weapon:RefreshMCChargedProjectile() end
+end)
+
 local POTION_ITEMS = {
     drinkable = "minecraft:potion",
     splash = "minecraft:splash_potion",
@@ -26,6 +46,42 @@ local function apiParts()
     return inventory, handWeapon
 end
 
+hook.Add("MCITEM.UseHeldStack", "MCITEM.MCSWEP.UseHeldStack", function(owner, stack, hand)
+    if not istable(stack) then return nil end
+    local weapon = owner:GetActiveWeapon()
+    local record = MC.SV.GetPlayerInventoryRecord(owner, false)
+    if not record or not IsValid(weapon) then return false, "inventory_unavailable" end
+    local context = { hand = hand, useStack = {
+        stack = table.Copy(stack), expectedStackHash = MC.ItemStackHash(stack),
+        expectedSlot = hand == "offhand" and 40 or record.selected,
+    } }
+    local throwable = MCITEM.Throwables and MCITEM.Throwables.Get(stack.item)
+    if throwable then
+        context.definition = throwable
+        return IsValid(MCITEM.Throwables.Use(weapon, context)), "throwable"
+    end
+    if stack.item == "minecraft:splash_potion" or stack.item == "minecraft:lingering_potion" then
+        local potionId = Integration.BasePotionID(stack)
+        context.definition = potionId and MCITEM.Potions.Get(potionId)
+        if not context.definition then return false, "potion_contents_unsupported" end
+        context.bottleType = stack.item == "minecraft:splash_potion" and "splash" or "lingering"
+        return IsValid(MCITEM.Potions.Throw(weapon, context)), "potion_throw"
+    end
+    local farming = MCITEM.Farming and MCITEM.Farming.Get(stack.item)
+    if farming then
+        local used, result = MCITEM.Farming.TryUse(weapon, farming, context)
+        -- Plantable food still runs Item.use when useOn has no target (PASS).
+        -- Keep genuine transaction/permission failures as explicit rejections.
+        if not used and result == "not_applicable" then return nil end
+        return used, result
+    end
+    local action = string.match(stack.item, "_(hoe)$") or string.match(stack.item, "_(shovel)$")
+        or string.match(stack.item, "_(axe)$")
+    if action then return MCITEM.BlockInteract.UseToolOnBlock(owner, weapon, action, context) end
+    if stack.item == "minecraft:shears" then return MCITEM.Shears.Use(owner, weapon, context) end
+    if stack.item == "minecraft:name_tag" then return MCITEM.NameTags.Use(owner, weapon, context) end
+end)
+
 local function selectedMatchesWeapon(owner, weapon)
     if not IsValid(owner) or not IsValid(weapon) or owner:GetActiveWeapon() ~= weapon then return false end
     if not weapon.GetNW2Bool or not weapon:GetNW2Bool("MCITEM_InventoryProxy", false) then return false end
@@ -40,25 +96,57 @@ local function reportMutationError(kind, err)
     local message = tostring(kind) .. ":" .. tostring(err or "unknown")
     if Integration.LastInventoryMutationError == message then return end
     Integration.LastInventoryMutationError = message
+    if MC and MC.Fault then return MC.Fault("mcitem_inventory_mutation", "%s", message) end
     if ErrorNoHalt then ErrorNoHalt("[MCITEM] MCSWEP inventory bridge failed: " .. message .. "\n") end
 end
 
-local function consumeSelected(kind, owner, weapon, expectedItem, amount, replacement)
+hook.Add("MCITEM.CaptureUseStack", "MCITEM.MCSWEP.CaptureUseStack", function(owner, weapon)
     if not selectedMatchesWeapon(owner, weapon) then return nil end
     local inventory = apiParts()
-    if not inventory or not isfunction(inventory.ConsumeSelected) then return nil end
+    local stack = inventory.GetSelected(owner)
+    local record = MC.SV.GetPlayerInventoryRecord(owner, false)
+    return { stack = table.Copy(stack), expectedStackHash = MC.ItemStackHash(stack),
+        expectedSlot = record.selected }
+end)
+
+local function consumeSelected(kind, owner, weapon, expectedItem, amount, replacement, context)
+    local explicitHand = context and context.useStack
+    if not explicitHand and not selectedMatchesWeapon(owner, weapon) then
+        if IsValid(weapon) and weapon:GetNW2Bool("MCITEM_InventoryProxy", false) then return false end
+        return nil
+    end
+    local inventory = apiParts()
+    if not inventory or not isfunction(inventory.ConsumeSelected) then
+        reportMutationError(kind, "consume_api_unavailable")
+        return false
+    end
+    context = context or {}
+    local captured = context.useStack or hook.Run("MCITEM.CaptureUseStack", owner, weapon)
+    if captured then context.stack = captured.stack end
     local result, _, _, infinite, err = inventory.ConsumeSelected(owner, amount, namespaced(replacement), {
         expectedItem = expectedItem,
-        expectedClass = weapon:GetClass(),
+        expectedClass = (context.hand == "offhand" or selectedMatchesWeapon(owner, weapon)) and weapon:GetClass() or nil,
         reason = "mcitem_" .. kind,
         dropOverflow = true,
+        expectedStackHash = captured and captured.expectedStackHash,
+        expectedSlot = captured and captured.expectedSlot,
+        hand = context.hand,
     })
     if result or infinite then return true end
     reportMutationError(kind, err)
     return false
 end
 
-local function canConsumeSelected(owner, weapon, expectedItem, amount)
+local function canConsumeSelected(owner, weapon, expectedItem, amount, context)
+    if context and context.useStack then
+        local record = MC.SV.SelectedStackMatches(owner, {
+            hand = context.hand, expectedItem = expectedItem,
+            expectedStackHash = context.useStack.expectedStackHash,
+            expectedSlot = context.useStack.expectedSlot,
+            expectedClass = context.hand == "offhand" and weapon:GetClass() or nil,
+        })
+        return record ~= nil
+    end
     if not IsValid(owner) or not IsValid(weapon) or not weapon.GetNW2Bool
         or not weapon:GetNW2Bool("MCITEM_InventoryProxy", false) then return nil end
     if not selectedMatchesWeapon(owner, weapon) then return false end
@@ -81,44 +169,49 @@ hook.Add("MCITEM.SWEPDurabilityDamage", "MCITEM.MCSWEP.DamageSelected", function
     if reason == "" then reason = "durability" end
     if string.sub(reason, 1, 7) ~= "mcitem_" then reason = "mcitem_" .. reason end
 
-    local result, _, err = inventory.DamageSelected(owner, amount, {
+    local result, broken, err = inventory.DamageSelected(owner, amount, {
         expectedItem = namespaced(weapon.MCItemID),
         expectedClass = weapon:GetClass(),
         reason = reason,
         actionId = istable(context) and context.actionId or nil,
     })
-    if result or err == "infinite_materials" then return true end
+    if result or err == "infinite_materials" then
+        if broken and IsValid(weapon) then
+            weapon.MCInventoryBreakRevision = (weapon.MCInventoryBreakRevision or 0) + 1
+        end
+        return true
+    end
     reportMutationError("durability", err)
     return false
 end)
 
 hook.Remove("MCITEM.ConsumeFoodItem", "MCITEM.MCSWEP.ConsumeFood")
-hook.Add("MCITEM.ConsumeFoodItem", "MCITEM.MCSWEP.ConsumeFood", function(owner, weapon, itemId, amount, replacement)
-    return consumeSelected("food", owner, weapon, namespaced(itemId), amount, replacement)
+hook.Add("MCITEM.ConsumeFoodItem", "MCITEM.MCSWEP.ConsumeFood", function(owner, weapon, itemId, amount, replacement, context)
+    return consumeSelected("food", owner, weapon, namespaced(itemId), amount, replacement, context)
 end)
 
 hook.Remove("MCITEM.ConsumeFarmingItem", "MCITEM.MCSWEP.ConsumeFarming")
-hook.Add("MCITEM.ConsumeFarmingItem", "MCITEM.MCSWEP.ConsumeFarming", function(owner, weapon, itemId, amount)
-    return consumeSelected("farming", owner, weapon, namespaced(itemId), amount, nil)
+hook.Add("MCITEM.ConsumeFarmingItem", "MCITEM.MCSWEP.ConsumeFarming", function(owner, weapon, itemId, amount, context)
+    return consumeSelected("farming", owner, weapon, namespaced(itemId), amount, nil, context)
 end)
 
 hook.Remove("MCITEM.CanConsumeFarmingItem", "MCITEM.MCSWEP.CanConsumeFarming")
-hook.Add("MCITEM.CanConsumeFarmingItem", "MCITEM.MCSWEP.CanConsumeFarming", function(owner, weapon, itemId, amount)
-    return canConsumeSelected(owner, weapon, namespaced(itemId), amount)
+hook.Add("MCITEM.CanConsumeFarmingItem", "MCITEM.MCSWEP.CanConsumeFarming", function(owner, weapon, itemId, amount, context)
+    return canConsumeSelected(owner, weapon, namespaced(itemId), amount, context)
 end)
 
 hook.Remove("MCITEM.ConsumePotionItem", "MCITEM.MCSWEP.ConsumePotion")
-hook.Add("MCITEM.ConsumePotionItem", "MCITEM.MCSWEP.ConsumePotion", function(owner, weapon, bottleType, _, amount, replacement)
+hook.Add("MCITEM.ConsumePotionItem", "MCITEM.MCSWEP.ConsumePotion", function(owner, weapon, bottleType, _, amount, replacement, context)
     local expectedItem = POTION_ITEMS[bottleType]
     if not expectedItem then return nil end
-    return consumeSelected("potion", owner, weapon, expectedItem, amount, replacement)
+    return consumeSelected("potion", owner, weapon, expectedItem, amount, replacement, context)
 end)
 
 hook.Remove("MCITEM.ConsumeThrowableItem", "MCITEM.MCSWEP.ConsumeThrowable")
-hook.Add("MCITEM.ConsumeThrowableItem", "MCITEM.MCSWEP.ConsumeThrowable", function(owner, weapon, definition, amount)
+hook.Add("MCITEM.ConsumeThrowableItem", "MCITEM.MCSWEP.ConsumeThrowable", function(owner, weapon, definition, amount, context)
     local itemId = istable(definition) and definition.id or nil
     if not itemId then return nil end
-    return consumeSelected("throwable", owner, weapon, namespaced(itemId), amount, nil)
+    return consumeSelected("throwable", owner, weapon, namespaced(itemId), amount, nil, context)
 end)
 
 --------------------------------------------------------------------------------
@@ -506,19 +599,22 @@ hook.Add("MCITEM.GiveItemToPlayer", "MCITEM.MCSWEP.GiveItem", function(ply, stac
     local requested = stack and stack.count or count or 1
     local leftover = istable(remainder) and remainder.count or (requested - (given or 0))
     if leftover and leftover > 0 and isvector(position) then
+        local dropped, dropError
         if istable(remainder) and isfunction(inventory.SpawnDropStack) then
-            inventory.SpawnDropStack(position, remainder, ply, { pickupDelay = 0.5 })
+            dropped, dropError = inventory.SpawnDropStack(position, remainder, ply, { pickupDelay = 0.5 })
         elseif isfunction(inventory.SpawnDrop) then
-            inventory.SpawnDrop(position, itemId, leftover, ply, { pickupDelay = 0.5 })
-        else
-            return (given or 0) > 0
+            dropped, dropError = inventory.SpawnDrop(position, itemId, leftover, ply, { pickupDelay = 0.5 })
         end
-        return true
+        if IsValid(dropped) then return true end
+        reportMutationError("pickup_overflow", dropError or "drop_unavailable")
+        local pending = istable(remainder) and table.Copy(remainder)
+            or { item = itemId, count = leftover, components = stack and stack.components, damage = stack and stack.damage }
+        return false, pending
     end
 
-    if (given or 0) > 0 then return true end
+    if leftover <= 0 then return true end
     reportMutationError("give", err)
-    return false
+    return false, remainder
 end)
 
 hook.Remove("MCITEM.SpawnItemDrop", "MCITEM.MCSWEP.SpawnItemDrop")

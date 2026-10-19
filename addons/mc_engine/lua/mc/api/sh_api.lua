@@ -850,6 +850,19 @@ function Coords.EngineToCell( pos, context )
 	return MC.WorldToCell( worldPos )
 end
 
+-- Engine and MC world frames share axes and units; world adapters re-origin
+-- positions by translation. Supply the entity whose engine frame is in use.
+function Coords.EngineToWorld( pos, context )
+	if not isvector( pos ) then return nil, "invalid_position" end
+	return MC.EngineToWorldPos( pos, context )
+end
+
+function Coords.WorldToEngine( pos, context )
+	if not isvector( pos ) then return nil, "invalid_position" end
+	local offset = MC.EngineToWorldPos( vector_origin, context )
+	return pos - offset
+end
+
 -- Cell an entity currently occupies (feet). InfMap-safe.
 function Coords.EntityCell( ent )
 	if not IsValid( ent ) then return nil, nil, nil end

@@ -96,7 +96,9 @@ function Food.ApplySaturation(player, amount, context)
     if handled ~= nil then return handled ~= false end
     local hunger = math.Clamp(player:GetNWInt("mc_food_level", HUNGER_DEFAULT), 0, HUNGER_MAX)
     local saturation = math.max(0, player:GetNWFloat("mc_food_saturation", SATURATION_DEFAULT))
-    player:SetNWFloat("mc_food_saturation", math.min(hunger, saturation + amount))
+    local newHunger = math.min(HUNGER_MAX, hunger + amount)
+    player:SetNWInt("mc_food_level", newHunger)
+    player:SetNWFloat("mc_food_saturation", math.min(newHunger, saturation + amount * 2))
     return true
 end
 

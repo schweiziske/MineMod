@@ -6,10 +6,11 @@ MCITEM = MCITEM or {}
 MCITEM.Throwables = MCITEM.Throwables or {}
 
 local Throwables = MCITEM.Throwables
-local PARTICLE_CORE_VERSION = 5
+local PARTICLE_CORE_VERSION = 6
 if (tonumber(Throwables.ParticleCoreVersion) or 0) >= PARTICLE_CORE_VERSION then return end
 Throwables.ParticleCoreVersion = PARTICLE_CORE_VERSION
 Throwables.ParticleCoreLoaded = true
+if not MCITEM.AlphaParticlePools then include("mcitem/cl_billboard.lua") end
 
 local MAX_PARTICLES = 12000
 local MAX_CATCHUP_TICKS = 8
@@ -70,19 +71,9 @@ local function particleBase(position, fullbright)
     return particle
 end
 
--- 全局粒子预算（`mcitem_particle_limit`）：各系统各自的 MAX_PARTICLES 仍然在，
--- 但总量由 sh_tuning.lua 的共享预算统一压住，超了先丢最老的。
-local function trimToGlobalBudget(particles)
-    local limit = isfunction(MCITEM.ParticleLimit) and MCITEM.ParticleLimit() or 0
-    if limit <= 0 or not isfunction(MCITEM.LiveParticleCount) then return end
-    while #particles > 0 and MCITEM.LiveParticleCount() >= limit do
-        table.remove(particles, 1)
-    end
-end
-
 local function append(particle)
     local particles = Throwables.ClientParticles
-    trimToGlobalBudget(particles)
+    if MCITEM.ReserveParticles and MCITEM.ReserveParticles(1) == 0 then return nil end
     if #particles >= MAX_PARTICLES then table.remove(particles, 1) end
     particles[#particles + 1] = particle
     return particle
@@ -339,81 +330,20 @@ hook.Add("Think", "MCITEM.Throwables.ParticleThink", function()
         end
         if emitter.age >= lifetimeTicks then table.remove(Throwables.WindChargeEmitters, index) end
     end
-    for index = #Throwables.ClientParticles, 1, -1 do
-        local particle = Throwables.ClientParticles[index]
+    local particles = Throwables.ClientParticles
+    local count, kept = #particles, 0
+    for index = 1, count do
+        local particle = particles[index]
         advanceParticle(particle, now)
-        if particle.removed then table.remove(Throwables.ClientParticles, index) end
+        if not particle.removed then
+            kept = kept + 1
+            particles[kept] = particle
+        end
     end
+    for index = kept + 1, count do particles[index] = nil end
 end)
-
-local function vertex(position, u, v, r, g, b, alpha)
-    mesh.Position(position)
-    mesh.TexCoord(0, u, v)
-    mesh.Color(r * 255, g * 255, b * 255, alpha * 255)
-    mesh.AdvanceVertex()
-end
-
-local function bucketFor(buckets, material, frame)
-    local byFrame = buckets[material]
-    if not byFrame then
-        byFrame = {}
-        buckets[material] = byFrame
-    end
-    frame = frame or -1
-    byFrame[frame] = byFrame[frame] or {}
-    return byFrame[frame]
-end
 
 hook.Remove("PostDrawTranslucentRenderables", "MCITEM.Throwables.ParticleDraw")
-hook.Add("PostDrawTranslucentRenderables", "MCITEM.Throwables.ParticleDraw", function(_, drawingSkybox)
-    if drawingSkybox or #Throwables.ClientParticles == 0 then return end
-    local now = CurTime()
-    local eyeAngles = EyeAngles()
-    local right, up = eyeAngles:Right(), eyeAngles:Up()
-    local buckets = {}
-
-    for _, particle in ipairs(Throwables.ClientParticles) do
-        local partial = math.Clamp((now - particle.lastTickAt) / Throwables.TickSeconds, 0, 1)
-        local position = LerpVector(partial, particle.oldPosition, particle.position)
-        local size = particle.quadSize
-        if particle.kind == "portal" then
-            local progress = math.Clamp((particle.age + partial) / particle.lifetime, 0, 1)
-            size = size * (2 * progress - progress * progress)
-        end
-        local frame = -1
-        if particle.kind == "effect" then
-            frame = 7 - math.floor(particle.age * 7 / particle.lifetime)
-        elseif particle.kind == "gust" then
-            frame = math.floor(particle.age * ((particle.frameCount or 1) - 1) / particle.lifetime)
-        end
-        local bucket = bucketFor(buckets, particle.material, frame)
-        bucket[#bucket + 1] = { particle = particle, position = position, size = size }
-    end
-
-    for material, byFrame in pairs(buckets) do
-        render.SetMaterial(material)
-        for frame, bucket in pairs(byFrame) do
-            if frame >= 0 then material:SetInt("$frame", frame) end
-            mesh.Begin(MATERIAL_QUADS, #bucket)
-            for _, entry in ipairs(bucket) do
-                local particle = entry.particle
-                local radius = entry.size * MCITEM.BlockSize()
-                local rightOffset, upOffset = right * radius, up * radius
-                local u0, u1, v0, v1 = 0, 1, 0, 1
-                if particle.kind == "fragment" then
-                    u0, u1 = (particle.uo + 1) / 4, particle.uo / 4
-                    v0, v1 = particle.vo / 4, (particle.vo + 1) / 4
-                end
-                local r = (particle.r or 1) * particle.litR
-                local g = (particle.g or 1) * particle.litG
-                local b = (particle.b or 1) * particle.litB
-                local alpha = particle.alpha or 1
-                vertex(entry.position - rightOffset - upOffset, u1, v1, r, g, b, alpha)
-                vertex(entry.position + rightOffset - upOffset, u0, v1, r, g, b, alpha)
-                vertex(entry.position + rightOffset + upOffset, u0, v0, r, g, b, alpha)
-                vertex(entry.position - rightOffset + upOffset, u1, v0, r, g, b, alpha)
-            end
-            mesh.End()
-        end
-    end
-end)
+MCITEM.AlphaParticlePools.throwables = {
+    particles = Throwables.ClientParticles, interval = Throwables.TickSeconds,
+}

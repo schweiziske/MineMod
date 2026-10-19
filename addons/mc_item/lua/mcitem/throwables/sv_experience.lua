@@ -20,6 +20,7 @@ local function mergeSpawn(position, value)
     local randomGroup = math.random(0, 39)
     for _, orb in ipairs(ents.FindInBox(position - half, position + half)) do
         if IsValid(orb) and orb:GetClass() == "mcitem_experience_orb"
+            and orb.MCPendingExperience == nil
             and orb:GetExperienceValue() == value
             and (orb:EntIndex() - randomGroup) % 40 == 0
         then
@@ -104,8 +105,17 @@ function Throwables.CollectExperienceOrb(orb, playerEntity)
         + Throwables.ExperiencePickupDelayTicks * Throwables.TickSeconds
 
     local oldLevel = experienceLevel(playerEntity)
-    local remaining = Throwables.RepairWithExperience(playerEntity, context.value, context)
-    local granted = remaining > 0 and Throwables.GiveExperience(playerEntity, remaining, context) or true
+    local remaining = orb.MCPendingExperience
+    if remaining == nil then
+        remaining = Throwables.RepairWithExperience(playerEntity, context.value, context)
+        -- Repair may already have committed. Never repair the same orb unit a
+        -- second time if the subsequent XP provider refuses the remainder.
+        orb.MCPendingExperience = remaining
+    end
+    local granted = true
+    if remaining > 0 then granted = Throwables.GiveExperience(playerEntity, remaining, context) end
+    if not granted then return false end
+    orb.MCPendingExperience = nil
     local newLevel = experienceLevel(playerEntity)
     if oldLevel ~= nil and newLevel ~= nil and oldLevel ~= newLevel then
         Throwables.NotifyExperienceLevelChanged(playerEntity, oldLevel, newLevel, context)

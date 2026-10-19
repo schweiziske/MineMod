@@ -22,6 +22,9 @@ function SV.SelectedStackMatches( ply, context )
 		return nil, nil, nil, "invalid_hand"
 	end
 	local slotIndex = context.hand == "offhand" and 40 or record.selected
+	if context.expectedSlot ~= nil and slotIndex ~= context.expectedSlot then
+		return nil, nil, nil, "selected_slot_changed"
+	end
 	local stack = SV.InteractionStack( record, slotIndex )
 	if not stack then return nil, nil, nil, "selected_item_missing" end
 

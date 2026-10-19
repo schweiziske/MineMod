@@ -53,9 +53,11 @@ function ENT:SetupExperience(value, direction, context)
 end
 
 function ENT:MergeNearbyOrbs()
+    if self.MCPendingExperience ~= nil then return end
     local half = Vector(0.75, 0.75, 0.75) * MCITEM.BlockSize()
     for _, other in ipairs(ents.FindInBox(self:GetPos() - half, self:GetPos() + half)) do
         if IsValid(other) and other ~= self and other:GetClass() == self:GetClass()
+            and other.MCPendingExperience == nil
             and other:GetExperienceValue() == self:GetExperienceValue()
             and (other:EntIndex() - self:EntIndex()) % 40 == 0
         then
@@ -119,8 +121,8 @@ function ENT:OrbStep()
     local minimumHull, maximumHull = bounds()
     local velocity = self.MCOrbVelocity or vector_origin
     local eyePosition = self:GetPos() + Vector(0, 0, 0.25 * MCITEM.BlockSize())
-    local fluid = Throwables.FluidKindAt(eyePosition)
-    local insideBlock = Throwables.HullCollidesAt(self:GetPos(), minimumHull, maximumHull)
+    local fluid = Throwables.FluidKindAt(eyePosition, self)
+    local insideBlock = Throwables.HullCollidesAt(self:GetPos(), minimumHull, maximumHull, self)
     if fluid == "water" then
         velocity.x = velocity.x * 0.99
         velocity.y = velocity.y * 0.99

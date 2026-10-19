@@ -108,6 +108,8 @@ end
 function SV.UseSelectedShearsOnBlock( ply, context )
 	context = istable( context ) and context or {}
 	local matchContext = {
+		hand = context.hand,
+		expectedSlot = context.expectedSlot,
 		expectedItem = "minecraft:shears",
 		expectedClass = context.expectedClass,
 		expectedStackHash = context.expectedStackHash,
@@ -123,6 +125,8 @@ function SV.UseSelectedShearsOnBlock( ply, context )
 	local durabilityResult, broken, infinite
 	local function commitDurability()
 		local result, didBreak, err = SV.DamageSelectedItem( ply, 1, {
+			hand = context.hand,
+			expectedSlot = context.expectedSlot,
 			expectedItem = matchContext.expectedItem,
 			expectedClass = matchContext.expectedClass,
 			expectedStackHash = matchContext.expectedStackHash,

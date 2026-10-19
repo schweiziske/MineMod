@@ -188,9 +188,7 @@ for _, spear in ipairs(SPEARS) do
         MCAttackSpeed = 1 / spear.attackDuration,
         MCAttackKnockback = 0,
         MCIsSword = false,
-        -- Item.Properties.spear installs Weapon(1), but Java 26.2's PiercingWeapon
-        -- and KineticWeapon paths call hurtEnemy without postHurtEnemy, so the
-        -- current spear attack implementation intentionally does not consume it.
+        -- Player.stabAttack -> itemAttackInteraction -> postHurtEnemy.
         MCWeaponDamagePerAttack = 1,
 
         MCSpearWood = spear.wood == true,

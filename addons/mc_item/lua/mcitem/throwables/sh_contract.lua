@@ -4,6 +4,21 @@ MCITEM = MCITEM or {}
 MCITEM.Throwables = MCITEM.Throwables or {}
 
 local Throwables = MCITEM.Throwables
+Throwables.PlayerCooldowns = Throwables.PlayerCooldowns or setmetatable({}, { __mode = "k" })
+
+function Throwables.IsOnCooldown(owner, definition)
+    local cooldowns = Throwables.PlayerCooldowns[owner]
+    local group = definition.cooldownGroup or definition.id
+    return cooldowns ~= nil and (cooldowns[group] or 0) > CurTime()
+end
+
+function Throwables.StartCooldown(owner, definition)
+    local cooldowns = Throwables.PlayerCooldowns[owner]
+    if not cooldowns then cooldowns = {} Throwables.PlayerCooldowns[owner] = cooldowns end
+    local group = definition.cooldownGroup or definition.id
+    cooldowns[group] = CurTime() + math.max(Throwables.RightClickDelayTicks,
+        definition.cooldownTicks or 0) * Throwables.TickSeconds
+end
 
 Throwables.TickSeconds = 1 / 20
 Throwables.RightClickDelayTicks = 4
@@ -61,6 +76,7 @@ end
 
 function Throwables.CanUse(weapon, owner, definition)
     if not IsValid(weapon) or not IsValid(owner) or not istable(definition) then return false end
+    if Throwables.IsOnCooldown(owner, definition) then return false end
     if isfunction(weapon.CanMCUseThrowable) then
         local result = weapon:CanMCUseThrowable(owner, definition)
         if result ~= nil then return result ~= false end
@@ -196,7 +212,9 @@ function Throwables.Consume(owner, weapon, definition, context)
         if handled ~= nil then return handled ~= false end
     end
     local handled = hook.Run("MCITEM.ConsumeThrowableItem", owner, weapon, definition, 1, context)
-    return handled ~= nil and handled ~= false or false
+    -- Standalone preview SWEPs have no inventory provider; an explicit false
+    -- from a provider must still cancel the prepared projectile.
+    return handled ~= false
 end
 
 -- EyeOfEnder.tick 的返还分支是 `spawnAtLocation(Items.ENDER_EYE)` —— 生成一个**掉落物**，
@@ -231,8 +249,7 @@ function Throwables.GiveExperience(player, value, context)
     end
     local handled = hook.Run("MCITEM.GiveExperience", player, value, context)
     if handled ~= nil then return handled ~= false end
-    -- No invented XP/level system: pickup still completes, while survival
-    -- integrations receive the exact orb value through the method/hook above.
+    -- Without an authoritative XP provider the orb must remain available.
     return false
 end
 

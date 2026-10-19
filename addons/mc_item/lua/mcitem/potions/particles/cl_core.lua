@@ -6,10 +6,15 @@ MCITEM = MCITEM or {}
 MCITEM.Potions = MCITEM.Potions or {}
 
 local Potions = MCITEM.Potions
+if not MCITEM.AlphaParticlePools then include("mcitem/cl_billboard.lua") end
 local MAX_CATCHUP_TICKS = 8
 local MAX_PARTICLES = 12000
 
 Potions.ClientParticles = Potions.ClientParticles or {}
+for _, particle in ipairs(Potions.ClientParticles) do
+    particle.r, particle.g, particle.b = particle.r or 1, particle.g or 1, particle.b or 1
+    particle.alpha = particle.alpha or 1
+end
 if isfunction(MCITEM.RegisterParticlePool) then
     MCITEM.RegisterParticlePool("potions", Potions.ClientParticles)
 end
@@ -58,19 +63,9 @@ local function sampleLight(position, emission)
     return 1, 1, 1
 end
 
--- 全局粒子预算（`mcitem_particle_limit`）：各系统各自的 MAX_PARTICLES 仍然在，
--- 但总量由 sh_tuning.lua 的共享预算统一压住，超了先丢最老的。
-local function trimToGlobalBudget(particles)
-    local limit = isfunction(MCITEM.ParticleLimit) and MCITEM.ParticleLimit() or 0
-    if limit <= 0 or not isfunction(MCITEM.LiveParticleCount) then return end
-    while #particles > 0 and MCITEM.LiveParticleCount() >= limit do
-        table.remove(particles, 1)
-    end
-end
-
 local function append(particle)
     local particles = Potions.ClientParticles
-    trimToGlobalBudget(particles)
+    if MCITEM.ReserveParticles and MCITEM.ReserveParticles(1) == 0 then return end
     if #particles >= MAX_PARTICLES then table.remove(particles, 1) end
     particles[#particles + 1] = particle
 end
@@ -85,6 +80,7 @@ local function particleBase(position, emission, fullbright)
         age = 0,
         lastTickAt = now,
         nextTickAt = now + Potions.TickSeconds,
+        r = 1, g = 1, b = 1, alpha = 1,
         litR = math.Clamp(tonumber(r) or 1, 0, 1),
         litG = math.Clamp(tonumber(g) or 1, 0, 1),
         litB = math.Clamp(tonumber(b) or 1, 0, 1),
@@ -260,80 +256,21 @@ end
 hook.Remove("Think", "MCITEM.Potions.ParticleThink")
 hook.Add("Think", "MCITEM.Potions.ParticleThink", function()
     local now = CurTime()
-    for index = #Potions.ClientParticles, 1, -1 do
-        local particle = Potions.ClientParticles[index]
+    local particles = Potions.ClientParticles
+    local count, kept = #particles, 0
+    for index = 1, count do
+        local particle = particles[index]
         advanceParticle(particle, now)
-        if particle.removed then table.remove(Potions.ClientParticles, index) end
+        if not particle.removed then
+            kept = kept + 1
+            particles[kept] = particle
+        end
     end
+    for index = kept + 1, count do particles[index] = nil end
 end)
-
-local function vertex(position, u, v, r, g, b, alpha)
-    mesh.Position(position)
-    mesh.TexCoord(0, u, v)
-    mesh.Color(r * 255, g * 255, b * 255, alpha * 255)
-    mesh.AdvanceVertex()
-end
-
-local function bucketFor(buckets, material, frame)
-    local byFrame = buckets[material]
-    if not byFrame then
-        byFrame = {}
-        buckets[material] = byFrame
-    end
-    frame = frame or -1
-    byFrame[frame] = byFrame[frame] or {}
-    return byFrame[frame]
-end
 
 hook.Remove("PostDrawTranslucentRenderables", "MCITEM.Potions.ParticleDraw")
-hook.Add("PostDrawTranslucentRenderables", "MCITEM.Potions.ParticleDraw", function(_, drawingSkybox)
-    if drawingSkybox or #Potions.ClientParticles == 0 then return end
-    local now = CurTime()
-    local eyeAngles = EyeAngles()
-    local right, up = eyeAngles:Right(), eyeAngles:Up()
-    local buckets = {}
-
-    for _, particle in ipairs(Potions.ClientParticles) do
-        local partial = math.Clamp((now - particle.lastTickAt) / Potions.TickSeconds, 0, 1)
-        local position = LerpVector(partial, particle.oldPosition, particle.position)
-        local material, frame
-        if particle.kind == "spell" then
-            material = particle.family == "spell" and spellMaterial or effectMaterial
-            frame = 7 - math.floor(particle.age * 7 / particle.lifetime)
-        elseif particle.kind == "gust" then
-            material = particle.material
-            frame = math.floor(particle.age * ((particle.frameCount or 1) - 1) / particle.lifetime)
-        else
-            material = particle.material
-        end
-        local bucket = bucketFor(buckets, material, frame)
-        bucket[#bucket + 1] = { particle = particle, position = position }
-    end
-
-    for material, byFrame in pairs(buckets) do
-        render.SetMaterial(material)
-        for frame, bucket in pairs(byFrame) do
-            if frame >= 0 then material:SetInt("$frame", frame) end
-            mesh.Begin(MATERIAL_QUADS, #bucket)
-            for _, entry in ipairs(bucket) do
-                local particle = entry.particle
-                local radius = particle.quadSize * MCITEM.BlockSize()
-                local rightOffset, upOffset = right * radius, up * radius
-                local u0, u1, v0, v1 = 0, 1, 0, 1
-                if particle.kind == "fragment" then
-                    u0, u1 = (particle.uo + 1) / 4, particle.uo / 4
-                    v0, v1 = particle.vo / 4, (particle.vo + 1) / 4
-                end
-                local r = (particle.r or 1) * particle.litR
-                local g = (particle.g or 1) * particle.litG
-                local b = (particle.b or 1) * particle.litB
-                local alpha = particle.alpha or 1
-                vertex(entry.position - rightOffset - upOffset, u1, v1, r, g, b, alpha)
-                vertex(entry.position + rightOffset - upOffset, u0, v1, r, g, b, alpha)
-                vertex(entry.position + rightOffset + upOffset, u0, v0, r, g, b, alpha)
-                vertex(entry.position - rightOffset + upOffset, u1, v0, r, g, b, alpha)
-            end
-            mesh.End()
-        end
-    end
-end)
+MCITEM.AlphaParticlePools.potions = {
+    particles = Potions.ClientParticles, interval = Potions.TickSeconds,
+    spellMaterial = spellMaterial, effectMaterial = effectMaterial,
+}

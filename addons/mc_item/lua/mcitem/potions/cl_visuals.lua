@@ -6,7 +6,19 @@ if not CLIENT then return end
 MCITEM = MCITEM or {}
 MCITEM.Potions = MCITEM.Potions or {}
 
-local hidden = setmetatable({}, { __mode = "k" })
+MCITEM.Potions.HiddenEntities = MCITEM.Potions.HiddenEntities or setmetatable({}, { __mode = "k" })
+local hidden = MCITEM.Potions.HiddenEntities
+
+hook.Add("MC.NightVisionFactor", "MCITEM.Potions.NightVision", function()
+    local player = LocalPlayer()
+    if not IsValid(player) then return 0 end
+    local effect = MCITEM.Potions.GetEffect(player, "night_vision")
+    if not effect then return 0 end
+    local ticks = effect.infinite and 201
+        or math.max(0, ((effect.expiresAt or CurTime()) - CurTime()) / MCITEM.Potions.TickSeconds)
+    if ticks >= 200 then return 1 end
+    return 0.7 + math.sin(ticks * math.pi * 0.2) * 0.3
+end)
 
 -- 只有带效果的实体才可能发光或隐身，所以这两个 hook 读状态 tick 每 20Hz 产出的
 -- 那份列表就够了。它们以前各自**每帧**遍历 ents.GetAll()，并且发光那条还会对每个

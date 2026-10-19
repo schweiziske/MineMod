@@ -24,9 +24,7 @@ local function apiParts()
 end
 
 function NameTags.EntityInteractionReach(owner, api, inventory)
-    local blockSize = api and api.Coords and isfunction(api.Coords.BlockSize)
-        and tonumber(api.Coords.BlockSize()) or 36.5
-    blockSize = math.max(blockSize or 36.5, 1)
+    local blockSize = MCITEM.BlockSize()
     local infinite = inventory and isfunction(inventory.HasInfiniteMaterials)
         and inventory.HasInfiniteMaterials(owner) == true
     return blockSize * (SURVIVAL_REACH_BLOCKS + (infinite and CREATIVE_REACH_BONUS_BLOCKS or 0))
@@ -38,27 +36,26 @@ function NameTags.TraceTarget(owner, weapon, api, inventory)
     return NameTags.FindAimTarget(owner, weapon, reach, true)
 end
 
-function NameTags.Use(owner, weapon)
+function NameTags.Use(owner, weapon, context)
     if not IsValid(owner) or not owner:IsPlayer() or not owner:Alive() then
         return false, "invalid_owner"
     end
     if not IsValid(weapon) or owner:GetActiveWeapon() ~= weapon then
         return false, "inactive_weapon"
     end
-    if not MCITEM.Utility or not MCITEM.Utility.IsInventoryProxy
-        or not MCITEM.Utility.IsInventoryProxy(weapon) then
+    if not context and not MCITEM.Utility.IsInventoryProxy(weapon) then
         return false, "inventory_name_tag_required"
     end
 
     local api, inventory, stackApi = apiParts()
     if not api then return false, "inventory_api_unavailable" end
-    if not isfunction(inventory.GetSelected) or not isfunction(inventory.ConsumeHeld)
+    if not isfunction(inventory.GetSelected) or not isfunction(inventory.ConsumeSelected)
         or not isfunction(inventory.HasInfiniteMaterials)
         or not isfunction(stackApi.GetCustomName) then
         return false, "name_tag_api_unavailable"
     end
 
-    local stack = inventory.GetSelected(owner)
+    local stack = context and context.useStack.stack or inventory.GetSelected(owner)
     if not istable(stack) or stack.item ~= "minecraft:name_tag" then
         return false, "selected_name_tag_missing"
     end
@@ -67,30 +64,21 @@ function NameTags.Use(owner, weapon)
     if present ~= true or customName == nil or customName == "" then
         return false, "name_tag_has_no_custom_name"
     end
-    local infiniteMaterials = inventory.HasInfiniteMaterials(owner) == true
-    local stackHash
-    if not infiniteMaterials then
-        if not isfunction(stackApi.Hash) then return false, "name_tag_api_unavailable" end
-        local hashError
-        stackHash, hashError = stackApi.Hash(stack)
-        if not stackHash then return false, hashError or "name_tag_hash_failed" end
-    end
+    if not isfunction(stackApi.Hash) then return false, "name_tag_api_unavailable" end
+    local stackHash, hashError = stackApi.Hash(stack)
+    if not stackHash then return false, hashError or "name_tag_hash_failed" end
 
     local target, targetError = NameTags.TraceTarget(owner, weapon, api, inventory)
     if not target then return false, targetError end
 
-    -- NameTagItem#interactLivingEntity shrinks its working stack, but
-    -- Player#interactOn substitutes a cloned stack for infinite-material
-    -- players.  Therefore only survival commits the authoritative inventory
-    -- mutation; creative still applies the name without consuming the tag.
-    if not infiniteMaterials then
-        local result, consumed, _, consumeError = inventory.ConsumeHeld(owner, "mainhand", 1, {
-            expectedItem = "minecraft:name_tag",
-            expectedHash = stackHash,
-            reason = "mcitem_name_tag_use",
-        })
-        if not result or consumed ~= 1 then return false, consumeError or "name_tag_consume_failed" end
-    end
+    -- ConsumeSelected validates identity before its creative exemption, so a
+    -- stale creative snapshot cannot apply a name from an item no longer held.
+    local result, consumed, _, _, consumeError = inventory.ConsumeSelected(owner, 1, nil, {
+        hand = context and context.hand or "mainhand", expectedItem = "minecraft:name_tag",
+        expectedStackHash = stackHash, expectedSlot = context and context.useStack.expectedSlot,
+        reason = "mcitem_name_tag_use",
+    })
+    if not result or consumed ~= 1 then return false, consumeError or "name_tag_consume_failed" end
 
     if not NameTags.SetEntityCustomName(target, customName) then
         return false, "name_tag_target_changed"

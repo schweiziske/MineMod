@@ -81,7 +81,9 @@ function Potions.SpawnThrown(owner, bottleType, potionId, options)
     context.potionId = definition.id
     context.bottleType = bottleType
     context.projectile = projectile
-    hook.Run("MCITEM.PotionProjectileSpawned", owner, projectile, definition, bottleType, context)
+    if not options.prepare then
+        hook.Run("MCITEM.PotionProjectileSpawned", owner, projectile, definition, bottleType, context)
+    end
     return projectile, context
 end
 
@@ -89,11 +91,11 @@ end
 -- kept for callers that integrated against the first public revision.
 Potions.SpawnThrownPotion = Potions.SpawnThrown
 
-function Potions.Throw(weapon)
+function Potions.Throw(weapon, useContext)
     if not IsValid(weapon) then return nil end
     local owner = weapon:GetOwner()
-    local definition = Potions.DefinitionForWeapon(weapon)
-    local bottleType = Potions.BottleTypeForWeapon(weapon)
+    local definition = useContext and useContext.definition or Potions.DefinitionForWeapon(weapon)
+    local bottleType = useContext and useContext.bottleType or Potions.BottleTypeForWeapon(weapon)
     if not Potions.CanThrow(weapon, owner, definition, bottleType) then return nil end
 
     local projectile, context = Potions.SpawnThrown(owner, bottleType, definition.id, {
@@ -103,18 +105,28 @@ function Potions.Throw(weapon)
         uncertainty = Potions.ProjectileUncertainty,
         -- SplashPotionItem/LingeringPotionItem play before the shared use
         -- method; EmitSound broadcasts the server event to nearby clients.
-        playSound = true,
+        playSound = false,
+        prepare = true,
         context = {
+            useStack = useContext and useContext.useStack or hook.Run("MCITEM.CaptureUseStack", owner, weapon),
+            hand = useContext and useContext.hand,
             weapon = weapon,
             delivery = "weapon_throw",
         },
     })
     if not IsValid(projectile) then return nil end
 
-    if isfunction(weapon.OnMCPotionThrown) then
+    if hook.Run("MCITEM.ConsumePotionItem", owner, weapon, bottleType, definition.id,
+        1, nil, context) == false then
+        projectile:Remove()
+        return nil
+    end
+    Potions.PlayThrowSound(owner)
+    hook.Run("MCITEM.PotionProjectileSpawned", owner, projectile, definition, bottleType, context)
+
+    if IsValid(weapon) and isfunction(weapon.OnMCPotionThrown) then
         weapon:OnMCPotionThrown(owner, projectile, definition, bottleType, context)
     end
     hook.Run("MCITEM.PotionThrown", owner, weapon, projectile, definition, bottleType, context)
-    hook.Run("MCITEM.ConsumePotionItem", owner, weapon, bottleType, definition.id, 1, nil, context)
     return projectile
 end

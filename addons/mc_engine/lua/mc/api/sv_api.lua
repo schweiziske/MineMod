@@ -439,6 +439,26 @@ function Player.CanEdit( ply )
 	return sv and sv.CanEdit and sv.CanEdit( ply ) == true or false
 end
 
+-- Transform an existing block with the same player permission/reach gates as
+-- break/use. It neither adds a block nor emits mining drops.
+function Player.TransformBlock( ply, bx, by, bz, block, expectedState )
+	local sv = SV()
+	if not sv or not sv.Validate then return false, "world_api_unavailable" end
+	if expectedState ~= nil and ( not isnumber( expectedState ) or expectedState ~= expectedState
+		or expectedState < 0 or expectedState == math.huge or expectedState ~= math.floor( expectedState ) ) then
+		return false, "invalid_expected_state"
+	end
+	local x, y, z = cellCoords( bx, by, bz )
+	if not x then return false, "invalid_cell" end
+	local state, err = resolveStateInput( block )
+	if not state or state == 0 then return false, err or "invalid_state" end
+	if not sv.Validate( ply, x, y, z, false ) then return false, "edit_denied" end
+	if expectedState ~= nil and MC.GetBlockState( x, y, z ) ~= expectedState then
+		return false, "state_changed"
+	end
+	return World.SetBlock( x, y, z, state, { actor = ply } )
+end
+
 -- Read-only interaction reach check for game-layer containers. This does not
 -- run edit vetoes or mutate the world; it only applies the engine's configured
 -- reach in the active world adapter's continuous coordinate frame.
@@ -1020,7 +1040,7 @@ function FarmingAPI.Plant( ply, bx, by, bz, state, opts )
 	if not x then return false, "invalid_cell" end
 	local stateId, err = resolveStateInput( state )
 	if stateId == nil then return false, err or "invalid_state" end
-	local ok, result = farming.Plant( ply, x, y, z, stateId, opts )
+	local ok, result = farming.Plant( ply, x, y, z, stateId )
 	if ok ~= true then return false, result or "placement_rejected" end
 	return true, deepCopy( result )
 end
@@ -1034,7 +1054,7 @@ function FarmingAPI.ApplyBonemeal( ply, bx, by, bz, opts )
 	if not farmingOptionsValid( opts ) then return false, "invalid_options" end
 	local x, y, z = cellCoords( bx, by, bz )
 	if not x then return false, "invalid_cell" end
-	local ok, result = farming.ApplyBonemeal( ply, x, y, z, opts )
+	local ok, result = farming.ApplyBonemeal( ply, x, y, z )
 	if ok ~= true then return false, result or "bonemeal_rejected" end
 	return true, deepCopy( result )
 end

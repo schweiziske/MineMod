@@ -11,7 +11,8 @@ MCITEM = MCITEM or {}
 MCITEM.Explosions = MCITEM.Explosions or {}
 
 local Explosions = MCITEM.Explosions
-if Explosions.CoreLoaded then return end
+if Explosions.CoreVersion == 2 then return end
+Explosions.CoreVersion = 2
 Explosions.CoreLoaded = true
 
 local TRACE_EPSILON = 1e-7
@@ -133,13 +134,18 @@ local function hitsMinecraftCollision(startPosition, endPosition)
     return false
 end
 
-local function segmentBlocked(startPosition, endPosition)
+local function segmentBlocked(startPosition, endPosition, context)
     local brush = util.TraceLine({
         start = startPosition,
         endpos = endPosition,
         mask = MASK_SOLID_BRUSHONLY,
     })
     if brush.Hit then return true end
+    local coords = MC and MC.API and MC.API.Coords
+    if coords then
+        startPosition = coords.EngineToWorld(startPosition, context)
+        endPosition = coords.EngineToWorld(endPosition, context)
+    end
     return hitsMinecraftCollision(startPosition, endPosition)
 end
 
@@ -179,7 +185,7 @@ function Explosions.Exposure(origin, target, context)
                     Lerp(y, minimum.y, maximum.y) + offsetY * blockSize,
                     Lerp(z, minimum.z, maximum.z)
                 )
-                if not segmentBlocked(sample, origin) then visible = visible + 1 end
+                if not segmentBlocked(sample, origin, target) then visible = visible + 1 end
                 total = total + 1
                 z = z + stepZ
             end

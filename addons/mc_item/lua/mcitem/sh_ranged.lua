@@ -2,6 +2,39 @@
 
 MCITEM = MCITEM or {}
 
+if SERVER then
+    -- Source reports damage acceptance independently of the red-health delta.
+    -- Keep nested damage events scoped to their target; never write Lua fields
+    -- onto CTakeDamageInfo userdata (the engine may expose another wrapper).
+    MCITEM.ActiveDamageContexts = MCITEM.ActiveDamageContexts or setmetatable({}, { __mode = "k" })
+    hook.Add("PostEntityTakeDamage", "MCITEM.DamageOutcome", function(target, _, tookDamage)
+        local context = MCITEM.ActiveDamageContexts[target]
+        if context then context.accepted = tookDamage == true end
+    end)
+
+    function MCITEM.TakeDamage(target, damageInfo)
+        local contexts = MCITEM.ActiveDamageContexts
+        local previous = contexts[target]
+        local potions = MCITEM.Potions
+        local oldHealth = target:Health()
+        local absorption = potions and potions.GetAbsorptionAmount
+        local oldAbsorption = absorption and absorption(target) or 0
+        local context = {}
+        contexts[target] = context
+        local ok, err = pcall(target.TakeDamageInfo, target, damageInfo)
+        contexts[target] = previous
+        if not ok then error(err, 0) end
+        local removed = not IsValid(target)
+        local actualDamage = removed and math.max(0, oldHealth)
+            or math.max(0, oldHealth - target:Health())
+        local absorbed = not removed and absorption and oldAbsorption > absorption(target)
+        local godMode = not removed and target:IsPlayer() and target:HasGodMode()
+        local accepted = not godMode and ((context.accepted == true and damageInfo:GetDamage() > 0)
+            or actualDamage > 0 or absorbed == true)
+        return accepted, actualDamage
+    end
+end
+
 -- 箭的世界模型。用 minecraft_swep 的 mcmodelpack 那支：它的长轴在**模型 +X**上
 -- （hull 36.75 × 11.9 × 11.9），所以 `SetAngles(velocity:Angle())` 直接就是正确朝向，
 -- 不需要任何角度补偿。旧的 models/mcgm/arrow 长轴在 +Y（11.9 × 37 × 11.9），
@@ -237,12 +270,15 @@ if SERVER then
         net.WriteAngle(entity:GetAngles())
         net.WriteFloat(entity:GetModelScale() or 1)
         net.WriteEntity(ply)
+        net.WriteBool(entity.GetSpectralArrow and entity:GetSpectralArrow() or false)
         net.SendPVS(position)
     end
-elseif not MCITEM.PickupAnimationInstalled then
+elseif (MCITEM.PickupAnimationVersion or 0) < 2 then
     MCITEM.PickupAnimationInstalled = true
+    MCITEM.PickupAnimationVersion = 2
 
-    local animations = {}
+    MCITEM.PickupAnimations = MCITEM.PickupAnimations or {}
+    local animations = MCITEM.PickupAnimations
 
     -- ItemPickupParticle.updatePosition
     local function pickupTarget(entity)
@@ -256,6 +292,7 @@ elseif not MCITEM.PickupAnimationInstalled then
         local angles = net.ReadAngle()
         local scale = net.ReadFloat()
         local target = net.ReadEntity()
+        local spectral = net.ReadBool()
 
         -- handleTakeItemEntity：volume 0.2、pitch (rand - rand) * 1.4 + 2.0。
         MCITEM.PlayRangedSoundAt(origin, "item_pickup", 1,
@@ -269,6 +306,8 @@ elseif not MCITEM.PickupAnimationInstalled then
         clientModel:SetPos(origin)
         clientModel:SetAngles(angles)
         clientModel:SetModelScale(scale > 0 and scale or 1, 0)
+        clientModel:SetNoDraw(true)
+        if spectral then clientModel:SetMaterial("models/mcmodelpack/arrow_spectral") end
 
         animations[#animations + 1] = {
             model = clientModel,
@@ -298,6 +337,21 @@ elseif not MCITEM.PickupAnimationInstalled then
                 blend = blend * blend
                 animation.model:SetPos(LerpVector(blend, animation.origin, pickupTarget(animation.target)))
             end
+        end
+    end)
+
+    hook.Add("PostDrawOpaqueRenderables", "MCITEM.ProjectilePickup.Draw", function(depth, skybox)
+        if depth or skybox then return end
+        for _, animation in ipairs(animations) do
+            local model = animation.model
+            if IsValid(model) then
+                MCITEM.DrawModelWithMCLight(model, model:WorldSpaceCenter())
+            end
+        end
+    end)
+    hook.Add("ShutDown", "MCITEM.ProjectilePickup.Cleanup", function()
+        for _, animation in ipairs(animations) do
+            if IsValid(animation.model) then animation.model:Remove() end
         end
     end)
 end

@@ -24,7 +24,6 @@ function ENT:HitEntity(target, trace)
         and runtime.ProjectileStack(self) or nil
     local enchantmentBonus = runtime and isfunction(runtime.GetTridentDamageBonus)
         and runtime.GetTridentDamageBonus(stack, target) or 0
-    local oldHealth = IsValid(target) and tonumber(target:Health()) or nil
     local damageInfo = DamageInfo()
     damageInfo:SetAttacker(IsValid(owner) and owner or self)
     -- DamageSources.trident uses the thrown trident as its direct entity.  The
@@ -35,14 +34,11 @@ function ENT:HitEntity(target, trace)
     damageInfo:SetDamageType(DMG_SLASH)
     damageInfo:SetDamagePosition(trace.HitPos)
     damageInfo:SetDamageForce(self:GetMCVelocity():GetNormalized() * MCITEM.BlockSize() * 20)
-    target:TakeDamageInfo(damageInfo)
-
-    local newHealth = IsValid(target) and tonumber(target:Health()) or nil
-    local actualDamage = oldHealth ~= nil and newHealth ~= nil
-        and math.max(oldHealth - newHealth, 0) or 0
-    if actualDamage > 0 and runtime and isfunction(runtime.ApplyDirectPostAttack) then
+    local accepted, actualDamage = MCITEM.TakeDamage(target, damageInfo)
+    self.MCLastHitAccepted = accepted
+    if accepted and runtime and isfunction(runtime.ApplyDirectPostAttack) then
         runtime.ApplyDirectPostAttack(
-            stack, IsValid(owner) and owner or self, target, self, actualDamage)
+            stack, IsValid(owner) and owner or self, target, self, actualDamage, accepted)
     end
 
     -- ThrownTrident.onHitEntity 的收尾是**两步**，我们原来只抄了第二步：
@@ -139,7 +135,11 @@ function ENT:MCLoyaltyDropAndRemove()
         and isfunction(MCITEM.SpawnItemDrop) then
         local pickup = istable(self.MCPickupStack)
             and self.MCPickupStack or (self.MCPickupItemID or "minecraft:trident")
-        MCITEM.SpawnItemDrop(self:GetPos(), pickup, 1, IsValid(owner) and owner or nil)
+        if not MCITEM.SpawnItemDrop(self:GetPos(), pickup, 1, IsValid(owner) and owner or nil) then
+            self:SetMCVelocity(vector_origin)
+            self:NextThink(CurTime() + 1)
+            return true
+        end
     end
     self:Remove()
     return false

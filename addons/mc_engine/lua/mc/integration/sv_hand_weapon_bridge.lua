@@ -223,6 +223,7 @@ function Bridge.Reconcile( ply, stack, context )
 		if not adapter and Bridge.ApplyPresentation then
 			Bridge.ApplyPresentation( weapon, stack, ply )
 		end
+		hook.Run( "MC.HandWeaponStackBound", ply, weapon, stack )
 	end
 	if switching then
 		ply:SelectWeapon( targetClass )

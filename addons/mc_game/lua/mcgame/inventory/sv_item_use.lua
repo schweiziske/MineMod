@@ -247,6 +247,11 @@ function SV.BeginSelectedItemUse( ply, context )
 	if record.itemUse then return true, "already_using" end
 	local now = CurTime()
 	if record.lastItemUse and now - record.lastItemUse < 0.08 then return false, "item_use_cooldown" end
+	local external, externalResult = hook.Run( "MCITEM.UseHeldStack", ply, stack, hand, context )
+	if external ~= nil then
+		if external then record.lastItemUse = now end
+		return external, externalResult
+	end
 	local kind, spec, usable = useDetails( stack, definition )
 	if context.hand == nil and not usable and ( not definition or not definition.blockId ) then
 		local offRecord, offStack, offDefinition = recordStackForHand( ply, "offhand" )

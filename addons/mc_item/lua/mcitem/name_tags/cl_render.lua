@@ -23,7 +23,8 @@ local LABEL_SCALE_REVISION_CVAR = CreateClientConVar(
     "mcitem_name_tag_scale_revision", "0", true, false,
     "Internal migration revision for the Minecraft name-tag scale", 0, LABEL_SCALE_REVISION
 )
-local inverted = setmetatable({}, { __mode = "k" })
+NameTags.InvertedEntities = NameTags.InvertedEntities or setmetatable({}, { __mode = "k" })
+local inverted = NameTags.InvertedEntities
 local lightingCache = setmetatable({}, { __mode = "k" })
 
 surface.CreateFont("MCITEMNameTagFallback", {
@@ -84,22 +85,53 @@ local function sampleLabelColor(target, position)
 end
 
 local function blockSize()
-    local coords = MC and MC.API and MC.API.Coords
-    return coords and isfunction(coords.BlockSize) and tonumber(coords.BlockSize()) or 36.5
+    return MCITEM.BlockSize()
+end
+
+local function sameMatrix(left, right)
+    if left == nil or right == nil then return left == right end
+    for row = 1, 4 do
+        for column = 1, 4 do
+            if left:GetField(row, column) ~= right:GetField(row, column) then return false end
+        end
+    end
+    return true
+end
+
+local function copyMatrix(value)
+    if not value then return nil end
+    local copy = Matrix()
+    for row = 1, 4 do
+        for column = 1, 4 do copy:SetField(row, column, value:GetField(row, column)) end
+    end
+    return copy
 end
 
 local function setUpsideDown(target, enabled)
+    local state = inverted[target]
+    local current = target:GetRenderMatrix()
     if enabled then
+        if not state then
+            state = { original = copyMatrix(current) }
+            inverted[target] = state
+        elseif not sameMatrix(current, state.applied) then
+            -- Another renderer took ownership since our previous update.
+            state.original = copyMatrix(current)
+        end
         local mins, maxs = target:OBBMins(), target:OBBMaxs()
         local matrix = Matrix()
         -- Minecraft translates by entity height and then rotates 180 degrees
         -- around its forward axis. Source's equivalent local axis is roll.
         matrix:SetAngles(Angle(0, 0, 180))
         matrix:SetTranslation(Vector(0, 0, mins.z + maxs.z))
+        if state.original then matrix = state.original * matrix end
         target:EnableMatrix("RenderMultiply", matrix)
-        inverted[target] = true
-    elseif inverted[target] then
-        target:DisableMatrix("RenderMultiply")
+        state.applied = matrix
+    elseif state then
+        if sameMatrix(current, state.applied) then
+            if state.original then target:EnableMatrix("RenderMultiply", state.original)
+            else target:DisableMatrix("RenderMultiply") end
+        end
         inverted[target] = nil
     end
 end
@@ -116,7 +148,7 @@ timer.Create("MCITEM.NameTags.UpdateMagicNames", 0.2, 0, function()
 end)
 
 hook.Add("PostDrawTranslucentRenderables", "MCITEM.NameTags.DrawCrosshairLabel", function(depth, skybox)
-    if skybox then return end
+    if depth or skybox then return end
     local player = LocalPlayer()
     if not IsValid(player) then return end
     local maximum = blockSize() * 64
@@ -169,6 +201,6 @@ end)
 hook.Add("ShutDown", "MCITEM.NameTags.ClearMagicNames", function()
     lightingCache = setmetatable({}, { __mode = "k" })
     for target in pairs(inverted) do
-        if IsValid(target) then target:DisableMatrix("RenderMultiply") end
+        if IsValid(target) then setUpsideDown(target, false) end
     end
 end)

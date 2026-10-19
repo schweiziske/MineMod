@@ -364,8 +364,8 @@ end
 -- 返回 false = 没有背包系统或塞不下。
 function MCITEM.GiveItemToPlayer(ply, stackOrItemId, count, position)
     if not IsValid(ply) then return false end
-    local handled = hook.Run("MCITEM.GiveItemToPlayer", ply, stackOrItemId, count or 1, position)
-    if handled ~= nil then return handled ~= false end
+    local handled, remainder = hook.Run("MCITEM.GiveItemToPlayer", ply, stackOrItemId, count or 1, position)
+    if handled ~= nil then return handled ~= false, remainder end
     return false
 end
 

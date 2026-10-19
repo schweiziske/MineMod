@@ -50,16 +50,22 @@ function ENT:ApplyCloudEffects()
             local delta = target:GetPos() - self:GetPos()
             local horizontalDistanceSquared = (delta.x * delta.x + delta.y * delta.y) / (blockSize * blockSize)
             if horizontalDistanceSquared <= radius * radius then
-                local applied = MCITEM.Potions.ApplyPotion(target, definition, self:GetCloudOwner(), {
-                    bottleType = "lingering",
-                    delivery = "cloud",
-                    durationScale = MCITEM.Potions.CloudDurationScale,
-                    instantPotency = MCITEM.Potions.CloudInstantPotency,
-                    cloud = self,
-                })
-                if applied then
+                local eligible = false
+                for _, effect in ipairs(definition.effects) do
+                    if MCITEM.Potions.CanReceiveEffect(target, effect.id, self:GetCloudOwner(), {
+                        delivery = "cloud", cloud = self,
+                    }) then eligible = true break end
+                end
+                if eligible then
                     self.MCCloudVictims[target] = self.MCCloudAge
                         + MCITEM.Potions.CloudReapplicationDelayTicks
+                    MCITEM.Potions.ApplyPotion(target, definition, self:GetCloudOwner(), {
+                        bottleType = "lingering",
+                        delivery = "cloud",
+                        durationScale = MCITEM.Potions.CloudDurationScale,
+                        instantPotency = MCITEM.Potions.CloudInstantPotency,
+                        cloud = self,
+                    })
                     radius = radius + MCITEM.Potions.CloudRadiusOnUse
                     self:SetCloudRadius(radius)
                     if radius < 0.5 then

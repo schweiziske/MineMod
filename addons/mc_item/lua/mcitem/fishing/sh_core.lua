@@ -178,14 +178,38 @@ function Fishing.LureSpeed(stack)
     return Fishing.EnchantmentLevel(stack, "minecraft:lure") * 100
 end
 
-function Fishing.Luck(stack, owner)
-    local value = Fishing.EnchantmentLevel(stack, "minecraft:luck_of_the_sea")
+function Fishing.PlayerLuck(owner, stack)
+    local value = 0
+    local potions = MCITEM.Potions
+    if IsValid(owner) and potions and potions.GetEffect then
+        local luck = potions.GetEffect(owner, "luck")
+        local unluck = potions.GetEffect(owner, "unluck")
+        if luck then value = value + luck.amplifier + 1 end
+        if unluck then value = value - unluck.amplifier - 1 end
+    end
     local extra = hook.Run("MCITEM.FishingPlayerLuck", owner, stack)
     if isnumber(extra) then value = value + extra end
     -- Luck is an additive floating-point attribute.  Java keeps the raw
     -- value until LootTable#getRandomItems applies each entry's integer
     -- weight formula; flooring here silently discards mod/provider bonuses.
-    return math.max(0, tonumber(value) or 0)
+    return tonumber(value) or 0
+end
+
+function Fishing.Luck(stack, owner)
+    return Fishing.EnchantmentLevel(stack, "minecraft:luck_of_the_sea") + Fishing.PlayerLuck(owner, stack)
+end
+
+local function engineToWorld(position, context)
+    local coords = MC and MC.API and MC.API.Coords
+    if coords and coords.EngineToWorld then return coords.EngineToWorld(position, context) end
+    if MC and MC.EngineToWorldPos then return MC.EngineToWorldPos(position, context) end
+    return position
+end
+
+local function worldToEngine(position, context)
+    local coords = MC and MC.API and MC.API.Coords
+    if coords and coords.WorldToEngine then return coords.WorldToEngine(position, context) end
+    return position - engineToWorld(vector_origin, context)
 end
 
 function Fishing.EngineToCell(position, context)
@@ -278,16 +302,19 @@ end
 
 function Fishing.FluidAtPosition(position, context)
     local bx, by, bz = Fishing.EngineToCell(position, context)
+    local worldPosition = engineToWorld(position, context)
+    local originZ = worldPosition.z - position.z
     local liquid = MC and MC.API and MC.API.Liquid
     local exactQueryAvailable = false
     local aboveKnownCellFluid = false
     if liquid and isfunction(liquid.AtPos) then
-        local ok, contact = pcall(liquid.AtPos, position)
+        local ok, contact = pcall(liquid.AtPos, worldPosition)
         exactQueryAvailable = ok
         if ok and istable(contact) and contact.kind then
             local fluid = shallowCopy(contact)
             fluid.source = false
-            fluid.surfaceZ = tonumber(fluid.surfaceZ)
+            local surfaceZ = tonumber(fluid.surfaceZ)
+            fluid.surfaceZ = surfaceZ and surfaceZ - originZ or nil
             return fluid, fluid.bx or bx, fluid.by or by, fluid.bz or bz
         end
     end
@@ -299,7 +326,7 @@ function Fishing.FluidAtPosition(position, context)
         local fluid = Fishing.FluidAtCell(bx, by, bz)
         if fluid then
             fluid = shallowCopy(fluid)
-            local cellMinimum = Fishing.CellMin(bx, by, bz)
+            local cellMinimum = worldToEngine(Fishing.CellMin(bx, by, bz), context)
             local surfaceZ = cellMinimum.z
                 + math.Clamp(tonumber(fluid.height) or 0, 0, 1) * Fishing.BlockSize()
             if position.z < surfaceZ then
@@ -329,7 +356,7 @@ function Fishing.FluidAtPosition(position, context)
     -- already been handled above, so this fallback remains unambiguous.
     local throwables = MCITEM.Throwables
     local kind = throwables and isfunction(throwables.FluidKindAt)
-        and throwables.FluidKindAt(position) or nil
+        and throwables.FluidKindAt(position, context) or nil
     if kind and not aboveKnownCellFluid then
         return {
             kind = kind,
@@ -338,19 +365,19 @@ function Fishing.FluidAtPosition(position, context)
             falling = false,
             waterlogged = false,
             source = false,
-            surfaceZ = Fishing.CellMin(bx, by, bz).z + Fishing.BlockSize(),
+            surfaceZ = worldToEngine(Fishing.CellMin(bx, by, bz), context).z + Fishing.BlockSize(),
         }, bx, by, bz
     end
     return nil, bx, by, bz
 end
 
-function Fishing.FluidSurfaceZ(position, fluid, bx, by, bz)
+function Fishing.FluidSurfaceZ(position, fluid, bx, by, bz, context)
     if not istable(fluid) then return nil end
     if isnumber(fluid.surfaceZ) then return fluid.surfaceZ end
     if fluid.source == true then
         return Fishing.SourceFluidSurfaceZ(position, fluid.kind)
     end
-    local cellMinimum = Fishing.CellMin(bx, by, bz)
+    local cellMinimum = worldToEngine(Fishing.CellMin(bx, by, bz), context)
     return cellMinimum.z
         + math.Clamp(tonumber(fluid.height) or 0, 0, 1) * Fishing.BlockSize()
 end
@@ -358,12 +385,12 @@ end
 function Fishing.WaterSurfacePosition(position, context)
     local fluid, bx, by, bz = Fishing.FluidAtPosition(position, context)
     if not fluid or fluid.kind ~= "water" then return nil, bx, by, bz, fluid end
-    local surfaceZ = Fishing.FluidSurfaceZ(position, fluid, bx, by, bz)
+    local surfaceZ = Fishing.FluidSurfaceZ(position, fluid, bx, by, bz, context)
     if not isnumber(surfaceZ) then return nil, bx, by, bz, fluid end
     if fluid.source == true then
         return Vector(position.x, position.y, surfaceZ), bx, by, bz, fluid
     end
-    local cellMinimum = Fishing.CellMin(bx, by, bz)
+    local cellMinimum = worldToEngine(Fishing.CellMin(bx, by, bz), context)
     return Vector(
         cellMinimum.x + Fishing.BlockSize() * 0.5,
         cellMinimum.y + Fishing.BlockSize() * 0.5,
@@ -439,7 +466,8 @@ function Fishing.CanSeeSky(bx, by, bz, context)
         local visible = world.CanSeeSky(bx, by, bz)
         if visible ~= nil then return visible == true end
     end
-    local position = Fishing.CellMin(bx, by, bz) + Vector(0.5, 0.5, 1) * Fishing.BlockSize()
+    local position = worldToEngine(Fishing.CellMin(bx, by, bz), context)
+        + Vector(0.5, 0.5, 1) * Fishing.BlockSize()
     local trace = util.TraceLine({
         start = position,
         endpos = position + Vector(0, 0, math.max(32768, Fishing.BlockSize() * 512)),

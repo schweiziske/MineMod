@@ -6,6 +6,91 @@ if not SERVER then return end
 
 MC = MC or {}
 MC.API = MC.API or {}
+MC.API.Farming = MC.API.Farming or {}
+
+-- Public callers provide item identity, never an arbitrary transaction callback.
+function MC.API.Farming.UseHeld(ply, bx, by, bz, context)
+    if context ~= nil and not istable(context) then return false, "invalid_context" end
+    for _, value in ipairs({ bx, by, bz }) do
+        if not isnumber(value) or value ~= value or math.abs(value) == math.huge
+            or value ~= math.floor(value) then return false, "invalid_cell" end
+    end
+    if bx == nil or by == nil or bz == nil then return false, "invalid_cell" end
+    context = context or {}
+    local sv, farming = MC.SV, MC.Farming
+    if not sv or not sv.SelectedStackMatches or not sv.ConsumeSelectedItem
+        or not farming then return false, "farming_api_unavailable" end
+    local record, _, stack, err = sv.SelectedStackMatches(ply, context)
+    if not record then return false, err end
+    local adapter = MCITEM and MCITEM.Farming
+    if not adapter or not adapter.Get or not adapter.ResolveUseContext then return false, "farming_api_unavailable" end
+    local definition = adapter.Get(stack.item)
+    if not definition then return false, "invalid_farming_item" end
+    local use = MCITEM.Farming.ResolveUseContext(ply, definition)
+    if not use or use.bx ~= bx or use.by ~= by or use.bz ~= bz then return false, "farming_target_changed" end
+    local hash = MC.ItemStackHash(stack)
+    local function consume()
+        local result, _, _, infinite, consumeError = sv.ConsumeSelectedItem(ply, 1, nil, {
+            hand = context.hand, expectedItem = stack.item, expectedStackHash = hash,
+            expectedClass = context.expectedClass, expectedSlot = context.expectedSlot,
+            reason = "mcitem_farming",
+        })
+        if not result and not infinite then return false, consumeError end
+        return true, result
+    end
+    local ok, result
+    if use.action == "plant" then
+        local state = MC.API.ResolveStateInput(use.crop)
+        if not state then return false, "invalid_crop_state" end
+        ok, result = farming.Plant(ply, bx, by, bz, state, { beforePublish = consume })
+    elseif use.action == "bonemeal" then
+        ok, result = farming.ApplyBonemeal(ply, bx, by, bz, { beforePublish = consume })
+    else
+        return false, "unsupported_farming_target"
+    end
+    return ok == true, MC.API.DeepCopy(result)
+end
+
+MC.API.Tools = MC.API.Tools or {}
+
+-- The game layer owns the paired world/inventory commit. External callers
+-- select an action, never a target state or a beforePublish callback.
+function MC.API.Tools.UseHeld(ply, action, context)
+    if context ~= nil and not istable(context) then return false, "invalid_context" end
+    if action ~= "hoe" and action ~= "shovel" and action ~= "axe" then return false, "invalid_tool_action" end
+    context = context or {}
+    local sv = MC.SV
+    local blocks = MCITEM and MCITEM.BlockInteract
+    if not sv or not sv.SelectedStackMatches or not sv.DamageSelectedItem or not sv.Validate or not sv.SetBlockState
+        or not blocks or not blocks.ResolveAimedToolUse then return false, "tool_api_unavailable" end
+    local record, slot, stack, matchError = sv.SelectedStackMatches(ply, context)
+    if not record then return false, matchError end
+    if string.sub(stack.item, -#action - 1) ~= "_" .. action then return false, "invalid_tool_item" end
+    local plan = blocks.ResolveAimedToolUse(ply, action)
+    if not plan then return false, "unsupported_tool_target" end
+    if not sv.Validate(ply, plan.bx, plan.by, plan.bz, false) then return false, "edit_denied" end
+    if MC.GetBlockState(plan.bx, plan.by, plan.bz) ~= plan.expectedState then return false, "state_changed" end
+    local state, stateError = MC.API.ResolveStateInput(plan.target)
+    if not state then return false, stateError end
+    local hash = MC.ItemStackHash(stack)
+    local function damageTool()
+        local result, _, err = sv.DamageSelectedItem(ply, 1, {
+            hand = context.hand, expectedItem = stack.item, expectedSlot = slot,
+            expectedStackHash = hash, expectedClass = context.expectedClass, reason = "mcitem_tool_use",
+        })
+        -- DamageSelectedItem validates the pinned stack before reporting the
+        -- unbreakable exemption. It must skip wear without vetoing useOn.
+        if result or err == "infinite_materials"
+            or (err == "item_not_damageable" and MC.ItemIsUnbreakable(stack)) then return true end
+        return false, err
+    end
+    local result = sv.SetBlockState(plan.bx, plan.by, plan.bz, state, {
+        actor = ply, priorityPhys = true, blockUpdates = true, beforePublish = damageTool,
+    })
+    if not result or not result.ok then return false, result and result.error or "write_failed" end
+    if result.changed <= 0 then return false, "unchanged" end
+    return true, plan
+end
 
 local API = MC.API
 local World = API.World
