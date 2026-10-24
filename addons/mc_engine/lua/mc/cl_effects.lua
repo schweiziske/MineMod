@@ -214,6 +214,10 @@ end
 
 -- Capture one colour per destruction event, including queued material warmup.
 -- Fragments retain this colour for their entire lifetime.
+local ParticleLightOffsets = {
+	{ 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 },
+	{ 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 },
+}
 local function terrainParticleColor( bx, by, bz, tintCode )
 	local tr, tg, tb = 255, 255, 255
 	if tintCode and tintCode ~= 0 and MC.BlockTintRGB then
@@ -224,6 +228,15 @@ local function terrainParticleColor( bx, by, bz, tintCode )
 	local world = MC.API.Coords.CellCenter( bx, by, bz )
 	local r, g, b = MC.API.Light.SamplePresentationRGB( world, 0 )
 	if not MC.Check( r ~= nil, "terrain_particle_light", "Cannot sample terrain particle lighting: %s", g ) then return nil end
+	-- Destruction can precede the asynchronous relight of the former solid
+	-- cell. Its exposed neighbours already carry the light seen on the block.
+	-- Sample once per burst, preserving real darkness when all seven are dark.
+	for _, offset in ipairs( ParticleLightOffsets ) do
+		local neighbour = MC.API.Coords.CellCenter( bx + offset[1], by + offset[2], bz + offset[3] )
+		local nr, ng, nb = MC.API.Light.SamplePresentationRGB( neighbour, 0 )
+		if not MC.Check( nr ~= nil, "terrain_particle_light", "Cannot sample terrain particle lighting: %s", ng ) then return nil end
+		r, g, b = math.max( r, nr ), math.max( g, ng ), math.max( b, nb )
+	end
 	return Color( math.floor( r * tr + 0.5 ), math.floor( g * tg + 0.5 ), math.floor( b * tb + 0.5 ) )
 end
 
