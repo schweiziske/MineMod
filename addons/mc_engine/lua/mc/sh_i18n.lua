@@ -4,8 +4,8 @@
 
 MC = MC or {}
 
-local DEFAULT_LANGUAGE = "zh_cn"
-local DEFAULT_LANGUAGE_SETTING = "en_us"
+local DEFAULT_LANGUAGE = "en_us"
+local DEFAULT_LANGUAGE_SETTING = "auto"
 local SUPPORTED_LANGUAGES = { zh_cn = true, en_us = true }
 local LANGUAGE_OPTION_ORDER = { "auto", "zh_cn", "en_us" }
 local LANGUAGE_OPTION_LABELS = {
