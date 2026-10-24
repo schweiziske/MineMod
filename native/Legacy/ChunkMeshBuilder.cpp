@@ -666,7 +666,7 @@ bool StageSectionMeshes(const SectionBuild &build, SectionMeshes &staged, MeshSt
 	staged = SectionMeshes{};
 	if (!source::GetMaterialSystem())
 		return false;
-	CMatRenderContextPtr ctx(source::GetMaterialSystem());
+	CMatRenderContextPtr ctx(source::GetMaterialSystem()->GetRenderContext());
 	if (!ctx)
 		return false;
 	try
@@ -708,7 +708,7 @@ void DestroyStagedSectionMeshes(SectionMeshes &staged, bool recordProfile)
 	}
 	if (!source::GetMaterialSystem())
 		return;
-	CMatRenderContextPtr ctx(source::GetMaterialSystem());
+	CMatRenderContextPtr ctx(source::GetMaterialSystem()->GetRenderContext());
 	if (!ctx)
 		return;
 	DestroyMeshList(ctx, staged.opaque, recordProfile);
@@ -770,7 +770,7 @@ void DestroyChunkMeshes(uint64_t chunkKey)
 		GetChunkMeshDraw().EraseMetadata(chunkKey);
 		return;
 	}
-	CMatRenderContextPtr ctx(source::GetMaterialSystem());
+	CMatRenderContextPtr ctx(source::GetMaterialSystem()->GetRenderContext());
 	if (!ctx)
 	{
 		GetChunkMeshDraw().EraseMetadata(chunkKey);
@@ -794,7 +794,7 @@ void DestroyAllMeshes()
 		GetChunkMeshDraw().ClearMetadata();
 		return;
 	}
-	CMatRenderContextPtr ctx(source::GetMaterialSystem());
+	CMatRenderContextPtr ctx(source::GetMaterialSystem()->GetRenderContext());
 	if (!ctx)
 	{
 		GetChunkMeshDraw().ClearMetadata();

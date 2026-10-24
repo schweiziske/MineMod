@@ -54,7 +54,7 @@ enum AppSystemTier_t
 };
 
 
-abstract_class IAppSystem
+abstract_class IAppSystemPublic
 {
 public:
 	// Here's where the app systems get to learn about each other 
@@ -68,8 +68,12 @@ public:
 	// Init, shutdown
 	virtual InitReturnVal_t Init() = 0;
 	virtual void Shutdown() = 0;
+};
 
-#if defined(GMOD_SDK_X86_64)
+// The beta ABI appends four base slots before derived system methods.
+abstract_class IAppSystemX86_64 : public IAppSystemPublic
+{
+public:
 	// Returns all dependent libraries
 	virtual const AppSystemInfo_t* GetDependencies() {return NULL;}
 
@@ -80,8 +84,13 @@ public:
 	virtual void Reconnect( CreateInterfaceFn factory, const char *pInterfaceName ) {}
 	// Is this appsystem a singleton? (returns false if there can be multiple instances of this interface)
 	virtual bool IsSingleton() { return true; }
-#endif
 };
+
+#if defined(GMOD_SDK_X86_64)
+abstract_class IAppSystem : public IAppSystemX86_64 {};
+#else
+abstract_class IAppSystem : public IAppSystemPublic {};
+#endif
 
 
 //-----------------------------------------------------------------------------

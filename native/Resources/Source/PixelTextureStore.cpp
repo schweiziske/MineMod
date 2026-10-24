@@ -23,7 +23,7 @@ public:
 	explicit TexturePublicationScope(uint64_t &ioBarrierCount, double &ioQueueDrainMS, double &ioMaterialLockMS)
 		: mMaterialSystem(source::GetMaterialSystem())
 	{
-		CMatRenderContextPtr context(mMaterialSystem);
+		CMatRenderContextPtr context(mMaterialSystem->GetRenderContext());
 		const auto			 drain_started = std::chrono::steady_clock::now();
 		context->GMOD_FlushQueue();
 		const auto lock_started = std::chrono::steady_clock::now();
@@ -37,7 +37,7 @@ public:
 	TexturePublicationScope &operator=(const TexturePublicationScope &) = delete;
 
 private:
-	IMaterialSystem *mMaterialSystem;
+	source::MaterialSystem *mMaterialSystem;
 	MaterialLock_t	 mLock;
 };
 } // namespace

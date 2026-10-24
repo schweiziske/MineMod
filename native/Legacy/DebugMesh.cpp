@@ -69,7 +69,7 @@ void DestroyDebugMesh()
 {
 	if (!g_mesh || !source::GetMaterialSystem())
 		return;
-	CMatRenderContextPtr ctx(source::GetMaterialSystem());
+	CMatRenderContextPtr ctx(source::GetMaterialSystem()->GetRenderContext());
 	if (!ctx)
 		return;
 	ctx->DestroyStaticMesh(g_mesh);

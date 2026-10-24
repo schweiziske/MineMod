@@ -1,15 +1,24 @@
 #pragma once
+#include "Render/Source/MaterialSystem.h"
 #include <cstdint>
 
 class IMaterial;
-class IMaterialSystem;
 
 namespace mcmesh::source
 {
-/// Borrowed engine interface, acquired at module open. All access is on the
-/// Lua/render thread; the engine owns it for the loaded module's lifetime.
-bool			 AcquireMaterialSystem();
-IMaterialSystem *GetMaterialSystem();
+enum class EEngineBranch
+{
+	Public,
+	X86_64,
+};
+
+/// Resolve a supported game BRANCH before making any engine-interface calls.
+bool SelectEngineBranch(const char *inName, EEngineBranch &outBranch);
+/// Acquire the selected ABI and register its restore callback on the Lua/render thread.
+bool AcquireMaterialSystem(EEngineBranch inBranch);
+/// Borrowed module-owned adapter, usable until ReleaseMaterialSystem. The Source
+/// engine owns the underlying interface; all calls run on the Lua/render thread.
+MaterialSystem *GetMaterialSystem();
 /// Detach module callbacks after retiring engine resources, before DLL unload.
 void ReleaseMaterialSystem();
 /// Changes after device restoration. Safe from any thread; does not wait.

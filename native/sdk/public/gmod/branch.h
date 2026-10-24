@@ -2,7 +2,8 @@
 #define GMOD_BRANCH_H
 
 // The public and beta engine branches expose different IAppSystem ABIs.
-// Select exactly one when compiling; these declarations are not interchangeable.
+// Select exactly one default when compiling. The explicit Public/X86_64 types
+// coexist for runtime branch selection; their engine pointers are not interchangeable.
 #if !defined(_WIN32) || (!defined(_M_X64) && !defined(_M_IX86))
 #error This SDK supports Windows x86 and x64 only.
 #endif

@@ -352,7 +352,7 @@ bool ChunkMeshDraw::State::Draw(const NativeDrawView &inView, int inPass, Native
 		result.mVisibleKeys = TakePendingVisibleKeys();
 
 	const double		 started = Plat_FloatTime();
-	CMatRenderContextPtr ctx(source::GetMaterialSystem());
+	CMatRenderContextPtr ctx(source::GetMaterialSystem()->GetRenderContext());
 	if (!ctx)
 	{
 		return false;
@@ -584,7 +584,7 @@ ChunkMeshDrawStats ChunkMeshDraw::GetStats() const
 }
 bool ChunkMeshDraw::DrawChunk(int inX, int inY, int inZ, int inPass)
 {
-	CMatRenderContextPtr ctx(source::GetMaterialSystem());
+	CMatRenderContextPtr ctx(source::GetMaterialSystem()->GetRenderContext());
 	if (!ctx)
 	{
 		return false;

@@ -540,7 +540,7 @@ static int DrawScene(ILuaBase *lua, bool inBatched)
 							 drawnSections = 0, sectionFrustum = 0, sectionPortal = 0, rejectedDirections = 0,
 							 vertices = 0, rejectedVertices = 0, binds = 0, rangesDrawn = 0, mergedRanges = 0,
 							 chunk_callbacks = 0;
-		CMatRenderContextPtr context(source::GetMaterialSystem());
+		CMatRenderContextPtr context(source::GetMaterialSystem()->GetRenderContext());
 		l2::require(!!context, "Native draw render context unavailable");
 		context->MatrixMode(MATERIAL_MODEL);
 		struct MatrixScope

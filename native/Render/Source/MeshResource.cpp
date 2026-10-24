@@ -36,7 +36,7 @@ void MeshResource::Upload(const l2::Part &inPart, unsigned inFirst, const std::s
 									 " format=" + std::to_string(format) + " uv0=" + std::to_string(TexCoordSize(0, format)) +
 									 " uv1=" + std::to_string(secondary_uv));
 		}
-		CMatRenderContextPtr context(source::GetMaterialSystem());
+		CMatRenderContextPtr context(source::GetMaterialSystem()->GetRenderContext());
 		l2::require(!!context, "L2 render context unavailable");
 		mDraw.mMesh = context->CreateStaticMesh(format, TEXTURE_GROUP_STATIC_VERTEX_BUFFER_OTHER, material);
 		l2::require(mDraw.mMesh != nullptr, "L2 CreateStaticMesh failed");
@@ -93,7 +93,7 @@ void MeshResource::Destroy()
 {
 	if (!mDraw.mMesh)
 		return;
-	CMatRenderContextPtr context(GetMaterialSystem());
+	CMatRenderContextPtr context(GetMaterialSystem()->GetRenderContext());
 	context->DestroyStaticMesh(mDraw.mMesh);
 	mDraw.mMesh = nullptr;
 	mMaterial->DecrementReferenceCount();

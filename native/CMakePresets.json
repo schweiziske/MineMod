@@ -25,6 +25,9 @@
       "binaryDir": "${sourceDir}/build/x86/${presetName}",
       "architecture": { "value": "x86", "strategy": "external" }
     },
+    { "name": "auto-debug", "inherits": "windows-x64", "cacheVariables": { "GMOD_BRANCH": "auto", "CMAKE_BUILD_TYPE": "Debug" } },
+    { "name": "auto-release", "inherits": "windows-x64", "cacheVariables": { "GMOD_BRANCH": "auto", "CMAKE_BUILD_TYPE": "Release" } },
+    { "name": "auto-release-final", "inherits": "windows-x64", "cacheVariables": { "GMOD_BRANCH": "auto", "CMAKE_BUILD_TYPE": "Release_Final" } },
     { "name": "public-debug", "inherits": "windows-x64", "cacheVariables": { "GMOD_BRANCH": "public", "CMAKE_BUILD_TYPE": "Debug" } },
     { "name": "public-release", "inherits": "windows-x64", "cacheVariables": { "GMOD_BRANCH": "public", "CMAKE_BUILD_TYPE": "Release" } },
     { "name": "public-release-final", "inherits": "windows-x64", "cacheVariables": { "GMOD_BRANCH": "public", "CMAKE_BUILD_TYPE": "Release_Final" } },
@@ -36,6 +39,9 @@
     { "name": "beta-release-final", "inherits": "windows-x64", "cacheVariables": { "GMOD_BRANCH": "x86-64", "CMAKE_BUILD_TYPE": "Release_Final" } }
   ],
   "buildPresets": [
+    { "name": "auto-debug", "configurePreset": "auto-debug" },
+    { "name": "auto-release", "configurePreset": "auto-release" },
+    { "name": "auto-release-final", "configurePreset": "auto-release-final" },
     { "name": "public-debug", "configurePreset": "public-debug" },
     { "name": "public-release", "configurePreset": "public-release" },
     { "name": "public-release-final", "configurePreset": "public-release-final" },

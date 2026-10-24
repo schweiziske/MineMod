@@ -1,16 +1,16 @@
 param(
     [ValidateSet("Debug", "Release", "Release_Final")]
     [string]$Configuration = "Release_Final",
-    [ValidateSet("public", "x86-64")]
-    [string]$Branch = "x86-64",
+    [ValidateSet("auto", "public", "x86-64")]
+    [string]$Branch = "auto",
     [ValidateSet("x64", "x86")]
     [string]$Architecture = "x64",
     [string]$OutputDirectory,
     [switch]$Tests
 )
 $ErrorActionPreference = "Stop"
-if ($Branch -eq "x86-64" -and $Architecture -ne "x64") {
-    throw "The x86-64 beta branch requires -Architecture x64."
+if ($Branch -ne "public" -and $Architecture -ne "x64") {
+    throw "Auto/beta builds require -Architecture x64. Use -Branch public for x86."
 }
 $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
 if (-not (Test-Path -LiteralPath $vswhere)) { throw "Visual Studio Installer/vswhere is required." }
@@ -25,7 +25,7 @@ $cmake = Join-Path $vs "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\c
 $ninja = Join-Path $vs "Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
 if (-not (Test-Path -LiteralPath $cmake)) { throw "Install the Visual Studio CMake component." }
 if (-not (Test-Path -LiteralPath $ninja)) { throw "Install the Visual Studio Ninja component." }
-$branchName = if ($Branch -eq "public") { "public" } else { "beta" }
+$branchName = switch ($Branch) { "auto" { "auto" }; "public" { "public" }; "x86-64" { "beta" } }
 $configurationName = $Configuration.ToLowerInvariant().Replace("_", "-")
 $preset = "$branchName-$configurationName"
 if ($Architecture -eq "x86") { $preset = "$branchName-x86-$configurationName" }

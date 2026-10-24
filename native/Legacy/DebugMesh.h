@@ -11,7 +11,7 @@ static void BuildSpikeMesh(IMaterial *mat)
 {
 	if (!source::GetMaterialSystem() || !source::SupportsNativeMeshVertexFormat(mat))
 		return;
-	CMatRenderContextPtr ctx(source::GetMaterialSystem());
+	CMatRenderContextPtr ctx(source::GetMaterialSystem()->GetRenderContext());
 	if (!ctx)
 		return;
 	if (g_mesh)
@@ -53,7 +53,7 @@ static void RebuildSpikeMeshFromVerts(IMaterial *mat, float *vs, int numVerts)
 		return;
 
 	// 2. 获取渲染上下文
-	CMatRenderContextPtr ctx(source::GetMaterialSystem());
+	CMatRenderContextPtr ctx(source::GetMaterialSystem()->GetRenderContext());
 	if (!ctx)
 		return;
 	if (g_mesh)

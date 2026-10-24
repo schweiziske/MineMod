@@ -14,7 +14,6 @@
 #include "Bindings/MeshBindings.h"
 #include "Bindings/DrawBindings.h"
 #include "Bindings/WorldBindings.h"
-#include <cstring>
 
 using namespace GarrysMod::Lua;
 
@@ -59,6 +58,12 @@ public:
 		mLua->SetField(-2, inName);
 	}
 
+	void AddString(const char *inName, const char *inValue)
+	{
+		mLua->PushString(inValue);
+		mLua->SetField(-2, inName);
+	}
+
 	void End()
 	{
 		// 弹出这个表
@@ -68,16 +73,16 @@ public:
 
 GMOD_MODULE_OPEN()
 {
-	// BRANCH is available before loading this module. Check it before the first
-	// material-system call; the plugin's own Lua ABI is checked only afterwards.
+	// Select the typed engine ABI before the first material-system virtual call.
 	LUA->PushSpecial(GarrysMod::Lua::SPECIAL_GLOB);
 	LUA->GetField(-1, "BRANCH");
-	const char *engine_branch = LUA->GetString(-1);
-#if defined(GMOD_SDK_PUBLIC)
-	const bool branch_matches = engine_branch && std::strcmp(engine_branch, "unknown") == 0;
+	mcmesh::source::EEngineBranch engine_branch;
+	const bool branch_matches = mcmesh::source::SelectEngineBranch(LUA->GetString(-1), engine_branch);
+#if defined(MCSWEP_AUTO_BRANCH)
+	const char *branch_error = "mcmesh: unsupported GMod branch; expected public (BRANCH=unknown) or x86-64 beta";
+#elif defined(GMOD_SDK_PUBLIC)
 	const char *branch_error = "mcmesh: this DLL requires public GMod; install the matching branch build";
 #else
-	const bool branch_matches = engine_branch && std::strcmp(engine_branch, "x86-64") == 0;
 	const char *branch_error = "mcmesh: this DLL requires x86-64 beta GMod; install the matching branch build";
 #endif
 	LUA->Pop(2);
@@ -87,7 +92,7 @@ GMOD_MODULE_OPEN()
 		return 0;
 	}
 
-	if (!mcmesh::source::AcquireMaterialSystem())
+	if (!mcmesh::source::AcquireMaterialSystem(engine_branch))
 	{
 		LUA->ThrowError("mcmesh: materialsystem acquire failed");
 		return 0;
@@ -102,6 +107,7 @@ GMOD_MODULE_OPEN()
 
 	// ---- 握手 / 生命周期 ----
 	fa.AddFunction("AbiVersion", GTLUAF(mcmesh::handshake::AbiVersion));
+	fa.AddString("EngineBranch", engine_branch == mcmesh::source::EEngineBranch::Public ? "public" : "x86-64");
 	fa.AddConstant("AtlasRegionVersion", 1);
 	fa.AddFunction("Handshake", GTLUAF(mcmesh::handshake::Handshake));
 	fa.AddFunction("SetAtlasPageMaterial", GTLUAF(mcmesh::handshake::SetAtlasPageMaterial));

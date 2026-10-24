@@ -567,7 +567,9 @@ DECLARE_POINTER_HANDLE( MaterialLock_t );
 // 
 //-----------------------------------------------------------------------------
 
-abstract_class IMaterialSystem : public IAppSystem
+// Both engine branches share these declarations; the base determines their ABI.
+template< class TAppSystem >
+abstract_class IMaterialSystemBase : public TAppSystem
 {
 public:
 
@@ -1057,6 +1059,10 @@ public:
 	// The bits will be retained by the material system and can be freed upon return.
 	virtual ITexture*			CreateNamedTextureFromBitsEx( const char* pName, const char *pTextureGroupName, int w, int h, int mips, ImageFormat fmt, int srcBufferSize, byte* srcBits, int nFlags ) = 0;
 };
+
+abstract_class IMaterialSystem : public IMaterialSystemBase<IAppSystem> {};
+abstract_class IMaterialSystemPublic : public IMaterialSystemBase<IAppSystemPublic> {};
+abstract_class IMaterialSystemX86_64 : public IMaterialSystemBase<IAppSystemX86_64> {};
 
 
 //-----------------------------------------------------------------------------
