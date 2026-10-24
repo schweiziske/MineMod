@@ -49,7 +49,10 @@ local function targetFor( instance, name, context, shadow )
 		w, h = shadow.target:Width() * size.scale, shadow.target:Height() * size.scale
 	end
 	w, h = math.max( 1, math.ceil( w ) ), math.max( 1, math.ceil( h ) )
-	requireValue( w <= 4096 and h <= 4096, "render_processing_size", "processing target exceeds 4096 square" )
+	-- A 2048-square cascade uses a 2x4 atlas with sky-boundary rows.
+	-- Keep view and fixed-size targets within their existing limits.
+	local maxHeight = size.relative == "shadow" and 8192 or 4096
+	requireValue( w <= 4096 and h <= maxHeight, "render_processing_size", "processing target exceeds its layout limit" )
 	local bank = instance.bank
 	local key = name .. "/" .. w .. "x" .. h
 	local entry = bank.targets[key]

@@ -526,6 +526,10 @@
           {
             "value": 1024,
             "label": "1024"
+          },
+          {
+            "value": 2048,
+            "label": "2048"
           }
         ],
         "label": "Shadow resolution",
@@ -1709,6 +1713,6 @@
         "shadow_atlas": "sunlight"
       }
     },
-    "build": "62011dca10c55709e848ca7415a14c9e90928d3257727162c9a6096ec9527bfd"
+    "build": "ebf52ea2239c9ec20cf620218c718b339b3b1c9388d7436a8a2c9c511d5d71de"
   }
 }

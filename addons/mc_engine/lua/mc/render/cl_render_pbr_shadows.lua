@@ -48,7 +48,7 @@ local function readSettings()
 		B.DisableShadow()
 	end
 	settings.skyBoundary = useSkyBoundary
-	settings.enabled, settings.size = enabled:GetBool(), size <= 256 and 256 or size <= 512 and 512 or 1024
+	settings.enabled, settings.size = enabled:GetBool(), size <= 256 and 256 or size <= 512 and 512 or size <= 1024 and 1024 or 2048
 	settings.range, settings.interval = distance:GetFloat(), interval:GetFloat()
 	settings.strength, settings.bias = strength:GetFloat(), bias:GetFloat()
 	settingsRevision = settingsRevision + 1
