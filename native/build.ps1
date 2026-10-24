@@ -1,41 +1,57 @@
 param(
     [ValidateSet("Debug", "Release", "Release_Final")]
     [string]$Configuration = "Release_Final",
+    [ValidateSet("public", "x86-64")]
+    [string]$Branch = "x86-64",
+    [ValidateSet("x64", "x86")]
+    [string]$Architecture = "x64",
     [string]$OutputDirectory,
     [switch]$Tests
 )
 $ErrorActionPreference = "Stop"
+if ($Branch -eq "x86-64" -and $Architecture -ne "x64") {
+    throw "The x86-64 beta branch requires -Architecture x64."
+}
 $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
 if (-not (Test-Path -LiteralPath $vswhere)) { throw "Visual Studio Installer/vswhere is required." }
 $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if (-not $vs) { throw "MSVC x64 build tools are required." }
-$installationVersion = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion
-$major = ([version]$installationVersion).Major
-switch ($major) {
-    17 { $toolset = "v143"; $generator = "Visual Studio 17 2022" }
-    18 { $toolset = "v145"; $generator = "Visual Studio 18 2026" }
-    default { throw "Unsupported Visual Studio version: $installationVersion. Update build.ps1's toolset/generator mapping." }
-}
-$msbuild = Join-Path $vs "MSBuild\Current\Bin\MSBuild.exe"
-$buildArguments = @("/m", "/nologo", "/p:Configuration=$Configuration", "/p:Platform=x64", "/p:PlatformToolset=$toolset", "/v:minimal")
+$devShell = Join-Path $vs "Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+if (-not (Test-Path -LiteralPath $devShell)) { throw "Visual Studio Developer PowerShell is required." }
+Import-Module $devShell
+Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments "-arch=$Architecture -host_arch=x64"
+
+$cmake = Join-Path $vs "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+$ninja = Join-Path $vs "Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
+if (-not (Test-Path -LiteralPath $cmake)) { throw "Install the Visual Studio CMake component." }
+if (-not (Test-Path -LiteralPath $ninja)) { throw "Install the Visual Studio Ninja component." }
+$branchName = if ($Branch -eq "public") { "public" } else { "beta" }
+$configurationName = $Configuration.ToLowerInvariant().Replace("_", "-")
+$preset = "$branchName-$configurationName"
+if ($Architecture -eq "x86") { $preset = "$branchName-x86-$configurationName" }
+$testOption = if ($Tests) { "ON" } else { "OFF" }
+$configureArguments = @("--preset", $preset, "-DCMAKE_MAKE_PROGRAM=$ninja", "-DMCSWEP_BUILD_TESTS=$testOption")
 if ($OutputDirectory) {
     $output = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot $OutputDirectory))
     if (-not $output.StartsWith($PSScriptRoot + "\", [StringComparison]::OrdinalIgnoreCase)) {
         throw "OutputDirectory must stay inside native/."
     }
-    $buildArguments += "/p:OutDir=$output/"
+    $configureArguments += "-DMCSWEP_OUTPUT_DIRECTORY=$output"
+} else {
+    # Reset an earlier override when reusing a preset's cache.
+    $configureArguments += "-DMCSWEP_OUTPUT_DIRECTORY=$PSScriptRoot/build/$Architecture/$preset/bin"
 }
-& $msbuild (Join-Path $PSScriptRoot "mcswep_native_mesh.vcxproj") @buildArguments
-if ($LASTEXITCODE -ne 0) { throw "Native module build failed ($LASTEXITCODE)." }
-if ($Tests) {
-    $cmake = Join-Path $vs "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
-    if (-not (Test-Path -LiteralPath $cmake)) { throw "Install the Visual Studio CMake component." }
-    $build = Join-Path $PSScriptRoot "build\x64\tests"
-    & $cmake -S (Join-Path $PSScriptRoot "tests") -B $build -G $generator -A x64
-    if ($LASTEXITCODE -ne 0) { throw "Native test configuration failed." }
-    & $cmake --build $build --config Release --parallel
-    if ($LASTEXITCODE -ne 0) { throw "Native test build failed." }
-    $ctest = Join-Path (Split-Path $cmake) "ctest.exe"
-    & $ctest --test-dir $build -C Release --output-on-failure
-    if ($LASTEXITCODE -ne 0) { throw "Native core tests failed." }
+Push-Location $PSScriptRoot
+try {
+    & $cmake @configureArguments
+    if ($LASTEXITCODE -ne 0) { throw "Native CMake configuration failed ($LASTEXITCODE)." }
+    & $cmake --build --preset $preset --parallel
+    if ($LASTEXITCODE -ne 0) { throw "Native module build failed ($LASTEXITCODE)." }
+    if ($Tests) {
+        $ctest = Join-Path (Split-Path $cmake) "ctest.exe"
+        & $ctest --test-dir "$PSScriptRoot/build/$Architecture/$preset" --output-on-failure
+        if ($LASTEXITCODE -ne 0) { throw "Native core tests failed ($LASTEXITCODE)." }
+    }
+} finally {
+    Pop-Location
 }

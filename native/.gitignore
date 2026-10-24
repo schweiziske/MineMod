@@ -1,7 +1,7 @@
 .vs/
 Release/
 Release_Final/
-x64/
+/x64/
 *.user
 *.obj
 *.pch
@@ -17,3 +17,4 @@ x64/
 *.tlog
 *.lastbuildstate
 build/
+CMakeUserPresets.json

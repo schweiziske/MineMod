@@ -14,6 +14,7 @@
 #include "Bindings/MeshBindings.h"
 #include "Bindings/DrawBindings.h"
 #include "Bindings/WorldBindings.h"
+#include <cstring>
 
 using namespace GarrysMod::Lua;
 
@@ -67,6 +68,25 @@ public:
 
 GMOD_MODULE_OPEN()
 {
+	// BRANCH is available before loading this module. Check it before the first
+	// material-system call; the plugin's own Lua ABI is checked only afterwards.
+	LUA->PushSpecial(GarrysMod::Lua::SPECIAL_GLOB);
+	LUA->GetField(-1, "BRANCH");
+	const char *engine_branch = LUA->GetString(-1);
+#if defined(GMOD_SDK_PUBLIC)
+	const bool branch_matches = engine_branch && std::strcmp(engine_branch, "unknown") == 0;
+	const char *branch_error = "mcmesh: this DLL requires public GMod; install the matching branch build";
+#else
+	const bool branch_matches = engine_branch && std::strcmp(engine_branch, "x86-64") == 0;
+	const char *branch_error = "mcmesh: this DLL requires x86-64 beta GMod; install the matching branch build";
+#endif
+	LUA->Pop(2);
+	if (!branch_matches)
+	{
+		LUA->ThrowError(branch_error);
+		return 0;
+	}
+
 	if (!mcmesh::source::AcquireMaterialSystem())
 	{
 		LUA->ThrowError("mcmesh: materialsystem acquire failed");

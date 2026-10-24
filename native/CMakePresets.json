@@ -1,0 +1,49 @@
+{
+  "version": 5,
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "windows-x64",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/x64/${presetName}",
+      "architecture": { "value": "x64", "strategy": "external" },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "environment": { "VSLANG": "1033" },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true,
+        "MCSWEP_BUILD_MODULE": true,
+        "MCSWEP_BUILD_TESTS": false
+      }
+    },
+    {
+      "name": "windows-x86",
+      "hidden": true,
+      "inherits": "windows-x64",
+      "binaryDir": "${sourceDir}/build/x86/${presetName}",
+      "architecture": { "value": "x86", "strategy": "external" }
+    },
+    { "name": "public-debug", "inherits": "windows-x64", "cacheVariables": { "GMOD_BRANCH": "public", "CMAKE_BUILD_TYPE": "Debug" } },
+    { "name": "public-release", "inherits": "windows-x64", "cacheVariables": { "GMOD_BRANCH": "public", "CMAKE_BUILD_TYPE": "Release" } },
+    { "name": "public-release-final", "inherits": "windows-x64", "cacheVariables": { "GMOD_BRANCH": "public", "CMAKE_BUILD_TYPE": "Release_Final" } },
+    { "name": "public-x86-debug", "inherits": "windows-x86", "cacheVariables": { "GMOD_BRANCH": "public", "CMAKE_BUILD_TYPE": "Debug" } },
+    { "name": "public-x86-release", "inherits": "windows-x86", "cacheVariables": { "GMOD_BRANCH": "public", "CMAKE_BUILD_TYPE": "Release" } },
+    { "name": "public-x86-release-final", "inherits": "windows-x86", "cacheVariables": { "GMOD_BRANCH": "public", "CMAKE_BUILD_TYPE": "Release_Final" } },
+    { "name": "beta-debug", "inherits": "windows-x64", "cacheVariables": { "GMOD_BRANCH": "x86-64", "CMAKE_BUILD_TYPE": "Debug" } },
+    { "name": "beta-release", "inherits": "windows-x64", "cacheVariables": { "GMOD_BRANCH": "x86-64", "CMAKE_BUILD_TYPE": "Release" } },
+    { "name": "beta-release-final", "inherits": "windows-x64", "cacheVariables": { "GMOD_BRANCH": "x86-64", "CMAKE_BUILD_TYPE": "Release_Final" } }
+  ],
+  "buildPresets": [
+    { "name": "public-debug", "configurePreset": "public-debug" },
+    { "name": "public-release", "configurePreset": "public-release" },
+    { "name": "public-release-final", "configurePreset": "public-release-final" },
+    { "name": "public-x86-debug", "configurePreset": "public-x86-debug" },
+    { "name": "public-x86-release", "configurePreset": "public-x86-release" },
+    { "name": "public-x86-release-final", "configurePreset": "public-x86-release-final" },
+    { "name": "beta-debug", "configurePreset": "beta-debug" },
+    { "name": "beta-release", "configurePreset": "beta-release" },
+    { "name": "beta-release-final", "configurePreset": "beta-release-final" }
+  ]
+}

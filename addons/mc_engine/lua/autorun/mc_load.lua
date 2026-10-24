@@ -457,18 +457,29 @@ if CLIENT then
 	MC.ProbeNativeMeshModule()
 	local nativeMissing = MC.NativeMeshModuleMissing == true
 	local nativeOutdated = MC.NativeMeshModuleOutdated == true
+	local nativeFailed = MC.NativeMeshModuleAvailable ~= true and not nativeMissing and not nativeOutdated
 	MC.RENDER_SECTION_SIZE = 16
 	MsgN( "[MC] render section size = " .. MC.RENDER_SECTION_SIZE
 		.. " (Lua/Native L2)" )
 
-	if ( nativeMissing or nativeOutdated ) and not MC.NativeMeshInstallNoticeScheduled then
+	if ( nativeMissing or nativeOutdated or nativeFailed ) and not MC.NativeMeshInstallNoticeScheduled then
 		MC.NativeMeshInstallNoticeScheduled = true
 		local nativeURL = NATIVE_MODULE_URL
+		local nativeFailureReason = MC.NativeMeshModuleFailureReason
 		timer.Simple( 1, function()
 			if MC.NativeMeshInstallNoticeShown then return end
 			MC.NativeMeshInstallNoticeShown = true
 			if chat and chat.AddText then
-				if nativeOutdated then
+				if nativeFailed then
+					chat.AddText(
+						Color( 255, 80, 80 ), "[MCSWEP] ",
+						MC.T( "native.dll_failed",
+							"Native DLL 初始化失败，当前使用 Lua 后端。\n失败原因：{reason}\n请安装与游戏分支和位数匹配的 DLL 并重启游戏。下载地址：", {
+								reason = nativeFailureReason,
+							} ),
+						Color( 130, 210, 255 ), nativeURL
+					)
+				elseif nativeOutdated then
 					chat.AddText(
 						Color( 80, 190, 255 ), "[MCSWEP] ",
 						Color( 255, 120, 90 ), MC.T( "native.dll_outdated",
@@ -488,6 +499,14 @@ if CLIENT then
 							"(推荐下载)" )
 					)
 				end
+			end
+			if nativeFailed then
+				MC.Fault( "native_module_init_failed", "%s", MC.T( "native.dll_failed_console",
+					"Native DLL 初始化失败：{reason}。请安装与游戏分支和位数匹配的 DLL 并重启游戏。下载地址: {url}", {
+						reason = nativeFailureReason,
+						url = nativeURL,
+					} ) )
+				return
 			end
 			local consoleKey = nativeOutdated and "native.dll_outdated_console" or "native.dll_console"
 			local consoleFallback = nativeOutdated

@@ -1,3 +1,4 @@
 {
-    "cmake.sourceDirectory": "D:/server/TEST/garrysmod/addons/mcswep/native/tests"
+    "cmake.sourceDirectory": "${workspaceFolder}",
+    "cmake.useCMakePresets": "always"
 }

@@ -10,4 +10,4 @@
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 
-#include "utils/lzma/C/LzmaDec.h"
+#include "lzma/LzmaDec.h"

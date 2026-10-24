@@ -28,7 +28,7 @@ WarningsAsErrors: >-
   bugprone-dangling-handle,
   bugprone-use-after-move
 HeaderFilterRegex: '(^|[/\\])native[/\\]'
-ExcludeHeaderFilterRegex: '(^|[/\\])native[/\\](include|build)[/\\]'
+ExcludeHeaderFilterRegex: '(^|[/\\])native[/\\](include|sdk|build)[/\\]'
 SystemHeaders: false
 CheckOptions:
   readability-identifier-naming.NamespaceCase: lower_case

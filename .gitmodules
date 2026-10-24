@@ -1,7 +1,3 @@
-[submodule "native/include/sourcesdk-minimal-x86-64-branch"]
-	path = native/include/sourcesdk-minimal-x86-64-branch
-	url = https://github.com/danielga/sourcesdk-minimal.git
-	branch = x86-64-branch
 [submodule "native/include/rapidjson-master"]
 	path = native/include/rapidjson-master
 	url = https://github.com/Tencent/rapidjson.git
