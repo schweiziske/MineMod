@@ -128,6 +128,17 @@ local function particleAtlasTexture()
 	return texture, textureName
 end
 
+local function particleTextureTransform( tile, col, row )
+	local x, y, width, height, layout = MC.AtlasRegion( tile )
+	local sampleOffset = 0.75 / ( ParticleUvSteps - 1 )
+	local transform = Matrix()
+	transform:SetField( 1, 1, width * 0.25 / layout.W )
+	transform:SetField( 2, 2, height * 0.25 / layout.H )
+	transform:SetField( 1, 4, ( x + col * sampleOffset * width ) / layout.W )
+	transform:SetField( 2, 4, ( y + row * sampleOffset * height ) / layout.H )
+	return transform
+end
+
 local function particleMaterialForTile( tileName, col, row )
 	local tile = type( tileName ) == "number" and tileName or MC.Tiles and MC.Tiles[tileName]
 	if tile == nil then return ParticleFallbackMaterial end
@@ -150,17 +161,7 @@ local function particleMaterialForTile( tileName, col, row )
 	local atlas = MC.Atlas
 	local atlasTexture, atlasTextureName = particleAtlasTexture()
 	if not atlas or not atlasTexture or not atlasTextureName then return ParticleFallbackMaterial end
-	local x, y, width, height, layout = MC.AtlasRegion(tile)
-	local sampleOffset = 0.75 / ( ParticleUvSteps - 1 )
-	local scaleX = width * 0.25 / layout.W
-	local scaleY = height * 0.25 / layout.H
-	local translateX = (x + col * sampleOffset * width) / layout.W
-	local translateY = (y + row * sampleOffset * height) / layout.H
 	local matName = "mc_particle_atlas_v2_" .. tile .. "_" .. col .. "_" .. row
-	local transform = string.format(
-		"center 0 0 scale %.9f %.9f rotate 0 translate %.9f %.9f",
-		scaleX, scaleY, translateX, translateY
-	)
 
 	local mat = CreateMaterial( matName, "UnlitGeneric", {
 		["$basetexture"] = atlasTextureName,
@@ -169,13 +170,16 @@ local function particleMaterialForTile( tileName, col, row )
 		["$vertexalpha"] = "1",
 		["$nocull"] = "1",
 		["$pointsample"] = "1",
-		["$basetexturetransform"] = transform,
 	} )
 
 	if mat and not mat:IsError() then
 		mat:SetTexture( "$basetexture", atlasTexture )
+		-- CreateMaterial reuses names across profile switches and Lua reloads.
+		-- Updating only the texture leaves UVs pointing into the previous atlas.
+		mat:SetMatrix( "$basetexturetransform", particleTextureTransform( tile, col, row ) )
 	else
-		mat = ParticleFallbackMaterial
+		MC.Fault( "terrain_particle_material", "Cannot create particle material for tile %s", tostring( tile ) )
+		return ParticleFallbackMaterial
 	end
 
 	byColumn[row] = mat
@@ -186,10 +190,11 @@ function MC.RefreshBlockParticleMaterials( atlasTexture )
 	if not atlasTexture or ( atlasTexture.IsError and atlasTexture:IsError() ) then return false end
 	ParticleAtlasTexture = atlasTexture
 	ParticleAtlasTextureName = atlasTexture.GetName and atlasTexture:GetName() or ParticleAtlasTextureName
-	for _, byTile in pairs( ParticleMaterialCache ) do
-		for _, byColumn in pairs( byTile ) do
-			for _, material in pairs( byColumn ) do
-				if material and material.SetTexture then material:SetTexture( "$basetexture", atlasTexture ) end
+	for tile, byTile in pairs( ParticleMaterialCache ) do
+		for col, byColumn in pairs( byTile ) do
+			for row, material in pairs( byColumn ) do
+				material:SetTexture( "$basetexture", atlasTexture )
+				material:SetMatrix( "$basetexturetransform", particleTextureTransform( tile, col, row ) )
 			end
 		end
 	end
@@ -197,7 +202,15 @@ function MC.RefreshBlockParticleMaterials( atlasTexture )
 end
 
 hook.Add( "MC.AtlasProfileChanged", "mc_particle_atlas_profile", function()
-	ParticleMaterialCache = {}
+	-- Keep the handles so the subsequent texture publication also updates
+	-- already living fragments. Material identities remain stable in Source.
+	for tile, byTile in pairs( ParticleMaterialCache ) do
+		for col, byColumn in pairs( byTile ) do
+			for row, material in pairs( byColumn ) do
+				material:SetMatrix( "$basetexturetransform", particleTextureTransform( tile, col, row ) )
+			end
+		end
+	end
 	ParticleWarmQueue = {}
 	ParticleWarmByTile = {}
 	ParticleAtlasPrewarmed = false
