@@ -84,7 +84,10 @@ MC.ConfigConVars = {
 					"切换自己的创造／生存模式；是否允许切换由服务器控制。", { choices = {
 						choice( "creative", "Creative", "创造" ),
 						choice( "survival", "Survival", "生存" ),
-					} } ),
+					},
+					get = function() return MC.ConfirmedPlayerGameMode() end,
+					set = function( value ) return MC.RequestPlayerGameMode( value ) end,
+				} ),
 		} ),
 
 		category( "texture_pack", "interface", "Texture pack", "材质包",

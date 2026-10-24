@@ -1090,6 +1090,10 @@ function MC.OpenConfigMenu()
 	end
 end
 
+hook.Add( "MCPlayerGameModeSynchronized", "mc_config_ui", function( mode )
+	MC.RefreshConfigControlValue( "mc_gamemode", mode )
+end )
+
 net.Receive( "mc_config_values", function()
 	local values = {}
 	for _ = 1, net.ReadUInt( 12 ) do

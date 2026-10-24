@@ -46,17 +46,31 @@ if CLIENT then
 		"Your Minecraft mode: creative (1) or survival (0); subject to server permissions" )
 	local applyingServerMode = false
 	local ready = false
+	local confirmedMode
 	local function requestMode( mode )
 		net.Start( "mc_player_gamemode" )
 			net.WriteBool( mode ~= nil )
 			if mode then net.WriteBool( mode == "creative" ) end
 		net.SendToServer()
 	end
+	function MC.ConfirmedPlayerGameMode()
+		return confirmedMode or MC.PlayerGameMode( LocalPlayer() )
+	end
+	function MC.RequestPlayerGameMode( value )
+		local mode = MC.NormalizeGameMode( value )
+		if not mode then return false, "invalid_game_mode" end
+		if not IsValid( LocalPlayer() ) then return false, "invalid_player" end
+		-- Menu selections are requests even if the local ConVar is unchanged.
+		requestMode( mode )
+		return true
+	end
 	net.Receive( "mc_player_gamemode", function()
 		local mode = net.ReadBool() and "creative" or "survival"
+		confirmedMode = mode
 		applyingServerMode = true
 		modeConVar:SetString( mode )
 		applyingServerMode = false
+		hook.Run( "MCPlayerGameModeSynchronized", mode )
 	end )
 	cvars.AddChangeCallback( "mc_gamemode", function( _, _, value )
 		if applyingServerMode or not ready then return end
