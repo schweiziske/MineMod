@@ -118,61 +118,74 @@ local function sampleInterval()
 	return math.Clamp( MC.EntityLightingInterval and MC.EntityLightingInterval:GetFloat() or 0.10, 0, 2 )
 end
 
+-- Voxel samplers consume persistent MC-world positions, not LocalToWorld's
+-- engine frame. Sample the centre and six faces so a large prop's origin
+-- inside a block does not decide the brightness of the entire model.
 local function samplePosition( ent, player )
-	if player and ent.EyePos then return ent:EyePos() end
-	local mins, maxs = ent:OBBMins(), ent:OBBMaxs()
-	return ent:LocalToWorld( Vector(
-		( mins.x + maxs.x ) * 0.5,
-		( mins.y + maxs.y ) * 0.5,
-		mins.z + ( maxs.z - mins.z ) * 0.65
-	) )
+	local coords = MC.API.Coords
+	if player then return coords.EntityEyeWorldPos( ent ) end
+	local minimum, maximum = coords.EntityWorldAABB( ent )
+	if not minimum or not maximum then
+		MC.Fault( "entity_light_bounds", "world bounds unavailable for entity %d", ent:EntIndex() )
+		return nil
+	end
+	return ( minimum + maximum ) * 0.5, minimum, maximum
+end
+
+local function sampleEntity( ent, player, position, minimum, maximum )
+	local r, g, b = MC.SampleDynamicLightingRGB( position, 0 )
+	if player then return r, g, b end
+	local inset = MC.API.Coords.BlockSize() * 0.125
+	local point = Vector( position.x, position.y, position.z )
+	for axis = 1, 3 do
+		local key = axis == 1 and "x" or axis == 2 and "y" or "z"
+		point[key] = minimum[key] - inset
+		local sr, sg, sb = MC.SampleDynamicLightingRGB( point, 0 )
+		r, g, b = r + sr, g + sg, b + sb
+		point[key] = maximum[key] + inset
+		sr, sg, sb = MC.SampleDynamicLightingRGB( point, 0 )
+		r, g, b = r + sr, g + sg, b + sb
+		point[key] = position[key]
+	end
+	return r / 7, g / 7, b / 7
 end
 
 local function sampledRGB( ent, player )
-	local now = CurTime()
+	local now, frame = RealTime(), FrameNumber()
 	local state = lightStates[ent]
-	if not state then
-		local r, g, b = 1, 1, 1
-		if MC.SampleDynamicLightingRGB then
-			r, g, b = MC.SampleDynamicLightingRGB( samplePosition( ent, player ), 0 )
-		end
-		local interval = sampleInterval()
-		local phase = interval > 0 and ( ( ent:EntIndex() % 7 ) / 7 ) * interval or 0
-		state = {
-			r = r, g = g, b = b,
-			targetR = r, targetG = g, targetB = b,
-			nextSample = now + interval + phase,
-			lastUpdate = now,
-		}
-		lightStates[ent] = state
-	else
-		local interval = sampleInterval()
-		if interval <= 0 or now >= ( state.nextSample or 0 ) then
-			local r, g, b = 1, 1, 1
-			if MC.SampleDynamicLightingRGB then
-				r, g, b = MC.SampleDynamicLightingRGB( samplePosition( ent, player ), 0 )
+	local interval = sampleInterval()
+	if not state or state.frame ~= frame then
+		local position, minimum, maximum = samplePosition( ent, player )
+		if not position then return nil end
+		local moved = not state or position:DistToSqr( state.position ) >= ( MC.API.Coords.BlockSize() * 0.25 ) ^ 2
+		if not state then
+			local r, g, b = sampleEntity( ent, player, position, minimum, maximum )
+			state = { r = r, g = g, b = b, targetR = r, targetG = g, targetB = b,
+				nextSample = now + interval, lastUpdate = now, position = position, interval = interval }
+			lightStates[ent] = state
+		else
+			if moved or interval ~= state.interval or now >= state.nextSample then
+				state.targetR, state.targetG, state.targetB = sampleEntity( ent, player, position, minimum, maximum )
+				state.nextSample, state.position, state.interval = now + interval, position, interval
 			end
-			state.targetR, state.targetG, state.targetB = r, g, b
-			state.nextSample = now + interval
+			local blend = 1 - math.exp( -math.Clamp( now - state.lastUpdate, 0, 0.1 ) * 12 )
+			state.r, state.g, state.b = Lerp( blend, state.r, state.targetR ),
+				Lerp( blend, state.g, state.targetG ), Lerp( blend, state.b, state.targetB )
+			state.lastUpdate = now
 		end
-		local dt = math.Clamp( now - ( state.lastUpdate or now ), 0, 0.1 )
-		state.lastUpdate = now
-		local blend = 1 - math.exp( -math.Clamp( dt, 0, 0.1 ) * 12 )
-		state.r = Lerp( blend, state.r, state.targetR or state.r )
-		state.g = Lerp( blend, state.g, state.targetG or state.g )
-		state.b = Lerp( blend, state.b, state.targetB or state.b )
+		state.frame = frame
 	end
 	local mul = gain()
 	return state.r * mul, state.g * mul, state.b * mul
 end
 
-local function dampMaterialReflections( ent, r, g, b )
-	if not ( ent.GetMaterials and Material ) then return nil end
+local function dampMaterialReflections( ent, r, g, b, states )
 	local factor = math.Clamp( math.max( r, g, b ) * reflectionStrength(), 0, 1 )
-	local states = {}
+	local seen = {}
 	for _, name in ipairs( ent:GetMaterials() or {} ) do
 		local mat = Material( name )
-		if mat and not mat:IsError() then
+		if mat and not mat:IsError() and not seen[mat] then
+			seen[mat] = true
 			local envTint = mat:GetVector( "$envmaptint" )
 			-- Some IMaterial getters return zero values (not one nil value) when a
 			-- parameter is absent. Assignment normalizes that case to nil before
@@ -180,6 +193,7 @@ local function dampMaterialReflections( ent, r, g, b )
 			local rawPhongBoost = mat:GetFloat( "$phongboost" )
 			local phongBoost = rawPhongBoost ~= nil and tonumber( rawPhongBoost ) or nil
 			local state = { mat = mat, phongBoost = phongBoost }
+			states[#states + 1] = state
 			if envTint then
 				state.envTint = Vector( envTint.x, envTint.y, envTint.z )
 				mat:SetVector( "$envmaptint", envTint * factor )
@@ -187,10 +201,8 @@ local function dampMaterialReflections( ent, r, g, b )
 			-- Many camera/weapon materials do not define $phongboost; GMod then
 			-- returns nil rather than zero. Leave absent shader parameters alone.
 			if phongBoost ~= nil then mat:SetFloat( "$phongboost", phongBoost * factor ) end
-			states[#states + 1] = state
 		end
 	end
-	return states
 end
 
 local function restoreMaterialReflections( states )
@@ -203,24 +215,22 @@ local function restoreMaterialReflections( states )
 	end
 end
 
-local function beginModelLighting( ent, player )
+-- Preserve Source's normal/model shading, including frozen prop lighting.
+-- MC light changes the model's RGB multiplier; it never leaves a global
+-- fullbright switch or a hard-coded white multiplier behind after a draw.
+local function beginModelLighting( ent, player, state )
 	local r, g, b = sampledRGB( ent, player )
-	-- Inspect/material parameters before changing global render state. If an
-	-- unusual addon material errors, it cannot leave the whole frame fullbright.
-	local materialState = dampMaterialReflections( ent, r, g, b )
-	-- Source refreshes/caches static model lighting when a prop comes to rest.
-	-- Combining that cache with a custom ambient cube can suddenly double-light
-	-- a stationary prop. Suppress the engine contribution, then explicitly
-	-- multiply the fullbright model by our bounded voxel-light RGB.
-	render.SuppressEngineLighting( true )
-	render.SetColorModulation( r, g, b )
-	return materialState
+	if not r then return end
+	state.r, state.g, state.b = render.GetColorModulation()
+	state.materials = {}
+	dampMaterialReflections( ent, r, g, b, state.materials )
+	render.SetColorModulation( state.r * r, state.g * g, state.b * b )
 end
 
-local function endModelLighting( materialState )
-	restoreMaterialReflections( materialState )
-	render.SetColorModulation( 1, 1, 1 )
-	render.SuppressEngineLighting( false )
+local function endModelLighting( state )
+	if not state.r then return end
+	render.SetColorModulation( state.r, state.g, state.b )
+	restoreMaterialReflections( state.materials )
 end
 
 -- Source StudioModel lighting: an ambient cube sampled at a lighting origin.
@@ -228,32 +238,34 @@ end
 -- model call. No color modulation, stencil, blend override or fullbright mode.
 local function drawPlayerWithSourceLighting( ply )
 	local r, g, b = sampledRGB( ply, true )
+	if not r then return end
 	-- SampleDynamicLightingRGB is also used as a display/vertex-color multiplier
 	-- by held items and particles. Source's ambient cube consumes linear HDR
 	-- intensity instead, so feeding 0.48 directly appears roughly 70% bright.
 	-- Convert the sampled display values to linear before setting model light.
 	local gamma = playerLightingGamma()
 	r, g, b = r ^ gamma, g ^ gamma, b ^ gamma
-	render.SetLightingOrigin( samplePosition( ply, true ) )
+	local origin = MC.API.Coords.EntityEyeWorldPos( ply )
+	local engineOrigin = MC.API.Coords.WorldToEngine( origin, ply )
+	render.SetLightingOrigin( engineOrigin )
 	render.SetLocalModelLights() -- remove unrelated Source local lights
 	render.ResetModelLighting( r, g, b ) -- sets all six ambient-cube faces
 	playerSourceDrawActive = true
 	local ok, err = pcall( ply.DrawModel, ply )
 	playerSourceDrawActive = false
 	render.ResetModelLighting( 1, 1, 1 )
-	if not ok then ErrorNoHalt( "[MC] player Source lighting draw failed: " .. tostring( err ) .. "\n" ) end
+	if not ok then MC.Fault( "entity_light_player_draw", "%s", tostring( err ) ) end
 end
 
 local function drawWrappedProp( ent, oldOverride, ... )
-	local materialState = beginModelLighting( ent, false )
-	local ok, err
-	if oldOverride then
-		ok, err = pcall( oldOverride, ent, ... )
-	else
-		ok, err = pcall( ent.DrawModel, ent, ... )
-	end
+	local materialState = {}
+	local ok, err = pcall( function( ... )
+		beginModelLighting( ent, false, materialState )
+		if oldOverride then return oldOverride( ent, ... ) end
+		return ent:DrawModel( ... )
+	end, ... )
 	endModelLighting( materialState )
-	if not ok then ErrorNoHalt( "[MC] entity lighting draw failed: " .. tostring( err ) .. "\n" ) end
+	if not ok then MC.Fault( "entity_light_draw", "%s", tostring( err ) ) end
 end
 
 local function unwrapProp( ent )
@@ -293,7 +305,7 @@ local function wrapProp( ent )
 		end
 	end
 	local wrapper = function( self, ... )
-		if not entityClassEnabled( self ) then
+		if not entityClassEnabled( self ) or MC.RenderPBRShadows and MC.RenderPBRShadows.rendering then
 			if oldOverride then return oldOverride( self, ... ) end
 			return self:DrawModel( ... )
 		end
@@ -308,6 +320,10 @@ local function clearLightStates()
 end
 
 local function refreshProps()
+	if enabled() and not MC.Check( type( MC.SampleDynamicLightingRGB ) == "function"
+		and MC.API and MC.API.Coords and MC.API.Coords.EntityWorldAABB
+		and MC.API.Coords.EntityEyeWorldPos and MC.API.Coords.WorldToEngine,
+		"entity_light_api", "entity lighting requires the world-coordinate RGB sampler" ) then return end
 	if not enabled() then
 		for ent in pairs( wrappedProps ) do unwrapProp( ent ) end
 		clearLightStates()
@@ -326,6 +342,9 @@ end
 hook.Remove( "PrePlayerDraw", "mc_entity_lighting_players" )
 hook.Remove( "PostPlayerDraw", "mc_entity_lighting_players" )
 hook.Add( "PrePlayerDraw", "mc_entity_lighting_players", function( ply )
+	-- The shadow owner supplies a depth material and a light-space camera.
+	-- Do not recurse into the colour-lighting draw while collecting its pose.
+	if MC.RenderPBRShadows and MC.RenderPBRShadows.rendering then return end
 	if playerSourceDrawActive then return end
 	if not playersEnabled() then return end
 	drawPlayerWithSourceLighting( ply )

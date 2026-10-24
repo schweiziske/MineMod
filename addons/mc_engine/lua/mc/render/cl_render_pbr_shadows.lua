@@ -13,6 +13,7 @@ S.skyMaterials = S.skyMaterials or {}
 S.skyCopyMaterials = S.skyCopyMaterials or {}
 S.skyCopyQuads = S.skyCopyQuads or {}
 S.waterMaterials = S.waterMaterials or setmetatable( {}, { __mode = "k" } )
+S.entityMaterials = S.entityMaterials or {}
 if S.atlasVersion ~= 2 then S.targets, S.atlasVersion = {}, 2 end
 if S.depthMaterialVersion ~= DEPTH_MATERIAL_VERSION then
 	-- Retained caster snapshots must also lose the old ALWAYS comparison.
@@ -31,6 +32,8 @@ local distance = MC.RenderPackSettings.Handle( "shadow_range" )
 local interval = MC.RenderPackSettings.Handle( "shadow_interval" )
 local strength = MC.RenderPackSettings.Handle( "shadow_strength" )
 local bias = MC.RenderPackSettings.Handle( "shadow_bias" )
+local entityShadows = CreateClientConVar( "mc_pbr_shadow_entities", "1", true, false,
+	"Cast Source prop, player, NPC and vehicle model shadows onto Minecraft surfaces" )
 local waterEnabled = MC.RenderPackSettings.Handle( "water" )
 local waterWaves = MC.RenderPackSettings.Handle( "water_waves" )
 local waterCaustics = MC.RenderPackSettings.Handle( "water_caustics" )
@@ -49,7 +52,9 @@ local function readSettings()
 	end
 	settings.skyBoundary = useSkyBoundary
 	settings.enabled, settings.size = enabled:GetBool(), size <= 256 and 256 or size <= 512 and 512 or size <= 1024 and 1024 or 2048
-	settings.range, settings.interval = distance:GetFloat(), interval:GetFloat()
+	local updateInterval = interval:GetFloat()
+	if settings.interval ~= updateInterval then S.nextUpdate = 0 end
+	settings.range, settings.interval = distance:GetFloat(), updateInterval
 	settings.strength, settings.bias = strength:GetFloat(), bias:GetFloat()
 	settingsRevision = settingsRevision + 1
 end
@@ -62,6 +67,7 @@ S.stats = { mode = "full", updates = 0, nearUpdates = 0, farUpdates = 0, cascade
 	testedRegions = 0, culledRegions = 0, regionChunks = 0, coverageUpdates = 0, fullCoverageFallbacks = 0,
 	materialWrites = 0, cpuMS = 0, waterUpdates = 0, waterCPU = 0, skyDraws = 0, skyCopies = 0,
 	interiorDraws = 0, interiorCascades = 0, status = "initializing" }
+S.stats.entityDraws, S.stats.entityCasters = 0, 0
 S.surfaceMaterials = setmetatable( {}, { __mode = "k" } )
 S.renderRevision, S.tileToken = ( S.renderRevision or 0 ) + 1, ( S.tileToken or 0 ) + 1
 S.valid, S.modelPushed, S.current, S.pending = false, false, {}, {}
@@ -81,8 +87,139 @@ local setups = {
 local stageNames = { "world_opaque", "world_cutout", "world_translucent" }
 local pushedRT, startedCam, stateActive, toneActive, oldTone = false, false, false, false, nil
 local clipActive, oldClip, scissorActive = false, false, false
+local entityCamActive, entityOverrideActive = false, false
+local entityCasters, entityCount = {}, 0
+local entitySetup = { type = "3D", origin = Vector(), angles = angles, ortho = {},
+	drawviewmodel = false, drawviewer = true, dopostprocess = false, bloomtone = false }
+local entityMaterials = S.entityMaterials
+local casterClasses = {
+	prop_physics = true, prop_physics_multiplayer = true, prop_dynamic = true,
+	prop_dynamic_override = true, prop_ragdoll = true,
+}
+-- C_PhysicsProp adds static-lighting streams when it sleeps. StudioRender
+-- then ignores $softwareskin. A cached C_ClientsideModel keeps the same posed
+-- silhouette without entering that physics-prop-only draw branch.
+for _, record in pairs( S.entityProxies or {} ) do
+	if IsValid( record.proxy ) then record.proxy:Remove() end
+end
+local entityProxies = {}
+S.entityProxies = entityProxies
+local proxyClasses = { prop_physics = true, prop_physics_multiplayer = true }
+local proxyCollection = 0
+local function removeEntityProxy( ent, record )
+	entityProxies[ent] = nil
+	if IsValid( record.proxy ) then record.proxy:Remove() end
+end
+local function clearEntityProxies()
+	for ent, record in pairs( entityProxies ) do removeEntityProxy( ent, record ) end
+end
+local function prepareEntityProxy( ent, model )
+	local record = entityProxies[ent]
+	if record and ( record.model ~= model or not IsValid( record.proxy ) ) then
+		removeEntityProxy( ent, record ) record = nil
+	end
+	if not record then
+		local proxy = ClientsideModel( model, RENDERGROUP_OPAQUE )
+		requireValue( IsValid( proxy ), "render_pbr_entity_proxy", "could not create a physics-prop shadow model: " .. model )
+		record = { proxy = proxy, model = model, bones = {}, poseBones = {}, poseMatrices = {}, poseCount = 0,
+			bodygroups = ent:GetNumBodyGroups() }
+		entityProxies[ent] = record
+		proxy:SetNoDraw( true )
+		proxy:DrawShadow( false )
+		for bone = 0, ent:GetBoneCount() - 1 do
+			if ent:GetBoneName( bone ) ~= "__INVALIDBONE__" then record.bones[#record.bones + 1] = bone end
+		end
+		proxy:AddCallback( "BuildBonePositions", function( self )
+			for i = 1, record.poseCount do self:SetBoneMatrix( record.poseBones[i], record.poseMatrices[i] ) end
+		end )
+	end
+	local proxy = record.proxy
+	record.collection = proxyCollection
+	local origin = ent:GetRenderOrigin()
+	if not isvector( origin ) then
+		local world = MC.API.Coords.EntityWorldPos( ent )
+		origin = MC.API.Coords.WorldToEngine( world, ent )
+	end
+	local orientation = ent:GetRenderAngles()
+	if not orientation then orientation = ent:GetAngles() end
+	proxy:SetRenderOrigin( origin )
+	proxy:SetRenderAngles( orientation )
+	proxy:SetSkin( ent:GetSkin() )
+	for group = 0, record.bodygroups - 1 do proxy:SetBodygroup( group, ent:GetBodygroup( group ) ) end
+	-- The copied world matrices already include model/bone scale. The proxy's
+	-- own model scale stays at one so a rigid prop is not scaled a second time.
+	ent:SetupBones()
+	local count = 0
+	for i = 1, #record.bones do
+		local bone = record.bones[i]
+		local pose = ent:GetBoneMatrix( bone )
+		if pose then
+			count = count + 1
+			record.poseBones[count], record.poseMatrices[count] = bone, pose
+		end
+	end
+	requireValue( count > 0, "render_pbr_entity_proxy_pose", "physics-prop shadow pose is unavailable: " .. model )
+	record.poseCount = count
+	proxy:InvalidateBoneCache()
+	proxy:SetupBones()
+	return proxy
+end
 local apiValidated = false
 B.DisableShadow()
+
+cvars.AddChangeCallback( "mc_pbr_shadow_entities", function()
+	S.fullDirty = true
+	if not entityShadows:GetBool() then clearEntityProxies() end
+end, "mc_l2_pbr_shadows" )
+hook.Add( "EntityRemoved", "mc_l2_pbr_entity_proxy", function( ent )
+	local record = entityProxies[ent]
+	if record then removeEntityProxy( ent, record ) end
+end )
+hook.Add( "ShutDown", "mc_l2_pbr_entity_proxy", clearEntityProxies )
+
+-- Resolve each entity's engine frame at the collection boundary. Bounds are
+-- culled in the same render frame as terrain; models keep their engine pose.
+local function collectEntityCasters( view )
+	entityCount = 0
+	proxyCollection = proxyCollection + 1
+	if entityShadows:GetBool() then
+		local coords = MC.API.Coords
+		for _, ent in ents.Iterator() do
+			if IsValid( ent ) and not ent:GetNoDraw() and not ent:IsDormant()
+				and ( casterClasses[ent:GetClass()] or ent:IsPlayer() or ent:IsNPC() or ent:IsNextBot() or ent:IsVehicle() )
+				and ( not ent:IsPlayer() or ent:Alive() )
+				and ent:GetColor().a == 255 then
+				local model = ent:GetModel()
+				if model and string.sub( model, -4 ) == ".mdl" then
+					local minimum, maximum = coords.EntityWorldAABB( ent )
+					requireValue( minimum and maximum, "render_pbr_entity_bounds", "entity shadow bounds are unavailable" )
+					minimum, maximum = coords.WorldToRender( minimum ), coords.WorldToRender( maximum )
+					local bounds = {
+						x = ( minimum.x + maximum.x ) * 0.5, y = ( minimum.y + maximum.y ) * 0.5,
+						z = ( minimum.z + maximum.z ) * 0.5, hx = ( maximum.x - minimum.x ) * 0.5,
+						hy = ( maximum.y - minimum.y ) * 0.5, hz = ( maximum.z - minimum.z ) * 0.5,
+					}
+					if M.Intersects( bounds, 0, 0, 0, view ) then
+						local worldOrigin = coords.EngineToWorld( vector_origin, ent )
+						local offset = coords.WorldToRender( worldOrigin )
+						entityCount = entityCount + 1
+						local record = entityCasters[entityCount] or {}
+						record.entity, record.bounds = ent, bounds
+						record.x, record.y, record.z = offset.x, offset.y, offset.z
+						if proxyClasses[ent:GetClass()] then record.caster = prepareEntityProxy( ent, model )
+						else record.caster = ent end
+						entityCasters[entityCount] = record
+					end
+				end
+			end
+		end
+	end
+	for ent, record in pairs( entityProxies ) do
+		if record.collection ~= proxyCollection then removeEntityProxy( ent, record ) end
+	end
+	for i = #entityCasters, entityCount + 1, -1 do entityCasters[i] = nil end
+	S.stats.entityCasters = entityCount
+end
 
 -- Any scene change invalidates the complete atlas. Notifications received
 -- during a render remain dirty for the next update.
@@ -121,6 +258,8 @@ local function ensureTarget( size )
 			and render.OverrideDepthEnable and render.EnableClipping and render.GetToneMappingScaleLinear
 			and render.SetToneMappingScaleLinear and cam.Start and cam.End and cam.PushModelMatrix and cam.PopModelMatrix
 			and matrix.SetField and MC.DrawPBRShadowCasters and M and M.Configure and M.Same and M.CoversCamera and M.WriteAngles and math.atan2
+			and render.MaterialOverride and ents.Iterator and MC.API.Coords.EntityWorldAABB
+			and MC.API.Coords.EngineToWorld and MC.API.Coords.WorldToRender
 			and MATERIAL_RT_DEPTH_SEPARATE ~= nil and RT_SIZE_LITERAL ~= nil and IMAGE_FORMAT_RGBA8888 ~= nil
 			and BLEND_ONE ~= nil and BLEND_ZERO ~= nil and BLENDFUNC_ADD ~= nil,
 			"render_pbr_shadow_api", "PBR shadows require orthographic views, a separate depth buffer and exact RGBA8 writes" )
@@ -312,12 +451,74 @@ function S.CasterMaterial( surface, stage )
 	return bindDepth( record )
 end
 
+local function entityCasterMaterial()
+	local key = "swskin/" .. S.program.vertex .. "/" .. S.program.pixel
+	local record = entityMaterials[key]
+	if not record then
+		requireValue( S.materialCount < 2048, "render_pbr_shadow_material_budget", "2048 immutable shadow materials reached" )
+		-- The terrain vertex shader has no hardware bone blending. Ask StudioRender
+		-- for software-skinned world positions, with an identity model matrix, so
+		-- the existing projection and linear-depth encoder consume the actual pose.
+		-- This first pass casts opaque model silhouettes; it never rewrites the
+		-- entity's materials, RenderOverride, render origin or bone matrices.
+		local material = CreateMaterial( "mc_l2_pbr_entity_depth2_" .. ( S.materialCount + 1 ), "screenspace_general_8tex", {
+			["$vertexshader"] = S.program.vertex, ["$pixshader"] = S.program.pixel,
+			["$basetexture"] = "vgui/white", ["$texture1"] = "vgui/white",
+			["$model"] = 1, ["$softwareskin"] = 1, ["$vertextransform"] = 1, ["$nocull"] = 1,
+			["$depthtest"] = 1, ["$writedepth"] = 0, ["$ignorez"] = 0,
+			["$linearread_basetexture"] = 1, ["$linearread_texture1"] = 1, ["$linearwrite"] = 1,
+			["$c1_w"] = 0, ["$c2_x"] = 0,
+		} )
+		requireValue( material and not material:IsError(), "render_pbr_entity_shadow_material", "could not create Source model depth material" )
+		record = { material = material }
+		entityMaterials[key], S.materialCount = record, S.materialCount + 1
+	end
+	return bindDepth( record ).material
+end
+
+local function drawEntityCasters( view, setup, probeMaterial, probe )
+	if entityCount == 0 then return end
+	local material = probeMaterial or entityCasterMaterial()
+	entitySetup.ortho.left, entitySetup.ortho.right = setup.ortho.left, setup.ortho.right
+	entitySetup.ortho.top, entitySetup.ortho.bottom = setup.ortho.top, setup.ortho.bottom
+	entitySetup.znear, entitySetup.zfar = setup.znear, setup.zfar
+	entitySetup.x, entitySetup.y, entitySetup.w, entitySetup.h = setup.x, setup.y, setup.w, setup.h
+	entityOverrideActive = true
+	render.MaterialOverride( material )
+	for i = 1, entityCount do
+		local record = entityCasters[i]
+		local ent = record.entity
+		if IsValid( ent ) and M.Intersects( record.bounds, 0, 0, 0, view ) then
+			-- Translate the light camera into this entity's engine frame rather
+			-- than relocating the model (which would invalidate its cached pose).
+			local x, y, z = view.x - record.x, view.y - record.y, view.z - record.z
+			if probe and probe.renderFrame then x, y, z = view.x, view.y, view.z end
+			entitySetup.origin.x, entitySetup.origin.y, entitySetup.origin.z = x, y, z
+			if not probeMaterial then
+				material:SetFloat( "$c1_x", x )
+				material:SetFloat( "$c1_y", y )
+				material:SetFloat( "$c1_z", z )
+				S.stats.materialWrites = S.stats.materialWrites + 3
+			end
+			cam.Start( entitySetup ) entityCamActive = true
+			if probe and probe.draw then probe.draw( record )
+			elseif probe and probe.source then ent:DrawModel()
+			elseif probeMaterial then ent:DrawModel()
+			else record.caster:DrawModel() end
+			cam.End() entityCamActive = false
+			S.stats.entityDraws, S.stats.draws = S.stats.entityDraws + 1, S.stats.draws + 1
+		end
+	end
+	render.MaterialOverride() entityOverrideActive = false
+end
+
 local function renderAtlas( pending, water, waterOnly, groups, version, chunks )
 	S.renderState = pending
 	local target = ensureTarget( pending.resolution )
 	pending.target = target
 	pending.skyBoundary = S.skyBoundary == true and settings.skyBoundary
 	if not waterOnly then
+		collectEntityCasters( pending.views[2] )
 		pending.hasSky, pending.skyTarget = false, nil
 		pending.skyCascades = pending.skyCascades or {}
 		for i = 1, 2 do
@@ -392,6 +593,7 @@ local function renderAtlas( pending, water, waterOnly, groups, version, chunks )
 			S.tileToken = S.tileToken + 1
 			cam.Start( setups[i] ) startedCam = true
 			MC.DrawPBRShadowCasters( groups, version, chunks, pending.views[i], S )
+			drawEntityCasters( pending.views[i], setups[i] )
 			cam.End() startedCam = false
 		end
 		if pending.skyBoundary and pending.hasSky then
@@ -405,6 +607,7 @@ local function renderAtlas( pending, water, waterOnly, groups, version, chunks )
 					setups[i].y = pending.resolution * 3
 					cam.Start( setups[i] ) startedCam = true
 					MC.DrawPBRShadowCasters( groups, version, chunks, pending.views[i], S )
+					drawEntityCasters( pending.views[i], setups[i] )
 					cam.End() startedCam = false
 					S.stats.interiorCascades = S.stats.interiorCascades + 1
 				end
@@ -438,6 +641,8 @@ end
 local function cleanup()
 	cleanupError = nil
 	S.waterPass, S.skyPass, S.skyClip, S.renderState = false, false, false, nil
+	if entityOverrideActive then restore( render.MaterialOverride ) entityOverrideActive = false end
+	if entityCamActive then restore( cam.End ) entityCamActive = false end
 	if scissorActive then restore( render.SetScissorRect, 0, 0, 0, 0, false ) scissorActive = false end
 	if S.modelPushed then restore( cam.PopModelMatrix ) S.modelPushed = false end
 	if startedCam then restore( cam.End ) startedCam = false end
@@ -498,6 +703,7 @@ local function drawAtlas( state, water, waterOnly, groups, version, chunks, now 
 	stats.skyDraws, stats.skyCopies, stats.interiorDraws, stats.interiorCascades = 0, 0, 0, 0
 	stats.testedChunks, stats.testedSections, stats.culledChunks, stats.culledSections = 0, 0, 0, 0
 	stats.testedRegions, stats.culledRegions, stats.regionChunks = 0, 0, 0
+	if not waterOnly then stats.entityDraws = 0 end
 	S.rendering = true
 	local ok, err = pcall( renderAtlas, state, water, waterOnly, groups, version, chunks )
 	local restoreError = cleanup()
@@ -515,6 +721,7 @@ local function drawAtlas( state, water, waterOnly, groups, version, chunks, now 
 		return false
 	end
 	state.revision = S.renderRevision
+	if not waterOnly then state.entityFrame = FrameNumber() end
 	state.water, state.waterFrame, state.waterWaves = water, FrameNumber(), waterWaves:GetFloat()
 	if waterOnly or water then stats.waterUpdates = stats.waterUpdates + 1 end
 	if waterOnly then stats.waterCPU = ( SysTime() - now ) * 1000 end
@@ -581,9 +788,12 @@ function S.Update( x, y, z, renderView )
 	water = waterEnabled:GetBool() and needsInterface and water and S.waterMaterials[water] and water or nil
 	pending.frameX, pending.frameY, pending.frameZ = frameX, frameY, frameZ
 	local geometry, visibility = MC.ChunkDrawListVersion(), MC.StreamVisibilityVersion or 0
+	-- Model movement and animation do not bump terrain's geometry version.
+	-- Refresh poses at the configured shadow cadence, even with a frozen sun.
+	local entityRefresh = entityShadows:GetBool() and current.entityFrame ~= FrameNumber()
 	if S.valid and not S.fullDirty and not coverageMiss and current.version == version
 		and current.geometry == geometry and current.visibility == visibility
-		and M.Same( current, pending ) then
+		and not entityRefresh and M.Same( current, pending ) then
 		if not updateWater( water ) then return false end
 		if not ensurePublished( x, y, z, renderView ) then return false end
 		S.stats.cached, S.stats.status = S.stats.cached + 1, "cached"
@@ -642,15 +852,189 @@ end
 -- refresh too: nested views could overwrite its result before terrain draws.
 hook.Remove( "PreDrawOpaqueRenderables", "mc_l2_pbr_shadows" )
 
+-- Explicit, one-shot GPU diagnostic. It never redraws the published atlas or
+-- changes a setting. ReadPixels are confined to a private 256-square target.
+local entityProbeQueued = false
+local entityProbeIndex
+concommand.Add( "mc_pbr_shadow_entity_probe", function( _, _, args )
+	entityProbeIndex = tonumber( args[1] )
+	entityProbeQueued = true
+	print( "[MC entity shadow probe] v5 queued; comparing posed proxies with direct physics-model depth" )
+end )
+hook.Add( "PostRender", "mc_l2_pbr_entity_shadow_probe", function()
+	if not entityProbeQueued or S.rendering then return end
+	entityProbeQueued = false
+	if not S.valid or not S.current.views then
+		print( "[MC entity shadow probe] no valid shadow map; keep PBR shadows enabled and try again" )
+		return
+	end
+	local savedStats = {}
+	for key, value in pairs( S.stats ) do savedStats[key] = value end
+	local results, size, readback, softwareSkin = {}, 256, nil, false
+	local black = Color( 0, 0, 0 )
+	local function readPixels()
+		-- CapturePixels requires a 2D context, independently of the model camera.
+		cam.Start2D() startedCam = true
+		render.CapturePixels()
+		local count, low, high = 0, 1, 0
+		local minX, minY, maxX, maxY = size, size, -1, -1
+		for y = 0, size - 1 do
+			for x = 0, size - 1 do
+				local r, g, b = render.ReadPixel( x, y )
+				if r ~= 255 or g ~= 255 or b ~= 255 then
+					count = count + 1
+					minX, minY = math.min( minX, x ), math.min( minY, y )
+					maxX, maxY = math.max( maxX, x ), math.max( maxY, y )
+					local depth = ( r + g * 256 ) / 65535
+					low, high = math.min( low, depth ), math.max( high, depth )
+				end
+			end
+		end
+		cam.End2D() startedCam = false
+		return { pixels = count, low = low, high = high, bounds = { minX, minY, maxX, maxY } }
+	end
+	local function drawBounds( record )
+		local bounds = record.bounds
+		render.SetColorMaterial()
+		render.DrawBox( Vector( bounds.x - record.x, bounds.y - record.y, bounds.z - record.z ),
+			angle_zero, Vector( -bounds.hx, -bounds.hy, -bounds.hz ), Vector( bounds.hx, bounds.hy, bounds.hz ), black )
+	end
+	local function sample( view, material, mode )
+		local setup = { type = "3D", origin = Vector( view.x, view.y, view.z ), angles = angles,
+			ortho = { left = -view.radius, right = view.radius, top = -view.radius, bottom = view.radius },
+			znear = view.znear, zfar = view.zfar, x = 0, y = 0, w = size, h = size,
+			drawviewmodel = false, drawviewer = true }
+		render.Clear( 255, 255, 255, 255, true, true )
+		cam.Start( setup ) startedCam = true
+		local before = S.stats.entityDraws
+		if mode == "control" then
+			-- A known primitive in the middle of the light volume bypasses all
+			-- entity hooks, pose caches and world-adapter coordinate conversions.
+			local half = view.radius * 0.125
+			render.SetColorMaterial()
+			render.DrawBox( Vector( view.x + view.fx * view.zfar * 0.5,
+				view.y + view.fy * view.zfar * 0.5, view.z + view.fz * view.zfar * 0.5 ),
+				angle_zero, Vector( -half, -half, -half ), Vector( half, half, half ), black )
+		else
+			local probe
+			if mode == "bounds" then probe = { draw = drawBounds }
+			elseif mode == "source" then probe = { source = true }
+			elseif mode == "renderFrame" then probe = { renderFrame = true } end
+			drawEntityCasters( view, setup, material, probe )
+		end
+		cam.End() startedCam = false
+		local result = readPixels()
+		result.draws = S.stats.entityDraws - before
+		return result
+	end
+	local function probe()
+		requireValue( render.CapturePixels and render.ReadPixel and render.DrawBox and render.SetColorMaterial,
+			"render_pbr_entity_probe_api", "entity probe requires pixel readback and reference geometry" )
+		collectEntityCasters( S.current.views[2] )
+		if entityProbeIndex then
+			local count = 0
+			for i = 1, entityCount do
+				if entityCasters[i].entity:EntIndex() == entityProbeIndex then
+					count = count + 1
+					entityCasters[count] = entityCasters[i]
+				end
+			end
+			for i = entityCount, count + 1, -1 do entityCasters[i] = nil end
+			entityCount = count
+		end
+		if not S.entityProbeTarget then
+			S.entityProbeTarget = GetRenderTargetEx( "mc_l2_pbr_entity_probe1", size, size, RT_SIZE_LITERAL,
+				MATERIAL_RT_DEPTH_SEPARATE, bit.bor( 1, 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA8888 )
+		end
+		requireValue( S.entityProbeTarget and not S.entityProbeTarget:IsError(), "render_pbr_entity_probe_target", "could not create private entity probe target" )
+		if not S.entityProbeMaterial or S.entityProbeMaterialVersion ~= 2 then
+			-- StudioRender overwrites $color with each entity's modulation. $color2
+			-- survives that write, keeping the reference black against a white clear.
+			S.entityProbeMaterial = CreateMaterial( "mc_l2_pbr_entity_probe_stock2", "UnlitGeneric", {
+				["$basetexture"] = "vgui/white", ["$model"] = 1,
+				["$color2"] = "[0 0 0]", ["$nocull"] = 1, ["$nofog"] = 1, ["$linearwrite"] = 1,
+			} )
+			S.entityProbeMaterialVersion = 2
+		end
+		requireValue( S.entityProbeMaterial and not S.entityProbeMaterial:IsError(), "render_pbr_entity_probe_material", "could not create stock model reference material" )
+		S.renderState = { views = S.current.views, resolution = size }
+		S.renderRevision = S.renderRevision + 1
+		S.skyPass, S.skyClip, S.waterPass = false, false, false
+		local depthMaterial = entityCasterMaterial()
+		softwareSkin = bit.band( depthMaterial:GetInt( "$flags" ), bit.lshift( 1, 23 ) ) ~= 0
+		render.PushRenderTarget( S.entityProbeTarget ) pushedRT = true
+		oldClip = render.EnableClipping( false ) clipActive = true
+		oldTone = render.GetToneMappingScaleLinear() toneActive = true
+		render.SetToneMappingScaleLinear( unitTone )
+		stateActive = true
+		render.SetStencilEnable( false )
+		render.OverrideBlend( true, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD )
+		render.OverrideAlphaWriteEnable( true, true )
+		render.OverrideColorWriteEnable( true, true )
+		render.OverrideDepthEnable( true, true )
+		M.WriteAngles( S.current.views[1], angles )
+		render.Clear( 17, 83, 149, 255, true, true )
+		cam.Start2D() startedCam = true
+		render.CapturePixels()
+		local r, g, b = render.ReadPixel( size * 0.5, size * 0.5 )
+		readback = string.format( "%d,%d,%d", r, g, b )
+		cam.End2D() startedCam = false
+		for i = 1, 2 do
+			local view = S.current.views[i]
+			results[i] = { control = sample( view, S.entityProbeMaterial, "control" ),
+				bounds = sample( view, S.entityProbeMaterial, "bounds" ),
+				depth = sample( view ), source = sample( view, nil, "source" ), stock = sample( view, S.entityProbeMaterial ),
+				renderFrame = sample( view, S.entityProbeMaterial, "renderFrame" ) }
+		end
+	end
+	S.rendering = true
+	local ok, err = pcall( probe )
+	local restoreError = cleanup()
+	S.rendering = false
+	for key, value in pairs( savedStats ) do S.stats[key] = value end
+	if not ok or restoreError then
+		local message = type( err ) == "table" and err.message or tostring( err )
+		if restoreError then message = message .. "; cleanup: " .. restoreError end
+		MC.Fault( "render_pbr_entity_probe", "%s", message )
+		return
+	end
+	local proxyCount = 0
+	for _ in pairs( entityProxies ) do proxyCount = proxyCount + 1 end
+	S.entityProbeResult = { cascades = results, casters = entityCount, proxies = proxyCount,
+		readback = readback, softwareSkin = softwareSkin, interval = settings.interval, frame = FrameNumber() }
+	print( string.format( "[MC entity shadow probe] v5 casters=%d proxies=%d size=%d readback=%s expected=17,83,149 softwareSkin=%s interval=%.4f strength=%.3f bias=%.4f vertex=%s pixel=%s",
+		entityCount, proxyCount, size, readback, tostring( softwareSkin ), settings.interval,
+		settings.strength, settings.bias, S.program.vertex, S.program.pixel ) )
+	for i = 1, 2 do
+		local result = results[i]
+		print( string.format( "[MC entity shadow probe] %s sourcePixels=%d proxyPixels=%d",
+			i == 1 and "near" or "far", result.source.pixels, result.depth.pixels ) )
+		print( string.format( "[MC entity shadow probe] %s customPixels=%d stockPixels=%d depth=%.6f..%.6f customBounds=%s stockBounds=%s",
+			i == 1 and "near" or "far", result.depth.pixels, result.stock.pixels,
+			result.depth.low, result.depth.high, table.concat( result.depth.bounds, "," ), table.concat( result.stock.bounds, "," ) ) )
+		print( string.format( "[MC entity shadow probe] %s controlPixels=%d boundsPixels=%d renderFramePixels=%d modelCalls=%d",
+			i == 1 and "near" or "far", result.control.pixels, result.bounds.pixels, result.renderFrame.pixels, result.stock.draws ) )
+	end
+	for i = 1, math.min( entityCount, 8 ) do
+		local record = entityCasters[i]
+		local ent, bounds = record.entity, record.bounds
+		print( string.format( "[MC entity shadow probe] entity=%d class=%s pos=%s renderOrigin=%s offset=%.1f,%.1f,%.1f boundsCenter=%.1f,%.1f,%.1f",
+			ent:EntIndex(), ent:GetClass(), tostring( ent:GetPos() ), tostring( ent:GetRenderOrigin() ),
+			record.x, record.y, record.z, bounds.x, bounds.y, bounds.z ) )
+	end
+end )
+
 concommand.Add( "mc_pbr_shadow_stats", function()
 	local stats = S.stats
-	print( string.format( "[MC PBR shadow] mode=full %s updates=%d near=%d far=%d cached=%d throttled=%d failures=%d size=%dx%d range=%.1f blocks updateCPU=%.3fms GPU=unmeasured",
+	print( string.format( "[MC PBR shadow] mode=full %s updates=%d near=%d far=%d cached=%d throttled=%d failures=%d size=%dx%d range=%.1f blocks updateCPU=%.3fms GPU=unmeasured interval=%.4fs",
 		stats.status, stats.updates, stats.nearUpdates, stats.farUpdates, stats.cached, stats.throttled, stats.failures,
-		settings.size * 2, settings.size * ( S.skyBoundary and 4 or 2 ), settings.range, stats.cpuMS ) )
+		settings.size * 2, settings.size * ( S.skyBoundary and 4 or 2 ), settings.range, stats.cpuMS, settings.interval ) )
 	print( string.format( "[MC PBR shadow] skyBoundary=%s skyDraws=%d skyCopies=%d interiorDraws=%d interiorCascades=%d (single entrance per solar ray)",
 		tostring( S.skyBoundary == true and settings.skyBoundary ), stats.skyDraws, stats.skyCopies, stats.interiorDraws, stats.interiorCascades ) )
 	print( string.format( "[MC PBR shadow] waterUpdates=%d waterCPU=%.3fms (water row only; opaque interval unchanged)",
 		stats.waterUpdates, stats.waterCPU ) )
+	print( string.format( "[MC PBR shadow] entityShadows=%s entityCasters=%d entityDraws=%d (opaque model silhouettes)",
+		tostring( entityShadows:GetBool() ), stats.entityCasters, stats.entityDraws ) )
 	print( string.format( "[MC PBR shadow] lastDraw draws=%d vertices=%d chunksTested=%d chunksCulled=%d sectionsTested=%d sectionsCulled=%d duplicates=%d materials=%d constantWrites=%d",
 		stats.draws, stats.vertices, stats.testedChunks, stats.culledChunks, stats.testedSections, stats.culledSections,
 		stats.duplicates, S.materialCount, stats.materialWrites ) )
