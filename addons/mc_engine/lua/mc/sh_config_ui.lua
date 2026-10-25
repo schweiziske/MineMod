@@ -396,8 +396,8 @@ MC.ConfigConVars = {
 				"How strongly envmap and Phong reflections remain visible in MC lighting.",
 				"MC 光照下保留环境反射与 Phong 高光的强度。" ),
 			item( "mc_light_entity_interval", "Sample interval", "采样间隔", "number",
-				"Seconds between expensive voxel-light samples for each entity; 0 updates every draw.",
-				"每个实体两次高开销体素光照采样之间的秒数；0 表示每次绘制都更新。", { unit = "s" } ),
+				"Minimum seconds between voxel-light samples per entity, including movement. At most 4 entities update per frame; 0 requests every frame.",
+				"每个实体两次体素采光的最短间隔，移动也受限；每帧最多更新 4 个实体，0 表示每帧申请更新。", { unit = "s" } ),
 		} ),
 
 		category( "creative_general", "creative", "Held block behaviour", "手持方块行为",
