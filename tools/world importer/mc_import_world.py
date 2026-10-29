@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import functools
 import hashlib
 import json
 import lzma
@@ -30,6 +31,7 @@ import re
 import shutil
 import struct
 import sys
+import tempfile
 import time
 import zlib
 from typing import Any
@@ -1389,6 +1391,91 @@ def write_gmod_save_meta(
     return meta_path
 
 
+def atomic_import_output(*, metadata: bool = True):
+    """Keep old shards readable until one atomic manifest replacement commits."""
+    def decorate(writer):
+        @functools.wraps(writer)
+        def write(output_path: pathlib.Path, *args, **kwargs):
+            output_path = pathlib.Path(output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            stage = pathlib.Path(tempfile.mkdtemp(prefix="mc_import_", dir=output_path.parent))
+            committed = False
+            publication_started = False
+            recovery_failed = False
+            rollback = stage / "_rollback"
+            old_main = rollback / "output.json"
+            old_meta = rollback / "metadata.json"
+            try:
+                written = writer(stage / output_path.name, *args, **kwargs)
+                main = written[0]
+                side_files = written[2 if metadata else 1:]
+                if side_files:
+                    manifest = json.loads(main.read_text(encoding="utf-8"))
+                    def staged_reference(value):
+                        relative = pathlib.PurePosixPath(value)
+                        if relative.is_absolute() or ".." in relative.parts:
+                            raise ValueError(f"invalid generated part path: {value}")
+                        if not (stage / relative).is_file():
+                            raise ValueError(f"missing generated part: {value}")
+                        return f"{stage.name}/{value}"
+                    for index, part in enumerate(manifest["parts"]):
+                        if isinstance(part, str):
+                            manifest["parts"][index] = staged_reference(part)
+                        else:
+                            for key in ("path", "fastPath"):
+                                if key in part:
+                                    part[key] = staged_reference(part[key])
+                    write_gmod_json(main, manifest)
+                rollback.mkdir()
+                if output_path.exists():
+                    shutil.copyfile(output_path, old_main)
+                if metadata:
+                    meta_source = written[1]
+                    meta_target = output_path.parent / meta_source.name
+                    if meta_target == output_path:
+                        raise ValueError("save data and metadata must have different paths")
+                    meta = json.loads(meta_source.read_text(encoding="utf-8"))
+                    meta["path"] = gmod_data_relative_path(output_path)
+                    write_gmod_json(meta_source, meta)
+                    if meta_target.exists():
+                        shutil.copyfile(meta_target, old_meta)
+                # Publish data first: a hard cancellation can leave stale summary
+                # metadata, but never a manifest referring to unfinished shards.
+                publication_started = True
+                os.replace(main, output_path)
+                if metadata:
+                    os.replace(meta_source, meta_target)
+                committed = True
+                return [output_path] + ([meta_target] if metadata else []) + side_files
+            except BaseException:
+                if publication_started and not committed:
+                    try:
+                        # Test the moved source, including interruption immediately
+                        # after os.replace succeeds but before a flag could be set.
+                        if not main.exists():
+                            if old_main.exists():
+                                os.replace(old_main, output_path)
+                            else:
+                                output_path.unlink()
+                        if metadata and not meta_source.exists():
+                            if old_meta.exists():
+                                os.replace(old_meta, meta_target)
+                            else:
+                                meta_target.unlink()
+                    except BaseException:
+                        recovery_failed = True
+                        raise
+                raise
+            finally:
+                # Published generations are retained: running servers may still
+                # lazily read the previous manifest's shards.
+                if not recovery_failed and (not committed or not side_files):
+                    shutil.rmtree(stage)
+        return write
+    return decorate
+
+
+@atomic_import_output()
 def write_gmod_save_files(save_path: pathlib.Path, save_data: dict[str, Any]) -> list[pathlib.Path]:
     save_path.parent.mkdir(parents=True, exist_ok=True)
     write_gmod_json(save_path, save_data)
@@ -1409,6 +1496,7 @@ def write_gmod_save_files(save_path: pathlib.Path, save_data: dict[str, Any]) ->
     return [save_path, meta_path]
 
 
+@atomic_import_output()
 def write_gmod_save_chunked(
     save_path: pathlib.Path,
     save_fields: dict[str, Any],
@@ -1629,6 +1717,7 @@ def encode_mcb4_fragment(record: Any, palette: list[Any], chunk_height: int = CH
     return bytes(out)
 
 
+@atomic_import_output()
 def write_gmod_save_streaming(
     save_path: pathlib.Path,
     save_fields: dict[str, Any],
@@ -1700,30 +1789,31 @@ def write_gmod_save_streaming(
             evicted["handle"] = None
         return handle
 
-    for chunk in chunks:
-        if not isinstance(chunk, list) or len(chunk) < 4:
-            continue
-        cx, cy, cz = int(chunk[0]), int(chunk[1]), int(chunk[2])
-        region = region_coords(cx, cy)
-        state = region_state(region)
-        fragment = encode_mcb4_fragment(chunk, palette, chunk_height)
-        # `region` is resolved to a part index once every region is known.
-        entry: dict[str, Any] = {"region": region}
-        if fragment is not None:
-            region_handle(region, state).write(fragment)
-            entry["fastOffset"] = state["fastBytes"]
-            entry["fastBytes"] = len(fragment)
-            state["fastBytes"] += len(fragment)
-        else:
-            state["sideChunks"].append(chunk)
-            entry["index"] = len(state["sideChunks"])
-            stats["fallbackChunks"] = int(stats.get("fallbackChunks") or 0) + 1
-        chunk_index[chunk_key_text(cx, cy, cz)] = entry
-
-    for state in regions.values():
-        if state["handle"] is not None:
-            state["handle"].close()
-            state["handle"] = None
+    try:
+        for chunk in chunks:
+            if not isinstance(chunk, list) or len(chunk) < 4:
+                continue
+            cx, cy, cz = int(chunk[0]), int(chunk[1]), int(chunk[2])
+            region = region_coords(cx, cy)
+            state = region_state(region)
+            fragment = encode_mcb4_fragment(chunk, palette, chunk_height)
+            # `region` is resolved to a part index once every region is known.
+            entry: dict[str, Any] = {"region": region}
+            if fragment is not None:
+                region_handle(region, state).write(fragment)
+                entry["fastOffset"] = state["fastBytes"]
+                entry["fastBytes"] = len(fragment)
+                state["fastBytes"] += len(fragment)
+            else:
+                state["sideChunks"].append(chunk)
+                entry["index"] = len(state["sideChunks"])
+                stats["fallbackChunks"] = int(stats.get("fallbackChunks") or 0) + 1
+            chunk_index[chunk_key_text(cx, cy, cz)] = entry
+    finally:
+        for state in regions.values():
+            if state["handle"] is not None:
+                state["handle"].close()
+                state["handle"] = None
 
     part_numbers: dict[tuple[int, int], int] = {}
     for region in sorted(regions):
@@ -1800,6 +1890,7 @@ def write_gmod_save_streaming(
     return [save_path, meta_path] + written_parts
 
 
+@atomic_import_output()
 def write_gmod_save_stream(
     save_path: pathlib.Path,
     save_fields: dict[str, Any],
@@ -2109,6 +2200,7 @@ def stream_world_to_gmod_save(
     return stats, written
 
 
+@atomic_import_output(metadata=False)
 def write_output(out_path: pathlib.Path, data: dict[str, Any], split_chunks: bool) -> list[pathlib.Path]:
     if not split_chunks:
         out_path.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")

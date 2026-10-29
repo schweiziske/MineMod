@@ -15,6 +15,7 @@ local API = MC.API or {}
 local World = API.World
 local Blocks = API.Blocks
 local CHEST_SLOTS = 27
+local chestWorldEpoch = 0
 SV.ChestOpeners = SV.ChestOpeners or {}
 SV.ChestOpenPositions = SV.ChestOpenPositions or {}
 util.AddNetworkString( "mc_chest_open_state" )
@@ -208,6 +209,47 @@ local function encodeChestRecord( record, storage )
 	record.revision = ( record.revision or 0 ) + 1
 end
 
+local function samePosition( left, right )
+	return left and right and left.bx == right.bx and left.by == right.by and left.bz == right.bz
+end
+
+local function refreshChestMenus( records, storages, sourceMenu )
+	for _, playerRecord in pairs( SV.PlayerInventories or {} ) do
+		local session = playerRecord.session
+		local menu = session and session.kind == "chest" and session.container or nil
+		if menu and menu ~= sourceMenu then
+			local changed = {}
+			for menuIndex, menuEntry in ipairs( menu.chestRecords ) do
+				for sourceIndex, sourceEntry in ipairs( records ) do
+					if samePosition( menuEntry.position, sourceEntry.position ) then
+						local position = sourceEntry.position
+						local persisted = mutableBlockEntity( position.bx, position.by, position.bz )
+						if not persisted then
+							MC.Fault( "chest_menu_record_missing", "missing committed chest at %d,%d,%d",
+								position.bx, position.by, position.bz )
+						else
+							menuEntry.record = persisted
+						end
+						local target = menu.chestStorages[menuIndex]
+						local source = storages[sourceIndex]
+						for slot = 1, CHEST_SLOTS do
+							if not MC.ItemStacksEqual( target[slot], source[slot] ) then
+								target[slot] = MC.CopyItemStack( source[slot] )
+								changed[#changed + 1] = ( menuIndex - 1 ) * CHEST_SLOTS + slot - 1
+							end
+						end
+						break
+					end
+				end
+			end
+			if #changed > 0 then
+				menu.revision = math.max( menu.revision, playerRecord.container.revision ) + 1
+				SV.PublishActiveInventoryCommit( playerRecord, { changedSlots = changed, revision = menu.revision }, {} )
+			end
+		end
+	end
+end
+
 local function playerSlotDefinitions( storage, offset )
 	local definitions = {}
 	for index = 0, 35 do
@@ -278,6 +320,7 @@ local function buildMenu( ply, record, positions )
 		if chestChanged then
 			for index, entry in ipairs( chestRecords ) do encodeChestRecord( entry.record, storages[index] ) end
 			markChestDirty( chestRecords )
+			refreshChestMenus( chestRecords, storages, committed )
 		end
 		if playerChanged then
 			record.container.revision = record.container.revision + 1
@@ -305,10 +348,6 @@ local function chestMenuStillValid( ply, positions )
 end
 
 function SV.GetChestMenuPositions( bx, by, bz ) return chestPositions( bx, by, bz ) end
-
-local function samePosition( left, right )
-	return left and right and left.bx == right.bx and left.by == right.by and left.bz == right.bz
-end
 
 -- Controlled logistics adapter. Chests do not otherwise have a shared runtime,
 -- so this snapshots authoritative records and the commit fans the result back
@@ -343,36 +382,7 @@ function SV.LogisticsCommitChestContainer( container, options )
 		if not options.persisted then encodeChestRecord( entry.record, storage ) end
 	end
 	if not options.persisted then markChestDirty( container.records ) end
-
-	for _, playerRecord in pairs( SV.PlayerInventories or {} ) do
-		local session = playerRecord.session
-		local menu = session and session.kind == "chest" and session.container or nil
-		if menu and type( menu.chestRecords ) == "table" and type( menu.chestStorages ) == "table" then
-			local changed = {}
-			for menuIndex, menuEntry in ipairs( menu.chestRecords ) do
-				for sourceIndex, sourceEntry in ipairs( container.records ) do
-					if samePosition( menuEntry.position, sourceEntry.position ) then
-						local position = sourceEntry.position
-						local persisted = position and mutableBlockEntity( position.bx, position.by, position.bz ) or nil
-						if persisted then menuEntry.record = persisted end
-						local target = menu.chestStorages[menuIndex]
-						local source = container.storages[sourceIndex]
-						for slot = 1, CHEST_SLOTS do
-							if not MC.ItemStacksEqual( target[slot], source[slot] ) then
-								target[slot] = MC.CopyItemStack( source[slot] )
-								changed[#changed + 1] = ( menuIndex - 1 ) * CHEST_SLOTS + slot - 1
-							end
-						end
-						break
-					end
-				end
-			end
-			if #changed > 0 and SV.PublishActiveInventoryCommit then
-				menu.revision = math.max( tonumber( menu.revision ) or 0, tonumber( playerRecord.container.revision ) or 0 ) + 1
-				SV.PublishActiveInventoryCommit( playerRecord, { changedSlots = changed, revision = menu.revision }, {} )
-			end
-		end
-	end
+	refreshChestMenus( container.records, container.storages )
 	return true
 end
 
@@ -388,6 +398,7 @@ function SV.OpenChest( ply, bx, by, bz )
 	menu.cursor = MC.CopyItemStack( record.carried )
 	record.carried = nil
 	local now = CurTime()
+	local epoch = chestWorldEpoch
 	record.session = {
 		token = sessionToken( ply, record ),
 		kind = "chest",
@@ -396,14 +407,14 @@ function SV.OpenChest( ply, bx, by, bz )
 		openedAt = now,
 		lastActionId = nil,
 		chestRecords = menu.chestRecords,
-			positions = positions,
-			validate = function() return chestMenuStillValid( ply, positions ) end,
-			playerOffset = menu.playerOffset,
-			chestSlots = menu.chestSlots,
-			onClose = function()
-				adjustChestOpeners( positions, -1 )
-			end,
-		}
+		positions = positions,
+		validate = function() return epoch == chestWorldEpoch and chestMenuStillValid( ply, positions ) end,
+		playerOffset = menu.playerOffset,
+		chestSlots = menu.chestSlots,
+		onClose = function()
+			adjustChestOpeners( positions, -1 )
+		end,
+	}
 	adjustChestOpeners( positions, 1 )
 	if SV.SendActiveInventoryOpen then SV.SendActiveInventoryOpen( ply, record, "chest" ) end
 	return true
@@ -431,3 +442,17 @@ hook.Add( "MC.BlocksChanged", "mc_chest_menu_block_validity", function()
 		end
 	end
 end )
+
+local function closeWorldChestMenus()
+	chestWorldEpoch = chestWorldEpoch + 1
+	for ply, record in pairs( SV.PlayerInventories or {} ) do
+		if record.session and record.session.kind == "chest" then
+			SV.ClosePlayerInventory( ply, "world_changed" )
+		end
+	end
+	SV.ChestOpeners = {}
+	SV.ChestOpenPositions = {}
+end
+
+hook.Add( "MC.PreWorldLoad", "mc_chest_world_reset", closeWorldChestMenus )
+hook.Add( "MC.WorldCleared", "mc_chest_world_clear", closeWorldChestMenus )

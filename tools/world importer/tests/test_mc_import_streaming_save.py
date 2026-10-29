@@ -23,7 +23,7 @@ def test_streaming_writer_exports_v10_manifest(tmp_path):
         "m.write_gmod_save_streaming(out, fields, chunks, ['minecraft:stone'], stats, 128);"
         "print(out)"
     )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run([sys.executable, "-X", "utf8", "-c", script], capture_output=True, text=True, encoding="utf-8")
     assert result.returncode == 0, result.stderr
     manifest_path = pathlib.Path(result.stdout.strip())
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -37,7 +37,10 @@ def test_streaming_writer_exports_v10_manifest(tmp_path):
     assert manifest["parts"][0]["fastFormat"] == "MCB4"
     assert "path" not in manifest["parts"][0]
     assert manifest["chunkIndex"]["0:0:0"]["fastOffset"] == 0
-    assert manifest["parts"][0]["fastPath"] == "regions/r.0.0.json"
+    fast_path = pathlib.PurePosixPath(manifest["parts"][0]["fastPath"])
+    assert fast_path.parts[0].startswith("mc_import_")
+    assert fast_path.parts[1:] == ("regions", "r.0.0.json")
+    assert (manifest_path.parent / fast_path).is_file()
     assert (manifest_path.parent / "meta.json").is_file()
 
 
@@ -56,7 +59,7 @@ def run_writer(tmp_path, chunks, palette, name="regions"):
         "m.write_gmod_save_streaming(out, fields, chunks, palette, stats);"
         "print(out)"
     )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run([sys.executable, "-X", "utf8", "-c", script], capture_output=True, text=True, encoding="utf-8")
     assert result.returncode == 0, result.stderr
     manifest_path = pathlib.Path(result.stdout.strip())
     return manifest_path, json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -72,7 +75,7 @@ def test_parts_are_sharded_by_region_like_minecraft(tmp_path):
         [-1, 0, 0, "0:0"],
     ]
     manifest_path, manifest = run_writer(tmp_path, chunks, ["minecraft:stone"])
-    part_dir = manifest_path.parent / "regions"
+    part_dir = (manifest_path.parent / manifest["parts"][0]["fastPath"]).parent
 
     assert manifest["regionChunks"] == 32
     assert manifest["fastFormat"] == "MCB4"
@@ -103,7 +106,7 @@ def test_side_data_chunks_use_the_qualified_json_name(tmp_path):
         [1, 0, 0, "0:0", [], [{"localIndex": 0, "sourceType": "minecraft:sign"}]],
     ]
     manifest_path, manifest = run_writer(tmp_path, chunks, ["minecraft:stone"], "sides")
-    part_dir = manifest_path.parent / "regions"
+    part_dir = (manifest_path.parent / manifest["parts"][0]["fastPath"]).parent
 
     assert len(manifest["parts"]) == 1
     entry = manifest["parts"][0]
@@ -128,7 +131,7 @@ def test_evicted_region_files_are_appended_not_truncated(tmp_path):
     chunks += [[32 * i, 0, 0, "0:0"] for i in range(1, 40)]
     chunks += [[1, 0, 1, "0:0"]]
     manifest_path, manifest = run_writer(tmp_path, chunks, ["minecraft:stone"], "evict")
-    part_dir = manifest_path.parent / "regions"
+    part_dir = (manifest_path.parent / manifest["parts"][0]["fastPath"]).parent
 
     assert len(manifest["parts"]) == 40
     first = manifest["chunkIndex"]["0:0:0"]
