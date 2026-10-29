@@ -11,11 +11,17 @@ local function integer( value, low, high )
 	return type( value ) == "number" and value >= low and value <= high and value == floor( value )
 end
 
+-- Every smooth-light corner reads through here; the bounds test is inline
+-- and only a failure pays for the fault report.
 function Snapshot:Index( bx, by, bz )
 	local x, y, z = bx - self.x, by - self.y, bz - self.z
-	if not MC.Check( integer( x, 0, self.sx - 1 ) and integer( y, 0, self.sy - 1 ) and integer( z, 0, self.sz - 1 ),
-		"l2_snapshot_bounds", "sample %s,%s,%s is outside the two-cell halo", bx, by, bz ) then return nil end
-	return x + self.sx * ( y + self.sy * z )
+	local sx, sy = self.sx, self.sy
+	if x >= 0 and x < sx and y >= 0 and y < sy and z >= 0 and z < self.sz
+		and x == floor( x ) and y == floor( y ) and z == floor( z ) then
+		return x + sx * ( y + sy * z )
+	end
+	MC.Check( false, "l2_snapshot_bounds", "sample %s,%s,%s is outside the two-cell halo", bx, by, bz )
+	return nil
 end
 
 function Snapshot:Read( bx, by, bz )

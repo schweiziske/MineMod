@@ -142,6 +142,7 @@ GMOD_MODULE_OPEN()
 	fa.AddFunction("ReadL2MeshPixels", GTLUAF(mcmesh::l2bridge::ReadMeshPixels));
 	fa.AddFunction("StageL2Relight", GTLUAF(mcmesh::l2bridge::StageRelight));
 	fa.AddFunction("UploadL2Relight", GTLUAF(mcmesh::l2bridge::UploadRelight));
+	fa.AddFunction("UploadL2RelightBatch", GTLUAF(mcmesh::l2bridge::UploadRelightBatch));
 	fa.AddFunction("DrawL2Relight", GTLUAF(mcmesh::pixelbindings::Draw));
 	fa.AddFunction("FinishL2Relight", GTLUAF(mcmesh::l2bridge::FinishRelight));
 	fa.AddFunction("CancelL2Section", GTLUAF(mcmesh::l2bridge::CancelSection));

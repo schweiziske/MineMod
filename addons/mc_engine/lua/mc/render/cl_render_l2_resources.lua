@@ -667,6 +667,13 @@ function R.UploadNativeLighting( transaction, owner, module, restore )
 	requireValue( ok == true, "l2_native_pixel_upload", tostring( why ) )
 end
 
+function R.UploadNativeLightingBatch( transactions, owner, module )
+	local id = R.pixelTextures[owner.atlas:GetName()]
+	requireValue( id, "l2_pixel_texture_handle", "Native lighting requires an owned pixel texture" )
+	local ok, why = module.UploadL2RelightBatch( transactions, id )
+	requireValue( ok == true, "l2_native_pixel_upload", tostring( why ) )
+end
+
 function R.RefreshLightmap( owner )
 	owner = owner or R
 	local revision = MC.GlobalLightmapRevision

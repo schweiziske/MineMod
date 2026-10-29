@@ -90,13 +90,17 @@ local function addEntry( bx, by, bz, stateId, kind )
 	return entry
 end
 
+local function effectState( stateId )
+	return EFFECT_BLOCKS[stateName( stateId )] ~= nil
+end
+
 local function scanChunk( key, chunk )
 	removeChunkEntries( key )
 	if MC.ForEachBlockState then
+		-- Classify palette states once; ordinary terrain cells are never visited.
 		MC.ForEachBlockState( chunk, function( bx, by, bz, _, _, _, stateId )
-			local kind = EFFECT_BLOCKS[stateName( stateId )]
-			if kind then addEntry( bx, by, bz, stateId, kind ) end
-		end )
+			addEntry( bx, by, bz, stateId, EFFECT_BLOCKS[stateName( stateId )] )
+		end, effectState )
 	end
 	ScannedChunkVersions[key] = { chunk = chunk, version = chunk.collisionVersion or 0 }
 end

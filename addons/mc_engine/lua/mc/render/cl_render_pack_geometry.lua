@@ -177,13 +177,57 @@ function G.Upload( buffer, perf )
 		bounds = bounds, direction = buffer.direction, castsShadow = buffer.castsShadow, water = buffer.water }
 end
 
-function G.ApplyNativeLighting( job, resources, module )
+local function auditNativeLighting( resources, module )
+	for _, data in ipairs( resources ) do
+		local result, problem = module.ReadL2MeshPixels( data.mesh )
+		requireValue( result ~= nil, "native_pixel_audit", tostring( problem ) )
+		result.pixels.occlusion = result.occlusion
+		G.auditPixels[data] = result.pixels
+	end
+end
+
+function G.StageNativeLighting( job, resources, module )
 	for _, data in ipairs( resources ) do
 		requireValue( data.references > 0 and data.nativeRelight,
 			"native_relight_layout", "Native relight requires live retained meshes" )
 	end
 	local transaction, reason = module.StageL2Relight( job, resources )
 	requireValue( transaction ~= nil, "native_relight_result", tostring( reason ) )
+	return transaction
+end
+
+-- Every relight staged in one pump shares a single queue barrier. Native
+-- restores the whole batch before reporting an upload failure; each
+-- transaction is then released without publishing its CPU pixels.
+-- items: { transaction = userdata, resources = { ... } }
+function G.ApplyNativeLightingBatch( items, module )
+	local transactions = {}
+	for i, item in ipairs( items ) do transactions[i] = item.transaction end
+	local ok, err = pcall( R.UploadNativeLightingBatch, transactions, P.shared, module )
+	if not ok then
+		local releaseErrors = {}
+		for _, transaction in ipairs( transactions ) do
+			local released, releaseError = module.FinishL2Relight( transaction, false )
+			if released ~= true then releaseErrors[#releaseErrors + 1] = tostring( releaseError ) end
+		end
+		requireValue( #releaseErrors == 0, "native_relight_restore",
+			"atlas rollback release failed; rebuild required: " .. table.concat( releaseErrors, "; " ) )
+		error( err, 0 )
+	end
+	local results = {}
+	for i, item in ipairs( items ) do
+		local committed, problem = module.FinishL2Relight( item.transaction, true )
+		results[i] = committed == true or { code = "native_relight_commit", message = tostring( problem ) }
+		if committed == true and G.auditPixels then
+			local audited, auditError = pcall( auditNativeLighting, item.resources, module )
+			if not audited then results[i] = auditError end
+		end
+	end
+	return results
+end
+
+function G.ApplyNativeLighting( job, resources, module )
+	local transaction = G.StageNativeLighting( job, resources, module )
 	local ok, err = pcall( function()
 		R.UploadNativeLighting( transaction, P.shared, module, false )
 		-- Native has completed the texture upload before publishing CPU pixels.
@@ -197,14 +241,7 @@ function G.ApplyNativeLighting( job, resources, module )
 			"atlas rollback failed; rebuild required: " .. tostring( restoreError ) .. " " .. tostring( releaseError ) )
 		error( err, 0 )
 	end
-	if G.auditPixels then
-		for _, data in ipairs( resources ) do
-			local result, problem = module.ReadL2MeshPixels( data.mesh )
-			requireValue( result ~= nil, "native_pixel_audit", tostring( problem ) )
-			result.pixels.occlusion = result.occlusion
-			G.auditPixels[data] = result.pixels
-		end
-	end
+	if G.auditPixels then auditNativeLighting( resources, module ) end
 end
 
 -- Results are staged first. A live section is updated in one render-thread

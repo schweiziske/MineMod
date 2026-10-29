@@ -107,12 +107,14 @@ function MC.NoteChestStateChanged( bx, by, bz, oldStateId, newStateId )
 end
 
 local function refreshChunks()
-	if not EntriesDirty or not World.ForEachLoadedBlock then return end
+	if not EntriesDirty or not World.ForEachLoadedBlock or not MC.IsChestState then return end
 	releaseMeshes()
 	Entries = {}
-	World.ForEachLoadedBlock( function( bx, by, bz, stateId )
-		if MC.IsChestState and MC.IsChestState( stateId ) then addEntry( bx, by, bz ) end
-	end )
+	-- The state filter skips non-chest palettes; projection events fire on
+	-- every stream commit, unload and block-entity change.
+	World.ForEachLoadedBlock( function( bx, by, bz )
+		addEntry( bx, by, bz )
+	end, MC.IsChestState )
 	EntriesDirty = false
 end
 

@@ -212,4 +212,64 @@ void PixelTextureStore::UploadNative(l2::PixelTransaction &ioTransaction, PixelT
 	else
 		ioTransaction.draw(stage, flush);
 }
+
+void PixelTextureStore::UploadNativeBatch(const std::vector<l2::PixelTransaction *> &ioTransactions, PixelTextureId inId)
+{
+	auto &texture = Find(inId);
+	for (auto *transaction : ioTransactions)
+		transaction->validate();
+	// Classify against the published image first: once one result is staged,
+	// MatchesPublished conservatively rejects every later comparison.
+	std::vector<bool> unchanged(ioTransactions.size());
+	const auto		  compare_started = std::chrono::steady_clock::now();
+	for (size_t i = 0; i < ioTransactions.size(); ++i)
+		unchanged[i] = texture.MatchesPublished(*ioTransactions[i]);
+	mRelightCompareMS += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - compare_started).count();
+
+	auto stage = [&](const std::shared_ptr<const l2::LightPixels> &inPixels, unsigned inFirst)
+	{
+		texture.StageTransactionPixels(*inPixels, inFirst);
+	};
+	size_t drawn = 0;
+	try
+	{
+		for (size_t i = 0; i < ioTransactions.size(); ++i)
+		{
+			auto &transaction = *ioTransactions[i];
+			if (unchanged[i])
+			{
+				transaction.draw([](const std::shared_ptr<const l2::LightPixels> &, unsigned) {});
+				++mUnchangedRelights;
+				for (const auto &update : transaction.updates())
+					mUnchangedRelightTexels += update.next->occlusion.size() * 5;
+			}
+			else
+			{
+				texture.PrepareTransaction(transaction);
+				// A failed draw restores its own partial staging before throwing.
+				transaction.draw(stage);
+			}
+			++drawn;
+		}
+		Flush();
+	}
+	catch (...)
+	{
+		const auto failure = std::current_exception();
+		try
+		{
+			for (size_t i = drawn; i-- > 0;)
+			{
+				texture.PrepareTransaction(*ioTransactions[i]);
+				ioTransactions[i]->restore(stage);
+			}
+			Flush();
+		}
+		catch (const std::exception &e)
+		{
+			throw std::runtime_error(std::string("Native L2 atlas rollback failed: ") + e.what());
+		}
+		std::rethrow_exception(failure);
+	}
+}
 } // namespace mcmesh::pixelupload

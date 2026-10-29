@@ -341,18 +341,6 @@ local function setStoredLight( store, bx, by, bz, level )
 	chunkStore[li] = level > 0 and level or nil
 end
 
-local function lightOpacityAt( bx, by, bz )
-	if not chunkLoadedForCell( bx, by, bz ) then return 15 end
-	local stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0
-	return lightOpacityForState( stateId, bx, by, bz )
-end
-
-local function lightPropagationCost( bx, by, bz )
-	local opacity = lightOpacityAt( bx, by, bz )
-	if opacity >= 15 then return 16 end
-	return math.max( 1, opacity )
-end
-
 local function clearStoredLight()
 	MC.LightBlockChunks = {}
 	MC.LightSkyColumnTops = nil
@@ -568,8 +556,24 @@ local function lightQueueCount( q )
 	return q and q.tail or 0
 end
 
+-- Chunk loading is fixed while a synchronous wave runs. Each visited cell
+-- resolves its chunk key/local index once; knownness is cached per key.
+local function newLoadedCache()
+	local loaded = {}
+	return function( key )
+		local value = loaded[key]
+		if value == nil then
+			value = chunkKeyLoaded( key ) == true
+			loaded[key] = value
+		end
+		return value
+	end
+end
+
 local function runLightIncreaseQueue( q, changed )
 	local processed = 0
+	local cellToChunk, chunkKey, stores = MC.CellToChunk, MC.ChunkKey, MC.LightBlockChunks
+	local loadedKey = newLoadedCache()
 	while q.head <= q.tail do
 		local bx, by, bz, level = popLightQueue( q )
 		-- The stored-value check drops phantom re-seeds: the decrease wave
@@ -579,19 +583,33 @@ local function runLightIncreaseQueue( q, changed )
 		-- after being queued. Without this check the increase pass would
 		-- re-flood light out of a now-dark cell — the classic two-torch
 		-- overlap residue.
-		if bx and chunkLoadedForCell( bx, by, bz )
-		and getStoredLight( MC.LightBlockChunks, bx, by, bz ) >= level then
-			processed = processed + 1
-			if level > 1 then
-				for i = 1, #NEIGHBORS do
-					local off = NEIGHBORS[i]
-					local nx, ny, nz = bx + off[1], by + off[2], bz + off[3]
-					local nextLevel = level - lightPropagationCost( nx, ny, nz )
-					if nextLevel > 0
-					and chunkLoadedForCell( nx, ny, nz )
-					and getStoredLight( MC.LightBlockChunks, nx, ny, nz ) < nextLevel then
-						setBlockLightChanged( changed, nx, ny, nz, nextLevel )
-						pushLightQueue( q, nx, ny, nz, nextLevel )
+		if bx then
+			local cx, cy, cz, li = cellToChunk( bx, by, bz )
+			local key = chunkKey( cx, cy, cz )
+			local store = stores[key]
+			if loadedKey( key ) and ( store and ( store[li] or 0 ) or 0 ) >= level then
+				processed = processed + 1
+				if level > 1 then
+					for i = 1, #NEIGHBORS do
+						local off = NEIGHBORS[i]
+						local nx, ny, nz = bx + off[1], by + off[2], bz + off[3]
+						local ncx, ncy, ncz, nli = cellToChunk( nx, ny, nz )
+						local nkey = chunkKey( ncx, ncy, ncz )
+						-- Unloaded cells are opaque to block light: they never receive it.
+						if loadedKey( nkey ) then
+							local opacity = lightOpacityForState( MC.GetBlockState and MC.GetBlockState( nx, ny, nz ) or 0, nx, ny, nz )
+							local nextLevel = level - ( opacity >= 15 and 16 or math.max( 1, opacity ) )
+							local nstore = stores[nkey]
+							if nextLevel > 0 and ( nstore and ( nstore[nli] or 0 ) or 0 ) < nextLevel then
+								if not nstore then
+									nstore = {}
+									stores[nkey] = nstore
+								end
+								nstore[nli] = nextLevel
+								noteChangedLightCell( changed, nx, ny, nz )
+								pushLightQueue( q, nx, ny, nz, nextLevel )
+							end
+						end
 					end
 				end
 			end
@@ -604,6 +622,8 @@ local function runLightDecreaseQueue( removeQ, addQ, changed )
 	local processed = 0
 	ensureLightSourceIndex()
 	local sources = MC.LightSourceCells
+	local cellToChunk, chunkKey, stores = MC.CellToChunk, MC.ChunkKey, MC.LightBlockChunks
+	local loadedKey = newLoadedCache()
 	while removeQ.head <= removeQ.tail do
 		local bx, by, bz, oldLevel = popLightQueue( removeQ )
 		if bx then
@@ -611,12 +631,15 @@ local function runLightDecreaseQueue( removeQ, addQ, changed )
 			for i = 1, #NEIGHBORS do
 				local off = NEIGHBORS[i]
 				local nx, ny, nz = bx + off[1], by + off[2], bz + off[3]
+				local ncx, ncy, ncz, nli = cellToChunk( nx, ny, nz )
+				local nkey = chunkKey( ncx, ncy, ncz )
+				local nstore = stores[nkey]
 				-- No chunkLoadedForCell gate here: stored block light can
 				-- outlive its chunk (a lone torch creates the chunk, removing
 				-- it deletes the chunk BEFORE this flood runs). The removal
 				-- wave must chase those orphaned values, otherwise the
 				-- surviving frontier re-seeds the region and the glow sticks.
-				local neighborLevel = getStoredLight( MC.LightBlockChunks, nx, ny, nz )
+				local neighborLevel = nstore and ( nstore[nli] or 0 ) or 0
 				if neighborLevel > 0 and neighborLevel < oldLevel then
 					-- A dimmer cell engulfed by the removed field may itself be
 					-- an emitter (torch next to broken glowstone). Flattening it
@@ -628,14 +651,17 @@ local function runLightDecreaseQueue( removeQ, addQ, changed )
 					-- contribution past it.
 					local source = sources and sources[cellKey( nx, ny, nz )]
 					local emission = source and source.level or 0
-					if emission > 0 and chunkLoadedForCell( nx, ny, nz ) then
+					-- nstore holds neighborLevel > 0; both writes below change it.
+					if emission > 0 and loadedKey( nkey ) then
 						if emission < neighborLevel then
-							setBlockLightChanged( changed, nx, ny, nz, emission )
+							nstore[nli] = emission
+							noteChangedLightCell( changed, nx, ny, nz )
 							pushLightQueue( removeQ, nx, ny, nz, neighborLevel )
 						end
 						pushLightQueue( addQ, nx, ny, nz, emission )
 					else
-						setBlockLightChanged( changed, nx, ny, nz, 0 )
+						nstore[nli] = nil
+						noteChangedLightCell( changed, nx, ny, nz )
 						pushLightQueue( removeQ, nx, ny, nz, neighborLevel )
 					end
 				elseif neighborLevel >= oldLevel then

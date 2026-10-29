@@ -1013,7 +1013,10 @@ function MC.FinalizeNativeStateChunkPatch( committed, backendEpoch, options )
 			if MC.CancelPartialLightingBatch then MC.CancelPartialLightingBatch( lightingBatch ) end
 			return false, "native_patch_storage_finalize:" .. tostring( finalizeError )
 		end
-		if MC.IndexChunkLightSources then MC.IndexChunkLightSources( c ) end
+		-- A partial batch indexes and seeds every new chunk once at its end, as
+		-- LoadStateChunkPatchData's deferLighting does; a per-chunk flood here
+		-- would light each streamed chunk twice.
+		if not lightingBatch and MC.IndexChunkLightSources then MC.IndexChunkLightSources( c ) end
 		touched[#touched + 1] = { cx = item.cx, cy = item.cy, cz = item.cz, key = item.key, count = item.count }
 		if item.count <= 0 then
 			MC.World[item.key] = nil
@@ -1106,7 +1109,8 @@ function MC.LoadBinaryStateChunkPatchData( data, options )
 			return false, commitError or "invalid_binary_block_entities:" .. tostring( index )
 		end
 		if MC.FinalizeChunkStateStorage then MC.FinalizeChunkStateStorage( c ) end
-		if MC.IndexChunkLightSources then MC.IndexChunkLightSources( c ) end
+		-- The partial batch end indexes and seeds this chunk (see above).
+		if not lightingBatch and MC.IndexChunkLightSources then MC.IndexChunkLightSources( c ) end
 		local touchedItem = { cx = item.cx, cy = item.cy, cz = item.cz, key = c.key, count = item.count }
 		touched[#touched + 1] = touchedItem
 		if item.count <= 0 then

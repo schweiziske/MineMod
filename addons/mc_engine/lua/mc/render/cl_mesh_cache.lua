@@ -53,6 +53,18 @@ local function lruRemove( lru, countName, slot )
 	end
 end
 
+-- Remove every slot of one chunk. Numeric keys address their 63 possible
+-- slots directly instead of scanning the whole LRU on each chunk dirty.
+local function lruRemoveChunk( lru, countName, key )
+	if type( key ) == "number" then
+		for sectionIndex = 1, 63 do lruRemove( lru, countName, key * 64 + sectionIndex ) end
+		return
+	end
+	for slot, entry in pairs( lru ) do
+		if entry and entry.key == key then lruRemove( lru, countName, slot ) end
+	end
+end
+
 local function geometryCacheSectionLimit()
 	local cv = MC.MeshGeometryCacheSections
 	if not cv and CreateClientConVar then
@@ -102,9 +114,7 @@ end
 
 function MC.ClearChunkMeshSectionGeometryLRU( key )
 	if not key then return end
-	for slot, entry in pairs( MC.MeshSectionGeometryLRU ) do
-		if entry and entry.key == key then lruRemove( MC.MeshSectionGeometryLRU, "MeshSectionGeometryLRUCount", slot ) end
-	end
+	lruRemoveChunk( MC.MeshSectionGeometryLRU, "MeshSectionGeometryLRUCount", key )
 end
 
 function MC.TouchMeshSectionGeometryCache( key, sectionIndex )
@@ -305,9 +315,7 @@ end
 
 function MC.ClearChunkBlockEmitCache( key )
 	if not key then return end
-	for slot, entry in pairs( MC.MeshBlockEmitCacheLRU or {} ) do
-		if entry and entry.key == key then lruRemove( MC.MeshBlockEmitCacheLRU, "MeshBlockEmitCacheLRUCount", slot ) end
-	end
+	if MC.MeshBlockEmitCacheLRU then lruRemoveChunk( MC.MeshBlockEmitCacheLRU, "MeshBlockEmitCacheLRUCount", key ) end
 	MC.MeshBlockEmitCache[key] = nil
 	MC.MeshBlockEmitDirty[key] = nil
 	MC.MeshBlockLightDirty[key] = nil

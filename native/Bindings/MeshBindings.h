@@ -32,6 +32,7 @@ int					  UploadMeshPixels(GarrysMod::Lua::ILuaBase *inLua);
 int					  ReadMeshPixels(GarrysMod::Lua::ILuaBase *inLua);
 int					  StageRelight(GarrysMod::Lua::ILuaBase *inLua);
 int					  UploadRelight(GarrysMod::Lua::ILuaBase *inLua);
+int					  UploadRelightBatch(GarrysMod::Lua::ILuaBase *inLua);
 int					  FinishRelight(GarrysMod::Lua::ILuaBase *inLua);
 int					  CancelSection(GarrysMod::Lua::ILuaBase *inLua);
 int					  CanSubmit(GarrysMod::Lua::ILuaBase *inLua);

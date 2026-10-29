@@ -6,6 +6,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace mcmesh::l2
 {
@@ -41,6 +42,10 @@ public:
 	void Shutdown();
 	void UploadNative(const l2::LightPixels &inPixels, PixelTextureId inId, unsigned inFirst);
 	void UploadNative(l2::PixelTransaction &ioTransaction, PixelTextureId inId, bool inRestore);
+	/// Publishes several relight transactions behind one queue barrier. Unchanged
+	/// results are classified before anything is staged; a failure restores every
+	/// drawn transaction and flushes once more before rethrowing.
+	void UploadNativeBatch(const std::vector<l2::PixelTransaction *> &ioTransactions, PixelTextureId inId);
 
 private:
 	PixelTexture										   &Find(PixelTextureId inId) const;

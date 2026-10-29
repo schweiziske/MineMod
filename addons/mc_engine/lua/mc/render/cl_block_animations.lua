@@ -1224,15 +1224,21 @@ end
 
 hook.Remove( "Think", "mc_block_animation_chunk_scan" )
 
-local function drawPreparedAnimations( animations, eye, elapsedTicks, water, view )
-	local maxRenderDistanceSqr = ( blockSize() * 96 ) ^ 2
+-- Render space is world space plus the chunk render-frame translation, so the
+-- per-entry range test of every animated block needs no Vector per frame.
+local function drawEntriesInRange( eye, elapsedTicks, drawingDepth )
+	local size = blockSize()
+	local half, maxRenderDistanceSqr = size * 0.5, ( size * 96 ) ^ 2
+	local ox, oy, oz = MC.ChunkRenderFrameOffset()
+	local wx, wy, wz = eye.x - ox - half, eye.y - oy - half, eye.z - oz - half
 	for _, entry in pairs( ModelEntries ) do
-		local center = MC.CellRenderCenter and MC.CellRenderCenter( entry.bx, entry.by, entry.bz )
-			or MC.CellWorldCenter( entry.bx, entry.by, entry.bz )
-		if eye:DistToSqr( center ) <= maxRenderDistanceSqr then
-			drawEntry( entry, elapsedTicks )
-		end
+		local dx, dy, dz = entry.bx * size - wx, entry.by * size - wy, entry.bz * size - wz
+		if dx * dx + dy * dy + dz * dz <= maxRenderDistanceSqr then drawEntry( entry, elapsedTicks, drawingDepth ) end
 	end
+end
+
+local function drawPreparedAnimations( animations, eye, elapsedTicks, water, view )
+	drawEntriesInRange( eye, elapsedTicks )
 	if water then
 		animationPointFilter( false )
 		MC.RenderPBRWater.CaptureRefraction( view, VisibleFluids )
@@ -1289,11 +1295,7 @@ end )
 
 local function drawAnimationDepth( eye, elapsedTicks )
 	if generationOwnsAnimation() then return end
-	local maxDistanceSqr = ( blockSize() * 96 ) ^ 2
-	for _, entry in pairs( ModelEntries ) do
-		local center = MC.API.Coords.CellRenderCenter( entry.bx, entry.by, entry.bz )
-		if eye:DistToSqr( center ) <= maxDistanceSqr then drawEntry( entry, elapsedTicks, true ) end
-	end
+	drawEntriesInRange( eye, elapsedTicks, true )
 end
 
 hook.Remove( "PostDrawOpaqueRenderables", "mc_block_animation_depth" )
@@ -1383,7 +1385,10 @@ function MC.BlockAnimationStats( validate )
 	end
 	return out
 end
-hook.Add( "MC.ClientWorldProjectionChanged", "mc_block_animation_world_projection", function()
+hook.Add( "MC.ClientWorldProjectionChanged", "mc_block_animation_world_projection", function( reason )
+	-- Block-entity data never changes a state or fluid; a full rescan and fluid
+	-- mesh rebuild here would repeat for every sign, chest or furnace update.
+	if reason == "block_entity_changed" then return end
 	clearEntries()
 	clearFluidMeshes()
 end )

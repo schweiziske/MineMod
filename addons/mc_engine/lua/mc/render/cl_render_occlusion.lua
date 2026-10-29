@@ -51,8 +51,37 @@ local world, worldGeneration, properties, visualRevision
 local classes, classEpoch = {}, 0
 local neighborChunks = {}
 local stats = { nodes = 0, chunks = 0, builds = 0, topologyHits = 0, traversals = 0,
-	cacheHits = 0, visited = 0, queuePeak = 0, lastMS = 0, topologyMS = 0, openBypasses = 0 }
+	cacheHits = 0, visited = 0, queuePeak = 0, lastMS = 0, topologyMS = 0, openBypasses = 0,
+	nativeGraphSends = 0, nativeGraphDeferred = 0 }
 O.stats = stats
+
+-- Native receives the whole graph per send. A stale Native graph is safe while
+-- it is looser than the current one: unregistered chunks are never portal
+-- culled and OPEN admits everything, so registration and a first OPEN->built
+-- commit coalesce. Anything that can make the sent graph hide newly visible
+-- geometry is sent on the next view: unload, a built section changing shape,
+-- and invalidation (dirty geometry opens its old connections immediately, so
+-- a dug wall never keeps a closed cache).
+-- Seconds; 0 restores a send/flood for every revision (tests use this).
+O.GraphCoalesceSeconds = O.GraphCoalesceSeconds or 0.5
+local nativeSent, nativeUrgent, nativeSentAt = {}, true, -math.huge
+
+local function sameTopology( a, b )
+	if a == b then return true end
+	if a.uniform ~= nil or b.uniform ~= nil then return a.uniform == b.uniform end
+	return a.cells == b.cells -- Interned strings; cells determine every face mask.
+end
+
+-- The Lua draw path applies the same rule to its whole-world flood. Sections
+-- registered after the last flood are drawn unculled until the next one.
+local luaFlooded, luaUrgent, luaFloodedAt = {}, true, -math.huge
+
+local function noteNativeTopology( id, nextTopology )
+	local sent = nativeSent[id]
+	if sent ~= nil and sent ~= OPEN and not sameTopology( sent, nextTopology ) then nativeUrgent = true end
+	local flooded = luaFlooded[id]
+	if flooded ~= nil and flooded ~= OPEN and not sameTopology( flooded, nextTopology ) then luaUrgent = true end
+end
 
 function O.Reset()
 	byKey, topology, neighbors, freeBases = {}, {}, {}, {}
@@ -61,6 +90,8 @@ function O.Reset()
 	nextBase, cachedRevision, lastRoot, lastSeed, exteriorSeen = 0, -1, 0, 0, false
 	restricted = 0
 	revision = revision + 1
+	nativeSent, nativeUrgent = {}, true
+	luaFlooded, luaUrgent = {}, true
 	O.active, stats.nodes, stats.chunks, stats.visited = false, 0, 0, 0
 end
 
@@ -243,6 +274,7 @@ function O.Forget( key, expectedChunk )
 	freeBases[#freeBases + 1] = record.base
 	stats.nodes, stats.chunks = stats.nodes - TOTAL, stats.chunks - 1
 	revision = revision + 1
+	nativeUrgent, luaUrgent = true, true
 end
 
 local function register( key, chunk )
@@ -252,7 +284,8 @@ local function register( key, chunk )
 	local base = freeBases[#freeBases]
 	if base then freeBases[#freeBases] = nil
 	else base, nextBase = nextBase, nextBase + TOTAL end
-	record = { key = key, chunk = chunk, base = base }
+	-- floodStamp marks sections the current Lua flood has not seen yet.
+	record = { key = key, chunk = chunk, base = base, floodStamp = stamp }
 	byKey[key] = record
 	for face = 1, 6 do
 		neighborChunks[face] = byKey[MC.ChunkKey( chunk.cx + dx[face], chunk.cy + dy[face], chunk.cz + dz[face] )]
@@ -289,6 +322,7 @@ function O.Commit( key, chunk, index, value )
 			if not topology[record.base + i].graphOpen then restricted = restricted - 1 end
 			if not nextTopology.graphOpen then restricted = restricted + 1 end
 			topology[record.base + i], changed = nextTopology, true
+			noteNativeTopology( record.base + i, nextTopology )
 		end
 	end
 	if changed then revision = revision + 1 end
@@ -306,7 +340,10 @@ function O.Invalidate( key, index )
 			topology[id], changed = OPEN, true
 		end
 	end
-	if changed then revision = revision + 1 end
+	if changed then
+		revision = revision + 1
+		nativeUrgent, luaUrgent = true, true
+	end
 end
 
 local function visit( id, mask )
@@ -364,7 +401,15 @@ end
 local nativeGraphRevision, nativeGraphModule
 function O.PrepareNativeView( bx, by, bz, module )
 	local active, root, seed = viewRoot( bx, by, bz )
-	if active and ( nativeGraphRevision ~= revision or nativeGraphModule ~= module ) then
+	local now = SysTime()
+	-- Root and seed come from the current topology; Native validates the root
+	-- against its grid and floods from the seed's component, so the camera
+	-- section must be identical in the sent graph before a send may wait.
+	if active and nativeGraphRevision ~= revision and nativeGraphModule == module
+		and not nativeUrgent and now < nativeSentAt + O.GraphCoalesceSeconds
+		and ( root == 0 or nativeSent[root] == topology[root] ) then
+		stats.nativeGraphDeferred = stats.nativeGraphDeferred + 1
+	elseif active and ( nativeGraphRevision ~= revision or nativeGraphModule ~= module ) then
 		local ok, err
 		if module.SetL2DrawSpatialGraph then
 			ok, err = module.SetL2DrawSpatialGraph( revision, nextBase, topology, neighbors, byKey, TOTAL, XY, Z, SIZE )
@@ -374,6 +419,9 @@ function O.PrepareNativeView( bx, by, bz, module )
 		end
 		if not ok then error( "Native visibility graph: " .. tostring( err ), 0 ) end
 		nativeGraphRevision, nativeGraphModule = revision, module
+		for id = 1, nextBase do nativeSent[id] = topology[id] end
+		nativeUrgent, nativeSentAt = false, now
+		stats.nativeGraphSends = stats.nativeGraphSends + 1
 	end
 	if not active then return false, root, seed, 0, 0, 0 end
 	return active, root, seed, floor( bx / SIZE ), floor( by / SIZE ), floor( bz / SIZE )
@@ -385,7 +433,11 @@ function O.PrepareView( bx, by, bz )
 	O.active = true
 	-- Moving inside the already reached component needs no new flood, even
 	-- across a section boundary. Facing changes never invalidate connectivity.
-	if cachedRevision == revision and ( root == 0 and exteriorSeen
+	-- Changes that only loosen the graph may wait (see the Native rule above).
+	local now = SysTime()
+	local current = cachedRevision == revision or not luaUrgent and now < luaFloodedAt + O.GraphCoalesceSeconds
+		and ( root == 0 or luaFlooded[root] == topology[root] )
+	if current and ( root == 0 and exteriorSeen
 		or root == lastRoot and seed == lastSeed
 		or root ~= 0 and seed ~= 0 and seen[root] == stamp and band( exits[root], seed ) == seed ) then
 		stats.cacheHits, stats.lastMS = stats.cacheHits + 1, 0
@@ -409,6 +461,8 @@ function O.PrepareView( bx, by, bz )
 		end
 	end
 	cachedRevision, lastRoot, lastSeed = revision, root, seed
+	for id = 1, nextBase do luaFlooded[id] = topology[id] end
+	luaUrgent, luaFloodedAt = false, now
 	stats.traversals = stats.traversals + 1
 	stats.lastMS, stats.queuePeak = ( SysTime() - started ) * 1000, math.max( stats.queuePeak, tail )
 end
@@ -420,5 +474,5 @@ function O.ChunkRecord( key, chunk )
 end
 
 function O.SectionVisible( record, index )
-	return not record or seen[record.base + index] == stamp
+	return not record or record.floodStamp == stamp or seen[record.base + index] == stamp
 end
