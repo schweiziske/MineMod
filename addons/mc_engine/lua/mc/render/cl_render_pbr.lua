@@ -121,6 +121,12 @@ function B.AtmosphereSun()
 	return values[6] * radiance, values[7] * radiance, values[8] * radiance
 end
 
+-- Refresh without changing the camera used by surface material bindings.
+function B.EntityLightParameters()
+	B.PrepareView( eyeX, eyeY, eyeZ )
+	return values[1], values[5] * values[6], values[5] * values[7], values[5] * values[8]
+end
+
 -- A publication follows a complete map render. The reused Matrix may have
 -- changed in place, so its identity is deliberately not used as a revision.
 function B.PublishShadow( texture, matrix, bias, weight )
