@@ -2,6 +2,19 @@
 
 MC = MC or {}
 
+-- Force banner rendering off, including callbacks left by Lua auto-refresh.
+local BANNER_RENDERING_ENABLED = false
+if not BANNER_RENDERING_ENABLED then
+	hook.Remove( "PostDrawOpaqueRenderables", "mc_banner_block_entities" )
+	hook.Remove( "PostDrawTranslucentRenderables", "mc_banner_block_entities" )
+	hook.Remove( "ShutDown", "mc_banner_meshes" )
+	MC.RenderPBRSSR.UnregisterDepthRenderer( "banners" )
+	for _, object in pairs( MC.BannerRenderMeshes or {} ) do object:Destroy() end
+	MC.BannerRenderMeshes = nil
+	MC.MarkBannerRenderEntriesDirty = nil
+	return
+end
+
 local Coords = MC.API.Coords
 local MATERIAL_FLAGS = "alphatest vertexcolor vertexalpha noclamp nocull"
 local BANNER_BODY = Material( "mc/entity/banner/banner_base.png", MATERIAL_FLAGS )

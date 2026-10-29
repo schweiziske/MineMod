@@ -88,63 +88,64 @@ local function blockSize()
     return MCITEM.BlockSize()
 end
 
-local function sameMatrix(left, right)
-    if left == nil or right == nil then return left == right end
-    for row = 1, 4 do
-        for column = 1, 4 do
-            if left:GetField(row, column) ~= right:GetField(row, column) then return false end
-        end
-    end
-    return true
-end
-
-local function copyMatrix(value)
-    if not value then return nil end
-    local copy = Matrix()
-    for row = 1, 4 do
-        for column = 1, 4 do copy:SetField(row, column, value:GetField(row, column)) end
-    end
-    return copy
-end
-
 local function setUpsideDown(target, enabled)
-    local state = inverted[target]
-    local current = target:GetRenderMatrix()
     if enabled then
-        if not state then
-            state = { original = copyMatrix(current) }
-            inverted[target] = state
-        elseif not sameMatrix(current, state.applied) then
-            -- Another renderer took ownership since our previous update.
-            state.original = copyMatrix(current)
-        end
         local mins, maxs = target:OBBMins(), target:OBBMaxs()
         local matrix = Matrix()
         -- Minecraft translates by entity height and then rotates 180 degrees
         -- around its forward axis. Source's equivalent local axis is roll.
         matrix:SetAngles(Angle(0, 0, 180))
         matrix:SetTranslation(Vector(0, 0, mins.z + maxs.z))
-        if state.original then matrix = state.original * matrix end
+        -- GMod exposes no getter for the RenderMultiply matrix.
         target:EnableMatrix("RenderMultiply", matrix)
-        state.applied = matrix
-    elseif state then
-        if sameMatrix(current, state.applied) then
-            if state.original then target:EnableMatrix("RenderMultiply", state.original)
-            else target:DisableMatrix("RenderMultiply") end
-        end
+        inverted[target] = true
+    elseif inverted[target] then
+        target:DisableMatrix("RenderMultiply")
         inverted[target] = nil
     end
 end
 
-timer.Create("MCITEM.NameTags.UpdateMagicNames", 0.2, 0, function()
-    for _, target in ipairs(ents.GetAll()) do
-        if NameTags.IsSupportedTarget(target) then
-            local name, present = NameTags.GetEntityCustomName(target)
-            setUpsideDown(target, present and NameTags.IsUpsideDownName(name) or false)
-        elseif inverted[target] then
-            setUpsideDown(target, false)
-        end
+local function updateMagicName(target)
+    if not IsValid(target) then return end
+    if NameTags.IsSupportedTarget(target) then
+        local name, present = NameTags.GetEntityCustomName(target)
+        setUpsideDown(target, present and NameTags.IsUpsideDownName(name) or false)
+    elseif inverted[target] then
+        setUpsideDown(target, false)
     end
+end
+
+local pendingUpdates = setmetatable({}, { __mode = "k" })
+local function queueMagicNameUpdate(target)
+    if pendingUpdates[target] then return end
+    pendingUpdates[target] = true
+    -- Creation and NW2 notifications can precede initialization/value storage.
+    -- Coalesce changes and read the final name on the next tick.
+    timer.Simple(0, function()
+        pendingUpdates[target] = nil
+        updateMagicName(target)
+    end)
+end
+
+-- Remove the old polling timer when this file is hot-reloaded.
+timer.Remove("MCITEM.NameTags.UpdateMagicNames")
+hook.Add("OnEntityCreated", "MCITEM.NameTags.UpdateMagicName", queueMagicNameUpdate)
+hook.Add("NotifyShouldTransmit", "MCITEM.NameTags.UpdateMagicName", function(target, transmitting)
+    if transmitting then queueMagicNameUpdate(target) end
+end)
+hook.Add("EntityNetworkedVarChanged", "MCITEM.NameTags.UpdateMagicName", function(target, key)
+    if key == NameTags.GenericNameKey or key == NameTags.BMBNameKey then
+        queueMagicNameUpdate(target)
+    end
+end)
+hook.Add("EntityRemoved", "MCITEM.NameTags.ClearEntity", function(target)
+    inverted[target] = nil
+    lightingCache[target] = nil
+end)
+
+-- Reconcile existing entities once on load/refresh, never on a repeating timer.
+timer.Simple(0, function()
+    for _, target in ipairs(ents.GetAll()) do updateMagicName(target) end
 end)
 
 hook.Add("PostDrawTranslucentRenderables", "MCITEM.NameTags.DrawCrosshairLabel", function(depth, skybox)

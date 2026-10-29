@@ -40,7 +40,7 @@ MC.EntityLightingReflections = CreateClientConVar(
 )
 MC.EntityLightingInterval = CreateClientConVar(
 	"mc_light_entity_interval", "0.10", true, false,
-	"Seconds between expensive voxel-light samples per entity; 0 updates every draw"
+	"Minimum seconds between voxel-light samples per entity; 0 requests every frame, with at most 4 entities sampled per frame"
 )
 MC.EntityLightingPlayerGamma = CreateClientConVar(
 	"mc_light_entity_player_gamma", "2.2", true, false,
@@ -64,6 +64,10 @@ local previousWrappedProps = MC.EntityLightingWrappedProps
 local wrappedProps = setmetatable( {}, { __mode = "k" } )
 MC.EntityLightingWrappedProps = wrappedProps
 local lightStates = setmetatable( {}, { __mode = "k" } )
+local materialLists = setmetatable( {}, { __mode = "k" } )
+local MAX_SAMPLES_PER_FRAME = 4
+local sampleQueue, queueHead, queueTail = {}, 1, 0
+local sampleFrame, frameSamples = -1, 0
 local playerSourceDrawActive = false
 local nextPropScan = 0
 
@@ -150,58 +154,104 @@ local function sampleEntity( ent, player, position, minimum, maximum )
 	return r / 7, g / 7, b / 7
 end
 
+local function queueSample( ent, state )
+	if state.queued then return end
+	state.queued = true
+	queueTail = queueTail + 1
+	sampleQueue[queueTail] = { entity = ent, state = state }
+end
+
+-- FIFO order prevents the first-drawn models from taking every frame's budget.
+-- Requests expire after one frame without drawing, allowing next-frame service.
+local function processSamples( now, frame, interval )
+	if sampleFrame ~= frame then sampleFrame, frameSamples = frame, 0 end
+	while queueHead <= queueTail and frameSamples < MAX_SAMPLES_PER_FRAME do
+		local request = sampleQueue[queueHead]
+		sampleQueue[queueHead], queueHead = nil, queueHead + 1
+		local ent, state = request.entity, request.state
+		state.queued = false
+		if lightStates[ent] == state and IsValid( ent ) and state.lastSeenFrame >= frame - 1
+			and ( state.player and playersEnabled() or not state.player and entityClassEnabled( ent ) )
+			and state.sampledFrame ~= frame
+			and ( not state.sampledAt or now - state.sampledAt >= interval ) then
+			frameSamples = frameSamples + 1
+			local position, minimum, maximum = samplePosition( ent, state.player )
+			if position then
+				local r, g, b = sampleEntity( ent, state.player, position, minimum, maximum )
+				state.targetR, state.targetG, state.targetB = r, g, b
+				state.sampledAt, state.sampledFrame = now, frame
+				if not state.r then
+					state.r, state.g, state.b, state.lastUpdate = r, g, b, now
+				end
+			end
+		end
+	end
+	if queueHead > queueTail then queueHead, queueTail = 1, 0 end
+end
+
 local function sampledRGB( ent, player )
 	local now, frame = RealTime(), FrameNumber()
 	local state = lightStates[ent]
 	local interval = sampleInterval()
-	if not state or state.frame ~= frame then
-		local position, minimum, maximum = samplePosition( ent, player )
-		if not position then return nil end
-		local moved = not state or position:DistToSqr( state.position ) >= ( MC.API.Coords.BlockSize() * 0.25 ) ^ 2
-		if not state then
-			local r, g, b = sampleEntity( ent, player, position, minimum, maximum )
-			state = { r = r, g = g, b = b, targetR = r, targetG = g, targetB = b,
-				nextSample = now + interval, lastUpdate = now, position = position, interval = interval }
-			lightStates[ent] = state
-		else
-			if moved or interval ~= state.interval or now >= state.nextSample then
-				state.targetR, state.targetG, state.targetB = sampleEntity( ent, player, position, minimum, maximum )
-				state.nextSample, state.position, state.interval = now + interval, position, interval
-			end
+	if not state then
+		state = { player = player }
+		lightStates[ent] = state
+	end
+	state.lastSeenFrame = frame
+	if state.frame ~= frame then
+		state.frame = frame
+		if state.sampledFrame ~= frame and ( not state.sampledAt or now - state.sampledAt >= interval ) then
+			queueSample( ent, state )
+		end
+		processSamples( now, frame, interval )
+		if state.r then
 			local blend = 1 - math.exp( -math.Clamp( now - state.lastUpdate, 0, 0.1 ) * 12 )
 			state.r, state.g, state.b = Lerp( blend, state.r, state.targetR ),
 				Lerp( blend, state.g, state.targetG ), Lerp( blend, state.b, state.targetB )
 			state.lastUpdate = now
 		end
-		state.frame = frame
 	end
+	-- Newly visible models retain Source lighting until their queued first sample.
+	if not state.r then return nil end
 	local mul = gain()
 	return state.r * mul, state.g * mul, state.b * mul
 end
 
-local function dampMaterialReflections( ent, r, g, b, states )
-	local factor = math.Clamp( math.max( r, g, b ) * reflectionStrength(), 0, 1 )
-	local seen = {}
+local function modelMaterials( ent )
+	local model, skin = ent:GetModel(), ent:GetSkin()
+	local cached = materialLists[ent]
+	if cached and cached.model == model and cached.skin == skin then return cached.materials end
+	local materials, seen = {}, {}
 	for _, name in ipairs( ent:GetMaterials() or {} ) do
 		local mat = Material( name )
 		if mat and not mat:IsError() and not seen[mat] then
 			seen[mat] = true
-			local envTint = mat:GetVector( "$envmaptint" )
-			-- Some IMaterial getters return zero values (not one nil value) when a
-			-- parameter is absent. Assignment normalizes that case to nil before
-			-- tonumber is called.
-			local rawPhongBoost = mat:GetFloat( "$phongboost" )
-			local phongBoost = rawPhongBoost ~= nil and tonumber( rawPhongBoost ) or nil
-			local state = { mat = mat, phongBoost = phongBoost }
-			states[#states + 1] = state
-			if envTint then
-				state.envTint = Vector( envTint.x, envTint.y, envTint.z )
-				mat:SetVector( "$envmaptint", envTint * factor )
-			end
-			-- Many camera/weapon materials do not define $phongboost; GMod then
-			-- returns nil rather than zero. Leave absent shader parameters alone.
-			if phongBoost ~= nil then mat:SetFloat( "$phongboost", phongBoost * factor ) end
+			materials[#materials + 1] = mat
 		end
+	end
+	materialLists[ent] = { model = model, skin = skin, materials = materials }
+	return materials
+end
+
+local function dampMaterialReflections( ent, r, g, b, states )
+	local factor = math.Clamp( math.max( r, g, b ) * reflectionStrength(), 0, 1 )
+	-- Cache identities only: shared material parameters can change between draws.
+	for _, mat in ipairs( modelMaterials( ent ) ) do
+		local envTint = mat:GetVector( "$envmaptint" )
+		-- Some IMaterial getters return zero values (not one nil value) when a
+		-- parameter is absent. Assignment normalizes that case to nil before
+		-- tonumber is called.
+		local rawPhongBoost = mat:GetFloat( "$phongboost" )
+		local phongBoost = rawPhongBoost ~= nil and tonumber( rawPhongBoost ) or nil
+		local state = { mat = mat, phongBoost = phongBoost }
+		states[#states + 1] = state
+		if envTint then
+			state.envTint = Vector( envTint.x, envTint.y, envTint.z )
+			mat:SetVector( "$envmaptint", envTint * factor )
+		end
+		-- Many camera/weapon materials do not define $phongboost; GMod then
+		-- returns nil rather than zero. Leave absent shader parameters alone.
+		if phongBoost ~= nil then mat:SetFloat( "$phongboost", phongBoost * factor ) end
 	end
 end
 
@@ -276,6 +326,7 @@ local function unwrapProp( ent )
 	end
 	wrappedProps[ent] = nil
 	lightStates[ent] = nil
+	materialLists[ent] = nil
 end
 
 local function wrapProp( ent )
@@ -317,6 +368,8 @@ end
 
 local function clearLightStates()
 	for ent in pairs( lightStates ) do lightStates[ent] = nil end
+	for ent in pairs( materialLists ) do materialLists[ent] = nil end
+	sampleQueue, queueHead, queueTail = {}, 1, 0
 end
 
 local function refreshProps()
@@ -363,6 +416,7 @@ end )
 hook.Add( "EntityRemoved", "mc_entity_lighting_cleanup", function( ent )
 	wrappedProps[ent] = nil
 	lightStates[ent] = nil
+	materialLists[ent] = nil
 end )
 
 hook.Add( "Think", "mc_entity_lighting_props", function()

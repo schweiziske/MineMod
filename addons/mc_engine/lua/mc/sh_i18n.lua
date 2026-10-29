@@ -4,7 +4,7 @@
 
 MC = MC or {}
 
-local DEFAULT_LANGUAGE = "zh_cn"
+local DEFAULT_LANGUAGE = "en_us"
 local DEFAULT_LANGUAGE_SETTING = "auto"
 local SUPPORTED_LANGUAGES = { zh_cn = true, en_us = true }
 local LANGUAGE_OPTION_ORDER = { "auto", "zh_cn", "en_us" }
@@ -48,8 +48,9 @@ end
 
 local function parseLanguageSetting( value )
 	value = canonicalLanguageValue( value )
-	if value == "" or value == "auto" or value == "default" or value == "game" or value == "gmod_language" then
-		return DEFAULT_LANGUAGE_SETTING, true
+	if value == "" then return DEFAULT_LANGUAGE_SETTING, true end
+	if value == "auto" or value == "default" or value == "game" or value == "gmod_language" then
+		return "auto", true
 	end
 	local lang = LANGUAGE_ALIASES[value] or ( SUPPORTED_LANGUAGES[value] and value )
 	if lang then return lang, true end
@@ -73,7 +74,7 @@ end
 
 local function resolveLanguage( setting, gameLanguage )
 	setting = normalizeLanguageSetting( setting )
-	if setting == DEFAULT_LANGUAGE_SETTING then
+	if setting == "auto" then
 		return normalizeLanguage( gameLanguage or clientGameLanguage() )
 	end
 	return setting
