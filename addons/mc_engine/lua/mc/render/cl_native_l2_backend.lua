@@ -27,6 +27,7 @@ function N.Probe()
 	if N.probed and N.module == module then return N.available, N.reason end
 	N.probed, N.module, N.available, N.voxelAvailable = true, module, false, false
 	N.modelAvailable, N.worldAvailable, N.relightAvailable = false, false, false
+	N.relightBatchAvailable = false
 	N.deferredLightingAvailable = false
 	N.mixedTopologyAvailable = false
 	N.fluidAvailable = false
@@ -67,6 +68,7 @@ function N.Probe()
 	N.worldAvailable = N.modelAvailable and type( module.SubmitWorldL2Section ) == "function"
 		and type( module.IsWorldL2Current ) == "function" and type( module.GetWorldL2Topology ) == "function"
 	N.relightAvailable = N.worldAvailable and type( module.SubmitWorldL2Relight ) == "function"
+	N.relightBatchAvailable = N.relightAvailable and type( module.UploadL2RelightBatch ) == "function"
 	N.deferredLightingAvailable = N.worldAvailable and type( module.IsWorldL2GeometryCurrent ) == "function"
 	N.fluidAvailable = N.worldAvailable and type( module.CompileL2Fluid ) == "function"
 	if not N.fluidAvailable then
@@ -542,10 +544,8 @@ function N.TryRelight( key, index )
 	local ctx = { key = key, sectionIndex = index, chunk = chunk, blockSize = section.blockSize,
 		nativeWorldHandle = section.nativeWorldHandle }
 	local tx
-	tx = enqueue( ctx, id, function()
-		local uploadStart = SysTime()
-		MC.RenderPackGeometry.ApplyNativeLighting( tx.id, resources, tx.module )
-		N.relightUploadMS = N.relightUploadMS + ( SysTime() - uploadStart ) * 1000
+	-- Runs after the section's pixels are on the GPU and its CPU pixels published.
+	local function relit()
 		N.relightSections = N.relightSections + 1
 		local cpu = MC.RenderGeometryStore.GetSection( key, index )
 		if cpu then MC.RenderGeometryStore.TouchLighting( cpu ) end
@@ -558,15 +558,50 @@ function N.TryRelight( key, index )
 				if MC.MeshLightDirtyRateLimited then MC.MeshLightDirtyRateLimited[key] = nil end
 			end
 		end
+	end
+	tx = enqueue( ctx, id, function()
+		local uploadStart = SysTime()
+		MC.RenderPackGeometry.ApplyNativeLighting( tx.id, resources, tx.module )
+		N.relightUploadMS = N.relightUploadMS + ( SysTime() - uploadStart ) * 1000
+		relit()
 	end, function() end )
-	tx.relight, tx.section = resources, section
+	tx.relight, tx.section, tx.relit = resources, section, relit
 	return "pending"
+end
+
+local function publishRelightBatch( batch, report )
+	local released = 0
+	local started = SysTime()
+	local ok, results = pcall( MC.RenderPackGeometry.ApplyNativeLightingBatch, batch, batch[1].tx.module )
+	N.relightUploadMS = N.relightUploadMS + ( SysTime() - started ) * 1000
+	for i, item in ipairs( batch ) do
+		local tx = item.tx
+		local result = ok and results[i] or results
+		local done, err = result == true, result
+		if done then done, err = pcall( function()
+			tx.relit()
+			item.published()
+		end ) end
+		if not done then
+			remove( tx )
+			released = released + 1
+			tx.discard( report )
+			report( type( err ) == "table" and err.code or "native_l2_publish",
+				"chunk " .. tostring( tx.key ) .. " section " .. tostring( tx.index ) .. ": "
+					.. tostring( type( err ) == "table" and err.message or err ) .. "; previous L2 section retained" )
+		else
+			released = released + 1
+		end
+	end
+	return released
 end
 
 function N.Pump( budget )
 	local released = 0
 	local faults = {}
 	local function report( code, message ) faults[#faults + 1] = { code, message } end
+	-- Relights ready in this pump publish behind one GPU queue barrier.
+	local relightBatch = N.relightBatchAvailable and {} or nil
 	for _, sections in pairs( N.pending ) do
 		for _, tx in pairs( sections ) do
 			if not current( tx ) then
@@ -634,19 +669,29 @@ function N.Pump( budget )
 					local relightAfter = tx.ctx.nativeDeferLighting and ( tx.lightInvalidated
 						or tx.ctx.nativeWorldHandle
 							and tx.module.IsWorldL2Current( tx.id, tx.ctx.nativeWorldHandle ) ~= true )
+					local function published()
+						N.completed = N.completed + 1
+						if MC.RenderPipeline and MC.RenderPipeline.NoteDirtyBuild then MC.RenderPipeline.NoteDirtyBuild( 1 ) end
+						local dirty = MC.MeshDirty[tx.key]
+						if not tx.relight and tx.index and type( dirty ) == "table" then
+							dirty[tx.index] = nil
+							if next( dirty ) == nil then MC.MeshDirty[tx.key] = nil end
+						elseif not tx.index then MC.MeshDirty[tx.key] = nil end
+						if not MC.MeshDirty[tx.key] and MC.MeshDirtyRateLimited then MC.MeshDirtyRateLimited[tx.key] = nil end
+						if relightAfter then MC.InvalidateNativeLightSection( tx.key, tx.index ) end
+						remove( tx )
+					end
+					if tx.relight and relightBatch then
+						-- Stage now; publishRelightBatch uploads, finishes and calls published().
+						relightBatch[#relightBatch + 1] = { tx = tx, published = published,
+							transaction = MC.RenderPackGeometry.StageNativeLighting( tx.id, tx.relight, tx.module ),
+							resources = tx.relight }
+						return
+					end
 					local started = SysTime()
 					tx.commit()
 					N.commitMS = N.commitMS + ( SysTime() - started ) * 1000
-					N.completed = N.completed + 1
-					if MC.RenderPipeline and MC.RenderPipeline.NoteDirtyBuild then MC.RenderPipeline.NoteDirtyBuild( 1 ) end
-					local dirty = MC.MeshDirty[tx.key]
-					if not tx.relight and tx.index and type( dirty ) == "table" then
-						dirty[tx.index] = nil
-						if next( dirty ) == nil then MC.MeshDirty[tx.key] = nil end
-					elseif not tx.index then MC.MeshDirty[tx.key] = nil end
-					if not MC.MeshDirty[tx.key] and MC.MeshDirtyRateLimited then MC.MeshDirtyRateLimited[tx.key] = nil end
-					if relightAfter then MC.InvalidateNativeLightSection( tx.key, tx.index ) end
-					remove( tx )
+					published()
 					released = released + 1
 				end )
 				if not ok then
@@ -662,6 +707,7 @@ function N.Pump( budget )
 			end
 		end
 	end
+	if relightBatch and #relightBatch > 0 then released = released + publishRelightBatch( relightBatch, report ) end
 	for _, fault in ipairs( faults ) do MC.Fault( fault[1], "%s", fault[2] ) end
 	return released
 end

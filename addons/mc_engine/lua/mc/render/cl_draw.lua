@@ -289,6 +289,7 @@ local planeCount = 0
 local frustumMode = "unprepared"
 local cullEyeX, cullEyeY, cullEyeZ = 0, 0, 0
 local maxDistSq = 0 -- 0 = unlimited
+local customDistance = false -- adapter replaces the spherical distance test
 local cullDistance, directionMargin, cullDirections = 0, 0, false
 local nativePortals, nativeRoot, nativeSeed, nativeDirections = false, 0, 63, false
 local nativePortalX, nativePortalY, nativePortalZ = 0, 0, 0
@@ -314,6 +315,13 @@ local function addPlane( nx, ny, nz, hx, hz )
 	planeNX[i], planeNY[i], planeNZ[i] = nx, ny, nz
 	planeAX[i], planeAY[i], planeAZ[i] = math_abs( nx ), math_abs( ny ), math_abs( nz )
 	planeR[i] = hx * ( planeAX[i] + planeAY[i] ) + hz * planeAZ[i]
+end
+
+local function adapterDistancePolicy()
+	if MC.ChunkDrawDistanceCustom then return MC.ChunkDrawDistanceCustom() end
+	-- Hosts without the world-adapter module install the policy function only
+	-- when they replace the spherical test.
+	return MC.ChunkDrawDistanceVisible ~= nil
 end
 
 local function updateCullState( depthOnly )
@@ -348,6 +356,7 @@ local function updateCullState( depthOnly )
 	local dist = MC.EffectiveMeshDrawDistance and MC.EffectiveMeshDrawDistance()
 		or ( MC.MeshDrawDistance and MC.MeshDrawDistance.GetFloat and MC.MeshDrawDistance:GetFloat() or 0 )
 	cullDistance = dist
+	customDistance = adapterDistancePolicy()
 	if dist > 0 then
 		-- Chunk bounding-sphere slack so a chunk whose center sits past the
 		-- limit but whose blocks reach inside it does not pop.
@@ -410,7 +419,7 @@ local function entryVisible( e )
 	end
 	if maxDistSq > 0 then
 		local visible
-		if MC.ChunkDrawDistanceVisible then
+		if customDistance then
 			visible = MC.ChunkDrawDistanceVisible( dx, dy, dz, distanceSq )
 		else
 			visible = dx * dx + dy * dy + dz * dz <= distanceSq
@@ -484,8 +493,8 @@ local function nativeChunk( key, list, x, y, z )
 	if nativeContext.store[key] ~= list or MC.GetChunkByKey( key ) ~= nativeContext.chunks[key] then return 0, false end
 	if MC.StreamHiddenChunkKeys and MC.StreamHiddenChunkKeys[key] then return 1, false end
 	-- World adapters may define a non-spherical distance policy. Preserve it at
-	-- the chunk boundary; no Lua vertex/section loop is involved.
-	if cullDistance > 0 and MC.ChunkDrawDistanceVisible then
+	-- the chunk boundary; without one, Native applies the plain distance limit.
+	if cullDistance > 0 and nativeContext.customDistance then
 		local b = list.bounds
 		local dx, dy, dz, distanceSq = x, y, z, maxDistSq
 		if b then dx, dy, dz, distanceSq = x + b.x, y + b.y, z + b.z, ( cullDistance + b.radius ) ^ 2
@@ -588,7 +597,8 @@ local function drawNativeChunks( cached, store, chunks, stats, depthStage, trans
 	for i = #planes, planeCount * 3 + 1, -1 do planes[i] = nil end
 	view.eyeX, view.eyeY, view.eyeZ = cullEyeX - renderFrameX, cullEyeY - renderFrameY, cullEyeZ - renderFrameZ
 	view.offsetX, view.offsetY, view.offsetZ = renderFrameX, renderFrameY, renderFrameZ
-	view.distance = MC.ChunkDrawDistanceVisible and 0 or cullDistance
+	nativeContext.customDistance = customDistance
+	view.distance = customDistance and 0 or cullDistance
 	view.moveBudget, view.directionMargin = MC.API.Coords.BlockSize() * 2, directionMargin
 	view.portals, view.root, view.seed = nativePortals, nativeRoot, nativeSeed
 	view.portalX, view.portalY, view.portalZ = nativePortalX, nativePortalY, nativePortalZ

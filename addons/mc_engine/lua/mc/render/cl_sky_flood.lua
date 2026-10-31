@@ -220,25 +220,82 @@ local function popQueue( q )
 	return bx, by, bz, level
 end
 
+-- The waves below resolve each visited cell's chunk key and local index once,
+-- instead of once per helper (known, exposure, store, cost). Chunk presence is
+-- fixed for a synchronous wave, so knownness is cached per key for its duration.
+-- Semantics match chunkKnownForCell/skyExposed/skyLevelAt/propagationCost.
+local function newWaveContext()
+	local known = {}
+	return {
+		cellToChunk = MC.CellToChunk, chunkKey = MC.ChunkKey,
+		stores = MC.LightSkyChunks, exposedAt = MC.SkyExposedAt,
+		known = function( cx, cy, cz, key )
+			local value = known[key]
+			if value == nil then
+				value = chunkKnown( cx, cy, cz, key )
+				known[key] = value
+			end
+			return value
+		end,
+	}
+end
+
+-- propagationCost with the cell's chunk already resolved.
+local function resolvedCost( bx, by, bz, cx, cy, cz, key, isKnown )
+	if not isKnown or not inSkyDomain( cx, cy, cz, key ) then return 16 end
+	local stateId = 0
+	if MC.World[key] then stateId = MC.GetBlockState and MC.GetBlockState( bx, by, bz ) or 0 end
+	local opacity = MC.BlockLightOpacityForState and MC.BlockLightOpacityForState( stateId, bx, by, bz ) or 15
+	if opacity >= 15 then return 16 end
+	if opacity > 2 and MC.Liquid and MC.Liquid.DecodeState( stateId ) == "water" then return 2 end
+	return math.max( 1, opacity )
+end
+
 local function runSkyIncrease( q, changed )
 	local processed = 0
+	local wave = newWaveContext()
+	local cellToChunk, chunkKey, stores, exposedAt, known = wave.cellToChunk, wave.chunkKey, wave.stores, wave.exposedAt, wave.known
 	while q.head <= q.tail do
 		local bx, by, bz, level = popQueue( q )
 		-- Same phantom re-seed guard as the block light wave: only spread from
 		-- cells whose current effective level still matches the queued level.
 		-- Known sparse air is valid; unknown streamed chunks cannot seed sky.
-		if bx and chunkKnownForCell( bx, by, bz )
-		and skyLevelAt( bx, by, bz ) >= level then
-			processed = processed + 1
-			if level > 1 then
-				for i = 1, #NEIGHBORS do
-					local off = NEIGHBORS[i]
-					local nx, ny, nz = bx + off[1], by + off[2], bz + off[3]
-					local nextLevel = level - propagationCost( nx, ny, nz )
-					if nextLevel > 0
-					and skyLevelAt( nx, ny, nz ) < nextLevel then
-						setSkyChanged( changed, nx, ny, nz, nextLevel )
-						pushQueue( q, nx, ny, nz, nextLevel )
+		if bx then
+			local cx, cy, cz, li = cellToChunk( bx, by, bz )
+			local key = chunkKey( cx, cy, cz )
+			if known( cx, cy, cz, key ) then
+				local current
+				if not exposedAt or exposedAt( bx, by, bz ) == true then current = 15
+				else
+					local store = stores[key]
+					current = store and ( store[li] or 0 ) or 0
+				end
+				if current >= level then
+					processed = processed + 1
+					if level > 1 then
+						for i = 1, #NEIGHBORS do
+							local off = NEIGHBORS[i]
+							local nx, ny, nz = bx + off[1], by + off[2], bz + off[3]
+							local ncx, ncy, ncz, nli = cellToChunk( nx, ny, nz )
+							local nkey = chunkKey( ncx, ncy, ncz )
+							local nKnown = known( ncx, ncy, ncz, nkey )
+							local nextLevel = level - resolvedCost( nx, ny, nz, ncx, ncy, ncz, nkey, nKnown )
+							if nextLevel > 0 then
+								-- Exposed cells are implicit 15 and never stored or queued here.
+								if not ( nKnown and ( not exposedAt or exposedAt( nx, ny, nz ) == true ) ) then
+									local store = stores[nkey]
+									if not store or ( store[nli] or 0 ) < nextLevel then
+										if not store then
+											store = {}
+											stores[nkey] = store
+										end
+										store[nli] = nextLevel
+										noteChangedCell( changed, nx, ny, nz )
+										pushQueue( q, nx, ny, nz, nextLevel )
+									end
+								end
+							end
+						end
 					end
 				end
 			end
@@ -249,6 +306,8 @@ end
 
 local function runSkyDecrease( removeQ, addQ, changed )
 	local processed = 0
+	local wave = newWaveContext()
+	local cellToChunk, chunkKey, stores, exposedAt, known = wave.cellToChunk, wave.chunkKey, wave.stores, wave.exposedAt, wave.known
 	while removeQ.head <= removeQ.tail do
 		local bx, by, bz, oldLevel = popQueue( removeQ )
 		if bx then
@@ -256,15 +315,18 @@ local function runSkyDecrease( removeQ, addQ, changed )
 			for i = 1, #NEIGHBORS do
 				local off = NEIGHBORS[i]
 				local nx, ny, nz = bx + off[1], by + off[2], bz + off[3]
-				if skyExposed( nx, ny, nz ) then
+				local ncx, ncy, ncz, nli = cellToChunk( nx, ny, nz )
+				local nkey = chunkKey( ncx, ncy, ncz )
+				if known( ncx, ncy, ncz, nkey ) and ( not exposedAt or exposedAt( nx, ny, nz ) == true ) then
 					-- Exposed neighbors are permanent sources: re-seed the add wave.
 					pushQueue( addQ, nx, ny, nz, 15 )
 				else
 					-- No loaded-chunk gate: stored sky can outlive its chunk,
 					-- the removal wave must chase orphans (same as block light).
-					local neighborLevel = getStoredSky( nx, ny, nz )
+					local store = stores[nkey]
+					local neighborLevel = store and ( store[nli] or 0 ) or 0
 					if neighborLevel > 0 and neighborLevel < oldLevel then
-						setStoredSky( nx, ny, nz, 0 )
+						store[nli] = nil
 						noteChangedCell( changed, nx, ny, nz )
 						pushQueue( removeQ, nx, ny, nz, neighborLevel )
 					elseif neighborLevel >= oldLevel then
@@ -559,6 +621,16 @@ local function queueColumnLoadedChunks( cx, cy, columnX, columnY )
 			queueChunkHalo( cx, cy, chunk.cz, columnX, columnY )
 		end
 	end
+end
+
+-- A chunk that joined without moving any column top changes no sky exposure.
+-- Its light reaches at most one chunk halo, so only that neighborhood refloods.
+function MC.QueueSkyFloodChunkHalo( cx, cy, cz )
+	if not MC.ChunkKey then return end
+	local native = nativeSkyBackend()
+	if native then native.ScheduleBlockLightRebuild( 0.02 ); return end
+	skyDomain = {}
+	queueChunkHalo( cx, cy, cz )
 end
 
 -- A top change affects the entire column and neighboring lighting halos,

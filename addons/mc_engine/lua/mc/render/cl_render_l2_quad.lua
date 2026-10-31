@@ -78,8 +78,12 @@ end
 local function pixel( blockByte, skyByte, shade, tint )
 	-- Java's smoothPack preserves all eight bits after weighted extrapolation.
 	-- The shader clamps to 240 when looking up the lightmap, not during transport.
-	requireValue( integer( blockByte, 0, 255 ) and integer( skyByte, 0, 255 )
-		and integer( shade, 0, 255 ), "invalid corner bytes" )
+	-- Inline range test: this runs for every corner of every quad.
+	if not ( blockByte >= 0 and blockByte <= 255 and skyByte >= 0 and skyByte <= 255
+		and shade >= 0 and shade <= 255 and blockByte == floor( blockByte )
+		and skyByte == floor( skyByte ) and shade == floor( shade ) ) then
+		error( "invalid corner bytes", 0 )
+	end
 	return blockByte + skyByte * 256 + shade * 65536 + tint * 16777216
 end
 

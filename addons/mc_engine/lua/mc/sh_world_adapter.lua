@@ -139,6 +139,13 @@ function MC.WorldFrameSettled()
 	return true
 end
 
+-- True when the active adapter replaces the spherical chunk distance test.
+-- Without one, batch renderers may apply the plain distance limit themselves.
+function MC.ChunkDrawDistanceCustom()
+	local adapter = activeAdapter()
+	return adapter ~= nil and adapter.ChunkDrawDistanceVisible ~= nil
+end
+
 function MC.ChunkDrawDistanceVisible( dx, dy, dz, maxDistSq )
 	maxDistSq = tonumber( maxDistSq ) or 0
 	if maxDistSq <= 0 then return true end

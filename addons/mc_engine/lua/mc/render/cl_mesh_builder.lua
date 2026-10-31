@@ -197,6 +197,7 @@ local function build( key, sectionIndex, lightOnly )
 				opaque, translucent, opaqueRecords, translucentRecords = ctx.flushSectionBuffers()
 				meshPerfAdd( perf, "flushMS", flushStart )
 			end )
+			if ctx then ctx.visibility.FlushStats() end
 			noteVisibilityStats( perf, not ok )
 			if not ok then
 				-- Finish all resource cleanup before strict-mode fault reporting can throw.

@@ -20,6 +20,9 @@ function Visibility.New( chunk, blockSections, perf )
 	local visibilityByType = {}
 	local touchedCount = 0
 	local minX, minY, minZ, snapshot
+	-- Six neighbor queries run per emitted block. Count in upvalues and add
+	-- them to the build's perf table once, in FlushStats.
+	local queries, cacheHits, snapshotReads, stateReads, classResolves = 0, 0, 0, 0, 0
 	local stateSections = chunk.stateSections
 	local stateAPI = MC.StateSection
 	local getState = stateAPI and ( stateAPI.GetFast or stateAPI.Get )
@@ -80,7 +83,7 @@ function Visibility.New( chunk, blockSections, perf )
 			local key = lx - minX + ( ly - minY ) * SIZE + ( lz - minZ ) * SIZE * SIZE + 1
 			local denseSlot = snapshot.slots[key]
 			if denseSlot then state = snapshot.states[denseSlot] else state = 0 end
-			perf.visibilitySnapshotReads = ( perf.visibilitySnapshotReads or 0 ) + 1
+			snapshotReads = snapshotReads + 1
 		elseif not chunk.nativeStateStorage and lx >= 0 and lx < C.CS and ly >= 0 and ly < C.CS and lz >= 0 and lz < C.CH then
 			if not stateSections or not getState then
 				return fail( "state_storage_unavailable", bx, by, bz )
@@ -88,14 +91,14 @@ function Visibility.New( chunk, blockSections, perf )
 			local li = lx + ly * C.CS + lz * C.CS2
 			local section = stateSections[floor( li / STATE_CELLS ) + 1]
 			if section then
-				perf.visibilityStateReads = ( perf.visibilityStateReads or 0 ) + 1
+				stateReads = stateReads + 1
 				state, err = getState( section, li % STATE_CELLS )
 			else
 				state = 0
 			end
 		else
 			if not getBlockState then return fail( "world_state_reader_unavailable", bx, by, bz ) end
-			perf.visibilityStateReads = ( perf.visibilityStateReads or 0 ) + 1
+			stateReads = stateReads + 1
 			state, err = getBlockState( bx, by, bz )
 		end
 		if type( state ) ~= "number" or state < 0 or state == math.huge or state ~= floor( state ) then
@@ -119,11 +122,11 @@ function Visibility.New( chunk, blockSections, perf )
 
 	local function packedClassAt( lx, ly, lz, bx, by, bz )
 		if view.error then return nil end
-		perf.visibilityQueries = ( perf.visibilityQueries or 0 ) + 1
+		queries = queries + 1
 		local slot = cacheSlot( lx, ly, lz )
 		local packed = slot and classes[slot]
 		if packed ~= nil then
-			perf.visibilityCacheHits = ( perf.visibilityCacheHits or 0 ) + 1
+			cacheHits = cacheHits + 1
 			return packed, states[slot]
 		end
 		local state = readState( lx, ly, lz, bx, by, bz, slot )
@@ -138,7 +141,7 @@ function Visibility.New( chunk, blockSections, perf )
 			return packed, state
 		end
 
-		perf.visibilityClassResolves = ( perf.visibilityClassResolves or 0 ) + 1
+		classResolves = classResolves + 1
 		local id, fullCube, translucent, visual, positionIndependent
 		if resolveClass then id, fullCube, translucent, visual, positionIndependent = resolveClass( state, bx, by, bz ) end
 		if id == nil or id == 0 or fullCube == nil or translucent == nil then
@@ -228,9 +231,19 @@ function Visibility.New( chunk, blockSections, perf )
 		return mask, count
 	end
 
+	function view.FlushStats()
+		perf.visibilityQueries = ( perf.visibilityQueries or 0 ) + queries
+		perf.visibilityCacheHits = ( perf.visibilityCacheHits or 0 ) + cacheHits
+		perf.visibilitySnapshotReads = ( perf.visibilitySnapshotReads or 0 ) + snapshotReads
+		perf.visibilityStateReads = ( perf.visibilityStateReads or 0 ) + stateReads
+		perf.visibilityClassResolves = ( perf.visibilityClassResolves or 0 ) + classResolves
+		queries, cacheHits, snapshotReads, stateReads, classResolves = 0, 0, 0, 0, 0
+	end
+
 	-- Called after Native submission has frozen all geometry and neighbor reads.
 	-- Pending upload/publication keeps the view object, but no input arrays.
 	function view.ReleaseInput()
+		view.FlushStats()
 		blockSections, snapshot, stateSections = nil, nil, nil
 		states, classes, touched = {}, {}, {}
 		staticClasses, visibilityByType = {}, {}

@@ -98,7 +98,9 @@ local casterClasses = {
 }
 -- C_PhysicsProp adds static-lighting streams when it sleeps. StudioRender
 -- then ignores $softwareskin. A cached C_ClientsideModel keeps the same posed
--- silhouette without entering that physics-prop-only draw branch.
+-- silhouette without entering that physics-prop-only draw branch. Actors
+-- also use proxies: their native draw paths can suppress the local player
+-- in first person or choose a hardware-skinned studio variant.
 for _, record in pairs( S.entityProxies or {} ) do
 	if IsValid( record.proxy ) then record.proxy:Remove() end
 end
@@ -120,7 +122,7 @@ local function prepareEntityProxy( ent, model )
 	end
 	if not record then
 		local proxy = ClientsideModel( model, RENDERGROUP_OPAQUE )
-		requireValue( IsValid( proxy ), "render_pbr_entity_proxy", "could not create a physics-prop shadow model: " .. model )
+		requireValue( IsValid( proxy ), "render_pbr_entity_proxy", "could not create an entity shadow model: " .. model )
 		record = { proxy = proxy, model = model, bones = {}, poseBones = {}, poseMatrices = {}, poseCount = 0,
 			bodygroups = ent:GetNumBodyGroups() }
 		entityProxies[ent] = record
@@ -148,6 +150,7 @@ local function prepareEntityProxy( ent, model )
 	for group = 0, record.bodygroups - 1 do proxy:SetBodygroup( group, ent:GetBodygroup( group ) ) end
 	-- The copied world matrices already include model/bone scale. The proxy's
 	-- own model scale stays at one so a rigid prop is not scaled a second time.
+	ent:InvalidateBoneCache()
 	ent:SetupBones()
 	local count = 0
 	for i = 1, #record.bones do
@@ -158,7 +161,7 @@ local function prepareEntityProxy( ent, model )
 			record.poseBones[count], record.poseMatrices[count] = bone, pose
 		end
 	end
-	requireValue( count > 0, "render_pbr_entity_proxy_pose", "physics-prop shadow pose is unavailable: " .. model )
+	requireValue( count > 0, "render_pbr_entity_proxy_pose", "entity shadow pose is unavailable: " .. model )
 	record.poseCount = count
 	proxy:InvalidateBoneCache()
 	proxy:SetupBones()
@@ -206,7 +209,8 @@ local function collectEntityCasters( view )
 						local record = entityCasters[entityCount] or {}
 						record.entity, record.bounds = ent, bounds
 						record.x, record.y, record.z = offset.x, offset.y, offset.z
-						if proxyClasses[ent:GetClass()] then record.caster = prepareEntityProxy( ent, model )
+						if proxyClasses[ent:GetClass()] or ent:IsPlayer() or ent:IsNPC() or ent:IsNextBot() then
+							record.caster = prepareEntityProxy( ent, model )
 						else record.caster = ent end
 						entityCasters[entityCount] = record
 					end
@@ -830,6 +834,16 @@ end
 function S.VolumeEnabled()
 	return settings.enabled and settings.strength > 0 and B.SunEnabled()
 		and ( not MC.MeshRender or MC.MeshRender:GetBool() )
+end
+
+-- CPU receivers follow the published projection, including its throttled sun
+-- direction. Never reuse an atlas from a previously selected shader pack.
+function S.EntityLightShadow()
+	if not S.valid or S.active ~= L.active or not S.program or not S.VolumeEnabled() then return nil end
+	local active, current = L.active, S.current
+	if active.world ~= MC.World or active.worldGeneration ~= MC.StateWorldGeneration
+		or current.blockSize ~= MC.API.Coords.BlockSize() or MC.WorldFrameSettled and not MC.WorldFrameSettled() then return nil end
+	return current.sx, current.sy, current.sz, settings.strength, current.radius * 4
 end
 
 local volumeCamera = { enabled = false }

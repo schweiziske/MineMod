@@ -27,12 +27,13 @@ local function convarFloat( cvar, fallback, minV, maxV )
 	return math.Clamp( tonumber( v ) or fallback, minV, maxV )
 end
 
-local function sunOccluded( pos, sunDir )
+local function sunOccluded( pos, sunDir, distance )
 	-- Step out of the source cell first so a particle spawned inside the
 	-- broken block does not self-shadow on its own (already removed) cell.
-	local step = MC.BS * 0.05
+	local size = MC.API.Coords.BlockSize()
+	local step = size * 0.05
 	local start = pos + sunDir * step
-	local maxDist = SHADOW_TRACE_BLOCKS * MC.BS
+	local maxDist = distance or SHADOW_TRACE_BLOCKS * size
 	for _ = 1, SHADOW_MAX_PASSTHROUGH do
 		local hit = MC.TraceBlockRay( start, sunDir, maxDist )
 		if not hit then return false end
@@ -50,13 +51,24 @@ end
 -- light body is visible, lerped toward the shadow tint floor (matching the
 -- fancy chunk shader) when a voxel occludes it. Cached per cell per frame
 -- because break particles sample in bursts within the same block.
-function MC.SampleSunShadow( pos )
-	if not ( MC.UsingMeshShadowMap and MC.UsingMeshShadowMap() ) then return 1 end
-	if not ( MC.MeshShadowLightDirection and MC.TraceBlockRay and MC.WorldToCell ) then return 1 end
-
-	local strength = convarFloat( MC.MeshShadowMapStrength, 0.75, 0, 1 )
-	local sunDir, scale = MC.MeshShadowLightDirection()
-	strength = strength * math.Clamp( tonumber( scale ) or 1, 0, 1 )
+function MC.SampleSunShadow( pos, precise )
+	if not ( MC.TraceBlockRay and MC.WorldToCell ) then return 1 end
+	local sunDir, strength, distance, tint
+	local runtime = MC.RenderPackRuntime
+	if runtime and runtime.active then
+		local shadows = MC.RenderPBRShadows
+		if not shadows or not shadows.EntityLightShadow then return 1 end
+		local sx, sy, sz
+		sx, sy, sz, strength, distance = shadows.EntityLightShadow()
+		if not sx then return 1 end
+		sunDir, tint = Vector( sx, sy, sz ), 0
+	else
+		if not ( MC.UsingMeshShadowMap and MC.UsingMeshShadowMap() and MC.MeshShadowLightDirection ) then return 1 end
+		local scale
+		sunDir, scale = MC.MeshShadowLightDirection()
+		strength = convarFloat( MC.MeshShadowMapStrength, 0.75, 0, 1 ) * math.Clamp( tonumber( scale ) or 1, 0, 1 )
+		tint = convarFloat( MC.MeshShadowMapTint, 0.6, 0, 1 )
+	end
 	if strength <= 0 or not sunDir then return 1 end
 
 	local frame = FrameNumber and FrameNumber() or 0
@@ -66,15 +78,14 @@ function MC.SampleSunShadow( pos )
 	end
 	local key
 	local bx, by, bz = MC.WorldToCell( pos )
-	if bx ~= nil and MC.CellKey then
+	if not precise and bx ~= nil and MC.CellKey then
 		key = MC.CellKey( bx, by, bz )
 		local cached = cacheFactor[key]
 		if cached then return cached end
 	end
 
 	local factor = 1
-	if sunOccluded( pos, sunDir ) then
-		local tint = convarFloat( MC.MeshShadowMapTint, 0.6, 0, 1 )
+	if sunOccluded( pos, sunDir, distance ) then
 		factor = 1 - strength * ( 1 - tint )
 	end
 	if key ~= nil then cacheFactor[key] = factor end
@@ -97,10 +108,11 @@ end
 -- a held item from snapping between two integer cells as the hand bobs across
 -- a boundary, while still using the exact propagated block/sky fields.
 function MC.SampleDynamicLightLevels( pos, emission )
-	if not ( pos and MC.SampleLighting and MC.BS ) then return 15, 15 end
-	local gx = pos.x / MC.BS - 0.5
-	local gy = pos.y / MC.BS - 0.5
-	local gz = pos.z / MC.BS - 0.5
+	if not ( pos and MC.SampleLighting ) then return 15, 15 end
+	local size = MC.API.Coords.BlockSize()
+	local gx = pos.x / size - 0.5
+	local gy = pos.y / size - 0.5
+	local gz = pos.z / size - 0.5
 	local x0, y0, z0 = math.floor( gx ), math.floor( gy ), math.floor( gz )
 	local fx, fy, fz = gx - x0, gy - y0, gz - z0
 	local block, sky = {}, {}
@@ -118,6 +130,47 @@ function MC.SampleDynamicLightLevels( pos, emission )
 	local blockLevel = trilerp( block[1], block[2], block[3], block[4], block[5], block[6], block[7], block[8], fx, fy, fz )
 	local skyLevel = trilerp( sky[1], sky[2], sky[3], sky[4], sky[5], sky[6], sky[7], sky[8], fx, fy, fz )
 	return math.max( blockLevel, math.Clamp( tonumber( emission ) or 0, 0, 15 ) ), skyLevel
+end
+
+local function lightmapLinear( value )
+	if value <= 0.04045 then return value / 12.92 end
+	return ( ( value + 0.055 ) / 1.055 ) ^ 2.4
+end
+
+local function entityPBRDiffuse( total, base, sun, direct, exposure )
+	-- $texture2 is sampled as sRGB by PBR; the CPU copy contains RGB bytes.
+	total, base = lightmapLinear( total ), lightmapLinear( base )
+	local linear = ( base + math.max( total - base, 0 ) * 0.4 + sun * direct ) * exposure
+	local mapped = math.Clamp( linear * ( 2.51 * linear + 0.03 ) / ( linear * ( 2.43 * linear + 0.59 ) + 0.14 ), 0, 1 )
+	return mapped ^ ( 1 / 2.2 )
+end
+
+-- Source models receive the active lightmap, including night vision and
+-- grayscale settings. Do not reconstruct a second, subtly different map.
+-- PBR uses a diffuse-only CPU approximation: the engine's materials cannot
+-- sample our shadow atlas or captured IBL. Keep block/ambient light separate
+-- from direct sunlight so an occluder removes only the direct term.
+function MC.SampleEntityLightingRGB( pos )
+	local block, sky = MC.SampleDynamicLightLevels( pos, 0 )
+	if not MC.Check( MC.GlobalLightmapRevision and MC.GlobalLightmapRevision > 0,
+		"entity_lightmap_unready", "entity lighting requires a published global lightmap" ) then return 0, 0, 0 end
+	local r, g, b = MC.SampleGlobalLightmapRGB( block, sky )
+	local active = MC.RenderPackRuntime and MC.RenderPackRuntime.active
+	local definition = active and active.plan.owners["pack/" .. active.pack].definition
+	local adapter = definition and definition.adapter
+	if adapter == "mc:pbr_quad_v4" or adapter == "mc:pbr_quad_v5" then
+		local br, bg, bb = MC.SampleGlobalLightmapRGB( block, 0 )
+		local exposure, sr, sg, sb = MC.RenderPBR.EntityLightParameters()
+		local direct = ( math.Clamp( sky / 15, 0, 1 ) ^ 2 ) * MC.SampleSunShadow( pos, true ) / math.pi
+		r, g, b = entityPBRDiffuse( r, br, sr, direct, exposure ),
+			entityPBRDiffuse( g, bg, sg, direct, exposure ), entityPBRDiffuse( b, bb, sb, direct, exposure )
+	end
+	local moving = MC.RenderDynamicLights
+	if moving then
+		local dr, dg, db = moving.SampleRGB( pos )
+		r, g, b = r + math.min( dr, 1 ) * ( 1 - r ), g + math.min( dg, 1 ) * ( 1 - g ), b + math.min( db, 1 ) * ( 1 - b )
+	end
+	return r, g, b
 end
 
 local function blockCurveUnit( level )

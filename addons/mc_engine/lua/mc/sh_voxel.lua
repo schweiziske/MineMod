@@ -1085,10 +1085,56 @@ end
 --- Iterate authoritative non-air states in deterministic local-index order.
 -- cb( bx,by,bz, lx,ly,lz, stateId )
 -- Optional stateFilter is evaluated per palette state, before decoding cells.
+-- Native sections expose a state histogram. A filtered scan classifies those
+-- distinct states and exports only accepted cells, instead of copying every
+-- non-air cell of the chunk into a Lua table. Returns false before any
+-- callback when the session cannot answer, so the caller can use the full copy.
+local NATIVE_STATE_SECTIONS = ( CS / STATE_SECTION_HEIGHT ) * ( CS / STATE_SECTION_HEIGHT ) * ( CH / STATE_SECTION_HEIGHT )
+local function forEachNativeFilteredState( backend, chunk, cb, stateFilter, ox, oy, oz )
+	if not ( backend.SupportsSectionCellFilter and backend.SupportsSectionCellFilter() and backend.GetSectionInfo ) then
+		return false
+	end
+	local selected, exports = {}, nil
+	for index = 1, NATIVE_STATE_SECTIONS do
+		local info = backend.GetSectionInfo( chunk, index )
+		if not info then return false end
+		local accepted
+		for stateId in pairs( info.counts ) do
+			local keep = selected[stateId]
+			if keep == nil then
+				keep = not not stateFilter( stateId )
+				selected[stateId] = keep
+			end
+			if keep then
+				accepted = accepted or {}
+				accepted[#accepted + 1] = stateId
+			end
+		end
+		if accepted then
+			local cells = backend.GetSectionCellsFiltered( chunk, index, accepted )
+			if not cells then return false end
+			exports = exports or {}
+			exports[#exports + 1] = cells
+		end
+	end
+	if not exports then return true end
+	for e = 1, #exports do
+		local cells = exports[e]
+		for i = 1, #cells, 2 do
+			local li = cells[i]
+			local lx, ly, lz = MC.DecodeLocal( li )
+			cb( ox + lx, oy + ly, oz + lz, lx, ly, lz, cells[i + 1] )
+		end
+	end
+	return true
+end
+
 function MC.ForEachBlockState( chunk, cb, stateFilter )
 	if not chunk or not cb then return end
 	if chunk.nativeStateStorage then
 		local backend = CLIENT and MC.ChunkBackends and MC.ChunkBackends.native or nil
+		if backend and stateFilter and forEachNativeFilteredState( backend, chunk, cb, stateFilter,
+			chunk.cx * CS, chunk.cy * CS, chunk.cz * CH ) then return end
 		local cells = backend and backend.GetChunkCells and backend.GetChunkCells( chunk ) or nil
 		if not cells then return end
 		local ox, oy, oz = chunk.cx * CS, chunk.cy * CS, chunk.cz * CH

@@ -1,14 +1,18 @@
--- Minecraft voxel lighting for Source-rendered players and prop models.
+-- Minecraft voxel lighting for Source-rendered players, NPCs and prop models.
 -- Opt-in because replacing prop RenderOverride can interact with other addons.
 MC = MC or {}
 
 MC.EntityLightingEnabled = CreateClientConVar(
 	"mc_light_entity", "0", true, false,
-	"Apply interpolated Minecraft lighting to players and common prop models"
+	"Apply interpolated Minecraft lighting to players, NPCs and common prop models"
 )
 MC.EntityLightingPlayers = CreateClientConVar(
-	"mc_light_entity_players", "0", true, false,
+	"mc_light_entity_players", "1", true, false,
 	"Apply Minecraft entity lighting to players"
+)
+MC.EntityLightingNPCs = CreateClientConVar(
+	"mc_light_entity_npcs", "1", true, false,
+	"Apply Minecraft entity lighting to NPCs and NextBots"
 )
 MC.EntityLightingProps = CreateClientConVar(
 	"mc_light_entity_props", "1", true, false,
@@ -82,6 +86,7 @@ local masterEnabled = MC.EntityLightingEnabled and MC.EntityLightingEnabled:GetB
 local playerLightingEnabled = MC.EntityLightingPlayers and MC.EntityLightingPlayers:GetBool() or false
 local propLightingEnabled = MC.EntityLightingProps and MC.EntityLightingProps:GetBool() or false
 local vehicleLightingEnabled = MC.EntityLightingVehicles and MC.EntityLightingVehicles:GetBool() or false
+local npcLightingEnabled = MC.EntityLightingNPCs:GetBool()
 
 local function enabled()
 	return masterEnabled
@@ -101,6 +106,7 @@ end
 
 local function entityClassEnabled( ent )
 	if not IsValid( ent ) then return false end
+	if ent:IsNPC() or ent:IsNextBot() then return enabled() and npcLightingEnabled end
 	local class = ent:GetClass()
 	return PROP_CLASSES[class] and propsEnabled()
 		or VEHICLE_CLASSES[class] and vehiclesEnabled()
@@ -137,17 +143,17 @@ local function samplePosition( ent, player )
 end
 
 local function sampleEntity( ent, player, position, minimum, maximum )
-	local r, g, b = MC.SampleDynamicLightingRGB( position, 0 )
+	local r, g, b = MC.SampleEntityLightingRGB( position )
 	if player then return r, g, b end
 	local inset = MC.API.Coords.BlockSize() * 0.125
 	local point = Vector( position.x, position.y, position.z )
 	for axis = 1, 3 do
 		local key = axis == 1 and "x" or axis == 2 and "y" or "z"
 		point[key] = minimum[key] - inset
-		local sr, sg, sb = MC.SampleDynamicLightingRGB( point, 0 )
+		local sr, sg, sb = MC.SampleEntityLightingRGB( point )
 		r, g, b = r + sr, g + sg, b + sb
 		point[key] = maximum[key] + inset
-		sr, sg, sb = MC.SampleDynamicLightingRGB( point, 0 )
+		sr, sg, sb = MC.SampleEntityLightingRGB( point )
 		r, g, b = r + sr, g + sg, b + sb
 		point[key] = position[key]
 	end
@@ -190,6 +196,9 @@ local function processSamples( now, frame, interval )
 end
 
 local function sampledRGB( ent, player )
+	-- World/lightmap publication can lag entity creation during connection.
+	-- Keep the engine draw until a real MC lightmap is available.
+	if not MC.GlobalLightmapRevision or MC.GlobalLightmapRevision <= 0 then return nil end
 	local now, frame = RealTime(), FrameNumber()
 	local state = lightStates[ent]
 	local interval = sampleInterval()
@@ -265,45 +274,43 @@ local function restoreMaterialReflections( states )
 	end
 end
 
--- Preserve Source's normal/model shading, including frozen prop lighting.
--- MC light changes the model's RGB multiplier; it never leaves a global
--- fullbright switch or a hard-coded white multiplier behind after a draw.
+-- Own the ambient cube for this draw. Multiplying Source's baked lighting
+-- by MC light applies two unrelated worlds' lighting, and setting the cube
+-- without suppression lets StudioRender replace it during DrawModel.
 local function beginModelLighting( ent, player, state )
 	local r, g, b = sampledRGB( ent, player )
 	if not r then return end
 	state.r, state.g, state.b = render.GetColorModulation()
 	state.materials = {}
 	dampMaterialReflections( ent, r, g, b, state.materials )
-	render.SetColorModulation( state.r * r, state.g * g, state.b * b )
+	local gamma = player and playerLightingGamma() or 2.2
+	state.lighting = true
+	render.SuppressEngineLighting( true )
+	render.SetLocalModelLights()
+	render.ResetModelLighting( r ^ gamma, g ^ gamma, b ^ gamma )
 end
 
 local function endModelLighting( state )
+	if state.lighting then
+		render.ResetModelLighting( 1, 1, 1 )
+		render.SuppressEngineLighting( false )
+	end
 	if not state.r then return end
 	render.SetColorModulation( state.r, state.g, state.b )
 	restoreMaterialReflections( state.materials )
 end
 
--- Source StudioModel lighting: an ambient cube sampled at a lighting origin.
--- Draw immediately in PrePlayerDraw so the cube cannot be replaced before the
--- model call. No color modulation, stencil, blend override or fullbright mode.
+-- Use the same owned lighting scope for actors and props, including cleanup
+-- if material setup or the model draw raises an error.
 local function drawPlayerWithSourceLighting( ply )
-	local r, g, b = sampledRGB( ply, true )
-	if not r then return end
-	-- SampleDynamicLightingRGB is also used as a display/vertex-color multiplier
-	-- by held items and particles. Source's ambient cube consumes linear HDR
-	-- intensity instead, so feeding 0.48 directly appears roughly 70% bright.
-	-- Convert the sampled display values to linear before setting model light.
-	local gamma = playerLightingGamma()
-	r, g, b = r ^ gamma, g ^ gamma, b ^ gamma
-	local origin = MC.API.Coords.EntityEyeWorldPos( ply )
-	local engineOrigin = MC.API.Coords.WorldToEngine( origin, ply )
-	render.SetLightingOrigin( engineOrigin )
-	render.SetLocalModelLights() -- remove unrelated Source local lights
-	render.ResetModelLighting( r, g, b ) -- sets all six ambient-cube faces
+	local state = {}
 	playerSourceDrawActive = true
-	local ok, err = pcall( ply.DrawModel, ply )
+	local ok, err = pcall( function()
+		beginModelLighting( ply, true, state )
+		ply:DrawModel()
+	end )
 	playerSourceDrawActive = false
-	render.ResetModelLighting( 1, 1, 1 )
+	endModelLighting( state )
 	if not ok then MC.Fault( "entity_light_player_draw", "%s", tostring( err ) ) end
 end
 
@@ -373,7 +380,7 @@ local function clearLightStates()
 end
 
 local function refreshProps()
-	if enabled() and not MC.Check( type( MC.SampleDynamicLightingRGB ) == "function"
+	if enabled() and not MC.Check( type( MC.SampleEntityLightingRGB ) == "function"
 		and MC.API and MC.API.Coords and MC.API.Coords.EntityWorldAABB
 		and MC.API.Coords.EntityEyeWorldPos and MC.API.Coords.WorldToEngine,
 		"entity_light_api", "entity lighting requires the world-coordinate RGB sampler" ) then return end
@@ -382,7 +389,7 @@ local function refreshProps()
 		clearLightStates()
 		return
 	end
-	if not ( propsEnabled() or vehiclesEnabled() ) then
+	if not ( propsEnabled() or vehiclesEnabled() or npcLightingEnabled ) then
 		for ent in pairs( wrappedProps ) do unwrapProp( ent ) end
 		return
 	end
@@ -407,7 +414,7 @@ hook.Remove( "PostDrawOpaqueRenderables", "mc_entity_lighting_safety" )
 hook.Remove( "PostDrawTranslucentRenderables", "mc_entity_lighting_safety" )
 
 hook.Add( "OnEntityCreated", "mc_entity_lighting_props", function( ent )
-	if not ( propsEnabled() or vehiclesEnabled() ) then return end
+	if not enabled() then return end
 	timer.Simple( 0, function()
 		if IsValid( ent ) then wrapProp( ent ) end
 	end )
@@ -436,6 +443,7 @@ if cvars.RemoveChangeCallback then
 	cvars.RemoveChangeCallback( "mc_light_entity_players", "mc_light_entity_players_refresh" )
 	cvars.RemoveChangeCallback( "mc_light_entity_props", "mc_light_entity_props_refresh" )
 	cvars.RemoveChangeCallback( "mc_light_entity_vehicles", "mc_light_entity_vehicles_refresh" )
+	cvars.RemoveChangeCallback( "mc_light_entity_npcs", "mc_light_entity_npcs_refresh" )
 end
 
 cvars.AddChangeCallback( "mc_light_entity", function( _, _, newValue )
@@ -456,6 +464,10 @@ cvars.AddChangeCallback( "mc_light_entity_vehicles", function( _, _, newValue )
 	vehicleLightingEnabled = convarValueEnabled( newValue )
 	refreshProps()
 end, "mc_light_entity_vehicles_refresh" )
+cvars.AddChangeCallback( "mc_light_entity_npcs", function( _, _, newValue )
+	npcLightingEnabled = convarValueEnabled( newValue )
+	refreshProps()
+end, "mc_light_entity_npcs_refresh" )
 
 if previousWrappedProps then
 	for ent, record in pairs( previousWrappedProps ) do

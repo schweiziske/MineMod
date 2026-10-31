@@ -277,6 +277,9 @@ end
 
 local dirtyKeys, dirtyScores, dirtyPriorities = {}, {}, {}
 local dirtyPinnedOnly = {}
+-- Min-heap over dirtyKeys' members. A frame usually consumes a few keys, so
+-- popping on demand replaces a full comparator sort of every dirty chunk.
+local dirtyHeap, dirtyHeapSize = {}, 0
 
 local function clearDirtySelection()
 	for i = 1, #dirtyKeys do
@@ -284,6 +287,14 @@ local function clearDirtySelection()
 		dirtyKeys[i], dirtyScores[key], dirtyPriorities[key] = nil, nil, nil
 		dirtyPinnedOnly[key] = nil
 	end
+	for i = dirtyHeapSize, 1, -1 do dirtyHeap[i] = nil end
+	dirtyHeapSize = 0
+end
+
+-- Diagnostics/tests: the per-frame scratch arrays, which must be empty
+-- between frames and reused rather than reallocated.
+function MC.MeshDirtySelectionScratch()
+	return dirtyKeys, dirtyHeap
 end
 
 local function dirtyKeyLess( a, b )
@@ -295,8 +306,22 @@ local function dirtyKeyLess( a, b )
 	return type( a ) == "number"
 end
 
+local function siftDirtyKey( i )
+	local heap, size = dirtyHeap, dirtyHeapSize
+	local key = heap[i]
+	while true do
+		local child = i * 2
+		if child > size then break end
+		if child < size and dirtyKeyLess( heap[child + 1], heap[child] ) then child = child + 1 end
+		if not dirtyKeyLess( heap[child], key ) then break end
+		heap[i] = heap[child]
+		i = child
+	end
+	heap[i] = key
+end
+
 -- The sparse maps remain authoritative for network/legacy writers. Only the
--- sorted selection is scratch; it never retains section tables across builds.
+-- ordered selection is scratch; it never retains section tables across builds.
 local function sortedDirtyKeys( dirty, rateLimited, buildDistance, pcx, pcy, pcz, blockSize, allowPinned )
 	clearDirtySelection()
 	local chunkW, chunkH
@@ -360,8 +385,22 @@ local function sortedDirtyKeys( dirty, rateLimited, buildDistance, pcx, pcy, pcz
 			end
 		end
 	end
-	if #dirtyKeys > 1 then table.sort( dirtyKeys, dirtyKeyLess ) end
-	return dirtyKeys, depth
+	-- dirtyKeyLess is a total order, so pops follow exactly the former sort.
+	local count = #dirtyKeys
+	for i = 1, count do dirtyHeap[i] = dirtyKeys[i] end
+	for i = #dirtyHeap, count + 1, -1 do dirtyHeap[i] = nil end
+	dirtyHeapSize = count
+	for i = math.floor( count / 2 ), 1, -1 do siftDirtyKey( i ) end
+	return count, depth
+end
+
+local function popDirtyKey()
+	local key = dirtyHeap[1]
+	dirtyHeap[1] = dirtyHeap[dirtyHeapSize]
+	dirtyHeap[dirtyHeapSize] = nil
+	dirtyHeapSize = dirtyHeapSize - 1
+	if dirtyHeapSize > 1 then siftDirtyKey( 1 ) end
+	return key
 end
 
 MC.ExplosionMeshFrameMS = MC.ExplosionMeshFrameMS or ( CreateClientConVar and CreateClientConVar(
@@ -645,12 +684,12 @@ end
 
 local function buildSelectedDirtyKeys( dirty, rateLimited, lightOnly, buildDistance, pcx, pcy, pcz, blockSize, budget )
 	local selectionStart = SysTime()
-	local keys, depth = sortedDirtyKeys( dirty, rateLimited, buildDistance, pcx, pcy, pcz, blockSize, not budget.native )
+	local count, depth = sortedDirtyKeys( dirty, rateLimited, buildDistance, pcx, pcy, pcz, blockSize, not budget.native )
 	budget.selectionMS = budget.selectionMS + ( SysTime() - selectionStart ) * 1000
 	local keyCount, sectionCount = 0, 0
-	local eligible = #keys > 0
-	for i = 1, #keys do
-		local key = keys[i]
+	local eligible = count > 0
+	for _ = 1, count do
+		local key = popDirtyKey()
 		local limited = dirtyPriorities[key] == 2
 		local skyPending = false
 		if not budget.native and MC.SkyFloodPendingForChunk then

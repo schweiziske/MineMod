@@ -1087,18 +1087,22 @@ end
 -- Iterate every currently loaded non-air cell without exposing MC.World or a
 -- chunk object. This is intended for rebuilding client-side derived indexes
 -- after MC.ClientWorldProjectionChanged, not for per-frame polling.
-function World.ForEachLoadedBlock( callback )
+-- Optional stateFilter( stateId ) -> bool selects states by section palette, so
+-- an index of rare blocks does not visit every loaded cell.
+function World.ForEachLoadedBlock( callback, stateFilter )
 	if not isfunction( callback ) then return false, "invalid_callback" end
+	if stateFilter ~= nil and not isfunction( stateFilter ) then return false, "invalid_state_filter" end
 	if not MC.ForEachBlockState then return false, "world_iteration_unavailable" end
 	local visited = 0
 	for _, chunk in pairs( MC.World or {} ) do
 		local stopped = false
 		MC.ForEachBlockState( chunk, function( bx, by, bz, _, _, _, stateId )
+			if stopped then return false end
 			visited = visited + 1
 			local ok, result = pcall( callback, bx, by, bz, stateId )
 			if not ok then stopped = "callback_failed" return false end
 			if result == false then stopped = true return false end
-		end )
+		end, stateFilter )
 		if stopped == "callback_failed" then return false, stopped, visited end
 		if stopped == true then break end
 	end

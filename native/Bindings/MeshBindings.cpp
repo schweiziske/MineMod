@@ -17,6 +17,8 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
+#include <vector>
 
 namespace mcmesh::l2bridge
 {
@@ -789,6 +791,46 @@ int UploadRelight(ILuaBase *inLua)
 		{
 			++GetBindingState().mRelightBatches;
 			for (const auto &update : transaction.updates())
+				GetBindingState().mNativePixelTexels += update.next->occlusion.size() * 5;
+		}
+		inLua->PushBool(true);
+		return 1;
+	}
+	catch (const std::exception &e)
+	{
+		return Fail(inLua, top, e.what());
+	}
+}
+int UploadRelightBatch(ILuaBase *inLua)
+{
+	const int top = inLua->Top();
+	try
+	{
+		l2::require(inLua->IsType(1, Type::Table), "invalid Native L2 relight batch");
+		const int	 count = inLua->ObjLen(1);
+		const double texture = ReadNumber(inLua, 2);
+		l2::require(count > 0, "empty Native L2 relight batch");
+		std::vector<l2::PixelTransaction *>	   transactions;
+		std::unordered_set<const l2::PixelSlot *> targets;
+		transactions.reserve(size_t(count));
+		for (int i = 1; i <= count; ++i)
+		{
+			inLua->PushNumber(double(i));
+			inLua->RawGet(1);
+			auto *transaction = inLua->GetUserType<l2::PixelTransaction>(-1, GetBindingState().mPixelTransactionType);
+			inLua->Pop();
+			l2::require(transaction != nullptr, "Native L2 lighting transaction was released");
+			// Rollback restores each transaction's previous pixels; shared meshes
+			// would make that order-dependent.
+			for (const auto &update : transaction->updates())
+				l2::require(targets.insert(update.target.get()).second, "duplicate Native L2 relight mesh in batch");
+			transactions.push_back(transaction);
+		}
+		pixelupload::GetPixelTextureStore().UploadNativeBatch(transactions, pixelupload::ParsePixelTextureId(texture));
+		for (const auto *transaction : transactions)
+		{
+			++GetBindingState().mRelightBatches;
+			for (const auto &update : transaction->updates())
 				GetBindingState().mNativePixelTexels += update.next->occlusion.size() * 5;
 		}
 		inLua->PushBool(true);

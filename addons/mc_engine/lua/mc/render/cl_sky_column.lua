@@ -242,15 +242,43 @@ local function invalidateChunkFootprint( cx, cy, cz )
 	end
 end
 
+-- Column tops over a chunk footprint, in column order. Absent chunks never
+-- block, so before the chunk enters chunkColumns this is the previous state.
+local function footprintTops( cx, cy )
+	local cs, result = MC.CS or 16, {}
+	for lx = 0, cs - 1 do
+		for ly = 0, cs - 1 do
+			result[#result + 1] = MC.SkyColumnTop( cx * cs + lx, cy * cs + ly )
+		end
+	end
+	return result
+end
+
 function MC.NoteSkyColumnChunkLoaded( chunk )
 	if not ( chunk and chunk.cx ~= nil ) then return end
-	noteChunkPresence( chunk.cx, chunk.cy, chunk.cz, true )
-	invalidateChunkFootprint( chunk.cx, chunk.cy, chunk.cz )
-	-- Column tops over this footprint changed wholesale: re-flood the sky
-	-- light of the whole chunk column plus its lateral neighbors (BFS light
-	-- reaches at most 14 blocks, less than one chunk).
+	local cx, cy, cz = chunk.cx, chunk.cy, chunk.cz
+	-- Only a fresh arrival can be compared: a chunk already listed would make
+	-- the "before" tops read its replacement data from MC.World.
+	local list = chunkColumns and chunkColumns[chunkColKey( cx, cy )]
+	local before = chunkColumns and not ( list and list[cz] ) and MC.QueueSkyFloodChunkHalo
+		and footprintTops( cx, cy ) or nil
+	noteChunkPresence( cx, cy, cz, true )
+	invalidateChunkFootprint( cx, cy, cz )
+	if before then
+		local after, unchanged = footprintTops( cx, cy ), true
+		for i = 1, #before do
+			if before[i] ~= after[i] then unchanged = false break end
+		end
+		if unchanged then
+			MC.QueueSkyFloodChunkHalo( cx, cy, cz )
+			return
+		end
+	end
+	-- Column tops over this footprint changed: re-flood the sky light of the
+	-- whole chunk column plus its lateral neighbors (BFS light reaches at most
+	-- 14 blocks, less than one chunk).
 	if MC.QueueSkyFloodColumn then
-		MC.QueueSkyFloodColumn( chunk.cx, chunk.cy, chunk.cz )
+		MC.QueueSkyFloodColumn( cx, cy, cz )
 	end
 end
 
