@@ -214,8 +214,14 @@ local function prepareDepth( view, records, scene, postGroup, postRequired )
     -- Push3DView. Match the captured, already-adjusted horizontal FOV exactly;
     -- its default player view need not match a CalcView override of this view.
     camera.fov = c.fov
-    camera.offcenter = view.offcenter and { left = -c.jitterX * c.width, right = ( 1 - c.jitterX ) * c.width,
-        top = c.jitterY * c.height, bottom = ( 1 + c.jitterY ) * c.height } or nil
+    -- Offcenter tables are owned by this capture and refilled in place.
+    camera.offcenter = nil
+    if view.offcenter then
+        local o = c.cameraOffcenter or {}
+        c.cameraOffcenter = o
+        o.left, o.right, o.top, o.bottom = -c.jitterX * c.width, ( 1 - c.jitterX ) * c.width, c.jitterY * c.height, ( 1 + c.jitterY ) * c.height
+        camera.offcenter = o
+    end
     local right, up, forward = camera.angles:Right(), camera.angles:Up(), camera.angles:Forward()
     local tangent = math.tan( math.rad( c.fov ) * 0.5 )
     local tanX, tanY = tangent * 1.05, tangent / c.aspect * 1.05
@@ -258,8 +264,11 @@ local function prepareDepth( view, records, scene, postGroup, postRequired )
     c.depthCamera.x, c.depthCamera.y = floor( c.x * depthSX ), floor( c.y * depthSY )
     c.depthCamera.w, c.depthCamera.h = max( 1, floor( c.width * depthSX ) ), max( 1, floor( c.height * depthSY ) )
     if camera.offcenter then
-        c.depthCamera.offcenter = { left = -c.jitterX * c.depthCamera.w, right = ( 1 - c.jitterX ) * c.depthCamera.w,
-            top = c.jitterY * c.depthCamera.h, bottom = ( 1 + c.jitterY ) * c.depthCamera.h }
+        local o = c.depthOffcenter or {}
+        c.depthOffcenter = o
+        o.left, o.right = -c.jitterX * c.depthCamera.w, ( 1 - c.jitterX ) * c.depthCamera.w
+        o.top, o.bottom = c.jitterY * c.depthCamera.h, ( 1 + c.jitterY ) * c.depthCamera.h
+        c.depthCamera.offcenter = o
     end
     local trace = c.traceCamera
     trace.offcenter = nil
@@ -268,8 +277,11 @@ local function prepareDepth( view, records, scene, postGroup, postRequired )
     trace.x, trace.y = floor( c.x * sx ), floor( c.y * sy )
     trace.w, trace.h = max( 1, floor( c.width * sx ) ), max( 1, floor( c.height * sy ) )
     if camera.offcenter then
-        trace.offcenter = { left = -c.jitterX * trace.w, right = ( 1 - c.jitterX ) * trace.w,
-            top = c.jitterY * trace.h, bottom = ( 1 + c.jitterY ) * trace.h }
+        local o = c.traceOffcenter or {}
+        c.traceOffcenter = o
+        o.left, o.right = -c.jitterX * trace.w, ( 1 - c.jitterX ) * trace.w
+        o.top, o.bottom = c.jitterY * trace.h, ( 1 + c.jitterY ) * trace.h
+        trace.offcenter = o
     end
     c.scaleX, c.scaleY = trace.w / c.width, trace.h / c.height
     local horizontal = 0.5 / tangent

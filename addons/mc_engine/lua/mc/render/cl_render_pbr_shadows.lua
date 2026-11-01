@@ -180,48 +180,132 @@ hook.Add( "EntityRemoved", "mc_l2_pbr_entity_proxy", function( ent )
 end )
 hook.Add( "ShutDown", "mc_l2_pbr_entity_proxy", clearEntityProxies )
 
+-- Caster eligibility shared by collection and change polling.
+local function casterModel( ent )
+	if IsValid( ent ) and not ent:GetNoDraw() and not ent:IsDormant()
+		and ( casterClasses[ent:GetClass()] or ent:IsPlayer() or ent:IsNPC() or ent:IsNextBot() or ent:IsVehicle() )
+		and ( not ent:IsPlayer() or ent:Alive() )
+		and ent:GetColor().a == 255 then
+		local model = ent:GetModel()
+		if model and string.sub( model, -4 ) == ".mdl" then return model end
+	end
+end
+
+-- Render-space bounds written into a caller-owned table.
+local function casterBounds( ent, bounds )
+	local coords = MC.API.Coords
+	local minimum, maximum = coords.EntityWorldAABB( ent )
+	requireValue( minimum and maximum, "render_pbr_entity_bounds", "entity shadow bounds are unavailable" )
+	minimum, maximum = coords.WorldToRender( minimum ), coords.WorldToRender( maximum )
+	bounds.x, bounds.y, bounds.z = ( minimum.x + maximum.x ) * 0.5, ( minimum.y + maximum.y ) * 0.5, ( minimum.z + maximum.z ) * 0.5
+	bounds.hx, bounds.hy, bounds.hz = ( maximum.x - minimum.x ) * 0.5, ( maximum.y - minimum.y ) * 0.5, ( maximum.z - minimum.z ) * 0.5
+	return bounds
+end
+
+-- Per-entity transform snapshot from the last collection or poll. Models have
+-- no pose revision, so actors (skeletal animation, aim pose parameters and
+-- gesture layers) always count as moved; rigid casters compare their engine
+-- transform, sequence, cycle and skin exactly. Re-origining invalidates the
+-- atlas separately, so engine-frame values are sufficient here.
+local casterStates, casterPass = {}, 0
+local scratchBounds = {}
+local function casterMoved( state, ent, model )
+	local actor = ent:IsPlayer() or ent:IsNPC() or ent:IsNextBot() or ent:GetClass() == "prop_ragdoll"
+	local pos, ang = ent:GetPos(), ent:GetAngles()
+	local px, py, pz, ap, ay, ar = pos.x, pos.y, pos.z, ang.p, ang.y, ang.r
+	local cycle, sequence, skin = ent:GetCycle(), ent:GetSequence(), ent:GetSkin()
+	local moved = actor or state.model ~= model or state.px ~= px or state.py ~= py or state.pz ~= pz
+		or state.ap ~= ap or state.ay ~= ay or state.ar ~= ar
+		or state.cycle ~= cycle or state.sequence ~= sequence or state.skin ~= skin
+	state.model, state.px, state.py, state.pz, state.ap, state.ay, state.ar = model, px, py, pz, ap, ay, ar
+	state.cycle, state.sequence, state.skin = cycle, sequence, skin
+	return moved
+end
+
+local function casterState( ent )
+	local state = casterStates[ent]
+	if not state then state = { inside = false } casterStates[ent] = state end
+	state.pass = casterPass
+	return state
+end
+
+-- Returns true when a removed caster had been inside the cascade.
+local function retireStaleCasters()
+	local changed = false
+	for ent, state in pairs( casterStates ) do
+		if state.pass ~= casterPass then
+			if state.inside then changed = true end
+			casterStates[ent] = nil
+		end
+	end
+	return changed
+end
+
+-- Cheap poll used while terrain, sun and projection are unchanged: a redraw
+-- is needed only when a caster inside (or leaving) the far cascade moved,
+-- appeared or disappeared. Bounds are converted only for moved casters.
+local function entityCastersChanged( view )
+	casterPass = casterPass + 1
+	local changed = false
+	if entityShadows:GetBool() then
+		for _, ent in ents.Iterator() do
+			local model = casterModel( ent )
+			if model then
+				local state = casterState( ent )
+				if casterMoved( state, ent, model ) then
+					local inside = M.Intersects( casterBounds( ent, scratchBounds ), 0, 0, 0, view )
+					if inside or state.inside then changed = true end
+					state.inside = inside
+				end
+			end
+		end
+	end
+	if retireStaleCasters() then changed = true end
+	return changed
+end
+
 -- Resolve each entity's engine frame at the collection boundary. Bounds are
 -- culled in the same render frame as terrain; models keep their engine pose.
 local function collectEntityCasters( view )
 	entityCount = 0
 	proxyCollection = proxyCollection + 1
+	casterPass = casterPass + 1
 	if entityShadows:GetBool() then
 		local coords = MC.API.Coords
 		for _, ent in ents.Iterator() do
-			if IsValid( ent ) and not ent:GetNoDraw() and not ent:IsDormant()
-				and ( casterClasses[ent:GetClass()] or ent:IsPlayer() or ent:IsNPC() or ent:IsNextBot() or ent:IsVehicle() )
-				and ( not ent:IsPlayer() or ent:Alive() )
-				and ent:GetColor().a == 255 then
-				local model = ent:GetModel()
-				if model and string.sub( model, -4 ) == ".mdl" then
-					local minimum, maximum = coords.EntityWorldAABB( ent )
-					requireValue( minimum and maximum, "render_pbr_entity_bounds", "entity shadow bounds are unavailable" )
-					minimum, maximum = coords.WorldToRender( minimum ), coords.WorldToRender( maximum )
-					local bounds = {
-						x = ( minimum.x + maximum.x ) * 0.5, y = ( minimum.y + maximum.y ) * 0.5,
-						z = ( minimum.z + maximum.z ) * 0.5, hx = ( maximum.x - minimum.x ) * 0.5,
-						hy = ( maximum.y - minimum.y ) * 0.5, hz = ( maximum.z - minimum.z ) * 0.5,
-					}
-					if M.Intersects( bounds, 0, 0, 0, view ) then
-						local worldOrigin = coords.EngineToWorld( vector_origin, ent )
-						local offset = coords.WorldToRender( worldOrigin )
-						entityCount = entityCount + 1
-						local record = entityCasters[entityCount] or {}
-						record.entity, record.bounds = ent, bounds
-						record.x, record.y, record.z = offset.x, offset.y, offset.z
-						if proxyClasses[ent:GetClass()] or ent:IsPlayer() or ent:IsNPC() or ent:IsNextBot() then
-							record.caster = prepareEntityProxy( ent, model )
-						else record.caster = ent end
-						entityCasters[entityCount] = record
-					end
+			local model = casterModel( ent )
+			if model then
+				local state = casterState( ent )
+				casterMoved( state, ent, model )
+				local bounds = casterBounds( ent, scratchBounds )
+				state.inside = M.Intersects( bounds, 0, 0, 0, view )
+				if state.inside then
+					local worldOrigin = coords.EngineToWorld( vector_origin, ent )
+					local offset = coords.WorldToRender( worldOrigin )
+					entityCount = entityCount + 1
+					local record = entityCasters[entityCount]
+					if not record then record = { bounds = {} } entityCasters[entityCount] = record end
+					local own = record.bounds
+					own.x, own.y, own.z, own.hx, own.hy, own.hz = bounds.x, bounds.y, bounds.z, bounds.hx, bounds.hy, bounds.hz
+					record.entity = ent
+					record.x, record.y, record.z = offset.x, offset.y, offset.z
+					if proxyClasses[ent:GetClass()] or ent:IsPlayer() or ent:IsNPC() or ent:IsNextBot() then
+						record.caster = prepareEntityProxy( ent, model )
+					else record.caster = ent end
 				end
 			end
 		end
 	end
+	retireStaleCasters()
 	for ent, record in pairs( entityProxies ) do
 		if record.collection ~= proxyCollection then removeEntityProxy( ent, record ) end
 	end
-	for i = #entityCasters, entityCount + 1, -1 do entityCasters[i] = nil end
+	-- Keep trailing records (and their bounds tables) for reuse; drop only
+	-- entity references so removed entities are not retained.
+	for i = entityCount + 1, #entityCasters do
+		local record = entityCasters[i]
+		record.entity, record.caster = nil, nil
+	end
 	S.stats.entityCasters = entityCount
 end
 
@@ -620,9 +704,11 @@ local function renderAtlas( pending, water, waterOnly, groups, version, chunks )
 		end
 	end
 	S.skyPass, S.skyClip = false, false
+	pending.waterCasters = 0
 	if water then
 		requireValue( MC.DrawWaterShadowCasters, "render_caustics_draw_api", "water shadow caster draw API is unavailable" )
 		S.waterPass = true
+		local before = S.stats.draws
 		for i = 1, 2 do
 			S.casterKeys = S.cascadeCasters[i]
 			S.tileToken = S.tileToken + 1
@@ -631,7 +717,11 @@ local function renderAtlas( pending, water, waterOnly, groups, version, chunks )
 			MC.DrawWaterShadowCasters( pending.views[i], S )
 			cam.End() startedCam = false
 		end
+		pending.waterCasters = S.stats.draws - before
 	end
+	-- Only the water interface rows feed time-varying processing (caustics).
+	-- Without any interface pixels, processing may reuse its output.
+	pending.timeInvariant = pending.waterCasters == 0
 	S.waterPass = false
 end
 
@@ -700,6 +790,10 @@ local function disable( status )
 	return false
 end
 
+local function fluidRevision()
+	return MC.FluidMeshRevision and MC.FluidMeshRevision() or 0
+end
+
 local function drawAtlas( state, water, waterOnly, groups, version, chunks, now )
 	S.renderRevision = S.renderRevision + 1
 	local stats = S.stats
@@ -725,18 +819,24 @@ local function drawAtlas( state, water, waterOnly, groups, version, chunks, now 
 		return false
 	end
 	state.revision = S.renderRevision
-	if not waterOnly then state.entityFrame = FrameNumber() end
-	state.water, state.waterFrame, state.waterWaves = water, FrameNumber(), waterWaves:GetFloat()
+	state.water, state.waterWaves = water, waterWaves:GetFloat()
+	state.waterFluids, state.waterVisibility = fluidRevision(), MC.StreamVisibilityVersion or 0
+	state.waterGeneration = MC.StateWorldGeneration
 	if waterOnly or water then stats.waterUpdates = stats.waterUpdates + 1 end
 	if waterOnly then stats.waterCPU = ( SysTime() - now ) * 1000 end
 	return true
 end
 
+-- The water row is depth plus neutral BA from static fluid meshes; waves and
+-- caustics animate in processing/shader time, not in this row. Redraw it only
+-- when the fluid meshes, stream visibility, world or toggles change. Opaque
+-- redraws (projection/sun/terrain changes) always redraw it too.
 local function updateWater( water )
 	local current = S.current
-	if current.water == water and ( not water or current.waterFrame == FrameNumber()
-		and current.waterWaves == waterWaves:GetFloat() ) then return true end
-	-- Time and water toggles never invalidate the opaque row. Use the current
+	if current.water == water and ( not water or current.waterWaves == waterWaves:GetFloat()
+		and current.waterFluids == fluidRevision() and current.waterVisibility == ( MC.StreamVisibilityVersion or 0 )
+		and current.waterGeneration == MC.StateWorldGeneration ) then return true end
+	-- Water toggles never invalidate the opaque row. Use the current
 	-- projection even when the camera/sun's pending projection is throttled.
 	return drawAtlas( current, water, true, nil, nil, nil, SysTime() )
 end
@@ -792,18 +892,28 @@ function S.Update( x, y, z, renderView )
 	water = waterEnabled:GetBool() and needsInterface and water and S.waterMaterials[water] and water or nil
 	pending.frameX, pending.frameY, pending.frameZ = frameX, frameY, frameZ
 	local geometry, visibility = MC.ChunkDrawListVersion(), MC.StreamVisibilityVersion or 0
-	-- Model movement and animation do not bump terrain's geometry version.
-	-- Refresh poses at the configured shadow cadence, even with a frozen sun.
-	local entityRefresh = entityShadows:GetBool() and current.entityFrame ~= FrameNumber()
+	local now = SysTime()
 	if S.valid and not S.fullDirty and not coverageMiss and current.version == version
 		and current.geometry == geometry and current.visibility == visibility
-		and not entityRefresh and M.Same( current, pending ) then
-		if not updateWater( water ) then return false end
-		if not ensurePublished( x, y, z, renderView ) then return false end
-		S.stats.cached, S.stats.status = S.stats.cached + 1, "cached"
-		return true
+		and M.Same( current, pending ) then
+		-- Model movement and animation do not bump terrain's geometry version.
+		-- Poll casters at the configured shadow cadence, even with a frozen
+		-- sun, and redraw only when a caster in the far cascade changed.
+		-- A poll failure (e.g. missing bounds) is not reported here: it forces
+		-- the redraw, whose collection raises it through drawAtlas's fault path.
+		local polled, changed = now >= S.nextUpdate, false
+		if polled then
+			local ok, result = pcall( entityCastersChanged, current.views[2] )
+			changed = not ok or result
+		end
+		if not changed then
+			if polled then S.nextUpdate = now + settings.interval end
+			if not updateWater( water ) then return false end
+			if not ensurePublished( x, y, z, renderView ) then return false end
+			S.stats.cached, S.stats.status = S.stats.cached + 1, "cached"
+			return true
+		end
 	end
-	local now = SysTime()
 	if now < S.retryAt then return disable( "retry_wait" ) end
 	-- Retain the opaque pixels/projection during the configured interval.
 	-- A remote view or changed world frame must still refresh immediately.
