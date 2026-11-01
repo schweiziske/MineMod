@@ -385,29 +385,43 @@ end
 function SWEP:AdvanceMCItem(now)
     now = now or CurTime()
 
+    -- 客户端一帧内会从多个渲染回调调用；同一帧、同一时钟直接复用上次结果。
+    if CLIENT then
+        local frame = FrameNumber()
+        if self.MCAdvanceFrame == frame and self.MCAdvanceNow == now and self.MCLastPartialTick ~= nil then
+            return self.MCLastPartialTick
+        end
+        self.MCAdvanceFrame, self.MCAdvanceNow = frame, now
+    end
+
     local state = self:GetMCItemState()
     local owner = self:GetOwner()
 
-    local params = {
-        swingTicks = self.MCSwingDurationTicks,
-        -- ItemInHandRenderer.tick 用的是 getItemSwapScale(1.0)：看前一个 tick。
-        itemSwapScale = MCITEM.ScaleFromTicker(
-            MCITEM.Ticker(self.MCItemSwapResetAt or self.MCAttackResetAt, now),
-            1,
-            self:GetMCAttackStrengthDelay()
-        ),
-        handsBusy = false,
-        movedBlocks = 0,
-        onGround = true,
-        pitch = 0,
-        yaw = 0,
-    }
+    -- MCITEM.Advance 只在调用期间读取 params，不保留引用，所以每把武器复用一张表。
+    local params = self.MCAdvanceParams
+    if not params then
+        params = {}
+        self.MCAdvanceParams = params
+    end
+    params.swingTicks = self.MCSwingDurationTicks
+    -- ItemInHandRenderer.tick 用的是 getItemSwapScale(1.0)：看前一个 tick。
+    params.itemSwapScale = MCITEM.ScaleFromTicker(
+        MCITEM.Ticker(self.MCItemSwapResetAt or self.MCAttackResetAt, now),
+        1,
+        self:GetMCAttackStrengthDelay()
+    )
+    params.handsBusy = false
+    params.movedBlocks = 0
+    params.onGround = true
+    params.pitch = 0
+    params.yaw = 0
 
     if IsValid(owner) then
         local position = owner:GetPos()
-        if state.lastPos then
-            local delta = position - state.lastPos
-            params.movedBlocks = math.sqrt(delta.x * delta.x + delta.y * delta.y) / MCITEM.BlockSize()
+        local lastPos = state.lastPos
+        if lastPos then
+            local deltaX, deltaY = position.x - lastPos.x, position.y - lastPos.y
+            params.movedBlocks = math.sqrt(deltaX * deltaX + deltaY * deltaY) / MCITEM.BlockSize()
         else
             state.lastPos = position
         end

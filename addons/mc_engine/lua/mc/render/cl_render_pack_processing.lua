@@ -54,8 +54,13 @@ local function targetFor( instance, name, context, shadow )
 	local maxHeight = size.relative == "shadow" and 8192 or 4096
 	requireValue( w <= 4096 and h <= maxHeight, "render_processing_size", "processing target exceeds its layout limit" )
 	local bank = instance.bank
+	-- Fast path: the same named target at the same size as last time.
+	local recent = bank.recentTargets
+	if not recent then recent = {} bank.recentTargets = recent end
+	local entry = recent[name]
+	if entry and entry.width == w and entry.height == h and entry.quad then return entry end
 	local key = name .. "/" .. w .. "x" .. h
-	local entry = bank.targets[key]
+	entry = bank.targets[key]
 	if not entry then
 		local bytes = w * h * ( spec.format == "rgba8" and 4 or 8 )
 		requireValue( P.targetCount < 128 and P.targetBytes + bytes <= maxTargetBytes,
@@ -71,6 +76,8 @@ local function targetFor( instance, name, context, shadow )
 		bank.targets[key] = entry
 	end
 	if not entry.quad then entry.quad = P.CopyQuad( w, h ) end
+	if not entry.name then entry.name = entry.texture:GetName() end
+	recent[name] = entry
 	return entry
 end
 
@@ -126,13 +133,17 @@ end
 function P.Invalidate( instance )
 	if not instance then return end
 	instance.key, instance.beginOutputs, instance.outputs, instance.shadowKey = nil, nil, nil, nil
+	instance.shadowSource = nil
 	instance.screenKey, instance.screenDone, instance.screenOutputs = nil, nil, nil
+	if instance.stageInputs then
+		for _, snapshot in pairs( instance.stageInputs ) do snapshot.valid = false end
+	end
 end
 
 function P.Release( instance )
 	if not instance then return end
 	P.Invalidate( instance )
-	instance.contextIdentities, instance.contextScratch = nil, nil
+	instance.contextIdentities, instance.contextScratch, instance.viewContext = nil, nil, nil
 	instance.bank.owner, instance.retired = nil, true
 end
 
@@ -195,7 +206,8 @@ end
 
 local function copyContext( instance, entry )
 	local identity = entry.identity
-	local context = { key = entry.key, world = identity.world, time = identity.time, block_size = identity.block_size,
+	local context = { key = entry.key, world = identity.world, generation = identity.generation, version = identity.version,
+		time = identity.time, block_size = identity.block_size,
 		view_x = identity.view_x, view_y = identity.view_y, view_z = identity.view_z,
 		view_width = identity.view_width, view_height = identity.view_height,
 		origin_x = identity.origin_x, origin_y = identity.origin_y, origin_z = identity.origin_z, settings = {} }
@@ -227,14 +239,49 @@ function P.ShadowWorldMatrix( matrix, shadow, index, blockSize, period )
 	for col = 1, 4 do matrix:SetField( 4, col, col == 4 and 1 or 0 ) end
 end
 
-local function scalar( value, context, target, shadow )
-	if type( value ) == "number" then return value end
-	local key = value:match( "^setting:(.+)$" )
+-- Per-pass descriptors are compiled once per bank record: parameter names,
+-- constant sources and input slots never change for a validated spec.
+local derivedScalars = { target_width = true, target_height = true, target_texel_x = true, target_texel_y = true,
+	shadow_resolution = true, sun_x = true, sun_y = true, sun_z = true }
+
+local function compileRecord( record )
+	if record.compiled then return end
+	local pass = record.spec
+	local constants = {}
+	for register, vector in pairs( pass.constants ) do
+		for index = 1, 4 do
+			local value = vector[index]
+			local entry = { param = "$" .. register .. "_" .. components[index] }
+			if type( value ) == "number" then entry.number = value
+			else
+				local key = value:match( "^setting:(.+)$" )
+				if key then entry.setting = key else entry.field = value end
+			end
+			constants[#constants + 1] = entry
+		end
+	end
+	local matrices = {}
+	for key, semantic in pairs( pass.matrices or {} ) do
+		matrices[#matrices + 1] = { key = key, param = "$" .. key .. "mat", index = semantic == "shadow_near_world" and 1 or 2 }
+	end
+	local inputs = {}
+	for slot, input in pairs( pass.inputs ) do
+		inputs[#inputs + 1] = { slot = slot, param = textureSlots[slot], input = input }
+	end
+	record.constantList, record.matrixList, record.inputList, record.inputScratch = constants, matrices, inputs, {}
+	record.compiled = true
+end
+
+local function constantValue( entry, context, target, shadow )
+	local number = entry.number
+	if number then return number end
+	local key = entry.setting
 	if key then
 		local setting = context.settings[key]
 		if type( setting ) == "boolean" then return setting and 1 or 0 end
 		return setting
 	end
+	local value = entry.field
 	if value == "target_width" then return target.width end
 	if value == "target_height" then return target.height end
 	if value == "target_texel_x" then return 1 / target.width end
@@ -246,79 +293,119 @@ local function scalar( value, context, target, shadow )
 	return context[value]
 end
 
+local function bindConstants( record, context, target, shadow )
+	local material, list = record.material, record.constantList
+	for i = 1, #list do
+		local entry = list[i]
+		material:SetFloat( entry.param, constantValue( entry, context, target, shadow ) )
+	end
+end
+
+-- Render state owned by the pass currently being drawn. Restoration clears
+-- each flag before its engine call, so a failing restore is not repeated and
+-- the remaining steps still run on the next attempt.
+local drawState = { overrides = 0 }
+local function restoreDrawState()
+	local ds = drawState
+	while ds.overrides > 0 do
+		local step = ds.overrides
+		ds.overrides = step - 1
+		if step == 6 then render.OverrideDepthEnable( false, false )
+		elseif step == 5 then render.OverrideBlend( false )
+		elseif step == 4 then render.OverrideAlphaWriteEnable( false, false )
+		elseif step == 3 then render.OverrideColorWriteEnable( false, false )
+		elseif step == 2 then render.SetBlend( ds.oldBlend )
+		else render.SetColorModulation( ds.r, ds.g, ds.b ) end
+	end
+	if ds.toned then ds.toned = false render.SetToneMappingScaleLinear( ds.oldTone ) end
+	if ds.pushed then ds.pushed = false render.PopRenderTarget() end
+	if ds.clipped then ds.clipped = false render.EnableClipping( ds.oldClip ) end
+end
+
+local function drawBody( record, target, screenPass )
+	local ds = drawState
+	ds.oldBlend = render.GetBlend()
+	ds.r, ds.g, ds.b = render.GetColorModulation()
+	if target.texture then render.PushRenderTarget( target.texture ) ds.pushed = true end
+	if not screenPass then
+		ds.oldClip = render.EnableClipping( false ) ds.clipped = true
+		ds.oldTone = render.GetToneMappingScaleLinear() ds.toned = true
+		render.SetToneMappingScaleLinear( unitTone )
+	end
+	ds.overrides = 6
+	render.OverrideDepthEnable( false, false )
+	render.OverrideBlend( true, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD )
+	render.OverrideAlphaWriteEnable( true, target.texture ~= nil )
+	render.OverrideColorWriteEnable( true, true )
+	render.SetBlend( 1 ) render.SetColorModulation( 1, 1, 1 )
+	local clear = target.clear
+	if clear then render.Clear( clear[1] * 255, clear[2] * 255, clear[3] * 255, clear[4] * 255, false, false ) end
+	render.SetMaterial( record.material )
+	target.quad:Draw()
+end
+
+-- One protected call per pass. Every state it acquired is restored; a
+-- restore failure is reported after all other restores were attempted.
 local function draw( record, target, screenPass )
-	local pushed, clipped, toned, overrides, oldClip, oldTone, oldBlend, r, g, b
-	local ok, err = pcall( function()
-		oldBlend = render.GetBlend()
-		r, g, b = render.GetColorModulation()
-		if target.texture then render.PushRenderTarget( target.texture ) pushed = true end
-		if not screenPass then
-			oldClip = render.EnableClipping( false ) clipped = true
-			oldTone = render.GetToneMappingScaleLinear() toned = true
-			render.SetToneMappingScaleLinear( unitTone )
-		end
-		overrides = true
-		render.OverrideDepthEnable( false, false )
-		render.OverrideBlend( true, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD )
-		render.OverrideAlphaWriteEnable( true, target.texture ~= nil )
-		render.OverrideColorWriteEnable( true, true )
-		render.SetBlend( 1 ) render.SetColorModulation( 1, 1, 1 )
-		local clear = target.clear
-		if clear then render.Clear( clear[1] * 255, clear[2] * 255, clear[3] * 255, clear[4] * 255, false, false ) end
-		render.SetMaterial( record.material )
-		target.quad:Draw()
-	end )
+	local ds = drawState
+	ds.overrides, ds.toned, ds.pushed, ds.clipped = 0, false, false, false
+	local ok, err = pcall( drawBody, record, target, screenPass )
 	local cleanupError
-	local function restore( fn, ... )
-		local restored, why = pcall( fn, ... )
-		if not restored and not cleanupError then cleanupError = tostring( why ) end
-	end
-	if overrides then
-		restore( render.OverrideDepthEnable, false, false )
-		restore( render.OverrideBlend, false )
-		restore( render.OverrideAlphaWriteEnable, false, false )
-		restore( render.OverrideColorWriteEnable, false, false )
-		restore( render.SetBlend, oldBlend ) restore( render.SetColorModulation, r, g, b )
-	end
-	if toned then restore( render.SetToneMappingScaleLinear, oldTone ) end
-	if pushed then restore( render.PopRenderTarget ) end
-	if clipped then restore( render.EnableClipping, oldClip ) end
+	repeat
+		local done, why = pcall( restoreDrawState )
+		if not done and not cleanupError then cleanupError = tostring( why ) end
+	until done
 	if cleanupError then error( tostring( err ) .. "; cleanup: " .. cleanupError, 0 ) end
 	if not ok then error( err, 0 ) end
 end
 
 local function execute( instance, stage, context, shadow )
-	local outputs = {}
+	-- Stage output tables are reused; Invalidate drops references on failure.
+	local scratch = instance.stageScratch
+	if not scratch then scratch = {} instance.stageScratch = scratch end
+	local outputs = scratch[stage]
+	if not outputs then outputs = {} scratch[stage] = outputs end
+	for name in pairs( outputs ) do outputs[name] = nil end
 	if stage == "shadowcomp" then for name, texture in pairs( instance.beginOutputs ) do outputs[name] = texture end end
-	for _, record in ipairs( instance.stages[stage] ) do
-		local pass, inputs, enabled = record.spec, {}, true
-		for _, key in ipairs( pass.enableSettings or {} ) do
-			local value = context.settings[key]
-			if value == false or value == 0 then enabled = false end
+	local records = instance.stages[stage]
+	for r = 1, #records do
+		local record = records[r]
+		compileRecord( record )
+		local pass, inputs, enabled = record.spec, record.inputScratch, true
+		local enableSettings = pass.enableSettings
+		if enableSettings then
+			for i = 1, #enableSettings do
+				local value = context.settings[enableSettings[i]]
+				if value == false or value == 0 then enabled = false end
+			end
 		end
-		for slot, input in pairs( pass.inputs ) do
-			local texture = record.textures[slot]
+		for name in pairs( inputs ) do inputs[name] = nil end
+		local inputList = record.inputList
+		for i = 1, #inputList do
+			local item = inputList[i]
+			local input, texture = item.input, record.textures[item.slot]
 			if input.target then texture = outputs[input.target]
 			elseif input.builtin then texture = shadow.target end
-			requireValue( texture ~= nil, "render_processing_input", "unavailable input for " .. pass.id .. "/" .. slot )
-			inputs[slot] = texture
+			requireValue( texture ~= nil, "render_processing_input", "unavailable input for " .. pass.id .. "/" .. item.slot )
+			inputs[item.slot] = texture
 		end
 		if not enabled then outputs[pass.output] = inputs[pass.disabledInput]
 		else
 			local target = targetFor( instance, pass.output, context, shadow )
-			for slot, texture in pairs( inputs ) do
-				requireValue( texture ~= target.texture and texture:GetName() ~= target.texture:GetName(),
+			for i = 1, #inputList do
+				local item = inputList[i]
+				local texture = inputs[item.slot]
+				requireValue( texture ~= target.texture and texture:GetName() ~= target.name,
 					"render_processing_alias", "physical read/write alias in " .. pass.id )
-				record.material:SetTexture( textureSlots[slot], texture )
+				record.material:SetTexture( item.param, texture )
 			end
-			for register, vector in pairs( pass.constants ) do
-				for index = 1, 4 do record.material:SetFloat( "$" .. register .. "_" .. components[index],
-					scalar( vector[index], context, target, shadow ) ) end
-			end
-			for key, semantic in pairs( pass.matrices ) do
-				local matrix = record.matrices[key]
-				P.ShadowWorldMatrix( matrix, shadow, semantic == "shadow_near_world" and 1 or 2, context.block_size, pass.worldPeriod )
-				record.material:SetMatrix( "$" .. key .. "mat", matrix )
+			bindConstants( record, context, target, shadow )
+			local matrixList = record.matrixList
+			for i = 1, #matrixList do
+				local item = matrixList[i]
+				local matrix = record.matrices[item.key]
+				P.ShadowWorldMatrix( matrix, shadow, item.index, context.block_size, pass.worldPeriod )
+				record.material:SetMatrix( item.param, matrix )
 			end
 			draw( record, target )
 			instance.stats.draws = instance.stats.draws + 1
@@ -328,24 +415,98 @@ local function execute( instance, stage, context, shadow )
 	return outputs
 end
 
+-- begin/shadowcomp outputs depend only on what their passes read: declared
+-- context scalars and settings, view-relative target sizes, block size (world
+-- matrices) and the world identity. Anything else (frame number, camera
+-- angles, render target, unreferenced view fields) never forces a rerun.
+local function stageDependencies( instance, stage )
+	local all = instance.stageDeps
+	if not all then all = {} instance.stageDeps = all end
+	local deps = all[stage]
+	if deps then return deps end
+	local fields, settings, seenFields, seenSettings = {}, {}, {}, {}
+	local function field( name )
+		if not seenFields[name] then seenFields[name] = true fields[#fields + 1] = name end
+	end
+	local function setting( key )
+		if not seenSettings[key] then seenSettings[key] = true settings[#settings + 1] = key end
+	end
+	field( "block_size" )
+	local pipeline = instance.definition.pipeline
+	for _, pass in ipairs( pipeline.passes ) do
+		if pass.stage == stage then
+			for _, vector in pairs( pass.constants ) do
+				for index = 1, 4 do
+					local value = vector[index]
+					if type( value ) == "string" then
+						local key = value:match( "^setting:(.+)$" )
+						if key then setting( key ) elseif not derivedScalars[value] then field( value ) end
+					end
+				end
+			end
+			for _, key in ipairs( pass.enableSettings or {} ) do setting( key ) end
+			local spec = pipeline.targets[pass.output]
+			if spec and spec.size.relative == "view" then field( "view_width" ) field( "view_height" ) end
+		end
+	end
+	deps = { fields = fields, settings = settings }
+	all[stage] = deps
+	return deps
+end
+
+local function sameStageInputs( instance, stage, context, ignoreTime )
+	local snapshot = instance.stageInputs and instance.stageInputs[stage]
+	if not snapshot or not snapshot.valid or snapshot.world ~= context.world
+		or snapshot.generation ~= context.generation or snapshot.version ~= context.version then return false end
+	local deps = stageDependencies( instance, stage )
+	local fields = deps.fields
+	for i = 1, #fields do
+		local name = fields[i]
+		if snapshot[name] ~= context[name] and not ( ignoreTime and name == "time" ) then return false end
+	end
+	local settings, values = deps.settings, snapshot.settings
+	for i = 1, #settings do
+		local key = settings[i]
+		if values[key] ~= context.settings[key] then return false end
+	end
+	return true
+end
+
+local function rememberStageInputs( instance, stage, context )
+	local all = instance.stageInputs
+	if not all then all = {} instance.stageInputs = all end
+	local snapshot = all[stage]
+	if not snapshot then snapshot = { settings = {} } all[stage] = snapshot end
+	snapshot.valid, snapshot.world = true, context.world
+	snapshot.generation, snapshot.version = context.generation, context.version
+	local deps = stageDependencies( instance, stage )
+	for _, name in ipairs( deps.fields ) do snapshot[name] = context[name] end
+	for _, key in ipairs( deps.settings ) do snapshot.settings[key] = context.settings[key] end
+end
+
+-- shadow.timeInvariant: the shadow coordinator asserts that the raw atlas has
+-- no time-varying input (no water interface pixels), so a shadowcomp stage
+-- reading `time` produces the same output at any time.
 function P.Run( instance, stage, context, shadow )
 	if not instance then return true end
 	requireValue( not instance.retired and instance.bank.owner == instance and instance.stages[stage],
 		"render_processing_owner", "invalid processing instance or stage" )
-	if instance.key ~= context.key or instance.world ~= context.world then
-		P.Invalidate( instance ) instance.key, instance.world = context.key, context.world
+	if instance.world ~= context.world then
+		P.Invalidate( instance ) instance.world = context.world
 	end
-	if stage == "shadowcomp" and not instance.beginOutputs then
+	if stage == "shadowcomp" then
 		local ok, err = P.Run( instance, "begin", context )
 		if not ok then return false, err end
 	end
-	local key = stage == "shadowcomp" and shadow.revision or context.key
-	if stage == "begin" and instance.beginOutputs or stage == "shadowcomp" and instance.shadowKey == key then
+	local ignoreTime = stage == "shadowcomp" and shadow.timeInvariant == true
+	if sameStageInputs( instance, stage, context, ignoreTime ) and ( stage == "begin" and instance.beginOutputs
+		or stage == "shadowcomp" and instance.shadowKey == shadow.revision and instance.shadowSource == shadow.target ) then
 		instance.stats.reused = instance.stats.reused + 1
 		return true
 	end
-	-- No consumer may keep a partially overwritten stage or previous-frame output.
-	instance.outputs, instance.shadowKey = nil, nil
+	-- No consumer may keep a partially overwritten stage or previous output.
+	instance.outputs, instance.shadowKey, instance.shadowSource = nil, nil, nil
+	if instance.stageInputs and instance.stageInputs[stage] then instance.stageInputs[stage].valid = false end
 	local start = SysTime()
 	P.rendering = true
 	local ok, result = pcall( execute, instance, stage, context, shadow )
@@ -358,17 +519,29 @@ function P.Run( instance, stage, context, shadow )
 	end
 	instance.stats[stage] = instance.stats[stage] + 1
 	if stage == "begin" then instance.beginOutputs = result
-	else instance.shadowKey = key end
+	else instance.shadowKey, instance.shadowSource = shadow.revision, shadow.target end
+	rememberStageInputs( instance, stage, context )
 	instance.outputs = result
 	return true
 end
 
--- Only the generic executor consumes this private snapshot; adapters never see
--- it. Run still checks the currently resident outputs after an A-B-A view trip.
+-- Only the generic executor consumes this private, reused context; adapters
+-- never see it. Run decides reuse from the stage's declared dependencies.
 function P.RunView( instance, stage, active, x, y, z, view, shadow )
-	local entry = contextIdentity( instance, active, x, y, z, view )
-	if not entry.context then entry.context = copyContext( instance, entry ) end
-	return P.Run( instance, stage, entry.context, shadow )
+	view = view or render.GetViewSetup( true )
+	local w, h = view.width or view.w, view.height or view.h
+	requireValue( type( w ) == "number" and type( h ) == "number" and w > 0 and h > 0 and w <= 16384 and h <= 16384,
+		"render_processing_view", "processing requires finite viewport dimensions" )
+	local context = instance.viewContext
+	if not context then context = { settings = {} } instance.viewContext = context end
+	context.world, context.generation, context.version = MC.World, MC.StateWorldGeneration, active.version
+	context.time, context.block_size = P.FrameTime(), MC.API.Coords.BlockSize()
+	context.view_x, context.view_y, context.view_z = x, y, z
+	context.view_width, context.view_height = w, h
+	context.origin_x, context.origin_y, context.origin_z = MC.ChunkRenderFrameOffset()
+	local settings = context.settings
+	for _, spec in ipairs( instance.definition.settings ) do settings[spec.key] = MC.RenderPackSettings.Get( spec.key ) end
+	return P.Run( instance, stage, context, shadow )
 end
 
 -- Geometry adapters use the same owner bank and cumulative allocation budget.
@@ -393,68 +566,92 @@ function P.SceneTarget( instance, name, width, height, format, point, depth )
 	return entry
 end
 
+local function clearTable( t )
+	for key in pairs( t ) do t[key] = nil end
+	return t
+end
+
+local function screenTarget( instance, width, height )
+	local bank = instance.bank
+	local cache = bank.screenTargets
+	if not cache then cache = {} bank.screenTargets = cache end
+	local size = width * 32768 + height
+	local target = cache[size]
+	if not target then
+		local count = bank.screenQuadCount or 0
+		requireValue( count < 32, "render_processing_quad_budget", "32 screen viewport sizes reached; restart the client" )
+		target = { width = width, height = height, quad = P.CopyQuad( width, height ) }
+		cache[size] = target
+		bank.screenQuadCount = count + 1
+	end
+	return target
+end
+
+local function executeScreen( instance, stage, context, adapter, outputs )
+	local records = instance.stages[stage]
+	for r = 1, #records do
+		local record = records[r]
+		compileRecord( record )
+		local spec = record.spec
+		if adapter.Enabled( spec.binding, context ) then
+			local target
+			if spec.output == "screen" then target = screenTarget( instance, context.view_width, context.view_height )
+			else target = targetFor( instance, spec.output, context ) end
+			local inputs, inputList = clearTable( record.inputScratch ), record.inputList
+			for i = 1, #inputList do
+				local item = inputList[i]
+				local input, slot = item.input, item.slot
+				local texture = record.textures[slot]
+				if input.target then texture = outputs[input.target] and outputs[input.target].texture
+				elseif input.builtin then texture = adapter.Input( input.builtin, context ) end
+				requireValue( texture and not texture:IsError(), "render_processing_input", "unavailable screen input: " .. spec.id .. "/" .. slot )
+				requireValue( not target.texture or texture:GetName() ~= target.name,
+					"render_processing_alias", "screen pass reads its output: " .. spec.id )
+				inputs[slot] = texture
+				record.material:SetTexture( item.param, texture )
+			end
+			adapter.Bind( spec.binding, record.material, context, target, outputs, inputs )
+			bindConstants( record, context, target )
+			draw( record, target, true )
+			if target.texture then outputs[spec.output] = target end
+			instance.stats.draws = instance.stats.draws + 1
+			instance.stats.lastPass = spec.id
+		else
+			outputs[spec.output] = nil
+			instance.stats.skipped = instance.stats.skipped + 1
+		end
+	end
+end
+
 -- Trusted bindings supply data and availability, not drawing or ordering.
 -- Camera-stage outputs never overwrite the light-space export cache.
+-- screenOutputs is valid until the next RunScreen call; callers read it
+-- immediately after a successful stage.
 function P.RunScreen( instance, stage, context, adapter )
 	requireValue( instance and not instance.retired and instance.bank.owner == instance and instance.stages[stage],
 		"render_processing_owner", "screen stage has no processing owner" )
 	local key = context.key
-	if instance.screenKey ~= key then
-		instance.screenKey, instance.screenDone, instance.screenOutputs = key, {}, {}
+	if instance.screenKey ~= key or not instance.screenDone or not instance.screenOutputs then
+		instance.screenKey = key
+		instance.screenDone = clearTable( instance.screenDone or {} )
+		instance.screenOutputs = clearTable( instance.screenOutputs or {} )
 	end
 	if instance.screenDone[stage] then instance.stats.reused = instance.stats.reused + 1 return true end
-	local outputs, start = {}, SysTime()
+	local outputs = instance.screenSpare
+	if not outputs or outputs == instance.screenOutputs then outputs = {} end
+	clearTable( outputs )
+	local start = SysTime()
 	for name, value in pairs( instance.screenOutputs ) do outputs[name] = value end
-	local ok, err = pcall( function()
-		for _, record in ipairs( instance.stages[stage] ) do
-			local spec = record.spec
-			if adapter.Enabled( spec.binding, context ) then
-				local target
-				if spec.output == "screen" then
-					local cache = instance.bank.screenQuads or {}
-					instance.bank.screenQuads = cache
-					local size = context.view_width .. "x" .. context.view_height
-					if not cache[size] then
-						local count = instance.bank.screenQuadCount or 0
-						requireValue( count < 32, "render_processing_quad_budget", "32 screen viewport sizes reached; restart the client" )
-						cache[size] = P.CopyQuad( context.view_width, context.view_height )
-						instance.bank.screenQuadCount = count + 1
-					end
-					target = { width = context.view_width, height = context.view_height, quad = cache[size] }
-				else target = targetFor( instance, spec.output, context ) end
-				local inputs = {}
-				for slot, input in pairs( spec.inputs ) do
-					local texture = record.textures[slot]
-					if input.target then texture = outputs[input.target] and outputs[input.target].texture
-					elseif input.builtin then texture = adapter.Input( input.builtin, context ) end
-					requireValue( texture and not texture:IsError(), "render_processing_input", "unavailable screen input: " .. spec.id .. "/" .. slot )
-					requireValue( not target.texture or texture:GetName() ~= target.texture:GetName(),
-						"render_processing_alias", "screen pass reads its output: " .. spec.id )
-					inputs[slot] = texture
-					record.material:SetTexture( textureSlots[slot], texture )
-				end
-				adapter.Bind( spec.binding, record.material, context, target, outputs, inputs )
-				for register, vector in pairs( spec.constants ) do
-					for index = 1, 4 do record.material:SetFloat( "$" .. register .. "_" .. components[index],
-						scalar( vector[index], context, target ) ) end
-				end
-				draw( record, target, true )
-				if target.texture then outputs[spec.output] = target end
-				instance.stats.draws = instance.stats.draws + 1
-				instance.stats.lastPass = spec.id
-			else
-				outputs[spec.output] = nil
-				instance.stats.skipped = instance.stats.skipped + 1
-			end
-		end
-	end )
+	local ok, err = pcall( executeScreen, instance, stage, context, adapter, outputs )
 	instance.stats.cpuMS = ( SysTime() - start ) * 1000
 	if not ok then
-		instance.screenOutputs, instance.screenDone = {}, {}
+		clearTable( instance.screenOutputs ) clearTable( instance.screenDone )
+		instance.screenSpare = outputs
 		instance.stats.failures = instance.stats.failures + 1
 		return false, err
 	end
-	instance.screenOutputs, instance.screenDone[stage] = outputs, true
+	instance.screenSpare, instance.screenOutputs = instance.screenOutputs, outputs
+	instance.screenDone[stage] = true
 	instance.stats[stage] = instance.stats[stage] + 1
 	instance.stats.lastStage = stage
 	return true

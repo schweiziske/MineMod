@@ -284,15 +284,25 @@ local function advanceParticle(particle, now)
     while not particle.removed and now >= particle.nextTickAt and steps < MAX_CATCHUP_TICKS do
         particle.lastTickAt = particle.nextTickAt
         particle.nextTickAt = particle.nextTickAt + TICK_SECONDS
-        particle.oldPosition = particle.position
+        -- Spawn gives position/oldPosition/velocity distinct Vectors; update
+        -- them in place.  Guard particles aliased by a pre-reload tick.
+        local position, oldPosition = particle.position, particle.oldPosition
+        if rawequal(position, oldPosition) then
+            oldPosition = Vector(position)
+            particle.oldPosition = oldPosition
+        end
+        oldPosition:Set(position)
 
         local oldLifetime = particle.remainingTicks
         particle.remainingTicks = oldLifetime - 1
         if oldLifetime <= 0 then
             particle.removed = true
         else
-            particle.position = particle.position + particle.velocity
-            particle.velocity = particle.velocity * DRAG
+            local velocity = particle.velocity
+            position.x = position.x + velocity.x
+            position.y = position.y + velocity.y
+            position.z = position.z + velocity.z
+            velocity.x, velocity.y, velocity.z = velocity.x * DRAG, velocity.y * DRAG, velocity.z * DRAG
         end
         steps = steps + 1
     end
@@ -306,27 +316,43 @@ end
 hook.Remove("Think", "MCITEM.FarmingGrowthParticles.Tick")
 hook.Add("Think", "MCITEM.FarmingGrowthParticles.Tick", function()
     local now = CurTime()
-    for index = #Farming.GrowthParticles, 1, -1 do
-        local particle = Farming.GrowthParticles[index]
+    -- Stable in-place compaction instead of O(n^2) table.remove shifting.
+    local particles = Farming.GrowthParticles
+    local count, kept = #particles, 0
+    for index = 1, count do
+        local particle = particles[index]
         advanceParticle(particle, now)
-        if particle.removed then table.remove(Farming.GrowthParticles, index) end
+        if not particle.removed then
+            kept = kept + 1
+            particles[kept] = particle
+        end
     end
+    for index = kept + 1, count do particles[index] = nil end
 end)
 
-local function addVertex(position, u, v, r, g, b)
-    mesh.Position(position)
+local vertexPosition = Vector(0, 0, 0)
+
+local function addVertex(x, y, z, u, v, r, g, b)
+    vertexPosition.x, vertexPosition.y, vertexPosition.z = x, y, z
+    mesh.Position(vertexPosition)
     mesh.TexCoord(0, u, v)
     mesh.Color(r * 255, g * 255, b * 255, 255)
     mesh.AdvanceVertex()
 end
 
-local function particleRenderPosition(particle, worldPosition, offsetCache)
+-- Returns the world->render offset Vector for the particle's cell, true when
+-- no offset applies, or false when the particle must be skipped.
+local function particleRenderOffset(particle, offsetCache)
     local api = MC and MC.API or nil
     local coords = api and api.Coords or nil
-    if not coords or not isfunction(coords.CellRenderMin) then return worldPosition end
-    if particle.bx == nil or particle.by == nil or particle.bz == nil then return worldPosition end
+    if not coords or not isfunction(coords.CellRenderMin) then return true end
+    if particle.bx == nil or particle.by == nil or particle.bz == nil then return true end
 
-    local key = particle.bx .. ":" .. particle.by .. ":" .. particle.bz
+    local key = particle.cellKey
+    if not key then
+        key = particle.bx .. ":" .. particle.by .. ":" .. particle.bz
+        particle.cellKey = key
+    end
     local offset = offsetCache[key]
     if offset == false then return nil end
     if not offset then
@@ -341,8 +367,13 @@ local function particleRenderPosition(particle, worldPosition, offsetCache)
         offset = renderMinimum - worldMinimum
         offsetCache[key] = offset
     end
-    return worldPosition + offset
+    return offset
 end
+
+-- Per-frame scratch reused across frames (cleared before use).
+local frameOffsetCache = {}
+local DRAW_STRIDE = 4
+local drawEntries = {}
 
 -- SuspendedTownParticle uses SingleQuadParticle.Layer.OPAQUE and the default
 -- LOOKAT_XYZ camera mode. Keep the alpha-tested (non-blended) VMT, but do not
@@ -363,30 +394,47 @@ hook.Add("PreDrawTranslucentRenderables", DRAW_HOOK, function(drawingDepth, draw
     local now = CurTime()
     local angles = EyeAngles()
     local right, up = angles:Right(), angles:Up()
-    local offsetCache = {}
-    local drawParticles = {}
-    for index = 1, #Farming.GrowthParticles do
-        local particle = Farming.GrowthParticles[index]
+    local rightX, rightY, rightZ = right.x, right.y, right.z
+    local upX, upY, upZ = up.x, up.y, up.z
+    local offsetCache = frameOffsetCache
+    for key in pairs(offsetCache) do offsetCache[key] = nil end
+    local drawCount = 0
+    local particles = Farming.GrowthParticles
+    for index = 1, #particles do
+        local particle = particles[index]
         local partialTick = math.Clamp((now - particle.lastTickAt) / TICK_SECONDS, 0, 1)
-        local worldPosition = LerpVector(partialTick, particle.oldPosition, particle.position)
-        local position = particleRenderPosition(particle, worldPosition, offsetCache)
-        if position then
-            drawParticles[#drawParticles + 1] = { particle = particle, position = position }
+        local offset = particleRenderOffset(particle, offsetCache)
+        if offset then
+            local oldPosition, position = particle.oldPosition, particle.position
+            local px = oldPosition.x + (position.x - oldPosition.x) * partialTick
+            local py = oldPosition.y + (position.y - oldPosition.y) * partialTick
+            local pz = oldPosition.z + (position.z - oldPosition.z) * partialTick
+            if offset ~= true then
+                px, py, pz = px + offset.x, py + offset.y, pz + offset.z
+            end
+            local base = drawCount * DRAW_STRIDE
+            drawEntries[base + 1], drawEntries[base + 2] = particle, px
+            drawEntries[base + 3], drawEntries[base + 4] = py, pz
+            drawCount = drawCount + 1
         end
     end
-    if #drawParticles == 0 then return end
+    if drawCount == 0 then return end
 
     render.SetMaterial(material)
-    mesh.Begin(MATERIAL_QUADS, #drawParticles)
-    for index = 1, #drawParticles do
-        local draw = drawParticles[index]
-        local particle, position = draw.particle, draw.position
-        local side = right * particle.radius
-        local top = up * particle.radius
-        addVertex(position - side + top, 0, 0, particle.litR, particle.litG, particle.litB)
-        addVertex(position + side + top, 1, 0, particle.litR, particle.litG, particle.litB)
-        addVertex(position + side - top, 1, 1, particle.litR, particle.litG, particle.litB)
-        addVertex(position - side - top, 0, 1, particle.litR, particle.litG, particle.litB)
+    mesh.Begin(MATERIAL_QUADS, drawCount)
+    for index = 0, drawCount - 1 do
+        local base = index * DRAW_STRIDE
+        local particle = drawEntries[base + 1]
+        local px, py, pz = drawEntries[base + 2], drawEntries[base + 3], drawEntries[base + 4]
+        drawEntries[base + 1] = nil
+        local radius = particle.radius
+        local sx, sy, sz = rightX * radius, rightY * radius, rightZ * radius
+        local tx, ty, tz = upX * radius, upY * radius, upZ * radius
+        local r, g, b = particle.litR, particle.litG, particle.litB
+        addVertex(px - sx + tx, py - sy + ty, pz - sz + tz, 0, 0, r, g, b)
+        addVertex(px + sx + tx, py + sy + ty, pz + sz + tz, 1, 0, r, g, b)
+        addVertex(px + sx - tx, py + sy - ty, pz + sz - tz, 1, 1, r, g, b)
+        addVertex(px - sx - tx, py - sy - ty, pz - sz - tz, 0, 1, r, g, b)
     end
     mesh.End()
 end)

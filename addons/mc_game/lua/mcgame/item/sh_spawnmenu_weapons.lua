@@ -95,7 +95,14 @@ local function publish( records )
 	W.revision = W.revision + 1
 	MC.RegisterCreativeStackProvider( "mc.game.spawnmenu_weapons", function( key, entries )
 		if key == TAB or key == "search" then
-			for _, stack in ipairs( W.stacks ) do entries[#entries + 1] = stack end
+			for _, stack in ipairs( W.stacks ) do
+				local class = W.Class( stack )
+				-- Keep mc_item SWEPs in the weapons tab; their Minecraft items
+				-- already appear in search through the ordinary item catalog.
+				local mcItemWeapon = string.sub( class, 1, 14 ) == "weapon_mcitem_"
+					or class == "weapon_bmb_item_model_test"
+				if key == TAB or not mcItemWeapon then entries[#entries + 1] = stack end
+			end
 		end
 		return entries
 	end, 100 )

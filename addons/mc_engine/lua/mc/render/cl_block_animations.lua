@@ -68,6 +68,11 @@ local FluidMeshCache = {}
 local FluidMeshRetryAt = {}
 local MaterialCache = {}
 local FluidMeshesDirty = false
+-- Bumped whenever a published fluid record appears, is replaced or removed.
+-- Light-space consumers cache the water depth row against this revision.
+local FluidMeshRevision = 0
+local function touchFluidMeshes() FluidMeshRevision = FluidMeshRevision + 1 end
+function MC.FluidMeshRevision() return FluidMeshRevision end
 local LastRefresh = 0
 local LastGeneration = tonumber( MC.StateWorldGeneration ) or 0
 local LastAnimationPack
@@ -107,6 +112,7 @@ local function releaseEmptyFluidChunk( key )
 	FluidEntryCounts[key] = nil
 	destroyFluidRecord( FluidMeshCache[key] )
 	FluidMeshCache[key], FluidMeshRetryAt[key] = nil, nil
+	touchFluidMeshes()
 end
 
 local function dirtyFluidChunk( key )
@@ -361,6 +367,7 @@ local function refreshChunks()
 		clearEntries()
 		FluidMeshesDirty = true
 		LastGeneration = generation
+		touchFluidMeshes()
 	end
 	for key, scanned in pairs( ScannedChunkVersions ) do
 		local current = MC.GetChunkByKey and MC.GetChunkByKey( key ) or MC.World and MC.World[key]
@@ -375,6 +382,7 @@ local function refreshChunks()
 			else
 				destroyFluidRecord( FluidMeshCache[key] )
 				FluidMeshCache[key] = nil
+				touchFluidMeshes()
 			end
 			FluidMeshRetryAt[key] = nil
 		end
@@ -489,6 +497,7 @@ local function fluidMeshesForChunk( chunkKey, animations )
 	if #availableKinds == 0 or not chunk then
 		destroyFluidRecord( cached )
 		FluidMeshCache[chunkKey] = false
+		touchFluidMeshes()
 		return nil
 	end
 
@@ -632,6 +641,7 @@ local function fluidMeshesForChunk( chunkKey, animations )
 	if next( record.meshes ) == nil then
 		destroyFluidRecord( cached )
 		FluidMeshCache[chunkKey] = false
+		touchFluidMeshes()
 		return nil
 	end
 	-- Keep empty sprite kinds out of the draw loop, especially so water-only
@@ -651,6 +661,7 @@ local function fluidMeshesForChunk( chunkKey, animations )
 	record.nextLightmapAt = CurTime() + 0.1
 	destroyFluidRecord( cached )
 	FluidMeshCache[chunkKey] = record
+	touchFluidMeshes()
 	FluidMeshRetryAt[chunkKey] = nil
 	AnimationStats.builds = AnimationStats.builds + 1
 	return record
@@ -1070,6 +1081,7 @@ local function clearFluidMeshes()
 	FluidMeshCache = {}
 	FluidMeshRetryAt = {}
 	FluidMeshesDirty = false
+	touchFluidMeshes()
 end
 
 local function clearMeshes()

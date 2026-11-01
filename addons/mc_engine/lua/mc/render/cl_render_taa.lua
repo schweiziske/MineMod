@@ -36,6 +36,15 @@ function T.Jitter( view )
     return 0, 0
 end
 
+-- Reused per-frame storage: T.view is replaced in place each main view, and
+-- the engine copies RenderView/cam.Start parameters when they are called.
+local viewState = { origin = Vector(), angles = Angle() }
+local renderOffcenter = {}
+local renderParams = { x = 0, y = 0, drawhud = true, drawviewmodel = true, drawmonitors = true,
+    dopostprocess = true, offcenter = renderOffcenter }
+local viewModelOffcenter = { left = 0, top = 0 }
+local viewModelCamera = { type = "3D", offcenter = viewModelOffcenter }
+
 function T.BeginView( origin, angles, fov )
     local group = MC.RenderPBRPost.Active()
     local view = render.GetViewSetup( true )
@@ -46,16 +55,21 @@ function T.BeginView( origin, angles, fov )
     T.sequence = T.sequence % #samples + 1
     local sample = samples[T.sequence]
     local jx, jy = sample[1] / view.width, sample[2] / view.height
-    T.view = { frame = FrameNumber(), owner = MC.RenderPackRuntime.active, width = view.width, height = view.height,
-        origin = Vector( origin.x, origin.y, origin.z ), angles = Angle( angles.p, angles.y, angles.r ),
-        fov = fov, jx = jx, jy = jy }
+    local state = viewState
+    state.frame, state.owner, state.width, state.height = FrameNumber(), MC.RenderPackRuntime.active, view.width, view.height
+    state.origin.x, state.origin.y, state.origin.z = origin.x, origin.y, origin.z
+    state.angles.p, state.angles.y, state.angles.r = angles.p, angles.y, angles.r
+    state.fov, state.jx, state.jy = fov, jx, jy
+    T.view = state
     -- RenderView schedules the replacement after RenderScene returns. Its FOV
     -- is already horizontal, and its offcenter input is in pixels (Y inverted).
-    render.RenderView( { origin = origin, angles = angles, fov = fov, aspect = view.aspect,
-        x = 0, y = 0, w = view.width, h = view.height, znear = view.znear, zfar = view.zfar,
-        znearviewmodel = view.znearviewmodel, zfarviewmodel = view.zfarviewmodel,
-        drawhud = true, drawviewmodel = true, drawmonitors = true, dopostprocess = true, bloomtone = view.bloomtone,
-        offcenter = { left = -sample[1], right = view.width - sample[1], top = sample[2], bottom = view.height + sample[2] } } )
+    local params = renderParams
+    params.origin, params.angles, params.fov, params.aspect = origin, angles, fov, view.aspect
+    params.w, params.h, params.znear, params.zfar = view.width, view.height, view.znear, view.zfar
+    params.znearviewmodel, params.zfarviewmodel, params.bloomtone = view.znearviewmodel, view.zfarviewmodel, view.bloomtone
+    renderOffcenter.left, renderOffcenter.right = -sample[1], view.width - sample[1]
+    renderOffcenter.top, renderOffcenter.bottom = sample[2], view.height + sample[2]
+    render.RenderView( params )
     return true
 end
 
@@ -64,11 +78,12 @@ function T.BeginViewModel()
     local view = render.GetViewSetup( true )
     if not T.IsView( view ) then return end
     T.EndViewModel()
-    cam.Start( { type = "3D", origin = view.origin, angles = view.angles,
-        fov = view.fovviewmodel, aspect = view.aspect,
-        x = view.x, y = view.y, w = view.width, h = view.height,
-        znear = view.znearviewmodel, zfar = view.zfarviewmodel,
-        offcenter = { left = 0, right = view.width, top = 0, bottom = view.height } } )
+    local camera = viewModelCamera
+    camera.origin, camera.angles, camera.fov, camera.aspect = view.origin, view.angles, view.fovviewmodel, view.aspect
+    camera.x, camera.y, camera.w, camera.h = view.x, view.y, view.width, view.height
+    camera.znear, camera.zfar = view.znearviewmodel, view.zfarviewmodel
+    viewModelOffcenter.right, viewModelOffcenter.bottom = view.width, view.height
+    cam.Start( camera )
     -- cam.Start rebuilds the projection but does not retain Source's
     -- foreground depth range for native viewmodels.
     render.DepthRange( 0, VIEWMODEL_DEPTH_MAX )

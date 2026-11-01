@@ -122,7 +122,10 @@ local function searchEntries( baseEntries )
 	for _, entry in ipairs( baseEntries or {} ) do result[#result + 1] = entry end
 	local creative = MC.API and MC.API.Creative
 	for _, category in ipairs( creative and creative.ListCategories and creative.ListCategories() or {} ) do
-		for _, entry in ipairs( dynamicCategoryEntries( category ) ) do result[#result + 1] = entry end
+		-- Slopes remain available in their own tab, but do not enter search.
+		if category.id ~= "mcswep:slopes" then
+			for _, entry in ipairs( dynamicCategoryEntries( category ) ) do result[#result + 1] = entry end
+		end
 	end
 	return result
 end
@@ -231,8 +234,8 @@ function MC.BuildCreativeTabStacks( tabKey, entries )
 	local isSearch = key == "search"
 	if isSearch then
 		-- Generated search contents only know vanilla bootstrap items. Vanilla's
-		-- search set also receives every category entry, so merge registered tabs
-		-- here and deduplicate by the same item+components identity.
+		-- search set also receives category entries. Merge searchable registered
+		-- tabs here and deduplicate by the same item+components identity.
 		entries = searchEntries( entries )
 	elseif entries == nil then
 		local creative = MC.API and MC.API.Creative

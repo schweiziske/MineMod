@@ -14,7 +14,10 @@ function MC.RequestCreativeHandBreak( weapon, aim, initialPress, commandNumber )
 	if not IsValid( weapon ) or weapon:GetClass() ~= "mc_item_hand"
 		or weapon:GetOwner() ~= ply or not MC.PlayerIsCreative( ply ) then return false end
 	local stateId = MC.GetBlockState( aim.bx, aim.by, aim.bz )
-	local offset = ( aim.HitPos - MC.API.Coords.CellMin( aim.bx, aim.by, aim.bz ) ) * ( 1 / MC.API.Coords.BlockSize() )
+	local offset = aim.HitOffset
+	if not offset then
+		offset = ( aim.HitPos - MC.API.Coords.CellMin( aim.bx, aim.by, aim.bz ) ) * ( 1 / MC.API.Coords.BlockSize() )
+	end
 	-- Capture the target before prediction turns it into air. The request is
 	-- sent even on listen hosts, where voxel prediction is intentionally off.
 	if MC.ClientEditPredictionEnabled()

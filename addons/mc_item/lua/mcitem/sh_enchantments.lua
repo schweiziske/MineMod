@@ -62,12 +62,21 @@ function MCITEM.ItemStackHasFoil(stack)
     return false
 end
 
+local function weaponIsInventoryProxy(weapon)
+    if weapon.MCHandWeaponBridgeProxy == true then return true end
+    return weapon.GetNW2Bool and weapon:GetNW2Bool("MCITEM_InventoryProxy", false) == true or false
+end
+
+local function weaponUsesClientInventoryStack(weapon, inventoryProxy)
+    if not CLIENT or not inventoryProxy or not MC or not MC.ClientInventory then return false end
+    local owner = weapon.GetOwner and weapon:GetOwner() or nil
+    return IsValid(owner) and owner == LocalPlayer()
+end
+
 function MCITEM.StackForWeaponFoil(weapon)
     if not IsValid(weapon) and not istable(weapon) then return nil end
-    local owner = weapon.GetOwner and weapon:GetOwner() or nil
-    local inventoryProxy = weapon.MCHandWeaponBridgeProxy == true
-    if weapon.GetNW2Bool and weapon:GetNW2Bool("MCITEM_InventoryProxy", false) then inventoryProxy = true end
-    if CLIENT and inventoryProxy and IsValid(owner) and owner == LocalPlayer() and MC and MC.ClientInventory then
+    local inventoryProxy = weaponIsInventoryProxy(weapon)
+    if weaponUsesClientInventoryStack(weapon, inventoryProxy) then
         local selected = math.Clamp(math.floor(tonumber(MC.ClientInventory.selected) or 0), 0, 8)
         local stack = MC.ClientInventory.slots and MC.ClientInventory.slots[selected + 1] or nil
         if istable(stack) then return stack end
@@ -87,6 +96,23 @@ function MCITEM.StackForWeaponFoil(weapon)
     }
 end
 
+-- The synthesized (non client-inventory) stack depends only on MCItemID and
+-- the proxy foil override, so its result is cached on the weapon under that
+-- key.  The local player's client-inventory stack can change components at
+-- any time and is evaluated uncached.
 function MCITEM.WeaponHasFoil(weapon)
-    return MCITEM.ItemStackHasFoil(MCITEM.StackForWeaponFoil(weapon))
+    if not IsValid(weapon) and not istable(weapon) then return MCITEM.ItemStackHasFoil(nil) end
+    local inventoryProxy = weaponIsInventoryProxy(weapon)
+    if weaponUsesClientInventoryStack(weapon, inventoryProxy) then
+        return MCITEM.ItemStackHasFoil(MCITEM.StackForWeaponFoil(weapon))
+    end
+    local itemId = weapon.MCItemID
+    local foil = inventoryProxy and weapon.GetNW2Bool and weapon:GetNW2Bool("MCITEM_ItemFoil", false) or nil
+    local foilKey = foil == nil and "none" or foil
+    if weapon.MCFoilCacheItem == itemId and weapon.MCFoilCacheKey == foilKey and weapon.MCFoilCacheResult ~= nil then
+        return weapon.MCFoilCacheResult
+    end
+    local result = MCITEM.ItemStackHasFoil(MCITEM.StackForWeaponFoil(weapon))
+    weapon.MCFoilCacheItem, weapon.MCFoilCacheKey, weapon.MCFoilCacheResult = itemId, foilKey, result
+    return result
 end

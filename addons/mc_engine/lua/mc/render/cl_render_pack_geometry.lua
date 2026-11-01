@@ -252,6 +252,9 @@ function G.ApplyLighting( updates )
 		requireValue( data.references > 0 and data.pixels and #update.pixels == data.quadCount * 4
 			and #update.occlusion == data.quadCount, "native_relight_layout", "invalid retained lighting output" )
 		update.firstQuad, update.quadCount = data.firstQuad, data.quadCount
+		-- The retained arrays are the bytes published at this range, so only
+		-- changed corners/AO are written. Rollback below rewrites whole parts.
+		update.previousPixels, update.previousOcclusion = data.pixels, data.occlusion
 	end
 	local attempted = 0
 	local ok, err = pcall( function()

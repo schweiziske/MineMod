@@ -82,8 +82,9 @@ local function spawnOne(owner, definition, now)
     local particle = {
         itemId = definition.id,
         material = particleMaterial(definition.id),
+        -- position/oldPosition are distinct Vectors updated in place by ticks.
         position = position,
-        oldPosition = position,
+        oldPosition = Vector(position),
         velocity = velocity,
         age = 0,
         lifetime = math.floor(4 / (math.Rand(0, 1) * 0.9 + 0.1)),
@@ -118,32 +119,52 @@ net.Receive(NET_PARTICLES, function()
     Food.SpawnItemParticles(net.ReadEntity(), net.ReadString(), net.ReadUInt(6))
 end)
 
+-- Reused trace scratch: tickParticle copies what it needs before the next trace.
+local traceInput = { mask = MASK_SOLID }
+local traceOutput = {}
+local traceDestination = Vector(0, 0, 0)
+
 local function tickParticle(particle)
-    particle.oldPosition = particle.position
+    local position, oldPosition = particle.position, particle.oldPosition
+    if rawequal(position, oldPosition) then
+        -- Particles created before a hot reload still alias these Vectors.
+        oldPosition = Vector(position)
+        particle.oldPosition = oldPosition
+    end
+    oldPosition:Set(position)
     particle.age = particle.age + 1
     if particle.age >= particle.lifetime then
         particle.removed = true
         return
     end
 
-    particle.velocity.z = particle.velocity.z - 0.04 * particle.gravity
-    local destination = particle.position + particle.velocity * MCITEM.BlockSize()
-    local trace = util.TraceLine({
-        start = particle.position,
-        endpos = destination,
-        filter = particle.owner,
-        mask = MASK_SOLID,
-    })
+    local velocity = particle.velocity
+    velocity.z = velocity.z - 0.04 * particle.gravity
+    local blockSize = MCITEM.BlockSize()
+    traceDestination.x = position.x + velocity.x * blockSize
+    traceDestination.y = position.y + velocity.y * blockSize
+    traceDestination.z = position.z + velocity.z * blockSize
+    traceInput.start = position
+    traceInput.endpos = traceDestination
+    traceInput.filter = particle.owner
+    traceInput.output = traceOutput
+    util.TraceLine(traceInput)
+    traceInput.filter = nil
+    local trace = traceOutput
     if trace.Hit then
-        particle.position = trace.HitPos
-        local normalSpeed = particle.velocity:Dot(trace.HitNormal)
+        position:Set(trace.HitPos)
+        local hitNormal = trace.HitNormal
+        local normalSpeed = velocity:Dot(hitNormal)
         if normalSpeed < 0 then
-            particle.velocity = particle.velocity - trace.HitNormal * normalSpeed
+            velocity.x = velocity.x - hitNormal.x * normalSpeed
+            velocity.y = velocity.y - hitNormal.y * normalSpeed
+            velocity.z = velocity.z - hitNormal.z * normalSpeed
         end
     else
-        particle.position = destination
+        position:Set(traceDestination)
     end
-    particle.velocity = particle.velocity * particle.friction
+    local friction = particle.friction
+    velocity.x, velocity.y, velocity.z = velocity.x * friction, velocity.y * friction, velocity.z * friction
 end
 
 local function advanceParticle(particle, now)
@@ -163,19 +184,37 @@ end
 hook.Remove("Think", "MCITEM_FoodParticlesThink")
 hook.Add("Think", "MCITEM_FoodParticlesThink", function()
     local now = CurTime()
-    for index = #Food.Particles, 1, -1 do
-        local particle = Food.Particles[index]
+    -- Stable in-place compaction instead of O(n^2) table.remove shifting.
+    local particles = Food.Particles
+    local count, kept = #particles, 0
+    for index = 1, count do
+        local particle = particles[index]
         advanceParticle(particle, now)
-        if particle.removed then table.remove(Food.Particles, index) end
+        if not particle.removed then
+            kept = kept + 1
+            particles[kept] = particle
+        end
     end
+    for index = kept + 1, count do particles[index] = nil end
 end)
 
-local function vertex(position, u, v, r, g, b)
-    mesh.Position(position)
+local vertexPosition = Vector(0, 0, 0)
+
+local function vertex(x, y, z, u, v, r, g, b)
+    vertexPosition.x, vertexPosition.y, vertexPosition.z = x, y, z
+    mesh.Position(vertexPosition)
     mesh.TexCoord(0, u, v)
     mesh.Color(r * 255, g * 255, b * 255, 255)
     mesh.AdvanceVertex()
 end
+
+-- Persistent per-material buckets: flat arrays of
+-- (particle, x, y, z) with a per-frame count; reset each frame without
+-- reallocating.
+local BUCKET_STRIDE = 4
+local drawBuckets = {}
+local drawCounts = {}
+local drawOrder = {}
 
 hook.Remove("PostDrawTranslucentRenderables", "MCITEM_FoodParticlesDraw")
 hook.Add("PostDrawTranslucentRenderables", "MCITEM_FoodParticlesDraw", function(_, drawingSkybox)
@@ -183,40 +222,64 @@ hook.Add("PostDrawTranslucentRenderables", "MCITEM_FoodParticlesDraw", function(
     local now = CurTime()
     local angles = EyeAngles()
     local right, up = angles:Right(), angles:Up()
-    local buckets = {}
+    local rightX, rightY, rightZ = right.x, right.y, right.z
+    local upX, upY, upZ = up.x, up.y, up.z
+    local orderCount = 0
 
-    for _, particle in ipairs(Food.Particles) do
+    local particles = Food.Particles
+    for index = 1, #particles do
+        local particle = particles[index]
         local partialTick = math.Clamp(
             (now - particle.lastTickAt) / Food.TickSeconds,
             0,
             1
         )
-        local bucket = buckets[particle.material]
+        local material = particle.material
+        local bucket = drawBuckets[material]
         if not bucket then
             bucket = {}
-            buckets[particle.material] = bucket
+            drawBuckets[material] = bucket
         end
-        bucket[#bucket + 1] = {
-            particle = particle,
-            position = LerpVector(partialTick, particle.oldPosition, particle.position),
-        }
+        local count = drawCounts[material]
+        if not count then
+            count = 0
+            orderCount = orderCount + 1
+            drawOrder[orderCount] = material
+        end
+        local oldPosition, position = particle.oldPosition, particle.position
+        local base = count * BUCKET_STRIDE
+        bucket[base + 1] = particle
+        bucket[base + 2] = oldPosition.x + (position.x - oldPosition.x) * partialTick
+        bucket[base + 3] = oldPosition.y + (position.y - oldPosition.y) * partialTick
+        bucket[base + 4] = oldPosition.z + (position.z - oldPosition.z) * partialTick
+        drawCounts[material] = count + 1
     end
 
-    for material, bucket in pairs(buckets) do
+    local blockSize = MCITEM.BlockSize()
+    for orderIndex = 1, orderCount do
+        local material = drawOrder[orderIndex]
+        local bucket = drawBuckets[material]
+        local count = drawCounts[material]
         render.SetMaterial(material)
-        mesh.Begin(MATERIAL_QUADS, #bucket)
-        for _, entry in ipairs(bucket) do
-            local particle = entry.particle
-            local radius = particle.quadSize * MCITEM.BlockSize()
-            local rightOffset, upOffset = right * radius, up * radius
+        mesh.Begin(MATERIAL_QUADS, count)
+        for entryIndex = 0, count - 1 do
+            local base = entryIndex * BUCKET_STRIDE
+            local particle = bucket[base + 1]
+            local px, py, pz = bucket[base + 2], bucket[base + 3], bucket[base + 4]
+            bucket[base + 1] = nil
+            local radius = particle.quadSize * blockSize
+            local rx, ry, rz = rightX * radius, rightY * radius, rightZ * radius
+            local ux, uy, uz = upX * radius, upY * radius, upZ * radius
             local u0, u1 = (particle.uo + 1) / 4, particle.uo / 4
             local v0, v1 = particle.vo / 4, (particle.vo + 1) / 4
             local r, g, b = particle.litR, particle.litG, particle.litB
-            vertex(entry.position - rightOffset - upOffset, u1, v1, r, g, b)
-            vertex(entry.position + rightOffset - upOffset, u0, v1, r, g, b)
-            vertex(entry.position + rightOffset + upOffset, u0, v0, r, g, b)
-            vertex(entry.position - rightOffset + upOffset, u1, v0, r, g, b)
+            vertex(px - rx - ux, py - ry - uy, pz - rz - uz, u1, v1, r, g, b)
+            vertex(px + rx - ux, py + ry - uy, pz + rz - uz, u0, v1, r, g, b)
+            vertex(px + rx + ux, py + ry + uy, pz + rz + uz, u0, v0, r, g, b)
+            vertex(px - rx + ux, py - ry + uy, pz - rz + uz, u1, v0, r, g, b)
         end
         mesh.End()
+        drawCounts[material] = nil
+        drawOrder[orderIndex] = nil
     end
 end)

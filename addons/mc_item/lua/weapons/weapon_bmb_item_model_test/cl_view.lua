@@ -277,6 +277,11 @@ end)
 -- 返回 位移增量(x,y,z), 角度增量(pitch,yaw,roll), 缩放倍率。
 -- `using` 为真时叠 mcitem_use_<w>_*；武器报出额外静止态（弩的 "charged"）时叠
 -- mcitem_charged_<w>_*。三组同一套坐标，所以调起来是一个心智模型。
+local function addAnchorExtra(extra, x, y, z, pitch, yaw, roll)
+    return x + extra.x:GetFloat(), y + extra.y:GetFloat(), z + extra.z:GetFloat(),
+        pitch + extra.pitch:GetFloat(), yaw + extra.yaw:GetFloat(), roll + extra.roll:GetFloat()
+end
+
 local function weaponAnchorOffsets(weapon, using)
     local name = weapon.MCAnchorName
     if not name then return 0, 0, 0, 0, 0, 0, 1 end
@@ -285,18 +290,15 @@ local function weaponAnchorOffsets(weapon, using)
     local x, y, z = set.x:GetFloat(), set.y:GetFloat(), set.z:GetFloat()
     local pitch, yaw, roll = set.pitch:GetFloat(), set.yaw:GetFloat(), set.roll:GetFloat()
 
-    local function add(extra)
-        x, y, z = x + extra.x:GetFloat(), y + extra.y:GetFloat(), z + extra.z:GetFloat()
-        pitch = pitch + extra.pitch:GetFloat()
-        yaw = yaw + extra.yaw:GetFloat()
-        roll = roll + extra.roll:GetFloat()
+    if using then
+        x, y, z, pitch, yaw, roll = addAnchorExtra(useConVarSet(name), x, y, z, pitch, yaw, roll)
     end
-
-    if using then add(useConVarSet(name)) end
 
     if weapon.GetMCAnchorExtraState then
         local state = weapon:GetMCAnchorExtraState()
-        if state == "charged" then add(chargedConVarSet(name)) end
+        if state == "charged" then
+            x, y, z, pitch, yaw, roll = addAnchorExtra(chargedConVarSet(name), x, y, z, pitch, yaw, roll)
+        end
     end
 
     return x, y, z, pitch, yaw, roll, math.max(set.scale:GetFloat(), 0.001)
@@ -309,16 +311,25 @@ local DEFAULT_DISPLAY = Render.DefaultFirstPersonDisplay
 -- weapons, food, potions, buckets, shields, totems and throwable items in both
 -- first and third person.  Keep foil passes inside the same bounded lighting
 -- scope because Glint.DrawModel performs additional DrawModel calls.
-local function drawMCItemModel(weapon, model, samplePosition)
-    local function drawPasses(lightR, lightG, lightB, _, glintR, glintG, glintB)
-        model:DrawModel()
-        if MCITEM.WeaponHasFoil and MCITEM.WeaponHasFoil(weapon)
-        and MCITEM.Glint and MCITEM.Glint.DrawModel then
-            MCITEM.Glint.DrawModel(model, weapon.MCGlintProfile,
-                glintR or lightR, glintG or lightG, glintB or lightB,
-                lightR, lightG, lightB)
-        end
+-- drawPasses is hoisted so a draw does not allocate a closure; the current
+-- weapon/model are passed through these upvalues and restored afterwards so a
+-- nested draw (if any) cannot clobber an outer one.
+local drawPassWeapon, drawPassModel
+
+local function drawPasses(lightR, lightG, lightB, _, glintR, glintG, glintB)
+    local weapon, model = drawPassWeapon, drawPassModel
+    model:DrawModel()
+    if MCITEM.WeaponHasFoil and MCITEM.WeaponHasFoil(weapon)
+    and MCITEM.Glint and MCITEM.Glint.DrawModel then
+        MCITEM.Glint.DrawModel(model, weapon.MCGlintProfile,
+            glintR or lightR, glintG or lightG, glintB or lightB,
+            lightR, lightG, lightB)
     end
+end
+
+local function drawMCItemModel(weapon, model, samplePosition)
+    local previousWeapon, previousModel = drawPassWeapon, drawPassModel
+    drawPassWeapon, drawPassModel = weapon, model
 
     if isfunction(MCITEM.DrawModelWithMCLight) then
         MCITEM.DrawModelWithMCLight(
@@ -330,6 +341,8 @@ local function drawMCItemModel(weapon, model, samplePosition)
     else
         drawPasses()
     end
+
+    drawPassWeapon, drawPassModel = previousWeapon, previousModel
 end
 
 local function firstPersonDisplay(weapon)
@@ -356,15 +369,19 @@ end
 -- 共享权重 × 本武器权重。三叉戟和剑在 MC 里挥的是**同一段** WHACK/6 动画
 -- （Items.TRIDENT 没装 SWING_ANIMATION 组件，吃 SwingAnimation.DEFAULT），差别只可能
 -- 来自 Source 侧的锚点 / pivot，所以幅度对不上时调这一组，不要去改 MC 的公式。
+-- 返回的表按武器复用：Render.ApplyWhackTransform 只在调用期间读取，不保留。
 local function swingWeights(weapon)
-    local weights = {
-        posX = fpMinecraftPosX:GetFloat(),
-        posY = fpMinecraftPosY:GetFloat(),
-        posZ = fpMinecraftPosZ:GetFloat(),
-        rotPitch = fpMinecraftRotPitch:GetFloat(),
-        rotYaw = fpMinecraftRotYaw:GetFloat(),
-        rotRoll = fpMinecraftRotRoll:GetFloat(),
-    }
+    local weights = weapon and weapon.MCSwingWeightsScratch
+    if not weights then
+        weights = {}
+        if weapon then weapon.MCSwingWeightsScratch = weights end
+    end
+    weights.posX = fpMinecraftPosX:GetFloat()
+    weights.posY = fpMinecraftPosY:GetFloat()
+    weights.posZ = fpMinecraftPosZ:GetFloat()
+    weights.rotPitch = fpMinecraftRotPitch:GetFloat()
+    weights.rotYaw = fpMinecraftRotYaw:GetFloat()
+    weights.rotRoll = fpMinecraftRotRoll:GetFloat()
 
     local name = weapon and weapon.MCAnchorName
     if not name then return weights end
@@ -584,9 +601,17 @@ function SWEP:ViewModelDrawn()
             )
         else
             -- 挥动之后的追加位姿（弩上好弦的静止偏移就在这一条上）。
-            local extra = self.GetMCSwingExtra and function(translate, rotate, value)
-                self:GetMCSwingExtra(translate, rotate, value, 1)
-            end or nil
+            -- 每把武器只建一次这个回调（它只捕获 self）。
+            local extra = nil
+            if self.GetMCSwingExtra then
+                extra = self.MCSwingExtraCallback
+                if not extra then
+                    extra = function(translate, rotate, value)
+                        self:GetMCSwingExtra(translate, rotate, value, 1)
+                    end
+                    self.MCSwingExtraCallback = extra
+                end
+            end
 
             position, angles = Render.ApplyWhackTransform(
                 position, angles, swing, equip, 1, unitScale, swingWeights(self),
@@ -801,11 +826,12 @@ function SWEP:DrawWorldModel()
 
     local position = matrix:GetTranslation()
     local angles = matrix:GetAngles()
-    position = position
-        + angles:Forward() * 7
-        + angles:Right() * 4
-        + angles:Up() * -10
-    angles:RotateAroundAxis(angles:Up(), 60)
+    -- 原地累加（GetTranslation 返回的是新 Vector），省掉中间 Vector。
+    local handForward, handRight, handUp = angles:Forward(), angles:Right(), angles:Up()
+    position.x = position.x + handForward.x * 7 + handRight.x * 4 + handUp.x * -10
+    position.y = position.y + handForward.y * 7 + handRight.y * 4 + handUp.y * -10
+    position.z = position.z + handForward.z * 7 + handRight.z * 4 + handUp.z * -10
+    angles:RotateAroundAxis(handUp, 60)
     angles:RotateAroundAxis(angles:Forward(), -160)
 
     local profile = self.MCThirdPersonProfile

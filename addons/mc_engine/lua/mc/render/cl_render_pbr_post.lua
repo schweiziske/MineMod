@@ -317,13 +317,27 @@ function P.ResetExposure()
     if group and group.exposure then group.exposure.previous = nil end
 end
 
+-- The history signature is serialized only when one of its inputs changes.
+local function exposureSignature( history, settings, packValue )
+    local cache = history.signatureInputs
+    if cache and cache[1] == settings[1] and cache[2] == settings[2] and cache[3] == settings[3]
+        and cache[4] == settings[4] and cache.pack == packValue and type( packValue ) ~= "table" then
+        return history.signature
+    end
+    cache = cache or {}
+    cache[1], cache[2], cache[3], cache[4], cache.pack = settings[1], settings[2], settings[3], settings[4], packValue
+    history.signatureInputs = cache
+    history.signature = MC.RenderPackSchema.Canonical( { settings, packValue } )
+    return history.signature
+end
+
 local function prepareExposure( context )
     local history = context.group.exposure
     local view = render.GetViewSetup( true )
     local world, err = MC.API.Coords.RenderToWorld( view.origin )
     requireValue( world ~= nil, "render_exposure_position", tostring( err ) )
     local settings = { exposureKey:GetFloat(), exposureStrength:GetFloat(), exposureRange:GetFloat(), exposureTime:GetFloat() }
-    local signature = MC.RenderPackSchema.Canonical( { settings, context.settings.exposure } )
+    local signature = exposureSignature( history, settings, context.settings.exposure )
     local now, frame, previous = RealTime(), FrameNumber(), history.previous
     local valid = previous and previous.world == MC.World and previous.generation == MC.StateWorldGeneration
         and previous.width == context.view_width and previous.height == context.view_height
@@ -352,7 +366,13 @@ function P.Input( semantic, context )
         return context.exposure.texture or render.GetScreenEffectTexture( 0 )
     end
     if semantic == "scene_color" then
-        render.UpdateScreenEffectTexture( 0 )
+        -- Copy the framebuffer once per stage, and again only after a pass
+        -- wrote the screen (P.Bind marks it); every consumer still reads the
+        -- current colour, never the framebuffer being written.
+        if not context.sceneColorFresh then
+            render.UpdateScreenEffectTexture( 0 )
+            context.sceneColorFresh = true
+        end
         local texture = render.GetScreenEffectTexture( 0 )
         requireValue( texture and not texture:IsError() and texture:Width() == context.view_width
             and texture:Height() == context.view_height, "render_post_scene_resize", "scene changed during screen processing" )
@@ -369,13 +389,15 @@ function P.Input( semantic, context )
     if semantic == "volume_shadow" then return c.volumeTexture end
 end
 
+local exposureParams = { "$c0_x", "$c0_y", "$c0_z", "$c0_w" }
 function P.Bind( binding, material, context, target, outputs, inputs )
+    -- The executor draws right after Bind; a screen output makes the next
+    -- scene_color consumer refresh its copy.
+    if not target.texture then context.sceneColorFresh = false end
     if binding == "taa_resolve" then taa.Bind( material, context ) return end
     if binding == "exposure_adapt" then
         local exposure = context.exposure
-        for i, component in ipairs( { "x", "y", "z", "w" } ) do
-            material:SetFloat( "$c0_" .. component, exposure.settings[i] )
-        end
+        for i = 1, 4 do material:SetFloat( exposureParams[i], exposure.settings[i] ) end
         material:SetFloat( "$c1_x", exposure.dt )
         material:SetFloat( "$c1_y", exposure.texture and 1 or 0 )
         return
@@ -383,11 +405,16 @@ function P.Bind( binding, material, context, target, outputs, inputs )
     binders[binding]( material, context.scene, target, inputs, context.group )
 end
 
+local bloomBindings = { "bloom_prefilter", "bloom_horizontal", "bloom_vertical", "bloom_composite" }
+-- Per-stage availability tables, reused across frames; RunScreen reads them
+-- synchronously through P.Enabled.
+local enabledByStage = { opaque = {}, world = {}, final = {} }
 function P.Run( stage, c, viewSerial )
     local group = P.Active()
     if not group then return true end
     local active = MC.RenderPackRuntime.active
-    local enabled = {}
+    local enabled = enabledByStage[stage]
+    for name in pairs( enabled ) do enabled[name] = nil end
     if stage == "opaque" then
         enabled.ssao = wantsAO()
         enabled.ssao_composite = enabled.ssao
@@ -405,7 +432,7 @@ function P.Run( stage, c, viewSerial )
         end
     elseif stage == "final" then
         local bloom = group.bloom and bloomEnabled:GetBool() and ( bloomStrength:GetFloat() > 0 or bloomDebug:GetBool() )
-        for _, name in ipairs( { "bloom_prefilter", "bloom_horizontal", "bloom_vertical", "bloom_composite" } ) do enabled[name] = bloom and true or false end
+        for i = 1, #bloomBindings do enabled[bloomBindings[i]] = bloom and true or false end
         local exposure = group.exposure and exposureEnabled:GetBool() and exposureStrength:GetFloat() > 0 and exposureRange:GetFloat() > 0
         for _, name in ipairs( exposureBindings ) do enabled[name] = exposure and true or false end
         if not exposure then P.ResetExposure() end

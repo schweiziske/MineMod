@@ -487,23 +487,6 @@ local NEIGHBORS = {
 	{ 0, 0, 1 }, { 0, 0, -1 },
 }
 
-local LIGHT_DIRTY_MESH_NEIGHBOR_X = {}
-local LIGHT_DIRTY_MESH_NEIGHBOR_Y = {}
-local LIGHT_DIRTY_MESH_NEIGHBOR_Z = {}
-local LIGHT_DIRTY_MESH_NEIGHBOR_COUNT = 0
-do
-	for dz = -1, 1 do
-		for dy = -1, 1 do
-			for dx = -1, 1 do
-				LIGHT_DIRTY_MESH_NEIGHBOR_COUNT = LIGHT_DIRTY_MESH_NEIGHBOR_COUNT + 1
-				LIGHT_DIRTY_MESH_NEIGHBOR_X[LIGHT_DIRTY_MESH_NEIGHBOR_COUNT] = dx
-				LIGHT_DIRTY_MESH_NEIGHBOR_Y[LIGHT_DIRTY_MESH_NEIGHBOR_COUNT] = dy
-				LIGHT_DIRTY_MESH_NEIGHBOR_Z[LIGHT_DIRTY_MESH_NEIGHBOR_COUNT] = dz
-			end
-		end
-	end
-end
-
 local function newChangedLightCells()
 	return { keys = {}, x = {}, y = {}, z = {}, count = 0 }
 end
@@ -596,10 +579,12 @@ local function runLightIncreaseQueue( q, changed )
 						local ncx, ncy, ncz, nli = cellToChunk( nx, ny, nz )
 						local nkey = chunkKey( ncx, ncy, ncz )
 						-- Unloaded cells are opaque to block light: they never receive it.
-						if loadedKey( nkey ) then
+						-- nextLevel is at most level - 1, so a neighbour already holding
+						-- that much cannot change and its state/opacity is not read.
+						local nstore = stores[nkey]
+						if ( nstore and ( nstore[nli] or 0 ) or 0 ) < level - 1 and loadedKey( nkey ) then
 							local opacity = lightOpacityForState( MC.GetBlockState and MC.GetBlockState( nx, ny, nz ) or 0, nx, ny, nz )
 							local nextLevel = level - ( opacity >= 15 and 16 or math.max( 1, opacity ) )
-							local nstore = stores[nkey]
 							if nextLevel > 0 and ( nstore and ( nstore[nli] or 0 ) or 0 ) < nextLevel then
 								if not nstore then
 									nstore = {}
@@ -902,61 +887,70 @@ function MC.MarkLightSectionsDirtyForChangedCells( changed )
 	local cs2, sectionSize = cs * cs, MC.RENDER_SECTION_SIZE or 16
 	local sectionXY = math.ceil( cs / sectionSize )
 	local floor = math.floor
-	-- A synchronous batch sees one world. Resolve its chunk neighbours once,
-	-- then deduplicate compact local cells before notifying each section. The
-	-- same 27 lighting dependencies are retained across all chunk boundaries.
-	local sources, targets = {}, {}
-	for c = 1, count do
-		local bx, by, bz = xs[c], ys[c], zs[c]
-		local cx, cy, cz = floor( bx / cs ), floor( by / cs ), floor( bz / ch )
-		local lx, ly, lz = bx - cx * cs, by - cy * cs, bz - cz * ch
-		local sourceKey = chunkKey( cx, cy, cz )
-		local neighbors = sources[sourceKey]
-		if neighbors == nil then
-			neighbors = {}
-			local any = false
-			for dz = -1, 1 do for dy = -1, 1 do for dx = -1, 1 do
-				local key = chunkKey( cx + dx, cy + dy, cz + dz )
-				if world[key] then
-					local target = targets[key]
-					if not target then
-						target = { cells = {}, sections = {}, key = key }
-						targets[key] = target
-					end
-					neighbors[dx + 2 + ( dy + 1 ) * 3 + ( dz + 1 ) * 9] = target
-					any = true
-				end
-			end end end
-			if not any then neighbors = false end
-			sources[sourceKey] = neighbors
+	-- The dirty set is the changed cells dilated by the full 3x3x3 cube. The
+	-- cube is separable, so dilate along x, then y, then z (3 probes per cell
+	-- per axis instead of 27). Cells are addressed inside the batch's padded
+	-- bounding box. One synchronous batch sees one world.
+	local targets = {} -- chunk key -> { key, sections = index -> cells }, loaded chunks only
+	if count > 0 then
+		local minX, minY, minZ, maxX, maxY, maxZ = xs[1], ys[1], zs[1], xs[1], ys[1], zs[1]
+		for c = 2, count do
+			local x, y, z = xs[c], ys[c], zs[c]
+			if x < minX then minX = x elseif x > maxX then maxX = x end
+			if y < minY then minY = y elseif y > maxY then maxY = y end
+			if z < minZ then minZ = z elseif z > maxZ then maxZ = z end
 		end
-		if neighbors then
-			for i = 1, LIGHT_DIRTY_MESH_NEIGHBOR_COUNT do
-				local x = lx + LIGHT_DIRTY_MESH_NEIGHBOR_X[i]
-				local y = ly + LIGHT_DIRTY_MESH_NEIGHBOR_Y[i]
-				local z = lz + LIGHT_DIRTY_MESH_NEIGHBOR_Z[i]
-				local dx, dy, dz = 0, 0, 0
-				if x < 0 then dx, x = -1, x + cs elseif x >= cs then dx, x = 1, x - cs end
-				if y < 0 then dy, y = -1, y + cs elseif y >= cs then dy, y = 1, y - cs end
-				if z < 0 then dz, z = -1, z + ch elseif z >= ch then dz, z = 1, z - ch end
-				local target = neighbors[dx + 2 + ( dy + 1 ) * 3 + ( dz + 1 ) * 9]
-				if target then
-					local li = x + y * cs + z * cs2
-					if not target.cells[li] then
-						target.cells[li] = true
-						local index = floor( x / sectionSize ) + floor( y / sectionSize ) * sectionXY
-							+ floor( z / sectionSize ) * sectionXY * sectionXY + 1
-						local cells = target.sections[index]
-						if not cells then
-							local sections = meshBlockLightDirty[target.key]
-							if not sections then sections = {} meshBlockLightDirty[target.key] = sections end
-							cells = sections[index]
-							if not cells then cells = {} sections[index] = cells end
-							target.sections[index] = cells
-						end
-						cells[li] = true
-					end
+		local ox, oy, oz = minX - 1, minY - 1, minZ - 1
+		local sx = maxX - minX + 3
+		local sxy = sx * ( maxY - minY + 3 )
+		local list, seen, n = {}, {}, 0
+		for c = 1, count do
+			local base = ( xs[c] - ox ) + ( ys[c] - oy ) * sx + ( zs[c] - oz ) * sxy
+			for d = base - 1, base + 1 do
+				if not seen[d] then seen[d] = true n = n + 1 list[n] = d end
+			end
+		end
+		for _, step in ipairs( { sx, sxy } ) do
+			local nextList, nextSeen, m = {}, {}, 0
+			for i = 1, n do
+				local base = list[i]
+				for d = base - step, base + step, step do
+					if not nextSeen[d] then nextSeen[d] = true m = m + 1 nextList[m] = d end
 				end
+			end
+			list, n = nextList, m
+		end
+		local lastCX, lastCY, lastCZ, target
+		for i = 1, n do
+			local k = list[i]
+			local bz = floor( k / sxy )
+			local rest = k - bz * sxy
+			local by = floor( rest / sx )
+			local bx = rest - by * sx + ox
+			by, bz = by + oy, bz + oz
+			local cx, cy, cz = floor( bx / cs ), floor( by / cs ), floor( bz / ch )
+			if cx ~= lastCX or cy ~= lastCY or cz ~= lastCZ then
+				lastCX, lastCY, lastCZ = cx, cy, cz
+				local key = chunkKey( cx, cy, cz )
+				target = targets[key]
+				if not target and world[key] then
+					target = { sections = {}, key = key }
+					targets[key] = target
+				end
+			end
+			if target then
+				local x, y, z = bx - cx * cs, by - cy * cs, bz - cz * ch
+				local index = floor( x / sectionSize ) + floor( y / sectionSize ) * sectionXY
+					+ floor( z / sectionSize ) * sectionXY * sectionXY + 1
+				local cells = target.sections[index]
+				if not cells then
+					local sections = meshBlockLightDirty[target.key]
+					if not sections then sections = {} meshBlockLightDirty[target.key] = sections end
+					cells = sections[index]
+					if not cells then cells = {} sections[index] = cells end
+					target.sections[index] = cells
+				end
+				cells[x + y * cs + z * cs2] = true
 			end
 		end
 	end

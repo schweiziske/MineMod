@@ -205,16 +205,20 @@ function Potions.SpawnGust(position)
     append(particle)
 end
 
+-- Reused trace scratch; HitPos is copied before the next trace can reuse it.
+local fragmentTraceInput = { mask = MASK_SOLID }
+local fragmentTraceOutput = {}
+
 local function moveFragment(particle)
     particle.velocity.z = particle.velocity.z - 0.04
     local destination = particle.position + particle.velocity * MCITEM.BlockSize()
-    local trace = util.TraceLine({
-        start = particle.position,
-        endpos = destination,
-        mask = MASK_SOLID,
-    })
+    fragmentTraceInput.start = particle.position
+    fragmentTraceInput.endpos = destination
+    fragmentTraceInput.output = fragmentTraceOutput
+    util.TraceLine(fragmentTraceInput)
+    local trace = fragmentTraceOutput
     if trace.Hit then
-        particle.position = trace.HitPos
+        particle.position = Vector(trace.HitPos)
         local normalSpeed = particle.velocity:Dot(trace.HitNormal)
         if normalSpeed < 0 then particle.velocity = particle.velocity - trace.HitNormal * normalSpeed end
     else
