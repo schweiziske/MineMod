@@ -82,7 +82,7 @@ MC.MeshGpuLightmapVanillaGamma = MC.MeshGpuLightmapVanillaGamma or ( CreateClien
 	"Vanilla look: Minecraft brightness slider 0-1 (options.gamma; 0 = Moody, 0.5 = vanilla default, 1 = Bright)" ) )
 MC.MeshGpuLightmapVanillaFlicker = MC.MeshGpuLightmapVanillaFlicker or ( CreateClientConVar and CreateClientConVar( "mc_lightmap_vanilla_flicker", "1", true, false,
 	"Vanilla look: per-tick torch light flicker (LightmapRenderStateExtractor's random walk); 0 = steady block light" ) )
-MC.MeshShadowMapSize = MC.MeshShadowMapSize or ( CreateClientConVar and CreateClientConVar( "mc_shadow_size", "4096", true, false,
+MC.MeshShadowMapSize = MC.MeshShadowMapSize or ( CreateClientConVar and CreateClientConVar( "mc_shadow_size", "2048", true, false,
 	"MC-owned shadow map cascade tile resolution, 512-4096 (atlas is size x 3*size; 4096 costs ~240MB VRAM and needs a modern GPU)" ) )
 MC.MeshShadowMapDistance = MC.MeshShadowMapDistance or ( CreateClientConVar and CreateClientConVar( "mc_shadow_distance", "10000", true, false,
 	"MC-owned shadow map world-space coverage radius (the far cascade; inner cascades divide it by the cascade ratio)" ) )
@@ -96,7 +96,7 @@ MC.MeshShadowMapSunStep = MC.MeshShadowMapSunStep or ( CreateClientConVar and Cr
 	"Day cycle: shadow sun angle quantization step in degrees; the shadow grid holds still between steps so edges stop shimmering (0 = continuous sun)" ) )
 MC.MeshShadowMode = MC.MeshShadowMode or ( CreateClientConVar and CreateClientConVar( "mc_shadow_mode", "map", true, false,
 	"MC sun shadow technique: linear = single-map alignment debug, map = Photon-style distorted map, csm = 3-cascade atlas, height = cached heightfield" ) )
-MC.MeshHfShadowSize = MC.MeshHfShadowSize or ( CreateClientConVar and CreateClientConVar( "mc_shadow_hf_size", "1024", true, false,
+MC.MeshHfShadowSize = MC.MeshHfShadowSize or ( CreateClientConVar and CreateClientConVar( "mc_shadow_hf_size", "2048", true, false,
 	"Heightfield shadow mode: top-down height map resolution" ) )
 MC.MeshHfShadowRange = MC.MeshHfShadowRange or ( CreateClientConVar and CreateClientConVar( "mc_shadow_hf_range", "4096", true, false,
 	"Heightfield shadow mode: world-space coverage radius around the player" ) )

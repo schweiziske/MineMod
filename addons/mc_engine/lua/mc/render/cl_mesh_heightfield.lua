@@ -81,7 +81,7 @@ local function heightfieldModeEnabled()
 end
 
 local function hfSize()
-	return convarInt( MC.MeshHfShadowSize, 1024, 256, 4096 )
+	return convarInt( MC.MeshHfShadowSize, 2048, 256, 4096 )
 end
 
 local function hfRangeCvar()
