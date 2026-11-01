@@ -579,10 +579,12 @@ local function runLightIncreaseQueue( q, changed )
 						local ncx, ncy, ncz, nli = cellToChunk( nx, ny, nz )
 						local nkey = chunkKey( ncx, ncy, ncz )
 						-- Unloaded cells are opaque to block light: they never receive it.
-						if loadedKey( nkey ) then
+						-- nextLevel is at most level - 1, so a neighbour already holding
+						-- that much cannot change and its state/opacity is not read.
+						local nstore = stores[nkey]
+						if ( nstore and ( nstore[nli] or 0 ) or 0 ) < level - 1 and loadedKey( nkey ) then
 							local opacity = lightOpacityForState( MC.GetBlockState and MC.GetBlockState( nx, ny, nz ) or 0, nx, ny, nz )
 							local nextLevel = level - ( opacity >= 15 and 16 or math.max( 1, opacity ) )
-							local nstore = stores[nkey]
 							if nextLevel > 0 and ( nstore and ( nstore[nli] or 0 ) or 0 ) < nextLevel then
 								if not nstore then
 									nstore = {}
