@@ -100,6 +100,10 @@ local CORNER_REMAP = {
 local PAIR_A, PAIR_B = { 4, 3, 3, 4 }, { 1, 1, 2, 2 }
 local SHADE = { 1, 0.5, float32( 0.6 ), float32( 0.6 ), float32( 0.8 ), float32( 0.8 ) }
 local QUAD_LOWER, QUAD_UPPER = float32( 0.0001 ), float32( 0.9999 )
+-- Exact memos of the per-vertex byte conversions, so the corner loop avoids
+-- float32's frexp. Whole-face AO is one of the few averageShade results;
+-- gray is an integer byte and directionShade one of the face shades.
+local grayByAO, shadeByGray = {}, {}
 
 local function classifyQuad( face, fullCollision, x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4 )
 	local x0, y0, z0 = min( x1, x2, x3, x4 ), min( y1, y2, y3, y4 ), min( z1, z2, z3, z4 )
@@ -260,20 +264,35 @@ function Lighter:PrepareBaked( bx, by, bz, baked, output )
 		for i = 1, 4 do resultLight[i], resultShade[i], resultAO[i] = light, baked.flatShade, 255 end
 	else
 		if not self:SampleFace( bx, by, bz, face, cubic ) then return nil end
+		local shades = shadeByGray[directionShade]
+		if not shades then
+			shades = {}
+			shadeByGray[directionShade] = shades
+		end
 		for vertex = 1, 4 do
-			local coords, ao
+			local coords, gray
 			if baked.partial then
 				local w = baked.weights[vertex]
 				coords = weightedBlend( self.coords[1], self.coords[2], self.coords[3], self.coords[4], w[1], w[2], w[3], w[4] )
-				ao = max( 0, min( 1, sum4( float32( self.ao[1] * w[1] ), float32( self.ao[2] * w[2] ),
+				local ao = max( 0, min( 1, sum4( float32( self.ao[1] * w[1] ), float32( self.ao[2] * w[2] ),
 					float32( self.ao[3] * w[3] ), float32( self.ao[4] * w[4] ) ) ) )
+				gray = floor( float32( ao * 255 ) )
 			else
 				local i = baked.indices[vertex]
-				coords, ao = self.coords[i], self.ao[i]
+				local ao = self.ao[i]
+				coords, gray = self.coords[i], grayByAO[ao]
+				if not gray then
+					gray = floor( float32( ao * 255 ) )
+					grayByAO[ao] = gray
+				end
 			end
 			resultLight[vertex] = quadEmission( coords, emission )
-			local gray = floor( float32( ao * 255 ) )
-			resultShade[vertex] = int( float32( gray * directionShade ) )
+			local shade = shades[gray]
+			if not shade then
+				shade = int( float32( gray * directionShade ) )
+				shades[gray] = shade
+			end
+			resultShade[vertex] = shade
 			resultAO[vertex] = gray
 		end
 	end

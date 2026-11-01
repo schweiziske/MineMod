@@ -456,21 +456,29 @@ function R.Material( index, source, translucent, blockSize, build )
 	return R.BoundMaterial( R, pass .. index, source, "world_" .. pass, blockSize, build.programs[pass], "linear" )
 end
 
-local function drawPixelRuns( width, firstPixel, pixels, zeroAlpha, rowScale, rowOffset )
-	local i, hasZeroAlpha = 1, false
-	while i <= #pixels do
-		local pixel, value = firstPixel + i - 1, pixels[i]
-		local x, y = pixel % width, floor( floor( pixel / width ) * rowScale + rowOffset )
-		local length, limit = 1, math.min( #pixels - i + 1, width - x )
-		while length < limit and pixels[i + length] == value do length = length + 1 end
-		local alpha = floor( value / 16777216 )
-		if alpha == 0 then hasZeroAlpha = true end
-		if ( alpha == 0 ) == zeroAlpha then
-			surface.SetDrawColor( value % 256, floor( value / 256 ) % 256,
-				floor( value / 65536 ) % 256, zeroAlpha and 255 or alpha )
-			surface.DrawTexturedRect( x, y, length, 1 )
+-- previous, when given, holds the bytes already published at the same
+-- addresses. Runs start only at changed values; a run may continue over equal
+-- unchanged values because rewriting identical bytes still saves a rectangle.
+local function drawPixelRuns( width, firstPixel, pixels, zeroAlpha, rowScale, rowOffset, previous )
+	local i, count, hasZeroAlpha = 1, #pixels, false
+	while i <= count do
+		local value = pixels[i]
+		if previous and previous[i] == value then
+			i = i + 1
+		else
+			local pixel = firstPixel + i - 1
+			local x, y = pixel % width, floor( floor( pixel / width ) * rowScale + rowOffset )
+			local length, limit = 1, math.min( count - i + 1, width - x )
+			while length < limit and pixels[i + length] == value do length = length + 1 end
+			local alpha = floor( value / 16777216 )
+			if alpha == 0 then hasZeroAlpha = true end
+			if ( alpha == 0 ) == zeroAlpha then
+				surface.SetDrawColor( value % 256, floor( value / 256 ) % 256,
+					floor( value / 65536 ) % 256, zeroAlpha and 255 or alpha )
+				surface.DrawTexturedRect( x, y, length, 1 )
+			end
+			i = i + length
 		end
-		i = i + length
 	end
 	return hasZeroAlpha
 end
@@ -533,7 +541,10 @@ uploadQueuedLightPixels = function( texture, layout, firstPixel, pixels )
 	if not ok then error( why, 0 ) end
 end
 
-local function uploadPixels( texture, width, firstPixel, pixels, rowScale, rowOffset, firstOcclusion, occlusion )
+-- previousPixels/previousOcclusion describe bytes already published at the same
+-- RT addresses. Procedural textures take the whole span in one native call.
+local function uploadPixels( texture, width, firstPixel, pixels, rowScale, rowOffset, firstOcclusion, occlusion,
+	previousPixels, previousOcclusion )
 	local queued = R.queuedLightTextures[texture:GetName()]
 	if queued then
 		requireValue( width == queued.width and not rowScale and not rowOffset and not occlusion,
@@ -566,15 +577,17 @@ local function uploadPixels( texture, width, firstPixel, pixels, rowScale, rowOf
 		render.OverrideBlend( true, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD ) blend = true
 		render.OverrideAlphaWriteEnable( true, true ) alpha = true
 		render.OverrideColorWriteEnable( true, true ) color = true
-		local zeroPixels = drawPixelRuns( width, firstPixel, pixels, false, rowScale, rowOffset )
+		local zeroPixels = drawPixelRuns( width, firstPixel, pixels, false, rowScale, rowOffset, previousPixels )
 		local zeroOcclusion = false
-		if occlusion then zeroOcclusion = drawPixelRuns( width, firstOcclusion, occlusion, false, 5, 2 ) end
+		if occlusion then
+			zeroOcclusion = drawPixelRuns( width, firstOcclusion, occlusion, false, 5, 2, previousOcclusion )
+		end
 		if zeroPixels or zeroOcclusion then
 			-- Surface drops alpha-zero draws before blending. Non-overlapping
 			-- zero-alpha runs submit opaque RGB and store alpha via ZERO/ZERO.
 			render.OverrideBlend( true, BLEND_ONE, BLEND_ZERO, BLENDFUNC_ADD, BLEND_ZERO, BLEND_ZERO, BLENDFUNC_ADD )
-			if zeroPixels then drawPixelRuns( width, firstPixel, pixels, true, rowScale, rowOffset ) end
-			if zeroOcclusion then drawPixelRuns( width, firstOcclusion, occlusion, true, 5, 2 ) end
+			if zeroPixels then drawPixelRuns( width, firstPixel, pixels, true, rowScale, rowOffset, previousPixels ) end
+			if zeroOcclusion then drawPixelRuns( width, firstOcclusion, occlusion, true, 5, 2, previousOcclusion ) end
 		end
 	end )
 	local errors = {}
@@ -647,6 +660,10 @@ function R.UploadPart( part, owner )
 			and part.occlusion and #part.occlusion == part.quadCount )
 		and part.firstQuad >= 0 and part.firstQuad + part.quadCount <= ( owner.capacity or 8192 ),
 		"l2_visual_atlas_range", "candidate atlas upload exceeds its bounded quad range" )
+	-- Optional bytes already published at this range; only changed values are written.
+	requireValue( part.previousPixels == nil or not part.nativeL2 and #part.previousPixels == #part.pixels
+		and part.previousOcclusion and #part.previousOcclusion == #part.occlusion,
+		"l2_visual_atlas_previous", "published corner/AO bytes do not match the upload range" )
 	if part.nativeL2 then
 		local module = MC.NativeL2.module
 		local id = R.pixelTextures[owner.atlas:GetName()]
@@ -655,7 +672,8 @@ function R.UploadPart( part, owner )
 		requireValue( ok == true, "l2_native_pixel_upload", tostring( why ) )
 		return
 	end
-	uploadPixels( owner.atlas, ATLAS_SIZE, part.firstQuad * 4, part.pixels, 1.25, 0.625, part.firstQuad, part.occlusion )
+	uploadPixels( owner.atlas, ATLAS_SIZE, part.firstQuad * 4, part.pixels, 1.25, 0.625, part.firstQuad, part.occlusion,
+		part.previousPixels, part.previousOcclusion )
 end
 
 -- C++ stages the whole section and flushes it before CPU publication. Both
