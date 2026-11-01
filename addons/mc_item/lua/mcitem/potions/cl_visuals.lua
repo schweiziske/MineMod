@@ -24,12 +24,14 @@ end)
 -- 那份列表就够了。它们以前各自**每帧**遍历 ents.GetAll()，并且发光那条还会对每个
 -- 实体解一次效果快照（NW2 字符串读 + JSON 解码）——世界里实体越多越贵，而其中
 -- 带药水效果的通常是个位数。
+local EMPTY = {}
+
 local function affectedEntities()
-    return MCITEM.Potions.AffectedEntities or {}
+    return MCITEM.Potions.AffectedEntities or EMPTY
 end
 
 local function hasGlowing(entity)
-    local effects = MCITEM.Potions.ClientEffects and MCITEM.Potions.ClientEffects(entity) or {}
+    local effects = MCITEM.Potions.ClientEffects and MCITEM.Potions.ClientEffects(entity) or EMPTY
     for _, effect in ipairs(effects) do
         if effect.id == "glowing" then return true end
     end
@@ -37,19 +39,25 @@ local function hasGlowing(entity)
 end
 
 hook.Remove("PreDrawHalos", "MCITEM.Potions.GlowingOutline")
+-- halo.Add keeps these references only until this frame's halo render, and
+-- PreDrawHalos refills them next frame, so one list/Color is reused.
+local glowing = {}
+local glowingColor
+
 hook.Add("PreDrawHalos", "MCITEM.Potions.GlowingOutline", function()
     if not halo or not halo.Add then return end
-    local glowing = {}
+    for index = #glowing, 1, -1 do glowing[index] = nil end
     for _, entity in ipairs(affectedEntities()) do
         if IsValid(entity) and hasGlowing(entity) then
             glowing[#glowing + 1] = entity
         end
     end
     if #glowing > 0 then
+        glowingColor = glowingColor or Color(255, 255, 255)
         -- Java renders glowing entities through the entity-outline pass. GMod's
         -- halo pass is the closest depth-aware equivalent and remains visible
         -- through geometry, which is the gameplay-significant behavior.
-        halo.Add(glowing, Color(255, 255, 255), 2, 2, 1, true, true)
+        halo.Add(glowing, glowingColor, 2, 2, 1, true, true)
     end
 end)
 

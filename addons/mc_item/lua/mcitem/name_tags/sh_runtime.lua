@@ -27,26 +27,29 @@ function NameTags.IsAliveTarget(target)
     return true
 end
 
+local function segmentAxisFraction(origin, delta, low, high, entry, exit)
+    if math.abs(delta) <= 1e-9 then
+        if origin < low or origin > high then return nil end
+        return entry, exit
+    end
+    local first, second = (low - origin) / delta, (high - origin) / delta
+    if first > second then first, second = second, first end
+    entry, exit = math.max(entry, first), math.min(exit, second)
+    if entry > exit then return nil end
+    return entry, exit
+end
+
 local function segmentAABBFraction(startPosition, endPosition, minimum, maximum)
-    local direction = endPosition - startPosition
     local entry, exit = 0, 1
-    local function component(vector, axis)
-        if axis == "x" then return vector.x end
-        if axis == "y" then return vector.y end
-        return vector.z
-    end
-    for _, axis in ipairs({ "x", "y", "z" }) do
-        local origin, delta = component(startPosition, axis), component(direction, axis)
-        local low, high = component(minimum, axis), component(maximum, axis)
-        if math.abs(delta) <= 1e-9 then
-            if origin < low or origin > high then return nil end
-        else
-            local first, second = (low - origin) / delta, (high - origin) / delta
-            if first > second then first, second = second, first end
-            entry, exit = math.max(entry, first), math.min(exit, second)
-            if entry > exit then return nil end
-        end
-    end
+    entry, exit = segmentAxisFraction(startPosition.x, endPosition.x - startPosition.x,
+        minimum.x, maximum.x, entry, exit)
+    if entry == nil then return nil end
+    entry, exit = segmentAxisFraction(startPosition.y, endPosition.y - startPosition.y,
+        minimum.y, maximum.y, entry, exit)
+    if entry == nil then return nil end
+    entry, exit = segmentAxisFraction(startPosition.z, endPosition.z - startPosition.z,
+        minimum.z, maximum.z, entry, exit)
+    if entry == nil then return nil end
     if exit < 0 or entry > 1 then return nil end
     return math.Clamp(entry, 0, 1)
 end
@@ -69,6 +72,37 @@ local function segmentCollisionFraction(target, startPosition, endPosition)
     return segmentAABBFraction(startPosition, endPosition, minimum, maximum)
 end
 
+-- Scratch state reused by FindAimTarget.  The function is not re-entrant and
+-- never hands these tables to callers.
+local aimCandidates, aimSeen, aimCandidateCount = {}, {}, 0
+local aimDirectFilter, aimObstructionFilter = {}, {}
+local aimTraceInput, aimTraceOutput = {}, {}
+
+local function addAimCandidate(entity)
+    if aimSeen[entity] or not NameTags.IsAliveTarget(entity) then return end
+    aimSeen[entity] = true
+    aimCandidateCount = aimCandidateCount + 1
+    aimCandidates[aimCandidateCount] = entity
+end
+
+local function clearAimCandidates()
+    for index = 1, aimCandidateCount do
+        aimSeen[aimCandidates[index]] = nil
+        aimCandidates[index] = nil
+    end
+    aimCandidateCount = 0
+end
+
+local function runAimTrace(startPosition, endPosition, filter)
+    aimTraceInput.start = startPosition
+    aimTraceInput.endpos = endPosition
+    aimTraceInput.filter = filter
+    aimTraceInput.mask = MASK_SHOT or MASK_SOLID
+    aimTraceInput.output = aimTraceOutput
+    util.TraceLine(aimTraceInput)
+    return aimTraceOutput
+end
+
 function NameTags.FindAimTarget(owner, weapon, reach, includeEntitySearch)
     if not IsValid(owner) then return nil, "invalid_owner" end
     reach = math.max(tonumber(reach) or 0, 0)
@@ -76,45 +110,38 @@ function NameTags.FindAimTarget(owner, weapon, reach, includeEntitySearch)
 
     local startPosition = owner:EyePos()
     local endPosition = startPosition + owner:GetAimVector() * reach
-    local candidates, seen = {}, {}
-    local function addCandidate(entity)
-        if seen[entity] or not NameTags.IsAliveTarget(entity) then return end
-        seen[entity] = true
-        candidates[#candidates + 1] = entity
-    end
+    clearAimCandidates()
 
-    local directTrace = util.TraceLine({
-        start = startPosition,
-        endpos = endPosition,
-        filter = { owner, weapon },
-        mask = MASK_SHOT or MASK_SOLID,
-    })
-    addCandidate(directTrace and directTrace.Entity or nil)
+    aimDirectFilter[1], aimDirectFilter[2] = owner, weapon
+    local directTrace = runAimTrace(startPosition, endPosition, aimDirectFilter)
+    addAimCandidate(directTrace.Entity)
 
     if includeEntitySearch ~= false and ents and ents.FindAlongRay then
-        for _, entity in ipairs(ents.FindAlongRay(startPosition, endPosition)) do addCandidate(entity) end
+        for _, entity in ipairs(ents.FindAlongRay(startPosition, endPosition)) do addAimCandidate(entity) end
     end
-    if BMB and isfunction(BMB.ForEachMob) then BMB.ForEachMob(addCandidate) end
+    if BMB and isfunction(BMB.ForEachMob) then BMB.ForEachMob(addAimCandidate) end
 
     local target, hitPosition, bestFraction
-    for _, candidate in ipairs(candidates) do
+    for index = 1, aimCandidateCount do
+        local candidate = aimCandidates[index]
         local fraction = segmentCollisionFraction(candidate, startPosition, endPosition)
         if fraction and (bestFraction == nil or fraction < bestFraction) then
             target = candidate
             bestFraction = fraction
-            hitPosition = startPosition + (endPosition - startPosition) * fraction
         end
+    end
+    clearAimCandidates()
+    if bestFraction then
+        hitPosition = startPosition + (endPosition - startPosition) * bestFraction
     end
     if not IsValid(target) or not isvector(hitPosition) then return nil, "invalid_target" end
 
-    local obstruction = util.TraceLine({
-        start = startPosition,
-        endpos = hitPosition,
-        filter = { owner, weapon, target },
-        mask = MASK_SHOT or MASK_SOLID,
-    })
-    if obstruction and (obstruction.StartSolid == true
-        or obstruction.Hit == true and (tonumber(obstruction.Fraction) or 0) < 0.999) then
+    aimObstructionFilter[1], aimObstructionFilter[2], aimObstructionFilter[3] = owner, weapon, target
+    local obstruction = runAimTrace(startPosition, hitPosition, aimObstructionFilter)
+    aimObstructionFilter[1], aimObstructionFilter[2], aimObstructionFilter[3] = nil, nil, nil
+    aimDirectFilter[1], aimDirectFilter[2] = nil, nil
+    if obstruction.StartSolid == true
+        or obstruction.Hit == true and (tonumber(obstruction.Fraction) or 0) < 0.999 then
         return nil, "target_occluded"
     end
     return target, nil, hitPosition

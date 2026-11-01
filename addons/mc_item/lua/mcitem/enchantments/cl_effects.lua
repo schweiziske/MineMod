@@ -252,24 +252,31 @@ net.Receive(NET_EVENT, function()
     end
 end)
 
-local function addFireVertex(position, u, v)
-    mesh.Position(position)
+local fireVertex = Vector(0, 0, 0)
+
+local function addFireVertex(x, y, z, u, v)
+    fireVertex.x, fireVertex.y, fireVertex.z = x, y, z
+    mesh.Position(fireVertex)
     mesh.TexCoord(0, u, v)
     mesh.Color(255, 255, 255, 255)
     mesh.AdvanceVertex()
 end
 
-local function drawFireLayer(position, right, up, width, height, material, flip, frame)
+-- Position/right/up are passed as scalar components so the per-layer quad
+-- does not allocate Vectors.  `up` is always world +Z for flame layers.
+local function drawFireLayer(px, py, pz, rightX, rightY, rightZ, upX, upY, upZ,
+        width, height, material, flip, frame)
     material:SetInt("$frame", frame)
     render.SetMaterial(material)
     local u0, u1 = 0, 1
     if flip then u0, u1 = u1, u0 end
-    local rightOffset, upOffset = right * width, up * height
+    local rx, ry, rz = rightX * width, rightY * width, rightZ * width
+    local ux, uy, uz = upX * height, upY * height, upZ * height
     mesh.Begin(MATERIAL_QUADS, 1)
-    addFireVertex(position - rightOffset - upOffset, u1, 1)
-    addFireVertex(position - rightOffset + upOffset, u1, 0)
-    addFireVertex(position + rightOffset + upOffset, u0, 0)
-    addFireVertex(position + rightOffset - upOffset, u0, 1)
+    addFireVertex(px - rx - ux, py - ry - uy, pz - rz - uz, u1, 1)
+    addFireVertex(px - rx + ux, py - ry + uy, pz - rz + uz, u1, 0)
+    addFireVertex(px + rx + ux, py + ry + uy, pz + rz + uz, u0, 0)
+    addFireVertex(px + rx - ux, py + ry - uy, pz + rz - uz, u0, 1)
     mesh.End()
 end
 
@@ -300,21 +307,24 @@ function Runtime.DrawFlameEntity(entity)
     local scale = width * 1.4
     local remaining = height / scale
     local base = entity:LocalToWorld(vector_origin)
-    local yaw = Angle(0, EyeAngles().y, 0)
-    local normal, right, up = -yaw:Forward(), yaw:Right(), Vector(0, 0, 1)
-    normal.z, right.z = 0, 0
-    normal:Normalize()
-    right:Normalize()
+    -- Angle(0, yaw, 0): Forward = (cos, sin, 0), Right = (sin, -cos, 0); both
+    -- are already horizontal unit vectors.
+    local yawRadians = math.rad(EyeAngles().y)
+    local yawCos, yawSin = math.cos(yawRadians), math.sin(yawRadians)
+    local normalX, normalY = -yawCos, -yawSin
+    local rightX, rightY = yawSin, -yawCos
+    local baseX, baseY, baseZ = base.x, base.y, base.z
     local frame = math.floor(CurTime() / 0.05) % FIRE_FRAME_COUNT
     local halfWidth, verticalOffset = 0.5, 0
     local depthOffset = 0.3 - math.floor(remaining) * 0.02
     local layer = 0
     while remaining > 0 and layer < 64 do
         local material = layer % 2 == 0 and fire0 or fire1
-        local position = base
-            + up * ((verticalOffset + 0.7) * scale)
-            + normal * ((depthOffset + FIRE_DEPTH_BIAS) * scale)
-        drawFireLayer(position, right, up, halfWidth * scale, 0.7 * scale, material,
+        local depth = (depthOffset + FIRE_DEPTH_BIAS) * scale
+        drawFireLayer(baseX + normalX * depth, baseY + normalY * depth,
+            baseZ + (verticalOffset + 0.7) * scale,
+            rightX, rightY, 0, 0, 0, 1,
+            halfWidth * scale, 0.7 * scale, material,
             math.floor(layer / 2) % 2 == 0, frame)
         remaining = remaining - 0.45
         verticalOffset = verticalOffset + 0.45
@@ -494,10 +504,30 @@ local function drawSoulParticles(now)
     end
 end
 
+-- Track mcitem_arrow entities by creation/removal instead of scanning every
+-- entity with ents.FindByClass each frame.  drawFlameArrow still checks the
+-- NW2 flame state, so non-burning arrows are skipped cheaply.
+local ARROW_CLASS = "mcitem_arrow"
+Runtime.TrackedArrows = Runtime.TrackedArrows or {}
+local trackedArrows = Runtime.TrackedArrows
+for arrow in pairs(trackedArrows) do
+    if not IsValid(arrow) then trackedArrows[arrow] = nil end
+end
+for _, arrow in ipairs(ents.FindByClass(ARROW_CLASS)) do trackedArrows[arrow] = true end
+
+hook.Add("OnEntityCreated", "MCITEM.EnchantmentRuntime.TrackArrows", function(entity)
+    if IsValid(entity) and entity:GetClass() == ARROW_CLASS then trackedArrows[entity] = true end
+end)
+hook.Add("EntityRemoved", "MCITEM.EnchantmentRuntime.TrackArrows", function(entity, fullUpdate)
+    -- A full update keeps the same client entity alive.
+    if fullUpdate then return end
+    trackedArrows[entity] = nil
+end)
+
 hook.Remove("PostDrawOpaqueRenderables", "MCITEM.EnchantmentRuntime.DrawFlame")
 hook.Add("PostDrawOpaqueRenderables", "MCITEM.EnchantmentRuntime.DrawFlame", function(drawingDepth, drawingSkybox, draw3DSkybox)
     if drawingDepth or drawingSkybox or draw3DSkybox then return end
-    for _, arrow in ipairs(ents.FindByClass("mcitem_arrow")) do drawFlameArrow(arrow) end
+    for arrow in pairs(trackedArrows) do drawFlameArrow(arrow) end
 end)
 
 hook.Remove("PostDrawTranslucentRenderables", "MCITEM.EnchantmentRuntime.DrawFX")

@@ -148,16 +148,45 @@ timer.Simple(0, function()
     for _, target in ipairs(ents.GetAll()) do updateMagicName(target) end
 end)
 
+-- The aim query traces, gathers along-ray entities, and walks every BMB mob.
+-- Run it at most once per rendered frame and at AIM_REFRESH_INTERVAL; the
+-- cached target is revalidated on every use.
+local AIM_REFRESH_INTERVAL = 1 / 15
+local aimCacheFrame, aimCacheExpires, aimCacheTarget = -1, 0, nil
+
+local function crosshairTarget(player, maximum)
+    local frame = FrameNumber()
+    if frame ~= aimCacheFrame then
+        local now = RealTime()
+        if now >= aimCacheExpires or (aimCacheTarget ~= nil and not IsValid(aimCacheTarget)) then
+            -- Use the same ray-versus-collision-box fallback as the authoritative
+            -- interaction path.  BMB SOLID_BBOX entities are not always returned by a
+            -- plain MASK_SHOT trace, but the label must still appear only after the
+            -- crosshair actually enters their collision box.
+            aimCacheTarget = NameTags.FindAimTarget(player, nil, maximum, true)
+            aimCacheExpires = now + AIM_REFRESH_INTERVAL
+        end
+        aimCacheFrame = frame
+    end
+    if aimCacheTarget ~= nil and not IsValid(aimCacheTarget) then aimCacheTarget = nil end
+    return aimCacheTarget
+end
+
+local labelDrawOptions = {
+    font = "default",
+    scale = LABEL_FONT_SCALE,
+    color = nil,
+    align = TEXT_ALIGN_CENTER,
+    verticalAlign = TEXT_ALIGN_CENTER,
+    shadow = false,
+}
+
 hook.Add("PostDrawTranslucentRenderables", "MCITEM.NameTags.DrawCrosshairLabel", function(depth, skybox)
     if depth or skybox then return end
     local player = LocalPlayer()
     if not IsValid(player) then return end
     local maximum = blockSize() * 64
-    -- Use the same ray-versus-collision-box fallback as the authoritative
-    -- interaction path.  BMB SOLID_BBOX entities are not always returned by a
-    -- plain MASK_SHOT trace, but the label must still appear only after the
-    -- crosshair actually enters their collision box.
-    local target = NameTags.FindAimTarget(player, nil, maximum, true)
+    local target = crosshairTarget(player, maximum)
     if not IsValid(target) then return end
     local name, present = NameTags.GetEntityCustomName(target)
     if not present then return end
@@ -180,14 +209,8 @@ hook.Add("PostDrawTranslucentRenderables", "MCITEM.NameTags.DrawCrosshairLabel",
             surface.SetDrawColor(0, 0, 0, 64)
             surface.DrawRect(-width * 0.5 - padding, -height * 0.5 - padding,
                 width + padding * 2, height + padding * 2)
-            font.Draw(name, 0, LABEL_TEXT_OFFSET_Y, {
-                font = "default",
-                scale = LABEL_FONT_SCALE,
-                color = textColor,
-                align = TEXT_ALIGN_CENTER,
-                verticalAlign = TEXT_ALIGN_CENTER,
-                shadow = false,
-            })
+            labelDrawOptions.color = textColor
+            font.Draw(name, 0, LABEL_TEXT_OFFSET_Y, labelDrawOptions)
         else
             surface.SetFont("MCITEMNameTagFallback")
             local width, height = surface.GetTextSize(name)

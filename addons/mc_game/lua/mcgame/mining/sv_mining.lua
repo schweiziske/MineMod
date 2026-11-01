@@ -185,7 +185,9 @@ util.AddNetworkString( "mc_hand_creative_break" )
 local creativeRequests = setmetatable( {}, { __mode = "k" } )
 
 local function validHitComponent( value )
-	return value == value and value >= -1 and value <= 2
+	-- Match cell-local float roundoff at an authored outer face.
+	return value == value and value >= MC.BlockSelectionMin - 0.000001
+		and value <= MC.BlockSelectionMax + 0.000001
 end
 
 local function requestedCreativeBreak( ply, bx, by, bz, stateId, offset, commandNumber, initialPress )
@@ -203,14 +205,28 @@ local function requestedCreativeBreak( ply, bx, by, bz, stateId, offset, command
 	local size, reach = MC.API.Coords.BlockSize(), MC.CurrentReach()
 	if reach <= 0 then reach = size * 5 end
 	if not MC.ReachAllowsEye( eye, bx, by, bz, reach ) then return false, "out_of_reach" end
-	local hit = MC.API.Coords.CellMin( bx, by, bz ) + offset * size
-	local direction = hit - eye
+	local base = MC.API.Coords.CellMin( bx, by, bz )
+	-- Subtract in cell-local space before constructing a Vector. Rebuilding a
+	-- large world-space hit first loses precision on thin faces and edges.
+	local direction = Vector( offset.x * size - ( eye.x - base.x ),
+		offset.y * size - ( eye.y - base.y ), offset.z * size - ( eye.z - base.z ) )
 	local distance = direction:Length()
-	if distance <= 0.000001 or distance > reach + size * 2 then return false, "invalid_hit_distance" end
-	direction:Normalize()
-	-- Use the submitted surface point, not a later view direction. The server
-	-- still traces its own world and rejects walls, other cells and entities.
-	local aim = MC.TraceBlockRay( eye, direction, distance + size * 0.001, MC.ClipFluidNone )
+	local epsilon = size * 0.001
+	-- The client traced from its own eye; the server eye lags or leads it by
+	-- movement latency. ReachAllowsEye above already bounds the target cell.
+	if distance > reach + size then return false, "invalid_hit_distance" end
+	if distance <= size * 0.000001 then
+		-- A ray starting inside a selection shape hits at the eye itself. There
+		-- is no surface direction to reconstruct; the short trace below must
+		-- still confirm that the server eye is inside the requested block.
+		direction = ply:EyeAngles():Forward()
+	else
+		direction:Normalize()
+	end
+	-- Selection shapes stay inside their own cell, so the segment always ends
+	-- in the target cell. Only the server's nearest actual hit authorizes the
+	-- edit; the offset is not trusted proof.
+	local aim = MC.TraceBlockRay( eye, direction, distance + epsilon, MC.ClipFluidNone )
 	if not aim or aim.bx ~= bx or aim.by ~= by or aim.bz ~= bz then return false, "target_occluded" end
 	local entity = MC.TraceEntityBeforeBlock( ply, aim, direction )
 	if IsValid( entity ) then return false, "entity_occluded" end

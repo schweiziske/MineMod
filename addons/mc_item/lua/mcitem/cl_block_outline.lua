@@ -26,6 +26,19 @@ local function isMCItemWeapon(weapon)
     return IsValid(weapon) and isfunction(weapon.GetMCItemState)
 end
 
+-- PostDrawTranslucentRenderables can fire several times in one frame; the aim
+-- query only depends on the local player's eye, so resolve it once per frame.
+local aimFrame, aimPlayer, aimHit = -1, nil, nil
+
+local function playerAimThisFrame(world, ply)
+    local frame = FrameNumber()
+    if aimFrame ~= frame or aimPlayer ~= ply then
+        aimFrame, aimPlayer = frame, ply
+        aimHit = world.PlayerAim(ply)
+    end
+    return aimHit
+end
+
 hook.Add("PostDrawTranslucentRenderables", "MCITEM.BlockOutline", function(_, _, sky3d)
     if sky3d or not cvOutline:GetBool() then return end
 
@@ -43,7 +56,7 @@ hook.Add("PostDrawTranslucentRenderables", "MCITEM.BlockOutline", function(_, _,
     end
 
     if not istable(api.World) or not isfunction(api.World.PlayerAim) then return end
-    local hit = api.World.PlayerAim(ply)
+    local hit = playerAimThisFrame(api.World, ply)
     if not istable(hit) or hit.bx == nil then return end
 
     api.UI.DrawBlockOutline(hit.StateId or hit.Block, hit.bx, hit.by, hit.bz, OUTLINE_COLOR)

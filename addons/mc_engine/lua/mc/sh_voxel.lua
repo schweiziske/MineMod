@@ -396,194 +396,201 @@ end
 
 local INF = math.huge
 local TRACE_EPS = 0.000001
+local DIRECTION_EPS = 0.000000000001
+local abs, floor, sqrt = math.abs, math.floor, math.sqrt
+-- Entry faces: 1/2 = -X/+X normal, 3/4 = -Y/+Y, 5/6 = -Z/+Z.
+local FACE_NX = { -1, 1, 0, 0, 0, 0 }
+local FACE_NY = { 0, 0, -1, 1, 0, 0 }
+local FACE_NZ = { 0, 0, 0, 0, -1, 1 }
+-- nil selection geometry means "unspecified": treat it as the whole cell.
+local UNIT_SELECTION_BOXES = { { 0, 0, 0, 1, 1, 1 } }
 
-local function axisStep( pos, dir, cell )
-	if math.abs( dir ) <= TRACE_EPS then return 0, INF, INF end
+local function finiteTraceNumber( value )
+	return type( value ) == "number" and value == value and value > -INF and value < INF
+end
+
+local function axisStep( pos, dir, cell, size )
+	if abs( dir ) <= DIRECTION_EPS then return 0, INF, INF end
 	local step = dir > 0 and 1 or -1
-	local boundary = ( dir > 0 and cell + 1 or cell ) * BS
+	local boundary = ( dir > 0 and cell + 1 or cell ) * size
 	local tMax = ( boundary - pos ) / dir
 	if tMax < 0 then tMax = 0 end
-	return step, tMax, BS / math.abs( dir )
+	return step, tMax, size / abs( dir )
 end
 
-local function rayAxisSlab( pos, dir, minPos, maxPos, tMin, tMax, normal, negNormal, posNormal )
-	if math.abs( dir ) <= TRACE_EPS then
-		if pos < minPos or pos > maxPos then return nil end
-		return tMin, tMax, normal
-	end
-
-	local near, far, nearNormal
-	if dir > 0 then
-		near = ( minPos - pos ) / dir
-		far = ( maxPos - pos ) / dir
-		nearNormal = negNormal
+-- Slab test of a cell-local ray against one box (already scaled to Source
+-- units). Returns entry distance (negative when the start is inside) and the
+-- entry face code, or nil. Exit-only contacts (tMax <= eps) never count, so a
+-- ray starting on a shared face does not select the block behind it.
+local function rayBoxEntry( px, py, pz, dx, dy, dz, x0, y0, z0, x1, y1, z1, maxDist, eps )
+	local tMin, tMax, face = -INF, INF, 0
+	if abs( dx ) <= DIRECTION_EPS then
+		if px < x0 - eps or px > x1 + eps then return nil end
 	else
-		near = ( maxPos - pos ) / dir
-		far = ( minPos - pos ) / dir
-		nearNormal = posNormal
+		local a, b = ( x0 - px ) / dx, ( x1 - px ) / dx
+		local f = 1
+		if a > b then a, b, f = b, a, 2 end
+		tMin, tMax, face = a, b, f
 	end
-
-	if near > tMin then
-		tMin = near
-		normal = nearNormal
+	if abs( dy ) <= DIRECTION_EPS then
+		if py < y0 - eps or py > y1 + eps then return nil end
+	else
+		local a, b = ( y0 - py ) / dy, ( y1 - py ) / dy
+		local f = 3
+		if a > b then a, b, f = b, a, 4 end
+		if a > tMin then tMin, face = a, f end
+		if b < tMax then tMax = b end
 	end
-	if far < tMax then tMax = far end
-	if tMin - tMax > TRACE_EPS then return nil end
-	return tMin, tMax, normal
+	if abs( dz ) <= DIRECTION_EPS then
+		if pz < z0 - eps or pz > z1 + eps then return nil end
+	else
+		local a, b = ( z0 - pz ) / dz, ( z1 - pz ) / dz
+		local f = 5
+		if a > b then a, b, f = b, a, 6 end
+		if a > tMin then tMin, face = a, f end
+		if b < tMax then tMax = b end
+	end
+	if tMin - tMax > eps or tMax <= eps or tMin > maxDist + eps then return nil end
+	return tMin, face
 end
 
-local function rayIntersectBox( startPos, dir, minX, minY, minZ, maxX, maxY, maxZ, maxDist, fallbackNormal )
-	local tMin, tMax = 0, maxDist
-	local normal = fallbackNormal or Vector( 0, 0, 0 )
-
-	tMin, tMax, normal = rayAxisSlab( startPos.x, dir.x, minX, maxX, tMin, tMax, normal, Vector( -1, 0, 0 ), Vector( 1, 0, 0 ) )
-	if not tMin then return nil end
-	tMin, tMax, normal = rayAxisSlab( startPos.y, dir.y, minY, maxY, tMin, tMax, normal, Vector( 0, -1, 0 ), Vector( 0, 1, 0 ) )
-	if not tMin then return nil end
-	tMin, tMax, normal = rayAxisSlab( startPos.z, dir.z, minZ, maxZ, tMin, tMax, normal, Vector( 0, 0, -1 ), Vector( 0, 0, 1 ) )
-	if not tMin then return nil end
-	if tMax < -TRACE_EPS or tMin - maxDist > TRACE_EPS then return nil end
-	return math.max( 0, tMin ), normal
-end
-
-local function traceSlopeHull( hull, startPos, dir, maxDist, bx, by, bz, fallbackNormal )
-	local base = MC.CellWorldMin( bx, by, bz )
-	local size = MC.API.Coords.BlockSize()
-	local px, py, pz = startPos.x - base.x, startPos.y - base.y, startPos.z - base.z
-	local near, far, normal = 0, maxDist, fallbackNormal
-	for i = 1, #hull.planes do
-		local plane = hull.planes[i]
+-- Convex slope hull. Returns distance, the entry plane normal (shared; copy
+-- before exposing, nil when the start is inside) and the inside flag.
+local function traceSlopeHull( hull, px, py, pz, dx, dy, dz, maxDist, size, eps )
+	local near, far, normal = -INF, INF, nil
+	local planes = hull.planes
+	for i = 1, #planes do
+		local plane = planes[i]
 		local distance = plane[4] * size - plane[1] * px - plane[2] * py - plane[3] * pz
-		local speed = plane[1] * dir.x + plane[2] * dir.y + plane[3] * dir.z
-		if math.abs( speed ) <= TRACE_EPS then
-			if distance < -TRACE_EPS then return nil end
+		local speed = plane[1] * dx + plane[2] * dy + plane[3] * dz
+		if abs( speed ) <= DIRECTION_EPS then
+			if distance < -eps then return nil end
 		else
 			local hit = distance / speed
 			if speed < 0 then
 				if hit > near then near, normal = hit, plane[5] end
 			elseif hit < far then far = hit end
-			if near - far > TRACE_EPS then return nil end
+			if near - far > eps then return nil end
 		end
 	end
-	return { dist = near, normal = normal }
-end
-
-local function traceBlockBoxes( startPos, dir, maxDist, bx, by, bz, id, orient, stateId, fallbackDist, fallbackNormal )
-	local hull = MC.BlockSlopeHull( id, orient )
-	if hull then return traceSlopeHull( hull, startPos, dir, maxDist, bx, by, bz, fallbackNormal ) end
-	local boxes = stateId ~= nil and MC.BlockSelectionBoxesForState
-		and MC.BlockSelectionBoxesForState( stateId, bx, by, bz ) or nil
-	if boxes == nil and stateId ~= nil and MC.BlockBoxesForState then
-		boxes = MC.BlockBoxesForState( stateId, bx, by, bz )
-	end
-	if boxes == nil then
-		if MC.BlockIsFullCube and MC.BlockIsFullCube( id, orient ) then
-			return { dist = fallbackDist, normal = fallbackNormal }
-		end
-		boxes = MC.BlockBoxes and MC.BlockBoxes( id, orient, bx, by, bz ) or nil
-	end
-	-- Both realms load the same compact model catalog and exact state selection
-	-- boxes. This fallback is only for custom/technical blocks which genuinely
-	-- have no authored collision, model, or selection geometry in either realm.
-	if not boxes or boxes[1] == nil then
-		return { dist = fallbackDist, normal = fallbackNormal }
-	end
-
-	local base = MC.CellWorldMin( bx, by, bz )
-	local bestDist, bestNormal
-	for _, box in ipairs( boxes ) do
-		local dist, normal = rayIntersectBox(
-			startPos,
-			dir,
-			base.x + box[1] * BS,
-			base.y + box[2] * BS,
-			base.z + box[3] * BS,
-			base.x + box[4] * BS,
-			base.y + box[5] * BS,
-			base.z + box[6] * BS,
-			maxDist,
-			fallbackNormal
-		)
-		if dist and ( not bestDist or dist < bestDist ) then
-			bestDist = dist
-			bestNormal = normal
-		end
-	end
-	if not bestDist then return nil end
-	return { dist = bestDist, normal = bestNormal }
+	if far <= eps or near > maxDist + eps then return nil end
+	if near < 0 then return 0, nil, true end
+	return near, normal, false
 end
 
 -- ClipContext.Fluid.NONE. Pass as MC.TraceBlockRay's options to walk straight
--- through fluid blocks, which is what Java's block picking does.
+-- through fluid cells, as Java's Entity#pick does for the crosshair.
 MC.ClipFluidNone = { skipFluid = true }
 
+-- Java BlockGetter#traverseBlocks + Level#clip: a single-cell DDA. Selection
+-- shapes are clipped to their own cell (MC.BlockSelectionBoxesForState), so
+-- the first cell whose shape the ray enters holds the nearest hit and no
+-- neighbour cells need inspecting. The loop allocates nothing until a hit.
 function MC.TraceBlockRay( startPos, dir, maxDist, options )
 	if not startPos or not dir then return nil end
-	dir = Vector( dir.x, dir.y, dir.z )
-	if dir:LengthSqr() <= TRACE_EPS then return nil end
-	dir:Normalize()
+	local ox, oy, oz = startPos.x, startPos.y, startPos.z
+	local dx, dy, dz = dir.x, dir.y, dir.z
+	if not finiteTraceNumber( ox ) or not finiteTraceNumber( oy ) or not finiteTraceNumber( oz )
+		or not finiteTraceNumber( dx ) or not finiteTraceNumber( dy ) or not finiteTraceNumber( dz ) then return nil end
+	local lengthSqr = dx * dx + dy * dy + dz * dz
+	if lengthSqr <= TRACE_EPS then return nil end
+	local length = sqrt( lengthSqr )
+	dx, dy, dz = dx / length, dy / length, dz / length
+	local size = MC.API.Coords.BlockSize()
 	maxDist = tonumber( maxDist ) or MC.CurrentReach()
-	if maxDist <= 0 then maxDist = BS * 5 end
+	if not finiteTraceNumber( maxDist ) then return nil end
+	if maxDist <= 0 then maxDist = size * 5 end
 	local skipFluid = istable( options ) and options.skipFluid == true
+	local eps = size * TRACE_EPS
 
-	local bx, by, bz = MC.WorldToCell( startPos )
-	local sx, tx, dx = axisStep( startPos.x, dir.x, bx )
-	local sy, ty, dy = axisStep( startPos.y, dir.y, by )
-	local sz, tz, dz = axisStep( startPos.z, dir.z, bz )
-	local dist = 0
-	local normal = Vector( 0, 0, 0 )
-	local maxSteps = math.ceil( maxDist / BS ) * 3 + 8
+	local bx, by, bz = floor( ox / size ), floor( oy / size ), floor( oz / size )
+	local sx, tx, ddx = axisStep( ox, dx, bx, size )
+	local sy, ty, ddy = axisStep( oy, dy, by, size )
+	local sz, tz, ddz = axisStep( oz, dz, bz, size )
+	local maxSteps = math.ceil( maxDist / size ) * 3 + 8
+	local getBlock, getState, getOrient = MC.GetBlock, MC.GetBlockState, MC.GetBlockOrient
+	local isFluid = skipFluid and MC.StateIsFluidBlock or nil
+	local selectionBoxes = MC.BlockSelectionBoxesForState
+	local slopeHull = MC.BlockSlopeHull
 
 	for _ = 1, maxSteps do
-		local id = MC.GetBlock( bx, by, bz )
-		-- Predicted placements already exist locally and can support the next
-		-- click. Skipping all pending cells forced building to wait for a round trip.
-		if id ~= 0 and dist <= maxDist then
-			local orient = MC.GetBlockOrient( bx, by, bz )
-			local stateId = MC.GetBlockState( bx, by, bz )
-			-- Skipping the cell rather than the box test keeps the DDA walking, so
-			-- the ray reports whatever is behind the fluid at its true distance.
-			local clipped = skipFluid and MC.StateIsFluidBlock
-				and MC.StateIsFluidBlock( stateId ) == true
-			local hit = not clipped
-				and traceBlockBoxes( startPos, dir, maxDist, bx, by, bz, id, orient, stateId, dist, normal )
-			if hit then
-				return {
-					Hit = true,
-					HitMCBlock = true,
-					Block = id,
-					Orient = orient,
-					StateId = stateId,
-					bx = bx, by = by, bz = bz,
-					HitPos = startPos + dir * hit.dist,
-					HitNormal = hit.normal,
-					Fraction = hit.dist / maxDist,
-					Distance = hit.dist,
-				}
+		local id = getBlock( bx, by, bz )
+		if id ~= 0 then
+			local stateId = getState( bx, by, bz )
+			if not ( isFluid and isFluid( stateId ) ) then
+				local orient = getOrient( bx, by, bz )
+				local px, py, pz = ox - bx * size, oy - by * size, oz - bz * size
+				local hitDist, hitFace, hitNormal, inside
+				local hull = slopeHull( id, orient )
+				if hull then
+					hitDist, hitNormal, inside = traceSlopeHull( hull, px, py, pz, dx, dy, dz, maxDist, size, eps )
+				else
+					local boxes
+					if stateId ~= nil and selectionBoxes then
+						boxes = selectionBoxes( stateId, bx, by, bz )
+					elseif MC.BlockBoxes then
+						boxes = MC.BlockBoxes( id, orient, bx, by, bz )
+					end
+					if boxes == nil then boxes = UNIT_SELECTION_BOXES end
+					for index = 1, #boxes do
+						local box = boxes[index]
+						local t, face = rayBoxEntry( px, py, pz, dx, dy, dz,
+							box[1] * size, box[2] * size, box[3] * size,
+							box[4] * size, box[5] * size, box[6] * size, maxDist, eps )
+						if t then
+							if t < 0 then
+								hitDist, hitFace, inside = 0, nil, true
+								break
+							end
+							if not hitDist or t < hitDist then hitDist, hitFace = t, face end
+						end
+					end
+				end
+				if hitDist then
+					local nx, ny, nz
+					if inside then
+						-- Java: Direction.getNearest(ray).getOpposite().
+						local ax, ay, az = abs( dx ), abs( dy ), abs( dz )
+						if ax >= ay and ax >= az then nx, ny, nz = dx > 0 and -1 or 1, 0, 0
+						elseif ay >= az then nx, ny, nz = 0, dy > 0 and -1 or 1, 0
+						else nx, ny, nz = 0, 0, dz > 0 and -1 or 1 end
+					elseif hitNormal then
+						nx, ny, nz = hitNormal.x, hitNormal.y, hitNormal.z
+					else
+						nx, ny, nz = FACE_NX[hitFace], FACE_NY[hitFace], FACE_NZ[hitFace]
+					end
+					return {
+						Hit = true,
+						HitMCBlock = true,
+						Block = id,
+						Orient = orient,
+						StateId = stateId,
+						bx = bx, by = by, bz = bz,
+						HitPos = Vector( ox + dx * hitDist, oy + dy * hitDist, oz + dz * hitDist ),
+						-- Cell-local hit before world-space rounding; sent to
+						-- the server for creative breaking.
+						HitOffset = Vector( ( px + dx * hitDist ) / size,
+							( py + dy * hitDist ) / size, ( pz + dz * hitDist ) / size ),
+						HitNormal = Vector( nx, ny, nz ),
+						Fraction = hitDist / maxDist,
+						Distance = hitDist,
+						StartSolid = inside == true,
+					}
+				end
 			end
 		end
 
 		if tx <= ty and tx <= tz then
-			dist = tx
-			if dist > maxDist then break end
-			bx = bx + sx
-			tx = tx + dx
-			normal = Vector( -sx, 0, 0 )
+			if tx > maxDist then break end
+			bx, tx = bx + sx, tx + ddx
 		elseif ty <= tz then
-			dist = ty
-			if dist > maxDist then break end
-			by = by + sy
-			ty = ty + dy
-			normal = Vector( 0, -sy, 0 )
+			if ty > maxDist then break end
+			by, ty = by + sy, ty + ddy
 		else
-			dist = tz
-			if dist > maxDist then break end
-			bz = bz + sz
-			tz = tz + dz
-			normal = Vector( 0, 0, -sz )
+			if tz > maxDist then break end
+			bz, tz = bz + sz, tz + ddz
 		end
 	end
-
 	return nil
 end
 

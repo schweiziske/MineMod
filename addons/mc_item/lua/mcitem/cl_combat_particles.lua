@@ -81,6 +81,9 @@ Combat.Materials = Combat.Materials or {
 -- 按"格 + emission"缓存一小段时间：一次重锤是 750 个粒子，逐粒子直调采样器太贵。
 
 local LIGHT_CACHE_SECONDS = 0.15
+-- lightCache[cellX][cellY][cellZ * 16 + emission] = { r, g, b, expires }.
+-- Numeric nested keys avoid a string.format per lookup; expired entries are
+-- overwritten in place.
 local lightCache = {}
 local lightCacheCount = 0
 
@@ -97,16 +100,14 @@ function MCITEM.SampleParticleLightRGB(position, emission)
 
     emission = math.Clamp(math.floor(tonumber(emission) or 0), 0, 15)
     local blockSize = MCITEM.BlockSize()
-    local key = string.format(
-        "%d,%d,%d:%d",
-        math.floor(position.x / blockSize),
-        math.floor(position.y / blockSize),
-        math.floor(position.z / blockSize),
-        emission
-    )
+    local cellX = math.floor(position.x / blockSize)
+    local cellY = math.floor(position.y / blockSize)
+    local key = math.floor(position.z / blockSize) * 16 + emission
 
     local now = CurTime()
-    local hit = lightCache[key]
+    local column = lightCache[cellX]
+    local row = column and column[cellY]
+    local hit = row and row[key]
     if hit and hit.expires > now then return hit.r, hit.g, hit.b end
 
     local ok, r, g, b = pcall(sample, position, emission)
@@ -117,12 +118,26 @@ function MCITEM.SampleParticleLightRGB(position, emission)
     g = math.Clamp(tonumber(g) or 1, 0, 1)
     b = math.Clamp(tonumber(b) or 1, 0, 1)
 
+    if hit then
+        hit.r, hit.g, hit.b, hit.expires = r, g, b, now + LIGHT_CACHE_SECONDS
+        return r, g, b
+    end
+
     if lightCacheCount > 512 then
         lightCache = {}
         lightCacheCount = 0
+        column, row = nil, nil
     end
-    if hit == nil then lightCacheCount = lightCacheCount + 1 end
-    lightCache[key] = { r = r, g = g, b = b, expires = now + LIGHT_CACHE_SECONDS }
+    if not column then
+        column = {}
+        lightCache[cellX] = column
+    end
+    if not row then
+        row = {}
+        column[cellY] = row
+    end
+    lightCacheCount = lightCacheCount + 1
+    row[key] = { r = r, g = g, b = b, expires = now + LIGHT_CACHE_SECONDS }
 
     return r, g, b
 end
@@ -242,8 +257,11 @@ local function particleBaseVelocity()
     )
 end
 
+-- Crit and mace-dust particles own distinct position/oldPosition/velocity
+-- Vectors (created in their spawn functions), so ticks update them in place.
 local function tickCritParticle(particle)
-    particle.oldPosition = particle.position
+    local position, oldPosition = particle.position, particle.oldPosition
+    oldPosition.x, oldPosition.y, oldPosition.z = position.x, position.y, position.z
 
     -- Particle.tick uses post-increment: remove only when the old age is already lifetime.
     if particle.age >= particle.lifetime then
@@ -253,9 +271,14 @@ local function tickCritParticle(particle)
     end
 
     particle.age = particle.age + 1
-    particle.velocity.z = particle.velocity.z - 0.04 * CRIT_GRAVITY
-    particle.position = particle.position + particle.velocity * MCITEM.BlockSize()
-    particle.velocity = particle.velocity * CRIT_FRICTION
+    local velocity = particle.velocity
+    velocity.z = velocity.z - 0.04 * CRIT_GRAVITY
+    local blockSize = MCITEM.BlockSize()
+    position.x = position.x + velocity.x * blockSize
+    position.y = position.y + velocity.y * blockSize
+    position.z = position.z + velocity.z * blockSize
+    velocity.x, velocity.y, velocity.z = velocity.x * CRIT_FRICTION,
+        velocity.y * CRIT_FRICTION, velocity.z * CRIT_FRICTION
     particle.green = particle.green * 0.96
     particle.blue = particle.blue * 0.9
 end
@@ -519,15 +542,20 @@ local function advanceParticle(particle, now)
         if particle.kind == "crit" then
             tickCritParticle(particle)
         elseif particle.kind == "mace_dust" then
-            particle.oldPosition = particle.position
+            local position, oldPosition = particle.position, particle.oldPosition
+            oldPosition.x, oldPosition.y, oldPosition.z = position.x, position.y, position.z
             if particle.age >= particle.lifetime then
                 particle.age = particle.age + 1
                 particle.removed = true
             else
                 particle.age = particle.age + 1
-                particle.velocity.z = particle.velocity.z - 0.04
-                particle.position = particle.position + particle.velocity * MCITEM.BlockSize()
-                particle.velocity = particle.velocity * 0.98
+                local velocity = particle.velocity
+                velocity.z = velocity.z - 0.04
+                local blockSize = MCITEM.BlockSize()
+                position.x = position.x + velocity.x * blockSize
+                position.y = position.y + velocity.y * blockSize
+                position.z = position.z + velocity.z * blockSize
+                velocity.x, velocity.y, velocity.z = velocity.x * 0.98, velocity.y * 0.98, velocity.z * 0.98
             end
         else
             particle.oldPosition = particle.position
@@ -554,17 +582,30 @@ end
 hook.Add("Think", "MCITEM.CombatParticles.Tick", function()
     local now = CurTime()
 
-    for index = #Combat.Emitters, 1, -1 do
-        local emitter = Combat.Emitters[index]
+    -- Stable in-place compaction instead of O(n^2) table.remove shifting.
+    local emitters = Combat.Emitters
+    local emitterCount, keptEmitters = #emitters, 0
+    for index = 1, emitterCount do
+        local emitter = emitters[index]
         advanceEmitter(emitter, now)
-        if emitter.life >= 3 then table.remove(Combat.Emitters, index) end
+        if emitter.life < 3 then
+            keptEmitters = keptEmitters + 1
+            emitters[keptEmitters] = emitter
+        end
     end
+    for index = keptEmitters + 1, emitterCount do emitters[index] = nil end
 
-    for index = #Combat.Particles, 1, -1 do
-        local particle = Combat.Particles[index]
+    local particles = Combat.Particles
+    local particleCount, keptParticles = #particles, 0
+    for index = 1, particleCount do
+        local particle = particles[index]
         advanceParticle(particle, now)
-        if particle.removed then table.remove(Combat.Particles, index) end
+        if not particle.removed then
+            keptParticles = keptParticles + 1
+            particles[keptParticles] = particle
+        end
     end
+    for index = keptParticles + 1, particleCount do particles[index] = nil end
 end)
 
 -- SingleQuadParticle 的顶点色 = 粒子自己的 rgb × getLightColor()。世界光走 MCSWEP 的
@@ -579,61 +620,72 @@ end)
 -- 改成按材质桶收集，每个桶用一次 mesh.Begin(MATERIAL_QUADS) 发出去：尘柱只有
 -- 4×4 = 16 种子块材质（× 方块种类），所以是 750 → ≤16 次 draw call。
 
+-- Buckets persist across frames as flat arrays (stride QUAD_STRIDE) with an
+-- explicit count; only the per-frame order list and counts are reset.
+local QUAD_STRIDE = 7
 local batchBuckets = {}
+local batchCounts = {}
 local batchOrder = {}
+local batchOrderCount = 0
+local vertexPosition = Vector(0, 0, 0)
 
-local function bucketFor(material)
+local function pushQuad(material, px, py, pz, radius, r, g, b)
     local bucket = batchBuckets[material]
     if not bucket then
         bucket = {}
         batchBuckets[material] = bucket
-        batchOrder[#batchOrder + 1] = material
     end
-    return bucket
+    local count = batchCounts[material]
+    if not count then
+        count = 0
+        batchOrderCount = batchOrderCount + 1
+        batchOrder[batchOrderCount] = material
+    end
+    local base = count * QUAD_STRIDE
+    bucket[base + 1], bucket[base + 2], bucket[base + 3] = px, py, pz
+    bucket[base + 4], bucket[base + 5], bucket[base + 6], bucket[base + 7] = radius, r, g, b
+    batchCounts[material] = count + 1
 end
 
-local function pushQuad(material, position, radius, r, g, b)
-    local bucket = bucketFor(material)
-    bucket[#bucket + 1] = { position, radius, r, g, b }
+local function emitVertex(x, y, z, u, v, r, g, b)
+    vertexPosition.x, vertexPosition.y, vertexPosition.z = x, y, z
+    mesh.Position(vertexPosition)
+    mesh.TexCoord(0, u, v) mesh.Color(r, g, b, 255) mesh.AdvanceVertex()
 end
 
 local function flushBatches()
     local viewAngles = EyeAngles()
     local right = viewAngles:Right()
     local up = viewAngles:Up()
+    local rightX, rightY, rightZ = right.x, right.y, right.z
+    local upX, upY, upZ = up.x, up.y, up.z
 
-    for index = 1, #batchOrder do
+    for index = 1, batchOrderCount do
         local material = batchOrder[index]
         local bucket = batchBuckets[material]
-        local count = #bucket
+        local count = batchCounts[material]
 
-        if count > 0 then
-            render.SetMaterial(material)
-            mesh.Begin(MATERIAL_QUADS, count)
-            for quadIndex = 1, count do
-                local quad = bucket[quadIndex]
-                local position, radius = quad[1], quad[2]
-                local r, g, b = quad[3] * 255, quad[4] * 255, quad[5] * 255
-                local rx, ry, rz = right.x * radius, right.y * radius, right.z * radius
-                local ux, uy, uz = up.x * radius, up.y * radius, up.z * radius
-                local px, py, pz = position.x, position.y, position.z
+        render.SetMaterial(material)
+        mesh.Begin(MATERIAL_QUADS, count)
+        for quadIndex = 0, count - 1 do
+            local base = quadIndex * QUAD_STRIDE
+            local px, py, pz = bucket[base + 1], bucket[base + 2], bucket[base + 3]
+            local radius = bucket[base + 4]
+            local r, g, b = bucket[base + 5] * 255, bucket[base + 6] * 255, bucket[base + 7] * 255
+            local rx, ry, rz = rightX * radius, rightY * radius, rightZ * radius
+            local ux, uy, uz = upX * radius, upY * radius, upZ * radius
 
-                mesh.Position(Vector(px - rx + ux, py - ry + uy, pz - rz + uz))
-                mesh.TexCoord(0, 0, 0) mesh.Color(r, g, b, 255) mesh.AdvanceVertex()
-                mesh.Position(Vector(px + rx + ux, py + ry + uy, pz + rz + uz))
-                mesh.TexCoord(0, 1, 0) mesh.Color(r, g, b, 255) mesh.AdvanceVertex()
-                mesh.Position(Vector(px + rx - ux, py + ry - uy, pz + rz - uz))
-                mesh.TexCoord(0, 1, 1) mesh.Color(r, g, b, 255) mesh.AdvanceVertex()
-                mesh.Position(Vector(px - rx - ux, py - ry - uy, pz - rz - uz))
-                mesh.TexCoord(0, 0, 1) mesh.Color(r, g, b, 255) mesh.AdvanceVertex()
-            end
-            mesh.End()
+            emitVertex(px - rx + ux, py - ry + uy, pz - rz + uz, 0, 0, r, g, b)
+            emitVertex(px + rx + ux, py + ry + uy, pz + rz + uz, 1, 0, r, g, b)
+            emitVertex(px + rx - ux, py + ry - uy, pz + rz - uz, 1, 1, r, g, b)
+            emitVertex(px - rx - ux, py - ry - uy, pz - rz - uz, 0, 1, r, g, b)
         end
+        mesh.End()
 
-        batchBuckets[material] = nil
+        batchCounts[material] = nil
+        batchOrder[index] = nil
     end
-
-    for index = #batchOrder, 1, -1 do batchOrder[index] = nil end
+    batchOrderCount = 0
 end
 
 hook.Add("PostDrawTranslucentRenderables", "MCITEM.CombatParticles.Draw", function(drawingDepth, drawingSkybox)
@@ -646,7 +698,10 @@ hook.Add("PostDrawTranslucentRenderables", "MCITEM.CombatParticles.Draw", functi
     for index = 1, #Combat.Particles do
         local particle = Combat.Particles[index]
         local partialTick = math.Clamp((now - particle.lastTickAt) / TICK_SECONDS, 0, 1)
-        local position = LerpVector(partialTick, particle.oldPosition, particle.position)
+        local oldPosition, position = particle.oldPosition, particle.position
+        local px = oldPosition.x + (position.x - oldPosition.x) * partialTick
+        local py = oldPosition.y + (position.y - oldPosition.y) * partialTick
+        local pz = oldPosition.z + (position.z - oldPosition.z) * partialTick
 
         local material, radius
         if particle.kind == "sweep" then
@@ -663,7 +718,7 @@ hook.Add("PostDrawTranslucentRenderables", "MCITEM.CombatParticles.Draw", functi
         end
 
         if radius > 0 then
-            pushQuad(material, position, radius, particle.litR, particle.litG, particle.litB)
+            pushQuad(material, px, py, pz, radius, particle.litR, particle.litG, particle.litB)
         end
     end
 
