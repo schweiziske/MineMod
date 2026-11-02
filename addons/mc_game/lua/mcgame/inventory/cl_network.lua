@@ -133,6 +133,9 @@ local function predictionTransferRules( menu, creative )
 			hotbar = { targets = { "chest" } },
 		}
 	end
+	if menu.kind == "menu" then
+		return { main = { targets = { "hotbar" } }, hotbar = { targets = { "main" } } }
+	end
 	if menu.kind == "crafting_table" then
 		return {
 			crafting = { targets = { "main", "hotbar" } },
@@ -243,6 +246,7 @@ local function buildPredictionContainer()
 	local enchanting = menu.kind == "enchanting_table"
 	local brewing = menu.kind == "brewing_stand"
 	local anvil, merchant = menu.kind == "anvil", menu.kind == "merchant"
+	local virtualMenu = menu.kind == "menu"
 	local logistics = menu.kind == "hopper" or menu.kind == "dispenser" or menu.kind == "dropper"
 	local recipeType = menu.kind == "blast_furnace" and "minecraft:blasting" or "minecraft:smelting"
 	local inputCount = crafting and math.max( 1, ( session.craftingWidth or 0 ) * ( session.craftingHeight or 0 ) ) or 0
@@ -251,8 +255,10 @@ local function buildPredictionContainer()
 		if menu.playerSlotMap then playerIndex = menu.playerSlotMap[index]
 		elseif index >= menu.playerOffset then playerIndex = index - menu.playerOffset end
 		local equipmentSlot = menu.equipmentSlotMap and menu.equipmentSlotMap[index] or nil
-		local group, meta, maxStack, mayPlace = "main", nil, nil, nil
-		if ( anvil or merchant ) and index == 2 then
+		local group, meta, maxStack, mayPlace, readOnly = "main", nil, nil, nil, nil
+		if virtualMenu and index < ( session.chestSlots or 0 ) then
+			group, meta, readOnly = "menu_display", { role = "result" }, true
+		elseif ( anvil or merchant ) and index == 2 then
 			group, meta, mayPlace = "result", { role = "result" }, function() return false end
 		elseif anvil and index < 2 then
 			group, meta = index == 0 and "anvil_left" or "anvil_right", { role = "input" }
@@ -300,7 +306,7 @@ local function buildPredictionContainer()
 		end
 		definitions[#definitions + 1] = {
 			index = index, storage = menu.slots, storageIndex = index + 1,
-			group = group, maxStack = maxStack, mayPlace = mayPlace, meta = meta,
+			group = group, maxStack = maxStack, mayPlace = mayPlace, meta = meta, readOnly = readOnly,
 		}
 		if playerIndex ~= nil then playerTargets[#playerTargets + 1] = index end
 		if crafting and index >= 1 and index <= inputCount then inputSlots[#inputSlots + 1] = index end
@@ -388,6 +394,10 @@ local function predictAction( container, action )
 		local slot = MC.ContainerGetSlot( container, action.slot )
 		if ( container.kind == "anvil" or container.kind == "merchant" ) and slot and slot.meta and slot.meta.role == "result"
 		and action.input ~= MC.ContainerInput.CLONE and action.input ~= MC.ContainerInput.QUICK_CRAFT then
+			return { ok = true, authoritativeOnly = true }
+		end
+		-- Virtual menu buttons are server code; any input on them waits for it.
+		if container.kind == "menu" and slot and slot.meta and slot.meta.role == "result" then
 			return { ok = true, authoritativeOnly = true }
 		end
 		return MC.ExecuteContainerInput( container, {
@@ -731,6 +741,7 @@ net.Receive( "mc_inventory_open", function()
 	local craftingWidth = net.ReadUInt( 4 )
 	local craftingHeight = net.ReadUInt( 4 )
 	local resultSlot = net.ReadUInt( 8 )
+	local title = net.ReadString()
 	if protocol ~= PROTOCOL_VERSION or containerId < 1 or token == "" or #token > 128 or err
 	or slotCount < 1 or slotCount > 127 or playerOffset + 36 > slotCount or chestSlots > slotCount
 	or ( crafting and ( craftingWidth < 1 or craftingHeight < 1 or craftingWidth * craftingHeight > 9
@@ -745,6 +756,7 @@ net.Receive( "mc_inventory_open", function()
 		creative = creative,
 		reason = reason,
 		kind = kind ~= "" and kind or "player",
+		title = title ~= "" and title or nil,
 		slotCount = slotCount,
 		playerOffset = playerOffset,
 		chestSlots = chestSlots,

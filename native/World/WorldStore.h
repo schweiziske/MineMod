@@ -188,6 +188,10 @@ struct MeshSnapshot : l2::CellSource, l2::FluidSource, l2::ShapeSource
 	Coord									origin, dimensions;
 	l2::Cell								read(Coord cell) const;
 	l2::Cell								read(int x, int y, int z) const override { return read({x, y, z}); }
+	/// Bulk read of a box inside the halo, resolving each chunk root once.
+	bool									fill(const int inOrigin[3], const int inDimensions[3], l2::Cell *outCells) const override;
+	/// Profiles of a box inside the halo, x fastest, as profile() resolves them.
+	void									FillProfiles(const int inOrigin[3], const int inDimensions[3], const Profile **outProfiles) const;
 	const l2::FluidState				   &fluid(int x, int y, int z) const override { return world->profile({x, y, z}).fluid; }
 	const l2::Shape						   &shape(int x, int y, int z) const override { return *world->profile({x, y, z}).shape; }
 	size_t									bytes() const override;
@@ -251,6 +255,19 @@ private:
 	Grid<std::shared_ptr<const LightChunk>>	   light_;
 	Grid<std::shared_ptr<const std::set<int>>> lightColumns_;
 	Grid<bool>								   invalidLight_;
+	/// Light invalidation published after a snapshot: the changed chunk, the
+	/// revision that published it and whether it reached the whole column.
+	/// Commits defer exactly the targets these regions cover. Entries at or
+	/// below mLightChangeBase have been pruned; older snapshots fall back to a
+	/// conservative chunk-root comparison.
+	struct LightChange
+	{
+		uint64_t mRevision = 0;
+		Coord	 mChunk;
+		bool	 mWholeColumn = false;
+	};
+	std::vector<LightChange>				   mLightChanges;
+	uint64_t								   mLightChangeBase = 0;
 	uint64_t								   epoch_ = 1, revision_ = 0;
 };
 } // namespace mcmesh::world

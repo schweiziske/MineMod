@@ -617,6 +617,7 @@ local function buildDirtyMeshKey( key, sections, rateLimited, budget, pinnedOnly
 		-- sectionIndex argument is compatibility-only. Submit once and retire the
 		-- whole Lua dirty set instead of calling the bridge 32 times.
 		local result = tryBuildMeshSection( key, sectionIndex, false, rateLimited, budget, sections )
+		if result ~= "blocked" then budget.unblocked = true end
 		if not result or result == "blocked" then return 0 end
 		if MC.RenderPipeline and MC.RenderPipeline.NoteDirtyBuild then MC.RenderPipeline.NoteDirtyBuild( 1 ) end
 		if MC.MeshDirty[key] == sections then
@@ -631,6 +632,7 @@ local function buildDirtyMeshKey( key, sections, rateLimited, budget, pinnedOnly
 	for sectionIndex = 1, RENDER_SECTION_COUNT do
 		if sections[sectionIndex] and ( not pinnedOnly or MC.RenderGeometryStore.IsSectionPinned( key, sectionIndex ) ) then
 			local result = tryBuildMeshSection( key, sectionIndex, false, rateLimited, budget, sections )
+			if result ~= "blocked" then budget.unblocked = true end
 			if not result then break end
 			if result ~= "pending" and result ~= "blocked" then
 				if MC.RenderPipeline and MC.RenderPipeline.NoteDirtyBuild then MC.RenderPipeline.NoteDirtyBuild( 1 ) end
@@ -696,7 +698,7 @@ local function buildSelectedDirtyKeys( dirty, rateLimited, lightOnly, buildDista
 			local chunk = MC.GetChunkByKey( key )
 			if chunk then skyPending = MC.SkyFloodPendingForChunk( chunk.cx, chunk.cy, chunk.cz ) end
 		end
-		if skyPending then budget.skyWaiting = true end
+		if skyPending then budget.skyWaiting, budget.unblocked = true, true end
 		local built = 0
 		-- Keep deferred keys dirty and eligible so lazy mode checks them again.
 		-- Existing geometry remains drawable while its lighting dependencies run.
@@ -750,6 +752,13 @@ hook.Remove( "Think", "mc_meshbuild" )
 local lazyIdleRevision = -1
 local lazyIdlePCX, lazyIdlePCY, lazyIdlePCZ
 local lazyIdleGeometry, lazyIdleLight, lazyIdleDistance, lazyIdleBlockSize
+-- A geometry pass in which every examined section waited for light. None can
+-- start before a dirty mark, a light commit or a publication changes this key.
+local waitRevision, waitLight, waitPublished = -1, nil, nil
+local function lightWaitKey()
+	local backend = MC.NativeChunkBackend
+	return backend and backend.LightSerial and backend.LightSerial(), MC.NativeL2 and MC.NativeL2.completed
+end
 hook.Add( "Think", "mc_meshbuild", function()
 	local unlimited = MC.BuildUnlimited and MC.BuildUnlimited:GetBool() == true
 	if unlimited or MC.ProcessSkyFloodQueue then
@@ -805,10 +814,22 @@ hook.Add( "Think", "mc_meshbuild", function()
 	local foundEligible, selectionDeferred = false, false
 	local geometryDepth = 0
 	local buildDistance = lazy and lazyDistance or nil
-	if not idle and next( MC.MeshDirty ) then
+	local serial, published = lightWaitKey()
+	local waiting = not lazy and serial ~= nil and waitRevision == meshDirtyRevision
+		and waitLight == serial and waitPublished == published
+	if not idle and not waiting and next( MC.MeshDirty ) then
 		if canBuildMeshSection( budget, false ) then
+			local revision = meshDirtyRevision
+			budget.unblocked = false
 			geometryKeys, geometrySections, foundEligible, geometryDepth = buildSelectedDirtyKeys(
 				MC.MeshDirty, MC.MeshDirtyRateLimited, false, buildDistance, pcx, pcy, pcz, blockSize, budget )
+			local afterSerial, afterPublished = lightWaitKey()
+			if foundEligible and not budget.unblocked and not budget.frameYield and not budget.rateYield
+				and revision == meshDirtyRevision and afterSerial == serial and afterPublished == published then
+				waitRevision, waitLight, waitPublished = revision, serial, published
+			else
+				waitRevision = -1
+			end
 		else
 			selectionDeferred = true
 		end

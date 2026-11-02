@@ -72,8 +72,29 @@ bool shapeCovered(const ShapeBox &box, unsigned face, const std::vector<ShapeBox
 	const double	   plane = box[axis + (positive ? 3 : 0)];
 	if (std::abs(plane - (positive ? 1 : 0)) > eps)
 		return false;
-	std::vector<std::array<double, 4>> covers;
-	std::vector<double>				   as{box[a], box[a + 3]}, bs{box[b], box[b + 3]};
+	// Called for every shape-culled model face. Ordinary neighbour shapes have a
+	// few boxes, so keep the scratch on the stack and spill only large shapes.
+	constexpr size_t					   cInline = 16;
+	std::array<std::array<double, 4>, cInline> coverInline;
+	std::array<double, 2 + 2 * cInline>	   edgeInlineA, edgeInlineB;
+	std::vector<std::array<double, 4>>	   coverHeap;
+	std::vector<double>					   edgeHeapA, edgeHeapB;
+	std::array<double, 4>				  *covers = coverInline.data();
+	double								  *as = edgeInlineA.data(), *bs = edgeInlineB.data();
+	if (boxes.size() > cInline)
+	{
+		coverHeap.resize(boxes.size());
+		edgeHeapA.resize(2 + 2 * boxes.size());
+		edgeHeapB.resize(2 + 2 * boxes.size());
+		covers = coverHeap.data();
+		as = edgeHeapA.data();
+		bs = edgeHeapB.data();
+	}
+	size_t coverCount = 0, aCount = 2, bCount = 2;
+	as[0] = box[a];
+	as[1] = box[a + 3];
+	bs[0] = box[b];
+	bs[1] = box[b + 3];
 	for (const auto &other : boxes)
 	{
 		if (std::abs(other[axis + (positive ? 0 : 3)] + off[axis] - plane) > eps)
@@ -84,29 +105,32 @@ bool shapeCovered(const ShapeBox &box, unsigned face, const std::vector<ShapeBox
 			continue;
 		if (a0 <= box[a] + eps && a1 >= box[a + 3] - eps && b0 <= box[b] + eps && b1 >= box[b + 3] - eps)
 			return true;
-		covers.push_back({a0, a1, b0, b1});
+		covers[coverCount++] = {a0, a1, b0, b1};
 		for (double edge : {a0, a1})
 			if (edge > box[a] + eps && edge < box[a + 3] - eps)
-				as.push_back(edge);
+				as[aCount++] = edge;
 		for (double edge : {b0, b1})
 			if (edge > box[b] + eps && edge < box[b + 3] - eps)
-				bs.push_back(edge);
+				bs[bCount++] = edge;
 	}
-	if (covers.empty())
+	if (!coverCount)
 		return false;
-	std::sort(as.begin(), as.end());
-	std::sort(bs.begin(), bs.end());
-	for (size_t ai = 1; ai < as.size(); ++ai)
-		for (size_t bi = 1; bi < bs.size(); ++bi)
+	std::sort(as, as + aCount);
+	std::sort(bs, bs + bCount);
+	for (size_t ai = 1; ai < aCount; ++ai)
+		for (size_t bi = 1; bi < bCount; ++bi)
 		{
 			const double ma = (as[ai - 1] + as[ai]) * 0.5, mb = (bs[bi - 1] + bs[bi]) * 0.5;
 			bool		 covered = false;
-			for (const auto &r : covers)
-				if (ma >= r[0] - eps && ma <= r[1] + eps && mb >= r[2] - eps && mb <= r[3] + eps)
+			for (size_t r = 0; r < coverCount; ++r)
+			{
+				const auto &cover = covers[r];
+				if (ma >= cover[0] - eps && ma <= cover[1] + eps && mb >= cover[2] - eps && mb <= cover[3] + eps)
 				{
 					covered = true;
 					break;
 				}
+			}
 			if (!covered)
 				return false;
 		}

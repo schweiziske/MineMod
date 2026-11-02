@@ -1,4 +1,5 @@
 #include "World/WorldStore.h"
+#include <algorithm>
 #include <deque>
 #include <iostream>
 #include <random>
@@ -386,9 +387,15 @@ void lightBaselinesAndColumns()
 		store.apply(store.revision(), {mutation});
 		const auto after = store.snapshot();
 		const int  radius = (16 + cfg.chunkSize - 1) / cfg.chunkSize;
+		const int  zRadius = (16 + cfg.chunkHeight - 1) / cfg.chunkHeight;
+		// The opaque cell at z=400 keeps the merged exposure threshold of column
+		// (0,0) when the cell below it changes; that edit floods a bounded halo.
+		// A new top at x=100 and an unload reach the complete columns.
+		const bool wholeColumn = pos.x != 0 || pos.z != 0;
 		for (const auto &entry : before->light)
 		{
-			const bool expected = std::abs(entry.first.x - mutation.chunk.x) <= radius && std::abs(entry.first.y - mutation.chunk.y) <= radius;
+			const bool expected = std::abs(entry.first.x - mutation.chunk.x) <= radius && std::abs(entry.first.y - mutation.chunk.y) <= radius &&
+								  (wholeColumn || std::abs(entry.first.z - mutation.chunk.z) <= zRadius);
 			check((after->invalidLight.count(entry.first) != 0) == expected, "column index invalidation differs from scan");
 		}
 		rebuild(store);
@@ -496,6 +503,136 @@ void incremental()
 		compareFull(store);
 	}
 }
+// Streamed arrival in random order while one light job is in flight, as the
+// session pumps it: later edits land between snapshot and commit. Each commit
+// may accept only targets that no later change can reach; after the queue
+// settles the stored light must equal a full rebuild.
+void interleavedArrival()
+{
+	unsigned deferredAll = 0, acceptedWithLaterChanges = 0;
+	for (const bool streaming : {false, true})
+		for (unsigned seed = 0; seed < 6; ++seed)
+		{
+			auto cfg = small(streaming);
+			cfg.minChunkZ = -3;
+			cfg.maxChunkZ = 3;
+			Store				  store(cfg, catalog());
+			std::mt19937		  random(9100 + seed * 31 + (streaming ? 7 : 0));
+			std::vector<Mutation> arrivals;
+			for (int z = -2; z <= 2; ++z)
+				for (int y = -2; y <= 1; ++y)
+					for (int x = -2; x <= 2; ++x)
+					{
+						Mutation row;
+						row.kind = Mutation::Kind::Replace;
+						row.chunk = {x, y, z};
+						row.terrainPresent = random() % 6 != 0;
+						if (row.terrainPresent)
+							for (unsigned li = 0; li < cfg.cellCount(); ++li)
+							{
+								const auto roll = random() % 16;
+								if (roll < 5)
+									row.cells.push_back({li, uint32_t(roll % 4 + 1)});
+							}
+						arrivals.push_back(std::move(row));
+					}
+			std::shuffle(arrivals.begin(), arrivals.end(), random);
+			std::atomic<bool>			 cancel{false};
+			std::unique_ptr<LightResult> inFlight;
+			size_t						 next = 0;
+			unsigned					 committedTotal = 0, deferredTotal = 0;
+			while (next < arrivals.size() || inFlight)
+			{
+				const auto action = random() % 4;
+				if (next < arrivals.size() && (action < 2 || !inFlight))
+				{
+					std::vector<Mutation> batch;
+					for (unsigned count = 1 + random() % 3; count && next < arrivals.size(); --count)
+						batch.push_back(arrivals[next++]);
+					if (random() % 5 == 0 && !batch.empty())
+					{
+						// Occasionally edit one cell of an already present chunk.
+						auto edit = cell(cfg, cfg.cellAt(batch.front().chunk, random() % cfg.cellCount()), random() % 5);
+						if (store.chunk(edit.chunk))
+							batch = {edit};
+					}
+					store.apply(store.revision(), batch);
+				}
+				if (inFlight && (action >= 2 || next == arrivals.size()))
+				{
+					const bool later = inFlight->source->revision != store.revision();
+					const auto result = store.commit(*inFlight);
+					check(!result.stale, "interleaved light result was stale");
+					committedTotal += result.committed;
+					deferredTotal += result.deferred;
+					if (later)
+						acceptedWithLaterChanges += result.committed;
+					inFlight.reset();
+				}
+				if (!inFlight && next < arrivals.size())
+					inFlight = rebuildLight(store.snapshot(), cancel);
+			}
+			for (int settle = 0; settle < 8 && !store.snapshot()->invalidLight.empty(); ++settle)
+				rebuild(store);
+			rebuild(store);
+			compareFull(store);
+			compareScalarLight(store);
+			check(committedTotal > 0, "interleaved arrival never committed light");
+			deferredAll += deferredTotal;
+		}
+	// Both precise outcomes must occur: conflicts deferred and unaffected roots kept.
+	check(deferredAll > 0 && acceptedWithLaterChanges > 0, "interleaved arrival did not exercise light conflicts");
+}
+// The dense halo marking must equal the per-cell owner walk it replaced.
+void affectedSectionsReference()
+{
+	std::mt19937 random(7713);
+	for (int size : {4, 16})
+	{
+		Config cfg;
+		cfg.chunkSize = size;
+		cfg.chunkHeight = size * 2;
+		cfg.sectionSize = size == 4 ? 2 : 16;
+		for (int round = 0; round < 40; ++round)
+		{
+			auto delta = std::make_shared<LightDelta>();
+			delta->chunk = {int(random() % 7) - 3, int(random() % 7) - 3, int(random() % 5) - 2};
+			delta->changedBits.resize((cfg.cellCount() + 7) / 8);
+			// Every tenth delta is a created/removed root: all cells changed.
+			const unsigned density = round % 10 == 5 ? 64 : round % 4 == 0 ? 8 : 1 + random() % 3;
+			for (unsigned li = 0; li < cfg.cellCount(); ++li)
+				if (random() % 64 < density)
+					delta->changedBits[li / 8] |= uint8_t(1u << (li % 8));
+			Grid<std::vector<uint8_t>> owners;
+			const int				   ss = cfg.sectionSize, xy = cfg.chunkSize / ss, height = cfg.chunkHeight / ss;
+			for (unsigned li = 0; li < cfg.cellCount(); ++li)
+			{
+				if (!(delta->changedBits[li / 8] & (1u << (li % 8))))
+					continue;
+				const auto cell = cfg.cellAt(delta->chunk, li);
+				for (int z = floorDiv(cell.z - 2, ss); z <= floorDiv(cell.z + 2, ss); ++z)
+					for (int y = floorDiv(cell.y - 2, ss); y <= floorDiv(cell.y + 2, ss); ++y)
+						for (int x = floorDiv(cell.x - 2, ss); x <= floorDiv(cell.x + 2, ss); ++x)
+						{
+							const Coord chunk{floorDiv(x, xy), floorDiv(y, xy), floorDiv(z, height)};
+							auto	   &bits = owners[chunk];
+							if (bits.empty())
+								bits.resize(cfg.sectionCount());
+							bits[unsigned(x - chunk.x * xy) + unsigned(xy * (y - chunk.y * xy + xy * (z - chunk.z * height)))] = 1;
+						}
+			}
+			Grid<std::vector<unsigned>> expected;
+			for (const auto &entry : owners)
+			{
+				auto &indices = expected[entry.first];
+				for (unsigned i = 0; i < entry.second.size(); ++i)
+					if (entry.second[i])
+						indices.push_back(i);
+			}
+			check(affectedLightSections(cfg, {delta}) == expected, "dense light halo differs from per-cell owners");
+		}
+	}
+}
 void boundedInvalidation()
 {
 	auto cfg = small(true);
@@ -547,11 +684,18 @@ void boundedInvalidation()
 	store.apply(store.revision(), {cell(cfg, {0, 0, 403}, 0)});
 	check(store.snapshot()->invalidLight.count({0, 0, -100}) != 0, "roof edit did not invalidate lower sky");
 	pendingLight = rebuildLight(store.snapshot(), cancel);
+	check(pendingLight->targets.count({0, 0, -100}) && pendingLight->targets.count({0, 0, 0}), "roof job missed column targets");
 	store.apply(store.revision(), {cell(cfg, {0, 0, 0}, 0)});
 	const auto roofRejected = store.commit(*pendingLight);
-	check(roofRejected.committed == 0 && roofRejected.deferred == pendingLight->targets.size(),
-		  "local edit weakened in-flight column conflict checks");
-	check(!store.lightReady({0, 0, -100}), "local edit lost pending distant roof invalidation");
+	// The later edit keeps the new exposure threshold (z=7), so it conflicts only
+	// with the targets in its bounded halo. Distant roots were computed after the
+	// roof removal and remain exact; the halo targets must stay pending.
+	size_t inHalo = 0;
+	for (const auto &target : pendingLight->targets)
+		inHalo += std::abs(target.first.z) <= (16 + cfg.chunkHeight - 1) / cfg.chunkHeight ? 1 : 0;
+	check(roofRejected.deferred == inHalo && roofRejected.committed == pendingLight->targets.size() - inHalo,
+		  "local edit conflict differs from its invalidation halo");
+	check(store.lightReady({0, 0, -100}) && !store.lightReady({0, 0, 0}), "local edit conflict lost or over-applied");
 	rebuild(store);
 	compareFull(store);
 	Mutation unload;
@@ -620,6 +764,8 @@ int main()
 		retainedGeometry();
 		configuration();
 		incremental();
+		interleavedArrival();
+		affectedSectionsReference();
 		boundedInvalidation();
 		exposureOracle();
 		std::cout << "Persistent world: atomic batches, snapshots, streaming, water, incremental light, stale jobs and budgets passed\n";

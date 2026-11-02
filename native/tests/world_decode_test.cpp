@@ -1,4 +1,5 @@
 #include "World/WorldSession.h"
+#include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <stdexcept>
@@ -120,8 +121,121 @@ DecodeStatus ready(DecodeWorker &worker, uint64_t id)
 		std::this_thread::sleep_for(std::chrono::milliseconds(1));
 	}
 }
+// Sections built straight from wire sections must equal the per-cell
+// replacement path, including counts, column tops and absent sections.
+void directSectionsMatchReplacements()
+{
+	auto profiles = std::make_shared<Catalog>();
+	profiles->states.resize(64);
+	for (unsigned i = 1; i < 64; ++i)
+	{
+		const uint8_t opacity = i % 4 == 0 ? 0 : i % 4 == 1 ? 15 : i % 4 == 2 ? 1 : 5;
+		profiles->states[i] = {0, opacity, uint8_t(opacity >= 15 ? 16 : std::max(1, int(opacity))), 0, 9, 0.5f};
+	}
+	uint32_t seed = 12345;
+	auto	 next = [&](unsigned bound)
+	{
+		seed = seed * 1664525u + 1013904223u;
+		return (seed >> 8) % bound;
+	};
+	for (const int sectionSize : {16, 8})
+	{
+		Config config;
+		config.sectionSize = sectionSize;
+		const unsigned		  chunkCount = 24;
+		std::vector<Mutation> expected;
+		Bytes				  body;
+		unsigned			  total = 0;
+		for (unsigned c = 0; c < chunkCount; ++c)
+		{
+			const unsigned		  flags = c % 11 == 10 ? 1 : 0;
+			std::vector<uint32_t> states(config.cellCount());
+			Bytes				  sections;
+			if (!flags)
+			{
+				for (unsigned s = 0; s < 2; ++s)
+				{
+					const unsigned kind = next(4);
+					if (kind == 0)
+						sections.push_back(0);
+					else if (kind == 1)
+					{
+						const uint32_t state = 1 + next(63);
+						std::fill_n(states.begin() + s * 4096, 4096, state);
+						sections.push_back(1);
+						u16(sections, 4096);
+						u32(sections, state);
+					}
+					else
+					{
+						const unsigned		  bits = 1 + next(6);
+						const unsigned		  size = 2 + next((1u << bits) - 1);
+						std::vector<uint32_t> palette;
+						// Kind 3 keeps air in the palette; kind 2 is solid.
+						for (uint32_t state = kind == 3 ? 0 : 1; palette.size() < size && state < 64; ++state)
+							palette.push_back(state);
+						std::vector<unsigned> indices(4096);
+						for (unsigned i = 0; i < 4096; ++i)
+						{
+							// Runs of one entry, as real terrain compresses.
+							indices[i] = (i / (1 + next(64)) + next(2)) % unsigned(palette.size());
+							states[s * 4096 + i] = palette[indices[i]];
+						}
+						unsigned count = 0;
+						for (unsigned i = 0; i < 4096; ++i)
+							count += states[s * 4096 + i] != 0;
+						if (!count)
+						{
+							sections.push_back(0);
+							std::fill_n(states.begin() + s * 4096, 4096, 0u);
+						}
+						else
+							packed(sections, bits, palette, indices);
+					}
+				}
+			}
+			Mutation mutation;
+			mutation.kind = Mutation::Kind::Replace;
+			mutation.chunk = {int(c) - 12, 0, 1};
+			for (unsigned li = 0; li < states.size(); ++li)
+				if (states[li])
+					mutation.cells.push_back({li, states[li]});
+			mutation.terrainPresent = !mutation.cells.empty();
+			total += unsigned(mutation.cells.size());
+			chunkHeader(body, int(c) - 12, flags);
+			body.insert(body.end(), sections.begin(), sections.end());
+			expected.push_back(std::move(mutation));
+		}
+		auto bytes = header(chunkCount, total);
+		bytes.insert(bytes.end(), body.begin(), body.end());
+		auto in = input(bytes, chunkCount, total, profiles);
+		in.config = config;
+		std::atomic<bool> cancelled{false};
+		const auto		  decoded = decodeBinary(in, cancelled);
+		const auto		  reference = prepareReplacements(config, profiles, 1, expected);
+		check(decoded->prepared.chunks.size() == reference.chunks.size(), "direct decode lost chunks");
+		for (const auto &entry : reference.chunks)
+		{
+			const auto found = decoded->prepared.chunks.find(entry.first);
+			check(found != decoded->prepared.chunks.end(), "direct decode lost a chunk");
+			const auto &want = *entry.second, &got = *found->second;
+			check(got.count == want.count && got.terrainPresent == want.terrainPresent && got.revision == want.revision
+					  && got.columnTops == want.columnTops && got.sections.size() == want.sections.size(),
+				  "direct decode changed chunk totals or column tops");
+			for (size_t s = 0; s < want.sections.size(); ++s)
+			{
+				const auto &a = want.sections[s], &b = got.sections[s];
+				check(!a == !b, "direct decode changed which sections exist");
+				if (a)
+					check(a->states == b->states && a->counts == b->counts && a->count == b->count && b->contexts.empty(),
+						  "direct decode changed section contents");
+			}
+		}
+	}
+}
 void run()
 {
+	directSectionsMatchReplacements();
 	std::atomic<bool> cancelled{false};
 	Store			  store({}, catalog());
 	auto			  bytes = header(2, 4096);

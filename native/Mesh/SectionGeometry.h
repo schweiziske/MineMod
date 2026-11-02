@@ -68,7 +68,10 @@ struct MemoryUsage
 struct CellSource
 {
 	virtual ~CellSource() = default;
-	virtual Cell   read(int x, int y, int z) const = 0;
+	virtual Cell read(int x, int y, int z) const = 0;
+	/// Optional bulk read of a whole box, x fastest, with values identical to
+	/// read(). Returns false when the source only supports per-cell reads.
+	virtual bool   fill(const int[3], const int[3], Cell *) const { return false; }
 	virtual size_t bytes() const = 0;
 	virtual void   memoryUsage(MemoryUsage &usage) const { usage.owned += bytes(); }
 };
@@ -86,6 +89,9 @@ public:
 	Snapshot(const int origin[3], const int dimensions[3], std::shared_ptr<const CellSource> source);
 	void			 prepare();
 	bool			 prepared() const { return !ready_.empty(); }
+	/// Worker-side: fill the whole cache from an owned source in one pass when
+	/// the source supports bulk reads. Per-cell reads stay lazy otherwise.
+	void			 preload();
 	const Cell		&read(int x, int y, int z);
 	const FaceLight &sampleFace(int x, int y, int z, unsigned face, bool cubic);
 	void			 validateSource(const int source[3]) const;

@@ -102,6 +102,11 @@ local function tryLuaRelight( key, index )
 end
 
 local function build( key, sectionIndex, lightOnly )
+	-- Light has nothing to update before a section's first build, which reads
+	-- the current light itself; a build without geometry is empty and unlit.
+	if lightOnly and sectionIndex and not ( MC.MeshSections[key] and MC.MeshSections[key][sectionIndex] ) then
+		return true
+	end
 	local world = MC.NativeChunkBackend
 	local native = MC.NativeL2
 	local deferLighting = not lightOnly and sectionIndex ~= nil and MC.MeshSections[key] ~= nil

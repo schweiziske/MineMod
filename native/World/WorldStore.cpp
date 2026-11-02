@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <deque>
 #include <stdexcept>
 #include <unordered_set>
@@ -292,9 +293,12 @@ std::unique_ptr<LightResult> rebuildLight(std::shared_ptr<const Snapshot> source
 	const auto &cfg = source->config;
 	auto		result = std::make_unique<LightResult>();
 	result->source = source;
-	// Summaries are maintained during mutation. The worker scans columns, not all
-	// states a second time, and never reads a mutable Store.
-	Grid<int>							 tops;
+	// Summaries are maintained during mutation. The worker groups chunk roots by
+	// XY column and resolves exposure thresholds only for the columns a target or
+	// boundary sample reads, never hashing every block column of the world.
+	const int							 cs = cfg.chunkSize;
+	const unsigned						 cs2 = unsigned(cs * cs);
+	Grid<std::vector<std::pair<int, const Chunk *>>> xyChunks;
 	std::unordered_set<Coord, CoordHash> domain;
 	const int							 xyHalo = (16 + cfg.chunkSize - 1) / cfg.chunkSize;
 	const int							 zHalo = (16 + cfg.chunkHeight - 1) / cfg.chunkHeight;
@@ -304,20 +308,7 @@ std::unique_ptr<LightResult> rebuildLight(std::shared_ptr<const Snapshot> source
 			return nullptr;
 		const auto	cc = entry.first;
 		const auto &chunk = *entry.second;
-		for (unsigned column = 0; column < chunk.columnTops.size(); ++column)
-		{
-			const int top = chunk.columnTops[column];
-			if (top < 0)
-				continue;
-			const Coord key{cc.x * cfg.chunkSize + int(column % cfg.chunkSize),
-							cc.y * cfg.chunkSize + int(column / cfg.chunkSize), 0};
-			const int	z = cc.z * cfg.chunkHeight + top;
-			const auto	found = tops.find(key);
-			if (found == tops.end())
-				tops.emplace(key, z);
-			else
-				found->second = std::max(found->second, z);
-		}
+		xyChunks[{cc.x, cc.y, 0}].emplace_back(cc.z, &chunk);
 		if (!chunk.terrainPresent)
 			continue;
 		for (int dz = -zHalo; dz <= zHalo; ++dz)
@@ -330,12 +321,26 @@ std::unique_ptr<LightResult> rebuildLight(std::shared_ptr<const Snapshot> source
 					require(!cfg.maxLightChunks || domain.size() <= cfg.maxLightChunks, "native light domain exceeds its chunk limit");
 				}
 	}
-	auto exposed = [&](Coord cell)
+	// Absolute exposure threshold of every block column in one XY chunk column;
+	// INT_MIN marks a column without any opacity>0 cell (fully exposed).
+	Grid<std::vector<int>> topCache;
+	auto				   chunkColumnTops = [&](int cx, int cy) -> const std::vector<int> &
 	{
-		if (!source->known(cfg.chunkAt(cell)))
-			return false;
-		const auto found = tops.find({cell.x, cell.y, 0});
-		return found == tops.end() || cell.z > found->second;
+		const Coord key{cx, cy, 0};
+		const auto	found = topCache.find(key);
+		if (found != topCache.end())
+			return found->second;
+		std::vector<int> tops(cs2, std::numeric_limits<int>::min());
+		const auto		 members = xyChunks.find(key);
+		if (members != xyChunks.end())
+			for (const auto &member : members->second)
+				for (unsigned column = 0; column < cs2; ++column)
+				{
+					const int top = member.second->columnTops[column];
+					if (top >= 0)
+						tops[column] = std::max(tops[column], member.first * cfg.chunkHeight + top);
+				}
+		return topCache.emplace(key, std::move(tops)).first->second;
 	};
 	struct WorkChunk
 	{
@@ -374,133 +379,226 @@ std::unique_ptr<LightResult> rebuildLight(std::shared_ptr<const Snapshot> source
 												  cfg.cellCount());
 	require(!cfg.maxLightBytes || fixedBytes <= cfg.maxLightBytes, "native lighting work exceeds its memory budget");
 	constexpr size_t Missing = std::numeric_limits<size_t>::max();
+	// Eight-byte nodes in a compacting vector FIFO. MSVC's std::deque keeps one
+	// element of the former 16-byte node per block, an allocation per enqueue.
 	struct Node
 	{
-		size_t	 chunk;
-		unsigned cell;
-		uint8_t	 level;
+		uint32_t chunk;
+		uint32_t cellLevel; // cell << 4 | level
 	};
-	std::deque<Node> blockQueue, skyQueue;
-	auto			 enqueue = [&](std::deque<Node> &queue, Node node)
+	struct Queue
 	{
-		require(!cfg.maxLightBytes || (blockQueue.size() + skyQueue.size() + 1) <= (cfg.maxLightBytes - fixedBytes) / sizeof(Node),
-				"native lighting queue exceeds its memory budget");
-		queue.push_back(node);
-	};
-	auto previous = [&](Coord pos, bool sky) -> unsigned
-	{
-		const auto key = cfg.chunkAt(pos);
-		if (!source->known(key))
-			return 0;
-		const auto *old = source->invalidLight.find(key) == source->invalidLight.end() && domain.find(key) != domain.end() ? find(source->light, key) : nullptr;
-		if (old)
+		std::vector<Node> nodes;
+		size_t			  head = 0;
+		bool			  empty() const { return head == nodes.size(); }
+		Node			  pop()
 		{
-			const auto value = old->values[cfg.localIndex(pos)];
-			return sky ? value >> 4 : value & 15;
+			const Node node = nodes[head++];
+			if (head == nodes.size())
+				nodes.clear(), head = 0;
+			else if (head >= 4096 && head * 2 >= nodes.size())
+			{
+				nodes.erase(nodes.begin(), nodes.begin() + std::ptrdiff_t(head));
+				head = 0;
+			}
+			return node;
 		}
-		return sky && (!cfg.skyEnabled || exposed(pos)) ? 15 : 0;
+	};
+	Queue blockQueue, skyQueue;
+	auto  enqueue = [&](Queue &queue, size_t chunk, unsigned cell, unsigned level)
+	{
+		// Vector slack can double the live footprint; budget for it.
+		require(!cfg.maxLightBytes || (blockQueue.nodes.size() + skyQueue.nodes.size() + 1) * 2 * sizeof(Node) <= cfg.maxLightBytes - fixedBytes,
+				"native lighting queue exceeds its memory budget");
+		queue.nodes.push_back({uint32_t(chunk), (cell << 4) | level});
+	};
+	// Chunk-local address tables replace per-cell runtime-divisor arithmetic.
+	const int			  ss = cfg.sectionSize, sectionsXY = cfg.chunkSize / ss, ch = cfg.chunkHeight;
+	std::vector<unsigned> sectionX(cs), cellX(cs), sectionZ(ch), cellZ(ch);
+	for (int i = 0; i < cs; ++i)
+	{
+		sectionX[i] = unsigned(i / ss);
+		cellX[i] = unsigned(i % ss);
+	}
+	for (int i = 0; i < ch; ++i)
+	{
+		sectionZ[i] = unsigned(i / ss);
+		cellZ[i] = unsigned(i % ss);
+	}
+	const auto &air = source->catalog->states[0];
+	// Boundary seeding reads only the six face neighbours of a target. Resolve
+	// their roots once instead of hashing every boundary cell and face.
+	struct FaceNeighbour
+	{
+		const LightChunk *old = nullptr;
+		bool			  target = false, known = false;
 	};
 	for (size_t ci = 0; ci < chunks.size(); ++ci)
 	{
 		if (cancelled.load(std::memory_order_relaxed))
 			return nullptr;
-		auto			   &chunk = chunks[ci];
-		const auto			cc = chunk.coord;
-		std::array<bool, 6> knownNeighbors;
+		auto					   &chunk = chunks[ci];
+		const auto					cc = chunk.coord;
+		std::array<bool, 6>			knownNeighbors;
+		std::array<FaceNeighbour, 6> faces;
 		for (int f = 0; f < 6; ++f)
 		{
 			const Coord key{cc.x + Offsets[f][0], cc.y + Offsets[f][1], cc.z + Offsets[f][2]};
 			const auto	found = byKey.find(key);
 			chunk.neighbors[f] = found == byKey.end() ? Missing : found->second;
 			knownNeighbors[f] = source->known(key);
+			auto &face = faces[f];
+			face.target = chunk.neighbors[f] != Missing;
+			face.known = knownNeighbors[f];
+			// Same rule as an old-light read: only a valid in-domain light root
+			// supplies boundary values; otherwise implicit exposure applies.
+			if (face.known && !face.target && source->invalidLight.find(key) == source->invalidLight.end() &&
+				domain.find(key) != domain.end())
+				face.old = find(source->light, key);
 		}
 		// Exposure is a column threshold. Resolve the horizontal halo once, not
 		// through world/hash lookups for every cell and each of its six faces.
 		const unsigned			 stride = unsigned(cfg.chunkSize + 2);
 		std::array<int, 66 * 66> columnTops;
+		const std::vector<int>	*ring[3][3];
+		for (int dy = -1; dy <= 1; ++dy)
+			for (int dx = -1; dx <= 1; ++dx)
+				ring[dy + 1][dx + 1] = &chunkColumnTops(cc.x + dx, cc.y + dy);
 		for (int y = -1; y <= cfg.chunkSize; ++y)
 			for (int x = -1; x <= cfg.chunkSize; ++x)
 			{
-				const auto top = tops.find({cc.x * cfg.chunkSize + x, cc.y * cfg.chunkSize + y, 0});
-				columnTops[unsigned(x + 1) + stride * unsigned(y + 1)] =
-					top == tops.end() ? std::numeric_limits<int>::min() : top->second;
+				const int ix = x < 0 ? 0 : x >= cs ? 2 : 1, iy = y < 0 ? 0 : y >= cs ? 2 : 1;
+				const int lx = x < 0 ? cs - 1 : x >= cs ? 0 : x, ly = y < 0 ? cs - 1 : y >= cs ? 0 : y;
+				columnTops[unsigned(x + 1) + stride * unsigned(y + 1)] = (*ring[iy][ix])[unsigned(lx) + unsigned(cs) * unsigned(ly)];
 			}
 		const Chunk *states = find(source->chunks, cc);
-		for (unsigned li = 0; li < cfg.cellCount(); ++li)
-		{
-			++result->scannedCells;
-			const auto &p = states ? profileIn(cfg, *source->catalog, *states, li) : source->catalog->states[0];
-			chunk.values[li] = p.emission;
-			chunk.blockCost[li] = uint8_t(p.opacity >= 15 ? 16 : std::max(1, int(p.opacity)));
-			chunk.skyCost[li] = p.skyCost;
-			if (p.emission)
-			{
-				enqueue(blockQueue, {ci, li, p.emission});
-				++result->sources;
-			}
-			const auto	   pos = cfg.cellAt(cc, li);
-			const unsigned x = li % cfg.chunkSize, y = li / cfg.chunkSize % cfg.chunkSize;
-			const unsigned z = li / (cfg.chunkSize * cfg.chunkSize);
-			const unsigned column = x + 1 + stride * (y + 1);
-			const int	   top = columnTops[column];
-			if (!cfg.skyEnabled || pos.z > top)
-			{
-				chunk.values[li] |= 0xf0;
-			}
-			else if (p.skyCost < 15)
-			{
-				// Seed from all exposed neighbors, including the cell just above a
-				// water/leaf column top and known sparse air outside this domain.
-				if (((x + 1 < unsigned(cfg.chunkSize) || knownNeighbors[0]) && pos.z > columnTops[column + 1]) || ((x > 0 || knownNeighbors[1]) && pos.z > columnTops[column - 1]) || ((y + 1 < unsigned(cfg.chunkSize) || knownNeighbors[2]) && pos.z > columnTops[column + stride]) || ((y > 0 || knownNeighbors[3]) && pos.z > columnTops[column - stride]) || ((z + 1 < unsigned(cfg.chunkHeight) || knownNeighbors[4]) && pos.z + 1 > top) || ((z > 0 || knownNeighbors[5]) && pos.z - 1 > top))
+		unsigned	 li = 0;
+		for (unsigned z = 0; z < unsigned(ch); ++z)
+			for (unsigned y = 0; y < unsigned(cs); ++y)
+				for (unsigned x = 0; x < unsigned(cs); ++x, ++li)
 				{
-					const auto level = uint8_t(15 - p.skyCost);
-					chunk.values[li] |= uint8_t(level << 4);
-					enqueue(skyQueue, {ci, li, level});
-					++result->sources;
+					++result->scannedCells;
+					const Profile *profile = &air;
+					if (states)
+					{
+						const auto &section = states->sections[sectionX[x] + sectionsXY * (sectionX[y] + sectionsXY * sectionZ[z])];
+						if (section)
+						{
+							const unsigned cell = cellX[x] + unsigned(ss) * (cellX[y] + unsigned(ss) * cellZ[z]);
+							profile = &source->catalog->states[section->states[cell]];
+							if (!section->contexts.empty())
+							{
+								const auto context = section->contexts.find(cell);
+								if (context != section->contexts.end())
+									profile = &context->second;
+							}
+						}
+					}
+					const auto &p = *profile;
+					chunk.values[li] = p.emission;
+					chunk.blockCost[li] = uint8_t(p.opacity >= 15 ? 16 : std::max(1, int(p.opacity)));
+					chunk.skyCost[li] = p.skyCost;
+					if (p.emission)
+					{
+						enqueue(blockQueue, ci, li, p.emission);
+						++result->sources;
+					}
+					const int	   pz = cc.z * cfg.chunkHeight + int(z);
+					const unsigned column = x + 1 + stride * (y + 1);
+					const int	   top = columnTops[column];
+					if (!cfg.skyEnabled || pz > top)
+					{
+						chunk.values[li] |= 0xf0;
+					}
+					else if (p.skyCost < 15)
+					{
+						// Seed from all exposed neighbors, including the cell just above a
+						// water/leaf column top and known sparse air outside this domain.
+						if (((x + 1 < unsigned(cfg.chunkSize) || knownNeighbors[0]) && pz > columnTops[column + 1]) || ((x > 0 || knownNeighbors[1]) && pz > columnTops[column - 1]) || ((y + 1 < unsigned(cfg.chunkSize) || knownNeighbors[2]) && pz > columnTops[column + stride]) || ((y > 0 || knownNeighbors[3]) && pz > columnTops[column - stride]) || ((z + 1 < unsigned(cfg.chunkHeight) || knownNeighbors[4]) && pz + 1 > top) || ((z > 0 || knownNeighbors[5]) && pz - 1 > top))
+						{
+							const auto level = uint8_t(15 - p.skyCost);
+							chunk.values[li] |= uint8_t(level << 4);
+							enqueue(skyQueue, ci, li, level);
+							++result->sources;
+						}
+					}
+					// Unchanged chunks supply boundary light for incremental reflood.
+					// Invalid chunks always belong to this build, so their old light
+					// cannot seed a removed emitter or an opened/closed sky column.
+					if (x == 0 || y == 0 || z == 0 || x + 1 == unsigned(cfg.chunkSize) || y + 1 == unsigned(cfg.chunkSize) || z + 1 == unsigned(cfg.chunkHeight))
+					{
+						unsigned block = chunk.values[li] & 15, sky = chunk.values[li] >> 4;
+						for (unsigned f = 0; f < 6; ++f)
+						{
+							// A face offset leaves this chunk only on the matching boundary.
+							unsigned nx = x, ny = y, nz = z, neighbourColumn = column;
+							bool	 leaves = false;
+							switch (f)
+							{
+							case 0:
+								leaves = x + 1 == unsigned(cs), nx = 0, neighbourColumn = column + 1;
+								break;
+							case 1:
+								leaves = x == 0, nx = unsigned(cs - 1), neighbourColumn = column - 1;
+								break;
+							case 2:
+								leaves = y + 1 == unsigned(cs), ny = 0, neighbourColumn = column + stride;
+								break;
+							case 3:
+								leaves = y == 0, ny = unsigned(cs - 1), neighbourColumn = column - stride;
+								break;
+							case 4:
+								leaves = z + 1 == unsigned(ch), nz = 0;
+								break;
+							default:
+								leaves = z == 0, nz = unsigned(ch - 1);
+								break;
+							}
+							const auto &face = faces[f];
+							if (!leaves || face.target)
+								continue;
+							unsigned previousBlock = 0, previousSky = 0;
+							if (face.known)
+							{
+								if (face.old)
+								{
+									const auto value = face.old->values[nx + unsigned(cs) * (ny + unsigned(cs) * nz)];
+									previousBlock = value & 15;
+									previousSky = value >> 4;
+								}
+								else if (!cfg.skyEnabled || pz + Offsets[f][2] > columnTops[neighbourColumn])
+									previousSky = 15;
+							}
+							const int b = int(previousBlock) - chunk.blockCost[li];
+							const int s = int(previousSky) - chunk.skyCost[li];
+							if (b > int(block))
+								block = unsigned(b);
+							if (s > int(sky))
+								sky = unsigned(s);
+						}
+						if (block > unsigned(chunk.values[li] & 15))
+							enqueue(blockQueue, ci, li, block);
+						if (sky > unsigned(chunk.values[li] >> 4))
+							enqueue(skyQueue, ci, li, sky);
+						chunk.values[li] = uint8_t(block | (sky << 4));
+					}
 				}
-			}
-			// Unchanged chunks supply boundary light for incremental reflood.
-			// Invalid chunks always belong to this build, so their old light
-			// cannot seed a removed emitter or an opened/closed sky column.
-			if (x == 0 || y == 0 || z == 0 || x + 1 == unsigned(cfg.chunkSize) || y + 1 == unsigned(cfg.chunkSize) || z + 1 == unsigned(cfg.chunkHeight))
-			{
-				unsigned block = chunk.values[li] & 15, sky = chunk.values[li] >> 4;
-				for (const auto &offset : Offsets)
-				{
-					const Coord neighbor{pos.x + offset[0], pos.y + offset[1], pos.z + offset[2]};
-					const auto	key = cfg.chunkAt(neighbor);
-					if (key == cc || byKey.find(key) != byKey.end())
-						continue;
-					const int b = int(previous(neighbor, false)) - chunk.blockCost[li];
-					const int s = int(previous(neighbor, true)) - chunk.skyCost[li];
-					if (b > int(block))
-						block = unsigned(b);
-					if (s > int(sky))
-						sky = unsigned(s);
-				}
-				if (block > unsigned(chunk.values[li] & 15))
-					enqueue(blockQueue, {ci, li, uint8_t(block)});
-				if (sky > unsigned(chunk.values[li] >> 4))
-					enqueue(skyQueue, {ci, li, uint8_t(sky)});
-				chunk.values[li] = uint8_t(block | (sky << 4));
-			}
-		}
 	}
-	const unsigned cs = cfg.chunkSize, cs2 = cs * cs;
-	auto		   flood = [&](std::deque<Node> &queue, bool sky)
+	const unsigned fcs = unsigned(cfg.chunkSize), fcs2 = fcs * fcs;
+	auto		   flood = [&](Queue &queue, bool sky)
 	{
 		while (!queue.empty())
 		{
 			if ((result->visits & 1023) == 0 && cancelled.load(std::memory_order_relaxed))
 				return false;
-			const Node node = queue.front();
-			queue.pop_front();
+			const Node node = queue.pop();
 			++result->visits;
+			const unsigned cell = node.cellLevel >> 4, level = node.cellLevel & 15;
 			const auto	  &chunk = chunks[node.chunk];
-			const unsigned current = sky ? chunk.values[node.cell] >> 4 : chunk.values[node.cell] & 15;
-			if (current != node.level || current <= 1)
+			const unsigned current = sky ? chunk.values[cell] >> 4 : chunk.values[cell] & 15;
+			if (current != level || current <= 1)
 				continue;
-			const int x = node.cell % cs, y = node.cell / cs % cs, z = node.cell / cs2;
+			const int x = cell % fcs, y = cell / fcs % fcs, z = cell / fcs2;
 			for (int f = 0; f < 6; ++f)
 			{
 				int	   nx = x + Offsets[f][0], ny = y + Offsets[f][1], nz = z + Offsets[f][2];
@@ -524,14 +622,14 @@ std::unique_ptr<LightResult> rebuildLight(std::shared_ptr<const Snapshot> source
 						nz -= cfg.chunkHeight;
 				}
 				auto		  &destination = chunks[target];
-				const unsigned li = unsigned(nx) + cs * (unsigned(ny) + cs * unsigned(nz));
+				const unsigned li = unsigned(nx) + fcs * (unsigned(ny) + fcs * unsigned(nz));
 				const int	   next = int(current) - (sky ? destination.skyCost[li] : destination.blockCost[li]);
 				const unsigned old = sky ? destination.values[li] >> 4 : destination.values[li] & 15;
 				if (next <= 0 || int(old) >= next)
 					continue;
 				auto &value = destination.values[li];
 				value = sky ? uint8_t((value & 15) | (next << 4)) : uint8_t((value & 0xf0) | next);
-				enqueue(queue, {target, li, uint8_t(next)});
+				enqueue(queue, target, li, unsigned(next));
 			}
 		}
 		return true;
@@ -562,15 +660,40 @@ std::unique_ptr<LightResult> rebuildLight(std::shared_ptr<const Snapshot> source
 		const auto *value = find(result->chunks, target.first);
 		auto		delta = std::make_shared<LightDelta>();
 		delta->chunk = target.first;
-		delta->changedBits.resize((cfg.cellCount() + 7) / 8);
+		const unsigned cells = cfg.cellCount();
+		delta->changedBits.resize((cells + 7) / 8);
 		bool changed = false;
-		for (unsigned li = 0; li < cfg.cellCount(); ++li)
+		if (!old || !value)
 		{
-			if (!old || !value || old->values[li] != value->values[li])
+			// A created or removed root changes every cell.
+			std::fill(delta->changedBits.begin(), delta->changedBits.end(), uint8_t(0xff));
+			if (cells % 8)
+				delta->changedBits.back() = uint8_t((1u << (cells % 8)) - 1);
+			changed = true;
+		}
+		else
+		{
+			// Compare eight cells per step; only differing blocks are expanded.
+			const uint8_t *before = old->values.data(), *after = value->values.data();
+			unsigned	   li = 0;
+			for (; li + 8 <= cells; li += 8)
 			{
-				delta->changedBits[li / 8] |= uint8_t(1u << (li % 8));
+				uint64_t a, b;
+				std::memcpy(&a, before + li, sizeof(a));
+				std::memcpy(&b, after + li, sizeof(b));
+				if (a == b)
+					continue;
+				for (unsigned k = li; k < li + 8; ++k)
+					if (before[k] != after[k])
+						delta->changedBits[k / 8] |= uint8_t(1u << (k % 8));
 				changed = true;
 			}
+			for (; li < cells; ++li)
+				if (before[li] != after[li])
+				{
+					delta->changedBits[li / 8] |= uint8_t(1u << (li % 8));
+					changed = true;
+				}
 		}
 		if (changed)
 		{
@@ -598,8 +721,13 @@ void Store::reset(Config config, std::shared_ptr<const Catalog> catalog)
 {
 	config.validate();
 	require(catalog != nullptr, "world reset requires a catalog");
-	catalog->validate();
-	auto sealed = std::make_shared<const Catalog>(*catalog);
+	// Reusing this Store's own sealed catalog needs neither validation nor a copy.
+	std::shared_ptr<const Catalog> sealed = catalog == catalog_ ? std::move(catalog) : nullptr;
+	if (!sealed)
+	{
+		catalog->validate();
+		sealed = std::make_shared<const Catalog>(*catalog);
+	}
 	config_ = config;
 	catalog_ = std::move(sealed);
 	chunks_.clear();
@@ -607,6 +735,8 @@ void Store::reset(Config config, std::shared_ptr<const Catalog> catalog)
 	light_.clear();
 	lightColumns_.clear();
 	invalidLight_.clear();
+	mLightChanges.clear();
+	mLightChangeBase = 0;
 	++epoch_;
 	revision_ = 0;
 }
@@ -620,6 +750,8 @@ void Store::reconfigure(Config config)
 	light_.clear();
 	lightColumns_.clear();
 	invalidLight_.clear();
+	mLightChanges.clear();
+	mLightChangeBase = revision_;
 	++epoch_;
 }
 std::shared_ptr<const Snapshot> Store::snapshot() const
@@ -725,17 +857,47 @@ bool Store::publish(Grid<std::shared_ptr<const Chunk>> pending)
 	Grid<std::shared_ptr<const Column>> sealedColumns;
 	for (auto &entry : columns)
 		sealedColumns.emplace(entry.first, std::move(entry.second));
+	// Sky exposure is the highest opacity>0 cell of each block column across the
+	// whole XY chunk column. Only a change of that merged threshold can alter
+	// light down an entire column; everything else is a bounded 15-level flood.
+	const unsigned cs2 = unsigned(config_.chunkSize * config_.chunkSize);
+	auto		   mergedTops = [&](const Column *inColumn, std::vector<int> &outTops)
+	{
+		outTops.assign(cs2, std::numeric_limits<int>::min());
+		if (!inColumn)
+			return;
+		for (const auto &entry : *inColumn)
+			for (unsigned c = 0; c < cs2; ++c)
+			{
+				const int top = entry.second->columnTops[c];
+				if (top >= 0)
+					outTops[c] = std::max(outTops[c], entry.first * config_.chunkHeight + top);
+			}
+	};
+	Grid<bool>		 exposureChanged;
+	std::vector<int> topsBefore, topsAfter;
+	for (const auto &entry : sealedColumns)
+	{
+		const auto previous = columns_.find(entry.first);
+		mergedTops(previous == columns_.end() ? nullptr : previous->second.get(), topsBefore);
+		mergedTops(entry.second.get(), topsAfter);
+		exposureChanged.emplace(entry.first, topsBefore != topsAfter);
+	}
 	// Prepare invalidation too, so allocation failure cannot publish half a batch.
 	auto	  invalid = invalidLight_;
 	const int radius = (16 + config_.chunkSize - 1) / config_.chunkSize;
 	const int zRadius = (16 + config_.chunkHeight - 1) / config_.chunkHeight;
+	mLightChanges.reserve(mLightChanges.size() + pending.size());
+	std::vector<LightChange> changes;
+	changes.reserve(pending.size());
 	for (const auto &entry : pending)
 	{
-		const auto *before = find(chunks_, entry.first);
 		const auto *after = entry.second.get();
-		// Only exposure/domain changes can propagate down an entire column.
-		// Ordinary emission/attenuation edits have a bounded 15-level flood.
-		const bool wholeColumn = !before || !after || before->terrainPresent != after->terrainPresent || before->columnTops != after->columnTops;
+		// Removal can lower the exposure threshold and also changes the known
+		// domain, so it stays whole-column. Arrival and edits flood a bounded
+		// halo unless they move the merged exposure threshold.
+		const bool wholeColumn = !after || exposureChanged.at({entry.first.x, entry.first.y, 0});
+		changes.push_back({revision_ + 1, entry.first, wholeColumn});
 		invalid[entry.first] = true;
 		for (int y = -radius; y <= radius; ++y)
 			for (int x = -radius; x <= radius; ++x)
@@ -787,6 +949,17 @@ bool Store::publish(Grid<std::shared_ptr<const Chunk>> pending)
 			chunks_.insert(std::move(node));
 	}
 	invalidLight_.swap(invalid);
+	// Capacity was reserved above; appending cannot fail after publication.
+	mLightChanges.insert(mLightChanges.end(), changes.begin(), changes.end());
+	// Without light commits the log would grow with every edit. Commits whose
+	// snapshot predates the retained log fall back to root comparison.
+	constexpr size_t cMaxLightChanges = size_t(1) << 16;
+	if (mLightChanges.size() > cMaxLightChanges)
+	{
+		const size_t dropped = mLightChanges.size() / 2;
+		mLightChangeBase = std::max(mLightChangeBase, mLightChanges[dropped - 1].mRevision);
+		mLightChanges.erase(mLightChanges.begin(), mLightChanges.begin() + std::ptrdiff_t(dropped));
+	}
 	++revision_;
 	return true;
 }
@@ -799,26 +972,51 @@ CommitResult Store::commit(const LightResult &result)
 		out.stale = true;
 		return out;
 	}
-	Grid<bool> conflicts;
+	Grid<bool> conflicts, conflictCells;
 	const int  radius = (16 + config_.chunkSize - 1) / config_.chunkSize;
+	const int  zRadius = (16 + config_.chunkHeight - 1) / config_.chunkHeight;
 	auto	   changed = [&](Coord coord)
 	{
 		for (int y = -radius; y <= radius; ++y)
 			for (int x = -radius; x <= radius; ++x)
 				conflicts[{coord.x + x, coord.y + y, 0}] = true;
 	};
-	if (result.source->revision != revision_)
+	const uint64_t since = result.source->revision;
+	if (since != revision_)
 	{
-		for (const auto &entry : result.source->chunks)
-			if (find(chunks_, entry.first) != entry.second.get())
-				changed(entry.first);
-		for (const auto &entry : chunks_)
-			if (result.source->chunks.find(entry.first) == result.source->chunks.end())
-				changed(entry.first);
+		if (since >= mLightChangeBase)
+		{
+			// A later change conflicts exactly with the light roots its own
+			// invalidation covers, including targets that had no root yet.
+			for (const auto &change : mLightChanges)
+			{
+				if (change.mRevision <= since)
+					continue;
+				if (change.mWholeColumn)
+				{
+					changed(change.mChunk);
+					continue;
+				}
+				for (int z = -zRadius; z <= zRadius; ++z)
+					for (int y = -radius; y <= radius; ++y)
+						for (int x = -radius; x <= radius; ++x)
+							conflictCells[{change.mChunk.x + x, change.mChunk.y + y, change.mChunk.z + z}] = true;
+			}
+		}
+		else
+		{
+			// The change log no longer covers this snapshot: compare chunk roots.
+			for (const auto &entry : result.source->chunks)
+				if (find(chunks_, entry.first) != entry.second.get())
+					changed(entry.first);
+			for (const auto &entry : chunks_)
+				if (result.source->chunks.find(entry.first) == result.source->chunks.end())
+					changed(entry.first);
+		}
 	}
 	auto conflict = [&](Coord coord)
 	{
-		return conflicts.find({coord.x, coord.y, 0}) != conflicts.end();
+		return conflicts.find({coord.x, coord.y, 0}) != conflicts.end() || conflictCells.find(coord) != conflictCells.end();
 	};
 	Grid<std::shared_ptr<const LightChunk>> pending;
 	Grid<std::set<int>>						columns;
@@ -925,6 +1123,14 @@ CommitResult Store::commit(const LightResult &result)
 		if (!conflict(entry.first) && deferred.find(entry.first) == deferred.end())
 			invalidLight_.erase(entry.first);
 	}
+	// Later commits use newer snapshots; older ones take the conservative path.
+	if (since > mLightChangeBase)
+	{
+		mLightChanges.erase(std::remove_if(mLightChanges.begin(), mLightChanges.end(),
+										   [since](const LightChange &inChange) { return inChange.mRevision <= since; }),
+							mLightChanges.end());
+		mLightChangeBase = since;
+	}
 	return out;
 }
 bool Store::lightReady(Coord coord) const
@@ -983,27 +1189,71 @@ Grid<std::vector<unsigned>> affectedLightSections(const Config &cfg, const Light
 {
 	Grid<std::vector<uint8_t>> owners;
 	const int				   ss = cfg.sectionSize, xy = cfg.chunkSize / ss, height = cfg.chunkHeight / ss;
+	const int				   cs = cfg.chunkSize, ch = cfg.chunkHeight;
 	for (const auto &pointer : changed)
 	{
 		const auto &delta = *pointer;
 		require(delta.changedBits.size() == (cfg.cellCount() + 7) / 8, "invalid light delta");
-		for (unsigned li = 0; li < cfg.cellCount(); ++li)
+		// Every changed cell marks the absolute sections its two-cell sampling
+		// halo overlaps. Mark a dense local window first; hash owners only once
+		// per marked section instead of once per cell and section.
+		const int bx = delta.chunk.x * cs, by = delta.chunk.y * cs, bz = delta.chunk.z * ch;
+		const int sx0 = floorDiv(bx - 2, ss), sy0 = floorDiv(by - 2, ss), sz0 = floorDiv(bz - 2, ss);
+		const int nx = floorDiv(bx + cs + 1, ss) - sx0 + 1, ny = floorDiv(by + cs + 1, ss) - sy0 + 1;
+		const int nz = floorDiv(bz + ch + 1, ss) - sz0 + 1;
+		std::vector<std::pair<int, int>> rangeX(cs), rangeY(cs), rangeZ(ch);
+		for (int i = 0; i < cs; ++i)
 		{
-			if (!(delta.changedBits[li / 8] & (1u << (li % 8))))
-				continue;
-			const auto cell = cfg.cellAt(delta.chunk, li);
-			for (int z = floorDiv(cell.z - 2, ss); z <= floorDiv(cell.z + 2, ss); ++z)
-				for (int y = floorDiv(cell.y - 2, ss); y <= floorDiv(cell.y + 2, ss); ++y)
-					for (int x = floorDiv(cell.x - 2, ss); x <= floorDiv(cell.x + 2, ss); ++x)
-					{
-						const Coord chunk{floorDiv(x, xy), floorDiv(y, xy), floorDiv(z, height)};
-						auto	   &bits = owners[chunk];
-						if (bits.empty())
-							bits.resize(cfg.sectionCount());
-						const unsigned section = unsigned(x - chunk.x * xy) + unsigned(xy * (y - chunk.y * xy + xy * (z - chunk.z * height)));
-						bits[section] = 1;
-					}
+			rangeX[i] = {floorDiv(bx + i - 2, ss) - sx0, floorDiv(bx + i + 2, ss) - sx0};
+			rangeY[i] = {floorDiv(by + i - 2, ss) - sy0, floorDiv(by + i + 2, ss) - sy0};
 		}
+		for (int i = 0; i < ch; ++i)
+			rangeZ[i] = {floorDiv(bz + i - 2, ss) - sz0, floorDiv(bz + i + 2, ss) - sz0};
+		std::vector<uint8_t> marks(size_t(nx) * ny * nz);
+		// A created or removed root changes every cell, whose halos together
+		// cover the whole window.
+		const unsigned cells = cfg.cellCount(), fullBytes = cells / 8;
+		bool		   full = std::all_of(delta.changedBits.begin(), delta.changedBits.begin() + fullBytes,
+										  [](uint8_t inBits) { return inBits == 0xff; });
+		if (full && cells % 8)
+			full = delta.changedBits.back() == uint8_t((1u << (cells % 8)) - 1);
+		if (full)
+			std::fill(marks.begin(), marks.end(), uint8_t(1));
+		for (unsigned word = 0; !full && word < delta.changedBits.size(); ++word)
+		{
+			const unsigned bits = delta.changedBits[word];
+			if (!bits)
+				continue;
+			for (unsigned bit = 0; bit < 8; ++bit)
+			{
+				if (!(bits & (1u << bit)))
+					continue;
+				const unsigned li = word * 8 + bit;
+				if (li >= cfg.cellCount())
+					break;
+				const auto &rx = rangeX[li % unsigned(cs)];
+				const auto &ry = rangeY[li / unsigned(cs) % unsigned(cs)];
+				const auto &rz = rangeZ[li / unsigned(cs * cs)];
+				for (int z = rz.first; z <= rz.second; ++z)
+					for (int y = ry.first; y <= ry.second; ++y)
+						for (int x = rx.first; x <= rx.second; ++x)
+							marks[size_t(x) + size_t(nx) * (size_t(y) + size_t(ny) * size_t(z))] = 1;
+			}
+		}
+		for (int z = 0; z < nz; ++z)
+			for (int y = 0; y < ny; ++y)
+				for (int x = 0; x < nx; ++x)
+				{
+					if (!marks[size_t(x) + size_t(nx) * (size_t(y) + size_t(ny) * size_t(z))])
+						continue;
+					const int	ax = sx0 + x, ay = sy0 + y, az = sz0 + z;
+					const Coord chunk{floorDiv(ax, xy), floorDiv(ay, xy), floorDiv(az, height)};
+					auto	   &bits = owners[chunk];
+					if (bits.empty())
+						bits.resize(cfg.sectionCount());
+					const unsigned section = unsigned(ax - chunk.x * xy) + unsigned(xy * (ay - chunk.y * xy + xy * (az - chunk.z * height)));
+					bits[section] = 1;
+				}
 	}
 	Grid<std::vector<unsigned>> result;
 	for (const auto &entry : owners)
@@ -1201,6 +1451,119 @@ l2::Cell MeshSnapshot::read(Coord cell) const
 	}
 	const auto &p = world->profile(cell);
 	return {p.l2Word | 1048576u | value, p.shade, p.renderClass, p.emission, p.fluidSolid};
+}
+namespace
+{
+/// Visit a box inside the mesh halo chunk by chunk, x fastest. The visitor gets
+/// the box index, whether the chunk is known, the stored light byte exactly as
+/// MeshSnapshot::read derives it, and the profile MeshSnapshot::profile returns.
+template <class Visit>
+void VisitMeshBox(const MeshSnapshot &inSnapshot, const int inOrigin[3], const int inDimensions[3], Visit &&inVisit)
+{
+	require(inSnapshot.world != nullptr, "native mesh snapshot has no world");
+	const int lower[3] = {inSnapshot.origin.x, inSnapshot.origin.y, inSnapshot.origin.z};
+	const int extent[3] = {inSnapshot.dimensions.x, inSnapshot.dimensions.y, inSnapshot.dimensions.z};
+	for (unsigned a = 0; a < 3; ++a)
+		require(inDimensions[a] > 0 && inOrigin[a] >= lower[a] &&
+					int64_t(inOrigin[a]) + inDimensions[a] <= int64_t(lower[a]) + extent[a],
+				"native sample is outside its mesh halo");
+	const auto &world = *inSnapshot.world;
+	const auto &cfg = world.config;
+	const auto &catalog = *world.catalog;
+	const int	cs = cfg.chunkSize, ch = cfg.chunkHeight, ss = cfg.sectionSize, xy = cs / ss;
+	// Chunk-local address tables; chunks are at most 64 cells on each axis.
+	unsigned sectionXY[64], cellXY[64], sectionZ[64], cellZ[64];
+	for (int i = 0; i < cs; ++i)
+	{
+		sectionXY[i] = unsigned(i / ss);
+		cellXY[i] = unsigned(i % ss);
+	}
+	for (int i = 0; i < ch; ++i)
+	{
+		sectionZ[i] = unsigned(i / ss);
+		cellZ[i] = unsigned(i % ss);
+	}
+	const int		 x0 = inOrigin[0], y0 = inOrigin[1], z0 = inOrigin[2];
+	const int		 x1 = x0 + inDimensions[0], y1 = y0 + inDimensions[1], z1 = z0 + inDimensions[2];
+	const Coord		 lo = cfg.chunkAt({x0, y0, z0}), hi = cfg.chunkAt({x1 - 1, y1 - 1, z1 - 1});
+	std::vector<int> tops;
+	for (int cz = lo.z; cz <= hi.z; ++cz)
+		for (int cy = lo.y; cy <= hi.y; ++cy)
+			for (int cx = lo.x; cx <= hi.x; ++cx)
+			{
+				const Coord		  key{cx, cy, cz};
+				const int		  bx = cx * cs, by = cy * cs, bz = cz * ch;
+				const bool		  known = world.known(key);
+				const Chunk		 *chunk = find(world.chunks, key);
+				const LightChunk *light = known ? find(inSnapshot.light, key) : nullptr;
+				// Without a light root, sky exposure is the highest opacity>0 cell of
+				// the whole block column, as read() scans the column's chunk roots.
+				tops.clear();
+				if (known && !light && cfg.skyEnabled)
+				{
+					tops.assign(size_t(cs) * cs, std::numeric_limits<int>::min());
+					const auto column = inSnapshot.columns.find({cx, cy, 0});
+					if (column != inSnapshot.columns.end())
+						for (const auto &entry : *column->second)
+							for (size_t c = 0; c < tops.size(); ++c)
+							{
+								const int top = entry.second->columnTops[c];
+								if (top >= 0)
+									tops[c] = std::max(tops[c], entry.first * ch + top);
+							}
+				}
+				const int ax0 = std::max(x0, bx), ax1 = std::min(x1, bx + cs);
+				const int ay0 = std::max(y0, by), ay1 = std::min(y1, by + cs);
+				const int az0 = std::max(z0, bz), az1 = std::min(z1, bz + ch);
+				for (int z = az0; z < az1; ++z)
+					for (int y = ay0; y < ay1; ++y)
+					{
+						const unsigned lz = unsigned(z - bz), ly = unsigned(y - by);
+						size_t		   index = size_t(ax0 - x0) + size_t(inDimensions[0]) * (size_t(y - y0) + size_t(inDimensions[1]) * size_t(z - z0));
+						for (int x = ax0; x < ax1; ++x, ++index)
+						{
+							const unsigned lx = unsigned(x - bx);
+							const unsigned li = lx + unsigned(cs) * (ly + unsigned(cs) * lz);
+							unsigned	   value = 0xf0;
+							if (light)
+								value = light->values[li];
+							else if (!tops.empty() && z <= tops[lx + unsigned(cs) * ly])
+								value = 0;
+							const Profile *profile = &catalog.states[0];
+							if (chunk)
+							{
+								const auto &section = chunk->sections[sectionXY[lx] + unsigned(xy) * (sectionXY[ly] + unsigned(xy) * sectionZ[lz])];
+								if (section)
+								{
+									const unsigned cell = cellXY[lx] + unsigned(ss) * (cellXY[ly] + unsigned(ss) * cellZ[lz]);
+									profile = &catalog.states[section->states[cell]];
+									if (!section->contexts.empty())
+									{
+										const auto context = section->contexts.find(cell);
+										if (context != section->contexts.end())
+											profile = &context->second;
+									}
+								}
+							}
+							inVisit(index, known, value, *profile);
+						}
+					}
+			}
+}
+} // namespace
+bool MeshSnapshot::fill(const int inOrigin[3], const int inDimensions[3], l2::Cell *outCells) const
+{
+	VisitMeshBox(*this, inOrigin, inDimensions, [&](size_t inIndex, bool inKnown, unsigned inValue, const Profile &inProfile)
+	{
+		outCells[inIndex] = inKnown ? l2::Cell{inProfile.l2Word | 1048576u | inValue, inProfile.shade, inProfile.renderClass, inProfile.emission, inProfile.fluidSolid}
+									: l2::Cell{0xef000, 0.2f, 1};
+	});
+	return true;
+}
+void MeshSnapshot::FillProfiles(const int inOrigin[3], const int inDimensions[3], const Profile **outProfiles) const
+{
+	VisitMeshBox(*this, inOrigin, inDimensions, [&](size_t inIndex, bool, unsigned, const Profile &inProfile)
+	{ outProfiles[inIndex] = &inProfile; });
 }
 size_t MeshSnapshot::bytes() const
 {

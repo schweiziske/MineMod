@@ -68,7 +68,9 @@ function MC.API.Tools.UseHeld(ply, action, context)
     if string.sub(stack.item, -#action - 1) ~= "_" .. action then return false, "invalid_tool_item" end
     local plan = blocks.ResolveAimedToolUse(ply, action)
     if not plan then return false, "unsupported_tool_target" end
-    if not sv.Validate(ply, plan.bx, plan.by, plan.bz, false) then return false, "edit_denied" end
+    if not sv.Validate(ply, plan.bx, plan.by, plan.bz, false, { action = "modify", reason = "tool_" .. action }) then
+        return false, "edit_denied"
+    end
     if MC.GetBlockState(plan.bx, plan.by, plan.bz) ~= plan.expectedState then return false, "state_changed" end
     local state, stateError = MC.API.ResolveStateInput(plan.target)
     if not state then return false, stateError end
@@ -709,10 +711,82 @@ function Inventory.SpawnDropStack( position, input, actor, options )
 end
 
 
+-- Equip (or with stack = nil, unequip) one EntityEquipment slot. The stack is
+-- copied; armor/offhand slot rules and the MC.CanTakeEquipmentStack veto apply.
+-- Returns true, equippedCopy | false, err.
+function Inventory.SetEquipmentSlot( ply, slot, stack, context )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return false, "invalid_player" end
+	if not sv or not sv.SetPlayerEquipmentStack then return false, "inventory_api_unavailable" end
+	local result, err = sv.SetPlayerEquipmentStack( ply, slot, deepCopy( stack ),
+		{ reason = istable( context ) and tostring( context.reason or "api_equip" ) or "api_equip" } )
+	if not result then return false, err end
+	return true, deepCopy( sv.GetPlayerEquipmentStack( ply, MC.NormalizeEquipmentSlot( slot ) ) )
+end
+
+-- Empty the 36 player slots, the carried cursor and (opts.equipment) every
+-- equipment slot in one revision. An open menu is closed first so crafting
+-- inputs and the cursor fall back into the storage being cleared. Nothing is
+-- dropped. Returns the number of stacks removed | 0, err.
+function Inventory.Clear( ply, opts )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return 0, "invalid_player" end
+	if not sv or not sv.GetPlayerInventoryRecord or not sv.CommitPlayerInventoryMutation then
+		return 0, "inventory_api_unavailable"
+	end
+	local record = sv.GetPlayerInventoryRecord( ply, false )
+	if not record then return 0, "inventory_not_loaded" end
+	opts = istable( opts ) and opts or {}
+	if record.session and sv.ClosePlayerInventory then sv.ClosePlayerInventory( ply, "inventory_cleared" ) end
+	if sv.CancelMining then sv.CancelMining( ply, "inventory_cleared" ) end
+	if sv.CancelSelectedItemUse then sv.CancelSelectedItemUse( ply, "inventory_cleared" ) end
+
+	local removed = 0
+	local container = record.container
+	local snapshot = MC.ContainerSnapshot( container )
+	for slot = 0, 35 do
+		if MC.ContainerGetStack( container, slot ) then
+			removed = removed + 1
+			MC.ContainerSetStack( container, slot, nil )
+		end
+	end
+	if container.cursor then removed = removed + 1 container.cursor = nil end
+	if record.carried then removed = removed + 1 record.carried = nil end
+	removed = removed + #( record.recoveryStacks or {} )
+	record.recoveryStacks = {}
+	local result, err = sv.CommitPlayerInventoryMutation( record, snapshot, { reason = "api_clear" } )
+	if not result then return 0, err end
+
+	if opts.equipment == true then
+		local equipmentSnapshot = sv.EquipmentSnapshot( record )
+		for _, slot in ipairs( MC.EquipmentSlotOrder or {} ) do
+			if record.equipment[slot] then removed = removed + 1 record.equipment[slot] = nil end
+		end
+		local equipmentResult, equipmentError = sv.CommitEquipmentMutation( record, equipmentSnapshot, { reason = "api_clear" } )
+		if not equipmentResult then return 0, equipmentError end
+	end
+	record.dirty = true
+	if sv.UpdatePlayerHeldNetwork then sv.UpdatePlayerHeldNetwork( record, { reason = "api_clear" } ) end
+	return removed
+end
+
+-- Chest-shaped virtual menu whose upper rows are server-owned buttons. See
+-- inventory/sv_virtual_menu.lua for the click context. Returns a menu handle
+-- { IsOpen, SetSlot, SetSlots, Close } | nil, err. Display stacks are copied.
+function Inventory.OpenMenu( ply, definition )
+	local sv = SV()
+	if not validInventoryPlayer( ply ) then return nil, "invalid_player" end
+	if not sv or not sv.OpenVirtualMenu then return nil, "inventory_api_unavailable" end
+	if type( definition ) ~= "table" then return nil, "invalid_menu" end
+	local copy = {}
+	for key, value in pairs( definition ) do copy[key] = key == "slots" and deepCopy( value ) or value end
+	return sv.OpenVirtualMenu( ply, copy )
+end
+
 API.RegisterCapability( "mc.game.fire", 1, Fire, "mc.game" )
 API.RegisterCapability( "mc.game.shears", 1, Shears, "mc.game" )
 API.RegisterCapability( "mc.game.mining", 1, Mining, "mc.game" )
-API.RegisterCapability( "mc.game.inventory", 1, Inventory, "mc.game" )
+API.RegisterCapability( "mc.game.inventory", 2, Inventory, "mc.game" )
 
 if API.HandWeapon then
 	API.HandWeapon.RegisterSelectionProvider( "mc.game.server_inventory", {

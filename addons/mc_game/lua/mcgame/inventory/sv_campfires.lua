@@ -143,7 +143,8 @@ function SV.DowseCampfireWithSelectedShovel( ply, bx, by, bz, context )
 	if not aim or aim.bx ~= bx or aim.by ~= by or aim.bz ~= bz then return false, "campfire_target_changed" end
 	local normal = aim.HitNormal or aim.Normal
 	if normal and ( normal.z or 0 ) < -0.5 then return false, "campfire_bottom_face" end
-	if not context.alreadyValidated and ( not SV.Validate or not SV.Validate( ply, bx, by, bz, false ) ) then
+	if not context.alreadyValidated
+	and ( not SV.Validate or not SV.Validate( ply, bx, by, bz, false, { action = "modify", reason = "campfire_dowse" } ) ) then
 		return false, "campfire_dowse_rejected"
 	end
 	local selected = SV.GetPlayerHandStack( ply, context.hand )

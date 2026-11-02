@@ -45,16 +45,24 @@ struct PortalComponent
 	std::array<uint64_t, 6> mTargets{};
 };
 
+using PortalFaces = std::array<std::vector<uint8_t>, 6>;
+
 struct PortalNode
 {
 	Cell					mPosition{};
 	std::array<unsigned, 6> mNeighbors{};
 	std::array<uint8_t, 6>	mExits{};
 	// Build-boundary inputs; the bridge releases these after linking components.
-	std::array<std::vector<uint8_t>, 6> mBoundary;
-	std::array<uint64_t, 6>				mEntries{};
-	std::vector<PortalComponent>		mComponents;
-	bool								mLive = false;
+	PortalFaces mBoundary;
+	/// Shared immutable boundary faces, read instead of mBoundary when set.
+	std::shared_ptr<const PortalFaces> mFaces;
+	/// Equality-only identity of the node's topology content; never dereferenced.
+	/// Null disables reuse. Equal non-null identities have identical boundaries.
+	const void					*mIdentity = nullptr;
+	std::array<uint64_t, 6>		 mEntries{};
+	std::vector<PortalComponent> mComponents;
+	bool						 mLive = false;
+	const std::vector<uint8_t>	&GetBoundary(unsigned inFace) const { return mFaces ? (*mFaces)[inFace] : mBoundary[inFace]; }
 };
 
 /// Build on the caller thread, then publish as const. Node zero is the exterior.

@@ -47,7 +47,9 @@ function SV.ResolvePlayerShearsPlantAim( ply, context )
 	local age = MC.GetStateProperty and tonumber( MC.GetStateProperty( oldStateId, "age" ) ) or nil
 	if age == nil then return false, "growing_plant_age_unavailable" end
 	if age >= MAX_AGE then return false, "growing_plant_max_age" end
-	if not SV.Validate or not SV.Validate( ply, bx, by, bz, false ) then return false, "shears_rejected" end
+	if not SV.Validate or not SV.Validate( ply, bx, by, bz, false, { action = "modify", reason = "shears" } ) then
+		return false, "shears_rejected"
+	end
 	local stateId = MC.StateWith and MC.StateWith( oldStateId, "age", MAX_AGE ) or nil
 	if not stateId or stateId == oldStateId then return false, "max_age_state_unavailable" end
 	return true, {

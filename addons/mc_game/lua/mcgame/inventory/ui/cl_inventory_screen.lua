@@ -628,7 +628,8 @@ function PANEL:Configure( session, state )
 	self.Session = session
 	self.State = state or MC.ClientInventory
 	self.MenuKind = session and session.kind or "player"
-	self.Chest = self.MenuKind == "chest"
+	-- Virtual menus reuse the chest layout; only the server knows their slots.
+	self.Chest = self.MenuKind == "chest" or self.MenuKind == "menu"
 	self.Hopper = self.MenuKind == "hopper"
 	self.Dispenser = self.MenuKind == "dispenser" or self.MenuKind == "dropper"
 	self.CraftingTable = self.MenuKind == "crafting_table"
@@ -1411,7 +1412,7 @@ function PANEL:PaintContent()
 		end
 	end
 	if self.Chest then
-		local title = self.ChestRows > 3 and "Large Chest" or "Chest"
+		local title = self.Session and self.Session.title or ( self.ChestRows > 3 and "Large Chest" or "Chest" )
 		UI.DrawText( title, self.Left + 8 * self.Scale, self.Top + 6 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
 		UI.DrawText( "Inventory", self.Left + 8 * self.Scale,
 			self.Top + ( self.ChestRows * 18 + 20 ) * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )

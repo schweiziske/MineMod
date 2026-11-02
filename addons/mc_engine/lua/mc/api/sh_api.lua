@@ -2006,7 +2006,7 @@ API.RegisterEvents( "mc.engine", {
 	["MC.ClientWorldProjectionChanged"] = { realm = "client", args = "reason, context", desc = "a bulk snapshot/hydration/unload/reset changed client world projections" },
 	["MC.BlocksChanged"] = { realm = "server", args = "changes{bx,by,bz,stateId,oldStateId,kind}[], revision, actor", desc = "one committed world transaction; kind: placed|removed|replaced|state_changed|block_entity_changed (not fired by /fill volume fills or mc_import raw imports)" },
 	["MC.CanPlayerEdit"] = { realm = "server", args = "ply", desc = "veto: return false to deny all world editing for this player action" },
-	["MC.CanPlayerEditCell"] = { realm = "server", args = "ply, bx, by, bz, placing", desc = "veto: return false to deny a player place/break/use at a cell" },
+	["MC.CanPlayerEditCell"] = { realm = "server", args = "ply, bx, by, bz, placing, context{action,reason,stateId,newStateId}", desc = "veto: return false to deny a player place/break/use/modify at a cell; context.action is place|break|use|modify" },
 	["MC.PlayerPlacedBlock"] = { realm = "server", args = "ply, bx, by, bz, stateId", desc = "player placement committed" },
 	["MC.PlayerBrokeBlock"] = { realm = "server", args = "ply, bx, by, bz, oldStateId, context", desc = "player break committed; context.damageTool requests game-layer durability" },
 	["MC.PlayerUsedBlock"] = { realm = "server", args = "ply, bx, by, bz, stateId", desc = "player right-click used a block (OnUse returned true)" },

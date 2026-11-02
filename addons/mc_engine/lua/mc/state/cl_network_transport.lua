@@ -27,6 +27,9 @@ local STREAM_PATCH_MAX_CHUNKS = 64
 local STREAM_PATCH_MAX_CELLS = 131072
 local BLOCK_ENTITY_PAYLOAD_MAX = Net.BLOCK_ENTITY_PAYLOAD_MAX or 32768
 local GAP_GRACE_SECONDS = 0.35
+-- Native snapshot decodes queued ahead of the in-order commit (decoder cap: 32 jobs).
+local SNAPSHOT_DECODE_JOBS = 16
+local SNAPSHOT_DECODE_CHUNKS = 256
 
 T.generation = T.generation
 T.appliedRevision = T.appliedRevision or 0
@@ -189,9 +192,12 @@ local function finalizeBulkGroup( groupId )
 	if group.lightingStarted and MC.EndLightingBulkLoad then MC.EndLightingBulkLoad() end
 	if MC.ClearAllBlockConnectionMaskCaches then MC.ClearAllBlockConnectionMaskCaches() end
 	for key in pairs( group.renderKeys ) do
-		if MC.MarkChunkDirty then MC.MarkChunkDirty( key ) end
-		if MC.MeshDirtyRateLimited then
-			MC.MeshDirtyRateLimited[key] = group.rateLimited and true or nil
+		-- A neighbour key outside the loaded world has nothing to build or retire.
+		if MC.MarkChunkDirty and ( MC.World[key] or MC.MeshSections and MC.MeshSections[key] ) then
+			MC.MarkChunkDirty( key )
+			if MC.MeshDirtyRateLimited then
+				MC.MeshDirtyRateLimited[key] = group.rateLimited and true or nil
+			end
 		end
 	end
 	for key in pairs( group.physKeys ) do
@@ -252,12 +258,14 @@ end
 local function cancelActiveBinarySnapshot()
 	cancelNativeTransport( T.snapshot )
 	local binary = T.snapshot and T.snapshot.binary
-	if not binary or not binary.activeJobId then return end
+	if not binary or not next( binary.decodes ) then return end
 	local backend = activeNativeBinarySectionPatchBackend() or MC.NativeChunkBackend
-	if backend and backend.CancelCompressedPatchDecode then
-		backend.CancelCompressedPatchDecode( binary.activeJobId )
+	for index, job in pairs( binary.decodes ) do
+		if backend and backend.CancelCompressedPatchDecode then
+			backend.CancelCompressedPatchDecode( job.id )
+		end
+		binary.decodes[index] = nil
 	end
-	binary.activeJobId = nil
 end
 
 local function cancelNativePatch( patch, backend )
@@ -348,7 +356,7 @@ function T.NativeOwnershipChanged()
 	local binary = T.snapshot and T.snapshot.binary
 	local pending = T.snapshot and T.snapshot.nativeTransportId ~= nil
 		or T.chunkPatch and T.chunkPatch.nativeTransportId ~= nil
-		or binary and binary.activeJobId ~= nil
+		or binary and next( binary.decodes ) ~= nil
 	for _, patch in pairs( T.pendingChunkPatches ) do
 		if patch.nativeJobId or patch.nativeTransportId then pending = true break end
 	end
@@ -1075,6 +1083,7 @@ local function initializeBinarySnapshot( snapshot, decoded )
 	snapshot.binary = {
 		batches = decoded.batches, chunkCount = decoded.chunkCount, cellCount = decoded.cellCount,
 		nextBatch = 1, committedChunks = 0, committedCells = 0, seenChunks = {}, bulkGroup = bulkGroup,
+		decodes = {},
 	}
 	MC.SyncProgress = {
 		expected = decoded.cellCount, received = 0, chunks = decoded.chunkCount, doneChunks = 0,
@@ -1119,6 +1128,34 @@ local function finishBinarySnapshot( snapshot )
 	return finishSnapshotApplication( snapshot )
 end
 
+-- Keeps the next batches decoding while earlier ones wait for their in-order
+-- commit, so the decode worker never idles for a frame between batches. The
+-- chunk bound keeps decoded, uncommitted sections far inside the decoder's
+-- admission budget; one batch is always admitted.
+local function startSnapshotDecodes( snapshot, binary, nativeBackend )
+	local jobs, chunks, started = 0, 0, 0
+	for _, job in pairs( binary.decodes ) do jobs, chunks = jobs + 1, chunks + job.chunks end
+	for index = binary.nextBatch, #binary.batches do
+		if not binary.decodes[index] then
+			local batch = binary.batches[index]
+			if jobs > 0 and ( jobs >= SNAPSHOT_DECODE_JOBS or chunks + batch.chunkCount > SNAPSHOT_DECODE_CHUNKS ) then break end
+			local jobId, epoch
+			if snapshot.nativeTransportId then
+				jobId, epoch = nativeBackend.StartNativeTransportDecode( snapshot.nativeTransportId, index )
+			else
+				jobId, epoch = nativeBackend.StartBinarySectionPatchDecode(
+					batch.payload, batch.compression, batch.rawBytes,
+					snapshot.generation, snapshot.baseRevision, batch.chunkCount, batch.cellCount )
+			end
+			if not jobId then return nil, "native_binary_snapshot_submit_failed:" .. tostring( epoch ) end
+			batch.payload = nil
+			binary.decodes[index] = { id = jobId, epoch = epoch, chunks = batch.chunkCount }
+			jobs, chunks, started = jobs + 1, chunks + batch.chunkCount, started + 1
+		end
+	end
+	return started
+end
+
 function T.PollBinarySnapshot()
 	local snapshot = T.snapshot
 	if snapshot and snapshot.nativeTransportId and snapshot.ended and not snapshot.binary then
@@ -1145,47 +1182,44 @@ function T.PollBinarySnapshot()
 
 	local batch = binary.batches[binary.nextBatch]
 	local nativeBackend = activeNativeBinarySectionPatchBackend()
-	if ( binary.activeJobId or snapshot.nativeTransportId ) and not nativeBackend then
+	if ( next( binary.decodes ) or snapshot.nativeTransportId ) and not nativeBackend then
 		return rejectBinarySnapshot( snapshot, "native_binary_snapshot_backend_unavailable" )
 	end
 	if nativeBackend then
-		if not binary.activeJobId then
-			local jobId, epoch
-			if snapshot.nativeTransportId then
-				jobId, epoch = nativeBackend.StartNativeTransportDecode( snapshot.nativeTransportId, binary.nextBatch )
-			else
-				jobId, epoch = nativeBackend.StartBinarySectionPatchDecode(
-					batch.payload, batch.compression, batch.rawBytes,
-					snapshot.generation, snapshot.baseRevision, batch.chunkCount, batch.cellCount )
+		local progressed = false
+		-- Commit every batch that is ready now, strictly in order.
+		while binary.nextBatch <= #binary.batches do
+			local started, startError = startSnapshotDecodes( snapshot, binary, nativeBackend )
+			if not started then return rejectBinarySnapshot( snapshot, startError ) end
+			progressed = progressed or started > 0
+			local index = binary.nextBatch
+			local job = binary.decodes[index]
+			batch = binary.batches[index]
+			local status = nativeBackend.PollBinarySectionPatchDecode( job.id )
+			if not status then return rejectBinarySnapshot( snapshot, "native_binary_snapshot_poll_failed" ) end
+			if status.status == "failed" or status.status == "cancelled" then
+				return rejectBinarySnapshot( snapshot, status.error or "native_binary_snapshot_decode_failed" )
 			end
-			if not jobId then return rejectBinarySnapshot( snapshot, "native_binary_snapshot_submit_failed:" .. tostring( epoch ) ) end
-			batch.payload = nil
-			binary.activeJobId, binary.activeEpoch = jobId, epoch
-			return true
+			if status.status ~= "ready" then return progressed end
+			if status.generation ~= snapshot.generation or status.revision ~= snapshot.baseRevision
+			or status.backendEpoch ~= job.epoch then
+				return rejectBinarySnapshot( snapshot, "native_binary_snapshot_stale" )
+			end
+			local keys, keyError = validateBinarySnapshotBatchChunks( binary, status.chunks, batch.chunkCount )
+			if not keys then return rejectBinarySnapshot( snapshot, keyError ) end
+			local include = {}
+			for chunk = 1, batch.chunkCount do include[chunk] = chunk end
+			local committed = nativeBackend.CommitBinarySectionPatch( job.id, include )
+			if not committed then return rejectBinarySnapshot( snapshot, "native_binary_snapshot_commit_failed" ) end
+			binary.decodes[index] = nil
+			local ok, result = MC.FinalizeNativeStateChunkPatch( committed, job.epoch, { fullSnapshot = true } )
+			if ok ~= true or not istable( result ) then
+				return rejectBinarySnapshot( snapshot, result or "native_binary_snapshot_finalize_failed" )
+			end
+			noteBinarySnapshotBatch( snapshot, result, keys )
+			progressed = true
 		end
-		local status = nativeBackend.PollBinarySectionPatchDecode( binary.activeJobId )
-		if not status then return rejectBinarySnapshot( snapshot, "native_binary_snapshot_poll_failed" ) end
-		if status.status == "failed" or status.status == "cancelled" then
-			return rejectBinarySnapshot( snapshot, status.error or "native_binary_snapshot_decode_failed" )
-		end
-		if status.status ~= "ready" then return false end
-		if status.generation ~= snapshot.generation or status.revision ~= snapshot.baseRevision
-		or status.backendEpoch ~= binary.activeEpoch then
-			return rejectBinarySnapshot( snapshot, "native_binary_snapshot_stale" )
-		end
-		local keys, keyError = validateBinarySnapshotBatchChunks( binary, status.chunks, batch.chunkCount )
-		if not keys then return rejectBinarySnapshot( snapshot, keyError ) end
-		local include = {}
-		for index = 1, batch.chunkCount do include[index] = index end
-		local committed = nativeBackend.CommitBinarySectionPatch( binary.activeJobId, include )
-		if not committed then return rejectBinarySnapshot( snapshot, "native_binary_snapshot_commit_failed" ) end
-		binary.activeJobId = nil
-		local ok, result = MC.FinalizeNativeStateChunkPatch( committed, binary.activeEpoch, { fullSnapshot = true } )
-		if ok ~= true or not istable( result ) then
-			return rejectBinarySnapshot( snapshot, result or "native_binary_snapshot_finalize_failed" )
-		end
-		noteBinarySnapshotBatch( snapshot, result, keys )
-		return true
+		return finishBinarySnapshot( snapshot )
 	end
 
 	local decoded, decodeError = MC.BinarySectionPatch.DecodeTransportPayload(

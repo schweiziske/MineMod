@@ -393,6 +393,23 @@ function World.GetRevision()
 	return sv and sv.BlockRevision or 0
 end
 
+-- Per-cell veto for destruction without an editing player (explosions and
+-- GMod damage). callback( bx, by, bz, stateId, cause, context ) returns false
+-- to protect the cell; cause is "explosion" | "damage" and context holds the
+-- attributed actor/source entities. Guards run inside explosion ray marching,
+-- so they must be cheap lookups. Same id replaces.
+function World.RegisterBlockGuard( id, callback )
+	local sv = SV()
+	if not sv or not sv.RegisterBlockGuard then return false, "block_guard_unavailable" end
+	return sv.RegisterBlockGuard( id, callback )
+end
+
+function World.UnregisterBlockGuard( id )
+	local sv = SV()
+	if not sv or not sv.UnregisterBlockGuard then return false, "block_guard_unavailable" end
+	return sv.UnregisterBlockGuard( id )
+end
+
 -------------------------------------------------------------------- API.Player
 -- Player-authoritative operations: full validation (admin, reach, cooldown,
 -- bounds, block limit, overlap) plus the MC.CanPlayerEdit* veto hooks.
@@ -452,7 +469,9 @@ function Player.TransformBlock( ply, bx, by, bz, block, expectedState )
 	if not x then return false, "invalid_cell" end
 	local state, err = resolveStateInput( block )
 	if not state or state == 0 then return false, err or "invalid_state" end
-	if not sv.Validate( ply, x, y, z, false ) then return false, "edit_denied" end
+	if not sv.Validate( ply, x, y, z, false, { action = "modify", newStateId = state } ) then
+		return false, "edit_denied"
+	end
 	if expectedState ~= nil and MC.GetBlockState( x, y, z ) ~= expectedState then
 		return false, "state_changed"
 	end
@@ -650,7 +669,9 @@ end
 
 local function validatePlayerFluidPlacement( ply, bx, by, bz, addsBlock )
 	local sv = SV()
-	if not sv or not sv.CanEdit or not sv.WorldBoundsOK then return false, "world_api_unavailable" end
+	if not sv or not sv.CanEdit or not sv.WorldBoundsOK or not sv.CellEditAllowed then
+		return false, "world_api_unavailable"
+	end
 
 	-- Mirrors SV.Validate while keeping two distinct placement facts:
 	-- protection hooks see a placement for every bucket empty, but the global
@@ -659,7 +680,7 @@ local function validatePlayerFluidPlacement( ply, bx, by, bz, addsBlock )
 	if ( ply.mcNextOp or 0 ) > now then return false, "cooldown" end
 	ply.mcNextOp = now + 0.03
 	if not sv.CanEdit( ply ) then return false, "edit_rejected" end
-	if MC.RunEvent and MC.RunEvent( "MC.CanPlayerEditCell", ply, bx, by, bz, true ) == false then
+	if not sv.CellEditAllowed( ply, bx, by, bz, true, { action = "place", reason = "fluid" } ) then
 		return false, "cell_rejected"
 	end
 
@@ -684,7 +705,7 @@ local function playerFluidWrite( ply, bx, by, bz, stateId, placing, addsBlock, s
 		if placing == true then
 			valid, validationError = validatePlayerFluidPlacement( ply, bx, by, bz, addsBlock == true )
 		else
-			valid = sv.Validate( ply, bx, by, bz, false ) == true
+			valid = sv.Validate( ply, bx, by, bz, false, { action = "break", reason = "fluid" } ) == true
 			validationError = valid and nil or "edit_rejected"
 		end
 		if not valid then return false, validationError end

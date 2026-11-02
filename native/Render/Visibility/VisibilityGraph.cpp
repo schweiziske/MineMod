@@ -60,7 +60,7 @@ std::vector<uint8_t> FindReachable(const VisibilityGraph &inGraph, unsigned inRo
 	}
 	return seen;
 }
-void BuildSpatialGraph(VisibilityGraph &ioGraph)
+void BuildSpatialGraph(VisibilityGraph &ioGraph, const VisibilityGraph *inPrevious)
 {
 	ioGraph.mSpatial = true;
 	ioGraph.mGrid.clear();
@@ -105,25 +105,103 @@ void BuildSpatialGraph(VisibilityGraph &ioGraph)
 																		   (unsigned(p[1] - ioGraph.mLower[1]) + unsigned(size[1]) * unsigned(p[2] - ioGraph.mLower[2]));
 			ioGraph.mGrid[slot] = id;
 		}
-	const unsigned axes[6] = {2, 2, 0, 0, 1, 1};
-	const unsigned stride[3] = {1, unsigned(size[0]), unsigned(size[0] * size[1])};
+	static constexpr unsigned axes[6] = {2, 2, 0, 0, 1, 1};
+	const unsigned			  stride[3] = {1, unsigned(size[0]), unsigned(size[0] * size[1])};
+	// Grid neighbour across a face, or zero at the grid edge / open space.
+	auto neighbourAt = [](const VisibilityGraph &inGraph, const Cell &inPosition, unsigned inFace) -> unsigned
+	{
+		Cell p = inPosition;
+		p[axes[inFace]] += inFace & 1 ? -1 : 1;
+		for (unsigned a = 0; a < 3; ++a)
+			if (p[a] < inGraph.mLower[a] || int64_t(p[a]) - inGraph.mLower[a] >= inGraph.mSize[a])
+				return 0;
+		const auto &size = inGraph.mSize;
+		return inGraph.mGrid[unsigned(p[0] - inGraph.mLower[0]) + unsigned(size[0]) *
+								 (unsigned(p[1] - inGraph.mLower[1]) + unsigned(size[1]) * unsigned(p[2] - inGraph.mLower[2]))];
+	};
+	const bool reusable = inPrevious && inPrevious->mSpatial && !inPrevious->mGrid.empty();
 	for (unsigned slot = 0; slot < ioGraph.mGrid.size(); ++slot)
 	{
 		const auto id = ioGraph.mGrid[slot];
 		if (!id)
 			continue;
 		auto &node = ioGraph.mNodes[id];
+		// Unchanged topology with unchanged neighbours links identically.
+		if (reusable && node.mIdentity)
+		{
+			Cell	 local = node.mPosition;
+			unsigned previous = 0;
+			bool	 inside = true;
+			for (unsigned a = 0; a < 3; ++a)
+			{
+				local[a] -= inPrevious->mLower[a];
+				inside = inside && local[a] >= 0 && local[a] < inPrevious->mSize[a];
+			}
+			if (inside)
+				previous = inPrevious->mGrid[unsigned(local[0]) + unsigned(inPrevious->mSize[0]) *
+														   (unsigned(local[1]) + unsigned(inPrevious->mSize[1]) * unsigned(local[2]))];
+			bool same = previous && inPrevious->mNodes[previous].mIdentity == node.mIdentity;
+			for (unsigned face = 0; face < 6 && same; ++face)
+			{
+				const unsigned now = neighbourAt(ioGraph, node.mPosition, face);
+				const unsigned before = neighbourAt(*inPrevious, node.mPosition, face);
+				same = now ? before && ioGraph.mNodes[now].mIdentity &&
+								 ioGraph.mNodes[now].mIdentity == inPrevious->mNodes[before].mIdentity
+						   : !before;
+			}
+			if (same)
+			{
+				node.mEntries = inPrevious->mNodes[previous].mEntries;
+				node.mComponents = inPrevious->mNodes[previous].mComponents;
+				continue;
+			}
+		}
 		node.mEntries = {};
 		node.mComponents.clear();
 		uint64_t masks = 0;
 		for (unsigned face = 0; face < 6; ++face)
 		{
-			if (node.mBoundary[face].empty())
+			const auto &boundary = node.GetBoundary(face);
+			if (boundary.empty())
 				node.mEntries[face] = uint64_t(1) << node.mExits[face];
 			else
-				for (const auto cell : node.mBoundary[face])
+				for (const auto cell : boundary)
 					node.mEntries[face] |= uint64_t(1) << (cell == 64 ? 0 : cell);
 			masks |= node.mEntries[face];
+		}
+		// Per face, collect the neighbour components each own component reaches
+		// in one pass over the shared boundary, instead of one pass per mask.
+		std::array<std::array<uint64_t, 64>, 6> reached{};
+		std::array<uint64_t, 6>					 faceTargets{};
+		std::array<bool, 6>						 perCell{};
+		for (unsigned face = 0; face < 6; ++face)
+		{
+			const unsigned a = axes[face];
+			const int	   p = node.mPosition[a] - ioGraph.mLower[a];
+			const bool	   edge = face & 1 ? p == 0 : p == size[a] - 1;
+			const unsigned neighbor = edge ? 0 : ioGraph.mGrid[face & 1 ? slot - stride[a] : slot + stride[a]];
+			if (!neighbor)
+			{
+				faceTargets[face] = uint64_t(1) << 63;
+				continue;
+			}
+			const auto &from = node.GetBoundary(face);
+			const auto &other = ioGraph.mNodes[neighbor];
+			const auto &to = other.GetBoundary(face ^ 1);
+			if (from.empty() || to.empty())
+			{
+				faceTargets[face] = uint64_t(1) << other.mExits[face ^ 1];
+				continue;
+			}
+			if (from.size() != to.size())
+				throw std::runtime_error("Native portal boundary sizes disagree");
+			// Keep disconnected air regions separate across a shared face.
+			// Equal six-bit component masks may merge, which only adds visibility.
+			perCell[face] = true;
+			auto &targets = reached[face];
+			for (size_t cell = 0; cell < from.size(); ++cell)
+				if (from[cell] < 64)
+					targets[from[cell]] |= uint64_t(1) << (to[cell] == 64 ? 0 : to[cell]);
 		}
 		for (unsigned mask = 1; mask < 64; ++mask)
 			if (masks & (uint64_t(1) << mask))
@@ -132,32 +210,7 @@ void BuildSpatialGraph(VisibilityGraph &ioGraph)
 				component.mMask = uint8_t(mask);
 				for (unsigned face = 0; face < 6; ++face)
 					if (mask & (1u << face))
-					{
-						const unsigned a = axes[face];
-						const int	   p = node.mPosition[a] - ioGraph.mLower[a];
-						const bool	   edge = face & 1 ? p == 0 : p == size[a] - 1;
-						const unsigned neighbor = edge ? 0 : ioGraph.mGrid[face & 1 ? slot - stride[a] : slot + stride[a]];
-						if (!neighbor)
-						{
-							component.mTargets[face] = uint64_t(1) << 63;
-							continue;
-						}
-						const auto &from = node.mBoundary[face];
-						const auto &other = ioGraph.mNodes[neighbor];
-						const auto &to = other.mBoundary[face ^ 1];
-						if (from.empty() || to.empty())
-						{
-							component.mTargets[face] = uint64_t(1) << other.mExits[face ^ 1];
-							continue;
-						}
-						if (from.size() != to.size())
-							throw std::runtime_error("Native portal boundary sizes disagree");
-						// Keep disconnected air regions separate across a shared face.
-						// Equal six-bit component masks may merge, which only adds visibility.
-						for (size_t cell = 0; cell < from.size(); ++cell)
-							if (from[cell] == mask)
-								component.mTargets[face] |= uint64_t(1) << (to[cell] == 64 ? 0 : to[cell]);
-					}
+						component.mTargets[face] = perCell[face] ? reached[face][mask] : faceTargets[face];
 				node.mComponents.push_back(component);
 			}
 	}

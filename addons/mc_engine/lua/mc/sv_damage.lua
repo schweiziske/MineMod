@@ -137,6 +137,11 @@ function SV.ApplyBlockDamage( bx, by, bz, amount, options )
 	local id = MC.GetBlock( bx, by, bz )
 	if id == 0 then return false, "air" end
 	if not actorCanDamage( damageActor( options ), options ) then return false, "forbidden" end
+	if SV.HasBlockGuards() and SV.IsBlockGuarded( bx, by, bz, MC.GetBlockState( bx, by, bz ), "damage", {
+		actor = damageActor( options ), source = options.inflictor,
+	} ) then
+		return false, "guarded"
+	end
 
 	local hardness = MC.BlockHardness and MC.BlockHardness( id ) or 1
 	if hardness < 0 then return false, "unbreakable" end
@@ -215,6 +220,9 @@ function SV.ApplyBlockExplosion( center, damage, options )
 	local keyX0 = floor( cx ) - keyRadius
 	local keyY0 = floor( cy ) - keyRadius
 	local keyZ0 = floor( cz ) - keyRadius
+	local guarded = SV.HasBlockGuards()
+	local guardContext = guarded and { actor = damageActor( options ), source = options.inflictor } or nil
+	local guardedStepCost = -( SV.GUARDED_BLOCK_RESISTANCE + 0.3 ) * EXPLOSION_STEP
 
 	for rayIndex = 1, EXPLOSION_RAY_COUNT do
 		local sx = EXPLOSION_RAY_X[rayIndex]
@@ -240,6 +248,11 @@ function SV.ApplyBlockExplosion( center, damage, options )
 							encodedCost = -encodedCost
 						end
 						EXPLOSION_BLOCK_STEP_COST[id] = encodedCost
+					end
+					-- Per cell, not per id: the per-id cache above stays shared.
+					if guarded and SV.IsBlockGuarded( bx, by, bz, MC.GetBlockState( bx, by, bz ),
+						"explosion", guardContext ) then
+						encodedCost = guardedStepCost
 					end
 				end
 				stepCost[key] = encodedCost

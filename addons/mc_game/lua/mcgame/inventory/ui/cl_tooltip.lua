@@ -63,14 +63,43 @@ local function enchantmentLines( stack )
 	return result
 end
 
+-- ItemLore: vanilla renders lore lines dark purple and italic unless styled.
+-- Entries are plain strings or { text = string, color = { r, g, b } }.
+local LORE_DEFAULT = Color( 170, 0, 170, 255 )
+
+local function textColor( value, fallback )
+	if type( value ) ~= "table" then return fallback end
+	local r, g, b = tonumber( value.r or value[1] ), tonumber( value.g or value[2] ), tonumber( value.b or value[3] )
+	if not r or not g or not b then return fallback end
+	return Color( math.Clamp( r, 0, 255 ), math.Clamp( g, 0, 255 ), math.Clamp( b, 0, 255 ), 255 )
+end
+
+local function loreLines( stack )
+	local lore = componentValue( stack, "lore" )
+	if type( lore ) ~= "table" then return {} end
+	local result = {}
+	for _, entry in ipairs( lore ) do
+		if type( entry ) == "string" then
+			result[#result + 1] = { text = entry, color = LORE_DEFAULT }
+		elseif type( entry ) == "table" and entry.text ~= nil then
+			result[#result + 1] = { text = tostring( entry.text ), color = textColor( entry.color, LORE_DEFAULT ) }
+		end
+	end
+	return result
+end
+
 function Tooltip.LinesForStack( stack )
 	if MC.IsEmptyItemStack( stack ) then return {} end
 	local definition = MC.GetItem and MC.GetItem( stack.item ) or nil
 	if not definition then return {} end
+	local nameColor = UI.RarityColor( definition.rarity )
+	local customName = componentValue( stack, "custom_name" )
+	if type( customName ) == "table" then nameColor = textColor( customName.color, nameColor ) end
 	local lines = {
-		{ text = UI.ItemRenderer.DisplayName( stack ), color = UI.RarityColor( definition.rarity ) },
+		{ text = UI.ItemRenderer.DisplayName( stack ), color = nameColor },
 	}
 	for _, line in ipairs( enchantmentLines( stack ) ) do lines[#lines + 1] = line end
+	for _, line in ipairs( loreLines( stack ) ) do lines[#lines + 1] = line end
 	local maxDamage = tonumber( definition.maxDamage ) or 0
 	if maxDamage > 0 then
 		local damage = math.Clamp( math.floor( tonumber( stack.damage ) or 0 ), 0, maxDamage )

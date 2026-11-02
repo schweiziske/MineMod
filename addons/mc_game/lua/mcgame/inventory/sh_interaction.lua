@@ -2,7 +2,7 @@
 -- creative permissions are resolved/validated by the server, never by the UI.
 MC = MC or {}
 
-MC.InventoryProtocolVersion = 2
+MC.InventoryProtocolVersion = 3
 MC.InventoryBackgroundAction = 65535
 
 function MC.InventorySelectionIsNewer( value, previous )

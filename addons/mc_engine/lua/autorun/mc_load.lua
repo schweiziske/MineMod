@@ -129,6 +129,7 @@ local SERVER_FILES = {
 	"mc/workshop/sv_workshop.lua",
 	"mc/sv_presets.lua",
 	"mc/sv_block_cluster.lua",
+	"mc/sv_block_guard.lua",
 	"mc/sv_damage.lua",
 	"mc/explosion/sv_java_rays.lua",
 	"mc/explosion/sv_trigger_handlers.lua",

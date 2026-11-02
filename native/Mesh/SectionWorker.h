@@ -20,6 +20,8 @@ struct Work
 {
 	Template geometry;
 	Command	 command;
+	Work() = default;
+	Work(const Template &inGeometry, const Command &inCommand) : geometry(inGeometry), command(inCommand) {}
 };
 // A compiled, state-only cube recipe. No engine objects cross the worker boundary.
 struct Cube

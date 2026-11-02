@@ -131,7 +131,7 @@ local function selectedTntTarget( ply, alreadyValidated )
 	local bx, by, bz = math.floor( aim.bx or 0 ), math.floor( aim.by or 0 ), math.floor( aim.bz or 0 )
 	if not tntAt( bx, by, bz ) then return nil, "not_tnt" end
 	if not alreadyValidated
-	and ( not SV.Validate or not SV.Validate( ply, bx, by, bz, false ) ) then
+	and ( not SV.Validate or not SV.Validate( ply, bx, by, bz, false, { action = "break", reason = "tnt_prime" } ) ) then
 		return nil, "ignite_rejected"
 	end
 	return { bx = bx, by = by, bz = bz }
@@ -314,7 +314,7 @@ local function projectileMayInteract( projectile, bx, by, bz )
 	if not IsValid( owner ) or not owner:IsPlayer() then return true end
 	if SV.WorldBoundsOK and not SV.WorldBoundsOK( bx, by, bz ) then return false end
 	if SV.CanEdit and not SV.CanEdit( owner ) then return false end
-	if MC.RunEvent and MC.RunEvent( "MC.CanPlayerEditCell", owner, bx, by, bz, false ) == false then
+	if SV.CellEditAllowed and not SV.CellEditAllowed( owner, bx, by, bz, false, { action = "break", reason = "projectile" } ) then
 		return false
 	end
 	return true

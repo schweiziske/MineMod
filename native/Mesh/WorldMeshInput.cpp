@@ -37,7 +37,29 @@ size_t MeshInstances::bytes() const
 {
 	const auto size = snapshot_->world->config.sectionSize;
 	return sizeof(*this) + recipes_.size() * (sizeof(MeshRecipe) + 64) + mBlockingStates.size() * 64
-		+ size_t(size * size * size) * (2 * sizeof(l2::Voxel) + 8);
+		+ size_t(size * size * size) * (2 * sizeof(l2::Voxel) + 8) + MeshProfileGrid::Bytes(*snapshot_);
+}
+MeshProfileGrid::MeshProfileGrid(std::shared_ptr<const MeshSnapshot> inSnapshot) : mSnapshot(std::move(inSnapshot))
+{
+	const auto &box = mSnapshot->dimensions;
+	mProfiles.resize(size_t(box.x) * box.y * box.z);
+	const int origin[3] = {mSnapshot->origin.x, mSnapshot->origin.y, mSnapshot->origin.z};
+	const int dimensions[3] = {box.x, box.y, box.z};
+	mSnapshot->FillProfiles(origin, dimensions, mProfiles.data());
+}
+size_t MeshProfileGrid::Bytes(const MeshSnapshot &inSnapshot)
+{
+	const auto &box = inSnapshot.dimensions;
+	return sizeof(MeshProfileGrid) + 64 + size_t(box.x) * box.y * box.z * sizeof(const Profile *);
+}
+const Profile &MeshProfileGrid::GetProfile(int x, int y, int z) const
+{
+	const auto &o = mSnapshot->origin;
+	const auto &d = mSnapshot->dimensions;
+	const int64_t dx = int64_t(x) - o.x, dy = int64_t(y) - o.y, dz = int64_t(z) - o.z;
+	if (dx < 0 || dy < 0 || dz < 0 || dx >= d.x || dy >= d.y || dz >= d.z)
+		return mSnapshot->world->profile({x, y, z});
+	return *mProfiles[size_t(dx) + size_t(d.x) * (size_t(dy) + size_t(d.y) * size_t(dz))];
 }
 void MeshInstances::populate(l2::Input &input, const std::atomic<bool> &cancelled) const
 {
@@ -56,6 +78,18 @@ void MeshInstances::populate(l2::Input &input, const std::atomic<bool> &cancelle
 	const auto			&cfg = snapshot_->world->config;
 	const unsigned		 ss = cfg.sectionSize;
 	const bool mixed_topology = topology_ && !mBlockingStates.empty();
+	// One pass over the halo replaces per-cell hashed world lookups in every
+	// visibility, light and shape query below; values equal the per-cell reads.
+	input.snapshot.preload();
+	bool needs_profiles = !input.fluids.empty();
+	for (const auto &binding : input.models)
+		needs_profiles = needs_profiles || binding.model->needsShapes;
+	if (needs_profiles)
+	{
+		auto profiles = std::make_shared<const MeshProfileGrid>(snapshot_);
+		input.fluidSource = profiles;
+		input.shapeSource = profiles;
+	}
 	std::vector<uint8_t> cells;
 	if (topology_)
 		cells.resize(ss * ss * ss);

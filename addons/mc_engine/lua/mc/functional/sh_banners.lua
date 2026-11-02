@@ -343,7 +343,7 @@ if SERVER then
 			if not editRateAllowed( ply ) then return false, "rate_limited" end
 			if not inRange( ply, bx, by, bz ) then return false, "out_of_range" end
 			if SV.CanEdit and not SV.CanEdit( ply ) then return false, "edit_denied" end
-			if MC.RunEvent and MC.RunEvent( "MC.CanPlayerEditCell", ply, bx, by, bz, true ) == false then
+			if not SV.CellEditAllowed( ply, bx, by, bz, true, { action = "modify", reason = "banner" } ) then
 				return false, "cell_edit_denied"
 			end
 		end

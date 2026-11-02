@@ -133,6 +133,7 @@ local SERVER_FILES = {
 	"mcgame/inventory/sv_anvil.lua",
 	"mcgame/inventory/sv_network.lua",
 	"mcgame/inventory/sv_merchant.lua",
+	"mcgame/inventory/sv_virtual_menu.lua",
 }
 local CLIENT_FILES = {
 	"mcgame/item/cl_projectile_lights.lua",

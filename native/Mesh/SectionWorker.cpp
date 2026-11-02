@@ -42,6 +42,8 @@ bool shapeVisible(Input &input, const Voxel &voxel, const ModelQuad &quad)
 	const auto choice = shapeChoice(*input.shapeSource, p, shape);
 	return !shapeCovered(quad.box, face, shape.variants[choice], off);
 }
+// Emit receives the template and command by reference; only the destination
+// part stores one copy per quad.
 template <class Emit>
 void visitVoxel(Input &input, const Voxel &voxel, Emit emit)
 {
@@ -49,14 +51,11 @@ void visitVoxel(Input &input, const Voxel &voxel, Emit emit)
 	{
 		const auto &recipe = input.fluids[voxel.cube];
 		const auto	geometry = fluidGeometry(recipe, *input.fluidSource, voxel.source);
+		Command		command;
+		command.opacity = recipe.opacity;
 		for (unsigned face = 0; face < 6; ++face)
 			if (geometry.mask & (1u << face))
-			{
-				Work work;
-				work.geometry = geometry.faces[face];
-				work.command.opacity = recipe.opacity;
-				emit(work, recipe.group);
-			}
+				emit(geometry.faces[face], command, recipe.group);
 		return;
 	}
 	if (!voxel.model)
@@ -64,7 +63,7 @@ void visitVoxel(Input &input, const Voxel &voxel, Emit emit)
 		const auto &cube = input.cubes[voxel.cube];
 		for (unsigned face = 0; face < 6; ++face)
 			if (visible(input, voxel, face, cube.block))
-				emit(cube.faces[face], cube.groups[face]);
+				emit(cube.faces[face].geometry, cube.faces[face].command, cube.groups[face]);
 		return;
 	}
 	const auto &binding = input.models[voxel.cube];
@@ -87,10 +86,7 @@ void visitVoxel(Input &input, const Voxel &voxel, Emit emit)
 			if (quad.cullFace && !(quad.shapeCull ? shapeVisible(input, voxel, quad)
 												  : visible(input, voxel, quad.cullFace - 1, model.block, model.keepInternalFaces)))
 				continue;
-			Work work = quad.work;
-			if (!ao)
-				work.geometry = quad.withoutAO;
-			emit(work, binding.group);
+			emit(ao ? quad.work.geometry : quad.withoutAO, quad.work.command, binding.group);
 		}
 	}
 }
@@ -261,36 +257,40 @@ void prefetchVoxels(Input &input)
 	// command arrays or vertex records are allocated for the supported cells.
 	for (const auto &voxel : input.voxels)
 	{
-		visitVoxel(input, voxel, [&](const Work &work, unsigned)
+		visitVoxel(input, voxel, [&](const Template &geometry, const Command &source, unsigned)
 				   {
-            Command command = work.command;
+            Command command = source;
             std::copy(std::begin(voxel.source), std::end(voxel.source), command.source);
-            prefetch(work.geometry, command, input.snapshot); });
+            prefetch(geometry, command, input.snapshot); });
 	}
 }
 void expandVoxels(Input &input, std::vector<unsigned> &groups, const std::atomic<bool> &cancelled)
 {
-	std::unordered_map<unsigned, size_t> buckets;
+	// A section uses a handful of material groups. Scan the open part of each
+	// group linearly instead of hashing every emitted quad.
+	std::vector<std::pair<unsigned, size_t>> buckets;
 	groups.resize(input.parts.size(), 0);
 	for (const auto &voxel : input.voxels)
 	{
 		if (cancelled)
 			return;
-		visitVoxel(input, voxel, [&](const Work &source, unsigned group)
+		visitVoxel(input, voxel, [&](const Template &geometry, const Command &command, unsigned group)
 				   {
-            auto found = buckets.find(group);
-            if (found == buckets.end() || input.parts[found->second].size() == input.maxQuads) {
-                const auto slot = input.parts.size();
-                buckets[group] = slot;
+            auto bucket = std::find_if(buckets.begin(), buckets.end(), [group](const auto &entry) { return entry.first == group; });
+            if (bucket == buckets.end()) {
+                buckets.emplace_back(group, input.parts.size());
+                bucket = buckets.end() - 1;
                 input.parts.emplace_back();
                 groups.push_back(group);
-                found = buckets.find(group);
+            } else if (input.parts[bucket->second].size() == input.maxQuads) {
+                bucket->second = input.parts.size();
+                input.parts.emplace_back();
+                groups.push_back(group);
             }
-            Work work = source;
+            auto &work = input.parts[bucket->second].emplace_back(geometry, command);
             std::copy(std::begin(voxel.source), std::end(voxel.source), work.command.source);
             std::copy(std::begin(voxel.translation), std::end(voxel.translation), work.command.translation);
-            work.command.size = input.blockSize;
-            input.parts[found->second].push_back(std::move(work)); });
+            work.command.size = input.blockSize; });
 	}
 }
 WorkerPool::~WorkerPool()
@@ -419,22 +419,45 @@ std::shared_ptr<const Job> WorkerPool::ready(uint64_t id) const
 }
 void WorkerPool::cancel(uint64_t id)
 {
+	// Releasing a finished job is the normal per-section path. Hand its results
+	// to one worker for disposal; wake gate waiters only when a running job may
+	// still be blocked in Acquire.
+	bool dispose = false, running = false;
 	{
 		std::lock_guard<std::mutex> lock(mutex_);
-		for (const auto &entry : jobs_)
+		auto						mark = [&](const std::shared_ptr<Job> &job)
 		{
-			auto &job = entry.second;
-			if ((!id || id == job->id) && !job->cancelled)
+			if (job->cancelled)
+				return;
+			if (job->state == JobState::Ready || job->state == JobState::Failed)
 			{
-				if (job->state == JobState::Ready || job->state == JobState::Failed)
-					queue_.push_back(job);
-				job->cancelled = true;
-				++stats_.cancelled;
+				queue_.push_back(job);
+				dispose = true;
 			}
+			else if (job->state == JobState::Running)
+				running = true;
+			job->cancelled = true;
+			++stats_.cancelled;
+		};
+		if (id)
+		{
+			const auto found = jobs_.find(id);
+			if (found != jobs_.end())
+				mark(found->second);
+		}
+		else
+		{
+			for (const auto &entry : jobs_)
+				mark(entry.second);
+			dispose = running = true;
 		}
 	}
-	mCpuWorkGate->NotifyCancellation();
-	wake_.notify_all();
+	if (running)
+		mCpuWorkGate->NotifyCancellation();
+	if (!id)
+		wake_.notify_all();
+	else if (dispose)
+		wake_.notify_one();
 }
 WorkerStats WorkerPool::stats() const
 {
@@ -499,6 +522,9 @@ void WorkerPool::run()
 					std::vector<unsigned> groups;
 					if (relight)
 					{
+						// Relight samples most of the halo; read it in one pass when the
+						// owned snapshot supports bulk reads.
+						input.snapshot.preload();
 						job->parts.resize(input.relight.size());
 						for (size_t p = 0; p < input.relight.size() && !job->cancelled; ++p)
 						{

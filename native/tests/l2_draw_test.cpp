@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <map>
 #include <random>
 #include <stdexcept>
 #include <thread>
@@ -278,6 +279,78 @@ static void spatialBoundaryTests()
 		if (graph.mNodes[id].mPosition == Cell{2, 1, 1})
 			check(seen[id], "opened component boundary failed to reveal target");
 	std::cout << "Spatial boundaries: nine thin-wall target sections hidden, disconnected face regions preserved, doorway restored\n";
+}
+// Reusing unchanged nodes from the previous graph must link exactly like a
+// full build: same entries and components for every node.
+static void incrementalGraphTests()
+{
+	std::mt19937 random(5531);
+	const unsigned side = 4;
+	auto randomFaces = [&]
+	{
+		auto faces = std::make_shared<PortalFaces>();
+		for (unsigned face = 0; face < 6; ++face)
+			for (unsigned cell = 0; cell < side * side; ++cell)
+				(*faces)[face].push_back(random() % 4 == 0 ? uint8_t(64) : uint8_t((random() % 64) | (1u << face)));
+		return std::shared_ptr<const PortalFaces>(std::move(faces));
+	};
+	std::vector<std::shared_ptr<const PortalFaces>> pool;
+	for (unsigned i = 0; i < 12; ++i)
+		pool.push_back(randomFaces());
+	unsigned reused = 0;
+	for (unsigned trial = 0; trial < 40; ++trial)
+	{
+		std::map<Cell, std::shared_ptr<const PortalFaces>> layout;
+		for (int z = 0; z < 4; ++z)
+			for (int y = 0; y < 5; ++y)
+				for (int x = 0; x < 5; ++x)
+					if (random() % 5)
+						layout[{x, y, z}] = pool[random() % pool.size()];
+		auto makeGraph = [&](const std::map<Cell, std::shared_ptr<const PortalFaces>> &inLayout)
+		{
+			VisibilityGraph graph;
+			graph.mNodes.resize(1);
+			for (const auto &[position, faces] : inLayout)
+			{
+				PortalNode node;
+				node.mLive = true;
+				node.mPosition = position;
+				node.mExits.fill(uint8_t(random() % 64));
+				node.mFaces = faces;
+				node.mIdentity = faces.get();
+				graph.mNodes.push_back(std::move(node));
+			}
+			return graph;
+		};
+		auto previous = makeGraph(layout);
+		BuildSpatialGraph(previous);
+		// Change, remove and add a few sections, sometimes outside the old grid.
+		for (unsigned edit = 0; edit < 1 + random() % 4; ++edit)
+		{
+			const Cell position{int(random() % 6) - (trial % 3 == 0 ? 1 : 0), int(random() % 5), int(random() % 4)};
+			if (random() % 3 == 0)
+				layout.erase(position);
+			else
+				layout[position] = random() % 2 ? randomFaces() : pool[random() % pool.size()];
+		}
+		auto incremental = makeGraph(layout);
+		auto full = incremental;
+		BuildSpatialGraph(incremental, &previous);
+		BuildSpatialGraph(full);
+		check(incremental.mGrid == full.mGrid && incremental.mNodes.size() == full.mNodes.size(), "incremental graph grid differs");
+		for (size_t id = 1; id < full.mNodes.size(); ++id)
+		{
+			const auto &a = incremental.mNodes[id], &b = full.mNodes[id];
+			check(a.mEntries == b.mEntries && a.mComponents.size() == b.mComponents.size(), "incremental graph entries differ");
+			for (size_t c = 0; c < b.mComponents.size(); ++c)
+				check(a.mComponents[c].mMask == b.mComponents[c].mMask && a.mComponents[c].mTargets == b.mComponents[c].mTargets,
+					  "incremental graph components differ");
+		}
+		for (const auto &node : previous.mNodes)
+			reused += node.mLive ? 1 : 0;
+	}
+	check(reused > 0, "incremental graph test built no nodes");
+	std::cout << "Incremental spatial graph: 40 edited layouts link exactly like full builds\n";
 }
 static void coverageTests()
 {
@@ -586,6 +659,7 @@ int main()
 		portalTests();
 		spatialPortalTests();
 		spatialBoundaryTests();
+		incrementalGraphTests();
 		spatialRayTests();
 		coverageTests();
 		directionTests();

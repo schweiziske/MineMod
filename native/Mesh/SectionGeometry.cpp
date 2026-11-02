@@ -261,6 +261,16 @@ void Snapshot::prepare()
 	cells_.swap(cells);
 	ready_.swap(ready);
 }
+void Snapshot::preload()
+{
+	if (!source_)
+		return;
+	prepare();
+	if (!source_->fill(origin_, dimensions_, cells_.data()))
+		return;
+	std::fill(ready_.begin(), ready_.end(), uint8_t(1));
+	reads += cellCount_;
+}
 size_t Snapshot::cacheBytes() const
 {
 	return std::max(cellCount_, cells_.capacity()) * sizeof(Cell) + std::max(cellCount_, ready_.capacity());

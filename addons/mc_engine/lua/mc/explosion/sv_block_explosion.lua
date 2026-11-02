@@ -589,11 +589,29 @@ function SV.ApplyMinecraftExplosion( center, radius, options )
 	if not Explosion.SelectJavaExplosionCells then return false, "explosion_selector_unavailable" end
 
 	local customResistance = options.blockResistance
+	-- Rays revisit cells; ask the guards once per cell per explosion.
+	local guardedCells
+	local guardContext
+	if SV.HasBlockGuards() then
+		guardedCells = {}
+		guardContext = { actor = options.actor, source = options.source }
+	end
+	local function cellGuarded( stateId, bx, by, bz )
+		if not guardedCells or stateId == 0 then return false end
+		local key = MC.CellKey( bx, by, bz )
+		local value = guardedCells[key]
+		if value == nil then
+			value = SV.IsBlockGuarded( bx, by, bz, stateId, "explosion", guardContext )
+			guardedCells[key] = value
+		end
+		return value
+	end
 	local selected, selectionError = Explosion.SelectJavaExplosionCells( center, radius, {
 		inBounds = function( bx, by, bz )
 			return not SV.WorldBoundsOK or SV.WorldBoundsOK( bx, by, bz )
 		end,
 		resistance = function( stateId, bx, by, bz, remainingPower )
+			if cellGuarded( stateId, bx, by, bz ) then return SV.GUARDED_BLOCK_RESISTANCE end
 			if isfunction( customResistance ) then
 				local value = customResistance( stateId, bx, by, bz, remainingPower, options )
 				if value ~= nil then return value end
@@ -601,6 +619,7 @@ function SV.ApplyMinecraftExplosion( center, radius, options )
 			return defaultResistance( stateId )
 		end,
 		shouldSelect = function( stateId, bx, by, bz, remainingPower )
+			if cellGuarded( stateId, bx, by, bz ) then return false end
 			if isfunction( options.shouldBlockExplode ) then
 				return options.shouldBlockExplode( stateId, bx, by, bz, remainingPower, options ) ~= false
 			end

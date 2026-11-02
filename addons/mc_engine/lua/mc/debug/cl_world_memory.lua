@@ -90,7 +90,7 @@ local function transportStats( detailed )
 		local binary = snapshot.binary
 		if binary then
 			result.nextBatch = binary.nextBatch
-			result.nativeDecodePending = binary.activeJobId ~= nil
+			result.nativeDecodePending = entries( binary.decodes )
 			for index, batch in next, binary.batches or {} do
 				local bytes = type( batch.payload ) == "string" and #batch.payload or 0
 				result.batchCount = result.batchCount + 1

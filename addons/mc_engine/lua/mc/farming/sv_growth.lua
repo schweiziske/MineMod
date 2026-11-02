@@ -326,7 +326,9 @@ end
 function Farming.ApplyBonemeal( actor, bx, by, bz, options )
 	if not IsValid( actor ) or not actor.IsPlayer or not actor:IsPlayer() then return false, "invalid_player" end
 	bx, by, bz = math.floor( bx ), math.floor( by ), math.floor( bz )
-	if not SV.Validate or SV.Validate( actor, bx, by, bz, false ) ~= true then return false, "edit_rejected" end
+	if not SV.Validate or SV.Validate( actor, bx, by, bz, false, { action = "modify", reason = "bonemeal" } ) ~= true then
+		return false, "edit_rejected"
+	end
 	local stateId = stateAt( bx, by, bz )
 	local name = Farming.StateName( stateId )
 	local definition = Farming.Crops[name]

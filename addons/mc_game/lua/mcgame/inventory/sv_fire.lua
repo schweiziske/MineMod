@@ -239,7 +239,9 @@ function SV.ResolvePlayerIgnition( ply, context )
 
 	local nextLit = litState( clickedState )
 	if nextLit then
-		if not SV.Validate or not SV.Validate( ply, bx, by, bz, false ) then return false, "ignite_rejected" end
+		if not SV.Validate or not SV.Validate( ply, bx, by, bz, false, { action = "modify", reason = "ignite" } ) then
+			return false, "ignite_rejected"
+		end
 		return true, ignitionResult( bx, by, bz, nextLit, "lit_property", clickedState )
 	end
 
@@ -351,7 +353,7 @@ function SV.ProjectileMayInteract( projectile, bx, by, bz )
 	if not IsValid( owner ) or not owner:IsPlayer() then return true end
 	if SV.WorldBoundsOK and not SV.WorldBoundsOK( bx, by, bz ) then return false end
 	if SV.CanEdit and not SV.CanEdit( owner ) then return false end
-	if MC.RunEvent and MC.RunEvent( "MC.CanPlayerEditCell", owner, bx, by, bz, false ) == false then
+	if SV.CellEditAllowed and not SV.CellEditAllowed( owner, bx, by, bz, false, { action = "modify", reason = "projectile" } ) then
 		return false
 	end
 	return true

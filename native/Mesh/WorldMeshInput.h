@@ -35,5 +35,21 @@ private:
 	size_t									 quads_ = 0;
 	bool									 topology_ = false;
 };
+/// Worker-local dense profile view of one mesh halo. Shape and fluid queries in
+/// the voxel loops become array reads; the snapshot keeps every profile alive.
+/// Positions outside the halo fall back to the snapshot's own lookup.
+class MeshProfileGrid final : public l2::FluidSource, public l2::ShapeSource
+{
+public:
+	explicit MeshProfileGrid(std::shared_ptr<const MeshSnapshot> inSnapshot);
+	const l2::FluidState &fluid(int x, int y, int z) const override { return GetProfile(x, y, z).fluid; }
+	const l2::Shape		 &shape(int x, int y, int z) const override { return *GetProfile(x, y, z).shape; }
+	static size_t		  Bytes(const MeshSnapshot &inSnapshot);
+
+private:
+	const Profile					   &GetProfile(int x, int y, int z) const;
+	std::shared_ptr<const MeshSnapshot> mSnapshot;
+	std::vector<const Profile *>		mProfiles;
+};
 l2::Topology meshTopology(std::vector<uint8_t> cells, unsigned size);
 } // namespace mcmesh::world

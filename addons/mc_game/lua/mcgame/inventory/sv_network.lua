@@ -334,6 +334,8 @@ function SV.SendActiveInventoryOpen( ply, record, reason )
 		net.WriteUInt( math.Clamp( math.floor( tonumber( session.craftingWidth ) or 0 ), 0, 15 ), 4 )
 		net.WriteUInt( math.Clamp( math.floor( tonumber( session.craftingHeight ) or 0 ), 0, 15 ), 4 )
 		net.WriteUInt( math.Clamp( math.floor( tonumber( session.resultSlot ) or 0 ), 0, MAX_MENU_SLOTS ), 8 )
+		-- Protocol 3: optional screen title; empty keeps the menu kind's own.
+		net.WriteString( string.sub( tostring( session.title or "" ), 1, 128 ) )
 	net.Send( ply )
 	SV.SendActiveInventorySnapshot( ply, "open" )
 	return true

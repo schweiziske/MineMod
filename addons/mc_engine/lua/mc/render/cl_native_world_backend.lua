@@ -24,6 +24,7 @@ local function stamp( session )
 	local version = requireResult( session:Version() )
 	session.backendEpoch = tostring( T.serial ) .. ":" .. version.epoch
 	session.lightPending = true
+	session.lightCommits, session.lightWaits = ( session.lightCommits or 0 ) + 1, {}
 end
 local function apply( rows )
 	local session = active()
@@ -238,23 +239,43 @@ function B.IsLightReady( key, sectionIndex )
 	if not key or not session.handle.IsMeshReady then return not session.lightPending end
 	local chunk = MC.World[key]
 	if not chunk or chunk.count == 0 then return true end
+	-- Readiness rises only when a light job commits. A section found waiting
+	-- keeps waiting until then, without asking Native again every frame.
+	local waits = sectionIndex and session.lightWaits and session.lightWaits[key]
+	if waits and waits[sectionIndex] == session.lightCommits then return false end
 	local size = MC.RENDER_SECTION_SIZE or 16
 	for index = sectionIndex or 1, sectionIndex or ( MC.CS / size ) ^ 2 * ( MC.CH / size ) do
 		local ready, err = session.handle:IsMeshReady( chunk.cx, chunk.cy, chunk.cz, index )
 		if ready == nil then error( "Native mesh readiness: " .. tostring( err ), 0 ) end
-		if not ready then return false end
+		if not ready then
+			if sectionIndex and session.lightWaits then
+				waits = session.lightWaits[key]
+				if not waits then waits = {} session.lightWaits[key] = waits end
+				waits[sectionIndex] = session.lightCommits
+			end
+			return false
+		end
 	end
 	return true
+end
+-- Changes at every light commit and world reset; mesh readiness never rises otherwise.
+function B.LightSerial()
+	return T.active and T.active.lightCommits
 end
 function B.Pump()
 	local session = T.active
 	if not session or session.fault or not session.lightPending then return end
+	-- A full snapshot replaces the world batch by batch, and each batch
+	-- invalidates the light of the ones before it. Light the final world once.
+	local transport = MC.StateNetworkTransport
+	if transport and transport.snapshot and transport.snapshot.binary then return end
 	local result, err = session.handle:Pump( false ) -- Only section invalidation is consumed here.
 	if not result then
 		session.fault = tostring( err )
 		MC.Fault( "native_world_light", "%s; Native world retained", session.fault )
 		return
 	end
+	if result.completed then session.lightCommits = ( session.lightCommits or 0 ) + 1 end
 	session.lightPending = result.pending
 	for _, row in ipairs( result.dirtySections ) do
 		local key = MC.ChunkKey( row.cx, row.cy, row.cz )

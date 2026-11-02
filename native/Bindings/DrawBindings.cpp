@@ -9,7 +9,9 @@
 #include "Resources/Source/PixelTextureStore.h"
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace mcmesh::l2drawbridge
@@ -68,6 +70,23 @@ struct Scene
 	~Scene() { clear(); }
 };
 std::unordered_set<Scene *> scenes;
+/// Section topology strings are immutable Lua strings; unchanged sections are
+/// resent as the same string object on every graph revision. Cache the
+/// validated boundary faces per string. A registry reference keeps each cached
+/// string alive, so its data pointer cannot be reused by another string.
+/// Face objects are immutable and shared with graph nodes, whose identity is
+/// the face object's address. Lua thread only; entries absent from the latest
+/// graph are released.
+struct TopologyFaces
+{
+	std::shared_ptr<Ref>						mString;
+	unsigned									mLength = 0, mSide = 0;
+	std::shared_ptr<const l2draw::PortalFaces> mFaces;
+	uint64_t									mGeneration = 0;
+};
+std::unordered_map<const char *, TopologyFaces>					topologyFaces;
+std::map<std::pair<unsigned, unsigned>, std::shared_ptr<const l2draw::PortalFaces>> uniformFaces;
+uint64_t																	topologyGeneration = 0;
 int							absolute(ILuaBase *lua, int at)
 {
 	return at > 0 ? at : lua->Top() + at + 1;
@@ -255,6 +274,8 @@ void shutdown()
 	for (auto *value : scenes)
 		value->clear();
 	currentGraph.reset();
+	topologyFaces.clear();
+	uniformFaces.clear();
 }
 int version(ILuaBase *lua)
 {
@@ -348,8 +369,15 @@ static int readGraph(ILuaBase *lua, bool spatial)
 				{
 					const auto uniform = l2::integer(numeric(lua, -1), 0, 64, "invalid Native uniform topology");
 					l2::require(uniform == 63 || uniform == 64, "Native uniform topology must be air or solid");
-					for (auto &face : node.mBoundary)
-						face.assign(side * side, uint8_t(uniform));
+					auto &faces = uniformFaces[{side, unsigned(uniform)}];
+					if (!faces)
+					{
+						auto value = std::make_shared<l2draw::PortalFaces>();
+						for (auto &face : *value)
+							face.assign(side * side, uint8_t(uniform));
+						faces = std::move(value);
+					}
+					node.mFaces = faces;
 					lua->Pop();
 				}
 				else
@@ -359,26 +387,38 @@ static int readGraph(ILuaBase *lua, bool spatial)
 					l2::require(lua->IsType(-1, Type::String), "missing Native topology cells");
 					unsigned	length = 0;
 					const auto *cells = reinterpret_cast<const uint8_t *>(lua->GetString(-1, &length));
-					l2::require(length == side * side * side, "Native topology cell count disagrees with section size");
-					for (unsigned i = 0; i < length; ++i)
-						l2::require(cells[i] <= 64, "invalid Native topology component");
-					for (unsigned face = 0; face < 6; ++face)
+					auto	   &cached = topologyFaces[reinterpret_cast<const char *>(cells)];
+					if (!cached.mFaces || cached.mLength != length || cached.mSide != side)
 					{
-						auto &boundary = node.mBoundary[face];
-						boundary.resize(side * side);
-						const unsigned edge = face & 1 ? 0 : side - 1;
-						for (unsigned b = 0; b < side; ++b)
-							for (unsigned a = 0; a < side; ++a)
-							{
-								const unsigned x = face < 2 || face >= 4 ? a : edge;
-								const unsigned y = face < 2 ? b : face < 4 ? a
-																		   : edge;
-								const unsigned z = face < 2 ? edge : b;
-								boundary[a + side * b] = cells[x + side * (y + side * z)];
-							}
+						l2::require(length == side * side * side, "Native topology cell count disagrees with section size");
+						for (unsigned i = 0; i < length; ++i)
+							l2::require(cells[i] <= 64, "invalid Native topology component");
+						auto faces = std::make_shared<l2draw::PortalFaces>();
+						for (unsigned face = 0; face < 6; ++face)
+						{
+							auto &boundary = (*faces)[face];
+							boundary.resize(side * side);
+							const unsigned edge = face & 1 ? 0 : side - 1;
+							for (unsigned b = 0; b < side; ++b)
+								for (unsigned a = 0; a < side; ++a)
+								{
+									const unsigned x = face < 2 || face >= 4 ? a : edge;
+									const unsigned y = face < 2 ? b : face < 4 ? a
+																			   : edge;
+									const unsigned z = face < 2 ? edge : b;
+									boundary[a + side * b] = cells[x + side * (y + side * z)];
+								}
+						}
+						cached.mString = std::make_shared<Ref>(lua, -1);
+						cached.mLength = length;
+						cached.mSide = side;
+						cached.mFaces = std::move(faces);
 					}
+					cached.mGeneration = topologyGeneration + 1;
+					node.mFaces = cached.mFaces;
 					lua->Pop();
 				}
+				node.mIdentity = node.mFaces.get();
 			}
 			lua->Pop();
 		}
@@ -430,10 +470,13 @@ static int readGraph(ILuaBase *lua, bool spatial)
 		{
 			for (unsigned id = 1; id <= count; ++id)
 				l2::require(!result->mNodes[id].mLive || assigned[id], "unpositioned Native spatial node");
-			l2draw::BuildSpatialGraph(*result);
-			for (auto &node : result->mNodes)
-				for (auto &face : node.mBoundary)
-					std::vector<uint8_t>().swap(face);
+			// Nodes keep their shared face objects, so the identities the next
+			// build compares against cannot be reused by newer face objects.
+			l2draw::BuildSpatialGraph(*result, currentGraph && currentGraph->mSpatial ? currentGraph.get() : nullptr);
+			// Release cached topology strings that this graph no longer uses.
+			++topologyGeneration;
+			for (auto it = topologyFaces.begin(); it != topologyFaces.end();)
+				it = it->second.mGeneration == topologyGeneration ? std::next(it) : topologyFaces.erase(it);
 		}
 		currentGraph = std::move(result);
 		lua->PushBool(true);

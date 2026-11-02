@@ -90,8 +90,14 @@ std::vector<uint8_t> decompress(const DecodeInput &input)
 			"lzma_decode_failed");
 	return result;
 }
-unsigned section(Reader &reader, uint32_t *states, size_t stateCount)
+using StateCounts = std::vector<std::pair<uint32_t, unsigned>>;
+// Decodes one wire section into states and returns its non-air count. When
+// outCounts is given it receives the non-air state histogram, gathered per
+// palette entry instead of per cell.
+unsigned section(Reader &reader, uint32_t *states, size_t stateCount, StateCounts *outCounts)
 {
+	if (outCounts)
+		outCounts->clear();
 	const auto mode = reader.u8();
 	if (mode == 0)
 		return 0;
@@ -102,6 +108,8 @@ unsigned section(Reader &reader, uint32_t *states, size_t stateCount)
 		const auto state = reader.u32();
 		require(count == SectionCells && state > 0 && state < stateCount, "invalid_uniform_section");
 		std::fill_n(states, SectionCells, state);
+		if (outCounts)
+			outCounts->emplace_back(state, SectionCells);
 		return count;
 	}
 	require(mode == 2, "invalid_section_mode");
@@ -121,7 +129,7 @@ unsigned section(Reader &reader, uint32_t *states, size_t stateCount)
 	require(wordCount == (SectionCells * bits + 31u) / 32u, "invalid_section_word_count");
 	const auto	  *words = reader.bytes(size_t(wordCount) * 4);
 	const uint64_t mask = (uint64_t(1) << bits) - 1;
-	unsigned	   actual = 0;
+	std::vector<unsigned> uses(paletteSize, 0);
 	for (unsigned i = 0; i < SectionCells; ++i)
 	{
 		const unsigned bit = i * bits, word = bit / 32, shift = bit % 32;
@@ -131,10 +139,57 @@ unsigned section(Reader &reader, uint32_t *states, size_t stateCount)
 		const auto index = unsigned((value >> shift) & mask);
 		require(index < paletteSize, "section_palette_index_out_of_range");
 		states[i] = palette[index];
-		actual += states[i] != 0;
+		++uses[index];
+	}
+	unsigned actual = 0;
+	for (unsigned i = 0; i < paletteSize; ++i)
+	{
+		if (!palette[i] || !uses[i])
+			continue;
+		actual += uses[i];
+		if (outCounts)
+			outCounts->emplace_back(palette[i], uses[i]);
 	}
 	require(actual == count, "section_count_mismatch");
 	return count;
+}
+// The wire's 4096-cell sections are the Store's own sections when the section
+// size equals the chunk width. Equivalent to replacing an absent chunk with
+// every non-air cell (editChunk), without per-cell hashing.
+std::shared_ptr<const Chunk> sectionChunk(const Config &config, const Catalog &catalog,
+	const std::vector<uint32_t> &states, const StateCounts (&counts)[2], unsigned count)
+{
+	auto chunk = std::make_shared<Chunk>(config);
+	chunk->count = count;
+	chunk->terrainPresent = count > 0;
+	for (unsigned s = 0; s < 2; ++s)
+	{
+		if (counts[s].empty())
+			continue;
+		auto section = std::make_shared<Section>(0);
+		section->states.assign(states.begin() + s * SectionCells, states.begin() + (s + 1) * SectionCells);
+		section->counts.reserve(counts[s].size());
+		for (const auto &entry : counts[s])
+		{
+			section->counts.emplace(entry.first, entry.second);
+			section->count += entry.second;
+		}
+		chunk->sections[s] = std::move(section);
+	}
+	const unsigned cs2 = unsigned(config.chunkSize * config.chunkSize);
+	for (unsigned column = 0; column < cs2; ++column)
+	{
+		for (int z = config.chunkHeight - 1; z >= 0; --z)
+		{
+			if (catalog.states[states[column + unsigned(z) * cs2]].opacity > 0)
+			{
+				chunk->columnTops[column] = int16_t(z);
+				break;
+			}
+		}
+	}
+	chunk->SealMemoryUsage();
+	return chunk;
 }
 std::string entities(Reader &reader, unsigned count, const std::vector<uint32_t> &states, uint32_t revision)
 {
@@ -217,11 +272,21 @@ std::shared_ptr<const DecodedResult> decodeBinary(const DecodeInput &input, cons
 	auto output = std::make_shared<DecodedResult>();
 	output->metadata = input.metadata;
 	output->mBlockEntityCellsComplete = !input.catalog->mBlockEntityStates.empty();
+	// Other section sizes split each wire section across several Store sections.
+	const bool			  direct = input.config.sectionSize == input.config.chunkSize;
 	std::vector<Mutation> mutations;
-	mutations.reserve(count);
+	if (direct)
+	{
+		require(!input.config.maxChunks || count <= input.config.maxChunks, "replacement batch exceeds its chunk limit");
+		output->prepared = {input.epoch, input.catalog, {}};
+		output->prepared.chunks.reserve(count);
+	}
+	else
+		mutations.reserve(count);
 	output->chunks.reserve(count);
 	Grid<bool> seen;
 	unsigned   actual = 0;
+	StateCounts counts[2];
 	for (unsigned i = 0; i < count; ++i)
 	{
 		if (cancelled.load())
@@ -233,40 +298,52 @@ std::shared_ptr<const DecodedResult> decodeBinary(const DecodeInput &input, cons
 		const auto entityCount = reader.u16();
 		require(flags <= 1 && entityCount <= input.config.cellCount(), "invalid_binary_chunk_header");
 		require(flags != 1 || entityCount == 0, "tombstone_block_entities");
-		Mutation mutation;
-		mutation.kind = Mutation::Kind::Replace;
-		mutation.chunk = coord;
 		DecodedChunk chunk;
 		chunk.coord = coord;
 		std::vector<uint32_t> states(input.config.cellCount());
+		counts[0].clear();
+		counts[1].clear();
 		if (flags == 0)
 		{
 			for (unsigned s = 0; s < 2; ++s)
-				chunk.count += section(reader, states.data() + s * SectionCells, input.catalog->states.size());
+				chunk.count += section(reader, states.data() + s * SectionCells, input.catalog->states.size(),
+									   direct ? &counts[s] : nullptr);
 			chunk.blockEntitiesJSON = entities(reader, entityCount, states, input.metadata.revision);
 		}
-		mutation.terrainPresent = chunk.count > 0;
-		mutation.cells.reserve(chunk.count);
+		Mutation mutation;
+		if (!direct)
+		{
+			mutation.kind = Mutation::Kind::Replace;
+			mutation.chunk = coord;
+			mutation.terrainPresent = chunk.count > 0;
+			mutation.cells.reserve(chunk.count);
+		}
+		const bool contextual = !input.catalog->contextual.empty();
 		for (unsigned li = 0; li < states.size(); ++li)
 		{
 			const auto state = states[li];
 			if (!state)
 				continue;
-			mutation.cells.push_back({li, state});
-			if (!input.catalog->contextual.empty() && input.catalog->contextual[state])
+			if (!direct)
+				mutation.cells.push_back({li, state});
+			if (contextual && input.catalog->contextual[state])
 				chunk.contextCells.push_back({li, state});
 			if (output->mBlockEntityCellsComplete && input.catalog->mBlockEntityStates[state])
 				chunk.mBlockEntityCells.push_back({li, state});
 		}
 		actual += chunk.count;
 		require(actual <= total, "binary_patch_total_count_mismatch");
-		mutations.push_back(std::move(mutation));
+		if (direct)
+			output->prepared.chunks.emplace(coord, sectionChunk(input.config, *input.catalog, states, counts, chunk.count));
+		else
+			mutations.push_back(std::move(mutation));
 		output->chunks.push_back(std::move(chunk));
 	}
 	require(actual == total && reader.pos == reader.size, "binary_patch_count_or_trailing_data");
 	if (cancelled.load())
 		return nullptr;
-	output->prepared = prepareReplacements(input.config, input.catalog, input.epoch, mutations);
+	if (!direct)
+		output->prepared = prepareReplacements(input.config, input.catalog, input.epoch, mutations);
 	if (cancelled.load())
 		return nullptr;
 	output->decompressMS = std::chrono::duration<double, std::milli>(parsed - started).count();

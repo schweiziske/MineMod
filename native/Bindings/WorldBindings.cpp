@@ -343,7 +343,7 @@ world::Profile ParseProfile(ILuaBase *inLua, int inTable, const world::Catalog *
 	result.validate();
 	return result;
 }
-std::shared_ptr<const world::Catalog> catalog(ILuaBase *lua, int table)
+std::shared_ptr<const world::Catalog> ParseCatalog(ILuaBase *lua, int table)
 {
 	require(lua->IsType(table, Type::Table), "native world requires a state catalog");
 	integer(lua, table, "formatVersion", 0, 2, 2);
@@ -398,6 +398,51 @@ std::shared_ptr<const world::Catalog> catalog(ILuaBase *lua, int table)
 	lua->Pop();
 	value->validate();
 	return value;
+}
+/// Lua catalog tables are immutable once built. Parsing the vanilla registry
+/// costs about 100 ms on the Lua thread, and every world reset passes the same
+/// table again, so the last parsed table is reused by identity and revision.
+/// Owned by the Lua thread; released at module shutdown.
+struct ParsedCatalog
+{
+	ILuaBase							 *mLua = nullptr;
+	int									  mReference = -1;
+	double								  mRevision = 0;
+	std::shared_ptr<const world::Catalog> mValue;
+};
+ParsedCatalog sParsedCatalog;
+void ForgetParsedCatalog()
+{
+	if (sParsedCatalog.mLua && sParsedCatalog.mReference >= 0)
+		sParsedCatalog.mLua->ReferenceFree(sParsedCatalog.mReference);
+	sParsedCatalog = {};
+}
+std::shared_ptr<const world::Catalog> catalog(ILuaBase *lua, int table)
+{
+	require(lua->IsType(table, Type::Table), "native world requires a state catalog");
+	table = table > 0 ? table : lua->Top() + table + 1;
+	const double revision = scalar(lua, table, "revision", 0);
+	if (sParsedCatalog.mValue && sParsedCatalog.mLua == lua && sParsedCatalog.mRevision == revision)
+	{
+		lua->ReferencePush(sParsedCatalog.mReference);
+		const bool same = lua->RawEqual(-1, table) != 0;
+		lua->Pop();
+		if (same)
+			return sParsedCatalog.mValue;
+	}
+	auto parsed = ParseCatalog(lua, table);
+	lua->Push(table);
+	const int reference = lua->ReferenceCreate();
+	ForgetParsedCatalog();
+	sParsedCatalog = {lua, reference, revision, parsed};
+	return parsed;
+}
+/// A Store seals its own copy. Remember that copy, so a later reset of the same
+/// Store passes its current catalog back and skips validation and copying.
+void RememberSealedCatalog(ILuaBase *lua, const std::shared_ptr<const world::Catalog> &inSealed)
+{
+	if (sParsedCatalog.mLua == lua && sParsedCatalog.mValue)
+		sParsedCatalog.mValue = inSealed;
 }
 std::vector<world::Mutation> ParseBatch(ILuaBase *inLua, int inTable, const world::Store &inStore,
 								 uint64_t &outShapeReferences)
@@ -1010,6 +1055,7 @@ LUA_FUNCTION(reset)
 	{
 		auto &value = session(LUA, 1);
 		value.reset(config(LUA, 2), catalog(LUA, 3));
+		RememberSealedCatalog(LUA, value.store().catalog());
 		LUA->GetUserType<Handle>(1, worldType)->mContextShapeReferences = 0;
 		version(LUA, value.store());
 		return 1;
@@ -1109,6 +1155,7 @@ void shutdown()
 {
 	while (first)
 		close(first);
+	ForgetParsedCatalog();
 }
 int capabilities(ILuaBase *lua)
 {
@@ -1142,6 +1189,7 @@ int create(ILuaBase *lua)
         lua->PushUserType_Value(Handle{}, worldType);
         auto* handle = lua->GetUserType<Handle>(-1, worldType);
         handle->value = new world::Session(cfg, std::move(profiles));
+        RememberSealedCatalog(lua, handle->value->store().catalog());
         handle->next = first;
         if (first) first->previous = handle;
         first = handle;

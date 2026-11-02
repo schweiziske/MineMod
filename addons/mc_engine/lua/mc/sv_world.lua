@@ -439,11 +439,36 @@ function SV.WorldCoordinateLimit()
 	return math.min( C.WorldLimit:GetInt(), protoMax )
 end
 
+-- MC.CanPlayerEditCell carries a sixth `context` argument so protection
+-- listeners can tell a container use from a break: both pass placing=false.
+-- action: "place" | "break" | "use" | "modify" (state/block-entity rewrite of
+-- an existing block). Callers that predate the field fall back to place/modify.
+local EDIT_ACTIONS = { place = true, ["break"] = true, use = true, modify = true }
+
+function SV.EditContext( bx, by, bz, placing, context )
+	local action = istable( context ) and context.action or nil
+	if not EDIT_ACTIONS[action] then action = placing == true and "place" or "modify" end
+	return {
+		action = action,
+		reason = istable( context ) and context.reason or nil,
+		stateId = MC.GetBlockState( bx, by, bz ),
+		newStateId = istable( context ) and context.newStateId or nil,
+	}
+end
+
+-- The cell veto alone (no cooldown, reach or global edit gate) for callers that
+-- already ran those checks or deliberately skip them (owned projectiles).
+function SV.CellEditAllowed( ply, bx, by, bz, placing, context )
+	if not MC.RunEvent then return true end
+	return MC.RunEvent( "MC.CanPlayerEditCell", ply, bx, by, bz, placing == true,
+		SV.EditContext( bx, by, bz, placing, context ) ) ~= false
+end
+
 -- returns true if allowed; otherwise false (+ optional notify)
-function SV.Validate( ply, bx, by, bz, placing )
+function SV.Validate( ply, bx, by, bz, placing, context )
 	if not cooldownOK( ply ) then return false end
 	if not canEdit( ply ) then return false end
-	if MC.RunEvent and MC.RunEvent( "MC.CanPlayerEditCell", ply, bx, by, bz, placing == true ) == false then return false end
+	if not SV.CellEditAllowed( ply, bx, by, bz, placing, context ) then return false end
 
 	local reach = C.Reach:GetFloat()
 	if reach > 0 and IsValid( ply ) then
@@ -897,7 +922,9 @@ local function validatePlacementPlan( ply, plan )
 	if not plan or not plan.cells or #plan.cells == 0 then return false end
 	if not cooldownOK( ply ) then return false end
 	if not canEdit( ply ) then return false end
-	if MC.RunEvent and MC.RunEvent( "MC.CanPlayerEditCell", ply, plan.bx, plan.by, plan.bz, true ) == false then return false end
+	if not SV.CellEditAllowed( ply, plan.bx, plan.by, plan.bz, true, { action = "place", newStateId = plan.stateId } ) then
+		return false
+	end
 	if not validateReach( ply, plan.bx, plan.by, plan.bz ) then return false end
 
 	local add = 0
@@ -935,7 +962,7 @@ local function validateBreakPlan( ply, plan, consumeCooldown )
 	if not plan or not plan.cells or #plan.cells == 0 then return false, "no_break_plan" end
 	if consumeCooldown ~= false and not cooldownOK( ply ) then return false, "edit_cooldown" end
 	if not canEdit( ply ) then return false, "edit_denied" end
-	if MC.RunEvent and MC.RunEvent( "MC.CanPlayerEditCell", ply, plan.bx, plan.by, plan.bz, false ) == false then
+	if not SV.CellEditAllowed( ply, plan.bx, plan.by, plan.bz, false, { action = "break" } ) then
 		return false, "cell_edit_denied"
 	end
 	if not validateReach( ply, plan.bx, plan.by, plan.bz ) then return false, "out_of_reach" end
@@ -1129,7 +1156,7 @@ function SV.Use( ply, bx, by, bz, selectedBlockID, context )
 		if IsValid( ply ) then ply.mcNextOp = restoreNextOp end
 		return false
 	end
-	if not SV.Validate( ply, bx, by, bz, false ) then return decline() end
+	if not SV.Validate( ply, bx, by, bz, false, { action = "use" } ) then return decline() end
 	local used = b.handlers.OnUse( ply, bx, by, bz, MC.GetBlockOrient( bx, by, bz ), selectedBlockID, context ) == true
 	if not used then return decline() end
 	-- Stamped so the right-click fallback below can tell whether the held
