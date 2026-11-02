@@ -120,17 +120,23 @@ local function prepareEntityProxy( ent, model )
 	if record and ( record.model ~= model or not IsValid( record.proxy ) ) then
 		removeEntityProxy( ent, record ) record = nil
 	end
+	-- Bone metadata can be unavailable until the first setup. Never retain an
+	-- empty skeleton: a later successful setup must be able to build the proxy.
+	ent:InvalidateBoneCache()
+	ent:SetupBones()
 	if not record then
+		local bones = {}
+		for bone = 0, ent:GetBoneCount() - 1 do
+			if ent:GetBoneName( bone ) ~= "__INVALIDBONE__" then bones[#bones + 1] = bone end
+		end
+		requireValue( #bones > 0, "render_pbr_entity_proxy_pose", "entity shadow skeleton is unavailable: " .. model )
 		local proxy = ClientsideModel( model, RENDERGROUP_OPAQUE )
 		requireValue( IsValid( proxy ), "render_pbr_entity_proxy", "could not create an entity shadow model: " .. model )
-		record = { proxy = proxy, model = model, bones = {}, poseBones = {}, poseMatrices = {}, poseCount = 0,
+		record = { proxy = proxy, model = model, bones = bones, poseBones = {}, poseMatrices = {}, poseCount = 0,
 			bodygroups = ent:GetNumBodyGroups() }
 		entityProxies[ent] = record
 		proxy:SetNoDraw( true )
 		proxy:DrawShadow( false )
-		for bone = 0, ent:GetBoneCount() - 1 do
-			if ent:GetBoneName( bone ) ~= "__INVALIDBONE__" then record.bones[#record.bones + 1] = bone end
-		end
 		proxy:AddCallback( "BuildBonePositions", function( self )
 			for i = 1, record.poseCount do self:SetBoneMatrix( record.poseBones[i], record.poseMatrices[i] ) end
 		end )
@@ -150,8 +156,6 @@ local function prepareEntityProxy( ent, model )
 	for group = 0, record.bodygroups - 1 do proxy:SetBodygroup( group, ent:GetBodygroup( group ) ) end
 	-- The copied world matrices already include model/bone scale. The proxy's
 	-- own model scale stays at one so a rigid prop is not scaled a second time.
-	ent:InvalidateBoneCache()
-	ent:SetupBones()
 	local count = 0
 	for i = 1, #record.bones do
 		local bone = record.bones[i]

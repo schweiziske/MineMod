@@ -85,9 +85,14 @@ end
 -- collision and rendering. Register on both realms; replace rather than
 -- mutate the returned immutable geometry when the definition changes.
 function MC.RegisterBlockStateSelectionBoxes( blockName, boxes )
-	if type( blockName ) ~= "string" or not MC.BlockStateSchemaByName[blockName] then
-		return nil, "invalid_block_name"
+	if type( blockName ) ~= "string" then return nil, "invalid_block_name" end
+	local schema = MC.BlockStateSchemaByName[blockName]
+	-- Shared autorun registers shapes before the state registry freezes.
+	-- The pending table is released after finalization; reloads use the index.
+	if not schema and MC.PendingBlockStateSchemas then
+		schema = MC.PendingBlockStateSchemas[blockName]
 	end
+	if not schema then return nil, "invalid_block_name" end
 	local validated = normalizedBoxes( boxes )
 	if not validated or validated == EMPTY_BOXES then return nil, "invalid_selection_boxes" end
 	local copy = {}
