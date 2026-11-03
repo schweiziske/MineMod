@@ -240,7 +240,7 @@ function main(argv) {
     const flag = argv[i];
     if (flag === "--stage-only") flags.stageOnly = true;
     else if (flag === "--experimental-gpu-animation") flags.experimentalAnimation = true;
-    else if (["--toolchain", "--compiler", "--game", "--reference", "--python", "--descriptor-from"].includes(flag)
+    else if (["--toolchain", "--compiler", "--game", "--reference", "--reference-sources", "--python", "--descriptor-from"].includes(flag)
         && argv[i + 1] && !argv[i + 1].startsWith("--")) {
       flags[flag.slice(2)] = flag === "--python" ? argv[++i] : path.resolve(argv[++i]);
     } else throw new Error(`Unknown/incomplete option: ${flag}`);
@@ -250,6 +250,19 @@ function main(argv) {
     publishDescriptor(JSON.parse(fs.readFileSync(flags["descriptor-from"], "utf8")));
     console.log(`Published JSON from verified existing VCS; no compilation or deployment\nDescriptor: ${DESCRIPTOR}`);
     return;
+  }
+  if (flags.reference && flags["reference-sources"]) {
+    throw new Error("Use either --reference <repository> or --reference-sources <directory>, not both");
+  }
+  const referenceSources = flags["reference-sources"] || (flags.reference
+    ? path.join(flags.reference, "tools/shader_compiler/shadersrc/mc_gpu_test") : null);
+  if (referenceSources) {
+    if (flags.compiler) throw new Error("Reference comparison currently requires the legacy compiler");
+    for (const name of ["mc_vanilla_quad_vs30.fxc", "mc_vanilla_quad.fxh"]) {
+      if (!fs.statSync(path.join(referenceSources, name)).isFile()) {
+        throw new Error(`Missing reference shader: ${path.join(referenceSources, name)}`);
+      }
+    }
   }
   const toolchain = flags.toolchain || path.join(__dirname, "toolchain");
   const game = flags.game || "D:/steam/steamapps/common/GarrysMod/garrysmod";
@@ -286,10 +299,9 @@ function main(argv) {
   if (flags.stageOnly) return;
   const referencePrograms = {};
   // Optional read-only reference audit, not a build dependency or a GPU test.
-  if (flags.reference) {
-    const reference = path.join(flags.reference, "shadersrc/mc_gpu_test");
+  if (referenceSources) {
     for (const name of ["mc_vanilla_quad_vs30.fxc", "mc_vanilla_quad.fxh"]) {
-      fs.copyFileSync(path.join(reference, name), path.join(build, name));
+      fs.copyFileSync(path.join(referenceSources, name), path.join(build, name));
       fs.appendFileSync(path.join(build, "uniquefilestocopy.txt"), name + "\r\n");
     }
     for (const [key, translucent] of [["cutout", 0], ["translucent", 1]]) {
@@ -305,7 +317,6 @@ function main(argv) {
     }
   }
   if (flags.compiler) {
-    if (flags.reference) throw new Error("Reference comparison currently requires the legacy compiler");
     compileModern(flags.compiler,build,Object.entries(names).map(([key,name])=>
       ({name,file:PROGRAMS[key][0].replaceAll("/","__"),profile:PROGRAMS[key][1]})));
   } else run(path.join(build, "shadercompile.exe"), ["-nompi", "-allowdebug", "-threads", "1", "-game", game, "-shaderpath", build],
@@ -314,7 +325,7 @@ function main(argv) {
     ...[...Object.values(names), ...Object.values(referencePrograms)].map(name =>
       path.join(build, "shaders/fxc", name + ".vcs"))], build, path.join(build, "bytecode-report.json")));
   for (const [key, name] of Object.entries(names)) validateReport(reports[name], PROGRAMS[key][1], key, flags.experimentalAnimation);
-  if (flags.reference) {
+  if (referenceSources) {
     const evidence = {};
     for (const [key, name] of Object.entries(referencePrograms)) {
       if (reports[names[key]].instructionHash !== reports[name].instructionHash) {

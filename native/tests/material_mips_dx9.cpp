@@ -127,8 +127,8 @@ int wmain(int argc, wchar_t **argv)
 		pp.BackBufferFormat = D3DFMT_X8R8G8B8;
 		ComPtr<IDirect3DDevice9> device;
 		check(api->CreateDevice(0, D3DDEVTYPE_HAL, window, D3DCREATE_HARDWARE_VERTEXPROCESSING, &pp, &device), "device");
-		auto						   vs = compile(root / "shadersrc/l2/probes/probe_animation_vertex.fxc", "vs_3_0");
-		auto						   ps = compile(root / "shadersrc/l2/probes/probe_material_mips.fxc", "ps_3_0");
+		auto						   vs = compile(root / "tools/shader_compiler/shadersrc/l2/probes/probe_animation_vertex.fxc", "vs_3_0");
+		auto						   ps = compile(root / "tools/shader_compiler/shadersrc/l2/probes/probe_material_mips.fxc", "ps_3_0");
 		ComPtr<IDirect3DVertexShader9> vertex;
 		ComPtr<IDirect3DPixelShader9>  pixel;
 		check(device->CreateVertexShader(static_cast<const DWORD *>(vs->GetBufferPointer()), &vertex), "vertex");
