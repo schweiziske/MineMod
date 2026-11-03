@@ -1,4 +1,4 @@
--- Batched Minecraft Java 26.2 throwable particles with MCSWEP voxel lighting.
+-- Batched Minecraft Java 26.2 throwable particles with MineMod voxel lighting.
 
 if not CLIENT then return end
 

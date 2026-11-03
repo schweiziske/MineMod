@@ -153,7 +153,7 @@ function ENT:HitEntity(target, trace, speed)
 
         -- Java drops an ALLOWED pickup and discards the arrow when the final
         -- reflected speed is below 1e-7 squared blocks/tick.  The public drop
-        -- bridge preserves the complete projectile ItemStack when MCSWEP is
+        -- bridge preserves the complete projectile ItemStack when MineMod is
         -- present; standalone MCITEM has no item-entity backend.
         if reflected:LengthSqr() < 1e-7 then
             if self.MCPickup == MCITEM.Pickup.ALLOWED
@@ -259,7 +259,7 @@ end
 
 -- `tryPickup` 的 ALLOWED 分支是 `player.getInventory().add(getPickupItem())`：
 -- 捡起来是真的往背包里放一件东西，放不下就捡不起来（实体留在原地）。
--- 装了 MCSWEP 走它的背包；没装就退回"把 SWEP 还给玩家"（只有三叉戟这类本身是
+-- 装了 MineMod 走它的背包；没装就退回"把 SWEP 还给玩家"（只有三叉戟这类本身是
 -- 一件武器的弹丸有意义，箭没有对应 SWEP，直接算捡到）。
 function ENT:MCGivePickupItem(ply)
     local itemId = self.MCPickupItemID
@@ -364,7 +364,7 @@ function ENT:Think()
 
     local owner = self:GetOwner()
     -- ThrownTrident 命中生物之后 `findHitEntity` 返回 null：**只是不再判定生物**，
-    -- 方块照撞。原来这一支换成了 MASK_SOLID_BRUSHONLY，而 MCSWEP 的方块是
+    -- 方块照撞。原来这一支换成了 MASK_SOLID_BRUSHONLY，而 MineMod 的方块是
     -- `mc_chunk` **实体**、不是 brush —— 于是弹开之后的三叉戟直接穿过方块掉下去。
     -- 正确做法是保持 MASK_SHOT，只在过滤器里把生物排掉。
     local ignoreLiving = self.MCIgnoreAllEntities == true
@@ -402,7 +402,7 @@ function ENT:Think()
         -- AbstractArrow.canHitEntity → Entity.canBeHitByProjectile()
         --   = isAlive() && isPickable() && !isSpectator()
         -- 也就是**只有活着的生物**算 onHitEntity，其余一律走 onHitBlock 插上去。
-        -- Source 这边把 MCSWEP 的 mc_chunk / 地图刷子 / prop 全部当成"方块"。
+        -- Source 这边把 MineMod 的 mc_chunk / 地图刷子 / prop 全部当成"方块"。
         if MCITEM.IsProjectileTarget(trace.Entity)
             and MCITEM.Throwables
             and isfunction(MCITEM.Throwables.TryEntityDeflection)

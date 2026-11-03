@@ -1,8 +1,8 @@
--- 把 MCITEM 的 convar 挂进 MCSWEP 的游戏内设置面板（"设置"那一栏）。
+-- 把 MCITEM 的 convar 挂进 MineMod 的游戏内设置面板（"设置"那一栏）。
 --
--- MCSWEP 侧新增了 `MC.API.Config.RegisterGroup / RegisterCategory`（见
+-- MineMod 侧新增了 `MC.API.Config.RegisterGroup / RegisterCategory`（见
 -- `lua/mc/api/sh_api.lua`），本文件只是它的第一个使用者：面板数据是纯元数据，
--- 注册两次同一个 id 是幂等的。MCSWEP 不在场（或版本没有这个 API）时整段静默跳过，
+-- 注册两次同一个 id 是幂等的。MineMod 不在场（或版本没有这个 API）时整段静默跳过，
 -- convar 本身照样能在控制台用 —— MCITEM 仍然是可独立安装的 addon。
 
 MCITEM = MCITEM or {}
@@ -146,8 +146,8 @@ local CATEGORIES = {
                     "Amplitude multiplier for Minecraft's tiny draw shake. 0 = off.",
                     "Minecraft 拉弓微抖的幅度倍率，0 = 关闭。"),
                 item("mcitem_block_outline", "Block outline", "方块描边", "bool",
-                    "Draw the MCSWEP block outline while a Minecraft weapon or item is aimed at a block.",
-                    "手持 Minecraft 武器 / 物品瞄准方块时显示 MCSWEP 的方块描边。"),
+                    "Draw the MineMod block outline while a Minecraft weapon or item is aimed at a block.",
+                    "手持 Minecraft 武器 / 物品瞄准方块时显示 MineMod 的方块描边。"),
             },
         },
         {

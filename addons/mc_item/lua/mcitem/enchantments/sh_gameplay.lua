@@ -1,5 +1,5 @@
 -- Minecraft Java 26.2 enchantment gameplay helpers shared by MCITEM weapons,
--- projectiles and the MCSWEP inventory bridge.  The authoritative enchantment
+-- projectiles and the MineMod inventory bridge.  The authoritative enchantment
 -- levels always come from the complete ItemStack components; this file never
 -- invents a second weapon-local enchantment store.
 
@@ -176,7 +176,7 @@ function Runtime.GetPunchLevel(stack)
 end
 
 -- LivingEntity's ordinary knockback-resistance attribute is shared by melee,
--- projectile and mob forces.  MCSWEP exposes Netherite's equipment total on
+-- projectile and mob forces.  MineMod exposes Netherite's equipment total on
 -- players as a networked attribute, while BMB/other integrations may expose a
 -- method, hook or entity field.  Take the strongest view instead of summing
 -- them: integrations often mirror the same underlying attribute in more than

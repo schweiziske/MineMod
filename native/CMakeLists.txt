@@ -12,7 +12,7 @@ endif()
 project(mcswep_native_mesh LANGUAGES C CXX)
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
-	message(FATAL_ERROR "MCSWEP Native requires an x86 or x64 toolchain.")
+	message(FATAL_ERROR "MineMod Native requires an x86 or x64 toolchain.")
 endif()
 
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")

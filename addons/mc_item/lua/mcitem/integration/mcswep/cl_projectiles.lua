@@ -1,4 +1,4 @@
--- Client-only visual parity for MCSWEP's built-in mc_projectile entity.
+-- Client-only visual parity for MineMod's built-in mc_projectile entity.
 
 if not CLIENT then return end
 

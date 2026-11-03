@@ -73,7 +73,7 @@ for _, filename in ipairs({
     "critical_hit.vtf", "damage.vtf",
     "sweep_0.vtf", "sweep_1.vtf", "sweep_2.vtf", "sweep_3.vtf",
     "sweep_4.vtf", "sweep_5.vtf", "sweep_6.vtf", "sweep_7.vtf",
-    -- 重锤尘柱在 MCSWEP 方块上采图集贴图；踩不到方块（Source 地面 / prop）时的兜底。
+    -- 重锤尘柱在 MineMod 方块上采图集贴图；踩不到方块（Source 地面 / prop）时的兜底。
     "dirt.vtf",
 }) do
     resource.AddFile("materials/mcitem/particles/" .. filename)

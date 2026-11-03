@@ -509,7 +509,7 @@ function SV.ThrowItemProjectile( ply, record, stack, context )
 end
 
 -- Ammo helpers for EXTERNAL projectile SWEPs (exposed through
--- MC.API.Inventory.HasAmmo / ConsumeAmmo). MCSWEP's own bow/crossbow path above
+-- MC.API.Inventory.HasAmmo / ConsumeAmmo). MineMod's own bow/crossbow path above
 -- consumes ammo inside its launch transaction; an external SWEP owns its own
 -- projectile entity, so it needs the ammo half on its own. Same allowed-item
 -- table, same creative "infinite materials" rule, same container commit.

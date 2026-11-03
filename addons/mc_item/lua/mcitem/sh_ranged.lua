@@ -53,7 +53,7 @@ end
 --------------------------------------------------------------------------------
 -- AbstractArrow.canHitEntity → Entity.canBeHitByProjectile() = 活着 + 可选中 + 非旁观。
 -- 方块、掉落物、载具、装饰实体都不满足，所以在 MC 里箭是**插上去**而不是打伤它们。
--- Source 侧没有这套语义，按"有生命的生物"判：玩家 / NPC / NextBot。MCSWEP 的
+-- Source 侧没有这套语义，按"有生命的生物"判：玩家 / NPC / NextBot。MineMod 的
 -- mc_chunk、地图刷子、玩家 prop 全部落在外面 = 当方块处理。
 function MCITEM.IsProjectileTarget(entity)
     if not IsValid(entity) or entity == game.GetWorld() then return false end

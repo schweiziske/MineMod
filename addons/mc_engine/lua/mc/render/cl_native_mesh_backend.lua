@@ -3,12 +3,12 @@ if MC.NativeMeshBackendModuleLoaded then return end
 MC.NativeMeshBackendModuleLoaded = true
 
 --[[----------------------------------------------------------------------------
-	mcswep_native_bridge.lua 鈥斺€?MCSWEP 鍘熺敓寤洪潰鍚庣閫傞厤鍣?鐙珛鎻掍欢, 涓嶆敼鍘熼」鐩?
+	mcswep_native_bridge.lua 鈥斺€?MineMod 鍘熺敓寤洪潰鍚庣閫傞厤鍣?鐙珛鎻掍欢, 涓嶆敼鍘熼」鐩?
 
 	瀹夎: 鏈枃浠堕殢 gmcl_mcswep_native_mesh DLL 鍙戝竷, 浣滀负鐙珛 addon:
 	    garrysmod/addons/mcswep-native/lua/autorun/client/mcswep_native_bridge.lua
 	    garrysmod/lua/bin/gmcl_mcswep_native_mesh_win64.dll (鎴?_win32)
-	鍘熼」鐩?MCSWEP)闆舵敼鍔ㄣ€傛病瑁?DLL / 鎻℃墜澶辫触 / 鍘熼」鐩笉瀛樺湪鏃舵湰鏂囦欢涓嶅仛浠讳綍浜嬨€?
+	鍘熼」鐩?MineMod)闆舵敼鍔ㄣ€傛病瑁?DLL / 鎻℃墜澶辫触 / 鍘熼」鐩笉瀛樺湪鏃舵湰鏂囦欢涓嶅仛浠讳綍浜嬨€?
 
 	鍘熺悊(杩愯鏃惰ˉ涓?+ 浠ｇ悊 mesh, 濂戠害瑙佸師鐢熶粨搴?INTERFACE.md v1):
 	  1. 鍖呬竴灞?MC.BuildChunkMesh / MC.RebuildChunkMeshLighting / MC.FreeChunkMesh銆?
@@ -33,7 +33,7 @@ if SERVER then AddCSLuaFile() end
 
 
 local CONVAR_ENABLED = CreateClientConVar( "mc_native_mesh", "1", true, false,
-	"MCSWEP native mesh backend: 1 = use mcswep_native_mesh module when available, 0 = pure Lua" )
+	"MineMod native mesh backend: 1 = use mcswep_native_mesh module when available, 0 = pure Lua" )
 local CONVAR_THINK_MS = CreateClientConVar( "mc_native_think_ms", "3", true, false,
 	"Per-frame budget (ms) for native mesh finalization" )
 local CONVAR_GREEDY = CreateClientConVar( "mc_native_greedy", "0", true, false,
@@ -169,7 +169,7 @@ local function applyNativeLightChanges( result )
 end
 
 local function log( msg )
-	print( "[mcswep-native] " .. tostring( msg ) )
+	print( "[MineMod Native] " .. tostring( msg ) )
 end
 
 local function refreshConfigVisibility()
@@ -2116,7 +2116,7 @@ concommand.Add( "mc_native_toggle", function()
 			log( "cannot activate: module or MC pipeline not ready (see mc_native_status)" )
 		end
 	end
-end, nil, "Hot-swap MCSWEP mesh backend between native (mcswep_native_mesh) and pure Lua for A/B comparison" )
+end, nil, "Hot-swap MineMod mesh backend between native (mcswep_native_mesh) and pure Lua for A/B comparison" )
 
 local function latestPerfSample( ring )
 	if ring.count == 0 then return nil end
@@ -2280,7 +2280,7 @@ concommand.Add( "mc_native_status", function()
 	lines[#lines + 1] = "gpu timing     = unavailable (source_api_unavailable)"
 	for _, l in ipairs( packProfileLines() ) do lines[#lines + 1] = l end
 	for _, l in ipairs( lines ) do log( l ) end
-end, nil, "Print MCSWEP native mesh backend state and module stats" )
+end, nil, "Print MineMod native mesh backend state and module stats" )
 
 concommand.Add( "mc_native_verify", function()
 	local failures, waits = {}, {}

@@ -16,7 +16,7 @@
 
 	Deliberately NOT ported: fire spread to flammable neighbours
 	(FireBlock#tick's trySpread half) and rain extinguishing. Spread is a
-	separate feature with its own griefing surface, and MCSWEP has no weather
+	separate feature with its own griefing surface, and MineMod has no weather
 	state to ask isRaining() about.
 ------------------------------------------------------------------------------]]
 

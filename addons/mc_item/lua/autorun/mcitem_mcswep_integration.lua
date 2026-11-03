@@ -1,4 +1,4 @@
--- Optional MCSWEP integration. MCITEM remains standalone when MC.API is absent.
+-- Optional MineMod integration. MCITEM remains standalone when MC.API is absent.
 
 if SERVER then AddCSLuaFile() end
 

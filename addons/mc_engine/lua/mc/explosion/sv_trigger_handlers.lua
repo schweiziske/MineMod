@@ -93,7 +93,7 @@ end
 
 local function triggerBell( context )
 	-- BellBlock.attemptToRing receives a null direction for explosions and falls
-	-- back to the block state's facing. MCSWEP has no BellBlockEntity animation,
+	-- back to the block state's facing. MineMod has no BellBlockEntity animation,
 	-- so integrations receive the exact logical ring through this event.
 	context.ringDirection = MC.GetStateProperty( context.stateId, "facing" )
 	if MC.RunEvent then MC.RunEvent( "MC.BellRungByExplosion", context ) end

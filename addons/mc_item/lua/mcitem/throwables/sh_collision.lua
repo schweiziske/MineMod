@@ -19,7 +19,7 @@ local function worldPosition(position, context)
     return position
 end
 
--- MCSWEP exposes its Minecraft world collision through large Source entities
+-- MineMod exposes its Minecraft world collision through large Source entities
 -- (`mc_chunk`, `mc_chunk_phys` and the client prediction carrier).  Those
 -- entities are only an engine-side broad-phase proxy; their AABB can cover an
 -- entire chunk/subchunk and therefore must never be considered a projectile
@@ -137,7 +137,7 @@ end
 -- AbstractArrow/ThrownTrident trace path. nil means "no opinion"; true/false is
 -- an explicit decision. Keeping this separate from Source solidity checks lets
 -- an entity such as an Enderman veto a projectile hit without making ordinary
--- props or MCSWEP chunk collision disappear from arrow traces.
+-- props or MineMod chunk collision disappear from arrow traces.
 function Throwables.QueryProjectileEntityHit(projectile, entity)
     if not IsValid(projectile) or not IsValid(entity) then return nil end
     if isfunction(projectile.ShouldMCProjectileHitEntity) then
@@ -385,7 +385,7 @@ function Throwables.TraceMovementHull(startPosition, destination, minimumHull, m
     local maximumDistance = displacement:Length()
     if maximumDistance <= EPSILON then return { Hit = false, HitPos = destination } end
     -- GMod trace filter callbacks return true when the entity is eligible to
-    -- be hit and false to skip it (the same convention used by MCSWEP's own
+    -- be hit and false to skip it (the same convention used by MineMod's own
     -- projectile filter and BMB's safety traces).  The Minecraft voxel path
     -- is the authoritative block query, so Source broad-phase proxies are
     -- always skipped.  A single entity passed by callers (the XP orb is one

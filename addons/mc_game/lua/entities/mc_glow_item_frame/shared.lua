@@ -1,7 +1,7 @@
 ENT.Type = "anim"
 ENT.Base = "mc_item_frame"
 ENT.PrintName = "Minecraft Glow Item Frame"
-ENT.Author = "MCSWEP"
+ENT.Author = "MineMod"
 ENT.Spawnable = false
 ENT.AdminOnly = false
 ENT.RenderGroup = RENDERGROUP_TRANSLUCENT

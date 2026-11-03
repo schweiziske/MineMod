@@ -202,7 +202,7 @@ end
 
 ------------------------------------------------------------------- API.Mining
 -- Public, tool-agnostic survival mining. External SWEPs provide only an item
--- id/stack and their active weapon entity; MCSWEP remains authoritative for
+-- id/stack and their active weapon entity; MineMod remains authoritative for
 -- reach, block state, vanilla speed, crack stages, loot and the transaction.
 API.Mining = API.Mining or {}
 local Mining = API.Mining

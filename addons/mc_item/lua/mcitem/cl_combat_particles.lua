@@ -67,17 +67,17 @@ Combat.Materials = Combat.Materials or {
 }
 
 --------------------------------------------------------------------------------
--- MCSWEP 体素采光（MC.API.Light.SampleRGB）
+-- MineMod 体素采光（MC.API.Light.SampleRGB）
 --------------------------------------------------------------------------------
 --
--- 以前用的是 render.GetLightColor：那是 **Source 地图的 lightmap**，跟 MCSWEP 的方块
+-- 以前用的是 render.GetLightColor：那是 **Source 地图的 lightmap**，跟 MineMod 的方块
 -- 世界毫无关系，在 gm_flatgrass 这种图上大约只有 0.3~0.5，于是暴击星/箭尾迹再叠上
 -- CritParticle 自己的 0.6~0.9 随机灰度就变成暗灰色 —— 这就是"射出来的粒子偏暗"。
 -- 贴图本身没问题（10 张战斗粒子 VTF 与 Mojang PNG 逐像素一致，本轮复核过）。
 --
 -- 采光走 v1 的 `MC.API.Light.SampleRGB(pos, emission)`（display 空间 RGB，直接当顶点色
--- 乘数，和 MCSWEP 自己的方块簇 / 手持方块同约定，**不叠实体模型那档 0.48 曝光**）。
--- MCSWEP 不在场时退回 1,1,1（全亮），比 Source lightmap 更接近 MC 的观感。
+-- 乘数，和 MineMod 自己的方块簇 / 手持方块同约定，**不叠实体模型那档 0.48 曝光**）。
+-- MineMod 不在场时退回 1,1,1（全亮），比 Source lightmap 更接近 MC 的观感。
 -- 按"格 + emission"缓存一小段时间：一次重锤是 750 个粒子，逐粒子直调采样器太贵。
 
 local LIGHT_CACHE_SECONDS = 0.15
@@ -143,7 +143,7 @@ function MCITEM.SampleParticleLightRGB(position, emission)
 end
 
 -- SingleQuadParticle 的顶点色 = 粒子自己的 rgb × getLightColor()。世界光走上面的
--- MCSWEP 体素采样器。
+-- MineMod 体素采样器。
 --
 -- ⚠ 采光**每个粒子只在生成时算一次**。一次重锤是 750 个粒子、每个活 1~2 秒，逐帧
 -- 逐粒子采样即使有按格缓存也要付 750 次字符串拼接 + table 查询，实测就是掉帧的大头。
@@ -163,20 +163,20 @@ end
 -- **被砸那一格方块的 particle sprite**，而且每个粒子只采该 sprite 的一个 1/4 × 1/4 子块：
 --     getU0 = sprite.getU((uo+1)/4)   getU1 = sprite.getU(uo/4)     -- uo,vo ∈ [0,3)
 --     getV0 = sprite.getV(vo/4)       getV1 = sprite.getV((vo+1)/4)
--- MCSWEP 的图集里已经有等价物：`MC.GetBlockParticleMaterial(id, col, row)` 返回一张带
+-- MineMod 的图集里已经有等价物：`MC.GetBlockParticleMaterial(id, col, row)` 返回一张带
 -- `$basetexturetransform` 的代理材质，正好把 0..1 的 UV 映射到那 1/4 子块，可以直接喂
 -- render.DrawSprite。这是内部符号（v1 的 API.Render 只有 MarkCellDirty，见
 -- docs/MCSWEP_API_V1_GAP.md 第七节），所以逐个探测、拿不到就退回自带贴图。
 --
--- 落点不在 MCSWEP 方块上时（站在 gm_flatgrass 的地面、prop 上等）用**泥土**粒子兜底，
--- 这是本轮拍板的行为：泥土贴图自带在 materials/mcitem/particles/dirt，所以 MCSWEP
+-- 落点不在 MineMod 方块上时（站在 gm_flatgrass 的地面、prop 上等）用**泥土**粒子兜底，
+-- 这是本轮拍板的行为：泥土贴图自带在 materials/mcitem/particles/dirt，所以 MineMod
 -- 完全缺席也有正确观感。
 
 local DUST_UV_STEPS = 4
 
 local dirtDustMaterials = {}
 
--- 自带泥土贴图的 16 张 1/4 子块材质，和 MCSWEP 代理材质同样的 basetexturetransform 算法。
+-- 自带泥土贴图的 16 张 1/4 子块材质，和 MineMod 代理材质同样的 basetexturetransform 算法。
 local function dirtDustMaterial(col, row)
     local key = col .. "," .. row
     local cached = dirtDustMaterials[key]
@@ -201,7 +201,7 @@ local function dirtDustMaterial(col, row)
     return material
 end
 
--- 被砸那一格的方块 id（脚下一格）。MCSWEP 不在场 / 那格是空气时返回 nil。
+-- 被砸那一格的方块 id（脚下一格）。MineMod 不在场 / 那格是空气时返回 nil。
 local function smashBlockId(position)
     if not MC or not istable(MC.API) then return nil end
     if isfunction(MC.API.IsReady) and not MC.API.IsReady() then return nil end
@@ -387,7 +387,7 @@ end
 -- Small public bridge for entity effects that need Java's CRIT particle but
 -- do not have a LivingEntity TrackingEmitter.  Distances and auxiliary
 -- velocities are expressed in Minecraft cells so callers remain independent
--- of the active MCSWEP block scale.
+-- of the active MineMod block scale.
 function Combat.EmitCriticalBurst(position, count, options)
     if not isvector(position) then return end
     options = istable(options) and options or {}
@@ -475,7 +475,7 @@ local function spawnMaceDust(blockId, position, verticalAux)
             verticalAux + randomGaussian() / 2
         ),
         -- TerrainParticle 构造式：rCol = gCol = bCol = 0.6（再乘方块 tint，
-        -- MCSWEP 的图集贴图已经是最终颜色，不另外乘 tint）。
+        -- MineMod 的图集贴图已经是最终颜色，不另外乘 tint）。
         red = 0.6,
         green = 0.6,
         blue = 0.6,
@@ -608,7 +608,7 @@ hook.Add("Think", "MCITEM.CombatParticles.Tick", function()
     for index = keptParticles + 1, particleCount do particles[index] = nil end
 end)
 
--- SingleQuadParticle 的顶点色 = 粒子自己的 rgb × getLightColor()。世界光走 MCSWEP 的
+-- SingleQuadParticle 的顶点色 = 粒子自己的 rgb × getLightColor()。世界光走 MineMod 的
 -- 体素采样器（见文件上半部分的注释：render.GetLightColor 是 Source lightmap，会偏暗）。
 --
 --------------------------------------------------------------------------------

@@ -1,4 +1,4 @@
--- Pure selected-stack -> MCITEM SWEP resolution for the generic MCSWEP bridge.
+-- Pure selected-stack -> MCITEM SWEP resolution for the generic MineMod bridge.
 
 MCITEM = MCITEM or {}
 MCITEM.MCSWEP = MCITEM.MCSWEP or {}
@@ -49,7 +49,7 @@ end
 function Integration.BasePotionID(stack)
     if not istable(stack) then return nil end
     local contents = component(stack.components, "potion_contents")
-    -- PotionItem#getDefaultInstance installs Potions.WATER. MCSWEP's compact
+    -- PotionItem#getDefaultInstance installs Potions.WATER. MineMod's compact
     -- generated registry does not serialize default components, so absence is
     -- the default water bottle; an explicitly present empty component is not.
     if contents == nil then return "water" end

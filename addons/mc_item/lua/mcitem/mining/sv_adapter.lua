@@ -1,4 +1,4 @@
--- Server adapter for MC.API.Mining. MCSWEP owns progress, crack stages, reach,
+-- Server adapter for MC.API.Mining. MineMod owns progress, crack stages, reach,
 -- vanilla tool rules, loot and block transactions; MCITEM only identifies the
 -- active SWEP and exposes durability/completion callbacks.
 

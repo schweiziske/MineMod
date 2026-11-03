@@ -20,7 +20,7 @@ end
 
 -- Minecraft absorption is stored in native health points (4 = two hearts),
 -- while CTakeDamageInfo is in Source HP. Ask the target for its explicit
--- health-unit contract first, then accept the shared BMB/MCSWEP fields or hook.
+-- health-unit contract first, then accept the shared BMB/MineMod fields or hook.
 -- A normal Source player is 100 HP versus Minecraft's 20, so the standalone
 -- fallback is 5 Source HP per Minecraft health point.
 function Potions.GetMinecraftHealthScale(target, context)
@@ -131,7 +131,7 @@ end)
 hook.Remove("EntityTakeDamage", "MCITEM.Potions.DamageAttributes")
 hook.Add("EntityTakeDamage", "MCITEM.Potions.DamageAttributes", function(target, damageInfo)
     if not IsValid(target) then return end
-    -- MCSWEP invokes the same status boundary after its shield/armor pass.
+    -- MineMod invokes the same status boundary after its shield/armor pass.
     -- Skip the early path for those players so absorption is not consumed
     -- before armor mitigation.
     if hasMCSWEPCombatPipeline(target) then

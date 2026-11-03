@@ -124,7 +124,7 @@ function SWEP:GetMCUseRenderState()
     return "block", self:GetMCShieldUseTicks(), 72000
 end
 
--- Read-only duck-typed combat contract consumed by MCSWEP. Inventory proxies
+-- Read-only duck-typed combat contract consumed by MineMod. Inventory proxies
 -- keep using the selected-stack state machine and real durability; a directly
 -- spawned SWEP exposes the same raised timing as an infinite-durability test
 -- shield without pretending that it belongs to mc_inventory.

@@ -713,7 +713,7 @@ end
 
 -- Level.getBlockRandomPos in Java 26.2: randValue = randValue * 3 +
 -- 1013904223 (32-bit), then x/y/z are three four-bit fields of randValue >> 2.
--- MCSWEP uses X/Y horizontally and Z vertically, so Java's Z maps to local Y
+-- MineMod uses X/Y horizontally and Z vertically, so Java's Z maps to local Y
 -- and Java's Y maps to local Z here.
 local function nextRandomSectionCell()
 	RandomTickValue = bit.tobit( RandomTickValue * 3 + 1013904223 )

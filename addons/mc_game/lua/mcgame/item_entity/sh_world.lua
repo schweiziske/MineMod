@@ -108,7 +108,7 @@ function R.FluidTrackersForBounds( minimum, maximum, output )
 	local x0, y0, z0, x1, y1, z1 = deflatedRange( minimum, maximum, C.fluidBoundsDeflate, output.queryMin, output.queryMax )
 	if x0 == nil then return output end
 	local size = R.BlockSize()
-	-- Java loop order is x, vertical y, horizontal z. MCSWEP maps those axes to
+	-- Java loop order is x, vertical y, horizontal z. MineMod maps those axes to
 	-- bx, bz, by respectively; the order matters while tracker.height grows.
 	for bx = x0, x1 do
 		for bz = z0, z1 do

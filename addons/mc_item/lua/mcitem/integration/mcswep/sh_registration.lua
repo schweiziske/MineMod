@@ -1,6 +1,6 @@
 -- Load-order-safe registration with MC.API.HandWeapon.
 --
--- MCITEM ships separately from MCSWEP, so neither autorun order is guaranteed.
+-- MCITEM ships separately from MineMod, so neither autorun order is guaranteed.
 -- MC.API.OnRegister replays for late subscribers, which covers "engine already
 -- loaded"; the hook covers "engine loads after us". Registration must happen in
 -- the register phase, before the block/state registries freeze.

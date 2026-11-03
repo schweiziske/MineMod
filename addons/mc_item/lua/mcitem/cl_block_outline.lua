@@ -1,11 +1,11 @@
--- 手持 MCITEM 武器 / 物品时，瞄准的 MCSWEP 方块画描边。
+-- 手持 MCITEM 武器 / 物品时，瞄准的 MineMod 方块画描边。
 --
--- MCSWEP 自己的 `mc_item_hand_block_outline` 钩子只在"当前武器是 MC Hands、背包，
+-- MineMod 自己的 `mc_item_hand_block_outline` 钩子只在"当前武器是 MC Hands、背包，
 -- 或者当前选中栈解析得到的那把 SWEP"时才画；从生成菜单直接拿一把 MCITEM 武器
--- （没有 MCSWEP 背包栈）就落在条件外面，所以这里补一份。判据互斥：MCSWEP 已经
+-- （没有 MineMod 背包栈）就落在条件外面，所以这里补一份。判据互斥：MineMod 已经
 -- 认领这一帧时本文件直接让路，不会画两遍。
 --
--- 描边本身用 MCSWEP 的 `MC.API.UI.DrawBlockOutline`（v1 公开入口），形状、颜色和
+-- 描边本身用 MineMod 的 `MC.API.UI.DrawBlockOutline`（v1 公开入口），形状、颜色和
 -- 原版方块一致，我们不自己画线框。
 
 if not CLIENT then return end
@@ -16,7 +16,7 @@ if MCITEM.BlockOutlineInstalled then return end
 MCITEM.BlockOutlineInstalled = true
 
 local cvOutline = CreateClientConVar("mcitem_block_outline", "1", true, false,
-    "Draw the MCSWEP block outline while a Minecraft weapon or item is aimed at a block.")
+    "Draw the MineMod block outline while a Minecraft weapon or item is aimed at a block.")
 
 local OUTLINE_COLOR = Color(0, 0, 0, 235)
 
@@ -50,7 +50,7 @@ hook.Add("PostDrawTranslucentRenderables", "MCITEM.BlockOutline", function(_, _,
     if not istable(api) or not istable(api.UI) or not isfunction(api.UI.DrawBlockOutline) then return end
     if isfunction(api.IsReady) and not api.IsReady() then return end
 
-    -- MCSWEP 已经为这把武器画了描边就让路（受管 SWEP / 选中栈解析得到的那把）。
+    -- MineMod 已经为这把武器画了描边就让路（受管 SWEP / 选中栈解析得到的那把）。
     if isfunction(MC.IsInventoryHeldItemWeaponActive) and MC.IsInventoryHeldItemWeaponActive(ply) then
         return
     end

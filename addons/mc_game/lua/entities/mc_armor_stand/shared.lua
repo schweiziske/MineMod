@@ -1,7 +1,7 @@
 ENT.Type = "anim"
 ENT.Base = "base_anim"
 ENT.PrintName = "Minecraft Armor Stand"
-ENT.Author = "MCSWEP"
+ENT.Author = "MineMod"
 ENT.Spawnable = false
 ENT.AdminOnly = false
 ENT.RenderGroup = RENDERGROUP_TRANSLUCENT

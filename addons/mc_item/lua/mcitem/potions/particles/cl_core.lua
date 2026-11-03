@@ -181,7 +181,7 @@ function Potions.SpawnSmallGust(position)
     if not isvector(position) then return end
     if not Potions.ParticleAdmitted(position) then return end
     -- GustParticle#getLightCoords returns 0xF000F0: both gust families are
-    -- deliberately fullbright even though ordinary potion particles use MCSWEP light.
+    -- deliberately fullbright even though ordinary potion particles use MineMod light.
     local particle = particleBase(position, 0, true)
     particle.kind = "gust"
     particle.material = gustMaterial

@@ -89,7 +89,7 @@ end
 -- `BowItem.use`：`if (!player.hasInfiniteMaterials() && player.getProjectile(stack).isEmpty())
 -- return InteractionResult.FAIL;` —— **没箭连拉弓的动作都不会开始**。
 -- 背包是服务端权威的，客户端看不到；所以服务端每 5 tick 把结论写进 NW2，两端读同一个
--- 值，预测不会分叉。创造模式和没装 MCSWEP 时恒为真。
+-- 值，预测不会分叉。创造模式和没装 MineMod 时恒为真。
 local AMMO_REFRESH_SECONDS = 0.25
 
 function SWEP:MCHasAmmo()

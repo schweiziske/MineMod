@@ -25,7 +25,7 @@ local function slopeDisplayName( block, language )
 	return block and ( block.dispZH or block.disp or block.name ) or ""
 end
 
--- The generated MCSWEP slope catalog is an engine-owned block list, not a
+-- The generated MineMod slope catalog is an engine-owned block list, not a
 -- second hand-maintained item list.  Build the public category from the live
 -- records so every generated slope (including future generated variants) gets
 -- the same-name BlockItem and neutral CreativeModeTab entry automatically.

@@ -1,7 +1,7 @@
 -- 弹药与"投出去的武器"的背包语义（MC 26.2）。
 --
--- MCITEM 自己**没有背包模型**，所以这一层只定义契约，真正的加减由 MCSWEP 背包桥
--- （`integration/mcswep/sv_inventory_hooks.lua`）实现。没装 MCSWEP 时全部退化成
+-- MCITEM 自己**没有背包模型**，所以这一层只定义契约，真正的加减由 MineMod 背包桥
+-- （`integration/mcswep/sv_inventory_hooks.lua`）实现。没装 MineMod 时全部退化成
 -- "无限弹药、投出去不扣物品"，addon 仍然能单独跑。
 --
 -- 源码依据：
@@ -15,7 +15,7 @@
 MCITEM = MCITEM or {}
 
 -- CrossbowItem 还接受烟花火箭，但 MCITEM 尚无烟花弹实体，所以这里仍只报箭；
--- MCSWEP 的通用 charged_projectiles API 会保留火箭的 3 点/发耐久语义。
+-- MineMod 的通用 charged_projectiles API 会保留火箭的 3 点/发耐久语义。
 MCITEM.AmmoItems = {
     bow = "minecraft:arrow",
     crossbow = "minecraft:arrow",
@@ -356,7 +356,7 @@ function MCITEM.TakeThrownWeaponStack(owner, weapon, itemId, durabilityAmount)
     local stack, infinite = hook.Run(
         "MCITEM.TakeThrownWeaponStack", owner, weapon, itemId, durabilityAmount or 1)
     if stack ~= nil then return stack, infinite == true end
-    -- 没装 MCSWEP 时仍保持 MCITEM 可独立使用；实体只按 ID 做 SWEP 回退。
+    -- 没装 MineMod 时仍保持 MCITEM 可独立使用；实体只按 ID 做 SWEP 回退。
     return nil, false
 end
 
@@ -386,7 +386,7 @@ function MCITEM.HasInfiniteMaterials(ply)
     return ply:IsAdmin()
 end
 
--- 在世界里生成一个掉落物（MCSWEP 的 `mc_item_drop`）。末影之眼返还、背包满了的
+-- 在世界里生成一个掉落物（MineMod 的 `mc_item_drop`）。末影之眼返还、背包满了的
 -- 溢出都走这一条。返回 false = 没有背包系统，调用方自己兜底。
 function MCITEM.SpawnItemDrop(position, stackOrItemId, count, actor)
     if not isvector(position) then return false end

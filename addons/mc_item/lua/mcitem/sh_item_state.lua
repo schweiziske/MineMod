@@ -1,9 +1,9 @@
 -- Minecraft 手持物品的逐 tick 状态模型（挥动 / 手部升降 / 视角晃动 / 攻击蓄力），
 -- 从 26.2 解包逐条移植。
 --
--- **本库刻意独立**：只依赖 MCSWEP 的 `MC.BS`（方块尺寸，而且是软依赖），
+-- **本库刻意独立**：只依赖 MineMod 的 `MC.BS`（方块尺寸，而且是软依赖），
 -- 不引用 BMB 的任何东西，可以整个 `lua/mcitem/` 目录单独拷走给别人做生存模式。
--- 命名空间是 `MCITEM`，和 MCSWEP 的 `MC`、BMB 的 `BMB` 都不冲突。
+-- 命名空间是 `MCITEM`，和 MineMod 的 `MC`、BMB 的 `BMB` 都不冲突。
 --
 -- 这里只放**与具体物品无关**的那一层，剑 / 斧 / 镐共用；单个 SWEP 只提供参数
 -- （swing 动画类型和时长、攻击力、攻击速度）。渲染在 cl_item_render.lua，
@@ -55,7 +55,7 @@ MCITEM.HandHeightRate = 0.4
 -- 节奏上：走路（GMod 200u/s ≈ 0.274 格/tick）几乎不受影响，奔跑回到 MC 的观感。
 MCITEM.MaxWalkBlocksPerTick = 5.612 / 20
 
--- 一格的 Source 尺寸。MCSWEP 在场就以它为准，否则退回它当前用的 36.5。
+-- 一格的 Source 尺寸。MineMod 在场就以它为准，否则退回它当前用的 36.5。
 -- 别在业务代码里写裸的 36/18/72，一律 `MCITEM.BlockSize() * n`。
 function MCITEM.BlockSize()
     return (MC and MC.BS) or 36.5

@@ -78,7 +78,7 @@ local function hitsMinecraftCollision(startPosition, endPosition)
 
     if apiMinecraftTrace(startPosition, direction, maximumDistance) then return true end
 
-    -- Compatibility fallback for older MCSWEP builds without TraceBlockRay.
+    -- Compatibility fallback for older MineMod builds without TraceBlockRay.
     local bx, by, bz = MC.WorldToCell(startPosition)
     if bx == nil then return false end
     local blockSize = MCITEM.BlockSize()

@@ -479,8 +479,8 @@ end
 -- 准星命中解析（Minecraft.hitResult：ENTITY / BLOCK / MISS 三选一）
 --------------------------------------------------------------------------------
 
--- MCSWEP 的世界基建实体：区块、碰撞承载体、掉落物、它自己的弹丸。这些是"方块"，
--- 不是可攻击目标（打它们等于对着方块挥空手）。名字来自 MCSWEP 的
+-- MineMod 的世界基建实体：区块、碰撞承载体、掉落物、它自己的弹丸。这些是"方块"，
+-- 不是可攻击目标（打它们等于对着方块挥空手）。名字来自 MineMod 的
 -- `mc_item_hand/shared.lua` 的 COMBAT_INFRASTRUCTURE，语义保持一致。
 MCITEM.CombatInfrastructureClasses = {
     mc_chunk = true,
@@ -493,7 +493,7 @@ MCITEM.CombatInfrastructureClasses = {
 
 -- MC 的 `Player.attack` 只要求目标 `isAttackable()`，不要求它是生物：船、矿车、
 -- 盔甲架、画都能打。原来这里只认玩家 / NPC / NextBot，所以以后加载具类实体会打不动。
--- 现在的判据：排除 MCSWEP 基建 → 玩家 / NPC / NextBot / BMB 生物 → 其余任何**有血量**
+-- 现在的判据：排除 MineMod 基建 → 玩家 / NPC / NextBot / BMB 生物 → 其余任何**有血量**
 -- 的实体（载具、船、矿车这类自定义 SENT 都满足）。纯装饰 prop 的 Health() 是 0，
 -- 仍然落在外面，所以左键打 prop 照旧走"挖掘挥动"分支。
 local function isAttackTarget(owner, target)
@@ -546,14 +546,14 @@ function SWEP:MCResolveAttackTarget(owner)
     return nil, trace
 end
 
--- Player.blockInteractionRange()。MCSWEP 方块走它自己的 reach（PlayerAim 传 nil），
+-- Player.blockInteractionRange()。MineMod 方块走它自己的 reach（PlayerAim 传 nil），
 -- Source 世界（地图墙 / prop）用这个距离。
 MCITEM.PlayerBlockInteractionRange = 4.5
 
--- HitResult.Type.BLOCK：先问 MCSWEP 有没有体素方块，再退回 Source 世界表面。
+-- HitResult.Type.BLOCK：先问 MineMod 有没有体素方块，再退回 Source 世界表面。
 -- 用户要求的"左键墙壁也是挖掘"就在第二条上：gm_flatgrass 的地面 / 玩家 prop 都算。
 --
--- Minecraft 的 hitResult 会在 ENTITY / BLOCK 中选择更近的一项。MCSWEP 的体素 DDA
+-- Minecraft 的 hitResult 会在 ENTITY / BLOCK 中选择更近的一项。MineMod 的体素 DDA
 -- 只看方块，所以这里必须补一次实体遮挡；否则生物、船、矿车或普通 Source 实体站在
 -- 方块前时，左键仍会穿过去启动后方方块的挖掘。
 function SWEP:MCEntityOccludesBlockHit(owner, hit)

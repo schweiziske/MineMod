@@ -2,7 +2,7 @@
 	Shared Minecraft Java 26.2 merchant rules.
 
 	The game layer accepts an external merchant snapshot through a deliberately
-	small entity contract.  It normalizes that snapshot into ordinary MCSWEP
+	small entity contract.  It normalizes that snapshot into ordinary MineMod
 	ItemStacks, evaluates the data-driven trade result modifiers once from the
 	offer seed, and exposes the pure matching/price helpers used by both realms.
 

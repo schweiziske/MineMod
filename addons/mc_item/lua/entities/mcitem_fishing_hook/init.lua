@@ -19,7 +19,7 @@ local function living(entity)
         or entity.IsBMBMob == true)
 end
 
--- MCSWEP's block world is made of entities. They are scenery, not catchable
+-- MineMod's block world is made of entities. They are scenery, not catchable
 -- targets, so they are rejected by class before anything else looks at them.
 local WORLD_COLLISION_CLASSES = {
     mc_chunk = true,
@@ -314,7 +314,7 @@ function ENT:TraceFlight(destination)
         local trace = throwables.TraceProjectile(self, self:GetPos(), destination)
         -- MC.API.World.TraceRay deliberately follows Minecraft's OUTLINE
         -- targeting geometry.  Standalone liquid states have no authored
-        -- outline, so MCSWEP's generic trace falls back to the whole cell and
+        -- outline, so MineMod's generic trace falls back to the whole cell and
         -- reports water as a block hit.  A FishingHook collision clip uses
         -- Block.COLLIDER + Fluid.NONE instead: pure water must not stop the
         -- projectile before its next tick can observe the water FluidState and
@@ -576,7 +576,7 @@ function ENT:PullEntity(entity)
         return true
     end
 
-    -- Entities that integrate their own Java-style movement (MCSWEP's primed
+    -- Entities that integrate their own Java-style movement (MineMod's primed
     -- TNT is MOVETYPE_NONE) ignore Entity:SetVelocity entirely. Hand them the
     -- impulse in the units their integrator uses: CalculatePullVelocity returns
     -- Source units/s, their delta movement is blocks per tick.

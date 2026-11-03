@@ -92,7 +92,7 @@ end
 --   ② 采光：trident_3d 老模型的 studiohdr illumposition 被编译成了本地 Z=1040.82u
 --      （真实 hull 只有 -7.12..64.15u）。矛头朝下时该点会旋进地底，整把直接变黑。
 --      render.SetLightingOrigin 在实体 DrawModel 这条路径上没有可靠覆盖这个缓存点；改为
---      显式采样 MCSWEP 体素光（无 MCSWEP 时用 Source lightmap），关掉引擎模型光后乘上去。
+--      显式采样 MineMod 体素光（无 MineMod 时用 Source lightmap），关掉引擎模型光后乘上去。
 local cvLightOffset = CreateClientConVar("mcitem_projectile_light_offset", "0.5", true, false,
     "How far along the surface normal a stuck arrow/trident samples world lighting, in blocks. 0 = geometry center.")
 
@@ -102,7 +102,7 @@ local function clamp01(value)
     return math.Clamp(tonumber(value) or 1, 0, 1)
 end
 
--- MC.API.Light.* 是 v1 入口；后一个名字兼容早期 MCSWEP。
+-- MC.API.Light.* 是 v1 入口；后一个名字兼容早期 MineMod。
 local function mcLightFn(name, fallbackName)
     if not MC then return nil end
     if istable(MC.API) and istable(MC.API.Light) and isfunction(MC.API.Light[name]) then
@@ -131,7 +131,7 @@ local function sampleProjectileLight(position)
         end
     end
 
-    -- 独立安装 MCITEM、没有 MCSWEP 体素世界时，仍然按当前 Source 地图取光。
+    -- 独立安装 MCITEM、没有 MineMod 体素世界时，仍然按当前 Source 地图取光。
     if render.GetLightColor then
         local light = render.GetLightColor(position)
         if isvector(light) then return clamp01(light.x), clamp01(light.y), clamp01(light.z) end

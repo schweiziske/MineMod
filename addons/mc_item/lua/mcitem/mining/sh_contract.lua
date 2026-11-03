@@ -1,4 +1,4 @@
--- Shared MCITEM <-> MCSWEP mining contract. This file contains no world writes;
+-- Shared MCITEM <-> MineMod mining contract. This file contains no world writes;
 -- the server adapter owns all authoritative calls.
 
 MCITEM = MCITEM or {}
@@ -28,7 +28,7 @@ function Mining.PlayerIsCreative(player)
 end
 
 -- Tool#canDestroyBlocksInCreative. Keep this shared so standalone MCITEM
--- weapons, inventory proxy instances and MCSWEP's selected-stack hand predict
+-- weapons, inventory proxy instances and MineMod's selected-stack hand predict
 -- the same result before the authoritative creative-break request is sent.
 function Mining.CanDestroyBlocksInCreative(weapon)
     if not IsValid(weapon) then return true end

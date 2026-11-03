@@ -413,7 +413,7 @@ MC.TryInventoryProxyWorldInteraction = tryInventoryProxyWorldInteraction
 -- Resolver-driven weapon_mcitem_* instances own their own SecondaryAttack.
 -- Minecraft still gives entity/block interaction precedence over item use, so
 -- consume that user-command before the proxy can start eating/charging and
--- route the press through the same authoritative MCSWEP handlers as the hand.
+-- route the press through the same authoritative MineMod handlers as the hand.
 hook.Add( "StartCommand", "mc_inventory_proxy_world_interaction", function( ply, command )
 	if not activeInventoryProxy( ply ) then
 		ply.MCInventoryProxySecondaryHeld = false

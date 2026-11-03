@@ -1,6 +1,6 @@
 -- Java 26.2 Consumable.onConsume adapters for MCITEM food.
 --
--- MCSWEP's native hand path owns the mc_food_level/mc_food_saturation
+-- MineMod's native hand path owns the mc_food_level/mc_food_saturation
 -- mutation.  MCITEM SWEPs use this module so the same public fields and
 -- potion runtime are available when the item is held as an external weapon.
 
@@ -253,7 +253,7 @@ function Food.ApplyConsumableEffects(player, definition, context)
 
     local id = definition.id
     local changed = false
-    -- MCITEM's standalone SWEP does not pass through MCSWEP's native hand
+    -- MCITEM's standalone SWEP does not pass through MineMod's native hand
     -- nutrition transaction, so apply FoodProperties here.  The native hand
     -- bridge calls this function with nutritionAlreadyApplied=true.
     if definition.isFood ~= false and context.nutritionAlreadyApplied ~= true then
@@ -295,7 +295,7 @@ function Food.ApplyConsumableEffects(player, definition, context)
 
     -- Java stores the effects on the consumed ItemStack as
     -- minecraft:suspicious_stew_effects.  An explicit integration override is
-    -- still accepted, but the native MCSWEP path needs no special caller data.
+    -- still accepted, but the native MineMod path needs no special caller data.
     if id == "suspicious_stew" then
         local stewEffects = istable(context.suspiciousEffects)
             and context.suspiciousEffects or Food.SuspiciousStewEffects(context.stack)

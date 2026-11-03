@@ -263,7 +263,7 @@ local function seenPercent( center, entity )
 	local stepY = 1 / ( depth * 2 + 1 )
 	local stepZ = 1 / ( height * 2 + 1 )
 	local offsetX = ( 1 - math.floor( 1 / stepX ) * stepX ) * size * 0.5
-	-- Java's Z axis maps to MCSWEP's horizontal Y axis; Source Z is Java Y.
+	-- Java's Z axis maps to MineMod's horizontal Y axis; Source Z is Java Y.
 	local offsetDepth = ( 1 - math.floor( 1 / stepY ) * stepY ) * size * 0.5
 	local hits, count = 0, 0
 	local xx = 0

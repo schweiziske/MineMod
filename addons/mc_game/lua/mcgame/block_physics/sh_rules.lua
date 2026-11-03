@@ -210,7 +210,7 @@ function P.HoneyNewVerticalVelocity( velocity )
 	return ( ( tonumber( velocity ) or 0 ) - C.defaultGravity ) * C.defaultVerticalDrag
 end
 
--- Coordinate convention matches MCSWEP cells: x/y horizontal, z vertical.
+-- Coordinate convention matches MineMod cells: x/y horizontal, z vertical.
 function P.IsHoneySliding( context )
 	context = context or {}
 	if context.onGround == true then return false end

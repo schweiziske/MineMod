@@ -71,7 +71,7 @@ local function sampleLabelColor(target, position)
     local light = MC and MC.API and MC.API.Light
     if light and isfunction(light.SampleRGB) then
         -- EntityRenderer submits the visible name-tag pass with emission 2.
-        -- Sample the same world-space attachment through MCSWEP's public API.
+        -- Sample the same world-space attachment through MineMod's public API.
         r, g, b = light.SampleRGB(position, 2)
     end
     local color = Color(

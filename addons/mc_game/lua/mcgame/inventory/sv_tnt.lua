@@ -304,7 +304,7 @@ MC.RegisterBlockUpdateHandler( "minecraft:tnt", {
 
 -- Projectile#mayInteract delegates player-owned projectiles to the owner's
 -- world-protection check, while ownerless projectiles are allowed (and mobs
--- are governed by mobGriefing in Java). MCSWEP has no mob-griefing gamerule,
+-- are governed by mobGriefing in Java). MineMod has no mob-griefing gamerule,
 -- so preserve its default-true behavior and apply the existing edit vetoes to
 -- player owners without incorrectly re-running reach/cooldown validation at
 -- the projectile's impact position.

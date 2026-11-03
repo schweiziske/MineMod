@@ -1,4 +1,4 @@
--- Selected-slot durability and consumption hooks for MCSWEP inventories.
+-- Selected-slot durability and consumption hooks for MineMod inventories.
 
 if not SERVER then return end
 
@@ -97,7 +97,7 @@ local function reportMutationError(kind, err)
     if Integration.LastInventoryMutationError == message then return end
     Integration.LastInventoryMutationError = message
     if MC and MC.Fault then return MC.Fault("mcitem_inventory_mutation", "%s", message) end
-    if ErrorNoHalt then ErrorNoHalt("[MCITEM] MCSWEP inventory bridge failed: " .. message .. "\n") end
+    if ErrorNoHalt then ErrorNoHalt("[MCITEM] MineMod inventory bridge failed: " .. message .. "\n") end
 end
 
 hook.Add("MCITEM.CaptureUseStack", "MCITEM.MCSWEP.CaptureUseStack", function(owner, weapon)
@@ -218,8 +218,8 @@ end)
 -- 弓 / 弩的箭矢，三叉戟的投出与拾回
 --------------------------------------------------------------------------------
 --
--- 弹药走 MCSWEP 新增的 `MC.API.Inventory.HasAmmo / ConsumeAmmo`（见交接说明）：
--- 它复用 MCSWEP 自己那张 allowedAmmo 表、创造模式的 infinite materials 规则和
+-- 弹药走 MineMod 新增的 `MC.API.Inventory.HasAmmo / ConsumeAmmo`（见交接说明）：
+-- 它复用 MineMod 自己那张 allowedAmmo 表、创造模式的 infinite materials 规则和
 -- 同一套容器事务，所以外部 SWEP 不会长出第二套"什么算箭"的判断。
 
 local function inventoryApi()
@@ -271,7 +271,7 @@ hook.Add("MCITEM.TakeProjectileAmmo", "MCITEM.MCSWEP.TakeAmmo", function(owner, 
     if not inventory or not isfunction(inventory.TakeAmmo) then return nil end
 
     -- MCITEM does not implement firework projectiles. Its crossbow therefore
-    -- uses the Java arrow predicate (normal + spectral) rather than MCSWEP's
+    -- uses the Java arrow predicate (normal + spectral) rather than MineMod's
     -- broader built-in crossbow predicate, which also includes rockets.
     local apiKind = kind == "crossbow" and "bow" or kind
 
@@ -431,7 +431,7 @@ hook.Add("MCITEM.LoadCrossbowProjectiles", "MCITEM.MCSWEP.LoadCrossbowProjectile
     if not inventory or not isfunction(inventory.LoadCrossbowProjectiles) then return nil end
 
     -- MCITEM still has no firework projectile entity, so its external crossbow
-    -- intentionally selects only normal/spectral arrows. MCSWEP's generic API
+    -- intentionally selects only normal/spectral arrows. MineMod's generic API
     -- retains full rocket support for its own projectile path.
     local stacks, infinite, generated, _, err = inventory.LoadCrossbowProjectiles(
         owner,
@@ -522,7 +522,7 @@ hook.Add("MCITEM.CommitCrossbowShot", "MCITEM.MCSWEP.CommitCrossbowShot", functi
     return false, false
 end)
 
--- MCSWEP's built-in bow/crossbow entity fires MC.ProjectileImpact after its
+-- MineMod's built-in bow/crossbow entity fires MC.ProjectileImpact after its
 -- own damage transaction. Add SpectralArrow#doPostHurtEffects here so both the
 -- built-in projectile and MCITEM's 3D arrow grant Glowing I for 200 ticks.
 hook.Remove("MC.ProjectileImpact", "MCITEM.MCSWEP.SpectralArrowEffect")
@@ -578,7 +578,7 @@ hook.Add("MCITEM.TakeThrownWeaponStack", "MCITEM.MCSWEP.TakeThrownWeaponStack", 
     return false, false
 end)
 
--- 捡回来的箭 / 三叉戟进背包；塞不下就按 MCSWEP 的掉落物落地（不是变成一个模型）。
+-- 捡回来的箭 / 三叉戟进背包；塞不下就按 MineMod 的掉落物落地（不是变成一个模型）。
 hook.Remove("MCITEM.GiveItemToPlayer", "MCITEM.MCSWEP.GiveItem")
 hook.Add("MCITEM.GiveItemToPlayer", "MCITEM.MCSWEP.GiveItem", function(ply, stackOrItemId, count, position)
     local inventory = inventoryApi()

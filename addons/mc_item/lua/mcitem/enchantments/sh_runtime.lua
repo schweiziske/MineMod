@@ -458,7 +458,7 @@ local function enginePositionToCell(position, context)
 end
 
 -- Shared gameplay modules (including Riptide's rain gate) need the same
--- coordinate conversion without duplicating the MC/MCSWEP adapter lookup.
+-- coordinate conversion without duplicating the MC/MineMod adapter lookup.
 Runtime.EnginePositionToCell = enginePositionToCell
 
 local function visibleToSky(position, coordinateContext, traceFilter)
@@ -1242,7 +1242,7 @@ if SERVER then
     hook.Remove("PlayerDisconnected", "MCITEM.Enchantments.WindBurstImpulse")
     hook.Add("PlayerDisconnected", "MCITEM.Enchantments.WindBurstImpulse", forgetWindBurstImpulse)
 
-    -- MCSWEP already owns the vanilla 0.2 submerged-mining attribute. Aqua
+    -- MineMod already owns the vanilla 0.2 submerged-mining attribute. Aqua
     -- Affinity sets that attribute to 1.0; it does not remove the airborne /5.
     hook.Remove("MC.PlayerMiningModifiers", "MCITEM.Enchantments.AquaAffinity")
     hook.Add("MC.PlayerMiningModifiers", "MCITEM.Enchantments.AquaAffinity",

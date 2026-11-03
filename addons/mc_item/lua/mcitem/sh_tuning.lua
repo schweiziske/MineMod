@@ -5,7 +5,7 @@
 -- 本文件只提供最后那一次乘法。
 --
 -- 击退倍率 `mcitem_knockback_scale` 在 `sh_use_effects.lua`（和 USE_EFFECTS 一起），
--- 不重复注册；两边都会被 `sh_config_menu.lua` 收进 MCSWEP 的设置面板。
+-- 不重复注册；两边都会被 `sh_config_menu.lua` 收进 MineMod 的设置面板。
 
 MCITEM = MCITEM or {}
 

@@ -45,7 +45,7 @@ end
 
 concommand.Add( "mc_native_load_profile", function()
 	local p = MC.NativeLoadProfile or {}
-	print( string.format( "[mcswep-native] load decompress=%.3fms json=%.3fms hydrate=%.3fms chunks=%d cells=%d",
+	print( string.format( "[MineMod Native] load decompress=%.3fms json=%.3fms hydrate=%.3fms chunks=%d cells=%d",
 		tonumber( p.decompressMS ) or 0, tonumber( p.jsonMS ) or 0, tonumber( p.hydrateMS ) or 0,
 		tonumber( p.chunks ) or 0, tonumber( p.cells ) or 0 ) )
 end, nil, "Print snapshot decode and NativeChunk hydration timings" )

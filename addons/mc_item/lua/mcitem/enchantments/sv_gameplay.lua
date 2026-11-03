@@ -1,5 +1,5 @@
 -- Server-side passive and transaction-adjacent enchantment effects for
--- Minecraft Java 26.2.  Inventory mutations go through MCSWEP's public API or
+-- Minecraft Java 26.2.  Inventory mutations go through MineMod's public API or
 -- generic hooks so the complete ItemStack remains authoritative.
 
 if not SERVER then return end
@@ -113,7 +113,7 @@ hook.Remove("MC.ModifyEntityIgnitionDuration", "MCITEM.Enchantments.FireProtecti
 hook.Add("MC.ModifyEntityIgnitionDuration", "MCITEM.Enchantments.FireProtectionBurningTime",
     fireProtectionBurningTime)
 
--- MCSWEP's public ignition event is also used by projectiles and block contact
+-- MineMod's public ignition event is also used by projectiles and block contact
 -- for ordinary Source entities.  Consume that boundary here so an already
 -- burning entity can use the readable entityflame deadline instead of falling
 -- back to Source's CBaseAnimating::Ignite no-op.  BMB owns its own fire clock;
@@ -757,7 +757,7 @@ function Runtime.ApplySpearLunge(playerEntity, weapon, stack)
     return true
 end
 
--- MCSWEP owns the authoritative block-break transaction.  It publishes this
+-- MineMod owns the authoritative block-break transaction.  It publishes this
 -- event only after the voxel write succeeds; MCITEM supplies the existing
 -- experience-orb implementation without creating a second XP store.  Convert
 -- the MC world-space cell center to the caller's engine space so InfMap origins

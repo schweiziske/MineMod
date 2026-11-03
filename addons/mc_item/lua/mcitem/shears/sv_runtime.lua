@@ -1,7 +1,7 @@
 -- Server-authoritative ShearsItem entity/block interaction.
 --
 -- Entity shearing commits the selected ItemStack durability before changing
--- the BMB state. GrowingPlantHeadBlock uses the MCSWEP transaction bridge so
+-- the BMB state. GrowingPlantHeadBlock uses the MineMod transaction bridge so
 -- its age=25 world write and selected durability publish atomically.
 
 if not SERVER then return end

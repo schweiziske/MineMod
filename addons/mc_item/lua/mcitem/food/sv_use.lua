@@ -69,7 +69,7 @@ function Food.CompleteUse(weapon, definition)
 
     -- Vanilla applies Consumable.onConsume after the stack transaction.  Keep
     -- nutrition as an extension point, but make the status effects authoritative
-    -- here so MCITEM SWEPs and the MCSWEP hand path share one implementation.
+    -- here so MCITEM SWEPs and the MineMod hand path share one implementation.
     if consumed ~= false and isfunction(Food.ApplyConsumableEffects) then
         Food.ApplyConsumableEffects(owner, definition, context)
     end

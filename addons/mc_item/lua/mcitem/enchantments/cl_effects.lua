@@ -190,7 +190,7 @@ local function traceSoulParticleAxis(particle, startPosition, displacement)
         mask = MASK_SOLID,
         -- Particle.move asks Level only for block collisions. Ignore players,
         -- NPCs and ordinary Source props while retaining map brushes and the
-        -- MCSWEP entities that own voxel collision on each realm.
+        -- MineMod entities that own voxel collision on each realm.
         filter = soulParticleCollisionFilter,
     })
     return trace and trace.HitPos or (startPosition + displacement)

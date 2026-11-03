@@ -1,7 +1,7 @@
 --[[----------------------------------------------------------------------------
 	Generic selected-payload -> SWEP integration registry.
 
-	MCSWEP deliberately knows nothing about external addon class names. Addons
+	MineMod deliberately knows nothing about external addon class names. Addons
 	register resolvers through MC.API.HandWeapon; the server bridge only switches
 	between registered base classes and classes returned by those resolvers.
 ------------------------------------------------------------------------------]]

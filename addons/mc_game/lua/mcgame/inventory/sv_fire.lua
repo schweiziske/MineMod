@@ -1,6 +1,6 @@
 -- Server-authoritative flint-and-steel interaction for external item addons.
 -- Placement mirrors Java 26.2 BaseFireBlock/FireBlock survival and state
--- selection. Nether-portal creation is deliberately absent because MCSWEP has
+-- selection. Nether-portal creation is deliberately absent because MineMod has
 -- no portal subsystem; an unsupported portal frame must not make invalid fire
 -- survive silently.
 
@@ -223,7 +223,7 @@ local function commitState( ply, bx, by, bz, stateId, source, beforePublish )
 	return true, result
 end
 
--- Internal helpers are named for focused regression tests and other MCSWEP
+-- Internal helpers are named for focused regression tests and other MineMod
 -- modules. External addons still use only MC.API.Fire.Ignite.
 SV.CanLightBlockState = canLightState
 SV.FireStateAt = fireStateAt

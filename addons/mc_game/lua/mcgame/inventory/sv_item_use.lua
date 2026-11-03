@@ -158,7 +158,7 @@ local function finishFood( ply, record, stack, context )
 	local newHunger = math.Clamp( hunger + nutrition, 0, HUNGER_MAX )
 	-- MC.ItemFoodData.saturation is the final FoodProperties.saturation value.
 	-- The `* 2` belongs only to FoodData.eat(nutrition, modifier), not to the
-	-- component-backed FoodProperties path used by MCITEM/MCSWEP stacks.
+	-- component-backed FoodProperties path used by MCITEM/MineMod stacks.
 	local newSaturation = math.max( saturation, math.min( newHunger, saturation + ( tonumber( food.saturation ) or 0 ) ) )
 	ply:SetNWInt( "mc_food_level", newHunger )
 	ply:SetNWFloat( "mc_food_saturation", newSaturation )

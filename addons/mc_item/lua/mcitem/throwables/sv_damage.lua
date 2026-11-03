@@ -27,7 +27,7 @@ function Throwables.HandleProjectileHit(projectile, trace)
 end
 
 -- Projectile.canHitEntity ultimately delegates to Entity.canBeHitByProjectile:
--- alive, pickable and non-spectating. Source props and MCSWEP chunk entities do
+-- alive, pickable and non-spectating. Source props and MineMod chunk entities do
 -- not represent living Minecraft entities, so they must follow the block-hit
 -- path and must never receive the Wind Charge's direct one-point damage.
 function Throwables.IsProjectileTarget(target)

@@ -1,5 +1,5 @@
 --[[----------------------------------------------------------------------------
-    MCSWEP addon manifests (engine layer).
+    MineMod addon manifests (engine layer).
 
     This is the small Lua counterpart of the useful part of Fabric's
     fabric.mod.json: an addon id/version, dependency ranges, realm selection,

@@ -1,6 +1,6 @@
 -- Java 26.2 dynamically appends one complete ItemStack per registered potion
 -- to Food & Drinks, in drinkable -> splash -> lingering order.  Search receives
--- those same PARENT_AND_SEARCH_TABS entries.  The generated MCSWEP tab file can
+-- those same PARENT_AND_SEARCH_TABS entries.  The generated MineMod tab file can
 -- only carry plain item IDs, so MCITEM supplies the missing component-bearing
 -- stacks through the public creative-stack provider API.
 
@@ -69,7 +69,7 @@ hook.Add("MC.CreativeStacksAPIReady", "MCITEM.MCSWEP.RegisterCreativeStacks", fu
     Integration.RegisterCreativeStackProvider()
 end)
 
--- Replay the game-layer readiness marker when MCSWEP loaded before MCITEM.
+-- Replay the game-layer readiness marker when MineMod loaded before MCITEM.
 if MC and MC.CreativeStacksAPIReady == true then Integration.RegisterCreativeStackProvider() end
 
 -- Autorefresh does not replay either addon's loader lifecycle.

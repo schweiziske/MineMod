@@ -218,7 +218,7 @@ function Throwables.Consume(owner, weapon, definition, context)
 end
 
 -- EyeOfEnder.tick 的返还分支是 `spawnAtLocation(Items.ENDER_EYE)` —— 生成一个**掉落物**，
--- 不是把一把武器扔在地上。装了 MCSWEP 就用它自己的 `mc_item_drop`（和方块掉落、玩家
+-- 不是把一把武器扔在地上。装了 MineMod 就用它自己的 `mc_item_drop`（和方块掉落、玩家
 -- 丢东西是同一种实体，能正常吸取、合并、计时消失）；没有 provider 时保持失败并发出接口事件，
 -- 绝不伪造会变成 ragdoll/物理武器的 SWEP。
 function Throwables.ReturnEnderEye(position, owner, context)

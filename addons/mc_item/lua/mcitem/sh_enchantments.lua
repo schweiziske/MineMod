@@ -1,5 +1,5 @@
 -- Minecraft Java 26.2 ItemStack.hasFoil semantics shared by standalone MCITEM
--- SWEPs and the optional MCSWEP inventory bridge.
+-- SWEPs and the optional MineMod inventory bridge.
 
 MCITEM = MCITEM or {}
 
@@ -87,7 +87,7 @@ function MCITEM.StackForWeaponFoil(weapon)
     return {
         item = "minecraft:" .. itemId,
         count = 1,
-        -- A proxy weapon is backed by one authoritative MCSWEP ItemStack.  Its
+        -- A proxy weapon is backed by one authoritative MineMod ItemStack.  Its
         -- explicit false must suppress MCITEM's item-ID fallback just like the
         -- Java component would.  Spawnmenu SWEPs have no proxy flag and keep
         -- the vanilla defaults (notably the enchanted golden apple/bottle o'

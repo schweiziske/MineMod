@@ -17,7 +17,7 @@ SWEP.MCWeaponDamagePerAttack = 0
 SWEP.MCIsSword = false
 SWEP.MCUseAction = nil
 
-SWEP.Instructions = "Rename the tag in an MCSWEP anvil, then right click a living NPC. Players cannot be named."
+SWEP.Instructions = "Rename the tag in a MineMod anvil, then right click a living NPC. Players cannot be named."
 
 function SWEP:SecondaryAttack()
     if MC and MC.InventoryOffhandUseActive and MC.InventoryOffhandUseActive(self) then return end

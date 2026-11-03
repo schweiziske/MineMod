@@ -136,8 +136,8 @@ end
 
 -- TridentItem.releaseUsing：投出去 = **这一件物品离开玩家**。ThrownTrident 带着那份
 -- ItemStack 飞出去，捡回来才还给背包。所以这里三件事一起做：
---   ① 生成弹丸；② 从 MCSWEP 背包的选中槽扣掉这一件；③ 收掉手上的 SWEP。
--- 没装 MCSWEP（= 没有背包）时 ② 是 no-op，但 ③ 照做：手上那一把已经飞出去了，
+--   ① 生成弹丸；② 从 MineMod 背包的选中槽扣掉这一件；③ 收掉手上的 SWEP。
+-- 没装 MineMod（= 没有背包）时 ② 是 no-op，但 ③ 照做：手上那一把已经飞出去了，
 -- 这一点和背包在不在场无关。
 function SWEP:ReleaseMCTrident()
     if not self.MCTridentUsing then return end

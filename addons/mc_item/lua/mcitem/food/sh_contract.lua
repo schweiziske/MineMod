@@ -42,7 +42,7 @@ function Food.PlayerCanAlwaysEat(player)
         return MC.PlayerIsCreative(player) == true
     end
 
-    -- MCSWEP replicates the normalized mode as creative/survival.  Accept the
+    -- MineMod replicates the normalized mode as creative/survival.  Accept the
     -- numeric aliases as a fallback so this contract also behaves correctly
     -- during client prediction while the shared game-mode helper is loading.
     local mode = string.lower(string.Trim(player:GetNWString("mc_gamemode", "survival")))

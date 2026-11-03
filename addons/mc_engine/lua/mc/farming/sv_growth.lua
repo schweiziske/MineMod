@@ -195,7 +195,7 @@ end
 
 local function farmlandRandomTick( context )
 	local moisture = tonumber( MC.GetStateProperty( context.stateId, "moisture" ) ) or 0
-	-- Java also hydrates from isRainingAt(pos.above()). MCSWEP currently has no
+	-- Java also hydrates from isRainingAt(pos.above()). MineMod currently has no
 	-- authoritative weather/rain state, so water is the only producer here.
 	if nearWater( context.bx, context.by, context.bz ) then
 		if moisture >= 7 then return nil end

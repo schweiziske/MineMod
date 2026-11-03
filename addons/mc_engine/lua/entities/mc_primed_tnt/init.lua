@@ -132,7 +132,7 @@ local function translateBounds( minimum, maximum, axis, amount )
 end
 
 local function axisOrder( movement )
-	-- Direction.axisStepOrder compares Java X/Z. MCSWEP maps Java Y to
+	-- Direction.axisStepOrder compares Java X/Z. MineMod maps Java Y to
 	-- Source Z and Java Z to Source Y.
 	if math.abs( movement.x ) < math.abs( movement.y ) then return { "z", "y", "x" } end
 	return { "z", "x", "y" }

@@ -1,14 +1,14 @@
 --[[----------------------------------------------------------------------------
-	MCSWEP game layer loader (survival: items, inventory, recipes, mining,
+	MineMod game layer loader (survival: items, inventory, recipes, mining,
 	containers).
 
-	This layer is a CONSUMER of the MCSWEP voxel engine, not part of it. The
+	This layer is a CONSUMER of the MineMod voxel engine, not part of it. The
 	engine owns the world - blocks, states, streaming, rendering, collision,
 	lighting, liquids, redstone and block updates - and knows nothing about
 	items. Everything here sits on top of that through MC.API, registered
 	capabilities and documented events.
 
-	This is a separate addon that consumes the MCSWEP voxel engine:
+	This is a separate addon that consumes the MineMod voxel engine:
 
 	  * every file is included from the engine's register phase, never at file
 	    scope, so "engine is loaded" is a structural guarantee instead of a
@@ -270,14 +270,14 @@ local function loadGameLayer()
 	if MC.GameLayerLoaded then return end
 	local api = MC and MC.API
 	if not api then
-		ErrorNoHalt( "[MCGame] MCSWEP engine is missing; the game layer will not load\n" )
+		ErrorNoHalt( "[MCGame] MineMod engine is missing; the game layer will not load\n" )
 		return
 	end
 	if not api.Require then
-		ErrorNoHalt( "[MCGame] MCSWEP engine has no version negotiation API; v2 is required\n" )
+		ErrorNoHalt( "[MCGame] MineMod engine has no version negotiation API; v2 is required\n" )
 		return
 	end
-	if not api.Require( REQUIRED_API_VERSION, "MCSWEP game layer" ) then return end
+	if not api.Require( REQUIRED_API_VERSION, "MineMod game layer" ) then return end
 	-- Item definitions are included after sh_registry.lua.  If this addon is
 	-- mounted only after the engine has frozen, sh_registry would otherwise
 	-- finalize an empty item registry and the remaining includes would leave a
@@ -311,5 +311,5 @@ end
 -- a server silently without items.
 timer.Simple( 0, function()
 	if MC.GameLayerLoaded then return end
-	ErrorNoHalt( "[MCGame] MCSWEP engine never announced itself; the game layer did not load\n" )
+	ErrorNoHalt( "[MCGame] MineMod engine never announced itself; the game layer did not load\n" )
 end )

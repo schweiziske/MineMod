@@ -1,5 +1,5 @@
 -- Small data-driven registry for model-backed ordinary items that need no
--- bespoke use runtime.  Registering them lets the MCSWEP selected-stack bridge
+-- bespoke use runtime.  Registering them lets the MineMod selected-stack bridge
 -- render the real 3D item instead of falling back to its flat sprite hand.
 
 if SERVER then AddCSLuaFile() end

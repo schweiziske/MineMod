@@ -377,7 +377,7 @@ local drawEntries = {}
 
 -- SuspendedTownParticle uses SingleQuadParticle.Layer.OPAQUE and the default
 -- LOOKAT_XYZ camera mode. Keep the alpha-tested (non-blended) VMT, but do not
--- draw from PostDrawOpaqueRenderables: MCSWEP also submits its custom chunk
+-- draw from PostDrawOpaqueRenderables: MineMod also submits its custom chunk
 -- meshes there and GMod does not guarantee hook ordering, so a later chunk
 -- submission can overwrite every particle inside a real crop. The boundary
 -- immediately before the translucent pass is after all opaque hooks have

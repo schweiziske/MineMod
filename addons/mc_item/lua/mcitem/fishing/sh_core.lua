@@ -156,7 +156,7 @@ end
 function Fishing.EnchantmentLevel(stack, enchantmentId)
     enchantmentId = namespaced(enchantmentId)
     -- Fishing is a runtime item-use effect.  Prefer the shared MCITEM reader,
-    -- which explicitly asks MCSWEP for the ordinary `enchantments` component.
+    -- which explicitly asks MineMod for the ordinary `enchantments` component.
     -- The public scalar ItemStack API intentionally accepts enchanted-book
     -- `stored_enchantments` too, so using it first would let a malformed book
     -- stack activate Lure/Luck of the Sea.

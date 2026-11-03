@@ -40,7 +40,7 @@ else
     end)
 end
 
--- MCSWEP resolves "use item on block" itself when the aimed block has an OnUse
+-- MineMod resolves "use item on block" itself when the aimed block has an OnUse
 -- handler that accepts the held item (flint and steel on TNT). That path runs
 -- entirely server-side inside MC.SV.Use, so this weapon's own SecondaryAttack --
 -- and therefore its ConfirmSwing -- never runs, and lighting TNT looked frozen

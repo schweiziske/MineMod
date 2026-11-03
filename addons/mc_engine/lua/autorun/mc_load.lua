@@ -346,7 +346,7 @@ for _, f in ipairs( SHARED ) do includeTracked( f ) end
 if CLIENT then
 	MC.JoinNoticeEnabled = MC.JoinNoticeEnabled or CreateClientConVar(
 		"mc_join_notice", "1", true, false,
-		"Show the MCSWEP configuration hint after joining a server"
+		"Show the MineMod configuration hint after joining a server"
 	)
 	if not MC.JoinNoticeScheduled then
 		MC.JoinNoticeScheduled = true
@@ -355,7 +355,7 @@ if CLIENT then
 			MC.JoinNoticeShown = true
 			if chat and chat.AddText then
 				chat.AddText(
-					Color( 80, 190, 255 ), "[MCSWEP] ",
+					Color( 80, 190, 255 ), "[MineMod] ",
 					Color( 235, 235, 235 ), MC.T( "join.config_hint",
 						"控制台输入 mc_config 打开配置界面，输入 mc_save_manager 打开存档管理器。" ),
 					Color( 160, 255, 160 ), "  " .. MC.T( "join.config_hide_hint",
@@ -473,7 +473,7 @@ if CLIENT then
 			if chat and chat.AddText then
 				if nativeFailed then
 					chat.AddText(
-						Color( 255, 80, 80 ), "[MCSWEP] ",
+						Color( 255, 80, 80 ), "[MineMod] ",
 						MC.T( "native.dll_failed",
 							"Native DLL 初始化失败，当前使用 Lua 后端。\n失败原因：{reason}\n请安装与游戏分支和位数匹配的 DLL 并重启游戏。下载地址：", {
 								reason = nativeFailureReason,
@@ -482,7 +482,7 @@ if CLIENT then
 					)
 				elseif nativeOutdated then
 					chat.AddText(
-						Color( 80, 190, 255 ), "[MCSWEP] ",
+						Color( 80, 190, 255 ), "[MineMod] ",
 						Color( 255, 120, 90 ), MC.T( "native.dll_outdated",
 							"Native DLL 版本过期（当前 ABI {actual}，需要 ABI {required}），当前使用 Lua 后端。下载地址：", {
 								actual = tostring( MC.NativeMeshModuleABI or "?" ),
@@ -492,7 +492,7 @@ if CLIENT then
 					)
 				else
 					chat.AddText(
-						Color( 80, 190, 255 ), "[MCSWEP] ",
+						Color( 80, 190, 255 ), "[MineMod] ",
 						Color( 255, 210, 90 ), MC.T( "native.dll_missing",
 							"未检测到优化DLL，当前使用 Lua 后端。 下载地址：" ),
 						Color( 130, 210, 255 ), nativeURL,
@@ -513,7 +513,7 @@ if CLIENT then
 			local consoleFallback = nativeOutdated
 				and "Native DLL 版本过期（当前 ABI {actual}，需要 ABI {required}）。下载地址: {url}"
 				or "Native DLL 下载地址: {url}"
-			MsgN( "[MCSWEP] " .. MC.T( consoleKey, consoleFallback, {
+			MsgN( "[MineMod] " .. MC.T( consoleKey, consoleFallback, {
 				actual = tostring( MC.NativeMeshModuleABI or "?" ),
 				required = tostring( MC.NativeMeshABI ),
 				url = nativeURL,
@@ -521,7 +521,7 @@ if CLIENT then
 		end )
 		concommand.Add( "mc_native_download", function()
 			if gui and gui.OpenURL then gui.OpenURL( nativeURL ) end
-		end, nil, MC.T( "native.dll_command_help", "打开 MCSWEP Native DLL 的 GitHub 页面" ) )
+		end, nil, MC.T( "native.dll_command_help", "打开 MineMod Native DLL 的 GitHub 页面" ) )
 	end
 end
 

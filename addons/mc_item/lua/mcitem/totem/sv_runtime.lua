@@ -1,4 +1,4 @@
--- Java 26.2 Totem of Undying result application. MCSWEP owns the lethal damage
+-- Java 26.2 Totem of Undying result application. MineMod owns the lethal damage
 -- boundary and atomic hand consumption; MCITEM owns potion/status semantics and
 -- the client effect packet.
 

@@ -6,7 +6,7 @@
 --   ShovelItem.useOn + FLATTENABLES          铲：压成土径
 --   AxeItem.useOn + STRIPPABLES / WeatheringCopper.getPrevious / HoneycombItem.WAX_OFF_BY_BLOCK
 --
--- MCSWEP 是**软依赖**：没装（或版本没有 MC.API）时，右键 useOn 静默失效、左键退化成
+-- MineMod 是**软依赖**：没装（或版本没有 MC.API）时，右键 useOn 静默失效、左键退化成
 -- "看到 Source 世界实体就当方块"。整个文件不许 include BMB 的任何东西。
 
 MCITEM = MCITEM or {}
@@ -22,7 +22,7 @@ MCITEM.BlockInteract = Blocks
 if SERVER then util.AddNetworkString("MCITEM_ToolUseSwing") end
 
 --------------------------------------------------------------------------------
--- MCSWEP 探测（只走 MC.API v1；内部符号一个都不碰）
+-- MineMod 探测（只走 MC.API v1；内部符号一个都不碰）
 --------------------------------------------------------------------------------
 
 local function mcApi()
@@ -33,7 +33,7 @@ end
 
 Blocks.Api = mcApi
 
--- MC 的方块交互距离是 Player.blockInteractionRange()；这里改用 MCSWEP 自己的 reach
+-- MC 的方块交互距离是 Player.blockInteractionRange()；这里改用 MineMod 自己的 reach
 -- （`mc_reach`，PlayerAim 传 nil 时的默认），这样工具能够到的格子和方块 addon 的
 -- 放置/破坏完全一致，不会出现"能放不能锄"。
 function Blocks.AimBlock(ply, reachUnits)
@@ -56,7 +56,7 @@ local function blockInfo(api, bx, by, bz)
     return api.World.GetBlockInfo(bx, by, bz)
 end
 
--- ⚠ 查表一律用 **mcid**，不要用 `info.name`。MCSWEP 的 `name` 是它自己的内部短名，
+-- ⚠ 查表一律用 **mcid**，不要用 `info.name`。MineMod 的 `name` 是它自己的内部短名，
 -- 和 Minecraft 的 id 不是一回事：草方块注册成 `name = "grass"`、
 -- `mcid = "minecraft:grass_block"`（sh_blocks.lua 的 RegisterBlock，aliases 里才有
 -- "grass_block"）。按 name 查会让锄头/铲子对草方块完全无反应。
@@ -337,7 +337,7 @@ if SERVER then
         MCITEM.PlayToolSound(ply, soundKey, center)
 
         -- AxeItem.spawnSoundAndParticle 的 levelEvent(3005/3004) 是刮痕 / 去蜡的方块碎屑
-        -- （去皮那一支没有粒子）。MCSWEP 的等价物是 PlayFx("break")，用新状态发，
+        -- （去皮那一支没有粒子）。MineMod 的等价物是 PlayFx("break")，用新状态发，
         -- 才不会掉出旧贴图的碎屑。
         if soundKey == "axe_scrape" or soundKey == "axe_wax_off" then
             api.World.PlayFx("break", bx, by, bz, target)
@@ -354,7 +354,7 @@ if SERVER then
     end
 end
 
--- MCITEM 的 SWEP 接管时，右键实体压根没有走到 MC.UseItemOnEntity —— MCSWEP 那条
+-- MCITEM 的 SWEP 接管时，右键实体压根没有走到 MC.UseItemOnEntity —— MineMod 那条
 -- 分发在 mc_item_hand 的 SecondaryAttack 里，而选中的物品一旦由 MCITEM 自己的 SWEP
 -- 接管，那个 SWEP 就不是 mc_item_hand 了。表现就是"在 mcinventory 里拿着 mcitem 的
 -- 物品时没法和生物交互"。

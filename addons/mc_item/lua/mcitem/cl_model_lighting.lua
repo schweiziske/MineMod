@@ -1,7 +1,7 @@
--- MCSWEP voxel lighting bridge for MCITEM StudioModels.
+-- MineMod voxel lighting bridge for MCITEM StudioModels.
 --
 -- Held weapons, food, potions and throwable items all end up as Source
--- StudioModels.  MCSWEP's block-mesh shade pipeline cannot light those models,
+-- StudioModels.  MineMod's block-mesh shade pipeline cannot light those models,
 -- so use the same prop-style path as mc/render/cl_entity_lighting.lua:
 -- sample dynamic voxel RGB, suppress Source model lighting for one bounded draw,
 -- modulate the model, then immediately restore global render state.
@@ -19,7 +19,7 @@ Lighting.States = istable(Lighting.States)
 local lightStates = Lighting.States
 local cvEnabled = GetConVar("mcitem_mcswep_lighting") or CreateClientConVar(
     "mcitem_mcswep_lighting", "1", true, false,
-    "Apply MCSWEP voxel lighting to MCITEM held, dropped and thrown item models."
+    "Apply MineMod voxel lighting to MCITEM held, dropped and thrown item models."
 )
 
 local function clamp01(value)
@@ -27,7 +27,7 @@ local function clamp01(value)
 end
 
 -- Resolve at sample time rather than file load time: autorun/SWEP ordering may
--- load MCITEM before MCSWEP, and either addon can be Lua-refreshed independently.
+-- load MCITEM before MineMod, and either addon can be Lua-refreshed independently.
 local function mcLightFn(name, fallbackName)
     if not MC then return nil end
     if istable(MC.API) and istable(MC.API.Light)
@@ -149,7 +149,7 @@ end
 local function reportDrawError(entity, err)
     local className = IsValid(entity) and entity:GetClass() or "invalid_entity"
     ErrorNoHalt(string.format(
-        "[MCITEM] MCSWEP-lit model draw failed (%s): %s\n",
+        "[MCITEM] MineMod-lit model draw failed (%s): %s\n",
         tostring(className), tostring(err)
     ))
 end
