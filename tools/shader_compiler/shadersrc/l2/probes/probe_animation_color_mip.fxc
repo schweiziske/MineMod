@@ -1,0 +1,42 @@
+sampler FrameAtlas : register(s0);
+float4 Params : register(c0); // interpolation, subtexel camera offset, output mode, reserved
+float4 Channels : register(c1); // animated color/normal/specular; -1 split, 0/1 force side
+#include "animation.fxh"
+#include "labpbr.fxh"
+float3 mcSafeNormalize(float3 v) { return v * rsqrt(max(dot(v,v), 1e-12f)); }
+static const float4 MCEyeExposure = float4(0,0,0,1);
+#include "brdf.fxh"
+
+float4 frameSample(float2 localUV, float row, float frame, float lod)
+{
+    // The test has no atlas padding. Clamp each frame at the sampled mip.
+    float inset = exp2(lod) * 0.5f / 128.0f;
+    float2 uv = clamp(localUV, inset, 1.0f - inset);
+    uv = (uv * 128.0f + float2(frame * 128.0f, row * 128.0f)) / float2(256,512);
+    return tex2Dlod(FrameAtlas, float4(uv,0,lod));
+}
+float4 main(float2 pixel : VPOS) : COLOR0
+{
+    float split = step(256.0f, pixel.x);
+    float candidate = Channels.w < 0.0f ? split : Channels.w;
+    float2 p = float2(pixel.x - split * 256.0f, fmod(pixel.y,128.0f));
+    float lod = floor(pixel.y / 128.0f) * 2.0f;
+    float2 uv = frac((p * exp2(lod) + Params.y) / 128.0f);
+    float materialLod = lod * (1.0f - candidate);
+    float4 color = lerp(frameSample(uv,0,0,lod), frameSample(uv,0,1,lod), Params.x * Channels.x);
+    float4 normal = mcAnimationNormal(frameSample(uv,1,0,materialLod), frameSample(uv,1,1,materialLod), Params.x * Channels.y);
+    float4 specular = mcAnimationSpecular(frameSample(uv,2,0,materialLod), frameSample(uv,2,1,materialLod), Params.x * Channels.z);
+    if (Params.z > 2.5f) return float4(specular.rgb,1);
+    if (Params.z > 1.5f) return float4(normal.rgb,1);
+    if (Params.z > 0.5f) return float4(color.rgb,1);
+    // Controlled direct-light preview, not the production environment/shadow pass.
+    float3 base = pow(max(color.rgb,0.0f),2.2f);
+    float roughness, metallic, subsurface, emission;
+    float3 f0;
+    mcLabSpecular(specular,base,roughness,metallic,f0,subsurface,emission);
+    float3 n = mcSafeNormalize(mcLabNormal(normal));
+    float3 light = normalize(float3(0.35f,-0.2f,1));
+    float3 lit = mcDirectBRDF(base,metallic,roughness,f0,1,n,float3(0,0,1),light,1,subsurface);
+    lit = lit * 2.0f + base * 0.15f * normal.b + base * emission * 4.0f;
+    return float4(pow(mcToneMap(lit),1.0f/2.2f),1);
+}

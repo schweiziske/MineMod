@@ -1,0 +1,29 @@
+#include "post/scene.fxh"
+sampler2D MCPostScene : register(s0);
+sampler2D MCPostOcclusion : register(s1);
+sampler2D MCPostDepthTexture : register(s2);
+
+float4 main(float2 uv : TEXCOORD0) : COLOR0
+{
+    float4 scene = tex2D(MCPostScene, uv);
+    float z = mcPostDepth(MCPostDepthTexture, uv);
+    float2 center = (floor(uv / MCPostTexel.zw) + 0.5f) * MCPostTexel.zw;
+    float occlusion = 0, weights = 0;
+    float tolerance = max(MCPostAO.y * 2.0f, z * 0.002f);
+    // Depth-aware filtering also upsamples. A low-resolution wall sample must
+    // not paint an AO halo onto sky or a different foreground object.
+    [unroll] for (int y = -1; y <= 1; ++y)
+    {
+        [unroll] for (int x = -1; x <= 1; ++x)
+        {
+            float2 sampleUV = center + float2(x, y) * MCPostTexel.zw;
+            float2 sampleAO = tex2Dlod(MCPostOcclusion, float4(sampleUV, 0, 0)).rg;
+            float spatial = (x == 0 ? 2.0f : 1.0f) * (y == 0 ? 2.0f : 1.0f);
+            float weight = spatial * exp2(-abs(sampleAO.y * 4000.0f - z) / tolerance);
+            occlusion += sampleAO.x * weight;
+            weights += weight;
+        }
+    }
+    float visibility = z >= 3990.0f ? 1.0f : max(0.35f, 1.0f - MCPostAO.w * occlusion / max(weights, 0.0001f));
+    return float4(MCPostView.x > 0.5f ? visibility.xxx : scene.rgb * visibility, scene.a);
+}

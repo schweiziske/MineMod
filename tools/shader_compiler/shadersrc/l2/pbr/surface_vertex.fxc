@@ -1,0 +1,2 @@
+#define MC_VERTEX_STAGE 1
+#include "geometry/vertex.fxh"

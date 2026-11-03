@@ -1,0 +1,17 @@
+#define MC_VERTEX_STAGE 0
+#include "adapter/bindings.fxh"
+#include "water/surface.fxh"
+#include "ssr/trace.fxh"
+float4 MCWaterOrigin : register(c15);
+float4 MCWaterMotion : register(c16);
+
+float4 main(MCWaterFragment input, float face : VFACE) : COLOR0
+{
+    MCWaterSurface surface = mcWaterSurface(input, face, MCWaterOrigin, MCWaterMotion, MCSSREye.xyz, MCSSRFootprint.xy);
+    // Horizontal surfaces trace from above and from below (total internal
+    // reflection). Waterfalls keep the environment response. Other
+    // faces still occupy the trace depth with a miss, so a farther upper
+    // surface seen through a water side face is not composited over it.
+    if (abs(surface.geometric.z) < 0.5f) return 0;
+    return mcSSRTrace(input.worldPosition, surface.normal, -surface.view);
+}

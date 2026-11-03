@@ -1,0 +1,13 @@
+sampler2D MCBloomSource : register(s0);
+float4 MCBloomStep : register(c0);
+float4 main(float2 uv : TEXCOORD0) : COLOR0
+{
+    // Nine-tap Gaussian collapsed into five bilinear samples. The weights sum
+    // to one, so a constant field does not brighten on each blur pass.
+    float3 glow = tex2D(MCBloomSource, uv).rgb * 0.227027027f;
+    glow += (tex2D(MCBloomSource, uv + MCBloomStep.xy * 1.384615385f).rgb
+           + tex2D(MCBloomSource, uv - MCBloomStep.xy * 1.384615385f).rgb) * 0.316216216f;
+    glow += (tex2D(MCBloomSource, uv + MCBloomStep.xy * 3.230769231f).rgb
+           + tex2D(MCBloomSource, uv - MCBloomStep.xy * 3.230769231f).rgb) * 0.070270270f;
+    return float4(glow, 1);
+}

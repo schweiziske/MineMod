@@ -1,0 +1,61 @@
+sampler2D MCVolumeScene : register(s0);
+sampler2D MCVolumeLight : register(s1);
+sampler2D MCVolumeDepth : register(s2);
+float4 MCVolumeResolve : register(c0); // light texel XY, block size, debug
+float4 MCVolumeDepthTexel : register(c1);
+
+float2 mcVolumeDepthUV(float2 uv)
+{
+    return min(max((floor(uv / MCVolumeDepthTexel.xy) + 0.5f) * MCVolumeDepthTexel.xy,
+                   MCVolumeDepthTexel.xy * 0.5f), 1.0f - MCVolumeDepthTexel.xy * 0.5f);
+}
+float mcVolumeInverseDepth(float2 uv)
+{
+    return 1.0f / max(tex2Dlod(MCVolumeDepth, float4(mcVolumeDepthUV(uv), 0, 0)).r, 0.000001f);
+}
+float4 main(float2 uv : TEXCOORD0) : COLOR0
+{
+    float4 scene = tex2D(MCVolumeScene, uv);
+    float2 depthUV = mcVolumeDepthUV(uv);
+    float depth = tex2Dlod(MCVolumeDepth, float4(depthUV, 0, 0)).r;
+    float inverseDepth = 1.0f / max(depth, 0.000001f);
+    float2 dx = float2(MCVolumeDepthTexel.x, 0), dy = float2(0, MCVolumeDepthTexel.y);
+    float left = inverseDepth - mcVolumeInverseDepth(depthUV - dx);
+    float right = mcVolumeInverseDepth(depthUV + dx) - inverseDepth;
+    float up = inverseDepth - mcVolumeInverseDepth(depthUV - dy);
+    float down = mcVolumeInverseDepth(depthUV + dy) - inverseDepth;
+    // Reciprocal view depth is planar in screen space. Pick the continuous
+    // side at silhouettes instead of widening the filter to accept a back wall.
+    float2 gradient = float2(abs(left) < abs(right) ? left : right, abs(up) < abs(down) ? up : down);
+    float2 center = (floor(uv / MCVolumeResolve.xy) + 0.5f) * MCVolumeResolve.xy;
+    float2 fraction = (uv - center) / MCVolumeResolve.xy;
+    float tolerance = max(MCVolumeResolve.z * 0.04f, depth * 8.0f);
+    float3 glow = 0, plain = 0;
+    float weights = 0, spatialWeights = 0;
+    [unroll] for (int y = -1; y <= 1; ++y)
+    {
+        [unroll] for (int x = -1; x <= 1; ++x)
+        {
+            float2 sampleUV = center + float2(x, y) * MCVolumeResolve.xy;
+            float4 sample = tex2Dlod(MCVolumeLight, float4(sampleUV, 0, 0));
+            float2 offset = (mcVolumeDepthUV(sampleUV) - depthUV) / MCVolumeDepthTexel.xy;
+            float predicted = 1.0f / max(inverseDepth + dot(gradient, offset), 0.000001f);
+            float difference = (sample.a - predicted) * 4000.0f / tolerance;
+            // Vary spatial weights at full-resolution pixel positions so the
+            // low-resolution buffer does not become visible as 4x4 squares.
+            float2 spatial = max(0.0f, 1.5f - abs(float2(x, y) - fraction));
+            float weight = exp2(-difference * difference * 2.0f)
+                * saturate(1.0f - abs(difference) * 0.5f) * spatial.x * spatial.y;
+            glow += sample.rgb * weight;
+            weights += weight;
+            plain += sample.rgb * spatial.x * spatial.y;
+            spatialWeights += spatial.x * spatial.y;
+        }
+    }
+    // Distant grazing ground can reject all nine taps on depth precision alone;
+    // those rows went black/bright. Fall back to the plain spatial filter.
+    glow = (glow + plain * 0.001f) / (weights + spatialWeights * 0.001f);
+    float3 scattering = 1.0f - exp(-glow);
+    // Existing scene is tone mapped. Bounded linear addition retains contrast.
+    return float4(MCVolumeResolve.w > 0.5f ? scattering : scene.rgb + scattering * (1.0f - scene.rgb), scene.a);
+}

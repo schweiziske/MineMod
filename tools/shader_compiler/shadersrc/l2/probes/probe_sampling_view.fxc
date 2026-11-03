@@ -1,0 +1,22 @@
+// In-game diagnostic using the production PBR vertex outputs and atlas ABI.
+#include "../pbr/materials/sampling.fxh"
+sampler2D Albedo : register(s0);
+
+float4 main(centroid float2 uv : TEXCOORD0, float2 derivativeUV : TEXCOORD5) : COLOR0
+{
+    float2 dx = ddx(derivativeUV) * MCResourceFootprint.xy;
+    float2 dy = ddy(derivativeUV) * MCResourceFootprint.xy;
+    float offset = 0.5f * log2(MCResourceFootprint.z);
+    float requested = 0.5f * log2(max(max(dot(dx,dx),dot(dy,dy)),MCResourceFootprint.z));
+    float selected = min(requested,MCResourceAtlas.z);
+#if MC_SAMPLING_VIEW_LOD
+    // R: requested physical LOD / 8; G: selected / 8; B: saturation flag.
+    return float4((requested-offset)/8.0f,(selected-offset)/8.0f,
+        requested > MCResourceAtlas.z + 0.01f ? 1.0f : 0.0f,1.0f);
+#else
+    float4 color = mcPBRColor(Albedo,uv,selected,true);
+    color.rgb = lerp(color.rgb*12.92f,1.055f*pow(max(color.rgb,0.0f),1.0f/2.4f)-0.055f,
+        step(0.0031308f,color.rgb));
+    return float4(color.rgb,1.0f);
+#endif
+}

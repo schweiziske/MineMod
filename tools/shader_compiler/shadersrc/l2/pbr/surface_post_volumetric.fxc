@@ -1,0 +1,120 @@
+#include "post/atmosphere.fxh"
+#include "lighting/shadow_layout.fxh"
+sampler2D MCVolumeDepth : register(s0);
+sampler2D MCVolumeShadow : register(s1);
+float4 MCVolumeSun : register(c14); // exposed linear solar RGB, scattering strength
+float4 MCVolumeU : register(c15);   // camera-relative far-cascade projection
+float4 MCVolumeV : register(c16);
+float4 MCVolumeZ : register(c17);
+float4 MCVolumeSettings : register(c18); // bias, inverse tile size, steps, reserved
+
+float3 mcVolumeTap(float2 uv, float depth)
+{
+    float2 address = uv * float2(0.5f, MC_SHADOW_ROW_SCALE) + float2(0.5f, 0)
+        + MCVolumeSettings.y * float2(0.25f, MC_SHADOW_ROW_SCALE * 0.5f);
+    const float2 unpackDepth = float2(255.0f, 65280.0f) / 65535.0f;
+    float stored = dot(tex2Dlod(MCVolumeShadow, float4(address, 0, 0)).rg, unpackDepth);
+#if MC_SKY_BOUNDARY
+    float entrance = dot(tex2Dlod(MCVolumeShadow, float4(address + float2(0, 0.5f), 0, 0)).rg, unpackDepth);
+    float interior = step(entrance + 0.5f / 65535.0f, depth - MCVolumeSettings.x)
+        * (1.0f - step(1.0f, entrance));
+    [branch] if (interior > 0.5f)
+        stored = dot(tex2Dlod(MCVolumeShadow, float4(address + float2(0, 0.75f), 0, 0)).rg, unpackDepth);
+#endif
+    float visible = step(depth - MCVolumeSettings.x, stored);
+    if (MCFogShape.w >= 0) return visible;
+    float4 water = tex2Dlod(MCVolumeShadow, float4(address + float2(0, MC_SHADOW_ROW_SCALE), 0, 0));
+    float waterDepth = dot(water.rg, unpackDepth);
+    // Missing interfaces cannot illuminate a submerged volume. Opaque roofs
+    // still occlude it, regardless of the artistic surface shadow strength.
+    float wet = step(waterDepth + 2.0f / 65535.0f, depth) * (1.0f - step(1.0f, waterDepth));
+#if MC_SKY_BOUNDARY
+    wet *= 1.0f - interior * step(waterDepth, entrance);
+#endif
+    float lightDistance = max(0.0f, depth - waterDepth) * MCFogCamera.y / length(MCVolumeZ.xyz);
+    // Horizontal water interface: project the solar path onto world vertical.
+    // This controls shaft contrast with depth independently of RGB absorption
+    // and camera distance. Additional shaft energy halves every six blocks.
+    float submergedDepth = lightDistance * abs(normalize(MCVolumeZ.xyz).z);
+    float shaftAttenuation = exp2(-submergedDepth / 6.0f);
+    // BA is a receiver-plane caustic, projected along the light for this
+    // single-scattering approximation; it is not a 3D photon-density field.
+    return visible * wet * (water.b * 4.0f) * shaftAttenuation
+        * exp(-mcMediumExtinction() * lightDistance);
+}
+float3 mcVolumeVisibility(float3 relativePosition)
+{
+    float4 samplePosition = float4(relativePosition, 1);
+    float2 uv = float2(dot(MCVolumeU, samplePosition), dot(MCVolumeV, samplePosition));
+    float depth = dot(MCVolumeZ, samplePosition);
+    float edge = max(abs(uv.x * 2 - 1), abs(uv.y * 2 - 1));
+    if (min(1.0f - edge, min(depth, 1.0f - depth)) <= 0) return 0;
+    float texel = MCVolumeSettings.y;
+    float2 grid = uv / texel;
+    float2 weight = frac(grid);
+    float2 low = floor(grid) * texel;
+    float2 high = min(low + texel, 1.0f - texel);
+    low = max(low, 0);
+    // Compare point-sampled depths, then interpolate visibility. RG depth
+    // itself must never be filtered across packed-byte carries or tile edges.
+    // Share the sky-aware tap body to stay within SM3's 32 temporary registers.
+    float3 visible = 0;
+    float2 corner = 0;
+    [loop] for (int tap = 0; tap < 4; ++tap)
+    {
+        float2 address = lerp(low, high, corner);
+        float2 weights = lerp(1.0f - weight, weight, corner);
+        visible += mcVolumeTap(address, depth) * (weights.x * weights.y);
+        corner = float2(1.0f - corner.y, corner.x);
+    }
+    float coverage = saturate((1.0f - edge) * 16.666667f) * saturate(min(depth, 1.0f - depth) * 16.0f);
+    // Surface shadow strength is an artistic darkening control. It must not
+    // turn opaque roofs into partially transmitting volumes.
+    return coverage * visible;
+}
+float mcVolumePhase(float cosine)
+{
+    if (MCFogShape.w < 0)
+    {
+        // A normalized broad/narrow HG mixture redistributes the same solar
+        // scattering energy to lateral views; both lobes use the shadowed
+        // volume integral, not an unoccluded screen-space glow.
+        float broad = 0.9775f / pow(max(0.7225f, 1.0225f - 0.3f * cosine), 1.5f);
+        float forward = 0.4375f / pow(max(0.0625f, 1.5625f - 1.5f * cosine), 1.5f);
+        return (0.35f / 12.566370614f) * (0.8f * broad + 0.2f * forward);
+    }
+    // Forward Mie scattering, g=0.65, with a 0.35 scattering albedo. The broad
+    // ambient haze is already supplied by fog; keep this extra solar lobe soft.
+    return (0.35f * 0.5775f / 12.566370614f)
+        / pow(max(0.1225f, 1.4225f - 1.3f * cosine), 1.5f);
+}
+float4 main(float2 uv : TEXCOORD0, float2 pixel : VPOS) : COLOR0
+{
+    float2 depthUV = (floor(uv / MCFogViewport.xy) + 0.5f) * MCFogViewport.xy;
+    float depth = tex2Dlod(MCVolumeDepth, float4(depthUV, 0, 0)).r;
+    float3 ray = mcFogRay(uv);
+    float rayLength = length(ray);
+    float3 direction = mcFogWorld(ray / rayLength);
+    float distance = min(depth * 4000.0f * rayLength * MCFogCamera.y, MCFogViewport.z);
+    float stepLength = max(0.0f, MCFogViewport.z - MCFogShape.x) / MCVolumeSettings.z;
+    if (distance <= MCFogShape.x || stepLength <= 0) return float4(0, 0, 0, depth);
+    float3 scattering = 0, transmittance = 1;
+    // IGN must use adjacent volume pixels, not the full-resolution depth grid.
+    // Decimating that grid aliases the noise into diagonal bands that survive
+    // the composite's 3x3 filter. VPOS also respects capped target sizes.
+    float dither = frac(52.9829189f * frac(dot(floor(pixel), float2(0.06711056f, 0.00583715f))));
+    // Fixed radial intervals: moving a receiver changes only the final partial
+    // interval. No frame jitter/history, and no sample can cross the receiver.
+    [loop] for (int i = 0; i < 32; ++i)
+    {
+        float start = MCFogShape.x + i * stepLength;
+        if (i >= MCVolumeSettings.z || start >= distance) break;
+        float end = min(start + stepLength, distance);
+        float3 nextTransmittance = exp(-mcMediumOpticalDepth(end, direction.z));
+        float3 position = direction * (lerp(start, end, dither) / MCFogCamera.y);
+        scattering += max(0.0f, transmittance - nextTransmittance) * mcVolumeVisibility(position);
+        transmittance = nextTransmittance;
+    }
+    float cosine = dot(direction, normalize(-MCVolumeZ.xyz));
+    return float4(MCVolumeSun.rgb * (MCVolumeSun.w * mcVolumePhase(cosine) * scattering), depth);
+}

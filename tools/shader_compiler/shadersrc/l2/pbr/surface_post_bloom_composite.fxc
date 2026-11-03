@@ -1,0 +1,12 @@
+sampler2D MCBloomScene : register(s0);
+sampler2D MCBloomBlurred : register(s1);
+float4 MCBloomSettings : register(c0); // strength, debug
+float4 main(float2 uv : TEXCOORD0) : COLOR0
+{
+    float4 scene = tex2D(MCBloomScene, uv);
+    float3 glow = tex2D(MCBloomBlurred, uv).rgb;
+    // Tone-mapped colour has no HDR headroom. A bounded screen blend retains
+    // hue and contrast instead of clipping every bright patch to flat white.
+    float3 colour = scene.rgb + saturate(glow * MCBloomSettings.x) * (1.0f - scene.rgb);
+    return float4(MCBloomSettings.y > 0.5f ? glow : colour, scene.a);
+}

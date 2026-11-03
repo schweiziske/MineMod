@@ -1,0 +1,46 @@
+#define MC_VERTEX_STAGE 0
+#include "adapter/bindings.fxh"
+#include "geometry/interface.fxh"
+#include "geometry/normal.fxh"
+#include "lighting/ibl.fxh"
+#include "materials/labpbr.fxh"
+#include "ssr/trace.fxh"
+#include "materials/sampling.fxh"
+float4 MCBlockSSR : register(c15); // scene inverse XY, alpha cutoff, maximum roughness
+// Redraws opaque/cutout terrain over the finished scene. s0 albedo, s1 private
+// scene depth, s2 scene colour copy, s3/s4 LabPBR maps, s7 DFG. No hardware
+// depth test: the trace rejects receivers hidden in the private depth.
+
+float4 main(MCPBRFragment input, float faceSign : VFACE, float2 pixel : VPOS) : COLOR0
+{
+    float3 px = ddx(input.derivativeWorldPosition), py = ddy(input.derivativeWorldPosition);
+    float2 ux = ddx(input.derivativeUV), uy = ddy(input.derivativeUV);
+    float3 v = normalize(MCSSREye.xyz - input.worldPosition);
+    float3 geometric = normalize(cross(py, px));
+    geometric *= dot(geometric, v) < 0.0f ? -1.0f : 1.0f;
+    float lod = mcResourceAtlasGrad(ux,uy);
+    float4 albedo = mcPBRColor(MCAlbedo, input.uv, lod, true);
+    lod += MCResourceFootprint.w;
+    float4 specularSample = mcPBRMaterial(MCORM, input.uv, lod, false);
+    float4 normalSample = mcPBRMaterial(MCNormal, input.uv, lod, true);
+    clip(faceSign);
+    clip(albedo.a - MCBlockSSR.z);
+    float roughness, metallic, subsurface, emission;
+    float3 f0;
+    mcLabSpecular(specularSample, albedo.rgb, roughness, metallic, f0, subsurface, emission);
+    // Unfiltered SSR is a mirror; fade it out before rough materials.
+    float fade = saturate(1.0f - roughness / MCBlockSSR.w);
+    clip(fade - 0.001f);
+    float3 n = mcMappedNormal(px, py, ux, uy, geometric, mcLabNormal(normalSample));
+    float2 dfg = mcEnvironmentBRDF(roughness, saturate(dot(n, v)));
+    float3 reflectance = saturate(f0 * dfg.x + saturate(dot(f0, 16.5f)) * dfg.y);
+    float4 hit = mcSSRTrace(input.worldPosition, n, -v);
+    clip(hit.w - 0.00001f);
+    float2 uv = (pixel + 0.5f) * MCBlockSSR.xy;
+    float3 current = tex2Dlod(MCGlobalLightmap, float4(uv, 0, 0)).rgb;
+    float3 reflected = tex2Dlod(MCGlobalLightmap, float4(hit.xy + (MCBlockSSR.xy - MCSSRDepthSize.zw) * 0.5f, 0, 0)).rgb;
+    // The scene already holds diffuse plus the environment reflection. Moving
+    // it toward the traced colour by the specular reflectance replaces that
+    // environment where a hit exists, and grazing mirrors become the hit.
+    return float4(lerp(current, reflected, reflectance * (hit.w * fade)), 1);
+}

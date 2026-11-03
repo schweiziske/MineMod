@@ -1,0 +1,11 @@
+// Boundary calibration for the atlas samplers used by vanilla and LabPBR.
+sampler2D Albedo : register(s0);
+sampler2D Normal : register(s3);
+sampler2D ORM : register(s4);
+float4 Settings : register(c0);
+float4 main(float2 uv : TEXCOORD0) : COLOR0
+{
+    float4 address=float4(uv,0,Settings.x);
+    return float4(tex2Dlod(Albedo,address).r,tex2Dlod(Normal,address).r,
+        tex2Dlod(ORM,address).r,1);
+}

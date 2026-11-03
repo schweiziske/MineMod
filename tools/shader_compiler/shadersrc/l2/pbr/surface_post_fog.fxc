@@ -1,0 +1,28 @@
+#include "post/atmosphere.fxh"
+sampler2D MCFogScene : register(s0);
+sampler2D MCFogDepth : register(s1);
+// Fourth row of $viewprojmat; c4 is engine-owned inverse texture dimensions.
+float4 MCFogEnd : register(c14); // full-opacity air distance in blocks; zero disables
+float4 main(float2 uv : TEXCOORD0) : COLOR0
+{
+    float4 scene = tex2D(MCFogScene, uv);
+    float2 depthUV = (floor(uv / MCFogViewport.xy) + 0.5f) * MCFogViewport.xy;
+    float z = tex2Dlod(MCFogDepth, float4(depthUV, 0, 0)).r * 4000.0f;
+    float3 ray = mcFogRay(uv);
+    float rayLength = length(ray);
+    float3 direction = mcFogWorld(ray / rayLength);
+    float sceneDistance = z * rayLength * MCFogCamera.y;
+    float distance = z >= 3990.0f ? MCFogViewport.z : min(sceneDistance, MCFogViewport.z);
+    float3 opacity = min(MCFogViewport.w, 1.0f - exp(-mcMediumOpticalDepth(distance, direction.z)));
+    // Match distant terrain at the horizon without recolouring the zenith.
+    if (z >= 3990.0f && MCFogShape.w >= 0) opacity *= pow(saturate(1.0f - max(direction.z, 0.0f) * 2.0f), 2.0f);
+    if (MCFogShape.w >= 0 && MCFogEnd.x > 0)
+    {
+        // The endpoint uses receiver distance, not the capped density integral.
+        // Saturated depth is the distant background, including the sky.
+        float endOpacity = z >= 3990.0f ? 1.0f
+            : smoothstep(MCFogShape.x, max(MCFogShape.x + 1.0f, MCFogEnd.x), sceneDistance);
+        opacity = lerp(opacity, 1.0f, endOpacity);
+    }
+    return float4(lerp(scene.rgb, MCAtmosphere.rgb, opacity), scene.a);
+}

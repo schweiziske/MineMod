@@ -1,0 +1,37 @@
+{
+  "id": "mc:pbr_quad_v5",
+  "revision": 5,
+  "material": "screenspace_general_8tex",
+  "layout": "mc:quad_corners_v1",
+  "vertexInputs": ["POSITION0", "TEXCOORD0", "COLOR0"],
+  "vertexConstants": [4, 5, 6, 7, 58, 59, 60],
+  "pixelConstants": [0, 1, 2, 3, 11, 12, 13, 14],
+  "samplers": [0, 1, 2, 3, 4, 5, 6, 7],
+  "ibl": "Filament-style GGX split sum; s6=512x256 RGBM64 octahedral roughness atlas (4x2 tiles, 128 stride, 2 padding), s7=128x128 RG/BA packed 16-bit DFG A/B",
+  "shadow": "2x4 point-filter RGBA8 atlas: near/far columns; ordinary opaque, water, first sky entrance, interior opaque rows. RG is 16-bit little-endian depth. Water BA is red/blue sunlight /4. Shadow c0=forward/inverse range, c1=origin/cutoff, c2=clip enable/inverse sky width/inverse sky height/interior row pixel offset; s1=separate 2x1 sky entrance depth. Single entrance per light ray; v1-v4 keep their 2x2 atlas.",
+  "normal": "RGB tangent-space XYZ UNORM; +Y follows increasing texture V; A scales dielectric F0 = 0.04*A (metals use albedo F0)",
+  "cornerAtlas": "s1=16384x16384 point-filter RGBA8; four corner rows plus one RGBA AO row per group; COLOR0 retains bank-local corner addresses; c0.z selects the 1048576-quad bank",
+  "orm": "RGBA UNORM = occlusion, perceptual roughness, signed material byte (128 dielectric, 255 metal, 1 thin transmission), emissive albedo scale",
+  "materialEncoding": "orm_signed_metal_subsurface_v1",
+  "colorPolicy": "sRGB albedo/lightmap reads; linear data maps and corner bytes; linear BRDF and tone mapping; sRGB output",
+  "geometryPolicy": "geometric normals from world-position derivatives; no NORMAL input or geometry rebuild",
+  "dynamicLights": "Local GGX light draw after affected terrain/block-entity/water meshes; original base programs unchanged. s2=64x1 point-filter RGBA8, five texels per light, at most eight. c0=inverseBlockSize,0,cornerAtlasBank,count; c1=render-space eye/exposure. Water uses the identical c15..18 wave/optics constants. Depth test without writes, additive RGB preserving destination alpha.",
+  "water": {
+    "version": 1,
+    "programs": ["water_vertex", "water"],
+    "vertexColor": "R/G=block/sky times 16, B=0..16 block water depth, A=shore weight; waves are independent of sprite UVs",
+    "pixelConstants": [0, 1, 2, 3, 4, 11, 12, 13, 14, 15, 16, 17, 18],
+    "samplers": [0, 2, 3, 5, 6],
+    "normal": "s3=256x256 repeating XYZ normal, A=foam noise, smooth mipmapped linear data; PNG import requires noclamp",
+    "transform": "invviewprojmat transports wrapped chunk phase/inverse block size, motion, scattering/foam, absorption/reflection",
+    "passes": "current-view scene copy followed by one translucent colour draw per fluid batch; depth test without depth write"
+  },
+  "waterSSR": {
+    "version": 1,
+    "programs": ["scene_depth_vertex", "scene_depth", "ssr_copy_vertex", "ssr_copy", "water_ssr", "water_ssr_composite"],
+    "depth": "GMod SSAO DepthWrite COLOR_DEPTH: linear perspective clip W / 4000 in red; engine scene depth redraw plus MC alpha-tested depth draws",
+    "trace": "half-resolution RGBA16F: hit UV, receiver view depth in Source units, confidence; up to 48 deterministic steps and five binary refinements",
+    "composition": "four receiver-depth-aware point taps replace only environmental reflection; pre-water colour source prevents feedback; main-view colour/depth generation must match"
+  },
+  "gpuReady": false
+}

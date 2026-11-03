@@ -1,0 +1,75 @@
+#define HDRTYPE HDR_TYPE_NONE
+#include "common_ps_fxc.h"
+#include "mc_gpu_block_tint.fxh"
+
+sampler BaseTextureSampler : register(s0);
+sampler ChunkLightSampler  : register(s1);
+#include "mc_gpu_chunk_lighttex_packed.fxh"
+
+static const float3 MC_SKY_LIGHT_TINT = float3( 0.94f, 0.98f, 1.06f );
+static const float3 MC_BLOCK_LIGHT_TINT = float3( 1.14f, 0.94f, 0.74f );
+static const float MC_SKY_TINT_STRENGTH = 0.22f;
+static const float MC_BLOCK_TINT_STRENGTH = 0.42f;
+static const float MC_CONTRAST_STRENGTH = 0.22f;
+
+struct PS_INPUT
+{
+	float2 vTexCoord : TEXCOORD0;
+	float3 vLocalPos : TEXCOORD1;
+	float4 vColor    : TEXCOORD3;
+	float2 vLightTileOrigin : TEXCOORD5;
+};
+
+float3 faceScaleForIndex( float faceIndex )
+{
+	if ( faceIndex < 1.5f )
+	{
+		return float3( 1.06f, 1.03f, 0.94f );
+	}
+	else if ( faceIndex < 2.5f )
+	{
+		return ( 128.0f / 255.0f ) * float3( 0.76f, 0.82f, 0.98f );
+	}
+	else if ( faceIndex < 3.5f )
+	{
+		return ( 153.0f / 255.0f ) * float3( 0.96f, 0.99f, 1.04f );
+	}
+	else if ( faceIndex < 4.5f )
+	{
+		return ( 153.0f / 255.0f ) * float3( 0.86f, 0.90f, 1.02f );
+	}
+	else if ( faceIndex < 5.5f )
+	{
+		return ( 204.0f / 255.0f ) * float3( 1.02f, 1.00f, 0.94f );
+	}
+	return ( 204.0f / 255.0f ) * float3( 0.82f, 0.88f, 1.04f );
+}
+
+float3 composeShaderPackLight( float3 lightChannels )
+{
+	float blockLight = saturate( lightChannels.g );
+	float skyLight = saturate( lightChannels.b );
+	float combined = max( blockLight, skyLight );
+	float contrasted = saturate( ( combined - 0.5f ) * 1.08f + 0.5f );
+	float intensity = lerp( combined, contrasted, MC_CONTRAST_STRENGTH );
+	float warm = saturate( blockLight * ( 1.0f - skyLight * 0.35f ) );
+	float cool = saturate( skyLight * ( 1.0f - blockLight * 0.25f ) );
+	float3 tint = 1.0f
+		+ ( MC_BLOCK_LIGHT_TINT - 1.0f ) * warm * MC_BLOCK_TINT_STRENGTH
+		+ ( MC_SKY_LIGHT_TINT - 1.0f ) * cool * MC_SKY_TINT_STRENGTH;
+	return saturate( intensity * tint );
+}
+
+HALF4 main( PS_INPUT i, float faceSign : VFACE ) : COLOR
+{
+	clip( faceSign );
+	float4 albedo = tex2D( BaseTextureSampler, i.vTexCoord );
+	clip( albedo.a - 0.5f );
+	albedo.rgb *= mcBlockTint( i.vColor.b );
+
+	float faceIndex = floor( i.vColor.g * 255.0f + 0.5f );
+	float3 lightColor = composeShaderPackLight( mcSampleSmoothFaceLight9( i.vLocalPos, faceIndex, i.vLightTileOrigin ) );
+	float3 faceScale = faceScaleForIndex( faceIndex );
+
+	return HALF4( saturate( albedo.rgb * lightColor * faceScale ), 1.0f );
+}

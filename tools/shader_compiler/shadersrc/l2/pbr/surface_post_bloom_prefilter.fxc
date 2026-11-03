@@ -1,0 +1,28 @@
+sampler2D MCBloomScene : register(s0);
+float4 MCBloomSettings : register(c0); // downsample tap spacing XY, threshold, soft knee
+float3 mcBloomExtract(float3 colour)
+{
+    // Max channel preserves warm fire and saturated emissive colours. This is
+    // deliberately an LDR threshold: each PBR material is already tone mapped.
+    float brightness = max(colour.r, max(colour.g, colour.b));
+    float knee = max(MCBloomSettings.w, 0.0001f);
+    float soft = clamp(brightness - MCBloomSettings.z + knee, 0.0f, 2.0f * knee);
+    soft = soft * soft / (4.0f * knee);
+    float contribution = max(brightness - MCBloomSettings.z, soft) / max(brightness, 0.0001f);
+    return colour * contribution;
+}
+float4 main(float2 uv : TEXCOORD0) : COLOR0
+{
+    float3 glow = 0;
+    // Extract before reduction so a small hot pixel is not averaged below the
+    // threshold. A tent footprint reduces shimmer as highlights cross pixels.
+    [unroll] for (int y = -1; y <= 1; ++y)
+    {
+        [unroll] for (int x = -1; x <= 1; ++x)
+        {
+            float weight = (x == 0 ? 2.0f : 1.0f) * (y == 0 ? 2.0f : 1.0f) / 16.0f;
+            glow += mcBloomExtract(tex2D(MCBloomScene, uv + float2(x, y) * MCBloomSettings.xy).rgb) * weight;
+        }
+    }
+    return float4(glow, 1);
+}

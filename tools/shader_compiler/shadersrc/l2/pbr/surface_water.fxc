@@ -1,0 +1,91 @@
+#define MC_VERTEX_STAGE 0
+#include "adapter/bindings.fxh"
+#include "water/interface.fxh"
+#include "geometry/normal.fxh"
+#include "lighting/brdf.fxh"
+#include "lighting/ibl.fxh"
+#include "lighting/shadow.fxh"
+#include "water/waves.fxh"
+#include "water/surface.fxh"
+
+// Four actually consumed rows of $invviewprojmat. Other PBR materials must
+// never set this matrix: their compiler is free to put literals in c15..c18.
+float4 MCWaterOrigin : register(c15); // wrapped block origin minus render origin; inverse block size
+float4 MCWaterMotion : register(c16); // seconds, normal strength, absorption density, refraction strength
+float4 MCWaterScatter : register(c17); // linear RGB scattering, shoreline foam strength
+float4 MCWaterAbsorption : register(c18); // RGB extinction per block, reflection strength
+// screenspace_general uploads inverse s0 dimensions to c4 on every draw.
+// s0 is the engine's current scene-copy texture, decoded from sRGB by the sampler.
+float4 MCWaterSceneTexel : register(c4);
+
+float4 main(MCWaterFragment input, float2 pixel : VPOS, float face : VFACE) : COLOR0
+{
+    MCWaterSurface surface = mcWaterSurface(input, face, MCWaterOrigin, MCWaterMotion, MCEyeExposure.xyz, 1.0f);
+    float3 px = surface.px, py = surface.py, v = surface.view;
+    float3 geometric = surface.geometric, waterBase = surface.base, n = surface.normal;
+    float top = surface.top;
+    float4 waves = surface.waves;
+    float nv = max(saturate(dot(n, v)), 0.001f);
+    // Filter the specular lobe as waves become subpixel; don't renormalize
+    // away the mip variance and turn distant water into white sparkles.
+    float roughness = surface.roughness;
+    float2 lightUV = (min(input.lightDepthShore.rg * 255.0f, 240.0f) + 8.0f) / 256.0f;
+    float3 block = tex2D(MCGlobalLightmap, float2(lightUV.x, 0.03125f)).rgb;
+    float3 sky = max(tex2D(MCGlobalLightmap, lightUV).rgb - block, 0.0f);
+    float skyAccess = saturate(input.lightDepthShore.g * (255.0f / 240.0f));
+    float shadow = mcSunVisibility(input.worldPosition, geometric);
+    float sun = skyAccess * skyAccess * MCSunDirection.w * shadow;
+    // Water2 (three.js, MIT) uses Schlick Fresnel to mix reflection/refraction.
+    // IOR 1.333 gives F0=0.02037; see third_party/threejs/NOTICE.md.
+    float fresnel = surface.fresnel;
+    float3 reflected = reflect(-v, n);
+    float3 reflection = mcPrefilteredRadiance(n, reflected, roughness) * sky * MCSunColor.w;
+    reflection += block * 0.08f;
+    reflection = lerp(reflection, mcWaterUnderside(MCWaterScatter.rgb, block, sky), surface.below);
+    float3 glint = mcDirectBRDF(0, 1, roughness, 0.02037f, 1, n, v, MCSunDirection.xyz, 1, 0)
+        * MCSunColor.rgb * sun;
+    // Project the wave perturbation onto the screen tangent basis. Remove each
+    // derivative's viewing-ray component to keep still/flow joins continuous.
+    float3 screenX = mcSafeNormalize(px - v * dot(px, v));
+    float3 screenY = mcSafeNormalize(py - v * dot(py, v));
+    float2 bend = clamp(float2(dot(n - waterBase, screenX), dot(n - waterBase, screenY)), -0.4f, 0.4f);
+    float2 sceneUV = (pixel + 0.5f + bend * (64.0f * MCWaterMotion.w)) * MCWaterSceneTexel.xy;
+    sceneUV = clamp(sceneUV, MCWaterSceneTexel.xy * 0.5f, 1.0f - MCWaterSceneTexel.xy * 0.5f);
+    // Without scene depth (or from underwater) use a fixed one-block path.
+    // Snell's law bounds it at grazing angles so a puddle stays clear.
+    float refractedCosine = sqrt(1.0f - (1.0f - nv * nv) / (1.333f * 1.333f));
+    float path = 1.0f / refractedCosine;
+    // Colour and optical depth must follow the same refraction displacement.
+    // Unshifted depth applies a nearby plant's short path to the seabed beside
+    // its shifted silhouette, leaving a clear halo in otherwise fogged water.
+    float behind = max(tex2Dlod(MCQuadVertices, float4(sceneUV, 0, 0)).r * 4000.0f
+        - input.clipW, 0.0f);
+    float fogged = MCWaterOrigin.w * behind
+        * length(MCEyeExposure.xyz - input.worldPosition) / input.clipW;
+    float distanceFog = MCQuadParams.z * step(0.0f, MCWaterOrigin.w);
+    path = lerp(path, fogged, distanceFog);
+    // As in chun v2 (gbuffers_water), two terms over that path in blocks:
+    // absorption, scaled by the Absorption setting, only darkens the scene and
+    // keeps its contrast; a fixed linear mist fades to the dark water colour,
+    // fully 12 blocks behind the surface (chun's WATER_MIST_VISIBILITY).
+    float3 transmission = exp2(-MCWaterAbsorption.rgb * (path * MCWaterMotion.z * 1.442695f));
+    // Clipped scene depth is not shallow water. Finish the opaque fallback
+    // while 12 blocks of depth remain, before clipping can shorten a full
+    // mist path. Keep the fade in block units and the underwater/depth gate.
+    float remainingDepth = (4000.0f - input.clipW) * abs(MCWaterOrigin.w);
+    float distantMist = 1.0f - smoothstep(12.0f, 24.0f, remainingDepth);
+    float mist = max(saturate(path * (1.0f / 12.0f)), distantMist) * distanceFog;
+    float foam = input.lightDepthShore.a * top * MCWaterScatter.w
+        * smoothstep(0.55f, 0.78f, waves.z);
+    float3 illumination = block + sky * 0.7f + MCSunColor.rgb * (sun * 0.12f);
+    float3 scattering = MCWaterScatter.rgb * illumination;
+    float3 scene = tex2D(MCAlbedo, sceneUV).rgb;
+    // The copied scene supplies transmission. RGB extinction tints the depth;
+    // only the mist adds the water's own colour.
+    float3 color = lerp(scene * transmission, mcToneMap(scattering), mist) * (1.0f - fresnel);
+    color += mcToneMap(reflection * MCWaterAbsorption.w) * fresnel;
+    color += mcToneMap(glint) * (1.0f - foam);
+    color = lerp(color, mcToneMap(illumination * 0.65f), foam);
+    // Colour includes the transmitted scene; depth writes remain disabled.
+    return float4(saturate(color), 1.0f);
+}

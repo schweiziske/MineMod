@@ -1,0 +1,15 @@
+sampler2D MCDepthAlbedo : register(s0);
+#include "materials/sampling.fxh"
+float4 MCDepthCutoff : register(c0);
+// R merges native and MC; G merges only MC; B merges only sky blocks.
+// Independent MIN channels preserve classification regardless of draw order,
+// including foreground geometry hiding a sky block. Main-view Z is untouched.
+float4 main(centroid float2 uv : TEXCOORD0, centroid float viewDepth : TEXCOORD1) : COLOR0
+{
+    float lod = mcResourceAtlasLod(uv);
+    clip(mcPBRColor(MCDepthAlbedo, uv, lod, false).a - MCDepthCutoff.w);
+    float z = saturate(viewDepth / 4000.0f);
+    // Alpha is independent, long-range temporal depth; retain the legacy RGB ABI.
+    float temporal = MCDepthCutoff.x > 0.5f ? 1 : min(viewDepth / 65536.0f, 0.998f);
+    return float4(z, z, MCDepthCutoff.x > 0.5f ? z : 1.0f, temporal);
+}

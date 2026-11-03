@@ -1,0 +1,23 @@
+#include "post/exposure.fxh"
+sampler2D MCExposureTiles : register(s0);
+sampler2D MCExposureHistory : register(s1);
+float4 MCExposureSettings : register(c0); // key, strength, EV limit, time constant
+float4 MCExposureFrame : register(c1); // delta seconds, valid history
+float4 main(float2 uv : TEXCOORD0) : COLOR0
+{
+    float4 total = 0;
+    [unroll] for (int y = 0; y < 4; ++y)
+    {
+        [unroll] for (int x = 0; x < 4; ++x)
+            total += tex2D(MCExposureTiles, (float2(x, y) + 0.5f) / 4.0f);
+    }
+    float luminance = total.x / max(total.y, 0.0001f);
+    float4 history = tex2D(MCExposureHistory, 0.5f);
+    float previous = MCExposureFrame.y > 0.5f ? history.r + history.b / 1024.0f
+        : pow(MCExposureSettings.x, 0.25f);
+    float encoded = mcExposureAdapt(luminance, previous, MCExposureFrame.x, MCExposureSettings.w);
+    float gain = mcExposureGain(encoded, MCExposureSettings.x, MCExposureSettings.y, MCExposureSettings.z);
+    // Split the fourth-root luminance so small high-FPS updates survive FP16.
+    float high = floor(encoded * 1024.0f) / 1024.0f;
+    return float4(high, gain, (encoded - high) * 1024.0f, 1);
+}

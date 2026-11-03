@@ -1,0 +1,3 @@
+#define MC_VERTEX_STAGE 1
+#define MC_DYNAMIC_SPRITE 0
+#include "dynamic/vertex.fxh"

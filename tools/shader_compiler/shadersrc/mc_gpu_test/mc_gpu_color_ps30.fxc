@@ -1,0 +1,12 @@
+#define HDRTYPE HDR_TYPE_NONE
+#include "common_ps_fxc.h"
+
+struct PS_INPUT
+{
+	float4 vColor : TEXCOORD3;
+};
+
+HALF4 main( PS_INPUT i ) : COLOR
+{
+	return HALF4( i.vColor.rgb, i.vColor.a );
+}

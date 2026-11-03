@@ -1,0 +1,30 @@
+sampler FrameAtlas : register(s0);
+#include "animation.fxh"
+// weight, mip, alpha-only, explicit-gradient mode
+float4 Params : register(c0);
+float4 MaterialMode : register(c1); // 0 color, 5 Lab normal, 6 Lab specular
+float4 SampleOffset : register(c2); // XY offset in texels at the selected mip
+
+float4 main(float2 pixel : VPOS) : COLOR0
+{
+    float scale = exp2(Params.y);
+    float2 uv = (floor(pixel) + 0.5) * scale / float2(256.0, 128.0);
+    uv += SampleOffset.xy * scale / float2(256.0, 128.0);
+    float2 dx = float2(scale / 256.0, 0.0);
+    float2 dy = float2(0.0, scale / 128.0);
+    float4 first, second;
+    if (Params.w > 0.5)
+    {
+        first = tex2Dgrad(FrameAtlas, uv, dx, dy);
+        second = tex2Dgrad(FrameAtlas, uv + float2(0.5, 0), dx, dy);
+    }
+    else
+    {
+        first = tex2Dlod(FrameAtlas, float4(uv, 0, Params.y));
+        second = tex2Dlod(FrameAtlas, float4(uv + float2(0.5, 0), 0, Params.y));
+    }
+    float4 value = lerp(first, second, Params.x);
+    if (MaterialMode.x > 5.5f) value = mcAnimationSpecular(first, second, Params.x);
+    else if (MaterialMode.x > 4.5f) value = mcAnimationNormal(first, second, Params.x);
+    return float4(Params.z > 0.5 ? value.aaa : value.rgb, 1);
+}

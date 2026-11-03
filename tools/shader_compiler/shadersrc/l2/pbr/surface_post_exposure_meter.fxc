@@ -1,0 +1,18 @@
+#include "post/exposure.fxh"
+sampler2D MCExposureScene : register(s0);
+float4 main(float2 uv : TEXCOORD0) : COLOR0
+{
+    // Fixed stratified samples, no frame-varying noise or mip dependency.
+    float luminance = 0;
+    [unroll] for (int y = 0; y < 4; ++y)
+    {
+        [unroll] for (int x = 0; x < 4; ++x)
+        {
+            float2 offset = (float2(x, y) - 1.5f) / 256.0f;
+            float3 colour = tex2D(MCExposureScene, uv + offset).rgb;
+            luminance += dot(colour, float3(0.2125f, 0.7154f, 0.0721f)) / 16.0f;
+        }
+    }
+    float weight = mcExposureWeight(luminance, uv);
+    return float4(luminance * weight, weight, 0, 1);
+}

@@ -1,0 +1,52 @@
+#define HDRTYPE HDR_TYPE_NONE
+#include "common_ps_fxc.h"
+
+sampler BaseTextureSampler : register(s0);
+
+// _centroid: under MSAA, an edge pixel whose center lies outside the triangle
+// otherwise EXTRAPOLATES every interpolant — UV lands past the atlas gutter
+// (alpha-test holes) — the block-edge seam artifact.
+struct PS_INPUT
+{
+	float2 vTexCoord : TEXCOORD0_centroid;
+	float4 vColor    : TEXCOORD3_centroid;
+};
+
+HALF4 main( PS_INPUT i, float faceSign : VFACE ) : COLOR
+{
+	clip( faceSign );
+	// tex2Dlod (explicit LOD 0): anisotropic minification must never widen the
+	// atlas footprint past the 4px tile gutter into alpha=0 cells (seam holes).
+	float4 albedo = tex2Dlod( BaseTextureSampler, float4( i.vTexCoord, 0.0f, 0.0f ) );
+	clip( albedo.a - 0.5f );
+	float lightMul = saturate( i.vColor.r );
+	float faceIndex = floor( i.vColor.g * 255.0f + 0.5f );
+	float3 faceScale = float3( 1.0f, 1.0f, 1.0f );
+
+	if ( faceIndex < 1.5f )
+	{
+		faceScale = float3( 1.06f, 1.03f, 0.94f );
+	}
+	else if ( faceIndex < 2.5f )
+	{
+		faceScale = ( 128.0f / 255.0f ) * float3( 0.76f, 0.82f, 0.98f );
+	}
+	else if ( faceIndex < 3.5f )
+	{
+		faceScale = ( 153.0f / 255.0f ) * float3( 0.96f, 0.99f, 1.04f );
+	}
+	else if ( faceIndex < 4.5f )
+	{
+		faceScale = ( 153.0f / 255.0f ) * float3( 0.86f, 0.90f, 1.02f );
+	}
+	else if ( faceIndex < 5.5f )
+	{
+		faceScale = ( 204.0f / 255.0f ) * float3( 1.02f, 1.00f, 0.94f );
+	}
+	else
+	{
+		faceScale = ( 204.0f / 255.0f ) * float3( 0.82f, 0.88f, 1.04f );
+	}
+
+	return HALF4( saturate( albedo.rgb * lightMul * faceScale ), 1.0f );
+}

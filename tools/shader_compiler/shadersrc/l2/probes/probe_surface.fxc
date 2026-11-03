@@ -1,0 +1,20 @@
+#include "probe_samplers.fxh"
+
+float4 main(PS_INPUT input) : COLOR
+{
+    float band = floor(saturate(input.uv.x) * 5.0);
+    float2 uv = float2(frac(input.uv.x * 5.0), input.uv.y);
+    float3 base = tex2D(BaseSampler, uv).rgb;
+    float3 normal = normalize(tex2D(NormalSampler, uv).rgb * 2.0 - 1.0);
+    float3 orm = tex2D(ORMSampler, uv).rgb;
+    float3 emissive = tex2D(EmissiveSampler, uv).rgb;
+    if (band < 1.0) return float4(base, 1.0);
+    if (band < 2.0) return float4(normal * 0.5 + 0.5, 1.0);
+    if (band < 3.0) return float4(orm, 1.0);
+    if (band < 4.0) return float4(emissive, 1.0);
+    // Diagnostic composition: proves texture influence, not a PBR BRDF.
+    float diffuse = saturate(dot(normal, normalize(float3(0.6, 0.2, 0.8))));
+    float3 result = base * orm.r * (0.15 + 0.85 * diffuse);
+    result *= (1.0 - 0.4 * orm.g) * (1.0 - 0.5 * orm.b);
+    return float4(saturate(result + emissive), 1.0);
+}

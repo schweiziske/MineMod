@@ -1,0 +1,11 @@
+#include "post/exposure.fxh"
+sampler2D MCExposureScene : register(s0);
+sampler2D MCExposureCurrent : register(s1);
+float4 main(float2 uv : TEXCOORD0) : COLOR0
+{
+    float4 scene = tex2D(MCExposureScene, uv);
+    float gain = tex2D(MCExposureCurrent, 0.5f).g;
+    float3 colour = float3(mcExposureChannel(scene.r, gain), mcExposureChannel(scene.g, gain),
+        mcExposureChannel(scene.b, gain));
+    return float4(colour, scene.a);
+}

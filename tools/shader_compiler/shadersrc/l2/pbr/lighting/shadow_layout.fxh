@@ -1,0 +1,13 @@
+#ifndef MC_PBR_SHADOW_LAYOUT_INCLUDED
+#define MC_PBR_SHADOW_LAYOUT_INCLUDED
+#ifndef MC_SKY_BOUNDARY
+#define MC_SKY_BOUNDARY 1
+#endif
+#if MC_SKY_BOUNDARY
+#define MC_SHADOW_ROW_SCALE 0.25f
+#define MC_SHADOW_ROWS 4.0f
+#else
+#define MC_SHADOW_ROW_SCALE 0.5f
+#define MC_SHADOW_ROWS 2.0f
+#endif
+#endif

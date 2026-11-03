@@ -1,0 +1,180 @@
+#include "water/wave_field.fxh"
+#include "lighting/shadow_layout.fxh"
+sampler2D MCShadowAtlas : register(s0);
+sampler2D MCWaveNormal : register(s1);
+float4 MCProcessing : register(c0); // seconds, wave strength, tile resolution, normal size
+float4 MCLight : register(c1); // direction towards sun
+float4 MCNearWorldX : register(c11);
+float4 MCNearWorldY : register(c12);
+float4 MCNearWorldZ : register(c13);
+float4 MCFarWorldX : register(c15);
+float4 MCFarWorldY : register(c16);
+float4 MCFarWorldZ : register(c17);
+struct MCProcessingFragment { float2 uv : TEXCOORD0; };
+
+float mcDepth(float2 uv)
+{
+    return dot(tex2Dlod(MCShadowAtlas, float4(uv, 0, 0)).rg,
+        float2(255.0f, 65280.0f)) / 65535.0f;
+}
+float mcArea(float2 x, float2 y) { return x.x * y.y - x.y * y.x; }
+float3 mcAirWaterRay(float3 incident, float3 normal)
+{
+    // Air -> water has eta < 1: 1-eta^2+eta^2*d^2 is always positive.
+    // The generic refract intrinsic's total-internal-reflection branch is dead.
+    const float eta = 1.0f / 1.333f;
+    float d = dot(normal,incident);
+    return eta * incident - (eta * d + sqrt(1.0f - eta * eta + eta * eta * d * d)) * normal;
+}
+
+float4 main(MCProcessingFragment input) : COLOR0
+{
+    float4 raw = tex2Dlod(MCShadowAtlas, float4(input.uv, 0, 0));
+    if (input.uv.y < MC_SHADOW_ROW_SCALE || input.uv.y >= 2.0f * MC_SHADOW_ROW_SCALE || min(raw.r, raw.g) > 0.999f) return raw;
+    float4 neutral = float4(raw.rg, 0.25f, 0.25f);
+    float texel = 1.0f / MCProcessing.z;
+    float2 address = frac(input.uv * float2(2.0f, MC_SHADOW_ROWS));
+    // Geometry raster positions are integer pixels; only addresses add 0.5.
+    float2 uv = address - texel * 0.5f;
+    float2 atlasBase = float2(input.uv.x < 0.5f ? 0 : 0.5f, 0);
+    float2 opaqueUV = input.uv - float2(0, MC_SHADOW_ROW_SCALE);
+    float waterDepth = dot(raw.rg, float2(255.0f, 65280.0f)) / 65535.0f;
+    float depth = mcDepth(opaqueUV);
+    float edge = min(min(uv.x, uv.y), min(1.0f - uv.x, 1.0f - uv.y));
+    if (depth >= 1.0f || depth <= waterDepth + 2.0f / 65535.0f || edge < texel * 2.0f)
+        return neutral;
+
+    float4 rowX = input.uv.x < 0.5f ? MCNearWorldX : MCFarWorldX;
+    float4 rowY = input.uv.x < 0.5f ? MCNearWorldY : MCFarWorldY;
+    float4 rowZ = input.uv.x < 0.5f ? MCNearWorldZ : MCFarWorldZ;
+    float3 colU = float3(rowX.x, rowY.x, rowZ.x);
+    float3 colV = float3(rowX.y, rowY.y, rowZ.y);
+    float3 colD = float3(rowX.z, rowY.z, rowZ.z);
+    float diameter = length(colU), depthRange = length(colD);
+    float3 right = colU / diameter, down = colV / diameter;
+    float3 forward = colD / depthRange;
+    float4 position = float4(uv, depth, 1);
+    float3 receiver = float3(dot(rowX, position), dot(rowY, position), dot(rowZ, position));
+    float3 water = receiver + colD * (waterDepth - depth);
+    float height = water.z - receiver.z;
+    float footprint = diameter * texel;
+    float validity = saturate((MCLight.z - 0.12f) * 5.0f)
+        * saturate((24.0f - height) / 8.0f) * saturate(height * 8.0f)
+        * saturate((1.5f - footprint) * 2.0f);
+    if (validity <= 0.0f) return neutral;
+
+    // Reject discontinuities rather than differentiating across pool edges.
+    float dx0 = depth - mcDepth(opaqueUV - float2(texel * 0.5f, 0));
+    float dx1 = mcDepth(opaqueUV + float2(texel * 0.5f, 0)) - depth;
+    float dy0 = depth - mcDepth(opaqueUV - float2(0, texel * MC_SHADOW_ROW_SCALE));
+    float dy1 = mcDepth(opaqueUV + float2(0, texel * MC_SHADOW_ROW_SCALE)) - depth;
+    float discontinuity = max(abs(dx0 - dx1), abs(dy0 - dy1)) * depthRange;
+    validity *= saturate(1.0f - discontinuity / max(0.2f, depthRange * 4.0f / 65535.0f));
+    if (validity <= 0.0f) return neutral;
+    float3 plane = normalize(cross(colU * texel + colD * ((dx0 + dx1) * 0.5f),
+        colV * texel + colD * ((dy0 + dy1) * 0.5f)));
+
+    float3 incident = -MCLight.xyz;
+    const float eta = 1.0f / 1.333f;
+    float3 flatRay = float3(eta * incident.xy,
+        -sqrt(1.0f - eta * eta + eta * eta * incident.z * incident.z));
+    float flatFacing = dot(plane, flatRay);
+    if (abs(flatFacing) < 0.08f) return neutral;
+    float3 flatX = float3(1, 0, 0) - flatRay * (plane.x / flatFacing);
+    float3 flatY = float3(0, 1, 0) - flatRay * (plane.y / flatFacing);
+    float baseArea = abs(mcArea(float2(dot(flatX, right), dot(flatX, down)),
+        float2(dot(flatY, right), dot(flatY, down))));
+    float2 start = receiver.xy - flatRay.xy * (-height / flatRay.z);
+    float epsilon = clamp(footprint * 0.5f, 0.04f, 0.3f);
+    // Explicit footprint: no implicit derivatives inside the Newton loops.
+    float lod = log2(max(footprint / max(MCLight.z, 0.2f)
+        * (410.0f / 4096.0f) * MCProcessing.w, 1.0f));
+    float depthTolerance = (abs(dx0 + dx1) + abs(dy0 + dy1)) * 0.25f + 2.0f / 65535.0f;
+    // The shared clock is already bounded to 8192 seconds. Both scrolling
+    // coefficients have integer numerators /4096, so repeat sampling applies
+    // the same 4096-second period without another per-pixel modulo.
+    float time = MCProcessing.x;
+    float2 root0 = 1.0e6f, root1 = 1.0e6f;
+    float energy = 0, confidence = 0;
+    [loop] for (int seed = 0; seed < 3; ++seed)
+    {
+        float2 source = start + (seed == 0 ? float2(0, 0)
+            : (seed == 1 ? float2(0.65f, 0.35f) : float2(-0.65f, -0.35f)));
+        float2 residual = 0, jx = 0, jy = 0;
+        float pathValid = 1;
+        // Four updates and a final evaluation at the resulting source point.
+        [loop] for (int iteration = 0; iteration < 5; ++iteration)
+        {
+            [loop] for (int probe = 0; probe < 3; ++probe)
+            {
+                float2 p = source + (probe == 0 ? float2(0, 0)
+                    : (probe == 1 ? float2(epsilon, 0) : float2(0, epsilon)));
+                float3 n0 = tex2Dlod(MCWaveNormal, float4(mcWaveUV(p, time, false), 0, lod)).xyz * 2.0f - 1.0f;
+                float3 n1 = tex2Dlod(MCWaveNormal, float4(mcWaveUV(p, time, true), 0, lod)).xyz * 2.0f - 1.0f;
+                float3 normal = normalize(float3(mcWaveSlope(n0, n1, MCProcessing.y), 1));
+                float3 ray = mcAirWaterRay(incident, normal);
+                float facing = dot(ray, plane);
+                float3 delta = float3(p - receiver.xy, height);
+                float distance = -dot(delta, plane) * facing / max(facing * facing, 0.0001f);
+                pathValid *= step(0.02f, abs(facing)) * step(0.0f, distance) * step(0.0f, dot(normal, MCLight.xyz));
+                float3 hit = delta + ray * distance;
+                float2 error = float2(dot(hit, right), dot(hit, down));
+                residual = probe == 0 ? error : residual;
+                float2 gradient = (error - residual) / epsilon;
+                jx = probe == 1 ? gradient : jx;
+                jy = probe == 2 ? gradient : jy;
+            }
+            float determinant = mcArea(jx, jy);
+            if (iteration < 4)
+            {
+                float2 stepXY = float2(mcArea(residual, jy), mcArea(jx, residual))
+                    * determinant / max(determinant * determinant, 0.0025f);
+                source -= stepXY * (0.75f * rsqrt(max(dot(stepXY, stepXY), 0.5625f)));
+            }
+        }
+        float converged = pathValid * (1.0f - smoothstep(0.04f, 0.12f, length(residual)));
+        // Validate the source interface in the same cascade, never clamped neighbours.
+        float3 sourceDelta = float3(source - water.xy, 0);
+        float2 sourceUV = uv + float2(dot(sourceDelta, right), dot(sourceDelta, down)) / diameter;
+        float sourceEdge = min(min(sourceUV.x, sourceUV.y), min(1.0f - sourceUV.x, 1.0f - sourceUV.y));
+        if (sourceEdge < texel || converged <= 0.5f) continue;
+        float2 sourceAddress = atlasBase + (sourceUV + texel * 0.5f) * float2(0.5f, MC_SHADOW_ROW_SCALE);
+        float sampledWater = mcDepth(sourceAddress + float2(0, MC_SHADOW_ROW_SCALE));
+        float sampledOpaque = mcDepth(sourceAddress);
+        float expectedDepth = waterDepth + dot(sourceDelta, forward) / depthRange;
+        // POINT depth belongs to the snapped raster position, not sourceUV.
+        float2 snappedUV = floor(sourceUV / texel + 0.5f) * texel;
+        float expectedSample = expectedDepth - dot((snappedUV - sourceUV), float2(colU.z, colV.z)) / colD.z;
+        float heightError = abs(sampledWater - expectedSample) * abs(colD.z);
+        converged *= step(sampledWater, 1.0f - 1.0f / 65535.0f)
+            * step(sampledWater + 2.0f / 65535.0f, sampledOpaque)
+            * (1.0f - smoothstep(0.08f, 0.2f + depthRange / 65535.0f, heightError));
+        // The depth atlas can reject visible blockers, not hidden geometry.
+        [loop] for (int check = 1; check < 4; ++check)
+        {
+            float fraction = check * 0.25f;
+            float2 checkUV = lerp(sourceUV, uv, fraction);
+            float checkDepth = lerp(expectedDepth, depth, fraction);
+            float blocker = mcDepth(atlasBase + (checkUV + texel * 0.5f) * float2(0.5f, MC_SHADOW_ROW_SCALE));
+            converged *= step(checkDepth - depthTolerance, blocker);
+        }
+        float2 separation0 = source - root0, separation1 = source - root1;
+        float minimumSeparationSquared = epsilon * epsilon * 4.0f;
+        float unique = step(minimumSeparationSquared, dot(separation0,separation0))
+            * step(minimumSeparationSquared, dot(separation1,separation1));
+        if (converged > 0.5f)
+        {
+            if (seed == 0) root0 = source;
+            else if (seed == 1) root1 = source;
+            // Pixel-footprint regularization preserves flat-water unit density.
+            float area = mcArea(jx, jy);
+            float beam = baseArea * clamp(footprint * 0.5f, 0.08f, 0.35f);
+            float density = min(4.0f, sqrt((baseArea * baseArea + beam * beam)
+                / max(area * area + beam * beam, 1.0e-12f)));
+            energy += density * unique;
+            confidence = max(confidence, (converged * 2.0f - 1.0f) * unique);
+        }
+    }
+    float light = lerp(1.0f, min(energy, 4.0f), validity * confidence);
+    return float4(raw.rg, light * 0.25f, light * 0.25f);
+}

@@ -1,0 +1,4 @@
+#define MC_VERTEX_STAGE 0
+#define MC_ALPHA_CUTOUT 0
+#define MC_ALPHA_TRANSLUCENT 1
+#include "passes/dynamic.fxh"

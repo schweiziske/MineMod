@@ -1,0 +1,105 @@
+#define MC_VERTEX_STAGE 0
+#include "adapter/bindings.fxh"
+#include "geometry/normal.fxh"
+#include "lighting/brdf.fxh"
+#include "lighting/ibl.fxh"
+#include "water/surface.fxh"
+float4 MCWaterOrigin : register(c15);
+float4 MCWaterMotion : register(c16);
+float4 MCWaterScatter : register(c17);
+float4 MCWaterAbsorption : register(c18);
+float4 MCSceneTexel : register(c4);
+float4 MCSSRView : register(c11);       // forward XYZ, block size
+float4 MCSSRDimensions : register(c12); // trace/source width/height, reciprocal width/height
+float4 MCSSRDepthInfo : register(c13);  // depth inverse XY, precise MC
+// s0=current complete colour, s1=RGBA16F trace, s4=pre-water scene (sRGB),
+// s7=private scene depth. The separate source prevents water reflecting its
+// own previous reflection.
+
+float4 mcSSRColourTap(float2 cell, float reference)
+{
+    float2 uv = (cell + 0.5f) * MCSSRDimensions.zw;
+    if (any(uv < 0) || any(uv > 1)) return 0;
+    // Validate each source texel against the precise scene depth, never an
+    // eight-bit copy: its 15.7-unit steps rejected whole iso-depth bands of
+    // walls and left bright environment streaks in the reflection. Only real
+    // silhouettes, well beyond a neighbouring texel's slope, are rejected.
+    float2 depthUV = (floor(uv / MCSSRDepthInfo.xy) + 0.5f) * MCSSRDepthInfo.xy;
+    float depth = tex2Dlod(MCDFG, float4(depthUV, 0, 0)).r * 4000.0f;
+    float tolerance = MCSSRView.w * 0.5f + reference * 0.02f;
+    float valid = saturate(2.0f - 2.0f * abs(depth - reference) / tolerance);
+    return float4(tex2Dlod(MCORM, float4(uv, 0, 0)).rgb * valid, valid);
+}
+float4 mcSSRContribution(float2 cell, float2 pixelUV, float depth, float2 depthDerivative)
+{
+    float2 uv = (cell + 0.5f) * MCSSRDimensions.zw;
+    float4 hit = tex2Dlod(MCQuadVertices, float4(uv, 0, 0));
+    // A trace pixel is centred at an integer in its own viewport. Account for
+    // D3D9's half-texel difference when predicting its full-view Z.
+    float2 ratio = MCSSRDimensions.zw / MCSceneTexel.xy;
+    float expected = depth + dot((uv - pixelUV) / MCSceneTexel.xy - (ratio - 1.0f) * 0.5f, depthDerivative);
+    float tolerance = MCSSRView.w * 0.05f + depth * 0.001f;
+    float valid = saturate(1.0f - abs(hit.z - expected) / tolerance);
+    float weight = hit.w * valid;
+    float2 depthUV = (floor(hit.xy / MCSSRDepthInfo.xy) + 0.5f) * MCSSRDepthInfo.xy;
+    float reference = tex2Dlod(MCDFG, float4(depthUV, 0, 0)).r * 4000.0f;
+    float2 sourceUV = hit.xy + (MCSceneTexel.xy - MCSSRDepthInfo.xy) * 0.5f;
+    float2 grid = sourceUV * MCSSRDimensions.xy - 0.5f;
+    float2 sourceCell = floor(grid), blend = frac(grid);
+    // Filter colours only after checking each source texel's own depth. A
+    // bilinear read here otherwise reflects the building behind a silhouette.
+    float4 a = mcSSRColourTap(sourceCell, reference);
+    float4 b = mcSSRColourTap(sourceCell + float2(1, 0), reference);
+    float4 c = mcSSRColourTap(sourceCell + float2(0, 1), reference);
+    float4 d = mcSSRColourTap(sourceCell + float2(1, 1), reference);
+    return lerp(lerp(a, b, blend.x), lerp(c, d, blend.x), blend.y) * weight;
+}
+
+float4 main(MCWaterFragment input, float2 pixel : VPOS, float face : VFACE) : COLOR0
+{
+    MCWaterSurface s = mcWaterSurface(input, face, MCWaterOrigin, MCWaterMotion, MCEyeExposure.xyz, 1.0f);
+    clip(abs(s.geometric.z) - 0.5f);
+    float depth = dot(input.worldPosition - MCEyeExposure.xyz, MCSSRView.xyz);
+    float2 depthDerivative = float2(ddx(depth), ddy(depth));
+    float2 uv = (pixel + 0.5f) * MCSceneTexel.xy;
+    float2 depthTexel = max(MCSSRDepthInfo.xy, MCSceneTexel.xy);
+    float2 depthUV = (floor((uv - MCSceneTexel.xy * 0.5f) / depthTexel) + 0.5f) * depthTexel;
+    float4 sceneSample = tex2Dlod(MCDFG, float4(depthUV, 0, 0));
+    float sceneDepth = sceneSample.r * 4000.0f;
+    float depthError = MCSSRDepthInfo.z > 0.5f && sceneSample.g <= sceneSample.r + 0.000001f
+        ? max(0.0625f, sceneSample.r * 3.90625f) : 2000.0f / 255.0f;
+    // Also reject foreground colour depth if another post effect cleared or
+    // replaced the main hardware depth buffer before this hook.
+    clip(sceneDepth + depthError - depth);
+    float2 grid = uv * MCSSRDimensions.xy - 0.5f;
+    float2 cell = floor(grid), blend = frac(grid);
+    // Four explicit point taps reject other water levels before upsampling.
+    // Bilinear filtering hit UV/depth first would invent hits at silhouettes.
+    float4 ssr = 0;
+    // Keep the four depth-aware gathers in one SM3 loop instead of expanding
+    // their sixteen source-colour checks into four copies of the shader body.
+    [loop] for (int tap = 0; tap < 4; ++tap)
+    {
+        float row = floor(tap * 0.5f);
+        float2 offset = float2(tap - row * 2, row);
+        float2 weight = 1.0f - abs(offset - blend);
+        ssr += mcSSRContribution(cell + offset, uv, depth, depthDerivative) * (weight.x * weight.y);
+    }
+    // A miss must leave the framebuffer untouched. Returning the old scene
+    // here could erase a nearer water layer's correction drawn earlier.
+    clip(ssr.a - 0.00001f);
+    float2 lightUV = (min(input.lightDepthShore.rg * 255.0f, 240.0f) + 8.0f) / 256.0f;
+    float3 block = tex2D(MCGlobalLightmap, float2(lightUV.x, 0.03125f)).rgb;
+    float3 sky = max(tex2D(MCGlobalLightmap, lightUV).rgb - block, 0.0f);
+    float3 reflected = reflect(-s.view, s.normal);
+    float3 environment = mcPrefilteredRadiance(s.normal, reflected, s.roughness) * sky * MCSunColor.w + block * 0.08f;
+    environment = lerp(environment, mcWaterUnderside(MCWaterScatter.rgb, block, sky), s.below);
+    float foam = input.lightDepthShore.a * s.top * MCWaterScatter.w * smoothstep(0.55f, 0.78f, s.waves.z);
+    float weight = s.fresnel * (1.0f - foam) * step(0.5f, abs(s.geometric.z));
+    float3 current = tex2D(MCAlbedo, uv).rgb;
+    // Replace only the already-present environmental reflection. Refraction,
+    // absorption, foam, sun glints and objects drawn over the water survive.
+    // The full-resolution draw also tests the main hardware depth buffer.
+    float3 correction = (ssr.rgb * MCWaterAbsorption.w - mcToneMap(environment * MCWaterAbsorption.w) * ssr.a) * weight;
+    return float4(saturate(current + correction), 1);
+}

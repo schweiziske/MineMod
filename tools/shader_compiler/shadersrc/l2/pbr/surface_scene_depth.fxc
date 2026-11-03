@@ -1,0 +1,11 @@
+sampler2D MCDepthAlbedo : register(s0);
+#include "materials/sampling.fxh"
+float4 MCDepthCutoff : register(c0);
+// Match GMod DepthWrite COLOR_DEPTH: perspective clip W / 4000, in red.
+// This is colour depth for SSAO, not the nonlinear hardware Z buffer.
+float4 main(centroid float2 uv : TEXCOORD0, centroid float viewDepth : TEXCOORD1) : COLOR0
+{
+    float lod = mcResourceAtlasLod(uv);
+    clip(mcPBRColor(MCDepthAlbedo, uv, lod, false).a - MCDepthCutoff.w);
+    return float4(saturate(viewDepth / 4000.0f), 0, 0, 1);
+}

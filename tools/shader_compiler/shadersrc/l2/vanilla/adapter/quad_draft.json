@@ -1,0 +1,22 @@
+{
+  "id": "mc:vanilla_quad_v2",
+  "revision": 2,
+  "gpuReady": false,
+  "material": "screenspace_general_8tex",
+  "atlasSize": 16384,
+  "lightmapSize": 16,
+  "verticesPerQuad": 4,
+  "vertexPayload": "COLOR0.rgb=localQuad*4+corner little-endian bytes; COLOR0.a=opacity",
+  "atlasPayload": "RGBA8=smoothBlockByte,smoothSkyByte,preTintShadeByte,tintCode",
+  "colorPolicy": "reference UNORM multiplication; no automatic sRGB reads or writes",
+  "dynamicLights": "Optional local-light draw after each affected mesh; original base programs unchanged. Shared 64x1 RGBA8 data, five texels per light, at most eight; c0=inverseBlockSize,firstQuad,opacity,count; c1=render-space eye. All local-light materials test depth without writes.",
+  "samplers": [
+    { "symbol": "MCAlbedo", "slot": 0, "materialKey": "$basetexture", "filter": "point", "encoding": "unorm" },
+    { "symbol": "MCQuadVertices", "slot": 1, "materialKey": "$texture1", "filter": "point", "encoding": "raw_rgba8" },
+    { "symbol": "MCGlobalLightmap", "slot": 2, "materialKey": "$texture2", "filter": "linear", "encoding": "unorm" }
+  ],
+  "constants": [
+    { "symbol": "MCModelViewProjection", "stage": "vertex", "slot": 4, "type": "float4x4", "registers": 4, "source": "engine model-view-projection" },
+    { "symbol": "MCQuadParams", "stage": "pixel", "slot": 0, "type": "float4", "registers": 1, "source": "x=reserved inverseBlockSize; y=reserved; z=cornerAtlasBank; w=cutoff" }
+  ]
+}

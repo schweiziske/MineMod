@@ -1,0 +1,4 @@
+#define MC_BLOCK_ENTITY 1
+#define MC_ALPHA_CUTOUT 1
+#define MC_ALPHA_TRANSLUCENT 0
+#include "passes/surface.fxh"

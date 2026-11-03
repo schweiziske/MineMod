@@ -1,0 +1,41 @@
+sampler2D MCAlbedo : register(s0);
+#include "lighting/shadow_layout.fxh"
+#if MC_SKY_BOUNDARY
+sampler2D MCSkyEntrance : register(s1);
+#endif
+#include "materials/sampling.fxh"
+float4 MCDepthForward : register(c0); // unit forward XYZ, inverse depth range
+float4 MCDepthOrigin : register(c1); // engine-space origin XYZ, alpha cutoff
+#if MC_SKY_BOUNDARY
+float4 MCSkyClip : register(c2); // enabled, inverse sky width/height, raster row offset
+#endif
+struct MCShadowFragment { centroid float2 uv : TEXCOORD0; float3 world : TEXCOORD1; };
+float4 main(MCShadowFragment input
+#if MC_SKY_BOUNDARY
+    , float2 pixel : VPOS
+#endif
+) : COLOR0
+{
+    // The cutoff is uniform for the draw. Fully opaque geometry only needs
+    // depth encoding; cutout geometry retains the resolved pack alpha mask.
+    float lod = mcResourceAtlasLod(input.uv);
+    [branch] if (MCDepthOrigin.w > 0.0f)
+        clip(mcPBRColor(MCAlbedo, input.uv, lod, false).a - MCDepthOrigin.w);
+    float depth = saturate(dot(input.world - MCDepthOrigin.xyz, MCDepthForward.xyz) * MCDepthForward.w);
+#if MC_SKY_BOUNDARY
+    [branch] if (MCSkyClip.x > 0.5f)
+    {
+        float2 address = (pixel + 0.5f - float2(0, MCSkyClip.w)) * MCSkyClip.yz;
+        float entrance = dot(tex2Dlod(MCSkyEntrance, float4(address, 0, 0)).rg,
+            float2(255.0f, 65280.0f)) / 65535.0f;
+        // Keep casters on the receiver side of the first sky entrance.
+        // Half a depth step absorbs the boundary's integer rounding only.
+        clip(depth - entrance + 0.5f / 65535.0f);
+    }
+#endif
+    // 16-bit integer depth in R/G of a standard RGBA8 color target (no float
+    // RT/MRT). B/A = 1.0: no water between the sun and this caster.
+    float value = floor(depth * 65535.0f + 0.5f);
+    float green = floor(value / 256.0f);
+    return float4((value - green * 256.0f) / 255.0f, green / 255.0f, 1.0f, 1.0f);
+}

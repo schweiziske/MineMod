@@ -1,0 +1,12 @@
+float4x4 MCModelViewProjection : register(c4);
+float4x3 MCModel : register(c58);
+struct MCShadowInput { float4 position : POSITION0; float2 uv : TEXCOORD0; };
+struct MCShadowFragment { float4 position : POSITION0; float2 uv : TEXCOORD0; float3 world : TEXCOORD1; };
+MCShadowFragment main(MCShadowInput input)
+{
+    MCShadowFragment output;
+    output.position = mul(input.position, MCModelViewProjection);
+    output.uv = input.uv;
+    output.world = mul(input.position, MCModel);
+    return output;
+}

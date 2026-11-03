@@ -1,0 +1,3 @@
+#define MC_VERTEX_STAGE 1
+#define MC_BLOCK_ENTITY 1
+#include "geometry/vertex.fxh"

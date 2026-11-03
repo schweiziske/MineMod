@@ -1,0 +1,31 @@
+#define MC_VERTEX_STAGE 0
+#include "adapter/bindings.fxh"
+#include "water/surface.fxh"
+#include "lighting/brdf.fxh"
+#include "lighting/dynamic.fxh"
+float4 MCWaterOrigin : register(c15);
+float4 MCWaterMotion : register(c16);
+float4 MCWaterScatter : register(c17);
+float4 MCWaterAbsorption : register(c18);
+
+float4 main(MCWaterFragment input, float face : VFACE) : COLOR0
+{
+    MCWaterSurface s = mcWaterSurface(input, face, MCWaterOrigin, MCWaterMotion, MCEyeExposure.xyz, 1.0f);
+    float3 position = (input.worldPosition - MCEyeExposure.xyz) * MCQuadParams.x;
+    float3 glint = 0, scatter = 0;
+    [loop] for (int i = 0; i < (int)MCQuadParams.w; ++i)
+    {
+        float3 direction;
+        float3 radiance = mcReadDynamicLight(MCGlobalLightmap, i, position, direction);
+        glint += mcDirectBRDF(0, 1, s.roughness, 0.02037f, 1, s.normal, s.view, direction, 1, 0) * radiance;
+        scatter += radiance * saturate(dot(s.normal, direction));
+    }
+    float foam = input.lightDepthShore.a * s.top * MCWaterScatter.w * smoothstep(0.55f, 0.78f, s.waves.z);
+    float nv = saturate(dot(s.normal, s.view));
+    float refractedCosine = sqrt(1.0f - (1.0f - nv * nv) / (1.333f * 1.333f));
+    float path = MCWaterMotion.z / refractedCosine;
+    float3 absorption = 1.0f - exp2(-MCWaterAbsorption.rgb * (path * 1.442695f));
+    float3 diffuse = MCWaterScatter.rgb * scatter * absorption * ((1.0f - s.fresnel) * 0.12f);
+    float3 light = mcToneMap(glint) * (1.0f - foam) + mcToneMap(diffuse + scatter * (foam * 0.2f));
+    return float4(saturate(light), 0);
+}

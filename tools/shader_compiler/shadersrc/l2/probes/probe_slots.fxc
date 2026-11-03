@@ -1,0 +1,15 @@
+#include "probe_samplers.fxh"
+
+float4 main(PS_INPUT input) : COLOR
+{
+    float slot = floor(saturate(input.uv.x) * 8.0);
+    float2 uv = float2(frac(input.uv.x * 8.0), input.uv.y);
+    if (slot < 1.0) return float4(tex2D(BaseSampler, uv).rgb, 1.0);
+    if (slot < 2.0) return float4(tex2D(LightBytesSampler, uv).rgb, 1.0);
+    if (slot < 3.0) return float4(tex2D(LightmapSampler, uv).rgb, 1.0);
+    if (slot < 4.0) return float4(tex2D(NormalSampler, uv).rgb, 1.0);
+    if (slot < 5.0) return float4(tex2D(ORMSampler, uv).rgb, 1.0);
+    if (slot < 6.0) return float4(tex2D(EmissiveSampler, uv).rgb, 1.0);
+    if (slot < 7.0) return float4(tex2D(Spare6Sampler, uv).rgb, 1.0);
+    return float4(tex2D(Spare7Sampler, uv).rgb, 1.0);
+}

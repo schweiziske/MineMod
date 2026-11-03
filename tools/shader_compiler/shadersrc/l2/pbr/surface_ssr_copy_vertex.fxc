@@ -1,0 +1,10 @@
+struct Fragment { float4 position : POSITION0; float2 uv : TEXCOORD0; };
+// The retained copy quad supplies clip-space positions including D3D9's
+// half-texel correction. No camera/model constants participate in this pass.
+Fragment main(float4 position : POSITION0, float2 uv : TEXCOORD0)
+{
+    Fragment output;
+    output.position = position;
+    output.uv = uv;
+    return output;
+}

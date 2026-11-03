@@ -1,0 +1,5 @@
+struct Output { float4 position : POSITION; float2 uv : TEXCOORD0; };
+Output main(float4 position : POSITION, float2 uv : TEXCOORD0)
+{
+    Output result; result.position=position; result.uv=uv; return result;
+}

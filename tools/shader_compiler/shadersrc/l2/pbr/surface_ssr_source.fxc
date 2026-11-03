@@ -1,0 +1,29 @@
+sampler2D MCSSRSourceScene : register(s0);
+sampler2D MCSSRSourceDepth : register(s1);
+float4 MCSSRSourceTexel : register(c0); // full colour inverse XY, depth inverse XY
+
+float4 mcSSRSourceSample(float2 cell)
+{
+    float2 uv = min(max((cell + 0.5f) * MCSSRSourceTexel.xy, MCSSRSourceTexel.xy * 0.5f),
+                    1.0f - MCSSRSourceTexel.xy * 0.5f);
+    // Colour and depth may have different viewport sizes. Remove the colour
+    // pixel-centre offset before selecting the corresponding depth pixel.
+    float2 depthUV = (floor((uv - MCSSRSourceTexel.xy * 0.5f) / MCSSRSourceTexel.zw) + 0.5f) * MCSSRSourceTexel.zw;
+    float depth = tex2Dlod(MCSSRSourceDepth, float4(depthUV, 0, 0)).r;
+    return float4(tex2Dlod(MCSSRSourceScene, float4(uv, 0, 0)).rgb, depth);
+}
+float4 main(float2 uv : TEXCOORD0) : COLOR0
+{
+    float2 cell = floor(uv / MCSSRSourceTexel.xy - 0.5f);
+    float4 a = mcSSRSourceSample(cell);
+    float4 b = mcSSRSourceSample(cell + float2(1, 0));
+    float4 c = mcSSRSourceSample(cell + float2(0, 1));
+    float4 d = mcSSRSourceSample(cell + float2(1, 1));
+    float nearest = min(min(a.a, b.a), min(c.a, d.a));
+    float tolerance = max(nearest * 0.002f, 0.000015258789f);
+    float wa = step(a.a, nearest + tolerance), wb = step(b.a, nearest + tolerance);
+    float wc = step(c.a, nearest + tolerance), wd = step(d.a, nearest + tolerance);
+    // Average only the front surface. Alpha carries its view depth in the
+    // existing RGBA8 allocation; resolve includes that channel's quantization.
+    return float4((a.rgb * wa + b.rgb * wb + c.rgb * wc + d.rgb * wd) / (wa + wb + wc + wd), nearest);
+}

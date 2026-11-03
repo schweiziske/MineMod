@@ -1,0 +1,61 @@
+#include "post/scene.fxh"
+sampler2D MCPostDepthTexture : register(s0);
+
+float3 mcAONormal(float2 uv, float3 p)
+{
+    float2 dx = float2(MCPostTexel.x, 0), dy = float2(0, MCPostTexel.y);
+    float3 l = mcPostPosition(uv - dx, mcPostDepth(MCPostDepthTexture, uv - dx));
+    float3 r = mcPostPosition(uv + dx, mcPostDepth(MCPostDepthTexture, uv + dx));
+    float3 u = mcPostPosition(uv - dy, mcPostDepth(MCPostDepthTexture, uv - dy));
+    float3 d = mcPostPosition(uv + dy, mcPostDepth(MCPostDepthTexture, uv + dy));
+    // Pick the neighbour on this surface instead of differentiating across a
+    // foreground silhouette. Orient the reconstructed normal towards the eye.
+    float3 x = abs(r.z - p.z) < abs(p.z - l.z) ? r - p : p - l;
+    float3 y = abs(u.z - p.z) < abs(p.z - d.z) ? u - p : p - d;
+    float3 n = cross(x, y);
+    n = dot(n, n) > 0.000001f ? normalize(n) : float3(0, 0, -1);
+    return dot(n, p) > 0 ? -n : n;
+}
+
+float mcAOSample(float2 uv, float3 p, float3 normal, float radius)
+{
+    if (!mcPostInside(uv)) return 0;
+    float z = mcPostDepth(MCPostDepthTexture, uv);
+    if (z >= 3990.0f) return 0;
+    float3 delta = mcPostPosition(uv, z) - p;
+    float distanceSquared = dot(delta, delta);
+    float inverseDistance = rsqrt(max(distanceSquared, 0.0001f));
+    float bias = max(MCPostAO.y, p.z * 0.0015f);
+    float horizon = saturate((dot(normal, delta) - bias) * inverseDistance);
+    return horizon * saturate(1.0f - distanceSquared / (radius * radius));
+}
+
+float4 main(float2 uv : TEXCOORD0) : COLOR0
+{
+    // At half resolution this pixel centre lies exactly on a depth-texel edge.
+    // Snap once: taps offset from the edge round independently, and a normal
+    // tap that lands on the centre texel collapses the normal to the view axis.
+    uv = (floor(uv / MCPostTexel.xy) + 0.5f) * MCPostTexel.xy;
+    float z = mcPostDepth(MCPostDepthTexture, uv);
+    if (z >= 3990.0f || z >= MCPostAO.z || z <= 0) return float4(0, z / 4000.0f, 0, 1);
+    float mcDepth = tex2Dlod(MCPostDepthTexture, float4(uv, 0, 0)).g * 4000.0f;
+    // Native RGBA8 depth remains useful as an occluder, but cannot supply a
+    // reliable receiver normal for contact AO. Never shade its quantized steps.
+    if (z < mcDepth) return float4(0, z / 4000.0f, 0, 1);
+    float3 p = mcPostPosition(uv, z);
+    float3 normal = mcAONormal(uv, p);
+    float radius = MCPostAO.x;
+    float2 footprint = min(radius * MCPostView.yz / max(z, 1.0f), 64.0f * MCPostTexel.xy);
+    float occlusion = 0;
+    // Eight fixed directions and two distances; no rotating per-frame noise.
+    [loop] for (int direction = 0; direction < 8; ++direction)
+    {
+        float angle = (direction + 0.125f) * 0.785398163f;
+        float2 offset = float2(cos(angle), sin(angle)) * footprint;
+        float nearHorizon = mcAOSample(uv + offset * 0.35f, p, normal, radius);
+        float farHorizon = mcAOSample(uv + offset * 0.8f, p, normal, radius);
+        occlusion += max(nearHorizon, farHorizon);
+    }
+    occlusion *= 0.25f * (1.0f - smoothstep(MCPostAO.z * 0.65f, MCPostAO.z, z));
+    return float4(saturate(occlusion), z / 4000.0f, 0, 1);
+}

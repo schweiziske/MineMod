@@ -1,0 +1,12 @@
+sampler2D MCExposureTiles : register(s0);
+float4 MCExposureTexel : register(c0);
+float4 main(float2 uv : TEXCOORD0) : COLOR0
+{
+    float4 total = 0;
+    [unroll] for (int y = 0; y < 4; ++y)
+    {
+        [unroll] for (int x = 0; x < 4; ++x)
+            total += tex2D(MCExposureTiles, uv + (float2(x, y) - 1.5f) * MCExposureTexel.xy);
+    }
+    return total / 16.0f;
+}

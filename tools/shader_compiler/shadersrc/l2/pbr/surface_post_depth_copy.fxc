@@ -1,0 +1,7 @@
+sampler2D MCNativeDepth : register(s0);
+float4 main(float2 uv : TEXCOORD0) : COLOR0
+{
+    float depth = tex2D(MCNativeDepth, uv).r;
+    // Native COLOR_DEPTH cannot distinguish sky from geometry beyond 4000.
+    return float4(depth, 1, 1, depth < 0.999f ? depth * (4000.0f / 65536.0f) : 1);
+}

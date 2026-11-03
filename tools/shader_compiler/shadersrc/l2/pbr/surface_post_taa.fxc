@@ -1,0 +1,124 @@
+sampler2D MCCurrent : register(s0);
+sampler2D MCDepth : register(s1);
+sampler2D MCHistory : register(s2);
+float4 MCTexel : register(c0); // inverse size, history valid, history weight
+float4 MCJitter : register(c1); // current screen-UV displacement, projection scale
+float4 MCLimits : register(c2); // previous projection scale, depth tolerance, depth unit
+float4 MCCurrentRight : register(c11);
+float4 MCCurrentUp : register(c12);
+float4 MCCurrentForward : register(c13);
+float4 MCPreviousRight : register(c15); // XYZ basis, W camera translation in previous view
+float4 MCPreviousUp : register(c16);
+float4 MCPreviousForward : register(c17);
+
+float3 toYCoCg(float3 c)
+{
+    return float3(dot(c, float3(0.25f, 0.5f, 0.25f)), (c.r - c.b) * 0.5f, (-c.r + 2 * c.g - c.b) * 0.25f);
+}
+float3 fromYCoCg(float3 c)
+{
+    return float3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z);
+}
+float3 historyColor(float2 uv)
+{
+    // Separable Catmull-Rom, combining the two positive middle lobes in each
+    // axis into a bilinear fetch: nine taps, no repeated bilinear softening.
+    float2 p = uv / MCTexel.xy - 0.5f;
+    float2 base = floor(p), f = p - base;
+    float2 w0 = f * (-0.5f + f * (1.0f - 0.5f * f));
+    float2 w1 = 1.0f + f * f * (-2.5f + 1.5f * f);
+    float2 w2 = f * (0.5f + f * (2.0f - 1.5f * f));
+    float2 w3 = f * f * (-0.5f + 0.5f * f);
+    float2 w12 = w1 + w2;
+    float2 p0 = (base - 0.5f) * MCTexel.xy;
+    float2 p12 = (base + 0.5f + w2 / w12) * MCTexel.xy;
+    float2 p3 = (base + 2.5f) * MCTexel.xy;
+    float3 color =
+        tex2Dlod(MCHistory, float4(p0.x, p0.y, 0, 0)).rgb * w0.x * w0.y +
+        tex2Dlod(MCHistory, float4(p12.x, p0.y, 0, 0)).rgb * w12.x * w0.y +
+        tex2Dlod(MCHistory, float4(p3.x, p0.y, 0, 0)).rgb * w3.x * w0.y +
+        tex2Dlod(MCHistory, float4(p0.x, p12.y, 0, 0)).rgb * w0.x * w12.y +
+        tex2Dlod(MCHistory, float4(p12.x, p12.y, 0, 0)).rgb * w12.x * w12.y +
+        tex2Dlod(MCHistory, float4(p3.x, p12.y, 0, 0)).rgb * w3.x * w12.y +
+        tex2Dlod(MCHistory, float4(p0.x, p3.y, 0, 0)).rgb * w0.x * w3.y +
+        tex2Dlod(MCHistory, float4(p12.x, p3.y, 0, 0)).rgb * w12.x * w3.y +
+        tex2Dlod(MCHistory, float4(p3.x, p3.y, 0, 0)).rgb * w3.x * w3.y;
+    return max(color, 0);
+}
+
+float4 main(float2 uv : TEXCOORD0) : COLOR0
+{
+    // Resolve onto the unjittered output grid, including on history resets.
+    float2 currentUV = uv + MCJitter.xy;
+    float3 current = tex2Dlod(MCCurrent, float4(currentUV, 0, 0)).rgb;
+    float depth = tex2Dlod(MCDepth, float4(uv, 0, 0)).a;
+    float3 currentYCoCg = toYCoCg(current);
+    float3 sum = 0, sumSquares = 0, crossSum = 0;
+    float closest = depth;
+    float2 closestUV = uv;
+    [unroll] for (int y = -1; y <= 1; ++y)
+    {
+        [unroll] for (int x = -1; x <= 1; ++x)
+        {
+            float2 tap = uv + float2(x, y) * MCTexel.xy;
+            float3 color = toYCoCg(tex2Dlod(MCCurrent, float4(tap, 0, 0)).rgb);
+            sum += color;
+            sumSquares += color * color;
+            if (x == 0 || y == 0) crossSum += color;
+            float z = tex2Dlod(MCDepth, float4(tap, 0, 0)).a;
+            if (z < closest) { closest = z; closestUV = tap; }
+        }
+    }
+    // Store the same dilated depth used for motion, not an unrelated center.
+    if (MCTexel.z < 0.5f) return float4(current, closest);
+    float2 unjittered = closestUV - MCJitter.xy;
+    float3 ray = float3((unjittered.x - 0.5f) / MCJitter.z, (0.5f - unjittered.y) / MCJitter.w, 1);
+    float3 world = ray.x * MCCurrentRight.xyz + ray.y * MCCurrentUp.xyz + MCCurrentForward.xyz;
+    bool sky = closest >= 0.999f;
+    world *= sky ? 1 : closest / MCLimits.w;
+    float translation = sky ? 0 : 1;
+    float3 old = float3(dot(world, MCPreviousRight.xyz) + translation * MCPreviousRight.w,
+        dot(world, MCPreviousUp.xyz) + translation * MCPreviousUp.w,
+        dot(world, MCPreviousForward.xyz) + translation * MCPreviousForward.w);
+    float2 projected = float2(old.x, -old.y) * MCLimits.xy / max(old.z, 0.00001f) + 0.5f;
+    // History is an unjittered output grid. Remove projection jitter from the
+    // motion vector, so a stationary pixel accumulates distinct subpixel rays.
+    float2 historyUV = uv + projected - unjittered;
+    if (old.z <= 0 || any(historyUV < MCTexel.xy * 0.5f) || any(historyUV > 1 - MCTexel.xy * 0.5f))
+        return float4(current, closest);
+    float2 center = (floor(historyUV / MCTexel.xy) + 0.5f) * MCTexel.xy;
+    float previousMin = 1, previousMax = 0;
+    [unroll] for (int hy = -1; hy <= 1; ++hy)
+    {
+        [unroll] for (int hx = -1; hx <= 1; ++hx)
+        {
+            float z = tex2Dlod(MCHistory, float4(center + float2(hx, hy) * MCTexel.xy, 0, 0)).a;
+            // Do not let sky depth widen a foreground acceptance interval.
+            if (sky == (z >= 0.999f))
+            {
+                previousMin = min(previousMin, z);
+                previousMax = max(previousMax, z);
+            }
+        }
+    }
+    float expected = sky ? 1 : old.z * MCLimits.w;
+    float tolerance = max(MCLimits.z, expected * 0.012f);
+    float depthError = max(previousMin - expected, expected - previousMax);
+    float confidence = 1 - smoothstep(tolerance, tolerance * 2, depthError);
+    if (previousMin > previousMax) confidence = 0;
+    float3 history = toYCoCg(historyColor(historyUV));
+    // iterationT-style variance bounds include the reconstructed current sample.
+    float3 mean = sum / 9;
+    float3 sigma = sqrt(max(sumSquares / 9 - mean * mean, 0));
+    float3 low = min(mean - 2 * sigma, currentYCoCg);
+    float3 high = max(mean + 2 * sigma, currentYCoCg);
+    float3 middle = (low + high) * 0.5f, extent = max((high - low) * 0.5f, 0.0001f);
+    float3 difference = history - middle;
+    float3 clipScale = min(1, extent / max(abs(difference), 0.000001f));
+    history = middle + difference * (clipScale.x * clipScale.y * clipScale.z);
+    float2 phase = abs(frac((uv - historyUV) / MCTexel.xy) - 0.5f) * 2;
+    float weight = MCTexel.w * (0.75f + 0.25f * sqrt(phase.x * phase.y)) * confidence;
+    // Only soften newly exposed pixels; valid static history keeps full detail.
+    currentYCoCg = lerp(crossSum * 0.2f, currentYCoCg, saturate(weight * 5 - 0.5f));
+    return float4(max(fromYCoCg(lerp(currentYCoCg, history, weight)), 0), closest);
+}
