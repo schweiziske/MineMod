@@ -145,14 +145,17 @@ MCITEM.GestureSeconds = 0.6
 local TP = MCITEM.ThirdPerson or {}
 MCITEM.ThirdPerson = TP
 
+-- 这里只放 id，显示文字在 mc_item 的词典 data_static/mc/i18n/mcitem/thirdperson/：
+-- field.<key>、profile.<name>、state.<state>。profile 的 stateLabels 给某个状态
+-- 换一个更具体的状态文字 id（食物的 use 显示成 consume“食用”）。
 TP.TransformFields = {
-    { key = "x", default = "0", label = "Forward", labelZH = "前后" },
-    { key = "y", default = "0", label = "Right", labelZH = "左右" },
-    { key = "z", default = "0", label = "Up", labelZH = "上下" },
-    { key = "pitch", default = "0", label = "Pitch", labelZH = "俯仰" },
-    { key = "yaw", default = "0", label = "Yaw", labelZH = "偏航" },
-    { key = "roll", default = "0", label = "Roll", labelZH = "翻滚" },
-    { key = "scale", default = "1", label = "Scale", labelZH = "大小" },
+    { key = "x", default = "0" },
+    { key = "y", default = "0" },
+    { key = "z", default = "0" },
+    { key = "pitch", default = "0" },
+    { key = "yaw", default = "0" },
+    { key = "roll", default = "0" },
+    { key = "scale", default = "1" },
 }
 
 local function transform(x, y, z, pitch, yaw, roll, scale)
@@ -185,7 +188,6 @@ local SHIELD_BLOCK = transform(0, 0, -6, 165, -90, 170, 1.3)
 
 TP.Profiles = {
     bow = {
-        label = "Bow", labelZH = "弓",
         states = { "idle", "attack", "draw_0", "draw_1", "draw_2" },
         defaults = {
             idle = BOW_IDLE,
@@ -202,7 +204,6 @@ TP.Profiles = {
         },
     },
     crossbow = {
-        label = "Crossbow", labelZH = "弩",
         states = {
             "idle", "attack", "load_0", "load_1", "load_2",
             "charged_arrow", "charged_firework",
@@ -226,12 +227,10 @@ TP.Profiles = {
         },
     },
     spear = {
-        label = "Spear", labelZH = "长矛",
         states = { "idle", "attack", "use" },
         defaults = { idle = SPEAR_IDLE, attack = SPEAR_ACTIVE, use = SPEAR_ACTIVE },
     },
     trident = {
-        label = "Trident", labelZH = "三叉戟",
         states = { "idle", "melee", "charge", "throw" },
         defaults = {
             idle = TRIDENT_IDLE,
@@ -240,102 +239,76 @@ TP.Profiles = {
         },
     },
     sword = {
-        label = "Sword", labelZH = "剑", states = { "idle", "attack" },
+        states = { "idle", "attack" },
         defaults = { idle = SWORD_HELD, attack = SWORD_HELD },
     },
     axe = {
-        label = "Axe", labelZH = "斧", states = { "idle", "attack" },
+        states = { "idle", "attack" },
         defaults = { idle = TOOL_HELD, attack = TOOL_HELD },
     },
     pickaxe = {
-        label = "Pickaxe", labelZH = "镐", states = { "idle", "attack" },
+        states = { "idle", "attack" },
         defaults = { idle = TOOL_HELD, attack = TOOL_HELD },
     },
     shovel = {
-        label = "Shovel", labelZH = "铲", states = { "idle", "attack" },
+        states = { "idle", "attack" },
         defaults = { idle = TOOL_HELD, attack = TOOL_HELD },
     },
     hoe = {
-        label = "Hoe", labelZH = "锄", states = { "idle", "attack" },
+        states = { "idle", "attack" },
         defaults = { idle = TOOL_HELD, attack = TOOL_HELD },
     },
     mace = {
-        label = "Mace", labelZH = "重锤", states = { "idle", "attack" },
+        states = { "idle", "attack" },
         defaults = { idle = MACE_HELD, attack = MACE_HELD },
     },
     food = {
-        label = "Food", labelZH = "食物", states = { "idle", "attack", "use" },
+        states = { "idle", "attack", "use" },
         defaults = { idle = ITEM_HELD, attack = ITEM_HELD, use = CONSUME_HELD },
-        stateLabels = { use = { "Consuming", "食用" } },
+        stateLabels = { use = "consume" },
     },
     potion = {
-        label = "Potions", labelZH = "药水",
         states = { "idle", "attack", "use", "throw" },
         defaults = { idle = ITEM_HELD, attack = ITEM_HELD, use = CONSUME_HELD },
-        stateLabels = { use = { "Drinking", "饮用" } },
+        stateLabels = { use = "drink" },
     },
     totem_of_undying = {
-        label = "Totem of Undying", labelZH = "不死图腾",
         states = { "idle", "attack" },
         defaults = { idle = ITEM_HELD, attack = ITEM_HELD },
     },
     fishing_rod = {
-        label = "Fishing Rod", labelZH = "钓鱼竿",
         states = { "idle", "attack", "use" },
         defaults = { idle = ITEM_HELD, attack = ITEM_HELD, use = ITEM_HELD },
-        stateLabels = { use = { "Cast / retrieve", "抛竿 / 收竿" } },
+        stateLabels = { use = "cast" },
     },
     flint_and_steel = {
-        label = "Flint and Steel", labelZH = "打火石",
         states = { "idle", "attack", "use" },
         defaults = {
             idle = FLINT_AND_STEEL_HELD,
             attack = FLINT_AND_STEEL_HELD,
             use = FLINT_AND_STEEL_HELD,
         },
-        stateLabels = { use = { "Ignite", "点火" } },
+        stateLabels = { use = "ignite" },
     },
     name_tag = {
-        label = "Name Tag", labelZH = "命名牌",
         states = { "idle", "attack" },
         defaults = { idle = ITEM_HELD, attack = ITEM_HELD },
     },
     shears = {
-        label = "Shears", labelZH = "剪刀",
         states = { "idle", "attack", "use" },
         defaults = { idle = ITEM_HELD, attack = ITEM_HELD, use = ITEM_HELD },
-        stateLabels = { use = { "Shear", "剪切" } },
+        stateLabels = { use = "shear" },
     },
     shield = {
-        label = "Shield", labelZH = "盾牌",
         states = { "idle", "attack", "block" },
         defaults = { idle = SHIELD_IDLE, attack = SHIELD_IDLE, block = SHIELD_BLOCK },
-        stateLabels = { block = { "Blocking", "格挡" } },
     },
     throwable = {
-        label = "Throwable items", labelZH = "投掷物品",
         states = { "idle", "attack", "throw" },
         defaults = { idle = ITEM_HELD, attack = ITEM_HELD, throw = ITEM_HELD },
     },
 }
 
-TP.StateLabels = {
-    block = { "Blocking", "格挡" },
-    idle = { "Idle", "静止" },
-    attack = { "Left attack / mining", "左键攻击 / 挖掘" },
-    draw_0 = { "Draw stage 0", "拉弓阶段 0" },
-    draw_1 = { "Draw stage 1", "拉弓阶段 1" },
-    draw_2 = { "Draw stage 2", "拉弓阶段 2" },
-    load_0 = { "Load stage 0", "装填阶段 0" },
-    load_1 = { "Load stage 1", "装填阶段 1" },
-    load_2 = { "Load stage 2", "装填阶段 2" },
-    charged_arrow = { "Loaded arrow", "已装箭" },
-    charged_firework = { "Loaded firework", "已装烟花" },
-    use = { "Kinetic use", "右键冲刺" },
-    melee = { "Melee", "近战" },
-    charge = { "Charging", "蓄力" },
-    throw = { "Throw", "投掷" },
-}
 
 -- 手势键既决定 holdtype，也决定该短动作使用哪一组第三人称锚点。
 TP.GestureStates = {

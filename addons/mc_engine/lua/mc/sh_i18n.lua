@@ -424,9 +424,12 @@ local function noteMissing( key, locale, fellBack )
 	end
 end
 
+-- {name} takes vars.name; {1}, {2}, ... take the array part of vars, which
+-- is how converted Minecraft templates (%s, %1$s) receive their arguments.
 local interpolationVars
 local function replacePlaceholder( name )
 	local value = interpolationVars[name]
+	if value == nil and string.find( name, "^%d+$" ) then value = interpolationVars[tonumber( name )] end
 	if value == nil then return nil end
 	return tostring( value )
 end

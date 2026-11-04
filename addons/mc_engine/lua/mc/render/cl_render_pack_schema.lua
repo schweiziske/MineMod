@@ -119,8 +119,12 @@ local function texturePath( value )
 	return value:match( "%.png$" ) ~= nil or value:match( "%.vtf$" ) ~= nil
 end
 
-local function text( value, limit )
-	return value == nil or type( value ) == "string" and #value <= limit
+-- Display fields hold full translation keys, never text; the pack's own
+-- addon ships the text below data_static/mc/i18n/. A missing translation
+-- falls back like any other key and never rejects a working descriptor.
+local function textKey( value, required )
+	if value == nil then return not required end
+	return type( value ) == "string" and MC.I18n.ValidKey( value )
 end
 
 local function number( value )
@@ -177,8 +181,9 @@ local function validateSettings( def )
 	local groups = {}
 	array( def.settingGroups, 32, "setting_groups" )
 	for _, group in ipairs( def.settingGroups ) do
-		fields( group, { id = true, label = true, labelZH = true }, "setting_group" )
-		if not localID( group.id ) or groups[group.id] or not text( group.label, 128 ) or not text( group.labelZH, 128 ) then
+		fields( group, { id = true, labelKey = true, descriptionKey = true }, "setting_group" )
+		if not localID( group.id ) or groups[group.id] or not textKey( group.labelKey, true )
+			or not textKey( group.descriptionKey ) then
 			reject( "invalid_setting_group" )
 		end
 		groups[group.id] = true
@@ -187,12 +192,12 @@ local function validateSettings( def )
 	array( def.settings, 128, "settings" )
 	for _, spec in ipairs( def.settings ) do
 		fields( spec, { key = true, group = true, type = true, default = true, min = true, max = true, integer = true,
-			choices = true, label = true, labelZH = true, help = true, helpZH = true }, "setting" )
+			choices = true, labelKey = true, helpKey = true }, "setting" )
 		if not localID( spec.key ) or keys[spec.key] then reject( "invalid_setting_key" ) end
 		keys[spec.key] = spec
 		if spec.group ~= nil and not groups[spec.group] then reject( "unknown_setting_group:" .. spec.key ) end
-		if not text( spec.label, 128 ) or not text( spec.labelZH, 128 ) or not text( spec.help, 512 ) or not text( spec.helpZH, 512 ) then
-			reject( "invalid_setting_text:" .. spec.key )
+		if not textKey( spec.labelKey, true ) or not textKey( spec.helpKey ) then
+			reject( "invalid_setting_text_key:" .. spec.key )
 		end
 		if spec.type == "bool" then
 			if type( spec.default ) ~= "boolean" or spec.min ~= nil or spec.max ~= nil or spec.choices ~= nil or spec.integer ~= nil then
@@ -208,9 +213,10 @@ local function validateSettings( def )
 			if spec.min ~= nil or spec.max ~= nil or spec.integer ~= nil then reject( "invalid_choice_setting:" .. spec.key ) end
 			local found = false
 			if array( spec.choices, 16, "setting_choices" ) == 0 then reject( "empty_setting_choices:" .. spec.key ) end
+			-- A choice without labelKey shows its value, e.g. a resolution.
 			for _, choice in ipairs( spec.choices ) do
-				fields( choice, { value = true, label = true, labelZH = true }, "setting_choice" )
-				if not number( choice.value ) or not text( choice.label, 128 ) or not text( choice.labelZH, 128 ) then
+				fields( choice, { value = true, labelKey = true }, "setting_choice" )
+				if not number( choice.value ) or not textKey( choice.labelKey ) then
 					reject( "invalid_setting_choice:" .. spec.key )
 				end
 				found = found or choice.value == spec.default
@@ -224,9 +230,9 @@ local function validateSettings( def )
 	local presets = {}
 	array( def.presets, 32, "presets" )
 	for _, preset in ipairs( def.presets ) do
-		fields( preset, { id = true, label = true, labelZH = true, values = true }, "preset" )
-		if not localID( preset.id ) or presets[preset.id]
-			or not text( preset.label, 128 ) or not text( preset.labelZH, 128 ) then reject( "invalid_preset_id_or_label" ) end
+		fields( preset, { id = true, labelKey = true, descriptionKey = true, values = true }, "preset" )
+		if not localID( preset.id ) or presets[preset.id] or not textKey( preset.labelKey, true )
+			or not textKey( preset.descriptionKey ) then reject( "invalid_preset_id_or_label" ) end
 		presets[preset.id] = true
 		presetValues( preset.values, keys, false )
 	end
@@ -529,12 +535,12 @@ local function validatePipeline( def )
 end
 
 local function validate( def )
-	fields( def, { schema = true, name = true, build = true, abi = true,
+	fields( def, { schema = true, nameKey = true, descriptionKey = true, build = true, abi = true,
 		layout = true, adapter = true, programs = true, resources = true, pipeline = true,
 		passes = true, implements = true, materialMaps = true, settings = true, settingGroups = true,
 		presets = true, defaultPreset = true }, "definition" )
 	if def.schema ~= Schema.VERSION then reject( "unsupported_descriptor_schema" ) end
-	if type( def.name ) ~= "string" or #def.name == 0 or #def.name > 128 then reject( "invalid_name" ) end
+	if not textKey( def.nameKey, true ) or not textKey( def.descriptionKey ) then reject( "invalid_name_key" ) end
 	if not hash( def.build ) then reject( "invalid_build_fingerprint" ) end
 	if not positiveInteger( def.abi ) or not Schema.IsID( def.layout )
 		or not Schema.IsID( def.adapter ) then reject( "invalid_compatibility" ) end

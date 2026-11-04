@@ -4,6 +4,7 @@
 
 MC = MC or {}
 MC.ConfigServerValues = MC.ConfigServerValues or {}
+MC.ConfigServerChoices = MC.ConfigServerChoices or {}
 
 surface.CreateFont( "mc_config_title", { font = "Roboto", size = 24, weight = 600, antialias = true, extended = true } )
 surface.CreateFont( "mc_config_heading", { font = "Roboto", size = 19, weight = 600, antialias = true, extended = true } )
@@ -41,53 +42,64 @@ local UI = {
 	danger = Color( 160, 74, 68, 255 ),
 }
 
-local function configText( en, zh )
-	if zh and MC.Language and MC.Language() == "zh_cn" then
-		return zh
-	end
-	return en
+-- Entries carry ids; their keys come from MC.ConfigText (sh_config_ui.lua).
+local Text = MC.ConfigText
+
+local function L( key, vars )
+	return MC.I18n.Resolve( key, vars )
 end
 
 local function itemLabel( item )
-	return configText( item.label or item.name, item.labelZH )
+	return L( Text.ItemKey( item ), item.labelVars )
 end
 
+-- helpSuffix is language-neutral detail such as a value range.
 local function itemHelp( item )
-	return configText( item.help or "", item.helpZH )
+	local key = Text.ItemHelpKey( item )
+	local help = key and L( key, item.helpVars ) or ""
+	if item.helpSuffix then help = help == "" and item.helpSuffix or help .. " " .. item.helpSuffix end
+	return help
 end
 
 local function categoryLabel( category )
-	return configText( category.label or category.id, category.zhLabel )
+	return L( Text.CategoryKey( category ), category.labelVars )
 end
 
 local function categoryDescription( category )
-	return configText( category.description or "", category.descriptionZH )
+	local key = Text.CategoryDescriptionKey( category )
+	return key and L( key, category.descriptionVars ) or ""
 end
 
 local function groupLabel( group )
-	return configText( group.label or group.id, group.zhLabel )
+	return L( Text.GroupKey( group ) )
 end
 
-local function choiceLabel( entry )
-	return configText( entry.label or entry.value, entry.labelZH )
+local function choiceLabel( item, entry )
+	local key = Text.ChoiceKey( item, entry )
+	if not key then return tostring( entry.text ) end
+	return L( key, entry.labelVars )
 end
 
 local function unitLabel( unit )
-	local units = {
-		blocks = { "blocks", "方块" },
-		chunks = { "chunks", "区块" },
-		["chunks/frame"] = { "chunks/frame", "区块/帧" },
-		bytes = { "bytes", "字节" },
-		ms = { "ms", "毫秒" },
-		s = { "seconds", "秒" },
-		px = { "px", "像素" },
-		deg = { "degrees", "度" },
-		texels = { "texels", "纹素" },
-		u = { "Source units", "Source 单位" },
-	}
-	local labels = units[unit]
-	if not labels then return tostring( unit or "" ) end
-	return configText( labels[1], labels[2] )
+	return L( Text.UnitKey( unit ) )
+end
+
+-- Search matches the current language and the en_us base, so an English
+-- setting name keeps working in any interface language.
+local function searchText( key, vars )
+	if not key then return "" end
+	return MC.I18n.Resolve( key, vars ) .. " " .. MC.I18n.Resolve( key, vars, MC.I18n.BASE_LOCALE )
+end
+
+-- choices may be a list or a function returning one; a server-scope entry
+-- with serverChoices uses the list the server sent with its values.
+local function itemChoices( scope, item )
+	if scope == "server" and item.serverChoices then
+		return MC.ConfigServerChoices[item.name] or {}
+	end
+	local choices = item.choices
+	if isfunction( choices ) then choices = choices() end
+	return choices or {}
 end
 
 local function configEntryVisible( entry )
@@ -133,7 +145,7 @@ local function applyConfigValue( scope, item, value )
 		local ok, err = item.set( value )
 		if ok == false then
 			MC.RefreshConfigControlValue( item.name, itemValue( scope, item ) )
-			Derma_Message( tostring( err ), configText( "Setting failed", "设置失败" ), "OK" )
+			Derma_Message( tostring( err ), L( "config.ui.setting_failed" ), "OK" )
 			return false
 		end
 		-- Show the stored value, e.g. after clamping to the setting's range.
@@ -271,8 +283,8 @@ local function createBoolControl( parent, scope, item, editable )
 		end
 	end
 
-	makeChoice( false, configText( "Off", "关闭" ) )
-	makeChoice( true, configText( "On", "开启" ) )
+	makeChoice( false, L( "config.ui.off" ) )
+	makeChoice( true, L( "config.ui.on" ) )
 
 	holder.MCSetValue = function( _, value )
 		holder.MCEnabled = isTruthyValue( value )
@@ -300,8 +312,8 @@ local function createChoiceControl( parent, scope, item, editable )
 		combo.DropButton:SetVisible( false )
 	end
 
-	for _, entry in ipairs( item.choices or {} ) do
-		combo:AddChoice( choiceLabel( entry ), tostring( entry.value ) )
+	for _, entry in ipairs( itemChoices( scope, item ) ) do
+		combo:AddChoice( choiceLabel( item, entry ), tostring( entry.value ) )
 	end
 
 	combo.Paint = function( s, w, h )
@@ -337,9 +349,9 @@ local function createChoiceControl( parent, scope, item, editable )
 
 	local function setDisplayedValue( value )
 		value = tostring( value or "" )
-		for _, entry in ipairs( item.choices or {} ) do
+		for _, entry in ipairs( itemChoices( scope, item ) ) do
 			if tostring( entry.value ) == value then
-				combo:SetValue( choiceLabel( entry ) )
+				combo:SetValue( choiceLabel( item, entry ) )
 				return
 			end
 		end
@@ -392,9 +404,9 @@ local function createValueControl( parent, scope, item, editable )
 	styleFlatButton( apply, {
 		label = function()
 			if apply.MCSavedUntil and apply.MCSavedUntil > CurTime() then
-				return configText( "Saved", "已保存" )
+				return L( "config.ui.saved" )
 			end
-			return configText( "Save", "保存" )
+			return L( "config.ui.save" )
 		end,
 		active = function()
 			return editable and ( apply.MCDirty or ( apply.MCSavedUntil and apply.MCSavedUntil > CurTime() ) )
@@ -454,32 +466,32 @@ local function createPresetControl( parent )
 	local sourceName, sourceReference
 	local function report( ok, err )
 		if ok then return end
-		Derma_Message( tostring( err ), configText( "Preset failed", "预设操作失败" ), "OK" )
+		Derma_Message( tostring( err ), L( "config.ui.preset_failed" ), "OK" )
 	end
 	local function samePack()
 		settings.Refresh()
 		if settings.pack == pack then return true end
-		report( false, configText( "The shader pack has changed.", "光影包已切换。" ) )
+		report( false, L( "config.ui.pack_changed" ) )
 		return false
 	end
 	local function confirm( title, name, action )
-		Derma_Query( name, title, configText( "Confirm", "确认" ), function()
+		Derma_Query( name, title, L( "config.ui.confirm" ), function()
 			if samePack() then action() end
-		end, configText( "Cancel", "取消" ) )
+		end, L( "config.ui.cancel" ) )
 	end
 	local function saveAs()
-		Derma_StringRequest( configText( "Save preset as", "预设另存为" ), configText( "Name", "名称" ), "",
+		Derma_StringRequest( L( "config.ui.preset_save_as" ), L( "config.ui.preset_name" ), "",
 			function( name )
 				if not samePack() then return end
 				local ok, err = settings.SavePreset( name )
 				if not ok and err == "preset_exists" then
-					confirm( configText( "Overwrite preset?", "覆盖预设？" ), name,
+					confirm( L( "config.ui.preset_overwrite_confirm" ), name,
 						function()
 							local saved, reason = settings.SavePreset( name, true )
 							report( saved, reason )
 						end )
 				else report( ok, err ) end
-			end, nil, configText( "Save", "保存" ), configText( "Cancel", "取消" ) )
+			end, nil, L( "config.ui.save" ), L( "config.ui.cancel" ) )
 	end
 	local function button( icon, tooltip, action )
 		local control = vgui.Create( "DImageButton", tools )
@@ -499,24 +511,24 @@ local function createPresetControl( parent )
 		control.DoClick = function() if samePack() then action() end end
 		return control
 	end
-	button( "page_copy", configText( "Save preset as", "预设另存为" ), saveAs )
-	local overwrite = button( "disk", configText( "Overwrite user preset", "覆盖用户预设" ), function()
+	button( "page_copy", L( "config.ui.preset_save_as" ), saveAs )
+	local overwrite = button( "disk", L( "config.ui.preset_overwrite" ), function()
 		local name = sourceName
-		confirm( configText( "Overwrite preset?", "覆盖预设？" ), name,
+		confirm( L( "config.ui.preset_overwrite_confirm" ), name,
 			function()
 				local ok, err = settings.SavePreset( name, true )
 				report( ok, err )
 			end )
 	end )
-	local delete = button( "delete", configText( "Delete user preset", "删除用户预设" ), function()
+	local delete = button( "delete", L( "config.ui.preset_delete" ), function()
 		local reference = sourceReference
-		confirm( configText( "Delete preset?", "删除预设？" ), sourceName,
+		confirm( L( "config.ui.preset_delete_confirm" ), sourceName,
 			function()
 				local ok, err = settings.DeletePreset( reference, true )
 				report( ok, err )
 			end )
 	end )
-	button( "arrow_undo", configText( "Restore default preset", "恢复默认预设" ),
+	button( "arrow_undo", L( "config.ui.preset_restore_default" ),
 		function()
 			local ok, err = settings.Reset()
 			report( ok, err )
@@ -528,13 +540,14 @@ local function createPresetControl( parent )
 		combo:Clear()
 		sourceName, sourceReference = nil, nil
 		for _, preset in ipairs( item.choices ) do
-			combo:AddChoice( choiceLabel( preset ), preset.value )
+			combo:AddChoice( choiceLabel( item, preset ), preset.value )
+			-- Only user presets carry text: their name as the player typed it.
 			if preset.value == source and not preset.builtin then
-				sourceName, sourceReference = preset.label, preset.value
+				sourceName, sourceReference = preset.text, preset.value
 			end
 		end
 		choice:MCSetValue( current )
-		if current == "custom" then combo:SetValue( configText( "Custom", "自定义" ) ) end
+		if current == "custom" then combo:SetValue( L( "config.ui.preset_custom" ) ) end
 		overwrite:SetEnabled( sourceName ~= nil )
 		delete:SetEnabled( sourceName ~= nil )
 	end
@@ -566,7 +579,7 @@ local function createConfigRow( parent, scope, item, rowIndex )
 		local open = vgui.Create( "DButton", controls )
 		open:Dock( FILL )
 		open:DockMargin( 0, 27, 12, 27 )
-		styleFlatButton( open, { label = configText( "Open manager", "打开管理器" ) } )
+		styleFlatButton( open, { label = L( "config.ui.open_manager" ) } )
 		open.DoClick = function()
 			if item.action == "save_manager" then MC.OpenSaveManager()
 			else MC.OpenTexturePackManager() end
@@ -607,8 +620,8 @@ local function createConfigRow( parent, scope, item, rowIndex )
 	meta:SetFont( "mc_config_meta" )
 	meta:SetTextColor( editable and UI.textFaint or UI.warn )
 	local suffix = ""
-	if item.advanced then suffix = suffix .. configText( "  ·  advanced", "  ·  高级设置" ) end
-	if not editable then suffix = suffix .. configText( "  ·  administrator only", "  ·  仅管理员可修改" ) end
+	if item.advanced then suffix = suffix .. "  ·  " .. L( "config.ui.advanced" ) end
+	if not editable then suffix = suffix .. "  ·  " .. L( "config.ui.admin_only" ) end
 	meta:SetText( item.name .. suffix )
 
 	return row
@@ -687,14 +700,14 @@ function MC.OpenConfigMenu()
 	title:SetSize( 500, 27 )
 	title:SetFont( "mc_config_title" )
 	title:SetTextColor( UI.text )
-	title:SetText( configText( "MC Settings", "MC 设置" ) )
+	title:SetText( L( "config.ui.title" ) )
 
 	local subtitle = vgui.Create( "DLabel", header )
 	subtitle:SetPos( 23, 37 )
 	subtitle:SetSize( 620, 19 )
 	subtitle:SetFont( "mc_config_small" )
 	subtitle:SetTextColor( UI.textDim )
-	subtitle:SetText( configText( "Client preferences and server administration", "客户端偏好与服务器管理" ) )
+	subtitle:SetText( L( "config.ui.subtitle" ) )
 
 	local close = vgui.Create( "DButton", header )
 	close:Dock( RIGHT )
@@ -755,7 +768,7 @@ function MC.OpenConfigMenu()
 	local search = vgui.Create( "DTextEntry", searchHolder )
 	search:Dock( FILL )
 	search:DockMargin( 12, 12, 12, 11 )
-	styleTextEntry( search, configText( "Search settings", "搜索设置" ) )
+	styleTextEntry( search, L( "config.ui.search" ) )
 
 	local categoryScroll = vgui.Create( "DScrollPanel", sidebar )
 	categoryScroll:Dock( FILL )
@@ -816,14 +829,14 @@ function MC.OpenConfigMenu()
 		return button
 	end
 
-	local hideButton = visibilityButton( contentHeader, configText( "Hide settings UI", "隐藏设置界面" ) )
+	local hideButton = visibilityButton( contentHeader, L( "config.ui.hide" ) )
 	hideButton:Dock( RIGHT )
 	hideButton:DockMargin( 0, 25, 8, 25 )
 	hideButton:SetVisible( false )
 	hideButton.DoClick = function()
 		if IsValid( restoreButton ) then return end
 		local x, y = hideButton:LocalToScreen( 0, 0 )
-		restoreButton = visibilityButton( nil, configText( "Show settings UI", "显示设置界面" ) )
+		restoreButton = visibilityButton( nil, L( "config.ui.show" ) )
 		restoreButton:SetPos( math.Clamp( x, 0, ScrW() - 32 ), math.Clamp( y, 0, ScrH() - 32 ) )
 		restoreButton.DoClick = function()
 			restoreButton:Remove()
@@ -892,12 +905,9 @@ function MC.OpenConfigMenu()
 		if query == "" then return true end
 		local haystack = table.concat( {
 			item.name or "",
-			item.label or "",
-			item.labelZH or "",
-			item.help or "",
-			item.helpZH or "",
-			entryCategory.label or "",
-			entryCategory.zhLabel or "",
+			searchText( Text.ItemKey( item ), item.labelVars ),
+			searchText( Text.ItemHelpKey( item ), item.helpVars ),
+			searchText( Text.CategoryKey( entryCategory ), entryCategory.labelVars ),
 		}, " " )
 		return string.find( string.lower( haystack ), string.lower( query ), 1, true ) ~= nil
 	end
@@ -935,14 +945,14 @@ function MC.OpenConfigMenu()
 				end
 			end
 
-			contentTitle:SetText( configText( "Search results", "搜索结果" ) )
-			contentDescription:SetText( configText( "Matching settings across the current scope.", "当前范围内所有匹配的设置。" ) )
+			contentTitle:SetText( L( "config.ui.search_results" ) )
+			contentDescription:SetText( L( "config.ui.search_results_description" ) )
 		else
 			local entryCategory = activeCategoryData()
 			if entryCategory then
 				for _, entry in ipairs( entryCategory.items or {} ) do
 					if entry.kind == "heading" then
-						createResultHeading( canvas, { label = entry.label, zhLabel = entry.labelZH }, entry.count or "" )
+						createResultHeading( canvas, { id = "", labelKey = entry.labelKey, labelVars = entry.labelVars }, entry.count or "" )
 					else
 						rowIndex = rowIndex + 1
 						total = total + 1
@@ -952,17 +962,17 @@ function MC.OpenConfigMenu()
 				contentTitle:SetText( categoryLabel( entryCategory ) )
 				contentDescription:SetText( categoryDescription( entryCategory ) )
 			else
-				contentTitle:SetText( configText( "No settings", "没有设置" ) )
+				contentTitle:SetText( L( "config.ui.no_settings" ) )
 				contentDescription:SetText( "" )
 			end
 		end
 
 		if total == 0 then
-			createEmptyState( canvas, configText( "Nothing found", "没有找到设置" ),
-				configText( "Try a setting name, description or ConVar.", "可以尝试设置名称、说明或 ConVar。" ) )
+			createEmptyState( canvas, L( "config.ui.nothing_found" ),
+				L( "config.ui.nothing_found_hint" ) )
 		end
 
-		contentCount:SetText( configText( total .. ( total == 1 and " setting" or " settings" ), total .. " 项设置" ) )
+		contentCount:SetText( MC.I18n.TranslateCount( "config.ui.setting_count", total ) )
 		canvas:InvalidateLayout( true )
 		if resetScroll then settingsScroll:GetVBar():SetScroll( 0 ) end
 	end
@@ -1029,13 +1039,13 @@ function MC.OpenConfigMenu()
 	local function updateScopeHint()
 		if activeScope == "client" then
 			scopeHint:SetTextColor( UI.textDim )
-			scopeHint:SetText( configText( "Changes apply to this client.", "修改只应用到当前客户端。" ) )
+			scopeHint:SetText( L( "config.ui.scope_client_hint" ) )
 		elseif canEditScope( "server" ) then
 			scopeHint:SetTextColor( UI.textDim )
-			scopeHint:SetText( configText( "Server changes apply immediately.", "服务器设置修改后立即生效。" ) )
+			scopeHint:SetText( L( "config.ui.scope_server_hint" ) )
 		else
 			scopeHint:SetTextColor( UI.warn )
-			scopeHint:SetText( configText( "Server settings are read-only without administrator access.", "没有管理员权限时，服务器设置仅可查看。" ) )
+			scopeHint:SetText( L( "config.ui.scope_server_readonly" ) )
 		end
 	end
 
@@ -1056,8 +1066,8 @@ function MC.OpenConfigMenu()
 				surface.SetDrawColor( UI.accent )
 				surface.DrawRect( 0, h - 3, w, 3 )
 			end
-			local label = scope == "client" and configText( "Client settings", "客户端设置" )
-				or configText( "Server settings", "服务器设置" )
+			local label = scope == "client" and L( "config.ui.scope_client" )
+				or L( "config.ui.scope_server" )
 			draw.SimpleText( label, "mc_config_body", w * 0.5, h * 0.5 - 1,
 				selected and UI.text or UI.textDim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
 		end
@@ -1094,14 +1104,34 @@ hook.Add( "MCPlayerGameModeSynchronized", "mc_config_ui", function( mode )
 	MC.RefreshConfigControlValue( "mc_gamemode", mode )
 end )
 
+-- Values first, then the choice lists of entries whose choices exist only on
+-- the server (sv_config_ui.lua writes the same layout).
 net.Receive( "mc_config_values", function()
 	local values = {}
 	for _ = 1, net.ReadUInt( 12 ) do
 		values[net.ReadString()] = net.ReadString()
 	end
+	local choices, choicesChanged = {}, false
+	for _ = 1, net.ReadUInt( 8 ) do
+		local name, list = net.ReadString(), {}
+		for index = 1, net.ReadUInt( 8 ) do
+			local value = net.ReadString()
+			list[index] = { value = value, text = value }
+		end
+		choices[name] = list
+		local previous = MC.ConfigServerChoices[name]
+		if not previous or #previous ~= #list then choicesChanged = true
+		else
+			for index, entry in ipairs( list ) do
+				if previous[index].value ~= entry.value then choicesChanged = true end
+			end
+		end
+	end
 
 	MC.ConfigServerValues = values
+	MC.ConfigServerChoices = choices
 	if not IsValid( MC.ConfigFrame ) then return end
+	if choicesChanged and MC.ConfigRefreshRows then MC.ConfigRefreshRows() end
 
 	for name, controls in pairs( MC.ConfigControlRows or {} ) do
 		local value = values[name]
@@ -1145,8 +1175,9 @@ concommand.Add( "mc_config", function()
 	MC.OpenConfigMenu()
 end )
 
+MC.I18n.BindPhrase( "mc.config.desktop_title", "config.ui.desktop_title" )
 list.Set( "DesktopWindows", "mc_config", {
-	title = "MC Config",
+	title = "#mc.config.desktop_title",
 	icon = "mc/ui/config_grass.png",
 	width = 1,
 	height = 1,

@@ -4,6 +4,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 const { ROOT, fingerprint, filelistEntry, immutableWrite } = require("./build_l2_vanilla.cjs");
+const { withDisplay } = require("./descriptor_display.cjs");
 const ADDON = path.join(ROOT, "addons/mc_skybox_block");
 const DESCRIPTOR = path.join(ADDON, "data_static/mc/shaderpacks/mc_skybox_captured.json");
 const PROGRAMS = { vertex: ["sky_vertex.fxc", "vs_3_0"], surface: ["sky_surface.fxc", "ps_3_0"] };
@@ -26,14 +27,21 @@ function validateReport(report, vertex) {
 
 function descriptorDocument(manifest) {
   const { vertex, surface } = manifest.programs;
-  return { schema: 1, kind: "shader", id: "mc_skybox:captured", definition: {
-    schema: 1, name: "Captured Source Sky", build: manifest.build,
+  return { schema: 1, kind: "shader", id: "mc_skybox:captured", definition: withDisplay("mc_skybox:captured", {
+    schema: 1, build: manifest.build,
     abi: 1, layout: "mc:quad_corners_v1", adapter: "mc:sky_quad_v1",
     programs: { sky: { vertex: vertex.name, pixel: surface.name,
       vertexHash: vertex.sha256, pixelHash: surface.sha256 } },
     resources: {}, passes: { sky: { stage: "world_opaque", program: "sky" } },
     implements: { "mc_skybox:sky": { contract: 1, passes: ["sky"] } },
-  } };
+  }) };
+}
+
+function writeDescriptor(document) {
+  fs.mkdirSync(path.dirname(DESCRIPTOR), { recursive: true });
+  const temporary = DESCRIPTOR + `.tmp-${process.pid}`;
+  fs.writeFileSync(temporary, JSON.stringify(document, null, 2) + "\n", { flag: "wx" });
+  fs.renameSync(temporary, DESCRIPTOR);
 }
 
 function run(exe, args, cwd, log) {
@@ -45,6 +53,14 @@ function run(exe, args, cwd, log) {
 }
 
 function main(argv) {
+  // Display keys are no build input; refresh them without compiling.
+  if (argv.length === 1 && argv[0] === "--display-only") {
+    const document = JSON.parse(fs.readFileSync(DESCRIPTOR, "utf8"));
+    document.definition = withDisplay(document.id, document.definition);
+    writeDescriptor(document);
+    console.log(`Published display keys; programs and build unchanged\nDescriptor: ${DESCRIPTOR}`);
+    return;
+  }
   const flags = {};
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
@@ -93,10 +109,7 @@ function main(argv) {
     if (fs.existsSync(file) && !fs.readFileSync(file).equals(bytes)) throw new Error(`Build-name collision: ${file}`);
   }
   for (const [file, bytes] of files) immutableWrite(file, bytes);
-  fs.mkdirSync(path.dirname(DESCRIPTOR), { recursive: true });
-  const temporary = DESCRIPTOR + `.tmp-${process.pid}`;
-  fs.writeFileSync(temporary, JSON.stringify(descriptorDocument(manifest), null, 2) + "\n", { flag: "wx" });
-  fs.renameSync(temporary, DESCRIPTOR);
+  writeDescriptor(descriptorDocument(manifest));
   console.log(`Published sky vertex/pixel programs and descriptor: ${DESCRIPTOR}`);
 }
 

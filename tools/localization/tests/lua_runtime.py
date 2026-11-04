@@ -202,6 +202,26 @@ class Runtime:
         self.run_file(ENGINE_LUA / "mc" / "sh_i18n.lua")
         return self
 
+    def load_api(self):
+        """Adds the config metadata and the public API facade on top of
+        load_i18n(), with just enough registry stubs for them to load."""
+        self.run_file(ENGINE_LUA / "mc" / "sh_config_ui.lua")
+        self.run("""
+            MC.ModRegistry = { creativeCategories = {}, creativeEntries = {}, creativeOrder = {},
+                creativeBlockCategories = {}, creativeSlotCursor = 0 }
+            function MC.NormalizeResourceLocation( value )
+                if type( value ) ~= "string" then return nil end
+                if not string.find( value, ":", 1, true ) then value = "minecraft:" .. value end
+                if not string.find( value, "^[a-z0-9_.%-]+:[a-z0-9_./%-]+$" ) then return nil end
+                return value
+            end
+            function Vector( x, y, z ) return { x = x or 0, y = y or 0, z = z or 0 } end
+            function Angle( p, y, r ) return { p = p or 0, y = y or 0, r = r or 0 } end
+            function Color( r, g, b, a ) return { r = r, g = g, b = b, a = a or 255 } end
+        """)
+        self.run_file(ENGINE_LUA / "mc" / "api" / "sh_api.lua")
+        return self
+
 
 def repo_game_roots():
     return sorted(path for path in (REPO / "addons").iterdir() if path.is_dir())

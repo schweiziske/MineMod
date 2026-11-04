@@ -22,7 +22,7 @@ local manifest = {
 		} ) )
 		requireResult( "item", api.Items.Register( { id = "mc_skybox:sky", block = "mc_skybox:sky", maxStack = 64 } ) )
 		requireResult( "category", api.Creative.RegisterCategory( {
-			id = "mc_skybox:blocks", title = "Skybox", titleZH = "天空方块", icon = "mc_skybox:sky",
+			id = "mc_skybox:blocks", icon = "mc_skybox:sky",
 		} ) )
 		requireResult( "creative entry", api.Creative.RegisterBlock( "mc_skybox:blocks", "mc_skybox:sky" ) )
 		if CLIENT then

@@ -5,6 +5,7 @@ const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 const { fingerprint, compilerSources, filelistEntry, immutableWrite, compileModern } = require("./build_l2_vanilla.cjs");
 const { constantPNG, publishedResources: engineResources } = require("./build_engine_render_textures.cjs");
+const { withDisplay } = require("./descriptor_display.cjs");
 const ROOT = path.resolve(__dirname, "../..");
 const ADDON = path.join(ROOT, "addons/mc_shaderpack_pbr");
 const DESCRIPTOR = path.join(ADDON, "data_static/mc/shaderpacks/mc_pbr.json");
@@ -143,12 +144,14 @@ function publishEngineResources() {
 function publishSettings() {
   const descriptor = JSON.parse(fs.readFileSync(DESCRIPTOR, "utf8"));
   const settings = JSON.parse(fs.readFileSync(SETTINGS, "utf8"));
+  descriptor.definition = withDisplay(descriptor.id, descriptor.definition);
   Object.assign(descriptor.definition, { settingGroups: settings.groups, settings: settings.settings,
     presets: settings.presets, defaultPreset: settings.defaultPreset });
-  // Settings participate in registry identity, not the immutable GPU build.
+  // Settings and display keys participate in registry identity, not the
+  // immutable GPU build; their translations are not build inputs at all.
   stampDefinition(descriptor.definition);
   atomicWrite(DESCRIPTOR, JSON.stringify(descriptor, null, 2).replace(/\n/g, "\r\n") + "\r\n");
-  console.log("Published PBR settings; shader programs and pipeline unchanged");
+  console.log("Published PBR settings and display keys; shader programs and pipeline unchanged");
 }
 
 // Delete .vcs files of earlier builds; the new descriptor must already be published.
@@ -234,11 +237,11 @@ function main(argv) {
   // Player-adjustable settings live outside the shader tree, so editing them
   // never renames the compiled programs. The client validates the schema.
   const settings = JSON.parse(fs.readFileSync(SETTINGS, "utf8"));
-  const definition = { schema: 1, name: "PBR", build: digest, abi: 1,
+  const definition = withDisplay("mc:pbr", { schema: 1, build: digest, abi: 1,
     layout: "mc:quad_corners_v1", adapter: contract.id, programs: {}, resources, passes: {},
     materialMaps, settingGroups: settings.groups, settings: settings.settings,
     presets: settings.presets, defaultPreset: settings.defaultPreset,
-    implements: { "mc:terrain": { contract: 1, passes: ["terrain_opaque", "terrain_cutout", "terrain_translucent"] } } };
+    implements: { "mc:terrain": { contract: 1, passes: ["terrain_opaque", "terrain_cutout", "terrain_translucent"] } } });
   for (const key of ["opaque", "cutout", "translucent"]) {
     definition.programs[key] = { vertex: names.vertex, vertexHash: manifest.programs.vertex.sha256,
       pixel: names[key], pixelHash: manifest.programs[key].sha256 };

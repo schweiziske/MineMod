@@ -4,7 +4,7 @@
   "id": "mc:pbr",
   "definition": {
     "schema": 1,
-    "name": "PBR",
+    "nameKey": "shaderpack.mc_pbr.name",
     "abi": 1,
     "layout": "mc:quad_corners_v1",
     "adapter": "mc:pbr_quad_v5",
@@ -331,48 +331,39 @@
     "settingGroups": [
       {
         "id": "textures",
-        "label": "Textures",
-        "labelZH": "贴图"
+        "labelKey": "shaderpack.mc_pbr.groups.textures.label"
       },
       {
         "id": "lighting",
-        "label": "Lighting",
-        "labelZH": "光照"
+        "labelKey": "shaderpack.mc_pbr.groups.lighting.label"
       },
       {
         "id": "shadows",
-        "label": "Sun shadows",
-        "labelZH": "太阳阴影"
+        "labelKey": "shaderpack.mc_pbr.groups.shadows.label"
       },
       {
         "id": "water",
-        "label": "Water",
-        "labelZH": "水面"
+        "labelKey": "shaderpack.mc_pbr.groups.water.label"
       },
       {
         "id": "underwater",
-        "label": "Underwater",
-        "labelZH": "水下"
+        "labelKey": "shaderpack.mc_pbr.groups.underwater.label"
       },
       {
         "id": "reflections",
-        "label": "Reflections",
-        "labelZH": "反射"
+        "labelKey": "shaderpack.mc_pbr.groups.reflections.label"
       },
       {
         "id": "ssao",
-        "label": "Contact occlusion",
-        "labelZH": "接触遮蔽"
+        "labelKey": "shaderpack.mc_pbr.groups.ssao.label"
       },
       {
         "id": "atmosphere",
-        "label": "Atmosphere",
-        "labelZH": "大气"
+        "labelKey": "shaderpack.mc_pbr.groups.atmosphere.label"
       },
       {
         "id": "bloom",
-        "label": "Bloom",
-        "labelZH": "泛光"
+        "labelKey": "shaderpack.mc_pbr.groups.bloom.label"
       }
     ],
     "settings": [
@@ -381,24 +372,21 @@
         "group": "textures",
         "type": "bool",
         "default": false,
-        "label": "Color texture interpolation",
-        "labelZH": "颜色贴图插值"
+        "labelKey": "shaderpack.mc_pbr.settings.color_interpolation.label"
       },
       {
         "key": "pbr_interpolation",
         "group": "textures",
         "type": "bool",
         "default": false,
-        "label": "PBR texture interpolation",
-        "labelZH": "PBR 贴图插值"
+        "labelKey": "shaderpack.mc_pbr.settings.pbr_interpolation.label"
       },
       {
         "key": "taa",
         "group": "textures",
         "type": "bool",
         "default": false,
-        "label": "Temporal anti-aliasing (TAA)",
-        "labelZH": "时域抗锯齿（TAA）"
+        "labelKey": "shaderpack.mc_pbr.settings.taa.label"
       },
       {
         "key": "exposure",
@@ -407,19 +395,16 @@
         "default": 2,
         "min": 0.05,
         "max": 8,
-        "label": "Exposure",
-        "labelZH": "曝光",
-        "help": "Exposure before tone mapping.",
-        "helpZH": "色调映射前的曝光。"
+        "labelKey": "shaderpack.mc_pbr.settings.exposure.label",
+        "helpKey": "shaderpack.mc_pbr.settings.exposure.help"
       },
       {
         "key": "auto_exposure",
         "group": "lighting",
         "type": "bool",
         "default": false,
-        "label": "Auto exposure",
-        "labelZH": "动态曝光",
-        "helpZH": "在基础曝光之上，按屏幕亮度缓慢调整；关闭后恢复原画面。"
+        "labelKey": "shaderpack.mc_pbr.settings.auto_exposure.label",
+        "helpKey": "shaderpack.mc_pbr.settings.auto_exposure.help"
       },
       {
         "key": "auto_exposure_key",
@@ -428,9 +413,8 @@
         "default": 0.18,
         "min": 0.05,
         "max": 0.5,
-        "label": "Metering target",
-        "labelZH": "测光目标",
-        "helpZH": "线性画面的目标亮度，越大整体越亮。"
+        "labelKey": "shaderpack.mc_pbr.settings.auto_exposure_key.label",
+        "helpKey": "shaderpack.mc_pbr.settings.auto_exposure_key.help"
       },
       {
         "key": "auto_exposure_strength",
@@ -439,9 +423,8 @@
         "default": 1,
         "min": 0,
         "max": 1,
-        "label": "Adaptation strength",
-        "labelZH": "自动调整强度",
-        "helpZH": "亮度负幂曲线的指数；0 不调整，1 完全补偿测光差异。"
+        "labelKey": "shaderpack.mc_pbr.settings.auto_exposure_strength.label",
+        "helpKey": "shaderpack.mc_pbr.settings.auto_exposure_strength.help"
       },
       {
         "key": "auto_exposure_range",
@@ -450,9 +433,8 @@
         "default": 2,
         "min": 0,
         "max": 3,
-        "label": "Exposure range (EV)",
-        "labelZH": "调整范围（档）",
-        "helpZH": "相对基础画面允许的正负档数；1 档限制在 0.5 到 2 倍。"
+        "labelKey": "shaderpack.mc_pbr.settings.auto_exposure_range.label",
+        "helpKey": "shaderpack.mc_pbr.settings.auto_exposure_range.help"
       },
       {
         "key": "auto_exposure_time",
@@ -461,9 +443,8 @@
         "default": 1,
         "min": 0.1,
         "max": 5,
-        "label": "Adaptation time",
-        "labelZH": "适应时间",
-        "helpZH": "适应亮处的时间常数（秒）；进入暗处时适应速度为其三倍。"
+        "labelKey": "shaderpack.mc_pbr.settings.auto_exposure_time.label",
+        "helpKey": "shaderpack.mc_pbr.settings.auto_exposure_time.help"
       },
       {
         "key": "sun_strength",
@@ -472,10 +453,8 @@
         "default": 2.5,
         "min": 0,
         "max": 8,
-        "label": "Sun strength",
-        "labelZH": "阳光强度",
-        "help": "Direct solar radiance.",
-        "helpZH": "太阳直射光强度。"
+        "labelKey": "shaderpack.mc_pbr.settings.sun_strength.label",
+        "helpKey": "shaderpack.mc_pbr.settings.sun_strength.help"
       },
       {
         "key": "environment",
@@ -484,30 +463,24 @@
         "default": 1,
         "min": 0,
         "max": 4,
-        "label": "Environment reflection",
-        "labelZH": "环境反射",
-        "help": "Specular image-based lighting intensity.",
-        "helpZH": "基于环境贴图的高光强度。"
+        "labelKey": "shaderpack.mc_pbr.settings.environment.label",
+        "helpKey": "shaderpack.mc_pbr.settings.environment.help"
       },
       {
         "key": "shadows",
         "group": "shadows",
         "type": "bool",
         "default": true,
-        "label": "Sun shadows",
-        "labelZH": "太阳阴影",
-        "help": "Cached two-cascade sun shadows.",
-        "helpZH": "两级缓存的太阳阴影。"
+        "labelKey": "shaderpack.mc_pbr.settings.shadows.label",
+        "helpKey": "shaderpack.mc_pbr.settings.shadows.help"
       },
       {
         "key": "shadow_sky_boundary",
         "group": "shadows",
         "type": "bool",
         "default": true,
-        "label": "Sky boundary shadows",
-        "labelZH": "天空边界阴影",
-        "help": "Ignore sunlight blockers beyond sky blocks. Off skips entrance and interior shadow passes; the atlas layout is retained.",
-        "helpZH": "排除天空方块外侧的太阳遮挡。关闭后跳过入口与内侧阴影绘制，保留原纹理布局。"
+        "labelKey": "shaderpack.mc_pbr.settings.shadow_sky_boundary.label",
+        "helpKey": "shaderpack.mc_pbr.settings.shadow_sky_boundary.help"
       },
       {
         "key": "shadow_resolution",
@@ -516,26 +489,20 @@
         "default": 2048,
         "choices": [
           {
-            "value": 256,
-            "label": "256"
+            "value": 256
           },
           {
-            "value": 512,
-            "label": "512"
+            "value": 512
           },
           {
-            "value": 1024,
-            "label": "1024"
+            "value": 1024
           },
           {
-            "value": 2048,
-            "label": "2048"
+            "value": 2048
           }
         ],
-        "label": "Shadow resolution",
-        "labelZH": "阴影分辨率",
-        "help": "Per-cascade shadow map size.",
-        "helpZH": "每一级阴影图的尺寸。"
+        "labelKey": "shaderpack.mc_pbr.settings.shadow_resolution.label",
+        "helpKey": "shaderpack.mc_pbr.settings.shadow_resolution.help"
       },
       {
         "key": "shadow_range",
@@ -544,10 +511,8 @@
         "default": 64,
         "min": 8,
         "max": 128,
-        "label": "Shadow range",
-        "labelZH": "阴影范围",
-        "help": "Far shadow radius in blocks; the near cascade covers a quarter.",
-        "helpZH": "远级阴影半径（格），近级为其四分之一。"
+        "labelKey": "shaderpack.mc_pbr.settings.shadow_range.label",
+        "helpKey": "shaderpack.mc_pbr.settings.shadow_range.help"
       },
       {
         "key": "shadow_interval",
@@ -556,10 +521,8 @@
         "default": 0.1,
         "min": 0,
         "max": 1,
-        "label": "Shadow update interval",
-        "labelZH": "阴影更新间隔",
-        "help": "Minimum seconds between changed shadow renders; 0 = every frame.",
-        "helpZH": "阴影变化后两次重绘的最短间隔（秒），0 为每帧。"
+        "labelKey": "shaderpack.mc_pbr.settings.shadow_interval.label",
+        "helpKey": "shaderpack.mc_pbr.settings.shadow_interval.help"
       },
       {
         "key": "shadow_strength",
@@ -568,10 +531,8 @@
         "default": 1,
         "min": 0,
         "max": 1,
-        "label": "Shadow strength",
-        "labelZH": "阴影强度",
-        "help": "Occlusion of direct sunlight only.",
-        "helpZH": "只遮挡太阳直射光。"
+        "labelKey": "shaderpack.mc_pbr.settings.shadow_strength.label",
+        "helpKey": "shaderpack.mc_pbr.settings.shadow_strength.help"
       },
       {
         "key": "shadow_bias",
@@ -580,29 +541,24 @@
         "default": 0.03,
         "min": 0,
         "max": 0.5,
-        "label": "Shadow bias",
-        "labelZH": "阴影偏移",
-        "help": "Base receiver depth bias in blocks.",
-        "helpZH": "接收面的基础深度偏移（格）。"
+        "labelKey": "shaderpack.mc_pbr.settings.shadow_bias.label",
+        "helpKey": "shaderpack.mc_pbr.settings.shadow_bias.help"
       },
       {
         "key": "water",
         "group": "water",
         "type": "bool",
         "default": true,
-        "label": "PBR water",
-        "labelZH": "PBR 水面",
-        "help": "Use the pack's water shader.",
-        "helpZH": "使用光影包的水面着色器。"
+        "labelKey": "shaderpack.mc_pbr.settings.water.label",
+        "helpKey": "shaderpack.mc_pbr.settings.water.help"
       },
       {
         "key": "water_caustics",
         "group": "water",
         "type": "bool",
         "default": true,
-        "label": "Water caustics",
-        "labelZH": "水体焦散",
-        "helpZH": "独立控制焦散亮纹，不关闭水下丁达尔光柱。"
+        "labelKey": "shaderpack.mc_pbr.settings.water_caustics.label",
+        "helpKey": "shaderpack.mc_pbr.settings.water_caustics.help"
       },
       {
         "key": "water_waves",
@@ -611,10 +567,8 @@
         "default": 0.1,
         "min": 0,
         "max": 1,
-        "label": "Ripples",
-        "labelZH": "波纹",
-        "help": "Water ripple strength.",
-        "helpZH": "水面波纹强度。"
+        "labelKey": "shaderpack.mc_pbr.settings.water_waves.label",
+        "helpKey": "shaderpack.mc_pbr.settings.water_waves.help"
       },
       {
         "key": "water_refraction",
@@ -623,10 +577,8 @@
         "default": 1,
         "min": 0,
         "max": 1,
-        "label": "Refraction",
-        "labelZH": "折射",
-        "help": "Screen-space distortion; 0 keeps undistorted transmission.",
-        "helpZH": "屏幕空间扭曲强度，0 为不扭曲。"
+        "labelKey": "shaderpack.mc_pbr.settings.water_refraction.label",
+        "helpKey": "shaderpack.mc_pbr.settings.water_refraction.help"
       },
       {
         "key": "water_density",
@@ -635,10 +587,8 @@
         "default": 1,
         "min": 0.1,
         "max": 4,
-        "label": "Absorption",
-        "labelZH": "吸收",
-        "help": "Water absorption per block.",
-        "helpZH": "每格水的光吸收。"
+        "labelKey": "shaderpack.mc_pbr.settings.water_density.label",
+        "helpKey": "shaderpack.mc_pbr.settings.water_density.help"
       },
       {
         "key": "water_foam",
@@ -647,18 +597,15 @@
         "default": 0.1,
         "min": 0,
         "max": 1,
-        "label": "Shore foam",
-        "labelZH": "岸边泡沫",
-        "help": "Subtle shoreline foam.",
-        "helpZH": "岸边的轻微泡沫。"
+        "labelKey": "shaderpack.mc_pbr.settings.water_foam.label",
+        "helpKey": "shaderpack.mc_pbr.settings.water_foam.help"
       },
       {
         "key": "underwater_fog",
         "group": "underwater",
         "type": "bool",
         "default": true,
-        "label": "Underwater fog",
-        "labelZH": "水下雾"
+        "labelKey": "shaderpack.mc_pbr.settings.underwater_fog.label"
       },
       {
         "key": "underwater_density",
@@ -667,8 +614,7 @@
         "default": 1,
         "min": 0,
         "max": 4,
-        "label": "Extinction density",
-        "labelZH": "水下消光浓度"
+        "labelKey": "shaderpack.mc_pbr.settings.underwater_density.label"
       },
       {
         "key": "underwater_distance",
@@ -677,17 +623,15 @@
         "default": 64,
         "min": 8,
         "max": 96,
-        "label": "Integration distance",
-        "labelZH": "水下积分距离（格）"
+        "labelKey": "shaderpack.mc_pbr.settings.underwater_distance.label"
       },
       {
         "key": "underwater_volumetric",
         "group": "underwater",
         "type": "bool",
         "default": true,
-        "label": "Underwater light shafts",
-        "labelZH": "水下丁达尔光柱",
-        "helpZH": "独立控制水下体积光，不关闭距离雾或焦散。"
+        "labelKey": "shaderpack.mc_pbr.settings.underwater_volumetric.label",
+        "helpKey": "shaderpack.mc_pbr.settings.underwater_volumetric.help"
       },
       {
         "key": "underwater_strength",
@@ -696,8 +640,7 @@
         "default": 1,
         "min": 0,
         "max": 4,
-        "label": "Light shaft strength",
-        "labelZH": "水下光柱强度"
+        "labelKey": "shaderpack.mc_pbr.settings.underwater_strength.label"
       },
       {
         "key": "underwater_steps",
@@ -707,18 +650,15 @@
         "min": 8,
         "max": 32,
         "integer": true,
-        "label": "Light shaft steps",
-        "labelZH": "水下光柱步数"
+        "labelKey": "shaderpack.mc_pbr.settings.underwater_steps.label"
       },
       {
         "key": "water_ssr",
         "group": "reflections",
         "type": "bool",
         "default": true,
-        "label": "Water reflections",
-        "labelZH": "水面反射",
-        "help": "Screen-space reflections on water; needs an extra scene depth pass.",
-        "helpZH": "水面屏幕空间反射，需要额外一次场景深度。"
+        "labelKey": "shaderpack.mc_pbr.settings.water_ssr.label",
+        "helpKey": "shaderpack.mc_pbr.settings.water_ssr.help"
       },
       {
         "key": "water_ssr_strength",
@@ -727,10 +667,8 @@
         "default": 1,
         "min": 0,
         "max": 1,
-        "label": "Water reflection strength",
-        "labelZH": "水面反射强度",
-        "help": "Misses keep the environment reflection.",
-        "helpZH": "未命中处保留环境反射。"
+        "labelKey": "shaderpack.mc_pbr.settings.water_ssr_strength.label",
+        "helpKey": "shaderpack.mc_pbr.settings.water_ssr_strength.help"
       },
       {
         "key": "water_ssr_distance",
@@ -739,10 +677,8 @@
         "default": 96,
         "min": 4,
         "max": 96,
-        "label": "Water ray length",
-        "labelZH": "水面射线长度",
-        "help": "Maximum reflection ray length in blocks.",
-        "helpZH": "反射射线最大长度（格）。"
+        "labelKey": "shaderpack.mc_pbr.settings.water_ssr_distance.label",
+        "helpKey": "shaderpack.mc_pbr.settings.water_ssr_distance.help"
       },
       {
         "key": "water_ssr_steps",
@@ -752,20 +688,16 @@
         "min": 8,
         "max": 48,
         "integer": true,
-        "label": "Water ray steps",
-        "labelZH": "水面射线步数",
-        "help": "Upper bound of ray steps.",
-        "helpZH": "射线步数上限。"
+        "labelKey": "shaderpack.mc_pbr.settings.water_ssr_steps.label",
+        "helpKey": "shaderpack.mc_pbr.settings.water_ssr_steps.help"
       },
       {
         "key": "block_ssr",
         "group": "reflections",
         "type": "bool",
         "default": false,
-        "label": "Block reflections",
-        "labelZH": "方块反射",
-        "help": "Screen-space reflections on smooth blocks; redraws visible terrain once.",
-        "helpZH": "光滑方块的屏幕空间反射，会多画一遍可见地形。"
+        "labelKey": "shaderpack.mc_pbr.settings.block_ssr.label",
+        "helpKey": "shaderpack.mc_pbr.settings.block_ssr.help"
       },
       {
         "key": "block_ssr_strength",
@@ -774,8 +706,7 @@
         "default": 1,
         "min": 0,
         "max": 1,
-        "label": "Block reflection strength",
-        "labelZH": "方块反射强度"
+        "labelKey": "shaderpack.mc_pbr.settings.block_ssr_strength.label"
       },
       {
         "key": "block_ssr_roughness",
@@ -784,10 +715,8 @@
         "default": 0.4,
         "min": 0.05,
         "max": 1,
-        "label": "Reflection roughness limit",
-        "labelZH": "反射粗糙度上限",
-        "help": "Roughness at which block reflections fade out.",
-        "helpZH": "粗糙度达到此值时反射完全淡出。"
+        "labelKey": "shaderpack.mc_pbr.settings.block_ssr_roughness.label",
+        "helpKey": "shaderpack.mc_pbr.settings.block_ssr_roughness.help"
       },
       {
         "key": "block_ssr_distance",
@@ -796,10 +725,8 @@
         "default": 32,
         "min": 4,
         "max": 96,
-        "label": "Block ray length",
-        "labelZH": "方块射线长度",
-        "help": "Maximum reflection ray length in blocks.",
-        "helpZH": "反射射线最大长度（格）。"
+        "labelKey": "shaderpack.mc_pbr.settings.block_ssr_distance.label",
+        "helpKey": "shaderpack.mc_pbr.settings.block_ssr_distance.help"
       },
       {
         "key": "block_ssr_steps",
@@ -809,10 +736,8 @@
         "min": 8,
         "max": 48,
         "integer": true,
-        "label": "Block ray steps",
-        "labelZH": "方块射线步数",
-        "help": "Upper bound of ray steps.",
-        "helpZH": "射线步数上限。"
+        "labelKey": "shaderpack.mc_pbr.settings.block_ssr_steps.label",
+        "helpKey": "shaderpack.mc_pbr.settings.block_ssr_steps.help"
       },
       {
         "key": "block_ssr_thickness",
@@ -821,20 +746,16 @@
         "default": 0.1,
         "min": 0.02,
         "max": 4,
-        "label": "Hit thickness",
-        "labelZH": "命中厚度",
-        "help": "Larger fills holes but widens near objects in reflections.",
-        "helpZH": "调大可补空洞，但近处物体在反射里会被拉宽。"
+        "labelKey": "shaderpack.mc_pbr.settings.block_ssr_thickness.label",
+        "helpKey": "shaderpack.mc_pbr.settings.block_ssr_thickness.help"
       },
       {
         "key": "ssao",
         "group": "ssao",
         "type": "bool",
         "default": true,
-        "label": "Contact occlusion",
-        "labelZH": "接触遮蔽",
-        "help": "Screen-space occlusion on opaque surfaces.",
-        "helpZH": "不透明表面的屏幕空间遮蔽。"
+        "labelKey": "shaderpack.mc_pbr.settings.ssao.label",
+        "helpKey": "shaderpack.mc_pbr.settings.ssao.help"
       },
       {
         "key": "ssao_strength",
@@ -843,8 +764,7 @@
         "default": 0.75,
         "min": 0,
         "max": 1.5,
-        "label": "Strength",
-        "labelZH": "强度"
+        "labelKey": "shaderpack.mc_pbr.settings.ssao_strength.label"
       },
       {
         "key": "ssao_radius",
@@ -853,10 +773,8 @@
         "default": 1.5,
         "min": 0.25,
         "max": 4,
-        "label": "Radius",
-        "labelZH": "半径",
-        "help": "Sampling radius in blocks.",
-        "helpZH": "采样半径（格）。"
+        "labelKey": "shaderpack.mc_pbr.settings.ssao_radius.label",
+        "helpKey": "shaderpack.mc_pbr.settings.ssao_radius.help"
       },
       {
         "key": "ssao_distance",
@@ -865,20 +783,16 @@
         "default": 24,
         "min": 4,
         "max": 64,
-        "label": "Fade distance",
-        "labelZH": "淡出距离",
-        "help": "Fade occlusion beyond this distance in blocks.",
-        "helpZH": "超过此距离（格）后淡出。"
+        "labelKey": "shaderpack.mc_pbr.settings.ssao_distance.label",
+        "helpKey": "shaderpack.mc_pbr.settings.ssao_distance.help"
       },
       {
         "key": "fog",
         "group": "atmosphere",
         "type": "bool",
         "default": false,
-        "label": "Fog",
-        "labelZH": "雾",
-        "help": "Distance and height atmosphere.",
-        "helpZH": "距离雾与高度雾。"
+        "labelKey": "shaderpack.mc_pbr.settings.fog.label",
+        "helpKey": "shaderpack.mc_pbr.settings.fog.help"
       },
       {
         "key": "fog_density",
@@ -887,10 +801,8 @@
         "default": 0.006,
         "min": 0,
         "max": 0.1,
-        "label": "Distance fog density",
-        "labelZH": "距离雾浓度",
-        "help": "Extinction per block.",
-        "helpZH": "每格消光。"
+        "labelKey": "shaderpack.mc_pbr.settings.fog_density.label",
+        "helpKey": "shaderpack.mc_pbr.settings.fog_density.help"
       },
       {
         "key": "fog_start",
@@ -899,10 +811,8 @@
         "default": 32,
         "min": 0,
         "max": 64,
-        "label": "Clear distance",
-        "labelZH": "清晰距离",
-        "help": "Fog-free foreground in blocks.",
-        "helpZH": "无雾前景距离（格）。"
+        "labelKey": "shaderpack.mc_pbr.settings.fog_start.label",
+        "helpKey": "shaderpack.mc_pbr.settings.fog_start.help"
       },
       {
         "key": "fog_end",
@@ -911,10 +821,8 @@
         "default": 128,
         "min": 0,
         "max": 256,
-        "label": "Opaque distance",
-        "labelZH": "完全遮蔽距离",
-        "help": "Air fog reaches full opacity here, in blocks; 0 disables. At least one block beyond the clear distance.",
-        "helpZH": "空气雾在此距离（格）达到完全不透明；0 关闭。实际值至少比清晰距离多 1 格。"
+        "labelKey": "shaderpack.mc_pbr.settings.fog_end.label",
+        "helpKey": "shaderpack.mc_pbr.settings.fog_end.help"
       },
       {
         "key": "fog_height_density",
@@ -923,10 +831,8 @@
         "default": 0.006,
         "min": 0,
         "max": 0.1,
-        "label": "Height fog density",
-        "labelZH": "高度雾浓度",
-        "help": "Maximum height-fog extinction, constant at and below the base height.",
-        "helpZH": "高度雾的最大消光，基准高度及以下保持此浓度。"
+        "labelKey": "shaderpack.mc_pbr.settings.fog_height_density.label",
+        "helpKey": "shaderpack.mc_pbr.settings.fog_height_density.help"
       },
       {
         "key": "fog_height",
@@ -935,10 +841,8 @@
         "default": 64,
         "min": -256,
         "max": 512,
-        "label": "Height fog base",
-        "labelZH": "高度雾基准",
-        "help": "Base height in MC world blocks.",
-        "helpZH": "MC 世界中的基准高度（格）。"
+        "labelKey": "shaderpack.mc_pbr.settings.fog_height.label",
+        "helpKey": "shaderpack.mc_pbr.settings.fog_height.help"
       },
       {
         "key": "fog_height_scale",
@@ -947,10 +851,8 @@
         "default": 32,
         "min": 4,
         "max": 256,
-        "label": "Height fog falloff",
-        "labelZH": "高度雾衰减",
-        "help": "Ascent above the base that halves the density, in blocks.",
-        "helpZH": "基准面以上浓度减半所需的上升高度（格）。"
+        "labelKey": "shaderpack.mc_pbr.settings.fog_height_scale.label",
+        "helpKey": "shaderpack.mc_pbr.settings.fog_height_scale.help"
       },
       {
         "key": "fog_distance",
@@ -959,20 +861,16 @@
         "default": 128,
         "min": 16,
         "max": 256,
-        "label": "Integration distance",
-        "labelZH": "积分距离",
-        "help": "Maximum atmosphere distance in blocks.",
-        "helpZH": "大气计算的最大距离（格）。"
+        "labelKey": "shaderpack.mc_pbr.settings.fog_distance.label",
+        "helpKey": "shaderpack.mc_pbr.settings.fog_distance.help"
       },
       {
         "key": "volumetric",
         "group": "atmosphere",
         "type": "bool",
         "default": true,
-        "label": "Light shafts",
-        "labelZH": "体积光",
-        "help": "Shadowed single-scattering sunlight; needs fog and shadows.",
-        "helpZH": "带阴影的单次散射阳光，需要雾和阴影。"
+        "labelKey": "shaderpack.mc_pbr.settings.volumetric.label",
+        "helpKey": "shaderpack.mc_pbr.settings.volumetric.help"
       },
       {
         "key": "volumetric_strength",
@@ -981,8 +879,7 @@
         "default": 0.8,
         "min": 0,
         "max": 3,
-        "label": "Light shaft strength",
-        "labelZH": "体积光强度"
+        "labelKey": "shaderpack.mc_pbr.settings.volumetric_strength.label"
       },
       {
         "key": "volumetric_distance",
@@ -991,10 +888,8 @@
         "default": 64,
         "min": 8,
         "max": 128,
-        "label": "Light shaft distance",
-        "labelZH": "体积光距离",
-        "help": "Maximum distance in blocks.",
-        "helpZH": "最大距离（格）。"
+        "labelKey": "shaderpack.mc_pbr.settings.volumetric_distance.label",
+        "helpKey": "shaderpack.mc_pbr.settings.volumetric_distance.help"
       },
       {
         "key": "volumetric_steps",
@@ -1004,18 +899,15 @@
         "min": 8,
         "max": 32,
         "integer": true,
-        "label": "Light shaft steps",
-        "labelZH": "体积光步数"
+        "labelKey": "shaderpack.mc_pbr.settings.volumetric_steps.label"
       },
       {
         "key": "bloom",
         "group": "bloom",
         "type": "bool",
         "default": true,
-        "label": "Bloom",
-        "labelZH": "泛光",
-        "help": "Soft highlight bloom.",
-        "helpZH": "柔和的高光泛光。"
+        "labelKey": "shaderpack.mc_pbr.settings.bloom.label",
+        "helpKey": "shaderpack.mc_pbr.settings.bloom.help"
       },
       {
         "key": "bloom_strength",
@@ -1024,8 +916,7 @@
         "default": 0.35,
         "min": 0,
         "max": 2,
-        "label": "Strength",
-        "labelZH": "强度"
+        "labelKey": "shaderpack.mc_pbr.settings.bloom_strength.label"
       },
       {
         "key": "bloom_threshold",
@@ -1034,10 +925,8 @@
         "default": 0.65,
         "min": 0,
         "max": 1,
-        "label": "Threshold",
-        "labelZH": "阈值",
-        "help": "Highlight threshold after tone mapping.",
-        "helpZH": "色调映射后的高光阈值。"
+        "labelKey": "shaderpack.mc_pbr.settings.bloom_threshold.label",
+        "helpKey": "shaderpack.mc_pbr.settings.bloom_threshold.help"
       },
       {
         "key": "bloom_knee",
@@ -1046,10 +935,8 @@
         "default": 0.2,
         "min": 0,
         "max": 0.5,
-        "label": "Soft knee",
-        "labelZH": "过渡宽度",
-        "help": "Soft threshold transition width.",
-        "helpZH": "阈值的柔和过渡宽度。"
+        "labelKey": "shaderpack.mc_pbr.settings.bloom_knee.label",
+        "helpKey": "shaderpack.mc_pbr.settings.bloom_knee.help"
       },
       {
         "key": "bloom_radius",
@@ -1058,17 +945,14 @@
         "default": 1,
         "min": 0.25,
         "max": 4,
-        "label": "Radius",
-        "labelZH": "半径",
-        "help": "Blur radius multiplier.",
-        "helpZH": "模糊半径倍数。"
+        "labelKey": "shaderpack.mc_pbr.settings.bloom_radius.label",
+        "helpKey": "shaderpack.mc_pbr.settings.bloom_radius.help"
       }
     ],
     "presets": [
       {
         "id": "minimum",
-        "label": "Minimum",
-        "labelZH": "最低",
+        "labelKey": "shaderpack.mc_pbr.presets.minimum.label",
         "values": {
           "color_interpolation": false,
           "pbr_interpolation": false,
@@ -1090,8 +974,7 @@
       },
       {
         "id": "low",
-        "label": "Low",
-        "labelZH": "低",
+        "labelKey": "shaderpack.mc_pbr.presets.low.label",
         "values": {
           "color_interpolation": false,
           "pbr_interpolation": false,
@@ -1123,8 +1006,7 @@
       },
       {
         "id": "medium",
-        "label": "Medium",
-        "labelZH": "中",
+        "labelKey": "shaderpack.mc_pbr.presets.medium.label",
         "values": {
           "color_interpolation": false,
           "pbr_interpolation": true,
@@ -1156,8 +1038,7 @@
       },
       {
         "id": "high",
-        "label": "High",
-        "labelZH": "高",
+        "labelKey": "shaderpack.mc_pbr.presets.high.label",
         "values": {
           "color_interpolation": false,
           "pbr_interpolation": true,
@@ -1189,8 +1070,7 @@
       },
       {
         "id": "full",
-        "label": "Full",
-        "labelZH": "完全",
+        "labelKey": "shaderpack.mc_pbr.presets.full.label",
         "values": {
           "color_interpolation": false,
           "pbr_interpolation": true,
@@ -1713,6 +1593,6 @@
         "shadow_atlas": "sunlight"
       }
     },
-    "build": "ebf52ea2239c9ec20cf620218c718b339b3b1c9388d7436a8a2c9c511d5d71de"
+    "build": "48d44e512b35aac53cc2aabac79f4ef68287ac4cd42905479c874eef8333fe6a"
   }
 }

@@ -158,7 +158,7 @@ local function refresh()
 			builtins[reference], builtinOrder[#builtinOrder + 1] = preset, reference
 		end
 		if #builtinOrder == 0 then
-			builtins["builtin:default"] = { label = "Default", labelZH = "默认", values = {} }
+			builtins["builtin:default"] = { labelKey = "config.shader_pack.default_preset", values = {} }
 			builtinOrder[1], defaultPreset = "builtin:default", "builtin:default"
 		else
 			defaultPreset = "builtin:" .. definition.defaultPreset
@@ -229,8 +229,7 @@ function Settings.Presets()
 	local result = {}
 	if not Settings.pack then return result end
 	for _, reference in ipairs( builtinOrder ) do
-		local preset = builtins[reference]
-		result[#result + 1] = { value = reference, label = preset.label or preset.id, labelZH = preset.labelZH, builtin = true }
+		result[#result + 1] = { value = reference, labelKey = builtins[reference].labelKey, builtin = true }
 	end
 	local names = file.Find( configDir( Settings.pack ) .. "/*.json", "DATA", "nameasc" )
 	for _, name in ipairs( names ) do
@@ -238,7 +237,8 @@ function Settings.Presets()
 		if reference then
 			local preset, err = readPreset( reference )
 			if preset then
-				result[#result + 1] = { value = reference, label = preset.name, builtin = false }
+				-- A user preset's name is the player's own text, shown as typed.
+				result[#result + 1] = { value = reference, text = preset.name, builtin = false }
 			else
 				MC.Fault( "render_pack_preset_file", "%s: %s", name, tostring( err ) )
 			end
@@ -301,7 +301,7 @@ function Settings.SavePreset( name, overwrite )
 	local reference = "user:" .. string.lower( name ) .. ".json"
 	local previous
 	for _, entry in ipairs( Settings.Presets() ) do
-		if not entry.builtin and entry.value ~= reference and string.lower( entry.label ) == string.lower( name ) then
+		if not entry.builtin and entry.value ~= reference and string.lower( entry.text ) == string.lower( name ) then
 			previous = entry.value
 			break
 		end
@@ -379,20 +379,19 @@ end
 
 -- Rows for the mc_config "shader pack" category: the pack selector, then the
 -- active pack's settings under their group headings. Rebuilt on every open.
-local function text( en, zh ) return { label = en, labelZH = zh } end
-
+-- Every label is a key from the pack's descriptor or the engine's config
+-- dictionary; nothing here depends on the current language.
 function Settings.ConfigItems()
 	refresh()
 	local runtime = MC.RenderPackRuntime
 	local packs = {}
 	for _, entry in ipairs( MC.RenderPackRegistry.List( "pack" ) ) do
-		packs[#packs + 1] = { value = entry.id, label = entry.name .. "  (" .. entry.id .. ")" }
+		packs[#packs + 1] = { value = entry.id, labelKey = "config.shader_pack.pack_choice",
+			labelVars = { name = { key = entry.nameKey }, id = entry.id } }
 	end
 	local items = { {
 		name = "mc_render_pack select", kind = "choice", choices = packs,
-		label = "Shader pack", labelZH = "光影包",
-		help = "Switches immediately and is remembered for the next join.",
-		helpZH = "立即切换，下次进入时沿用。",
+		labelKey = "config.shader_pack.select.label", helpKey = "config.shader_pack.select.help",
 		get = function() return runtime.Selected() end,
 		set = function( value )
 			local ok, err = runtime.Choose( value )
@@ -401,7 +400,7 @@ function Settings.ConfigItems()
 	} }
 	if Settings.pack then
 		items[#items + 1] = { name = "mc_render_pack_preset", kind = "preset",
-			label = "Preset", labelZH = "预设", get = Settings.CurrentPreset }
+			labelKey = "config.shader_pack.preset.label", helpKey = false, get = Settings.CurrentPreset }
 	end
 	local groupNames, counts, previous = {}, {}, nil
 	for _, group in ipairs( Settings.groups ) do groupNames[group.id] = group end
@@ -410,30 +409,28 @@ function Settings.ConfigItems()
 		counts[group] = ( counts[group] or 0 ) + 1
 	end
 	if Settings.pack and #order == 0 then
-		local heading = text( "This pack has no adjustable settings", "这个光影包没有可调设置" )
-		heading.kind, heading.count = "heading", ""
-		items[#items + 1] = heading
+		items[#items + 1] = { kind = "heading", count = "", labelKey = "config.shader_pack.no_settings" }
 	end
 	for _, key in ipairs( order ) do
 		local spec = specs[key]
 		local group = spec.group or ""
 		if group ~= previous then
-			local named = groupNames[group] or {}
-			local heading = text( named.label or group, named.labelZH )
-			heading.kind, heading.count = "heading", counts[group]
-			items[#items + 1] = heading
+			local named = groupNames[group]
+			items[#items + 1] = { kind = "heading", count = counts[group],
+				labelKey = named and named.labelKey or "config.shader_pack.ungrouped" }
 			previous = group
 		end
-		local range = spec.type == "number" and string.format( " (%g – %g)", spec.min, spec.max ) or ""
 		local item = { name = "mc_render_pack_set " .. key, kind = spec.type,
-			label = spec.label or key, labelZH = spec.labelZH,
-			help = ( spec.help or "" ) .. range, helpZH = ( spec.helpZH or spec.help or "" ) .. range,
+			labelKey = spec.labelKey, helpKey = spec.helpKey or false,
+			helpSuffix = spec.type == "number" and string.format( "(%g – %g)", spec.min, spec.max ) or nil,
 			get = function() return values[key] end,
 			set = function( value ) return Settings.Set( key, value ) end }
 		if spec.type == "choice" then
 			item.choices = {}
 			for index, choice in ipairs( spec.choices ) do
-				item.choices[index] = { value = choice.value, label = choice.label or tostring( choice.value ), labelZH = choice.labelZH }
+				-- Without a key the value itself is the label, e.g. 2048.
+				item.choices[index] = { value = choice.value, labelKey = choice.labelKey,
+					text = choice.labelKey == nil and tostring( choice.value ) or nil }
 			end
 		end
 		items[#items + 1] = item
@@ -449,8 +446,8 @@ local function describe( key )
 		for index, choice in ipairs( spec.choices ) do list[index] = tostring( choice.value ) end
 		range = " {" .. table.concat( list, "," ) .. "}"
 	end
-	local label = MC.Language and MC.Language() == "zh_cn" and spec.labelZH or spec.label
-	return string.format( "%-24s = %-8s default %s%s  %s", key, tostring( value ), tostring( spec.default ), range, label or "" )
+	return string.format( "%-24s = %-8s default %s%s  %s", key, tostring( value ), tostring( spec.default ), range,
+		MC.T( spec.labelKey ) )
 end
 
 local function completeKeys( command, arguments )
@@ -494,7 +491,9 @@ concommand.Add( "mc_render_pack_preset", function( _, _, args )
 	elseif action == nil or action == "list" then
 		local current = Settings.CurrentPreset()
 		print( "[MC render pack] preset: " .. tostring( current ) )
-		for _, preset in ipairs( Settings.Presets() ) do print( "  " .. preset.value .. "  " .. preset.label ) end
+		for _, preset in ipairs( Settings.Presets() ) do
+			print( "  " .. preset.value .. "  " .. ( preset.text or MC.T( preset.labelKey ) ) )
+		end
 		return
 	else print( 'usage: mc_render_pack_preset list | apply <id> | save "<name>" [confirm] | delete <id> confirm' ) return end
 	print( ok and "[MC render pack] preset saved/applied" or "[MC render pack] " .. tostring( err ) )

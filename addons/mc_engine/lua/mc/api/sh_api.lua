@@ -157,6 +157,19 @@ local function reportIgnoredCreativeSlot( id, definition )
 	if ErrorNoHalt then ErrorNoHalt( message ) else print( message ) end
 end
 
+-- The tab title is a translation key, by default itemGroup.<namespace>.<path>
+-- with "/" read as ".". The owning addon ships the text as JSON below
+-- data_static/mc/i18n/ (docs/localization.md); no inline title is accepted.
+local function creativeTitleKey( id, explicit )
+	local key = explicit
+	if key == nil then
+		local namespace, path = string.match( id, "^([^:]+):(.+)$" )
+		key = "itemGroup." .. namespace .. "." .. string.gsub( path, "/", "." )
+	end
+	if not ( MC.I18n and MC.I18n.ValidKey( key ) ) then return nil end
+	return key
+end
+
 function Creative.RegisterCategory( definition )
 	if MC.BlockStateRegistryFrozen or MC.ModBlockRegistryFrozen or MC.API._freezeStarted
 		or MC.ModCreativeRegistryFrozen or ( MC.ModRegistry and MC.ModRegistry.creativeFrozen ) then
@@ -166,8 +179,9 @@ function Creative.RegisterCategory( definition )
 	local id = normalizeCreativeId( definition.id or definition.key or definition.name )
 	if not id then return false, "invalid_identifier" end
 	if creativeRegistry.creativeCategories[id] then return false, "duplicate_creative_category" end
-	local title = tostring( definition.title or id )
-	local titleZH = tostring( definition.titleZH or title )
+	if definition.title ~= nil or definition.titleZH ~= nil then return false, "inline_title_unsupported" end
+	local titleKey = creativeTitleKey( id, definition.titleKey )
+	if not titleKey then return false, "invalid_title_key" end
 	local icon = definition.icon ~= nil
 		and ( MC.ValidateModContentIdentifier and MC.ValidateModContentIdentifier( definition.icon )
 			or MC.NormalizeResourceLocation( definition.icon ) ) or nil
@@ -182,8 +196,8 @@ function Creative.RegisterCategory( definition )
 	if not page then return false, "creative_slots_exhausted" end
 	reportIgnoredCreativeSlot( id, definition )
 	local record = {
-		id = id, key = id, row = row, column = column, page = page, title = title, titleZH = titleZH,
-		titleKey = definition.titleKey, icon = icon,
+		id = id, key = id, row = row, column = column, page = page,
+		titleKey = titleKey, icon = icon,
 		background = background, showTitle = definition.showTitle ~= false,
 		canScroll = definition.canScroll ~= false,
 	}
@@ -2045,12 +2059,34 @@ end
 -- append, so registering twice with the same category id is a no-op.
 --
 --   scope    "client" | "server" (server entries are admin-only and networked)
---   group    { id, label, zhLabel }
---   category { id, group, label, zhLabel, description, descriptionZH, items = {
---                { name = "cvar_name", label, labelZH, kind = "bool|number|choice|string",
---                  help, helpZH, unit, choices = { { value, label, labelZH }, ... } }, ... } }
+--   group    { id, labelKey? }
+--   category { id, group, labelKey?, descriptionKey?, items = {
+--                { name = "cvar_name", kind = "bool|number|choice|string", unit?,
+--                  labelKey?, helpKey?, choices = { { value, labelKey? }, ... } }, ... } }
+--
+-- Display text is never inline: every label, description, help, choice and
+-- unit is a translation key, by default derived from the ids
+-- (config.group.<id>, config.category.<id>.label|.description,
+-- config.setting.<name>.label|.help|.choice.<value>, config.unit.<unit>).
+-- The registering addon ships those keys as JSON below
+-- data_static/mc/i18n/ (docs/localization.md).
 API.Config = API.Config or {}
 local Config = API.Config
+
+local CONFIG_TEXT_FIELDS = { "label", "zhLabel", "labelZH", "description", "descriptionZH", "help", "helpZH" }
+
+local function inlineConfigText( entry )
+	for _, field in ipairs( CONFIG_TEXT_FIELDS ) do
+		if entry[field] ~= nil then return field end
+	end
+end
+
+local function validConfigKeys( kind, entry )
+	for _, key in ipairs( MC.ConfigText.Keys( kind, entry ) ) do
+		if not MC.I18n.ValidKey( key ) then return false end
+	end
+	return true
+end
 
 local function configScope( scope )
 	if scope ~= "client" and scope ~= "server" then return nil end
@@ -2079,12 +2115,12 @@ end
 function Config.RegisterGroup( scope, group )
 	if not configScope( scope ) then return false, "config_ui_unavailable" end
 	if not istable( group ) or not isstring( group.id ) or group.id == "" then return false, "invalid_group" end
+	if inlineConfigText( group ) then return false, "inline_text_unsupported" end
+	if group.labelKey ~= nil and not isstring( group.labelKey ) or not validConfigKeys( "group", group ) then
+		return false, "invalid_text_key"
+	end
 	if Config.HasGroup( scope, group.id ) then return true end
-	table.insert( MC.ConfigGroups[scope], {
-		id = group.id,
-		label = tostring( group.label or group.id ),
-		zhLabel = tostring( group.zhLabel or group.label or group.id ),
-	} )
+	table.insert( MC.ConfigGroups[scope], { id = group.id, labelKey = group.labelKey } )
 	return true
 end
 
@@ -2096,10 +2132,19 @@ function Config.RegisterCategory( scope, category )
 	if not istable( category.items ) or #category.items == 0 then return false, "invalid_items" end
 	if Config.HasCategory( scope, category.id ) then return true end
 
+	if inlineConfigText( category ) then return false, "inline_text_unsupported" end
+	if not validConfigKeys( "category", category ) then return false, "invalid_text_key" end
 	local entry = deepCopy( category )
 	entry.scope = scope
 	for _, item in ipairs( entry.items ) do
 		if not isstring( item.name ) or item.name == "" then return false, "invalid_item" end
+		if inlineConfigText( item ) then return false, "inline_text_unsupported" end
+		if istable( item.choices ) then
+			for _, choice in ipairs( item.choices ) do
+				if not istable( choice ) or inlineConfigText( choice ) then return false, "inline_text_unsupported" end
+			end
+		end
+		if not validConfigKeys( "item", item ) then return false, "invalid_text_key" end
 		item.category = entry.id
 		item.scope = scope
 		item.kind = item.kind or "number"

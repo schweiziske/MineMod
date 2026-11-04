@@ -14,7 +14,7 @@ local ok, err = MC.API.Items.Register( {
 } )
 MC.Check( ok, "gmod_weapon_item_registration", "%s", tostring( err ) )
 ok, err = MC.API.Creative.RegisterCategory( {
-	id = TAB, title = "GMod Weapons", titleZH = "GMod 武器", icon = ITEM,
+	id = TAB, icon = ITEM,
 	background = "items", showTitle = true, canScroll = true,
 } )
 MC.Check( ok, "gmod_weapon_tab_registration", "%s", tostring( err ) )

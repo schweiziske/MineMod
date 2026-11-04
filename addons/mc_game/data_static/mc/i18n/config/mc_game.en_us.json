@@ -1,0 +1,11 @@
+{
+  "locale": "en_us",
+  "entries": {
+    "category.inventory_ui.description": "Minecraft inventory interface scale and layout.",
+    "category.inventory_ui.label": "Inventory UI",
+    "setting.mc_inventory_return_button.help": "Show the button below the player inventory. Changes apply immediately.",
+    "setting.mc_inventory_return_button.label": "Return to GMod button",
+    "setting.mc_inventory_ui_scale.help": "Maximum GUI scale; 0 uses the largest integer scale allowed by the current resolution.",
+    "setting.mc_inventory_ui_scale.label": "Interface scale"
+  }
+}

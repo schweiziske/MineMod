@@ -543,8 +543,7 @@ MC.CreativeCategories = MC.CreativeCategories or {
 }
 
 local function creativeCategoryLabel( category )
-	if category.labelKey then return L( category.labelKey ) end
-	return tostring( category.label or category.id )
+	return L( category.labelKey )
 end
 
 function MC.RefreshCreativeCategories()
@@ -556,7 +555,6 @@ function MC.RefreshCreativeCategories()
 			MC.CreativeCategories[#MC.CreativeCategories + 1] = {
 				id = category.id,
 				labelKey = category.titleKey,
-				label = category.title,
 			}
 			seen[category.id] = true
 		end

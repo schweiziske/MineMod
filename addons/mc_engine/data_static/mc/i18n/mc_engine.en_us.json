@@ -1,5 +1,11 @@
 {
   "locale": "en_us",
-  "aliases": ["en", "english"],
-  "entries": {}
+  "aliases": [
+    "en",
+    "english"
+  ],
+  "entries": {
+    "itemGroup.mcswep.color_blocks": "Color Blocks",
+    "itemGroup.mcswep.slopes": "Slopes"
+  }
 }

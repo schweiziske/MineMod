@@ -1,0 +1,5 @@
+{
+  "mc:pbr": { "nameKey": "shaderpack.mc_pbr.name" },
+  "mc:vanilla": { "nameKey": "shaderpack.mc_vanilla.name" },
+  "mc_skybox:captured": { "nameKey": "shaderpack.mc_skybox_captured.name" }
+}

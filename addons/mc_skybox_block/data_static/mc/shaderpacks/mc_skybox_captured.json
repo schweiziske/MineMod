@@ -4,7 +4,7 @@
   "id": "mc_skybox:captured",
   "definition": {
     "schema": 1,
-    "name": "Captured Source Sky",
+    "nameKey": "shaderpack.mc_skybox_captured.name",
     "build": "cdb0a4c8b503e9f179794cc42e41ccb283c0834f7d01daa2ada206a444982972",
     "abi": 1,
     "layout": "mc:quad_corners_v1",

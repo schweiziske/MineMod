@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
+const { withDisplay } = require("./descriptor_display.cjs");
 const ROOT = path.resolve(__dirname, "../..");
 const SOURCE = path.join(__dirname, "shadersrc/l2/vanilla");
 const ADDON = path.join(ROOT, "addons/mc_shaderpack_vanilla");
@@ -197,13 +198,13 @@ function packDefinition(manifest) {
         pixel: manifest.programs[key].name, pixelHash: manifest.programs[key].sha256 };
     }
   }
-  return {
-    schema: 1, name: "Vanilla", build: manifest.build, abi: 1,
+  return withDisplay("mc:vanilla", {
+    schema: 1, build: manifest.build, abi: 1,
     layout: "mc:quad_corners_v1", adapter: manifest.binding.id,
     programs, resources: {}, passes,
     implements: { "mc:terrain": { contract: 1,
       passes: ["terrain_opaque", "terrain_cutout", "terrain_translucent"] } },
-  };
+  });
 }
 
 function descriptorDocument(manifest) {
@@ -226,15 +227,32 @@ function validatePublishedBuild(manifest) {
   }
 }
 
-function publishDescriptor(manifest) {
-  validatePublishedBuild(manifest);
+function writeDescriptor(document) {
   fs.mkdirSync(path.dirname(DESCRIPTOR), { recursive: true });
   const temporary = DESCRIPTOR + `.tmp-${process.pid}`;
-  fs.writeFileSync(temporary, JSON.stringify(descriptorDocument(manifest), null, 2) + "\n", { flag: "wx" });
+  fs.writeFileSync(temporary, JSON.stringify(document, null, 2) + "\n", { flag: "wx" });
   fs.renameSync(temporary, DESCRIPTOR);
 }
 
+function publishDescriptor(manifest) {
+  validatePublishedBuild(manifest);
+  writeDescriptor(descriptorDocument(manifest));
+}
+
+// Display keys are no build input: refresh them in the published descriptor
+// without compiling or touching the programs and their build.
+function publishDisplay() {
+  const document = JSON.parse(fs.readFileSync(DESCRIPTOR, "utf8"));
+  document.definition = withDisplay(document.id, document.definition);
+  writeDescriptor(document);
+}
+
 function main(argv) {
+  if (argv.length === 1 && argv[0] === "--display-only") {
+    publishDisplay();
+    console.log(`Published display keys; programs and build unchanged\nDescriptor: ${DESCRIPTOR}`);
+    return;
+  }
   const flags = {};
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];

@@ -23,8 +23,6 @@ local function registerColors()
 
 	local ok, result = API.Creative.RegisterCategory( {
 		id = CATEGORY,
-		title = "Color Blocks",
-		titleZH = "色块",
 		icon = colors[1].mcid,
 		background = "items",
 		showTitle = true,

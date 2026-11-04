@@ -4,6 +4,10 @@
 -- Copy it into a third-party addon's shared autorun directory (and rename the
 -- namespace) to register one block, one item, and one CreativeModeTab-shaped
 -- category without editing MCSWEP.
+--
+-- Display text is not written here. Copy examples/data_static/ into the root of
+-- the same addon as well: its JSON files under data_static/mc/i18n/ provide the
+-- translation keys this file uses (see docs/localization.md).
 
 local function registerExampleContent( context )
 	local api = context and context.api or MC and MC.API
@@ -46,10 +50,9 @@ local function registerExampleContent( context )
 
 	-- The tab slot is assigned by the registry; a definition never picks its own
 	-- page/row/column, so two addons shipped separately cannot collide.
+	-- The tab title is the key itemGroup.example.building, derived from the id.
 	local categoryOK, category = api.Creative.RegisterCategory( {
 		id = "example:building",
-		title = "Example Building",
-		titleZH = "示例建筑",
 		icon = "example:polished_basalt",
 		showTitle = true,
 		canScroll = true,

@@ -17,6 +17,8 @@ local SHARED = {
 	-- MC.Fault / MC.Check / MC.Need, so the reporter has to exist before any of
 	-- them run. It has no dependencies of its own.
 	"mc/sh_fault.lua",
+	-- Translation queries are available to every later file, at load time too.
+	"mc/sh_i18n.lua",
 	"mc/state/sh_network_protocol.lua",
 	"mc/sh_config.lua",
 	"mc/sh_game_mode.lua",
@@ -24,7 +26,6 @@ local SHARED = {
 	"mc/sh_world_adapter.lua",
 	"mc/sh_config_ui.lua",
 	"mc/sh_daycycle.lua",
-	"mc/sh_i18n.lua",
 	"mc/generated/sh_generated_tiles.lua",
 	"mc/generated/sh_generated_block_animations_default.lua",
 	"mc/generated/sh_generated_block_animations_programmer_art.lua",

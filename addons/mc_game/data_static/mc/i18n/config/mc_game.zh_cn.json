@@ -1,0 +1,11 @@
+{
+  "locale": "zh_cn",
+  "entries": {
+    "category.inventory_ui.description": "Minecraft 物品栏界面尺寸与布局。",
+    "category.inventory_ui.label": "物品栏界面",
+    "setting.mc_inventory_return_button.help": "显示玩家物品栏下方的返回按钮，修改后立即生效。",
+    "setting.mc_inventory_return_button.label": "显示返回 GMod 按钮",
+    "setting.mc_inventory_ui_scale.help": "最大界面缩放；0 表示根据当前分辨率自动使用可用的最大整数缩放。",
+    "setting.mc_inventory_ui_scale.label": "界面尺寸"
+  }
+}

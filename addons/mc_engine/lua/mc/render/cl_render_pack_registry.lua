@@ -122,8 +122,9 @@ end
 function Catalog.List( kind )
 	local result = {}
 	for id, entry in pairs( state[kind] ) do
-		result[#result + 1] = { id = id, name = entry.definition.name, build = entry.definition.build,
-			source = entry.source, revision = entry.revision }
+		local definition = entry.definition
+		result[#result + 1] = { id = id, nameKey = definition.nameKey, descriptionKey = definition.descriptionKey,
+			build = definition.build, source = entry.source, revision = entry.revision }
 	end
 	table.sort( result, function( a, b ) return a.id < b.id end )
 	return result

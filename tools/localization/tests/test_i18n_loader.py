@@ -459,6 +459,15 @@ def test_named_parameters():
         check("i18n_invalid_key" in rt.faults(), "a non-string key is a fault")
 
 
+def test_positional_parameters():
+    with Scenario() as s:
+        s.fragment("addon_a", "ui/en.json", "en_us", {"durability": "Durability: {1} / {2}", "mixed": "{1} of {name}"})
+        rt = s.runtime()
+        eq(T(rt, "ui.durability", [12, 250]), "Durability: 12 / 250")
+        eq(T(rt, "ui.mixed", {1: "one", "name": "all"}), "one of all")
+        eq(T(rt, "ui.durability", {"1": "string key"}), "Durability: string key / {2}")
+
+
 def test_nested_specs_translate_in_the_same_locale_and_strings_stay_literal():
     with Scenario() as s:
         s.fragment("addon_a", "ui/en.json", "en_us", {"item": "{count} x {name}", "stone": "Stone", "wrap": "[{inner}]"})
@@ -625,7 +634,10 @@ def test_repository_fragments_load_cleanly():
     entries = repo_entries()
     en, zh = set(entries["en_us"]), set(entries["zh_cn"])
     eq(sorted(zh - en), [], "zh_cn keys without an en_us original")
-    eq(sorted(en - zh), [], "en_us keys without a zh_cn translation")
+    # A language without a singular form only provides <key>.other.
+    untranslated = sorted(key for key in en - zh
+                          if not (key.endswith(".one") and key[:-4] + ".other" in zh))
+    eq(untranslated, [], "en_us keys without a zh_cn translation")
 
 
 if __name__ == "__main__":

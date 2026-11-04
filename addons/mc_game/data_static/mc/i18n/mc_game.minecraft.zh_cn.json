@@ -1,0 +1,21 @@
+{
+  "locale": "zh_cn",
+  "entries": {
+    "itemGroup.buildingBlocks": "建筑方块",
+    "itemGroup.coloredBlocks": "染色方块",
+    "itemGroup.combat": "战斗用品",
+    "itemGroup.consumables": "消耗品",
+    "itemGroup.crafting": "合成用品",
+    "itemGroup.foodAndDrink": "食物与饮品",
+    "itemGroup.functional": "功能方块",
+    "itemGroup.hotbar": "已保存的快捷栏",
+    "itemGroup.ingredients": "原材料",
+    "itemGroup.inventory": "生存模式物品栏",
+    "itemGroup.natural": "自然方块",
+    "itemGroup.op": "管理员用品",
+    "itemGroup.redstone": "红石方块",
+    "itemGroup.search": "搜索物品",
+    "itemGroup.spawnEggs": "刷怪蛋",
+    "itemGroup.tools": "工具与实用物品"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "locale": "en_us",
+  "entries": {
+    "itemGroup.buildingBlocks": "Building Blocks",
+    "itemGroup.coloredBlocks": "Colored Blocks",
+    "itemGroup.combat": "Combat",
+    "itemGroup.consumables": "Consumables",
+    "itemGroup.crafting": "Crafting",
+    "itemGroup.foodAndDrink": "Food & Drinks",
+    "itemGroup.functional": "Functional Blocks",
+    "itemGroup.hotbar": "Saved Hotbars",
+    "itemGroup.ingredients": "Ingredients",
+    "itemGroup.inventory": "Survival Inventory",
+    "itemGroup.natural": "Natural Blocks",
+    "itemGroup.op": "Operator Utilities",
+    "itemGroup.redstone": "Redstone Blocks",
+    "itemGroup.search": "Search Items",
+    "itemGroup.spawnEggs": "Spawn Eggs",
+    "itemGroup.tools": "Tools & Utilities"
+  }
+}

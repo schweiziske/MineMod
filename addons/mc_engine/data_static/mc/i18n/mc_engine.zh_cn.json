@@ -1,5 +1,13 @@
 {
   "locale": "zh_cn",
-  "aliases": ["zh", "zh_hans", "chinese", "schinese"],
-  "entries": {}
+  "aliases": [
+    "zh",
+    "zh_hans",
+    "chinese",
+    "schinese"
+  ],
+  "entries": {
+    "itemGroup.mcswep.color_blocks": "色块",
+    "itemGroup.mcswep.slopes": "斜坡"
+  }
 }

@@ -24,9 +24,28 @@ local function countServerConfigValues()
 	return count
 end
 
+-- Entries whose choices only the server knows, such as its loaded locales.
+local function serverChoiceLists()
+	local lists = {}
+	for _, category in ipairs( MC.ConfigConVars.server or {} ) do
+		for _, item in ipairs( category.items or {} ) do
+			if item.serverChoices and #lists < 255 then
+				local values = {}
+				for index, entry in ipairs( item.serverChoices() ) do
+					if index > 255 then break end
+					values[index] = tostring( entry.value )
+				end
+				lists[#lists + 1] = { name = item.name, values = values }
+			end
+		end
+	end
+	return lists
+end
+
 local function sendServerConfigValues( ply )
 	if not IsValid( ply ) then return end
 
+	local lists = serverChoiceLists()
 	net.Start( "mc_config_values" )
 		net.WriteUInt( countServerConfigValues(), 12 )
 		for _, category in ipairs( MC.ConfigConVars.server or {} ) do
@@ -37,6 +56,12 @@ local function sendServerConfigValues( ply )
 					net.WriteString( cvar:GetString() )
 				end
 			end
+		end
+		net.WriteUInt( #lists, 8 )
+		for _, list in ipairs( lists ) do
+			net.WriteString( list.name )
+			net.WriteUInt( #list.values, 8 )
+			for _, value in ipairs( list.values ) do net.WriteString( value ) end
 		end
 	net.Send( ply )
 end

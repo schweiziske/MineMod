@@ -361,30 +361,19 @@ UI.ReturnButtonConVar = UI.ReturnButtonConVar or createClientSetting( "mc_invent
 -- mc_config is engine-owned, so the optional game layer contributes its row
 -- through the public metadata API instead of making mc_engine hard-code a
 -- mc_game ConVar. RegisterCategory is idempotent across client autorefreshes.
+-- The texts are mc_game's config.* keys (data_static/mc/i18n/config/).
 local configAPI = MC.API and MC.API.Config
 if configAPI and configAPI.RegisterCategory then
 	local configOK, configError = configAPI.RegisterCategory( "client", {
 		id = "inventory_ui",
 		group = "interface",
-		label = "Inventory UI",
-		zhLabel = "物品栏界面",
-		description = "Minecraft inventory interface scale and layout.",
-		descriptionZH = "Minecraft 物品栏界面尺寸与布局。",
 		items = { {
 			name = "mc_inventory_ui_scale",
-			label = "Interface scale",
-			labelZH = "界面尺寸",
 			kind = "number",
-			help = "Maximum GUI scale; 0 uses the largest integer scale allowed by the current resolution.",
-			helpZH = "最大界面缩放；0 表示根据当前分辨率自动使用可用的最大整数缩放。",
 			unit = "scale",
 		}, {
 			name = "mc_inventory_return_button",
-			label = "Return to GMod button",
-			labelZH = "显示返回 GMod 按钮",
 			kind = "bool",
-			help = "Show the button below the player inventory. Changes apply immediately.",
-			helpZH = "显示玩家物品栏下方的返回按钮，修改后立即生效。",
 		} },
 	} )
 	if configOK == false then UI.ConfigRegistrationError = tostring( configError or "config_registration_failed" ) end

@@ -117,8 +117,6 @@ local function tabRows()
 				column = math.Clamp( math.floor( tonumber( source.column ) or 0 ), 0, 6 ),
 				page = math.max( 0, math.floor( tonumber( source.page ) or 0 ) ),
 				pinned = source.key == "search" or source.key == "inventory",
-				title = tostring( source.title or source.key ),
-				titleZH = tostring( source.titleZH or source.title or source.key ),
 				titleKey = source.titleKey,
 				showTitle = creativeTabShowsTitle( source ),
 				canScroll = source.canScroll ~= false,
@@ -132,10 +130,10 @@ local function tabRows()
 	return result
 end
 
+-- Looked up on every draw, so a language change needs no tab rebuild.
 local function tabTitle( tab )
 	if not tab then return "" end
-	if MC.Language and MC.Language() == "zh_cn" then return tab.titleZH or tab.title end
-	return tab.title
+	return MC.T( tab.titleKey )
 end
 
 function UI.RefreshCreativeTabs()

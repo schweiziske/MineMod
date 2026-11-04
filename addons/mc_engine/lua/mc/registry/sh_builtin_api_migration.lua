@@ -103,8 +103,6 @@ local function registerBuiltinOakSlope()
 	-- allocated slot.
 	local categoryOK, category = api.Creative.RegisterCategory( {
 			id = CATEGORY_ID,
-			title = "Slopes",
-			titleZH = "斜坡",
 			icon = BLOCK_ID,
 			background = "items",
 			showTitle = true,

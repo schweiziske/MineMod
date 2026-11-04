@@ -4,7 +4,7 @@
   "id": "mc:vanilla",
   "definition": {
     "schema": 1,
-    "name": "Vanilla",
+    "nameKey": "shaderpack.mc_vanilla.name",
     "build": "4f51b9c300af696c0655324238b09c1e92cab49696a941a0029f81bd0c53a618",
     "abi": 1,
     "layout": "mc:quad_corners_v1",

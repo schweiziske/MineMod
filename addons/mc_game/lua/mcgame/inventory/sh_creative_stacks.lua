@@ -72,8 +72,6 @@ function MC.GetCreativeTabCatalog()
 				row = category.row,
 				column = category.column,
 				page = category.page,
-				title = category.title,
-				titleZH = category.titleZH,
 				titleKey = category.titleKey,
 				icon = category.icon,
 				background = category.background,

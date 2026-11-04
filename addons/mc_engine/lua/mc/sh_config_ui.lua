@@ -1,25 +1,95 @@
 --[[----------------------------------------------------------------------------
 	MC : shared ConVar metadata for the in-game config menu.
+
+	Entries carry ids only. Their display text is translated from keys that
+	derive from those ids (MC.ConfigText); an entry names its own key only to
+	reuse a text. The owning addon ships the text as JSON fragments below
+	data_static/mc/i18n/config/ (docs/localization.md).
 ------------------------------------------------------------------------------]]
 
 MC = MC or {}
 
-local function choice( value, label, labelZH )
-	return {
-		value = tostring( value ),
-		label = label,
-		labelZH = labelZH,
-	}
+------------------------------------------------------------------ text keys
+
+MC.ConfigText = MC.ConfigText or {}
+local Text = MC.ConfigText
+
+--   group           config.group.<id>
+--   category        config.category.<id>.label / .description
+--   setting         config.setting.<name>.label / .help
+--   choice          config.setting.<name>.choice.<value>
+--   unit            config.unit.<unit>
+-- labelKey, descriptionKey and helpKey replace a derived key; helpKey or
+-- descriptionKey false means the entry has no such text. labelVars,
+-- descriptionVars and helpVars fill placeholders and may hold nested
+-- { key = ..., vars = ... } specs. A choice with text shows that literal
+-- (a locale id, a user's preset name) instead of a translation.
+function Text.GroupKey( group )
+	return group.labelKey or ( "config.group." .. tostring( group.id ) )
 end
 
-local function item( name, label, labelZH, kind, help, helpZH, options )
+function Text.CategoryKey( category )
+	return category.labelKey or ( "config.category." .. tostring( category.id ) .. ".label" )
+end
+
+function Text.CategoryDescriptionKey( category )
+	if category.descriptionKey == false then return nil end
+	return category.descriptionKey or ( "config.category." .. tostring( category.id ) .. ".description" )
+end
+
+function Text.ItemKey( item )
+	return item.labelKey or ( "config.setting." .. tostring( item.name ) .. ".label" )
+end
+
+function Text.ItemHelpKey( item )
+	if item.helpKey == false then return nil end
+	return item.helpKey or ( "config.setting." .. tostring( item.name ) .. ".help" )
+end
+
+function Text.ChoiceKey( item, entry )
+	if entry.text ~= nil then return nil end
+	return entry.labelKey or ( "config.setting." .. tostring( item.name ) .. ".choice." .. tostring( entry.value ) )
+end
+
+function Text.UnitKey( unit )
+	return "config.unit." .. tostring( unit )
+end
+
+-- Every key an entry will look up ("group", "category" or "item"), for
+-- validation at registration time and for the coverage tests.
+function Text.Keys( kind, entry )
+	local keys = {}
+	local function add( key )
+		if key ~= nil then keys[#keys + 1] = key end
+	end
+	if kind == "group" then
+		add( Text.GroupKey( entry ) )
+	elseif kind == "category" then
+		add( Text.CategoryKey( entry ) )
+		add( Text.CategoryDescriptionKey( entry ) )
+	else
+		add( Text.ItemKey( entry ) )
+		add( Text.ItemHelpKey( entry ) )
+		if entry.unit ~= nil then add( Text.UnitKey( entry.unit ) ) end
+		if istable( entry.choices ) then
+			for _, choiceEntry in ipairs( entry.choices ) do add( Text.ChoiceKey( entry, choiceEntry ) ) end
+		end
+	end
+	return keys
+end
+
+------------------------------------------------------------------ metadata
+
+local function choice( value, options )
+	local entry = { value = tostring( value ) }
+	for key, option in pairs( options or {} ) do entry[key] = option end
+	return entry
+end
+
+local function item( name, kind, options )
 	local entry = {
 		name = name,
-		label = label,
-		labelZH = labelZH,
 		kind = kind or "number",
-		help = help or "",
-		helpZH = helpZH or "",
 	}
 
 	for key, value in pairs( options or {} ) do
@@ -29,7 +99,7 @@ local function item( name, label, labelZH, kind, help, helpZH, options )
 	return entry
 end
 
-local function category( id, group, label, labelZH, description, descriptionZH, items, options )
+local function category( id, group, items, options )
 	for _, entry in ipairs( items or {} ) do
 		entry.category = id
 	end
@@ -37,10 +107,6 @@ local function category( id, group, label, labelZH, description, descriptionZH, 
 	local entry = {
 		id = id,
 		group = group,
-		label = label,
-		zhLabel = labelZH,
-		description = description or "",
-		descriptionZH = descriptionZH or "",
 		items = items or {},
 	}
 
@@ -51,732 +117,350 @@ local function category( id, group, label, labelZH, description, descriptionZH, 
 	return entry
 end
 
+-- Language choices are the locales this realm loaded, shown by their ids.
+local function languageChoices()
+	local choices = {}
+	for index, option in ipairs( MC.I18n.LanguageOptions() ) do
+		choices[index] = { value = option.value, text = option.label }
+	end
+	return choices
+end
+
 MC.ConfigGroups = {
 	client = {
-		{ id = "interface", label = "Interface", zhLabel = "界面" },
-		{ id = "lighting", label = "Lighting", zhLabel = "光照与阴影" },
-		{ id = "creative", label = "Creative tool", zhLabel = "创造工具" },
-		{ id = "rendering", label = "Rendering", zhLabel = "画面与网格" },
-		{ id = "diagnostics", label = "Diagnostics", zhLabel = "诊断" },
+		{ id = "interface" },
+		{ id = "lighting" },
+		{ id = "creative" },
+		{ id = "rendering" },
+		{ id = "diagnostics" },
 	},
 	server = {
-		{ id = "access", label = "Access and world", zhLabel = "权限与世界" },
-		{ id = "editing", label = "Editing and storage", zhLabel = "编辑与存储" },
-		{ id = "gameplay", label = "Gameplay", zhLabel = "玩法" },
-		{ id = "network", label = "Networking", zhLabel = "网络与同步" },
-		{ id = "physics", label = "Collision", zhLabel = "碰撞" },
+		{ id = "access" },
+		{ id = "editing" },
+		{ id = "gameplay" },
+		{ id = "network" },
+		{ id = "physics" },
+		{ id = "interface" },
 	},
 }
 
 MC.ConfigConVars = {
 	client = {
-		category( "home", "interface", "Home", "首页",
-			"Open world saves and texture packs from here.",
-			"在这里打开存档管理器和材质包管理器。", {
-				item( "mc_save_manager", "Save manager", "存档管理器", "action",
-					"Browse and manage world saves.",
-					"浏览与管理世界存档。", { action = "save_manager" } ),
-				item( "mc_texture_packs", "Texture pack manager", "材质包管理器", "action",
-					"Choose a registered texture pack and apply it when ready.",
-					"选择材质包，点击应用后生效。", { action = "texture_pack_manager" } ),
-				item( "mc_gamemode", "Minecraft game mode", "Minecraft 游戏模式", "choice",
-					"Switch your own mode; the server controls whether switching is allowed.",
-					"切换自己的创造／生存模式；是否允许切换由服务器控制。", { choices = {
-						choice( "creative", "Creative", "创造" ),
-						choice( "survival", "Survival", "生存" ),
+		category( "home", "interface", {
+				item( "mc_save_manager", "action", { action = "save_manager" } ),
+				item( "mc_texture_packs", "action", { action = "texture_pack_manager" } ),
+				item( "mc_gamemode", "choice", { choices = {
+						choice( "creative" ),
+						choice( "survival" ),
 					},
 					get = function() return MC.ConfirmedPlayerGameMode() end,
 					set = function( value ) return MC.RequestPlayerGameMode( value ) end,
 				} ),
 		} ),
 
-		category( "texture_pack", "interface", "Texture pack", "材质包",
-			"Browse and select installed texture packs.",
-			"浏览并选择已安装的材质包。", {
-				item( "mc_texture_packs", "Texture pack manager", "材质包管理器", "action",
-					"Choose a registered texture pack and apply it when ready.",
-					"选择材质包，点击应用后生效。", { action = "texture_pack_manager" } ),
+		category( "texture_pack", "interface", {
+				item( "mc_texture_packs", "action", { action = "texture_pack_manager" } ),
 		} ),
 
-		category( "shader_pack", "interface", "Shader pack", "光影",
-			"Choose the shader pack; the settings below are provided by the active pack and saved under data/mc/shaderpacks/config.",
-			"选择光影包；下面的设置由当前光影包提供，保存在 data/mc/shaderpacks/config。", {}, { dynamic = "render_pack" } ),
+		category( "shader_pack", "interface", {}, { dynamic = "render_pack" } ),
 
-		category( "language", "interface", "Language", "语言",
-			"Choose the language used by MC menus and prompts.",
-			"选择 MC 菜单与提示所使用的语言。", {
-			item( "mc_language", "Interface language", "界面语言", "choice",
-				"Auto follows Garry's Mod; changes take effect immediately.",
-				"自动会跟随 Garry's Mod，修改后立即生效。", { choices = {
-					choice( "auto", "Automatic", "自动" ),
-					choice( "zh_cn", "Simplified Chinese", "简体中文" ),
-					choice( "en_us", "English", "English" ),
+		category( "language", "interface", {
+			item( "mc_language", "choice", { choices = languageChoices } ),
+		} ),
+
+		category( "display", "rendering", {
+			item( "mc_mesh_render", "bool" ),
+			item( "mc_mesh_cull_mode", "choice", { choices = {
+					choice( "ccw" ),
+					choice( "cw" ),
 				} } ),
+			item( "mc_mesh_frustum_cull", "bool" ),
+			item( "mc_mesh_draw_distance", "number", { unit = "u" } ),
+			item( "mc_mesh_depth_prepass", "bool" ),
 		} ),
 
-		category( "display", "rendering", "World display", "世界显示",
-			"Basic chunk visibility, distance and culling options.",
-			"方块区块的显示、距离与剔除设置。", {
-			item( "mc_mesh_render", "Render chunk meshes", "显示区块网格", "bool",
-				"Draw MC chunk meshes; collision remains active when hidden.",
-				"绘制 MC 区块网格；关闭后碰撞仍然生效。" ),
-			item( "mc_mesh_cull_mode", "Face culling direction", "面剔除方向", "choice",
-				"Choose the winding order used to remove back faces.",
-				"选择用于剔除背面的顶点绕序。", { choices = {
-					choice( "ccw", "Counter-clockwise (CCW)", "逆时针（CCW）" ),
-					choice( "cw", "Clockwise (CW)", "顺时针（CW）" ),
-				} } ),
-			item( "mc_mesh_frustum_cull", "View-frustum culling", "视锥剔除", "bool",
-				"Skip chunks that are completely outside the camera view.",
-				"跳过完全位于相机视野之外的区块。" ),
-			item( "mc_mesh_draw_distance", "Mesh draw distance", "网格绘制距离", "number",
-				"Maximum render distance in Source units; 0 means unlimited.",
-				"最大绘制距离，单位为 Source 单位；0 表示不限制。", { unit = "u" } ),
-			item( "mc_mesh_depth_prepass", "Depth prepass", "深度预处理", "bool",
-				"Draw an extra depth-only pass before GPU chunk materials.",
-				"在 GPU 区块材质前额外绘制一次纯深度通道。" ),
+		category( "mesh_cache", "rendering", {
+			item( "mc_gc_smoothing", "number" ),
+			item( "mc_build_unlimited", "bool" ),
+			item( "mc_mesh_geometry_cache_sections", "number" ),
+			item( "mc_mesh_block_emit_cache_sections", "number" ),
+			item( "mc_mesh_begin_upload", "bool" ),
+			item( "mc_mesh_connection_visible_template", "bool" ),
 		} ),
 
-		category( "mesh_cache", "rendering", "Mesh performance", "网格性能",
-			"Scheduling, memory caches and upload paths used while rebuilding chunks.",
-			"区块重建时使用的调度方式、内存缓存与上传方式。", {
-			item( "mc_gc_smoothing", "GC smoothing", "GC 分帧程度", "number",
-				"0 restores previous GC settings; 1-16 uses smaller per-frame steps at higher values. Try 4 for recording. Affects all client Lua; may increase memory use and cannot split atomic GC pauses.",
-				"0 恢复原 GC 设置；1-16 越大，每帧主动回收步长越小，录制可先试 4。影响全部客户端 Lua，可能增加内存占用，无法拆分 GC 原子阶段的卡顿。" ),
-			item( "mc_build_unlimited", "Disable build time slicing", "取消构建分帧", "bool",
-				"Drain received client mesh, lighting, collision and unload cleanup work, including distant lazy meshes. Switching off restores saved budgets and lazy settings.",
-				"集中完成已收到的网格、光照、碰撞和卸载清理，包括远处延迟构建的区块；可能出现较长卡顿，关闭后恢复原有预算与延迟构建设置。" ),
-			item( "mc_mesh_geometry_cache_sections", "Geometry cache sections", "几何缓存分区数", "number",
-				"Render sections retaining Lua vertex and light data; lower values save memory.",
-				"保留 Lua 顶点与光照数据的渲染分区数；调低可节省内存。" ),
-			item( "mc_mesh_block_emit_cache_sections", "Block emission cache sections", "方块生成缓存分区数", "number",
-				"Sections retaining per-block emitted geometry; lower values increase rebuild work.",
-				"保留逐方块生成几何的分区数；调低会增加重建工作量。" ),
-			item( "mc_mesh_begin_upload", "Use mesh.Begin upload", "使用 mesh.Begin 上传", "bool",
-				"Upload IMesh vertices through mesh.Begin instead of BuildFromTriangles.",
-				"使用 mesh.Begin 上传 IMesh 顶点，而不是 BuildFromTriangles。" ),
-			item( "mc_mesh_connection_visible_template", "Connected-shape templates", "连接形状模板", "bool",
-				"Cache visible geometry templates for fences, panes, walls and pipes.",
-				"缓存栅栏、玻璃板、墙与管道等连接形状的可见几何模板。" ),
-		} ),
-
-		category( "native_mesh", "rendering", "Native mesh backend", "原生网格后端",
-			"Controls for the optional native DLL that builds and finalizes chunk meshes.",
-			"控制可选的原生 DLL，由它负责构建并落地区块网格。", {
-			item( "mc_native_mesh", "Use native mesh backend", "使用原生网格后端", "bool",
-				"Use mcswep_native_mesh when the compatible client DLL is installed; disable to use the Lua backend.",
-				"安装兼容的客户端 DLL 时使用 mcswep_native_mesh；关闭后改用 Lua 后端。" ),
-			item( "mc_native_think_ms", "Native finalization budget", "原生网格落地预算", "number",
-				"Maximum milliseconds per frame used to commit completed native mesh work.",
-				"每帧用于提交已完成原生网格任务的最大毫秒数。", { unit = "ms" } ),
+		category( "native_mesh", "rendering", {
+			item( "mc_native_mesh", "bool" ),
+			item( "mc_native_think_ms", "number", { unit = "ms" } ),
 		}, { requiresNativeMesh = true } ),
 
-		category( "client_collision", "rendering", "Client prediction collision", "客户端预测碰撞",
-			"Local collision used to keep movement smooth while the server stays authoritative.",
-			"用于保持移动顺滑的本地碰撞；最终判定仍以服务器为准。", {
-			item( "mc_client_collision", "Prediction collision", "预测碰撞", "bool",
-				"Build a small clientside collision area around the local player.",
-				"在本地玩家周围建立一小块客户端碰撞区域。" ),
-			item( "mc_client_collision_chunk_span", "Collision chunk span", "碰撞区块范围", "number",
-				"Extra chunk radius retained around the local collision area; 0 disables it.",
-				"本地碰撞区域周围额外保留的区块半径；0 表示关闭。", { unit = "chunks" } ),
-			item( "mc_client_collision_cross_chunk", "Cross-chunk collision", "跨区块碰撞", "bool",
-				"Allow prediction collision to include neighbouring chunks when needed.",
-				"需要时允许预测碰撞延伸到相邻区块。" ),
-			item( "mc_client_collision_default_version", "Collision defaults version", "碰撞默认值版本", "number",
-				"Internal migration marker. Change only when troubleshooting old settings.",
-				"内部迁移标记，仅在排查旧设置时修改。", { advanced = true } ),
+		category( "client_collision", "rendering", {
+			item( "mc_client_collision", "bool" ),
+			item( "mc_client_collision_chunk_span", "number", { unit = "chunks" } ),
+			item( "mc_client_collision_cross_chunk", "bool" ),
+			item( "mc_client_collision_default_version", "number", { advanced = true } ),
 		} ),
 
-		category( "light_pipeline", "lighting", "Lighting pipeline", "光照管线",
-			"Select the renderer and overall lighting appearance.",
-			"选择光照渲染路径与整体观感。", {
-			item( "mc_light_enabled", "Minecraft lighting", "Minecraft 光照", "bool",
-				"Apply Minecraft-style block and sky lighting to chunk meshes.",
-				"将 Minecraft 风格的方块光与天空光应用到区块网格。" ),
-			item( "mc_light_shader", "GPU chunk shader", "GPU 区块着色器", "bool",
-				"Use the custom compiled shader for chunk atlas meshes.",
-				"为区块图集网格使用自定义编译着色器。" ),
-			item( "mc_light_texture", "Per-chunk light texture", "逐区块光照纹理", "bool",
-				"Sample chunk light textures on the GPU instead of baking light into vertices.",
-				"在 GPU 上采样区块光照纹理，而不是把光照烘焙进顶点。" ),
+		category( "light_pipeline", "lighting", {
+			item( "mc_light_enabled", "bool" ),
+			item( "mc_light_shader", "bool" ),
+			item( "mc_light_texture", "bool" ),
 		} ),
 
-		category( "light_balance", "lighting", "Brightness and balance", "亮度与平衡",
-			"Tune overall light levels without changing the selected pipeline.",
-			"在不更换光照管线的情况下调整整体明暗。", {
-			item( "mc_light_ambient_min", "Vertex ambient minimum", "顶点环境光下限", "number",
-				"Minimum brightness used by CPU vertex-lighting paths.",
-				"CPU 顶点光照路径使用的最低亮度。" ),
-			item( "mc_light_brightness", "Block and sky brightness", "方块光与天空光亮度", "number",
-				"Brightness multiplier for sampled block and sky light.",
-				"采样方块光与天空光的亮度倍数。" ),
-			item( "mc_light_gamma", "Light falloff gamma", "光照衰减 Gamma", "number",
-				"Values above 1 brighten middle levels; values below 1 darken them.",
-				"大于 1 会提亮中间亮度，小于 1 会压暗。" ),
-			item( "mc_light_sun_brightness", "Sun and sky multiplier", "日光与天空光倍数", "number",
-				"Separate multiplier for sun and sky contribution.",
-				"单独调整日光与天空光的强度倍数。" ),
+		category( "light_balance", "lighting", {
+			item( "mc_light_ambient_min", "number" ),
+			item( "mc_light_brightness", "number" ),
+			item( "mc_light_gamma", "number" ),
+			item( "mc_light_sun_brightness", "number" ),
 		} ),
 
-		category( "bloom", "lighting", "Bloom", "泛光",
-			"Screen-space spread around bright torches and sun highlights.",
-			"控制火把与日光高亮周围的屏幕空间扩散。", {
-			item( "mc_light_bloom", "Bloom", "泛光", "bool",
-				"Enable bloom for the fancy GPU lighting look.",
-				"为细腻 GPU 光照风格启用泛光。" ),
-			item( "mc_light_bloom_strength", "Bloom strength", "泛光强度", "number",
-				"Intensity of the blurred highlight contribution.",
-				"模糊高亮叠加到画面上的强度。" ),
-			item( "mc_light_bloom_threshold", "Bloom threshold", "泛光阈值", "number",
-				"Higher values keep bloom limited to brighter pixels.",
-				"数值越高，只有更亮的像素才会产生泛光。" ),
-			item( "mc_light_bloom_radius", "Bloom radius", "泛光半径", "number",
-				"Blur radius in screen pixels; runtime range is 1 to 16.",
-				"屏幕像素中的模糊半径；运行时范围为 1 到 16。", { unit = "px" } ),
+		category( "bloom", "lighting", {
+			item( "mc_light_bloom", "bool" ),
+			item( "mc_light_bloom_strength", "number" ),
+			item( "mc_light_bloom_threshold", "number" ),
+			item( "mc_light_bloom_radius", "number", { unit = "px" } ),
 		} ),
 
-		category( "lightmap", "lighting", "Global lightmap", "全局光照图",
-			"Color and tone controls for the procedural 16 by 16 lightmap.",
-			"程序生成的 16×16 光照图的色彩与明暗设置。", {
-			item( "mc_lightmap", "Procedural lightmap", "程序光照图", "bool",
-				"Use warm torch light and colored day/night sky lighting.",
-				"使用暖色火把光与带颜色的昼夜天空光。" ),
-			item( "mc_lightmap_torch_warmth", "Torch warmth", "火把暖色", "number",
-				"Warm tint applied to block light; 0 is neutral white.",
-				"方块光的暖色程度；0 为中性白光。" ),
-			item( "mc_lightmap_ambient", "Dark-area ambient floor", "暗部环境光下限", "number",
-				"Minimum visible brightness in fully dark areas.",
-				"完全黑暗区域保留的最低可见亮度。" ),
-			item( "mc_lightmap_sunset", "Sunset grading", "日落调色", "number",
-				"Orange grading strength during sunrise and sunset.",
-				"日出与日落时的橙色调色强度。" ),
-			item( "mc_lightmap_night_gamma", "Night brightness curve", "夜晚亮度曲线", "number",
-				"Perceptual curve controlling day-to-night sky brightness.",
-				"控制昼夜天空亮度过渡的感知曲线。" ),
-			item( "mc_lightmap_sky_curve", "Sky ambient curve", "天空环境光曲线", "number",
-				"Higher values keep open but shaded spaces brighter.",
-				"数值越高，开阔但被遮挡的区域会更亮。" ),
-			item( "mc_lightmap_sky_min", "Sky ambient floor", "天空环境光下限", "number",
-				"Ambient fraction retained at sky light level 0.",
-				"天空光等级为 0 时仍保留的环境光比例。" ),
-			item( "mc_lightmap_eye_dark", "Camera cave darkening", "相机洞穴压暗", "number",
-				"Ambient multiplier when the camera cell has no sky light; 1 disables it.",
-				"相机所在格没有天空光时的环境光倍数；1 表示关闭。" ),
-			item( "mc_lightmap_vanilla_gamma", "Vanilla brightness", "原版亮度", "number",
-				"Minecraft brightness slider for the vanilla look: 0 to 1.",
-				"原版光照风格使用的 Minecraft 亮度滑块：0 到 1。" ),
-			item( "mc_lightmap_vanilla_flicker", "Vanilla torch flicker", "原版火把闪烁", "bool",
-				"Use the original per-tick torch brightness variation.",
-				"使用原版逐 tick 的火把亮度变化。" ),
+		category( "lightmap", "lighting", {
+			item( "mc_lightmap", "bool" ),
+			item( "mc_lightmap_torch_warmth", "number" ),
+			item( "mc_lightmap_ambient", "number" ),
+			item( "mc_lightmap_sunset", "number" ),
+			item( "mc_lightmap_night_gamma", "number" ),
+			item( "mc_lightmap_sky_curve", "number" ),
+			item( "mc_lightmap_sky_min", "number" ),
+			item( "mc_lightmap_eye_dark", "number" ),
+			item( "mc_lightmap_vanilla_gamma", "number" ),
+			item( "mc_lightmap_vanilla_flicker", "bool" ),
 		} ),
 
-		category( "sky_light", "lighting", "Sky-light updates", "天空光更新",
-			"Voxel sky flood controls.",
-			"体素天空光传播设置。", {
-			item( "mc_light_sky_flood", "Voxel sky flood", "体素天空光传播", "bool",
-				"Flood Minecraft-style sky light into partially enclosed spaces.",
-				"将 Minecraft 风格天空光传播到半封闭空间。" ),
-			item( "mc_light_sky_flood_per_frame", "Sky flood budget", "天空光传播预算", "number",
-				"Chunks of queued sky-light work processed per frame.",
-				"每帧处理的天空光队列区块数。", { unit = "chunks/frame" } ),
+		category( "sky_light", "lighting", {
+			item( "mc_light_sky_flood", "bool" ),
+			item( "mc_light_sky_flood_per_frame", "number", { unit = "chunks_per_frame" } ),
 		} ),
 
-		category( "shadow_look", "lighting", "Shadow appearance", "阴影观感",
-			"Shared shadow controls and the color treatment used by the fancy look.",
-			"阴影通用设置，以及细腻风格使用的颜色处理。", {
-			item( "mc_shadow", "Sun shadows", "太阳阴影", "bool",
-				"Let the GPU chunk shader receive MC sun shadows.",
-				"让 GPU 区块着色器接收 MC 太阳阴影。" ),
-			item( "mc_shadow_strength", "Shadow strength", "阴影强度", "number",
-				"How strongly shadows darken the final chunk color.",
-				"阴影对区块最终颜色的压暗强度。" ),
-			item( "mc_shadow_tint", "Cool shadow tint", "阴影冷色调", "number",
-				"Shift shadowed surfaces toward the cool sky color.",
-				"让阴影区域向偏冷的天空色移动。" ),
-			item( "mc_shadow_face_shade", "Back-face shading", "背光面压暗", "number",
-				"Shade faces pointing away from the sun.",
-				"压暗背向太阳的方块表面。" ),
-			item( "mc_shadow_warmth", "Sun and torch warmth", "日光与火把暖色", "number",
-				"Warm tint on sunlit and torch-lit surfaces.",
-				"日照面与火把照亮区域的暖色程度。" ),
-			item( "mc_shadow_edge_fade", "Coverage edge fade", "覆盖边缘淡出", "number",
-				"Fade band at the border of the shadow coverage area.",
-				"阴影覆盖区域边缘的淡出宽度。" ),
+		category( "shadow_look", "lighting", {
+			item( "mc_shadow", "bool" ),
+			item( "mc_shadow_strength", "number" ),
+			item( "mc_shadow_tint", "number" ),
+			item( "mc_shadow_face_shade", "number" ),
+			item( "mc_shadow_warmth", "number" ),
+			item( "mc_shadow_edge_fade", "number" ),
 		} ),
 
-		category( "shadow_map", "lighting", "Shadow map", "阴影图",
-			"Resolution, coverage and update behaviour for shadow-map mode.",
-			"阴影图模式的分辨率、覆盖范围与更新方式。", {
-			item( "mc_shadow_bias", "Depth bias", "深度偏移", "number",
-				"Sampling bias used to reduce acne and edge light leaks.",
-				"用于减少自阴影条纹与边缘漏光的采样偏移。" ),
-			item( "mc_shadow_softness", "Edge softness", "边缘柔化", "number",
-				"Shadow edge softness measured in shadow-map texels.",
-				"以阴影图纹素为单位的阴影边缘柔化程度。", { unit = "texels" } ),
-			item( "mc_shadow_size", "Map resolution", "阴影图分辨率", "number",
-				"Per-cascade tile resolution of the shadow atlas, 512-4096 (three tiles stacked; 4096 costs ~240MB VRAM and needs a modern GPU).",
-				"阴影 atlas 的每级联 tile 分辨率，512-4096（三个级联纵向拼接；4096 约占 240MB 显存，需要较新的显卡）。", { unit = "px" } ),
-			item( "mc_shadow_distance", "Coverage radius", "覆盖半径", "number",
-				"Far cascade radius; the near/mid cascades divide it by the cascade ratio so close shadows stay sharp.",
-				"远级联的覆盖半径；近/中级联按级联比缩小，近处阴影始终保持清晰。", { unit = "u" } ),
-			item( "mc_shadow_cascade_ratio", "Cascade ratio", "级联比", "number",
-				"Cascaded atlas mode only: radius ratio between cascades (near = distance/ratio², mid = distance/ratio).",
-				"仅级联模式：级联之间的半径比（近 = 距离/比²，中 = 距离/比）。" ),
-			item( "mc_shadow_caster_distance", "Caster distance", "投影物距离", "number",
-				"Maximum camera distance for chunks rendered into the shadow map.",
-				"参与阴影图绘制的区块与相机的最大距离。", { unit = "u" } ),
-			item( "mc_shadow_update_interval", "Update interval", "更新间隔", "number",
-				"Minimum seconds between redraws; 0 allows updates every frame.",
-				"两次重绘之间的最短秒数；0 允许每帧更新。", { unit = "s" } ),
-			item( "mc_shadow_sun_step", "Sun angle step", "太阳角度步进", "number",
-				"Day cycle: quantize the shadow sun angle in degrees so shadow edges stay still between steps instead of shimmering (0 = continuous).",
-				"昼夜循环：把阴影太阳角量化为固定度数步进，步进之间阴影边缘完全静止不再抖动（0 = 连续移动）。", { unit = "°" } ),
+		category( "shadow_map", "lighting", {
+			item( "mc_shadow_bias", "number" ),
+			item( "mc_shadow_softness", "number", { unit = "texels" } ),
+			item( "mc_shadow_size", "number", { unit = "px" } ),
+			item( "mc_shadow_distance", "number", { unit = "u" } ),
+			item( "mc_shadow_cascade_ratio", "number" ),
+			item( "mc_shadow_caster_distance", "number", { unit = "u" } ),
+			item( "mc_shadow_update_interval", "number", { unit = "s" } ),
+			item( "mc_shadow_sun_step", "number", { unit = "deg" } ),
 		} ),
 
-		-- category( "height_shadow", "lighting", "Heightfield shadows", "高度场阴影",
-		-- 	"Cached top-down height data used by the height shadow technique.",
-		-- 	"高度场阴影技术使用的俯视高度缓存。", {
-		-- 	item( "mc_shadow_hf_size", "Height map resolution", "高度图分辨率", "number",
-		-- 		"Resolution of the cached top-down height map.",
-		-- 		"缓存俯视高度图的分辨率。", { unit = "px" } ),
-		-- 	item( "mc_shadow_hf_range", "Height map coverage", "高度图覆盖半径", "number",
-		-- 		"World-space radius covered around the player.",
-		-- 		"以玩家为中心的世界空间覆盖半径。", { unit = "u" } ),
-		-- 	item( "mc_shadow_hf_max_dist", "Maximum shadow reach", "最大投影距离", "number",
-		-- 		"Maximum distance a blocker may cast a heightfield shadow.",
-		-- 		"遮挡物通过高度场投射阴影的最大距离。", { unit = "u" } ),
-		-- 	item( "mc_shadow_hf_softness", "Penumbra softness", "半影柔度", "number",
-		-- 		"Rate at which shadows widen with blocker distance.",
-		-- 		"阴影随遮挡距离增加而变宽的速度。" ),
-		-- 	item( "mc_shadow_hf_update_interval", "Height map update interval", "高度图更新间隔", "number",
-		-- 		"Minimum seconds between redraws after geometry or window changes.",
-		-- 		"几何或覆盖窗口变化后，两次重绘之间的最短秒数。", { unit = "s" } ),
+		-- category( "height_shadow", "lighting", {
+		-- 	item( "mc_shadow_hf_size", "number", { unit = "px" } ),
+		-- 	item( "mc_shadow_hf_range", "number", { unit = "u" } ),
+		-- 	item( "mc_shadow_hf_max_dist", "number", { unit = "u" } ),
+		-- 	item( "mc_shadow_hf_softness", "number" ),
+		-- 	item( "mc_shadow_hf_update_interval", "number", { unit = "s" } ),
 		-- } ),
 
-		category( "day_night_look", "lighting", "Day and night appearance", "昼夜观感",
-			"Clientside sun path, moonlight and night color controls.",
-			"客户端太阳轨迹、月光与夜间颜色设置。", {
-			item( "mc_daycycle_sun_tilt", "Sun path tilt", "太阳轨迹倾斜", "number",
-				"Sideways tilt of the sun path used by the shadow system.",
-				"阴影系统使用的太阳轨迹横向倾斜程度。" ),
-			item( "mc_daycycle_moon_shadow", "Moon shadow strength", "月光阴影强度", "number",
-				"Night shadow strength relative to daytime sun shadows.",
-				"夜间月光阴影相对日间太阳阴影的强度。" ),
-			item( "mc_daycycle_moon_light", "Deep-night sky level", "深夜天空光等级", "number",
-				"Moonlight sky level at deep night, from 0 to 15.",
-				"深夜月光的天空光等级，范围 0 到 15。" ),
-			item( "mc_daycycle_night_tint", "Night blue tint", "夜间蓝色调", "number",
-				"Strength of the moonlit blue tint on sky-lit surfaces.",
-				"天空光照区域在夜间偏向月光蓝的程度。" ),
+		category( "day_night_look", "lighting", {
+			item( "mc_daycycle_sun_tilt", "number" ),
+			item( "mc_daycycle_moon_shadow", "number" ),
+			item( "mc_daycycle_moon_light", "number" ),
+			item( "mc_daycycle_night_tint", "number" ),
 		} ),
 
-		category( "entity_lighting", "lighting", "Entity and vehicle lighting", "实体与载具光照",
-			"Apply MC world lighting to players, NPCs, props and standard Source vehicles.",
-			"将 MC 世界光照应用到玩家、NPC、道具与原生 Source 载具。", {
-			item( "mc_light_entity", "Entity lighting master", "实体光照总开关", "bool",
-				"Master switch for MC lighting on supported entity types.",
-				"控制受支持实体类型的 MC 光照总开关。" ),
-			item( "mc_light_entity_players", "Player lighting", "玩家光照", "bool",
-				"Apply MC lighting to player models; requires the master switch.",
-				"将 MC 光照应用到玩家模型；需要开启总开关。" ),
-			item( "mc_light_entity_npcs", "NPC lighting", "NPC 光照", "bool",
-				"Apply MC lighting to NPC and NextBot models.",
-				"将 MC 光照应用到 NPC 和 NextBot 模型。" ),
-			item( "mc_light_entity_props", "Prop lighting", "道具光照", "bool",
-				"Apply MC lighting to common physics, dynamic and ragdoll props.",
-				"将 MC 光照应用到常见物理、动态与布娃娃道具。" ),
-			item( "mc_light_entity_vehicles", "Vehicle lighting", "载具光照", "bool",
-				"Apply MC lighting to the standard jeep, airboat and prisoner pod.",
-				"将 MC 光照应用到原生吉普车、汽艇和座椅载具。" ),
-			item( "mc_light_entity_cluster", "Structure lighting", "结构实体光照", "bool",
-				"Apply MC lighting to block structure entities made with the structure grabber.",
-				"将 MC 光照应用到结构搬运器生成的方块结构实体。" ),
-			item( "mc_light_entity_gain", "Entity exposure", "实体曝光", "number",
-				"Brightness multiplier for players, NPCs, props and vehicles.",
-				"玩家、NPC、道具与载具光照使用的亮度倍数。" ),
-			item( "mc_light_entity_cluster_gain", "Structure exposure", "结构曝光", "number",
-				"Brightness multiplier for block structures; 1 matches chunk vertex lighting.",
-				"方块结构实体的亮度倍数；1 与区块顶点光照一致。" ),
-			item( "mc_light_entity_reflections", "Reflection strength", "反射强度", "number",
-				"How strongly envmap and Phong reflections remain visible in MC lighting.",
-				"MC 光照下保留环境反射与 Phong 高光的强度。" ),
-			item( "mc_light_entity_interval", "Sample interval", "采样间隔", "number",
-				"Minimum seconds between voxel-light samples per entity, including movement. At most 4 entities update per frame; 0 requests every frame.",
-				"每个实体两次体素采光的最短间隔，移动也受限；每帧最多更新 4 个实体，0 表示每帧申请更新。", { unit = "s" } ),
+		category( "entity_lighting", "lighting", {
+			item( "mc_light_entity", "bool" ),
+			item( "mc_light_entity_players", "bool" ),
+			item( "mc_light_entity_npcs", "bool" ),
+			item( "mc_light_entity_props", "bool" ),
+			item( "mc_light_entity_vehicles", "bool" ),
+			item( "mc_light_entity_cluster", "bool" ),
+			item( "mc_light_entity_gain", "number" ),
+			item( "mc_light_entity_cluster_gain", "number" ),
+			item( "mc_light_entity_reflections", "number" ),
+			item( "mc_light_entity_interval", "number", { unit = "s" } ),
 		} ),
 
-		category( "creative_general", "creative", "Held block behaviour", "手持方块行为",
-			"Enable the held model and placement or break animation.",
-			"控制手持方块模型以及放置、破坏动画。", {
-			item( "mc_creative_held_model", "Held block model", "手持方块模型", "bool",
-				"Draw the selected block in the player's hand.",
-				"在玩家手中绘制当前选中的方块。" ),
-			item( "mc_creative_held_anim", "Swing animation", "挥动动画", "bool",
-				"Play the placement and break swing animations.",
-				"播放放置与破坏时的挥动动画。" ),
+		category( "creative_general", "creative", {
+			item( "mc_creative_held_model", "bool" ),
+			item( "mc_creative_held_anim", "bool" ),
 		} ),
 
-		category( "creative_first_person", "creative", "First-person pose", "第一人称姿态",
-			"Position, scale and rotation of the first-person held block.",
-			"第一人称手持方块的位置、缩放与旋转。", {
-			item( "mc_creative_held_fp_forward", "Forward offset", "前后偏移", "number", "First-person forward offset.", "第一人称前后位置。" ),
-			item( "mc_creative_held_fp_right", "Right offset", "左右偏移", "number", "First-person right offset.", "第一人称左右位置。" ),
-			item( "mc_creative_held_fp_up", "Vertical offset", "上下偏移", "number", "First-person vertical offset.", "第一人称上下位置。" ),
-			item( "mc_creative_held_fp_scale", "Scale", "缩放", "number", "First-person held block scale.", "第一人称手持方块大小。" ),
-			item( "mc_creative_held_fp_yaw", "Yaw", "偏航角", "number", "First-person yaw rotation.", "第一人称 yaw 旋转角度。", { unit = "deg" } ),
-			item( "mc_creative_held_fp_pitch", "Pitch", "俯仰角", "number", "First-person pitch rotation.", "第一人称 pitch 旋转角度。", { unit = "deg" } ),
-			item( "mc_creative_held_fp_roll", "Roll", "翻滚角", "number", "First-person roll rotation.", "第一人称 roll 旋转角度。", { unit = "deg" } ),
+		category( "creative_first_person", "creative", {
+			item( "mc_creative_held_fp_forward", "number" ),
+			item( "mc_creative_held_fp_right", "number" ),
+			item( "mc_creative_held_fp_up", "number" ),
+			item( "mc_creative_held_fp_scale", "number" ),
+			item( "mc_creative_held_fp_yaw", "number", { unit = "deg" } ),
+			item( "mc_creative_held_fp_pitch", "number", { unit = "deg" } ),
+			item( "mc_creative_held_fp_roll", "number", { unit = "deg" } ),
 		} ),
 
-		category( "creative_third_person", "creative", "Third-person pose", "第三人称姿态",
-			"Position, scale and rotation of the third-person held block.",
-			"第三人称手持方块的位置、缩放与旋转。", {
-			item( "mc_creative_held_tp_forward", "Forward offset", "前后偏移", "number", "Third-person forward offset.", "第三人称前后位置。" ),
-			item( "mc_creative_held_tp_right", "Right offset", "左右偏移", "number", "Third-person right offset.", "第三人称左右位置。" ),
-			item( "mc_creative_held_tp_up", "Vertical offset", "上下偏移", "number", "Third-person vertical offset.", "第三人称上下位置。" ),
-			item( "mc_creative_held_tp_scale", "Scale", "缩放", "number", "Third-person held block scale.", "第三人称手持方块大小。" ),
-			item( "mc_creative_held_tp_yaw", "Yaw", "偏航角", "number", "Third-person yaw rotation.", "第三人称 yaw 旋转角度。", { unit = "deg" } ),
-			item( "mc_creative_held_tp_pitch", "Pitch", "俯仰角", "number", "Third-person pitch rotation.", "第三人称 pitch 旋转角度。", { unit = "deg" } ),
-			item( "mc_creative_held_tp_roll", "Roll", "翻滚角", "number", "Third-person roll rotation.", "第三人称 roll 旋转角度。", { unit = "deg" } ),
+		category( "creative_third_person", "creative", {
+			item( "mc_creative_held_tp_forward", "number" ),
+			item( "mc_creative_held_tp_right", "number" ),
+			item( "mc_creative_held_tp_up", "number" ),
+			item( "mc_creative_held_tp_scale", "number" ),
+			item( "mc_creative_held_tp_yaw", "number", { unit = "deg" } ),
+			item( "mc_creative_held_tp_pitch", "number", { unit = "deg" } ),
+			item( "mc_creative_held_tp_roll", "number", { unit = "deg" } ),
 		} ),
 
-		category( "render_diagnostics", "diagnostics", "Render diagnostics", "渲染诊断",
-			"Verbose mesh and lighting measurements intended for troubleshooting.",
-			"用于排查问题的网格与光照详细测量。", {
-			item( "mc_mesh_debug_full_cube_only", "Render full cubes only", "仅渲染完整方块", "bool",
-				"Debug occlusion by omitting non-full-cube block geometry.",
-				"忽略非完整方块几何，用于排查遮挡问题。" ),
-			item( "mc_mesh_emit_probe", "Mesh emission timings", "网格生成耗时", "bool",
-				"Print detailed timings for full geometry rebuilds.",
-				"打印完整几何重建的详细耗时。" ),
-			item( "mc_light_perf_debug", "Collect lighting timings", "收集光照耗时", "bool",
-				"Collect detailed lighting performance diagnostics.",
-				"收集详细的光照性能诊断数据。" ),
-			item( "mc_light_perf_print_break", "Print after block break", "破坏方块后打印", "bool",
-				"Print lighting cost when a block is broken.",
-				"破坏方块时打印光照计算开销。" ),
-			item( "mc_light_perf_print_each", "Print every light calculation", "打印每次光照计算", "bool",
-				"Print one timing line for every lighting calculation.",
-				"每次光照计算都打印一行耗时。" ),
+		category( "render_diagnostics", "diagnostics", {
+			item( "mc_mesh_debug_full_cube_only", "bool" ),
+			item( "mc_mesh_emit_probe", "bool" ),
+			item( "mc_light_perf_debug", "bool" ),
+			item( "mc_light_perf_print_break", "bool" ),
+			item( "mc_light_perf_print_each", "bool" ),
 		} ),
 
-		category( "collision_diagnostics", "diagnostics", "Collision diagnostics", "碰撞诊断",
-			"Visual bounds and logs for server and client collision interest.",
-			"显示服务器与客户端碰撞关注区域的边界和日志。", {
-			item( "mc_server_collision_debug", "Server collision bounds", "服务器碰撞边界", "bool",
-				"Draw server-authoritative collision interest bounds.",
-				"绘制服务器权威碰撞关注区域边界。" ),
-			item( "mc_client_collision_debug", "Client rebuild logs", "客户端重建日志", "bool",
-				"Print client prediction collision rebuild diagnostics.",
-				"打印客户端预测碰撞的重建诊断。" ),
-			item( "mc_client_collision_area_debug", "Client collision areas", "客户端碰撞区域", "bool",
-				"Draw active client prediction collision areas.",
-				"绘制当前客户端预测碰撞区域。" ),
-			item( "mc_client_collision_aabb_debug", "Client collision boxes", "客户端碰撞盒", "bool",
-				"Draw individual client prediction collision AABBs.",
-				"绘制单个客户端预测碰撞 AABB。" ),
-			item( "mc_client_collision_aabb_debug_limit", "Collision box draw limit", "碰撞盒绘制上限", "number",
-				"Maximum client collision AABBs drawn at once.",
-				"一次最多绘制的客户端碰撞 AABB 数量。" ),
+		category( "collision_diagnostics", "diagnostics", {
+			item( "mc_server_collision_debug", "bool" ),
+			item( "mc_client_collision_debug", "bool" ),
+			item( "mc_client_collision_area_debug", "bool" ),
+			item( "mc_client_collision_aabb_debug", "bool" ),
+			item( "mc_client_collision_aabb_debug_limit", "number" ),
 		} ),
 	},
 
 	server = {
-		category( "permissions", "access", "Permissions", "权限",
-			"Who may edit blocks and use shared saves, presets, or the structure grabber.",
-			"控制谁可以编辑方块以及使用公共存档、预设或结构搬运器。", {
-			item( "mc_admin_only", "Admin-only block editing", "仅管理员编辑方块", "bool",
-				"Only administrators may place or break MC blocks.",
-				"只有管理员可以放置或破坏 MC 方块。" ),
-			item( "mc_save_public", "Public saves", "公共存档", "bool",
-				"Allow non-admin players to list, load and save worlds; deletion stays admin-only.",
-				"允许非管理员列出、读取和保存世界；删除仍仅限管理员。" ),
-			item( "mc_workshop_manage", "Workshop world management", "创意工坊世界管理", "choice",
-				"Choose who may export saves to Workshop or ask the server to import Workshop worlds.",
-				"选择谁可以把存档发布到创意工坊，或申请由服务端导入创意工坊世界。", { choices = {
-					choice( "0", "Superadmins", "仅超级管理员" ),
-					choice( "1", "Administrators", "管理员" ),
-					choice( "2", "Everyone", "所有玩家" ),
+		category( "permissions", "access", {
+			item( "mc_admin_only", "bool" ),
+			item( "mc_save_public", "bool" ),
+			item( "mc_workshop_manage", "choice", { choices = {
+					choice( "0" ),
+					choice( "1" ),
+					choice( "2" ),
 				} } ),
-			item( "mc_preset_public", "Public presets", "公共预设", "bool",
-				"Allow non-admin players to list, load, save and place presets.",
-				"允许非管理员列出、读取、保存和放置预设。" ),
-			item( "mc_cluster_public", "Public structure grabber", "公共结构搬运器", "bool",
-				"Allow non-admin players to convert MC blocks into movable structures and place them back.",
-				"允许非管理员把 MC 方块转换为可搬运结构，并放回网格。" ),
+			item( "mc_preset_public", "bool" ),
+			item( "mc_cluster_public", "bool" ),
 		} ),
 
-		category( "world_limits", "access", "World limits", "世界限制",
-			"Global build boundary, block count and interaction reach.",
-			"全局建造边界、方块数量与交互距离。", {
-			item( "mc_world_limit", "Coordinate limit", "坐标边界", "number",
-				"Maximum absolute block coordinate on every axis.",
-				"每个坐标轴允许的最大绝对方块坐标。", { unit = "blocks" } ),
-			item( "mc_max_blocks", "Global block limit", "全局方块上限", "number",
-				"Maximum placed blocks in the world; 0 means unlimited.",
-				"世界中最多可放置的方块数；0 表示不限。", { unit = "blocks" } ),
-			item( "mc_reach", "Build reach", "建造距离", "number",
-				"Maximum place and break distance in Source units; 0 disables the check.",
-				"放置与破坏的最大 Source 单位距离；0 表示关闭检查。", { unit = "u" } ),
+		-- Choices are the locales the server loaded; the client receives them
+		-- with the server values (sv_config_ui.lua).
+		category( "server_console", "interface", {
+			item( "mc_console_language", "choice", { serverChoices = languageChoices } ),
 		} ),
 
-		category( "server_time", "access", "Day and night cycle", "昼夜循环",
-			"Server-owned world time and the duration of a full day.",
-			"服务器控制的世界时间与完整一天时长。", {
-			item( "mc_daycycle", "Day and night cycle", "昼夜循环", "bool",
-				"Enable the server-side Minecraft day and night cycle (off by default). When off, lighting follows the map sun direction.",
-				"启用服务器端 Minecraft 昼夜循环（默认关闭）；关闭时光照方向跟随地图太阳。" ),
-			item( "mc_daycycle_paused", "Pause world time", "暂停世界时间", "bool",
-				"Freeze the day and night clock at its current time without disabling lighting.",
-				"冻结当前昼夜时间，但保持对应时间的天空光与阴影。" ),
-			item( "mc_daycycle_follow_atmos", "Follow Atmos clock", "跟随 Atmos 时钟", "bool",
-				"Use the installed Atmos addon's day/night clock when it is available.",
-				"Atmos 插件可用时，使用它的昼夜时钟。" ),
-			item( "mc_daycycle_length", "Full-day length", "完整一天时长", "number",
-				"Real seconds per complete Minecraft day.",
-				"一个完整 Minecraft 日对应的现实秒数。", { unit = "s" } ),
+		category( "world_limits", "access", {
+			item( "mc_world_limit", "number", { unit = "blocks" } ),
+			item( "mc_max_blocks", "number", { unit = "blocks" } ),
+			item( "mc_reach", "number", { unit = "u" } ),
 		} ),
 
-		category( "autosave", "editing", "Autosave", "自动保存",
-			"Periodic server world saving.",
-			"服务器世界的定时保存设置。", {
-			item( "mc_autosave", "Autosave interval", "自动保存间隔", "number",
-				"Seconds between automatic saves; 0 disables autosave.",
-				"两次自动保存之间的秒数；0 表示关闭。", { unit = "s" } ),
+		category( "server_time", "access", {
+			item( "mc_daycycle", "bool" ),
+			item( "mc_daycycle_paused", "bool" ),
+			item( "mc_daycycle_follow_atmos", "bool" ),
+			item( "mc_daycycle_length", "number", { unit = "s" } ),
 		} ),
 
-		category( "fill", "editing", "Fill command", "填充命令",
-			"Limits and batching used by the /fill operation.",
-			"/fill 操作使用的限制与分批设置。", {
-			item( "mc_fill_max", "Maximum modified blocks", "最大修改方块数", "number",
-				"Maximum blocks one /fill may modify; 0 means unlimited.",
-				"单次 /fill 最多修改的方块数；0 表示不限。", { unit = "blocks" } ),
-			item( "mc_fill_batch_cells", "Cells per batch", "每批单元数", "number",
-				"Maximum cells applied in one server fill batch.",
-				"服务器一次填充批次最多应用的单元数。" ),
-			item( "mc_fill_batch_chunks", "Chunks per batch", "每批区块数", "number",
-				"Maximum chunks touched by one server fill batch.",
-				"服务器一次填充批次最多触及的区块数。" ),
-			item( "mc_fill_batch_interval", "Batch interval", "批次间隔", "number",
-				"Seconds between fill batches.",
-				"两次填充批次之间的秒数。", { unit = "s" } ),
+		category( "autosave", "editing", {
+			item( "mc_autosave", "number", { unit = "s" } ),
 		} ),
 
-		category( "imports_presets", "editing", "Imports and presets", "导入与预设",
-			"Size limits for imported worlds and reusable structures.",
-			"导入世界与可复用结构的大小限制。", {
-			item( "mc_import_max", "Import block limit", "导入方块上限", "number",
-				"Maximum blocks one import may load; 0 means unlimited.",
-				"单次导入最多读取的方块数；0 表示不限。", { unit = "blocks" } ),
-			item( "mc_preset_max_blocks", "Preset block limit", "预设方块上限", "number",
-				"Maximum non-air blocks one preset may save or place; 0 means unlimited.",
-				"单个预设最多保存或放置的非空气方块数；0 表示不限。", { unit = "blocks" } ),
+		category( "fill", "editing", {
+			item( "mc_fill_max", "number", { unit = "blocks" } ),
+			item( "mc_fill_batch_cells", "number" ),
+			item( "mc_fill_batch_chunks", "number" ),
+			item( "mc_fill_batch_interval", "number", { unit = "s" } ),
 		} ),
 
-		category( "full_sync", "network", "Full-map synchronization", "全量同步",
-			"One shared paced queue for join snapshots, large edits, Chunk hydration and preset data.",
-			"加入快照、大型编辑、区块补水和预设数据共用同一个限速队列。", {
-			item( "mc_binary_chunk_patch", "Binary Section patches", "二进制 Section 补丁", "bool",
-				"Send Chunk hydration as palette and packed-word Binary Sections instead of terrain JSON.",
-				"使用调色板与 packed word 的二进制 Section 传输区块，不再生成地形 JSON。", { advanced = true } ),
-			item( "mc_binary_net_profile", "Binary network profiling", "二进制网络分析", "bool",
-				"Collect server timings for Binary Section encoding, compression, queueing and net.Send.",
-				"收集服务端 Binary Section 编码、压缩、排队与 net.Send 耗时。", { advanced = true } ),
-			item( "mc_sync_messages_per_tick", "Messages per tick", "每 tick 消息数", "number",
-				"Maximum queued state messages sent to each player per 0.05-second interval.",
-				"每 0.05 秒最多向每个玩家发送的排队状态消息数。" ),
-			item( "mc_sync_reliable_budget", "Reliable byte budget", "可靠消息字节预算", "number",
-				"Hard queued state byte budget per player per 0.05 seconds; total bandwidth multiplies by syncing players.",
-				"每 0.05 秒每个玩家的排队状态字节硬上限；总带宽会乘以同时同步人数。", { unit = "bytes" } ),
-			item( "mc_sync_frame_ms", "Server CPU budget", "服务器 CPU 预算", "number",
-				"Approximate server CPU milliseconds spent on full sync each tick.",
-				"每个 tick 用于全量同步的大致服务器 CPU 毫秒数。", { unit = "ms" } ),
-			item( "mc_sync_inflight_limit", "Unacknowledged byte limit", "未确认字节上限", "number",
-				"Maximum acknowledged queued state bytes waiting for processing per client.",
-				"每个客户端等待处理确认的排队状态字节上限。", { unit = "bytes" } ),
+		category( "imports_presets", "editing", {
+			item( "mc_import_max", "number", { unit = "blocks" } ),
+			item( "mc_preset_max_blocks", "number", { unit = "blocks" } ),
 		} ),
 
-		-- category( "http_delivery", "network", "HTTP chunk delivery", "HTTP 区块传输",
-		-- 	"Optional delivery of lazy-save base chunks through an HTTP host.",
-		-- 	"可选地通过 HTTP 主机传输懒加载存档的基础区块。", {
-		-- 	item( "mc_chunk_http_enabled", "HTTP chunk delivery", "HTTP 区块传输", "bool",
-		-- 		"Allow clients to fetch lazy-save chunks over HTTP instead of GMod net.",
-		-- 		"允许客户端通过 HTTP 而不是 GMod net 获取懒加载区块。" ),
-		-- 	item( "mc_chunk_http_base_url", "HTTP data root", "HTTP 数据根地址", "string",
-		-- 		"Root URL that serves the server's garrysmod/data directory.",
-		-- 		"用于提供服务器 garrysmod/data 目录的根 URL。" ),
+		category( "full_sync", "network", {
+			item( "mc_binary_chunk_patch", "bool", { advanced = true } ),
+			item( "mc_binary_net_profile", "bool", { advanced = true } ),
+			item( "mc_sync_messages_per_tick", "number" ),
+			item( "mc_sync_reliable_budget", "number", { unit = "bytes" } ),
+			item( "mc_sync_frame_ms", "number", { unit = "ms" } ),
+			item( "mc_sync_inflight_limit", "number", { unit = "bytes" } ),
+		} ),
+
+		-- category( "http_delivery", "network", {
+		-- 	item( "mc_chunk_http_enabled", "bool" ),
+		-- 	item( "mc_chunk_http_base_url", "string" ),
 		-- } ),
 
-		-- category( "chunk_storage", "network", "Lazy chunk storage", "懒加载区块存储",
-		-- 	"Memory and time budgets for hydrating chunks from large saves.",
-		-- 	"从大型存档载入区块时使用的内存与时间预算。", {
-		-- 	item( "mc_large_world_chunk_threshold", "Large-world threshold", "大型世界阈值", "number",
-		-- 		"Chunk count at which imported saves use lazy streaming behaviour.",
-		-- 		"导入存档开始使用懒加载行为的区块数量阈值。", { unit = "chunks" } ),
-		-- 	item( "mc_chunk_store_part_cache", "Part-file cache", "分包文件缓存", "number",
-		-- 		"Maximum lazy-save part files cached in memory.",
-		-- 		"内存中最多缓存的懒加载存档分包文件数。" ),
-		-- 	item( "mc_chunk_store_loads_per_tick", "Chunk loads per tick", "每 tick 区块载入数", "number",
-		-- 		"Maximum lazy chunks hydrated during one store tick.",
-		-- 		"每个存储 tick 最多载入的懒加载区块数。" ),
-		-- 	item( "mc_chunk_store_frame_ms", "Hydration time budget", "载入时间预算", "number",
-		-- 		"Approximate milliseconds available for lazy chunk hydration per tick.",
-		-- 		"每个 tick 可用于懒加载区块载入的大致毫秒数。", { unit = "ms" } ),
+		-- category( "chunk_storage", "network", {
+		-- 	item( "mc_large_world_chunk_threshold", "number", { unit = "chunks" } ),
+		-- 	item( "mc_chunk_store_part_cache", "number" ),
+		-- 	item( "mc_chunk_store_loads_per_tick", "number" ),
+		-- 	item( "mc_chunk_store_frame_ms", "number", { unit = "ms" } ),
 		-- } ),
 
-		-- category( "legacy_streaming", "network", "Legacy streaming", "旧版流式加载",
-		-- 	"Compatibility switches retained for older save and sync paths.",
-		-- 	"为旧存档与同步路径保留的兼容设置。", {
-		-- 	item( "mc_stream_chunk_span_xy", "Horizontal stream span", "水平流式范围", "number",
-		-- 		"Legacy horizontal client chunk synchronization span.",
-		-- 		"旧版客户端区块同步的水平范围。", { advanced = true } ),
-		-- 	item( "mc_stream_chunk_span_z", "Vertical stream span", "垂直流式范围", "number",
-		-- 		"Legacy vertical client chunk synchronization span.",
-		-- 		"旧版客户端区块同步的垂直范围。", { advanced = true } ),
-		-- 	item( "mc_large_world_lazy_load", "Legacy lazy loading", "旧版懒加载", "bool",
-		-- 		"Legacy v8 lazy chunk loading switch.",
-		-- 		"旧版 v8 懒加载区块开关。", { advanced = true } ),
+		-- category( "legacy_streaming", "network", {
+		-- 	item( "mc_stream_chunk_span_xy", "number", { advanced = true } ),
+		-- 	item( "mc_stream_chunk_span_z", "number", { advanced = true } ),
+		-- 	item( "mc_large_world_lazy_load", "bool", { advanced = true } ),
 		-- } ),
 
-		category( "collision_interest", "physics", "Collision interest", "碰撞关注范围",
-			"Where the server and client keep chunk collision active.",
-			"服务器与客户端保持区块碰撞激活的范围。", {
-			item( "mc_server_collision", "Server collision", "服务器碰撞", "bool",
-				"Build authoritative MC collision on the server.",
-				"在服务器建立权威 MC 方块碰撞。" ),
-			item( "mc_server_collision_chunk_span", "Server chunk span", "服务器区块范围", "number",
-				"Extra chunk radius around server collision AABBs.",
-				"服务器碰撞 AABB 周围额外保留的区块半径。", { unit = "chunks" } ),
-			item( "mc_server_collision_aabb_padding", "Entity AABB padding", "实体 AABB 边距", "number",
-				"Source-unit padding around player and entity bounds.",
-				"玩家与实体边界周围增加的 Source 单位边距。", { unit = "u" } ),
-			item( "mc_collision_aim_distance", "Aim trace distance", "准星检测距离", "number",
-				"Trace distance used to retain collision around the aimed block.",
-				"用于保持准星所指方块周围碰撞的检测距离。", { unit = "u" } ),
-			item( "mc_server_collision_aim_radius", "Server aim radius", "服务器准星半径", "number",
-				"Block radius retained around each player's aimed block on the server.",
-				"服务器在每位玩家准星方块周围保留的方块半径。", { unit = "blocks" } ),
-			item( "mc_client_collision_aim_radius", "Client aim radius", "客户端准星半径", "number",
-				"Block radius used by client prediction around the aimed block.",
-				"客户端预测在准星方块周围使用的方块半径。", { unit = "blocks" } ),
-			item( "mc_server_collision_hot_span", "Velocity hot span", "速度热点范围", "number",
-				"Base chunk radius retained in the direction of entity movement.",
-				"沿实体移动方向额外保留的基础区块半径。", { unit = "chunks" } ),
-			item( "mc_server_collision_lookahead_time", "Velocity lookahead time", "速度预判时间", "number",
-				"Seconds of entity movement used for collision lookahead.",
-				"碰撞预判使用的实体移动秒数。", { unit = "s" } ),
-			item( "mc_server_collision_lookahead_max", "Lookahead maximum span", "预判最大范围", "number",
-				"Maximum chunk radius reached by velocity lookahead.",
-				"速度预判最多扩展到的区块半径。", { unit = "chunks" } ),
+		category( "collision_interest", "physics", {
+			item( "mc_server_collision", "bool" ),
+			item( "mc_server_collision_chunk_span", "number", { unit = "chunks" } ),
+			item( "mc_server_collision_aabb_padding", "number", { unit = "u" } ),
+			item( "mc_collision_aim_distance", "number", { unit = "u" } ),
+			item( "mc_server_collision_aim_radius", "number", { unit = "blocks" } ),
+			item( "mc_client_collision_aim_radius", "number", { unit = "blocks" } ),
+			item( "mc_server_collision_hot_span", "number", { unit = "chunks" } ),
+			item( "mc_server_collision_lookahead_time", "number", { unit = "s" } ),
+			item( "mc_server_collision_lookahead_max", "number", { unit = "chunks" } ),
 		} ),
 
-		category( "collision_rebuild", "physics", "Collision rebuild pacing", "碰撞重建节奏",
-			"Batch size and delay after explosions or preset edits.",
-			"爆炸或预设编辑后的碰撞批量重建大小与间隔。", {
-			item( "mc_bulk_collision_chunks_per_interval", "Chunks per rebuild batch", "每批重建区块数", "number",
-				"Collision chunks rebuilt during each batch.",
-				"每个批次重建的碰撞区块数。" ),
-			item( "mc_bulk_collision_interval", "Rebuild batch interval", "重建批次间隔", "number",
-				"Seconds between collision rebuild batches.",
-				"两次碰撞重建批次之间的秒数。", { unit = "s" } ),
+		category( "collision_rebuild", "physics", {
+			item( "mc_bulk_collision_chunks_per_interval", "number" ),
+			item( "mc_bulk_collision_interval", "number", { unit = "s" } ),
 		} ),
 
-		category( "interaction", "gameplay", "Block interaction", "方块互动",
-			"How players activate doors, levers and other usable blocks.",
-			"玩家激活门、拉杆等可互动方块的方式。", {
-			item( "mc_use_interact", "Right-click interacts with blocks", "右键与方块互动", "bool",
-				"Right-clicking an aimed usable block interacts with it regardless of the held weapon, including empty hands and non-Minecraft weapons. The E key is reserved for the inventory and never interacts with blocks.",
-				"对准可互动方块按右键即可互动，无论手持何种武器（空手、非 Minecraft 武器同样有效）。E 键已保留给背包，不再与方块互动。" ),
+		category( "interaction", "gameplay", {
+			item( "mc_use_interact", "bool" ),
 		} ),
 
-		category( "block_updates", "gameplay", "Block updates", "方块更新",
-			"Controls queued neighbour updates and scheduled block ticks.",
-			"控制水、红石及其他方块的邻居更新与计划刻。", {
-			item( "mc_block_updates_enabled", "Enable block updates", "启用方块更新", "bool",
-				"Enable water, redstone and other queued block behaviour. Disabled by default until the native acceleration path is ready.",
-				"启用水、红石及其他排队方块行为；原生加速路径完成前默认关闭。" ),
+		category( "block_updates", "gameplay", {
+			item( "mc_block_updates_enabled", "bool" ),
 		} ),
 
-		category( "block_damage", "gameplay", "Block damage", "方块伤害",
-			"How regular Garry's Mod damage breaks MC blocks.",
-			"普通 Garry's Mod 伤害破坏 MC 方块的方式。", {
-			item( "mc_block_damage", "Damage can break blocks", "伤害可破坏方块", "bool",
-				"Allow Garry's Mod damage to damage and break MC blocks.",
-				"允许 Garry's Mod 伤害损伤并破坏 MC 方块。" ),
-			item( "mc_block_health_scale", "Block health scale", "方块生命值倍数", "number",
-				"Health multiplier applied to Minecraft block hardness.",
-				"应用到 Minecraft 方块硬度的生命值倍数。" ),
-			item( "mc_block_damage_decay", "Partial damage decay", "部分伤害衰减", "number",
-				"Seconds before unfinished block damage is forgotten.",
-				"未完成破坏的方块伤害被清除前等待的秒数。", { unit = "s" } ),
+		category( "block_damage", "gameplay", {
+			item( "mc_block_damage", "bool" ),
+			item( "mc_block_health_scale", "number" ),
+			item( "mc_block_damage_decay", "number", { unit = "s" } ),
 		} ),
 
-		category( "block_cluster", "gameplay", "Structure grabber", "结构搬运器",
-			"Limits and physics for block structures converted into movable entities.",
-			"方块结构转换为可搬运实体的上限与物理设置。", {
-			item( "mc_cluster_max_blocks", "Max blocks per structure", "单个结构方块上限", "number",
-				"Maximum blocks one structure entity may hold (protocol cap 8191).",
-				"单个结构实体最多容纳的方块数（协议上限 8191）。", { unit = "blocks" } ),
-			item( "mc_cluster_max_extent", "Max selection edge", "选区边长上限", "number",
-				"Maximum selection edge length per axis, in blocks.",
-				"选区每个方向的最大边长（方块数）。", { unit = "blocks" } ),
-			item( "mc_cluster_max_per_player", "Structures per player", "每人结构数上限", "number",
-				"Maximum live structure entities per player; 0 means unlimited.",
-				"每个玩家同时存在的结构实体上限；0 表示不限。" ),
-			item( "mc_cluster_health_per_block", "Durability per block", "每方块耐久", "number",
-				"Structure health contributed by each block; 0 makes structures indestructible.",
-				"每个方块提供的结构耐久；0 表示结构无敌。" ),
-			item( "mc_cluster_mass_per_block", "Mass per block", "每方块质量", "number",
-				"Physics mass contributed by each block.",
-				"每个方块提供的物理质量。", { unit = "kg" } ),
-			item( "mc_cluster_max_convexes", "Precise collision convex cap", "精确碰撞凸包上限", "number",
-				"Convex cap for precise-mode structures (crate mode is exempt). STRONGLY RECOMMENDED: install VPhysics-Jolt. WITHOUT Jolt do NOT raise this above 64: stock vphysics crashes the server very easily on moving-structure impacts!",
-				"精确模式结构的凸包上限（箱体模式不受限）。强烈推荐安装 VPhysics-Jolt。未安装 Jolt 时千万不要调高（保持 64）：原版物理引擎在结构碰撞时非常容易炸服！！" ),
-			item( "mc_cluster_merge_cells", "Collision merge size", "碰撞合并尺寸", "number",
-				"Max merged collision box edge in cells. Same warning as the convex cap: only raise above 8 with VPhysics-Jolt installed — huge convexes crash stock vphysics outright.",
-				"碰撞盒贪心合并的每边最大格数。与凸包上限同理：只有安装 VPhysics-Jolt 后才可调高（默认 8）——超大凸包会直接炸掉原版物理引擎。", { unit = "cells" } ),
-			item( "mc_cluster_collision_inset", "Collision skin inset", "碰撞内缩量", "number",
-				"Per-face collision shrink so converted structures never start flush against block collision; 0 disables.",
-				"碰撞体每面向内收缩的量，避免转换出的结构与方块碰撞零距离贴合；0 表示关闭。", { unit = "u" } ),
+		category( "block_cluster", "gameplay", {
+			item( "mc_cluster_max_blocks", "number", { unit = "blocks" } ),
+			item( "mc_cluster_max_extent", "number", { unit = "blocks" } ),
+			item( "mc_cluster_max_per_player", "number" ),
+			item( "mc_cluster_health_per_block", "number" ),
+			item( "mc_cluster_mass_per_block", "number", { unit = "kg" } ),
+			item( "mc_cluster_max_convexes", "number" ),
+			item( "mc_cluster_merge_cells", "number", { unit = "cells" } ),
+			item( "mc_cluster_collision_inset", "number", { unit = "u" } ),
 		} ),
 
-		category( "explosions", "gameplay", "Explosions", "爆炸",
-			"Explosion radius, limits and effects.",
-			"爆炸半径、限制与效果。", {
-			item( "mc_block_explosion_scale", "Blast-to-radius scale", "爆炸伤害转半径倍数", "number",
-				"Convert Garry's Mod blast damage into Minecraft explosion radius.",
-				"将 Garry's Mod 爆炸伤害换算为 Minecraft 爆炸半径。" ),
-			item( "mc_block_explosion_max_radius", "Maximum explosion radius", "最大爆炸半径", "number",
-				"Maximum Minecraft-style block explosion radius.",
-				"Minecraft 风格方块爆炸的最大半径。", { unit = "blocks" } ),
-			item( "mc_block_explosion_max_blocks", "Maximum destroyed blocks", "最大破坏方块数", "number",
-				"Maximum blocks one explosion may destroy; 0 means unlimited.",
-				"单次爆炸最多破坏的方块数；0 表示不限。", { unit = "blocks" } ),
-			item( "mc_block_explosion_fx_limit", "Break-effect limit", "破坏效果上限", "number",
-				"Maximum particle and sound effects broadcast per explosion; 0 sends none.",
-				"单次爆炸最多广播的粒子与声音效果数；0 表示不发送。" ),
+		category( "explosions", "gameplay", {
+			item( "mc_block_explosion_scale", "number" ),
+			item( "mc_block_explosion_max_radius", "number", { unit = "blocks" } ),
+			item( "mc_block_explosion_max_blocks", "number", { unit = "blocks" } ),
+			item( "mc_block_explosion_fx_limit", "number" ),
 		} ),
 
-		category( "inventory_death", "gameplay", "Inventory and death", "背包与死亡",
-			"Controls whether Minecraft inventory and equipment are dropped when a player dies.",
-			"控制玩家死亡时是否掉落 Minecraft 背包和装备。", {
-			item( "mc_keep_inventory", "Keep inventory on death", "死亡不掉落", "bool",
-				"Keep all Minecraft inventory and equipment after death.",
-				"玩家死亡后保留全部 Minecraft 背包与装备。" ),
+		category( "inventory_death", "gameplay", {
+			item( "mc_keep_inventory", "bool" ),
 		} ),
-		category( "player_game_mode", "gameplay", "Player game mode", "玩家游戏模式",
-			"Default mode and permission to switch between creative and survival.",
-			"默认模式以及自由切换创造／生存的权限。", {
-			item( "mc_default_gamemode", "Default game mode", "默认游戏模式", "choice",
-				"Mode for players without a saved mode; defaults to creative.",
-				"未保存过模式的玩家使用的默认模式，默认为创造。", { choices = {
-					choice( "creative", "Creative", "创造" ),
-					choice( "survival", "Survival", "生存" ),
+		category( "player_game_mode", "gameplay", {
+			item( "mc_default_gamemode", "choice", { choices = {
+					choice( "creative" ),
+					choice( "survival" ),
 				} } ),
-			item( "mc_allow_gamemode_switch", "Allow mode switching", "允许自由切换模式", "bool",
-				"Allow ordinary players to switch their own mode; enabled by default. Administrators may always switch.",
-				"允许普通玩家切换自己的创造／生存模式，默认开启；管理员始终可切换。" ),
+			item( "mc_allow_gamemode_switch", "bool" ),
 		} ),
 	},
 }
