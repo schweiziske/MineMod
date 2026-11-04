@@ -270,10 +270,12 @@ function MC.RegisterStateVisualModelTransform( modelId, transform )
 	if type( transform ) ~= "function" then return nil, "invalid_model_transform" end
 	ModelTransformById[modelId] = transform
 	TransformedModelDataCache[modelId] = nil
+	MC.StateVisualModelRevision = ( MC.StateVisualModelRevision or 0 ) + 1
 	return transform
 end
 
 function MC.ClearDecodedStateVisualModels()
+	MC.StateVisualModelRevision = ( MC.StateVisualModelRevision or 0 ) + 1
 	GeometryCache = {}
 	SurfaceCache = {}
 	ModelDataCache = {}

@@ -361,13 +361,15 @@ end
 -- 0..1, lerped into the tile's atlas rect after the per-face rotate/flip; this
 -- lets partial boxes (slabs, stairs, fence posts, ...) sample only the slice of
 -- the texture they actually cover, just like the in-world mesh.
-local function drawIconQuad( tile, verts, shade, rot, flipU, flipV, mat, tintCode, worldColor )
-	local u0, v0, u1, v1 = MC.TileUV( tile )
-	local poly = {}
+local function drawIconQuad( tile, verts, shade, rot, flipU, flipV, mat, tintCode, worldColor, uv, poly )
+	local u0, v0, u1, v1 = MC.TileUV( tile, uv )
+	poly = poly or { {}, {}, {}, {} }
 	for i = 1, 4 do
 		local c = verts[i]
 		local ru, rv = iconRotatedUV( c.uf, c.vf, rot, flipU, flipV )
-		poly[i] = { x = c.px, y = c.py, u = u0 + ru * ( u1 - u0 ), v = v0 + rv * ( v1 - v0 ) }
+		local point = poly[i]
+		point.x, point.y = c.px, c.py
+		point.u, point.v = u0 + ru * ( u1 - u0 ), v0 + rv * ( v1 - v0 )
 	end
 	surface.SetMaterial( mat or MC.MaterialCreativeIcon or MC.Material )
 	local r, g, b = shade, shade, shade
@@ -405,6 +407,7 @@ local function appendIconBoxFaces( pool, box, faces, project )
 		end
 		pool[#pool + 1] = {
 			tile = info.tile, shade = shade, depth = depth * 0.25,
+			faceKey = info.faceKey,
 			rot = info.rot, flipU = info.flipU, flipV = info.flipV, tintCode = info.tintCode, verts = verts,
 		}
 	end
@@ -439,6 +442,98 @@ local function iconBoxes( id, orient, visual )
 	return MC.BlockBoxes and MC.BlockBoxes( id, orient ) or nil
 end
 
+local modelIconGeometry = setmetatable( {}, { __mode = "k" } )
+local boxIconGeometry = setmetatable( {}, { __mode = "k" } )
+local MODEL_ICON_SHADE = { 255, 130, 215, 215, 170, 170 }
+local ICON_HORIZONTAL = 0.625 * 0.70710678118655
+local ICON_VERTICAL = 0.625 * 0.86602540378444
+local BOX_ICON_FACE_KEYS = { top = { faceKey = "top" }, xp = { faceKey = "xp" }, yp = { faceKey = "yp" } }
+
+local function centerIconFaces( pool )
+	if #pool == 0 then return end
+	local minX, minY, maxX, maxY = math.huge, math.huge, -math.huge, -math.huge
+	for _, entry in ipairs( pool ) do
+		for _, point in ipairs( entry.verts ) do
+			minX, minY = math.min( minX, point.px ), math.min( minY, point.py )
+			maxX, maxY = math.max( maxX, point.px ), math.max( maxY, point.py )
+		end
+	end
+	local centerX, centerY = ( minX + maxX ) * 0.5, ( minY + maxY ) * 0.5
+	for _, entry in ipairs( pool ) do
+		for _, point in ipairs( entry.verts ) do
+			point.px, point.py = point.px - centerX, point.py - centerY
+		end
+		entry.projected, entry.poly = { {}, {}, {}, {} }, { {}, {}, {}, {} }
+	end
+end
+
+local function projectIconFace( entry, size, cx, cy )
+	for index = 1, 4 do
+		local source, target = entry.verts[index], entry.projected[index]
+		target.px, target.py = cx + source.px * size, cy + source.py * size
+		target.uf, target.vf = source.uf, source.vf
+	end
+	return entry.projected
+end
+
+local function projectIconBoxPoint( x, y, z )
+	return ( x - y ) * ICON_HORIZONTAL,
+		( x + y - 1 ) * ICON_HORIZONTAL * 0.5 - ( z - 0.5 ) * ICON_VERTICAL
+end
+
+local function boxIconFaces( boxes )
+	local cached = boxIconGeometry[boxes]
+	if cached then return cached end
+	local pool = {}
+	for _, box in ipairs( boxes ) do
+		appendIconBoxFaces( pool, box, BOX_ICON_FACE_KEYS, projectIconBoxPoint )
+	end
+	centerIconFaces( pool )
+	table.sort( pool, function( a, b ) return a.depth < b.depth end )
+	boxIconGeometry[boxes] = pool
+	return pool
+end
+
+local function modelIconFaces( quads )
+	local cached = modelIconGeometry[quads]
+	if cached then return cached end
+	local horizontal, vertical = ICON_HORIZONTAL, ICON_VERTICAL
+	local pool = {}
+	for _, quad in ipairs( quads ) do
+		local verts, depth = {}, 0
+		for index = 1, 4 do
+			local point = quad.points[index]
+			local p = point.pos
+			verts[index] = { px = ( p.x - p.y ) * horizontal,
+				py = ( p.x + p.y ) * horizontal * 0.5 - p.z * vertical,
+				uf = point.u, vf = point.v }
+			depth = depth + p.x + p.y + p.z * 0.81649658092773
+		end
+		local a, b, c = verts[1], verts[2], verts[3]
+		-- Cull by projected winding: rotated and crossed planes cannot be
+		-- classified by their nearest axis face alone.
+		if ( b.px - a.px ) * ( c.py - a.py ) - ( b.py - a.py ) * ( c.px - a.px ) > 0 then
+			pool[#pool + 1] = { quad = quad, verts = verts, depth = depth }
+		end
+	end
+	-- Center the projected outline, not the full-block origin. Thin or
+	-- asymmetric models otherwise sit below/beside the middle of the slot.
+	-- This adjustment and the draw tables are prepared only on a cache miss.
+	centerIconFaces( pool )
+	table.sort( pool, function( a, b ) return a.depth < b.depth end )
+	modelIconGeometry[quads] = pool
+	return pool
+end
+
+local function drawModelIcon( quads, x, y, w, h, material, worldColor )
+	local size, cx, cy = math.min( w, h ), x + w * 0.5, y + h * 0.5
+	for _, entry in ipairs( modelIconFaces( quads ) ) do
+		local quad = entry.quad
+		drawIconQuad( quad.tile, projectIconFace( entry, size, cx, cy ), MODEL_ICON_SHADE[quad.face], 0, false, false,
+			material, quad.tintCode, worldColor, quad.uv, entry.poly )
+	end
+end
+
 function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual, materialOverride, worldColor )
 	local b = visual and visual.block or MC.Blocks[id]
 	if not b then return end
@@ -468,6 +563,12 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual, 
 			MC.DrawBlockIcon( id, x, y, w, h, tintStateId, materialOverride, worldColor )
 			return
 		end
+	end
+
+	local quads = MC.BlockPresentationQuads( tintStateId )
+	if quads then
+		drawModelIcon( quads, x, y, w, h, materialOverride or iconMaterialFor( id ), worldColor )
+		return
 	end
 
 	-- Solid cubes and blocks with real slab/stairs/model/connection geometry get
@@ -501,30 +602,16 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual, 
 		faces.yp.tintCode = tintCode
 	end
 
-	-- Vanilla block/item models are anchored at the exact centre of the 16x16
-	-- GUI slot, then use the block-model GUI transform: X=30, Y=225 and a
-	-- uniform 0.625 scale. This orthographic projection is the 2D equivalent;
-	-- keeping the model origin at (0.5, 0.5, 0.5) also aligns partial blocks
-	-- exactly as Minecraft does instead of tuning their top edge separately.
+	-- Legacy/custom box shapes use the same cached outline centering as
+	-- catalog models. Resolve face materials separately so their current
+	-- rotation, tint and atlas binding do not become part of the geometry cache.
 	local size = math.min( w, h )
 	local cx, cy = x + w * 0.5, y + h * 0.5
-	local modelScale = size * 0.625
-	local horizontal = modelScale * 0.70710678118655
-	local groundVertical = horizontal * 0.5
-	local blockVertical = modelScale * 0.86602540378444
-	local function project( px, py, pz )
-		return cx + ( px - py ) * horizontal,
-			cy + ( px + py - 1 ) * groundVertical - ( pz - 0.5 ) * blockVertical
-	end
-
-	local pool = {}
-	for _, box in ipairs( boxes ) do
-		appendIconBoxFaces( pool, box, faces, project )
-	end
-	table.sort( pool, function( a, c ) return a.depth < c.depth end )
 	local mat = materialOverride or iconMaterialFor( id )
-	for _, f in ipairs( pool ) do
-		drawIconQuad( f.tile, f.verts, f.shade, f.rot, f.flipU, f.flipV, mat, f.tintCode, worldColor )
+	for _, entry in ipairs( boxIconFaces( boxes ) ) do
+		local f = faces[entry.faceKey]
+		drawIconQuad( f.tile, projectIconFace( entry, size, cx, cy ), entry.shade,
+			f.rot, f.flipU, f.flipV, mat, f.tintCode, worldColor, nil, entry.poly )
 	end
 end
 

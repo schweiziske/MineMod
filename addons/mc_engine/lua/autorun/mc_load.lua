@@ -242,6 +242,7 @@ local CLIENT_FILES = {
 	"mc/cl_texture_pack_manager.lua",
 	"mc/cl_texture_pack_ui.lua",
 	"mc/cl_config_ui.lua",
+	"mc/cl_block_presentation.lua",
 	"mc/cl_ui.lua",
 	"mc/cl_save_ui.lua",
 	"mc/workshop/cl_workshop.lua",

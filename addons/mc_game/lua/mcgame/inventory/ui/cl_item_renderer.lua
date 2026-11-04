@@ -673,6 +673,50 @@ function Renderer.CanDraw( stack )
 	return not MC.IsEmptyItemStack( stack ) and definitionFor( stack ) ~= nil
 end
 
+local doorIconOffsets = setmetatable( {}, { __mode = "k" } )
+local doorIconPoly = {
+	{ x = 0, y = 0, u = 0, v = 0 }, { x = 0, y = 0, u = 1, v = 0 },
+	{ x = 0, y = 0, u = 1, v = 1 }, { x = 0, y = 0, u = 0, v = 1 },
+}
+
+local function doorIconOffset( definition, plan )
+	if not string.match( definition.name or "", "_door$" ) or #plan.layers ~= 1 then return nil end
+	local mask = spriteMaskForLayer( plan.layers[1] )
+	if not mask then return nil end
+	local cached = doorIconOffsets[mask]
+	if cached then return cached end
+	-- Masks are validated when the generated catalog loads. Scan once per
+	-- mask, then reuse the normalized offset at every inventory/HUD scale.
+	local width, height = mask.width, mask.height
+	local minX, minY, maxX, maxY = width, height, 0, 0
+	for rowIndex = 0, height - 1 do
+		local row = mask.rows[rowIndex + 1]
+		for column = 0, width - 1 do
+			if math.floor( row / spriteMaskBitPowers[column] ) % 2 == 1 then
+				minX, minY = math.min( minX, column ), math.min( minY, rowIndex )
+				maxX, maxY = math.max( maxX, column + 1 ), math.max( maxY, rowIndex + 1 )
+			end
+		end
+	end
+	if maxX <= minX or maxY <= minY then return nil end
+	cached = { x = 0.5 - ( minX + maxX ) / ( 2 * width ),
+		y = 0.5 - ( minY + maxY ) / ( 2 * height ) }
+	doorIconOffsets[mask] = cached
+	return cached
+end
+
+local function drawDoorIcon( material, x, y, size, color )
+	-- Explicit edge UVs preserve the full 16x16 canvas without the textured
+	-- rectangle helper's texel inset. Reuse the polygon instead of allocating
+	-- vertices each Paint; the alpha-mask offset centers the visible door.
+	local a, b, c, d = doorIconPoly[1], doorIconPoly[2], doorIconPoly[3], doorIconPoly[4]
+	a.x, a.y, b.x, b.y = x, y, x + size, y
+	c.x, c.y, d.x, d.y = x + size, y + size, x, y + size
+	surface.SetMaterial( material )
+	surface.SetDrawColor( color.r or 255, color.g or 255, color.b or 255, color.a or 255 )
+	surface.DrawPoly( doorIconPoly )
+end
+
 function Renderer.DrawIcon( stack, x, y, size, options )
 	if not Renderer.CanDraw( stack ) then return false end
 	options = options or {}
@@ -689,11 +733,17 @@ function Renderer.DrawIcon( stack, x, y, size, options )
 			drawSpecialIcon( stack, plan, x, y, size, options )
 	end
 	if not drawn and #materials > 0 then
+		local offset = doorIconOffset( definition, plan )
+		if offset then x, y = x + offset.x * size, y + offset.y * size end
 		drawMask = function()
 			UI.WithPointFiltering( function()
 				for index, material in ipairs( materials ) do
 					local color = Renderer.LayerColor( stack, plan, index, options.worldColor )
-					UI.DrawTexture( material, x, y, size, size, nil, nil, nil, nil, color )
+					if offset then
+						drawDoorIcon( material, x, y, size, color )
+					else
+						UI.DrawTexture( material, x, y, size, size, nil, nil, nil, nil, color )
+					end
 				end
 			end )
 		end

@@ -424,11 +424,42 @@ if CLIENT then
 		return HELD_FULL_BLOCK
 	end
 
+	local heldBlockMatrix = Matrix()
+	local heldBlockScale = Vector( 1, 1, 1 )
+	local heldModelDrawState = {}
+
+	local function drawHeldModelQuads( state, quads, material, lightR, lightG, lightB )
+		render.SetMaterial( material )
+		mesh.Begin( MATERIAL_TRIANGLES, #quads * 2 )
+		state.building = true
+		for _, quad in ipairs( quads ) do
+			local u0, v0, u1, v1 = MC.TileUV( quad.tile, quad.uv )
+			local shade = HELD_FACE_SHADE[quad.face]
+			local r, g, b = 255, 255, 255
+			if quad.tintCode ~= 0 then r, g, b = MC.BlockTintRGB( quad.tintCode ) end
+			r = math.Clamp( math.floor( shade.r * lightR * r / 255 + 0.5 ), 0, 255 )
+			g = math.Clamp( math.floor( shade.g * lightG * g / 255 + 0.5 ), 0, 255 )
+			b = math.Clamp( math.floor( shade.b * lightB * b / 255 + 0.5 ), 0, 255 )
+			for _, ci in ipairs( HELD_TRI ) do
+				local point = quad.points[ci]
+				mesh.Position( point.pos )
+				mesh.Normal( quad.normal )
+				mesh.TexCoord( 0, u0 + point.u * ( u1 - u0 ), v0 + point.v * ( v1 - v0 ) )
+				mesh.Color( r, g, b, 255 )
+				mesh.AdvanceVertex()
+			end
+		end
+		state.building = false
+		mesh.End()
+	end
+
 	function MC.DrawCreativeHeldBlock( id, orient, pos, ang, scale, brightness, stateId )
 		if not ( MC.Blocks and MC.Blocks[id] and MC.Material and MC.BlockFace and MC.TileUV ) then return false end
 		if not stateId and MC.StateFromLegacy then stateId = MC.StateFromLegacy( id, orient or 0 ) end
-		local boxes = heldBlockBoxes( id, orient, stateId )
-		if not boxes or #boxes == 0 then return false end
+		local quads = MC.BlockPresentationQuads( stateId )
+		local boxes
+		if not quads then boxes = heldBlockBoxes( id, orient, stateId ) end
+		if not quads and ( not boxes or #boxes == 0 ) then return false end
 
 		local translucent = stateId and MC.IsTranslucentBlockState and MC.IsTranslucentBlockState( stateId )
 			or MC.IsTranslucentBlock and MC.IsTranslucentBlock( id )
@@ -444,14 +475,15 @@ if CLIENT then
 			lightG, lightB = lightR, lightR
 		end
 		local tintR, tintG, tintB = 255, 255, 255
-		if stateId and MC.BlockStateTintCode and MC.BlockTintRGB then
+		if not quads and stateId and MC.BlockStateTintCode and MC.BlockTintRGB then
 			local tintCode = MC.BlockStateTintCode( stateId, id, 0 )
 			if tintCode and tintCode ~= 0 then tintR, tintG, tintB = MC.BlockTintRGB( tintCode ) end
 		end
-		local mat = Matrix()
-		mat:Translate( pos )
-		mat:Rotate( ang )
-		mat:Scale( Vector( scale, scale, scale ) )
+		local mat = heldBlockMatrix
+		heldBlockScale.x, heldBlockScale.y, heldBlockScale.z = scale, scale, scale
+		mat:SetAngles( ang )
+		mat:SetTranslation( pos )
+		mat:SetScale( heldBlockScale )
 
 		cam.PushModelMatrix( mat )
 		-- Keep the source texels crisp in both hands, independent of the world's
@@ -459,40 +491,47 @@ if CLIENT then
 		render.PushFilterMin( TEXFILTER.POINT )
 		render.PushFilterMag( TEXFILTER.POINT )
 		local building = false
-		local ok, err = pcall( function()
-			render.SetMaterial( material )
-			mesh.Begin( MATERIAL_TRIANGLES, #boxes * 12 )
-			building = true
-			for _, box in ipairs( boxes ) do
-				for face = 1, 6 do
-					local tile, rot, flipU, flipV
-					if stateId and MC.BlockFaceForState then
-						tile, rot, flipU, flipV = MC.BlockFaceForState( stateId, face )
-					else
-						tile, rot, flipU, flipV = MC.BlockFace( id, face, orient )
-					end
-					local corners = HELD_FACE_CORNERS[face]( box )
-					local normal = HELD_FACE_NORMALS[face]
-					local shade = HELD_FACE_SHADE[face]
-					for _, ci in ipairs( HELD_TRI ) do
-						local c = corners[ci]
-						local u, v = atlasUV( tile, face, c, rot, flipU, flipV )
-						mesh.Position( Vector( c[1] - 0.5, c[2] - 0.5, c[3] - 0.5 ) )
-						mesh.Normal( normal )
-						mesh.TexCoord( 0, u, v )
-						mesh.Color(
-							math.Clamp( math.floor( shade.r * lightR * tintR / 255 + 0.5 ), 0, 255 ),
-							math.Clamp( math.floor( shade.g * lightG * tintG / 255 + 0.5 ), 0, 255 ),
-							math.Clamp( math.floor( shade.b * lightB * tintB / 255 + 0.5 ), 0, 255 ),
-							shade.a
-						)
-						mesh.AdvanceVertex()
+		local ok, err
+		if quads then
+			heldModelDrawState.building = false
+			ok, err = pcall( drawHeldModelQuads, heldModelDrawState, quads, material, lightR, lightG, lightB )
+			building = heldModelDrawState.building
+		else
+			ok, err = pcall( function()
+				render.SetMaterial( material )
+				mesh.Begin( MATERIAL_TRIANGLES, #boxes * 12 )
+				building = true
+				for _, box in ipairs( boxes ) do
+					for face = 1, 6 do
+						local tile, rot, flipU, flipV
+						if stateId and MC.BlockFaceForState then
+							tile, rot, flipU, flipV = MC.BlockFaceForState( stateId, face )
+						else
+							tile, rot, flipU, flipV = MC.BlockFace( id, face, orient )
+						end
+						local corners = HELD_FACE_CORNERS[face]( box )
+						local normal = HELD_FACE_NORMALS[face]
+						local shade = HELD_FACE_SHADE[face]
+						for _, ci in ipairs( HELD_TRI ) do
+							local c = corners[ci]
+							local u, v = atlasUV( tile, face, c, rot, flipU, flipV )
+							mesh.Position( Vector( c[1] - 0.5, c[2] - 0.5, c[3] - 0.5 ) )
+							mesh.Normal( normal )
+							mesh.TexCoord( 0, u, v )
+							mesh.Color(
+								math.Clamp( math.floor( shade.r * lightR * tintR / 255 + 0.5 ), 0, 255 ),
+								math.Clamp( math.floor( shade.g * lightG * tintG / 255 + 0.5 ), 0, 255 ),
+								math.Clamp( math.floor( shade.b * lightB * tintB / 255 + 0.5 ), 0, 255 ),
+								shade.a
+							)
+							mesh.AdvanceVertex()
+						end
 					end
 				end
-			end
-			building = false
-			mesh.End()
-		end )
+				building = false
+				mesh.End()
+			end )
+		end
 		if building then
 			-- Finish the abandoned immediate mesh before restoring render state.
 			-- Preserve the original emission error if ending it also fails.
