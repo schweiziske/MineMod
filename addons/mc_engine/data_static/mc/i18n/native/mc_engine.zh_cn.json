@@ -1,0 +1,13 @@
+{
+  "locale": "zh_cn",
+  "entries": {
+    "dll_command_help": "打开 MineMod Native DLL 的 GitHub 页面",
+    "dll_console": "Native DLL 下载地址: {url}",
+    "dll_failed": "Native DLL 初始化失败，当前使用 Lua 后端。\n失败原因：{reason}\n请安装与游戏分支和位数匹配的 DLL 并重启游戏。下载地址：",
+    "dll_failed_console": "Native DLL 初始化失败：{reason}。请安装与游戏分支和位数匹配的 DLL 并重启游戏。下载地址: {url}",
+    "dll_missing": "未检测到优化DLL，当前使用 Lua 后端。 下载地址：",
+    "dll_open_hint": "(推荐下载)",
+    "dll_outdated": "Native DLL 版本过期（当前 ABI {actual}，需要 ABI {required}），当前使用 Lua 后端。下载地址：",
+    "dll_outdated_console": "Native DLL 版本过期（当前 ABI {actual}，需要 ABI {required}）。下载地址: {url}"
+  }
+}

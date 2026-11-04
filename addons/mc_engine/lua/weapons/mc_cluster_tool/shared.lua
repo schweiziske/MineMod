@@ -11,14 +11,14 @@
 
 if SERVER then AddCSLuaFile() end
 
-local function L( key, fallback, vars )
-	return MC and MC.T and MC.T( key, fallback, vars ) or fallback
+local function L( key, vars )
+	return MC.T( key, vars )
 end
 
-SWEP.PrintName     = L( "weapon.mc_cluster_tool.name", "MC 结构搬运器" )
+SWEP.PrintName     = L( "weapon.mc_cluster_tool.name" )
 SWEP.Author        = "schweiziske"
-SWEP.Purpose       = L( "weapon.mc_cluster_tool.purpose", "把选中的 Minecraft 方块变成可搬运的物理实体" )
-SWEP.Instructions  = L( "weapon.mc_cluster_tool.instructions", "左键 选择  右键 取消  R 切换模式  E 连通选择  G 转换/放回  X 清空" )
+SWEP.Purpose       = L( "weapon.mc_cluster_tool.purpose" )
+SWEP.Instructions  = L( "weapon.mc_cluster_tool.instructions" )
 SWEP.Category      = "Minecraft"
 
 -- Admin build tool: right-click is a deliberate cluster gesture, not "interact".
@@ -65,8 +65,7 @@ function SWEP:Deploy()
 	if CLIENT then
 		timer.Simple( 0, function()
 			if not IsValid( self ) then return end
-			clientChat( L( "weapon.mc_cluster_tool.help",
-				"结构搬运器：左键选方块 (R 切换框选)，E 连通选择，G 把选区变成实体；对准实体按 G 放回网格。" ) )
+			clientChat( L( "weapon.mc_cluster_tool.help" ) )
 		end )
 	end
 	return true
@@ -78,13 +77,13 @@ function SWEP:PrimaryAttackClient()
 	if not IsValid( owner ) or owner ~= LocalPlayer() then return end
 
 	if MC.ClusterAimedCluster and IsValid( MC.ClusterAimedCluster() ) then
-		clientChat( L( "weapon.mc_cluster_tool.aim_paste_hint", "对准结构时按 G 放回网格" ) )
+		clientChat( L( "weapon.mc_cluster_tool.aim_paste_hint" ) )
 		return
 	end
 
 	local aim = aimedBlock()
 	if not aim then
-		clientChat( L( "weapon.mc_cluster_tool.aim_block", "请准星对准一个 MC 方块" ) )
+		clientChat( L( "weapon.mc_cluster_tool.aim_block" ) )
 		return
 	end
 
@@ -117,7 +116,7 @@ function SWEP:SecondaryAttackClient()
 
 	if ( MC.ClusterSelectMode == "box" or MC.ClusterSelectMode == "crate" ) and MC.ClusterBoxCorner then
 		MC.ClusterBoxCorner = nil
-		clientChat( L( "weapon.mc_cluster_tool.corner_cancel", "已取消角点" ) )
+		clientChat( L( "weapon.mc_cluster_tool.corner_cancel" ) )
 		return
 	end
 
@@ -162,14 +161,14 @@ function SWEP:ClusterActionClient( action )
 		end
 	elseif action == "flood" then
 		if MC.ClusterSelectMode == "crate" then
-			clientChat( L( "weapon.mc_cluster_tool.crate_no_flood", "箱体模式只支持框选" ) )
+			clientChat( L( "weapon.mc_cluster_tool.crate_no_flood" ) )
 			return
 		end
 		local aim = aimedBlock()
 		if aim and MC.ClusterFloodSelect then
 			MC.ClusterFloodSelect( aim.bx, aim.by, aim.bz )
 		else
-			clientChat( L( "weapon.mc_cluster_tool.aim_block", "请准星对准一个 MC 方块" ) )
+			clientChat( L( "weapon.mc_cluster_tool.aim_block" ) )
 		end
 	end
 end
@@ -188,11 +187,11 @@ function SWEP:ToggleModeClient()
 	MC.ClusterSelectMode = nextMode
 
 	if nextMode == "box" then
-		clientChat( L( "weapon.mc_cluster_tool.mode_box", "已切换到框选模式" ) )
+		clientChat( L( "weapon.mc_cluster_tool.mode_box" ) )
 	elseif nextMode == "crate" then
-		clientChat( L( "weapon.mc_cluster_tool.mode_crate", "已切换到箱体模式 (碰撞为整箱, 适合大结构)" ) )
+		clientChat( L( "weapon.mc_cluster_tool.mode_crate" ) )
 	else
-		clientChat( L( "weapon.mc_cluster_tool.mode_fine", "已切换到细选模式" ) )
+		clientChat( L( "weapon.mc_cluster_tool.mode_fine" ) )
 	end
 end
 
@@ -234,7 +233,7 @@ end
 
 if CLIENT then
 	function SWEP:GetPrintName()
-		return L( "weapon.mc_cluster_tool.name", self.PrintName or "MC 结构搬运器" )
+		return L( "weapon.mc_cluster_tool.name" )
 	end
 
 	local function activeClusterTool( ply )
@@ -316,9 +315,9 @@ if CLIENT then
 	-- segmented mode selector; returns the x after the last tab
 	local function drawModeTabs( x, y, mode )
 		local tabs = {
-			{ id = "fine", label = L( "weapon.mc_cluster_tool.ui_tab_fine", "细选" ) },
-			{ id = "box", label = L( "weapon.mc_cluster_tool.ui_tab_box", "框选" ) },
-			{ id = "crate", label = L( "weapon.mc_cluster_tool.ui_tab_crate", "箱体" ) },
+			{ id = "fine", label = L( "weapon.mc_cluster_tool.ui_tab_fine" ) },
+			{ id = "box", label = L( "weapon.mc_cluster_tool.ui_tab_box" ) },
+			{ id = "crate", label = L( "weapon.mc_cluster_tool.ui_tab_crate" ) },
 		}
 		local tw, th, gap = 76, 22, 4
 		for i, tab in ipairs( tabs ) do
@@ -366,17 +365,17 @@ if CLIENT then
 			-- entity card: what it is / how healthy / can it go back
 			local blocks = aimedCluster.GetBlockCount and aimedCluster:GetBlockCount() or 0
 			draw.SimpleText(
-				L( "weapon.mc_cluster_tool.ui_structure", "方块结构" ) .. " · "
-					.. L( "weapon.mc_cluster_tool.ui_blocks", "{n} 方块", { n = blocks } ),
+				L( "weapon.mc_cluster_tool.ui_structure" ) .. " · "
+					.. L( "weapon.mc_cluster_tool.ui_blocks", { n = blocks } ),
 				"mc_hud", x0 + pad, rowY1 + 4, COL_TEXT, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER )
 			local owner = aimedCluster.GetOwnerLabel and aimedCluster:GetOwnerLabel() or ""
 			if owner ~= "" then
-				draw.SimpleText( L( "weapon.mc_cluster_tool.owner", "主人 {name}", { name = owner } ),
+				draw.SimpleText( L( "weapon.mc_cluster_tool.owner", { name = owner } ),
 					"mc_hud_small", x0 + panelW - pad, rowY1 + 4, COL_DIM, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER )
 			end
 
 			local maxHP = aimedCluster.GetClusterMaxHP and aimedCluster:GetClusterMaxHP() or 0
-			local durLabel = L( "weapon.mc_cluster_tool.ui_durability", "耐久" )
+			local durLabel = L( "weapon.mc_cluster_tool.ui_durability" )
 			draw.SimpleText( durLabel, "mc_hud_small", x0 + pad, rowY2 + 3, COL_DIM, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER )
 			surface.SetFont( "mc_hud_small" )
 			local durLabelW = surface.GetTextSize( durLabel )
@@ -389,28 +388,28 @@ if CLIENT then
 				draw.SimpleText( hp .. " / " .. maxHP, "mc_hud_small", x0 + panelW - pad, rowY2 + 3,
 					COL_DIM, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER )
 			else
-				draw.SimpleText( L( "weapon.mc_cluster_tool.durability_inf", "耐久 无敌" ), "mc_hud_small",
+				draw.SimpleText( L( "weapon.mc_cluster_tool.durability_inf" ), "mc_hud_small",
 					barX, rowY2 + 3, COL_DIM, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER )
 			end
 
 			local status, statusCol
 			if ghost and ghost.tilted then
-				status = L( "weapon.mc_cluster_tool.ui_paste_tilted", "先用物理枪放平" )
+				status = L( "weapon.mc_cluster_tool.ui_paste_tilted" )
 				statusCol = COL_BAD
 			elseif ghost and ( ghost.blocked or 0 ) > 0 then
-				status = L( "weapon.mc_cluster_tool.ui_paste_blocked", "有 {n} 格被占用", { n = ghost.blocked } )
+				status = L( "weapon.mc_cluster_tool.ui_paste_blocked", { n = ghost.blocked } )
 				statusCol = COL_BAD
 			else
-				status = L( "weapon.mc_cluster_tool.ui_paste_ok", "可放回" )
+				status = L( "weapon.mc_cluster_tool.ui_paste_ok" )
 				statusCol = COL_OK
 			end
 			local nextX = drawKeyChip( x0 + pad, rowY3, "G",
-				L( "weapon.mc_cluster_tool.ui_paste", "放回网格" ), COL_TEXT )
+				L( "weapon.mc_cluster_tool.ui_paste" ), COL_TEXT )
 			draw.SimpleText( status, "mc_hud_small", nextX, rowY3 + 10, statusCol, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER )
 		else
 			-- selection panel: mode tabs + fill bar + context keybinds
 			local afterTabs = drawModeTabs( x0 + pad, rowY1, mode )
-			drawKeyChip( afterTabs + 4, rowY1 + 1, "R", L( "weapon.mc_cluster_tool.ui_cycle", "切换模式" ) )
+			drawKeyChip( afterTabs + 4, rowY1 + 1, "R", L( "weapon.mc_cluster_tool.ui_cycle" ) )
 			local nearFull = maxBlocks > 0 and count / maxBlocks > 0.9
 			draw.SimpleText( count .. " / " .. maxBlocks, "mc_hud_small", x0 + panelW - pad, rowY1 + 11,
 				nearFull and COL_ACCENT_CRATE or COL_DIM, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER )
@@ -419,23 +418,23 @@ if CLIENT then
 				mode == "crate" and COL_ACCENT_CRATE or COL_ACCENT )
 
 			local chips = {}
-			local LMB = L( "weapon.mc_cluster_tool.ui_key_lmb", "左键" )
-			local RMB = L( "weapon.mc_cluster_tool.ui_key_rmb", "右键" )
+			local LMB = L( "weapon.mc_cluster_tool.ui_key_lmb" )
+			local RMB = L( "weapon.mc_cluster_tool.ui_key_rmb" )
 			if mode == "fine" then
-				chips[#chips + 1] = { LMB, L( "weapon.mc_cluster_tool.ui_add", "加选" ) }
-				chips[#chips + 1] = { RMB, L( "weapon.mc_cluster_tool.ui_remove", "减选" ) }
-				chips[#chips + 1] = { "E", L( "weapon.mc_cluster_tool.ui_flood", "连通选择" ) }
+				chips[#chips + 1] = { LMB, L( "weapon.mc_cluster_tool.ui_add" ) }
+				chips[#chips + 1] = { RMB, L( "weapon.mc_cluster_tool.ui_remove" ) }
+				chips[#chips + 1] = { "E", L( "weapon.mc_cluster_tool.ui_flood" ) }
 			elseif MC.ClusterBoxCorner then
-				chips[#chips + 1] = { LMB, L( "weapon.mc_cluster_tool.ui_corner_b", "选对角" ) }
-				chips[#chips + 1] = { RMB, L( "weapon.mc_cluster_tool.ui_corner_cancel", "取消角点" ) }
+				chips[#chips + 1] = { LMB, L( "weapon.mc_cluster_tool.ui_corner_b" ) }
+				chips[#chips + 1] = { RMB, L( "weapon.mc_cluster_tool.ui_corner_cancel" ) }
 			else
-				chips[#chips + 1] = { LMB, L( "weapon.mc_cluster_tool.ui_corner_a", "选第一角点" ) }
+				chips[#chips + 1] = { LMB, L( "weapon.mc_cluster_tool.ui_corner_a" ) }
 			end
 			if count > 0 then
 				chips[#chips + 1] = { "G", mode == "crate"
-					and L( "weapon.mc_cluster_tool.ui_convert_crate", "转换(整箱)" )
-					or L( "weapon.mc_cluster_tool.ui_convert", "转换" ), COL_TEXT }
-				chips[#chips + 1] = { "X", L( "weapon.mc_cluster_tool.ui_clear", "清空" ) }
+					and L( "weapon.mc_cluster_tool.ui_convert_crate" )
+					or L( "weapon.mc_cluster_tool.ui_convert" ), COL_TEXT }
+				chips[#chips + 1] = { "X", L( "weapon.mc_cluster_tool.ui_clear" ) }
 			end
 			drawChipRow( x0 + pad, rowY3, chips )
 		end

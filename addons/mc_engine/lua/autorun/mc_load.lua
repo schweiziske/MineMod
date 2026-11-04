@@ -353,10 +353,8 @@ if CLIENT then
 			if chat and chat.AddText then
 				chat.AddText(
 					Color( 80, 190, 255 ), "[MineMod] ",
-					Color( 235, 235, 235 ), MC.T( "join.config_hint",
-						"控制台输入 mc_config 打开配置界面，输入 mc_save_manager 打开存档管理器。" ),
-					Color( 160, 255, 160 ), "  " .. MC.T( "join.config_hide_hint",
-						"输入 mc_join_notice 0 关闭进服提示。" )
+					Color( 235, 235, 235 ), MC.T( "join.config_hint" ),
+					Color( 160, 255, 160 ), "  " .. MC.T( "join.config_hide_hint" )
 				)
 			end
 		end )
@@ -471,46 +469,36 @@ if CLIENT then
 				if nativeFailed then
 					chat.AddText(
 						Color( 255, 80, 80 ), "[MineMod] ",
-						MC.T( "native.dll_failed",
-							"Native DLL 初始化失败，当前使用 Lua 后端。\n失败原因：{reason}\n请安装与游戏分支和位数匹配的 DLL 并重启游戏。下载地址：", {
-								reason = nativeFailureReason,
-							} ),
+						MC.T( "native.dll_failed", { reason = nativeFailureReason } ),
 						Color( 130, 210, 255 ), nativeURL
 					)
 				elseif nativeOutdated then
 					chat.AddText(
 						Color( 80, 190, 255 ), "[MineMod] ",
-						Color( 255, 120, 90 ), MC.T( "native.dll_outdated",
-							"Native DLL 版本过期（当前 ABI {actual}，需要 ABI {required}），当前使用 Lua 后端。下载地址：", {
-								actual = tostring( MC.NativeMeshModuleABI or "?" ),
-								required = tostring( MC.NativeMeshABI ),
-							} ),
+						Color( 255, 120, 90 ), MC.T( "native.dll_outdated", {
+							actual = tostring( MC.NativeMeshModuleABI or "?" ),
+							required = tostring( MC.NativeMeshABI ),
+						} ),
 						Color( 130, 210, 255 ), nativeURL
 					)
 				else
 					chat.AddText(
 						Color( 80, 190, 255 ), "[MineMod] ",
-						Color( 255, 210, 90 ), MC.T( "native.dll_missing",
-							"未检测到优化DLL，当前使用 Lua 后端。 下载地址：" ),
+						Color( 255, 210, 90 ), MC.T( "native.dll_missing" ),
 						Color( 130, 210, 255 ), nativeURL,
-						Color( 160, 255, 160 ), MC.T( "native.dll_open_hint",
-							"(推荐下载)" )
+						Color( 160, 255, 160 ), MC.T( "native.dll_open_hint" )
 					)
 				end
 			end
 			if nativeFailed then
-				MC.Fault( "native_module_init_failed", "%s", MC.T( "native.dll_failed_console",
-					"Native DLL 初始化失败：{reason}。请安装与游戏分支和位数匹配的 DLL 并重启游戏。下载地址: {url}", {
-						reason = nativeFailureReason,
-						url = nativeURL,
-					} ) )
+				MC.Fault( "native_module_init_failed", "%s", MC.T( "native.dll_failed_console", {
+					reason = nativeFailureReason,
+					url = nativeURL,
+				} ) )
 				return
 			end
 			local consoleKey = nativeOutdated and "native.dll_outdated_console" or "native.dll_console"
-			local consoleFallback = nativeOutdated
-				and "Native DLL 版本过期（当前 ABI {actual}，需要 ABI {required}）。下载地址: {url}"
-				or "Native DLL 下载地址: {url}"
-			MsgN( "[MineMod] " .. MC.T( consoleKey, consoleFallback, {
+			MsgN( "[MineMod] " .. MC.T( consoleKey, {
 				actual = tostring( MC.NativeMeshModuleABI or "?" ),
 				required = tostring( MC.NativeMeshABI ),
 				url = nativeURL,
@@ -518,7 +506,7 @@ if CLIENT then
 		end )
 		concommand.Add( "mc_native_download", function()
 			if gui and gui.OpenURL then gui.OpenURL( nativeURL ) end
-		end, nil, MC.T( "native.dll_command_help", "打开 MineMod Native DLL 的 GitHub 页面" ) )
+		end, nil, MC.T( "native.dll_command_help" ) )
 	end
 end
 

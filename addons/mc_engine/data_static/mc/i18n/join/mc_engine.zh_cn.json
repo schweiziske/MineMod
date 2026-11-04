@@ -1,0 +1,7 @@
+{
+  "locale": "zh_cn",
+  "entries": {
+    "config_hide_hint": "输入 mc_join_notice 0 关闭进服提示。",
+    "config_hint": "控制台输入 mc_config 打开配置界面，输入 mc_save_manager 打开存档管理器。"
+  }
+}

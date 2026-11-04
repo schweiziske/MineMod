@@ -1,0 +1,10 @@
+{
+  "locale": "zh_cn",
+  "entries": {
+    "complete": "MC 同步完成  {label}",
+    "progress": "MC 同步 {received}/{expected} 方块  {done}/{chunks} 区块",
+    "progress_bytes": "MC 同步 {received}/{expected} KB  {done}/{chunks} 分片",
+    "workshop_complete": "创意工坊基础世界已从本地读取完成",
+    "workshop_progress": "本地读取创意工坊世界 {received}/{expected} 方块  {done}/{chunks} 区块"
+  }
+}

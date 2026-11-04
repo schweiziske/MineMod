@@ -1,0 +1,23 @@
+{
+  "locale": "en_us",
+  "entries": {
+    "category.all": "All",
+    "category.building": "Building Blocks",
+    "category.color_blocks": "Color Blocks",
+    "category.custom": "Custom",
+    "category.decoration": "Decoration",
+    "category.functional": "Functional Blocks",
+    "category.natural": "Natural Blocks",
+    "category.plants": "Plants",
+    "category.redstone": "Redstone",
+    "category.slopes": "Slopes",
+    "category.transparent": "Transparent/Glass",
+    "page": "{page} / {pages}    {count} blocks",
+    "search": "Search Chinese / English / minecraft:id",
+    "state.auto": "Automatic Placement",
+    "state.explicit_default": "Explicit Default State",
+    "state.selected": "Selected",
+    "state.title": "Block State",
+    "title": "Creative Inventory"
+  }
+}

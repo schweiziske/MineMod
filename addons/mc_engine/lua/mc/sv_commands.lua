@@ -20,8 +20,9 @@ local function nextFillJobId()
 	return NextFillJobId
 end
 
-local function L( ply, key, fallback, vars )
-	return MC.TFor and MC.TFor( ply, key, fallback, vars ) or fallback
+-- Translated with this server's files for the player's language.
+local function L( ply, key, vars )
+	return MC.I18n.Resolve( key, vars, MC.I18n.LanguageForPlayer( ply ) )
 end
 
 local function chat( ply, msg )
@@ -54,17 +55,15 @@ local function copyConsoleArgsWithCommand( command, args )
 end
 
 ------------------------------------------------------------------- fill command
-local FILL_USAGE = "用法: /fill x1 y1 z1 x2 y2 z2 <id|name|air|minecraft:name[state]> [state]"
-
 local function fillAimText( ply )
 	if not IsValid( ply ) or not MC.PlayerBlockAim then return nil end
 	local hit = MC.PlayerBlockAim( ply )
 	if not hit or not hit.bx then return nil end
-	return string.format( "当前瞄准方块坐标: %d %d %d", hit.bx, hit.by, hit.bz )
+	return L( ply, "server.fill_aim", { x = hit.bx, y = hit.by, z = hit.bz } )
 end
 
 local function sendFillUsage( ply )
-	chat( ply, L( ply, "server.fill_usage", FILL_USAGE ) )
+	chat( ply, L( ply, "server.fill_usage" ) )
 	-- local aim = fillAimText( ply )
 	-- if aim then chat( ply, aim ) end
 end
@@ -214,10 +213,10 @@ if false then timer.Create( "mc_fill_jobs", 0.05, 0, function()
 		job.scanMS = job.scanMS + ( SysTime() - scanStarted ) * 1000
 		if scanState == "max_blocks" then
 			table.remove( FillJobs, 1 )
-			chat( job.ply, L( job.ply, "server.fill_max_blocks", "Fill would exceed mc_max_blocks" ) )
+			chat( job.ply, L( job.ply, "server.fill_max_blocks" ) )
 		elseif scanState == "empty" then
 			table.remove( FillJobs, 1 )
-			chat( job.ply, L( job.ply, "server.filled", "Filled {count} blocks", { count = 0 } ) )
+			chat( job.ply, L( job.ply, "server.filled", { count = 0 } ) )
 		end
 		return
 	end
@@ -252,7 +251,7 @@ if false then timer.Create( "mc_fill_jobs", 0.05, 0, function()
 			job.id, job.volume or 0, job.cellCount or 0, job.changed or 0, job.batches or 0,
 			job.scanMS or 0, job.applyMS or 0, ( SysTime() - ( job.startedAt or SysTime() ) ) * 1000
 		) )
-		chat( job.ply, L( job.ply, "server.filled", "已填充 {count} 个方块", { count = job.changed or 0 } ) )
+		chat( job.ply, L( job.ply, "server.filled", { count = job.changed or 0 } ) )
 	end
 end ) end
 
@@ -541,33 +540,33 @@ local function runFill( ply, args )
 		return
 	end
 	if parseErr == "state" then
-		chat( ply, L( ply, "server.invalid_state", "方块状态不合法: {block}", { block = blockArg } ) )
+		chat( ply, L( ply, "server.invalid_state", { block = blockArg } ) )
 		return
 	end
 	local stateId, stateExact, stateError = MC.StateFromLegacy( id, id == 0 and 0 or orient )
 	if stateId == nil or stateExact ~= true then
-		chat( ply, L( ply, "server.invalid_state", "方块状态不合法: {block}", { block = blockArg or stateError or "?" } ) )
+		chat( ply, L( ply, "server.invalid_state", { block = blockArg or stateError or "?" } ) )
 		return
 	end
 
 	local result, fillError = SV.FillVolume( x1, y1, z1, x2, y2, z2, stateId, { actor = ply } )
 	if not result then
 		if fillError == "world_limit" then
-			chat( ply, L( ply, "server.world_limit", "超出建造范围 (mc_world_limit)" ) )
+			chat( ply, L( ply, "server.world_limit" ) )
 		elseif fillError == "fill_too_large" then
 			local volume = ( math.abs( math.floor( x2 ) - math.floor( x1 ) ) + 1 )
 				* ( math.abs( math.floor( y2 ) - math.floor( y1 ) ) + 1 )
 				* ( math.abs( math.floor( z2 ) - math.floor( z1 ) ) + 1 )
 			local fillMax = C.FillMax and C.FillMax:GetInt() or 32768
-			chat( ply, L( ply, "server.fill_too_large", "填充范围太大 ({volume} > mc_fill_max {max})", { volume = volume, max = fillMax } ) )
+			chat( ply, L( ply, "server.fill_too_large", { volume = volume, max = fillMax } ) )
 		elseif fillError == "max_blocks" then
-			chat( ply, L( ply, "server.fill_max_blocks", "Fill would exceed mc_max_blocks" ) )
+			chat( ply, L( ply, "server.fill_max_blocks" ) )
 		else
 			chat( ply, "Fill failed: " .. tostring( fillError or "unknown_error" ) )
 		end
 		return
 	end
-	chat( ply, L( ply, "server.filled", "Filled {count} blocks", { count = result.changed or 0 } ) )
+	chat( ply, L( ply, "server.filled", { count = result.changed or 0 } ) )
 end
 
 hook.Add( "PlayerSay", "mc_fill_command", function( ply, text )

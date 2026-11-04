@@ -1,0 +1,23 @@
+{
+  "locale": "zh_cn",
+  "entries": {
+    "category.all": "全部",
+    "category.building": "建筑方块",
+    "category.color_blocks": "色块",
+    "category.custom": "自定义",
+    "category.decoration": "装饰",
+    "category.functional": "功能方块",
+    "category.natural": "自然方块",
+    "category.plants": "植物",
+    "category.redstone": "红石",
+    "category.slopes": "斜坡",
+    "category.transparent": "透明/玻璃",
+    "page": "{page} / {pages}    {count} 个方块",
+    "search": "搜索中文名 / 英文名 / minecraft:id",
+    "state.auto": "自动放置",
+    "state.explicit_default": "显式默认状态",
+    "state.selected": "已选中",
+    "state.title": "方块状态",
+    "title": "创造物品栏"
+  }
+}

@@ -18,8 +18,9 @@ local C   = MC.Config
 -- MC block interaction. MC must never stop other addons' PlayerUse hooks.
 hook.Remove( "PlayerUse", "mc_use_interact_exclusive" )
 
-local function L( ply, key, fallback, vars )
-	return MC.TFor and MC.TFor( ply, key, fallback, vars ) or fallback
+-- Translated with this server's files for the player's language.
+local function L( ply, key, vars )
+	return MC.I18n.Resolve( key, vars, MC.I18n.LanguageForPlayer( ply ) )
 end
 
 local BULK_SET_CELLS_PER_MESSAGE = 1024
@@ -407,7 +408,7 @@ end
 
 local function canEdit( ply )
 	if C.AdminOnly:GetBool() and IsValid( ply ) and not ply:IsAdmin() then
-		notify( ply, L( ply, "server.admin_build", "只有管理员可以建造 (mc_admin_only)" ) )
+		notify( ply, L( ply, "server.admin_build" ) )
 		return false
 	end
 	-- Public veto: protection/zone addons deny by returning false. The
@@ -480,12 +481,12 @@ function SV.Validate( ply, bx, by, bz, placing, context )
 
 	if placing then
 		if not worldBoundsOK( bx, by, bz ) then
-			notify( ply, L( ply, "server.world_limit", "超出建造范围 (mc_world_limit)" ) )
+			notify( ply, L( ply, "server.world_limit" ) )
 			return false
 		end
 		local maxBlocks = C.MaxBlocks:GetInt()
 		if maxBlocks > 0 and SV.BlockCount >= maxBlocks then
-			notify( ply, L( ply, "server.max_blocks", "已达到方块上限 (mc_max_blocks)" ) )
+			notify( ply, L( ply, "server.max_blocks" ) )
 			return false
 		end
 	end
@@ -933,7 +934,7 @@ local function validatePlacementPlan( ply, plan )
 			return false
 		end
 		if not worldBoundsOK( cell.bx, cell.by, cell.bz ) then
-			notify( ply, L( ply, "server.world_limit", "Out of build range (mc_world_limit)" ) )
+			notify( ply, L( ply, "server.world_limit" ) )
 			return false
 		end
 		local existingId = MC.GetBlock( cell.bx, cell.by, cell.bz )
@@ -952,7 +953,7 @@ local function validatePlacementPlan( ply, plan )
 
 	local maxBlocks = C.MaxBlocks:GetInt()
 	if maxBlocks > 0 and SV.BlockCount + add > maxBlocks then
-		notify( ply, L( ply, "server.max_blocks", "Block limit reached (mc_max_blocks)" ) )
+		notify( ply, L( ply, "server.max_blocks" ) )
 		return false
 	end
 	return true
@@ -1307,8 +1308,6 @@ local function trimArg( s )
 end
 
 ------------------------------------------------------------------- import tool
-local IMPORT_USAGE = "用法: mc_import <mc_import/文件.json> [replace|append] [reject|preserve]"
-
 local function normalizeImportPath( path )
 	path = trimArg( path or "" )
 	path = string.gsub( path, "\\", "/" )
@@ -1738,7 +1737,7 @@ end
 
 local function importErrorText( ply, err )
 	if err == "invalid_file" then
-		return L( ply, "server.invalid_file", "文件格式不对" )
+		return L( ply, "server.invalid_file" )
 	end
 	return tostring( err )
 end
@@ -1748,29 +1747,29 @@ local function runImport( ply, args )
 	local first = string.lower( tostring( args[1] or "" ) )
 	local base = ( first == "/mc_import" or first == "!mc_import" or first == "mc_import" ) and 2 or 1
 	local path = normalizeImportPath( args[base] )
-	if not path then chat( ply, L( ply, "server.import_usage", IMPORT_USAGE ) ) return end
+	if not path then chat( ply, L( ply, "server.import_usage" ) ) return end
 
 	local mode = string.lower( tostring( args[base + 1] or "replace" ) )
 	local appendMode = mode == "append"
 	if mode ~= "replace" and mode ~= "append" then
-		chat( ply, L( ply, "server.import_usage", IMPORT_USAGE ) )
+		chat( ply, L( ply, "server.import_usage" ) )
 		return
 	end
 	local unknownPolicy = string.lower( tostring( args[base + 2] or "reject" ) )
 	if unknownPolicy ~= "reject" and unknownPolicy ~= "preserve" then
-		chat( ply, L( ply, "server.import_usage", IMPORT_USAGE ) )
+		chat( ply, L( ply, "server.import_usage" ) )
 		return
 	end
 
 	if not file.Exists( path, "DATA" ) then
-		chat( ply, L( ply, "server.import_missing", "找不到导入文件: garrysmod/data/{path}", { path = path } ) )
+		chat( ply, L( ply, "server.import_missing", { path = path } ) )
 		return
 	end
 
 	local raw = file.Read( path, "DATA" )
 	local data = raw and util.JSONToTable( raw )
 	if not data then
-		chat( ply, L( ply, "server.import_bad_json", "导入文件不是有效 JSON: {path}", { path = path } ) )
+		chat( ply, L( ply, "server.import_bad_json", { path = path } ) )
 		return
 	end
 
@@ -1784,8 +1783,8 @@ local function runImport( ply, args )
 	else
 		result, err = importManifest( data, path, appendMode )
 	end
-	if not result then chat( ply, L( ply, "server.import_failed", "导入失败: {err}", { err = importErrorText( ply, err ) } ) ) return end
-	local msg = L( ply, "server.import_done", "导入完成: {blocks} 个方块，当前总数 {total}，跳过未知 {unknown}，越界 {bounds}，超上限 {max}", {
+	if not result then chat( ply, L( ply, "server.import_failed", { err = importErrorText( ply, err ) } ) ) return end
+	local msg = L( ply, "server.import_done", {
 		blocks = result.imported,
 		total = result.total,
 		unknown = result.skippedUnknown,
@@ -1795,13 +1794,13 @@ local function runImport( ply, args )
 	chat( ply, msg )
 	if result.lossSummary then chat( ply, "import verification: " .. result.lossSummary ) end
 	if result.expected and result.expected > 0 and result.imported ~= result.expected then
-		chat( ply, L( ply, "server.import_count_mismatch", "导入文件写着 {expected} 个方块，实际进服 {imported} 个；少的都在上面跳过统计里。", {
+		chat( ply, L( ply, "server.import_count_mismatch", {
 			expected = result.expected,
 			imported = result.imported,
 		} ) )
 	end
 	if result.skippedLimit > 0 then
-		chat( ply, L( ply, "server.import_truncated", "导入被 mc_import_max={max} 截断了；完整区块请先执行 mc_import_max 0。", {
+		chat( ply, L( ply, "server.import_truncated", {
 			max = tostring( C.ImportMax and C.ImportMax:GetInt() or "?" ),
 		} ) )
 	end
@@ -1825,7 +1824,7 @@ end )
 concommand.Add( "mc_import_probe", function( ply, _, args )
 	if IsValid( ply ) and not ply:IsAdmin() then return end
 	local path = normalizeImportPath( args[1] )
-	if not path then chat( ply, L( ply, "server.import_usage", IMPORT_USAGE ) ) return end
+	if not path then chat( ply, L( ply, "server.import_usage" ) ) return end
 	if not file.Exists( path, "DATA" ) then
 		chat( ply, "probe missing: garrysmod/data/" .. path )
 		return
@@ -2785,5 +2784,5 @@ concommand.Add( "mc_rebuild", function( ply )
 		end
 	end
 	MsgN( "[MC] rebuilding collision for " .. n .. " chunks" )
-	if IsValid( ply ) then ply:ChatPrint( "[MC] " .. L( ply, "server.rebuilt", "重建了 {count} 个区块的碰撞", { count = n } ) ) end
+	if IsValid( ply ) then ply:ChatPrint( "[MC] " .. L( ply, "server.rebuilt", { count = n } ) ) end
 end )

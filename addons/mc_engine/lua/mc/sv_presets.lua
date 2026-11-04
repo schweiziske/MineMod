@@ -12,8 +12,9 @@ local SV = MC.SV
 local C = MC.Config
 local Net = MC.Net
 
-local function L( ply, key, fallback, vars )
-	return MC.TFor and MC.TFor( ply, key, fallback, vars ) or fallback
+-- Translated with this server's files for the player's language.
+local function L( ply, key, vars )
+	return MC.I18n.Resolve( key, vars, MC.I18n.LanguageForPlayer( ply ) )
 end
 
 local PRESET_DIR = "mc/presets"
@@ -127,11 +128,11 @@ end
 
 local function canEditPresets( ply )
 	if not canUsePresets( ply ) then
-		if IsValid( ply ) then ply:ChatPrint( "[MC] " .. L( ply, "server.preset_admin", "只有管理员可以读取/保存/放置预设 (mc_preset_public 0)" ) ) end
+		if IsValid( ply ) then ply:ChatPrint( "[MC] " .. L( ply, "server.preset_admin" ) ) end
 		return false
 	end
 	if C.AdminOnly and C.AdminOnly:GetBool() and IsValid( ply ) and not ply:IsAdmin() then
-		ply:ChatPrint( "[MC] " .. L( ply, "server.preset_edit_admin", "只有管理员可以保存/放置预设 (mc_admin_only)" ) )
+		ply:ChatPrint( "[MC] " .. L( ply, "server.preset_edit_admin" ) )
 		return false
 	end
 	return true
@@ -580,8 +581,7 @@ function SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 	if totalChanged <= 0 then return false, bulkErr or "unchanged" end
 	if IsValid( ply ) then
 		local key = overwrite and "server.preset_overwritten" or "server.preset_placed"
-		local fallback = overwrite and "已覆盖预设: {name} ({changes} changes)" or "已放置预设: {name} ({changes} changes)"
-		ply:ChatPrint( "[MC] " .. L( ply, key, fallback, { name = tostring( data.name or presetName ), changes = totalChanged } ) )
+		ply:ChatPrint( "[MC] " .. L( ply, key, { name = tostring( data.name or presetName ), changes = totalChanged } ) )
 	end
 	if MC.RunEvent then
 		MC.RunEvent( "MC.PresetPlaced", ply, tostring( data.name or presetName ),
@@ -703,7 +703,7 @@ end
 
 net.Receive( "mc_preset_list_req", function( _, ply )
 	if not canUsePresets( ply ) then
-		sendPresetList( ply, L( ply, "server.preset_admin_list", "只有管理员可以读取/保存预设 (mc_preset_public 0)" ), true, {} )
+		sendPresetList( ply, L( ply, "server.preset_admin_list" ), true, {} )
 		return
 	end
 	sendPresetList( ply )
@@ -712,7 +712,7 @@ end )
 net.Receive( "mc_preset_load_req", function( _, ply )
 	local presetName = net.ReadString()
 	if not canUsePresets( ply ) then
-		sendPresetDataError( ply, presetName, L( ply, "server.preset_admin_load", "只有管理员可以读取预设 (mc_preset_public 0)" ) )
+		sendPresetDataError( ply, presetName, L( ply, "server.preset_admin_load" ) )
 		return
 	end
 	sendPresetData( ply, presetName )
@@ -720,7 +720,7 @@ end )
 
 net.Receive( "mc_preset_save", function( _, ply )
 	if not canEditPresets( ply ) then
-		sendPresetList( ply, L( ply, "server.preset_admin_save", "只有管理员可以保存预设 (mc_preset_public 0)" ), true, {} )
+		sendPresetList( ply, L( ply, "server.preset_admin_save" ), true, {} )
 		return
 	end
 	local presetName = net.ReadString()
@@ -746,9 +746,9 @@ net.Receive( "mc_preset_save", function( _, ply )
 
 	local ok, result = SV.SavePreset( presetName, cornerA, cornerB, anchor, cover, ply )
 	if ok then
-		sendPresetList( ply, L( ply, "server.preset_saved", "预设已保存: {name}", { name = tostring( presetName ) } ) )
+		sendPresetList( ply, L( ply, "server.preset_saved", { name = tostring( presetName ) } ) )
 	else
-		sendPresetList( ply, L( ply, "server.preset_save_failed", "预设保存失败: {err}", { err = tostring( result ) } ), true )
+		sendPresetList( ply, L( ply, "server.preset_save_failed", { err = tostring( result ) } ), true )
 	end
 end )
 
@@ -770,7 +770,7 @@ net.Receive( "mc_preset_place", function( _, ply )
 	end
 	local ok, err = SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 	if not ok and IsValid( ply ) then
-		ply:ChatPrint( "[MC] " .. L( ply, "server.preset_place_failed", "预设放置失败: {err}", { err = tostring( err ) } ) )
+		ply:ChatPrint( "[MC] " .. L( ply, "server.preset_place_failed", { err = tostring( err ) } ) )
 	end
 end )
 

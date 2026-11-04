@@ -6,14 +6,14 @@
 
 if SERVER then AddCSLuaFile() end
 
-local function L( key, fallback, vars )
-	return MC and MC.T and MC.T( key, fallback, vars ) or fallback
+local function L( key, vars )
+	return MC.T( key, vars )
 end
 
-SWEP.PrintName     = L( "weapon.mc_preset_placer.name", "MC 预设放置器" )
+SWEP.PrintName     = L( "weapon.mc_preset_placer.name" )
 SWEP.Author        = "schweiziske"
-SWEP.Purpose       = L( "weapon.mc_preset_placer.purpose", "保存和放置 Minecraft 方块建筑预设" )
-SWEP.Instructions  = L( "weapon.mc_preset_placer.instructions", "R 打开预设界面  左键选择/放置  右键撤销  G 旋转" )
+SWEP.Purpose       = L( "weapon.mc_preset_placer.purpose" )
+SWEP.Instructions  = L( "weapon.mc_preset_placer.instructions" )
 SWEP.Category      = "Minecraft"
 
 -- Admin build tool: right-click is a deliberate preset gesture, not "interact".
@@ -68,7 +68,7 @@ function SWEP:Deploy()
 	if CLIENT then
 		timer.Simple( 0, function()
 			if not IsValid( self ) then return end
-			clientChat( L( "weapon.mc_preset_placer.help", "预设放置器：按 R 打开界面。新建预设用左键选四步；读取预设后左键放置。" ) )
+			clientChat( L( "weapon.mc_preset_placer.help" ) )
 		end )
 	end
 	return true
@@ -142,7 +142,7 @@ end
 
 if CLIENT then
 	function SWEP:GetPrintName()
-		return L( "weapon.mc_preset_placer.name", self.PrintName or "MC 预设放置器" )
+		return L( "weapon.mc_preset_placer.name" )
 	end
 
 	local function activePresetPlacer( ply )
@@ -197,21 +197,21 @@ if CLIENT then
 		local sw, sh = ScrW(), ScrH()
 		local mode = MC.PresetMode or "idle"
 		local step = MC.PresetSelectionStep or 0
-		local title = L( "weapon.mc_preset_placer.title", "MC 预设放置器" )
+		local title = L( "weapon.mc_preset_placer.title" )
 		local hint
-		local overwriteText = ( MC.PresetOverwrite == true ) and L( "weapon.mc_preset_placer.overwrite_on", "覆盖: 开" ) or L( "weapon.mc_preset_placer.overwrite_off", "覆盖: 关" )
+		local overwriteText = ( MC.PresetOverwrite == true ) and L( "weapon.mc_preset_placer.overwrite_on" ) or L( "weapon.mc_preset_placer.overwrite_off" )
 		local rotationDeg = MC.PresetRotationDegrees and MC.PresetRotationDegrees( MC.PresetRotation or 0 ) or ( ( MC.PresetRotation or 0 ) * 90 )
-		local rotationText = L( "weapon.mc_preset_placer.rotation", "旋转: {degrees} deg", { degrees = rotationDeg } )
+		local rotationText = L( "weapon.mc_preset_placer.rotation", { degrees = rotationDeg } )
 		if mode == "place" and MC.ActivePreset then
-			hint = L( "weapon.mc_preset_placer.place_hint", "左键放置投影   右键取消   E 覆盖   G 旋转   R 预设" )
+			hint = L( "weapon.mc_preset_placer.place_hint" )
 		elseif mode == "create" then
-			if step == 0 then hint = L( "weapon.mc_preset_placer.step0", "左键选择第一个方块   右键取消" )
-			elseif step == 1 then hint = L( "weapon.mc_preset_placer.step1", "左键选择第二个方块完成范围   右键撤销" )
-			elseif step == 2 then hint = L( "weapon.mc_preset_placer.step2", "左键选择基准面   右键撤销" )
-			elseif step == 3 then hint = L( "weapon.mc_preset_placer.step3", "左键截图并保存   右键撤销" )
-			else hint = L( "weapon.mc_preset_placer.saving", "正在保存预设..." ) end
+			if step == 0 then hint = L( "weapon.mc_preset_placer.step0" )
+			elseif step == 1 then hint = L( "weapon.mc_preset_placer.step1" )
+			elseif step == 2 then hint = L( "weapon.mc_preset_placer.step2" )
+			elseif step == 3 then hint = L( "weapon.mc_preset_placer.step3" )
+			else hint = L( "weapon.mc_preset_placer.saving" ) end
 		else
-			hint = L( "weapon.mc_preset_placer.open", "R 打开预设界面" )
+			hint = L( "weapon.mc_preset_placer.open" )
 		end
 
 		draw.RoundedBox( 6, sw * 0.5 - 270, sh - 116, 540, 76, Color( 0, 0, 0, 175 ) )

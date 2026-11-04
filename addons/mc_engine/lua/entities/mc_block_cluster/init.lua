@@ -25,8 +25,9 @@ function ENT:SetClusterRecord( record, blob )
 	self:SetSizeZ( record.size[3] )
 end
 
-local function T( ply, key, fallback, vars )
-	return MC.TFor and MC.TFor( ply, key, fallback, vars ) or fallback
+-- Translated with this server's files for the player's language.
+local function T( ply, key, vars )
+	return MC.I18n.Resolve( key, vars, MC.I18n.LanguageForPlayer( ply ) )
 end
 
 -- Strip bulky/transient fields from dupes; the record alone rebuilds
@@ -45,14 +46,14 @@ function ENT:Use( activator )
 
 	local durability = ( self.ClusterMaxHealth or 0 ) > 0
 		and ( math.max( 0, math.floor( self.ClusterHealth or 0 ) ) .. "/" .. self.ClusterMaxHealth )
-		or T( activator, "cluster.use_invincible", "无敌" )
-	local info = T( activator, "cluster.use_info", "方块结构: {n} 方块  耐久 {hp}",
+		or T( activator, "cluster.use_invincible" )
+	local info = T( activator, "cluster.use_info",
 		{ n = self:GetBlockCount(), hp = durability } )
 	local owner = self:GetOwnerLabel()
-	if owner ~= "" then info = info .. T( activator, "cluster.use_owner", "  主人 {name}", { name = owner } ) end
+	if owner ~= "" then info = info .. T( activator, "cluster.use_owner", { name = owner } ) end
 	local phys = self:GetPhysicsObject()
 	if IsValid( phys ) and not phys:IsMotionEnabled() then
-		info = info .. T( activator, "cluster.use_frozen", "  [已冻结]" )
+		info = info .. T( activator, "cluster.use_frozen" )
 	end
 	activator:ChatPrint( "[MC] " .. info )
 end

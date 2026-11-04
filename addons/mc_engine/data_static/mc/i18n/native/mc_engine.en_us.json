@@ -1,0 +1,13 @@
+{
+  "locale": "en_us",
+  "entries": {
+    "dll_command_help": "Open the MineMod Native DLL GitHub page",
+    "dll_console": "Native DLL download: {url}",
+    "dll_failed": "Native DLL initialization failed; using the Lua backend.\nReason: {reason}\nInstall the DLL matching your game branch and architecture, then restart the game. Download: ",
+    "dll_failed_console": "Native DLL initialization failed: {reason}. Install the DLL matching your game branch and architecture, then restart the game. Download: {url}",
+    "dll_missing": "Optional Native DLL was not detected; using the Lua backend. ",
+    "dll_open_hint": " (recommended download)",
+    "dll_outdated": "Native DLL is outdated (installed ABI {actual}, required ABI {required}); using the Lua backend. Download: ",
+    "dll_outdated_console": "Native DLL is outdated (installed ABI {actual}, required ABI {required}). Download: {url}"
+  }
+}

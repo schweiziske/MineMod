@@ -1,0 +1,10 @@
+{
+  "locale": "en_us",
+  "entries": {
+    "complete": "MC sync complete  {label}",
+    "progress": "MC sync {received}/{expected} blocks  {done}/{chunks} chunks",
+    "progress_bytes": "MC sync {received}/{expected} KB  {done}/{chunks} parts",
+    "workshop_complete": "Workshop base world loaded locally",
+    "workshop_progress": "Loading Workshop world locally {received}/{expected} blocks  {done}/{chunks} chunks"
+  }
+}

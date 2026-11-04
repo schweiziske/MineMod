@@ -36,8 +36,8 @@ local PreviewRendering = false
 
 Client.sequence = math.floor( tonumber( Client.sequence ) or ( SysTime() * 1000 ) ) % 4294967295
 
-local function L( key, fallback, vars )
-	return MC.T and MC.T( key, fallback, vars ) or fallback
+local function L( key, vars )
+	return MC.T( key, vars )
 end
 
 local function nextRequestId()
@@ -46,41 +46,42 @@ local function nextRequestId()
 	return Client.sequence
 end
 
-local ERROR_TEXT = {
-	permission = { "workshop.error_permission", "服务端未批准该创意工坊操作" },
-	save_permission = { "workshop.error_permission", "服务端未批准该创意工坊操作" },
-	rate_limited = { "workshop.error_rate", "请求太快，请稍后再试" },
-	transfer_busy = { "workshop.error_busy", "已有创意工坊传输正在进行" },
-	invalid_slot = { "workshop.error_slot", "存档名称无效" },
-	workshop_requires_region_save = { "workshop.error_legacy", "旧版存档暂不能发布，请先重新覆盖保存一次" },
-	invalid_workshop_id = { "workshop.error_id", "创意工坊 ID 或链接无效" },
-	invalid_load_request = { "workshop.error_request", "创意工坊读取请求无效" },
-	invalid_bundle_magic = { "workshop.error_not_world", "该物品不是 MC 世界存档" },
-	unsupported_bundle_save_version = { "workshop.error_version", "该 MC 世界存档版本不受支持" },
-	bundle_crc_mismatch = { "workshop.error_corrupt", "创意工坊世界包校验失败" },
-	hash_mismatch = { "workshop.error_corrupt", "创意工坊世界包校验失败" },
-	package_mismatch = { "workshop.error_corrupt", "创意工坊世界包校验失败" },
-	capture_empty = { "workshop.error_capture_empty", "无法从当前游戏画面拍摄创意工坊封面" },
-	capture_too_large = { "workshop.error_capture_too_large", "拍摄到的创意工坊封面超过大小限制" },
-	capture_write_failed = { "workshop.error_capture_write", "无法把创意工坊封面写入客户端数据目录" },
-	capture_timeout = { "workshop.error_capture_timeout", "等待游戏画面截图超时" },
-	capture_size = { "workshop.error_capture_size", "当前游戏画面尺寸太小，无法生成创意工坊封面" },
-	workshop_file_unreadable = { "workshop.error_file_unreadable", "无法读取 Steam 下载的创意工坊世界文件" },
-	workshop_handle_read_failed = { "workshop.error_file_unreadable", "无法读取 Steam 下载的创意工坊世界文件" },
-	workshop_file_too_large = { "workshop.error_file_too_large", "创意工坊世界文件超过服务器允许的大小" },
-	shared_write_failed = { "workshop.error_shared_write", "无法写入 Listen Server 共享世界文件" },
-	shared_read_failed = { "workshop.error_shared_read", "Listen Server 无法读取共享世界文件" },
-	shared_unavailable = { "workshop.error_shared_unavailable", "当前客户端不能使用 Listen Server 共享读取" },
-	cache_write_failed = { "workshop.error_cache_write", "无法缓存创意工坊基础世界" },
-	timeout = { "workshop.error_timeout", "创意工坊操作超时" },
-	load_failed = { "workshop.error_load", "服务端无法读取该世界" },
+-- Error code from the server or Steam -> translation key.
+local ERROR_KEYS = {
+	permission = "workshop.error_permission",
+	save_permission = "workshop.error_permission",
+	rate_limited = "workshop.error_rate",
+	transfer_busy = "workshop.error_busy",
+	invalid_slot = "workshop.error_slot",
+	workshop_requires_region_save = "workshop.error_legacy",
+	invalid_workshop_id = "workshop.error_id",
+	invalid_load_request = "workshop.error_request",
+	invalid_bundle_magic = "workshop.error_not_world",
+	unsupported_bundle_save_version = "workshop.error_version",
+	bundle_crc_mismatch = "workshop.error_corrupt",
+	hash_mismatch = "workshop.error_corrupt",
+	package_mismatch = "workshop.error_corrupt",
+	capture_empty = "workshop.error_capture_empty",
+	capture_too_large = "workshop.error_capture_too_large",
+	capture_write_failed = "workshop.error_capture_write",
+	capture_timeout = "workshop.error_capture_timeout",
+	capture_size = "workshop.error_capture_size",
+	workshop_file_unreadable = "workshop.error_file_unreadable",
+	workshop_handle_read_failed = "workshop.error_file_unreadable",
+	workshop_file_too_large = "workshop.error_file_too_large",
+	shared_write_failed = "workshop.error_shared_write",
+	shared_read_failed = "workshop.error_shared_read",
+	shared_unavailable = "workshop.error_shared_unavailable",
+	cache_write_failed = "workshop.error_cache_write",
+	timeout = "workshop.error_timeout",
+	load_failed = "workshop.error_load",
 }
 
 local function errorText( code )
 	code = tostring( code or "error" )
-	local item = ERROR_TEXT[code]
-	if item then return L( item[1], item[2] ) .. " (" .. code .. ")" end
-	return L( "workshop.error_generic", "创意工坊操作失败: {err}", { err = code } )
+	local key = ERROR_KEYS[code]
+	if key then return L( key ) .. " (" .. code .. ")" end
+	return L( "workshop.error_generic", { err = code } )
 end
 
 local function setStatus( message, isError, pending )
@@ -418,7 +419,7 @@ local function bindPublishedId( publish, workshopId )
 	clearTimer( publish.returnTimer )
 	publish.bindRequestId = nextRequestId()
 	publish.workshopId = workshopId
-	setStatus( L( "workshop.binding", "正在把创意工坊 ID 写回服务端存档..." ), false, true )
+	setStatus( L( "workshop.binding" ), false, true )
 	net.Start( "mc_workshop_bind_id" )
 		net.WriteUInt( publish.bindRequestId, 32 )
 		net.WriteString( publish.save.name or "" )
@@ -442,16 +443,16 @@ local function promptPublishedId( publish, candidates )
 		if #candidates > #shown then candidateText = candidateText .. " ..." end
 	end
 	Derma_StringRequest(
-		L( "workshop.bind_title", "关联创意工坊 ID" ),
-		L( "workshop.bind_prompt", "发布窗口没有把 ID 直接返回游戏。请输入刚发布或更新的 Workshop ID，或粘贴其 Steam 创意工坊链接。" ) .. candidateText,
+		L( "workshop.bind_title" ),
+		L( "workshop.bind_prompt" ) .. candidateText,
 		publish.knownWorkshopId or candidates and candidates[1] or "",
 		function( value ) bindPublishedId( publish, value ) end,
 		function()
-			setStatus( L( "workshop.bind_cancelled", "发布文件已交给 Steam，但没有关联 Workshop ID" ), true, false )
+			setStatus( L( "workshop.bind_cancelled" ), true, false )
 			clearPublish( true )
 		end,
-		L( "workshop.bind", "关联" ),
-		L( "save.cancel", "取消" )
+		L( "workshop.bind" ),
+		L( "save.cancel" )
 	)
 end
 
@@ -535,7 +536,7 @@ local function launchPublisher( publish, bundle, decoded )
 		publish.archiveBytes = #archive
 		publish.dataPath = dataPath
 		publish.imagePath = imagePath
-		setStatus( L( "workshop.publisher_open", "正在打开 Garry's Mod 创意工坊发布窗口..." ), false, true )
+		setStatus( L( "workshop.publisher_open" ), false, true )
 		RunConsoleCommand( "dupe_publish", "data/" .. dataPath, "data/" .. imagePath )
 		startPublishPolling( publish )
 	end )
@@ -555,7 +556,7 @@ function W.PublishSave( save )
 		knownWorkshopId = W.NormalizeWorkshopId( save.workshopId ),
 	}
 	Client.publish = publish
-	setStatus( L( "workshop.exporting", "服务端正在导出存档..." ), false, true )
+	setStatus( L( "workshop.exporting" ), false, true )
 	queryOwnedIds( function( ids )
 		if Client.publish ~= publish then return end
 		if ids then publish.beforeIds = ids else publish.baselineFailed = true end
@@ -642,7 +643,7 @@ net.Receive( "mc_workshop_export_part", function()
 		clearPublish( true )
 		return
 	end
-	setStatus( L( "workshop.capturing", "正在隐藏界面并拍摄创意工坊封面..." ), false, true )
+	setStatus( L( "workshop.capturing" ), false, true )
 	launchPublisher( publish, bundle, decoded )
 end )
 
@@ -655,7 +656,7 @@ net.Receive( "mc_workshop_bind_result", function()
 	local publish = Client.publish
 	if not publish or publish.bindRequestId ~= requestId then return end
 	if ok then
-		setStatus( L( "workshop.publish_done", "已发布并关联 Workshop ID {id}", { id = workshopId } ), false, false )
+		setStatus( L( "workshop.publish_done", { id = workshopId } ), false, false )
 		if publish.dataPath and file.Exists( publish.dataPath, "DATA" ) then file.Delete( publish.dataPath ) end
 		if publish.imagePath and file.Exists( publish.imagePath, "DATA" ) then file.Delete( publish.imagePath ) end
 		MC.SaveManagerPendingSelection = slotName
@@ -818,7 +819,7 @@ local function acceptWorkshopBundle( import, payload )
 	import.decoded = decoded
 	import.archiveInfo = archiveInfoOrError
 	import.contentHash = W.ContentHash( payload )
-	setStatus( L( "workshop.awaiting_approval", "世界包已校验，正在等待服务端批准读取..." ), false, true )
+	setStatus( L( "workshop.awaiting_approval" ), false, true )
 	net.Start( "mc_workshop_load_request" )
 		net.WriteUInt( import.requestId, 32 )
 		net.WriteString( import.workshopId )
@@ -1579,7 +1580,7 @@ function W.ImportWorkshopId( workshopId )
 		sharedLocal = W.ClientCanShareListenData(),
 	}
 	Client.import = import
-	setStatus( L( "workshop.downloading", "正在从创意工坊下载 {id}...", { id = workshopId } ), false, true )
+	setStatus( L( "workshop.downloading", { id = workshopId } ), false, true )
 	import.downloadTimer = "MC_WorkshopDownloadTimeout_" .. tostring( import.requestId )
 	timer.Create( import.downloadTimer, WORKSHOP_DOWNLOAD_TIMEOUT, 1, function()
 		if Client.import == import then
@@ -1614,8 +1615,8 @@ end
 function W.PromptImport()
 	if W.ClientBusy() then setStatus( errorText( "transfer_busy" ), true, false ) return end
 	Derma_StringRequest(
-		L( "workshop.import_title", "读取创意工坊世界" ),
-		L( "workshop.import_prompt", "输入 Workshop ID 或 Steam 创意工坊链接。客户端会先下载并校验，服务端批准后才接收和读取。" ),
+		L( "workshop.import_title" ),
+		L( "workshop.import_prompt" ),
 		"",
 		function( value )
 			local workshopId = W.NormalizeWorkshopId( value )
@@ -1629,17 +1630,16 @@ function W.PromptImport()
 			end
 
 			Derma_Query(
-				L( "workshop.import_dedicated_body",
-					"当前连接的是专用服务器。完整 GMA 将由你的客户端从 Steam 下载并校验，再通过游戏网络上传给服务器。大世界可能消耗较多上行流量，并需要数分钟。是否继续？" ),
-				L( "workshop.import_dedicated_title", "专用服务器传输: {id}", { id = workshopId } ),
-				L( "workshop.import_dedicated_continue", "继续传输" ),
+				L( "workshop.import_dedicated_body" ),
+				L( "workshop.import_dedicated_title", { id = workshopId } ),
+				L( "workshop.import_dedicated_continue" ),
 				function() W.ImportWorkshopId( workshopId ) end,
-				L( "save.cancel", "取消" )
+				L( "save.cancel" )
 			)
 		end,
 		nil,
-		L( "workshop.import", "读取创意工坊" ),
-		L( "save.cancel", "取消" )
+		L( "workshop.import" ),
+		L( "save.cancel" )
 	)
 end
 
@@ -1672,7 +1672,7 @@ net.Receive( "mc_workshop_load_approval", function()
 			return
 		end
 		import.sharedPath = sharedPath
-		setStatus( L( "workshop.reading_shared", "服务端已批准，正在通过 Listen Server 共享目录读取并再次校验世界包..." ), false, true )
+		setStatus( L( "workshop.reading_shared" ), false, true )
 		local wrote, writeError = writeDataBinary( sharedPath, import.payload )
 		net.Start( "mc_workshop_shared_ready" )
 			net.WriteUInt( import.requestId, 32 )
@@ -1699,7 +1699,7 @@ net.Receive( "mc_workshop_load_approval", function()
 	end
 
 	local parts = math.ceil( #import.payload / W.UPLOAD_PART_BYTES )
-	setStatus( L( "workshop.uploading", "服务端已批准，正在上传并再次校验世界包..." ), false, true )
+	setStatus( L( "workshop.uploading" ), false, true )
 	net.Start( "mc_workshop_upload_begin" )
 		net.WriteUInt( import.requestId, 32 )
 		net.WriteString( token )
@@ -1744,7 +1744,7 @@ net.Receive( "mc_workshop_upload_result", function()
 	local import = Client.import
 	if not import or import.requestId ~= requestId then return end
 	if ok then
-		setStatus( L( "workshop.import_done", "已从创意工坊读取: {name}", { name = slotName } ), false, false )
+		setStatus( L( "workshop.import_done", { name = slotName } ), false, false )
 		MC.SaveManagerPendingSelection = slotName
 	else
 		setStatus( errorText( err ), true, false )

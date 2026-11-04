@@ -5,8 +5,8 @@
 
 if SERVER then AddCSLuaFile() end
 
-local function L( key, fallback, vars )
-	return MC and MC.T and MC.T( key, fallback, vars ) or fallback
+local function L( key, vars )
+	return MC.T( key, vars )
 end
 
 local function blockDisplayText( blockOrID )
@@ -15,10 +15,10 @@ local function blockDisplayText( blockOrID )
 	return MC.BlockDisplayName and MC.BlockDisplayName( b, b.dispZH or b.disp ) or b.disp
 end
 
-SWEP.PrintName     = L( "weapon.mc_creative_placer.name", "MC DEBUG TOOL" )
+SWEP.PrintName     = L( "weapon.mc_creative_placer.name" )
 SWEP.Author        = "schweiziske"
-SWEP.Purpose       = L( "weapon.mc_creative_placer.purpose", "放置 / 破坏 Minecraft 方块，并从创造物品栏选择方块" )
-SWEP.Instructions  = L( "weapon.mc_creative_placer.instructions", "左键破坏  右键放置  Reload 创造物品栏" )
+SWEP.Purpose       = L( "weapon.mc_creative_placer.purpose" )
+SWEP.Instructions  = L( "weapon.mc_creative_placer.instructions" )
 SWEP.Category      = "Minecraft"
 
 -- Right-click already tries MC.SV.Use before placing; see the fallback hook in
@@ -725,7 +725,7 @@ if CLIENT then
 	function SWEP:DrawWorldModelTranslucent() end
 
 	function SWEP:GetPrintName()
-		return L( "weapon.mc_creative_placer.name", self.PrintName or "MC DEBUG TOOL" )
+		return L( "weapon.mc_creative_placer.name" )
 	end
 
 	local function receiveCreativeHeldBlockAnim()
@@ -789,7 +789,7 @@ if CLIENT then
 		if MC.DrawCreativeHotbar then
 			MC.DrawCreativeHotbar( sw * 0.5, hotbarY, { slotSize = slotSize } )
 		end
-		draw.SimpleText( L( "weapon.mc_creative_placer.hud", "左键破坏    右键放置    中键取块(自动)    Shift+中键取数据    Reload 创造栏    Tab 切出" ), "mc_hud_small", sw * 0.5, sh - 10, Color( 255, 255, 255, 190 ), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
+		draw.SimpleText( L( "weapon.mc_creative_placer.hud" ), "mc_hud_small", sw * 0.5, sh - 10, Color( 255, 255, 255, 190 ), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER )
 
 		surface.SetDrawColor( 255, 255, 255, 220 )
 		surface.DrawRect( sw * 0.5 - 1, sh * 0.5 - 1, 2, 2 )

@@ -1883,42 +1883,159 @@ function GameMode.IsCreative( ply )
 end
 
 ----------------------------------------------------------------------- API.I18n
+-- File dictionaries (docs/localization.md). Translations ship as JSON below
+-- data_static/mc/i18n/ in the addon that owns the content; nothing here
+-- registers them. Every query takes a key plus optional vars and locale and
+-- falls back to en_us, then to the key itself.
 API.I18n = API.I18n or {}
 local I18n = API.I18n
 
+local function i18nEngine()
+	return MC.I18n
+end
+
+local function validI18nVars( vars )
+	return vars == nil or istable( vars )
+end
+
+local function validI18nLocale( locale )
+	return locale == nil or isstring( locale )
+end
+
+-- vars values are strings, numbers or nested { key = ..., vars = ... } specs
+-- that are translated in the same locale first.
+function I18n.Translate( key, vars, locale )
+	local engine = i18nEngine()
+	if not engine then return nil, "i18n_unavailable" end
+	if not engine.ValidKey( key ) then return nil, "invalid_key" end
+	if not validI18nVars( vars ) then return nil, "invalid_vars" end
+	if not validI18nLocale( locale ) then return nil, "invalid_locale" end
+	return engine.Resolve( key, vars, locale )
+end
+
+-- Chooses <key>.one for a count of 1 and <key>.other otherwise; {count} is
+-- filled automatically.
+function I18n.TranslateCount( key, count, vars, locale )
+	local engine = i18nEngine()
+	if not engine then return nil, "i18n_unavailable" end
+	if not engine.ValidKey( key ) then return nil, "invalid_key" end
+	if not isnumber( count ) then return nil, "invalid_count" end
+	if not validI18nVars( vars ) then return nil, "invalid_vars" end
+	if not validI18nLocale( locale ) then return nil, "invalid_locale" end
+	return engine.TranslateCount( key, count, vars, locale )
+end
+
+-- Server: the text this server's own files give for the player's language.
+-- It does not apply the player's personal overrides and sends nothing;
+-- player-facing text belongs on the client, which translates it itself.
+function I18n.TranslateForPlayer( ply, key, vars )
+	local engine = i18nEngine()
+	if not engine then return nil, "i18n_unavailable" end
+	return I18n.Translate( key, vars, engine.LanguageForPlayer( ply ) )
+end
+
+function I18n.TranslateConsole( key, vars )
+	local engine = i18nEngine()
+	if not engine then return nil, "i18n_unavailable" end
+	return I18n.Translate( key, vars, engine.ConsoleLanguage() )
+end
+
+function I18n.Has( key, locale )
+	local engine = i18nEngine()
+	return engine ~= nil and engine.ValidKey( key ) and validI18nLocale( locale ) and engine.Has( key, locale ) or false
+end
+
+-- Effective locale of this realm: the player's interface language on a
+-- client, mc_console_language on the server.
 function I18n.Language()
-	return MC.Language and MC.Language() or "en_us"
+	local engine = i18nEngine()
+	return engine and engine.Language() or "en_us"
+end
+
+-- "auto" or the locale stored in mc_language (client) / mc_console_language.
+function I18n.LanguageSetting()
+	local engine = i18nEngine()
+	return engine and engine.LanguageSetting() or "auto"
 end
 
 function I18n.LanguageForPlayer( ply )
-	if MC.LanguageForPlayer then return MC.LanguageForPlayer( ply ) end
-	return I18n.Language()
+	local engine = i18nEngine()
+	return engine and engine.LanguageForPlayer( ply ) or "en_us"
 end
 
-function I18n.Translate( key, fallback, vars, lang )
-	if MC.T then return MC.T( key, fallback, deepCopy( vars ), lang ) end
-	return tostring( fallback or key or "" )
+function I18n.ConsoleLanguage()
+	local engine = i18nEngine()
+	return engine and engine.ConsoleLanguage() or "en_us"
 end
 
-function I18n.TranslateForPlayer( ply, key, fallback, vars )
-	if MC.TFor then return MC.TFor( ply, key, fallback, deepCopy( vars ) ) end
-	return I18n.Translate( key, fallback, vars, I18n.LanguageForPlayer( ply ) )
+-- Loaded locales, sorted; a locale appears once a fragment provides entries.
+function I18n.Locales()
+	local engine = i18nEngine()
+	return engine and engine.Locales() or {}
 end
 
+-- { { value = "auto", label = "auto" }, { value = locale, label = locale }, ... }
 function I18n.LanguageOptions()
-	return deepCopy( MC.LanguageOptions and MC.LanguageOptions() or {} )
+	local engine = i18nEngine()
+	return deepCopy( engine and engine.LanguageOptions() or {} )
 end
 
-function I18n.SetLanguage( lang )
-	if not MC.SetLanguage then return nil, "i18n_unavailable" end
-	return MC.SetLanguage( lang )
+function I18n.SetLanguage( setting )
+	local engine = i18nEngine()
+	if not engine then return nil, "i18n_unavailable" end
+	if not isstring( setting ) then return nil, "invalid_locale" end
+	return engine.SetLanguage( setting )
 end
 
+-- callback( locale, reason ); reason is "setting", "game_language" or "reload".
 function I18n.RegisterLanguageChanged( name, callback )
 	if not isfunction( callback ) then return false, "invalid_callback" end
-	if not MC.RegisterLanguageChanged then return false, "i18n_unavailable" end
-	MC.RegisterLanguageChanged( tostring( name or callback ), callback )
+	local engine = i18nEngine()
+	if not engine then return false, "i18n_unavailable" end
+	engine.RegisterLanguageChanged( tostring( name or callback ), callback )
 	return true
+end
+
+function I18n.UnregisterLanguageChanged( name )
+	local engine = i18nEngine()
+	if not engine then return false, "i18n_unavailable" end
+	engine.UnregisterLanguageChanged( tostring( name ) )
+	return true
+end
+
+-- Rescans this realm's files and refreshes every language consumer.
+function I18n.Reload()
+	local engine = i18nEngine()
+	if not engine then return nil, "i18n_unavailable" end
+	engine.Reload( "reload" )
+	return engine.Report()
+end
+
+-- Copy of the last load: files, errors, duplicate keys, aliases and the keys
+-- that queries could not find since then.
+function I18n.Report()
+	local engine = i18nEngine()
+	if not engine then return nil, "i18n_unavailable" end
+	return engine.Report()
+end
+
+function I18n.MissingKeys( locale )
+	local engine = i18nEngine()
+	if not engine then return nil, "i18n_unavailable" end
+	if not validI18nLocale( locale ) then return nil, "invalid_locale" end
+	return engine.MissingKeys( locale )
+end
+
+if CLIENT then
+	-- Garry's Mod phrase ("#phrase") whose text follows the MC language.
+	function I18n.BindPhrase( phrase, key, vars )
+		local engine = i18nEngine()
+		if not engine then return false, "i18n_unavailable" end
+		if not isstring( phrase ) or phrase == "" then return false, "invalid_phrase" end
+		if not engine.ValidKey( key ) then return false, "invalid_key" end
+		if not validI18nVars( vars ) then return false, "invalid_vars" end
+		return engine.BindPhrase( phrase, key, deepCopy( vars ) )
+	end
 end
 
 -------------------------------------------------------------------- API.Config

@@ -11,8 +11,9 @@ MC.SV = MC.SV or {}
 local SV = MC.SV
 local C = MC.Config
 
-local function L( ply, key, fallback, vars )
-	return MC.TFor and MC.TFor( ply, key, fallback, vars ) or fallback
+-- Translated with this server's files for the player's language.
+local function L( ply, key, vars )
+	return MC.I18n.Resolve( key, vars, MC.I18n.LanguageForPlayer( ply ) )
 end
 
 local SAVE_DIR = "mc"
@@ -746,7 +747,7 @@ end )
 
 net.Receive( "mc_save_list_req", function( _, ply )
 	if not canUseSaves( ply ) then
-		sendSaveList( ply, L( ply, "server.save_admin_list", "只有管理员可以读取/保存存档 (mc_save_public 0)" ), true, {} )
+		sendSaveList( ply, L( ply, "server.save_admin_list" ), true, {} )
 		return
 	end
 	sendSaveList( ply )
@@ -763,19 +764,19 @@ net.Receive( "mc_save_action", function( _, ply )
 	local ok, err
 	if action == "save" then
 		if not canUseSaves( ply ) then
-			sendSaveList( ply, L( ply, "server.save_admin_save", "只有管理员可以保存存档 (mc_save_public 0)" ), true, {} )
+			sendSaveList( ply, L( ply, "server.save_admin_save" ), true, {} )
 			return
 		end
 		ok, err = SV.SaveNamed( slotName, cover )
 	elseif action == "load" then
 		if not canUseSaves( ply ) then
-			sendSaveList( ply, L( ply, "server.save_admin_load", "只有管理员可以读取存档 (mc_save_public 0)" ), true, {} )
+			sendSaveList( ply, L( ply, "server.save_admin_load" ), true, {} )
 			return
 		end
 		ok, err = SV.LoadSave( slotName, true )
 	elseif action == "delete" then
 		if not canDeleteSaves( ply ) then
-			sendSaveList( ply, L( ply, "server.save_admin_delete", "只有管理员可以删除存档" ), true, SV.SaveList() )
+			sendSaveList( ply, L( ply, "server.save_admin_delete" ), true, SV.SaveList() )
 			return
 		end
 		ok, err = SV.DeleteSave( slotName )
@@ -784,8 +785,8 @@ net.Receive( "mc_save_action", function( _, ply )
 	end
 
 	if ok then
-		sendSaveList( ply, L( ply, "server.action_done", "操作完成: {action}", { action = action } ) )
+		sendSaveList( ply, L( ply, "server.action_done", { action = action } ) )
 	else
-		sendSaveList( ply, L( ply, "server.action_failed", "操作失败: {err}", { err = tostring( err ) } ), true )
+		sendSaveList( ply, L( ply, "server.action_failed", { err = tostring( err ) } ), true )
 	end
 end )

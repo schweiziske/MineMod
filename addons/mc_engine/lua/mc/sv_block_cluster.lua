@@ -18,8 +18,9 @@ local CLUSTER_CLASS = "mc_block_cluster"
 local CONVERT_COOLDOWN = 0.5
 local DATA_REPLIES_PER_SECOND = 24
 
-local function L( ply, key, fallback, vars )
-	return MC.TFor and MC.TFor( ply, key, fallback, vars ) or fallback
+-- Translated with this server's files for the player's language.
+local function L( ply, key, vars )
+	return MC.I18n.Resolve( key, vars, MC.I18n.LanguageForPlayer( ply ) )
 end
 
 local function notify( ply, msg )
@@ -30,7 +31,7 @@ local function canUseClusters( ply )
 	if not IsValid( ply ) or ply:IsAdmin() then return true end
 	local public = C.ClusterPublic or GetConVar( "mc_cluster_public" )
 	if public and public:GetBool() then return true end
-	notify( ply, L( ply, "cluster.admin_only", "只有管理员可以使用结构搬运器 (mc_cluster_public 0)" ) )
+	notify( ply, L( ply, "cluster.admin_only" ) )
 	return false
 end
 
@@ -174,8 +175,7 @@ duplicator.RegisterEntityClass( CLUSTER_CLASS, function( ply, data )
 	local sid = IsValid( ply ) and ply:SteamID64() or nil
 	local maxPer = C.ClusterMaxPerPlayer and C.ClusterMaxPerPlayer:GetInt() or 8
 	if maxPer > 0 and countPlayerClusters( sid ) >= maxPer then
-		notify( ply, L( ply, "cluster.per_player_limit",
-			"你的结构实体已达上限 ({max} 个, mc_cluster_max_per_player)", { max = maxPer } ) )
+		notify( ply, L( ply, "cluster.per_player_limit", { max = maxPer } ) )
 		return nil
 	end
 
@@ -274,20 +274,20 @@ end
 -- rotation 0..3 clockwise quarter turns. Never overwrites occupied cells.
 SV.PlaceClusterAt = placeClusterAt
 
-local PASTE_FAIL_TEXT = {
-	occupied = { "cluster.paste_err_occupied", "目标位置被方块占用" },
-	out_of_bounds = { "cluster.paste_err_bounds", "超出建造范围" },
-	block_limit = { "cluster.paste_err_limit", "会超过全局方块上限 (mc_max_blocks)" },
-	no_record = { "cluster.paste_err_record", "结构数据缺失" },
-	not_loaded = { "cluster.not_loaded", "选区内有区块未能加载，请稍后重试" },
+local PASTE_FAIL_KEYS = {
+	occupied = "cluster.paste_err_occupied",
+	out_of_bounds = "cluster.paste_err_bounds",
+	block_limit = "cluster.paste_err_limit",
+	no_record = "cluster.paste_err_record",
+	not_loaded = "cluster.not_loaded",
 }
 
 local function pasteFailText( ply, err, blocked )
 	if err == "occupied" and blocked then
-		return L( ply, "cluster.paste_occupied_n", "目标位置有 {n} 格被方块占用", { n = blocked } )
+		return L( ply, "cluster.paste_occupied_n", { n = blocked } )
 	end
-	local entry = PASTE_FAIL_TEXT[err]
-	if entry then return L( ply, entry[1], entry[2] ) end
+	local key = PASTE_FAIL_KEYS[err]
+	if key then return L( ply, key ) end
 	return tostring( err )
 end
 
@@ -296,16 +296,16 @@ local function registerClusterUndo( ply, ent, originCell )
 	if not ( undo and undo.Create ) or not IsValid( ply ) then return end
 	undo.Create( "mc_block_cluster" )
 	undo.SetPlayer( ply )
-	undo.SetCustomUndoText( L( ply, "cluster.undo_text", "撤销 MC 方块结构 (放回原位)" ) )
+	undo.SetCustomUndoText( L( ply, "cluster.undo_text" ) )
 	undo.AddFunction( function()
 		if not IsValid( ent ) then return end
 		if not canUseClusters( ply ) then return end
 		if SV.CanEdit and not SV.CanEdit( ply ) then return end
 		local ok, err, blocked = placeClusterAt( ply, ent, originCell, 0 )
 		if ok then
-			notify( ply, L( ply, "cluster.undo_restored", "已把结构放回原位" ) )
+			notify( ply, L( ply, "cluster.undo_restored" ) )
 		else
-			notify( ply, L( ply, "cluster.undo_failed", "撤销失败: {err}", { err = pasteFailText( ply, err, blocked ) } ) )
+			notify( ply, L( ply, "cluster.undo_failed", { err = pasteFailText( ply, err, blocked ) } ) )
 		end
 	end )
 	undo.Finish()
@@ -317,7 +317,7 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 	if not canUseClusters( ply ) then return end
 	local maxBlocks = MC.ClusterMaxBlocks()
 	if count < 1 or count > maxBlocks then
-		notify( ply, L( ply, "cluster.too_many", "选区超过上限 ({max} 方块, mc_cluster_max_blocks)", { max = maxBlocks } ) )
+		notify( ply, L( ply, "cluster.too_many", { max = maxBlocks } ) )
 		return
 	end
 	if not SV.CanEdit( ply ) then return end
@@ -326,7 +326,7 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 	local maxPer = C.ClusterMaxPerPlayer and C.ClusterMaxPerPlayer:GetInt() or 8
 	local sid = IsValid( ply ) and ply:SteamID64() or nil
 	if maxPer > 0 and countPlayerClusters( sid ) >= maxPer then
-		notify( ply, L( ply, "cluster.per_player_limit", "你的结构实体已达上限 ({max} 个, mc_cluster_max_per_player)", { max = maxPer } ) )
+		notify( ply, L( ply, "cluster.per_player_limit", { max = maxPer } ) )
 		return
 	end
 
@@ -350,7 +350,7 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 
 	local maxExtent = MC.ClusterMaxExtent()
 	if maxx - minx + 1 > maxExtent or maxy - miny + 1 > maxExtent or maxz - minz + 1 > maxExtent then
-		notify( ply, L( ply, "cluster.too_large", "选区尺寸超过上限 ({max} 格, mc_cluster_max_extent)", { max = maxExtent } ) )
+		notify( ply, L( ply, "cluster.too_large", { max = maxExtent } ) )
 		return
 	end
 
@@ -363,13 +363,13 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 			math.Clamp( eye.y, miny * MC.BS, ( maxy + 1 ) * MC.BS ),
 			math.Clamp( eye.z, minz * MC.BS, ( maxz + 1 ) * MC.BS ) )
 		if eye:DistToSqr( nearest ) > rangeLimit * rangeLimit then
-			notify( ply, L( ply, "cluster.too_far", "选区离你太远" ) )
+			notify( ply, L( ply, "cluster.too_far" ) )
 			return
 		end
 	end
 
 	if not hydrateSelectionChunks( requested ) then
-		notify( ply, L( ply, "cluster.not_loaded", "选区内有区块未能加载，请稍后重试" ) )
+		notify( ply, L( ply, "cluster.not_loaded" ) )
 		return
 	end
 
@@ -388,7 +388,7 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 		end
 	end
 	if n == 0 then
-		notify( ply, L( ply, "cluster.empty", "选区里没有方块" ) )
+		notify( ply, L( ply, "cluster.empty" ) )
 		return
 	end
 
@@ -402,18 +402,18 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 	local convexes, convexErr, convexCount = MC.ClusterCollisionConvexes( record )
 	if not convexes then
 		if convexErr == "too_complex" then
-			notify( ply, L( ply, "cluster.too_complex", "结构太复杂: {n}/{max} 个碰撞凸包", { n = convexCount or 0, max = MC.ClusterMaxConvexes() } ) )
+			notify( ply, L( ply, "cluster.too_complex", { n = convexCount or 0, max = MC.ClusterMaxConvexes() } ) )
 		elseif convexErr == "no_collision" then
-			notify( ply, L( ply, "cluster.no_collision", "选区里没有可碰撞的方块" ) )
+			notify( ply, L( ply, "cluster.no_collision" ) )
 		else
-			notify( ply, L( ply, "cluster.phys_failed", "碰撞构建失败: {err}", { err = tostring( convexErr ) } ) )
+			notify( ply, L( ply, "cluster.phys_failed", { err = tostring( convexErr ) } ) )
 		end
 		return
 	end
 
 	local ent, spawnErr = SV.SpawnCluster( record, MC.CellWorldMin( minx, miny, minz ), angle_zero, true, sid )
 	if not IsValid( ent ) then
-		notify( ply, L( ply, "cluster.spawn_failed", "生成结构实体失败: {err}", { err = tostring( spawnErr ) } ) )
+		notify( ply, L( ply, "cluster.spawn_failed", { err = tostring( spawnErr ) } ) )
 		return
 	end
 	ent.ClusterOriginCell = { minx, miny, minz }
@@ -440,7 +440,7 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 			changed = result.changed
 		elseif result.error ~= "chunk_hydration_transport_unavailable" then
 			ent:Remove()
-			notify( ply, L( ply, "cluster.remove_failed", "移除方块失败，转换已取消" ) )
+			notify( ply, L( ply, "cluster.remove_failed" ) )
 			return
 		end
 	end
@@ -453,7 +453,7 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 	end
 	if ( changed or 0 ) <= 0 then
 		ent:Remove()
-		notify( ply, L( ply, "cluster.remove_failed", "移除方块失败，转换已取消" ) )
+		notify( ply, L( ply, "cluster.remove_failed" ) )
 		return
 	end
 	if changed ~= #removeCells then
@@ -465,11 +465,9 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 	if MC.ClusterEngineStyle == true then broadcastClusterFx( ent, true ) end
 	if crate then
 		notify( ply, L( ply, "cluster.converted_crate",
-			"已转换 {n} 个方块为箱体结构 (整箱碰撞, 物理枪解冻可搬运, 对准按 G 放回网格)",
 			{ n = #removeCells } ) )
 	else
 		notify( ply, L( ply, "cluster.converted",
-			"已转换 {n} 个方块为结构实体 (初始为冻结状态, 物理枪解冻后可搬运, 对准后按 G 放回网格)",
 			{ n = #removeCells } ) )
 	end
 end )
@@ -517,7 +515,7 @@ net.Receive( "mc_cluster_paste", function( _, ply )
 	local snap, snapErr = MC.ClusterComputeSnap( ent:GetPos(), ent:GetAngles() )
 	if not snap then
 		if snapErr == "tilted" then
-			notify( ply, L( ply, "cluster.tilted", "结构倾斜太大, 先用物理枪放平再放回" ) )
+			notify( ply, L( ply, "cluster.tilted" ) )
 		end
 		return
 	end
@@ -527,9 +525,9 @@ net.Receive( "mc_cluster_paste", function( _, ply )
 	local targetMin = MC.ClusterSnapTargets( record, snap.pos, snap.rotation )
 	local ok, result, blocked = placeClusterAt( ply, ent, targetMin, snap.rotation )
 	if ok then
-		notify( ply, L( ply, "cluster.pasted", "已把 {n} 个方块放回网格", { n = result } ) )
+		notify( ply, L( ply, "cluster.pasted", { n = result } ) )
 	else
-		notify( ply, L( ply, "cluster.paste_failed", "放回失败: {err}", { err = pasteFailText( ply, result, blocked ) } ) )
+		notify( ply, L( ply, "cluster.paste_failed", { err = pasteFailText( ply, result, blocked ) } ) )
 	end
 end )
 

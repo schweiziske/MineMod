@@ -1,0 +1,27 @@
+{
+  "locale": "en_us",
+  "entries": {
+    "all": "All",
+    "all_groups": "All groups",
+    "current_map": "Current map",
+    "delete_group": "Delete group",
+    "delete_group_hint": "The group will be removed and its items will become ungrouped.",
+    "filter": "Filters",
+    "group": "Group",
+    "group_exists": "The group name is empty or already exists",
+    "group_manage_hint": "Right-click to rename or delete this group",
+    "group_name": "Enter a group name",
+    "group_none": "Ungrouped",
+    "groups": "Custom groups",
+    "maps": "Saved map",
+    "move_to_group": "Move to",
+    "new": "+ New",
+    "new_group": "New group",
+    "no_results": "Nothing matches the current filters.",
+    "preset_subtitle": "Keep build ideas ready to place again",
+    "rename_group": "Rename group",
+    "save_subtitle": "Organize, filter, and return to your block worlds",
+    "search": "Search name or map",
+    "showing": "Showing {visible} / {total}"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "locale": "en_us",
+  "entries": {
+    "config_hide_hint": "Enter mc_join_notice 0 to disable this join notice.",
+    "config_hint": "Enter mc_config in the console to open settings, or mc_save_manager to open the save manager."
+  }
+}

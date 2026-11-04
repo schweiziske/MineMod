@@ -4,8 +4,8 @@
 
 MC = MC or {}
 
-local function L( key, fallback, vars )
-	return MC.T and MC.T( key, fallback, vars ) or fallback
+local function L( key, vars )
+	return MC.T( key, vars )
 end
 
 local function blockDisplayText( blockOrID )
@@ -529,18 +529,23 @@ function MC.DrawMinecraftBlockIcon( id, x, y, w, h, orient, forceModel, visual, 
 end
 
 MC.CreativeCategories = MC.CreativeCategories or {
-	{ id = "all", labelKey = "creative.category.all", label = MC.T( "creative.category.all", "全部" ) },
-	{ id = "color_blocks", labelKey = "creative.category.color_blocks", label = "色块" },
-	{ id = "slopes", labelKey = "creative.category.slopes", label = "斜坡" },
-	{ id = "custom", labelKey = "creative.category.custom", label = "自定义" },
-	{ id = "building", labelKey = "creative.category.building", label = "建筑方块" },
-	{ id = "natural", labelKey = "creative.category.natural", label = "自然方块" },
-	{ id = "functional", labelKey = "creative.category.functional", label = "功能方块" },
-	{ id = "redstone", labelKey = "creative.category.redstone", label = "红石" },
-	{ id = "decoration", labelKey = "creative.category.decoration", label = "装饰" },
-	{ id = "transparent", labelKey = "creative.category.transparent", label = "透明/玻璃" },
-	{ id = "plants", labelKey = "creative.category.plants", label = "植物" },
+	{ id = "all", labelKey = "creative.category.all" },
+	{ id = "color_blocks", labelKey = "creative.category.color_blocks" },
+	{ id = "slopes", labelKey = "creative.category.slopes" },
+	{ id = "custom", labelKey = "creative.category.custom" },
+	{ id = "building", labelKey = "creative.category.building" },
+	{ id = "natural", labelKey = "creative.category.natural" },
+	{ id = "functional", labelKey = "creative.category.functional" },
+	{ id = "redstone", labelKey = "creative.category.redstone" },
+	{ id = "decoration", labelKey = "creative.category.decoration" },
+	{ id = "transparent", labelKey = "creative.category.transparent" },
+	{ id = "plants", labelKey = "creative.category.plants" },
 }
+
+local function creativeCategoryLabel( category )
+	if category.labelKey then return L( category.labelKey ) end
+	return tostring( category.label or category.id )
+end
 
 function MC.RefreshCreativeCategories()
 	local seen = {}
@@ -1326,7 +1331,7 @@ function MC.OpenCreativeStatePicker( id, onSelect, parent, selectedStateId )
 	if IsValid( MC.CreativeStateFrame ) then MC.CreativeStateFrame:Remove() end
 
 	local fr = vgui.Create( "DFrame" )
-	fr:SetTitle( L( "creative.state.title", "方块状态" ) .. " · " .. blockDisplayText( b ) )
+	fr:SetTitle( L( "creative.state.title" ) .. " · " .. blockDisplayText( b ) )
 	fr:SetSize( 520, 620 )
 	positionCreativeStateFrame( fr, parent )
 	fr:MakePopup()
@@ -1383,8 +1388,8 @@ function MC.OpenCreativeStatePicker( id, onSelect, parent, selectedStateId )
 	automatic:Dock( TOP )
 	automatic:DockMargin( 8, 0, 8, 6 )
 	automatic:SetTall( 34 )
-	local automaticLabel = L( "creative.state.auto", "自动放置" )
-	local selectedLabel = L( "creative.state.selected", "已选中" )
+	local automaticLabel = L( "creative.state.auto" )
+	local selectedLabel = L( "creative.state.selected" )
 	MC.StyleCreativePagerButton( automatic, function( selected )
 		return selected and ( automaticLabel .. "  ·  " .. selectedLabel ) or automaticLabel
 	end, function()
@@ -1399,7 +1404,7 @@ function MC.OpenCreativeStatePicker( id, onSelect, parent, selectedStateId )
 	explicitDefault:Dock( TOP )
 	explicitDefault:DockMargin( 8, 0, 8, 6 )
 	explicitDefault:SetTall( 30 )
-	MC.StyleCreativePagerButton( explicitDefault, L( "creative.state.explicit_default", "显式默认状态" ) )
+	MC.StyleCreativePagerButton( explicitDefault, L( "creative.state.explicit_default" ) )
 	explicitDefault.DoClick = function()
 		automaticSelected = false
 		selectedStateId = schema.defaultStateId
@@ -1562,7 +1567,7 @@ function MC.OpenCreativeInventory( onSelect, opts )
 	end
 
 	local fr = vgui.Create( "DFrame" )
-	fr:SetTitle( L( "creative.title", "创造物品栏" ) )
+	fr:SetTitle( L( "creative.title" ) )
 	fr:SetSize( 960, 700 )
 	fr:Center()
 	fr:MakePopup()
@@ -1592,7 +1597,7 @@ function MC.OpenCreativeInventory( onSelect, opts )
 	search:DockMargin( 8, 0, 8, 6 )
 	search:SetTall( 30 )
 	search:SetValue( tostring( cachedState.search or "" ) )
-	search:SetPlaceholderText( L( "creative.search", "搜索中文名 / 英文名 / minecraft:id" ) )
+	search:SetPlaceholderText( L( "creative.search" ) )
 	search:SetDrawBackground( false )
 	search:SetTextColor( CREATIVE_UI.text )
 	if search.SetCursorColor then search:SetCursorColor( CREATIVE_UI.accent ) end
@@ -1601,7 +1606,7 @@ function MC.OpenCreativeInventory( onSelect, opts )
 		surface.SetDrawColor( 88, 96, 110, s:HasFocus() and 190 or 110 )
 		surface.DrawOutlinedRect( 0, 0, w, h, 1 )
 		if s:GetValue() == "" and not s:HasFocus() then
-			draw.SimpleText( L( "creative.search", "搜索中文名 / 英文名 / minecraft:id" ), "mc_hud_small", 8, h * 0.5, CREATIVE_UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER )
+			draw.SimpleText( L( "creative.search" ), "mc_hud_small", 8, h * 0.5, CREATIVE_UI.textDim, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER )
 		end
 		s:DrawTextEntryText( CREATIVE_UI.text, Color( 95, 145, 210 ), CREATIVE_UI.text )
 	end
@@ -1640,7 +1645,7 @@ function MC.OpenCreativeInventory( onSelect, opts )
 	local activeCategory = tostring( cachedState.category or "all" )
 	local page = math.max( 1, math.floor( tonumber( cachedState.pages[activeCategory] ) or 1 ) )
 	for _, cat in ipairs( MC.CreativeCategories ) do
-		local label = L( cat.labelKey, cat.label )
+		local label = creativeCategoryLabel( cat )
 		local grid = vgui.Create( "DPanel", tabs )
 		MC.StyleCreativeGridPanel( grid )
 		local layout = vgui.Create( "DPanel", grid )
@@ -1653,8 +1658,7 @@ function MC.OpenCreativeInventory( onSelect, opts )
 		if sheet and sheet.Tab then
 			categoryTabs[cat.id] = sheet.Tab
 			sheet.Tab.MCCategoryID = cat.id
-			sheet.Tab.MCCategoryLabelKey = cat.labelKey
-			sheet.Tab.MCCategoryFallback = cat.label
+			sheet.Tab.MCCategory = cat
 			sheet.Tab:SetTextColor( CREATIVE_UI.text )
 			sheet.Tab.Paint = function( s, w, h )
 				local active = tabs:GetActiveTab() == s
@@ -1712,7 +1716,7 @@ function MC.OpenCreativeInventory( onSelect, opts )
 			addCreativeButton( layout, ids[i], selectCreativeBlock, fr, closeOnSelect )
 		end
 		layout:InvalidateLayout( true )
-		pageLabel:SetText( L( "creative.page", "{page} / {pages}    {count} 个方块", { page = page, pages = pages, count = #ids } ) )
+		pageLabel:SetText( L( "creative.page", { page = page, pages = pages, count = #ids } ) )
 		prev:SetEnabled( page > 1 )
 		next:SetEnabled( page < pages )
 		cacheInventoryPosition()
@@ -1741,13 +1745,13 @@ function MC.OpenCreativeInventory( onSelect, opts )
 		if IsValid( MC.CreativeStateFrame ) then MC.CreativeStateFrame:Remove() end
 	end
 	fr.MCRefreshLanguage = function()
-		fr:SetTitle( L( "creative.title", "创造物品栏" ) )
-		search:SetPlaceholderText( L( "creative.search", "搜索中文名 / 英文名 / minecraft:id" ) )
+		fr:SetTitle( L( "creative.title" ) )
+		search:SetPlaceholderText( L( "creative.search" ) )
 		local items = tabs.GetItems and tabs:GetItems() or tabs.Items or {}
 		for _, item in ipairs( items ) do
 			local tab = item.Tab
-			if IsValid( tab ) and tab.MCCategoryLabelKey then
-				tab:SetText( L( tab.MCCategoryLabelKey, tab.MCCategoryFallback or "" ) )
+			if IsValid( tab ) and tab.MCCategory then
+				tab:SetText( creativeCategoryLabel( tab.MCCategory ) )
 			end
 		end
 		rebuild()
@@ -1830,7 +1834,7 @@ function MC.OpenPalette( onSelect )
 	if IsValid( MC.PaletteFrame ) then MC.PaletteFrame:Remove() end
 
 	local fr = vgui.Create( "DFrame" )
-	fr:SetTitle( L( "palette.title", "选择方块" ) )
+	fr:SetTitle( L( "palette.title" ) )
 	fr:SetSize( 780, 560 )
 	fr:Center()
 	fr:MakePopup()
@@ -1881,21 +1885,21 @@ hook.Add( "HUDPaint", "mc_sync_progress", function()
 	local x, y = sw * 0.5 - w * 0.5, 96
 	local label
 	if p.workshop == true then
-		label = L( "sync.workshop_progress", "本地读取创意工坊世界 {received}/{expected} 方块  {done}/{chunks} 区块", {
+		label = L( "sync.workshop_progress", {
 			received = p.received,
 			expected = p.expected,
 			done = p.doneChunks,
 			chunks = p.chunks,
 		} )
 	elseif p.bytes == true then
-		label = L( "sync.progress_bytes", "MC 同步 {received}/{expected} KB  {done}/{chunks} 分片", {
+		label = L( "sync.progress_bytes", {
 			received = math.floor( ( p.received or 0 ) / 1024 + 0.5 ),
 			expected = math.max( 1, math.floor( ( p.expected or 0 ) / 1024 + 0.5 ) ),
 			done = p.doneChunks,
 			chunks = p.chunks,
 		} )
 	else
-		label = L( "sync.progress", "MC 同步 {received}/{expected} 方块  {done}/{chunks} 区块", {
+		label = L( "sync.progress", {
 			received = p.received,
 			expected = p.expected,
 			done = p.doneChunks,
@@ -1904,9 +1908,9 @@ hook.Add( "HUDPaint", "mc_sync_progress", function()
 	end
 	if complete then
 		if p.workshop == true then
-			label = L( "sync.workshop_complete", "创意工坊基础世界已从本地读取完成" )
+			label = L( "sync.workshop_complete" )
 		else
-			label = L( "sync.complete", "MC 同步完成  {label}", { label = label } )
+			label = L( "sync.complete", { label = label } )
 		end
 	end
 
@@ -1922,7 +1926,7 @@ if MC.RegisterLanguageChanged then
 			MC.CreativeFrame:MCRefreshLanguage()
 		end
 		if IsValid( MC.PaletteFrame ) then
-			MC.PaletteFrame:SetTitle( L( "palette.title", "选择方块" ) )
+			MC.PaletteFrame:SetTitle( L( "palette.title" ) )
 			MC.PaletteFrame:InvalidateLayout( true )
 		end
 	end )

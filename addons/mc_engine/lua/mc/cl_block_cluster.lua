@@ -17,8 +17,8 @@ local function chat( msg )
 	if IsValid( ply ) then ply:ChatPrint( "[MC] " .. msg ) end
 end
 
-local function L( key, fallback, vars )
-	return MC.T and MC.T( key, fallback, vars ) or fallback
+local function L( key, vars )
+	return MC.T( key, vars )
 end
 
 ------------------------------------------------------------------ mesh build
@@ -404,7 +404,7 @@ end
 function MC.ClusterSelectionClear( silent )
 	MC.ClusterSelection = { cells = {}, count = 0, version = MC.ClusterSelection.version + 1 }
 	MC.ClusterBoxCorner = nil
-	if not silent then chat( L( "cluster.cleared", "已清空选区" ) ) end
+	if not silent then chat( L( "cluster.cleared" ) ) end
 end
 
 -- silent add used by flood/box bulk paths; returns false, reason on failure
@@ -431,17 +431,16 @@ local function selectionTryAdd( bx, by, bz )
 	return true
 end
 
-local ADD_FAIL_TEXT = {
-	count = { "cluster.add_failed_count", "选区已达方块数上限" },
-	extent = { "cluster.add_failed_extent", "选区尺寸超过上限" },
-	air = { "cluster.add_failed_air", "那里没有方块" },
+local ADD_FAIL_KEYS = {
+	count = "cluster.add_failed_count",
+	extent = "cluster.add_failed_extent",
+	air = "cluster.add_failed_air",
 }
 
 function MC.ClusterSelectionAdd( bx, by, bz )
 	local ok, reason = selectionTryAdd( bx, by, bz )
 	if not ok then
-		local entry = ADD_FAIL_TEXT[reason]
-		chat( entry and L( entry[1], entry[2] ) or L( "cluster.add_failed", "无法加选" ) )
+		chat( L( ADD_FAIL_KEYS[reason] or "cluster.add_failed" ) )
 	end
 	return ok
 end
@@ -465,7 +464,7 @@ local FLOOD_NEIGHBORS = {
 -- Flood-select the connected structure (6-neighborhood over non-air cells).
 function MC.ClusterFloodSelect( bx, by, bz )
 	if ( MC.GetBlockState( bx, by, bz ) or 0 ) == 0 then
-		chat( L( "cluster.flood_air", "请准星对准一个方块再连通选择" ) )
+		chat( L( "cluster.flood_air" ) )
 		return
 	end
 
@@ -495,9 +494,9 @@ function MC.ClusterFloodSelect( bx, by, bz )
 	end
 
 	if limited then
-		chat( L( "cluster.flood_limited", "连通选择到达上限, 已选 {n} 个方块", { n = MC.ClusterSelection.count } ) )
+		chat( L( "cluster.flood_limited", { n = MC.ClusterSelection.count } ) )
 	elseif added > 0 then
-		chat( L( "cluster.flood_done", "连通选择 +{n} (共 {total})", { n = added, total = MC.ClusterSelection.count } ) )
+		chat( L( "cluster.flood_done", { n = added, total = MC.ClusterSelection.count } ) )
 	end
 end
 
@@ -507,7 +506,7 @@ function MC.ClusterBoxClick( bx, by, bz )
 	local corner = MC.ClusterBoxCorner
 	if not corner then
 		MC.ClusterBoxCorner = { bx = bx, by = by, bz = bz }
-		chat( L( "cluster.corner_a", "已选第一个角点, 再选对角完成框选" ) )
+		chat( L( "cluster.corner_a" ) )
 		return
 	end
 
@@ -516,12 +515,12 @@ function MC.ClusterBoxClick( bx, by, bz )
 	local minz, maxz = math.min( corner.bz, bz ), math.max( corner.bz, bz )
 	local maxExtent = MC.ClusterMaxExtent()
 	if maxx - minx + 1 > maxExtent or maxy - miny + 1 > maxExtent or maxz - minz + 1 > maxExtent then
-		chat( L( "cluster.box_extent", "框选尺寸超过上限 ({max} 格)", { max = maxExtent } ) )
+		chat( L( "cluster.box_extent", { max = maxExtent } ) )
 		return
 	end
 	local volume = ( maxx - minx + 1 ) * ( maxy - miny + 1 ) * ( maxz - minz + 1 )
 	if volume > BOX_MAX_VOLUME then
-		chat( L( "cluster.box_volume", "框选体积太大" ) )
+		chat( L( "cluster.box_volume" ) )
 		return
 	end
 
@@ -546,9 +545,9 @@ function MC.ClusterBoxClick( bx, by, bz )
 	end
 
 	if limited then
-		chat( L( "cluster.box_limited", "框选到达上限, 已选 {n} 个方块", { n = MC.ClusterSelection.count } ) )
+		chat( L( "cluster.box_limited", { n = MC.ClusterSelection.count } ) )
 	else
-		chat( L( "cluster.box_done", "框选 +{n} (共 {total})", { n = added, total = MC.ClusterSelection.count } ) )
+		chat( L( "cluster.box_done", { n = added, total = MC.ClusterSelection.count } ) )
 	end
 end
 
@@ -592,7 +591,7 @@ end
 function MC.ClusterSendConvert()
 	local sel = MC.ClusterSelection
 	if sel.count == 0 then
-		chat( L( "cluster.nothing_selected", "先选择一些方块 (左键加选 / E 连通选择 / 框选)" ) )
+		chat( L( "cluster.nothing_selected" ) )
 		return
 	end
 	net.Start( "mc_cluster_convert" )
