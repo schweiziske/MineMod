@@ -1,6 +1,18 @@
 {
   "locale": "en_us",
   "entries": {
-    "itemGroup.mcswep.gmod_weapons": "GMod Weapons"
+    "inventory.anvil.name_too_long": "Name too long",
+    "inventory.merchant.out_of_stock": "Trade is out of stock and can restock",
+    "inventory.merchant.unavailable.default": "This trade is permanently unavailable",
+    "inventory.merchant.unavailable.exploration_map_pending": "This trade needs structure-map data that is not available yet",
+    "inventory.merchant.unavailable.modifier_filtered_out": "This trade result could not be generated",
+    "inventory.merchant.unavailable.unsupported_potion_options": "This potion trade is not supported by the current version",
+    "inventory.merchant.unavailable.unsupported_trade_modifier": "This trade result is not supported by the current version",
+    "inventory.no_gmod_weapon": "No GMod weapon available",
+    "inventory.return_to_gmod": "Return to GMod",
+    "item.mcswep.gmod_weapon": "GMod Weapon",
+    "itemGroup.mcswep.gmod_weapons": "GMod Weapons",
+    "weapon.mc_item_hand.instructions": "Left click breaks  Right click uses/places  Reload or E opens the inventory",
+    "weapon.mc_item_hand.purpose": "Minecraft inventory item interaction"
   }
 }

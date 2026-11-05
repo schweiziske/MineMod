@@ -1,6 +1,7 @@
 {
   "locale": "en_us",
   "entries": {
+    "block.example.polished_basalt": "Example Polished Basalt",
     "itemGroup.example.building": "Example Building"
   }
 }

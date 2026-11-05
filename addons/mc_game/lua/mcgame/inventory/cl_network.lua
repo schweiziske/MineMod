@@ -836,7 +836,7 @@ end
 net.Receive( "mc_inventory_exit_hand", function()
 	local screen = MC.InventoryUI and MC.InventoryUI.Screen
 	if not IsValid( screen ) then return end
-	screen.ErrorText = MC.Language() == "zh_cn" and "没有可切换的 GMod 武器" or "No GMod weapon available"
+	screen.ErrorText = MC.T( "inventory.no_gmod_weapon" )
 	screen.ErrorUntil = RealTime() + 2.5
 end )
 

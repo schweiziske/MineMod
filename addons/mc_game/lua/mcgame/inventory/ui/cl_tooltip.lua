@@ -10,18 +10,6 @@ UI.Tooltip = Tooltip
 local ENCHANTMENT_GRAY = Color( 170, 170, 170, 255 )
 local CURSE_RED = Color( 255, 85, 85, 255 )
 
-local function vanillaItemText( key, fallback )
-	local catalog = MC.GeneratedInventoryText and MC.GeneratedInventoryText[key] or nil
-	if type( catalog ) ~= "table" then return fallback end
-	local language = MC.Language and MC.Language() or "en_us"
-	return catalog[language] or catalog.en_us or fallback
-end
-
-local function formatVanillaText( template, ... )
-	local ok, value = pcall( string.format, tostring( template or "" ), ... )
-	return ok and value or tostring( template or "" )
-end
-
 local function componentValue( stack, key )
 	local components = type( stack ) == "table" and stack.components or nil
 	if type( components ) ~= "table" then return nil end
@@ -104,7 +92,7 @@ function Tooltip.LinesForStack( stack )
 	if maxDamage > 0 then
 		local damage = math.Clamp( math.floor( tonumber( stack.damage ) or 0 ), 0, maxDamage )
 		lines[#lines + 1] = {
-			text = formatVanillaText( vanillaItemText( "durability", "Durability: %s / %s" ), maxDamage - damage, maxDamage ),
+			text = MC.T( "item.durability", { maxDamage - damage, maxDamage } ),
 			color = UI.Colors.text,
 		}
 	end

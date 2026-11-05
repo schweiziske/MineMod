@@ -8,7 +8,8 @@ own the content.
 
     addons/<addon>/data_static/mc/i18n/<addon>.minecraft.<locale>.json
 
-holding the full Minecraft keys that the OWNERS table assigns to that addon.
+holding the full Minecraft keys that the OWNERS table assigns to that addon
+(only keys en_us.json also has).
 Java format specifiers become MineMod placeholders: %s and %n$s turn into {n}
 (the n-th positional parameter), %% into %. Any other % sequence stops the run.
 
@@ -24,11 +25,24 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SUFFIX = ".minecraft."
 
-# addon -> predicate over Minecraft keys. Ownership follows the content
-# definition: the game layer owns the vanilla creative tabs.
+# addon -> key prefixes (a prefix ending in "." owns the keys below it, any
+# other prefix only the exact key). Ownership follows the content definition:
+# the engine registers the blocks, the game layer the items, creative tabs and
+# container screens, MCITEM the effects, potions and enchantments.
 OWNERS = {
-    "mc_game": lambda key: key.startswith("itemGroup."),
+    "mc_engine": ("block.minecraft.",),
+    "mc_game": (
+        "itemGroup.", "item.minecraft.", "item.durability", "item.components",
+        "container.", "book.pageIndicator", "merchant.",
+        "entity.minecraft.villager", "entity.minecraft.villager.", "entity.minecraft.wandering_trader",
+    ),
+    "mc_item": ("effect.minecraft.", "effect.duration.infinite", "effect.none", "enchantment.minecraft.",
+                "enchantment.level.", "potion.withAmplifier", "potion.withDuration"),
 }
+
+
+def owns(prefixes, key):
+    return any(key.startswith(prefix) if prefix.endswith(".") else key == prefix for prefix in prefixes)
 
 SPECIFIER = re.compile(r"%(?:(\d+)\$)?([sd])|%%|%")
 
@@ -81,9 +95,12 @@ def i18n_root(addon):
 def build(locales):
     """{ path: text } for every fragment the current lang files produce."""
     outputs = {}
-    for addon, owns in OWNERS.items():
+    for addon, prefixes in OWNERS.items():
         for locale, document in locales.items():
-            entries = {key: convert(key, text) for key, text in document.items() if owns(key)}
+            # en_us defines the key set; a key only another locale still
+            # carries is a leftover of an older version and is dropped.
+            entries = {key: convert(key, text) for key, text in document.items()
+                       if owns(prefixes, key) and key in locales["en_us"]}
             if entries:
                 path = i18n_root(addon) / ("%s%s%s.json" % (addon, SUFFIX, locale))
                 outputs[path] = render(locale, entries)

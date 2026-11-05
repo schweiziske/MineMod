@@ -18,13 +18,6 @@ local function canonicalBlockName( block )
 	return type( value ) == "string" and value or nil
 end
 
-local function slopeDisplayName( block, language )
-	if MC.BlockDisplayName then
-		return MC.BlockDisplayName( block, block and ( block.dispZH or block.disp or block.name ), language )
-	end
-	return block and ( block.dispZH or block.disp or block.name ) or ""
-end
-
 -- The generated MineMod slope catalog is an engine-owned block list, not a
 -- second hand-maintained item list.  Build the public category from the live
 -- records so every generated slope (including future generated variants) gets
@@ -87,8 +80,6 @@ local function registerBuiltinOakSlope()
 		block = BLOCK_ID,
 		maxStack = 64,
 		kind = "block",
-		displayName = "Custom Oak Slope",
-		displayNameZH = "自定义橡木斜坡",
 		source = "mcswep",
 	} )
 	if not itemOK then return migrationFailed( "BlockItem", item or "item_api_unavailable" ) end
@@ -124,14 +115,12 @@ local function registerBuiltinOakSlope()
 	local registeredNames = {}
 	for _, record in ipairs( slopeRecords ) do
 		if record.name ~= BLOCK_ID then
-			local block = record.block
+			-- The BlockItem takes its name from the slope block.
 			local itemOK, item = api.Items.Register( {
 				id = record.name,
 				block = record.name,
 				maxStack = 64,
 				kind = "block",
-				displayName = slopeDisplayName( block, "en_us" ),
-				displayNameZH = slopeDisplayName( block, "zh_cn" ),
 				source = "mcswep",
 			} )
 			if not itemOK then

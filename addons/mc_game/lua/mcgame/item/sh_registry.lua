@@ -50,6 +50,21 @@ function MC.NormalizeItemName( value )
 	return normalizeName( value )
 end
 
+-- Item names are translation keys. A definition may name its key (the
+-- generated vanilla rows do, following Minecraft's lang files); otherwise a
+-- BlockItem takes its block's key and vars when the registry freezes, and any
+-- other item uses item.<namespace>.<path>.
+local function itemTranslation( definition, name )
+	if definition.displayName ~= nil or definition.displayNameZH ~= nil then return nil, "inline_name_unsupported" end
+	local key = definition.translationKey
+	if key ~= nil and not ( type( key ) == "string" and MC.I18n.ValidKey( key ) ) then return nil, "invalid_translation_key" end
+	if definition.translationVars ~= nil and type( definition.translationVars ) ~= "table" then
+		return nil, "invalid_translation_vars"
+	end
+	if key == nil and definition.block == nil then key = MC.I18n.ContentKey( "item", name ) end
+	return key or false, definition.translationVars
+end
+
 function MC.RegisterItem( definition )
 	if MC.ItemRegistryFrozen then return nil, "registry_frozen" end
 	if type( definition ) ~= "table" then return nil, "invalid_definition" end
@@ -58,6 +73,8 @@ function MC.RegisterItem( definition )
 	if not name then return nil, "invalid_item_name" end
 	if #name > 128 then return nil, "item_name_too_long" end
 	if MC.PendingItems[name] then return nil, "duplicate_item" end
+	local translationKey, translationVars = itemTranslation( definition, name )
+	if translationKey == nil then return nil, translationVars end
 
 	local maxStack = normalizedInteger( definition.maxStack, 1, MC.ItemAbsoluteMaxStack, 64 )
 	if not maxStack then return nil, "invalid_max_stack" end
@@ -89,8 +106,9 @@ function MC.RegisterItem( definition )
 		blockName = blockName,
 		texture = texture,
 		model = trim( definition.model ) ~= "" and trim( definition.model ) or nil,
-		displayName = trim( definition.displayName ) ~= "" and trim( definition.displayName ) or nil,
-		displayNameZH = trim( definition.displayNameZH ) ~= "" and trim( definition.displayNameZH ) or nil,
+		-- false until a BlockItem inherits its block's key at the freeze.
+		translationKey = translationKey,
+		translationVars = translationVars,
 		rarity = string.lower( trim( definition.rarity ~= nil and definition.rarity or "common" ) ),
 		kind = string.lower( trim( definition.kind ~= nil and definition.kind or ( blockName and "block" or "item" ) ) ),
 		tags = copyList( definition.tags ),
@@ -124,9 +142,9 @@ local function resolveBlockItem( definition )
 	definition.blockId = resolved.id
 	definition.kind = "block"
 	MC.ItemsByBlockId[resolved.id] = definition
-	if not definition.displayName and resolved.block then
-		definition.displayName = MC.BlockDisplayName and MC.BlockDisplayName( resolved.block, resolved.block.dispZH or resolved.block.disp )
-			or resolved.block.dispZH or resolved.block.disp
+	if not definition.translationKey and resolved.block then
+		definition.translationKey = resolved.block.translationKey
+		definition.translationVars = resolved.block.translationVars
 	end
 end
 
@@ -136,7 +154,7 @@ function MC.FinalizeItemRegistry()
 	if not MC.PendingItems["minecraft:air"] then
 		MC.PendingItems["minecraft:air"] = {
 			name = "minecraft:air", maxStack = 64, maxDamage = 0,
-			kind = "item", rarity = "common", tags = {},
+			kind = "item", rarity = "common", tags = {}, translationKey = "block.minecraft.air",
 		}
 	end
 
@@ -235,20 +253,23 @@ function MC.ItemForBlockState( stateId )
 	return blockId and MC.ItemForBlock( blockId ) or nil
 end
 
-function MC.ItemDisplayName( value, lang )
+-- Key and vars of an item name. A BlockItem that has not been bound to its
+-- block yet (before the freeze) answers with its block's key.
+function MC.ItemTranslationKey( value )
 	local definition = MC.GetItem( value )
-	if not definition then return tostring( value or "" ) end
-	lang = tostring( lang or ( MC.Language and MC.Language() ) or "en_us" )
-	if lang == "zh_cn" and definition.displayNameZH and definition.displayNameZH ~= "" then
-		return definition.displayNameZH
-	end
-	if definition.displayName and definition.displayName ~= "" then return definition.displayName end
-	if definition.blockId and MC.Blocks and MC.Blocks[definition.blockId] then
-		local block = MC.Blocks[definition.blockId]
-		return MC.BlockDisplayName and MC.BlockDisplayName( block, block.dispZH or block.disp ) or block.dispZH or block.disp
-	end
-	local path = string.match( definition.name, ":(.+)$" ) or definition.name
-	return string.gsub( path, "_", " " )
+	if not definition then return nil end
+	if definition.translationKey then return definition.translationKey, definition.translationVars end
+	local resolved = definition.blockName and MC.ResolveBlock and MC.ResolveBlock( definition.blockName ) or nil
+	if resolved and resolved.block then return resolved.block.translationKey, resolved.block.translationVars end
+	return MC.I18n.ContentKey( "item", definition.name )
+end
+
+-- The item's name in locale (default: this realm's language). Names are
+-- never stored, so the registry keeps no language of its own.
+function MC.ItemDisplayName( value, locale )
+	local key, vars = MC.ItemTranslationKey( value )
+	if not key then return tostring( value or "" ) end
+	return MC.I18n.Resolve( key, vars, locale )
 end
 
 function MC.ItemMaxStack( value )

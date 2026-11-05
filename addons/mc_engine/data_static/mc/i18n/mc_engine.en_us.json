@@ -5,6 +5,26 @@
     "english"
   ],
   "entries": {
+    "block.mcswep.black_color_block": "Custom Black Block",
+    "block.mcswep.blue_color_block": "Custom Blue Block",
+    "block.mcswep.generated_color": "Color Block H{hue} S{saturation} V{value}",
+    "block.mcswep.generated_slope": "{block} Slope",
+    "block.mcswep.green_color_block": "Custom Green Block",
+    "block.mcswep.oak_slope": "Custom Oak Slope",
+    "block.mcswep.red_color_block": "Custom Red Block",
+    "block.mcswep.white_color_block": "Custom White Block",
+    "debug.f3.block": "Block: {x} {y} {z}",
+    "debug.f3.chunk": "Chunk: {x} {y}",
+    "debug.f3.facing": "Facing: {facing}",
+    "debug.f3.facing.east": "east",
+    "debug.f3.facing.north": "north",
+    "debug.f3.facing.south": "south",
+    "debug.f3.facing.west": "west",
+    "debug.f3.loaded": "Loaded: {chunks} chunks, {blocks} blocks",
+    "debug.f3.target": "Targeted block: {target}",
+    "debug.f3.target_chunk": "Targeted chunk: {x} {y}",
+    "debug.f3.title": "MineMod Debug (F3)",
+    "entity.mc_block_cluster.name": "MC Block Structure",
     "itemGroup.mcswep.color_blocks": "Color Blocks",
     "itemGroup.mcswep.slopes": "Slopes"
   }

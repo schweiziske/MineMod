@@ -57,8 +57,15 @@ local function generatedName( hue, saturation, value )
 	return string.format( "mcswep_color_h%03d_s%03d_v%03d", hue, saturation, value )
 end
 
-local function displayName( block )
-	return block.dispZH or block.disp or block.name
+-- Names are templates of mc_engine's dictionary: the colour components, and
+-- for a slope the name of the block it is cut from.
+local function colorNameVars( hue, saturation, value )
+	return { hue = string.format( "%03d", hue ), saturation = string.format( "%03d", saturation ),
+		value = string.format( "%03d", value ) }
+end
+
+local function slopeNameVars( source )
+	return { block = { key = source.translationKey, vars = source.translationVars } }
 end
 
 local function isSlopeSource( block )
@@ -86,7 +93,8 @@ for hueIndex = 0, COLOR_HUES - 1 do
 			id = blockId,
 			name = name,
 			mcid = "mcswep:" .. name,
-			disp = string.format( "色块 H%03d S%03d V%03d", hue, variant[1], variant[2] ),
+			translationKey = "block.mcswep.generated_color",
+			translationVars = colorNameVars( hue, variant[1], variant[2] ),
 			solid = true,
 			transparent = false,
 			creativeCategory = "color_blocks",
@@ -111,7 +119,8 @@ for index = 1, #sourceIds do
 			id = nextSlopeID,
 			name = name,
 			mcid = "mcswep:" .. name,
-			disp = displayName( source ) .. "斜坡",
+			translationKey = "block.mcswep.generated_slope",
+			translationVars = slopeNameVars( source ),
 			solid = true,
 			transparent = false,
 			creativeCategory = "slopes",

@@ -32,16 +32,14 @@ local function registerColors()
 	for _, block in ipairs( colors ) do
 		-- Explicit block-model identity sends GUI, held and dropped forms through
 		-- the existing block-state mesh renderer and its runtime atlas bindings.
-		-- No separate item PNG, material or pre-baked VTF is needed.
-		local suffix = string.upper( string.gsub( block.name, "^mcswep_color_", "" ) )
+		-- No separate item PNG, material or pre-baked VTF is needed. The
+		-- BlockItem takes its name from the colour block.
 		ok, result = API.Items.Register( {
 			id = block.mcid,
 			block = block.mcid,
 			model = "mcswep:block/" .. block.name,
 			maxStack = 64,
 			kind = "block",
-			displayName = "Color Block " .. string.gsub( suffix, "_", " " ),
-			displayNameZH = block.dispZH or block.disp,
 			source = "mcswep",
 		} )
 		if not accept( ok, result, "item:" .. block.mcid ) then return end

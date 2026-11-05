@@ -7,6 +7,26 @@
     "schinese"
   ],
   "entries": {
+    "block.mcswep.black_color_block": "自定义黑色方块",
+    "block.mcswep.blue_color_block": "自定义蓝色方块",
+    "block.mcswep.generated_color": "色块 H{hue} S{saturation} V{value}",
+    "block.mcswep.generated_slope": "{block}斜坡",
+    "block.mcswep.green_color_block": "自定义绿色方块",
+    "block.mcswep.oak_slope": "自定义橡木斜坡",
+    "block.mcswep.red_color_block": "自定义红色方块",
+    "block.mcswep.white_color_block": "自定义白色方块",
+    "debug.f3.block": "方块：{x} {y} {z}",
+    "debug.f3.chunk": "区块：{x} {y}",
+    "debug.f3.facing": "朝向：{facing}",
+    "debug.f3.facing.east": "东",
+    "debug.f3.facing.north": "北",
+    "debug.f3.facing.south": "南",
+    "debug.f3.facing.west": "西",
+    "debug.f3.loaded": "已加载：{chunks} 个区块，{blocks} 个方块",
+    "debug.f3.target": "目标方块：{target}",
+    "debug.f3.target_chunk": "目标区块：{x} {y}",
+    "debug.f3.title": "MineMod 调试（F3）",
+    "entity.mc_block_cluster.name": "MC 方块结构",
     "itemGroup.mcswep.color_blocks": "色块",
     "itemGroup.mcswep.slopes": "斜坡"
   }

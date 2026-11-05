@@ -161,13 +161,9 @@ end
 -- with "/" read as ".". The owning addon ships the text as JSON below
 -- data_static/mc/i18n/ (docs/localization.md); no inline title is accepted.
 local function creativeTitleKey( id, explicit )
-	local key = explicit
-	if key == nil then
-		local namespace, path = string.match( id, "^([^:]+):(.+)$" )
-		key = "itemGroup." .. namespace .. "." .. string.gsub( path, "/", "." )
-	end
-	if not ( MC.I18n and MC.I18n.ValidKey( key ) ) then return nil end
-	return key
+	if explicit == nil then return MC.I18n.ContentKey( "itemGroup", id ) end
+	if not MC.I18n.ValidKey( explicit ) then return nil end
+	return explicit
 end
 
 function Creative.RegisterCategory( definition )
@@ -299,6 +295,9 @@ function Items.Register( definition )
 	if MC.BlockStateRegistryFrozen or API._freezeStarted or API._ready then return nil, "registry_frozen" end
 	local name, err = itemDefinitionName( definition )
 	if not name then return nil, err end
+	-- Names come from translation keys (item.<ns>.<path>, a BlockItem's block
+	-- key, or an explicit translationKey); inline text is not accepted.
+	if definition.displayName ~= nil or definition.displayNameZH ~= nil then return nil, "inline_name_unsupported" end
 	local blockName
 	if definition.block ~= nil then
 		blockName = MC.ValidateModContentIdentifier and MC.ValidateModContentIdentifier( definition.block )
@@ -1354,25 +1353,41 @@ function Blocks.WithProperty( stateId, propertyName, value )
 	return MC.StateWith( stateId, propertyName, value )
 end
 
--- Localized display name. Numbers are ambiguous (legacy block ids and state
--- ids share the same integer range): a number naming a registered block is
--- treated as a BLOCK id. For state ids use DisplayNameForState.
-function Blocks.DisplayName( idOrStateId )
+local function blockForDisplay( idOrStateId )
 	local block = MC.Blocks and MC.Blocks[idOrStateId] or nil
 	if not block and MC.IsValidBlockState and MC.IsValidBlockState( idOrStateId ) and MC.BlockTypeForState then
 		local id = MC.BlockTypeForState( idOrStateId )
 		block = id and MC.Blocks and MC.Blocks[id] or nil
 	end
-	if not block then return nil, "unknown_block" end
-	return MC.BlockDisplayName and MC.BlockDisplayName( block ) or block.name
+	return block
 end
 
-function Blocks.DisplayNameForState( stateId )
+-- Localized display name in locale (default: this realm's language), from the
+-- block's translation key. Numbers are ambiguous (legacy block ids and state
+-- ids share the same integer range): a number naming a registered block is
+-- treated as a BLOCK id. For state ids use DisplayNameForState.
+function Blocks.DisplayName( idOrStateId, locale )
+	if locale ~= nil and not isstring( locale ) then return nil, "invalid_locale" end
+	local block = blockForDisplay( idOrStateId )
+	if not block then return nil, "unknown_block" end
+	return MC.BlockDisplayName( block, locale )
+end
+
+function Blocks.DisplayNameForState( stateId, locale )
+	if locale ~= nil and not isstring( locale ) then return nil, "invalid_locale" end
 	if not MC.IsValidBlockState or not MC.IsValidBlockState( stateId ) then return nil, "invalid_state" end
 	local id = MC.BlockTypeForState and MC.BlockTypeForState( stateId ) or nil
 	local block = id and MC.Blocks and MC.Blocks[id] or nil
 	if not block then return nil, "unknown_block" end
-	return MC.BlockDisplayName and MC.BlockDisplayName( block ) or block.name
+	return MC.BlockDisplayName( block, locale )
+end
+
+-- Translation key and vars (a copy) of a block, for addons that compose their
+-- own text; same id rules as DisplayName.
+function Blocks.TranslationKey( idOrStateId )
+	local block = blockForDisplay( idOrStateId )
+	if not block then return nil, "unknown_block" end
+	return block.translationKey, deepCopy( block.translationVars )
 end
 
 function Blocks.Hardness( id )

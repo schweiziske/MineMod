@@ -372,6 +372,16 @@ function MC.ValidateModBlockDefinition( definition )
 	if definition.drops ~= nil or definition.lootTable ~= nil or definition.loot_table ~= nil then
 		return nil, "unsupported_loot_definition"
 	end
+	-- Names are translation keys (block.<namespace>.<path> unless
+	-- translationKey says otherwise); the text is the addon's JSON.
+	if definition.disp ~= nil or definition.dispZH ~= nil then return nil, "inline_name_unsupported" end
+	if definition.translationKey ~= nil and not ( isString( definition.translationKey )
+		and MC.I18n.ValidKey( definition.translationKey ) ) then
+		return nil, "invalid_translation_key"
+	end
+	if definition.translationVars ~= nil and not isTable( definition.translationVars ) then
+		return nil, "invalid_translation_vars"
+	end
 	-- `id` is the public spelling.  `mcid`/`name` remain compatibility aliases
 	-- for the migrated legacy definition, but must not silently override an
 	-- explicit public id.

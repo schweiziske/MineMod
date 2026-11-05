@@ -312,5 +312,80 @@ def test_shader_builders_publish_display_keys():
         check("withDisplay(" in text and not re.search(r'\bname: "', text), "%s writes display keys only" % name)
 
 
+# ---------------------------------------------------------------- content names
+
+def test_content_keys_follow_minecraft():
+    rt = runtime()
+    eq(rt.call("MC.I18n.ContentKey", "block", "minecraft:stone"), "block.minecraft.stone", "block key")
+    eq(rt.call("MC.I18n.ContentKey", "item", "example:tools/hammer"), "item.example.tools.hammer", "nested path")
+    eq(rt.call("MC.I18n.ContentKey", "item", "no namespace"), None, "invalid identifier")
+
+
+def generated_item_keys():
+    text = (ADDONS / "mc_game/lua/mcgame/generated/sh_generated_items.lua").read_text(encoding="utf-8")
+    rows = re.findall(r'^	\{"(minecraft:[a-z0-9_]+)",\d+,\d+,(?:nil|"[^"]*"),(?:nil|"[^"]*"),(nil|"[^"]*"),', text, re.M)
+    check(len(rows) > 1000, "generated item rows parsed")
+    check("displayName" not in text and "GeneratedInventoryText" not in text, "generated items carry no names")
+    return [key.strip('"') for _, key in rows if key != "nil"]
+
+
+def test_generated_item_names_are_translated():
+    rt = runtime()
+    eq(untranslated(rt, generated_item_keys()), [], "untranslated item names")
+    tabs = (ADDONS / "mc_game/lua/mcgame/generated/sh_generated_creative_tabs.lua").read_text(encoding="utf-8")
+    check("titleZH" not in tabs and "title=" not in tabs, "generated creative tabs carry only titleKey")
+
+
+def test_potion_effect_and_enchantment_names_are_translated():
+    rt = runtime()
+    keys = []
+    potions = (ADDONS / "mc_game/lua/mcgame/item/sh_potion_contents.lua").read_text(encoding="utf-8")
+    for base in set(re.findall(r'base = "([a-z_]+)"', potions)):
+        for bottle in ("potion", "splash_potion", "lingering_potion"):
+            keys.append("item.minecraft.%s.effect.%s" % (bottle, base))
+    effects = (ADDONS / "mc_item/lua/mcitem/potions/sh_data.lua").read_text(encoding="utf-8")
+    effects = effects[effects.index("MCITEM.Potions.Effects = {"):]
+    effects = effects[:effects.index("\n}")]
+    keys += ["effect.minecraft." + effect for effect in re.findall(r'^    \["([a-z_]+)"\] = \{', effects, re.M)]
+    enchanting = (ADDONS / "mc_game/lua/mcgame/generated/sh_generated_enchanting.lua").read_text(encoding="utf-8")
+    keys += ["enchantment.minecraft." + e for e in set(re.findall(r'"minecraft:([a-z_]+)"', enchanting))
+             if rt.call("MC.I18n.Has", "enchantment.minecraft." + e, "en_us")]
+    keys += ["enchantment.level.%d" % n for n in range(1, 11)] + ["effect.duration.infinite"]
+    check(len(keys) > 150, "name keys collected")
+    eq(untranslated(rt, keys), [], "untranslated names")
+
+
+CODE_KEY = re.compile(r'(?:MC\.T|drawLabel|MC\.I18n\.Resolve)\(\s*"([A-Za-z0-9_.-]+)"')
+
+
+def test_literal_keys_in_code_are_translated():
+    rt = runtime()
+    keys = []
+    for addon in ("mc_engine", "mc_game", "mc_item", "mc_skybox_block"):
+        for path in (ADDONS / addon / "lua").rglob("*.lua"):
+            if "generated" in path.parts:
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            keys += CODE_KEY.findall(text)
+            if path.name == "cl_texture_pack_ui.lua":
+                keys += ["texture_pack." + key for key in re.findall(r'L\(\s*"([a-z0-9_.]+)"', text)]
+            if path.name == "cl_debug.lua":
+                keys += re.findall(r'L\(\s*"(debug\.[a-z0-9_.]+)"', text)
+    check(len(set(keys)) > 30, "code keys collected: %d" % len(set(keys)))
+    # A literal ending in "." is the prefix of a key built at run time.
+    eq(untranslated(rt, [key for key in keys if not key.endswith(".")]), [], "untranslated literal keys")
+
+
+def test_explicit_locale_reaches_names():
+    rt = runtime()
+    eq(rt.call("MC.I18n.Language"), "en_us", "interface language")
+    eq(rt.call("MC.I18n.Resolve", "item.minecraft.acacia_boat", None, "zh_cn"), "金合欢木船", "item name in zh_cn")
+    rt.run("MC.PotionContents = nil")
+    rt.run_file(ADDONS / "mc_game/lua/mcgame/item/sh_potion_contents.lua")
+    stack = "{ item = 'minecraft:splash_potion', components = { potion_contents = 'minecraft:healing' } }"
+    eq(rt.eval("MC.PotionContents.DisplayName( %s, 'zh_cn' )" % stack), "喷溅型治疗药水", "potion in zh_cn")
+    eq(rt.eval("MC.PotionContents.DisplayName( %s )" % stack), "Splash Potion of Healing", "potion in the interface language")
+
+
 if __name__ == "__main__":
     sys.exit(lua_runtime.run_tests(dict(globals()), sys.argv[1:]))

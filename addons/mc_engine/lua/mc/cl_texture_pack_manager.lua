@@ -5,9 +5,9 @@ local M = MC.TexturePackManager
 local Session = {}
 Session.__index = Session
 
-function M.Text( english, chinese )
-	if MC.Language() == "zh_cn" then return chinese end
-	return english
+-- Texts of the texture pack screen live under texture_pack.*.
+function M.Text( key, vars )
+	return MC.T( "texture_pack." .. key, vars )
 end
 
 function Session:IsDirty()
@@ -23,7 +23,7 @@ function Session:Refresh()
 	for _, entry in ipairs( MC.ResourcePacks.ListPacks() ) do
 		local name = entry.name
 		if not entry.title or entry.title == "" then entry.title = name end
-		entry.description = entry.description or M.Text( "Provided by: ", "提供者：" ) .. entry.owner
+		entry.description = entry.description or M.Text( "provided_by", { owner = entry.owner } )
 		self.packs[#self.packs + 1], self.byName[name] = entry, entry
 	end
 	if not dirty then self.draft = self.preference end

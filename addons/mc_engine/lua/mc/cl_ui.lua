@@ -11,7 +11,7 @@ end
 local function blockDisplayText( blockOrID )
 	local b = type( blockOrID ) == "table" and blockOrID or MC.Blocks[blockOrID]
 	if not b then return "" end
-	return MC.BlockDisplayName and MC.BlockDisplayName( b, b.dispZH or b.disp ) or b.disp
+	return MC.BlockDisplayName( b )
 end
 
 surface.CreateFont( "mc_hud", { font = "Roboto", size = 22, weight = 600 } )
@@ -1073,13 +1073,15 @@ hook.Add( "InitPostEntity", "mc_creative_hotbar_initial_sync", function()
 	end )
 end )
 
+-- Search matches the id, the name in the interface language and the en_us
+-- name, so English and Minecraft-id searches work in every language.
 local function blockText( b )
+	if not b then return "" end
 	return string.lower( table.concat( {
-		tostring( b and b.name or "" ),
-		tostring( b and b.mcid or "" ),
-		tostring( b and b.disp or "" ),
-		tostring( b and b.dispZH or "" ),
-		tostring( b and MC.BlockDisplayName and MC.BlockDisplayName( b, b.dispZH or b.disp, "en_us" ) or "" ),
+		tostring( b.name ),
+		tostring( b.mcid ),
+		MC.BlockDisplayName( b ),
+		MC.BlockDisplayName( b, MC.I18n.BASE_LOCALE ),
 	}, " " ) )
 end
 

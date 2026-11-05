@@ -1,0 +1,7 @@
+{
+  "locale": "en_us",
+  "entries": {
+    "mcitem.enchanted_book.name": "{book} — {enchantments}",
+    "mcitem.list_separator": ", "
+  }
+}

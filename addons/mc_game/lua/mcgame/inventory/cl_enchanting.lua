@@ -13,7 +13,6 @@ local Blocks = API.Blocks or {}
 local Coords = API.Coords or {}
 local Light = API.Light or {}
 local Font = API.Font or {}
-local I18n = API.I18n or {}
 local BLOCK_ENTITY_TYPE = "minecraft:enchanting_table"
 local resolvedTable = type( Blocks.Resolve ) == "function" and Blocks.Resolve( "minecraft:enchanting_table" ) or nil
 local ENCHANTING_TABLE_BLOCK_ID = resolvedTable and resolvedTable.id or nil
@@ -137,51 +136,38 @@ function MC.RequestEnchantingOption( optionIndex )
 	return MC.QueueInventoryMenuButton( optionIndex )
 end
 
-local ROMAN = {
-	[1] = "I", [2] = "II", [3] = "III", [4] = "IV", [5] = "V",
-	[6] = "VI", [7] = "VII", [8] = "VIII", [9] = "IX", [10] = "X",
-}
-
-local function titleWord( word )
-	return string.upper( string.sub( word, 1, 1 ) ) .. string.sub( word, 2 )
-end
-
+-- Enchantment names belong to MCITEM; without it the clue shows the id.
 function MC.EnchantingClueName( enchantmentId, level )
 	enchantmentId = tostring( enchantmentId or "" )
 	level = math.max( 0, math.floor( tonumber( level ) or 0 ) )
 	if MCITEM and type( MCITEM.EnchantmentLevelName ) == "function" then
-		local called, value = pcall( MCITEM.EnchantmentLevelName, enchantmentId, level )
-		if called and isstring( value ) and value ~= "" then return value end
+		return MCITEM.EnchantmentLevelName( enchantmentId, level )
 	end
-	local path = string.match( enchantmentId, "^[^:]+:(.+)$" ) or enchantmentId
-	path = string.gsub( path, "_", " " )
-	path = string.gsub( path, "%S+", titleWord )
-	if level > 0 then path = path .. " " .. ( ROMAN[level] or tostring( level ) ) end
-	return path ~= "" and path or ( type( I18n.Language ) == "function" and I18n.Language() == "zh_cn"
-		and "未知附魔" or "Unknown Enchantment" )
+	return enchantmentId
 end
 
+-- EnchantmentScreen's tooltip, with Minecraft's own keys.
 function MC.EnchantingOptionTooltipLines( option )
 	if type( option ) ~= "table" or not option.clue then return nil end
-	local chinese = type( I18n.Language ) == "function" and I18n.Language() == "zh_cn"
 	local lines = {
-		{ text = ( chinese and "可能的附魔：" or "Enchantment clue: " )
-			.. MC.EnchantingClueName( option.clue, option.clueLevel ), color = Color( 255, 255, 255 ) },
+		{ text = MC.T( "container.enchant.clue", { MC.EnchantingClueName( option.clue, option.clueLevel ) } ),
+			color = Color( 255, 255, 255 ) },
 		{ text = "", color = Color( 255, 255, 255 ) },
 	}
 	if option.error == "not_enough_experience" then
 		lines[#lines + 1] = {
-			text = ( chinese and "需要等级 " or "Level requirement: " ) .. tostring( option.cost or 0 ),
+			text = MC.T( "container.enchant.level.requirement", { tostring( option.cost or 0 ) } ),
 			color = Color( 255, 85, 85 ),
 		}
 	else
 		local lapis = math.max( 1, math.floor( tonumber( option.lapisCost ) or ( tonumber( option.index ) or 0 ) + 1 ) )
+		local plural = lapis == 1 and "one" or "many"
 		lines[#lines + 1] = {
-			text = chinese and ( "青金石：" .. lapis ) or ( lapis == 1 and "1 Lapis Lazuli" or lapis .. " Lapis Lazuli" ),
+			text = MC.T( "container.enchant.lapis." .. plural, { lapis } ),
 			color = option.error == "not_enough_lapis" and Color( 255, 85, 85 ) or Color( 170, 170, 170 ),
 		}
 		lines[#lines + 1] = {
-			text = chinese and ( "消耗等级：" .. lapis ) or ( lapis == 1 and "1 Enchantment Level" or lapis .. " Enchantment Levels" ),
+			text = MC.T( "container.enchant.level." .. plural, { lapis } ),
 			color = Color( 170, 170, 170 ),
 		}
 	end

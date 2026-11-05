@@ -69,28 +69,6 @@ local BOTTLE_PREFIX = {
 	["minecraft:lingering_potion"] = "item.minecraft.lingering_potion.effect.",
 }
 
-local EN_US = {
-	water = "Water Bottle", mundane = "Mundane Potion", thick = "Thick Potion", awkward = "Awkward Potion",
-	night_vision = "Potion of Night Vision", invisibility = "Potion of Invisibility",
-	leaping = "Potion of Leaping", fire_resistance = "Potion of Fire Resistance",
-	swiftness = "Potion of Swiftness", slowness = "Potion of Slowness",
-	turtle_master = "Potion of the Turtle Master", water_breathing = "Potion of Water Breathing",
-	healing = "Potion of Healing", harming = "Potion of Harming", poison = "Potion of Poison",
-	regeneration = "Potion of Regeneration", strength = "Potion of Strength",
-	weakness = "Potion of Weakness", luck = "Potion of Luck", slow_falling = "Potion of Slow Falling",
-	wind_charged = "Potion of Wind Charging", weaving = "Potion of Weaving",
-	oozing = "Potion of Oozing", infested = "Potion of Infestation",
-}
-
-local ZH_CN = {
-	water = "水瓶", mundane = "平凡的药水", thick = "浓稠的药水", awkward = "粗制的药水",
-	night_vision = "夜视药水", invisibility = "隐身药水", leaping = "跳跃药水", fire_resistance = "抗火药水",
-	swiftness = "迅捷药水", slowness = "迟缓药水", turtle_master = "神龟药水", water_breathing = "水肺药水",
-	healing = "治疗药水", harming = "伤害药水", poison = "剧毒药水", regeneration = "再生药水",
-	strength = "力量药水", weakness = "虚弱药水", luck = "幸运药水", slow_falling = "缓降药水",
-	wind_charged = "蓄风药水", weaving = "盘丝药水", oozing = "渗浆药水", infested = "虫蚀药水",
-}
-
 local function component( stack, key )
 	if type( stack ) ~= "table" or type( stack.components ) ~= "table" then return nil end
 	local value = stack.components[key]
@@ -144,42 +122,19 @@ function PotionContents.Color( stack, alpha )
 	return Color and Color( r, g, b, tonumber( alpha ) or 255 ) or { r = r, g = g, b = b, a = tonumber( alpha ) or 255 }
 end
 
-local function englishBottleName( item, base, fallback )
-	if item == "minecraft:potion" then return fallback end
-	local kind = item == "minecraft:splash_potion" and "Splash" or "Lingering"
-	if base == "water" then return kind .. " Water Bottle" end
-	if base == "mundane" or base == "thick" or base == "awkward" then
-		return string.gsub( fallback, " Potion$", " " .. kind .. " Potion" )
-	end
-	return kind .. " " .. fallback
-end
-
-local function chineseBottleName( item, fallback )
-	if item == "minecraft:potion" then return fallback end
-	local prefix = item == "minecraft:splash_potion" and "喷溅型" or "滞留型"
-	return prefix .. fallback
-end
-
-function PotionContents.DisplayName( stack, lang )
-	if not PotionContents.IsBottle( stack ) then return nil end
-	local contents = PotionContents.Value( stack )
-	local definition = PotionContents.Definition( stack )
-	if not contents or not definition then return nil end
-	local customName = type( contents.custom_name ) == "string" and contents.custom_name or nil
-	local base = customName or definition.base
-	lang = tostring( lang or ( MC.Language and MC.Language() ) or "en_us" )
-	if lang == "zh_cn" then
-		local fallback = ZH_CN[base]
-		return fallback and chineseBottleName( stack.item, fallback ) or nil
-	end
-	local fallback = EN_US[base]
-	return fallback and englishBottleName( stack.item, base, fallback ) or nil
-end
-
+-- Minecraft's own key (item.minecraft.<bottle>.effect.<name>); a
+-- potion_contents custom_name replaces the potion's name part, as in Java.
 function PotionContents.TranslationKey( stack )
 	local contents = PotionContents.Value( stack )
 	local definition = PotionContents.Definition( stack )
 	if not contents or not definition then return nil end
 	local suffix = type( contents.custom_name ) == "string" and contents.custom_name or definition.base
-	return BOTTLE_PREFIX[stack.item] .. suffix
+	local key = BOTTLE_PREFIX[stack.item] .. suffix
+	return MC.I18n.ValidKey( key ) and key or nil
+end
+
+-- The bottle's name in locale (default: this realm's language).
+function PotionContents.DisplayName( stack, locale )
+	local key = PotionContents.TranslationKey( stack )
+	return key and MC.I18n.Resolve( key, nil, locale ) or nil
 end

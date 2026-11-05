@@ -108,6 +108,23 @@ function Items.Resolve( value )
 	}
 end
 
+-- Key and vars of the item's name, as stored in the registry (a BlockItem
+-- answers with its block's key).
+function Items.TranslationKey( value )
+	local normalized = itemName( type( value ) == "table" and value.name or value )
+	if not normalized or not ( MC.GetItem and MC.GetItem( normalized ) ) then return nil, "unknown_item" end
+	local key, vars = MC.ItemTranslationKey( normalized )
+	return key, copyValue( vars )
+end
+
+-- The item's name in locale (default: the realm's language).
+function Items.DisplayName( value, locale )
+	if locale ~= nil and not isstring( locale ) then return nil, "invalid_locale" end
+	local key, err = Items.TranslationKey( value )
+	if not key then return nil, err end
+	return MC.ItemDisplayName( type( value ) == "table" and value.name or value, locale )
+end
+
 function Items.RuntimeId( value )
 	local resolved, err = Items.Resolve( value )
 	return resolved and resolved.runtimeId or nil, err

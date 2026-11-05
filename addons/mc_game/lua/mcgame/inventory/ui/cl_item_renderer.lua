@@ -781,7 +781,9 @@ function Renderer.DrawStack( stack, x, y, size, options )
 	return true
 end
 
-function Renderer.DisplayName( stack )
+-- locale (default: the interface language) reaches every name lookup below;
+-- a player's custom name and a GMod weapon title are shown as they are.
+function Renderer.DisplayName( stack, locale )
 	local definition = definitionFor( stack )
 	if not definition then return "" end
 	local customName, hasCustomName
@@ -790,12 +792,12 @@ function Renderer.DisplayName( stack )
 	local weapon = MC.SpawnmenuWeapons and MC.SpawnmenuWeapons.Record( stack )
 	if weapon then return language.GetPhrase( weapon.title ) end
 	local enchantedBookName = MCITEM and MCITEM.EnchantedBookDisplayName
-		and MCITEM.EnchantedBookDisplayName( stack ) or nil
+		and MCITEM.EnchantedBookDisplayName( stack, locale ) or nil
 	if enchantedBookName and enchantedBookName ~= "" then return enchantedBookName end
 	local potionName = MC.PotionContents and MC.PotionContents.DisplayName
-		and MC.PotionContents.DisplayName( stack ) or nil
+		and MC.PotionContents.DisplayName( stack, locale ) or nil
 	if potionName and potionName ~= "" then return potionName end
-	return MC.ItemDisplayName and MC.ItemDisplayName( definition ) or tostring( definition.displayName or definition.name )
+	return MC.ItemDisplayName( definition, locale )
 end
 
 local DEFAULT_DISPLAY = {

@@ -10,7 +10,6 @@ local UI = MC.InventoryUI
 local EFFECT_KEY = "MCITEMPotionEffects"
 local cache = setmetatable({}, { __mode = "k" })
 
-local ROMAN = { "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X" }
 local SORT_DURATION_THRESHOLD = 32147
 
 local function decode(entity)
@@ -103,28 +102,20 @@ local function inventoryEffects(entity)
 	return activeEffects(entity, false)
 end
 
+-- Gui.getEffectName: effect.<namespace>.<path>, plus enchantment.level.<n>
+-- for amplifiers 1-9. Effect names are MCITEM's translations.
 local function effectName(effect)
-	local definition = MCITEM and MCITEM.Potions and MCITEM.Potions.EffectDefinition
-		and MCITEM.Potions.EffectDefinition(effect.id) or nil
-	local name = definition and definition.name or tostring(effect.id or "")
-	if MC.Language and MC.Language() == "zh_cn" then
-		local zh = {
-			absorption = "伤害吸收", fire_resistance = "抗火", regeneration = "生命恢复",
-			resistance = "抗性提升", poison = "中毒", hunger = "饥饿", nausea = "反胃",
-			instant_health = "瞬间治疗", instant_damage = "瞬间伤害", jump_boost = "跳跃提升",
-			speed = "速度", slowness = "缓慢", strength = "力量", weakness = "虚弱",
-			night_vision = "夜视", invisibility = "隐身", water_breathing = "水下呼吸",
-			slow_falling = "缓降", luck = "幸运", unluck = "霉运", glowing = "发光",
-		}
-		name = zh[tostring(effect.id or "")] or name
-	end
+	local id = tostring(effect.id or "")
+	if id ~= "" and not string.find(id, ":", 1, true) then id = "minecraft:" .. id end
+	local key = MC.I18n.ContentKey("effect", id)
+	local name = key and MC.T(key) or id
 	local amplifier = tonumber(effect.amplifier) or 0
-	if amplifier >= 1 and amplifier <= 9 then name = name .. " " .. ROMAN[amplifier + 1] end
+	if amplifier >= 1 and amplifier <= 9 then name = name .. " " .. MC.T("enchantment.level." .. (amplifier + 1)) end
 	return name
 end
 
 local function formatDuration(ticks)
-	if ticks == -1 then return MC.Language and MC.Language() == "zh_cn" and "无限" or "Infinite" end
+	if ticks == -1 then return MC.T("effect.duration.infinite") end
 	if ticks <= 0 then return "0:00" end
 	local seconds = math.floor(ticks / 20)
 	local minutes = math.floor(seconds / 60)

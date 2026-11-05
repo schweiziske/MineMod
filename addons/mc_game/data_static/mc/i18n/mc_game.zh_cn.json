@@ -1,6 +1,18 @@
 {
   "locale": "zh_cn",
   "entries": {
-    "itemGroup.mcswep.gmod_weapons": "GMod 武器"
+    "inventory.anvil.name_too_long": "名称过长",
+    "inventory.merchant.out_of_stock": "交易已售罄，稍后可补货",
+    "inventory.merchant.unavailable.default": "此交易当前永久不可用",
+    "inventory.merchant.unavailable.exploration_map_pending": "此交易需要尚未接入的结构地图数据",
+    "inventory.merchant.unavailable.modifier_filtered_out": "无法生成此交易结果",
+    "inventory.merchant.unavailable.unsupported_potion_options": "当前版本尚不支持此药水交易",
+    "inventory.merchant.unavailable.unsupported_trade_modifier": "当前版本尚不支持此交易结果",
+    "inventory.no_gmod_weapon": "没有可切换的 GMod 武器",
+    "inventory.return_to_gmod": "返回 GMod",
+    "item.mcswep.gmod_weapon": "GMod 武器",
+    "itemGroup.mcswep.gmod_weapons": "GMod 武器",
+    "weapon.mc_item_hand.instructions": "左键破坏  右键使用/放置  Reload 或 E 打开物品栏",
+    "weapon.mc_item_hand.purpose": "Minecraft 物品栏物品交互"
   }
 }

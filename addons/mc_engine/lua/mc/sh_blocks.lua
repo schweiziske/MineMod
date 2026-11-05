@@ -36,16 +36,6 @@ MC.Tiles = T
 MC.TileNames = {}
 for name, tile in pairs( T ) do MC.TileNames[tile] = name end
 
-local FixedDisp = {
-	grass = "草方块", dirt = "泥土", stone = "石头", cobblestone = "圆石",
-	oak_planks = "橡木木板", oak_log = "橡木原木", sand = "沙子", glass = "玻璃",
-	bricks = "红砖块", stone_bricks = "石砖", bedrock = "基岩", gold_block = "金块",
-	iron_block = "铁块", diamond_block = "钻石块", tnt = "TNT", crafting_table = "工作台",
-	obsidian = "黑曜石", glowstone = "荧石", netherrack = "下界岩", snow = "雪块",
-	oak_leaves = "橡树树叶", pumpkin = "南瓜", melon = "西瓜", bookshelf = "书架",
-	furnace = "熔炉", dispenser = "发射器", observer = "侦测器",
-}
-
 local function normalizeBlockKey( s )
 	s = string.lower( tostring( s or "" ) )
 	s = string.match( s, "^%s*(.-)%s*$" )
@@ -58,9 +48,21 @@ local function tileValue( value, fallback )
 	return fallback or 0
 end
 
-local function blockDisp( name, mcid, id, explicit )
-	local generated = MC.GeneratedBlockNames or {}
-	return explicit or generated[mcid] or generated[name] or FixedDisp[name] or ( "方块 " .. tostring( name or mcid or id ) )
+-- A block's name is the translation key block.<namespace>.<path> unless the
+-- definition names another key; translationVars fill its placeholders and may
+-- hold nested { key = ..., vars = ... } specs (generated slopes name their
+-- source block that way). The text lives in the owning addon's dictionary.
+local function blockTranslation( def, mcid )
+	if def.disp ~= nil or def.dispZH ~= nil then return nil, "inline_name_unsupported" end
+	local key = def.translationKey
+	if key == nil then
+		key = MC.I18n.ContentKey( "block", mcid )
+	elseif not MC.I18n.ValidKey( key ) then
+		key = nil
+	end
+	if not key then return nil, "invalid_translation_key" end
+	if def.translationVars ~= nil and type( def.translationVars ) ~= "table" then return nil, "invalid_translation_vars" end
+	return key, def.translationVars
 end
 
 local function generatedBlockProperties( name, mcid )
@@ -385,13 +387,17 @@ function MC.RegisterBlock( def )
 	local handler = def.handlers or ( handlerName and MC.BlockHandlers[handlerName] ) or nil
 	if handler and handler.OnTick then MC.HasBlockTickHandlers = true end
 
-	local displayName = blockDisp( name, mcid, id, def.disp )
+	local translationKey, translationVars = blockTranslation( def, mcid )
+	if not translationKey then
+		MC.Fault( "block_translation_key", "%s: %s", tostring( mcid ), tostring( translationVars ) )
+		return nil, translationVars
+	end
 	local b = {
 		id = id,
 		name = name,
 		mcid = mcid,
-		disp = displayName,
-		dispZH = displayName,
+		translationKey = translationKey,
+		translationVars = translationVars,
 		solid = shouldForceSolid( name, mcid ) or solid,
 		-- Chests have collision, but their block-entity model neither blocks
 		-- neighbouring faces nor seals voxel light like a full cube.
@@ -435,8 +441,6 @@ function MC.RegisterBlock( def )
 		orient = stateRule,
 		place = def.placeRule or def.place,
 	}
-	if MC.BlockDisplayName then b.disp = MC.BlockDisplayName( b, displayName ) end
-
 	MC.Blocks[id] = b
 	MC.BlockByName[mcid] = b
 	MC.BlockAliases[name] = b
@@ -819,6 +823,23 @@ function MC.BlockHardness( id )
 	return tonumber( b.hardness ) or 1
 end
 
+local AIR_KEY = "block.minecraft.air"
+
+-- Key and vars of a block record or block id; air for 0 and unknown ids.
+function MC.BlockTranslationKey( blockOrId )
+	local b = type( blockOrId ) == "table" and blockOrId or MC.Blocks[tonumber( blockOrId ) or -1]
+	if not b then return AIR_KEY, nil end
+	return b.translationKey, b.translationVars
+end
+
+-- The block's name in locale (default: this realm's language). Names are
+-- looked up on demand and never stored, so a language change needs no
+-- refresh and an explicit locale always reaches the lookup.
+function MC.BlockDisplayName( blockOrId, locale )
+	local key, vars = MC.BlockTranslationKey( blockOrId )
+	return MC.I18n.Resolve( key, vars, locale )
+end
+
 function MC.BlockRequiresCorrectTool( id )
 	local b = MC.Blocks[tonumber( id ) or -1]
 	return b and b.requiresCorrectToolForDrops == true or false
@@ -865,7 +886,6 @@ registerImportFallbackBlock( { id = 60009, name = "flower", mcid = "minecraft:da
 
 if MC.RegisterPendingCustomBlocks then MC.RegisterPendingCustomBlocks() end
 rebuildBlockList()
-if MC.RefreshBlockDisplayNames then MC.RefreshBlockDisplayNames() end
 
 -- These generated maps are staging indexes used only while the initial block
 -- records above are normalized. Every value needed at runtime now lives on a
@@ -876,7 +896,6 @@ MC.GeneratedBlockLight = nil
 MC.GeneratedBlockCollision = nil
 MC.GeneratedBlockModelVariants = nil
 MC.GeneratedBlockConnections = nil
-MC.GeneratedBlockNames = nil
 MC.GeneratedBlockSoundTypes = nil
 MC.GeneratedNoTerrainParticles = nil
 MC.GeneratedBlockRegistrationTablesReleased = true

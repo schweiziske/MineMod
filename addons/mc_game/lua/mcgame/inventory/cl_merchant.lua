@@ -25,52 +25,12 @@ local TRADE_BUTTON = UI.GetGuiMaterial( "sprites/widget/button" )
 local TRADE_BUTTON_HIGHLIGHTED = UI.GetGuiMaterial( "sprites/widget/button_highlighted" )
 
 local LEVEL_MIN_XP = { [1] = 0, [2] = 10, [3] = 70, [4] = 150, [5] = 250 }
-local LEVEL_NAMES = {
-	[1] = { en = "Novice", zh = "新手" },
-	[2] = { en = "Apprentice", zh = "学徒" },
-	[3] = { en = "Journeyman", zh = "熟练工" },
-	[4] = { en = "Expert", zh = "专家" },
-	[5] = { en = "Master", zh = "大师" },
-}
-local PROFESSION_NAMES = {
-	none = { en = "Villager", zh = "村民" },
-	nitwit = { en = "Nitwit", zh = "傻子村民" },
-	armorer = { en = "Armorer", zh = "盔甲匠" },
-	butcher = { en = "Butcher", zh = "屠夫" },
-	cartographer = { en = "Cartographer", zh = "制图师" },
-	cleric = { en = "Cleric", zh = "牧师" },
-	farmer = { en = "Farmer", zh = "农民" },
-	fisherman = { en = "Fisherman", zh = "渔夫" },
-	fletcher = { en = "Fletcher", zh = "制箭师" },
-	leatherworker = { en = "Leatherworker", zh = "皮匠" },
-	librarian = { en = "Librarian", zh = "图书管理员" },
-	mason = { en = "Mason", zh = "石匠" },
-	shepherd = { en = "Shepherd", zh = "牧羊人" },
-	toolsmith = { en = "Toolsmith", zh = "工具匠" },
-	weaponsmith = { en = "Weaponsmith", zh = "武器匠" },
-	wandering_trader = { en = "Wandering Trader", zh = "流浪商人" },
-}
-local UNAVAILABLE_REASON_TEXT = {
-	exploration_map_pending = {
-		en = "This trade needs structure-map data that is not available yet",
-		zh = "此交易需要尚未接入的结构地图数据",
-	},
-	unsupported_trade_modifier = {
-		en = "This trade result is not supported by the current version",
-		zh = "当前版本尚不支持此交易结果",
-	},
-	unsupported_potion_options = {
-		en = "This potion trade is not supported by the current version",
-		zh = "当前版本尚不支持此药水交易",
-	},
-	modifier_filtered_out = {
-		en = "This trade result could not be generated",
-		zh = "无法生成此交易结果",
-	},
-}
-local DEFAULT_UNAVAILABLE_TEXT = {
-	en = "This trade is permanently unavailable",
-	zh = "此交易当前永久不可用",
+-- Unavailable trades name their reason; any other reason uses .default.
+local UNAVAILABLE_REASONS = {
+	exploration_map_pending = true,
+	unsupported_trade_modifier = true,
+	unsupported_potion_options = true,
+	modifier_filtered_out = true,
 }
 
 local function emit( eventName, ... )
@@ -451,22 +411,22 @@ local function scrollerOffset( offerCount, scrollOffset )
 	return offset
 end
 
-local function localized( values )
-	if not values then return nil end
-	return MC.Language and MC.Language() == "zh_cn" and values.zh or values.en
-end
-
 local function unavailableReasonText( reason )
-	return localized( UNAVAILABLE_REASON_TEXT[tostring( reason or "" )]
-		or DEFAULT_UNAVAILABLE_TEXT )
+	reason = tostring( reason or "" )
+	return MC.T( "inventory.merchant.unavailable." .. ( UNAVAILABLE_REASONS[reason] and reason or "default" ) )
 end
 
+-- MerchantScreen: the profession name (Minecraft's entity keys), with
+-- merchant.title and merchant.level.<n> while the villager shows its level.
 local function merchantTitle( state )
-	local name = localized( PROFESSION_NAMES[state.profession] ) or tostring( state.profession or "Villager" )
+	local profession = tostring( state.profession or "none" )
+	local key = profession == "wandering_trader" and "entity.minecraft.wandering_trader"
+		or "entity.minecraft.villager." .. profession
+	if not MC.I18n.Has( key, MC.I18n.BASE_LOCALE ) then key = "entity.minecraft.villager" end
 	if state.showProgressBar and state.level >= 1 and state.level <= 5 then
-		name = name .. " - " .. ( localized( LEVEL_NAMES[state.level] ) or tostring( state.level ) )
+		return MC.T( "merchant.title", { { key = key }, { key = "merchant.level." .. state.level } } )
 	end
-	return name
+	return MC.T( key )
 end
 
 function PANEL:PaintContent()
@@ -539,12 +499,11 @@ function PANEL:PaintContent()
 			UI.DrawTexture( OUT_OF_STOCK, left + 182 * scale, top + 35 * scale, 28 * scale, 21 * scale )
 		end
 	end )
-	local chinese = MC.Language and MC.Language() == "zh_cn"
-	UI.DrawText( state and merchantTitle( state ) or ( chinese and "商人" or "Merchant" ),
+	UI.DrawText( state and merchantTitle( state ) or MC.T( "entity.minecraft.villager" ),
 		left + 187 * scale, top + 6 * scale, scale, Color( 64, 64, 64 ), TEXT_ALIGN_CENTER, false )
-	UI.DrawText( chinese and "交易" or "Trades", left + 48 * scale, top + 6 * scale,
+	UI.DrawText( MC.T( "merchant.trades" ), left + 48 * scale, top + 6 * scale,
 		scale, Color( 64, 64, 64 ), TEXT_ALIGN_CENTER, false )
-	UI.DrawText( chinese and "物品栏" or "Inventory", left + 107 * scale, top + 72 * scale,
+	UI.DrawText( MC.T( "container.inventory" ), left + 107 * scale, top + 72 * scale,
 		scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
 	return true
 end
@@ -584,8 +543,7 @@ function PANEL:PaintOver()
 	if selected and selected.outOfStock and not selected.unavailable and state.canRestock
 	and x >= self.Left + 186 * self.Scale and x <= self.Left + 208 * self.Scale
 	and y >= self.Top + 35 * self.Scale and y <= self.Top + 56 * self.Scale then
-		UI.Tooltip.DrawLines( { MC.Language and MC.Language() == "zh_cn"
-			and "交易已售罄，稍后可补货" or "Trade is out of stock and can restock" },
+		UI.Tooltip.DrawLines( { MC.T( "inventory.merchant.out_of_stock" ) },
 			x, y, self.Scale )
 	end
 end

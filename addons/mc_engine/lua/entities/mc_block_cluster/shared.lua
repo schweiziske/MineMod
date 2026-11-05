@@ -7,7 +7,7 @@
 
 ENT.Type      = "anim"
 ENT.Base      = "base_anim"
-ENT.PrintName = "MC 方块结构"
+ENT.PrintName = MC.T( "entity.mc_block_cluster.name" )
 ENT.Author    = "schweiziske"
 ENT.Spawnable = false
 ENT.AdminOnly = false

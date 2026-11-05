@@ -56,7 +56,7 @@ concommand.Add( "mc_block_diag", function()
 	if not IsValid( ply ) then return end
 	local hit = MC.PlayerBlockAim and MC.PlayerBlockAim( ply )
 	if not hit or not hit.bx then
-		print( "[MC diag] 准星没有指向方块" )
+		print( "[MC diag] the crosshair is not on a block" )
 		return
 	end
 	local bx, by, bz = hit.bx, hit.by, hit.bz
@@ -82,7 +82,7 @@ concommand.Add( "mc_block_diag", function()
 		tostring( b.lightEmission ),
 		tostring( lightLevel ), tostring( blockLight ), tostring( skyLight ), tonumber( lightBrightness ) or 1 ) )
 	local boxes = MC.BlockBoxes( id, orient, bx, by, bz ) or {}
-	print( string.format( "  boxes=%d (post+arms; >1 表示有连接)", #boxes ) )
+	print( string.format( "  boxes=%d (post+arms; >1 means connected)", #boxes ) )
 	for i, box in ipairs( boxes ) do
 		print( string.format( "    [%d] %.4f,%.4f,%.4f -> %.4f,%.4f,%.4f %s%s",
 			i, box[1], box[2], box[3], box[4], box[5], box[6],
@@ -415,12 +415,16 @@ concommand.Add( "mc_phys_probe", function()
 	end
 end )
 
+local function L( key, vars )
+	return MC.T( key, vars )
+end
+
 local function facingName( yaw )
 	yaw = ( yaw % 360 + 360 ) % 360
-	if yaw < 45 or yaw >= 315 then return "+X (东)" end
-	if yaw < 135 then return "+Y (南)" end
-	if yaw < 225 then return "-X (西)" end
-	return "-Y (北)"
+	if yaw < 45 or yaw >= 315 then return L( "debug.f3.facing.east" ) end
+	if yaw < 135 then return L( "debug.f3.facing.south" ) end
+	if yaw < 225 then return L( "debug.f3.facing.west" ) end
+	return L( "debug.f3.facing.north" )
 end
 
 local function worldStats()
@@ -455,19 +459,19 @@ hook.Add( "HUDPaint", "mc_debug_hud", function()
 	local renderStats = MC.RenderStats or {}
 	local physStats = MC.ClientPhysStats or {}
 
-	local looked = string.format( "%d %d %d [%d %s]", lx, ly, lz, lid, lb and lb.disp or "空气" )
+	local looked = string.format( "%d %d %d [%d %s]", lx, ly, lz, lid, MC.BlockDisplayName( lb or 0 ) )
 	if state ~= "" then looked = looked .. " " .. state end
 
 	local lines = {
-		"MC 调试 (F3)",
+		L( "debug.f3.title" ),
 		string.format( "XYZ:          %.1f   %.1f   %.1f", pos.x, pos.y, pos.z ),
-		string.format( "方块格:       %d   %d   %d", bx, by, bz ),
-		string.format( "区块列:       %d   %d", cx, cy ),
-		"朝向:         " .. facingName( ply:EyeAngles().yaw ),
+		L( "debug.f3.block", { x = bx, y = by, z = bz } ),
+		L( "debug.f3.chunk", { x = cx, y = cy } ),
+		L( "debug.f3.facing", { facing = facingName( ply:EyeAngles().yaw ) } ),
 		"",
-		"看向方块:     " .. looked,
-		string.format( "看向区块列:   %d   %d", lcx, lcy ),
-		string.format( "已加载:       %d 区块 / %d 方块", chunks, blocks ),
+		L( "debug.f3.target", { target = looked } ),
+		L( "debug.f3.target_chunk", { x = lcx, y = lcy } ),
+		L( "debug.f3.loaded", { chunks = chunks, blocks = blocks } ),
 	}
 
 	table.insert( lines, string.format( "IMesh:        %s ms  %s O / %s T", tostring( renderStats.lastMeshBuildMS ), tostring( renderStats.lastOpaqueMeshes ), tostring( renderStats.lastTranslucentMeshes ) ) )

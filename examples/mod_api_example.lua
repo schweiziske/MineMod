@@ -33,8 +33,8 @@ local function registerExampleContent( context )
 		-- This deliberately reuses a shipped material so the sample works
 		-- without adding an asset to the MCSWEP addon.
 		texture = "mc/item/apple",
-		displayName = "Example Polished Basalt",
-		displayNameZH = "示例磨制玄武岩",
+		-- No name here either: a BlockItem shows its block's name,
+		-- block.example.polished_basalt.
 		kind = "block",
 	} )
 	if not itemOK then

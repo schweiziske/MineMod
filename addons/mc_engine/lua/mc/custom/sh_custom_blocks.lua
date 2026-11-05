@@ -125,8 +125,10 @@ function MC.RegisterCustomBlock( def )
 	MC.CustomBlockDefs[key] = prepared
 
 	if MC.RegisterBlock then
-		local b = stampCustomMetadata( MC.RegisterBlock( prepared ), prepared )
-		if b and MC.RefreshBlockList then MC.RefreshBlockList() end
+		local registered, registerError = MC.RegisterBlock( prepared )
+		local b = stampCustomMetadata( registered, prepared )
+		if not b then return nil, registerError end
+		if MC.RefreshBlockList then MC.RefreshBlockList() end
 		return b
 	end
 
@@ -203,7 +205,6 @@ MC.MigratedBuiltinOakSlopeRuntimeId = 61001
 MC.MigratedBuiltinOakSlopeDefinition = {
 	name = "custom_oak_slope",
 	mcid = "mcswep:oak_slope",
-	disp = "自定义橡木斜坡",
 	creativeCategory = "custom",
 	solid = true,
 	transparent = false,
@@ -221,11 +222,11 @@ MC.MigratedBuiltinOakSlopeDefinition = {
 }
 
 local COLOR_BLOCKS = {
-	{ id = 61010, name = "red_color_block", mcid = "mcswep:red_color_block", disp = "自定义红色块", tile = "red_concrete" },
-	{ id = 61011, name = "green_color_block", mcid = "mcswep:green_color_block", disp = "自定义绿色块", tile = "lime_concrete" },
-	{ id = 61012, name = "blue_color_block", mcid = "mcswep:blue_color_block", disp = "自定义蓝色块", tile = "blue_concrete" },
-	{ id = 61013, name = "white_color_block", mcid = "mcswep:white_color_block", disp = "自定义白色块", tile = "white_concrete" },
-	{ id = 61014, name = "black_color_block", mcid = "mcswep:black_color_block", disp = "自定义黑色块", tile = "black_concrete" },
+	{ id = 61010, name = "red_color_block", mcid = "mcswep:red_color_block", tile = "red_concrete" },
+	{ id = 61011, name = "green_color_block", mcid = "mcswep:green_color_block", tile = "lime_concrete" },
+	{ id = 61012, name = "blue_color_block", mcid = "mcswep:blue_color_block", tile = "blue_concrete" },
+	{ id = 61013, name = "white_color_block", mcid = "mcswep:white_color_block", tile = "white_concrete" },
+	{ id = 61014, name = "black_color_block", mcid = "mcswep:black_color_block", tile = "black_concrete" },
 }
 
 for _, def in ipairs( COLOR_BLOCKS ) do
@@ -233,7 +234,6 @@ for _, def in ipairs( COLOR_BLOCKS ) do
 		id = def.id,
 		name = "custom_" .. def.name,
 		mcid = def.mcid,
-		disp = def.disp,
 		creativeCategory = "custom",
 		solid = true,
 		transparent = false,

@@ -1,6 +1,7 @@
 {
   "locale": "zh_cn",
   "entries": {
+    "block.example.polished_basalt": "示例磨制玄武岩",
     "itemGroup.example.building": "示例建筑"
   }
 }

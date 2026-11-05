@@ -542,6 +542,20 @@ function I18n.TranslateCount( key, count, vars, locale )
 	return I18n.Resolve( chosen, merged, locale )
 end
 
+-- Translation key of registered content, Minecraft's descriptionId form:
+-- <kind>.<namespace>.<path> with "/" in the path read as ".", so
+-- ContentKey( "block", "minecraft:oak_log" ) is "block.minecraft.oak_log".
+-- An identifier without a namespace is in minecraft. Returns nil when the
+-- identifier cannot form a valid key.
+function I18n.ContentKey( kind, identifier )
+	if type( kind ) ~= "string" or type( identifier ) ~= "string" then return nil end
+	local namespace, path = string.match( identifier, "^([^:]+):(.+)$" )
+	if not namespace then namespace, path = "minecraft", identifier end
+	local key = kind .. "." .. namespace .. "." .. string.gsub( path, "/", "." )
+	if not validKey( key ) then return nil end
+	return key
+end
+
 function I18n.Has( key, locale )
 	local dictionary = dictionaryFor( locale )
 	return dictionary ~= nil and dictionary[key] ~= nil
@@ -852,60 +866,5 @@ else
 		printLines( missingLines(), ply )
 	end, nil, "List MC localization keys the server could not find since the last load" )
 end
-
------------------------------------------------------------------- block names
--- Transitional: block names still come from the generated name table until
--- the block registry switches to translation keys.
-
-local EN_BLOCK_OVERRIDES = {
-	["minecraft:tnt"] = "TNT",
-	["minecraft:redstone_wire"] = "Redstone Dust",
-	["minecraft:grass_block"] = "Grass Block",
-	["mcswep:oak_slope"] = "Custom Oak Slope",
-	["mcswep:red_color_block"] = "Custom Red Block",
-	["mcswep:green_color_block"] = "Custom Green Block",
-	["mcswep:blue_color_block"] = "Custom Blue Block",
-	["mcswep:white_color_block"] = "Custom White Block",
-	["mcswep:black_color_block"] = "Custom Black Block",
-}
-
-local function titleWord( word )
-	local lower = string.lower( word )
-	if lower == "tnt" or lower == "tv" then return string.upper( lower ) end
-	return string.upper( string.sub( lower, 1, 1 ) ) .. string.sub( lower, 2 )
-end
-
-local function englishNameFromID( mcid )
-	local key = string.match( tostring( mcid or "" ), "^[^:]+:(.+)$" ) or tostring( mcid or "" )
-	key = string.gsub( key, "_", " " )
-	return ( string.gsub( key, "%S+", titleWord ) )
-end
-
-function MC.BlockDisplayName( blockOrDef, fallback, lang )
-	local def = type( blockOrDef ) == "table" and blockOrDef or nil
-	local mcid = def and def.mcid or tostring( blockOrDef or "" )
-	local name = def and def.name
-	if ( lang or activeLocale ) ~= "zh_cn" then
-		return EN_BLOCK_OVERRIDES[mcid] or EN_BLOCK_OVERRIDES[name] or englishNameFromID( mcid ~= "" and mcid or name )
-	end
-	if def then
-		return def.dispZH or def.zhDisp or def.baseDisp or fallback or def.disp
-			or ( MC.GeneratedBlockNames and ( MC.GeneratedBlockNames[mcid] or MC.GeneratedBlockNames[name] ) )
-			or englishNameFromID( mcid ~= "" and mcid or name )
-	end
-	return fallback or englishNameFromID( mcid )
-end
-
-function MC.RefreshBlockDisplayNames( lang )
-	for _, b in pairs( MC.Blocks or {} ) do
-		b.disp = MC.BlockDisplayName( b, b.dispZH or b.disp, lang )
-	end
-end
-
--- Sorted first among the change callbacks, so interface refreshes read the
--- new names.
-MC.RegisterLanguageChanged( "!mc_block_display_names", function()
-	MC.RefreshBlockDisplayNames()
-end )
 
 I18n.Reload( "startup" )

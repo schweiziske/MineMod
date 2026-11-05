@@ -482,12 +482,12 @@ end)
 
 hook.Add("HUDPaint", "mc_resource_pack_loading", function()
 	if not MC.TexturePackPending and not (MC.RenderPackRuntime and MC.RenderPackRuntime.atlasTransition) then return end
-	local message = MC.TexturePackPending and "正在从 PNG 烘焙默认材质包…" or "正在准备材质包网格…"
+	local message = MC.T(MC.TexturePackPending and "texture_pack.loading.baking_default" or "texture_pack.loading.preparing_mesh")
 	local status = R.lastId and R.jobs[R.lastId]
 	if MC.TexturePackPending and status and (status.state == "failed" or status.state == "cancelled") then
-		message = "默认材质包未就绪：" .. tostring(status.error)
+		message = MC.T("texture_pack.loading.default_unavailable", { error = tostring(status.error) })
 	elseif MC.TexturePackPending and R.restoreError then
-		message = "默认材质包未就绪：" .. R.restoreError
+		message = MC.T("texture_pack.loading.default_unavailable", { error = tostring(R.restoreError) })
 	end
 	draw.SimpleText(message, "DermaDefaultBold", ScrW()/2, ScrH()/2,
 		color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)

@@ -136,6 +136,13 @@ local function tabTitle( tab )
 	return MC.T( tab.titleKey )
 end
 
+local LABEL_COLOR = Color( 64, 64, 64 )
+
+-- Container captions are Minecraft's own keys, looked up on every draw.
+local function drawLabel( key, x, y, scale, align, vars )
+	UI.DrawText( MC.T( key, vars ), x, y, scale, LABEL_COLOR, align or TEXT_ALIGN_LEFT, false )
+end
+
 function UI.RefreshCreativeTabs()
 	UI.CreativeTabs = tabRows()
 	UI.CreativeTabsByKey = {}
@@ -248,8 +255,7 @@ function CREATIVE_PAGE_BUTTON:PageTooltipText()
 	if not IsValid( self.Screen ) then return nil end
 	local current = math.Clamp( math.floor( tonumber( self.Screen.CreativeTabPage ) or 0 ), 0, maxCreativeTabPage() ) + 1
 	local total = maxCreativeTabPage() + 1
-	if MC.Language and MC.Language() == "zh_cn" then return string.format( "第 %d/%d 页", current, total ) end
-	return string.format( "Page %d/%d", current, total )
+	return MC.T( "book.pageIndicator", { current, total } )
 end
 
 function CREATIVE_PAGE_BUTTON:Paint( w, h )
@@ -436,7 +442,7 @@ function RETURN_BUTTON:Paint( w, h )
 	surface.SetDrawColor( pressed and RETURN_LIGHT or RETURN_DARK )
 	surface.DrawRect( scale, h - 2 * scale, w - 2 * scale, scale )
 	surface.DrawRect( w - 2 * scale, scale, scale, h - 2 * scale )
-	local label = MC.Language() == "zh_cn" and "返回 GMod" or "Return to GMod"
+	local label = MC.T( "inventory.return_to_gmod" )
 	local offset = pressed and scale or 0
 	UI.DrawText( label, w * 0.5 + offset, h * 0.5 + offset, scale,
 		color_white, TEXT_ALIGN_CENTER, true, TEXT_ALIGN_CENTER )
@@ -1214,9 +1220,11 @@ function PANEL:RefreshCreativeItems()
 		if definition and definition.name ~= "minecraft:air" then
 			local include = true
 			if query ~= "" then
-				local displayName = UI.ItemRenderer and UI.ItemRenderer.DisplayName and UI.ItemRenderer.DisplayName( stack )
-					or MC.ItemDisplayName and MC.ItemDisplayName( definition ) or definition.name
-				local haystack = string.lower( tostring( definition.name ) .. " " .. tostring( displayName ) )
+				-- The interface language, en_us and the item id all match, so an
+				-- English or minecraft:id search works in every language.
+				local haystack = string.lower( tostring( definition.name ) .. " "
+					.. UI.ItemRenderer.DisplayName( stack ) .. " "
+					.. UI.ItemRenderer.DisplayName( stack, MC.I18n.BASE_LOCALE ) )
 				include = string.find( haystack, query, 1, true ) ~= nil
 			end
 			if include then self.CurrentItems[#self.CurrentItems + 1] = MC.CopyItemStack( stack, 1 ) end
@@ -1410,64 +1418,53 @@ function PANEL:PaintContent()
 		end
 	end
 	if self.Chest then
-		local title = self.Session and self.Session.title or ( self.ChestRows > 3 and "Large Chest" or "Chest" )
-		UI.DrawText( title, self.Left + 8 * self.Scale, self.Top + 6 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
-		UI.DrawText( "Inventory", self.Left + 8 * self.Scale,
-			self.Top + ( self.ChestRows * 18 + 20 ) * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+		-- A session title is the container's custom name (player text).
+		local title = self.Session and self.Session.title
+		if title then
+			UI.DrawText( title, self.Left + 8 * self.Scale, self.Top + 6 * self.Scale, self.Scale, LABEL_COLOR, TEXT_ALIGN_LEFT, false )
+		else
+			drawLabel( self.ChestRows > 3 and "container.chestDouble" or "container.chest",
+				self.Left + 8 * self.Scale, self.Top + 6 * self.Scale, self.Scale )
+		end
+		drawLabel( "container.inventory", self.Left + 8 * self.Scale,
+			self.Top + ( self.ChestRows * 18 + 20 ) * self.Scale, self.Scale )
 	elseif self.Enchanting then
-		local chinese = MC.Language and MC.Language() == "zh_cn"
-		UI.DrawText( chinese and "附魔" or "Enchant", self.Left + 8 * self.Scale,
-			self.Top + 6 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
-		UI.DrawText( chinese and "物品栏" or "Inventory", self.Left + 8 * self.Scale,
-			self.Top + 72 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+		drawLabel( "container.enchant", self.Left + 8 * self.Scale, self.Top + 6 * self.Scale, self.Scale )
+		drawLabel( "container.inventory", self.Left + 8 * self.Scale, self.Top + 72 * self.Scale, self.Scale )
 	elseif self.Anvil then
-		local chinese = MC.Language and MC.Language() == "zh_cn"
 		-- AnvilScreen sets titleLabelX=60; the inherited label Y remains 6.
-		UI.DrawText( chinese and "修复和命名" or "Repair & Name", self.Left + 60 * self.Scale,
-			self.Top + 6 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
-		UI.DrawText( chinese and "物品栏" or "Inventory", self.Left + 8 * self.Scale,
-			self.Top + 72 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+		drawLabel( "container.repair", self.Left + 60 * self.Scale, self.Top + 6 * self.Scale, self.Scale )
+		drawLabel( "container.inventory", self.Left + 8 * self.Scale, self.Top + 72 * self.Scale, self.Scale )
 		local state = self.AnvilState or self.Session and self.Session.anvilState or {}
 		local errorCode = self.AnvilLocalError or state.error
 		if state.tooExpensive then
-			UI.DrawText( chinese and "过于昂贵！" or "Too Expensive!", self.Left + 166 * self.Scale,
+			UI.DrawText( MC.T( "container.repair.expensive" ), self.Left + 166 * self.Scale,
 				self.Top + 69 * self.Scale, self.Scale, Color( 255, 85, 85 ), TEXT_ALIGN_RIGHT, true )
 		elseif ( tonumber( state.cost ) or 0 ) > 0 and state.resultAvailable then
-			local label = ( chinese and "附魔花费：" or "Enchantment Cost: " ) .. tostring( state.cost )
+			local label = MC.T( "container.repair.cost", { tostring( state.cost ) } )
 			UI.DrawText( label, self.Left + 166 * self.Scale, self.Top + 69 * self.Scale,
 				self.Scale, state.canTake == false and Color( 255, 85, 85 ) or Color( 128, 255, 32 ), TEXT_ALIGN_RIGHT, true )
 		elseif errorCode == "name_too_long" then
-			UI.DrawText( chinese and "名称过长" or "Name too long", self.Left + 166 * self.Scale,
+			UI.DrawText( MC.T( "inventory.anvil.name_too_long" ), self.Left + 166 * self.Scale,
 				self.Top + 69 * self.Scale, self.Scale, Color( 255, 85, 85 ), TEXT_ALIGN_RIGHT, true )
 		end
 	elseif self.Brewing then
-		local chinese = MC.Language and MC.Language() == "zh_cn"
-		UI.DrawText( chinese and "酿造台" or "Brewing Stand", self.Left + 88 * self.Scale,
-			self.Top + 6 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_CENTER, false )
-		UI.DrawText( chinese and "物品栏" or "Inventory", self.Left + 8 * self.Scale,
-			self.Top + 72 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+		drawLabel( "container.brewing", self.Left + 88 * self.Scale, self.Top + 6 * self.Scale, self.Scale, TEXT_ALIGN_CENTER )
+		drawLabel( "container.inventory", self.Left + 8 * self.Scale, self.Top + 72 * self.Scale, self.Scale )
 	elseif self.Furnace then
-		local chinese = MC.Language and MC.Language() == "zh_cn"
-		local title = self.BlastFurnace and ( chinese and "高炉" or "Blast Furnace" )
-			or ( chinese and "熔炉" or "Furnace" )
-		UI.DrawText( title, self.Left + 88 * self.Scale, self.Top + 6 * self.Scale,
-			self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_CENTER, false )
-		UI.DrawText( chinese and "物品栏" or "Inventory", self.Left + 8 * self.Scale,
-			self.Top + 72 * self.Scale, self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+		drawLabel( self.BlastFurnace and "container.blast_furnace" or "container.furnace",
+			self.Left + 88 * self.Scale, self.Top + 6 * self.Scale, self.Scale, TEXT_ALIGN_CENTER )
+		drawLabel( "container.inventory", self.Left + 8 * self.Scale, self.Top + 72 * self.Scale, self.Scale )
 	elseif self.Crafting then
-		local chinese = MC.Language and MC.Language() == "zh_cn"
 		-- CraftingScreen uses titleLabelX=29. InventoryScreen uses 97 and
 		-- overrides extractLabels to omit the player-inventory caption entirely.
 		local titleX = self.CraftingTable and 29 or 97
-		UI.DrawText( chinese and "合成" or "Crafting", self.Left + titleX * self.Scale, self.Top + 6 * self.Scale,
-			self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+		drawLabel( "container.crafting", self.Left + titleX * self.Scale, self.Top + 6 * self.Scale, self.Scale )
 		if self.CraftingTable then
-			UI.DrawText( chinese and "物品栏" or "Inventory", self.Left + 8 * self.Scale, self.Top + 72 * self.Scale,
-				self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+			drawLabel( "container.inventory", self.Left + 8 * self.Scale, self.Top + 72 * self.Scale, self.Scale )
 		end
 	elseif not self.Creative and not self.Hopper and not self.Dispenser then
-		UI.DrawText( "Inventory", self.Left + 8 * self.Scale, self.Top + 72 * self.Scale,
-			self.Scale, Color( 64, 64, 64 ), TEXT_ALIGN_LEFT, false )
+		drawLabel( "container.inventory", self.Left + 8 * self.Scale, self.Top + 72 * self.Scale, self.Scale )
 	elseif self.Creative then
 		if maxCreativeTabPage() > 0 then
 			UI.DrawText( self.CreativePageLabel, self.Left + CREATIVE_W * self.Scale * 0.5,

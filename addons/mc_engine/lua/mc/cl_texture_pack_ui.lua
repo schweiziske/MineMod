@@ -1,6 +1,6 @@
 -- A Minecraft-style picker for registered atlases and prepared source packs.
 local M = MC.TexturePackManager
-local text = M.Text
+local L = M.Text
 local C = {
 	background = Color( 41, 41, 41 ), list = Color( 23, 23, 23 ), hover = Color( 38, 38, 38 ),
 	text = Color( 255, 250, 237 ), secondary = Color( 238, 224, 189 ), line = Color( 100, 91, 69 ),
@@ -19,10 +19,10 @@ local EVENTS = { "MC.TexturePackChanged", "MC.TexturePackRegistered", "MC.Textur
 local bakeProgress
 hook.Add("MC.ResourcePackApplyChanged","mc_texture_pack_progress",function(status)
 	if status.raw and (status.state=="baking" or status.state=="building") then
-		local caption=text("Preparing textures", "正在准备贴图")
-		if status.phase=="bake" then caption=text("Baking textures", "正在烘焙贴图") end
+		local caption=L( "preparing_textures" )
+		if status.phase=="bake" then caption=L( "baking_textures" ) end
 		local count,total=status.completed or 0,status.total or 0
-		if total>0 then caption=caption.."  "..count.." / "..total end
+		if total>0 then caption=L("progress",{caption=caption,count=count,total=total}) end
 		bakeProgress={caption=caption,fraction=total>0 and count/total or 0}
 	else bakeProgress=nil end
 end)
@@ -205,12 +205,12 @@ function ROW:SetEntry( manager, entry, selected )
 	self.Manager, self.Entry = manager, entry
 	self.Preview = preview( entry.preview )
 	self.Summary = entry.description
-	if not entry.available then self.Summary = text( "Texture files missing", "贴图文件缺失" ) end
+	if not entry.available then self.Summary = L( "texture_files_missing" ) end
 	self.DescriptionOptions.color = entry.available and C.secondary or C.warning
 	self.Pick:SetTooltip( entry.title .. "\n" .. self.Summary )
 	self.Transfer:SetVisible( not selected )
 	self.Transfer:SetEnabled( entry.available == true )
-	self.Transfer:SetTooltip( text( "Select ", "选择 " ) .. entry.title )
+	self.Transfer:SetTooltip( L( "select_pack", { pack = entry.title } ) )
 	self:InvalidateLayout( true )
 	self.Pick:InvalidateLayout( true )
 end
@@ -265,8 +265,8 @@ function FRAME:Init()
 	local close = button( self.Header, "X", function() self:Close() end, true )
 	close:Dock( RIGHT )
 	close:SetWide( 40 )
-	close:SetTooltip( text( "Close", "关闭" ) )
-	local title = label( self.Header, text( "Texture packs", "材质包" ), C.text, fonts.heading, 1, true )
+	close:SetTooltip( L( "close" ) )
+	local title = label( self.Header, L( "texture_packs" ), C.text, fonts.heading, 1, true )
 	title:Dock( FILL )
 	title:DockMargin( 40, 0, 0, 0 )
 	self.Search = vgui.Create( "DTextEntry", self )
@@ -274,7 +274,7 @@ function FRAME:Init()
 	self.Search:SetTall( 34 )
 	self.Search:DockMargin( 0, 0, 0, 18 )
 	self.Search:SetFont( fonts.body )
-	self.Search:SetPlaceholderText( text( "Search texture packs", "搜索材质包" ) )
+	self.Search:SetPlaceholderText( L( "search_texture_packs" ) )
 	self.Search:SetTextColor( C.text )
 	self.Search:SetCursorColor( C.text )
 	self.Search.Paint = function( s, w, h )
@@ -282,7 +282,7 @@ function FRAME:Init()
 		surface.SetDrawColor( s:HasFocus() and C.text or C.line )
 		surface.DrawOutlinedRect( 0, 0, w, h, 1 )
 		if s:GetValue() == "" and not s:HasFocus() then
-			drawText( text( "Search texture packs", "搜索材质包" ), fonts.body, 8, ( h - heights[fonts.body] ) / 2, C.secondary )
+			drawText( L( "search_texture_packs" ), fonts.body, 8, ( h - heights[fonts.body] ) / 2, C.secondary )
 		end
 		s:DrawTextEntryText( C.text, C.button, C.text )
 	end
@@ -299,27 +299,26 @@ function FRAME:Init()
 	self.Footer:Dock( BOTTOM )
 	self.Footer:SetTall( ( heights[fonts.body] + 2 ) * 3 + 54 )
 	self.Footer.Paint = function() end
-	self.Hint = label( self.Footer, text( "One texture pack can be active at a time.", "一次启用一个材质包。" ), C.secondary, fonts.body, 1, true )
+	self.Hint = label( self.Footer, L( "one_texture_pack_can_be_active" ), C.secondary, fonts.body, 1, true )
 	self.Status = label( self.Footer, "", C.warning, fonts.body, 2, true )
-	self.Undo = button( self.Footer, text( "Undo changes", "撤销更改" ), function()
+	self.Undo = button( self.Footer, L( "undo_changes" ), function()
 		self.Session:Revert()
 		self:RefreshRows()
 	end )
-	self.Apply = button( self.Footer, text( "Apply", "应用" ), function()
+	self.Apply = button( self.Footer, L( "apply" ), function()
 		local function apply(confirmed)
 			if not IsValid(self) then return end
 			local ok, err = self.Session:Apply(confirmed)
 			self:RefreshRows()
-			if not ok then self:SetStatus(text("Could not apply: ", "应用失败：") .. tostring(err)) end
+			if not ok then self:SetStatus(L("apply_failed", { error = tostring(err) })) end
 		end
 		local entry = self.Session.byName[self.Session.draft]
 		if entry and entry.resourceSource and not entry.formatMatches then
 			local name, revision = entry.name, entry.revision
-			Derma_Query(text("This pack targets a different Minecraft resource format. Apply its supported textures?",
-				"此包的 Minecraft 资源格式与当前版本不匹配，仍要应用其中支持的贴图吗？"),
-				text("Resource format mismatch", "资源格式不匹配"), text("Apply", "应用"), function()
+			Derma_Query(L("format_mismatch_question"),
+				L( "resource_format_mismatch" ), L( "apply" ), function()
 					if IsValid(self) and self.Session.draft == name then apply({[name]=revision}) end
-				end, text("Cancel", "取消"))
+				end, L( "cancel" ))
 		else apply() end
 	end )
 	self.Footer.PerformLayout = function( _, w )
@@ -337,10 +336,10 @@ function FRAME:Init()
 	self.Board = vgui.Create( "DPanel", self )
 	self.Board:Dock( FILL )
 	self.Board.Paint = function() end
-	self.Available = lane( self.Board, text( "Available", "可用" ) )
-	self.Selected = lane( self.Board, text( "Selected", "已选择" ) )
-	self.AvailableTab = button( self.Board, text( "Available", "可用" ), function() self.NarrowTab = "available" self.Board:InvalidateLayout( true ) end, true )
-	self.SelectedTab = button( self.Board, text( "Selected", "已选择" ), function() self.NarrowTab = "selected" self.Board:InvalidateLayout( true ) end, true )
+	self.Available = lane( self.Board, L( "available" ) )
+	self.Selected = lane( self.Board, L( "selected" ) )
+	self.AvailableTab = button( self.Board, L( "available" ), function() self.NarrowTab = "available" self.Board:InvalidateLayout( true ) end, true )
+	self.SelectedTab = button( self.Board, L( "selected" ), function() self.NarrowTab = "selected" self.Board:InvalidateLayout( true ) end, true )
 	self.Board.PerformLayout = function( _, w, h )
 		local narrow = w < 760
 		self.AvailableTab:SetVisible( narrow ) self.SelectedTab:SetVisible( narrow )
@@ -358,17 +357,17 @@ function FRAME:Init()
 		b:Dock( LEFT ) b:SetWide( width or 94 )
 		return b
 	end
-	tool( self.Available.Tools, text( "Refresh", "刷新" ), function()
+	tool( self.Available.Tools, L( "refresh" ), function()
 		if MC.ResourceRepository and not MC.ResourcePacks.IsApplying() then MC.ResourceRepository.Refresh() end
 		self:Refresh()
 	end )
-	self.Bake = tool( self.Available.Tools, text( "Bake atlas", "烘焙材质" ), function()
+	self.Bake = tool( self.Available.Tools, L( "bake_atlas" ), function()
 		if MC.AtlasBaker.IsBusy() then MC.AtlasBaker.Cancel() return end
 		local function start( id )
 			local ok, err = MC.AtlasBaker.Start( id )
 			if not ok and IsValid( self ) then
 				if err == "source_manifest_missing:" .. id then
-					self:SetStatus( text( "Source textures have not been prepared: ", "尚未准备源贴图：" ) .. id )
+					self:SetStatus( L( "sources_not_prepared", { pack = id } ) )
 				else self:SetStatus( tostring( err ) ) end
 			end
 		end
@@ -381,9 +380,9 @@ function FRAME:Init()
 		menu:Open()
 	end, 140 )
 	local function detail() self.Details:SetVisible( not self.Details:IsVisible() ) self:UpdateState() self:InvalidateLayout( true ) end
-	self.AvailableDetails = tool( self.Available.Tools, text( "Details", "详情" ), detail )
-	tool( self.Selected.Tools, text( "Use default", "恢复默认" ), function() self:Choose( "default" ) end, 140 )
-	self.SelectedDetails = tool( self.Selected.Tools, text( "Details", "详情" ), detail )
+	self.AvailableDetails = tool( self.Available.Tools, L( "details" ), detail )
+	tool( self.Selected.Tools, L( "use_default" ), function() self:Choose( "default" ) end, 140 )
+	self.SelectedDetails = tool( self.Selected.Tools, L( "details" ), detail )
 	self.Next = button( self.Available.Tools, ">", function()
 		self.Page = self.Page + 1 self:RefreshRows() self.Available.Scroll:GetVBar():SetScroll( 0 )
 	end, true )
@@ -412,28 +411,28 @@ end
 
 function FRAME:SetStatus( value )
 	self.Status:SetCaption( value )
-	self.Apply:SetTooltip( value ~= "" and value or text( "Apply selected pack", "应用所选材质包" ) )
+	self.Apply:SetTooltip( value ~= "" and value or L( "apply_selected_pack" ) )
 end
 
 function FRAME:UpdateState()
 	local s = self.Session
 	local bake = MC.AtlasBaker.Status()
 	local busy = MC.AtlasBaker.IsBusy()
-	self.Bake.Caption = busy and text( "Cancel bake", "取消烘焙" ) or text( "Bake atlas", "烘焙材质" )
+	self.Bake.Caption = busy and L( "cancel_bake" ) or L( "bake_atlas" )
 	self.Bake:SetTooltip( self.Bake.Caption )
 	self.Bake:InvalidateLayout()
 	self.Apply:SetEnabled( s:CanApply() )
 	self.Undo:SetEnabled( s:IsDirty() )
 	local state = ""
-	if s.error then state = text( "Could not apply: ", "应用失败：" ) .. s.error
-	elseif s.leaseOwner then state = text( "Controlled by ", "当前由模式控制：" ) .. s.leaseOwner .. " (" .. s.active .. ")"
-	elseif not s.byName[s.draft] then state = text( "Selected pack was removed.", "所选材质包已被移除。" )
-	elseif s:IsDirty() then state = text( "Changes not applied", "更改尚未应用" )
-	elseif s.active ~= s.preference then state = text( "Currently active: ", "当前实际使用：" ) .. s.active end
+	if s.error then state = L( "apply_failed", { error = s.error } )
+	elseif s.leaseOwner then state = L( "controlled_by", { owner = s.leaseOwner, pack = s.active } )
+	elseif not s.byName[s.draft] then state = L( "selected_pack_was_removed" )
+	elseif s:IsDirty() then state = L( "changes_not_applied" )
+	elseif s.active ~= s.preference then state = L( "currently_active", { pack = s.active } ) end
 	if busy then
-		if s.pending then state = text( "Preparing selected pack; it will apply automatically.", "正在准备所选材质包，完成后自动应用。" )
-		else state = text( "Waiting to bake: ", "等待烘焙：" ) .. bake.pack end
-	elseif bake.state == "failed" then state = text( "Bake failed: ", "烘焙失败：" ) .. bake.error end
+		if s.pending then state = L( "preparing_selected_pack_it_will_apply" )
+		else state = L( "waiting_to_bake", { pack = bake.pack } ) end
+	elseif bake.state == "failed" then state = L( "bake_failed", { error = bake.error } ) end
 	self:SetStatus( state )
 	local entry = s.byName[s.focus]
 	self.AvailableDetails:SetEnabled( entry ~= nil and s.focus ~= s.draft )
@@ -441,13 +440,13 @@ function FRAME:UpdateState()
 	if entry then
 		local support = entry.name
 		if entry.resourceSource then
-			support = entry.error or text("Java textures; models and other pack content are not applied.", "Java 贴图；包内模型等其他内容暂不应用。")
+			support = entry.error or L( "java_textures_models_and_other_pack" )
 			if entry.unsupported and #entry.unsupported > 0 then support = support .. " " .. table.concat(entry.unsupported, ", ") end
 		end
 		self.Details:SetCaption( entry.title .. "\n" .. entry.description .. "\n"
-			.. text( "Provider: ", "提供者：" ) .. entry.owner .. "\n" .. support )
+			.. L( "provider", { owner = entry.owner } ) .. "\n" .. support )
 		self.Details:SetTooltip( entry.description .. "\n" .. support )
-	else self.Details:SetCaption( text( "This pack is no longer registered.", "这个材质包已不再注册。" ) ) end
+	else self.Details:SetCaption( L( "this_pack_is_no_longer_registered" ) ) end
 end
 
 function FRAME:Choose( name )
@@ -477,7 +476,7 @@ function FRAME:RefreshRows()
 		end
 		for i = count + 1, #column.Rows do column.Rows[i]:SetVisible( false ) end
 		if not IsValid( column.Empty ) then
-			column.Empty = label( column.Scroll:GetCanvas(), text( "No matching packs", "没有匹配的材质包" ), C.secondary )
+			column.Empty = label( column.Scroll:GetCanvas(), L( "no_matching_packs" ), C.secondary )
 			column.Empty:Dock( TOP ) column.Empty:SetTall( 40 )
 		end
 		column.Empty:SetVisible( count == 0 )
@@ -485,7 +484,7 @@ function FRAME:RefreshRows()
 	end
 	populate( self.Available, available, ( self.Page - 1 ) * PAGE_SIZE + 1, math.min( self.Page * PAGE_SIZE, #available ), false )
 	local selected = self.Session.byName[self.Session.draft] or { name = self.Session.draft, title = self.Session.draft,
-		description = text( "Pack removed", "材质包已移除" ), owner = "", available = false }
+		description = L( "pack_removed" ), owner = "", available = false }
 	populate( self.Selected, { selected }, 1, 1, true )
 	self:UpdateState()
 end

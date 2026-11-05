@@ -1,6 +1,7 @@
 {
   "locale": "en_us",
   "entries": {
+    "block.mc_skybox.sky": "Sky Block",
     "itemGroup.mc_skybox.blocks": "Skybox"
   }
 }

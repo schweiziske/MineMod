@@ -9,7 +9,7 @@ local NET = "mc_spawnmenu_weapons"
 local Hand = MC.API.HandWeapon
 
 local ok, err = MC.API.Items.Register( {
-	id = ITEM, maxStack = 1, displayName = "GMod Weapon", displayNameZH = "GMod 武器",
+	id = ITEM, maxStack = 1, -- named by item.mcswep.gmod_weapon
 	source = "mc.game", texture = "gui/gmod_logo.vmt",
 } )
 MC.Check( ok, "gmod_weapon_item_registration", "%s", tostring( err ) )

@@ -12,7 +12,7 @@ end
 local function blockDisplayText( blockOrID )
 	local b = type( blockOrID ) == "table" and blockOrID or ( MC and MC.Blocks and MC.Blocks[blockOrID] )
 	if not b then return "" end
-	return MC.BlockDisplayName and MC.BlockDisplayName( b, b.dispZH or b.disp ) or b.disp
+	return MC.BlockDisplayName( b )
 end
 
 SWEP.PrintName     = L( "weapon.mc_creative_placer.name" )

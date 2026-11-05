@@ -1,6 +1,7 @@
 {
   "locale": "zh_cn",
   "entries": {
+    "block.mc_skybox.sky": "天空方块",
     "itemGroup.mc_skybox.blocks": "天空方块"
   }
 }

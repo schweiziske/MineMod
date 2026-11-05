@@ -14,8 +14,8 @@ MC = MC or {}
 
 SWEP.PrintName = "MC"
 SWEP.Author = "schweiziske"
-SWEP.Purpose = "Minecraft inventory item interaction"
-SWEP.Instructions = "左键破坏  右键使用/放置  Reload 或 E 打开物品栏"
+SWEP.Purpose = MC.T( "weapon.mc_item_hand.purpose" )
+SWEP.Instructions = MC.T( "weapon.mc_item_hand.instructions" )
 SWEP.Category = "Minecraft"
 SWEP.Spawnable = true
 SWEP.AdminOnly = false
