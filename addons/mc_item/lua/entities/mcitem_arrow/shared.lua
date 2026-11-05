@@ -11,7 +11,7 @@ ENT.Base = "base_anim"
 -- source from the firing SWEP without depending on this addon's entity class.
 ENT.MCProjectile = true
 ENT.MCShieldProjectile = true
-ENT.PrintName = "Minecraft Arrow"
+ENT.PrintName = "#mcitem.entity.arrow"
 ENT.Spawnable = false
 ENT.RenderGroup = RENDERGROUP_OPAQUE
 

@@ -1,0 +1,15 @@
+{
+  "locale": "zh_cn",
+  "entries": {
+    "instructions.bow": "按住右键拉弓，松开射箭。左键：攻击或挖掘。",
+    "instructions.crossbow": "按住右键装填，再次右键射击。左键：攻击或挖掘。",
+    "instructions.fishing_rod": "左键：攻击或挖掘。右键：抛竿；再次右键收回鱼钩、钩住的实体或渔获。",
+    "instructions.flint_and_steel": "左键：攻击或挖掘。右键：点燃方块表面；灵魂沙和灵魂土会生成灵魂火。",
+    "instructions.trident": "左键：攻击或挖掘。按住右键蓄力 10 刻，松开投掷。",
+    "instructions.totem_of_undying": "放在当前选中的主手或副手中，可抵挡一次致命伤害。",
+    "instructions.shield": "按住右键举盾，0.25 秒后开始格挡。斧可使格挡失效 5 秒。放下盾牌时左键攻击或挖掘。",
+    "instructions.name_tag": "在 MineMod 铁砧中重命名后，右键点击活着的 NPC。不能命名玩家。",
+    "instructions.shears": "左键：攻击或挖掘。右键：剪取就绪的 BMB 绵羊或沼骸，或将藤蔓顶端年龄设为 25 以停止生长。",
+    "instructions.mace": "左键：攻击。下落超过 1.5 格时发动重击。"
+  }
+}

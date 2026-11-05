@@ -1,6 +1,6 @@
 ENT.Type = "anim"
 ENT.Base = "base_anim"
-ENT.PrintName = "Minecraft Eye of Ender"
+ENT.PrintName = "#mcitem.entity.eye_of_ender"
 ENT.Spawnable = false
 ENT.RenderGroup = RENDERGROUP_OPAQUE
 

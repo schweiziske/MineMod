@@ -1,0 +1,15 @@
+{
+  "locale": "zh_cn",
+  "entries": {
+    "search": "搜索",
+    "registry_mismatch": "配方数据与服务器不一致",
+    "place": "点击放入材料",
+    "missing_ingredients": "材料不足",
+    "category.building": "建筑方块",
+    "category.equipment": "装备",
+    "category.misc": "杂项",
+    "category.redstone": "红石",
+    "category.food": "食物",
+    "category.blocks": "方块"
+  }
+}

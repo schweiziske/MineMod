@@ -18,10 +18,7 @@ local C   = MC.Config
 -- MC block interaction. MC must never stop other addons' PlayerUse hooks.
 hook.Remove( "PlayerUse", "mc_use_interact_exclusive" )
 
--- Translated with this server's files for the player's language.
-local function L( ply, key, vars )
-	return MC.I18n.Resolve( key, vars, MC.I18n.LanguageForPlayer( ply ) )
-end
+local message = MC.Messages.Spec
 
 local BULK_SET_CELLS_PER_MESSAGE = 1024
 local GMOD_NET_MAX_BYTES = 65533
@@ -391,15 +388,11 @@ local function notify( ply, msg )
 	if not IsValid( ply ) then return end
 	if ( ply.mcNextWarn or 0 ) > CurTime() then return end
 	ply.mcNextWarn = CurTime() + 2
-	ply:ChatPrint( "[MC] " .. msg )
+	MC.Messages.Notify( ply, msg )
 end
 
 local function chat( ply, msg )
-	if IsValid( ply ) then
-		ply:ChatPrint( "[MC] " .. msg )
-	else
-		MsgN( "[MC] " .. msg )
-	end
+	MC.Messages.Reply( ply, msg )
 end
 
 function SV.Chat( ply, msg )
@@ -408,7 +401,7 @@ end
 
 local function canEdit( ply )
 	if C.AdminOnly:GetBool() and IsValid( ply ) and not ply:IsAdmin() then
-		notify( ply, L( ply, "server.admin_build" ) )
+		notify( ply, message( "server.admin_build" ) )
 		return false
 	end
 	-- Public veto: protection/zone addons deny by returning false. The
@@ -481,12 +474,12 @@ function SV.Validate( ply, bx, by, bz, placing, context )
 
 	if placing then
 		if not worldBoundsOK( bx, by, bz ) then
-			notify( ply, L( ply, "server.world_limit" ) )
+			notify( ply, message( "server.world_limit" ) )
 			return false
 		end
 		local maxBlocks = C.MaxBlocks:GetInt()
 		if maxBlocks > 0 and SV.BlockCount >= maxBlocks then
-			notify( ply, L( ply, "server.max_blocks" ) )
+			notify( ply, message( "server.max_blocks" ) )
 			return false
 		end
 	end
@@ -934,7 +927,7 @@ local function validatePlacementPlan( ply, plan )
 			return false
 		end
 		if not worldBoundsOK( cell.bx, cell.by, cell.bz ) then
-			notify( ply, L( ply, "server.world_limit" ) )
+			notify( ply, message( "server.world_limit" ) )
 			return false
 		end
 		local existingId = MC.GetBlock( cell.bx, cell.by, cell.bz )
@@ -953,7 +946,7 @@ local function validatePlacementPlan( ply, plan )
 
 	local maxBlocks = C.MaxBlocks:GetInt()
 	if maxBlocks > 0 and SV.BlockCount + add > maxBlocks then
-		notify( ply, L( ply, "server.max_blocks" ) )
+		notify( ply, message( "server.max_blocks" ) )
 		return false
 	end
 	return true
@@ -1737,7 +1730,7 @@ end
 
 local function importErrorText( ply, err )
 	if err == "invalid_file" then
-		return L( ply, "server.invalid_file" )
+		return message( "server.invalid_file" )
 	end
 	return tostring( err )
 end
@@ -1747,33 +1740,33 @@ local function runImport( ply, args )
 	local first = string.lower( tostring( args[1] or "" ) )
 	local base = ( first == "/mc_import" or first == "!mc_import" or first == "mc_import" ) and 2 or 1
 	local path = normalizeImportPath( args[base] )
-	if not path then chat( ply, L( ply, "server.import_usage" ) ) return end
+	if not path then chat( ply, message( "server.import_usage" ) ) return end
 
 	local mode = string.lower( tostring( args[base + 1] or "replace" ) )
 	local appendMode = mode == "append"
 	if mode ~= "replace" and mode ~= "append" then
-		chat( ply, L( ply, "server.import_usage" ) )
+		chat( ply, message( "server.import_usage" ) )
 		return
 	end
 	local unknownPolicy = string.lower( tostring( args[base + 2] or "reject" ) )
 	if unknownPolicy ~= "reject" and unknownPolicy ~= "preserve" then
-		chat( ply, L( ply, "server.import_usage" ) )
+		chat( ply, message( "server.import_usage" ) )
 		return
 	end
 
 	if not file.Exists( path, "DATA" ) then
-		chat( ply, L( ply, "server.import_missing", { path = path } ) )
+		chat( ply, message( "server.import_missing", { path = path } ) )
 		return
 	end
 
 	local raw = file.Read( path, "DATA" )
 	local data = raw and util.JSONToTable( raw )
 	if not data then
-		chat( ply, L( ply, "server.import_bad_json", { path = path } ) )
+		chat( ply, message( "server.import_bad_json", { path = path } ) )
 		return
 	end
 
-	chat( ply, "import format: " .. importFormatText( data ) .. " bytes=" .. #raw )
+	chat( ply, message( "server.import_format", { format = importFormatText( data ), bytes = #raw } ) )
 	local result, err
 	if data.format == "mc_world_import" and SV.ImportWorldBundle then
 		result, err = SV.ImportWorldBundle( data, path, {
@@ -1783,8 +1776,8 @@ local function runImport( ply, args )
 	else
 		result, err = importManifest( data, path, appendMode )
 	end
-	if not result then chat( ply, L( ply, "server.import_failed", { err = importErrorText( ply, err ) } ) ) return end
-	local msg = L( ply, "server.import_done", {
+	if not result then chat( ply, message( "server.import_failed", { err = importErrorText( ply, err ) } ) ) return end
+	local msg = message( "server.import_done", {
 		blocks = result.imported,
 		total = result.total,
 		unknown = result.skippedUnknown,
@@ -1792,15 +1785,15 @@ local function runImport( ply, args )
 		max = result.skippedLimit,
 	} )
 	chat( ply, msg )
-	if result.lossSummary then chat( ply, "import verification: " .. result.lossSummary ) end
+	if result.lossSummary then chat( ply, message( "server.import_verification", { summary = result.lossSummary } ) ) end
 	if result.expected and result.expected > 0 and result.imported ~= result.expected then
-		chat( ply, L( ply, "server.import_count_mismatch", {
+		chat( ply, message( "server.import_count_mismatch", {
 			expected = result.expected,
 			imported = result.imported,
 		} ) )
 	end
 	if result.skippedLimit > 0 then
-		chat( ply, L( ply, "server.import_truncated", {
+		chat( ply, message( "server.import_truncated", {
 			max = tostring( C.ImportMax and C.ImportMax:GetInt() or "?" ),
 		} ) )
 	end
@@ -1824,25 +1817,28 @@ end )
 concommand.Add( "mc_import_probe", function( ply, _, args )
 	if IsValid( ply ) and not ply:IsAdmin() then return end
 	local path = normalizeImportPath( args[1] )
-	if not path then chat( ply, L( ply, "server.import_usage" ) ) return end
+	if not path then chat( ply, message( "server.import_usage" ) ) return end
 	if not file.Exists( path, "DATA" ) then
-		chat( ply, "probe missing: garrysmod/data/" .. path )
+		chat( ply, message( "server.import_missing", { path = path } ) )
 		return
 	end
 	local raw = file.Read( path, "DATA" )
 	local data = raw and util.JSONToTable( raw )
 	if not data then
-		chat( ply, "probe invalid JSON bytes=" .. tostring( raw and #raw or "nil" ) )
+		chat( ply, message( "server.import_probe_invalid", { bytes = tostring( raw and #raw or "nil" ) } ) )
 		return
 	end
-	chat( ply, "probe " .. path .. ": " .. importFormatText( data ) .. " bytes=" .. #raw )
+	chat( ply, message( "server.import_probe", { path = path, format = importFormatText( data ), bytes = #raw } ) )
 	if istable( data.parts ) and data.parts[1] then
 		local dir = string.GetPathFromFilename( path )
 		local partPath = tostring( data.parts[1] )
 		if not string.StartWith( partPath, "mc_import/" ) then partPath = dir .. partPath end
 		local partRaw = file.Read( partPath, "DATA" )
 		local partData = partRaw and util.JSONToTable( partRaw )
-		chat( ply, "probe first part " .. partPath .. ": " .. ( partData and importFormatText( partData ) or "invalid" ) .. " bytes=" .. tostring( partRaw and #partRaw or "nil" ) )
+		chat( ply, message( "server.import_probe", {
+			path = partPath, format = partData and importFormatText( partData ) or "invalid",
+			bytes = tostring( partRaw and #partRaw or "nil" ),
+		} ) )
 	end
 end )
 
@@ -2772,7 +2768,7 @@ concommand.Add( "mc_rebuild", function( ply )
 	if IsValid( ply ) and not ply:IsAdmin() then return end
 	if not serverCollisionEnabled() then
 		MsgN( "[MC] server collision is disabled (mc_server_collision 0)" )
-		if IsValid( ply ) then ply:ChatPrint( "[MC] server collision is disabled" ) end
+		MC.Messages.Reply( ply, "server.collision_disabled" )
 		return
 	end
 	local n = 0
@@ -2783,6 +2779,6 @@ concommand.Add( "mc_rebuild", function( ply )
 			n = n + 1
 		end
 	end
-	MsgN( "[MC] rebuilding collision for " .. n .. " chunks" )
-	if IsValid( ply ) then ply:ChatPrint( "[MC] " .. L( ply, "server.rebuilt", { count = n } ) ) end
+	MC.Messages.Console( "server.rebuilt", { count = n } )
+	if IsValid( ply ) then MC.Messages.Notify( ply, "server.rebuilt", { count = n } ) end
 end )

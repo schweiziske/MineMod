@@ -9,8 +9,8 @@ include("mcitem/fishing/sh_core.lua")
 local Fishing = MCITEM.Fishing
 
 SWEP.Base = "weapon_bmb_item_model_test"
-SWEP.PrintName = "Minecraft Fishing Rod"
-SWEP.Category = "Minecraft in GMod - Utility"
+SWEP.PrintName = "#item.minecraft.fishing_rod"
+SWEP.Category = "#mcitem.category.utility"
 SWEP.Spawnable = true
 SWEP.AdminOnly = false
 
@@ -26,7 +26,7 @@ SWEP.MCIsSword = false
 SWEP.MCUseAction = nil
 SWEP.MCThirdPersonSwingGesture = "item_attack"
 
-SWEP.Instructions = "Left click: attack or mine. Right click: cast; right click again to retrieve the hook, hooked entity, or fishing loot."
+SWEP.MCInstructionsKey = "mcitem.instructions.fishing_rod"
 
 local FIRST_PERSON_DISPLAY = {
     rotation = { 0, 90, 25 },

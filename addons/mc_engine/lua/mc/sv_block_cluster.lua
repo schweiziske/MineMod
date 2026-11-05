@@ -18,20 +18,17 @@ local CLUSTER_CLASS = "mc_block_cluster"
 local CONVERT_COOLDOWN = 0.5
 local DATA_REPLIES_PER_SECOND = 24
 
--- Translated with this server's files for the player's language.
-local function L( ply, key, vars )
-	return MC.I18n.Resolve( key, vars, MC.I18n.LanguageForPlayer( ply ) )
-end
+local message = MC.Messages.Spec
 
 local function notify( ply, msg )
-	if IsValid( ply ) then ply:ChatPrint( "[MC] " .. msg ) end
+	if IsValid( ply ) then MC.Messages.Notify( ply, msg ) end
 end
 
 local function canUseClusters( ply )
 	if not IsValid( ply ) or ply:IsAdmin() then return true end
 	local public = C.ClusterPublic or GetConVar( "mc_cluster_public" )
 	if public and public:GetBool() then return true end
-	notify( ply, L( ply, "cluster.admin_only" ) )
+	notify( ply, message( "cluster.admin_only" ) )
 	return false
 end
 
@@ -175,7 +172,7 @@ duplicator.RegisterEntityClass( CLUSTER_CLASS, function( ply, data )
 	local sid = IsValid( ply ) and ply:SteamID64() or nil
 	local maxPer = C.ClusterMaxPerPlayer and C.ClusterMaxPerPlayer:GetInt() or 8
 	if maxPer > 0 and countPlayerClusters( sid ) >= maxPer then
-		notify( ply, L( ply, "cluster.per_player_limit", { max = maxPer } ) )
+		notify( ply, message( "cluster.per_player_limit", { max = maxPer } ) )
 		return nil
 	end
 
@@ -284,10 +281,10 @@ local PASTE_FAIL_KEYS = {
 
 local function pasteFailText( ply, err, blocked )
 	if err == "occupied" and blocked then
-		return L( ply, "cluster.paste_occupied_n", { n = blocked } )
+		return message( "cluster.paste_occupied_n", { n = blocked } )
 	end
 	local key = PASTE_FAIL_KEYS[err]
-	if key then return L( ply, key ) end
+	if key then return message( key ) end
 	return tostring( err )
 end
 
@@ -296,16 +293,16 @@ local function registerClusterUndo( ply, ent, originCell )
 	if not ( undo and undo.Create ) or not IsValid( ply ) then return end
 	undo.Create( "mc_block_cluster" )
 	undo.SetPlayer( ply )
-	undo.SetCustomUndoText( L( ply, "cluster.undo_text" ) )
+	undo.SetCustomUndoText( "#mc.cluster.undo_text" )
 	undo.AddFunction( function()
 		if not IsValid( ent ) then return end
 		if not canUseClusters( ply ) then return end
 		if SV.CanEdit and not SV.CanEdit( ply ) then return end
 		local ok, err, blocked = placeClusterAt( ply, ent, originCell, 0 )
 		if ok then
-			notify( ply, L( ply, "cluster.undo_restored" ) )
+			notify( ply, message( "cluster.undo_restored" ) )
 		else
-			notify( ply, L( ply, "cluster.undo_failed", { err = pasteFailText( ply, err, blocked ) } ) )
+			notify( ply, message( "cluster.undo_failed", { err = pasteFailText( ply, err, blocked ) } ) )
 		end
 	end )
 	undo.Finish()
@@ -317,7 +314,7 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 	if not canUseClusters( ply ) then return end
 	local maxBlocks = MC.ClusterMaxBlocks()
 	if count < 1 or count > maxBlocks then
-		notify( ply, L( ply, "cluster.too_many", { max = maxBlocks } ) )
+		notify( ply, message( "cluster.too_many", { max = maxBlocks } ) )
 		return
 	end
 	if not SV.CanEdit( ply ) then return end
@@ -326,7 +323,7 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 	local maxPer = C.ClusterMaxPerPlayer and C.ClusterMaxPerPlayer:GetInt() or 8
 	local sid = IsValid( ply ) and ply:SteamID64() or nil
 	if maxPer > 0 and countPlayerClusters( sid ) >= maxPer then
-		notify( ply, L( ply, "cluster.per_player_limit", { max = maxPer } ) )
+		notify( ply, message( "cluster.per_player_limit", { max = maxPer } ) )
 		return
 	end
 
@@ -350,7 +347,7 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 
 	local maxExtent = MC.ClusterMaxExtent()
 	if maxx - minx + 1 > maxExtent or maxy - miny + 1 > maxExtent or maxz - minz + 1 > maxExtent then
-		notify( ply, L( ply, "cluster.too_large", { max = maxExtent } ) )
+		notify( ply, message( "cluster.too_large", { max = maxExtent } ) )
 		return
 	end
 
@@ -363,13 +360,13 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 			math.Clamp( eye.y, miny * MC.BS, ( maxy + 1 ) * MC.BS ),
 			math.Clamp( eye.z, minz * MC.BS, ( maxz + 1 ) * MC.BS ) )
 		if eye:DistToSqr( nearest ) > rangeLimit * rangeLimit then
-			notify( ply, L( ply, "cluster.too_far" ) )
+			notify( ply, message( "cluster.too_far" ) )
 			return
 		end
 	end
 
 	if not hydrateSelectionChunks( requested ) then
-		notify( ply, L( ply, "cluster.not_loaded" ) )
+		notify( ply, message( "cluster.not_loaded" ) )
 		return
 	end
 
@@ -388,7 +385,7 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 		end
 	end
 	if n == 0 then
-		notify( ply, L( ply, "cluster.empty" ) )
+		notify( ply, message( "cluster.empty" ) )
 		return
 	end
 
@@ -402,18 +399,18 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 	local convexes, convexErr, convexCount = MC.ClusterCollisionConvexes( record )
 	if not convexes then
 		if convexErr == "too_complex" then
-			notify( ply, L( ply, "cluster.too_complex", { n = convexCount or 0, max = MC.ClusterMaxConvexes() } ) )
+			notify( ply, message( "cluster.too_complex", { n = convexCount or 0, max = MC.ClusterMaxConvexes() } ) )
 		elseif convexErr == "no_collision" then
-			notify( ply, L( ply, "cluster.no_collision" ) )
+			notify( ply, message( "cluster.no_collision" ) )
 		else
-			notify( ply, L( ply, "cluster.phys_failed", { err = tostring( convexErr ) } ) )
+			notify( ply, message( "cluster.phys_failed", { err = tostring( convexErr ) } ) )
 		end
 		return
 	end
 
 	local ent, spawnErr = SV.SpawnCluster( record, MC.CellWorldMin( minx, miny, minz ), angle_zero, true, sid )
 	if not IsValid( ent ) then
-		notify( ply, L( ply, "cluster.spawn_failed", { err = tostring( spawnErr ) } ) )
+		notify( ply, message( "cluster.spawn_failed", { err = tostring( spawnErr ) } ) )
 		return
 	end
 	ent.ClusterOriginCell = { minx, miny, minz }
@@ -440,7 +437,7 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 			changed = result.changed
 		elseif result.error ~= "chunk_hydration_transport_unavailable" then
 			ent:Remove()
-			notify( ply, L( ply, "cluster.remove_failed" ) )
+			notify( ply, message( "cluster.remove_failed" ) )
 			return
 		end
 	end
@@ -453,7 +450,7 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 	end
 	if ( changed or 0 ) <= 0 then
 		ent:Remove()
-		notify( ply, L( ply, "cluster.remove_failed" ) )
+		notify( ply, message( "cluster.remove_failed" ) )
 		return
 	end
 	if changed ~= #removeCells then
@@ -464,10 +461,10 @@ net.Receive( "mc_cluster_convert", function( _, ply )
 	if MC.RunEvent then MC.RunEvent( "MC.ClusterConverted", ply, ent, #removeCells ) end
 	if MC.ClusterEngineStyle == true then broadcastClusterFx( ent, true ) end
 	if crate then
-		notify( ply, L( ply, "cluster.converted_crate",
+		notify( ply, message( "cluster.converted_crate",
 			{ n = #removeCells } ) )
 	else
-		notify( ply, L( ply, "cluster.converted",
+		notify( ply, message( "cluster.converted",
 			{ n = #removeCells } ) )
 	end
 end )
@@ -515,7 +512,7 @@ net.Receive( "mc_cluster_paste", function( _, ply )
 	local snap, snapErr = MC.ClusterComputeSnap( ent:GetPos(), ent:GetAngles() )
 	if not snap then
 		if snapErr == "tilted" then
-			notify( ply, L( ply, "cluster.tilted" ) )
+			notify( ply, message( "cluster.tilted" ) )
 		end
 		return
 	end
@@ -525,9 +522,9 @@ net.Receive( "mc_cluster_paste", function( _, ply )
 	local targetMin = MC.ClusterSnapTargets( record, snap.pos, snap.rotation )
 	local ok, result, blocked = placeClusterAt( ply, ent, targetMin, snap.rotation )
 	if ok then
-		notify( ply, L( ply, "cluster.pasted", { n = result } ) )
+		notify( ply, message( "cluster.pasted", { n = result } ) )
 	else
-		notify( ply, L( ply, "cluster.paste_failed", { err = pasteFailText( ply, result, blocked ) } ) )
+		notify( ply, message( "cluster.paste_failed", { err = pasteFailText( ply, result, blocked ) } ) )
 	end
 end )
 

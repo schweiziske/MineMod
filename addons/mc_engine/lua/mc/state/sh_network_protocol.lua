@@ -99,6 +99,7 @@ Net.MessageNames = {
 	"mc_unload_chunk", "mc_set", "mc_set_bulk", "mc_set_bulk_fast",
 	"mc_reliable_ack", "mc_fx", "mc_explosion_fx", "mc_creative_place_anim", "mc_creative_break_anim",
 	"mc_clear", "mc_collision_debug_req", "mc_collision_debug",
+	"mc_message",
 	"mc_save_list_req", "mc_save_list_data", "mc_save_action",
 	"mc_save_cover_begin", "mc_save_cover_part", "mc_save_cover_ack", "mc_save_cover_req",
 	"mc_save_cover_download_begin", "mc_save_cover_download_part",

@@ -8,9 +8,9 @@ include("mcitem/sh_ranged.lua")
 include("mcitem/sh_ammo.lua")
 
 SWEP.Base = "weapon_bmb_item_model_test"
-SWEP.PrintName = "Minecraft Crossbow"
-SWEP.Category = "Minecraft in GMod - Items"
-SWEP.Instructions = "Hold right click to load; right click again to fire. Left click: attack / mining swing."
+SWEP.PrintName = "#item.minecraft.crossbow"
+SWEP.Category = "#mcitem.category.items"
+SWEP.MCInstructionsKey = "mcitem.instructions.crossbow"
 SWEP.Spawnable = true
 SWEP.AdminOnly = false
 SWEP.WorldModel = "models/mcgm/crossbow/crossbow.mdl"

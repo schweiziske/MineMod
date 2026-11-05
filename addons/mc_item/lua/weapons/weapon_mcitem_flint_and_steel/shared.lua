@@ -4,8 +4,8 @@ AddCSLuaFile("mcitem/utility/sh_use.lua")
 include("mcitem/utility/sh_use.lua")
 
 SWEP.Base = "weapon_bmb_item_model_test"
-SWEP.PrintName = "Minecraft Flint and Steel"
-SWEP.Category = "Minecraft in GMod - Utility"
+SWEP.PrintName = "#item.minecraft.flint_and_steel"
+SWEP.Category = "#mcitem.category.utility"
 SWEP.Spawnable = true
 SWEP.AdminOnly = false
 
@@ -20,7 +20,7 @@ SWEP.MCWeaponDamagePerAttack = 0
 SWEP.MCIsSword = false
 SWEP.MCUseAction = nil
 
-SWEP.Instructions = "Left click: attack or mine. Right click: ignite a block face; soul sand and soul soil create soul fire."
+SWEP.MCInstructionsKey = "mcitem.instructions.flint_and_steel"
 
 local function playStandaloneSound(api, result)
     local soundApi = api and api.Sound

@@ -25,10 +25,7 @@ function ENT:SetClusterRecord( record, blob )
 	self:SetSizeZ( record.size[3] )
 end
 
--- Translated with this server's files for the player's language.
-local function T( ply, key, vars )
-	return MC.I18n.Resolve( key, vars, MC.I18n.LanguageForPlayer( ply ) )
-end
+local message = MC.Messages.Spec
 
 -- Strip bulky/transient fields from dupes; the record alone rebuilds
 -- everything (blob, physics, datatables) in the paste factory.
@@ -46,16 +43,12 @@ function ENT:Use( activator )
 
 	local durability = ( self.ClusterMaxHealth or 0 ) > 0
 		and ( math.max( 0, math.floor( self.ClusterHealth or 0 ) ) .. "/" .. self.ClusterMaxHealth )
-		or T( activator, "cluster.use_invincible" )
-	local info = T( activator, "cluster.use_info",
-		{ n = self:GetBlockCount(), hp = durability } )
+		or message( "cluster.use_invincible" )
 	local owner = self:GetOwnerLabel()
-	if owner ~= "" then info = info .. T( activator, "cluster.use_owner", { name = owner } ) end
 	local phys = self:GetPhysicsObject()
-	if IsValid( phys ) and not phys:IsMotionEnabled() then
-		info = info .. T( activator, "cluster.use_frozen" )
-	end
-	activator:ChatPrint( "[MC] " .. info )
+	local frozen = IsValid( phys ) and not phys:IsMotionEnabled()
+	local key = "cluster.use_info" .. ( owner ~= "" and "_owned" or "" ) .. ( frozen and "_frozen" or "" )
+	MC.Messages.Notify( activator, key, { n = self:GetBlockCount(), hp = durability, name = owner } )
 end
 
 function ENT:RebuildClusterPhysics( frozen )

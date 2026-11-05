@@ -12,10 +12,7 @@ local SV = MC.SV
 local C = MC.Config
 local Net = MC.Net
 
--- Translated with this server's files for the player's language.
-local function L( ply, key, vars )
-	return MC.I18n.Resolve( key, vars, MC.I18n.LanguageForPlayer( ply ) )
-end
+local message = MC.Messages.Spec
 
 local PRESET_DIR = "mc/presets"
 local PRESET_META_DIR = "mc/preset_meta"
@@ -128,11 +125,11 @@ end
 
 local function canEditPresets( ply )
 	if not canUsePresets( ply ) then
-		if IsValid( ply ) then ply:ChatPrint( "[MC] " .. L( ply, "server.preset_admin" ) ) end
+		MC.Messages.Reply( ply, "server.preset_admin" )
 		return false
 	end
 	if C.AdminOnly and C.AdminOnly:GetBool() and IsValid( ply ) and not ply:IsAdmin() then
-		ply:ChatPrint( "[MC] " .. L( ply, "server.preset_edit_admin" ) )
+		MC.Messages.Notify( ply, "server.preset_edit_admin" )
 		return false
 	end
 	return true
@@ -378,7 +375,9 @@ function SV.SavePreset( presetName, cornerA, cornerB, anchor, cover, ply )
 		payload = compressed,
 	}
 	writePresetMeta( presetName, data )
-	MsgN( string.format( "[MC] saved preset \"%s\" (%d blocks, %dx%dx%d)", presetName, #cells, data.size[1], data.size[2], data.size[3] ) )
+	MC.Messages.Console( "server.preset_saved_detail", {
+		name = presetName, blocks = #cells, x = data.size[1], y = data.size[2], z = data.size[3],
+	} )
 	if MC.RunEvent then MC.RunEvent( "MC.PresetSaved", presetName, ply ) end
 	return true, data
 end
@@ -394,7 +393,7 @@ function SV.DeletePreset( presetName )
 	if file.Exists( metaPath, "DATA" ) then file.Delete( metaPath ) end
 	deletePresetCovers( presetName )
 	PresetCache[presetName] = nil
-	MsgN( "[MC] deleted preset \"" .. presetName .. "\"" )
+	MC.Messages.Console( "server.preset_deleted", { name = presetName } )
 	if MC.RunEvent then MC.RunEvent( "MC.PresetDeleted", presetName ) end
 	return true
 end
@@ -581,7 +580,7 @@ function SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 	if totalChanged <= 0 then return false, bulkErr or "unchanged" end
 	if IsValid( ply ) then
 		local key = overwrite and "server.preset_overwritten" or "server.preset_placed"
-		ply:ChatPrint( "[MC] " .. L( ply, key, { name = tostring( data.name or presetName ), changes = totalChanged } ) )
+		MC.Messages.Notify( ply, key, { name = tostring( data.name or presetName ), changes = totalChanged } )
 	end
 	if MC.RunEvent then
 		MC.RunEvent( "MC.PresetPlaced", ply, tostring( data.name or presetName ),
@@ -592,10 +591,19 @@ end
 
 local function sendPresetList( ply, message, isError, presets )
 	if not IsValid( ply ) then return end
+	local payload, err = MC.Messages.Encode( message )
+	if not payload then MC.Fault( "preset_message_encode", "%s", err ) return end
 	presets = presets or SV.PresetList()
-	local count = math.min( #presets, MAX_NET_PRESETS )
+	local count, bytes = 0, 32 + #payload
+	for index = 1, math.min( #presets, MAX_NET_PRESETS ) do
+		local preset = presets[index]
+		local rowBytes = 24 + #tostring( preset.name or "" ) + #tostring( preset.map or "unknown" )
+			+ #tostring( preset.createdAtText or "?" ) + #tostring( preset.cover or "" )
+		if bytes + rowBytes > 60000 then break end
+		bytes, count = bytes + rowBytes, index
+	end
 	net.Start( "mc_preset_list_data" )
-		net.WriteString( message or "" )
+		net.WriteString( payload )
 		net.WriteBool( isError == true )
 		net.WriteUInt( count, 12 )
 		for i = 1, count do
@@ -614,9 +622,11 @@ local function sendPresetList( ply, message, isError, presets )
 end
 
 local function sendPresetDataError( ply, presetName, err )
+	local payload, encodeError = MC.Messages.Encode( err )
+	if not payload then MC.Fault( "preset_message_encode", "%s", encodeError ) return end
 	net.Start( "mc_preset_data" )
 		net.WriteString( presetName or "" )
-		net.WriteString( tostring( err or "error" ) )
+		net.WriteString( payload )
 		net.WriteBool( true )
 		net.WriteUInt( 0, 16 )
 		net.WriteUInt( 0, 32 )
@@ -626,7 +636,7 @@ end
 local function sendPresetData( ply, presetName )
 	if not IsValid( ply ) then return end
 	local data, err, cached = SV.LoadPreset( presetName )
-	if not data then sendPresetDataError( ply, presetName, err ) return end
+	if not data then sendPresetDataError( ply, presetName, message( "server.action_failed", { err = tostring( err ) } ) ) return end
 
 	-- the .dat on disk is already the compressed JSON payload the client
 	-- expects; reuse it instead of re-serializing + re-compressing per request
@@ -636,7 +646,7 @@ local function sendPresetData( ply, presetName )
 		compressed = json and util.Compress( json ) or nil
 	end
 	if not compressed or compressed == "" or #compressed > MAX_PRESET_DATA_BYTES then
-		sendPresetDataError( ply, presetName, "preset_payload_too_large" )
+		sendPresetDataError( ply, presetName, message( "server.preset_payload_too_large" ) )
 		return
 	end
 
@@ -703,7 +713,7 @@ end
 
 net.Receive( "mc_preset_list_req", function( _, ply )
 	if not canUsePresets( ply ) then
-		sendPresetList( ply, L( ply, "server.preset_admin_list" ), true, {} )
+		sendPresetList( ply, message( "server.preset_admin_list" ), true, {} )
 		return
 	end
 	sendPresetList( ply )
@@ -712,7 +722,7 @@ end )
 net.Receive( "mc_preset_load_req", function( _, ply )
 	local presetName = net.ReadString()
 	if not canUsePresets( ply ) then
-		sendPresetDataError( ply, presetName, L( ply, "server.preset_admin_load" ) )
+		sendPresetDataError( ply, presetName, message( "server.preset_admin_load" ) )
 		return
 	end
 	sendPresetData( ply, presetName )
@@ -720,7 +730,7 @@ end )
 
 net.Receive( "mc_preset_save", function( _, ply )
 	if not canEditPresets( ply ) then
-		sendPresetList( ply, L( ply, "server.preset_admin_save" ), true, {} )
+		sendPresetList( ply, message( "server.preset_admin_save" ), true, {} )
 		return
 	end
 	local presetName = net.ReadString()
@@ -746,9 +756,9 @@ net.Receive( "mc_preset_save", function( _, ply )
 
 	local ok, result = SV.SavePreset( presetName, cornerA, cornerB, anchor, cover, ply )
 	if ok then
-		sendPresetList( ply, L( ply, "server.preset_saved", { name = tostring( presetName ) } ) )
+		sendPresetList( ply, message( "server.preset_saved", { name = tostring( presetName ) } ) )
 	else
-		sendPresetList( ply, L( ply, "server.preset_save_failed", { err = tostring( result ) } ), true )
+		sendPresetList( ply, message( "server.preset_save_failed", { err = tostring( result ) } ), true )
 	end
 end )
 
@@ -770,7 +780,7 @@ net.Receive( "mc_preset_place", function( _, ply )
 	end
 	local ok, err = SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 	if not ok and IsValid( ply ) then
-		ply:ChatPrint( "[MC] " .. L( ply, "server.preset_place_failed", { err = tostring( err ) } ) )
+		MC.Messages.Notify( ply, "server.preset_place_failed", { err = tostring( err ) } )
 	end
 end )
 
@@ -856,17 +866,13 @@ end )
 
 concommand.Add( "mc_preset_list", function( ply )
 	if not canUsePresets( ply ) then
-		if IsValid( ply ) then ply:PrintMessage( HUD_PRINTCONSOLE, "[MC] only admins may list/load/save MC presets (set mc_preset_public 1 to allow everyone)" ) end
+		MC.Messages.Reply( ply, "server.preset_admin", nil, "console" )
 		return
 	end
 	local presets = SV.PresetList()
-	if IsValid( ply ) then
-		for _, preset in ipairs( presets ) do
-			ply:PrintMessage( HUD_PRINTCONSOLE, string.format( "[MC] preset %s | %d blocks | %s", preset.name, preset.blocks or 0, preset.createdAtText or "?" ) )
-		end
-	else
-		for _, preset in ipairs( presets ) do
-			MsgN( string.format( "[MC] preset %s | %d blocks | %s", preset.name, preset.blocks or 0, preset.createdAtText or "?" ) )
-		end
+	for _, preset in ipairs( presets ) do
+		MC.Messages.Reply( ply, "server.preset_list_row", {
+			name = preset.name, blocks = preset.blocks or 0, time = preset.createdAtText or "?",
+		}, "console" )
 	end
 end )

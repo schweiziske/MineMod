@@ -137,7 +137,11 @@ end
 
 local function setStatus( frame, message, isError )
 	if not IsValid( frame ) or not IsValid( frame.StatusLabel ) then return end
-	frame.StatusLabel:SetText( message or "" )
+	frame.StatusSpec = type( message ) == "table" and message or nil
+	frame.StatusIsError = isError
+	local text = frame.StatusSpec and MC.I18n.Resolve( frame.StatusSpec ) or message or ""
+	frame.StatusLabel:SetText( text )
+	frame.StatusLabel:SetTooltip( text ~= "" and text or nil )
 	frame.StatusLabel:SetTextColor( isError and UI.error or UI.textDim )
 end
 
@@ -294,19 +298,19 @@ end
 
 local function sendSaveAction( action, slotName, captureCover )
 	if ( action == "save" or action == "load" ) and not canUseSaveManager() then
-		setStatus( MC.SaveManagerFrame, L( "save.admin_only" ), true )
+		setStatus( MC.SaveManagerFrame, MC.Messages.Spec( "save.admin_only" ), true )
 		return
 	end
 	slotName = trim( slotName )
 	if slotName == "" then
-		setStatus( MC.SaveManagerFrame, L( "save.enter_name" ), true )
+		setStatus( MC.SaveManagerFrame, MC.Messages.Spec( "save.enter_name" ), true )
 		return
 	end
 
 	if action == "save" and captureCover ~= false then
 		local frame = MC.SaveManagerFrame
 		if IsValid( frame ) and frame.UploadBusy then
-			setStatus( frame, L( "save.upload_busy" ), true )
+			setStatus( frame, MC.Messages.Spec( "save.upload_busy" ), true )
 			return
 		end
 		if IsValid( frame ) then frame.UploadBusy = true end
@@ -315,13 +319,13 @@ local function sendSaveAction( action, slotName, captureCover )
 			if IsValid( frame ) then
 				frame:SetVisible( true )
 				frame:MakePopup()
-				setStatus( frame, L( "save.uploading" ) )
+				setStatus( frame, MC.Messages.Spec( "save.uploading" ) )
 			end
 
 			uploadSaveCover( slotName, coverPath, data, function( ok, confirmedCover, err )
 				if IsValid( frame ) then frame.UploadBusy = false end
 				if not ok then
-					setStatus( frame, L( "save.upload_failed", { err = tostring( err or "error" ) } ), true )
+					setStatus( frame, MC.Messages.Spec( "save.upload_failed", { err = tostring( err or "error" ) } ), true )
 					return
 				end
 				sendSaveActionNow( action, slotName, confirmedCover or "" )
@@ -379,7 +383,7 @@ local function createSaveRow( parent, frame, save )
 	end
 end
 
-function MC.OpenSaveManager()
+function MC.OpenSaveManager( viewState )
 	if IsValid( MC.SaveManagerFrame ) then MC.SaveManagerFrame:Remove() end
 
 	local fr = vgui.Create( "DFrame" )
@@ -392,10 +396,11 @@ function MC.OpenSaveManager()
 	fr:MakePopup()
 	fr:SetKeyboardInputEnabled( true )
 	fr:DockPadding( 12, 68, 12, 12 )
-	fr.MapFilter = "*"
-	fr.GroupFilter = "*"
-	fr.SourceFilter = "*"
-	fr.SearchText = ""
+	fr.MapFilter = viewState and viewState.MapFilter or "*"
+	fr.GroupFilter = viewState and viewState.GroupFilter or "*"
+	fr.SourceFilter = viewState and viewState.SourceFilter or "*"
+	fr.SearchText = viewState and viewState.SearchText or ""
+	fr.SelectedSave = viewState and viewState.SelectedSave or nil
 	fr.Paint = function( _, w, h )
 		surface.SetDrawColor( UI.frame )
 		surface.DrawRect( 0, 0, w, h )
@@ -551,6 +556,7 @@ function MC.OpenSaveManager()
 	search:DockMargin( 10, 44, 10, 8 )
 	search:SetTall( 32 )
 	MC.LibraryStyleTextEntry( search, L( "library.search" ), UI )
+	search:SetValue( fr.SearchText )
 	search.OnValueChange = function( _, value )
 		fr.SearchText = value or ""
 		if fr.RefreshSaveRows then fr:RefreshSaveRows( "", false, true ) end
@@ -635,7 +641,7 @@ function MC.OpenSaveManager()
 	load:SetEnabled( canManage )
 	load.DoClick = function()
 		local save = fr.SelectedSave
-		if not save then setStatus( fr, L( "save.select_first" ), true ) return end
+		if not save then setStatus( fr, MC.Messages.Spec( "save.select_first" ), true ) return end
 		Derma_Query(
 			L( "save.load_confirm_body" ),
 			L( "save.load_confirm_title", { name = save.name } ),
@@ -652,8 +658,8 @@ function MC.OpenSaveManager()
 	overwrite:SetEnabled( canManage )
 	overwrite.DoClick = function()
 		local save = fr.SelectedSave
-		if not save then setStatus( fr, L( "save.select_first" ), true ) return end
-		if isMountedSave( save ) then setStatus( fr, L( "save.mounted_read_only" ), true ) return end
+		if not save then setStatus( fr, MC.Messages.Spec( "save.select_first" ), true ) return end
+		if isMountedSave( save ) then setStatus( fr, MC.Messages.Spec( "save.mounted_read_only" ), true ) return end
 		Derma_Query(
 			L( "save.overwrite_confirm_body" ),
 			L( "save.overwrite_confirm_title", { name = save.name } ),
@@ -671,8 +677,8 @@ function MC.OpenSaveManager()
 		styleButton( delete, L( "save.delete" ), true )
 		delete.DoClick = function()
 			local save = fr.SelectedSave
-			if not save then setStatus( fr, L( "save.select_first" ), true ) return end
-			if isMountedSave( save ) then setStatus( fr, L( "save.mounted_read_only" ), true ) return end
+			if not save then setStatus( fr, MC.Messages.Spec( "save.select_first" ), true ) return end
+			if isMountedSave( save ) then setStatus( fr, MC.Messages.Spec( "save.mounted_read_only" ), true ) return end
 			Derma_Query(
 				L( "save.delete_confirm_body" ),
 				L( "save.delete_confirm_title", { name = save.name } ),
@@ -690,8 +696,8 @@ function MC.OpenSaveManager()
 		or L( "workshop.permission_hint" ) )
 	publishWorkshop.DoClick = function()
 		local save = fr.SelectedSave
-		if not save then setStatus( fr, L( "save.select_first" ), true ) return end
-		if isMountedSave( save ) then setStatus( fr, L( "save.mounted_read_only" ), true ) return end
+		if not save then setStatus( fr, MC.Messages.Spec( "save.select_first" ), true ) return end
+		if isMountedSave( save ) then setStatus( fr, MC.Messages.Spec( "save.mounted_read_only" ), true ) return end
 		Derma_Query(
 			L( "workshop.publish_confirm_body" ),
 			L( "workshop.publish_confirm_title", { name = save.name } ),
@@ -813,7 +819,7 @@ function MC.OpenSaveManager()
 			add.DoClick = function()
 				Derma_StringRequest( L( "library.new_group" ), L( "library.group_name" ), "", function( name )
 					local id = MC.LibraryCreateGroup( name )
-					if not id then setStatus( fr, L( "library.group_exists" ), true ) return end
+					if not id then setStatus( fr, MC.Messages.Spec( "library.group_exists" ), true ) return end
 					fr.GroupFilter = "*"
 					fr:RefreshSaveRows( "", false )
 				end )
@@ -979,11 +985,19 @@ function MC.OpenSaveManager()
 	fr:RefreshWorkshopActions()
 	local workshopStatus = MC.Workshop and MC.Workshop.Client and MC.Workshop.Client.status or nil
 	if workshopStatus then MC.SetSaveManagerWorkshopStatus( workshopStatus.message, workshopStatus.isError, workshopStatus.pending ) end
-	MC.RequestSaveList()
+	if viewState then
+		-- A locale refresh reuses the current list, without a reply erasing status.
+		fr:RefreshSaveRows( viewState.StatusSpec, viewState.StatusIsError )
+		nameEntry:SetValue( viewState.NameText )
+	else
+		MC.RequestSaveList()
+	end
 end
 
 net.Receive( "mc_save_list_data", function()
-	local message = net.ReadString()
+	local message, messageError = MC.Messages.Read()
+	if messageError then return end
+	message = message or ""
 	local isError = net.ReadBool()
 	local count = net.ReadUInt( 12 )
 	local saves = {}
@@ -1076,8 +1090,13 @@ end )
 if MC.RegisterLanguageChanged then
 	MC.RegisterLanguageChanged( "mc_save_ui", function()
 		if IsValid( MC.SaveManagerFrame ) then
-			MC.SaveManagerFrame:Remove()
-			MC.OpenSaveManager()
+			local frame = MC.SaveManagerFrame
+			MC.OpenSaveManager( {
+				MapFilter = frame.MapFilter, GroupFilter = frame.GroupFilter,
+				SourceFilter = frame.SourceFilter, SearchText = frame.SearchText,
+				SelectedSave = frame.SelectedSave, NameText = frame.NameEntry:GetValue(),
+				StatusSpec = frame.StatusSpec, StatusIsError = frame.StatusIsError,
+			} )
 		end
 	end )
 end

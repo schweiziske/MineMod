@@ -1969,6 +1969,15 @@ function I18n.TranslateConsole( key, vars )
 	return I18n.Translate( key, vars, engine.ConsoleLanguage() )
 end
 
+-- Sends a key and bounded parameters; only the recipient's client translates.
+-- Unlike TranslateForPlayer this applies that client's installed overrides.
+function I18n.Notify( ply, key, vars, channel )
+	if not SERVER then return false, "server_only" end
+	if not MC.Messages then return false, "messages_unavailable" end
+	if not MC.I18n.ValidKey( key ) then return false, "invalid_key" end
+	return MC.Messages.Notify( ply, key, vars, channel )
+end
+
 function I18n.Has( key, locale )
 	local engine = i18nEngine()
 	return engine ~= nil and engine.ValidKey( key ) and validI18nLocale( locale ) and engine.Has( key, locale ) or false

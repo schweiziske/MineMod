@@ -1,6 +1,6 @@
 ENT.Type = "anim"
 ENT.Base = "base_anim"
-ENT.PrintName = "Minecraft Potion Cloud"
+ENT.PrintName = "#mcitem.entity.potion_cloud"
 ENT.Spawnable = false
 ENT.RenderGroup = RENDERGROUP_TRANSLUCENT
 

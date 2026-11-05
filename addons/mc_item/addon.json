@@ -1,0 +1,6 @@
+{
+  "title": "MineMod Items",
+  "type": "weapon",
+  "tags": ["build", "fun"],
+  "ignore": ["AGENTS.md", "*.md", "**/*.md", "scripts/*", "tests/*", "models/*.sw.vtx", "models/*.xbox.vtx"]
+}

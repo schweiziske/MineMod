@@ -4,8 +4,8 @@ AddCSLuaFile("mcitem/utility/sh_use.lua")
 include("mcitem/utility/sh_use.lua")
 
 SWEP.Base = "weapon_bmb_item_model_test"
-SWEP.PrintName = "Minecraft Shears"
-SWEP.Category = "Minecraft in GMod - Utility"
+SWEP.PrintName = "#item.minecraft.shears"
+SWEP.Category = "#mcitem.category.utility"
 SWEP.Spawnable = true
 SWEP.AdminOnly = false
 
@@ -20,7 +20,7 @@ SWEP.MCWeaponDamagePerAttack = 0
 SWEP.MCIsSword = false
 SWEP.MCUseAction = nil
 
-SWEP.Instructions = "Left click: attack or mine. Right click: shear a ready BMB sheep/Bogged or stop a growing vine head at age 25."
+SWEP.MCInstructionsKey = "mcitem.instructions.shears"
 
 function SWEP:SecondaryAttack()
     if MC and MC.InventoryOffhandUseActive and MC.InventoryOffhandUseActive(self) then return end

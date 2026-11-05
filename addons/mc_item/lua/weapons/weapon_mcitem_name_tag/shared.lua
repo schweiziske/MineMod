@@ -1,8 +1,8 @@
 AddCSLuaFile()
 
 SWEP.Base = "weapon_bmb_item_model_test"
-SWEP.PrintName = "Minecraft Name Tag"
-SWEP.Category = "Minecraft in GMod - Utility"
+SWEP.PrintName = "#item.minecraft.name_tag"
+SWEP.Category = "#mcitem.category.utility"
 SWEP.Spawnable = true
 SWEP.AdminOnly = false
 
@@ -17,7 +17,7 @@ SWEP.MCWeaponDamagePerAttack = 0
 SWEP.MCIsSword = false
 SWEP.MCUseAction = nil
 
-SWEP.Instructions = "Rename the tag in a MineMod anvil, then right click a living NPC. Players cannot be named."
+SWEP.MCInstructionsKey = "mcitem.instructions.name_tag"
 
 function SWEP:SecondaryAttack()
     if MC and MC.InventoryOffhandUseActive and MC.InventoryOffhandUseActive(self) then return end

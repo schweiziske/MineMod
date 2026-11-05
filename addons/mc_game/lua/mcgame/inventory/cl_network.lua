@@ -836,8 +836,7 @@ end
 net.Receive( "mc_inventory_exit_hand", function()
 	local screen = MC.InventoryUI and MC.InventoryUI.Screen
 	if not IsValid( screen ) then return end
-	screen.ErrorText = MC.T( "inventory.no_gmod_weapon" )
-	screen.ErrorUntil = RealTime() + 2.5
+	MC.InventoryUI.SetError( screen, "no_gmod_weapon", nil, "inventory.no_gmod_weapon" )
 end )
 
 function MC.CloseInventorySession()

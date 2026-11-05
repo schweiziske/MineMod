@@ -11,10 +11,7 @@ MC.SV = MC.SV or {}
 local SV = MC.SV
 local C = MC.Config
 
--- Translated with this server's files for the player's language.
-local function L( ply, key, vars )
-	return MC.I18n.Resolve( key, vars, MC.I18n.LanguageForPlayer( ply ) )
-end
+local message = MC.Messages.Spec
 
 local SAVE_DIR = "mc"
 local SAVE_SLOT_DIR = "mc/saves"
@@ -430,7 +427,7 @@ function SV.DeleteSave( slotName )
 		file.Delete( root )
 	end
 	SV.DeleteSaveCovers( slotName )
-	MsgN( "[MC] deleted save \"" .. slotName .. "\"" )
+	MC.Messages.Console( "server.save_deleted", { name = slotName } )
 	if MC.RunEvent then MC.RunEvent( "MC.SaveDeleted", slotName ) end
 	return true
 end
@@ -499,8 +496,8 @@ local function saveCommandName( args )
 end
 
 local function printSaveManagerLine( ply, msg )
-	MsgN( msg )
-	if IsValid( ply ) then ply:PrintMessage( HUD_PRINTCONSOLE, msg ) end
+	MC.Messages.Console( msg )
+	if IsValid( ply ) then MC.Messages.Notify( ply, msg, nil, "console" ) end
 end
 
 local function savePublicConVar()
@@ -526,11 +523,11 @@ SV.CanUseSaves = canUseSaves
 SV.CanDeleteSaves = canDeleteSaves
 
 local function printSaveUseDenied( ply )
-	printSaveManagerLine( ply, "[MC] only admins may list/load/save MC saves (set mc_save_public 1 to allow everyone)" )
+	printSaveManagerLine( ply, message( "server.save_admin_use" ) )
 end
 
 local function printSaveDeleteDenied( ply )
-	printSaveManagerLine( ply, "[MC] only admins may delete MC saves" )
+	printSaveManagerLine( ply, message( "server.save_admin_delete" ) )
 end
 
 local SaveCoverUploads = {}
@@ -669,8 +666,10 @@ end )
 
 local function sendSaveList( ply, message, isError, saves )
 	if not IsValid( ply ) then return end
+	local payload, err = MC.Messages.Encode( message )
+	if not payload then MC.Fault( "save_message_encode", "%s", err ) return end
 	saves = saves or SV.SaveList()
-	local count, estimatedBytes = 0, 32 + #tostring( message or "" )
+	local count, estimatedBytes = 0, 32 + #payload
 	for index = 1, math.min( #saves, MAX_NET_SAVES ) do
 		local save = saves[index]
 		local rowBytes = 24
@@ -689,7 +688,7 @@ local function sendSaveList( ply, message, isError, saves )
 		return math.floor( math.Clamp( tonumber( value ) or 0, 0, 4294967295 ) )
 	end
 	net.Start( "mc_save_list_data" )
-		net.WriteString( message or "" )
+		net.WriteString( payload )
 		net.WriteBool( isError == true )
 		net.WriteUInt( count, 12 )
 		for i = 1, count do
@@ -718,15 +717,15 @@ local function runSaveListCommand( ply )
 	if not canUseSaves( ply ) then printSaveUseDenied( ply ) return end
 	local saves = SV.SaveList()
 	if #saves == 0 then
-		printSaveManagerLine( ply, "[MC] no named saves in DATA:mc/saves, DATA:mc/workshop_saves, or GAME:data_static/mc/saves" )
+		printSaveManagerLine( ply, message( "server.save_list_empty" ) )
 		return
 	end
-	printSaveManagerLine( ply, "[MC] named saves:" )
+	printSaveManagerLine( ply, message( "server.save_list_title" ) )
 	for _, save in ipairs( saves ) do
-		printSaveManagerLine( ply, string.format(
-			"[MC] %s | map=%s | blocks=%d | chunks=%d | saved=%s",
-			tostring( save.name ), tostring( save.map ), save.blocks or 0, save.chunks or 0, tostring( save.savedAtText )
-		) )
+		printSaveManagerLine( ply, message( "server.save_list_row", {
+			name = tostring( save.name ), map = tostring( save.map ), blocks = save.blocks or 0,
+			chunks = save.chunks or 0, time = tostring( save.savedAtText ),
+		} ) )
 	end
 end
 
@@ -736,18 +735,18 @@ concommand.Add( "mc_saves", runSaveListCommand )
 concommand.Add( "mc_load_save", function( ply, _, args )
 	if not canUseSaves( ply ) then printSaveUseDenied( ply ) return end
 	local ok, err = SV.LoadSave( saveCommandName( args ), true )
-	if not ok then printSaveManagerLine( ply, "[MC] load save failed: " .. tostring( err ) ) end
+	if not ok then printSaveManagerLine( ply, message( "server.save_load_failed", { err = tostring( err ) } ) ) end
 end )
 
 concommand.Add( "mc_delete_save", function( ply, _, args )
 	if not canDeleteSaves( ply ) then printSaveDeleteDenied( ply ) return end
 	local ok, err = SV.DeleteSave( saveCommandName( args ) )
-	if not ok then printSaveManagerLine( ply, "[MC] delete save failed: " .. tostring( err ) ) end
+	if not ok then printSaveManagerLine( ply, message( "server.save_delete_failed", { err = tostring( err ) } ) ) end
 end )
 
 net.Receive( "mc_save_list_req", function( _, ply )
 	if not canUseSaves( ply ) then
-		sendSaveList( ply, L( ply, "server.save_admin_list" ), true, {} )
+		sendSaveList( ply, message( "server.save_admin_list" ), true, {} )
 		return
 	end
 	sendSaveList( ply )
@@ -764,19 +763,19 @@ net.Receive( "mc_save_action", function( _, ply )
 	local ok, err
 	if action == "save" then
 		if not canUseSaves( ply ) then
-			sendSaveList( ply, L( ply, "server.save_admin_save" ), true, {} )
+			sendSaveList( ply, message( "server.save_admin_save" ), true, {} )
 			return
 		end
 		ok, err = SV.SaveNamed( slotName, cover )
 	elseif action == "load" then
 		if not canUseSaves( ply ) then
-			sendSaveList( ply, L( ply, "server.save_admin_load" ), true, {} )
+			sendSaveList( ply, message( "server.save_admin_load" ), true, {} )
 			return
 		end
 		ok, err = SV.LoadSave( slotName, true )
 	elseif action == "delete" then
 		if not canDeleteSaves( ply ) then
-			sendSaveList( ply, L( ply, "server.save_admin_delete" ), true, SV.SaveList() )
+			sendSaveList( ply, message( "server.save_admin_delete" ), true, SV.SaveList() )
 			return
 		end
 		ok, err = SV.DeleteSave( slotName )
@@ -785,8 +784,8 @@ net.Receive( "mc_save_action", function( _, ply )
 	end
 
 	if ok then
-		sendSaveList( ply, L( ply, "server.action_done", { action = action } ) )
+		sendSaveList( ply, message( "server.action_done", { action = message( "server.action." .. action ) } ) )
 	else
-		sendSaveList( ply, L( ply, "server.action_failed", { err = tostring( err ) } ), true )
+		sendSaveList( ply, message( "server.action_failed", { err = tostring( err ) } ), true )
 	end
 end )

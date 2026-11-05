@@ -151,6 +151,7 @@ local CLIENT_FILES = {
 	"mcgame/inventory/cl_furnaces.lua",
 	"mcgame/inventory/cl_brewing.lua",
 	"mcgame/inventory/ui/cl_theme.lua",
+	"mcgame/inventory/ui/cl_localization.lua",
 	"mcgame/item/cl_model_resolver.lua",
 	"mcgame/inventory/ui/cl_entry.lua",
 	"mcgame/inventory/ui/cl_item_renderer.lua",

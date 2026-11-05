@@ -11,7 +11,7 @@ if SERVER then include("mcitem/potions/sv_apply.lua") end
 
 SWEP.Base = "weapon_mcitem_potion_base"
 SWEP.PrintName = "Minecraft Drinkable Potion Base"
-SWEP.Category = "Minecraft in GMod - Potions"
+SWEP.Category = "#mcitem.category.potions"
 SWEP.Spawnable = false
 SWEP.AdminOnly = false
 

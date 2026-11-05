@@ -40,9 +40,10 @@
     "undo_failed": "Undo failed: {err}",
     "undo_restored": "Structure restored to its original spot",
     "undo_text": "Undo MC block structure (restore in place)",
-    "use_frozen": "  [frozen]",
     "use_info": "Block structure: {n} blocks  durability {hp}",
-    "use_invincible": "invulnerable",
-    "use_owner": "  owner {name}"
+    "use_info_frozen": "Block structure: {n} blocks  durability {hp}  [frozen]",
+    "use_info_owned": "Block structure: {n} blocks  durability {hp}  owner {name}",
+    "use_info_owned_frozen": "Block structure: {n} blocks  durability {hp}  owner {name}  [frozen]",
+    "use_invincible": "invulnerable"
   }
 }

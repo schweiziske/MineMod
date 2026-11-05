@@ -180,8 +180,7 @@ function OFFER_BUTTON:DoClick()
 	if not IsValid( self.Screen ) or self.OfferIndex == nil then return end
 	local ok, err = MC.RequestMerchantSelection( self.OfferIndex )
 	if not ok then
-		self.Screen.ErrorText = tostring( err or "merchant_selection_failed" )
-		self.Screen.ErrorUntil = RealTime() + 2.5
+		UI.SetError( self.Screen, err or "merchant_selection_failed" )
 	end
 end
 
@@ -284,8 +283,7 @@ function PANEL:ApplyMerchantState( merchantState )
 	local maximum = math.max( 0, #( self.MerchantState and self.MerchantState.offers or {} ) - VISIBLE_OFFERS )
 	self.MerchantScrollOffset = math.Clamp( self.MerchantScrollOffset or 0, 0, maximum )
 	if self.MerchantState and self.MerchantState.error then
-		self.ErrorText = self.MerchantState.error
-		self.ErrorUntil = RealTime() + 2.5
+		UI.SetError( self, self.MerchantState.error )
 	end
 	self:LayoutSpecialControls()
 end

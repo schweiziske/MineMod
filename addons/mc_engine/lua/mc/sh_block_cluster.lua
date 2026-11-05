@@ -14,6 +14,8 @@
 
 MC = MC or {}
 
+if CLIENT then MC.I18n.BindPhrase( "mc.cluster.undo_text", "cluster.undo_text" ) end
+
 -- Engine-style rendering extras (VertexLit engine lighting, RTT shadow hack,
 -- color tool support, spawn FX) collected behind one switch after playtesting
 -- hit too many physgun-interaction bugs. false = the stable classic look

@@ -84,10 +84,9 @@ for _, material in ipairs(MATERIALS) do
 
         local definition = {
             Base = "weapon_bmb_item_model_test",
-            PrintName = "Minecraft " .. material.name .. " " .. tool.name,
-            Category = "Minecraft in GMod - Items",
-            Instructions = "Left click: attack in the air / on a mob, mining swing on a block."
-                .. (tool.useOn and " Right click: " .. tool.useOn .. "." or ""),
+            PrintName = "#item.minecraft." .. itemId,
+            Category = "#mcitem.category.items",
+            MCInstructionsKey = "mcitem.instructions." .. (tool.useAction or "attack"),
             Spawnable = true,
             AdminOnly = false,
             WorldModel = itemModelPath(itemId),
@@ -172,9 +171,9 @@ for _, spear in ipairs(SPEARS) do
     local itemId = spear.id .. "_spear"
     weapons.Register({
         Base = "weapon_mcitem_spear_base",
-        PrintName = "Minecraft " .. spear.name .. " Spear",
-        Category = "Minecraft in GMod - Items",
-        Instructions = "Left click: fully charged piercing stab. Hold right click: kinetic spear attack.",
+        PrintName = "#item.minecraft." .. itemId,
+        Category = "#mcitem.category.items",
+        MCInstructionsKey = "mcitem.instructions.spear",
         Spawnable = true,
         AdminOnly = false,
         WorldModel = itemModelPath(itemId),

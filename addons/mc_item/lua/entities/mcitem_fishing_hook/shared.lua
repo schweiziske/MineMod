@@ -6,7 +6,7 @@ include("mcitem/fishing/sh_core.lua")
 
 ENT.Type = "anim"
 ENT.Base = "base_anim"
-ENT.PrintName = "Minecraft Fishing Bobber"
+ENT.PrintName = "#mcitem.entity.fishing_hook"
 ENT.Spawnable = false
 ENT.RenderGroup = RENDERGROUP_TRANSLUCENT
 ENT.MCProjectile = true

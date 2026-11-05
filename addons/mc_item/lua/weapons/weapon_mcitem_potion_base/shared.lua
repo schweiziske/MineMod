@@ -9,7 +9,7 @@ include("mcitem/potions/sh_audio.lua")
 
 SWEP.Base = "weapon_bmb_item_model_test"
 SWEP.PrintName = "Minecraft Potion Base"
-SWEP.Category = "Minecraft in GMod - Potions"
+SWEP.Category = "#mcitem.category.potions"
 SWEP.Spawnable = false
 SWEP.AdminOnly = false
 

@@ -40,9 +40,10 @@
     "undo_failed": "撤销失败: {err}",
     "undo_restored": "已把结构放回原位",
     "undo_text": "撤销 MC 方块结构 (放回原位)",
-    "use_frozen": "  [已冻结]",
     "use_info": "方块结构: {n} 方块  耐久 {hp}",
-    "use_invincible": "无敌",
-    "use_owner": "  主人 {name}"
+    "use_info_frozen": "方块结构: {n} 方块  耐久 {hp}  [已冻结]",
+    "use_info_owned": "方块结构: {n} 方块  耐久 {hp}  主人 {name}",
+    "use_info_owned_frozen": "方块结构: {n} 方块  耐久 {hp}  主人 {name}  [已冻结]",
+    "use_invincible": "无敌"
   }
 }

@@ -1,0 +1,6 @@
+{
+  "title": "MineMod Engine",
+  "type": "tool",
+  "tags": ["build", "fun"],
+  "ignore": ["AGENTS.md", "*.md", "**/*.md"]
+}

@@ -5,7 +5,7 @@
 MC = MC or {}
 
 local function L( key, vars )
-	return MC.T( key, vars )
+	return MC.I18n.Resolve( key, vars )
 end
 
 local PRESET_COVER_DIR = "mc/preset_covers"
@@ -133,7 +133,11 @@ end
 
 local function setStatus( frame, message, isError )
 	if not IsValid( frame ) or not IsValid( frame.StatusLabel ) then return end
-	frame.StatusLabel:SetText( message or "" )
+	frame.StatusSpec = type( message ) == "table" and message or nil
+	frame.StatusIsError = isError
+	local text = frame.StatusSpec and MC.I18n.Resolve( frame.StatusSpec ) or message or ""
+	frame.StatusLabel:SetText( text )
+	frame.StatusLabel:SetTooltip( text ~= "" and text or nil )
 	frame.StatusLabel:SetTextColor( isError and UI.error or UI.textDim )
 end
 
@@ -732,7 +736,7 @@ local function infoLine( x, y, label, value, color )
 	MC.DrawFittedText( tostring( value or "" ), "mc_hud", { "mc_hud_small", "mc_hud_fit_16" }, x + 92, y - 2, color or UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, 390 )
 end
 
-function MC.OpenPresetManager()
+function MC.OpenPresetManager( viewState )
 	if IsValid( MC.PresetManagerFrame ) then MC.PresetManagerFrame:Remove() end
 
 	local fr = vgui.Create( "DFrame" )
@@ -745,9 +749,10 @@ function MC.OpenPresetManager()
 	fr:MakePopup()
 	fr:SetKeyboardInputEnabled( true )
 	fr:DockPadding( 12, 68, 12, 12 )
-	fr.MapFilter = "*"
-	fr.GroupFilter = "*"
-	fr.SearchText = ""
+	fr.MapFilter = viewState and viewState.MapFilter or "*"
+	fr.GroupFilter = viewState and viewState.GroupFilter or "*"
+	fr.SearchText = viewState and viewState.SearchText or ""
+	fr.SelectedPreset = viewState and viewState.SelectedPreset or nil
 	fr.Paint = function( _, w, h )
 		surface.SetDrawColor( UI.frame )
 		surface.DrawRect( 0, 0, w, h )
@@ -787,9 +792,10 @@ function MC.OpenPresetManager()
 	local nameEntry = vgui.Create( "DTextEntry", header )
 	nameEntry:SetPos( 14, 32 )
 	nameEntry:SetSize( 480, 28 )
-	nameEntry:SetValue( generatedPresetName() )
+	nameEntry:SetValue( viewState and viewState.NameText or generatedPresetName() )
 	MC.LibraryStyleTextEntry( nameEntry, L( "preset.new_name" ) )
 	nameEntry:SetEnabled( canManage )
+	fr.NameEntry = nameEntry
 
 	local create = vgui.Create( "DButton", header )
 	create:SetPos( 506, 32 )
@@ -872,6 +878,7 @@ function MC.OpenPresetManager()
 	search:DockMargin( 10, 44, 10, 8 )
 	search:SetTall( 32 )
 	MC.LibraryStyleTextEntry( search, L( "library.search" ) )
+	search:SetValue( fr.SearchText )
 	search.OnValueChange = function( _, value )
 		fr.SearchText = value or ""
 		if fr.RefreshPresetRows then fr:RefreshPresetRows( "", false, true ) end
@@ -937,9 +944,9 @@ function MC.OpenPresetManager()
 	load:SetEnabled( canManage )
 	load.DoClick = function()
 		local preset = fr.SelectedPreset
-		if not preset then setStatus( fr, L( "preset.select_first" ), true ) return end
+		if not preset then setStatus( fr, MC.Messages.Spec( "preset.select_first" ), true ) return end
 		requestPresetData( preset.name )
-		setStatus( fr, L( "preset.loading_projection" ) )
+		setStatus( fr, MC.Messages.Spec( "preset.loading_projection" ) )
 		fr:Close()
 	end
 
@@ -1003,7 +1010,7 @@ function MC.OpenPresetManager()
 			add.DoClick = function()
 				Derma_StringRequest( L( "library.new_group" ), L( "library.group_name" ), "", function( name )
 					local id = MC.LibraryCreateGroup( name )
-					if not id then setStatus( fr, L( "library.group_exists" ), true ) return end
+					if not id then setStatus( fr, MC.Messages.Spec( "library.group_exists" ), true ) return end
 					fr.GroupFilter = "*"
 					fr:RefreshPresetRows( "", false )
 				end )
@@ -1128,11 +1135,17 @@ function MC.OpenPresetManager()
 		setStatus( self, message ~= "" and message or countText, isError )
 	end
 
-	MC.RequestPresetList()
+	if viewState then
+		fr:RefreshPresetRows( viewState.StatusSpec, viewState.StatusIsError )
+	else
+		MC.RequestPresetList()
+	end
 end
 
 net.Receive( "mc_preset_list_data", function()
-	local message = net.ReadString()
+	local message, messageError = MC.Messages.Read()
+	if messageError then return end
+	message = message or ""
 	local isError = net.ReadBool()
 	local count = net.ReadUInt( 12 )
 	local presets = {}
@@ -1153,7 +1166,7 @@ net.Receive( "mc_preset_list_data", function()
 	if IsValid( MC.PresetManagerFrame ) and MC.PresetManagerFrame.RefreshPresetRows then
 		MC.PresetManagerFrame:RefreshPresetRows( message, isError )
 	elseif message ~= "" then
-		chat( message )
+		chat( MC.I18n.Resolve( message ) )
 	end
 end )
 
@@ -1170,12 +1183,17 @@ end )
 
 net.Receive( "mc_preset_data", function()
 	local name = net.ReadString()
-	local message = net.ReadString()
+	local message, messageError = MC.Messages.Read()
+	if messageError then return end
 	local isError = net.ReadBool()
 	local expectedParts = net.ReadUInt( 16 )
 	local totalBytes = net.ReadUInt( 32 )
 	if isError or expectedParts < 1 or totalBytes < 1 then
-		chat( L( "preset.load_failed", { message = tostring( message ) } ) )
+		local failure = MC.Messages.Spec( "preset.load_failed", {
+			message = message or { key = "server.preset_load_unknown" },
+		} )
+		setStatus( MC.PresetManagerFrame, failure, true )
+		chat( MC.I18n.Resolve( failure ) )
 		return
 	end
 	PresetDataBuffers[name] = {
@@ -1293,8 +1311,13 @@ end )
 if MC.RegisterLanguageChanged then
 	MC.RegisterLanguageChanged( "mc_preset_ui", function()
 		if IsValid( MC.PresetManagerFrame ) then
-			MC.PresetManagerFrame:Remove()
-			MC.OpenPresetManager()
+			local frame = MC.PresetManagerFrame
+			MC.OpenPresetManager( {
+				MapFilter = frame.MapFilter, GroupFilter = frame.GroupFilter,
+				SearchText = frame.SearchText, SelectedPreset = frame.SelectedPreset,
+				NameText = frame.NameEntry:GetValue(),
+				StatusSpec = frame.StatusSpec, StatusIsError = frame.StatusIsError,
+			} )
 		end
 	end )
 end

@@ -19,13 +19,14 @@ Book.CATEGORY_ORDER = Book.CATEGORY_ORDER or {
 	"redstone",
 }
 
-Book.CATEGORY_TITLES = Book.CATEGORY_TITLES or {
-	building = "Building Blocks",
-	equipment = "Equipment",
-	misc = "Miscellaneous",
-	redstone = "Redstone",
-	food = "Food",
-	blocks = "Blocks",
+Book.CATEGORY_KEYS = {
+	search = "recipe_book.search",
+	building = "recipe_book.category.building",
+	equipment = "recipe_book.category.equipment",
+	misc = "recipe_book.category.misc",
+	redstone = "recipe_book.category.redstone",
+	food = "recipe_book.category.food",
+	blocks = "recipe_book.category.blocks",
 }
 
 local function lower( value )

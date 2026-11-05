@@ -8,7 +8,7 @@ if SERVER then include("mcitem/buckets/sv_use.lua") end
 
 SWEP.Base = "weapon_bmb_item_model_test"
 SWEP.PrintName = "Minecraft Bucket Base"
-SWEP.Category = "Minecraft in GMod - Items"
+SWEP.Category = "#mcitem.category.items"
 SWEP.Spawnable = false
 SWEP.AdminOnly = false
 SWEP.MCAttackDamage = 1

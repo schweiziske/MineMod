@@ -1,5 +1,6 @@
 {
 	"title": "Minecraft in GMod - Survival",
 	"type": "tool",
-	"tags": [ "build", "fun" ]
+	"tags": [ "build", "fun" ],
+	"ignore": [ "*.md", "**/*.md", "materials/mc/misc/enchanted_glint_armor.png.mcmeta" ]
 }

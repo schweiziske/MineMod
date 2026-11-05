@@ -7,45 +7,31 @@ MCITEM.Potions = MCITEM.Potions or {}
 
 local Potions = MCITEM.Potions
 
-Potions.WeaponCategory = "Minecraft in GMod - Potions"
-
-local ROMAN = { "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X" }
+Potions.WeaponCategory = "#mcitem.category.potions"
 
 local BOTTLES = {
     drinkable = {
         classPrefix = "weapon_mcitem_potion_",
         base = "weapon_mcitem_potion_drinkable",
-        instruction = "Left click: attack or mine. Hold right click: drink.",
+        instructionKey = "mcitem.instructions.potion_drink",
+        item = "potion",
     },
     splash = {
         classPrefix = "weapon_mcitem_splash_potion_",
         base = "weapon_mcitem_potion_throwable",
-        instruction = "Left click: attack or mine. Right click: throw.",
+        instructionKey = "mcitem.instructions.potion_throw",
+        item = "splash_potion",
     },
     lingering = {
         classPrefix = "weapon_mcitem_lingering_potion_",
         base = "weapon_mcitem_potion_throwable",
-        instruction = "Left click: attack or mine. Right click: throw.",
+        instructionKey = "mcitem.instructions.potion_throw",
+        item = "lingering_potion",
     },
 }
 
-local function bottleDisplayName(bottleType, definition)
-    local name = definition.name or definition.id
-    if bottleType == "drinkable" then return name end
-
-    local prefix = bottleType == "splash" and "Splash" or "Lingering"
-    if definition.id == "water" then return prefix .. " Water Bottle" end
-
-    -- en_us.json uses "Awkward Splash Potion" / "Awkward Lingering
-    -- Potion" (and the same ordering for Mundane/Thick), while effect-bearing
-    -- bottles use "Splash/Lingering Potion of ...".
-    if definition.id == "awkward" or definition.id == "mundane" or definition.id == "thick" then
-        return string.gsub(name, " Potion$", " " .. prefix .. " Potion")
-    end
-    if string.StartWith(name, "Potion ") then
-        return prefix .. " " .. name
-    end
-    return prefix .. " " .. name
+local function bottleDisplayName(bottleType, definition, locale)
+    return MC.T("item.minecraft." .. BOTTLES[bottleType].item .. ".effect." .. definition.baseName, nil, locale)
 end
 
 local function formatTickDuration(ticks)
@@ -59,42 +45,47 @@ local function formatTickDuration(ticks)
     return string.format("%02d:%02d", minutes, seconds)
 end
 
-local function effectDescription(effect)
+local function effectDescription(effect, locale)
     local definition = Potions.EffectDefinition and Potions.EffectDefinition(effect.id) or nil
-    local name = definition and definition.name or tostring(effect.id or "Unknown Effect")
+    local name = MC.T("effect.minecraft." .. effect.id:gsub("^minecraft:", ""), nil, locale)
     local amplifier = math.max(0, math.floor(tonumber(effect.amplifier) or 0))
-    if amplifier >= 1 and amplifier <= 9 then name = name .. " " .. ROMAN[amplifier + 1] end
-    if definition and definition.instant == true then return name .. " (Instant)" end
+    if amplifier >= 1 then
+        name = MC.T("potion.withAmplifier", { name, MC.T("enchantment.level." .. (amplifier + 1), nil, locale) }, locale)
+    end
+    if definition and definition.instant == true then return MC.T("mcitem.potion.instant", { effect = name }, locale) end
     local duration = tonumber(effect.durationTicks) or 0
-    if duration == -1 then return name .. " (Infinite)" end
+    if duration == -1 then return MC.T("potion.withDuration", { name, MC.T("effect.duration.infinite", nil, locale) }, locale) end
     -- Java PotionContents.addPotionTooltip omits a duration when the effect
     -- ends within 20 ticks; instant effects therefore never become "00:00".
     if duration <= 20 then return name end
-    return name .. " (" .. formatTickDuration(duration) .. ")"
+    return MC.T("potion.withDuration", { name, formatTickDuration(duration) }, locale)
 end
 
-function Potions.FormatEffectSummary(definition)
+function Potions.FormatEffectSummary(definition, locale)
     if not istable(definition) or not istable(definition.effects) or #definition.effects == 0 then
-        return "No Effects"
+        return MC.T("effect.none", nil, locale)
     end
     local summaries = {}
-    for _, effect in ipairs(definition.effects) do summaries[#summaries + 1] = effectDescription(effect) end
-    return table.concat(summaries, "; ")
+    for _, effect in ipairs(definition.effects) do summaries[#summaries + 1] = effectDescription(effect, locale) end
+    return table.concat(summaries, MC.T("mcitem.potion.separator", nil, locale))
 end
 
-function Potions.WeaponDisplayName(bottleType, definition)
+function Potions.WeaponDisplayName(bottleType, definition, locale)
     if not BOTTLES[bottleType] or not istable(definition) then return nil end
-    local name = "Minecraft " .. bottleDisplayName(bottleType, definition)
+    local name = bottleDisplayName(bottleType, definition, locale)
     if istable(definition.effects) and #definition.effects > 0 then
-        name = name .. " | " .. Potions.FormatEffectSummary(definition)
+        name = MC.T("mcitem.potion.name_with_effects", { name = name, effects = Potions.FormatEffectSummary(definition, locale) }, locale)
     end
     return name
 end
 
-function Potions.WeaponInstructions(bottleType, definition)
+function Potions.WeaponInstructions(bottleType, definition, locale)
     local bottle = BOTTLES[bottleType]
     if not bottle or not istable(definition) then return nil end
-    return bottle.instruction .. " Effects: " .. Potions.FormatEffectSummary(definition)
+    return MC.T("mcitem.potion.instructions", {
+        action = MC.T(bottle.instructionKey, nil, locale),
+        effects = Potions.FormatEffectSummary(definition, locale),
+    }, locale)
 end
 
 function Potions.WeaponClass(bottleType, potionId)
@@ -114,9 +105,9 @@ function Potions.RegisterWeapons()
             local className = Potions.WeaponClass(bottleType, definition.id)
             weapons.Register({
                 Base = bottle.base,
-                PrintName = Potions.WeaponDisplayName(bottleType, definition),
+                PrintName = "#mcitem.potion." .. bottleType .. "." .. definition.id,
                 Category = Potions.WeaponCategory,
-                Instructions = Potions.WeaponInstructions(bottleType, definition),
+                MCInstructionsKey = bottle.instructionKey,
                 Spawnable = true,
                 AdminOnly = false,
                 WorldModel = "models/mcgm/" .. modelId .. "/" .. modelId .. ".mdl",

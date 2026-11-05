@@ -1,0 +1,4 @@
+{
+  "locale": "en_us",
+  "entries": { "weapon_equip_failed": "Cannot equip {class} ({code})." }
+}

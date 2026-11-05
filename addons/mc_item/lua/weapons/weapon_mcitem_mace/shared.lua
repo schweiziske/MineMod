@@ -8,9 +8,9 @@ include("mcitem/sh_ranged.lua")
 if SERVER then util.AddNetworkString("MCITEM_MaceSmashParticle") end
 
 SWEP.Base = "weapon_bmb_item_model_test"
-SWEP.PrintName = "Minecraft Mace"
-SWEP.Category = "Minecraft in GMod - Items"
-SWEP.Instructions = "Primary: attack. Falling more than 1.5 blocks performs a smash attack."
+SWEP.PrintName = "#item.minecraft.mace"
+SWEP.Category = "#mcitem.category.items"
+SWEP.MCInstructionsKey = "mcitem.instructions.mace"
 SWEP.Spawnable = true
 SWEP.AdminOnly = false
 SWEP.WorldModel = "models/mcgm/mace/mace.mdl"

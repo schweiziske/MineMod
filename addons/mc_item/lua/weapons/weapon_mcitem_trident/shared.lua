@@ -21,9 +21,9 @@ else
 end
 
 SWEP.Base = "weapon_bmb_item_model_test"
-SWEP.PrintName = "Minecraft Trident"
-SWEP.Category = "Minecraft in GMod - Items"
-SWEP.Instructions = "Left click: attack / mining swing. Hold right click for 10 ticks, then release to throw."
+SWEP.PrintName = "#item.minecraft.trident"
+SWEP.Category = "#mcitem.category.items"
+SWEP.MCInstructionsKey = "mcitem.instructions.trident"
 SWEP.Spawnable = true
 SWEP.AdminOnly = false
 -- ThrownTridentRenderer / 手持都用 **TridentModel**（真 3D 模型，贴图

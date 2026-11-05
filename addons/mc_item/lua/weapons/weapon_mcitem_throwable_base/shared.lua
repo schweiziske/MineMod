@@ -14,7 +14,7 @@ if SERVER then include("mcitem/throwables/sv_throw.lua") end
 
 SWEP.Base = "weapon_bmb_item_model_test"
 SWEP.PrintName = "Minecraft Throwable Base"
-SWEP.Category = "Minecraft in GMod - Throwables"
+SWEP.Category = "#mcitem.category.throwables"
 SWEP.Spawnable = false
 SWEP.AdminOnly = false
 

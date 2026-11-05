@@ -18,7 +18,7 @@ end
 
 SWEP.Base = "weapon_bmb_item_model_test"
 SWEP.PrintName = "Minecraft Food Base"
-SWEP.Category = "Minecraft in GMod - Food"
+SWEP.Category = "#mcitem.category.food"
 SWEP.Spawnable = false
 SWEP.AdminOnly = false
 

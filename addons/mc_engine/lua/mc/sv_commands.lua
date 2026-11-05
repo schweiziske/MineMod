@@ -20,21 +20,10 @@ local function nextFillJobId()
 	return NextFillJobId
 end
 
--- Translated with this server's files for the player's language.
-local function L( ply, key, vars )
-	return MC.I18n.Resolve( key, vars, MC.I18n.LanguageForPlayer( ply ) )
-end
+local message = MC.Messages.Spec
 
 local function chat( ply, msg )
-	if SV.Chat then
-		SV.Chat( ply, msg )
-		if IsValid( ply ) then ply:PrintMessage( HUD_PRINTCONSOLE, "[MC] " .. msg ) end
-	elseif IsValid( ply ) then
-		ply:ChatPrint( "[MC] " .. msg )
-		ply:PrintMessage( HUD_PRINTCONSOLE, "[MC] " .. msg )
-	else
-		MsgN( "[MC] " .. msg )
-	end
+	MC.Messages.Reply( ply, msg, nil, "both" )
 end
 
 local function trimArg( s )
@@ -59,11 +48,11 @@ local function fillAimText( ply )
 	if not IsValid( ply ) or not MC.PlayerBlockAim then return nil end
 	local hit = MC.PlayerBlockAim( ply )
 	if not hit or not hit.bx then return nil end
-	return L( ply, "server.fill_aim", { x = hit.bx, y = hit.by, z = hit.bz } )
+	return message( "server.fill_aim", { x = hit.bx, y = hit.by, z = hit.bz } )
 end
 
 local function sendFillUsage( ply )
-	chat( ply, L( ply, "server.fill_usage" ) )
+	chat( ply, message( "server.fill_usage" ) )
 	-- local aim = fillAimText( ply )
 	-- if aim then chat( ply, aim ) end
 end
@@ -139,8 +128,10 @@ local function scanFillJob( job )
 	if job.cellCount <= 0 then return "empty" end
 	job.phase = "apply"
 	job.index = 1
-	chat( job.ply, string.format( "[fill] queued %d changed blocks; batch=%d cells/%d chunks every %.2fs",
-		job.cellCount, fillBatchCells(), fillBatchChunks(), fillBatchInterval() ) )
+	chat( job.ply, message( "server.fill_queued", {
+		count = job.cellCount, cells = fillBatchCells(), chunks = fillBatchChunks(),
+		seconds = string.format( "%.2f", fillBatchInterval() ),
+	} ) )
 	return "ready"
 end
 
@@ -195,7 +186,7 @@ local function enqueueFillJob( ply, spec )
 		batches = 0,
 		physKeys = {},
 	}
-	chat( ply, string.format( "[fill] scanning %d blocks in paced server batches", spec.volume ) )
+	chat( ply, message( "server.fill_scanning", { count = spec.volume } ) )
 end
 
 -- Kept only so a hot-reloaded server can still parse old queued-job helpers;
@@ -213,10 +204,10 @@ if false then timer.Create( "mc_fill_jobs", 0.05, 0, function()
 		job.scanMS = job.scanMS + ( SysTime() - scanStarted ) * 1000
 		if scanState == "max_blocks" then
 			table.remove( FillJobs, 1 )
-			chat( job.ply, L( job.ply, "server.fill_max_blocks" ) )
+			chat( job.ply, message( "server.fill_max_blocks" ) )
 		elseif scanState == "empty" then
 			table.remove( FillJobs, 1 )
-			chat( job.ply, L( job.ply, "server.filled", { count = 0 } ) )
+			chat( job.ply, message( "server.filled", { count = 0 } ) )
 		end
 		return
 	end
@@ -251,7 +242,7 @@ if false then timer.Create( "mc_fill_jobs", 0.05, 0, function()
 			job.id, job.volume or 0, job.cellCount or 0, job.changed or 0, job.batches or 0,
 			job.scanMS or 0, job.applyMS or 0, ( SysTime() - ( job.startedAt or SysTime() ) ) * 1000
 		) )
-		chat( job.ply, L( job.ply, "server.filled", { count = job.changed or 0 } ) )
+		chat( job.ply, message( "server.filled", { count = job.changed or 0 } ) )
 	end
 end ) end
 
@@ -540,33 +531,33 @@ local function runFill( ply, args )
 		return
 	end
 	if parseErr == "state" then
-		chat( ply, L( ply, "server.invalid_state", { block = blockArg } ) )
+		chat( ply, message( "server.invalid_state", { block = blockArg } ) )
 		return
 	end
 	local stateId, stateExact, stateError = MC.StateFromLegacy( id, id == 0 and 0 or orient )
 	if stateId == nil or stateExact ~= true then
-		chat( ply, L( ply, "server.invalid_state", { block = blockArg or stateError or "?" } ) )
+		chat( ply, message( "server.invalid_state", { block = blockArg or stateError or "?" } ) )
 		return
 	end
 
 	local result, fillError = SV.FillVolume( x1, y1, z1, x2, y2, z2, stateId, { actor = ply } )
 	if not result then
 		if fillError == "world_limit" then
-			chat( ply, L( ply, "server.world_limit" ) )
+			chat( ply, message( "server.world_limit" ) )
 		elseif fillError == "fill_too_large" then
 			local volume = ( math.abs( math.floor( x2 ) - math.floor( x1 ) ) + 1 )
 				* ( math.abs( math.floor( y2 ) - math.floor( y1 ) ) + 1 )
 				* ( math.abs( math.floor( z2 ) - math.floor( z1 ) ) + 1 )
 			local fillMax = C.FillMax and C.FillMax:GetInt() or 32768
-			chat( ply, L( ply, "server.fill_too_large", { volume = volume, max = fillMax } ) )
+			chat( ply, message( "server.fill_too_large", { volume = volume, max = fillMax } ) )
 		elseif fillError == "max_blocks" then
-			chat( ply, L( ply, "server.fill_max_blocks" ) )
+			chat( ply, message( "server.fill_max_blocks" ) )
 		else
-			chat( ply, "Fill failed: " .. tostring( fillError or "unknown_error" ) )
+			chat( ply, message( "server.fill_failed", { err = tostring( fillError or "unknown_error" ) } ) )
 		end
 		return
 	end
-	chat( ply, L( ply, "server.filled", { count = result.changed or 0 } ) )
+	chat( ply, message( "server.filled", { count = result.changed or 0 } ) )
 end
 
 hook.Add( "PlayerSay", "mc_fill_command", function( ply, text )

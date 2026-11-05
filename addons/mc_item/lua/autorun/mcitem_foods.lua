@@ -31,11 +31,9 @@ for _, definition in ipairs(MCITEM.Food.Definitions) do
     local modelId = definition.modelId or itemId
     weapons.Register({
         Base = "weapon_mcitem_food_base",
-        PrintName = "Minecraft " .. definition.name,
-        Category = "Minecraft in GMod - Food",
-        Instructions = definition.id == "milk_bucket"
-            and "Left click: attack or mine. Hold right click: drink and clear all status effects."
-            or "Left click: attack or mine. Hold right click: consume.",
+        PrintName = "#item.minecraft." .. definition.id,
+        Category = "#mcitem.category.food",
+        MCInstructionsKey = definition.id == "milk_bucket" and "mcitem.instructions.milk" or "mcitem.instructions.food",
         Spawnable = true,
         AdminOnly = false,
         WorldModel = "models/mcgm/" .. modelId .. "/" .. modelId .. ".mdl",

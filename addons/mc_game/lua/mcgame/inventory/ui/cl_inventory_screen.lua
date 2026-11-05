@@ -401,8 +401,7 @@ function ENCHANTING_BUTTON:DoClick()
 	if ok then
 		UI.PlayButtonSound()
 	elseif IsValid( self.Screen ) then
-		self.Screen.ErrorText = tostring( errorCode or "enchantment_unavailable" )
-		self.Screen.ErrorUntil = RealTime() + 2.5
+		UI.SetError( self.Screen, errorCode or "enchantment_unavailable" )
 	end
 end
 
@@ -613,8 +612,7 @@ function PANEL:Init()
 	hook.Add( "MC.InventorySelectionChanged", self, function( panel ) panel:RefreshInventorySlots() end )
 	hook.Add( "MC.InventoryActionResult", self, function( panel, _, accepted, errorCode )
 		if accepted then return end
-		panel.ErrorText = tostring( errorCode ~= "" and errorCode or "inventory_action_rejected" )
-		panel.ErrorUntil = RealTime() + 2.5
+		UI.SetError( panel, errorCode ~= "" and errorCode or "inventory_action_rejected" )
 	end )
 	hook.Add( "MC.CreativeStackProvidersChanged", self, function( panel )
 		if not panel.Creative then return end

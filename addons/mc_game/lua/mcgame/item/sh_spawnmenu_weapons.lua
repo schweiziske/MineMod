@@ -56,7 +56,7 @@ local function acquire( ply, class )
 		local now = CurTime()
 		if now >= ( deniedAt[ply] or 0 ) then
 			deniedAt[ply] = now + 1
-			ply:ChatPrint( "[MC] Cannot equip " .. class .. ": " .. reason )
+			MC.Messages.Notify( ply, "inventory.weapon_equip_failed", { class = class, code = reason } )
 		end
 		return nil, reason
 	end

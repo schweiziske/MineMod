@@ -1,0 +1,15 @@
+{
+  "locale": "en_us",
+  "entries": {
+    "instructions.bow": "Hold right click to draw; release to fire. Left click: attack / mining swing.",
+    "instructions.crossbow": "Hold right click to load; right click again to fire. Left click: attack / mining swing.",
+    "instructions.fishing_rod": "Left click: attack or mine. Right click: cast; right click again to retrieve the hook, hooked entity, or fishing loot.",
+    "instructions.flint_and_steel": "Left click: attack or mine. Right click: ignite a block face; soul sand and soul soil create soul fire.",
+    "instructions.trident": "Left click: attack / mining swing. Hold right click for 10 ticks, then release to throw.",
+    "instructions.totem_of_undying": "Hold it in the selected inventory hand or offhand to survive lethal damage.",
+    "instructions.shield": "Hold right click to block attacks after the vanilla 0.25 second raise delay. Axes disable blocking for 5 seconds. Left click attacks or mines while lowered.",
+    "instructions.name_tag": "Rename the tag in a MineMod anvil, then right click a living NPC. Players cannot be named.",
+    "instructions.shears": "Left click: attack or mine. Right click: shear a ready BMB sheep/Bogged or stop a growing vine head at age 25.",
+    "instructions.mace": "Primary: attack. Falling more than 1.5 blocks performs a smash attack."
+  }
+}

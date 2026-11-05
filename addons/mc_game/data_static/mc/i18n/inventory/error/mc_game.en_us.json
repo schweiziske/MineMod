@@ -1,0 +1,33 @@
+{
+  "locale": "en_us",
+  "entries": {
+    "action_failed": "Unable to complete this action ({code}).",
+    "inventory_action_rejected": "The server rejected this inventory action.",
+    "inventory_not_loaded": "Your inventory is not ready yet.",
+    "enchantment_unavailable": "This enchantment is unavailable.",
+    "recipe_place_failed": "Unable to place the recipe ingredients.",
+    "recipe_ingredients_missing": "You do not have enough ingredients.",
+    "recipe_cursor_not_empty": "Put down the item on your cursor first.",
+    "recipe_does_not_fit": "This recipe needs a larger crafting grid.",
+    "crafting_inventory_full": "There is not enough inventory space.",
+    "no_crafting_result": "These ingredients do not produce an item.",
+    "result_cursor_different_item": "Put down the item on your cursor first.",
+    "result_cursor_full": "The stack on your cursor is full.",
+    "result_hotbar_full": "The selected hotbar stack is full.",
+    "result_hotbar_occupied": "The selected hotbar slot is occupied.",
+    "merchant_selection_failed": "Unable to select this trade.",
+    "merchant_offer_not_satisfied": "The required payment is missing or this trade is unavailable.",
+    "merchant_payment_changed": "The trade payment changed. Try again.",
+    "merchant_revision_mismatch": "The trades changed. Select the trade again.",
+    "merchant_unavailable": "This merchant is no longer available.",
+    "merchant_result_cursor_full": "The stack on your cursor is full.",
+    "merchant_result_cursor_different_item": "Put down the item on your cursor first.",
+    "merchant_result_hotbar_full": "The selected hotbar stack is full.",
+    "merchant_result_hotbar_occupied": "The selected hotbar slot is occupied.",
+    "equipment_slot_rejected": "This item cannot be equipped in that slot.",
+    "equipment_take_denied": "This equipped item cannot be removed.",
+    "food_full": "You are not hungry.",
+    "shield_disabled": "Your shield is temporarily disabled.",
+    "projectile_ammo_missing": "You do not have suitable ammunition."
+  }
+}

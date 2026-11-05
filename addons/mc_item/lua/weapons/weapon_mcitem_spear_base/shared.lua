@@ -7,7 +7,7 @@ include("mcitem/sh_ranged.lua")
 
 SWEP.Base = "weapon_bmb_item_model_test"
 SWEP.PrintName = "Minecraft Spear Base"
-SWEP.Category = "Minecraft in GMod - Items"
+SWEP.Category = "#mcitem.category.items"
 SWEP.Instructions = "Left click: fully charged piercing stab. Hold right click: kinetic spear attack."
 SWEP.Spawnable = false
 SWEP.AdminOnly = false

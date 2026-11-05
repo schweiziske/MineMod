@@ -8,9 +8,9 @@ include("mcitem/sh_ranged.lua")
 include("mcitem/sh_ammo.lua")
 
 SWEP.Base = "weapon_bmb_item_model_test"
-SWEP.PrintName = "Minecraft Bow"
-SWEP.Category = "Minecraft in GMod - Items"
-SWEP.Instructions = "Hold right click to draw; release to fire. Left click: attack / mining swing."
+SWEP.PrintName = "#item.minecraft.bow"
+SWEP.Category = "#mcitem.category.items"
+SWEP.MCInstructionsKey = "mcitem.instructions.bow"
 SWEP.Spawnable = true
 SWEP.AdminOnly = false
 -- MCITEM owns the stable *_item family and can ship standalone. BMB's skeleton mounts

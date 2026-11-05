@@ -1,6 +1,6 @@
 ENT.Type = "anim"
 ENT.Base = "base_anim"
-ENT.PrintName = "Minecraft Experience Orb"
+ENT.PrintName = "#mcitem.entity.experience_orb"
 ENT.Spawnable = false
 ENT.RenderGroup = RENDERGROUP_TRANSLUCENT
 

@@ -1,0 +1,4 @@
+{
+  "locale": "zh_cn",
+  "entries": { "weapon_equip_failed": "无法装备 {class}（{code}）。" }
+}

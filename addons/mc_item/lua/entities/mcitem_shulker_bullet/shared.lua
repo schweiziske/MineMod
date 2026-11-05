@@ -1,6 +1,6 @@
 ENT.Type = "anim"
 ENT.Base = "mcitem_thrown_item_base"
-ENT.PrintName = "Minecraft Shulker Bullet"
+ENT.PrintName = "#mcitem.entity.shulker_bullet"
 ENT.Spawnable = false
 ENT.RenderGroup = RENDERGROUP_TRANSLUCENT
 

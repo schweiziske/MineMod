@@ -1,6 +1,6 @@
 ENT.Type = "anim"
 ENT.Base = "mcitem_thrown_item_base"
-ENT.PrintName = "Minecraft Thrown Item"
+ENT.PrintName = "#mcitem.entity.thrown_generic"
 ENT.Spawnable = false
 
 AddCSLuaFile("mcitem/throwables/sh_data.lua")

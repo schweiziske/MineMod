@@ -1,0 +1,33 @@
+{
+  "locale": "zh_cn",
+  "entries": {
+    "action_failed": "无法完成此操作（{code}）。",
+    "inventory_action_rejected": "服务器拒绝了此次物品栏操作。",
+    "inventory_not_loaded": "物品栏尚未就绪。",
+    "enchantment_unavailable": "此附魔当前不可用。",
+    "recipe_place_failed": "无法放入配方材料。",
+    "recipe_ingredients_missing": "材料不足。",
+    "recipe_cursor_not_empty": "请先放下鼠标上拿着的物品。",
+    "recipe_does_not_fit": "此配方需要更大的合成网格。",
+    "crafting_inventory_full": "物品栏空间不足。",
+    "no_crafting_result": "这些材料无法合成物品。",
+    "result_cursor_different_item": "请先放下鼠标上拿着的物品。",
+    "result_cursor_full": "鼠标上拿着的物品已堆叠至上限。",
+    "result_hotbar_full": "所选快捷栏物品已堆叠至上限。",
+    "result_hotbar_occupied": "所选快捷栏槽位已被占用。",
+    "merchant_selection_failed": "无法选择此交易。",
+    "merchant_offer_not_satisfied": "缺少交易所需物品，或此交易当前不可用。",
+    "merchant_payment_changed": "交易所需物品发生变化，请重试。",
+    "merchant_revision_mismatch": "交易列表已变化，请重新选择。",
+    "merchant_unavailable": "此商人已不可用。",
+    "merchant_result_cursor_full": "鼠标上拿着的物品已堆叠至上限。",
+    "merchant_result_cursor_different_item": "请先放下鼠标上拿着的物品。",
+    "merchant_result_hotbar_full": "所选快捷栏物品已堆叠至上限。",
+    "merchant_result_hotbar_occupied": "所选快捷栏槽位已被占用。",
+    "equipment_slot_rejected": "此物品无法装备到该槽位。",
+    "equipment_take_denied": "无法取下此装备。",
+    "food_full": "你还不饿。",
+    "shield_disabled": "盾牌暂时不可用。",
+    "projectile_ammo_missing": "没有合适的弹药。"
+  }
+}

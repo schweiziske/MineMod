@@ -30,13 +30,10 @@ for _, itemId in ipairs(MCITEM.Farming.RegisteredItemOrder) do
     local definition = MCITEM.Farming.Get(itemId)
     weapons.Register({
         Base = "weapon_mcitem_farming_base",
-        PrintName = "Minecraft " .. definition.name,
-        Category = "Minecraft in GMod - Farming",
-        Instructions = definition.action == "plant"
-            and "Left click: attack or mine. Right click: plant on valid soil."
-            or definition.action == "bonemeal"
-                and "Left click: attack or mine. Right click: fertilize a supported crop."
-                or "Left click: attack or mine.",
+        PrintName = "#item.minecraft." .. definition.id,
+        Category = "#mcitem.category.farming",
+        MCInstructionsKey = definition.action == "plant" and "mcitem.instructions.plant"
+            or definition.action == "bonemeal" and "mcitem.instructions.bonemeal" or "mcitem.instructions.attack",
         Spawnable = true,
         AdminOnly = false,
         WorldModel = definition.model,

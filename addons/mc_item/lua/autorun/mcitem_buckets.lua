@@ -15,11 +15,9 @@ for _, itemId in ipairs({ "bucket", "water_bucket", "lava_bucket" }) do
     local definition = MCITEM.Buckets.Get(itemId)
     weapons.Register({
         Base = "weapon_mcitem_bucket_base",
-        PrintName = "Minecraft " .. definition.name,
-        Category = "Minecraft in GMod - Items",
-        Instructions = definition.pickup
-            and "Left click: attack or mine. Right click: pick up a water/lava source."
-            or "Left click: attack or mine. Right click: place the contained source.",
+        PrintName = "#item.minecraft." .. definition.id,
+        Category = "#mcitem.category.items",
+        MCInstructionsKey = definition.pickup and "mcitem.instructions.bucket_pickup" or "mcitem.instructions.bucket_place",
         Spawnable = true,
         AdminOnly = false,
         WorldModel = definition.model,

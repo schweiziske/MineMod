@@ -20,6 +20,7 @@ local SHARED = {
 	-- Translation queries are available to every later file, at load time too.
 	"mc/sh_i18n.lua",
 	"mc/state/sh_network_protocol.lua",
+	"mc/sh_messages.lua",
 	"mc/sh_config.lua",
 	"mc/sh_game_mode.lua",
 	"mc/workshop/sh_workshop_bundle.lua",

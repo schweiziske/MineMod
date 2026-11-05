@@ -5,9 +5,9 @@ for _, definition in ipairs(MCITEM.Throwables.Definitions) do
         local itemId = definition.id
         weapons.Register({
             Base = "weapon_mcitem_throwable_base",
-            PrintName = "Minecraft " .. definition.name,
-            Category = "Minecraft in GMod - Throwables",
-            Instructions = "Left click: attack or mine. Right click: use the item.",
+            PrintName = "#item.minecraft." .. definition.id,
+            Category = "#mcitem.category.throwables",
+            MCInstructionsKey = "mcitem.instructions.use",
             Spawnable = true,
             AdminOnly = false,
             WorldModel = "models/mcgm/" .. definition.modelId .. "/" .. definition.modelId .. ".mdl",

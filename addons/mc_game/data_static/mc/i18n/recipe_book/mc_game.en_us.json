@@ -1,0 +1,15 @@
+{
+  "locale": "en_us",
+  "entries": {
+    "search": "Search",
+    "registry_mismatch": "Recipe data differs from the server",
+    "place": "Click to place",
+    "missing_ingredients": "Missing ingredients",
+    "category.building": "Building Blocks",
+    "category.equipment": "Equipment",
+    "category.misc": "Miscellaneous",
+    "category.redstone": "Redstone",
+    "category.food": "Food",
+    "category.blocks": "Blocks"
+  }
+}

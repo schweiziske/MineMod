@@ -4,9 +4,9 @@ AddCSLuaFile("mcitem/utility/sh_use.lua")
 include("mcitem/utility/sh_use.lua")
 
 SWEP.Base = "weapon_bmb_item_model_test"
-SWEP.PrintName = "Minecraft Shield"
-SWEP.Category = "Minecraft in GMod - Utility"
-SWEP.Instructions = "Hold right click to block attacks after the vanilla 0.25 second raise delay. Axes disable blocking for 5 seconds. Left click attacks or mines while lowered."
+SWEP.PrintName = "#item.minecraft.shield"
+SWEP.Category = "#mcitem.category.utility"
+SWEP.MCInstructionsKey = "mcitem.instructions.shield"
 SWEP.Spawnable = true
 SWEP.AdminOnly = false
 

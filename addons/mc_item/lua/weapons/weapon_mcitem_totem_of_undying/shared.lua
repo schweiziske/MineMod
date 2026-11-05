@@ -1,8 +1,8 @@
 AddCSLuaFile()
 
 SWEP.Base = "weapon_bmb_item_model_test"
-SWEP.PrintName = "Minecraft Totem of Undying"
-SWEP.Category = "Minecraft in GMod - Utility"
+SWEP.PrintName = "#item.minecraft.totem_of_undying"
+SWEP.Category = "#mcitem.category.utility"
 SWEP.Spawnable = true
 SWEP.AdminOnly = false
 
@@ -18,7 +18,7 @@ SWEP.MCWeaponDamagePerAttack = 0
 SWEP.MCIsSword = false
 SWEP.MCUseAction = nil
 
-SWEP.Instructions = "Hold it in the selected inventory hand or offhand to survive lethal damage."
+SWEP.MCInstructionsKey = "mcitem.instructions.totem_of_undying"
 
 function SWEP:IsMCDeathProtectionAvailable(owner)
     if not SERVER or not IsValid(owner) or owner:GetActiveWeapon() ~= self then return false end

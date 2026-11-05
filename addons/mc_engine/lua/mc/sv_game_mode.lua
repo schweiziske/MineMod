@@ -21,13 +21,8 @@ local function validMode( value )
 	return MC.NormalizeGameMode( value ) or "creative"
 end
 
-local function notify( ply, message )
-	if IsValid( ply ) then
-		ply:ChatPrint( "[MC] " .. tostring( message ) )
-		ply:PrintMessage( HUD_PRINTCONSOLE, "[MC] " .. tostring( message ) )
-	else
-		MsgN( "[MC] " .. tostring( message ) )
-	end
+local function notify( ply, key, vars )
+	MC.Messages.Reply( ply, key, vars, "both" )
 end
 
 local function persistentMode( ply )
@@ -85,7 +80,7 @@ net.Receive( "mc_player_gamemode", function( _, ply )
 			SV.SetPlayerGameMode( ply, mode, ply )
 			return
 		end
-		notify( ply, "服务器已关闭自由切换 Minecraft 游戏模式" )
+		notify( ply, "server.gamemode.switch_disabled" )
 	end
 	sendMode( ply, SV.GetPlayerGameMode( ply ) )
 end )
@@ -112,12 +107,12 @@ end
 local function command( ply, _, args )
 	local query = table.concat( args, " ", 2 )
 	if IsValid( ply ) and not ply:IsAdmin() and ( query ~= "" or not maySwitchOwnMode( ply ) ) then
-		notify( ply, "没有权限修改该玩家的 Minecraft 游戏模式" )
+		notify( ply, "server.gamemode.permission" )
 		return
 	end
 	local mode = MC.NormalizeGameMode( args[1] )
 	if not mode then
-		notify( ply, "用法: mc_set_gamemode <creative|survival> [玩家]" )
+		notify( ply, "server.gamemode.usage" )
 		return
 	end
 	local targets
@@ -126,13 +121,14 @@ local function command( ply, _, args )
 	else
 		targets = findTargets( query )
 	end
-	if #targets == 0 then notify( ply, "找不到目标玩家" ) return end
-	if #targets > 1 then notify( ply, "目标不唯一，请输入完整玩家名或 SteamID" ) return end
+	if #targets == 0 then notify( ply, "server.gamemode.no_target" ) return end
+	if #targets > 1 then notify( ply, "server.gamemode.ambiguous" ) return end
 	local target = targets[1]
 	local ok, oldMode = SV.SetPlayerGameMode( target, mode, ply )
-	if not ok then notify( ply, "修改游戏模式失败: " .. tostring( oldMode ) ) return end
-	notify( ply, string.format( "%s 的游戏模式已设置为 %s", target:Nick(), mode ) )
-	if target ~= ply then notify( target, string.format( "管理员将你的游戏模式设置为 %s", mode ) ) end
+	if not ok then notify( ply, "server.gamemode.failed", { err = tostring( oldMode ) } ) return end
+	local modeSpec = MC.Messages.Spec( "server.gamemode." .. mode )
+	notify( ply, "server.gamemode.changed", { name = target:Nick(), mode = modeSpec } )
+	if target ~= ply then notify( target, "server.gamemode.changed_by_admin", { mode = modeSpec } ) end
 end
 
 -- Release the old command name so it can be used by the client ConVar.

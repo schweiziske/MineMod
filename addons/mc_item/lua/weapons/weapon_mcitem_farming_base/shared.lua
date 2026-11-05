@@ -15,7 +15,7 @@ end
 -- planting itself is ItemUseAnimation.NONE, so success plays only normal swing.
 SWEP.Base = "weapon_mcitem_food_base"
 SWEP.PrintName = "Minecraft Farming Item Base"
-SWEP.Category = "Minecraft in GMod - Farming"
+SWEP.Category = "#mcitem.category.farming"
 SWEP.Spawnable = false
 SWEP.AdminOnly = false
 SWEP.MCAttackDamage = 1

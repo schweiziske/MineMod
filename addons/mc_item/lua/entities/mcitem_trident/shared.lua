@@ -2,7 +2,7 @@ AddCSLuaFile()
 
 ENT.Type = "anim"
 ENT.Base = "mcitem_arrow"
-ENT.PrintName = "Minecraft Thrown Trident"
+ENT.PrintName = "#mcitem.entity.trident"
 ENT.Spawnable = false
 ENT.RenderGroup = RENDERGROUP_OPAQUE
 

@@ -27,10 +27,7 @@ local RequestTimes = {}
 local MountedAddonIndex = { signature = nil, packages = {} }
 W.ServerBaseGeneration = math.floor( tonumber( W.ServerBaseGeneration ) or 0 ) % 4294967296
 
--- Translated with this server's files for the player's language.
-local function L( ply, key, vars )
-	return MC.I18n.Resolve( key, vars, MC.I18n.LanguageForPlayer( ply ) )
-end
+local message = MC.Messages.Spec
 
 local function workshopManageConVar()
 	if not C.WorkshopManage then
@@ -789,7 +786,7 @@ local function finishUpload( ply, session, payload )
 	end
 	sendUploadResult( ply, session.requestId, true, "", slotName, session.workshopId )
 	if SV.SendSaveList and ( not SV.CanUseSaves or SV.CanUseSaves( ply ) ) then
-		SV.SendSaveList( ply, L( ply, "workshop.import_done", { name = slotName } ), false )
+		SV.SendSaveList( ply, message( "workshop.import_done", { name = slotName } ), false )
 	end
 end
 
@@ -903,9 +900,8 @@ net.Receive( "mc_workshop_bind_id", function( _, ply )
 	local ok, err = SV.UpdateSaveWorkshopMetadata( slotName, workshopId, contentHash, ply:SteamID64(), archiveBytes )
 	sendBindResult( ply, requestId, ok, ok and "" or err, slotName, workshopId )
 	if ok and SV.SendSaveList then
-		MsgN( string.format( "[MC] %s linked save %s to Workshop item %s",
-			ply:Nick(), slotName, workshopId ) )
-		SV.SendSaveList( ply, L( ply, "workshop.publish_bound", { id = workshopId } ), false )
+		MC.Messages.Console( "server.workshop_linked", { player = ply:Nick(), name = slotName, id = workshopId } )
+		SV.SendSaveList( ply, message( "workshop.publish_bound", { id = workshopId } ), false )
 	end
 	if ok and W.ServerLoadedSlot == slotName then
 		if SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end

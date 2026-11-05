@@ -265,6 +265,7 @@ function BOOK:Init()
 	self.SearchEntry:SetHighlightColor( Color( 120, 150, 190, 120 ) )
 	self.SearchEntry:SetCursorColor( Color( 35, 35, 35, 255 ) )
 	self.SearchEntry:SetUpdateOnType( true )
+	self.SearchEntry:SetPlaceholderText( MC.T( "recipe_book.search" ) )
 	self.SearchEntry.MCBitmapScale = self.Scale
 	UI.ConfigureBitmapTextEntry( self.SearchEntry, { color = Color( 35, 35, 35, 255 ), padding = 1 } )
 	self.SearchGeneration = 0
@@ -474,8 +475,7 @@ function BOOK:PlaceRecipe( recipe, useMax )
 	if self.RegistryMismatch or not recipe then return false end
 	local ok, actionOrError = MC.QueueRecipeBookPlacement( recipe.id, useMax == true )
 	if not ok then
-		self.ErrorText = tostring( actionOrError or "recipe_place_failed" )
-		self.ErrorUntil = RealTime() + 2
+		UI.SetError( self, actionOrError or "recipe_place_failed", 2 )
 		return false
 	end
 	self.PendingRecipeId = recipe.id
@@ -499,7 +499,7 @@ function BOOK:Paint( w, h )
 	if self.RegistryMismatch then
 		surface.SetDrawColor( 0, 0, 0, 120 )
 		surface.DrawRect( TAB_MARGIN * self.Scale, 0, PANEL_W * self.Scale, h )
-		UI.DrawText( "Recipe data mismatch", ( TAB_MARGIN + PANEL_W * 0.5 ) * self.Scale, 76 * self.Scale,
+		UI.DrawText( MC.T( "recipe_book.registry_mismatch" ), ( TAB_MARGIN + PANEL_W * 0.5 ) * self.Scale, 76 * self.Scale,
 			self.Scale, Color( 255, 120, 90 ), TEXT_ALIGN_CENTER, true )
 	end
 	return true
@@ -509,11 +509,11 @@ function BOOK:HoveredTooltipLines()
 	if IsValid( self.HoveredRecipe ) and self.HoveredRecipe.Recipe then
 		local recipe = self.HoveredRecipe.Recipe
 		local lines = UI.Tooltip.LinesForStack( recipe.result )
-		lines[#lines + 1] = { text = self.HoveredRecipe.Craftable and "Click to place" or "Missing ingredients", color = self.HoveredRecipe.Craftable and UI.Colors.text or Color( 255, 120, 90 ) }
+		lines[#lines + 1] = { text = MC.T( self.HoveredRecipe.Craftable and "recipe_book.place" or "recipe_book.missing_ingredients" ), color = self.HoveredRecipe.Craftable and UI.Colors.text or Color( 255, 120, 90 ) }
 		return lines
 	end
 	if IsValid( self.HoveredTab ) then
-		return { { text = Book.CATEGORY_TITLES[self.HoveredTab.Key] or "Search", color = UI.Colors.text } }
+		return { { text = MC.T( Book.CATEGORY_KEYS[self.HoveredTab.Key] or "recipe_book.search" ), color = UI.Colors.text } }
 	end
 end
 
