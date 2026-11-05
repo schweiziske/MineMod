@@ -239,6 +239,10 @@ function MC.StateVisualModelData( modelId )
 	local mapOffset = ( modelId - 1 ) * 4 + 1
 	local geometryId = u16( Catalog.modelMap, mapOffset )
 	local surfaceId = u16( Catalog.modelMap, mapOffset + 2 )
+	-- Entity-rendered blocks (including shulker boxes) have valid catalog
+	-- entries with no baked geometry or surfaces. Distinguish those from a
+	-- missing model so presentation callers can use their authored shapes.
+	if geometryId == 0 and surfaceId == 0 then return nil, "empty_model" end
 	if geometryId == 0 or surfaceId == 0 then return nil end
 	local cacheKey = geometryId * 2048 + surfaceId
 	local cached = ModelDataCache[cacheKey]

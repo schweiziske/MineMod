@@ -16,7 +16,7 @@ function MC.BlockPresentationQuads( stateId )
 		cache = {}
 		visualRevision, modelRevision = MC.BlockStateVisualRevision, MC.StateVisualModelRevision
 	end
-	if cache[stateId] then return cache[stateId] end
+	if cache[stateId] ~= nil then return cache[stateId] or nil end
 	local modelStateId = stateId
 	local name = visual.block.name
 	if ( name == "minecraft:piston" or name == "minecraft:sticky_piston" )
@@ -28,8 +28,13 @@ function MC.BlockPresentationQuads( stateId )
 	end
 	local result = {}
 	local complete = true
+	local needsBaseRenderer = false
 	MC.VisitStateVisualModels( modelStateId, 0, 0, 0, function( modelId )
-		local model = MC.StateVisualModelData( modelId )
+		local model, reason = MC.StateVisualModelData( modelId )
+		if reason == "empty_model" then
+			needsBaseRenderer = true
+			return
+		end
 		if not MC.Check( model ~= nil, "block_presentation_model", "Missing presentation model %s for state %s", modelId, stateId ) then
 			complete = false
 			return
@@ -55,7 +60,10 @@ function MC.BlockPresentationQuads( stateId )
 	end )
 	if not complete then return nil end
 	-- Empty entity-rendered models continue through their existing fallback.
-	if #result == 0 then return nil end
+	if needsBaseRenderer or #result == 0 then
+		cache[stateId] = false
+		return nil
+	end
 	cache[stateId] = result
 	return result
 end
