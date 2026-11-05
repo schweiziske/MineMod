@@ -141,6 +141,15 @@ local VISUAL_PLAN_PROPERTIES = {
 	bed = { "facing", "part" },
 }
 
+-- The legacy campfire catalog contains only unlit wood, even though the
+-- default block state is lit. Matching its projected state plan therefore
+-- does not prove that the base renderer contains all of that plan's quads.
+-- Atlas animations require the flame planes and lit logs in the world mesh.
+local COMPLETE_STATE_MODELS = {
+	["minecraft:campfire"] = true,
+	["minecraft:soul_campfire"] = true,
+}
+
 local function baseRendererHandlesConnection( block )
 	local connection = block and block.connection
 	return connection == "fence" or connection == "pane" or connection == "bars"
@@ -245,7 +254,8 @@ function MC.ResolveBlockStateVisual( stateId, bx, by, bz )
 		if visual.forceBaseRenderer == true then
 			visual.generatedVisualOverride = false
 		else
-			visual.generatedVisualOverride = visual.forceGeneratedVisual == true or projectedPlanId ~= planId
+			visual.generatedVisualOverride = visual.forceGeneratedVisual == true
+				or COMPLETE_STATE_MODELS[schema.name] == true or projectedPlanId ~= planId
 				or MC.StateVisualPlanHasRandomChoice and MC.StateVisualPlanHasRandomChoice( planId ) == true
 		end
 	end

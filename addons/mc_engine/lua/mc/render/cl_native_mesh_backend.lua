@@ -1831,7 +1831,7 @@ local function tryStart()
 	local metadata = MC.BlockStateRegistryMetadata or {}
 	local catalog = MC.StateVisualCatalog or {}
 	local atlasProfileKey = MC.AtlasProfileCacheKey and MC.AtlasProfileCacheKey() or "default"
-	local cacheKey = "mcbd5-state-liquid1-visual3-stateflags3-renderroute2-modelsurface2-pistonuv1-atlaspages1:" .. tostring( metadata.schemaHash or "" ) .. ":" .. tostring( catalog.visualPlanSha256 or "" )
+	local cacheKey = "mcbd5-state-liquid1-visual3-stateflags3-renderroute3-modelsurface2-pistonuv1-atlaspages1:" .. tostring( metadata.schemaHash or "" ) .. ":" .. tostring( catalog.visualPlanSha256 or "" )
 		.. ":" .. tostring( MC.BlockStateCount or 0 ) .. ":" .. tostring( atlasProfileKey )
 	local builtFresh, loadedFromDisk, loadedFromArtifact = false, false, false
 	if state.defCache and state.defCache.key == cacheKey then
