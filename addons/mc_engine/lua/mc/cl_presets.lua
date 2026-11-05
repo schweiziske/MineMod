@@ -517,6 +517,9 @@ function MC.DrawPresetProjection()
 	local matrix = Matrix()
 	matrix:SetTranslation( MC.CellWorldMin( ox, oy, oz ) )
 	cam.PushModelMatrix( matrix )
+		-- Match cluster previews: preserve atlas pixels in the stock shader.
+		render.PushFilterMin( TEXFILTER.POINT )
+		render.PushFilterMag( TEXFILTER.POINT )
 		render.SetMaterial( mat )
 		render.SetBlend( 0.52 )
 		render.SetColorModulation( 0.78, 0.92, 1 )
@@ -525,6 +528,8 @@ function MC.DrawPresetProjection()
 		end
 		render.SetColorModulation( 1, 1, 1 )
 		render.SetBlend( 1 )
+		render.PopFilterMag()
+		render.PopFilterMin()
 	cam.PopModelMatrix()
 end
 

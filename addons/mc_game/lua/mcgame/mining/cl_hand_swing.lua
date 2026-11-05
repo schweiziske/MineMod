@@ -1,11 +1,9 @@
 --[[----------------------------------------------------------------------------
 	MC survival mining hand swing.
 
-	Minecraft 26.2 calls player.swing(MAIN_HAND) on every successful
-	continueDestroyBlock tick. LivingEntity.swing only restarts after the current
-	swing reaches half of its duration, so a default six-tick item loops every
-	three 20 TPS ticks while mining continues. This presentation module mirrors
-	that cadence without touching the separate equip-height/place animation.
+	Mining requests arrive every tick, but play a complete swing before restarting
+	for a calmer local presentation. Discrete attacks retain Java's half-duration
+	restart gate. Neither animation gate changes block breaking progress.
 ------------------------------------------------------------------------------]]
 
 if not CLIENT then return end
@@ -57,8 +55,7 @@ local function stateFor( weapon )
 	return weapon.MCHandMiningSwingState
 end
 
--- Mirrors LivingEntity.swing: request every mining tick, restart only once the
--- current swingTime reaches duration / 2 (or the previous swing has ended).
+-- Coordinates identify mining requests; attacks request a swing without a cell.
 function Swing.Request( weapon, bx, by, bz, now )
 	if not IsValid( weapon ) then return false end
 	local ply = weapon:GetOwner()
@@ -67,7 +64,8 @@ function Swing.Request( weapon, bx, by, bz, now )
 	local state = stateFor( weapon )
 	local durationTicks = Swing.DurationTicks( ply, weapon )
 	local elapsedTicks = state.startedAt and ( now - state.startedAt ) / TICK_SECONDS or math.huge
-	if not state.active or elapsedTicks < 0 or elapsedTicks >= durationTicks / 2 then
+	local restartTicks = bx ~= nil and durationTicks or durationTicks / 2
+	if not state.active or elapsedTicks < 0 or elapsedTicks >= restartTicks then
 		state.startedAt = now
 		state.active = true
 	end

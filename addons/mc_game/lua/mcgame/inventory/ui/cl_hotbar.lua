@@ -135,6 +135,8 @@ local USE_INTERACT_OWN_COLLISION = {
 
 local function traceHasForeignUseTarget( trace )
 	if not trace or trace.HitWorld or not IsValid( trace.Entity ) then return false end
+	-- Players have no native +use action; looking at one must not eat the inventory key.
+	if trace.Entity:IsPlayer() then return false end
 	return USE_INTERACT_OWN_COLLISION[trace.Entity:GetClass()] ~= true
 end
 

@@ -787,11 +787,32 @@ end
 
 --------------------------------------------------------------------------------
 
+function SWEP:CreateMCWorldModel()
+    local desiredModel = self:GetMCThirdPersonModel()
+    local model = self.MCItemWorldModel
+    if IsValid(model) then
+        if model:GetModel() ~= desiredModel then model:SetModel(desiredModel) end
+        return model
+    end
+
+    -- Keep the held mesh independent of the engine-owned SWEP's parent and
+    -- bone cache. Remote weapon entities can already have a pose built at the
+    -- owner's origin before DrawWorldModel applies the hand transform.
+    model = ClientsideModel(desiredModel, RENDERGROUP_OPAQUE)
+    if not IsValid(model) then return nil end
+    model:SetNoDraw(true)
+    model:DrawShadow(false)
+    self.MCItemWorldModel = model
+    return model
+end
+
 function SWEP:DrawWorldModel()
     local owner = self:GetOwner()
     if not IsValid(owner) then
-        -- A per-state third-person scale may have been applied while equipped.
-        -- Restore the base world scale before drawing a dropped/unowned weapon.
+        self.MCItemWorldRenderPosition = nil
+        self.MCItemWorldRenderAngles = nil
+        self.MCItemWorldRenderScale = nil
+        -- Dropped weapons use the engine entity at the base world scale.
         self:SetModelScale(0.55, 0)
         drawMCItemModel(self, self)
         return
@@ -808,19 +829,23 @@ function SWEP:DrawWorldModel()
     -- items sat inside their bodies while your own looked correct (user report
     -- 2026-08-28, screenshots of the mace). Refresh for whoever owns it.
     --
-    -- Once per player per frame: SetupBones is idempotent within a frame, and a
-    -- player carrying this SWEP would otherwise pay for it on every draw pass.
+    -- SetupBones alone can reuse a pose prepared by an earlier render pass.
+    -- Invalidate once per player per frame before reading the hand matrix.
     local frame = FrameNumber()
     if owner.MCItemBoneSetupFrame ~= frame then
         owner.MCItemBoneSetupFrame = frame
+        owner:InvalidateBoneCache()
         owner:SetupBones()
     end
 
     local bone = owner:LookupBone("ValveBiped.Bip01_R_Hand")
     local matrix = bone and owner:GetBoneMatrix(bone)
     if not matrix then
-        self:SetModelScale(0.55, 0)
-        drawMCItemModel(self, self)
+        -- An equipped SWEP's entity origin is not a hand anchor. Drawing it
+        -- there while the player skeleton is unavailable puts it in the torso.
+        self.MCItemWorldRenderPosition = nil
+        self.MCItemWorldRenderAngles = nil
+        self.MCItemWorldRenderScale = nil
         return
     end
 
@@ -849,24 +874,25 @@ function SWEP:DrawWorldModel()
         angles:RotateAroundAxis(angles:Forward(), roll)
     end
 
-    local desiredModel = self.GetMCThirdPersonModel
-        and self:GetMCThirdPersonModel()
-        or self.WorldModel
-    if desiredModel and self:GetModel() ~= desiredModel then self:SetModel(desiredModel) end
+    local model = self:CreateMCWorldModel()
+    if not IsValid(model) then return end
 
-    self:SetRenderOrigin(position)
-    self:SetRenderAngles(angles)
     local worldScale = 0.55 * stateScale
+    -- position/angles are the Source render-space hand anchor; worldScale is
+    -- the existing dimensionless multiplier for the compiled MDL.
+    model:SetPos(position)
+    model:SetAngles(angles)
+    model:SetModelScale(worldScale, 0)
+    model:InvalidateBoneCache()
+    model:SetupBones()
+    model:SetModelScale(worldScale, 0)
     -- Keep the transform from the most recent world-model pass available to
     -- attachments such as the fishing line.  A one-frame-old value is still a
     -- better match than rebuilding this hand/profile transform independently.
     self.MCItemWorldRenderPosition = Vector(position.x, position.y, position.z)
     self.MCItemWorldRenderAngles = Angle(angles.p, angles.y, angles.r)
     self.MCItemWorldRenderScale = worldScale
-    self:SetModelScale(worldScale, 0)
-    drawMCItemModel(self, self, position)
-    self:SetRenderOrigin()
-    self:SetRenderAngles()
+    drawMCItemModel(self, model, position)
 end
 
 -- 这里以前负责还原 viewmodel 的材质覆盖。现在藏 vm 走 render.SetBlend，是逐帧
@@ -881,5 +907,9 @@ function SWEP:OnRemove()
     if IsValid(self.MCItemPreview) then
         self.MCItemPreview:Remove()
         self.MCItemPreview = nil
+    end
+    if IsValid(self.MCItemWorldModel) then
+        self.MCItemWorldModel:Remove()
+        self.MCItemWorldModel = nil
     end
 end

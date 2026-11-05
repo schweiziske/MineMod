@@ -942,6 +942,8 @@ local function drawPasteGhost( ent )
 
 	local good = ghost.blocked == 0
 	cam.PushModelMatrix( ghost.matrix )
+		render.PushFilterMin( TEXFILTER.POINT )
+		render.PushFilterMag( TEXFILTER.POINT )
 		render.SetBlend( 0.45 )
 		if good then
 			render.SetColorModulation( 0.55, 1, 0.6 )
@@ -956,6 +958,8 @@ local function drawPasteGhost( ent )
 		end
 		render.SetColorModulation( 1, 1, 1 )
 		render.SetBlend( 1 )
+		render.PopFilterMag()
+		render.PopFilterMin()
 	cam.PopModelMatrix()
 end
 

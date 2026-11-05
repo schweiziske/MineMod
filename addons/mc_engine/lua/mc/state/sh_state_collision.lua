@@ -327,7 +327,9 @@ local function resolveDoor( stateId, schema )
 	local key = FacingIndex[facing] or 0
 	local cached = FamilyShapeCache.door[key]
 	if cached then return cached end
-	cached = internBoxes( { horizontalPlane( facing, 3 / 16, 1 ) } )
+	-- Leave room for the default Source player hull in a one-block doorway.
+	-- Keep a solid, boundary-anchored sheet when closed; visuals stay full thickness.
+	cached = internBoxes( { horizontalPlane( facing, 1 / 32, 1 ) } )
 	FamilyShapeCache.door[key] = cached
 	return cached
 end

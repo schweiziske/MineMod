@@ -19,6 +19,7 @@
 --   · 重启门：LivingEntity.swing 只在 swingTime >= duration/2 时才准重来。挖掘每
 --     tick 请求一次 → 6 tick 的剑每 4 tick 重启 → 只播得到曲线前半段（0 → 0.5）在
 --     那循环；单次攻击没人打断 → 完整播完 0 → 1。
+--     本地挖掘表现改为完整播完再重复，避免半段循环过快；攻击保留原规则。
 --   · 手部升降：攻击（打空**和**打中都算）以及换物品会把 ticker 清零，手沉下去再按
 --     `(ticker / 攻击冷却)^3` 抬起来——**和准星那个冷却图标是同一条时间轴**。
 --     挖掘不清 ticker，所以挖的时候手一直是举着的。
@@ -445,8 +446,8 @@ function SWEP:AdvanceMCItem(now)
 end
 
 -- LivingEntity.swing(MAIN_HAND)
-function SWEP:MCSwing(now)
-    return MCITEM.Swing(self:GetMCItemState(), self.MCSwingDurationTicks, now)
+function SWEP:MCSwing(now, completeCycle)
+    return MCITEM.Swing(self:GetMCItemState(), self.MCSwingDurationTicks, now, completeCycle)
 end
 
 --------------------------------------------------------------------------------
@@ -806,9 +807,8 @@ end
 -- Minecraft.continueAttack(down)：按住左键且准星停在方块上时每 tick 请求一次挥动。
 --   · missTime > 0 或 isUsingItem() 直接 return
 --   · 带 PIERCING_WEAPON 的物品（长矛）**完全不走这条**
---   · 到底重不重启由 LivingEntity.swing 的 duration/2 门决定，别在这里写死间隔
--- 请求频率故意高于 20Hz（半个 MC tick）：Source 的 66Hz 栅格没法精确落在 MC 的 tick
--- 边界上，请求稀了会错过门刚打开的那一 tick，把 0.2s 的节奏拖成 0.25s。
+--   · 连续挖掘播完整个挥动后再重复；单次攻击仍使用原来的重启规则
+-- 保持现有挖掘请求频率，仅让动画等到完整周期结束，避免改变破坏进度。
 function SWEP:MCContinueAttack(now, owner)
     if self:MCInventoryInputBlocked(owner) then return end
     if MC and MC.InventoryOffhandUseActive and MC.InventoryOffhandUseActive(self) then return end
@@ -825,8 +825,8 @@ function SWEP:MCContinueAttack(now, owner)
         return
     end
 
-    -- continueDestroyBlock runs every tick even when LivingEntity.swing's
-    -- duration/2 gate refuses to restart the visible swing. Starting again on
+    -- continueDestroyBlock runs every tick even when the animation gate
+    -- refuses to restart the visible swing. Starting again on
     -- the same cell is idempotent; moving to another cell cancels/restarts.
     if SERVER then
         if self:MCCanAttackBlockInCurrentGameMode(owner) then
@@ -836,7 +836,7 @@ function SWEP:MCContinueAttack(now, owner)
         end
     end
 
-    if self:MCSwing(now) then
+    if self:MCSwing(now, true) then
         self:PlayMCThirdPersonSwing(now, owner)
     end
 end

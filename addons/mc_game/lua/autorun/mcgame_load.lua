@@ -118,6 +118,7 @@ local SERVER_FILES = {
 	"mcgame/mining/sv_mining.lua",
 	"mcgame/inventory/sv_projectiles.lua",
 	"mcgame/inventory/sv_combat.lua",
+	"mcgame/inventory/sv_player_combat_audio.lua",
 	"mcgame/decoration/sv_effects.lua",
 	"mcgame/decoration/sv_decorations.lua",
 	"mcgame/api/sv_public_api.lua",
@@ -257,6 +258,7 @@ if SERVER then
 			"sound/mc/block/chest",
 			"sound/mc/block/enchantment_table",
 			"sound/mc/item/book",
+			"sound/mc/player",
 		} ) do
 			for _, fileName in ipairs( file.Find( resourceRoot .. "/*.ogg", "GAME" ) or {} ) do
 				resource.AddFile( resourceRoot .. "/" .. fileName )

@@ -8,7 +8,10 @@
     presentation.
 ------------------------------------------------------------------------------]]
 
-if SERVER then AddCSLuaFile() end
+if SERVER then
+	AddCSLuaFile()
+	AddCSLuaFile( "cl_fists.lua" )
+end
 
 MC = MC or {}
 
@@ -25,9 +28,10 @@ SWEP.DrawAmmo = false
 SWEP.DrawCrosshair = true
 SWEP.Base = "weapon_base"
 SWEP.UseHands = true
-SWEP.ViewModel = "models/weapons/c_toolgun.mdl"
+SWEP.ViewModel = "models/weapons/c_arms.mdl"
+SWEP.ViewModelFOV = 54
 SWEP.WorldModel = "models/weapons/w_toolgun.mdl"
-SWEP.DrawViewModel = false
+SWEP.DrawViewModel = true
 SWEP.DrawWorldModel = false
 SWEP.Primary = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "none" }
 SWEP.Secondary = { ClipSize = -1, DefaultClip = -1, Automatic = true, Ammo = "none" }
@@ -534,6 +538,55 @@ local function restoreConsumed( record, snapshot )
 	if record and snapshot then MC.ContainerRestore( record.container, snapshot ) end
 end
 
+function SWEP:MCIsEmptyHand()
+	local ply = self:GetOwner()
+	return self:GetClass() == "mc_item_hand" and IsValid( ply )
+		and MC.IsEmptyItemStack( selectedStackForRealm( ply ) )
+end
+
+-- c_arms starts in an off-screen reference pose. Prepare its animation before
+-- native viewmodel visibility/bone setup, as weapon_fists does in Deploy.
+-- The engine reuses the same viewmodel entity when switching weapon models.
+function SWEP:MCPrepareFistViewModel()
+	if not self:MCIsEmptyHand() then return end
+	local vm = self:GetOwner():GetViewModel()
+	if not IsValid( vm ) then return end
+	local model = vm:GetModel()
+	if model ~= self.ViewModel then
+		self.MCFistPresentation = nil
+		return
+	end
+	local state = self.MCFistPresentation
+	if state and state.vm == vm and state.model == model then return vm, state end
+	local draw = vm:LookupSequence( "fists_draw" )
+	local idle = vm:LookupSequence( "fists_idle_01" )
+	local left = vm:LookupSequence( "fists_left" )
+	local right = vm:LookupSequence( "fists_right" )
+	-- A model change may not have loaded its included animations yet. Do not
+	-- cache failed lookups for the lifetime of the shared viewmodel entity.
+	if draw < 0 or idle < 0 or left < 0 or right < 0 then return end
+	state = { vm = vm, model = model, idle = idle, left = left, right = right }
+	self.MCFistPresentation = state
+	vm:SendViewModelMatchingSequence( draw )
+	vm:SetPlaybackRate( 1 )
+	return vm, state
+end
+
+function SWEP:MCRequestFistSwing( mining )
+	if not self:MCIsEmptyHand() then return end
+	if CLIENT then
+		self:MCPlayFistSwing()
+		return
+	end
+	local now = CurTime()
+	local interval = mining and 0.3 or 0.15
+	if self.MCLastFistGesture and now - self.MCLastFistGesture < interval then return end
+	self.MCLastFistGesture = now
+	self:GetOwner():SetAnimation( PLAYER_ATTACK1 )
+	-- SWEP attacks are not predicted clientside in single player.
+	if game.SinglePlayer() then self:CallOnClient( "MCPlayFistSwing" ) end
+end
+
 function SWEP:Initialize()
 	self:SetHoldType( "normal" )
 	self.MCCreativeAttackHeld = false
@@ -544,7 +597,11 @@ function SWEP:Initialize()
 end
 
 function SWEP:Deploy()
-	self:SetHoldType( "normal" )
+	self:SetHoldType( self:MCIsEmptyHand() and "fist" or "normal" )
+	self.MCLastFistGesture = nil
+	self.MCHandMiningSwingState = nil
+	self.MCFistPresentation = nil
+	self:MCPrepareFistViewModel()
 	self.MCCreativeAttackHeld = false
 	self.MCSecondaryHeld = false
 	self.MCSecondaryMode = nil
@@ -615,12 +672,21 @@ local function primaryAttack( self )
 	local creative = creativeMode( ply )
 	local selectedStack = selectedStackForRealm( ply )
 	local canDestroyInCreative = not creative or creativeBlockAttackAllowed( selectedStack )
+	if initialPress then
+		self:MCRequestFistSwing()
+		if CLIENT and ( traceCombatTarget( ply, eyeTrace ) or not aim ) then
+			self:MCPredictHandAttack()
+		end
+	end
 	if SERVER then
 		local target = MC.SV and MC.SV.TraceSelectedItemAttack and select( 1, MC.SV.TraceSelectedItemAttack( ply ) ) or nil
 		if target then
 			if MC.SV and MC.SV.CancelMining then MC.SV.CancelMining( ply, "combat_target" ) end
 			if initialPress and MC.SV.AttackSelectedItem then MC.SV.AttackSelectedItem( ply, target, { reason = "primary_attack" } ) end
 			return
+		end
+		if initialPress and not aim and MC.SV and MC.SV.ResetSelectedAttackCooldown then
+			MC.SV.ResetSelectedAttackCooldown( ply )
 		end
 		-- Multiplayer creative block edits arrive with their original target in
 		-- mc_hand_creative_break. Do not independently break/ACK this command.
@@ -632,6 +698,7 @@ local function primaryAttack( self )
 		local bx, by, bz = breakTarget( ply, aim, eyeTrace )
 		if not bx then return end
 		if not creative then
+			self:MCRequestFistSwing( true )
 			if MC.SV and MC.SV.BeginMining then
 				MC.SV.BeginMining( ply, bx, by, bz, { initialPress = initialPress, commandNumber = miningCommandNumber( ply ) } )
 			end
@@ -652,6 +719,7 @@ local function primaryAttack( self )
 			)
 		end
 		if broke then
+			self:MCRequestFistSwing()
 			self.MCCreativeBreakReadyAt = now + CREATIVE_DESTROY_DELAY
 			net.Start( "mc_creative_break_anim" )
 				net.WriteInt( bx, MC.Net.COORD_BITS )
@@ -1073,6 +1141,13 @@ function SWEP:Think()
 		self.MCSecondaryMode = nil
 		return
 	end
+	local holdType = self:MCIsEmptyHand() and "fist" or "normal"
+	if self:GetHoldType() ~= holdType then self:SetHoldType( holdType ) end
+	if holdType == "fist" then
+		self:MCPrepareFistViewModel()
+	else
+		self.MCFistPresentation = nil
+	end
 	if self.MCCreativeAttackHeld and not ply:KeyDown( IN_ATTACK ) then
 		self.MCCreativeAttackHeld = false
 		self:SetNextPrimaryFire( CurTime() )
@@ -1093,6 +1168,9 @@ function SWEP:Think()
 end
 
 function SWEP:Holster()
+	if CLIENT then self:MCClearFistPresentation() end
+	self.MCHandMiningSwingState = nil
+	self.MCPredictedHandAttackAt = nil
 	if SERVER then
 		local ply = self:GetOwner()
 		if IsValid( ply ) and MC.SV and MC.SV.CancelSelectedItemUse then
@@ -1107,6 +1185,7 @@ function SWEP:Holster()
 end
 
 function SWEP:OnRemove()
+	if CLIENT then self:MCClearFistPresentation() end
 	if SERVER then
 		local ply = self:GetOwner()
 		if IsValid( ply ) and MC.SV and MC.SV.CancelSelectedItemUse then
@@ -1568,6 +1647,10 @@ if CLIENT then
 	hook.Add( "PreDrawViewModels", "mc_item_hand_first_person", function()
 		local ply = LocalPlayer()
 		if not IsValid( ply ) or ply:ShouldDrawLocalPlayer() then return end
+		local weapon = ply:GetActiveWeapon()
+		if IsValid( weapon ) and weapon:GetClass() == "mc_item_hand" then
+			weapon:MCUpdateFistViewModel()
+		end
 		drawHeld( ply, true )
 	end )
 
@@ -1589,9 +1672,7 @@ if CLIENT then
 
 	hook.Remove( "PostPlayerDraw", "mc_item_hand_third_person" )
 
-	function SWEP:PreDrawViewModel()
-		return true
-	end
+	include( "cl_fists.lua" )
 
 	function SWEP:DrawWorldModel()
 		local owner = self:GetOwner()

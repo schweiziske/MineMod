@@ -244,6 +244,26 @@ local function selectedAttackSpec( ply )
 	}
 end
 
+-- Hits and misses consume the same attack charge. Mining does not.
+function SV.ResetSelectedAttackCooldown( ply, record, spec )
+	if not validPlayer( ply ) then return nil end
+	record = record or SV.GetPlayerInventoryRecord( ply, false )
+	if not record then return nil end
+	if not spec then
+		local stack
+		stack, spec = selectedAttackSpec( ply )
+	end
+	local now = CurTime()
+	local elapsed = record.lastAttackAt and math.max( 0, now - record.lastAttackAt ) or nil
+	local strength = MC.ItemAttackStrengthScale( elapsed, spec.attackSpeed )
+	record.lastAttackAt = now
+	if ply.SetNWFloat then
+		ply:SetNWFloat( "mc_attack_strength", strength )
+		ply:SetNWFloat( "mc_attack_ready_at", now + 1 / math.max( 0.1, tonumber( spec.attackSpeed ) or 4 ) )
+	end
+	return strength
+end
+
 local function shieldStackForState( record, state )
 	if not record or not state or state.kind ~= "shield" then return nil end
 	if state.hand == "offhand" then return record.equipment and record.equipment.offhand or nil end
@@ -461,19 +481,16 @@ function SV.AttackSelectedItem( ply, requestedTarget, context )
 	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply, false ) or nil
 	if not record then return false, "inventory_not_loaded" end
 	local stack, spec = selectedAttackSpec( ply )
-	local now = CurTime()
-	local elapsed = record.lastAttackAt and math.max( 0, now - record.lastAttackAt ) or nil
-	local strength = MC.ItemAttackStrengthScale and MC.ItemAttackStrengthScale( elapsed, spec.attackSpeed ) or 1
+	local strength = SV.ResetSelectedAttackCooldown( ply, record, spec )
 	local damage = MC.ItemAttackDamageAtStrength and MC.ItemAttackDamageAtStrength( spec.attackDamage, strength )
 		or math.max( 0, tonumber( spec.attackDamage ) or 1 )
-	record.lastAttackAt = now
-	if ply.SetNWFloat then
-		ply:SetNWFloat( "mc_attack_strength", strength )
-		ply:SetNWFloat( "mc_attack_ready_at", now + 1 / math.max( 0.1, tonumber( spec.attackSpeed ) or 4 ) )
-	end
 	if not DamageInfo then return false, "damage_info_unavailable" end
 	local damageInfo = DamageInfo()
 	if not damageInfo then return false, "damage_info_unavailable" end
+	-- Empty-hand damage uses the 20 MC HP -> 100 Source HP conversion.
+	-- Keep the existing impulse strength independent of this health-unit mapping.
+	local forceDamage = damage
+	if MC.IsEmptyItemStack( stack ) then damage = damage * 5 end
 	damageInfo:SetDamage( damage )
 	if damageInfo.SetDamageType then damageInfo:SetDamageType( DMG_CLUB or 128 ) end
 	if damageInfo.SetAttacker then damageInfo:SetAttacker( ply ) end
@@ -482,7 +499,7 @@ function SV.AttackSelectedItem( ply, requestedTarget, context )
 	local hitPosition = trace and trace.HitPos or entityCenter( target )
 	if hitPosition and damageInfo.SetDamagePosition then damageInfo:SetDamagePosition( hitPosition ) end
 	if damageInfo.SetReportedPosition and ply.GetShootPos then damageInfo:SetReportedPosition( ply:GetShootPos() ) end
-	if damageInfo.SetDamageForce and ply.GetAimVector then damageInfo:SetDamageForce( ply:GetAimVector() * damage * 100 ) end
+	if damageInfo.SetDamageForce and ply.GetAimVector then damageInfo:SetDamageForce( ply:GetAimVector() * forceDamage * 100 ) end
 	local metadata = {
 		attacker = ply,
 		-- Player.attack(Entity) creates DamageSource.playerAttack(player),
@@ -607,7 +624,7 @@ hook.Add( "EntityTakeDamage", "mc_equipment_combat_damage", applyEquipmentCombat
 
 hook.Add( "PlayerSwitchWeapon", "mc_equipment_combat_switch", function( ply, oldWeapon )
 	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply, false ) or nil
-	if record then record.lastAttackAt = CurTime() end
+	if record then SV.ResetSelectedAttackCooldown( ply, record ) end
 	local bridge = MC.HandWeaponBridge
 	local controlled = IsValid( oldWeapon ) and (
 		bridge and bridge.IsInventoryControlledClass and bridge.IsInventoryControlledClass( oldWeapon )
@@ -623,7 +640,7 @@ hook.Add( "PlayerSpawn", "mc_equipment_combat_spawn", function( ply )
 	local record = SV.GetPlayerInventoryRecord and SV.GetPlayerInventoryRecord( ply, false ) or nil
 	if record then
 		record.shieldDisabledUntil = 0
-		record.lastAttackAt = CurTime()
+		SV.ResetSelectedAttackCooldown( ply, record )
 	end
 	if IsValid( ply ) and ply.SetNWFloat then ply:SetNWFloat( "mc_shield_disabled_until", 0 ) end
 end )

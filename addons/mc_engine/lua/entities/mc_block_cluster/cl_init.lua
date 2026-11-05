@@ -161,10 +161,16 @@ local function drawMeshList( self, list )
 	end
 
 	cam.PushModelMatrix( self:GetWorldTransformMatrix() )
+	-- Cluster meshes use stock Source shaders, so explicitly preserve the
+	-- atlas texels instead of inheriting the engine's smooth texture filters.
+	render.PushFilterMin( TEXFILTER.POINT )
+	render.PushFilterMag( TEXFILTER.POINT )
 	for _, entry in ipairs( list ) do
 		render.SetMaterial( entry.material )
 		entry.mesh:Draw()
 	end
+	render.PopFilterMag()
+	render.PopFilterMin()
 	cam.PopModelMatrix()
 
 	if tinted then render.SetColorModulation( 1, 1, 1 ) end

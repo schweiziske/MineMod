@@ -206,9 +206,10 @@ if CLIENT then
                 self.MCItemPreview:GetModelScale()
             )
             if position then return position end
-        elseif self.MCItemWorldRenderPosition and self.MCItemWorldRenderAngles then
+        elseif IsValid(self.MCItemWorldModel)
+        and self.MCItemWorldRenderPosition and self.MCItemWorldRenderAngles then
             local position = modelTip(
-                self,
+                self.MCItemWorldModel,
                 self.MCItemWorldRenderPosition,
                 self.MCItemWorldRenderAngles,
                 self.MCItemWorldRenderScale

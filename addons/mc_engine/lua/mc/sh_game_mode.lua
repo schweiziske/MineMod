@@ -45,7 +45,6 @@ if CLIENT then
 	local modeConVar = CreateClientConVar( "mc_gamemode", "creative", true, false,
 		"Your Minecraft mode: creative (1) or survival (0); subject to server permissions" )
 	local applyingServerMode = false
-	local ready = false
 	local confirmedMode
 	local function requestMode( mode )
 		net.Start( "mc_player_gamemode" )
@@ -73,12 +72,16 @@ if CLIENT then
 		hook.Run( "MCPlayerGameModeSynchronized", mode )
 	end )
 	cvars.AddChangeCallback( "mc_gamemode", function( _, _, value )
-		if applyingServerMode or not ready then return end
-		requestMode( MC.NormalizeGameMode( value ) )
+		if applyingServerMode then return end
+		-- Use the same live readiness check as the menu. Startup synchronization
+		-- can run before LocalPlayer exists; it must not permanently gate commands.
+		local ok, err = MC.RequestPlayerGameMode( value )
+		if not ok and err == "invalid_game_mode" and IsValid( LocalPlayer() ) then
+			requestMode( nil )
+		end
 	end, "mc_request_player_gamemode" )
 	local function synchronizeMode()
 		if not IsValid( LocalPlayer() ) then return end
-		ready = true
 		requestMode( nil )
 	end
 	hook.Add( "InitPostEntity", "mc_sync_player_gamemode", synchronizeMode )

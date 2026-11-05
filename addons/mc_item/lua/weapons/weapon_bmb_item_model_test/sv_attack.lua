@@ -29,7 +29,7 @@ util.AddNetworkString("MCITEM_CombatParticle")
 -- HL2 NPC 有反应。BMB mob 有自己的一套击退（按攻击者方向），不吃这个值。
 SWEP.MCKnockbackForceScale = 5
 
--- 击退缩放（`mcitem_knockback_scale`，默认 0.6）在 sh_use_effects.lua 里，那边写了
+-- 击退缩放（`mcitem_knockback_scale`，默认 0.3）在 sh_use_effects.lua 里，那边写了
 -- 为什么不能字面照抄 MC 的速度：Source 重力只有 MC 的一半左右。
 
 -- 非 BMB 的 NPC / NextBot 没有自己的击退实现，只吃 DamageForce（很多 NPC 干脆不理）。
@@ -210,8 +210,7 @@ function SWEP:MCApplyMinecraftKnockback(target, direction, strength)
     if isPlayer then
         -- 玩家的 SetVelocity 是叠加不是设置：先抵消残留，再一次性写入。
         if grounded then target:SetGroundEntity(NULL) end
-        target:SetVelocity(-velocity)
-        target:SetVelocity(result)
+        target:SetVelocity(result - velocity)
     else
         -- NPC / NextBot：SetVelocity 是设置语义，直接写最终速度。
         if grounded and target.SetGroundEntity then target:SetGroundEntity(NULL) end
@@ -227,8 +226,17 @@ function SWEP:MCBuildDamageInfo(owner, damage, position, direction, knockback, t
     -- （`mcitem_damage_scale`，默认 5）就是这一层换算，公式本身仍然是 MC 原版的
     -- `ATTACK_DAMAGE * baseDamageScaleFactor()`，只在最后乘一次。
     damageInfo:SetDamage(MCITEM.ScaleDamage(damage))
-    damageInfo:SetDamageType(DMG_SLASH)
+    local playerTarget = IsValid(target) and target:IsPlayer()
+    -- Players receive the accepted hit's explicit MC velocity below. Source's
+    -- damage knockback is a separate impulse and may still be pending when
+    -- GetVelocity is read, so subtracting current velocity cannot cancel it.
+    damageInfo:SetDamageType(playerTarget
+        and bit.bor(DMG_SLASH, DMG_PREVENT_PHYSICS_FORCE) or DMG_SLASH)
     damageInfo:SetDamagePosition(position)
+    if playerTarget then
+        damageInfo:SetDamageForce(vector_origin)
+        return damageInfo
+    end
     -- Source applies DamageInfo's force while processing TakeDamageInfo, before
     -- the Java-style hurtServer acceptance gate is observable to this Lua
     -- wrapper.  Scale that implicit force with the same KNOCKBACK_RESISTANCE

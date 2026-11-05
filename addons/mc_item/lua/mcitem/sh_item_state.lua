@@ -142,8 +142,8 @@ end
 -- 返回是否真的重新起了一次挥动——**这个门就是"挖掘和攻击看起来不一样"的全部原因**：
 -- 挖掘时每 tick 都请求一次，但只有 swingTime >= duration/2 才准重启，于是动画永远
 -- 在前半段循环（6 tick 的剑 → 每 4 tick 重来一次，只播到 0.5）；单次攻击没人打断，
--- 完整播完 0 → 1。两者共用同一条曲线。
-function MCITEM.Swing(state, durationTicks, now)
+-- 完整播完 0 → 1。两者共用同一条曲线。completeCycle 让本地挖掘改用完整周期。
+function MCITEM.Swing(state, durationTicks, now, completeCycle)
     local duration = MCITEM.ResolveSwingDuration(durationTicks)
 
     -- swingTime < 0 = 这一 tick 已经排过一次重启了。MC 一个 tick 只会调一次 swing()，
@@ -151,7 +151,10 @@ function MCITEM.Swing(state, durationTicks, now)
     -- 66Hz 请求，不吃掉重复请求的话一个 tick 能重启三次（实测 16 次/秒）。
     if state.swinging and state.swingTime < 0 then return false end
 
-    if state.swinging and state.swingTime < math.floor(duration / 2) then
+    -- Continuous mining opts into a complete arc instead of Java's half-arc
+    -- restart. Combat and item-use callers retain the original gate.
+    local restartTick = completeCycle and duration or math.floor(duration / 2)
+    if state.swinging and state.swingTime < restartTick then
         return false
     end
 
@@ -174,7 +177,7 @@ function MCITEM.Swing(state, durationTicks, now)
         state.swingAnchorPending = true
     end
 
-    -- 诊断用：起挥间隔（挖掘时应稳定在 4 tick = 200ms）和整弧起点。
+    -- 诊断用：实际起挥间隔和整弧起点。
     if now then
         state.lastSwingGap = state.lastSwingAt and (now - state.lastSwingAt) or nil
         state.lastSwingAt = now
