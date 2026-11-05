@@ -1,21 +1,15 @@
 #pragma once
 #include "Render/Source/MaterialSystem.h"
+#include "Render/Source/MaterialSystemAbi.h"
 #include <cstdint>
 
 class IMaterial;
 
 namespace mcmesh::source
 {
-enum class EEngineBranch
-{
-	Public,
-	X86_64,
-};
-
-/// Resolve a supported game BRANCH before making any engine-interface calls.
-bool SelectEngineBranch(const char *inName, EEngineBranch &outBranch);
-/// Acquire the selected ABI and register its restore callback on the Lua/render thread.
-bool AcquireMaterialSystem(EEngineBranch inBranch);
+/// Inspect the loaded engine ABI before calling it, then register its restore
+/// callback on the Lua/render thread. A failed detection returns a Lua-safe error.
+bool AcquireMaterialSystem(const char *inReportedBranch, EEngineBranch &outBranch, const char *&outError);
 /// Borrowed module-owned adapter, usable until ReleaseMaterialSystem. The Source
 /// engine owns the underlying interface; all calls run on the Lua/render thread.
 MaterialSystem *GetMaterialSystem();

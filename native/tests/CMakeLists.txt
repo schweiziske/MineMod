@@ -10,6 +10,10 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 	enable_testing()
 endif()
 
+add_executable(mc_material_system_abi_test material_system_abi_test.cpp)
+target_compile_features(mc_material_system_abi_test PRIVATE cxx_std_17)
+add_test(NAME material_system_abi COMMAND mc_material_system_abi_test)
+
 add_executable(mc_native_cpu_work_test cpu_work_gate_test.cpp)
 add_executable(mc_resource_source_probe resource_source_probe.cpp)
 add_executable(mc_native_atlas_pixels_probe atlas_pixels_probe.cpp)

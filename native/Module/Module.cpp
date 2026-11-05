@@ -77,24 +77,12 @@ GMOD_MODULE_OPEN()
 	LUA->PushSpecial(GarrysMod::Lua::SPECIAL_GLOB);
 	LUA->GetField(-1, "BRANCH");
 	mcmesh::source::EEngineBranch engine_branch;
-	const bool branch_matches = mcmesh::source::SelectEngineBranch(LUA->GetString(-1), engine_branch);
-#if defined(MCSWEP_AUTO_BRANCH)
-	const char *branch_error = "mcmesh: unsupported GMod branch; expected public (BRANCH=unknown) or x86-64 beta";
-#elif defined(GMOD_SDK_PUBLIC)
-	const char *branch_error = "mcmesh: this DLL requires public GMod; install the matching branch build";
-#else
-	const char *branch_error = "mcmesh: this DLL requires x86-64 beta GMod; install the matching branch build";
-#endif
+	const char *branch_error = nullptr;
+	const bool acquired = mcmesh::source::AcquireMaterialSystem(LUA->GetString(-1), engine_branch, branch_error);
 	LUA->Pop(2);
-	if (!branch_matches)
+	if (!acquired)
 	{
 		LUA->ThrowError(branch_error);
-		return 0;
-	}
-
-	if (!mcmesh::source::AcquireMaterialSystem(engine_branch))
-	{
-		LUA->ThrowError("mcmesh: materialsystem acquire failed");
 		return 0;
 	}
 

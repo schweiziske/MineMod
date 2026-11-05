@@ -102,31 +102,14 @@ void OnRestoreBuffers(int /*inChangeFlags*/)
 }
 } // namespace
 
-bool SelectEngineBranch(const char *inName, EEngineBranch &outBranch)
+bool AcquireMaterialSystem(const char *inReportedBranch, EEngineBranch &outBranch, const char *&outError)
 {
-	if (!inName)
-		return false;
-#if defined(MCSWEP_AUTO_BRANCH) || defined(GMOD_SDK_PUBLIC)
-	if (std::strcmp(inName, "unknown") == 0)
-	{
-		outBranch = EEngineBranch::Public;
-		return true;
-	}
-#endif
-#if defined(_M_X64) && (defined(MCSWEP_AUTO_BRANCH) || defined(GMOD_SDK_X86_64))
-	if (std::strcmp(inName, "x86-64") == 0)
-	{
-		outBranch = EEngineBranch::X86_64;
-		return true;
-	}
-#endif
-	return false;
-}
-
-bool AcquireMaterialSystem(EEngineBranch inBranch)
-{
+	outError = "mcmesh: materialsystem acquire failed";
 	if (sMaterialSystem)
-		return inBranch == sEngineBranch;
+	{
+		outBranch = sEngineBranch;
+		return true;
+	}
 	HMODULE library = GetModuleHandleA("materialsystem.dll");
 	if (!library)
 		return false;
@@ -136,7 +119,52 @@ bool AcquireMaterialSystem(EEngineBranch inBranch)
 	void *engine_interface = factory(MATERIAL_SYSTEM_INTERFACE_VERSION, nullptr);
 	if (!engine_interface)
 		return false;
-	switch (inBranch)
+	EEngineBranch engine_branch;
+#if defined(_M_X64)
+	// Steam's BRANCH can describe another installation of App 4000. In
+	// particular, a separately installed public x64 client can report x86-64.
+	// Inspect both layouts before making any material-system virtual call.
+	const auto *image = reinterpret_cast<const uint8_t *>(library);
+	const auto *dos = reinterpret_cast<const IMAGE_DOS_HEADER *>(image);
+	const auto *nt = reinterpret_cast<const IMAGE_NT_HEADERS *>(image + dos->e_lfanew);
+	const auto *sections = IMAGE_FIRST_SECTION(nt);
+	auto read_image = [&](uintptr_t inAddress, void *outBytes, size_t inSize, DWORD inFlags)
+	{
+		const uintptr_t image_base = reinterpret_cast<uintptr_t>(image);
+		if (inAddress < image_base)
+			return false;
+		const uintptr_t rva = inAddress - image_base;
+		for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i)
+		{
+			const auto &section = sections[i];
+			if ((section.Characteristics & inFlags) != inFlags || rva < section.VirtualAddress)
+				continue;
+			const uintptr_t offset = rva - section.VirtualAddress;
+			if (offset > section.Misc.VirtualSize || inSize > section.Misc.VirtualSize - offset)
+				continue;
+			std::memcpy(outBytes, reinterpret_cast<const void *>(inAddress), inSize);
+			return true;
+		}
+		return false;
+	};
+	uintptr_t methods[22]{};
+	const auto table = *static_cast<const uintptr_t *const *>(engine_interface);
+	outError = "mcmesh: unsupported or ambiguous materialsystem ABI; native initialization stopped before engine calls";
+	if (!read_image(reinterpret_cast<uintptr_t>(table), methods, sizeof(methods), IMAGE_SCN_MEM_READ)
+		|| !DetectMaterialSystemAbi(methods, [&](uintptr_t inAddress, void *outBytes, size_t inSize)
+		{
+			return read_image(inAddress, outBytes, inSize, IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE);
+		}, engine_branch))
+		return false;
+#else
+	// The x86 build has only the public SDK layout.
+	outError = "mcmesh: this x86 DLL requires public GMod";
+	if (!inReportedBranch || std::strcmp(inReportedBranch, "unknown") != 0)
+		return false;
+	engine_branch = EEngineBranch::Public;
+#endif
+	outError = "mcmesh: this DLL does not contain the detected materialsystem ABI; install the auto build";
+	switch (engine_branch)
 	{
 #if defined(MCSWEP_AUTO_BRANCH) || defined(GMOD_SDK_PUBLIC)
 	case EEngineBranch::Public:
@@ -153,7 +181,8 @@ bool AcquireMaterialSystem(EEngineBranch inBranch)
 	default:
 		return false;
 	}
-	sEngineBranch = inBranch;
+	sEngineBranch = engine_branch;
+	outBranch = engine_branch;
 	sMaterialSystem->AddRestoreFunc(OnRestoreBuffers);
 	return true;
 }
