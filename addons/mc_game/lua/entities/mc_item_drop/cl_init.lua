@@ -4,6 +4,7 @@ ENT.RenderGroup = RENDERGROUP_TRANSLUCENT
 
 local FLAT_ITEM_GROUND_SCALE = 0.5
 local BLOCK_ITEM_GROUND_SCALE = 0.25
+local ITEM_DROP_MODEL_SCALE = 0.75
 local drawDistance = CreateClientConVar( "mc_item_drop_draw_distance", "96", true, false,
 	"Maximum item drop draw distance in Minecraft blocks (0 disables distance culling).", 0, 1024 )
 local visualVersion = 0
@@ -102,9 +103,10 @@ end
 function ENT:DrawTranslucent()
 	local renderer = MC.InventoryUI and MC.InventoryUI.ItemRenderer
 	if not renderer then return end
-	local modelSize = blockSize()
+	local blockUnit = blockSize()
+	local modelSize = blockUnit * ITEM_DROP_MODEL_SCALE
 	local origin = self:GetPos()
-	local distanceSquared = origin:DistToSqr( EyePos() ) / ( modelSize * modelSize )
+	local distanceSquared = origin:DistToSqr( EyePos() ) / ( blockUnit * blockUnit )
 	local limit = drawDistance:GetFloat()
 	if limit > 0 and distanceSquared > limit * limit then return end
 	local cached = visualCache( self )
