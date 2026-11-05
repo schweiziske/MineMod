@@ -95,8 +95,13 @@ function MC.RegisterCustomBlock( def )
 		if MsgN then MsgN( "[MC] custom block registration rejected after block-state registry freeze" ) end
 		return nil, "registry_frozen"
 	end
+	local previousNextID = MC.CustomNextBlockID
 	local prepared, key = prepareCustomDef( def )
-	if not prepared then return nil, "invalid_definition" end
+	if not prepared then
+		MC.CustomNextBlockID = previousNextID
+		return nil, "invalid_definition"
+	end
+	local createdSchema
 	if MC.RegisterBlock and MC.RegisterProjectBlockStateSchema then
 		local stateRule = prepared.stateRule or prepared.orient
 		if string.match( prepared.name, "_door$" ) then
@@ -113,9 +118,28 @@ function MC.RegisterCustomBlock( def )
 			stateSchema = prepared.stateSchema or prepared.blockStateSchema,
 		} )
 		if not schema then
+			MC.CustomNextBlockID = previousNextID
 			if MsgN then MsgN( "[MC] custom block '" .. key .. "' has invalid state schema: " .. tostring( schemaError ) ) end
 			return nil, schemaError or "invalid_state_schema"
 		end
+		if schemaError == true then createdSchema = schema end
+	end
+
+	local b
+	if MC.RegisterBlock then
+		-- Registration is a boundary: undo the new schema even when strict
+		-- faults raise, then preserve the original failure for the caller.
+		local ok, registered, registerError = pcall( MC.RegisterBlock, prepared )
+		if not ok or not registered then
+			if createdSchema and MC.PendingBlockStateSchemas[createdSchema.name] == createdSchema then
+				MC.PendingBlockStateSchemas[createdSchema.name] = nil
+				MC.BlockStateRegistryEffectiveHash = nil
+			end
+			MC.CustomNextBlockID = previousNextID
+			if not ok then error( registered, 0 ) end
+			return nil, registerError
+		end
+		b = stampCustomMetadata( registered, prepared )
 	end
 
 	if not MC.CustomBlockOrderSeen[key] then
@@ -124,10 +148,7 @@ function MC.RegisterCustomBlock( def )
 	end
 	MC.CustomBlockDefs[key] = prepared
 
-	if MC.RegisterBlock then
-		local registered, registerError = MC.RegisterBlock( prepared )
-		local b = stampCustomMetadata( registered, prepared )
-		if not b then return nil, registerError end
+	if b then
 		if MC.RefreshBlockList then MC.RefreshBlockList() end
 		return b
 	end
@@ -137,9 +158,21 @@ end
 
 function MC.RegisterPendingCustomBlocks()
 	if not MC.RegisterBlock then return end
-	for _, key in ipairs( MC.CustomBlockOrder ) do
+	local index = 1
+	while index <= #MC.CustomBlockOrder do
+		local key = MC.CustomBlockOrder[index]
 		local def = MC.CustomBlockDefs[key]
-		if def then stampCustomMetadata( MC.RegisterBlock( def ), def ) end
+		local ok, registered
+		if def then ok, registered = pcall( MC.RegisterBlock, def ) end
+		if registered and ok then
+			stampCustomMetadata( registered, def )
+			index = index + 1
+		else
+			MC.CustomBlockDefs[key] = nil
+			MC.CustomBlockOrderSeen[key] = nil
+			table.remove( MC.CustomBlockOrder, index )
+			if def and not ok then error( registered, 0 ) end
+		end
 	end
 end
 

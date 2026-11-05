@@ -385,8 +385,6 @@ function MC.RegisterBlock( def )
 	if not handlerName and stateRule == "trapdoor" then handlerName = "trapdoor" end
 	if not handlerName and connectionKind == "fence_gate" then handlerName = "fence_gate" end
 	local handler = def.handlers or ( handlerName and MC.BlockHandlers[handlerName] ) or nil
-	if handler and handler.OnTick then MC.HasBlockTickHandlers = true end
-
 	local translationKey, translationVars = blockTranslation( def, mcid )
 	if not translationKey then
 		MC.Fault( "block_translation_key", "%s: %s", tostring( mcid ), tostring( translationVars ) )
@@ -441,6 +439,7 @@ function MC.RegisterBlock( def )
 		orient = stateRule,
 		place = def.placeRule or def.place,
 	}
+	if handler and handler.OnTick then MC.HasBlockTickHandlers = true end
 	MC.Blocks[id] = b
 	MC.BlockByName[mcid] = b
 	MC.BlockAliases[name] = b
