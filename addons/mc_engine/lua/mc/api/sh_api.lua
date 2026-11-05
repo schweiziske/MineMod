@@ -2012,7 +2012,7 @@ function I18n.Locales()
 	return engine and engine.Locales() or {}
 end
 
--- { { value = "auto", label = "auto" }, { value = locale, label = locale }, ... }
+-- Stable locale values; labels are nativeName (or the locale id) and translated auto.
 function I18n.LanguageOptions()
 	local engine = i18nEngine()
 	return deepCopy( engine and engine.LanguageOptions() or {} )

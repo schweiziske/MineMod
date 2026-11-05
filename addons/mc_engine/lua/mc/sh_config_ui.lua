@@ -117,7 +117,7 @@ local function category( id, group, items, options )
 	return entry
 end
 
--- Language choices are the locales this realm loaded, shown by their ids.
+-- Language choice values stay stable while labels use each locale's autonym.
 local function languageChoices()
 	local choices = {}
 	for index, option in ipairs( MC.I18n.LanguageOptions() ) do

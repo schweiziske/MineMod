@@ -47,6 +47,7 @@ local LIMITS = {
 	valueBytes = 8192,
 	aliases = 16,
 	localeBytes = 32,
+	nativeNameBytes = 128,
 }
 I18n.LIMITS = LIMITS
 
@@ -65,9 +66,11 @@ local EMPTY = {}
 local dictionaries = {}
 local sources = {}
 local aliasTargets = {}
+local nativeNames = {}
 local localeList = {}
 local baseDictionary = EMPTY
-local lastReport = { generation = 0, errors = {}, conflicts = {}, aliasConflicts = {}, files = {}, locales = {}, entries = 0 }
+local lastReport = { generation = 0, errors = {}, conflicts = {}, aliasConflicts = {},
+	nativeNameConflicts = {}, nativeNames = {}, files = {}, locales = {}, entries = 0 }
 local generation = 0
 
 -- Current effective locale of this realm: the player's choice on the client,
@@ -177,7 +180,7 @@ local function readDocument( path, pathID )
 	return document
 end
 
-local DOCUMENT_FIELDS = { locale = true, aliases = true, entries = true }
+local DOCUMENT_FIELDS = { locale = true, nativeName = true, aliases = true, entries = true }
 
 -- Validates one decoded fragment. Any defect rejects the whole file.
 local function parseFragment( document, namespace )
@@ -189,6 +192,14 @@ local function parseFragment( document, namespace )
 	end
 	local locale = canonicalLocale( document.locale )
 	if not locale then return nil, "'locale' is missing or not a locale identifier" end
+
+	local nativeName = document.nativeName
+	if nativeName ~= nil then
+		if type( nativeName ) ~= "string" or trim( nativeName ) == ""
+			or #nativeName > LIMITS.nativeNameBytes or string.find( nativeName, "%c" ) then
+			return nil, "'nativeName' must be nonblank text without control characters, at most " .. LIMITS.nativeNameBytes .. " bytes"
+		end
+	end
 
 	local aliases = {}
 	if document.aliases ~= nil then
@@ -222,7 +233,7 @@ local function parseFragment( document, namespace )
 		if #final > LIMITS.keyBytes then return nil, "final key '" .. final .. "' is longer than " .. LIMITS.keyBytes .. " bytes" end
 		finalKeys[index] = final
 	end
-	return { locale = locale, aliases = aliases, keys = keys, finalKeys = finalKeys, entries = entries }
+	return { locale = locale, nativeName = nativeName, aliases = aliases, keys = keys, finalKeys = finalKeys, entries = entries }
 end
 
 ------------------------------------------------------------------ catalog build
@@ -231,9 +242,11 @@ local function buildCatalog()
 	local report = {
 		generation = generation + 1,
 		errors = {}, conflicts = {}, aliasConflicts = {}, files = {}, locales = {}, entries = 0,
+		nativeNameConflicts = {}, nativeNames = {},
 	}
 	local nextDictionaries, nextSources = {}, {}
 	local nextAliases, aliasSources = {}, {}
+	local nextNativeNames, nameSources = {}, {}
 	local total = 0
 
 	for _, root in ipairs( ROOTS ) do
@@ -279,6 +292,17 @@ local function buildCatalog()
 						nextAliases[alias], aliasSources[alias] = locale, source
 					end
 				end
+				if fragment.nativeName ~= nil then
+					local previous = nextNativeNames[locale]
+					if previous and previous ~= fragment.nativeName then
+						report.nativeNameConflicts[#report.nativeNameConflicts + 1] = {
+							locale = locale, previous = previous, previousSource = nameSources[locale],
+							current = fragment.nativeName, source = source,
+						}
+					end
+					nextNativeNames[locale], nameSources[locale] = fragment.nativeName, source
+					report.nativeNames[locale] = { nativeName = fragment.nativeName, source = source }
+				end
 				report.files[#report.files + 1] = {
 					source = source, kind = root.kind, locale = locale, entries = #fragment.keys,
 				}
@@ -293,7 +317,7 @@ local function buildCatalog()
 	table.sort( locales )
 	report.locales = locales
 	report.entries = total
-	return nextDictionaries, nextSources, nextAliases, locales, report
+	return nextDictionaries, nextSources, nextAliases, locales, report, nextNativeNames
 end
 
 ------------------------------------------------------------------ active locale
@@ -388,14 +412,24 @@ local function printReport( report )
 		MsgN( string.format( "[MC i18n]   alias %s: %s (%s), then %s (%s) wins", conflict.alias,
 			conflict.previous, conflict.previousSource, conflict.current, conflict.source ) )
 	end
+	for index, conflict in ipairs( report.nativeNameConflicts ) do
+		if index > REPORT_PRINT_LIMIT then
+			MsgN( string.format( "[MC i18n]   ... %d more language name conflict(s); mc_i18n_report lists all",
+				#report.nativeNameConflicts - REPORT_PRINT_LIMIT ) )
+			break
+		end
+		MsgN( string.format( "[MC i18n]   nativeName %s: %s (%s), then %s (%s) wins", conflict.locale,
+			conflict.previous, conflict.previousSource, conflict.current, conflict.source ) )
+	end
 end
 
 -- Rebuilds every dictionary from the visible files. Queries keep reading the
 -- previous dictionaries until the new set is complete.
 function I18n.Reload( reason )
-	local nextDictionaries, nextSources, nextAliases, locales, report = buildCatalog()
+	local nextDictionaries, nextSources, nextAliases, locales, report, nextNativeNames = buildCatalog()
 	generation = report.generation
 	dictionaries, sources, aliasTargets, localeList = nextDictionaries, nextSources, nextAliases, locales
+	nativeNames = nextNativeNames
 	baseDictionary = dictionaries[BASE_LOCALE] or EMPTY
 	lastReport = report
 	missingByLocale, missingCount = {}, 0
@@ -577,11 +611,12 @@ function I18n.IsLoaded( locale )
 	return dictionary ~= nil and next( dictionary ) ~= nil
 end
 
--- "auto" is a selection mode, then every loaded locale by its identifier.
+-- Stable setting values with autonyms independent of the current UI language.
 function I18n.LanguageOptions()
-	local options = { { value = "auto", label = "auto" } }
+	local autoKey = SERVER and "config.language.auto_server" or "config.language.auto"
+	local options = { { value = "auto", label = MC.T( autoKey ) } }
 	for _, locale in ipairs( localeList ) do
-		options[#options + 1] = { value = locale, label = locale }
+		options[#options + 1] = { value = locale, label = nativeNames[locale] or locale }
 	end
 	return options
 end
@@ -792,6 +827,16 @@ local function reportLines()
 		lines[#lines + 1] = string.format( "  alias %s: %s (%s), then %s (%s) wins", conflict.alias,
 			conflict.previous, conflict.previousSource, conflict.current, conflict.source )
 	end
+	for _, locale in ipairs( report.locales ) do
+		local name = report.nativeNames[locale]
+		if name then
+			lines[#lines + 1] = string.format( "  nativeName %s: %s (%s)", locale, name.nativeName, name.source )
+		end
+	end
+	for _, conflict in ipairs( report.nativeNameConflicts ) do
+		lines[#lines + 1] = string.format( "  nativeName conflict %s: %s (%s), then %s (%s) wins", conflict.locale,
+			conflict.previous, conflict.previousSource, conflict.current, conflict.source )
+	end
 	return lines
 end
 
@@ -823,7 +868,9 @@ if CLIENT then
 
 	local function languageLines()
 		local lines = { string.format( "[MC] mc_language = %s (current %s)", I18n.LanguageSetting(), activeLocale ) }
-		for _, option in ipairs( I18n.LanguageOptions() ) do lines[#lines + 1] = "[MC]   " .. option.value end
+		for _, option in ipairs( I18n.LanguageOptions() ) do
+			lines[#lines + 1] = "[MC]   " .. option.value .. "  " .. option.label
+		end
 		return lines
 	end
 

@@ -1,6 +1,8 @@
 {
   "locale": "en_us",
   "entries": {
+    "language.auto": "Automatic (game language)",
+    "language.auto_server": "Automatic (English)",
     "category.autosave.description": "Periodic server world saving.",
     "category.autosave.label": "Autosave",
     "category.block_cluster.description": "Limits and physics for block structures converted into movable entities.",

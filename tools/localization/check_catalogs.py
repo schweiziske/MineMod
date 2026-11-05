@@ -22,6 +22,7 @@ def unique_object(pairs):
 def inspect(roots):
     catalogs, sources, aliases = {}, {}, {}
     report = {"files": [], "errors": [], "conflicts": [], "aliasConflicts": [],
+              "nativeNameConflicts": [], "nativeNames": {},
               "missing": {}, "placeholders": [], "coverage": {}}
     # A root represents a mounted virtual tree. Preserve root order for overrides.
     for roots_in_layer in roots:
@@ -45,7 +46,7 @@ def inspect(roots):
                 if len(raw) > 1048576:
                     raise ValueError("file exceeds 1 MiB")
                 data = json.loads(raw.decode("utf-8-sig"), object_pairs_hook=unique_object)
-                if not isinstance(data, dict) or set(data) - {"locale", "aliases", "entries"}:
+                if not isinstance(data, dict) or set(data) - {"locale", "nativeName", "aliases", "entries"}:
                     raise ValueError("invalid catalog fields")
                 locale = data.get("locale")
                 if not isinstance(locale, str):
@@ -53,6 +54,11 @@ def inspect(roots):
                 locale = locale.lower().replace("-", "_")
                 if len(locale) > 32 or not LOCALE.fullmatch(locale):
                     raise ValueError("invalid locale")
+                native_name = data.get("nativeName")
+                if "nativeName" in data:
+                    if (not isinstance(native_name, str) or not native_name.strip(" \t\r\n\v\f")
+                            or len(native_name.encode()) > 128 or re.search(r"[\x00-\x1f\x7f]", native_name)):
+                        raise ValueError("nativeName must be nonblank text without control characters, at most 128 bytes")
                 entries = data.get("entries")
                 if not isinstance(entries, dict) or len(entries) > 10000:
                     raise ValueError("entries must be an object with at most 10000 members")
@@ -87,6 +93,13 @@ def inspect(roots):
                 if alias in aliases and aliases[alias] != locale:
                     report["aliasConflicts"].append({"alias": alias, "previous": aliases[alias], "winner": locale})
                 aliases[alias] = locale
+            if native_name is not None:
+                previous = report["nativeNames"].get(locale)
+                if previous and previous["nativeName"] != native_name:
+                    report["nativeNameConflicts"].append({
+                        "locale": locale, "previous": previous["nativeName"], "previousSource": previous["source"],
+                        "current": native_name, "source": source})
+                report["nativeNames"][locale] = {"nativeName": native_name, "source": source}
             report["files"].append({"source": source, "locale": locale, "entries": len(checked)})
     base = catalogs.get("en_us", {})
     if not base:
@@ -118,7 +131,8 @@ def main():
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"{len(report['files'])} files; {len(report['errors'])} errors; "
-          f"{len(report['conflicts'])} key conflicts; {len(report['placeholders'])} placeholder mismatches")
+          f"{len(report['conflicts'])} key conflicts; {len(report['nativeNameConflicts'])} language name conflicts; "
+          f"{len(report['placeholders'])} placeholder mismatches")
     for locale, coverage in report["coverage"].items():
         print(f"{locale}: {coverage['translated']}/{coverage['base']} base entries")
         for key in report["missing"][locale][:10]:
@@ -127,6 +141,9 @@ def main():
         print(error)
     for mismatch in report["placeholders"][:10]:
         print(f"{mismatch['locale']} {mismatch['key']}: {mismatch['expected']} != {mismatch['actual']}")
+    for conflict in report["nativeNameConflicts"][:10]:
+        print(f"{conflict['locale']} nativeName: {conflict['previous']} ({conflict['previousSource']})"
+              f" -> {conflict['current']} ({conflict['source']})")
     # Conflicting catalogs are legal; their winning sources stay visible in the report.
     return int(bool(report["errors"] or report["placeholders"] or any(report["missing"].values())))
 

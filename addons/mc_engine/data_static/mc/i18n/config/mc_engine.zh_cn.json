@@ -1,6 +1,8 @@
 {
   "locale": "zh_cn",
   "entries": {
+    "language.auto": "自动（跟随游戏）",
+    "language.auto_server": "自动（英语）",
     "category.autosave.description": "服务器世界的定时保存设置。",
     "category.autosave.label": "自动保存",
     "category.block_cluster.description": "方块结构转换为可搬运实体的上限与物理设置。",

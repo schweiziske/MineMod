@@ -95,7 +95,16 @@ end
 -- with serverChoices uses the list the server sent with its values.
 local function itemChoices( scope, item )
 	if scope == "server" and item.serverChoices then
-		return MC.ConfigServerChoices[item.name] or {}
+		local available = MC.ConfigServerChoices[item.name] or {}
+		if item.name ~= "mc_console_language" then return available end
+		-- Only locale identifiers cross the wire; names use this client's metadata.
+		local labels, choices = {}, {}
+		for _, option in ipairs( MC.I18n.LanguageOptions() ) do labels[option.value] = option.label end
+		labels.auto = L( "config.language.auto_server" )
+		for index, entry in ipairs( available ) do
+			choices[index] = { value = entry.value, text = labels[entry.value] or entry.value }
+		end
+		return choices
 	end
 	local choices = item.choices
 	if isfunction( choices ) then choices = choices() end

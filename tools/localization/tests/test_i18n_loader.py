@@ -50,10 +50,12 @@ class Scenario:
         path.write_bytes(content.encode("utf-8") if isinstance(content, str) else content)
         return path
 
-    def fragment(self, addon, relative, locale, entries, aliases=None):
+    def fragment(self, addon, relative, locale, entries, aliases=None, native_name=None):
         document = {"locale": locale, "entries": entries}
         if aliases is not None:
             document["aliases"] = aliases
+        if native_name is not None:
+            document["nativeName"] = native_name
         return self.write(self.base / "addons" / addon / ROOT / relative, document)
 
     def raw(self, addon, relative, content):
@@ -289,6 +291,7 @@ def test_resource_limits_reject_whole_files():
 def test_new_locale_becomes_selectable_after_reload():
     with Scenario() as s:
         s.fragment("addon_a", "ui/en.json", "en_us", {"title": "Settings"})
+        s.fragment("addon_a", "config/labels.json", "en_us", {"language.auto": "Automatic (game language)"})
         rt = s.runtime()
         eq(rt.to_python(rt.call("MC.I18n.Locales")), ["en_us"])
         # A new addon with a locale no Lua code names.
@@ -296,12 +299,35 @@ def test_new_locale_becomes_selectable_after_reload():
         rt.call("MC.I18n.Reload")
         eq(rt.to_python(rt.call("MC.I18n.Locales")), ["en_us", "fr_fr"])
         options = rt.to_python(rt.call("MC.I18n.LanguageOptions"))
-        eq(options, [{"value": "auto", "label": "auto"}, {"value": "en_us", "label": "en_us"},
-                     {"value": "fr_fr", "label": "fr_fr"}], "options show raw locale ids")
+        eq(options, [{"value": "auto", "label": "Automatic (game language)"}, {"value": "en_us", "label": "en_us"},
+                     {"value": "fr_fr", "label": "fr_fr"}], "unnamed locales keep their ids")
         eq(rt.call("MC.I18n.SetLanguage", "FR-fr"), "fr_fr")
         eq(rt.eval('GetConVar( "mc_language" ):GetString()'), "fr_fr")
         eq(rt.call("MC.I18n.Language"), "fr_fr")
         eq(T(rt, "ui.title"), "Paramètres")
+
+
+def test_native_names_merge_without_changing_language_values():
+    with Scenario() as s:
+        s.fragment("addon_a", "a.json", "en_us", {"config.language.auto": "Automatic"}, native_name="English")
+        s.fragment("addon_a", "b.json", "fr_fr", {"title": "Paramètres"}, native_name="Français")
+        s.fragment("addon_b", "c.json", "fr_fr", {}, native_name="Français")
+        s.fragment("addon_b", "d.json", "fr_fr", {"other": "Autre"})
+        rt = s.runtime()
+        eq(rt.report()["nativeNameConflicts"], [], "same name and omitted field are not conflicts")
+        eq(rt.to_python(rt.call("MC.I18n.LanguageOptions"))[-1], {"value": "fr_fr", "label": "Français"})
+        path = s.base / "data" / "mc" / "i18n" / "overrides" / "name.json"
+        s.write(path, {"locale": "fr_fr", "nativeName": "Français (France)", "entries": {}})
+        rt.call("MC.I18n.Reload")
+        report = rt.report()
+        eq(len(report["nativeNameConflicts"]), 1)
+        eq(report["nativeNameConflicts"][0]["previousSource"], "GAME:" + ROOT + "c.json")
+        eq(report["nativeNames"]["fr_fr"]["source"], "DATA:mc/i18n/overrides/name.json")
+        eq(rt.to_python(rt.call("MC.I18n.LanguageOptions"))[-1], {"value": "fr_fr", "label": "Français (France)"})
+        eq(rt.call("MC.I18n.Has", "nativeName", "fr_fr"), False, "metadata is not a translation key")
+        path.unlink()
+        rt.call("MC.I18n.Reload")
+        eq(rt.to_python(rt.call("MC.I18n.LanguageOptions"))[-1], {"value": "fr_fr", "label": "Français"})
 
 
 def test_locale_without_entries_is_not_listed():
