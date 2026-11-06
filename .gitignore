@@ -30,6 +30,7 @@ addon.json
 maps/mc_void.bsp
 maps/mc_void.vmf
 .codex_sound_objects_26_2/
+/minemod/
 _research
 testworld
 .vscode/settings.json

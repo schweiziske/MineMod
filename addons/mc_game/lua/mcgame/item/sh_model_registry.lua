@@ -121,7 +121,7 @@ if CLIENT then
 			end
 		end
 
-		local items, models = {}, {}
+		local items, models, blockSpriteMasks = {}, {}, {}
 		for _, entry in ipairs( entries ) do
 			if entry.i ~= nil then
 				local itemId = modelIdentifier( entry.i )
@@ -140,6 +140,23 @@ if CLIENT then
 				for _, layer in ipairs( data.layers ) do
 					if layer ~= nil and ( type( layer ) ~= "string" or #layer > 192 ) then return false, "invalid_item_model_layer" end
 				end
+				local mask = data.blockSpriteMask
+				if mask ~= nil then
+					if #data.layers ~= 1 or type( data.layers[1] ) ~= "string"
+					or not data.layers[1]:match( "^mc/block/" ) or type( mask ) ~= "table"
+					or not finiteNumber( mask.width ) or not finiteNumber( mask.height )
+					or mask.width % 1 ~= 0 or mask.height % 1 ~= 0
+					or mask.width < 1 or mask.width > 32 or mask.height < 1 or mask.height > 32
+					or type( mask.rows ) ~= "table" or #mask.rows ~= mask.height then
+						return false, "invalid_item_block_sprite_mask"
+					end
+					for _, row in ipairs( mask.rows ) do
+						if not finiteNumber( row ) or row % 1 ~= 0 or row < 0 or row >= 2 ^ mask.width then
+							return false, "invalid_item_block_sprite_mask_row"
+						end
+					end
+					blockSpriteMasks[data.layers[1]] = mask
+				end
 				models[modelId] = data
 			else
 				return false, "unknown_item_model_entry"
@@ -148,6 +165,7 @@ if CLIENT then
 		if entryCount( items ) > MAX_ITEMS or entryCount( models ) > MAX_MODELS then return false, "item_model_catalog_limits" end
 
 		MC.ItemModelFiles = models
+		MC.ItemBlockSpriteMasks = blockSpriteMasks
 		MC.ItemModelCatalog = {
 			version = MC.GeneratedItemModelSourceVersion,
 			items = items,

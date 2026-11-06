@@ -2,7 +2,7 @@
 -- Do not hand edit; regenerate after replacing out/.
 MC = MC or {}
 MC.GeneratedItemModelSourceVersion = "26.2-pre-4"
-MC.ItemModelRegistryHash = "4cb0eb47f834b15326eaa8aecad930c6b3aa630f5164d3ddead10fd342f8c1dd"
+MC.ItemModelRegistryHash = "adfead3695d28cebebd08b8ff29f9f1e760c1f1f270e6c94058ff19e753fcf01"
 MC.GeneratedItemModelPayloadParts = {}
 if SERVER and file and file.Find and AddCSLuaFile then
 	for _, fileName in ipairs( file.Find( "mcgame/generated/sh_generated_item_models_part*.lua", "LUA" ) or {} ) do

@@ -93,7 +93,8 @@ for index = 0, 31 do spriteMaskBitPowers[index] = 2 ^ index end
 local function spriteMaskForLayer( layer )
 	if type( layer ) ~= "string" or layer == "" then return nil end
 	layer = string.gsub( layer, "%.png$", "" )
-	return MC.ItemSpriteMasks and MC.ItemSpriteMasks[layer] or nil
+	return MC.ItemSpriteMasks and MC.ItemSpriteMasks[layer]
+		or MC.ItemBlockSpriteMasks and MC.ItemBlockSpriteMasks[layer] or nil
 end
 
 local function maskOpaque( mask, x, y )
@@ -277,8 +278,52 @@ function Renderer.Definition( stack )
 	return definitionFor( stack )
 end
 
+local blockLayerMaterials = {}
+
+local function bindBlockLayer( entry )
+	local source = MC.MaterialHeldBlock
+	if not MC.Check( source and MC.TileUV, "item_block_layer_atlas", "Missing item atlas for %s", entry.layer ) then return false end
+	local texture = source:GetTexture( "$basetexture" )
+	if not MC.Check( texture and not texture:IsError(), "item_block_layer_texture", "Missing item texture for %s", entry.layer ) then return false end
+	local u0, v0, u1, v1 = MC.TileUV( entry.tile )
+	local transform = Matrix()
+	transform:SetField( 1, 1, u1 - u0 )
+	transform:SetField( 2, 2, v1 - v0 )
+	transform:SetField( 1, 4, u0 )
+	transform:SetField( 2, 4, v0 )
+	entry.material:SetTexture( "$basetexture", texture )
+	entry.material:SetMatrix( "$basetexturetransform", transform )
+	if MC.ResourceGeneration then MC.ResourceGeneration.TrackMaterial( entry.material ) end
+	return true
+end
+
+local function blockLayerMaterial( layer, tileName, worldItem )
+	local key = layer .. ( worldItem and "|world" or "|icon" )
+	local cached = blockLayerMaterials[key]
+	if cached then return cached.material end
+	local tile = MC.Tiles and MC.Tiles[tileName]
+	if not MC.Check( tile ~= nil, "item_block_layer_tile", "Unknown block sprite %s", layer ) then return nil end
+	local material = CreateMaterial( "mc_item_block_layer_" .. tile .. ( worldItem and "_world" or "_icon" ), "UnlitGeneric", {
+		["$basetexture"] = "vgui/white", ["$vertexcolor"] = "1", ["$vertexalpha"] = "1",
+		["$nocull"] = worldItem and "0" or "1", ["$alphatest"] = "1", ["$alphatestreference"] = "0.5",
+		["$hdrcolorscale"] = tostring( UI.WorldItemHDRColorScale or 1 ),
+	} )
+	if not MC.Check( material and not material:IsError(), "item_block_layer_material", "Cannot create block sprite material %s", layer ) then return nil end
+	cached = { layer = layer, tile = tile, material = material }
+	if not bindBlockLayer( cached ) then return nil end
+	blockLayerMaterials[key] = cached
+	return material
+end
+
+hook.Add( "MC.TexturePackChanged", "mc_item_block_layers", function()
+	-- Prepared drops retain these material handles across resource-pack changes.
+	for _, entry in pairs( blockLayerMaterials ) do bindBlockLayer( entry ) end
+end )
+
 function Renderer.MaterialForLayer( layer, worldItem )
 	if type( layer ) ~= "string" or layer == "" then return nil end
+	local tileName = string.match( layer, "^mc/block/([a-z0-9_/%-]+)$" )
+	if tileName then return blockLayerMaterial( layer, tileName, worldItem == true ) end
 	-- Explicit Source materials (such as the 128px GMod logo) already name a
 	-- complete resource; only bare item texture paths need the PNG extension.
 	if not string.match( layer, "%.png$" ) and not string.match( layer, "%.vmt$" ) then
