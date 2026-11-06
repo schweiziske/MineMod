@@ -371,13 +371,13 @@ if CLIENT then
 		"DrawVisible", "SetChunkVisible", "SetSimpleGreedy", "SetDirectionalDraw", "SetOcclusionCull", "SetLod",
 	}
 	MC.NativeMeshABI = 8
-	local NATIVE_MODULE_URL = "https://github.com/ABSD546316187/mcswep_native_mesh/releases"
+	local NATIVE_MODULE_URL = "https://github.com/schweiziske/MineMod/releases"
 
 	local function expectedNativeModulePath()
 		if not ( system and system.IsWindows and system.IsWindows() ) then return nil end
 		local arch = jit and jit.arch or nil
-		if arch == "x64" then return "lua/bin/gmcl_mcswep_native_mesh_win64.dll" end
-		if arch == "x86" then return "lua/bin/gmcl_mcswep_native_mesh_win32.dll" end
+		if arch == "x64" then return "lua/bin/gmcl_minemod_native_win64.dll" end
+		if arch == "x86" then return "lua/bin/gmcl_minemod_native_win32.dll" end
 		return nil
 	end
 
@@ -412,7 +412,7 @@ if CLIENT then
 				MC.NativeMeshModuleFailureReason = "module not installed: " .. modulePath
 				return false
 			end
-			loaded, loadError = pcall( require, "mcswep_native_mesh" )
+			loaded, loadError = pcall( require, "minemod_native" )
 		end
 
 		local usable = loaded and istable( mcmesh ) and isfunction( mcmesh.AbiVersion )

@@ -355,7 +355,7 @@
     "setting.mc_mesh_geometry_cache_sections.label": "几何缓存分区数",
     "setting.mc_mesh_render.help": "绘制 MC 区块网格；关闭后碰撞仍然生效。",
     "setting.mc_mesh_render.label": "显示区块网格",
-    "setting.mc_native_mesh.help": "安装兼容的客户端 DLL 时使用 mcswep_native_mesh；关闭后改用 Lua 后端。",
+    "setting.mc_native_mesh.help": "安装兼容的客户端 DLL 时使用 minemod_native；关闭后改用 Lua 后端。",
     "setting.mc_native_mesh.label": "使用原生网格后端",
     "setting.mc_native_think_ms.help": "每帧用于提交已完成原生网格任务的最大毫秒数。",
     "setting.mc_native_think_ms.label": "原生网格落地预算",

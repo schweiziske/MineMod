@@ -115,7 +115,7 @@ if(MCSWEP_BUILD_MODULE)
 	set(MCSWEP_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin" CACHE PATH "Module output directory")
 	set_target_properties(mcswep_native_mesh PROPERTIES
 		PREFIX ""
-		OUTPUT_NAME "gmcl_mcswep_native_mesh_${module_platform}"
+		OUTPUT_NAME "gmcl_minemod_native_${module_platform}"
 		RUNTIME_OUTPUT_DIRECTORY "${MCSWEP_OUTPUT_DIRECTORY}"
 		LIBRARY_OUTPUT_DIRECTORY "${MCSWEP_OUTPUT_DIRECTORY}"
 	)

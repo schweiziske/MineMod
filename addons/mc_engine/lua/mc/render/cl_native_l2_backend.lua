@@ -31,7 +31,7 @@ function N.Probe()
 	N.deferredLightingAvailable = false
 	N.mixedTopologyAvailable = false
 	N.fluidAvailable = false
-	N.reason = MC.NativeMeshModuleFailureReason or "installed DLL has no L2 interface; update mcswep_native_mesh"
+	N.reason = MC.NativeMeshModuleFailureReason or "installed DLL has no L2 interface; update minemod_native"
 	if type( module ) ~= "table" then return false, N.reason end
 	for _, name in ipairs( { "L2Version", "CompileL2Template", "SubmitL2Section", "PollL2Section",
 		"UploadL2PartNative", "CancelL2Section", "CanSubmitL2", "GetL2Stats",

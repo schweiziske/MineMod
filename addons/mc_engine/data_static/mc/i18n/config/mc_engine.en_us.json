@@ -355,7 +355,7 @@
     "setting.mc_mesh_geometry_cache_sections.label": "Geometry cache sections",
     "setting.mc_mesh_render.help": "Draw MC chunk meshes; collision remains active when hidden.",
     "setting.mc_mesh_render.label": "Render chunk meshes",
-    "setting.mc_native_mesh.help": "Use mcswep_native_mesh when the compatible client DLL is installed; disable to use the Lua backend.",
+    "setting.mc_native_mesh.help": "Use minemod_native when the compatible client DLL is installed; disable to use the Lua backend.",
     "setting.mc_native_mesh.label": "Use native mesh backend",
     "setting.mc_native_think_ms.help": "Maximum milliseconds per frame used to commit completed native mesh work.",
     "setting.mc_native_think_ms.label": "Native finalization budget",

@@ -1,0 +1,140 @@
+name: Native DLLs
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Optional existing Release tag: build that tag and upload assets; empty = artifacts only'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ inputs.release_tag || github.ref }}
+  cancel-in-progress: ${{ inputs.release_tag == '' }}
+
+jobs:
+  build:
+    name: Windows ${{ matrix.architecture }} (${{ matrix.branch }})
+    runs-on: windows-2022
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            branch: auto
+            preset: auto-release-final
+            platform: win64
+            machine: '8664'
+          - architecture: x86
+            branch: public
+            preset: public-x86-release-final
+            platform: win32
+            machine: '014C'
+    env:
+      NATIVE_ARCHITECTURE: ${{ matrix.architecture }}
+      NATIVE_BRANCH: ${{ matrix.branch }}
+      NATIVE_PLATFORM: ${{ matrix.platform }}
+      NATIVE_MACHINE: ${{ matrix.machine }}
+      NATIVE_BINARY_DIRECTORY: native/build/${{ matrix.architecture }}/${{ matrix.preset }}/bin
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out source and pinned dependencies
+        uses: actions/checkout@v4
+        with:
+          # When uploading, build the specified release tag, never latest main.
+          ref: ${{ inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
+          submodules: true
+          persist-credentials: false
+
+      - name: Build optimized DLL
+        run: |
+          .\native\build.ps1 -Configuration Release_Final `
+            -Branch $env:NATIVE_BRANCH -Architecture $env:NATIVE_ARCHITECTURE
+
+      - name: Verify and collect build
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dllName = "gmcl_minemod_native_$env:NATIVE_PLATFORM.dll"
+          $dllPath = Join-Path $env:NATIVE_BINARY_DIRECTORY $dllName
+          $bytes = [IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $dllPath).Path)
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4).ToString('X4')
+          if ($machine -ne $env:NATIVE_MACHINE) { throw "Wrong DLL architecture: $machine" }
+
+          $header = Get-Content -LiteralPath native/Module/Handshake.h -Raw
+          $loader = Get-Content -LiteralPath addons/mc_engine/lua/autorun/mc_load.lua -Raw
+          $nativeAbi = [regex]::Match($header, '\bABI_VERSION\s*=\s*(\d+)\s*;')
+          $luaAbi = [regex]::Match($loader, '\bMC\.NativeMeshABI\s*=\s*(\d+)\b')
+          if (-not $nativeAbi.Success -or -not $luaAbi.Success) { throw 'ABI declaration missing' }
+          $abi = [int]$nativeAbi.Groups[1].Value
+          if ($abi -ne [int]$luaAbi.Groups[1].Value) { throw 'Native/Lua ABI versions differ' }
+
+          $commit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve source commit' }
+          $hash = (Get-FileHash -LiteralPath $dllPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+          Copy-Item -LiteralPath $dllPath -Destination artifacts
+          $pdbName = [IO.Path]::ChangeExtension($dllName, '.pdb')
+          Copy-Item -LiteralPath (Join-Path $env:NATIVE_BINARY_DIRECTORY $pdbName) -Destination artifacts
+          "$hash  $dllName" | Set-Content -LiteralPath "artifacts/$dllName.sha256" -Encoding utf8
+          [ordered]@{
+            module = 'minemod_native'
+            abi = $abi
+            commit = $commit.Trim()
+            architecture = $env:NATIVE_ARCHITECTURE
+            engine_branch = $env:NATIVE_BRANCH
+            configuration = 'Release_Final'
+            dll = $dllName
+            sha256 = $hash
+            workflow_run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          } | ConvertTo-Json | Set-Content -LiteralPath "artifacts/native-build-$env:NATIVE_PLATFORM.json" -Encoding utf8
+          "### $dllName`nSource: $commit`n`nABI: $abi`n`nSHA-256: $hash" |
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+
+      - name: Save DLL, symbols and build information
+        uses: actions/upload-artifact@v4
+        with:
+          name: minemod-native-${{ matrix.platform }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Attach both DLLs to selected release
+    if: inputs.release_tag != ''
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download both successful builds
+        uses: actions/download-artifact@v4
+        with:
+          pattern: minemod-native-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Upload release DLLs and build information
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Use explicit names so neither architecture can be silently omitted.
+          gh release upload "$RELEASE_TAG" --clobber \
+            artifacts/gmcl_minemod_native_win32.dll \
+            artifacts/gmcl_minemod_native_win64.dll \
+            artifacts/gmcl_minemod_native_win32.dll.sha256 \
+            artifacts/gmcl_minemod_native_win64.dll.sha256 \
+            artifacts/native-build-win32.json \
+            artifacts/native-build-win64.json
