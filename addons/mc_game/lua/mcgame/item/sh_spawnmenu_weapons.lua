@@ -35,6 +35,8 @@ local function eligible( class, definition )
 	return type( class ) == "string" and #class <= 128 and class:match( "^[%w_%.%-]+$" )
 		and type( definition ) == "table" and definition.Spawnable == true
 		and class ~= "mc_item_hand" and class ~= "mc_creative_placer" and class ~= "mc_inventory"
+		-- MCITEM weapons are represented by their Minecraft items in the catalog.
+		and string.sub( class, 1, 14 ) ~= "weapon_mcitem_" and class ~= "weapon_bmb_item_model_test"
 end
 
 function W.CanEquip( ply, class )
@@ -96,12 +98,7 @@ local function publish( records )
 	MC.RegisterCreativeStackProvider( "mc.game.spawnmenu_weapons", function( key, entries )
 		if key == TAB or key == "search" then
 			for _, stack in ipairs( W.stacks ) do
-				local class = W.Class( stack )
-				-- Keep mc_item SWEPs in the weapons tab; their Minecraft items
-				-- already appear in search through the ordinary item catalog.
-				local mcItemWeapon = string.sub( class, 1, 14 ) == "weapon_mcitem_"
-					or class == "weapon_bmb_item_model_test"
-				if key == TAB or not mcItemWeapon then entries[#entries + 1] = stack end
+				entries[#entries + 1] = stack
 			end
 		end
 		return entries
