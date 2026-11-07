@@ -18,9 +18,8 @@ GMod 不会挂载嵌套目录，`addons/` 下的每个目录都是一个独立 a
 | `mc_game` | 生存玩法：物品、物品栏、配方、挖掘、掉落物、容器。只通过 `MC.API` 使用引擎 |
 | `mc_item` | MC 物品武器、模型、材质和声音 |
 | `mc_shaderpack_pbr` | 可选 PBR 光影包 |
-| `mc_shaderpack_l2_probes` | 渲染管线调试用探针 shader |
 | `mc_skybox_block` | 方块天空盒 |
-| `mc_texturepack_programmer_art` / `mc_texturepack_avpbr` | 可选材质包，在游戏内烘焙 atlas |
+| `mc_texturepack_programmer_art` | 可选经典材质包，在游戏内烘焙 atlas |
 
 引擎不依赖游戏层。实体和武器各只由一个 addon 提供，归属登记在 [addons/ownership.json](../../addons/ownership.json)；同一相对挂载路径不能由两个 addon 重复提供。
 

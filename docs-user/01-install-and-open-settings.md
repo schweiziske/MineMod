@@ -17,7 +17,6 @@ For manual installation, place each required addon in `garrysmod/addons/`. This 
 | `mc_item` | MC item weapons, models, materials, and sounds |
 | `mc_shaderpack_pbr` | Optional PBR shader pack |
 | `mc_texturepack_programmer_art` | Optional classic textures |
-| `mc_texturepack_avpbr` | Optional AVPBR textures and PBR materials |
 
 For your first session, install the first three addons plus `mc_game` and `mc_item`. Fully exit and restart the game after adding or replacing addons.
 

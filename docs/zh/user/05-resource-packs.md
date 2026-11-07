@@ -24,10 +24,8 @@
 |---|---|
 | 默认 | 安装 `mc_texturepack_default`，必需 |
 | Programmer Art | 安装 `mc_texturepack_programmer_art`，已含原始资源 |
-| AVPBR | 安装 `mc_texturepack_avpbr`，已含原始资源 |
 
-Programmer Art 与 AVPBR 应用时自动生成图集，无需用户运行离线烘焙脚本。
-AVPBR 的法线、高光等效果还需选择 `mc:pbr` [光影包](06-shader-packs.md)。
+Programmer Art 应用时自动生成图集，无需用户运行离线烘焙脚本。
 
 安装或移除 addon 后须完整重启游戏；管理器刷新不会挂载新 addon。
 

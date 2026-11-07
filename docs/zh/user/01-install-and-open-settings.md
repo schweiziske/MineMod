@@ -18,7 +18,6 @@
 | `mc_item` | MC 物品武器、模型、材质和声音 |
 | `mc_shaderpack_pbr` | 可选，PBR 光影包 |
 | `mc_texturepack_programmer_art` | 可选，经典贴图 |
-| `mc_texturepack_avpbr` | 可选，AVPBR 贴图与 PBR 材质 |
 
 第一次游玩建议安装前三项以及 `mc_game`、`mc_item`。
 新增或替换 addon 后，完整退出并重启游戏。

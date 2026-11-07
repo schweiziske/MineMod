@@ -18,9 +18,8 @@ GMod does not mount nested directories. Each directory under `addons/` is a sepa
 | `mc_game` | Survival gameplay: items, inventory, recipes, mining, drops, and containers. Uses the engine only through `MC.API` |
 | `mc_item` | MC item weapons, models, materials, and sounds |
 | `mc_shaderpack_pbr` | Optional PBR shader pack |
-| `mc_shaderpack_l2_probes` | Probe shaders for debugging the rendering pipeline |
 | `mc_skybox_block` | Block skybox |
-| `mc_texturepack_programmer_art` / `mc_texturepack_avpbr` | Optional resource packs whose atlases are baked in game |
+| `mc_texturepack_programmer_art` | Optional classic resource pack whose atlas is baked in game |
 
 The engine does not depend on the gameplay layer. Each entity or weapon belongs to one addon, as recorded in [addons/ownership.json](addons/ownership.json). Two addons must not provide the same relative mount path.
 

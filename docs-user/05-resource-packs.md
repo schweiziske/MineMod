@@ -21,9 +21,8 @@ One pack is active at a time. Selecting an entry does not apply it until you cli
 | --- | --- |
 | Default | `mc_texturepack_default`, required |
 | Programmer Art | `mc_texturepack_programmer_art`; source assets included |
-| AVPBR | `mc_texturepack_avpbr`; source assets included |
 
-Programmer Art and AVPBR generate their atlases automatically when applied. No offline baking script is required. AVPBR normal and specular effects also require the `mc:pbr` [shader pack](06-shader-packs.md).
+Programmer Art generates its atlas automatically when applied. No offline baking script is required.
 
 Fully restart after installing or removing addons. Refreshing the manager does not mount new addons.
 
