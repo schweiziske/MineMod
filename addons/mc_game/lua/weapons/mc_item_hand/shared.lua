@@ -1631,12 +1631,16 @@ if CLIENT then
 			startedAt = ply:GetNWFloat( "mc_item_using_start", 0 ),
 			duration = ply:GetNWFloat( "mc_item_using_duration", 0 ),
 		}
+		local stack = selectedStack( ply )
 		local HandWeapon = MC.API and MC.API.HandWeapon or nil
-		local ownsFirstPerson = firstPerson and HandWeapon
-			and HandWeapon.OwnsFirstPersonPresentation
-			and HandWeapon.OwnsFirstPersonPresentation( weapon ) == true
+		-- Restored GMod weapons already own their viewmodel before their
+		-- catalog entry (and adapter) arrives. Never draw the icon as a hand.
+		local ownsFirstPerson = firstPerson and (
+			( MC.SpawnmenuWeapons and MC.SpawnmenuWeapons.Class( stack ) ~= nil )
+			or ( HandWeapon and HandWeapon.OwnsFirstPersonPresentation
+				and HandWeapon.OwnsFirstPersonPresentation( weapon ) == true ) )
 		if not ownsFirstPerson then
-			drawHeldStack( ply, selectedStack( ply ), firstPerson, "mainhand", useState )
+			drawHeldStack( ply, stack, firstPerson, "mainhand", useState )
 		end
 		drawHeldStack( ply, equipmentStack( ply, "offhand" ), firstPerson, "offhand", useState )
 	end

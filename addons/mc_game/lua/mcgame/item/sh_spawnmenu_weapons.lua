@@ -112,7 +112,6 @@ end, 50 )
 
 if SERVER then
 	local nextRequest = setmetatable( {}, { __mode = "k" } )
-	local sentRevision = setmetatable( {}, { __mode = "k" } )
 	local function refresh()
 		local records = {}
 		local changed = false
@@ -133,9 +132,10 @@ if SERVER then
 		end
 		if changed or count ~= #W.stacks or W.revision == 0 then publish( records ) end
 	end
-	local function sendCatalog( ply, force )
-		if not force and sentRevision[ply] == W.revision then return end
-		sentRevision[ply] = W.revision
+	local function sendCatalog( ply, receivedRevision )
+		-- A send is not an acknowledgement: a joining client may not have
+		-- installed its receiver yet, or may still be missing catalog pages.
+		if receivedRevision == W.revision then return end
 		local rows = W.stacks
 		-- Small reliable pages keep even large addon collections below net's limit.
 		local pageCount = math.max( 1, math.ceil( #rows / 32 ) )
@@ -157,17 +157,18 @@ if SERVER then
 			net.Send( ply )
 		end
 	end
-	net.Receive( NET, function( _, ply )
+	net.Receive( NET, function( length, ply )
 		local now = CurTime()
 		if now < ( nextRequest[ply] or 0 ) then return end
 		nextRequest[ply] = now + 2
+		local receivedRevision = length >= 32 and net.ReadUInt( 32 ) or nil
 		refresh()
-		sendCatalog( ply )
+		sendCatalog( ply, receivedRevision )
 	end )
 	hook.Add( "InitPostEntity", "mc_spawnmenu_weapon_catalog", refresh )
 	hook.Add( "OnReloaded", "mc_spawnmenu_weapon_catalog", function()
 		refresh()
-		for _, ply in ipairs( player.GetHumans() ) do sendCatalog( ply, true ) end
+		for _, ply in ipairs( player.GetHumans() ) do sendCatalog( ply ) end
 	end )
 else
 	local pending
@@ -186,13 +187,19 @@ else
 		if page == count then
 			if receivedRevision ~= revision then publish( pending.records ) receivedRevision = revision end
 			pending = nil
+			timer.Remove( NET )
 		end
 	end )
 	local function requestCatalog()
 		if not IsValid( LocalPlayer() ) then return end
 		net.Start( NET )
+			net.WriteUInt( receivedRevision or 0, 32 )
 		net.SendToServer()
 	end
 	hook.Add( "InitPostEntity", "mc_spawnmenu_weapon_catalog", requestCatalog )
 	hook.Add( "MC.InventoryOpened", "mc_spawnmenu_weapon_catalog", requestCatalog )
+	-- InitPostEntity is a one-shot notification. Keep the initial handshake
+	-- alive until all pages arrive, including when this file loads after it.
+	timer.Create( NET, 2, 0, requestCatalog )
+	requestCatalog()
 end
