@@ -61,7 +61,6 @@ mc_language zh_cn
 | `mc_admin_only` | `0` | 1 限制管理员编辑方块 |
 | `mc_default_gamemode` | `creative` | 新玩家模式，不覆盖玩家已保存的模式 |
 | `mc_allow_gamemode_switch` | `1` | 允许普通玩家切换自己的模式 |
-| `mc_inventory_creative` | `1` | 允许创造物品栏的目录和复制操作 |
 | `mc_inventory_persist` | `1` | 保存玩家物品栏 |
 | `mc_keep_inventory` | `0` | 1 死亡保留物品栏与装备 |
 | `mc_use_interact` | `1` | 右键与可使用的 MC 方块交互 |

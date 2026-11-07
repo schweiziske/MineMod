@@ -40,10 +40,6 @@ local function hasInfiniteMaterials( ply )
 	return SV.PlayerHasInfiniteMaterials and SV.PlayerHasInfiniteMaterials( ply ) == true
 end
 
-local function creativeCatalogAllowed()
-	return not MC.Config.InventoryCreative or MC.Config.InventoryCreative:GetBool()
-end
-
 local function actionRateAllowed( record )
 	local now = CurTime()
 	local rate = record.actionRate
@@ -750,7 +746,7 @@ net.Receive( "mc_inventory_creative_pick", function( _, ply )
 	if not actionRateAllowed( record ) then sendRejected( record, actionId, "rate_limited", false ) return end
 	if not actionSequenceAllowed( session, actionId ) then sendRejected( record, actionId, "stale_action", true ) return end
 	if revision > container.revision then sendRejected( record, actionId, "revision_mismatch", true ) return end
-	if not hasInfiniteMaterials( ply ) or not creativeCatalogAllowed() then
+	if not hasInfiniteMaterials( ply ) then
 		sendRejected( record, actionId, "creative_only", false )
 		return
 	end

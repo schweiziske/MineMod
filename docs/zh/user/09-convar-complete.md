@@ -85,7 +85,6 @@
 | `mc_fill_max` | `100000` | 服务器 | 单次 /fill 体积上限；0 不限 |
 | `mc_import_max` | `0` | 服务器 | 单次世界导入方块数上限；0 不限 |
 | `mc_inventory_action_rate` | `80` | 服务器 | 每位玩家每秒允许的服务器物品栏操作数 |
-| `mc_inventory_creative` | `1` | 服务器 | 允许创造物品栏的目录和复制操作 |
 | `mc_inventory_persist` | `1` | 服务器 | 按 SteamID64 保存玩家 MC 物品栏 |
 | `mc_keep_inventory` | `0` | 服务器 | 死亡保留 MC 物品栏与装备 |
 | `mc_max_blocks` | `0` | 服务器 | 世界方块总数上限；0 不限 |

@@ -85,7 +85,6 @@ The server controls permissions and effective game rules. A name containing clie
 | `mc_fill_max` | `100000` | Server | Maximum volume per /fill; 0 unlimited |
 | `mc_import_max` | `0` | Server | Maximum blocks per world import; 0 unlimited |
 | `mc_inventory_action_rate` | `80` | Server | Allowed server inventory actions per player per second |
-| `mc_inventory_creative` | `1` | Server | Allow creative catalog and copying operations |
 | `mc_inventory_persist` | `1` | Server | Persist player MC inventory by SteamID64 |
 | `mc_keep_inventory` | `0` | Server | Keep MC inventory and equipment on death |
 | `mc_max_blocks` | `0` | Server | World block-count limit; 0 unlimited |

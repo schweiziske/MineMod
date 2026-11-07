@@ -59,7 +59,6 @@ Requires `mc_item`. Change all settings below on the client.
 | `mc_admin_only` | `0` | 1 restricts block editing to administrators |
 | `mc_default_gamemode` | `creative` | New-player mode; preserves a player's saved mode |
 | `mc_allow_gamemode_switch` | `1` | Allow regular players to change their own mode |
-| `mc_inventory_creative` | `1` | Allow creative inventory catalog and duplication |
 | `mc_inventory_persist` | `1` | Save player inventories |
 | `mc_keep_inventory` | `0` | 1 preserves inventory and equipment on death |
 | `mc_use_interact` | `1` | Right-click usable MC blocks to interact |
