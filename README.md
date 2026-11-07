@@ -116,4 +116,4 @@ MineMod's code is licensed under [MIT](LICENSE).
 
 Minecraft textures, sounds, models, and other assets belong to Mojang Studios and are outside the MIT license. This is an unofficial project, unaffiliated with Mojang Studios or Microsoft.
 
-Parts of the PBR shader pack and other systems reference or port work from Iris, Photon, Complementary Reimagined, Google Filament, and three.js. The repository also includes Source SDK, miniz, RapidJSON, LibDeflate, and GNU Unifont components. Their sources and licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Parts of the PBR shader pack and other systems reference or port work from Iris, Photon, Complementary Reimagined, Google Filament, three.js, and GWater2. The repository also includes Source SDK, miniz, RapidJSON, LibDeflate, and GNU Unifont components. Their sources and licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

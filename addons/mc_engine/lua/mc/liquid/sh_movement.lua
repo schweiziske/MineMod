@@ -1,6 +1,5 @@
--- Predicted voxel swimming with Source-style wish speed, drag and acceleration.
--- Algorithm reference: Valve Source SDK CGameMovement::WaterMove and
--- CheckJumpButton. This Lua implementation owns voxel contact and hull motion.
+-- Predicted player swimming. Movement coefficients and integration follow
+-- GWater2; voxel contact, Minecraft currents and bubble columns remain local.
 
 MC = MC or {}
 MC.Liquid = MC.Liquid or {}
@@ -16,20 +15,22 @@ local SWIM_SOUND_INTERVAL = 1
 local SWIM_SOUND_EVENT = "Player.Swim"
 local WADE_SOUND_EVENT = "Player.Wade"
 
+-- Defaults from gwater2_interactions.lua at commit d21167c.
 local SwimParameters = {
-	speedScale = 0.8,
-	idleSinkSpeed = 60,
-	jumpSpeed = 100,
+	speed = 2,
+	buoyancy = 0.49,
+	friction = 0,
+	dragPerSecond = 2,
+	finishGravityScale = 0.5,
 }
 
 -- Lava needs to feel like a dense, sticky liquid rather than water with a
 -- different colour. It has deliberately weak input acceleration and quickly
 -- damps both player input and carried velocity.
 local LavaSwimParameters = {
-	speedScale = 0.35,
-	idleSinkSpeed = 30,
-	jumpSpeed = 80,
-	frictionScale = 2,
+	speed = 0.35,
+	jumpScale = 0.25,
+	dragPerSecond = 4,
 }
 
 MC.LiquidMovementParameters = SwimParameters
@@ -39,11 +40,10 @@ MC.LiquidMoveContacts = setmetatable( {}, { __mode = "k" } )
 local NextSwimSoundAt = setmetatable( {}, { __mode = "k" } )
 local WasTouchingWater = setmetatable( {}, { __mode = "k" } )
 
-local FrictionConVar = GetConVar( "sv_friction" )
-local AccelerateConVar = GetConVar( "sv_accelerate" )
+local GravityConVar = GetConVar and GetConVar( "sv_gravity" ) or nil
 
 local function canApplyMove( ply )
-	if not IsValid( ply ) or not ply:Alive() or ply:InVehicle() or ply:IsFrozen() then return false end
+	if not IsValid( ply ) or not ply:Alive() or ply:InVehicle() then return false end
 	local moveType = ply:GetMoveType()
 	return moveType == MOVETYPE_WALK or moveType == MOVETYPE_STEP
 end
@@ -116,17 +116,34 @@ local function applyBubbleColumn( velocity, contact, factor )
 	return velocity
 end
 
-local function waistSubmerged( ply, move, contact )
-	local origin, err = MC.API.Coords.MoveOriginWorldPos( ply, move:GetOrigin() )
-	if not origin then
-		MC.Fault( "liquid_waist_world_position", "liquid waist query: %s", tostring( err ) )
-		return false
+local function swimAcceleration( ply, move )
+	local angles = move.GetMoveAngles and move:GetMoveAngles() or ply:EyeAngles()
+	local acceleration = angles:Forward() * move:GetForwardSpeed()
+		+ angles:Right() * move:GetSideSpeed()
+		+ angles:Up() * ( move.GetUpSpeed and move:GetUpSpeed() or 0 )
+	local length = acceleration:Length()
+	if length > 0 then
+		acceleration:Mul( math.min( length, ply:GetMaxSpeed() ) / length * SwimParameters.speed )
 	end
-	local mins, maxs
-	if ply:Crouching() then mins, maxs = ply:GetHullDuck() else mins, maxs = ply:GetHull() end
-	local waist = MC.Liquid.PointContact( origin.x + ( mins.x + maxs.x ) * 0.5,
-		origin.y + ( mins.y + maxs.y ) * 0.5, origin.z + ( mins.z + maxs.z ) * 0.5 )
-	return waist ~= nil and waist.kind == contact.kind
+	if move:KeyDown( IN_JUMP ) then
+		acceleration.z = acceleration.z + ply:GetMaxSpeed()
+	end
+	return acceleration
+end
+
+local function lavaSwimAcceleration( ply, move )
+	local angles = move.GetMoveAngles and move:GetMoveAngles() or ply:EyeAngles()
+	local acceleration = angles:Forward() * move:GetForwardSpeed()
+		+ angles:Right() * move:GetSideSpeed()
+		+ angles:Up() * ( move.GetUpSpeed and move:GetUpSpeed() or 0 )
+	local length = acceleration:Length()
+	if length > 0 then
+		acceleration:Mul( math.min( length, ply:GetMaxSpeed() ) / length * LavaSwimParameters.speed )
+	end
+	if move:KeyDown( IN_JUMP ) then
+		acceleration.z = acceleration.z + ply:GetMaxSpeed() * LavaSwimParameters.jumpScale
+	end
+	return acceleration
 end
 
 local function updateWaterTransitionSound( ply, contact )
@@ -145,60 +162,51 @@ end
 
 local function playJumpSwimSound( ply, move, contact )
 	if not SERVER or contact.kind ~= "water" or not move:KeyDown( IN_JUMP ) then return end
+	local origin, err = MC.API.Coords.MoveOriginWorldPos( ply, move:GetOrigin() )
+	if not origin then
+		MC.Fault( "liquid_waist_world_position", "liquid swim sound query: %s", tostring( err ) )
+		return
+	end
+	local mins, maxs = ply:OBBMins(), ply:OBBMaxs()
+	local waistZ = origin.z + ( mins.z + maxs.z ) * 0.5
+	local waistContact = MC.Liquid.PointContact( origin.x, origin.y, waistZ )
+	if not waistContact or waistContact.kind ~= "water" then return end
 	local now = CurTime()
 	if now < ( NextSwimSoundAt[ply] or 0 ) then return end
 	NextSwimSoundAt[ply] = now + SWIM_SOUND_INTERVAL
 	ply:EmitSound( SWIM_SOUND_EVENT )
 end
 
-local function applySourceSwim( ply, move, contact )
+local function applyGWaterSwim( ply, move, contact )
 	local velocity = move:GetVelocity()
 	local factor = tickFactor()
 	local lava = contact.kind == "lava"
 	local currentScale = lava and LAVA_CURRENT_SCALE or WATER_CURRENT_SCALE
-	if not contact.swimming then
-		applyCurrent( velocity, contact, currentScale, factor )
-		move:SetVelocity( velocity )
-		return
-	end
-	local parameters = lava and LavaSwimParameters or SwimParameters
-	local seconds = FrameTime()
-	local angles = move:GetMoveAngles()
-	local forward, right = angles:Forward(), angles:Right()
-	local forwardSpeed, sideSpeed, upSpeed = move:GetForwardSpeed(), move:GetSideSpeed(), move:GetUpSpeed()
-	local clientSpeed = move:GetMaxClientSpeed()
-	local speedLimit = move:GetMaxSpeed()
-	if clientSpeed > 0 then speedLimit = math.min( speedLimit, clientSpeed ) else clientSpeed = speedLimit end
-	local wx = forward.x * forwardSpeed + right.x * sideSpeed
-	local wy = forward.y * forwardSpeed + right.y * sideSpeed
-	local wz = forward.z * forwardSpeed + right.z * sideSpeed
-	if move:KeyDown( IN_JUMP ) then
-		wz = wz + clientSpeed
-		velocity.z = parameters.jumpSpeed
-		playJumpSwimSound( ply, move, contact )
-	elseif forwardSpeed == 0 and sideSpeed == 0 and upSpeed == 0 then
-		wz = wz - parameters.idleSinkSpeed
+	velocity = applyCurrent( velocity, contact, currentScale, factor )
+
+	local frameTime = FrameTime()
+	local acceleration = swimAcceleration( ply, move )
+	if lava then acceleration = lavaSwimAcceleration( ply, move ) end
+	playJumpSwimSound( ply, move, contact )
+	velocity = velocity + acceleration * frameTime
+	if lava then
+		velocity:Mul( max( 0, 1 - frameTime * LavaSwimParameters.dragPerSecond ) )
 	else
-		wz = wz + upSpeed + math.min( max( forwardSpeed * forward.z * 2, 0 ), clientSpeed )
+		velocity:Mul( max( 0, 1 - frameTime * SwimParameters.dragPerSecond ) )
 	end
-	local wishLength = sqrt( wx * wx + wy * wy + wz * wz )
-	local wishSpeed = math.min( wishLength, speedLimit ) * parameters.speedScale
-	local friction = ply:GetFriction()
-	local speed = velocity:Length()
-	local retained = speed * max( 0, 1 - seconds * FrictionConVar:GetFloat() * friction * ( lava and parameters.frictionScale or 1 ) )
-	if retained < 0.1 then retained = 0 end
-	if speed > 0 then velocity:Mul( retained / speed ) end
-	if wishSpeed >= 0.1 and wishSpeed > retained then
-		local gain = math.min( wishSpeed - retained, AccelerateConVar:GetFloat() * wishSpeed * seconds * friction ) / wishLength
-		velocity.x, velocity.y, velocity.z = velocity.x + wx * gain, velocity.y + wy * gain, velocity.z + wz * gain
-	end
-	applyCurrent( velocity, contact, currentScale, factor )
-	applyBubbleColumn( velocity, contact, factor )
-	MC.Liquid.MoveSwimming( ply, move, velocity, seconds )
+
+	local gravityScale = ply:GetGravity()
+	if gravityScale == 0 then gravityScale = 1 end
+	local gravity = ( GravityConVar and GravityConVar:GetFloat() or 600 ) * gravityScale
+	velocity.z = velocity.z + frameTime * gravity * SwimParameters.buoyancy
+	if SwimParameters.friction ~= 0 then velocity:Mul( 1 - SwimParameters.friction ) end
+
+	velocity = applyBubbleColumn( velocity, contact, factor )
+	move:SetVelocity( velocity )
 end
 
 function MC.ApplyLiquidMove( ply, move )
-	if not canApplyMove( ply ) or ply:WaterLevel() >= 2 then
+	if not canApplyMove( ply ) then
 		updateWaterTransitionSound( ply, nil )
 		MC.LiquidMovePlayers[ply] = nil
 		MC.LiquidMoveContacts[ply] = nil
@@ -213,22 +221,26 @@ function MC.ApplyLiquidMove( ply, move )
 	end
 	MC.LiquidMovePlayers[ply] = contact.kind
 	MC.LiquidMoveContacts[ply] = contact
-	contact.swimming = waistSubmerged( ply, move, contact )
-	applySourceSwim( ply, move, contact )
+	applyGWaterSwim( ply, move, contact )
 	return true, contact
 end
 
 hook.Add( "Move", "mc_liquid_swim", function( ply, move )
-	local applied, contact = MC.ApplyLiquidMove( ply, move )
-	if applied and contact.swimming then return true end
+	MC.ApplyLiquidMove( ply, move )
 end )
 
--- Remove the old gravity compensation when this file is hot reloaded.
-hook.Remove( "FinishMove", "mc_liquid_swim" )
+hook.Add( "FinishMove", "mc_liquid_swim", function( ply, move )
+	if not MC.LiquidMoveContacts[ply] then return end
+	local gravityScale = ply:GetGravity()
+	if gravityScale == 0 then gravityScale = 1 end
+	local gravity = GravityConVar and GravityConVar:GetFloat() or 600
+	local velocity = move:GetVelocity()
+	velocity.z = velocity.z + FrameTime() * gravity * gravityScale * SwimParameters.finishGravityScale
+	move:SetVelocity( velocity )
+end )
 
 hook.Add( "CalcMainActivity", "mc_liquid_swim", function( ply )
-	local contact = MC.LiquidMoveContacts[ply]
-	if not contact or not contact.swimming or ply:InVehicle() then return end
+	if not MC.LiquidMoveContacts[ply] or ply:InVehicle() then return end
 	return ACT_MP_SWIM, -1
 end )
 
