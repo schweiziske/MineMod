@@ -180,17 +180,17 @@ end
 
 local function sourcePool( container, data )
 	local pool, seen = {}, {}
-	local function add( index )
+	local function add( index, fromGrid )
 		index = math.floor( tonumber( index ) or -1 )
 		if index < 0 or seen[index] then return end
 		local stack = MC.ContainerGetStack( container, index )
 		if not MC.IsEmptyItemStack( stack ) then
-			pool[#pool + 1] = { index = index, stack = MC.CopyItemStack( stack ) }
+			pool[#pool + 1] = { index = index, stack = MC.CopyItemStack( stack ), fromGrid = fromGrid }
 		end
 		seen[index] = true
 	end
-	for _, index in ipairs( data.inputSlots or {} ) do add( index ) end
-	for _, index in ipairs( data.playerTargets or {} ) do add( index ) end
+	for _, index in ipairs( data.inputSlots or {} ) do add( index, true ) end
+	for _, index in ipairs( data.playerTargets or {} ) do add( index, false ) end
 	return pool
 end
 
@@ -241,12 +241,8 @@ local function placementList( recipe, width, height, inputSlots )
 	return output
 end
 
-local function clearCraftingAndPlayer( container, data )
+local function clearCraftingInputs( container, data )
 	for _, index in ipairs( data.inputSlots or {} ) do
-		local ok, err = MC.ContainerSetStack( container, index, nil )
-		if not ok then return false, err end
-	end
-	for _, index in ipairs( data.playerTargets or {} ) do
 		local ok, err = MC.ContainerSetStack( container, index, nil )
 		if not ok then return false, err end
 	end
@@ -254,8 +250,18 @@ local function clearCraftingAndPlayer( container, data )
 end
 
 local function restorePool( container, pool, targets, context )
+	-- Keep player stacks in their original slots, including gaps and split
+	-- stacks. Only consumed ingredients change; never repack the inventory.
 	for _, entry in ipairs( pool ) do
-		if not MC.IsEmptyItemStack( entry.stack ) then
+		if not entry.fromGrid and not MC.ItemStacksEqual( MC.ContainerGetStack( container, entry.index ), entry.stack ) then
+			local ok, err = MC.ContainerSetStack( container, entry.index, entry.stack )
+			if not ok then return false, err end
+		end
+	end
+	-- Unused contents of the previous grid need inventory space. Return them
+	-- after applying withdrawals so newly emptied source slots are available.
+	for _, entry in ipairs( pool ) do
+		if entry.fromGrid and not MC.IsEmptyItemStack( entry.stack ) then
 			local remaining = select( 1, MC.ContainerMoveStackTo( container, entry.stack, targets, context ) )
 			if not MC.IsEmptyItemStack( remaining ) then return false end
 		end
@@ -309,7 +315,7 @@ function MC.CraftingPlaceRecipe( container, recipe, context, useMax )
 	end
 	if not selectedAmount then return false, "recipe_ingredients_missing" end
 
-	local ok, err = clearCraftingAndPlayer( container, data )
+	local ok, err = clearCraftingInputs( container, data )
 	if not ok then MC.ContainerRestore( container, snapshot ) return false, err or "recipe_clear_failed" end
 	local placed = {}
 	-- Re-run the deterministic selection against the chosen amount so the
@@ -329,9 +335,10 @@ function MC.CraftingPlaceRecipe( container, recipe, context, useMax )
 	end
 
 	local targets = data.playerTargets or {}
-	if not restorePool( container, pool, targets, context or {} ) then
+	local restored, restoreError = restorePool( container, pool, targets, context or {} )
+	if not restored then
 		MC.ContainerRestore( container, snapshot )
-		return false, "crafting_inventory_full"
+		return false, restoreError or "crafting_inventory_full"
 	end
 	local refreshed, refreshError = MC.CraftingRefreshResult( container )
 	if not refreshed then

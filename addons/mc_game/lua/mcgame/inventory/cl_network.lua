@@ -309,8 +309,14 @@ local function buildPredictionContainer()
 			index = index, storage = menu.slots, storageIndex = index + 1,
 			group = group, maxStack = maxStack, mayPlace = mayPlace, meta = meta, readOnly = readOnly,
 		}
-		if playerIndex ~= nil then playerTargets[#playerTargets + 1] = index end
 		if crafting and index >= 1 and index <= inputCount then inputSlots[#inputSlots + 1] = index end
+	end
+	-- Match the server's inventory order: hotbar first, then main inventory.
+	-- Player-menu indices put the main inventory first, which would otherwise
+	-- predict withdrawals from different stacks and jump back on acknowledgement.
+	for playerIndex = 0, 35 do
+		local index = playerMenuIndex( menu, playerIndex )
+		if index ~= nil then playerTargets[#playerTargets + 1] = index end
 	end
 	local hotbarSlots = {}
 	for button = 0, 8 do hotbarSlots[button + 1] = playerMenuIndex( menu, button ) end
