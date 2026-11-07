@@ -3,8 +3,10 @@
 /out/version.json text eol=lf
 # Raw resource bytes are covered by the shipped per-file and bundle SHA256.
 /addons/mc_texturepack_default/data_static/mc/raw_default/** -text
+/addons/mc_texturepack_*/materials/mc/resourcepacks/** -text
 # Preserve the original metadata's CRLF and trailing newline exactly as hashed.
 /addons/mc_texturepack_default/data_static/mc/raw_default/**/*.mcmeta whitespace=cr-at-eol,-blank-at-eof
+/addons/mc_texturepack_default/data_static/mc/raw_default/**/*.mcmeta.json whitespace=cr-at-eol,-blank-at-eof
 # Preserve extracted third-party resource packs byte-for-byte.
 /addons/mc_texturepack_avpbr/data_static/mc/raw_resourcepacks/** -text -whitespace
 /addons/mc_texturepack_programmer_art/data_static/mc/resourcepacks/programmer_art/** -text -whitespace

@@ -46,6 +46,21 @@ ZIP 直读需要具备资源包 I/O 功能的 Native 模块；不安装模块时
 材质选择属于客户端。把资源包只放进专用服务器的 DATA 目录，
 不会自动给玩家安装或切换材质。不同玩家可以选择不同的包。
 
+## 发布资源包 addon
+
+创意工坊 addon 将 Java 资源包拆到以下两个根目录，包名保持一致：
+
+```text
+materials/mc/resourcepacks/my_pack/pack.png
+materials/mc/resourcepacks/my_pack/assets/minecraft/textures/block/stone.png
+data_static/mc/resourcepacks/my_pack/pack.mcmeta.json
+data_static/mc/resourcepacks/my_pack/assets/minecraft/textures/block/stone.png.mcmeta.json
+```
+
+PNG 保留原始字节，包括动画条带和 LabPBR 伴图。其他 JSON 文件按原相对路径放在 `data_static` 根目录下；所有 `.mcmeta` 文件名末尾追加 `.json`。加载器还原逻辑资源名后继续解析贴图、动画和 overlay。包会自动发现；旁边的 `data_static/mc/resourcepacks/my_pack.json` source 描述文件可指定稳定的公开 ID 和标题。
+
+这条额外路径无需 Native 模块，解压目录和 ZIP 导入入口仍然可用。
+
 ## 常见问题
 
 - **列表没有包**：检查客户端路径、`pack.mcmeta` 所在层级和 addon 挂载状态。

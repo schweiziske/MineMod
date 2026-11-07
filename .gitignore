@@ -4,7 +4,6 @@ _build/*
 !_build/generate_item_sprite_masks.py
 !_build/test_texture_pack_leases.lua
 __pycache__/
-addons/mc_texturepack_*/materials/mc/resourcepacks/*/
 addons/mc_texturepack_*/data_static/mc/atlas_bake/
 *.pyc
 _tools/equestria_mcb4_import_2.err

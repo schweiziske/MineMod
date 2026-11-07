@@ -1,8 +1,10 @@
--- The DLL-free source adapter deliberately accepts extracted directories only.
+-- DLL-free directory sources. Mounted packs may split images into materials/;
+-- metadata keeps its logical Java path while .mcmeta is shipped as .mcmeta.json.
 MC.ResourceDirectory = {}
 local D = MC.ResourceDirectory
 local ROOTS = {DATA = "mc/resourcepacks/inbox", GAME = "data_static/mc/resourcepacks"}
 local LEGACY_ROOT = "data_static/mc/raw_resourcepacks"
+local MATERIAL_ROOT = "materials/mc/resourcepacks"
 local function directoryRoot(name, pathID)
 	local root = ROOTS[pathID]
 	-- Existing extracted addons (including AVPBR) retain their old location.
@@ -43,15 +45,23 @@ function D.Inspect(name, pathID)
 	local base = root .. "/" .. name
 	if not file.IsDir(base,pathID) then return nil,"resource_directory_missing" end
 	base = base .. "/"
-	local metadataSize = file.Size(base .. "pack.mcmeta",pathID)
+	local metadataPath = base .. "pack.mcmeta"
+	if pathID == "GAME" and not file.Exists(metadataPath,pathID) then
+		metadataPath = metadataPath .. ".json"
+	end
+	local metadataSize = file.Size(metadataPath,pathID)
 	if not metadataSize or metadataSize < 0 then return nil,"resource_source_missing:pack.mcmeta" end
 	if metadataSize > 1048576 then return nil,"resource_pack_metadata_budget" end
-	local metadata = file.Read(base .. "pack.mcmeta",pathID)
+	local metadata = file.Read(metadataPath,pathID)
 	if not metadata or #metadata ~= metadataSize then return nil,"resource_source_read:pack.mcmeta" end
-	local entries, locations = {["pack.mcmeta"]=metadataSize}, {["pack.mcmeta"]=base .. "pack.mcmeta"}
-	local coverSize = file.Size(base .. "pack.png",pathID)
+	local entries, locations = {["pack.mcmeta"]=metadataSize}, {["pack.mcmeta"]=metadataPath}
+	local coverPath = base .. "pack.png"
+	if pathID == "GAME" and not file.Exists(coverPath,pathID) then
+		coverPath = MATERIAL_ROOT .. "/" .. name .. "/pack.png"
+	end
+	local coverSize = file.Size(coverPath,pathID)
 	if coverSize and coverSize >= 0 then
-		entries["pack.png"], locations["pack.png"] = coverSize, base .. "pack.png"
+		entries["pack.png"], locations["pack.png"] = coverSize, coverPath
 	end
 	return {directory=name,entries=entries,locations=locations,pathID=pathID,metadataOnly=true,
 		revision="metadata:" .. MC.ResourcePackRules.Hash(metadata)}
@@ -65,31 +75,44 @@ function D.Open(name, pathID)
 	root = directoryRoot(name, pathID)
 	if not file.IsDir(root.."/"..name,pathID) then return nil,"resource_directory_missing" end
 	local entries, locations, stamps, count, total = {}, {}, {}, 0, 0
-	local function walk(relative, depth)
+	local function walk(sourceRoot, relative, depth, imagesOnly)
 		if depth>32 then return nil,"resource_directory_depth" end
-		local base=root.."/"..name.."/"..relative
+		local base=sourceRoot..relative
 		local files, dirs=file.Find(base.."*",pathID)
 		if not files or not dirs then return nil,"resource_directory_list:"..relative end
 		table.sort(files); table.sort(dirs)
 		for _, leaf in ipairs(files) do
 			local path=relative..leaf
 			if not validName(leaf) or #path>512 then return nil,"resource_pack_file_path:"..path end
-			local size=file.Size(base..leaf,pathID)
-			if not size or size<0 or size>134217728 then return nil,"resource_source_file_budget:"..path end
-			count,total=count+1,total+size
-			if count>65536 or total>1073741824 then return nil,"resource_source_directory_budget" end
-			entries[path],locations[path]=size,base..leaf
-			stamps[#stamps+1]=path..":"..size
+			if not imagesOnly or leaf:sub(-4) == ".png" then
+				if pathID == "GAME" and not imagesOnly and path:sub(-12) == ".mcmeta.json" then
+					path = path:sub(1,-6)
+				end
+				if entries[path] then return nil,"resource_source_duplicate:"..path end
+				local size=file.Size(base..leaf,pathID)
+				if not size or size<0 or size>134217728 then return nil,"resource_source_file_budget:"..path end
+				count,total=count+1,total+size
+				if count>65536 or total>1073741824 then return nil,"resource_source_directory_budget" end
+				entries[path],locations[path]=size,base..leaf
+				stamps[#stamps+1]=path..":"..size
+			end
 		end
 		for _, leaf in ipairs(dirs) do
 			if not validName(leaf) then return nil,"resource_pack_file_path" end
-			local ok,err=walk(relative..leaf.."/",depth+1)
+			local ok,err=walk(sourceRoot,relative..leaf.."/",depth+1,imagesOnly)
 			if not ok then return nil,err end
 		end
 		return true
 	end
-	local ok,err=walk("",0)
+	local ok,err=walk(root.."/"..name.."/","",0,false)
 	if not ok then return nil,err end
+	if pathID == "GAME" then
+		local images=MATERIAL_ROOT.."/"..name.."/"
+		if file.IsDir(images,pathID) then
+			ok,err=walk(images,"",0,true)
+			if not ok then return nil,err end
+		end
+	end
 	-- The index tracks names and sizes. Snapshot validates the actual bytes of
 	-- every consumed resource, so modification-time queries add no protection.
 	-- Metadata also affects overlays/filtering before any textures are resolved.

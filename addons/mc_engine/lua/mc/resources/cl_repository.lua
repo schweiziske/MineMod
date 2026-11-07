@@ -207,8 +207,8 @@ function D.Refresh()
 	elseif MC.ResourceDirectory then
 		adapters[#adapters+1] = {prefix="local_", pathID="DATA", list=MC.ResourceDirectory.List, open=MC.ResourceDirectory.Open}
 	end
-	-- Addons ship the same extracted tree as the DATA inbox. Always use Lua for
-	-- GAME locators, even when native I/O is installed (it only owns the inbox).
+	-- Mounted packs also support materials/ images and JSON metadata aliases.
+	-- Native I/O owns only the DATA inbox, so GAME locators always use Lua.
 	if MC.ResourceDirectory then
 		adapters[#adapters+1] = {prefix="mounted_", pathID="GAME", list=MC.ResourceDirectory.List, open=MC.ResourceDirectory.Open}
 	end

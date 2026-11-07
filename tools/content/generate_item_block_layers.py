@@ -22,6 +22,7 @@ PART = re.compile(rb"\[=\[(.*?)\]=\]", re.S)
 def generate(repo, read_model):
     generated = repo / "addons/mc_game/lua/mcgame/generated"
     raw = repo / "addons/mc_texturepack_default/data_static/mc/raw_default"
+    materials = repo / "addons/mc_texturepack_default/materials/mc/resourcepacks/default"
     manifest = json.loads((raw / "manifest.json").read_bytes())
     tiles = {}
     for tile in manifest["tiles"]:
@@ -51,9 +52,14 @@ def generate(repo, read_model):
             raise ValueError(f"Expected a block layer0 in {model_id}: {resource}")
         texture_path = "assets/minecraft/textures/" + resource.split(":", 1)[1] + ".png"
         tile = tiles[resource.replace(":block/", ":textures/block/") + ".png"]
-        with Image.open(raw / texture_path) as image:
+        image_path = materials / texture_path
+        if not image_path.exists():
+            image_path = raw / texture_path
+        with Image.open(image_path) as image:
             width, height = image.size
             metadata_path = raw / (texture_path + ".mcmeta")
+            if not metadata_path.exists():
+                metadata_path = raw / (texture_path + ".mcmeta.json")
             animation = json.loads(metadata_path.read_bytes()).get("animation", {}) if metadata_path.exists() else {}
             if "width" in animation:
                 width, height = animation["width"], animation.get("height", height)

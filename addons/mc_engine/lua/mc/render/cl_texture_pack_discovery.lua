@@ -90,7 +90,8 @@ local function load( path, kind )
 	local owner = "texturepack." .. document.id
 	local directory
 	if kind == "source" and output ~= "default"
-		and (file.Exists(ROOT .. document.id .. "/pack.mcmeta", "GAME") or previous and previous.directory) then
+		and (file.Exists(ROOT .. document.id .. "/pack.mcmeta", "GAME")
+			or file.Exists(ROOT .. document.id .. "/pack.mcmeta.json", "GAME") or previous and previous.directory) then
 		requireValue( output == document.id and not document.id:match("^local_") and not document.id:match("^mounted_"),
 			"directory source requires a stable unreserved id matching output" )
 		directory = document.id
@@ -111,7 +112,8 @@ local function load( path, kind )
 		registered = pack and pack.owner == owner
 	end
 	if directory then
-		requireValue( file.Exists(ROOT .. directory .. "/pack.mcmeta", "GAME"), "missing resource pack: " .. directory )
+		requireValue( file.Exists(ROOT .. directory .. "/pack.mcmeta", "GAME")
+			or file.Exists(ROOT .. directory .. "/pack.mcmeta.json", "GAME"), "missing resource pack: " .. directory )
 	end
 	if previous and previous.bytes == bytes and registered then return "unchanged" end
 	local ok, err

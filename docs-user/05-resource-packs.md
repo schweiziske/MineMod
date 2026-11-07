@@ -41,6 +41,21 @@ garrysmod/data/mc/resourcepacks/inbox/MyPack/
 
 Pack selection is client-side. Placing a pack only in a dedicated server's DATA directory does not install or select it for players. Different players can use different packs.
 
+## Shipping a pack addon
+
+For Workshop addons, split a Java pack between these two roots, using the same pack name:
+
+```text
+materials/mc/resourcepacks/my_pack/pack.png
+materials/mc/resourcepacks/my_pack/assets/minecraft/textures/block/stone.png
+data_static/mc/resourcepacks/my_pack/pack.mcmeta.json
+data_static/mc/resourcepacks/my_pack/assets/minecraft/textures/block/stone.png.mcmeta.json
+```
+
+Keep PNG bytes unchanged, including animation strips and LabPBR companion maps. Put other JSON files under the `data_static` root with their original relative paths, and append `.json` to every `.mcmeta` filename. The loader restores those logical names before resolving textures, animations, and overlays. The pack is discovered automatically; an adjacent `data_static/mc/resourcepacks/my_pack.json` source descriptor can give it a stable public ID and title.
+
+This additional layout works without the Native module. The extracted-directory and ZIP import paths remain available.
+
 ## Troubleshooting
 
 - **Pack is not listed:** check the client path, `pack.mcmeta` nesting, and addon mounts.

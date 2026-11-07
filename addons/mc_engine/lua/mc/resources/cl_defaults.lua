@@ -3,6 +3,7 @@
 MC.ResourceDefaults = MC.ResourceDefaults or {}
 local B = MC.ResourceDefaults
 local ROOT = "data_static/mc/raw_default/"
+local MATERIAL_ROOT = "materials/mc/resourcepacks/default/"
 function B.Ensure()
 	local raw = file.Read(ROOT .. "manifest.json", "GAME")
 	if not raw then B.error = "resource_default_sources_missing" return nil, B.error end
@@ -15,7 +16,17 @@ function B.Ensure()
 		B.error = "resource_default_manifest" return nil, B.error
 	end
 	local files = {}
-	for path in pairs(manifest.files) do files[path] = ROOT .. path end
+	for path in pairs(manifest.files) do
+		local location = ROOT .. path
+		if manifest.schema == 1 then
+			if path:sub(-4) == ".png" and file.Exists(MATERIAL_ROOT .. path, "GAME") then
+				location = MATERIAL_ROOT .. path
+			elseif path:sub(-7) == ".mcmeta" and file.Exists(location .. ".json", "GAME") then
+				location = location .. ".json"
+			end
+		end
+		files[path] = location
+	end
 	local bundle
 	if manifest.schema==2 then
 		if type(manifest.bundle)~="table" or manifest.bundle.path~="payload.dat" then
