@@ -37,4 +37,4 @@ MineMod 自身的代码以 [MIT](../../LICENSE) 发布。下列内容不属于�
 | [Complementary Reimagined](https://github.com/ComplementaryDevelopment/ComplementaryReimagined) | PBR 材质分类 | 参考其方块分类、材质响应数值和贴图区域遮罩，用自有生成器和贴图实现；未包含上游 GLSL 或资源 | Complementary License Agreement 1.7，见 `third_party/complementary/` |
 | [Iris](https://github.com/IrisShaders/Iris) | `addons/mc_engine/lua/mc/render/cl_render_shadow_math.lua`、`cl_render_pbr_shadows.lua` | 参照其阴影视锥的世界空间网格对齐方式 | LGPL-3.0 |
 | [Photon](https://github.com/sixthsurge/photon) | `addons/mc_engine/lua/mc/render/cl_mesh_shadow_map.lua` 及阴影深度 shader | 参照其阴影图畸变公式 | Photon Shaders License Agreement |
-| [GWater2](https://github.com/meetric1/gwater2) | `addons/mc_engine/lua/mc/liquid/sh_movement.lua` | 参照其玩家游泳的移动系数和积分方式 | GPL-3.0 |
+| [Valve Source SDK 2013](https://github.com/ValveSoftware/source-sdk-2013/blob/master/src/game/shared/gamemovement.cpp) | `addons/mc_engine/lua/mc/liquid/sh_movement.lua` | 独立 Lua 实现的算法参考：游泳目标速度、阻力、加速和跳跃速度 | Source 1 SDK License；见 `native/sdk/LICENSE` |

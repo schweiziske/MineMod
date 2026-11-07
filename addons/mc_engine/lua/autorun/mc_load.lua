@@ -51,6 +51,7 @@ local SHARED = {
 	"mc/liquid/sh_shapes.lua",
 	"mc/liquid/sh_flow.lua",
 	"mc/liquid/sh_contact.lua",
+	"mc/liquid/sh_swim_motion.lua",
 	"mc/liquid/sh_movement.lua",
 	"mc/custom/sh_custom_blocks.lua",
 	"mc/sh_blocks.lua",

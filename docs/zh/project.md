@@ -116,4 +116,4 @@ MineMod 的代码以 [MIT](../../LICENSE) 发布。
 
 仓库中的 Minecraft 贴图、声音、模型等资源版权归 Mojang Studios 所有，不在 MIT 许可范围内。本项目是非官方作品，与 Mojang Studios 和 Microsoft 无关。
 
-PBR 光影包等部分参考或移植了 Iris、Photon、Complementary Reimagined、Google Filament、three.js、GWater2 等项目，并随附 Source SDK、miniz、RapidJSON、LibDeflate、GNU Unifont 等第三方组件。它们各自的来源和许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+PBR 光影包等部分参考或移植了 Iris、Photon、Complementary Reimagined、Google Filament、three.js 等项目，并随附 Source SDK、miniz、RapidJSON、LibDeflate、GNU Unifont 等第三方组件。它们各自的来源和许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
