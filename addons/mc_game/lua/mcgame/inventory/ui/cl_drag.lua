@@ -11,7 +11,8 @@ local MOVE_THRESHOLD_SQR = 16
 local function shiftDown() return input.IsKeyDown( KEY_LSHIFT ) or input.IsKeyDown( KEY_RSHIFT ) end
 local function controlDown() return input.IsKeyDown( KEY_LCONTROL ) or input.IsKeyDown( KEY_RCONTROL ) end
 local function cursorStack() return MC.ClientInventory.cursor end
-local function creative() return MC.ClientInventory.session and MC.ClientInventory.session.creative == true end
+-- Chest and other container layouts still allow creative interaction.
+local function creative() return MC.ClientInventory.session and MC.ClientInventory.session.infiniteMaterials == true end
 
 local function slotKey( slot )
 	if slot:IsInventorySlot() then return "menu:" .. slot:GetActionIndex() end

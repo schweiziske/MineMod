@@ -36,9 +36,12 @@ end )
 
 util.AddNetworkString( "mc_inventory_world_action" )
 
-local function creativeAllowed( ply )
+local function hasInfiniteMaterials( ply )
 	return SV.PlayerHasInfiniteMaterials and SV.PlayerHasInfiniteMaterials( ply ) == true
-		and ( not MC.Config.InventoryCreative or MC.Config.InventoryCreative:GetBool() )
+end
+
+local function creativeCatalogAllowed()
+	return not MC.Config.InventoryCreative or MC.Config.InventoryCreative:GetBool()
 end
 
 local function actionRateAllowed( record )
@@ -336,6 +339,8 @@ function SV.SendActiveInventoryOpen( ply, record, reason )
 		net.WriteUInt( math.Clamp( math.floor( tonumber( session.resultSlot ) or 0 ), 0, MAX_MENU_SLOTS ), 8 )
 		-- Protocol 3: optional screen title; empty keeps the menu kind's own.
 		net.WriteString( string.sub( tostring( session.title or "" ), 1, 128 ) )
+		-- Interaction capability is independent of the menu's creative layout.
+		net.WriteBool( hasInfiniteMaterials( ply ) == true )
 	net.Send( ply )
 	SV.SendActiveInventorySnapshot( ply, "open" )
 	return true
@@ -350,7 +355,7 @@ function SV.OpenPlayerInventory( ply, reason )
 	record.lastOpenRequest = now
 	if record.session and record.session.kind ~= "player" then SV.ClosePlayerInventory( ply, "switch" ) end
 	if not record.session then
-		local creative = creativeAllowed( ply )
+		local creative = hasInfiniteMaterials( ply )
 		local menu, playerOffset
 		if creative and SV.BuildCreativeInventoryMenu then
 			menu, playerOffset = SV.BuildCreativeInventoryMenu( ply, record )
@@ -549,7 +554,7 @@ net.Receive( "mc_inventory_action", function( _, ply )
 	session.lastActivity = CurTime()
 	local context = {
 		player = ply, actionId = actionId,
-		creative = creativeAllowed( ply ),
+		creative = hasInfiniteMaterials( ply ),
 		canDrop = type( SV.SpawnItemDrop ) == "function",
 		parityClicks = MC.GameplayParityInventoryClicksEnabled
 			and MC.GameplayParityInventoryClicksEnabled() or false,
@@ -634,7 +639,7 @@ net.Receive( "mc_inventory_menu_button", function( _, ply )
 	local context = {
 		player = ply,
 		actionId = actionId,
-		creative = creativeAllowed( ply ),
+		creative = hasInfiniteMaterials( ply ),
 		canDrop = type( SV.SpawnItemDrop ) == "function",
 		menuButton = true,
 	}
@@ -702,7 +707,7 @@ net.Receive( "mc_inventory_recipe_place", function( _, ply )
 	local context = {
 		player = ply,
 		actionId = actionId,
-		creative = creativeAllowed( ply ),
+		creative = hasInfiniteMaterials( ply ),
 		canDrop = type( SV.SpawnItemDrop ) == "function",
 		recipeBook = true,
 	}
@@ -745,7 +750,10 @@ net.Receive( "mc_inventory_creative_pick", function( _, ply )
 	if not actionRateAllowed( record ) then sendRejected( record, actionId, "rate_limited", false ) return end
 	if not actionSequenceAllowed( session, actionId ) then sendRejected( record, actionId, "stale_action", true ) return end
 	if revision > container.revision then sendRejected( record, actionId, "revision_mismatch", true ) return end
-	if not creativeAllowed( ply ) then sendRejected( record, actionId, "creative_only", false ) return end
+	if not hasInfiniteMaterials( ply ) or not creativeCatalogAllowed() then
+		sendRejected( record, actionId, "creative_only", false )
+		return
+	end
 	if ( targetSlot < -3 or targetSlot > 8 ) and targetSlot ~= 40
 		or targetSlot == -2 and requestedStack ~= nil then sendRejected( record, actionId, "invalid_creative_target", false ) return end
 	if stackError then sendRejected( record, actionId, stackError, false ) return end
@@ -835,7 +843,7 @@ net.Receive( "mc_inventory_world_action", function( _, ply )
 	if not actionRateAllowed( record ) then sendRejected( record, actionId, "rate_limited", false ) return end
 	local container = record.container
 	MC.ConfigurePlayerSwap( container, record )
-	local context = { player = ply, actionId = actionId, creative = creativeAllowed( ply ),
+	local context = { player = ply, actionId = actionId, creative = hasInfiniteMaterials( ply ),
 		canDrop = type( SV.SpawnItemDrop ) == "function", parityClicks = true, reason = "world_inventory_action" }
 	reserveActionDrops( context )
 	local result

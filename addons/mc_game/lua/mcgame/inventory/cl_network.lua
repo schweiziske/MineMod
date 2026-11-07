@@ -238,7 +238,8 @@ local function buildPredictionContainer()
 	local menu, session = State.menu, State.session
 	if not menu then return nil end
 	if not session then
-		session = { containerId = 1, creative = MC.PlayerIsCreative and MC.PlayerIsCreative( LocalPlayer() ) == true }
+		local creative = MC.PlayerIsCreative and MC.PlayerIsCreative( LocalPlayer() ) == true
+		session = { containerId = 1, creative = creative, infiniteMaterials = creative }
 	end
 	local definitions, playerTargets, inputSlots = {}, {}, {}
 	local crafting, creative = session.crafting == true, session.creative == true
@@ -320,7 +321,7 @@ local function buildPredictionContainer()
 		slots = definitions, hotbarSlots = hotbarSlots,
 		transferRules = predictionTransferRules( menu, creative ),
 		cursor = State.cursor,
-		context = { creative = creative, crafting = crafting, clientPrediction = true },
+		context = { creative = session.infiniteMaterials == true, crafting = crafting, clientPrediction = true },
 		getSwapStack = function( committed, button )
 			if button ~= 40 then return nil end
 			local index = equipmentMap.offhand
@@ -742,6 +743,7 @@ net.Receive( "mc_inventory_open", function()
 	local craftingHeight = net.ReadUInt( 4 )
 	local resultSlot = net.ReadUInt( 8 )
 	local title = net.ReadString()
+	local infiniteMaterials = net.ReadBool()
 	if protocol ~= PROTOCOL_VERSION or containerId < 1 or token == "" or #token > 128 or err
 	or slotCount < 1 or slotCount > 127 or playerOffset + 36 > slotCount or chestSlots > slotCount
 	or ( crafting and ( craftingWidth < 1 or craftingHeight < 1 or craftingWidth * craftingHeight > 9
@@ -754,6 +756,7 @@ net.Receive( "mc_inventory_open", function()
 		containerId = containerId,
 		token = token,
 		creative = creative,
+		infiniteMaterials = infiniteMaterials,
 		reason = reason,
 		kind = kind ~= "" and kind or "player",
 		title = title ~= "" and title or nil,
