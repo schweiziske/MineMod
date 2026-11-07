@@ -413,13 +413,10 @@ local function predictAction( container, action )
 		}, context )
 	end
 	if action.kind == "recipe_place" then
-		local recipe = MC.GetRecipe and MC.GetRecipe( action.recipeId ) or nil
-		if not recipe then return { ok = false, error = "unknown_recipe" } end
-		local furnace = State.session and ( State.session.kind == "furnace" or State.session.kind == "blast_furnace" )
-		local result, err
-		if furnace then result, err = MC.FurnacePlaceRecipe( container, recipe, context, action.useMax == true )
-		else result, err = MC.CraftingPlaceRecipe( container, recipe, context, action.useMax == true ) end
-		return result or { ok = false, error = err or "recipe_place_failed" }
+		-- Source-stack selection and returning the old grid belong to the
+		-- server. Show its placement once, and replay later inputs only after
+		-- that result arrives instead of exposing a speculative rearrangement.
+		return { ok = true, authoritativeOnly = true }
 	end
 	if action.kind == "menu_button" then
 		-- Business buttons never predict authoritative stack, experience or seed
@@ -538,15 +535,23 @@ local function enqueueAction( action )
 	action.actionId = actionId
 	action.baseRevision = State.authoritative and State.authoritative.revision or State.revision
 	State.actions[#State.actions + 1] = action
-	if State.predictedContainer and not State.predictionBarrier then
+	-- Later actions still go to the server in order, but cannot change the
+	-- visible prediction until the pending authoritative action is resolved.
+	if State.predictionBarrier then
+		pumpActions()
+		return true, actionId
+	end
+	if State.predictedContainer then
 		local result = predictAction( State.predictedContainer, action )
 		action.predictionOK, action.predictionError = result.ok == true, result.error
 		State.predictionBarrier = result.authoritativeOnly == true
-		syncPredictionMirrors( State.predictedContainer )
-		emit( "MC.InventoryMenuChanged", nil, State.revision, State )
-		emit( "MC.InventoryChanged", nil, State.revision, State )
-		emit( "MC.EquipmentChanged", nil, State.revision, State )
-		emit( "MC.InventoryCursorChanged", State.cursor, State )
+		if not State.predictionBarrier then
+			syncPredictionMirrors( State.predictedContainer )
+			emit( "MC.InventoryMenuChanged", nil, State.revision, State )
+			emit( "MC.InventoryChanged", nil, State.revision, State )
+			emit( "MC.EquipmentChanged", nil, State.revision, State )
+			emit( "MC.InventoryCursorChanged", State.cursor, State )
+		end
 	else
 		MC.RebuildClientPrediction()
 	end
