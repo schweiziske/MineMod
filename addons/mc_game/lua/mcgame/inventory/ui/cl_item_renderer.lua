@@ -280,11 +280,16 @@ end
 
 local blockLayerMaterials = {}
 
-local function bindBlockLayer( entry )
+local function blockLayerTexture( layer )
 	local source = MC.MaterialHeldBlock
-	if not MC.Check( source and MC.TileUV, "item_block_layer_atlas", "Missing item atlas for %s", entry.layer ) then return false end
+	if not MC.Check( source and MC.TileUV, "item_block_layer_atlas", "Missing item atlas for %s", layer ) then return nil end
 	local texture = source:GetTexture( "$basetexture" )
-	if not MC.Check( texture and not texture:IsError(), "item_block_layer_texture", "Missing item texture for %s", entry.layer ) then return false end
+	if not MC.Check( texture and not texture:IsError(), "item_block_layer_texture", "Missing item texture for %s", layer ) then return nil end
+	return texture
+end
+
+local function bindBlockLayer( entry, texture )
+	if not texture then return false end
 	local u0, v0, u1, v1 = MC.TileUV( entry.tile )
 	local transform = Matrix()
 	transform:SetField( 1, 1, u1 - u0 )
@@ -303,21 +308,35 @@ local function blockLayerMaterial( layer, tileName, worldItem )
 	if cached then return cached.material end
 	local tile = MC.Tiles and MC.Tiles[tileName]
 	if not MC.Check( tile ~= nil, "item_block_layer_tile", "Unknown block sprite %s", layer ) then return nil end
-	local material = CreateMaterial( "mc_item_block_layer_" .. tile .. ( worldItem and "_world" or "_icon" ), "UnlitGeneric", {
-		["$basetexture"] = "vgui/white", ["$vertexcolor"] = "1", ["$vertexalpha"] = "1",
+	local texture = blockLayerTexture( layer )
+	if not texture then return nil end
+	-- VGUI keeps the mapping dimensions from material creation. Seed with the
+	-- real atlas and separate sizes so cached 1x1 bootstrap materials cannot
+	-- collapse DrawTexturedRect's UVs after the atlas becomes available.
+	local name = "mc_item_block_layer_" .. tile .. ( worldItem and "_world" or "_icon" )
+		.. "_mapping_v1_" .. texture:Width() .. "x" .. texture:Height()
+	local material = CreateMaterial( name, "UnlitGeneric", {
+		["$basetexture"] = texture:GetName(), ["$vertexcolor"] = "1", ["$vertexalpha"] = "1",
 		["$nocull"] = worldItem and "0" or "1", ["$alphatest"] = "1", ["$alphatestreference"] = "0.5",
 		["$hdrcolorscale"] = tostring( UI.WorldItemHDRColorScale or 1 ),
 	} )
 	if not MC.Check( material and not material:IsError(), "item_block_layer_material", "Cannot create block sprite material %s", layer ) then return nil end
-	cached = { layer = layer, tile = tile, material = material }
-	if not bindBlockLayer( cached ) then return nil end
+	cached = { layer = layer, tile = tile, material = material, worldItem = worldItem }
+	if not bindBlockLayer( cached, texture ) then return nil end
 	blockLayerMaterials[key] = cached
 	return material
 end
 
 hook.Add( "MC.TexturePackChanged", "mc_item_block_layers", function()
 	-- Prepared drops retain these material handles across resource-pack changes.
-	for _, entry in pairs( blockLayerMaterials ) do bindBlockLayer( entry ) end
+	-- UI draws resolve again so a changed atlas size gets matching VGUI mapping.
+	for key, entry in pairs( blockLayerMaterials ) do
+		if entry.worldItem then
+			bindBlockLayer( entry, blockLayerTexture( entry.layer ) )
+		else
+			blockLayerMaterials[key] = nil
+		end
+	end
 end )
 
 function Renderer.MaterialForLayer( layer, worldItem )
@@ -778,6 +797,14 @@ function Renderer.DrawIcon( stack, x, y, size, options )
 			drawSpecialIcon( stack, plan, x, y, size, options )
 	end
 	if not drawn and #materials > 0 then
+		local gui = plan.display and plan.display.gui
+		local translation = gui and gui.translation
+		if translation then
+			-- Item-model translations use sixteenths of the GUI canvas, with
+			-- positive Y pointing up. Share the result with the foil mask/pass.
+			x = x + ( translation[1] or 0 ) * size / 16
+			y = y - ( translation[2] or 0 ) * size / 16
+		end
 		local offset = doorIconOffset( definition, plan )
 		if offset then x, y = x + offset.x * size, y + offset.y * size end
 		drawMask = function()
